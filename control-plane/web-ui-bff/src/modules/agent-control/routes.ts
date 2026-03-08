@@ -8,10 +8,17 @@ import {
   terminateAgent,
   getAgentMessages,
   getAgentRun,
+  listAgentRuns,
 } from "./opencode-adapter";
 import { wsBroadcaster } from "../realtime/ws-broadcaster";
 
 export const agentControlRoutes = new Hono();
+
+// GET /api/agents — list all registered agent runs
+agentControlRoutes.get("/", (c) => {
+  const runs = listAgentRuns();
+  return c.json(runs);
+});
 
 // POST /api/agents/:agentRunId/pause
 agentControlRoutes.post("/:agentRunId/pause", async (c) => {

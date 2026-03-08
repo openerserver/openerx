@@ -1,11 +1,13 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
+import { authRoutes } from "./modules/auth/routes";
 import { realtimeRoutes } from "./modules/realtime/routes";
 import { agentControlRoutes } from "./modules/agent-control/routes";
 import { taskRoutes } from "./modules/tasks/routes";
 import { approvalRoutes } from "./modules/approvals/routes";
 import { authMiddleware } from "./middleware/auth";
+import { websocketHandler } from "./modules/realtime/ws-broadcaster";
 
 const app = new Hono();
 
@@ -24,6 +26,10 @@ app.use(
 
 app.get("/health", (c) => c.json({ status: "ok", service: "openerx-bff" }));
 
+// ── Auth Routes (public — no authMiddleware) ──────────────────────
+
+app.route("/api/auth", authRoutes);
+
 // ── Routes (all require auth) ──────────────────────────────────────
 
 app.use("/api/*", authMiddleware);
@@ -32,21 +38,23 @@ app.route("/api/agents", agentControlRoutes);
 app.route("/api/tasks", taskRoutes);
 app.route("/api/approvals", approvalRoutes);
 
-// ── WebSocket upgrade for realtime ─────────────────────────────────
-
-app.get("/ws", async (c) => {
-  // WebSocket upgrade handled by Bun's native WebSocket support
-  // See ws-broadcaster.ts for the handler
-  return c.text("WebSocket endpoint — upgrade required", 426);
-});
-
 // ── Start Server ───────────────────────────────────────────────────
 
 const port = Number(process.env.BFF_PORT) || 4098;
 
 export default {
   port,
-  fetch: app.fetch,
+  fetch(req: Request, server: { upgrade: (req: Request, opts?: unknown) => boolean }) {
+    // Upgrade /ws requests to WebSocket
+    const url = new URL(req.url);
+    if (url.pathname === "/ws") {
+      const ok = server.upgrade(req, { data: req.url });
+      if (ok) return undefined;
+      return new Response("WebSocket upgrade failed", { status: 426 });
+    }
+    return app.fetch(req);
+  },
+  websocket: websocketHandler,
 };
 
 console.log(`OpenerX BFF running on http://localhost:${port}`);

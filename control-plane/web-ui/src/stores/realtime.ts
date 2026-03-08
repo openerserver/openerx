@@ -1,9 +1,6 @@
-import { create } from "zustand";
+import { defineStore } from "pinia";
 
-// ── Realtime Store ─────────────────────────────────────────────────
-// Manages WebSocket connection and event stream from the BFF.
-
-interface RealtimeEvent {
+export interface RealtimeEvent {
   id: string;
   type: string;
   ts: string;
@@ -14,63 +11,66 @@ interface RealtimeEvent {
   data: Record<string, unknown>;
 }
 
+const MAX_EVENTS = 500;
+
 interface RealtimeState {
   connected: boolean;
   events: RealtimeEvent[];
   ws: WebSocket | null;
-  connect: (token: string) => void;
-  disconnect: () => void;
-  subscribeTask: (taskId: string) => void;
 }
 
-const MAX_EVENTS = 500;
+export const useRealtimeStore = defineStore("realtime", {
+  state: (): RealtimeState => ({
+    connected: false,
+    events: [],
+    ws: null,
+  }),
+  actions: {
+    connect(token: string) {
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) return;
 
-export const useRealtimeStore = create<RealtimeState>()((set, get) => ({
-  connected: false,
-  events: [],
-  ws: null,
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const ws = new WebSocket(
+        `${protocol}//${window.location.host}/ws?token=${encodeURIComponent(token)}`,
+      );
 
-  connect(token: string) {
-    const existing = get().ws;
-    if (existing && existing.readyState === WebSocket.OPEN) return;
+      ws.onopen = () => {
+        this.connected = true;
+        this.ws = ws;
+      };
 
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const ws = new WebSocket(`${protocol}//${window.location.host}/ws?token=${encodeURIComponent(token)}`);
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data) as RealtimeEvent;
+          this.events = [data, ...this.events].slice(0, MAX_EVENTS);
+        } catch {
+          // Malformed message
+        }
+      };
 
-    ws.onopen = () => set({ connected: true, ws });
+      ws.onclose = () => {
+        this.connected = false;
+        this.ws = null;
+        // Auto-reconnect after 3s
+        setTimeout(() => {
+          this.connect(token);
+        }, 3000);
+      };
 
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data) as RealtimeEvent;
-        set((state) => ({
-          events: [data, ...state.events].slice(0, MAX_EVENTS),
-        }));
-      } catch {
-        // Malformed message
+      ws.onerror = () => ws.close();
+    },
+
+    disconnect() {
+      if (this.ws) this.ws.close();
+      this.connected = false;
+      this.ws = null;
+      this.events = [];
+    },
+
+    subscribeTask(taskId: string) {
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify({ type: "subscribe_task", taskId }));
       }
-    };
-
-    ws.onclose = () => {
-      set({ connected: false, ws: null });
-      // Auto-reconnect after 3s
-      setTimeout(() => {
-        get().connect(token);
-      }, 3000);
-    };
-
-    ws.onerror = () => ws.close();
+    },
   },
-
-  disconnect() {
-    const ws = get().ws;
-    if (ws) ws.close();
-    set({ connected: false, ws: null, events: [] });
-  },
-
-  subscribeTask(taskId: string) {
-    const ws = get().ws;
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: "subscribe_task", taskId }));
-    }
-  },
-}));
+});

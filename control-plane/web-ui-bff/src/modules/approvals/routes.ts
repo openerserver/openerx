@@ -1,26 +1,20 @@
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
+import { cpFetch, authHeader } from "../../lib/control-plane-client";
 
 // ── Approval Routes (BFF) ──────────────────────────────────────────
 // Proxies approval operations to the Control Plane and broadcasts events.
-
-const CONTROL_PLANE_URL = process.env.CONTROL_PLANE_URL || "http://localhost:4097";
 
 export const approvalRoutes = new Hono();
 
 // GET /api/approvals?status=pending
 approvalRoutes.get("/", async (c) => {
   const status = c.req.query("status") || "pending";
-  try {
-    const response = await fetch(`${CONTROL_PLANE_URL}/api/approvals?status=${status}`, {
-      headers: { Authorization: c.req.header("Authorization") || "" },
-    });
-    const data = await response.json();
-    return c.json(data);
-  } catch (e) {
-    return c.json({ error: `Failed to fetch approvals: ${e}` }, 502);
-  }
+  const result = await cpFetch(`/api/approvals?status=${encodeURIComponent(status)}`, {
+    authorization: authHeader(c),
+  });
+  return c.json(result.data, result.ok ? 200 : (result.status as 400 | 401 | 403 | 502));
 });
 
 // POST /api/approvals/:ticketId/resolve
@@ -35,20 +29,11 @@ approvalRoutes.post(
   async (c) => {
     const ticketId = c.req.param("ticketId");
     const body = c.req.valid("json");
-
-    try {
-      const response = await fetch(`${CONTROL_PLANE_URL}/api/approvals/${ticketId}/resolve`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: c.req.header("Authorization") || "",
-        },
-        body: JSON.stringify(body),
-      });
-      const data = await response.json();
-      return c.json(data, (response.ok ? 200 : response.status) as 200 | 400 | 401 | 403 | 404 | 409 | 410 | 500);
-    } catch (e) {
-      return c.json({ error: `Failed to resolve approval: ${e}` }, 502);
-    }
+    const result = await cpFetch(`/api/approvals/${ticketId}/resolve`, {
+      method: "POST",
+      body,
+      authorization: authHeader(c),
+    });
+    return c.json(result.data, result.ok ? 200 : (result.status as 400 | 401 | 403 | 404 | 409 | 410 | 500));
   },
 );

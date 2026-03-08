@@ -10,6 +10,7 @@ import { policyRoutes } from "./modules/policies/routes";
 import { auditRoutes } from "./modules/audit/routes";
 import { costRoutes } from "./modules/cost/routes";
 import { approvalRoutes } from "./modules/approvals/routes";
+import { taskRoutes } from "./modules/tasks/routes";
 
 const app = new Hono();
 
@@ -39,6 +40,7 @@ app.route("/api/policies", policyRoutes);
 app.route("/api/audit", auditRoutes);
 app.route("/api/cost", costRoutes);
 app.route("/api/approvals", approvalRoutes);
+app.route("/api/tasks", taskRoutes);
 
 // ── Start Server ───────────────────────────────────────────────────
 

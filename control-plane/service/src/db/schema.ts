@@ -79,6 +79,27 @@ export const sessions = sqliteTable("sessions", {
   finishedAt: text("finished_at"),
 });
 
+// ── Tasks ──────────────────────────────────────────────────────────
+
+export const tasks = sqliteTable("tasks", {
+  id: text("id").primaryKey(),
+  projectId: text("project_id").notNull().references(() => projects.id),
+  userId: text("user_id").notNull().references(() => users.id),
+  title: text("title").notNull(),
+  prompt: text("prompt").notNull(),
+  status: text("status", {
+    enum: ["pending", "running", "paused", "completed", "failed", "cancelled"],
+  })
+    .notNull()
+    .default("pending"),
+  sessionId: text("session_id"), // OpenCode session ID once execution starts
+  agentRunId: text("agent_run_id"),
+  result: text("result"),
+  createdAt: text("created_at").notNull().default("(datetime('now'))"),
+  startedAt: text("started_at"),
+  finishedAt: text("finished_at"),
+});
+
 // ── Policy Templates ───────────────────────────────────────────────
 
 export const policyTemplates = sqliteTable("policy_templates", {

@@ -43,7 +43,16 @@ authRoutes.post("/login", zValidator("json", loginSchema), async (c) => {
     role: user.role,
   });
 
-  return c.json({ token, user: { id: user.id, username: user.username, displayName: user.displayName, role: user.role } });
+  return c.json({
+    token,
+    user: {
+      id: user.id,
+      username: user.username,
+      displayName: user.displayName,
+      role: user.role,
+      projects: roles.map((r) => ({ id: r.projectId, role: r.role })),
+    },
+  });
 });
 
 // POST /api/auth/refresh

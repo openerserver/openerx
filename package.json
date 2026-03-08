@@ -17,7 +17,8 @@
     "build:ui": "cd control-plane/web-ui && bun run build",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
-    "typecheck": "tsc --noEmit -p control-plane/service/tsconfig.json && tsc --noEmit -p control-plane/web-ui-bff/tsconfig.json"
+    "typecheck": "tsc --noEmit -p control-plane/service/tsconfig.json && tsc --noEmit -p control-plane/web-ui-bff/tsconfig.json",
+    "cli:task": "cd control-plane/service && bun run cli:task"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.0",
