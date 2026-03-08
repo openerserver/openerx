@@ -38,7 +38,10 @@
     "./.opencode/plugins/orchestrator-plugin.ts",
     "./.opencode/plugins/task-graph-plugin.ts",
     "./.opencode/plugins/hashline-edit-plugin.ts",
-    "./.opencode/plugins/context-injection-plugin.ts"
+    "./.opencode/plugins/context-injection-plugin.ts",
+    "./.opencode/plugins/tmux-plugin.ts",
+    "./.opencode/plugins/skills-plugin.ts",
+    "./.opencode/tools/session-tools.ts"
   ],
   "mcp": {}
 }
