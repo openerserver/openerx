@@ -4,5 +4,7 @@ dist/
 .env.local
 *.db
 *.db-journal
+*.db-shm
+*.db-wal
 .opencode/state/
 .DS_Store
