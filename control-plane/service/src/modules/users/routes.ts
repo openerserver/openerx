@@ -3,7 +3,7 @@ import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import { eq } from "drizzle-orm";
 import { db } from "../../db";
-import { users, projectRoles } from "../../db/schema";
+import { users } from "../../db/schema";
 import { authMiddleware } from "../../middleware/auth";
 import { requireRole } from "../../middleware/rbac";
 

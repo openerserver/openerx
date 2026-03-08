@@ -9,7 +9,7 @@ export function Dashboard() {
   const [approvals, setApprovals] = useState<unknown[]>([]);
 
   useEffect(() => {
-    listApprovals("pending").then(setApprovals).catch(() => {});
+    listApprovals("pending").then((data) => setApprovals(data as unknown[])).catch(() => {});
   }, []);
 
   // Derive active tasks from events

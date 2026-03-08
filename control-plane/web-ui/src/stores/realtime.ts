@@ -54,8 +54,7 @@ export const useRealtimeStore = create<RealtimeState>()((set, get) => ({
       set({ connected: false, ws: null });
       // Auto-reconnect after 3s
       setTimeout(() => {
-        const { token } = { token }; // capture
-        if (token) get().connect(token);
+        get().connect(token);
       }, 3000);
     };
 

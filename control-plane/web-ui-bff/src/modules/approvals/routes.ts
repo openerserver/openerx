@@ -46,7 +46,7 @@ approvalRoutes.post(
         body: JSON.stringify(body),
       });
       const data = await response.json();
-      return c.json(data, response.ok ? 200 : response.status);
+      return c.json(data, (response.ok ? 200 : response.status) as 200 | 400 | 401 | 403 | 404 | 409 | 410 | 500);
     } catch (e) {
       return c.json({ error: `Failed to resolve approval: ${e}` }, 502);
     }

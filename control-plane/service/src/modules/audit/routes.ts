@@ -1,5 +1,4 @@
 import { Hono } from "hono";
-import { z } from "zod";
 import { eq, and, gte, lte, desc } from "drizzle-orm";
 import { db } from "../../db";
 import { auditEvents } from "../../db/schema";

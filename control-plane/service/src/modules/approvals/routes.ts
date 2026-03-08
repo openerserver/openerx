@@ -4,11 +4,11 @@ import { z } from "zod";
 import { eq } from "drizzle-orm";
 import { db } from "../../db";
 import { approvalTickets } from "../../db/schema";
-import { authMiddleware } from "../../middleware/auth";
+import { authMiddleware, type AppEnv } from "../../middleware/auth";
 import { requireRole } from "../../middleware/rbac";
 import { recordAuditEvent } from "../audit/routes";
 
-export const approvalRoutes = new Hono();
+export const approvalRoutes = new Hono<AppEnv>();
 
 approvalRoutes.use("*", authMiddleware);
 

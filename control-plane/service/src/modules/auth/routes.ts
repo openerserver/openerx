@@ -4,9 +4,9 @@ import { z } from "zod";
 import { eq } from "drizzle-orm";
 import { db } from "../../db";
 import { users } from "../../db/schema";
-import { signJWT, authMiddleware, verifyJWT } from "../../middleware/auth";
+import { signJWT, authMiddleware, type AppEnv } from "../../middleware/auth";
 
-export const authRoutes = new Hono();
+export const authRoutes = new Hono<AppEnv>();
 
 const loginSchema = z.object({
   username: z.string().min(1),

@@ -1,3 +1,4 @@
+import type { Env } from "hono";
 import { createMiddleware } from "hono/factory";
 import * as jose from "jose";
 
@@ -6,6 +7,12 @@ export interface JWTPayload {
   org: string;
   projects: Array<{ id: string; role: string }>;
   role: string;
+}
+
+export interface AppEnv extends Env {
+  Variables: {
+    user: JWTPayload;
+  };
 }
 
 const JWT_SECRET = new TextEncoder().encode(

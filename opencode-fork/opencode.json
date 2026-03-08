@@ -43,5 +43,24 @@
     "./.opencode/plugins/skills-plugin.ts",
     "./.opencode/tools/session-tools.ts"
   ],
-  "mcp": {}
+  "mcp": {
+    "exa": {
+      "command": "npx",
+      "args": ["-y", "@anthropic-ai/exa-mcp-server"],
+      "env": {
+        "EXA_API_KEY": "${EXA_API_KEY}"
+      },
+      "description": "Web search via Exa — retrieves relevant web pages, articles, and documentation"
+    },
+    "context7": {
+      "command": "npx",
+      "args": ["-y", "@anthropic-ai/context7-mcp-server"],
+      "description": "Official library documentation lookup — frameworks, languages, APIs"
+    },
+    "grep-app": {
+      "command": "npx",
+      "args": ["-y", "@anthropic-ai/grep-app-mcp-server"],
+      "description": "GitHub code search — find usage patterns and implementations across public repos"
+    }
+  }
 }

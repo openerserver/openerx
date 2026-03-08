@@ -10,7 +10,6 @@ export const taskRoutes = new Hono();
 // GET /api/tasks — List tasks for the current user/project
 taskRoutes.get("/", async (c) => {
   const projectId = c.req.query("projectId");
-  const user = c.get("user");
 
   // Proxy to control plane; aggregate with task graph state from OpenCode
   try {

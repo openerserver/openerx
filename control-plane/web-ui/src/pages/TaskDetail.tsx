@@ -8,7 +8,7 @@ import { TaskGraph } from "../components/TaskGraph";
 export function TaskDetail() {
   const { taskId } = useParams<{ taskId: string }>();
   const { subscribeTask, events } = useRealtimeStore();
-  const [task, setTask] = useState<unknown>(null);
+  const [__task, setTask] = useState<unknown>(null);
 
   useEffect(() => {
     if (taskId) {
@@ -27,7 +27,7 @@ export function TaskDetail() {
     if (event.agentRunId) {
       agentRuns.set(event.agentRunId, {
         id: event.agentRunId,
-        status: event.type.split(".")[1],
+        status: event.type.split(".")[1] ?? "unknown",
         type: (event.data.agentType as string) || "unknown",
       });
     }
