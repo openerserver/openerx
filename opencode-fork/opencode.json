@@ -1,0 +1,44 @@
+{
+  "$schema": "https://opencode.ai/schemas/opencode.json",
+  "agents": {
+    "defaults": {
+      "model": "anthropic/claude-sonnet-4-20250514",
+      "provider": "anthropic"
+    }
+  },
+  "models": {
+    "providers": {
+      "anthropic": {
+        "api": "anthropic",
+        "name": "Anthropic (Primary)"
+      },
+      "openai": {
+        "api": "openai-completions",
+        "name": "OpenAI (Fallback)"
+      }
+    },
+    "list": [
+      {
+        "id": "anthropic/claude-sonnet-4-20250514",
+        "name": "Claude Sonnet 4 (Primary - Reasoning)",
+        "provider": "anthropic",
+        "contextWindow": 200000,
+        "maxTokens": 16384
+      },
+      {
+        "id": "openai/gpt-4.1-mini",
+        "name": "GPT-4.1 Mini (Fast Execution)",
+        "provider": "openai",
+        "contextWindow": 1047576,
+        "maxTokens": 32768
+      }
+    ]
+  },
+  "plugins": [
+    "./.opencode/plugins/orchestrator-plugin.ts",
+    "./.opencode/plugins/task-graph-plugin.ts",
+    "./.opencode/plugins/hashline-edit-plugin.ts",
+    "./.opencode/plugins/context-injection-plugin.ts"
+  ],
+  "mcp": {}
+}

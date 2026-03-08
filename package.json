@@ -1,0 +1,26 @@
+{
+  "name": "openerx",
+  "private": true,
+  "workspaces": [
+    "control-plane/service",
+    "control-plane/web-ui-bff",
+    "control-plane/web-ui"
+  ],
+  "scripts": {
+    "dev:service": "cd control-plane/service && bun run dev",
+    "dev:bff": "cd control-plane/web-ui-bff && bun run dev",
+    "dev:ui": "cd control-plane/web-ui && bun run dev",
+    "dev": "bun run dev:service & bun run dev:bff & bun run dev:ui",
+    "build": "bun run build:service && bun run build:bff && bun run build:ui",
+    "build:service": "cd control-plane/service && bun run build",
+    "build:bff": "cd control-plane/web-ui-bff && bun run build",
+    "build:ui": "cd control-plane/web-ui && bun run build",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "typecheck": "tsc --noEmit -p control-plane/service/tsconfig.json && tsc --noEmit -p control-plane/web-ui-bff/tsconfig.json"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.0",
+    "typescript": "^5.7.0"
+  }
+}
