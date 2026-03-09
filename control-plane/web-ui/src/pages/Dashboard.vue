@@ -93,10 +93,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from "vue";
-import { useRealtimeStore } from "../stores/realtime";
-import { useProjectStore } from "../stores/project";
+import { computed, onMounted, ref } from "vue";
 import { listApprovals } from "../lib/api";
+import { useProjectStore } from "../stores/project";
+import { useRealtimeStore } from "../stores/realtime";
 
 const realtimeStore = useRealtimeStore();
 const projectStore = useProjectStore();
@@ -123,10 +123,7 @@ onMounted(async () => {
 });
 
 const activeTasks = computed(() => {
-  const map = new Map<
-    string,
-    { taskId: string; lastEvent: string; lastUpdate: string }
-  >();
+  const map = new Map<string, { taskId: string; lastEvent: string; lastUpdate: string }>();
   for (const e of events.value) {
     if (
       (e.type === "task.created" || e.type === "task.node.updated") &&

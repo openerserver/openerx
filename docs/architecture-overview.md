@@ -10,6 +10,10 @@
 
 本文档描述的是“当前实现”，不是目标蓝图。
 
+相关补充文档：
+
+- [OpenCode 关注边界说明](./opencode-focus-boundary.md)
+
 ## 2. 系统定位
 
 OpenerX 当前实现是一个面向 AI Agent 任务执行的控制平面系统。它的职责不是直接承载所有智能体执行逻辑，而是围绕任务执行提供以下能力：
@@ -21,6 +25,8 @@ OpenerX 当前实现是一个面向 AI Agent 任务执行的控制平面系统�
 - 对外部 OpenCode Runtime 的适配与控制
 
 从职责边界看，系统由“控制平面服务 + 前端聚合层 + Web UI + 外部运行时”四部分组成。
+
+关于 OpenCode 能力边界，需要单独强调：当前系统关注的是 OpenCode Runtime 接入、协议稳定性以及插件生态兼容性，而不是 OpenCode 桌面端产品能力，详见 [OpenCode 关注边界说明](./opencode-focus-boundary.md)。
 
 ## 3. 逻辑分层
 
@@ -122,14 +128,15 @@ flowchart LR
 
 ### 5.2 BFF 模块
 
-BFF 当前主要包含四类能力：
+BFF 当前主要包含五类能力：
 
-- realtime：实时状态、会话订阅、事件广播
-- agent-control：暂停、恢复、注入指导、终止、消息读取
-- tasks：面向前端的任务视图聚合
+- realtime：实时状态、会话订阅、事件广播、DAG 同步触发
+- agent-control：暂停、恢复、注入指导、终止、消息读取、session 续跑
+- tasks：面向前端的任务视图聚合、graph 同步、pipeline 查询、session 历史
+- config：Agent/Skill/Command/Model/MCP/插件生命周期/编排策略/恢复策略配置管理
 - approvals：审批代理与响应透传
 
-其中 tasks 和 approvals 更偏向业务代理；realtime 和 agent-control 更偏向运行时适配。
+其中 tasks 和 approvals 更偏向业务代理；realtime 和 agent-control 更偏向运行时适配；config 提供运行时配置的 UI 治理入口。
 
 ### 5.3 前端页面与状态模块
 
@@ -137,8 +144,8 @@ BFF 当前主要包含四类能力：
 
 - Login：登录页
 - Dashboard：仪表盘，展示任务、审批和事件流
-- TaskDetail：任务详情页，展示任务图、Agent 控制台和任务事件
-- Settings：配置页
+- TaskDetail：任务详情页，展示任务图（DAG 可视化）、Agent 控制台、编排决策、规划流水线、会话历史和任务事件
+- Settings：配置页（模型、Agent、Skill、命令、MCP 服务、安全基线、插件生命周期、编排策略、恢复策略）
 
 状态管理拆分为：
 
@@ -149,6 +156,7 @@ BFF 当前主要包含四类能力：
 
 SQLite 中当前的核心表包括：
 
+**治理元数据**：
 - organizations：组织
 - projects：项目
 - environments：环境
@@ -161,7 +169,14 @@ SQLite 中当前的核心表包括：
 - approval_tickets：审批单
 - budget_configs：预算配置
 
-从模型设计可以看出，当前控制平面的重点不是任务调度本身，而是“治理侧元数据与追踪”。
+**任务编排模型**（运行时 DAG 镜像）：
+- task_nodes：DAG 任务节点（对齐 task-graph-plugin 的 TaskNode 字段）
+- task_edges：DAG 依赖边（blocks / informs）
+- agent_runs：Agent 执行记录
+- plugins：插件元数据与生命周期状态
+- tasks 表新增 category（意图分类）和 strategy（编排策略）字段
+
+模型设计覆盖"治理侧元数据与追踪"和"运行时编排穿透"两个方向。详见 [oh-my-openagent 实现说明](./oh-my-openagent-implementation.md)。
 
 ## 7. 关键业务链路
 
@@ -219,16 +234,20 @@ SQLite 中当前的核心表包括：
 
 ## 9. 当前架构判断
 
-从代码实现看，当前系统不是一个完整闭环的“统一任务编排平台”，而是一个已经具备雏形的 AI 控制平面：
+从代码实现看，当前系统已经从纯治理侧控制面向"运行时穿透"方向演进：
 
-- 治理能力比编排能力更成熟
-- 前端展示能力已经围绕实时流建立起来
-- BFF 和控制平面边界已经形成，但仍有缺口
-- 任务域模型还不够独立，仍借助审计事件进行拼装
+- 治理能力（审批、审计、成本、策略）已成熟
+- 运行时 DAG 穿透已实现（task-graph-plugin → dag-sync → SQLite 镜像）
+- 编排可视化已落地（意图分类、规划流水线、编排决策面板）
+- 插件生命周期控制面已闭合（启用/禁用/安装/卸载/兼容性检查）
+- 连续执行机制已暴露到 UI（session 历史、续跑、恢复策略）
+- BFF 和控制平面边界已形成，职责划分清晰
 
-因此，当前架构更适合定义为：
+因此，当前架构可定义为：
 
-> 一个以审批、审计、成本和实时可视化为核心的 AI Agent 控制平面原型系统。
+> 一个以审批、审计、成本为治理内核，以运行时 DAG 穿透、编排可视化和插件治理为编排内核的 AI Agent 控制平面系统。
+
+详细的运行时穿透能力实现，见 [oh-my-openagent 实现说明](./oh-my-openagent-implementation.md)。
 
 ## 10. 现状问题清单
 
@@ -268,15 +287,11 @@ BFF 的职责已收缩为：
 
 WebSocket 连接建立时已验证 JWT，绑定 userId 和项目范围。无效 token 的连接会被拒绝（close 4401）。事件广播按项目和任务订阅进行过滤，`subscribe_task` 指令包含项目级权限校验。
 
-### 10.5 运行时状态与控制平面状态尚未统一
+### 10.5 ✅ 运行时状态已建立控制面镜像
 
-Agent 状态、任务节点状态、会话状态一部分来自 OpenCode Runtime，一部分来自控制平面数据库或审计流，当前还没有单一可信状态源。
+运行时 DAG 状态通过 dag-sync 机制同步到控制面数据库（task_nodes、task_edges、agent_runs），节点状态集与 task-graph-plugin 保持一致。意图分类和编排策略通过 tasks.category/strategy 字段持久化。
 
-这会造成：
-
-- 状态解释复杂
-- 前后端展示容易不一致
-- 异常恢复和追溯成本高
+仍需注意：实时事件与 DB 镜像之间可能存在短暂不一致窗口，前端采用"API 主数据 + 实时事件增量"策略降低影响。
 
 ### 10.6 持久化层仍以 SQLite 为主
 

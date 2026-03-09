@@ -1,16 +1,17 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
-import { authRoutes } from "./modules/auth/routes";
-import { orgRoutes } from "./modules/orgs/routes";
-import { projectRoutes } from "./modules/projects/routes";
-import { envRoutes } from "./modules/envs/routes";
-import { userRoutes } from "./modules/users/routes";
-import { policyRoutes } from "./modules/policies/routes";
-import { auditRoutes } from "./modules/audit/routes";
-import { costRoutes } from "./modules/cost/routes";
 import { approvalRoutes } from "./modules/approvals/routes";
+import { auditRoutes } from "./modules/audit/routes";
+import { authRoutes } from "./modules/auth/routes";
+import { costRoutes } from "./modules/cost/routes";
+import { envRoutes } from "./modules/envs/routes";
+import { orgRoutes } from "./modules/orgs/routes";
+import { pluginRoutes } from "./modules/plugins/routes";
+import { policyRoutes } from "./modules/policies/routes";
+import { projectRoutes } from "./modules/projects/routes";
 import { taskRoutes } from "./modules/tasks/routes";
+import { userRoutes } from "./modules/users/routes";
 
 const app = new Hono();
 
@@ -24,6 +25,11 @@ app.use(
     credentials: true,
   }),
 );
+
+app.onError((error, c) => {
+  console.error("[control-plane] uncaught error", error);
+  return c.json({ error: error instanceof Error ? error.message : "Internal Server Error" }, 500);
+});
 
 // ── Health Check ───────────────────────────────────────────────────
 
@@ -41,6 +47,7 @@ app.route("/api/audit", auditRoutes);
 app.route("/api/cost", costRoutes);
 app.route("/api/approvals", approvalRoutes);
 app.route("/api/tasks", taskRoutes);
+app.route("/api/plugins", pluginRoutes);
 
 // ── Start Server ───────────────────────────────────────────────────
 

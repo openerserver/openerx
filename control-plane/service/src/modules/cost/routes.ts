@@ -1,10 +1,10 @@
-import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
-import { z } from "zod";
 import { eq } from "drizzle-orm";
+import { Hono } from "hono";
+import { z } from "zod";
 import { db } from "../../db";
-import { costRecords, budgetConfigs, projects } from "../../db/schema";
-import { authMiddleware, type AppEnv, type JWTPayload } from "../../middleware/auth";
+import { budgetConfigs, costRecords, projects } from "../../db/schema";
+import { type AppEnv, type JWTPayload, authMiddleware } from "../../middleware/auth";
 
 export const costRoutes = new Hono<AppEnv>();
 
@@ -47,13 +47,13 @@ costRoutes.get("/summary", async (c) => {
   }
 
   // Get cost records for the project
-  const records = await db
-    .select()
-    .from(costRecords)
-    .where(eq(costRecords.projectId, projectId));
+  const records = await db.select().from(costRecords).where(eq(costRecords.projectId, projectId));
 
   // Group by requested dimension
-  const grouped = new Map<string, { inputTokens: number; outputTokens: number; cost: number; count: number }>();
+  const grouped = new Map<
+    string,
+    { inputTokens: number; outputTokens: number; cost: number; count: number }
+  >();
 
   for (const record of records) {
     let key: string;
@@ -160,88 +160,77 @@ const updateBudgetSchema = z.object({
   throttleThreshold: z.number().min(0).max(1).optional(),
 });
 
-costRoutes.post(
-  "/budget",
-  zValidator("json", budgetSchema),
-  async (c) => {
-    const body = c.req.valid("json");
-    const user = c.get("user") as JWTPayload;
-    const id = crypto.randomUUID();
-    const createdAt = new Date().toISOString();
+costRoutes.post("/budget", zValidator("json", budgetSchema), async (c) => {
+  const body = c.req.valid("json");
+  const user = c.get("user") as JWTPayload;
+  const id = crypto.randomUUID();
+  const createdAt = new Date().toISOString();
 
-    const project = await db.query.projects.findFirst({
-      where: eq(projects.id, body.projectId),
-    });
-    if (!project) return c.json({ error: "Project not found" }, 404);
+  const project = await db.query.projects.findFirst({
+    where: eq(projects.id, body.projectId),
+  });
+  if (!project) return c.json({ error: "Project not found" }, 404);
 
-    if (!hasProjectAccess(user, body.projectId, "project_admin")) {
-      return c.json({ error: "Insufficient project permissions" }, 403);
-    }
+  if (!hasProjectAccess(user, body.projectId, "project_admin")) {
+    return c.json({ error: "Insufficient project permissions" }, 403);
+  }
 
-    await db.insert(budgetConfigs).values({
-      id,
-      projectId: body.projectId,
-      period: body.period,
-      limitAmount: body.limitAmount,
-      warnThreshold: body.warnThreshold,
-      throttleThreshold: body.throttleThreshold,
-      createdAt,
-    });
+  await db.insert(budgetConfigs).values({
+    id,
+    projectId: body.projectId,
+    period: body.period,
+    limitAmount: body.limitAmount,
+    warnThreshold: body.warnThreshold,
+    throttleThreshold: body.throttleThreshold,
+    createdAt,
+  });
 
-    return c.json({ id, ...body, createdAt }, 201);
-  },
-);
+  return c.json({ id, ...body, createdAt }, 201);
+});
 
 // PATCH /api/cost/budget/:budgetId
-costRoutes.patch(
-  "/budget/:budgetId",
-  zValidator("json", updateBudgetSchema),
-  async (c) => {
-    const budgetId = c.req.param("budgetId");
-    const body = c.req.valid("json");
-    const user = c.get("user") as JWTPayload;
+costRoutes.patch("/budget/:budgetId", zValidator("json", updateBudgetSchema), async (c) => {
+  const budgetId = c.req.param("budgetId");
+  const body = c.req.valid("json");
+  const user = c.get("user") as JWTPayload;
 
-    const existing = await db.query.budgetConfigs.findFirst({
-      where: eq(budgetConfigs.id, budgetId),
-    });
-    if (!existing) return c.json({ error: "Budget config not found" }, 404);
+  const existing = await db.query.budgetConfigs.findFirst({
+    where: eq(budgetConfigs.id, budgetId),
+  });
+  if (!existing) return c.json({ error: "Budget config not found" }, 404);
 
-    if (!hasProjectAccess(user, existing.projectId, "project_admin")) {
-      return c.json({ error: "Insufficient project permissions" }, 403);
-    }
+  if (!hasProjectAccess(user, existing.projectId, "project_admin")) {
+    return c.json({ error: "Insufficient project permissions" }, 403);
+  }
 
-    await db
-      .update(budgetConfigs)
-      .set({
-        ...(body.period !== undefined ? { period: body.period } : {}),
-        ...(body.limitAmount !== undefined ? { limitAmount: body.limitAmount } : {}),
-        ...(body.warnThreshold !== undefined ? { warnThreshold: body.warnThreshold } : {}),
-        ...(body.throttleThreshold !== undefined
-          ? { throttleThreshold: body.throttleThreshold }
-          : {}),
-      })
-      .where(eq(budgetConfigs.id, budgetId));
+  await db
+    .update(budgetConfigs)
+    .set({
+      ...(body.period !== undefined ? { period: body.period } : {}),
+      ...(body.limitAmount !== undefined ? { limitAmount: body.limitAmount } : {}),
+      ...(body.warnThreshold !== undefined ? { warnThreshold: body.warnThreshold } : {}),
+      ...(body.throttleThreshold !== undefined
+        ? { throttleThreshold: body.throttleThreshold }
+        : {}),
+    })
+    .where(eq(budgetConfigs.id, budgetId));
 
-    return c.json({
-      id: budgetId,
-      projectId: existing.projectId,
-      period: body.period ?? existing.period,
-      limitAmount: body.limitAmount ?? existing.limitAmount,
-      warnThreshold: body.warnThreshold ?? existing.warnThreshold,
-      throttleThreshold: body.throttleThreshold ?? existing.throttleThreshold,
-    });
-  },
-);
+  return c.json({
+    id: budgetId,
+    projectId: existing.projectId,
+    period: body.period ?? existing.period,
+    limitAmount: body.limitAmount ?? existing.limitAmount,
+    warnThreshold: body.warnThreshold ?? existing.warnThreshold,
+    throttleThreshold: body.throttleThreshold ?? existing.throttleThreshold,
+  });
+});
 
 // GET /api/cost/detail?taskId=
 costRoutes.get("/detail", async (c) => {
   const taskId = c.req.query("taskId");
   if (!taskId) return c.json({ error: "taskId query param required" }, 400);
 
-  const records = await db
-    .select()
-    .from(costRecords)
-    .where(eq(costRecords.taskId, taskId));
+  const records = await db.select().from(costRecords).where(eq(costRecords.taskId, taskId));
 
   const totalCost = records.reduce((sum, r) => sum + r.cost, 0);
   const totalInputTokens = records.reduce((sum, r) => sum + r.inputTokens, 0);

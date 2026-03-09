@@ -1,10 +1,16 @@
-import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
-import { z } from "zod";
 import { and, eq, inArray } from "drizzle-orm";
+import { Hono } from "hono";
+import { z } from "zod";
 import { db } from "../../db";
-import { organizations, projectRoles, projects, users, type ProjectSettings } from "../../db/schema";
-import { authMiddleware, type AppEnv, type JWTPayload } from "../../middleware/auth";
+import {
+  type ProjectSettings,
+  organizations,
+  projectRoles,
+  projects,
+  users,
+} from "../../db/schema";
+import { type AppEnv, type JWTPayload, authMiddleware } from "../../middleware/auth";
 import { requireProjectRole, requireRole } from "../../middleware/rbac";
 
 export const projectRoutes = new Hono<AppEnv>();
@@ -44,7 +50,11 @@ const ROLE_HIERARCHY: Record<Role, number> = {
 const createProjectSchema = z.object({
   orgId: z.string().min(1),
   name: z.string().min(1).max(100),
-  slug: z.string().min(1).max(50).regex(/^[a-z0-9-]+$/),
+  slug: z
+    .string()
+    .min(1)
+    .max(50)
+    .regex(/^[a-z0-9-]+$/),
   description: z.string().max(500).optional(),
   settings: projectSettingsSchema.optional(),
 });
@@ -82,7 +92,9 @@ function normalizeProjectSettings(settings: unknown): ProjectSettings | null | u
   return settings as ProjectSettings;
 }
 
-function normalizeProjectRecord<T extends { settings?: unknown }>(project: T): Omit<T, "settings"> & {
+function normalizeProjectRecord<T extends { settings?: unknown }>(
+  project: T,
+): Omit<T, "settings"> & {
   settings?: ProjectSettings | null;
 } {
   return {
@@ -376,7 +388,9 @@ projectRoutes.patch(
     if (!existing) return c.json({ error: "Project not found" }, 404);
 
     const existingSettings = normalizeProjectSettings(existing.settings) ?? {};
-    const nextSettings = body.settings ? { ...existingSettings, ...body.settings } : existingSettings;
+    const nextSettings = body.settings
+      ? { ...existingSettings, ...body.settings }
+      : existingSettings;
 
     await db
       .update(projects)

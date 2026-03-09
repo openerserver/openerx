@@ -94,16 +94,16 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
 import { message } from "ant-design-vue";
+import { computed, onMounted, ref, watch } from "vue";
 import {
+  type MemberCandidate,
+  type ProjectMember,
   addProjectMember,
   listProjectMemberCandidates,
   listProjectMembers,
   removeProjectMember,
   updateProjectMember,
-  type MemberCandidate,
-  type ProjectMember,
 } from "../lib/api";
 import { useAuthStore } from "../stores/auth";
 
@@ -284,5 +284,4 @@ function valueToRole(value: unknown): "project_admin" | "developer" | "viewer" {
   }
   return "developer";
 }
-
 </script>

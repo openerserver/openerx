@@ -13,7 +13,7 @@
         <div
           :style="{ fontSize: '10px', marginTop: '2px', color: statusColors[data.status] || '#64748b' }"
         >
-          {{ data.status }}
+          {{ statusLabel(data.status) }}
         </div>
       </div>
     </template>
@@ -21,14 +21,15 @@
 </template>
 
 <script setup lang="ts">
-import { computed, type CSSProperties } from "vue";
-import { VueFlow } from "@vue-flow/core";
 import { Background } from "@vue-flow/background";
 import { Controls } from "@vue-flow/controls";
+import { VueFlow } from "@vue-flow/core";
+import { type CSSProperties, computed, ref, watch } from "vue";
 import "@vue-flow/core/dist/style.css";
 import "@vue-flow/core/dist/theme-default.css";
 import "@vue-flow/controls/dist/style.css";
 import dagre from "dagre";
+import { type TaskGraphData, getTaskGraph } from "../lib/api";
 
 interface TaskEvent {
   id: string;
@@ -39,18 +40,67 @@ interface TaskEvent {
 const props = defineProps<{
   taskId: string;
   events: TaskEvent[];
+  fallbackStatus?: string;
 }>();
+
+const apiGraph = ref<TaskGraphData | null>(null);
+
+// Fetch graph data from API when taskId changes
+watch(
+  () => props.taskId,
+  async (id) => {
+    if (!id) return;
+    try {
+      apiGraph.value = await getTaskGraph(id);
+    } catch {
+      apiGraph.value = null;
+    }
+  },
+  { immediate: true },
+);
+
+// Periodically refresh graph when task is running
+watch(
+  () => props.events.length,
+  async () => {
+    if (!props.taskId) return;
+    try {
+      apiGraph.value = await getTaskGraph(props.taskId);
+    } catch {
+      // Keep existing data
+    }
+  },
+);
 
 const statusColors: Record<string, string> = {
   pending: "#64748b",
   blocked: "#a855f7",
   in_progress: "#3b82f6",
+  running: "#3b82f6",
   completed: "#22c55e",
   failed: "#ef4444",
   stopped: "#6b7280",
   paused: "#f59e0b",
   waiting_approval: "#f97316",
+  cancelled: "#6b7280",
 };
+
+function statusLabel(status: string) {
+  const map: Record<string, string> = {
+    pending: "待执行",
+    blocked: "已阻塞",
+    in_progress: "进行中",
+    running: "运行中",
+    completed: "已完成",
+    failed: "失败",
+    stopped: "已停止",
+    paused: "已暂停",
+    waiting_approval: "待审批",
+    cancelled: "已取消",
+  };
+
+  return map[status] || status;
+}
 
 function nodeStyle(status: string): CSSProperties {
   return {
@@ -65,41 +115,51 @@ function nodeStyle(status: string): CSSProperties {
 }
 
 const layoutResult = computed(() => {
-  const nodeMap = new Map<
-    string,
-    { id: string; label: string; status: string }
-  >();
+  const nodeMap = new Map<string, { id: string; label: string; status: string }>();
+  const edgeList: Array<{ source: string; target: string }> = [];
 
-  for (const event of props.events) {
-    if (event.type === "task.node.updated" && event.data.nodeId) {
-      const nodeId = event.data.nodeId as string;
-      nodeMap.set(nodeId, {
-        id: nodeId,
-        label: (event.data.label as string) || nodeId,
-        status: (event.data.status as string) || "pending",
+  // 1. Populate from API graph data (primary source)
+  if (apiGraph.value && apiGraph.value.nodes.length > 0) {
+    for (const node of apiGraph.value.nodes) {
+      nodeMap.set(node.id, {
+        id: node.id,
+        label: node.subject,
+        status: node.status,
       });
+    }
+    for (const edge of apiGraph.value.edges) {
+      edgeList.push({ source: edge.fromNodeId, target: edge.toNodeId });
     }
   }
 
-  // Placeholder if no nodes
+  // 2. Overlay real-time event updates (incremental refresh)
+  for (const event of props.events) {
+    if (event.type === "task.node.updated" && event.data.nodeId) {
+      const nodeId = event.data.nodeId as string;
+      const existing = nodeMap.get(nodeId);
+      nodeMap.set(nodeId, {
+        id: nodeId,
+        label: (event.data.label as string) || existing?.label || nodeId,
+        status: (event.data.status as string) || existing?.status || "pending",
+      });
+
+      // Add edges from dependsOn if not from API
+      if (event.data.dependsOn && edgeList.length === 0) {
+        const deps = event.data.dependsOn as string[];
+        for (const dep of deps) {
+          edgeList.push({ source: dep, target: nodeId });
+        }
+      }
+    }
+  }
+
+  // 3. Placeholder if no data at all
   if (nodeMap.size === 0) {
     nodeMap.set("placeholder", {
       id: "placeholder",
       label: `Task ${props.taskId.slice(0, 8)}`,
-      status: "pending",
+      status: props.fallbackStatus || "pending",
     });
-  }
-
-  // Extract edges
-  const edges: Array<{ source: string; target: string }> = [];
-  for (const event of props.events) {
-    if (event.type === "task.node.updated" && event.data.dependsOn) {
-      const deps = event.data.dependsOn as string[];
-      const nodeId = event.data.nodeId as string;
-      for (const dep of deps) {
-        edges.push({ source: dep, target: nodeId });
-      }
-    }
   }
 
   // Dagre layout
@@ -110,7 +170,7 @@ const layoutResult = computed(() => {
   for (const node of nodeMap.values()) {
     g.setNode(node.id, { width: 180, height: 60 });
   }
-  for (const edge of edges) {
+  for (const edge of edgeList) {
     g.setEdge(edge.source, edge.target);
   }
   dagre.layout(g);
@@ -125,7 +185,7 @@ const layoutResult = computed(() => {
     };
   });
 
-  const flowEdges = edges.map((e) => ({
+  const flowEdges = edgeList.map((e) => ({
     id: `${e.source}-${e.target}`,
     source: e.source,
     target: e.target,

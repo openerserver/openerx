@@ -1,7 +1,7 @@
-import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
-import { z } from "zod";
 import { eq } from "drizzle-orm";
+import { Hono } from "hono";
+import { z } from "zod";
 import { db } from "../../db";
 import { users } from "../../db/schema";
 import { authMiddleware } from "../../middleware/auth";
@@ -12,10 +12,16 @@ export const userRoutes = new Hono();
 userRoutes.use("*", authMiddleware);
 
 const createUserSchema = z.object({
-  username: z.string().min(3).max(50).regex(/^[a-zA-Z0-9_-]+$/),
+  username: z
+    .string()
+    .min(3)
+    .max(50)
+    .regex(/^[a-zA-Z0-9_-]+$/),
   password: z.string().min(8),
   displayName: z.string().min(1).max(100),
-  role: z.enum(["platform_admin", "org_admin", "project_admin", "developer", "viewer"]).default("developer"),
+  role: z
+    .enum(["platform_admin", "org_admin", "project_admin", "developer", "viewer"])
+    .default("developer"),
 });
 
 const updateUserSchema = z.object({
@@ -36,33 +42,31 @@ userRoutes.get("/", requireRole("org_admin"), async (c) => {
 });
 
 // POST /api/users
-userRoutes.post(
-  "/",
-  requireRole("org_admin"),
-  zValidator("json", createUserSchema),
-  async (c) => {
-    const body = c.req.valid("json");
-    const id = crypto.randomUUID();
+userRoutes.post("/", requireRole("org_admin"), zValidator("json", createUserSchema), async (c) => {
+  const body = c.req.valid("json");
+  const id = crypto.randomUUID();
 
-    // Check for existing username
-    const existing = await db.query.users.findFirst({
-      where: eq(users.username, body.username),
-    });
-    if (existing) return c.json({ error: "Username already exists" }, 409);
+  // Check for existing username
+  const existing = await db.query.users.findFirst({
+    where: eq(users.username, body.username),
+  });
+  if (existing) return c.json({ error: "Username already exists" }, 409);
 
-    const passwordHash = await Bun.password.hash(body.password, { algorithm: "bcrypt", cost: 12 });
+  const passwordHash = await Bun.password.hash(body.password, { algorithm: "bcrypt", cost: 12 });
 
-    await db.insert(users).values({
-      id,
-      username: body.username,
-      passwordHash,
-      displayName: body.displayName,
-      role: body.role,
-    });
+  await db.insert(users).values({
+    id,
+    username: body.username,
+    passwordHash,
+    displayName: body.displayName,
+    role: body.role,
+  });
 
-    return c.json({ id, username: body.username, displayName: body.displayName, role: body.role }, 201);
-  },
-);
+  return c.json(
+    { id, username: body.username, displayName: body.displayName, role: body.role },
+    201,
+  );
+});
 
 // PATCH /api/users/:userId
 userRoutes.patch(
@@ -81,7 +85,10 @@ userRoutes.patch(
     const updateData: Record<string, unknown> = {};
     if (body.displayName) updateData.displayName = body.displayName;
     if (body.password) {
-      updateData.passwordHash = await Bun.password.hash(body.password, { algorithm: "bcrypt", cost: 12 });
+      updateData.passwordHash = await Bun.password.hash(body.password, {
+        algorithm: "bcrypt",
+        cost: 12,
+      });
     }
 
     if (Object.keys(updateData).length > 0) {

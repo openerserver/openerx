@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { cpFetch, authHeader } from "../../lib/control-plane-client";
+import { authHeader, cpFetch } from "../../lib/control-plane-client";
 
 export const projectRoutes = new Hono();
 
@@ -10,9 +10,12 @@ projectRoutes.get("/", async (c) => {
   if (orgId) params.set("orgId", orgId);
 
   const query = params.toString();
-  const result = await cpFetch<Array<Record<string, unknown>>>(`/api/projects${query ? `?${query}` : ""}`, {
-    authorization: authHeader(c),
-  });
+  const result = await cpFetch<Array<Record<string, unknown>>>(
+    `/api/projects${query ? `?${query}` : ""}`,
+    {
+      authorization: authHeader(c),
+    },
+  );
 
   return c.json(result.data, result.ok ? 200 : (result.status as 401 | 502));
 });
@@ -31,9 +34,12 @@ projectRoutes.post("/", async (c) => {
 // GET /api/projects/:projectId/members
 projectRoutes.get("/:projectId/members", async (c) => {
   const projectId = c.req.param("projectId");
-  const result = await cpFetch<Array<Record<string, unknown>>>(`/api/projects/${projectId}/members`, {
-    authorization: authHeader(c),
-  });
+  const result = await cpFetch<Array<Record<string, unknown>>>(
+    `/api/projects/${projectId}/members`,
+    {
+      authorization: authHeader(c),
+    },
+  );
   return c.json(result.data, result.ok ? 200 : (result.status as 401 | 403 | 404 | 502));
 });
 
@@ -58,7 +64,10 @@ projectRoutes.post("/:projectId/members", async (c) => {
     body,
     authorization: authHeader(c),
   });
-  return c.json(result.data, result.ok ? 201 : (result.status as 400 | 401 | 403 | 404 | 409 | 502));
+  return c.json(
+    result.data,
+    result.ok ? 201 : (result.status as 400 | 401 | 403 | 404 | 409 | 502),
+  );
 });
 
 // PATCH /api/projects/:projectId/members/:userId
@@ -66,11 +75,14 @@ projectRoutes.patch("/:projectId/members/:userId", async (c) => {
   const projectId = c.req.param("projectId");
   const userId = c.req.param("userId");
   const body = await c.req.json();
-  const result = await cpFetch<Record<string, unknown>>(`/api/projects/${projectId}/members/${userId}`, {
-    method: "PATCH",
-    body,
-    authorization: authHeader(c),
-  });
+  const result = await cpFetch<Record<string, unknown>>(
+    `/api/projects/${projectId}/members/${userId}`,
+    {
+      method: "PATCH",
+      body,
+      authorization: authHeader(c),
+    },
+  );
   return c.json(result.data, result.ok ? 200 : (result.status as 400 | 401 | 403 | 404 | 502));
 });
 
@@ -78,10 +90,13 @@ projectRoutes.patch("/:projectId/members/:userId", async (c) => {
 projectRoutes.delete("/:projectId/members/:userId", async (c) => {
   const projectId = c.req.param("projectId");
   const userId = c.req.param("userId");
-  const result = await cpFetch<Record<string, unknown>>(`/api/projects/${projectId}/members/${userId}`, {
-    method: "DELETE",
-    authorization: authHeader(c),
-  });
+  const result = await cpFetch<Record<string, unknown>>(
+    `/api/projects/${projectId}/members/${userId}`,
+    {
+      method: "DELETE",
+      authorization: authHeader(c),
+    },
+  );
   return c.json(result.data, result.ok ? 200 : (result.status as 400 | 401 | 403 | 404 | 502));
 });
 

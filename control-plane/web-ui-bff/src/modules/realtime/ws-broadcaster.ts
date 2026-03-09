@@ -1,6 +1,6 @@
-import type { RealtimeEvent } from "../../types/events";
-import type { JWTPayload } from "../../middleware/auth";
 import * as jose from "jose";
+import type { JWTPayload } from "../../middleware/auth";
+import type { RealtimeEvent } from "../../types/events";
 import { sseAggregator } from "./sse-aggregator";
 
 // ── WebSocket Broadcaster ──────────────────────────────────────────
@@ -54,12 +54,20 @@ class WSBroadcaster {
 
     for (const [, client] of this.clients) {
       // Filter by project — only deliver if client has access to the event's project
-      if (event.projectId && client.projectIds.size > 0 && !client.projectIds.has(event.projectId)) {
+      if (
+        event.projectId &&
+        client.projectIds.size > 0 &&
+        !client.projectIds.has(event.projectId)
+      ) {
         continue;
       }
 
       // Filter by task subscription
-      if (event.taskId && client.subscribedTasks.size > 0 && !client.subscribedTasks.has(event.taskId)) {
+      if (
+        event.taskId &&
+        client.subscribedTasks.size > 0 &&
+        !client.subscribedTasks.has(event.taskId)
+      ) {
         continue;
       }
 
@@ -140,7 +148,9 @@ export const websocketHandler = {
 
   message(ws: WebSocket, message: string | ArrayBuffer) {
     try {
-      const data = JSON.parse(typeof message === "string" ? message : new TextDecoder().decode(message));
+      const data = JSON.parse(
+        typeof message === "string" ? message : new TextDecoder().decode(message),
+      );
 
       const clientId = (ws as unknown as Record<string, string>).__clientId;
       if (!clientId) return;

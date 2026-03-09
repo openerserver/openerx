@@ -124,10 +124,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted } from "vue";
-import { useRoute } from "vue-router";
 import { message } from "ant-design-vue";
-import { getProject, updateProject, type Project, type ProjectSettings } from "../lib/api";
+import { computed, onMounted, ref } from "vue";
+import { useRoute } from "vue-router";
+import { type Project, type ProjectSettings, getProject, updateProject } from "../lib/api";
 import { useAuthStore } from "../stores/auth";
 import { useProjectStore } from "../stores/project";
 
@@ -168,7 +168,7 @@ const canManage = computed(() => {
 onMounted(async () => {
   const projectId = String(route.params.projectId);
   try {
-    project.value = await getProject(projectId) as ProjectWithSettings;
+    project.value = (await getProject(projectId)) as ProjectWithSettings;
   } catch {
     project.value = null;
   } finally {
@@ -218,7 +218,10 @@ async function saveDesc() {
   try {
     await updateProject(project.value.id, { description: editDescValue.value.trim() });
     project.value.description = editDescValue.value.trim();
-    projectStore.updateProjectInList({ id: project.value.id, description: project.value.description });
+    projectStore.updateProjectInList({
+      id: project.value.id,
+      description: project.value.description,
+    });
     editingDesc.value = false;
     message.success("保存成功");
   } catch (e) {

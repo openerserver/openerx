@@ -127,10 +127,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from "vue";
 import { PlusOutlined } from "@ant-design/icons-vue";
 import { message } from "ant-design-vue";
-import { listTasks, createTask, executeTask, type Task } from "../lib/api";
+import { computed, onMounted, ref, watch } from "vue";
+import { type Task, createTask, executeTask, listTasks } from "../lib/api";
 import { useProjectStore } from "../stores/project";
 
 const projectStore = useProjectStore();

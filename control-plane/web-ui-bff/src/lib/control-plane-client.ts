@@ -4,8 +4,7 @@
 import * as jose from "jose";
 import type { JWTPayload } from "../middleware/auth";
 
-const CONTROL_PLANE_URL =
-  process.env.CONTROL_PLANE_URL || "http://localhost:4097";
+const CONTROL_PLANE_URL = process.env.CONTROL_PLANE_URL || "http://localhost:4097";
 const JWT_SECRET = new TextEncoder().encode(
   process.env.JWT_SECRET || "openerx-dev-secret-change-in-production",
 );
@@ -47,7 +46,19 @@ export async function cpFetch<T = unknown>(
       headers,
       body: body ? JSON.stringify(body) : undefined,
     });
-    const data = (await response.json()) as T;
+    const text = await response.text();
+    let data: T;
+
+    if (!text) {
+      data = {} as T;
+    } else {
+      try {
+        data = JSON.parse(text) as T;
+      } catch {
+        data = { error: text } as T;
+      }
+    }
+
     const ms = (performance.now() - start).toFixed(1);
     console.log(`[cp] ${method} ${path} → ${response.status} (${ms}ms) rid=${requestId}`);
     return { ok: response.ok, status: response.status, data };

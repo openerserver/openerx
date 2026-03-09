@@ -15,6 +15,13 @@
       "when": 1772966117736,
       "tag": "0001_thin_jane_foster",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1773042646713,
+      "tag": "0002_numerous_bastion",
+      "breakpoints": true
     }
   ]
 }

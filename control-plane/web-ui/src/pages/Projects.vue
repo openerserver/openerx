@@ -143,10 +143,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted } from "vue";
 import { PlusOutlined } from "@ant-design/icons-vue";
 import { message } from "ant-design-vue";
-import { createProject, updateProject, listOrgs, type Org, type Project } from "../lib/api";
+import { computed, onMounted, ref } from "vue";
+import { type Org, type Project, createProject, listOrgs, updateProject } from "../lib/api";
 import { useAuthStore } from "../stores/auth";
 import { useProjectStore } from "../stores/project";
 

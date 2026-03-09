@@ -1,6 +1,6 @@
-import { type Plugin, tool } from "@opencode-ai/plugin";
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { type Plugin, tool } from "@opencode-ai/plugin";
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -113,50 +113,78 @@ function getReadyNodes(graph: TaskGraph): TaskNode[] {
   });
 }
 
-function updateDependentNodes(graph: TaskGraph, nodeId: string, newStatus: NodeStatus): void {
-  if (newStatus === "completed") {
-    // Unblock downstream nodes whose all blockers are now completed
-    const downstream = graph.edges
-      .filter((e) => e.from === nodeId && e.type === "blocks")
-      .map((e) => e.to);
+function getBlockingEdges(graph: TaskGraph, nodeId: string): TaskEdge[] {
+  return graph.edges.filter((edge) => edge.to === nodeId && edge.type === "blocks");
+}
 
-    for (const downId of downstream) {
-      const downNode = graph.nodes.find((n) => n.id === downId);
-      if (downNode?.status === "blocked") {
-        const allBlockers = graph.edges
-          .filter((e) => e.to === downId && e.type === "blocks")
-          .map((e) => e.from);
-        const allDone = allBlockers.every((bid) => {
-          const bn = graph.nodes.find((n) => n.id === bid);
-          return bn?.status === "completed";
-        });
-        if (allDone) {
-          downNode.status = "pending";
-        }
-      }
-    }
-  } else if (newStatus === "stopped" || newStatus === "failed") {
-    // Block downstream nodes
-    const downstream = graph.edges
-      .filter((e) => e.from === nodeId && e.type === "blocks")
-      .map((e) => e.to);
+function getDownstreamBlockTargets(graph: TaskGraph, nodeId: string): string[] {
+  return graph.edges
+    .filter((edge) => edge.from === nodeId && edge.type === "blocks")
+    .map((edge) => edge.to);
+}
 
-    for (const downId of downstream) {
-      const downNode = graph.nodes.find((n) => n.id === downId);
-      if (downNode && downNode.status === "pending") {
-        downNode.status = "blocked";
-      }
+function areAllBlockersCompleted(graph: TaskGraph, nodeId: string): boolean {
+  return getBlockingEdges(graph, nodeId)
+    .map((edge) => edge.from)
+    .every(
+      (blockerId) => graph.nodes.find((node) => node.id === blockerId)?.status === "completed",
+    );
+}
+
+function unblockCompletedDependents(graph: TaskGraph, nodeId: string): void {
+  for (const downstreamId of getDownstreamBlockTargets(graph, nodeId)) {
+    const downstreamNode = graph.nodes.find((node) => node.id === downstreamId);
+    if (downstreamNode?.status === "blocked" && areAllBlockersCompleted(graph, downstreamId)) {
+      downstreamNode.status = "pending";
     }
   }
 }
 
+function blockDownstreamNodes(graph: TaskGraph, nodeId: string): void {
+  for (const downstreamId of getDownstreamBlockTargets(graph, nodeId)) {
+    const downstreamNode = graph.nodes.find((node) => node.id === downstreamId);
+    if (downstreamNode?.status === "pending") {
+      downstreamNode.status = "blocked";
+    }
+  }
+}
+
+function updateDependentNodes(graph: TaskGraph, nodeId: string, newStatus: NodeStatus): void {
+  if (newStatus === "completed") {
+    unblockCompletedDependents(graph, nodeId);
+  } else if (newStatus === "stopped" || newStatus === "failed") {
+    blockDownstreamNodes(graph, nodeId);
+  }
+}
+
+function applyNodeUpdate(
+  node: TaskNode,
+  newStatus: NodeStatus,
+  sessionId?: string,
+  output?: string,
+  error?: string,
+  tokenUsed?: number,
+): void {
+  node.status = newStatus;
+  if (sessionId) node.sessionId = sessionId;
+  if (output) node.output = output;
+  if (error) node.error = error;
+  if (tokenUsed) node.tokenUsed += tokenUsed;
+
+  if (newStatus === "in_progress" && !node.startedAt) {
+    node.startedAt = Date.now();
+  }
+  if (newStatus === "completed" || newStatus === "stopped") {
+    node.finishedAt = Date.now();
+  }
+  if (newStatus === "failed") {
+    node.retryCount++;
+  }
+}
+
 function checkGraphCompletion(graph: TaskGraph): void {
-  const allTerminal = graph.nodes.every(
-    (n) => n.status === "completed" || n.status === "stopped",
-  );
-  const anyFailed = graph.nodes.some(
-    (n) => n.status === "failed" && n.retryCount >= n.maxRetries,
-  );
+  const allTerminal = graph.nodes.every((n) => n.status === "completed" || n.status === "stopped");
+  const anyFailed = graph.nodes.some((n) => n.status === "failed" && n.retryCount >= n.maxRetries);
 
   if (allTerminal) {
     graph.status = "completed";
@@ -175,34 +203,53 @@ export const TaskGraphPlugin: Plugin = async ({ directory }) => {
         args: {
           taskId: tool.schema.string("Unique task identifier"),
           title: tool.schema.string("Task title"),
-          nodes: tool.schema.string(
-            "JSON array of nodes: [{subject, agentType, maxRetries?}]",
-          ),
+          nodes: tool.schema.string("JSON array of nodes: [{subject, agentType, maxRetries?}]"),
           edges: tool.schema.string(
             "JSON array of edges: [{fromIndex, toIndex, type}] where index refers to node position",
           ),
         },
         async execute({ taskId, title, nodes: nodesJson, edges: edgesJson }) {
-          const rawNodes = JSON.parse(nodesJson) as Array<{
-            subject: string;
-            agentType: string;
-            maxRetries?: number;
-          }>;
-          const rawEdges = JSON.parse(edgesJson) as Array<{
-            fromIndex: number;
-            toIndex: number;
-            type?: "blocks" | "informs";
-          }>;
+          const rawNodes = JSON.parse(nodesJson) as Array<Record<string, unknown>>;
+          const rawEdges = JSON.parse(edgesJson) as Array<Record<string, unknown>>;
+
+          const isNodeStatus = (value: unknown): value is NodeStatus =>
+            typeof value === "string" &&
+            [
+              "pending",
+              "in_progress",
+              "completed",
+              "failed",
+              "blocked",
+              "stopped",
+              "paused",
+              "waiting_approval",
+            ].includes(value);
+
+          const externalNodeIds = rawNodes.map((rn, i) => String(rn.id ?? i));
 
           const graphId = generateId();
           const taskNodes: TaskNode[] = rawNodes.map((rn, i) => ({
             id: `${graphId}-n${i}`,
-            subject: rn.subject,
-            status: "pending" as NodeStatus,
-            agentType: rn.agentType,
+            subject:
+              typeof rn.subject === "string"
+                ? rn.subject
+                : typeof rn.title === "string"
+                  ? rn.title
+                  : typeof rn.name === "string"
+                    ? rn.name
+                    : typeof rn.description === "string"
+                      ? rn.description
+                      : `Step ${i + 1}`,
+            status: isNodeStatus(rn.status) ? rn.status : ("pending" as NodeStatus),
+            agentType:
+              typeof rn.agentType === "string"
+                ? rn.agentType
+                : typeof rn.agent === "string"
+                  ? rn.agent
+                  : "build",
             sessionId: null,
             retryCount: 0,
-            maxRetries: rn.maxRetries ?? 3,
+            maxRetries: typeof rn.maxRetries === "number" ? rn.maxRetries : 3,
             output: null,
             error: null,
             tokenUsed: 0,
@@ -210,11 +257,50 @@ export const TaskGraphPlugin: Plugin = async ({ directory }) => {
             finishedAt: null,
           }));
 
-          const taskEdges: TaskEdge[] = rawEdges.map((re) => ({
-            from: taskNodes[re.fromIndex]!.id,
-            to: taskNodes[re.toIndex]!.id,
-            type: re.type ?? "blocks",
-          }));
+          const resolveNodeIndex = (value: unknown): number => {
+            if (typeof value === "number" && Number.isInteger(value)) {
+              return value;
+            }
+            if (typeof value === "string") {
+              const byExternalId = externalNodeIds.indexOf(value);
+              if (byExternalId >= 0) return byExternalId;
+
+              const byGraphNodeId = taskNodes.findIndex((node) => node.id === value);
+              if (byGraphNodeId >= 0) return byGraphNodeId;
+
+              const bySubject = taskNodes.findIndex((node) => node.subject === value);
+              if (bySubject >= 0) return bySubject;
+            }
+            return -1;
+          };
+
+          const edgeKeys = new Set<string>();
+          const taskEdges: TaskEdge[] = [];
+          const pushEdge = (fromIndex: number, toIndex: number, type?: unknown) => {
+            const fromNode = taskNodes[fromIndex];
+            const toNode = taskNodes[toIndex];
+            if (!fromNode || !toNode) return;
+
+            const edgeType = type === "informs" ? "informs" : "blocks";
+            const key = `${fromNode.id}:${toNode.id}:${edgeType}`;
+            if (edgeKeys.has(key)) return;
+            edgeKeys.add(key);
+            taskEdges.push({ from: fromNode.id, to: toNode.id, type: edgeType });
+          };
+
+          for (const re of rawEdges) {
+            const fromIndex = resolveNodeIndex(re.fromIndex ?? re.from);
+            const toIndex = resolveNodeIndex(re.toIndex ?? re.to);
+            pushEdge(fromIndex, toIndex, re.type);
+          }
+
+          rawNodes.forEach((rn, toIndex) => {
+            const dependencies = Array.isArray(rn.dependencies) ? rn.dependencies : [];
+            for (const dependency of dependencies) {
+              const fromIndex = resolveNodeIndex(dependency);
+              pushEdge(fromIndex, toIndex, "blocks");
+            }
+          });
 
           // Mark nodes with unsatisfied dependencies as blocked
           for (const node of taskNodes) {
@@ -280,21 +366,7 @@ export const TaskGraphPlugin: Plugin = async ({ directory }) => {
             });
           }
 
-          node.status = newStatus;
-          if (sessionId) node.sessionId = sessionId;
-          if (output) node.output = output;
-          if (error) node.error = error;
-          if (tokenUsed) node.tokenUsed += tokenUsed;
-
-          if (newStatus === "in_progress" && !node.startedAt) {
-            node.startedAt = Date.now();
-          }
-          if (newStatus === "completed" || newStatus === "stopped") {
-            node.finishedAt = Date.now();
-          }
-          if (newStatus === "failed") {
-            node.retryCount++;
-          }
+          applyNodeUpdate(node, newStatus, sessionId, output, error, tokenUsed);
 
           updateDependentNodes(graph, nodeId, newStatus);
           checkGraphCompletion(graph);

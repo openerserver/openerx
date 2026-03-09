@@ -1,13 +1,6 @@
-import { type Plugin, tool } from "@opencode-ai/plugin";
-import {
-  existsSync,
-  readFileSync,
-  readdirSync,
-  statSync,
-  writeFileSync,
-  mkdirSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
+import { type Plugin, tool } from "@opencode-ai/plugin";
 
 // ── Skills System Plugin ──────────────────────────────────────────
 //
@@ -33,10 +26,10 @@ interface SkillDefinition {
 }
 
 interface SkillPermissions {
-  allowedTools: string[];     // tool names this skill can use, empty = all
-  deniedTools: string[];      // explicitly denied tools
-  filePatterns: string[];     // glob patterns for files this skill can access
-  maxConcurrency: number;     // max parallel operations
+  allowedTools: string[]; // tool names this skill can use, empty = all
+  deniedTools: string[]; // explicitly denied tools
+  filePatterns: string[]; // glob patterns for files this skill can access
+  maxConcurrency: number; // max parallel operations
 }
 
 interface SkillMcpServer {
@@ -109,10 +102,7 @@ function loadSkillsFromDir(
             filePatterns: parsed.frontmatter.permissions?.filePatterns ?? ["**/*"],
             maxConcurrency: parsed.frontmatter.permissions?.maxConcurrency ?? 3,
           },
-          mcpServers: [
-            ...(parsed.frontmatter.mcp ?? []),
-            ...mcpServers,
-          ],
+          mcpServers: [...(parsed.frontmatter.mcp ?? []), ...mcpServers],
           active: false,
         });
       } catch {
@@ -136,14 +126,16 @@ function parseSkillFrontmatter(content: string): {
   try {
     // Simple YAML-like parsing for frontmatter
     const frontmatter: Record<string, unknown> = {};
-    const lines = match[1]!.split("\n");
+    const [, rawFrontmatter, body] = match;
+    const lines = rawFrontmatter.split("\n");
     let currentKey = "";
 
     for (const line of lines) {
       const kv = line.match(/^(\w+):\s*(.*)$/);
       if (kv) {
-        currentKey = kv[1]!;
-        const value = kv[2]!.trim();
+        const [, key, rawValue] = kv;
+        currentKey = key;
+        const value = rawValue.trim();
         if (value.startsWith("[") && value.endsWith("]")) {
           // Simple array parsing
           frontmatter[currentKey] = value
@@ -159,7 +151,7 @@ function parseSkillFrontmatter(content: string): {
       }
     }
 
-    return { frontmatter: frontmatter as SkillFrontmatter, body: match[2]! };
+    return { frontmatter: frontmatter as SkillFrontmatter, body };
   } catch {
     return { frontmatter: {}, body: content };
   }
@@ -214,9 +206,7 @@ export const SkillsPlugin: Plugin = async ({ $, directory }) => {
               allowedTools: s.permissions.allowedTools.length
                 ? s.permissions.allowedTools
                 : "(all)",
-              deniedTools: s.permissions.deniedTools.length
-                ? s.permissions.deniedTools
-                : "(none)",
+              deniedTools: s.permissions.deniedTools.length ? s.permissions.deniedTools : "(none)",
               filePatterns: s.permissions.filePatterns,
               maxConcurrency: s.permissions.maxConcurrency,
             },
@@ -264,14 +254,11 @@ export const SkillsPlugin: Plugin = async ({ $, directory }) => {
                   .map(([k, v]) => `${k}=${v}`)
                   .join(" ");
                 // Start MCP server in background
-                const proc = Bun.spawn(
-                  [mcp.command, ...mcp.args],
-                  {
-                    cwd: skill.directory,
-                    env: { ...process.env, ...mcp.env },
-                    stdio: ["pipe", "pipe", "pipe"],
-                  },
-                );
+                const proc = Bun.spawn([mcp.command, ...mcp.args], {
+                  cwd: skill.directory,
+                  env: { ...process.env, ...mcp.env },
+                  stdio: ["pipe", "pipe", "pipe"],
+                });
                 activeMcpProcesses.set(`${skillName}:${mcp.name}`, proc);
                 startedMcps.push(mcp.name);
               } catch (e) {
@@ -283,7 +270,8 @@ export const SkillsPlugin: Plugin = async ({ $, directory }) => {
           return JSON.stringify({
             skill: skillName,
             status: "activated",
-            instructions: skill.instructions.substring(0, 500) + (skill.instructions.length > 500 ? "..." : ""),
+            instructions:
+              skill.instructions.substring(0, 500) + (skill.instructions.length > 500 ? "..." : ""),
             instructionLength: skill.instructions.length,
             permissions: skill.permissions,
             mcpServersStarted: startedMcps,
@@ -292,7 +280,8 @@ export const SkillsPlugin: Plugin = async ({ $, directory }) => {
       }),
 
       skill_deactivate: tool({
-        description: "Deactivate a skill, removing its instructions from context and stopping its MCP servers",
+        description:
+          "Deactivate a skill, removing its instructions from context and stopping its MCP servers",
         args: {
           skillName: tool.schema.string("Name of the skill to deactivate"),
         },
@@ -326,7 +315,8 @@ export const SkillsPlugin: Plugin = async ({ $, directory }) => {
       }),
 
       skill_read: tool({
-        description: "Read the full SKILL.md instructions for a specific skill without activating it",
+        description:
+          "Read the full SKILL.md instructions for a specific skill without activating it",
         args: {
           skillName: tool.schema.string("Name of the skill to read"),
         },
@@ -437,7 +427,11 @@ ${description}
           "Get the combined instructions from all currently active skills. Used internally by the orchestrator to inject skill context into prompts.",
         args: {},
         async execute() {
-          const activeSkills: Array<{ name: string; instructions: string; permissions: SkillPermissions }> = [];
+          const activeSkills: Array<{
+            name: string;
+            instructions: string;
+            permissions: SkillPermissions;
+          }> = [];
 
           for (const [_name, skill] of skillRegistry) {
             if (skill.active) {
@@ -452,10 +446,7 @@ ${description}
           return JSON.stringify({
             activeCount: activeSkills.length,
             skills: activeSkills,
-            totalInstructionChars: activeSkills.reduce(
-              (sum, s) => sum + s.instructions.length,
-              0,
-            ),
+            totalInstructionChars: activeSkills.reduce((sum, s) => sum + s.instructions.length, 0),
           });
         },
       }),
@@ -463,7 +454,7 @@ ${description}
 
     // Hook: inject active skill instructions into prompt
     hook: {
-      "before_prompt_build": async (context: { prompt: string }) => {
+      before_prompt_build: async (context: { prompt: string }) => {
         const activeInstructions: string[] = [];
         for (const [_, skill] of skillRegistry) {
           if (skill.active) {

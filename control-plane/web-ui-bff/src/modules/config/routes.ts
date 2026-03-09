@@ -1,17 +1,17 @@
-import { Hono } from "hono";
-import { zValidator } from "@hono/zod-validator";
-import { z } from "zod";
 import {
-  readFileSync,
-  writeFileSync,
-  readdirSync,
-  existsSync,
   copyFileSync,
+  existsSync,
   mkdirSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
 } from "node:fs";
-import { join, resolve, basename } from "node:path";
-import type { JWTPayload } from "../../middleware/auth";
+import { basename, join, resolve } from "node:path";
+import { zValidator } from "@hono/zod-validator";
+import { Hono } from "hono";
+import { z } from "zod";
 import { parseFrontmatter, serializeFrontmatter } from "../../lib/frontmatter";
+import type { JWTPayload } from "../../middleware/auth";
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -56,7 +56,7 @@ function writeOpencodeJson(data: Record<string, unknown>): void {
   JSON.parse(serialized); // will throw if malformed
   const backupPath = `${OPENCODE_JSON}.bak`;
   if (existsSync(OPENCODE_JSON)) copyFileSync(OPENCODE_JSON, backupPath);
-  writeFileSync(OPENCODE_JSON, serialized + "\n", "utf-8");
+  writeFileSync(OPENCODE_JSON, `${serialized}\n`, "utf-8");
 }
 
 // ── Routes ─────────────────────────────────────────────────────────
@@ -378,25 +378,21 @@ configRoutes.get("/security", (c) => {
   return c.json({ data: { raw } });
 });
 
-configRoutes.put(
-  "/security",
-  zValidator("json", z.object({ raw: z.string() })),
-  (c) => {
-    const user = c.get("user");
-    if (user.role !== "platform_admin" && user.role !== "org_admin" && user.role !== "admin") {
-      return c.json({ error: "Requires org_admin role" }, 403);
-    }
+configRoutes.put("/security", zValidator("json", z.object({ raw: z.string() })), (c) => {
+  const user = c.get("user");
+  if (user.role !== "platform_admin" && user.role !== "org_admin" && user.role !== "admin") {
+    return c.json({ error: "Requires org_admin role" }, 403);
+  }
 
-    const { raw } = c.req.valid("json");
-    if (existsSync(SECURITY_MD)) copyFileSync(SECURITY_MD, `${SECURITY_MD}.bak`);
-    writeFileSync(SECURITY_MD, raw, "utf-8");
+  const { raw } = c.req.valid("json");
+  if (existsSync(SECURITY_MD)) copyFileSync(SECURITY_MD, `${SECURITY_MD}.bak`);
+  writeFileSync(SECURITY_MD, raw, "utf-8");
 
-    return c.json({ ok: true });
-  },
-);
+  return c.json({ ok: true });
+});
 
 // ═══════════════════════════════════════════════════════════════════
-// PLUGINS (read-only listing)
+// PLUGINS
 // ═══════════════════════════════════════════════════════════════════
 
 configRoutes.get("/plugins", (c) => {
@@ -404,15 +400,73 @@ configRoutes.get("/plugins", (c) => {
   if (adminErr) return c.json({ error: adminErr }, 403);
   const config = readOpencodeJson();
   const pluginPaths = (config.plugins as string[]) || [];
+  const disabledPlugins = (config._disabledPlugins as string[]) || [];
   const plugins = pluginPaths.map((p) => {
     const fullPath = resolve(OPENCODE_ROOT, p);
     return {
       path: p,
       name: basename(p, ".ts"),
       exists: existsSync(fullPath),
+      enabled: true,
     };
   });
+  // Include disabled plugins
+  for (const p of disabledPlugins) {
+    const fullPath = resolve(OPENCODE_ROOT, p);
+    plugins.push({
+      path: p,
+      name: basename(p, ".ts"),
+      exists: existsSync(fullPath),
+      enabled: false,
+    });
+  }
   return c.json({ data: plugins });
+});
+
+// POST /config/plugins/:name/disable — Move plugin from active to disabled
+configRoutes.post("/plugins/:name/disable", (c) => {
+  const adminErr = requireSystemAdmin(c.get("user"));
+  if (adminErr) return c.json({ error: adminErr }, 403);
+  const name = c.req.param("name") as string;
+
+  const config = readOpencodeJson();
+  const pluginPaths = (config.plugins as string[]) || [];
+  const disabledPlugins = (config._disabledPlugins as string[]) || [];
+
+  const idx = pluginPaths.findIndex((p) => basename(p, ".ts") === name);
+  if (idx === -1) return c.json({ error: "Plugin not found in active list" }, 404);
+
+  const removed = pluginPaths.splice(idx, 1)[0] as string;
+  if (!disabledPlugins.includes(removed)) disabledPlugins.push(removed);
+
+  config.plugins = pluginPaths;
+  config._disabledPlugins = disabledPlugins;
+  writeOpencodeJson(config);
+
+  return c.json({ ok: true, name, enabled: false });
+});
+
+// POST /config/plugins/:name/enable — Move plugin from disabled to active
+configRoutes.post("/plugins/:name/enable", (c) => {
+  const adminErr = requireSystemAdmin(c.get("user"));
+  if (adminErr) return c.json({ error: adminErr }, 403);
+  const name = c.req.param("name") as string;
+
+  const config = readOpencodeJson();
+  const pluginPaths = (config.plugins as string[]) || [];
+  const disabledPlugins = (config._disabledPlugins as string[]) || [];
+
+  const idx = disabledPlugins.findIndex((p) => basename(p, ".ts") === name);
+  if (idx === -1) return c.json({ error: "Plugin not found in disabled list" }, 404);
+
+  const removed = disabledPlugins.splice(idx, 1)[0] as string;
+  if (!pluginPaths.includes(removed)) pluginPaths.push(removed);
+
+  config.plugins = pluginPaths;
+  config._disabledPlugins = disabledPlugins;
+  writeOpencodeJson(config);
+
+  return c.json({ ok: true, name, enabled: true });
 });
 
 // ═══════════════════════════════════════════════════════════════════
@@ -466,12 +520,263 @@ configRoutes.get("/overview", (c) => {
         list: (config.models as Record<string, unknown>)?.list || [],
       },
       mcp: config.mcp || {},
-      plugins: ((config.plugins as string[]) || []).map((p) => ({
-        path: p,
-        name: basename(p, ".ts"),
-      })),
+      plugins: [
+        ...((config.plugins as string[]) || []).map((p) => ({
+          path: p,
+          name: basename(p, ".ts"),
+          enabled: true,
+        })),
+        ...((config._disabledPlugins as string[]) || []).map((p) => ({
+          path: p,
+          name: basename(p, ".ts"),
+          enabled: false,
+        })),
+      ],
     },
   });
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// ORCHESTRATION STRATEGY CONFIG
+// ═══════════════════════════════════════════════════════════════════
+
+const STRATEGY_FILE = join(OPENCODE_STATE_DIR, "orchestration-strategy.json");
+
+interface OrchestrationStrategy {
+  categoryAgentMap: Record<string, string[]>;
+  categoryModelMap: Record<string, string>;
+  enablePipeline: boolean;
+}
+
+const DEFAULT_STRATEGY: OrchestrationStrategy = {
+  categoryAgentMap: {
+    quick: ["explore-enterprise"],
+    deep: ["hephaestus-enterprise"],
+    ops: ["oracle-enterprise"],
+    security: ["oracle-enterprise", "hephaestus-enterprise"],
+    architecture: ["prometheus-enterprise", "oracle-enterprise"],
+  },
+  categoryModelMap: {
+    quick: "",
+    deep: "",
+    ops: "",
+    security: "",
+    architecture: "",
+  },
+  enablePipeline: true,
+};
+
+function readStrategy(): OrchestrationStrategy {
+  if (!existsSync(STRATEGY_FILE)) return DEFAULT_STRATEGY;
+  try {
+    return JSON.parse(readFileSync(STRATEGY_FILE, "utf-8"));
+  } catch {
+    return DEFAULT_STRATEGY;
+  }
+}
+
+function writeStrategy(data: OrchestrationStrategy): void {
+  if (!existsSync(OPENCODE_STATE_DIR)) mkdirSync(OPENCODE_STATE_DIR, { recursive: true });
+  writeFileSync(STRATEGY_FILE, JSON.stringify(data, null, 2), "utf-8");
+}
+
+configRoutes.get("/orchestration-strategy", (c) => {
+  const adminErr = requireSystemAdmin(c.get("user"));
+  if (adminErr) return c.json({ error: adminErr }, 403);
+  return c.json({ data: readStrategy() });
+});
+
+const strategySchema = z.object({
+  categoryAgentMap: z.record(z.string(), z.array(z.string())),
+  categoryModelMap: z.record(z.string(), z.string()),
+  enablePipeline: z.boolean(),
+});
+
+configRoutes.put("/orchestration-strategy", zValidator("json", strategySchema), (c) => {
+  const adminErr = requireSystemAdmin(c.get("user"));
+  if (adminErr) return c.json({ error: adminErr }, 403);
+  const body = c.req.valid("json");
+  writeStrategy(body);
+  return c.json({ ok: true });
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// PLUGIN LIFECYCLE — Install / Uninstall / Compatibility
+// ═══════════════════════════════════════════════════════════════════
+
+const pluginsDir = join(DOT_OPENCODE, "plugins");
+
+// POST /config/plugins/install — Install plugin from local path or built-in template
+const installPluginSchema = z.object({
+  source: z.string().min(1).max(500),
+  name: z.string().optional(),
+});
+
+configRoutes.post("/plugins/install", zValidator("json", installPluginSchema), (c) => {
+  const adminErr = requireSystemAdmin(c.get("user"));
+  if (adminErr) return c.json({ error: adminErr }, 403);
+  const { source, name } = c.req.valid("json");
+
+  // Resolve source path
+  const sourcePath = resolve(OPENCODE_ROOT, source);
+  if (!existsSync(sourcePath)) {
+    return c.json({ error: `Source file not found: ${source}` }, 400);
+  }
+
+  // Ensure plugins directory exists
+  if (!existsSync(pluginsDir)) mkdirSync(pluginsDir, { recursive: true });
+
+  const fileName = name ? `${name}.ts` : basename(sourcePath);
+  const targetKey = safePath(pluginsDir, fileName);
+  if (!targetKey) return c.json({ error: "Invalid plugin name" }, 400);
+
+  // Copy plugin file
+  copyFileSync(sourcePath, targetKey);
+
+  // Register in opencode.json
+  const config = readOpencodeJson();
+  const pluginPaths = (config.plugins as string[]) || [];
+  const relativePath = `.opencode/plugins/${fileName}`;
+  if (!pluginPaths.includes(relativePath)) {
+    pluginPaths.push(relativePath);
+    config.plugins = pluginPaths;
+    writeOpencodeJson(config);
+  }
+
+  return c.json({ ok: true, name: basename(fileName, ".ts"), path: relativePath });
+});
+
+// POST /config/plugins/:name/uninstall — Remove plugin
+configRoutes.post("/plugins/:name/uninstall", (c) => {
+  const adminErr = requireSystemAdmin(c.get("user"));
+  if (adminErr) return c.json({ error: adminErr }, 403);
+  const name = c.req.param("name") as string;
+
+  const config = readOpencodeJson();
+  const pluginPaths = (config.plugins as string[]) || [];
+  const disabledPlugins = (config._disabledPlugins as string[]) || [];
+
+  // Find in active or disabled
+  const activeIdx = pluginPaths.findIndex((p) => basename(p, ".ts") === name);
+  const disabledIdx = disabledPlugins.findIndex((p) => basename(p, ".ts") === name);
+
+  if (activeIdx === -1 && disabledIdx === -1) {
+    return c.json({ error: "Plugin not found" }, 404);
+  }
+
+  if (activeIdx !== -1) pluginPaths.splice(activeIdx, 1);
+  if (disabledIdx !== -1) disabledPlugins.splice(disabledIdx, 1);
+
+  config.plugins = pluginPaths;
+  config._disabledPlugins = disabledPlugins;
+  writeOpencodeJson(config);
+
+  return c.json({ ok: true, name });
+});
+
+// GET /config/plugins/compatibility — Check all plugins for basic compatibility
+configRoutes.get("/plugins/compatibility", (c) => {
+  const adminErr = requireSystemAdmin(c.get("user"));
+  if (adminErr) return c.json({ error: adminErr }, 403);
+
+  const config = readOpencodeJson();
+  const allPaths = [
+    ...((config.plugins as string[]) || []),
+    ...((config._disabledPlugins as string[]) || []),
+  ];
+
+  const results = allPaths.map((p) => {
+    const fullPath = resolve(OPENCODE_ROOT, p);
+    const errors: string[] = [];
+
+    if (!existsSync(fullPath)) {
+      errors.push("File not found");
+      return { name: basename(p, ".ts"), path: p, compatible: false, errors };
+    }
+
+    try {
+      const content = readFileSync(fullPath, "utf-8");
+      // Basic checks
+      if (!content.includes("export default") && !content.includes("export function")) {
+        errors.push("Missing export default or export function");
+      }
+      if (!content.includes("plugin") && !content.includes("Plugin")) {
+        errors.push("No plugin-related exports found");
+      }
+    } catch (e) {
+      errors.push(`Read error: ${e}`);
+    }
+
+    return {
+      name: basename(p, ".ts"),
+      path: p,
+      compatible: errors.length === 0,
+      errors,
+    };
+  });
+
+  return c.json({ data: results });
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// CONTINUATION POLICY
+// ═══════════════════════════════════════════════════════════════════
+
+const POLICY_FILE = join(OPENCODE_STATE_DIR, "continuation-policy.json");
+
+interface ContinuationPolicy {
+  autoRetryOnFailure: boolean;
+  maxRetries: number;
+  retryableErrors: string[];
+  requireApprovalOnRetry: boolean;
+  fallbackModel: string;
+  enableFallback: boolean;
+}
+
+const DEFAULT_POLICY: ContinuationPolicy = {
+  autoRetryOnFailure: false,
+  maxRetries: 2,
+  retryableErrors: ["timeout", "rate_limit", "context_length"],
+  requireApprovalOnRetry: true,
+  fallbackModel: "",
+  enableFallback: false,
+};
+
+function readPolicy(): ContinuationPolicy {
+  if (!existsSync(POLICY_FILE)) return DEFAULT_POLICY;
+  try {
+    return JSON.parse(readFileSync(POLICY_FILE, "utf-8"));
+  } catch {
+    return DEFAULT_POLICY;
+  }
+}
+
+function writePolicy(data: ContinuationPolicy): void {
+  if (!existsSync(OPENCODE_STATE_DIR)) mkdirSync(OPENCODE_STATE_DIR, { recursive: true });
+  writeFileSync(POLICY_FILE, JSON.stringify(data, null, 2), "utf-8");
+}
+
+configRoutes.get("/continuation-policy", (c) => {
+  const adminErr = requireSystemAdmin(c.get("user"));
+  if (adminErr) return c.json({ error: adminErr }, 403);
+  return c.json({ data: readPolicy() });
+});
+
+const policySchema = z.object({
+  autoRetryOnFailure: z.boolean(),
+  maxRetries: z.number().int().min(0).max(10),
+  retryableErrors: z.array(z.string()),
+  requireApprovalOnRetry: z.boolean(),
+  fallbackModel: z.string(),
+  enableFallback: z.boolean(),
+});
+
+configRoutes.put("/continuation-policy", zValidator("json", policySchema), (c) => {
+  const adminErr = requireSystemAdmin(c.get("user"));
+  if (adminErr) return c.json({ error: adminErr }, 403);
+  const body = c.req.valid("json");
+  writePolicy(body);
+  return c.json({ ok: true });
 });
 
 // ═══════════════════════════════════════════════════════════════════
@@ -535,26 +840,35 @@ configRoutes.get("/copilot/models", async (c) => {
     return c.json({ error: `Copilot models API error: ${resp.status} ${text}` }, 502);
   }
 
-  const payload = (await resp.json()) as {
-    data?: Array<Record<string, unknown>>;
-  } | Array<Record<string, unknown>>;
+  const payload = (await resp.json()) as
+    | {
+        data?: Array<Record<string, unknown>>;
+      }
+    | Array<Record<string, unknown>>;
 
   const rawList = Array.isArray(payload) ? payload : payload.data || [];
-  const models = rawList.map((item) => ({
-    id: typeof item.id === "string" ? item.id : "",
-    name: typeof item.name === "string" ? item.name : typeof item.id === "string" ? item.id : "",
-    vendor: typeof item.vendor === "string" ? item.vendor : "",
-    version: typeof item.version === "string" ? item.version : "",
-    preview: Boolean(item.preview),
-    contextWindow:
-      typeof (item.capabilities as { limits?: { max_context_window_tokens?: unknown } } | undefined)?.limits?.max_context_window_tokens === "number"
-        ? ((item.capabilities as { limits?: { max_context_window_tokens?: number } }).limits?.max_context_window_tokens ?? null)
-        : null,
-    maxTokens:
-      typeof (item.capabilities as { limits?: { max_output_tokens?: unknown } } | undefined)?.limits?.max_output_tokens === "number"
-        ? ((item.capabilities as { limits?: { max_output_tokens?: number } }).limits?.max_output_tokens ?? null)
-        : null,
-  })).filter((item) => item.id);
+  const models = rawList
+    .map((item) => ({
+      id: typeof item.id === "string" ? item.id : "",
+      name: typeof item.name === "string" ? item.name : typeof item.id === "string" ? item.id : "",
+      vendor: typeof item.vendor === "string" ? item.vendor : "",
+      version: typeof item.version === "string" ? item.version : "",
+      preview: Boolean(item.preview),
+      contextWindow:
+        typeof (
+          item.capabilities as { limits?: { max_context_window_tokens?: unknown } } | undefined
+        )?.limits?.max_context_window_tokens === "number"
+          ? ((item.capabilities as { limits?: { max_context_window_tokens?: number } }).limits
+              ?.max_context_window_tokens ?? null)
+          : null,
+      maxTokens:
+        typeof (item.capabilities as { limits?: { max_output_tokens?: unknown } } | undefined)
+          ?.limits?.max_output_tokens === "number"
+          ? ((item.capabilities as { limits?: { max_output_tokens?: number } }).limits
+              ?.max_output_tokens ?? null)
+          : null,
+    }))
+    .filter((item) => item.id);
 
   return c.json({ data: models });
 });
@@ -603,10 +917,7 @@ configRoutes.post("/copilot/device-code", async (c) => {
 // Step 2: Poll for access token
 configRoutes.post(
   "/copilot/poll-token",
-  zValidator(
-    "json",
-    z.object({ device_code: z.string() }),
-  ),
+  zValidator("json", z.object({ device_code: z.string() })),
   async (c) => {
     const adminErr = requireSystemAdmin(c.get("user"));
     if (adminErr) return c.json({ error: adminErr }, 403);

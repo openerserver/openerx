@@ -10,7 +10,8 @@
     "db:migrate": "bun run src/db/migrate.ts",
     "db:seed": "bun run src/db/seed.ts",
     "db:studio": "drizzle-kit studio",
-    "cli:task": "bun run src/cli/create-task.ts"
+    "cli:task": "bun run src/cli/create-task.ts",
+    "cli:repair-graphs": "bun run src/cli/repair-historical-graphs.ts"
   },
   "dependencies": {
     "hono": "^4.7.0",

@@ -9,7 +9,9 @@ export const OpsRunbookPlugin: Plugin = async ({ $, directory }) => {
         description: "Query application logs with filtering",
         args: {
           service: tool.schema.string("Service name or log file path"),
-          timeRange: tool.schema.string("Time range, e.g., '1h', '30m', '2024-01-01 to 2024-01-02'"),
+          timeRange: tool.schema.string(
+            "Time range, e.g., '1h', '30m', '2024-01-01 to 2024-01-02'",
+          ),
           query: tool.schema.string("Search query (regex supported)"),
           limit: tool.schema.number("Maximum lines to return (default: 100)"),
         },
@@ -64,7 +66,7 @@ export const OpsRunbookPlugin: Plugin = async ({ $, directory }) => {
         args: {
           metric: tool.schema.string("Metric name (e.g., 'http_requests_total')"),
           timeRange: tool.schema.string("Time range: '5m', '1h', '24h'"),
-          labels: tool.schema.string("Label filters as JSON (optional), e.g., '{\"job\":\"api\"}'"),
+          labels: tool.schema.string('Label filters as JSON (optional), e.g., \'{"job":"api"}\''),
         },
         async execute({ metric, timeRange, labels }) {
           const labelFilters = labels ? JSON.parse(labels) : {};
@@ -74,8 +76,7 @@ export const OpsRunbookPlugin: Plugin = async ({ $, directory }) => {
           const query = labelStr ? `${metric}{${labelStr}}` : metric;
 
           // Default Prometheus endpoint
-          const prometheusUrl =
-            process.env.PROMETHEUS_URL || "http://localhost:9090";
+          const prometheusUrl = process.env.PROMETHEUS_URL || "http://localhost:9090";
 
           try {
             const result =
@@ -154,7 +155,9 @@ export const OpsRunbookPlugin: Plugin = async ({ $, directory }) => {
         description:
           "Execute a predefined runbook step. PRODUCTION environments require human approval.",
         args: {
-          runbookId: tool.schema.string("Runbook identifier (e.g., 'restart-service', 'clear-cache')"),
+          runbookId: tool.schema.string(
+            "Runbook identifier (e.g., 'restart-service', 'clear-cache')",
+          ),
           params: tool.schema.string("JSON parameters for the runbook step"),
           environment: tool.schema.string("Target environment: dev|staging|production"),
         },
@@ -176,7 +179,7 @@ export const OpsRunbookPlugin: Plugin = async ({ $, directory }) => {
           // Known runbooks
           const runbooks: Record<string, string> = {
             "restart-service": `systemctl restart ${parsedParams.service || "unknown"}`,
-            "clear-cache": `redis-cli FLUSHDB`,
+            "clear-cache": "redis-cli FLUSHDB",
             "rotate-logs": `logrotate -f /etc/logrotate.d/${parsedParams.service || "unknown"}`,
             "check-connectivity": `curl -sf ${parsedParams.url || "http://localhost"}/health`,
           };

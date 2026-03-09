@@ -1,10 +1,10 @@
-import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
-import { z } from "zod";
 import { eq } from "drizzle-orm";
+import { Hono } from "hono";
+import { z } from "zod";
 import { db } from "../../db";
 import { environments, projects } from "../../db/schema";
-import { authMiddleware, type AppEnv, type JWTPayload } from "../../middleware/auth";
+import { type AppEnv, type JWTPayload, authMiddleware } from "../../middleware/auth";
 
 export const envRoutes = new Hono<AppEnv>();
 
@@ -63,76 +63,66 @@ envRoutes.get("/", async (c) => {
 });
 
 // POST /api/envs
-envRoutes.post(
-  "/",
-  zValidator("json", createEnvSchema),
-  async (c) => {
-    const body = c.req.valid("json");
-    const user = c.get("user") as JWTPayload;
-    const id = crypto.randomUUID();
-    const createdAt = new Date().toISOString();
+envRoutes.post("/", zValidator("json", createEnvSchema), async (c) => {
+  const body = c.req.valid("json");
+  const user = c.get("user") as JWTPayload;
+  const id = crypto.randomUUID();
+  const createdAt = new Date().toISOString();
 
-    // Verify project exists
-    const project = await db.query.projects.findFirst({
-      where: eq(projects.id, body.projectId),
-    });
-    if (!project) return c.json({ error: "Project not found" }, 404);
+  // Verify project exists
+  const project = await db.query.projects.findFirst({
+    where: eq(projects.id, body.projectId),
+  });
+  if (!project) return c.json({ error: "Project not found" }, 404);
 
-    if (!hasProjectAccess(user, body.projectId, "project_admin")) {
-      return c.json({ error: "Insufficient project permissions" }, 403);
-    }
+  if (!hasProjectAccess(user, body.projectId, "project_admin")) {
+    return c.json({ error: "Insufficient project permissions" }, 403);
+  }
 
-    await db.insert(environments).values({
-      id,
-      projectId: body.projectId,
-      name: body.name,
-      riskLevel: body.riskLevel,
-      requiresApproval: body.requiresApproval,
-      createdAt,
-    });
+  await db.insert(environments).values({
+    id,
+    projectId: body.projectId,
+    name: body.name,
+    riskLevel: body.riskLevel,
+    requiresApproval: body.requiresApproval,
+    createdAt,
+  });
 
-    return c.json({ id, ...body, createdAt }, 201);
-  },
-);
+  return c.json({ id, ...body, createdAt }, 201);
+});
 
 // PATCH /api/envs/:envId
-envRoutes.patch(
-  "/:envId",
-  zValidator("json", updateEnvSchema),
-  async (c) => {
-    const envId = c.req.param("envId");
-    const body = c.req.valid("json");
-    const user = c.get("user") as JWTPayload;
+envRoutes.patch("/:envId", zValidator("json", updateEnvSchema), async (c) => {
+  const envId = c.req.param("envId");
+  const body = c.req.valid("json");
+  const user = c.get("user") as JWTPayload;
 
-    const existing = await db.query.environments.findFirst({
-      where: eq(environments.id, envId),
-    });
-    if (!existing) return c.json({ error: "Environment not found" }, 404);
+  const existing = await db.query.environments.findFirst({
+    where: eq(environments.id, envId),
+  });
+  if (!existing) return c.json({ error: "Environment not found" }, 404);
 
-    if (!hasProjectAccess(user, existing.projectId, "project_admin")) {
-      return c.json({ error: "Insufficient project permissions" }, 403);
-    }
+  if (!hasProjectAccess(user, existing.projectId, "project_admin")) {
+    return c.json({ error: "Insufficient project permissions" }, 403);
+  }
 
-    await db
-      .update(environments)
-      .set({
-        ...(body.name !== undefined ? { name: body.name } : {}),
-        ...(body.riskLevel !== undefined ? { riskLevel: body.riskLevel } : {}),
-        ...(body.requiresApproval !== undefined
-          ? { requiresApproval: body.requiresApproval }
-          : {}),
-      })
-      .where(eq(environments.id, envId));
+  await db
+    .update(environments)
+    .set({
+      ...(body.name !== undefined ? { name: body.name } : {}),
+      ...(body.riskLevel !== undefined ? { riskLevel: body.riskLevel } : {}),
+      ...(body.requiresApproval !== undefined ? { requiresApproval: body.requiresApproval } : {}),
+    })
+    .where(eq(environments.id, envId));
 
-    return c.json({
-      id: envId,
-      projectId: existing.projectId,
-      name: body.name ?? existing.name,
-      riskLevel: body.riskLevel ?? existing.riskLevel,
-      requiresApproval: body.requiresApproval ?? existing.requiresApproval,
-    });
-  },
-);
+  return c.json({
+    id: envId,
+    projectId: existing.projectId,
+    name: body.name ?? existing.name,
+    riskLevel: body.riskLevel ?? existing.riskLevel,
+    requiresApproval: body.requiresApproval ?? existing.requiresApproval,
+  });
+});
 
 // DELETE /api/envs/:envId
 envRoutes.delete("/:envId", async (c) => {

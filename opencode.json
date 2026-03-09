@@ -1,0 +1,48 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "github-copilot/claude-sonnet-4",
+  "server": {
+    "port": 4096,
+    "hostname": "127.0.0.1"
+  },
+  "provider": {
+    "anthropic": {
+      "api": "anthropic",
+      "name": "Anthropic (Primary)"
+    },
+    "openai": {
+      "api": "openai-completions",
+      "name": "OpenAI (Fallback)"
+    },
+    "github-copilot": {
+      "api": "github-copilot",
+      "name": "GitHub Copilot"
+    }
+  },
+  "plugin": [
+    "./opencode-fork/.opencode/plugins/orchestrator-plugin.ts",
+    "./opencode-fork/.opencode/plugins/task-graph-plugin.ts",
+    "./opencode-fork/.opencode/plugins/hashline-edit-plugin.ts",
+    "./opencode-fork/.opencode/plugins/context-injection-plugin.ts",
+    "./opencode-fork/.opencode/plugins/tmux-plugin.ts",
+    "./opencode-fork/.opencode/plugins/skills-plugin.ts",
+    "./opencode-fork/.opencode/tools/session-tools.ts"
+  ],
+  "mcp": {
+    "exa": {
+      "type": "local",
+      "command": ["npx", "-y", "@anthropic-ai/exa-mcp-server"],
+      "environment": {
+        "EXA_API_KEY": "${EXA_API_KEY}"
+      }
+    },
+    "context7": {
+      "type": "local",
+      "command": ["npx", "-y", "@anthropic-ai/context7-mcp-server"]
+    },
+    "grep-app": {
+      "type": "local",
+      "command": ["npx", "-y", "@anthropic-ai/grep-app-mcp-server"]
+    }
+  }
+}

@@ -1,8 +1,4 @@
-import {
-  createRouter,
-  createWebHistory,
-  type RouteRecordRaw,
-} from "vue-router";
+import { type RouteRecordRaw, createRouter, createWebHistory } from "vue-router";
 import { useAuthStore } from "../stores/auth";
 
 const routes: RouteRecordRaw[] = [

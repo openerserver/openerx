@@ -60,7 +60,15 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
-import { getProject, listEnvironments, listPolicies, type ApprovalPolicyMode, type Environment, type PolicyTemplate, type Project } from "../lib/api";
+import {
+  type ApprovalPolicyMode,
+  type Environment,
+  type PolicyTemplate,
+  type Project,
+  getProject,
+  listEnvironments,
+  listPolicies,
+} from "../lib/api";
 
 const route = useRoute();
 const projectId = String(route.params.projectId || "");

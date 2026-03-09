@@ -1,10 +1,10 @@
-import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
-import { z } from "zod";
 import { eq } from "drizzle-orm";
+import { Hono } from "hono";
+import { z } from "zod";
 import { db } from "../../db";
 import { approvalTickets } from "../../db/schema";
-import { authMiddleware, type AppEnv } from "../../middleware/auth";
+import { type AppEnv, authMiddleware } from "../../middleware/auth";
 import { requireRole } from "../../middleware/rbac";
 import { recordAuditEvent } from "../audit/routes";
 
@@ -17,7 +17,7 @@ const sqliteDateTimePattern = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
 
 function parseApprovalTimestamp(value: string) {
   if (sqliteDateTimePattern.test(value)) {
-    return new Date(value.replace(" ", "T") + "Z");
+    return new Date(`${value.replace(" ", "T")}Z`);
   }
   return new Date(value);
 }
@@ -114,7 +114,12 @@ export async function createApprovalTicket(ticket: {
   taskId: string;
   agentRunId?: string;
   nodeId?: string;
-  actionType: "production_write" | "level3_command" | "budget_exceed" | "batch_edit" | "external_api";
+  actionType:
+    | "production_write"
+    | "level3_command"
+    | "budget_exceed"
+    | "batch_edit"
+    | "external_api";
   riskLevel: "medium" | "high" | "critical";
   requestDetail: Record<string, unknown>;
 }) {

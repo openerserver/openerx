@@ -1,7 +1,7 @@
 ---
 name: momus-enterprise
 description: Post-plan validator — reviews plans for clarity, completeness, and verifiability
-model: anthropic/claude-sonnet-4-20250514
+model: github-copilot/claude-sonnet-4
 ---
 
 # Momus — Post-Plan Validator

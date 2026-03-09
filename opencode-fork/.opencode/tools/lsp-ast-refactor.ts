@@ -23,8 +23,7 @@ export const LspAstRefactorPlugin: Plugin = async ({ client, $ }) => {
           // Use shell to perform the rename via LSP-compatible tooling
           // This relies on the project having a language server configured
           try {
-            const result =
-              await $`cd ${filePath.substring(0, filePath.lastIndexOf("/"))} && \
+            const result = await $`cd ${filePath.substring(0, filePath.lastIndexOf("/"))} && \
               grep -rn "\\b${symbolName}\\b" --include="*.ts" --include="*.tsx" --include="*.js" --include="*.jsx" | head -50`;
 
             const references = String(result).trim().split("\n").filter(Boolean);
@@ -170,7 +169,9 @@ export const LspAstRefactorPlugin: Plugin = async ({ client, $ }) => {
 
             // Find exported symbols
             const exports = await client.find.text({
-              query: { pattern: "^export\\s+(default\\s+)?(function|class|const|let|type|interface|enum)" },
+              query: {
+                pattern: "^export\\s+(default\\s+)?(function|class|const|let|type|interface|enum)",
+              },
             });
 
             // Find import statements

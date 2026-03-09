@@ -15,13 +15,15 @@ export const QualityPlugin: Plugin = async ({ $, directory }) => {
           const files = filePaths ? filePaths.split(",").map((f) => f.trim()) : ["."];
           const fixFlag = fixMode ? "--write" : "";
           try {
-            const result = await $`cd ${directory} && npx biome check ${fixFlag} ${files.join(" ")} 2>&1 || true`;
+            const result =
+              await $`cd ${directory} && npx biome check ${fixFlag} ${files.join(" ")} 2>&1 || true`;
             return String(result);
           } catch (e) {
             // Try eslint as fallback
             try {
               const eslintFlag = fixMode ? "--fix" : "";
-              const result = await $`cd ${directory} && npx eslint ${eslintFlag} ${files.join(" ")} 2>&1 || true`;
+              const result =
+                await $`cd ${directory} && npx eslint ${eslintFlag} ${files.join(" ")} 2>&1 || true`;
               return String(result);
             } catch {
               return JSON.stringify({ error: `Lint failed: ${e}` });
@@ -41,7 +43,8 @@ export const QualityPlugin: Plugin = async ({ $, directory }) => {
           const pattern = testPattern || "";
           try {
             // Try bun test first, then vitest, then jest
-            const result = await $`cd ${directory} && bun test ${pattern} ${coverageFlag} 2>&1 || npx vitest run ${pattern} ${coverageFlag} 2>&1 || npx jest ${pattern} ${coverageFlag} 2>&1 || true`;
+            const result =
+              await $`cd ${directory} && bun test ${pattern} ${coverageFlag} 2>&1 || npx vitest run ${pattern} ${coverageFlag} 2>&1 || npx jest ${pattern} ${coverageFlag} 2>&1 || true`;
             return String(result);
           } catch (e) {
             return JSON.stringify({ error: `Tests failed: ${e}` });
@@ -58,12 +61,14 @@ export const QualityPlugin: Plugin = async ({ $, directory }) => {
           const targets = filePaths ? filePaths.split(",").map((f) => f.trim()) : ["."];
           try {
             // Try semgrep first
-            const result = await $`cd ${directory} && semgrep scan --config auto ${targets.join(" ")} --json 2>&1 || true`;
+            const result =
+              await $`cd ${directory} && semgrep scan --config auto ${targets.join(" ")} --json 2>&1 || true`;
             return String(result);
           } catch {
             return JSON.stringify({
               note: "SAST tools (semgrep) not installed. Install with: pip install semgrep",
-              manualCheck: "Review code for: SQL injection, XSS, command injection, path traversal, hardcoded secrets",
+              manualCheck:
+                "Review code for: SQL injection, XSS, command injection, path traversal, hardcoded secrets",
             });
           }
         },
@@ -74,7 +79,8 @@ export const QualityPlugin: Plugin = async ({ $, directory }) => {
         args: {},
         async execute() {
           try {
-            const auditResult = await $`cd ${directory} && npm audit --json 2>&1 || bun pm audit 2>&1 || true`;
+            const auditResult =
+              await $`cd ${directory} && npm audit --json 2>&1 || bun pm audit 2>&1 || true`;
             return String(auditResult);
           } catch (e) {
             return JSON.stringify({ error: `Dependency check failed: ${e}` });
@@ -106,9 +112,8 @@ export const QualityPlugin: Plugin = async ({ $, directory }) => {
             const test = await $`cd ${directory} && bun test 2>&1 || npx vitest run 2>&1 || true`;
             const testOutput = String(test);
             results.tests = {
-              status: testOutput.includes("FAIL") || testOutput.includes("failed")
-                ? "fail"
-                : "pass",
+              status:
+                testOutput.includes("FAIL") || testOutput.includes("failed") ? "fail" : "pass",
               output: testOutput.substring(0, 2000),
             };
           } catch {
@@ -119,10 +124,14 @@ export const QualityPlugin: Plugin = async ({ $, directory }) => {
             (r) => r.status === "pass" || r.status === "skip",
           );
 
-          return JSON.stringify({
-            overall: allPassed ? "PASS" : "FAIL",
-            checks: results,
-          }, null, 2);
+          return JSON.stringify(
+            {
+              overall: allPassed ? "PASS" : "FAIL",
+              checks: results,
+            },
+            null,
+            2,
+          );
         },
       }),
 
@@ -144,8 +153,11 @@ export const QualityPlugin: Plugin = async ({ $, directory }) => {
           ];
 
           try {
-            const patternRegex = aiPatterns.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
-            const result = await $`cd ${directory} && grep -rn "(${patternRegex})" ${files.join(" ")} 2>/dev/null || true`;
+            const patternRegex = aiPatterns
+              .map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+              .join("|");
+            const result =
+              await $`cd ${directory} && grep -rn "(${patternRegex})" ${files.join(" ")} 2>/dev/null || true`;
             const matches = String(result).trim();
 
             return JSON.stringify({
@@ -170,7 +182,8 @@ export const QualityPlugin: Plugin = async ({ $, directory }) => {
         },
         async execute({ message }) {
           // Conventional commit pattern: type(scope): description
-          const conventionalPattern = /^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-z-]+\))?!?:\s.+/;
+          const conventionalPattern =
+            /^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-z-]+\))?!?:\s.+/;
           const isConventional = conventionalPattern.test(message);
 
           const suggestions: string[] = [];
@@ -178,7 +191,7 @@ export const QualityPlugin: Plugin = async ({ $, directory }) => {
             suggestions.push(
               "Use conventional commit format: type(scope): description",
               "Types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert",
-              `Example: feat(auth): add JWT token refresh endpoint`,
+              "Example: feat(auth): add JWT token refresh endpoint",
             );
           }
           if (message.length > 72) {
@@ -209,9 +222,11 @@ export const QualityPlugin: Plugin = async ({ $, directory }) => {
           const sinceFlag = since ? `--since="${since}"` : "";
           try {
             // Search commit messages
-            const msgResult = await $`cd ${directory} && git log --oneline --grep="${query}" ${authorFlag} ${sinceFlag} -20 2>&1 || true`;
+            const msgResult =
+              await $`cd ${directory} && git log --oneline --grep="${query}" ${authorFlag} ${sinceFlag} -20 2>&1 || true`;
             // Search diffs
-            const diffResult = await $`cd ${directory} && git log --oneline -S"${query}" ${authorFlag} ${sinceFlag} -20 2>&1 || true`;
+            const diffResult =
+              await $`cd ${directory} && git log --oneline -S"${query}" ${authorFlag} ${sinceFlag} -20 2>&1 || true`;
 
             return JSON.stringify({
               query,

@@ -13,7 +13,9 @@ export type RealtimeEventType =
   | "agent.resumed"
   | "agent.completed"
   | "agent.failed"
+  | "agent.auth-error"
   | "task.created"
+  | "task.continued"
   | "task.node.updated"
   | "task.completed"
   | "approval.required"
@@ -34,12 +36,7 @@ export interface RealtimeEvent {
 
 // ── Task & Agent Models ─────────────────────────────────────────────
 
-export type AgentRunStatus =
-  | "running"
-  | "paused"
-  | "completed"
-  | "failed"
-  | "stopped";
+export type AgentRunStatus = "running" | "paused" | "completed" | "failed" | "stopped";
 
 export interface AgentRun {
   id: string;

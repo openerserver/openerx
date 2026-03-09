@@ -1,6 +1,6 @@
-import { computed, ref } from "vue";
 import { defineStore } from "pinia";
-import { listProjects, type Project } from "../lib/api";
+import { computed, ref } from "vue";
+import { type Project, listProjects } from "../lib/api";
 
 export const useProjectStore = defineStore(
   "project",

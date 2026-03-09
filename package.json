@@ -1,11 +1,7 @@
 {
   "name": "openerx",
   "private": true,
-  "workspaces": [
-    "control-plane/service",
-    "control-plane/web-ui-bff",
-    "control-plane/web-ui"
-  ],
+  "workspaces": ["control-plane/service", "control-plane/web-ui-bff", "control-plane/web-ui"],
   "scripts": {
     "dev:service": "cd control-plane/service && bun run dev",
     "dev:bff": "cd control-plane/web-ui-bff && bun run dev",

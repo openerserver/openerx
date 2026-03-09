@@ -1,10 +1,10 @@
-import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
-import { z } from "zod";
 import { and, eq, inArray } from "drizzle-orm";
+import { Hono } from "hono";
+import { z } from "zod";
 import { db } from "../../db";
 import { organizations, projectRoles, projects } from "../../db/schema";
-import { authMiddleware, type AppEnv } from "../../middleware/auth";
+import { type AppEnv, authMiddleware } from "../../middleware/auth";
 import { requireRole } from "../../middleware/rbac";
 
 export const orgRoutes = new Hono<AppEnv>();
@@ -13,7 +13,11 @@ orgRoutes.use("*", authMiddleware);
 
 const createOrgSchema = z.object({
   name: z.string().min(1).max(100),
-  slug: z.string().min(1).max(50).regex(/^[a-z0-9-]+$/),
+  slug: z
+    .string()
+    .min(1)
+    .max(50)
+    .regex(/^[a-z0-9-]+$/),
 });
 
 // GET /api/orgs

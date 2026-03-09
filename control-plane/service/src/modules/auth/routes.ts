@@ -1,10 +1,10 @@
-import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
-import { z } from "zod";
 import { eq } from "drizzle-orm";
+import { Hono } from "hono";
+import { z } from "zod";
 import { db } from "../../db";
 import { projectRoles, users } from "../../db/schema";
-import { signJWT, authMiddleware, type AppEnv } from "../../middleware/auth";
+import { type AppEnv, authMiddleware, signJWT } from "../../middleware/auth";
 
 export const authRoutes = new Hono<AppEnv>();
 

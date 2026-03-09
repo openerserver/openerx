@@ -1,19 +1,19 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
-import { authRoutes } from "./modules/auth/routes";
-import { realtimeRoutes } from "./modules/realtime/routes";
+import { authMiddleware } from "./middleware/auth";
 import { agentControlRoutes } from "./modules/agent-control/routes";
-import { taskRoutes } from "./modules/tasks/routes";
 import { approvalRoutes } from "./modules/approvals/routes";
-import { costRoutes } from "./modules/cost/routes";
+import { authRoutes } from "./modules/auth/routes";
 import { configRoutes } from "./modules/config/routes";
+import { costRoutes } from "./modules/cost/routes";
 import { envRoutes } from "./modules/envs/routes";
+import { orgRoutes } from "./modules/orgs/routes";
 import { policyRoutes } from "./modules/policies/routes";
 import { projectRoutes } from "./modules/projects/routes";
-import { orgRoutes } from "./modules/orgs/routes";
-import { authMiddleware } from "./middleware/auth";
+import { realtimeRoutes } from "./modules/realtime/routes";
 import { websocketHandler } from "./modules/realtime/ws-broadcaster";
+import { taskRoutes } from "./modules/tasks/routes";
 
 const app = new Hono();
 

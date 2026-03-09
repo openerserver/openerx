@@ -14,17 +14,16 @@ export function parseFrontmatter(content: string): ParsedFrontmatter {
     return { frontmatter: {}, body: content };
   }
   try {
-    const frontmatter = parseYaml(match[1]!) as Record<string, unknown>;
-    return { frontmatter, body: match[2]! };
+    const rawFrontmatter = match[1] ?? "";
+    const body = match[2] ?? "";
+    const frontmatter = parseYaml(rawFrontmatter) as Record<string, unknown>;
+    return { frontmatter, body };
   } catch {
     return { frontmatter: {}, body: content };
   }
 }
 
-export function serializeFrontmatter(
-  frontmatter: Record<string, unknown>,
-  body: string,
-): string {
+export function serializeFrontmatter(frontmatter: Record<string, unknown>, body: string): string {
   const yamlStr = stringifyYaml(frontmatter).trimEnd();
   return `---\n${yamlStr}\n---\n${body}`;
 }

@@ -19,6 +19,8 @@
 - 不更换 OpenCode Runtime
 - 不进行大规模 UI 重构
 
+关于 OpenCode 的进一步关注项与不关注项，采用独立文档维护，详见 [OpenCode 关注边界说明](./opencode-focus-boundary.md)。
+
 ## 2. 阶段一工作包
 
 ### WP1. 认证入口闭环

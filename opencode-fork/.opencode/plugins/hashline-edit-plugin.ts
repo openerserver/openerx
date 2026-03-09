@@ -1,6 +1,6 @@
-import { type Plugin, tool } from "@opencode-ai/plugin";
 import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { type Plugin, tool } from "@opencode-ai/plugin";
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -43,7 +43,7 @@ function annotateFileContent(filePath: string): { annotated: string; entries: Ha
 
   for (let i = 0; i < lines.length; i++) {
     const lineNumber = i + 1;
-    const content = lines[i]!;
+    const content = lines[i] ?? "";
     const hash = computeLineHash(lineNumber, content);
     entries.push({ lineNumber, hash, content });
     annotatedLines.push(`LINE#${lineNumber}#${hash} | ${content}`);
@@ -55,76 +55,131 @@ function annotateFileContent(filePath: string): { annotated: string; entries: Ha
 function parseLineHash(hashStr: string): { lineNumber: number; hash: string } | null {
   const match = hashStr.match(/^LINE#(\d+)#([a-f0-9]{6})$/);
   if (!match) return null;
-  return { lineNumber: parseInt(match[1]!, 10), hash: match[2]! };
+  const [, lineNumber, hash] = match;
+  return { lineNumber: Number.parseInt(lineNumber, 10), hash };
 }
 
-function validateAndApplyEdits(
-  filePath: string,
-  operations: EditOperation[],
-): EditResult {
-  if (!existsSync(filePath)) {
-    return { success: false, filePath, linesEdited: 0, errors: ["File not found"] };
+function getLineContent(lines: string[], lineNumber: number): string | null {
+  return lines[lineNumber - 1] ?? null;
+}
+
+function validateEditOperations(lines: string[], operations: EditOperation[]): string[] {
+  const errors: string[] = [];
+
+  for (const op of operations) {
+    const parsed = parseLineHash(op.lineHash);
+    if (!parsed) {
+      errors.push(`Invalid hash format: ${op.lineHash}`);
+      continue;
+    }
+
+    const { lineNumber, hash } = parsed;
+    if (lineNumber < 1 || lineNumber > lines.length) {
+      errors.push(`Line ${lineNumber} out of range (file has ${lines.length} lines)`);
+      continue;
+    }
+
+    const currentContent = getLineContent(lines, lineNumber);
+    if (currentContent === null) {
+      errors.push(`Line ${lineNumber} out of range (file has ${lines.length} lines)`);
+      continue;
+    }
+
+    const currentHash = computeLineHash(lineNumber, currentContent);
+    if (currentHash !== hash) {
+      errors.push(
+        `Hash mismatch at line ${lineNumber}: expected ${hash}, got ${currentHash}. File has changed since last read. Please re-read the file.`,
+      );
+    }
   }
 
-  // File-level lock
+  return errors;
+}
+
+function applyEditOperations(lines: string[], operations: EditOperation[]): number {
+  let linesEdited = 0;
+
+  for (const op of operations) {
+    const parsed = parseLineHash(op.lineHash);
+    if (!parsed) {
+      continue;
+    }
+    lines[parsed.lineNumber - 1] = op.newContent;
+    linesEdited++;
+  }
+
+  return linesEdited;
+}
+
+function withFileLock<T>(filePath: string, callback: () => T): T | EditResult | string {
   if (fileLocks.has(filePath)) {
     return {
       success: false,
       filePath,
       linesEdited: 0,
       errors: ["File is locked by another edit operation. Please retry."],
-    };
+    } satisfies EditResult;
   }
 
   fileLocks.add(filePath);
   try {
-    const raw = readFileSync(filePath, "utf-8");
-    const lines = raw.split("\n");
-    const errors: string[] = [];
-    let linesEdited = 0;
+    return callback();
+  } finally {
+    fileLocks.delete(filePath);
+  }
+}
 
-    // Validate all operations first
-    for (const op of operations) {
-      const parsed = parseLineHash(op.lineHash);
-      if (!parsed) {
-        errors.push(`Invalid hash format: ${op.lineHash}`);
-        continue;
-      }
+function collectDeletionTargets(lines: string[], hashes: string[]) {
+  const linesToDelete = new Set<number>();
+  const errors: string[] = [];
 
-      const { lineNumber, hash } = parsed;
-      if (lineNumber < 1 || lineNumber > lines.length) {
-        errors.push(`Line ${lineNumber} out of range (file has ${lines.length} lines)`);
-        continue;
-      }
-
-      const currentContent = lines[lineNumber - 1]!;
-      const currentHash = computeLineHash(lineNumber, currentContent);
-
-      if (currentHash !== hash) {
-        errors.push(
-          `Hash mismatch at line ${lineNumber}: expected ${hash}, got ${currentHash}. ` +
-            "File has changed since last read. Please re-read the file.",
-        );
-      }
+  for (const hash of hashes) {
+    const parsed = parseLineHash(hash);
+    if (!parsed) {
+      errors.push(`Invalid hash: ${hash}`);
+      continue;
     }
 
-    // If any validation failed, reject entire batch
+    const currentContent = getLineContent(lines, parsed.lineNumber);
+    if (currentContent === null) {
+      errors.push(`Line ${parsed.lineNumber} out of range`);
+      continue;
+    }
+
+    const currentHash = computeLineHash(parsed.lineNumber, currentContent);
+    if (currentHash !== parsed.hash) {
+      errors.push(`Hash mismatch at line ${parsed.lineNumber}`);
+      continue;
+    }
+
+    linesToDelete.add(parsed.lineNumber - 1);
+  }
+
+  return { linesToDelete, errors };
+}
+
+function validateAndApplyEdits(filePath: string, operations: EditOperation[]): EditResult {
+  if (!existsSync(filePath)) {
+    return { success: false, filePath, linesEdited: 0, errors: ["File not found"] };
+  }
+
+  const result = withFileLock(filePath, () => {
+    const raw = readFileSync(filePath, "utf-8");
+    const lines = raw.split("\n");
+    const errors = validateEditOperations(lines, operations);
+
     if (errors.length > 0) {
       return { success: false, filePath, linesEdited: 0, errors };
     }
 
-    // Apply all edits
-    for (const op of operations) {
-      const parsed = parseLineHash(op.lineHash)!;
-      lines[parsed.lineNumber - 1] = op.newContent;
-      linesEdited++;
-    }
-
+    const linesEdited = applyEditOperations(lines, operations);
     writeFileSync(filePath, lines.join("\n"), "utf-8");
     return { success: true, filePath, linesEdited, errors: [] };
-  } finally {
-    fileLocks.delete(filePath);
-  }
+  });
+
+  return typeof result === "string"
+    ? { success: false, filePath, linesEdited: 0, errors: [result] }
+    : result;
 }
 
 // ── Plugin Export ──────────────────────────────────────────────────
@@ -198,7 +253,12 @@ export const HashlineEditPlugin: Plugin = async () => {
               return JSON.stringify({ error: `Line ${lineNumber} out of range` });
             }
 
-            const currentHash = computeLineHash(lineNumber, lines[lineNumber - 1]!);
+            const currentContent = getLineContent(lines, lineNumber);
+            if (currentContent === null) {
+              return JSON.stringify({ error: `Line ${lineNumber} out of range` });
+            }
+
+            const currentHash = computeLineHash(lineNumber, currentContent);
             if (currentHash !== hash) {
               return JSON.stringify({
                 error: `Hash mismatch at line ${lineNumber}. File changed, please re-read.`,
@@ -233,30 +293,10 @@ export const HashlineEditPlugin: Plugin = async () => {
             return JSON.stringify({ error: "File not found" });
           }
 
-          if (fileLocks.has(filePath)) {
-            return JSON.stringify({ error: "File is locked" });
-          }
-
-          fileLocks.add(filePath);
-          try {
+          const result = withFileLock(filePath, () => {
             const raw = readFileSync(filePath, "utf-8");
             const lines = raw.split("\n");
-            const linesToDelete = new Set<number>();
-            const errors: string[] = [];
-
-            for (const h of hashes) {
-              const parsed = parseLineHash(h);
-              if (!parsed) {
-                errors.push(`Invalid hash: ${h}`);
-                continue;
-              }
-              const currentHash = computeLineHash(parsed.lineNumber, lines[parsed.lineNumber - 1]!);
-              if (currentHash !== parsed.hash) {
-                errors.push(`Hash mismatch at line ${parsed.lineNumber}`);
-                continue;
-              }
-              linesToDelete.add(parsed.lineNumber - 1);
-            }
+            const { linesToDelete, errors } = collectDeletionTargets(lines, hashes);
 
             if (errors.length > 0) {
               return JSON.stringify({ success: false, errors });
@@ -269,9 +309,13 @@ export const HashlineEditPlugin: Plugin = async () => {
               success: true,
               linesDeleted: linesToDelete.size,
             });
-          } finally {
-            fileLocks.delete(filePath);
+          });
+
+          if (typeof result !== "string") {
+            return JSON.stringify(result);
           }
+
+          return result;
         },
       }),
     },
@@ -280,9 +324,7 @@ export const HashlineEditPlugin: Plugin = async () => {
     "tool.execute.after": async (input) => {
       if (input.properties?.toolName === "read_file") {
         // Log that hashline-annotated read is available
-        console.log(
-          "[hashline] Tip: Use hashline_read for safe editing with content verification",
-        );
+        console.log("[hashline] Tip: Use hashline_read for safe editing with content verification");
       }
     },
   };

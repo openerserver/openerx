@@ -85,8 +85,7 @@ function classifyIntent(message: string): IntentClassification {
   const entries = Object.entries(scores) as [TaskCategory, number][];
   entries.sort((a, b) => b[1] - a[1]);
 
-  const topCategory = entries[0]![0];
-  const topScore = entries[0]![1];
+  const [topCategory = "quick", topScore = 0] = entries[0] ?? [];
   const totalScore = entries.reduce((sum, [, s]) => sum + s, 0);
 
   const complexity = estimateComplexity(message);
@@ -142,10 +141,17 @@ const MODEL_ROUTES: Record<string, ModelRoute[]> = {
 };
 
 function selectModel(category: TaskCategory, complexity: Complexity): ModelRoute {
-  if (category === "quick" && complexity === "low") {
-    return MODEL_ROUTES.fast![0]!;
+  const fastModel = MODEL_ROUTES.fast[0];
+  const primaryModel = MODEL_ROUTES.primary[0];
+
+  if (!fastModel || !primaryModel) {
+    throw new Error("Model routes are not configured");
   }
-  return MODEL_ROUTES.primary![0]!;
+
+  if (category === "quick" && complexity === "low") {
+    return fastModel;
+  }
+  return primaryModel;
 }
 
 // ── Sub-Session Registry ───────────────────────────────────────────
@@ -162,10 +168,7 @@ function getSubSessions(taskId: string): SubSessionEntry[] {
   return sessionRegistry.get(taskId) ?? [];
 }
 
-function findSubSession(
-  taskId: string,
-  agentType: string,
-): SubSessionEntry | undefined {
+function findSubSession(taskId: string, agentType: string): SubSessionEntry | undefined {
   return getSubSessions(taskId).find((s) => s.agentType === agentType);
 }
 
@@ -224,30 +227,49 @@ function computePruningStrategy(
   const indicesToRemove: number[] = [];
   const lastReadIndex = new Map<string, number>();
 
+  function trackDuplicateRead(
+    message: { content: string; toolName?: string },
+    index: number,
+  ): void {
+    if (message.toolName !== "read_file") {
+      return;
+    }
+
+    const pathMatch = message.content.match(/path[:\s]+["']?([^\s"']+)/);
+    if (!pathMatch?.[1]) {
+      return;
+    }
+
+    const prev = lastReadIndex.get(pathMatch[1]);
+    if (prev !== undefined) {
+      indicesToRemove.push(prev);
+      stats.duplicateReadsRemoved++;
+      stats.totalTokensSaved += Math.ceil(message.content.length / 4);
+    }
+    lastReadIndex.set(pathMatch[1], index);
+  }
+
+  function trackCompressedErrors(message: { role: string; content: string }): void {
+    if (
+      message.role !== "tool" ||
+      !message.content.includes("Error") ||
+      message.content.length <= 500
+    ) {
+      return;
+    }
+
+    stats.errorOutputsCompressed++;
+    stats.totalTokensSaved += Math.ceil((message.content.length - 500) / 4);
+  }
+
   for (let i = 0; i < messages.length; i++) {
-    const msg = messages[i]!;
-
-    // Deduplicate file reads: keep only the latest read of each file
-    if (msg.toolName === "read_file") {
-      const pathMatch = msg.content.match(/path[:\s]+["']?([^\s"']+)/);
-      if (pathMatch?.[1]) {
-        const prev = lastReadIndex.get(pathMatch[1]);
-        if (prev !== undefined) {
-          indicesToRemove.push(prev);
-          stats.duplicateReadsRemoved++;
-          stats.totalTokensSaved += Math.ceil(msg.content.length / 4);
-        }
-        lastReadIndex.set(pathMatch[1], i);
-      }
+    const msg = messages[i];
+    if (!msg) {
+      continue;
     }
 
-    // Compress error outputs (keep first 500 chars)
-    if (msg.role === "tool" && msg.content.includes("Error")) {
-      if (msg.content.length > 500) {
-        stats.errorOutputsCompressed++;
-        stats.totalTokensSaved += Math.ceil((msg.content.length - 500) / 4);
-      }
-    }
+    trackDuplicateRead(msg, i);
+    trackCompressedErrors(msg);
   }
 
   return { indicesToRemove, stats };
@@ -278,10 +300,7 @@ export const OrchestratorPlugin: Plugin = async ({ client, project, directory })
           complexity: tool.schema.string("Task complexity: low|medium|high"),
         },
         async execute({ category, complexity }) {
-          const route = selectModel(
-            category as TaskCategory,
-            complexity as Complexity,
-          );
+          const route = selectModel(category as TaskCategory, complexity as Complexity);
           return JSON.stringify(route);
         },
       }),
@@ -322,7 +341,9 @@ export const OrchestratorPlugin: Plugin = async ({ client, project, directory })
         async execute({ taskId, agentType, prompt }) {
           const sub = findSubSession(taskId, agentType);
           if (!sub) {
-            return JSON.stringify({ error: `No sub-session found for ${agentType} in task ${taskId}` });
+            return JSON.stringify({
+              error: `No sub-session found for ${agentType} in task ${taskId}`,
+            });
           }
           sub.status = "running";
           const result = await client.session.prompt({
@@ -396,10 +417,12 @@ export const OrchestratorPlugin: Plugin = async ({ client, project, directory })
           const result = await client.session.prompt({
             path: { id: sub.sessionId },
             body: {
-              parts: [{
-                type: "text",
-                text: "Resume execution. Apply any guidance provided above and continue your current task.",
-              }],
+              parts: [
+                {
+                  type: "text",
+                  text: "Resume execution. Apply any guidance provided above and continue your current task.",
+                },
+              ],
             },
           });
           sub.status = "running";
@@ -465,7 +488,7 @@ export const OrchestratorPlugin: Plugin = async ({ client, project, directory })
       try {
         const todos = await client.session.get({ path: { id: sessionId } });
         const sessionData = todos.data;
-        if (sessionData && sessionData.title?.includes("[")) {
+        if (sessionData?.title?.includes("[")) {
           // This is a sub-session managed by us — check if task has pending nodes
           console.log(`[orchestrator] Session ${sessionId} idle — checking for pending work`);
         }
@@ -477,10 +500,7 @@ export const OrchestratorPlugin: Plugin = async ({ client, project, directory })
     "session.error": async (input) => {
       const sessionId = input.properties?.sessionID;
       if (!sessionId) return;
-      console.error(
-        `[orchestrator] Session ${sessionId} error:`,
-        input.properties?.data,
-      );
+      console.error(`[orchestrator] Session ${sessionId} error:`, input.properties?.data);
     },
   };
 };

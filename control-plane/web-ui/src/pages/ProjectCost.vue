@@ -60,7 +60,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
-import { getProject, listBudgetConfigs, type BudgetConfig, type Project } from "../lib/api";
+import { type BudgetConfig, type Project, getProject, listBudgetConfigs } from "../lib/api";
 
 const route = useRoute();
 const projectId = String(route.params.projectId || "");

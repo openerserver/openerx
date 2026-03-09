@@ -1,6 +1,6 @@
-import { type Plugin, tool } from "@opencode-ai/plugin";
-import { existsSync, readFileSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { type Plugin, tool } from "@opencode-ai/plugin";
 
 // ── Tmux Integration Plugin ───────────────────────────────────────
 //
@@ -31,10 +31,10 @@ function sanitizeSessionName(name: string): string {
 function sanitizeInput(input: string): string {
   // Block dangerous patterns while allowing normal terminal usage
   const blocked = [
-    /rm\s+-rf\s+\/(?:\s|$)/,        // rm -rf /
-    /mkfs\./,                         // filesystem format
-    /dd\s+if=.*of=\/dev\//,          // raw disk write
-    /:(){ :\|:& };:/,                // fork bomb
+    /rm\s+-rf\s+\/(?:\s|$)/, // rm -rf /
+    /mkfs\./, // filesystem format
+    /dd\s+if=.*of=\/dev\//, // raw disk write
+    /:(){ :\|:& };:/, // fork bomb
   ];
   for (const pattern of blocked) {
     if (pattern.test(input)) {
@@ -62,15 +62,22 @@ export const TmuxPlugin: Plugin = async ({ $, directory }) => {
         description:
           "Create a new tmux session for persistent interactive terminal work (REPL, debugger, long-running process). Returns the session name for subsequent commands.",
         args: {
-          name: tool.schema.string("Session name (alphanumeric, dash, underscore). E.g. 'debug-server', 'python-repl'"),
+          name: tool.schema.string(
+            "Session name (alphanumeric, dash, underscore). E.g. 'debug-server', 'python-repl'",
+          ),
           purpose: tool.schema.string("Description of what this session is for"),
-          startCommand: tool.schema.string("Optional initial command to run in the session (e.g. 'python3', 'node --inspect')"),
-          workingDir: tool.schema.string("Working directory path (optional, defaults to project root)"),
+          startCommand: tool.schema.string(
+            "Optional initial command to run in the session (e.g. 'python3', 'node --inspect')",
+          ),
+          workingDir: tool.schema.string(
+            "Working directory path (optional, defaults to project root)",
+          ),
         },
         async execute({ name, purpose, startCommand, workingDir }) {
           if (!tmuxAvailable) {
             return JSON.stringify({
-              error: "tmux is not installed. Install with: brew install tmux (macOS) or apt install tmux (Linux)",
+              error:
+                "tmux is not installed. Install with: brew install tmux (macOS) or apt install tmux (Linux)",
             });
           }
 
@@ -117,8 +124,12 @@ export const TmuxPlugin: Plugin = async ({ $, directory }) => {
           "Send keystrokes or a command to an existing tmux session. Use this to interact with REPLs, debuggers, or any interactive terminal.",
         args: {
           session: tool.schema.string("Tmux session name (from tmux_create_session)"),
-          keys: tool.schema.string("Keys or command to send. For Enter press, append newline via 'Enter' flag."),
-          pressEnter: tool.schema.boolean("If true, append Enter keystroke after the keys (default: true)"),
+          keys: tool.schema.string(
+            "Keys or command to send. For Enter press, append newline via 'Enter' flag.",
+          ),
+          pressEnter: tool.schema.boolean(
+            "If true, append Enter keystroke after the keys (default: true)",
+          ),
         },
         async execute({ session, keys, pressEnter }) {
           if (!tmuxAvailable) {
@@ -165,7 +176,9 @@ export const TmuxPlugin: Plugin = async ({ $, directory }) => {
           "Read the current visible output from a tmux session pane. Use to check command results, REPL output, debugger state, etc.",
         args: {
           session: tool.schema.string("Tmux session name"),
-          lines: tool.schema.number("Number of lines to capture from scrollback (default: 50, max: 500)"),
+          lines: tool.schema.number(
+            "Number of lines to capture from scrollback (default: 50, max: 500)",
+          ),
         },
         async execute({ session, lines }) {
           if (!tmuxAvailable) {
@@ -198,7 +211,8 @@ export const TmuxPlugin: Plugin = async ({ $, directory }) => {
           }
 
           try {
-            const rawList = await $`tmux list-sessions -F '#{session_name}:#{session_created}:#{session_windows}:#{session_attached}' 2>/dev/null || true`;
+            const rawList =
+              await $`tmux list-sessions -F '#{session_name}:#{session_created}:#{session_windows}:#{session_attached}' 2>/dev/null || true`;
             const rawStr = String(rawList).trim();
 
             if (!rawStr) {
@@ -210,16 +224,23 @@ export const TmuxPlugin: Plugin = async ({ $, directory }) => {
               .filter((line) => line.startsWith("openerx-"))
               .map((line) => {
                 const [name, created, windows, attached] = line.split(":");
-                const meta = tmuxSessions.get(name!);
+                if (!name) {
+                  return null;
+                }
+
+                const meta = tmuxSessions.get(name);
                 return {
                   name,
-                  created: created ? new Date(parseInt(created!) * 1000).toISOString() : "unknown",
-                  windows: parseInt(windows || "1"),
+                  created: created
+                    ? new Date(Number.parseInt(created) * 1000).toISOString()
+                    : "unknown",
+                  windows: Number.parseInt(windows || "1"),
                   attached: attached === "1",
                   purpose: meta?.purpose || "unknown",
                   lastCommand: meta?.lastCommand || "unknown",
                 };
-              });
+              })
+              .filter((session): session is NonNullable<typeof session> => session !== null);
 
             return JSON.stringify({ sessions, total: sessions.length });
           } catch (e) {

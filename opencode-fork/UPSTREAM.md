@@ -2,8 +2,8 @@
 
 ## Locked Baseline
 
-- **OpenCode Version**: v1.2.21
-- **Lock Date**: 2026-03-08
+- **OpenCode Version**: v1.2.22
+- **Lock Date**: 2026-03-09
 - **SDK Package**: @opencode-ai/sdk
 
 ## Upgrade Policy
@@ -29,4 +29,5 @@
 
 | Date | Version | Notes |
 |------|---------|-------|
+| 2026-03-09 | v1.2.22 | MCP toggle fix, beta/stable DB sharing, OPENCODE_SKIP_MIGRATIONS flag |
 | 2026-03-08 | v1.2.21 | Initial baseline |

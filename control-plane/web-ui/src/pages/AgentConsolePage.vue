@@ -248,22 +248,16 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, reactive } from "vue";
 import {
   PauseCircleOutlined,
   PlayCircleOutlined,
-  StopOutlined,
-  SendOutlined,
   RobotOutlined,
+  SendOutlined,
+  StopOutlined,
 } from "@ant-design/icons-vue";
 import { message } from "ant-design-vue";
-import {
-  pauseAgent,
-  resumeAgent,
-  injectGuidance,
-  terminateAgent,
-  listAgentRuns,
-} from "../lib/api";
+import { computed, onMounted, reactive, ref } from "vue";
+import { injectGuidance, listAgentRuns, pauseAgent, resumeAgent, terminateAgent } from "../lib/api";
 import { useRealtimeStore } from "../stores/realtime";
 
 interface AgentRun {
@@ -272,7 +266,10 @@ interface AgentRun {
   status: string;
   taskId: string;
   agentType?: string;
+  updatedAt?: number;
 }
+
+type AgentRunStatus = "running" | "paused" | "completed" | "failed" | "stopped";
 
 const realtimeStore = useRealtimeStore();
 const loading = ref(false);
@@ -289,43 +286,100 @@ function setSelectedAgentId(value: unknown) {
   selectedAgentId.value = value == null ? undefined : String(value);
 }
 
+function normalizeAgentEventStatus(eventType?: string): AgentRunStatus | undefined {
+  const statusMap: Record<string, AgentRunStatus> = {
+    "agent.started": "running",
+    "agent.running": "running",
+    "agent.resumed": "running",
+    "agent.paused": "paused",
+    "agent.completed": "completed",
+    "agent.failed": "failed",
+    "agent.stopped": "stopped",
+  };
+
+  return eventType ? statusMap[eventType] : undefined;
+}
+
+function normalizeAgentStatus(status?: string): AgentRunStatus | undefined {
+  const statusMap: Record<string, AgentRunStatus> = {
+    running: "running",
+    paused: "paused",
+    completed: "completed",
+    failed: "failed",
+    stopped: "stopped",
+  };
+
+  return status ? statusMap[status] : undefined;
+}
+
+const latestRealtimeRuns = computed(() => {
+  const runs = new Map<string, AgentRun>();
+
+  for (const evt of [...realtimeStore.events].reverse()) {
+    if (!evt.type.startsWith("agent.") || !evt.agentRunId) {
+      continue;
+    }
+
+    const existing = runs.get(evt.agentRunId);
+    runs.set(evt.agentRunId, {
+      agentRunId: evt.agentRunId,
+      subSessionId: evt.sessionId || existing?.subSessionId,
+      status: normalizeAgentEventStatus(evt.type) ?? existing?.status ?? "running",
+      taskId: evt.taskId || existing?.taskId || "",
+      agentType:
+        typeof evt.data?.agentType === "string"
+          ? evt.data.agentType
+          : existing?.agentType || "Agent",
+      updatedAt: Date.parse(evt.ts),
+    });
+  }
+
+  return runs;
+});
+
 // Merge API-registered runs with runs discovered from WebSocket events
 const allAgentRuns = computed(() => {
   const map = new Map<string, AgentRun>();
 
-  // API-registered runs take priority
   for (const run of registeredRuns.value) {
-    map.set(run.agentRunId, run);
+    map.set(run.agentRunId, {
+      ...run,
+      status: normalizeAgentStatus(run.status) ?? run.status,
+      agentType: run.agentType || "Agent",
+      updatedAt: run.updatedAt ?? 0,
+    });
   }
 
-  // Discover additional runs from realtime events
-  for (const evt of realtimeStore.events) {
-    if (evt.type.startsWith("agent.") && evt.agentRunId && !map.has(evt.agentRunId)) {
-      map.set(evt.agentRunId, {
-        agentRunId: evt.agentRunId,
-        status: deriveStatus(evt.type),
-        taskId: evt.taskId || "",
-        agentType: (evt.data?.agentType as string) || "Agent",
-      });
-    }
-    // Update status from newer events
-    if (evt.type.startsWith("agent.") && evt.agentRunId && map.has(evt.agentRunId)) {
-      const existing = map.get(evt.agentRunId)!;
-      const derivedStatus = deriveStatus(evt.type);
-      if (derivedStatus !== "unknown") {
-        existing.status = derivedStatus;
-      }
-      if (!existing.agentType && evt.data?.agentType) {
-        existing.agentType = evt.data.agentType as string;
-      }
-    }
+  for (const [agentRunId, realtimeRun] of latestRealtimeRuns.value.entries()) {
+    const existing = map.get(agentRunId);
+    map.set(agentRunId, {
+      ...existing,
+      ...realtimeRun,
+      subSessionId: realtimeRun.subSessionId || existing?.subSessionId,
+      taskId: realtimeRun.taskId || existing?.taskId || "",
+      agentType: realtimeRun.agentType || existing?.agentType || "Agent",
+      status: realtimeRun.status || existing?.status || "running",
+      updatedAt: realtimeRun.updatedAt ?? existing?.updatedAt ?? 0,
+    });
   }
 
   // Sort: running first, then paused, then others
-  const order: Record<string, number> = { running: 0, paused: 1, stopped: 2, completed: 3, failed: 4 };
-  return Array.from(map.values()).sort(
-    (a, b) => (order[a.status] ?? 5) - (order[b.status] ?? 5),
-  );
+  const order: Record<string, number> = {
+    running: 0,
+    paused: 1,
+    stopped: 2,
+    completed: 3,
+    failed: 4,
+  };
+
+  return Array.from(map.values()).sort((a, b) => {
+    const statusOrder = (order[a.status] ?? 5) - (order[b.status] ?? 5);
+    if (statusOrder !== 0) {
+      return statusOrder;
+    }
+
+    return (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
+  });
 });
 
 const agentSelectOptions = computed(() =>
@@ -338,12 +392,12 @@ const agentSelectOptions = computed(() =>
 );
 
 const agentEvents = computed(() =>
-  realtimeStore.events.filter(
-    (e) => e.type.startsWith("agent.") || e.type === "guidance.injected",
-  ),
+  realtimeStore.events.filter((e) => e.type.startsWith("agent.") || e.type === "guidance.injected"),
 );
 
-const runningCount = computed(() => allAgentRuns.value.filter((r) => r.status === "running").length);
+const runningCount = computed(
+  () => allAgentRuns.value.filter((r) => r.status === "running").length,
+);
 const pausedCount = computed(() => allAgentRuns.value.filter((r) => r.status === "paused").length);
 const completedCount = computed(
   () => allAgentRuns.value.filter((r) => r.status === "completed" || r.status === "stopped").length,
@@ -351,19 +405,6 @@ const completedCount = computed(
 
 function getAgentEvents(agentRunId: string) {
   return realtimeStore.events.filter((e) => e.agentRunId === agentRunId);
-}
-
-function deriveStatus(eventType: string): string {
-  const map: Record<string, string> = {
-    "agent.started": "running",
-    "agent.running": "running",
-    "agent.paused": "paused",
-    "agent.resumed": "running",
-    "agent.completed": "completed",
-    "agent.failed": "failed",
-    "agent.stopped": "stopped",
-  };
-  return map[eventType] || "unknown";
 }
 
 function statusColor(status: string) {
@@ -389,7 +430,8 @@ function statusLabel(status: string) {
 }
 
 function eventColor(type: string) {
-  if (type.includes("started") || type.includes("running") || type.includes("resumed")) return "blue";
+  if (type.includes("started") || type.includes("running") || type.includes("resumed"))
+    return "blue";
   if (type.includes("paused")) return "orange";
   if (type.includes("completed")) return "green";
   if (type.includes("failed") || type.includes("stopped")) return "red";
@@ -404,7 +446,10 @@ function formatTime(ts: string) {
 async function refreshAgents() {
   loading.value = true;
   try {
-    registeredRuns.value = await listAgentRuns();
+    registeredRuns.value = (await listAgentRuns()).map((run) => ({
+      ...run,
+      status: normalizeAgentStatus(run.status) ?? run.status,
+    }));
   } catch {
     // Might fail if no agents registered yet
     registeredRuns.value = [];
@@ -417,6 +462,7 @@ async function handleAction(agentRunId: string, action: () => Promise<unknown>) 
   actionLoading.value = agentRunId;
   try {
     await action();
+    await refreshAgents();
   } catch (e) {
     message.error(String(e));
   } finally {

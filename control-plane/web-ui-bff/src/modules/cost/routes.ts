@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { cpFetch, authHeader } from "../../lib/control-plane-client";
+import { authHeader, cpFetch } from "../../lib/control-plane-client";
 
 export const costRoutes = new Hono();
 
@@ -9,9 +9,12 @@ costRoutes.get("/budget", async (c) => {
   if (projectId) params.set("projectId", projectId);
 
   const query = params.toString();
-  const result = await cpFetch<Array<Record<string, unknown>>>(`/api/cost/budget${query ? `?${query}` : ""}`, {
-    authorization: authHeader(c),
-  });
+  const result = await cpFetch<Array<Record<string, unknown>>>(
+    `/api/cost/budget${query ? `?${query}` : ""}`,
+    {
+      authorization: authHeader(c),
+    },
+  );
   return c.json(result.data, result.ok ? 200 : (result.status as 400 | 401 | 403 | 404 | 502));
 });
 

@@ -1,10 +1,11 @@
-import type { RealtimeEvent, RealtimeEventType } from "../../types/events";
 import { cpFetch, createInternalAuthorization } from "../../lib/control-plane-client";
+import type { RealtimeEvent, RealtimeEventType } from "../../types/events";
 import {
   findAgentRunBySessionId,
   getSessionMessages,
   updateAgentRunStatus,
 } from "../agent-control/opencode-adapter";
+import { observeGraphWorkspaceDir, onGraphToolExecuted } from "./dag-sync";
 
 // ── SSE Aggregator ─────────────────────────────────────────────────
 // Subscribes to OpenCode Runtime SSE events and transforms them into
@@ -39,7 +40,7 @@ class SSEAggregator {
   /**
    * Subscribe to a specific session's SSE stream.
    */
-  async subscribeSession(sessionId: string): Promise<void> {
+  async subscribeSession(_sessionId: string): Promise<void> {
     await this.subscribeGlobal();
   }
 
@@ -121,7 +122,7 @@ class SSEAggregator {
     }
 
     conn.reconnectAttempts++;
-    const delay = this.reconnectDelay * Math.pow(2, conn.reconnectAttempts - 1);
+    const delay = this.reconnectDelay * 2 ** (conn.reconnectAttempts - 1);
     console.log(`SSE ${key}: reconnecting in ${delay}ms (attempt ${conn.reconnectAttempts})`);
 
     setTimeout(() => this.startSSE(key, conn), delay);
@@ -130,6 +131,11 @@ class SSEAggregator {
   private handleSSEEvent(type: string, data: string): void {
     try {
       const parsed = JSON.parse(data);
+      const workspaceDirectory =
+        typeof parsed === "object" && parsed && "directory" in parsed
+          ? String(parsed.directory || "")
+          : "";
+      observeGraphWorkspaceDir(workspaceDirectory);
       const payload =
         typeof parsed === "object" && parsed && "payload" in parsed
           ? (parsed.payload as Record<string, unknown>)
@@ -138,15 +144,23 @@ class SSEAggregator {
       const event = payload
         ? this.transformEvent(String(payload.type || type), {
             ...(typeof parsed === "object" && parsed ? parsed : {}),
-            ...(typeof payload.properties === "object" && payload.properties ? payload.properties : {}),
+            ...(typeof payload.properties === "object" && payload.properties
+              ? payload.properties
+              : {}),
             rawType: payload.type,
           })
         : this.transformEvent(type, parsed as Record<string, unknown>);
 
       if (event) {
         this.emit(event);
+        if (event.type === "session.error") {
+          this.maybeEmitAuthError(event);
+        }
         void this.maybeFinalizeRun(event);
       }
+
+      // Trigger DAG sync for task_graph_* tool calls
+      this.maybeSyncDag(type, payload, parsed as Record<string, unknown>, workspaceDirectory);
     } catch {
       // Malformed event, skip
     }
@@ -191,6 +205,60 @@ class SSEAggregator {
     }
   }
 
+  /**
+   * Detect provider-level auth errors (e.g. Copilot 403) and surface
+   * them as an explicit agent.auth-error event so the frontend can act
+   * immediately instead of waiting for a completion that will never arrive.
+   */
+  private maybeEmitAuthError(event: RealtimeEvent): void {
+    const error =
+      typeof event.data.error === "object" && event.data.error
+        ? (event.data.error as Record<string, unknown>)
+        : undefined;
+    if (!error) return;
+
+    const errorData =
+      typeof error.data === "object" && error.data
+        ? (error.data as Record<string, unknown>)
+        : undefined;
+
+    const statusCode = errorData?.statusCode;
+    const isAuthError =
+      statusCode === 401 ||
+      statusCode === 403 ||
+      (typeof errorData?.message === "string" &&
+        /reauthenticate|unauthorized|auth/i.test(errorData.message as string));
+
+    if (!isAuthError) return;
+
+    const { sessionId, taskId, projectId, agentRunId } = event;
+
+    console.warn(
+      `Provider auth error detected (status=${statusCode}) for session ${sessionId}`,
+    );
+
+    this.emit({
+      id: crypto.randomUUID(),
+      type: "agent.auth-error",
+      ts: new Date().toISOString(),
+      sessionId,
+      taskId,
+      projectId,
+      agentRunId,
+      data: {
+        statusCode,
+        message: errorData?.message ?? error.name ?? "Provider authentication failed",
+        provider: (errorData?.metadata as Record<string, unknown>)?.url ?? undefined,
+        isRetryable: errorData?.isRetryable ?? false,
+      },
+    });
+
+    // Mark the agent run as failed so the system stops waiting for completion
+    if (agentRunId) {
+      updateAgentRunStatus(agentRunId, "failed");
+    }
+  }
+
   private isCompletionSignal(event: RealtimeEvent): boolean {
     if (!event.sessionId || !event.agentRunId || !event.taskId || !event.projectId) {
       return false;
@@ -205,7 +273,9 @@ class SSEAggregator {
         ? (event.data.info as Record<string, unknown>)
         : undefined;
     const time =
-      typeof info?.time === "object" && info.time ? (info.time as Record<string, unknown>) : undefined;
+      typeof info?.time === "object" && info.time
+        ? (info.time as Record<string, unknown>)
+        : undefined;
     const completed = time?.completed;
 
     if (event.type === "session.updated") {
@@ -213,14 +283,25 @@ class SSEAggregator {
     }
 
     if (event.type === "message.updated") {
-      return info?.role === "assistant" && (typeof completed === "number" || typeof completed === "string");
+      const finish = typeof info?.finish === "string" ? info.finish : undefined;
+      return (
+        info?.role === "assistant" &&
+        finish === "stop" &&
+        (typeof completed === "number" || typeof completed === "string")
+      );
     }
 
     return false;
   }
 
   private async maybeFinalizeRun(event: RealtimeEvent): Promise<void> {
-    if (!this.isCompletionSignal(event) || !event.agentRunId || !event.sessionId || !event.taskId || !event.projectId) {
+    if (
+      !this.isCompletionSignal(event) ||
+      !event.agentRunId ||
+      !event.sessionId ||
+      !event.taskId ||
+      !event.projectId
+    ) {
       return;
     }
 
@@ -267,7 +348,7 @@ class SSEAggregator {
       }
 
       updateAgentRunStatus(event.agentRunId, "completed");
-  this.finalizedAgentRuns.add(event.agentRunId);
+      this.finalizedAgentRuns.add(event.agentRunId);
 
       this.emit({
         id: crypto.randomUUID(),
@@ -345,7 +426,9 @@ class SSEAggregator {
         }
 
         const time =
-          typeof info?.time === "object" && info.time ? (info.time as Record<string, unknown>) : undefined;
+          typeof info?.time === "object" && info.time
+            ? (info.time as Record<string, unknown>)
+            : undefined;
         const completed = time?.completed;
         if (text && (typeof completed === "number" || typeof completed === "string")) {
           return { text, completed: true };
@@ -364,7 +447,10 @@ class SSEAggregator {
     if (typeof data.sessionId === "string") return data.sessionId;
     if (typeof data.sessionID === "string") return data.sessionID;
 
-    const info = typeof data.info === "object" && data.info ? (data.info as Record<string, unknown>) : undefined;
+    const info =
+      typeof data.info === "object" && data.info
+        ? (data.info as Record<string, unknown>)
+        : undefined;
     if (type.startsWith("session.") && typeof info?.id === "string") {
       return info.id;
     }
@@ -372,12 +458,36 @@ class SSEAggregator {
       return info.sessionID;
     }
 
-    const part = typeof data.part === "object" && data.part ? (data.part as Record<string, unknown>) : undefined;
+    const part =
+      typeof data.part === "object" && data.part
+        ? (data.part as Record<string, unknown>)
+        : undefined;
     if (typeof part?.sessionID === "string") {
       return part.sessionID;
     }
 
     return undefined;
+  }
+
+  private maybeSyncDag(
+    type: string,
+    payload: Record<string, unknown> | null,
+    parsed: Record<string, unknown>,
+    workspaceDirectory?: string,
+  ): void {
+    const eventType = payload ? String(payload.type || type) : type;
+    if (eventType !== "tool.execute.after") return;
+
+    const props =
+      (typeof payload?.properties === "object" && payload.properties
+        ? (payload.properties as Record<string, unknown>)
+        : parsed) || {};
+    const toolName = String(props.toolName || props.name || "");
+    if (!toolName.startsWith("task_graph_")) return;
+
+    const toolResult = String(props.result || props.output || "{}");
+    const sessionId = this.extractSessionId(payload ?? parsed);
+    void onGraphToolExecuted(toolName, toolResult, workspaceDirectory, sessionId);
   }
 
   onEvent(handler: EventHandler): () => void {

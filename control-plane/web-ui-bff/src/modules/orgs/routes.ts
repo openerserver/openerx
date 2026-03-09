@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { cpFetch, authHeader } from "../../lib/control-plane-client";
+import { authHeader, cpFetch } from "../../lib/control-plane-client";
 
 export const orgRoutes = new Hono();
 

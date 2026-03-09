@@ -88,14 +88,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
 import { message } from "ant-design-vue";
+import { computed, onMounted, ref, watch } from "vue";
 import {
+  type Environment,
   createEnvironment,
   listEnvironments,
   removeEnvironment,
   updateEnvironment,
-  type Environment,
 } from "../lib/api";
 import { useAuthStore } from "../stores/auth";
 

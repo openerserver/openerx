@@ -6,7 +6,7 @@
         <a-typography-text code style="font-size: 11px">{{
           agentRunId.slice(0, 8)
         }}</a-typography-text>
-        <a-tag :color="statusColor">{{ status }}</a-tag>
+        <a-tag :color="statusColor">{{ statusLabel }}</a-tag>
       </a-flex>
     </template>
 
@@ -58,13 +58,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from "vue";
-import {
-  PauseCircleOutlined,
-  PlayCircleOutlined,
-  StopOutlined,
-} from "@ant-design/icons-vue";
-import { pauseAgent, resumeAgent, injectGuidance, terminateAgent } from "../lib/api";
+import { PauseCircleOutlined, PlayCircleOutlined, StopOutlined } from "@ant-design/icons-vue";
+import { computed, ref } from "vue";
+import { injectGuidance, pauseAgent, resumeAgent, terminateAgent } from "../lib/api";
 
 const props = defineProps<{
   agentRunId: string;
@@ -84,6 +80,18 @@ const statusColor = computed(() => {
     stopped: "default",
   };
   return map[props.status] || "default";
+});
+
+const statusLabel = computed(() => {
+  const map: Record<string, string> = {
+    running: "运行中",
+    paused: "已暂停",
+    completed: "已完成",
+    failed: "失败",
+    stopped: "已停止",
+  };
+
+  return map[props.status] || props.status;
 });
 
 async function handleAction(action: () => Promise<unknown>) {

@@ -432,46 +432,193 @@
       </a-tab-pane>
 
       <!-- ═══════════ 插件 ═══════════ -->
-      <a-tab-pane key="plugins" tab="插件 (只读)">
-        <a-table :dataSource="pluginsList" :columns="pluginColumns" :pagination="false" rowKey="path" size="small" />
-        <a-alert type="info" message="插件为 TypeScript 源码文件，出于安全考虑仅支持查看，不支持在线编辑。" style="margin-top: 12px" showIcon />
+      <a-tab-pane key="plugins" tab="插件">
+        <a-card title="已注册插件" size="small">
+          <template #extra>
+            <a-space>
+              <a-button size="small" @click="checkCompat" :loading="compatLoading">兼容性检查</a-button>
+              <a-button size="small" type="primary" @click="showInstallPlugin = true">安装插件</a-button>
+            </a-space>
+          </template>
+          <a-table :dataSource="pluginsList" :columns="pluginColumns" :pagination="false" rowKey="name" size="small">
+            <template #bodyCell="{ column, record }">
+              <template v-if="column.dataIndex === 'enabled'">
+                <a-tag :color="record.enabled !== false ? 'green' : 'default'">{{ record.enabled !== false ? '启用' : '禁用' }}</a-tag>
+              </template>
+              <template v-else-if="column.dataIndex === 'action'">
+                <a-space>
+                  <a-button v-if="record.enabled !== false" size="small" @click="togglePlugin(record.name, false)">禁用</a-button>
+                  <a-button v-else size="small" type="primary" @click="togglePlugin(record.name, true)">启用</a-button>
+                  <a-popconfirm title="确定卸载？" @confirm="doUninstall(record.name)" okText="确定" cancelText="取消">
+                    <a-button size="small" danger>卸载</a-button>
+                  </a-popconfirm>
+                </a-space>
+              </template>
+            </template>
+          </a-table>
+        </a-card>
+
+        <a-card v-if="compatResults.length" title="兼容性检查结果" size="small" style="margin-top: 16px">
+          <a-table :dataSource="compatResults" :columns="compatColumns" :pagination="false" rowKey="name" size="small">
+            <template #bodyCell="{ column, record }">
+              <template v-if="column.dataIndex === 'compatible'">
+                <a-tag :color="record.compatible ? 'green' : 'red'">{{ record.compatible ? '兼容' : '不兼容' }}</a-tag>
+              </template>
+              <template v-else-if="column.dataIndex === 'errors'">
+                {{ record.errors.join('; ') || '-' }}
+              </template>
+            </template>
+          </a-table>
+        </a-card>
+
+        <a-modal
+          :open="showInstallPlugin"
+          title="安装插件"
+          @ok="doInstallPlugin"
+          @cancel="showInstallPlugin = false"
+          okText="安装"
+          cancelText="取消"
+          :confirmLoading="installLoading"
+        >
+          <a-form layout="vertical">
+            <a-form-item label="源文件路径 (相对于 opencode-fork/)">
+              <a-input v-model:value="installSource" placeholder=".opencode/plugins/my-plugin.ts" />
+            </a-form-item>
+            <a-form-item label="插件名称 (可选)">
+              <a-input v-model:value="installName" placeholder="my-plugin" />
+            </a-form-item>
+          </a-form>
+        </a-modal>
+      </a-tab-pane>
+
+      <!-- ═══════════ 编排策略 ═══════════ -->
+      <a-tab-pane key="strategy" tab="编排策略">
+        <a-spin :spinning="strategyLoading">
+          <a-card title="意图分类 → Agent 映射" size="small">
+            <a-table :dataSource="strategyTableData" :columns="strategyAgentColumns" :pagination="false" rowKey="category" size="small">
+              <template #bodyCell="{ column, record }">
+                <template v-if="column.dataIndex === 'category'">
+                  <a-tag color="blue">{{ record.label }}</a-tag>
+                </template>
+                <template v-else-if="column.dataIndex === 'agents'">
+                  <a-select
+                    mode="tags"
+                    :value="record.agents"
+                    style="width: 100%"
+                    @change="(v: unknown) => updateStrategyAgent(record.category, v as string[])"
+                  />
+                </template>
+                <template v-else-if="column.dataIndex === 'model'">
+                  <a-input
+                    :value="record.model"
+                    size="small"
+                    placeholder="使用默认模型"
+                    @change="(e: Event) => updateStrategyModel(record.category, (e.target as HTMLInputElement).value)"
+                  />
+                </template>
+              </template>
+            </a-table>
+          </a-card>
+
+          <a-card title="规划流水线" size="small" style="margin-top: 16px">
+            <a-form-item label="启用 Prometheus/Metis/Momus 规划流水线">
+              <a-switch v-model:checked="strategyData.enablePipeline" />
+            </a-form-item>
+          </a-card>
+
+          <a-button type="primary" style="margin-top: 16px" :loading="strategySaving" @click="saveStrategy">保存编排策略</a-button>
+        </a-spin>
+      </a-tab-pane>
+
+      <!-- ═══════════ 恢复策略 ═══════════ -->
+      <a-tab-pane key="policy" tab="恢复策略">
+        <a-spin :spinning="policyLoading">
+          <a-card title="失败恢复与续跑策略" size="small">
+            <a-form layout="vertical">
+              <a-row :gutter="16">
+                <a-col :span="12">
+                  <a-form-item label="失败自动重试">
+                    <a-switch v-model:checked="policyData.autoRetryOnFailure" />
+                  </a-form-item>
+                </a-col>
+                <a-col :span="12">
+                  <a-form-item label="最大重试次数">
+                    <a-input-number v-model:value="policyData.maxRetries" :min="0" :max="10" />
+                  </a-form-item>
+                </a-col>
+              </a-row>
+              <a-form-item label="可重试错误类型">
+                <a-select mode="tags" v-model:value="policyData.retryableErrors" style="width: 100%" />
+              </a-form-item>
+              <a-form-item label="重试前需人工审批">
+                <a-switch v-model:checked="policyData.requireApprovalOnRetry" />
+              </a-form-item>
+              <a-row :gutter="16">
+                <a-col :span="12">
+                  <a-form-item label="启用模型 Fallback">
+                    <a-switch v-model:checked="policyData.enableFallback" />
+                  </a-form-item>
+                </a-col>
+                <a-col :span="12">
+                  <a-form-item label="Fallback 模型">
+                    <a-input v-model:value="policyData.fallbackModel" placeholder="provider/model-id" :disabled="!policyData.enableFallback" />
+                  </a-form-item>
+                </a-col>
+              </a-row>
+            </a-form>
+          </a-card>
+
+          <a-button type="primary" style="margin-top: 16px" :loading="policySaving" @click="savePolicy">保存恢复策略</a-button>
+        </a-spin>
       </a-tab-pane>
     </a-tabs>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, onUnmounted } from "vue";
 import { message } from "ant-design-vue";
+import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
 import {
-  getConfigOverview,
-  getAgent,
-  updateAgent,
-  getSkill,
-  updateSkill,
-  getCommand,
-  updateCommand,
-  getModelsConfig,
-  updateModelsConfig,
-  getMcpConfig,
-  updateMcpConfig,
-  getSecurityBaseline,
-  updateSecurityBaseline,
-  listPlugins,
-  getCopilotStatus,
-  requestCopilotDeviceCode,
-  pollCopilotToken,
-  copilotLogout,
-  getCopilotModels,
-  type AgentSummary,
   type AgentDetail,
-  type SkillSummary,
-  type SkillDetail,
-  type CommandSummary,
+  type AgentSummary,
   type CommandDetail,
-  type McpServer,
-  type PluginInfo,
+  type CommandSummary,
+  type ContinuationPolicy,
   type CopilotModelInfo,
+  type McpServer,
+  type OrchestrationStrategy,
+  type PluginCompatResult,
+  type PluginInfo,
+  type SkillDetail,
+  type SkillSummary,
+  checkPluginCompatibility,
+  copilotLogout,
+  disablePlugin,
+  enablePlugin,
+  getAgent,
+  getCommand,
+  getConfigOverview,
+  getContinuationPolicy,
+  getCopilotModels,
+  getCopilotStatus,
+  getMcpConfig,
+  getModelsConfig,
+  getOrchestrationStrategy,
+  getSecurityBaseline,
+  getSkill,
+  installPlugin,
+  listPlugins,
+  pollCopilotToken,
+  requestCopilotDeviceCode,
+  uninstallPlugin,
+  updateAgent,
+  updateCommand,
+  updateContinuationPolicy,
+  updateMcpConfig,
+  updateModelsConfig,
+  updateOrchestrationStrategy,
+  updateSecurityBaseline,
+  updateSkill,
 } from "../lib/api";
 
 // ── Tab ────────────────────────────────────────────────────────────
@@ -517,9 +664,7 @@ function buildModelSelectOptions(currentModel = "") {
   return options;
 }
 
-const modelSelectOptions = computed(() =>
-  buildModelSelectOptions(),
-);
+const modelSelectOptions = computed(() => buildModelSelectOptions());
 
 const defaultModelSelectOptions = computed(() =>
   buildModelSelectOptions(getRecordString(modelsData.defaults, "model")),
@@ -557,8 +702,14 @@ function setRecordString(record: Record<string, unknown>, key: string, value: un
 }
 
 function addProvider() {
-  if (!newProvider.key) { message.warning("请输入 Key"); return; }
-  if (modelsData.providers[newProvider.key]) { message.warning("该 Key 已存在"); return; }
+  if (!newProvider.key) {
+    message.warning("请输入 Key");
+    return;
+  }
+  if (modelsData.providers[newProvider.key]) {
+    message.warning("该 Key 已存在");
+    return;
+  }
   modelsData.providers[newProvider.key] = {
     api: newProvider.api,
     name: newProvider.name || newProvider.key,
@@ -603,22 +754,55 @@ function addModel() {
 }
 
 // ── Presets ────────────────────────────────────────────────────────
-const COPILOT_PRESETS: Record<string, {
-  providers: Record<string, Record<string, unknown>>;
-  defaults: Record<string, unknown>;
-  list: Array<Record<string, unknown>>;
-}> = {
+const COPILOT_PRESETS: Record<
+  string,
+  {
+    providers: Record<string, Record<string, unknown>>;
+    defaults: Record<string, unknown>;
+    list: Array<Record<string, unknown>>;
+  }
+> = {
   copilot: {
     providers: {
       "github-copilot": { api: "github-copilot", name: "GitHub Copilot" },
     },
     defaults: { model: "claude-sonnet-4", provider: "github-copilot" },
     list: [
-      { id: "claude-sonnet-4", name: "Claude Sonnet 4 (via Copilot)", provider: "github-copilot", contextWindow: 200000, maxTokens: 16384 },
-      { id: "claude-opus-4", name: "Claude Opus 4 (via Copilot)", provider: "github-copilot", contextWindow: 200000, maxTokens: 16384 },
-      { id: "gpt-4.1", name: "GPT-4.1 (via Copilot)", provider: "github-copilot", contextWindow: 1047576, maxTokens: 32768 },
-      { id: "gpt-5-mini", name: "GPT-5 Mini (via Copilot)", provider: "github-copilot", contextWindow: 1047576, maxTokens: 32768 },
-      { id: "gemini-2.5-pro", name: "Gemini 2.5 Pro (via Copilot)", provider: "github-copilot", contextWindow: 1048576, maxTokens: 65536 },
+      {
+        id: "claude-sonnet-4",
+        name: "Claude Sonnet 4 (via Copilot)",
+        provider: "github-copilot",
+        contextWindow: 200000,
+        maxTokens: 16384,
+      },
+      {
+        id: "claude-opus-4",
+        name: "Claude Opus 4 (via Copilot)",
+        provider: "github-copilot",
+        contextWindow: 200000,
+        maxTokens: 16384,
+      },
+      {
+        id: "gpt-4.1",
+        name: "GPT-4.1 (via Copilot)",
+        provider: "github-copilot",
+        contextWindow: 1047576,
+        maxTokens: 32768,
+      },
+      {
+        id: "gpt-5-mini",
+        name: "GPT-5 Mini (via Copilot)",
+        provider: "github-copilot",
+        contextWindow: 1047576,
+        maxTokens: 32768,
+      },
+      {
+        id: "gemini-2.5-pro",
+        name: "Gemini 2.5 Pro (via Copilot)",
+        provider: "github-copilot",
+        contextWindow: 1048576,
+        maxTokens: 65536,
+      },
     ],
   },
   "copilot-claude": {
@@ -628,20 +812,60 @@ const COPILOT_PRESETS: Record<string, {
     },
     defaults: { model: "claude-sonnet-4", provider: "github-copilot" },
     list: [
-      { id: "claude-sonnet-4", name: "Claude Sonnet 4 (Copilot, Free)", provider: "github-copilot", contextWindow: 200000, maxTokens: 16384 },
-      { id: "claude-opus-4", name: "Claude Opus 4 (Copilot, Free)", provider: "github-copilot", contextWindow: 200000, maxTokens: 16384 },
-      { id: "anthropic/claude-sonnet-4-20250514", name: "Claude Sonnet 4 (Direct API)", provider: "anthropic", contextWindow: 200000, maxTokens: 16384 },
-      { id: "gpt-4.1", name: "GPT-4.1 (Copilot)", provider: "github-copilot", contextWindow: 1047576, maxTokens: 32768 },
+      {
+        id: "claude-sonnet-4",
+        name: "Claude Sonnet 4 (Copilot, Free)",
+        provider: "github-copilot",
+        contextWindow: 200000,
+        maxTokens: 16384,
+      },
+      {
+        id: "claude-opus-4",
+        name: "Claude Opus 4 (Copilot, Free)",
+        provider: "github-copilot",
+        contextWindow: 200000,
+        maxTokens: 16384,
+      },
+      {
+        id: "anthropic/claude-sonnet-4-20250514",
+        name: "Claude Sonnet 4 (Direct API)",
+        provider: "anthropic",
+        contextWindow: 200000,
+        maxTokens: 16384,
+      },
+      {
+        id: "gpt-4.1",
+        name: "GPT-4.1 (Copilot)",
+        provider: "github-copilot",
+        contextWindow: 1047576,
+        maxTokens: 32768,
+      },
     ],
   },
   "github-models": {
     providers: {
-      "github-models": { api: "github-models", name: "GitHub Models", baseURL: "https://models.github.ai/inference" },
+      "github-models": {
+        api: "github-models",
+        name: "GitHub Models",
+        baseURL: "https://models.github.ai/inference",
+      },
     },
     defaults: { model: "openai/gpt-4.1", provider: "github-models" },
     list: [
-      { id: "openai/gpt-4.1", name: "GPT-4.1 (GitHub Models)", provider: "github-models", contextWindow: 1047576, maxTokens: 32768 },
-      { id: "openai/gpt-4o", name: "GPT-4o (GitHub Models)", provider: "github-models", contextWindow: 128000, maxTokens: 16384 },
+      {
+        id: "openai/gpt-4.1",
+        name: "GPT-4.1 (GitHub Models)",
+        provider: "github-models",
+        contextWindow: 1047576,
+        maxTokens: 32768,
+      },
+      {
+        id: "openai/gpt-4o",
+        name: "GPT-4o (GitHub Models)",
+        provider: "github-models",
+        contextWindow: 128000,
+        maxTokens: 16384,
+      },
     ],
   },
 };
@@ -738,8 +962,14 @@ function addAllCopilotModels() {
 }
 
 function clearCopilotTimers() {
-  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-  if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+  if (countdownTimer) {
+    clearInterval(countdownTimer);
+    countdownTimer = null;
+  }
 }
 
 async function loadCopilotStatus() {
@@ -750,7 +980,9 @@ async function loadCopilotStatus() {
     if (copilotAuth.authenticated) {
       await loadCopilotModels();
     }
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 }
 
 async function loadCopilotModels() {
@@ -914,14 +1146,25 @@ function deleteMcp(name: string) {
 
 function updateMcpArgs(server: McpServer, value: unknown) {
   const raw = String(value ?? "");
-  server.args = raw.split(",").map((item) => item.trim()).filter(Boolean);
+  server.args = raw
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 function addMcp() {
-  if (!newMcp.name) { message.warning("请输入名称"); return; }
+  if (!newMcp.name) {
+    message.warning("请输入名称");
+    return;
+  }
   mcpData[newMcp.name] = {
     command: newMcp.command,
-    args: newMcp.args ? newMcp.args.split(",").map((s) => s.trim()).filter(Boolean) : [],
+    args: newMcp.args
+      ? newMcp.args
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : [],
     description: newMcp.description || undefined,
   };
   showAddMcp.value = false;
@@ -937,9 +1180,160 @@ const securityRaw = ref("");
 // ── Plugins ────────────────────────────────────────────────────────
 const pluginsList = ref<PluginInfo[]>([]);
 const pluginColumns = [
+  { title: "名称", dataIndex: "name", width: "20%" },
+  { title: "路径", dataIndex: "path", width: "40%" },
+  { title: "状态", dataIndex: "enabled", width: "15%" },
+  { title: "操作", dataIndex: "action", width: "25%" },
+];
+
+// Plugin lifecycle
+const showInstallPlugin = ref(false);
+const installSource = ref("");
+const installName = ref("");
+const installLoading = ref(false);
+const compatLoading = ref(false);
+const compatResults = ref<PluginCompatResult[]>([]);
+const compatColumns = [
   { title: "名称", dataIndex: "name" },
   { title: "路径", dataIndex: "path" },
+  { title: "兼容性", dataIndex: "compatible", width: 100 },
+  { title: "问题", dataIndex: "errors" },
 ];
+
+async function togglePlugin(name: string, enable: boolean) {
+  try {
+    if (enable) await enablePlugin(name);
+    else await disablePlugin(name);
+    message.success(`插件 ${name} 已${enable ? "启用" : "禁用"}`);
+    const r = await listPlugins();
+    pluginsList.value = r.data;
+  } catch {
+    message.error("操作失败");
+  }
+}
+
+async function doUninstall(name: string) {
+  try {
+    await uninstallPlugin(name);
+    message.success(`插件 ${name} 已卸载`);
+    const r = await listPlugins();
+    pluginsList.value = r.data;
+  } catch {
+    message.error("卸载失败");
+  }
+}
+
+async function doInstallPlugin() {
+  if (!installSource.value.trim()) return;
+  installLoading.value = true;
+  try {
+    await installPlugin(installSource.value, installName.value || undefined);
+    message.success("插件安装成功");
+    showInstallPlugin.value = false;
+    installSource.value = "";
+    installName.value = "";
+    const r = await listPlugins();
+    pluginsList.value = r.data;
+  } catch {
+    message.error("安装失败");
+  } finally {
+    installLoading.value = false;
+  }
+}
+
+async function checkCompat() {
+  compatLoading.value = true;
+  try {
+    const r = await checkPluginCompatibility();
+    compatResults.value = r.data;
+  } catch {
+    message.error("检查失败");
+  } finally {
+    compatLoading.value = false;
+  }
+}
+
+// ── Orchestration Strategy ─────────────────────────────────────────
+const strategyLoading = ref(false);
+const strategySaving = ref(false);
+
+const CATEGORY_LABELS: Record<string, string> = {
+  quick: "快速查询",
+  deep: "深度开发",
+  ops: "运维操作",
+  security: "安全审计",
+  architecture: "架构设计",
+};
+
+const strategyData = reactive<OrchestrationStrategy>({
+  categoryAgentMap: {},
+  categoryModelMap: {},
+  enablePipeline: true,
+});
+
+const strategyTableData = computed(() =>
+  Object.keys(CATEGORY_LABELS).map((cat) => ({
+    category: cat,
+    label: CATEGORY_LABELS[cat],
+    agents: strategyData.categoryAgentMap[cat] || [],
+    model: strategyData.categoryModelMap[cat] || "",
+  })),
+);
+
+const strategyAgentColumns = [
+  { title: "分类", dataIndex: "category", width: "15%" },
+  { title: "推荐 Agent", dataIndex: "agents", width: "50%" },
+  { title: "指定模型", dataIndex: "model", width: "35%" },
+];
+
+function updateStrategyAgent(category: string, agents: string[]) {
+  strategyData.categoryAgentMap[category] = agents;
+}
+
+function updateStrategyModel(category: string, model: string) {
+  strategyData.categoryModelMap[category] = model;
+}
+
+async function saveStrategy() {
+  strategySaving.value = true;
+  try {
+    await updateOrchestrationStrategy({
+      categoryAgentMap: strategyData.categoryAgentMap,
+      categoryModelMap: strategyData.categoryModelMap,
+      enablePipeline: strategyData.enablePipeline,
+    });
+    message.success("编排策略已保存");
+  } catch {
+    message.error("保存失败");
+  } finally {
+    strategySaving.value = false;
+  }
+}
+
+// ── Continuation Policy ────────────────────────────────────────────
+const policyLoading = ref(false);
+const policySaving = ref(false);
+
+const policyData = reactive<ContinuationPolicy>({
+  autoRetryOnFailure: false,
+  maxRetries: 2,
+  retryableErrors: ["timeout", "rate_limit", "context_length"],
+  requireApprovalOnRetry: true,
+  fallbackModel: "",
+  enableFallback: false,
+});
+
+async function savePolicy() {
+  policySaving.value = true;
+  try {
+    await updateContinuationPolicy({ ...policyData });
+    message.success("恢复策略已保存");
+  } catch {
+    message.error("保存失败");
+  } finally {
+    policySaving.value = false;
+  }
+}
 
 // ── Saving ─────────────────────────────────────────────────────────
 const saving = ref(false);
@@ -952,7 +1346,7 @@ async function saveModels() {
       providers: modelsData.providers,
       list: modelsData.list,
     });
-    message.success("模型配置已保存" + (res.restartRequired ? "（需重启 OpenCode 生效）" : ""));
+    message.success(`模型配置已保存${res.restartRequired ? "（需重启 OpenCode 生效）" : ""}`);
   } catch (e: unknown) {
     message.error("保存失败");
   } finally {
@@ -1003,7 +1397,7 @@ async function saveMcp() {
   saving.value = true;
   try {
     const res = await updateMcpConfig(mcpData);
-    message.success("MCP 配置已保存" + (res.restartRequired ? "（需重启 OpenCode 生效）" : ""));
+    message.success(`MCP 配置已保存${res.restartRequired ? "（需重启 OpenCode 生效）" : ""}`);
   } catch (e: unknown) {
     message.error("保存失败");
   } finally {
@@ -1047,21 +1441,49 @@ onMounted(async () => {
   try {
     const modelsRes = await getModelsConfig();
     Object.assign(modelsData.providers, modelsRes.data.providers);
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 
   // Commands (not in overview)
   try {
     const { data: cmds } = await (await import("../lib/api")).listCommands();
     commandsList.value = cmds;
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 
   // Security
   try {
     const secRes = await getSecurityBaseline();
     securityRaw.value = secRes.data.raw;
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 
   // Copilot auth status
   await loadCopilotStatus();
+
+  // Orchestration strategy
+  try {
+    strategyLoading.value = true;
+    const s = await getOrchestrationStrategy();
+    Object.assign(strategyData, s.data);
+  } catch {
+    /* ignore */
+  } finally {
+    strategyLoading.value = false;
+  }
+
+  // Continuation policy
+  try {
+    policyLoading.value = true;
+    const p = await getContinuationPolicy();
+    Object.assign(policyData, p.data);
+  } catch {
+    /* ignore */
+  } finally {
+    policyLoading.value = false;
+  }
 });
 </script>

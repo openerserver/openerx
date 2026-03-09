@@ -102,6 +102,8 @@ export interface Task {
   sessionId?: string;
   agentRunId?: string;
   result?: string;
+  category?: string;
+  strategy?: string;
   createdAt: string;
   startedAt?: string;
   finishedAt?: string;
@@ -200,6 +202,116 @@ export async function createTask(data: { title: string; prompt: string; projectI
     method: "POST",
     body: JSON.stringify(data),
   });
+}
+
+export interface TaskGraphNode {
+  id: string;
+  taskId: string;
+  graphId: string;
+  subject: string;
+  status: string;
+  agentType: string;
+  sessionId: string | null;
+  retryCount: number;
+  maxRetries: number;
+  output: string | null;
+  error: string | null;
+  tokenUsed: number;
+  startedAt: string | null;
+  finishedAt: string | null;
+  createdAt: string;
+}
+
+export interface TaskGraphEdge {
+  id: string;
+  taskId: string;
+  graphId: string;
+  fromNodeId: string;
+  toNodeId: string;
+  edgeType: string;
+}
+
+export interface TaskGraphData {
+  taskId: string;
+  nodes: TaskGraphNode[];
+  edges: TaskGraphEdge[];
+}
+
+export async function getTaskGraph(taskId: string) {
+  return request<TaskGraphData>(`/tasks/${taskId}/graph`);
+}
+
+// ── Planning Pipeline ──────────────────────────────────────────────
+
+export interface PipelineStage {
+  agent: string;
+  label: string;
+  status: "pending" | "running" | "completed";
+  messageCount: number;
+  output: string | null;
+  tokens: { input: number; output: number } | null;
+}
+
+export async function getTaskPipeline(taskId: string) {
+  return request<{ stages: PipelineStage[] }>(`/tasks/${taskId}/pipeline`);
+}
+
+// ── Session History ────────────────────────────────────────────────
+
+export interface SessionInfo {
+  id: string;
+  title: string;
+  isActive: boolean;
+  summary: { additions: number; deletions: number; files: number } | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+export async function getTaskSessions(taskId: string) {
+  return request<{ data: SessionInfo[] }>(`/tasks/${taskId}/sessions`);
+}
+
+export async function getSessionMessages(taskId: string, sessionId: string) {
+  return request<{ data: unknown[] }>(`/tasks/${taskId}/sessions/${sessionId}/messages`);
+}
+
+export async function continueTask(taskId: string, prompt: string, sessionId?: string) {
+  return request<{ ok: boolean; sessionId: string }>(`/tasks/${taskId}/continue`, {
+    method: "POST",
+    body: JSON.stringify({ prompt, sessionId }),
+  });
+}
+
+// ── Plugin Lifecycle ───────────────────────────────────────────────
+
+export async function disablePlugin(name: string) {
+  return request<{ ok: boolean }>(`/config/plugins/${name}/disable`, { method: "POST" });
+}
+
+export async function enablePlugin(name: string) {
+  return request<{ ok: boolean }>(`/config/plugins/${name}/enable`, { method: "POST" });
+}
+
+export async function installPlugin(source: string, name?: string) {
+  return request<{ ok: boolean; name: string }>("/config/plugins/install", {
+    method: "POST",
+    body: JSON.stringify({ source, name }),
+  });
+}
+
+export async function uninstallPlugin(name: string) {
+  return request<{ ok: boolean }>(`/config/plugins/${name}/uninstall`, { method: "POST" });
+}
+
+export async function checkPluginCompatibility() {
+  return request<{ data: PluginCompatResult[] }>("/config/plugins/compatibility");
+}
+
+export interface PluginCompatResult {
+  name: string;
+  path: string;
+  compatible: boolean;
+  errors: string[];
 }
 
 export async function listProjects(orgId?: string) {
@@ -493,6 +605,7 @@ export interface PluginInfo {
   path: string;
   name: string;
   exists?: boolean;
+  enabled?: boolean;
 }
 
 export async function getConfigOverview() {
@@ -591,15 +704,56 @@ export async function updateSecurityBaseline(raw: string) {
   });
 }
 
-// Plugins (read-only)
+// Plugins
 export async function listPlugins() {
   return request<{ data: PluginInfo[] }>("/config/plugins");
+}
+
+// Orchestration Strategy
+export interface OrchestrationStrategy {
+  categoryAgentMap: Record<string, string[]>;
+  categoryModelMap: Record<string, string>;
+  enablePipeline: boolean;
+}
+
+export async function getOrchestrationStrategy() {
+  return request<{ data: OrchestrationStrategy }>("/config/orchestration-strategy");
+}
+
+export async function updateOrchestrationStrategy(data: OrchestrationStrategy) {
+  return request<{ ok: boolean }>("/config/orchestration-strategy", {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
+}
+
+// Continuation Policy
+export interface ContinuationPolicy {
+  autoRetryOnFailure: boolean;
+  maxRetries: number;
+  retryableErrors: string[];
+  requireApprovalOnRetry: boolean;
+  fallbackModel: string;
+  enableFallback: boolean;
+}
+
+export async function getContinuationPolicy() {
+  return request<{ data: ContinuationPolicy }>("/config/continuation-policy");
+}
+
+export async function updateContinuationPolicy(data: ContinuationPolicy) {
+  return request<{ ok: boolean }>("/config/continuation-policy", {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
 }
 
 // ── Copilot OAuth ──────────────────────────────────────────────────
 
 export async function getCopilotStatus() {
-  return request<{ data: { authenticated: boolean; login_at?: string | null } }>("/config/copilot/status");
+  return request<{ data: { authenticated: boolean; login_at?: string | null } }>(
+    "/config/copilot/status",
+  );
 }
 
 export async function requestCopilotDeviceCode() {

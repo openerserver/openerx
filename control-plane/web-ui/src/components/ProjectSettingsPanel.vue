@@ -229,18 +229,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from "vue";
 import { message } from "ant-design-vue";
+import { computed, onMounted, reactive, ref, watch } from "vue";
 import {
-  createBudgetConfig,
-  createPolicy,
-  getModelsConfig,
-  listEnvironments,
-  listBudgetConfigs,
-  listPolicies,
-  updateProject,
-  updateBudgetConfig,
-  updatePolicy,
   type ApprovalPolicyMode,
   type BudgetConfig,
   type Environment,
@@ -248,6 +239,15 @@ import {
   type ModelsConfig,
   type PolicyTemplate,
   type ProjectSettings,
+  createBudgetConfig,
+  createPolicy,
+  getModelsConfig,
+  listBudgetConfigs,
+  listEnvironments,
+  listPolicies,
+  updateBudgetConfig,
+  updatePolicy,
+  updateProject,
 } from "../lib/api";
 import { useAuthStore } from "../stores/auth";
 
@@ -347,17 +347,18 @@ onMounted(async () => {
   environmentsLoading.value = true;
   try {
     const modelsRequest = canManage.value ? getModelsConfig() : Promise.resolve(null);
-    const [modelsResult, environmentsResult, policyResult, budgetResult] = await Promise.allSettled([
-      modelsRequest,
-      listEnvironments(props.projectId),
-      listPolicies(props.projectId),
-      listBudgetConfigs(props.projectId),
-    ]);
+    const [modelsResult, environmentsResult, policyResult, budgetResult] = await Promise.allSettled(
+      [
+        modelsRequest,
+        listEnvironments(props.projectId),
+        listPolicies(props.projectId),
+        listBudgetConfigs(props.projectId),
+      ],
+    );
 
     modelsData.value =
-      modelsResult.status === "fulfilled" ? modelsResult.value?.data ?? null : null;
-    environments.value =
-      environmentsResult.status === "fulfilled" ? environmentsResult.value : [];
+      modelsResult.status === "fulfilled" ? (modelsResult.value?.data ?? null) : null;
+    environments.value = environmentsResult.status === "fulfilled" ? environmentsResult.value : [];
     policies.value = policyResult.status === "fulfilled" ? policyResult.value : [];
     budgetConfigs.value = budgetResult.status === "fulfilled" ? budgetResult.value : [];
 
@@ -400,9 +401,7 @@ async function handleSave() {
       ...(form.defaultEnvironmentId ? { defaultEnvironmentId: form.defaultEnvironmentId } : {}),
       ...(linkedPolicy?.id ? { approvalPolicyTemplateId: linkedPolicy.id } : {}),
       ...(form.approvalPolicy ? { approvalPolicy: form.approvalPolicy } : {}),
-      ...(Object.keys(environmentApprovalPolicies).length
-        ? { environmentApprovalPolicies }
-        : {}),
+      ...(Object.keys(environmentApprovalPolicies).length ? { environmentApprovalPolicies } : {}),
       ...(typeof form.maxConcurrency === "number" ? { maxConcurrency: form.maxConcurrency } : {}),
       ...(typeof form.budgetMonthly === "number" ? { budgetMonthly: form.budgetMonthly } : {}),
       ...(linkedBudget?.id ? { budgetConfigId: linkedBudget.id } : {}),
@@ -627,9 +626,7 @@ async function upsertBudgetConfig() {
   return { id: created.id };
 }
 
-function cloneEnvironmentApprovalPolicies(
-  value?: ProjectSettings["environmentApprovalPolicies"],
-) {
+function cloneEnvironmentApprovalPolicies(value?: ProjectSettings["environmentApprovalPolicies"]) {
   return Object.fromEntries(
     Object.entries(value || {}).map(([environmentId, binding]) => [environmentId, { ...binding }]),
   );
@@ -662,7 +659,10 @@ function syncEnvironmentApprovalPolicies(
   return nextBindings;
 }
 
-function updateEnvironmentApprovalPolicy(environmentId: string, approvalPolicy: ApprovalPolicyMode | undefined) {
+function updateEnvironmentApprovalPolicy(
+  environmentId: string,
+  approvalPolicy: ApprovalPolicyMode | undefined,
+) {
   const nextBindings = cloneEnvironmentApprovalPolicies(form.environmentApprovalPolicies);
 
   if (!approvalPolicy) {

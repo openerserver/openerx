@@ -4,8 +4,8 @@ import type { AgentRunStatus } from "../../types/events";
 // Maps agent control operations to OpenCode SDK calls.
 
 const OPENCODE_URL = process.env.OPENCODE_URL || "http://localhost:4096";
-const OPENCODE_PROVIDER_ID = process.env.OPENCODE_PROVIDER_ID || "opencode";
-const OPENCODE_MODEL_ID = process.env.OPENCODE_MODEL_ID || "big-pickle";
+const OPENCODE_PROVIDER_ID = process.env.OPENCODE_PROVIDER_ID || "github-copilot";
+const OPENCODE_MODEL_ID = process.env.OPENCODE_MODEL_ID || "claude-sonnet-4";
 
 interface OpencodeResponse {
   ok: boolean;
@@ -18,15 +18,34 @@ interface AgentRunRecord {
   status: AgentRunStatus;
   taskId: string;
   projectId: string;
+  startedAt: number;
   finishedAt?: string;
+  pausedAt?: number;
+  lastPromptAt?: number;
 }
+
+const PROMPT_SETTLE_MS = 1200;
+const MIN_ACTIVE_BEFORE_PAUSE_MS = 3000;
 
 function buildPromptBody(
   text: string,
-  options?: { noReply?: boolean; agent?: string },
+  options?: { noReply?: boolean; agent?: string; taskId?: string; projectId?: string },
 ): Record<string, unknown> {
+  const executionContext =
+    options?.taskId && options?.projectId
+      ? [
+          "Execution context:",
+          `- OpenerX task ID: ${options.taskId}`,
+          `- Project ID: ${options.projectId}`,
+          "- If you call create_sub_session, dispatch_to_agent, list_sub_sessions, or any task_graph_* tool, you MUST use the exact OpenerX task ID above as taskId.",
+          "- For task_graph_create, nodes must use JSON objects shaped like {subject, agentType, maxRetries?}.",
+          "- For task_graph_create, edges must use JSON objects shaped like {fromIndex, toIndex, type?} where indexes reference the nodes array.",
+          "",
+        ].join("\n")
+      : "";
+
   return {
-    parts: [{ type: "text", text }],
+    parts: [{ type: "text", text: `${executionContext}${text}` }],
     model: {
       providerID: OPENCODE_PROVIDER_ID,
       modelID: OPENCODE_MODEL_ID,
@@ -82,10 +101,7 @@ async function opcall(method: string, path: string, body?: unknown): Promise<Ope
 // ── Agent Run Registry ─────────────────────────────────────────────
 // Maps agentRunId → subSessionId for OpenCode adapter operations.
 
-const agentRunRegistry = new Map<
-  string,
-  AgentRunRecord
->();
+const agentRunRegistry = new Map<string, AgentRunRecord>();
 
 export function registerAgentRun(
   agentRunId: string,
@@ -93,7 +109,32 @@ export function registerAgentRun(
   taskId: string,
   projectId: string,
 ): void {
-  agentRunRegistry.set(agentRunId, { subSessionId, status: "running", taskId, projectId });
+  agentRunRegistry.set(agentRunId, {
+    subSessionId,
+    status: "running",
+    taskId,
+    projectId,
+    startedAt: Date.now(),
+  });
+}
+
+async function waitForPromptWindow(run: AgentRunRecord): Promise<void> {
+  const waitUntil = Math.max(run.pausedAt ?? 0, run.lastPromptAt ?? 0) + PROMPT_SETTLE_MS;
+  const remaining = waitUntil - Date.now();
+  if (remaining > 0) {
+    await new Promise((resolve) => setTimeout(resolve, remaining));
+  }
+}
+
+async function waitForPauseWindow(run: AgentRunRecord): Promise<void> {
+  const remaining = run.startedAt + MIN_ACTIVE_BEFORE_PAUSE_MS - Date.now();
+  if (remaining > 0) {
+    await new Promise((resolve) => setTimeout(resolve, remaining));
+  }
+}
+
+function markPromptSent(run: AgentRunRecord): void {
+  run.lastPromptAt = Date.now();
 }
 
 function setFinishedAt(run: AgentRunRecord, status: AgentRunStatus): void {
@@ -102,7 +143,7 @@ function setFinishedAt(run: AgentRunRecord, status: AgentRunStatus): void {
     return;
   }
 
-  delete run.finishedAt;
+  run.finishedAt = undefined;
 }
 
 export function updateAgentRunStatus(agentRunId: string, status: AgentRunStatus) {
@@ -149,6 +190,7 @@ export async function createSession(
   taskId: string,
   projectId: string,
   prompt: string,
+  options?: { agent?: string },
 ): Promise<OpencodeResponse & { sessionId?: string; agentRunId?: string }> {
   // 1. Create a new session in OpenCode
   const sessionResult = await opcall("POST", "/session", {
@@ -173,7 +215,11 @@ export async function createSession(
   const messageResult = await opcall(
     "POST",
     `/session/${sessionId}/prompt_async`,
-    buildPromptBody(prompt, { agent: "build" }),
+    buildPromptBody(prompt, {
+      agent: options?.agent || "build",
+      taskId,
+      projectId,
+    }),
   );
 
   if (!messageResult.ok) {
@@ -186,6 +232,11 @@ export async function createSession(
     };
   }
 
+  const run = agentRunRegistry.get(agentRunId);
+  if (run) {
+    markPromptSent(run);
+  }
+
   return { ok: true, data: sessionResult.data, sessionId, agentRunId };
 }
 
@@ -195,13 +246,19 @@ export async function createSession(
 export async function pauseAgent(agentRunId: string): Promise<OpencodeResponse> {
   const run = agentRunRegistry.get(agentRunId);
   if (!run) return { ok: false, error: "Agent run not found" };
-  if (run.status !== "running") return { ok: false, error: `Cannot pause: status is ${run.status}` };
+  if (run.status !== "running")
+    return { ok: false, error: `Cannot pause: status is ${run.status}` };
 
+  await waitForPauseWindow(run);
+  updateAgentRunStatus(agentRunId, "paused");
+  run.pausedAt = Date.now();
   const result = await opcall("POST", `/session/${run.subSessionId}/abort`);
 
-  if (result.ok) {
-    updateAgentRunStatus(agentRunId, "paused");
+  if (!result.ok) {
+    updateAgentRunStatus(agentRunId, "running");
+    run.pausedAt = undefined;
   }
+
   return result;
 }
 
@@ -215,13 +272,20 @@ export async function injectGuidance(
 ): Promise<OpencodeResponse> {
   const run = agentRunRegistry.get(agentRunId);
   if (!run) return { ok: false, error: "Agent run not found" };
-  if (run.status !== "paused") return { ok: false, error: `Cannot inject guidance: status is ${run.status}` };
+  if (run.status !== "paused")
+    return { ok: false, error: `Cannot inject guidance: status is ${run.status}` };
+
+  await waitForPromptWindow(run);
 
   const result = await opcall(
     "POST",
     `/session/${run.subSessionId}/prompt_async`,
     buildPromptBody(content, { noReply: mode === "noReply" }),
   );
+
+  if (result.ok) {
+    markPromptSent(run);
+  }
 
   return result;
 }
@@ -232,16 +296,23 @@ export async function injectGuidance(
 export async function resumeAgent(agentRunId: string): Promise<OpencodeResponse> {
   const run = agentRunRegistry.get(agentRunId);
   if (!run) return { ok: false, error: "Agent run not found" };
-  if (run.status !== "paused") return { ok: false, error: `Cannot resume: status is ${run.status}` };
+  if (run.status !== "paused")
+    return { ok: false, error: `Cannot resume: status is ${run.status}` };
+
+  await waitForPromptWindow(run);
 
   const result = await opcall(
     "POST",
     `/session/${run.subSessionId}/prompt_async`,
-    buildPromptBody("Resume execution. Apply any guidance provided above and continue your current task."),
+    buildPromptBody(
+      "Resume execution. Apply any guidance provided above and continue your current task.",
+    ),
   );
 
   if (result.ok) {
     updateAgentRunStatus(agentRunId, "running");
+    run.pausedAt = undefined;
+    markPromptSent(run);
   }
   return result;
 }
@@ -273,4 +344,15 @@ export async function getAgentMessages(agentRunId: string): Promise<OpencodeResp
 
 export async function getSessionMessages(sessionId: string): Promise<OpencodeResponse> {
   return await opcall("GET", `/session/${sessionId}/message?limit=200`);
+}
+
+export async function listSessions(limit = 20): Promise<OpencodeResponse> {
+  return await opcall("GET", `/session?limit=${limit}`);
+}
+
+export async function continueSession(
+  sessionId: string,
+  prompt: string,
+): Promise<OpencodeResponse> {
+  return await opcall("POST", `/session/${sessionId}/prompt_async`, buildPromptBody(prompt));
 }

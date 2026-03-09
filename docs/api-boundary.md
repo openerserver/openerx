@@ -6,6 +6,8 @@
 - BFF 对前端暴露统一的 `/api/*` 和 `/ws`
 - 控制平面服务 (`:4097`) 仅由 BFF 回源调用，不对外暴露
 
+OpenCode 的整体关注边界另见 [OpenCode 关注边界说明](./opencode-focus-boundary.md)。本文档只描述当前接口收敛方式，不覆盖 OpenCode 产品能力取舍。
+
 ## 2. BFF 对前端暴露的接口
 
 ### 2.1 认证（公开，无需 token）
@@ -35,7 +37,7 @@
 
 OpenCode Runtime 的真实协议差异见：
 
-- [docs/opencode-1.1.57-runtime-protocol.md](docs/opencode-1.1.57-runtime-protocol.md)
+- [docs/opencode-runtime-protocol.md](docs/opencode-runtime-protocol.md)
 
 | 方法 | 路径 | 说明 | 回源目标 |
 |------|------|------|----------|

@@ -9,6 +9,329 @@ import { type Plugin, tool } from "@opencode-ai/plugin";
 // Clean-room equivalent of oh-my-openagent's session tools.
 // ───────────────────────────────────────────────────────────────────
 
+type UnknownRecord = Record<string, unknown>;
+
+interface SessionRecord extends UnknownRecord {
+  id?: string;
+  title?: string;
+  subject?: string;
+  createdAt?: number | string;
+  created_at?: number | string;
+  updatedAt?: number | string;
+  updated_at?: number | string;
+  parentID?: string;
+  parent_id?: string;
+  tokensUsed?: number;
+  tokens_used?: number;
+  cost?: number;
+  model?: string;
+  modelUsed?: string;
+}
+
+interface ToolCallRecord extends UnknownRecord {
+  name?: string;
+  function?: { name?: string };
+}
+
+interface MessageRecord extends UnknownRecord {
+  id?: string;
+  role?: string;
+  content?: unknown;
+  toolCalls?: ToolCallRecord[];
+  tool_calls?: ToolCallRecord[];
+  createdAt?: number | string;
+  created_at?: number | string;
+  tokens?: number;
+  tokensUsed?: number;
+}
+
+interface SearchResult {
+  sessionId: string;
+  sessionTitle: string;
+  matchingMessages: Array<{
+    role: string;
+    snippet: string;
+    createdAt: unknown;
+  }>;
+}
+
+interface SessionSummaryStats {
+  userMessages: number;
+  assistantMessages: number;
+  totalTokens: number;
+  firstQuery: string;
+  lastResponse: string;
+}
+
+function asRecord(value: unknown): UnknownRecord | null {
+  return value && typeof value === "object" ? (value as UnknownRecord) : null;
+}
+
+function asSessionRecord(value: unknown): SessionRecord | null {
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+  return record as SessionRecord;
+}
+
+function asMessageRecord(value: unknown): MessageRecord | null {
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+  return record as MessageRecord;
+}
+
+function extractDataList<T>(data: unknown, mapper: (value: unknown) => T | null): T[] {
+  const values = Array.isArray(data)
+    ? data
+    : data && typeof data === "object"
+      ? Object.values(data as UnknownRecord)
+      : [];
+
+  return values.flatMap((value) => {
+    const mapped = mapper(value);
+    return mapped ? [mapped] : [];
+  });
+}
+
+function getSessionList(data: unknown): SessionRecord[] {
+  return extractDataList(data, asSessionRecord);
+}
+
+function getMessageList(data: unknown): MessageRecord[] {
+  return extractDataList(data, asMessageRecord);
+}
+
+function getTimestamp(record: {
+  createdAt?: number | string;
+  created_at?: number | string;
+}): number {
+  const value = record.createdAt ?? record.created_at ?? 0;
+  return typeof value === "number" ? value : Number.parseInt(String(value), 10) || 0;
+}
+
+function sortByCreatedDesc<T extends { createdAt?: number | string; created_at?: number | string }>(
+  items: T[],
+): T[] {
+  return [...items].sort((a, b) => getTimestamp(b) - getTimestamp(a));
+}
+
+function sortByCreatedAsc<T extends { createdAt?: number | string; created_at?: number | string }>(
+  items: T[],
+): T[] {
+  return [...items].sort((a, b) => getTimestamp(a) - getTimestamp(b));
+}
+
+function getSessionId(session: SessionRecord): string {
+  return typeof session.id === "string" ? session.id : "unknown";
+}
+
+function getSessionTitle(session: SessionRecord): string {
+  if (typeof session.title === "string" && session.title.length > 0) {
+    return session.title;
+  }
+  if (typeof session.subject === "string" && session.subject.length > 0) {
+    return session.subject;
+  }
+  return "(untitled)";
+}
+
+function getToolCalls(message: MessageRecord): ToolCallRecord[] {
+  if (Array.isArray(message.toolCalls)) {
+    return message.toolCalls;
+  }
+  if (Array.isArray(message.tool_calls)) {
+    return message.tool_calls;
+  }
+  return [];
+}
+
+function summarizeSessionRecord(session: SessionRecord) {
+  return {
+    id: getSessionId(session),
+    title: getSessionTitle(session),
+    createdAt: session.createdAt ?? session.created_at,
+    updatedAt: session.updatedAt ?? session.updated_at,
+    parentId: session.parentID ?? session.parent_id ?? null,
+    tokensUsed: session.tokensUsed ?? session.tokens_used ?? 0,
+    cost: session.cost ?? 0,
+    modelUsed: session.model ?? session.modelUsed ?? "unknown",
+  };
+}
+
+function summarizeMessageRecord(message: MessageRecord) {
+  return {
+    id: message.id,
+    role: message.role,
+    content: truncateContent(extractContent(message), 2000),
+    toolCalls: getToolCalls(message),
+    createdAt: message.createdAt ?? message.created_at,
+    tokens: message.tokens ?? message.tokensUsed ?? 0,
+  };
+}
+
+function buildSnippet(content: string, query: string): string {
+  const idx = content.toLowerCase().indexOf(query);
+  const start = Math.max(0, idx - 100);
+  const end = Math.min(content.length, idx + query.length + 100);
+  return `${start > 0 ? "..." : ""}${content.substring(start, end)}${end < content.length ? "..." : ""}`;
+}
+
+function updateSummaryStats(
+  stats: SessionSummaryStats,
+  message: MessageRecord,
+  content: string,
+): void {
+  if (message.role === "user") {
+    stats.userMessages++;
+    if (!stats.firstQuery) {
+      stats.firstQuery = truncateContent(content, 200);
+    }
+  } else if (message.role === "assistant") {
+    stats.assistantMessages++;
+    stats.lastResponse = truncateContent(content, 200);
+  }
+
+  stats.totalTokens += message.tokens ?? message.tokensUsed ?? 0;
+}
+
+function collectToolNames(message: MessageRecord, toolsUsed: Set<string>): void {
+  for (const toolCall of getToolCalls(message)) {
+    const toolName = toolCall.name ?? toolCall.function?.name;
+    if (toolName) {
+      toolsUsed.add(toolName);
+    }
+  }
+}
+
+function collectReferencedFiles(content: string, filesReferenced: Set<string>): void {
+  const fileMatches = content.match(/(?:^|\s)([\w./\\-]+\.\w{1,10})(?:\s|$|:|,)/gm);
+  if (!fileMatches) {
+    return;
+  }
+
+  for (const match of fileMatches) {
+    const cleaned = match.trim().replace(/[,:]/g, "");
+    if (cleaned.includes("/") || cleaned.includes(".")) {
+      filesReferenced.add(cleaned);
+    }
+  }
+}
+
+function getPartContent(part: unknown): string {
+  if (typeof part === "string") {
+    return part;
+  }
+
+  const record = asRecord(part);
+  if (!record) {
+    return "";
+  }
+
+  if (record.type === "text" && typeof record.text === "string") {
+    return record.text;
+  }
+  if (record.type === "tool_use") {
+    return `[tool: ${String(record.name ?? "unknown")}]`;
+  }
+  if (record.type === "tool_result") {
+    return `[tool_result: ${String(record.content ?? "")}]`;
+  }
+
+  return "";
+}
+
+async function searchSession(
+  client: Parameters<Plugin>[0]["client"],
+  session: SessionRecord,
+  query: string,
+): Promise<SearchResult | null> {
+  const sessionId = getSessionId(session);
+  if (sessionId === "unknown") {
+    return null;
+  }
+
+  const messages = await client.session.messages({
+    path: { id: sessionId },
+  });
+
+  if (!messages?.data) {
+    return null;
+  }
+
+  const msgList = getMessageList(messages.data);
+  const matchingMessages = msgList
+    .filter((message) => extractContent(message).toLowerCase().includes(query))
+    .slice(0, 3)
+    .map((message) => ({
+      role: message.role ?? "unknown",
+      snippet: buildSnippet(extractContent(message), query),
+      createdAt: message.createdAt ?? message.created_at,
+    }));
+
+  if (matchingMessages.length === 0) {
+    return null;
+  }
+
+  return {
+    sessionId,
+    sessionTitle: getSessionTitle(session),
+    matchingMessages,
+  };
+}
+
+function summarizeMessages(msgList: MessageRecord[]) {
+  const stats: SessionSummaryStats = {
+    userMessages: 0,
+    assistantMessages: 0,
+    totalTokens: 0,
+    firstQuery: "",
+    lastResponse: "",
+  };
+  const toolsUsed = new Set<string>();
+  const filesReferenced = new Set<string>();
+
+  for (const message of msgList) {
+    const content = extractContent(message);
+    updateSummaryStats(stats, message, content);
+    collectToolNames(message, toolsUsed);
+    collectReferencedFiles(content, filesReferenced);
+  }
+
+  return {
+    messageCount: msgList.length,
+    userMessages: stats.userMessages,
+    assistantMessages: stats.assistantMessages,
+    totalTokens: stats.totalTokens,
+    toolsUsed: Array.from(toolsUsed),
+    filesReferenced: Array.from(filesReferenced).slice(0, 30),
+    firstQuery: stats.firstQuery,
+    lastResponse: stats.lastResponse,
+  };
+}
+
+function buildContinuePayload(msgList: MessageRecord[]) {
+  const sorted = sortByCreatedAsc(msgList);
+  const recentMessages = sorted.slice(-6).map((message) => ({
+    role: message.role ?? "unknown",
+    content: truncateContent(extractContent(message), 1500),
+    createdAt: message.createdAt ?? message.created_at,
+  }));
+
+  const allContent = sorted.map((message) => extractContent(message)).join("\n");
+  const todoPattern =
+    /(?:TODO|FIXME|PENDING|NEXT|remaining|still need|not yet|incomplete)[:\s].{10,100}/gi;
+  const pendingItems = [...allContent.matchAll(todoPattern)].map((match) => match[0]).slice(0, 10);
+
+  return {
+    totalMessages: msgList.length,
+    recentMessages,
+    pendingItems,
+  };
+}
+
 export const SessionToolsPlugin: Plugin = async ({ client }) => {
   return {
     tool: {
@@ -26,27 +349,9 @@ export const SessionToolsPlugin: Plugin = async ({ client }) => {
               return JSON.stringify({ sessions: [], note: "No sessions found or SDK unavailable" });
             }
 
-            const sessionList = Object.values(sessions.data);
-
-            // Sort by creation time descending
-            const sorted = sessionList
-              .sort((a: any, b: any) => {
-                const tA = a.createdAt || a.created_at || 0;
-                const tB = b.createdAt || b.created_at || 0;
-                return tB - tA;
-              })
-              .slice(0, Math.min(limit || 20, 100));
-
-            const result = sorted.map((s: any) => ({
-              id: s.id,
-              title: s.title || s.subject || "(untitled)",
-              createdAt: s.createdAt || s.created_at,
-              updatedAt: s.updatedAt || s.updated_at,
-              parentId: s.parentID || s.parent_id || null,
-              tokensUsed: s.tokensUsed || s.tokens_used || 0,
-              cost: s.cost || 0,
-              modelUsed: s.model || s.modelUsed || "unknown",
-            }));
+            const sessionList = getSessionList(sessions.data);
+            const sorted = sortByCreatedDesc(sessionList).slice(0, Math.min(limit || 20, 100));
+            const result = sorted.map(summarizeSessionRecord);
 
             return JSON.stringify({
               sessions: result,
@@ -73,30 +378,16 @@ export const SessionToolsPlugin: Plugin = async ({ client }) => {
             });
 
             if (!messages?.data) {
-              return JSON.stringify({ error: `Session '${sessionId}' not found or has no messages` });
+              return JSON.stringify({
+                error: `Session '${sessionId}' not found or has no messages`,
+              });
             }
 
-            const msgList = Array.isArray(messages.data)
-              ? messages.data
-              : Object.values(messages.data);
-
-            // Sort chronologically
-            const sorted = msgList.sort((a: any, b: any) => {
-              const tA = a.createdAt || a.created_at || 0;
-              const tB = b.createdAt || b.created_at || 0;
-              return tA - tB;
-            });
+            const msgList = getMessageList(messages.data);
+            const sorted = sortByCreatedAsc(msgList);
 
             const selected = lastN ? sorted.slice(-lastN) : sorted;
-
-            const result = selected.map((m: any) => ({
-              id: m.id,
-              role: m.role,
-              content: truncateContent(extractContent(m), 2000),
-              toolCalls: m.toolCalls || m.tool_calls || [],
-              createdAt: m.createdAt || m.created_at,
-              tokens: m.tokens || m.tokensUsed || 0,
-            }));
+            const result = selected.map(summarizeMessageRecord);
 
             return JSON.stringify({
               sessionId,
@@ -125,61 +416,17 @@ export const SessionToolsPlugin: Plugin = async ({ client }) => {
               return JSON.stringify({ results: [], note: "No sessions available" });
             }
 
-            const sessionList = Object.values(sessions.data);
+            const sessionList = getSessionList(sessions.data);
             const searchLimit = Math.min(maxSessions || 10, 30);
             const queryLower = query.toLowerCase();
-            const matches: Array<{
-              sessionId: string;
-              sessionTitle: string;
-              matchingMessages: Array<{
-                role: string;
-                snippet: string;
-                createdAt: unknown;
-              }>;
-            }> = [];
-
-            // Search through recent sessions
-            const recentSessions = sessionList
-              .sort((a: any, b: any) => {
-                const tA = a.createdAt || a.created_at || 0;
-                const tB = b.createdAt || b.created_at || 0;
-                return tB - tA;
-              })
-              .slice(0, searchLimit);
+            const matches: SearchResult[] = [];
+            const recentSessions = sortByCreatedDesc(sessionList).slice(0, searchLimit);
 
             for (const session of recentSessions) {
               try {
-                const messages = await client.session.messages({
-                  path: { id: (session as any).id },
-                });
-
-                if (!messages?.data) continue;
-
-                const msgList = Array.isArray(messages.data)
-                  ? messages.data
-                  : Object.values(messages.data);
-
-                const matchingMsgs = msgList.filter((m: any) => {
-                  const content = extractContent(m).toLowerCase();
-                  return content.includes(queryLower);
-                });
-
-                if (matchingMsgs.length > 0) {
-                  matches.push({
-                    sessionId: (session as any).id,
-                    sessionTitle: (session as any).title || (session as any).subject || "(untitled)",
-                    matchingMessages: matchingMsgs.slice(0, 3).map((m: any) => {
-                      const content = extractContent(m);
-                      const idx = content.toLowerCase().indexOf(queryLower);
-                      const start = Math.max(0, idx - 100);
-                      const end = Math.min(content.length, idx + query.length + 100);
-                      return {
-                        role: m.role,
-                        snippet: (start > 0 ? "..." : "") + content.substring(start, end) + (end < content.length ? "..." : ""),
-                        createdAt: m.createdAt || m.created_at,
-                      };
-                    }),
-                  });
+                const match = await searchSession(client, session, queryLower);
+                if (match) {
+                  matches.push(match);
                 }
               } catch {
                 // Skip inaccessible sessions
@@ -214,62 +461,12 @@ export const SessionToolsPlugin: Plugin = async ({ client }) => {
               return JSON.stringify({ error: `Session '${sessionId}' not found` });
             }
 
-            const msgList = Array.isArray(messages.data)
-              ? messages.data
-              : Object.values(messages.data);
-
-            // Analyze messages
-            let userMsgCount = 0;
-            let assistantMsgCount = 0;
-            const toolsUsed = new Set<string>();
-            const filesReferenced = new Set<string>();
-            let totalTokens = 0;
-            let firstUserMessage = "";
-            let lastAssistantMessage = "";
-
-            for (const m of msgList as any[]) {
-              if (m.role === "user") {
-                userMsgCount++;
-                if (!firstUserMessage) {
-                  firstUserMessage = truncateContent(extractContent(m), 200);
-                }
-              } else if (m.role === "assistant") {
-                assistantMsgCount++;
-                lastAssistantMessage = truncateContent(extractContent(m), 200);
-              }
-
-              totalTokens += m.tokens || m.tokensUsed || 0;
-
-              // Extract tool calls
-              const calls = m.toolCalls || m.tool_calls || [];
-              for (const tc of calls) {
-                const toolName = tc.name || tc.function?.name;
-                if (toolName) toolsUsed.add(toolName);
-              }
-
-              // Extract file references
-              const content = extractContent(m);
-              const fileMatches = content.match(/(?:^|\s)([\w./\\-]+\.\w{1,10})(?:\s|$|:|,)/gm);
-              if (fileMatches) {
-                for (const fm of fileMatches) {
-                  const cleaned = fm.trim().replace(/[,:]/g, "");
-                  if (cleaned.includes("/") || cleaned.includes(".")) {
-                    filesReferenced.add(cleaned);
-                  }
-                }
-              }
-            }
+            const msgList = getMessageList(messages.data);
+            const summary = summarizeMessages(msgList);
 
             return JSON.stringify({
               sessionId,
-              messageCount: msgList.length,
-              userMessages: userMsgCount,
-              assistantMessages: assistantMsgCount,
-              totalTokens,
-              toolsUsed: Array.from(toolsUsed),
-              filesReferenced: Array.from(filesReferenced).slice(0, 30),
-              firstQuery: firstUserMessage,
-              lastResponse: lastAssistantMessage,
+              ...summary,
             });
           } catch (e) {
             return JSON.stringify({ error: `Failed to summarize session: ${e}` });
@@ -293,33 +490,12 @@ export const SessionToolsPlugin: Plugin = async ({ client }) => {
               return JSON.stringify({ error: `Session '${sessionId}' not found` });
             }
 
-            const msgList = Array.isArray(messages.data)
-              ? messages.data
-              : Object.values(messages.data);
-
-            // Sort chronologically and get last messages
-            const sorted = msgList.sort((a: any, b: any) => {
-              const tA = a.createdAt || a.created_at || 0;
-              const tB = b.createdAt || b.created_at || 0;
-              return tA - tB;
-            });
-
-            const recentMessages = sorted.slice(-6).map((m: any) => ({
-              role: m.role,
-              content: truncateContent(extractContent(m), 1500),
-              createdAt: m.createdAt || m.created_at,
-            }));
-
-            // Look for TODO items or pending work indicators
-            const allContent = sorted.map((m: any) => extractContent(m)).join("\n");
-            const todoPattern = /(?:TODO|FIXME|PENDING|NEXT|remaining|still need|not yet|incomplete)[:\s].{10,100}/gi;
-            const pendingItems = [...allContent.matchAll(todoPattern)].map((m) => m[0]).slice(0, 10);
+            const msgList = getMessageList(messages.data);
+            const continuation = buildContinuePayload(msgList);
 
             return JSON.stringify({
               sessionId,
-              totalMessages: msgList.length,
-              recentMessages,
-              pendingItems,
+              ...continuation,
               hint: "Review recent messages to understand context, then continue the work.",
             });
           } catch (e) {
@@ -333,25 +509,17 @@ export const SessionToolsPlugin: Plugin = async ({ client }) => {
 
 // ── Utility Functions ──────────────────────────────────────────────
 
-function extractContent(message: any): string {
+function extractContent(message: MessageRecord): string {
   if (typeof message.content === "string") return message.content;
   if (Array.isArray(message.content)) {
-    return message.content
-      .map((p: any) => {
-        if (typeof p === "string") return p;
-        if (p.type === "text") return p.text;
-        if (p.type === "tool_use") return `[tool: ${p.name}]`;
-        if (p.type === "tool_result") return `[tool_result: ${p.content || ""}]`;
-        return "";
-      })
-      .join("\n");
+    return message.content.map(getPartContent).join("\n");
   }
   return String(message.content || "");
 }
 
 function truncateContent(content: string, maxLen: number): string {
   if (content.length <= maxLen) return content;
-  return content.substring(0, maxLen) + `... (${content.length - maxLen} chars truncated)`;
+  return `${content.substring(0, maxLen)}... (${content.length - maxLen} chars truncated)`;
 }
 
 export default SessionToolsPlugin;

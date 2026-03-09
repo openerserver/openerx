@@ -1,6 +1,6 @@
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
 import { type Plugin, tool } from "@opencode-ai/plugin";
-import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
-import { join, relative, dirname } from "node:path";
 import { parse as parseYaml } from "yaml";
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -28,12 +28,7 @@ function discoverAgentsMd(projectDir: string): ContextRule[] {
   return rules.sort((a, b) => b.priority - a.priority);
 }
 
-function walkDirectory(
-  dir: string,
-  rules: ContextRule[],
-  projectRoot: string,
-  depth = 0,
-): void {
+function walkDirectory(dir: string, rules: ContextRule[], projectRoot: string, depth = 0): void {
   if (depth > 10) return; // prevent infinite recursion
 
   const agentsMdPath = join(dir, "AGENTS.md");
@@ -81,8 +76,9 @@ function parseFrontmatter(content: string): {
     return { frontmatter: {}, body: content };
   }
   try {
-    const frontmatter = parseYaml(match[1]!) as Record<string, unknown>;
-    return { frontmatter, body: match[2]! };
+    const [, rawFrontmatter, body] = match;
+    const frontmatter = parseYaml(rawFrontmatter) as Record<string, unknown>;
+    return { frontmatter, body };
   } catch {
     return { frontmatter: {}, body: content };
   }
@@ -193,16 +189,8 @@ export const ContextInjectionPlugin: Plugin = async ({ directory }) => {
         },
         async execute({ agentName, currentFile }) {
           const rules = getRules();
-          const { context, result } = buildContextForAgent(
-            rules,
-            agentName,
-            currentFile,
-          );
-          return JSON.stringify(
-            { ...result, context: context.substring(0, 10000) },
-            null,
-            2,
-          );
+          const { context, result } = buildContextForAgent(rules, agentName, currentFile);
+          return JSON.stringify({ ...result, context: context.substring(0, 10000) }, null, 2);
         },
       }),
 
@@ -221,7 +209,7 @@ export const ContextInjectionPlugin: Plugin = async ({ directory }) => {
     },
 
     // Inject context into system prompt for each agent session
-    "before_prompt_build": async (input) => {
+    before_prompt_build: async (input) => {
       const agentName = input.properties?.agentId;
       if (!agentName || typeof agentName !== "string") return;
 

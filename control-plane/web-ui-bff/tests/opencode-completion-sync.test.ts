@@ -14,10 +14,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
 }
 
-async function request<T>(
-  path: string,
-  options: RequestInit = {},
-): Promise<T> {
+async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(`${BFF_URL}${path}`, options);
   const text = await response.text();
 
@@ -29,7 +26,9 @@ async function request<T>(
   }
 
   if (!response.ok) {
-    throw new Error(`${options.method || "GET"} ${path} failed: ${response.status} ${JSON.stringify(data)}`);
+    throw new Error(
+      `${options.method || "GET"} ${path} failed: ${response.status} ${JSON.stringify(data)}`,
+    );
   }
 
   return data as T;
@@ -78,12 +77,17 @@ async function waitForEvent(
 function extractAssistantText(messages: unknown): string {
   const normalized = Array.isArray(messages)
     ? messages
-    : typeof messages === "object" && messages && Array.isArray((messages as { data?: unknown[] }).data)
+    : typeof messages === "object" &&
+        messages &&
+        Array.isArray((messages as { data?: unknown[] }).data)
       ? (messages as { data: unknown[] }).data
       : [];
 
   for (let index = normalized.length - 1; index >= 0; index--) {
-    const message = normalized[index] as { info?: Record<string, unknown>; parts?: Array<Record<string, unknown>> };
+    const message = normalized[index] as {
+      info?: Record<string, unknown>;
+      parts?: Array<Record<string, unknown>>;
+    };
     if (message?.info?.role !== "assistant") {
       continue;
     }
@@ -102,7 +106,11 @@ function extractAssistantText(messages: unknown): string {
   return "";
 }
 
-async function waitForCompletedStatus(token: string, taskId: string, agentRunId: string): Promise<{
+async function waitForCompletedStatus(
+  token: string,
+  taskId: string,
+  agentRunId: string,
+): Promise<{
   agentStatus: { status: string };
   taskStatus: { status: string; result: string | null; finishedAt: string | null };
 }> {
@@ -113,11 +121,15 @@ async function waitForCompletedStatus(token: string, taskId: string, agentRunId:
       request<{ status: string }>(`/api/agents/${agentRunId}/status`, {
         headers: { Authorization: `Bearer ${token}` },
       }),
-      request<{ status: string; result: string | null; finishedAt: string | null }>(`/api/tasks/${taskId}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      }),
+      request<{ status: string; result: string | null; finishedAt: string | null }>(
+        `/api/tasks/${taskId}`,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+        },
+      ),
     ]);
-    const completedStatuses = agentStatus.status === "completed" && taskStatus.status === "completed";
+    const completedStatuses =
+      agentStatus.status === "completed" && taskStatus.status === "completed";
     const hasFinishedAt = Boolean(taskStatus.finishedAt);
 
     if (completedStatuses && hasFinishedAt) {
@@ -130,7 +142,11 @@ async function waitForCompletedStatus(token: string, taskId: string, agentRunId:
   throw new Error(`Timed out waiting for completed status of task ${taskId}`);
 }
 
-async function waitForAssistantResult(token: string, taskId: string, agentRunId: string): Promise<{
+async function waitForAssistantResult(
+  token: string,
+  taskId: string,
+  agentRunId: string,
+): Promise<{
   taskStatus: { status: string; result: string | null; finishedAt: string | null };
   assistantText: string;
 }> {
@@ -138,9 +154,12 @@ async function waitForAssistantResult(token: string, taskId: string, agentRunId:
 
   while (Date.now() - startedAt < 30000) {
     const [taskStatus, messages] = await Promise.all([
-      request<{ status: string; result: string | null; finishedAt: string | null }>(`/api/tasks/${taskId}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      }),
+      request<{ status: string; result: string | null; finishedAt: string | null }>(
+        `/api/tasks/${taskId}`,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+        },
+      ),
       request(`/api/agents/${agentRunId}/messages`, {
         headers: { Authorization: `Bearer ${token}` },
       }),
@@ -188,7 +207,9 @@ async function runCompletionSyncScenario(options: {
 
   const events: Array<Record<string, unknown>> = [];
   const wsReady = createDeferred<void>();
-  const ws = new WebSocket(`${BFF_URL.replace("http", "ws")}/ws?token=${encodeURIComponent(token)}`);
+  const ws = new WebSocket(
+    `${BFF_URL.replace("http", "ws")}/ws?token=${encodeURIComponent(token)}`,
+  );
 
   let agentRunId = "";
   let completed = false;
@@ -213,10 +234,13 @@ async function runCompletionSyncScenario(options: {
   try {
     await wsReady.promise;
 
-    const execution = await request<{ agentRunId: string; sessionId: string }>(`/api/tasks/${task.id}/execute`, {
-      method: "POST",
-      headers: authHeaders,
-    });
+    const execution = await request<{ agentRunId: string; sessionId: string }>(
+      `/api/tasks/${task.id}/execute`,
+      {
+        method: "POST",
+        headers: authHeaders,
+      },
+    );
 
     agentRunId = execution.agentRunId;
 
@@ -234,12 +258,18 @@ async function runCompletionSyncScenario(options: {
         method: "POST",
         headers: authHeaders,
         body: JSON.stringify({
-          content: "After resume, keep the final answer to exactly 3 bullets and mention one concrete BFF/runtime integration risk.",
+          content:
+            "After resume, keep the final answer to exactly 3 bullets and mention one concrete BFF/runtime integration risk.",
           mode: "noReply",
         }),
       });
       expect(guidanceResult.ok).toBe(true);
-      await waitForEvent(events, "guidance.injected", (event) => event.agentRunId === agentRunId, 15000);
+      await waitForEvent(
+        events,
+        "guidance.injected",
+        (event) => event.agentRunId === agentRunId,
+        15000,
+      );
 
       const resumeResult = await request<{ ok: boolean }>(`/api/agents/${agentRunId}/resume`, {
         method: "POST",
@@ -247,17 +277,23 @@ async function runCompletionSyncScenario(options: {
       });
       expect(resumeResult.ok).toBe(true);
 
-      await waitForEvent(events, "agent.resumed", (event) => event.agentRunId === agentRunId, 15000);
+      await waitForEvent(
+        events,
+        "agent.resumed",
+        (event) => event.agentRunId === agentRunId,
+        15000,
+      );
     }
 
-    await waitForEvent(events, "agent.completed", (event) => event.agentRunId === agentRunId, 120000);
+    await waitForEvent(
+      events,
+      "agent.completed",
+      (event) => event.agentRunId === agentRunId,
+      120000,
+    );
     await waitForEvent(events, "task.completed", (event) => event.taskId === task.id, 120000);
 
-    const { agentStatus, taskStatus } = await waitForCompletedStatus(
-      token,
-      task.id,
-      agentRunId,
-    );
+    const { agentStatus, taskStatus } = await waitForCompletedStatus(token, task.id, agentRunId);
 
     expect(agentStatus.status).toBe("completed");
     expect(taskStatus.status).toBe("completed");

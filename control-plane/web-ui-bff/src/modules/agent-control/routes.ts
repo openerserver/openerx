@@ -1,16 +1,16 @@
-import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
+import { Hono } from "hono";
 import { z } from "zod";
+import { wsBroadcaster } from "../realtime/ws-broadcaster";
 import {
-  pauseAgent,
-  resumeAgent,
-  injectGuidance,
-  terminateAgent,
   getAgentMessages,
   getAgentRun,
+  injectGuidance,
   listAgentRuns,
+  pauseAgent,
+  resumeAgent,
+  terminateAgent,
 } from "./opencode-adapter";
-import { wsBroadcaster } from "../realtime/ws-broadcaster";
 
 export const agentControlRoutes = new Hono();
 
@@ -68,30 +68,26 @@ const guidanceSchema = z.object({
   mode: z.enum(["reply", "noReply"]).default("reply"),
 });
 
-agentControlRoutes.post(
-  "/:agentRunId/guidance",
-  zValidator("json", guidanceSchema),
-  async (c) => {
-    const agentRunId = c.req.param("agentRunId");
-    const { content, mode } = c.req.valid("json");
-    const result = await injectGuidance(agentRunId, content, mode);
+agentControlRoutes.post("/:agentRunId/guidance", zValidator("json", guidanceSchema), async (c) => {
+  const agentRunId = c.req.param("agentRunId");
+  const { content, mode } = c.req.valid("json");
+  const result = await injectGuidance(agentRunId, content, mode);
 
-    if (result.ok) {
-      const run = getAgentRun(agentRunId);
-      wsBroadcaster.broadcast({
-        id: crypto.randomUUID(),
-        type: "guidance.injected",
-        ts: new Date().toISOString(),
-        agentRunId,
-        taskId: run?.taskId,
-        projectId: run?.projectId,
-        data: { agentRunId, content, mode },
-      });
-    }
+  if (result.ok) {
+    const run = getAgentRun(agentRunId);
+    wsBroadcaster.broadcast({
+      id: crypto.randomUUID(),
+      type: "guidance.injected",
+      ts: new Date().toISOString(),
+      agentRunId,
+      taskId: run?.taskId,
+      projectId: run?.projectId,
+      data: { agentRunId, content, mode },
+    });
+  }
 
-    return c.json(result, result.ok ? 200 : 400);
-  },
-);
+  return c.json(result, result.ok ? 200 : 400);
+});
 
 // POST /api/agents/:agentRunId/terminate
 agentControlRoutes.post("/:agentRunId/terminate", async (c) => {

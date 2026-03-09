@@ -42,19 +42,19 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, h, type CSSProperties } from "vue";
-import { useRouter, useRoute } from "vue-router";
 import {
-  DashboardOutlined,
-  UnorderedListOutlined,
-  ProjectOutlined,
   AuditOutlined,
+  DashboardOutlined,
+  ProjectOutlined,
   RobotOutlined,
   SettingOutlined,
+  UnorderedListOutlined,
 } from "@ant-design/icons-vue";
+import { type CSSProperties, computed, h, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
+import ProjectSwitcher from "../components/ProjectSwitcher.vue";
 import { useAuthStore } from "../stores/auth";
 import { useRealtimeStore } from "../stores/realtime";
-import ProjectSwitcher from "../components/ProjectSwitcher.vue";
 
 const router = useRouter();
 const route = useRoute();

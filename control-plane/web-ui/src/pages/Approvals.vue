@@ -94,7 +94,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { listApprovals, resolveApproval } from "../lib/api";
 import { formatApiDateTime } from "../lib/datetime";
 
@@ -113,9 +113,7 @@ const loadingId = ref<string | null>(null);
 const statusFilter = ref<"pending" | "approved" | "rejected" | "">("pending");
 const approvals = ref<ApprovalTicket[]>([]);
 
-const pendingCount = computed(
-  () => approvals.value.filter((a) => a.status === "pending").length,
-);
+const pendingCount = computed(() => approvals.value.filter((a) => a.status === "pending").length);
 
 watch(statusFilter, () => refresh());
 

@@ -45,7 +45,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from "vue";
+import { computed, ref } from "vue";
 import { resolveApproval } from "../lib/api";
 import { formatApiDateTime } from "../lib/datetime";
 

@@ -19,7 +19,10 @@ function parseArgs() {
   const flags = new Set<string>();
 
   for (let i = 0; i < args.length; i++) {
-    const arg = args[i]!;
+    const arg = args[i];
+    if (!arg) {
+      continue;
+    }
     if (arg.startsWith("--")) {
       const key = arg.slice(2);
       const next = args[i + 1];
@@ -43,7 +46,7 @@ async function apiFetch<T>(path: string, token: string, opts?: RequestInit): Pro
       ...opts?.headers,
     },
   });
-  const data = await res.json() as T & { error?: string };
+  const data = (await res.json()) as T & { error?: string };
   if (!res.ok) {
     throw new Error(data.error || `HTTP ${res.status}`);
   }
@@ -131,7 +134,7 @@ Options:
         agentRunId: string;
         status: string;
       }>(`/api/tasks/${task.id}/execute`, token, { method: "POST" });
-      console.log(`  ✓ Agent started`);
+      console.log("  ✓ Agent started");
       console.log(`    taskId:     ${execResult.taskId}`);
       console.log(`    sessionId:  ${execResult.sessionId}`);
       console.log(`    agentRunId: ${execResult.agentRunId}`);

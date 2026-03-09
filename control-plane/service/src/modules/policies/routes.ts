@@ -1,10 +1,10 @@
-import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
-import { z } from "zod";
 import { eq } from "drizzle-orm";
+import { Hono } from "hono";
+import { z } from "zod";
 import { db } from "../../db";
 import { policyTemplates, projects } from "../../db/schema";
-import { authMiddleware, type AppEnv, type JWTPayload } from "../../middleware/auth";
+import { type AppEnv, type JWTPayload, authMiddleware } from "../../middleware/auth";
 
 export const policyRoutes = new Hono<AppEnv>();
 
@@ -64,65 +64,57 @@ policyRoutes.get("/", async (c) => {
 });
 
 // POST /api/policies
-policyRoutes.post(
-  "/",
-  zValidator("json", createPolicySchema),
-  async (c) => {
-    const body = c.req.valid("json");
-    const user = c.get("user") as JWTPayload;
-    const id = crypto.randomUUID();
-    const createdAt = new Date().toISOString();
+policyRoutes.post("/", zValidator("json", createPolicySchema), async (c) => {
+  const body = c.req.valid("json");
+  const user = c.get("user") as JWTPayload;
+  const id = crypto.randomUUID();
+  const createdAt = new Date().toISOString();
 
-    const project = await db.query.projects.findFirst({
-      where: eq(projects.id, body.projectId),
-    });
-    if (!project) return c.json({ error: "Project not found" }, 404);
+  const project = await db.query.projects.findFirst({
+    where: eq(projects.id, body.projectId),
+  });
+  if (!project) return c.json({ error: "Project not found" }, 404);
 
-    if (!hasProjectAccess(user, body.projectId, "project_admin")) {
-      return c.json({ error: "Insufficient project permissions" }, 403);
-    }
+  if (!hasProjectAccess(user, body.projectId, "project_admin")) {
+    return c.json({ error: "Insufficient project permissions" }, 403);
+  }
 
-    await db.insert(policyTemplates).values({
-      id,
-      projectId: body.projectId,
-      name: body.name,
-      type: body.type,
-      rules: body.rules,
-      appliesTo: body.appliesTo,
-      createdAt,
-    });
+  await db.insert(policyTemplates).values({
+    id,
+    projectId: body.projectId,
+    name: body.name,
+    type: body.type,
+    rules: body.rules,
+    appliesTo: body.appliesTo,
+    createdAt,
+  });
 
-    return c.json({ id, ...body, createdAt }, 201);
-  },
-);
+  return c.json({ id, ...body, createdAt }, 201);
+});
 
 // PATCH /api/policies/:policyId
-policyRoutes.patch(
-  "/:policyId",
-  zValidator("json", updatePolicySchema),
-  async (c) => {
-    const policyId = c.req.param("policyId");
-    const body = c.req.valid("json");
-    const user = c.get("user") as JWTPayload;
+policyRoutes.patch("/:policyId", zValidator("json", updatePolicySchema), async (c) => {
+  const policyId = c.req.param("policyId");
+  const body = c.req.valid("json");
+  const user = c.get("user") as JWTPayload;
 
-    const existing = await db.query.policyTemplates.findFirst({
-      where: eq(policyTemplates.id, policyId),
-    });
-    if (!existing) return c.json({ error: "Policy not found" }, 404);
+  const existing = await db.query.policyTemplates.findFirst({
+    where: eq(policyTemplates.id, policyId),
+  });
+  if (!existing) return c.json({ error: "Policy not found" }, 404);
 
-    if (!hasProjectAccess(user, existing.projectId, "project_admin")) {
-      return c.json({ error: "Insufficient project permissions" }, 403);
-    }
+  if (!hasProjectAccess(user, existing.projectId, "project_admin")) {
+    return c.json({ error: "Insufficient project permissions" }, 403);
+  }
 
-    await db
-      .update(policyTemplates)
-      .set({
-        ...(body.name && { name: body.name }),
-        ...(body.rules && { rules: body.rules }),
-        ...(body.appliesTo && { appliesTo: body.appliesTo }),
-      })
-      .where(eq(policyTemplates.id, policyId));
+  await db
+    .update(policyTemplates)
+    .set({
+      ...(body.name && { name: body.name }),
+      ...(body.rules && { rules: body.rules }),
+      ...(body.appliesTo && { appliesTo: body.appliesTo }),
+    })
+    .where(eq(policyTemplates.id, policyId));
 
-    return c.json({ id: policyId, ...body });
-  },
-);
+  return c.json({ id: policyId, ...body });
+});

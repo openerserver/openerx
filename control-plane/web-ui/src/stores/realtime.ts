@@ -13,6 +13,38 @@ export interface RealtimeEvent {
 
 const MAX_EVENTS = 500;
 
+function normalizeRealtimeEvent(input: unknown): RealtimeEvent | null {
+  if (!input || typeof input !== "object") {
+    return null;
+  }
+
+  const payload = input as Record<string, unknown>;
+  if (typeof payload.type !== "string") {
+    return null;
+  }
+
+  if (payload.type === "subscribed" || payload.type === "error") {
+    return null;
+  }
+
+  return {
+    id: typeof payload.id === "string" && payload.id.length > 0 ? payload.id : crypto.randomUUID(),
+    type: payload.type,
+    ts:
+      typeof payload.ts === "string" && payload.ts.length > 0
+        ? payload.ts
+        : new Date().toISOString(),
+    projectId: typeof payload.projectId === "string" ? payload.projectId : undefined,
+    taskId: typeof payload.taskId === "string" ? payload.taskId : undefined,
+    sessionId: typeof payload.sessionId === "string" ? payload.sessionId : undefined,
+    agentRunId: typeof payload.agentRunId === "string" ? payload.agentRunId : undefined,
+    data:
+      payload.data && typeof payload.data === "object" && !Array.isArray(payload.data)
+        ? (payload.data as Record<string, unknown>)
+        : {},
+  };
+}
+
 interface RealtimeState {
   connected: boolean;
   events: RealtimeEvent[];
@@ -31,7 +63,10 @@ export const useRealtimeStore = defineStore("realtime", {
   }),
   actions: {
     connect(token: string) {
-      if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
+      if (
+        this.ws &&
+        (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)
+      ) {
         return;
       }
 
@@ -59,7 +94,10 @@ export const useRealtimeStore = defineStore("realtime", {
 
       ws.onmessage = (event) => {
         try {
-          const data = JSON.parse(event.data) as RealtimeEvent;
+          const data = normalizeRealtimeEvent(JSON.parse(event.data) as unknown);
+          if (!data) {
+            return;
+          }
           this.events = [data, ...this.events].slice(0, MAX_EVENTS);
         } catch {
           // Malformed message
