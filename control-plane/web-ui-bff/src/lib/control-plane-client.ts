@@ -1,8 +1,14 @@
 // ── Control Plane Client ────────────────────────────────────────────
 // Unified fetch helper for BFF → Control Plane Service calls.
 
+import * as jose from "jose";
+import type { JWTPayload } from "../middleware/auth";
+
 const CONTROL_PLANE_URL =
   process.env.CONTROL_PLANE_URL || "http://localhost:4097";
+const JWT_SECRET = new TextEncoder().encode(
+  process.env.JWT_SECRET || "openerx-dev-secret-change-in-production",
+);
 
 export interface UpstreamResponse<T = unknown> {
   ok: boolean;
@@ -54,6 +60,23 @@ export async function cpFetch<T = unknown>(
       data: { error: `Control plane unreachable: ${e}` } as T,
     };
   }
+}
+
+export async function createInternalAuthorization(): Promise<string> {
+  const payload: JWTPayload = {
+    sub: process.env.INTERNAL_SERVICE_USER_ID || "system:bff",
+    org: process.env.INTERNAL_SERVICE_ORG_ID || "system",
+    projects: [],
+    role: "platform_admin",
+  };
+
+  const token = await new jose.SignJWT(payload as unknown as jose.JWTPayload)
+    .setProtectedHeader({ alg: "HS256" })
+    .setIssuedAt()
+    .setExpirationTime("5m")
+    .sign(JWT_SECRET);
+
+  return `Bearer ${token}`;
 }
 
 /**

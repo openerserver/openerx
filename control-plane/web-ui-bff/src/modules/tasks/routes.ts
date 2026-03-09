@@ -87,7 +87,7 @@ taskRoutes.post("/:taskId/execute", async (c) => {
   }
 
   // 2. Create OpenCode session and send prompt
-  const execResult = await createSession(taskId, task.prompt);
+  const execResult = await createSession(taskId, task.projectId, task.prompt);
 
   if (!execResult.ok && !execResult.sessionId) {
     return c.json({ error: execResult.error || "Failed to start agent execution" }, 502);
@@ -110,6 +110,7 @@ taskRoutes.post("/:taskId/execute", async (c) => {
     type: "agent.started",
     ts: new Date().toISOString(),
     taskId,
+    projectId: task.projectId,
     agentRunId: execResult.agentRunId,
     sessionId: execResult.sessionId,
     data: { taskId, title: task.title, agentRunId: execResult.agentRunId },

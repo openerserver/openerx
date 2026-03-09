@@ -33,6 +33,10 @@
 
 ### 2.4 Agent 控制（需要 token）
 
+OpenCode Runtime 的真实协议差异见：
+
+- [docs/opencode-1.1.57-runtime-protocol.md](docs/opencode-1.1.57-runtime-protocol.md)
+
 | 方法 | 路径 | 说明 | 回源目标 |
 |------|------|------|----------|
 | POST | `/api/agents/:agentRunId/pause` | 暂停 Agent | OpenCode Runtime |

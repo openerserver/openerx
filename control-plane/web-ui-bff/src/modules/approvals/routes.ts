@@ -10,8 +10,9 @@ export const approvalRoutes = new Hono();
 
 // GET /api/approvals?status=pending
 approvalRoutes.get("/", async (c) => {
-  const status = c.req.query("status") || "pending";
-  const result = await cpFetch(`/api/approvals?status=${encodeURIComponent(status)}`, {
+  const status = c.req.query("status");
+  const query = status ? `?status=${encodeURIComponent(status)}` : "";
+  const result = await cpFetch(`/api/approvals${query}`, {
     authorization: authHeader(c),
   });
   return c.json(result.data, result.ok ? 200 : (result.status as 400 | 401 | 403 | 502));

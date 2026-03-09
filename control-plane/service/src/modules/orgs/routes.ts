@@ -1,13 +1,13 @@
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
-import { eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { db } from "../../db";
-import { organizations } from "../../db/schema";
-import { authMiddleware } from "../../middleware/auth";
+import { organizations, projectRoles, projects } from "../../db/schema";
+import { authMiddleware, type AppEnv } from "../../middleware/auth";
 import { requireRole } from "../../middleware/rbac";
 
-export const orgRoutes = new Hono();
+export const orgRoutes = new Hono<AppEnv>();
 
 orgRoutes.use("*", authMiddleware);
 
@@ -18,7 +18,35 @@ const createOrgSchema = z.object({
 
 // GET /api/orgs
 orgRoutes.get("/", async (c) => {
-  const orgs = await db.query.organizations.findMany();
+  const user = c.get("user");
+  const isGlobalAdmin = user.role === "platform_admin" || user.role === "org_admin";
+
+  if (isGlobalAdmin) {
+    const orgs = await db.query.organizations.findMany();
+    return c.json(orgs);
+  }
+
+  const memberships = await db.query.projectRoles.findMany({
+    where: eq(projectRoles.userId, user.sub),
+  });
+  const projectIds = memberships.map((membership) => membership.projectId);
+
+  if (projectIds.length === 0) {
+    return c.json([]);
+  }
+
+  const visibleProjects = await db.query.projects.findMany({
+    where: inArray(projects.id, projectIds),
+  });
+  const orgIds = [...new Set(visibleProjects.map((project) => project.orgId))];
+
+  if (orgIds.length === 0) {
+    return c.json([]);
+  }
+
+  const orgs = await db.query.organizations.findMany({
+    where: inArray(organizations.id, orgIds),
+  });
   return c.json(orgs);
 });
 
@@ -26,15 +54,31 @@ orgRoutes.get("/", async (c) => {
 orgRoutes.post("/", requireRole("org_admin"), zValidator("json", createOrgSchema), async (c) => {
   const { name, slug } = c.req.valid("json");
   const id = crypto.randomUUID();
+  const createdAt = new Date().toISOString();
 
-  await db.insert(organizations).values({ id, name, slug });
+  await db.insert(organizations).values({ id, name, slug, createdAt });
 
-  return c.json({ id, name, slug }, 201);
+  return c.json({ id, name, slug, createdAt }, 201);
 });
 
 // GET /api/orgs/:orgId
 orgRoutes.get("/:orgId", async (c) => {
   const orgId = c.req.param("orgId");
+  const user = c.get("user");
+
+  if (user.role !== "platform_admin" && user.role !== "org_admin") {
+    const membership = await db
+      .select({ orgId: projects.orgId })
+      .from(projectRoles)
+      .innerJoin(projects, eq(projectRoles.projectId, projects.id))
+      .where(and(eq(projectRoles.userId, user.sub), eq(projects.orgId, orgId)))
+      .get();
+
+    if (!membership) {
+      return c.json({ error: "Organization not found or access denied" }, 404);
+    }
+  }
+
   const org = await db.query.organizations.findFirst({
     where: eq(organizations.id, orgId),
   });

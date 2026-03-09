@@ -23,6 +23,7 @@ class WSBroadcaster {
   constructor() {
     // Subscribe to all SSE events and broadcast to WS clients
     sseAggregator.onEvent((event) => this.broadcast(event));
+    void sseAggregator.subscribeGlobal();
   }
 
   addClient(id: string, client: WSClient): void {

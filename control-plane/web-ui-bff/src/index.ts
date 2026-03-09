@@ -6,6 +6,12 @@ import { realtimeRoutes } from "./modules/realtime/routes";
 import { agentControlRoutes } from "./modules/agent-control/routes";
 import { taskRoutes } from "./modules/tasks/routes";
 import { approvalRoutes } from "./modules/approvals/routes";
+import { costRoutes } from "./modules/cost/routes";
+import { configRoutes } from "./modules/config/routes";
+import { envRoutes } from "./modules/envs/routes";
+import { policyRoutes } from "./modules/policies/routes";
+import { projectRoutes } from "./modules/projects/routes";
+import { orgRoutes } from "./modules/orgs/routes";
 import { authMiddleware } from "./middleware/auth";
 import { websocketHandler } from "./modules/realtime/ws-broadcaster";
 
@@ -37,6 +43,12 @@ app.route("/api/realtime", realtimeRoutes);
 app.route("/api/agents", agentControlRoutes);
 app.route("/api/tasks", taskRoutes);
 app.route("/api/approvals", approvalRoutes);
+app.route("/api/cost", costRoutes);
+app.route("/api/envs", envRoutes);
+app.route("/api/policies", policyRoutes);
+app.route("/api/projects", projectRoutes);
+app.route("/api/orgs", orgRoutes);
+app.route("/api/config", configRoutes);
 
 // ── Start Server ───────────────────────────────────────────────────
 

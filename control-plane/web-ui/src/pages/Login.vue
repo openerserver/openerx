@@ -24,10 +24,11 @@
           :rules="[{ required: true, message: '请输入用户名' }]"
         >
           <a-input
-            v-model:value="form.username"
+            :value="form.username"
             placeholder="请输入用户名"
             size="large"
             autocomplete="username"
+            @update:value="form.username = String($event ?? '')"
           />
         </a-form-item>
 
@@ -37,10 +38,11 @@
           :rules="[{ required: true, message: '请输入密码' }]"
         >
           <a-input-password
-            v-model:value="form.password"
+            :value="form.password"
             placeholder="请输入密码"
             size="large"
             autocomplete="current-password"
+            @update:value="form.password = String($event ?? '')"
           />
         </a-form-item>
 
@@ -67,8 +69,8 @@
 <script setup lang="ts">
 import { reactive, ref } from "vue";
 import { useRouter } from "vue-router";
-import { useAuthStore } from "@/stores/auth";
-import { login } from "@/lib/api";
+import { useAuthStore } from "../stores/auth";
+import { login } from "../lib/api";
 
 const router = useRouter();
 const authStore = useAuthStore();

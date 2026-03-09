@@ -1,11 +1,12 @@
 ---
 name: git-master
 description: Advanced Git operations — atomic commits, interactive rebase, conflict resolution
-permissions:
-  allowedTools: [run_lint, run_tests, git_commit_style, git_history_search]
-  deniedTools: [tmux_kill_session]
-  filePatterns: ["**/*"]
-  maxConcurrency: 1
+metadata:
+  permissions:
+    allowedTools: [run_lint, run_tests, git_commit_style, git_history_search]
+    deniedTools: [tmux_kill_session]
+    filePatterns: ["**/*"]
+    maxConcurrency: 1
 ---
 
 # Git Master — Advanced Git Skill

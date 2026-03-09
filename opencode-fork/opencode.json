@@ -2,8 +2,8 @@
   "$schema": "https://opencode.ai/schemas/opencode.json",
   "agents": {
     "defaults": {
-      "model": "anthropic/claude-sonnet-4-20250514",
-      "provider": "anthropic"
+      "model": "claude-sonnet-4",
+      "provider": "github-copilot"
     }
   },
   "models": {
@@ -15,22 +15,47 @@
       "openai": {
         "api": "openai-completions",
         "name": "OpenAI (Fallback)"
+      },
+      "github-copilot": {
+        "api": "github-copilot",
+        "name": "GitHub Copilot"
       }
     },
     "list": [
       {
-        "id": "anthropic/claude-sonnet-4-20250514",
-        "name": "Claude Sonnet 4 (Primary - Reasoning)",
-        "provider": "anthropic",
+        "id": "claude-sonnet-4",
+        "name": "Claude Sonnet 4 (via Copilot)",
+        "provider": "github-copilot",
         "contextWindow": 200000,
         "maxTokens": 16384
       },
       {
-        "id": "openai/gpt-4.1-mini",
-        "name": "GPT-4.1 Mini (Fast Execution)",
-        "provider": "openai",
+        "id": "claude-opus-4",
+        "name": "Claude Opus 4 (via Copilot)",
+        "provider": "github-copilot",
+        "contextWindow": 200000,
+        "maxTokens": 16384
+      },
+      {
+        "id": "gpt-4.1",
+        "name": "GPT-4.1 (via Copilot)",
+        "provider": "github-copilot",
         "contextWindow": 1047576,
         "maxTokens": 32768
+      },
+      {
+        "id": "gpt-5-mini",
+        "name": "GPT-5 Mini (via Copilot)",
+        "provider": "github-copilot",
+        "contextWindow": 1047576,
+        "maxTokens": 32768
+      },
+      {
+        "id": "gemini-2.5-pro",
+        "name": "Gemini 2.5 Pro (via Copilot)",
+        "provider": "github-copilot",
+        "contextWindow": 1048576,
+        "maxTokens": 65536
       }
     ]
   },
@@ -46,7 +71,10 @@
   "mcp": {
     "exa": {
       "command": "npx",
-      "args": ["-y", "@anthropic-ai/exa-mcp-server"],
+      "args": [
+        "-y",
+        "@anthropic-ai/exa-mcp-server"
+      ],
       "env": {
         "EXA_API_KEY": "${EXA_API_KEY}"
       },
@@ -54,12 +82,18 @@
     },
     "context7": {
       "command": "npx",
-      "args": ["-y", "@anthropic-ai/context7-mcp-server"],
+      "args": [
+        "-y",
+        "@anthropic-ai/context7-mcp-server"
+      ],
       "description": "Official library documentation lookup — frameworks, languages, APIs"
     },
     "grep-app": {
       "command": "npx",
-      "args": ["-y", "@anthropic-ai/grep-app-mcp-server"],
+      "args": [
+        "-y",
+        "@anthropic-ai/grep-app-mcp-server"
+      ],
       "description": "GitHub code search — find usage patterns and implementations across public repos"
     }
   }

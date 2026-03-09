@@ -28,19 +28,21 @@
       </template>
       <a-flex :gap="12">
         <a-select
-          v-model:value="selectedAgentId"
+          :value="selectedAgentId"
           style="width: 280px"
           placeholder="选择 Agent"
           :options="agentSelectOptions"
           allow-clear
+          @update:value="setSelectedAgentId"
         />
         <a-input
-          v-model:value="quickGuidance"
+          :value="quickGuidance"
           placeholder="输入指令内容（Agent 暂停时可用）..."
           style="flex: 1"
           @press-enter="handleQuickGuidance"
+          @update:value="quickGuidance = String($event ?? '')"
         />
-        <a-radio-group v-model:value="guidanceMode" size="small">
+        <a-radio-group :value="guidanceMode" size="small" @update:value="guidanceMode = $event">
           <a-radio-button value="reply">等待回复</a-radio-button>
           <a-radio-button value="noReply">仅注入</a-radio-button>
         </a-radio-group>
@@ -143,13 +145,14 @@
               <!-- Inline Guidance (when paused) -->
               <a-input-search
                 v-if="run.status === 'paused'"
-                v-model:value="inlineGuidance[run.agentRunId]"
+                :value="inlineGuidance[run.agentRunId]"
                 placeholder="注入指令..."
                 enter-button="发送"
                 size="small"
                 :loading="actionLoading === run.agentRunId"
                 @search="handleInlineGuidance(run.agentRunId)"
                 @click.stop
+                @update:value="inlineGuidance[run.agentRunId] = String($event ?? '')"
               />
 
               <!-- Recent events for this agent -->
@@ -260,8 +263,8 @@ import {
   injectGuidance,
   terminateAgent,
   listAgentRuns,
-} from "@/lib/api";
-import { useRealtimeStore } from "@/stores/realtime";
+} from "../lib/api";
+import { useRealtimeStore } from "../stores/realtime";
 
 interface AgentRun {
   agentRunId: string;
@@ -281,6 +284,10 @@ const selectedAgentId = ref<string | undefined>(undefined);
 const quickGuidance = ref("");
 const guidanceMode = ref<"reply" | "noReply">("reply");
 const inlineGuidance = reactive<Record<string, string>>({});
+
+function setSelectedAgentId(value: unknown) {
+  selectedAgentId.value = value == null ? undefined : String(value);
+}
 
 // Merge API-registered runs with runs discovered from WebSocket events
 const allAgentRuns = computed(() => {

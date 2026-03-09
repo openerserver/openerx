@@ -1,3 +1,4 @@
+import { ref } from "vue";
 import { defineStore } from "pinia";
 
 export interface User {
@@ -8,25 +9,30 @@ export interface User {
   projects?: Array<{ id: string; role: string }>;
 }
 
-interface AuthState {
-  token: string | null;
-  user: User | null;
-}
+export const useAuthStore = defineStore(
+  "auth",
+  () => {
+    const token = ref<string | null>(null);
+    const user = ref<User | null>(null);
 
-export const useAuthStore = defineStore("auth", {
-  state: (): AuthState => ({
-    token: null,
-    user: null,
-  }),
-  actions: {
-    login(token: string, user: User) {
-      this.token = token;
-      this.user = user;
-    },
-    logout() {
-      this.token = null;
-      this.user = null;
-    },
+    function login(nextToken: string, nextUser: User) {
+      token.value = nextToken;
+      user.value = nextUser;
+    }
+
+    function logout() {
+      token.value = null;
+      user.value = null;
+    }
+
+    return {
+      token,
+      user,
+      login,
+      logout,
+    };
   },
-  persist: true,
-});
+  {
+    persist: true,
+  },
+);

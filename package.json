@@ -15,6 +15,7 @@
     "build:service": "cd control-plane/service && bun run build",
     "build:bff": "cd control-plane/web-ui-bff && bun run build",
     "build:ui": "cd control-plane/web-ui && bun run build",
+    "test:bff:completion-sync": "cd control-plane/web-ui-bff && bun run test:integration:completion-sync",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "typecheck": "tsc --noEmit -p control-plane/service/tsconfig.json && tsc --noEmit -p control-plane/web-ui-bff/tsconfig.json",

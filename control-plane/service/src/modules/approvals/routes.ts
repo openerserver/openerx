@@ -12,11 +12,26 @@ export const approvalRoutes = new Hono<AppEnv>();
 
 approvalRoutes.use("*", authMiddleware);
 
+const approvalStatusSchema = z.enum(["pending", "approved", "rejected", "expired"]);
+const sqliteDateTimePattern = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
+
+function parseApprovalTimestamp(value: string) {
+  if (sqliteDateTimePattern.test(value)) {
+    return new Date(value.replace(" ", "T") + "Z");
+  }
+  return new Date(value);
+}
+
 // GET /api/approvals?status=pending
 approvalRoutes.get("/", requireRole("developer"), async (c) => {
-  const status = c.req.query("status") || "pending";
+  const status = c.req.query("status");
+  const parsedStatus = status ? approvalStatusSchema.safeParse(status) : null;
+  if (status && !parsedStatus?.success) {
+    return c.json({ error: "Invalid approval status" }, 400);
+  }
+
   const result = await db.query.approvalTickets.findMany({
-    where: eq(approvalTickets.status, status as "pending" | "approved" | "rejected" | "expired"),
+    ...(parsedStatus?.success ? { where: eq(approvalTickets.status, parsedStatus.data) } : {}),
   });
   return c.json(result);
 });
@@ -56,7 +71,7 @@ approvalRoutes.post(
     }
 
     // Check if expired
-    if (new Date(ticket.expiresAt) < new Date()) {
+    if (parseApprovalTimestamp(ticket.expiresAt) < new Date()) {
       await db
         .update(approvalTickets)
         .set({ status: "expired", resolvedAt: new Date().toISOString() })

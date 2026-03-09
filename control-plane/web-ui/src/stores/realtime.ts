@@ -17,6 +17,8 @@ interface RealtimeState {
   connected: boolean;
   events: RealtimeEvent[];
   ws: WebSocket | null;
+  reconnectEnabled: boolean;
+  reconnectTimer: ReturnType<typeof setTimeout> | null;
 }
 
 export const useRealtimeStore = defineStore("realtime", {
@@ -24,19 +26,35 @@ export const useRealtimeStore = defineStore("realtime", {
     connected: false,
     events: [],
     ws: null,
+    reconnectEnabled: false,
+    reconnectTimer: null,
   }),
   actions: {
     connect(token: string) {
-      if (this.ws && this.ws.readyState === WebSocket.OPEN) return;
+      if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
+        return;
+      }
+
+      this.reconnectEnabled = true;
+      if (this.reconnectTimer) {
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+      }
 
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       const ws = new WebSocket(
         `${protocol}//${window.location.host}/ws?token=${encodeURIComponent(token)}`,
       );
 
+      this.ws = ws;
+
       ws.onopen = () => {
         this.connected = true;
         this.ws = ws;
+        if (this.reconnectTimer) {
+          clearTimeout(this.reconnectTimer);
+          this.reconnectTimer = null;
+        }
       };
 
       ws.onmessage = (event) => {
@@ -50,9 +68,15 @@ export const useRealtimeStore = defineStore("realtime", {
 
       ws.onclose = () => {
         this.connected = false;
-        this.ws = null;
-        // Auto-reconnect after 3s
-        setTimeout(() => {
+        if (this.ws === ws) {
+          this.ws = null;
+        }
+        if (!this.reconnectEnabled) {
+          return;
+        }
+
+        this.reconnectTimer = setTimeout(() => {
+          this.reconnectTimer = null;
           this.connect(token);
         }, 3000);
       };
@@ -61,6 +85,11 @@ export const useRealtimeStore = defineStore("realtime", {
     },
 
     disconnect() {
+      this.reconnectEnabled = false;
+      if (this.reconnectTimer) {
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+      }
       if (this.ws) this.ws.close();
       this.connected = false;
       this.ws = null;

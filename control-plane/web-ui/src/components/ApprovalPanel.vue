@@ -13,12 +13,10 @@
 
       <a-typography-paragraph
         type="secondary"
+        :content="`Task: ${ticket.taskId?.slice(0, 8) || '-'} — ${JSON.stringify(ticket.requestDetail).slice(0, 60)}`"
         :ellipsis="{ rows: 1 }"
         style="font-size: 12px; margin-bottom: 8px"
-      >
-        Task: {{ ticket.taskId?.slice(0, 8) }} —
-        {{ JSON.stringify(ticket.requestDetail).slice(0, 60) }}
-      </a-typography-paragraph>
+      />
 
       <a-space>
         <a-button
@@ -40,7 +38,7 @@
       </a-space>
 
       <div style="font-size: 11px; color: #64748b; margin-top: 4px">
-        过期: {{ new Date(ticket.expiresAt).toLocaleString() }}
+        过期: {{ formatApiDateTime(ticket.expiresAt) }}
       </div>
     </a-card>
   </a-space>
@@ -48,7 +46,8 @@
 
 <script setup lang="ts">
 import { ref, computed } from "vue";
-import { resolveApproval } from "@/lib/api";
+import { resolveApproval } from "../lib/api";
+import { formatApiDateTime } from "../lib/datetime";
 
 interface ApprovalItem {
   id: string;
@@ -61,6 +60,10 @@ interface ApprovalItem {
 
 const props = defineProps<{
   approvals: unknown[];
+}>();
+
+const emit = defineEmits<{
+  resolved: [];
 }>();
 
 const loadingId = ref<string | null>(null);
@@ -77,6 +80,7 @@ async function handleResolve(ticketId: string, action: "approve" | "reject") {
   loadingId.value = ticketId;
   try {
     await resolveApproval(ticketId, action);
+    emit("resolved");
   } catch {
     // Error handling
   } finally {

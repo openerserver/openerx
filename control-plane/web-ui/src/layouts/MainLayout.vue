@@ -8,8 +8,10 @@
         </p>
       </div>
 
+      <ProjectSwitcher />
+
       <a-menu
-        v-model:selectedKeys="selectedKeys"
+        :selectedKeys="selectedKeys"
         theme="dark"
         mode="inline"
         :items="menuItems"
@@ -45,12 +47,14 @@ import { useRouter, useRoute } from "vue-router";
 import {
   DashboardOutlined,
   UnorderedListOutlined,
+  ProjectOutlined,
   AuditOutlined,
   RobotOutlined,
   SettingOutlined,
 } from "@ant-design/icons-vue";
-import { useAuthStore } from "@/stores/auth";
-import { useRealtimeStore } from "@/stores/realtime";
+import { useAuthStore } from "../stores/auth";
+import { useRealtimeStore } from "../stores/realtime";
+import ProjectSwitcher from "../components/ProjectSwitcher.vue";
 
 const router = useRouter();
 const route = useRoute();
@@ -66,26 +70,39 @@ watch(
   { immediate: true },
 );
 
-const menuItems = [
-  { key: "/", icon: () => h(DashboardOutlined), label: "Dashboard" },
-  { key: "/tasks", icon: () => h(UnorderedListOutlined), label: "任务" },
-  { key: "/agents", icon: () => h(RobotOutlined), label: "Agent 控制台" },
-  { key: "/approvals", icon: () => h(AuditOutlined), label: "审批" },
-  { key: "/settings", icon: () => h(SettingOutlined), label: "设置" },
-];
+const isSystemAdmin = computed(
+  () => authStore.user?.role === "platform_admin" || authStore.user?.role === "org_admin",
+);
+
+const menuItems = computed(() => {
+  const items = [
+    { key: "/", icon: () => h(DashboardOutlined), label: "Dashboard" },
+    { key: "/tasks", icon: () => h(UnorderedListOutlined), label: "任务" },
+    { key: "/projects", icon: () => h(ProjectOutlined), label: "项目" },
+    { key: "/agents", icon: () => h(RobotOutlined), label: "Agent 控制台" },
+    { key: "/approvals", icon: () => h(AuditOutlined), label: "审批" },
+  ];
+
+  if (isSystemAdmin.value) {
+    items.push({ key: "/settings", icon: () => h(SettingOutlined), label: "设置" });
+  }
+
+  return items;
+});
 
 const selectedKeys = computed(() => {
   const path = route.path;
   if (path === "/" || path === "") return ["/"];
   if (path.startsWith("/tasks")) return ["/tasks"];
+  if (path.startsWith("/projects")) return ["/projects"];
   if (path.startsWith("/agents")) return ["/agents"];
   if (path.startsWith("/approvals")) return ["/approvals"];
   if (path.startsWith("/settings")) return ["/settings"];
   return ["/"];
 });
 
-function onMenuClick({ key }: { key: string }) {
-  router.push(key);
+function onMenuClick({ key }: { key: string | number }) {
+  router.push(String(key));
 }
 
 function handleLogout() {

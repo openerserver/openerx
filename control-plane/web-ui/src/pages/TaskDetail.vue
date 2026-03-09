@@ -58,10 +58,10 @@
 <script setup lang="ts">
 import { computed, watch } from "vue";
 import { useRoute } from "vue-router";
-import { useRealtimeStore } from "@/stores/realtime";
-import { getTask } from "@/lib/api";
-import AgentConsole from "@/components/AgentConsole.vue";
-import TaskGraph from "@/components/TaskGraph.vue";
+import { useRealtimeStore } from "../stores/realtime";
+import { getTask } from "../lib/api";
+import AgentConsole from "../components/AgentConsole.vue";
+import TaskGraph from "../components/TaskGraph.vue";
 
 const route = useRoute();
 const realtimeStore = useRealtimeStore();

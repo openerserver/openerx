@@ -10,7 +10,12 @@
         />
       </a-typography-title>
       <a-space>
-        <a-radio-group v-model:value="statusFilter" button-style="solid" size="small">
+        <a-radio-group
+          :value="statusFilter"
+          button-style="solid"
+          size="small"
+          @update:value="handleStatusFilterChange"
+        >
           <a-radio-button value="pending">待处理</a-radio-button>
           <a-radio-button value="approved">已批准</a-radio-button>
           <a-radio-button value="rejected">已拒绝</a-radio-button>
@@ -45,11 +50,10 @@
               <a-descriptions-item label="详情">
                 <a-typography-paragraph
                   type="secondary"
+                  :content="JSON.stringify(ticket.requestDetail).slice(0, 120)"
                   :ellipsis="{ rows: 2 }"
                   style="font-size: 12px; margin: 0"
-                >
-                  {{ JSON.stringify(ticket.requestDetail).slice(0, 120) }}
-                </a-typography-paragraph>
+                />
               </a-descriptions-item>
               <a-descriptions-item label="过期时间">
                 <a-typography-text type="secondary" style="font-size: 12px">
@@ -57,8 +61,8 @@
                 </a-typography-text>
               </a-descriptions-item>
               <a-descriptions-item v-if="ticket.status !== 'pending'" label="状态">
-                <a-tag :color="ticket.status === 'approved' ? 'green' : 'red'">
-                  {{ ticket.status === "approved" ? "已批准" : "已拒绝" }}
+                <a-tag :color="statusColor(ticket.status)">
+                  {{ statusLabel(ticket.status) }}
                 </a-tag>
               </a-descriptions-item>
             </a-descriptions>
@@ -91,7 +95,8 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from "vue";
-import { listApprovals, resolveApproval } from "@/lib/api";
+import { listApprovals, resolveApproval } from "../lib/api";
+import { formatApiDateTime } from "../lib/datetime";
 
 interface ApprovalTicket {
   id: string;
@@ -105,7 +110,7 @@ interface ApprovalTicket {
 
 const loading = ref(false);
 const loadingId = ref<string | null>(null);
-const statusFilter = ref("pending");
+const statusFilter = ref<"pending" | "approved" | "rejected" | "">("pending");
 const approvals = ref<ApprovalTicket[]>([]);
 
 const pendingCount = computed(
@@ -113,6 +118,14 @@ const pendingCount = computed(
 );
 
 watch(statusFilter, () => refresh());
+
+function handleStatusFilterChange(value: unknown) {
+  if (value === "pending" || value === "approved" || value === "rejected" || value === "") {
+    statusFilter.value = value;
+    return;
+  }
+  statusFilter.value = "pending";
+}
 
 async function refresh() {
   loading.value = true;
@@ -144,9 +157,20 @@ function riskColor(level: string) {
   return "gold";
 }
 
+function statusColor(status: string) {
+  if (status === "approved") return "green";
+  if (status === "expired") return "default";
+  return "red";
+}
+
+function statusLabel(status: string) {
+  if (status === "approved") return "已批准";
+  if (status === "expired") return "已过期";
+  return "已拒绝";
+}
+
 function formatTime(ts: string) {
-  if (!ts) return "-";
-  return new Date(ts).toLocaleString();
+  return formatApiDateTime(ts);
 }
 
 onMounted(() => refresh());

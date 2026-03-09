@@ -10,9 +10,30 @@ sqlite.exec("PRAGMA journal_mode = WAL");
 sqlite.exec("PRAGMA foreign_keys = ON");
 
 const db = drizzle(sqlite, { schema });
+const BAD_TIMESTAMP_LITERAL = "(datetime('now'))";
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function normalizeLegacyCreatedAt(tableName: string, columnName = "created_at") {
+  sqlite
+    .query(`UPDATE ${tableName} SET ${columnName} = ?1 WHERE ${columnName} = '${BAD_TIMESTAMP_LITERAL.replace(/'/g, "''")}'`)
+    .run(nowIso());
+}
 
 async function seed() {
   console.log("Seeding database...");
+
+  normalizeLegacyCreatedAt("organizations");
+  normalizeLegacyCreatedAt("projects");
+  normalizeLegacyCreatedAt("environments");
+  normalizeLegacyCreatedAt("users");
+  normalizeLegacyCreatedAt("policy_templates");
+  normalizeLegacyCreatedAt("approval_tickets");
+  normalizeLegacyCreatedAt("budget_configs");
+  normalizeLegacyCreatedAt("tasks");
+  normalizeLegacyCreatedAt("sessions", "started_at");
 
   // ── 1. Default Organization ───────────────────────────────────
   const orgId = "org-default";
@@ -22,6 +43,7 @@ async function seed() {
       id: orgId,
       name: "OpenerX",
       slug: "openerx",
+      createdAt: nowIso(),
     }).run();
     console.log("  ✓ Created default organization: OpenerX");
   } else {
@@ -39,6 +61,7 @@ async function seed() {
       slug: "default",
       description: "Default OpenerX project",
       settings: { defaultModel: "anthropic/claude-sonnet-4-20250514", maxConcurrency: 5, budgetMonthly: 500 },
+      createdAt: nowIso(),
     }).run();
     console.log("  ✓ Created default project");
   } else {
@@ -47,9 +70,9 @@ async function seed() {
 
   // ── 3. Environments ───────────────────────────────────────────
   const envs = [
-    { id: "env-dev", projectId, name: "dev", riskLevel: "low" as const, requiresApproval: false },
-    { id: "env-staging", projectId, name: "staging", riskLevel: "medium" as const, requiresApproval: false },
-    { id: "env-production", projectId, name: "production", riskLevel: "critical" as const, requiresApproval: true },
+    { id: "env-dev", projectId, name: "dev", riskLevel: "low" as const, requiresApproval: false, createdAt: nowIso() },
+    { id: "env-staging", projectId, name: "staging", riskLevel: "medium" as const, requiresApproval: false, createdAt: nowIso() },
+    { id: "env-production", projectId, name: "production", riskLevel: "critical" as const, requiresApproval: true, createdAt: nowIso() },
   ];
   for (const env of envs) {
     const existing = db.select().from(schema.environments).where(eq(schema.environments.id, env.id)).get();
@@ -73,6 +96,7 @@ async function seed() {
       passwordHash,
       displayName: "Admin",
       role: "platform_admin",
+      createdAt: nowIso(),
     }).run();
     console.log(`  ✓ Created admin user: ${adminUsername} / ${adminPassword}`);
   } else {
@@ -103,6 +127,7 @@ async function seed() {
       limitAmount: 500,
       warnThreshold: 0.8,
       throttleThreshold: 0.95,
+      createdAt: nowIso(),
     }).run();
     console.log("  ✓ Created default budget config ($500/month)");
   }

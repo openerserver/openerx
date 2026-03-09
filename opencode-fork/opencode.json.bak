@@ -1,0 +1,66 @@
+{
+  "$schema": "https://opencode.ai/schemas/opencode.json",
+  "agents": {
+    "defaults": {
+      "model": "anthropic/claude-sonnet-4-20250514",
+      "provider": "anthropic"
+    }
+  },
+  "models": {
+    "providers": {
+      "anthropic": {
+        "api": "anthropic",
+        "name": "Anthropic (Primary)"
+      },
+      "openai": {
+        "api": "openai-completions",
+        "name": "OpenAI (Fallback)"
+      }
+    },
+    "list": [
+      {
+        "id": "anthropic/claude-sonnet-4-20250514",
+        "name": "Claude Sonnet 4 (Primary - Reasoning)",
+        "provider": "anthropic",
+        "contextWindow": 200000,
+        "maxTokens": 16384
+      },
+      {
+        "id": "openai/gpt-4.1-mini",
+        "name": "GPT-4.1 Mini (Fast Execution)",
+        "provider": "openai",
+        "contextWindow": 1047576,
+        "maxTokens": 32768
+      }
+    ]
+  },
+  "plugins": [
+    "./.opencode/plugins/orchestrator-plugin.ts",
+    "./.opencode/plugins/task-graph-plugin.ts",
+    "./.opencode/plugins/hashline-edit-plugin.ts",
+    "./.opencode/plugins/context-injection-plugin.ts",
+    "./.opencode/plugins/tmux-plugin.ts",
+    "./.opencode/plugins/skills-plugin.ts",
+    "./.opencode/tools/session-tools.ts"
+  ],
+  "mcp": {
+    "exa": {
+      "command": "npx",
+      "args": ["-y", "@anthropic-ai/exa-mcp-server"],
+      "env": {
+        "EXA_API_KEY": "${EXA_API_KEY}"
+      },
+      "description": "Web search via Exa — retrieves relevant web pages, articles, and documentation"
+    },
+    "context7": {
+      "command": "npx",
+      "args": ["-y", "@anthropic-ai/context7-mcp-server"],
+      "description": "Official library documentation lookup — frameworks, languages, APIs"
+    },
+    "grep-app": {
+      "command": "npx",
+      "args": ["-y", "@anthropic-ai/grep-app-mcp-server"],
+      "description": "GitHub code search — find usage patterns and implementations across public repos"
+    }
+  }
+}

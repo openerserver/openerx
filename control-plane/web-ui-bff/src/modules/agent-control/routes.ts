@@ -26,12 +26,14 @@ agentControlRoutes.post("/:agentRunId/pause", async (c) => {
   const result = await pauseAgent(agentRunId);
 
   if (result.ok) {
+    const run = getAgentRun(agentRunId);
     wsBroadcaster.broadcast({
       id: crypto.randomUUID(),
       type: "agent.paused",
       ts: new Date().toISOString(),
       agentRunId,
-      taskId: getAgentRun(agentRunId)?.taskId,
+      taskId: run?.taskId,
+      projectId: run?.projectId,
       data: { agentRunId },
     });
   }
@@ -45,12 +47,14 @@ agentControlRoutes.post("/:agentRunId/resume", async (c) => {
   const result = await resumeAgent(agentRunId);
 
   if (result.ok) {
+    const run = getAgentRun(agentRunId);
     wsBroadcaster.broadcast({
       id: crypto.randomUUID(),
       type: "agent.resumed",
       ts: new Date().toISOString(),
       agentRunId,
-      taskId: getAgentRun(agentRunId)?.taskId,
+      taskId: run?.taskId,
+      projectId: run?.projectId,
       data: { agentRunId },
     });
   }
@@ -73,12 +77,14 @@ agentControlRoutes.post(
     const result = await injectGuidance(agentRunId, content, mode);
 
     if (result.ok) {
+      const run = getAgentRun(agentRunId);
       wsBroadcaster.broadcast({
         id: crypto.randomUUID(),
         type: "guidance.injected",
         ts: new Date().toISOString(),
         agentRunId,
-        taskId: getAgentRun(agentRunId)?.taskId,
+        taskId: run?.taskId,
+        projectId: run?.projectId,
         data: { agentRunId, content, mode },
       });
     }
@@ -93,12 +99,14 @@ agentControlRoutes.post("/:agentRunId/terminate", async (c) => {
   const result = await terminateAgent(agentRunId);
 
   if (result.ok) {
+    const run = getAgentRun(agentRunId);
     wsBroadcaster.broadcast({
       id: crypto.randomUUID(),
       type: "agent.failed",
       ts: new Date().toISOString(),
       agentRunId,
-      taskId: getAgentRun(agentRunId)?.taskId,
+      taskId: run?.taskId,
+      projectId: run?.projectId,
       data: { agentRunId, reason: "terminated" },
     });
   }

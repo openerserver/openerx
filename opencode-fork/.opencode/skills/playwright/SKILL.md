@@ -1,11 +1,12 @@
 ---
 name: playwright
 description: Browser automation and UI testing with Playwright
-permissions:
-  allowedTools: [tmux_create_session, tmux_send_keys, tmux_read_output, tmux_kill_session, run_tests]
-  deniedTools: []
-  filePatterns: ["**/*.spec.ts", "**/*.test.ts", "**/e2e/**", "**/playwright.config.*"]
-  maxConcurrency: 2
+metadata:
+  permissions:
+    allowedTools: [tmux_create_session, tmux_send_keys, tmux_read_output, tmux_kill_session, run_tests]
+    deniedTools: []
+    filePatterns: ["**/*.spec.ts", "**/*.test.ts", "**/e2e/**", "**/playwright.config.*"]
+    maxConcurrency: 2
 ---
 
 # Playwright — Browser Automation Skill

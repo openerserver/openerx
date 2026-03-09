@@ -4,10 +4,11 @@
       <a-typography-title :level="3" style="margin: 0">任务列表</a-typography-title>
       <a-space>
         <a-select
-          v-model:value="statusFilter"
+          :value="statusFilter"
           style="width: 140px"
           placeholder="状态筛选"
           allow-clear
+          @update:value="setStatusFilter"
         >
           <a-select-option value="pending">待执行</a-select-option>
           <a-select-option value="running">运行中</a-select-option>
@@ -73,33 +74,49 @@
 
     <!-- Create Task Modal -->
     <a-modal
-      v-model:open="showCreateModal"
+      :open="showCreateModal"
       title="新建任务"
       :confirm-loading="creating"
+      :ok-button-props="{ disabled: !projectStore.currentProjectId }"
       @ok="handleCreate"
       ok-text="创建"
       cancel-text="取消"
       :width="640"
+      @update:open="showCreateModal = $event"
     >
       <a-form :model="createForm" layout="vertical" style="margin-top: 16px">
+        <a-form-item label="项目">
+          <a-input
+            :value="projectStore.currentProject?.name || '未选择项目'"
+            disabled
+          />
+          <div v-if="!projectStore.currentProjectId" style="margin-top: 8px; color: #ff4d4f; font-size: 12px">
+            请先在侧边栏选择项目。
+          </div>
+        </a-form-item>
         <a-form-item label="任务标题" required>
           <a-input
-            v-model:value="createForm.title"
+            :value="createForm.title"
             placeholder="例：优化登录页面性能"
             :maxlength="500"
+            @update:value="createForm.title = String($event ?? '')"
           />
         </a-form-item>
         <a-form-item label="任务描述 / Prompt" required>
           <a-textarea
-            v-model:value="createForm.prompt"
+            :value="createForm.prompt"
             placeholder="详细描述需要 Agent 完成的任务..."
             :rows="8"
             :maxlength="50000"
             show-count
+            @update:value="createForm.prompt = String($event ?? '')"
           />
         </a-form-item>
         <a-form-item label="执行方式">
-          <a-radio-group v-model:value="createForm.autoExecute">
+          <a-radio-group
+            :value="createForm.autoExecute"
+            @update:value="createForm.autoExecute = Boolean($event)"
+          >
             <a-radio :value="true">创建后立即执行</a-radio>
             <a-radio :value="false">仅创建（稍后手动执行）</a-radio>
           </a-radio-group>
@@ -110,13 +127,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from "vue";
+import { ref, computed, onMounted, watch } from "vue";
 import { PlusOutlined } from "@ant-design/icons-vue";
 import { message } from "ant-design-vue";
-import { listTasks, createTask, executeTask, type Task } from "@/lib/api";
-import { useAuthStore } from "@/stores/auth";
+import { listTasks, createTask, executeTask, type Task } from "../lib/api";
+import { useProjectStore } from "../stores/project";
 
-const authStore = useAuthStore();
+const projectStore = useProjectStore();
 const loading = ref(false);
 const creating = ref(false);
 const executingId = ref<string | null>(null);
@@ -138,6 +155,10 @@ const columns = [
   { title: "操作", key: "actions", width: 150 },
 ];
 
+function setStatusFilter(value: unknown) {
+  statusFilter.value = value == null ? undefined : String(value);
+}
+
 const filteredTasks = computed(() => {
   if (!statusFilter.value) return tasks.value;
   return tasks.value.filter((t) => t.status === statusFilter.value);
@@ -146,7 +167,7 @@ const filteredTasks = computed(() => {
 async function refresh() {
   loading.value = true;
   try {
-    const result = await listTasks();
+    const result = await listTasks(projectStore.currentProjectId || undefined);
     tasks.value = result.data || [];
   } catch {
     // ignore
@@ -161,10 +182,9 @@ async function handleCreate() {
     return;
   }
 
-  // Use first project from JWT or fallback
-  const projectId = authStore.user?.projects?.[0]?.id;
+  const projectId = projectStore.currentProjectId;
   if (!projectId) {
-    message.error("未找到可用项目，请联系管理员");
+    message.error("未找到可用项目，请先创建或选择项目");
     return;
   }
 
@@ -241,8 +261,21 @@ function formatTime(ts: string) {
   return new Date(ts).toLocaleString();
 }
 
-onMounted(() => refresh());
-</script>
+onMounted(async () => {
+  if (projectStore.projects.length === 0) {
+    await projectStore.loadProjects();
+  }
+});
 
-onMounted(() => refresh());
+watch(
+  () => projectStore.currentProjectId,
+  (projectId) => {
+    if (!projectId) {
+      tasks.value = [];
+      return;
+    }
+    void refresh();
+  },
+  { immediate: true },
+);
 </script>

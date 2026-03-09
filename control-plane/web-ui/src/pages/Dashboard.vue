@@ -1,6 +1,15 @@
 <template>
   <div style="padding: 24px">
-    <a-typography-title :level="3">Dashboard</a-typography-title>
+    <a-typography-title :level="3">
+      Dashboard
+      <a-typography-text
+        v-if="projectStore.currentProject"
+        type="secondary"
+        style="font-size: 14px; margin-left: 12px"
+      >
+        {{ projectStore.currentProject.name }}
+      </a-typography-text>
+    </a-typography-title>
 
     <a-row :gutter="[16, 16]">
       <!-- Active Tasks -->
@@ -62,7 +71,7 @@
               style="margin-left: 8px"
             />
           </template>
-          <ApprovalPanel :approvals="approvals" />
+          <ApprovalPanel :approvals="approvals" @resolved="loadApprovals" />
         </a-card>
       </a-col>
     </a-row>
@@ -85,21 +94,32 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from "vue";
-import { useRealtimeStore } from "@/stores/realtime";
-import { listApprovals } from "@/lib/api";
-import ApprovalPanel from "@/components/ApprovalPanel.vue";
+import { useRealtimeStore } from "../stores/realtime";
+import { useProjectStore } from "../stores/project";
+import { listApprovals } from "../lib/api";
 
 const realtimeStore = useRealtimeStore();
+const projectStore = useProjectStore();
 const approvals = ref<unknown[]>([]);
 
-const events = computed(() => realtimeStore.events);
+const events = computed(() => {
+  if (!projectStore.currentProjectId) return [];
+  return realtimeStore.events.filter((event) => event.projectId === projectStore.currentProjectId);
+});
 
-onMounted(async () => {
+async function loadApprovals() {
   try {
     approvals.value = (await listApprovals("pending")) as unknown[];
   } catch {
-    // ignore
+    approvals.value = [];
   }
+}
+
+onMounted(async () => {
+  if (projectStore.projects.length === 0) {
+    await projectStore.loadProjects();
+  }
+  await loadApprovals();
 });
 
 const activeTasks = computed(() => {

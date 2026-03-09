@@ -46,12 +46,13 @@
     <!-- Guidance input (only when paused) -->
     <a-input-search
       v-if="status === 'paused'"
-      v-model:value="guidance"
+      :value="guidance"
       placeholder="注入指令..."
       enter-button="发送"
       size="small"
       :loading="loading"
       @search="sendGuidance"
+      @update:value="guidance = String($event ?? '')"
     />
   </a-card>
 </template>
@@ -63,7 +64,7 @@ import {
   PlayCircleOutlined,
   StopOutlined,
 } from "@ant-design/icons-vue";
-import { pauseAgent, resumeAgent, injectGuidance, terminateAgent } from "@/lib/api";
+import { pauseAgent, resumeAgent, injectGuidance, terminateAgent } from "../lib/api";
 
 const props = defineProps<{
   agentRunId: string;

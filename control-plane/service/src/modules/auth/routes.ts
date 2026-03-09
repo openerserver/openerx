@@ -3,7 +3,7 @@ import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import { eq } from "drizzle-orm";
 import { db } from "../../db";
-import { users } from "../../db/schema";
+import { projectRoles, users } from "../../db/schema";
 import { signJWT, authMiddleware, type AppEnv } from "../../middleware/auth";
 
 export const authRoutes = new Hono<AppEnv>();
@@ -33,7 +33,7 @@ authRoutes.post("/login", zValidator("json", loginSchema), async (c) => {
 
   // Fetch project roles
   const roles = await db.query.projectRoles.findMany({
-    where: eq(users.id, user.id),
+    where: eq(projectRoles.userId, user.id),
   });
 
   const token = await signJWT({

@@ -1,4 +1,10 @@
 import type { RealtimeEvent, RealtimeEventType } from "../../types/events";
+import { cpFetch, createInternalAuthorization } from "../../lib/control-plane-client";
+import {
+  findAgentRunBySessionId,
+  getSessionMessages,
+  updateAgentRunStatus,
+} from "../agent-control/opencode-adapter";
 
 // ── SSE Aggregator ─────────────────────────────────────────────────
 // Subscribes to OpenCode Runtime SSE events and transforms them into
@@ -6,7 +12,7 @@ import type { RealtimeEvent, RealtimeEventType } from "../../types/events";
 
 interface SSEConnection {
   url: string;
-  eventSource: EventSource | null;
+  abortController: AbortController | null;
   reconnectAttempts: number;
   maxReconnectAttempts: number;
 }
@@ -19,12 +25,14 @@ class SSEAggregator {
   private connections = new Map<string, SSEConnection>();
   private handlers = new Set<EventHandler>();
   private reconnectDelay = 1000;
+  private finalizingAgentRuns = new Set<string>();
+  private finalizedAgentRuns = new Set<string>();
 
   /**
    * Subscribe to the global OpenCode SSE event stream.
    */
   async subscribeGlobal(): Promise<void> {
-    const url = `${OPENCODE_URL}/api/event`;
+    const url = `${OPENCODE_URL}/global/event`;
     await this.connect("global", url);
   }
 
@@ -32,8 +40,7 @@ class SSEAggregator {
    * Subscribe to a specific session's SSE stream.
    */
   async subscribeSession(sessionId: string): Promise<void> {
-    const url = `${OPENCODE_URL}/api/session/${sessionId}/event`;
-    await this.connect(`session:${sessionId}`, url);
+    await this.subscribeGlobal();
   }
 
   private async connect(key: string, url: string): Promise<void> {
@@ -41,7 +48,7 @@ class SSEAggregator {
 
     const conn: SSEConnection = {
       url,
-      eventSource: null,
+      abortController: null,
       reconnectAttempts: 0,
       maxReconnectAttempts: 10,
     };
@@ -52,8 +59,10 @@ class SSEAggregator {
 
   private async startSSE(key: string, conn: SSEConnection): Promise<void> {
     try {
+      conn.abortController = new AbortController();
       const response = await fetch(conn.url, {
         headers: { Accept: "text/event-stream" },
+        signal: conn.abortController.signal,
       });
 
       if (!response.ok || !response.body) {
@@ -76,19 +85,19 @@ class SSEAggregator {
             const lines = buffer.split("\n");
             buffer = lines.pop() || "";
 
-            let eventType = "";
-            let data = "";
+            let eventType = "message";
+            const dataLines: string[] = [];
 
             for (const line of lines) {
               if (line.startsWith("event:")) {
                 eventType = line.slice(6).trim();
               } else if (line.startsWith("data:")) {
-                data = line.slice(5).trim();
-              } else if (line === "" && data) {
+                dataLines.push(line.slice(5).trim());
+              } else if (line === "" && dataLines.length > 0) {
                 // End of event
-                this.handleSSEEvent(eventType, data);
-                eventType = "";
-                data = "";
+                this.handleSSEEvent(eventType, dataLines.join("\n"));
+                eventType = "message";
+                dataLines.length = 0;
               }
             }
           }
@@ -121,11 +130,22 @@ class SSEAggregator {
   private handleSSEEvent(type: string, data: string): void {
     try {
       const parsed = JSON.parse(data);
-      const event = this.transformEvent(type, parsed);
+      const payload =
+        typeof parsed === "object" && parsed && "payload" in parsed
+          ? (parsed.payload as Record<string, unknown>)
+          : null;
+
+      const event = payload
+        ? this.transformEvent(String(payload.type || type), {
+            ...(typeof parsed === "object" && parsed ? parsed : {}),
+            ...(typeof payload.properties === "object" && payload.properties ? payload.properties : {}),
+            rawType: payload.type,
+          })
+        : this.transformEvent(type, parsed as Record<string, unknown>);
+
       if (event) {
-        for (const handler of this.handlers) {
-          handler(event);
-        }
+        this.emit(event);
+        void this.maybeFinalizeRun(event);
       }
     } catch {
       // Malformed event, skip
@@ -142,6 +162,7 @@ class SSEAggregator {
       "session.idle": "session.idle",
       "session.error": "session.error",
       "message.updated": "message.updated",
+      "message.part.updated": "message.updated",
       "tool.execute.before": "tool.execute.before",
       "tool.execute.after": "tool.execute.after",
     };
@@ -149,14 +170,214 @@ class SSEAggregator {
     const mappedType = eventTypeMap[type];
     if (!mappedType) return null;
 
+    const sessionId = this.extractSessionId(type, data);
+    const run = sessionId ? findAgentRunBySessionId(sessionId) : undefined;
+
     return {
       id: crypto.randomUUID(),
       type: mappedType,
       ts: new Date().toISOString(),
-      sessionId: data.sessionId as string | undefined,
-      taskId: data.taskId as string | undefined,
+      sessionId,
+      taskId: run?.taskId,
+      projectId: run?.projectId,
+      agentRunId: run?.agentRunId,
       data,
     };
+  }
+
+  private emit(event: RealtimeEvent): void {
+    for (const handler of this.handlers) {
+      handler(event);
+    }
+  }
+
+  private isCompletionSignal(event: RealtimeEvent): boolean {
+    if (!event.sessionId || !event.agentRunId || !event.taskId || !event.projectId) {
+      return false;
+    }
+
+    if (event.type === "session.idle") {
+      return true;
+    }
+
+    const info =
+      typeof event.data.info === "object" && event.data.info
+        ? (event.data.info as Record<string, unknown>)
+        : undefined;
+    const time =
+      typeof info?.time === "object" && info.time ? (info.time as Record<string, unknown>) : undefined;
+    const completed = time?.completed;
+
+    if (event.type === "session.updated") {
+      return typeof completed === "number" || typeof completed === "string";
+    }
+
+    if (event.type === "message.updated") {
+      return info?.role === "assistant" && (typeof completed === "number" || typeof completed === "string");
+    }
+
+    return false;
+  }
+
+  private async maybeFinalizeRun(event: RealtimeEvent): Promise<void> {
+    if (!this.isCompletionSignal(event) || !event.agentRunId || !event.sessionId || !event.taskId || !event.projectId) {
+      return;
+    }
+
+    const run = findAgentRunBySessionId(event.sessionId);
+    if (!run || run.status !== "running") {
+      return;
+    }
+
+    if (this.finalizedAgentRuns.has(event.agentRunId)) {
+      return;
+    }
+
+    if (this.finalizingAgentRuns.has(event.agentRunId)) {
+      return;
+    }
+
+    this.finalizingAgentRuns.add(event.agentRunId);
+
+    try {
+      const authorization = await createInternalAuthorization();
+      const assistantResult = await this.getLatestAssistantResult(
+        event.sessionId,
+        event.type === "session.idle" ? 20000 : 8000,
+      );
+
+      if (event.type === "session.idle" && !assistantResult.completed) {
+        return;
+      }
+
+      const resultText = assistantResult.text;
+      const taskUpdate = await cpFetch(`/api/tasks/${encodeURIComponent(event.taskId)}`, {
+        method: "PATCH",
+        authorization,
+        body: {
+          status: "completed",
+          sessionId: event.sessionId,
+          agentRunId: event.agentRunId,
+          ...(resultText ? { result: resultText } : {}),
+        },
+      });
+
+      if (!taskUpdate.ok) {
+        throw new Error(`Task completion sync failed: ${taskUpdate.status}`);
+      }
+
+      updateAgentRunStatus(event.agentRunId, "completed");
+  this.finalizedAgentRuns.add(event.agentRunId);
+
+      this.emit({
+        id: crypto.randomUUID(),
+        type: "agent.completed",
+        ts: new Date().toISOString(),
+        sessionId: event.sessionId,
+        taskId: event.taskId,
+        projectId: event.projectId,
+        agentRunId: event.agentRunId,
+        data: {
+          sourceEvent: event.type,
+          ...(resultText ? { result: resultText } : {}),
+        },
+      });
+
+      this.emit({
+        id: crypto.randomUUID(),
+        type: "task.completed",
+        ts: new Date().toISOString(),
+        sessionId: event.sessionId,
+        taskId: event.taskId,
+        projectId: event.projectId,
+        agentRunId: event.agentRunId,
+        data: {
+          status: "completed",
+          sourceEvent: event.type,
+          ...(resultText ? { result: resultText } : {}),
+        },
+      });
+    } catch (error) {
+      console.error(`Failed to finalize agent run ${event.agentRunId}:`, error);
+    } finally {
+      this.finalizingAgentRuns.delete(event.agentRunId);
+    }
+  }
+
+  private async getLatestAssistantResult(
+    sessionId: string,
+    timeoutMs: number,
+  ): Promise<{ text?: string; completed: boolean }> {
+    const deadline = Date.now() + timeoutMs;
+    let fallbackText: string | undefined;
+
+    while (Date.now() < deadline) {
+      const messagesResult = await getSessionMessages(sessionId);
+      if (!messagesResult.ok || !Array.isArray(messagesResult.data)) {
+        return { text: fallbackText, completed: false };
+      }
+
+      for (let index = messagesResult.data.length - 1; index >= 0; index--) {
+        const message = messagesResult.data[index];
+        if (!message || typeof message !== "object") {
+          continue;
+        }
+
+        const info =
+          "info" in message && typeof message.info === "object" && message.info
+            ? (message.info as Record<string, unknown>)
+            : undefined;
+        if (info?.role !== "assistant") {
+          continue;
+        }
+
+        const parts = Array.isArray((message as { parts?: unknown }).parts)
+          ? ((message as { parts: unknown[] }).parts as Record<string, unknown>[])
+          : [];
+        const text = parts
+          .filter((part) => part.type === "text" && typeof part.text === "string")
+          .map((part) => String(part.text).trim())
+          .filter(Boolean)
+          .join("\n\n");
+
+        if (text) {
+          fallbackText = text;
+        }
+
+        const time =
+          typeof info?.time === "object" && info.time ? (info.time as Record<string, unknown>) : undefined;
+        const completed = time?.completed;
+        if (text && (typeof completed === "number" || typeof completed === "string")) {
+          return { text, completed: true };
+        }
+
+        break;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+
+    return { text: fallbackText, completed: false };
+  }
+
+  private extractSessionId(type: string, data: Record<string, unknown>): string | undefined {
+    if (typeof data.sessionId === "string") return data.sessionId;
+    if (typeof data.sessionID === "string") return data.sessionID;
+
+    const info = typeof data.info === "object" && data.info ? (data.info as Record<string, unknown>) : undefined;
+    if (type.startsWith("session.") && typeof info?.id === "string") {
+      return info.id;
+    }
+    if (typeof info?.sessionID === "string") {
+      return info.sessionID;
+    }
+
+    const part = typeof data.part === "object" && data.part ? (data.part as Record<string, unknown>) : undefined;
+    if (typeof part?.sessionID === "string") {
+      return part.sessionID;
+    }
+
+    return undefined;
   }
 
   onEvent(handler: EventHandler): () => void {
@@ -167,7 +388,7 @@ class SSEAggregator {
   disconnect(key: string): void {
     const conn = this.connections.get(key);
     if (conn) {
-      conn.eventSource?.close();
+      conn.abortController?.abort();
       this.connections.delete(key);
     }
   }
