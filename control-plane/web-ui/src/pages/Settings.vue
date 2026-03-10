@@ -3,8 +3,62 @@
     <a-typography-title :level="3">设置</a-typography-title>
 
     <a-tabs :activeKey="activeTab" @update:activeKey="setActiveTab">
+      <a-tab-pane key="account" tab="账户信息">
+        <a-row :gutter="16">
+          <a-col :xs="24" :lg="12">
+            <a-card title="基本信息">
+              <a-alert
+                v-if="authStore.user?.mustChangePassword"
+                type="warning"
+                show-icon
+                message="当前账户被标记为首次登录必须改密。请先在下方完成密码更新。"
+                style="margin-bottom: 16px"
+              />
+              <a-form layout="vertical">
+                <a-form-item label="用户名">
+                  <a-input :value="authStore.user?.username || ''" disabled />
+                </a-form-item>
+                <a-form-item label="显示名称" required>
+                  <a-input :value="accountProfile.displayName" :maxlength="100" @update:value="accountProfile.displayName = String($event ?? '')" />
+                </a-form-item>
+                <a-form-item label="邮箱">
+                  <a-input :value="accountProfile.email" :maxlength="200" placeholder="可选" @update:value="accountProfile.email = String($event ?? '')" />
+                </a-form-item>
+                <a-form-item label="全局角色">
+                  <a-input :value="authStore.user?.role || ''" disabled />
+                </a-form-item>
+                <a-form-item label="创建时间">
+                  <a-input :value="formatAccountTime(authStore.user?.createdAt)" disabled />
+                </a-form-item>
+                <a-form-item label="最近登录时间">
+                  <a-input :value="formatAccountTime(authStore.user?.lastLoginAt)" disabled />
+                </a-form-item>
+                <a-button type="primary" :loading="accountSaving" @click="saveAccountProfile">保存资料</a-button>
+              </a-form>
+            </a-card>
+          </a-col>
+          <a-col :xs="24" :lg="12">
+            <a-card title="修改密码">
+              <a-form layout="vertical">
+                <a-form-item label="当前密码" required>
+                  <a-input-password :value="passwordProfile.currentPassword" autocomplete="current-password" @update:value="passwordProfile.currentPassword = String($event ?? '')" />
+                </a-form-item>
+                <a-form-item label="新密码" required>
+                  <a-input-password :value="passwordProfile.newPassword" autocomplete="new-password" @update:value="passwordProfile.newPassword = String($event ?? '')" />
+                  <div style="color: #888; font-size: 12px; margin-top: 4px">{{ PASSWORD_POLICY_HINT }}</div>
+                </a-form-item>
+                <a-form-item label="确认新密码" required>
+                  <a-input-password :value="passwordProfile.confirmPassword" autocomplete="new-password" @update:value="passwordProfile.confirmPassword = String($event ?? '')" />
+                </a-form-item>
+                <a-button type="primary" :loading="passwordSaving" @click="saveMyPassword">更新密码</a-button>
+              </a-form>
+            </a-card>
+          </a-col>
+        </a-row>
+      </a-tab-pane>
+
       <!-- ═══════════ 模型 ═══════════ -->
-      <a-tab-pane key="models" tab="模型">
+      <a-tab-pane v-if="isSystemAdmin" key="models" tab="模型">
         <a-spin :spinning="modelsLoading">
           <a-card title="快速预设">
             <a-space>
@@ -226,7 +280,7 @@
       </a-tab-pane>
 
       <!-- ═══════════ Agent ═══════════ -->
-      <a-tab-pane key="agents" tab="Agent">
+      <a-tab-pane v-if="isSystemAdmin" key="agents" tab="Agent">
         <a-row :gutter="16">
           <a-col :span="6">
             <a-menu :selectedKeys="agentSelected" mode="inline" @click="onAgentSelect">
@@ -285,7 +339,7 @@
       </a-tab-pane>
 
       <!-- ═══════════ Skill ═══════════ -->
-      <a-tab-pane key="skills" tab="Skill">
+      <a-tab-pane v-if="isSystemAdmin" key="skills" tab="Skill">
         <a-row :gutter="16">
           <a-col :span="6">
             <a-menu :selectedKeys="skillSelected" mode="inline" @click="onSkillSelect">
@@ -331,7 +385,7 @@
       </a-tab-pane>
 
       <!-- ═══════════ MCP ═══════════ -->
-      <a-tab-pane key="mcp" tab="MCP 服务">
+      <a-tab-pane v-if="isSystemAdmin" key="mcp" tab="MCP 服务">
         <a-spin :spinning="mcpLoading">
           <a-row :gutter="[16, 16]">
             <a-col :xs="24" :md="8" v-for="(server, name) in mcpData" :key="name">
@@ -388,7 +442,7 @@
       </a-tab-pane>
 
       <!-- ═══════════ 命令 ═══════════ -->
-      <a-tab-pane key="commands" tab="命令">
+      <a-tab-pane v-if="isSystemAdmin" key="commands" tab="命令">
         <a-row :gutter="16">
           <a-col :span="6">
             <a-menu :selectedKeys="commandSelected" mode="inline" @click="onCommandSelect">
@@ -422,7 +476,7 @@
       </a-tab-pane>
 
       <!-- ═══════════ 安全 ═══════════ -->
-      <a-tab-pane key="security" tab="安全基线">
+      <a-tab-pane v-if="isSystemAdmin" key="security" tab="安全基线">
         <a-spin :spinning="securityLoading">
           <a-card title="SECURITY-BASELINE.md">
             <a-textarea :value="securityRaw" :rows="22" style="font-family: monospace; font-size: 13px" @update:value="securityRaw = String($event ?? '')" />
@@ -432,7 +486,7 @@
       </a-tab-pane>
 
       <!-- ═══════════ 插件 ═══════════ -->
-      <a-tab-pane key="plugins" tab="插件">
+      <a-tab-pane v-if="isSystemAdmin" key="plugins" tab="插件">
         <a-card title="已注册插件" size="small">
           <template #extra>
             <a-space>
@@ -492,7 +546,7 @@
       </a-tab-pane>
 
       <!-- ═══════════ 编排策略 ═══════════ -->
-      <a-tab-pane key="strategy" tab="编排策略">
+      <a-tab-pane v-if="isSystemAdmin" key="strategy" tab="编排策略">
         <a-spin :spinning="strategyLoading">
           <a-card title="意图分类 → Agent 映射" size="small">
             <a-table :dataSource="strategyTableData" :columns="strategyAgentColumns" :pagination="false" rowKey="category" size="small">
@@ -505,7 +559,7 @@
                     mode="tags"
                     :value="record.agents"
                     style="width: 100%"
-                    @change="(v: unknown) => updateStrategyAgent(record.category, v as string[])"
+                    @change="(value) => handleStrategyAgentsChange(record.category, value)"
                   />
                 </template>
                 <template v-else-if="column.dataIndex === 'model'">
@@ -513,7 +567,7 @@
                     :value="record.model"
                     size="small"
                     placeholder="使用默认模型"
-                    @change="(e: Event) => updateStrategyModel(record.category, (e.target as HTMLInputElement).value)"
+                    @update:value="(value) => updateStrategyModel(record.category, String(value ?? ''))"
                   />
                 </template>
               </template>
@@ -526,12 +580,93 @@
             </a-form-item>
           </a-card>
 
+          <a-row :gutter="16" style="margin-top: 16px">
+            <a-col :xs="24" :xl="12">
+              <a-card title="前置评估" size="small">
+                <a-form layout="vertical">
+                  <a-form-item label="启用任务开始前评估">
+                    <a-switch v-model:checked="strategyData.preExecutionReview.enabled" />
+                  </a-form-item>
+                  <a-form-item label="评估 Agent">
+                    <a-input
+                      :value="strategyData.preExecutionReview.agent"
+                      placeholder="prometheus-enterprise"
+                      @update:value="strategyData.preExecutionReview.agent = String($event ?? '')"
+                    />
+                  </a-form-item>
+                  <a-form-item label="指定模型">
+                    <a-input
+                      :value="strategyData.preExecutionReview.model"
+                      placeholder="留空使用系统默认"
+                      @update:value="strategyData.preExecutionReview.model = String($event ?? '')"
+                    />
+                  </a-form-item>
+                  <a-form-item label="超时 (ms)">
+                    <a-input-number
+                      :value="strategyData.preExecutionReview.timeoutMs"
+                      :min="1000"
+                      :step="1000"
+                      style="width: 100%"
+                      @update:value="strategyData.preExecutionReview.timeoutMs = Number($event ?? 15000)"
+                    />
+                  </a-form-item>
+                  <a-form-item label="提示词模板">
+                    <a-textarea
+                      :value="strategyData.preExecutionReview.promptTemplate"
+                      :rows="8"
+                      @update:value="strategyData.preExecutionReview.promptTemplate = String($event ?? '')"
+                    />
+                  </a-form-item>
+                </a-form>
+              </a-card>
+            </a-col>
+            <a-col :xs="24" :xl="12">
+              <a-card title="后置评估" size="small">
+                <a-form layout="vertical">
+                  <a-form-item label="启用任务完成后评估">
+                    <a-switch v-model:checked="strategyData.postExecutionReview.enabled" />
+                  </a-form-item>
+                  <a-form-item label="评估 Agent">
+                    <a-input
+                      :value="strategyData.postExecutionReview.agent"
+                      placeholder="oracle-enterprise"
+                      @update:value="strategyData.postExecutionReview.agent = String($event ?? '')"
+                    />
+                  </a-form-item>
+                  <a-form-item label="指定模型">
+                    <a-input
+                      :value="strategyData.postExecutionReview.model"
+                      placeholder="留空使用系统默认"
+                      @update:value="strategyData.postExecutionReview.model = String($event ?? '')"
+                    />
+                  </a-form-item>
+                  <a-form-item label="超时 (ms)">
+                    <a-input-number
+                      :value="strategyData.postExecutionReview.timeoutMs"
+                      :min="1000"
+                      :step="1000"
+                      style="width: 100%"
+                      @update:value="strategyData.postExecutionReview.timeoutMs = Number($event ?? 15000)"
+                    />
+                  </a-form-item>
+                  <a-form-item label="提示词模板">
+                    <a-textarea
+                      :value="strategyData.postExecutionReview.promptTemplate"
+                      :rows="8"
+                      @update:value="strategyData.postExecutionReview.promptTemplate = String($event ?? '')"
+                    />
+                  </a-form-item>
+                </a-form>
+              </a-card>
+            </a-col>
+          </a-row>
+
           <a-button type="primary" style="margin-top: 16px" :loading="strategySaving" @click="saveStrategy">保存编排策略</a-button>
         </a-spin>
       </a-tab-pane>
 
       <!-- ═══════════ 恢复策略 ═══════════ -->
-      <a-tab-pane key="policy" tab="恢复策略">
+      <a-tab-pane v-if="isSystemAdmin" key="policy" tab="恢复策略">
         <a-spin :spinning="policyLoading">
           <a-card title="失败恢复与续跑策略" size="small">
             <a-form layout="vertical">
@@ -571,6 +706,67 @@
           <a-button type="primary" style="margin-top: 16px" :loading="policySaving" @click="savePolicy">保存恢复策略</a-button>
         </a-spin>
       </a-tab-pane>
+
+      <a-tab-pane v-if="isSystemAdmin" key="maintenance" tab="运维">
+        <a-card title="运行中任务 Reconcile" size="small">
+          <a-alert
+            type="info"
+            show-icon
+            message="用于人工修复假 running 任务"
+            description="会扫描当前持久化的 running 任务，尝试补全已完成结果、恢复仍在进行的会话，或将明显陈旧的假 running 任务标记为失败。"
+            style="margin-bottom: 16px"
+          />
+          <a-space direction="vertical" style="width: 100%" :size="16">
+            <a-space>
+              <a-button type="primary" :loading="reconcileLoading" @click="runRunningTaskReconcile">手动触发 Reconcile</a-button>
+              <a-button :loading="reconcileAuditLoading" @click="loadReconcileAuditEvents">刷新记录</a-button>
+              <span style="color: #888; font-size: 12px">仅管理员可用，不需要重启 BFF。</span>
+            </a-space>
+
+            <a-descriptions bordered size="small" :column="2">
+              <a-descriptions-item label="最近一次触发时间">{{ formatAccountTime(latestReconcileAudit?.ts) }}</a-descriptions-item>
+              <a-descriptions-item label="最近一次触发人">{{ formatReconcileActor(latestReconcileAudit?.userId) }}</a-descriptions-item>
+              <a-descriptions-item label="最近一次运行时状态">{{ latestReconcileRuntimeLabel }}</a-descriptions-item>
+              <a-descriptions-item label="最近一次扫描数">{{ latestReconcileScanned }}</a-descriptions-item>
+            </a-descriptions>
+
+            <a-descriptions v-if="reconcileSummary" bordered size="small" :column="2">
+              <a-descriptions-item label="扫描任务数">{{ reconcileSummary.scanned }}</a-descriptions-item>
+              <a-descriptions-item label="运行时可用">{{ reconcileSummary.runtimeAvailable ? '是' : '否' }}</a-descriptions-item>
+              <a-descriptions-item label="补全完成">{{ reconcileSummary.completed }}</a-descriptions-item>
+              <a-descriptions-item label="修正失败">{{ reconcileSummary.failed }}</a-descriptions-item>
+              <a-descriptions-item label="恢复内存态">{{ reconcileSummary.recovered }}</a-descriptions-item>
+              <a-descriptions-item label="跳过">{{ reconcileSummary.skipped }}</a-descriptions-item>
+            </a-descriptions>
+
+            <a-card title="最近手动修复记录" size="small">
+              <a-table
+                :dataSource="reconcileAuditEvents"
+                :columns="reconcileAuditColumns"
+                :pagination="false"
+                :loading="reconcileAuditLoading"
+                rowKey="id"
+                size="small"
+              >
+                <template #bodyCell="{ column, record }">
+                  <template v-if="column.dataIndex === 'ts'">
+                    {{ formatAccountTime(record.ts) }}
+                  </template>
+                  <template v-else-if="column.dataIndex === 'userId'">
+                    {{ formatReconcileActor(record.userId) }}
+                  </template>
+                  <template v-else-if="column.dataIndex === 'runtimeAvailable'">
+                    {{ getAuditRuntimeLabel(record) }}
+                  </template>
+                  <template v-else-if="column.dataIndex === 'summary'">
+                    {{ getAuditSummaryText(record) }}
+                  </template>
+                </template>
+              </a-table>
+            </a-card>
+          </a-space>
+        </a-card>
+      </a-tab-pane>
     </a-tabs>
   </div>
 </template>
@@ -579,8 +775,10 @@
 import { message } from "ant-design-vue";
 import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
 import {
+  type AdminUser,
   type AgentDetail,
   type AgentSummary,
+  type AuditEvent,
   type CommandDetail,
   type CommandSummary,
   type ContinuationPolicy,
@@ -589,6 +787,7 @@ import {
   type OrchestrationStrategy,
   type PluginCompatResult,
   type PluginInfo,
+  type RunningTaskReconcileSummary,
   type SkillDetail,
   type SkillSummary,
   checkPluginCompatibility,
@@ -603,12 +802,16 @@ import {
   getCopilotStatus,
   getMcpConfig,
   getModelsConfig,
+  getMyProfile,
   getOrchestrationStrategy,
   getSecurityBaseline,
   getSkill,
   installPlugin,
+  listAuditEvents,
   listPlugins,
+  listUsers,
   pollCopilotToken,
+  reconcileRunningTasks,
   requestCopilotDeviceCode,
   uninstallPlugin,
   updateAgent,
@@ -616,16 +819,173 @@ import {
   updateContinuationPolicy,
   updateMcpConfig,
   updateModelsConfig,
+  updateMyProfile,
   updateOrchestrationStrategy,
   updateSecurityBaseline,
   updateSkill,
 } from "../lib/api";
+import { PASSWORD_POLICY_HINT, validatePasswordPolicy } from "../lib/password-policy";
+import { useAuthStore } from "../stores/auth";
 
 // ── Tab ────────────────────────────────────────────────────────────
-const activeTab = ref("models");
+const authStore = useAuthStore();
+const isSystemAdmin = computed(
+  () => authStore.user?.role === "platform_admin" || authStore.user?.role === "org_admin",
+);
+const activeTab = ref(isSystemAdmin.value ? "models" : "account");
 
+const reconcileLoading = ref(false);
+const reconcileSummary = ref<RunningTaskReconcileSummary | null>(null);
+const reconcileAuditLoading = ref(false);
+const reconcileAuditEvents = ref<AuditEvent[]>([]);
+const adminUsers = ref<AdminUser[]>([]);
 function setActiveTab(value: unknown) {
   activeTab.value = String(value);
+}
+
+const latestReconcileAudit = computed(() => reconcileAuditEvents.value[0] ?? null);
+
+const reconcileAuditColumns = [
+  { title: "时间", dataIndex: "ts", width: "24%" },
+  { title: "触发人", dataIndex: "userId", width: "22%" },
+  { title: "运行时", dataIndex: "runtimeAvailable", width: "14%" },
+  { title: "摘要", dataIndex: "summary", width: "40%" },
+];
+
+const latestReconcileRuntimeLabel = computed(() =>
+  latestReconcileAudit.value ? getAuditRuntimeLabel(latestReconcileAudit.value) : "-",
+);
+
+const latestReconcileScanned = computed(() => {
+  if (!latestReconcileAudit.value) return "-";
+  return String(getAuditDetailNumber(latestReconcileAudit.value, "scanned"));
+});
+
+const accountSaving = ref(false);
+const passwordSaving = ref(false);
+const accountProfile = reactive({ displayName: "", email: "" });
+const passwordProfile = reactive({ currentPassword: "", newPassword: "", confirmPassword: "" });
+
+function syncAccountProfile() {
+  accountProfile.displayName = authStore.user?.displayName || "";
+  accountProfile.email = authStore.user?.email || "";
+}
+
+function formatAccountTime(value?: string | null) {
+  if (!value) return "-";
+  return new Date(value).toLocaleString();
+}
+
+function findAdminUser(userId?: string | null) {
+  if (!userId) return null;
+  return adminUsers.value.find((user) => user.id === userId) ?? null;
+}
+
+function formatReconcileActor(userId?: string | null) {
+  if (!userId) return "-";
+  const user = findAdminUser(userId);
+  if (!user) return userId;
+  return `${user.displayName} (${user.username})`;
+}
+
+function getAuditDetailRecord(event: unknown) {
+  const detail =
+    event && typeof event === "object" && "detail" in event
+      ? (event as { detail?: unknown }).detail
+      : undefined;
+  return detail && typeof detail === "object" ? (detail as Record<string, unknown>) : {};
+}
+
+function getAuditDetailNumber(event: unknown, key: string) {
+  const value = getAuditDetailRecord(event)[key];
+  return typeof value === "number" ? value : 0;
+}
+
+function getAuditRuntimeLabel(event: unknown) {
+  const value = getAuditDetailRecord(event).runtimeAvailable;
+  return value === true ? "可用" : value === false ? "不可用" : "-";
+}
+
+function getAuditSummaryText(event: unknown) {
+  return `扫描 ${getAuditDetailNumber(event, "scanned")}，补全 ${getAuditDetailNumber(event, "completed")}，失败 ${getAuditDetailNumber(event, "failed")}，恢复 ${getAuditDetailNumber(event, "recovered")}，跳过 ${getAuditDetailNumber(event, "skipped")}`;
+}
+
+async function loadAdminUsers() {
+  try {
+    adminUsers.value = await listUsers();
+  } catch {
+    adminUsers.value = [];
+  }
+}
+
+async function loadReconcileAuditEvents() {
+  reconcileAuditLoading.value = true;
+  try {
+    const result = await listAuditEvents({
+      type: "task.running.reconciled",
+      limit: 10,
+    });
+    reconcileAuditEvents.value = result.data;
+  } catch {
+    reconcileAuditEvents.value = [];
+  } finally {
+    reconcileAuditLoading.value = false;
+  }
+}
+
+async function saveAccountProfile() {
+  if (!accountProfile.displayName.trim()) {
+    message.warning("显示名称不能为空");
+    return;
+  }
+
+  accountSaving.value = true;
+  try {
+    const profile = await updateMyProfile({
+      displayName: accountProfile.displayName.trim(),
+      email: accountProfile.email.trim() || null,
+    });
+    authStore.setUser(profile);
+    syncAccountProfile();
+    message.success("账户资料已更新");
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : "更新失败");
+  } finally {
+    accountSaving.value = false;
+  }
+}
+
+async function saveMyPassword() {
+  if (!passwordProfile.currentPassword || !passwordProfile.newPassword) {
+    message.warning("请填写当前密码和新密码");
+    return;
+  }
+  const policyResult = validatePasswordPolicy(passwordProfile.newPassword);
+  if (!policyResult.valid) {
+    message.warning(policyResult.errors[0]);
+    return;
+  }
+  if (passwordProfile.newPassword !== passwordProfile.confirmPassword) {
+    message.warning("两次输入的新密码不一致");
+    return;
+  }
+
+  passwordSaving.value = true;
+  try {
+    const profile = await updateMyProfile({
+      currentPassword: passwordProfile.currentPassword,
+      newPassword: passwordProfile.newPassword,
+    });
+    authStore.setUser(profile);
+    passwordProfile.currentPassword = "";
+    passwordProfile.newPassword = "";
+    passwordProfile.confirmPassword = "";
+    message.success("密码已更新");
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : "更新密码失败");
+  } finally {
+    passwordSaving.value = false;
+  }
 }
 
 // ── Models ─────────────────────────────────────────────────────────
@@ -1269,6 +1629,20 @@ const strategyData = reactive<OrchestrationStrategy>({
   categoryAgentMap: {},
   categoryModelMap: {},
   enablePipeline: true,
+  preExecutionReview: {
+    enabled: false,
+    agent: "prometheus-enterprise",
+    model: "",
+    promptTemplate: "",
+    timeoutMs: 15000,
+  },
+  postExecutionReview: {
+    enabled: false,
+    agent: "oracle-enterprise",
+    model: "",
+    promptTemplate: "",
+    timeoutMs: 15000,
+  },
 });
 
 const strategyTableData = computed(() =>
@@ -1290,6 +1664,10 @@ function updateStrategyAgent(category: string, agents: string[]) {
   strategyData.categoryAgentMap[category] = agents;
 }
 
+function handleStrategyAgentsChange(category: string, value: unknown) {
+  updateStrategyAgent(category, Array.isArray(value) ? value.map((item) => String(item)) : []);
+}
+
 function updateStrategyModel(category: string, model: string) {
   strategyData.categoryModelMap[category] = model;
 }
@@ -1301,6 +1679,8 @@ async function saveStrategy() {
       categoryAgentMap: strategyData.categoryAgentMap,
       categoryModelMap: strategyData.categoryModelMap,
       enablePipeline: strategyData.enablePipeline,
+      preExecutionReview: strategyData.preExecutionReview,
+      postExecutionReview: strategyData.postExecutionReview,
     });
     message.success("编排策略已保存");
   } catch {
@@ -1332,6 +1712,22 @@ async function savePolicy() {
     message.error("保存失败");
   } finally {
     policySaving.value = false;
+  }
+}
+
+async function runRunningTaskReconcile() {
+  reconcileLoading.value = true;
+  try {
+    const result = await reconcileRunningTasks();
+    reconcileSummary.value = result.data;
+    await loadReconcileAuditEvents();
+    message.success(
+      `Reconcile 完成：扫描 ${result.data.scanned}，补全 ${result.data.completed}，失败 ${result.data.failed}，恢复 ${result.data.recovered}`,
+    );
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : "触发 reconcile 失败");
+  } finally {
+    reconcileLoading.value = false;
   }
 }
 
@@ -1419,6 +1815,19 @@ async function saveSecurity() {
 
 // ── Init ───────────────────────────────────────────────────────────
 onMounted(async () => {
+  try {
+    const profile = await getMyProfile();
+    authStore.setUser(profile);
+    syncAccountProfile();
+  } catch {
+    message.error("加载账户信息失败");
+  }
+
+  if (!isSystemAdmin.value) {
+    activeTab.value = "account";
+    return;
+  }
+
   // Load overview for quick lists
   try {
     const overview = await getConfigOverview();
@@ -1436,6 +1845,8 @@ onMounted(async () => {
   } catch {
     message.error("加载配置概览失败");
   }
+
+  await Promise.allSettled([loadAdminUsers(), loadReconcileAuditEvents()]);
 
   // Load models providers separately (overview doesn't include them)
   try {

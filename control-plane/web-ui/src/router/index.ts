@@ -62,6 +62,11 @@ const routes: RouteRecordRaw[] = [
         name: "Settings",
         component: () => import("../pages/Settings.vue"),
       },
+      {
+        path: "users",
+        name: "Users",
+        component: () => import("../pages/Users.vue"),
+      },
     ],
   },
 ];
@@ -75,14 +80,6 @@ router.beforeEach((to) => {
   const auth = useAuthStore();
   if (to.meta.requiresAuth && !auth.token) {
     return { name: "Login" };
-  }
-
-  if (to.name === "Settings") {
-    const role = auth.user?.role;
-    const isSystemAdmin = role === "platform_admin" || role === "org_admin";
-    if (!isSystemAdmin) {
-      return { name: "Dashboard" };
-    }
   }
 });
 

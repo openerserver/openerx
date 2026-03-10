@@ -11,6 +11,10 @@ import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
 import { z } from "zod";
 import { parseFrontmatter, serializeFrontmatter } from "../../lib/frontmatter";
+import {
+  readOrchestrationStrategy,
+  writeOrchestrationStrategy,
+} from "../../lib/orchestration-strategy";
 import type { JWTPayload } from "../../middleware/auth";
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -286,6 +290,27 @@ configRoutes.get("/models", (c) => {
   });
 });
 
+// GET /config/models/list — model list only (available to all authenticated users)
+configRoutes.get("/models/list", (c) => {
+  const config = readOpencodeJson();
+  return c.json({
+    data: (config.models as Record<string, unknown>)?.list || [],
+  });
+});
+
+// GET /config/models/available — list configured model IDs from opencode.json provider + model config
+// Used for pre-flight validation before task execution
+configRoutes.get("/models/available", (c) => {
+  const config = readOpencodeJson();
+  const providers = Object.keys((config.provider as Record<string, unknown>) || {});
+  const modelList = ((config.models as Record<string, unknown>)?.list || []) as Array<
+    Record<string, unknown>
+  >;
+  const modelIds = modelList.map((m) => (typeof m.id === "string" ? m.id : "")).filter(Boolean);
+  const defaultModel = typeof config.model === "string" ? config.model : null;
+  return c.json({ data: { providers, modelIds, defaultModel } });
+});
+
 configRoutes.put(
   "/models",
   zValidator(
@@ -540,63 +565,33 @@ configRoutes.get("/overview", (c) => {
 // ORCHESTRATION STRATEGY CONFIG
 // ═══════════════════════════════════════════════════════════════════
 
-const STRATEGY_FILE = join(OPENCODE_STATE_DIR, "orchestration-strategy.json");
-
-interface OrchestrationStrategy {
-  categoryAgentMap: Record<string, string[]>;
-  categoryModelMap: Record<string, string>;
-  enablePipeline: boolean;
-}
-
-const DEFAULT_STRATEGY: OrchestrationStrategy = {
-  categoryAgentMap: {
-    quick: ["explore-enterprise"],
-    deep: ["hephaestus-enterprise"],
-    ops: ["oracle-enterprise"],
-    security: ["oracle-enterprise", "hephaestus-enterprise"],
-    architecture: ["prometheus-enterprise", "oracle-enterprise"],
-  },
-  categoryModelMap: {
-    quick: "",
-    deep: "",
-    ops: "",
-    security: "",
-    architecture: "",
-  },
-  enablePipeline: true,
-};
-
-function readStrategy(): OrchestrationStrategy {
-  if (!existsSync(STRATEGY_FILE)) return DEFAULT_STRATEGY;
-  try {
-    return JSON.parse(readFileSync(STRATEGY_FILE, "utf-8"));
-  } catch {
-    return DEFAULT_STRATEGY;
-  }
-}
-
-function writeStrategy(data: OrchestrationStrategy): void {
-  if (!existsSync(OPENCODE_STATE_DIR)) mkdirSync(OPENCODE_STATE_DIR, { recursive: true });
-  writeFileSync(STRATEGY_FILE, JSON.stringify(data, null, 2), "utf-8");
-}
-
 configRoutes.get("/orchestration-strategy", (c) => {
   const adminErr = requireSystemAdmin(c.get("user"));
   if (adminErr) return c.json({ error: adminErr }, 403);
-  return c.json({ data: readStrategy() });
+  return c.json({ data: readOrchestrationStrategy() });
+});
+
+const workflowHookSchema = z.object({
+  enabled: z.boolean(),
+  agent: z.string(),
+  model: z.string(),
+  promptTemplate: z.string().min(1),
+  timeoutMs: z.number().int().positive(),
 });
 
 const strategySchema = z.object({
   categoryAgentMap: z.record(z.string(), z.array(z.string())),
   categoryModelMap: z.record(z.string(), z.string()),
   enablePipeline: z.boolean(),
+  preExecutionReview: workflowHookSchema,
+  postExecutionReview: workflowHookSchema,
 });
 
 configRoutes.put("/orchestration-strategy", zValidator("json", strategySchema), (c) => {
   const adminErr = requireSystemAdmin(c.get("user"));
   if (adminErr) return c.json({ error: adminErr }, 403);
   const body = c.req.valid("json");
-  writeStrategy(body);
+  writeOrchestrationStrategy(body);
   return c.json({ ok: true });
 });
 

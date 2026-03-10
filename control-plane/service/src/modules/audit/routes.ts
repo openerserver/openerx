@@ -1,11 +1,13 @@
+import { zValidator } from "@hono/zod-validator";
 import { and, desc, eq, gte, lte } from "drizzle-orm";
 import { Hono } from "hono";
+import { z } from "zod";
 import { db } from "../../db";
 import { auditEvents } from "../../db/schema";
-import { authMiddleware } from "../../middleware/auth";
+import { type AppEnv, authMiddleware } from "../../middleware/auth";
 import { requireRole } from "../../middleware/rbac";
 
-export const auditRoutes = new Hono();
+export const auditRoutes = new Hono<AppEnv>();
 
 auditRoutes.use("*", authMiddleware);
 auditRoutes.use("*", requireRole("developer"));
@@ -62,6 +64,44 @@ auditRoutes.get("/trace/:traceId", async (c) => {
     .orderBy(auditEvents.ts);
 
   return c.json(result);
+});
+
+const createAuditEventSchema = z.object({
+  projectId: z.string().min(1).optional(),
+  sessionId: z.string().min(1).optional(),
+  taskId: z.string().min(1).optional(),
+  agentRunId: z.string().min(1).optional(),
+  eventType: z.string().min(1).max(100),
+  action: z.string().min(1).max(100),
+  target: z.string().max(500).optional(),
+  detail: z.record(z.unknown()).optional(),
+  riskLevel: z.enum(["low", "medium", "high", "critical"]).optional(),
+  traceId: z.string().min(1).max(200).optional(),
+});
+
+// POST /api/audit
+auditRoutes.post("/", zValidator("json", createAuditEventSchema), async (c) => {
+  const user = c.get("user");
+  if (user.role !== "platform_admin" && user.role !== "org_admin" && user.role !== "admin") {
+    return c.json({ error: "Requires org_admin role" }, 403);
+  }
+
+  const body = c.req.valid("json");
+  await recordAuditEvent({
+    userId: user.sub,
+    projectId: body.projectId,
+    sessionId: body.sessionId,
+    taskId: body.taskId,
+    agentRunId: body.agentRunId,
+    eventType: body.eventType,
+    action: body.action,
+    target: body.target,
+    detail: body.detail,
+    riskLevel: body.riskLevel,
+    traceId: body.traceId,
+  });
+
+  return c.json({ ok: true }, 201);
 });
 
 /**

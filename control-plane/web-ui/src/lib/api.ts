@@ -37,12 +37,162 @@ export async function login(username: string, password: string) {
       id: string;
       username: string;
       displayName: string;
+      email?: string | null;
       role: string;
+      accountStatus?: "active" | "disabled";
+      mustChangePassword?: boolean;
+      lastLoginAt?: string | null;
+      createdAt?: string;
       projects?: Array<{ id: string; role: string }>;
     };
   }>("/auth/login", {
     method: "POST",
     body: JSON.stringify({ username, password }),
+  });
+}
+
+export interface CurrentUserProfile {
+  id: string;
+  username: string;
+  displayName: string;
+  email: string | null;
+  role: string;
+  accountStatus: "active" | "disabled";
+  mustChangePassword: boolean;
+  lastLoginAt: string | null;
+  createdAt: string;
+  projects: Array<{
+    id: string;
+    role: string;
+    name?: string;
+    slug?: string;
+    orgId?: string | null;
+    orgName?: string | null;
+  }>;
+}
+
+export async function getMyProfile() {
+  return request<CurrentUserProfile>("/auth/me");
+}
+
+export async function updateMyProfile(data: {
+  displayName?: string;
+  email?: string | null;
+  currentPassword?: string;
+  newPassword?: string;
+}) {
+  return request<CurrentUserProfile>("/auth/me", {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  });
+}
+
+export type UserAccountStatus = "active" | "disabled";
+export type UserRole = "platform_admin" | "org_admin" | "project_admin" | "developer" | "viewer";
+
+export interface AdminUser {
+  id: string;
+  username: string;
+  displayName: string;
+  email: string | null;
+  role: UserRole;
+  accountStatus: UserAccountStatus;
+  mustChangePassword: boolean;
+  lastLoginAt: string | null;
+  createdAt: string;
+  projects?: Array<{ projectId: string; projectName: string; role: string }>;
+}
+
+export interface AuditEvent {
+  id: string;
+  ts: string;
+  userId: string | null;
+  projectId: string | null;
+  sessionId: string | null;
+  taskId: string | null;
+  agentRunId: string | null;
+  eventType: string;
+  action: string;
+  target: string | null;
+  detail?: Record<string, unknown> | null;
+  riskLevel: "low" | "medium" | "high" | "critical";
+  traceId: string | null;
+}
+
+export async function listUsers() {
+  return request<AdminUser[]>("/users");
+}
+
+export async function listAuditEvents(params?: {
+  projectId?: string;
+  userId?: string;
+  from?: string;
+  to?: string;
+  type?: string;
+  limit?: number;
+  offset?: number;
+}) {
+  const query = new URLSearchParams();
+  if (params?.projectId) query.set("projectId", params.projectId);
+  if (params?.userId) query.set("userId", params.userId);
+  if (params?.from) query.set("from", params.from);
+  if (params?.to) query.set("to", params.to);
+  if (params?.type) query.set("type", params.type);
+  if (params?.limit !== undefined) query.set("limit", String(params.limit));
+  if (params?.offset !== undefined) query.set("offset", String(params.offset));
+  return request<{ data: AuditEvent[]; limit: number; offset: number }>(
+    `/audit${query.toString() ? `?${query.toString()}` : ""}`,
+  );
+}
+
+export async function createUser(data: {
+  username: string;
+  password: string;
+  displayName: string;
+  email?: string | null;
+  mustChangePassword?: boolean;
+  role?: UserRole;
+}) {
+  return request<AdminUser>("/users", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateUser(
+  userId: string,
+  data: { displayName?: string; email?: string | null; password?: string },
+) {
+  return request<{ id: string; displayName?: string; email?: string | null; password?: string }>(
+    `/users/${userId}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    },
+  );
+}
+
+export async function setUserRole(userId: string, role: UserRole) {
+  return request<{ id: string; role: UserRole }>(`/users/${userId}/role`, {
+    method: "PUT",
+    body: JSON.stringify({ role }),
+  });
+}
+
+export async function setUserStatus(userId: string, status: UserAccountStatus) {
+  return request<{ id: string; accountStatus: UserAccountStatus }>(`/users/${userId}/status`, {
+    method: "PUT",
+    body: JSON.stringify({ status }),
+  });
+}
+
+export async function resetUserPassword(
+  userId: string,
+  data: { password: string; mustChangePassword?: boolean },
+) {
+  return request<{ id: string; mustChangePassword: boolean }>(`/users/${userId}/password`, {
+    method: "PUT",
+    body: JSON.stringify(data),
   });
 }
 
@@ -104,9 +254,42 @@ export interface Task {
   result?: string;
   category?: string;
   strategy?: string;
+  repoId?: string | null;
+  workspaceRoot?: string | null;
+  baseRevision?: string | null;
+  workingBranch?: string | null;
+  repoName?: string | null;
+  remoteUrl?: string | null;
+  selectedModel?: string | null;
+  // Identity snapshot
+  credentialId?: string | null;
+  credentialLabel?: string | null;
+  gitAuthorName?: string | null;
+  gitAuthorEmail?: string | null;
+  gitCommitterName?: string | null;
+  gitCommitterEmail?: string | null;
+  // Post-execution facts
+  finalCommitSha?: string | null;
+  finalBranchName?: string | null;
+  changesSummary?: {
+    filesAdded?: number;
+    filesModified?: number;
+    filesDeleted?: number;
+    totalInsertions?: number;
+    totalDeletions?: number;
+  } | null;
   createdAt: string;
   startedAt?: string;
   finishedAt?: string;
+}
+
+export interface RunningTaskReconcileSummary {
+  scanned: number;
+  completed: number;
+  failed: number;
+  recovered: number;
+  skipped: number;
+  runtimeAvailable: boolean;
 }
 
 export interface Project {
@@ -186,18 +369,35 @@ export interface MemberCandidate {
   createdAt?: string;
 }
 
+const TASK_LIST_LIMIT = 200;
+
 export async function listTasks(projectId?: string, status?: string) {
   const params = new URLSearchParams();
   if (projectId) params.set("projectId", projectId);
   if (status) params.set("status", status);
+  params.set("limit", String(TASK_LIST_LIMIT));
   return request<{ data: Task[] }>(`/tasks?${params.toString()}`);
 }
+
+export { TASK_LIST_LIMIT };
 
 export async function getTask(taskId: string) {
   return request<Task>(`/tasks/${taskId}`);
 }
 
-export async function createTask(data: { title: string; prompt: string; projectId: string }) {
+export async function createTask(data: {
+  title: string;
+  prompt: string;
+  projectId: string;
+  repoId?: string;
+  workingBranch?: string;
+  credentialId?: string;
+  selectedModel?: string;
+  gitAuthorName?: string;
+  gitAuthorEmail?: string;
+  gitCommitterName?: string;
+  gitCommitterEmail?: string;
+}) {
   return request<{ id: string; status: string }>("/tasks", {
     method: "POST",
     body: JSON.stringify(data),
@@ -494,6 +694,143 @@ export async function updateBudgetConfig(
   });
 }
 
+// ── Repository Credentials ─────────────────────────────────────────
+
+export type CredentialType = "pat" | "oauth_token" | "ssh_key_ref" | "app_installation";
+export type CredentialScope = "project" | "shared";
+export type CredentialStatus = "active" | "revoked" | "expired";
+
+export interface RepositoryCredential {
+  id: string;
+  projectId: string;
+  repoId: string | null;
+  label: string;
+  provider: RepositoryProvider;
+  credentialType: CredentialType;
+  secretRefMasked: string;
+  gitAuthorName: string | null;
+  gitAuthorEmail: string | null;
+  scope: CredentialScope;
+  isDefault: boolean;
+  status: CredentialStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export async function listCredentials(projectId: string, repoId?: string) {
+  const params = new URLSearchParams({ projectId });
+  if (repoId) params.set("repoId", repoId);
+  return request<{ data: RepositoryCredential[] }>(`/credentials?${params.toString()}`);
+}
+
+export async function createCredential(
+  projectId: string,
+  data: {
+    repoId?: string;
+    label: string;
+    provider: RepositoryProvider;
+    credentialType: CredentialType;
+    secretRef: string;
+    gitAuthorName?: string;
+    gitAuthorEmail?: string;
+    scope?: CredentialScope;
+    isDefault?: boolean;
+  },
+) {
+  return request<{ id: string; label: string; status: string }>("/credentials", {
+    method: "POST",
+    body: JSON.stringify({ projectId, ...data }),
+  });
+}
+
+export async function updateCredential(
+  projectId: string,
+  credentialId: string,
+  data: {
+    label?: string;
+    secretRef?: string;
+    gitAuthorName?: string | null;
+    gitAuthorEmail?: string | null;
+    isDefault?: boolean;
+    status?: CredentialStatus;
+  },
+) {
+  return request<{ id: string }>(`/credentials/${encodeURIComponent(credentialId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ projectId, ...data }),
+  });
+}
+
+export async function revokeCredential(projectId: string, credentialId: string) {
+  return request<{ ok: boolean }>(
+    `/credentials/${encodeURIComponent(credentialId)}?projectId=${encodeURIComponent(projectId)}`,
+    { method: "DELETE" },
+  );
+}
+
+// ── Repositories ───────────────────────────────────────────────────
+
+export type RepositoryProvider = "github" | "gitlab" | "gitea" | "local";
+export type RepositoryStatus = "active" | "archived" | "error";
+
+export interface Repository {
+  id: string;
+  projectId: string;
+  name: string;
+  provider: RepositoryProvider;
+  remoteUrl: string;
+  defaultBranch: string;
+  description: string | null;
+  status: RepositoryStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export async function listRepositories(projectId: string) {
+  return request<{ data: Repository[] }>(
+    `/repositories?projectId=${encodeURIComponent(projectId)}`,
+  );
+}
+
+export async function createRepository(data: {
+  projectId: string;
+  name: string;
+  provider: RepositoryProvider;
+  remoteUrl: string;
+  defaultBranch?: string;
+  description?: string;
+}) {
+  return request<Repository>("/repositories", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateRepository(
+  repoId: string,
+  data: {
+    projectId: string;
+    name?: string;
+    provider?: RepositoryProvider;
+    remoteUrl?: string;
+    defaultBranch?: string;
+    description?: string | null;
+    status?: RepositoryStatus;
+  },
+) {
+  return request<Repository>(`/repositories/${repoId}`, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function archiveRepository(repoId: string, projectId: string) {
+  return request<{ ok: boolean }>(
+    `/repositories/${repoId}?projectId=${encodeURIComponent(projectId)}`,
+    { method: "DELETE" },
+  );
+}
+
 // ── Organizations ──────────────────────────────────────────────────
 
 export interface Org {
@@ -507,6 +844,73 @@ export async function listOrgs() {
   return request<Org[]>("/orgs");
 }
 
+// ── Project Overview ───────────────────────────────────────────────
+
+export interface ProjectOverviewItem {
+  id: string;
+  orgId: string;
+  orgName: string;
+  name: string;
+  slug: string;
+  description?: string | null;
+  projectStatus: "healthy" | "pending_config" | "archived" | "error";
+  completedCount: number;
+  totalRequiredCount: number;
+  completionPercent: number;
+  risks: string[];
+  runningTasks: number;
+  pendingApprovals: number;
+  failedTasksToday: number;
+  lastActivityAt?: string | null;
+  memberCount: number;
+  repositoryCount: number;
+  environmentCount: number;
+  currentUserRole?: string | null;
+  isCurrentUserManager: boolean;
+  createdAt?: string;
+}
+
+export interface ProjectOverviewResponse {
+  data: ProjectOverviewItem[];
+  page: number;
+  pageSize: number;
+  total: number;
+  summary: {
+    totalProjects: number;
+    pendingConfigCount: number;
+    riskCount: number;
+  };
+}
+
+export async function listProjectOverview(params?: {
+  q?: string;
+  orgId?: string;
+  status?: string;
+  configStatus?: string;
+  onlyManaged?: boolean;
+  sortBy?: string;
+  page?: number;
+  pageSize?: number;
+}) {
+  const query = new URLSearchParams();
+  if (params?.q) query.set("q", params.q);
+  if (params?.orgId) query.set("orgId", params.orgId);
+  if (params?.status) query.set("status", params.status);
+  if (params?.configStatus) query.set("configStatus", params.configStatus);
+  if (params?.onlyManaged) query.set("onlyManaged", "true");
+  if (params?.sortBy) query.set("sortBy", params.sortBy);
+  if (params?.page !== undefined) query.set("page", String(params.page));
+  if (params?.pageSize !== undefined) query.set("pageSize", String(params.pageSize));
+  const qs = query.toString();
+  return request<ProjectOverviewResponse>(`/projects/overview${qs ? `?${qs}` : ""}`);
+}
+
+export async function archiveProject(projectId: string) {
+  return request<{ ok: boolean; id: string; status: string }>(`/projects/${projectId}/archive`, {
+    method: "PATCH",
+  });
+}
+
 export async function executeTask(taskId: string) {
   return request<{
     taskId: string;
@@ -514,6 +918,19 @@ export async function executeTask(taskId: string) {
     agentRunId: string;
     status: string;
   }>(`/tasks/${taskId}/execute`, { method: "POST" });
+}
+
+export async function updateTaskStatus(taskId: string, status: string) {
+  return request<{ id: string; status: string }>(`/tasks/${taskId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ status }),
+  });
+}
+
+export async function reconcileRunningTasks() {
+  return request<{ ok: boolean; data: RunningTaskReconcileSummary }>("/tasks/reconcile-running", {
+    method: "POST",
+  });
 }
 
 // ── Approvals ──────────────────────────────────────────────────────
@@ -675,6 +1092,9 @@ export async function updateCommand(
 export async function getModelsConfig() {
   return request<{ data: ModelsConfig }>("/config/models");
 }
+export async function getModelsList() {
+  return request<{ data: Array<Record<string, unknown>> }>("/config/models/list");
+}
 export async function updateModelsConfig(data: ModelsConfig) {
   return request<{ ok: boolean; restartRequired: boolean }>("/config/models", {
     method: "PUT",
@@ -710,10 +1130,20 @@ export async function listPlugins() {
 }
 
 // Orchestration Strategy
+export interface WorkflowEvaluationHook {
+  enabled: boolean;
+  agent: string;
+  model: string;
+  promptTemplate: string;
+  timeoutMs: number;
+}
+
 export interface OrchestrationStrategy {
   categoryAgentMap: Record<string, string[]>;
   categoryModelMap: Record<string, string>;
   enablePipeline: boolean;
+  preExecutionReview: WorkflowEvaluationHook;
+  postExecutionReview: WorkflowEvaluationHook;
 }
 
 export async function getOrchestrationStrategy() {
@@ -787,4 +1217,58 @@ export async function copilotLogout() {
 
 export async function getCopilotModels() {
   return request<{ data: CopilotModelInfo[] }>("/config/copilot/models");
+}
+
+// ── Code Changes ───────────────────────────────────────────────────
+
+export interface CodeChange {
+  id: string;
+  taskId: string;
+  repoId: string | null;
+  agentRunId: string | null;
+  changeSource: "runtime_diff" | "task_snapshot" | "git_commit";
+  commitSha: string | null;
+  commitAuthorName: string | null;
+  commitAuthorEmail: string | null;
+  commitMessage: string | null;
+  branchName: string | null;
+  summary: string | null;
+  createdAt: string;
+}
+
+export interface FileChange {
+  id: string;
+  changeId: string;
+  filePath: string;
+  changeType: "added" | "modified" | "deleted" | "renamed";
+  oldPath: string | null;
+  insertions: number;
+  deletions: number;
+}
+
+export async function getTaskChanges(taskId: string) {
+  return request<{ data: CodeChange[] }>(`/tasks/${encodeURIComponent(taskId)}/changes`);
+}
+
+export async function getChangeFiles(taskId: string, changeId: string) {
+  return request<{ data: FileChange[] }>(
+    `/tasks/${encodeURIComponent(taskId)}/changes/${encodeURIComponent(changeId)}/files`,
+  );
+}
+
+// ── Governance ─────────────────────────────────────────────────────
+
+export interface GovernanceSummary {
+  overallRisk: "low" | "medium" | "high" | "critical";
+  violations: Array<{
+    ruleId: string;
+    ruleName: string;
+    level: string;
+    detail: string;
+  }>;
+  approvalRequired: boolean;
+}
+
+export async function getTaskGovernance(taskId: string) {
+  return request<GovernanceSummary>(`/tasks/${encodeURIComponent(taskId)}/governance`);
 }

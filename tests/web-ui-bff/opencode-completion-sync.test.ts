@@ -8,7 +8,9 @@ const BFF_URL = process.env.TEST_BFF_URL || "http://127.0.0.1:4098";
 const PROJECT_ID = process.env.TEST_PROJECT_ID || "proj-default";
 const USERNAME = process.env.TEST_USERNAME || "admin";
 const PASSWORD = process.env.TEST_PASSWORD || "admin123!";
-const DB_PATH = process.env.TEST_DB_PATH || resolve(__dirname, "../../service/data/openerx.db");
+const DB_PATH =
+  process.env.TEST_DB_PATH || resolve(__dirname, "../../control-plane/service/data/openerx.db");
+const executionIntegrationTest = process.env.RUN_EXECUTION_INTEGRATION === "1" ? test : test.skip;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
@@ -334,7 +336,7 @@ async function runCompletionSyncScenario(options: {
   }
 }
 
-test("OpenCode completion sync closes pause/guidance/resume flow", async () => {
+executionIntegrationTest("OpenCode completion sync closes pause/guidance/resume flow", async () => {
   await runCompletionSyncScenario({
     titlePrefix: "completion-sync-test",
     prompt:
@@ -344,12 +346,15 @@ test("OpenCode completion sync closes pause/guidance/resume flow", async () => {
   });
 });
 
-test("OpenCode direct execution completes without pause or resume", async () => {
-  await runCompletionSyncScenario({
-    titlePrefix: "direct-completion-test",
-    prompt:
-      "Inspect the repository briefly and produce a concise final status summary with one explicit BFF/runtime integration risk, without waiting for any further guidance.",
-    intervene: false,
-    expectResultSync: false,
-  });
-});
+executionIntegrationTest(
+  "OpenCode direct execution completes without pause or resume",
+  async () => {
+    await runCompletionSyncScenario({
+      titlePrefix: "direct-completion-test",
+      prompt:
+        "Inspect the repository briefly and produce a concise final status summary with one explicit BFF/runtime integration risk, without waiting for any further guidance.",
+      intervene: false,
+      expectResultSync: false,
+    });
+  },
+);

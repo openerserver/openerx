@@ -1,13 +1,22 @@
 import { cpFetch, createInternalAuthorization } from "../../lib/control-plane-client";
+import { resolveModelRoute } from "../../lib/opencode-config";
+import {
+  type WorkflowEvaluationRecord,
+  mergeTaskStrategy,
+  parseTaskStrategy,
+  readOrchestrationStrategy,
+  renderPromptTemplate,
+} from "../../lib/orchestration-strategy";
 import type { RealtimeEvent, RealtimeEventType } from "../../types/events";
 import {
   findAgentRunBySessionId,
   getSessionMessages,
+  runDetachedPrompt,
   updateAgentRunStatus,
 } from "../agent-control/opencode-adapter";
+import { collectChangesFromSession } from "../code-changes/change-collector";
 import { observeGraphWorkspaceDir, onGraphToolExecuted } from "./dag-sync";
 
-// ── SSE Aggregator ─────────────────────────────────────────────────
 // Subscribes to OpenCode Runtime SSE events and transforms them into
 // standard RealtimeEvent format for WebSocket broadcast.
 
@@ -22,12 +31,163 @@ type EventHandler = (event: RealtimeEvent) => void;
 
 const OPENCODE_URL = process.env.OPENCODE_URL || "http://localhost:4096";
 
+interface CompletedTaskContext {
+  id: string;
+  title: string;
+  prompt: string;
+  projectId: string;
+  repoName?: string | null;
+  remoteUrl?: string | null;
+  workingBranch?: string | null;
+  result?: string | null;
+  strategy?: string | null;
+  selectedModel?: string | null;
+  finalCommitSha?: string | null;
+  finalBranchName?: string | null;
+  changesSummary?: {
+    filesAdded?: number;
+    filesModified?: number;
+    filesDeleted?: number;
+    totalInsertions?: number;
+    totalDeletions?: number;
+  } | null;
+}
+
+function parseModelString(raw: string): { providerId: string; modelId: string } {
+  return resolveModelRoute(raw);
+}
+
+function formatChangeSummary(task: CompletedTaskContext): string {
+  const summary = task.changesSummary;
+  if (!summary) {
+    return "No code changes recorded.";
+  }
+
+  return [
+    `Files added: ${summary.filesAdded || 0}`,
+    `Files modified: ${summary.filesModified || 0}`,
+    `Files deleted: ${summary.filesDeleted || 0}`,
+    `Total insertions: ${summary.totalInsertions || 0}`,
+    `Total deletions: ${summary.totalDeletions || 0}`,
+    task.finalBranchName ? `Final branch: ${task.finalBranchName}` : undefined,
+    task.finalCommitSha ? `Final commit: ${task.finalCommitSha}` : undefined,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 class SSEAggregator {
   private connections = new Map<string, SSEConnection>();
   private handlers = new Set<EventHandler>();
   private reconnectDelay = 1000;
   private finalizingAgentRuns = new Set<string>();
   private finalizedAgentRuns = new Set<string>();
+
+  private async triggerPostExecutionReview(
+    taskId: string,
+    resultText: string | undefined,
+    authorization: string,
+  ): Promise<void> {
+    const strategyConfig = readOrchestrationStrategy();
+    const hook = strategyConfig.postExecutionReview;
+    if (!hook.enabled || !hook.agent) {
+      return;
+    }
+
+    const taskResult = await cpFetch<CompletedTaskContext>(
+      `/api/tasks/${encodeURIComponent(taskId)}`,
+      {
+        authorization,
+      },
+    );
+    if (!taskResult.ok) {
+      return;
+    }
+
+    const task = taskResult.data;
+    const taskStrategy = parseTaskStrategy(task.strategy);
+    const prompt = renderPromptTemplate(hook.promptTemplate, {
+      taskId: task.id,
+      projectId: task.projectId,
+      taskTitle: task.title,
+      taskPrompt: task.prompt,
+      taskResult: task.result || resultText || "",
+      repoName: task.repoName,
+      remoteUrl: task.remoteUrl,
+      workingBranch: task.workingBranch,
+      selectedAgent:
+        typeof taskStrategy.selectedAgent === "string" ? taskStrategy.selectedAgent : "",
+      selectedModel:
+        typeof taskStrategy.effectiveModel === "string"
+          ? taskStrategy.effectiveModel
+          : task.selectedModel || "",
+      changesSummary: formatChangeSummary(task),
+    });
+
+    const hookModel = hook.model ? parseModelString(hook.model) : undefined;
+    const result = await runDetachedPrompt(
+      `[Post-review ${task.id.slice(0, 8)}] ${task.title}`,
+      prompt,
+      {
+        agent: hook.agent,
+        model: hookModel,
+        taskId: task.id,
+        projectId: task.projectId,
+        timeoutMs: hook.timeoutMs,
+      },
+    );
+
+    const evaluation: WorkflowEvaluationRecord = result.ok
+      ? {
+          status: result.completed ? "completed" : "failed",
+          agent: hook.agent,
+          model: hook.model || undefined,
+          prompt,
+          result: result.text,
+          error: result.completed ? undefined : "Post-execution review timed out",
+          sessionId: result.sessionId,
+          completedAt: new Date().toISOString(),
+        }
+      : {
+          status: "failed",
+          agent: hook.agent,
+          model: hook.model || undefined,
+          prompt,
+          error: result.error || "Post-execution review failed",
+          sessionId: result.sessionId,
+          completedAt: new Date().toISOString(),
+        };
+
+    const patchResult = await cpFetch(`/api/tasks/${encodeURIComponent(task.id)}`, {
+      method: "PATCH",
+      authorization,
+      body: {
+        strategy: mergeTaskStrategy(task.strategy, {
+          workflowEvaluations: {
+            postExecution: evaluation,
+          },
+        }),
+      },
+    });
+
+    if (!patchResult.ok) {
+      return;
+    }
+
+    this.emit({
+      id: crypto.randomUUID(),
+      type: "task.workflow-evaluation.updated",
+      ts: new Date().toISOString(),
+      taskId: task.id,
+      projectId: task.projectId,
+      data: {
+        phase: "postExecution",
+        status: evaluation.status,
+        agent: evaluation.agent,
+        sessionId: evaluation.sessionId,
+      },
+    });
+  }
 
   /**
    * Subscribe to the global OpenCode SSE event stream.
@@ -233,9 +393,7 @@ class SSEAggregator {
 
     const { sessionId, taskId, projectId, agentRunId } = event;
 
-    console.warn(
-      `Provider auth error detected (status=${statusCode}) for session ${sessionId}`,
-    );
+    console.warn(`Provider auth error detected (status=${statusCode}) for session ${sessionId}`);
 
     this.emit({
       id: crypto.randomUUID(),
@@ -378,6 +536,28 @@ class SSEAggregator {
           ...(resultText ? { result: resultText } : {}),
         },
       });
+
+      // Collect code changes first, then run any configured post-execution review.
+      const completedTaskId = event.taskId;
+      collectChangesFromSession({
+        taskId: event.taskId,
+        sessionId: event.sessionId,
+        agentRunId: event.agentRunId,
+        authorization,
+      })
+        .catch((err) => {
+          console.error(`Change collection failed for task ${event.taskId}:`, err);
+        })
+        .finally(() => {
+          if (!completedTaskId) {
+            return;
+          }
+          this.triggerPostExecutionReview(completedTaskId, resultText, authorization).catch(
+            (err) => {
+              console.error(`Post-execution review failed for task ${completedTaskId}:`, err);
+            },
+          );
+        });
     } catch (error) {
       console.error(`Failed to finalize agent run ${event.agentRunId}:`, error);
     } finally {
@@ -486,7 +666,7 @@ class SSEAggregator {
     if (!toolName.startsWith("task_graph_")) return;
 
     const toolResult = String(props.result || props.output || "{}");
-    const sessionId = this.extractSessionId(payload ?? parsed);
+    const sessionId = this.extractSessionId(eventType, payload ?? parsed);
     void onGraphToolExecuted(toolName, toolResult, workspaceDirectory, sessionId);
   }
 

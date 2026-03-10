@@ -121,6 +121,49 @@ function listRuntimeGraphs(preferredDirectory?: string): string[] {
   return Array.from(graphIds);
 }
 
+function getToolGraphInputId(input: Record<string, unknown> | undefined): string | undefined {
+  return typeof input?.graphId === "string" ? input.graphId : undefined;
+}
+
+function collectGraphIdsFromOutput(graphIds: Set<string>, output: unknown): void {
+  if (typeof output !== "string") {
+    return;
+  }
+
+  try {
+    const parsed = JSON.parse(output) as { graphId?: unknown; id?: unknown };
+    if (typeof parsed.graphId === "string") {
+      graphIds.add(parsed.graphId);
+    }
+    if (typeof parsed.id === "string") {
+      graphIds.add(parsed.id);
+    }
+  } catch {
+    // Ignore non-JSON tool outputs.
+  }
+}
+
+function collectGraphIdsFromPart(graphIds: Set<string>, part: unknown): void {
+  if (typeof part !== "object" || !part) return;
+
+  const toolPart = part as {
+    type?: unknown;
+    tool?: unknown;
+    state?: { input?: Record<string, unknown>; output?: unknown };
+  };
+  if (toolPart.type !== "tool") return;
+
+  const toolName = typeof toolPart.tool === "string" ? toolPart.tool : "";
+  if (!toolName.startsWith("task_graph_")) return;
+
+  const inputGraphId = getToolGraphInputId(toolPart.state?.input);
+  if (inputGraphId) {
+    graphIds.add(inputGraphId);
+  }
+
+  collectGraphIdsFromOutput(graphIds, toolPart.state?.output);
+}
+
 function extractGraphIdsFromMessages(messages: unknown[]): string[] {
   const graphIds = new Set<string>();
 
@@ -131,35 +174,7 @@ function extractGraphIdsFromMessages(messages: unknown[]): string[] {
       : [];
 
     for (const part of parts) {
-      if (typeof part !== "object" || !part) continue;
-      const toolPart = part as {
-        type?: unknown;
-        tool?: unknown;
-        state?: { input?: Record<string, unknown>; output?: unknown };
-      };
-      if (toolPart.type !== "tool") continue;
-
-      const toolName = typeof toolPart.tool === "string" ? toolPart.tool : "";
-      if (!toolName.startsWith("task_graph_")) continue;
-
-      const input = toolPart.state?.input;
-      if (typeof input?.graphId === "string") {
-        graphIds.add(input.graphId);
-      }
-
-      const output = toolPart.state?.output;
-      if (typeof output !== "string") continue;
-      try {
-        const parsed = JSON.parse(output) as { graphId?: unknown; id?: unknown };
-        if (typeof parsed.graphId === "string") {
-          graphIds.add(parsed.graphId);
-        }
-        if (typeof parsed.id === "string") {
-          graphIds.add(parsed.id);
-        }
-      } catch {
-        // Ignore non-JSON tool outputs.
-      }
+      collectGraphIdsFromPart(graphIds, part);
     }
   }
 
@@ -169,7 +184,10 @@ function extractGraphIdsFromMessages(messages: unknown[]): string[] {
 // Track last sync time per graph to avoid redundant syncs
 const lastSyncTimestamps = new Map<string, number>();
 
-async function syncGraphToControlPlane(graph: RuntimeTaskGraph, sessionId?: string): Promise<boolean> {
+async function syncGraphToControlPlane(
+  graph: RuntimeTaskGraph,
+  sessionId?: string,
+): Promise<boolean> {
   const lastSync = lastSyncTimestamps.get(graph.id);
   if (lastSync && lastSync >= graph.updatedAt) {
     return true; // Already synced

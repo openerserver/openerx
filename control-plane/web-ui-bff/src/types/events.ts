@@ -18,6 +18,7 @@ export type RealtimeEventType =
   | "task.continued"
   | "task.node.updated"
   | "task.completed"
+  | "task.workflow-evaluation.updated"
   | "approval.required"
   | "approval.resolved"
   | "cost.threshold"

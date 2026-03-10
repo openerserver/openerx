@@ -5,8 +5,20 @@ export interface User {
   id: string;
   username: string;
   displayName: string;
+  email?: string | null;
   role: string;
-  projects?: Array<{ id: string; role: string }>;
+  accountStatus?: "active" | "disabled";
+  mustChangePassword?: boolean;
+  lastLoginAt?: string | null;
+  createdAt?: string;
+  projects?: Array<{
+    id: string;
+    role: string;
+    name?: string;
+    slug?: string;
+    orgId?: string | null;
+    orgName?: string | null;
+  }>;
 }
 
 export const useAuthStore = defineStore(
@@ -20,6 +32,15 @@ export const useAuthStore = defineStore(
       user.value = nextUser;
     }
 
+    function setUser(nextUser: User | null) {
+      user.value = nextUser;
+    }
+
+    function patchUser(patch: Partial<User>) {
+      if (!user.value) return;
+      user.value = { ...user.value, ...patch };
+    }
+
     function logout() {
       token.value = null;
       user.value = null;
@@ -29,6 +50,8 @@ export const useAuthStore = defineStore(
       token,
       user,
       login,
+      setUser,
+      patchUser,
       logout,
     };
   },

@@ -3,6 +3,40 @@ import { authHeader, cpFetch } from "../../lib/control-plane-client";
 
 export const projectRoutes = new Hono();
 
+// GET /api/projects/overview
+projectRoutes.get("/overview", async (c) => {
+  const params = new URLSearchParams();
+  for (const key of [
+    "q",
+    "orgId",
+    "status",
+    "configStatus",
+    "onlyManaged",
+    "sortBy",
+    "page",
+    "pageSize",
+  ]) {
+    const val = c.req.query(key);
+    if (val) params.set(key, val);
+  }
+  const query = params.toString();
+  const result = await cpFetch<Record<string, unknown>>(
+    `/api/projects/overview${query ? `?${query}` : ""}`,
+    { authorization: authHeader(c) },
+  );
+  return c.json(result.data, result.ok ? 200 : (result.status as 401 | 502));
+});
+
+// PATCH /api/projects/:projectId/archive
+projectRoutes.patch("/:projectId/archive", async (c) => {
+  const projectId = c.req.param("projectId");
+  const result = await cpFetch<Record<string, unknown>>(`/api/projects/${projectId}/archive`, {
+    method: "PATCH",
+    authorization: authHeader(c),
+  });
+  return c.json(result.data, result.ok ? 200 : (result.status as 401 | 403 | 404 | 502));
+});
+
 // GET /api/projects?orgId=
 projectRoutes.get("/", async (c) => {
   const orgId = c.req.query("orgId") || "";

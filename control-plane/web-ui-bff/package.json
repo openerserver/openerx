@@ -6,7 +6,14 @@
   "scripts": {
     "dev": "bun run --watch src/index.ts",
     "build": "bun build src/index.ts --outdir dist --target bun",
-    "test:integration:completion-sync": "bun test tests/opencode-completion-sync.test.ts --timeout 120000"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "bun test ../../tests/web-ui-bff --timeout 120000",
+    "test:integration:completion-sync": "bun test ../../tests/web-ui-bff/opencode-completion-sync.test.ts --timeout 120000",
+    "test:integration:workflow-evaluation": "RUN_EXECUTION_INTEGRATION=1 bun test ../../tests/web-ui-bff/workflow-evaluation.test.ts --timeout 120000",
+    "test:integration:dag-sync": "bun test ../../tests/web-ui-bff/dag-sync.test.ts --timeout 30000",
+    "test:identity": "bun test ../../tests/web-ui-bff/identity-binding.test.ts --timeout 30000",
+    "test:user-management": "bun test ../../tests/web-ui-bff/user-management.test.ts --timeout 30000",
+    "test:external-execute": "RUN_EXECUTION_INTEGRATION=1 bun test ../../tests/web-ui-bff/identity-binding.test.ts ../../tests/web-ui-bff/opencode-completion-sync.test.ts ../../tests/web-ui-bff/workflow-evaluation.test.ts --timeout 120000"
   },
   "dependencies": {
     "@hono/zod-validator": "^0.4.0",

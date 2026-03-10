@@ -41,8 +41,12 @@
 
     <!-- Orchestration Decisions -->
     <a-card title="编排决策" size="small" style="margin-top: 16px">
-      <a-empty v-if="!task?.category && !strategy" description="暂无编排数据" />
+      <a-empty v-if="!task?.category && !strategy && !task?.selectedModel" description="暂无编排数据" />
       <a-descriptions v-else :column="{ xs: 1, sm: 2, lg: 4 }" bordered size="small">
+        <a-descriptions-item label="执行模型">
+          <a-tag v-if="task?.selectedModel" color="cyan">{{ task.selectedModel }}</a-tag>
+          <a-typography-text v-else type="secondary">项目/系统默认</a-typography-text>
+        </a-descriptions-item>
         <a-descriptions-item label="意图分类">
           <a-tag color="blue">{{ categoryLabels[task?.category || ''] || task?.category || '-' }}</a-tag>
         </a-descriptions-item>
@@ -64,13 +68,180 @@
             {{ strategy?.requiresPlan ? '是' : '否' }}
           </a-tag>
         </a-descriptions-item>
-        <a-descriptions-item label="推荐 Agents" :span="{ xs: 1, sm: 2, lg: 4 }">
+        <a-descriptions-item label="实际执行 Agent">
+          <a-tag v-if="strategy?.selectedAgent" color="geekblue">{{ strategy.selectedAgent }}</a-tag>
+          <span v-else>-</span>
+        </a-descriptions-item>
+        <a-descriptions-item label="推荐 Agents" :span="4">
           <a-tag v-for="agent in (strategy?.suggestedAgents || [])" :key="agent" color="purple">
             {{ agent }}
           </a-tag>
           <span v-if="!strategy?.suggestedAgents?.length">-</span>
         </a-descriptions-item>
       </a-descriptions>
+    </a-card>
+
+    <a-card
+      v-if="strategy?.workflowEvaluations?.preExecution || strategy?.workflowEvaluations?.postExecution"
+      title="工作流评估"
+      size="small"
+      style="margin-top: 16px"
+    >
+      <a-row :gutter="[16, 16]">
+        <a-col :xs="24" :xl="12">
+          <a-card size="small" title="前置评估">
+            <a-empty v-if="!strategy?.workflowEvaluations?.preExecution" description="未执行前置评估" />
+            <template v-else>
+              <a-space direction="vertical" style="width: 100%">
+                <a-space>
+                  <a-tag :color="evaluationStatusColor(strategy.workflowEvaluations.preExecution.status)">
+                    {{ evaluationStatusLabel(strategy.workflowEvaluations.preExecution.status) }}
+                  </a-tag>
+                  <a-tag color="blue">{{ strategy.workflowEvaluations.preExecution.agent }}</a-tag>
+                </a-space>
+                <a-typography-text type="secondary">
+                  {{ formatTime(strategy.workflowEvaluations.preExecution.completedAt) }}
+                </a-typography-text>
+                <pre v-if="strategy.workflowEvaluations.preExecution.result" style="white-space: pre-wrap; font-size: 12px; max-height: 220px; overflow: auto">{{ strategy.workflowEvaluations.preExecution.result }}</pre>
+                <a-alert v-else-if="strategy.workflowEvaluations.preExecution.error" type="warning" :message="strategy.workflowEvaluations.preExecution.error" show-icon />
+              </a-space>
+            </template>
+          </a-card>
+        </a-col>
+        <a-col :xs="24" :xl="12">
+          <a-card size="small" title="后置评估">
+            <a-empty v-if="!strategy?.workflowEvaluations?.postExecution" description="未执行后置评估" />
+            <template v-else>
+              <a-space direction="vertical" style="width: 100%">
+                <a-space>
+                  <a-tag :color="evaluationStatusColor(strategy.workflowEvaluations.postExecution.status)">
+                    {{ evaluationStatusLabel(strategy.workflowEvaluations.postExecution.status) }}
+                  </a-tag>
+                  <a-tag color="blue">{{ strategy.workflowEvaluations.postExecution.agent }}</a-tag>
+                </a-space>
+                <a-typography-text type="secondary">
+                  {{ formatTime(strategy.workflowEvaluations.postExecution.completedAt) }}
+                </a-typography-text>
+                <pre v-if="strategy.workflowEvaluations.postExecution.result" style="white-space: pre-wrap; font-size: 12px; max-height: 220px; overflow: auto">{{ strategy.workflowEvaluations.postExecution.result }}</pre>
+                <a-alert v-else-if="strategy.workflowEvaluations.postExecution.error" type="warning" :message="strategy.workflowEvaluations.postExecution.error" show-icon />
+              </a-space>
+            </template>
+          </a-card>
+        </a-col>
+      </a-row>
+    </a-card>
+
+    <!-- Code Context -->
+    <a-card v-if="task?.repoId" title="代码上下文" size="small" style="margin-top: 16px">
+      <a-descriptions :column="{ xs: 1, sm: 2 }" bordered size="small">
+        <a-descriptions-item label="仓库">
+          {{ task.repoName || task.repoId }}
+        </a-descriptions-item>
+        <a-descriptions-item label="远程地址">
+          <a-typography-text v-if="task.remoteUrl" copyable>{{ task.remoteUrl }}</a-typography-text>
+          <span v-else>-</span>
+        </a-descriptions-item>
+        <a-descriptions-item label="工作分支">
+          <a-tag v-if="task.workingBranch" color="blue">{{ task.workingBranch }}</a-tag>
+          <span v-else>-</span>
+        </a-descriptions-item>
+        <a-descriptions-item label="工作目录">
+          <a-typography-text v-if="task.workspaceRoot" code>{{ task.workspaceRoot }}</a-typography-text>
+          <span v-else>-</span>
+        </a-descriptions-item>
+        <a-descriptions-item label="基线版本">
+          <a-typography-text v-if="task.baseRevision" code>{{ task.baseRevision?.slice(0, 12) }}</a-typography-text>
+          <span v-else>-</span>
+        </a-descriptions-item>
+      </a-descriptions>
+    </a-card>
+
+    <!-- Identity Snapshot -->
+    <a-card v-if="task?.credentialId || task?.gitAuthorName || task?.gitAuthorEmail" title="身份快照" size="small" style="margin-top: 16px">
+      <a-typography-text type="secondary" style="display: block; margin-bottom: 12px; font-size: 12px">
+        任务发起人不一定等于最终 Git Author。执行凭证决定仓库访问权限，Author/Committer 决定提交显示身份。
+      </a-typography-text>
+      <a-descriptions :column="{ xs: 1, sm: 2 }" bordered size="small">
+        <a-descriptions-item label="执行凭证">
+          <a-tag v-if="task.credentialLabel" color="blue">{{ task.credentialLabel }}</a-tag>
+          <a-typography-text v-if="task.credentialId" type="secondary" style="margin-left: 4px">
+            ({{ task.credentialId.slice(0, 8) }})
+          </a-typography-text>
+          <span v-if="!task.credentialLabel && !task.credentialId">-</span>
+        </a-descriptions-item>
+        <a-descriptions-item label="Author">
+          <span v-if="task.gitAuthorName || task.gitAuthorEmail">
+            {{ task.gitAuthorName || '' }}
+            <a-typography-text v-if="task.gitAuthorEmail" type="secondary">
+              &lt;{{ task.gitAuthorEmail }}&gt;
+            </a-typography-text>
+          </span>
+          <span v-else>-</span>
+        </a-descriptions-item>
+        <a-descriptions-item label="Committer">
+          <span v-if="task.gitCommitterName || task.gitCommitterEmail">
+            {{ task.gitCommitterName || '' }}
+            <a-typography-text v-if="task.gitCommitterEmail" type="secondary">
+              &lt;{{ task.gitCommitterEmail }}&gt;
+            </a-typography-text>
+          </span>
+          <span v-else>-</span>
+        </a-descriptions-item>
+        <a-descriptions-item label="最终分支">
+          <a-tag v-if="task.finalBranchName" color="cyan">{{ task.finalBranchName }}</a-tag>
+          <span v-else>-</span>
+        </a-descriptions-item>
+        <a-descriptions-item label="最终提交">
+          <a-typography-text v-if="task.finalCommitSha" code copyable>{{ task.finalCommitSha.slice(0, 12) }}</a-typography-text>
+          <span v-else>-</span>
+        </a-descriptions-item>
+        <a-descriptions-item v-if="task.changesSummary" label="变更摘要">
+          <a-space>
+            <a-tag color="green">+{{ task.changesSummary.totalInsertions || 0 }}</a-tag>
+            <a-tag color="red">-{{ task.changesSummary.totalDeletions || 0 }}</a-tag>
+            <a-typography-text type="secondary">
+              {{ task.changesSummary.filesAdded || 0 }} 新增 ·
+              {{ task.changesSummary.filesModified || 0 }} 修改 ·
+              {{ task.changesSummary.filesDeleted || 0 }} 删除
+            </a-typography-text>
+          </a-space>
+        </a-descriptions-item>
+      </a-descriptions>
+    </a-card>
+
+    <!-- Code Changes -->
+    <a-card title="代码变更" size="small" style="margin-top: 16px">
+      <TaskCodeChanges v-if="taskId" :task-id="taskId" />
+    </a-card>
+
+    <!-- Governance Summary -->
+    <a-card title="治理评估" size="small" style="margin-top: 16px">
+      <a-spin v-if="governanceLoading" />
+      <a-empty v-else-if="!governance" description="暂无治理数据" />
+      <div v-else>
+        <a-descriptions :column="{ xs: 1, sm: 2 }" bordered size="small">
+          <a-descriptions-item label="风险等级">
+            <a-tag :color="riskColor(governance.overallRisk)">{{ riskLabel(governance.overallRisk) }}</a-tag>
+          </a-descriptions-item>
+          <a-descriptions-item label="需要审批">
+            <a-tag :color="governance.approvalRequired ? 'red' : 'green'">
+              {{ governance.approvalRequired ? '是' : '否' }}
+            </a-tag>
+          </a-descriptions-item>
+        </a-descriptions>
+        <div v-if="governance.violations.length > 0" style="margin-top: 12px">
+          <a-typography-text strong>命中规则</a-typography-text>
+          <a-list size="small" :data-source="governance.violations" style="margin-top: 8px">
+            <template #renderItem="{ item }">
+              <a-list-item>
+                <a-tag :color="riskColor(item.level)">{{ item.level }}</a-tag>
+                <a-typography-text strong>{{ item.ruleName }}</a-typography-text>
+                <a-typography-text type="secondary" style="margin-left: 8px">{{ item.detail }}</a-typography-text>
+              </a-list-item>
+            </template>
+          </a-list>
+        </div>
+      </div>
     </a-card>
 
     <!-- Planning Pipeline -->
@@ -127,7 +298,12 @@
     >
       <a-form layout="vertical">
         <a-form-item label="补充指令">
-          <a-textarea v-model:value="continuePrompt" :rows="4" placeholder="输入续跑指令..." />
+          <a-textarea
+            :value="continuePrompt"
+            :rows="4"
+            placeholder="输入续跑指令..."
+            @update:value="continuePrompt = String($event ?? '')"
+          />
         </a-form-item>
       </a-form>
     </a-modal>
@@ -150,16 +326,16 @@
 
 <script setup lang="ts">
 import { message } from "ant-design-vue";
-import { computed, ref, watch } from "vue";
+import { computed, onUnmounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
-import AgentConsole from "../components/AgentConsole.vue";
-import TaskGraph from "../components/TaskGraph.vue";
 import {
+  type GovernanceSummary,
   type PipelineStage,
   type SessionInfo,
   type Task,
   continueTask,
   getTask,
+  getTaskGovernance,
   getTaskPipeline,
   getTaskSessions,
 } from "../lib/api";
@@ -181,35 +357,216 @@ const pipelineCurrentStep = computed(() => {
 // Sessions
 const sessions = ref<SessionInfo[]>([]);
 
+// Governance
+const governance = ref<GovernanceSummary | null>(null);
+const governanceLoading = ref(false);
+
 // Continue modal
 const showContinueModal = ref(false);
 const continuePrompt = ref("");
 const continuing = ref(false);
+let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+let bootstrapRefreshToken = 0;
+const BOOTSTRAP_REFRESH_ATTEMPTS = 8;
+const BOOTSTRAP_REFRESH_INTERVAL_MS = 500;
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function refreshTaskData(
+  id: string,
+  options: {
+    task?: boolean;
+    pipeline?: boolean;
+    sessions?: boolean;
+    governance?: boolean;
+  } = {
+    task: true,
+    pipeline: true,
+    sessions: true,
+    governance: true,
+  },
+) {
+  const jobs: Promise<unknown>[] = [];
+
+  if (options.task !== false) {
+    jobs.push(
+      getTask(id)
+        .then((t) => {
+          task.value = t;
+        })
+        .catch(() => {}),
+    );
+  }
+
+  if (options.pipeline) {
+    jobs.push(
+      getTaskPipeline(id)
+        .then((r) => {
+          pipelineStages.value = r.stages;
+        })
+        .catch(() => {}),
+    );
+  }
+
+  if (options.sessions) {
+    jobs.push(
+      getTaskSessions(id)
+        .then((r) => {
+          sessions.value = r.data;
+        })
+        .catch(() => {}),
+    );
+  }
+
+  if (options.governance) {
+    governanceLoading.value = true;
+    jobs.push(
+      getTaskGovernance(id)
+        .then((r) => {
+          governance.value = r;
+        })
+        .catch(() => {})
+        .finally(() => {
+          governanceLoading.value = false;
+        }),
+    );
+  }
+
+  await Promise.all(jobs);
+}
+
+function shouldBootstrapRefresh() {
+  if (!taskId.value) {
+    return false;
+  }
+
+  const hasExecutionSignals = taskEvents.value.some((event) =>
+    [
+      "agent.started",
+      "agent.completed",
+      "task.completed",
+      "task.continued",
+      "task.workflow-evaluation.updated",
+      "session.updated",
+      "message.updated",
+    ].includes(event.type),
+  );
+
+  if (!task.value) {
+    return !hasExecutionSignals;
+  }
+
+  return Boolean(
+    !task.value.strategy &&
+      !task.value.agentRunId &&
+      !task.value.sessionId &&
+      sessions.value.length === 0 &&
+      !hasExecutionSignals,
+  );
+}
+
+async function bootstrapTaskRefresh(id: string) {
+  const token = ++bootstrapRefreshToken;
+
+  for (let attempt = 0; attempt < BOOTSTRAP_REFRESH_ATTEMPTS; attempt += 1) {
+    if (token !== bootstrapRefreshToken || taskId.value !== id) {
+      return;
+    }
+
+    if (!shouldBootstrapRefresh()) {
+      return;
+    }
+
+    await sleep(BOOTSTRAP_REFRESH_INTERVAL_MS);
+
+    if (token !== bootstrapRefreshToken || taskId.value !== id) {
+      return;
+    }
+
+    await refreshTaskData(id, {
+      task: true,
+      pipeline: false,
+      sessions: true,
+      governance: false,
+    });
+  }
+}
+
+function scheduleTaskRefresh(reason: string) {
+  if (!taskId.value) {
+    return;
+  }
+
+  if (refreshTimer) {
+    clearTimeout(refreshTimer);
+  }
+
+  const delay = reason === "task.workflow-evaluation.updated" ? 0 : 250;
+  refreshTimer = setTimeout(() => {
+    refreshTimer = null;
+    void refreshTaskData(taskId.value as string, {
+      task: true,
+      pipeline: reason === "task.continued",
+      sessions: reason !== "agent.started",
+      governance:
+        reason === "task.completed" ||
+        reason === "task.continued" ||
+        reason === "task.workflow-evaluation.updated",
+    });
+  }, delay);
+}
+
+const taskEvents = computed(() => realtimeStore.events.filter((e) => e.taskId === taskId.value));
+
+const displayedTaskEvents = computed(() =>
+  taskEvents.value.slice(0, 30).map((event, index) => ({
+    ...event,
+    tableKey: event.id || `${event.ts}-${event.type}-${index}`,
+    data: event.data && typeof event.data === "object" ? event.data : {},
+  })),
+);
+
+const agentEvents = computed(() => taskEvents.value.filter((e) => e.type.startsWith("agent.")));
 
 watch(
   taskId,
   (id) => {
     if (id) {
       realtimeStore.subscribeTask(id);
-      getTask(id)
-        .then((t) => {
-          task.value = t;
-        })
-        .catch(() => {});
-      getTaskPipeline(id)
-        .then((r) => {
-          pipelineStages.value = r.stages;
-        })
-        .catch(() => {});
-      getTaskSessions(id)
-        .then((r) => {
-          sessions.value = r.data;
-        })
-        .catch(() => {});
+      void refreshTaskData(id).then(() => bootstrapTaskRefresh(id));
     }
   },
   { immediate: true },
 );
+
+watch(
+  () => taskEvents.value[0]?.id,
+  () => {
+    const latestEvent = taskEvents.value[0];
+    if (!latestEvent) {
+      return;
+    }
+
+    if (
+      latestEvent.type === "agent.started" ||
+      latestEvent.type === "task.completed" ||
+      latestEvent.type === "task.continued" ||
+      latestEvent.type === "task.workflow-evaluation.updated"
+    ) {
+      scheduleTaskRefresh(latestEvent.type);
+    }
+  },
+);
+
+onUnmounted(() => {
+  bootstrapRefreshToken += 1;
+  if (refreshTimer) {
+    clearTimeout(refreshTimer);
+    refreshTimer = null;
+  }
+});
 
 async function handleContinue() {
   if (!taskId.value || !continuePrompt.value.trim()) return;
@@ -237,6 +594,23 @@ const strategy = computed(() => {
       suggestedAgents?: string[];
       requiresPlan?: boolean;
       confidence?: number;
+      selectedAgent?: string;
+      workflowEvaluations?: {
+        preExecution?: {
+          status: string;
+          agent: string;
+          result?: string;
+          error?: string;
+          completedAt: string;
+        };
+        postExecution?: {
+          status: string;
+          agent: string;
+          result?: string;
+          error?: string;
+          completedAt: string;
+        };
+      };
     };
   } catch {
     return null;
@@ -256,6 +630,44 @@ const complexityColors: Record<string, string> = {
   medium: "orange",
   high: "red",
 };
+
+function riskColor(level: string) {
+  const map: Record<string, string> = {
+    low: "green",
+    medium: "orange",
+    high: "red",
+    critical: "magenta",
+  };
+  return map[level] || "default";
+}
+
+function riskLabel(level: string) {
+  const map: Record<string, string> = {
+    low: "低风险",
+    medium: "中风险",
+    high: "高风险",
+    critical: "严重",
+  };
+  return map[level] || level;
+}
+
+function evaluationStatusColor(status: string) {
+  if (status === "completed") return "green";
+  if (status === "failed") return "red";
+  return "default";
+}
+
+function evaluationStatusLabel(status: string) {
+  if (status === "completed") return "完成";
+  if (status === "failed") return "失败";
+  if (status === "skipped") return "跳过";
+  return status;
+}
+
+function formatTime(ts: string) {
+  if (!ts) return "-";
+  return new Date(ts).toLocaleString();
+}
 
 type AgentRunStatus = "running" | "paused" | "completed" | "failed" | "stopped";
 
@@ -312,18 +724,6 @@ const sessionColumns = [
   },
 ];
 
-const taskEvents = computed(() => realtimeStore.events.filter((e) => e.taskId === taskId.value));
-
-const displayedTaskEvents = computed(() =>
-  taskEvents.value.slice(0, 30).map((event, index) => ({
-    ...event,
-    tableKey: event.id || `${event.ts}-${event.type}-${index}`,
-    data: event.data && typeof event.data === "object" ? event.data : {},
-  })),
-);
-
-const agentEvents = computed(() => taskEvents.value.filter((e) => e.type.startsWith("agent.")));
-
 const agentRuns = computed(() => {
   const runs = new Map<
     string,
@@ -351,7 +751,7 @@ const agentRuns = computed(() => {
       type:
         typeof event.data.agentType === "string"
           ? event.data.agentType
-          : existing?.type ?? "Agent",
+          : (existing?.type ?? "Agent"),
       updatedAt: Date.parse(event.ts),
     });
   }

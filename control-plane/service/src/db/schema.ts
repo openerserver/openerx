@@ -41,7 +41,11 @@ export const projects = sqliteTable("projects", {
   slug: text("slug").notNull(),
   description: text("description"),
   settings: text("settings", { mode: "json" }).$type<ProjectSettings>(),
+  status: text("status", { enum: ["active", "archived"] })
+    .notNull()
+    .default("active"),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
 // ── Environments ───────────────────────────────────────────────────
@@ -66,11 +70,20 @@ export const users = sqliteTable("users", {
   username: text("username").notNull().unique(),
   passwordHash: text("password_hash").notNull(),
   displayName: text("display_name").notNull(),
+  email: text("email"),
   role: text("role", {
     enum: ["platform_admin", "org_admin", "project_admin", "developer", "viewer"],
   })
     .notNull()
     .default("developer"),
+  accountStatus: text("account_status", { enum: ["active", "disabled"] })
+    .notNull()
+    .default("active"),
+  mustChangePassword: integer("must_change_password", { mode: "boolean" }).notNull().default(false),
+  tokenVersion: integer("token_version").notNull().default(0),
+  failedLoginAttempts: integer("failed_login_attempts").notNull().default(0),
+  lockedUntil: text("locked_until"),
+  lastLoginAt: text("last_login_at"),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
@@ -106,6 +119,61 @@ export const sessions = sqliteTable("sessions", {
   finishedAt: text("finished_at"),
 });
 
+// ── Repositories ───────────────────────────────────────────────────
+
+export const repositories = sqliteTable("repositories", {
+  id: text("id").primaryKey(),
+  projectId: text("project_id")
+    .notNull()
+    .references(() => projects.id),
+  name: text("name").notNull(),
+  provider: text("provider", {
+    enum: ["github", "gitlab", "gitea", "local"],
+  }).notNull(),
+  remoteUrl: text("remote_url").notNull(),
+  defaultBranch: text("default_branch").notNull().default("main"),
+  description: text("description"),
+  status: text("status", {
+    enum: ["active", "archived", "error"],
+  })
+    .notNull()
+    .default("active"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+// ── Repository Credentials (references, not raw secrets) ───────────
+
+export type CredentialType = "pat" | "oauth_token" | "ssh_key_ref" | "app_installation";
+
+export const repositoryCredentials = sqliteTable("repository_credentials", {
+  id: text("id").primaryKey(),
+  projectId: text("project_id")
+    .notNull()
+    .references(() => projects.id),
+  repoId: text("repo_id").references(() => repositories.id), // null = project-wide
+  label: text("label").notNull(),
+  provider: text("provider", {
+    enum: ["github", "gitlab", "gitea", "local"],
+  }).notNull(),
+  credentialType: text("credential_type", {
+    enum: ["pat", "oauth_token", "ssh_key_ref", "app_installation"],
+  }).notNull(),
+  /** Where the real secret lives — e.g. env var name or secret-store path. Never a raw token. */
+  secretRef: text("secret_ref").notNull(),
+  gitAuthorName: text("git_author_name"),
+  gitAuthorEmail: text("git_author_email"),
+  scope: text("scope", { enum: ["project", "shared"] })
+    .notNull()
+    .default("project"),
+  isDefault: integer("is_default", { mode: "boolean" }).notNull().default(false),
+  status: text("status", { enum: ["active", "revoked", "expired"] })
+    .notNull()
+    .default("active"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
 // ── Tasks ──────────────────────────────────────────────────────────
 
 export const tasks = sqliteTable("tasks", {
@@ -130,6 +198,32 @@ export const tasks = sqliteTable("tasks", {
     enum: ["quick", "deep", "ops", "security", "architecture"],
   }),
   strategy: text("strategy"), // JSON summary of execution strategy from orchestrator-plugin
+  repoId: text("repo_id").references(() => repositories.id),
+  workspaceRoot: text("workspace_root"),
+  baseRevision: text("base_revision"),
+  workingBranch: text("working_branch"),
+
+  // ── Model selection ─────────────────────────────────────────────
+  selectedModel: text("selected_model"), // user-chosen model at task creation
+
+  // ── Identity snapshot (frozen at execution start) ───────────────
+  credentialId: text("credential_id").references(() => repositoryCredentials.id),
+  gitAuthorName: text("git_author_name"),
+  gitAuthorEmail: text("git_author_email"),
+  gitCommitterName: text("git_committer_name"),
+  gitCommitterEmail: text("git_committer_email"),
+
+  // ── Post-execution facts ────────────────────────────────────────
+  finalCommitSha: text("final_commit_sha"),
+  finalBranchName: text("final_branch_name"),
+  changesSummary: text("changes_summary", { mode: "json" }).$type<{
+    filesAdded?: number;
+    filesModified?: number;
+    filesDeleted?: number;
+    totalInsertions?: number;
+    totalDeletions?: number;
+  }>(),
+
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   startedAt: text("started_at"),
   finishedAt: text("finished_at"),
@@ -169,6 +263,9 @@ export const auditEvents = sqliteTable("audit_events", {
   detail: text("detail", { mode: "json" }).$type<Record<string, unknown>>(),
   riskLevel: text("risk_level", { enum: ["low", "medium", "high", "critical"] }).default("low"),
   traceId: text("trace_id"),
+  // Identity-chain fields
+  credentialId: text("credential_id"),
+  authorResolvedAs: text("author_resolved_as"), // e.g. "user:alice" or "shared:ci-bot"
 });
 
 // ── Cost Records ───────────────────────────────────────────────────
@@ -289,6 +386,41 @@ export const agentRuns = sqliteTable("agent_runs", {
   startedAt: text("started_at"),
   finishedAt: text("finished_at"),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+// ── Code Changes ───────────────────────────────────────────────────
+
+export const codeChanges = sqliteTable("code_changes", {
+  id: text("id").primaryKey(),
+  taskId: text("task_id")
+    .notNull()
+    .references(() => tasks.id),
+  repoId: text("repo_id").references(() => repositories.id),
+  agentRunId: text("agent_run_id").references(() => agentRuns.id),
+  changeSource: text("change_source", {
+    enum: ["runtime_diff", "task_snapshot", "git_commit"],
+  }).notNull(),
+  commitSha: text("commit_sha"),
+  commitAuthorName: text("commit_author_name"),
+  commitAuthorEmail: text("commit_author_email"),
+  commitMessage: text("commit_message"),
+  branchName: text("branch_name"),
+  summary: text("summary"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const fileChanges = sqliteTable("file_changes", {
+  id: text("id").primaryKey(),
+  changeId: text("change_id")
+    .notNull()
+    .references(() => codeChanges.id),
+  filePath: text("file_path").notNull(),
+  changeType: text("change_type", {
+    enum: ["added", "modified", "deleted", "renamed"],
+  }).notNull(),
+  oldPath: text("old_path"),
+  insertions: integer("insertions").notNull().default(0),
+  deletions: integer("deletions").notNull().default(0),
 });
 
 // ── Plugins (lifecycle metadata) ───────────────────────────────────

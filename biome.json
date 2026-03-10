@@ -16,7 +16,15 @@
     "lineWidth": 100
   },
   "files": {
-    "ignore": ["node_modules", "dist", ".opencode/state"]
+    "ignore": [
+      "node_modules",
+      "dist",
+      ".opencode",
+      ".vscode",
+      "tmp",
+      "opencode-fork/.opencode",
+      "control-plane/web-ui/src/components.d.ts"
+    ]
   },
   "overrides": [
     {

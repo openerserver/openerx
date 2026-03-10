@@ -27,28 +27,86 @@ interface AgentRunRecord {
 const PROMPT_SETTLE_MS = 1200;
 const MIN_ACTIVE_BEFORE_PAUSE_MS = 3000;
 
-function buildPromptBody(
-  text: string,
-  options?: { noReply?: boolean; agent?: string; taskId?: string; projectId?: string },
-): Record<string, unknown> {
-  const executionContext =
-    options?.taskId && options?.projectId
-      ? [
-          "Execution context:",
-          `- OpenerX task ID: ${options.taskId}`,
-          `- Project ID: ${options.projectId}`,
-          "- If you call create_sub_session, dispatch_to_agent, list_sub_sessions, or any task_graph_* tool, you MUST use the exact OpenerX task ID above as taskId.",
-          "- For task_graph_create, nodes must use JSON objects shaped like {subject, agentType, maxRetries?}.",
-          "- For task_graph_create, edges must use JSON objects shaped like {fromIndex, toIndex, type?} where indexes reference the nodes array.",
-          "",
-        ].join("\n")
-      : "";
+type PromptOptions = {
+  noReply?: boolean;
+  agent?: string;
+  taskId?: string;
+  projectId?: string;
+  model?: { providerId: string; modelId: string };
+  repoContext?: {
+    repoName?: string;
+    remoteUrl?: string;
+    workingBranch?: string;
+    gitAuthorName?: string;
+    gitAuthorEmail?: string;
+    gitCommitterName?: string;
+    gitCommitterEmail?: string;
+  };
+};
+
+function appendExecutionContextLines(lines: string[], options?: PromptOptions): void {
+  if (!options?.taskId || !options?.projectId) {
+    return;
+  }
+
+  lines.push(
+    "Execution context:",
+    `- OpenerX task ID: ${options.taskId}`,
+    `- Project ID: ${options.projectId}`,
+  );
+}
+
+function appendRepoContextLines(lines: string[], repoContext?: PromptOptions["repoContext"]): void {
+  if (!repoContext) {
+    return;
+  }
+
+  if (repoContext.repoName) lines.push(`- Repository: ${repoContext.repoName}`);
+  if (repoContext.remoteUrl) lines.push(`- Remote URL: ${repoContext.remoteUrl}`);
+  if (repoContext.workingBranch) lines.push(`- Working branch: ${repoContext.workingBranch}`);
+  if (repoContext.gitAuthorName || repoContext.gitAuthorEmail) {
+    lines.push(
+      `- Git author: ${repoContext.gitAuthorName ?? ""} <${repoContext.gitAuthorEmail ?? ""}>`,
+    );
+  }
+  if (repoContext.gitCommitterName || repoContext.gitCommitterEmail) {
+    lines.push(
+      `- Git committer: ${repoContext.gitCommitterName ?? ""} <${repoContext.gitCommitterEmail ?? ""}>`,
+    );
+  }
+}
+
+function appendTaskGraphToolingNotes(lines: string[], options?: PromptOptions): void {
+  if (!options?.taskId || !options?.projectId) {
+    return;
+  }
+
+  lines.push(
+    "- If you call create_sub_session, dispatch_to_agent, list_sub_sessions, or any task_graph_* tool, you MUST use the exact OpenerX task ID above as taskId.",
+    "- For task_graph_create, nodes must use JSON objects shaped like {subject, agentType, maxRetries?}.",
+    "- For task_graph_create, edges must use JSON objects shaped like {fromIndex, toIndex, type?} where indexes reference the nodes array.",
+  );
+}
+
+function buildExecutionContext(options?: PromptOptions): string {
+  const lines: string[] = [];
+  appendExecutionContextLines(lines, options);
+  appendRepoContextLines(lines, options?.repoContext);
+  appendTaskGraphToolingNotes(lines, options);
+  return lines.length > 0 ? `${lines.join("\n")}\n\n` : "";
+}
+
+function buildPromptBody(text: string, options?: PromptOptions): Record<string, unknown> {
+  const executionContext = buildExecutionContext(options);
+
+  const modelProvider = options?.model?.providerId || OPENCODE_PROVIDER_ID;
+  const modelId = options?.model?.modelId || OPENCODE_MODEL_ID;
 
   return {
     parts: [{ type: "text", text: `${executionContext}${text}` }],
     model: {
-      providerID: OPENCODE_PROVIDER_ID,
-      modelID: OPENCODE_MODEL_ID,
+      providerID: modelProvider,
+      modelID: modelId,
     },
     ...(options?.agent ? { agent: options.agent } : {}),
     ...(typeof options?.noReply === "boolean" ? { noReply: options.noReply } : {}),
@@ -103,6 +161,19 @@ async function opcall(method: string, path: string, body?: unknown): Promise<Ope
 
 const agentRunRegistry = new Map<string, AgentRunRecord>();
 
+function parseStartedAt(value?: string | number | null): number {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Date.parse(value);
+    if (!Number.isNaN(parsed)) {
+      return parsed;
+    }
+  }
+  return Date.now();
+}
+
 export function registerAgentRun(
   agentRunId: string,
   subSessionId: string,
@@ -115,6 +186,22 @@ export function registerAgentRun(
     taskId,
     projectId,
     startedAt: Date.now(),
+  });
+}
+
+export function recoverAgentRun(
+  agentRunId: string,
+  subSessionId: string,
+  taskId: string,
+  projectId: string,
+  startedAt?: string | number | null,
+): void {
+  agentRunRegistry.set(agentRunId, {
+    subSessionId,
+    status: "running",
+    taskId,
+    projectId,
+    startedAt: parseStartedAt(startedAt),
   });
 }
 
@@ -190,7 +277,19 @@ export async function createSession(
   taskId: string,
   projectId: string,
   prompt: string,
-  options?: { agent?: string },
+  options?: {
+    agent?: string;
+    model?: { providerId: string; modelId: string };
+    repoContext?: {
+      repoName?: string;
+      remoteUrl?: string;
+      workingBranch?: string;
+      gitAuthorName?: string;
+      gitAuthorEmail?: string;
+      gitCommitterName?: string;
+      gitCommitterEmail?: string;
+    };
+  },
 ): Promise<OpencodeResponse & { sessionId?: string; agentRunId?: string }> {
   // 1. Create a new session in OpenCode
   const sessionResult = await opcall("POST", "/session", {
@@ -217,8 +316,10 @@ export async function createSession(
     `/session/${sessionId}/prompt_async`,
     buildPromptBody(prompt, {
       agent: options?.agent || "build",
+      model: options?.model,
       taskId,
       projectId,
+      repoContext: options?.repoContext,
     }),
   );
 
@@ -290,9 +391,6 @@ export async function injectGuidance(
   return result;
 }
 
-/**
- * Resume a paused agent run.
- */
 export async function resumeAgent(agentRunId: string): Promise<OpencodeResponse> {
   const run = agentRunRegistry.get(agentRunId);
   if (!run) return { ok: false, error: "Agent run not found" };
@@ -314,12 +412,10 @@ export async function resumeAgent(agentRunId: string): Promise<OpencodeResponse>
     run.pausedAt = undefined;
     markPromptSent(run);
   }
+
   return result;
 }
 
-/**
- * Terminate an agent run permanently.
- */
 export async function terminateAgent(agentRunId: string): Promise<OpencodeResponse> {
   const run = agentRunRegistry.get(agentRunId);
   if (!run) return { ok: false, error: "Agent run not found" };
@@ -329,12 +425,10 @@ export async function terminateAgent(agentRunId: string): Promise<OpencodeRespon
   if (result.ok) {
     updateAgentRunStatus(agentRunId, "stopped");
   }
+
   return result;
 }
 
-/**
- * Get the list of messages for an agent run's sub-session.
- */
 export async function getAgentMessages(agentRunId: string): Promise<OpencodeResponse> {
   const run = agentRunRegistry.get(agentRunId);
   if (!run) return { ok: false, error: "Agent run not found" };
@@ -346,13 +440,155 @@ export async function getSessionMessages(sessionId: string): Promise<OpencodeRes
   return await opcall("GET", `/session/${sessionId}/message?limit=200`);
 }
 
+function getAssistantMessageInfo(message: unknown): Record<string, unknown> | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+
+  return "info" in message && typeof message.info === "object" && message.info
+    ? (message.info as Record<string, unknown>)
+    : undefined;
+}
+
+function getMessageParts(message: unknown): Record<string, unknown>[] {
+  if (!message || typeof message !== "object") {
+    return [];
+  }
+
+  return Array.isArray((message as { parts?: unknown }).parts)
+    ? ((message as { parts: unknown[] }).parts as Record<string, unknown>[])
+    : [];
+}
+
+function readAssistantText(parts: Record<string, unknown>[]): string | undefined {
+  const text = parts
+    .filter((part) => part.type === "text" && typeof part.text === "string")
+    .map((part) => String(part.text).trim())
+    .filter(Boolean)
+    .join("\n\n");
+
+  return text || undefined;
+}
+
+function isCompletedAssistantMessage(info: Record<string, unknown> | undefined): boolean {
+  const time =
+    typeof info?.time === "object" && info.time
+      ? (info.time as Record<string, unknown>)
+      : undefined;
+  const completed = time?.completed;
+  return typeof completed === "number" || typeof completed === "string";
+}
+
+export function extractAssistantResultFromMessages(messages: unknown): {
+  text?: string;
+  completed: boolean;
+} {
+  if (!Array.isArray(messages)) {
+    return { completed: false };
+  }
+
+  let fallbackText: string | undefined;
+
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    const info = getAssistantMessageInfo(message);
+    if (info?.role !== "assistant") {
+      continue;
+    }
+
+    const text = readAssistantText(getMessageParts(message));
+    if (text) {
+      fallbackText = text;
+    }
+
+    if (text && isCompletedAssistantMessage(info)) {
+      return { text, completed: true };
+    }
+
+    break;
+  }
+
+  return { text: fallbackText, completed: false };
+}
+
+async function waitForSessionText(
+  sessionId: string,
+  timeoutMs: number,
+): Promise<{ text?: string; completed: boolean }> {
+  const deadline = Date.now() + timeoutMs;
+  let fallbackText: string | undefined;
+
+  while (Date.now() < deadline) {
+    const messagesResult = await getSessionMessages(sessionId);
+    if (!messagesResult.ok || !Array.isArray(messagesResult.data)) {
+      return { text: fallbackText, completed: false };
+    }
+
+    const assistantResult = extractAssistantResultFromMessages(messagesResult.data);
+    if (assistantResult.text) {
+      fallbackText = assistantResult.text;
+    }
+
+    if (assistantResult.completed) {
+      return assistantResult;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+
+  return { text: fallbackText, completed: false };
+}
+
 export async function listSessions(limit = 20): Promise<OpencodeResponse> {
   return await opcall("GET", `/session?limit=${limit}`);
+}
+
+export async function runDetachedPrompt(
+  title: string,
+  prompt: string,
+  options?: PromptOptions & { timeoutMs?: number },
+): Promise<OpencodeResponse & { sessionId?: string; text?: string; completed?: boolean }> {
+  const sessionResult = await opcall("POST", "/session", { title });
+  if (!sessionResult.ok) {
+    return { ok: false, error: sessionResult.error || "Failed to create detached session" };
+  }
+
+  const sessionData = sessionResult.data as { id?: string; sessionID?: string };
+  const sessionId = sessionData.id || sessionData.sessionID;
+  if (!sessionId) {
+    return { ok: false, error: "No session ID returned from OpenCode" };
+  }
+
+  const promptResult = await opcall(
+    "POST",
+    `/session/${sessionId}/prompt_async`,
+    buildPromptBody(prompt, options),
+  );
+  if (!promptResult.ok) {
+    return {
+      ok: false,
+      error: promptResult.error || "Detached session created but prompt failed",
+      sessionId,
+    };
+  }
+
+  const result = await waitForSessionText(sessionId, options?.timeoutMs ?? 15000);
+  return {
+    ok: true,
+    sessionId,
+    text: result.text,
+    completed: result.completed,
+  };
 }
 
 export async function continueSession(
   sessionId: string,
   prompt: string,
+  options?: { model?: { providerId: string; modelId: string } },
 ): Promise<OpencodeResponse> {
-  return await opcall("POST", `/session/${sessionId}/prompt_async`, buildPromptBody(prompt));
+  return await opcall(
+    "POST",
+    `/session/${sessionId}/prompt_async`,
+    buildPromptBody(prompt, { model: options?.model }),
+  );
 }

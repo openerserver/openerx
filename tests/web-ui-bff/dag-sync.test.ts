@@ -1,8 +1,11 @@
 import { afterAll, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { observeGraphWorkspaceDir, resolveGraphStorageDirs } from "../src/modules/realtime/dag-sync";
+import { join } from "node:path";
+import {
+  observeGraphWorkspaceDir,
+  resolveGraphStorageDirs,
+} from "../../control-plane/web-ui-bff/src/modules/realtime/dag-sync";
 
 const tempPaths: string[] = [];
 

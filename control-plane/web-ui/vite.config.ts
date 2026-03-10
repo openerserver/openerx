@@ -33,6 +33,10 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": resolve(__dirname, "src"),
+      "@vue/test-utils": resolve(__dirname, "node_modules/@vue/test-utils"),
+      pinia: resolve(__dirname, "node_modules/pinia"),
+      vue: resolve(__dirname, "node_modules/vue"),
+      "vue-router": resolve(__dirname, "node_modules/vue-router"),
     },
   },
   build: {
@@ -55,5 +59,10 @@ export default defineConfig({
         ws: true,
       },
     },
+  },
+  test: {
+    environment: "jsdom",
+    include: ["../../tests/web-ui/**/*.test.ts"],
+    setupFiles: "../../tests/web-ui/vitest.setup.ts",
   },
 });

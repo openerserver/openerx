@@ -1,53 +1,221 @@
 <template>
   <div style="padding: 24px">
+    <!-- 标题操作区 -->
     <a-flex justify="space-between" align="center" style="margin-bottom: 16px">
-      <a-typography-title :level="3" style="margin: 0">项目管理</a-typography-title>
+      <div>
+        <a-typography-title :level="3" style="margin: 0">项目管理</a-typography-title>
+        <a-typography-text type="secondary">统一查看项目状态、配置完整度与治理风险</a-typography-text>
+      </div>
       <a-button v-if="canCreateProject" type="primary" @click="showCreateModal = true">
         <template #icon><PlusOutlined /></template>
         新建项目
       </a-button>
     </a-flex>
 
+    <!-- 筛选工具区 -->
+    <a-card size="small" style="margin-bottom: 16px">
+      <a-flex wrap="wrap" gap="middle" align="center">
+        <a-input-search
+          :value="queryText"
+          placeholder="搜索项目名称 / Slug"
+          style="width: 220px"
+          allow-clear
+          @update:value="queryText = String($event ?? '')"
+          @search="loadOverview()"
+        />
+        <a-select
+          :value="selectedOrgId || undefined"
+          placeholder="全部组织"
+          style="width: 160px"
+          allow-clear
+          @update:value="selectedOrgId = String($event ?? ''); loadOverview()"
+        >
+          <a-select-option v-for="org in orgs" :key="org.id" :value="org.id">
+            {{ org.name }}
+          </a-select-option>
+        </a-select>
+        <a-select
+          :value="selectedProjectStatus || undefined"
+          placeholder="全部状态"
+          style="width: 130px"
+          allow-clear
+          @update:value="selectedProjectStatus = String($event ?? ''); loadOverview()"
+        >
+          <a-select-option value="healthy">正常</a-select-option>
+          <a-select-option value="pending_config">待配置</a-select-option>
+          <a-select-option value="archived">已归档</a-select-option>
+          <a-select-option value="error">异常</a-select-option>
+        </a-select>
+        <a-select
+          :value="selectedConfigStatus || undefined"
+          placeholder="配置状态"
+          style="width: 130px"
+          allow-clear
+          @update:value="selectedConfigStatus = String($event ?? ''); loadOverview()"
+        >
+          <a-select-option value="configured">已配置</a-select-option>
+          <a-select-option value="pending">待配置</a-select-option>
+          <a-select-option value="risk">存在风险</a-select-option>
+        </a-select>
+        <a-select
+          :value="selectedSortBy"
+          style="width: 150px"
+          @update:value="selectedSortBy = String($event ?? 'last_activity_desc'); loadOverview()"
+        >
+          <a-select-option value="last_activity_desc">最近活跃</a-select-option>
+          <a-select-option value="created_at_desc">最近创建</a-select-option>
+          <a-select-option value="name_asc">名称 A-Z</a-select-option>
+        </a-select>
+        <a-switch
+          :checked="onlyManaged"
+          checked-children="仅我管理"
+          un-checked-children="全部"
+          @update:checked="onlyManaged = !!$event; loadOverview()"
+        />
+        <a-button @click="resetFilters">重置</a-button>
+      </a-flex>
+    </a-card>
+
+    <!-- 摘要提示区 -->
+    <a-alert
+      v-if="summary && summary.totalProjects > 0"
+      type="info"
+      show-icon
+      style="margin-bottom: 16px"
+    >
+      <template #message>
+        <span>
+          共 {{ summary.totalProjects }} 个项目<template v-if="summary.pendingConfigCount > 0">，其中 {{ summary.pendingConfigCount }} 个待配置</template><template v-if="summary.riskCount > 0">，{{ summary.riskCount }} 个存在治理风险</template>
+        </span>
+        <a-button
+          v-if="summary.pendingConfigCount > 0"
+          type="link"
+          size="small"
+          @click="selectedProjectStatus = 'pending_config'; loadOverview()"
+        >查看待配置</a-button>
+        <a-button
+          v-if="summary.riskCount > 0"
+          type="link"
+          size="small"
+          @click="selectedConfigStatus = 'risk'; loadOverview()"
+        >查看风险项目</a-button>
+      </template>
+    </a-alert>
+
+    <!-- 总览表格 -->
     <a-table
-      :data-source="projectStore.projects"
+      :data-source="overviewRows"
       :columns="columns"
-      :loading="projectStore.loading"
-      :pagination="{ pageSize: 20 }"
+      :loading="overviewLoading"
+      :pagination="{
+        current: pagination.page,
+        pageSize: pagination.pageSize,
+        total: pagination.total,
+        showSizeChanger: true,
+        showTotal: (total: number) => `共 ${total} 条`,
+      }"
       row-key="id"
       size="middle"
+      @change="handleTableChange"
     >
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'name'">
-          <router-link :to="`/projects/${record.id}`">
-            {{ record.name }}
-          </router-link>
+          <div>
+            <router-link :to="`/projects/${record.id}`" style="font-weight: 500">
+              {{ record.name }}
+            </router-link>
+            <a-tag v-if="record.isCurrentUserManager" color="blue" style="margin-left: 6px; font-size: 11px">我管理</a-tag>
+          </div>
+          <a-typography-text type="secondary" style="font-size: 12px">{{ record.slug }}</a-typography-text>
         </template>
 
-        <template v-if="column.key === 'slug'">
-          <a-typography-text code>{{ record.slug }}</a-typography-text>
+        <template v-if="column.key === 'orgName'">
+          {{ record.orgName }}
         </template>
 
-        <template v-if="column.key === 'description'">
-          {{ record.description || '-' }}
+        <template v-if="column.key === 'projectStatus'">
+          <a-tag :color="statusColor(record.projectStatus)">
+            {{ statusLabel(record.projectStatus) }}
+          </a-tag>
         </template>
 
-        <template v-if="column.key === 'createdAt'">
-          {{ formatTime(record.createdAt) }}
+        <template v-if="column.key === 'completion'">
+          <a-progress
+            :percent="record.completionPercent"
+            :stroke-color="record.completionPercent >= 100 ? '#52c41a' : '#1677ff'"
+            size="small"
+            style="width: 100px; display: inline-block; vertical-align: middle"
+          />
+          <span style="font-size: 12px; margin-left: 8px; color: #8c8c8c">
+            {{ record.completedCount }}/{{ record.totalRequiredCount }}
+          </span>
+        </template>
+
+        <template v-if="column.key === 'risks'">
+          <template v-if="record.risks.length === 0">
+            <a-typography-text type="secondary">—</a-typography-text>
+          </template>
+          <template v-else>
+            <a-tag v-for="(risk, idx) in record.risks.slice(0, 2)" :key="idx" color="warning" style="margin-bottom: 2px">
+              {{ risk }}
+            </a-tag>
+            <a-tag v-if="record.risks.length > 2" color="default">
+              +{{ record.risks.length - 2 }}
+            </a-tag>
+          </template>
+        </template>
+
+        <template v-if="column.key === 'activity'">
+          <div style="font-size: 12px">
+            <span v-if="record.runningTasks > 0" style="color: #1677ff">运行中 {{ record.runningTasks }}</span>
+            <span v-else style="color: #8c8c8c">运行中 0</span>
+          </div>
+          <div style="font-size: 12px">
+            <span v-if="record.pendingApprovals > 0" style="color: #fa8c16">待审批 {{ record.pendingApprovals }}</span>
+            <span v-else style="color: #8c8c8c">待审批 0</span>
+          </div>
+          <div v-if="record.failedTasksToday > 0" style="font-size: 12px; color: #ff4d4f">
+            今日失败 {{ record.failedTasksToday }}
+          </div>
+        </template>
+
+        <template v-if="column.key === 'lastActivityAt'">
+          <a-tooltip :title="record.lastActivityAt ? formatTime(record.lastActivityAt) : '-'">
+            {{ formatRelativeTime(record.lastActivityAt) }}
+          </a-tooltip>
         </template>
 
         <template v-if="column.key === 'actions'">
           <a-space>
-            <a-button
-              v-if="canEditProject(String(record.id || ''))"
-              type="link"
-              size="small"
-              @click="openEdit(record)"
-            >
-              编辑
-            </a-button>
             <router-link :to="`/projects/${record.id}`">
               <a-button type="link" size="small">详情</a-button>
             </router-link>
+            <a-button
+              v-if="record.risks.length > 0"
+              type="link"
+              size="small"
+              @click="openQuickConfig(record as any)"
+            >快速配置</a-button>
+            <a-dropdown>
+              <a-button type="link" size="small">更多 <DownOutlined /></a-button>
+              <template #overlay>
+                <a-menu>
+                  <a-menu-item
+                    v-if="record.isCurrentUserManager"
+                    @click="openEdit(record as any)"
+                  >编辑项目</a-menu-item>
+                  <a-menu-item @click="$router.push(`/projects/${record.id}?tab=members`)">查看成员</a-menu-item>
+                  <a-menu-item @click="$router.push(`/projects/${record.id}?tab=repositories`)">查看仓库</a-menu-item>
+                  <a-menu-item @click="$router.push(`/projects/${record.id}?tab=credentials`)">查看凭证</a-menu-item>
+                  <a-menu-item
+                    v-if="record.isCurrentUserManager && record.projectStatus !== 'archived'"
+                    @click="handleArchive(record as any)"
+                  >
+                    <span style="color: #ff4d4f">归档项目</span>
+                  </a-menu-item>
+                </a-menu>
+              </template>
+            </a-dropdown>
           </a-space>
         </template>
       </template>
@@ -143,18 +311,53 @@
 </template>
 
 <script setup lang="ts">
-import { PlusOutlined } from "@ant-design/icons-vue";
-import { message } from "ant-design-vue";
+import { DownOutlined, PlusOutlined } from "@ant-design/icons-vue";
+import { Modal, message } from "ant-design-vue";
 import { computed, onMounted, ref } from "vue";
-import { type Org, type Project, createProject, listOrgs, updateProject } from "../lib/api";
+import { useRouter } from "vue-router";
+import {
+  type Org,
+  type ProjectOverviewItem,
+  archiveProject,
+  createProject,
+  listOrgs,
+  listProjectOverview,
+  updateProject,
+} from "../lib/api";
 import { useAuthStore } from "../stores/auth";
 import { useProjectStore } from "../stores/project";
 
 const authStore = useAuthStore();
 const projectStore = useProjectStore();
+const router = useRouter();
+
+// ── Filter state ───────────────────────────────────────────────────
+
+const queryText = ref("");
+const selectedOrgId = ref("");
+const selectedProjectStatus = ref("");
+const selectedConfigStatus = ref("");
+const selectedSortBy = ref("last_activity_desc");
+const onlyManaged = ref(false);
+
+// ── Overview data ──────────────────────────────────────────────────
+
+const overviewLoading = ref(false);
+const overviewRows = ref<ProjectOverviewItem[]>([]);
+const summary = ref<{
+  totalProjects: number;
+  pendingConfigCount: number;
+  riskCount: number;
+} | null>(null);
+const pagination = ref({ page: 1, pageSize: 20, total: 0 });
+
+// ── Org data (for filters & create) ───────────────────────────────
 
 const orgs = ref<Org[]>([]);
 const orgsLoading = ref(false);
+
+// ── Create/Edit modals ────────────────────────────────────────────
+
 const showCreateModal = ref(false);
 const creating = ref(false);
 const showEditModal = ref(false);
@@ -173,22 +376,73 @@ const editForm = ref({
   description: "",
 });
 
+// ── Table columns ──────────────────────────────────────────────────
+
 const columns = [
-  { title: "项目名称", key: "name", dataIndex: "name" },
-  { title: "Slug", key: "slug", dataIndex: "slug", width: 160 },
-  { title: "描述", key: "description", dataIndex: "description", ellipsis: true },
-  { title: "创建时间", key: "createdAt", dataIndex: "createdAt", width: 180 },
-  { title: "操作", key: "actions", width: 150 },
+  { title: "项目名称", key: "name", dataIndex: "name", width: 220 },
+  { title: "所属组织", key: "orgName", dataIndex: "orgName", width: 120 },
+  { title: "状态", key: "projectStatus", dataIndex: "projectStatus", width: 90 },
+  { title: "配置完成度", key: "completion", width: 180 },
+  { title: "风险提示", key: "risks", width: 200 },
+  { title: "任务/审批", key: "activity", width: 120 },
+  { title: "最近活跃", key: "lastActivityAt", dataIndex: "lastActivityAt", width: 130 },
+  { title: "操作", key: "actions", width: 200 },
 ];
+
+// ── Computed ───────────────────────────────────────────────────────
 
 const canCreateProject = computed(
   () => authStore.user?.role === "platform_admin" || authStore.user?.role === "org_admin",
 );
 
+// ── Lifecycle ──────────────────────────────────────────────────────
+
 onMounted(async () => {
-  await projectStore.loadProjects();
-  await loadOrgs();
+  await Promise.all([loadOverview(), loadOrgs()]);
 });
+
+// ── Methods ────────────────────────────────────────────────────────
+
+async function loadOverview() {
+  overviewLoading.value = true;
+  try {
+    const res = await listProjectOverview({
+      q: queryText.value || undefined,
+      orgId: selectedOrgId.value || undefined,
+      status: selectedProjectStatus.value || undefined,
+      configStatus: selectedConfigStatus.value || undefined,
+      onlyManaged: onlyManaged.value || undefined,
+      sortBy: selectedSortBy.value,
+      page: pagination.value.page,
+      pageSize: pagination.value.pageSize,
+    });
+    overviewRows.value = res.data;
+    summary.value = res.summary;
+    pagination.value.total = res.total;
+    pagination.value.page = res.page;
+  } catch (e) {
+    message.error(`加载项目总览失败: ${e}`);
+  } finally {
+    overviewLoading.value = false;
+  }
+}
+
+function resetFilters() {
+  queryText.value = "";
+  selectedOrgId.value = "";
+  selectedProjectStatus.value = "";
+  selectedConfigStatus.value = "";
+  selectedSortBy.value = "last_activity_desc";
+  onlyManaged.value = false;
+  pagination.value.page = 1;
+  loadOverview();
+}
+
+function handleTableChange(pag: { current?: number; pageSize?: number }) {
+  if (pag.current) pagination.value.page = pag.current;
+  if (pag.pageSize) pagination.value.pageSize = pag.pageSize;
+  loadOverview();
+}
 
 async function loadOrgs() {
   orgsLoading.value = true;
@@ -204,15 +458,62 @@ async function loadOrgs() {
   }
 }
 
-function canEditProject(projectId: string) {
-  const globalRole = authStore.user?.role;
-  if (globalRole === "platform_admin" || globalRole === "org_admin") {
-    return true;
-  }
+function statusLabel(status: string) {
+  const map: Record<string, string> = {
+    healthy: "正常",
+    pending_config: "待配置",
+    archived: "已归档",
+    error: "异常",
+  };
+  return map[status] || status;
+}
 
-  return authStore.user?.projects?.some(
-    (project) => project.id === projectId && project.role === "project_admin",
-  );
+function statusColor(status: string) {
+  const map: Record<string, string> = {
+    healthy: "success",
+    pending_config: "warning",
+    archived: "default",
+    error: "error",
+  };
+  return map[status] || "default";
+}
+
+function openQuickConfig(record: ProjectOverviewItem) {
+  const risks = record.risks;
+  let tab = "overview";
+  if (risks.includes("凭证已过期") || risks.includes("无凭证")) {
+    tab = "credentials";
+  } else if (risks.includes("无仓库")) {
+    tab = "repositories";
+  } else if (risks.includes("无环境")) {
+    tab = "environments";
+  } else if (
+    risks.includes("无默认环境") ||
+    risks.includes("审批未绑定") ||
+    risks.includes("预算未配置")
+  ) {
+    tab = "settings";
+  }
+  router.push(`/projects/${record.id}?tab=${tab}`);
+}
+
+function handleArchive(record: ProjectOverviewItem) {
+  Modal.confirm({
+    title: "确认归档项目？",
+    content: `归档后项目「${record.name}」将不再允许新建任务，但保留详情查看和审计记录。`,
+    okText: "确认归档",
+    okType: "danger",
+    cancelText: "取消",
+    async onOk() {
+      try {
+        await archiveProject(record.id);
+        message.success("项目已归档");
+        await loadOverview();
+      } catch (e) {
+        message.error(`归档失败: ${e}`);
+      }
+    },
+  });
 }
 
 function autoSlug() {
@@ -252,6 +553,7 @@ async function handleCreate() {
     projectStore.addProject(project);
     showCreateModal.value = false;
     createForm.value = { orgId: orgs.value[0]?.id || "", name: "", slug: "", description: "" };
+    await loadOverview();
   } catch (e) {
     message.error(`创建失败: ${e}`);
   } finally {
@@ -259,16 +561,11 @@ async function handleCreate() {
   }
 }
 
-function openEdit(record: Record<string, unknown>) {
-  if (!canEditProject(String(record.id || ""))) {
-    message.error("你没有修改该项目的权限");
-    return;
-  }
-
-  editingProjectId.value = String(record.id);
+function openEdit(record: ProjectOverviewItem) {
+  editingProjectId.value = record.id;
   editForm.value = {
-    name: String(record.name || ""),
-    description: String(record.description || ""),
+    name: record.name || "",
+    description: record.description || "",
   };
   showEditModal.value = true;
 }
@@ -286,12 +583,8 @@ async function handleEdit() {
       description: editForm.value.description.trim(),
     });
     message.success("保存成功");
-    projectStore.updateProjectInList({
-      id: editingProjectId.value,
-      name: editForm.value.name.trim(),
-      description: editForm.value.description.trim(),
-    });
     showEditModal.value = false;
+    await loadOverview();
   } catch (e) {
     message.error(`保存失败: ${e}`);
   } finally {
@@ -302,5 +595,18 @@ async function handleEdit() {
 function formatTime(ts: string) {
   if (!ts) return "-";
   return new Date(ts).toLocaleString();
+}
+
+function formatRelativeTime(ts?: string | null) {
+  if (!ts) return "-";
+  const diff = Date.now() - new Date(ts).getTime();
+  const minutes = Math.floor(diff / 60000);
+  if (minutes < 1) return "刚刚";
+  if (minutes < 60) return `${minutes} 分钟前`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days} 天前`;
+  return formatTime(ts);
 }
 </script>

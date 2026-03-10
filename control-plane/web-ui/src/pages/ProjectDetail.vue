@@ -99,6 +99,16 @@
           <ProjectEnvironmentsPanel :project-id="project.id" />
         </a-tab-pane>
 
+        <!-- 代码仓库 Tab -->
+        <a-tab-pane key="repositories" tab="代码仓库">
+          <ProjectRepositoriesPanel :project-id="project.id" />
+        </a-tab-pane>
+
+        <!-- 凭证 Tab -->
+        <a-tab-pane key="credentials" tab="凭证">
+          <ProjectCredentialsPanel :project-id="project.id" />
+        </a-tab-pane>
+
         <!-- 成员 Tab -->
         <a-tab-pane key="members" tab="成员">
           <ProjectMembersPanel :project-id="project.id" />
@@ -166,6 +176,10 @@ const canManage = computed(() => {
 });
 
 onMounted(async () => {
+  const tab = route.query.tab;
+  if (typeof tab === "string" && tab) {
+    activeTab.value = tab;
+  }
   const projectId = String(route.params.projectId);
   try {
     project.value = (await getProject(projectId)) as ProjectWithSettings;

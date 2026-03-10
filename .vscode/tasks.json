@@ -1,0 +1,34 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "start-opencode-runtime",
+			"type": "shell",
+			"command": "/Users/wanglei/.opencode/bin/opencode",
+			"args": [
+				"serve",
+				".",
+				"--hostname",
+				"127.0.0.1",
+				"--port",
+				"4096"
+			],
+			"isBackground": true,
+			"group": "none"
+		},
+		{
+			"label": "start-opencode-runtime",
+			"type": "shell",
+			"command": "/Users/wanglei/.opencode/bin/opencode",
+			"args": [
+				"serve",
+				"--hostname",
+				"127.0.0.1",
+				"--port",
+				"4096"
+			],
+			"isBackground": true,
+			"group": "none"
+		}
+	]
+}

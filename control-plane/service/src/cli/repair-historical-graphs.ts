@@ -107,9 +107,7 @@ function toIsoOrNull(value?: number | null): string | null {
 }
 
 function normalizeNodeStatus(value?: string): NodeStatus {
-  return value && VALID_NODE_STATUSES.has(value as NodeStatus)
-    ? (value as NodeStatus)
-    : "pending";
+  return value && VALID_NODE_STATUSES.has(value as NodeStatus) ? (value as NodeStatus) : "pending";
 }
 
 function normalizeEdgeType(value?: string): EdgeType {
@@ -144,6 +142,7 @@ async function fetchRuntimeMessages(sessionId: string): Promise<unknown[]> {
   return Array.isArray(data) ? data : [];
 }
 
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: runtime mapping repair must inspect several tool shapes and fallback outputs from historical sessions.
 function extractRuntimeMappings(
   taskId: string,
   messages: unknown[],
@@ -195,6 +194,7 @@ function extractRuntimeMappings(
   }
 }
 
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: historical repair CLI merges several fallback mapping sources in one maintenance-only flow.
 async function buildResolverMaps(): Promise<ResolverMaps> {
   const [taskRows, sessionRows, runRows, nodeRows] = await Promise.all([
     db.select({ id: tasks.id, sessionId: tasks.sessionId }).from(tasks),
@@ -331,7 +331,8 @@ async function repairGraph(
       filePath,
       originalTaskId,
       status: "skipped",
-      reason: "No matching control-plane task could be resolved from graph.taskId or node sessionIds",
+      reason:
+        "No matching control-plane task could be resolved from graph.taskId or node sessionIds",
     };
   }
 
@@ -369,6 +370,7 @@ async function repairGraph(
   };
 }
 
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: CLI entrypoint intentionally combines argument parsing, filtering, execution, and reporting.
 async function main() {
   const { parsed, flags } = parseArgs();
 

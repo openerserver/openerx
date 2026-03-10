@@ -4,16 +4,21 @@ import { logger } from "hono/logger";
 import { authMiddleware } from "./middleware/auth";
 import { agentControlRoutes } from "./modules/agent-control/routes";
 import { approvalRoutes } from "./modules/approvals/routes";
+import { auditRoutes } from "./modules/audit/routes";
 import { authRoutes } from "./modules/auth/routes";
 import { configRoutes } from "./modules/config/routes";
 import { costRoutes } from "./modules/cost/routes";
+import { credentialRoutes } from "./modules/credentials/routes";
 import { envRoutes } from "./modules/envs/routes";
 import { orgRoutes } from "./modules/orgs/routes";
 import { policyRoutes } from "./modules/policies/routes";
 import { projectRoutes } from "./modules/projects/routes";
 import { realtimeRoutes } from "./modules/realtime/routes";
 import { websocketHandler } from "./modules/realtime/ws-broadcaster";
+import { repositoryRoutes } from "./modules/repositories/routes";
+import { reconcileRunningTasksOnStartup } from "./modules/tasks/reconcile";
 import { taskRoutes } from "./modules/tasks/routes";
+import { userRoutes } from "./modules/users/routes";
 
 const app = new Hono();
 
@@ -39,6 +44,7 @@ app.route("/api/auth", authRoutes);
 // ── Routes (all require auth) ──────────────────────────────────────
 
 app.use("/api/*", authMiddleware);
+app.route("/api/audit", auditRoutes);
 app.route("/api/realtime", realtimeRoutes);
 app.route("/api/agents", agentControlRoutes);
 app.route("/api/tasks", taskRoutes);
@@ -47,12 +53,17 @@ app.route("/api/cost", costRoutes);
 app.route("/api/envs", envRoutes);
 app.route("/api/policies", policyRoutes);
 app.route("/api/projects", projectRoutes);
+app.route("/api/repositories", repositoryRoutes);
+app.route("/api/credentials", credentialRoutes);
 app.route("/api/orgs", orgRoutes);
+app.route("/api/users", userRoutes);
 app.route("/api/config", configRoutes);
 
 // ── Start Server ───────────────────────────────────────────────────
 
 const port = Number(process.env.BFF_PORT) || 4098;
+
+void reconcileRunningTasksOnStartup();
 
 export default {
   port,

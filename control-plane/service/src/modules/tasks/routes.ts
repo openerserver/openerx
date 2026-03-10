@@ -3,7 +3,14 @@ import { and, desc, eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 import { db } from "../../db";
-import { agentRuns, taskEdges, taskNodes, tasks } from "../../db/schema";
+import {
+  agentRuns,
+  repositories,
+  repositoryCredentials,
+  taskEdges,
+  taskNodes,
+  tasks,
+} from "../../db/schema";
 import { type AppEnv, authMiddleware } from "../../middleware/auth";
 import { requireRole } from "../../middleware/rbac";
 import { recordAuditEvent } from "../audit/routes";
@@ -19,31 +26,117 @@ const createTaskSchema = z.object({
   title: z.string().min(1).max(500),
   prompt: z.string().min(1).max(50000),
   projectId: z.string().min(1),
+  repoId: z.string().min(1).optional(),
+  workingBranch: z.string().min(1).max(100).optional(),
+  credentialId: z.string().min(1).optional(),
+  selectedModel: z.string().max(200).optional(),
+  gitAuthorName: z.string().max(200).optional(),
+  gitAuthorEmail: z.string().email().max(200).optional(),
+  gitCommitterName: z.string().max(200).optional(),
+  gitCommitterEmail: z.string().email().max(200).optional(),
 });
 
-taskRoutes.post("/", zValidator("json", createTaskSchema), async (c) => {
-  const user = c.get("user");
-  const { title, prompt, projectId } = c.req.valid("json");
+type CreateTaskInput = z.infer<typeof createTaskSchema>;
 
-  const taskId = crypto.randomUUID();
-  await db.insert(tasks).values({
-    id: taskId,
-    projectId,
-    userId: user.sub,
-    title,
-    prompt,
-    status: "pending",
+async function validateTaskRepository(projectId: string, repoId?: string) {
+  if (!repoId) {
+    return null;
+  }
+
+  const repo = await db.query.repositories.findFirst({
+    where: and(eq(repositories.id, repoId), eq(repositories.projectId, projectId)),
   });
 
+  if (!repo) {
+    return { error: "Repository not found in this project" as const };
+  }
+
+  if (repo.status !== "active") {
+    return { error: "Repository is not active" as const };
+  }
+
+  return null;
+}
+
+async function validateTaskCredential(projectId: string, credentialId?: string) {
+  if (!credentialId) {
+    return null;
+  }
+
+  const credential = await db.query.repositoryCredentials.findFirst({
+    where: and(
+      eq(repositoryCredentials.id, credentialId),
+      eq(repositoryCredentials.projectId, projectId),
+      eq(repositoryCredentials.status, "active"),
+    ),
+  });
+
+  if (!credential) {
+    return { error: "Credential not found or inactive in this project" as const };
+  }
+
+  return null;
+}
+
+async function validateTaskCreateInput(body: CreateTaskInput) {
+  const repoValidation = await validateTaskRepository(body.projectId, body.repoId);
+  if (repoValidation) {
+    return repoValidation;
+  }
+
+  const credentialValidation = await validateTaskCredential(body.projectId, body.credentialId);
+  if (credentialValidation) {
+    return credentialValidation;
+  }
+
+  return null;
+}
+
+async function insertTask(userId: string, body: CreateTaskInput) {
+  const taskId = crypto.randomUUID();
+
+  await db.insert(tasks).values({
+    id: taskId,
+    projectId: body.projectId,
+    userId,
+    title: body.title,
+    prompt: body.prompt,
+    status: "pending",
+    repoId: body.repoId ?? null,
+    workingBranch: body.workingBranch ?? null,
+    credentialId: body.credentialId ?? null,
+    selectedModel: body.selectedModel ?? null,
+    gitAuthorName: body.gitAuthorName ?? null,
+    gitAuthorEmail: body.gitAuthorEmail ?? null,
+    gitCommitterName: body.gitCommitterName ?? null,
+    gitCommitterEmail: body.gitCommitterEmail ?? null,
+  });
+
+  return taskId;
+}
+
+async function recordTaskCreatedAudit(userId: string, taskId: string, body: CreateTaskInput) {
   await recordAuditEvent({
-    userId: user.sub,
-    projectId,
+    userId,
+    projectId: body.projectId,
     taskId,
     eventType: "task.created",
     action: "create_task",
-    target: title,
-    detail: { prompt: prompt.slice(0, 200) },
+    target: body.title,
+    detail: { prompt: body.prompt.slice(0, 200) },
   });
+}
+
+taskRoutes.post("/", zValidator("json", createTaskSchema), async (c) => {
+  const user = c.get("user");
+  const body = c.req.valid("json");
+  const validationError = await validateTaskCreateInput(body);
+  if (validationError) {
+    return c.json(validationError, 400);
+  }
+
+  const taskId = await insertTask(user.sub, body);
+  await recordTaskCreatedAudit(user.sub, taskId, body);
 
   return c.json({ id: taskId, status: "pending" }, 201);
 });
@@ -53,46 +146,141 @@ taskRoutes.post("/", zValidator("json", createTaskSchema), async (c) => {
 taskRoutes.get("/", async (c) => {
   const projectId = c.req.query("projectId");
   const status = c.req.query("status");
+  const repoId = c.req.query("repoId");
   const limit = Math.min(Number(c.req.query("limit") || 50), 200);
 
   const conditions = [];
   if (projectId) conditions.push(eq(tasks.projectId, projectId));
   if (status) conditions.push(eq(tasks.status, status as (typeof tasks.status.enumValues)[number]));
+  if (repoId) conditions.push(eq(tasks.repoId, repoId));
 
   const where = conditions.length > 0 ? and(...conditions) : undefined;
 
   const result = await db
     .select()
     .from(tasks)
+    .leftJoin(repositories, eq(tasks.repoId, repositories.id))
+    .leftJoin(repositoryCredentials, eq(tasks.credentialId, repositoryCredentials.id))
     .where(where)
     .orderBy(desc(tasks.createdAt))
     .limit(limit);
 
-  return c.json({ data: result });
+  const data = result.map((r) => ({
+    ...r.tasks,
+    repoName: r.repositories?.name ?? null,
+    remoteUrl: r.repositories?.remoteUrl ?? null,
+    credentialLabel: r.repository_credentials?.label ?? null,
+  }));
+
+  return c.json({ data });
 });
 
 // ── Get Task ───────────────────────────────────────────────────────
 
 taskRoutes.get("/:taskId", async (c) => {
   const taskId = c.req.param("taskId");
-  const task = await db.query.tasks.findFirst({
-    where: eq(tasks.id, taskId),
-  });
+  const result = await db
+    .select()
+    .from(tasks)
+    .leftJoin(repositories, eq(tasks.repoId, repositories.id))
+    .leftJoin(repositoryCredentials, eq(tasks.credentialId, repositoryCredentials.id))
+    .where(eq(tasks.id, taskId))
+    .limit(1);
 
-  if (!task) return c.json({ error: "Task not found" }, 404);
+  if (result.length === 0) return c.json({ error: "Task not found" }, 404);
+  const row = result[0];
+  if (!row) return c.json({ error: "Task not found" }, 404);
+
+  const task = {
+    ...row.tasks,
+    repoName: row.repositories?.name ?? null,
+    remoteUrl: row.repositories?.remoteUrl ?? null,
+    credentialLabel: row.repository_credentials?.label ?? null,
+  };
   return c.json(task);
 });
 
 // ── Update Task Status ─────────────────────────────────────────────
 
 const updateStatusSchema = z.object({
-  status: z.enum(["running", "paused", "completed", "failed", "cancelled"]),
+  status: z.enum(["running", "paused", "completed", "failed", "cancelled"]).optional(),
   sessionId: z.string().optional(),
   agentRunId: z.string().optional(),
   result: z.string().optional(),
   category: z.enum(["quick", "deep", "ops", "security", "architecture"]).optional(),
   strategy: z.string().optional(),
+  workspaceRoot: z.string().optional(),
+  baseRevision: z.string().optional(),
+  workingBranch: z.string().optional(),
+  // Identity snapshot (frozen at execution start)
+  credentialId: z.string().optional(),
+  gitAuthorName: z.string().max(200).optional(),
+  gitAuthorEmail: z.string().email().max(200).optional(),
+  gitCommitterName: z.string().max(200).optional(),
+  gitCommitterEmail: z.string().email().max(200).optional(),
+  // Post-execution facts
+  finalCommitSha: z.string().max(200).optional(),
+  finalBranchName: z.string().max(200).optional(),
+  changesSummary: z
+    .object({
+      filesAdded: z.number().int().optional(),
+      filesModified: z.number().int().optional(),
+      filesDeleted: z.number().int().optional(),
+      totalInsertions: z.number().int().optional(),
+      totalDeletions: z.number().int().optional(),
+    })
+    .optional(),
 });
+
+type TaskStatusUpdate = z.infer<typeof updateStatusSchema>;
+
+const directTaskUpdateKeys = [
+  "sessionId",
+  "agentRunId",
+  "result",
+  "category",
+  "strategy",
+  "workspaceRoot",
+  "baseRevision",
+  "workingBranch",
+  "credentialId",
+  "gitAuthorName",
+  "gitAuthorEmail",
+  "gitCommitterName",
+  "gitCommitterEmail",
+  "finalCommitSha",
+  "finalBranchName",
+  "changesSummary",
+] as const;
+
+function shouldSetFinishedAt(status: TaskStatusUpdate["status"]) {
+  return status === "completed" || status === "failed" || status === "cancelled";
+}
+
+function buildTaskUpdates(body: TaskStatusUpdate, existing: typeof tasks.$inferSelect) {
+  const updates: Record<string, unknown> = {};
+
+  if (body.status !== undefined) {
+    updates.status = body.status;
+  }
+
+  for (const key of directTaskUpdateKeys) {
+    const value = body[key];
+    if (value !== undefined) {
+      updates[key] = value;
+    }
+  }
+
+  if (body.status === "running" && !existing.startedAt) {
+    updates.startedAt = new Date().toISOString();
+  }
+
+  if (shouldSetFinishedAt(body.status)) {
+    updates.finishedAt = new Date().toISOString();
+  }
+
+  return updates;
+}
 
 taskRoutes.patch("/:taskId", zValidator("json", updateStatusSchema), async (c) => {
   const taskId = c.req.param("taskId");
@@ -103,18 +291,7 @@ taskRoutes.patch("/:taskId", zValidator("json", updateStatusSchema), async (c) =
   });
   if (!existing) return c.json({ error: "Task not found" }, 404);
 
-  const updates: Record<string, unknown> = { status: body.status };
-  if (body.sessionId) updates.sessionId = body.sessionId;
-  if (body.agentRunId) updates.agentRunId = body.agentRunId;
-  if (body.result) updates.result = body.result;
-  if (body.category) updates.category = body.category;
-  if (body.strategy) updates.strategy = body.strategy;
-  if (body.status === "running" && !existing.startedAt) {
-    updates.startedAt = new Date().toISOString();
-  }
-  if (body.status === "completed" || body.status === "failed" || body.status === "cancelled") {
-    updates.finishedAt = new Date().toISOString();
-  }
+  const updates = buildTaskUpdates(body, existing);
 
   await db.update(tasks).set(updates).where(eq(tasks.id, taskId));
 
