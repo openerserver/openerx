@@ -226,3 +226,60 @@ describe("Settings – mustChangePassword alert", () => {
     expect(wrapper.text()).not.toContain("首次登录必须改密");
   });
 });
+
+describe("Settings – orchestration hooks UI", () => {
+  it("shows lifecycle hooks editor for admins and hides legacy pre/post review cards", async () => {
+    apiMocks.getOrchestrationStrategy.mockResolvedValueOnce({
+      data: {
+        categoryAgentMap: {},
+        categoryModelMap: {},
+        enablePipeline: true,
+        hooks: [
+          {
+            id: "pre-execution-1",
+            trigger: "pre-execution",
+            enabled: true,
+            agent: "reviewer",
+            model: "",
+            promptTemplate: "Review {{taskPrompt}}",
+            timeoutMs: 15000,
+            order: 0,
+          },
+        ],
+        templates: [],
+        judge: {
+          enabled: false,
+          agent: "judge",
+          model: "",
+          promptTemplate: "",
+          timeoutMs: 30000,
+          selectionStrategy: "judge-pick",
+        },
+      },
+    });
+    apiMocks.getContinuationPolicy.mockResolvedValueOnce({
+      data: {
+        autoRetryOnFailure: false,
+        maxRetries: 2,
+        retryableErrors: [],
+        requireApprovalOnRetry: false,
+        fallbackModel: "",
+        enableFallback: false,
+      },
+    });
+
+    const { wrapper } = await mountSettings({ role: "platform_admin" });
+
+    const strategyTab = wrapper
+      .findAll(".ant-tabs-tab")
+      .find((tab) => tab.text().includes("编排策略"));
+    expect(strategyTab).toBeTruthy();
+    await strategyTab?.trigger("click");
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("生命周期 Hooks");
+    expect(wrapper.text()).toContain("执行前 Hook");
+    expect(wrapper.text()).not.toContain("启用任务开始前评估");
+    expect(wrapper.text()).not.toContain("启用任务完成后评估");
+  });
+});

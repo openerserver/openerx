@@ -3,6 +3,7 @@ dist/
 .env
 .env.local
 *.db
+
 *.db-journal
 *.db-shm
 *.db-wal
@@ -11,3 +12,4 @@ dist/
 opencode-fork/.opencode/state/
 opencode-fork/.copilot-token.json
 .DS_Store
+tmp/*

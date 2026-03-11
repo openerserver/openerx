@@ -67,6 +67,7 @@ void reconcileRunningTasksOnStartup();
 
 export default {
   port,
+  idleTimeout: 255,
   fetch(req: Request, server: { upgrade: (req: Request, opts?: unknown) => boolean }) {
     // Upgrade /ws requests to WebSocket
     const url = new URL(req.url);

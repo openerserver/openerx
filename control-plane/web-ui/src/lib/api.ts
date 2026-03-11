@@ -254,6 +254,8 @@ export interface Task {
   result?: string;
   category?: string;
   strategy?: string;
+  executionMode?: ExecutionMode;
+  executionPlan?: string;
   repoId?: string | null;
   workspaceRoot?: string | null;
   baseRevision?: string | null;
@@ -1129,21 +1131,103 @@ export async function listPlugins() {
   return request<{ data: PluginInfo[] }>("/config/plugins");
 }
 
-// Orchestration Strategy
-export interface WorkflowEvaluationHook {
+export type HookTrigger = "pre-execution" | "post-execution" | "on-failure" | "pre-resume";
+
+export interface LifecycleHook {
+  id: string;
+  trigger: HookTrigger;
+  enabled: boolean;
+  agent: string;
+  model?: string;
+  promptTemplate: string;
+  timeoutMs: number;
+  order: number;
+}
+
+export type ExecutionMode = "single" | "parallel";
+
+export interface WorkflowTemplate {
+  id: string;
+  name: string;
+  description?: string;
+  mode: ExecutionMode;
+  agents: string[];
+  maxParallelCandidates?: number;
+  enabled: boolean;
+  categoryDefaults?: string[];
+}
+
+export interface JudgeConfig {
   enabled: boolean;
   agent: string;
   model: string;
   promptTemplate: string;
   timeoutMs: number;
+  selectionStrategy: "judge-pick" | "highest-score";
+}
+
+export interface ExecutionCandidate {
+  label: string;
+  agent: string;
+  model?: string;
+  sessionId?: string;
+  agentRunId?: string;
+  status: "pending" | "running" | "completed" | "failed";
+  result?: string;
+  startedAt?: string;
+  finishedAt?: string;
+}
+
+export interface ExecutionPlan {
+  templateId: string;
+  mode: ExecutionMode;
+  candidates: ExecutionCandidate[];
+  judgeResult?: JudgeResult;
+  winnerCandidateIndex?: number;
+}
+
+export interface JudgeResult {
+  status: "completed" | "failed" | "skipped";
+  sessionId?: string;
+  winnerIndex?: number;
+  scores?: number[];
+  reasoning: string;
+  completedAt: string;
+}
+
+export interface HookDecision {
+  action:
+    | "allow"
+    | "deny"
+    | "rewrite-prompt"
+    | "request-approval"
+    | "switch-model"
+    | "spawn-followup";
+  reason?: string;
+  rewrittenPrompt?: string;
+  targetModel?: string;
+}
+
+export interface HookExecutionRecord {
+  hookId: string;
+  trigger: HookTrigger;
+  status: "completed" | "failed" | "skipped";
+  agent: string;
+  model?: string;
+  result?: string;
+  error?: string;
+  sessionId?: string;
+  decision?: HookDecision;
+  completedAt: string;
 }
 
 export interface OrchestrationStrategy {
   categoryAgentMap: Record<string, string[]>;
   categoryModelMap: Record<string, string>;
   enablePipeline: boolean;
-  preExecutionReview: WorkflowEvaluationHook;
-  postExecutionReview: WorkflowEvaluationHook;
+  hooks: LifecycleHook[];
+  templates: WorkflowTemplate[];
+  judge: JudgeConfig;
 }
 
 export async function getOrchestrationStrategy() {
@@ -1180,13 +1264,13 @@ export async function updateContinuationPolicy(data: ContinuationPolicy) {
 
 // ── Copilot OAuth ──────────────────────────────────────────────────
 
-export async function getCopilotStatus() {
+export async function getCopilotStatus(provider = "github-copilot") {
   return request<{ data: { authenticated: boolean; login_at?: string | null } }>(
-    "/config/copilot/status",
+    `/config/copilot/status?provider=${encodeURIComponent(provider)}`,
   );
 }
 
-export async function requestCopilotDeviceCode() {
+export async function requestCopilotDeviceCode(provider = "github-copilot") {
   return request<{
     data: {
       device_code: string;
@@ -1195,28 +1279,28 @@ export async function requestCopilotDeviceCode() {
       expires_in: number;
       interval: number;
     };
-  }>("/config/copilot/device-code", { method: "POST" });
+  }>(`/config/copilot/device-code?provider=${encodeURIComponent(provider)}`, { method: "POST" });
 }
 
-export async function pollCopilotToken(device_code: string) {
+export async function pollCopilotToken(device_code: string, provider = "github-copilot") {
   return request<{
     data: {
       status: string;
       error_description?: string;
       interval?: number;
     };
-  }>("/config/copilot/poll-token", {
+  }>(`/config/copilot/poll-token?provider=${encodeURIComponent(provider)}`, {
     method: "POST",
     body: JSON.stringify({ device_code }),
   });
 }
 
-export async function copilotLogout() {
-  return request<{ ok: boolean }>("/config/copilot/logout", { method: "POST" });
+export async function copilotLogout(provider = "github-copilot") {
+  return request<{ ok: boolean }>(`/config/copilot/logout?provider=${encodeURIComponent(provider)}`, { method: "POST" });
 }
 
-export async function getCopilotModels() {
-  return request<{ data: CopilotModelInfo[] }>("/config/copilot/models");
+export async function getCopilotModels(provider = "github-copilot") {
+  return request<{ data: CopilotModelInfo[] }>(`/config/copilot/models?provider=${encodeURIComponent(provider)}`);
 }
 
 // ── Code Changes ───────────────────────────────────────────────────

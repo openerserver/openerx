@@ -72,7 +72,12 @@
           <a-tag v-if="strategy?.selectedAgent" color="geekblue">{{ strategy.selectedAgent }}</a-tag>
           <span v-else>-</span>
         </a-descriptions-item>
-        <a-descriptions-item label="推荐 Agents" :span="4">
+        <a-descriptions-item label="执行模式">
+          <a-tag :color="(task?.executionMode || strategy?.executionMode) === 'parallel' ? 'volcano' : 'blue'">
+            {{ (task?.executionMode || strategy?.executionMode) === 'parallel' ? '并行竞争' : '单一执行' }}
+          </a-tag>
+        </a-descriptions-item>
+        <a-descriptions-item label="推荐 Agents">
           <a-tag v-for="agent in (strategy?.suggestedAgents || [])" :key="agent" color="purple">
             {{ agent }}
           </a-tag>
@@ -81,54 +86,115 @@
       </a-descriptions>
     </a-card>
 
+    <!-- Execution Plan Candidates -->
     <a-card
-      v-if="strategy?.workflowEvaluations?.preExecution || strategy?.workflowEvaluations?.postExecution"
-      title="工作流评估"
+      v-if="executionPlan && executionPlan.candidates.length > 1"
+      title="并行执行候选"
       size="small"
       style="margin-top: 16px"
     >
-      <a-row :gutter="[16, 16]">
-        <a-col :xs="24" :xl="12">
-          <a-card size="small" title="前置评估">
-            <a-empty v-if="!strategy?.workflowEvaluations?.preExecution" description="未执行前置评估" />
-            <template v-else>
-              <a-space direction="vertical" style="width: 100%">
-                <a-space>
-                  <a-tag :color="evaluationStatusColor(strategy.workflowEvaluations.preExecution.status)">
-                    {{ evaluationStatusLabel(strategy.workflowEvaluations.preExecution.status) }}
-                  </a-tag>
-                  <a-tag color="blue">{{ strategy.workflowEvaluations.preExecution.agent }}</a-tag>
-                </a-space>
-                <a-typography-text type="secondary">
-                  {{ formatTime(strategy.workflowEvaluations.preExecution.completedAt) }}
-                </a-typography-text>
-                <pre v-if="strategy.workflowEvaluations.preExecution.result" style="white-space: pre-wrap; font-size: 12px; max-height: 220px; overflow: auto">{{ strategy.workflowEvaluations.preExecution.result }}</pre>
-                <a-alert v-else-if="strategy.workflowEvaluations.preExecution.error" type="warning" :message="strategy.workflowEvaluations.preExecution.error" show-icon />
-              </a-space>
+      <a-table
+        :data-source="executionPlan.candidates"
+        :columns="candidateColumns"
+        :pagination="false"
+        size="small"
+        row-key="label"
+      >
+        <template #bodyCell="{ column, record, index }">
+          <template v-if="column.dataIndex === 'label'">
+            <a-space>
+              <span>{{ record.label }}</span>
+              <a-tag v-if="executionPlan?.judgeResult?.winnerIndex === index" color="gold">获胜</a-tag>
+            </a-space>
+          </template>
+          <template v-else-if="column.dataIndex === 'agent'">
+            <a-tag color="geekblue">{{ record.agent }}</a-tag>
+            <a-tag v-if="record.model" color="cyan" style="margin-left: 4px">{{ record.model }}</a-tag>
+          </template>
+          <template v-else-if="column.dataIndex === 'status'">
+            <a-tag :color="candidateStatusColor(record.status)">{{ candidateStatusLabel(record.status) }}</a-tag>
+          </template>
+          <template v-else-if="column.dataIndex === 'score'">
+            <span v-if="executionPlan?.judgeResult?.scores?.[index] != null">
+              {{ executionPlan.judgeResult.scores[index].toFixed(1) }}
+            </span>
+            <span v-else>-</span>
+          </template>
+        </template>
+      </a-table>
+    </a-card>
+
+    <!-- Judge Result -->
+    <a-card
+      v-if="executionPlan?.judgeResult"
+      title="裁判评估结果"
+      size="small"
+      style="margin-top: 16px"
+    >
+      <a-descriptions :column="{ xs: 1, sm: 2 }" bordered size="small">
+        <a-descriptions-item label="获胜方案">
+          <a-tag color="gold">
+            {{ executionPlan.candidates[executionPlan.judgeResult.winnerIndex]?.label || `候选 #${executionPlan.judgeResult.winnerIndex}` }}
+          </a-tag>
+        </a-descriptions-item>
+        <a-descriptions-item label="评分">
+          <a-space>
+            <span v-for="(score, idx) in executionPlan.judgeResult.scores" :key="idx">
+              <a-tag :color="idx === executionPlan.judgeResult.winnerIndex ? 'gold' : 'default'">
+                {{ executionPlan.candidates[idx]?.label || `#${idx}` }}: {{ score.toFixed(1) }}
+              </a-tag>
+            </span>
+          </a-space>
+        </a-descriptions-item>
+        <a-descriptions-item label="评估理由">
+          <pre style="white-space: pre-wrap; font-size: 12px; max-height: 200px; overflow: auto">{{ executionPlan.judgeResult.reasoning }}</pre>
+        </a-descriptions-item>
+      </a-descriptions>
+    </a-card>
+
+    <!-- Hook Executions -->
+    <a-card
+      v-if="strategy?.hookExecutions?.length"
+      title="Hook 执行记录"
+      size="small"
+      style="margin-top: 16px"
+    >
+      <a-table
+        :data-source="strategy.hookExecutions"
+        :columns="hookColumns"
+        :pagination="false"
+        size="small"
+        row-key="hookId"
+      >
+        <template #bodyCell="{ column, record }">
+          <template v-if="column.dataIndex === 'trigger'">
+            <a-tag>{{ hookTriggerLabel(record.trigger) }}</a-tag>
+          </template>
+          <template v-else-if="column.dataIndex === 'status'">
+            <a-tag :color="evaluationStatusColor(record.status)">{{ evaluationStatusLabel(record.status) }}</a-tag>
+          </template>
+          <template v-else-if="column.dataIndex === 'agent'">
+            <a-tag color="blue">{{ record.agent }}</a-tag>
+          </template>
+          <template v-else-if="column.dataIndex === 'result'">
+            <a-typography-text v-if="record.error" type="danger">{{ record.error }}</a-typography-text>
+            <a-typography-paragraph
+              v-else-if="record.result"
+              :ellipsis="{ rows: 2, expandable: true }"
+              :content="record.result"
+              style="margin: 0; font-size: 12px"
+            />
+            <span v-else>-</span>
+          </template>
+          <template v-else-if="column.dataIndex === 'decision'">
+            <template v-if="record.decision">
+              <a-tag :color="record.decision.action === 'allow' ? 'green' : record.decision.action === 'rewrite-prompt' ? 'orange' : 'red'">{{ record.decision.action }}</a-tag>
+              <a-typography-text v-if="record.decision.reason" style="font-size: 11px; display: block; margin-top: 4px">{{ record.decision.reason }}</a-typography-text>
             </template>
-          </a-card>
-        </a-col>
-        <a-col :xs="24" :xl="12">
-          <a-card size="small" title="后置评估">
-            <a-empty v-if="!strategy?.workflowEvaluations?.postExecution" description="未执行后置评估" />
-            <template v-else>
-              <a-space direction="vertical" style="width: 100%">
-                <a-space>
-                  <a-tag :color="evaluationStatusColor(strategy.workflowEvaluations.postExecution.status)">
-                    {{ evaluationStatusLabel(strategy.workflowEvaluations.postExecution.status) }}
-                  </a-tag>
-                  <a-tag color="blue">{{ strategy.workflowEvaluations.postExecution.agent }}</a-tag>
-                </a-space>
-                <a-typography-text type="secondary">
-                  {{ formatTime(strategy.workflowEvaluations.postExecution.completedAt) }}
-                </a-typography-text>
-                <pre v-if="strategy.workflowEvaluations.postExecution.result" style="white-space: pre-wrap; font-size: 12px; max-height: 220px; overflow: auto">{{ strategy.workflowEvaluations.postExecution.result }}</pre>
-                <a-alert v-else-if="strategy.workflowEvaluations.postExecution.error" type="warning" :message="strategy.workflowEvaluations.postExecution.error" show-icon />
-              </a-space>
-            </template>
-          </a-card>
-        </a-col>
-      </a-row>
+            <span v-else>-</span>
+          </template>
+        </template>
+      </a-table>
     </a-card>
 
     <!-- Code Context -->
@@ -448,7 +514,7 @@ function shouldBootstrapRefresh() {
       "agent.completed",
       "task.completed",
       "task.continued",
-      "task.workflow-evaluation.updated",
+      "task.hooks.updated",
       "session.updated",
       "message.updated",
     ].includes(event.type),
@@ -503,7 +569,7 @@ function scheduleTaskRefresh(reason: string) {
     clearTimeout(refreshTimer);
   }
 
-  const delay = reason === "task.workflow-evaluation.updated" ? 0 : 250;
+  const delay = reason === "task.hooks.updated" ? 0 : 250;
   refreshTimer = setTimeout(() => {
     refreshTimer = null;
     void refreshTaskData(taskId.value as string, {
@@ -513,7 +579,7 @@ function scheduleTaskRefresh(reason: string) {
       governance:
         reason === "task.completed" ||
         reason === "task.continued" ||
-        reason === "task.workflow-evaluation.updated",
+        reason === "task.hooks.updated",
     });
   }, delay);
 }
@@ -553,7 +619,7 @@ watch(
       latestEvent.type === "agent.started" ||
       latestEvent.type === "task.completed" ||
       latestEvent.type === "task.continued" ||
-      latestEvent.type === "task.workflow-evaluation.updated"
+      latestEvent.type === "task.hooks.updated"
     ) {
       scheduleTaskRefresh(latestEvent.type);
     }
@@ -595,22 +661,55 @@ const strategy = computed(() => {
       requiresPlan?: boolean;
       confidence?: number;
       selectedAgent?: string;
-      workflowEvaluations?: {
-        preExecution?: {
-          status: string;
-          agent: string;
-          result?: string;
-          error?: string;
-          completedAt: string;
+      selectedTemplateId?: string;
+      executionMode?: string;
+      hookExecutions?: Array<{
+        hookId: string;
+        trigger: string;
+        status: string;
+        agent: string;
+        result?: string;
+        error?: string;
+        startedAt?: string;
+        completedAt?: string;
+        decision?: {
+          action: string;
+          reason?: string;
+          rewrittenPrompt?: string;
         };
-        postExecution?: {
-          status: string;
-          agent: string;
-          result?: string;
-          error?: string;
-          completedAt: string;
-        };
+      }>;
+    };
+  } catch {
+    return null;
+  }
+});
+
+const executionPlan = computed(() => {
+  if (!task.value?.executionPlan) return null;
+  try {
+    const parsed = JSON.parse(task.value.executionPlan) as {
+      mode: string;
+      candidates: Array<{
+        label?: string;
+        agent: string;
+        model?: string;
+        sessionId?: string;
+        agentRunId?: string;
+        status: string;
+        result?: string;
+      }>;
+      judgeResult?: {
+        winnerIndex: number;
+        scores: number[];
+        reasoning: string;
       };
+    };
+    return {
+      ...parsed,
+      candidates: parsed.candidates.map((candidate, index) => ({
+        ...candidate,
+        label: candidate.label || `候选 ${index + 1}`,
+      })),
     };
   } catch {
     return null;
@@ -667,6 +766,55 @@ function evaluationStatusLabel(status: string) {
 function formatTime(ts: string) {
   if (!ts) return "-";
   return new Date(ts).toLocaleString();
+}
+
+const candidateColumns = [
+  { title: "方案", dataIndex: "label", key: "label" },
+  { title: "Agent / 模型", dataIndex: "agent", key: "agent" },
+  { title: "状态", dataIndex: "status", key: "status" },
+  { title: "评分", dataIndex: "score", key: "score" },
+];
+
+function candidateStatusColor(status: string) {
+  const map: Record<string, string> = {
+    pending: "default",
+    running: "processing",
+    completed: "green",
+    failed: "red",
+    winner: "gold",
+  };
+  return map[status] || "default";
+}
+
+function candidateStatusLabel(status: string) {
+  const map: Record<string, string> = {
+    pending: "待执行",
+    running: "执行中",
+    completed: "已完成",
+    failed: "失败",
+    winner: "获胜",
+  };
+  return map[status] || status;
+}
+
+const hookColumns = [
+  { title: "触发点", dataIndex: "trigger", key: "trigger" },
+  { title: "Agent", dataIndex: "agent", key: "agent" },
+  { title: "状态", dataIndex: "status", key: "status" },
+  { title: "决策", dataIndex: "decision", key: "decision", width: 160 },
+  { title: "结果", dataIndex: "result", key: "result", width: 400 },
+];
+
+function hookTriggerLabel(trigger: string) {
+  const map: Record<string, string> = {
+    "pre-execution": "执行前",
+    "post-execution": "执行后",
+    "on-failure": "失败时",
+    "pre-resume": "续跑前",
+    "pre-judge": "裁判前",
+    "post-judge": "裁判后",
+  };
+  return map[trigger] || trigger;
 }
 
 type AgentRunStatus = "running" | "paused" | "completed" | "failed" | "stopped";

@@ -1,7 +1,9 @@
 import { cpFetch, createInternalAuthorization } from "../../lib/control-plane-client";
 import { resolveModelRoute } from "../../lib/opencode-config";
 import {
-  type WorkflowEvaluationRecord,
+  type ExecutionCandidate,
+  type ExecutionPlan,
+  type JudgeResult,
   mergeTaskStrategy,
   parseTaskStrategy,
   readOrchestrationStrategy,
@@ -15,6 +17,7 @@ import {
   updateAgentRunStatus,
 } from "../agent-control/opencode-adapter";
 import { collectChangesFromSession } from "../code-changes/change-collector";
+import { executeLifecycleHooks } from "../hooks/lifecycle-hooks";
 import { observeGraphWorkspaceDir, onGraphToolExecuted } from "./dag-sync";
 
 // Subscribes to OpenCode Runtime SSE events and transforms them into
@@ -83,16 +86,38 @@ class SSEAggregator {
   private finalizingAgentRuns = new Set<string>();
   private finalizedAgentRuns = new Set<string>();
 
-  private async triggerPostExecutionReview(
+  // ── Parallel execution tracking ─────────────────────────────────
+  // Maps taskId → sessionIds of all candidates
+  private parallelTaskSessions = new Map<string, Set<string>>();
+  // Maps sessionId → { taskId, candidateIndex }
+  private sessionToCandidateMap = new Map<string, { taskId: string; candidateIndex: number }>();
+  // Maps taskId → completed candidate sessions with results
+  private parallelCandidateResults = new Map<
+    string,
+    Map<number, { sessionId: string; result?: string }>
+  >();
+  private judgingTasks = new Set<string>();
+
+  /** Register parallel candidates for aggregated tracking. */
+  registerParallelTask(taskId: string, candidates: ExecutionCandidate[]): void {
+    const sessionIds = new Set<string>();
+    for (let i = 0; i < candidates.length; i++) {
+      const c = candidates[i];
+      if (c?.sessionId) {
+        sessionIds.add(c.sessionId);
+        this.sessionToCandidateMap.set(c.sessionId, { taskId, candidateIndex: i });
+      }
+    }
+    this.parallelTaskSessions.set(taskId, sessionIds);
+    this.parallelCandidateResults.set(taskId, new Map());
+  }
+
+  private async triggerPostExecutionHooks(
     taskId: string,
     resultText: string | undefined,
     authorization: string,
   ): Promise<void> {
     const strategyConfig = readOrchestrationStrategy();
-    const hook = strategyConfig.postExecutionReview;
-    if (!hook.enabled || !hook.agent) {
-      return;
-    }
 
     const taskResult = await cpFetch<CompletedTaskContext>(
       `/api/tasks/${encodeURIComponent(taskId)}`,
@@ -106,66 +131,47 @@ class SSEAggregator {
 
     const task = taskResult.data;
     const taskStrategy = parseTaskStrategy(task.strategy);
-    const prompt = renderPromptTemplate(hook.promptTemplate, {
+    const hookResult = await executeLifecycleHooks({
+      strategy: strategyConfig,
+      trigger: "post-execution",
       taskId: task.id,
       projectId: task.projectId,
       taskTitle: task.title,
       taskPrompt: task.prompt,
-      taskResult: task.result || resultText || "",
-      repoName: task.repoName,
-      remoteUrl: task.remoteUrl,
-      workingBranch: task.workingBranch,
-      selectedAgent:
-        typeof taskStrategy.selectedAgent === "string" ? taskStrategy.selectedAgent : "",
-      selectedModel:
-        typeof taskStrategy.effectiveModel === "string"
-          ? taskStrategy.effectiveModel
-          : task.selectedModel || "",
-      changesSummary: formatChangeSummary(task),
-    });
-
-    const hookModel = hook.model ? parseModelString(hook.model) : undefined;
-    const result = await runDetachedPrompt(
-      `[Post-review ${task.id.slice(0, 8)}] ${task.title}`,
-      prompt,
-      {
-        agent: hook.agent,
-        model: hookModel,
+      titlePrefix: "Post-review",
+      context: {
         taskId: task.id,
         projectId: task.projectId,
-        timeoutMs: hook.timeoutMs,
+        taskTitle: task.title,
+        taskPrompt: task.prompt,
+        taskResult: task.result || resultText || "",
+        repoName: task.repoName,
+        remoteUrl: task.remoteUrl,
+        workingBranch: task.workingBranch,
+        selectedAgent:
+          typeof taskStrategy.selectedAgent === "string" ? taskStrategy.selectedAgent : "",
+        selectedModel:
+          typeof taskStrategy.effectiveModel === "string"
+            ? taskStrategy.effectiveModel
+            : task.selectedModel || "",
+        changesSummary: formatChangeSummary(task),
       },
-    );
+    });
+    if (hookResult.hookExecutions.length === 0) {
+      return;
+    }
 
-    const evaluation: WorkflowEvaluationRecord = result.ok
-      ? {
-          status: result.completed ? "completed" : "failed",
-          agent: hook.agent,
-          model: hook.model || undefined,
-          prompt,
-          result: result.text,
-          error: result.completed ? undefined : "Post-execution review timed out",
-          sessionId: result.sessionId,
-          completedAt: new Date().toISOString(),
-        }
-      : {
-          status: "failed",
-          agent: hook.agent,
-          model: hook.model || undefined,
-          prompt,
-          error: result.error || "Post-execution review failed",
-          sessionId: result.sessionId,
-          completedAt: new Date().toISOString(),
-        };
+    const firstHook = hookResult.hookExecutions[0];
+    if (!firstHook) {
+      return;
+    }
 
     const patchResult = await cpFetch(`/api/tasks/${encodeURIComponent(task.id)}`, {
       method: "PATCH",
       authorization,
       body: {
         strategy: mergeTaskStrategy(task.strategy, {
-          workflowEvaluations: {
-            postExecution: evaluation,
-          },
+          hookExecutions: hookResult.hookExecutions,
         }),
       },
     });
@@ -176,15 +182,15 @@ class SSEAggregator {
 
     this.emit({
       id: crypto.randomUUID(),
-      type: "task.workflow-evaluation.updated",
+      type: "task.hooks.updated",
       ts: new Date().toISOString(),
       taskId: task.id,
       projectId: task.projectId,
       data: {
         phase: "postExecution",
-        status: evaluation.status,
-        agent: evaluation.agent,
-        sessionId: evaluation.sessionId,
+        status: firstHook.status,
+        agent: firstHook.agent,
+        sessionId: firstHook.sessionId,
       },
     });
   }
@@ -233,6 +239,8 @@ class SSEAggregator {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+      let eventType = "message";
+      const dataLines: string[] = [];
 
       conn.reconnectAttempts = 0;
 
@@ -246,10 +254,8 @@ class SSEAggregator {
             const lines = buffer.split("\n");
             buffer = lines.pop() || "";
 
-            let eventType = "message";
-            const dataLines: string[] = [];
-
-            for (const line of lines) {
+            for (const rawLine of lines) {
+              const line = rawLine.replace(/\r$/, "");
               if (line.startsWith("event:")) {
                 eventType = line.slice(6).trim();
               } else if (line.startsWith("data:")) {
@@ -315,6 +321,7 @@ class SSEAggregator {
         this.emit(event);
         if (event.type === "session.error") {
           this.maybeEmitAuthError(event);
+          void this.maybeFinalizeFailure(event);
         }
         void this.maybeFinalizeRun(event);
       }
@@ -490,6 +497,65 @@ class SSEAggregator {
       }
 
       const resultText = assistantResult.text;
+
+      // Check if this is a parallel candidate completion
+      const candidateInfo = this.sessionToCandidateMap.get(event.sessionId);
+      if (candidateInfo) {
+        // Record this candidate's result
+        const taskResults = this.parallelCandidateResults.get(candidateInfo.taskId);
+        if (taskResults) {
+          taskResults.set(candidateInfo.candidateIndex, {
+            sessionId: event.sessionId,
+            result: resultText,
+          });
+        }
+
+        updateAgentRunStatus(event.agentRunId, "completed");
+        this.finalizedAgentRuns.add(event.agentRunId);
+
+        this.emit({
+          id: crypto.randomUUID(),
+          type: "agent.completed",
+          ts: new Date().toISOString(),
+          sessionId: event.sessionId,
+          taskId: event.taskId,
+          projectId: event.projectId,
+          agentRunId: event.agentRunId,
+          data: {
+            sourceEvent: event.type,
+            candidateIndex: candidateInfo.candidateIndex,
+            executionMode: "parallel",
+            ...(resultText ? { result: resultText } : {}),
+          },
+        });
+
+        // Collect changes for this candidate
+        collectChangesFromSession({
+          taskId: event.taskId,
+          sessionId: event.sessionId,
+          agentRunId: event.agentRunId,
+          authorization,
+        }).catch((err) => {
+          console.error(
+            `Change collection failed for parallel candidate ${candidateInfo.candidateIndex}:`,
+            err,
+          );
+        });
+
+        // Check if all candidates are done
+        const allSessions = this.parallelTaskSessions.get(candidateInfo.taskId);
+        if (allSessions && taskResults && taskResults.size >= allSessions.size) {
+          void this.finalizeParallelTask(
+            candidateInfo.taskId,
+            event.projectId ?? "",
+            authorization,
+          );
+        }
+
+        return;
+      }
+
+      // Single mode: original flow
       const taskUpdate = await cpFetch(`/api/tasks/${encodeURIComponent(event.taskId)}`, {
         method: "PATCH",
         authorization,
@@ -537,7 +603,7 @@ class SSEAggregator {
         },
       });
 
-      // Collect code changes first, then run any configured post-execution review.
+      // Collect code changes first, then run any configured post-execution hooks.
       const completedTaskId = event.taskId;
       collectChangesFromSession({
         taskId: event.taskId,
@@ -552,9 +618,9 @@ class SSEAggregator {
           if (!completedTaskId) {
             return;
           }
-          this.triggerPostExecutionReview(completedTaskId, resultText, authorization).catch(
+          this.triggerPostExecutionHooks(completedTaskId, resultText, authorization).catch(
             (err) => {
-              console.error(`Post-execution review failed for task ${completedTaskId}:`, err);
+              console.error(`Post-execution hooks failed for task ${completedTaskId}:`, err);
             },
           );
         });
@@ -562,6 +628,173 @@ class SSEAggregator {
       console.error(`Failed to finalize agent run ${event.agentRunId}:`, error);
     } finally {
       this.finalizingAgentRuns.delete(event.agentRunId);
+    }
+  }
+
+  /**
+   * Handle session.error events: mark the task as failed and trigger on-failure hooks.
+   */
+  private async maybeFinalizeFailure(event: RealtimeEvent): Promise<void> {
+    if (event.type !== "session.error" || !event.sessionId || !event.taskId) {
+      return;
+    }
+
+    const run = findAgentRunBySessionId(event.sessionId);
+    if (!run) return;
+
+    // Pause/stop currently relies on aborting the runtime session, which may emit
+    // session.error even though the local run state is intentional and recoverable.
+    if (run.status === "paused" || run.status === "stopped") {
+      return;
+    }
+
+    // Avoid double-processing if already finalized or finalizing
+    if (
+      run.agentRunId &&
+      (this.finalizedAgentRuns.has(run.agentRunId) || this.finalizingAgentRuns.has(run.agentRunId))
+    ) {
+      return;
+    }
+
+    // Mark the agent run as failed
+    if (run.agentRunId) {
+      updateAgentRunStatus(run.agentRunId, "failed");
+      this.finalizedAgentRuns.add(run.agentRunId);
+    }
+
+    const errorMessage = this.extractErrorMessage(event);
+
+    // Check if this is a parallel candidate failure
+    const candidateInfo = this.sessionToCandidateMap.get(event.sessionId);
+    if (candidateInfo) {
+      this.emit({
+        id: crypto.randomUUID(),
+        type: "agent.completed",
+        ts: new Date().toISOString(),
+        sessionId: event.sessionId,
+        taskId: event.taskId,
+        projectId: event.projectId,
+        agentRunId: run.agentRunId,
+        data: {
+          sourceEvent: event.type,
+          candidateIndex: candidateInfo.candidateIndex,
+          executionMode: "parallel",
+          error: errorMessage,
+          status: "failed",
+        },
+      });
+
+      // Record failure result for the candidate so parallel tracking can proceed
+      const taskResults = this.parallelCandidateResults.get(candidateInfo.taskId);
+      if (taskResults) {
+        taskResults.set(candidateInfo.candidateIndex, {
+          sessionId: event.sessionId,
+          result: `[FAILED] ${errorMessage}`,
+        });
+      }
+
+      // Check if all candidates are now done (succeeded or failed)
+      const allSessions = this.parallelTaskSessions.get(candidateInfo.taskId);
+      if (allSessions && taskResults && taskResults.size >= allSessions.size) {
+        const authorization = await createInternalAuthorization();
+        void this.finalizeParallelTask(candidateInfo.taskId, event.projectId ?? "", authorization);
+      }
+      return;
+    }
+
+    // Single mode: patch task as failed + trigger on-failure hooks
+    try {
+      const authorization = await createInternalAuthorization();
+
+      await cpFetch(`/api/tasks/${encodeURIComponent(event.taskId)}`, {
+        method: "PATCH",
+        authorization,
+        body: {
+          status: "failed",
+          sessionId: event.sessionId,
+          agentRunId: run.agentRunId,
+        },
+      });
+
+      this.emit({
+        id: crypto.randomUUID(),
+        type: "task.completed",
+        ts: new Date().toISOString(),
+        sessionId: event.sessionId,
+        taskId: event.taskId,
+        projectId: event.projectId,
+        agentRunId: run.agentRunId,
+        data: { status: "failed", error: errorMessage, sourceEvent: event.type },
+      });
+
+      void this.triggerOnFailureHooks(event.taskId, errorMessage, authorization);
+    } catch (error) {
+      console.error(`Failed to finalize failure for task ${event.taskId}:`, error);
+    }
+  }
+
+  private extractErrorMessage(event: RealtimeEvent): string {
+    const error =
+      typeof event.data.error === "object" && event.data.error
+        ? (event.data.error as Record<string, unknown>)
+        : typeof event.data.error === "string"
+          ? event.data.error
+          : undefined;
+    if (typeof error === "string") return error;
+    if (error) {
+      const data =
+        typeof error.data === "object" && error.data
+          ? (error.data as Record<string, unknown>)
+          : undefined;
+      return String(data?.message ?? error.message ?? error.name ?? "Unknown error");
+    }
+    return "Session error";
+  }
+
+  /**
+   * Run all enabled on-failure lifecycle hooks for a failed task.
+   */
+  private async triggerOnFailureHooks(
+    taskId: string,
+    errorMessage: string,
+    authorization: string,
+  ): Promise<void> {
+    const strategyConfig = readOrchestrationStrategy();
+    const taskResult = await cpFetch<CompletedTaskContext>(
+      `/api/tasks/${encodeURIComponent(taskId)}`,
+      { authorization },
+    );
+    if (!taskResult.ok) return;
+
+    const task = taskResult.data;
+    const hookResult = await executeLifecycleHooks({
+      strategy: strategyConfig,
+      trigger: "on-failure",
+      taskId: task.id,
+      projectId: task.projectId,
+      taskTitle: task.title,
+      taskPrompt: task.prompt,
+      titlePrefix: "on-failure",
+      context: {
+        taskId: task.id,
+        projectId: task.projectId,
+        taskTitle: task.title,
+        taskPrompt: task.prompt,
+        errorMessage,
+      },
+    });
+
+    // Append hook execution records to the task strategy
+    if (hookResult.hookExecutions.length > 0) {
+      await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
+        method: "PATCH",
+        authorization,
+        body: {
+          strategy: mergeTaskStrategy(task.strategy, {
+            hookExecutions: hookResult.hookExecutions,
+          }),
+        },
+      });
     }
   }
 
@@ -673,6 +906,239 @@ class SSEAggregator {
   onEvent(handler: EventHandler): () => void {
     this.handlers.add(handler);
     return () => this.handlers.delete(handler);
+  }
+
+  /**
+   * Finalize a parallel task after all candidates have completed.
+   * Optionally triggers a judge evaluation.
+   */
+  private async finalizeParallelTask(
+    taskId: string,
+    projectId: string,
+    authorization: string,
+  ): Promise<void> {
+    if (this.judgingTasks.has(taskId)) return;
+    this.judgingTasks.add(taskId);
+
+    try {
+      const results = this.parallelCandidateResults.get(taskId);
+      const candidateResults = results
+        ? Array.from(results.entries()).sort(([a], [b]) => a - b)
+        : [];
+
+      // Fetch the task to get its execution plan
+      const taskResult = await cpFetch<CompletedTaskContext & { executionPlan?: string }>(
+        `/api/tasks/${encodeURIComponent(taskId)}`,
+        { authorization },
+      );
+      if (!taskResult.ok) return;
+
+      const task = taskResult.data;
+      let plan: ExecutionPlan | undefined;
+      if (task.executionPlan) {
+        try {
+          plan = JSON.parse(task.executionPlan as string) as ExecutionPlan;
+        } catch {
+          /* ignore */
+        }
+      }
+
+      // Update each candidate's status in the execution plan
+      if (plan) {
+        for (const [idx, cr] of candidateResults) {
+          if (plan.candidates[idx]) {
+            plan.candidates[idx].status = "completed";
+            plan.candidates[idx].result = cr.result;
+            plan.candidates[idx].finishedAt = new Date().toISOString();
+          }
+        }
+      }
+
+      // Try to run judge if configured
+      const strategyConfig = readOrchestrationStrategy();
+      const judgeConfig = strategyConfig.judge;
+      let judgeResult: JudgeResult | undefined;
+
+      if (judgeConfig.enabled && candidateResults.length > 1) {
+        judgeResult = await this.runJudgeEvaluation(
+          task,
+          candidateResults,
+          judgeConfig,
+          authorization,
+        );
+        if (plan && judgeResult) {
+          plan.judgeResult = judgeResult;
+          plan.winnerCandidateIndex = judgeResult.winnerIndex;
+        }
+      } else if (candidateResults.length > 0) {
+        // No judge: pick the first completed candidate as the winner
+        if (plan) {
+          plan.winnerCandidateIndex = candidateResults[0]?.[0] ?? 0;
+        }
+      }
+
+      // Use winner's result as the task result
+      const winnerIdx = plan?.winnerCandidateIndex ?? candidateResults[0]?.[0] ?? 0;
+      const winnerResult = results?.get(winnerIdx)?.result;
+
+      // Final PATCH to complete the task
+      await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
+        method: "PATCH",
+        authorization,
+        body: {
+          status: "completed",
+          executionPlan: plan ? JSON.stringify(plan) : undefined,
+          ...(winnerResult ? { result: winnerResult } : {}),
+          strategy: mergeTaskStrategy(task.strategy, {
+            hookExecutions: judgeResult
+              ? [
+                  {
+                    hookId: "judge",
+                    trigger: "post-execution",
+                    status: judgeResult.status,
+                    agent: judgeConfig.agent,
+                    model: judgeConfig.model || undefined,
+                    prompt: "[judge evaluation]",
+                    result: judgeResult.reasoning,
+                    sessionId: judgeResult.sessionId,
+                    completedAt: judgeResult.completedAt,
+                  },
+                ]
+              : undefined,
+          }),
+        },
+      });
+
+      this.emit({
+        id: crypto.randomUUID(),
+        type: "task.completed",
+        ts: new Date().toISOString(),
+        taskId,
+        projectId,
+        data: {
+          status: "completed",
+          executionMode: "parallel",
+          winnerCandidateIndex: winnerIdx,
+          candidateCount: candidateResults.length,
+          hasJudge: !!judgeResult,
+          ...(winnerResult ? { result: winnerResult } : {}),
+        },
+      });
+
+      // Run post-execution hooks after parallel completion
+      this.triggerPostExecutionHooks(taskId, winnerResult, authorization).catch((err) => {
+        console.error(`Post-execution hooks failed for parallel task ${taskId}:`, err);
+      });
+    } catch (error) {
+      console.error(`Failed to finalize parallel task ${taskId}:`, error);
+    } finally {
+      // Clean up tracking state
+      this.parallelTaskSessions.delete(taskId);
+      this.parallelCandidateResults.delete(taskId);
+      this.judgingTasks.delete(taskId);
+      // Clean up session->candidate mappings
+      for (const [sid, info] of this.sessionToCandidateMap) {
+        if (info.taskId === taskId) this.sessionToCandidateMap.delete(sid);
+      }
+    }
+  }
+
+  /**
+   * Run a judge evaluation across multiple candidate results.
+   */
+  private async runJudgeEvaluation(
+    task: CompletedTaskContext,
+    candidateResults: Array<[number, { sessionId: string; result?: string }]>,
+    judgeConfig: {
+      agent: string;
+      model: string;
+      promptTemplate: string;
+      timeoutMs: number;
+      selectionStrategy: string;
+    },
+    _authorization: string,
+  ): Promise<JudgeResult> {
+    const candidateBlock = candidateResults
+      .map(
+        ([idx, cr]) =>
+          `--- Candidate ${idx}: ---\nStatus: completed\nResult:\n${cr.result ?? "(no result)"}`,
+      )
+      .join("\n\n");
+
+    const prompt = renderPromptTemplate(judgeConfig.promptTemplate, {
+      taskTitle: task.title,
+      taskPrompt: task.prompt,
+      candidateResults: candidateBlock,
+      candidateCount: String(candidateResults.length),
+    });
+
+    const hookModel = judgeConfig.model ? parseModelString(judgeConfig.model) : undefined;
+    const result = await runDetachedPrompt(`[Judge ${task.id.slice(0, 8)}] ${task.title}`, prompt, {
+      agent: judgeConfig.agent,
+      model: hookModel,
+      taskId: task.id,
+      projectId: task.projectId,
+      timeoutMs: judgeConfig.timeoutMs,
+    });
+
+    if (!result.ok || !result.text) {
+      return {
+        status: "failed",
+        sessionId: result.sessionId,
+        reasoning: result.error || "Judge evaluation failed",
+        completedAt: new Date().toISOString(),
+      };
+    }
+
+    // Try to parse structured JSON from judge response
+    try {
+      const jsonMatch = result.text.match(/\{[\s\S]*"winnerIndex"[\s\S]*\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]) as {
+          winnerIndex?: number;
+          scores?: number[];
+          reasoning?: string;
+        };
+
+        let winnerIndex = parsed.winnerIndex;
+
+        // When strategy is highest-score and scores are available, override
+        // the judge-picked winner with the candidate that scored highest.
+        if (
+          judgeConfig.selectionStrategy === "highest-score" &&
+          Array.isArray(parsed.scores) &&
+          parsed.scores.length > 0
+        ) {
+          let maxScore = Number.NEGATIVE_INFINITY;
+          for (let i = 0; i < parsed.scores.length; i++) {
+            const score = parsed.scores[i];
+            if (typeof score === "number" && score > maxScore) {
+              maxScore = score;
+              winnerIndex = candidateResults[i]?.[0] ?? i;
+            }
+          }
+        }
+
+        return {
+          status: "completed",
+          sessionId: result.sessionId,
+          winnerIndex,
+          scores: parsed.scores,
+          reasoning: parsed.reasoning || result.text,
+          completedAt: new Date().toISOString(),
+        };
+      }
+    } catch {
+      // Fall through to unstructured result
+    }
+
+    return {
+      status: "completed",
+      sessionId: result.sessionId,
+      winnerIndex: 0,
+      reasoning: result.text,
+      completedAt: new Date().toISOString(),
+    };
   }
 
   disconnect(key: string): void {

@@ -17,7 +17,7 @@ const DB_PATH =
   process.env.TEST_DB_PATH || resolve(__dirname, "../../control-plane/service/data/openerx.db");
 const executionIntegrationTest = process.env.RUN_EXECUTION_INTEGRATION === "1" ? test : test.skip;
 
-interface WorkflowEvaluationHook {
+interface HookConfig {
   enabled: boolean;
   agent: string;
   model: string;
@@ -25,15 +25,25 @@ interface WorkflowEvaluationHook {
   timeoutMs: number;
 }
 
+interface LifecycleHook {
+  id: string;
+  trigger: "pre-execution" | "post-execution" | "on-failure" | "pre-resume";
+  enabled: boolean;
+  agent: string;
+  model?: string;
+  promptTemplate: string;
+  timeoutMs: number;
+  order: number;
+}
+
 interface OrchestrationStrategy {
   categoryAgentMap: Record<string, string[]>;
   categoryModelMap: Record<string, string>;
   enablePipeline: boolean;
-  preExecutionReview: WorkflowEvaluationHook;
-  postExecutionReview: WorkflowEvaluationHook;
+  hooks: LifecycleHook[];
 }
 
-interface WorkflowEvaluationRecord {
+interface HookExecutionSnapshot {
   status: string;
   agent: string;
   model?: string;
@@ -47,10 +57,7 @@ interface WorkflowEvaluationRecord {
 interface TaskStrategyPayload {
   selectedAgent?: string;
   effectiveModel?: string;
-  workflowEvaluations?: {
-    preExecution?: WorkflowEvaluationRecord;
-    postExecution?: WorkflowEvaluationRecord;
-  };
+  hookExecutions?: Array<HookExecutionSnapshot & { hookId: string; trigger: string }>;
 }
 
 interface TaskRecord {
@@ -58,6 +65,12 @@ interface TaskRecord {
   status: string;
   agentRunId?: string | null;
   strategy?: string | null;
+}
+
+interface ProjectRecord {
+  settings?: {
+    defaultModel?: string;
+  } | null;
 }
 
 const createdTaskIds: string[] = [];
@@ -161,6 +174,14 @@ async function getTask(taskId: string): Promise<TaskRecord> {
   });
 }
 
+async function getProjectDefaultModel(): Promise<string> {
+  const project = await request<ProjectRecord>(`/api/projects/${PROJECT_ID}`, {
+    headers: authHeaders(),
+  });
+
+  return project.settings?.defaultModel || "qwen-local:qwen/qwen3.5-35b-a3b";
+}
+
 async function terminateAgent(agentRunId: string): Promise<void> {
   await request(`/api/agents/${agentRunId}/terminate`, {
     method: "POST",
@@ -184,7 +205,7 @@ async function waitForTaskStrategy(
     await sleep(250);
   }
 
-  throw new Error(`Timed out waiting for workflow evaluation on task ${taskId}`);
+  throw new Error(`Timed out waiting for hook execution on task ${taskId}`);
 }
 
 async function waitForEvent(
@@ -234,16 +255,17 @@ afterAll(async () => {
   try {
     execSync(`sqlite3 "${DB_PATH}" "${statements.join(" ")}"`, { timeout: 5000 });
   } catch {
-    console.warn("Cleanup failed for workflow-evaluation.test.ts");
+    console.warn("Cleanup failed for hooks integration test");
   }
 });
 
-describe("workflow evaluations", () => {
+describe("lifecycle hooks integration", () => {
   executionIntegrationTest(
-    "persists pre-execution evaluation after saving orchestration strategy",
+    "persists pre-execution hook result after saving orchestration strategy",
     async () => {
       await withStrategyLock(async () => {
         const originalStrategy = await getOrchestrationStrategy();
+        const hookModel = await getProjectDefaultModel();
         let agentRunId: string | undefined;
 
         try {
@@ -252,22 +274,23 @@ describe("workflow evaluations", () => {
             categoryAgentMap: Object.fromEntries(
               Object.keys(originalStrategy.categoryAgentMap).map((key) => [key, ["build"]]),
             ),
-            preExecutionReview: {
-              enabled: true,
-              agent: "build",
-              model: "",
-              timeoutMs: 15000,
-              promptTemplate: [
-                "Pre-flight reviewer for OpenerX task.",
-                "Task title: {{taskTitle}}",
-                "Task prompt:",
-                "{{taskPrompt}}",
-              ].join("\n"),
-            },
-            postExecutionReview: {
-              ...originalStrategy.postExecutionReview,
-              enabled: false,
-            },
+            hooks: [
+              {
+                id: "pre-execution-test",
+                trigger: "pre-execution",
+                enabled: true,
+                agent: "build",
+                model: hookModel,
+                timeoutMs: 15000,
+                promptTemplate: [
+                  "Pre-flight reviewer for OpenerX task.",
+                  "Task title: {{taskTitle}}",
+                  "Task prompt:",
+                  "{{taskPrompt}}",
+                ].join("\n"),
+                order: 0,
+              },
+            ],
           });
 
           const taskTitle = `pre-eval-${Date.now()}`;
@@ -280,18 +303,22 @@ describe("workflow evaluations", () => {
           const { task, strategy } = await waitForTaskStrategy(
             taskId,
             (currentStrategy, currentTask) =>
-              Boolean(currentStrategy.workflowEvaluations?.preExecution) &&
-              currentTask.status !== "pending",
+              Boolean(
+                currentStrategy.hookExecutions?.some((hook) => hook.trigger === "pre-execution"),
+              ) && currentTask.status !== "pending",
           );
 
           expect(task.status).not.toBe("pending");
           expect(strategy.selectedAgent).toBeTruthy();
-          expect(strategy.workflowEvaluations?.preExecution).toBeTruthy();
-          expect(strategy.workflowEvaluations?.preExecution?.agent).toBe("build");
-          expect(strategy.workflowEvaluations?.preExecution?.prompt).toContain(taskTitle);
-          expect(strategy.workflowEvaluations?.preExecution?.prompt).toContain("Task title:");
-          expect(strategy.workflowEvaluations?.preExecution?.prompt).toContain(taskPrompt);
-          expect(strategy.workflowEvaluations?.preExecution?.completedAt).toBeTruthy();
+          const preExecution = strategy.hookExecutions?.find(
+            (hook) => hook.trigger === "pre-execution",
+          );
+          expect(preExecution).toBeTruthy();
+          expect(preExecution?.agent).toBe("build");
+          expect(preExecution?.prompt).toContain(taskTitle);
+          expect(preExecution?.prompt).toContain("Task title:");
+          expect(preExecution?.prompt).toContain(taskPrompt);
+          expect(preExecution?.completedAt).toBeTruthy();
         } finally {
           if (agentRunId) {
             await terminateAgent(agentRunId).catch(() => undefined);
@@ -303,10 +330,11 @@ describe("workflow evaluations", () => {
   );
 
   executionIntegrationTest(
-    "persists post-execution evaluation and emits refresh event after strategy save",
+    "persists post-execution hook result and emits hooks refresh event after strategy save",
     async () => {
       await withStrategyLock(async () => {
         const originalStrategy = await getOrchestrationStrategy();
+        const hookModel = await getProjectDefaultModel();
         const events: Array<Record<string, unknown>> = [];
         const unsubscribe = sseAggregator.onEvent((event) => {
           events.push(event as unknown as Record<string, unknown>);
@@ -318,22 +346,23 @@ describe("workflow evaluations", () => {
             categoryAgentMap: Object.fromEntries(
               Object.keys(originalStrategy.categoryAgentMap).map((key) => [key, ["build"]]),
             ),
-            preExecutionReview: {
-              ...originalStrategy.preExecutionReview,
-              enabled: false,
-            },
-            postExecutionReview: {
-              enabled: true,
-              agent: "build",
-              model: "",
-              timeoutMs: 15000,
-              promptTemplate: [
-                "Post-execution reviewer for OpenerX task.",
-                "Task title: {{taskTitle}}",
-                "Execution result:",
-                "{{taskResult}}",
-              ].join("\n"),
-            },
+            hooks: [
+              {
+                id: "post-execution-test",
+                trigger: "post-execution",
+                enabled: true,
+                agent: "build",
+                model: hookModel,
+                timeoutMs: 15000,
+                promptTemplate: [
+                  "Post-execution reviewer for OpenerX task.",
+                  "Task title: {{taskTitle}}",
+                  "Execution result:",
+                  "{{taskResult}}",
+                ].join("\n"),
+                order: 0,
+              },
+            ],
           });
 
           const taskId = await createTask(
@@ -355,39 +384,43 @@ describe("workflow evaluations", () => {
 
           await (
             sseAggregator as unknown as {
-              triggerPostExecutionReview: (
+              triggerPostExecutionHooks: (
                 taskId: string,
                 resultText: string,
                 authorization: string,
               ) => Promise<void>;
             }
-          ).triggerPostExecutionReview(taskId, resultText, authorization);
+          ).triggerPostExecutionHooks(taskId, resultText, authorization);
 
-          const evaluationUpdatedEvent = await waitForEvent(
+          const hooksUpdatedEvent = await waitForEvent(
             events,
-            "task.workflow-evaluation.updated",
+            "task.hooks.updated",
             (event) => event.taskId === taskId,
             20000,
           );
 
-          expect(evaluationUpdatedEvent.data).toMatchObject({
+          expect(hooksUpdatedEvent.data).toMatchObject({
             phase: "postExecution",
             agent: "build",
           });
 
           const { strategy } = await waitForTaskStrategy(
             taskId,
-            (currentStrategy) => Boolean(currentStrategy.workflowEvaluations?.postExecution),
+            (currentStrategy) =>
+              Boolean(
+                currentStrategy.hookExecutions?.some((hook) => hook.trigger === "post-execution"),
+              ),
             20000,
           );
 
-          expect(strategy.workflowEvaluations?.postExecution).toBeTruthy();
-          expect(strategy.workflowEvaluations?.postExecution?.agent).toBe("build");
-          expect(strategy.workflowEvaluations?.postExecution?.prompt).toContain("Task title:");
-          expect(strategy.workflowEvaluations?.postExecution?.prompt).toContain(
-            "Execution result:",
+          const postExecution = strategy.hookExecutions?.find(
+            (hook) => hook.trigger === "post-execution",
           );
-          expect(strategy.workflowEvaluations?.postExecution?.completedAt).toBeTruthy();
+          expect(postExecution).toBeTruthy();
+          expect(postExecution?.agent).toBe("build");
+          expect(postExecution?.prompt).toContain("Task title:");
+          expect(postExecution?.prompt).toContain("Execution result:");
+          expect(postExecution?.completedAt).toBeTruthy();
         } finally {
           unsubscribe();
           await updateOrchestrationStrategy(originalStrategy);

@@ -1,8 +1,8 @@
 import { flushPromises, mount } from "@vue/test-utils";
-import type { Task } from "../../control-plane/web-ui/src/lib/api";
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { defineComponent, h } from "vue";
+import type { Task } from "../../control-plane/web-ui/src/lib/api";
 import Tasks from "../../control-plane/web-ui/src/pages/Tasks.vue";
 import { useProjectStore } from "../../control-plane/web-ui/src/stores/project";
 

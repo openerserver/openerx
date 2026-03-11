@@ -571,27 +571,63 @@ configRoutes.get("/orchestration-strategy", (c) => {
   return c.json({ data: readOrchestrationStrategy() });
 });
 
-const workflowHookSchema = z.object({
+const lifecycleHookSchema = z.object({
+  id: z.string().min(1),
+  trigger: z.enum(["pre-execution", "post-execution", "on-failure", "pre-resume"]),
+  enabled: z.boolean(),
+  agent: z.string(),
+  model: z.string().optional(),
+  promptTemplate: z.string().min(1),
+  timeoutMs: z.number().int().positive(),
+  order: z.number().int().min(0),
+});
+
+const workflowTemplateSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  description: z.string().optional(),
+  mode: z.enum(["single", "parallel"]),
+  agents: z.array(z.string()),
+  maxParallelCandidates: z.number().int().min(1).max(5).optional(),
+  enabled: z.boolean(),
+  categoryDefaults: z.array(z.string()).optional(),
+});
+
+const judgeConfigSchema = z.object({
   enabled: z.boolean(),
   agent: z.string(),
   model: z.string(),
   promptTemplate: z.string().min(1),
   timeoutMs: z.number().int().positive(),
+  selectionStrategy: z.enum(["judge-pick", "highest-score"]),
 });
 
 const strategySchema = z.object({
   categoryAgentMap: z.record(z.string(), z.array(z.string())),
   categoryModelMap: z.record(z.string(), z.string()),
   enablePipeline: z.boolean(),
-  preExecutionReview: workflowHookSchema,
-  postExecutionReview: workflowHookSchema,
+  hooks: z.array(lifecycleHookSchema).optional(),
+  templates: z.array(workflowTemplateSchema).optional(),
+  judge: judgeConfigSchema.optional(),
 });
 
 configRoutes.put("/orchestration-strategy", zValidator("json", strategySchema), (c) => {
   const adminErr = requireSystemAdmin(c.get("user"));
   if (adminErr) return c.json({ error: adminErr }, 403);
   const body = c.req.valid("json");
-  writeOrchestrationStrategy(body);
+  writeOrchestrationStrategy({
+    ...body,
+    hooks: body.hooks ?? [],
+    templates: body.templates ?? [],
+    judge: body.judge ?? {
+      enabled: false,
+      agent: "",
+      model: "",
+      promptTemplate: "",
+      timeoutMs: 30000,
+      selectionStrategy: "judge-pick" as const,
+    },
+  });
   return c.json({ ok: true });
 });
 
@@ -785,26 +821,38 @@ const GITHUB_ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token";
 const COPILOT_MODELS_URL = "https://api.githubcopilot.com/models";
 const COPILOT_TOKEN_FILE = join(OPENCODE_STATE_DIR, "copilot-token.json");
 
+/** Sanitize provider suffix for use in filenames (alphanumeric and dashes only) */
+function sanitizeCopilotSuffix(provider: string): string {
+  return provider.replace(/[^a-zA-Z0-9-]/g, "");
+}
+
+function copilotTokenFile(provider = "github-copilot"): string {
+  if (provider === "github-copilot") return COPILOT_TOKEN_FILE;
+  return join(OPENCODE_STATE_DIR, `copilot-token-${sanitizeCopilotSuffix(provider)}.json`);
+}
+
 /** Read stored Copilot token (if any) */
-function readCopilotToken(): { access_token?: string; login_at?: string } | null {
-  if (!existsSync(COPILOT_TOKEN_FILE)) return null;
+function readCopilotToken(provider = "github-copilot"): { access_token?: string; login_at?: string } | null {
+  const file = copilotTokenFile(provider);
+  if (!existsSync(file)) return null;
   try {
-    return JSON.parse(readFileSync(COPILOT_TOKEN_FILE, "utf-8"));
+    return JSON.parse(readFileSync(file, "utf-8"));
   } catch {
     return null;
   }
 }
 
-function writeCopilotToken(data: Record<string, unknown>): void {
+function writeCopilotToken(data: Record<string, unknown>, provider = "github-copilot"): void {
   mkdirSync(OPENCODE_STATE_DIR, { recursive: true });
-  writeFileSync(COPILOT_TOKEN_FILE, JSON.stringify(data, null, 2), { mode: 0o600 });
+  writeFileSync(copilotTokenFile(provider), JSON.stringify(data, null, 2), { mode: 0o600 });
 }
 
 // Step 0: Check if we already have a token
 configRoutes.get("/copilot/status", (c) => {
   const adminErr = requireSystemAdmin(c.get("user"));
   if (adminErr) return c.json({ error: adminErr }, 403);
-  const token = readCopilotToken();
+  const provider = (c.req.query("provider") || "github-copilot");
+  const token = readCopilotToken(provider);
   if (token?.access_token) {
     return c.json({ data: { authenticated: true, login_at: token.login_at || null } });
   }
@@ -815,7 +863,8 @@ configRoutes.get("/copilot/models", async (c) => {
   const adminErr = requireSystemAdmin(c.get("user"));
   if (adminErr) return c.json({ error: adminErr }, 403);
 
-  const token = readCopilotToken();
+  const provider = (c.req.query("provider") || "github-copilot");
+  const token = readCopilotToken(provider);
   if (!token?.access_token) {
     return c.json({ error: "GitHub Copilot 未认证" }, 401);
   }
@@ -958,12 +1007,13 @@ configRoutes.post(
 
     if (data.access_token) {
       // Store token securely
+      const provider = (c.req.query("provider") || "github-copilot");
       writeCopilotToken({
         access_token: data.access_token,
         token_type: data.token_type,
         scope: data.scope,
         login_at: new Date().toISOString(),
-      });
+      }, provider);
 
       return c.json({
         data: { status: "success" },
@@ -979,8 +1029,10 @@ configRoutes.post("/copilot/logout", (c) => {
   const adminErr = requireSystemAdmin(c.get("user"));
   if (adminErr) return c.json({ error: adminErr }, 403);
 
-  if (existsSync(COPILOT_TOKEN_FILE)) {
-    writeFileSync(COPILOT_TOKEN_FILE, "{}", { mode: 0o600 });
+  const provider = (c.req.query("provider") || "github-copilot");
+  const file = copilotTokenFile(provider);
+  if (existsSync(file)) {
+    writeFileSync(file, "{}", { mode: 0o600 });
   }
   return c.json({ ok: true });
 });

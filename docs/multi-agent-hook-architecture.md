@@ -2,7 +2,7 @@
 
 > 适用范围：OpenerX 控制平面任务执行能力演进
 >
-> 目标：从当前"单 Agent 执行 + 固定前后置评审"模式，演进为"多 Agent 并行执行 + 通用生命周期 Hook + 聚合评判"模式
+> 目标：从当前"单 Agent 执行 + 固定执行前/执行后 Hook"模式，演进为"多 Agent 并行执行 + 通用生命周期 Hook + 聚合评判"模式
 
 ## 1. 文档目标
 
@@ -21,19 +21,19 @@
 ```text
 用户创建任务 → 意图分类 (classifyIntent)
              → 选择单个执行 Agent (selectExecutionAgent — 取 suggestedAgents[0])
-             → 可选：前置评审 (runPreExecutionReview)
+             → 可选：执行前 Hook (runPreExecutionHooks)
              → 创建 OpenCode Session → 单 Agent 执行
              → SSE 事件聚合
-             → 任务完成后可选：后置评审 (triggerPostExecutionReview)
+             → 任务完成后可选：执行后 Hook (triggerPostExecutionHooks)
 ```
 
 ### 2.2 当前限制
 
 | 维度 | 当前状态 | 限制说明 |
 | ---- | -------- | -------- |
-| Hook 类型 | 固定 `preExecutionReview` / `postExecutionReview` 两个字段 | 不能加中间态 Hook（暂停前、失败后、续跑前等） |
+| Hook 类型 | 固定执行前 / 执行后两个治理入口 | 不能加中间态 Hook（暂停前、失败后、续跑前等） |
 | 执行模式 | 单 Agent 执行 (`tasks.agentRunId` 为单值) | `classifyIntent()` 返回多个 `suggestedAgents` 但只取第一个 |
-| 评估方式 | 后置评审仅评估单次执行结果 | 无法对比多个 Agent 结果，无法做聚合裁决 |
+| 评估方式 | 执行后 Hook 仅评估单次执行结果 | 无法对比多个 Agent 结果，无法做聚合裁决 |
 | 策略配置 | `OrchestrationStrategy` 中 Hook 字段固定 | 新增 Hook 点必须改类型定义 + 全量迁移 |
 
 ### 2.3 相关代码位置
@@ -42,10 +42,10 @@
 | ---- | ---- | ---- |
 | 编排策略 | `web-ui-bff/src/lib/orchestration-strategy.ts` | Hook 类型定义、策略读写、模板渲染 |
 | 意图分类 | `web-ui-bff/src/lib/intent-classifier.ts` | 任务分类、`suggestedAgents` 计算 |
-| 任务执行 | `web-ui-bff/src/modules/tasks/routes.ts` | 前置评审、Session 创建、PATCH 更新 |
-| 事件聚合 | `web-ui-bff/src/modules/realtime/sse-aggregator.ts` | 后置评审触发、SSE 事件广播 |
+| 任务执行 | `web-ui-bff/src/modules/tasks/routes.ts` | 执行前 Hook、Session 创建、PATCH 更新 |
+| 事件聚合 | `web-ui-bff/src/modules/realtime/sse-aggregator.ts` | 执行后 Hook 触发、SSE 事件广播 |
 | 配置 API | `web-ui-bff/src/modules/config/routes.ts` | `GET/PUT /orchestration-strategy` |
-| 前端设置 | `web-ui/src/pages/Settings.vue` | 前后置评审 UI 配置 |
+| 前端设置 | `web-ui/src/pages/Settings.vue` | 生命周期 Hook UI 配置 |
 | 数据模型 | `service/src/db/schema.ts` | `tasks`、`agentRuns`、`taskNodes`、`taskEdges` 表 |
 
 ## 3. 目标模型
@@ -83,7 +83,7 @@
 
 ### 4.1 目标
 
-将固定的 `preExecutionReview` / `postExecutionReview` 两个字段，泛化为可配置的 Hook 数组，支持任意生命周期触发点。
+将固定的执行前 / 执行后治理入口，泛化为可配置的 Hook 数组，支持任意生命周期触发点。
 
 ### 4.1.1 权限边界
 
@@ -104,8 +104,8 @@
 
 ```typescript
 type HookTrigger =
-  | "pre-execution"      // 任务执行前（替代 preExecutionReview）
-  | "post-execution"     // 任务完成后（替代 postExecutionReview）
+  | "pre-execution"      // 任务执行前
+  | "post-execution"     // 任务完成后
   | "on-failure"         // 任务失败时
   | "on-pause"           // 任务暂停时
   | "pre-resume"         // 续跑前
@@ -172,13 +172,9 @@ export interface OrchestrationStrategy {
   categoryTemplateMap: Record<string, string[]>;
   categoryModelMap: Record<string, string>;
   enablePipeline: boolean;
-  hooks: LifecycleHook[];    // 替代 preExecutionReview / postExecutionReview
+  hooks: LifecycleHook[];    // 统一承载执行前 / 执行后等生命周期 Hook
   templates: WorkflowTemplate[];
-
-  // 向后兼容（Phase 1 读取时自动迁移，Phase 2 移除）
   categoryAgentMap?: Record<string, string[]>;
-  preExecutionReview?: WorkflowEvaluationHook;
-  postExecutionReview?: WorkflowEvaluationHook;
 }
 ```
 
@@ -211,21 +207,16 @@ export interface PersistedTaskStrategy {
   // Phase 1：Hook 执行记录替代固定字段
   hookExecutions?: HookExecutionRecord[];
 
-  // 向后兼容
-  workflowEvaluations?: {
-    preExecution?: WorkflowEvaluationRecord;
-    postExecution?: WorkflowEvaluationRecord;
-  };
   [key: string]: unknown;
 }
 ```
 
 ### 4.4 向后兼容迁移策略
 
-`readOrchestrationStrategy()` 中加入自动迁移逻辑：
+`readOrchestrationStrategy()` 中保留旧字段读取迁移逻辑：
 
 ```typescript
-function migrateToHooks(raw: any): OrchestrationStrategy {
+function migrateToHooks(raw: any): LifecycleHook[] {
   if (raw.hooks) return raw; // 已迁移
 
   const hooks: LifecycleHook[] = [];
@@ -256,7 +247,7 @@ function migrateToHooks(raw: any): OrchestrationStrategy {
     });
   }
 
-  return { ...raw, hooks, preExecutionReview: undefined, postExecutionReview: undefined };
+  return hooks;
 }
 ```
 
@@ -264,16 +255,16 @@ function migrateToHooks(raw: any): OrchestrationStrategy {
 
 | 端点 | 变更 |
 | ---- | ---- |
-| `PUT /orchestration-strategy` | Schema 新增 `hooks` 数组，兼容接收旧格式；仅系统管理员可调用 |
-| `GET /orchestration-strategy` | 返回迁移后的结构；仅系统管理员可调用 |
-| `GET /api/tasks/:id` | `strategy` JSON 中 `hookExecutions` 替代 `workflowEvaluations` |
+| `PUT /orchestration-strategy` | Schema 使用 `hooks` / `templates` / `judge`；仅系统管理员可调用 |
+| `GET /orchestration-strategy` | 返回迁移后的 hooks 结构；仅系统管理员可调用 |
+| `GET /api/tasks/:id` | `strategy` JSON 中使用 `hookExecutions`，任务顶层可带 `executionPlan` |
 
 ### 4.6 BFF 触发逻辑变更
 
 #### tasks/routes.ts — 执行前
 
 ```typescript
-// 替代原 runPreExecutionReview()
+// 执行前 Hook 统一入口
 async function runLifecycleHooks(
   trigger: HookTrigger,
   task: Task,
@@ -297,17 +288,17 @@ async function runLifecycleHooks(
 #### sse-aggregator.ts — 执行后/失败/暂停
 
 ```typescript
-// 替代原 triggerPostExecutionReview()
+// 执行后/失败后等 Hook 统一入口
 // 根据事件类型自动匹配 trigger
 private async triggerLifecycleHooks(trigger: HookTrigger, taskId: string) {
   const records = await runLifecycleHooks(trigger, task, buildHookContext(task));
-  // PATCH task strategy + emit task.hook-evaluation.updated
+  // PATCH task strategy + emit task.hooks.updated
 }
 ```
 
 ### 4.7 前端变更 (Settings.vue)
 
-将固定的"前置评审 / 后置评审"表单改为动态 Hook 列表：
+将固定的"执行前 / 执行后"治理表单改为动态 Hook 列表：
 
 该入口继续保留在系统设置页，仅系统管理员可见、可编辑；非管理员不展示策略配置入口。
 
@@ -316,13 +307,13 @@ private async triggerLifecycleHooks(trigger: HookTrigger, taskId: string) {
 ┌──────────────────────────────────────────┐
 │ [+ 添加 Hook]                             │
 │                                          │
-│ ┌─ pre-execution: 前置评审 (默认) ──────┐ │
+│ ┌─ pre-execution: 执行前 Hook (默认) ───┐ │
 │ │ Agent: prometheus-enterprise          │ │
 │ │ Model: (默认)      超时: 15000ms      │ │
 │ │ [启用] [编辑] [删除]                   │ │
 │ └────────────────────────────────────────┘ │
 │                                          │
-│ ┌─ post-execution: 后置评审 (默认) ─────┐ │
+│ ┌─ post-execution: 执行后 Hook (默认) ───┐ │
 │ │ Agent: oracle-enterprise              │ │
 │ │ Model: (默认)      超时: 15000ms      │ │
 │ │ [启用] [编辑] [删除]                   │ │
@@ -337,7 +328,7 @@ private async triggerLifecycleHooks(trigger: HookTrigger, taskId: string) {
 
 ### 4.8 TaskDetail.vue 变更
 
-将"治理与评估"区域改为展示 `hookExecutions` 数组，每条记录显示：trigger、agent、status、result 摘要。
+将"治理与 Hook 执行"区域改为展示 `hookExecutions` 数组，每条记录显示：trigger、agent、status、result 摘要。
 
 ## 5. Phase 2：多 Agent 并行执行
 
@@ -849,9 +840,9 @@ TaskDetail 展示执行记录、候选结果和最终裁决
 | `control-plane/web-ui-bff/src/lib/orchestration-strategy.ts` | 仅支持 `categoryAgentMap`、固定前后评审 | 增加 `WorkflowTemplate`、`HookExecutionRecord`、`JudgeResult`、`ExecutionPlan`；保留旧格式双读兼容 |
 | `control-plane/web-ui-bff/src/modules/config/routes.ts` | `GET/PUT /orchestration-strategy` 仍是旧 schema | 改为模板库 schema；兼容旧字段输入；保持管理员权限不变 |
 | `control-plane/web-ui-bff/src/modules/tasks/routes.ts` | 仍是分类后选一个 agent 执行 | 增加模板解析、single/parallel 执行分支、executionPlan 持久化、基础 pre-hook 记录 |
-| `control-plane/web-ui-bff/src/modules/realtime/sse-aggregator.ts` | 只围绕单 session 完成检测和后置评估 | 增加多 session 聚合、parallel 终态判定、post-hook 持久化、基础 judge 触发 |
-| `control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter.ts` | 已支持 session、pause、resume、guidance | 补足 parallel candidate 与 judge session 的 registry 管理；不改协议 |
-
+| `control-plane/web-ui-bff/src/modules/realtime/sse-aggregator.ts` | 只围绕单 session 完成检测和执行后治理 | 增加多 session 聚合、parallel 终态判定、post-hook 持久化、基础 judge 触发 |
+| `control-plane/web-ui/src/pages/TaskDetail.vue` | 展示 `selectedAgent`、`suggestedAgents`、固定治理结果 | 增加模板信息、candidate 列表、judge 结果、hook 执行记录 |
+| `tests/web-ui-bff/hooks-integration.test.ts` | 只覆盖固定执行前/执行后治理 | 扩展为模板兼容迁移、single 模式、parallel 模式基础 judge |
 ### 9.2 控制面服务与存储层
 
 | 文件 | 当前状态 | MVP 改动 |
@@ -864,15 +855,15 @@ TaskDetail 展示执行记录、候选结果和最终裁决
 
 | 文件 | 当前状态 | MVP 改动 |
 | ---- | ---- | -------- |
-| `control-plane/web-ui/src/pages/Settings.vue` | 仍是分类到 agent + 固定前后评估表单 | 改成模板库管理视图，但一期只支持 single/parallel 两种模板与前后 hook 配置 |
+| `control-plane/web-ui/src/pages/Settings.vue` | 仍是分类到 agent + 固定治理表单 | 改成模板库管理视图，但一期只支持 single/parallel 两种模板与生命周期 hook 配置 |
 | `control-plane/web-ui/src/lib/api.ts` | orchestration strategy 类型仍是旧结构 | 更新前端类型与 API payload；增加 execution plan / judge result 类型 |
-| `control-plane/web-ui/src/pages/TaskDetail.vue` | 展示 `selectedAgent`、`suggestedAgents`、`workflowEvaluations` | 增加模板信息、candidate 列表、judge 结果；保留旧字段兼容显示 |
+| `control-plane/web-ui/src/pages/TaskDetail.vue` | 展示 `selectedAgent`、`suggestedAgents`、基础治理信息 | 增加模板信息、candidate 列表、judge 结果、hook 执行记录 |
 
 ### 9.4 测试与回归
 
 | 文件 | 当前状态 | MVP 改动 |
 | ---- | ---- | -------- |
-| `tests/web-ui-bff/workflow-evaluation.test.ts` | 只覆盖固定前后评审 | 扩展为模板兼容迁移、single 模式、parallel 模式基础 judge |
+| `tests/web-ui-bff/hooks-integration.test.ts` | 只覆盖固定执行前/执行后治理 | 扩展为模板兼容迁移、single 模式、parallel 模式基础 judge |
 | `tests/web-ui-bff/user-management.test.ts` | 已覆盖 orchestration strategy 管理员权限 | 保持并补模板制 schema 的管理员权限回归 |
 | `tests/web-ui/*` | TaskDetail 与 Settings 仍基于旧编排 UI | 增加模板页渲染、candidate 展示、judge 展示、旧数据兼容测试 |
 

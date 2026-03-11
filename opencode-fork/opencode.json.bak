@@ -1,40 +1,50 @@
 {
-  "$schema": "https://opencode.ai/schemas/opencode.json",
-  "agents": {
-    "defaults": {
-      "model": "anthropic/claude-sonnet-4-20250514",
-      "provider": "anthropic"
+  "$schema": "https://opencode.ai/config.json",
+  "model": "qwen-local/qwen/qwen3.5-35b-a3b",
+  "server": {
+    "port": 4096,
+    "hostname": "127.0.0.1"
+  },
+  "provider": {
+    "anthropic": {
+      "api": "anthropic",
+      "name": "Anthropic (Primary)"
+    },
+    "openai": {
+      "api": "openai-completions",
+      "name": "OpenAI (Fallback)"
+    },
+    "github-copilot": {
+      "api": "github-copilot",
+      "name": "GitHub Copilot"
+    },
+    "qwen-local": {
+      "api": "openai-completions",
+      "name": "Qwen Local",
+      "models": {
+        "zai-org/glm-4.7-flash": {
+          "id": "zai-org/glm-4.7-flash",
+          "name": "GLM 4.7 Flash",
+          "family": "glm",
+          "reasoning": true,
+          "tool_call": true,
+          "temperature": true
+        },
+        "qwen/qwen3.5-35b-a3b": {
+          "id": "qwen/qwen3.5-35b-a3b",
+          "name": "Qwen 3.5 35B A3B",
+          "family": "qwen",
+          "reasoning": true,
+          "tool_call": true,
+          "temperature": true
+        }
+      },
+      "options": {
+        "baseURL": "http://192.168.31.103:1234/v1"
+      }
     }
   },
-  "models": {
-    "providers": {
-      "anthropic": {
-        "api": "anthropic",
-        "name": "Anthropic (Primary)"
-      },
-      "openai": {
-        "api": "openai-completions",
-        "name": "OpenAI (Fallback)"
-      }
-    },
-    "list": [
-      {
-        "id": "anthropic/claude-sonnet-4-20250514",
-        "name": "Claude Sonnet 4 (Primary - Reasoning)",
-        "provider": "anthropic",
-        "contextWindow": 200000,
-        "maxTokens": 16384
-      },
-      {
-        "id": "openai/gpt-4.1-mini",
-        "name": "GPT-4.1 Mini (Fast Execution)",
-        "provider": "openai",
-        "contextWindow": 1047576,
-        "maxTokens": 32768
-      }
-    ]
-  },
-  "plugins": [
+  "plugin": [
     "./.opencode/plugins/orchestrator-plugin.ts",
     "./.opencode/plugins/task-graph-plugin.ts",
     "./.opencode/plugins/hashline-edit-plugin.ts",
@@ -45,22 +55,65 @@
   ],
   "mcp": {
     "exa": {
-      "command": "npx",
-      "args": ["-y", "@anthropic-ai/exa-mcp-server"],
-      "env": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "@anthropic-ai/exa-mcp-server"
+      ],
+      "environment": {
         "EXA_API_KEY": "${EXA_API_KEY}"
-      },
-      "description": "Web search via Exa — retrieves relevant web pages, articles, and documentation"
+      }
     },
     "context7": {
-      "command": "npx",
-      "args": ["-y", "@anthropic-ai/context7-mcp-server"],
-      "description": "Official library documentation lookup — frameworks, languages, APIs"
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "@anthropic-ai/context7-mcp-server"
+      ]
     },
     "grep-app": {
-      "command": "npx",
-      "args": ["-y", "@anthropic-ai/grep-app-mcp-server"],
-      "description": "GitHub code search — find usage patterns and implementations across public repos"
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "@anthropic-ai/grep-app-mcp-server"
+      ]
     }
+  },
+  "agents": {
+    "defaults": {}
+  },
+  "models": {
+    "providers": {
+      "github-copilot": {
+        "api": "github-copilot",
+        "name": "GitHub Copilot"
+      }
+    },
+    "list": [
+      {
+        "id": "gpt-5.4",
+        "name": "GPT-5.4",
+        "provider": "github-copilot",
+        "contextWindow": 400000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "claude-opus-4.6",
+        "name": "Claude Opus 4.6",
+        "provider": "github-copilot",
+        "contextWindow": 144000,
+        "maxTokens": 64000
+      },
+      {
+        "id": "gemini-3-flash-preview",
+        "name": "Gemini 3 Flash (Preview)",
+        "provider": "github-copilot",
+        "contextWindow": 128000,
+        "maxTokens": 64000
+      }
+    ]
   }
 }

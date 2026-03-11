@@ -1,6 +1,6 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "github-copilot/claude-sonnet-4",
+  "model": "qwen-local/qwen/qwen3.5-35b-a3b",
   "server": {
     "port": 4096,
     "hostname": "127.0.0.1"
@@ -17,6 +17,34 @@
     "github-copilot": {
       "api": "github-copilot",
       "name": "GitHub Copilot"
+    },
+    "github-copilot-2": {
+      "name": "GitHub Copilot (Account 2)"
+    },
+    "qwen-local": {
+      "api": "openai-completions",
+      "name": "Qwen Local",
+      "models": {
+        "zai-org/glm-4.7-flash": {
+          "id": "zai-org/glm-4.7-flash",
+          "name": "GLM 4.7 Flash",
+          "family": "glm",
+          "reasoning": true,
+          "tool_call": true,
+          "temperature": true
+        },
+        "qwen/qwen3.5-35b-a3b": {
+          "id": "qwen/qwen3.5-35b-a3b",
+          "name": "Qwen 3.5 35B A3B",
+          "family": "qwen",
+          "reasoning": true,
+          "tool_call": true,
+          "temperature": true
+        }
+      },
+      "options": {
+        "baseURL": "http://192.168.31.103:1234/v1"
+      }
     }
   },
   "plugin": [

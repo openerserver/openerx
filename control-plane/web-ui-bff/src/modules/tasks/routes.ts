@@ -5,10 +5,12 @@ import { authHeader, cpFetch } from "../../lib/control-plane-client";
 import { classifyIntent } from "../../lib/intent-classifier";
 import { resolveModelRoute, validateModelProvider } from "../../lib/opencode-config";
 import {
-  type WorkflowEvaluationRecord,
+  type ExecutionPlan,
+  type HookExecutionRecord,
+  buildExecutionPlan,
   mergeTaskStrategy,
   readOrchestrationStrategy,
-  renderPromptTemplate,
+  resolveWorkflowTemplate,
 } from "../../lib/orchestration-strategy";
 import type { JWTPayload } from "../../middleware/auth";
 import {
@@ -16,9 +18,10 @@ import {
   createSession,
   getSessionMessages,
   listSessions,
-  runDetachedPrompt,
 } from "../agent-control/opencode-adapter";
+import { executeLifecycleHooks } from "../hooks/lifecycle-hooks";
 import { syncGraphsForSessionTask, syncGraphsForTask } from "../realtime/dag-sync";
+import { sseAggregator } from "../realtime/sse-aggregator";
 import { wsBroadcaster } from "../realtime/ws-broadcaster";
 import { reconcileRunningTasksOnStartup } from "./reconcile";
 
@@ -27,6 +30,15 @@ import { reconcileRunningTasksOnStartup } from "./reconcile";
 type AppEnv = { Variables: { user: JWTPayload } };
 
 export const taskRoutes = new Hono<AppEnv>();
+
+type IntentClassification = ReturnType<typeof classifyIntent>;
+type ResolvedModel = { providerId: string; modelId: string };
+type SessionStartResult = Awaited<ReturnType<typeof createSession>>;
+
+interface StartExecutionResponse {
+  status: 200 | 502;
+  body: Record<string, unknown>;
+}
 
 interface ExecutableTask {
   id: string;
@@ -45,6 +57,28 @@ interface ExecutableTask {
 }
 
 type IdentitySnapshot = Record<string, unknown>;
+
+interface PreparedExecutionContext {
+  task: ExecutableTask;
+  authorization: string;
+  identitySnapshot: IdentitySnapshot;
+  classification: IntentClassification;
+  executionAgent: string;
+  plan: ExecutionPlan;
+  repoContext: ReturnType<typeof buildRepoContext>;
+  resolvedModel?: ResolvedModel;
+  effectiveModel?: string;
+}
+
+interface ExecutionContext extends PreparedExecutionContext {
+  prompt: string;
+  hookExecutions: HookExecutionRecord[];
+}
+
+interface ParallelCandidateAttempt {
+  index: number;
+  sessionResult?: SessionStartResult;
+}
 
 function requireSystemAdmin(user: JWTPayload): string | null {
   if (user.role === "platform_admin" || user.role === "org_admin" || user.role === "admin") {
@@ -111,13 +145,22 @@ function selectExecutionAgent(prompt: string) {
   const configuredAgents = strategy.categoryAgentMap[classification.category] || [];
   const suggestedAgents =
     configuredAgents.length > 0 ? configuredAgents : classification.suggestedAgents;
+
+  // Resolve template and build execution plan
+  const template = resolveWorkflowTemplate(strategy, classification.category);
+  const plan = buildExecutionPlan(template, strategy, classification.category);
+
+  // For single mode, the execution agent is the sole candidate
+  const executionAgent = plan.candidates[0]?.agent || suggestedAgents[0] || "build";
+
   return {
     classification: {
       ...classification,
       suggestedAgents,
     },
-    executionAgent: suggestedAgents[0] || "build",
+    executionAgent,
     strategy,
+    plan,
   };
 }
 
@@ -129,7 +172,7 @@ async function resolveExecutionModel(
   task: ExecutableTask,
   authorization: string,
   strategyModel?: string,
-): Promise<{ providerId: string; modelId: string } | undefined> {
+): Promise<ResolvedModel | undefined> {
   // 1. Task-level override
   if (task.selectedModel) {
     return parseModelString(task.selectedModel);
@@ -188,7 +231,8 @@ function buildTaskPatchBody(
   executionMeta: {
     selectedAgent: string;
     effectiveModel?: string;
-    preExecution?: WorkflowEvaluationRecord;
+    plan?: ExecutionPlan;
+    hookExecutions?: HookExecutionRecord[];
   },
 ) {
   return {
@@ -196,16 +240,18 @@ function buildTaskPatchBody(
     sessionId: execResult.sessionId,
     agentRunId: execResult.agentRunId,
     category: classification.category,
+    executionMode: executionMeta.plan?.mode ?? "single",
+    executionPlan: executionMeta.plan ? JSON.stringify(executionMeta.plan) : undefined,
     strategy: mergeTaskStrategy(undefined, {
+      selectedTemplateId: executionMeta.plan?.templateId,
       complexity: classification.complexity,
       suggestedAgents: classification.suggestedAgents,
       requiresPlan: classification.requiresPlan,
       confidence: classification.confidence,
       selectedAgent: executionMeta.selectedAgent,
       effectiveModel: executionMeta.effectiveModel,
-      workflowEvaluations: executionMeta.preExecution
-        ? { preExecution: executionMeta.preExecution }
-        : undefined,
+      executionMode: executionMeta.plan?.mode,
+      hookExecutions: executionMeta.hookExecutions,
     }),
     ...identitySnapshot,
   };
@@ -227,76 +273,368 @@ function buildWorkflowPromptContext(
   };
 }
 
-async function runPreExecutionReview(
+async function runPreExecutionHooks(
   task: ExecutableTask,
-  identitySnapshot: IdentitySnapshot,
+  repoContext: ReturnType<typeof buildRepoContext>,
   executionAgent: string,
   effectiveModel: string | undefined,
 ) {
   const strategy = readOrchestrationStrategy();
-  const hook = strategy.preExecutionReview;
-  if (!hook.enabled || !hook.agent) {
-    return { prompt: task.prompt, evaluation: undefined as WorkflowEvaluationRecord | undefined };
-  }
-
-  const prompt = renderPromptTemplate(
-    hook.promptTemplate,
-    buildWorkflowPromptContext(task, {
+  const hookResult = await executeLifecycleHooks({
+    strategy,
+    trigger: "pre-execution",
+    taskId: task.id,
+    projectId: task.projectId,
+    taskTitle: task.title,
+    taskPrompt: task.prompt,
+    titlePrefix: "Preflight",
+    repoContext,
+    context: buildWorkflowPromptContext(task, {
       selectedAgent: executionAgent,
       selectedModel: effectiveModel,
       taskResult: "",
       changesSummary: "",
     }),
-  );
+  });
 
-  const hookModel = hook.model ? parseModelString(hook.model) : undefined;
-  const result = await runDetachedPrompt(
-    `[Preflight ${task.id.slice(0, 8)}] ${task.title}`,
-    prompt,
-    {
-      agent: hook.agent,
-      model: hookModel,
-      taskId: task.id,
-      projectId: task.projectId,
-      repoContext: buildRepoContext(task, identitySnapshot),
-      timeoutMs: hook.timeoutMs,
-    },
-  );
-
-  const evaluation: WorkflowEvaluationRecord = result.ok
-    ? {
-        status: result.completed ? "completed" : "failed",
-        agent: hook.agent,
-        model: hook.model || undefined,
-        prompt,
-        result: result.text,
-        error: result.completed ? undefined : "Pre-execution review timed out",
-        sessionId: result.sessionId,
-        completedAt: new Date().toISOString(),
-      }
-    : {
-        status: "failed",
-        agent: hook.agent,
-        model: hook.model || undefined,
-        prompt,
-        error: result.error || "Pre-execution review failed",
-        sessionId: result.sessionId,
-        completedAt: new Date().toISOString(),
-      };
-
-  if (!result.ok || !result.text) {
-    return { prompt: task.prompt, evaluation };
+  if (hookResult.hookExecutions.length === 0) {
+    return {
+      prompt: task.prompt,
+      hookExecutions: [] as HookExecutionRecord[],
+    };
   }
 
+  if (hookResult.rewrittenPrompt) {
+    return {
+      prompt: hookResult.rewrittenPrompt,
+      hookExecutions: hookResult.hookExecutions,
+    };
+  }
+
+  // Default: prepend the review as context for the execution agent
   const promptWithReview = [
     "Pre-execution assessment from the configured review agent:",
-    result.text,
+    hookResult.combinedResultText || "",
     "",
     "Original task:",
     task.prompt,
   ].join("\n\n");
 
-  return { prompt: promptWithReview, evaluation };
+  return {
+    prompt: promptWithReview,
+    hookExecutions: hookResult.hookExecutions,
+  };
+}
+
+function validateExecutableTask(task: ExecutableTask): string | null {
+  if (task.status !== "pending") {
+    return `Cannot execute: task status is ${task.status}`;
+  }
+
+  return null;
+}
+
+function validateResolvedModel(resolvedModel: ResolvedModel | undefined) {
+  if (!resolvedModel) {
+    return null;
+  }
+
+  const check = validateModelProvider(resolvedModel.providerId);
+  if (check.valid) {
+    return null;
+  }
+
+  return {
+    status: 400 as const,
+    body: {
+      error: check.error,
+      code: "MODEL_PROVIDER_NOT_CONFIGURED",
+      providers: check.providers,
+    },
+  };
+}
+
+async function prepareExecutionContext(
+  task: ExecutableTask,
+  authorization: string,
+): Promise<PreparedExecutionContext> {
+  const identitySnapshot = await resolveExecutionIdentity(task, authorization);
+  const { classification, executionAgent, strategy, plan } = selectExecutionAgent(task.prompt);
+  const resolvedModel = await resolveExecutionModel(
+    task,
+    authorization,
+    strategy.categoryModelMap[classification.category] || undefined,
+  );
+  const repoContext = buildRepoContext(task, identitySnapshot);
+
+  return {
+    task,
+    authorization,
+    identitySnapshot,
+    classification,
+    executionAgent,
+    plan,
+    repoContext,
+    resolvedModel,
+    effectiveModel: resolvedModel
+      ? `${resolvedModel.providerId}:${resolvedModel.modelId}`
+      : undefined,
+  };
+}
+
+async function finalizePreExecutionContext(
+  context: PreparedExecutionContext,
+): Promise<ExecutionContext> {
+  const preExecutionHooks = await runPreExecutionHooks(
+    context.task,
+    context.repoContext,
+    context.executionAgent,
+    context.effectiveModel,
+  );
+
+  return {
+    ...context,
+    prompt: preExecutionHooks.prompt,
+    hookExecutions: [...preExecutionHooks.hookExecutions],
+  };
+}
+
+function isParallelExecution(plan: ExecutionPlan) {
+  return plan.mode === "parallel" && plan.candidates.length > 1;
+}
+
+async function createParallelCandidateAttempts(
+  context: ExecutionContext,
+): Promise<ParallelCandidateAttempt[]> {
+  return Promise.all(
+    context.plan.candidates.map(async (candidate, index) => {
+      try {
+        const sessionResult = await createSession(
+          context.task.id,
+          context.task.projectId,
+          context.prompt,
+          {
+            agent: candidate.agent,
+            candidateIndex: index,
+            repoContext: context.repoContext,
+            model: context.resolvedModel,
+          },
+        );
+        return { index, sessionResult };
+      } catch {
+        return { index };
+      }
+    }),
+  );
+}
+
+function applyParallelCandidateAttempts(plan: ExecutionPlan, attempts: ParallelCandidateAttempt[]) {
+  let hasAnySuccess = false;
+  const startedAt = new Date().toISOString();
+
+  for (const attempt of attempts) {
+    const candidate = plan.candidates[attempt.index];
+    if (!candidate) {
+      continue;
+    }
+
+    if (!attempt.sessionResult) {
+      candidate.status = "failed";
+      continue;
+    }
+
+    candidate.sessionId = attempt.sessionResult.sessionId;
+    candidate.agentRunId = attempt.sessionResult.agentRunId;
+    candidate.status = attempt.sessionResult.ok ? "running" : "failed";
+    candidate.startedAt = startedAt;
+    hasAnySuccess ||= attempt.sessionResult.ok;
+  }
+
+  return hasAnySuccess;
+}
+
+async function markTaskFailed(taskId: string, authorization: string) {
+  await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
+    method: "PATCH",
+    body: { status: "failed" },
+    authorization,
+  });
+}
+
+async function persistExecutionStart(
+  context: ExecutionContext,
+  execResult: { sessionId?: string; agentRunId?: string },
+) {
+  await cpFetch(`/api/tasks/${encodeURIComponent(context.task.id)}`, {
+    method: "PATCH",
+    body: buildTaskPatchBody(execResult, context.classification, context.identitySnapshot, {
+      selectedAgent: context.executionAgent,
+      effectiveModel: context.effectiveModel,
+      plan: context.plan,
+      hookExecutions: context.hookExecutions,
+    }),
+    authorization: context.authorization,
+  });
+}
+
+function broadcastParallelExecutionStarted(context: ExecutionContext) {
+  for (const candidate of context.plan.candidates) {
+    if (candidate.status !== "running") {
+      continue;
+    }
+
+    wsBroadcaster.broadcast({
+      id: crypto.randomUUID(),
+      type: "agent.started",
+      ts: new Date().toISOString(),
+      taskId: context.task.id,
+      projectId: context.task.projectId,
+      agentRunId: candidate.agentRunId,
+      sessionId: candidate.sessionId,
+      data: {
+        taskId: context.task.id,
+        title: context.task.title,
+        agentRunId: candidate.agentRunId,
+        agent: candidate.agent,
+        executionMode: "parallel",
+      },
+    });
+  }
+}
+
+function buildParallelExecutionResponse(
+  taskId: string,
+  primaryCandidate: ExecutionPlan["candidates"][number] | undefined,
+  candidates: ExecutionPlan["candidates"],
+): StartExecutionResponse {
+  return {
+    status: 200,
+    body: {
+      taskId,
+      sessionId: primaryCandidate?.sessionId,
+      agentRunId: primaryCandidate?.agentRunId,
+      status: "running",
+      executionMode: "parallel",
+      candidates: candidates.map((candidate) => ({
+        agent: candidate.agent,
+        sessionId: candidate.sessionId,
+        status: candidate.status,
+      })),
+    },
+  };
+}
+
+async function startParallelExecution(context: ExecutionContext): Promise<StartExecutionResponse> {
+  const attempts = await createParallelCandidateAttempts(context);
+  const hasAnySuccess = applyParallelCandidateAttempts(context.plan, attempts);
+
+  if (!hasAnySuccess) {
+    await markTaskFailed(context.task.id, context.authorization);
+    return {
+      status: 502,
+      body: { error: "All parallel candidates failed to start" },
+    };
+  }
+
+  const primaryCandidate = context.plan.candidates.find(
+    (candidate) => candidate.status === "running",
+  );
+  await persistExecutionStart(context, {
+    sessionId: primaryCandidate?.sessionId,
+    agentRunId: primaryCandidate?.agentRunId,
+  });
+  sseAggregator.registerParallelTask(context.task.id, context.plan.candidates);
+  broadcastParallelExecutionStarted(context);
+
+  return buildParallelExecutionResponse(context.task.id, primaryCandidate, context.plan.candidates);
+}
+
+function handleSingleExecutionFailure(
+  taskId: string,
+  execResult: SessionStartResult,
+): StartExecutionResponse | null {
+  if (!execResult.ok && !execResult.sessionId) {
+    return {
+      status: 502,
+      body: { error: execResult.error || "Failed to start agent execution" },
+    };
+  }
+
+  if (!execResult.ok && execResult.sessionId) {
+    return {
+      status: 502,
+      body: {
+        error: execResult.error || "Agent 会话已创建但提示发送失败 — 所选模型可能未开通或不可用",
+        code: "MODEL_RUNTIME_ERROR",
+        sessionId: execResult.sessionId,
+        taskId,
+      },
+    };
+  }
+
+  return null;
+}
+
+function attachSingleCandidate(plan: ExecutionPlan, execResult: SessionStartResult) {
+  const candidate = plan.candidates[0];
+  if (!candidate) {
+    return;
+  }
+
+  candidate.sessionId = execResult.sessionId;
+  candidate.agentRunId = execResult.agentRunId;
+  candidate.status = "running";
+  candidate.startedAt = new Date().toISOString();
+}
+
+function broadcastSingleExecutionStarted(
+  context: ExecutionContext,
+  execResult: SessionStartResult,
+) {
+  wsBroadcaster.broadcast({
+    id: crypto.randomUUID(),
+    type: "agent.started",
+    ts: new Date().toISOString(),
+    taskId: context.task.id,
+    projectId: context.task.projectId,
+    agentRunId: execResult.agentRunId,
+    sessionId: execResult.sessionId,
+    data: {
+      taskId: context.task.id,
+      title: context.task.title,
+      agentRunId: execResult.agentRunId,
+    },
+  });
+}
+
+async function startSingleExecution(context: ExecutionContext): Promise<StartExecutionResponse> {
+  const execResult = await createSession(context.task.id, context.task.projectId, context.prompt, {
+    agent: context.executionAgent,
+    repoContext: context.repoContext,
+    model: context.resolvedModel,
+  });
+  const failure = handleSingleExecutionFailure(context.task.id, execResult);
+  if (failure) {
+    if (failure.body.code === "MODEL_RUNTIME_ERROR") {
+      await markTaskFailed(context.task.id, context.authorization);
+    }
+    return failure;
+  }
+
+  attachSingleCandidate(context.plan, execResult);
+  await persistExecutionStart(context, execResult);
+  broadcastSingleExecutionStarted(context, execResult);
+
+  return {
+    status: 200,
+    body: {
+      taskId: context.task.id,
+      sessionId: execResult.sessionId,
+      agentRunId: execResult.agentRunId,
+      status: "running",
+      executionMode: "single",
+    },
+  };
 }
 
 // GET /api/tasks — List tasks
@@ -364,113 +702,29 @@ taskRoutes.post("/", zValidator("json", createTaskSchema), async (c) => {
 taskRoutes.post("/:taskId/execute", async (c) => {
   const taskId = c.req.param("taskId");
   const authorization = authHeader(c);
-
-  // 1. Fetch the task from Control Plane
   const taskResult = await fetchExecutableTask(taskId, authorization);
-
   if (!taskResult.ok) {
     return c.json({ error: "Task not found" }, 404);
   }
 
   const task = taskResult.data;
-  if (task.status !== "pending") {
-    return c.json({ error: `Cannot execute: task status is ${task.status}` }, 400);
+  const validationError = validateExecutableTask(task);
+  if (validationError) {
+    return c.json({ error: validationError }, 400);
   }
 
-  // 2. Identity resolution — resolve credential → author/committer snapshot
-  const identitySnapshot = await resolveExecutionIdentity(task, authorization);
-  const { classification, executionAgent, strategy } = selectExecutionAgent(task.prompt);
-
-  // 2b. Model resolution: task override > project default > system default (env)
-  const resolvedModel = await resolveExecutionModel(
-    task,
-    authorization,
-    strategy.categoryModelMap[classification.category] || undefined,
-  );
-  const effectiveModel = resolvedModel
-    ? `${resolvedModel.providerId}:${resolvedModel.modelId}`
-    : undefined;
-
-  // 2c. Pre-flight: validate model provider is configured
-  if (resolvedModel) {
-    const check = validateModelProvider(resolvedModel.providerId);
-    if (!check.valid) {
-      return c.json(
-        {
-          error: check.error,
-          code: "MODEL_PROVIDER_NOT_CONFIGURED",
-          providers: check.providers,
-        },
-        400,
-      );
-    }
+  const preparedContext = await prepareExecutionContext(task, authorization);
+  const modelValidationError = validateResolvedModel(preparedContext.resolvedModel);
+  if (modelValidationError) {
+    return c.json(modelValidationError.body, modelValidationError.status);
   }
 
-  const preExecutionReview = await runPreExecutionReview(
-    task,
-    identitySnapshot,
-    executionAgent,
-    effectiveModel,
-  );
+  const executionContext = await finalizePreExecutionContext(preparedContext);
+  const response = isParallelExecution(executionContext.plan)
+    ? await startParallelExecution(executionContext)
+    : await startSingleExecution(executionContext);
 
-  // 3. Create OpenCode session and send prompt (with repo context for prompt injection)
-  const execResult = await createSession(taskId, task.projectId, preExecutionReview.prompt, {
-    agent: executionAgent,
-    repoContext: buildRepoContext(task, identitySnapshot),
-    model: resolvedModel,
-  });
-
-  if (!execResult.ok && !execResult.sessionId) {
-    return c.json({ error: execResult.error || "Failed to start agent execution" }, 502);
-  }
-
-  // Session created but prompt failed (e.g. model not available at runtime)
-  if (!execResult.ok && execResult.sessionId) {
-    // Mark task as failed instead of leaving it in limbo
-    await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
-      method: "PATCH",
-      body: { status: "failed" },
-      authorization,
-    });
-    return c.json(
-      {
-        error: execResult.error || "Agent 会话已创建但提示发送失败 — 所选模型可能未开通或不可用",
-        code: "MODEL_RUNTIME_ERROR",
-        sessionId: execResult.sessionId,
-      },
-      502,
-    );
-  }
-
-  // 3. Update task status in Control Plane (with intent classification + identity snapshot)
-  await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
-    method: "PATCH",
-    body: buildTaskPatchBody(execResult, classification, identitySnapshot, {
-      selectedAgent: executionAgent,
-      effectiveModel,
-      preExecution: preExecutionReview.evaluation,
-    }),
-    authorization,
-  });
-
-  // 4. Broadcast events
-  wsBroadcaster.broadcast({
-    id: crypto.randomUUID(),
-    type: "agent.started",
-    ts: new Date().toISOString(),
-    taskId,
-    projectId: task.projectId,
-    agentRunId: execResult.agentRunId,
-    sessionId: execResult.sessionId,
-    data: { taskId, title: task.title, agentRunId: execResult.agentRunId },
-  });
-
-  return c.json({
-    taskId,
-    sessionId: execResult.sessionId,
-    agentRunId: execResult.agentRunId,
-    status: "running",
-  });
+  return c.json(response.body, response.status);
 });
 
 // POST /api/tasks/reconcile-running — Manually reconcile persisted running tasks

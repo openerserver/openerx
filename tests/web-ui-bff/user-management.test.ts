@@ -511,20 +511,7 @@ describe("Admin user management (BFF)", () => {
           categoryAgentMap: {},
           categoryModelMap: {},
           enablePipeline: true,
-          preExecutionReview: {
-            enabled: false,
-            agent: "prometheus-enterprise",
-            model: "",
-            promptTemplate: "blocked",
-            timeoutMs: 15000,
-          },
-          postExecutionReview: {
-            enabled: false,
-            agent: "oracle-enterprise",
-            model: "",
-            promptTemplate: "blocked",
-            timeoutMs: 15000,
-          },
+          hooks: [],
         }),
       },
     );

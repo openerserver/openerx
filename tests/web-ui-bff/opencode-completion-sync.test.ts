@@ -261,7 +261,7 @@ async function runCompletionSyncScenario(options: {
         headers: authHeaders,
         body: JSON.stringify({
           content:
-            "After resume, keep the final answer to exactly 3 bullets and mention one concrete BFF/runtime integration risk.",
+            "Quick brief reply only. Discard any unfinished output from before the pause. Do not inspect the repository or call tools. Reply with exactly these 3 bullets and nothing else: - Resumed flow acknowledged. - Final result stored. - Runtime delay observed.",
           mode: "noReply",
         }),
       });
@@ -340,7 +340,7 @@ executionIntegrationTest("OpenCode completion sync closes pause/guidance/resume 
   await runCompletionSyncScenario({
     titlePrefix: "completion-sync-test",
     prompt:
-      "Inspect the repository briefly and then produce a concise 3-bullet status summary with one explicit BFF/runtime integration risk.",
+      "Quick brief reply only. Do not inspect the repository or call tools. First print the word HOLD on 40 separate lines. If the run is later resumed after a pause, discard any unfinished HOLD output and reply with exactly these 3 bullets and nothing else: - Resumed flow acknowledged. - Final result stored. - Runtime delay observed.",
     intervene: true,
     expectResultSync: true,
   });
@@ -352,7 +352,7 @@ executionIntegrationTest(
     await runCompletionSyncScenario({
       titlePrefix: "direct-completion-test",
       prompt:
-        "Inspect the repository briefly and produce a concise final status summary with one explicit BFF/runtime integration risk, without waiting for any further guidance.",
+        "Quick brief reply only. Do not inspect the repository or call tools. Reply with exactly these 2 lines and nothing else: Direct completion acknowledged. Runtime delay observed.",
       intervene: false,
       expectResultSync: false,
     });

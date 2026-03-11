@@ -6,6 +6,7 @@ import type { AgentRunStatus } from "../../types/events";
 const OPENCODE_URL = process.env.OPENCODE_URL || "http://localhost:4096";
 const OPENCODE_PROVIDER_ID = process.env.OPENCODE_PROVIDER_ID || "github-copilot";
 const OPENCODE_MODEL_ID = process.env.OPENCODE_MODEL_ID || "claude-sonnet-4";
+const configuredMinActiveBeforePauseMs = Number(process.env.OPENCODE_MIN_ACTIVE_BEFORE_PAUSE_MS);
 
 interface OpencodeResponse {
   ok: boolean;
@@ -18,6 +19,8 @@ interface AgentRunRecord {
   status: AgentRunStatus;
   taskId: string;
   projectId: string;
+  model?: { providerId: string; modelId: string };
+  candidateIndex?: number;
   startedAt: number;
   finishedAt?: string;
   pausedAt?: number;
@@ -25,7 +28,10 @@ interface AgentRunRecord {
 }
 
 const PROMPT_SETTLE_MS = 1200;
-const MIN_ACTIVE_BEFORE_PAUSE_MS = 3000;
+const MIN_ACTIVE_BEFORE_PAUSE_MS =
+  Number.isFinite(configuredMinActiveBeforePauseMs) && configuredMinActiveBeforePauseMs >= 0
+    ? configuredMinActiveBeforePauseMs
+    : 3000;
 
 type PromptOptions = {
   noReply?: boolean;
@@ -179,12 +185,16 @@ export function registerAgentRun(
   subSessionId: string,
   taskId: string,
   projectId: string,
+  model?: { providerId: string; modelId: string },
+  candidateIndex?: number,
 ): void {
   agentRunRegistry.set(agentRunId, {
     subSessionId,
     status: "running",
     taskId,
     projectId,
+    model,
+    candidateIndex,
     startedAt: Date.now(),
   });
 }
@@ -195,12 +205,16 @@ export function recoverAgentRun(
   taskId: string,
   projectId: string,
   startedAt?: string | number | null,
+  model?: { providerId: string; modelId: string },
+  candidateIndex?: number,
 ): void {
   agentRunRegistry.set(agentRunId, {
     subSessionId,
     status: "running",
     taskId,
     projectId,
+    model,
+    candidateIndex,
     startedAt: parseStartedAt(startedAt),
   });
 }
@@ -280,6 +294,7 @@ export async function createSession(
   options?: {
     agent?: string;
     model?: { providerId: string; modelId: string };
+    candidateIndex?: number;
     repoContext?: {
       repoName?: string;
       remoteUrl?: string;
@@ -308,7 +323,14 @@ export async function createSession(
 
   // 2. Register as an agent run
   const agentRunId = crypto.randomUUID();
-  registerAgentRun(agentRunId, sessionId, taskId, projectId);
+  registerAgentRun(
+    agentRunId,
+    sessionId,
+    taskId,
+    projectId,
+    options?.model,
+    options?.candidateIndex,
+  );
 
   // 3. Send initial prompt to start execution
   const messageResult = await opcall(
@@ -381,7 +403,7 @@ export async function injectGuidance(
   const result = await opcall(
     "POST",
     `/session/${run.subSessionId}/prompt_async`,
-    buildPromptBody(content, { noReply: mode === "noReply" }),
+    buildPromptBody(content, { noReply: mode === "noReply", model: run.model }),
   );
 
   if (result.ok) {
@@ -404,6 +426,7 @@ export async function resumeAgent(agentRunId: string): Promise<OpencodeResponse>
     `/session/${run.subSessionId}/prompt_async`,
     buildPromptBody(
       "Resume execution. Apply any guidance provided above and continue your current task.",
+      { model: run.model },
     ),
   );
 

@@ -7,28 +7,35 @@
 			"command": "/Users/wanglei/.opencode/bin/opencode",
 			"args": [
 				"serve",
-				".",
 				"--hostname",
 				"127.0.0.1",
 				"--port",
-				"4096"
+				"4096",
+				"--print-logs"
 			],
 			"isBackground": true,
 			"group": "none"
 		},
 		{
-			"label": "start-opencode-runtime",
+			"label": "run-completion-sync-real",
 			"type": "shell",
-			"command": "/Users/wanglei/.opencode/bin/opencode",
-			"args": [
-				"serve",
-				"--hostname",
-				"127.0.0.1",
-				"--port",
-				"4096"
-			],
-			"isBackground": true,
-			"group": "none"
+			"command": "cd control-plane/web-ui-bff && TEST_BFF_URL=http://127.0.0.1:4098 RUN_EXECUTION_INTEGRATION=1 bun test ../../tests/web-ui-bff/opencode-completion-sync.test.ts --timeout 120000",
+			"isBackground": false,
+			"group": "test"
+		},
+		{
+			"label": "check-opencode-health",
+			"type": "shell",
+			"command": "curl -s -o /dev/null -w '%{http_code}\\n' http://127.0.0.1:4096/session",
+			"isBackground": false,
+			"group": "test"
+		},
+		{
+			"label": "run-completion-sync-real-2",
+			"type": "shell",
+			"command": "cd control-plane/web-ui-bff && TEST_BFF_URL=http://127.0.0.1:4098 RUN_EXECUTION_INTEGRATION=1 bun test ../../tests/web-ui-bff/opencode-completion-sync.test.ts --timeout 120000",
+			"isBackground": false,
+			"group": "test"
 		}
 	]
 }

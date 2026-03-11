@@ -365,8 +365,8 @@ import {
   type Task,
   createTask,
   executeTask,
-  getTask,
   getModelsList,
+  getTask,
   listCredentials,
   listRepositories,
   listTasks,
@@ -756,8 +756,7 @@ async function handleCreate() {
       prompt: createForm.value.prompt,
       status: "pending",
       createdAt: new Date().toISOString(),
-      repoName:
-        repos.value.find((repo) => repo.id === createForm.value.repoId)?.name || undefined,
+      repoName: repos.value.find((repo) => repo.id === createForm.value.repoId)?.name || undefined,
     } satisfies Partial<Task>;
     const result = await createTask(buildCreatePayload(projectId));
 

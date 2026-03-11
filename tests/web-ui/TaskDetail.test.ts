@@ -110,6 +110,66 @@ vi.mock("ant-design-vue", async () => {
     },
   });
 
+  type TableColumn = { key?: unknown; dataIndex?: unknown };
+
+  function getColumnKey(column: TableColumn) {
+    return String(column.key ?? column.dataIndex ?? "");
+  }
+
+  function getColumnDataIndex(column: TableColumn) {
+    return typeof column.dataIndex === "string" ? column.dataIndex : "";
+  }
+
+  function renderTableCell(
+    column: TableColumn,
+    record: unknown,
+    index: number,
+    bodyCell:
+      | ((args: { column: TableColumn; record: unknown; index: number }) => unknown[])
+      | undefined,
+  ) {
+    const dataIndex = getColumnDataIndex(column);
+    const slotContent = bodyCell ? bodyCell({ column, record, index }) : undefined;
+    const fallback =
+      dataIndex && typeof record === "object" && record
+        ? (record as Record<string, unknown>)[dataIndex]
+        : undefined;
+    const children =
+      slotContent && slotContent.length > 0 ? (slotContent as never[]) : String(fallback ?? "");
+
+    return vue.h("div", { key: `${index}-${getColumnKey(column)}` }, children);
+  }
+
+  function renderTableRows(
+    dataSource: unknown,
+    columns: unknown,
+    bodyCell:
+      | ((args: { column: TableColumn; record: unknown; index: number }) => unknown[])
+      | undefined,
+  ) {
+    if (!Array.isArray(dataSource) || !Array.isArray(columns)) {
+      return [];
+    }
+
+    return dataSource.flatMap((record, index) =>
+      columns.map((column) => renderTableCell(column as TableColumn, record, index, bodyCell)),
+    );
+  }
+
+  const ATable = vue.defineComponent({
+    name: "ATable",
+    inheritAttrs: false,
+    props: ["dataSource", "columns"],
+    setup(props, { slots, attrs }) {
+      return () =>
+        vue.h(
+          "div",
+          { ...attrs, "data-component": "ATable" },
+          renderTableRows(props.dataSource, props.columns, slots.bodyCell),
+        );
+    },
+  });
+
   return {
     message: {
       success: vi.fn(),
@@ -140,7 +200,7 @@ vi.mock("ant-design-vue", async () => {
     AModal: simple("AModal"),
     AForm: simple("AForm", "form"),
     AFormItem: simple("AFormItem"),
-    ATable: simple("ATable"),
+    ATable,
   };
 });
 
@@ -192,18 +252,20 @@ beforeEach(() => {
 });
 
 describe("TaskDetail", () => {
-  it("subscribes to the task and refreshes when workflow evaluation event arrives", async () => {
+  it("subscribes to the task and refreshes when hooks event arrives", async () => {
     apiMocks.getTask.mockResolvedValueOnce(makeTask()).mockResolvedValueOnce(
       makeTask({
         selectedAgent: "build",
-        workflowEvaluations: {
-          postExecution: {
+        hookExecutions: [
+          {
+            hookId: "post-1",
+            trigger: "post-execution",
             status: "completed",
             agent: "build",
             result: "Looks good.",
             completedAt: "2026-03-10T12:01:10.000Z",
           },
-        },
+        ],
       }),
     );
 
@@ -215,7 +277,7 @@ describe("TaskDetail", () => {
 
     realtimeState.events.unshift({
       id: "evt-1",
-      type: "task.workflow-evaluation.updated",
+      type: "task.hooks.updated",
       ts: new Date().toISOString(),
       taskId: "task-1",
       data: { phase: "postExecution" },
@@ -226,7 +288,7 @@ describe("TaskDetail", () => {
     await flushPromises();
 
     expect(apiMocks.getTask).toHaveBeenCalledTimes(2);
-    expect(wrapper.text()).toContain("后置评估");
+    expect(wrapper.text()).toContain("Hook 执行记录");
     expect(wrapper.text()).toContain("Looks good.");
   });
 
@@ -253,14 +315,16 @@ describe("TaskDetail", () => {
       .mockResolvedValueOnce(
         makeTask({
           selectedAgent: "build",
-          workflowEvaluations: {
-            postExecution: {
+          hookExecutions: [
+            {
+              hookId: "post-1",
+              trigger: "post-execution",
               status: "completed",
               agent: "build",
               result: "Settled without manual refresh.",
               completedAt: "2026-03-10T12:01:10.000Z",
             },
-          },
+          ],
         }),
       );
 
@@ -273,7 +337,81 @@ describe("TaskDetail", () => {
     await flushPromises();
 
     expect(apiMocks.getTask).toHaveBeenCalledTimes(2);
-    expect(wrapper.text()).toContain("后置评估");
+    expect(wrapper.text()).toContain("Hook 执行记录");
     expect(wrapper.text()).toContain("Settled without manual refresh.");
+  });
+
+  it("renders parallel candidates with labels, winner tag and judge result", async () => {
+    apiMocks.getTask.mockResolvedValueOnce(
+      makeTaskWithOverrides({
+        executionMode: "parallel",
+        executionPlan: JSON.stringify({
+          mode: "parallel",
+          candidates: [
+            {
+              label: "候选 1",
+              agent: "build",
+              model: "github-copilot:claude-sonnet-4",
+              status: "completed",
+              result: "Candidate one result",
+            },
+            {
+              label: "候选 2",
+              agent: "oracle-enterprise",
+              status: "completed",
+              result: "Candidate two result",
+            },
+          ],
+          judgeResult: {
+            winnerIndex: 1,
+            scores: [82.5, 91.2],
+            reasoning: "候选 2 更完整，风险更低。",
+          },
+        }),
+        strategy: JSON.stringify({
+          selectedAgent: "build",
+          executionMode: "parallel",
+          suggestedAgents: ["build", "oracle-enterprise"],
+        }),
+      }),
+    );
+
+    const wrapper = await mountPage();
+
+    expect(wrapper.text()).toContain("并行执行候选");
+    expect(wrapper.text()).toContain("候选 1");
+    expect(wrapper.text()).toContain("候选 2");
+    expect(wrapper.text()).toContain("获胜");
+    expect(wrapper.text()).toContain("裁判评估结果");
+    expect(wrapper.text()).toContain("候选 2 更完整，风险更低。");
+    expect(wrapper.text()).toContain("候选 1: 82.5");
+    expect(wrapper.text()).toContain("候选 2: 91.2");
+  });
+
+  it("falls back to generated candidate labels for legacy parallel execution plans", async () => {
+    apiMocks.getTask.mockResolvedValueOnce(
+      makeTaskWithOverrides({
+        executionMode: "parallel",
+        executionPlan: JSON.stringify({
+          mode: "parallel",
+          candidates: [
+            {
+              agent: "build",
+              status: "completed",
+            },
+            {
+              agent: "oracle-enterprise",
+              status: "failed",
+            },
+          ],
+        }),
+        strategy: JSON.stringify({ executionMode: "parallel" }),
+      }),
+    );
+
+    const wrapper = await mountPage();
+
+    expect(wrapper.text()).toContain("候选 1");
+    expect(wrapper.text()).toContain("候选 2");
   });
 });

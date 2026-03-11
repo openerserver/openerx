@@ -206,6 +206,10 @@ export const tasks = sqliteTable("tasks", {
   // ── Model selection ─────────────────────────────────────────────
   selectedModel: text("selected_model"), // user-chosen model at task creation
 
+  // ── Multi-agent execution ───────────────────────────────────────
+  executionMode: text("execution_mode", { enum: ["single", "parallel"] }).default("single"),
+  executionPlan: text("execution_plan"), // JSON: ExecutionPlan
+
   // ── Identity snapshot (frozen at execution start) ───────────────
   credentialId: text("credential_id").references(() => repositoryCredentials.id),
   gitAuthorName: text("git_author_name"),
@@ -383,6 +387,7 @@ export const agentRuns = sqliteTable("agent_runs", {
   tokenUsed: integer("token_used").notNull().default(0),
   result: text("result"),
   error: text("error"),
+  candidateIndex: integer("candidate_index"),
   startedAt: text("started_at"),
   finishedAt: text("finished_at"),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),

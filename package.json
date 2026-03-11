@@ -26,6 +26,8 @@
     "typecheck:ui": "cd control-plane/web-ui && bun run typecheck",
     "typecheck": "bun run typecheck:service && bun run typecheck:bff && bun run typecheck:ui",
     "check:all": "bash scripts/check-all.sh",
+    "opencode:health": "bash scripts/opencode-health-check.sh",
+    "opencode:cleanup": "bash scripts/opencode-cleanup.sh",
     "cli:task": "cd control-plane/service && bun run cli:task"
   },
   "devDependencies": {

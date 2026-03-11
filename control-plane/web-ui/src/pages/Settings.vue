@@ -68,24 +68,24 @@
             </a-space>
           </a-card>
 
-          <!-- Copilot OAuth -->
-          <a-card title="GitHub Copilot 认证" style="margin-top: 16px">
-            <template v-if="copilotAuth.authenticated">
-              <a-result status="success" title="已登录 GitHub Copilot"
-                :sub-title="copilotAuth.loginAt ? `登录时间: ${copilotAuth.loginAt}` : ''">
+          <!-- Copilot OAuth (multi-account) -->
+          <a-card v-for="cpProvider in copilotProviders" :key="cpProvider" :title="`GitHub Copilot 认证 — ${cpProvider}`" style="margin-top: 16px">
+            <template v-if="copilotAuthMap[cpProvider]?.authenticated">
+              <a-result status="success" :title="`已登录 ${cpProvider}`"
+                :sub-title="copilotAuthMap[cpProvider]?.loginAt ? `登录时间: ${copilotAuthMap[cpProvider].loginAt}` : ''">
                 <template #extra>
                   <a-space>
-                    <a-button @click="loadCopilotModels" :loading="copilotModels.loading">读取模型列表</a-button>
-                    <a-button danger @click="doCopilotLogout" :loading="copilotAuth.loading">退出登录</a-button>
+                    <a-button @click="loadCopilotModelsFor(cpProvider)" :loading="copilotModelsMap[cpProvider]?.loading">读取模型列表</a-button>
+                    <a-button danger @click="doCopilotLogoutFor(cpProvider)" :loading="copilotAuthMap[cpProvider]?.loading">退出登录</a-button>
                   </a-space>
                 </template>
               </a-result>
 
               <a-card size="small" title="Copilot 可用模型" style="margin-top: 16px">
-                <template v-if="copilotModels.error">
-                  <a-alert type="error" :message="copilotModels.error" show-icon style="margin-bottom: 12px" />
+                <template v-if="copilotModelsMap[cpProvider]?.error">
+                  <a-alert type="error" :message="copilotModelsMap[cpProvider].error" show-icon style="margin-bottom: 12px" />
                 </template>
-                <template v-if="copilotModels.items.length">
+                <template v-if="(copilotModelsMap[cpProvider]?.items || []).length">
                   <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; gap: 12px; flex-wrap: wrap">
                     <span style="color: #888; font-size: 12px">认证成功后可从 Copilot 读取当前账号可用模型，并添加到下方模型配置。</span>
                     <a-space>
@@ -93,10 +93,10 @@
                         <a-radio-button value="all">全部</a-radio-button>
                         <a-radio-button value="unconfigured">只显示未配置模型</a-radio-button>
                       </a-radio-group>
-                      <a-button type="primary" @click="addAllCopilotModels">添加全部未配置模型</a-button>
+                      <a-button type="primary" @click="addAllCopilotModelsFor(cpProvider)">添加全部未配置模型</a-button>
                     </a-space>
                   </div>
-                  <a-table :dataSource="filteredCopilotModels" :columns="copilotModelColumns" :pagination="false" rowKey="id" size="small">
+                  <a-table :dataSource="getFilteredCopilotModels(cpProvider)" :columns="copilotModelColumns" :pagination="false" rowKey="id" size="small">
                     <template #bodyCell="{ column, record }">
                       <template v-if="column.dataIndex === 'contextWindow'">
                         {{ record.contextWindow || '-' }}
@@ -105,7 +105,7 @@
                         {{ record.maxTokens || '-' }}
                       </template>
                       <template v-else-if="column.dataIndex === 'action'">
-                        <a-button size="small" :disabled="isModelConfigured(String(record.id || ''))" @click="addCopilotModelFromRecord(record)">
+                        <a-button size="small" :disabled="isModelConfigured(String(record.id || ''))" @click="addCopilotModelFromRecordFor(record, cpProvider)">
                           {{ isModelConfigured(record.id) ? '已添加' : '添加' }}
                         </a-button>
                       </template>
@@ -118,7 +118,7 @@
               </a-card>
             </template>
 
-            <template v-else-if="copilotAuth.deviceCode">
+            <template v-else-if="copilotAuthMap[cpProvider]?.deviceCode">
               <a-steps :current="1" size="small" style="margin-bottom: 20px">
                 <a-step title="获取验证码" />
                 <a-step title="在 GitHub 授权" />
@@ -127,26 +127,26 @@
               <div style="text-align: center; padding: 16px 0">
                 <div style="margin-bottom: 12px; color: #888">请在浏览器中打开以下链接，并输入验证码：</div>
                 <div style="margin-bottom: 12px">
-                  <a :href="copilotAuth.verificationUri" target="_blank" rel="noopener noreferrer"
+                  <a :href="copilotAuthMap[cpProvider]?.verificationUri" target="_blank" rel="noopener noreferrer"
                     style="font-size: 16px">
-                    {{ copilotAuth.verificationUri }}
+                    {{ copilotAuthMap[cpProvider]?.verificationUri }}
                   </a>
                 </div>
                 <div style="font-size: 32px; font-weight: bold; letter-spacing: 6px; font-family: monospace; padding: 16px; background: rgba(255,255,255,0.05); border-radius: 8px; display: inline-block; user-select: all">
-                  {{ copilotAuth.userCode }}
+                  {{ copilotAuthMap[cpProvider]?.userCode }}
                 </div>
                 <div style="margin-top: 12px; color: #888">
-                  <a-spin size="small" /> 等待授权中... ({{ copilotAuth.countdown }}s 后超时)
+                  <a-spin size="small" /> 等待授权中... ({{ copilotAuthMap[cpProvider]?.countdown }}s 后超时)
                 </div>
               </div>
             </template>
 
             <template v-else>
               <div style="display: flex; align-items: center; gap: 16px">
-                <a-button type="primary" @click="startCopilotAuth" :loading="copilotAuth.loading">
+                <a-button type="primary" @click="startCopilotAuthFor(cpProvider)" :loading="copilotAuthMap[cpProvider]?.loading">
                   使用 GitHub 帐号登录
                 </a-button>
-                <span style="color: #888; font-size: 12px">通过 OAuth Device Flow 认证，无需输入 Token</span>
+                <span style="color: #888; font-size: 12px">通过 OAuth Device Flow 认证，无需输入 Token。每个 Provider 可绑定不同的 GitHub 账号。</span>
               </div>
             </template>
           </a-card>
@@ -580,86 +580,211 @@
             </a-form-item>
           </a-card>
 
-          <a-row :gutter="16" style="margin-top: 16px">
-            <a-col :xs="24" :xl="12">
-              <a-card title="前置评估" size="small">
-                <a-form layout="vertical">
-                  <a-form-item label="启用任务开始前评估">
-                    <a-switch v-model:checked="strategyData.preExecutionReview.enabled" />
+          <a-card title="生命周期 Hooks" size="small" style="margin-top: 16px">
+            <a-typography-text type="secondary" style="display: block; margin-bottom: 12px; font-size: 12px">
+              使用统一 hooks 配置执行前、执行后、失败后、续跑前的治理逻辑。前置/后置评估已合并到 hooks 视图管理。
+            </a-typography-text>
+            <a-row :gutter="16">
+              <a-col v-for="section in HOOK_SECTIONS" :key="section.trigger" :xs="24" :xl="12" style="margin-bottom: 16px">
+                <a-card :title="section.title" size="small">
+                  <template #extra>
+                    <a-button size="small" type="dashed" @click="addHook(section.trigger)">+ 新增</a-button>
+                  </template>
+                  <a-empty v-if="hooksByTrigger(section.trigger).length === 0" :description="section.emptyText" />
+                  <a-collapse v-else size="small">
+                    <a-collapse-panel
+                      v-for="(hook, idx) in hooksByTrigger(section.trigger)"
+                      :key="hook.id"
+                      :header="hook.id || `${section.title} Hook ${idx + 1}`"
+                    >
+                      <template #extra>
+                        <a-space @click.stop>
+                          <a-switch
+                            v-model:checked="hook.enabled"
+                            checked-children="启用"
+                            un-checked-children="停用"
+                            size="small"
+                          />
+                          <a-button size="small" danger @click.stop="removeHook(hook.id)">删除</a-button>
+                        </a-space>
+                      </template>
+                      <a-form layout="vertical" size="small">
+                        <a-row :gutter="12">
+                          <a-col :span="10">
+                            <a-form-item label="Hook 标识">
+                              <a-input :value="hook.id" @update:value="hook.id = String($event ?? '')" />
+                            </a-form-item>
+                          </a-col>
+                          <a-col :span="10">
+                            <a-form-item label="执行 Agent">
+                              <a-input :value="hook.agent" placeholder="prometheus-enterprise" @update:value="hook.agent = String($event ?? '')" />
+                            </a-form-item>
+                          </a-col>
+                          <a-col :span="4">
+                            <a-form-item label="顺序">
+                              <a-input-number :value="hook.order" :min="0" style="width: 100%" @update:value="hook.order = Number($event ?? 0)" />
+                            </a-form-item>
+                          </a-col>
+                        </a-row>
+                        <a-row :gutter="12">
+                          <a-col :span="12">
+                            <a-form-item label="指定模型">
+                              <a-input :value="hook.model" placeholder="留空使用系统默认" @update:value="hook.model = String($event ?? '')" />
+                            </a-form-item>
+                          </a-col>
+                          <a-col :span="12">
+                            <a-form-item label="超时 (ms)">
+                              <a-input-number :value="hook.timeoutMs" :min="1000" :step="1000" style="width: 100%" @update:value="hook.timeoutMs = Number($event ?? 15000)" />
+                            </a-form-item>
+                          </a-col>
+                        </a-row>
+                        <a-form-item label="提示词模板">
+                          <a-textarea :value="hook.promptTemplate" :rows="6" @update:value="hook.promptTemplate = String($event ?? '')" />
+                        </a-form-item>
+                      </a-form>
+                    </a-collapse-panel>
+                  </a-collapse>
+                </a-card>
+              </a-col>
+            </a-row>
+          </a-card>
+
+          <!-- ── Workflow Templates ── -->
+          <a-card title="工作流模板" size="small" style="margin-top: 16px">
+            <template #extra>
+              <a-button size="small" type="dashed" @click="addTemplate">+ 新增模板</a-button>
+            </template>
+            <a-empty v-if="strategyData.templates.length === 0" description="暂无模板，请添加" />
+            <a-collapse v-else accordion size="small">
+              <a-collapse-panel
+                v-for="(tpl, idx) in strategyData.templates"
+                :key="tpl.id"
+                :header="`${tpl.name} (${tpl.mode === 'parallel' ? '并行竞争' : '单一执行'})`"
+              >
+                <template #extra>
+                  <a-space @click.stop>
+                    <a-switch
+                      v-model:checked="tpl.enabled"
+                      checked-children="启用"
+                      un-checked-children="停用"
+                      size="small"
+                    />
+                    <a-button size="small" danger @click.stop="removeTemplate(idx)">删除</a-button>
+                  </a-space>
+                </template>
+                <a-form layout="vertical" size="small">
+                  <a-row :gutter="12">
+                    <a-col :span="8">
+                      <a-form-item label="模板名称">
+                        <a-input
+                          :value="tpl.name"
+                          @update:value="tpl.name = String($event ?? '')"
+                        />
+                      </a-form-item>
+                    </a-col>
+                    <a-col :span="8">
+                      <a-form-item label="执行模式">
+                        <a-select v-model:value="tpl.mode">
+                          <a-select-option value="single">单一执行</a-select-option>
+                          <a-select-option value="parallel">并行竞争</a-select-option>
+                        </a-select>
+                      </a-form-item>
+                    </a-col>
+                    <a-col :span="8">
+                      <a-form-item label="最大并行数" v-if="tpl.mode === 'parallel'">
+                        <a-input-number
+                          :value="tpl.maxParallelCandidates ?? 3"
+                          :min="2"
+                          :max="5"
+                          style="width: 100%"
+                          @update:value="tpl.maxParallelCandidates = Number($event ?? 3)"
+                        />
+                      </a-form-item>
+                    </a-col>
+                  </a-row>
+                  <a-form-item label="执行 Agent 列表">
+                    <a-select
+                      mode="tags"
+                      :value="tpl.agents"
+                      placeholder="输入 Agent 名称"
+                      style="width: 100%"
+                      @change="(v) => (tpl.agents = Array.isArray(v) ? v.map(String) : [])"
+                    />
                   </a-form-item>
-                  <a-form-item label="评估 Agent">
+                  <a-form-item label="适用意图分类">
+                    <a-select
+                      mode="multiple"
+                      :value="tpl.categoryDefaults ?? []"
+                      placeholder="不选则为通用模板"
+                      style="width: 100%"
+                      @change="(v) => (tpl.categoryDefaults = Array.isArray(v) ? v.map(String) : [])"
+                    >
+                      <a-select-option v-for="(label, cat) in CATEGORY_LABELS_MAP" :key="cat" :value="cat">
+                        {{ label }}
+                      </a-select-option>
+                    </a-select>
+                  </a-form-item>
+                </a-form>
+              </a-collapse-panel>
+            </a-collapse>
+          </a-card>
+
+          <!-- ── Judge Configuration ── -->
+          <a-card title="裁判配置" size="small" style="margin-top: 16px">
+            <a-typography-text type="secondary" style="display: block; margin-bottom: 12px; font-size: 12px">
+              并行竞争模式下，裁判 Agent 对多个候选结果进行评分，选出最优方案。仅在并行模板启用时生效。
+            </a-typography-text>
+            <a-form layout="vertical">
+              <a-form-item label="启用裁判">
+                <a-switch v-model:checked="strategyData.judge.enabled" />
+              </a-form-item>
+              <a-row :gutter="12">
+                <a-col :span="8">
+                  <a-form-item label="裁判 Agent">
                     <a-input
-                      :value="strategyData.preExecutionReview.agent"
+                      :value="strategyData.judge.agent"
                       placeholder="prometheus-enterprise"
-                      @update:value="strategyData.preExecutionReview.agent = String($event ?? '')"
+                      @update:value="strategyData.judge.agent = String($event ?? '')"
                     />
                   </a-form-item>
+                </a-col>
+                <a-col :span="8">
                   <a-form-item label="指定模型">
                     <a-input
-                      :value="strategyData.preExecutionReview.model"
+                      :value="strategyData.judge.model"
                       placeholder="留空使用系统默认"
-                      @update:value="strategyData.preExecutionReview.model = String($event ?? '')"
+                      @update:value="strategyData.judge.model = String($event ?? '')"
                     />
                   </a-form-item>
-                  <a-form-item label="超时 (ms)">
-                    <a-input-number
-                      :value="strategyData.preExecutionReview.timeoutMs"
-                      :min="1000"
-                      :step="1000"
-                      style="width: 100%"
-                      @update:value="strategyData.preExecutionReview.timeoutMs = Number($event ?? 15000)"
-                    />
+                </a-col>
+                <a-col :span="8">
+                  <a-form-item label="选择策略">
+                    <a-select v-model:value="strategyData.judge.selectionStrategy">
+                      <a-select-option value="judge-pick">裁判选择</a-select-option>
+                      <a-select-option value="highest-score">最高评分</a-select-option>
+                    </a-select>
                   </a-form-item>
-                  <a-form-item label="提示词模板">
-                    <a-textarea
-                      :value="strategyData.preExecutionReview.promptTemplate"
-                      :rows="8"
-                      @update:value="strategyData.preExecutionReview.promptTemplate = String($event ?? '')"
-                    />
-                  </a-form-item>
-                </a-form>
-              </a-card>
-            </a-col>
-            <a-col :xs="24" :xl="12">
-              <a-card title="后置评估" size="small">
-                <a-form layout="vertical">
-                  <a-form-item label="启用任务完成后评估">
-                    <a-switch v-model:checked="strategyData.postExecutionReview.enabled" />
-                  </a-form-item>
-                  <a-form-item label="评估 Agent">
-                    <a-input
-                      :value="strategyData.postExecutionReview.agent"
-                      placeholder="oracle-enterprise"
-                      @update:value="strategyData.postExecutionReview.agent = String($event ?? '')"
-                    />
-                  </a-form-item>
-                  <a-form-item label="指定模型">
-                    <a-input
-                      :value="strategyData.postExecutionReview.model"
-                      placeholder="留空使用系统默认"
-                      @update:value="strategyData.postExecutionReview.model = String($event ?? '')"
-                    />
-                  </a-form-item>
-                  <a-form-item label="超时 (ms)">
-                    <a-input-number
-                      :value="strategyData.postExecutionReview.timeoutMs"
-                      :min="1000"
-                      :step="1000"
-                      style="width: 100%"
-                      @update:value="strategyData.postExecutionReview.timeoutMs = Number($event ?? 15000)"
-                    />
-                  </a-form-item>
-                  <a-form-item label="提示词模板">
-                    <a-textarea
-                      :value="strategyData.postExecutionReview.promptTemplate"
-                      :rows="8"
-                      @update:value="strategyData.postExecutionReview.promptTemplate = String($event ?? '')"
-                    />
-                  </a-form-item>
-                </a-form>
-              </a-card>
-            </a-col>
-          </a-row>
+                </a-col>
+              </a-row>
+              <a-form-item label="超时 (ms)">
+                <a-input-number
+                  :value="strategyData.judge.timeoutMs"
+                  :min="5000"
+                  :step="5000"
+                  style="width: 200px"
+                  @update:value="strategyData.judge.timeoutMs = Number($event ?? 30000)"
+                />
+              </a-form-item>
+              <a-form-item label="裁判提示词模板">
+                <a-textarea
+                  :value="strategyData.judge.promptTemplate"
+                  :rows="6"
+                  placeholder="使用 {{candidateResults}} {{taskTitle}} {{taskPrompt}} 等变量"
+                  @update:value="strategyData.judge.promptTemplate = String($event ?? '')"
+                />
+              </a-form-item>
+            </a-form>
+          </a-card>
 
           <a-button type="primary" style="margin-top: 16px" :loading="strategySaving" @click="saveStrategy">保存编排策略</a-button>
         </a-spin>
@@ -783,6 +908,8 @@ import {
   type CommandSummary,
   type ContinuationPolicy,
   type CopilotModelInfo,
+  type JudgeConfig,
+  type LifecycleHook,
   type McpServer,
   type OrchestrationStrategy,
   type PluginCompatResult,
@@ -790,6 +917,7 @@ import {
   type RunningTaskReconcileSummary,
   type SkillDetail,
   type SkillSummary,
+  type WorkflowTemplate,
   checkPluginCompatibility,
   copilotLogout,
   disablePlugin,
@@ -1241,35 +1369,60 @@ function applyPreset(presetKey: string) {
   message.info("已应用预设，记得点击「保存模型配置」生效");
 }
 
-// ── Copilot OAuth ──────────────────────────────────────────────────
-const copilotAuth = reactive({
-  authenticated: false,
-  loginAt: null as string | null,
-  loading: false,
-  deviceCode: "",
-  userCode: "",
-  verificationUri: "",
-  countdown: 0,
-  interval: 5,
-});
-const copilotModels = reactive<{
+// ── Copilot OAuth (multi-account) ──────────────────────────────────
+interface CopilotAuthState {
+  authenticated: boolean;
+  loginAt: string | null;
+  loading: boolean;
+  deviceCode: string;
+  userCode: string;
+  verificationUri: string;
+  countdown: number;
+  interval: number;
+}
+interface CopilotModelsState {
   loading: boolean;
   error: string;
   items: CopilotModelInfo[];
-}>({
-  loading: false,
-  error: "",
-  items: [],
-});
-const copilotModelFilter = ref("all");
-let pollTimer: ReturnType<typeof setInterval> | null = null;
-let countdownTimer: ReturnType<typeof setInterval> | null = null;
+}
 
-function ensureCopilotProvider() {
-  if (!modelsData.providers["github-copilot"]) {
-    modelsData.providers["github-copilot"] = {
+// List of copilot provider IDs from the current project config
+const copilotProviders = computed(() => {
+  const providers = Object.keys(modelsData.providers || {});
+  const result = providers.filter((id) => id.startsWith("github-copilot"));
+  return result.length ? result : ["github-copilot"];
+});
+
+const copilotAuthMap = reactive<Record<string, CopilotAuthState>>({});
+const copilotModelsMap = reactive<Record<string, CopilotModelsState>>({});
+
+function ensureCopilotAuthState(provider: string) {
+  if (!copilotAuthMap[provider]) {
+    copilotAuthMap[provider] = {
+      authenticated: false,
+      loginAt: null,
+      loading: false,
+      deviceCode: "",
+      userCode: "",
+      verificationUri: "",
+      countdown: 0,
+      interval: 5,
+    };
+  }
+  if (!copilotModelsMap[provider]) {
+    copilotModelsMap[provider] = { loading: false, error: "", items: [] };
+  }
+}
+
+const copilotModelFilter = ref("all");
+const pollTimers: Record<string, ReturnType<typeof setInterval> | null> = {};
+const countdownTimers: Record<string, ReturnType<typeof setInterval> | null> = {};
+
+function ensureCopilotProviderFor(provider: string) {
+  if (!modelsData.providers[provider]) {
+    modelsData.providers[provider] = {
       api: "github-copilot",
-      name: "GitHub Copilot",
+      name: provider === "github-copilot" ? "GitHub Copilot" : `GitHub Copilot (${provider.replace("github-copilot-", "")})`,
     };
   }
 }
@@ -1278,28 +1431,27 @@ function isModelConfigured(modelId: string) {
   return modelsData.list.some((model) => getRecordString(model, "id") === modelId);
 }
 
-const filteredCopilotModels = computed(() => {
-  if (copilotModelFilter.value !== "unconfigured") {
-    return copilotModels.items;
-  }
+function getFilteredCopilotModels(provider: string): CopilotModelInfo[] {
+  ensureCopilotAuthState(provider);
+  const items = copilotModelsMap[provider]?.items || [];
+  if (copilotModelFilter.value !== "unconfigured") return items;
+  return items.filter((model) => !isModelConfigured(model.id));
+}
 
-  return copilotModels.items.filter((model) => !isModelConfigured(model.id));
-});
-
-function addCopilotModel(model: CopilotModelInfo) {
+function addCopilotModelFor(model: CopilotModelInfo, provider: string) {
   if (isModelConfigured(model.id)) return;
-  ensureCopilotProvider();
+  ensureCopilotProviderFor(provider);
   modelsData.list.push({
     id: model.id,
     name: model.name || model.id,
-    provider: "github-copilot",
+    provider,
     contextWindow: model.contextWindow ?? 200000,
     maxTokens: model.maxTokens ?? 16384,
   });
 }
 
-function addCopilotModelFromRecord(record: Record<string, unknown>) {
-  addCopilotModel({
+function addCopilotModelFromRecordFor(record: Record<string, unknown>, provider: string) {
+  addCopilotModelFor({
     id: String(record.id || ""),
     name: String(record.name || record.id || ""),
     vendor: String(record.vendor || ""),
@@ -1307,131 +1459,147 @@ function addCopilotModelFromRecord(record: Record<string, unknown>) {
     preview: Boolean(record.preview),
     contextWindow: typeof record.contextWindow === "number" ? record.contextWindow : null,
     maxTokens: typeof record.maxTokens === "number" ? record.maxTokens : null,
-  });
+  }, provider);
 }
 
-function addAllCopilotModels() {
-  const pending = copilotModels.items.filter((model) => !isModelConfigured(model.id));
+function addAllCopilotModelsFor(provider: string) {
+  ensureCopilotAuthState(provider);
+  const allItems = copilotModelsMap[provider]?.items || [];
+  const pending = allItems.filter((model) => !isModelConfigured(model.id));
   if (!pending.length) {
     message.info("Copilot 模型已全部加入当前配置");
     return;
   }
-
-  pending.forEach(addCopilotModel);
-  message.success(`已添加 ${pending.length} 个 Copilot 模型，请点击“保存模型配置”生效`);
+  pending.forEach((m) => addCopilotModelFor(m, provider));
+  message.success(`已添加 ${pending.length} 个 Copilot 模型，请点击"保存模型配置"生效`);
 }
 
-function clearCopilotTimers() {
-  if (pollTimer) {
-    clearInterval(pollTimer);
-    pollTimer = null;
+function clearCopilotTimersFor(provider: string) {
+  if (pollTimers[provider]) {
+    clearInterval(pollTimers[provider]!);
+    pollTimers[provider] = null;
   }
-  if (countdownTimer) {
-    clearInterval(countdownTimer);
-    countdownTimer = null;
+  if (countdownTimers[provider]) {
+    clearInterval(countdownTimers[provider]!);
+    countdownTimers[provider] = null;
   }
 }
 
-async function loadCopilotStatus() {
+function clearAllCopilotTimers() {
+  for (const p of Object.keys(pollTimers)) clearCopilotTimersFor(p);
+}
+
+async function loadCopilotStatusFor(provider: string) {
+  ensureCopilotAuthState(provider);
   try {
-    const res = await getCopilotStatus();
-    copilotAuth.authenticated = res.data.authenticated;
-    copilotAuth.loginAt = res.data.login_at || null;
-    if (copilotAuth.authenticated) {
-      await loadCopilotModels();
+    const res = await getCopilotStatus(provider);
+    copilotAuthMap[provider].authenticated = res.data.authenticated;
+    copilotAuthMap[provider].loginAt = res.data.login_at || null;
+    if (copilotAuthMap[provider].authenticated) {
+      await loadCopilotModelsFor(provider);
     }
   } catch {
     /* ignore */
   }
 }
 
-async function loadCopilotModels() {
-  if (!copilotAuth.authenticated) return;
+async function loadCopilotModelsFor(provider: string) {
+  ensureCopilotAuthState(provider);
+  if (!copilotAuthMap[provider].authenticated) return;
 
-  copilotModels.loading = true;
-  copilotModels.error = "";
+  copilotModelsMap[provider].loading = true;
+  copilotModelsMap[provider].error = "";
   try {
-    const res = await getCopilotModels();
-    copilotModels.items = res.data;
+    const res = await getCopilotModels(provider);
+    copilotModelsMap[provider].items = res.data;
   } catch (e: unknown) {
-    copilotModels.error = e instanceof Error ? e.message : "读取 Copilot 模型失败";
+    copilotModelsMap[provider].error = e instanceof Error ? e.message : "读取 Copilot 模型失败";
   } finally {
-    copilotModels.loading = false;
+    copilotModelsMap[provider].loading = false;
   }
 }
 
-async function startCopilotAuth() {
-  copilotAuth.loading = true;
+async function startCopilotAuthFor(provider: string) {
+  ensureCopilotAuthState(provider);
+  const auth = copilotAuthMap[provider];
+  auth.loading = true;
   try {
-    const res = await requestCopilotDeviceCode();
+    const res = await requestCopilotDeviceCode(provider);
     const d = res.data;
-    copilotAuth.deviceCode = d.device_code;
-    copilotAuth.userCode = d.user_code;
-    copilotAuth.verificationUri = d.verification_uri;
-    copilotAuth.interval = Math.max(d.interval || 5, 5);
-    copilotAuth.countdown = d.expires_in || 900;
+    auth.deviceCode = d.device_code;
+    auth.userCode = d.user_code;
+    auth.verificationUri = d.verification_uri;
+    auth.interval = Math.max(d.interval || 5, 5);
+    auth.countdown = d.expires_in || 900;
 
-    // Countdown timer
-    countdownTimer = setInterval(() => {
-      copilotAuth.countdown--;
-      if (copilotAuth.countdown <= 0) {
-        clearCopilotTimers();
-        copilotAuth.deviceCode = "";
+    countdownTimers[provider] = setInterval(() => {
+      auth.countdown--;
+      if (auth.countdown <= 0) {
+        clearCopilotTimersFor(provider);
+        auth.deviceCode = "";
         message.error("验证码已过期，请重新发起认证");
       }
     }, 1000);
 
-    // Poll timer
-    startPolling();
-  } catch (e: unknown) {
+    startPollingFor(provider);
+  } catch {
     message.error("发起认证失败");
   } finally {
-    copilotAuth.loading = false;
+    auth.loading = false;
   }
 }
 
-function startPolling() {
-  if (pollTimer) clearInterval(pollTimer);
-  pollTimer = setInterval(async () => {
+function startPollingFor(provider: string) {
+  ensureCopilotAuthState(provider);
+  const auth = copilotAuthMap[provider];
+  if (pollTimers[provider]) clearInterval(pollTimers[provider]!);
+  pollTimers[provider] = setInterval(async () => {
     try {
-      const pollRes = await pollCopilotToken(copilotAuth.deviceCode);
+      const pollRes = await pollCopilotToken(auth.deviceCode, provider);
       const status = pollRes.data.status;
       if (status === "success") {
-        clearCopilotTimers();
-        copilotAuth.deviceCode = "";
-        copilotAuth.authenticated = true;
-        copilotAuth.loginAt = new Date().toISOString();
-        await loadCopilotModels();
-        message.success("GitHub Copilot 认证成功！");
+        clearCopilotTimersFor(provider);
+        auth.deviceCode = "";
+        auth.authenticated = true;
+        auth.loginAt = new Date().toISOString();
+        await loadCopilotModelsFor(provider);
+        message.success(`${provider} 认证成功！`);
       } else if (status === "slow_down") {
-        copilotAuth.interval = (pollRes.data.interval || copilotAuth.interval) + 3;
-        startPolling();
+        auth.interval = (pollRes.data.interval || auth.interval) + 3;
+        startPollingFor(provider);
       }
-      // "authorization_pending" — keep polling
     } catch {
       // Network error — keep trying
     }
-  }, copilotAuth.interval * 1000);
+  }, auth.interval * 1000);
 }
 
-async function doCopilotLogout() {
-  copilotAuth.loading = true;
+async function doCopilotLogoutFor(provider: string) {
+  ensureCopilotAuthState(provider);
+  const auth = copilotAuthMap[provider];
+  auth.loading = true;
   try {
-    await copilotLogout();
-    copilotAuth.authenticated = false;
-    copilotAuth.loginAt = null;
-    copilotModels.items = [];
-    copilotModels.error = "";
-    message.success("已退出 Copilot 登录");
+    await copilotLogout(provider);
+    auth.authenticated = false;
+    auth.loginAt = null;
+    copilotModelsMap[provider].items = [];
+    copilotModelsMap[provider].error = "";
+    message.success(`已退出 ${provider} 登录`);
   } catch {
     message.error("退出失败");
   } finally {
-    copilotAuth.loading = false;
+    auth.loading = false;
+  }
+}
+
+async function loadCopilotStatus() {
+  for (const p of copilotProviders.value) {
+    await loadCopilotStatusFor(p);
   }
 }
 
 onUnmounted(() => {
-  clearCopilotTimers();
+  clearAllCopilotTimers();
 });
 
 // ── Agents ─────────────────────────────────────────────────────────
@@ -1629,19 +1797,24 @@ const strategyData = reactive<OrchestrationStrategy>({
   categoryAgentMap: {},
   categoryModelMap: {},
   enablePipeline: true,
-  preExecutionReview: {
+  hooks: [],
+  templates: [
+    {
+      id: "default-single",
+      name: "标准单执行",
+      mode: "single",
+      agents: [],
+      enabled: true,
+      categoryDefaults: ["quick", "deep", "ops", "security", "architecture"],
+    },
+  ],
+  judge: {
     enabled: false,
     agent: "prometheus-enterprise",
     model: "",
     promptTemplate: "",
-    timeoutMs: 15000,
-  },
-  postExecutionReview: {
-    enabled: false,
-    agent: "oracle-enterprise",
-    model: "",
-    promptTemplate: "",
-    timeoutMs: 15000,
+    timeoutMs: 30000,
+    selectionStrategy: "judge-pick",
   },
 });
 
@@ -1672,6 +1845,57 @@ function updateStrategyModel(category: string, model: string) {
   strategyData.categoryModelMap[category] = model;
 }
 
+const CATEGORY_LABELS_MAP = CATEGORY_LABELS;
+
+const HOOK_SECTIONS = [
+  { trigger: "pre-execution", title: "执行前 Hook", emptyText: "暂无执行前 Hook" },
+  { trigger: "post-execution", title: "执行后 Hook", emptyText: "暂无执行后 Hook" },
+  { trigger: "on-failure", title: "失败后 Hook", emptyText: "暂无失败后 Hook" },
+  { trigger: "pre-resume", title: "续跑前 Hook", emptyText: "暂无续跑前 Hook" },
+] as const;
+
+function hooksByTrigger(trigger: LifecycleHook["trigger"]) {
+  return strategyData.hooks
+    .filter((hook) => hook.trigger === trigger)
+    .sort((a, b) => a.order - b.order);
+}
+
+function addHook(trigger: LifecycleHook["trigger"]) {
+  const count = strategyData.hooks.filter((hook) => hook.trigger === trigger).length + 1;
+  strategyData.hooks.push({
+    id: `${trigger}-${Date.now()}`,
+    trigger,
+    enabled: true,
+    agent: "",
+    model: "",
+    promptTemplate: "",
+    timeoutMs: 15000,
+    order: count - 1,
+  });
+}
+
+function removeHook(hookId: string) {
+  const index = strategyData.hooks.findIndex((hook) => hook.id === hookId);
+  if (index >= 0) {
+    strategyData.hooks.splice(index, 1);
+  }
+}
+
+function addTemplate() {
+  const id = `tpl-${Date.now()}`;
+  strategyData.templates.push({
+    id,
+    name: `模板 ${strategyData.templates.length + 1}`,
+    mode: "single",
+    agents: [],
+    enabled: true,
+  });
+}
+
+function removeTemplate(index: number) {
+  strategyData.templates.splice(index, 1);
+}
+
 async function saveStrategy() {
   strategySaving.value = true;
   try {
@@ -1679,8 +1903,9 @@ async function saveStrategy() {
       categoryAgentMap: strategyData.categoryAgentMap,
       categoryModelMap: strategyData.categoryModelMap,
       enablePipeline: strategyData.enablePipeline,
-      preExecutionReview: strategyData.preExecutionReview,
-      postExecutionReview: strategyData.postExecutionReview,
+      hooks: strategyData.hooks,
+      templates: strategyData.templates,
+      judge: strategyData.judge,
     });
     message.success("编排策略已保存");
   } catch {
