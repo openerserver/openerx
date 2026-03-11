@@ -60,12 +60,13 @@
       <!-- ═══════════ 模型 ═══════════ -->
       <a-tab-pane v-if="isSystemAdmin" key="models" tab="模型">
         <a-spin :spinning="modelsLoading">
-          <a-card title="快速预设">
-            <a-space>
-              <a-button @click="applyPreset('copilot')">GitHub Copilot</a-button>
-              <a-button @click="applyPreset('copilot-claude')">Copilot + Claude</a-button>
-              <a-button @click="applyPreset('github-models')">GitHub Models</a-button>
-            </a-space>
+          <a-card title="GitHub Copilot 账号" style="margin-bottom: 16px">
+            <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap">
+              <span style="color: #888; font-size: 12px">
+                需要第二个或更多 Copilot 账号时，点击右侧按钮即可自动添加新的 Provider，随后在对应卡片上登录不同 GitHub 账号。
+              </span>
+              <a-button type="primary" @click="addCopilotProvider">添加 Copilot 账号</a-button>
+            </div>
           </a-card>
 
           <!-- Copilot OAuth (multi-account) -->
@@ -75,47 +76,69 @@
                 :sub-title="copilotAuthMap[cpProvider]?.loginAt ? `登录时间: ${copilotAuthMap[cpProvider].loginAt}` : ''">
                 <template #extra>
                   <a-space>
-                    <a-button @click="loadCopilotModelsFor(cpProvider)" :loading="copilotModelsMap[cpProvider]?.loading">读取模型列表</a-button>
                     <a-button danger @click="doCopilotLogoutFor(cpProvider)" :loading="copilotAuthMap[cpProvider]?.loading">退出登录</a-button>
                   </a-space>
                 </template>
               </a-result>
 
-              <a-card size="small" title="Copilot 可用模型" style="margin-top: 16px">
-                <template v-if="copilotModelsMap[cpProvider]?.error">
-                  <a-alert type="error" :message="copilotModelsMap[cpProvider].error" show-icon style="margin-bottom: 12px" />
-                </template>
-                <template v-if="(copilotModelsMap[cpProvider]?.items || []).length">
-                  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; gap: 12px; flex-wrap: wrap">
-                    <span style="color: #888; font-size: 12px">认证成功后可从 Copilot 读取当前账号可用模型，并添加到下方模型配置。</span>
-                    <a-space>
-                      <a-radio-group :value="copilotModelFilter" @update:value="copilotModelFilter = String($event)">
-                        <a-radio-button value="all">全部</a-radio-button>
-                        <a-radio-button value="unconfigured">只显示未配置模型</a-radio-button>
-                      </a-radio-group>
-                      <a-button type="primary" @click="addAllCopilotModelsFor(cpProvider)">添加全部未配置模型</a-button>
+              <a-collapse
+                size="small"
+                style="margin-top: 16px"
+                :activeKey="getCopilotModelCollapseActiveKey(cpProvider)"
+                @update:activeKey="setCopilotModelCollapseActiveKey(cpProvider, $event)"
+              >
+                <a-collapse-panel key="models" header="Copilot 可用模型">
+                  <template #extra>
+                    <a-space size="small" @click.stop>
+                      <a-tag :color="getCopilotModelsStatusColor(cpProvider)">{{ getCopilotModelsStatusText(cpProvider) }}</a-tag>
+                      <span v-if="getCopilotModelsMetaText(cpProvider)" style="color: #888; font-size: 12px">
+                        {{ getCopilotModelsMetaText(cpProvider) }}
+                      </span>
                     </a-space>
-                  </div>
-                  <a-table :dataSource="getFilteredCopilotModels(cpProvider)" :columns="copilotModelColumns" :pagination="false" rowKey="id" size="small">
-                    <template #bodyCell="{ column, record }">
-                      <template v-if="column.dataIndex === 'contextWindow'">
-                        {{ record.contextWindow || '-' }}
-                      </template>
-                      <template v-else-if="column.dataIndex === 'maxTokens'">
-                        {{ record.maxTokens || '-' }}
-                      </template>
-                      <template v-else-if="column.dataIndex === 'action'">
-                        <a-button size="small" :disabled="isModelConfigured(String(record.id || ''))" @click="addCopilotModelFromRecordFor(record, cpProvider)">
-                          {{ isModelConfigured(record.id) ? '已添加' : '添加' }}
-                        </a-button>
-                      </template>
+                  </template>
+                  <a-spin :spinning="copilotModelsMap[cpProvider]?.loading">
+                    <template v-if="copilotModelsMap[cpProvider]?.error">
+                      <a-alert type="error" :message="copilotModelsMap[cpProvider].error" show-icon style="margin-bottom: 12px" />
                     </template>
-                  </a-table>
-                </template>
-                <template v-else>
-                  <a-empty description="认证成功后可读取 Copilot 可用模型" />
-                </template>
-              </a-card>
+                    <template v-if="(copilotModelsMap[cpProvider]?.items || []).length">
+                      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; gap: 12px; flex-wrap: wrap">
+                        <a-space wrap>
+                          <a-tag color="blue">总数 {{ copilotModelsMap[cpProvider]?.items.length || 0 }}</a-tag>
+                          <a-tag color="gold">未配置 {{ getCopilotUnconfiguredCount(cpProvider) }}</a-tag>
+                        </a-space>
+                        <a-space>
+                          <a-radio-group :value="copilotModelFilter" @update:value="copilotModelFilter = String($event)">
+                            <a-radio-button value="all">全部</a-radio-button>
+                            <a-radio-button value="unconfigured">只显示未配置模型</a-radio-button>
+                          </a-radio-group>
+                          <a-button type="primary" @click="addAllCopilotModelsFor(cpProvider)">添加全部未配置模型</a-button>
+                        </a-space>
+                      </div>
+                      <a-table :dataSource="getFilteredCopilotModels(cpProvider)" :columns="copilotModelColumns" :pagination="false" rowKey="id" size="small">
+                        <template #bodyCell="{ column, record }">
+                          <template v-if="column.dataIndex === 'contextWindow'">
+                            {{ record.contextWindow || '-' }}
+                          </template>
+                          <template v-else-if="column.dataIndex === 'maxTokens'">
+                            {{ record.maxTokens || '-' }}
+                          </template>
+                          <template v-else-if="column.dataIndex === 'action'">
+                            <a-button size="small" :disabled="isModelConfigured(cpProvider, String(record.id || ''))" @click="addCopilotModelFromRecordFor(record, cpProvider)">
+                              {{ isModelConfigured(cpProvider, String(record.id || '')) ? '已添加' : '添加' }}
+                            </a-button>
+                          </template>
+                        </template>
+                      </a-table>
+                    </template>
+                    <template v-else-if="copilotModelsMap[cpProvider]?.loaded">
+                      <a-empty description="当前账号暂无可读取的 Copilot 模型" />
+                    </template>
+                    <template v-else>
+                      <a-empty description="展开此面板会自动读取 Copilot 可用模型；再次展开会刷新列表" />
+                    </template>
+                  </a-spin>
+                </a-collapse-panel>
+              </a-collapse>
             </template>
 
             <template v-else-if="copilotAuthMap[cpProvider]?.deviceCode">
@@ -151,75 +174,53 @@
             </template>
           </a-card>
 
-          <a-card title="默认 Agent 模型" style="margin-top: 16px">
-            <a-form layout="vertical">
-              <a-form-item label="Model ID">
-                <a-select
-                  :value="getRecordString(modelsData.defaults, 'model')"
-                  show-search
-                  style="width: 100%"
-                  placeholder="anthropic/claude-sonnet-4-20250514"
-                  :options="defaultModelSelectOptions"
-                  option-filter-prop="label"
-                  @update:value="setRecordString(modelsData.defaults, 'model', $event)"
-                />
-              </a-form-item>
-              <a-form-item label="Provider">
-                <a-select
-                  :value="getRecordString(modelsData.defaults, 'provider')"
-                  style="width: 100%"
-                  placeholder="选择 Provider"
-                  @update:value="setRecordString(modelsData.defaults, 'provider', $event)"
-                >
-                  <a-select-option v-for="pk in Object.keys(modelsData.providers)" :key="pk" :value="pk">{{ pk }}</a-select-option>
-                </a-select>
-              </a-form-item>
-            </a-form>
-          </a-card>
-
           <a-card title="Provider 列表" style="margin-top: 16px">
-            <a-table :dataSource="providerTableData" :columns="providerColumns" :pagination="false" rowKey="key" size="small">
-              <template #bodyCell="{ column, record }">
-                <template v-if="column.dataIndex === 'key'">
-                  <a-input :value="record.key" disabled size="small" />
+            <div style="margin-bottom: 8px; color: #888; font-size: 12px">先配置连接入口，再挂接模型。</div>
+            <template v-if="providerTableData.length">
+              <a-table :dataSource="providerTableData" :columns="providerColumns" :pagination="false" rowKey="key" size="small">
+                <template #bodyCell="{ column, record }">
+                  <template v-if="column.dataIndex === 'key'">
+                    <a-input :value="record.key" disabled size="small" />
+                  </template>
+                  <template v-else-if="column.dataIndex === 'name'">
+                    <a-input
+                      :value="record.name"
+                      size="small"
+                      placeholder="显示名称"
+                      @update:value="updateProvider(record.key, 'name', $event)"
+                    />
+                  </template>
+                  <template v-else-if="column.dataIndex === 'api'">
+                    <a-select
+                      :value="record.api"
+                      size="small"
+                      style="width:100%"
+                      placeholder="API 类型"
+                      @update:value="updateProvider(record.key, 'api', $event)"
+                    >
+                      <a-select-option value="anthropic">anthropic</a-select-option>
+                      <a-select-option value="openai-completions">openai-completions</a-select-option>
+                      <a-select-option value="openai-responses">openai-responses</a-select-option>
+                      <a-select-option value="azure-openai">azure-openai</a-select-option>
+                      <a-select-option value="github-copilot">github-copilot</a-select-option>
+                      <a-select-option value="github-models">github-models</a-select-option>
+                    </a-select>
+                  </template>
+                  <template v-else-if="column.dataIndex === 'baseURL'">
+                    <a-input
+                      :value="record.baseURL"
+                      size="small"
+                      placeholder="https://api.example.com/v1"
+                      @update:value="updateProvider(record.key, 'baseURL', $event)"
+                    />
+                  </template>
+                  <template v-else-if="column.dataIndex === 'action'">
+                    <a-button danger size="small" @click="deleteProvider(record.key)">删除</a-button>
+                  </template>
                 </template>
-                <template v-else-if="column.dataIndex === 'name'">
-                  <a-input
-                    :value="record.name"
-                    size="small"
-                    placeholder="显示名称"
-                    @update:value="updateProvider(record.key, 'name', $event)"
-                  />
-                </template>
-                <template v-else-if="column.dataIndex === 'api'">
-                  <a-select
-                    :value="record.api"
-                    size="small"
-                    style="width:100%"
-                    placeholder="API 类型"
-                    @update:value="updateProvider(record.key, 'api', $event)"
-                  >
-                    <a-select-option value="anthropic">anthropic</a-select-option>
-                    <a-select-option value="openai-completions">openai-completions</a-select-option>
-                    <a-select-option value="openai-responses">openai-responses</a-select-option>
-                    <a-select-option value="azure-openai">azure-openai</a-select-option>
-                    <a-select-option value="github-copilot">github-copilot</a-select-option>
-                    <a-select-option value="github-models">github-models</a-select-option>
-                  </a-select>
-                </template>
-                <template v-else-if="column.dataIndex === 'baseURL'">
-                  <a-input
-                    :value="record.baseURL"
-                    size="small"
-                    placeholder="https://api.example.com/v1"
-                    @update:value="updateProvider(record.key, 'baseURL', $event)"
-                  />
-                </template>
-                <template v-else-if="column.dataIndex === 'action'">
-                  <a-button danger size="small" @click="deleteProvider(record.key)">删除</a-button>
-                </template>
-              </template>
-            </a-table>
+              </a-table>
+            </template>
+            <a-empty v-else description="还没有 Provider。下一步：点击下方“+ 添加 Provider”，或先在上方添加 GitHub Copilot 账号。" />
             <a-button type="dashed" block style="margin-top: 8px" @click="showAddProvider = true">+ 添加 Provider</a-button>
           </a-card>
 
@@ -248,31 +249,60 @@
           </a-modal>
 
           <a-card title="模型列表" style="margin-top: 16px">
-            <a-table :dataSource="modelsData.list" :columns="modelColumns" :pagination="false" rowKey="id" size="small">
-              <template #bodyCell="{ column, record, index }">
-                <template v-if="column.dataIndex === 'id'">
-                  <a-input :value="record.id" size="small" @update:value="record.id = String($event ?? '')" />
+            <div style="margin-bottom: 8px; color: #888; font-size: 12px">为任务准备可选的执行模型。</div>
+            <template v-if="modelsData.list.length">
+              <a-table :dataSource="modelsData.list" :columns="modelColumns" :pagination="false" :rowKey="getConfiguredModelKey" :rowClassName="getModelRowClassName" size="small">
+                <template #bodyCell="{ column, record, index }">
+                  <template v-if="column.dataIndex === 'id'">
+                    <div style="display: flex; flex-direction: column; gap: 6px">
+                      <a-input :value="record.id" size="small" @update:value="updateModelField(record, 'id', $event)" />
+                      <a-tag v-if="getModelRecordIssue(record)" color="red">{{ getModelRecordIssue(record) }}</a-tag>
+                    </div>
+                  </template>
+                  <template v-else-if="column.dataIndex === 'name'">
+                    <div style="display: flex; flex-direction: column; gap: 6px">
+                      <a-input :value="record.name" size="small" @update:value="record.name = String($event ?? '')" />
+                      <a-tag v-if="isDefaultConfiguredModelRecord(record)" color="gold">默认执行模型</a-tag>
+                    </div>
+                  </template>
+                  <template v-else-if="column.dataIndex === 'provider'">
+                    <div style="display: flex; flex-direction: column; gap: 6px">
+                      <a-select :value="record.provider" size="small" style="width:100%" @update:value="updateModelField(record, 'provider', $event)">
+                        <a-select-option v-for="pk in Object.keys(modelsData.providers)" :key="pk" :value="pk">{{ pk }}</a-select-option>
+                      </a-select>
+                      <span v-if="getModelRoutePreview(record)" style="color: #888; font-size: 12px">{{ getModelRoutePreview(record) }}</span>
+                    </div>
+                  </template>
+                  <template v-else-if="column.dataIndex === 'contextWindow'">
+                    <a-input-number :value="record.contextWindow" size="small" :min="1" style="width:100%" @update:value="record.contextWindow = Number($event ?? 1)" />
+                  </template>
+                  <template v-else-if="column.dataIndex === 'maxTokens'">
+                    <a-input-number :value="record.maxTokens" size="small" :min="1" style="width:100%" @update:value="record.maxTokens = Number($event ?? 1)" />
+                  </template>
+                  <template v-else-if="column.dataIndex === 'action'">
+                    <a-button danger size="small" @click="removeModelAt(index)">删除</a-button>
+                  </template>
                 </template>
-                <template v-else-if="column.dataIndex === 'name'">
-                  <a-input :value="record.name" size="small" @update:value="record.name = String($event ?? '')" />
-                </template>
-                <template v-else-if="column.dataIndex === 'provider'">
-                  <a-select :value="record.provider" size="small" style="width:100%" @update:value="record.provider = String($event ?? '')">
-                    <a-select-option v-for="pk in Object.keys(modelsData.providers)" :key="pk" :value="pk">{{ pk }}</a-select-option>
-                  </a-select>
-                </template>
-                <template v-else-if="column.dataIndex === 'contextWindow'">
-                  <a-input-number :value="record.contextWindow" size="small" :min="1" style="width:100%" @update:value="record.contextWindow = Number($event ?? 1)" />
-                </template>
-                <template v-else-if="column.dataIndex === 'maxTokens'">
-                  <a-input-number :value="record.maxTokens" size="small" :min="1" style="width:100%" @update:value="record.maxTokens = Number($event ?? 1)" />
-                </template>
-                <template v-else-if="column.dataIndex === 'action'">
-                  <a-button danger size="small" @click="modelsData.list.splice(index, 1)">删除</a-button>
-                </template>
-              </template>
-            </a-table>
+              </a-table>
+            </template>
+            <a-empty v-else description="还没有模型。下一步：先配置 Provider，或登录并展开上方 Copilot 模型区后导入；也可以直接点击下方“+ 添加模型”。" />
             <a-button type="dashed" block style="margin-top: 8px" @click="addModel">+ 添加模型</a-button>
+          </a-card>
+
+          <a-card title="默认执行模型" style="margin-top: 16px">
+            <a-form layout="vertical">
+              <a-form-item label="默认执行路由">
+                <a-select
+                  :value="getDefaultAgentModelValue() || undefined"
+                  show-search
+                  style="width: 100%"
+                  placeholder="先在上方配置模型，再选择默认模型"
+                  :options="defaultModelSelectOptions"
+                  option-filter-prop="label"
+                  @update:value="setDefaultAgentModelValue($event)"
+                />
+              </a-form-item>
+            </a-form>
           </a-card>
 
           <a-button type="primary" style="margin-top: 16px" :loading="saving" @click="saveModels">保存模型配置</a-button>
@@ -1128,19 +1158,148 @@ const modelsData = reactive<{
   list: [],
 });
 
+function buildModelRoute(provider: string, modelId: string) {
+  if (!provider || !modelId) return "";
+  return `${provider}:${modelId}`;
+}
+
+function parseModelRouteValue(value: string) {
+  const normalized = value.trim();
+  const colonIndex = normalized.indexOf(":");
+  if (colonIndex > 0) {
+    return {
+      provider: normalized.slice(0, colonIndex),
+      modelId: normalized.slice(colonIndex + 1),
+    };
+  }
+
+  return {
+    provider: "",
+    modelId: normalized,
+  };
+}
+
+function getConfiguredModelKey(model: Record<string, unknown>) {
+  return buildModelRoute(getRecordString(model, "provider"), getRecordString(model, "id"));
+}
+
+function getDefaultAgentModelValue() {
+  const model = getRecordString(modelsData.defaults, "model");
+  if (!model) return "";
+  if (model.includes(":")) return model;
+
+  const provider = getRecordString(modelsData.defaults, "provider");
+  return buildModelRoute(provider, model) || model;
+}
+
+function setDefaultAgentModelValue(value: unknown) {
+  const normalized = String(value ?? "").trim();
+  if (!normalized) {
+    modelsData.defaults.model = "";
+    delete modelsData.defaults.provider;
+    return;
+  }
+
+  const parsed = parseModelRouteValue(normalized);
+  modelsData.defaults.model = parsed.provider ? buildModelRoute(parsed.provider, parsed.modelId) : parsed.modelId;
+  if (parsed.provider) {
+    modelsData.defaults.provider = parsed.provider;
+  } else {
+    delete modelsData.defaults.provider;
+  }
+}
+
+function isDefaultAgentModelConfigured() {
+  const route = getDefaultAgentModelValue();
+  if (!route) return true;
+  return modelsData.list.some((model) => getConfiguredModelKey(model) === route);
+}
+
+function clearInvalidDefaultAgentModel() {
+  if (!isDefaultAgentModelConfigured()) {
+    setDefaultAgentModelValue("");
+    return true;
+  }
+  return false;
+}
+
+function isDefaultConfiguredModelRecord(record: Record<string, unknown>) {
+  const route = getDefaultAgentModelValue();
+  if (!route) return false;
+  return getConfiguredModelKey(record) === route;
+}
+
+function getModelDuplicateRouteCount(record: Record<string, unknown>) {
+  const route = getConfiguredModelKey(record);
+  if (!route) return 0;
+  return modelsData.list.filter((model) => getConfiguredModelKey(model) === route).length;
+}
+
+function getModelRecordIssue(record: Record<string, unknown>) {
+  const provider = getRecordString(record, "provider").trim();
+  const id = getRecordString(record, "id").trim();
+  if (!provider || !id) return "需要同时填写 Provider 和模型 ID";
+  if (getModelDuplicateRouteCount(record) > 1) return `重复模型路由：${buildModelRoute(provider, id)}`;
+  return "";
+}
+
+function getModelRoutePreview(record: Record<string, unknown>) {
+  const provider = getRecordString(record, "provider").trim();
+  const id = getRecordString(record, "id").trim();
+  if (!provider && !id) return "";
+  if (!provider || !id) return "需补全后才会形成模型路由";
+  return `模型路由：${buildModelRoute(provider, id)}`;
+}
+
+function getModelRowClassName(record: Record<string, unknown>) {
+  const rowClasses: string[] = [];
+  if (isDefaultConfiguredModelRecord(record)) rowClasses.push("default-agent-model-row");
+  if (getModelRecordIssue(record)) rowClasses.push("invalid-model-row");
+  return rowClasses.join(" ");
+}
+
+function getModelValidationErrors() {
+  const errors: string[] = [];
+  const seen = new Map<string, number>();
+
+  modelsData.list.forEach((model, index) => {
+    const provider = getRecordString(model, "provider").trim();
+    const id = getRecordString(model, "id").trim();
+    const rowNumber = index + 1;
+
+    if (!provider || !id) {
+      errors.push(`第 ${rowNumber} 行缺少 Provider 或模型 ID`);
+      return;
+    }
+
+    const route = buildModelRoute(provider, id);
+    const firstRow = seen.get(route);
+    if (firstRow) {
+      errors.push(`第 ${firstRow} 行与第 ${rowNumber} 行存在重复模型路由 ${route}`);
+      return;
+    }
+
+    seen.set(route, rowNumber);
+  });
+
+  return errors;
+}
+
 function buildModelSelectOptions(currentModel = "") {
   const options = modelsData.list
     .map((model) => {
       const id = getRecordString(model, "id");
+      const provider = getRecordString(model, "provider");
       if (!id) return null;
+      if (!provider) return null;
 
       const name = getRecordString(model, "name");
-      const provider = getRecordString(model, "provider");
+      const route = buildModelRoute(provider, id);
       const meta = [name, provider].filter(Boolean).join(" / ");
 
       return {
-        value: id,
-        label: meta ? `${id} (${meta})` : id,
+        value: route,
+        label: meta ? `${route} (${meta})` : route,
       };
     })
     .filter((option): option is { value: string; label: string } => Boolean(option));
@@ -1152,10 +1311,8 @@ function buildModelSelectOptions(currentModel = "") {
   return options;
 }
 
-const modelSelectOptions = computed(() => buildModelSelectOptions());
-
 const defaultModelSelectOptions = computed(() =>
-  buildModelSelectOptions(getRecordString(modelsData.defaults, "model")),
+  buildModelSelectOptions(getDefaultAgentModelValue()),
 );
 
 const agentModelSelectOptions = computed(() =>
@@ -1215,8 +1372,48 @@ function updateProvider(key: string, field: string, value: unknown) {
   if (p) p[field] = String(value ?? "");
 }
 
+function getNextCopilotProviderKey() {
+  let index = 2;
+  while (modelsData.providers[`github-copilot-${index}`]) {
+    index += 1;
+  }
+  return `github-copilot-${index}`;
+}
+
+function addCopilotProvider() {
+  let initializedPrimary = false;
+  if (!modelsData.providers["github-copilot"]) {
+    ensureCopilotProviderFor("github-copilot");
+    initializedPrimary = true;
+  }
+
+  const providerKey = getNextCopilotProviderKey();
+  modelsData.providers[providerKey] = {
+    api: "github-copilot",
+    name: `GitHub Copilot (${providerKey.replace("github-copilot-", "账号 ")})`,
+  };
+
+  message.success(
+    initializedPrimary
+      ? `已初始化 github-copilot 并新增 ${providerKey}，现在可以分别登录不同账号`
+      : `已新增 ${providerKey}，现在可以在新卡片上登录另一个 GitHub 账号`,
+  );
+}
+
 function deleteProvider(key: string) {
+  const removedModels = modelsData.list.filter((model) => getRecordString(model, "provider") === key).length;
   delete modelsData.providers[key];
+  if (removedModels > 0) {
+    modelsData.list = modelsData.list.filter((model) => getRecordString(model, "provider") !== key);
+  }
+
+  const clearedDefault = clearInvalidDefaultAgentModel();
+  if (removedModels > 0 || clearedDefault) {
+    const messages: string[] = [];
+    if (removedModels > 0) messages.push(`已移除 ${removedModels} 个关联模型`);
+    if (clearedDefault) messages.push("已清空失效的默认执行模型");
+    message.info(messages.join("，"));
+  }
 }
 
 const modelColumns = [
@@ -1241,132 +1438,18 @@ function addModel() {
   modelsData.list.push({ id: "", name: "", provider: "", contextWindow: 200000, maxTokens: 16384 });
 }
 
-// ── Presets ────────────────────────────────────────────────────────
-const COPILOT_PRESETS: Record<
-  string,
-  {
-    providers: Record<string, Record<string, unknown>>;
-    defaults: Record<string, unknown>;
-    list: Array<Record<string, unknown>>;
+function updateModelField(record: Record<string, unknown>, field: "id" | "provider", value: unknown) {
+  record[field] = String(value ?? "");
+  if (clearInvalidDefaultAgentModel()) {
+    message.info("已清空失效的默认执行模型");
   }
-> = {
-  copilot: {
-    providers: {
-      "github-copilot": { api: "github-copilot", name: "GitHub Copilot" },
-    },
-    defaults: { model: "claude-sonnet-4", provider: "github-copilot" },
-    list: [
-      {
-        id: "claude-sonnet-4",
-        name: "Claude Sonnet 4 (via Copilot)",
-        provider: "github-copilot",
-        contextWindow: 200000,
-        maxTokens: 16384,
-      },
-      {
-        id: "claude-opus-4",
-        name: "Claude Opus 4 (via Copilot)",
-        provider: "github-copilot",
-        contextWindow: 200000,
-        maxTokens: 16384,
-      },
-      {
-        id: "gpt-4.1",
-        name: "GPT-4.1 (via Copilot)",
-        provider: "github-copilot",
-        contextWindow: 1047576,
-        maxTokens: 32768,
-      },
-      {
-        id: "gpt-5-mini",
-        name: "GPT-5 Mini (via Copilot)",
-        provider: "github-copilot",
-        contextWindow: 1047576,
-        maxTokens: 32768,
-      },
-      {
-        id: "gemini-2.5-pro",
-        name: "Gemini 2.5 Pro (via Copilot)",
-        provider: "github-copilot",
-        contextWindow: 1048576,
-        maxTokens: 65536,
-      },
-    ],
-  },
-  "copilot-claude": {
-    providers: {
-      "github-copilot": { api: "github-copilot", name: "GitHub Copilot" },
-      anthropic: { api: "anthropic", name: "Anthropic (Direct)" },
-    },
-    defaults: { model: "claude-sonnet-4", provider: "github-copilot" },
-    list: [
-      {
-        id: "claude-sonnet-4",
-        name: "Claude Sonnet 4 (Copilot, Free)",
-        provider: "github-copilot",
-        contextWindow: 200000,
-        maxTokens: 16384,
-      },
-      {
-        id: "claude-opus-4",
-        name: "Claude Opus 4 (Copilot, Free)",
-        provider: "github-copilot",
-        contextWindow: 200000,
-        maxTokens: 16384,
-      },
-      {
-        id: "anthropic/claude-sonnet-4-20250514",
-        name: "Claude Sonnet 4 (Direct API)",
-        provider: "anthropic",
-        contextWindow: 200000,
-        maxTokens: 16384,
-      },
-      {
-        id: "gpt-4.1",
-        name: "GPT-4.1 (Copilot)",
-        provider: "github-copilot",
-        contextWindow: 1047576,
-        maxTokens: 32768,
-      },
-    ],
-  },
-  "github-models": {
-    providers: {
-      "github-models": {
-        api: "github-models",
-        name: "GitHub Models",
-        baseURL: "https://models.github.ai/inference",
-      },
-    },
-    defaults: { model: "openai/gpt-4.1", provider: "github-models" },
-    list: [
-      {
-        id: "openai/gpt-4.1",
-        name: "GPT-4.1 (GitHub Models)",
-        provider: "github-models",
-        contextWindow: 1047576,
-        maxTokens: 32768,
-      },
-      {
-        id: "openai/gpt-4o",
-        name: "GPT-4o (GitHub Models)",
-        provider: "github-models",
-        contextWindow: 128000,
-        maxTokens: 16384,
-      },
-    ],
-  },
-};
+}
 
-function applyPreset(presetKey: string) {
-  const preset = COPILOT_PRESETS[presetKey];
-  if (!preset) return;
-  for (const [k, v] of Object.entries(preset.providers)) {
-    modelsData.providers[k] = v;
+function removeModelAt(index: number) {
+  modelsData.list.splice(index, 1);
+  if (clearInvalidDefaultAgentModel()) {
+    message.info("已清空失效的默认执行模型");
   }
-  Object.assign(modelsData.defaults, preset.defaults);
-  modelsData.list = [...preset.list];
-  message.info("已应用预设，记得点击「保存模型配置」生效");
 }
 
 // ── Copilot OAuth (multi-account) ──────────────────────────────────
@@ -1382,6 +1465,7 @@ interface CopilotAuthState {
 }
 interface CopilotModelsState {
   loading: boolean;
+  loaded: boolean;
   error: string;
   items: CopilotModelInfo[];
 }
@@ -1410,13 +1494,63 @@ function ensureCopilotAuthState(provider: string) {
     };
   }
   if (!copilotModelsMap[provider]) {
-    copilotModelsMap[provider] = { loading: false, error: "", items: [] };
+    copilotModelsMap[provider] = { loading: false, loaded: false, error: "", items: [] };
   }
 }
 
 const copilotModelFilter = ref("all");
+const copilotModelsExpanded = reactive<Record<string, boolean>>({});
 const pollTimers: Record<string, ReturnType<typeof setInterval> | null> = {};
 const countdownTimers: Record<string, ReturnType<typeof setInterval> | null> = {};
+
+function getCopilotUnconfiguredCount(provider: string) {
+  ensureCopilotAuthState(provider);
+  return (copilotModelsMap[provider]?.items || []).filter((model) => !isModelConfigured(provider, model.id)).length;
+}
+
+function getCopilotModelsStatusColor(provider: string) {
+  ensureCopilotAuthState(provider);
+  const modelsState = copilotModelsMap[provider];
+  if (modelsState.loading) return "processing";
+  if (modelsState.error) return "red";
+  if (!modelsState.loaded) return "default";
+  return "green";
+}
+
+function getCopilotModelsStatusText(provider: string) {
+  ensureCopilotAuthState(provider);
+  const modelsState = copilotModelsMap[provider];
+  if (modelsState.loading) return "读取中";
+  if (modelsState.error) return "读取失败";
+  if (!modelsState.loaded) return "未读取";
+  return "已读取";
+}
+
+function getCopilotModelsMetaText(provider: string) {
+  ensureCopilotAuthState(provider);
+  const modelsState = copilotModelsMap[provider];
+  if (modelsState.loading) return "正在读取模型列表";
+  if (modelsState.error) return "展开可重试";
+  if (!modelsState.loaded) return "展开后读取";
+
+  const count = modelsState.items.length;
+  if (!count) return "暂无数据；再次展开可刷新";
+  return `${count} 个模型，未配置 ${getCopilotUnconfiguredCount(provider)} 个`;
+}
+
+function getCopilotModelCollapseActiveKey(provider: string) {
+  return copilotModelsExpanded[provider] ? ["models"] : [];
+}
+
+function setCopilotModelCollapseActiveKey(provider: string, value: unknown) {
+  const keys = Array.isArray(value) ? value.map((item) => String(item)) : [String(value ?? "")].filter(Boolean);
+  const shouldExpand = keys.includes("models");
+  const wasExpanded = Boolean(copilotModelsExpanded[provider]);
+  copilotModelsExpanded[provider] = shouldExpand;
+  if (shouldExpand && !wasExpanded && !copilotModelsMap[provider]?.loading) {
+    void loadCopilotModelsFor(provider);
+  }
+}
 
 function ensureCopilotProviderFor(provider: string) {
   if (!modelsData.providers[provider]) {
@@ -1427,19 +1561,20 @@ function ensureCopilotProviderFor(provider: string) {
   }
 }
 
-function isModelConfigured(modelId: string) {
-  return modelsData.list.some((model) => getRecordString(model, "id") === modelId);
+function isModelConfigured(provider: string, modelId: string) {
+  const route = buildModelRoute(provider, modelId);
+  return modelsData.list.some((model) => getConfiguredModelKey(model) === route);
 }
 
 function getFilteredCopilotModels(provider: string): CopilotModelInfo[] {
   ensureCopilotAuthState(provider);
   const items = copilotModelsMap[provider]?.items || [];
   if (copilotModelFilter.value !== "unconfigured") return items;
-  return items.filter((model) => !isModelConfigured(model.id));
+  return items.filter((model) => !isModelConfigured(provider, model.id));
 }
 
 function addCopilotModelFor(model: CopilotModelInfo, provider: string) {
-  if (isModelConfigured(model.id)) return;
+  if (isModelConfigured(provider, model.id)) return;
   ensureCopilotProviderFor(provider);
   modelsData.list.push({
     id: model.id,
@@ -1465,7 +1600,7 @@ function addCopilotModelFromRecordFor(record: Record<string, unknown>, provider:
 function addAllCopilotModelsFor(provider: string) {
   ensureCopilotAuthState(provider);
   const allItems = copilotModelsMap[provider]?.items || [];
-  const pending = allItems.filter((model) => !isModelConfigured(model.id));
+  const pending = allItems.filter((model) => !isModelConfigured(provider, model.id));
   if (!pending.length) {
     message.info("Copilot 模型已全部加入当前配置");
     return;
@@ -1496,7 +1631,7 @@ async function loadCopilotStatusFor(provider: string) {
     copilotAuthMap[provider].authenticated = res.data.authenticated;
     copilotAuthMap[provider].loginAt = res.data.login_at || null;
     if (copilotAuthMap[provider].authenticated) {
-      await loadCopilotModelsFor(provider);
+      ensureCopilotProviderFor(provider);
     }
   } catch {
     /* ignore */
@@ -1512,6 +1647,7 @@ async function loadCopilotModelsFor(provider: string) {
   try {
     const res = await getCopilotModels(provider);
     copilotModelsMap[provider].items = res.data;
+    copilotModelsMap[provider].loaded = true;
   } catch (e: unknown) {
     copilotModelsMap[provider].error = e instanceof Error ? e.message : "读取 Copilot 模型失败";
   } finally {
@@ -1562,7 +1698,7 @@ function startPollingFor(provider: string) {
         auth.deviceCode = "";
         auth.authenticated = true;
         auth.loginAt = new Date().toISOString();
-        await loadCopilotModelsFor(provider);
+        ensureCopilotProviderFor(provider);
         message.success(`${provider} 认证成功！`);
       } else if (status === "slow_down") {
         auth.interval = (pollRes.data.interval || auth.interval) + 3;
@@ -1583,6 +1719,7 @@ async function doCopilotLogoutFor(provider: string) {
     auth.authenticated = false;
     auth.loginAt = null;
     copilotModelsMap[provider].items = [];
+    copilotModelsMap[provider].loaded = false;
     copilotModelsMap[provider].error = "";
     message.success(`已退出 ${provider} 登录`);
   } catch {
@@ -1962,12 +2099,23 @@ const saving = ref(false);
 async function saveModels() {
   saving.value = true;
   try {
+    clearInvalidDefaultAgentModel();
+    setDefaultAgentModelValue(getDefaultAgentModelValue());
+    const validationErrors = getModelValidationErrors();
+    if (validationErrors.length > 0) {
+      message.error(validationErrors[0]);
+      return;
+    }
     const res = await updateModelsConfig({
       defaults: modelsData.defaults,
       providers: modelsData.providers,
       list: modelsData.list,
     });
-    message.success(`模型配置已保存${res.restartRequired ? "（需重启 OpenCode 生效）" : ""}`);
+    message.success(
+      res.restartRequired
+        ? "模型配置已保存到 opencode.json；需重启 OpenCode 运行时后，新任务才会使用新配置"
+        : "模型配置已保存到 opencode.json；新任务将自动使用最新配置",
+    );
   } catch (e: unknown) {
     message.error("保存失败");
   } finally {
@@ -2123,3 +2271,21 @@ onMounted(async () => {
   }
 });
 </script>
+
+<style scoped>
+:deep(.default-agent-model-row > td) {
+  background: #fff7e6;
+}
+
+:deep(.default-agent-model-row:hover > td) {
+  background: #ffe7ba;
+}
+
+:deep(.invalid-model-row > td) {
+  background: #fff1f0;
+}
+
+:deep(.invalid-model-row:hover > td) {
+  background: #ffccc7;
+}
+</style>

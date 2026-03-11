@@ -25,6 +25,22 @@ const injectGuidanceMock = mock(async () => ({ ok: true }));
 const resumeAgentMock = mock(async () => ({ ok: true }));
 const registerParallelTaskMock = mock(() => undefined);
 const authHeaderMock = mock(() => "Bearer test");
+const readDefaultExecutionModelMock = mock(() => undefined as string | undefined);
+const resolveModelRouteMock = mock((raw: string) => {
+  const value = raw.trim();
+  const colonIndex = value.indexOf(":");
+  if (colonIndex > 0) {
+    return { providerId: value.slice(0, colonIndex), modelId: value.slice(colonIndex + 1) };
+  }
+
+  const slashIndex = value.indexOf("/");
+  if (slashIndex > 0) {
+    return { providerId: value.slice(0, slashIndex), modelId: value.slice(slashIndex + 1) };
+  }
+
+  return { providerId: "github-copilot", modelId: value };
+});
+const validateModelProviderMock = mock(() => ({ valid: true as const }));
 let currentStrategy = strategyModule.normalizeOrchestrationStrategy({
   hooks: [
     {
@@ -62,6 +78,7 @@ const broadcastMock = mock(() => undefined);
 mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter", () => ({
   createSession: createSessionMock,
   continueSession: mock(async () => ({ ok: true })),
+  getSessionMessages: mock(async () => ({ ok: true, data: [] })),
   runDetachedPrompt: runDetachedPromptMock,
   getAgentMessages: mock(async () => ({ ok: true, data: [] })),
   getAgentRun: getAgentRunMock,
@@ -77,6 +94,12 @@ mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () =>
   authHeader: authHeaderMock,
   cpFetch: cpFetchMock,
   createInternalAuthorization: createInternalAuthorizationMock,
+}));
+
+mock.module("../../control-plane/web-ui-bff/src/lib/opencode-config", () => ({
+  readDefaultExecutionModel: readDefaultExecutionModelMock,
+  resolveModelRoute: resolveModelRouteMock,
+  validateModelProvider: validateModelProviderMock,
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/lib/orchestration-strategy", () => ({
@@ -120,6 +143,9 @@ beforeEach(() => {
   resumeAgentMock.mockReset();
   registerParallelTaskMock.mockReset();
   authHeaderMock.mockReset();
+  readDefaultExecutionModelMock.mockReset();
+  resolveModelRouteMock.mockClear();
+  validateModelProviderMock.mockReset();
   cpFetchMock.mockReset();
   createInternalAuthorizationMock.mockReset();
   broadcastMock.mockReset();
@@ -159,6 +185,8 @@ beforeEach(() => {
     agentRunId: "run-test",
   });
   authHeaderMock.mockReturnValue("Bearer test");
+  readDefaultExecutionModelMock.mockReturnValue(undefined);
+  validateModelProviderMock.mockReturnValue({ valid: true });
   cpFetchMock.mockImplementation(
     async (url: string, options?: { method?: string; body?: unknown }) => {
       if (!options?.method) {
@@ -429,5 +457,44 @@ describe("executeLifecycleHooks behavior", () => {
     const patchCalls = getPatchCalls();
     expect(patchCalls).toHaveLength(1);
     expect((patchCalls[0]?.[1] as { body?: { status?: string } }).body?.status).toBe("failed");
+  });
+
+  test("execute route hot-loads the system default execution model for new tasks", async () => {
+    currentStrategy = buildStrategy({ hooks: [] });
+    currentTask = {
+      ...currentTask,
+      title: "System default model task",
+      prompt: "Run with the configured default model.",
+      selectedModel: undefined,
+    };
+
+    const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
+
+    readDefaultExecutionModelMock.mockReturnValueOnce("github-copilot:gemini-3-flash-preview");
+    let response = await taskRoutes.request("http://localhost/task-1/execute", {
+      method: "POST",
+      headers: { Authorization: "Bearer test" },
+    });
+    expect(response.status).toBe(200);
+    expect(createSessionMock.mock.calls[0]?.[3]).toMatchObject({
+      model: {
+        providerId: "github-copilot",
+        modelId: "gemini-3-flash-preview",
+      },
+    });
+
+    createSessionMock.mockClear();
+    readDefaultExecutionModelMock.mockReturnValueOnce("qwen-local:qwen/qwen3.5-35b-a3b");
+    response = await taskRoutes.request("http://localhost/task-1/execute", {
+      method: "POST",
+      headers: { Authorization: "Bearer test" },
+    });
+    expect(response.status).toBe(200);
+    expect(createSessionMock.mock.calls[0]?.[3]).toMatchObject({
+      model: {
+        providerId: "qwen-local",
+        modelId: "qwen/qwen3.5-35b-a3b",
+      },
+    });
   });
 });

@@ -3,7 +3,11 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { authHeader, cpFetch } from "../../lib/control-plane-client";
 import { classifyIntent } from "../../lib/intent-classifier";
-import { resolveModelRoute, validateModelProvider } from "../../lib/opencode-config";
+import {
+  readDefaultExecutionModel,
+  resolveModelRoute,
+  validateModelProvider,
+} from "../../lib/opencode-config";
 import {
   type ExecutionPlan,
   type HookExecutionRecord,
@@ -166,7 +170,8 @@ function selectExecutionAgent(prompt: string) {
 
 /**
  * Resolve the model to use for execution.
- * Priority: task.selectedModel > project.settings.defaultModel > env fallback (null).
+ * Priority: task.selectedModel > strategy override > project.settings.defaultModel >
+ * opencode.json default > env fallback (null).
  */
 async function resolveExecutionModel(
   task: ExecutableTask,
@@ -193,10 +198,16 @@ async function resolveExecutionModel(
       return parseModelString(projectResult.data.settings.defaultModel);
     }
   } catch {
-    // Fall through to env default
+    // Fall through to system default
   }
 
-  // 4. Return undefined — adapter will use its env-based defaults
+  // 4. System-level default from opencode.json
+  const systemDefaultModel = readDefaultExecutionModel();
+  if (systemDefaultModel) {
+    return parseModelString(systemDefaultModel);
+  }
+
+  // 5. Return undefined — adapter will use its env-based defaults
   return undefined;
 }
 

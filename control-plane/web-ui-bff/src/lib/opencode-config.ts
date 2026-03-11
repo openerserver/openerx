@@ -10,6 +10,24 @@ export function readOpencodeJson(): Record<string, unknown> {
   return JSON.parse(readFileSync(OPENCODE_JSON, "utf-8"));
 }
 
+function getTrimmedString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
+export function readDefaultExecutionModel(): string | undefined {
+  const config = readOpencodeJson();
+  const defaults = (config.agents as Record<string, unknown> | undefined)?.defaults as
+    | Record<string, unknown>
+    | undefined;
+
+  return getTrimmedString(defaults?.model) ?? getTrimmedString(config.model);
+}
+
 /**
  * Check if a provider is configured in opencode.json.
  * Returns the provider key list if found, or null.

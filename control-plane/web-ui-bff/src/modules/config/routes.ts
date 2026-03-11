@@ -54,6 +54,30 @@ function readOpencodeJson(): Record<string, unknown> {
   return JSON.parse(readFileSync(OPENCODE_JSON, "utf-8"));
 }
 
+function getTrimmedString(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
+function getConfiguredDefaultExecutionModel(config: Record<string, unknown>): string | null {
+  const defaults = (config.agents as Record<string, unknown> | undefined)?.defaults as
+    | Record<string, unknown>
+    | undefined;
+
+  return getTrimmedString(defaults?.model) ?? getTrimmedString(config.model) ?? null;
+}
+
+function toRuntimeModelRoute(raw: string): string {
+  const value = raw.trim();
+  const colonIndex = value.indexOf(":");
+  if (colonIndex > 0) {
+    return `${value.slice(0, colonIndex)}/${value.slice(colonIndex + 1)}`;
+  }
+
+  return value;
+}
+
 function writeOpencodeJson(data: Record<string, unknown>): void {
   // Validate it's valid JSON before writing
   const serialized = JSON.stringify(data, null, 2);
@@ -61,6 +85,29 @@ function writeOpencodeJson(data: Record<string, unknown>): void {
   const backupPath = `${OPENCODE_JSON}.bak`;
   if (existsSync(OPENCODE_JSON)) copyFileSync(OPENCODE_JSON, backupPath);
   writeFileSync(OPENCODE_JSON, `${serialized}\n`, "utf-8");
+}
+
+function validateModelsPayload(list: Array<Record<string, unknown>>): string | null {
+  const seen = new Set<string>();
+
+  for (const [index, model] of list.entries()) {
+    const provider = typeof model.provider === "string" ? model.provider.trim() : "";
+    const id = typeof model.id === "string" ? model.id.trim() : "";
+    const rowNumber = index + 1;
+
+    if (!provider || !id) {
+      return `第 ${rowNumber} 行缺少 Provider 或模型 ID`;
+    }
+
+    const route = `${provider}:${id}`;
+    if (seen.has(route)) {
+      return `存在重复模型路由 ${route}`;
+    }
+
+    seen.add(route);
+  }
+
+  return null;
 }
 
 // ── Routes ─────────────────────────────────────────────────────────
@@ -307,7 +354,7 @@ configRoutes.get("/models/available", (c) => {
     Record<string, unknown>
   >;
   const modelIds = modelList.map((m) => (typeof m.id === "string" ? m.id : "")).filter(Boolean);
-  const defaultModel = typeof config.model === "string" ? config.model : null;
+  const defaultModel = getConfiguredDefaultExecutionModel(config);
   return c.json({ data: { providers, modelIds, defaultModel } });
 });
 
@@ -326,13 +373,23 @@ configRoutes.put(
     if (adminErr) return c.json({ error: adminErr }, 403);
 
     const { defaults, providers, list } = c.req.valid("json");
+    const validationError = validateModelsPayload(list);
+    if (validationError) {
+      return c.json({ error: validationError }, 400);
+    }
     const config = readOpencodeJson();
+    const defaultModel = getTrimmedString((defaults as Record<string, unknown>)?.model);
 
     config.agents = { ...(config.agents as object), defaults };
     config.models = { providers, list };
+    if (defaultModel) {
+      config.model = toRuntimeModelRoute(defaultModel);
+    } else {
+      delete config.model;
+    }
 
     writeOpencodeJson(config);
-    return c.json({ ok: true, restartRequired: true });
+    return c.json({ ok: true, restartRequired: false });
   },
 );
 

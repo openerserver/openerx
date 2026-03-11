@@ -1,6 +1,6 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "qwen-local/qwen/qwen3.5-35b-a3b",
+  "model": "github-copilot/gemini-3-flash-preview",
   "server": {
     "port": 4096,
     "hostname": "127.0.0.1"
@@ -83,13 +83,24 @@
     }
   },
   "agents": {
-    "defaults": {}
+    "defaults": {
+      "model": "github-copilot:gemini-3-flash-preview",
+      "provider": "github-copilot"
+    }
   },
   "models": {
     "providers": {
       "github-copilot": {
         "api": "github-copilot",
         "name": "GitHub Copilot"
+      },
+      "jack": {
+        "api": "github-copilot",
+        "name": "jackgithub"
+      },
+      "github-copilot-2": {
+        "api": "github-copilot",
+        "name": "GitHub Copilot (账号 2)"
       }
     },
     "list": [
@@ -113,6 +124,13 @@
         "provider": "github-copilot",
         "contextWindow": 128000,
         "maxTokens": 64000
+      },
+      {
+        "id": "gpt-5.3-codex",
+        "name": "GPT-5.3-Codex",
+        "provider": "github-copilot",
+        "contextWindow": 400000,
+        "maxTokens": 128000
       }
     ]
   }
