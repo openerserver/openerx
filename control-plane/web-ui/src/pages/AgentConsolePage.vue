@@ -387,7 +387,7 @@
                       <a-descriptions-item label="关联任务">
                         <router-link
                           v-if="selectedRun.taskId"
-                          :to="`/tasks/${selectedRun.taskId}`"
+                          :to="`/workbench?task=${selectedRun.taskId}`"
                         >
                           <a-typography-text code>{{
                             selectedRun.taskId.slice(0, 12)
@@ -477,7 +477,7 @@
                     <a-space>
                       <router-link
                         v-if="selectedRun.taskId"
-                        :to="`/tasks/${selectedRun.taskId}`"
+                        :to="`/workbench?task=${selectedRun.taskId}`"
                       >
                         <a-button size="small">查看任务上下文</a-button>
                       </router-link>

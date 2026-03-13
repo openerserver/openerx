@@ -74,6 +74,33 @@ if [ -n "$PACK_PID" ]; then
 else
   echo -e "${GREEN}[OK]       无 git pack-objects 子进程${NC}"
 fi
-
+# 5. Auth 凭据完整性
+echo ""
+echo "--- Auth Credentials ---"
+AUTH_JSON="$HOME/.local/share/opencode/auth.json"
+if [ -f "$AUTH_JSON" ]; then
+  AUTH_KEYS=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(len(d))" "$AUTH_JSON" 2>/dev/null || echo "parse-error")
+  if [ "$AUTH_KEYS" = "parse-error" ]; then
+    echo -e "${RED}[CRITICAL] auth.json 无法解析${NC}"
+  elif [ "$AUTH_KEYS" = "0" ]; then
+    echo -e "${RED}[CRITICAL] auth.json 是空对象 — 无任何 provider 凭据${NC}"
+    echo "          运行 opencode auth login 重新登录"
+    # 检查是否存在备份
+    AUTH_BAK="$HOME/.local/share/opencode/auth.json.bak"
+    if [ -f "$AUTH_BAK" ]; then
+      BAK_KEYS=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(len(d))" "$AUTH_BAK" 2>/dev/null || echo "0")
+      if [ "$BAK_KEYS" != "0" ]; then
+        echo -e "${YELLOW}          发现有效备份 auth.json.bak (${BAK_KEYS} credentials)，可使用以下命令恢复：${NC}"
+        echo "          cp ~/.local/share/opencode/auth.json.bak ~/.local/share/opencode/auth.json"
+      fi
+    fi
+  else
+    echo -e "${GREEN}[OK]       ${AUTH_KEYS} provider(s) 已配置${NC}"
+    # 备份有效凭据
+    cp "$AUTH_JSON" "$AUTH_JSON.bak" 2>/dev/null || true
+  fi
+else
+  echo -e "${RED}[CRITICAL] auth.json 不存在${NC}"
+fi
 echo ""
 echo "==========================================="

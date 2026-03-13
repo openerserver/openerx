@@ -195,6 +195,13 @@ export interface OrchestrationStrategy {
   judge: JudgeConfig;
 }
 
+export const DEFAULT_EXECUTION_AGENT = "default-executor";
+export const LEGACY_DEFAULT_EXECUTION_AGENT = "build";
+
+export function isDefaultExecutionAgent(agentName: string | undefined | null): boolean {
+  return agentName === DEFAULT_EXECUTION_AGENT || agentName === LEGACY_DEFAULT_EXECUTION_AGENT;
+}
+
 const DEFAULT_PRE_PROMPT = [
   "You are performing a pre-execution assessment for an OpenerX task.",
   "Summarize the task intent, key risks, required clarifications, and a concise execution recommendation.",
@@ -494,7 +501,7 @@ export function buildExecutionPlan(
   const configuredAgents = strategy.categoryAgentMap[category] || [];
 
   if (template.mode === "single") {
-    const agent = template.agents[0] || configuredAgents[0] || "build";
+    const agent = template.agents[0] || configuredAgents[0] || DEFAULT_EXECUTION_AGENT;
     return {
       templateId: template.id,
       mode: "single",

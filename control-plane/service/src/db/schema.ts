@@ -119,6 +119,28 @@ export const sessions = sqliteTable("sessions", {
   finishedAt: text("finished_at"),
 });
 
+// ── Task Sessions (branch lineage for fork tree) ───────────────────
+
+export const taskSessions = sqliteTable("task_sessions", {
+  id: text("id").primaryKey(),
+  taskId: text("task_id")
+    .notNull()
+    .references(() => tasks.id),
+  runtimeSessionId: text("runtime_session_id").notNull(), // OpenCode session ID
+  parentRuntimeSessionId: text("parent_runtime_session_id"), // parent session, null = root
+  forkedFromMessageId: text("forked_from_message_id"), // message-level fork point
+  branchName: text("branch_name"),
+  sourceType: text("source_type", {
+    enum: ["root", "fork", "sub_session"],
+  })
+    .notNull()
+    .default("root"),
+  isActive: integer("is_active", { mode: "boolean" }).notNull().default(false),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  archivedAt: text("archived_at"),
+});
+
 // ── Repositories ───────────────────────────────────────────────────
 
 export const repositories = sqliteTable("repositories", {
@@ -462,4 +484,14 @@ export const budgetConfigs = sqliteTable("budget_configs", {
   warnThreshold: real("warn_threshold").notNull().default(0.8),
   throttleThreshold: real("throttle_threshold").notNull().default(0.95),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+// ── Workbench Layouts ──────────────────────────────────────────────
+
+export const workbenchLayouts = sqliteTable("workbench_layouts", {
+  userId: text("user_id")
+    .primaryKey()
+    .references(() => users.id),
+  layoutJson: text("layout_json").notNull().default("{}"),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });

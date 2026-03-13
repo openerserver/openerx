@@ -1,31 +1,29 @@
 <template>
-  <a-config-provider :theme="darkTheme">
+  <a-config-provider :theme="appTheme">
     <router-view />
   </a-config-provider>
 </template>
 
 <script setup lang="ts">
-import { theme } from "ant-design-vue";
+import { appTheme, palette } from "./theme/ui-theme";
 
-const darkTheme = {
-  algorithm: theme.darkAlgorithm,
-  token: {
-    colorPrimary: "#3b82f6",
-    colorBgContainer: "#1e293b",
-    colorBgElevated: "#1e293b",
-    colorBgLayout: "#0f172a",
-    colorBorder: "#334155",
-    colorText: "#e2e8f0",
-    borderRadius: 8,
-  },
-};
+const appBodyBackground = palette.layoutBg;
+const appBodyColor = palette.text;
 </script>
 
 <style>
+html,
+body,
+#app {
+  height: 100%;
+  min-height: 100%;
+}
+
 body {
   margin: 0;
-  background: #0f172a;
+  background: v-bind(appBodyBackground);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
     "Helvetica Neue", Arial, sans-serif;
+  color: v-bind(appBodyColor);
 }
 </style>

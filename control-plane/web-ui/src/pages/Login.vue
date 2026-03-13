@@ -1,19 +1,8 @@
 <template>
-  <div
-    style="
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      background: #0f172a;
-    "
-  >
-    <a-card
-      style="width: 380px; background: #1e293b; border-color: #334155"
-      :bordered="true"
-    >
-      <h1 style="color: #3b82f6; font-size: 24px; margin: 0 0 4px">OpenerX</h1>
-      <p style="color: #64748b; font-size: 13px; margin: 0 0 32px">
+  <div :style="loginThemeStyles.page">
+    <a-card :style="loginThemeStyles.card" :bordered="true">
+      <h1 :style="loginThemeStyles.title">OpenerX</h1>
+      <p :style="loginThemeStyles.subtitle">
         Enterprise AI Dev/Ops Platform
       </p>
 
@@ -71,6 +60,7 @@ import { reactive, ref } from "vue";
 import { useRouter } from "vue-router";
 import { login } from "../lib/api";
 import { useAuthStore } from "../stores/auth";
+import { loginThemeStyles } from "../theme/ui-theme";
 
 const router = useRouter();
 const authStore = useAuthStore();

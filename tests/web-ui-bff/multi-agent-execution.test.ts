@@ -128,7 +128,7 @@ describe("resolveWorkflowTemplate", () => {
           enabled: true,
           categoryDefaults: ["ops"],
         },
-        { id: "generic", name: "Generic", mode: "single", agents: ["build"], enabled: true },
+        { id: "generic", name: "Generic", mode: "single", agents: ["default-executor"], enabled: true },
       ],
     });
 
@@ -140,7 +140,7 @@ describe("resolveWorkflowTemplate", () => {
     const strategy = buildStrategy({
       templates: [
         { id: "disabled", name: "Off", mode: "single", agents: ["x"], enabled: false },
-        { id: "fallback", name: "Fallback", mode: "single", agents: ["build"], enabled: true },
+        { id: "fallback", name: "Fallback", mode: "single", agents: ["default-executor"], enabled: true },
       ],
     });
 
@@ -229,7 +229,7 @@ describe("buildExecutionPlan", () => {
 describe("mergeTaskStrategy with hookExecutions", () => {
   test("appends hookExecutions to existing array", () => {
     const existing = JSON.stringify({
-      selectedAgent: "build",
+      selectedAgent: "default-executor",
       hookExecutions: [
         { hookId: "h1", trigger: "pre-execution", status: "completed", agent: "reviewer" },
       ],
@@ -256,13 +256,13 @@ describe("mergeTaskStrategy with hookExecutions", () => {
 
   test("creates hookExecutions from empty", () => {
     const merged = mergeTaskStrategy(undefined, {
-      selectedAgent: "build",
+      selectedAgent: "default-executor",
       hookExecutions: [
         {
           hookId: "legacy-pre-execution",
           trigger: "pre-execution",
           status: "completed",
-          agent: "build",
+          agent: "default-executor",
           prompt: "Review task prompt",
           completedAt: new Date().toISOString(),
         },
@@ -278,7 +278,7 @@ describe("mergeTaskStrategy with hookExecutions", () => {
       hookExecutions: [{ hookId: "h1", trigger: "pre-execution", status: "completed", agent: "x" }],
     });
 
-    const merged = mergeTaskStrategy(existing, { selectedAgent: "build" });
+    const merged = mergeTaskStrategy(existing, { selectedAgent: "default-executor" });
     const parsed = JSON.parse(merged);
     expect(parsed.hookExecutions).toHaveLength(1);
   });

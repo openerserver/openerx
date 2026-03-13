@@ -43,7 +43,7 @@
 
             <a-descriptions size="small" :column="1" :colon="false">
               <a-descriptions-item label="任务">
-                <router-link v-if="ticket.taskId" :to="`/tasks/${ticket.taskId}`" @click.stop>
+                <router-link v-if="ticket.taskId" :to="`/workbench?task=${ticket.taskId}`" @click.stop>
                   <a-typography-text code>{{ ticket.taskId.slice(0, 12) }}</a-typography-text>
                 </router-link>
                 <span v-else>-</span>
@@ -113,7 +113,7 @@
           </a-descriptions-item>
           <a-descriptions-item label="操作类型">{{ actionTypeLabel(detailTicket.actionType) }}</a-descriptions-item>
           <a-descriptions-item label="关联任务">
-            <router-link v-if="detailTicket.taskId" :to="`/tasks/${detailTicket.taskId}`">
+            <router-link v-if="detailTicket.taskId" :to="`/workbench?task=${detailTicket.taskId}`">
               {{ detailTicket.taskId }}
             </router-link>
             <span v-else>-</span>

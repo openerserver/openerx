@@ -4,16 +4,144 @@
 		{
 			"label": "start-opencode-runtime",
 			"type": "shell",
-			"command": "/Users/wanglei/.opencode/bin/opencode",
+			"command": "zsh",
 			"args": [
-				"serve",
-				"--hostname",
-				"127.0.0.1",
-				"--port",
-				"4096",
-				"--print-logs"
+				"-lc",
+				"pids=$(lsof -ti tcp:4096 -sTCP:LISTEN 2>/dev/null || true); if [[ -n \"$pids\" ]]; then kill $pids; sleep 1; fi; exec /Users/wanglei/.opencode/bin/opencode serve --hostname 127.0.0.1 --port 4096 --print-logs"
 			],
 			"isBackground": true,
+			"problemMatcher": {
+				"owner": "custom",
+				"pattern": {
+					"regexp": "^(.*)$",
+					"message": 1
+				},
+				"background": {
+					"activeOnStart": true,
+					"beginsPattern": ".",
+					"endsPattern": "opencode server listening on http://127\\.0\\.0\\.1:4096"
+				}
+			},
+			"group": "none"
+		},
+		{
+			"label": "start-web-ui-bff",
+			"type": "shell",
+			"command": "zsh",
+			"args": [
+				"-lc",
+				"pids=$(lsof -ti tcp:4098 -sTCP:LISTEN 2>/dev/null || true); if [[ -n \"$pids\" ]]; then kill $pids; sleep 1; fi; cd control-plane/web-ui-bff && exec bun run dev"
+			],
+			"isBackground": true,
+			"problemMatcher": {
+				"owner": "custom",
+				"pattern": {
+					"regexp": "^(.*)$",
+					"message": 1
+				},
+				"background": {
+					"activeOnStart": true,
+					"beginsPattern": ".",
+					"endsPattern": "Started development server: http://localhost:4098|OpenerX BFF running on http://localhost:4098"
+				}
+			},
+			"group": "none"
+		},
+		{
+			"label": "start-web-ui",
+			"type": "shell",
+			"command": "zsh",
+			"args": [
+				"-lc",
+				"pids=$(lsof -ti tcp:5173 -sTCP:LISTEN 2>/dev/null || true); if [[ -n \"$pids\" ]]; then kill $pids; fi; fallback=$(lsof -ti tcp:5174 -sTCP:LISTEN 2>/dev/null || true); if [[ -n \"$fallback\" ]]; then kill $fallback; fi; sleep 1; cd control-plane/web-ui && exec bun run dev --host 127.0.0.1 --port 5173"
+			],
+			"isBackground": true,
+			"problemMatcher": {
+				"owner": "custom",
+				"pattern": {
+					"regexp": "^(.*)$",
+					"message": 1
+				},
+				"background": {
+					"activeOnStart": true,
+					"beginsPattern": ".",
+					"endsPattern": "Local:\\s+http://127\\.0\\.0\\.1:5173/"
+				}
+			},
+			"group": "none"
+		},
+		{
+			"label": "stop-opencode-runtime",
+			"type": "shell",
+			"command": "zsh",
+			"args": [
+				"-lc",
+				"pids=$(lsof -ti tcp:4096 -sTCP:LISTEN 2>/dev/null || true); if [[ -n \"$pids\" ]]; then kill $pids; fi"
+			],
+			"isBackground": false,
+			"group": "none"
+		},
+		{
+			"label": "stop-web-ui-bff",
+			"type": "shell",
+			"command": "zsh",
+			"args": [
+				"-lc",
+				"pids=$(lsof -ti tcp:4098 -sTCP:LISTEN 2>/dev/null || true); if [[ -n \"$pids\" ]]; then kill $pids; fi"
+			],
+			"isBackground": false,
+			"group": "none"
+		},
+		{
+			"label": "stop-web-ui",
+			"type": "shell",
+			"command": "zsh",
+			"args": [
+				"-lc",
+				"pids=$(lsof -ti tcp:5173 -sTCP:LISTEN 2>/dev/null || true); if [[ -n \"$pids\" ]]; then kill $pids; fi; fallback=$(lsof -ti tcp:5174 -sTCP:LISTEN 2>/dev/null || true); if [[ -n \"$fallback\" ]]; then kill $fallback; fi"
+			],
+			"isBackground": false,
+			"group": "none"
+		},
+		{
+			"label": "restart-opencode-runtime",
+			"dependsOrder": "sequence",
+			"dependsOn": [
+				"stop-opencode-runtime",
+				"start-opencode-runtime"
+			],
+			"problemMatcher": [],
+			"group": "none"
+		},
+		{
+			"label": "restart-web-ui-bff",
+			"dependsOrder": "sequence",
+			"dependsOn": [
+				"stop-web-ui-bff",
+				"start-web-ui-bff"
+			],
+			"problemMatcher": [],
+			"group": "none"
+		},
+		{
+			"label": "restart-web-ui",
+			"dependsOrder": "sequence",
+			"dependsOn": [
+				"stop-web-ui",
+				"start-web-ui"
+			],
+			"problemMatcher": [],
+			"group": "none"
+		},
+		{
+			"label": "start-all-dev",
+			"dependsOrder": "parallel",
+			"dependsOn": [
+				"start-opencode-runtime",
+				"start-web-ui-bff",
+				"start-web-ui"
+			],
+			"problemMatcher": [],
 			"group": "none"
 		},
 		{

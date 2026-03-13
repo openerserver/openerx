@@ -19,7 +19,7 @@
           <a-list v-else :data-source="activeTasks" size="small">
             <template #renderItem="{ item }">
               <a-list-item>
-                <router-link :to="`/tasks/${item.taskId}`">
+                <router-link :to="`/workbench?task=${item.taskId}`">
                   <a-space>
                     <a-typography-text code>{{
                       item.taskId.slice(0, 8)

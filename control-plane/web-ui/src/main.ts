@@ -2,6 +2,7 @@ import { createPinia } from "pinia";
 import piniaPluginPersistedstate from "pinia-plugin-persistedstate";
 import { createApp } from "vue";
 import "ant-design-vue/dist/reset.css";
+import "highlight.js/styles/github.css";
 
 import App from "./App.vue";
 import router from "./router";

@@ -3,6 +3,7 @@
 export type RealtimeEventType =
   | "session.created"
   | "session.updated"
+  | "session.activated"
   | "session.idle"
   | "session.error"
   | "message.updated"
@@ -15,8 +16,10 @@ export type RealtimeEventType =
   | "agent.failed"
   | "agent.auth-error"
   | "task.created"
+  | "task.forked"
   | "task.continued"
   | "task.node.updated"
+  | "pipeline.stage.updated"
   | "task.completed"
   | "task.hooks.updated"
   | "approval.required"

@@ -1,14 +1,38 @@
 <template>
   <a-layout style="min-height: 100vh">
-    <a-layout-sider :width="240" theme="dark" :style="siderStyle">
+    <a-layout-sider
+      v-if="!embeddedMode"
+      v-model:collapsed="siderCollapsed"
+      :width="240"
+      :collapsed-width="80"
+      :trigger="null"
+      theme="dark"
+      :style="siderStyle"
+    >
       <div :style="logoStyle">
-        <h1 style="color: #3b82f6; font-size: 20px; margin: 0">OpenerX</h1>
-        <p style="color: #64748b; font-size: 12px; margin: 4px 0 0">
-          Enterprise AI Dev/Ops
-        </p>
+        <a-flex justify="space-between" align="center" :style="layoutThemeStyles.logoHeader">
+          <div v-if="!siderCollapsed">
+            <h1 :style="layoutThemeStyles.logoTitle">OpenerX</h1>
+            <p :style="layoutThemeStyles.logoSubtitle">
+              Enterprise AI Dev/Ops
+            </p>
+          </div>
+          <div v-else :style="layoutThemeStyles.logoCompactBadge">OX</div>
+          <a-button
+            type="text"
+            size="small"
+            :style="layoutThemeStyles.siderToggle"
+            @click="toggleSider"
+          >
+            <template #icon>
+              <MenuFoldOutlined v-if="!siderCollapsed" />
+              <MenuUnfoldOutlined v-else />
+            </template>
+          </a-button>
+        </a-flex>
       </div>
 
-      <ProjectSwitcher />
+      <ProjectSwitcher v-if="!siderCollapsed" />
 
       <a-menu
         :selectedKeys="selectedKeys"
@@ -19,23 +43,40 @@
       />
 
       <div :style="footerStyle">
-        <a-flex justify="space-between" align="center" style="margin-bottom: 8px">
-          <span style="color: #94a3b8; font-size: 13px">{{
-            authStore.user?.displayName
-          }}</span>
+        <a-flex justify="space-between" align="center" :style="layoutThemeStyles.footerStatusRow">
+          <span v-if="!siderCollapsed" :style="layoutThemeStyles.footerUser">{{ authStore.user?.displayName }}</span>
           <a-badge
             :status="realtimeStore.connected ? 'success' : 'error'"
-            :text="realtimeStore.connected ? '已连接' : '未连接'"
+            :text="siderCollapsed ? undefined : realtimeStore.connected ? '已连接' : '未连接'"
             style="font-size: 12px"
           />
         </a-flex>
-        <a-button type="text" size="small" block @click="handleLogout">
+        <a-tooltip v-if="siderCollapsed" title="退出登录" placement="right">
+          <a-button
+            type="text"
+            size="small"
+            :style="layoutThemeStyles.footerActionCollapsed"
+            @click="handleLogout"
+          >
+            <template #icon>
+              <PoweroffOutlined />
+            </template>
+          </a-button>
+        </a-tooltip>
+        <a-button
+          v-else
+          type="text"
+          size="small"
+          block
+          :style="layoutThemeStyles.footerAction"
+          @click="handleLogout"
+        >
           退出登录
         </a-button>
       </div>
     </a-layout-sider>
 
-    <a-layout-content style="overflow: auto">
+    <a-layout-content :style="layoutThemeStyles.content">
       <router-view />
     </a-layout-content>
 
@@ -63,7 +104,7 @@
         </a-form-item>
         <a-form-item label="新密码" required>
           <a-input-password :value="passwordForm.newPassword" autocomplete="new-password" @update:value="passwordForm.newPassword = String($event ?? '')" />
-          <div style="color: #888; font-size: 12px; margin-top: 4px">{{ PASSWORD_POLICY_HINT }}</div>
+          <div :style="layoutThemeStyles.passwordHint">{{ PASSWORD_POLICY_HINT }}</div>
         </a-form-item>
         <a-form-item label="确认新密码" required>
           <a-input-password :value="passwordForm.confirmPassword" autocomplete="new-password" @update:value="passwordForm.confirmPassword = String($event ?? '')" />
@@ -77,25 +118,41 @@
 import {
   AuditOutlined,
   DashboardOutlined,
+  MenuFoldOutlined,
+  MenuUnfoldOutlined,
   ProjectOutlined,
   RobotOutlined,
   SettingOutlined,
   TeamOutlined,
   UnorderedListOutlined,
+  AppstoreOutlined,
+  PoweroffOutlined,
 } from "@ant-design/icons-vue";
 import { message } from "ant-design-vue";
-import { type CSSProperties, computed, h, reactive, ref, watch } from "vue";
+import { computed, h, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import ProjectSwitcher from "../components/ProjectSwitcher.vue";
 import { getMyProfile, updateMyProfile } from "../lib/api";
 import { PASSWORD_POLICY_HINT, validatePasswordPolicy } from "../lib/password-policy";
 import { useAuthStore } from "../stores/auth";
 import { useRealtimeStore } from "../stores/realtime";
+import { layoutThemeStyles } from "../theme/ui-theme";
 
 const router = useRouter();
 const route = useRoute();
 const authStore = useAuthStore();
 const realtimeStore = useRealtimeStore();
+const embeddedMode = computed(() => route.query.embedded === "1");
+const SIDEBAR_COLLAPSED_KEY = "openerx-sidebar-collapsed";
+const siderCollapsed = ref(
+  typeof window !== "undefined" ? window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1" : false,
+);
+
+watch(siderCollapsed, (collapsed) => {
+  if (typeof window !== "undefined") {
+    window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? "1" : "0");
+  }
+});
 
 // Connect WebSocket when layout mounts
 watch(
@@ -123,6 +180,7 @@ const menuItems = computed(() => {
   const items = [
     { key: "/", icon: () => h(DashboardOutlined), label: "Dashboard" },
     { key: "/tasks", icon: () => h(UnorderedListOutlined), label: "任务" },
+    { key: "/workbench", icon: () => h(AppstoreOutlined), label: "任务工作台" },
     { key: "/projects", icon: () => h(ProjectOutlined), label: "项目" },
     { key: "/agents", icon: () => h(RobotOutlined), label: "Agent 控制台" },
     { key: "/approvals", icon: () => h(AuditOutlined), label: "审批" },
@@ -139,6 +197,7 @@ const menuItems = computed(() => {
 const selectedKeys = computed(() => {
   const path = route.path;
   if (path === "/" || path === "") return ["/"];
+  if (path.startsWith("/workbench")) return ["/workbench"];
   if (path.startsWith("/tasks")) return ["/tasks"];
   if (path.startsWith("/projects")) return ["/projects"];
   if (path.startsWith("/agents")) return ["/agents"];
@@ -156,6 +215,10 @@ function handleLogout() {
   realtimeStore.disconnect();
   authStore.logout();
   router.push("/login");
+}
+
+function toggleSider() {
+  siderCollapsed.value = !siderCollapsed.value;
 }
 
 const passwordModalOpen = computed(() => !!authStore.user?.mustChangePassword);
@@ -195,21 +258,9 @@ async function handleForcePasswordChange() {
   }
 }
 
-const siderStyle: CSSProperties = {
-  background: "#0f172a",
-  borderRight: "1px solid #1e293b",
-  display: "flex",
-  flexDirection: "column",
-};
+const siderStyle = layoutThemeStyles.sider;
 
-const logoStyle: CSSProperties = {
-  padding: "16px 24px",
-  borderBottom: "1px solid #1e293b",
-};
+const logoStyle = layoutThemeStyles.logoWrap;
 
-const footerStyle: CSSProperties = {
-  padding: "12px 16px",
-  borderTop: "1px solid #1e293b",
-  marginTop: "auto",
-};
+const footerStyle = layoutThemeStyles.footer;
 </script>

@@ -8,6 +8,7 @@ const apiMocks = vi.hoisted(() => ({
   getMyProfile: vi.fn(),
   updateMyProfile: vi.fn(),
   getModelsConfig: vi.fn(),
+  testModelProvider: vi.fn(),
   getConfigOverview: vi.fn(),
   getCopilotStatus: vi.fn(),
   getCopilotModels: vi.fn(),
@@ -281,5 +282,279 @@ describe("Settings – orchestration hooks UI", () => {
     expect(wrapper.text()).toContain("执行前 Hook");
     expect(wrapper.text()).not.toContain("启用任务开始前评估");
     expect(wrapper.text()).not.toContain("启用任务完成后评估");
+  });
+});
+
+describe("Settings – models loading state", () => {
+  it("does not render empty provider/model states before model data loads", async () => {
+    apiMocks.getConfigOverview.mockReturnValueOnce(new Promise(() => {}));
+    apiMocks.getModelsConfig.mockReturnValueOnce(new Promise(() => {}));
+
+    const { wrapper } = await mountSettings({ role: "platform_admin" });
+
+    expect(wrapper.text()).toContain("GitHub Copilot 账号");
+    expect(wrapper.text()).not.toContain("还没有 Provider");
+    expect(wrapper.text()).not.toContain("还没有模型");
+  });
+});
+
+describe("Settings – strategy/policy loading state", () => {
+  it("does not render default strategy content before strategy data loads", async () => {
+    apiMocks.getOrchestrationStrategy.mockReturnValueOnce(new Promise(() => {}));
+
+    const { wrapper } = await mountSettings({ role: "platform_admin" });
+
+    const strategyTab = wrapper
+      .findAll(".ant-tabs-tab")
+      .find((tab) => tab.text().includes("编排策略"));
+    expect(strategyTab).toBeTruthy();
+    await strategyTab?.trigger("click");
+    await flushPromises();
+
+    expect(wrapper.text()).not.toContain("意图分类 → Agent 映射");
+    expect(wrapper.text()).not.toContain("暂无模板，请添加");
+    expect(wrapper.text()).not.toContain("启用裁判");
+  });
+
+  it("does not render default policy content before policy data loads", async () => {
+    apiMocks.getOrchestrationStrategy.mockResolvedValueOnce({
+      data: {
+        categoryAgentMap: {},
+        categoryModelMap: {},
+        enablePipeline: true,
+        hooks: [],
+        templates: [],
+        judge: {
+          enabled: false,
+          agent: "judge",
+          model: "",
+          promptTemplate: "",
+          timeoutMs: 30000,
+          selectionStrategy: "judge-pick",
+        },
+      },
+    });
+    apiMocks.getContinuationPolicy.mockReturnValueOnce(new Promise(() => {}));
+
+    const { wrapper } = await mountSettings({ role: "platform_admin" });
+
+    const policyTab = wrapper
+      .findAll(".ant-tabs-tab")
+      .find((tab) => tab.text().includes("恢复策略"));
+    expect(policyTab).toBeTruthy();
+    await policyTab?.trigger("click");
+    await flushPromises();
+
+    expect(wrapper.text()).not.toContain("失败恢复与续跑策略");
+    expect(wrapper.text()).not.toContain("最大重试次数");
+    expect(wrapper.text()).not.toContain("重试前需人工审批");
+  });
+});
+
+describe("Settings – strategy agent/model selectors", () => {
+  it("renders strategy agent/model fields as selectors instead of plain text inputs", async () => {
+    apiMocks.getConfigOverview.mockResolvedValueOnce({
+      data: {
+        agents: [{ name: "planner" }, { name: "reviewer" }],
+        skills: [],
+        models: {
+          defaults: {},
+          list: [
+            {
+              id: "gpt-4.1",
+              provider: "github-copilot",
+              name: "GPT 4.1",
+            },
+          ],
+        },
+        mcp: {},
+        plugins: [],
+      },
+    });
+    apiMocks.getOrchestrationStrategy.mockResolvedValueOnce({
+      data: {
+        categoryAgentMap: { quick: ["planner"] },
+        categoryModelMap: { quick: "github-copilot/gpt-4.1" },
+        enablePipeline: true,
+        hooks: [
+          {
+            id: "pre-execution-1",
+            trigger: "pre-execution",
+            enabled: true,
+            agent: "reviewer",
+            model: "github-copilot/gpt-4.1",
+            promptTemplate: "Review {{taskPrompt}}",
+            timeoutMs: 15000,
+            order: 0,
+          },
+        ],
+        templates: [
+          {
+            id: "default-parallel",
+            name: "并行模板",
+            mode: "parallel",
+            agents: ["planner", "reviewer"],
+            enabled: true,
+            categoryDefaults: ["quick"],
+            maxParallelCandidates: 2,
+          },
+        ],
+        judge: {
+          enabled: true,
+          agent: "reviewer",
+          model: "github-copilot/gpt-4.1",
+          promptTemplate: "judge",
+          timeoutMs: 30000,
+          selectionStrategy: "judge-pick",
+        },
+      },
+    });
+    apiMocks.getContinuationPolicy.mockResolvedValueOnce({
+      data: {
+        autoRetryOnFailure: false,
+        maxRetries: 2,
+        retryableErrors: [],
+        requireApprovalOnRetry: false,
+        fallbackModel: "",
+        enableFallback: false,
+      },
+    });
+
+    const { wrapper } = await mountSettings({ role: "platform_admin" });
+
+    const strategyTab = wrapper
+      .findAll(".ant-tabs-tab")
+      .find((tab) => tab.text().includes("编排策略"));
+    expect(strategyTab).toBeTruthy();
+    await strategyTab?.trigger("click");
+    await flushPromises();
+
+    expect(wrapper.findAll('input[placeholder="使用默认模型"]').length).toBe(0);
+    expect(wrapper.findAll('input[placeholder="prometheus-enterprise"]').length).toBe(0);
+    expect(wrapper.findAll('input[placeholder="留空使用系统默认"]').length).toBe(0);
+    expect(wrapper.findAll('.ant-select').length).toBeGreaterThan(6);
+  });
+
+  it("shows inline help for parallel max count and category defaults", async () => {
+    apiMocks.getOrchestrationStrategy.mockResolvedValueOnce({
+      data: {
+        categoryAgentMap: {},
+        categoryModelMap: {},
+        enablePipeline: true,
+        hooks: [],
+        templates: [
+          {
+            id: "parallel-template",
+            name: "并行模板",
+            mode: "parallel",
+            agents: ["planner", "reviewer"],
+            enabled: true,
+            categoryDefaults: ["quick"],
+            maxParallelCandidates: 3,
+          },
+        ],
+        judge: {
+          enabled: false,
+          agent: "judge",
+          model: "",
+          promptTemplate: "",
+          timeoutMs: 30000,
+          selectionStrategy: "judge-pick",
+        },
+      },
+    });
+    apiMocks.getContinuationPolicy.mockResolvedValueOnce({
+      data: {
+        autoRetryOnFailure: false,
+        maxRetries: 2,
+        retryableErrors: [],
+        requireApprovalOnRetry: false,
+        fallbackModel: "",
+        enableFallback: false,
+      },
+    });
+
+    const { wrapper } = await mountSettings({ role: "platform_admin" });
+
+    const strategyTab = wrapper
+      .findAll(".ant-tabs-tab")
+      .find((tab) => tab.text().includes("编排策略"));
+    expect(strategyTab).toBeTruthy();
+    await strategyTab?.trigger("click");
+    await flushPromises();
+
+    const templatePanel = wrapper
+      .findAll('.ant-collapse-header')
+      .find((panel) => panel.text().includes("并行模板"));
+    expect(templatePanel).toBeTruthy();
+    await templatePanel?.trigger("click");
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("这是并行 candidate 的上限，不是必须执行数");
+    expect(wrapper.text()).toContain("意图分类来自系统在创建任务时对用户 Prompt 的自动判定");
+  });
+});
+
+describe("Settings – strategy operational linkages", () => {
+  it("shows default agent names in category mapping placeholders", async () => {
+    apiMocks.getOrchestrationStrategy.mockResolvedValueOnce({
+      data: {
+        categoryAgentMap: {},
+        categoryModelMap: {},
+        enablePipeline: true,
+        hooks: [],
+        templates: [],
+        judge: { enabled: false, agent: "", model: "", promptTemplate: "", timeoutMs: 30000, selectionStrategy: "judge-pick" },
+      },
+    });
+    apiMocks.getContinuationPolicy.mockResolvedValueOnce({
+      data: { autoRetryOnFailure: false, maxRetries: 2, retryableErrors: [], requireApprovalOnRetry: false, fallbackModel: "", enableFallback: false },
+    });
+
+    const { wrapper } = await mountSettings({ role: "platform_admin" });
+
+    const strategyTab = wrapper.findAll(".ant-tabs-tab").find((tab) => tab.text().includes("编排策略"));
+    await strategyTab?.trigger("click");
+    await flushPromises();
+
+    const html = wrapper.html();
+    // Agent select placeholders show per-category defaults
+    expect(html).toContain("留空则使用默认: oracle-enterprise, hephaestus-enterprise");
+    expect(html).toContain("留空则使用默认: explore-enterprise");
+  });
+
+  it("shows judge disabled warning when no parallel template exists", async () => {
+    apiMocks.getOrchestrationStrategy.mockResolvedValueOnce({
+      data: {
+        categoryAgentMap: {},
+        categoryModelMap: {},
+        enablePipeline: true,
+        hooks: [],
+        templates: [
+          { id: "s1", name: "单一模板", mode: "single", agents: [], enabled: true },
+        ],
+        judge: { enabled: false, agent: "", model: "", promptTemplate: "", timeoutMs: 30000, selectionStrategy: "judge-pick" },
+      },
+    });
+    apiMocks.getContinuationPolicy.mockResolvedValueOnce({
+      data: { autoRetryOnFailure: false, maxRetries: 2, retryableErrors: [], requireApprovalOnRetry: false, fallbackModel: "", enableFallback: false },
+    });
+
+    const { wrapper } = await mountSettings({ role: "platform_admin" });
+
+    const strategyTab = wrapper.findAll(".ant-tabs-tab").find((tab) => tab.text().includes("编排策略"));
+    await strategyTab?.trigger("click");
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("当前没有启用的并行竞争模板");
+    const judgeSwitch = wrapper.findAll('.ant-switch').find((_sw, _i, arr) => {
+      // The judge switch is the one inside the judge card
+      return arr.length > 0;
+    });
+    // Judge switch should be disabled
+    const judgeCard = wrapper.findAll('.ant-card').find((c) => c.text().includes("裁判配置"));
+    expect(judgeCard).toBeTruthy();
+    const switchEl = judgeCard?.find('.ant-switch');
+    expect(switchEl?.classes()).toContain("ant-switch-disabled");
   });
 });

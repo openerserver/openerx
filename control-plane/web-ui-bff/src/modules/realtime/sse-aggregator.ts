@@ -19,6 +19,7 @@ import {
 import { collectChangesFromSession } from "../code-changes/change-collector";
 import { executeLifecycleHooks } from "../hooks/lifecycle-hooks";
 import { observeGraphWorkspaceDir, onGraphToolExecuted } from "./dag-sync";
+import { buildPipelineStageUpdatedEvents } from "./pipeline-events";
 
 // Subscribes to OpenCode Runtime SSE events and transforms them into
 // standard RealtimeEvent format for WebSocket broadcast.
@@ -39,6 +40,7 @@ interface CompletedTaskContext {
   title: string;
   prompt: string;
   projectId: string;
+  sessionId?: string | null;
   repoName?: string | null;
   remoteUrl?: string | null;
   workingBranch?: string | null;
@@ -97,6 +99,20 @@ class SSEAggregator {
     Map<number, { sessionId: string; result?: string }>
   >();
   private judgingTasks = new Set<string>();
+
+  private async emitPipelineStageUpdates(args: {
+    taskId: string;
+    sessionId?: string;
+    projectId?: string;
+    agentRunId?: string;
+    authorization: string;
+    reason: "task.continued" | "task.completed" | "task.failed" | "task.hooks.updated" | "task.node.updated" | "agent.completed";
+  }): Promise<void> {
+    const events = await buildPipelineStageUpdatedEvents(args);
+    for (const event of events) {
+      this.emit(event);
+    }
+  }
 
   /** Register parallel candidates for aggregated tracking. */
   registerParallelTask(taskId: string, candidates: ExecutionCandidate[]): void {
@@ -192,6 +208,14 @@ class SSEAggregator {
         agent: firstHook.agent,
         sessionId: firstHook.sessionId,
       },
+    });
+
+    await this.emitPipelineStageUpdates({
+      taskId: task.id,
+      sessionId: task.sessionId ?? undefined,
+      projectId: task.projectId,
+      authorization,
+      reason: "task.hooks.updated",
     });
   }
 
@@ -294,43 +318,54 @@ class SSEAggregator {
     setTimeout(() => this.startSSE(key, conn), delay);
   }
 
-  private handleSSEEvent(type: string, data: string): void {
+  private async handleSSEEvent(type: string, data: string): Promise<void> {
     try {
       const parsed = JSON.parse(data);
-      const workspaceDirectory =
-        typeof parsed === "object" && parsed && "directory" in parsed
-          ? String(parsed.directory || "")
-          : "";
-      observeGraphWorkspaceDir(workspaceDirectory);
-      const payload =
-        typeof parsed === "object" && parsed && "payload" in parsed
-          ? (parsed.payload as Record<string, unknown>)
-          : null;
-
-      const event = payload
-        ? this.transformEvent(String(payload.type || type), {
-            ...(typeof parsed === "object" && parsed ? parsed : {}),
-            ...(typeof payload.properties === "object" && payload.properties
-              ? payload.properties
-              : {}),
-            rawType: payload.type,
-          })
-        : this.transformEvent(type, parsed as Record<string, unknown>);
-
-      if (event) {
-        this.emit(event);
-        if (event.type === "session.error") {
-          this.maybeEmitAuthError(event);
-          void this.maybeFinalizeFailure(event);
-        }
-        void this.maybeFinalizeRun(event);
+      if (!parsed || typeof parsed !== "object") {
+        return;
       }
-
-      // Trigger DAG sync for task_graph_* tool calls
-      this.maybeSyncDag(type, payload, parsed as Record<string, unknown>, workspaceDirectory);
+      await this.processParsedEvent(type, parsed as Record<string, unknown>);
     } catch {
       // Malformed event, skip
     }
+  }
+
+  async ingestParsedEvent(type: string, parsed: Record<string, unknown>): Promise<void> {
+    await this.processParsedEvent(type, parsed);
+  }
+
+  private async processParsedEvent(
+    type: string,
+    parsed: Record<string, unknown>,
+  ): Promise<void> {
+    const workspaceDirectory =
+      typeof parsed.directory === "string" ? String(parsed.directory || "") : "";
+    observeGraphWorkspaceDir(workspaceDirectory);
+    const payload =
+      typeof parsed.payload === "object" && parsed.payload
+        ? (parsed.payload as Record<string, unknown>)
+        : null;
+
+    const event = payload
+      ? this.transformEvent(String(payload.type || type), {
+          ...parsed,
+          ...(typeof payload.properties === "object" && payload.properties
+            ? payload.properties
+            : {}),
+          rawType: payload.type,
+        })
+      : this.transformEvent(type, parsed);
+
+    if (event) {
+      this.emit(event);
+      if (event.type === "session.error") {
+        this.maybeEmitAuthError(event);
+        void this.maybeFinalizeFailure(event);
+      }
+      void this.maybeFinalizeRun(event);
+    }
+
+    await this.maybeSyncDag(type, payload, parsed, workspaceDirectory);
   }
 
   /**
@@ -529,6 +564,15 @@ class SSEAggregator {
           },
         });
 
+        await this.emitPipelineStageUpdates({
+          taskId: event.taskId,
+          sessionId: event.sessionId,
+          projectId: event.projectId,
+          agentRunId: event.agentRunId,
+          authorization,
+          reason: "agent.completed",
+        });
+
         // Collect changes for this candidate
         collectChangesFromSession({
           taskId: event.taskId,
@@ -601,6 +645,15 @@ class SSEAggregator {
           sourceEvent: event.type,
           ...(resultText ? { result: resultText } : {}),
         },
+      });
+
+      await this.emitPipelineStageUpdates({
+        taskId: event.taskId,
+        sessionId: event.sessionId,
+        projectId: event.projectId,
+        agentRunId: event.agentRunId,
+        authorization,
+        reason: "task.completed",
       });
 
       // Collect code changes first, then run any configured post-execution hooks.
@@ -725,6 +778,15 @@ class SSEAggregator {
         projectId: event.projectId,
         agentRunId: run.agentRunId,
         data: { status: "failed", error: errorMessage, sourceEvent: event.type },
+      });
+
+      await this.emitPipelineStageUpdates({
+        taskId: event.taskId,
+        sessionId: event.sessionId,
+        projectId: event.projectId,
+        agentRunId: run.agentRunId,
+        authorization,
+        reason: "task.failed",
       });
 
       void this.triggerOnFailureHooks(event.taskId, errorMessage, authorization);
@@ -882,12 +944,12 @@ class SSEAggregator {
     return undefined;
   }
 
-  private maybeSyncDag(
+  private async maybeSyncDag(
     type: string,
     payload: Record<string, unknown> | null,
     parsed: Record<string, unknown>,
     workspaceDirectory?: string,
-  ): void {
+  ): Promise<void> {
     const eventType = payload ? String(payload.type || type) : type;
     if (eventType !== "tool.execute.after") return;
 
@@ -900,7 +962,31 @@ class SSEAggregator {
 
     const toolResult = String(props.result || props.output || "{}");
     const sessionId = this.extractSessionId(eventType, payload ?? parsed);
-    void onGraphToolExecuted(toolName, toolResult, workspaceDirectory, sessionId);
+    await onGraphToolExecuted(toolName, toolResult, workspaceDirectory, sessionId);
+    if (!sessionId) return;
+
+    const run = findAgentRunBySessionId(sessionId);
+    if (!run?.taskId) return;
+
+    const authorization = await createInternalAuthorization();
+    this.emit({
+      id: crypto.randomUUID(),
+      type: "task.node.updated",
+      ts: new Date().toISOString(),
+      sessionId,
+      taskId: run.taskId,
+      projectId: run.projectId,
+      agentRunId: run.agentRunId,
+      data: { toolName },
+    });
+    await this.emitPipelineStageUpdates({
+      taskId: run.taskId,
+      sessionId,
+      projectId: run.projectId,
+      agentRunId: run.agentRunId,
+      authorization,
+      reason: "task.node.updated",
+    });
   }
 
   onEvent(handler: EventHandler): () => void {
@@ -1023,6 +1109,13 @@ class SSEAggregator {
           hasJudge: !!judgeResult,
           ...(winnerResult ? { result: winnerResult } : {}),
         },
+      });
+
+      await this.emitPipelineStageUpdates({
+        taskId,
+        projectId,
+        authorization,
+        reason: "task.completed",
       });
 
       // Run post-execution hooks after parallel completion

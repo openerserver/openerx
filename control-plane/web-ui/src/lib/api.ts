@@ -1,6 +1,38 @@
 import { useAuthStore } from "../stores/auth";
+import { normalizeRecoverySuggestions, type RecoverySuggestion } from "./recovery-suggestions";
 
 const BASE_URL = "/api";
+
+export interface ApiErrorPayload {
+  error: string;
+  code?: string;
+  status?: number;
+  diagnostics?: Record<string, unknown>;
+  recoverySuggestions?: Array<RecoverySuggestion | string>;
+}
+
+export class ApiError extends Error {
+  status: number;
+  code?: string;
+  diagnostics?: Record<string, unknown>;
+  recoverySuggestions: RecoverySuggestion[];
+
+  constructor(payload: ApiErrorPayload) {
+    super(payload.error || `HTTP ${payload.status || 500}`);
+    this.name = "ApiError";
+    this.status = payload.status || 500;
+    this.code = payload.code;
+    this.diagnostics = payload.diagnostics;
+    this.recoverySuggestions = normalizeRecoverySuggestions(payload.recoverySuggestions);
+  }
+}
+
+export function toApiError(error: unknown): ApiError | null {
+  if (error instanceof ApiError) {
+    return error;
+  }
+  return null;
+}
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const authStore = useAuthStore();
@@ -21,8 +53,12 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   }
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: "Request failed" }));
-    throw new Error(error.error || `HTTP ${response.status}`);
+    const error = (await response.json().catch(() => ({ error: "Request failed" }))) as ApiErrorPayload;
+    throw new ApiError({
+      ...error,
+      status: response.status,
+      error: error.error || `HTTP ${response.status}`,
+    });
   }
 
   return response.json();
@@ -387,6 +423,13 @@ export async function getTask(taskId: string) {
   return request<Task>(`/tasks/${taskId}`);
 }
 
+export async function updateTask(taskId: string, data: { selectedModel?: string | null }) {
+  return request<Partial<Task>>(`/tasks/${taskId}`, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  });
+}
+
 export async function createTask(data: {
   title: string;
   prompt: string;
@@ -443,19 +486,58 @@ export async function getTaskGraph(taskId: string) {
   return request<TaskGraphData>(`/tasks/${taskId}/graph`);
 }
 
-// ── Planning Pipeline ──────────────────────────────────────────────
+// ── Runtime Pipeline ───────────────────────────────────────────────
 
-export interface PipelineStage {
-  agent: string;
+export type RuntimePipelineStatus = "idle" | "running" | "completed" | "failed" | "paused";
+export type RuntimePipelineStageStatus = "pending" | "running" | "completed" | "failed" | "skipped";
+
+export interface RuntimePipelineStage {
+  id: string;
+  type: "hook" | "planning" | "execution" | "judge" | "post-hook" | "graph-node";
   label: string;
-  status: "pending" | "running" | "completed";
-  messageCount: number;
+  status: RuntimePipelineStageStatus;
+  order: number;
+  sourceType: "executionPlan.step" | "strategy.hookExecution" | "taskGraph.node" | "session.message";
+  sourceId: string | null;
+  agent: string | null;
+  model: string | null;
+  sessionId: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  durationMs: number | null;
   output: string | null;
+  error: string | null;
   tokens: { input: number; output: number } | null;
+  graphNodeId: string | null;
+  dependsOn: string[];
+  messageCount?: number;
 }
 
-export async function getTaskPipeline(taskId: string) {
-  return request<{ stages: PipelineStage[] }>(`/tasks/${taskId}/pipeline`);
+export interface PipelineSummary {
+  totalStages: number;
+  completedStages: number;
+  failedStages: number;
+  currentStageId: string | null;
+  totalTokens: { input: number; output: number };
+  totalDurationMs: number;
+  replanCount: number;
+}
+
+export interface RuntimePipeline {
+  taskId: string;
+  sessionId: string | null;
+  branchName: string | null;
+  status: RuntimePipelineStatus;
+  createdAt: string | null;
+  updatedAt: string;
+  stages: RuntimePipelineStage[];
+  summary: PipelineSummary;
+}
+
+export async function getTaskPipeline(taskId: string, sessionId?: string) {
+  const params = new URLSearchParams();
+  if (sessionId) params.set("sessionId", sessionId);
+  return request<RuntimePipeline>(`/tasks/${taskId}/pipeline${params.toString() ? `?${params.toString()}` : ""}`);
 }
 
 // ── Session History ────────────────────────────────────────────────
@@ -482,6 +564,54 @@ export async function continueTask(taskId: string, prompt: string, sessionId?: s
     method: "POST",
     body: JSON.stringify({ prompt, sessionId }),
   });
+}
+
+export async function forkTaskSession(taskId: string, sessionId: string, title?: string, messageId?: string) {
+  return request<{ ok: boolean; sessionId: string; title?: string; parentSessionId?: string; forkedFromMessageId?: string }>(
+    `/tasks/${taskId}/sessions/${sessionId}/fork`,
+    {
+      method: "POST",
+      body: JSON.stringify({ title, messageId }),
+    },
+  );
+}
+
+// ── Session Tree (Branch Lineage) ──────────────────────────────────
+
+export interface SessionTreeNode {
+  id: string;
+  runtimeSessionId: string;
+  parentRuntimeSessionId: string | null;
+  forkedFromMessageId: string | null;
+  forkedFromMessageRole: string | null;
+  forkedFromMessagePreview: string | null;
+  firstPromptAfterFork: string | null;
+  branchName: string | null;
+  sourceType: string;
+  isActive: boolean;
+  title: string | null;
+  summary: { additions: number; deletions: number; files: number } | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+  children: SessionTreeNode[];
+}
+
+export async function getSessionTree(taskId: string) {
+  return request<{ data: SessionTreeNode[] }>(`/tasks/${taskId}/session-tree`);
+}
+
+export async function activateSession(taskId: string, sessionId: string) {
+  return request<{ ok: boolean; sessionId: string }>(
+    `/tasks/${taskId}/sessions/${sessionId}/activate`,
+    { method: "POST" },
+  );
+}
+
+export async function archiveTaskSession(taskId: string, sessionId: string) {
+  return request<{ ok: boolean }>(
+    `/tasks/${taskId}/sessions/${sessionId}/archive`,
+    { method: "POST" },
+  );
 }
 
 // ── Plugin Lifecycle ───────────────────────────────────────────────
@@ -514,6 +644,26 @@ export interface PluginCompatResult {
   path: string;
   compatible: boolean;
   errors: string[];
+}
+
+// ── Workbench Layout ───────────────────────────────────────────────
+
+export interface WorkbenchLayoutPayload {
+  tabs: Array<{ taskId: string; title?: string; status?: string; pinned?: boolean }>;
+  activeTaskId: string;
+  secondaryPane: { taskId: string; sessionId?: string; label?: string } | null;
+  splitMode: boolean;
+}
+
+export async function getWorkbenchLayout() {
+  return request<{ data: WorkbenchLayoutPayload }>("/workbench/layout");
+}
+
+export async function saveWorkbenchLayout(layout: WorkbenchLayoutPayload) {
+  return request<{ ok: boolean }>("/workbench/layout", {
+    method: "PUT",
+    body: JSON.stringify(layout),
+  });
 }
 
 export async function listProjects(orgId?: string) {
@@ -1020,6 +1170,13 @@ export interface CopilotModelInfo {
   maxTokens: number | null;
 }
 
+export interface DiscoveredProviderModel {
+  id: string;
+  name: string;
+  contextWindow: number | null;
+  maxTokens: number | null;
+}
+
 export interface PluginInfo {
   path: string;
   name: string;
@@ -1102,6 +1259,23 @@ export async function updateModelsConfig(data: ModelsConfig) {
     method: "PUT",
     body: JSON.stringify(data),
   });
+}
+export async function testModelProvider(data: { key?: string; provider: Record<string, unknown> }) {
+  return request<{
+    data: {
+      ok: boolean;
+      message: string;
+      status?: number;
+      modelCount?: number;
+      models?: DiscoveredProviderModel[];
+    };
+  }>(
+    "/config/models/providers/test",
+    {
+      method: "POST",
+      body: JSON.stringify(data),
+    },
+  );
 }
 
 // MCP

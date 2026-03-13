@@ -1,8 +1,18 @@
 import { Database } from "bun:sqlite";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import { migrate } from "drizzle-orm/bun-sqlite/migrator";
+import { dirname, isAbsolute, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { ensureRuntimeTables } from "./runtime-schema";
 
-const DATABASE_URL = process.env.DATABASE_URL || "./data/openerx.db";
+const DB_DIR = dirname(fileURLToPath(import.meta.url));
+const SERVICE_ROOT = resolve(DB_DIR, "../..");
+const DATABASE_URL = process.env.DATABASE_URL
+	? isAbsolute(process.env.DATABASE_URL)
+		? process.env.DATABASE_URL
+		: resolve(SERVICE_ROOT, process.env.DATABASE_URL)
+	: resolve(SERVICE_ROOT, "data/openerx.db");
+const MIGRATIONS_FOLDER = resolve(SERVICE_ROOT, "drizzle");
 
 const sqlite = new Database(DATABASE_URL, { create: true });
 sqlite.exec("PRAGMA journal_mode = WAL");
@@ -10,8 +20,16 @@ sqlite.exec("PRAGMA foreign_keys = ON");
 
 const db = drizzle(sqlite);
 
-console.log("Running migrations...");
-migrate(db, { migrationsFolder: "./drizzle" });
-console.log("Migrations applied successfully!");
+console.log(`Running migrations against ${DATABASE_URL}...`);
+try {
+	migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
+	console.log("Migrations applied successfully!");
+} catch (error) {
+	console.warn("Migrations encountered an existing-schema conflict; ensuring runtime tables instead.");
+	console.warn(error instanceof Error ? error.message : String(error));
+}
+
+ensureRuntimeTables(sqlite);
+console.log("Runtime compatibility tables ensured.");
 
 sqlite.close();

@@ -294,6 +294,16 @@ async function runCompletionSyncScenario(options: {
       120000,
     );
     await waitForEvent(events, "task.completed", (event) => event.taskId === task.id, 120000);
+    await waitForEvent(
+      events,
+      "pipeline.stage.updated",
+      (event) =>
+        event.taskId === task.id
+        && typeof event.data === "object"
+        && event.data
+        && (event.data as Record<string, unknown>).reason === "task.completed",
+      120000,
+    );
 
     const { agentStatus, taskStatus } = await waitForCompletedStatus(token, task.id, agentRunId);
 
@@ -335,6 +345,125 @@ async function runCompletionSyncScenario(options: {
     await deleteTask(task.id);
   }
 }
+
+executionIntegrationTest("task graph injection pushes task.node.updated over websocket", async () => {
+  const health = await request<{ status: string }>("/health");
+  expect(health.status).toBe("ok");
+
+  const token = await login();
+  const authHeaders = {
+    Authorization: `Bearer ${token}`,
+    "Content-Type": "application/json",
+  };
+
+  const task = await request<{ id: string }>("/api/tasks", {
+    method: "POST",
+    headers: authHeaders,
+    body: JSON.stringify({
+      title: `task-node-updated-${Date.now()}`,
+      projectId: PROJECT_ID,
+      prompt:
+        "Quick brief reply only. Do not inspect the repository or call tools. Reply with exactly one line: OK.",
+    }),
+  });
+
+  const events: Array<Record<string, unknown>> = [];
+  const wsReady = createDeferred<void>();
+  const ws = new WebSocket(
+    `${BFF_URL.replace("http", "ws")}/ws?token=${encodeURIComponent(token)}`,
+  );
+
+  let agentRunId = "";
+  let completed = false;
+
+  ws.addEventListener("open", () => {
+    ws.send(JSON.stringify({ type: "subscribe_task", taskId: task.id, projectId: PROJECT_ID }));
+    wsReady.resolve();
+  });
+
+  ws.addEventListener("message", (message) => {
+    try {
+      const event = JSON.parse(String(message.data)) as Record<string, unknown>;
+      events.push(event);
+    } catch {
+      // ignore malformed frames
+    }
+  });
+
+  ws.addEventListener("error", (error) => wsReady.reject(error));
+
+  try {
+    await wsReady.promise;
+
+    const execution = await request<{ agentRunId: string; sessionId: string }>(
+      `/api/tasks/${task.id}/execute`,
+      {
+        method: "POST",
+        headers: authHeaders,
+      },
+    );
+    agentRunId = execution.agentRunId;
+
+    await request<{
+      ok: boolean;
+      graphId: string;
+      workspaceDirectory: string;
+      graphPath: string;
+    }>("/api/realtime/dev/inject-task-graph-event", {
+      method: "POST",
+      headers: authHeaders,
+      body: JSON.stringify({
+        taskId: task.id,
+        projectId: PROJECT_ID,
+        sessionId: execution.sessionId,
+        graph: {
+          status: "running",
+          nodes: [
+            {
+              id: "node-1",
+              subject: "Synthetic graph node",
+              status: "running",
+              agentType: "default-executor",
+            },
+          ],
+          edges: [],
+        },
+      }),
+    });
+
+    await waitForEvent(
+      events,
+      "task.node.updated",
+      (event) => event.taskId === task.id,
+      30000,
+    );
+    await waitForEvent(
+      events,
+      "pipeline.stage.updated",
+      (event) =>
+        event.taskId === task.id
+        && typeof event.data === "object"
+        && event.data
+        && (event.data as Record<string, unknown>).reason === "task.node.updated",
+      30000,
+    );
+  } finally {
+    ws.close();
+
+    if (agentRunId) {
+      try {
+        await request(`/api/agents/${agentRunId}/terminate`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+        });
+      } catch {
+        // best effort cleanup
+      }
+    }
+
+    await deleteTask(task.id);
+  }
+});
 
 executionIntegrationTest("OpenCode completion sync closes pause/guidance/resume flow", async () => {
   await runCompletionSyncScenario({

@@ -23,6 +23,11 @@ const routes: RouteRecordRaw[] = [
         component: () => import("../pages/Tasks.vue"),
       },
       {
+        path: "workbench",
+        name: "TaskWorkbench",
+        component: () => import("../pages/TaskWorkbench.vue"),
+      },
+      {
         path: "tasks/:taskId",
         name: "TaskDetail",
         component: () => import("../pages/TaskDetail.vue"),
@@ -74,6 +79,12 @@ const routes: RouteRecordRaw[] = [
 const router = createRouter({
   history: createWebHistory(),
   routes,
+  scrollBehavior(_to, _from, savedPosition) {
+    if (savedPosition) {
+      return savedPosition;
+    }
+    return { top: 0, left: 0 };
+  },
 });
 
 router.beforeEach((to) => {

@@ -16,6 +16,7 @@ import { projectRoutes } from "./modules/projects/routes";
 import { repositoryRoutes } from "./modules/repositories/routes";
 import { taskRoutes } from "./modules/tasks/routes";
 import { userRoutes } from "./modules/users/routes";
+import { workbenchRoutes } from "./modules/workbench/routes";
 
 const app = new Hono();
 
@@ -56,6 +57,7 @@ app.route("/api/projects/:projectId/repositories", repositoryRoutes);
 app.route("/api/projects/:projectId/credentials", credentialRoutes);
 app.route("/api", codeChangeRoutes);
 app.route("/api/governance", governanceRoutes);
+app.route("/api/workbench", workbenchRoutes);
 
 // ── Start Server ───────────────────────────────────────────────────
 

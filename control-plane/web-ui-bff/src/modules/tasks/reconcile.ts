@@ -34,6 +34,7 @@ export interface RunningTaskReconcileSummary {
 
 const DEFAULT_RUNNING_TASK_LIMIT = 200;
 const DEFAULT_STALE_RUNNING_OFFLINE_MS = 2 * 60 * 60 * 1000;
+const DEFAULT_PERIODIC_RECONCILE_MS = 5 * 60 * 1000; // 5 minutes
 
 function parseTimestamp(value?: string | null): number {
   if (!value) return 0;
@@ -227,6 +228,34 @@ async function reconcileSingleRunningTask(
     task.startedAt ?? task.createdAt ?? undefined,
   );
   return "recovered";
+}
+
+/**
+ * Start a periodic timer that reconciles running tasks at a fixed interval.
+ * This catches zombie tasks that slip through the real-time SSE sync.
+ */
+export function startPeriodicReconcile(): void {
+  const intervalMs = (() => {
+    const configured = Number(process.env.PERIODIC_RECONCILE_MS || "");
+    return Number.isFinite(configured) && configured > 0
+      ? configured
+      : DEFAULT_PERIODIC_RECONCILE_MS;
+  })();
+
+  console.log(`[reconcile] periodic reconcile enabled, interval=${intervalMs}ms`);
+
+  setInterval(async () => {
+    try {
+      const summary = await reconcileRunningTasksOnStartup();
+      if (summary.completed > 0 || summary.failed > 0) {
+        console.log(
+          `[reconcile/periodic] cleaned up: completed=${summary.completed} failed=${summary.failed}`,
+        );
+      }
+    } catch (err) {
+      console.error("[reconcile/periodic] error:", err);
+    }
+  }, intervalMs);
 }
 
 export async function reconcileRunningTasksOnStartup(): Promise<RunningTaskReconcileSummary> {

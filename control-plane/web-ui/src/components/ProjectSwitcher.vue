@@ -20,9 +20,9 @@
 </template>
 
 <script setup lang="ts">
-import type { CSSProperties } from "vue";
 import { onMounted } from "vue";
 import { useProjectStore } from "../stores/project";
+import { layoutThemeStyles } from "../theme/ui-theme";
 
 const projectStore = useProjectStore();
 
@@ -36,8 +36,5 @@ function handleSwitch(value: unknown) {
   projectStore.switchProject(String(value ?? ""));
 }
 
-const wrapperStyle: CSSProperties = {
-  padding: "8px 16px",
-  borderBottom: "1px solid #1e293b",
-};
+const wrapperStyle = layoutThemeStyles.projectSwitcherWrap;
 </script>

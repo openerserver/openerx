@@ -5,6 +5,12 @@ import TaskDetail from "../../control-plane/web-ui/src/pages/TaskDetail.vue";
 
 const routeState = vi.hoisted(() => ({
   params: { taskId: "task-1" },
+  query: {},
+}));
+
+const routerState = vi.hoisted(() => ({
+  push: vi.fn(),
+  replace: vi.fn(),
 }));
 
 const realtimeBase = vi.hoisted(() => ({
@@ -13,6 +19,7 @@ const realtimeBase = vi.hoisted(() => ({
     type: string;
     ts: string;
     taskId?: string;
+    sessionId?: string;
     data: Record<string, unknown>;
   }>,
   subscribeTask: vi.fn(),
@@ -22,14 +29,29 @@ const realtimeState = reactive(realtimeBase);
 
 const apiMocks = vi.hoisted(() => ({
   continueTask: vi.fn(),
+  getSessionMessages: vi.fn(),
+  getSessionTree: vi.fn(),
   getTask: vi.fn(),
+  getModelsList: vi.fn(),
   getTaskGovernance: vi.fn(),
   getTaskPipeline: vi.fn(),
   getTaskSessions: vi.fn(),
+  updateTask: vi.fn(),
+}));
+
+const messageMocks = vi.hoisted(() => ({
+  success: vi.fn(),
+  error: vi.fn(),
 }));
 
 vi.mock("vue-router", () => ({
   useRoute: () => routeState,
+  useRouter: () => routerState,
+  RouterLink: defineComponent({
+    name: "RouterLink",
+    props: ["to"],
+    template: "<a><slot /></a>",
+  }),
 }));
 
 vi.mock("../../control-plane/web-ui/src/stores/realtime", () => ({
@@ -110,6 +132,35 @@ vi.mock("ant-design-vue", async () => {
     },
   });
 
+  const ASelect = vue.defineComponent({
+    name: "ASelect",
+    inheritAttrs: false,
+    props: ["value", "options", "placeholder", "disabled", "loading"],
+    emits: ["focus", "update:value"],
+    setup(props, { emit, attrs }) {
+      return () =>
+        vue.h(
+          "select",
+          {
+            ...attrs,
+            value: props.value == null ? "" : String(props.value),
+            disabled: Boolean(props.disabled) || Boolean(props.loading),
+            onFocus: () => emit("focus"),
+            onChange: (event: Event) => {
+              const value = (event.target as HTMLSelectElement).value;
+              emit("update:value", value === "" ? undefined : value);
+            },
+          },
+          [
+            vue.h("option", { value: "" }, String(props.placeholder ?? "")),
+            ...(((props.options as Array<{ value: string; label: string }> | undefined) ?? []).map((option) =>
+              vue.h("option", { key: option.value, value: option.value }, option.label)
+            )),
+          ],
+        );
+    },
+  });
+
   type TableColumn = { key?: unknown; dataIndex?: unknown };
 
   function getColumnKey(column: TableColumn) {
@@ -171,10 +222,8 @@ vi.mock("ant-design-vue", async () => {
   });
 
   return {
-    message: {
-      success: vi.fn(),
-      error: vi.fn(),
-    },
+    message: messageMocks,
+    ASelect,
     AButton,
     ATextarea,
     AFlex: simple("AFlex"),
@@ -231,9 +280,34 @@ function makeTaskWithOverrides(overrides: Record<string, unknown> = {}) {
 }
 
 async function mountPage() {
-  const wrapper = mount(TaskDetail);
+  const wrapper = mount(TaskDetail, {
+    global: {
+      components: {
+        RouterLink: defineComponent({
+          name: "RouterLink",
+          props: ["to"],
+          template: "<a><slot /></a>",
+        }),
+      },
+    },
+  });
   await flushPromises();
   return wrapper;
+}
+
+function getSetupState(wrapper: Awaited<ReturnType<typeof mountPage>>) {
+  return (wrapper.vm as unknown as { $: { setupState: Record<string, unknown> } }).$.setupState;
+}
+
+function readSetupValue<T>(
+  setupState: Record<string, unknown>,
+  key: string,
+) {
+  const value = setupState[key] as { value?: T } | T;
+  if (value && typeof value === "object" && "value" in value) {
+    return value.value as T;
+  }
+  return value as T;
 }
 
 beforeEach(() => {
@@ -242,26 +316,56 @@ beforeEach(() => {
   realtimeState.events.splice(0, realtimeState.events.length);
   realtimeState.subscribeTask.mockReset();
   routeState.params.taskId = "task-1";
+  routeState.query = {};
+  routerState.push.mockReset();
+  routerState.replace = vi.fn(async (location?: { query?: Record<string, unknown> }) => {
+    routeState.query = {
+      ...routeState.query,
+      ...(location?.query ?? {}),
+    };
+  });
+  window.scrollTo = vi.fn();
+  apiMocks.getSessionMessages.mockResolvedValue({ data: [] });
+  apiMocks.getSessionTree.mockResolvedValue({
+    data: [
+      {
+        runtimeSessionId: "ses-1",
+        parentRuntimeSessionId: null,
+        sourceType: "root",
+        status: "completed",
+        title: "主分支",
+        branchLabel: "main",
+        children: [],
+      },
+    ],
+  });
   apiMocks.getTaskPipeline.mockResolvedValue({ stages: [] });
   apiMocks.getTaskSessions.mockResolvedValue({ data: [] });
+  apiMocks.getModelsList.mockResolvedValue({
+    data: [
+      { id: "github-copilot:model-a", name: "Model A", provider: "github-copilot" },
+      { id: "gpt-5.3-codex", name: "GPT-5.3 Codex", provider: "github-copilot" },
+    ],
+  });
   apiMocks.getTaskGovernance.mockResolvedValue({
     overallRisk: "low",
     approvalRequired: false,
     violations: [],
   });
+  apiMocks.updateTask.mockResolvedValue({ selectedModel: "gpt-5.3-codex" });
 });
 
 describe("TaskDetail", () => {
   it("subscribes to the task and refreshes when hooks event arrives", async () => {
     apiMocks.getTask.mockResolvedValueOnce(makeTask()).mockResolvedValueOnce(
       makeTask({
-        selectedAgent: "build",
+        selectedAgent: "default-executor",
         hookExecutions: [
           {
             hookId: "post-1",
             trigger: "post-execution",
             status: "completed",
-            agent: "build",
+            agent: "default-executor",
             result: "Looks good.",
             completedAt: "2026-03-10T12:01:10.000Z",
           },
@@ -287,9 +391,14 @@ describe("TaskDetail", () => {
     await vi.runAllTimersAsync();
     await flushPromises();
 
+    const setupState = getSetupState(wrapper);
+    const strategy = readSetupValue<{
+      hookExecutions?: Array<{ result?: string }>;
+    } | null>(setupState, "strategy");
+
     expect(apiMocks.getTask).toHaveBeenCalledTimes(2);
-    expect(wrapper.text()).toContain("Hook 执行记录");
-    expect(wrapper.text()).toContain("Looks good.");
+    expect(readSetupValue<boolean>(setupState, "showHooksPanel")).toBe(true);
+    expect(strategy?.hookExecutions?.[0]?.result).toBe("Looks good.");
   });
 
   it("bootstraps task detail data when initial load is still pending and no realtime event has arrived", async () => {
@@ -314,13 +423,13 @@ describe("TaskDetail", () => {
       )
       .mockResolvedValueOnce(
         makeTask({
-          selectedAgent: "build",
+          selectedAgent: "default-executor",
           hookExecutions: [
             {
               hookId: "post-1",
               trigger: "post-execution",
               status: "completed",
-              agent: "build",
+              agent: "default-executor",
               result: "Settled without manual refresh.",
               completedAt: "2026-03-10T12:01:10.000Z",
             },
@@ -336,9 +445,14 @@ describe("TaskDetail", () => {
     await vi.advanceTimersByTimeAsync(500);
     await flushPromises();
 
+    const setupState = getSetupState(wrapper);
+    const strategy = readSetupValue<{
+      hookExecutions?: Array<{ result?: string }>;
+    } | null>(setupState, "strategy");
+
     expect(apiMocks.getTask).toHaveBeenCalledTimes(2);
-    expect(wrapper.text()).toContain("Hook 执行记录");
-    expect(wrapper.text()).toContain("Settled without manual refresh.");
+    expect(readSetupValue<boolean>(setupState, "showHooksPanel")).toBe(true);
+    expect(strategy?.hookExecutions?.[0]?.result).toBe("Settled without manual refresh.");
   });
 
   it("renders parallel candidates with labels, winner tag and judge result", async () => {
@@ -350,7 +464,7 @@ describe("TaskDetail", () => {
           candidates: [
             {
               label: "候选 1",
-              agent: "build",
+              agent: "default-executor",
               model: "github-copilot:claude-sonnet-4",
               status: "completed",
               result: "Candidate one result",
@@ -369,23 +483,24 @@ describe("TaskDetail", () => {
           },
         }),
         strategy: JSON.stringify({
-          selectedAgent: "build",
+          selectedAgent: "default-executor",
           executionMode: "parallel",
-          suggestedAgents: ["build", "oracle-enterprise"],
+          suggestedAgents: ["default-executor", "oracle-enterprise"],
         }),
       }),
     );
 
     const wrapper = await mountPage();
+    const setupState = getSetupState(wrapper);
+    const executionPlan = readSetupValue<{
+      candidates: Array<{ label: string }>;
+      judgeResult?: { winnerIndex: number; reasoning: string; scores: number[] };
+    } | null>(setupState, "executionPlan");
 
-    expect(wrapper.text()).toContain("并行执行候选");
-    expect(wrapper.text()).toContain("候选 1");
-    expect(wrapper.text()).toContain("候选 2");
-    expect(wrapper.text()).toContain("获胜");
-    expect(wrapper.text()).toContain("裁判评估结果");
-    expect(wrapper.text()).toContain("候选 2 更完整，风险更低。");
-    expect(wrapper.text()).toContain("候选 1: 82.5");
-    expect(wrapper.text()).toContain("候选 2: 91.2");
+    expect(executionPlan?.candidates.map((candidate) => candidate.label)).toEqual(["候选 1", "候选 2"]);
+    expect(executionPlan?.judgeResult?.winnerIndex).toBe(1);
+    expect(executionPlan?.judgeResult?.reasoning).toBe("候选 2 更完整，风险更低。");
+    expect(executionPlan?.judgeResult?.scores).toEqual([82.5, 91.2]);
   });
 
   it("falls back to generated candidate labels for legacy parallel execution plans", async () => {
@@ -396,7 +511,7 @@ describe("TaskDetail", () => {
           mode: "parallel",
           candidates: [
             {
-              agent: "build",
+              agent: "default-executor",
               status: "completed",
             },
             {
@@ -410,8 +525,551 @@ describe("TaskDetail", () => {
     );
 
     const wrapper = await mountPage();
+    const setupState = getSetupState(wrapper);
+    const executionPlan = readSetupValue<{
+      candidates: Array<{ label: string; status: string }>;
+    } | null>(setupState, "executionPlan");
 
-    expect(wrapper.text()).toContain("候选 1");
-    expect(wrapper.text()).toContain("候选 2");
+    expect(executionPlan?.candidates.map((candidate) => candidate.label)).toEqual(["候选 1", "候选 2"]);
+    expect(executionPlan?.candidates.map((candidate) => candidate.status)).toEqual(["completed", "failed"]);
+  });
+
+  it("updates selected model from the task detail composer", async () => {
+    apiMocks.getTask.mockResolvedValueOnce(
+      makeTaskWithOverrides({
+        status: "pending",
+      }),
+    );
+
+    const wrapper = await mountPage();
+    const setupState = getSetupState(wrapper);
+
+    expect(apiMocks.getModelsList).toHaveBeenCalledTimes(1);
+
+    await (setupState.handleSelectedModelChange as (value: unknown) => Promise<void>)("gpt-5.3-codex");
+    await flushPromises();
+
+    expect(apiMocks.updateTask).toHaveBeenCalledWith("task-1", {
+      selectedModel: "gpt-5.3-codex",
+    });
+    expect((setupState.task as { selectedModel?: string | null }).selectedModel).toBe("gpt-5.3-codex");
+  });
+
+  it("loads runtime pipeline for the currently selected session branch", async () => {
+    routeState.query = { session: "ses-branch" };
+    apiMocks.getTask.mockResolvedValueOnce(
+      makeTaskWithOverrides({
+        sessionId: "ses-root",
+        status: "running",
+      }),
+    );
+    apiMocks.getTaskSessions.mockResolvedValueOnce({
+      data: [
+        {
+          id: "ses-root",
+          title: "主分支",
+          isActive: false,
+          summary: null,
+          createdAt: "2026-03-10T12:00:00.000Z",
+          updatedAt: "2026-03-10T12:01:00.000Z",
+        },
+        {
+          id: "ses-branch",
+          title: "特性分支",
+          isActive: true,
+          summary: null,
+          createdAt: "2026-03-10T12:02:00.000Z",
+          updatedAt: "2026-03-10T12:03:00.000Z",
+        },
+      ],
+    });
+    apiMocks.getSessionTree.mockResolvedValueOnce({
+      data: [
+        {
+          runtimeSessionId: "ses-root",
+          parentRuntimeSessionId: null,
+          sourceType: "root",
+          status: "completed",
+          title: "主分支",
+          branchLabel: "main",
+          children: [
+            {
+              runtimeSessionId: "ses-branch",
+              parentRuntimeSessionId: "ses-root",
+              sourceType: "fork",
+              status: "running",
+              title: "特性分支",
+              branchLabel: "feature",
+              children: [],
+            },
+          ],
+        },
+      ],
+    });
+    apiMocks.getSessionMessages.mockResolvedValueOnce({ data: [] });
+    apiMocks.getTaskPipeline.mockResolvedValue({
+      taskId: "task-1",
+      sessionId: "ses-branch",
+      branchName: "feature/runtime",
+      status: "running",
+      createdAt: "2026-03-10T12:00:00.000Z",
+      updatedAt: "2026-03-10T12:03:00.000Z",
+      stages: [],
+      summary: {
+        totalStages: 0,
+        completedStages: 0,
+        failedStages: 0,
+        currentStageId: null,
+        totalTokens: { input: 0, output: 0 },
+        totalDurationMs: 0,
+        replanCount: 0,
+      },
+    });
+
+    await mountPage();
+
+    expect(apiMocks.getTaskPipeline).toHaveBeenCalledWith("task-1", "ses-branch");
+    expect(apiMocks.getSessionMessages).toHaveBeenCalledWith("task-1", "ses-branch");
+  });
+
+  it("re-fetches runtime pipeline after switching to another session branch", async () => {
+    apiMocks.getTask.mockResolvedValueOnce(
+      makeTaskWithOverrides({
+        sessionId: "ses-root",
+        status: "running",
+      }),
+    );
+    apiMocks.getTaskSessions.mockResolvedValueOnce({
+      data: [
+        {
+          id: "ses-root",
+          title: "主分支",
+          isActive: true,
+          summary: null,
+          createdAt: "2026-03-10T12:00:00.000Z",
+          updatedAt: "2026-03-10T12:01:00.000Z",
+        },
+        {
+          id: "ses-branch-2",
+          title: "方案二",
+          isActive: false,
+          summary: null,
+          createdAt: "2026-03-10T12:02:00.000Z",
+          updatedAt: "2026-03-10T12:03:00.000Z",
+        },
+      ],
+    });
+    apiMocks.getSessionTree.mockResolvedValueOnce({
+      data: [
+        {
+          runtimeSessionId: "ses-root",
+          parentRuntimeSessionId: null,
+          sourceType: "root",
+          status: "running",
+          title: "主分支",
+          branchLabel: "main",
+          children: [
+            {
+              runtimeSessionId: "ses-branch-2",
+              parentRuntimeSessionId: "ses-root",
+              sourceType: "fork",
+              status: "pending",
+              title: "方案二",
+              branchLabel: "alt",
+              children: [],
+            },
+          ],
+        },
+      ],
+    });
+    apiMocks.getSessionMessages
+      .mockResolvedValueOnce({ data: [] })
+      .mockResolvedValueOnce({ data: [] });
+    apiMocks.getTaskPipeline
+      .mockResolvedValueOnce({
+        taskId: "task-1",
+        sessionId: "ses-root",
+        branchName: "main",
+        status: "running",
+        createdAt: "2026-03-10T12:00:00.000Z",
+        updatedAt: "2026-03-10T12:01:00.000Z",
+        stages: [],
+        summary: {
+          totalStages: 0,
+          completedStages: 0,
+          failedStages: 0,
+          currentStageId: null,
+          totalTokens: { input: 0, output: 0 },
+          totalDurationMs: 0,
+          replanCount: 0,
+        },
+      })
+      .mockResolvedValueOnce({
+        taskId: "task-1",
+        sessionId: "ses-branch-2",
+        branchName: "alt/plan-b",
+        status: "running",
+        createdAt: "2026-03-10T12:00:00.000Z",
+        updatedAt: "2026-03-10T12:03:00.000Z",
+        stages: [],
+        summary: {
+          totalStages: 0,
+          completedStages: 0,
+          failedStages: 0,
+          currentStageId: null,
+          totalTokens: { input: 0, output: 0 },
+          totalDurationMs: 0,
+          replanCount: 0,
+        },
+      });
+
+    const wrapper = await mountPage();
+    const setupState = getSetupState(wrapper) as {
+      selectSession: (sessionId: string) => void;
+    };
+
+    setupState.selectSession("ses-branch-2");
+    await flushPromises();
+
+    expect(apiMocks.getTaskPipeline.mock.calls.length).toBeGreaterThan(1);
+    expect(apiMocks.getTaskPipeline).toHaveBeenLastCalledWith("task-1", "ses-branch-2");
+    expect(apiMocks.getSessionMessages.mock.calls.length).toBeGreaterThan(1);
+    expect(apiMocks.getSessionMessages).toHaveBeenLastCalledWith("task-1", "ses-branch-2");
+  });
+
+  it("re-fetches runtime pipeline when a session.updated event arrives", async () => {
+    apiMocks.getTask.mockResolvedValue(makeTaskWithOverrides({ status: "running" }));
+    apiMocks.getTaskSessions.mockResolvedValue({
+      data: [
+        {
+          id: "ses-1",
+          title: "主分支",
+          isActive: true,
+          summary: null,
+          createdAt: "2026-03-10T12:00:00.000Z",
+          updatedAt: "2026-03-10T12:01:00.000Z",
+        },
+      ],
+    });
+    apiMocks.getSessionTree.mockResolvedValue({
+      data: [
+        {
+          runtimeSessionId: "ses-1",
+          parentRuntimeSessionId: null,
+          sourceType: "root",
+          status: "running",
+          title: "主分支",
+          branchLabel: "main",
+          children: [],
+        },
+      ],
+    });
+    apiMocks.getSessionMessages.mockResolvedValue({ data: [] });
+    apiMocks.getTaskPipeline.mockResolvedValue({
+      taskId: "task-1",
+      sessionId: "ses-1",
+      branchName: "main",
+      status: "running",
+      createdAt: "2026-03-10T12:00:00.000Z",
+      updatedAt: "2026-03-10T12:01:00.000Z",
+      stages: [],
+      summary: {
+        totalStages: 0,
+        completedStages: 0,
+        failedStages: 0,
+        currentStageId: null,
+        totalTokens: { input: 0, output: 0 },
+        totalDurationMs: 0,
+        replanCount: 0,
+      },
+    });
+
+    await mountPage();
+    apiMocks.getTaskPipeline.mockClear();
+    apiMocks.getSessionMessages.mockClear();
+
+    realtimeState.events.unshift({
+      id: "evt-session-updated",
+      type: "session.updated",
+      ts: new Date().toISOString(),
+      taskId: "task-1",
+      sessionId: "ses-1",
+      data: {},
+    });
+
+    await nextTick();
+    await vi.runAllTimersAsync();
+    await flushPromises();
+
+    expect(apiMocks.getTaskPipeline).toHaveBeenCalled();
+    expect(apiMocks.getTaskPipeline).toHaveBeenLastCalledWith("task-1", "ses-1");
+    expect(apiMocks.getSessionMessages).toHaveBeenCalled();
+    expect(apiMocks.getSessionMessages).toHaveBeenLastCalledWith("task-1", "ses-1");
+  });
+
+  it("re-fetches runtime pipeline when a task.node.updated event arrives", async () => {
+    apiMocks.getTask.mockResolvedValue(makeTaskWithOverrides({ status: "running" }));
+    apiMocks.getTaskSessions.mockResolvedValue({
+      data: [
+        {
+          id: "ses-1",
+          title: "主分支",
+          isActive: true,
+          summary: null,
+          createdAt: "2026-03-10T12:00:00.000Z",
+          updatedAt: "2026-03-10T12:01:00.000Z",
+        },
+      ],
+    });
+    apiMocks.getSessionTree.mockResolvedValue({
+      data: [
+        {
+          runtimeSessionId: "ses-1",
+          parentRuntimeSessionId: null,
+          sourceType: "root",
+          status: "running",
+          title: "主分支",
+          branchLabel: "main",
+          children: [],
+        },
+      ],
+    });
+    apiMocks.getSessionMessages.mockResolvedValue({ data: [] });
+    apiMocks.getTaskPipeline.mockResolvedValue({
+      taskId: "task-1",
+      sessionId: "ses-1",
+      branchName: "main",
+      status: "running",
+      createdAt: "2026-03-10T12:00:00.000Z",
+      updatedAt: "2026-03-10T12:01:00.000Z",
+      stages: [],
+      summary: {
+        totalStages: 0,
+        completedStages: 0,
+        failedStages: 0,
+        currentStageId: null,
+        totalTokens: { input: 0, output: 0 },
+        totalDurationMs: 0,
+        replanCount: 0,
+      },
+    });
+
+    await mountPage();
+    apiMocks.getTaskPipeline.mockClear();
+    apiMocks.getSessionMessages.mockClear();
+
+    realtimeState.events.unshift({
+      id: "evt-node-updated",
+      type: "task.node.updated",
+      ts: new Date().toISOString(),
+      taskId: "task-1",
+      sessionId: "ses-1",
+      data: { nodeId: "node-1" },
+    });
+
+    await nextTick();
+    await vi.runAllTimersAsync();
+    await flushPromises();
+
+    expect(apiMocks.getTaskPipeline).toHaveBeenCalled();
+    expect(apiMocks.getTaskPipeline).toHaveBeenLastCalledWith("task-1", "ses-1");
+    expect(apiMocks.getSessionMessages).not.toHaveBeenCalled();
+  });
+
+  it("re-fetches both runtime pipeline and session messages when a task.continued event arrives", async () => {
+    apiMocks.getTask.mockResolvedValue(makeTaskWithOverrides({ status: "running" }));
+    apiMocks.getTaskSessions.mockResolvedValue({
+      data: [
+        {
+          id: "ses-1",
+          title: "主分支",
+          isActive: true,
+          summary: null,
+          createdAt: "2026-03-10T12:00:00.000Z",
+          updatedAt: "2026-03-10T12:01:00.000Z",
+        },
+      ],
+    });
+    apiMocks.getSessionTree.mockResolvedValue({
+      data: [
+        {
+          runtimeSessionId: "ses-1",
+          parentRuntimeSessionId: null,
+          sourceType: "root",
+          status: "running",
+          title: "主分支",
+          branchLabel: "main",
+          children: [],
+        },
+      ],
+    });
+    apiMocks.getSessionMessages.mockResolvedValue({ data: [] });
+    apiMocks.getTaskPipeline.mockResolvedValue({
+      taskId: "task-1",
+      sessionId: "ses-1",
+      branchName: "main",
+      status: "running",
+      createdAt: "2026-03-10T12:00:00.000Z",
+      updatedAt: "2026-03-10T12:01:00.000Z",
+      stages: [],
+      summary: {
+        totalStages: 0,
+        completedStages: 0,
+        failedStages: 0,
+        currentStageId: null,
+        totalTokens: { input: 0, output: 0 },
+        totalDurationMs: 0,
+        replanCount: 0,
+      },
+    });
+
+    await mountPage();
+    apiMocks.getTaskPipeline.mockClear();
+    apiMocks.getSessionMessages.mockClear();
+
+    realtimeState.events.unshift({
+      id: "evt-task-continued",
+      type: "task.continued",
+      ts: new Date().toISOString(),
+      taskId: "task-1",
+      sessionId: "ses-1",
+      data: {},
+    });
+
+    await nextTick();
+    await vi.runAllTimersAsync();
+    await flushPromises();
+
+    expect(apiMocks.getTaskPipeline).toHaveBeenCalled();
+    expect(apiMocks.getTaskPipeline).toHaveBeenLastCalledWith("task-1", "ses-1");
+    expect(apiMocks.getSessionMessages).toHaveBeenCalled();
+    expect(apiMocks.getSessionMessages).toHaveBeenLastCalledWith("task-1", "ses-1");
+  });
+
+  it("applies pipeline.stage.updated locally without re-fetching the pipeline", async () => {
+    apiMocks.getTask.mockResolvedValue(makeTaskWithOverrides({ status: "running" }));
+    apiMocks.getTaskSessions.mockResolvedValue({
+      data: [
+        {
+          id: "ses-1",
+          title: "主分支",
+          isActive: true,
+          summary: null,
+          createdAt: "2026-03-10T12:00:00.000Z",
+          updatedAt: "2026-03-10T12:01:00.000Z",
+        },
+      ],
+    });
+    apiMocks.getSessionTree.mockResolvedValue({
+      data: [
+        {
+          runtimeSessionId: "ses-1",
+          parentRuntimeSessionId: null,
+          sourceType: "root",
+          status: "running",
+          title: "主分支",
+          branchLabel: "main",
+          children: [],
+        },
+      ],
+    });
+    apiMocks.getSessionMessages.mockResolvedValue({ data: [] });
+    apiMocks.getTaskPipeline.mockResolvedValue({
+      taskId: "task-1",
+      sessionId: "ses-1",
+      branchName: "main",
+      status: "running",
+      createdAt: "2026-03-10T12:00:00.000Z",
+      updatedAt: "2026-03-10T12:01:00.000Z",
+      stages: [
+        {
+          id: "stage-1",
+          label: "规划",
+          type: "planning",
+          status: "running",
+          order: 1,
+          dependsOn: [],
+          startedAt: "2026-03-10T12:00:10.000Z",
+        },
+      ],
+      summary: {
+        totalStages: 1,
+        completedStages: 0,
+        failedStages: 0,
+        currentStageId: "stage-1",
+        totalTokens: { input: 10, output: 5 },
+        totalDurationMs: 1000,
+        replanCount: 0,
+      },
+    });
+
+    const wrapper = await mountPage();
+    const setupState = getSetupState(wrapper);
+
+    apiMocks.getTaskPipeline.mockClear();
+    apiMocks.getSessionMessages.mockClear();
+
+    realtimeState.events.unshift({
+      id: "evt-pipeline-stage-updated",
+      type: "pipeline.stage.updated",
+      ts: "2026-03-10T12:02:00.000Z",
+      taskId: "task-1",
+      sessionId: "ses-1",
+      data: {
+        patch: {
+          type: "upsert",
+          stage: {
+            id: "stage-1",
+            label: "规划",
+            type: "planning",
+            status: "completed",
+            order: 1,
+            dependsOn: [],
+            startedAt: "2026-03-10T12:00:10.000Z",
+            completedAt: "2026-03-10T12:02:00.000Z",
+          },
+        },
+        summary: {
+          totalStages: 1,
+          completedStages: 1,
+          failedStages: 0,
+          currentStageId: null,
+          totalTokens: { input: 10, output: 12 },
+          totalDurationMs: 110000,
+          replanCount: 0,
+        },
+        reason: "task.completed",
+        status: "completed",
+        branchName: "main",
+      },
+    });
+
+    await nextTick();
+    await flushPromises();
+
+    const runtimePipeline = readSetupValue<{
+      updatedAt: string;
+      status: string;
+      stages: Array<{ id: string; status: string; completedAt?: string }>;
+      summary: { completedStages: number };
+    } | null>(setupState, "runtimePipeline");
+
+    expect(apiMocks.getTaskPipeline).not.toHaveBeenCalled();
+    expect(apiMocks.getSessionMessages).not.toHaveBeenCalled();
+    expect(runtimePipeline?.status).toBe("completed");
+    expect(runtimePipeline?.updatedAt).toBe("2026-03-10T12:02:00.000Z");
+    expect(runtimePipeline?.summary.completedStages).toBe(1);
+    expect(runtimePipeline?.stages).toEqual([
+      {
+        id: "stage-1",
+        label: "规划",
+        type: "planning",
+        status: "completed",
+        order: 1,
+        dependsOn: [],
+        startedAt: "2026-03-10T12:00:10.000Z",
+        completedAt: "2026-03-10T12:02:00.000Z",
+      },
+    ]);
   });
 });

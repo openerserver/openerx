@@ -418,7 +418,7 @@ describe("executeLifecycleHooks behavior", () => {
           id: "single-template",
           name: "Single Template",
           mode: "single",
-          agents: ["build"],
+          agents: ["default-executor"],
           enabled: true,
         },
       ],

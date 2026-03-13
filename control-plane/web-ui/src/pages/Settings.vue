@@ -60,7 +60,7 @@
       <!-- ═══════════ 模型 ═══════════ -->
       <a-tab-pane v-if="isSystemAdmin" key="models" tab="模型">
         <a-spin :spinning="modelsLoading">
-          <a-card title="GitHub Copilot 账号" style="margin-bottom: 16px">
+          <a-card id="settings-models-copilot-accounts" title="GitHub Copilot 账号" style="margin-bottom: 16px">
             <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap">
               <span style="color: #888; font-size: 12px">
                 需要第二个或更多 Copilot 账号时，点击右侧按钮即可自动添加新的 Provider，随后在对应卡片上登录不同 GitHub 账号。
@@ -69,8 +69,14 @@
             </div>
           </a-card>
 
+          <a-card v-if="modelsLoading" style="margin-top: 16px">
+            <a-skeleton active :paragraph="{ rows: 10 }" />
+          </a-card>
+
+          <template v-else>
+
           <!-- Copilot OAuth (multi-account) -->
-          <a-card v-for="cpProvider in copilotProviders" :key="cpProvider" :title="`GitHub Copilot 认证 — ${cpProvider}`" style="margin-top: 16px">
+          <a-card v-for="cpProvider in copilotProviders" :id="`settings-models-copilot-${cpProvider}`" :key="cpProvider" :title="`GitHub Copilot 认证 — ${cpProvider}`" style="margin-top: 16px">
             <template v-if="copilotAuthMap[cpProvider]?.authenticated">
               <a-result status="success" :title="`已登录 ${cpProvider}`"
                 :sub-title="copilotAuthMap[cpProvider]?.loginAt ? `登录时间: ${copilotAuthMap[cpProvider].loginAt}` : ''">
@@ -174,10 +180,17 @@
             </template>
           </a-card>
 
-          <a-card title="Provider 列表" style="margin-top: 16px">
+          <a-card id="settings-models-providers" title="Provider 列表" style="margin-top: 16px">
             <div style="margin-bottom: 8px; color: #888; font-size: 12px">先配置连接入口，再挂接模型。</div>
             <template v-if="providerTableData.length">
-              <a-table :dataSource="providerTableData" :columns="providerColumns" :pagination="false" rowKey="key" size="small">
+              <a-table
+                :dataSource="providerTableData"
+                :columns="providerColumns"
+                :pagination="false"
+                rowKey="key"
+                size="small"
+                :customRow="getProviderTableRowProps"
+              >
                 <template #bodyCell="{ column, record }">
                   <template v-if="column.dataIndex === 'key'">
                     <a-input :value="record.key" disabled size="small" />
@@ -214,14 +227,26 @@
                       @update:value="updateProvider(record.key, 'baseURL', $event)"
                     />
                   </template>
+                  <template v-else-if="column.dataIndex === 'apiKey'">
+                    <a-input-password
+                      :value="record.apiKey"
+                      size="small"
+                      placeholder="用于 Provider 鉴权的 API Key"
+                      @update:value="updateProvider(record.key, 'apiKey', $event)"
+                    />
+                  </template>
                   <template v-else-if="column.dataIndex === 'action'">
-                    <a-button danger size="small" @click="deleteProvider(record.key)">删除</a-button>
+                    <a-space>
+                      <a-button size="small" :loading="providerTestLoading[record.key]" @click="testProvider(record.key)">测试</a-button>
+                      <a-button size="small" :loading="providerModelLoading[record.key]" @click="chooseProviderModels(record.key)">选择模型</a-button>
+                      <a-button danger size="small" @click="deleteProvider(record.key)">删除</a-button>
+                    </a-space>
                   </template>
                 </template>
               </a-table>
             </template>
             <a-empty v-else description="还没有 Provider。下一步：点击下方“+ 添加 Provider”，或先在上方添加 GitHub Copilot 账号。" />
-            <a-button type="dashed" block style="margin-top: 8px" @click="showAddProvider = true">+ 添加 Provider</a-button>
+            <a-button id="settings-models-provider-add" type="dashed" block style="margin-top: 8px" @click="showAddProvider = true">+ 添加 Provider</a-button>
           </a-card>
 
           <a-modal :open="showAddProvider" title="添加 Provider" @ok="addProvider" okText="添加" cancelText="取消" @update:open="showAddProvider = $event">
@@ -245,10 +270,67 @@
               <a-form-item label="Base URL">
                 <a-input :value="newProvider.baseURL" placeholder="https://api.example.com/v1" @update:value="newProvider.baseURL = String($event ?? '')" />
               </a-form-item>
+              <a-form-item label="API Key">
+                <a-input-password :value="newProvider.apiKey" placeholder="用于 Provider 鉴权的 API Key" @update:value="newProvider.apiKey = String($event ?? '')" />
+              </a-form-item>
             </a-form>
           </a-modal>
 
-          <a-card title="模型列表" style="margin-top: 16px">
+          <a-modal
+            :open="providerModelPicker.open"
+            title="选择可用模型"
+            width="820px"
+            :footer="null"
+            @update:open="(open) => { if (!open) closeProviderModelPicker(); }"
+          >
+            <a-space direction="vertical" style="width: 100%" :size="12">
+              <a-alert
+                v-if="providerModelPicker.message"
+                :type="providerModelPicker.error ? 'error' : 'info'"
+                :message="providerModelPicker.message"
+                show-icon
+              />
+              <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap">
+                <a-typography-text type="secondary">
+                  当前 Provider: {{ providerModelPicker.providerKey || '-' }}
+                </a-typography-text>
+                <a-button
+                  type="primary"
+                  :disabled="!providerModelPicker.models.some((model) => !isModelConfigured(providerModelPicker.providerKey, model.id))"
+                  @click="addAllDiscoveredModels"
+                >
+                  添加全部未配置模型
+                </a-button>
+              </div>
+              <a-table
+                :dataSource="providerModelPicker.models"
+                :columns="discoveredProviderModelColumns"
+                :pagination="false"
+                rowKey="id"
+                size="small"
+              >
+                <template #bodyCell="{ column, record }">
+                  <template v-if="column.dataIndex === 'contextWindow'">
+                    {{ record.contextWindow || '-' }}
+                  </template>
+                  <template v-else-if="column.dataIndex === 'maxTokens'">
+                    {{ record.maxTokens || '-' }}
+                  </template>
+                  <template v-else-if="column.dataIndex === 'action'">
+                    <a-button
+                      size="small"
+                      :disabled="isModelConfigured(providerModelPicker.providerKey, String(record.id || ''))"
+                      @click="addDiscoveredModelFromRecord(record)"
+                    >
+                      {{ isModelConfigured(providerModelPicker.providerKey, String(record.id || '')) ? '已添加' : '添加' }}
+                    </a-button>
+                  </template>
+                </template>
+              </a-table>
+            </a-space>
+          </a-modal>
+
+          <a-card id="settings-models-list" title="模型列表" style="margin-top: 16px">
             <div style="margin-bottom: 8px; color: #888; font-size: 12px">为任务准备可选的执行模型。</div>
             <template v-if="modelsData.list.length">
               <a-table :dataSource="modelsData.list" :columns="modelColumns" :pagination="false" :rowKey="getConfiguredModelKey" :rowClassName="getModelRowClassName" size="small">
@@ -289,7 +371,7 @@
             <a-button type="dashed" block style="margin-top: 8px" @click="addModel">+ 添加模型</a-button>
           </a-card>
 
-          <a-card title="默认执行模型" style="margin-top: 16px">
+          <a-card id="settings-models-default" title="默认执行模型" style="margin-top: 16px">
             <a-form layout="vertical">
               <a-form-item label="默认执行路由">
                 <a-select
@@ -306,6 +388,7 @@
           </a-card>
 
           <a-button type="primary" style="margin-top: 16px" :loading="saving" @click="saveModels">保存模型配置</a-button>
+          </template>
         </a-spin>
       </a-tab-pane>
 
@@ -578,7 +661,22 @@
       <!-- ═══════════ 编排策略 ═══════════ -->
       <a-tab-pane v-if="isSystemAdmin" key="strategy" tab="编排策略">
         <a-spin :spinning="strategyLoading">
+          <a-card v-if="strategyLoading">
+            <a-skeleton active :paragraph="{ rows: 12 }" />
+          </a-card>
+
+          <template v-else>
+          <a-alert
+            type="info"
+            show-icon
+            style="margin-bottom: 16px"
+            message="编排策略如何生效"
+            description="当任务创建时，系统会根据用户 Prompt 自动判定意图分类（如安全审计、深度开发等）。判定结果依次驱动三项联动：① 按下方映射表选择该分类对应的 Agent 和模型；② 匹配适用该分类的工作流模板（决定单一执行还是并行竞争）；③ 如果配了生命周期 Hooks，则在执行前后触发对应治理逻辑。如果某个分类没有做自定义配置，系统会使用内置默认推荐（如安全审计默认使用 oracle-enterprise + hephaestus-enterprise）。"
+          />
           <a-card title="意图分类 → Agent 映射" size="small">
+            <a-typography-text type="secondary" style="display: block; margin-bottom: 12px; font-size: 12px">
+              每行对应一种自动判定的意图分类。可为每种分类指定专属 Agent 和模型：留空则使用系统默认推荐（快速查询 → explore-enterprise；深度开发 → sisyphus / prometheus / hephaestus；运维操作 → oracle；安全审计 → oracle + hephaestus；架构设计 → prometheus + oracle）。
+            </a-typography-text>
             <a-table :dataSource="strategyTableData" :columns="strategyAgentColumns" :pagination="false" rowKey="category" size="small">
               <template #bodyCell="{ column, record }">
                 <template v-if="column.dataIndex === 'category'">
@@ -589,14 +687,23 @@
                     mode="tags"
                     :value="record.agents"
                     style="width: 100%"
+                    show-search
+                    :options="getStrategyAgentSelectOptions(record.agents)"
+                    option-filter-prop="label"
+                    :placeholder="`留空则使用默认: ${DEFAULT_CATEGORY_AGENTS[record.category]?.join(', ') || '—'}`"
                     @change="(value) => handleStrategyAgentsChange(record.category, value)"
                   />
                 </template>
                 <template v-else-if="column.dataIndex === 'model'">
-                  <a-input
+                  <a-select
                     :value="record.model"
+                    show-search
                     size="small"
-                    placeholder="使用默认模型"
+                    style="width: 100%"
+                    placeholder="留空则使用全局默认模型"
+                    :options="getStrategyModelSelectOptions(record.model)"
+                    option-filter-prop="label"
+                    allow-clear
                     @update:value="(value) => updateStrategyModel(record.category, String(value ?? ''))"
                   />
                 </template>
@@ -647,7 +754,16 @@
                           </a-col>
                           <a-col :span="10">
                             <a-form-item label="执行 Agent">
-                              <a-input :value="hook.agent" placeholder="prometheus-enterprise" @update:value="hook.agent = String($event ?? '')" />
+                              <a-select
+                                :value="hook.agent || undefined"
+                                show-search
+                                style="width: 100%"
+                                placeholder="选择 Agent"
+                                :options="getStrategySingleAgentSelectOptions(hook.agent)"
+                                option-filter-prop="label"
+                                allow-clear
+                                @update:value="hook.agent = String($event ?? '')"
+                              />
                             </a-form-item>
                           </a-col>
                           <a-col :span="4">
@@ -659,7 +775,16 @@
                         <a-row :gutter="12">
                           <a-col :span="12">
                             <a-form-item label="指定模型">
-                              <a-input :value="hook.model" placeholder="留空使用系统默认" @update:value="hook.model = String($event ?? '')" />
+                              <a-select
+                                :value="hook.model || undefined"
+                                show-search
+                                style="width: 100%"
+                                placeholder="留空使用系统默认"
+                                :options="getStrategyModelSelectOptions(hook.model)"
+                                option-filter-prop="label"
+                                allow-clear
+                                @update:value="hook.model = String($event ?? '')"
+                              />
                             </a-form-item>
                           </a-col>
                           <a-col :span="12">
@@ -721,14 +846,19 @@
                       </a-form-item>
                     </a-col>
                     <a-col :span="8">
-                      <a-form-item label="最大并行数" v-if="tpl.mode === 'parallel'">
-                        <a-input-number
-                          :value="tpl.maxParallelCandidates ?? 3"
-                          :min="2"
-                          :max="5"
-                          style="width: 100%"
-                          @update:value="tpl.maxParallelCandidates = Number($event ?? 3)"
-                        />
+                      <a-form-item label="最大并行数（上限）" v-if="tpl.mode === 'parallel'">
+                        <a-space direction="vertical" style="width: 100%" :size="4">
+                          <a-input-number
+                            :value="tpl.maxParallelCandidates ?? 3"
+                            :min="2"
+                            :max="5"
+                            style="width: 100%"
+                            @update:value="tpl.maxParallelCandidates = Number($event ?? 3)"
+                          />
+                          <a-typography-text type="secondary" style="font-size: 12px">
+                            这是并行 candidate 的上限，不是必须执行数。少于该数量时，只按已选择的 Agent 数量并行运行；不会重复执行某个 Agent 来补满。
+                          </a-typography-text>
+                        </a-space>
                       </a-form-item>
                     </a-col>
                   </a-row>
@@ -738,21 +868,33 @@
                       :value="tpl.agents"
                       placeholder="输入 Agent 名称"
                       style="width: 100%"
+                      show-search
+                      :options="getStrategyAgentSelectOptions(tpl.agents)"
+                      option-filter-prop="label"
                       @change="(v) => (tpl.agents = Array.isArray(v) ? v.map(String) : [])"
+                      :status="tpl.mode === 'parallel' && tpl.agents.length > 0 && tpl.agents.length < 2 ? 'warning' : undefined"
                     />
+                    <a-typography-text v-if="tpl.mode === 'parallel' && tpl.agents.length > 0 && tpl.agents.length < 2" type="warning" style="font-size: 12px">
+                      并行竞争模式建议至少选择 2 个 Agent，当前仅 {{ tpl.agents.length }} 个，将退化为单一执行。
+                    </a-typography-text>
                   </a-form-item>
                   <a-form-item label="适用意图分类">
-                    <a-select
-                      mode="multiple"
-                      :value="tpl.categoryDefaults ?? []"
-                      placeholder="不选则为通用模板"
-                      style="width: 100%"
-                      @change="(v) => (tpl.categoryDefaults = Array.isArray(v) ? v.map(String) : [])"
-                    >
-                      <a-select-option v-for="(label, cat) in CATEGORY_LABELS_MAP" :key="cat" :value="cat">
-                        {{ label }}
-                      </a-select-option>
-                    </a-select>
+                    <a-space direction="vertical" style="width: 100%" :size="4">
+                      <a-select
+                        mode="multiple"
+                        :value="tpl.categoryDefaults ?? []"
+                        placeholder="不选则为通用模板"
+                        style="width: 100%"
+                        @change="(v) => handleTemplateCategoryChange(tpl, Array.isArray(v) ? v.map(String) : [])"
+                      >
+                        <a-select-option v-for="(label, cat) in CATEGORY_LABELS_MAP" :key="cat" :value="cat">
+                          {{ label }}
+                        </a-select-option>
+                      </a-select>
+                      <a-typography-text type="secondary" style="font-size: 12px">
+                        这里不是手工创建分类，而是限制模板在什么任务意图下优先生效。意图分类来自系统在创建任务时对用户 Prompt 的自动判定，分类规则对应上面的“快速查询 / 深度开发 / 运维操作 / 安全审计 / 架构设计”；如果留空，表示该模板可作为通用模板参与选择。
+                      </a-typography-text>
+                    </a-space>
                   </a-form-item>
                 </a-form>
               </a-collapse-panel>
@@ -764,25 +906,42 @@
             <a-typography-text type="secondary" style="display: block; margin-bottom: 12px; font-size: 12px">
               并行竞争模式下，裁判 Agent 对多个候选结果进行评分，选出最优方案。仅在并行模板启用时生效。
             </a-typography-text>
+            <a-alert
+              v-if="!hasEnabledParallelTemplate"
+              type="warning"
+              show-icon
+              style="margin-bottom: 12px"
+              message="当前没有启用的并行竞争模板，裁判配置暂时不会生效。请先在上方工作流模板中添加一个「并行竞争」模式的模板并启用。"
+            />
             <a-form layout="vertical">
               <a-form-item label="启用裁判">
-                <a-switch v-model:checked="strategyData.judge.enabled" />
+                <a-switch v-model:checked="strategyData.judge.enabled" :disabled="!hasEnabledParallelTemplate" />
               </a-form-item>
               <a-row :gutter="12">
                 <a-col :span="8">
                   <a-form-item label="裁判 Agent">
-                    <a-input
-                      :value="strategyData.judge.agent"
+                    <a-select
+                      :value="strategyData.judge.agent || undefined"
                       placeholder="prometheus-enterprise"
+                      style="width: 100%"
+                      show-search
+                      :options="getStrategySingleAgentSelectOptions(strategyData.judge.agent)"
+                      option-filter-prop="label"
+                      allow-clear
                       @update:value="strategyData.judge.agent = String($event ?? '')"
                     />
                   </a-form-item>
                 </a-col>
                 <a-col :span="8">
                   <a-form-item label="指定模型">
-                    <a-input
-                      :value="strategyData.judge.model"
+                    <a-select
+                      :value="strategyData.judge.model || undefined"
                       placeholder="留空使用系统默认"
+                      style="width: 100%"
+                      show-search
+                      :options="getStrategyModelSelectOptions(strategyData.judge.model)"
+                      option-filter-prop="label"
+                      allow-clear
                       @update:value="strategyData.judge.model = String($event ?? '')"
                     />
                   </a-form-item>
@@ -817,12 +976,18 @@
           </a-card>
 
           <a-button type="primary" style="margin-top: 16px" :loading="strategySaving" @click="saveStrategy">保存编排策略</a-button>
+          </template>
         </a-spin>
       </a-tab-pane>
 
       <!-- ═══════════ 恢复策略 ═══════════ -->
       <a-tab-pane v-if="isSystemAdmin" key="policy" tab="恢复策略">
         <a-spin :spinning="policyLoading">
+          <a-card v-if="policyLoading">
+            <a-skeleton active :paragraph="{ rows: 8 }" />
+          </a-card>
+
+          <template v-else>
           <a-card title="失败恢复与续跑策略" size="small">
             <a-form layout="vertical">
               <a-row :gutter="16">
@@ -859,6 +1024,7 @@
           </a-card>
 
           <a-button type="primary" style="margin-top: 16px" :loading="policySaving" @click="savePolicy">保存恢复策略</a-button>
+          </template>
         </a-spin>
       </a-tab-pane>
 
@@ -928,7 +1094,8 @@
 
 <script setup lang="ts">
 import { message } from "ant-design-vue";
-import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from "vue";
+import { useRoute } from "vue-router";
 import {
   type AdminUser,
   type AgentDetail,
@@ -938,6 +1105,7 @@ import {
   type CommandSummary,
   type ContinuationPolicy,
   type CopilotModelInfo,
+  type DiscoveredProviderModel,
   type JudgeConfig,
   type LifecycleHook,
   type McpServer,
@@ -971,6 +1139,7 @@ import {
   pollCopilotToken,
   reconcileRunningTasks,
   requestCopilotDeviceCode,
+  testModelProvider,
   uninstallPlugin,
   updateAgent,
   updateCommand,
@@ -983,10 +1152,12 @@ import {
   updateSkill,
 } from "../lib/api";
 import { PASSWORD_POLICY_HINT, validatePasswordPolicy } from "../lib/password-policy";
+import { resolveSettingsDeepLink } from "../lib/settings-deep-link";
 import { useAuthStore } from "../stores/auth";
 
 // ── Tab ────────────────────────────────────────────────────────────
 const authStore = useAuthStore();
+const route = useRoute();
 const isSystemAdmin = computed(
   () => authStore.user?.role === "platform_admin" || authStore.user?.role === "org_admin",
 );
@@ -999,6 +1170,60 @@ const reconcileAuditEvents = ref<AuditEvent[]>([]);
 const adminUsers = ref<AdminUser[]>([]);
 function setActiveTab(value: unknown) {
   activeTab.value = String(value);
+}
+
+function prefillProviderDraft(draft: { key: string; api?: string } | undefined) {
+  if (!draft) {
+    return;
+  }
+  if (!newProvider.key.trim()) {
+    newProvider.key = draft.key;
+  }
+  if (draft.api) {
+    newProvider.api = draft.api;
+  }
+}
+
+async function applySettingsDeepLink() {
+  const resolution = resolveSettingsDeepLink({
+    tab: route.query.tab,
+    section: route.query.section,
+    provider: route.query.provider,
+    providerKeys: providerTableData.value.map((entry) => entry.key),
+    authenticatedCopilotProviders: Object.entries(copilotAuthMap)
+      .filter(([, state]) => state?.authenticated)
+      .map(([provider]) => provider),
+  });
+
+  if (resolution.activeTab) {
+    activeTab.value = resolution.activeTab;
+  }
+
+  if (activeTab.value !== "models" || modelsLoading.value) {
+    return;
+  }
+
+  if (resolution.ensureCopilotProvider) {
+    ensureCopilotAuthState(resolution.ensureCopilotProvider);
+  }
+
+  if (resolution.expandCopilotProvider) {
+    setCopilotModelCollapseActiveKey(resolution.expandCopilotProvider, ["models"]);
+  }
+
+  showAddProvider.value = resolution.openProviderModal;
+  if (resolution.providerDraft) {
+    prefillProviderDraft(resolution.providerDraft);
+  }
+
+  await nextTick();
+  const targetId = resolution.targetId;
+  if (!targetId) {
+    return;
+  }
+
+  const element = document.getElementById(targetId);
+  element?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 const latestReconcileAudit = computed(() => reconcileAuditEvents.value[0] ?? null);
@@ -1319,11 +1544,47 @@ const agentModelSelectOptions = computed(() =>
   buildModelSelectOptions(getRecordString(agentDetail.value?.frontmatter ?? {}, "model")),
 );
 
+function buildAgentSelectOptions(currentAgents: string[] = []) {
+  const currentValues = currentAgents.filter(Boolean);
+  const knownAgents = agentsList.value.map((agent) => agent.name).filter(Boolean);
+  const allAgents = [...knownAgents, ...currentValues];
+  const seen = new Set<string>();
+
+  return allAgents
+    .filter((agent) => {
+      if (seen.has(agent)) return false;
+      seen.add(agent);
+      return true;
+    })
+    .map((agent) => ({ value: agent, label: agent }));
+}
+
+function getStrategyAgentSelectOptions(currentAgents: string[] = []) {
+  return buildAgentSelectOptions(currentAgents);
+}
+
+function getStrategySingleAgentSelectOptions(currentAgent = "") {
+  return buildAgentSelectOptions(currentAgent ? [currentAgent] : []);
+}
+
+function getStrategyModelSelectOptions(currentModel = "") {
+  return buildModelSelectOptions(currentModel);
+}
+
 const providerColumns = [
   { title: "Key", dataIndex: "key", width: "15%" },
-  { title: "名称", dataIndex: "name", width: "20%" },
-  { title: "API 类型", dataIndex: "api", width: "20%" },
-  { title: "Base URL", dataIndex: "baseURL", width: "35%" },
+  { title: "名称", dataIndex: "name", width: "16%" },
+  { title: "API 类型", dataIndex: "api", width: "16%" },
+  { title: "Base URL", dataIndex: "baseURL", width: "24%" },
+  { title: "API Key", dataIndex: "apiKey", width: "19%" },
+  { title: "", dataIndex: "action", width: "10%" },
+];
+
+const discoveredProviderModelColumns = [
+  { title: "ID", dataIndex: "id", width: "30%" },
+  { title: "名称", dataIndex: "name", width: "28%" },
+  { title: "Context Window", dataIndex: "contextWindow", width: "16%" },
+  { title: "Max Tokens", dataIndex: "maxTokens", width: "16%" },
   { title: "", dataIndex: "action", width: "10%" },
 ];
 
@@ -1335,7 +1596,34 @@ const providerTableData = computed(() =>
 );
 
 const showAddProvider = ref(false);
-const newProvider = reactive({ key: "", name: "", api: "openai-completions", baseURL: "" });
+const newProvider = reactive({
+  key: "",
+  name: "",
+  api: "openai-completions",
+  baseURL: "",
+  apiKey: "",
+});
+const providerTestLoading = reactive<Record<string, boolean>>({});
+const providerModelLoading = reactive<Record<string, boolean>>({});
+const providerModelPicker = reactive<{
+  open: boolean;
+  providerKey: string;
+  models: DiscoveredProviderModel[];
+  message: string;
+  error: boolean;
+}>({
+  open: false,
+  providerKey: "",
+  models: [],
+  message: "",
+  error: false,
+});
+
+function getProviderTableRowProps(record: { key: string }) {
+  return {
+    id: `settings-models-provider-row-${record.key}`,
+  };
+}
 
 function getRecordString(record: Record<string, unknown>, key: string) {
   const value = record[key];
@@ -1346,7 +1634,7 @@ function setRecordString(record: Record<string, unknown>, key: string, value: un
   record[key] = String(value ?? "");
 }
 
-function addProvider() {
+async function addProvider() {
   if (!newProvider.key) {
     message.warning("请输入 Key");
     return;
@@ -1355,21 +1643,131 @@ function addProvider() {
     message.warning("该 Key 已存在");
     return;
   }
-  modelsData.providers[newProvider.key] = {
+  const providerKey = newProvider.key;
+  modelsData.providers[providerKey] = {
     api: newProvider.api,
-    name: newProvider.name || newProvider.key,
+    name: newProvider.name || providerKey,
     ...(newProvider.baseURL ? { baseURL: newProvider.baseURL } : {}),
+    ...(newProvider.apiKey ? { apiKey: newProvider.apiKey } : {}),
   };
   showAddProvider.value = false;
   newProvider.key = "";
   newProvider.name = "";
   newProvider.api = "openai-completions";
   newProvider.baseURL = "";
+  newProvider.apiKey = "";
+
+  const provider = modelsData.providers[providerKey] as Record<string, unknown> | undefined;
+  if (provider && getRecordString(provider, "baseURL")) {
+    await chooseProviderModels(providerKey);
+  }
 }
 
 function updateProvider(key: string, field: string, value: unknown) {
   const p = modelsData.providers[key] as Record<string, unknown>;
   if (p) p[field] = String(value ?? "");
+}
+
+async function testProvider(key: string) {
+  const provider = modelsData.providers[key] as Record<string, unknown> | undefined;
+  if (!provider) {
+    message.warning("Provider 不存在");
+    return;
+  }
+
+  providerTestLoading[key] = true;
+  try {
+    const result = await testModelProvider({ key, provider });
+    if (result.data.ok) {
+      message.success(`${key}：${result.data.message}`);
+    } else {
+      message.error(`${key}：${result.data.message}`);
+    }
+  } catch (error) {
+    message.error(
+      error instanceof Error ? `${key}：${error.message}` : `${key}：测试 Provider 失败`,
+    );
+  } finally {
+    providerTestLoading[key] = false;
+  }
+}
+
+function closeProviderModelPicker() {
+  providerModelPicker.open = false;
+  providerModelPicker.providerKey = "";
+  providerModelPicker.models = [];
+  providerModelPicker.message = "";
+  providerModelPicker.error = false;
+}
+
+async function chooseProviderModels(key: string) {
+  const provider = modelsData.providers[key] as Record<string, unknown> | undefined;
+  if (!provider) {
+    message.warning("Provider 不存在");
+    return;
+  }
+
+  providerModelLoading[key] = true;
+  try {
+    const result = await testModelProvider({ key, provider });
+    providerModelPicker.open = true;
+    providerModelPicker.providerKey = key;
+    providerModelPicker.models = result.data.models || [];
+    providerModelPicker.message = result.data.message;
+    providerModelPicker.error = !result.data.ok;
+    if (!result.data.ok) {
+      message.error(`${key}：${result.data.message}`);
+      return;
+    }
+    if (!providerModelPicker.models.length) {
+      message.info(`${key}：未读取到可导入模型`);
+    }
+  } catch (error) {
+    providerModelPicker.open = true;
+    providerModelPicker.providerKey = key;
+    providerModelPicker.models = [];
+    providerModelPicker.message = error instanceof Error ? error.message : "读取可用模型失败";
+    providerModelPicker.error = true;
+    message.error(
+      error instanceof Error ? `${key}：${error.message}` : `${key}：读取可用模型失败`,
+    );
+  } finally {
+    providerModelLoading[key] = false;
+  }
+}
+
+function addDiscoveredModelFor(model: DiscoveredProviderModel, provider: string) {
+  if (!provider || isModelConfigured(provider, model.id)) return;
+  modelsData.list.push({
+    id: model.id,
+    name: model.name || model.id,
+    provider,
+    contextWindow: model.contextWindow ?? 200000,
+    maxTokens: model.maxTokens ?? 16384,
+  });
+}
+
+function addDiscoveredModelFromRecord(record: Record<string, unknown>) {
+  addDiscoveredModelFor(
+    {
+      id: String(record.id || ""),
+      name: String(record.name || record.id || ""),
+      contextWindow: typeof record.contextWindow === "number" ? record.contextWindow : null,
+      maxTokens: typeof record.maxTokens === "number" ? record.maxTokens : null,
+    },
+    providerModelPicker.providerKey,
+  );
+}
+
+function addAllDiscoveredModels() {
+  const provider = providerModelPicker.providerKey;
+  const pending = providerModelPicker.models.filter((model) => !isModelConfigured(provider, model.id));
+  if (!pending.length) {
+    message.info("可用模型已全部加入当前配置");
+    return;
+  }
+  pending.forEach((model) => addDiscoveredModelFor(model, provider));
+  message.success(`已添加 ${pending.length} 个模型，请点击“保存模型配置”生效`);
 }
 
 function getNextCopilotProviderKey() {
@@ -1919,7 +2317,7 @@ async function checkCompat() {
 }
 
 // ── Orchestration Strategy ─────────────────────────────────────────
-const strategyLoading = ref(false);
+const strategyLoading = ref(true);
 const strategySaving = ref(false);
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -1928,6 +2326,14 @@ const CATEGORY_LABELS: Record<string, string> = {
   ops: "运维操作",
   security: "安全审计",
   architecture: "架构设计",
+};
+
+const DEFAULT_CATEGORY_AGENTS: Record<string, string[]> = {
+  quick: ["explore-enterprise"],
+  deep: ["sisyphus-enterprise", "prometheus-enterprise", "hephaestus-enterprise"],
+  ops: ["oracle-enterprise"],
+  security: ["oracle-enterprise", "hephaestus-enterprise"],
+  architecture: ["prometheus-enterprise", "oracle-enterprise"],
 };
 
 const strategyData = reactive<OrchestrationStrategy>({
@@ -1983,6 +2389,36 @@ function updateStrategyModel(category: string, model: string) {
 }
 
 const CATEGORY_LABELS_MAP = CATEGORY_LABELS;
+
+const hasEnabledParallelTemplate = computed(() =>
+  strategyData.templates.some((t) => t.enabled && t.mode === "parallel"),
+);
+
+function handleTemplateCategoryChange(
+  tpl: OrchestrationStrategy["templates"][number],
+  categories: string[],
+) {
+  const oldCategories = tpl.categoryDefaults ?? [];
+  tpl.categoryDefaults = categories;
+
+  // Auto-fill agents when categories are added and agent list is empty
+  if (tpl.agents.length === 0 && categories.length > 0) {
+    const newCats = categories.filter((c) => !oldCategories.includes(c));
+    if (newCats.length > 0) {
+      const agentsToAdd: string[] = [];
+      for (const cat of newCats) {
+        const mapped = strategyData.categoryAgentMap[cat];
+        const source = mapped && mapped.length > 0 ? mapped : DEFAULT_CATEGORY_AGENTS[cat] ?? [];
+        for (const a of source) {
+          if (!agentsToAdd.includes(a)) agentsToAdd.push(a);
+        }
+      }
+      if (agentsToAdd.length > 0) {
+        tpl.agents = agentsToAdd;
+      }
+    }
+  }
+}
 
 const HOOK_SECTIONS = [
   { trigger: "pre-execution", title: "执行前 Hook", emptyText: "暂无执行前 Hook" },
@@ -2053,7 +2489,7 @@ async function saveStrategy() {
 }
 
 // ── Continuation Policy ────────────────────────────────────────────
-const policyLoading = ref(false);
+const policyLoading = ref(true);
 const policySaving = ref(false);
 
 const policyData = reactive<ContinuationPolicy>({
@@ -2201,33 +2637,45 @@ onMounted(async () => {
     return;
   }
 
-  // Load overview for quick lists
+  await applySettingsDeepLink();
+
+  modelsLoading.value = true;
   try {
-    const overview = await getConfigOverview();
-    const d = overview.data;
-    agentsList.value = d.agents;
-    skillsList.value = d.skills as SkillSummary[];
-    Object.assign(modelsData.defaults, d.models.defaults);
-    modelsData.list = d.models.list;
+    // Load overview for quick lists
+    try {
+      const overview = await getConfigOverview();
+      const d = overview.data;
+      agentsList.value = d.agents;
+      skillsList.value = d.skills as SkillSummary[];
+      Object.assign(modelsData.defaults, d.models.defaults);
+      modelsData.list = d.models.list;
 
-    // MCP
-    Object.assign(mcpData, d.mcp);
+      // MCP
+      Object.assign(mcpData, d.mcp);
 
-    // Plugins
-    pluginsList.value = d.plugins;
-  } catch {
-    message.error("加载配置概览失败");
+      // Plugins
+      pluginsList.value = d.plugins;
+    } catch {
+      message.error("加载配置概览失败");
+    }
+
+    // Load models providers separately (overview doesn't include them)
+    try {
+      const modelsRes = await getModelsConfig();
+      Object.assign(modelsData.providers, modelsRes.data.providers);
+    } catch {
+      /* ignore */
+    }
+
+    // Copilot auth status depends on configured providers.
+    await loadCopilotStatus();
+  } finally {
+    modelsLoading.value = false;
   }
+
+  await applySettingsDeepLink();
 
   await Promise.allSettled([loadAdminUsers(), loadReconcileAuditEvents()]);
-
-  // Load models providers separately (overview doesn't include them)
-  try {
-    const modelsRes = await getModelsConfig();
-    Object.assign(modelsData.providers, modelsRes.data.providers);
-  } catch {
-    /* ignore */
-  }
 
   // Commands (not in overview)
   try {
@@ -2244,9 +2692,6 @@ onMounted(async () => {
   } catch {
     /* ignore */
   }
-
-  // Copilot auth status
-  await loadCopilotStatus();
 
   // Orchestration strategy
   try {
@@ -2270,6 +2715,13 @@ onMounted(async () => {
     policyLoading.value = false;
   }
 });
+
+watch(
+  () => [route.query.tab, route.query.section, route.query.provider, modelsLoading.value],
+  () => {
+    void applySettingsDeepLink();
+  },
+);
 </script>
 
 <style scoped>

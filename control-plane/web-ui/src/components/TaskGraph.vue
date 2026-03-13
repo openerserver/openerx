@@ -3,15 +3,15 @@
     :nodes="graphNodes"
     :edges="graphEdges"
     :fit-view-on-init="true"
-    style="height: 100%; background: #0f172a; border-radius: 8px"
+    :style="taskGraphTheme.canvas"
   >
-    <Background :gap="20" :color="'#334155'" />
+    <Background :gap="20" :color="taskGraphTheme.backgroundColor" />
     <Controls />
     <template #node-default="{ data }">
       <div :style="nodeStyle(data.status)">
         <div style="font-size: 12px; font-weight: 500">{{ data.label }}</div>
         <div
-          :style="{ fontSize: '10px', marginTop: '2px', color: statusColors[data.status] || '#64748b' }"
+          :style="{ fontSize: '10px', marginTop: '2px', color: taskGraphTheme.statusColors[data.status] || '#64748b' }"
         >
           {{ statusLabel(data.status) }}
         </div>
@@ -30,6 +30,7 @@ import "@vue-flow/core/dist/theme-default.css";
 import "@vue-flow/controls/dist/style.css";
 import dagre from "dagre";
 import { type TaskGraphData, getTaskGraph } from "../lib/api";
+import { buildTaskGraphNodeStyle, taskGraphTheme } from "../theme/ui-theme";
 
 interface TaskEvent {
   id: string;
@@ -72,19 +73,6 @@ watch(
   },
 );
 
-const statusColors: Record<string, string> = {
-  pending: "#64748b",
-  blocked: "#a855f7",
-  in_progress: "#3b82f6",
-  running: "#3b82f6",
-  completed: "#22c55e",
-  failed: "#ef4444",
-  stopped: "#6b7280",
-  paused: "#f59e0b",
-  waiting_approval: "#f97316",
-  cancelled: "#6b7280",
-};
-
 function statusLabel(status: string) {
   const map: Record<string, string> = {
     pending: "待执行",
@@ -103,15 +91,7 @@ function statusLabel(status: string) {
 }
 
 function nodeStyle(status: string): CSSProperties {
-  return {
-    background: "#1e293b",
-    border: `2px solid ${statusColors[status] || "#64748b"}`,
-    borderRadius: "8px",
-    padding: "8px 12px",
-    color: "#e2e8f0",
-    textAlign: "center",
-    minWidth: "140px",
-  };
+  return buildTaskGraphNodeStyle(status);
 }
 
 const layoutResult = computed(() => {
@@ -190,7 +170,7 @@ const layoutResult = computed(() => {
     source: e.source,
     target: e.target,
     animated: true,
-    style: { stroke: "#475569" },
+    style: { stroke: taskGraphTheme.edgeStroke },
   }));
 
   return { nodes: flowNodes, edges: flowEdges };

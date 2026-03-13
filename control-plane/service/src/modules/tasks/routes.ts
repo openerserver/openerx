@@ -9,6 +9,7 @@ import {
   repositoryCredentials,
   taskEdges,
   taskNodes,
+  taskSessions,
   tasks,
 } from "../../db/schema";
 import { type AppEnv, authMiddleware } from "../../middleware/auth";
@@ -207,6 +208,7 @@ const updateStatusSchema = z.object({
   sessionId: z.string().optional(),
   agentRunId: z.string().optional(),
   result: z.string().optional(),
+  selectedModel: z.string().max(200).nullable().optional(),
   category: z.enum(["quick", "deep", "ops", "security", "architecture"]).optional(),
   strategy: z.string().optional(),
   executionMode: z.enum(["single", "parallel"]).optional(),
@@ -240,6 +242,7 @@ const directTaskUpdateKeys = [
   "sessionId",
   "agentRunId",
   "result",
+  "selectedModel",
   "category",
   "strategy",
   "executionMode",
@@ -478,4 +481,145 @@ taskRoutes.patch("/:taskId/runs/:runId", zValidator("json", updateRunSchema), as
   await db.update(agentRuns).set(updates).where(eq(agentRuns.id, runId));
 
   return c.json({ id: runId, ...updates });
+});
+
+// ── Task Sessions (branch lineage) ─────────────────────────────────
+
+// GET /api/tasks/:taskId/task-sessions — List all task_sessions for a task (branch tree data)
+taskRoutes.get("/:taskId/task-sessions", async (c) => {
+  const taskId = c.req.param("taskId");
+
+  const task = await db.query.tasks.findFirst({ where: eq(tasks.id, taskId) });
+  if (!task) return c.json({ error: "Task not found" }, 404);
+
+  const rows = await db
+    .select()
+    .from(taskSessions)
+    .where(eq(taskSessions.taskId, taskId))
+    .orderBy(taskSessions.createdAt);
+
+  return c.json({ data: rows });
+});
+
+// POST /api/tasks/:taskId/task-sessions — Create a task_session record (root or fork)
+const createTaskSessionSchema = z.object({
+  runtimeSessionId: z.string().min(1),
+  parentRuntimeSessionId: z.string().optional(),
+  forkedFromMessageId: z.string().optional(),
+  branchName: z.string().max(200).optional(),
+  sourceType: z.enum(["root", "fork", "sub_session"]).optional(),
+  isActive: z.boolean().optional(),
+});
+
+taskRoutes.post("/:taskId/task-sessions", zValidator("json", createTaskSessionSchema), async (c) => {
+  const taskId = c.req.param("taskId");
+  const body = c.req.valid("json");
+
+  const task = await db.query.tasks.findFirst({ where: eq(tasks.id, taskId) });
+  if (!task) return c.json({ error: "Task not found" }, 404);
+
+  const now = new Date().toISOString();
+  const existingRecord = await db.query.taskSessions.findFirst({
+    where: and(
+      eq(taskSessions.taskId, taskId),
+      eq(taskSessions.runtimeSessionId, body.runtimeSessionId),
+    ),
+  });
+
+  // If marking this as active, deactivate others first
+  if (body.isActive) {
+    await db
+      .update(taskSessions)
+      .set({ isActive: false, updatedAt: now })
+      .where(and(eq(taskSessions.taskId, taskId), eq(taskSessions.isActive, true)));
+  }
+
+  if (existingRecord) {
+    await db
+      .update(taskSessions)
+      .set({
+        parentRuntimeSessionId: body.parentRuntimeSessionId ?? existingRecord.parentRuntimeSessionId,
+        forkedFromMessageId: body.forkedFromMessageId ?? existingRecord.forkedFromMessageId,
+        branchName: body.branchName ?? existingRecord.branchName,
+        sourceType: body.sourceType ?? existingRecord.sourceType,
+        isActive: body.isActive ?? existingRecord.isActive,
+        archivedAt: null,
+        updatedAt: now,
+      })
+      .where(eq(taskSessions.id, existingRecord.id));
+
+    return c.json({
+      id: existingRecord.id,
+      taskId,
+      runtimeSessionId: body.runtimeSessionId,
+      updated: true,
+    });
+  }
+
+  const id = crypto.randomUUID();
+
+  await db.insert(taskSessions).values({
+    id,
+    taskId,
+    runtimeSessionId: body.runtimeSessionId,
+    parentRuntimeSessionId: body.parentRuntimeSessionId ?? null,
+    forkedFromMessageId: body.forkedFromMessageId ?? null,
+    branchName: body.branchName ?? null,
+    sourceType: body.sourceType ?? "root",
+    isActive: body.isActive ?? false,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  return c.json({ id, taskId, runtimeSessionId: body.runtimeSessionId }, 201);
+});
+
+// POST /api/tasks/:taskId/task-sessions/:sessionId/activate — Set a branch as active
+taskRoutes.post("/:taskId/task-sessions/:tsId/activate", async (c) => {
+  const taskId = c.req.param("taskId");
+  const tsId = c.req.param("tsId");
+  const now = new Date().toISOString();
+
+  const record = await db.query.taskSessions.findFirst({
+    where: and(eq(taskSessions.id, tsId), eq(taskSessions.taskId, taskId)),
+  });
+  if (!record) return c.json({ error: "Task session not found" }, 404);
+
+  // Deactivate all, then activate the target
+  await db
+    .update(taskSessions)
+    .set({ isActive: false, updatedAt: now })
+    .where(and(eq(taskSessions.taskId, taskId), eq(taskSessions.isActive, true)));
+
+  await db
+    .update(taskSessions)
+    .set({ isActive: true, updatedAt: now })
+    .where(eq(taskSessions.id, tsId));
+
+  // Sync tasks.sessionId to the activated branch's runtime session
+  await db
+    .update(tasks)
+    .set({ sessionId: record.runtimeSessionId })
+    .where(eq(tasks.id, taskId));
+
+  return c.json({ ok: true, activatedSessionId: record.runtimeSessionId });
+});
+
+// POST /api/tasks/:taskId/task-sessions/:sessionId/archive — Archive a branch
+taskRoutes.post("/:taskId/task-sessions/:tsId/archive", async (c) => {
+  const taskId = c.req.param("taskId");
+  const tsId = c.req.param("tsId");
+  const now = new Date().toISOString();
+
+  const record = await db.query.taskSessions.findFirst({
+    where: and(eq(taskSessions.id, tsId), eq(taskSessions.taskId, taskId)),
+  });
+  if (!record) return c.json({ error: "Task session not found" }, 404);
+
+  await db
+    .update(taskSessions)
+    .set({ archivedAt: now, updatedAt: now })
+    .where(eq(taskSessions.id, tsId));
+
+  return c.json({ ok: true });
 });

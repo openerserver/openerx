@@ -1,3 +1,10 @@
+import { existsSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  DEFAULT_EXECUTION_AGENT,
+  isDefaultExecutionAgent,
+} from "../../lib/orchestration-strategy";
 import type { AgentRunStatus } from "../../types/events";
 
 // ── OpenCode Adapter ───────────────────────────────────────────────
@@ -7,6 +14,7 @@ const OPENCODE_URL = process.env.OPENCODE_URL || "http://localhost:4096";
 const OPENCODE_PROVIDER_ID = process.env.OPENCODE_PROVIDER_ID || "github-copilot";
 const OPENCODE_MODEL_ID = process.env.OPENCODE_MODEL_ID || "claude-sonnet-4";
 const configuredMinActiveBeforePauseMs = Number(process.env.OPENCODE_MIN_ACTIVE_BEFORE_PAUSE_MS);
+const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
 
 interface OpencodeResponse {
   ok: boolean;
@@ -49,6 +57,41 @@ type PromptOptions = {
     gitCommitterEmail?: string;
   };
 };
+
+function getAgentDefinitionDirs(): string[] {
+  const candidates = [
+    process.env.OPENCODE_DIR,
+    process.env.OPENCODE_ROOT,
+    process.cwd(),
+    resolve(MODULE_DIR, "../../../../../"),
+    resolve(MODULE_DIR, "../../../../../opencode-fork"),
+  ].filter((value): value is string => Boolean(value));
+
+  return Array.from(new Set(candidates.map((directory) => join(directory, ".opencode", "agents"))));
+}
+
+function hasRuntimeAgentDefinition(agentName: string): boolean {
+  if (!agentName || isDefaultExecutionAgent(agentName)) {
+    return true;
+  }
+
+  return getAgentDefinitionDirs().some((directory) =>
+    existsSync(join(directory, `${agentName}.md`)),
+  );
+}
+
+function resolvePromptAgent(agentName?: string): string | undefined {
+  if (!agentName) {
+    return undefined;
+  }
+
+  if (hasRuntimeAgentDefinition(agentName)) {
+    return agentName;
+  }
+
+  console.warn(`[opencode-adapter] agent definition not found for ${agentName}; falling back to runtime default agent`);
+  return undefined;
+}
 
 function appendExecutionContextLines(lines: string[], options?: PromptOptions): void {
   if (!options?.taskId || !options?.projectId) {
@@ -104,6 +147,7 @@ function buildExecutionContext(options?: PromptOptions): string {
 
 function buildPromptBody(text: string, options?: PromptOptions): Record<string, unknown> {
   const executionContext = buildExecutionContext(options);
+  const agent = resolvePromptAgent(options?.agent);
 
   const modelProvider = options?.model?.providerId || OPENCODE_PROVIDER_ID;
   const modelId = options?.model?.modelId || OPENCODE_MODEL_ID;
@@ -114,7 +158,7 @@ function buildPromptBody(text: string, options?: PromptOptions): Record<string, 
       providerID: modelProvider,
       modelID: modelId,
     },
-    ...(options?.agent ? { agent: options.agent } : {}),
+    ...(agent ? { agent } : {}),
     ...(typeof options?.noReply === "boolean" ? { noReply: options.noReply } : {}),
   };
 }
@@ -281,6 +325,43 @@ export function listAgentRuns() {
   }));
 }
 
+export function ensureAgentRunForSession(
+  sessionId: string,
+  taskId: string,
+  projectId: string,
+  model?: { providerId: string; modelId: string },
+  agentRunId?: string,
+) {
+  const existing = findAgentRunBySessionId(sessionId);
+
+  if (existing) {
+    const run = agentRunRegistry.get(existing.agentRunId);
+    if (run) {
+      run.status = "running";
+      run.taskId = taskId;
+      run.projectId = projectId;
+      run.startedAt = Date.now();
+      run.pausedAt = undefined;
+      run.finishedAt = undefined;
+      if (model) {
+        run.model = model;
+      }
+      markPromptSent(run);
+    }
+
+    return existing.agentRunId;
+  }
+
+  const resolvedAgentRunId = agentRunId || crypto.randomUUID();
+  registerAgentRun(resolvedAgentRunId, sessionId, taskId, projectId, model);
+  const created = agentRunRegistry.get(resolvedAgentRunId);
+  if (created) {
+    markPromptSent(created);
+  }
+
+  return resolvedAgentRunId;
+}
+
 // ── Control Operations ─────────────────────────────────────────────
 
 /**
@@ -337,7 +418,7 @@ export async function createSession(
     "POST",
     `/session/${sessionId}/prompt_async`,
     buildPromptBody(prompt, {
-      agent: options?.agent || "build",
+      agent: options?.agent || DEFAULT_EXECUTION_AGENT,
       model: options?.model,
       taskId,
       projectId,
@@ -564,6 +645,27 @@ async function waitForSessionText(
 
 export async function listSessions(limit = 20): Promise<OpencodeResponse> {
   return await opcall("GET", `/session?limit=${limit}`);
+}
+
+export async function forkSession(
+  sessionId: string,
+  options?: { title?: string },
+): Promise<OpencodeResponse & { sessionId?: string }> {
+  const result = await opcall(
+    "POST",
+    `/session/${sessionId}/fork`,
+    options?.title ? { title: options.title } : undefined,
+  );
+
+  if (!result.ok) {
+    return { ok: false, error: result.error || "Failed to fork session" };
+  }
+
+  const sessionData = result.data as { id?: string; sessionID?: string } | undefined;
+  return {
+    ...result,
+    sessionId: sessionData?.id || sessionData?.sessionID,
+  }; 
 }
 
 export async function runDetachedPrompt(

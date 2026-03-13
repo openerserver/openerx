@@ -16,9 +16,13 @@ import { projectRoutes } from "./modules/projects/routes";
 import { realtimeRoutes } from "./modules/realtime/routes";
 import { websocketHandler } from "./modules/realtime/ws-broadcaster";
 import { repositoryRoutes } from "./modules/repositories/routes";
-import { reconcileRunningTasksOnStartup } from "./modules/tasks/reconcile";
+import {
+  reconcileRunningTasksOnStartup,
+  startPeriodicReconcile,
+} from "./modules/tasks/reconcile";
 import { taskRoutes } from "./modules/tasks/routes";
 import { userRoutes } from "./modules/users/routes";
+import { workbenchRoutes } from "./modules/workbench/routes";
 
 const app = new Hono();
 
@@ -58,12 +62,14 @@ app.route("/api/credentials", credentialRoutes);
 app.route("/api/orgs", orgRoutes);
 app.route("/api/users", userRoutes);
 app.route("/api/config", configRoutes);
+app.route("/api/workbench", workbenchRoutes);
 
 // ── Start Server ───────────────────────────────────────────────────
 
 const port = Number(process.env.BFF_PORT) || 4098;
 
 void reconcileRunningTasksOnStartup();
+startPeriodicReconcile();
 
 export default {
   port,

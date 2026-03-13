@@ -257,14 +257,14 @@ describe("lifecycle hooks integration", () => {
           await updateOrchestrationStrategy({
             ...originalStrategy,
             categoryAgentMap: Object.fromEntries(
-              Object.keys(originalStrategy.categoryAgentMap).map((key) => [key, ["build"]]),
+              Object.keys(originalStrategy.categoryAgentMap).map((key) => [key, ["default-executor"]]),
             ),
             hooks: [
               {
                 id: "pre-execution-test",
                 trigger: "pre-execution",
                 enabled: true,
-                agent: "build",
+                agent: "default-executor",
                 model: "",
                 timeoutMs: 15000,
                 promptTemplate: [
@@ -299,7 +299,7 @@ describe("lifecycle hooks integration", () => {
             (hook) => hook.trigger === "pre-execution",
           );
           expect(preExecution).toBeTruthy();
-          expect(preExecution?.agent).toBe("build");
+          expect(preExecution?.agent).toBe("default-executor");
           expect(preExecution?.prompt).toContain(taskTitle);
           expect(preExecution?.prompt).toContain("Task title:");
           expect(preExecution?.prompt).toContain(taskPrompt);
@@ -328,14 +328,14 @@ describe("lifecycle hooks integration", () => {
           await updateOrchestrationStrategy({
             ...originalStrategy,
             categoryAgentMap: Object.fromEntries(
-              Object.keys(originalStrategy.categoryAgentMap).map((key) => [key, ["build"]]),
+              Object.keys(originalStrategy.categoryAgentMap).map((key) => [key, ["default-executor"]]),
             ),
             hooks: [
               {
                 id: "post-execution-test",
                 trigger: "post-execution",
                 enabled: true,
-                agent: "build",
+                agent: "default-executor",
                 model: "",
                 timeoutMs: 15000,
                 promptTemplate: [
@@ -385,7 +385,7 @@ describe("lifecycle hooks integration", () => {
 
           expect(hooksUpdatedEvent.data).toMatchObject({
             phase: "postExecution",
-            agent: "build",
+            agent: "default-executor",
           });
 
           const { strategy } = await waitForTaskStrategy(
@@ -401,7 +401,7 @@ describe("lifecycle hooks integration", () => {
             (hook) => hook.trigger === "post-execution",
           );
           expect(postExecution).toBeTruthy();
-          expect(postExecution?.agent).toBe("build");
+          expect(postExecution?.agent).toBe("default-executor");
           expect(postExecution?.prompt).toContain("Task title:");
           expect(postExecution?.prompt).toContain("Execution result:");
           expect(postExecution?.completedAt).toBeTruthy();

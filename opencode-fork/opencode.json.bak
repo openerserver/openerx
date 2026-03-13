@@ -1,6 +1,6 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "qwen-local/qwen/qwen3.5-35b-a3b",
+  "model": "github-copilot/gemini-3-flash-preview",
   "server": {
     "port": 4096,
     "hostname": "127.0.0.1"
@@ -40,7 +40,8 @@
         }
       },
       "options": {
-        "baseURL": "http://192.168.31.103:1234/v1"
+        "baseURL": "http://192.168.1.103:8000/v1",
+        "apiKey": "1234"
       }
     }
   },
@@ -90,13 +91,15 @@
   },
   "models": {
     "providers": {
+      "qwen-local": {
+        "api": "openai-completions",
+        "name": "Qwen Local",
+        "baseURL": "http://192.168.31.103:8000/v1",
+        "apiKey": "1234"
+      },
       "github-copilot": {
         "api": "github-copilot",
         "name": "GitHub Copilot"
-      },
-      "jack": {
-        "api": "github-copilot",
-        "name": "jackgithub"
       },
       "github-copilot-2": {
         "api": "github-copilot",
@@ -104,6 +107,16 @@
       }
     },
     "list": [
+      {
+        "id": "qwen/qwen3.5-35b-a3b",
+        "name": "Qwen 3.5 35B A3B",
+        "provider": "qwen-local"
+      },
+      {
+        "id": "zai-org/glm-4.7-flash",
+        "name": "GLM 4.7 Flash",
+        "provider": "qwen-local"
+      },
       {
         "id": "gpt-5.4",
         "name": "GPT-5.4",
@@ -131,6 +144,13 @@
         "provider": "github-copilot",
         "contextWindow": 400000,
         "maxTokens": 128000
+      },
+      {
+        "id": "Qwen3.5-122B-A10B-4bit",
+        "name": "Qwen3.5-122B-A10B-4bit",
+        "provider": "qwen-local",
+        "contextWindow": 200000,
+        "maxTokens": 16384
       }
     ]
   }

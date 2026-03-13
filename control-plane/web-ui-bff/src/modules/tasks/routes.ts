@@ -4,11 +4,19 @@ import { z } from "zod";
 import { authHeader, cpFetch } from "../../lib/control-plane-client";
 import { classifyIntent } from "../../lib/intent-classifier";
 import {
+  diagnoseModelReadiness,
   readDefaultExecutionModel,
   resolveModelRoute,
   validateModelProvider,
 } from "../../lib/opencode-config";
 import {
+  RUNTIME_RECOVERY_ERROR_CODES,
+  RUNTIME_RECOVERY_SUGGESTION_IDS,
+  RUNTIME_RECOVERY_SUGGESTION_KINDS,
+  type RuntimeRecoverySuggestion,
+} from "../../lib/runtime-recovery-contract";
+import {
+  DEFAULT_EXECUTION_AGENT,
   type ExecutionPlan,
   type HookExecutionRecord,
   buildExecutionPlan,
@@ -16,15 +24,19 @@ import {
   readOrchestrationStrategy,
   resolveWorkflowTemplate,
 } from "../../lib/orchestration-strategy";
+import { buildRuntimePipeline } from "../../lib/runtime-pipeline";
 import type { JWTPayload } from "../../middleware/auth";
 import {
   continueSession,
   createSession,
+  ensureAgentRunForSession,
+  forkSession,
   getSessionMessages,
   listSessions,
 } from "../agent-control/opencode-adapter";
 import { executeLifecycleHooks } from "../hooks/lifecycle-hooks";
 import { syncGraphsForSessionTask, syncGraphsForTask } from "../realtime/dag-sync";
+import { buildPipelineStageUpdatedEvents } from "../realtime/pipeline-events";
 import { sseAggregator } from "../realtime/sse-aggregator";
 import { wsBroadcaster } from "../realtime/ws-broadcaster";
 import { reconcileRunningTasksOnStartup } from "./reconcile";
@@ -42,6 +54,15 @@ type SessionStartResult = Awaited<ReturnType<typeof createSession>>;
 interface StartExecutionResponse {
   status: 200 | 502;
   body: Record<string, unknown>;
+}
+
+interface SessionSummaryRecord {
+  id: string;
+  title: string;
+  isActive: boolean;
+  summary: { additions: number; deletions: number; files: number } | null;
+  createdAt: string | null;
+  updatedAt: string | null;
 }
 
 interface ExecutableTask {
@@ -155,7 +176,7 @@ function selectExecutionAgent(prompt: string) {
   const plan = buildExecutionPlan(template, strategy, classification.category);
 
   // For single mode, the execution agent is the sole candidate
-  const executionAgent = plan.candidates[0]?.agent || suggestedAgents[0] || "build";
+  const executionAgent = plan.candidates[0]?.agent || suggestedAgents[0] || DEFAULT_EXECUTION_AGENT;
 
   return {
     classification: {
@@ -345,23 +366,97 @@ function validateExecutableTask(task: ExecutableTask): string | null {
   return null;
 }
 
-function validateResolvedModel(resolvedModel: ResolvedModel | undefined) {
+async function validateResolvedModel(resolvedModel: ResolvedModel | undefined) {
   if (!resolvedModel) {
     return null;
   }
 
   const check = validateModelProvider(resolvedModel.providerId);
   if (check.valid) {
-    return null;
+    return diagnoseModelReadiness(resolvedModel).then((failure) =>
+      failure
+        ? {
+            status: failure.status,
+            body: failure,
+          }
+        : null,
+    );
   }
 
   return {
     status: 400 as const,
     body: {
       error: check.error,
-      code: "MODEL_PROVIDER_NOT_CONFIGURED",
+      code: RUNTIME_RECOVERY_ERROR_CODES.providerNotConfigured,
+      diagnostics: {
+        providerId: resolvedModel.providerId,
+        modelId: resolvedModel.modelId,
+        configuredProviders: check.providers,
+      },
+      recoverySuggestions: [
+        {
+          id: RUNTIME_RECOVERY_SUGGESTION_IDS.addMissingProvider,
+          kind: RUNTIME_RECOVERY_SUGGESTION_KINDS.config,
+          title: "先在系统配置 → 模型中添加对应 Provider。",
+          detail: `当前缺少 Provider: ${resolvedModel.providerId}`,
+        },
+        {
+          id: RUNTIME_RECOVERY_SUGGESTION_IDS.switchToConfiguredModel,
+          kind: RUNTIME_RECOVERY_SUGGESTION_KINDS.check,
+          title: "或改用当前已经配置好的模型后再执行。",
+          detail: `已配置 Provider: ${check.providers.join(", ") || "(无)"}`,
+        },
+      ] satisfies RuntimeRecoverySuggestion[],
       providers: check.providers,
     },
+  };
+}
+
+function parseMessageTimeValue(message: unknown, key: "created" | "updated") {
+  if (!message || typeof message !== "object") {
+    return null;
+  }
+
+  const info = "info" in message && typeof message.info === "object" && message.info
+    ? (message.info as Record<string, unknown>)
+    : undefined;
+  const time = info && typeof info.time === "object" && info.time
+    ? (info.time as Record<string, unknown>)
+    : undefined;
+  const value = time?.[key] ?? time?.started ?? time?.completed;
+
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return new Date(value).toISOString();
+  }
+  if (typeof value === "string") {
+    const parsed = Date.parse(value);
+    if (!Number.isNaN(parsed)) {
+      return new Date(parsed).toISOString();
+    }
+  }
+
+  return null;
+}
+
+async function buildFallbackTaskSession(
+  taskId: string,
+  task: { sessionId?: string; title?: string },
+): Promise<SessionSummaryRecord | null> {
+  if (!task.sessionId) {
+    return null;
+  }
+
+  const messagesResult = await getSessionMessages(task.sessionId);
+  const messages = Array.isArray(messagesResult.data) ? messagesResult.data : [];
+  const lastMessage = messages[messages.length - 1];
+
+  return {
+    id: task.sessionId,
+    title: task.title ? `[Task ${taskId.slice(0, 8)}] ${task.title}` : `[Task ${taskId.slice(0, 8)}] 主会话`,
+    isActive: true,
+    summary: null,
+    createdAt: parseMessageTimeValue(messages[0], "created"),
+    updatedAt: parseMessageTimeValue(lastMessage, "updated"),
   };
 }
 
@@ -557,6 +652,20 @@ async function startParallelExecution(context: ExecutionContext): Promise<StartE
   sseAggregator.registerParallelTask(context.task.id, context.plan.candidates);
   broadcastParallelExecutionStarted(context);
 
+  // Register root branch in task_sessions lineage for primary candidate
+  if (primaryCandidate?.sessionId) {
+    await cpFetch(`/api/tasks/${encodeURIComponent(context.task.id)}/task-sessions`, {
+      method: "POST",
+      body: {
+        runtimeSessionId: primaryCandidate.sessionId,
+        branchName: context.task.title,
+        sourceType: "root",
+        isActive: true,
+      },
+      authorization: context.authorization,
+    });
+  }
+
   return buildParallelExecutionResponse(context.task.id, primaryCandidate, context.plan.candidates);
 }
 
@@ -636,6 +745,20 @@ async function startSingleExecution(context: ExecutionContext): Promise<StartExe
   await persistExecutionStart(context, execResult);
   broadcastSingleExecutionStarted(context, execResult);
 
+  // Register root branch in task_sessions lineage
+  if (execResult.sessionId) {
+    await cpFetch(`/api/tasks/${encodeURIComponent(context.task.id)}/task-sessions`, {
+      method: "POST",
+      body: {
+        runtimeSessionId: execResult.sessionId,
+        branchName: context.task.title,
+        sourceType: "root",
+        isActive: true,
+      },
+      authorization: context.authorization,
+    });
+  }
+
   return {
     status: 200,
     body: {
@@ -671,6 +794,23 @@ taskRoutes.get("/:taskId", async (c) => {
     authorization: authHeader(c),
   });
   return c.json(result.data, result.ok ? 200 : (result.status as 401 | 404 | 502));
+});
+
+const updateTaskSchema = z.object({
+  selectedModel: z.string().max(200).nullable().optional(),
+});
+
+taskRoutes.patch("/:taskId", zValidator("json", updateTaskSchema), async (c) => {
+  const taskId = c.req.param("taskId");
+  const body = c.req.valid("json");
+
+  const result = await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
+    method: "PATCH",
+    body,
+    authorization: authHeader(c),
+  });
+
+  return c.json(result.data, result.ok ? 200 : (result.status as 400 | 401 | 404 | 502));
 });
 
 // POST /api/tasks — Create a new task
@@ -725,7 +865,7 @@ taskRoutes.post("/:taskId/execute", async (c) => {
   }
 
   const preparedContext = await prepareExecutionContext(task, authorization);
-  const modelValidationError = validateResolvedModel(preparedContext.resolvedModel);
+  const modelValidationError = await validateResolvedModel(preparedContext.resolvedModel);
   if (modelValidationError) {
     return c.json(modelValidationError.body, modelValidationError.status);
   }
@@ -783,55 +923,22 @@ taskRoutes.get("/:taskId/runs", async (c) => {
   return c.json(result.data, result.ok ? 200 : (result.status as 401 | 404 | 502));
 });
 
-// GET /api/tasks/:taskId/pipeline — Get planning pipeline results
-// Fetches session messages and extracts planning stage outputs (prometheus/metis/momus)
-const PIPELINE_AGENTS = ["prometheus-enterprise", "metis-enterprise", "momus-enterprise"];
-
+// GET /api/tasks/:taskId/pipeline — Get runtime pipeline results
 taskRoutes.get("/:taskId/pipeline", async (c) => {
   const taskId = c.req.param("taskId");
+  const requestedSessionId = c.req.query("sessionId");
+  const authorization = authHeader(c);
 
-  // Fetch the task to get its sessionId
-  const taskResult = await cpFetch<{ sessionId?: string }>(
-    `/api/tasks/${encodeURIComponent(taskId)}`,
-    { authorization: authHeader(c) },
-  );
-  if (!taskResult.ok || !taskResult.data?.sessionId) {
-    return c.json({ stages: [] });
-  }
+  await syncGraphsForSessionTask(taskId, requestedSessionId).catch(() => {});
+  await syncGraphsForTask(taskId).catch(() => {});
 
-  // Fetch messages from the OpenCode session
-  const msgResult = await getSessionMessages(taskResult.data.sessionId);
-  if (!msgResult.ok || !Array.isArray(msgResult.data)) {
-    return c.json({ stages: [] });
-  }
-
-  const messages = msgResult.data as Array<{
-    info: { role: string; agent?: string; tokens?: { input: number; output: number } };
-    parts: Array<{ type: string; text?: string }>;
-  }>;
-
-  // Extract planning pipeline stages from assistant messages
-  const stages = PIPELINE_AGENTS.map((agentName) => {
-    const agentMsgs = messages.filter(
-      (m) => m.info.role === "assistant" && m.info.agent === agentName,
-    );
-    const lastMsg = agentMsgs[agentMsgs.length - 1];
-    const output =
-      lastMsg?.parts
-        ?.filter((p) => p.type === "text")
-        .map((p) => p.text)
-        .join("\n") || null;
-    return {
-      agent: agentName,
-      label: agentName.replace("-enterprise", ""),
-      status: agentMsgs.length > 0 ? (output ? "completed" : "running") : "pending",
-      messageCount: agentMsgs.length,
-      output: output ? (output.length > 2000 ? `${output.slice(0, 2000)}…` : output) : null,
-      tokens: lastMsg?.info.tokens || null,
-    };
+  const pipeline = await buildRuntimePipeline({
+    taskId,
+    sessionId: requestedSessionId,
+    authorization,
   });
 
-  return c.json({ stages });
+  return c.json(pipeline);
 });
 
 // ═══════════════════════════════════════════════════════════════════
@@ -855,11 +962,12 @@ taskRoutes.get("/:taskId/sessions", async (c) => {
   // List recent sessions from OpenCode and filter by task reference
   const sessResult = await listSessions(50);
   if (!sessResult.ok || !Array.isArray(sessResult.data)) {
-    return c.json({ data: [] });
+    const fallback = await buildFallbackTaskSession(taskId, taskResult.data || {});
+    return c.json({ data: fallback ? [fallback] : [] });
   }
 
   const taskPrefix = `[Task ${taskId.slice(0, 8)}]`;
-  const sessions = (
+  const sessions: SessionSummaryRecord[] = (
     sessResult.data as Array<{
       id: string;
       title?: string;
@@ -877,6 +985,13 @@ taskRoutes.get("/:taskId/sessions", async (c) => {
       createdAt: s.time?.created ? new Date(s.time.created).toISOString() : null,
       updatedAt: s.time?.updated ? new Date(s.time.updated).toISOString() : null,
     }));
+
+  if (taskResult.data?.sessionId && !sessions.some((session) => session.id === taskResult.data?.sessionId)) {
+    const fallback = await buildFallbackTaskSession(taskId, taskResult.data);
+    if (fallback) {
+      sessions.unshift(fallback);
+    }
+  }
 
   return c.json({ data: sessions });
 });
@@ -928,14 +1043,18 @@ taskRoutes.post("/:taskId/continue", zValidator("json", continueSchema), async (
 
   // Pre-flight: validate model provider
   if (resolvedModel) {
-    const check = validateModelProvider(resolvedModel.providerId);
-    if (!check.valid) {
-      return c.json(
-        { error: check.error, code: "MODEL_PROVIDER_NOT_CONFIGURED", providers: check.providers },
-        400,
-      );
+    const modelValidationError = await validateResolvedModel(resolvedModel);
+    if (modelValidationError) {
+      return c.json(modelValidationError.body, modelValidationError.status);
     }
   }
+
+  const agentRunId = ensureAgentRunForSession(
+    sid,
+    taskId,
+    taskResult.data.projectId,
+    resolvedModel,
+  );
 
   const result = await continueSession(sid, prompt, { model: resolvedModel });
   if (!result.ok) return c.json({ error: result.error || "Failed to continue session" }, 502);
@@ -953,10 +1072,649 @@ taskRoutes.post("/:taskId/continue", zValidator("json", continueSchema), async (
     ts: new Date().toISOString(),
     taskId,
     projectId: taskResult.data?.projectId,
-    data: { sessionId: sid },
+    agentRunId,
+    data: { sessionId: sid, agentRunId },
   });
 
-  return c.json({ ok: true, sessionId: sid });
+  void buildPipelineStageUpdatedEvents({
+    taskId,
+    sessionId: sid,
+    projectId: taskResult.data?.projectId,
+    agentRunId,
+    authorization: authHeader(c),
+    reason: "task.continued",
+  }).then((events) => {
+    for (const event of events) {
+      wsBroadcaster.broadcast(event);
+    }
+  });
+
+  return c.json({ ok: true, sessionId: sid, agentRunId });
+});
+
+const forkSessionSchema = z.object({
+  title: z.string().min(1).max(500).optional(),
+  messageId: z.string().optional(),
+});
+
+taskRoutes.post(
+  "/:taskId/sessions/:sessionId/fork",
+  zValidator("json", forkSessionSchema),
+  async (c) => {
+    const taskId = c.req.param("taskId");
+    const sessionId = c.req.param("sessionId");
+    const { title, messageId } = c.req.valid("json");
+    const authorization = authHeader(c);
+
+    const taskResult = await cpFetch<{ projectId?: string; title?: string }>(
+      `/api/tasks/${encodeURIComponent(taskId)}`,
+      { authorization },
+    );
+
+    if (!taskResult.ok) {
+      return c.json({ error: "Task not found" }, 404);
+    }
+
+    await ensureParentLineageRecord(taskId, sessionId, authorization, taskResult.data?.title);
+
+    const defaultTitle = title || `[Task ${taskId.slice(0, 8)}] Fork ${new Date().toLocaleTimeString()}`;
+    const result = await forkSession(sessionId, { title: defaultTitle });
+
+    if (!result.ok || !result.sessionId) {
+      return c.json({ error: result.error || "Failed to fork session" }, 502);
+    }
+
+    // Persist branch lineage in task_sessions
+    await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}/task-sessions`, {
+      method: "POST",
+      body: {
+        runtimeSessionId: result.sessionId,
+        parentRuntimeSessionId: sessionId,
+        forkedFromMessageId: messageId,
+        branchName: defaultTitle,
+        sourceType: "fork",
+        isActive: true,
+      },
+      authorization,
+    });
+
+    wsBroadcaster.broadcast({
+      id: crypto.randomUUID(),
+      type: "task.forked",
+      ts: new Date().toISOString(),
+      taskId,
+      projectId: taskResult.data?.projectId,
+      sessionId: result.sessionId,
+      data: {
+        parentSessionId: sessionId,
+        title: defaultTitle,
+        forkedFromMessageId: messageId,
+      },
+    });
+
+    return c.json({
+      ok: true,
+      sessionId: result.sessionId,
+      title: defaultTitle,
+      parentSessionId: sessionId,
+      forkedFromMessageId: messageId,
+    });
+  },
+);
+
+// ═══════════════════════════════════════════════════════════════════
+// SESSION TREE & ACTIVATE — Branch lineage operations
+// ═══════════════════════════════════════════════════════════════════
+
+interface TaskSessionRecord {
+  id: string;
+  taskId: string;
+  runtimeSessionId: string;
+  parentRuntimeSessionId: string | null;
+  forkedFromMessageId: string | null;
+  branchName: string | null;
+  sourceType: string;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+  archivedAt: string | null;
+}
+
+interface RuntimeSessionMeta {
+  title?: string;
+  summary?: { additions: number; deletions: number; files: number } | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
+
+interface SessionTreeNode {
+  id: string;
+  runtimeSessionId: string;
+  parentRuntimeSessionId: string | null;
+  forkedFromMessageId: string | null;
+  forkedFromMessageRole: string | null;
+  forkedFromMessagePreview: string | null;
+  firstPromptAfterFork: string | null;
+  branchName: string | null;
+  sourceType: string;
+  isActive: boolean;
+  title: string | null;
+  summary: { additions: number; deletions: number; files: number } | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+  children: SessionTreeNode[];
+}
+
+function compareIsoTime(left?: string | null, right?: string | null) {
+  const leftTime = left ? Date.parse(left) : Number.POSITIVE_INFINITY;
+  const rightTime = right ? Date.parse(right) : Number.POSITIVE_INFINITY;
+  return leftTime - rightTime;
+}
+
+function dedupeTaskSessionRecords(records: TaskSessionRecord[]) {
+  const byRuntimeSessionId = new Map<string, TaskSessionRecord>();
+
+  for (const record of records) {
+    const existing = byRuntimeSessionId.get(record.runtimeSessionId);
+    if (!existing) {
+      byRuntimeSessionId.set(record.runtimeSessionId, record);
+      continue;
+    }
+
+    const existingScore = Number(Boolean(existing.parentRuntimeSessionId)) + Number(Boolean(existing.forkedFromMessageId));
+    const nextScore = Number(Boolean(record.parentRuntimeSessionId)) + Number(Boolean(record.forkedFromMessageId));
+    const existingUpdated = existing.updatedAt ? Date.parse(existing.updatedAt) : 0;
+    const nextUpdated = record.updatedAt ? Date.parse(record.updatedAt) : 0;
+
+    if (nextScore > existingScore || nextUpdated > existingUpdated) {
+      byRuntimeSessionId.set(record.runtimeSessionId, record);
+    }
+  }
+
+  return Array.from(byRuntimeSessionId.values()).sort((left, right) => compareIsoTime(left.createdAt, right.createdAt));
+}
+
+function normalizeLineageRecords(records: TaskSessionRecord[]) {
+  const normalized = dedupeTaskSessionRecords(records).map((record) => ({ ...record }));
+  if (normalized.length <= 1) {
+    return { records: normalized, repaired: [] as TaskSessionRecord[] };
+  }
+
+  const rootRecord =
+    normalized.find((record) => record.sourceType === "root") ??
+    normalized.slice().sort((left, right) => compareIsoTime(left.createdAt, right.createdAt))[0];
+
+  if (!rootRecord) {
+    return { records: normalized, repaired: [] as TaskSessionRecord[] };
+  }
+
+  const repaired: TaskSessionRecord[] = [];
+
+  for (const record of normalized) {
+    let changed = false;
+
+    if (record.runtimeSessionId === rootRecord.runtimeSessionId) {
+      if (record.parentRuntimeSessionId !== null) {
+        record.parentRuntimeSessionId = null;
+        changed = true;
+      }
+      if (record.sourceType !== "root") {
+        record.sourceType = "root";
+        changed = true;
+      }
+    } else if (!record.parentRuntimeSessionId) {
+      record.parentRuntimeSessionId = rootRecord.runtimeSessionId;
+      changed = true;
+      if (record.sourceType !== "sub_session") {
+        record.sourceType = "fork";
+      }
+    } else if (record.sourceType === "root") {
+      record.sourceType = "fork";
+      changed = true;
+    }
+
+    if (changed) {
+      repaired.push(record);
+    }
+  }
+
+  return { records: normalized, repaired };
+}
+
+async function fetchRuntimeSessionMap(limit = 50) {
+  const sessResult = await listSessions(limit);
+  const runtimeMap = new Map<string, RuntimeSessionMeta>();
+
+  if (sessResult.ok && Array.isArray(sessResult.data)) {
+    for (const session of sessResult.data as Array<{
+      id: string;
+      title?: string;
+      summary?: { additions: number; deletions: number; files: number };
+      time?: { created: number; updated: number };
+    }>) {
+      runtimeMap.set(session.id, {
+        title: session.title,
+        summary: session.summary ?? null,
+        createdAt: session.time?.created ? new Date(session.time.created).toISOString() : null,
+        updatedAt: session.time?.updated ? new Date(session.time.updated).toISOString() : null,
+      });
+    }
+  }
+
+  return runtimeMap;
+}
+
+function extractMessagePreview(message: unknown) {
+  if (!message || typeof message !== "object") {
+    return { role: null, preview: null } as const;
+  }
+
+  const record = message as Record<string, unknown>;
+  const info = record.info && typeof record.info === "object"
+    ? (record.info as Record<string, unknown>)
+    : undefined;
+  const role = typeof info?.role === "string" ? info.role : null;
+  const parts = Array.isArray(record.parts) ? record.parts : [];
+  const text = parts
+    .flatMap((part) => {
+      if (!part || typeof part !== "object") {
+        return [] as string[];
+      }
+
+      const typedPart = part as Record<string, unknown>;
+      if (typedPart.type === "text" && typeof typedPart.text === "string") {
+        return [typedPart.text];
+      }
+
+      return [] as string[];
+    })
+    .join("\n\n")
+    .trim();
+
+  if (!text) {
+    return { role, preview: null } as const;
+  }
+
+  const blocks = text
+    .split(/\n\s*\n/g)
+    .map((block) => block.trim())
+    .filter(Boolean);
+
+  const preferredBlock =
+    blocks.find((block) => !block.startsWith("Execution context:")) ??
+    blocks.find((block) => !block.startsWith("- OpenerX task ID:")) ??
+    blocks[0] ??
+    text;
+
+  const normalized = preferredBlock.replace(/\s+/g, " ").trim();
+  const preview = normalized.length > 72 ? `${normalized.slice(0, 71).trimEnd()}…` : normalized;
+
+  return {
+    role,
+    preview: preview || null,
+  } as const;
+}
+
+async function buildForkMessagePreviewMap(records: TaskSessionRecord[]) {
+  const previewMap = new Map<string, { role: string | null; preview: string | null }>();
+  const parentSessionTargets = new Map<string, Set<string>>();
+
+  for (const record of records) {
+    if (!record.parentRuntimeSessionId || !record.forkedFromMessageId) {
+      continue;
+    }
+
+    const messageIds = parentSessionTargets.get(record.parentRuntimeSessionId) ?? new Set<string>();
+    messageIds.add(record.forkedFromMessageId);
+    parentSessionTargets.set(record.parentRuntimeSessionId, messageIds);
+  }
+
+  await Promise.all(
+    Array.from(parentSessionTargets.entries()).map(async ([parentSessionId, messageIds]) => {
+      const result = await getSessionMessages(parentSessionId);
+      if (!result.ok || !Array.isArray(result.data)) {
+        return;
+      }
+
+      for (const message of result.data) {
+        if (!message || typeof message !== "object") {
+          continue;
+        }
+
+        const info = (message as Record<string, unknown>).info;
+        const messageId = info && typeof info === "object" && typeof (info as Record<string, unknown>).id === "string"
+          ? ((info as Record<string, unknown>).id as string)
+          : null;
+
+        if (!messageId || !messageIds.has(messageId)) {
+          continue;
+        }
+
+        previewMap.set(`${parentSessionId}:${messageId}`, extractMessagePreview(message));
+      }
+    }),
+  );
+
+  return previewMap;
+}
+
+async function buildFirstPromptAfterForkMap(records: TaskSessionRecord[]) {
+  const promptMap = new Map<string, string | null>();
+
+  await Promise.all(
+    records.map(async (record) => {
+      const result = await getSessionMessages(record.runtimeSessionId);
+      if (!result.ok || !Array.isArray(result.data)) {
+        promptMap.set(record.runtimeSessionId, null);
+        return;
+      }
+
+      if (record.sourceType === "root") {
+        const firstUserMessage = result.data.find((message) => {
+          if (!message || typeof message !== "object") {
+            return false;
+          }
+
+          const info = (message as Record<string, unknown>).info;
+          if (!info || typeof info !== "object") {
+            return false;
+          }
+
+          return (info as Record<string, unknown>).role === "user";
+        });
+
+        const preview = firstUserMessage ? extractMessagePreview(firstUserMessage).preview : null;
+        promptMap.set(record.runtimeSessionId, preview);
+        return;
+      }
+
+      if (record.sourceType !== "fork") {
+        return;
+      }
+
+      const createdAtMs = Date.parse(record.createdAt);
+      if (!Number.isFinite(createdAtMs)) {
+        promptMap.set(record.runtimeSessionId, null);
+        return;
+      }
+
+      const firstUserMessage = result.data.find((message) => {
+        if (!message || typeof message !== "object") {
+          return false;
+        }
+
+        const info = (message as Record<string, unknown>).info;
+        if (!info || typeof info !== "object") {
+          return false;
+        }
+
+        const role = (info as Record<string, unknown>).role;
+        const created = ((info as Record<string, unknown>).time as Record<string, unknown> | undefined)?.created;
+        return role === "user" && typeof created === "number" && created >= createdAtMs;
+      });
+
+      const preview = firstUserMessage ? extractMessagePreview(firstUserMessage).preview : null;
+      promptMap.set(record.runtimeSessionId, preview);
+    }),
+  );
+
+  return promptMap;
+}
+
+function synthesizeLineageRecordsFromRuntime(
+  taskId: string,
+  taskSessionId: string | undefined,
+  runtimeSessions: Map<string, RuntimeSessionMeta>,
+) {
+  const taskPrefix = `[Task ${taskId.slice(0, 8)}]`;
+  const records = Array.from(runtimeSessions.entries())
+    .filter(([runtimeSessionId, runtime]) => runtimeSessionId === taskSessionId || runtime.title?.includes(taskPrefix))
+    .sort((left, right) => compareIsoTime(left[1].createdAt ?? left[1].updatedAt, right[1].createdAt ?? right[1].updatedAt))
+    .map(([runtimeSessionId, runtime]) => ({ runtimeSessionId, runtime }));
+
+  const rootRuntimeSessionId =
+    (taskSessionId && records.find((record) => record.runtimeSessionId === taskSessionId)?.runtimeSessionId) ||
+    records[0]?.runtimeSessionId;
+
+  if (!rootRuntimeSessionId) {
+    return [] as TaskSessionRecord[];
+  }
+
+  return records.map(({ runtimeSessionId, runtime }) => ({
+    id: `synthetic-${runtimeSessionId}`,
+    taskId,
+    runtimeSessionId,
+    parentRuntimeSessionId: runtimeSessionId === rootRuntimeSessionId ? null : rootRuntimeSessionId,
+    forkedFromMessageId: null,
+    branchName: runtime.title ?? null,
+    sourceType: runtimeSessionId === rootRuntimeSessionId ? "root" : "fork",
+    isActive: runtimeSessionId === taskSessionId,
+    createdAt: runtime.createdAt ?? runtime.updatedAt ?? new Date().toISOString(),
+    updatedAt: runtime.updatedAt ?? runtime.createdAt ?? new Date().toISOString(),
+    archivedAt: null,
+  }));
+}
+
+async function persistLineageRepairs(taskId: string, records: TaskSessionRecord[], authorization: string) {
+  for (const record of records) {
+    await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}/task-sessions`, {
+      method: "POST",
+      body: {
+        runtimeSessionId: record.runtimeSessionId,
+        parentRuntimeSessionId: record.parentRuntimeSessionId ?? undefined,
+        forkedFromMessageId: record.forkedFromMessageId ?? undefined,
+        branchName: record.branchName ?? undefined,
+        sourceType: record.sourceType === "sub_session" ? "sub_session" : record.sourceType === "root" ? "root" : "fork",
+        isActive: record.isActive,
+      },
+      authorization,
+    });
+  }
+}
+
+async function ensureParentLineageRecord(
+  taskId: string,
+  parentSessionId: string,
+  authorization: string,
+  taskTitle?: string,
+) {
+  const lineageResult = await cpFetch<{ data: TaskSessionRecord[] }>(
+    `/api/tasks/${encodeURIComponent(taskId)}/task-sessions`,
+    { authorization },
+  );
+
+  const existingRecords =
+    lineageResult.ok && Array.isArray(lineageResult.data?.data)
+      ? lineageResult.data.data.filter((record: TaskSessionRecord) => !record.archivedAt)
+      : [];
+
+  if (existingRecords.some((record) => record.runtimeSessionId === parentSessionId)) {
+    return;
+  }
+
+  const runtimeMap = await fetchRuntimeSessionMap(100);
+  const runtime = runtimeMap.get(parentSessionId);
+  const { records: normalized } = normalizeLineageRecords(existingRecords);
+  const rootRecord = normalized.find((record) => record.sourceType === "root");
+  const inferredParentId = rootRecord && rootRecord.runtimeSessionId !== parentSessionId
+    ? rootRecord.runtimeSessionId
+    : undefined;
+
+  await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}/task-sessions`, {
+    method: "POST",
+    body: {
+      runtimeSessionId: parentSessionId,
+      parentRuntimeSessionId: inferredParentId,
+      branchName: runtime?.title ?? taskTitle,
+      sourceType: inferredParentId ? "fork" : "root",
+      isActive: false,
+    },
+    authorization,
+  });
+}
+
+function buildSessionTree(
+  records: TaskSessionRecord[],
+  runtimeSessions: Map<string, RuntimeSessionMeta>,
+  forkMessagePreviewMap: Map<string, { role: string | null; preview: string | null }>,
+  firstPromptAfterForkMap: Map<string, string | null>,
+): SessionTreeNode[] {
+  const nodeMap = new Map<string, SessionTreeNode>();
+  const roots: SessionTreeNode[] = [];
+
+  for (const rec of records) {
+    const runtime = runtimeSessions.get(rec.runtimeSessionId);
+    const forkSource = rec.parentRuntimeSessionId && rec.forkedFromMessageId
+      ? forkMessagePreviewMap.get(`${rec.parentRuntimeSessionId}:${rec.forkedFromMessageId}`)
+      : undefined;
+    const node: SessionTreeNode = {
+      id: rec.id,
+      runtimeSessionId: rec.runtimeSessionId,
+      parentRuntimeSessionId: rec.parentRuntimeSessionId,
+      forkedFromMessageId: rec.forkedFromMessageId,
+      forkedFromMessageRole: forkSource?.role ?? null,
+      forkedFromMessagePreview: forkSource?.preview ?? null,
+      firstPromptAfterFork: firstPromptAfterForkMap.get(rec.runtimeSessionId) ?? null,
+      branchName: rec.branchName,
+      sourceType: rec.sourceType,
+      isActive: rec.isActive,
+      title: runtime?.title ?? rec.branchName,
+      summary: runtime?.summary ?? null,
+      createdAt: runtime?.createdAt ?? rec.createdAt,
+      updatedAt: runtime?.updatedAt ?? rec.updatedAt,
+      children: [],
+    };
+    nodeMap.set(rec.runtimeSessionId, node);
+  }
+
+  for (const node of nodeMap.values()) {
+    if (node.parentRuntimeSessionId && nodeMap.has(node.parentRuntimeSessionId)) {
+      nodeMap.get(node.parentRuntimeSessionId)!.children.push(node);
+    } else {
+      roots.push(node);
+    }
+  }
+
+  return roots;
+}
+
+// GET /api/tasks/:taskId/session-tree — Return branch tree for a task
+taskRoutes.get("/:taskId/session-tree", async (c) => {
+  const taskId = c.req.param("taskId");
+  const authorization = authHeader(c);
+
+  const taskResult = await cpFetch<{ sessionId?: string }>(
+    `/api/tasks/${encodeURIComponent(taskId)}`,
+    { authorization },
+  );
+
+  // Fetch task_sessions lineage from control plane
+  const lineageResult = await cpFetch<{ data: TaskSessionRecord[] }>(
+    `/api/tasks/${encodeURIComponent(taskId)}/task-sessions`,
+    { authorization },
+  );
+
+  const lineageRecords: TaskSessionRecord[] =
+    lineageResult.ok && Array.isArray(lineageResult.data?.data)
+      ? lineageResult.data.data.filter((r: TaskSessionRecord) => !r.archivedAt)
+      : [];
+
+  const runtimeMap = await fetchRuntimeSessionMap(100);
+  const forkMessagePreviewMap = await buildForkMessagePreviewMap(lineageRecords);
+  const firstPromptAfterForkMap = await buildFirstPromptAfterForkMap(lineageRecords);
+
+  // If no lineage records, fall back to the flat sessions list
+  if (lineageRecords.length === 0) {
+    const synthesizedRecords = synthesizeLineageRecordsFromRuntime(taskId, taskResult.data?.sessionId, runtimeMap);
+
+    if (synthesizedRecords.length === 0) {
+      return c.json({ data: [] });
+    }
+
+    await persistLineageRepairs(taskId, synthesizedRecords, authorization);
+    return c.json({ data: buildSessionTree(synthesizedRecords, runtimeMap, new Map(), new Map()) });
+  }
+
+  const { records: normalizedRecords, repaired } = normalizeLineageRecords(lineageRecords);
+  if (repaired.length > 0) {
+    await persistLineageRepairs(taskId, repaired, authorization);
+  }
+
+  const tree = buildSessionTree(normalizedRecords, runtimeMap, forkMessagePreviewMap, firstPromptAfterForkMap);
+  return c.json({ data: tree });
+});
+
+// POST /api/tasks/:taskId/sessions/:sessionId/activate — Activate a branch
+taskRoutes.post("/:taskId/sessions/:sessionId/activate", async (c) => {
+  const taskId = c.req.param("taskId");
+  const sessionId = c.req.param("sessionId");
+
+  // Find the task_sessions record by runtimeSessionId
+  const lineageResult = await cpFetch<{ data: TaskSessionRecord[] }>(
+    `/api/tasks/${encodeURIComponent(taskId)}/task-sessions`,
+    { authorization: authHeader(c) },
+  );
+
+  if (!lineageResult.ok || !Array.isArray(lineageResult.data?.data)) {
+    return c.json({ error: "Failed to fetch branch lineage" }, 502);
+  }
+
+  const record = lineageResult.data.data.find((r: TaskSessionRecord) => r.runtimeSessionId === sessionId);
+  if (!record) {
+    return c.json({ error: "Session not found in branch lineage" }, 404);
+  }
+
+  // Call service activate endpoint
+  const activateResult = await cpFetch(
+    `/api/tasks/${encodeURIComponent(taskId)}/task-sessions/${encodeURIComponent(record.id)}/activate`,
+    { method: "POST", authorization: authHeader(c) },
+  );
+
+  if (!activateResult.ok) {
+    return c.json({ error: "Failed to activate session" }, 502);
+  }
+
+  wsBroadcaster.broadcast({
+    id: crypto.randomUUID(),
+    type: "session.activated",
+    ts: new Date().toISOString(),
+    taskId,
+    data: { sessionId, branchName: record.branchName },
+  });
+
+  return c.json({ ok: true, sessionId });
+});
+
+// POST /api/tasks/:taskId/sessions/:sessionId/archive — Archive a branch
+taskRoutes.post("/:taskId/sessions/:sessionId/archive", async (c) => {
+  const taskId = c.req.param("taskId");
+  const sessionId = c.req.param("sessionId");
+
+  // Find the task_sessions record by runtimeSessionId
+  const lineageResult = await cpFetch<{ data: TaskSessionRecord[] }>(
+    `/api/tasks/${encodeURIComponent(taskId)}/task-sessions`,
+    { authorization: authHeader(c) },
+  );
+
+  if (!lineageResult.ok || !Array.isArray(lineageResult.data?.data)) {
+    return c.json({ error: "Failed to fetch branch lineage" }, 502);
+  }
+
+  const record = lineageResult.data.data.find((r: TaskSessionRecord) => r.runtimeSessionId === sessionId);
+  if (!record) {
+    return c.json({ error: "Session not found in branch lineage" }, 404);
+  }
+
+  const archiveResult = await cpFetch(
+    `/api/tasks/${encodeURIComponent(taskId)}/task-sessions/${encodeURIComponent(record.id)}/archive`,
+    { method: "POST", authorization: authHeader(c) },
+  );
+
+  if (!archiveResult.ok) {
+    return c.json({ error: "Failed to archive session" }, 502);
+  }
+
+  return c.json({ ok: true });
 });
 
 // ═══════════════════════════════════════════════════════════════════

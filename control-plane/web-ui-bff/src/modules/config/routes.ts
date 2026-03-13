@@ -87,6 +87,37 @@ function writeOpencodeJson(data: Record<string, unknown>): void {
   writeFileSync(OPENCODE_JSON, `${serialized}\n`, "utf-8");
 }
 
+function getStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+export function getConfiguredPluginPaths(config: Record<string, unknown>): string[] {
+  const singularPaths = getStringArray(config.plugin);
+  if (singularPaths.length > 0) {
+    return singularPaths;
+  }
+
+  return getStringArray(config.plugins);
+}
+
+export function getDisabledPluginPaths(config: Record<string, unknown>): string[] {
+  return getStringArray(config._disabledPlugins);
+}
+
+export function normalizePluginConfigPath(fileName: string): string {
+  return `./.opencode/plugins/${fileName}`;
+}
+
+export function setConfiguredPluginState(
+  config: Record<string, unknown>,
+  activePaths: string[],
+  disabledPaths: string[],
+): void {
+  config.plugin = [...new Set(activePaths)];
+  config._disabledPlugins = [...new Set(disabledPaths)];
+  delete config.plugins;
+}
+
 function validateModelsPayload(list: Array<Record<string, unknown>>): string | null {
   const seen = new Set<string>();
 
@@ -108,6 +139,142 @@ function validateModelsPayload(list: Array<Record<string, unknown>>): string | n
   }
 
   return null;
+}
+
+function normalizeBaseUrl(value: string): string {
+  return value.replace(/\/+$/, "");
+}
+
+async function readProbeResponseBody(response: Response): Promise<unknown> {
+  const text = await response.text();
+  if (!text) {
+    return undefined;
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+
+export async function probeModelProviderConnection(provider: Record<string, unknown>): Promise<{
+  ok: boolean;
+  message: string;
+  status?: number;
+  modelCount?: number;
+  models?: Array<Record<string, unknown>>;
+}> {
+  type ProviderModelSummary = {
+    id: string;
+    name: string;
+    contextWindow: number | null;
+    maxTokens: number | null;
+  };
+
+  const api = getTrimmedString(provider.api);
+  const baseURL = getTrimmedString(provider.baseURL);
+  const apiKey = getTrimmedString(provider.apiKey);
+
+  if (!api) {
+    return { ok: false, message: "缺少 Provider API 类型" };
+  }
+
+  if (api === "github-copilot") {
+    return {
+      ok: true,
+      message: "GitHub Copilot Provider 通过上方 OAuth 登录状态管理，无需额外连通性探测。",
+    };
+  }
+
+  if (!["openai-completions", "openai-responses", "github-models", "azure-openai"].includes(api)) {
+    return { ok: false, message: `暂不支持测试 API 类型 ${api}` };
+  }
+
+  if (!baseURL) {
+    return { ok: false, message: "缺少 Base URL" };
+  }
+
+  const headers: Record<string, string> = {
+    Accept: "application/json",
+  };
+
+  if (apiKey) {
+    headers.Authorization = `Bearer ${apiKey}`;
+    headers["api-key"] = apiKey;
+    headers["x-api-key"] = apiKey;
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(`${normalizeBaseUrl(baseURL)}/models`, {
+      method: "GET",
+      headers,
+      signal: AbortSignal.timeout(8000),
+    });
+  } catch (fetchErr) {
+    const detail =
+      fetchErr instanceof DOMException && fetchErr.name === "TimeoutError"
+        ? "连接超时（8 秒）"
+        : fetchErr instanceof TypeError
+          ? `网络不可达：${fetchErr.message}`
+          : String(fetchErr);
+    return { ok: false, message: `连接失败：${detail}` };
+  }
+  const body = await readProbeResponseBody(response);
+
+  if (!response.ok) {
+    const detail =
+      typeof body === "string"
+        ? body
+        : typeof body === "object" && body && "error" in body && typeof body.error === "string"
+          ? body.error
+          : `HTTP ${response.status}`;
+    return {
+      ok: false,
+      status: response.status,
+      message: `连接失败：${detail}`,
+    };
+  }
+
+  const modelCount =
+    typeof body === "object" &&
+    body &&
+    "data" in body &&
+    Array.isArray(body.data)
+      ? body.data.length
+      : undefined;
+
+  const models =
+    typeof body === "object" && body && "data" in body && Array.isArray(body.data)
+      ? body.data
+          .map((item) => {
+            if (!item || typeof item !== "object") return null;
+
+            const record = item as Record<string, unknown>;
+            const id = getTrimmedString(record.id);
+            if (!id) return null;
+
+            return {
+              id,
+              name: getTrimmedString(record.name) ?? getTrimmedString(record.display_name) ?? id,
+              contextWindow: typeof record.contextWindow === "number" ? record.contextWindow : null,
+              maxTokens: typeof record.maxTokens === "number" ? record.maxTokens : null,
+            } satisfies ProviderModelSummary;
+          })
+          .filter((item): item is NonNullable<typeof item> => item !== null)
+      : undefined;
+
+  return {
+    ok: true,
+    status: response.status,
+    modelCount,
+    models,
+    message:
+      typeof modelCount === "number"
+        ? `连接成功，返回 ${modelCount} 个模型`
+        : `连接成功，HTTP ${response.status}`,
+  };
 }
 
 // ── Routes ─────────────────────────────────────────────────────────
@@ -393,6 +560,35 @@ configRoutes.put(
   },
 );
 
+configRoutes.post(
+  "/models/providers/test",
+  zValidator(
+    "json",
+    z.object({
+      key: z.string().optional(),
+      provider: z.record(z.unknown()),
+    }),
+  ),
+  async (c) => {
+    const adminErr = requireSystemAdmin(c.get("user"));
+    if (adminErr) return c.json({ error: adminErr }, 403);
+
+    const { provider } = c.req.valid("json");
+
+    try {
+      const result = await probeModelProviderConnection(provider);
+      return c.json({ data: result });
+    } catch (error) {
+      return c.json({
+        data: {
+          ok: false,
+          message: error instanceof Error ? error.message : "测试 Provider 失败",
+        },
+      });
+    }
+  },
+);
+
 // ═══════════════════════════════════════════════════════════════════
 // MCP SERVERS (opencode.json → mcp)
 // ═══════════════════════════════════════════════════════════════════
@@ -481,8 +677,8 @@ configRoutes.get("/plugins", (c) => {
   const adminErr = requireSystemAdmin(c.get("user"));
   if (adminErr) return c.json({ error: adminErr }, 403);
   const config = readOpencodeJson();
-  const pluginPaths = (config.plugins as string[]) || [];
-  const disabledPlugins = (config._disabledPlugins as string[]) || [];
+  const pluginPaths = getConfiguredPluginPaths(config);
+  const disabledPlugins = getDisabledPluginPaths(config);
   const plugins = pluginPaths.map((p) => {
     const fullPath = resolve(OPENCODE_ROOT, p);
     return {
@@ -512,8 +708,8 @@ configRoutes.post("/plugins/:name/disable", (c) => {
   const name = c.req.param("name") as string;
 
   const config = readOpencodeJson();
-  const pluginPaths = (config.plugins as string[]) || [];
-  const disabledPlugins = (config._disabledPlugins as string[]) || [];
+  const pluginPaths = getConfiguredPluginPaths(config);
+  const disabledPlugins = getDisabledPluginPaths(config);
 
   const idx = pluginPaths.findIndex((p) => basename(p, ".ts") === name);
   if (idx === -1) return c.json({ error: "Plugin not found in active list" }, 404);
@@ -521,8 +717,7 @@ configRoutes.post("/plugins/:name/disable", (c) => {
   const removed = pluginPaths.splice(idx, 1)[0] as string;
   if (!disabledPlugins.includes(removed)) disabledPlugins.push(removed);
 
-  config.plugins = pluginPaths;
-  config._disabledPlugins = disabledPlugins;
+  setConfiguredPluginState(config, pluginPaths, disabledPlugins);
   writeOpencodeJson(config);
 
   return c.json({ ok: true, name, enabled: false });
@@ -535,8 +730,8 @@ configRoutes.post("/plugins/:name/enable", (c) => {
   const name = c.req.param("name") as string;
 
   const config = readOpencodeJson();
-  const pluginPaths = (config.plugins as string[]) || [];
-  const disabledPlugins = (config._disabledPlugins as string[]) || [];
+  const pluginPaths = getConfiguredPluginPaths(config);
+  const disabledPlugins = getDisabledPluginPaths(config);
 
   const idx = disabledPlugins.findIndex((p) => basename(p, ".ts") === name);
   if (idx === -1) return c.json({ error: "Plugin not found in disabled list" }, 404);
@@ -544,8 +739,7 @@ configRoutes.post("/plugins/:name/enable", (c) => {
   const removed = disabledPlugins.splice(idx, 1)[0] as string;
   if (!pluginPaths.includes(removed)) pluginPaths.push(removed);
 
-  config.plugins = pluginPaths;
-  config._disabledPlugins = disabledPlugins;
+  setConfiguredPluginState(config, pluginPaths, disabledPlugins);
   writeOpencodeJson(config);
 
   return c.json({ ok: true, name, enabled: true });
@@ -603,12 +797,12 @@ configRoutes.get("/overview", (c) => {
       },
       mcp: config.mcp || {},
       plugins: [
-        ...((config.plugins as string[]) || []).map((p) => ({
+        ...getConfiguredPluginPaths(config).map((p) => ({
           path: p,
           name: basename(p, ".ts"),
           enabled: true,
         })),
-        ...((config._disabledPlugins as string[]) || []).map((p) => ({
+        ...getDisabledPluginPaths(config).map((p) => ({
           path: p,
           name: basename(p, ".ts"),
           enabled: false,
@@ -723,11 +917,11 @@ configRoutes.post("/plugins/install", zValidator("json", installPluginSchema), (
 
   // Register in opencode.json
   const config = readOpencodeJson();
-  const pluginPaths = (config.plugins as string[]) || [];
-  const relativePath = `.opencode/plugins/${fileName}`;
+  const pluginPaths = getConfiguredPluginPaths(config);
+  const relativePath = normalizePluginConfigPath(fileName);
   if (!pluginPaths.includes(relativePath)) {
     pluginPaths.push(relativePath);
-    config.plugins = pluginPaths;
+    setConfiguredPluginState(config, pluginPaths, getDisabledPluginPaths(config));
     writeOpencodeJson(config);
   }
 
@@ -741,8 +935,8 @@ configRoutes.post("/plugins/:name/uninstall", (c) => {
   const name = c.req.param("name") as string;
 
   const config = readOpencodeJson();
-  const pluginPaths = (config.plugins as string[]) || [];
-  const disabledPlugins = (config._disabledPlugins as string[]) || [];
+  const pluginPaths = getConfiguredPluginPaths(config);
+  const disabledPlugins = getDisabledPluginPaths(config);
 
   // Find in active or disabled
   const activeIdx = pluginPaths.findIndex((p) => basename(p, ".ts") === name);
@@ -755,8 +949,7 @@ configRoutes.post("/plugins/:name/uninstall", (c) => {
   if (activeIdx !== -1) pluginPaths.splice(activeIdx, 1);
   if (disabledIdx !== -1) disabledPlugins.splice(disabledIdx, 1);
 
-  config.plugins = pluginPaths;
-  config._disabledPlugins = disabledPlugins;
+  setConfiguredPluginState(config, pluginPaths, disabledPlugins);
   writeOpencodeJson(config);
 
   return c.json({ ok: true, name });
@@ -769,8 +962,8 @@ configRoutes.get("/plugins/compatibility", (c) => {
 
   const config = readOpencodeJson();
   const allPaths = [
-    ...((config.plugins as string[]) || []),
-    ...((config._disabledPlugins as string[]) || []),
+    ...getConfiguredPluginPaths(config),
+    ...getDisabledPluginPaths(config),
   ];
 
   const results = allPaths.map((p) => {

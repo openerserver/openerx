@@ -73,6 +73,11 @@ interface ProjectRecord {
   } | null;
 }
 
+interface ConfigModelRecord {
+  id?: string;
+  provider?: string;
+}
+
 const createdTaskIds: string[] = [];
 let token = "";
 let strategyQueue = Promise.resolve();
@@ -147,7 +152,11 @@ async function updateOrchestrationStrategy(strategy: OrchestrationStrategy): Pro
   });
 }
 
-async function createTask(title: string, prompt: string): Promise<string> {
+async function createTask(
+  title: string,
+  prompt: string,
+  options?: { selectedModel?: string },
+): Promise<string> {
   const response = await request<{ id: string }>("/api/tasks", {
     method: "POST",
     headers: authHeaders(),
@@ -155,6 +164,7 @@ async function createTask(title: string, prompt: string): Promise<string> {
       title,
       projectId: PROJECT_ID,
       prompt,
+      ...(options?.selectedModel ? { selectedModel: options.selectedModel } : {}),
     }),
   });
   createdTaskIds.push(response.id);
@@ -174,12 +184,32 @@ async function getTask(taskId: string): Promise<TaskRecord> {
   });
 }
 
-async function getProjectDefaultModel(): Promise<string> {
+async function getAvailableCopilotModel(): Promise<string> {
+  const modelList = await request<{ data?: ConfigModelRecord[] }>("/api/config/models/list", {
+    headers: authHeaders(),
+  });
+
+  const configuredCopilotModel = (modelList.data || []).find(
+    (model) =>
+      typeof model.provider === "string"
+      && model.provider.startsWith("github-copilot")
+      && typeof model.id === "string"
+      && model.id.trim().length > 0,
+  );
+
+  if (configuredCopilotModel?.provider && configuredCopilotModel.id) {
+    return `${configuredCopilotModel.provider}:${configuredCopilotModel.id}`;
+  }
+
   const project = await request<ProjectRecord>(`/api/projects/${PROJECT_ID}`, {
     headers: authHeaders(),
   });
 
-  return project.settings?.defaultModel || "qwen-local:qwen/qwen3.5-35b-a3b";
+  if (project.settings?.defaultModel?.startsWith("github-copilot")) {
+    return project.settings.defaultModel;
+  }
+
+  return "github-copilot:claude-sonnet-4";
 }
 
 async function terminateAgent(agentRunId: string): Promise<void> {
@@ -226,6 +256,44 @@ async function waitForEvent(
   throw new Error(`Timed out waiting for event ${type}`);
 }
 
+async function subscribeTaskEvents(taskId: string) {
+  const events: Array<Record<string, unknown>> = [];
+  let resolveOpen: (() => void) | undefined;
+  let rejectOpen: ((reason?: unknown) => void) | undefined;
+  const opened = new Promise<void>((resolve, reject) => {
+    resolveOpen = resolve;
+    rejectOpen = reject;
+  });
+
+  const ws = new WebSocket(
+    `${BFF_URL.replace("http", "ws")}/ws?token=${encodeURIComponent(token)}`,
+  );
+
+  ws.addEventListener("open", () => {
+    ws.send(JSON.stringify({ type: "subscribe_task", taskId, projectId: PROJECT_ID }));
+    resolveOpen?.();
+  });
+
+  ws.addEventListener("message", (message) => {
+    try {
+      events.push(JSON.parse(String(message.data)) as Record<string, unknown>);
+    } catch {
+      // Ignore malformed frames.
+    }
+  });
+
+  ws.addEventListener("error", (error) => rejectOpen?.(error));
+
+  await opened;
+
+  return {
+    events,
+    close() {
+      ws.close();
+    },
+  };
+}
+
 async function withStrategyLock<T>(fn: () => Promise<T>): Promise<T> {
   const previous = strategyQueue;
   let release: (() => void) | undefined;
@@ -265,21 +333,22 @@ describe("lifecycle hooks integration", () => {
     async () => {
       await withStrategyLock(async () => {
         const originalStrategy = await getOrchestrationStrategy();
-        const hookModel = await getProjectDefaultModel();
+        const executionModel = await getAvailableCopilotModel();
+        const hookModel = executionModel;
         let agentRunId: string | undefined;
 
         try {
           await updateOrchestrationStrategy({
             ...originalStrategy,
             categoryAgentMap: Object.fromEntries(
-              Object.keys(originalStrategy.categoryAgentMap).map((key) => [key, ["build"]]),
+              Object.keys(originalStrategy.categoryAgentMap).map((key) => [key, ["default-executor"]]),
             ),
             hooks: [
               {
                 id: "pre-execution-test",
                 trigger: "pre-execution",
                 enabled: true,
-                agent: "build",
+                agent: "default-executor",
                 model: hookModel,
                 timeoutMs: 15000,
                 promptTemplate: [
@@ -296,7 +365,9 @@ describe("lifecycle hooks integration", () => {
           const taskTitle = `pre-eval-${Date.now()}`;
           const taskPrompt =
             "Inspect the repository briefly and respond with one concise status line.";
-          const taskId = await createTask(taskTitle, taskPrompt);
+          const taskId = await createTask(taskTitle, taskPrompt, {
+            selectedModel: executionModel,
+          });
           const execution = await executeTask(taskId);
           agentRunId = execution.agentRunId;
 
@@ -314,7 +385,7 @@ describe("lifecycle hooks integration", () => {
             (hook) => hook.trigger === "pre-execution",
           );
           expect(preExecution).toBeTruthy();
-          expect(preExecution?.agent).toBe("build");
+          expect(preExecution?.agent).toBe("default-executor");
           expect(preExecution?.prompt).toContain(taskTitle);
           expect(preExecution?.prompt).toContain("Task title:");
           expect(preExecution?.prompt).toContain(taskPrompt);
@@ -334,7 +405,8 @@ describe("lifecycle hooks integration", () => {
     async () => {
       await withStrategyLock(async () => {
         const originalStrategy = await getOrchestrationStrategy();
-        const hookModel = await getProjectDefaultModel();
+        const executionModel = await getAvailableCopilotModel();
+        const hookModel = executionModel;
         const events: Array<Record<string, unknown>> = [];
         const unsubscribe = sseAggregator.onEvent((event) => {
           events.push(event as unknown as Record<string, unknown>);
@@ -344,14 +416,14 @@ describe("lifecycle hooks integration", () => {
           await updateOrchestrationStrategy({
             ...originalStrategy,
             categoryAgentMap: Object.fromEntries(
-              Object.keys(originalStrategy.categoryAgentMap).map((key) => [key, ["build"]]),
+              Object.keys(originalStrategy.categoryAgentMap).map((key) => [key, ["default-executor"]]),
             ),
             hooks: [
               {
                 id: "post-execution-test",
                 trigger: "post-execution",
                 enabled: true,
-                agent: "build",
+                agent: "default-executor",
                 model: hookModel,
                 timeoutMs: 15000,
                 promptTemplate: [
@@ -368,6 +440,9 @@ describe("lifecycle hooks integration", () => {
           const taskId = await createTask(
             `post-eval-${Date.now()}`,
             "Reply with exactly one line: OK.",
+            {
+              selectedModel: executionModel,
+            },
           );
           await executeTask(taskId);
 
@@ -401,7 +476,7 @@ describe("lifecycle hooks integration", () => {
 
           expect(hooksUpdatedEvent.data).toMatchObject({
             phase: "postExecution",
-            agent: "build",
+            agent: "default-executor",
           });
 
           const { strategy } = await waitForTaskStrategy(
@@ -417,12 +492,92 @@ describe("lifecycle hooks integration", () => {
             (hook) => hook.trigger === "post-execution",
           );
           expect(postExecution).toBeTruthy();
-          expect(postExecution?.agent).toBe("build");
+          expect(postExecution?.agent).toBe("default-executor");
           expect(postExecution?.prompt).toContain("Task title:");
           expect(postExecution?.prompt).toContain("Execution result:");
           expect(postExecution?.completedAt).toBeTruthy();
         } finally {
           unsubscribe();
+          await updateOrchestrationStrategy(originalStrategy);
+        }
+      });
+    },
+  );
+
+  executionIntegrationTest(
+    "pushes task.hooks.updated to websocket clients after real completion",
+    async () => {
+      await withStrategyLock(async () => {
+        const originalStrategy = await getOrchestrationStrategy();
+        const executionModel = await getAvailableCopilotModel();
+        const hookModel = executionModel;
+        let subscription:
+          | {
+              events: Array<Record<string, unknown>>;
+              close: () => void;
+            }
+          | undefined;
+
+        try {
+          await updateOrchestrationStrategy({
+            ...originalStrategy,
+            categoryAgentMap: Object.fromEntries(
+              Object.keys(originalStrategy.categoryAgentMap).map((key) => [key, ["default-executor"]]),
+            ),
+            hooks: [
+              {
+                id: "post-execution-ws-test",
+                trigger: "post-execution",
+                enabled: true,
+                agent: "default-executor",
+                model: hookModel,
+                timeoutMs: 15000,
+                promptTemplate: [
+                  "Post-execution reviewer for OpenerX task.",
+                  "Task title: {{taskTitle}}",
+                  "Execution result:",
+                  "{{taskResult}}",
+                ].join("\n"),
+                order: 0,
+              },
+            ],
+          });
+
+          const taskId = await createTask(
+            `post-eval-ws-${Date.now()}`,
+            "Quick brief reply only. Do not inspect the repository or call tools. Reply with exactly one line: OK.",
+            {
+              selectedModel: executionModel,
+            },
+          );
+          subscription = await subscribeTaskEvents(taskId);
+
+          await executeTask(taskId);
+
+          await waitForEvent(
+            subscription.events,
+            "task.completed",
+            (event) => event.taskId === taskId,
+            120000,
+          );
+          await waitForEvent(
+            subscription.events,
+            "task.hooks.updated",
+            (event) => event.taskId === taskId,
+            120000,
+          );
+          await waitForEvent(
+            subscription.events,
+            "pipeline.stage.updated",
+            (event) =>
+              event.taskId === taskId
+              && typeof event.data === "object"
+              && event.data
+              && (event.data as Record<string, unknown>).reason === "task.hooks.updated",
+            120000,
+          );
+        } finally {
+          subscription?.close();
           await updateOrchestrationStrategy(originalStrategy);
         }
       });

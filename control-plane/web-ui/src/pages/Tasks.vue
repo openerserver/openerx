@@ -24,7 +24,10 @@
           <a-select-option value="paused">已暂停</a-select-option>
           <a-select-option value="cancelled">已取消</a-select-option>
         </a-select>
-        <a-button @click="refresh" :loading="loading">刷新</a-button>
+        <a-button @click="refresh" :loading="loading">
+          <template #icon><SyncOutlined :spin="!!autoRefreshTimer" /></template>
+          {{ autoRefreshTimer ? '自动刷新中' : '刷新' }}
+        </a-button>
         <a-button type="primary" @click="showCreateModal = true">
           <template #icon><PlusOutlined /></template>
           新建任务
@@ -69,16 +72,19 @@
         </a-empty>
       </template>
       <template #bodyCell="{ column, record }">
-        <template v-if="column.key === 'id'">
-          <router-link :to="`/tasks/${record.id}`">
-            <a-typography-text code>{{ record.id.slice(0, 12) }}</a-typography-text>
-          </router-link>
+        <template v-if="column.key === 'title'">
+          <a-tooltip placement="topLeft" :overlayStyle="{ maxWidth: '480px' }">
+            <template #title>
+              <div style="white-space: pre-wrap; max-height: 300px; overflow-y: auto; font-size: 13px">{{ record.prompt || '无描述' }}</div>
+            </template>
+            <router-link :to="`/workbench?task=${record.id}`">
+              {{ record.title }}
+            </router-link>
+          </a-tooltip>
         </template>
 
-        <template v-if="column.key === 'title'">
-          <router-link :to="`/tasks/${record.id}`">
-            {{ record.title }}
-          </router-link>
+        <template v-if="column.key === 'projectName'">
+          {{ getProjectName(record.projectId) }}
         </template>
 
         <template v-if="column.key === 'status'">
@@ -121,12 +127,12 @@
             </a-popconfirm>
             <router-link
               v-if="record.status === 'failed' || record.status === 'completed'"
-              :to="`/tasks/${record.id}?action=continue`"
+              :to="`/workbench?task=${record.id}`"
             >
               <a-button size="small">续跑</a-button>
             </router-link>
-            <router-link :to="`/tasks/${record.id}`">
-              <a-button type="link" size="small">详情</a-button>
+            <router-link :to="`/workbench?task=${record.id}`">
+              <a-button type="link" size="small">工作台</a-button>
             </router-link>
           </a-space>
         </template>
@@ -196,8 +202,8 @@
               </a-select-option>
             </a-select-opt-group>
           </a-select>
-          <div v-if="selectedCredential" style="margin-top: 8px; padding: 8px 12px; background: #1e293b; border-radius: 6px; border: 1px solid #334155">
-            <a-typography-text type="secondary" style="font-size: 12px">
+          <div v-if="selectedCredential" :style="tasksThemeStyles.credentialSummary">
+            <a-typography-text type="secondary" :style="tasksThemeStyles.credentialSummaryText">
               预设身份：{{ selectedCredential.gitAuthorName || '未设置' }}
               <template v-if="selectedCredential.gitAuthorEmail">
                 &lt;{{ selectedCredential.gitAuthorEmail }}&gt;
@@ -286,7 +292,7 @@
               管理
             </a-button>
           </a-space>
-          <div v-if="showDeleteTemplate && taskTemplates.length" style="margin-top: 8px; padding: 8px; border: 1px solid #334155; border-radius: 6px">
+          <div v-if="showDeleteTemplate && taskTemplates.length" :style="tasksThemeStyles.templateManager">
             <div v-for="(tpl, idx) in taskTemplates" :key="idx" style="display: flex; justify-content: space-between; align-items: center; padding: 4px 0">
               <span>{{ tpl.name }}</span>
               <a-button size="small" danger type="text" @click="removeTemplate(idx)">删除</a-button>
@@ -302,6 +308,24 @@
           />
         </a-form-item>
         <a-form-item label="任务描述 / Prompt" required>
+          <div v-if="commandsData.length" style="margin-bottom: 8px">
+            <a-select
+              :value="selectedCommand"
+              placeholder="选择命令前缀（可选）"
+              allow-clear
+              style="width: 100%"
+              @update:value="applyCommand($event)"
+            >
+              <a-select-option v-for="cmd in commandsData" :key="cmd.name" :value="cmd.name">
+                /{{ cmd.name }} — {{ cmd.description }}
+              </a-select-option>
+            </a-select>
+            <div style="margin-top: 4px">
+              <a-typography-text type="secondary" style="font-size: 12px">
+                选择命令后将在 Prompt 开头添加 <code>/命令名</code>，Agent 会按预定义流程执行
+              </a-typography-text>
+            </div>
+          </div>
           <a-textarea
             :value="createForm.prompt"
             placeholder="详细描述需要 Agent 完成的任务..."
@@ -355,10 +379,13 @@
 </template>
 
 <script setup lang="ts">
-import { PlusOutlined } from "@ant-design/icons-vue";
+import { PlusOutlined, SyncOutlined } from "@ant-design/icons-vue";
 import { message } from "ant-design-vue";
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { useRouter } from "vue-router";
 import {
+  type ApiError,
+  type CommandSummary,
   type Repository,
   type RepositoryCredential,
   TASK_LIST_LIMIT,
@@ -367,14 +394,20 @@ import {
   executeTask,
   getModelsList,
   getTask,
+  listCommands,
   listCredentials,
   listRepositories,
   listTasks,
   updateTaskStatus,
 } from "../lib/api";
+import { showRuntimeRecoveryNotice } from "../lib/runtime-recovery";
+import { RUNTIME_RECOVERY_ERROR_PREFIX } from "../lib/runtime-recovery-contract";
+import { RUNTIME_RECOVERY_CONTEXTS } from "../lib/runtime-recovery-notice";
 import { useProjectStore } from "../stores/project";
+import { tasksThemeStyles } from "../theme/ui-theme";
 
 const projectStore = useProjectStore();
+const router = useRouter();
 const loading = ref(false);
 const creating = ref(false);
 const executingId = ref<string | null>(null);
@@ -389,6 +422,44 @@ const modelsLoading = ref(false);
 const modelsData = ref<Array<Record<string, unknown>> | null>(null);
 const EXECUTION_SETTLE_TIMEOUT_MS = 3000;
 const EXECUTION_SETTLE_INTERVAL_MS = 200;
+const AUTO_REFRESH_INTERVAL_MS = 8000;
+
+const autoRefreshTimer = ref<ReturnType<typeof setInterval> | null>(null);
+const hasActiveTasks = computed(() =>
+  tasks.value.some((t) => t.status === "running" || t.status === "pending"),
+);
+
+function startAutoRefresh() {
+  stopAutoRefresh();
+  autoRefreshTimer.value = setInterval(async () => {
+    if (loading.value) return;
+    try {
+      const result = await listTasks(projectStore.currentProjectId || undefined);
+      const data = result.data || [];
+      tasks.value = data;
+      truncated.value = data.length >= TASK_LIST_LIMIT;
+    } catch {
+      // Silently ignore auto-refresh errors
+    }
+    // Stop polling if no more active tasks
+    if (!hasActiveTasks.value) {
+      stopAutoRefresh();
+    }
+  }, AUTO_REFRESH_INTERVAL_MS);
+}
+
+function stopAutoRefresh() {
+  if (autoRefreshTimer.value) {
+    clearInterval(autoRefreshTimer.value);
+    autoRefreshTimer.value = null;
+  }
+}
+
+function maybeStartAutoRefresh() {
+  if (hasActiveTasks.value && !autoRefreshTimer.value) {
+    startAutoRefresh();
+  }
+}
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -488,10 +559,42 @@ function filterModelOption(input: string, option: { value?: string; label?: stri
   );
 }
 
+const commandsData = ref<CommandSummary[]>([]);
+const selectedCommand = ref<string | undefined>(undefined);
+
+async function loadCommands() {
+  try {
+    const result = await listCommands();
+    commandsData.value = result?.data ?? [];
+  } catch {
+    commandsData.value = [];
+  }
+}
+
+function applyCommand(cmdName: unknown) {
+  if (cmdName == null) {
+    selectedCommand.value = undefined;
+    // Remove leading /command from prompt if present
+    const prompt = createForm.value.prompt;
+    const match = prompt.match(/^\/\S+\s?/);
+    if (match) {
+      createForm.value.prompt = prompt.slice(match[0].length);
+    }
+    return;
+  }
+  const name = String(cmdName);
+  selectedCommand.value = name;
+  const prompt = createForm.value.prompt;
+  // Replace existing /command prefix or prepend
+  const replaced = prompt.replace(/^\/\S+\s?/, "");
+  createForm.value.prompt = `/${name} ${replaced}`;
+}
+
 watch(showCreateModal, (open) => {
   if (open) {
     loadRepos();
     if (!modelsData.value) loadModels();
+    if (!commandsData.value.length) loadCommands();
   }
 });
 
@@ -622,10 +725,15 @@ async function autoExecuteCreatedTask(taskId?: string) {
     message.success("Agent 已开始执行");
     return latestTask;
   } catch (e) {
-    const msg = String(e instanceof Error ? e.message : e);
-    if (msg.includes("提供商") || msg.includes("模型") || msg.includes("MODEL_")) {
-      message.error(`任务已创建，但模型不可用: ${msg}`, 8);
+    if (
+      showRuntimeRecoveryNotice(e, {
+        context: RUNTIME_RECOVERY_CONTEXTS.taskCreateExecute,
+        router,
+      })
+    ) {
+      message.warning("任务已创建，待你修复模型配置后可再次执行", 6);
     } else {
+      const msg = String(e instanceof Error ? e.message : e);
       message.warning(`任务已创建，但启动执行失败: ${msg}`);
     }
     return undefined;
@@ -634,19 +742,60 @@ async function autoExecuteCreatedTask(taskId?: string) {
 
 function resetCreateForm() {
   createForm.value = createInitialForm();
+  selectedCommand.value = undefined;
 }
 
 // ── Task Templates (localStorage) ──────────────────────────────────
 
 type TaskTemplate = { name: string; title: string; prompt: string };
 const TEMPLATE_STORAGE_KEY = "openerx-task-templates";
+const DEFAULT_TASK_TEMPLATES: TaskTemplate[] = [
+  {
+    name: "常规缺陷修复",
+    title: "修复线上问题",
+    prompt:
+      "请先定位问题根因，给出最小必要修复。\n补充受影响范围、回归风险和验证步骤。",
+  },
+  {
+    name: "功能开发",
+    title: "实现新功能",
+    prompt:
+      "请先梳理需求和边界条件，再实现功能代码。\n同时补充必要测试，并说明使用方式和影响范围。",
+  },
+  {
+    name: "运维排障",
+    title: "排查运行异常",
+    prompt:
+      "请先收集现象、日志和可能原因，按优先级给出排查过程。\n如果需要修改配置或代码，请说明风险、回滚方式和验证步骤。",
+  },
+];
+
+function sanitizeTemplates(value: unknown): TaskTemplate[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const { name, title, prompt } = item as Record<string, unknown>;
+    if (
+      typeof name !== "string" ||
+      typeof title !== "string" ||
+      typeof prompt !== "string" ||
+      !name.trim() ||
+      !title.trim() ||
+      !prompt.trim()
+    ) {
+      return [];
+    }
+    return [{ name: name.trim(), title: title.trim(), prompt: prompt.trim() }];
+  });
+}
 
 function loadTemplates(): TaskTemplate[] {
   try {
     const raw = localStorage.getItem(TEMPLATE_STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as TaskTemplate[]) : [];
+    if (!raw) return DEFAULT_TASK_TEMPLATES;
+    return sanitizeTemplates(JSON.parse(raw));
   } catch {
-    return [];
+    return DEFAULT_TASK_TEMPLATES;
   }
 }
 
@@ -692,8 +841,8 @@ watch(
 );
 
 const columns = [
-  { title: "任务 ID", key: "id", dataIndex: "id", width: 140 },
   { title: "标题", key: "title", dataIndex: "title", ellipsis: true },
+  { title: "项目", key: "projectName", width: 140, ellipsis: true },
   { title: "状态", key: "status", dataIndex: "status", width: 100 },
   { title: "仓库", key: "repoName", dataIndex: "repoName", width: 140, ellipsis: true },
   { title: "耗时", key: "duration", width: 120 },
@@ -710,6 +859,11 @@ const columns = [
 
 function setStatusFilter(value: unknown) {
   statusFilter.value = value == null ? undefined : String(value);
+}
+
+function getProjectName(projectId: string): string {
+  const project = projectStore.projects.find((p) => p.id === projectId);
+  return project?.name || projectId;
 }
 
 const filteredTasks = computed(() => {
@@ -734,6 +888,7 @@ async function refresh() {
     const data = result.data || [];
     tasks.value = data;
     truncated.value = data.length >= TASK_LIST_LIMIT;
+    maybeStartAutoRefresh();
   } catch (e) {
     loadError.value = `加载任务列表失败: ${e}`;
   } finally {
@@ -798,8 +953,17 @@ async function handleExecute(taskId: string) {
       upsertTaskSnapshot(latestTask);
     }
   } catch (e) {
+    if (
+      showRuntimeRecoveryNotice(e, {
+        context: RUNTIME_RECOVERY_CONTEXTS.taskExecute,
+        router,
+      })
+    ) {
+      return;
+    }
+
     const msg = String(e instanceof Error ? e.message : e);
-    if (msg.includes("提供商") || msg.includes("模型") || msg.includes("MODEL_")) {
+    if ((e as ApiError | null)?.code?.includes(RUNTIME_RECOVERY_ERROR_PREFIX)) {
       message.error(msg, 8);
     } else {
       message.error(`执行失败: ${msg}`);
@@ -869,6 +1033,10 @@ onMounted(async () => {
   if (projectStore.projects.length === 0) {
     await projectStore.loadProjects();
   }
+});
+
+onUnmounted(() => {
+  stopAutoRefresh();
 });
 
 watch(

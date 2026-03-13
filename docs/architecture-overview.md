@@ -13,6 +13,7 @@
 相关补充文档：
 
 - [OpenCode 关注边界说明](./opencode-focus-boundary.md)
+- [运行架构图](./runtime-process-architecture.md)
 
 ## 2. 系统定位
 

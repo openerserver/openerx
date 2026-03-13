@@ -13,3 +13,4 @@ opencode-fork/.opencode/state/
 opencode-fork/.copilot-token.json
 .DS_Store
 tmp/*
+bun.lock

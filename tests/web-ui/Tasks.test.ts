@@ -367,6 +367,17 @@ describe("Tasks page", () => {
     expect(apiMocks.updateTaskStatus).toHaveBeenCalledWith("task-run", "cancelled");
   });
 
+  it("loads built-in task templates when localStorage is empty", async () => {
+    const wrapper = await mountPage([]);
+
+    const state = getSetupState(wrapper) as {
+      taskTemplates: Array<{ name: string; title: string; prompt: string }>;
+    };
+
+    expect(state.taskTemplates.length).toBeGreaterThan(0);
+    expect(state.taskTemplates.map((template) => template.name)).toContain("常规缺陷修复");
+  });
+
   it("saves task template to localStorage", async () => {
     const wrapper = await mountPage([]);
 
