@@ -144,6 +144,99 @@ async function waitForCompletedStatus(
   throw new Error(`Timed out waiting for completed status of task ${taskId}`);
 }
 
+async function waitForStoppedStatus(
+  token: string,
+  agentRunId: string,
+): Promise<{ status: string; finishedAt?: string | null }> {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < 30000) {
+    const agentStatus = await request<{ status: string; finishedAt?: string | null }>(
+      `/api/agents/${agentRunId}/status`,
+      {
+        headers: { Authorization: `Bearer ${token}` },
+      },
+    );
+
+    if (agentStatus.status === "stopped") {
+      return agentStatus;
+    }
+
+    await sleep(250);
+  }
+
+  throw new Error(`Timed out waiting for stopped status of agent ${agentRunId}`);
+}
+
+async function waitForAgentSummary(
+  token: string,
+  agentRunId: string,
+): Promise<{
+  agentRunId: string;
+  status: string;
+  blockerType: string | null;
+  blockerLabel: string;
+  finishedAt: string | null;
+}> {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < 30000) {
+    const summary = await request<{
+      agentRunId: string;
+      status: string;
+      blockerType: string | null;
+      blockerLabel: string;
+      finishedAt: string | null;
+    }>(`/api/agents/${agentRunId}/summary`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    if (summary.status === "stopped") {
+      return summary;
+    }
+
+    await sleep(250);
+  }
+
+  throw new Error(`Timed out waiting for stopped summary of agent ${agentRunId}`);
+}
+
+async function waitForQueueContains(
+  token: string,
+  queue: "attention" | "running" | "recent",
+  agentRunId: string,
+): Promise<{
+  data: Array<{
+    agentRunId: string;
+    status: string;
+    blockerType: string | null;
+    blockerLabel: string;
+  }>;
+}> {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < 30000) {
+    const response = await request<{
+      data: Array<{
+        agentRunId: string;
+        status: string;
+        blockerType: string | null;
+        blockerLabel: string;
+      }>;
+    }>(`/api/agents/queues?queue=${encodeURIComponent(queue)}&page=1&pageSize=20`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    if (response.data.some((item) => item.agentRunId === agentRunId)) {
+      return response;
+    }
+
+    await sleep(250);
+  }
+
+  throw new Error(`Timed out waiting for agent ${agentRunId} in ${queue} queue`);
+}
+
 async function waitForAssistantResult(
   token: string,
   taskId: string,
@@ -487,3 +580,99 @@ executionIntegrationTest(
     });
   },
 );
+
+executionIntegrationTest("OpenCode terminate emits stopped event and persists stopped status", async () => {
+  const health = await request<{ status: string }>("/health");
+  expect(health.status).toBe("ok");
+
+  const token = await login();
+  const authHeaders = {
+    Authorization: `Bearer ${token}`,
+    "Content-Type": "application/json",
+  };
+
+  const task = await request<{ id: string }>("/api/tasks", {
+    method: "POST",
+    headers: authHeaders,
+    body: JSON.stringify({
+      title: `terminate-regression-${Date.now()}`,
+      projectId: PROJECT_ID,
+      prompt:
+        "Quick brief reply only. Do not inspect the repository or call tools. Print the word HOLD on 200 separate lines and do not summarize.",
+    }),
+  });
+
+  const events: Array<Record<string, unknown>> = [];
+  const wsReady = createDeferred<void>();
+  const ws = new WebSocket(
+    `${BFF_URL.replace("http", "ws")}/ws?token=${encodeURIComponent(token)}`,
+  );
+
+  let agentRunId = "";
+
+  ws.addEventListener("open", () => {
+    ws.send(JSON.stringify({ type: "subscribe_task", taskId: task.id, projectId: PROJECT_ID }));
+    wsReady.resolve();
+  });
+
+  ws.addEventListener("message", (message) => {
+    try {
+      const event = JSON.parse(String(message.data)) as Record<string, unknown>;
+      events.push(event);
+    } catch {
+      // ignore malformed frames
+    }
+  });
+
+  ws.addEventListener("error", (error) => wsReady.reject(error));
+
+  try {
+    await wsReady.promise;
+
+    const execution = await request<{ agentRunId: string }>(`/api/tasks/${task.id}/execute`, {
+      method: "POST",
+      headers: authHeaders,
+    });
+    agentRunId = execution.agentRunId;
+
+    await waitForEvent(events, "agent.started", (event) => event.agentRunId === agentRunId, 15000);
+
+    const terminateResult = await request<{ ok: boolean }>(`/api/agents/${agentRunId}/terminate`, {
+      method: "POST",
+      headers: authHeaders,
+    });
+    expect(terminateResult.ok).toBe(true);
+
+    const stoppedEvent = await waitForEvent(
+      events,
+      "agent.stopped",
+      (event) => event.agentRunId === agentRunId,
+      15000,
+    );
+    expect((stoppedEvent.data as Record<string, unknown>)?.reason).toBe("terminated");
+
+    const agentStatus = await waitForStoppedStatus(token, agentRunId);
+    expect(agentStatus.status).toBe("stopped");
+
+    const summary = await waitForAgentSummary(token, agentRunId);
+    expect(summary.agentRunId).toBe(agentRunId);
+    expect(summary.status).toBe("stopped");
+    expect(summary.blockerType).toBe("stopped");
+    expect(summary.blockerLabel).toBe("已停止待处理");
+    expect(summary.finishedAt).toBeTruthy();
+
+    const recentQueue = await waitForQueueContains(token, "recent", agentRunId);
+    const queuedRun = recentQueue.data.find((item) => item.agentRunId === agentRunId);
+    expect(queuedRun?.status).toBe("stopped");
+    expect(queuedRun?.blockerType).toBe("stopped");
+
+    const attentionQueue = await waitForQueueContains(token, "attention", agentRunId);
+    const attentionRun = attentionQueue.data.find((item) => item.agentRunId === agentRunId);
+    expect(attentionRun?.status).toBe("stopped");
+    expect(attentionRun?.blockerType).toBe("stopped");
+    expect(attentionRun?.blockerLabel).toBe("已停止待处理");
+  } finally {
+    ws.close();
+    await deleteTask(task.id);
+  }
+});

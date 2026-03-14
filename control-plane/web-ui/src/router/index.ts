@@ -28,6 +28,11 @@ const routes: RouteRecordRaw[] = [
         component: () => import("../pages/TaskWorkbench.vue"),
       },
       {
+        path: "multi-task-monitor",
+        name: "MultiTaskMonitor",
+        component: () => import("../pages/MultiTaskMonitor.vue"),
+      },
+      {
         path: "tasks/:taskId",
         name: "TaskDetail",
         component: () => import("../pages/TaskDetail.vue"),
@@ -66,6 +71,11 @@ const routes: RouteRecordRaw[] = [
         path: "settings",
         name: "Settings",
         component: () => import("../pages/Settings.vue"),
+      },
+      {
+        path: "chat-settings",
+        name: "ChatSettings",
+        component: () => import("../pages/ChatSettings.vue"),
       },
       {
         path: "users",

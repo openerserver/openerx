@@ -6,9 +6,11 @@ import { agentControlRoutes } from "./modules/agent-control/routes";
 import { approvalRoutes } from "./modules/approvals/routes";
 import { auditRoutes } from "./modules/audit/routes";
 import { authRoutes } from "./modules/auth/routes";
+import { chatSettingsRoutes } from "./modules/chat-settings/routes";
 import { configRoutes } from "./modules/config/routes";
 import { costRoutes } from "./modules/cost/routes";
 import { credentialRoutes } from "./modules/credentials/routes";
+import { dashboardRoutes } from "./modules/dashboard/routes";
 import { envRoutes } from "./modules/envs/routes";
 import { orgRoutes } from "./modules/orgs/routes";
 import { policyRoutes } from "./modules/policies/routes";
@@ -54,6 +56,7 @@ app.route("/api/agents", agentControlRoutes);
 app.route("/api/tasks", taskRoutes);
 app.route("/api/approvals", approvalRoutes);
 app.route("/api/cost", costRoutes);
+app.route("/api/dashboard", dashboardRoutes);
 app.route("/api/envs", envRoutes);
 app.route("/api/policies", policyRoutes);
 app.route("/api/projects", projectRoutes);
@@ -62,6 +65,7 @@ app.route("/api/credentials", credentialRoutes);
 app.route("/api/orgs", orgRoutes);
 app.route("/api/users", userRoutes);
 app.route("/api/config", configRoutes);
+app.route("/api/chat-settings", chatSettingsRoutes);
 app.route("/api/workbench", workbenchRoutes);
 
 // ── Start Server ───────────────────────────────────────────────────

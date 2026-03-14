@@ -22,10 +22,12 @@
     "highlight.js": "^11.11.1",
     "marked": "^17.0.4",
     "marked-highlight": "^2.2.3",
+    "mermaid": "^11.13.0",
     "pinia": "^2.3.0",
     "pinia-plugin-persistedstate": "^4.2.0",
     "vue": "^3.5.0",
-    "vue-router": "^4.5.0"
+    "vue-router": "^4.5.0",
+    "yoga-layout": "^3.2.1"
   },
   "devDependencies": {
     "@types/dagre": "^0.7.0",

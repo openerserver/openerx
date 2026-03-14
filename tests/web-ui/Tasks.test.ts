@@ -244,8 +244,8 @@ async function mountPage(tasks = [makeTask()]) {
         RouterLink: defineComponent({
           name: "RouterLink",
           props: ["to"],
-          setup(_props, { slots }) {
-            return () => h("a", {}, slots.default ? slots.default() : undefined);
+          setup(props, { slots }) {
+            return () => h("a", { "data-to": typeof props.to === "string" ? props.to : String(props.to ?? "") }, slots.default ? slots.default() : undefined);
           },
         }),
       },
@@ -393,5 +393,13 @@ describe("Tasks page", () => {
     await flushPromises();
 
     expect(localStorage.getItem("openerx-task-templates")).toContain("常规修复模板");
+  });
+
+  it("shows a multi task monitor shortcut for each task row", async () => {
+    const wrapper = await mountPage([makeTask({ id: "task-monitor", title: "Monitor me" })]);
+
+    const monitorLink = wrapper.find('a[data-to="/multi-task-monitor?task=task-monitor"]');
+    expect(monitorLink.exists()).toBe(true);
+    expect(monitorLink.text()).toContain("监控台");
   });
 });

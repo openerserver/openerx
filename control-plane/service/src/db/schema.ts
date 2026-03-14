@@ -495,3 +495,147 @@ export const workbenchLayouts = sqliteTable("workbench_layouts", {
   layoutJson: text("layout_json").notNull().default("{}"),
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
+
+// ── Role Agents ───────────────────────────────────────────────────
+
+export const roleAgents = sqliteTable("role_agents", {
+  id: text("id").primaryKey(),
+  projectId: text("project_id").references(() => projects.id),
+  name: text("name").notNull(),
+  description: text("description"),
+  scope: text("scope", { enum: ["system", "project"] }).notNull().default("system"),
+  status: text("status", { enum: ["active", "disabled", "deprecated"] })
+    .notNull()
+    .default("active"),
+  ownerTeam: text("owner_team"),
+  permissionProfile: text("permission_profile").notNull(),
+  toolProfile: text("tool_profile").notNull(),
+  defaultExecutionMode: text("default_execution_mode", {
+    enum: ["single", "parallel-review", "round-robin"],
+  })
+    .notNull()
+    .default("single"),
+  aggregationStrategy: text("aggregation_strategy", {
+    enum: ["first-pass", "majority", "merge-summary", "human-review"],
+  }),
+  maxActiveBindings: integer("max_active_bindings"),
+  requireConsensus: integer("require_consensus", { mode: "boolean" }).notNull().default(false),
+  riskLevel: text("risk_level", { enum: ["low", "medium", "high", "critical"] })
+    .notNull()
+    .default("low"),
+  requiresApprovalForWrite: integer("requires_approval_for_write", { mode: "boolean" })
+    .notNull()
+    .default(false),
+  outputSchemaId: text("output_schema_id"),
+  tagsJson: text("tags_json", { mode: "json" }).$type<string[]>(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const roleAgentBindings = sqliteTable("role_agent_bindings", {
+  id: text("id").primaryKey(),
+  roleAgentId: text("role_agent_id")
+    .notNull()
+    .references(() => roleAgents.id),
+  bindingKey: text("binding_key").notNull(),
+  runtimeAgent: text("runtime_agent").notNull(),
+  label: text("label").notNull(),
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+  priority: integer("priority").notNull().default(1),
+  model: text("model"),
+  tagsJson: text("tags_json", { mode: "json" }).$type<string[]>(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+// ── Workflow Templates ────────────────────────────────────────────
+
+export const workflowTemplates = sqliteTable("workflow_templates", {
+  id: text("id").primaryKey(),
+  projectId: text("project_id").references(() => projects.id),
+  name: text("name").notNull(),
+  description: text("description"),
+  category: text("category"),
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+  selectableByProjects: integer("selectable_by_projects", { mode: "boolean" })
+    .notNull()
+    .default(true),
+  stageOrderJson: text("stage_order_json", { mode: "json" }).$type<string[]>().notNull(),
+  defaultRolesJson: text("default_roles_json", { mode: "json" }).$type<string[]>(),
+  version: integer("version").notNull().default(1),
+  createdBy: text("created_by"),
+  updatedBy: text("updated_by"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const workflowTemplateStages = sqliteTable("workflow_template_stages", {
+  id: text("id").primaryKey(),
+  templateId: text("template_id")
+    .notNull()
+    .references(() => workflowTemplates.id),
+  stageKey: text("stage_key").notNull(),
+  name: text("name").notNull(),
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+  mode: text("mode", { enum: ["single", "parallel", "pipeline"] })
+    .notNull()
+    .default("single"),
+  primaryRoleAgentId: text("primary_role_agent_id").notNull(),
+  participantRoleAgentIdsJson: text("participant_role_agent_ids_json", { mode: "json" })
+    .$type<string[]>()
+    .notNull(),
+  roleExecutionPoliciesJson: text("role_execution_policies_json", { mode: "json" }),
+  entryCriteriaJson: text("entry_criteria_json", { mode: "json" }).$type<string[]>(),
+  exitCriteriaJson: text("exit_criteria_json", { mode: "json" }).$type<string[]>(),
+  hooksJson: text("hooks_json", { mode: "json" }),
+  gatesJson: text("gates_json", { mode: "json" }),
+  approvalsJson: text("approvals_json", { mode: "json" }),
+  failurePolicyJson: text("failure_policy_json", { mode: "json" }),
+  orderIndex: integer("order_index").notNull().default(0),
+});
+
+// ── Task Workflow Runs ────────────────────────────────────────────
+
+export const taskWorkflowRuns = sqliteTable("task_workflow_runs", {
+  id: text("id").primaryKey(),
+  taskId: text("task_id")
+    .notNull()
+    .references(() => tasks.id),
+  templateId: text("template_id").notNull(),
+  currentStage: text("current_stage").notNull(),
+  status: text("status", {
+    enum: ["pending", "running", "blocked", "waiting-approval", "failed", "completed", "cancelled"],
+  })
+    .notNull()
+    .default("pending"),
+  startedAt: text("started_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  finishedAt: text("finished_at"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const taskStageRuns = sqliteTable("task_stage_runs", {
+  id: text("id").primaryKey(),
+  workflowRunId: text("workflow_run_id")
+    .notNull()
+    .references(() => taskWorkflowRuns.id),
+  stageKey: text("stage_key").notNull(),
+  status: text("status", {
+    enum: ["pending", "running", "blocked", "waiting-approval", "failed", "completed", "skipped", "cancelled"],
+  })
+    .notNull()
+    .default("pending"),
+  primaryRoleAgentId: text("primary_role_agent_id").notNull(),
+  participantRoleAgentIdsJson: text("participant_role_agent_ids_json", { mode: "json" }).$type<string[]>(),
+  startedAt: text("started_at"),
+  finishedAt: text("finished_at"),
+  blockingReason: text("blocking_reason"),
+  approvalState: text("approval_state", {
+    enum: ["not-required", "pending", "approved", "rejected", "expired", "cancelled"],
+  })
+    .notNull()
+    .default("not-required"),
+  artifactsSummaryJson: text("artifacts_summary_json", { mode: "json" }),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});

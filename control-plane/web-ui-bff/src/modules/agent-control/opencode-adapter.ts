@@ -583,15 +583,80 @@ function isCompletedAssistantMessage(info: Record<string, unknown> | undefined):
   return typeof completed === "number" || typeof completed === "string";
 }
 
+function extractAssistantErrorMessage(info: Record<string, unknown> | undefined): string | undefined {
+  const rawError = info?.error;
+  if (typeof rawError === "string") {
+    const trimmed = rawError.trim();
+    return trimmed || undefined;
+  }
+
+  if (typeof rawError !== "object" || !rawError) {
+    return undefined;
+  }
+
+  const error = rawError as Record<string, unknown>;
+  const data =
+    typeof error.data === "object" && error.data
+      ? (error.data as Record<string, unknown>)
+      : undefined;
+  const message = data?.message ?? error.message ?? error.name;
+  return typeof message === "string" && message.trim() ? message.trim() : undefined;
+}
+
+function readTokenMetric(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function extractAssistantTokenUsage(info: Record<string, unknown> | undefined): number {
+  const tokens =
+    typeof info?.tokens === "object" && info.tokens
+      ? (info.tokens as Record<string, unknown>)
+      : undefined;
+  if (!tokens) {
+    return 0;
+  }
+
+  const total = readTokenMetric(tokens.total);
+  if (total > 0) {
+    return total;
+  }
+
+  const cache =
+    typeof tokens.cache === "object" && tokens.cache
+      ? (tokens.cache as Record<string, unknown>)
+      : undefined;
+
+  return (
+    readTokenMetric(tokens.input) +
+    readTokenMetric(tokens.output) +
+    readTokenMetric(tokens.reasoning) +
+    readTokenMetric(cache?.read) +
+    readTokenMetric(cache?.write)
+  );
+}
+
 export function extractAssistantResultFromMessages(messages: unknown): {
   text?: string;
   completed: boolean;
+  failed: boolean;
+  error?: string;
+  tokenUsed: number;
 } {
   if (!Array.isArray(messages)) {
-    return { completed: false };
+    return { completed: false, failed: false, tokenUsed: 0 };
   }
 
   let fallbackText: string | undefined;
+  let tokenUsed = 0;
+
+  for (const message of messages) {
+    const info = getAssistantMessageInfo(message);
+    if (info?.role !== "assistant") {
+      continue;
+    }
+
+    tokenUsed += extractAssistantTokenUsage(info);
+  }
 
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index];
@@ -605,32 +670,45 @@ export function extractAssistantResultFromMessages(messages: unknown): {
       fallbackText = text;
     }
 
+    const errorMessage = extractAssistantErrorMessage(info);
+    if (errorMessage) {
+      return { text: fallbackText ?? text, completed: false, failed: true, error: errorMessage, tokenUsed };
+    }
+
     if (text && isCompletedAssistantMessage(info)) {
-      return { text, completed: true };
+      return { text, completed: true, failed: false, tokenUsed };
     }
 
     break;
   }
 
-  return { text: fallbackText, completed: false };
+  return { text: fallbackText, completed: false, failed: false, tokenUsed };
 }
 
 async function waitForSessionText(
   sessionId: string,
   timeoutMs: number,
-): Promise<{ text?: string; completed: boolean }> {
+): Promise<{ text?: string; completed: boolean; failed: boolean; error?: string; tokenUsed: number }> {
   const deadline = Date.now() + timeoutMs;
   let fallbackText: string | undefined;
+  let fallbackTokenUsed = 0;
 
   while (Date.now() < deadline) {
     const messagesResult = await getSessionMessages(sessionId);
     if (!messagesResult.ok || !Array.isArray(messagesResult.data)) {
-      return { text: fallbackText, completed: false };
+      return { text: fallbackText, completed: false, failed: false, tokenUsed: fallbackTokenUsed };
     }
 
     const assistantResult = extractAssistantResultFromMessages(messagesResult.data);
     if (assistantResult.text) {
       fallbackText = assistantResult.text;
+    }
+    if (assistantResult.tokenUsed > 0) {
+      fallbackTokenUsed = assistantResult.tokenUsed;
+    }
+
+    if (assistantResult.failed) {
+      return assistantResult;
     }
 
     if (assistantResult.completed) {
@@ -640,7 +718,7 @@ async function waitForSessionText(
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
 
-  return { text: fallbackText, completed: false };
+  return { text: fallbackText, completed: false, failed: false, tokenUsed: fallbackTokenUsed };
 }
 
 export async function listSessions(limit = 20): Promise<OpencodeResponse> {

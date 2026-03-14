@@ -4,12 +4,17 @@ import { AntDesignVueResolver } from "unplugin-vue-components/resolvers";
 import Components from "unplugin-vue-components/vite";
 import { defineConfig } from "vite";
 
+const bffHttpTarget = process.env.VITE_BFF_TARGET || "http://127.0.0.1:4098";
+const bffWsTarget = process.env.VITE_BFF_WS_TARGET || "ws://127.0.0.1:4098";
+
 function manualChunks(id: string) {
   if (!id.includes("node_modules")) return undefined;
 
   if (id.includes("ant-design-vue")) return "antd";
   if (id.includes("@ant-design/icons-vue")) return "antd-icons";
-  if (id.includes("@vue-flow/") || id.includes("dagre")) return "graph";
+  if (id.includes("@vue-flow/")) {
+    return "graph";
+  }
   if (
     id.includes("vue-router") ||
     id.includes("pinia") ||
@@ -51,11 +56,11 @@ export default defineConfig({
     port: 5173,
     proxy: {
       "/api": {
-        target: "http://localhost:4098",
+        target: bffHttpTarget,
         changeOrigin: true,
       },
       "/ws": {
-        target: "ws://localhost:4098",
+        target: bffWsTarget,
         ws: true,
       },
     },

@@ -231,6 +231,7 @@ export const loginThemeStyles = {
   } satisfies CSSProperties,
 };
 
+/** @deprecated Workbench now uses scoped CSS in TaskWorkbench.vue. Kept only for backward compat. */
 export const workbenchThemeStyles = {
   page: {
     padding: "24px",

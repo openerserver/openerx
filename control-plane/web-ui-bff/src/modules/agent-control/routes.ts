@@ -1,21 +1,336 @@
 import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
 import { z } from "zod";
-import { cpFetch, createInternalAuthorization } from "../../lib/control-plane-client";
+import { authHeader, cpFetch, createInternalAuthorization } from "../../lib/control-plane-client";
 import { mergeTaskStrategy, readOrchestrationStrategy } from "../../lib/orchestration-strategy";
 import { executeLifecycleHooks } from "../hooks/lifecycle-hooks";
 import { wsBroadcaster } from "../realtime/ws-broadcaster";
 import {
+  extractAssistantResultFromMessages,
   getAgentMessages,
   getAgentRun,
+  getSessionMessages,
   injectGuidance,
   listAgentRuns,
   pauseAgent,
   resumeAgent,
   terminateAgent,
+  updateAgentRunStatus,
 } from "./opencode-adapter";
+import { patchAgentRunRecord, recordAgentAudit } from "./run-persistence";
 
 export const agentControlRoutes = new Hono();
+
+type RuntimeRun = ReturnType<typeof listAgentRuns>[number];
+
+interface AgentOverviewResponse {
+  summary: {
+    attentionCount: number;
+    runningCount: number;
+    completedCount: number;
+    failureRate: number;
+    avgDurationMs: number | null;
+    humanInterventionRate: number;
+  };
+  queueCounts: {
+    attention: number;
+    running: number;
+    recent: number;
+  };
+  generatedAt: string;
+}
+
+interface AgentQueueItem {
+  agentRunId: string;
+  taskId: string;
+  taskTitle: string;
+  projectId: string;
+  projectName: string | null;
+  agentType: string;
+  status: string;
+  sessionId?: string | null;
+  currentStage: string | null;
+  blockerType: string | null;
+  blockerLabel: string;
+  blockerReason: string | null;
+  riskLevel: string | null;
+  approvalStatus: string | null;
+  requiresIntervention: boolean;
+  startedAt: string | null;
+  finishedAt: string | null;
+  lastActivityAt: string | null;
+  durationMs: number | null;
+  modelUsed: string | null;
+  tokenUsed: number;
+  resultSummary: string | null;
+  guidanceCount: number;
+}
+
+interface AgentQueueResponse {
+  data: AgentQueueItem[];
+  page: number;
+  pageSize: number;
+  total: number;
+}
+
+interface AgentRunSummaryResponse {
+  agentRunId: string;
+  taskId: string;
+  taskTitle: string;
+  projectId: string;
+  projectName: string | null;
+  agentType: string;
+  status: string;
+  sessionId: string | null;
+  modelUsed: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  lastActivityAt: string | null;
+  durationMs: number | null;
+  tokenUsed: number;
+  blockerType: string | null;
+  blockerLabel: string;
+  riskLevel: string | null;
+  guidanceCount: number;
+  resultSummary: string | null;
+  result: string | null;
+  error: string | null;
+  longSummary: string | null;
+  latestEvents: Array<{ ts: string; type: string; summary: string }>;
+  subSessionId?: string;
+}
+
+type PersistedRunStatus = Parameters<typeof patchAgentRunRecord>[0]["status"];
+
+function buildForwardedQuery(c: { req: { query: (name: string) => string | undefined } }, keys: string[]) {
+  const params = new URLSearchParams();
+  for (const key of keys) {
+    const value = c.req.query(key);
+    if (value) params.set(key, value);
+  }
+  const query = params.toString();
+  return query ? `?${query}` : "";
+}
+
+function runtimeTimestampToIso(value?: number | string | null) {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return new Date(value).toISOString();
+  }
+  if (typeof value === "string" && value.trim()) {
+    const ts = Date.parse(value);
+    if (Number.isFinite(ts)) return new Date(ts).toISOString();
+  }
+  return null;
+}
+
+function shouldPreferPersistedStatus(persistedStatus: string, runtimeStatus: string) {
+  return runtimeStatus === "running" && persistedStatus !== "running";
+}
+
+function resolveMergedStatus(persistedStatus: string, runtimeStatus: string) {
+  return shouldPreferPersistedStatus(persistedStatus, runtimeStatus)
+    ? persistedStatus
+    : runtimeStatus;
+}
+
+function maybeResyncRuntimeStatus(agentRunId: string, persistedStatus: string, runtimeRun?: RuntimeRun) {
+  if (!runtimeRun || !shouldPreferPersistedStatus(persistedStatus, runtimeRun.status)) {
+    return runtimeRun;
+  }
+
+  const synced = updateAgentRunStatus(agentRunId, persistedStatus as RuntimeRun["status"]);
+  return synced ?? runtimeRun;
+}
+
+function mergeQueueItemWithRuntime(item: AgentQueueItem, runtimeRun?: RuntimeRun): AgentQueueItem {
+  const effectiveRuntimeRun = maybeResyncRuntimeStatus(item.agentRunId, item.status, runtimeRun);
+  if (!effectiveRuntimeRun) return item;
+  return {
+    ...item,
+    status: resolveMergedStatus(item.status, effectiveRuntimeRun.status),
+    agentType: effectiveRuntimeRun.model ? `${item.agentType}` : item.agentType,
+    startedAt: item.startedAt || runtimeTimestampToIso(effectiveRuntimeRun.startedAt),
+    lastActivityAt:
+      runtimeTimestampToIso(effectiveRuntimeRun.pausedAt) ||
+      runtimeTimestampToIso(effectiveRuntimeRun.finishedAt) ||
+      item.lastActivityAt ||
+      runtimeTimestampToIso(effectiveRuntimeRun.startedAt),
+  };
+}
+
+function mergeSummaryWithRuntime(summary: AgentRunSummaryResponse, runtimeRun?: RuntimeRun) {
+  const effectiveRuntimeRun = maybeResyncRuntimeStatus(summary.agentRunId, summary.status, runtimeRun);
+  if (!effectiveRuntimeRun) return summary;
+  return {
+    ...summary,
+    status: resolveMergedStatus(summary.status, effectiveRuntimeRun.status),
+    startedAt: summary.startedAt || runtimeTimestampToIso(effectiveRuntimeRun.startedAt),
+    finishedAt: summary.finishedAt || runtimeTimestampToIso(effectiveRuntimeRun.finishedAt),
+    lastActivityAt:
+      runtimeTimestampToIso(effectiveRuntimeRun.pausedAt) ||
+      runtimeTimestampToIso(effectiveRuntimeRun.finishedAt) ||
+      summary.lastActivityAt ||
+      runtimeTimestampToIso(effectiveRuntimeRun.startedAt),
+    subSessionId: effectiveRuntimeRun.subSessionId,
+  };
+}
+
+async function loadSessionTokenUsage(sessionId?: string | null): Promise<number> {
+  if (!sessionId) {
+    return 0;
+  }
+
+  const messagesResult = await getSessionMessages(sessionId);
+  if (!messagesResult.ok) {
+    return 0;
+  }
+
+  return extractAssistantResultFromMessages(messagesResult.data).tokenUsed;
+}
+
+async function maybeBackfillTokenUsage(input: {
+  agentRunId: string;
+  taskId: string;
+  sessionId?: string | null;
+  status: string;
+  tokenUsed: number;
+}) {
+  if (input.tokenUsed > 0 || !input.sessionId) {
+    return input.tokenUsed;
+  }
+
+  const tokenUsed = await loadSessionTokenUsage(input.sessionId);
+  if (tokenUsed <= 0) {
+    return input.tokenUsed;
+  }
+
+  await patchAgentRunRecord({
+    taskId: input.taskId,
+    agentRunId: input.agentRunId,
+    status: input.status as PersistedRunStatus,
+    tokenUsed,
+  });
+
+  return tokenUsed;
+}
+
+async function buildRuntimeOnlySummary(c: { req: { header: (name: string) => string | undefined } }, runtimeRun: RuntimeRun) {
+  const taskResult = await cpFetch<{ id: string; title: string; projectId: string }>(
+    `/api/tasks/${encodeURIComponent(runtimeRun.taskId)}`,
+    { authorization: authHeader(c) },
+  );
+  return {
+    agentRunId: runtimeRun.agentRunId,
+    taskId: runtimeRun.taskId,
+    taskTitle: taskResult.ok ? taskResult.data.title : runtimeRun.taskId,
+    projectId: taskResult.ok ? taskResult.data.projectId : runtimeRun.projectId,
+    projectName: null,
+    agentType: "Agent",
+    status: runtimeRun.status,
+    sessionId: runtimeRun.subSessionId,
+    modelUsed: runtimeRun.model ? `${runtimeRun.model.providerId}:${runtimeRun.model.modelId}` : null,
+    startedAt: runtimeTimestampToIso(runtimeRun.startedAt),
+    finishedAt: runtimeTimestampToIso(runtimeRun.finishedAt),
+    lastActivityAt:
+      runtimeTimestampToIso(runtimeRun.pausedAt) ||
+      runtimeTimestampToIso(runtimeRun.finishedAt) ||
+      runtimeTimestampToIso(runtimeRun.startedAt),
+    durationMs: null,
+    tokenUsed: 0,
+    blockerType: runtimeRun.status === "paused" ? "manual_resume" : runtimeRun.status === "running" ? null : runtimeRun.status,
+    blockerLabel:
+      runtimeRun.status === "paused"
+        ? "等待人工恢复"
+        : runtimeRun.status === "running"
+          ? "推进中"
+          : runtimeRun.status,
+    riskLevel: null,
+    guidanceCount: 0,
+    resultSummary: null,
+    result: null,
+    error: null,
+    longSummary: "该实例当前仅存在于 BFF 运行时注册表中，聚合视图尚未持久化完整摘要。",
+    latestEvents: [],
+    subSessionId: runtimeRun.subSessionId,
+  } satisfies AgentRunSummaryResponse;
+}
+
+// GET /api/agents/overview — aggregated overview for agent ops dashboard
+agentControlRoutes.get("/overview", async (c) => {
+  const query = buildForwardedQuery(c, ["projectId", "from", "to", "ownerScope"]);
+  const result = await cpFetch<AgentOverviewResponse>(`/api/agent-runs/overview${query}`, {
+    authorization: authHeader(c),
+  });
+  return c.json(result.data, result.ok ? 200 : (result.status as 401 | 403 | 502));
+});
+
+// GET /api/agents/queues — aggregated queues for attention/running/recent
+agentControlRoutes.get("/queues", async (c) => {
+  const query = buildForwardedQuery(c, [
+    "queue",
+    "projectId",
+    "from",
+    "to",
+    "ownerScope",
+    "page",
+    "pageSize",
+    "status",
+    "search",
+    "requiresIntervention",
+  ]);
+  const result = await cpFetch<AgentQueueResponse>(`/api/agent-runs/queues${query}`, {
+    authorization: authHeader(c),
+  });
+  if (!result.ok) {
+    return c.json(result.data, result.status as 401 | 403 | 502);
+  }
+
+  const runtimeMap = new Map(listAgentRuns().map((run) => [run.agentRunId, run]));
+  const data = await Promise.all(
+    result.data.data.map(async (item) => {
+      const tokenUsed = await maybeBackfillTokenUsage({
+        agentRunId: item.agentRunId,
+        taskId: item.taskId,
+        sessionId: item.sessionId,
+        status: item.status,
+        tokenUsed: item.tokenUsed,
+      });
+      return mergeQueueItemWithRuntime({ ...item, tokenUsed }, runtimeMap.get(item.agentRunId));
+    }),
+  );
+  return c.json({ ...result.data, data });
+});
+
+// GET /api/agents/:agentRunId/summary — aggregated drawer summary for single agent run
+agentControlRoutes.get("/:agentRunId/summary", async (c) => {
+  const agentRunId = c.req.param("agentRunId");
+  const result = await cpFetch<AgentRunSummaryResponse>(
+    `/api/agent-runs/${encodeURIComponent(agentRunId)}/summary`,
+    {
+      authorization: authHeader(c),
+    },
+  );
+  const runtimeRun = getAgentRun(agentRunId);
+
+  if (!result.ok) {
+    if (result.status === 404 && runtimeRun) {
+      const fallback = await buildRuntimeOnlySummary(c, { agentRunId, ...runtimeRun });
+      const tokenUsed = await loadSessionTokenUsage(fallback.sessionId);
+      return c.json({ ...fallback, tokenUsed: tokenUsed || fallback.tokenUsed }, 200);
+    }
+    return c.json(result.data, result.status as 401 | 403 | 404 | 502);
+  }
+
+  const summary = mergeSummaryWithRuntime(result.data, runtimeRun ? { agentRunId, ...runtimeRun } : undefined);
+  const tokenUsed = await maybeBackfillTokenUsage({
+    agentRunId: summary.agentRunId,
+    taskId: summary.taskId,
+    sessionId: summary.sessionId,
+    status: summary.status,
+    tokenUsed: summary.tokenUsed,
+  });
+  return c.json({ ...summary, tokenUsed });
+});
 
 // GET /api/agents — list all registered agent runs
 agentControlRoutes.get("/", (c) => {
@@ -30,6 +345,26 @@ agentControlRoutes.post("/:agentRunId/pause", async (c) => {
 
   if (result.ok) {
     const run = getAgentRun(agentRunId);
+    if (run?.taskId) {
+      await Promise.all([
+        patchAgentRunRecord({
+          taskId: run.taskId,
+          agentRunId,
+          status: "paused",
+          model: run.model,
+        }),
+        recordAgentAudit({
+          projectId: run.projectId,
+          taskId: run.taskId,
+          sessionId: run.subSessionId,
+          agentRunId,
+          eventType: "agent",
+          action: "paused",
+          detail: { agentRunId },
+          riskLevel: "medium",
+        }),
+      ]);
+    }
     wsBroadcaster.broadcast({
       id: crypto.randomUUID(),
       type: "agent.paused",
@@ -61,6 +396,26 @@ agentControlRoutes.post("/:agentRunId/resume", async (c) => {
 
   if (result.ok) {
     const currentRun = getAgentRun(agentRunId);
+    if (currentRun?.taskId) {
+      await Promise.all([
+        patchAgentRunRecord({
+          taskId: currentRun.taskId,
+          agentRunId,
+          status: "running",
+          model: currentRun.model,
+        }),
+        recordAgentAudit({
+          projectId: currentRun.projectId,
+          taskId: currentRun.taskId,
+          sessionId: currentRun.subSessionId,
+          agentRunId,
+          eventType: "agent",
+          action: "resumed",
+          detail: { agentRunId },
+          riskLevel: "low",
+        }),
+      ]);
+    }
     wsBroadcaster.broadcast({
       id: crypto.randomUUID(),
       type: "agent.resumed",
@@ -88,6 +443,18 @@ agentControlRoutes.post("/:agentRunId/guidance", zValidator("json", guidanceSche
 
   if (result.ok) {
     const run = getAgentRun(agentRunId);
+    if (run?.taskId) {
+      await recordAgentAudit({
+        projectId: run.projectId,
+        taskId: run.taskId,
+        sessionId: run.subSessionId,
+        agentRunId,
+        eventType: "guidance",
+        action: mode === "noReply" ? "injected_no_reply" : "injected",
+        detail: { agentRunId, content, mode },
+        riskLevel: "low",
+      });
+    }
     wsBroadcaster.broadcast({
       id: crypto.randomUUID(),
       type: "guidance.injected",
@@ -109,9 +476,32 @@ agentControlRoutes.post("/:agentRunId/terminate", async (c) => {
 
   if (result.ok) {
     const run = getAgentRun(agentRunId);
+    const tokenUsed = await loadSessionTokenUsage(run?.subSessionId);
+    if (run?.taskId) {
+      await Promise.all([
+        patchAgentRunRecord({
+          taskId: run.taskId,
+          agentRunId,
+          status: "stopped",
+          model: run.model,
+          tokenUsed,
+          finishedAt: new Date().toISOString(),
+        }),
+        recordAgentAudit({
+          projectId: run.projectId,
+          taskId: run.taskId,
+          sessionId: run.subSessionId,
+          agentRunId,
+          eventType: "agent",
+          action: "stopped",
+          detail: { agentRunId, reason: "terminated" },
+          riskLevel: "high",
+        }),
+      ]);
+    }
     wsBroadcaster.broadcast({
       id: crypto.randomUUID(),
-      type: "agent.failed",
+      type: "agent.stopped",
       ts: new Date().toISOString(),
       agentRunId,
       taskId: run?.taskId,

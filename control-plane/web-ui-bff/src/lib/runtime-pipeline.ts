@@ -63,6 +63,8 @@ interface TaskRecord {
   strategy?: string | null;
   executionPlan?: string | null;
   createdAt?: string | null;
+  finishedAt?: string | null;
+  result?: string | null;
 }
 
 interface TaskSessionRecord {
@@ -429,6 +431,36 @@ function alignGraphNodesToStages(stages: RuntimePipelineStage[], nodes: TaskGrap
   return stages;
 }
 
+function finalizeStagesForTask(task: TaskRecord, stages: RuntimePipelineStage[]): RuntimePipelineStage[] {
+  if (task.status !== "failed") {
+    return stages;
+  }
+
+  const failureAt = task.finishedAt ?? new Date().toISOString();
+  const failureReason = task.result ?? "Task failed";
+
+  return stages.map((stage) => {
+    if (stage.status === "running") {
+      return {
+        ...stage,
+        status: "failed",
+        finishedAt: stage.finishedAt ?? failureAt,
+        error: stage.error ?? failureReason,
+      };
+    }
+
+    if (stage.status === "pending") {
+      return {
+        ...stage,
+        status: "skipped",
+        finishedAt: stage.finishedAt ?? failureAt,
+      };
+    }
+
+    return stage;
+  });
+}
+
 export async function buildRuntimePipeline(args: {
   taskId: string;
   sessionId?: string;
@@ -556,16 +588,17 @@ export async function buildRuntimePipeline(args: {
   }
 
   const alignedStages = alignGraphNodesToStages(stages, graphNodes).sort((left, right) => left.order - right.order);
-  const summary = computePipelineSummary(alignedStages);
+  const finalizedStages = finalizeStagesForTask(task, alignedStages);
+  const summary = computePipelineSummary(finalizedStages);
 
   return {
     taskId: args.taskId,
     sessionId: requestedSessionId ?? null,
     branchName,
-    status: mapTaskStatus(task.status, alignedStages),
+    status: mapTaskStatus(task.status, finalizedStages),
     createdAt: task.createdAt ?? null,
     updatedAt: new Date().toISOString(),
-    stages: alignedStages,
+    stages: finalizedStages,
     summary,
   };
 }

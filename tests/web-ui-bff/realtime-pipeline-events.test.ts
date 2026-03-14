@@ -11,9 +11,42 @@ const cpFetchMock = mock(async (url: string, options?: { method?: string }) => {
         prompt: "Summarize progress",
         projectId: "proj-1",
         sessionId: "ses-task-main",
+        agentRunId: "run-1",
         result: "Done",
         strategy: null,
         selectedModel: "gpt-5.4",
+        startedAt: "2026-03-12T10:00:00.000Z",
+        executionPlan: JSON.stringify({
+          templateId: "single-default",
+          mode: "single",
+          steps: [{ id: "exec-1", type: "execution", status: "running" }],
+          candidates: [
+            {
+              label: "Default executor",
+              agent: "default-executor",
+              sessionId: "ses-1",
+              agentRunId: "run-1",
+              status: "running",
+              startedAt: "2026-03-12T10:00:00.000Z",
+            },
+          ],
+        }),
+      },
+    };
+  }
+
+  if ((options?.method || "GET") === "GET" && url === "/api/tasks/task-1/task-sessions") {
+    return {
+      ok: true,
+      status: 200,
+      data: {
+        data: [
+          {
+            runtimeSessionId: "ses-1",
+            isActive: true,
+            archivedAt: null,
+          },
+        ],
       },
     };
   }
@@ -22,8 +55,18 @@ const cpFetchMock = mock(async (url: string, options?: { method?: string }) => {
 });
 
 const createInternalAuthorizationMock = mock(async () => "Bearer internal");
+const extractAssistantResultFromMessagesMock = mock(() => ({
+  completed: true,
+  failed: false,
+  error: undefined as string | undefined,
+  tokenUsed: 0,
+  text: "Final answer",
+}));
 const findAgentRunBySessionIdMock = mock(() => undefined);
+const getAgentRunMock = mock(() => undefined);
 const getSessionMessagesMock = mock(async () => ({ ok: true, data: [] as Array<Record<string, unknown>> }));
+const listSessionsMock = mock(async () => ({ ok: true, data: [{ id: "ses-1" }] }));
+const recoverAgentRunMock = mock(() => undefined);
 const updateAgentRunStatusMock = mock(() => undefined);
 const runDetachedPromptMock = mock(async () => ({ ok: true, text: "judge result", sessionId: "judge-ses" }));
 const collectChangesFromSessionMock = mock(async () => undefined);
@@ -37,8 +80,12 @@ mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () =>
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter", () => ({
+  extractAssistantResultFromMessages: extractAssistantResultFromMessagesMock,
   findAgentRunBySessionId: findAgentRunBySessionIdMock,
+  getAgentRun: getAgentRunMock,
   getSessionMessages: getSessionMessagesMock,
+  listSessions: listSessionsMock,
+  recoverAgentRun: recoverAgentRunMock,
   runDetachedPrompt: runDetachedPromptMock,
   updateAgentRunStatus: updateAgentRunStatusMock,
 }));
@@ -85,8 +132,12 @@ function resetAggregatorState() {
 beforeEach(() => {
   cpFetchMock.mockReset();
   createInternalAuthorizationMock.mockReset();
+  extractAssistantResultFromMessagesMock.mockReset();
   findAgentRunBySessionIdMock.mockReset();
+  getAgentRunMock.mockReset();
   getSessionMessagesMock.mockReset();
+  listSessionsMock.mockReset();
+  recoverAgentRunMock.mockReset();
   updateAgentRunStatusMock.mockReset();
   runDetachedPromptMock.mockReset();
   collectChangesFromSessionMock.mockReset();
@@ -105,9 +156,42 @@ beforeEach(() => {
           prompt: "Summarize progress",
           projectId: "proj-1",
           sessionId: "ses-task-main",
+          agentRunId: "run-1",
           result: "Done",
           strategy: null,
           selectedModel: "gpt-5.4",
+          startedAt: "2026-03-12T10:00:00.000Z",
+          executionPlan: JSON.stringify({
+            templateId: "single-default",
+            mode: "single",
+            steps: [{ id: "exec-1", type: "execution", status: "running" }],
+            candidates: [
+              {
+                label: "Default executor",
+                agent: "default-executor",
+                sessionId: "ses-1",
+                agentRunId: "run-1",
+                status: "running",
+                startedAt: "2026-03-12T10:00:00.000Z",
+              },
+            ],
+          }),
+        },
+      };
+    }
+
+    if ((options?.method || "GET") === "GET" && url === "/api/tasks/task-1/task-sessions") {
+      return {
+        ok: true,
+        status: 200,
+        data: {
+          data: [
+            {
+              runtimeSessionId: "ses-1",
+              isActive: true,
+              archivedAt: null,
+            },
+          ],
         },
       };
     }
@@ -116,8 +200,18 @@ beforeEach(() => {
   });
 
   createInternalAuthorizationMock.mockResolvedValue("Bearer internal");
+  extractAssistantResultFromMessagesMock.mockReturnValue({
+    completed: true,
+    failed: false,
+    error: undefined,
+    tokenUsed: 0,
+    text: "Final answer",
+  });
   findAgentRunBySessionIdMock.mockReturnValue(undefined);
+  getAgentRunMock.mockReturnValue(undefined);
   getSessionMessagesMock.mockResolvedValue({ ok: true, data: [] });
+  listSessionsMock.mockResolvedValue({ ok: true, data: [{ id: "ses-1" }] });
+  recoverAgentRunMock.mockImplementation(() => undefined);
   updateAgentRunStatusMock.mockImplementation(() => undefined);
   runDetachedPromptMock.mockResolvedValue({ ok: true, text: "judge result", sessionId: "judge-ses" });
   collectChangesFromSessionMock.mockResolvedValue(undefined);
@@ -262,6 +356,26 @@ describe("SSEAggregator pipeline emitters", () => {
           projectId: "proj-1",
           agentRunId: "run-1",
           reason: "task.completed",
+        }),
+      );
+      expect(cpFetchMock).toHaveBeenCalledWith(
+        "/api/tasks/task-1",
+        expect.objectContaining({
+          method: "PATCH",
+          body: expect.objectContaining({
+            status: "completed",
+            executionPlan: expect.stringContaining('"status":"completed"'),
+          }),
+        }),
+      );
+      expect(cpFetchMock).toHaveBeenCalledWith(
+        "/api/tasks/task-1/task-sessions",
+        expect.objectContaining({
+          method: "POST",
+          body: expect.objectContaining({
+            runtimeSessionId: "ses-1",
+            isActive: false,
+          }),
         }),
       );
     } finally {

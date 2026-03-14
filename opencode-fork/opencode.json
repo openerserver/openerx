@@ -81,6 +81,15 @@
         "-y",
         "@anthropic-ai/grep-app-mcp-server"
       ]
+    },
+    "demo-memory": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "@modelcontextprotocol/server-memory"
+      ],
+      "description": "Demo memory MCP for validation"
     }
   },
   "agents": {
@@ -151,6 +160,18 @@
         "provider": "qwen-local",
         "contextWindow": 200000,
         "maxTokens": 16384
+      },
+      {
+        "id": "gpt-4o",
+        "name": "GPT-4o",
+        "provider": "github-copilot"
+      },
+      {
+        "id": "claude-sonnet-4.6",
+        "name": "Claude Sonnet 4.6",
+        "provider": "github-copilot",
+        "contextWindow": 200000,
+        "maxTokens": 32000
       }
     ]
   }

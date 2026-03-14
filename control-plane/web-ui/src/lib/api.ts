@@ -261,15 +261,219 @@ export async function getAgentStatus(agentRunId: string) {
   return request(`/agents/${agentRunId}/status`);
 }
 
+export interface AgentRunSummary {
+  agentRunId: string;
+  subSessionId: string;
+  status: string;
+  taskId: string;
+  projectId?: string;
+  agentType?: string;
+  startedAt?: number;
+  finishedAt?: string;
+  pausedAt?: number;
+  candidateIndex?: number;
+}
+
 export async function listAgentRuns() {
-  return request<
-    Array<{
-      agentRunId: string;
-      subSessionId: string;
-      status: string;
-      taskId: string;
-    }>
-  >("/agents");
+  return request<AgentRunSummary[]>("/agents");
+}
+
+export interface AgentOpsOverview {
+  summary: {
+    attentionCount: number;
+    runningCount: number;
+    completedCount: number;
+    failureRate: number;
+    avgDurationMs: number | null;
+    humanInterventionRate: number;
+  };
+  queueCounts: {
+    attention: number;
+    running: number;
+    recent: number;
+  };
+  generatedAt: string;
+}
+
+export interface AgentOpsQueueItem {
+  agentRunId: string;
+  taskId: string;
+  taskTitle: string;
+  projectId: string;
+  projectName: string | null;
+  agentType: string;
+  status: string;
+  currentStage: string | null;
+  blockerType: string | null;
+  blockerLabel: string;
+  blockerReason: string | null;
+  riskLevel: string | null;
+  approvalStatus: string | null;
+  requiresIntervention: boolean;
+  startedAt: string | null;
+  finishedAt: string | null;
+  lastActivityAt: string | null;
+  durationMs: number | null;
+  modelUsed: string | null;
+  tokenUsed: number;
+  resultSummary: string | null;
+  guidanceCount: number;
+}
+
+export interface AgentOpsQueueResponse {
+  data: AgentOpsQueueItem[];
+  page: number;
+  pageSize: number;
+  total: number;
+}
+
+export interface AgentOpsQueueQuery {
+  status?: string;
+  search?: string;
+  requiresIntervention?: boolean;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface AgentRunOpsSummary {
+  agentRunId: string;
+  taskId: string;
+  taskTitle: string;
+  projectId: string;
+  projectName: string | null;
+  agentType: string;
+  status: string;
+  sessionId: string | null;
+  modelUsed: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  lastActivityAt: string | null;
+  durationMs: number | null;
+  tokenUsed: number;
+  blockerType: string | null;
+  blockerLabel: string;
+  riskLevel: string | null;
+  guidanceCount: number;
+  resultSummary: string | null;
+  result: string | null;
+  error: string | null;
+  longSummary: string | null;
+  latestEvents: Array<{ ts: string; type: string; summary: string }>;
+  subSessionId?: string;
+}
+
+export type DashboardProviderTokenRange = "24h" | "7d" | "30d" | "monthly";
+
+export interface DashboardProviderTokenBucket {
+  bucket: string;
+  tokenUsed: number;
+  completedRuns: number;
+}
+
+export interface DashboardProviderMonthlyBucket {
+  month: string;
+  tokenUsed: number;
+  completedRuns: number;
+  failureRate: number;
+  interventionRate: number;
+  avgTokensPerCompletedRun: number;
+}
+
+export interface DashboardProviderModelItem {
+  route: string;
+  modelId: string;
+  label: string;
+  tokenUsed: number;
+  requestCount: number;
+  tokenShareWithinProvider: number;
+  completedRuns: number;
+  failedRuns: number;
+  stoppedRuns: number;
+  interventionRuns: number;
+  totalRuns: number;
+  failureRate: number;
+  interventionRate: number;
+  avgTokensPerRun: number;
+  avgTokensPerCompletedRun: number;
+  latestRunAt: string | null;
+}
+
+export interface DashboardProviderTokenItem {
+  providerId: string;
+  label: string;
+  tokenUsed: number;
+  requestCount: number;
+  tokenShare: number;
+  completedRuns: number;
+  failedRuns: number;
+  stoppedRuns: number;
+  interventionRuns: number;
+  totalRuns: number;
+  failureRate: number;
+  interventionRate: number;
+  avgTokensPerRun: number;
+  avgTokensPerCompletedRun: number;
+  latestRunAt: string | null;
+  trend: DashboardProviderTokenBucket[];
+  monthly: DashboardProviderMonthlyBucket[];
+  health: "healthy" | "warn" | "risk";
+  reasons: string[];
+  recommendationAction: "keep" | "observe" | "downgrade";
+  recommendationLabel: string;
+  recommendationMessage: string;
+  models: DashboardProviderModelItem[];
+}
+
+export interface DashboardProviderTokenSummary {
+  range: DashboardProviderTokenRange;
+  totalTokens: number;
+  requestCount: number;
+  totalRuns: number;
+  completedRuns: number;
+  topProviderId: string | null;
+  topProviderShare: number;
+  avgTokensPerCompletedRun: number;
+  riskProviderCount: number;
+  monthlyTotals?: Array<{ month: string; tokenUsed: number; completedRuns: number }>;
+}
+
+export interface DashboardProviderTokenResponse {
+  projectId: string;
+  range: DashboardProviderTokenRange;
+  generatedAt: string;
+  summary: DashboardProviderTokenSummary;
+  providers: DashboardProviderTokenItem[];
+}
+
+export async function getAgentOpsOverview() {
+  return request<AgentOpsOverview>("/agents/overview");
+}
+
+export async function getAgentOpsQueue(
+  queue: "attention" | "running" | "recent",
+  query: AgentOpsQueueQuery = {},
+) {
+  const params = new URLSearchParams({ queue });
+  if (query.status) params.set("status", query.status);
+  if (query.search) params.set("search", query.search);
+  if (typeof query.requiresIntervention === "boolean") {
+    params.set("requiresIntervention", String(query.requiresIntervention));
+  }
+  if (query.page) params.set("page", String(query.page));
+  if (query.pageSize) params.set("pageSize", String(query.pageSize));
+  return request<AgentOpsQueueResponse>(`/agents/queues?${params.toString()}`);
+}
+
+export async function getAgentRunOpsSummary(agentRunId: string) {
+  return request<AgentRunOpsSummary>(`/agents/${agentRunId}/summary`);
+}
+
+export async function getDashboardProviderTokens(
+  projectId: string,
+  range: DashboardProviderTokenRange = "24h",
+) {
+  const params = new URLSearchParams({ projectId, range });
+  return request<DashboardProviderTokenResponse>(`/dashboard/provider-tokens?${params.toString()}`);
 }
 
 export async function getAgentMessages(agentRunId: string) {
@@ -649,10 +853,15 @@ export interface PluginCompatResult {
 // ── Workbench Layout ───────────────────────────────────────────────
 
 export interface WorkbenchLayoutPayload {
-  tabs: Array<{ taskId: string; title?: string; status?: string; pinned?: boolean }>;
-  activeTaskId: string;
-  secondaryPane: { taskId: string; sessionId?: string; label?: string } | null;
-  splitMode: boolean;
+  // New multi-pane format
+  panes?: Array<{ id: string; taskId: string; sessionId?: string; title?: string; status?: string; pinned?: boolean }>;
+  activePaneId?: string;
+  columns?: number;
+  // Legacy format (readable for migration)
+  tabs?: Array<{ taskId: string; title?: string; status?: string; pinned?: boolean }>;
+  activeTaskId?: string;
+  secondaryPane?: { taskId: string; sessionId?: string; label?: string } | null;
+  splitMode?: boolean;
 }
 
 export async function getWorkbenchLayout() {
@@ -1415,6 +1624,180 @@ export async function updateOrchestrationStrategy(data: OrchestrationStrategy) {
   });
 }
 
+export interface ChatSettingsPendingPatch {
+  index: number;
+  action: "preview" | "apply" | "explain" | "validate";
+  configType: "orchestration-strategy" | "models" | "agents" | "mcp" | "skills" | "commands" | "security" | "plugins";
+  patch: Record<string, unknown>;
+  explanation: string;
+  rawText: string;
+  mermaidPreview?: Record<string, string>;
+  visualizations?: Array<{ kind: "mermaid" | "json"; title: string; content: string }>;
+  orchestrationPreview?: OrchestrationPreviewModel;
+  configVersion: string;
+  createdAt: string;
+  signature?: string;
+}
+
+export interface OrchestrationCategorySummary {
+  category: string;
+  templateName: string;
+  executionMode: ExecutionMode | "unknown";
+  pipelineEnabled: boolean;
+  judgeEnabled: boolean;
+  judgeAgent: string;
+  judgeModel: string;
+  primaryAgents: string[];
+  primaryModel: string;
+  notes: string[];
+}
+
+export interface OrchestrationJudgeChange {
+  changed: boolean;
+  beforeEnabled: boolean;
+  afterEnabled: boolean;
+  beforeAgent: string;
+  afterAgent: string;
+  beforeModel: string;
+  afterModel: string;
+}
+
+export interface OrchestrationTemplateChange {
+  category: string;
+  beforeTemplate: string;
+  afterTemplate: string;
+  beforeMode: ExecutionMode | "unknown";
+  afterMode: ExecutionMode | "unknown";
+}
+
+export interface OrchestrationStrategyChangeCard {
+  id: string;
+  category: string;
+  changeType: "template" | "judge" | "model" | "agent" | "pipeline";
+  title: string;
+  summary: string;
+  beforeLabel: string;
+  afterLabel: string;
+  riskLevel: "low" | "medium" | "high";
+  affectsJudge: boolean;
+  affectsTemplate: boolean;
+  mermaidCode?: string;
+}
+
+export interface OrchestrationRiskHint {
+  level: "low" | "medium" | "high";
+  summary: string;
+}
+
+export interface OrchestrationPreviewModel {
+  configVersion: string;
+  explanation: string;
+  affectedCategories: string[];
+  changeCards: OrchestrationStrategyChangeCard[];
+  judgeChange: OrchestrationJudgeChange;
+  templateChanges: OrchestrationTemplateChange[];
+  strategySummaryBefore?: OrchestrationCategorySummary[];
+  strategySummaryAfter?: OrchestrationCategorySummary[];
+  riskHints?: OrchestrationRiskHint[];
+  mermaidPreview: Record<string, string>;
+  rawPatch: Record<string, unknown>;
+}
+
+export interface ChatSettingsCurrentContext {
+  configVersion: string;
+  configVersions: {
+    "orchestration-strategy": string;
+    models: string;
+    mcp: string;
+    security: string;
+    plugins: string;
+    agents: Record<string, string>;
+    skills: Record<string, string>;
+    commands: Record<string, string>;
+  };
+  strategy: OrchestrationStrategy;
+  orchestrationVersion?: string;
+  categorySummaries?: OrchestrationCategorySummary[];
+  supportedCategories?: string[];
+  modelsConfig: ModelsConfig;
+  mcpConfig: Record<string, McpServer>;
+  mermaidByCategory: Record<string, string>;
+  modelsVisualizations: Array<{ kind: "mermaid" | "json"; title: string; content: string }>;
+  agents: string[];
+  models: string[];
+  agentSummaries: AgentSummary[];
+  skillSummaries: SkillSummary[];
+  commandSummaries: CommandSummary[];
+  securityBaseline: { raw: string };
+  pluginsConfig: { plugins: PluginInfo[] };
+  allowedPluginSourcePrefixes: string[];
+  installablePluginSources: Array<{
+    source: string;
+    name: string;
+    installed: boolean;
+    enabled: boolean;
+  }>;
+  supportedConfigTypes: string[];
+}
+
+export interface ChatSettingsConversationState {
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+  messages: Array<{ role: "user" | "assistant"; content: string; createdAt: string }>;
+  pendingPatches: ChatSettingsPendingPatch[];
+}
+
+export async function getChatSettingsCurrentContext() {
+  return request<{ data: ChatSettingsCurrentContext }>("/chat-settings/current-context");
+}
+
+export async function chatWithChatSettings(data: {
+  conversationId?: string;
+  message: string;
+  model?: string;
+}) {
+  return request<{
+    data: {
+      conversationId: string;
+      configVersion: string;
+      message: string;
+      patch: ChatSettingsPendingPatch;
+    };
+  }>("/chat-settings/chat", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function applyChatSettingsPatch(data: {
+  conversationId: string;
+  patchIndex: number;
+  configVersion: string;
+  pendingPatch?: ChatSettingsPendingPatch;
+}) {
+  return request<{
+    data: {
+      ok: boolean;
+      configVersion: string;
+      strategy: OrchestrationStrategy;
+      mermaidByCategory: Record<string, string>;
+      visualizations: Array<{ kind: "mermaid" | "json"; title: string; content: string }>;
+      configVersions: ChatSettingsCurrentContext["configVersions"];
+    };
+  }>("/chat-settings/apply", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function getChatSettingsHistory(conversationId?: string) {
+  const query = conversationId ? `?conversationId=${encodeURIComponent(conversationId)}` : "";
+  return request<{ data: ChatSettingsConversationState | Array<Record<string, unknown>> }>(
+    `/chat-settings/history${query}`,
+  );
+}
+
 // Continuation Policy
 export interface ContinuationPolicy {
   autoRetryOnFailure: boolean;
@@ -1529,4 +1912,130 @@ export interface GovernanceSummary {
 
 export async function getTaskGovernance(taskId: string) {
   return request<GovernanceSummary>(`/tasks/${encodeURIComponent(taskId)}/governance`);
+}
+
+// ── Role Workflow / Review ────────────────────────────────────────
+
+export interface RoleAgentRecord {
+  id: string;
+  projectId?: string | null;
+  name: string;
+  description?: string | null;
+  scope: "system" | "project";
+  status: "active" | "disabled" | "deprecated";
+  ownerTeam?: string | null;
+  permissionProfile: string;
+  toolProfile: string;
+  defaultExecutionMode: "single" | "parallel-review" | "round-robin";
+  aggregationStrategy?: "first-pass" | "majority" | "merge-summary" | "human-review" | null;
+  maxActiveBindings?: number | null;
+  requireConsensus: boolean;
+  riskLevel: "low" | "medium" | "high" | "critical";
+  requiresApprovalForWrite: boolean;
+  outputSchemaId?: string | null;
+  tagsJson?: string[] | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RoleAgentBindingRecord {
+  id: string;
+  roleAgentId: string;
+  bindingKey: string;
+  runtimeAgent: string;
+  label: string;
+  enabled: boolean;
+  priority: number;
+  model?: string | null;
+  tagsJson?: string[] | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TaskStageViewModel {
+  id?: string;
+  stageKey: string;
+  stageLabel?: string;
+  status: string;
+  approvalState: string;
+  blockingReason?: string;
+  primaryRoleLabel?: string;
+}
+
+export interface RoleConclusionViewModel {
+  id: string;
+  roleAgentId: string;
+  roleLabel: string;
+  stage: string;
+  finalDecision: string;
+  aggregateRiskLevel: string;
+  consensusScore: number;
+  winningRationale: string;
+  mergedFindings: Array<{ key: string; title: string; severity: string }>;
+  minorityFindings: Array<{ key: string; title: string; severity: string }>;
+  conflicts: Array<{ type: string; severity: string; summary: string }>;
+  approvalRequired: boolean;
+}
+
+export interface DeveloperChangeRequestViewModel {
+  id: string;
+  sourceRoleAgentId: string;
+  sourceRoleLabel: string;
+  priority: string;
+  title: string;
+  summary: string;
+  requiredChanges: string[];
+  blocking: boolean;
+  approvalRequired: boolean;
+  status: string;
+}
+
+export interface TaskWorkflowViewModel {
+  taskId: string;
+  workflow: {
+    templateId?: string | null;
+    currentStage: string;
+    status: string;
+    stages: TaskStageViewModel[];
+  };
+  roleConclusions: RoleConclusionViewModel[];
+  developerChangeRequests: DeveloperChangeRequestViewModel[];
+}
+
+export async function listRoleAgents(projectId?: string) {
+  const params = new URLSearchParams();
+  if (projectId) params.set("projectId", projectId);
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  return request<{ data: RoleAgentRecord[] }>(`/role-agents${suffix}`);
+}
+
+export async function getTaskWorkflow(taskId: string) {
+  return request<{ data: { workflowRun: Record<string, unknown> | null; stages: TaskStageViewModel[] } }>(
+    `/tasks/${encodeURIComponent(taskId)}/workflow`,
+  );
+}
+
+export async function getTaskRoleConclusions(taskId: string) {
+  return request<{ data: RoleConclusionViewModel[] }>(`/tasks/${encodeURIComponent(taskId)}/role-conclusions`);
+}
+
+export async function getDeveloperChangeRequests(taskId: string) {
+  return request<{ data: DeveloperChangeRequestViewModel[] }>(
+    `/tasks/${encodeURIComponent(taskId)}/developer-change-requests`,
+  );
+}
+
+export async function updateDeveloperChangeRequest(taskId: string, data: {
+  requestId: string;
+  status: "open" | "acknowledged" | "in-progress" | "resolved" | "won't-fix";
+  resolutionNote?: string;
+}) {
+  return request<{ ok: boolean }>(`/tasks/${encodeURIComponent(taskId)}/developer-change-requests`, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function getTaskWorkflowView(taskId: string) {
+  return request<TaskWorkflowViewModel>(`/tasks/${encodeURIComponent(taskId)}/workflow-view`);
 }

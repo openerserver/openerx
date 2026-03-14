@@ -1,6 +1,8 @@
 import { cpFetch, createInternalAuthorization } from "../../lib/control-plane-client";
+import { finalizeTaskState } from "./finalize";
 import {
   extractAssistantResultFromMessages,
+  getAgentRun,
   getSessionMessages,
   listSessions,
   recoverAgentRun,
@@ -16,6 +18,8 @@ interface RunningTaskRecord {
   result?: string | null;
   createdAt?: string | null;
   startedAt?: string | null;
+  finishedAt?: string | null;
+  executionPlan?: string | null;
 }
 
 interface SessionListEntry {
@@ -62,26 +66,17 @@ function sessionIdFromEntry(entry: SessionListEntry): string | undefined {
   return undefined;
 }
 
-async function patchTask(
-  authorization: string,
-  taskId: string,
-  body: Record<string, unknown>,
-): Promise<boolean> {
-  const result = await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
-    method: "PATCH",
-    authorization,
-    body,
-  });
-  return result.ok;
-}
-
 async function markTaskFailed(
   authorization: string,
   task: RunningTaskRecord,
   reason: string,
 ): Promise<boolean> {
-  return patchTask(authorization, task.id, {
+  return finalizeTaskState({
+    authorization,
+    taskId: task.id,
     status: "failed",
+    sessionId: task.sessionId ?? undefined,
+    agentRunId: task.agentRunId ?? undefined,
     result: reason,
   });
 }
@@ -91,11 +86,13 @@ async function markTaskCompleted(
   task: RunningTaskRecord,
   resultText?: string,
 ): Promise<boolean> {
-  return patchTask(authorization, task.id, {
+  return finalizeTaskState({
+    authorization,
+    taskId: task.id,
     status: "completed",
     sessionId: task.sessionId ?? undefined,
     agentRunId: task.agentRunId ?? undefined,
-    ...(resultText ? { result: resultText } : {}),
+    result: resultText,
   });
 }
 
@@ -123,6 +120,31 @@ async function loadRunningTasks(authorization: string) {
   return runningTasksResult.data.data;
 }
 
+async function loadRecentTasks(authorization: string) {
+  const tasksResult = await cpFetch<{ data?: RunningTaskRecord[] }>(
+    `/api/tasks?limit=${DEFAULT_RUNNING_TASK_LIMIT}`,
+    { authorization },
+  );
+
+  if (!tasksResult.ok || !Array.isArray(tasksResult.data?.data)) {
+    return null;
+  }
+
+  return tasksResult.data.data;
+}
+
+function mergeUniqueTasks(...taskLists: Array<RunningTaskRecord[] | null>) {
+  const merged = new Map<string, RunningTaskRecord>();
+  for (const taskList of taskLists) {
+    for (const task of taskList || []) {
+      if (!merged.has(task.id)) {
+        merged.set(task.id, task);
+      }
+    }
+  }
+  return Array.from(merged.values());
+}
+
 async function getRuntimeSessionIds(limit: number) {
   const sessionListResult = await listSessions(limit);
   const runtimeAvailable = sessionListResult.ok && Array.isArray(sessionListResult.data);
@@ -145,6 +167,133 @@ interface ReconcileTaskContext {
 }
 
 type ReconcileTaskOutcome = "completed" | "failed" | "recovered" | "skipped";
+
+interface TaskSessionRecord {
+  runtimeSessionId: string;
+  isActive: boolean;
+  archivedAt?: string | null;
+}
+
+interface ParsedExecutionPlanCandidate {
+  status?: string;
+  finishedAt?: string;
+}
+
+interface ParsedExecutionPlanStep {
+  type?: string;
+  status?: string;
+}
+
+interface ParsedExecutionPlan {
+  candidates?: ParsedExecutionPlanCandidate[];
+  steps?: ParsedExecutionPlanStep[];
+}
+
+function parseExecutionPlan(raw: string | null | undefined): ParsedExecutionPlan | null {
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as ParsedExecutionPlan;
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function isTerminalStatus(status: string | null | undefined) {
+  return status === "completed" || status === "failed" || status === "cancelled";
+}
+
+function inferTerminalStatus(task: RunningTaskRecord): "completed" | "failed" | "cancelled" | null {
+  if (isTerminalStatus(task.status)) {
+    return task.status as "completed" | "failed" | "cancelled";
+  }
+
+  if (typeof task.result === "string" && /^\s*\[FAILED\]/.test(task.result)) {
+    return "failed";
+  }
+
+  if (task.finishedAt || task.result) {
+    return "completed";
+  }
+
+  return null;
+}
+
+function planNeedsTerminalRepair(task: RunningTaskRecord): boolean {
+  const plan = parseExecutionPlan(task.executionPlan);
+  if (!plan) {
+    return false;
+  }
+
+  const candidateNeedsRepair = (plan.candidates || []).some((candidate) => {
+    if (candidate.status === "running" || candidate.status === "pending") {
+      return true;
+    }
+    return Boolean(task.finishedAt && !candidate.finishedAt);
+  });
+
+  const stepNeedsRepair = (plan.steps || []).some((step) => {
+    if (step.type !== "execution") {
+      return false;
+    }
+    return step.status === "running" || step.status === "pending";
+  });
+
+  return candidateNeedsRepair || stepNeedsRepair;
+}
+
+function taskLooksHistoricallyInconsistent(task: RunningTaskRecord) {
+  return Boolean(inferTerminalStatus(task) && (planNeedsTerminalRepair(task) || task.status === "running"));
+}
+
+async function loadTaskSessions(authorization: string, taskId: string) {
+  const lineageResult = await cpFetch<{ data?: TaskSessionRecord[] }>(
+    `/api/tasks/${encodeURIComponent(taskId)}/task-sessions`,
+    { authorization },
+  );
+
+  if (!lineageResult.ok || !Array.isArray(lineageResult.data?.data)) {
+    return [] as TaskSessionRecord[];
+  }
+
+  return lineageResult.data.data;
+}
+
+async function reconcileHistoricallyInconsistentTask(
+  task: RunningTaskRecord,
+  context: ReconcileTaskContext,
+): Promise<ReconcileTaskOutcome> {
+  const terminalStatus = inferTerminalStatus(task);
+  if (!terminalStatus) {
+    return "skipped";
+  }
+
+  const lineageRecords = await loadTaskSessions(context.authorization, task.id);
+  const hasActiveSession = lineageRecords.some((record) => !record.archivedAt && record.isActive);
+
+  if (!hasActiveSession && !planNeedsTerminalRepair(task) && isTerminalStatus(task.status)) {
+    return "skipped";
+  }
+
+  const updated = await finalizeTaskState({
+    authorization: context.authorization,
+    taskId: task.id,
+    status: terminalStatus,
+    sessionId: task.sessionId ?? undefined,
+    agentRunId: task.agentRunId ?? undefined,
+    result: task.result ?? undefined,
+    task,
+  });
+
+  if (!updated) {
+    return "skipped";
+  }
+
+  return terminalStatus === "failed" ? "failed" : "completed";
+}
 
 function summarizeOutcome(summary: RunningTaskReconcileSummary, outcome: ReconcileTaskOutcome) {
   if (outcome === "completed") summary.completed += 1;
@@ -215,9 +364,22 @@ async function reconcileSingleRunningTask(
   }
 
   const assistantResult = extractAssistantResultFromMessages(messagesResult.data);
+  if (assistantResult.failed) {
+    return failTaskWithReason(
+      task,
+      context,
+      `Recovered from failed assistant session: ${assistantResult.error || "Assistant message ended with an error."}`,
+    );
+  }
+
   if (assistantResult.completed) {
     const updated = await markTaskCompleted(context.authorization, task, assistantResult.text);
     return updated ? "completed" : "skipped";
+  }
+
+  const existingRun = getAgentRun(task.agentRunId);
+  if (existingRun) {
+    return "skipped";
   }
 
   recoverAgentRun(
@@ -260,13 +422,22 @@ export function startPeriodicReconcile(): void {
 
 export async function reconcileRunningTasksOnStartup(): Promise<RunningTaskReconcileSummary> {
   const authorization = await createInternalAuthorization();
-  const runningTasks = await loadRunningTasks(authorization);
-  if (!runningTasks) {
+  const [runningTasks, recentTasks] = await Promise.all([
+    loadRunningTasks(authorization),
+    loadRecentTasks(authorization),
+  ]);
+  if (!runningTasks || !recentTasks) {
     console.warn("[reconcile] failed to load running tasks from control plane");
     return emptyReconcileSummary();
   }
 
-  if (runningTasks.length === 0) {
+  const reconcileCandidates = mergeUniqueTasks(runningTasks, recentTasks);
+  const historicalTasks = reconcileCandidates.filter((task) => taskLooksHistoricallyInconsistent(task));
+  const runningOnlyTasks = reconcileCandidates.filter(
+    (task) => task.status === "running" && !historicalTasks.some((candidate) => candidate.id === task.id),
+  );
+
+  if (runningOnlyTasks.length === 0 && historicalTasks.length === 0) {
     console.log("[reconcile] no running tasks to reconcile");
     return emptyReconcileSummary();
   }
@@ -277,7 +448,7 @@ export async function reconcileRunningTasksOnStartup(): Promise<RunningTaskRecon
   );
   const summary: RunningTaskReconcileSummary = {
     ...emptyReconcileSummary(runtimeAvailable),
-    scanned: runningTasks.length,
+    scanned: runningOnlyTasks.length + historicalTasks.length,
   };
   const context: ReconcileTaskContext = {
     authorization,
@@ -286,8 +457,13 @@ export async function reconcileRunningTasksOnStartup(): Promise<RunningTaskRecon
     runtimeSessionIds,
   };
 
-  for (const task of runningTasks) {
+  for (const task of runningOnlyTasks) {
     const outcome = await reconcileSingleRunningTask(task, context);
+    summarizeOutcome(summary, outcome);
+  }
+
+  for (const task of historicalTasks) {
+    const outcome = await reconcileHistoricallyInconsistentTask(task, context);
     summarizeOutcome(summary, outcome);
   }
 

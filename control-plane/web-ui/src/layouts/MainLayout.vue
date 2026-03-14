@@ -2,7 +2,8 @@
   <a-layout style="min-height: 100vh">
     <a-layout-sider
       v-if="!embeddedMode"
-      v-model:collapsed="siderCollapsed"
+      :collapsed="siderCollapsed"
+      @update:collapsed="siderCollapsed = Boolean($event)"
       :width="240"
       :collapsed-width="80"
       :trigger="null"
@@ -120,6 +121,7 @@ import {
   DashboardOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
+  MessageOutlined,
   ProjectOutlined,
   RobotOutlined,
   SettingOutlined,
@@ -131,7 +133,6 @@ import {
 import { message } from "ant-design-vue";
 import { computed, h, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import ProjectSwitcher from "../components/ProjectSwitcher.vue";
 import { getMyProfile, updateMyProfile } from "../lib/api";
 import { PASSWORD_POLICY_HINT, validatePasswordPolicy } from "../lib/password-policy";
 import { useAuthStore } from "../stores/auth";
@@ -181,6 +182,7 @@ const menuItems = computed(() => {
     { key: "/", icon: () => h(DashboardOutlined), label: "Dashboard" },
     { key: "/tasks", icon: () => h(UnorderedListOutlined), label: "任务" },
     { key: "/workbench", icon: () => h(AppstoreOutlined), label: "任务工作台" },
+    { key: "/multi-task-monitor", icon: () => h(AppstoreOutlined), label: "多任务监控台" },
     { key: "/projects", icon: () => h(ProjectOutlined), label: "项目" },
     { key: "/agents", icon: () => h(RobotOutlined), label: "Agent 控制台" },
     { key: "/approvals", icon: () => h(AuditOutlined), label: "审批" },
@@ -188,6 +190,7 @@ const menuItems = computed(() => {
   ];
 
   if (authStore.user?.role === "platform_admin" || authStore.user?.role === "org_admin") {
+    items.splice(6, 0, { key: "/chat-settings", icon: () => h(MessageOutlined), label: "对话配置" });
     items.splice(5, 0, { key: "/users", icon: () => h(TeamOutlined), label: "用户管理" });
   }
 
@@ -198,10 +201,12 @@ const selectedKeys = computed(() => {
   const path = route.path;
   if (path === "/" || path === "") return ["/"];
   if (path.startsWith("/workbench")) return ["/workbench"];
+  if (path.startsWith("/multi-task-monitor")) return ["/multi-task-monitor"];
   if (path.startsWith("/tasks")) return ["/tasks"];
   if (path.startsWith("/projects")) return ["/projects"];
   if (path.startsWith("/agents")) return ["/agents"];
   if (path.startsWith("/approvals")) return ["/approvals"];
+  if (path.startsWith("/chat-settings")) return ["/chat-settings"];
   if (path.startsWith("/users")) return ["/users"];
   if (path.startsWith("/settings")) return ["/settings"];
   return ["/"];

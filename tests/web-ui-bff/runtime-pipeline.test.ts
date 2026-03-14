@@ -16,6 +16,7 @@ const getSessionMessagesMock = mock(async (_sessionId: string) => ({
 
 mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () => ({
   cpFetch: cpFetchMock,
+  createInternalAuthorization: mock(async () => "Bearer internal"),
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter", () => ({
@@ -97,6 +98,74 @@ beforeEach(() => {
 });
 
 describe("buildRuntimePipeline", () => {
+  test("finalizes unfinished stages when the task has already failed", async () => {
+    const plan = createExecutionPlan();
+    const strategy = createStrategy();
+
+    cpFetchMock.mockImplementation(async (url: string) => {
+      if (url === "/api/tasks/task-failed") {
+        return {
+          ok: true,
+          data: {
+            id: "task-failed",
+            status: "failed",
+            result: "Recovered from failed assistant session: The operation was aborted.",
+            sessionId: "ses-root",
+            createdAt: "2026-03-12T09:50:00.000Z",
+            finishedAt: "2026-03-12T10:06:00.000Z",
+            executionPlan: JSON.stringify(plan),
+            strategy: JSON.stringify(strategy),
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-failed/task-sessions") {
+        return {
+          ok: true,
+          data: {
+            data: [
+              { id: "ts-root", runtimeSessionId: "ses-root", branchName: "main", isActive: true },
+              { id: "ts-branch-1", runtimeSessionId: "ses-branch-1", branchName: "候选 A", isActive: false },
+              { id: "ts-branch-2", runtimeSessionId: "ses-branch-2", branchName: "候选 B", isActive: false },
+            ],
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-failed/graph") {
+        return {
+          ok: true,
+          data: { taskId: "task-failed", nodes: [], edges: [] },
+        };
+      }
+
+      throw new Error(`Unexpected cpFetch url: ${url}`);
+    });
+
+    getSessionMessagesMock.mockResolvedValue({ ok: true, data: [] });
+
+    const { buildRuntimePipeline } = await import("../../control-plane/web-ui-bff/src/lib/runtime-pipeline");
+    const pipeline = await buildRuntimePipeline({
+      taskId: "task-failed",
+      authorization: "Bearer test",
+    });
+
+    expect(pipeline.status).toBe("failed");
+    expect(pipeline.stages.find((stage) => stage.id === "candidate:0:ses-branch-1")).toMatchObject({
+      status: "failed",
+      error: "Recovered from failed assistant session: The operation was aborted.",
+      finishedAt: "2026-03-12T10:06:00.000Z",
+    });
+    expect(pipeline.stages.find((stage) => stage.id === "judge:judge-1")).toMatchObject({
+      status: "skipped",
+      finishedAt: "2026-03-12T10:02:00.000Z",
+    });
+    expect(pipeline.summary).toMatchObject({
+      failedStages: 1,
+      currentStageId: null,
+    });
+  });
+
   test("aggregates hooks, planning, execution plan and graph nodes for the selected branch", async () => {
     const plan = createExecutionPlan();
     const strategy = createStrategy();

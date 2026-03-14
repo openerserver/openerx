@@ -13,9 +13,14 @@
     "build:ui": "cd control-plane/web-ui && bun run build",
     "test:service": "cd control-plane/service && bun run test",
     "test:bff": "cd control-plane/web-ui-bff && bun run test",
+    "test:bff:chat-settings": "cd control-plane/web-ui-bff && bun test ../../tests/web-ui-bff/chat-settings-routes.test.ts --timeout 120000",
     "test:bff:realtime-regression": "cd control-plane/web-ui-bff && bun run test:realtime-regression",
     "test:ui": "cd control-plane/web-ui && bun run test",
+    "test:ui:chat-settings": "cd control-plane/web-ui && bun run test -- ../../tests/web-ui/ChatSettings.test.ts",
     "test:ui:file": "cd control-plane/web-ui && bun run test --",
+    "test:chat-settings:regression": "bun run test:bff:chat-settings && bun run test:ui:chat-settings",
+    "test:e2e:chat-settings": "playwright test tests/e2e/chat-settings-admin.spec.ts",
+    "test:chat-settings:ci": "bun run test:chat-settings:regression && bun run test:e2e:chat-settings",
     "test:all": "bun run test:service && bun run test:bff && bun run test:ui",
     "test:bff:completion-sync": "cd control-plane/web-ui-bff && bun run test:integration:completion-sync",
     "test:identity": "cd control-plane/service && bun run test:identity",
@@ -33,6 +38,7 @@
     "cli:task": "cd control-plane/service && bun run cli:task"
   },
   "devDependencies": {
+    "@playwright/test": "^1.55.0",
     "@biomejs/biome": "^1.9.0",
     "bun-types": "^1.3.10",
     "typescript": "^5.7.0"

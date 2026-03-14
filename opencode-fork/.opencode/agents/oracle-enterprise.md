@@ -1,6 +1,7 @@
 ---
 name: oracle-enterprise
-description: Architecture and incident analysis agent — evaluates design, diagnoses failures, and recommends actions
+description: Responsible for operations troubleshooting, system inspection,
+  deployment diagnostics, and recovery guidance.
 model: anthropic/claude-sonnet-4-20250514
 ---
 

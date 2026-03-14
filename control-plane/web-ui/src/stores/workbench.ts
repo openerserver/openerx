@@ -1,6 +1,6 @@
 import { defineStore } from "pinia";
 import { ref, watch } from "vue";
-import { getWorkbenchLayout, saveWorkbenchLayout } from "../lib/api";
+import { getWorkbenchLayout, saveWorkbenchLayout, type WorkbenchLayoutPayload } from "../lib/api";
 
 export interface WorkbenchTaskTab {
   taskId: string;
@@ -20,6 +20,47 @@ export interface WorkbenchSnapshot {
   activeTaskId: string;
   secondaryPane: WorkbenchSecondaryPane | null;
   splitMode: boolean;
+}
+
+function toLegacySnapshot(layout: WorkbenchLayoutPayload): WorkbenchSnapshot | null {
+  if (Array.isArray(layout.tabs) && layout.tabs.length > 0) {
+    return {
+      tabs: layout.tabs.map((tab) => ({ ...tab })),
+      activeTaskId: layout.activeTaskId || layout.tabs[0]?.taskId || "",
+      secondaryPane: layout.secondaryPane ? { ...layout.secondaryPane } : null,
+      splitMode: Boolean(layout.splitMode),
+    };
+  }
+
+  if (!Array.isArray(layout.panes) || layout.panes.length === 0) {
+    return null;
+  }
+
+  const taskPanes = layout.panes.filter((pane) => pane.taskId);
+  if (taskPanes.length === 0) {
+    return null;
+  }
+
+  const activePane = taskPanes.find((pane) => pane.id === layout.activePaneId) || taskPanes[0];
+  const secondaryPane = taskPanes.find((pane) => pane.id !== activePane.id);
+
+  return {
+    tabs: taskPanes.map((pane) => ({
+      taskId: pane.taskId,
+      title: pane.title,
+      status: pane.status,
+      pinned: pane.pinned,
+    })),
+    activeTaskId: activePane.taskId,
+    secondaryPane: secondaryPane
+      ? {
+          taskId: secondaryPane.taskId,
+          sessionId: secondaryPane.sessionId,
+          label: secondaryPane.title,
+        }
+      : null,
+    splitMode: taskPanes.length > 1,
+  };
 }
 
 export const useWorkbenchStore = defineStore(
@@ -252,8 +293,6 @@ export const useWorkbenchStore = defineStore(
       }
     }
 
-    // ── Server Sync ────────────────────────────────────────────────
-
     let saveTimer: ReturnType<typeof setTimeout> | null = null;
     const serverSyncing = ref(false);
 
@@ -274,8 +313,9 @@ export const useWorkbenchStore = defineStore(
         serverSyncing.value = true;
         const res = await getWorkbenchLayout();
         const layout = res.data;
-        if (layout && Array.isArray(layout.tabs) && layout.tabs.length > 0) {
-          restoreSnapshot(layout);
+        const snapshot = layout ? toLegacySnapshot(layout) : null;
+        if (snapshot) {
+          restoreSnapshot(snapshot);
         }
       } catch {
         // 首次使用或网络异常时忽略，保持 localStorage 状态

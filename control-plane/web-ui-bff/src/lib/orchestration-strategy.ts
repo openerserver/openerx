@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const OPENCODE_ROOT = resolve(
@@ -426,6 +426,15 @@ export function writeOrchestrationStrategy(data: OrchestrationStrategy): void {
     JSON.stringify(normalizeOrchestrationStrategy(data), null, 2),
     "utf-8",
   );
+}
+
+export function getOrchestrationStrategyVersion(): string {
+  if (!existsSync(STRATEGY_FILE)) {
+    return "missing";
+  }
+
+  const stat = statSync(STRATEGY_FILE);
+  return `${stat.size}-${Math.trunc(stat.mtimeMs)}`;
 }
 
 export function renderPromptTemplate(

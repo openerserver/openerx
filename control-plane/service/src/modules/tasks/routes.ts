@@ -426,9 +426,18 @@ taskRoutes.get("/:taskId/runs", async (c) => {
 });
 
 const createRunSchema = z.object({
+  id: z.string().optional(),
   nodeId: z.string().optional(),
   sessionId: z.string().optional(),
   agentType: z.string().min(1),
+  status: z.enum(["pending", "running", "paused", "completed", "failed", "stopped", "terminated"]).optional(),
+  modelUsed: z.string().optional(),
+  tokenUsed: z.number().int().optional(),
+  result: z.string().optional(),
+  error: z.string().optional(),
+  candidateIndex: z.number().int().optional(),
+  startedAt: z.string().optional(),
+  finishedAt: z.string().optional(),
 });
 
 taskRoutes.post("/:taskId/runs", zValidator("json", createRunSchema), async (c) => {
@@ -438,17 +447,31 @@ taskRoutes.post("/:taskId/runs", zValidator("json", createRunSchema), async (c) 
   const task = await db.query.tasks.findFirst({ where: eq(tasks.id, taskId) });
   if (!task) return c.json({ error: "Task not found" }, 404);
 
-  const runId = crypto.randomUUID();
+  const runId = body.id || crypto.randomUUID();
+  const existing = await db.query.agentRuns.findFirst({ where: eq(agentRuns.id, runId) });
+  if (existing) {
+    return c.json(existing, 200);
+  }
+
+  const status = body.status ?? "pending";
   await db.insert(agentRuns).values({
     id: runId,
     taskId,
     nodeId: body.nodeId ?? null,
     sessionId: body.sessionId ?? null,
     agentType: body.agentType,
-    status: "pending",
+    status,
+    modelUsed: body.modelUsed ?? null,
+    tokenUsed: body.tokenUsed ?? 0,
+    result: body.result ?? null,
+    error: body.error ?? null,
+    candidateIndex: body.candidateIndex ?? null,
+    startedAt: body.startedAt ?? (status === "running" ? new Date().toISOString() : null),
+    finishedAt:
+      body.finishedAt ?? (["completed", "failed", "stopped", "terminated"].includes(status) ? new Date().toISOString() : null),
   });
 
-  return c.json({ id: runId, status: "pending" }, 201);
+  return c.json({ id: runId, status }, 201);
 });
 
 const updateRunSchema = z.object({
@@ -457,6 +480,8 @@ const updateRunSchema = z.object({
   tokenUsed: z.number().int().optional(),
   result: z.string().optional(),
   error: z.string().optional(),
+  startedAt: z.string().optional(),
+  finishedAt: z.string().optional(),
 });
 
 taskRoutes.patch("/:taskId/runs/:runId", zValidator("json", updateRunSchema), async (c) => {
@@ -471,10 +496,14 @@ taskRoutes.patch("/:taskId/runs/:runId", zValidator("json", updateRunSchema), as
   if (body.tokenUsed !== undefined) updates.tokenUsed = body.tokenUsed;
   if (body.result) updates.result = body.result;
   if (body.error) updates.error = body.error;
-  if (body.status === "running" && !existing.startedAt) {
+  if (body.startedAt) {
+    updates.startedAt = body.startedAt;
+  } else if (body.status === "running" && !existing.startedAt) {
     updates.startedAt = new Date().toISOString();
   }
-  if (["completed", "failed", "stopped", "terminated"].includes(body.status)) {
+  if (body.finishedAt) {
+    updates.finishedAt = body.finishedAt;
+  } else if (["completed", "failed", "stopped", "terminated"].includes(body.status)) {
     updates.finishedAt = new Date().toISOString();
   }
 

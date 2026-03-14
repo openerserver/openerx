@@ -514,6 +514,171 @@
               </div>
             </a-collapse-panel>
 
+            <a-collapse-panel v-if="showRoleWorkflowPanel" key="role-workflow" header="角色工作流">
+              <a-spin v-if="workflowViewLoading" />
+              <a-alert
+                v-else-if="workflowViewError"
+                type="warning"
+                show-icon
+                :message="workflowViewError"
+              />
+              <a-empty
+                v-else-if="!workflowSummary && roleConclusions.length === 0 && developerChangeRequests.length === 0"
+                description="暂无角色工作流数据"
+              />
+              <div v-else>
+                <a-space size="small" wrap :style="{ marginBottom: '12px' }">
+                  <a-tag color="blue">阶段 {{ workflowBannerState.currentStage }}</a-tag>
+                  <a-tag :color="stageStatusTone(workflowBannerState.workflowStatus)">{{ workflowStatusLabel }}</a-tag>
+                  <a-tag v-if="workflowBannerState.blocked" color="red">已阻断</a-tag>
+                  <a-tag v-if="workflowBannerState.approvalPending" color="orange">待审批</a-tag>
+                  <a-tag v-if="workflowBannerState.openChangeRequestCount > 0" color="gold">
+                    待修正 {{ workflowBannerState.openChangeRequestCount }}
+                  </a-tag>
+                </a-space>
+
+                <a-alert
+                  v-if="workflowBannerState.blockingReason"
+                  type="error"
+                  show-icon
+                  :message="workflowBannerState.blockingReason"
+                  :style="{ marginBottom: '12px' }"
+                />
+
+                <a-tabs :active-key="roleReviewActiveTab" size="small" @update:activeKey="roleReviewActiveTab = String($event)">
+                  <a-tab-pane key="overview" tab="概览">
+                    <a-descriptions :column="1" bordered size="small">
+                      <a-descriptions-item label="当前阶段">{{ workflowBannerState.currentStage }}</a-descriptions-item>
+                      <a-descriptions-item label="流程状态">{{ workflowStatusLabel }}</a-descriptions-item>
+                      <a-descriptions-item label="角色结论数">{{ roleConclusions.length }}</a-descriptions-item>
+                      <a-descriptions-item label="待修正数">{{ openDeveloperChangeRequests.length }}</a-descriptions-item>
+                    </a-descriptions>
+                  </a-tab-pane>
+
+                  <a-tab-pane key="stages" tab="阶段">
+                    <a-empty v-if="workflowStages.length === 0" description="暂无阶段数据" />
+                    <a-space v-else direction="vertical" :size="8" :style="{ width: '100%' }">
+                      <a-card v-for="stage in workflowStages" :key="stage.id" size="small">
+                        <a-flex justify="space-between" align="flex-start" :gap="8">
+                          <div>
+                            <div><strong>{{ stage.stageLabel || stage.stageKey }}</strong></div>
+                            <a-typography-text type="secondary">主责 {{ stage.primaryRoleLabel || '未指定' }}</a-typography-text>
+                          </div>
+                          <a-space size="small" wrap>
+                            <a-tag :color="stageStatusTone(stage.status)">{{ stage.status }}</a-tag>
+                            <a-tag v-if="stage.approvalState !== 'not-required'" color="orange">{{ stage.approvalState }}</a-tag>
+                          </a-space>
+                        </a-flex>
+                        <div v-if="stage.blockingReason" :style="{ marginTop: '8px', color: '#a61d24' }">{{ stage.blockingReason }}</div>
+                      </a-card>
+                    </a-space>
+                  </a-tab-pane>
+
+                  <a-tab-pane key="reviews" tab="角色评审">
+                    <a-empty v-if="roleConclusions.length === 0" description="暂无角色结论" />
+                    <a-space v-else direction="vertical" :size="8" :style="{ width: '100%' }">
+                      <a-card v-for="item in roleConclusions" :key="item.id" size="small">
+                        <a-flex justify="space-between" align="flex-start" :gap="8">
+                          <div>
+                            <div><strong>{{ item.roleLabel }}</strong></div>
+                            <a-typography-text type="secondary">阶段 {{ item.stage }}</a-typography-text>
+                          </div>
+                          <a-space size="small" wrap>
+                            <a-tag :color="roleDecisionColor(item.finalDecision)">{{ item.finalDecision }}</a-tag>
+                            <a-tag :color="riskColor(item.aggregateRiskLevel)">{{ item.aggregateRiskLevel }}</a-tag>
+                            <a-tag v-if="item.approvalRequired" color="orange">需审批</a-tag>
+                          </a-space>
+                        </a-flex>
+                        <div :style="{ marginTop: '8px' }">{{ item.winningRationale || '暂无聚合说明' }}</div>
+                        <div :style="{ marginTop: '8px' }">
+                          <a-button type="link" size="small" @click="toggleRoleReviewExpanded(item.id)">
+                            {{ isRoleReviewExpanded(item.id) ? '收起详情' : '展开详情' }}
+                          </a-button>
+                        </div>
+                        <div v-if="isRoleReviewExpanded(item.id)" :style="{ marginTop: '8px' }">
+                          <div v-if="item.mergedFindings.length > 0">
+                            <a-typography-text strong>主要发现</a-typography-text>
+                            <ul :style="{ paddingLeft: '18px', margin: '6px 0' }">
+                              <li v-for="finding in item.mergedFindings" :key="finding.key">{{ finding.title }}</li>
+                            </ul>
+                          </div>
+                          <div v-if="item.minorityFindings.length > 0">
+                            <a-typography-text strong>少数派意见</a-typography-text>
+                            <ul :style="{ paddingLeft: '18px', margin: '6px 0' }">
+                              <li v-for="finding in item.minorityFindings" :key="finding.key">{{ finding.title }}</li>
+                            </ul>
+                          </div>
+                        </div>
+                      </a-card>
+                    </a-space>
+                  </a-tab-pane>
+
+                  <a-tab-pane key="conflicts" tab="冲突">
+                    <a-empty v-if="roleConflictItems.length === 0" description="暂无冲突" />
+                    <a-list v-else size="small" :data-source="roleConflictItems">
+                      <template #renderItem="{ item }">
+                        <a-list-item>
+                          <a-space direction="vertical" :size="2">
+                            <a-space size="small" wrap>
+                              <strong>{{ item.roleLabel }}</strong>
+                              <a-tag :color="riskColor(item.severity)">{{ item.severity }}</a-tag>
+                              <a-tag :color="roleDecisionColor(item.finalDecision)">{{ item.finalDecision }}</a-tag>
+                            </a-space>
+                            <a-typography-text type="secondary">{{ item.summary }}</a-typography-text>
+                          </a-space>
+                        </a-list-item>
+                      </template>
+                    </a-list>
+                  </a-tab-pane>
+
+                  <a-tab-pane key="change-requests" tab="修正请求">
+                    <a-empty v-if="developerChangeRequests.length === 0" description="暂无修正请求" />
+                    <a-space v-else direction="vertical" :size="8" :style="{ width: '100%' }">
+                      <a-card v-for="item in developerChangeRequests" :key="item.id" size="small">
+                        <a-flex justify="space-between" align="flex-start" :gap="8">
+                          <div>
+                            <div><strong>{{ item.title }}</strong></div>
+                            <a-typography-text type="secondary">来源 {{ item.sourceRoleLabel }}</a-typography-text>
+                          </div>
+                          <a-space size="small" wrap>
+                            <a-tag :color="riskColor(item.priority)">{{ item.priority }}</a-tag>
+                            <a-tag :color="item.blocking ? 'red' : 'default'">{{ item.blocking ? '阻断' : '非阻断' }}</a-tag>
+                            <a-tag :color="item.approvalRequired ? 'orange' : 'default'">{{ item.approvalRequired ? '需审批' : item.status }}</a-tag>
+                          </a-space>
+                        </a-flex>
+                        <div :style="{ marginTop: '8px' }">{{ item.summary }}</div>
+                        <div :style="{ marginTop: '8px' }">
+                          <a-button type="link" size="small" @click="toggleChangeRequestExpanded(item.id)">
+                            {{ isChangeRequestExpanded(item.id) ? '收起详情' : '展开详情' }}
+                          </a-button>
+                        </div>
+                        <div v-if="isChangeRequestExpanded(item.id)" :style="{ marginTop: '8px' }">
+                          <ul :style="{ paddingLeft: '18px', margin: '6px 0' }">
+                            <li v-for="change in item.requiredChanges" :key="change">{{ change }}</li>
+                          </ul>
+                        </div>
+                        <a-space size="small" wrap>
+                          <a-button
+                            v-if="item.status === 'open'"
+                            size="small"
+                            :loading="isUpdatingChangeRequest(item.id)"
+                            @click="handleDeveloperChangeRequestStatus(item.id, 'acknowledged')"
+                          >标记已确认</a-button>
+                          <a-button
+                            v-if="item.status !== 'resolved'"
+                            size="small"
+                            type="primary"
+                            :loading="isUpdatingChangeRequest(item.id)"
+                            @click="handleDeveloperChangeRequestStatus(item.id, 'resolved')"
+                          >标记已解决</a-button>
+                        </a-space>
+                      </a-card>
+                    </a-space>
+                  </a-tab-pane>
+                </a-tabs>
+              </div>
+            </a-collapse-panel>
+
             <a-collapse-panel v-if="showHooksPanel" key="hooks" header="Hook 执行记录">
               <a-table
                 :data-source="strategy?.hookExecutions || []"
@@ -687,16 +852,19 @@
 <script setup lang="ts">
 import { BranchesOutlined, CopyOutlined, EnterOutlined } from "@ant-design/icons-vue";
 import { message } from "ant-design-vue";
-import { computed, nextTick, onUnmounted, ref, watch } from "vue";
+import { computed, defineAsyncComponent, nextTick, onUnmounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
+  type DeveloperChangeRequestViewModel,
   type GovernanceSummary,
   type PipelineSummary,
+  type RoleConclusionViewModel,
   type RuntimePipeline,
   type RuntimePipelineStage,
   type SessionInfo,
   type SessionTreeNode,
   type Task,
+  type TaskWorkflowViewModel,
   activateSession,
   archiveTaskSession,
   continueTask,
@@ -708,12 +876,13 @@ import {
   getTaskGovernance,
   getTaskPipeline,
   getTaskSessions,
+  getTaskWorkflowView,
+  updateDeveloperChangeRequest,
   updateTask,
 } from "../lib/api";
 import { showRuntimeRecoveryNotice } from "../lib/runtime-recovery";
 import { renderMarkdown } from "../lib/markdown";
 import { parseConfirmationBlock, type ConfirmationBlock } from "../lib/confirmation-parser";
-import ConfirmationForm from "../components/ConfirmationForm.vue";
 import { RUNTIME_RECOVERY_CONTEXTS } from "../lib/runtime-recovery-notice";
 import { type RealtimeEvent, useRealtimeStore } from "../stores/realtime";
 import {
@@ -721,6 +890,8 @@ import {
   buildTaskDetailSessionCardStyle,
   taskDetailThemeStyles,
 } from "../theme/ui-theme";
+
+const ConfirmationForm = defineAsyncComponent(() => import("../components/ConfirmationForm.vue"));
 
 const route = useRoute();
 const router = useRouter();
@@ -775,6 +946,14 @@ const hasOrchestrationData = computed(() =>
 const hasPipelineData = computed(() => pipelineStages.value.length > 0);
 const hasTaskEventsData = computed(() => taskEvents.value.length > 0);
 const hasHookData = computed(() => Boolean(strategy.value?.hookExecutions?.length));
+const hasRoleWorkflowData = computed(() =>
+  Boolean(
+    workflowSummary.value?.currentStage
+      || workflowStages.value.length > 0
+      || roleConclusions.value.length > 0
+      || developerChangeRequests.value.length > 0,
+  ),
+);
 
 const showGraphPanel = computed(() => !isWorkbenchEmbedded.value || hasTaskGraphData.value);
 const showContextPanel = computed(() => !isWorkbenchEmbedded.value || hasCodeContext.value);
@@ -783,6 +962,7 @@ const showGovernancePanel = computed(() => !isWorkbenchEmbedded.value || hasGove
 const showOrchestrationPanel = computed(() => !isWorkbenchEmbedded.value || hasOrchestrationData.value);
 const showPipelinePanel = computed(() => !isWorkbenchEmbedded.value || hasPipelineData.value);
 const showHooksPanel = computed(() => !isWorkbenchEmbedded.value ? Boolean(strategy.value?.hookExecutions?.length) : hasHookData.value);
+const showRoleWorkflowPanel = computed(() => !isWorkbenchEmbedded.value || hasRoleWorkflowData.value || workflowViewLoading.value);
 const showEventsPanel = computed(() => !isWorkbenchEmbedded.value || hasTaskEventsData.value);
 const useCompactInspector = computed(() => isWorkbenchEmbedded.value);
 const orchestrationSummaryItems = computed(() => {
@@ -824,6 +1004,7 @@ const embeddedSidebarPanelCount = computed(
     showContextPanel.value,
     showChangesPanel.value,
     showGovernancePanel.value,
+    showRoleWorkflowPanel.value,
     showHooksPanel.value,
     ...(!useCompactInspector.value ? [showOrchestrationPanel.value, showPipelinePanel.value, showGraphPanel.value, showEventsPanel.value] : []),
   ].filter(Boolean).length,
@@ -883,6 +1064,10 @@ const taskDetailDefaultActivePanels = computed(() => {
 
   if (showChangesPanel.value) {
     base.push("changes");
+  }
+
+  if (showRoleWorkflowPanel.value) {
+    base.push("role-workflow");
   }
 
   if (showEventsPanel.value && isWorkbenchEmbedded.value) {
@@ -946,6 +1131,15 @@ const activating = ref(false);
 const governance = ref<GovernanceSummary | null>(null);
 const governanceLoading = ref(false);
 
+// Role workflow placeholders
+const workflowViewLoading = ref(false);
+const workflowViewError = ref<string | null>(null);
+const workflowView = ref<TaskWorkflowViewModel | null>(null);
+const roleReviewActiveTab = ref("overview");
+const expandedRoleReviewIds = ref<string[]>([]);
+const expandedChangeRequestIds = ref<string[]>([]);
+const updatingChangeRequestIds = ref<string[]>([]);
+
 const continuePrompt = ref("");
 const continuing = ref(false);
 const forking = ref(false);
@@ -1007,6 +1201,148 @@ const modelOptions = computed(() => {
   return options;
 });
 
+const workflowSummary = computed(() => workflowView.value?.workflow ?? null);
+const workflowStages = computed(() => workflowView.value?.workflow.stages ?? []);
+const roleConclusions = computed<RoleConclusionViewModel[]>(() => workflowView.value?.roleConclusions ?? []);
+const developerChangeRequests = computed<DeveloperChangeRequestViewModel[]>(() => workflowView.value?.developerChangeRequests ?? []);
+const openDeveloperChangeRequests = computed(() =>
+  developerChangeRequests.value.filter((item) => item.status === "open" || item.status === "in-progress"),
+);
+const blockingRoleConclusions = computed(() =>
+  roleConclusions.value.filter((item) => item.finalDecision === "block" || item.finalDecision === "human-review"),
+);
+const roleConflictItems = computed(() =>
+  roleConclusions.value.flatMap((item) =>
+    item.conflicts.map((conflict) => ({
+      roleAgentId: item.roleAgentId,
+      roleLabel: item.roleLabel,
+      stage: item.stage,
+      finalDecision: item.finalDecision,
+      ...conflict,
+    })),
+  ),
+);
+const workflowBannerState = computed(() => ({
+  currentStage: workflowSummary.value?.currentStage ?? "unknown",
+  workflowStatus: workflowSummary.value?.status ?? "pending",
+  blocked: blockingRoleConclusions.value.length > 0 || workflowSummary.value?.status === "blocked",
+  approvalPending: workflowStages.value.some((stage) => stage.approvalState === "pending"),
+  openChangeRequestCount: openDeveloperChangeRequests.value.length,
+  blockingReason: workflowStages.value.find((stage) => stage.blockingReason)?.blockingReason,
+}));
+
+const workflowStatusLabel = computed(() => {
+  switch (workflowBannerState.value.workflowStatus) {
+    case "running":
+      return "进行中";
+    case "blocked":
+      return "已阻断";
+    case "waiting-approval":
+      return "待审批";
+    case "failed":
+      return "失败";
+    case "completed":
+      return "已完成";
+    case "cancelled":
+      return "已取消";
+    default:
+      return workflowBannerState.value.workflowStatus || "未开始";
+  }
+});
+
+function roleDecisionColor(decision: string) {
+  switch (decision) {
+    case "block":
+    case "human-review":
+      return "red";
+    case "needs-approval":
+      return "orange";
+    case "notify-developer":
+      return "gold";
+    case "allow":
+      return "green";
+    default:
+      return "default";
+  }
+}
+
+function stageStatusTone(status: string) {
+  switch (status) {
+    case "completed":
+      return "green";
+    case "running":
+      return "blue";
+    case "blocked":
+      return "red";
+    case "waiting-approval":
+      return "orange";
+    case "failed":
+      return "volcano";
+    default:
+      return "default";
+  }
+}
+
+function isRoleReviewExpanded(id: string) {
+  return expandedRoleReviewIds.value.includes(id);
+}
+
+function toggleRoleReviewExpanded(id: string) {
+  expandedRoleReviewIds.value = expandedRoleReviewIds.value.includes(id)
+    ? expandedRoleReviewIds.value.filter((item) => item !== id)
+    : [...expandedRoleReviewIds.value, id];
+}
+
+function isChangeRequestExpanded(id: string) {
+  return expandedChangeRequestIds.value.includes(id);
+}
+
+function toggleChangeRequestExpanded(id: string) {
+  expandedChangeRequestIds.value = expandedChangeRequestIds.value.includes(id)
+    ? expandedChangeRequestIds.value.filter((item) => item !== id)
+    : [...expandedChangeRequestIds.value, id];
+}
+
+function isUpdatingChangeRequest(id: string) {
+  return updatingChangeRequestIds.value.includes(id);
+}
+
+async function refreshWorkflowView(id: string) {
+  workflowViewLoading.value = true;
+  try {
+    workflowView.value = await getTaskWorkflowView(id);
+    workflowViewError.value = null;
+  } catch (error) {
+    workflowViewError.value = error instanceof Error ? error.message : "加载角色工作流失败";
+    workflowView.value = null;
+  } finally {
+    workflowViewLoading.value = false;
+  }
+}
+
+async function handleDeveloperChangeRequestStatus(requestId: string, status: "acknowledged" | "resolved") {
+  if (!taskId.value || isUpdatingChangeRequest(requestId)) {
+    return;
+  }
+
+  updatingChangeRequestIds.value = [...updatingChangeRequestIds.value, requestId];
+  try {
+    await updateDeveloperChangeRequest(taskId.value, { requestId, status });
+    message.success(status === "resolved" ? "修正请求已标记为已解决" : "修正请求已确认");
+    await refreshTaskData(taskId.value, {
+      task: false,
+      pipeline: false,
+      sessions: false,
+      governance: false,
+      workflow: true,
+    });
+  } catch (error) {
+    message.error(`更新修正请求失败: ${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    updatingChangeRequestIds.value = updatingChangeRequestIds.value.filter((item) => item !== requestId);
+  }
+}
+
 function filterModelOption(input: string, option: { value?: string; label?: string }) {
   const keyword = input.toLowerCase();
   return (
@@ -1060,11 +1396,13 @@ async function refreshTaskData(
     pipeline?: boolean;
     sessions?: boolean;
     governance?: boolean;
+    workflow?: boolean;
   } = {
     task: true,
     pipeline: true,
     sessions: true,
     governance: true,
+    workflow: true,
   },
 ) {
   const jobs: Promise<unknown>[] = [];
@@ -1117,6 +1455,10 @@ async function refreshTaskData(
           governanceLoading.value = false;
         }),
     );
+  }
+
+  if (options.workflow) {
+    jobs.push(refreshWorkflowView(id));
   }
 
   await Promise.all(jobs);
@@ -1451,6 +1793,16 @@ function scheduleTaskRefresh(reason: string) {
           reason === "task.completed" ||
           reason === "task.continued" ||
           reason === "task.hooks.updated",
+        workflow: [
+          "agent.started",
+          "task.completed",
+          "task.continued",
+          "task.hooks.updated",
+          "task.role-review.started",
+          "task.role-review.completed",
+          "task.role-review.conflicted",
+          "task.developer-change-request.created",
+        ].includes(reason),
       });
 
       if (

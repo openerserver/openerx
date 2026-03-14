@@ -161,6 +161,7 @@
 
 <script setup lang="ts">
 import { Button, Modal, message, notification } from "ant-design-vue";
+import type { DefaultOptionType } from "ant-design-vue/es/select";
 import { computed, h, onUnmounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { getTask, listTasks, type Task } from "../lib/api";
@@ -330,11 +331,13 @@ function handlePickerTargetChange(value: unknown) {
   taskPickerTarget.value = value === "secondary" ? "secondary" : "primary";
 }
 
-function filterTaskOption(input: string, option: { value?: string; label?: string }) {
+function filterTaskOption(input: string, option?: DefaultOptionType) {
   const keyword = input.toLowerCase();
+  const optionValue = option?.value == null ? "" : String(option.value).toLowerCase();
+  const optionLabel = option?.label == null ? "" : String(option.label).toLowerCase();
   return (
-    (option.value?.toLowerCase().includes(keyword) ?? false) ||
-    (option.label?.toLowerCase().includes(keyword) ?? false)
+    optionValue.includes(keyword) ||
+    optionLabel.includes(keyword)
   );
 }
 

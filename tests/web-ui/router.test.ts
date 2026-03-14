@@ -25,6 +25,13 @@ vi.mock("../../control-plane/web-ui/src/pages/Users.vue", () => ({
   }),
 }));
 
+vi.mock("../../control-plane/web-ui/src/pages/MultiTaskMonitor.vue", () => ({
+  default: defineComponent({
+    name: "MockMultiTaskMonitorPage",
+    template: '<div data-testid="multi-task-monitor-page">多任务监控台页面</div>',
+  }),
+}));
+
 vi.mock("../../control-plane/web-ui/src/layouts/MainLayout.vue", () => ({
   default: defineComponent({
     name: "MockMainLayout",
@@ -99,5 +106,22 @@ describe("users route auth", () => {
 
     expect(router.currentRoute.value.name).toBe("Users");
     expect(wrapper.text()).toContain("用户管理页");
+  });
+
+  it("renders the multi task monitor page when authenticated", async () => {
+    authState.token = "test-token";
+
+    const wrapper = mount(RouterHost, {
+      global: {
+        plugins: [router],
+      },
+    });
+
+    await router.push("/multi-task-monitor");
+    await router.isReady();
+    await flushPromises();
+
+    expect(router.currentRoute.value.name).toBe("MultiTaskMonitor");
+    expect(wrapper.text()).toContain("多任务监控台页面");
   });
 });

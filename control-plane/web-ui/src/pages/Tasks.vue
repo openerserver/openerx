@@ -134,6 +134,9 @@
             <router-link :to="`/workbench?task=${record.id}`">
               <a-button type="link" size="small">工作台</a-button>
             </router-link>
+            <router-link :to="`/multi-task-monitor?task=${record.id}`">
+              <a-button type="link" size="small">监控台</a-button>
+            </router-link>
           </a-space>
         </template>
       </template>
@@ -854,7 +857,7 @@ const columns = [
     sorter: (a: Task, b: Task) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
     defaultSortOrder: "descend" as const,
   },
-  { title: "操作", key: "actions", width: 210 },
+  { title: "操作", key: "actions", width: 280 },
 ];
 
 function setStatusFilter(value: unknown) {

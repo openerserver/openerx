@@ -14,6 +14,7 @@ export type RealtimeEventType =
   | "agent.resumed"
   | "agent.completed"
   | "agent.failed"
+  | "agent.stopped"
   | "agent.auth-error"
   | "task.created"
   | "task.forked"

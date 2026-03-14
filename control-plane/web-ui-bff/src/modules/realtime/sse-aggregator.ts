@@ -11,15 +11,18 @@ import {
 } from "../../lib/orchestration-strategy";
 import type { RealtimeEvent, RealtimeEventType } from "../../types/events";
 import {
+  extractAssistantResultFromMessages,
   findAgentRunBySessionId,
   getSessionMessages,
   runDetachedPrompt,
   updateAgentRunStatus,
 } from "../agent-control/opencode-adapter";
+import { patchAgentRunRecord, recordAgentAudit } from "../agent-control/run-persistence";
 import { collectChangesFromSession } from "../code-changes/change-collector";
 import { executeLifecycleHooks } from "../hooks/lifecycle-hooks";
 import { observeGraphWorkspaceDir, onGraphToolExecuted } from "./dag-sync";
 import { buildPipelineStageUpdatedEvents } from "./pipeline-events";
+import { finalizeTaskState } from "../tasks/finalize";
 
 // Subscribes to OpenCode Runtime SSE events and transforms them into
 // standard RealtimeEvent format for WebSocket broadcast.
@@ -359,7 +362,7 @@ class SSEAggregator {
     if (event) {
       this.emit(event);
       if (event.type === "session.error") {
-        this.maybeEmitAuthError(event);
+        void this.maybeEmitAuthError(event);
         void this.maybeFinalizeFailure(event);
       }
       void this.maybeFinalizeRun(event);
@@ -412,7 +415,7 @@ class SSEAggregator {
    * them as an explicit agent.auth-error event so the frontend can act
    * immediately instead of waiting for a completion that will never arrive.
    */
-  private maybeEmitAuthError(event: RealtimeEvent): void {
+  private async maybeEmitAuthError(event: RealtimeEvent): Promise<void> {
     const error =
       typeof event.data.error === "object" && event.data.error
         ? (event.data.error as Record<string, unknown>)
@@ -456,6 +459,36 @@ class SSEAggregator {
     // Mark the agent run as failed so the system stops waiting for completion
     if (agentRunId) {
       updateAgentRunStatus(agentRunId, "failed");
+      const runtimeRun = sessionId ? findAgentRunBySessionId(sessionId) : undefined;
+      const errorMessage =
+        typeof errorData?.message === "string"
+          ? errorData.message
+          : error.name ?? "Provider authentication failed";
+      if (runtimeRun?.taskId) {
+        await Promise.all([
+          patchAgentRunRecord({
+            taskId: runtimeRun.taskId,
+            agentRunId,
+            status: "failed",
+            model: runtimeRun.model,
+            error: String(errorMessage),
+            finishedAt: new Date().toISOString(),
+          }),
+          recordAgentAudit({
+            projectId: runtimeRun.projectId,
+            taskId: runtimeRun.taskId,
+            sessionId,
+            agentRunId,
+            eventType: "agent",
+            action: "auth_error",
+            detail: {
+              statusCode,
+              message: errorMessage,
+            },
+            riskLevel: "high",
+          }),
+        ]);
+      }
     }
   }
 
@@ -532,6 +565,7 @@ class SSEAggregator {
       }
 
       const resultText = assistantResult.text;
+      const tokenUsed = assistantResult.tokenUsed;
 
       // Check if this is a parallel candidate completion
       const candidateInfo = this.sessionToCandidateMap.get(event.sessionId);
@@ -546,6 +580,33 @@ class SSEAggregator {
         }
 
         updateAgentRunStatus(event.agentRunId, "completed");
+        if (event.taskId) {
+          await Promise.all([
+            patchAgentRunRecord({
+              taskId: event.taskId,
+              agentRunId: event.agentRunId,
+              status: "completed",
+              model: run.model,
+              tokenUsed,
+              result: resultText,
+              finishedAt: new Date().toISOString(),
+            }),
+            recordAgentAudit({
+              projectId: event.projectId,
+              taskId: event.taskId,
+              sessionId: event.sessionId,
+              agentRunId: event.agentRunId,
+              eventType: "agent",
+              action: "completed",
+              detail: {
+                candidateIndex: candidateInfo.candidateIndex,
+                executionMode: "parallel",
+                result: resultText,
+              },
+              riskLevel: "low",
+            }),
+          ]);
+        }
         this.finalizedAgentRuns.add(event.agentRunId);
 
         this.emit({
@@ -600,22 +661,44 @@ class SSEAggregator {
       }
 
       // Single mode: original flow
-      const taskUpdate = await cpFetch(`/api/tasks/${encodeURIComponent(event.taskId)}`, {
-        method: "PATCH",
+      const taskUpdate = await finalizeTaskState({
         authorization,
-        body: {
-          status: "completed",
-          sessionId: event.sessionId,
-          agentRunId: event.agentRunId,
-          ...(resultText ? { result: resultText } : {}),
-        },
+        taskId: event.taskId,
+        status: "completed",
+        sessionId: event.sessionId,
+        agentRunId: event.agentRunId,
+        result: resultText,
       });
 
-      if (!taskUpdate.ok) {
-        throw new Error(`Task completion sync failed: ${taskUpdate.status}`);
+      if (!taskUpdate) {
+        throw new Error(`Task completion sync failed for ${event.taskId}`);
       }
 
       updateAgentRunStatus(event.agentRunId, "completed");
+      await Promise.all([
+        patchAgentRunRecord({
+          taskId: event.taskId,
+          agentRunId: event.agentRunId,
+          status: "completed",
+          model: run.model,
+          tokenUsed,
+          result: resultText,
+          finishedAt: new Date().toISOString(),
+        }),
+        recordAgentAudit({
+          projectId: event.projectId,
+          taskId: event.taskId,
+          sessionId: event.sessionId,
+          agentRunId: event.agentRunId,
+          eventType: "agent",
+          action: "completed",
+          detail: {
+            sourceEvent: event.type,
+            result: resultText,
+          },
+          riskLevel: "low",
+        }),
+      ]);
       this.finalizedAgentRuns.add(event.agentRunId);
 
       this.emit({
@@ -709,13 +792,36 @@ class SSEAggregator {
       return;
     }
 
+    const errorMessage = this.extractErrorMessage(event);
+    const assistantResult = await this.getLatestAssistantResult(event.sessionId, 1000);
+    const tokenUsed = assistantResult.tokenUsed;
+
     // Mark the agent run as failed
     if (run.agentRunId) {
       updateAgentRunStatus(run.agentRunId, "failed");
+      await Promise.all([
+        patchAgentRunRecord({
+          taskId: event.taskId,
+          agentRunId: run.agentRunId,
+          status: "failed",
+          model: run.model,
+          tokenUsed,
+          error: errorMessage,
+          finishedAt: new Date().toISOString(),
+        }),
+        recordAgentAudit({
+          projectId: event.projectId,
+          taskId: event.taskId,
+          sessionId: event.sessionId,
+          agentRunId: run.agentRunId,
+          eventType: "agent",
+          action: "failed",
+          detail: { error: errorMessage, sourceEvent: event.type },
+          riskLevel: "high",
+        }),
+      ]);
       this.finalizedAgentRuns.add(run.agentRunId);
     }
-
-    const errorMessage = this.extractErrorMessage(event);
 
     // Check if this is a parallel candidate failure
     const candidateInfo = this.sessionToCandidateMap.get(event.sessionId);
@@ -759,15 +865,18 @@ class SSEAggregator {
     try {
       const authorization = await createInternalAuthorization();
 
-      await cpFetch(`/api/tasks/${encodeURIComponent(event.taskId)}`, {
-        method: "PATCH",
+      const finalized = await finalizeTaskState({
         authorization,
-        body: {
-          status: "failed",
-          sessionId: event.sessionId,
-          agentRunId: run.agentRunId,
-        },
+        taskId: event.taskId,
+        status: "failed",
+        sessionId: event.sessionId,
+        agentRunId: run.agentRunId,
+        result: errorMessage,
       });
+
+      if (!finalized) {
+        throw new Error(`Task failure sync failed for ${event.taskId}`);
+      }
 
       this.emit({
         id: crypto.randomUUID(),
@@ -863,59 +972,33 @@ class SSEAggregator {
   private async getLatestAssistantResult(
     sessionId: string,
     timeoutMs: number,
-  ): Promise<{ text?: string; completed: boolean }> {
+  ): Promise<{ text?: string; completed: boolean; tokenUsed: number }> {
     const deadline = Date.now() + timeoutMs;
     let fallbackText: string | undefined;
+    let fallbackTokenUsed = 0;
 
     while (Date.now() < deadline) {
       const messagesResult = await getSessionMessages(sessionId);
       if (!messagesResult.ok || !Array.isArray(messagesResult.data)) {
-        return { text: fallbackText, completed: false };
+        return { text: fallbackText, completed: false, tokenUsed: fallbackTokenUsed };
       }
 
-      for (let index = messagesResult.data.length - 1; index >= 0; index--) {
-        const message = messagesResult.data[index];
-        if (!message || typeof message !== "object") {
-          continue;
-        }
+      const assistantResult = extractAssistantResultFromMessages(messagesResult.data);
+      if (assistantResult.text) {
+        fallbackText = assistantResult.text;
+      }
+      if (assistantResult.tokenUsed > 0) {
+        fallbackTokenUsed = assistantResult.tokenUsed;
+      }
 
-        const info =
-          "info" in message && typeof message.info === "object" && message.info
-            ? (message.info as Record<string, unknown>)
-            : undefined;
-        if (info?.role !== "assistant") {
-          continue;
-        }
-
-        const parts = Array.isArray((message as { parts?: unknown }).parts)
-          ? ((message as { parts: unknown[] }).parts as Record<string, unknown>[])
-          : [];
-        const text = parts
-          .filter((part) => part.type === "text" && typeof part.text === "string")
-          .map((part) => String(part.text).trim())
-          .filter(Boolean)
-          .join("\n\n");
-
-        if (text) {
-          fallbackText = text;
-        }
-
-        const time =
-          typeof info?.time === "object" && info.time
-            ? (info.time as Record<string, unknown>)
-            : undefined;
-        const completed = time?.completed;
-        if (text && (typeof completed === "number" || typeof completed === "string")) {
-          return { text, completed: true };
-        }
-
-        break;
+      if (assistantResult.completed) {
+        return assistantResult;
       }
 
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
 
-    return { text: fallbackText, completed: false };
+    return { text: fallbackText, completed: false, tokenUsed: fallbackTokenUsed };
   }
 
   private extractSessionId(type: string, data: Record<string, unknown>): string | undefined {

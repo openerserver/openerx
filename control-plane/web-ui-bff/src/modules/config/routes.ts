@@ -887,6 +887,41 @@ configRoutes.put("/orchestration-strategy", zValidator("json", strategySchema), 
 // ═══════════════════════════════════════════════════════════════════
 
 const pluginsDir = join(DOT_OPENCODE, "plugins");
+const ALLOWED_PLUGIN_SOURCE_PREFIXES = [".opencode/plugins/", "./.opencode/plugins/"];
+
+export function getAllowedPluginSourcePrefixes(): string[] {
+  return [...ALLOWED_PLUGIN_SOURCE_PREFIXES];
+}
+
+export function resolveAllowedPluginInstallSource(source: string):
+  | { ok: true; sourcePath: string; normalizedSource: string }
+  | { ok: false; error: string } {
+  const trimmed = source.trim();
+  if (!trimmed) {
+    return { ok: false, error: "插件来源不能为空" };
+  }
+  if (!trimmed.endsWith(".ts")) {
+    return { ok: false, error: "插件来源必须是 .ts 文件" };
+  }
+  if (!ALLOWED_PLUGIN_SOURCE_PREFIXES.some((prefix) => trimmed.startsWith(prefix))) {
+    return {
+      ok: false,
+      error: `插件安装仅允许从 ${ALLOWED_PLUGIN_SOURCE_PREFIXES.join(" 或 ")} 范围内选择现有插件文件。`,
+    };
+  }
+
+  const normalizedSource = trimmed.startsWith("./") ? trimmed.slice(2) : trimmed;
+  const sourcePath = resolve(OPENCODE_ROOT, normalizedSource);
+  const allowedRoot = resolve(pluginsDir);
+  if (!sourcePath.startsWith(allowedRoot)) {
+    return { ok: false, error: "插件来源超出允许目录范围" };
+  }
+  if (!existsSync(sourcePath)) {
+    return { ok: false, error: `Source file not found: ${source}` };
+  }
+
+  return { ok: true, sourcePath, normalizedSource };
+}
 
 // POST /config/plugins/install — Install plugin from local path or built-in template
 const installPluginSchema = z.object({
@@ -899,21 +934,20 @@ configRoutes.post("/plugins/install", zValidator("json", installPluginSchema), (
   if (adminErr) return c.json({ error: adminErr }, 403);
   const { source, name } = c.req.valid("json");
 
-  // Resolve source path
-  const sourcePath = resolve(OPENCODE_ROOT, source);
-  if (!existsSync(sourcePath)) {
-    return c.json({ error: `Source file not found: ${source}` }, 400);
+  const sourceResult = resolveAllowedPluginInstallSource(source);
+  if (!sourceResult.ok) {
+    return c.json({ error: sourceResult.error }, 400);
   }
 
   // Ensure plugins directory exists
   if (!existsSync(pluginsDir)) mkdirSync(pluginsDir, { recursive: true });
 
-  const fileName = name ? `${name}.ts` : basename(sourcePath);
+  const fileName = name ? `${name}.ts` : basename(sourceResult.sourcePath);
   const targetKey = safePath(pluginsDir, fileName);
   if (!targetKey) return c.json({ error: "Invalid plugin name" }, 400);
 
   // Copy plugin file
-  copyFileSync(sourcePath, targetKey);
+  copyFileSync(sourceResult.sourcePath, targetKey);
 
   // Register in opencode.json
   const config = readOpencodeJson();

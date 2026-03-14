@@ -34,6 +34,7 @@ import {
   getSessionMessages,
   listSessions,
 } from "../agent-control/opencode-adapter";
+import { createAgentRunRecord } from "../agent-control/run-persistence";
 import { executeLifecycleHooks } from "../hooks/lifecycle-hooks";
 import { syncGraphsForSessionTask, syncGraphsForTask } from "../realtime/dag-sync";
 import { buildPipelineStageUpdatedEvents } from "../realtime/pipeline-events";
@@ -63,6 +64,93 @@ interface SessionSummaryRecord {
   summary: { additions: number; deletions: number; files: number } | null;
   createdAt: string | null;
   updatedAt: string | null;
+}
+
+interface WorkflowRunPayload {
+  id?: string;
+  templateId?: string | null;
+  currentStage?: string | null;
+  status?: string | null;
+}
+
+interface WorkflowStagePayload {
+  id?: string;
+  stageKey?: string | null;
+  status?: string | null;
+  approvalState?: string | null;
+  blockingReason?: string | null;
+  primaryRoleAgentId?: string | null;
+}
+
+interface RoleConclusionPayload {
+  id?: string;
+  roleAgentId?: string | null;
+  stage?: string | null;
+  finalDecision?: string | null;
+  aggregateRiskLevel?: string | null;
+  consensusScore?: number | null;
+  winningRationale?: string | null;
+  mergedFindings?: Array<{ key?: string; title?: string; severity?: string }> | null;
+  minorityFindings?: Array<{ key?: string; title?: string; severity?: string }> | null;
+  conflicts?: Array<{ type?: string; severity?: string; summary?: string }> | null;
+  approvalRequired?: boolean | null;
+  approvalRecommendation?: { required?: boolean | null } | null;
+}
+
+interface DeveloperChangeRequestPayload {
+  id?: string;
+  sourceRoleAgentId?: string | null;
+  priority?: string | null;
+  title?: string | null;
+  summary?: string | null;
+  requiredChanges?: string[] | null;
+  blocking?: boolean | null;
+  approvalRequired?: boolean | null;
+  status?: string | null;
+}
+
+interface WorkflowViewModel {
+  taskId: string;
+  workflow: {
+    templateId: string | null;
+    currentStage: string;
+    status: string;
+    stages: Array<{
+      id: string;
+      stageKey: string;
+      stageLabel: string;
+      status: string;
+      approvalState: string;
+      blockingReason?: string;
+      primaryRoleLabel?: string;
+    }>;
+  };
+  roleConclusions: Array<{
+    id: string;
+    roleAgentId: string;
+    roleLabel: string;
+    stage: string;
+    finalDecision: string;
+    aggregateRiskLevel: string;
+    consensusScore: number;
+    winningRationale: string;
+    mergedFindings: Array<{ key: string; title: string; severity: string }>;
+    minorityFindings: Array<{ key: string; title: string; severity: string }>;
+    conflicts: Array<{ type: string; severity: string; summary: string }>;
+    approvalRequired: boolean;
+  }>;
+  developerChangeRequests: Array<{
+    id: string;
+    sourceRoleAgentId: string;
+    sourceRoleLabel: string;
+    priority: string;
+    title: string;
+    summary: string;
+    requiredChanges: string[];
+    blocking: boolean;
+    approvalRequired: boolean;
+    status: string;
+  }>;
 }
 
 interface ExecutableTask {
@@ -305,6 +393,141 @@ function buildWorkflowPromptContext(
   };
 }
 
+function roleLabelFromId(roleAgentId: string | null | undefined) {
+  switch (roleAgentId) {
+    case "role.product":
+      return "产品";
+    case "role.architect":
+      return "架构";
+    case "role.developer":
+      return "开发者";
+    case "role.visual":
+      return "美术";
+    case "role.security":
+      return "安全";
+    case "role.release":
+      return "部署";
+    case "role.operations":
+      return "运维";
+    case "role.qa":
+      return "QA";
+    default:
+      return roleAgentId?.replace(/^role\./, "") || "未命名角色";
+  }
+}
+
+function stageLabelFromKey(stageKey: string | null | undefined) {
+  switch (stageKey) {
+    case "intake":
+      return "需求进入";
+    case "clarify":
+      return "需求澄清";
+    case "design":
+      return "方案设计";
+    case "plan":
+      return "任务拆解";
+    case "implement":
+      return "实现开发";
+    case "verify":
+      return "集成验证";
+    case "release":
+      return "发布执行";
+    case "post-release":
+      return "发布观察";
+    case "retrospective":
+      return "复盘沉淀";
+    case "done":
+      return "已完成";
+    case "cancelled":
+      return "已取消";
+    default:
+      return stageKey || "未命名阶段";
+  }
+}
+
+async function buildTaskWorkflowViewModel(taskId: string, authorization: string): Promise<WorkflowViewModel> {
+  const [workflowResult, conclusionsResult, requestsResult] = await Promise.all([
+    cpFetch<{ data?: { workflowRun?: WorkflowRunPayload | null; stages?: WorkflowStagePayload[] | null } }>(
+      `/api/tasks/${encodeURIComponent(taskId)}/workflow`,
+      { authorization },
+    ),
+    cpFetch<{ data?: RoleConclusionPayload[] }>(`/api/tasks/${encodeURIComponent(taskId)}/role-conclusions`, {
+      authorization,
+    }),
+    cpFetch<{ data?: DeveloperChangeRequestPayload[] }>(
+      `/api/tasks/${encodeURIComponent(taskId)}/developer-change-requests`,
+      { authorization },
+    ),
+  ]);
+
+  const workflowRun = workflowResult.ok ? workflowResult.data?.data?.workflowRun ?? null : null;
+  const stages = workflowResult.ok ? workflowResult.data?.data?.stages ?? [] : [];
+  const conclusions = conclusionsResult.ok ? conclusionsResult.data?.data ?? [] : [];
+  const requests = requestsResult.ok ? requestsResult.data?.data ?? [] : [];
+
+  return {
+    taskId,
+    workflow: {
+      templateId: workflowRun?.templateId ?? null,
+      currentStage: workflowRun?.currentStage || "unknown",
+      status: workflowRun?.status || "pending",
+      stages: stages.map((stage, index) => ({
+        id: stage.id || `${taskId}-${stage.stageKey || index}`,
+        stageKey: stage.stageKey || `stage-${index + 1}`,
+        stageLabel: stageLabelFromKey(stage.stageKey),
+        status: stage.status || "pending",
+        approvalState: stage.approvalState || "not-required",
+        blockingReason: stage.blockingReason || undefined,
+        primaryRoleLabel: roleLabelFromId(stage.primaryRoleAgentId),
+      })),
+    },
+    roleConclusions: conclusions.map((item, index) => ({
+      id: item.id || `${item.roleAgentId || "role"}-${item.stage || index}`,
+      roleAgentId: item.roleAgentId || "unknown",
+      roleLabel: roleLabelFromId(item.roleAgentId),
+      stage: item.stage || "unknown",
+      finalDecision: item.finalDecision || "observe",
+      aggregateRiskLevel: item.aggregateRiskLevel || "low",
+      consensusScore: typeof item.consensusScore === "number" ? item.consensusScore : 0,
+      winningRationale: item.winningRationale || "",
+      mergedFindings: Array.isArray(item.mergedFindings)
+        ? item.mergedFindings.map((finding, findingIndex) => ({
+            key: finding?.key || `${index}-merged-${findingIndex}`,
+            title: finding?.title || "未命名发现",
+            severity: finding?.severity || "low",
+          }))
+        : [],
+      minorityFindings: Array.isArray(item.minorityFindings)
+        ? item.minorityFindings.map((finding, findingIndex) => ({
+            key: finding?.key || `${index}-minority-${findingIndex}`,
+            title: finding?.title || "未命名发现",
+            severity: finding?.severity || "low",
+          }))
+        : [],
+      conflicts: Array.isArray(item.conflicts)
+        ? item.conflicts.map((conflict) => ({
+            type: conflict?.type || "unknown",
+            severity: conflict?.severity || "low",
+            summary: conflict?.summary || "未提供冲突摘要",
+          }))
+        : [],
+      approvalRequired: Boolean(item.approvalRequired ?? item.approvalRecommendation?.required),
+    })),
+    developerChangeRequests: requests.map((item, index) => ({
+      id: item.id || `${item.sourceRoleAgentId || "role"}-request-${index}`,
+      sourceRoleAgentId: item.sourceRoleAgentId || "unknown",
+      sourceRoleLabel: roleLabelFromId(item.sourceRoleAgentId),
+      priority: item.priority || "medium",
+      title: item.title || "未命名修正请求",
+      summary: item.summary || "",
+      requiredChanges: Array.isArray(item.requiredChanges) ? item.requiredChanges : [],
+      blocking: Boolean(item.blocking),
+      approvalRequired: Boolean(item.approvalRequired),
+      status: item.status || "open",
+    })),
+  };
+}
+
 async function runPreExecutionHooks(
   task: ExecutableTask,
   repoContext: ReturnType<typeof buildRepoContext>,
@@ -440,7 +663,7 @@ function parseMessageTimeValue(message: unknown, key: "created" | "updated") {
 
 async function buildFallbackTaskSession(
   taskId: string,
-  task: { sessionId?: string; title?: string },
+  task: { sessionId?: string; title?: string; status?: string },
 ): Promise<SessionSummaryRecord | null> {
   if (!task.sessionId) {
     return null;
@@ -453,7 +676,7 @@ async function buildFallbackTaskSession(
   return {
     id: task.sessionId,
     title: task.title ? `[Task ${taskId.slice(0, 8)}] ${task.title}` : `[Task ${taskId.slice(0, 8)}] 主会话`,
-    isActive: true,
+    isActive: task.status === "running",
     summary: null,
     createdAt: parseMessageTimeValue(messages[0], "created"),
     updatedAt: parseMessageTimeValue(lastMessage, "updated"),
@@ -526,6 +749,20 @@ async function createParallelCandidateAttempts(
             model: context.resolvedModel,
           },
         );
+        if (sessionResult.agentRunId) {
+          await createAgentRunRecord({
+            taskId: context.task.id,
+            agentRunId: sessionResult.agentRunId,
+            sessionId: sessionResult.sessionId,
+            agentType: candidate.agent,
+            status: sessionResult.ok ? "running" : "failed",
+            model: context.resolvedModel,
+            candidateIndex: index,
+            error: sessionResult.ok ? undefined : sessionResult.error,
+            startedAt: new Date().toISOString(),
+            finishedAt: sessionResult.ok ? undefined : new Date().toISOString(),
+          });
+        }
         return { index, sessionResult };
       } catch {
         return { index };
@@ -733,6 +970,19 @@ async function startSingleExecution(context: ExecutionContext): Promise<StartExe
     repoContext: context.repoContext,
     model: context.resolvedModel,
   });
+  if (execResult.agentRunId) {
+    await createAgentRunRecord({
+      taskId: context.task.id,
+      agentRunId: execResult.agentRunId,
+      sessionId: execResult.sessionId,
+      agentType: context.executionAgent,
+      status: execResult.ok ? "running" : "failed",
+      model: context.resolvedModel,
+      error: execResult.ok ? undefined : execResult.error,
+      startedAt: new Date().toISOString(),
+      finishedAt: execResult.ok ? undefined : new Date().toISOString(),
+    });
+  }
   const failure = handleSingleExecutionFailure(context.task.id, execResult);
   if (failure) {
     if (failure.body.code === "MODEL_RUNTIME_ERROR") {
@@ -794,6 +1044,65 @@ taskRoutes.get("/:taskId", async (c) => {
     authorization: authHeader(c),
   });
   return c.json(result.data, result.ok ? 200 : (result.status as 401 | 404 | 502));
+});
+
+taskRoutes.get("/:taskId/workflow", async (c) => {
+  const taskId = c.req.param("taskId");
+  const result = await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}/workflow`, {
+    authorization: authHeader(c),
+  });
+  return c.json(result.data, result.ok ? 200 : (result.status as 401 | 404 | 502));
+});
+
+taskRoutes.get("/:taskId/role-conclusions", async (c) => {
+  const taskId = c.req.param("taskId");
+  const result = await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}/role-conclusions`, {
+    authorization: authHeader(c),
+  });
+  return c.json(result.data, result.ok ? 200 : (result.status as 401 | 404 | 502));
+});
+
+taskRoutes.get("/:taskId/developer-change-requests", async (c) => {
+  const taskId = c.req.param("taskId");
+  const result = await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}/developer-change-requests`, {
+    authorization: authHeader(c),
+  });
+  return c.json(result.data, result.ok ? 200 : (result.status as 401 | 404 | 502));
+});
+
+const updateDeveloperChangeRequestSchema = z.object({
+  requestId: z.string().min(1),
+  status: z.enum(["open", "acknowledged", "in-progress", "resolved", "won't-fix"]),
+  resolutionNote: z.string().optional(),
+});
+
+taskRoutes.patch(
+  "/:taskId/developer-change-requests",
+  zValidator("json", updateDeveloperChangeRequestSchema),
+  async (c) => {
+    const taskId = c.req.param("taskId");
+    const body = c.req.valid("json");
+    const result = await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}/developer-change-requests`, {
+      method: "PATCH",
+      body,
+      authorization: authHeader(c),
+    });
+    return c.json(result.data, result.ok ? 200 : (result.status as 400 | 401 | 404 | 502));
+  },
+);
+
+taskRoutes.get("/:taskId/workflow-view", async (c) => {
+  const taskId = c.req.param("taskId");
+  const authorization = authHeader(c);
+  const taskResult = await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
+    authorization,
+  });
+  if (!taskResult.ok) {
+    return c.json(taskResult.data, taskResult.status as 401 | 404 | 502);
+  }
+
+  const view = await buildTaskWorkflowViewModel(taskId, authorization);
+  return c.json(view);
 });
 
 const updateTaskSchema = z.object({
@@ -950,7 +1259,7 @@ taskRoutes.get("/:taskId/sessions", async (c) => {
   const taskId = c.req.param("taskId");
 
   // Get task to find its sessionId
-  const taskResult = await cpFetch<{ sessionId?: string; title?: string }>(
+  const taskResult = await cpFetch<{ sessionId?: string; title?: string; status?: string }>(
     `/api/tasks/${encodeURIComponent(taskId)}`,
     { authorization: authHeader(c) },
   );
@@ -958,6 +1267,8 @@ taskRoutes.get("/:taskId/sessions", async (c) => {
   if (!taskResult.ok) {
     return c.json({ data: [] });
   }
+
+  const sessionIsActive = taskResult.data?.status === "running";
 
   // List recent sessions from OpenCode and filter by task reference
   const sessResult = await listSessions(50);
@@ -980,7 +1291,7 @@ taskRoutes.get("/:taskId/sessions", async (c) => {
     .map((s) => ({
       id: s.id,
       title: s.title || "",
-      isActive: s.id === taskResult.data?.sessionId,
+      isActive: sessionIsActive && s.id === taskResult.data?.sessionId,
       summary: s.summary || null,
       createdAt: s.time?.created ? new Date(s.time.created).toISOString() : null,
       updatedAt: s.time?.updated ? new Date(s.time.updated).toISOString() : null,
