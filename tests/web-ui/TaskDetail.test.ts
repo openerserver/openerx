@@ -384,6 +384,118 @@ describe("TaskDetail", () => {
     expect(wrapper.text()).toContain("角色实际介入记录");
   });
 
+  it("renders workflow fact sections with involved roles, pending items and governance summary", async () => {
+    apiMocks.getTask.mockResolvedValueOnce(makeTask());
+    apiMocks.getTaskWorkflowView.mockResolvedValueOnce({
+      taskId: "task-1",
+      workflow: {
+        currentStage: "review",
+        status: "waiting-approval",
+        stages: [
+          {
+            id: "stage-review",
+            stageKey: "review",
+            stageLabel: "评审",
+            status: "running",
+            approvalState: "pending",
+            blockingReason: "等待安全负责人审批",
+            primaryRoleLabel: "安全 Agent",
+          },
+        ],
+      },
+      roleConclusions: [
+        {
+          id: "conclusion-1",
+          roleAgentId: "role.security",
+          roleLabel: "安全 Agent",
+          stage: "review",
+          finalDecision: "human-review",
+          aggregateRiskLevel: "high",
+          consensusScore: 0.82,
+          winningRationale: "发现高风险变更，需要人工复核。",
+          mergedFindings: [{ key: "finding-1", title: "存在高危命令执行路径", severity: "high" }],
+          minorityFindings: [],
+          conflicts: [{ type: "severity", severity: "high", summary: "是否允许上线存在争议。" }],
+          approvalRequired: true,
+        },
+      ],
+      developerChangeRequests: [
+        {
+          id: "change-1",
+          sourceRoleAgentId: "role.security",
+          sourceRoleLabel: "安全 Agent",
+          priority: "high",
+          title: "补充输入校验",
+          summary: "需要补上参数白名单校验。",
+          requiredChanges: ["为执行入口增加 allowlist", "补充回归测试"],
+          blocking: true,
+          approvalRequired: false,
+          status: "open",
+        },
+        {
+          id: "change-2",
+          sourceRoleAgentId: "role.security",
+          sourceRoleLabel: "安全 Agent",
+          priority: "medium",
+          title: "补充审计日志",
+          summary: "记录关键参数变更。",
+          requiredChanges: ["增加审计事件"],
+          blocking: false,
+          approvalRequired: false,
+          status: "resolved",
+        },
+      ],
+    });
+
+    const wrapper = await mountPage();
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("当前阶段");
+    expect(wrapper.text()).toContain("评审");
+    expect(wrapper.text()).toContain("已介入角色列表");
+    expect(wrapper.text()).toContain("开发者待处理项");
+    expect(wrapper.text()).toContain("审批与人工接管状态");
+    expect(wrapper.text()).toContain("安全 Agent");
+    expect(wrapper.text()).toContain("补充输入校验");
+    expect(wrapper.text()).toContain("需要人工复核");
+    expect(wrapper.text()).toContain("等待安全负责人审批");
+  });
+
+  it("renders human-friendly labels for terminal and keyed workflow stages", async () => {
+    apiMocks.getTask.mockResolvedValueOnce(makeTask());
+    apiMocks.getTaskWorkflowView.mockResolvedValueOnce({
+      taskId: "task-1",
+      workflow: {
+        currentStage: "done",
+        status: "completed",
+        stages: [],
+      },
+      roleConclusions: [
+        {
+          id: "conclusion-1",
+          roleAgentId: "role.qa",
+          roleLabel: "QA Agent",
+          stage: "verify",
+          finalDecision: "allow",
+          aggregateRiskLevel: "low",
+          consensusScore: 0.94,
+          winningRationale: "验证通过。",
+          mergedFindings: [],
+          minorityFindings: [],
+          conflicts: [],
+          approvalRequired: false,
+        },
+      ],
+      developerChangeRequests: [],
+    });
+
+    const wrapper = await mountPage();
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("已完成");
+    expect(wrapper.text()).toContain("集成验证");
+  });
+
   it("subscribes to the task and refreshes when hooks event arrives", async () => {
     const updatedTask = makeTask({
       selectedAgent: "default-executor",

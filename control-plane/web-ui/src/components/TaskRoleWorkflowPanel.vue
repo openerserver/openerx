@@ -11,155 +11,162 @@
     description="暂无角色实际介入记录"
   />
   <div v-else>
-    <a-space size="small" wrap :style="{ marginBottom: '12px' }">
-      <a-tag color="blue">阶段 {{ workflowBannerState.currentStage }}</a-tag>
-      <a-tag :color="stageStatusTone(workflowBannerState.workflowStatus)">{{ workflowStatusLabel }}</a-tag>
-      <a-tag v-if="workflowBannerState.blocked" color="red">已阻断</a-tag>
-      <a-tag v-if="workflowBannerState.approvalPending" color="orange">待审批</a-tag>
-      <a-tag v-if="workflowBannerState.openChangeRequestCount > 0" color="gold">
-        待修正 {{ workflowBannerState.openChangeRequestCount }}
-      </a-tag>
-    </a-space>
+    <a-card size="small" :style="{ marginBottom: '12px' }" data-testid="task-workflow-banner">
+      <a-space size="small" wrap :style="{ marginBottom: workflowBannerState.blockingReason ? '12px' : '0' }">
+        <a-tag color="blue">阶段 {{ currentStageLabel }}</a-tag>
+        <a-tag :color="stageStatusTone(workflowBannerState.workflowStatus)">{{ workflowStatusLabel }}</a-tag>
+        <a-tag v-if="workflowBannerState.blocked" color="red">已阻断</a-tag>
+        <a-tag v-if="workflowBannerState.approvalPending" color="orange">待审批</a-tag>
+        <a-tag v-if="workflowBannerState.openChangeRequestCount > 0" color="gold">
+          待修正 {{ workflowBannerState.openChangeRequestCount }}
+        </a-tag>
+      </a-space>
 
-    <a-alert
-      v-if="workflowBannerState.blockingReason"
-      type="error"
-      show-icon
-      :message="workflowBannerState.blockingReason"
-      :style="{ marginBottom: '12px' }"
-    />
+      <a-alert
+        v-if="workflowBannerState.blockingReason"
+        type="error"
+        show-icon
+        :message="workflowBannerState.blockingReason"
+        :style="{ marginBottom: '12px' }"
+      />
 
-    <a-tabs :active-key="activeTab" size="small" @update:activeKey="activeTab = String($event)">
-      <a-tab-pane key="overview" tab="概览">
-        <a-descriptions :column="1" bordered size="small">
-          <a-descriptions-item label="当前阶段">{{ workflowBannerState.currentStage }}</a-descriptions-item>
-          <a-descriptions-item label="流程状态">{{ workflowStatusLabel }}</a-descriptions-item>
-          <a-descriptions-item label="角色结论数">{{ roleConclusions.length }}</a-descriptions-item>
-          <a-descriptions-item label="待修正数">{{ openDeveloperChangeRequests.length }}</a-descriptions-item>
-        </a-descriptions>
-      </a-tab-pane>
+      <a-descriptions :column="1" bordered size="small">
+        <a-descriptions-item label="当前阶段">{{ currentStageLabel }}</a-descriptions-item>
+        <a-descriptions-item label="流程状态">{{ workflowStatusLabel }}</a-descriptions-item>
+        <a-descriptions-item label="角色结论数">{{ roleConclusions.length }}</a-descriptions-item>
+        <a-descriptions-item label="待处理项">{{ openDeveloperChangeRequests.length }}</a-descriptions-item>
+      </a-descriptions>
+    </a-card>
 
-      <a-tab-pane key="stages" tab="阶段">
-        <a-empty v-if="workflowStages.length === 0" description="暂无阶段数据" />
-        <a-space v-else direction="vertical" :size="8" :style="{ width: '100%' }">
-          <a-card v-for="stage in workflowStages" :key="stage.id" size="small">
-            <a-flex justify="space-between" align="flex-start" :gap="8">
-              <div>
-                <div><strong>{{ stage.stageLabel || stage.stageKey }}</strong></div>
-                <a-typography-text type="secondary">主责 {{ stage.primaryRoleLabel || '未指定' }}</a-typography-text>
-              </div>
-              <a-space size="small" wrap>
-                <a-tag :color="stageStatusTone(stage.status)">{{ stage.status }}</a-tag>
-                <a-tag v-if="stage.approvalState !== 'not-required'" color="orange">{{ stage.approvalState }}</a-tag>
-              </a-space>
-            </a-flex>
-            <div v-if="stage.blockingReason" :style="{ marginTop: '8px', color: '#a61d24' }">{{ stage.blockingReason }}</div>
-          </a-card>
-        </a-space>
-      </a-tab-pane>
-
-      <a-tab-pane key="reviews" tab="角色评审">
-        <a-empty v-if="roleConclusions.length === 0" description="暂无角色结论" />
-        <a-space v-else direction="vertical" :size="8" :style="{ width: '100%' }">
-          <a-card v-for="item in roleConclusions" :key="item.id" size="small">
-            <a-flex justify="space-between" align="flex-start" :gap="8">
-              <div>
-                <div><strong>{{ item.roleLabel }}</strong></div>
-                <a-typography-text type="secondary">阶段 {{ item.stage }}</a-typography-text>
-              </div>
-              <a-space size="small" wrap>
-                <a-tag :color="roleDecisionColor(item.finalDecision)">{{ item.finalDecision }}</a-tag>
-                <a-tag :color="riskColor(item.aggregateRiskLevel)">{{ item.aggregateRiskLevel }}</a-tag>
-                <a-tag v-if="item.approvalRequired" color="orange">需审批</a-tag>
-              </a-space>
-            </a-flex>
-            <div :style="{ marginTop: '8px' }">{{ item.winningRationale || '暂无聚合说明' }}</div>
-            <div :style="{ marginTop: '8px' }">
-              <a-button type="link" size="small" @click="toggleRoleReviewExpanded(item.id)">
-                {{ isRoleReviewExpanded(item.id) ? '收起详情' : '展开详情' }}
-              </a-button>
+    <a-card size="small" title="已介入角色列表" :style="{ marginBottom: '12px' }" data-testid="task-workflow-involved-roles">
+      <a-empty v-if="roleConclusions.length === 0" description="暂无已介入角色" />
+      <a-space v-else direction="vertical" :size="8" :style="{ width: '100%' }">
+        <a-card v-for="item in roleConclusions" :key="item.id" size="small">
+          <a-flex justify="space-between" align="flex-start" :gap="8">
+            <div>
+              <div><strong>{{ item.roleLabel }}</strong></div>
+              <a-typography-text type="secondary">阶段 {{ formatStageLabel(item.stage) }}</a-typography-text>
             </div>
-            <div v-if="isRoleReviewExpanded(item.id)" :style="{ marginTop: '8px' }">
-              <div v-if="item.mergedFindings.length > 0">
-                <a-typography-text strong>主要发现</a-typography-text>
-                <ul :style="{ paddingLeft: '18px', margin: '6px 0' }">
-                  <li v-for="finding in item.mergedFindings" :key="finding.key">{{ finding.title }}</li>
-                </ul>
-              </div>
-              <div v-if="item.minorityFindings.length > 0">
-                <a-typography-text strong>少数派意见</a-typography-text>
-                <ul :style="{ paddingLeft: '18px', margin: '6px 0' }">
-                  <li v-for="finding in item.minorityFindings" :key="finding.key">{{ finding.title }}</li>
-                </ul>
-              </div>
+            <a-space size="small" wrap>
+              <a-tag :color="roleDecisionColor(item.finalDecision)">{{ roleDecisionLabel(item.finalDecision) }}</a-tag>
+              <a-tag :color="riskColor(item.aggregateRiskLevel)">{{ item.aggregateRiskLevel }}</a-tag>
+              <a-tag v-if="item.approvalRequired" color="orange">需审批</a-tag>
+              <a-tag v-if="item.finalDecision === 'human-review'" color="volcano">人工复核</a-tag>
+            </a-space>
+          </a-flex>
+          <div :style="{ marginTop: '8px' }">{{ item.winningRationale || '暂无聚合说明' }}</div>
+          <div :style="{ marginTop: '8px' }">
+            <a-button type="link" size="small" @click="toggleRoleReviewExpanded(item.id)">
+              {{ isRoleReviewExpanded(item.id) ? '收起详情' : '展开详情' }}
+            </a-button>
+          </div>
+          <div v-if="isRoleReviewExpanded(item.id)" :style="{ marginTop: '8px' }">
+            <div v-if="item.mergedFindings.length > 0">
+              <a-typography-text strong>主要发现</a-typography-text>
+              <ul :style="{ paddingLeft: '18px', margin: '6px 0' }">
+                <li v-for="finding in item.mergedFindings" :key="finding.key">{{ finding.title }}</li>
+              </ul>
             </div>
-          </a-card>
-        </a-space>
-      </a-tab-pane>
+            <div v-if="item.minorityFindings.length > 0">
+              <a-typography-text strong>少数派意见</a-typography-text>
+              <ul :style="{ paddingLeft: '18px', margin: '6px 0' }">
+                <li v-for="finding in item.minorityFindings" :key="finding.key">{{ finding.title }}</li>
+              </ul>
+            </div>
+          </div>
+        </a-card>
+      </a-space>
+    </a-card>
 
-      <a-tab-pane key="conflicts" tab="冲突">
-        <a-empty v-if="roleConflictItems.length === 0" description="暂无冲突" />
-        <a-list v-else size="small" :data-source="roleConflictItems">
+    <a-card size="small" title="开发者待处理项" :style="{ marginBottom: '12px' }" data-testid="task-workflow-change-requests">
+      <a-empty v-if="openDeveloperChangeRequests.length === 0" description="暂无待处理项" />
+      <a-space v-else direction="vertical" :size="8" :style="{ width: '100%' }">
+        <a-card v-for="item in openDeveloperChangeRequests" :key="item.id" size="small">
+          <a-flex justify="space-between" align="flex-start" :gap="8">
+            <div>
+              <div><strong>{{ item.title }}</strong></div>
+              <a-typography-text type="secondary">来源 {{ item.sourceRoleLabel }}</a-typography-text>
+            </div>
+            <a-space size="small" wrap>
+              <a-tag :color="riskColor(item.priority)">{{ item.priority }}</a-tag>
+              <a-tag :color="item.blocking ? 'red' : 'default'">{{ item.blocking ? '阻断' : '非阻断' }}</a-tag>
+              <a-tag :color="item.approvalRequired ? 'orange' : 'default'">{{ item.approvalRequired ? '需审批' : changeRequestStatusLabel(item.status) }}</a-tag>
+            </a-space>
+          </a-flex>
+          <div :style="{ marginTop: '8px' }">{{ item.summary }}</div>
+          <div :style="{ marginTop: '8px' }">
+            <a-button type="link" size="small" @click="toggleChangeRequestExpanded(item.id)">
+              {{ isChangeRequestExpanded(item.id) ? '收起详情' : '展开详情' }}
+            </a-button>
+          </div>
+          <div v-if="isChangeRequestExpanded(item.id)" :style="{ marginTop: '8px' }">
+            <ul :style="{ paddingLeft: '18px', margin: '6px 0' }">
+              <li v-for="change in item.requiredChanges" :key="change">{{ change }}</li>
+            </ul>
+          </div>
+          <a-space size="small" wrap>
+            <a-button
+              v-if="item.status === 'open'"
+              size="small"
+              :loading="isUpdatingChangeRequest(item.id)"
+              @click="emitRequestStatusChange(item.id, 'acknowledged')"
+            >标记已确认</a-button>
+            <a-button
+              v-if="item.status !== 'resolved'"
+              size="small"
+              type="primary"
+              :loading="isUpdatingChangeRequest(item.id)"
+              @click="emitRequestStatusChange(item.id, 'resolved')"
+            >标记已解决</a-button>
+          </a-space>
+        </a-card>
+      </a-space>
+    </a-card>
+
+    <a-card size="small" title="审批与人工接管状态" data-testid="task-workflow-governance-status">
+      <a-descriptions :column="1" bordered size="small">
+        <a-descriptions-item label="待审批阶段数">{{ approvalPendingStages.length }}</a-descriptions-item>
+        <a-descriptions-item label="需审批角色数">{{ approvalRequiredConclusions.length }}</a-descriptions-item>
+        <a-descriptions-item label="人工介入状态">{{ manualInterventionLabel }}</a-descriptions-item>
+        <a-descriptions-item label="已解决修正项">{{ resolvedDeveloperChangeRequests.length }}</a-descriptions-item>
+      </a-descriptions>
+
+      <div v-if="approvalPendingStages.length > 0" :style="{ marginTop: '12px' }">
+        <a-typography-text strong>待审批阶段</a-typography-text>
+        <ul :style="{ paddingLeft: '18px', margin: '6px 0' }">
+          <li v-for="stage in approvalPendingStages" :key="stage.id || stage.stageKey">
+            {{ stage.stageLabel || stage.stageKey }}
+          </li>
+        </ul>
+      </div>
+
+      <div v-if="manualReviewConclusions.length > 0" :style="{ marginTop: '12px' }">
+        <a-typography-text strong>待人工复核角色</a-typography-text>
+        <ul :style="{ paddingLeft: '18px', margin: '6px 0' }">
+          <li v-for="item in manualReviewConclusions" :key="item.id">
+            {{ item.roleLabel }} · {{ formatStageLabel(item.stage) }}
+          </li>
+        </ul>
+      </div>
+
+      <div v-if="roleConflictItems.length > 0" :style="{ marginTop: '12px' }">
+        <a-typography-text strong>冲突摘要</a-typography-text>
+        <a-list size="small" :data-source="roleConflictItems">
           <template #renderItem="{ item }">
             <a-list-item>
               <a-space direction="vertical" :size="2">
                 <a-space size="small" wrap>
                   <strong>{{ item.roleLabel }}</strong>
                   <a-tag :color="riskColor(item.severity)">{{ item.severity }}</a-tag>
-                  <a-tag :color="roleDecisionColor(item.finalDecision)">{{ item.finalDecision }}</a-tag>
+                  <a-tag :color="roleDecisionColor(item.finalDecision)">{{ roleDecisionLabel(item.finalDecision) }}</a-tag>
                 </a-space>
                 <a-typography-text type="secondary">{{ item.summary }}</a-typography-text>
               </a-space>
             </a-list-item>
           </template>
         </a-list>
-      </a-tab-pane>
-
-      <a-tab-pane key="change-requests" tab="修正请求">
-        <a-empty v-if="developerChangeRequests.length === 0" description="暂无修正请求" />
-        <a-space v-else direction="vertical" :size="8" :style="{ width: '100%' }">
-          <a-card v-for="item in developerChangeRequests" :key="item.id" size="small">
-            <a-flex justify="space-between" align="flex-start" :gap="8">
-              <div>
-                <div><strong>{{ item.title }}</strong></div>
-                <a-typography-text type="secondary">来源 {{ item.sourceRoleLabel }}</a-typography-text>
-              </div>
-              <a-space size="small" wrap>
-                <a-tag :color="riskColor(item.priority)">{{ item.priority }}</a-tag>
-                <a-tag :color="item.blocking ? 'red' : 'default'">{{ item.blocking ? '阻断' : '非阻断' }}</a-tag>
-                <a-tag :color="item.approvalRequired ? 'orange' : 'default'">{{ item.approvalRequired ? '需审批' : item.status }}</a-tag>
-              </a-space>
-            </a-flex>
-            <div :style="{ marginTop: '8px' }">{{ item.summary }}</div>
-            <div :style="{ marginTop: '8px' }">
-              <a-button type="link" size="small" @click="toggleChangeRequestExpanded(item.id)">
-                {{ isChangeRequestExpanded(item.id) ? '收起详情' : '展开详情' }}
-              </a-button>
-            </div>
-            <div v-if="isChangeRequestExpanded(item.id)" :style="{ marginTop: '8px' }">
-              <ul :style="{ paddingLeft: '18px', margin: '6px 0' }">
-                <li v-for="change in item.requiredChanges" :key="change">{{ change }}</li>
-              </ul>
-            </div>
-            <a-space size="small" wrap>
-              <a-button
-                v-if="item.status === 'open'"
-                size="small"
-                :loading="isUpdatingChangeRequest(item.id)"
-                @click="emitRequestStatusChange(item.id, 'acknowledged')"
-              >标记已确认</a-button>
-              <a-button
-                v-if="item.status !== 'resolved'"
-                size="small"
-                type="primary"
-                :loading="isUpdatingChangeRequest(item.id)"
-                @click="emitRequestStatusChange(item.id, 'resolved')"
-              >标记已解决</a-button>
-            </a-space>
-          </a-card>
-        </a-space>
-      </a-tab-pane>
-    </a-tabs>
+      </div>
+    </a-card>
   </div>
 </template>
 
@@ -188,15 +195,26 @@ const emit = defineEmits<{
   (e: "request-status-change", payload: { requestId: string; status: "acknowledged" | "resolved" }): void;
 }>();
 
-const activeTab = ref("overview");
 const expandedRoleReviewIds = ref<string[]>([]);
 const expandedChangeRequestIds = ref<string[]>([]);
 
 const openDeveloperChangeRequests = computed(() =>
   props.developerChangeRequests.filter((item) => item.status === "open" || item.status === "in-progress"),
 );
+const resolvedDeveloperChangeRequests = computed(() =>
+  props.developerChangeRequests.filter((item) => item.status === "resolved"),
+);
 const blockingRoleConclusions = computed(() =>
   props.roleConclusions.filter((item) => item.finalDecision === "block" || item.finalDecision === "human-review"),
+);
+const manualReviewConclusions = computed(() =>
+  props.roleConclusions.filter((item) => item.finalDecision === "human-review"),
+);
+const approvalRequiredConclusions = computed(() =>
+  props.roleConclusions.filter((item) => item.approvalRequired),
+);
+const approvalPendingStages = computed(() =>
+  props.workflowStages.filter((stage) => stage.approvalState === "pending"),
 );
 const roleConflictItems = computed(() =>
   props.roleConclusions.flatMap((item) =>
@@ -217,6 +235,27 @@ const workflowBannerState = computed(() => ({
   openChangeRequestCount: openDeveloperChangeRequests.value.length,
   blockingReason: props.workflowStages.find((stage) => stage.blockingReason)?.blockingReason,
 }));
+
+const stageLabelLookup = computed(() =>
+  new Map(
+    props.workflowStages.map((stage) => [stage.stageKey, stage.stageLabel || fallbackStageLabel(stage.stageKey)]),
+  ),
+);
+
+const currentStageLabel = computed(() => formatStageLabel(workflowBannerState.value.currentStage));
+
+const manualInterventionLabel = computed(() => {
+  if (manualReviewConclusions.value.length > 0) {
+    return "需要人工复核";
+  }
+  if (workflowBannerState.value.blocked) {
+    return "当前阻断，待人工处理";
+  }
+  if (approvalPendingStages.value.length > 0) {
+    return "等待审批结果";
+  }
+  return "当前无需人工接管";
+});
 
 const workflowStatusLabel = computed(() => {
   switch (workflowBannerState.value.workflowStatus) {
@@ -263,6 +302,38 @@ function roleDecisionColor(decision: string) {
   }
 }
 
+function roleDecisionLabel(decision: string) {
+  switch (decision) {
+    case "block":
+      return "阻断";
+    case "human-review":
+      return "人工复核";
+    case "needs-approval":
+      return "待审批";
+    case "notify-developer":
+      return "通知开发者";
+    case "allow":
+      return "放行";
+    default:
+      return decision;
+  }
+}
+
+function changeRequestStatusLabel(status: string) {
+  switch (status) {
+    case "open":
+      return "待处理";
+    case "in-progress":
+      return "处理中";
+    case "acknowledged":
+      return "已确认";
+    case "resolved":
+      return "已解决";
+    default:
+      return status;
+  }
+}
+
 function stageStatusTone(status: string) {
   switch (status) {
     case "completed":
@@ -277,6 +348,49 @@ function stageStatusTone(status: string) {
       return "volcano";
     default:
       return "default";
+  }
+}
+
+function formatStageLabel(stageKey: string | null | undefined) {
+  if (!stageKey) {
+    return "未开始";
+  }
+
+  return stageLabelLookup.value.get(stageKey) || fallbackStageLabel(stageKey);
+}
+
+function fallbackStageLabel(stageKey: string) {
+  switch (stageKey) {
+    case "intake":
+      return "需求进入";
+    case "clarify":
+      return "需求澄清";
+    case "design":
+      return "方案设计";
+    case "plan":
+      return "任务拆解";
+    case "implement":
+      return "实现开发";
+    case "review":
+      return "评审";
+    case "verify":
+      return "集成验证";
+    case "fix":
+      return "修复处理";
+    case "release":
+      return "发布执行";
+    case "post-release":
+      return "发布观察";
+    case "retrospective":
+      return "复盘沉淀";
+    case "done":
+      return "已完成";
+    case "cancelled":
+      return "已取消";
+    case "unknown":
+      return "未知阶段";
+    default:
+      return stageKey;
   }
 }
 

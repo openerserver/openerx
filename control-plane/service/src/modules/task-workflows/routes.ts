@@ -6,6 +6,7 @@ import { db } from "../../db";
 import { taskStageRuns, taskWorkflowRuns, workflowTemplateStages } from "../../db/schema";
 import { type AppEnv, authMiddleware } from "../../middleware/auth";
 import { requireRole } from "../../middleware/rbac";
+import { ensureLegacyRoleWorkflowMigrated } from "./legacy-role-workflow-storage";
 
 export const taskWorkflowRoutes = new Hono<AppEnv>();
 
@@ -35,6 +36,10 @@ function getTaskId(c: { req: { param: (name: string) => string } }) {
 
 taskWorkflowRoutes.get("/", async (c) => {
   const taskId = getTaskId(c);
+  const task = await ensureLegacyRoleWorkflowMigrated(taskId);
+  if (!task) {
+    return c.json({ error: "Task not found" }, 404);
+  }
   const workflowRun = await db.query.taskWorkflowRuns.findFirst({ where: eq(taskWorkflowRuns.taskId, taskId) });
 
   if (!workflowRun) {
@@ -98,6 +103,8 @@ taskWorkflowRoutes.post("/initialize", zValidator("json", initializeWorkflowSche
 taskWorkflowRoutes.post("/advance", zValidator("json", advanceWorkflowSchema), async (c) => {
   const taskId = getTaskId(c);
   const body = c.req.valid("json");
+  const task = await ensureLegacyRoleWorkflowMigrated(taskId);
+  if (!task) return c.json({ error: "Task not found" }, 404);
   const workflowRun = await db.query.taskWorkflowRuns.findFirst({ where: eq(taskWorkflowRuns.taskId, taskId) });
   if (!workflowRun) return c.json({ error: "Workflow run not found" }, 404);
 
@@ -142,6 +149,8 @@ taskWorkflowRoutes.post("/advance", zValidator("json", advanceWorkflowSchema), a
 taskWorkflowRoutes.post("/retry-stage", zValidator("json", retryStageSchema), async (c) => {
   const taskId = getTaskId(c);
   const body = c.req.valid("json");
+  const task = await ensureLegacyRoleWorkflowMigrated(taskId);
+  if (!task) return c.json({ error: "Task not found" }, 404);
   const workflowRun = await db.query.taskWorkflowRuns.findFirst({ where: eq(taskWorkflowRuns.taskId, taskId) });
   if (!workflowRun) return c.json({ error: "Workflow run not found" }, 404);
 

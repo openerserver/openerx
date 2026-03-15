@@ -1,8 +1,18 @@
 import { eq } from "drizzle-orm";
 import { db } from "../../db";
-import { developerChangeRequests, roleAggregateConclusions, tasks } from "../../db/schema";
+import {
+  developerChangeRequests,
+  roleAggregateConclusions,
+  taskStageRuns,
+  taskWorkflowRuns,
+  tasks,
+  workflowTemplateStages,
+} from "../../db/schema";
 
 type JsonRecord = Record<string, unknown>;
+type WorkflowStatus = typeof taskWorkflowRuns.$inferSelect.status | typeof tasks.$inferSelect.status;
+
+const legacyWorkflowMigrationInflight = new Map<string, Promise<typeof tasks.$inferSelect | null>>();
 
 function parseTaskStrategy(raw: string | null | undefined) {
   if (!raw) {
@@ -28,7 +38,216 @@ function serializeTaskStrategy(strategy: JsonRecord) {
   return Object.keys(strategy).length > 0 ? JSON.stringify(strategy) : null;
 }
 
-export async function ensureLegacyRoleWorkflowMigrated(taskId: string) {
+function parseExecutionPlan(raw: string | null | undefined) {
+  if (!raw) {
+    return {} as JsonRecord;
+  }
+
+  try {
+    return JSON.parse(raw) as JsonRecord;
+  } catch {
+    return {} as JsonRecord;
+  }
+}
+
+function readString(value: unknown) {
+  return typeof value === "string" && value ? value : null;
+}
+
+function inferWorkflowTemplateId(task: typeof tasks.$inferSelect, strategy: JsonRecord, executionPlan: JsonRecord) {
+  return (
+    readString(strategy.selectedTemplateId)
+    || readString(executionPlan.templateId)
+    || "legacy-unspecified"
+  );
+}
+
+function inferLegacyStage(strategy: JsonRecord, legacyRoleConclusions: unknown[]) {
+  const strategyStage = readString(strategy.currentStage);
+  if (strategyStage) {
+    return strategyStage;
+  }
+
+  const lastConclusion = [...legacyRoleConclusions].reverse().find((item) => {
+    const entry = isNonEmptyObject(item) ? item : null;
+    return Boolean(entry && typeof entry.stage === "string" && entry.stage);
+  });
+  if (isNonEmptyObject(lastConclusion) && typeof lastConclusion.stage === "string") {
+    return lastConclusion.stage;
+  }
+
+  return null;
+}
+
+function inferWorkflowStatus(taskStatus: typeof tasks.$inferSelect.status) {
+  switch (taskStatus) {
+    case "running":
+      return "running" as const;
+    case "paused":
+      return "blocked" as const;
+    case "completed":
+      return "completed" as const;
+    case "failed":
+      return "failed" as const;
+    case "cancelled":
+      return "cancelled" as const;
+    default:
+      return "pending" as const;
+  }
+}
+
+function inferCurrentStage(taskStatus: typeof tasks.$inferSelect.status, legacyStage: string | null) {
+  switch (taskStatus) {
+    case "completed":
+      return "done";
+    case "cancelled":
+      return "cancelled";
+    case "running":
+    case "paused":
+    case "failed":
+      return legacyStage ?? "unknown";
+    default:
+      return legacyStage ?? "intake";
+  }
+}
+
+function buildStageRunStatus(
+  taskStatus: WorkflowStatus,
+  stageKey: string,
+  currentStage: string,
+  index: number,
+  currentIndex: number,
+) {
+  if (taskStatus === "completed") {
+    return "completed" as const;
+  }
+
+  if (index < currentIndex) {
+    return "completed" as const;
+  }
+
+  if (stageKey !== currentStage) {
+    return "pending" as const;
+  }
+
+  switch (taskStatus) {
+    case "running":
+      return "running" as const;
+    case "paused":
+    case "blocked":
+      return "blocked" as const;
+    case "waiting-approval":
+      return "waiting-approval" as const;
+    case "failed":
+      return "failed" as const;
+    case "cancelled":
+      return "cancelled" as const;
+    default:
+      return "pending" as const;
+  }
+}
+
+async function ensureWorkflowStageRunsMigrated(
+  workflowRun: typeof taskWorkflowRuns.$inferSelect,
+  task: typeof tasks.$inferSelect,
+  legacyStage: string | null,
+) {
+  const existingStageRun = await db.query.taskStageRuns.findFirst({
+    where: eq(taskStageRuns.workflowRunId, workflowRun.id),
+  });
+  if (existingStageRun) {
+    return;
+  }
+
+  const templateStages = await db
+    .select()
+    .from(workflowTemplateStages)
+    .where(eq(workflowTemplateStages.templateId, workflowRun.templateId));
+
+  if (templateStages.length === 0) {
+    return;
+  }
+
+  const orderedStages = [...templateStages].sort((left, right) => left.orderIndex - right.orderIndex);
+  const fallbackStageKey = orderedStages[0]?.stageKey ?? workflowRun.currentStage;
+  const activeStageKey = orderedStages.some((stage) => stage.stageKey === workflowRun.currentStage)
+    ? workflowRun.currentStage
+    : (workflowRun.status === "completed" ? orderedStages[orderedStages.length - 1]?.stageKey : legacyStage) ?? fallbackStageKey;
+  const activeIndex = Math.max(0, orderedStages.findIndex((stage) => stage.stageKey === activeStageKey));
+  const now = new Date().toISOString();
+  const startedAt = workflowRun.startedAt ?? task.startedAt ?? task.createdAt ?? now;
+  const finishedAt = workflowRun.finishedAt
+    ?? (workflowRun.status === "completed" || workflowRun.status === "failed" || workflowRun.status === "cancelled" ? now : null);
+
+  const stagePayloads: Array<typeof taskStageRuns.$inferInsert> = orderedStages.map((stage, index) => {
+    const status = buildStageRunStatus(workflowRun.status, stage.stageKey, activeStageKey, index, activeIndex);
+    return {
+      id: crypto.randomUUID(),
+      workflowRunId: workflowRun.id,
+      stageKey: stage.stageKey,
+      status,
+      primaryRoleAgentId: stage.primaryRoleAgentId,
+      participantRoleAgentIdsJson: stage.participantRoleAgentIdsJson,
+      startedAt: status === "pending" ? null : startedAt,
+      finishedAt:
+        status === "completed" || status === "failed" || status === "cancelled"
+          ? finishedAt ?? now
+          : null,
+      blockingReason: status === "blocked" ? "历史任务暂停，待人工恢复" : null,
+      approvalState: status === "waiting-approval" ? "pending" : "not-required",
+      artifactsSummaryJson: null,
+      createdAt: task.createdAt ?? now,
+      updatedAt: now,
+    };
+  });
+
+  await db.insert(taskStageRuns).values(stagePayloads);
+}
+
+async function ensureLegacyTaskWorkflowRunMigrated(
+  task: typeof tasks.$inferSelect,
+  strategy: JsonRecord,
+  legacyRoleConclusions: unknown[],
+) {
+  const existingWorkflowRun = await db.query.taskWorkflowRuns.findFirst({
+    where: eq(taskWorkflowRuns.taskId, task.id),
+  });
+  if (existingWorkflowRun) {
+    await ensureWorkflowStageRunsMigrated(existingWorkflowRun, task, inferLegacyStage(strategy, legacyRoleConclusions));
+    return existingWorkflowRun;
+  }
+
+  const executionPlan = parseExecutionPlan(task.executionPlan);
+  const templateId = inferWorkflowTemplateId(task, strategy, executionPlan);
+  const legacyStage = inferLegacyStage(strategy, legacyRoleConclusions);
+  const workflowStatus = inferWorkflowStatus(task.status);
+  const currentStage = inferCurrentStage(task.status, legacyStage);
+  const now = new Date().toISOString();
+  const startedAt = task.startedAt ?? task.createdAt ?? now;
+  const finishedAt = task.finishedAt ?? (task.status === "completed" || task.status === "failed" || task.status === "cancelled" ? now : null);
+  const workflowRunId = crypto.randomUUID();
+
+  await db.insert(taskWorkflowRuns).values({
+    id: workflowRunId,
+    taskId: task.id,
+    templateId,
+    currentStage,
+    status: workflowStatus,
+    startedAt,
+    finishedAt,
+    createdAt: task.createdAt ?? now,
+    updatedAt: now,
+  });
+
+  const createdWorkflowRun = await db.query.taskWorkflowRuns.findFirst({ where: eq(taskWorkflowRuns.id, workflowRunId) });
+  if (createdWorkflowRun) {
+    await ensureWorkflowStageRunsMigrated(createdWorkflowRun, task, legacyStage);
+  }
+
+  return createdWorkflowRun;
+}
+
+async function ensureLegacyRoleWorkflowMigratedInternal(taskId: string) {
   const task = await db.query.tasks.findFirst({ where: eq(tasks.id, taskId) });
   if (!task) {
     return null;
@@ -37,6 +256,8 @@ export async function ensureLegacyRoleWorkflowMigrated(taskId: string) {
   const strategy = parseTaskStrategy(task.strategy);
   const legacyRoleConclusions = normalizeArray(strategy.roleAggregateConclusions);
   const legacyChangeRequests = normalizeArray(strategy.developerChangeRequests);
+
+  await ensureLegacyTaskWorkflowRunMigrated(task, strategy, legacyRoleConclusions);
 
   const existingRoleConclusions = await db
     .select({ id: roleAggregateConclusions.id })
@@ -164,4 +385,17 @@ export async function ensureLegacyRoleWorkflowMigrated(taskId: string) {
   }
 
   return task;
+}
+
+export async function ensureLegacyRoleWorkflowMigrated(taskId: string) {
+  const existingPromise = legacyWorkflowMigrationInflight.get(taskId);
+  if (existingPromise) {
+    return existingPromise;
+  }
+
+  const promise = ensureLegacyRoleWorkflowMigratedInternal(taskId).finally(() => {
+    legacyWorkflowMigrationInflight.delete(taskId);
+  });
+  legacyWorkflowMigrationInflight.set(taskId, promise);
+  return promise;
 }

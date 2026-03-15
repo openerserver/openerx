@@ -1,6 +1,8 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { ensureLegacyRoleWorkflowMigrated } from "../../control-plane/service/src/modules/task-workflows/legacy-role-workflow-storage";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -10,6 +12,7 @@ const USERNAME = process.env.TEST_USERNAME || "admin";
 const PASSWORD = process.env.TEST_PASSWORD || "admin123!";
 const DB_PATH =
   process.env.TEST_DB_PATH || resolve(__dirname, "../../control-plane/service/data/openerx.db");
+const testDatabase = new Database(DB_PATH, { create: true });
 
 async function request<T>(
   path: string,
@@ -52,6 +55,7 @@ async function login(): Promise<string> {
 }
 
 const createdTaskIds: string[] = [];
+const createdWorkflowTemplateIds: string[] = [];
 
 async function createTask(token: string, title: string) {
   const { data, status } = await authedRequest<{ id: string }>(token, "/api/tasks", {
@@ -67,25 +71,87 @@ async function createTask(token: string, title: string) {
   return data.id;
 }
 
+function createWorkflowTemplateFixture(templateId: string, stageKeys: string[]) {
+  const now = new Date().toISOString();
+  createdWorkflowTemplateIds.push(templateId);
+
+  testDatabase
+    .query(
+      `INSERT INTO workflow_templates (
+        id, name, enabled, selectable_by_projects, stage_order_json, version, created_at, updated_at
+      ) VALUES (?1, ?2, 1, 1, ?3, 1, ?4, ?5)`,
+    )
+    .run(templateId, `Test Template ${templateId}`, JSON.stringify(stageKeys), now, now);
+
+  const insertStage = testDatabase.query(
+    `INSERT INTO workflow_template_stages (
+      id, template_id, stage_key, name, enabled, mode, primary_role_agent_id, participant_role_agent_ids_json, order_index
+    ) VALUES (?1, ?2, ?3, ?4, 1, 'single', ?5, ?6, ?7)`,
+  );
+
+  stageKeys.forEach((stageKey, index) => {
+    insertStage.run(
+      `${templateId}-${stageKey}`,
+      templateId,
+      stageKey,
+      stageKey,
+      `role.${stageKey}`,
+      JSON.stringify([]),
+      index,
+    );
+  });
+}
+
+function countWorkflowRuns(taskId: string) {
+  const row = testDatabase
+    .query("SELECT COUNT(*) AS count FROM task_workflow_runs WHERE task_id = ?1")
+    .get(taskId) as { count: number | bigint };
+  return Number(row.count ?? 0);
+}
+
+function countStageRunsForTask(taskId: string) {
+  const row = testDatabase
+    .query(
+      `SELECT COUNT(*) AS count
+       FROM task_stage_runs
+       WHERE workflow_run_id IN (SELECT id FROM task_workflow_runs WHERE task_id = ?1)`,
+    )
+    .get(taskId) as { count: number | bigint };
+  return Number(row.count ?? 0);
+}
+
 afterAll(async () => {
-  if (createdTaskIds.length === 0) {
-    return;
-  }
-
-  const statements = createdTaskIds.flatMap((taskId) => [
-    `DELETE FROM developer_change_requests WHERE task_id='${taskId}';`,
-    `DELETE FROM role_aggregate_conclusions WHERE task_id='${taskId}';`,
-    `DELETE FROM task_sessions WHERE task_id='${taskId}';`,
-    `DELETE FROM audit_events WHERE task_id='${taskId}';`,
-    `DELETE FROM agent_runs WHERE task_id='${taskId}';`,
-    `DELETE FROM tasks WHERE id='${taskId}';`,
-  ]);
-
-  const { execSync } = await import("node:child_process");
   try {
-    execSync(`sqlite3 "${DB_PATH}" "${statements.join(" ")}"`, { timeout: 5000 });
-  } catch {
-    console.warn("Cleanup failed for role-workflow-storage.test.ts");
+    const deleteTaskStageRuns = testDatabase.query(
+      "DELETE FROM task_stage_runs WHERE workflow_run_id IN (SELECT id FROM task_workflow_runs WHERE task_id = ?1)",
+    );
+    const deleteTaskWorkflowRuns = testDatabase.query("DELETE FROM task_workflow_runs WHERE task_id = ?1");
+    const deleteChangeRequests = testDatabase.query("DELETE FROM developer_change_requests WHERE task_id = ?1");
+    const deleteRoleConclusions = testDatabase.query("DELETE FROM role_aggregate_conclusions WHERE task_id = ?1");
+    const deleteTaskSessions = testDatabase.query("DELETE FROM task_sessions WHERE task_id = ?1");
+    const deleteAuditEvents = testDatabase.query("DELETE FROM audit_events WHERE task_id = ?1");
+    const deleteAgentRuns = testDatabase.query("DELETE FROM agent_runs WHERE task_id = ?1");
+    const deleteTasks = testDatabase.query("DELETE FROM tasks WHERE id = ?1");
+    const deleteTemplateStages = testDatabase.query("DELETE FROM workflow_template_stages WHERE template_id = ?1");
+    const deleteTemplates = testDatabase.query("DELETE FROM workflow_templates WHERE id = ?1");
+
+    for (const taskId of createdTaskIds) {
+      deleteTaskStageRuns.run(taskId);
+      deleteTaskWorkflowRuns.run(taskId);
+      deleteChangeRequests.run(taskId);
+      deleteRoleConclusions.run(taskId);
+      deleteTaskSessions.run(taskId);
+      deleteAuditEvents.run(taskId);
+      deleteAgentRuns.run(taskId);
+      deleteTasks.run(taskId);
+    }
+
+    for (const templateId of createdWorkflowTemplateIds) {
+      deleteTemplateStages.run(templateId);
+      deleteTemplates.run(templateId);
+    }
+  } finally {
+    testDatabase.close();
   }
 });
 
@@ -260,5 +326,148 @@ describe("Role workflow storage (service)", () => {
     const parsedStrategy = taskAfterMigration.data.strategy ? JSON.parse(taskAfterMigration.data.strategy) : {};
     expect(parsedStrategy.roleAggregateConclusions).toBeUndefined();
     expect(parsedStrategy.developerChangeRequests).toBeUndefined();
+  });
+
+  test("lazily creates a workflow run for historical tasks when workflow data is missing", async () => {
+    const taskId = await createTask(token, `legacy-task-workflow-${Date.now()}`);
+
+    const patchTask = await authedRequest<Record<string, unknown>>(token, `/api/tasks/${taskId}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        status: "running",
+        strategy: JSON.stringify({
+          selectedTemplateId: "legacy-template-1",
+          roleAggregateConclusions: [
+            {
+              id: "legacy-conclusion-wf-1",
+              roleAgentId: "role.qa",
+              stage: "verify",
+              aggregationStrategy: "merge-summary",
+              status: "aligned",
+              finalDecision: "allow",
+              aggregateRiskLevel: "medium",
+              confidenceScore: 0.8,
+              consensusScore: 0.75,
+              winningRationale: "已进入验证阶段。",
+            },
+          ],
+        }),
+      }),
+    });
+    expect(patchTask.status).toBe(200);
+
+    const workflow = await authedRequest<{
+      data: {
+        workflowRun: { templateId: string; currentStage: string; status: string } | null;
+        stages: Array<Record<string, unknown>>;
+      };
+    }>(token, `/api/tasks/${taskId}/workflow`);
+
+    expect(workflow.status).toBe(200);
+    expect(workflow.data.data.workflowRun).toMatchObject({
+      templateId: "legacy-template-1",
+      currentStage: "verify",
+      status: "running",
+    });
+  });
+
+  test("keeps lazy workflow migration idempotent under concurrent reads", async () => {
+    const taskId = await createTask(token, `legacy-task-workflow-concurrent-${Date.now()}`);
+
+    const patchTask = await authedRequest<Record<string, unknown>>(token, `/api/tasks/${taskId}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        status: "running",
+        strategy: JSON.stringify({
+          selectedTemplateId: "legacy-template-concurrent",
+          roleAggregateConclusions: [
+            {
+              id: "legacy-conclusion-concurrent-1",
+              roleAgentId: "role.qa",
+              stage: "verify",
+              aggregationStrategy: "merge-summary",
+              status: "aligned",
+              finalDecision: "allow",
+              aggregateRiskLevel: "medium",
+              confidenceScore: 0.8,
+              consensusScore: 0.75,
+              winningRationale: "并发读取下也应只生成一条 workflow run。",
+            },
+          ],
+        }),
+      }),
+    });
+    expect(patchTask.status).toBe(200);
+
+    await Promise.all([
+      ensureLegacyRoleWorkflowMigrated(taskId),
+      ensureLegacyRoleWorkflowMigrated(taskId),
+    ]);
+
+    expect(countWorkflowRuns(taskId)).toBe(1);
+  });
+
+  test("backfills missing stage runs when a historical task already has workflow run", async () => {
+    const taskId = await createTask(token, `legacy-task-stage-backfill-${Date.now()}`);
+    const templateId = `legacy-template-backfill-${Date.now()}`;
+    createWorkflowTemplateFixture(templateId, ["design", "verify"]);
+
+    const patchTask = await authedRequest<Record<string, unknown>>(token, `/api/tasks/${taskId}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        status: "running",
+        strategy: JSON.stringify({
+          selectedTemplateId: templateId,
+          currentStage: "verify",
+          roleAggregateConclusions: [
+            {
+              id: "legacy-conclusion-stage-backfill-1",
+              roleAgentId: "role.qa",
+              stage: "verify",
+              aggregationStrategy: "merge-summary",
+              status: "aligned",
+              finalDecision: "allow",
+              aggregateRiskLevel: "medium",
+              confidenceScore: 0.8,
+              consensusScore: 0.75,
+              winningRationale: "已有 workflow run，但缺 stage runs。",
+            },
+          ],
+        }),
+      }),
+    });
+    expect(patchTask.status).toBe(200);
+
+    const now = new Date().toISOString();
+    testDatabase
+      .query(
+        `INSERT INTO task_workflow_runs (
+          id, task_id, template_id, current_stage, status, started_at, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`,
+      )
+      .run(`workflow-run-${taskId}`, taskId, templateId, "verify", "running", now, now, now);
+
+    const workflow = await authedRequest<{
+      data: {
+        workflowRun: { templateId: string; currentStage: string; status: string } | null;
+        stages: Array<{ stageKey: string; status: string }>;
+      };
+    }>(token, `/api/tasks/${taskId}/workflow`);
+
+    expect(workflow.status).toBe(200);
+    expect(workflow.data.data.workflowRun).toMatchObject({
+      templateId,
+      currentStage: "verify",
+      status: "running",
+    });
+    expect(workflow.data.data.stages).toHaveLength(2);
+    expect(countStageRunsForTask(taskId)).toBe(2);
+
+    const retryStage = await authedRequest<{ ok: boolean }>(token, `/api/tasks/${taskId}/workflow/retry-stage`, {
+      method: "POST",
+      body: JSON.stringify({ stageKey: "verify" }),
+    });
+    expect(retryStage.status).toBe(200);
+    expect(retryStage.data.ok).toBe(true);
   });
 });

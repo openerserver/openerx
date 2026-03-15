@@ -487,7 +487,7 @@ function stageLabelFromKey(stageKey: string | null | undefined) {
 async function buildTaskWorkflowViewModel(
   taskId: string,
   authorization: string,
-  options: { projectId?: string | null } = {},
+  options: { projectId?: string | null; taskStatus?: string | null } = {},
 ): Promise<WorkflowViewModel> {
   const [workflowResult, conclusionsResult, requestsResult] = await Promise.all([
     cpFetch<{ data?: { workflowRun?: WorkflowRunPayload | null; stages?: WorkflowStagePayload[] | null } }>(
@@ -516,13 +516,20 @@ async function buildTaskWorkflowViewModel(
     authorization,
     { projectId: options.projectId },
   );
+  const inferredWorkflowStatus = inferWorkflowStatus(workflowRun, stages, options.taskStatus);
+  const inferredCurrentStage = inferWorkflowCurrentStage(
+    workflowRun,
+    stages,
+    inferredWorkflowStatus,
+    options.taskStatus,
+  );
 
   return {
     taskId,
     workflow: {
       templateId: workflowRun?.templateId ?? null,
-      currentStage: workflowRun?.currentStage || "unknown",
-      status: workflowRun?.status || "pending",
+      currentStage: inferredCurrentStage,
+      status: inferredWorkflowStatus,
       stages: stages.map((stage, index) => ({
         id: stage.id || `${taskId}-${stage.stageKey || index}`,
         stageKey: stage.stageKey || `stage-${index + 1}`,
@@ -582,6 +589,82 @@ async function buildTaskWorkflowViewModel(
       status: item.status || "open",
     })),
   };
+}
+
+function inferWorkflowStatus(
+  workflowRun: WorkflowRunPayload | null,
+  stages: WorkflowStagePayload[],
+  taskStatus?: string | null,
+) {
+  if (workflowRun?.status) {
+    return workflowRun.status;
+  }
+
+  if (stages.some((stage) => stage.status === "blocked")) {
+    return "blocked";
+  }
+
+  if (stages.some((stage) => stage.status === "waiting-approval" || stage.approvalState === "pending")) {
+    return "waiting-approval";
+  }
+
+  if (stages.some((stage) => stage.status === "running")) {
+    return "running";
+  }
+
+  switch (taskStatus) {
+    case "running":
+      return "running";
+    case "paused":
+      return "blocked";
+    case "completed":
+      return "completed";
+    case "failed":
+      return "failed";
+    case "cancelled":
+      return "cancelled";
+    default:
+      return "pending";
+  }
+}
+
+function inferWorkflowCurrentStage(
+  workflowRun: WorkflowRunPayload | null,
+  stages: WorkflowStagePayload[],
+  workflowStatus: string,
+  taskStatus?: string | null,
+) {
+  if (workflowRun?.currentStage) {
+    return workflowRun.currentStage;
+  }
+
+  const activeStage = stages.find(
+    (stage) =>
+      Boolean(stage.stageKey)
+      && (stage.status === "running"
+        || stage.status === "blocked"
+        || stage.status === "waiting-approval"
+        || stage.approvalState === "pending"
+        || (workflowStatus === "running" && stage.status === "pending")),
+  );
+  if (activeStage?.stageKey) {
+    return activeStage.stageKey;
+  }
+
+  const completedStage = [...stages].reverse().find((stage) => stage.stageKey && stage.status === "completed");
+  if (completedStage?.stageKey) {
+    return completedStage.stageKey;
+  }
+
+  if (taskStatus === "completed") {
+    return "done";
+  }
+
+  if (taskStatus === "cancelled") {
+    return "cancelled";
+  }
+
+  return "unknown";
 }
 
 async function runPreExecutionHooks(
@@ -715,6 +798,25 @@ function parseMessageTimeValue(message: unknown, key: "created" | "updated") {
   }
 
   return null;
+}
+
+/**
+ * Build a minimal session record from CP data only — no OpenCode calls.
+ * Used when OpenCode is unreachable to avoid cascading timeouts.
+ */
+function buildCpOnlyFallbackSession(
+  taskId: string,
+  task: { sessionId?: string; title?: string; status?: string; createdAt?: string; updatedAt?: string },
+): SessionSummaryRecord | null {
+  if (!task.sessionId) return null;
+  return {
+    id: task.sessionId,
+    title: task.title ? `[Task ${taskId.slice(0, 8)}] ${task.title}` : `[Task ${taskId.slice(0, 8)}] 主会话`,
+    isActive: task.status === "running",
+    summary: null,
+    createdAt: task.createdAt ?? null,
+    updatedAt: task.updatedAt ?? null,
+  };
 }
 
 async function buildFallbackTaskSession(
@@ -1156,15 +1258,19 @@ taskRoutes.patch(
 taskRoutes.get(":taskId/workflow-view", async (c) => {
   const taskId = c.req.param("taskId");
   const authorization = authHeader(c);
-  const taskResult = await cpFetch<{ projectId?: string | null }>(`/api/tasks/${encodeURIComponent(taskId)}`, {
+  const taskResult = await cpFetch<{ projectId?: string | null; status?: string | null }>(
+    `/api/tasks/${encodeURIComponent(taskId)}`,
+    {
     authorization,
-  });
+    },
+  );
   if (!taskResult.ok) {
     return c.json(taskResult.data, taskResult.status as 401 | 404 | 502);
   }
 
   const view = await buildTaskWorkflowViewModel(taskId, authorization, {
     projectId: taskResult.data?.projectId,
+    taskStatus: taskResult.data?.status,
   });
   return c.json(view);
 });
@@ -1302,13 +1408,16 @@ taskRoutes.get("/:taskId/pipeline", async (c) => {
   const requestedSessionId = c.req.query("sessionId");
   const authorization = authHeader(c);
 
-  await syncGraphsForSessionTask(taskId, requestedSessionId).catch(() => {});
+  // syncGraphsForSessionTask already fetches session messages from OpenCode;
+  // capture them so buildRuntimePipeline can reuse without a second call.
+  const syncResult = await syncGraphsForSessionTask(taskId, requestedSessionId).catch(() => ({ synced: 0 }));
   await syncGraphsForTask(taskId).catch(() => {});
 
   const pipeline = await buildRuntimePipeline({
     taskId,
     sessionId: requestedSessionId,
     authorization,
+    prefetchedMessages: (syncResult as { messages?: unknown[] }).messages,
   });
 
   return c.json(pipeline);
@@ -1337,7 +1446,10 @@ taskRoutes.get("/:taskId/sessions", async (c) => {
   // List recent sessions from OpenCode and filter by task reference
   const sessResult = await listSessions(50);
   if (!sessResult.ok || !Array.isArray(sessResult.data)) {
-    const fallback = await buildFallbackTaskSession(taskId, taskResult.data || {});
+    // OpenCode is unreachable — build fallback from CP data only.
+    // Do NOT call getSessionMessages here: it would trigger another
+    // OpenCode timeout and double the response latency.
+    const fallback = buildCpOnlyFallbackSession(taskId, taskResult.data || {});
     return c.json({ data: fallback ? [fallback] : [] });
   }
 
