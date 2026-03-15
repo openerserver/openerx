@@ -245,6 +245,56 @@ describe("Settings – mustChangePassword alert", () => {
   });
 });
 
+describe("Settings – skills grouping", () => {
+  it("groups skills by category and metadata on the skills tab", async () => {
+    routeState.query = { tab: "skills" };
+    apiMocks.getConfigOverview.mockResolvedValueOnce({
+      data: {
+        agents: [],
+        skills: [
+          {
+            dirName: "agent-customization",
+            name: "Agent Customization",
+            description: "Create and maintain instruction files",
+            category: "agent",
+            tags: ["copilot", "workflow"],
+            applyTo: ["**/*.instructions.md"],
+          },
+          {
+            dirName: "postgres-tuning",
+            name: "Postgres Tuning",
+            description: "Database optimization checklist",
+            tags: ["sql", "performance"],
+            applyTo: ["**/*.sql"],
+          },
+          {
+            dirName: "release-runbook",
+            name: "Release Runbook",
+            description: "Deployment and rollback steps",
+            category: "documentation",
+            tags: ["runbook"],
+            applyTo: ["docs/**"],
+          },
+        ],
+        models: {
+          defaults: {},
+          list: [],
+        },
+        mcp: {},
+        plugins: [],
+      },
+    });
+
+    const { wrapper } = await mountSettings({ role: "platform_admin" });
+
+    expect(wrapper.text()).toContain("Skill");
+    expect(wrapper.text()).toContain("AI / Agent (1)");
+    expect(wrapper.text()).toContain("数据 / 数据库 (1)");
+    expect(wrapper.text()).toContain("文档 / 写作 (1)");
+    expect(wrapper.text()).toContain("选择左侧 Skill 查看详情");
+  });
+});
+
 describe("Settings – orchestration hooks UI", () => {
   it("shows lifecycle hooks editor for admins and hides legacy pre/post review cards", async () => {
     apiMocks.getOrchestrationStrategy.mockResolvedValueOnce({

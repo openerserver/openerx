@@ -60,6 +60,25 @@ function getTrimmedString(value: unknown): string | undefined {
   return trimmed || undefined;
 }
 
+function getTrimmedStringArray(value: unknown): string[] | undefined {
+  if (Array.isArray(value)) {
+    const items = value
+      .map((item) => getTrimmedString(item))
+      .filter((item): item is string => Boolean(item));
+    return items.length ? items : undefined;
+  }
+
+  if (typeof value === "string") {
+    const items = value
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+    return items.length ? items : undefined;
+  }
+
+  return undefined;
+}
+
 function getConfiguredDefaultExecutionModel(config: Record<string, unknown>): string | null {
   const defaults = (config.agents as Record<string, unknown> | undefined)?.defaults as
     | Record<string, unknown>
@@ -375,6 +394,9 @@ configRoutes.get("/skills", (c) => {
         dirName: dir,
         name: (frontmatter.name as string) || dir,
         description: (frontmatter.description as string) || "",
+        category: getTrimmedString(frontmatter.category),
+        tags: getTrimmedStringArray(frontmatter.tags),
+        applyTo: getTrimmedStringArray(frontmatter.applyTo),
         permissions: frontmatter.permissions || {},
       };
     })
@@ -783,6 +805,9 @@ configRoutes.get("/overview", (c) => {
         dirName: dir,
         name: (frontmatter.name as string) || dir,
         description: (frontmatter.description as string) || "",
+        category: getTrimmedString(frontmatter.category),
+        tags: getTrimmedStringArray(frontmatter.tags),
+        applyTo: getTrimmedStringArray(frontmatter.applyTo),
       };
     })
     .filter(Boolean);

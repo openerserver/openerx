@@ -1536,6 +1536,9 @@ export interface SkillSummary {
   dirName: string;
   name: string;
   description: string;
+  category?: string;
+  tags?: string[];
+  applyTo?: string[];
   permissions?: Record<string, unknown>;
 }
 

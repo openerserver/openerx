@@ -455,10 +455,22 @@
       <a-tab-pane v-if="isSystemAdmin" key="skills" tab="Skill">
         <a-row :gutter="16">
           <a-col :span="6">
-            <a-menu :selectedKeys="skillSelected" mode="inline" @click="onSkillSelect">
-              <a-menu-item v-for="s in skillsList" :key="s.dirName || s.name">
-                {{ s.name }}
-              </a-menu-item>
+            <a-menu
+              :selectedKeys="skillSelected"
+              :openKeys="skillOpenKeys"
+              mode="inline"
+              @click="onSkillSelect"
+              @openChange="onSkillOpenChange"
+            >
+              <a-sub-menu
+                v-for="group in groupedSkillsList"
+                :key="group.key"
+              >
+                <template #title>{{ `${group.label} (${group.items.length})` }}</template>
+                <a-menu-item v-for="s in group.items" :key="s.dirName || s.name">
+                  {{ s.name }}
+                </a-menu-item>
+              </a-sub-menu>
             </a-menu>
           </a-col>
           <a-col :span="18">
@@ -2170,14 +2182,224 @@ async function onAgentSelect({ key }: { key: string | number }) {
 // ── Skills ─────────────────────────────────────────────────────────
 const skillsList = ref<SkillSummary[]>([]);
 const skillSelected = ref<string[]>([]);
+const skillOpenKeys = ref<string[]>([]);
 const skillDetail = ref<{ frontmatter: Record<string, unknown>; body: string } | null>(null);
 const skillLoading = ref(false);
+
+interface SkillGroupDefinition {
+  key: string;
+  label: string;
+  priority: number;
+  keywords: string[];
+}
+
+interface SkillGroupView {
+  key: string;
+  label: string;
+  priority: number;
+  items: SkillSummary[];
+}
+
+const skillGroupDefinitions: SkillGroupDefinition[] = [
+  {
+    key: "ai-agent",
+    label: "AI / Agent",
+    priority: 10,
+    keywords: ["agentic", "copilot", "prompt", "context", "memory", "mcp"],
+  },
+  {
+    key: "search-research",
+    label: "搜索 / 研究",
+    priority: 20,
+    keywords: ["search", "research", "knowledge", "obsidian"],
+  },
+  {
+    key: "testing-quality",
+    label: "测试 / 质量",
+    priority: 30,
+    keywords: ["test", "testing", "playwright", "cypress", "vitest", "jest", "review", "lint", "quality"],
+  },
+  {
+    key: "security",
+    label: "安全",
+    priority: 40,
+    keywords: ["security", "auth", "audit", "owasp", "threat", "stride", "vulnerability", "csp", "cors"],
+  },
+  {
+    key: "git-collaboration",
+    label: "Git / 协作",
+    priority: 50,
+    keywords: ["git", "commit", "pull request", "pr", "linear", "branch", "rebase"],
+  },
+  {
+    key: "docs-writing",
+    label: "文档 / 写作",
+    priority: 60,
+    keywords: ["documentation", "document", "docs", "readme", "runbook", "writing"],
+  },
+  {
+    key: "backend-api",
+    label: "后端 / API",
+    priority: 70,
+    keywords: ["backend", "api", "graphql", "rest", "microservice", "server", "architecture"],
+  },
+  {
+    key: "frontend-ui",
+    label: "前端 / UI",
+    priority: 80,
+    keywords: ["react", "next.js", "nextjs", "vite", "tailwind", "browser", "frontend", "email"],
+  },
+  {
+    key: "data-database",
+    label: "数据 / 数据库",
+    priority: 90,
+    keywords: ["database", "sql", "postgres", "prisma", "drizzle", "query", "schema", "migration", "model"],
+  },
+  {
+    key: "devops-infra",
+    label: "DevOps / 运维",
+    priority: 100,
+    keywords: ["docker", "bash", "ci/cd", "deployment", "infra", "container", "monorepo"],
+  },
+  {
+    key: "workflow-automation",
+    label: "工作流 / 自动化",
+    priority: 110,
+    keywords: ["workflow", "orchestration", "automation", "retry", "recovery", "fallback"],
+  },
+  {
+    key: "development",
+    label: "代码开发",
+    priority: 120,
+    keywords: ["typescript", "javascript", "python", "go", "rust", "coding", "clean code", "refactor"],
+  },
+];
+
+const skillCategoryAliases: Record<string, string> = {
+  testing: "testing-quality",
+  quality: "testing-quality",
+  security: "security",
+  documentation: "docs-writing",
+  docs: "docs-writing",
+  writing: "docs-writing",
+  workflow: "workflow-automation",
+  automation: "workflow-automation",
+  orchestration: "workflow-automation",
+  frontend: "frontend-ui",
+  ui: "frontend-ui",
+  backend: "backend-api",
+  api: "backend-api",
+  database: "data-database",
+  data: "data-database",
+  git: "git-collaboration",
+  devops: "devops-infra",
+  infra: "devops-infra",
+  search: "search-research",
+  research: "search-research",
+  agent: "ai-agent",
+  ai: "ai-agent",
+};
+
+function normalizeSkillGroupLabel(value: string): string {
+  return value
+    .split(/[\s/_-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" / ");
+}
+
+function getSkillSearchText(skill: SkillSummary): string {
+  return [skill.name, skill.description, skill.category, ...(skill.tags ?? []), ...(skill.applyTo ?? [])]
+    .filter((part): part is string => Boolean(part && part.trim()))
+    .join(" ")
+    .toLowerCase();
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function matchesSkillKeyword(searchText: string, keyword: string): boolean {
+  const escaped = escapeRegExp(keyword.toLowerCase()).replace(/\s+/g, "\\s+");
+  const pattern = new RegExp(`(^|[^a-z0-9])${escaped}([^a-z0-9]|$)`);
+  return pattern.test(searchText);
+}
+
+function resolveSkillGroup(skill: SkillSummary): { key: string; label: string; priority: number } {
+  const rawCategory = String(skill.category ?? "").trim().toLowerCase();
+  if (rawCategory) {
+    const aliasKey = skillCategoryAliases[rawCategory];
+    const aliasGroup = aliasKey ? skillGroupDefinitions.find((group) => group.key === aliasKey) : undefined;
+    if (aliasGroup) {
+      return { key: aliasGroup.key, label: aliasGroup.label, priority: aliasGroup.priority };
+    }
+    return {
+      key: `custom:${rawCategory}`,
+      label: normalizeSkillGroupLabel(rawCategory),
+      priority: 130,
+    };
+  }
+
+  const searchText = getSkillSearchText(skill);
+  const matchedGroup = skillGroupDefinitions.find((group) =>
+    group.keywords.some((keyword) => matchesSkillKeyword(searchText, keyword)),
+  );
+  if (matchedGroup) {
+    return { key: matchedGroup.key, label: matchedGroup.label, priority: matchedGroup.priority };
+  }
+
+  return { key: "uncategorized", label: "未分类", priority: 999 };
+}
+
+const groupedSkillsList = computed<SkillGroupView[]>(() => {
+  const groups = new Map<string, SkillGroupView>();
+
+  for (const skill of [...skillsList.value].sort((left, right) =>
+    left.name.localeCompare(right.name, "zh-CN"),
+  )) {
+    const groupMeta = resolveSkillGroup(skill);
+    const current = groups.get(groupMeta.key);
+    if (current) {
+      current.items.push(skill);
+      continue;
+    }
+    groups.set(groupMeta.key, {
+      key: groupMeta.key,
+      label: groupMeta.label,
+      priority: groupMeta.priority,
+      items: [skill],
+    });
+  }
+
+  return [...groups.values()].sort((left, right) => {
+    if (left.priority !== right.priority) return left.priority - right.priority;
+    return left.label.localeCompare(right.label, "zh-CN");
+  });
+});
+
+const skillGroupKeyBySkillKey = computed<Record<string, string>>(() => {
+  const mapping: Record<string, string> = {};
+  for (const group of groupedSkillsList.value) {
+    for (const skill of group.items) {
+      mapping[skill.dirName || skill.name] = group.key;
+    }
+  }
+  return mapping;
+});
+
+function onSkillOpenChange(keys: string[]) {
+  skillOpenKeys.value = keys;
+}
 
 async function onSkillSelect({ key }: { key: string | number }) {
   const skillKey = String(key);
   skillLoading.value = true;
   try {
     skillSelected.value = [skillKey];
+    const groupKey = skillGroupKeyBySkillKey.value[skillKey];
+    if (groupKey && !skillOpenKeys.value.includes(groupKey)) {
+      skillOpenKeys.value = [...skillOpenKeys.value, groupKey];
+    }
     const res = await getSkill(skillKey);
     skillDetail.value = { frontmatter: res.data.frontmatter, body: res.data.body };
   } catch (e: unknown) {
