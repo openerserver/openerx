@@ -67,6 +67,16 @@ const routes: RouteRecordRaw[] = [
         component: () => import("../pages/ProjectRoleExecution.vue"),
       },
       {
+        path: "projects/:projectId/workflow",
+        name: "ProjectWorkflowTemplate",
+        component: () => import("../pages/ProjectWorkflowTemplate.vue"),
+      },
+      {
+        path: "projects/:projectId/orchestration",
+        name: "ProjectOrchestration",
+        component: () => import("../pages/ProjectOrchestration.vue"),
+      },
+      {
         path: "projects/:projectId/cost",
         name: "ProjectCost",
         component: () => import("../pages/ProjectCost.vue"),
@@ -85,6 +95,16 @@ const routes: RouteRecordRaw[] = [
         path: "settings",
         name: "Settings",
         component: () => import("../pages/Settings.vue"),
+      },
+      {
+        path: "settings/workflow-templates",
+        name: "WorkflowTemplatesAdmin",
+        component: () => import("../pages/WorkflowTemplatesAdmin.vue"),
+      },
+      {
+        path: "settings/workflow-templates/:templateId",
+        name: "WorkflowTemplateEditor",
+        component: () => import("../pages/WorkflowTemplateEditor.vue"),
       },
       {
         path: "chat-settings",
@@ -115,6 +135,20 @@ router.beforeEach((to) => {
   const auth = useAuthStore();
   if (to.meta.requiresAuth && !auth.token) {
     return { name: "Login" };
+  }
+});
+
+router.beforeEach((to, from) => {
+  if (from.query.embedded === "1" && to.path !== "/login" && to.query.embedded === undefined) {
+    return {
+      path: to.path,
+      query: {
+        ...to.query,
+        embedded: "1",
+      },
+      hash: to.hash,
+      replace: true,
+    };
   }
 });
 

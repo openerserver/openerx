@@ -17,6 +17,7 @@ import {
   repositoryCredentials,
   tasks,
   users,
+  workflowTemplates,
 } from "../../db/schema";
 import { type AppEnv, type JWTPayload, authMiddleware } from "../../middleware/auth";
 import { requireProjectRole, requireRole } from "../../middleware/rbac";
@@ -35,6 +36,7 @@ const environmentApprovalPolicyBindingSchema = z.object({
 const projectSettingsSchema = z.object({
   defaultModel: z.string().min(1).optional(),
   defaultEnvironmentId: z.string().min(1).optional(),
+  workflowTemplateId: z.string().min(1).optional(),
   approvalPolicyTemplateId: z.string().min(1).optional(),
   approvalPolicy: approvalPolicyModeSchema.optional(),
   environmentApprovalPolicies: z.record(environmentApprovalPolicyBindingSchema).optional(),
@@ -84,6 +86,10 @@ const updateProjectMemberSchema = z.object({
   role: projectMemberRoleSchema,
 });
 
+const workflowTemplateBindingSchema = z.object({
+  workflowTemplateId: z.string().min(1).nullable(),
+});
+
 function normalizeProjectSettings(settings: unknown): ProjectSettings | null | undefined {
   if (settings == null) {
     return settings as null | undefined;
@@ -115,6 +121,39 @@ async function getProjectOrNull(projectId: string) {
   return db.query.projects.findFirst({
     where: eq(projects.id, projectId),
   });
+}
+
+async function getWorkflowTemplateBinding(projectId: string, settings: ProjectSettings | null | undefined) {
+  const workflowTemplateId = settings?.workflowTemplateId || null;
+  if (!workflowTemplateId) {
+    return {
+      workflowTemplateId: null,
+      template: null,
+    };
+  }
+
+  const template = await db.query.workflowTemplates.findFirst({
+    where: eq(workflowTemplates.id, workflowTemplateId),
+  });
+
+  if (!template) {
+    return {
+      workflowTemplateId,
+      template: null,
+    };
+  }
+
+  if (template.projectId && template.projectId !== projectId) {
+    return {
+      workflowTemplateId,
+      template: null,
+    };
+  }
+
+  return {
+    workflowTemplateId,
+    template,
+  };
 }
 
 async function listProjectAdmins(projectId: string) {
@@ -944,6 +983,102 @@ projectRoutes.get("/:projectId", async (c) => {
   }
   return c.json(normalizeProjectRecord(project));
 });
+
+// GET /api/projects/:projectId/workflow-template
+projectRoutes.get(
+  "/:projectId/workflow-template",
+  requireProjectRole("projectId", "viewer"),
+  async (c) => {
+    const projectId = c.req.param("projectId");
+    const project = await getProjectOrNull(projectId);
+    if (!project) {
+      return c.json({ error: "Project not found" }, 404);
+    }
+
+    const settings = normalizeProjectSettings(project.settings) ?? {};
+    const binding = await getWorkflowTemplateBinding(projectId, settings);
+
+    return c.json({
+      projectId,
+      workflowTemplateId: binding.workflowTemplateId,
+      template: binding.template,
+    });
+  },
+);
+
+// PUT /api/projects/:projectId/workflow-template
+projectRoutes.put(
+  "/:projectId/workflow-template",
+  requireProjectRole("projectId", "project_admin"),
+  zValidator("json", workflowTemplateBindingSchema),
+  async (c) => {
+    const projectId = c.req.param("projectId");
+    const user = c.get("user");
+    const body = c.req.valid("json");
+
+    const project = await getProjectOrNull(projectId);
+    if (!project) {
+      return c.json({ error: "Project not found" }, 404);
+    }
+
+    let template = null;
+    if (body.workflowTemplateId) {
+      template = await db.query.workflowTemplates.findFirst({
+        where: eq(workflowTemplates.id, body.workflowTemplateId),
+      });
+
+      if (!template) {
+        return c.json({ error: "Workflow template not found" }, 404);
+      }
+
+      if (!template.enabled) {
+        return c.json({ error: "Workflow template is disabled" }, 400);
+      }
+
+      const selectableForProject = template.selectableByProjects || template.projectId === projectId;
+      if (!selectableForProject) {
+        return c.json({ error: "Workflow template is not selectable for this project" }, 400);
+      }
+    }
+
+    const existingSettings = normalizeProjectSettings(project.settings) ?? {};
+    const nextSettings: ProjectSettings = { ...existingSettings };
+
+    if (body.workflowTemplateId) {
+      nextSettings.workflowTemplateId = body.workflowTemplateId;
+    } else {
+      delete nextSettings.workflowTemplateId;
+    }
+
+    const now = new Date().toISOString();
+    await db
+      .update(projects)
+      .set({
+        settings: nextSettings,
+        updatedAt: now,
+      })
+      .where(eq(projects.id, projectId));
+
+    await db.insert(auditEvents).values({
+      id: crypto.randomUUID(),
+      ts: now,
+      userId: user.sub,
+      projectId,
+      eventType: "project.workflow_template.updated",
+      action: "bind_workflow_template",
+      target: projectId,
+      detail: {
+        workflowTemplateId: body.workflowTemplateId,
+      },
+    });
+
+    return c.json({
+      projectId,
+      workflowTemplateId: body.workflowTemplateId,
+      template,
+    });
+  },
+);
 
 // PATCH /api/projects/:projectId
 projectRoutes.patch(

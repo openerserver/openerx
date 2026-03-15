@@ -56,7 +56,8 @@ function readString(value: unknown) {
 
 function inferWorkflowTemplateId(task: typeof tasks.$inferSelect, strategy: JsonRecord, executionPlan: JsonRecord) {
   return (
-    readString(strategy.selectedTemplateId)
+    readString(strategy.workflowTemplateId)
+    || readString(strategy.selectedTemplateId)
     || readString(executionPlan.templateId)
     || "legacy-unspecified"
   );

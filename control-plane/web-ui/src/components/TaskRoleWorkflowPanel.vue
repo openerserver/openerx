@@ -38,6 +38,63 @@
       </a-descriptions>
     </a-card>
 
+    <a-card size="small" title="阶段实际态" :style="{ marginBottom: '12px' }" data-testid="task-workflow-stage-runtime">
+      <a-empty v-if="workflowStages.length === 0" description="暂无阶段运行记录" />
+      <a-space v-else direction="vertical" :size="8" :style="{ width: '100%' }">
+        <a-card v-for="stage in workflowStages" :key="stage.id || stage.stageKey" size="small">
+          <a-flex justify="space-between" align="flex-start" :gap="8">
+            <div>
+              <div><strong>{{ stage.stageLabel || formatStageLabel(stage.stageKey) }}</strong></div>
+              <a-typography-text type="secondary">
+                {{ stage.stageKey }} · 主责 {{ stage.primaryRoleLabel || '未命名角色' }}
+              </a-typography-text>
+            </div>
+            <a-space size="small" wrap>
+              <a-tag :color="stageStatusTone(stage.status)">{{ stageStatusLabel(stage.status) }}</a-tag>
+              <a-tag :color="gateResultColor(stage.runtimeSummary.gateResult)">
+                Gate {{ gateResultLabel(stage.runtimeSummary.gateResult) }}
+              </a-tag>
+              <a-tag :color="approvalResultColor(stage.runtimeSummary.approvalResult)">
+                Approval {{ approvalResultLabel(stage.runtimeSummary.approvalResult) }}
+              </a-tag>
+            </a-space>
+          </a-flex>
+
+          <a-space wrap :style="{ marginTop: '8px' }">
+            <a-tag>Gate 配置 {{ stage.gateCount }}</a-tag>
+            <a-tag>Approval 配置 {{ stage.approvalCount }}</a-tag>
+            <a-tag>角色结论 {{ stage.runtimeSummary.conclusionCount }}</a-tag>
+            <a-tag v-if="stage.runtimeSummary.blockDecisionCount > 0 || stage.runtimeSummary.manualReviewCount > 0" color="red">
+              阻断结论 {{ stage.runtimeSummary.blockDecisionCount + stage.runtimeSummary.manualReviewCount }}
+            </a-tag>
+            <a-tag v-if="stage.runtimeSummary.approvalDecisionCount > 0" color="orange">
+              审批结论 {{ stage.runtimeSummary.approvalDecisionCount }}
+            </a-tag>
+            <a-tag v-if="stage.runtimeSummary.openChangeRequestCount > 0" color="gold">
+              待修正 {{ stage.runtimeSummary.openChangeRequestCount }}
+            </a-tag>
+          </a-space>
+
+          <a-alert
+            v-if="stage.blockingReason"
+            type="error"
+            show-icon
+            :style="{ marginTop: '8px' }"
+            :message="stage.blockingReason"
+          />
+
+          <a-space direction="vertical" :size="4" :style="{ marginTop: '8px', width: '100%' }">
+            <a-typography-text v-if="stage.runtimeSummary.latestBlockingRoleLabel" type="danger">
+              最近阻断角色：{{ stage.runtimeSummary.latestBlockingRoleLabel }}
+            </a-typography-text>
+            <a-typography-text v-if="stage.runtimeSummary.latestApprovalRoleLabel" type="warning">
+              最近审批角色：{{ stage.runtimeSummary.latestApprovalRoleLabel }}
+            </a-typography-text>
+          </a-space>
+        </a-card>
+      </a-space>
+    </a-card>
+
     <a-card size="small" title="已介入角色列表" :style="{ marginBottom: '12px' }" data-testid="task-workflow-involved-roles">
       <a-empty v-if="roleConclusions.length === 0" description="暂无已介入角色" />
       <a-space v-else direction="vertical" :size="8" :style="{ width: '100%' }">
@@ -348,6 +405,79 @@ function stageStatusTone(status: string) {
       return "volcano";
     default:
       return "default";
+  }
+}
+
+function stageStatusLabel(status: string) {
+  switch (status) {
+    case "pending":
+      return "待开始";
+    case "running":
+      return "进行中";
+    case "blocked":
+      return "已阻断";
+    case "waiting-approval":
+      return "待审批";
+    case "failed":
+      return "失败";
+    case "completed":
+      return "已完成";
+    case "cancelled":
+      return "已取消";
+    default:
+      return status;
+  }
+}
+
+function gateResultColor(status: string) {
+  switch (status) {
+    case "blocked":
+      return "red";
+    case "passed":
+      return "green";
+    case "pending":
+      return "blue";
+    default:
+      return "default";
+  }
+}
+
+function gateResultLabel(status: string) {
+  switch (status) {
+    case "blocked":
+      return "阻断";
+    case "passed":
+      return "通过";
+    case "pending":
+      return "待判定";
+    default:
+      return "未配置";
+  }
+}
+
+function approvalResultColor(status: string) {
+  switch (status) {
+    case "approved":
+      return "green";
+    case "pending":
+      return "orange";
+    case "rejected":
+      return "red";
+    default:
+      return "default";
+  }
+}
+
+function approvalResultLabel(status: string) {
+  switch (status) {
+    case "approved":
+      return "已通过";
+    case "pending":
+      return "待审批";
+    case "rejected":
+      return "已拒绝";
+    default:
+      return "未配置";
   }
 }
 

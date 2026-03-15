@@ -1,0 +1,510 @@
+<template>
+  <div style="padding: 24px">
+    <a-page-header
+      :title="viewModel ? `${viewModel.project.name} / 工作流` : '项目工作流'"
+      sub-title="查看并绑定当前项目采用的阶段模板"
+      @back="$router.push(`/projects/${projectId}`)"
+    />
+
+    <ProjectSectionNav :project-id="projectId" active-key="workflow" />
+
+    <a-spin :spinning="loading" style="display: block">
+      <a-alert v-if="loadError" type="error" show-icon style="margin-bottom: 16px" :message="loadError" />
+      <a-alert
+        v-else-if="viewModel?.access.message"
+        type="info"
+        show-icon
+        style="margin-bottom: 16px"
+        :message="viewModel.access.message"
+      />
+
+      <template v-if="viewModel">
+        <a-row :gutter="[16, 16]" style="margin-bottom: 16px">
+          <a-col :xs="24" :lg="10">
+            <a-card size="small" title="当前模板摘要">
+              <a-descriptions :column="1" size="small" bordered>
+                <a-descriptions-item label="当前绑定模板">
+                  {{ viewModel.currentTemplate?.name || '尚未绑定' }}
+                </a-descriptions-item>
+                <a-descriptions-item label="绑定模板 ID">
+                  {{ viewModel.workflowTemplateId || '未绑定' }}
+                </a-descriptions-item>
+                <a-descriptions-item label="模板来源">
+                  {{ viewModel.currentTemplateSource === 'bound' ? '项目已绑定' : '项目未绑定' }}
+                </a-descriptions-item>
+                <a-descriptions-item label="可选模板数">
+                  {{ viewModel.selectableTemplates.length }}
+                </a-descriptions-item>
+              </a-descriptions>
+            </a-card>
+          </a-col>
+
+          <a-col :xs="24" :lg="14">
+            <a-card size="small" title="模板绑定">
+              <a-form layout="vertical">
+                <a-form-item label="选择项目模板">
+                  <a-select
+                    :value="selectedTemplateId"
+                    allow-clear
+                    :disabled="!viewModel.access.canManage"
+                    placeholder="未绑定时，任务不会使用项目级阶段模板"
+                    @update:value="selectedTemplateId = toTemplateId($event)"
+                  >
+                    <a-select-option v-for="template in viewModel.selectableTemplates" :key="template.id" :value="template.id">
+                      {{ template.name }}
+                    </a-select-option>
+                  </a-select>
+                </a-form-item>
+                <a-space>
+                  <a-button
+                    type="primary"
+                    :loading="saving"
+                    :disabled="!viewModel.access.canManage"
+                    @click="saveBinding"
+                  >
+                    保存绑定
+                  </a-button>
+                  <a-button :disabled="saving || !viewModel.access.canManage" @click="selectedTemplateId = undefined">
+                    解绑
+                  </a-button>
+                </a-space>
+              </a-form>
+            </a-card>
+          </a-col>
+        </a-row>
+
+        <a-card v-if="selectionDiff" size="small" title="切换前差异摘要" style="margin-bottom: 16px">
+          <a-space direction="vertical" style="width: 100%" :size="10">
+            <a-alert
+              type="info"
+              show-icon
+              :message="selectionDiff.summary"
+              :description="selectionDiff.description"
+            />
+            <a-row :gutter="16">
+              <a-col :xs="24" :md="12">
+                <a-card size="small" title="阶段变化">
+                  <a-space direction="vertical" style="width: 100%" :size="6">
+                    <a-typography-text>新增阶段：{{ selectionDiff.added.join(' / ') || '无' }}</a-typography-text>
+                    <a-typography-text>移除阶段：{{ selectionDiff.removed.join(' / ') || '无' }}</a-typography-text>
+                    <a-typography-text>顺序变化：{{ selectionDiff.reordered.join(' / ') || '无' }}</a-typography-text>
+                  </a-space>
+                </a-card>
+              </a-col>
+              <a-col :xs="24" :md="12">
+                <a-card size="small" title="关键控制变化">
+                  <a-space direction="vertical" style="width: 100%" :size="6">
+                    <a-typography-text>
+                      Gate 变化：{{ selectionDiff.gateChanges.join(' / ') || '无' }}
+                    </a-typography-text>
+                    <a-typography-text>
+                      Approval 变化：{{ selectionDiff.approvalChanges.join(' / ') || '无' }}
+                    </a-typography-text>
+                  </a-space>
+                </a-card>
+              </a-col>
+            </a-row>
+          </a-space>
+        </a-card>
+
+        <a-card size="small" title="流程可视化" style="margin-bottom: 16px">
+          <a-alert
+            type="info"
+            show-icon
+            style="margin-bottom: 12px"
+            message="这里直接展示阶段流转和主责角色，便于在绑定前比较当前模板与候选模板会怎么跑。"
+          />
+
+          <a-radio-group
+            :value="diagramKind"
+            button-style="solid"
+            size="small"
+            style="margin-bottom: 12px"
+            @update:value="diagramKind = String($event ?? 'flow')"
+          >
+            <a-radio-button value="flow">阶段流转图</a-radio-button>
+            <a-radio-button value="roles">角色介入图</a-radio-button>
+          </a-radio-group>
+
+          <a-tabs :activeKey="diagramTab" :destroyInactiveTabPane="true" @update:activeKey="diagramTab = String($event ?? 'current')">
+            <a-tab-pane key="current" :tab="currentDiagramTitle">
+              <MermaidRenderer v-if="diagramTab === 'current'" :code="currentDiagramMermaid" />
+            </a-tab-pane>
+            <a-tab-pane v-if="showCandidateDiagram" key="candidate" :tab="candidateDiagramTitle">
+              <MermaidRenderer v-if="diagramTab === 'candidate'" :code="candidateDiagramMermaid" />
+            </a-tab-pane>
+          </a-tabs>
+        </a-card>
+
+        <a-card size="small" title="阶段路径">
+          <a-empty v-if="viewModel.stages.length === 0" description="当前项目未绑定模板，暂无阶段路径" />
+          <template v-else>
+            <a-space wrap>
+                <a-tag v-for="stage in viewModel.stages" :key="stage.id" color="blue">
+                  {{ stage.stageKey }}
+                </a-tag>
+            </a-space>
+            <a-typography-paragraph type="secondary" style="margin: 12px 0 0">
+              当前展示的是项目真实绑定模板下的阶段定义，不再使用临时预览模板。
+            </a-typography-paragraph>
+          </template>
+        </a-card>
+
+        <a-card size="small" title="可选模板列表">
+          <a-table :data-source="viewModel.selectableTemplates" row-key="id" size="small" :pagination="false">
+            <a-table-column title="模板" key="name">
+              <template #default="{ record }">
+                <a-space direction="vertical" :size="2">
+                  <span>{{ record.name }}</span>
+                  <a-typography-text type="secondary">{{ record.id }}</a-typography-text>
+                </a-space>
+              </template>
+            </a-table-column>
+            <a-table-column title="阶段顺序" key="stageOrder">
+              <template #default="{ record }">
+                {{ record.stageOrderJson.join(' -> ') || '未配置' }}
+              </template>
+            </a-table-column>
+            <a-table-column title="状态" key="status" :width="180">
+              <template #default="{ record }">
+                <a-space>
+                  <a-tag :color="record.enabled ? 'green' : 'default'">{{ record.enabled ? '启用' : '停用' }}</a-tag>
+                  <a-tag :color="record.selectableByProjects ? 'blue' : 'default'">
+                    {{ record.selectableByProjects ? '项目可选' : '仅系统' }}
+                  </a-tag>
+                </a-space>
+              </template>
+            </a-table-column>
+            <a-table-column title="操作" key="actions" :width="140">
+              <template #default="{ record }">
+                <a-space>
+                  <router-link :to="{ name: 'WorkflowTemplateEditor', params: { templateId: record.id } }">
+                    <a-button size="small">查看模板</a-button>
+                  </router-link>
+                  <a-tag v-if="record.id === viewModel.workflowTemplateId" color="green">已绑定</a-tag>
+                </a-space>
+              </template>
+            </a-table-column>
+          </a-table>
+        </a-card>
+      </template>
+    </a-spin>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { message } from "ant-design-vue";
+import { computed, defineAsyncComponent, onMounted, ref, watch } from "vue";
+import { useRoute } from "vue-router";
+import {
+  type ProjectWorkflowTemplateView,
+  getProjectWorkflowTemplateView,
+  listWorkflowTemplateStages,
+  updateProjectWorkflowTemplateBinding,
+} from "../lib/api";
+
+const MermaidRenderer = defineAsyncComponent(() => import("../components/MermaidRenderer.vue"));
+
+const route = useRoute();
+const projectId = String(route.params.projectId);
+const loading = ref(true);
+const saving = ref(false);
+const diagramTab = ref("current");
+const diagramKind = ref("flow");
+const loadError = ref<string | null>(null);
+const viewModel = ref<ProjectWorkflowTemplateView | null>(null);
+const selectedTemplateId = ref<string | undefined>(undefined);
+const selectedTemplateStages = ref<ProjectWorkflowTemplateView["stages"]>([]);
+const loadingSelectionDiff = ref(false);
+
+const roleLabelMap: Record<string, string> = {
+  "role.product": "产品 Agent",
+  "role.architect": "架构师 Agent",
+  "role.developer": "开发者 Agent",
+  "role.visual": "美术 Agent",
+  "role.security": "安全 Agent",
+  "role.release": "部署 Agent",
+  "role.operations": "运维 Agent",
+  "role.qa": "QA Agent",
+};
+
+function toTemplateId(value: unknown) {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+async function loadViewModel() {
+  viewModel.value = await getProjectWorkflowTemplateView(projectId);
+  selectedTemplateId.value = viewModel.value.workflowTemplateId || undefined;
+  selectedTemplateStages.value = [...viewModel.value.stages];
+  diagramTab.value = "current";
+}
+
+function sanitizeMermaidLabel(value: string) {
+  return value
+    .replace(/"/g, "'")
+    .replace(/\[/g, "(")
+    .replace(/\]/g, ")")
+    .replace(/\{/g, "(")
+    .replace(/\}/g, ")")
+    .replace(/\|/g, "/")
+    .trim();
+}
+
+function resolveRoleLabel(roleAgentId: string) {
+  return roleLabelMap[roleAgentId] || roleAgentId || "未指定角色";
+}
+
+function normalizeFallbackStage(stage: ProjectWorkflowTemplateView["stages"][number]) {
+  const policy = stage.failurePolicyJson && typeof stage.failurePolicyJson === "object"
+    ? stage.failurePolicyJson as Record<string, unknown>
+    : null;
+  const fallback = policy?.fallbackStageKey;
+  return typeof fallback === "string" && fallback.trim() ? fallback.trim() : "";
+}
+
+function buildFlowMermaid(stages: ProjectWorkflowTemplateView["stages"]) {
+  if (stages.length === 0) {
+    return "";
+  }
+
+  const ordered = [...stages].sort((left, right) => left.orderIndex - right.orderIndex);
+  const lines = [
+    "flowchart TD",
+    "classDef active fill:#d9f7be,stroke:#389e0d,color:#135200;",
+    "classDef muted fill:#f5f5f5,stroke:#bfbfbf,color:#595959;",
+  ];
+
+  for (const [index, stage] of ordered.entries()) {
+    const nodeId = `stage_${index + 1}`;
+    const gateCount = Array.isArray(stage.gatesJson) ? stage.gatesJson.length : 0;
+    const approvalCount = Array.isArray(stage.approvalsJson) ? stage.approvalsJson.length : 0;
+    const participantCount = Array.isArray(stage.participantRoleAgentIdsJson) ? stage.participantRoleAgentIdsJson.length : 0;
+    const label = sanitizeMermaidLabel([
+      `${index + 1}. ${stage.name || stage.stageKey}`,
+      `${stage.stageKey} / ${resolveRoleLabel(stage.primaryRoleAgentId)}`,
+      `参与 ${participantCount} / Gate ${gateCount} / Approval ${approvalCount}`,
+    ].join("\\n"));
+
+    lines.push(`${nodeId}[\"${label}\"]`);
+    lines.push(`class ${nodeId} ${stage.enabled ? "active" : "muted"};`);
+
+    if (index > 0) {
+      lines.push(`stage_${index} --> ${nodeId}`);
+    }
+
+    const fallbackStageKey = normalizeFallbackStage(stage);
+    if (fallbackStageKey) {
+      const fallbackIndex = ordered.findIndex((item) => item.stageKey === fallbackStageKey);
+      if (fallbackIndex >= 0) {
+        lines.push(`${nodeId} -. fallback .-> stage_${fallbackIndex + 1}`);
+      }
+    }
+  }
+
+  return lines.join("\n");
+}
+
+function buildRoleMapMermaid(stages: ProjectWorkflowTemplateView["stages"]) {
+  if (stages.length === 0) {
+    return "";
+  }
+
+  const ordered = [...stages].sort((left, right) => left.orderIndex - right.orderIndex);
+  const lines = [
+    "flowchart LR",
+    "classDef stage fill:#e6f4ff,stroke:#1677ff,color:#003a8c;",
+    "classDef primary fill:#fff7e6,stroke:#fa8c16,color:#873800;",
+    "classDef participant fill:#f9f0ff,stroke:#722ed1,color:#391085;",
+    "classDef control fill:#fff1f0,stroke:#cf1322,color:#820014;",
+  ];
+
+  for (const [index, stage] of ordered.entries()) {
+    const stageNodeId = `stage_${index + 1}`;
+    lines.push(`${stageNodeId}[\"${sanitizeMermaidLabel(`${stage.name || stage.stageKey}\\n${stage.stageKey}`)}\"]`);
+    lines.push(`class ${stageNodeId} stage;`);
+
+    if (stage.primaryRoleAgentId.trim()) {
+      const primaryId = `primary_${index + 1}`;
+      lines.push(`${primaryId}[\"主责: ${sanitizeMermaidLabel(resolveRoleLabel(stage.primaryRoleAgentId))}\"]`);
+      lines.push(`${stageNodeId} --> ${primaryId}`);
+      lines.push(`class ${primaryId} primary;`);
+    }
+
+    for (const [participantIndex, participantRoleId] of (stage.participantRoleAgentIdsJson || []).entries()) {
+      const participantId = `participant_${index + 1}_${participantIndex + 1}`;
+      lines.push(`${participantId}[\"参与: ${sanitizeMermaidLabel(resolveRoleLabel(participantRoleId))}\"]`);
+      lines.push(`${stageNodeId} --> ${participantId}`);
+      lines.push(`class ${participantId} participant;`);
+    }
+
+    for (const [gateIndex, gateEntry] of (stage.gatesJson || []).entries()) {
+      const gate = gateEntry && typeof gateEntry === "object" ? gateEntry as Record<string, unknown> : {};
+      const gateId = `gate_${index + 1}_${gateIndex + 1}`;
+      const gateName = typeof gate.name === "string" && gate.name.trim() ? gate.name.trim() : String(gate.type || `Gate ${gateIndex + 1}`);
+      const evaluatorRole = typeof gate.evaluatorRole === "string" ? gate.evaluatorRole : "";
+      const gateRole = evaluatorRole ? ` / ${resolveRoleLabel(evaluatorRole)}` : "";
+      lines.push(`${gateId}[\"Gate: ${sanitizeMermaidLabel(`${gateName}${gateRole}`)}\"]`);
+      lines.push(`${stageNodeId} -.-> ${gateId}`);
+      lines.push(`class ${gateId} control;`);
+    }
+
+    for (const [approvalIndex, approvalEntry] of (stage.approvalsJson || []).entries()) {
+      const approval = approvalEntry && typeof approvalEntry === "object" ? approvalEntry as Record<string, unknown> : {};
+      const approvalId = `approval_${index + 1}_${approvalIndex + 1}`;
+      const approvalName = typeof approval.name === "string" && approval.name.trim() ? approval.name.trim() : `Approval ${approvalIndex + 1}`;
+      const approverRole = typeof approval.approverRole === "string" ? approval.approverRole : "";
+      const approvalRole = approverRole ? ` / ${resolveRoleLabel(approverRole)}` : "";
+      lines.push(`${approvalId}[\"Approval: ${sanitizeMermaidLabel(`${approvalName}${approvalRole}`)}\"]`);
+      lines.push(`${stageNodeId} -.-> ${approvalId}`);
+      lines.push(`class ${approvalId} control;`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
+const showCandidateDiagram = computed(() => {
+  if (!viewModel.value) {
+    return false;
+  }
+  return Boolean(selectedTemplateId.value) && selectedTemplateId.value !== viewModel.value.workflowTemplateId;
+});
+
+const currentDiagramTitle = computed(() => `当前绑定：${viewModel.value?.currentTemplate?.name || "未绑定"}`);
+
+const candidateDiagramTitle = computed(() => {
+  const selectedTemplate = viewModel.value?.selectableTemplates.find((template) => template.id === selectedTemplateId.value);
+  return `候选模板：${selectedTemplate?.name || selectedTemplateId.value || "未选择"}`;
+});
+
+const currentFlowMermaid = computed(() => buildFlowMermaid(viewModel.value?.stages || []));
+
+const candidateFlowMermaid = computed(() => buildFlowMermaid(selectedTemplateStages.value || []));
+
+const currentRoleMapMermaid = computed(() => buildRoleMapMermaid(viewModel.value?.stages || []));
+
+const candidateRoleMapMermaid = computed(() => buildRoleMapMermaid(selectedTemplateStages.value || []));
+
+const currentDiagramMermaid = computed(() => (diagramKind.value === "roles" ? currentRoleMapMermaid.value : currentFlowMermaid.value));
+
+const candidateDiagramMermaid = computed(() => (diagramKind.value === "roles" ? candidateRoleMapMermaid.value : candidateFlowMermaid.value));
+
+function summarizeControlDiff(
+  currentStages: ProjectWorkflowTemplateView["stages"],
+  nextStages: ProjectWorkflowTemplateView["stages"],
+  key: "gatesJson" | "approvalsJson",
+) {
+  const currentMap = new Map(currentStages.map((stage) => [stage.stageKey, Array.isArray(stage[key]) ? stage[key].length : 0]));
+  const nextMap = new Map(nextStages.map((stage) => [stage.stageKey, Array.isArray(stage[key]) ? stage[key].length : 0]));
+
+  return [...new Set([...currentMap.keys(), ...nextMap.keys()])]
+    .map((stageKey) => {
+      const currentCount = currentMap.get(stageKey) || 0;
+      const nextCount = nextMap.get(stageKey) || 0;
+      if (currentCount === nextCount) {
+        return null;
+      }
+      return `${stageKey} ${currentCount} -> ${nextCount}`;
+    })
+    .filter((item): item is string => Boolean(item));
+}
+
+const selectionDiff = computed(() => {
+  if (!viewModel.value) {
+    return null;
+  }
+
+  const currentTemplate = viewModel.value.currentTemplate;
+  const selectedTemplate = viewModel.value.selectableTemplates.find((template) => template.id === selectedTemplateId.value) || null;
+  if ((selectedTemplate?.id || null) === (currentTemplate?.id || null)) {
+    return null;
+  }
+
+  const currentOrder = viewModel.value.stages.map((stage) => stage.stageKey);
+  const nextOrder = (selectedTemplateId.value ? selectedTemplateStages.value : []).map((stage) => stage.stageKey);
+  const currentSet = new Set(currentOrder);
+  const nextSet = new Set(nextOrder);
+
+  const added = nextOrder.filter((stageKey) => !currentSet.has(stageKey));
+  const removed = currentOrder.filter((stageKey) => !nextSet.has(stageKey));
+  const reordered = nextOrder.filter((stageKey, index) => currentSet.has(stageKey) && currentOrder[index] !== stageKey);
+  const gateChanges = summarizeControlDiff(viewModel.value.stages, selectedTemplateStages.value, "gatesJson");
+  const approvalChanges = summarizeControlDiff(viewModel.value.stages, selectedTemplateStages.value, "approvalsJson");
+
+  if (!selectedTemplateId.value) {
+    return {
+      summary: "解绑后项目将不再使用项目级工作流模板。",
+      description: `当前 ${currentOrder.length} 个阶段会被移除，任务将回退到无项目模板绑定状态。`,
+      added,
+      removed: currentOrder,
+      reordered: [],
+      gateChanges,
+      approvalChanges,
+    };
+  }
+
+  return {
+    summary: `准备从 ${currentTemplate?.name || '未绑定'} 切换到 ${selectedTemplate?.name || selectedTemplateId.value}。`,
+    description: loadingSelectionDiff.value
+      ? "正在计算候选模板差异。"
+      : `目标模板包含 ${nextOrder.length} 个阶段，新增 ${added.length} 个，移除 ${removed.length} 个。`,
+    added,
+    removed,
+    reordered,
+    gateChanges,
+    approvalChanges,
+  };
+});
+
+watch(
+  [selectedTemplateId, viewModel],
+  async ([templateId, currentView]) => {
+    if (!currentView) {
+      return;
+    }
+    if (!templateId) {
+      selectedTemplateStages.value = [];
+      diagramTab.value = "current";
+      return;
+    }
+    if (templateId === currentView.workflowTemplateId) {
+      selectedTemplateStages.value = [...currentView.stages];
+      diagramTab.value = "current";
+      return;
+    }
+
+    loadingSelectionDiff.value = true;
+    try {
+      const response = await listWorkflowTemplateStages(templateId);
+      selectedTemplateStages.value = (response.data || []).slice().sort((left, right) => left.orderIndex - right.orderIndex);
+      diagramTab.value = "candidate";
+    } finally {
+      loadingSelectionDiff.value = false;
+    }
+  },
+  { immediate: true },
+);
+
+async function saveBinding() {
+  saving.value = true;
+  try {
+    await updateProjectWorkflowTemplateBinding(projectId, selectedTemplateId.value || null);
+    await loadViewModel();
+    message.success(selectedTemplateId.value ? "工作流模板绑定已更新" : "工作流模板已解绑");
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : "工作流模板绑定保存失败");
+  } finally {
+    saving.value = false;
+  }
+}
+
+onMounted(async () => {
+  try {
+    await loadViewModel();
+  } catch (error) {
+    loadError.value = error instanceof Error ? error.message : "项目工作流视图加载失败";
+  } finally {
+    loading.value = false;
+  }
+});
+</script>

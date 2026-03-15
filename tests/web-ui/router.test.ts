@@ -149,4 +149,25 @@ describe("users route auth", () => {
     expect(router.currentRoute.value.fullPath).toBe("/projects/proj-default/approval-policies");
     expect(wrapper.text()).toContain("审批策略页");
   });
+
+  it("inherits embedded query across internal navigation from embedded pages", async () => {
+    authState.token = "test-token";
+
+    const wrapper = mount(RouterHost, {
+      global: {
+        plugins: [router],
+      },
+    });
+
+    await router.push("/users?embedded=1");
+    await router.isReady();
+    await flushPromises();
+
+    await router.push("/multi-task-monitor");
+    await flushPromises();
+
+    expect(router.currentRoute.value.name).toBe("MultiTaskMonitor");
+    expect(router.currentRoute.value.fullPath).toBe("/multi-task-monitor?embedded=1");
+    expect(wrapper.text()).toContain("多任务监控台页面");
+  });
 });

@@ -386,6 +386,7 @@
                 placeholder="描述下一步要构建的内容"
                 :disabled="!selectedSessionId"
                 :bordered="false"
+                @keydown="handleComposerKeydown"
                 @update:value="continuePrompt = String($event ?? '')"
               />
 
@@ -1994,6 +1995,19 @@ async function handleContinue() {
   } finally {
     continuing.value = false;
   }
+}
+
+function handleComposerKeydown(event: KeyboardEvent) {
+  if (event.key !== "Enter") {
+    return;
+  }
+
+  if (event.shiftKey || event.ctrlKey || event.metaKey || event.altKey || event.isComposing) {
+    return;
+  }
+
+  event.preventDefault();
+  void handleContinue();
 }
 
 async function handleForkToSecondary() {

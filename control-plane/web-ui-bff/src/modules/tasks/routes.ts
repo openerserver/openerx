@@ -21,6 +21,7 @@ import {
   type HookExecutionRecord,
   buildExecutionPlan,
   mergeTaskStrategy,
+  parseTaskStrategy,
   readOrchestrationStrategy,
   resolveWorkflowTemplate,
 } from "../../lib/orchestration-strategy";
@@ -41,6 +42,7 @@ import { buildPipelineStageUpdatedEvents } from "../realtime/pipeline-events";
 import { sseAggregator } from "../realtime/sse-aggregator";
 import { wsBroadcaster } from "../realtime/ws-broadcaster";
 import { reconcileRunningTasksOnStartup } from "./reconcile";
+import { buildTaskWorkflowViewModel } from "./workflow-view";
 import { ensureTaskWorkflowStarted } from "./workflow-sync";
 
 // ── Task Routes (BFF) ──────────────────────────────────────────────
@@ -67,99 +69,13 @@ interface SessionSummaryRecord {
   updatedAt: string | null;
 }
 
-interface WorkflowRunPayload {
-  id?: string;
-  templateId?: string | null;
-  currentStage?: string | null;
-  status?: string | null;
-}
-
-interface WorkflowStagePayload {
-  id?: string;
-  stageKey?: string | null;
-  status?: string | null;
-  approvalState?: string | null;
-  blockingReason?: string | null;
-  primaryRoleAgentId?: string | null;
-}
-
-interface RoleConclusionPayload {
-  id?: string;
-  roleAgentId?: string | null;
-  stage?: string | null;
-  finalDecision?: string | null;
-  aggregateRiskLevel?: string | null;
-  consensusScore?: number | null;
-  winningRationale?: string | null;
-  mergedFindings?: Array<{ key?: string; title?: string; severity?: string }> | null;
-  minorityFindings?: Array<{ key?: string; title?: string; severity?: string }> | null;
-  conflicts?: Array<{ type?: string; severity?: string; summary?: string }> | null;
-  approvalRequired?: boolean | null;
-  approvalRecommendation?: { required?: boolean | null } | null;
-}
-
-interface DeveloperChangeRequestPayload {
-  id?: string;
-  sourceRoleAgentId?: string | null;
-  priority?: string | null;
-  title?: string | null;
-  summary?: string | null;
-  requiredChanges?: string[] | null;
-  blocking?: boolean | null;
-  approvalRequired?: boolean | null;
-  status?: string | null;
-}
-
-interface WorkflowViewModel {
-  taskId: string;
-  workflow: {
-    templateId: string | null;
-    currentStage: string;
-    status: string;
-    stages: Array<{
-      id: string;
-      stageKey: string;
-      stageLabel: string;
-      status: string;
-      approvalState: string;
-      blockingReason?: string;
-      primaryRoleLabel?: string;
-    }>;
-  };
-  roleConclusions: Array<{
-    id: string;
-    roleAgentId: string;
-    roleLabel: string;
-    stage: string;
-    finalDecision: string;
-    aggregateRiskLevel: string;
-    consensusScore: number;
-    winningRationale: string;
-    mergedFindings: Array<{ key: string; title: string; severity: string }>;
-    minorityFindings: Array<{ key: string; title: string; severity: string }>;
-    conflicts: Array<{ type: string; severity: string; summary: string }>;
-    approvalRequired: boolean;
-  }>;
-  developerChangeRequests: Array<{
-    id: string;
-    sourceRoleAgentId: string;
-    sourceRoleLabel: string;
-    priority: string;
-    title: string;
-    summary: string;
-    requiredChanges: string[];
-    blocking: boolean;
-    approvalRequired: boolean;
-    status: string;
-  }>;
-}
-
 interface ExecutableTask {
   id: string;
   prompt: string;
   status: string;
   projectId: string;
   title: string;
+  strategy?: string | null;
   selectedModel?: string | null;
   repoId?: string | null;
   repoName?: string | null;
@@ -179,6 +95,7 @@ interface PreparedExecutionContext {
   classification: IntentClassification;
   executionAgent: string;
   plan: ExecutionPlan;
+  workflowTemplateId: string | null;
   repoContext: ReturnType<typeof buildRepoContext>;
   resolvedModel?: ResolvedModel;
   effectiveModel?: string;
@@ -346,6 +263,7 @@ function buildRepoContext(task: ExecutableTask, identitySnapshot: IdentitySnapsh
 }
 
 function buildTaskPatchBody(
+  task: ExecutableTask,
   execResult: { sessionId?: string; agentRunId?: string },
   classification: ReturnType<typeof classifyIntent>,
   identitySnapshot: IdentitySnapshot,
@@ -353,6 +271,7 @@ function buildTaskPatchBody(
     selectedAgent: string;
     effectiveModel?: string;
     plan?: ExecutionPlan;
+    workflowTemplateId?: string | null;
     hookExecutions?: HookExecutionRecord[];
   },
 ) {
@@ -363,8 +282,9 @@ function buildTaskPatchBody(
     category: classification.category,
     executionMode: executionMeta.plan?.mode ?? "single",
     executionPlan: executionMeta.plan ? JSON.stringify(executionMeta.plan) : undefined,
-    strategy: mergeTaskStrategy(undefined, {
+    strategy: mergeTaskStrategy(task.strategy, {
       selectedTemplateId: executionMeta.plan?.templateId,
+      workflowTemplateId: executionMeta.workflowTemplateId,
       complexity: classification.complexity,
       suggestedAgents: classification.suggestedAgents,
       requiresPlan: classification.requiresPlan,
@@ -394,278 +314,6 @@ function buildWorkflowPromptContext(
   };
 }
 
-function fallbackRoleLabelFromId(roleAgentId: string | null | undefined) {
-  switch (roleAgentId) {
-    case "role.product":
-      return "产品";
-    case "role.architect":
-      return "架构";
-    case "role.developer":
-      return "开发者";
-    case "role.visual":
-      return "美术";
-    case "role.security":
-      return "安全";
-    case "role.release":
-      return "部署";
-    case "role.operations":
-      return "运维";
-    case "role.qa":
-      return "QA";
-    default:
-      return roleAgentId?.replace(/^role\./, "") || "未命名角色";
-  }
-}
-
-async function resolveRoleLabels(
-  roleAgentIds: Array<string | null | undefined>,
-  authorization: string,
-  options: {
-    projectId?: string | null;
-  } = {},
-) {
-  const uniqueIds = Array.from(new Set(roleAgentIds.filter((value): value is string => Boolean(value))));
-  const labelEntries = await Promise.all(
-    uniqueIds.map(async (roleAgentId) => {
-      const query = new URLSearchParams();
-      if (options.projectId) {
-        query.set("projectId", options.projectId);
-      }
-
-      const resolveResult = await cpFetch<{ data?: { role?: { name?: string | null } } }>(
-        `/api/role-agents/${encodeURIComponent(roleAgentId)}/resolve${query.toString() ? `?${query.toString()}` : ""}`,
-        { authorization },
-      );
-      if (resolveResult.ok && resolveResult.data?.data?.role?.name) {
-        return [roleAgentId, resolveResult.data.data.role.name] as const;
-      }
-
-      const detailResult = await cpFetch<{ data?: { name?: string | null } }>(
-        `/api/role-agents/${encodeURIComponent(roleAgentId)}`,
-        { authorization },
-      );
-      if (detailResult.ok && detailResult.data?.data?.name) {
-        return [roleAgentId, detailResult.data.data.name] as const;
-      }
-
-      return [roleAgentId, fallbackRoleLabelFromId(roleAgentId)] as const;
-    }),
-  );
-
-  return new Map(labelEntries);
-}
-
-function stageLabelFromKey(stageKey: string | null | undefined) {
-  switch (stageKey) {
-    case "intake":
-      return "需求进入";
-    case "clarify":
-      return "需求澄清";
-    case "design":
-      return "方案设计";
-    case "plan":
-      return "任务拆解";
-    case "implement":
-      return "实现开发";
-    case "verify":
-      return "集成验证";
-    case "release":
-      return "发布执行";
-    case "post-release":
-      return "发布观察";
-    case "retrospective":
-      return "复盘沉淀";
-    case "done":
-      return "已完成";
-    case "cancelled":
-      return "已取消";
-    default:
-      return stageKey || "未命名阶段";
-  }
-}
-
-async function buildTaskWorkflowViewModel(
-  taskId: string,
-  authorization: string,
-  options: { projectId?: string | null; taskStatus?: string | null } = {},
-): Promise<WorkflowViewModel> {
-  const [workflowResult, conclusionsResult, requestsResult] = await Promise.all([
-    cpFetch<{ data?: { workflowRun?: WorkflowRunPayload | null; stages?: WorkflowStagePayload[] | null } }>(
-      `/api/tasks/${encodeURIComponent(taskId)}/workflow`,
-      { authorization },
-    ),
-    cpFetch<{ data?: RoleConclusionPayload[] }>(`/api/tasks/${encodeURIComponent(taskId)}/role-conclusions`, {
-      authorization,
-    }),
-    cpFetch<{ data?: DeveloperChangeRequestPayload[] }>(
-      `/api/tasks/${encodeURIComponent(taskId)}/developer-change-requests`,
-      { authorization },
-    ),
-  ]);
-
-  const workflowRun = workflowResult.ok ? workflowResult.data?.data?.workflowRun ?? null : null;
-  const stages = workflowResult.ok ? workflowResult.data?.data?.stages ?? [] : [];
-  const conclusions = conclusionsResult.ok ? conclusionsResult.data?.data ?? [] : [];
-  const requests = requestsResult.ok ? requestsResult.data?.data ?? [] : [];
-  const roleLabels = await resolveRoleLabels(
-    [
-      ...stages.map((stage) => stage.primaryRoleAgentId),
-      ...conclusions.map((item) => item.roleAgentId),
-      ...requests.map((item) => item.sourceRoleAgentId),
-    ],
-    authorization,
-    { projectId: options.projectId },
-  );
-  const inferredWorkflowStatus = inferWorkflowStatus(workflowRun, stages, options.taskStatus);
-  const inferredCurrentStage = inferWorkflowCurrentStage(
-    workflowRun,
-    stages,
-    inferredWorkflowStatus,
-    options.taskStatus,
-  );
-
-  return {
-    taskId,
-    workflow: {
-      templateId: workflowRun?.templateId ?? null,
-      currentStage: inferredCurrentStage,
-      status: inferredWorkflowStatus,
-      stages: stages.map((stage, index) => ({
-        id: stage.id || `${taskId}-${stage.stageKey || index}`,
-        stageKey: stage.stageKey || `stage-${index + 1}`,
-        stageLabel: stageLabelFromKey(stage.stageKey),
-        status: stage.status || "pending",
-        approvalState: stage.approvalState || "not-required",
-        blockingReason: stage.blockingReason || undefined,
-        primaryRoleLabel:
-          roleLabels.get(stage.primaryRoleAgentId || "")
-          || fallbackRoleLabelFromId(stage.primaryRoleAgentId),
-      })),
-    },
-    roleConclusions: conclusions.map((item, index) => ({
-      id: item.id || `${item.roleAgentId || "role"}-${item.stage || index}`,
-      roleAgentId: item.roleAgentId || "unknown",
-      roleLabel: roleLabels.get(item.roleAgentId || "") || fallbackRoleLabelFromId(item.roleAgentId),
-      stage: item.stage || "unknown",
-      finalDecision: item.finalDecision || "observe",
-      aggregateRiskLevel: item.aggregateRiskLevel || "low",
-      consensusScore: typeof item.consensusScore === "number" ? item.consensusScore : 0,
-      winningRationale: item.winningRationale || "",
-      mergedFindings: Array.isArray(item.mergedFindings)
-        ? item.mergedFindings.map((finding, findingIndex) => ({
-            key: finding?.key || `${index}-merged-${findingIndex}`,
-            title: finding?.title || "未命名发现",
-            severity: finding?.severity || "low",
-          }))
-        : [],
-      minorityFindings: Array.isArray(item.minorityFindings)
-        ? item.minorityFindings.map((finding, findingIndex) => ({
-            key: finding?.key || `${index}-minority-${findingIndex}`,
-            title: finding?.title || "未命名发现",
-            severity: finding?.severity || "low",
-          }))
-        : [],
-      conflicts: Array.isArray(item.conflicts)
-        ? item.conflicts.map((conflict) => ({
-            type: conflict?.type || "unknown",
-            severity: conflict?.severity || "low",
-            summary: conflict?.summary || "未提供冲突摘要",
-          }))
-        : [],
-      approvalRequired: Boolean(item.approvalRequired ?? item.approvalRecommendation?.required),
-    })),
-    developerChangeRequests: requests.map((item, index) => ({
-      id: item.id || `${item.sourceRoleAgentId || "role"}-request-${index}`,
-      sourceRoleAgentId: item.sourceRoleAgentId || "unknown",
-      sourceRoleLabel:
-        roleLabels.get(item.sourceRoleAgentId || "")
-        || fallbackRoleLabelFromId(item.sourceRoleAgentId),
-      priority: item.priority || "medium",
-      title: item.title || "未命名修正请求",
-      summary: item.summary || "",
-      requiredChanges: Array.isArray(item.requiredChanges) ? item.requiredChanges : [],
-      blocking: Boolean(item.blocking),
-      approvalRequired: Boolean(item.approvalRequired),
-      status: item.status || "open",
-    })),
-  };
-}
-
-function inferWorkflowStatus(
-  workflowRun: WorkflowRunPayload | null,
-  stages: WorkflowStagePayload[],
-  taskStatus?: string | null,
-) {
-  if (workflowRun?.status) {
-    return workflowRun.status;
-  }
-
-  if (stages.some((stage) => stage.status === "blocked")) {
-    return "blocked";
-  }
-
-  if (stages.some((stage) => stage.status === "waiting-approval" || stage.approvalState === "pending")) {
-    return "waiting-approval";
-  }
-
-  if (stages.some((stage) => stage.status === "running")) {
-    return "running";
-  }
-
-  switch (taskStatus) {
-    case "running":
-      return "running";
-    case "paused":
-      return "blocked";
-    case "completed":
-      return "completed";
-    case "failed":
-      return "failed";
-    case "cancelled":
-      return "cancelled";
-    default:
-      return "pending";
-  }
-}
-
-function inferWorkflowCurrentStage(
-  workflowRun: WorkflowRunPayload | null,
-  stages: WorkflowStagePayload[],
-  workflowStatus: string,
-  taskStatus?: string | null,
-) {
-  if (workflowRun?.currentStage) {
-    return workflowRun.currentStage;
-  }
-
-  const activeStage = stages.find(
-    (stage) =>
-      Boolean(stage.stageKey)
-      && (stage.status === "running"
-        || stage.status === "blocked"
-        || stage.status === "waiting-approval"
-        || stage.approvalState === "pending"
-        || (workflowStatus === "running" && stage.status === "pending")),
-  );
-  if (activeStage?.stageKey) {
-    return activeStage.stageKey;
-  }
-
-  const completedStage = [...stages].reverse().find((stage) => stage.stageKey && stage.status === "completed");
-  if (completedStage?.stageKey) {
-    return completedStage.stageKey;
-  }
-
-  if (taskStatus === "completed") {
-    return "done";
-  }
-
-  if (taskStatus === "cancelled") {
-    return "cancelled";
-  }
-
-  return "unknown";
-}
 
 async function runPreExecutionHooks(
   task: ExecutableTask,
@@ -852,6 +500,7 @@ async function prepareExecutionContext(
     authorization,
     strategy.categoryModelMap[classification.category] || undefined,
   );
+  const workflowTemplateId = await resolveTaskWorkflowTemplateId(task, authorization);
   const repoContext = buildRepoContext(task, identitySnapshot);
 
   return {
@@ -861,6 +510,7 @@ async function prepareExecutionContext(
     classification,
     executionAgent,
     plan,
+    workflowTemplateId,
     repoContext,
     resolvedModel,
     effectiveModel: resolvedModel
@@ -968,10 +618,11 @@ async function persistExecutionStart(
 ) {
   await cpFetch(`/api/tasks/${encodeURIComponent(context.task.id)}`, {
     method: "PATCH",
-    body: buildTaskPatchBody(execResult, context.classification, context.identitySnapshot, {
+    body: buildTaskPatchBody(context.task, execResult, context.classification, context.identitySnapshot, {
       selectedAgent: context.executionAgent,
       effectiveModel: context.effectiveModel,
       plan: context.plan,
+      workflowTemplateId: context.workflowTemplateId,
       hookExecutions: context.hookExecutions,
     }),
     authorization: context.authorization,
@@ -980,7 +631,7 @@ async function persistExecutionStart(
   await ensureTaskWorkflowStarted({
     authorization: context.authorization,
     taskId: context.task.id,
-    templateId: context.plan.templateId,
+    templateId: context.workflowTemplateId,
   });
 }
 
@@ -1305,16 +956,65 @@ const createTaskSchema = z.object({
   gitAuthorEmail: z.string().email().max(200).optional(),
 });
 
+async function fetchProjectWorkflowTemplateId(projectId: string, authorization: string) {
+  const projectResult = await cpFetch<{ settings?: { workflowTemplateId?: string | null } }>(
+    `/api/projects/${encodeURIComponent(projectId)}`,
+    { authorization },
+  );
+
+  if (!projectResult.ok) {
+    return null;
+  }
+
+  return typeof projectResult.data?.settings?.workflowTemplateId === "string"
+    && projectResult.data.settings.workflowTemplateId.trim()
+    ? projectResult.data.settings.workflowTemplateId.trim()
+    : null;
+}
+
+async function snapshotTaskWorkflowTemplate(
+  taskId: string,
+  projectId: string,
+  authorization: string,
+) {
+  const workflowTemplateId = await fetchProjectWorkflowTemplateId(projectId, authorization);
+
+  await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
+    method: "PATCH",
+    authorization,
+    body: {
+      strategy: mergeTaskStrategy(undefined, {
+        workflowTemplateId,
+      }),
+    },
+  });
+
+  return workflowTemplateId;
+}
+
+async function resolveTaskWorkflowTemplateId(task: ExecutableTask, authorization: string) {
+  const parsedStrategy = parseTaskStrategy(task.strategy);
+  if (Object.prototype.hasOwnProperty.call(parsedStrategy, "workflowTemplateId")) {
+    return typeof parsedStrategy.workflowTemplateId === "string" && parsedStrategy.workflowTemplateId.trim()
+      ? parsedStrategy.workflowTemplateId.trim()
+      : null;
+  }
+
+  return fetchProjectWorkflowTemplateId(task.projectId, authorization);
+}
+
 taskRoutes.post("/", zValidator("json", createTaskSchema), async (c) => {
   const body = c.req.valid("json");
+  const authorization = authHeader(c);
 
   const result = await cpFetch<{ id: string; status: string }>("/api/tasks", {
     method: "POST",
     body,
-    authorization: authHeader(c),
+    authorization,
   });
 
   if (result.ok) {
+    await snapshotTaskWorkflowTemplate(result.data.id, body.projectId, authorization);
     wsBroadcaster.broadcast({
       id: crypto.randomUUID(),
       type: "task.created",

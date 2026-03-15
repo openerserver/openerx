@@ -25,6 +25,7 @@ import {
 } from "./modules/tasks/reconcile";
 import { taskRoutes } from "./modules/tasks/routes";
 import { userRoutes } from "./modules/users/routes";
+import { workflowTemplateRoutes } from "./modules/workflow-templates/routes";
 import { workbenchRoutes } from "./modules/workbench/routes";
 
 const app = new Hono();
@@ -68,6 +69,7 @@ app.route("/api/orgs", orgRoutes);
 app.route("/api/users", userRoutes);
 app.route("/api/config", configRoutes);
 app.route("/api/chat-settings", chatSettingsRoutes);
+app.route("/api/workflow-templates", workflowTemplateRoutes);
 app.route("/api/workbench", workbenchRoutes);
 
 // ── Start Server ───────────────────────────────────────────────────

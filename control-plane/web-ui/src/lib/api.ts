@@ -755,6 +755,7 @@ export interface EnvironmentApprovalPolicyBinding {
 export interface ProjectSettings {
   defaultModel?: string;
   defaultEnvironmentId?: string;
+  workflowTemplateId?: string;
   approvalPolicyTemplateId?: string;
   approvalPolicy?: ApprovalPolicyMode;
   environmentApprovalPolicies?: Record<string, EnvironmentApprovalPolicyBinding>;
@@ -1524,6 +1525,9 @@ export interface AgentSummary {
   name: string;
   description: string;
   model: string;
+  category?: string;
+  tags?: string[];
+  applyTo?: string[];
 }
 
 export interface AgentDetail {
@@ -2259,6 +2263,20 @@ export interface TaskStageViewModel {
   approvalState: string;
   blockingReason?: string;
   primaryRoleLabel?: string;
+  gateCount: number;
+  approvalCount: number;
+  runtimeSummary: {
+    conclusionCount: number;
+    blockDecisionCount: number;
+    approvalDecisionCount: number;
+    manualReviewCount: number;
+    openChangeRequestCount: number;
+    blockingChangeRequestCount: number;
+    gateResult: "not-configured" | "pending" | "passed" | "blocked";
+    approvalResult: "not-configured" | "pending" | "approved" | "rejected";
+    latestBlockingRoleLabel?: string;
+    latestApprovalRoleLabel?: string;
+  };
 }
 
 export interface RoleConclusionViewModel {
@@ -2280,6 +2298,7 @@ export interface DeveloperChangeRequestViewModel {
   id: string;
   sourceRoleAgentId: string;
   sourceRoleLabel: string;
+  stageKey?: string;
   priority: string;
   title: string;
   summary: string;
@@ -2301,6 +2320,192 @@ export interface TaskWorkflowViewModel {
   developerChangeRequests: DeveloperChangeRequestViewModel[];
 }
 
+export interface WorkflowTemplateRecord {
+  id: string;
+  projectId?: string | null;
+  name: string;
+  description?: string | null;
+  category?: string | null;
+  enabled: boolean;
+  selectableByProjects: boolean;
+  stageOrderJson: string[];
+  defaultRolesJson?: string[] | null;
+  version: number;
+  createdBy?: string | null;
+  updatedBy?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WorkflowTemplateStageRecord {
+  id: string;
+  templateId: string;
+  stageKey: string;
+  name: string;
+  enabled: boolean;
+  mode: "single" | "parallel" | "pipeline";
+  primaryRoleAgentId: string;
+  participantRoleAgentIdsJson: string[];
+  roleExecutionPoliciesJson?: Array<Record<string, unknown>> | null;
+  entryCriteriaJson?: string[] | null;
+  exitCriteriaJson?: string[] | null;
+  hooksJson?: Array<Record<string, unknown>> | null;
+  gatesJson?: Array<Record<string, unknown>> | null;
+  approvalsJson?: Array<Record<string, unknown>> | null;
+  failurePolicyJson?: Record<string, unknown> | null;
+  orderIndex: number;
+}
+
+export interface WorkflowStageCatalogItem {
+  key: string;
+  label: string;
+  description: string;
+}
+
+export interface WorkflowTemplateEditorView {
+  template: WorkflowTemplateRecord | null;
+  stages: WorkflowTemplateStageRecord[];
+  availableRoles: Array<{
+    id: string;
+    name: string;
+    riskLevel?: string;
+    defaultExecutionMode?: string;
+    allowedStages?: string[];
+  }>;
+  stageCatalog: WorkflowStageCatalogItem[];
+  diagnostics: {
+    duplicateStageKeys: string[];
+    missingConfiguredStages: string[];
+    hasCustomStages: boolean;
+  };
+}
+
+export interface ProjectWorkflowTemplateView {
+  project: {
+    id: string;
+    name: string;
+    slug: string;
+  };
+  currentTemplate: WorkflowTemplateRecord | null;
+  workflowTemplateId: string | null;
+  currentTemplateSource: "bound" | "unbound";
+  stages: WorkflowTemplateStageRecord[];
+  selectableTemplates: WorkflowTemplateRecord[];
+  stageCatalog: WorkflowStageCatalogItem[];
+  access: {
+    canManage: boolean;
+    message?: string | null;
+  };
+}
+
+export interface OrchestrationBindingViewModel {
+  id: string;
+  bindingKey: string;
+  label: string;
+  runtimeAgent: string;
+  enabled: boolean;
+  priority: number;
+  model?: string | null;
+  source: "system" | "project";
+}
+
+export interface OrchestrationBindingResolutionViewModel {
+  source: "system" | "project" | "mixed" | "none";
+  sourceReason: string;
+  activeBindings: OrchestrationBindingViewModel[];
+  standbyBindings: OrchestrationBindingViewModel[];
+  candidatePoolSize: number;
+  maxBindings: number | null;
+}
+
+export interface OrchestrationStageRoleMatrixRowViewModel {
+  roleAgentId: string;
+  roleLabel: string;
+  involvementKinds: string[];
+  reasons: string[];
+  executionMode: string;
+  executionModeLabel: string;
+  executionMethodSource: "stage-policy" | "project-override" | "system-default";
+  executionMethodSourceLabel: string;
+  projectMode: "platform-default" | "project-extend" | "project-takeover" | "unregistered";
+  projectModeLabel: string;
+  impactSummary: string;
+  riskLevel: string;
+  stageCovered: boolean;
+  bindingResolution: OrchestrationBindingResolutionViewModel;
+  warnings: string[];
+}
+
+export interface OrchestrationStageViewModel {
+  id: string;
+  stageKey: string;
+  name: string;
+  enabled: boolean;
+  mode: "single" | "parallel" | "pipeline";
+  orderIndex: number;
+  primaryRoleAgentId: string;
+  primaryRoleLabel: string;
+  participantRoleAgentIdsJson: string[];
+  gatesJson?: Array<Record<string, unknown>> | null;
+  approvalsJson?: Array<Record<string, unknown>> | null;
+  failurePolicyJson?: Record<string, unknown> | null;
+  roleMatrix: OrchestrationStageRoleMatrixRowViewModel[];
+  runtimeSummary: {
+    totalTasks: number;
+    runningCount: number;
+    blockedCount: number;
+    waitingApprovalCount: number;
+    completedCount: number;
+    failedCount: number;
+    blockDecisionCount: number;
+    approvalDecisionCount: number;
+    openChangeRequestCount: number;
+    blockingChangeRequestCount: number;
+    latestTask: {
+      taskId: string;
+      title: string;
+      workflowStatus: string;
+      stageStatus: string;
+      approvalState: string;
+      blockingReason?: string;
+      timestamp?: string | null;
+    } | null;
+  } | null;
+}
+
+export interface OrchestrationScenarioViewModel {
+  source: "current" | "candidate";
+  template: WorkflowTemplateRecord | null;
+  stages: OrchestrationStageViewModel[];
+}
+
+export interface ProjectOrchestrationView {
+  project: {
+    id: string;
+    name: string;
+    slug: string;
+  };
+  workflowTemplateId: string | null;
+  currentTemplate: WorkflowTemplateRecord | null;
+  selectableTemplates: WorkflowTemplateRecord[];
+  access: {
+    canManage: boolean;
+    message?: string | null;
+  };
+  roleCapabilities: Array<ProjectRoleExecutionViewRow & {
+    executionModeLabel: string;
+    projectModeLabel: string;
+    bindingCounts: {
+      system: number;
+      project: number;
+    };
+  }>;
+  scenarios: {
+    current: OrchestrationScenarioViewModel;
+    candidate: OrchestrationScenarioViewModel | null;
+  };
+}
+
 export async function listRoleAgents(projectId?: string) {
   const params = new URLSearchParams();
   if (projectId) params.set("projectId", projectId);
@@ -2308,9 +2513,182 @@ export async function listRoleAgents(projectId?: string) {
   return request<{ data: RoleAgentRecord[] }>(`/role-agents${suffix}`);
 }
 
+export async function listWorkflowTemplates(projectId?: string) {
+  const params = new URLSearchParams();
+  if (projectId) params.set("projectId", projectId);
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  return request<{ data: WorkflowTemplateRecord[] }>(`/workflow-templates${suffix}`);
+}
+
+export async function createWorkflowTemplate(data: {
+  id: string;
+  projectId?: string;
+  name: string;
+  description?: string;
+  category?: string;
+  enabled: boolean;
+  selectableByProjects: boolean;
+  stageOrder: string[];
+  defaultRoles?: string[];
+}) {
+  return request<WorkflowTemplateRecord>("/workflow-templates", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateWorkflowTemplate(
+  templateId: string,
+  data: Partial<{
+    projectId: string;
+    name: string;
+    description: string;
+    category: string;
+    enabled: boolean;
+    selectableByProjects: boolean;
+    stageOrder: string[];
+    defaultRoles: string[];
+  }>,
+) {
+  return request<WorkflowTemplateRecord>(`/workflow-templates/${encodeURIComponent(templateId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function cloneWorkflowTemplate(
+  templateId: string,
+  data: {
+    id: string;
+    name: string;
+    description?: string;
+    category?: string;
+    projectId?: string;
+    enabled?: boolean;
+    selectableByProjects?: boolean;
+    defaultRoles?: string[];
+  },
+) {
+  return request<{
+    template: WorkflowTemplateRecord;
+    stages: WorkflowTemplateStageRecord[];
+    sourceTemplateId: string;
+  }>(`/workflow-templates/${encodeURIComponent(templateId)}/clone`, {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function listWorkflowTemplateStages(templateId: string) {
+  return request<{ data: WorkflowTemplateStageRecord[] }>(
+    `/workflow-templates/${encodeURIComponent(templateId)}/stages`,
+  );
+}
+
+export async function createWorkflowTemplateStage(
+  templateId: string,
+  data: {
+    id: string;
+    stageKey: string;
+    name: string;
+    enabled: boolean;
+    mode: "single" | "parallel" | "pipeline";
+    primaryRoleAgentId: string;
+    participantRoleAgentIds: string[];
+    roleExecutionPolicies?: Array<Record<string, unknown>>;
+    entryCriteria?: string[];
+    exitCriteria?: string[];
+    hooks?: Array<Record<string, unknown>>;
+    gates?: Array<Record<string, unknown>>;
+    approvals?: Array<Record<string, unknown>>;
+    failurePolicy?: Record<string, unknown>;
+    orderIndex: number;
+  },
+) {
+  return request<WorkflowTemplateStageRecord>(
+    `/workflow-templates/${encodeURIComponent(templateId)}/stages`,
+    {
+      method: "POST",
+      body: JSON.stringify(data),
+    },
+  );
+}
+
+export async function updateWorkflowTemplateStage(
+  templateId: string,
+  stageId: string,
+  data: Partial<{
+    stageKey: string;
+    name: string;
+    enabled: boolean;
+    mode: "single" | "parallel" | "pipeline";
+    primaryRoleAgentId: string;
+    participantRoleAgentIds: string[];
+    roleExecutionPolicies: Array<Record<string, unknown>>;
+    entryCriteria: string[];
+    exitCriteria: string[];
+    hooks: Array<Record<string, unknown>>;
+    gates: Array<Record<string, unknown>>;
+    approvals: Array<Record<string, unknown>>;
+    failurePolicy: Record<string, unknown>;
+    orderIndex: number;
+  }>,
+) {
+  return request<WorkflowTemplateStageRecord>(
+    `/workflow-templates/${encodeURIComponent(templateId)}/stages/${encodeURIComponent(stageId)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    },
+  );
+}
+
+export async function deleteWorkflowTemplateStage(templateId: string, stageId: string) {
+  return request<{ ok: boolean; id: string }>(
+    `/workflow-templates/${encodeURIComponent(templateId)}/stages/${encodeURIComponent(stageId)}`,
+    {
+      method: "DELETE",
+    },
+  );
+}
+
+export async function getWorkflowTemplateEditorView(templateId: string) {
+  return request<WorkflowTemplateEditorView>(
+    `/workflow-templates/${encodeURIComponent(templateId)}/editor-view`,
+  );
+}
+
+export async function getProjectWorkflowTemplateView(projectId: string) {
+  return request<ProjectWorkflowTemplateView>(
+    `/workflow-templates/projects/${encodeURIComponent(projectId)}/view`,
+  );
+}
+
+export async function updateProjectWorkflowTemplateBinding(
+  projectId: string,
+  workflowTemplateId: string | null,
+) {
+  return request<{ projectId: string; workflowTemplateId: string | null; template: WorkflowTemplateRecord | null }>(
+    `/workflow-templates/projects/${encodeURIComponent(projectId)}/selection`,
+    {
+      method: "PUT",
+      body: JSON.stringify({ workflowTemplateId }),
+    },
+  );
+}
+
 export async function getProjectRoleExecutionView(projectId: string) {
   return request<ProjectRoleExecutionView>(
     `/projects/${encodeURIComponent(projectId)}/role-execution-view`,
+  );
+}
+
+export async function getProjectOrchestrationView(projectId: string, candidateTemplateId?: string) {
+  const params = new URLSearchParams();
+  if (candidateTemplateId) params.set("candidateTemplateId", candidateTemplateId);
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  return request<ProjectOrchestrationView>(
+    `/projects/${encodeURIComponent(projectId)}/orchestration-view${suffix}`,
   );
 }
 

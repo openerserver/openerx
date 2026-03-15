@@ -396,10 +396,22 @@
       <a-tab-pane v-if="isSystemAdmin" key="agents" tab="Agent">
         <a-row :gutter="16">
           <a-col :span="6">
-            <a-menu :selectedKeys="agentSelected" mode="inline" @click="onAgentSelect">
-              <a-menu-item v-for="a in agentsList" :key="a.name">
-                {{ a.name }}
-              </a-menu-item>
+            <a-menu
+              :selectedKeys="agentSelected"
+              :openKeys="agentOpenKeys"
+              mode="inline"
+              @click="onAgentSelect"
+              @openChange="onAgentOpenChange"
+            >
+              <a-sub-menu
+                v-for="group in groupedAgentsList"
+                :key="group.key"
+              >
+                <template #title>{{ `${group.label} (${group.items.length})` }}</template>
+                <a-menu-item v-for="a in group.items" :key="a.name">
+                  {{ a.name }}
+                </a-menu-item>
+              </a-sub-menu>
             </a-menu>
           </a-col>
           <a-col :span="18">
@@ -822,6 +834,18 @@
             <template #extra>
               <a-button size="small" type="dashed" @click="addTemplate">+ 新增模板</a-button>
             </template>
+            <a-alert
+              type="info"
+              show-icon
+              style="margin-bottom: 16px"
+              message="这里维护的是编排策略里的执行模板。阶段状态机模板已拆到独立管理台。"
+            >
+              <template #description>
+                <router-link :to="{ name: 'WorkflowTemplatesAdmin' }">
+                  <a-button size="small">进入阶段模板管理台</a-button>
+                </router-link>
+              </template>
+            </a-alert>
             <a-empty v-if="strategyData.templates.length === 0" description="暂无模板，请添加" />
             <a-collapse v-else accordion size="small">
               <a-collapse-panel
@@ -2162,14 +2186,173 @@ onUnmounted(() => {
 // ── Agents ─────────────────────────────────────────────────────────
 const agentsList = ref<AgentSummary[]>([]);
 const agentSelected = ref<string[]>([]);
+const agentOpenKeys = ref<string[]>([]);
 const agentDetail = ref<{ frontmatter: Record<string, unknown>; body: string } | null>(null);
 const agentLoading = ref(false);
+
+interface AgentGroupDefinition {
+  key: string;
+  label: string;
+  priority: number;
+  keywords: string[];
+}
+
+interface AgentGroupView {
+  key: string;
+  label: string;
+  priority: number;
+  items: AgentSummary[];
+}
+
+const agentGroupDefinitions: AgentGroupDefinition[] = [
+  {
+    key: "orchestration",
+    label: "编排 / 路由",
+    priority: 10,
+    keywords: ["orchestrator", "dispatch", "decomposes", "routes", "routing", "specialist agents"],
+  },
+  {
+    key: "planning",
+    label: "规划 / 方案",
+    priority: 20,
+    keywords: ["planning", "plan", "pre-plan", "post-plan", "requirement", "interviews", "ambiguities"],
+  },
+  {
+    key: "exploration",
+    label: "探索 / 检索",
+    priority: 30,
+    keywords: ["exploration", "lookup", "retrieval", "finds", "summarizes", "context", "queries"],
+  },
+  {
+    key: "execution",
+    label: "执行 / 开发",
+    priority: 40,
+    keywords: ["execution", "writes", "edits", "tests code", "implements", "end-to-end"],
+  },
+  {
+    key: "review-validation",
+    label: "审核 / 校验",
+    priority: 50,
+    keywords: ["validator", "reviews", "audit", "clarity", "completeness", "verifiability", "validates"],
+  },
+  {
+    key: "operations",
+    label: "运维 / 故障处理",
+    priority: 60,
+    keywords: ["operations", "troubleshooting", "system inspection", "inspection", "ops"],
+  },
+  {
+    key: "multimodal",
+    label: "多模态",
+    priority: 70,
+    keywords: ["multimodal", "images", "pdf", "screenshots", "design mockups"],
+  },
+];
+
+const agentCategoryAliases: Record<string, string> = {
+  orchestration: "orchestration",
+  orchestrator: "orchestration",
+  planning: "planning",
+  planner: "planning",
+  explore: "exploration",
+  exploration: "exploration",
+  retrieval: "exploration",
+  execution: "execution",
+  coding: "execution",
+  review: "review-validation",
+  validation: "review-validation",
+  audit: "review-validation",
+  operations: "operations",
+  ops: "operations",
+  multimodal: "multimodal",
+};
+
+function getAgentSearchText(agent: AgentSummary): string {
+  return [agent.name, agent.description, agent.category, agent.model, ...(agent.tags ?? []), ...(agent.applyTo ?? [])]
+    .filter((part): part is string => Boolean(part && part.trim()))
+    .join(" ")
+    .toLowerCase();
+}
+
+function matchesAgentKeyword(searchText: string, keyword: string): boolean {
+  const escaped = escapeRegExp(keyword.toLowerCase()).replace(/\s+/g, "\\s+");
+  const pattern = new RegExp(`(^|[^a-z0-9])${escaped}([^a-z0-9]|$)`);
+  return pattern.test(searchText);
+}
+
+function resolveAgentGroup(agent: AgentSummary): { key: string; label: string; priority: number } {
+  const rawCategory = String(agent.category ?? "").trim().toLowerCase();
+  if (rawCategory) {
+    const aliasKey = agentCategoryAliases[rawCategory];
+    const aliasGroup = aliasKey ? agentGroupDefinitions.find((group) => group.key === aliasKey) : undefined;
+    if (aliasGroup) {
+      return { key: aliasGroup.key, label: aliasGroup.label, priority: aliasGroup.priority };
+    }
+    return {
+      key: `custom:${rawCategory}`,
+      label: normalizeSkillGroupLabel(rawCategory),
+      priority: 999,
+    };
+  }
+
+  const searchText = getAgentSearchText(agent);
+  const matchedGroup = agentGroupDefinitions.find((group) =>
+    group.keywords.some((keyword) => matchesAgentKeyword(searchText, keyword)),
+  );
+  if (matchedGroup) {
+    return { key: matchedGroup.key, label: matchedGroup.label, priority: matchedGroup.priority };
+  }
+
+  return { key: "uncategorized", label: "未分类", priority: 999 };
+}
+
+const groupedAgentsList = computed<AgentGroupView[]>(() => {
+  const groups = new Map<string, AgentGroupView>();
+
+  for (const agent of [...agentsList.value].sort((left, right) => left.name.localeCompare(right.name, "zh-CN"))) {
+    const groupMeta = resolveAgentGroup(agent);
+    const current = groups.get(groupMeta.key);
+    if (current) {
+      current.items.push(agent);
+      continue;
+    }
+    groups.set(groupMeta.key, {
+      key: groupMeta.key,
+      label: groupMeta.label,
+      priority: groupMeta.priority,
+      items: [agent],
+    });
+  }
+
+  return [...groups.values()].sort((left, right) => {
+    if (left.priority !== right.priority) return left.priority - right.priority;
+    return left.label.localeCompare(right.label, "zh-CN");
+  });
+});
+
+const agentGroupKeyByAgentName = computed<Record<string, string>>(() => {
+  const mapping: Record<string, string> = {};
+  for (const group of groupedAgentsList.value) {
+    for (const agent of group.items) {
+      mapping[agent.name] = group.key;
+    }
+  }
+  return mapping;
+});
+
+function onAgentOpenChange(keys: string[]) {
+  agentOpenKeys.value = keys;
+}
 
 async function onAgentSelect({ key }: { key: string | number }) {
   const agentKey = String(key);
   agentLoading.value = true;
   try {
     agentSelected.value = [agentKey];
+    const groupKey = agentGroupKeyByAgentName.value[agentKey];
+    if (groupKey && !agentOpenKeys.value.includes(groupKey)) {
+      agentOpenKeys.value = [...agentOpenKeys.value, groupKey];
+    }
     const res = await getAgent(agentKey);
     agentDetail.value = { frontmatter: res.data.frontmatter, body: res.data.body };
   } catch (e: unknown) {

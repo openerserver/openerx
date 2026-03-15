@@ -319,6 +319,9 @@ configRoutes.get("/agents", (c) => {
       name: (frontmatter.name as string) || f.replace(".md", ""),
       description: (frontmatter.description as string) || "",
       model: (frontmatter.model as string) || "",
+      category: getTrimmedString(frontmatter.category),
+      tags: getTrimmedStringArray(frontmatter.tags),
+      applyTo: getTrimmedStringArray(frontmatter.applyTo),
     };
   });
   return c.json({ data: agents });
@@ -787,6 +790,9 @@ configRoutes.get("/overview", (c) => {
       name: (frontmatter.name as string) || f.replace(".md", ""),
       description: (frontmatter.description as string) || "",
       model: (frontmatter.model as string) || "",
+      category: getTrimmedString(frontmatter.category),
+      tags: getTrimmedStringArray(frontmatter.tags),
+      applyTo: getTrimmedStringArray(frontmatter.applyTo),
     };
   });
 

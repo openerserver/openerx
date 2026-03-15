@@ -27,6 +27,154 @@ function normalizeLegacyCreatedAt(tableName: string, columnName = "created_at") 
     .run(nowIso());
 }
 
+function defaultWorkflowTemplateDefinition() {
+  const templateId = "workflow-template-default-delivery";
+  return {
+    template: {
+      id: templateId,
+      name: "默认研发交付模板",
+      description: "覆盖澄清、设计、实现、验证和发布的标准研发阶段模板。",
+      category: "delivery",
+      enabled: true,
+      selectableByProjects: true,
+      stageOrderJson: ["clarify", "design", "implement", "verify", "release"],
+      defaultRolesJson: [
+        "role.product",
+        "role.architect",
+        "role.developer",
+        "role.qa",
+        "role.release",
+        "role.security",
+      ],
+      version: 1,
+    },
+    stages: [
+      {
+        id: `${templateId}.clarify`,
+        stageKey: "clarify",
+        name: "需求澄清",
+        enabled: true,
+        mode: "single" as const,
+        primaryRoleAgentId: "role.product",
+        participantRoleAgentIdsJson: ["role.architect", "role.security"],
+        orderIndex: 0,
+      },
+      {
+        id: `${templateId}.design`,
+        stageKey: "design",
+        name: "方案设计",
+        enabled: true,
+        mode: "parallel" as const,
+        primaryRoleAgentId: "role.architect",
+        participantRoleAgentIdsJson: ["role.product", "role.security", "role.visual"],
+        orderIndex: 1,
+      },
+      {
+        id: `${templateId}.implement`,
+        stageKey: "implement",
+        name: "实现开发",
+        enabled: true,
+        mode: "single" as const,
+        primaryRoleAgentId: "role.developer",
+        participantRoleAgentIdsJson: ["role.security"],
+        orderIndex: 2,
+      },
+      {
+        id: `${templateId}.verify`,
+        stageKey: "verify",
+        name: "集成验证",
+        enabled: true,
+        mode: "parallel" as const,
+        primaryRoleAgentId: "role.qa",
+        participantRoleAgentIdsJson: ["role.developer", "role.security", "role.operations"],
+        orderIndex: 3,
+      },
+      {
+        id: `${templateId}.release`,
+        stageKey: "release",
+        name: "发布执行",
+        enabled: true,
+        mode: "single" as const,
+        primaryRoleAgentId: "role.release",
+        participantRoleAgentIdsJson: ["role.qa", "role.operations", "role.security"],
+        orderIndex: 4,
+      },
+    ],
+  };
+}
+
+function bootstrapDefaultWorkflowTemplate(projectId: string) {
+  const now = nowIso();
+  const definition = defaultWorkflowTemplateDefinition();
+
+  const existingTemplate = db
+    .select()
+    .from(schema.workflowTemplates)
+    .where(eq(schema.workflowTemplates.id, definition.template.id))
+    .get();
+
+  if (!existingTemplate) {
+    db.insert(schema.workflowTemplates)
+      .values({
+        ...definition.template,
+        projectId: null,
+        createdBy: "system:seed",
+        updatedBy: "system:seed",
+        createdAt: now,
+        updatedAt: now,
+      })
+      .run();
+    console.log("  ✓ Created default workflow template");
+  } else {
+    console.log("  ○ Default workflow template already exists");
+  }
+
+  for (const stage of definition.stages) {
+    const existingStage = db
+      .select()
+      .from(schema.workflowTemplateStages)
+      .where(eq(schema.workflowTemplateStages.id, stage.id))
+      .get();
+    if (existingStage) {
+      continue;
+    }
+
+    db.insert(schema.workflowTemplateStages)
+      .values({
+        ...stage,
+        templateId: definition.template.id,
+        roleExecutionPoliciesJson: null,
+        entryCriteriaJson: null,
+        exitCriteriaJson: null,
+        hooksJson: null,
+        gatesJson: null,
+        approvalsJson: null,
+        failurePolicyJson: null,
+      })
+      .run();
+  }
+
+  const existingProject = db
+    .select()
+    .from(schema.projects)
+    .where(eq(schema.projects.id, projectId))
+    .get();
+  const projectSettings = (existingProject?.settings || {}) as schema.ProjectSettings;
+  if (existingProject && !projectSettings.workflowTemplateId) {
+    db.update(schema.projects)
+      .set({
+        settings: {
+          ...projectSettings,
+          workflowTemplateId: definition.template.id,
+        },
+        updatedAt: now,
+      })
+      .where(eq(schema.projects.id, projectId))
+      .run();
+    console.log("  ✓ Bound default workflow template to default project");
+  }
+}
+
 async function seed() {
   console.log("Seeding database...");
 
@@ -41,6 +189,8 @@ async function seed() {
   normalizeLegacyCreatedAt("sessions", "started_at");
   normalizeLegacyCreatedAt("role_agents");
   normalizeLegacyCreatedAt("role_agent_bindings");
+  normalizeLegacyCreatedAt("workflow_templates");
+  normalizeLegacyCreatedAt("workflow_template_stages");
 
   // ── 1. Default Organization ───────────────────────────────────
   const orgId = "org-default";
@@ -205,6 +355,9 @@ async function seed() {
   console.log(
     `  ✓ Bootstrapped role bindings (created: ${roleBootstrap.createdBindings.length}, updated: ${roleBootstrap.updatedBindings.length}, skipped: ${roleBootstrap.skippedBindings.length})`,
   );
+
+  // ── 8. Default Workflow Template ─────────────────────────────
+  bootstrapDefaultWorkflowTemplate(projectId);
 
   console.log("\nSeed complete! Login with:");
   console.log(`  Username: ${adminUsername}`);

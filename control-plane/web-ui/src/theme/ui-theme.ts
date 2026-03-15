@@ -264,9 +264,11 @@ export const workbenchThemeStyles = {
   } satisfies CSSProperties,
   tabLabel: {
     display: "flex",
-    flexDirection: "column",
-    gap: "3px",
+    alignItems: "center",
+    minWidth: 0,
+    maxWidth: "260px",
     padding: "2px 0",
+    overflow: "hidden",
   } satisfies CSSProperties,
   attentionTag: {
     marginInlineStart: 0,

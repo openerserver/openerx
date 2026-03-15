@@ -183,4 +183,18 @@ describe("TaskWorkbench regression", () => {
     expect(frames[0]?.attributes("src")).toBe("/tasks/task-primary?embedded=1&workbench=1");
     expect(frames[1]?.attributes("src")).toBe("/tasks/task-secondary?embedded=1&workbench=1");
   });
+
+  it("keeps workbench tabs in a single-line overflow layout for long labels", async () => {
+    const { wrapper, workbench } = await mountWorkbench();
+
+    workbench.openTask("task-1", "这是一个非常长的任务标题用于验证工作台标签不会因为内容过长而自动换行撑高导航栏", "running");
+    workbench.openTask("task-2", "第二个超长标签用于验证标签导航仍然保持单行并交给横向溢出处理", "pending");
+    await nextTick();
+    await flushPromises();
+
+    const tabs = wrapper.find(".task-workbench-tabs");
+    expect(tabs.exists()).toBe(true);
+    expect(wrapper.findAll(".task-workbench-tabs__title")).toHaveLength(2);
+    expect(wrapper.find(".task-workbench-tabs__tab-content").classes()).toContain("task-workbench-tabs__tab-content");
+  });
 });

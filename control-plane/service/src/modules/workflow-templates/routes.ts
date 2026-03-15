@@ -171,3 +171,21 @@ workflowTemplateRoutes.patch(
     return c.json(updated);
   },
 );
+
+workflowTemplateRoutes.delete("/:templateId/stages/:stageId", async (c) => {
+  const templateId = c.req.param("templateId");
+  const stageId = c.req.param("stageId");
+
+  const existing = await db.query.workflowTemplateStages.findFirst({
+    where: and(eq(workflowTemplateStages.id, stageId), eq(workflowTemplateStages.templateId, templateId)),
+  });
+  if (!existing) {
+    return c.json({ error: "Workflow template stage not found" }, 404);
+  }
+
+  await db
+    .delete(workflowTemplateStages)
+    .where(and(eq(workflowTemplateStages.id, stageId), eq(workflowTemplateStages.templateId, templateId)));
+
+  return c.json({ ok: true, id: stageId });
+});

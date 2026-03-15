@@ -173,6 +173,7 @@ export interface JudgeResult {
 
 export interface PersistedTaskStrategy {
   selectedTemplateId?: string;
+  workflowTemplateId?: string | null;
   complexity?: string;
   suggestedAgents?: string[];
   requiresPlan?: boolean;

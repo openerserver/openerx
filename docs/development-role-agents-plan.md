@@ -21,6 +21,46 @@
 - [docs/multi-agent-hook-architecture.md](docs/multi-agent-hook-architecture.md)
 - [docs/approval-standards-management-plan.md](docs/approval-standards-management-plan.md)
 - [docs/architecture-overview.md](docs/architecture-overview.md)
+- [docs/organization-oriented-agent-operating-model.md](docs/organization-oriented-agent-operating-model.md)
+- [docs/boss-agent-design.md](docs/boss-agent-design.md)
+
+## 1.1 在文档体系中的位置
+
+本方案聚焦“角色 Agent 与研发阶段如何接入系统”，属于角色与阶段接入蓝图。
+
+它主要回答：
+
+- 系统中应建立哪些角色 Agent
+- 每类角色在研发流程中承担什么职责
+- 这些角色应在什么阶段介入
+- 模板、Hook、审批和阶段产物如何衔接
+
+它不负责完整回答以下上层问题：
+
+- 平台管理员与项目管理者之间如何分层
+- 哪些判断由模型自动完成，哪些必须由人类保留
+- 系统为何要按 IT 公司开发组的组织方式来表达
+- 谁来承担项目经营、节奏控制和项目级裁决职责
+
+这些问题由 [docs/organization-oriented-agent-operating-model.md](docs/organization-oriented-agent-operating-model.md) 负责回答。
+
+在新的文档体系中，建议将两份文档理解为上下层关系：
+
+- [docs/development-role-agents-plan.md](docs/development-role-agents-plan.md)：角色与阶段接入设计文档
+- [docs/organization-oriented-agent-operating-model.md](docs/organization-oriented-agent-operating-model.md)：组织架构化产品总方案
+
+进一步说：
+
+- 本文档定义“团队里有哪些岗位、这些岗位如何进入流程”
+- 组织化方案定义“谁负责经营团队、谁负责制定制度、哪些职责交给老板 Agent 自动完成”
+
+因此，本文档不被新的组织化方案废弃，而是被其上提并纳入更完整的组织叙事中。
+
+若需要进一步查看老板 Agent 的职责、输入输出、升级规则和自动托管等级，应继续参考 [docs/boss-agent-design.md](docs/boss-agent-design.md)。
+
+若需要统一理解“单兵模式 / 组织化协作模式 / 混合模式”与 `L0 / L1 / L2` 自动托管等级的组合关系，应以 [docs/organization-oriented-agent-operating-model.md](docs/organization-oriented-agent-operating-model.md) 中的“协作模式 × 自动托管等级对照表”为准。
+
+若需要直接按任务场景选择推荐组合，例如小任务、跨系统改造、生产发布、安全修复，也应优先参考 [docs/organization-oriented-agent-operating-model.md](docs/organization-oriented-agent-operating-model.md) 中的“推荐使用场景表”。
 
 ## 2. 背景与问题
 

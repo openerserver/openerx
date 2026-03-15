@@ -137,9 +137,13 @@ taskWorkflowRoutes.post("/advance", zValidator("json", advanceWorkflowSchema), a
     }
   }
 
+  const nextWorkflowStatus = body.toStage
+    ? (body.status === "completed" ? "running" : body.status)
+    : body.status;
+
   await db
     .update(taskWorkflowRuns)
-    .set({ currentStage: body.toStage ?? body.fromStage, status: body.status, updatedAt: now })
+    .set({ currentStage: body.toStage ?? body.fromStage, status: nextWorkflowStatus, updatedAt: now })
     .where(eq(taskWorkflowRuns.id, workflowRun.id));
 
   const updated = await db.query.taskWorkflowRuns.findFirst({ where: eq(taskWorkflowRuns.id, workflowRun.id) });

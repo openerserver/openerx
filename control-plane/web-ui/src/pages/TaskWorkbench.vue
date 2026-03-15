@@ -44,6 +44,7 @@
 
       <template v-else>
         <a-tabs
+          class="task-workbench-tabs"
           type="editable-card"
           hide-add
           :activeKey="workbench.activeTaskId"
@@ -58,10 +59,10 @@
             <template #tab>
               <a-dropdown :trigger="['contextmenu']">
                 <div :style="workbenchThemeStyles.tabLabel">
-                  <a-space size="small" wrap>
+                  <a-space size="small" class="task-workbench-tabs__tab-content">
                     <a-badge :status="tabStatusBadge(tab.status)" />
-                    <span v-if="tab.pinned" :style="{ marginRight: '2px' }">📌</span>
-                    <span>{{ tabLabel(tab) }}</span>
+                    <span v-if="tab.pinned" class="task-workbench-tabs__pin">📌</span>
+                    <span class="task-workbench-tabs__title">{{ tabLabel(tab) }}</span>
                     <a-tag v-if="tabNeedsAttention(tab.status)" color="orange" :style="workbenchThemeStyles.attentionTag">未完成</a-tag>
                   </a-space>
                 </div>
@@ -557,3 +558,58 @@ onUnmounted(() => {
   window.removeEventListener("message", handleWorkbenchMessage);
 });
 </script>
+
+<style scoped>
+.task-workbench-tabs {
+  min-width: 0;
+}
+
+.task-workbench-tabs__tab-content {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  flex-wrap: nowrap;
+}
+
+.task-workbench-tabs__pin {
+  flex: 0 0 auto;
+  margin-right: 2px;
+}
+
+.task-workbench-tabs__title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-workbench-tabs :deep(.ant-tabs-nav) {
+  margin-bottom: 12px;
+}
+
+.task-workbench-tabs :deep(.ant-tabs-nav-wrap) {
+  min-width: 0;
+}
+
+.task-workbench-tabs :deep(.ant-tabs-nav-list) {
+  flex-wrap: nowrap;
+}
+
+.task-workbench-tabs :deep(.ant-tabs-tab) {
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: min(320px, calc(100vw - 240px));
+}
+
+.task-workbench-tabs :deep(.ant-tabs-tab-btn) {
+  min-width: 0;
+  max-width: 100%;
+}
+
+@media (max-width: 960px) {
+  .task-workbench-tabs :deep(.ant-tabs-tab) {
+    max-width: min(220px, calc(100vw - 120px));
+  }
+}
+</style>

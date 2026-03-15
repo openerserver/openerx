@@ -11,6 +11,7 @@ export interface EnvironmentApprovalPolicyBinding {
 export interface ProjectSettings {
   defaultModel?: string;
   defaultEnvironmentId?: string;
+  workflowTemplateId?: string;
   approvalPolicyTemplateId?: string;
   approvalPolicy?: ApprovalPolicyMode;
   environmentApprovalPolicies?: Record<string, EnvironmentApprovalPolicyBinding>;

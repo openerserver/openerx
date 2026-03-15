@@ -16,7 +16,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 
-type ProjectSectionKey = "overview" | "approval-policies" | "role-execution" | "cost";
+type ProjectSectionKey = "overview" | "approval-policies" | "role-execution" | "workflow" | "orchestration" | "cost";
 
 const props = defineProps<{
   projectId: string;
@@ -38,6 +38,16 @@ const items = computed(() => [
     key: "role-execution" as const,
     label: "角色执行",
     to: { name: "ProjectRoleExecution", params: { projectId: props.projectId } },
+  },
+  {
+    key: "workflow" as const,
+    label: "工作流",
+    to: { name: "ProjectWorkflowTemplate", params: { projectId: props.projectId } },
+  },
+  {
+    key: "orchestration" as const,
+    label: "介入编排",
+    to: { name: "ProjectOrchestration", params: { projectId: props.projectId } },
   },
   {
     key: "cost" as const,

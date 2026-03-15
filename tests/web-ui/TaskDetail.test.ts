@@ -696,6 +696,33 @@ describe("TaskDetail", () => {
     expect((setupState.task as { selectedModel?: string | null }).selectedModel).toBe("gpt-5.3-codex");
   });
 
+  it("submits the reply composer with Enter by default", async () => {
+    apiMocks.getTask.mockResolvedValue(makeTaskWithOverrides({ status: "pending" }));
+    apiMocks.continueTask.mockResolvedValue({ ok: true });
+
+    const wrapper = await mountPage();
+    const textarea = wrapper.find("textarea");
+
+    await textarea.setValue("继续处理剩余问题");
+    await textarea.trigger("keydown", { key: "Enter" });
+    await flushPromises();
+
+    expect(apiMocks.continueTask).toHaveBeenCalledWith("task-1", "继续处理剩余问题", "ses-1");
+  });
+
+  it("keeps Shift+Enter available for multiline input", async () => {
+    apiMocks.getTask.mockResolvedValue(makeTaskWithOverrides({ status: "pending" }));
+
+    const wrapper = await mountPage();
+    const textarea = wrapper.find("textarea");
+
+    await textarea.setValue("第一行");
+    await textarea.trigger("keydown", { key: "Enter", shiftKey: true });
+    await flushPromises();
+
+    expect(apiMocks.continueTask).not.toHaveBeenCalled();
+  });
+
   it("loads runtime pipeline for the currently selected session branch", async () => {
     routeState.query = { session: "ses-branch" };
     apiMocks.getTask.mockResolvedValueOnce(
