@@ -6,6 +6,8 @@
       @back="$router.push(`/projects/${projectId}`)"
     />
 
+    <ProjectSectionNav :project-id="projectId" active-key="approval-policies" />
+
     <a-spin :spinning="loading" style="display: block">
       <div v-if="project">
         <a-alert
@@ -77,6 +79,37 @@
               </a-select>
             </a-form-item>
           </a-form>
+        </a-card>
+
+        <a-card size="small" title="策略模板列表" style="margin-top: 16px">
+          <a-alert
+            type="info"
+            show-icon
+            style="margin-bottom: 16px"
+            message="审批策略页维护的实际载体是 policy templates。项目默认策略和环境覆盖在保存后都会同步成模板。"
+          />
+
+          <a-empty
+            v-if="approvalTemplates.length === 0"
+            description="当前还没有生成审批策略模板，首次保存后会自动创建。"
+          />
+
+          <a-space v-else direction="vertical" :size="8" :style="{ width: '100%' }">
+            <a-card v-for="template in approvalTemplates" :key="template.id" size="small">
+              <a-flex justify="space-between" align="flex-start" :gap="8">
+                <div>
+                  <div><strong>{{ template.name }}</strong></div>
+                  <a-typography-text type="secondary">
+                    {{ template.id }} · {{ policyScopeLabel(template) }}
+                  </a-typography-text>
+                </div>
+                <a-space size="small" wrap>
+                  <a-tag color="blue">{{ approvalPolicyLabel(policyToApprovalPolicy(template.rules)) }}</a-tag>
+                  <a-tag>{{ template.appliesTo }}</a-tag>
+                </a-space>
+              </a-flex>
+            </a-card>
+          </a-space>
         </a-card>
 
         <a-card size="small" title="环境审批覆盖" style="margin-top: 16px">
@@ -187,6 +220,11 @@ const canManage = computed(() => {
 });
 
 const linkedPolicy = computed(() => resolveLinkedPolicy(policies.value));
+const approvalTemplates = computed(() =>
+  policies.value.filter(
+    (item) => item.type === "command_level" && item.rules.source === "project-settings",
+  ),
+);
 const environmentPolicyCount = computed(() => Object.keys(form.environmentApprovalPolicies || {}).length);
 
 onMounted(async () => {
@@ -428,6 +466,21 @@ function environmentPolicyTemplateLabel(environmentId: string) {
     return `当前模板: ${linkedTemplate.name} (${linkedTemplate.id})`;
   }
   return "当前模板: 继承项目默认策略";
+}
+
+function policyScopeLabel(template: PolicyTemplate) {
+  if (template.appliesTo === "all") {
+    return "项目默认模板";
+  }
+
+  if (template.appliesTo === "environment") {
+    const environmentName = typeof template.rules.environmentName === "string"
+      ? template.rules.environmentName
+      : "指定环境";
+    return `环境覆盖模板 · ${environmentName}`;
+  }
+
+  return "其他模板";
 }
 
 function approvalPolicyLabel(policy: ApprovalPolicyMode | undefined) {

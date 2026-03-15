@@ -6,6 +6,8 @@
       @back="$router.push('/projects')"
     />
 
+    <ProjectSectionNav v-if="project" :project-id="project.id" active-key="overview" />
+
     <a-spin :spinning="loading" v-if="loading" style="display: block; text-align: center; padding: 60px" />
 
     <template v-else-if="project">

@@ -6,6 +6,8 @@
       @back="$router.push(`/projects/${projectId}`)"
     />
 
+    <ProjectSectionNav :project-id="projectId" active-key="cost" />
+
     <a-spin :spinning="loading" style="display: block">
       <a-row v-if="project" :gutter="[16, 16]">
         <a-col :xs="24" :lg="8">

@@ -6,6 +6,8 @@
       @back="$router.push(`/projects/${projectId}`)"
     />
 
+    <ProjectSectionNav :project-id="projectId" active-key="role-execution" />
+
     <a-spin :spinning="loading" style="display: block">
       <div v-if="project">
         <a-row :gutter="[16, 16]" style="margin-bottom: 16px">
@@ -35,7 +37,7 @@
                   角色执行页只负责“这个项目里每个角色如何运行”，包括是否沿用平台默认、是否补充项目执行器，以及是否完全由项目接管。
                 </a-typography-text>
                 <a-typography-text type="secondary">
-                  审批模板和环境级审批覆盖不再放在这里，当前仍在“项目设置”中维护，后续会拆成独立的审批策略页。
+                  审批模板和环境级审批覆盖已经拆到独立的审批策略页；这里不再承载审批规则本身。
                 </a-typography-text>
                 <a-space wrap>
                   <router-link :to="{ name: 'ProjectApprovalPolicies', params: { projectId } }">

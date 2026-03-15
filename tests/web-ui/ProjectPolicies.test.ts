@@ -104,10 +104,47 @@ describe("ProjectPolicies", () => {
     const wrapper = await mountPage();
 
     expect(wrapper.text()).toContain("审批策略");
+    expect(wrapper.text()).toContain("概览");
+    expect(wrapper.text()).toContain("角色执行");
+    expect(wrapper.text()).toContain("成本");
+    expect(wrapper.text()).toContain("策略模板列表");
     expect(wrapper.text()).toContain("环境审批覆盖");
     expect(wrapper.text()).toContain("Production");
 
     const saveButton = wrapper.find('button');
     expect(saveButton.exists()).toBe(true);
+  });
+
+  it("shows project policy templates as an explicit list", async () => {
+    apiMocks.listPolicies.mockResolvedValueOnce([
+      {
+        id: "policy-project-default",
+        projectId: "proj-default",
+        name: "Project Default Approval Policy",
+        type: "command_level",
+        appliesTo: "all",
+        rules: { approvalPolicy: "balanced", source: "project-settings" },
+      },
+      {
+        id: "policy-env-prod",
+        projectId: "proj-default",
+        name: "Production Approval Policy",
+        type: "command_level",
+        appliesTo: "environment",
+        rules: {
+          approvalPolicy: "strict",
+          source: "project-settings",
+          environmentId: "env-prod",
+          environmentName: "Production",
+        },
+      },
+    ]);
+
+    const wrapper = await mountPage();
+
+    expect(wrapper.text()).toContain("Project Default Approval Policy");
+    expect(wrapper.text()).toContain("项目默认模板");
+    expect(wrapper.text()).toContain("Production Approval Policy");
+    expect(wrapper.text()).toContain("环境覆盖模板");
   });
 });

@@ -36,9 +36,9 @@
 - 前端全量测试已通过：14 个文件，121 个用例
 - BFF 聚合接口定向测试已通过，覆盖 403 回退、404 透传、非 403 上游异常转 502
 
-> 适用范围：OpenerX 项目详情 / 项目策略页 / 角色执行配置管理
+> 适用范围：OpenerX 项目详情 / 项目审批策略页 / 角色执行配置管理
 >
-> 目标：把当前“项目策略 + 角色 override + binding 管理”改造成普通用户也能理解的配置体验，让用户回答三个问题：
+> 目标：把当前“项目审批策略 + 角色 override + binding 管理”改造成普通用户也能理解的配置体验，让用户回答三个问题：
 >
 > - 这个项目会用到哪些角色
 > - 每个角色现在由谁执行
@@ -171,7 +171,7 @@
 
 目标：让用户先知道项目有没有“偏离默认”。
 
-#### B. 角色列表主表
+#### B. 角色列表主表（项目页）
 
 每一行代表一个角色，不再先展示底层字段，而是先展示“业务结果”。
 
@@ -394,7 +394,7 @@
 
 ### 9.1 页面拆分
 
-从当前 [control-plane/web-ui/src/pages/ProjectPolicies.vue](control-plane/web-ui/src/pages/ProjectPolicies.vue) 中拆出角色执行配置页。
+角色执行配置页已从当前 [control-plane/web-ui/src/pages/ProjectPolicies.vue](control-plane/web-ui/src/pages/ProjectPolicies.vue) 的混合职责中拆出。
 
 建议新建页面：
 
@@ -1292,7 +1292,7 @@ interface ProjectRoleExecutionRow {
 但它当前的问题是：
 
 - 没有为“角色执行”提供独立页签
-- 还把部分策略信息概览埋在 overview / settings 语义里
+- 还把部分审批策略信息概览埋在 overview / settings 语义里
 
 建议调整：
 
@@ -1314,7 +1314,7 @@ interface ProjectRoleExecutionRow {
 - 审批策略
 - 月预算
 - 环境审批策略
-- 跳转到策略页 / 成本页
+- 跳转到审批策略页 / 角色执行页 / 成本页
 
 这部分总体上是成立的，因为它属于“项目设置”和“审批策略摘要”。
 
@@ -1370,30 +1370,29 @@ interface ProjectRoleExecutionRow {
 - 不保留为最终混合页
 - 拆分迁移
 
-#### D. 路由 ProjectPolicies：保留兼容期，但目标是迁移
+#### D. 路由 ProjectPolicies：当前兼容重定向入口
 
-[control-plane/web-ui/src/router/index.ts](control-plane/web-ui/src/router/index.ts) 当前存在：
+[control-plane/web-ui/src/router/index.ts](control-plane/web-ui/src/router/index.ts) 当前仍保留：
 
 - `projects/:projectId/policies`
 
-这个路由在兼容期内可以保留，但不应再作为长期目标入口。
+这个路由当前用于兼容旧链接，会直接重定向到新的审批策略页，不再承担独立页面职责。
 
-建议未来拆成：
+当前主入口已经拆分为：
 
 - `projects/:projectId/approval-policies`
 - `projects/:projectId/role-execution`
 
-兼容策略：
+当前兼容策略：
 
-- 第一阶段先保留旧路由
-- 旧路由进入后显示迁移提示，或自动跳转到新入口选择页
-- 所有新按钮和导航都不再指向旧 `policies` 路由
+- 保留旧路由做 redirect
+- 所有新按钮和导航均指向新入口
+- 后续是否彻底删除旧路由，仅取决于是否还需要兼容历史链接
 
 结论：
 
-- 短期保留
-- 中期迁移
-- 长期下线或仅做 redirect
+- 保留兼容 redirect
+- 不再作为功能页演进
 
 ### 17.3 具体迁移映射
 
@@ -1444,9 +1443,9 @@ interface ProjectRoleExecutionRow {
 - 角色执行相关解释文案
 - “策略页 = 审批 + 角色配置”的总入口心智
 
-### 17.4 对现有页面的调整动作建议
+### 17.4 对现有页面的调整动作建议（历史迁移记录）
 
-按实施顺序，建议做 5 个动作。
+下列动作已经完成，保留在这里用于说明当时的迁移路径。
 
 #### 动作一：先改名称，再改结构
 
@@ -1460,15 +1459,15 @@ interface ProjectRoleExecutionRow {
 
 这样可以先把错误心智止损。
 
-#### 动作二：把 ProjectPolicies 改成过渡页
+#### 动作二：处理旧 ProjectPolicies 路由
 
-在真正拆分之前，可以把 [control-plane/web-ui/src/pages/ProjectPolicies.vue](control-plane/web-ui/src/pages/ProjectPolicies.vue) 先降级为过渡页：
+实现结果不是保留过渡页，而是把旧路由直接重定向到新的审批策略页：
 
-- 顶部提示“该页将拆分为审批策略与角色执行两个页面”
-- 页面主体改成两个大卡片入口
-- 旧内容逐步迁空
+- 旧 `policies` 路由继续可访问
+- 实际页面内容由新的审批策略页承接
+- 用户不再停留在中间态页面上理解迁移关系
 
-这样既不需要一次性推翻，又能尽快把概念纠正过来。
+这样能更快收敛入口心智，也避免再维护一个纯过渡页面。
 
 #### 动作三：先抽出“角色执行页”
 
@@ -1559,20 +1558,20 @@ interface ProjectRoleExecutionRow {
 
 建议形成三个前端页面边界：
 
-- 迁移入口页：旧策略路由，仅负责引导
+- 兼容重定向入口：旧策略路由，仅负责兼容历史链接
 - 项目角色执行页：负责角色运行规则与项目执行器管理
-- 项目审批策略页：当前暂由项目设置页承接，后续独立
+- 项目审批策略页：负责策略模板列表、项目默认审批策略、环境审批覆盖
 
 其中接口职责如下：
 
 - BFF 负责聚合页面所需读模型，尽量减少前端拼装
 - control-plane 负责角色、项目 override、执行器 binding、审批模板与预算配置的主数据读写
 
-### 18.2 迁移入口页
+### 18.2 兼容重定向入口
 
 页面：
 
-- [control-plane/web-ui/src/pages/ProjectPolicies.vue](control-plane/web-ui/src/pages/ProjectPolicies.vue)
+- [control-plane/web-ui/src/router/index.ts](control-plane/web-ui/src/router/index.ts)
 
 页面区块：
 
@@ -1580,20 +1579,20 @@ interface ProjectRoleExecutionRow {
 
 用途：
 
-- 展示项目名称
-- 保证旧路由进入后上下文不丢失
+- 保证旧链接仍然可用
+- 把用户直接送到新的审批策略页
 
 前端读取：
 
-- `getProject(projectId)`
+- 无额外读取，直接由路由重定向完成
 
 建议 BFF：
 
-- 继续复用现有项目读接口
+- 无新增要求
 
 control-plane：
 
-- `GET /api/projects/:projectId`
+- 无新增要求
 
 写接口：
 
@@ -1603,8 +1602,8 @@ control-plane：
 
 用途：
 
-- 分流到审批策略
-- 分流到角色执行
+- 该方案未采用
+- 旧入口不再停留在中间态页面
 
 前端读取：
 
@@ -1846,9 +1845,9 @@ control-plane：
 
 ### 18.4 项目审批策略页
 
-当前暂承载于：
+当前页面已经独立为：
 
-- [control-plane/web-ui/src/components/ProjectSettingsPanel.vue](control-plane/web-ui/src/components/ProjectSettingsPanel.vue)
+- [control-plane/web-ui/src/pages/ProjectPolicies.vue](control-plane/web-ui/src/pages/ProjectPolicies.vue)
 
 对应区块与接口如下。
 
@@ -1944,13 +1943,13 @@ GET /api/approvals?taskId=:taskId
 
 ### 18.6 前端拆分实施顺序
 
-按接口依赖和页面风险，建议顺序如下：
+按接口依赖和页面风险，实际落地顺序如下：
 
-1. 旧 `ProjectPolicies` 降级成迁移入口
-2. 新增 `ProjectRoleExecution`，暂复用现有 role-agent BFF 代理接口
-3. 更新 `ProjectSettingsPanel` 快捷入口，阻断旧心智继续扩散
-4. BFF 新增 `GET /api/projects/:projectId/role-execution-view` 聚合读模型
-5. 后续再把审批策略从 `ProjectSettingsPanel` 独立成专页
+1. 新增 `ProjectRoleExecution`，承接角色运行规则与执行器管理
+2. 更新 `ProjectSettingsPanel` 快捷入口，阻断旧心智继续扩散
+3. BFF 新增 `GET /api/projects/:projectId/role-execution-view` 聚合读模型
+4. 审批策略从 `ProjectSettingsPanel` 独立成专页 `ProjectPolicies`
+5. 旧 `ProjectPolicies` 路由保留为 redirect，继续兼容历史链接
 
 ## 19. 最终结论
 
@@ -1968,7 +1967,7 @@ GET /api/approvals?taskId=:taskId
 
 页面还必须额外回答第四件事：
 
-4. 这些角色会在项目运行的哪个阶段，以什么方式介入当前任务
+- 这些角色会在项目运行的哪个阶段，以什么方式介入当前任务
 
 只有把“配置能力”和“运行介入能力”一起设计出来，用户才会真正明白：
 

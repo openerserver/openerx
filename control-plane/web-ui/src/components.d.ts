@@ -82,6 +82,7 @@ declare module 'vue' {
     ProjectEnvironmentsPanel: typeof import('./components/ProjectEnvironmentsPanel.vue')['default']
     ProjectMembersPanel: typeof import('./components/ProjectMembersPanel.vue')['default']
     ProjectRepositoriesPanel: typeof import('./components/ProjectRepositoriesPanel.vue')['default']
+    ProjectSectionNav: typeof import('./components/ProjectSectionNav.vue')['default']
     ProjectSettingsPanel: typeof import('./components/ProjectSettingsPanel.vue')['default']
     ProjectSwitcher: typeof import('./components/ProjectSwitcher.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']

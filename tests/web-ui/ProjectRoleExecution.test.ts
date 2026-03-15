@@ -227,6 +227,11 @@ describe("ProjectRoleExecution", () => {
   it("opens the execution drawer and saves a project-level override", async () => {
     const wrapper = await mountPage();
 
+    expect(wrapper.text()).toContain("概览");
+    expect(wrapper.text()).toContain("审批策略");
+    expect(wrapper.text()).toContain("成本");
+    expect(wrapper.text()).toContain("已经拆到独立的审批策略页");
+
     const openButton = wrapper.find('[data-testid="role-override-open-role.product"]');
     expect(openButton.exists()).toBe(true);
 
