@@ -578,8 +578,10 @@ let taskPickerRefreshTimer: ReturnType<typeof setInterval> | null = null;
 let streamScrollTimer: ReturnType<typeof setTimeout> | null = null;
 let monitorStreamingRevealTimer: ReturnType<typeof setTimeout> | null = null;
 let freeLayoutReflowTimer: ReturnType<typeof setTimeout> | null = null;
+let viewportDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingFreeLayoutReflow: { force?: boolean; updateBaseline?: boolean } | null = null;
 const monitorNodeResizeObservers = new Map<string, ResizeObserver>();
+let unmounted = false;
 
 const STREAMING_PLACEHOLDER_TEXT = "正在生成...";
 const STREAMING_REVEAL_INTERVAL_MS = 22;
@@ -1238,14 +1240,13 @@ watch(
     const taskIds = monitorStore.nodes.map((node) => node.taskId);
     taskIds.forEach((taskId) => {
       realtimeStore.subscribeTask(taskId);
-      void refreshNodeSummary(taskId);
+      void refreshNodeSummary(taskId, true);
     });
 
     if (taskIds.length > 0 && !refreshTimer) {
       refreshTimer = setInterval(() => {
-        taskIds.forEach((taskId) => {
-          void refreshNodeSummary(taskId, true);
-        });
+        if (unmounted) return;
+        void refreshNodesBatched(monitorStore.nodes.map((n) => n.taskId));
       }, 10000);
     }
 
@@ -1389,6 +1390,7 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  unmounted = true;
   if (typeof window !== "undefined") {
     window.removeEventListener("resize", handleWindowResize);
   }
@@ -1403,6 +1405,10 @@ onUnmounted(() => {
   if (freeLayoutReflowTimer) {
     clearTimeout(freeLayoutReflowTimer);
     freeLayoutReflowTimer = null;
+  }
+  if (viewportDebounceTimer) {
+    clearTimeout(viewportDebounceTimer);
+    viewportDebounceTimer = null;
   }
   monitorNodeResizeObservers.forEach((observer) => observer.disconnect());
   monitorNodeResizeObservers.clear();
@@ -1421,11 +1427,16 @@ function handlePaneReady(instance: { setViewport?: (viewport: { x: number; y: nu
 }
 
 function handleViewportChangeEnd(viewport: { x: number; y: number; zoom: number }) {
+  if (viewportDebounceTimer) clearTimeout(viewportDebounceTimer);
+  viewportDebounceTimer = null;
   monitorStore.setViewport(viewport);
 }
 
 function handleViewportChange(viewport: { x: number; y: number; zoom: number }) {
-  monitorStore.setViewport(viewport);
+  if (viewportDebounceTimer) clearTimeout(viewportDebounceTimer);
+  viewportDebounceTimer = setTimeout(() => {
+    monitorStore.setViewport(viewport);
+  }, 120);
 }
 
 function handleWindowResize() {
@@ -1763,6 +1774,7 @@ function stabilizeFreeLayout(options?: { force?: boolean; updateBaseline?: boole
 }
 
 async function reloadTaskPicker() {
+  if (unmounted) return;
   if (!projectStore.currentProjectId) {
     taskPickerTasks.value = [];
     return;
@@ -1788,9 +1800,19 @@ function ensureTaskPickerRefreshTimer() {
   }, 10000);
 }
 
+const MONITOR_REFRESH_CONCURRENCY = 3;
+
+async function refreshNodesBatched(taskIds: string[]) {
+  for (let i = 0; i < taskIds.length; i += MONITOR_REFRESH_CONCURRENCY) {
+    if (unmounted) return;
+    const batch = taskIds.slice(i, i + MONITOR_REFRESH_CONCURRENCY);
+    await Promise.all(batch.map((taskId) => refreshNodeSummary(taskId)));
+  }
+}
+
 function syncRunningTasksToCanvas() {
   const runningTasks = taskPickerTasks.value.filter((task) => task.status === "running");
-  let addedCount = 0;
+  const newTaskIds: string[] = [];
 
   runningTasks.forEach((task) => {
     if (monitorStore.getNode(task.id)) {
@@ -1798,17 +1820,18 @@ function syncRunningTasksToCanvas() {
     }
 
     monitorStore.addTaskNode(task.id);
-    addedCount += 1;
-    void refreshNodeSummary(task.id);
+    newTaskIds.push(task.id);
   });
 
-  if (addedCount > 0) {
+  if (newTaskIds.length > 0) {
+    void refreshNodesBatched(newTaskIds);
+
     if (currentLayoutMode.value === "free") {
       void nextTick().then(() => stabilizeFreeLayout({ updateBaseline: true }));
       return;
     }
 
-    if (monitorStore.nodes.length === addedCount) {
+    if (monitorStore.nodes.length === newTaskIds.length) {
       void nextTick().then(() => autoArrangeNodes());
     }
   }
@@ -2271,6 +2294,7 @@ async function autoArrangeNodes() {
 }
 
 async function refreshNodeSummary(taskId: string, skipIfBusy = false) {
+  if (unmounted) return;
   if (skipIfBusy && refreshState[taskId]) return;
   refreshState[taskId] = true;
   try {
@@ -2310,6 +2334,7 @@ async function refreshNodeSummary(taskId: string, skipIfBusy = false) {
 }
 
 async function refreshSessionMessagesForMonitor(taskId: string, sessionId: string, silent = false) {
+  if (unmounted) return;
   if (!silent && refreshState[taskId]) {
     return;
   }

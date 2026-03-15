@@ -465,6 +465,7 @@ export async function buildRuntimePipeline(args: {
   taskId: string;
   sessionId?: string;
   authorization: string;
+  prefetchedMessages?: unknown[];
 }): Promise<RuntimePipeline> {
   const taskResult = await cpFetch<TaskRecord>(`/api/tasks/${encodeURIComponent(args.taskId)}`, {
     authorization: args.authorization,
@@ -493,7 +494,9 @@ export async function buildRuntimePipeline(args: {
     cpFetch<TaskGraphData>(`/api/tasks/${encodeURIComponent(args.taskId)}/graph`, {
       authorization: args.authorization,
     }),
-    requestedSessionId ? getSessionMessages(requestedSessionId) : Promise.resolve({ ok: false } as const),
+    args.prefetchedMessages
+      ? Promise.resolve({ ok: true, data: args.prefetchedMessages } as const)
+      : requestedSessionId ? getSessionMessages(requestedSessionId) : Promise.resolve({ ok: false } as const),
   ]);
 
   const lineage =

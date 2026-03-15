@@ -213,7 +213,9 @@ const selectedKeys = computed(() => {
 });
 
 function onMenuClick({ key }: { key: string | number }) {
-  router.push(String(key));
+  // Defer navigation to next macrotask to escape Vue's reactive effect batching,
+  // which can block router.push when heavy reactive trees (e.g. VueFlow) are active.
+  setTimeout(() => router.push(String(key)), 0);
 }
 
 function handleLogout() {

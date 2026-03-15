@@ -16,6 +16,41 @@ const OPENCODE_MODEL_ID = process.env.OPENCODE_MODEL_ID || "claude-sonnet-4";
 const configuredMinActiveBeforePauseMs = Number(process.env.OPENCODE_MIN_ACTIVE_BEFORE_PAUSE_MS);
 const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
 
+// ── Circuit breaker for OpenCode runtime ────────────────────────────
+// After CIRCUIT_BREAKER_THRESHOLD consecutive failures, fast-fail for
+// CIRCUIT_BREAKER_COOLDOWN_MS without making a network call.
+const CIRCUIT_BREAKER_THRESHOLD = 2;
+const CIRCUIT_BREAKER_COOLDOWN_MS = 15_000;
+let circuitBreakerFailures = 0;
+let circuitBreakerOpenedAt = 0;
+
+function isCircuitOpen(): boolean {
+  if (circuitBreakerFailures < CIRCUIT_BREAKER_THRESHOLD) return false;
+  if (Date.now() - circuitBreakerOpenedAt > CIRCUIT_BREAKER_COOLDOWN_MS) {
+    // Cooldown expired, allow a probe
+    circuitBreakerFailures = 0;
+    return false;
+  }
+  return true;
+}
+
+function recordCircuitSuccess(): void {
+  circuitBreakerFailures = 0;
+}
+
+function recordCircuitFailure(): void {
+  circuitBreakerFailures++;
+  if (circuitBreakerFailures >= CIRCUIT_BREAKER_THRESHOLD) {
+    circuitBreakerOpenedAt = Date.now();
+  }
+}
+
+// Short-lived cache + in-flight deduplication for listSessions to prevent
+// request avalanche when the multi-task-monitor refreshes many tasks at once.
+const LIST_SESSIONS_CACHE_TTL_MS = 3_000;
+const listSessionsCache = new Map<string, { ts: number; result: OpencodeResponse }>();
+const listSessionsInflight = new Map<string, Promise<OpencodeResponse>>();
+
 interface OpencodeResponse {
   ok: boolean;
   data?: unknown;
@@ -180,13 +215,20 @@ async function parseResponseBody(response: Response): Promise<unknown> {
   }
 }
 
-async function opcall(method: string, path: string, body?: unknown): Promise<OpencodeResponse> {
+async function opcall(method: string, path: string, body?: unknown, timeoutMs = 4_000): Promise<OpencodeResponse> {
+  if (isCircuitOpen()) {
+    return { ok: false, error: "OpenCode circuit breaker open — skipping call" };
+  }
   try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     const response = await fetch(`${OPENCODE_URL}${path}`, {
       method,
       headers: { "Content-Type": "application/json" },
       body: body ? JSON.stringify(body) : undefined,
+      signal: controller.signal,
     });
+    clearTimeout(timer);
 
     const data = await parseResponseBody(response);
 
@@ -200,8 +242,10 @@ async function opcall(method: string, path: string, body?: unknown): Promise<Ope
       return { ok: false, data, error };
     }
 
+    recordCircuitSuccess();
     return { ok: true, data };
   } catch (e) {
+    recordCircuitFailure();
     return { ok: false, error: String(e) };
   }
 }
@@ -540,8 +584,18 @@ export async function getAgentMessages(agentRunId: string): Promise<OpencodeResp
   return await opcall("GET", `/session/${run.subSessionId}/message?limit=200`);
 }
 
+const sessionMessagesInflight = new Map<string, Promise<OpencodeResponse>>();
+
 export async function getSessionMessages(sessionId: string): Promise<OpencodeResponse> {
-  return await opcall("GET", `/session/${sessionId}/message?limit=200`);
+  const existing = sessionMessagesInflight.get(sessionId);
+  if (existing) {
+    return existing;
+  }
+  const promise = opcall("GET", `/session/${sessionId}/message?limit=200`).finally(() => {
+    sessionMessagesInflight.delete(sessionId);
+  });
+  sessionMessagesInflight.set(sessionId, promise);
+  return promise;
 }
 
 function getAssistantMessageInfo(message: unknown): Record<string, unknown> | undefined {
@@ -722,7 +776,26 @@ async function waitForSessionText(
 }
 
 export async function listSessions(limit = 20): Promise<OpencodeResponse> {
-  return await opcall("GET", `/session?limit=${limit}`);
+  const cacheKey = `list-sessions-${limit}`;
+  const now = Date.now();
+  const cached = listSessionsCache.get(cacheKey);
+  if (cached && now - cached.ts < LIST_SESSIONS_CACHE_TTL_MS) {
+    return cached.result;
+  }
+  const inflight = listSessionsInflight.get(cacheKey);
+  if (inflight) {
+    return inflight;
+  }
+  const promise = opcall("GET", `/session?limit=${limit}`).then((result) => {
+    listSessionsCache.set(cacheKey, { ts: Date.now(), result });
+    listSessionsInflight.delete(cacheKey);
+    return result;
+  }).catch((err) => {
+    listSessionsInflight.delete(cacheKey);
+    throw err;
+  });
+  listSessionsInflight.set(cacheKey, promise);
+  return promise;
 }
 
 export async function forkSession(

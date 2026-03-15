@@ -26,6 +26,7 @@ export async function cpFetch<T = unknown>(
     headers?: Record<string, string>;
     body?: unknown;
     authorization?: string;
+    timeoutMs?: number;
   } = {},
 ): Promise<UpstreamResponse<T>> {
   const { method = "GET", body, authorization } = opts;
@@ -40,12 +41,17 @@ export async function cpFetch<T = unknown>(
   }
 
   const start = performance.now();
+  const timeoutMs = opts.timeoutMs ?? 15_000;
   try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     const response = await fetch(`${CONTROL_PLANE_URL}${path}`, {
       method,
       headers,
       body: body ? JSON.stringify(body) : undefined,
+      signal: controller.signal,
     });
+    clearTimeout(timer);
     const text = await response.text();
     let data: T;
 

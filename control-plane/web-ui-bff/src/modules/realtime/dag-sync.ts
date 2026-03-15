@@ -313,15 +313,16 @@ export async function syncGraphsForSessionTask(
   taskId: string,
   sessionId?: string,
   preferredDirectory?: string,
-): Promise<number> {
-  if (!sessionId) return 0;
+): Promise<{ synced: number; messages?: unknown[] }> {
+  if (!sessionId) return { synced: 0 };
 
   const messageResult = await getSessionMessages(sessionId);
   if (!messageResult.ok || !Array.isArray(messageResult.data)) {
-    return 0;
+    return { synced: 0 };
   }
 
-  const graphIds = extractGraphIdsFromMessages(messageResult.data);
+  const messages = messageResult.data as unknown[];
+  const graphIds = extractGraphIdsFromMessages(messages);
   let synced = 0;
 
   for (const graphId of graphIds) {
@@ -333,5 +334,5 @@ export async function syncGraphsForSessionTask(
     if (ok) synced++;
   }
 
-  return synced;
+  return { synced, messages };
 }
