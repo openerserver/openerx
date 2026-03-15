@@ -1,14 +1,21 @@
 /// <reference types="bun-types" />
 
-import { describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, mock, test } from "bun:test";
 
 mock.restore();
 
+let adapterImportCounter = 0;
+
 async function loadOpencodeAdapter() {
+  adapterImportCounter += 1;
   return import(
-    "../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter?opencode-adapter-test"
+    `../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter?opencode-adapter-test=${adapterImportCounter}`
   );
 }
+
+afterEach(() => {
+  mock.restore();
+});
 
 describe("extractAssistantResultFromMessages", () => {
   test("marks assistant messages with embedded errors as failed", async () => {
@@ -66,5 +73,85 @@ describe("extractAssistantResultFromMessages", () => {
     expect(result.completed).toBe(true);
     expect(result.failed).toBe(false);
     expect(result.text).toBe("done");
+  });
+});
+
+describe("opencode adapter resilience", () => {
+  test("keeps session-read circuit breaker scoped away from write operations", async () => {
+    const fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/session?limit=20")) {
+        throw new Error("runtime unavailable");
+      }
+      if (url.includes("/session/source-session/fork") && init?.method === "POST") {
+        return new Response(JSON.stringify({ id: "forked-session" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      return new Response("not found", { status: 404 });
+    });
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    const { forkSession, listSessions } = await loadOpencodeAdapter();
+
+    const first = await listSessions();
+    const second = await listSessions();
+    const write = await forkSession("source-session");
+
+    expect(first.ok).toBe(false);
+    expect(second.ok).toBe(false);
+    expect(write.ok).toBe(true);
+    expect(write.sessionId).toBe("forked-session");
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  test("fast-fails repeated session reads after the threshold is reached", async () => {
+    const fetchMock = mock(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/session?limit=20")) {
+        throw new Error("runtime unavailable");
+      }
+
+      return new Response("not found", { status: 404 });
+    });
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    const { listSessions } = await loadOpencodeAdapter();
+
+    await listSessions();
+    await listSessions();
+    const third = await listSessions();
+
+    expect(third.ok).toBe(false);
+    expect(third.error).toContain("circuit breaker open");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  test("clears opcall timeout timers after fetch failures", async () => {
+    const originalSetTimeout = globalThis.setTimeout;
+    const originalClearTimeout = globalThis.clearTimeout;
+    const timerToken = { kind: "timer" } as unknown as ReturnType<typeof setTimeout>;
+    const setTimeoutMock = mock(() => timerToken);
+    const clearTimeoutMock = mock(() => {});
+    const fetchMock = mock(async () => {
+      throw new Error("network down");
+    });
+
+    globalThis.setTimeout = setTimeoutMock as typeof setTimeout;
+    globalThis.clearTimeout = clearTimeoutMock as typeof clearTimeout;
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    try {
+      const { forkSession } = await loadOpencodeAdapter();
+      const result = await forkSession("source-session");
+
+      expect(result.ok).toBe(false);
+      expect(clearTimeoutMock).toHaveBeenCalledWith(timerToken);
+    } finally {
+      globalThis.setTimeout = originalSetTimeout;
+      globalThis.clearTimeout = originalClearTimeout;
+    }
   });
 });

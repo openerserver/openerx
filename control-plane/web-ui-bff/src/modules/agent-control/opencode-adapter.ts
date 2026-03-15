@@ -17,32 +17,43 @@ const configuredMinActiveBeforePauseMs = Number(process.env.OPENCODE_MIN_ACTIVE_
 const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
 
 // ── Circuit breaker for OpenCode runtime ────────────────────────────
-// After CIRCUIT_BREAKER_THRESHOLD consecutive failures, fast-fail for
-// CIRCUIT_BREAKER_COOLDOWN_MS without making a network call.
+// Session read fan-out can avalanche the runtime, so only those paths use a
+// short-lived circuit breaker. Mutating calls keep probing independently.
 const CIRCUIT_BREAKER_THRESHOLD = 2;
 const CIRCUIT_BREAKER_COOLDOWN_MS = 15_000;
-let circuitBreakerFailures = 0;
-let circuitBreakerOpenedAt = 0;
+const SESSION_READ_CIRCUIT_KEY = "session-read";
+const circuitBreakers = new Map<string, { failures: number; openedAt: number }>();
 
-function isCircuitOpen(): boolean {
-  if (circuitBreakerFailures < CIRCUIT_BREAKER_THRESHOLD) return false;
-  if (Date.now() - circuitBreakerOpenedAt > CIRCUIT_BREAKER_COOLDOWN_MS) {
-    // Cooldown expired, allow a probe
-    circuitBreakerFailures = 0;
+function isCircuitOpen(circuitKey?: string): boolean {
+  if (!circuitKey) return false;
+
+  const state = circuitBreakers.get(circuitKey);
+  if (!state || state.failures < CIRCUIT_BREAKER_THRESHOLD) {
     return false;
   }
+
+  if (Date.now() - state.openedAt > CIRCUIT_BREAKER_COOLDOWN_MS) {
+    circuitBreakers.delete(circuitKey);
+    return false;
+  }
+
   return true;
 }
 
-function recordCircuitSuccess(): void {
-  circuitBreakerFailures = 0;
+function recordCircuitSuccess(circuitKey?: string): void {
+  if (!circuitKey) return;
+  circuitBreakers.delete(circuitKey);
 }
 
-function recordCircuitFailure(): void {
-  circuitBreakerFailures++;
-  if (circuitBreakerFailures >= CIRCUIT_BREAKER_THRESHOLD) {
-    circuitBreakerOpenedAt = Date.now();
-  }
+function recordCircuitFailure(circuitKey?: string): void {
+  if (!circuitKey) return;
+
+  const current = circuitBreakers.get(circuitKey) ?? { failures: 0, openedAt: 0 };
+  const failures = current.failures + 1;
+  circuitBreakers.set(circuitKey, {
+    failures,
+    openedAt: failures >= CIRCUIT_BREAKER_THRESHOLD ? Date.now() : current.openedAt,
+  });
 }
 
 // Short-lived cache + in-flight deduplication for listSessions to prevent
@@ -215,21 +226,28 @@ async function parseResponseBody(response: Response): Promise<unknown> {
   }
 }
 
-async function opcall(method: string, path: string, body?: unknown, timeoutMs = 4_000): Promise<OpencodeResponse> {
-  if (isCircuitOpen()) {
+type OpcallOptions = {
+  timeoutMs?: number;
+  circuitKey?: string;
+};
+
+async function opcall(method: string, path: string, body?: unknown, options: OpcallOptions = {}): Promise<OpencodeResponse> {
+  const { timeoutMs = 4_000, circuitKey } = options;
+
+  if (isCircuitOpen(circuitKey)) {
     return { ok: false, error: "OpenCode circuit breaker open — skipping call" };
   }
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    timer = setTimeout(() => controller.abort(), timeoutMs);
     const response = await fetch(`${OPENCODE_URL}${path}`, {
       method,
       headers: { "Content-Type": "application/json" },
       body: body ? JSON.stringify(body) : undefined,
       signal: controller.signal,
     });
-    clearTimeout(timer);
-
     const data = await parseResponseBody(response);
 
     if (!response.ok) {
@@ -242,11 +260,15 @@ async function opcall(method: string, path: string, body?: unknown, timeoutMs = 
       return { ok: false, data, error };
     }
 
-    recordCircuitSuccess();
+    recordCircuitSuccess(circuitKey);
     return { ok: true, data };
   } catch (e) {
-    recordCircuitFailure();
+    recordCircuitFailure(circuitKey);
     return { ok: false, error: String(e) };
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
   }
 }
 
@@ -591,7 +613,9 @@ export async function getSessionMessages(sessionId: string): Promise<OpencodeRes
   if (existing) {
     return existing;
   }
-  const promise = opcall("GET", `/session/${sessionId}/message?limit=200`).finally(() => {
+  const promise = opcall("GET", `/session/${sessionId}/message?limit=200`, undefined, {
+    circuitKey: SESSION_READ_CIRCUIT_KEY,
+  }).finally(() => {
     sessionMessagesInflight.delete(sessionId);
   });
   sessionMessagesInflight.set(sessionId, promise);
@@ -786,8 +810,12 @@ export async function listSessions(limit = 20): Promise<OpencodeResponse> {
   if (inflight) {
     return inflight;
   }
-  const promise = opcall("GET", `/session?limit=${limit}`).then((result) => {
-    listSessionsCache.set(cacheKey, { ts: Date.now(), result });
+  const promise = opcall("GET", `/session?limit=${limit}`, undefined, {
+    circuitKey: SESSION_READ_CIRCUIT_KEY,
+  }).then((result) => {
+    if (result.ok) {
+      listSessionsCache.set(cacheKey, { ts: Date.now(), result });
+    }
     listSessionsInflight.delete(cacheKey);
     return result;
   }).catch((err) => {
