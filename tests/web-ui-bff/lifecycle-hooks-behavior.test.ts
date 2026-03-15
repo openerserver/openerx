@@ -1,9 +1,29 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import * as strategyModule from "../../control-plane/web-ui-bff/src/lib/orchestration-strategy";
 import {
   type OrchestrationStrategy,
   normalizeOrchestrationStrategy,
 } from "../../control-plane/web-ui-bff/src/lib/orchestration-strategy";
+
+mock.restore();
+
+async function loadLifecycleHooksModule() {
+  return import(
+    "../../control-plane/web-ui-bff/src/modules/hooks/lifecycle-hooks?lifecycle-hooks-behavior-test"
+  );
+}
+
+async function loadAgentControlRoutesModule() {
+  return import(
+    "../../control-plane/web-ui-bff/src/modules/agent-control/routes?lifecycle-hooks-behavior-test"
+  );
+}
+
+async function loadTaskRoutesModule() {
+  return import(
+    "../../control-plane/web-ui-bff/src/modules/tasks/routes?lifecycle-hooks-behavior-test"
+  );
+}
 
 const runDetachedPromptMock = mock(async () => ({
   ok: true,
@@ -41,6 +61,12 @@ const resolveModelRouteMock = mock((raw: string) => {
   return { providerId: "github-copilot", modelId: value };
 });
 const validateModelProviderMock = mock(() => ({ valid: true as const }));
+const diagnoseModelReadinessMock = mock(async () => undefined as undefined | Record<string, unknown>);
+const executeLifecycleHooksMock = mock(async () => ({
+  hookExecutions: [] as Array<Record<string, unknown>>,
+  combinedResultText: undefined as string | undefined,
+  rewrittenPrompt: undefined as string | undefined,
+}));
 let currentStrategy = strategyModule.normalizeOrchestrationStrategy({
   hooks: [
     {
@@ -78,6 +104,15 @@ const broadcastMock = mock(() => undefined);
 mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter", () => ({
   createSession: createSessionMock,
   continueSession: mock(async () => ({ ok: true })),
+  ensureAgentRunForSession: mock(() => "run-test"),
+  extractAssistantResultFromMessages: mock(() => ({
+    completed: false,
+    failed: false,
+    error: undefined,
+    tokenUsed: 0,
+  })),
+  findAgentRunBySessionId: mock(() => undefined),
+  forkSession: mock(async () => ({ ok: true, sessionId: "forked-session" })),
   getSessionMessages: mock(async () => ({ ok: true, data: [] })),
   runDetachedPrompt: runDetachedPromptMock,
   getAgentMessages: mock(async () => ({ ok: true, data: [] })),
@@ -86,8 +121,10 @@ mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-a
   listAgentRuns: mock(() => []),
   listSessions: mock(async () => ({ ok: true, data: [] })),
   pauseAgent: mock(async () => ({ ok: true })),
+  recoverAgentRun: mock(() => undefined),
   resumeAgent: resumeAgentMock,
   terminateAgent: mock(async () => ({ ok: true })),
+  updateAgentRunStatus: mock(() => undefined),
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () => ({
@@ -100,11 +137,16 @@ mock.module("../../control-plane/web-ui-bff/src/lib/opencode-config", () => ({
   readDefaultExecutionModel: readDefaultExecutionModelMock,
   resolveModelRoute: resolveModelRouteMock,
   validateModelProvider: validateModelProviderMock,
+  diagnoseModelReadiness: diagnoseModelReadinessMock,
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/lib/orchestration-strategy", () => ({
   ...strategyModule,
   readOrchestrationStrategy: () => currentStrategy,
+}));
+
+mock.module("../../control-plane/web-ui-bff/src/modules/hooks/lifecycle-hooks", () => ({
+  executeLifecycleHooks: executeLifecycleHooksMock,
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/modules/realtime/ws-broadcaster", () => ({
@@ -118,17 +160,6 @@ mock.module("../../control-plane/web-ui-bff/src/modules/realtime/sse-aggregator"
 mock.module("../../control-plane/web-ui-bff/src/modules/realtime/dag-sync", () => ({
   syncGraphsForSessionTask: mock(async () => undefined),
   syncGraphsForTask: mock(async () => undefined),
-}));
-
-mock.module("../../control-plane/web-ui-bff/src/modules/tasks/reconcile", () => ({
-  reconcileRunningTasksOnStartup: mock(async () => ({
-    scanned: 0,
-    completed: 0,
-    failed: 0,
-    recovered: 0,
-    skipped: 0,
-    runtimeAvailable: true,
-  })),
 }));
 
 function buildStrategy(overrides: Partial<OrchestrationStrategy> = {}): OrchestrationStrategy {
@@ -146,6 +177,8 @@ beforeEach(() => {
   readDefaultExecutionModelMock.mockReset();
   resolveModelRouteMock.mockClear();
   validateModelProviderMock.mockReset();
+  diagnoseModelReadinessMock.mockReset();
+  executeLifecycleHooksMock.mockReset();
   cpFetchMock.mockReset();
   createInternalAuthorizationMock.mockReset();
   broadcastMock.mockReset();
@@ -187,6 +220,12 @@ beforeEach(() => {
   authHeaderMock.mockReturnValue("Bearer test");
   readDefaultExecutionModelMock.mockReturnValue(undefined);
   validateModelProviderMock.mockReturnValue({ valid: true });
+  diagnoseModelReadinessMock.mockResolvedValue(undefined);
+  executeLifecycleHooksMock.mockResolvedValue({
+    hookExecutions: [],
+    combinedResultText: undefined,
+    rewrittenPrompt: undefined,
+  });
   cpFetchMock.mockImplementation(
     async (url: string, options?: { method?: string; body?: unknown }) => {
       if (!options?.method) {
@@ -214,9 +253,15 @@ afterEach(() => {
   resumeAgentMock.mockReset();
   registerParallelTaskMock.mockReset();
   authHeaderMock.mockReset();
+  diagnoseModelReadinessMock.mockReset();
+  executeLifecycleHooksMock.mockReset();
   cpFetchMock.mockReset();
   createInternalAuthorizationMock.mockReset();
   broadcastMock.mockReset();
+});
+
+afterAll(() => {
+  mock.restore();
 });
 
 function getPatchCalls() {
@@ -239,9 +284,7 @@ describe("executeLifecycleHooks behavior", () => {
       sessionId: "session-rewrite",
     });
 
-    const { executeLifecycleHooks } = await import(
-      "../../control-plane/web-ui-bff/src/modules/hooks/lifecycle-hooks"
-    );
+    const { executeLifecycleHooks } = await loadLifecycleHooksModule();
 
     const strategy = buildStrategy({
       hooks: [
@@ -282,9 +325,7 @@ describe("executeLifecycleHooks behavior", () => {
       sessionId: "session-failure",
     });
 
-    const { executeLifecycleHooks } = await import(
-      "../../control-plane/web-ui-bff/src/modules/hooks/lifecycle-hooks"
-    );
+    const { executeLifecycleHooks } = await loadLifecycleHooksModule();
 
     const strategy = buildStrategy({
       hooks: [
@@ -329,14 +370,10 @@ describe("executeLifecycleHooks behavior", () => {
   test("pre-resume route injects rewritten guidance before resume", async () => {
     const callOrder: string[] = [];
 
-    runDetachedPromptMock.mockResolvedValueOnce({
-      ok: true,
-      completed: true,
-      text: JSON.stringify({
-        action: "rewrite-prompt",
-        rewrittenPrompt: "Resume with stricter validation and avoid touching auth.",
-      }),
-      sessionId: "session-pre-resume",
+    executeLifecycleHooksMock.mockResolvedValueOnce({
+      hookExecutions: [{ hookId: "pre-resume-1" }],
+      combinedResultText: undefined,
+      rewrittenPrompt: "Resume with stricter validation and avoid touching auth.",
     });
 
     injectGuidanceMock.mockImplementation(async () => {
@@ -348,9 +385,7 @@ describe("executeLifecycleHooks behavior", () => {
       return { ok: true };
     });
 
-    const { agentControlRoutes } = await import(
-      "../../control-plane/web-ui-bff/src/modules/agent-control/routes"
-    );
+    const { agentControlRoutes } = await loadAgentControlRoutesModule();
 
     const response = await agentControlRoutes.request("http://localhost/run-1/resume", {
       method: "POST",
@@ -392,7 +427,7 @@ describe("executeLifecycleHooks behavior", () => {
       .mockResolvedValueOnce({ ok: false, error: "candidate A failed" })
       .mockResolvedValueOnce({ ok: false, error: "candidate B failed" });
 
-    const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
+    const { taskRoutes } = await loadTaskRoutesModule();
     const response = await taskRoutes.request("http://localhost/task-1/execute", {
       method: "POST",
       headers: { Authorization: "Bearer test" },
@@ -436,7 +471,7 @@ describe("executeLifecycleHooks behavior", () => {
       agentRunId: "run-runtime",
     });
 
-    const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
+    const { taskRoutes } = await loadTaskRoutesModule();
     const response = await taskRoutes.request("http://localhost/task-1/execute", {
       method: "POST",
       headers: { Authorization: "Bearer test" },
@@ -468,7 +503,7 @@ describe("executeLifecycleHooks behavior", () => {
       selectedModel: undefined,
     };
 
-    const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
+    const { taskRoutes } = await loadTaskRoutesModule();
 
     readDefaultExecutionModelMock.mockReturnValueOnce("github-copilot:gemini-3-flash-preview");
     let response = await taskRoutes.request("http://localhost/task-1/execute", {

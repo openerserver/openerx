@@ -32,6 +32,13 @@ vi.mock("../../control-plane/web-ui/src/pages/MultiTaskMonitor.vue", () => ({
   }),
 }));
 
+vi.mock("../../control-plane/web-ui/src/pages/ProjectPolicies.vue", () => ({
+  default: defineComponent({
+    name: "MockProjectPoliciesPage",
+    template: '<div data-testid="project-policies-page">审批策略页</div>',
+  }),
+}));
+
 vi.mock("../../control-plane/web-ui/src/layouts/MainLayout.vue", () => ({
   default: defineComponent({
     name: "MockMainLayout",
@@ -123,5 +130,23 @@ describe("users route auth", () => {
 
     expect(router.currentRoute.value.name).toBe("MultiTaskMonitor");
     expect(wrapper.text()).toContain("多任务监控台页面");
+  });
+
+  it("redirects the legacy project policies path to the new approval policies route", async () => {
+    authState.token = "test-token";
+
+    const wrapper = mount(RouterHost, {
+      global: {
+        plugins: [router],
+      },
+    });
+
+    await router.push("/projects/proj-default/policies");
+    await router.isReady();
+    await flushPromises();
+
+    expect(router.currentRoute.value.name).toBe("ProjectApprovalPolicies");
+    expect(router.currentRoute.value.fullPath).toBe("/projects/proj-default/approval-policies");
+    expect(wrapper.text()).toContain("审批策略页");
   });
 });

@@ -73,6 +73,21 @@
             </a-descriptions>
 
             <a-flex v-if="ticket.status === 'pending'" :gap="8" style="margin-top: 12px">
+              <router-link
+                :to="{
+                  path: '/agents',
+                  query: {
+                    entryContext: 'approval',
+                    focus: 'attention',
+                    approvalBlocked: 'true',
+                    ...(ticket.taskId ? { taskId: ticket.taskId } : {}),
+                    ...(ticket.agentRunId ? { agentRunId: ticket.agentRunId } : {}),
+                  },
+                }"
+                @click.stop
+              >
+                <a-button size="small">查看 Agent</a-button>
+              </router-link>
               <a-button
                 type="primary"
                 size="small"
@@ -150,6 +165,20 @@
         <pre style="background: #f5f5f5; padding: 12px; border-radius: 6px; font-size: 12px; white-space: pre-wrap; word-break: break-all; max-height: 240px; overflow: auto">{{ JSON.stringify(detailTicket.requestDetail, null, 2) }}</pre>
 
         <a-flex v-if="detailTicket.status === 'pending'" :gap="8" style="margin-top: 16px">
+          <router-link
+            :to="{
+              path: '/agents',
+              query: {
+                entryContext: 'approval',
+                focus: 'attention',
+                approvalBlocked: 'true',
+                ...(detailTicket.taskId ? { taskId: detailTicket.taskId } : {}),
+                ...(detailTicket.agentRunId ? { agentRunId: detailTicket.agentRunId } : {}),
+              },
+            }"
+          >
+            <a-button>查看 Agent</a-button>
+          </router-link>
           <a-button type="primary" @click="openResolveModal(detailTicket, 'approve')">批准</a-button>
           <a-button danger @click="openResolveModal(detailTicket, 'reject')">拒绝</a-button>
         </a-flex>
@@ -169,11 +198,12 @@
       <a-form layout="vertical">
         <a-form-item label="审批意见（可选）">
           <a-textarea
-            v-model:value="resolveComment"
+            :value="resolveComment"
             :rows="3"
             :maxlength="500"
             show-count
             placeholder="请输入审批意见…"
+            @update:value="resolveComment = String($event ?? '')"
           />
         </a-form-item>
       </a-form>

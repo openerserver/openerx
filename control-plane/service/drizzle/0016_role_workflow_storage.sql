@@ -1,0 +1,41 @@
+CREATE TABLE `role_aggregate_conclusions` (
+	`id` text PRIMARY KEY NOT NULL,
+	`task_id` text NOT NULL REFERENCES `tasks`(`id`),
+	`task_stage_run_id` text,
+	`role_agent_id` text NOT NULL,
+	`stage` text NOT NULL,
+	`aggregation_strategy` text NOT NULL,
+	`status` text NOT NULL,
+	`final_decision` text NOT NULL,
+	`aggregate_risk_level` text NOT NULL,
+	`confidence_score` real NOT NULL DEFAULT 0,
+	`consensus_score` real NOT NULL DEFAULT 0,
+	`winning_rationale` text NOT NULL,
+	`merged_findings_json` text,
+	`minority_findings_json` text,
+	`conflicts_json` text,
+	`approval_recommendation_json` text,
+	`generated_at` text NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	`created_at` text NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	`updated_at` text NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE `developer_change_requests` (
+	`id` text PRIMARY KEY NOT NULL,
+	`task_id` text NOT NULL REFERENCES `tasks`(`id`),
+	`task_stage_run_id` text,
+	`source_role_agent_id` text NOT NULL,
+	`assigned_role_agent_id` text NOT NULL DEFAULT 'role.developer',
+	`priority` text NOT NULL,
+	`title` text NOT NULL,
+	`summary` text NOT NULL,
+	`required_changes_json` text NOT NULL,
+	`related_finding_keys_json` text,
+	`blocking` integer NOT NULL DEFAULT false,
+	`approval_required` integer NOT NULL DEFAULT false,
+	`status` text NOT NULL DEFAULT 'open',
+	`resolution_note` text,
+	`created_at` text NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	`updated_at` text NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	`resolved_at` text
+);

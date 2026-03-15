@@ -671,6 +671,7 @@ function providerRowProps(record: DisplayProviderItem) {
       void router.push({
         path: "/agents",
         query: {
+          entryContext: "alert",
           provider: record.providerId,
           focus: record.recommendationAction === "downgrade" ? "attention" : "recent",
           ...(record.recommendationAction === "downgrade" ? { status: "failed" } : {}),

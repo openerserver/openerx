@@ -1,11 +1,12 @@
 import { zValidator } from "@hono/zod-validator";
-import { eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 import { db } from "../../db";
-import { tasks } from "../../db/schema";
+import { roleAggregateConclusions } from "../../db/schema";
 import { type AppEnv, authMiddleware } from "../../middleware/auth";
 import { requireRole } from "../../middleware/rbac";
+import { ensureLegacyRoleWorkflowMigrated } from "../task-workflows/legacy-role-workflow-storage";
 
 export const roleConclusionRoutes = new Hono<AppEnv>();
 
@@ -28,36 +29,125 @@ const roleConclusionSchema = z.object({
   approvalRecommendation: z.any().optional(),
 });
 
-function parseTaskStrategy(raw: string | null | undefined) {
-  if (!raw) return {} as Record<string, unknown>;
-  try {
-    return JSON.parse(raw) as Record<string, unknown>;
-  } catch {
-    return {} as Record<string, unknown>;
-  }
+function requireTaskId(c: { req: { param: (name: string) => string | undefined } }) {
+  return c.req.param("taskId") ?? "";
 }
 
 roleConclusionRoutes.get("/", async (c) => {
-  const taskId = c.req.param("taskId");
-  const task = await db.query.tasks.findFirst({ where: eq(tasks.id, taskId) });
+  const taskId = requireTaskId(c);
+  const task = await ensureLegacyRoleWorkflowMigrated(taskId);
   if (!task) return c.json({ error: "Task not found" }, 404);
-  const strategy = parseTaskStrategy(task.strategy);
-  return c.json({ data: (strategy.roleAggregateConclusions as unknown[]) ?? [] });
+
+  const rows = await db
+    .select()
+    .from(roleAggregateConclusions)
+    .where(eq(roleAggregateConclusions.taskId, taskId))
+    .orderBy(desc(roleAggregateConclusions.generatedAt));
+
+  return c.json({
+    data: rows.map((row) => ({
+      id: row.id,
+      roleAgentId: row.roleAgentId,
+      stage: row.stage,
+      aggregationStrategy: row.aggregationStrategy,
+      status: row.status,
+      finalDecision: row.finalDecision,
+      aggregateRiskLevel: row.aggregateRiskLevel,
+      confidenceScore: row.confidenceScore,
+      consensusScore: row.consensusScore,
+      winningRationale: row.winningRationale,
+      mergedFindings: row.mergedFindingsJson ?? [],
+      minorityFindings: row.minorityFindingsJson ?? [],
+      conflicts: row.conflictsJson ?? [],
+      approvalRecommendation: row.approvalRecommendationJson ?? null,
+      generatedAt: row.generatedAt,
+    })),
+  });
 });
 
 roleConclusionRoutes.post("/", zValidator("json", roleConclusionSchema), async (c) => {
-  const taskId = c.req.param("taskId");
+  const taskId = requireTaskId(c);
   const body = c.req.valid("json");
-  const task = await db.query.tasks.findFirst({ where: eq(tasks.id, taskId) });
+  const task = await ensureLegacyRoleWorkflowMigrated(taskId);
   if (!task) return c.json({ error: "Task not found" }, 404);
-  const strategy = parseTaskStrategy(task.strategy);
-  const existing = Array.isArray(strategy.roleAggregateConclusions)
-    ? [...(strategy.roleAggregateConclusions as Record<string, unknown>[])]
-    : [];
-  const next = existing.filter(
-    (item) => !(item.roleAgentId === body.roleAgentId && item.stage === body.stage),
-  );
-  next.push({ ...body, generatedAt: new Date().toISOString() });
-  await db.update(tasks).set({ strategy: JSON.stringify({ ...strategy, roleAggregateConclusions: next }) }).where(eq(tasks.id, taskId));
-  return c.json({ ok: true, data: next });
+  const now = new Date().toISOString();
+  const existing = await db.query.roleAggregateConclusions.findFirst({
+    where: and(
+      eq(roleAggregateConclusions.taskId, taskId),
+      eq(roleAggregateConclusions.roleAgentId, body.roleAgentId),
+      eq(roleAggregateConclusions.stage, body.stage),
+    ),
+  });
+
+  if (existing) {
+    await db
+      .update(roleAggregateConclusions)
+      .set({
+        taskStageRunId: null,
+        aggregationStrategy: body.aggregationStrategy,
+        status: body.status,
+        finalDecision: body.finalDecision,
+        aggregateRiskLevel: body.aggregateRiskLevel,
+        confidenceScore: body.confidenceScore,
+        consensusScore: body.consensusScore,
+        winningRationale: body.winningRationale,
+        mergedFindingsJson: body.mergedFindings ?? [],
+        minorityFindingsJson: body.minorityFindings ?? [],
+        conflictsJson: body.conflicts ?? [],
+        approvalRecommendationJson: body.approvalRecommendation ?? null,
+        generatedAt: now,
+        updatedAt: now,
+      })
+      .where(eq(roleAggregateConclusions.id, existing.id));
+  } else {
+    const payload: typeof roleAggregateConclusions.$inferInsert = {
+      id: crypto.randomUUID(),
+      taskId,
+      taskStageRunId: null,
+      roleAgentId: body.roleAgentId,
+      stage: body.stage,
+      aggregationStrategy: body.aggregationStrategy,
+      status: body.status,
+      finalDecision: body.finalDecision,
+      aggregateRiskLevel: body.aggregateRiskLevel,
+      confidenceScore: body.confidenceScore,
+      consensusScore: body.consensusScore,
+      winningRationale: body.winningRationale,
+      mergedFindingsJson: body.mergedFindings ?? [],
+      minorityFindingsJson: body.minorityFindings ?? [],
+      conflictsJson: body.conflicts ?? [],
+      approvalRecommendationJson: body.approvalRecommendation ?? null,
+      generatedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    };
+    await db.insert(roleAggregateConclusions).values(payload);
+  }
+
+  const rows = await db
+    .select()
+    .from(roleAggregateConclusions)
+    .where(eq(roleAggregateConclusions.taskId, taskId))
+    .orderBy(desc(roleAggregateConclusions.generatedAt));
+
+  return c.json({
+    ok: true,
+    data: rows.map((row) => ({
+      id: row.id,
+      roleAgentId: row.roleAgentId,
+      stage: row.stage,
+      aggregationStrategy: row.aggregationStrategy,
+      status: row.status,
+      finalDecision: row.finalDecision,
+      aggregateRiskLevel: row.aggregateRiskLevel,
+      confidenceScore: row.confidenceScore,
+      consensusScore: row.consensusScore,
+      winningRationale: row.winningRationale,
+      mergedFindings: row.mergedFindingsJson ?? [],
+      minorityFindings: row.minorityFindingsJson ?? [],
+      conflicts: row.conflictsJson ?? [],
+      approvalRecommendation: row.approvalRecommendationJson ?? null,
+      generatedAt: row.generatedAt,
+    })),
+  });
 });

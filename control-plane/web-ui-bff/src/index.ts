@@ -18,6 +18,7 @@ import { projectRoutes } from "./modules/projects/routes";
 import { realtimeRoutes } from "./modules/realtime/routes";
 import { websocketHandler } from "./modules/realtime/ws-broadcaster";
 import { repositoryRoutes } from "./modules/repositories/routes";
+import { roleAgentRoutes } from "./modules/role-agents/routes";
 import {
   reconcileRunningTasksOnStartup,
   startPeriodicReconcile,
@@ -60,6 +61,7 @@ app.route("/api/dashboard", dashboardRoutes);
 app.route("/api/envs", envRoutes);
 app.route("/api/policies", policyRoutes);
 app.route("/api/projects", projectRoutes);
+app.route("/api/role-agents", roleAgentRoutes);
 app.route("/api/repositories", repositoryRoutes);
 app.route("/api/credentials", credentialRoutes);
 app.route("/api/orgs", orgRoutes);

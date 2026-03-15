@@ -67,6 +67,17 @@ interface TaskRecord {
   strategy?: string | null;
 }
 
+interface ProjectRecord {
+  settings?: {
+    defaultModel?: string;
+  } | null;
+}
+
+interface ConfigModelRecord {
+  id?: string;
+  provider?: string;
+}
+
 const createdTaskIds: string[] = [];
 let token = "";
 let strategyQueue = Promise.resolve();
@@ -141,7 +152,11 @@ async function updateOrchestrationStrategy(strategy: OrchestrationStrategy): Pro
   });
 }
 
-async function createTask(title: string, prompt: string): Promise<string> {
+async function createTask(
+  title: string,
+  prompt: string,
+  options?: { selectedModel?: string },
+): Promise<string> {
   const response = await request<{ id: string }>("/api/tasks", {
     method: "POST",
     headers: authHeaders(),
@@ -149,10 +164,39 @@ async function createTask(title: string, prompt: string): Promise<string> {
       title,
       projectId: PROJECT_ID,
       prompt,
+      ...(options?.selectedModel ? { selectedModel: options.selectedModel } : {}),
     }),
   });
   createdTaskIds.push(response.id);
   return response.id;
+}
+
+async function getAvailableCopilotModel(): Promise<string> {
+  const modelList = await request<{ data?: ConfigModelRecord[] }>("/api/config/models/list", {
+    headers: authHeaders(),
+  });
+
+  const configuredCopilotModel = (modelList.data || []).find(
+    (model) =>
+      typeof model.provider === "string"
+      && model.provider.startsWith("github-copilot")
+      && typeof model.id === "string"
+      && model.id.trim().length > 0,
+  );
+
+  if (configuredCopilotModel?.provider && configuredCopilotModel.id) {
+    return `${configuredCopilotModel.provider}:${configuredCopilotModel.id}`;
+  }
+
+  const project = await request<ProjectRecord>(`/api/projects/${PROJECT_ID}`, {
+    headers: authHeaders(),
+  });
+
+  if (project.settings?.defaultModel?.startsWith("github-copilot")) {
+    return project.settings.defaultModel;
+  }
+
+  return "github-copilot:claude-sonnet-4";
 }
 
 async function executeTask(taskId: string): Promise<{ agentRunId: string; sessionId: string }> {
@@ -252,6 +296,7 @@ describe("lifecycle hooks integration", () => {
       await withStrategyLock(async () => {
         const originalStrategy = await getOrchestrationStrategy();
         let agentRunId: string | undefined;
+        const executionModel = await getAvailableCopilotModel();
 
         try {
           await updateOrchestrationStrategy({
@@ -281,7 +326,9 @@ describe("lifecycle hooks integration", () => {
           const taskTitle = `pre-eval-${Date.now()}`;
           const taskPrompt =
             "Inspect the repository briefly and respond with one concise status line.";
-          const taskId = await createTask(taskTitle, taskPrompt);
+          const taskId = await createTask(taskTitle, taskPrompt, {
+            selectedModel: executionModel,
+          });
           const execution = await executeTask(taskId);
           agentRunId = execution.agentRunId;
 
@@ -320,6 +367,7 @@ describe("lifecycle hooks integration", () => {
       await withStrategyLock(async () => {
         const originalStrategy = await getOrchestrationStrategy();
         const events: Array<Record<string, unknown>> = [];
+        const executionModel = await getAvailableCopilotModel();
         const unsubscribe = sseAggregator.onEvent((event) => {
           events.push(event as unknown as Record<string, unknown>);
         });
@@ -352,6 +400,9 @@ describe("lifecycle hooks integration", () => {
           const taskId = await createTask(
             `post-eval-${Date.now()}`,
             "Reply with exactly one line: OK.",
+            {
+              selectedModel: executionModel,
+            },
           );
           await executeTask(taskId);
 

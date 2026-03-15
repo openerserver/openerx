@@ -5,6 +5,18 @@ import { defineComponent, h } from "vue";
 import { useProjectStore } from "../../control-plane/web-ui/src/stores/project";
 import { useTaskMonitorStore } from "../../control-plane/web-ui/src/stores/task-monitor";
 
+const VUE_FLOW_EMITS = [
+  "pane-ready",
+  "node-drag-start",
+  "node-drag",
+  "node-drag-stop",
+  "viewport-change",
+  "viewport-change-end",
+] as const;
+
+type VueFlowEmitName = (typeof VUE_FLOW_EMITS)[number];
+const VUE_FLOW_EMIT_OPTIONS = Object.fromEntries(VUE_FLOW_EMITS.map((eventName) => [eventName, (_payload?: unknown) => true]));
+
 const apiMocks = vi.hoisted(() => ({
   listProjects: vi.fn(),
   listTasks: vi.fn(),
@@ -52,23 +64,53 @@ vi.mock("../../control-plane/web-ui/src/stores/realtime", () => ({
   useRealtimeStore: useRealtimeStoreMock,
 }));
 
-vi.mock("@vue-flow/core", () => ({
-  VueFlow: defineComponent({
-    name: "VueFlow",
-    props: ["nodes"],
-    emits: ["pane-ready", "node-drag-start", "node-drag", "node-drag-stop", "viewport-change", "viewport-change-end"],
-    setup(props, { slots, emit }) {
+const VueFlowStub: any = {
+  name: "VueFlow",
+  inheritAttrs: false,
+  props: {
+    nodes: { type: Array, default: () => [] },
+    edges: { type: Array, default: () => [] },
+    defaultViewport: { type: Object, default: undefined },
+    minZoom: { type: Number, default: undefined },
+    maxZoom: { type: Number, default: undefined },
+    nodesDraggable: { type: Boolean, default: undefined },
+    elementsSelectable: { type: Boolean, default: undefined },
+    fitViewOnInit: { type: Boolean, default: undefined },
+  },
+  emits: VUE_FLOW_EMIT_OPTIONS,
+  setup(props: Record<string, unknown>, { slots, emit, attrs, expose }: any) {
+    expose({
+      emitFromTest(eventName: VueFlowEmitName, payload?: unknown) {
+        emit(eventName, payload);
+      },
+    });
+
+    queueMicrotask(() => {
       emit("pane-ready", { setViewport: vi.fn() });
-      return () =>
-        h("div", { class: "vue-flow-stub" },
-          ((props.nodes as Array<Record<string, unknown>>) || []).map((node) =>
-            h("div", { class: "vue-flow-node", "data-node-id": String(node.id) }, [
-              slots[`node-${String(node.type)}`]?.({ data: node.data }) || null,
-            ]),
-          ),
-        );
-    },
-  }),
+    });
+
+    return () =>
+      h("div", {
+        ...attrs,
+        class: ["vue-flow-stub", attrs.class],
+        style: [attrs.style, { width: "1280px", height: "820px", position: "relative" }],
+      },
+        ((props.nodes as Array<Record<string, unknown>>) || []).map((node) => {
+          const slotContent = slots[`node-${String(node.type)}`]?.({ data: node.data });
+          const normalizedChildren = Array.isArray(slotContent)
+            ? slotContent
+            : slotContent
+              ? [slotContent]
+              : [];
+
+          return h("div", { class: "vue-flow-node", "data-node-id": String(node.id) }, normalizedChildren);
+        }),
+      );
+  },
+};
+
+vi.mock("@vue-flow/core", () => ({
+  VueFlow: VueFlowStub,
 }));
 
 vi.mock("@vue-flow/background", () => ({
@@ -219,7 +261,13 @@ async function mountPage() {
   const realtimeStore = useRealtimeStoreMock();
   realtimeStore.events = [];
 
+  const attachTarget = document.createElement("div");
+  attachTarget.style.width = "1440px";
+  attachTarget.style.height = "960px";
+  document.body.appendChild(attachTarget);
+
   const wrapper = mount(MultiTaskMonitor, {
+    attachTo: attachTarget,
     global: {
       plugins: [pinia],
       stubs: {
@@ -236,6 +284,34 @@ async function mountPage() {
 
   await flushPromises();
   return { wrapper, taskMonitorStore, realtimeStore };
+}
+
+function emitFlowEvent(
+  flow: { vm: { $emit: (eventName: VueFlowEmitName, payload?: unknown) => void; $?: { vnode?: { props?: Record<string, unknown> } } } },
+  eventName: VueFlowEmitName,
+  payload?: unknown,
+) {
+  const handlerName = `on${eventName
+    .split("-")
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join("")}`;
+  const handler = flow.vm.$?.vnode?.props?.[handlerName];
+
+  if (typeof handler === "function") {
+    handler(payload);
+    return;
+  }
+
+  if (Array.isArray(handler)) {
+    for (const candidate of handler) {
+      if (typeof candidate === "function") {
+        candidate(payload);
+      }
+    }
+    return;
+  }
+
+  flow.vm.$emit(eventName, payload);
 }
 
 beforeEach(() => {
@@ -617,7 +693,7 @@ describe("MultiTaskMonitor", () => {
       const draggedNode = taskMonitorStore.nodes.find((node) => node.taskId === "task-2");
       expect(draggedNode).toBeTruthy();
 
-      wrapper.findComponent({ name: "VueFlow" }).vm.$emit("node-drag-stop", {
+      emitFlowEvent(wrapper.findComponent({ name: "VueFlow" }) as never, "node-drag-stop", {
         node: {
           id: draggedNode!.id,
           position: { x: 463, y: 177 },
@@ -666,19 +742,19 @@ describe("MultiTaskMonitor", () => {
 
       const flow = wrapper.findComponent({ name: "VueFlow" });
 
-      flow.vm.$emit("node-drag-start", {
+      emitFlowEvent(flow as never, "node-drag-start", {
         node: {
           id: shorterNode!.id,
           position: { x: shorterNode!.x, y: shorterNode!.y },
         },
       });
-      flow.vm.$emit("node-drag", {
+      emitFlowEvent(flow as never, "node-drag", {
         node: {
           id: shorterNode!.id,
           position: { x: 444, y: 40 },
         },
       });
-      flow.vm.$emit("node-drag-stop", {
+      emitFlowEvent(flow as never, "node-drag-stop", {
         node: {
           id: shorterNode!.id,
           position: { x: 444, y: 40 },
@@ -697,19 +773,19 @@ describe("MultiTaskMonitor", () => {
       taskMonitorStore.setNodeSize(tallerNode!.id, 350, 520);
       await flushPromises();
 
-      flow.vm.$emit("node-drag-start", {
+      emitFlowEvent(flow as never, "node-drag-start", {
         node: {
           id: tallerNode!.id,
           position: { x: tallerNode!.x, y: tallerNode!.y },
         },
       });
-      flow.vm.$emit("node-drag", {
+      emitFlowEvent(flow as never, "node-drag", {
         node: {
           id: tallerNode!.id,
           position: { x: 444, y: 40 },
         },
       });
-      flow.vm.$emit("node-drag-stop", {
+      emitFlowEvent(flow as never, "node-drag-stop", {
         node: {
           id: tallerNode!.id,
           position: { x: 444, y: 40 },
@@ -744,13 +820,13 @@ describe("MultiTaskMonitor", () => {
       expect(draggedNode).toBeTruthy();
 
       const flow = wrapper.findComponent({ name: "VueFlow" });
-      flow.vm.$emit("node-drag-start", {
+      emitFlowEvent(flow as never, "node-drag-start", {
         node: {
           id: draggedNode!.id,
           position: { x: draggedNode!.x, y: draggedNode!.y },
         },
       });
-      flow.vm.$emit("node-drag", {
+      emitFlowEvent(flow as never, "node-drag", {
         node: {
           id: draggedNode!.id,
           position: { x: 463, y: 177 },
@@ -763,7 +839,7 @@ describe("MultiTaskMonitor", () => {
       expect(targetPreview.attributes("style") || "").toContain("left: 406px");
       expect(targetPreview.attributes("style") || "").toContain("top: 28px");
 
-      flow.vm.$emit("node-drag-stop", {
+      emitFlowEvent(flow as never, "node-drag-stop", {
         node: {
           id: draggedNode!.id,
           position: { x: 463, y: 177 },
@@ -798,13 +874,13 @@ describe("MultiTaskMonitor", () => {
       expect(draggedNode).toBeTruthy();
 
       const flow = wrapper.findComponent({ name: "VueFlow" });
-      flow.vm.$emit("node-drag-start", {
+      emitFlowEvent(flow as never, "node-drag-start", {
         node: {
           id: draggedNode!.id,
           position: { x: draggedNode!.x, y: draggedNode!.y },
         },
       });
-      flow.vm.$emit("node-drag", {
+      emitFlowEvent(flow as never, "node-drag", {
         node: {
           id: draggedNode!.id,
           position: { x: 463, y: 177 },
@@ -819,7 +895,7 @@ describe("MultiTaskMonitor", () => {
       expect(targetPreview.exists()).toBe(true);
       expect(targetPreview.attributes("style") || "").toContain("left: 248px");
 
-      flow.vm.$emit("node-drag-stop", {
+      emitFlowEvent(flow as never, "node-drag-stop", {
         node: {
           id: draggedNode!.id,
           position: { x: 463, y: 177 },
@@ -855,13 +931,13 @@ describe("MultiTaskMonitor", () => {
       expect(draggedNode).toBeTruthy();
 
       const flow = wrapper.findComponent({ name: "VueFlow" });
-      flow.vm.$emit("node-drag-start", {
+      emitFlowEvent(flow as never, "node-drag-start", {
         node: {
           id: draggedNode!.id,
           position: { x: 609, y: 42 },
         },
       });
-      flow.vm.$emit("node-drag", {
+      emitFlowEvent(flow as never, "node-drag", {
         node: {
           id: draggedNode!.id,
           position: { x: 42, y: 564 },
@@ -874,7 +950,7 @@ describe("MultiTaskMonitor", () => {
       expect(targetPreview.attributes("style") || "").toContain("left: 42px");
       expect(targetPreview.attributes("style") || "").toContain("top: 564px");
 
-      flow.vm.$emit("node-drag-stop", {
+      emitFlowEvent(flow as never, "node-drag-stop", {
         node: {
           id: draggedNode!.id,
           position: { x: 42, y: 564 },
@@ -909,13 +985,13 @@ describe("MultiTaskMonitor", () => {
       expect(draggedNode).toBeTruthy();
 
       const flow = wrapper.findComponent({ name: "VueFlow" });
-      flow.vm.$emit("node-drag-start", {
+      emitFlowEvent(flow as never, "node-drag-start", {
         node: {
           id: draggedNode!.id,
           position: { x: draggedNode!.x, y: draggedNode!.y },
         },
       });
-      flow.vm.$emit("node-drag", {
+      emitFlowEvent(flow as never, "node-drag", {
         node: {
           id: draggedNode!.id,
           position: { x: 44, y: 40 },
@@ -960,13 +1036,13 @@ describe("MultiTaskMonitor", () => {
       expect(draggedNode).toBeTruthy();
 
       const flow = wrapper.findComponent({ name: "VueFlow" });
-      flow.vm.$emit("node-drag-start", {
+      emitFlowEvent(flow as never, "node-drag-start", {
         node: {
           id: draggedNode!.id,
           position: { x: draggedNode!.x, y: draggedNode!.y },
         },
       });
-      flow.vm.$emit("node-drag", {
+      emitFlowEvent(flow as never, "node-drag", {
         node: {
           id: draggedNode!.id,
           position: { x: 44, y: 40 },
@@ -1009,13 +1085,13 @@ describe("MultiTaskMonitor", () => {
       expect(draggedNode).toBeTruthy();
 
       const flow = wrapper.findComponent({ name: "VueFlow" });
-      flow.vm.$emit("node-drag-start", {
+      emitFlowEvent(flow as never, "node-drag-start", {
         node: {
           id: draggedNode!.id,
           position: { x: draggedNode!.x, y: draggedNode!.y },
         },
       });
-      flow.vm.$emit("node-drag", {
+      emitFlowEvent(flow as never, "node-drag", {
         node: {
           id: draggedNode!.id,
           position: { x: 44, y: 40 },
@@ -1023,7 +1099,7 @@ describe("MultiTaskMonitor", () => {
       });
       await flushPromises();
 
-      flow.vm.$emit("viewport-change", { x: -120, y: -80, zoom: 1.25 });
+      emitFlowEvent(flow as never, "viewport-change", { x: -120, y: -80, zoom: 1.25 });
       await flushPromises();
 
       const targetPreview = wrapper.find('[data-preview-type="target"]');
@@ -1057,19 +1133,19 @@ describe("MultiTaskMonitor", () => {
       expect(draggedNode).toBeTruthy();
 
       const flow = wrapper.findComponent({ name: "VueFlow" });
-      flow.vm.$emit("node-drag-start", {
+      emitFlowEvent(flow as never, "node-drag-start", {
         node: {
           id: draggedNode!.id,
           position: { x: draggedNode!.x, y: draggedNode!.y },
         },
       });
-      flow.vm.$emit("node-drag", {
+      emitFlowEvent(flow as never, "node-drag", {
         node: {
           id: draggedNode!.id,
           position: { x: 44, y: 40 },
         },
       });
-      flow.vm.$emit("node-drag-stop", {
+      emitFlowEvent(flow as never, "node-drag-stop", {
         node: {
           id: draggedNode!.id,
           position: { x: 44, y: 40 },
@@ -1108,13 +1184,13 @@ describe("MultiTaskMonitor", () => {
       expect(draggedNode).toBeTruthy();
 
       const flow = wrapper.findComponent({ name: "VueFlow" });
-      flow.vm.$emit("node-drag-start", {
+      emitFlowEvent(flow as never, "node-drag-start", {
         node: {
           id: draggedNode!.id,
           position: { x: draggedNode!.x, y: draggedNode!.y },
         },
       });
-      flow.vm.$emit("node-drag", {
+      emitFlowEvent(flow as never, "node-drag", {
         node: {
           id: draggedNode!.id,
           position: { x: 46, y: 36 },

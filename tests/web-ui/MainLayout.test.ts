@@ -5,6 +5,16 @@ import { defineComponent, h } from "vue";
 import MainLayout from "../../control-plane/web-ui/src/layouts/MainLayout.vue";
 import { useAuthStore } from "../../control-plane/web-ui/src/stores/auth";
 
+const routeState = vi.hoisted(() => ({
+  path: "/",
+  params: {},
+  query: {},
+}));
+
+const routerState = vi.hoisted(() => ({
+  push: vi.fn(),
+}));
+
 const apiMocks = vi.hoisted(() => ({
   getMyProfile: vi.fn(),
   updateMyProfile: vi.fn(),
@@ -13,8 +23,8 @@ const apiMocks = vi.hoisted(() => ({
 vi.mock("../../control-plane/web-ui/src/lib/api", () => apiMocks);
 
 vi.mock("vue-router", () => ({
-  useRouter: () => ({ push: vi.fn() }),
-  useRoute: () => ({ path: "/" }),
+  useRouter: () => routerState,
+  useRoute: () => routeState,
 }));
 
 vi.mock("../../control-plane/web-ui/src/stores/realtime", () => ({
@@ -92,6 +102,10 @@ async function mountLayout(userOverrides: Partial<typeof baseUser> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  routeState.path = "/";
+  routeState.params = {};
+  routeState.query = {};
+  routerState.push.mockReset();
 });
 
 describe("MainLayout – mustChangePassword modal", () => {

@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 
+mock.restore();
+
 const buildRuntimePipelineMock = mock(async () => ({
   taskId: "task-1",
   sessionId: "ses-1",
@@ -23,9 +25,11 @@ mock.module("../../control-plane/web-ui-bff/src/lib/runtime-pipeline", () => ({
   buildRuntimePipeline: buildRuntimePipelineMock,
 }));
 
-const { buildPipelineStageUpdatedEvents } = await import(
-  "../../control-plane/web-ui-bff/src/modules/realtime/pipeline-events"
-);
+async function loadPipelineEventsModule() {
+  return import(
+    "../../control-plane/web-ui-bff/src/modules/realtime/pipeline-events?pipeline-events-test"
+  );
+}
 
 beforeEach(() => {
   buildRuntimePipelineMock.mockReset();
@@ -51,6 +55,7 @@ beforeEach(() => {
 
 describe("buildPipelineStageUpdatedEvents", () => {
   test("emits one upsert event per stage with summary metadata", async () => {
+    const { buildPipelineStageUpdatedEvents } = await loadPipelineEventsModule();
     buildRuntimePipelineMock.mockResolvedValue({
       taskId: "task-1",
       sessionId: "ses-1",
@@ -152,6 +157,7 @@ describe("buildPipelineStageUpdatedEvents", () => {
   });
 
   test("returns no events when pipeline has no bound session or stages", async () => {
+    const { buildPipelineStageUpdatedEvents } = await loadPipelineEventsModule();
     buildRuntimePipelineMock.mockResolvedValue({
       taskId: "task-1",
       sessionId: null,

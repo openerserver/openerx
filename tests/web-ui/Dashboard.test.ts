@@ -256,6 +256,7 @@ describe("Dashboard provider navigation", () => {
       query: {
         provider: "github-copilot",
         focus: "recent",
+        entryContext: "alert",
       },
     });
   });

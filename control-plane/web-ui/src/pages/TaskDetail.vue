@@ -13,6 +13,23 @@
         </a-space>
       </div>
       <a-space direction="vertical" align="end" size="small">
+        <router-link
+          v-if="taskId"
+          :to="{
+            path: '/agents',
+            query: {
+              entryContext: 'task',
+              focus: 'attention',
+              taskId,
+              ...(task?.projectId ? { projectId: task.projectId } : {}),
+              ...(task?.agentRunId ? { agentRunId: task.agentRunId } : {}),
+              ...(governance?.approvalRequired ? { approvalBlocked: 'true' } : {}),
+              ...(governance && governance.overallRisk !== 'low' ? { riskLevel: governance.overallRisk } : {}),
+            },
+          }"
+        >
+          <a-button>查看 Agent 运行</a-button>
+        </router-link>
         <router-link v-if="taskId && !isWorkbenchEmbedded" :to="`/workbench?task=${taskId}`">
           <a-button type="primary">在工作台打开</a-button>
         </router-link>
@@ -502,6 +519,25 @@
                 </a-descriptions>
                 <div v-if="governance.violations.length > 0" :style="taskDetailThemeStyles.governanceViolations">
                   <a-typography-text strong>命中规则</a-typography-text>
+                  <div style="margin: 8px 0 12px 0">
+                    <router-link
+                      v-if="taskId"
+                      :to="{
+                        path: '/agents',
+                        query: {
+                          entryContext: 'task',
+                          focus: 'attention',
+                          taskId,
+                          ...(task?.projectId ? { projectId: task.projectId } : {}),
+                          ...(task?.agentRunId ? { agentRunId: task.agentRunId } : {}),
+                          ...(governance.approvalRequired ? { approvalBlocked: 'true' } : {}),
+                          ...(governance.overallRisk !== 'low' ? { riskLevel: governance.overallRisk } : {}),
+                        },
+                      }"
+                    >
+                      <a-button size="small">带筛选查看 Agent</a-button>
+                    </router-link>
+                  </div>
                   <a-list size="small" :data-source="governance.violations" :style="taskDetailThemeStyles.governanceList">
                     <template #renderItem="{ item }">
                       <a-list-item>
@@ -514,169 +550,29 @@
               </div>
             </a-collapse-panel>
 
-            <a-collapse-panel v-if="showRoleWorkflowPanel" key="role-workflow" header="角色工作流">
-              <a-spin v-if="workflowViewLoading" />
-              <a-alert
-                v-else-if="workflowViewError"
-                type="warning"
-                show-icon
-                :message="workflowViewError"
+            <a-collapse-panel v-if="showProjectRoleConfigPanel" key="project-role-config" header="项目角色配置">
+              <TaskProjectRoleConfigPanel
+                v-if="task?.projectId"
+                :loading="projectRoleConfigLoading"
+                :error="projectRoleConfigError"
+                :project-id="task.projectId"
+                :rows="projectRoleConfigRows"
+                :current-stage="workflowSummary?.currentStage"
+                :active-role-agent-ids="activeRoleAgentIds"
               />
-              <a-empty
-                v-else-if="!workflowSummary && roleConclusions.length === 0 && developerChangeRequests.length === 0"
-                description="暂无角色工作流数据"
+            </a-collapse-panel>
+
+            <a-collapse-panel v-if="showRoleWorkflowPanel" key="role-workflow" header="角色实际介入记录">
+              <TaskRoleWorkflowPanel
+                :loading="workflowViewLoading"
+                :error="workflowViewError"
+                :workflow-summary="workflowSummary"
+                :workflow-stages="workflowStages"
+                :role-conclusions="roleConclusions"
+                :developer-change-requests="developerChangeRequests"
+                :updating-request-ids="updatingChangeRequestIds"
+                @request-status-change="handleRoleWorkflowRequestStatusChange"
               />
-              <div v-else>
-                <a-space size="small" wrap :style="{ marginBottom: '12px' }">
-                  <a-tag color="blue">阶段 {{ workflowBannerState.currentStage }}</a-tag>
-                  <a-tag :color="stageStatusTone(workflowBannerState.workflowStatus)">{{ workflowStatusLabel }}</a-tag>
-                  <a-tag v-if="workflowBannerState.blocked" color="red">已阻断</a-tag>
-                  <a-tag v-if="workflowBannerState.approvalPending" color="orange">待审批</a-tag>
-                  <a-tag v-if="workflowBannerState.openChangeRequestCount > 0" color="gold">
-                    待修正 {{ workflowBannerState.openChangeRequestCount }}
-                  </a-tag>
-                </a-space>
-
-                <a-alert
-                  v-if="workflowBannerState.blockingReason"
-                  type="error"
-                  show-icon
-                  :message="workflowBannerState.blockingReason"
-                  :style="{ marginBottom: '12px' }"
-                />
-
-                <a-tabs :active-key="roleReviewActiveTab" size="small" @update:activeKey="roleReviewActiveTab = String($event)">
-                  <a-tab-pane key="overview" tab="概览">
-                    <a-descriptions :column="1" bordered size="small">
-                      <a-descriptions-item label="当前阶段">{{ workflowBannerState.currentStage }}</a-descriptions-item>
-                      <a-descriptions-item label="流程状态">{{ workflowStatusLabel }}</a-descriptions-item>
-                      <a-descriptions-item label="角色结论数">{{ roleConclusions.length }}</a-descriptions-item>
-                      <a-descriptions-item label="待修正数">{{ openDeveloperChangeRequests.length }}</a-descriptions-item>
-                    </a-descriptions>
-                  </a-tab-pane>
-
-                  <a-tab-pane key="stages" tab="阶段">
-                    <a-empty v-if="workflowStages.length === 0" description="暂无阶段数据" />
-                    <a-space v-else direction="vertical" :size="8" :style="{ width: '100%' }">
-                      <a-card v-for="stage in workflowStages" :key="stage.id" size="small">
-                        <a-flex justify="space-between" align="flex-start" :gap="8">
-                          <div>
-                            <div><strong>{{ stage.stageLabel || stage.stageKey }}</strong></div>
-                            <a-typography-text type="secondary">主责 {{ stage.primaryRoleLabel || '未指定' }}</a-typography-text>
-                          </div>
-                          <a-space size="small" wrap>
-                            <a-tag :color="stageStatusTone(stage.status)">{{ stage.status }}</a-tag>
-                            <a-tag v-if="stage.approvalState !== 'not-required'" color="orange">{{ stage.approvalState }}</a-tag>
-                          </a-space>
-                        </a-flex>
-                        <div v-if="stage.blockingReason" :style="{ marginTop: '8px', color: '#a61d24' }">{{ stage.blockingReason }}</div>
-                      </a-card>
-                    </a-space>
-                  </a-tab-pane>
-
-                  <a-tab-pane key="reviews" tab="角色评审">
-                    <a-empty v-if="roleConclusions.length === 0" description="暂无角色结论" />
-                    <a-space v-else direction="vertical" :size="8" :style="{ width: '100%' }">
-                      <a-card v-for="item in roleConclusions" :key="item.id" size="small">
-                        <a-flex justify="space-between" align="flex-start" :gap="8">
-                          <div>
-                            <div><strong>{{ item.roleLabel }}</strong></div>
-                            <a-typography-text type="secondary">阶段 {{ item.stage }}</a-typography-text>
-                          </div>
-                          <a-space size="small" wrap>
-                            <a-tag :color="roleDecisionColor(item.finalDecision)">{{ item.finalDecision }}</a-tag>
-                            <a-tag :color="riskColor(item.aggregateRiskLevel)">{{ item.aggregateRiskLevel }}</a-tag>
-                            <a-tag v-if="item.approvalRequired" color="orange">需审批</a-tag>
-                          </a-space>
-                        </a-flex>
-                        <div :style="{ marginTop: '8px' }">{{ item.winningRationale || '暂无聚合说明' }}</div>
-                        <div :style="{ marginTop: '8px' }">
-                          <a-button type="link" size="small" @click="toggleRoleReviewExpanded(item.id)">
-                            {{ isRoleReviewExpanded(item.id) ? '收起详情' : '展开详情' }}
-                          </a-button>
-                        </div>
-                        <div v-if="isRoleReviewExpanded(item.id)" :style="{ marginTop: '8px' }">
-                          <div v-if="item.mergedFindings.length > 0">
-                            <a-typography-text strong>主要发现</a-typography-text>
-                            <ul :style="{ paddingLeft: '18px', margin: '6px 0' }">
-                              <li v-for="finding in item.mergedFindings" :key="finding.key">{{ finding.title }}</li>
-                            </ul>
-                          </div>
-                          <div v-if="item.minorityFindings.length > 0">
-                            <a-typography-text strong>少数派意见</a-typography-text>
-                            <ul :style="{ paddingLeft: '18px', margin: '6px 0' }">
-                              <li v-for="finding in item.minorityFindings" :key="finding.key">{{ finding.title }}</li>
-                            </ul>
-                          </div>
-                        </div>
-                      </a-card>
-                    </a-space>
-                  </a-tab-pane>
-
-                  <a-tab-pane key="conflicts" tab="冲突">
-                    <a-empty v-if="roleConflictItems.length === 0" description="暂无冲突" />
-                    <a-list v-else size="small" :data-source="roleConflictItems">
-                      <template #renderItem="{ item }">
-                        <a-list-item>
-                          <a-space direction="vertical" :size="2">
-                            <a-space size="small" wrap>
-                              <strong>{{ item.roleLabel }}</strong>
-                              <a-tag :color="riskColor(item.severity)">{{ item.severity }}</a-tag>
-                              <a-tag :color="roleDecisionColor(item.finalDecision)">{{ item.finalDecision }}</a-tag>
-                            </a-space>
-                            <a-typography-text type="secondary">{{ item.summary }}</a-typography-text>
-                          </a-space>
-                        </a-list-item>
-                      </template>
-                    </a-list>
-                  </a-tab-pane>
-
-                  <a-tab-pane key="change-requests" tab="修正请求">
-                    <a-empty v-if="developerChangeRequests.length === 0" description="暂无修正请求" />
-                    <a-space v-else direction="vertical" :size="8" :style="{ width: '100%' }">
-                      <a-card v-for="item in developerChangeRequests" :key="item.id" size="small">
-                        <a-flex justify="space-between" align="flex-start" :gap="8">
-                          <div>
-                            <div><strong>{{ item.title }}</strong></div>
-                            <a-typography-text type="secondary">来源 {{ item.sourceRoleLabel }}</a-typography-text>
-                          </div>
-                          <a-space size="small" wrap>
-                            <a-tag :color="riskColor(item.priority)">{{ item.priority }}</a-tag>
-                            <a-tag :color="item.blocking ? 'red' : 'default'">{{ item.blocking ? '阻断' : '非阻断' }}</a-tag>
-                            <a-tag :color="item.approvalRequired ? 'orange' : 'default'">{{ item.approvalRequired ? '需审批' : item.status }}</a-tag>
-                          </a-space>
-                        </a-flex>
-                        <div :style="{ marginTop: '8px' }">{{ item.summary }}</div>
-                        <div :style="{ marginTop: '8px' }">
-                          <a-button type="link" size="small" @click="toggleChangeRequestExpanded(item.id)">
-                            {{ isChangeRequestExpanded(item.id) ? '收起详情' : '展开详情' }}
-                          </a-button>
-                        </div>
-                        <div v-if="isChangeRequestExpanded(item.id)" :style="{ marginTop: '8px' }">
-                          <ul :style="{ paddingLeft: '18px', margin: '6px 0' }">
-                            <li v-for="change in item.requiredChanges" :key="change">{{ change }}</li>
-                          </ul>
-                        </div>
-                        <a-space size="small" wrap>
-                          <a-button
-                            v-if="item.status === 'open'"
-                            size="small"
-                            :loading="isUpdatingChangeRequest(item.id)"
-                            @click="handleDeveloperChangeRequestStatus(item.id, 'acknowledged')"
-                          >标记已确认</a-button>
-                          <a-button
-                            v-if="item.status !== 'resolved'"
-                            size="small"
-                            type="primary"
-                            :loading="isUpdatingChangeRequest(item.id)"
-                            @click="handleDeveloperChangeRequestStatus(item.id, 'resolved')"
-                          >标记已解决</a-button>
-                        </a-space>
-                      </a-card>
-                    </a-space>
-                  </a-tab-pane>
-                </a-tabs>
-              </div>
             </a-collapse-panel>
 
             <a-collapse-panel v-if="showHooksPanel" key="hooks" header="Hook 执行记录">
@@ -855,10 +751,9 @@ import { message } from "ant-design-vue";
 import { computed, defineAsyncComponent, nextTick, onUnmounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
-  type DeveloperChangeRequestViewModel,
   type GovernanceSummary,
   type PipelineSummary,
-  type RoleConclusionViewModel,
+  type ProjectRoleExecutionView,
   type RuntimePipeline,
   type RuntimePipelineStage,
   type SessionInfo,
@@ -870,6 +765,7 @@ import {
   continueTask,
   forkTaskSession,
   getModelsList,
+  getProjectRoleExecutionView,
   getSessionMessages,
   getSessionTree,
   getTask,
@@ -892,6 +788,8 @@ import {
 } from "../theme/ui-theme";
 
 const ConfirmationForm = defineAsyncComponent(() => import("../components/ConfirmationForm.vue"));
+const TaskProjectRoleConfigPanel = defineAsyncComponent(() => import("../components/TaskProjectRoleConfigPanel.vue"));
+const TaskRoleWorkflowPanel = defineAsyncComponent(() => import("../components/TaskRoleWorkflowPanel.vue"));
 
 const route = useRoute();
 const router = useRouter();
@@ -954,6 +852,7 @@ const hasRoleWorkflowData = computed(() =>
       || developerChangeRequests.value.length > 0,
   ),
 );
+const hasProjectRoleConfigData = computed(() => projectRoleConfigRows.value.length > 0);
 
 const showGraphPanel = computed(() => !isWorkbenchEmbedded.value || hasTaskGraphData.value);
 const showContextPanel = computed(() => !isWorkbenchEmbedded.value || hasCodeContext.value);
@@ -962,6 +861,7 @@ const showGovernancePanel = computed(() => !isWorkbenchEmbedded.value || hasGove
 const showOrchestrationPanel = computed(() => !isWorkbenchEmbedded.value || hasOrchestrationData.value);
 const showPipelinePanel = computed(() => !isWorkbenchEmbedded.value || hasPipelineData.value);
 const showHooksPanel = computed(() => !isWorkbenchEmbedded.value ? Boolean(strategy.value?.hookExecutions?.length) : hasHookData.value);
+const showProjectRoleConfigPanel = computed(() => !isWorkbenchEmbedded.value || hasProjectRoleConfigData.value || projectRoleConfigLoading.value);
 const showRoleWorkflowPanel = computed(() => !isWorkbenchEmbedded.value || hasRoleWorkflowData.value || workflowViewLoading.value);
 const showEventsPanel = computed(() => !isWorkbenchEmbedded.value || hasTaskEventsData.value);
 const useCompactInspector = computed(() => isWorkbenchEmbedded.value);
@@ -1135,9 +1035,9 @@ const governanceLoading = ref(false);
 const workflowViewLoading = ref(false);
 const workflowViewError = ref<string | null>(null);
 const workflowView = ref<TaskWorkflowViewModel | null>(null);
-const roleReviewActiveTab = ref("overview");
-const expandedRoleReviewIds = ref<string[]>([]);
-const expandedChangeRequestIds = ref<string[]>([]);
+const projectRoleConfigLoading = ref(false);
+const projectRoleConfigError = ref<string | null>(null);
+const projectRoleExecutionView = ref<ProjectRoleExecutionView | null>(null);
 const updatingChangeRequestIds = ref<string[]>([]);
 
 const continuePrompt = ref("");
@@ -1203,109 +1103,19 @@ const modelOptions = computed(() => {
 
 const workflowSummary = computed(() => workflowView.value?.workflow ?? null);
 const workflowStages = computed(() => workflowView.value?.workflow.stages ?? []);
-const roleConclusions = computed<RoleConclusionViewModel[]>(() => workflowView.value?.roleConclusions ?? []);
-const developerChangeRequests = computed<DeveloperChangeRequestViewModel[]>(() => workflowView.value?.developerChangeRequests ?? []);
-const openDeveloperChangeRequests = computed(() =>
-  developerChangeRequests.value.filter((item) => item.status === "open" || item.status === "in-progress"),
-);
-const blockingRoleConclusions = computed(() =>
-  roleConclusions.value.filter((item) => item.finalDecision === "block" || item.finalDecision === "human-review"),
-);
-const roleConflictItems = computed(() =>
-  roleConclusions.value.flatMap((item) =>
-    item.conflicts.map((conflict) => ({
-      roleAgentId: item.roleAgentId,
-      roleLabel: item.roleLabel,
-      stage: item.stage,
-      finalDecision: item.finalDecision,
-      ...conflict,
-    })),
-  ),
-);
-const workflowBannerState = computed(() => ({
-  currentStage: workflowSummary.value?.currentStage ?? "unknown",
-  workflowStatus: workflowSummary.value?.status ?? "pending",
-  blocked: blockingRoleConclusions.value.length > 0 || workflowSummary.value?.status === "blocked",
-  approvalPending: workflowStages.value.some((stage) => stage.approvalState === "pending"),
-  openChangeRequestCount: openDeveloperChangeRequests.value.length,
-  blockingReason: workflowStages.value.find((stage) => stage.blockingReason)?.blockingReason,
-}));
-
-const workflowStatusLabel = computed(() => {
-  switch (workflowBannerState.value.workflowStatus) {
-    case "running":
-      return "进行中";
-    case "blocked":
-      return "已阻断";
-    case "waiting-approval":
-      return "待审批";
-    case "failed":
-      return "失败";
-    case "completed":
-      return "已完成";
-    case "cancelled":
-      return "已取消";
-    default:
-      return workflowBannerState.value.workflowStatus || "未开始";
+const roleConclusions = computed(() => workflowView.value?.roleConclusions ?? []);
+const developerChangeRequests = computed(() => workflowView.value?.developerChangeRequests ?? []);
+const projectRoleConfigRows = computed(() => projectRoleExecutionView.value?.rows ?? []);
+const activeRoleAgentIds = computed(() => {
+  const ids = new Set<string>();
+  for (const item of roleConclusions.value) {
+    if (item.roleAgentId) ids.add(item.roleAgentId);
   }
+  for (const item of developerChangeRequests.value) {
+    if (item.sourceRoleAgentId) ids.add(item.sourceRoleAgentId);
+  }
+  return Array.from(ids);
 });
-
-function roleDecisionColor(decision: string) {
-  switch (decision) {
-    case "block":
-    case "human-review":
-      return "red";
-    case "needs-approval":
-      return "orange";
-    case "notify-developer":
-      return "gold";
-    case "allow":
-      return "green";
-    default:
-      return "default";
-  }
-}
-
-function stageStatusTone(status: string) {
-  switch (status) {
-    case "completed":
-      return "green";
-    case "running":
-      return "blue";
-    case "blocked":
-      return "red";
-    case "waiting-approval":
-      return "orange";
-    case "failed":
-      return "volcano";
-    default:
-      return "default";
-  }
-}
-
-function isRoleReviewExpanded(id: string) {
-  return expandedRoleReviewIds.value.includes(id);
-}
-
-function toggleRoleReviewExpanded(id: string) {
-  expandedRoleReviewIds.value = expandedRoleReviewIds.value.includes(id)
-    ? expandedRoleReviewIds.value.filter((item) => item !== id)
-    : [...expandedRoleReviewIds.value, id];
-}
-
-function isChangeRequestExpanded(id: string) {
-  return expandedChangeRequestIds.value.includes(id);
-}
-
-function toggleChangeRequestExpanded(id: string) {
-  expandedChangeRequestIds.value = expandedChangeRequestIds.value.includes(id)
-    ? expandedChangeRequestIds.value.filter((item) => item !== id)
-    : [...expandedChangeRequestIds.value, id];
-}
-
-function isUpdatingChangeRequest(id: string) {
-  return updatingChangeRequestIds.value.includes(id);
-}
 
 async function refreshWorkflowView(id: string) {
   workflowViewLoading.value = true;
@@ -1320,8 +1130,21 @@ async function refreshWorkflowView(id: string) {
   }
 }
 
+async function refreshProjectRoleConfig(projectId: string) {
+  projectRoleConfigLoading.value = true;
+  try {
+    projectRoleExecutionView.value = await getProjectRoleExecutionView(projectId);
+    projectRoleConfigError.value = null;
+  } catch (error) {
+    projectRoleConfigError.value = error instanceof Error ? error.message : "加载项目角色配置失败";
+    projectRoleExecutionView.value = null;
+  } finally {
+    projectRoleConfigLoading.value = false;
+  }
+}
+
 async function handleDeveloperChangeRequestStatus(requestId: string, status: "acknowledged" | "resolved") {
-  if (!taskId.value || isUpdatingChangeRequest(requestId)) {
+  if (!taskId.value || updatingChangeRequestIds.value.includes(requestId)) {
     return;
   }
 
@@ -1341,6 +1164,10 @@ async function handleDeveloperChangeRequestStatus(requestId: string, status: "ac
   } finally {
     updatingChangeRequestIds.value = updatingChangeRequestIds.value.filter((item) => item !== requestId);
   }
+}
+
+function handleRoleWorkflowRequestStatusChange(payload: { requestId: string; status: "acknowledged" | "resolved" }) {
+  void handleDeveloperChangeRequestStatus(payload.requestId, payload.status);
 }
 
 function filterModelOption(input: string, option: { value?: string; label?: string }) {
@@ -1397,21 +1224,25 @@ async function refreshTaskData(
     sessions?: boolean;
     governance?: boolean;
     workflow?: boolean;
+    roleConfig?: boolean;
   } = {
     task: true,
     pipeline: true,
     sessions: true,
     governance: true,
     workflow: true,
+    roleConfig: true,
   },
 ) {
   const jobs: Promise<unknown>[] = [];
+  let refreshedTaskProjectId: string | null = null;
 
   if (options.task !== false) {
     jobs.push(
       getTask(id)
         .then((t) => {
           task.value = t;
+          refreshedTaskProjectId = t.projectId || null;
         })
         .catch(() => {}),
     );
@@ -1462,6 +1293,16 @@ async function refreshTaskData(
   }
 
   await Promise.all(jobs);
+
+  if (options.roleConfig) {
+    const nextProjectId = refreshedTaskProjectId || task.value?.projectId || null;
+    if (nextProjectId) {
+      await refreshProjectRoleConfig(nextProjectId);
+    } else {
+      projectRoleExecutionView.value = null;
+      projectRoleConfigError.value = null;
+    }
+  }
 }
 
 function getPreferredPipelineSessionId() {

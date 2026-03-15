@@ -24,6 +24,7 @@ export const agentControlRoutes = new Hono();
 type RuntimeRun = ReturnType<typeof listAgentRuns>[number];
 
 interface AgentOverviewResponse {
+  viewScope?: "mine" | "project" | "global";
   summary: {
     attentionCount: number;
     runningCount: number;
@@ -36,6 +37,13 @@ interface AgentOverviewResponse {
     attention: number;
     running: number;
     recent: number;
+  };
+  blockerBreakdown?: {
+    failedHighRisk: number;
+    approvalBlocked: number;
+    pausedAwaitingResume: number;
+    stalled: number;
+    stoppedPendingReview: number;
   };
   generatedAt: string;
 }
@@ -64,6 +72,18 @@ interface AgentQueueItem {
   tokenUsed: number;
   resultSummary: string | null;
   guidanceCount: number;
+  primaryAttentionReason?: string | null;
+  quickActions?: string[];
+  actionPermissions?: {
+    canPause: boolean;
+    canResume: boolean;
+    canTerminate: boolean;
+    canInjectGuidance: boolean;
+    canViewApproval: boolean;
+    canViewAudit: boolean;
+    canViewCodeChanges: boolean;
+    canExport: boolean;
+  } | null;
 }
 
 interface AgentQueueResponse {
@@ -75,6 +95,8 @@ interface AgentQueueResponse {
 
 interface AgentRunSummaryResponse {
   agentRunId: string;
+  entryContext?: string;
+  viewScope?: "mine" | "project" | "global";
   taskId: string;
   taskTitle: string;
   projectId: string;
@@ -97,7 +119,93 @@ interface AgentRunSummaryResponse {
   error: string | null;
   longSummary: string | null;
   latestEvents: Array<{ ts: string; type: string; summary: string }>;
+  actionPermissions?: {
+    canPause: boolean;
+    canResume: boolean;
+    canTerminate: boolean;
+    canInjectGuidance: boolean;
+    canViewApproval: boolean;
+    canViewAudit: boolean;
+    canViewCodeChanges: boolean;
+    canExport: boolean;
+  } | null;
+  governance?: {
+    approvalTickets?: number;
+    pendingApprovals?: number;
+    latestApprovalStatus?: string | null;
+    recentAuditEvents?: number;
+    latestHighRiskAction?: string | null;
+  } | null;
+  codeChanges?: {
+    changeCount?: number;
+    files?: number;
+    insertions?: number;
+    deletions?: number;
+    latestSummary?: string | null;
+  } | null;
   subSessionId?: string;
+}
+
+interface AgentAnalyticsRankingItem {
+  key: string;
+  label: string;
+  totalRuns: number;
+  completedRuns: number;
+  failedRuns: number;
+  attentionCount: number;
+  interventionCount: number;
+  successRate: number;
+  failureRate: number;
+  avgDurationMs: number | null;
+  avgTokenUsed: number | null;
+}
+
+interface AgentAnalyticsHealthResponse {
+  viewScope?: "mine" | "project" | "global";
+  generatedAt: string;
+  totals: {
+    totalRuns: number;
+    completedRuns: number;
+    failedRuns: number;
+    stoppedRuns: number;
+    humanInterventionRuns: number;
+    attentionRuns: number;
+    approvalBlockedRuns: number;
+    avgDurationMs: number | null;
+    failureRate: number;
+    interventionRate: number;
+  };
+  agentRanking: AgentAnalyticsRankingItem[];
+  modelRanking: AgentAnalyticsRankingItem[];
+}
+
+interface AgentAnalyticsBreakdownItem {
+  key: string;
+  label: string;
+  count: number;
+  share: number;
+}
+
+interface AgentAnalyticsFailuresResponse {
+  generatedAt: string;
+  totalAttentionRuns: number;
+  blockerBreakdown: AgentAnalyticsBreakdownItem[];
+  failureReasons: AgentAnalyticsBreakdownItem[];
+  riskBreakdown: AgentAnalyticsBreakdownItem[];
+}
+
+interface AgentAnalyticsTimelineResponse {
+  generatedAt: string;
+  bucketUnit: "hour" | "day";
+  buckets: Array<{
+    bucket: string;
+    label: string;
+    totalRuns: number;
+    completedRuns: number;
+    failedRuns: number;
+    attentionRuns: number;
+    interventionRuns: number;
+  }>;
 }
 
 type PersistedRunStatus = Parameters<typeof patchAgentRunRecord>[0]["status"];
@@ -257,7 +365,22 @@ async function buildRuntimeOnlySummary(c: { req: { header: (name: string) => str
 
 // GET /api/agents/overview — aggregated overview for agent ops dashboard
 agentControlRoutes.get("/overview", async (c) => {
-  const query = buildForwardedQuery(c, ["projectId", "from", "to", "ownerScope"]);
+  const query = buildForwardedQuery(c, [
+    "projectId",
+    "taskId",
+    "agentRunId",
+    "from",
+    "to",
+    "ownerScope",
+    "status",
+    "search",
+    "riskLevel",
+    "approvalBlocked",
+    "requiresIntervention",
+    "agentType",
+    "model",
+    "entryContext",
+  ]);
   const result = await cpFetch<AgentOverviewResponse>(`/api/agent-runs/overview${query}`, {
     authorization: authHeader(c),
   });
@@ -269,6 +392,8 @@ agentControlRoutes.get("/queues", async (c) => {
   const query = buildForwardedQuery(c, [
     "queue",
     "projectId",
+    "taskId",
+    "agentRunId",
     "from",
     "to",
     "ownerScope",
@@ -276,7 +401,12 @@ agentControlRoutes.get("/queues", async (c) => {
     "pageSize",
     "status",
     "search",
+    "riskLevel",
+    "approvalBlocked",
     "requiresIntervention",
+    "agentType",
+    "model",
+    "entryContext",
   ]);
   const result = await cpFetch<AgentQueueResponse>(`/api/agent-runs/queues${query}`, {
     authorization: authHeader(c),
@@ -304,8 +434,9 @@ agentControlRoutes.get("/queues", async (c) => {
 // GET /api/agents/:agentRunId/summary — aggregated drawer summary for single agent run
 agentControlRoutes.get("/:agentRunId/summary", async (c) => {
   const agentRunId = c.req.param("agentRunId");
+  const query = buildForwardedQuery(c, ["entryContext", "ownerScope"]);
   const result = await cpFetch<AgentRunSummaryResponse>(
-    `/api/agent-runs/${encodeURIComponent(agentRunId)}/summary`,
+    `/api/agent-runs/${encodeURIComponent(agentRunId)}/summary${query}`,
     {
       authorization: authHeader(c),
     },
@@ -330,6 +461,75 @@ agentControlRoutes.get("/:agentRunId/summary", async (c) => {
     tokenUsed: summary.tokenUsed,
   });
   return c.json({ ...summary, tokenUsed });
+});
+
+agentControlRoutes.get("/analytics/health", async (c) => {
+  const query = buildForwardedQuery(c, [
+    "projectId",
+    "taskId",
+    "agentRunId",
+    "from",
+    "to",
+    "ownerScope",
+    "status",
+    "search",
+    "riskLevel",
+    "approvalBlocked",
+    "requiresIntervention",
+    "agentType",
+    "model",
+    "entryContext",
+  ]);
+  const result = await cpFetch<AgentAnalyticsHealthResponse>(`/api/agent-runs/analytics/health${query}`, {
+    authorization: authHeader(c),
+  });
+  return c.json(result.data, result.ok ? 200 : (result.status as 401 | 403 | 502));
+});
+
+agentControlRoutes.get("/analytics/failures", async (c) => {
+  const query = buildForwardedQuery(c, [
+    "projectId",
+    "taskId",
+    "agentRunId",
+    "from",
+    "to",
+    "ownerScope",
+    "status",
+    "search",
+    "riskLevel",
+    "approvalBlocked",
+    "requiresIntervention",
+    "agentType",
+    "model",
+    "entryContext",
+  ]);
+  const result = await cpFetch<AgentAnalyticsFailuresResponse>(`/api/agent-runs/analytics/failures${query}`, {
+    authorization: authHeader(c),
+  });
+  return c.json(result.data, result.ok ? 200 : (result.status as 401 | 403 | 502));
+});
+
+agentControlRoutes.get("/analytics/timeline", async (c) => {
+  const query = buildForwardedQuery(c, [
+    "projectId",
+    "taskId",
+    "agentRunId",
+    "from",
+    "to",
+    "ownerScope",
+    "status",
+    "search",
+    "riskLevel",
+    "approvalBlocked",
+    "requiresIntervention",
+    "agentType",
+    "model",
+    "entryContext",
+  ]);
+  const result = await cpFetch<AgentAnalyticsTimelineResponse>(`/api/agent-runs/analytics/timeline${query}`, {
+    authorization: authHeader(c),
+  });
+  return c.json(result.data, result.ok ? 200 : (result.status as 401 | 403 | 502));
 });
 
 // GET /api/agents — list all registered agent runs

@@ -15,6 +15,7 @@
     "test:bff": "cd control-plane/web-ui-bff && bun run test",
     "test:bff:chat-settings": "cd control-plane/web-ui-bff && bun test ../../tests/web-ui-bff/chat-settings-routes.test.ts --timeout 120000",
     "test:bff:realtime-regression": "cd control-plane/web-ui-bff && bun run test:realtime-regression",
+    "test:bff:execution-integration": "cd control-plane/web-ui-bff && bun run test:integration:execution",
     "test:ui": "cd control-plane/web-ui && bun run test",
     "test:ui:chat-settings": "cd control-plane/web-ui && bun run test -- ../../tests/web-ui/ChatSettings.test.ts",
     "test:ui:file": "cd control-plane/web-ui && bun run test --",
@@ -35,6 +36,7 @@
     "check:all": "bash scripts/check-all.sh",
     "opencode:health": "bash scripts/opencode-health-check.sh",
     "opencode:cleanup": "bash scripts/opencode-cleanup.sh",
+    "opencode:sync-skills": "bash scripts/sync-skillhub-skills.sh",
     "cli:task": "cd control-plane/service && bun run cli:task"
   },
   "devDependencies": {

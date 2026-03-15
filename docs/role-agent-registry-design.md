@@ -714,7 +714,280 @@ interface ResolvedRoleAgent {
 
 安全 Agent、部署 Agent、运维 Agent 的执行记录应默认进入审计事件流。
 
-## 11. 首批验收标准
+## 11. 注册表读取模型与项目覆盖规则
+
+仅定义写模型还不够，后续 BFF 和工作流阶段推进器真正依赖的是“解析后的可执行角色视图”。
+
+因此建议把角色注册表分为两层：
+
+- 控制平面写模型：管理员维护的 `role_agents` 与 `role_agent_bindings`
+- BFF / 执行侧读模型：按任务、项目、阶段解析后的 `ResolvedRoleAgent`
+
+### 11.1 读取模型建议
+
+建议控制平面在管理接口之外，再提供一个面向执行器的解析结果模型：
+
+```ts
+interface ResolvedRoleAgentView {
+  id: string;
+  name: string;
+  scope: "system" | "project";
+  status: "active" | "disabled" | "deprecated";
+  riskLevel: "low" | "medium" | "high" | "critical";
+  allowedStages: WorkflowStage[];
+  permissionProfile: PermissionProfileId;
+  toolProfile: ToolProfileId;
+  defaultExecutionMode: RoleExecutionMode;
+  aggregationPolicy?: RoleAggregationPolicy;
+  requiresApprovalForWrite: boolean;
+  outputSchemaId: string;
+  bindings: Array<{
+    bindingId: string;
+    runtimeAgent: string;
+    label: string;
+    enabled: boolean;
+    priority: number;
+    model?: string;
+    tags?: string[];
+  }>;
+}
+```
+
+说明：
+
+- 管理页仍可读取原始注册表对象
+- 执行器、阶段推进器、审批引擎优先读取解析后的只读视图
+- 这样可以避免 BFF 自己在多个模块里重复拼接 `bindings + aggregationPolicy + profiles`
+
+### 11.2 项目覆盖优先级
+
+角色注册表需要明确系统级和项目级配置如何共存。
+
+建议优先级如下：
+
+1. 项目级角色定义优先于系统级同 ID 定义
+2. 如果项目级只覆盖部分字段，则未覆盖字段回退到系统级默认定义
+3. 如果项目级角色被显式 `disabled`，则视为该项目禁用该角色
+4. 如果项目级未定义该角色，则直接使用系统级角色
+
+建议覆盖策略采用“字段级继承”，而不是要求项目侧复制整份角色定义。
+
+```ts
+interface EffectiveRoleResolution {
+  baseRole: RoleAgentRegistration;
+  projectOverride?: Partial<RoleAgentRegistration>;
+  effectiveRole: RoleAgentRegistration;
+}
+```
+
+### 11.3 binding 解析规则
+
+对于 bindings，建议采用以下解析规则：
+
+1. 先取项目级启用 bindings
+2. 若项目级未配置 bindings，则回退到系统级 bindings
+3. 若项目级显式配置为空数组，表示该项目暂不允许该角色落到任何运行时 Agent
+4. disabled bindings 不进入执行器候选集合
+5. 解析后候选 bindings 按 `priority ASC` 排序
+
+这样可以保证：
+
+- 模板始终只引用稳定的 `role.<domain>`
+- 不同项目可以替换底层运行时实现或模型选择
+- 管理员可以通过项目覆盖控制高风险项目的角色执行策略
+
+## 12. 默认种子与 Profile 注册策略
+
+如果角色注册表没有默认种子，工作流模板会引用到一组并不存在的角色 ID，导致系统在首轮初始化后不可执行。
+
+因此建议把“首批角色定义”视为平台种子主数据，而不是仅保留在文档示例里。
+
+### 12.1 建议默认种子内容
+
+系统初始化时建议自动写入以下角色：
+
+- `role.product`
+- `role.architect`
+- `role.developer`
+- `role.visual`
+- `role.security`
+- `role.release`
+- `role.operations`
+- `role.qa`
+
+并同步写入首批默认 bindings，用于建立最小可执行闭环。
+
+### 12.2 种子幂等要求
+
+默认种子必须满足以下要求：
+
+1. 基于 `id` 幂等 upsert，而不是每次重复插入
+2. 已存在记录时，仅补齐缺失字段或在管理员未修改时执行安全更新
+3. 不得覆盖项目级角色自定义配置
+4. 允许后续版本追加新角色或新 binding，但不能破坏旧模板引用
+
+### 12.3 permission / tool / output schema 的注册方式
+
+虽然第一阶段可以先把 `permissionProfile`、`toolProfile`、`outputSchemaId` 存成字符串，但文档层应先定义这些字符串不是自由输入，而是受控注册表 ID。
+
+建议后续统一维护以下静态注册：
+
+```ts
+type PermissionProfileId =
+  | "perm.readonly-analysis"
+  | "perm.design-governance"
+  | "perm.code-implementation"
+  | "perm.security-review"
+  | "perm.release-management"
+  | "perm.operations-control";
+
+type OutputSchemaId =
+  | "artifact.product-brief.v1"
+  | "artifact.architecture-decision.v1"
+  | "artifact.developer-change.v1"
+  | "artifact.visual-spec.v1"
+  | "artifact.security-review.v1"
+  | "artifact.release-plan.v1"
+  | "artifact.ops-runbook.v1"
+  | "artifact.qa-report.v1";
+```
+
+建议原则：
+
+- 控制平面写入时校验 ID 是否在受支持集合内
+- BFF 不自行发明新的 profile ID
+- 管理页只从受支持列表中选择，避免拼写漂移
+
+## 13. 运行时解析与执行前校验
+
+角色注册表真正生效的关键，不是 CRUD 成功，而是任务执行前能否稳定解析出“本阶段可运行、且安全可放行”的角色执行计划。
+
+### 13.1 建议解析流程
+
+建议 BFF 或工作流阶段推进器在执行角色前固定执行以下步骤：
+
+1. 根据 `roleAgentId` 读取系统级角色定义
+2. 若存在 `projectId`，尝试加载项目级覆盖
+3. 合并得到 `effectiveRole`
+4. 校验当前 `stage` 是否包含在 `allowedStages`
+5. 解析并过滤可用 bindings
+6. 根据模板 `roleExecutionPolicies` 覆盖默认执行模式
+7. 根据 `riskLevel`、审批状态、写权限边界做执行前放行判断
+8. 生成 `ResolvedRoleAgent` 交给执行器
+
+### 13.2 执行前硬性校验
+
+建议至少包含以下校验：
+
+- `status` 必须为 `active`
+- `allowedStages` 必须包含当前阶段
+- 至少有一个 enabled binding，除非该角色本阶段只作为静态占位角色
+- 非 `role.developer` 角色不得获得项目主代码写权限
+- 高风险角色若配置 `requiresApprovalForWrite=true`，则没有审批票据时不得进入写操作
+- `toolProfile` 必须和 `permissionProfile` 相容，不能出现“只读权限 + 代码写工具”的非法组合
+
+### 13.3 round-robin 与 parallel-review 的最小规则
+
+为避免不同实现对执行模式各自理解，建议先固定三种模式的最小语义：
+
+- `single`：只运行优先级最高的一个 enabled binding
+- `parallel-review`：并行运行多个 enabled binding，受 `maxActiveBindings` 限制
+- `round-robin`：按优先级顺序轮换一个 binding 执行；适合成本控制或运行时负载均衡
+
+若模板配置与角色默认配置冲突，则以模板阶段策略为准。
+
+## 14. 控制平面接口读模型建议
+
+为了避免管理接口和执行接口混用，建议在现有 CRUD 基础上再约定两类读取能力。
+
+### 14.1 管理视图接口
+
+用途：后台维护角色主数据。
+
+建议返回：
+
+- 角色基础信息
+- bindings 列表
+- profile ID
+- 状态和范围
+
+示例：
+
+- `GET /api/role-agents`
+- `GET /api/role-agents/:roleAgentId`
+- `GET /api/role-agents/:roleAgentId/bindings`
+
+### 14.2 执行解析接口
+
+用途：供 BFF、阶段推进器、审批引擎直接消费。
+
+建议新增只读解析接口：
+
+- `GET /api/role-agents/:roleAgentId/resolve?projectId=...&stage=...`
+
+返回建议：
+
+```ts
+{
+  data: {
+    role: ResolvedRoleAgentView;
+    source: {
+      baseScope: "system" | "project";
+      overrideApplied: boolean;
+      policySource: "role-default" | "template-stage";
+    };
+    validation: {
+      executable: boolean;
+      reasons: string[];
+    };
+  };
+}
+```
+
+好处：
+
+- BFF 不需要重复实现项目覆盖和字段继承逻辑
+- 前端管理页也可以复用解析结果做“执行预检”展示
+- 审批系统可以直接看到当前角色是否具备放行条件
+
+## 15. 分阶段落地建议
+
+建议按四个阶段推进，而不是一次把所有治理能力都压到第一版里。
+
+### 15.1 Phase 1：角色注册表最小闭环
+
+目标：
+
+- 落库 `role_agents` 与 `role_agent_bindings`
+- 提供 CRUD
+- 写入首批默认种子
+- 工作流模板开始只引用角色 ID
+
+### 15.2 Phase 2：执行解析与模板联动
+
+目标：
+
+- 提供 `resolve` 读模型
+- 支持项目覆盖
+- 阶段推进器根据 `allowedStages` 和 `roleExecutionPolicies` 解析执行计划
+
+### 15.3 Phase 3：工具白名单与审批联动
+
+目标：
+
+- `permissionProfile` 与 `toolProfile` 正式接入工具放行器
+- 高风险角色执行前接审批票据检查
+- 关键角色自动进入审计事件流
+
+### 15.4 Phase 4：统计、审计与运维治理
+
+目标：
+
+- 基于 `roleAgentId` 统计阶段阻断率、审批率、命中率
+- 支持查看角色级执行历史、binding 命中分布和冲突分布
+- 为后续角色优化和模型替换提供可观测基础
+
+## 16. 首批验收标准
 
 1. 系统中存在独立角色 Agent 注册表，而不是把角色写散在模板配置里。
 2. 每个角色具备稳定的系统 ID、权限档位和工具档位。
@@ -724,7 +997,7 @@ interface ResolvedRoleAgent {
 6. 除开发者 Agent 外，其他角色均不具备项目主代码写权限。
 7. 同一角色支持多个 Agent 实例并行或轮询执行，尤其适用于安全、架构、QA、运维等辅助角色。
 
-## 12. 建议的下一步
+## 17. 建议的下一步
 
 在本设计确认后，建议继续补两项实现设计：
 

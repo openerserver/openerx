@@ -1,11 +1,13 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, mock, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  observeGraphWorkspaceDir,
-  resolveGraphStorageDirs,
-} from "../../control-plane/web-ui-bff/src/modules/realtime/dag-sync";
+
+mock.restore();
+
+async function loadDagSyncModule() {
+  return import("../../control-plane/web-ui-bff/src/modules/realtime/dag-sync?dag-sync-test");
+}
 
 const tempPaths: string[] = [];
 
@@ -15,7 +17,8 @@ afterAll(() => {
   }
 });
 
-test("resolveGraphStorageDirs includes observed workspace task graph directory", () => {
+test("resolveGraphStorageDirs includes observed workspace task graph directory", async () => {
+  const { observeGraphWorkspaceDir, resolveGraphStorageDirs } = await loadDagSyncModule();
   const workspaceDir = mkdtempSync(join(tmpdir(), "openerx-dag-sync-"));
   const graphDir = join(workspaceDir, ".opencode", "state", "task-graphs");
   mkdirSync(graphDir, { recursive: true });
@@ -26,7 +29,8 @@ test("resolveGraphStorageDirs includes observed workspace task graph directory",
   expect(resolveGraphStorageDirs()).toContain(graphDir);
 });
 
-test("resolveGraphStorageDirs prefers explicit workspace directory when provided", () => {
+test("resolveGraphStorageDirs prefers explicit workspace directory when provided", async () => {
+  const { resolveGraphStorageDirs } = await loadDagSyncModule();
   const workspaceDir = mkdtempSync(join(tmpdir(), "openerx-dag-sync-preferred-"));
   const graphDir = join(workspaceDir, ".opencode", "state", "task-graphs");
   mkdirSync(graphDir, { recursive: true });

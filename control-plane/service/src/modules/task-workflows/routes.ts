@@ -30,7 +30,7 @@ const retryStageSchema = z.object({
 });
 
 function getTaskId(c: { req: { param: (name: string) => string } }) {
-  return c.req.param("taskId");
+  return c.req.param("taskId") ?? "";
 }
 
 taskWorkflowRoutes.get("/", async (c) => {
@@ -73,8 +73,7 @@ taskWorkflowRoutes.post("/initialize", zValidator("json", initializeWorkflowSche
   });
 
   if (templateStages.length > 0) {
-    await db.insert(taskStageRuns).values(
-      templateStages.map((stage) => ({
+    const stageRunPayloads: Array<typeof taskStageRuns.$inferInsert> = templateStages.map((stage) => ({
         id: crypto.randomUUID(),
         workflowRunId,
         stageKey: stage.stageKey,
@@ -88,8 +87,8 @@ taskWorkflowRoutes.post("/initialize", zValidator("json", initializeWorkflowSche
         artifactsSummaryJson: null,
         createdAt: now,
         updatedAt: now,
-      })),
-    );
+      }));
+    await db.insert(taskStageRuns).values(stageRunPayloads);
   }
 
   const workflowRun = await db.query.taskWorkflowRuns.findFirst({ where: eq(taskWorkflowRuns.id, workflowRunId) });

@@ -1,434 +1,132 @@
 <template>
   <div class="agent-ops-page">
-    <a-flex justify="space-between" align="start" wrap="wrap" :gap="12" class="page-header">
-      <div>
-        <a-typography-title :level="3" style="margin: 0">Agent 运营中心</a-typography-title>
-        <a-typography-paragraph type="secondary" style="margin: 6px 0 0 0">
-          统一查看 Agent 的执行健康度、阻塞情况与人工介入入口。
-        </a-typography-paragraph>
-      </div>
-      <a-space wrap>
-        <a-tooltip :title="connectionTooltip">
-          <a-badge :status="realtimeStore.connected ? 'success' : 'error'" :text="connectionLabel" />
-        </a-tooltip>
-        <a-button v-if="!realtimeStore.connected" size="small" type="link" @click="handleReconnect">
-          重连
-        </a-button>
-        <a-button @click="handleRefreshAll" :loading="loading || queueDataLoading">刷新</a-button>
-      </a-space>
-    </a-flex>
+    <AgentOpsHeader
+      :view-mode="viewMode"
+      :view-mode-label="viewModeLabel"
+      :entry-context="pageQuery.entryContext"
+      :entry-context-label="entryContextLabel"
+      :page-subtitle="pageSubtitle"
+      :page-query="pageQuery"
+      :project-options="projectOptions"
+      :is-admin-role="isAdminRole"
+      :realtime-connected="realtimeStore.connected"
+      :connection-tooltip="connectionTooltip"
+      :connection-label="connectionLabel"
+      :loading="loading"
+      :queue-data-loading="queueDataLoading"
+      @project-change="handleProjectChange"
+      @owner-scope-change="handleOwnerScopeChange"
+      @reconnect="handleReconnect"
+      @refresh="handleRefreshAll"
+    />
 
-    <a-row :gutter="[12, 12]" style="margin-bottom: 16px">
-      <a-col v-for="card in summaryCards" :key="card.key" :xs="24" :sm="12" :xl="4">
-        <a-card
-          size="small"
-          :class="['summary-card', { 'summary-card-active': queueFocus === card.focusKey }]"
-          @click="queueFocus = card.focusKey"
-        >
-          <div class="summary-card-label">{{ card.label }}</div>
-          <div class="summary-card-value" :style="{ color: card.color }">{{ card.value }}</div>
-          <div class="summary-card-hint">{{ card.hint }}</div>
-        </a-card>
-      </a-col>
-    </a-row>
+    <AgentOpsFilterBar
+      :page-query="pageQuery"
+      :provider-options="providerOptions"
+      :queue-focus="queueFocus"
+      :advanced-filter-active-keys="advancedFilterActiveKeys"
+      :scope-summary-text="scopeSummaryText"
+      :boolean-select-value="booleanSelectValue"
+      @search-change="pageQuery.search = normalizeOptionalString($event)"
+      @model-change="handleModelChange"
+      @status-change="handleStatusChange"
+      @queue-focus-change="handleQueueFocusChange"
+      @toggle-advanced-filters="toggleAdvancedFilters"
+      @advanced-filter-collapse="handleAdvancedFilterCollapse"
+      @risk-level-change="handleRiskLevelChange"
+      @requires-intervention-change="handleRequiresInterventionChange"
+      @approval-blocked-change="handleApprovalBlockedChange"
+      @agent-type-change="pageQuery.agentType = normalizeOptionalString($event)"
+    />
 
-    <a-card size="small" style="margin-bottom: 16px">
-      <a-flex wrap="wrap" :gap="12" align="center">
-        <a-input
-          :value="searchText"
-          allow-clear
-          placeholder="搜索 Agent ID / 类型 / 任务..."
-          style="width: 280px"
-          @update:value="searchText = String($event ?? '')"
-        >
-          <template #prefix>
-            <SearchOutlined style="color: #94a3b8" />
-          </template>
-        </a-input>
-        <a-select
-          :value="providerFilter"
-          style="width: 180px"
-          @update:value="providerFilter = String($event ?? '')"
-        >
-          <a-select-option value="">全部 Provider</a-select-option>
-          <a-select-option v-for="provider in providerOptions" :key="provider" :value="provider">
-            {{ provider }}
-          </a-select-option>
-        </a-select>
-        <a-select
-          :value="statusFilter"
-          style="width: 180px"
-          @update:value="statusFilter = String($event ?? '')"
-        >
-          <a-select-option value="">全部状态</a-select-option>
-          <a-select-option value="running">运行中</a-select-option>
-          <a-select-option value="paused">已暂停</a-select-option>
-          <a-select-option value="failed">失败</a-select-option>
-          <a-select-option value="completed">已完成</a-select-option>
-          <a-select-option value="stopped">已停止</a-select-option>
-          <a-select-option value="terminated">已终止</a-select-option>
-        </a-select>
-        <a-radio-group :value="queueFocus" size="small" @update:value="handleQueueFocusChange">
-          <a-radio-button value="all">全部</a-radio-button>
-          <a-radio-button value="attention">待处理</a-radio-button>
-          <a-radio-button value="running">推进中</a-radio-button>
-          <a-radio-button value="recent">最近结果</a-radio-button>
-        </a-radio-group>
-        <a-typography-text type="secondary">
-          共 {{ visibleRunCount }} 个实例，待处理 {{ attentionQueue.length }} 个。
-        </a-typography-text>
-      </a-flex>
-    </a-card>
+    <AgentOpsQueueBoard
+      :summary-cards="summaryCards"
+      :queue-focus="queueFocus"
+      :queue-data-loading="queueDataLoading"
+      :displayed-total-known-runs="displayedTotalKnownRuns"
+      :attention-queue="attentionQueue"
+      :running-queue="runningQueue"
+      :recent-queue="recentQueue"
+      :selected-agent-id="selectedAgentId"
+      :view-mode="viewMode"
+      :scope-tag-label="scopeTagLabel"
+      :active-project-label="activeProjectLabel"
+      :page-query="pageQuery"
+      :key-events="keyEvents"
+      :can-inject-guidance-globally="canInjectGuidanceGlobally"
+      :agent-select-options="agentSelectOptions"
+      :quick-guidance="quickGuidance"
+      :guidance-mode="guidanceMode"
+      :guidance-loading="guidanceLoading"
+      :status-color="statusColor"
+      :status-label="statusLabel"
+      :event-color="eventColor"
+      :summarize-event="summarizeEvent"
+      :format-relative-time="formatRelativeTime"
+      :format-token-raw="formatTokenRaw"
+      :format-token-count="formatTokenCount"
+      :short-id="shortId"
+      @queue-focus-change="handleQueueFocusChange"
+      @open-agent-drawer="openAgentDrawer"
+      @selected-agent-change="setSelectedAgentId"
+      @quick-guidance-change="quickGuidance = $event"
+      @guidance-mode-change="guidanceMode = $event === 'noReply' ? 'noReply' : 'reply'"
+      @quick-guidance-send="handleQuickGuidance"
+    />
 
-    <a-result
-      v-if="!queueDataLoading && displayedTotalKnownRuns === 0"
-      status="info"
-      title="暂无 Agent 运行实例"
-      sub-title="当任务触发 Agent 执行后，这里会显示待处理、推进中和最近结果三个工作队列。"
-    >
-      <template #extra>
-        <a-space>
-          <router-link to="/tasks">
-            <a-button type="primary">去任务页创建任务</a-button>
-          </router-link>
-          <router-link to="/workbench">
-            <a-button>查看任务工作台</a-button>
-          </router-link>
-        </a-space>
-      </template>
-    </a-result>
+    <AgentOpsAnalyticsPanel
+      v-if="isAdminRole"
+      :loading="analyticsLoading"
+      :health="agentAnalytics?.health ?? null"
+      :failures="agentAnalytics?.failures ?? null"
+      :timeline="agentAnalytics?.timeline ?? null"
+      :scope-tag-label="scopeTagLabel"
+      :page-query="pageQuery"
+      :format-duration-from-ms="formatDurationFromMs"
+      :format-token-count="formatTokenCount"
+      @apply-filters="handleAnalyticsApplyFilters"
+    />
 
-    <template v-else>
-      <a-row :gutter="[16, 16]">
-        <a-col :xs="24" :xl="8" v-show="shouldShowQueue('attention')">
-          <a-card size="small" :body-style="{ padding: '12px' }">
-            <template #title>
-              <a-flex justify="space-between" align="center">
-                <span>需要处理</span>
-                <a-badge :count="attentionQueue.length" :show-zero="true" />
-              </a-flex>
-            </template>
-            <div class="queue-subtitle">失败、暂停、已停止和长时间无进展的实例。</div>
-            <a-empty v-if="attentionQueue.length === 0" description="当前没有需要处理的 Agent" />
-            <div v-else class="queue-list">
-              <div
-                v-for="item in attentionQueue"
-                :key="item.agentRunId"
-                :class="['queue-item', { 'queue-item-selected': selectedAgentId === item.agentRunId }]"
-                @click="openAgentDrawer(item.agentRunId)"
-              >
-                <a-flex justify="space-between" align="start" :gap="8">
-                  <div>
-                    <a-flex align="center" :gap="6" wrap="wrap">
-                      <RobotOutlined style="color: #64748b" />
-                      <span class="queue-item-title">{{ item.agentType }}</span>
-                      <a-tag :color="statusColor(item.status)">{{ statusLabel(item.status) }}</a-tag>
-                    </a-flex>
-                    <div class="queue-item-meta">
-                      {{ shortId(item.agentRunId) }}
-                      <span v-if="item.taskId"> · 任务 {{ shortId(item.taskId) }}</span>
-                      <span v-if="item.updatedAt"> · {{ formatRelativeTime(item.updatedAt) }}</span>
-                    </div>
-                  </div>
-                  <a-tag color="red">{{ item.blockerLabel }}</a-tag>
-                </a-flex>
-                <div class="queue-item-summary">{{ item.summary }}</div>
-              </div>
-            </div>
-          </a-card>
-        </a-col>
-
-        <a-col :xs="24" :xl="8" v-show="shouldShowQueue('running')">
-          <a-card size="small" :body-style="{ padding: '12px' }">
-            <template #title>
-              <a-flex justify="space-between" align="center">
-                <span>正在推进</span>
-                <a-badge :count="runningQueue.length" :show-zero="true" />
-              </a-flex>
-            </template>
-            <div class="queue-subtitle">正在执行且最近仍有活动的 Agent。</div>
-            <a-empty v-if="runningQueue.length === 0" description="当前没有推进中的 Agent" />
-            <div v-else class="queue-list">
-              <div
-                v-for="item in runningQueue"
-                :key="item.agentRunId"
-                :class="['queue-item', { 'queue-item-selected': selectedAgentId === item.agentRunId }]"
-                @click="openAgentDrawer(item.agentRunId)"
-              >
-                <a-flex justify="space-between" align="start" :gap="8">
-                  <div>
-                    <a-flex align="center" :gap="6" wrap="wrap">
-                      <RobotOutlined style="color: #64748b" />
-                      <span class="queue-item-title">{{ item.agentType }}</span>
-                      <a-tag :color="statusColor(item.status)">{{ statusLabel(item.status) }}</a-tag>
-                    </a-flex>
-                    <div class="queue-item-meta">
-                      {{ shortId(item.agentRunId) }}
-                      <span v-if="item.taskId"> · 任务 {{ shortId(item.taskId) }}</span>
-                      <span v-if="item.updatedAt"> · {{ formatRelativeTime(item.updatedAt) }}</span>
-                    </div>
-                  </div>
-                  <a-tag color="blue">活跃</a-tag>
-                </a-flex>
-                <div class="queue-item-summary">{{ item.summary }}</div>
-              </div>
-            </div>
-          </a-card>
-        </a-col>
-
-        <a-col :xs="24" :xl="8" v-show="shouldShowQueue('recent')">
-          <a-card size="small" :body-style="{ padding: '12px' }">
-            <template #title>
-              <a-flex justify="space-between" align="center">
-                <span>最近结果</span>
-                <a-badge :count="recentQueue.length" :show-zero="true" />
-              </a-flex>
-            </template>
-            <div class="queue-subtitle">最近 24 小时结束的执行结果，便于快速复盘。</div>
-            <a-empty v-if="recentQueue.length === 0" description="当前没有可展示的近期结果" />
-            <div v-else class="queue-list">
-              <div
-                v-for="item in recentQueue"
-                :key="item.agentRunId"
-                :class="['queue-item', { 'queue-item-selected': selectedAgentId === item.agentRunId }]"
-                @click="openAgentDrawer(item.agentRunId)"
-              >
-                <a-flex justify="space-between" align="start" :gap="8">
-                  <div>
-                    <a-flex align="center" :gap="6" wrap="wrap">
-                      <RobotOutlined style="color: #64748b" />
-                      <span class="queue-item-title">{{ item.agentType }}</span>
-                      <a-tag :color="statusColor(item.status)">{{ statusLabel(item.status) }}</a-tag>
-                    </a-flex>
-                    <div class="queue-item-meta">
-                      {{ shortId(item.agentRunId) }}
-                      <span v-if="item.taskId"> · 任务 {{ shortId(item.taskId) }}</span>
-                      <span v-if="item.finishedAtMs"> · {{ formatRelativeTime(item.finishedAtMs) }}</span>
-                      <a-tooltip v-if="item.tokenUsed > 0" :title="formatTokenRaw(item.tokenUsed)">
-                        <span> · Tokens {{ formatTokenCount(item.tokenUsed) }}</span>
-                      </a-tooltip>
-                    </div>
-                  </div>
-                  <a-tag :color="item.status === 'completed' ? 'green' : 'red'">
-                    {{ item.status === 'completed' ? '结果' : '复盘' }}
-                  </a-tag>
-                </a-flex>
-                <div class="queue-item-summary">{{ item.summary }}</div>
-              </div>
-            </div>
-          </a-card>
-        </a-col>
-      </a-row>
-
-      <a-row :gutter="[16, 16]" style="margin-top: 16px">
-        <a-col :xs="24" :xl="14">
-          <a-card size="small">
-            <template #title>
-              <a-flex justify="space-between" align="center">
-                <span>关键事件流</span>
-                <a-badge :count="keyEvents.length" :show-zero="true" />
-              </a-flex>
-            </template>
-            <div class="queue-subtitle">保留实时感知，但只展示与处置最相关的最近事件。</div>
-            <a-empty v-if="keyEvents.length === 0" description="等待事件..." />
-            <div v-else class="event-feed">
-              <div v-for="evt in keyEvents" :key="evt.id" class="event-feed-item">
-                <a-flex justify="space-between" align="start" :gap="8">
-                  <div>
-                    <a-flex align="center" :gap="6" wrap="wrap">
-                      <a-tag :color="eventColor(evt.type)">{{ evt.type }}</a-tag>
-                      <span class="event-feed-meta">{{ evt.agentRunId ? shortId(evt.agentRunId) : '系统' }}</span>
-                    </a-flex>
-                    <div class="event-feed-summary">{{ summarizeEvent(evt) }}</div>
-                  </div>
-                  <span class="event-feed-meta">{{ formatRelativeTime(Date.parse(evt.ts)) }}</span>
-                </a-flex>
-              </div>
-            </div>
-          </a-card>
-        </a-col>
-
-        <a-col :xs="24" :xl="10">
-          <a-card size="small">
-            <template #title>快速注入指令</template>
-            <div class="queue-subtitle">对运行中或暂停中的 Agent 直接下发补充指令。</div>
-            <a-flex vertical :gap="10">
-              <a-select
-                :value="selectedAgentId"
-                placeholder="选择 Agent"
-                :options="agentSelectOptions"
-                allow-clear
-                @update:value="setSelectedAgentId"
-              />
-              <a-input
-                :value="quickGuidance"
-                placeholder="输入指令内容..."
-                @press-enter="handleQuickGuidance"
-                @update:value="quickGuidance = String($event ?? '')"
-              />
-              <a-radio-group :value="guidanceMode" size="small" @update:value="guidanceMode = $event">
-                <a-radio-button value="reply">等待回复</a-radio-button>
-                <a-radio-button value="noReply">仅注入</a-radio-button>
-              </a-radio-group>
-              <a-button
-                type="primary"
-                :disabled="!selectedAgentId || !quickGuidance.trim()"
-                :loading="guidanceLoading"
-                @click="handleQuickGuidance"
-              >
-                发送指令
-              </a-button>
-            </a-flex>
-          </a-card>
-        </a-col>
-      </a-row>
-    </template>
-
-    <a-drawer
+    <AgentOpsDetailDrawer
       :open="detailDrawerVisible"
-      :width="560"
-      placement="right"
-      @close="detailDrawerVisible = false"
-    >
-      <template #title>
-        <a-flex align="center" :gap="8" wrap="wrap">
-          <RobotOutlined />
-          <span>{{ selectedRunSummaryView?.agentType || 'Agent' }}</span>
-          <a-tag v-if="selectedRunSummaryView" :color="statusColor(selectedRunSummaryView.status)">
-            {{ statusLabel(selectedRunSummaryView.status) }}
-          </a-tag>
-        </a-flex>
-      </template>
-
-      <template v-if="selectedRunSummaryView">
-        <a-flex vertical :gap="16">
-          <a-card size="small" title="运行摘要" :loading="summaryLoading">
-            <a-descriptions :column="1" size="small">
-              <a-descriptions-item label="Agent Run ID">
-                <a-typography-text code copyable>{{ selectedRunSummaryView.agentRunId }}</a-typography-text>
-              </a-descriptions-item>
-              <a-descriptions-item label="任务">
-                <router-link v-if="selectedRunSummaryView.taskId" :to="`/workbench?task=${selectedRunSummaryView.taskId}`">
-                  {{ selectedRunSummaryView.taskTitle || selectedRunSummaryView.taskId }}
-                </router-link>
-                <span v-else>-</span>
-              </a-descriptions-item>
-              <a-descriptions-item label="会话 ID">
-                <a-typography-text v-if="selectedRunSummaryView.subSessionId || selectedRunSummaryView.sessionId" code>
-                  {{ selectedRunSummaryView.subSessionId || selectedRunSummaryView.sessionId }}
-                </a-typography-text>
-                <span v-else>-</span>
-              </a-descriptions-item>
-              <a-descriptions-item label="最近活动">
-                {{ selectedRunSummaryView.lastActivityAt ? formatRelativeTime(parseDate(selectedRunSummaryView.lastActivityAt) ?? Date.now()) : '-' }}
-              </a-descriptions-item>
-              <a-descriptions-item label="运行时长">
-                {{ selectedRunSummaryView.durationMs != null ? formatDurationFromMs(selectedRunSummaryView.durationMs) : '-' }}
-              </a-descriptions-item>
-              <a-descriptions-item label="Token 使用量">
-                <a-tooltip v-if="selectedRunSummaryView.tokenUsed > 0" :title="formatTokenRaw(selectedRunSummaryView.tokenUsed)">
-                  <span>{{ formatTokenCount(selectedRunSummaryView.tokenUsed) }}</span>
-                </a-tooltip>
-                <span v-else>-</span>
-              </a-descriptions-item>
-              <a-descriptions-item label="人工介入">
-                {{ selectedRunSummaryView.guidanceCount > 0 ? `已介入 ${selectedRunSummaryView.guidanceCount} 次` : '暂无' }}
-              </a-descriptions-item>
-              <a-descriptions-item label="当前判断">
-                <a-tag :color="selectedRunSummaryView.blockerType ? 'red' : 'blue'">
-                  {{ summaryJudgementLabel(selectedRunSummaryView) }}
-                </a-tag>
-                <span style="margin-left: 8px">{{ selectedRunSummaryView.blockerLabel }}</span>
-              </a-descriptions-item>
-            </a-descriptions>
-          </a-card>
-
-          <a-card size="small" title="结果与风险" :loading="summaryLoading">
-            <a-alert
-              :type="selectedRunSummaryView.blockerType ? 'warning' : 'info'"
-              show-icon
-              :message="selectedRunSummaryView.blockerLabel"
-              :description="selectedRunSummaryView.resultSummary || '暂无结构化摘要。'"
-            />
-            <a-typography-paragraph style="margin: 12px 0 0 0">
-              {{ selectedRunSummaryView.longSummary || selectedRunSummaryView.resultSummary || '暂无结构化摘要。' }}
-            </a-typography-paragraph>
-          </a-card>
-
-          <a-card size="small" title="处置动作">
-            <a-space wrap style="margin-bottom: 12px">
-              <a-button
-                v-if="selectedRunSummaryView.status === 'running'"
-                :loading="actionLoading === selectedRunSummaryView.agentRunId"
-                @click="handlePause(selectedRunSummaryView.agentRunId)"
-              >
-                <template #icon><PauseCircleOutlined /></template>
-                暂停
-              </a-button>
-              <a-button
-                v-if="selectedRunSummaryView.status === 'paused'"
-                type="primary"
-                :loading="actionLoading === selectedRunSummaryView.agentRunId"
-                @click="handleResume(selectedRunSummaryView.agentRunId)"
-              >
-                <template #icon><PlayCircleOutlined /></template>
-                恢复
-              </a-button>
-              <a-popconfirm
-                v-if="selectedRunSummaryView.status === 'running' || selectedRunSummaryView.status === 'paused'"
-                title="确定终止此 Agent？"
-                @confirm="handleTerminate(selectedRunSummaryView.agentRunId)"
-              >
-                <a-button danger :loading="actionLoading === selectedRunSummaryView.agentRunId">
-                  <template #icon><StopOutlined /></template>
-                  终止
-                </a-button>
-              </a-popconfirm>
-              <router-link v-if="selectedRunSummaryView.taskId" :to="`/workbench?task=${selectedRunSummaryView.taskId}`">
-                <a-button>进入任务工作台</a-button>
-              </router-link>
-              <a-button @click="copyDiagnostics">复制诊断信息</a-button>
-            </a-space>
-            <a-input-search
-              :value="inlineGuidance[selectedRunSummaryView.agentRunId]"
-              placeholder="输入补充指令..."
-              enter-button="发送"
-              :loading="actionLoading === selectedRunSummaryView.agentRunId"
-              @search="handleInlineGuidance(selectedRunSummaryView.agentRunId)"
-              @update:value="inlineGuidance[selectedRunSummaryView.agentRunId] = String($event ?? '')"
-            />
-          </a-card>
-
-          <a-card size="small" title="最近关键事件" :loading="summaryLoading">
-            <a-empty v-if="(selectedRunSummaryView.latestEvents?.length || 0) === 0" description="暂无事件" />
-            <div v-else class="drawer-events">
-              <div
-                v-for="evt in selectedRunSummaryView.latestEvents"
-                :key="`${evt.type}-${evt.ts}`"
-                class="drawer-event-item"
-              >
-                <a-flex justify="space-between" align="start" :gap="8">
-                  <div>
-                    <a-tag :color="eventColor(evt.type)">{{ evt.type }}</a-tag>
-                    <div class="event-feed-summary">{{ evt.summary }}</div>
-                  </div>
-                  <span class="event-feed-meta">{{ formatRelativeTime(parseDate(evt.ts) ?? Date.now()) }}</span>
-                </a-flex>
-              </div>
-            </div>
-          </a-card>
-        </a-flex>
-      </template>
-    </a-drawer>
+      :summary="selectedRunSummaryView"
+      :summary-loading="summaryLoading"
+      :drawer-mode="drawerMode"
+      :view-mode="viewMode"
+      :action-permissions="selectedActionPermissions"
+      :action-loading="actionLoading"
+      :inline-guidance="selectedRunSummaryView ? (inlineGuidance[selectedRunSummaryView.agentRunId] || '') : ''"
+      :status-color="statusColor"
+      :status-label="statusLabel"
+      :event-color="eventColor"
+      :parse-date="parseDate"
+      :format-relative-time="formatRelativeTime"
+      :format-duration-from-ms="formatDurationFromMs"
+      :format-token-raw="formatTokenRaw"
+      :format-token-count="formatTokenCount"
+      :summary-judgement-label="summaryJudgementLabel"
+      :code-changes-summary-text="codeChangesSummaryText"
+      @close="handleCloseDrawer"
+      @drawer-mode-change="handleDrawerModeChange"
+      @pause="handlePause"
+      @resume="handleResume"
+      @terminate="handleTerminate"
+      @copy-diagnostics="copyDiagnostics"
+      @inline-guidance-send="handleInlineGuidance"
+      @inline-guidance-change="handleInlineGuidanceChange"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { PauseCircleOutlined, PlayCircleOutlined, RobotOutlined, SearchOutlined, StopOutlined } from "@ant-design/icons-vue";
 import { message } from "ant-design-vue";
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
+  getAgentOpsAnalyticsFailures,
+  getAgentOpsAnalyticsHealth,
+  getAgentOpsAnalyticsTimeline,
+  type AgentOpsAnalyticsView,
   getAgentOpsOverview,
   getAgentOpsQueue,
   getAgentRunOpsSummary,
@@ -437,8 +135,14 @@ import {
   pauseAgent,
   resumeAgent,
   terminateAgent,
+  type AgentOpsActionPermissions,
+  type AgentOpsEntryContext,
   type AgentOpsOverview,
+  type AgentOpsOwnerScope,
+  type AgentOpsPageQuery,
+  type AgentOpsQueue,
   type AgentOpsQueueItem,
+  type AgentOpsViewMode,
   type AgentRunOpsSummary,
   type AgentRunSummary,
 } from "../lib/api";
@@ -446,8 +150,9 @@ import { useAuthStore } from "../stores/auth";
 import { type RealtimeEvent, useRealtimeStore } from "../stores/realtime";
 
 type AgentRunStatus = "running" | "paused" | "completed" | "failed" | "stopped" | "terminated";
-type QueueFocus = "all" | "attention" | "running" | "recent";
+type QueueFocus = "all" | AgentOpsQueue;
 type BlockerType = "failed" | "paused" | "stalled" | "stopped" | "healthy";
+type DrawerMode = "quickAction" | "deepReview";
 
 interface AgentRun {
   agentRunId: string;
@@ -491,6 +196,7 @@ interface QueueViewItem {
   startedAt?: number;
 }
 
+const authStore = useAuthStore();
 const realtimeStore = useRealtimeStore();
 const route = useRoute();
 const router = useRouter();
@@ -500,6 +206,9 @@ const guidanceLoading = ref(false);
 const detailDrawerVisible = ref(false);
 const queueDataLoading = ref(false);
 const summaryLoading = ref(false);
+const analyticsLoading = ref(false);
+const drawerMode = ref<DrawerMode>("quickAction");
+const advancedFilterActiveKeys = ref<string[]>([]);
 
 const registeredRuns = ref<AgentRun[]>([]);
 const selectedAgentId = ref<string | undefined>(undefined);
@@ -507,10 +216,11 @@ const quickGuidance = ref("");
 const guidanceMode = ref<"reply" | "noReply">("reply");
 const inlineGuidance = reactive<Record<string, string>>({});
 
-const searchText = ref("");
-const providerFilter = ref("");
-const statusFilter = ref("");
-const queueFocus = ref<QueueFocus>("all");
+const pageQuery = reactive<AgentOpsPageQuery>({
+  ownerScope: "mine",
+  entryContext: "nav",
+});
+const queueFocus = ref<QueueFocus>("attention");
 const agentOverview = ref<AgentOpsOverview | null>(null);
 const remoteQueuesLoaded = ref(false);
 const remoteAttentionQueue = ref<AgentOpsQueueItem[]>([]);
@@ -520,11 +230,104 @@ const remoteAttentionTotal = ref(0);
 const remoteRunningTotal = ref(0);
 const remoteRecentTotal = ref(0);
 const selectedRunSummary = ref<AgentRunOpsSummary | null>(null);
+const agentAnalytics = ref<AgentOpsAnalyticsView | null>(null);
 const aggregateRefreshTimer = ref<number | null>(null);
-const isProviderScoped = computed(() => providerFilter.value.trim().length > 0);
+const isProviderScoped = computed(() => (pageQuery.model ?? "").trim().length > 0);
+
+const ADMIN_ROLES = new Set(["project_admin", "org_admin", "platform_admin"]);
+
+function normalizeOptionalString(value: unknown) {
+  const normalized = String(value ?? "").trim();
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function parseBooleanQueryValue(value: unknown): boolean | undefined {
+  if (value === true || value === "true") return true;
+  if (value === false || value === "false") return false;
+  return undefined;
+}
+
+function booleanSelectValue(value?: boolean) {
+  if (value === true) return "true";
+  if (value === false) return "false";
+  return "";
+}
+
+function defaultOwnerScope(): AgentOpsOwnerScope {
+  return ADMIN_ROLES.has(authStore.user?.role || "") ? "all" : "mine";
+}
+
+function defaultQueueFocus(): QueueFocus {
+  return ADMIN_ROLES.has(authStore.user?.role || "") ? "all" : "attention";
+}
+
+function defaultDrawerMode(): DrawerMode {
+  return ADMIN_ROLES.has(authStore.user?.role || "") ? "deepReview" : "quickAction";
+}
+
+function toEntryContext(value: unknown): AgentOpsEntryContext {
+  return value === "task" || value === "workbench" || value === "approval" || value === "alert"
+    ? value
+    : "nav";
+}
 
 function setSelectedAgentId(value: unknown) {
   selectedAgentId.value = value == null ? undefined : String(value);
+}
+
+function handleProjectChange(value: unknown) {
+  pageQuery.projectId = normalizeOptionalString(value);
+}
+
+function handleOwnerScopeChange(value: unknown) {
+  pageQuery.ownerScope = value === "all" ? "all" : "mine";
+}
+
+function handleStatusChange(value: unknown) {
+  const normalized = normalizeOptionalString(value);
+  pageQuery.status = normalized as AgentOpsPageQuery["status"];
+}
+
+function handleModelChange(value: unknown) {
+  pageQuery.model = normalizeOptionalString(value);
+}
+
+function handleRiskLevelChange(value: unknown) {
+  const normalized = normalizeOptionalString(value);
+  pageQuery.riskLevel = normalized as AgentOpsPageQuery["riskLevel"];
+}
+
+function handleRequiresInterventionChange(value: unknown) {
+  pageQuery.requiresIntervention = parseBooleanQueryValue(value);
+}
+
+function handleApprovalBlockedChange(value: unknown) {
+  pageQuery.approvalBlocked = parseBooleanQueryValue(value);
+}
+
+function toggleAdvancedFilters() {
+  advancedFilterActiveKeys.value = advancedFilterActiveKeys.value.length > 0 ? [] : ["advanced"];
+}
+
+function handleAdvancedFilterCollapse(value: unknown) {
+  advancedFilterActiveKeys.value = Array.isArray(value) ? value.map(String) : value == null ? [] : [String(value)];
+}
+
+function handleDrawerModeChange(value: unknown) {
+  drawerMode.value = value === "deepReview" ? "deepReview" : "quickAction";
+}
+
+function handleInlineGuidanceChange(value: string) {
+  if (!selectedRunSummaryView.value) return;
+  inlineGuidance[selectedRunSummaryView.value.agentRunId] = value;
+}
+
+function handleAnalyticsApplyFilters(payload: { queryPatch: Partial<AgentOpsPageQuery>; queueFocus?: QueueFocus }) {
+  Object.assign(pageQuery, payload.queryPatch);
+  if (payload.queueFocus) {
+    queueFocus.value = payload.queueFocus;
+  }
+  advancedFilterActiveKeys.value = ["advanced"];
 }
 
 function handleQueueFocusChange(value: unknown) {
@@ -692,9 +495,12 @@ function normalizeRemoteQueueItem(item: AgentOpsQueueItem) {
   } satisfies QueueViewItem;
 }
 
-function matchesProvider(item: QueueViewItem) {
-  if (!providerFilter.value) return true;
-  return parseProviderId(item.modelUsed) === providerFilter.value;
+function matchesModelFilter(item: QueueViewItem) {
+  const normalizedFilter = pageQuery.model?.trim().toLowerCase();
+  if (!normalizedFilter) return true;
+  const modelUsed = item.modelUsed?.trim().toLowerCase() || "";
+  const providerId = parseProviderId(item.modelUsed).trim().toLowerCase();
+  return modelUsed.includes(normalizedFilter) || providerId === normalizedFilter;
 }
 
 function summarizeEvent(evt: RealtimeEvent) {
@@ -735,33 +541,105 @@ const connectionTooltip = computed(() => {
   return '未连接 · 点击“重连”恢复实时订阅';
 });
 
+const isAdminRole = computed(() => ADMIN_ROLES.has(authStore.user?.role || ""));
+
+const viewMode = computed<AgentOpsViewMode>(() => (isAdminRole.value ? "admin" : "user"));
+
+const viewModeLabel = computed(() => (viewMode.value === "admin" ? "管理员视图" : "普通用户视图"));
+
+const pageSubtitle = computed(() =>
+  viewMode.value === "admin"
+    ? "统一查看 Agent 执行健康度、阻塞情况、治理信号与人工介入入口。"
+    : "统一查看与我相关的 Agent 阻塞、结果与人工介入入口。",
+);
+
+const entryContextLabel = computed(() => {
+  const labelMap: Record<AgentOpsEntryContext, string> = {
+    nav: "导航进入",
+    task: "任务上下文",
+    workbench: "工作台上下文",
+    approval: "审批回跳",
+    alert: "告警回跳",
+  };
+  return labelMap[pageQuery.entryContext ?? "nav"];
+});
+
+const projectOptions = computed(() =>
+  (authStore.user?.projects || []).map((project) => ({
+    value: project.id,
+    label: project.name || project.id,
+  })),
+);
+
+const activeProjectLabel = computed(() => {
+  if (!pageQuery.projectId) return null;
+  return projectOptions.value.find((project) => project.value === pageQuery.projectId)?.label || pageQuery.projectId;
+});
+
+const scopeTagLabel = computed(() => {
+  if (pageQuery.ownerScope === "mine") {
+    return activeProjectLabel.value ? `我的任务 · ${activeProjectLabel.value}` : "我的任务";
+  }
+  return activeProjectLabel.value ? `项目视图 · ${activeProjectLabel.value}` : "全局 / 项目视图";
+});
+
+const scopeSummaryText = computed(() => {
+  const scopeLabel = pageQuery.ownerScope === "mine" ? "我的视图" : isAdminRole.value ? "管理员视图" : "当前视图";
+  return `${scopeLabel}共 ${visibleRunCount.value} 个实例，待处理 ${attentionQueue.value.length} 个。`;
+});
+
+const canInjectGuidanceGlobally = computed(() => authStore.user?.role !== "viewer");
+
+function resolveActionPermissions(summary?: AgentRunOpsSummary | null): AgentOpsActionPermissions {
+  const fallback: AgentOpsActionPermissions = {
+    canPause: authStore.user?.role !== "viewer",
+    canResume: authStore.user?.role !== "viewer",
+    canTerminate: authStore.user?.role !== "viewer",
+    canInjectGuidance: authStore.user?.role !== "viewer",
+    canViewApproval: authStore.user?.role !== "viewer",
+    canViewAudit: isAdminRole.value,
+    canViewCodeChanges: true,
+    canExport: isAdminRole.value,
+  };
+  return { ...fallback, ...(summary?.actionPermissions || {}) };
+}
+
 const agentEvents = computed(() =>
   realtimeStore.events.filter((e) => e.type.startsWith("agent.") || e.type === "guidance.injected"),
 );
 
 const attentionQueue = computed(() => {
-  return remoteAttentionQueue.value.map(normalizeRemoteQueueItem).filter(matchesProvider);
+  return remoteAttentionQueue.value.map(normalizeRemoteQueueItem).filter(matchesModelFilter);
 });
 
 const runningQueue = computed(() => {
-  return remoteRunningQueue.value.map(normalizeRemoteQueueItem).filter(matchesProvider);
+  return remoteRunningQueue.value.map(normalizeRemoteQueueItem).filter(matchesModelFilter);
 });
 
 const recentQueue = computed(() => {
-  return remoteRecentQueue.value.map(normalizeRemoteQueueItem).filter(matchesProvider);
+  return remoteRecentQueue.value.map(normalizeRemoteQueueItem).filter(matchesModelFilter);
 });
 
 const providerOptions = computed(() =>
   Array.from(
     new Set(
       [...remoteAttentionQueue.value, ...remoteRunningQueue.value, ...remoteRecentQueue.value]
-        .map((item) => parseProviderId(item.modelUsed))
+        .flatMap((item) => {
+          const values = [parseProviderId(item.modelUsed)];
+          if (item.modelUsed?.trim()) {
+            values.push(item.modelUsed.trim());
+          }
+          return values;
+        })
+        .concat(pageQuery.model?.trim() ? [pageQuery.model.trim()] : [])
         .filter(Boolean),
     ),
   ).sort(),
 );
 
 const allQueueItems = computed(() => [...attentionQueue.value, ...runningQueue.value, ...recentQueue.value]);
+
+const selectedActionPermissions = computed(() => resolveActionPermissions(selectedRunSummaryView.value));
 
 const selectedQueueItem = computed(() =>
   selectedAgentId.value
@@ -773,6 +651,8 @@ const selectedRunSummaryView = computed(() => {
   if (selectedRunSummary.value) return selectedRunSummary.value;
   if (!selectedQueueItem.value) return null;
   return {
+    entryContext: pageQuery.entryContext,
+    viewScope: pageQuery.ownerScope === "mine" ? "mine" : pageQuery.projectId ? "project" : "global",
     agentRunId: selectedQueueItem.value.agentRunId,
     taskId: selectedQueueItem.value.taskId,
     taskTitle: selectedQueueItem.value.taskTitle || selectedQueueItem.value.taskId,
@@ -796,6 +676,7 @@ const selectedRunSummaryView = computed(() => {
     error: null,
     longSummary: selectedQueueItem.value.summary,
     latestEvents: [],
+    actionPermissions: resolveActionPermissions(),
   } satisfies AgentRunOpsSummary;
 });
 
@@ -911,18 +792,20 @@ const agentSelectOptions = computed(() =>
     })),
 );
 
-function shouldShowQueue(queue: Exclude<QueueFocus, "all">) {
-  return queueFocus.value === "all" || queueFocus.value === queue;
-}
-
 function openAgentDrawer(agentRunId: string) {
   selectedAgentId.value = agentRunId;
   detailDrawerVisible.value = true;
+  pageQuery.agentRunId = agentRunId;
+  drawerMode.value = defaultDrawerMode();
   void loadAgentRunSummary(agentRunId);
 }
 
+function handleCloseDrawer() {
+  detailDrawerVisible.value = false;
+  pageQuery.agentRunId = undefined;
+}
+
 function handleReconnect() {
-  const authStore = useAuthStore();
   if (!authStore.token) return;
   realtimeStore.disconnect();
   realtimeStore.connect(authStore.token);
@@ -951,18 +834,30 @@ async function refreshAgents() {
 }
 
 async function handleRefreshAll() {
-  await Promise.all([refreshAgents(), refreshAggregates()]);
+  await Promise.all([refreshAgents(), refreshAggregates(), refreshAnalytics()]);
 }
 
 async function refreshAggregates() {
   queueDataLoading.value = true;
   try {
     const queueQuery = {
-      status: statusFilter.value || undefined,
-      search: searchText.value.trim() || undefined,
+      ownerScope: pageQuery.ownerScope,
+      projectId: pageQuery.projectId,
+      taskId: pageQuery.taskId,
+      agentRunId: pageQuery.agentRunId,
+      status: pageQuery.status,
+      search: pageQuery.search?.trim() || undefined,
+      riskLevel: pageQuery.riskLevel,
+      approvalBlocked: pageQuery.approvalBlocked,
+      requiresIntervention: pageQuery.requiresIntervention,
+      agentType: pageQuery.agentType,
+      model: pageQuery.model,
+      from: pageQuery.from,
+      to: pageQuery.to,
+      entryContext: pageQuery.entryContext,
     };
     const [overview, attention, running, recent] = await Promise.all([
-      getAgentOpsOverview(),
+      getAgentOpsOverview(pageQuery),
       getAgentOpsQueue("attention", queueQuery),
       getAgentOpsQueue("running", queueQuery),
       getAgentOpsQueue("recent", queueQuery),
@@ -986,6 +881,28 @@ async function refreshAggregates() {
     remoteRecentTotal.value = 0;
   } finally {
     queueDataLoading.value = false;
+  }
+}
+
+async function refreshAnalytics() {
+  if (!isAdminRole.value) {
+    agentAnalytics.value = null;
+    analyticsLoading.value = false;
+    return;
+  }
+
+  analyticsLoading.value = true;
+  try {
+    const [health, failures, timeline] = await Promise.all([
+      getAgentOpsAnalyticsHealth(pageQuery),
+      getAgentOpsAnalyticsFailures(pageQuery),
+      getAgentOpsAnalyticsTimeline(pageQuery),
+    ]);
+    agentAnalytics.value = { health, failures, timeline };
+  } catch {
+    agentAnalytics.value = null;
+  } finally {
+    analyticsLoading.value = false;
   }
 }
 
@@ -1024,12 +941,26 @@ function scheduleRealtimeRefresh(event: RealtimeEvent) {
 async function loadAgentRunSummary(agentRunId: string) {
   summaryLoading.value = true;
   try {
-    selectedRunSummary.value = await getAgentRunOpsSummary(agentRunId);
+    selectedRunSummary.value = await getAgentRunOpsSummary(agentRunId, {
+      entryContext: pageQuery.entryContext,
+      ownerScope: pageQuery.ownerScope,
+    });
   } catch {
     selectedRunSummary.value = null;
   } finally {
     summaryLoading.value = false;
   }
+}
+
+function codeChangesSummaryText(summary: AgentRunOpsSummary) {
+  const codeChanges = summary.codeChanges;
+  if (!codeChanges) return "暂无代码变更摘要";
+  if (codeChanges.latestSummary?.trim()) return codeChanges.latestSummary;
+  const files = codeChanges.files ?? 0;
+  const insertions = codeChanges.insertions ?? 0;
+  const deletions = codeChanges.deletions ?? 0;
+  if (!files && !insertions && !deletions) return "暂无代码变更摘要";
+  return `变更 ${files} 个文件，+${insertions} / -${deletions}`;
 }
 
 async function handleAction(agentRunId: string, action: () => Promise<unknown>) {
@@ -1085,49 +1016,78 @@ async function handleQuickGuidance() {
 }
 
 function applyQueryFilters() {
-  const nextSearch = typeof route.query.search === "string" ? route.query.search : "";
-  const nextStatus = typeof route.query.status === "string" ? route.query.status : "";
-  const nextProvider = typeof route.query.provider === "string" ? route.query.provider : "";
-  const nextFocus = typeof route.query.focus === "string" ? route.query.focus : "all";
+  pageQuery.search = typeof route.query.search === "string" ? route.query.search : undefined;
+  pageQuery.status = typeof route.query.status === "string"
+    ? (route.query.status as AgentOpsPageQuery["status"])
+    : undefined;
+  pageQuery.model = typeof route.query.model === "string"
+    ? route.query.model
+    : typeof route.query.provider === "string"
+      ? route.query.provider
+      : undefined;
+  pageQuery.ownerScope = route.query.ownerScope === "all" || route.query.ownerScope === "mine"
+    ? route.query.ownerScope
+    : defaultOwnerScope();
+  pageQuery.projectId = typeof route.query.projectId === "string" ? route.query.projectId : undefined;
+  pageQuery.taskId = typeof route.query.taskId === "string" ? route.query.taskId : undefined;
+  pageQuery.agentRunId = typeof route.query.agentRunId === "string" ? route.query.agentRunId : undefined;
+  pageQuery.entryContext = toEntryContext(route.query.entryContext);
+  pageQuery.riskLevel = typeof route.query.riskLevel === "string"
+    ? (route.query.riskLevel as AgentOpsPageQuery["riskLevel"])
+    : undefined;
+  pageQuery.approvalBlocked = parseBooleanQueryValue(route.query.approvalBlocked);
+  pageQuery.requiresIntervention = parseBooleanQueryValue(route.query.requiresIntervention);
+  pageQuery.agentType = typeof route.query.agentType === "string" ? route.query.agentType : undefined;
+  pageQuery.from = typeof route.query.from === "string" ? route.query.from : undefined;
+  pageQuery.to = typeof route.query.to === "string" ? route.query.to : undefined;
 
-  if (searchText.value !== nextSearch) searchText.value = nextSearch;
-  if (statusFilter.value !== nextStatus) statusFilter.value = nextStatus;
-  if (providerFilter.value !== nextProvider) providerFilter.value = nextProvider;
+  const nextFocus = typeof route.query.focus === "string" ? route.query.focus : defaultQueueFocus();
   if (nextFocus === "attention" || nextFocus === "running" || nextFocus === "recent" || nextFocus === "all") {
-    if (queueFocus.value !== nextFocus) queueFocus.value = nextFocus;
+    queueFocus.value = nextFocus;
+  }
+
+  if (pageQuery.agentRunId && selectedAgentId.value !== pageQuery.agentRunId) {
+    selectedAgentId.value = pageQuery.agentRunId;
+    detailDrawerVisible.value = true;
+    drawerMode.value = defaultDrawerMode();
+    void loadAgentRunSummary(pageQuery.agentRunId);
   }
 }
 
 function syncQueryFilters() {
   const query: Record<string, string> = {};
-  if (searchText.value.trim()) query.search = searchText.value.trim();
-  if (statusFilter.value) query.status = statusFilter.value;
-  if (providerFilter.value) query.provider = providerFilter.value;
+  if (pageQuery.search?.trim()) query.search = pageQuery.search.trim();
+  if (pageQuery.status) query.status = pageQuery.status;
+  if (pageQuery.model) query.model = pageQuery.model;
+  if (pageQuery.ownerScope) query.ownerScope = pageQuery.ownerScope;
+  if (pageQuery.projectId) query.projectId = pageQuery.projectId;
+  if (pageQuery.taskId) query.taskId = pageQuery.taskId;
+  if (pageQuery.agentRunId && detailDrawerVisible.value) query.agentRunId = pageQuery.agentRunId;
+  if (pageQuery.entryContext && pageQuery.entryContext !== "nav") query.entryContext = pageQuery.entryContext;
+  if (pageQuery.riskLevel) query.riskLevel = pageQuery.riskLevel;
+  if (typeof pageQuery.approvalBlocked === "boolean") query.approvalBlocked = String(pageQuery.approvalBlocked);
+  if (typeof pageQuery.requiresIntervention === "boolean") {
+    query.requiresIntervention = String(pageQuery.requiresIntervention);
+  }
+  if (pageQuery.agentType?.trim()) query.agentType = pageQuery.agentType.trim();
+  if (pageQuery.from) query.from = pageQuery.from;
+  if (pageQuery.to) query.to = pageQuery.to;
   if (queueFocus.value !== "all") query.focus = queueFocus.value;
 
-  const current = route.query;
-  const currentNormalized = {
-    search: typeof current.search === "string" ? current.search : "",
-    status: typeof current.status === "string" ? current.status : "",
-    provider: typeof current.provider === "string" ? current.provider : "",
-    focus: typeof current.focus === "string" ? current.focus : "",
-  };
+  const currentQuery = route.query;
+  const currentKeys = Object.keys(currentQuery);
+  const nextKeys = Object.keys(query);
+  const isSameQuery = currentKeys.length === nextKeys.length
+    && nextKeys.every((key) => String(currentQuery[key] ?? "") === String(query[key] ?? ""));
 
-  if (
-    currentNormalized.search === (query.search ?? "")
-    && currentNormalized.status === (query.status ?? "")
-    && currentNormalized.provider === (query.provider ?? "")
-    && currentNormalized.focus === (query.focus ?? "")
-  ) {
-    return;
-  }
+  if (isSameQuery) return;
 
   void router.replace({ query });
 }
 
 onMounted(() => {
   applyQueryFilters();
-  void Promise.all([refreshAgents(), refreshAggregates()]);
+  void Promise.all([refreshAgents(), refreshAggregates(), refreshAnalytics()]);
 });
 
 onUnmounted(() => {
@@ -1144,13 +1104,52 @@ watch(
   { immediate: true },
 );
 
-watch([searchText, statusFilter], () => {
-  void refreshAggregates();
-});
+watch(
+  () => [
+    pageQuery.search,
+    pageQuery.status,
+    pageQuery.ownerScope,
+    pageQuery.projectId,
+    pageQuery.riskLevel,
+    pageQuery.approvalBlocked,
+    pageQuery.requiresIntervention,
+    pageQuery.agentType,
+    pageQuery.model,
+    pageQuery.from,
+    pageQuery.to,
+    queueFocus.value,
+  ],
+  () => {
+    void refreshAggregates();
+    void refreshAnalytics();
+    syncQueryFilters();
+  },
+);
 
-watch([searchText, statusFilter, providerFilter, queueFocus], () => {
-  syncQueryFilters();
-});
+watch(
+  () => [detailDrawerVisible.value, pageQuery.agentRunId],
+  () => {
+    syncQueryFilters();
+  },
+);
+
+watch(
+  () => authStore.user?.role,
+  () => {
+    if (!route.query.ownerScope) {
+      pageQuery.ownerScope = defaultOwnerScope();
+    }
+    if (!route.query.focus) {
+      queueFocus.value = defaultQueueFocus();
+    }
+    if (!isAdminRole.value) {
+      agentAnalytics.value = null;
+    } else {
+      void refreshAnalytics();
+    }
+  },
+  { immediate: true },
+);
 
 watch(
   () => agentEvents.value[0]?.id,
@@ -1165,95 +1164,5 @@ watch(
 <style scoped>
 .agent-ops-page {
   padding: 24px;
-}
-
-.page-header {
-  margin-bottom: 16px;
-}
-
-.summary-card {
-  cursor: pointer;
-  border: 1px solid #e2e8f0;
-  transition: all 0.15s ease;
-}
-
-.summary-card:hover,
-.summary-card-active {
-  border-color: #3b82f6;
-  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.12);
-}
-
-.summary-card-label {
-  color: #64748b;
-  font-size: 12px;
-}
-
-.summary-card-value {
-  font-size: 26px;
-  font-weight: 600;
-  line-height: 1.2;
-  margin-top: 4px;
-}
-
-.summary-card-hint,
-.queue-subtitle,
-.queue-item-meta,
-.event-feed-meta {
-  color: #94a3b8;
-  font-size: 12px;
-}
-
-.queue-subtitle {
-  margin-bottom: 12px;
-}
-
-.queue-list,
-.drawer-events,
-.event-feed {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.queue-item,
-.drawer-event-item,
-.event-feed-item {
-  border: 1px solid #e2e8f0;
-  border-radius: 10px;
-  padding: 12px;
-  background: #fff;
-}
-
-.queue-item {
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-
-.queue-item:hover,
-.queue-item-selected {
-  border-color: #3b82f6;
-  background: #f8fbff;
-}
-
-.queue-item-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: #0f172a;
-}
-
-.queue-item-summary,
-.event-feed-summary {
-  margin-top: 8px;
-  color: #334155;
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-.event-payload {
-  white-space: pre-wrap;
-  word-break: break-word;
-  margin: 0;
-  font-size: 12px;
-  color: #334155;
 }
 </style>

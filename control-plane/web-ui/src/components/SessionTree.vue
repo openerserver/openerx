@@ -22,7 +22,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { SessionTreeNode } from "../lib/api";
-import SessionTreeBranch from "./SessionTreeBranch.vue";
 
 const props = defineProps<{
   tree: SessionTreeNode[];

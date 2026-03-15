@@ -164,6 +164,27 @@
 			"command": "cd control-plane/web-ui-bff && TEST_BFF_URL=http://127.0.0.1:4098 RUN_EXECUTION_INTEGRATION=1 bun test ../../tests/web-ui-bff/opencode-completion-sync.test.ts --timeout 120000",
 			"isBackground": false,
 			"group": "test"
+		},
+		{
+			"label": "run-bff-execution-integration",
+			"type": "shell",
+			"command": "cd control-plane/web-ui-bff && bun run test:integration:execution",
+			"isBackground": false,
+			"group": "test"
+		},
+		{
+			"label": "run-bff-workflow-evaluation-real",
+			"type": "shell",
+			"command": "cd control-plane/web-ui-bff && bun run test:integration:workflow-evaluation",
+			"isBackground": false,
+			"group": "test"
+		},
+		{
+			"label": "run-bff-identity-execute-real",
+			"type": "shell",
+			"command": "cd control-plane/web-ui-bff && bun run test:integration:identity-execute",
+			"isBackground": false,
+			"group": "test"
 		}
 	]
 }

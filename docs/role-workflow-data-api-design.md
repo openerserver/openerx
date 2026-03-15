@@ -88,6 +88,7 @@ role_agents = {
   requireConsensus: boolean,
   riskLevel: "low" | "medium" | "high" | "critical",
   requiresApprovalForWrite: boolean,
+  allowedStagesJson: string,
   outputSchemaId: string | null,
   tagsJson: string | null,
   createdAt: string,
@@ -99,6 +100,8 @@ role_agents = {
 
 - `id` 全局唯一
 - `scope=project` 时可增加 `projectId`
+- `allowedStagesJson` 不为空，最少包含一个阶段
+- 非 `role.developer` 角色不应通过 profile 组合间接获得主代码写权限
 
 ### 4.2 role_agent_bindings
 
@@ -297,24 +300,100 @@ developer_change_requests = {
 - `bindingResults` 明细表
 - `stage hook executions` 明细表
 
-## 6. 控制平面服务 API 设计
+## 6. 注册表解析读模型建议
 
-### 6.1 角色注册表 API
+控制平面除了保存角色注册表写模型外，还应提供一个面向 BFF / 阶段推进器的解析读模型。
+
+建议统一以下对象：
+
+```ts
+interface ResolvedRoleAgentView {
+  id: string;
+  name: string;
+  scope: "system" | "project";
+  status: "active" | "disabled" | "deprecated";
+  riskLevel: "low" | "medium" | "high" | "critical";
+  allowedStages: string[];
+  permissionProfile: string;
+  toolProfile: string;
+  defaultExecutionMode: "single" | "parallel-review" | "round-robin";
+  aggregationPolicy?: {
+    strategy: "first-pass" | "majority" | "merge-summary" | "human-review";
+    maxActiveBindings?: number;
+    requireConsensus?: boolean;
+  };
+  requiresApprovalForWrite: boolean;
+  outputSchemaId?: string | null;
+  bindings: Array<{
+    bindingId: string;
+    runtimeAgent: string;
+    label: string;
+    enabled: boolean;
+    priority: number;
+    model?: string | null;
+    tags?: string[] | null;
+  }>;
+}
+
+interface ResolvedRoleAgentResponse {
+  data: {
+    role: ResolvedRoleAgentView;
+    source: {
+      baseScope: "system" | "project";
+      overrideApplied: boolean;
+      policySource: "role-default" | "template-stage";
+    };
+    validation: {
+      executable: boolean;
+      reasons: string[];
+    };
+  };
+}
+```
+
+说明：
+
+- 该对象不等同于数据库行，而是“项目覆盖 + 阶段校验 + bindings 过滤”后的执行视图
+- BFF 不应自行重复实现项目覆盖和 allowedStages 校验逻辑
+- 前端管理页可复用此模型显示“当前项目是否可执行某角色”
+
+## 7. 控制平面服务 API 设计
+
+### 7.1 角色注册表 API
 
 建议新增：
 
 - `GET /api/role-agents`
+- `GET /api/role-agents/:roleAgentId`
 - `POST /api/role-agents`
 - `PATCH /api/role-agents/:roleAgentId`
 - `GET /api/role-agents/:roleAgentId/bindings`
 - `POST /api/role-agents/:roleAgentId/bindings`
 - `PATCH /api/role-agents/:roleAgentId/bindings/:bindingId`
+- `GET /api/role-agents/:roleAgentId/resolve`
 
 用途：
 
 - 管理角色定义和实例绑定
+- 为 BFF、阶段推进器和审批引擎提供执行前解析结果
 
-### 6.2 工作流模板 API
+`GET /api/role-agents/:roleAgentId/resolve` 查询参数建议：
+
+- `projectId?`
+- `stage?`
+- `templateId?`
+
+返回建议：
+
+- `ResolvedRoleAgentResponse`
+
+用途说明：
+
+- `projectId` 用于应用项目级覆盖
+- `stage` 用于校验 `allowedStages`
+- `templateId` 用于决定策略来源是否被模板阶段策略覆盖
+
+### 7.2 工作流模板 API
 
 建议新增：
 
@@ -324,7 +403,7 @@ developer_change_requests = {
 - `PATCH /api/workflow-templates/:templateId`
 - `GET /api/workflow-templates/:templateId/stages`
 
-### 6.3 任务工作流运行 API
+### 7.3 任务工作流运行 API
 
 建议新增：
 
@@ -342,7 +421,7 @@ developer_change_requests = {
 - 当前阻塞原因
 - 审批状态
 
-### 6.4 聚合结论 API
+### 7.4 聚合结论 API
 
 建议新增：
 
@@ -355,7 +434,7 @@ developer_change_requests = {
 - 读接口给前端页面和管理页使用
 - 写接口主要由 BFF 内部调用
 
-### 6.5 开发者修正请求 API
+### 7.5 开发者修正请求 API
 
 建议新增：
 
@@ -371,9 +450,64 @@ developer_change_requests = {
 - `resolved`
 - `won't-fix`
 
-## 7. BFF API 与聚合职责
+## 8. 注册表种子策略建议
 
-### 7.1 BFF 对前端提供的聚合接口
+角色注册表与工作流模板存在强引用关系，因此首批默认角色不应只停留在文档中，而应作为平台种子主数据。
+
+### 8.1 建议默认种子对象
+
+建议平台初始化时默认写入：
+
+- 8 个系统级角色：`role.product`、`role.architect`、`role.developer`、`role.visual`、`role.security`、`role.release`、`role.operations`、`role.qa`
+- 每个角色的默认 bindings
+- 受控的 `permissionProfile`、`toolProfile`、`outputSchemaId`
+
+### 8.2 种子执行方式
+
+建议种子以两种入口并存：
+
+1. 启动/部署时的内部 seed 脚本，用于新环境初始化
+2. 管理员显式触发的 bootstrap 动作，用于补齐历史环境缺失角色
+
+建议接口：
+
+- `POST /api/role-agents/bootstrap-defaults`
+
+请求体建议：
+
+```ts
+z.object({
+  applyBindings: z.boolean().default(true),
+  overwriteUnmodifiedRecords: z.boolean().default(false),
+  scope: z.enum(["system"]).default("system"),
+})
+```
+
+返回建议：
+
+```ts
+{
+  data: {
+    createdRoles: string[];
+    updatedRoles: string[];
+    skippedRoles: string[];
+    createdBindings: string[];
+    updatedBindings: string[];
+    skippedBindings: string[];
+  };
+}
+```
+
+### 8.3 种子幂等原则
+
+- 以角色 `id` 和 binding 的 `roleAgentId + bindingKey` 作为幂等键
+- 项目级角色和项目级 bindings 不应被系统种子覆盖
+- 管理员显式修改过的系统角色默认不自动覆盖，除非 `overwriteUnmodifiedRecords=true`
+- 若工作流模板引用了缺失角色，bootstrap 结果必须能明确指出未补齐项
+
+## 9. BFF API 与聚合职责
+
+### 9.1 BFF 对前端提供的聚合接口
 
 建议新增：
 
@@ -384,7 +518,7 @@ developer_change_requests = {
 
 - 一次性返回任务详情页所需的阶段、角色结论、冲突和修正请求聚合视图
 
-### 7.2 BFF 对控制平面调用的写入接口
+### 9.2 BFF 对控制平面调用的写入接口
 
 BFF 在执行角色聚合后，按顺序调用：
 
@@ -393,7 +527,7 @@ BFF 在执行角色聚合后，按顺序调用：
 3. 写开发者修正请求
 4. 视情况写审批单或审计事件
 
-## 8. 统一读模型建议
+## 10. 统一读模型建议
 
 为减少前端多次拼装，建议 BFF 输出统一读模型。
 
@@ -440,41 +574,44 @@ interface DeveloperChangeRequestViewModel {
 }
 ```
 
-## 9. 权限建议
+## 11. 权限建议
 
-### 9.1 管理页权限
+### 11.1 管理页权限
 
 - 角色注册表和工作流模板仅管理员可编辑
 - 项目成员可只读查看与本项目相关的模板生效结果
 
-### 9.2 任务详情页权限
+### 11.2 任务详情页权限
 
 - 普通成员可查看角色结论摘要和开发者修正请求
 - 冲突细节、原始实例输出可按角色或管理权限进一步控制
 
-## 10. 落地顺序建议
+## 12. 落地顺序建议
 
-### 10.1 Phase 1
+### 12.1 Phase 1
 
 - 先补控制平面表结构：`role_agents`、`role_agent_bindings`、`workflow_templates`、`workflow_template_stages`
+- 在 `role_agents` 中补 `allowedStagesJson`
+- 提供 `GET /api/role-agents/:roleAgentId/resolve` 与 bootstrap 默认角色能力
 - BFF 继续把运行结果写入任务策略 JSON
 - 前端先消费 BFF 聚合读模型
 
-### 10.2 Phase 2
+### 12.2 Phase 2
 
 - 增加 `task_workflow_runs`、`task_stage_runs`
 - 增加 `role_aggregate_conclusions`、`developer_change_requests`
 - 将阶段状态和聚合结果从 JSON 转向正式表
 
-### 10.3 Phase 3
+### 12.3 Phase 3
 
 - 增加 binding 级明细表
 - 增加统计、治理报表和准确率回放能力
 
-## 11. 首批验收标准
+## 13. 首批验收标准
 
 1. 后端对象能完整覆盖角色注册表、阶段状态机、角色聚合结论和开发者修正请求。
 2. 控制平面 API 与 BFF 聚合职责边界明确。
 3. 前端可以通过统一读模型拿到任务详情页所需主要数据。
 4. 保持只有开发者角色可修改主代码，修正请求默认回交开发者。
 5. 整套设计允许先 JSON 兼容、后表结构落地的渐进实现。
+6. 角色注册表支持 `allowedStages` 校验、项目覆盖解析和默认种子补齐。

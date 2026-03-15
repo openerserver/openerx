@@ -12,6 +12,17 @@ const DB_PATH =
   process.env.TEST_DB_PATH || resolve(__dirname, "../../control-plane/service/data/openerx.db");
 const executionIntegrationTest = process.env.RUN_EXECUTION_INTEGRATION === "1" ? test : test.skip;
 
+interface ConfigModelRecord {
+  id?: string;
+  provider?: string;
+}
+
+interface ProjectRecord {
+  settings?: {
+    defaultModel?: string;
+  } | null;
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
 }
@@ -43,6 +54,39 @@ async function login(): Promise<string> {
     body: JSON.stringify({ username: USERNAME, password: PASSWORD }),
   });
   return data.token;
+}
+
+async function getAvailableCopilotModel(token: string): Promise<string> {
+  const authHeaders = {
+    Authorization: `Bearer ${token}`,
+    "Content-Type": "application/json",
+  };
+
+  const modelList = await request<{ data?: ConfigModelRecord[] }>("/api/config/models/list", {
+    headers: authHeaders,
+  });
+
+  const configuredCopilotModel = (modelList.data || []).find(
+    (model) =>
+      typeof model.provider === "string"
+      && model.provider.startsWith("github-copilot")
+      && typeof model.id === "string"
+      && model.id.trim().length > 0,
+  );
+
+  if (configuredCopilotModel?.provider && configuredCopilotModel.id) {
+    return `${configuredCopilotModel.provider}:${configuredCopilotModel.id}`;
+  }
+
+  const project = await request<ProjectRecord>(`/api/projects/${PROJECT_ID}`, {
+    headers: authHeaders,
+  });
+
+  if (project.settings?.defaultModel?.startsWith("github-copilot")) {
+    return project.settings.defaultModel;
+  }
+
+  return "github-copilot:claude-sonnet-4";
 }
 
 function createDeferred<T>() {
@@ -289,6 +333,7 @@ async function runCompletionSyncScenario(options: {
     Authorization: `Bearer ${token}`,
     "Content-Type": "application/json",
   };
+  const selectedModel = await getAvailableCopilotModel(token);
 
   const task = await request<{ id: string }>("/api/tasks", {
     method: "POST",
@@ -297,6 +342,7 @@ async function runCompletionSyncScenario(options: {
       title: `${options.titlePrefix}-${Date.now()}`,
       projectId: PROJECT_ID,
       prompt: options.prompt,
+      selectedModel,
     }),
   });
 
@@ -448,6 +494,7 @@ executionIntegrationTest("task graph injection pushes task.node.updated over web
     Authorization: `Bearer ${token}`,
     "Content-Type": "application/json",
   };
+  const selectedModel = await getAvailableCopilotModel(token);
 
   const task = await request<{ id: string }>("/api/tasks", {
     method: "POST",
@@ -457,6 +504,7 @@ executionIntegrationTest("task graph injection pushes task.node.updated over web
       projectId: PROJECT_ID,
       prompt:
         "Quick brief reply only. Do not inspect the repository or call tools. Reply with exactly one line: OK.",
+      selectedModel,
     }),
   });
 
@@ -590,6 +638,7 @@ executionIntegrationTest("OpenCode terminate emits stopped event and persists st
     Authorization: `Bearer ${token}`,
     "Content-Type": "application/json",
   };
+  const selectedModel = await getAvailableCopilotModel(token);
 
   const task = await request<{ id: string }>("/api/tasks", {
     method: "POST",
@@ -599,6 +648,7 @@ executionIntegrationTest("OpenCode terminate emits stopped event and persists st
       projectId: PROJECT_ID,
       prompt:
         "Quick brief reply only. Do not inspect the repository or call tools. Print the word HOLD on 200 separate lines and do not summarize.",
+      selectedModel,
     }),
   });
 

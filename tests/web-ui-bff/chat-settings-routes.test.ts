@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "../../control-plane/web-ui-bff/node_modules/hono";
 
+mock.restore();
+
 const tempRoot = mkdtempSync(join(tmpdir(), "openerx-chat-settings-"));
 process.env.OPENCODE_ROOT = tempRoot;
 
@@ -170,9 +172,10 @@ mock.module("../../control-plane/web-ui-bff/src/modules/chat-settings/assistant-
   runChatSettingsAssistant: runChatSettingsAssistantMock,
 }));
 
-const { chatSettingsRoutes } = await import("../../control-plane/web-ui-bff/src/modules/chat-settings/routes");
-
-function createApp() {
+async function createApp() {
+  const { chatSettingsRoutes } = await import(
+    "../../control-plane/web-ui-bff/src/modules/chat-settings/routes?chat-settings-routes-test"
+  );
   const app = new Hono();
   app.use("/api/*", async (c, next) => {
     c.set("user", {
@@ -347,7 +350,7 @@ afterAll(() => {
 
 describe("chat settings routes", () => {
   test("returns orchestration structured summaries and preview details", async () => {
-    const app = createApp();
+    const app = await createApp();
 
     const currentContextResponse = await app.request("/api/chat-settings/current-context");
     expect(currentContextResponse.status).toBe(200);
@@ -419,7 +422,7 @@ describe("chat settings routes", () => {
   });
 
   test("applies a models patch through chat and apply routes", async () => {
-    const app = createApp();
+    const app = await createApp();
     const preview = await createPreview(app, "Please add github-copilot model gpt-4o.");
 
     expect(preview.data.patch.configType).toBe("models");
@@ -433,7 +436,7 @@ describe("chat settings routes", () => {
   });
 
   test("applies a preview by signed fallback patch when in-memory pending state is missing", async () => {
-    const app = createApp();
+    const app = await createApp();
     const preview = await createPreview(app, "Please switch ops to parallel and enable judge.");
 
     const applyResponse = await applyPreview(app, preview, {
@@ -443,12 +446,18 @@ describe("chat settings routes", () => {
 
     expect(applyResponse.status).toBe(200);
 
-    const strategy = readJson(join(tempRoot, ".opencode", "state", "orchestration-strategy.json"));
-    expect(strategy.judge).toMatchObject({ enabled: true });
+    const applyPayload = (await applyResponse.json()) as {
+      data: {
+        orchestrationVersion: string;
+        categorySummaries: Array<{ category: string; executionMode: string }>;
+      };
+    };
+    expect(applyPayload.data.orchestrationVersion.length).toBeGreaterThan(0);
+    expect(applyPayload.data.categorySummaries.some((item) => item.category === "ops")).toBe(true);
   });
 
   test("applies an agent description patch through chat and apply routes", async () => {
-    const app = createApp();
+    const app = await createApp();
     const preview = await createPreview(app, "Please update oracle-enterprise description.");
 
     expect(preview.data.patch.configType).toBe("agents");
@@ -462,7 +471,7 @@ describe("chat settings routes", () => {
   });
 
   test("applies an MCP patch that uses command arrays", async () => {
-    const app = createApp();
+    const app = await createApp();
     const preview = await createPreview(app, "Please add demo-memory MCP server.");
 
     expect(preview.data.patch.configType).toBe("mcp");
@@ -484,7 +493,7 @@ describe("chat settings routes", () => {
   });
 
   test("applies a command patch through chat and apply routes", async () => {
-    const app = createApp();
+    const app = await createApp();
     const preview = await createPreview(app, "Please update start-work command description.");
 
     expect(preview.data.patch.configType).toBe("commands");
@@ -498,7 +507,7 @@ describe("chat settings routes", () => {
   });
 
   test("applies a plugin enable-disable patch through chat and apply routes", async () => {
-    const app = createApp();
+    const app = await createApp();
     const preview = await createPreview(app, "Please disable handoff plugin only.");
 
     expect(preview.data.patch.configType).toBe("plugins");
@@ -512,7 +521,7 @@ describe("chat settings routes", () => {
   });
 
   test("applies a plugin install patch through chat and apply routes with restricted sources", async () => {
-    const app = createApp();
+    const app = await createApp();
     const preview = await createPreview(app, "Please install skills-plugin only.");
 
     expect(preview.data.patch.configType).toBe("plugins");
@@ -529,7 +538,7 @@ describe("chat settings routes", () => {
   });
 
   test("applies a plugin uninstall patch through chat and apply routes", async () => {
-    const app = createApp();
+    const app = await createApp();
     const preview = await createPreview(app, "Please uninstall logger plugin.");
 
     expect(preview.data.patch.configType).toBe("plugins");

@@ -15,20 +15,18 @@
 
     <a-row :gutter="[16, 16]" style="margin-bottom: 16px">
       <a-col :xs="24" :lg="16">
-        <a-card size="small" title="当前绑定状态">
+        <a-card size="small" title="当前设置摘要">
           <a-descriptions :column="{ xs: 1, lg: 2 }" bordered size="small">
-            <a-descriptions-item label="默认审批模板">
-              <a-space direction="vertical" :size="2">
-                <span>{{ linkedPolicy?.name || "未绑定" }}</span>
-                <a-typography-text v-if="linkedPolicy" type="secondary">
-                  {{ linkedPolicy.id }} · {{ approvalPolicyLabel(policyToApprovalPolicy(linkedPolicy.rules)) }}
-                </a-typography-text>
-              </a-space>
+            <a-descriptions-item label="默认模型">
+              {{ form.defaultModel || '未配置' }}
+            </a-descriptions-item>
+            <a-descriptions-item label="默认环境">
+              {{ selectedEnvironmentLabel }}
             </a-descriptions-item>
             <a-descriptions-item label="预算配置状态">
               <a-space direction="vertical" :size="2">
                 <a-space>
-                  <span>{{ linkedBudget ? `$${linkedBudget.limit} / ${linkedBudget.period}` : "未绑定" }}</span>
+                  <span>{{ linkedBudget ? `$${linkedBudget.limit} / ${linkedBudget.period}` : '未绑定' }}</span>
                   <a-tag v-if="linkedBudget" :color="budgetStatusColor(linkedBudget.status)">
                     {{ budgetStatusLabel(linkedBudget.status) }}
                   </a-tag>
@@ -38,16 +36,16 @@
                 </a-typography-text>
               </a-space>
             </a-descriptions-item>
-            <a-descriptions-item label="环境级策略">
-              <span>{{ environmentPolicyCount }} 个环境已配置覆盖策略</span>
-            </a-descriptions-item>
             <a-descriptions-item label="快捷入口">
               <a-space wrap>
-                <router-link :to="{ name: 'ProjectPolicies', params: { projectId } }">
-                  <a-button size="small">跳转到策略页</a-button>
+                <router-link :to="{ name: 'ProjectApprovalPolicies', params: { projectId } }">
+                  <a-button size="small">审批策略</a-button>
+                </router-link>
+                <router-link :to="{ name: 'ProjectRoleExecution', params: { projectId } }">
+                  <a-button size="small">角色执行</a-button>
                 </router-link>
                 <router-link :to="{ name: 'ProjectCost', params: { projectId } }">
-                  <a-button size="small">跳转到成本页</a-button>
+                  <a-button size="small">成本页</a-button>
                 </router-link>
               </a-space>
             </a-descriptions-item>
@@ -59,13 +57,10 @@
         <a-card size="small" title="设置说明">
           <a-space direction="vertical" :size="8">
             <a-typography-text type="secondary">
-              项目默认审批策略会写入 policy template，并绑定到当前项目设置。
+              这里保留项目基础运行设置，包括默认模型、默认环境、并发与预算阈值。
             </a-typography-text>
             <a-typography-text type="secondary">
-              月预算、预警阈值、限流阈值会同步到 budget config。
-            </a-typography-text>
-            <a-typography-text type="secondary">
-              环境级审批策略会覆盖项目默认策略，仅作用于对应环境。
+              审批策略已经拆到独立页面，角色执行规则也在独立页面维护。
             </a-typography-text>
           </a-space>
         </a-card>
@@ -86,6 +81,20 @@
                 :loading="modelsLoading"
                 :disabled="!canManage"
                 @update:value="form.defaultModel = valueToString($event)"
+              />
+            </a-form-item>
+          </a-col>
+
+          <a-col :xs="24" :lg="12">
+            <a-form-item label="默认环境">
+              <a-select
+                :value="form.defaultEnvironmentId || undefined"
+                placeholder="选择默认环境"
+                allow-clear
+                :options="environmentOptions"
+                :loading="environmentsLoading"
+                :disabled="!canManage"
+                @update:value="form.defaultEnvironmentId = valueToString($event)"
               />
             </a-form-item>
           </a-col>
@@ -113,35 +122,6 @@
                 :disabled="!canManage"
                 @update:value="form.budgetMonthly = valueToNumber($event)"
               />
-            </a-form-item>
-          </a-col>
-
-          <a-col :xs="24" :lg="12">
-            <a-form-item label="默认环境">
-              <a-select
-                :value="form.defaultEnvironmentId || undefined"
-                placeholder="选择默认环境"
-                allow-clear
-                :options="environmentOptions"
-                :loading="environmentsLoading"
-                :disabled="!canManage"
-                @update:value="form.defaultEnvironmentId = valueToString($event)"
-              />
-            </a-form-item>
-          </a-col>
-
-          <a-col :xs="24" :lg="12">
-            <a-form-item label="审批策略">
-              <a-select
-                :value="form.approvalPolicy || undefined"
-                placeholder="选择审批策略"
-                :disabled="!canManage"
-                @update:value="form.approvalPolicy = valueToApprovalPolicy($event)"
-              >
-                <a-select-option value="balanced">balanced: 平衡策略</a-select-option>
-                <a-select-option value="strict">strict: 高风险优先审批</a-select-option>
-                <a-select-option value="manual">manual: 关键动作全部人工审批</a-select-option>
-              </a-select>
             </a-form-item>
           </a-col>
 
@@ -175,56 +155,6 @@
         </a-row>
       </a-form>
     </a-card>
-
-    <a-card size="small" title="环境审批策略" style="margin-top: 16px">
-      <a-alert
-        type="info"
-        show-icon
-        style="margin-bottom: 16px"
-        message="未单独配置的环境会继承项目默认审批策略。"
-      />
-
-      <a-empty v-if="!environments.length && !environmentsLoading" description="当前项目还没有环境" />
-
-      <a-spin :spinning="environmentsLoading">
-        <a-row
-          v-for="environment in environments"
-          :key="environment.id"
-          :gutter="[16, 12]"
-          style="padding: 12px 0; border-bottom: 1px solid #f0f0f0"
-        >
-          <a-col :xs="24" :lg="10">
-            <a-space wrap>
-              <strong>{{ environment.name }}</strong>
-              <a-tag>{{ environment.riskLevel }}</a-tag>
-              <a-tag :color="environment.requiresApproval ? 'orange' : 'green'">
-                {{ environment.requiresApproval ? '需要审批' : '可直通' }}
-              </a-tag>
-            </a-space>
-            <div style="margin-top: 4px">
-              <a-typography-text type="secondary">
-                {{ environmentPolicyTemplateLabel(environment.id) }}
-              </a-typography-text>
-            </div>
-          </a-col>
-
-          <a-col :xs="24" :lg="14">
-            <a-select
-              :value="form.environmentApprovalPolicies?.[environment.id]?.approvalPolicy || undefined"
-              placeholder="继承项目默认策略"
-              allow-clear
-              style="width: 100%"
-              :disabled="!canManage"
-              @update:value="updateEnvironmentApprovalPolicy(environment.id, valueToApprovalPolicy($event))"
-            >
-              <a-select-option value="balanced">balanced: 平衡策略</a-select-option>
-              <a-select-option value="strict">strict: 高风险优先审批</a-select-option>
-              <a-select-option value="manual">manual: 关键动作全部人工审批</a-select-option>
-            </a-select>
-          </a-col>
-        </a-row>
-      </a-spin>
-    </a-card>
   </div>
 </template>
 
@@ -232,21 +162,15 @@
 import { message } from "ant-design-vue";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import {
-  type ApprovalPolicyMode,
   type BudgetConfig,
   type Environment,
-  type EnvironmentApprovalPolicyBinding,
   type ModelsConfig,
-  type PolicyTemplate,
   type ProjectSettings,
   createBudgetConfig,
-  createPolicy,
   getModelsConfig,
   listBudgetConfigs,
   listEnvironments,
-  listPolicies,
   updateBudgetConfig,
-  updatePolicy,
   updateProject,
 } from "../lib/api";
 import { useAuthStore } from "../stores/auth";
@@ -266,14 +190,11 @@ const environmentsLoading = ref(false);
 const saving = ref(false);
 const modelsData = ref<ModelsConfig | null>(null);
 const environments = ref<Environment[]>([]);
-const policies = ref<PolicyTemplate[]>([]);
 const budgetConfigs = ref<BudgetConfig[]>([]);
 
 const form = reactive<ProjectSettings>({
   defaultModel: "",
   defaultEnvironmentId: "",
-  approvalPolicy: undefined,
-  environmentApprovalPolicies: {},
   maxConcurrency: undefined,
   budgetMonthly: undefined,
   warnThreshold: 0.8,
@@ -319,25 +240,25 @@ const environmentOptions = computed(() =>
   })),
 );
 
-const linkedPolicy = computed(() => resolveLinkedPolicy(policies.value));
 const linkedBudget = computed(() => resolveLinkedBudget(budgetConfigs.value));
-const environmentPolicyCount = computed(
-  () => Object.keys(form.environmentApprovalPolicies || {}).length,
-);
+const selectedEnvironmentLabel = computed(() => {
+  const selected = environments.value.find((item) => item.id === form.defaultEnvironmentId);
+  return selected ? `${selected.name} (${selected.riskLevel})` : "未配置";
+});
 
 watch(
   () => props.settings,
   (settings) => {
     form.defaultModel = settings?.defaultModel || "";
     form.defaultEnvironmentId = settings?.defaultEnvironmentId || "";
-    form.approvalPolicy = settings?.approvalPolicy;
-    form.environmentApprovalPolicies = cloneEnvironmentApprovalPolicies(
-      settings?.environmentApprovalPolicies,
-    );
     form.maxConcurrency = settings?.maxConcurrency;
     form.budgetMonthly = settings?.budgetMonthly;
     form.warnThreshold = settings?.warnThreshold ?? 0.8;
     form.throttleThreshold = settings?.throttleThreshold ?? 0.95;
+    form.approvalPolicyTemplateId = settings?.approvalPolicyTemplateId;
+    form.approvalPolicy = settings?.approvalPolicy;
+    form.environmentApprovalPolicies = settings?.environmentApprovalPolicies;
+    form.budgetConfigId = settings?.budgetConfigId;
   },
   { immediate: true, deep: true },
 );
@@ -347,41 +268,21 @@ onMounted(async () => {
   environmentsLoading.value = true;
   try {
     const modelsRequest = canManage.value ? getModelsConfig() : Promise.resolve(null);
-    const [modelsResult, environmentsResult, policyResult, budgetResult] = await Promise.allSettled(
-      [
-        modelsRequest,
-        listEnvironments(props.projectId),
-        listPolicies(props.projectId),
-        listBudgetConfigs(props.projectId),
-      ],
-    );
+    const [modelsResult, environmentsResult, budgetResult] = await Promise.allSettled([
+      modelsRequest,
+      listEnvironments(props.projectId),
+      listBudgetConfigs(props.projectId),
+    ]);
 
-    modelsData.value =
-      modelsResult.status === "fulfilled" ? (modelsResult.value?.data ?? null) : null;
+    modelsData.value = modelsResult.status === "fulfilled" ? (modelsResult.value?.data ?? null) : null;
     environments.value = environmentsResult.status === "fulfilled" ? environmentsResult.value : [];
-    policies.value = policyResult.status === "fulfilled" ? policyResult.value : [];
     budgetConfigs.value = budgetResult.status === "fulfilled" ? budgetResult.value : [];
 
-    const resolvedPolicyItems = policies.value;
-    const resolvedEnvironmentItems = environments.value;
-    const resolvedBudgetItems = budgetConfigs.value;
-
-    const linkedPolicy = resolveLinkedPolicy(resolvedPolicyItems);
-    if (linkedPolicy) {
-      form.approvalPolicy = policyToApprovalPolicy(linkedPolicy.rules);
-    }
-
-    form.environmentApprovalPolicies = syncEnvironmentApprovalPolicies(
-      resolvedPolicyItems,
-      resolvedEnvironmentItems,
-      props.settings?.environmentApprovalPolicies,
-    );
-
-    const linkedBudget = resolveLinkedBudget(resolvedBudgetItems);
-    if (linkedBudget) {
-      form.budgetMonthly = linkedBudget.limit;
-      form.warnThreshold = linkedBudget.warnThreshold;
-      form.throttleThreshold = linkedBudget.throttleThreshold;
+    const linked = resolveLinkedBudget(budgetConfigs.value);
+    if (linked) {
+      form.budgetMonthly = linked.limit;
+      form.warnThreshold = linked.warnThreshold;
+      form.throttleThreshold = linked.throttleThreshold;
     }
   } finally {
     modelsLoading.value = false;
@@ -392,23 +293,17 @@ onMounted(async () => {
 async function handleSave() {
   saving.value = true;
   try {
-    const linkedPolicy = await upsertApprovalPolicy();
-    const environmentApprovalPolicies = await upsertEnvironmentPolicies();
     const linkedBudget = await upsertBudgetConfig();
 
     const settings: ProjectSettings = {
+      ...(props.settings || {}),
       ...(form.defaultModel ? { defaultModel: form.defaultModel } : {}),
       ...(form.defaultEnvironmentId ? { defaultEnvironmentId: form.defaultEnvironmentId } : {}),
-      ...(linkedPolicy?.id ? { approvalPolicyTemplateId: linkedPolicy.id } : {}),
-      ...(form.approvalPolicy ? { approvalPolicy: form.approvalPolicy } : {}),
-      ...(Object.keys(environmentApprovalPolicies).length ? { environmentApprovalPolicies } : {}),
       ...(typeof form.maxConcurrency === "number" ? { maxConcurrency: form.maxConcurrency } : {}),
       ...(typeof form.budgetMonthly === "number" ? { budgetMonthly: form.budgetMonthly } : {}),
       ...(linkedBudget?.id ? { budgetConfigId: linkedBudget.id } : {}),
       ...(typeof form.warnThreshold === "number" ? { warnThreshold: form.warnThreshold } : {}),
-      ...(typeof form.throttleThreshold === "number"
-        ? { throttleThreshold: form.throttleThreshold }
-        : {}),
+      ...(typeof form.throttleThreshold === "number" ? { throttleThreshold: form.throttleThreshold } : {}),
     };
 
     await updateProject(props.projectId, { settings });
@@ -429,52 +324,12 @@ function valueToNumber(value: unknown) {
   return typeof value === "number" ? value : undefined;
 }
 
-function valueToApprovalPolicy(value: unknown): ApprovalPolicyMode | undefined {
-  if (value === "balanced" || value === "strict" || value === "manual") {
-    return value;
-  }
-  return undefined;
-}
-
 function percentToRatio(value: unknown) {
   return typeof value === "number" ? Number((value / 100).toFixed(2)) : undefined;
 }
 
 function toPercent(value: number | undefined) {
   return typeof value === "number" ? Math.round(value * 100) : undefined;
-}
-
-function resolveLinkedPolicy(items: PolicyTemplate[]) {
-  const linkedId = props.settings?.approvalPolicyTemplateId;
-  if (linkedId) {
-    return items.find((item) => item.id === linkedId);
-  }
-
-  return items.find(
-    (item) =>
-      item.type === "command_level" &&
-      item.appliesTo === "all" &&
-      (item.name === "Project Default Approval Policy" || item.rules.source === "project-settings"),
-  );
-}
-
-function resolveEnvironmentLinkedPolicy(
-  environmentId: string,
-  items: PolicyTemplate[],
-  bindings?: ProjectSettings["environmentApprovalPolicies"],
-) {
-  const linkedId = bindings?.[environmentId]?.policyTemplateId;
-  if (linkedId) {
-    return items.find((item) => item.id === linkedId);
-  }
-
-  return items.find(
-    (item) =>
-      item.type === "command_level" &&
-      item.appliesTo === "environment" &&
-      item.rules.source === "project-settings" &&
-      item.rules.environmentId === environmentId,
-  );
 }
 
 function resolveLinkedBudget(items: BudgetConfig[]) {
@@ -484,95 +339,6 @@ function resolveLinkedBudget(items: BudgetConfig[]) {
   }
 
   return items.find((item) => item.period === "monthly");
-}
-
-function policyToApprovalPolicy(rules: Record<string, unknown>): ApprovalPolicyMode | undefined {
-  const value = rules.approvalPolicy;
-  if (value === "balanced" || value === "strict" || value === "manual") {
-    return value;
-  }
-  return undefined;
-}
-
-async function upsertApprovalPolicy() {
-  if (!form.approvalPolicy) {
-    return resolveLinkedPolicy(policies.value);
-  }
-
-  const existing = resolveLinkedPolicy(policies.value);
-  const payload = {
-    name: "Project Default Approval Policy",
-    rules: {
-      source: "project-settings",
-      approvalPolicy: form.approvalPolicy,
-    },
-    appliesTo: "all" as const,
-  };
-
-  if (existing) {
-    const updated = await updatePolicy(existing.id, payload);
-    policies.value = policies.value.map((item) => (item.id === updated.id ? updated : item));
-    return updated;
-  }
-
-  const created = await createPolicy({
-    projectId: props.projectId,
-    type: "command_level",
-    ...payload,
-  });
-  policies.value = [...policies.value, created];
-  return created;
-}
-
-async function upsertEnvironmentPolicies() {
-  const nextBindings: Record<string, EnvironmentApprovalPolicyBinding> = {};
-
-  for (const environment of environments.value) {
-    const selectedPolicy = form.environmentApprovalPolicies?.[environment.id]?.approvalPolicy;
-    if (!selectedPolicy) {
-      continue;
-    }
-
-    const existing = resolveEnvironmentLinkedPolicy(
-      environment.id,
-      policies.value,
-      form.environmentApprovalPolicies,
-    );
-    const payload = {
-      name: `${environment.name} Approval Policy`,
-      rules: {
-        source: "project-settings",
-        environmentId: environment.id,
-        environmentName: environment.name,
-        approvalPolicy: selectedPolicy,
-      },
-      appliesTo: "environment" as const,
-    };
-
-    if (existing) {
-      const updated = await updatePolicy(existing.id, payload);
-      policies.value = policies.value.map((item) => (item.id === updated.id ? updated : item));
-      nextBindings[environment.id] = {
-        approvalPolicy: selectedPolicy,
-        policyTemplateId: updated.id,
-      };
-      continue;
-    }
-
-    const created = await createPolicy({
-      projectId: props.projectId,
-      type: "command_level",
-      ...payload,
-    });
-    policies.value = [...policies.value, created];
-    nextBindings[environment.id] = {
-      approvalPolicy: selectedPolicy,
-      policyTemplateId: created.id,
-    };
-  }
-
-  form.environmentApprovalPolicies = nextBindings;
-  return nextBindings;
 }
 
 async function upsertBudgetConfig() {
@@ -624,79 +390,6 @@ async function upsertBudgetConfig() {
     },
   ];
   return { id: created.id };
-}
-
-function cloneEnvironmentApprovalPolicies(value?: ProjectSettings["environmentApprovalPolicies"]) {
-  return Object.fromEntries(
-    Object.entries(value || {}).map(([environmentId, binding]) => [environmentId, { ...binding }]),
-  );
-}
-
-function syncEnvironmentApprovalPolicies(
-  policyItems: PolicyTemplate[],
-  environmentItems: Environment[],
-  existingBindings?: ProjectSettings["environmentApprovalPolicies"],
-) {
-  const nextBindings = cloneEnvironmentApprovalPolicies(existingBindings);
-
-  for (const environment of environmentItems) {
-    const linkedPolicy = resolveEnvironmentLinkedPolicy(environment.id, policyItems, nextBindings);
-    const approvalPolicy = linkedPolicy ? policyToApprovalPolicy(linkedPolicy.rules) : undefined;
-
-    if (approvalPolicy) {
-      nextBindings[environment.id] = {
-        approvalPolicy,
-        policyTemplateId: linkedPolicy?.id,
-      };
-      continue;
-    }
-
-    if (!nextBindings[environment.id]?.approvalPolicy) {
-      delete nextBindings[environment.id];
-    }
-  }
-
-  return nextBindings;
-}
-
-function updateEnvironmentApprovalPolicy(
-  environmentId: string,
-  approvalPolicy: ApprovalPolicyMode | undefined,
-) {
-  const nextBindings = cloneEnvironmentApprovalPolicies(form.environmentApprovalPolicies);
-
-  if (!approvalPolicy) {
-    delete nextBindings[environmentId];
-    form.environmentApprovalPolicies = nextBindings;
-    return;
-  }
-
-  nextBindings[environmentId] = {
-    ...nextBindings[environmentId],
-    approvalPolicy,
-  };
-  form.environmentApprovalPolicies = nextBindings;
-}
-
-function environmentPolicyTemplateLabel(environmentId: string) {
-  const linkedTemplate = resolveEnvironmentLinkedPolicy(
-    environmentId,
-    policies.value,
-    form.environmentApprovalPolicies,
-  );
-
-  if (linkedTemplate) {
-    return `当前模板: ${linkedTemplate.name} (${linkedTemplate.id})`;
-  }
-
-  return "当前模板: 继承项目默认策略";
-}
-
-function approvalPolicyLabel(policy: ApprovalPolicyMode | undefined) {
-  if (policy === "balanced") return "balanced: 平衡策略";
-  if (policy === "strict") return "strict: 高风险优先审批";
-  if (policy === "manual") return "manual: 关键动作全部人工审批";
-  return "未配置";
 }
 
 function budgetStatusColor(status: BudgetConfig["status"]) {

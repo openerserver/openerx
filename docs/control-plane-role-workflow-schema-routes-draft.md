@@ -86,12 +86,19 @@ export const roleAgents = sqliteTable("role_agents", {
   requiresApprovalForWrite: integer("requires_approval_for_write", { mode: "boolean" })
     .notNull()
     .default(false),
+  allowedStagesJson: text("allowed_stages_json", { mode: "json" }).$type<string[]>().notNull(),
   outputSchemaId: text("output_schema_id"),
   tagsJson: text("tags_json", { mode: "json" }).$type<string[]>(),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 ```
+
+说明：
+
+- `allowedStagesJson` 为角色级硬边界，不应仅放在模板侧
+- 推荐后续增加 `(scope, projectId, id)` 组合索引，便于项目覆盖解析
+- 推荐为 `role_agent_bindings` 增加 `(roleAgentId, bindingKey)` 唯一约束
 
 ### 4.2 roleAgentBindings
 
@@ -235,12 +242,16 @@ export const taskStageRuns = sqliteTable("task_stage_runs", {
 - `control-plane/service/src/modules/task-workflows/routes.ts`
 - `control-plane/service/src/modules/role-conclusions/routes.ts`
 - `control-plane/service/src/modules/developer-change-requests/routes.ts`
+- `control-plane/service/src/modules/role-agents/bootstrap.ts`
+- `control-plane/service/src/modules/role-agents/resolve.ts`
 
 ### 5.1 模块职责
 
 `role-agents`
 
 - 管理角色和 binding 主数据
+- 提供角色解析读模型
+- 承担默认角色种子补齐
 
 `workflow-templates`
 
@@ -278,6 +289,11 @@ export const taskStageRuns = sqliteTable("task_stage_runs", {
 { data: Array<{ id: string; name: string; scope: string; status: string; defaultExecutionMode: string }> }
 ```
 
+建议支持附加查询参数：
+
+- `includeBindings?`
+- `includeDisabledBindings?`
+
 ### 6.2 POST /api/role-agents
 
 建议 schema：
@@ -293,10 +309,183 @@ z.object({
   toolProfile: z.string().min(1),
   defaultExecutionMode: z.enum(["single", "parallel-review", "round-robin"]),
   aggregationStrategy: z.enum(["first-pass", "majority", "merge-summary", "human-review"]).optional(),
+  maxActiveBindings: z.number().int().positive().optional(),
+  requireConsensus: z.boolean().optional(),
+  riskLevel: z.enum(["low", "medium", "high", "critical"]).optional(),
+  requiresApprovalForWrite: z.boolean().optional(),
+  allowedStages: z.array(z.string().min(1)).min(1),
+  outputSchemaId: z.string().optional(),
+  ownerTeam: z.string().optional(),
+  tags: z.array(z.string()).optional(),
 })
 ```
 
-### 6.3 GET/POST/PATCH /api/role-agents/:roleAgentId/bindings
+返回建议：
+
+```ts
+{
+  data: {
+    id: string;
+    allowedStages: string[];
+    createdAt: string;
+    updatedAt: string;
+  };
+}
+```
+
+### 6.3 GET /api/role-agents/:roleAgentId
+
+用途：
+
+- 读取单个角色详情
+
+返回建议：
+
+```ts
+{
+  data: {
+    id: string;
+    projectId?: string | null;
+    name: string;
+    scope: "system" | "project";
+    status: "active" | "disabled" | "deprecated";
+    permissionProfile: string;
+    toolProfile: string;
+    defaultExecutionMode: string;
+    aggregationStrategy?: string | null;
+    maxActiveBindings?: number | null;
+    requireConsensus: boolean;
+    riskLevel: string;
+    requiresApprovalForWrite: boolean;
+    allowedStages: string[];
+    outputSchemaId?: string | null;
+    tags?: string[] | null;
+  };
+}
+```
+
+### 6.4 PATCH /api/role-agents/:roleAgentId
+
+用途：
+
+- 更新角色定义
+
+patch schema 建议：
+
+```ts
+roleAgentPatchSchema = roleAgentSchema.partial().omit({ id: true })
+```
+
+要求：
+
+- 若传入 `allowedStages`，不得为空数组
+- 若 `scope=project`，应校验 `projectId`
+- 非 `role.developer` 的 `permissionProfile + toolProfile` 组合不得突破主代码写权限边界
+
+### 6.5 GET /api/role-agents/:roleAgentId/resolve
+
+用途：
+
+- 给 BFF、阶段推进器、审批引擎返回可执行角色解析结果
+
+查询参数建议：
+
+- `projectId?`
+- `stage?`
+- `templateId?`
+
+返回建议：
+
+```ts
+{
+  data: {
+    role: {
+      id: string;
+      name: string;
+      scope: "system" | "project";
+      status: "active" | "disabled" | "deprecated";
+      riskLevel: "low" | "medium" | "high" | "critical";
+      allowedStages: string[];
+      permissionProfile: string;
+      toolProfile: string;
+      defaultExecutionMode: "single" | "parallel-review" | "round-robin";
+      aggregationPolicy?: {
+        strategy: "first-pass" | "majority" | "merge-summary" | "human-review";
+        maxActiveBindings?: number;
+        requireConsensus?: boolean;
+      };
+      requiresApprovalForWrite: boolean;
+      outputSchemaId?: string | null;
+      bindings: Array<{
+        bindingId: string;
+        runtimeAgent: string;
+        label: string;
+        enabled: boolean;
+        priority: number;
+        model?: string | null;
+        tags?: string[] | null;
+      }>;
+    };
+    source: {
+      baseScope: "system" | "project";
+      overrideApplied: boolean;
+      policySource: "role-default" | "template-stage";
+    };
+    validation: {
+      executable: boolean;
+      reasons: string[];
+    };
+  };
+}
+```
+
+解析规则建议：
+
+1. 先读取系统级角色
+2. 若传入 `projectId`，尝试叠加项目级同 ID 覆盖
+3. 按项目覆盖规则解析 bindings
+4. 若传入 `stage`，校验是否包含在 `allowedStages`
+5. 若传入 `templateId`，再解析模板阶段策略覆盖执行模式
+6. 过滤 disabled bindings，并按 `priority ASC` 排序
+
+### 6.6 POST /api/role-agents/bootstrap-defaults
+
+用途：
+
+- 在新环境初始化或老环境补齐时幂等写入默认角色和 bindings
+
+请求体建议：
+
+```ts
+z.object({
+  applyBindings: z.boolean().default(true),
+  overwriteUnmodifiedRecords: z.boolean().default(false),
+  scope: z.enum(["system"]).default("system"),
+})
+```
+
+返回建议：
+
+```ts
+{
+  data: {
+    createdRoles: string[];
+    updatedRoles: string[];
+    skippedRoles: string[];
+    createdBindings: string[];
+    updatedBindings: string[];
+    skippedBindings: string[];
+  };
+}
+```
+
+说明：
+
+- 该接口应仅允许 `org_admin` 使用
+- 新环境初始化仍建议优先使用内部 seed 脚本
+- HTTP bootstrap 主要用于补齐历史环境或执行修复性重建
+
+### 6.7 GET/POST/PATCH /api/role-agents/:roleAgentId/bindings
 
 用途：
 
@@ -312,10 +501,119 @@ z.object({
   enabled: z.boolean().optional(),
   priority: z.number().int().min(1),
   model: z.string().optional(),
+  tags: z.array(z.string()).optional(),
 })
 ```
 
-## 7. workflow-templates routes 草案
+额外要求：
+
+- `bindingKey` 在同一 `roleAgentId` 下唯一
+- patch 后若该角色没有任何 enabled binding，`resolve` 应返回 `executable=false`
+
+## 7. role-agents 内部数据结构草案
+
+### 7.1 seed 定义对象
+
+```ts
+interface RoleAgentSeedDefinition {
+  role: {
+    id: string;
+    name: string;
+    description?: string;
+    scope: "system";
+    permissionProfile: string;
+    toolProfile: string;
+    defaultExecutionMode: "single" | "parallel-review" | "round-robin";
+    aggregationStrategy?: "first-pass" | "majority" | "merge-summary" | "human-review";
+    maxActiveBindings?: number;
+    requireConsensus?: boolean;
+    riskLevel?: "low" | "medium" | "high" | "critical";
+    requiresApprovalForWrite?: boolean;
+    allowedStages: string[];
+    outputSchemaId?: string;
+    ownerTeam?: string;
+    tags?: string[];
+  };
+  bindings: Array<{
+    bindingKey: string;
+    runtimeAgent: string;
+    label: string;
+    enabled?: boolean;
+    priority: number;
+    model?: string;
+    tags?: string[];
+  }>;
+}
+```
+
+### 7.2 resolve 结果对象
+
+```ts
+interface ResolvedRoleAgentResult {
+  role: {
+    id: string;
+    projectId?: string | null;
+    name: string;
+    scope: "system" | "project";
+    status: "active" | "disabled" | "deprecated";
+    riskLevel: "low" | "medium" | "high" | "critical";
+    allowedStages: string[];
+    permissionProfile: string;
+    toolProfile: string;
+    defaultExecutionMode: "single" | "parallel-review" | "round-robin";
+    aggregationPolicy?: {
+      strategy: "first-pass" | "majority" | "merge-summary" | "human-review";
+      maxActiveBindings?: number;
+      requireConsensus?: boolean;
+    };
+    requiresApprovalForWrite: boolean;
+    outputSchemaId?: string | null;
+    bindings: Array<{
+      bindingId: string;
+      runtimeAgent: string;
+      label: string;
+      enabled: boolean;
+      priority: number;
+      model?: string | null;
+      tags?: string[] | null;
+    }>;
+  };
+  source: {
+    baseScope: "system" | "project";
+    overrideApplied: boolean;
+    policySource: "role-default" | "template-stage";
+  };
+  validation: {
+    executable: boolean;
+    reasons: string[];
+  };
+}
+```
+
+### 7.3 resolve 内部步骤草案
+
+建议拆为两个纯函数和一个路由适配函数：
+
+```ts
+function mergeRoleAgentDefinition(
+  baseRole: RoleAgentRow,
+  projectOverride?: Partial<RoleAgentRow>,
+): RoleAgentRow;
+
+function resolveRoleBindings(
+  baseBindings: RoleAgentBindingRow[],
+  projectBindings?: RoleAgentBindingRow[],
+): RoleAgentBindingRow[];
+
+async function resolveRoleAgentForExecution(input: {
+  roleAgentId: string;
+  projectId?: string;
+  stage?: string;
+  templateId?: string;
+}): Promise<ResolvedRoleAgentResult>;
+```
+
+## 8. workflow-templates routes 草案
 
 ### 7.1 GET /api/workflow-templates
 
@@ -366,9 +664,9 @@ z.object({
 })
 ```
 
-## 8. task-workflows routes 草案
+## 9. task-workflows routes 草案
 
-### 8.1 GET /api/tasks/:taskId/workflow
+### 9.1 GET /api/tasks/:taskId/workflow
 
 用途：
 
@@ -385,7 +683,7 @@ z.object({
 }
 ```
 
-### 8.2 POST /api/tasks/:taskId/workflow/initialize
+### 9.2 POST /api/tasks/:taskId/workflow/initialize
 
 用途：
 
@@ -400,7 +698,7 @@ z.object({
 })
 ```
 
-### 8.3 POST /api/tasks/:taskId/workflow/advance
+### 9.3 POST /api/tasks/:taskId/workflow/advance
 
 用途：
 
@@ -418,27 +716,27 @@ z.object({
 })
 ```
 
-### 8.4 POST /api/tasks/:taskId/workflow/retry-stage
+### 9.4 POST /api/tasks/:taskId/workflow/retry-stage
 
 用途：
 
 - 阶段重试
 
-## 9. role-conclusions routes 草案
+## 10. role-conclusions routes 草案
 
-### 9.1 GET /api/tasks/:taskId/role-conclusions
+### 10.1 GET /api/tasks/:taskId/role-conclusions
 
 用途：
 
 - 按任务读取所有角色聚合结论
 
-### 9.2 GET /api/tasks/:taskId/stages/:stageKey/role-conclusions
+### 10.2 GET /api/tasks/:taskId/stages/:stageKey/role-conclusions
 
 用途：
 
 - 读取某阶段角色结论
 
-### 9.3 POST /api/tasks/:taskId/stages/:stageKey/role-conclusions
+### 10.3 POST /api/tasks/:taskId/stages/:stageKey/role-conclusions
 
 用途：
 
@@ -463,15 +761,15 @@ z.object({
 })
 ```
 
-## 10. developer-change-requests routes 草案
+## 11. developer-change-requests routes 草案
 
-### 10.1 GET /api/tasks/:taskId/developer-change-requests
+### 11.1 GET /api/tasks/:taskId/developer-change-requests
 
 用途：
 
 - 列出开发者修正请求
 
-### 10.2 POST /api/tasks/:taskId/developer-change-requests
+### 11.2 POST /api/tasks/:taskId/developer-change-requests
 
 用途：
 
@@ -493,7 +791,7 @@ z.object({
 })
 ```
 
-### 10.3 PATCH /api/developer-change-requests/:requestId
+### 11.3 PATCH /api/developer-change-requests/:requestId
 
 用途：
 
@@ -508,9 +806,9 @@ z.object({
 })
 ```
 
-## 11. 第一阶段落地建议
+## 12. 第一阶段落地建议
 
-### 11.1 最小 schema 变更
+### 12.1 最小 schema 变更
 
 第一阶段优先新增：
 
@@ -518,17 +816,36 @@ z.object({
 - `roleAgentBindings`
 - `workflowTemplates`
 - `workflowTemplateStages`
+- `roleAgents.allowedStagesJson`
 
 原因：
 
 - 这几张表是主数据，不应继续塞在 JSON 配置里
+- `allowedStages` 是角色边界，不应只靠模板运行时推断
 
-### 11.2 中间兼容策略
+### 12.2 中间兼容策略
 
 - `taskWorkflowRuns` 与 `taskStageRuns` 可先只做 API 草案，不立即强依赖
 - `roleAggregateConclusions` 与 `developerChangeRequests` 第一阶段可继续通过 BFF 聚合读模型输出，并部分保存在 `tasks.strategy`
+- `resolve` 接口第一阶段即可落地，因为它直接服务 BFF 和模板解析，不依赖第二阶段运行态表
+- 默认角色种子可通过 seed 脚本与 `bootstrap-defaults` 接口并行提供
 
-## 12. 建议的挂载方式
+## 13. 默认种子落地策略
+
+建议默认角色种子由两条路径提供：
+
+1. `control-plane/service/src/db/seed.ts` 在新环境初始化时写入默认系统角色和 bindings
+2. `control-plane/service/src/modules/role-agents/bootstrap.ts` 提供幂等 bootstrap 能力，供管理接口调用
+
+bootstrap 执行规则建议：
+
+- 仅处理 `scope=system` 的默认角色
+- 若目标角色不存在则创建
+- 若目标角色存在且未被管理员修改，则允许安全更新
+- 若目标角色存在且已被管理员修改，则默认跳过并记录 `skipped`
+- 项目级 override 永远不由系统种子覆盖
+
+## 14. 建议的挂载方式
 
 建议在服务入口按现有模块风格挂载：
 
@@ -538,9 +855,15 @@ z.object({
 - `/api/tasks/:taskId/role-conclusions`
 - `/api/tasks/:taskId/developer-change-requests`
 
-## 13. 首批验收标准
+其中 `role-agents` 模块内建议再包含：
+
+- `GET /api/role-agents/:roleAgentId/resolve`
+- `POST /api/role-agents/bootstrap-defaults`
+
+## 15. 首批验收标准
 
 1. schema 草案与当前 Drizzle 风格一致。
 2. routes 草案与当前 Hono + zod 风格一致。
 3. 主数据、运行态、聚合结论、修正请求的对象边界清晰。
 4. 第一阶段和第二阶段的落地边界明确，没有一次性引入过多耦合。
+5. 角色注册表实现草案已覆盖 `allowedStages`、resolve 读模型与默认种子补齐。

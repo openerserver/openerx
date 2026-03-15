@@ -649,10 +649,10 @@
         >
           <a-form layout="vertical">
             <a-form-item label="源文件路径 (相对于 opencode-fork/)">
-              <a-input v-model:value="installSource" placeholder=".opencode/plugins/my-plugin.ts" />
+              <a-input :value="installSource" placeholder=".opencode/plugins/my-plugin.ts" @update:value="installSource = String($event ?? '')" />
             </a-form-item>
             <a-form-item label="插件名称 (可选)">
-              <a-input v-model:value="installName" placeholder="my-plugin" />
+              <a-input :value="installName" placeholder="my-plugin" @update:value="installName = String($event ?? '')" />
             </a-form-item>
           </a-form>
         </a-modal>
@@ -713,7 +713,7 @@
 
           <a-card title="规划流水线" size="small" style="margin-top: 16px">
             <a-form-item label="启用 Prometheus/Metis/Momus 规划流水线">
-              <a-switch v-model:checked="strategyData.enablePipeline" />
+              <a-switch :checked="strategyData.enablePipeline" @update:checked="strategyData.enablePipeline = Boolean($event)" />
             </a-form-item>
           </a-card>
 
@@ -737,10 +737,11 @@
                       <template #extra>
                         <a-space @click.stop>
                           <a-switch
-                            v-model:checked="hook.enabled"
+                            :checked="hook.enabled"
                             checked-children="启用"
                             un-checked-children="停用"
                             size="small"
+                            @update:checked="hook.enabled = Boolean($event)"
                           />
                           <a-button size="small" danger @click.stop="removeHook(hook.id)">删除</a-button>
                         </a-space>
@@ -819,10 +820,11 @@
                 <template #extra>
                   <a-space @click.stop>
                     <a-switch
-                      v-model:checked="tpl.enabled"
+                      :checked="tpl.enabled"
                       checked-children="启用"
                       un-checked-children="停用"
                       size="small"
+                      @update:checked="tpl.enabled = Boolean($event)"
                     />
                     <a-button size="small" danger @click.stop="removeTemplate(idx)">删除</a-button>
                   </a-space>
@@ -839,7 +841,7 @@
                     </a-col>
                     <a-col :span="8">
                       <a-form-item label="执行模式">
-                        <a-select v-model:value="tpl.mode">
+                        <a-select :value="tpl.mode" @update:value="tpl.mode = normalizeTemplateMode($event)">
                           <a-select-option value="single">单一执行</a-select-option>
                           <a-select-option value="parallel">并行竞争</a-select-option>
                         </a-select>
@@ -915,7 +917,7 @@
             />
             <a-form layout="vertical">
               <a-form-item label="启用裁判">
-                <a-switch v-model:checked="strategyData.judge.enabled" :disabled="!hasEnabledParallelTemplate" />
+                <a-switch :checked="strategyData.judge.enabled" :disabled="!hasEnabledParallelTemplate" @update:checked="strategyData.judge.enabled = Boolean($event)" />
               </a-form-item>
               <a-row :gutter="12">
                 <a-col :span="8">
@@ -948,7 +950,7 @@
                 </a-col>
                 <a-col :span="8">
                   <a-form-item label="选择策略">
-                    <a-select v-model:value="strategyData.judge.selectionStrategy">
+                    <a-select :value="strategyData.judge.selectionStrategy" @update:value="strategyData.judge.selectionStrategy = normalizeJudgeSelectionStrategy($event)">
                       <a-select-option value="judge-pick">裁判选择</a-select-option>
                       <a-select-option value="highest-score">最高评分</a-select-option>
                     </a-select>
@@ -993,30 +995,30 @@
               <a-row :gutter="16">
                 <a-col :span="12">
                   <a-form-item label="失败自动重试">
-                    <a-switch v-model:checked="policyData.autoRetryOnFailure" />
+                    <a-switch :checked="policyData.autoRetryOnFailure" @update:checked="policyData.autoRetryOnFailure = Boolean($event)" />
                   </a-form-item>
                 </a-col>
                 <a-col :span="12">
                   <a-form-item label="最大重试次数">
-                    <a-input-number v-model:value="policyData.maxRetries" :min="0" :max="10" />
+                    <a-input-number :value="policyData.maxRetries" :min="0" :max="10" @update:value="policyData.maxRetries = Number($event ?? 0)" />
                   </a-form-item>
                 </a-col>
               </a-row>
               <a-form-item label="可重试错误类型">
-                <a-select mode="tags" v-model:value="policyData.retryableErrors" style="width: 100%" />
+                <a-select mode="tags" :value="policyData.retryableErrors" style="width: 100%" @update:value="policyData.retryableErrors = Array.isArray($event) ? $event.map(String) : []" />
               </a-form-item>
               <a-form-item label="重试前需人工审批">
-                <a-switch v-model:checked="policyData.requireApprovalOnRetry" />
+                <a-switch :checked="policyData.requireApprovalOnRetry" @update:checked="policyData.requireApprovalOnRetry = Boolean($event)" />
               </a-form-item>
               <a-row :gutter="16">
                 <a-col :span="12">
                   <a-form-item label="启用模型 Fallback">
-                    <a-switch v-model:checked="policyData.enableFallback" />
+                    <a-switch :checked="policyData.enableFallback" @update:checked="policyData.enableFallback = Boolean($event)" />
                   </a-form-item>
                 </a-col>
                 <a-col :span="12">
                   <a-form-item label="Fallback 模型">
-                    <a-input v-model:value="policyData.fallbackModel" placeholder="provider/model-id" :disabled="!policyData.enableFallback" />
+                    <a-input :value="policyData.fallbackModel" placeholder="provider/model-id" :disabled="!policyData.enableFallback" @update:value="policyData.fallbackModel = String($event ?? '')" />
                   </a-form-item>
                 </a-col>
               </a-row>
@@ -1170,6 +1172,14 @@ const reconcileAuditEvents = ref<AuditEvent[]>([]);
 const adminUsers = ref<AdminUser[]>([]);
 function setActiveTab(value: unknown) {
   activeTab.value = String(value);
+}
+
+function normalizeTemplateMode(value: unknown): WorkflowTemplate["mode"] {
+  return value === "parallel" ? "parallel" : "single";
+}
+
+function normalizeJudgeSelectionStrategy(value: unknown): JudgeConfig["selectionStrategy"] {
+  return value === "highest-score" ? "highest-score" : "judge-pick";
 }
 
 function prefillProviderDraft(draft: { key: string; api?: string } | undefined) {

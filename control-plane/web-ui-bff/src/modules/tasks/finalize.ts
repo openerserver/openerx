@@ -1,5 +1,6 @@
 import { type ExecutionPlan } from "../../lib/orchestration-strategy";
 import { cpFetch } from "../../lib/control-plane-client";
+import { syncTaskWorkflowTerminalState } from "./workflow-sync";
 
 type FinalizedTaskStatus = "completed" | "failed" | "cancelled";
 
@@ -193,5 +194,10 @@ export async function finalizeTaskState(input: FinalizeTaskStateInput): Promise<
   }
 
   await deactivateTaskSession(input.authorization, input.taskId, resolvedSessionId);
+  await syncTaskWorkflowTerminalState({
+    authorization: input.authorization,
+    taskId: input.taskId,
+    status: input.status,
+  });
   return true;
 }

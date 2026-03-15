@@ -526,6 +526,7 @@ export const roleAgents = sqliteTable("role_agents", {
   requiresApprovalForWrite: integer("requires_approval_for_write", { mode: "boolean" })
     .notNull()
     .default(false),
+  allowedStagesJson: text("allowed_stages_json", { mode: "json" }).$type<string[]>().notNull(),
   outputSchemaId: text("output_schema_id"),
   tagsJson: text("tags_json", { mode: "json" }).$type<string[]>(),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
@@ -537,6 +538,7 @@ export const roleAgentBindings = sqliteTable("role_agent_bindings", {
   roleAgentId: text("role_agent_id")
     .notNull()
     .references(() => roleAgents.id),
+  projectId: text("project_id").references(() => projects.id),
   bindingKey: text("binding_key").notNull(),
   runtimeAgent: text("runtime_agent").notNull(),
   label: text("label").notNull(),
@@ -544,6 +546,38 @@ export const roleAgentBindings = sqliteTable("role_agent_bindings", {
   priority: integer("priority").notNull().default(1),
   model: text("model"),
   tagsJson: text("tags_json", { mode: "json" }).$type<string[]>(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const roleAgentProjectOverrides = sqliteTable("role_agent_project_overrides", {
+  id: text("id").primaryKey(),
+  roleAgentId: text("role_agent_id")
+    .notNull()
+    .references(() => roleAgents.id),
+  projectId: text("project_id")
+    .notNull()
+    .references(() => projects.id),
+  name: text("name"),
+  description: text("description"),
+  status: text("status", { enum: ["active", "disabled", "deprecated"] }),
+  ownerTeam: text("owner_team"),
+  permissionProfile: text("permission_profile"),
+  toolProfile: text("tool_profile"),
+  defaultExecutionMode: text("default_execution_mode", {
+    enum: ["single", "parallel-review", "round-robin"],
+  }),
+  aggregationStrategy: text("aggregation_strategy", {
+    enum: ["first-pass", "majority", "merge-summary", "human-review"],
+  }),
+  maxActiveBindings: integer("max_active_bindings"),
+  requireConsensus: integer("require_consensus", { mode: "boolean" }),
+  riskLevel: text("risk_level", { enum: ["low", "medium", "high", "critical"] }),
+  requiresApprovalForWrite: integer("requires_approval_for_write", { mode: "boolean" }),
+  allowedStagesJson: text("allowed_stages_json", { mode: "json" }).$type<string[]>(),
+  outputSchemaId: text("output_schema_id"),
+  tagsJson: text("tags_json", { mode: "json" }).$type<string[]>(),
+  bindingsMode: text("bindings_mode", { enum: ["inherit", "replace"] }).notNull().default("inherit"),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
@@ -638,4 +672,60 @@ export const taskStageRuns = sqliteTable("task_stage_runs", {
   artifactsSummaryJson: text("artifacts_summary_json", { mode: "json" }),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const roleAggregateConclusions = sqliteTable("role_aggregate_conclusions", {
+  id: text("id").primaryKey(),
+  taskId: text("task_id")
+    .notNull()
+    .references(() => tasks.id),
+  taskStageRunId: text("task_stage_run_id"),
+  roleAgentId: text("role_agent_id").notNull(),
+  stage: text("stage").notNull(),
+  aggregationStrategy: text("aggregation_strategy", {
+    enum: ["first-pass", "majority", "merge-summary", "human-review"],
+  }).notNull(),
+  status: text("status", {
+    enum: ["aligned", "partially-aligned", "conflicted", "escalated", "blocked"],
+  }).notNull(),
+  finalDecision: text("final_decision", {
+    enum: ["allow", "notify-developer", "needs-approval", "block", "observe", "human-review"],
+  }).notNull(),
+  aggregateRiskLevel: text("aggregate_risk_level", {
+    enum: ["low", "medium", "high", "critical"],
+  }).notNull(),
+  confidenceScore: real("confidence_score").notNull().default(0),
+  consensusScore: real("consensus_score").notNull().default(0),
+  winningRationale: text("winning_rationale").notNull(),
+  mergedFindingsJson: text("merged_findings_json", { mode: "json" }).$type<Record<string, unknown>[]>(),
+  minorityFindingsJson: text("minority_findings_json", { mode: "json" }).$type<Record<string, unknown>[]>(),
+  conflictsJson: text("conflicts_json", { mode: "json" }).$type<Record<string, unknown>[]>(),
+  approvalRecommendationJson: text("approval_recommendation_json", { mode: "json" }).$type<Record<string, unknown>>(),
+  generatedAt: text("generated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const developerChangeRequests = sqliteTable("developer_change_requests", {
+  id: text("id").primaryKey(),
+  taskId: text("task_id")
+    .notNull()
+    .references(() => tasks.id),
+  taskStageRunId: text("task_stage_run_id"),
+  sourceRoleAgentId: text("source_role_agent_id").notNull(),
+  assignedRoleAgentId: text("assigned_role_agent_id").notNull().default("role.developer"),
+  priority: text("priority", { enum: ["low", "medium", "high", "critical"] }).notNull(),
+  title: text("title").notNull(),
+  summary: text("summary").notNull(),
+  requiredChangesJson: text("required_changes_json", { mode: "json" }).$type<string[]>().notNull(),
+  relatedFindingKeysJson: text("related_finding_keys_json", { mode: "json" }).$type<string[]>(),
+  blocking: integer("blocking", { mode: "boolean" }).notNull().default(false),
+  approvalRequired: integer("approval_required", { mode: "boolean" }).notNull().default(false),
+  status: text("status", {
+    enum: ["open", "acknowledged", "in-progress", "resolved", "won't-fix"],
+  }).notNull().default("open"),
+  resolutionNote: text("resolution_note"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  resolvedAt: text("resolved_at"),
 });

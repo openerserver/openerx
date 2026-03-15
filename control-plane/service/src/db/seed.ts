@@ -2,12 +2,15 @@ import { Database } from "bun:sqlite";
 import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import * as schema from "./schema";
+import { ensureRuntimeTables } from "./runtime-schema";
+import { bootstrapDefaultRoleAgents } from "../modules/role-agents/bootstrap";
 
 const DATABASE_URL = process.env.DATABASE_URL || "./data/openerx.db";
 
 const sqlite = new Database(DATABASE_URL, { create: true });
 sqlite.exec("PRAGMA journal_mode = WAL");
 sqlite.exec("PRAGMA foreign_keys = ON");
+ensureRuntimeTables(sqlite);
 
 const db = drizzle(sqlite, { schema });
 const BAD_TIMESTAMP_LITERAL = "(datetime('now'))";
@@ -36,6 +39,8 @@ async function seed() {
   normalizeLegacyCreatedAt("budget_configs");
   normalizeLegacyCreatedAt("tasks");
   normalizeLegacyCreatedAt("sessions", "started_at");
+  normalizeLegacyCreatedAt("role_agents");
+  normalizeLegacyCreatedAt("role_agent_bindings");
 
   // ── 1. Default Organization ───────────────────────────────────
   const orgId = "org-default";
@@ -188,6 +193,18 @@ async function seed() {
       .run();
     console.log("  ✓ Created default budget config ($500/month)");
   }
+
+  // ── 7. Default Role Agents ───────────────────────────────────
+  const roleBootstrap = await bootstrapDefaultRoleAgents(db, {
+    applyBindings: true,
+    overwriteUnmodifiedRecords: false,
+  });
+  console.log(
+    `  ✓ Bootstrapped role agents (created: ${roleBootstrap.createdRoles.length}, updated: ${roleBootstrap.updatedRoles.length}, skipped: ${roleBootstrap.skippedRoles.length})`,
+  );
+  console.log(
+    `  ✓ Bootstrapped role bindings (created: ${roleBootstrap.createdBindings.length}, updated: ${roleBootstrap.updatedBindings.length}, skipped: ${roleBootstrap.skippedBindings.length})`,
+  );
 
   console.log("\nSeed complete! Login with:");
   console.log(`  Username: ${adminUsername}`);

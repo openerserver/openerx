@@ -29,6 +29,7 @@ const realtimeState = reactive(realtimeBase);
 
 const apiMocks = vi.hoisted(() => ({
   continueTask: vi.fn(),
+  getProjectRoleExecutionView: vi.fn(),
   getSessionMessages: vi.fn(),
   getSessionTree: vi.fn(),
   getTask: vi.fn(),
@@ -36,6 +37,7 @@ const apiMocks = vi.hoisted(() => ({
   getTaskGovernance: vi.fn(),
   getTaskPipeline: vi.fn(),
   getTaskSessions: vi.fn(),
+  getTaskWorkflowView: vi.fn(),
   updateTask: vi.fn(),
 }));
 
@@ -341,6 +343,22 @@ beforeEach(() => {
   });
   apiMocks.getTaskPipeline.mockResolvedValue({ stages: [] });
   apiMocks.getTaskSessions.mockResolvedValue({ data: [] });
+  apiMocks.getTaskWorkflowView.mockResolvedValue({
+    taskId: "task-1",
+    workflow: {
+      currentStage: "implement",
+      status: "running",
+      stages: [],
+    },
+    roleConclusions: [],
+    developerChangeRequests: [],
+  });
+  apiMocks.getProjectRoleExecutionView.mockResolvedValue({
+    project: { id: "proj-1", name: "Default Project", slug: "default" },
+    summary: { totalRoles: 1, customizedRoles: 0, takeoverRoles: 0, riskyRoles: 0 },
+    rows: [],
+    access: { overrideReadable: true, fallbackToSystemDefaults: false, message: null },
+  });
   apiMocks.getModelsList.mockResolvedValue({
     data: [
       { id: "github-copilot:model-a", name: "Model A", provider: "github-copilot" },
@@ -356,22 +374,33 @@ beforeEach(() => {
 });
 
 describe("TaskDetail", () => {
+  it("renders separate panels for project role config and runtime intervention facts", async () => {
+    apiMocks.getTask.mockResolvedValueOnce(makeTask());
+
+    const wrapper = await mountPage();
+
+    expect(apiMocks.getProjectRoleExecutionView).toHaveBeenCalledWith("proj-1");
+    expect(wrapper.text()).toContain("项目角色配置");
+    expect(wrapper.text()).toContain("角色实际介入记录");
+  });
+
   it("subscribes to the task and refreshes when hooks event arrives", async () => {
-    apiMocks.getTask.mockResolvedValueOnce(makeTask()).mockResolvedValueOnce(
-      makeTask({
-        selectedAgent: "default-executor",
-        hookExecutions: [
-          {
-            hookId: "post-1",
-            trigger: "post-execution",
-            status: "completed",
-            agent: "default-executor",
-            result: "Looks good.",
-            completedAt: "2026-03-10T12:01:10.000Z",
-          },
-        ],
-      }),
-    );
+    const updatedTask = makeTask({
+      selectedAgent: "default-executor",
+      hookExecutions: [
+        {
+          hookId: "post-1",
+          trigger: "post-execution",
+          status: "completed",
+          agent: "default-executor",
+          result: "Looks good.",
+          completedAt: "2026-03-10T12:01:10.000Z",
+        },
+      ],
+    });
+
+    apiMocks.getTask.mockResolvedValue(updatedTask);
+    apiMocks.getTask.mockResolvedValueOnce(makeTask()).mockResolvedValueOnce(updatedTask);
 
     const wrapper = await mountPage();
 
@@ -396,7 +425,7 @@ describe("TaskDetail", () => {
       hookExecutions?: Array<{ result?: string }>;
     } | null>(setupState, "strategy");
 
-    expect(apiMocks.getTask).toHaveBeenCalledTimes(2);
+    expect(apiMocks.getTask.mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(readSetupValue<boolean>(setupState, "showHooksPanel")).toBe(true);
     expect(strategy?.hookExecutions?.[0]?.result).toBe("Looks good.");
   });

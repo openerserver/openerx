@@ -24,6 +24,25 @@ type QueueType = "attention" | "running" | "recent";
 type BlockerType = "approval" | "stalled" | "manual_resume" | "failed" | "stopped" | null;
 type RiskLevel = "low" | "medium" | "high" | "critical" | null;
 
+interface RunFilterOptions {
+  projectId?: string;
+  taskId?: string;
+  agentRunId?: string;
+  from?: string;
+  to?: string;
+  agentType?: string;
+  model?: string;
+}
+
+interface QueueFilterOptions {
+  ownerScope?: string;
+  status?: string;
+  search?: string;
+  requiresIntervention?: boolean;
+  riskLevel?: string;
+  approvalBlocked?: boolean;
+}
+
 const ROLE_HIERARCHY: Record<Role, number> = {
   platform_admin: 5,
   org_admin: 4,
@@ -110,6 +129,25 @@ interface HydratedQueueItem {
   tokenUsed: number;
   resultSummary: string | null;
   guidanceCount: number;
+  primaryAttentionReason: string | null;
+  quickActions: string[];
+  actionPermissions: {
+    canPause: boolean;
+    canResume: boolean;
+    canTerminate: boolean;
+    canInjectGuidance: boolean;
+    canViewApproval: boolean;
+    canViewAudit: boolean;
+    canViewCodeChanges: boolean;
+    canExport: boolean;
+  };
+}
+
+interface AnalyticsContext {
+  baseRuns: BaseRunRow[];
+  items: HydratedQueueItem[];
+  scopedItems: HydratedQueueItem[];
+  runsById: Map<string, BaseRunRow>;
 }
 
 function parseDate(value?: string | null): number | null {
@@ -141,6 +179,53 @@ function parseBool(value: string | undefined): boolean | undefined {
   if (value === "true") return true;
   if (value === "false") return false;
   return undefined;
+}
+
+function parseTimestampQuery(value?: string): number | null {
+  if (!value) return null;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function parseProviderId(modelUsed?: string | null) {
+  const value = modelUsed?.trim();
+  if (!value) return "";
+  const colonIndex = value.indexOf(":");
+  if (colonIndex > 0) return value.slice(0, colonIndex);
+  const slashIndex = value.indexOf("/");
+  if (slashIndex > 0) return value.slice(0, slashIndex);
+  return value;
+}
+
+function roundPercentage(numerator: number, denominator: number) {
+  if (denominator <= 0) return 0;
+  return Number(((numerator / denominator) * 100).toFixed(2));
+}
+
+function average(numbers: number[]) {
+  if (numbers.length === 0) return null;
+  return Math.round(numbers.reduce((sum, value) => sum + value, 0) / numbers.length);
+}
+
+function resolveViewScope(user: JWTPayload, ownerScope?: string, projectId?: string) {
+  if (ownerScope === "mine") return "mine" as const;
+  if (projectId) return "project" as const;
+  return (ROLE_HIERARCHY[user.role as Role] ?? 0) >= ROLE_HIERARCHY.org_admin ? "global" as const : "project" as const;
+}
+
+function buildActionPermissions(user: JWTPayload, status: AgentRunStatus) {
+  const canOperate = user.role !== "viewer";
+  const isAdmin = (ROLE_HIERARCHY[user.role as Role] ?? 0) >= ROLE_HIERARCHY.project_admin;
+  return {
+    canPause: canOperate && status === "running",
+    canResume: canOperate && status === "paused",
+    canTerminate: canOperate && (status === "running" || status === "paused"),
+    canInjectGuidance: canOperate,
+    canViewApproval: canOperate,
+    canViewAudit: isAdmin,
+    canViewCodeChanges: true,
+    canExport: isAdmin,
+  };
 }
 
 function maxRiskLevel(levels: RiskLevel[]): RiskLevel {
@@ -190,7 +275,155 @@ function buildSummaryText(args: {
   return formatChangesSummary(args.run.taskChangesSummary) || "暂无结构化摘要。";
 }
 
+function resolveQuickActions(status: AgentRunStatus, blockerType: BlockerType) {
+  const actions: string[] = [];
+  if (status === "running") actions.push("pause", "inject_guidance");
+  if (status === "paused") actions.push("resume", "inject_guidance", "terminate");
+  if (status === "failed" || blockerType === "approval" || blockerType === "stalled") {
+    actions.push("review", "inject_guidance");
+  }
+  if (status === "running" || status === "paused") actions.push("terminate");
+  return Array.from(new Set(actions));
+}
+
+function readRunFilters(c: { req: { query: (name: string) => string | undefined } }): RunFilterOptions {
+  return {
+    projectId: c.req.query("projectId"),
+    taskId: c.req.query("taskId"),
+    agentRunId: c.req.query("agentRunId"),
+    from: c.req.query("from"),
+    to: c.req.query("to"),
+    agentType: c.req.query("agentType"),
+    model: c.req.query("model"),
+  };
+}
+
+function readQueueFilters(c: { req: { query: (name: string) => string | undefined } }): QueueFilterOptions {
+  return {
+    ownerScope: c.req.query("ownerScope") || undefined,
+    status: c.req.query("status") || undefined,
+    search: c.req.query("search") || undefined,
+    requiresIntervention: parseBool(c.req.query("requiresIntervention")),
+    riskLevel: c.req.query("riskLevel") || undefined,
+    approvalBlocked: parseBool(c.req.query("approvalBlocked")),
+  };
+}
+
+async function loadAnalyticsContext(
+  user: JWTPayload,
+  runFilters: RunFilterOptions,
+  queueFilters: QueueFilterOptions,
+): Promise<AnalyticsContext> {
+  const baseRuns = await loadBaseRuns(user, runFilters);
+  const runIds = baseRuns.map((run) => run.agentRunId);
+  const related = await loadRelatedMaps(runIds);
+  const items = baseRuns.map((run) =>
+    hydrateQueueItem(
+      user,
+      run,
+      related.approvalsByRunId.get(run.agentRunId) || [],
+      related.auditsByRunId.get(run.agentRunId) || [],
+      related.changesByRunId.get(run.agentRunId) || [],
+    ),
+  );
+  const runsById = new Map(baseRuns.map((run) => [run.agentRunId, run]));
+  const scopedItems = applySharedFilters(items, queueFilters, user.sub, runsById);
+  return { baseRuns, items, scopedItems, runsById };
+}
+
+function normalizeFailureReason(item: HydratedQueueItem) {
+  const text = `${item.blockerReason || ""} ${item.resultSummary || ""}`.toLowerCase();
+  if (item.blockerType === "approval") return "审批阻塞";
+  if (item.blockerType === "stalled") return "长时间无进展";
+  if (item.blockerType === "manual_resume") return "等待人工恢复";
+  if (item.blockerType === "stopped") return "人工停止待处理";
+  if (text.includes("timeout") || text.includes("超时")) return "执行超时";
+  if (text.includes("auth") || text.includes("权限") || text.includes("credential") || text.includes("凭证")) {
+    return "认证或权限异常";
+  }
+  if (text.includes("model") || text.includes("provider") || text.includes("copilot")) {
+    return "模型或 Provider 异常";
+  }
+  if (text.includes("json") || text.includes("schema") || text.includes("parse") || text.includes("结构化")) {
+    return "结构化结果异常";
+  }
+  return item.blockerType === "failed" || item.status === "failed" ? "执行失败" : "需要人工处理";
+}
+
+function buildBreakdownItems(entries: Array<[string, number]>, total: number) {
+  return entries
+    .filter(([, count]) => count > 0)
+    .sort((left, right) => right[1] - left[1])
+    .map(([key, count]) => ({
+      key,
+      label: key,
+      count,
+      share: roundPercentage(count, total),
+    }));
+}
+
+function buildRanking(
+  items: HydratedQueueItem[],
+  keySelector: (item: HydratedQueueItem) => string,
+  labelSelector: (item: HydratedQueueItem) => string,
+) {
+  const grouped = new Map<string, { label: string; items: HydratedQueueItem[] }>();
+  for (const item of items) {
+    const key = keySelector(item).trim() || "unknown";
+    const existing = grouped.get(key);
+    if (existing) {
+      existing.items.push(item);
+      continue;
+    }
+    grouped.set(key, { label: labelSelector(item).trim() || key, items: [item] });
+  }
+
+  return Array.from(grouped.entries())
+    .map(([key, group]) => {
+      const ended = group.items.filter((item) => ["completed", "failed", "stopped", "terminated"].includes(item.status));
+      const completedRuns = group.items.filter((item) => item.status === "completed").length;
+      const failedRuns = group.items.filter((item) => ["failed", "stopped", "terminated"].includes(item.status)).length;
+      const interventionCount = group.items.filter((item) => item.guidanceCount > 0 || item.requiresIntervention).length;
+      const durationValues = ended
+        .map((item) => item.durationMs)
+        .filter((value): value is number => value != null && Number.isFinite(value));
+      const tokenValues = group.items
+        .map((item) => item.tokenUsed)
+        .filter((value) => Number.isFinite(value) && value > 0);
+      return {
+        key,
+        label: group.label,
+        totalRuns: group.items.length,
+        completedRuns,
+        failedRuns,
+        attentionCount: group.items.filter((item) => item.requiresIntervention).length,
+        interventionCount,
+        successRate: roundPercentage(completedRuns, ended.length || group.items.length),
+        failureRate: roundPercentage(failedRuns, ended.length || group.items.length),
+        avgDurationMs: average(durationValues),
+        avgTokenUsed: average(tokenValues),
+      };
+    })
+    .sort((left, right) => right.totalRuns - left.totalRuns || right.failureRate - left.failureRate)
+    .slice(0, 6);
+}
+
+function toTimelineBucketKey(timestamp: number, bucketUnit: "hour" | "day") {
+  const date = new Date(timestamp);
+  if (bucketUnit === "hour") {
+    return date.toISOString().slice(0, 13) + ":00:00.000Z";
+  }
+  return date.toISOString().slice(0, 10);
+}
+
+function toTimelineLabel(bucketKey: string, bucketUnit: "hour" | "day") {
+  return bucketUnit === "hour"
+    ? bucketKey.slice(5, 13).replace("T", " ")
+    : bucketKey.slice(5, 10);
+}
+
 function hydrateQueueItem(
+  user: JWTPayload,
   run: BaseRunRow,
   approvals: ApprovalRecord[],
   audits: AuditRecord[],
@@ -269,11 +502,14 @@ function hydrateQueueItem(
     tokenUsed: run.tokenUsed,
     resultSummary: summary,
     guidanceCount,
+    primaryAttentionReason: blockerType ? summary : null,
+    quickActions: resolveQuickActions(run.status, blockerType),
+    actionPermissions: buildActionPermissions(user, run.status),
   };
 }
 
-async function loadBaseRuns(user: JWTPayload, projectId?: string): Promise<BaseRunRow[]> {
-  if (projectId && !hasProjectAccess(user, projectId)) {
+async function loadBaseRuns(user: JWTPayload, filters: RunFilterOptions = {}): Promise<BaseRunRow[]> {
+  if (filters.projectId && !hasProjectAccess(user, filters.projectId)) {
     return [];
   }
 
@@ -283,10 +519,16 @@ async function loadBaseRuns(user: JWTPayload, projectId?: string): Promise<BaseR
   }
 
   const conditions = [];
-  if (projectId) {
-    conditions.push(eq(tasks.projectId, projectId));
+  if (filters.projectId) {
+    conditions.push(eq(tasks.projectId, filters.projectId));
   } else if (accessibleProjects) {
     conditions.push(inArray(tasks.projectId, accessibleProjects));
+  }
+  if (filters.taskId) {
+    conditions.push(eq(tasks.id, filters.taskId));
+  }
+  if (filters.agentRunId) {
+    conditions.push(eq(agentRuns.id, filters.agentRunId));
   }
 
   const rows = await db
@@ -339,6 +581,11 @@ async function loadBaseRuns(user: JWTPayload, projectId?: string): Promise<BaseR
     }
   }
 
+  const fromMs = parseTimestampQuery(filters.from);
+  const toMs = parseTimestampQuery(filters.to);
+  const normalizedAgentType = filters.agentType?.trim().toLowerCase();
+  const normalizedModel = filters.model?.trim().toLowerCase();
+
   return rows.map((row) => ({
     ...row,
     tokenUsed:
@@ -347,7 +594,27 @@ async function loadBaseRuns(user: JWTPayload, projectId?: string): Promise<BaseR
         : row.sessionId
           ? (tokenUsageBySessionId.get(row.sessionId) ?? 0)
           : 0,
-  })) as BaseRunRow[];
+  })).filter((row) => {
+    if (normalizedAgentType && !row.agentType.toLowerCase().includes(normalizedAgentType)) {
+      return false;
+    }
+    if (normalizedModel) {
+      const modelUsed = row.modelUsed?.toLowerCase() || "";
+      const providerId = parseProviderId(row.modelUsed).toLowerCase();
+      if (!modelUsed.includes(normalizedModel) && providerId !== normalizedModel) {
+        return false;
+      }
+    }
+
+    const activityMs = parseDate(row.finishedAt) ?? parseDate(row.startedAt) ?? parseDate(row.createdAt);
+    if (fromMs != null && activityMs != null && activityMs < fromMs) {
+      return false;
+    }
+    if (toMs != null && activityMs != null && activityMs > toMs) {
+      return false;
+    }
+    return true;
+  }) as BaseRunRow[];
 }
 
 async function loadRelatedMaps(runIds: string[]) {
@@ -401,17 +668,55 @@ async function loadRelatedMaps(runIds: string[]) {
   return { approvalsByRunId, auditsByRunId, changesByRunId };
 }
 
-function filterQueueItems(
+function applySharedFilters(
   items: HydratedQueueItem[],
-  queue: QueueType,
-  ownerScope: string | undefined,
+  filters: QueueFilterOptions,
   userId: string,
   runsById: Map<string, BaseRunRow>,
 ) {
   let filtered = items;
-  if (ownerScope === "mine") {
+  if (filters.ownerScope === "mine") {
     filtered = filtered.filter((item) => runsById.get(item.agentRunId)?.taskUserId === userId);
   }
+
+  if (filters.status) {
+    filtered = filtered.filter((item) => item.status === filters.status);
+  }
+  if (filters.requiresIntervention !== undefined) {
+    filtered = filtered.filter((item) => item.requiresIntervention === filters.requiresIntervention);
+  }
+  if (filters.riskLevel) {
+    filtered = filtered.filter((item) => item.riskLevel === filters.riskLevel);
+  }
+  if (filters.approvalBlocked !== undefined) {
+    filtered = filtered.filter((item) => (item.blockerType === "approval") === filters.approvalBlocked);
+  }
+  if (filters.search) {
+    const search = filters.search.trim().toLowerCase();
+    if (search) {
+      filtered = filtered.filter((item) => {
+        const run = runsById.get(item.agentRunId);
+        return item.agentRunId.toLowerCase().includes(search)
+          || item.agentType.toLowerCase().includes(search)
+          || item.taskId.toLowerCase().includes(search)
+          || item.taskTitle.toLowerCase().includes(search)
+          || (item.projectName || "").toLowerCase().includes(search)
+          || (run?.modelUsed || "").toLowerCase().includes(search);
+      });
+    }
+  }
+
+  return filtered;
+}
+
+function filterQueueItems(
+  items: HydratedQueueItem[],
+  queue: QueueType,
+  filters: QueueFilterOptions,
+  userId: string,
+  runsById: Map<string, BaseRunRow>,
+) {
+  const filtered = applySharedFilters(items, filters, userId, runsById);
   if (queue === "attention") {
     return filtered.filter((item) => item.requiresIntervention);
   }
@@ -429,13 +734,15 @@ function filterQueueItems(
 
 agentRunRoutes.get("/overview", async (c) => {
   const user = c.get("user");
-  const projectId = c.req.query("projectId");
-  const ownerScope = c.req.query("ownerScope");
-  const baseRuns = await loadBaseRuns(user, projectId);
+  const filters = readRunFilters(c);
+  const sharedFilters = readQueueFilters(c);
+  const ownerScope = sharedFilters.ownerScope;
+  const baseRuns = await loadBaseRuns(user, filters);
   const runIds = baseRuns.map((run) => run.agentRunId);
   const related = await loadRelatedMaps(runIds);
   const items = baseRuns.map((run) =>
     hydrateQueueItem(
+      user,
       run,
       related.approvalsByRunId.get(run.agentRunId) || [],
       related.auditsByRunId.get(run.agentRunId) || [],
@@ -443,19 +750,21 @@ agentRunRoutes.get("/overview", async (c) => {
     ),
   );
   const runsById = new Map(baseRuns.map((run) => [run.agentRunId, run]));
-  const attention = filterQueueItems(items, "attention", ownerScope, user.sub, runsById);
-  const running = filterQueueItems(items, "running", ownerScope, user.sub, runsById);
-  const recent = filterQueueItems(items, "recent", ownerScope, user.sub, runsById);
+  const scopedItems = applySharedFilters(items, sharedFilters, user.sub, runsById);
+  const attention = filterQueueItems(items, "attention", sharedFilters, user.sub, runsById);
+  const running = filterQueueItems(items, "running", sharedFilters, user.sub, runsById);
+  const recent = filterQueueItems(items, "recent", sharedFilters, user.sub, runsById);
   const endedRecent = recent.filter((item) => ["completed", "failed", "stopped", "terminated"].includes(item.status));
   const failedRecent = endedRecent.filter((item) => ["failed", "stopped", "terminated"].includes(item.status));
   const avgDurationMs = endedRecent.length > 0
     ? Math.round(endedRecent.reduce((sum, item) => sum + (item.durationMs || 0), 0) / endedRecent.length)
     : null;
-  const humanInterventionRate = items.length > 0
-    ? Number(((items.filter((item) => item.guidanceCount > 0 || item.requiresIntervention).length / items.length) * 100).toFixed(2))
+  const humanInterventionRate = scopedItems.length > 0
+    ? Number(((scopedItems.filter((item) => item.guidanceCount > 0 || item.requiresIntervention).length / scopedItems.length) * 100).toFixed(2))
     : 0;
 
   return c.json({
+    viewScope: resolveViewScope(user, ownerScope, filters.projectId),
     summary: {
       attentionCount: attention.length,
       runningCount: running.length,
@@ -469,26 +778,31 @@ agentRunRoutes.get("/overview", async (c) => {
       running: running.length,
       recent: recent.length,
     },
+    blockerBreakdown: {
+      failedHighRisk: scopedItems.filter((item) => item.blockerType === "failed" && (item.riskLevel === "high" || item.riskLevel === "critical")).length,
+      approvalBlocked: scopedItems.filter((item) => item.blockerType === "approval").length,
+      pausedAwaitingResume: scopedItems.filter((item) => item.blockerType === "manual_resume").length,
+      stalled: scopedItems.filter((item) => item.blockerType === "stalled").length,
+      stoppedPendingReview: scopedItems.filter((item) => item.blockerType === "stopped").length,
+    },
     generatedAt: new Date().toISOString(),
   });
 });
 
 agentRunRoutes.get("/queues", async (c) => {
   const user = c.get("user");
-  const projectId = c.req.query("projectId");
-  const ownerScope = c.req.query("ownerScope");
+  const filters = readRunFilters(c);
   const queue = (c.req.query("queue") || "attention") as QueueType;
   const page = parsePositiveInt(c.req.query("page"), 1);
   const pageSize = Math.min(parsePositiveInt(c.req.query("pageSize"), 20), 100);
-  const statusFilter = c.req.query("status");
-  const search = (c.req.query("search") || "").trim().toLowerCase();
-  const requiresIntervention = parseBool(c.req.query("requiresIntervention"));
+  const filterOptions = readQueueFilters(c);
 
-  const baseRuns = await loadBaseRuns(user, projectId);
+  const baseRuns = await loadBaseRuns(user, filters);
   const runIds = baseRuns.map((run) => run.agentRunId);
   const related = await loadRelatedMaps(runIds);
   const items = baseRuns.map((run) =>
     hydrateQueueItem(
+      user,
       run,
       related.approvalsByRunId.get(run.agentRunId) || [],
       related.auditsByRunId.get(run.agentRunId) || [],
@@ -496,22 +810,7 @@ agentRunRoutes.get("/queues", async (c) => {
     ),
   );
   const runsById = new Map(baseRuns.map((run) => [run.agentRunId, run]));
-  let filtered = filterQueueItems(items, queue, ownerScope, user.sub, runsById);
-
-  if (statusFilter) {
-    filtered = filtered.filter((item) => item.status === statusFilter);
-  }
-  if (requiresIntervention !== undefined) {
-    filtered = filtered.filter((item) => item.requiresIntervention === requiresIntervention);
-  }
-  if (search) {
-    filtered = filtered.filter((item) =>
-      item.agentRunId.toLowerCase().includes(search) ||
-      item.agentType.toLowerCase().includes(search) ||
-      item.taskId.toLowerCase().includes(search) ||
-      item.taskTitle.toLowerCase().includes(search),
-    );
-  }
+  let filtered = filterQueueItems(items, queue, filterOptions, user.sub, runsById);
 
   filtered.sort((left, right) => {
     const rightTime = parseDate(right.lastActivityAt) ?? parseDate(right.finishedAt) ?? parseDate(right.startedAt) ?? 0;
@@ -526,10 +825,147 @@ agentRunRoutes.get("/queues", async (c) => {
   return c.json({ data, page, pageSize, total });
 });
 
+agentRunRoutes.get("/analytics/health", async (c) => {
+  const user = c.get("user");
+  const runFilters = readRunFilters(c);
+  const queueFilters = readQueueFilters(c);
+  const { scopedItems } = await loadAnalyticsContext(user, runFilters, queueFilters);
+  const endedItems = scopedItems.filter((item) => ["completed", "failed", "stopped", "terminated"].includes(item.status));
+  const completedRuns = scopedItems.filter((item) => item.status === "completed").length;
+  const failedRuns = scopedItems.filter((item) => ["failed", "stopped", "terminated"].includes(item.status)).length;
+  const humanInterventionRuns = scopedItems.filter((item) => item.guidanceCount > 0 || item.requiresIntervention).length;
+  const durationValues = endedItems
+    .map((item) => item.durationMs)
+    .filter((value): value is number => value != null && Number.isFinite(value));
+
+  return c.json({
+    viewScope: resolveViewScope(user, queueFilters.ownerScope, runFilters.projectId),
+    generatedAt: new Date().toISOString(),
+    totals: {
+      totalRuns: scopedItems.length,
+      completedRuns,
+      failedRuns,
+      stoppedRuns: scopedItems.filter((item) => item.status === "stopped" || item.status === "terminated").length,
+      humanInterventionRuns,
+      attentionRuns: scopedItems.filter((item) => item.requiresIntervention).length,
+      approvalBlockedRuns: scopedItems.filter((item) => item.blockerType === "approval").length,
+      avgDurationMs: average(durationValues),
+      failureRate: roundPercentage(failedRuns, endedItems.length || scopedItems.length),
+      interventionRate: roundPercentage(humanInterventionRuns, scopedItems.length),
+    },
+    agentRanking: buildRanking(scopedItems, (item) => item.agentType, (item) => item.agentType),
+    modelRanking: buildRanking(
+      scopedItems,
+      (item) => item.modelUsed || "unknown",
+      (item) => item.modelUsed || "未记录模型",
+    ),
+  });
+});
+
+agentRunRoutes.get("/analytics/failures", async (c) => {
+  const user = c.get("user");
+  const runFilters = readRunFilters(c);
+  const queueFilters = readQueueFilters(c);
+  const { scopedItems } = await loadAnalyticsContext(user, runFilters, queueFilters);
+  const attentionItems = scopedItems.filter((item) => item.requiresIntervention);
+  const blockerCounts = new Map<string, number>();
+  const reasonCounts = new Map<string, number>();
+  const riskCounts = new Map<string, number>();
+
+  for (const item of attentionItems) {
+    const blockerLabel = item.blockerLabel || "其他异常";
+    blockerCounts.set(blockerLabel, (blockerCounts.get(blockerLabel) ?? 0) + 1);
+    const reason = normalizeFailureReason(item);
+    reasonCounts.set(reason, (reasonCounts.get(reason) ?? 0) + 1);
+  }
+
+  for (const item of scopedItems) {
+    if (!item.riskLevel) continue;
+    const riskLabel = item.riskLevel === "critical"
+      ? "严重风险"
+      : item.riskLevel === "high"
+        ? "高风险"
+        : item.riskLevel === "medium"
+          ? "中风险"
+          : "低风险";
+    riskCounts.set(riskLabel, (riskCounts.get(riskLabel) ?? 0) + 1);
+  }
+
+  return c.json({
+    generatedAt: new Date().toISOString(),
+    totalAttentionRuns: attentionItems.length,
+    blockerBreakdown: buildBreakdownItems(Array.from(blockerCounts.entries()), attentionItems.length),
+    failureReasons: buildBreakdownItems(Array.from(reasonCounts.entries()), attentionItems.length),
+    riskBreakdown: buildBreakdownItems(Array.from(riskCounts.entries()), scopedItems.length),
+  });
+});
+
+agentRunRoutes.get("/analytics/timeline", async (c) => {
+  const user = c.get("user");
+  const runFilters = readRunFilters(c);
+  const queueFilters = readQueueFilters(c);
+  const { scopedItems } = await loadAnalyticsContext(user, runFilters, queueFilters);
+  const timestamps = scopedItems
+    .map((item) => parseDate(item.finishedAt) ?? parseDate(item.lastActivityAt) ?? parseDate(item.startedAt))
+    .filter((value): value is number => value != null);
+
+  if (timestamps.length === 0) {
+    return c.json({
+      generatedAt: new Date().toISOString(),
+      bucketUnit: "day",
+      buckets: [],
+    });
+  }
+
+  const minTs = Math.min(...timestamps);
+  const maxTs = Math.max(...timestamps);
+  const bucketUnit = maxTs - minTs <= 48 * 60 * 60 * 1000 ? "hour" : "day";
+  const buckets = new Map<string, {
+    bucket: string;
+    label: string;
+    totalRuns: number;
+    completedRuns: number;
+    failedRuns: number;
+    attentionRuns: number;
+    interventionRuns: number;
+  }>();
+
+  for (const item of scopedItems) {
+    const timestamp = parseDate(item.finishedAt) ?? parseDate(item.lastActivityAt) ?? parseDate(item.startedAt);
+    if (timestamp == null) continue;
+    const bucket = toTimelineBucketKey(timestamp, bucketUnit);
+    const existing = buckets.get(bucket) ?? {
+      bucket,
+      label: toTimelineLabel(bucket, bucketUnit),
+      totalRuns: 0,
+      completedRuns: 0,
+      failedRuns: 0,
+      attentionRuns: 0,
+      interventionRuns: 0,
+    };
+    existing.totalRuns += 1;
+    if (item.status === "completed") existing.completedRuns += 1;
+    if (["failed", "stopped", "terminated"].includes(item.status)) existing.failedRuns += 1;
+    if (item.requiresIntervention) existing.attentionRuns += 1;
+    if (item.guidanceCount > 0 || item.requiresIntervention) existing.interventionRuns += 1;
+    buckets.set(bucket, existing);
+  }
+
+  return c.json({
+    generatedAt: new Date().toISOString(),
+    bucketUnit,
+    buckets: Array.from(buckets.values())
+      .sort((left, right) => left.bucket.localeCompare(right.bucket))
+      .slice(-12),
+  });
+});
+
 agentRunRoutes.get("/:agentRunId/summary", async (c) => {
   const user = c.get("user");
   const agentRunId = c.req.param("agentRunId");
-  const baseRuns = await loadBaseRuns(user);
+  const entryContext = c.req.query("entryContext") || undefined;
+  const ownerScope = c.req.query("ownerScope") || undefined;
+  const baseRuns = await loadBaseRuns(user, { agentRunId });
   const run = baseRuns.find((item) => item.agentRunId === agentRunId);
   if (!run) {
     return c.json({ error: "Agent run not found" }, 404);
@@ -539,7 +975,9 @@ agentRunRoutes.get("/:agentRunId/summary", async (c) => {
   const approvals = related.approvalsByRunId.get(agentRunId) || [];
   const audits = related.auditsByRunId.get(agentRunId) || [];
   const changes = related.changesByRunId.get(agentRunId) || [];
-  const item = hydrateQueueItem(run, approvals, audits, changes);
+  const item = hydrateQueueItem(user, run, approvals, audits, changes);
+  const latestApproval = approvals[0] ?? null;
+  const latestHighRiskAudit = audits.find((audit) => audit.riskLevel === "critical" || audit.riskLevel === "high") ?? null;
 
   const latestEvents = [
     ...approvals.map((approval) => ({
@@ -565,6 +1003,8 @@ agentRunRoutes.get("/:agentRunId/summary", async (c) => {
     .slice(0, 12);
 
   return c.json({
+    entryContext,
+    viewScope: resolveViewScope(user, ownerScope, run.projectId ?? undefined),
     agentRunId: run.agentRunId,
     taskId: run.taskId,
     taskTitle: run.taskTitle,
@@ -588,5 +1028,26 @@ agentRunRoutes.get("/:agentRunId/summary", async (c) => {
     error: run.error,
     longSummary: item.resultSummary,
     latestEvents,
+    actionPermissions: item.actionPermissions,
+    governance: {
+      approvalTickets: approvals.length,
+      pendingApprovals: approvals.filter((approval) => approval.status === "pending").length,
+      latestApprovalStatus: latestApproval?.status || null,
+      recentAuditEvents: audits.length,
+      latestHighRiskAction:
+        (typeof latestHighRiskAudit?.detail?.message === "string" && latestHighRiskAudit.detail.message)
+        || latestHighRiskAudit?.action
+        || null,
+    },
+    codeChanges: {
+      changeCount: changes.length,
+      files:
+        (run.taskChangesSummary?.filesAdded ?? 0)
+        + (run.taskChangesSummary?.filesModified ?? 0)
+        + (run.taskChangesSummary?.filesDeleted ?? 0),
+      insertions: run.taskChangesSummary?.totalInsertions ?? 0,
+      deletions: run.taskChangesSummary?.totalDeletions ?? 0,
+      latestSummary: changes[0]?.summary || formatChangesSummary(run.taskChangesSummary),
+    },
   });
 });

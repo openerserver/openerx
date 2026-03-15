@@ -29,6 +29,11 @@ declare module 'vue' {
     AForm: typeof import('ant-design-vue/es')['Form']
     AFormItem: typeof import('ant-design-vue/es')['FormItem']
     AgentConsole: typeof import('./components/AgentConsole.vue')['default']
+    AgentOpsAnalyticsPanel: typeof import('./components/agent-ops/AgentOpsAnalyticsPanel.vue')['default']
+    AgentOpsDetailDrawer: typeof import('./components/agent-ops/AgentOpsDetailDrawer.vue')['default']
+    AgentOpsFilterBar: typeof import('./components/agent-ops/AgentOpsFilterBar.vue')['default']
+    AgentOpsHeader: typeof import('./components/agent-ops/AgentOpsHeader.vue')['default']
+    AgentOpsQueueBoard: typeof import('./components/agent-ops/AgentOpsQueueBoard.vue')['default']
     AInput: typeof import('ant-design-vue/es')['Input']
     AInputNumber: typeof import('ant-design-vue/es')['InputNumber']
     AInputPassword: typeof import('ant-design-vue/es')['InputPassword']
@@ -51,7 +56,6 @@ declare module 'vue' {
     ARadioGroup: typeof import('ant-design-vue/es')['RadioGroup']
     AResult: typeof import('ant-design-vue/es')['Result']
     ARow: typeof import('ant-design-vue/es')['Row']
-    ASegmented: typeof import('ant-design-vue/es')['Segmented']
     ASelect: typeof import('ant-design-vue/es')['Select']
     ASelectOptGroup: typeof import('ant-design-vue/es')['SelectOptGroup']
     ASelectOption: typeof import('ant-design-vue/es')['SelectOption']
@@ -86,5 +90,7 @@ declare module 'vue' {
     SessionTreeBranch: typeof import('./components/SessionTreeBranch.vue')['default']
     TaskCodeChanges: typeof import('./components/TaskCodeChanges.vue')['default']
     TaskGraph: typeof import('./components/TaskGraph.vue')['default']
+    TaskProjectRoleConfigPanel: typeof import('./components/TaskProjectRoleConfigPanel.vue')['default']
+    TaskRoleWorkflowPanel: typeof import('./components/TaskRoleWorkflowPanel.vue')['default']
   }
 }

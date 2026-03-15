@@ -4,6 +4,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import Settings from "../../control-plane/web-ui/src/pages/Settings.vue";
 import { useAuthStore } from "../../control-plane/web-ui/src/stores/auth";
 
+const routeState = vi.hoisted(() => ({
+  path: "/settings",
+  params: {},
+  query: {},
+}));
+
 const apiMocks = vi.hoisted(() => ({
   getMyProfile: vi.fn(),
   updateMyProfile: vi.fn(),
@@ -40,6 +46,14 @@ const apiMocks = vi.hoisted(() => ({
 
 vi.mock("../../control-plane/web-ui/src/lib/api", () => apiMocks);
 
+vi.mock("vue-router", () => ({
+  useRoute: () => routeState,
+  useRouter: () => ({
+    push: vi.fn(),
+    replace: vi.fn(),
+  }),
+}));
+
 const baseUser = {
   id: "user-1",
   username: "testuser",
@@ -70,6 +84,9 @@ async function mountSettings(userOverrides: Partial<typeof baseUser> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  routeState.path = "/settings";
+  routeState.params = {};
+  routeState.query = {};
 });
 
 describe("Settings – profile save", () => {

@@ -24,6 +24,17 @@ const DB_PATH =
 const executionIntegrationDescribe =
   process.env.RUN_EXECUTION_INTEGRATION === "1" ? describe : describe.skip;
 
+interface ConfigModelRecord {
+  id?: string;
+  provider?: string;
+}
+
+interface ProjectRecord {
+  settings?: {
+    defaultModel?: string;
+  } | null;
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
 }
@@ -77,6 +88,36 @@ async function login(): Promise<string> {
   });
   if (status !== 200) throw new Error(`Login failed: ${status} ${JSON.stringify(data)}`);
   return data.token;
+}
+
+async function getAvailableCopilotModel(token: string): Promise<string> {
+  const { data: modelList, status: modelStatus } = await bffRequest<{ data?: ConfigModelRecord[] }>(
+    token,
+    "/api/config/models/list",
+  );
+  if (modelStatus === 200) {
+    const configuredCopilotModel = (modelList.data || []).find(
+      (model) =>
+        typeof model.provider === "string"
+        && model.provider.startsWith("github-copilot")
+        && typeof model.id === "string"
+        && model.id.trim().length > 0,
+    );
+
+    if (configuredCopilotModel?.provider && configuredCopilotModel.id) {
+      return `${configuredCopilotModel.provider}:${configuredCopilotModel.id}`;
+    }
+  }
+
+  const { data: project, status: projectStatus } = await bffRequest<ProjectRecord>(
+    token,
+    `/api/projects/${PROJECT_ID}`,
+  );
+  if (projectStatus === 200 && project.settings?.defaultModel?.startsWith("github-copilot")) {
+    return project.settings.defaultModel;
+  }
+
+  return "github-copilot:claude-sonnet-4";
 }
 
 // ── Cleanup ────────────────────────────────────────────────────────
@@ -460,6 +501,7 @@ describe("Cross-Layer Consistency", () => {
 
 executionIntegrationDescribe("Execute route identity resolution", () => {
   test("POST execute falls back to project default credential and patches task identity", async () => {
+    const selectedModel = await getAvailableCopilotModel(token);
     const repoName = `exec-fallback-repo-${Date.now()}`;
     const { data: repository, status: repoStatus } = await bffRequest<{ id: string }>(
       token,
@@ -511,6 +553,7 @@ executionIntegrationDescribe("Execute route identity resolution", () => {
           prompt: "Inspect the repository briefly and return one concise status line.",
           projectId: PROJECT_ID,
           repoId: repository.id,
+          selectedModel,
         }),
       },
     );

@@ -112,7 +112,7 @@
         pageSize: pagination.pageSize,
         total: pagination.total,
         showSizeChanger: true,
-        showTotal: (total: number) => `共 ${total} 条`,
+        showTotal: showPaginationTotal,
       }"
       row-key="id"
       size="middle"
@@ -194,7 +194,7 @@
               v-if="record.risks.length > 0"
               type="link"
               size="small"
-              @click="openQuickConfig(record as any)"
+              @click="handleQuickConfigClick(record)"
             >快速配置</a-button>
             <a-dropdown>
               <a-button type="link" size="small">更多 <DownOutlined /></a-button>
@@ -202,14 +202,14 @@
                 <a-menu>
                   <a-menu-item
                     v-if="record.isCurrentUserManager"
-                    @click="openEdit(record as any)"
+                    @click="handleEditClick(record)"
                   >编辑项目</a-menu-item>
                   <a-menu-item @click="$router.push(`/projects/${record.id}?tab=members`)">查看成员</a-menu-item>
                   <a-menu-item @click="$router.push(`/projects/${record.id}?tab=repositories`)">查看仓库</a-menu-item>
                   <a-menu-item @click="$router.push(`/projects/${record.id}?tab=credentials`)">查看凭证</a-menu-item>
                   <a-menu-item
                     v-if="record.isCurrentUserManager && record.projectStatus !== 'archived'"
-                    @click="handleArchive(record as any)"
+                    @click="handleArchiveClick(record)"
                   >
                     <span style="color: #ff4d4f">归档项目</span>
                   </a-menu-item>
@@ -476,6 +476,32 @@ function statusColor(status: string) {
     error: "error",
   };
   return map[status] || "default";
+}
+
+function showPaginationTotal(total: number) {
+  return `共 ${total} 条`;
+}
+
+function isProjectOverviewItem(record: unknown): record is ProjectOverviewItem {
+  return !!record && typeof record === "object" && "id" in record && "name" in record && "slug" in record;
+}
+
+function handleQuickConfigClick(record: Record<string, unknown>) {
+  if (isProjectOverviewItem(record)) {
+    openQuickConfig(record);
+  }
+}
+
+function handleEditClick(record: Record<string, unknown>) {
+  if (isProjectOverviewItem(record)) {
+    openEdit(record);
+  }
+}
+
+function handleArchiveClick(record: Record<string, unknown>) {
+  if (isProjectOverviewItem(record)) {
+    handleArchive(record);
+  }
 }
 
 function openQuickConfig(record: ProjectOverviewItem) {

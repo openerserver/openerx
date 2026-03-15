@@ -41,6 +41,7 @@ import { buildPipelineStageUpdatedEvents } from "../realtime/pipeline-events";
 import { sseAggregator } from "../realtime/sse-aggregator";
 import { wsBroadcaster } from "../realtime/ws-broadcaster";
 import { reconcileRunningTasksOnStartup } from "./reconcile";
+import { ensureTaskWorkflowStarted } from "./workflow-sync";
 
 // ── Task Routes (BFF) ──────────────────────────────────────────────
 
@@ -393,7 +394,7 @@ function buildWorkflowPromptContext(
   };
 }
 
-function roleLabelFromId(roleAgentId: string | null | undefined) {
+function fallbackRoleLabelFromId(roleAgentId: string | null | undefined) {
   switch (roleAgentId) {
     case "role.product":
       return "产品";
@@ -414,6 +415,44 @@ function roleLabelFromId(roleAgentId: string | null | undefined) {
     default:
       return roleAgentId?.replace(/^role\./, "") || "未命名角色";
   }
+}
+
+async function resolveRoleLabels(
+  roleAgentIds: Array<string | null | undefined>,
+  authorization: string,
+  options: {
+    projectId?: string | null;
+  } = {},
+) {
+  const uniqueIds = Array.from(new Set(roleAgentIds.filter((value): value is string => Boolean(value))));
+  const labelEntries = await Promise.all(
+    uniqueIds.map(async (roleAgentId) => {
+      const query = new URLSearchParams();
+      if (options.projectId) {
+        query.set("projectId", options.projectId);
+      }
+
+      const resolveResult = await cpFetch<{ data?: { role?: { name?: string | null } } }>(
+        `/api/role-agents/${encodeURIComponent(roleAgentId)}/resolve${query.toString() ? `?${query.toString()}` : ""}`,
+        { authorization },
+      );
+      if (resolveResult.ok && resolveResult.data?.data?.role?.name) {
+        return [roleAgentId, resolveResult.data.data.role.name] as const;
+      }
+
+      const detailResult = await cpFetch<{ data?: { name?: string | null } }>(
+        `/api/role-agents/${encodeURIComponent(roleAgentId)}`,
+        { authorization },
+      );
+      if (detailResult.ok && detailResult.data?.data?.name) {
+        return [roleAgentId, detailResult.data.data.name] as const;
+      }
+
+      return [roleAgentId, fallbackRoleLabelFromId(roleAgentId)] as const;
+    }),
+  );
+
+  return new Map(labelEntries);
 }
 
 function stageLabelFromKey(stageKey: string | null | undefined) {
@@ -445,7 +484,11 @@ function stageLabelFromKey(stageKey: string | null | undefined) {
   }
 }
 
-async function buildTaskWorkflowViewModel(taskId: string, authorization: string): Promise<WorkflowViewModel> {
+async function buildTaskWorkflowViewModel(
+  taskId: string,
+  authorization: string,
+  options: { projectId?: string | null } = {},
+): Promise<WorkflowViewModel> {
   const [workflowResult, conclusionsResult, requestsResult] = await Promise.all([
     cpFetch<{ data?: { workflowRun?: WorkflowRunPayload | null; stages?: WorkflowStagePayload[] | null } }>(
       `/api/tasks/${encodeURIComponent(taskId)}/workflow`,
@@ -464,6 +507,15 @@ async function buildTaskWorkflowViewModel(taskId: string, authorization: string)
   const stages = workflowResult.ok ? workflowResult.data?.data?.stages ?? [] : [];
   const conclusions = conclusionsResult.ok ? conclusionsResult.data?.data ?? [] : [];
   const requests = requestsResult.ok ? requestsResult.data?.data ?? [] : [];
+  const roleLabels = await resolveRoleLabels(
+    [
+      ...stages.map((stage) => stage.primaryRoleAgentId),
+      ...conclusions.map((item) => item.roleAgentId),
+      ...requests.map((item) => item.sourceRoleAgentId),
+    ],
+    authorization,
+    { projectId: options.projectId },
+  );
 
   return {
     taskId,
@@ -478,13 +530,15 @@ async function buildTaskWorkflowViewModel(taskId: string, authorization: string)
         status: stage.status || "pending",
         approvalState: stage.approvalState || "not-required",
         blockingReason: stage.blockingReason || undefined,
-        primaryRoleLabel: roleLabelFromId(stage.primaryRoleAgentId),
+        primaryRoleLabel:
+          roleLabels.get(stage.primaryRoleAgentId || "")
+          || fallbackRoleLabelFromId(stage.primaryRoleAgentId),
       })),
     },
     roleConclusions: conclusions.map((item, index) => ({
       id: item.id || `${item.roleAgentId || "role"}-${item.stage || index}`,
       roleAgentId: item.roleAgentId || "unknown",
-      roleLabel: roleLabelFromId(item.roleAgentId),
+      roleLabel: roleLabels.get(item.roleAgentId || "") || fallbackRoleLabelFromId(item.roleAgentId),
       stage: item.stage || "unknown",
       finalDecision: item.finalDecision || "observe",
       aggregateRiskLevel: item.aggregateRiskLevel || "low",
@@ -516,7 +570,9 @@ async function buildTaskWorkflowViewModel(taskId: string, authorization: string)
     developerChangeRequests: requests.map((item, index) => ({
       id: item.id || `${item.sourceRoleAgentId || "role"}-request-${index}`,
       sourceRoleAgentId: item.sourceRoleAgentId || "unknown",
-      sourceRoleLabel: roleLabelFromId(item.sourceRoleAgentId),
+      sourceRoleLabel:
+        roleLabels.get(item.sourceRoleAgentId || "")
+        || fallbackRoleLabelFromId(item.sourceRoleAgentId),
       priority: item.priority || "medium",
       title: item.title || "未命名修正请求",
       summary: item.summary || "",
@@ -818,6 +874,12 @@ async function persistExecutionStart(
     }),
     authorization: context.authorization,
   });
+
+  await ensureTaskWorkflowStarted({
+    authorization: context.authorization,
+    taskId: context.task.id,
+    templateId: context.plan.templateId,
+  });
 }
 
 function broadcastParallelExecutionStarted(context: ExecutionContext) {
@@ -1091,17 +1153,19 @@ taskRoutes.patch(
   },
 );
 
-taskRoutes.get("/:taskId/workflow-view", async (c) => {
+taskRoutes.get(":taskId/workflow-view", async (c) => {
   const taskId = c.req.param("taskId");
   const authorization = authHeader(c);
-  const taskResult = await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
+  const taskResult = await cpFetch<{ projectId?: string | null }>(`/api/tasks/${encodeURIComponent(taskId)}`, {
     authorization,
   });
   if (!taskResult.ok) {
     return c.json(taskResult.data, taskResult.status as 401 | 404 | 502);
   }
 
-  const view = await buildTaskWorkflowViewModel(taskId, authorization);
+  const view = await buildTaskWorkflowViewModel(taskId, authorization, {
+    projectId: taskResult.data?.projectId,
+  });
   return c.json(view);
 });
 

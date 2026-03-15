@@ -37,26 +37,29 @@
 
       <a-flex :gap="12" style="margin-bottom: 12px" wrap="wrap">
         <a-input
-          v-model:value="searchText"
+          :value="searchText"
           placeholder="搜索用户名、显示名、邮箱"
           allow-clear
           style="width: 260px"
+          @update:value="searchText = String($event ?? '')"
         />
         <a-select
-          v-model:value="filterRole"
+          :value="filterRole"
           placeholder="角色筛选"
           allow-clear
           style="width: 150px"
+          @update:value="filterRole = normalizeRole($event)"
         >
           <a-select-option v-for="role in allRoles" :key="role" :value="role">
             {{ roleLabel(role) }}
           </a-select-option>
         </a-select>
         <a-select
-          v-model:value="filterStatus"
+          :value="filterStatus"
           placeholder="状态筛选"
           allow-clear
           style="width: 120px"
+          @update:value="filterStatus = normalizeAccountStatus($event)"
         >
           <a-select-option value="active">启用</a-select-option>
           <a-select-option value="disabled">禁用</a-select-option>
@@ -358,6 +361,13 @@ const resetPasswordUserId = ref("");
 const searchText = ref("");
 const filterRole = ref<UserRole | undefined>(undefined);
 const filterStatus = ref<"active" | "disabled" | undefined>(undefined);
+
+function normalizeAccountStatus(value: unknown): "active" | "disabled" | undefined {
+  if (value === "active" || value === "disabled") {
+    return value;
+  }
+  return undefined;
+}
 
 const filteredUsers = computed(() => {
   let result = users.value;

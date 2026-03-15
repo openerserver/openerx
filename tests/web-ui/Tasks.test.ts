@@ -6,6 +6,11 @@ import type { Task } from "../../control-plane/web-ui/src/lib/api";
 import Tasks from "../../control-plane/web-ui/src/pages/Tasks.vue";
 import { useProjectStore } from "../../control-plane/web-ui/src/stores/project";
 
+const routerMocks = vi.hoisted(() => ({
+  push: vi.fn(),
+  replace: vi.fn(),
+}));
+
 const TASK_LIST_LIMIT = 200;
 
 const apiMocks = vi.hoisted(() => ({
@@ -27,6 +32,10 @@ const messageMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../control-plane/web-ui/src/lib/api", () => apiMocks);
+
+vi.mock("vue-router", () => ({
+  useRouter: () => routerMocks,
+}));
 
 vi.mock("ant-design-vue", () => {
   const inputLike = (name: string, tag: "input" | "textarea" = "input") =>
@@ -262,6 +271,8 @@ function getSetupState(wrapper: Awaited<ReturnType<typeof mountPage>>) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  routerMocks.push.mockReset();
+  routerMocks.replace.mockReset();
   localStorage.clear();
   document.body.innerHTML = "";
 });

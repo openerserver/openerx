@@ -48,9 +48,23 @@ const routes: RouteRecordRaw[] = [
         component: () => import("../pages/ProjectDetail.vue"),
       },
       {
+        path: "projects/:projectId/approval-policies",
+        name: "ProjectApprovalPolicies",
+        component: () => import("../pages/ProjectPolicies.vue"),
+      },
+      {
         path: "projects/:projectId/policies",
         name: "ProjectPolicies",
-        component: () => import("../pages/ProjectPolicies.vue"),
+        redirect: (to) => ({
+          name: "ProjectApprovalPolicies",
+          params: to.params,
+          query: to.query,
+        }),
+      },
+      {
+        path: "projects/:projectId/role-execution",
+        name: "ProjectRoleExecution",
+        component: () => import("../pages/ProjectRoleExecution.vue"),
       },
       {
         path: "projects/:projectId/cost",

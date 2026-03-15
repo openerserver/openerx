@@ -1,10 +1,18 @@
 /// <reference types="bun-types" />
 
-import { describe, expect, test } from "bun:test";
-import { extractAssistantResultFromMessages } from "../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter";
+import { describe, expect, mock, test } from "bun:test";
+
+mock.restore();
+
+async function loadOpencodeAdapter() {
+  return import(
+    "../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter?opencode-adapter-test"
+  );
+}
 
 describe("extractAssistantResultFromMessages", () => {
-  test("marks assistant messages with embedded errors as failed", () => {
+  test("marks assistant messages with embedded errors as failed", async () => {
+    const { extractAssistantResultFromMessages } = await loadOpencodeAdapter();
     const result = extractAssistantResultFromMessages([
       {
         info: {
@@ -35,7 +43,8 @@ describe("extractAssistantResultFromMessages", () => {
     expect(result.tokenUsed).toBe(10);
   });
 
-  test("still reports completed assistant messages with text as completed", () => {
+  test("still reports completed assistant messages with text as completed", async () => {
+    const { extractAssistantResultFromMessages } = await loadOpencodeAdapter();
     const result = extractAssistantResultFromMessages([
       {
         info: {
