@@ -428,6 +428,10 @@ beforeEach(() => {
           id: "message-1",
           role: "assistant",
           agent: "oracle-enterprise",
+          model: {
+            providerID: "github-copilot",
+            modelID: "gemini-3-flash-preview",
+          },
           time: {
             created: "2026-03-14T08:04:00.000Z",
             completed: "2026-03-14T08:04:20.000Z",
@@ -535,17 +539,7 @@ describe("MultiTaskMonitor", () => {
     expect(wrapper.text()).toContain("用户输入");
     expect(wrapper.text()).toContain("修复生产登录故障");
     expect(wrapper.text()).toContain("已定位到登录态丢失的根因");
-    expect(wrapper.text()).not.toContain("当前会话");
-
-    const overviewButton = wrapper.findAll("button").find((item) => item.text().includes("展开概览"));
-    await overviewButton?.trigger("click");
-    await flushPromises();
-
-    expect(wrapper.text()).toContain("当前会话");
-    expect(wrapper.text()).toContain("主分支");
-    expect(wrapper.text()).toContain("当前阶段");
-    expect(wrapper.text()).toContain("修复认证链路");
-    expect(wrapper.text()).toContain("任务状态");
+    expect(wrapper.text()).toContain("github-copilot:gemini-3-flash-preview");
   });
 
   it("imports running tasks from the toolbar", async () => {
@@ -1366,19 +1360,18 @@ describe("MultiTaskMonitor", () => {
     expect(taskMonitorStore.freeLayoutBaseline[firstNode!.id]?.width).toBe(350);
   });
 
-  it("removes whole-card collapse while keeping overview collapse available", async () => {
+  it("shows stream directly without the old overview panel", async () => {
     const { wrapper, taskMonitorStore } = await mountPage();
 
     taskMonitorStore.addTaskNode("task-1", { collapsed: true });
     await flushPromises();
 
-    const buttonTexts = wrapper.findAll("button").map((button) => button.text().trim()).filter(Boolean);
-
-    expect(wrapper.text()).toContain("任务概览");
     expect(wrapper.text()).toContain("实时回复");
+
+    const buttonTexts = wrapper.findAll("button").map((button) => button.text().trim()).filter(Boolean);
+    expect(buttonTexts).not.toContain("展开概览");
     expect(buttonTexts).not.toContain("折叠");
     expect(buttonTexts).not.toContain("展开");
-    expect(buttonTexts).toContain("展开概览");
   });
 
   it("switches to time layout mode and places newer activity first", async () => {
@@ -1921,6 +1914,10 @@ describe("MultiTaskMonitor", () => {
           id: "message-stream-1",
           role: "assistant",
           agent: "oracle-enterprise",
+          model: {
+            providerID: "github-copilot",
+            modelID: "claude-sonnet-4",
+          },
           time: {
             created: "2026-03-14T08:05:00.000Z",
           },
@@ -1970,6 +1967,10 @@ describe("MultiTaskMonitor", () => {
           id: "message-stream-1",
           role: "assistant",
           agent: "oracle-enterprise",
+          model: {
+            providerID: "github-copilot",
+            modelID: "claude-sonnet-4",
+          },
           time: {
             created: "2026-03-14T08:05:00.000Z",
             completed: "2026-03-14T08:05:03.000Z",
@@ -1984,6 +1985,7 @@ describe("MultiTaskMonitor", () => {
     expect(wrapper.text()).toContain("修复登录流程");
     expect(wrapper.text()).toContain("实时回复");
     expect(wrapper.text()).toContain("已定位到登录态丢失的根因");
+    expect(wrapper.text()).toContain("github-copilot:claude-sonnet-4");
     expect(wrapper.text()).toContain("已完成");
     expect(wrapper.text()).not.toContain("生成中");
   });

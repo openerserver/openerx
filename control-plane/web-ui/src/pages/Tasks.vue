@@ -31,6 +31,9 @@
         <a-button v-if="projectStore.currentProjectId" @click="router.push(`/projects/${projectStore.currentProjectId}/operating-mode-launcher`)">
           场景推荐入口
         </a-button>
+        <a-button v-if="projectStore.currentProjectId" @click="router.push(`/projects/${projectStore.currentProjectId}/task-graph`)">
+          任务总图
+        </a-button>
         <a-button type="primary" @click="showCreateModal = true">
           <template #icon><PlusOutlined /></template>
           新建任务
@@ -179,6 +182,20 @@
                 </a-button>
                 <a-button v-if="createForm.operatingMode" size="small" @click="clearOperatingModeSelection">
                   清空临时档位
+                </a-button>
+              </a-space>
+            </a-space>
+          </a-card>
+        </a-form-item>
+        <a-form-item v-if="relationContextSummary" label="默认关系写入">
+          <a-card size="small" :body-style="{ padding: '12px 16px' }">
+            <a-space direction="vertical" style="width: 100%" size="small">
+              <a-typography-text type="secondary">
+                {{ relationContextSummary }}
+              </a-typography-text>
+              <a-space wrap>
+                <a-button size="small" @click="clearRelationContextSelection">
+                  清空默认关系
                 </a-button>
               </a-space>
             </a-space>
@@ -640,6 +657,13 @@ type CreateTaskForm = {
   gitAuthorEmail: string;
   gitCommitterName: string;
   gitCommitterEmail: string;
+  relationContext?: {
+    spawnedFromTaskId?: string;
+    dependsOnTaskIds?: string[];
+    blockedByTaskIds?: string[];
+    blocksTaskIds?: string[];
+    metadata?: Record<string, unknown>;
+  };
   operatingMode?: OperatingModeSelection;
 };
 
@@ -656,6 +680,7 @@ function createInitialForm(): CreateTaskForm {
     gitAuthorEmail: "",
     gitCommitterName: "",
     gitCommitterEmail: "",
+    relationContext: undefined,
     operatingMode: undefined,
   };
 }
@@ -671,6 +696,28 @@ const operatingModeSummary = computed(() => {
   const scenarioLabel = mode.scenarioKey ? ` · 场景 ${mode.scenarioKey}` : "";
   const templateLabel = mode.selectedTemplateId ? ` · 模板 ${mode.selectedTemplateId}` : "";
   return `协作 ${mode.collaborationMode} · 托管 ${mode.autopilotLevel} · 老板 ${mode.bossParticipationMode}${scenarioLabel}${templateLabel}`;
+});
+
+const relationContextSummary = computed(() => {
+  const relationContext = createForm.value.relationContext;
+  if (!relationContext) {
+    return "";
+  }
+
+  const parts: string[] = [];
+  if (relationContext.spawnedFromTaskId) {
+    parts.push(`派生自 ${relationContext.spawnedFromTaskId}`);
+  }
+  if ((relationContext.dependsOnTaskIds || []).length > 0) {
+    parts.push(`默认依赖 ${(relationContext.dependsOnTaskIds || []).join("、")}`);
+  }
+  if ((relationContext.blockedByTaskIds || []).length > 0) {
+    parts.push(`默认被 ${(relationContext.blockedByTaskIds || []).join("、")} 阻塞`);
+  }
+  if ((relationContext.blocksTaskIds || []).length > 0) {
+    parts.push(`默认阻塞 ${(relationContext.blocksTaskIds || []).join("、")}`);
+  }
+  return parts.join("；");
 });
 
 const repos = ref<Repository[]>([]);
@@ -744,6 +791,7 @@ function buildCreatePayload(projectId: string) {
     ...(form.gitAuthorEmail ? { gitAuthorEmail: form.gitAuthorEmail } : {}),
     ...(form.gitCommitterName ? { gitCommitterName: form.gitCommitterName } : {}),
     ...(form.gitCommitterEmail ? { gitCommitterEmail: form.gitCommitterEmail } : {}),
+    ...(form.relationContext ? { relationContext: form.relationContext } : {}),
     ...(form.operatingMode ? { operatingMode: form.operatingMode } : {}),
   };
 }
@@ -793,6 +841,10 @@ function clearOperatingModeSelection() {
   createForm.value.operatingMode = undefined;
 }
 
+function clearRelationContextSelection() {
+  createForm.value.relationContext = undefined;
+}
+
 function openScenarioLauncher() {
   if (!projectStore.currentProjectId) {
     message.warning("请先选择项目");
@@ -828,9 +880,13 @@ async function applyScenarioQuerySelection() {
   const scenarioKey = typeof route.query.scenarioKey === "string" ? route.query.scenarioKey : "";
   const openCreate = route.query.openCreate === "1";
   const projectId = typeof route.query.projectId === "string" ? route.query.projectId : "";
+  const relationContext = readRelationContextFromRouteQuery(route.query);
 
   if (!scenarioKey) {
-    if (openCreate) {
+    if (relationContext) {
+      createForm.value.relationContext = relationContext;
+    }
+    if (openCreate || relationContext) {
       showCreateModal.value = true;
     }
     return;
@@ -843,11 +899,49 @@ async function applyScenarioQuerySelection() {
   await loadRecommendedProfiles();
   const matchedProfile = recommendedProfiles.value.find((item) => item.scenarioKey === scenarioKey);
   if (!matchedProfile) {
+    if (relationContext) {
+      createForm.value.relationContext = relationContext;
+    }
     return;
   }
 
   createForm.value.operatingMode = buildScenarioOperatingMode(matchedProfile);
+  if (relationContext) {
+    createForm.value.relationContext = relationContext;
+  }
   showCreateModal.value = true;
+}
+
+function readRelationContextFromRouteQuery(query: Record<string, unknown>) {
+  const spawnedFromTaskId = readQueryString(query.spawnedFromTaskId);
+  const dependsOnTaskIds = readQueryTaskIdList(query.dependsOnTaskIds ?? query.dependsOnTaskId);
+  const blockedByTaskIds = readQueryTaskIdList(query.blockedByTaskIds ?? query.blockedByTaskId);
+  const blocksTaskIds = readQueryTaskIdList(query.blocksTaskIds ?? query.blocksTaskId);
+
+  if (!spawnedFromTaskId && dependsOnTaskIds.length === 0 && blockedByTaskIds.length === 0 && blocksTaskIds.length === 0) {
+    return undefined;
+  }
+
+  return {
+    ...(spawnedFromTaskId ? { spawnedFromTaskId } : {}),
+    ...(dependsOnTaskIds.length > 0 ? { dependsOnTaskIds } : {}),
+    ...(blockedByTaskIds.length > 0 ? { blockedByTaskIds } : {}),
+    ...(blocksTaskIds.length > 0 ? { blocksTaskIds } : {}),
+  };
+}
+
+function readQueryTaskIdList(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return Array.from(new Set(value.flatMap((item) => readQueryTaskIdList(item))));
+  }
+  if (typeof value !== "string" || !value.trim()) {
+    return [];
+  }
+  return Array.from(new Set(value.split(",").map((item) => item.trim()).filter(Boolean)));
+}
+
+function readQueryString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 // ── Task Templates (localStorage) ──────────────────────────────────

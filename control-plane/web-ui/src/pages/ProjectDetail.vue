@@ -13,6 +13,7 @@
         <a-button type="primary" data-testid="open-project-operating-mode" @click="router.push(`/projects/${project.id}/operating-mode`)">打开运行档位</a-button>
         <a-button data-testid="open-task-operating-launcher" @click="router.push(`/projects/${project.id}/operating-mode-launcher`)">场景推荐入口</a-button>
         <a-button @click="router.push(`/projects/${project.id}/orchestration`)">查看介入编排</a-button>
+        <a-button data-testid="open-project-task-graph" @click="router.push(`/projects/${project.id}/task-graph`)">任务总图</a-button>
         <a-button data-testid="open-boss-operations-center" @click="router.push(`/projects/${project.id}/boss-operations`)">老板经营视图</a-button>
       </a-space>
     </a-card>

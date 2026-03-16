@@ -397,6 +397,29 @@ export const taskEdges = sqliteTable("task_edges", {
     .default("blocks"),
 });
 
+// ── Project Task Relations (cross-task graph) ─────────────────────
+
+export const projectTaskRelations = sqliteTable("project_task_relations", {
+  id: text("id").primaryKey(),
+  projectId: text("project_id")
+    .notNull()
+    .references(() => projects.id),
+  sourceTaskId: text("source_task_id")
+    .notNull()
+    .references(() => tasks.id),
+  targetTaskId: text("target_task_id")
+    .notNull()
+    .references(() => tasks.id),
+  relationType: text("relation_type", { enum: ["depends-on", "blocks", "spawned-from"] })
+    .notNull(),
+  relationSource: text("relation_source", { enum: ["manual", "system", "task-create"] })
+    .notNull()
+    .default("manual"),
+  metadata: text("metadata", { mode: "json" }).$type<Record<string, unknown>>(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
 // ── Agent Runs (individual agent execution records) ────────────────
 
 export const agentRuns = sqliteTable("agent_runs", {

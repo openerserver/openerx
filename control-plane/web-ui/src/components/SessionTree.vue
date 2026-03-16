@@ -8,6 +8,7 @@
         :node="node"
         :selected-session-id="selectedSessionId"
         :task-status="taskStatus"
+        :session-state-map="sessionStateMap"
         :depth="0"
         branch-path=""
         @select="onSelect"
@@ -27,6 +28,13 @@ const props = defineProps<{
   tree: SessionTreeNode[];
   selectedSessionId?: string;
   taskStatus?: string;
+  sessionStateMap?: Record<string, {
+    badgeLabel: string;
+    badgeColor: string;
+    summary: string;
+    detail?: string;
+    countdownLabel?: string;
+  }>;
 }>();
 
 const emit = defineEmits<{

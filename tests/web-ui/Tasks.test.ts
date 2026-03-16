@@ -497,4 +497,52 @@ describe("Tasks page", () => {
       }),
     );
   });
+
+  it("applies relation context from route query and sends it on task creation", async () => {
+    routeMocks.query = {
+      projectId: "proj-1",
+      openCreate: "1",
+      spawnedFromTaskId: "task-parent",
+      dependsOnTaskId: "task-parent,task-upstream",
+      blocksTaskId: "task-blocked",
+    };
+
+    const wrapper = await mountPage([]);
+    const state = getSetupState(wrapper) as {
+      createForm: {
+        title: string;
+        prompt: string;
+        autoExecute: boolean;
+        relationContext?: {
+          spawnedFromTaskId?: string;
+          dependsOnTaskIds?: string[];
+          blocksTaskIds?: string[];
+        };
+      };
+      handleCreate: () => Promise<void>;
+    };
+
+    expect(state.createForm.relationContext).toEqual({
+      spawnedFromTaskId: "task-parent",
+      dependsOnTaskIds: ["task-parent", "task-upstream"],
+      blocksTaskIds: ["task-blocked"],
+    });
+
+    state.createForm.title = "Follow-up task";
+    state.createForm.prompt = "continue from parent";
+    state.createForm.autoExecute = false;
+
+    await state.handleCreate();
+    await flushPromises();
+
+    expect(apiMocks.createTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        relationContext: {
+          spawnedFromTaskId: "task-parent",
+          dependsOnTaskIds: ["task-parent", "task-upstream"],
+          blocksTaskIds: ["task-blocked"],
+        },
+      }),
+    );
+  });
 });

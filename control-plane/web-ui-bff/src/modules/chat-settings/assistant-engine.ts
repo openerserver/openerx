@@ -141,7 +141,7 @@ function parseJsonFromText(text: string | undefined): Record<string, unknown> | 
 
   // Strip markdown code fences (```json ... ``` or ``` ... ```)
   const fenceMatch = direct.match(/```(?:json)?\s*\n?([\s\S]*?)```/);
-  const stripped = fenceMatch ? fenceMatch[1].trim() : direct;
+  const stripped = fenceMatch?.[1]?.trim() || direct;
 
   const candidates = [stripped, direct, ...(direct.match(/\{[\s\S]*\}/g) || [])];
   for (const candidate of candidates) {

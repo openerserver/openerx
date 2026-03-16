@@ -15,6 +15,73 @@ interface ProjectRecord {
   id: string;
   name?: string;
   slug?: string;
+  description?: string | null;
+}
+
+interface ProjectTaskGraphTaskRecord {
+  id: string;
+  projectId: string;
+  userId: string;
+  title: string;
+  prompt: string;
+  status: string;
+  category?: string | null;
+  strategy?: string | null;
+  repoName?: string | null;
+  workingBranch?: string | null;
+  selectedModel?: string | null;
+  changesSummary?: {
+    filesAdded?: number;
+    filesModified?: number;
+    filesDeleted?: number;
+    totalInsertions?: number;
+    totalDeletions?: number;
+  } | null;
+  createdAt?: string | null;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+}
+
+interface ProjectTaskGraphEdgeViewModel {
+  id: string;
+  sourceTaskId: string;
+  targetTaskId: string;
+  type: "depends-on" | "blocks" | "spawned-from";
+  source: "manual" | "system" | "task-create";
+}
+
+interface ProjectTaskGraphTaskViewModel extends ProjectTaskGraphTaskRecord {
+  currentStageLabel: string | null;
+  latestActivityAt: string | null;
+}
+
+interface ProjectTaskGraphViewModel {
+  project: {
+    id: string;
+    name: string;
+    slug: string;
+    description: string | null;
+  };
+  tasks: ProjectTaskGraphTaskViewModel[];
+  edges: ProjectTaskGraphEdgeViewModel[];
+  capabilities: {
+    supportsDependsOn: boolean;
+    supportsBlocks: boolean;
+    supportsSpawnedFrom: boolean;
+  };
+  refreshedAt: string;
+}
+
+interface ProjectTaskRelationRecord {
+  id: string;
+  projectId: string;
+  sourceTaskId: string;
+  targetTaskId: string;
+  type: "depends-on" | "blocks" | "spawned-from";
+  source: "manual" | "system" | "task-create";
+  metadata?: Record<string, unknown> | null;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 interface RoleAgentRecord {
@@ -824,6 +891,82 @@ async function buildProjectBossOperationsView(projectId: string, authorization: 
   };
 }
 
+function inferTaskStageLabel(task: ProjectTaskGraphTaskRecord): string | null {
+  if (typeof task.category === "string" && task.category.trim()) {
+    return task.category.trim();
+  }
+  if (typeof task.strategy === "string" && task.strategy.trim()) {
+    return task.strategy.trim();
+  }
+  return null;
+}
+
+async function buildProjectTaskGraphView(projectId: string, authorization: string) {
+  const [projectResult, taskResult, relationResult] = await Promise.all([
+    cpFetch<ProjectRecord>(`/api/projects/${encodeURIComponent(projectId)}`, { authorization }),
+    cpFetch<{ data?: ProjectTaskGraphTaskRecord[] }>(
+      `/api/tasks?projectId=${encodeURIComponent(projectId)}&limit=200`,
+      { authorization },
+    ),
+    cpFetch<{ data?: ProjectTaskRelationRecord[] }>(
+      `/api/projects/${encodeURIComponent(projectId)}/task-relations`,
+      { authorization },
+    ),
+  ]);
+
+  if (!projectResult.ok) {
+    return projectResult;
+  }
+
+  if (!taskResult.ok) {
+    return taskResult;
+  }
+
+  if (!relationResult.ok) {
+    return relationResult;
+  }
+
+  const tasks = (taskResult.data?.data || []).map((task) => ({
+    ...task,
+    currentStageLabel: inferTaskStageLabel(task),
+    latestActivityAt: task.finishedAt || task.startedAt || task.createdAt || null,
+  } satisfies ProjectTaskGraphTaskViewModel));
+
+  const taskIds = new Set(tasks.map((task) => task.id));
+  const edges = (relationResult.data?.data || []).filter(
+    (relation) => taskIds.has(relation.sourceTaskId) && taskIds.has(relation.targetTaskId),
+  ).map((relation) => ({
+    id: relation.id,
+    sourceTaskId: relation.sourceTaskId,
+    targetTaskId: relation.targetTaskId,
+    type: relation.type,
+    source: relation.source,
+  } satisfies ProjectTaskGraphEdgeViewModel));
+
+  const relationTypes = new Set(edges.map((edge) => edge.type));
+
+  return {
+    ok: true as const,
+    status: 200 as const,
+    data: {
+      project: {
+        id: projectResult.data.id,
+        name: projectResult.data.name || projectResult.data.id,
+        slug: projectResult.data.slug || "",
+        description: projectResult.data.description || null,
+      },
+      tasks,
+      edges,
+      capabilities: {
+        supportsDependsOn: relationTypes.has("depends-on"),
+        supportsBlocks: relationTypes.has("blocks"),
+        supportsSpawnedFrom: relationTypes.has("spawned-from"),
+      },
+      refreshedAt: new Date().toISOString(),
+    } satisfies ProjectTaskGraphViewModel,
+  };
+}
+
 async function fetchWorkflowTemplates(authorization: string) {
   return cpFetch<{ data?: WorkflowTemplateRecord[] }>("/api/workflow-templates", { authorization });
 }
@@ -1149,7 +1292,10 @@ projectRoutes.get("/:projectId/orchestration-view", async (c) => {
   const projectId = c.req.param("projectId");
   const authorization = authHeader(c);
   const candidateTemplateId = c.req.query("candidateTemplateId") || undefined;
-  const user = (c.get("user") || {}) as { role?: string; projects?: Array<{ id: string; role: string }> };
+  const user = (c.get("user") || {}) as {
+    role?: string;
+    projects?: Array<{ id: string; role: string }>;
+  };
   const canManage =
     user.role === "platform_admin"
     || user.role === "org_admin"
@@ -1277,6 +1423,24 @@ projectRoutes.get("/:projectId/boss-operations-view", async (c) => {
   } catch (error) {
     return c.json(
       { message: error instanceof Error ? error.message : "Failed to build boss operations view" },
+      502,
+    );
+  }
+});
+
+projectRoutes.get("/:projectId/task-graph-view", async (c) => {
+  const projectId = c.req.param("projectId");
+  const authorization = authHeader(c);
+
+  try {
+    const result = await buildProjectTaskGraphView(projectId, authorization);
+    if (!result.ok) {
+      return c.json(result.data, result.status as 401 | 403 | 404 | 502);
+    }
+    return c.json(result.data, 200);
+  } catch (error) {
+    return c.json(
+      { message: error instanceof Error ? error.message : "Failed to build project task graph view" },
       502,
     );
   }

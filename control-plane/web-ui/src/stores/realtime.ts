@@ -139,5 +139,11 @@ export const useRealtimeStore = defineStore("realtime", {
         this.ws.send(JSON.stringify({ type: "subscribe_task", taskId }));
       }
     },
+
+    subscribeProject(projectId: string) {
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify({ type: "subscribe_project", projectId }));
+      }
+    },
   },
 });

@@ -4,6 +4,7 @@ export type RealtimeEventType =
   | "session.created"
   | "session.updated"
   | "session.activated"
+  | "session.status"
   | "session.idle"
   | "session.error"
   | "message.updated"

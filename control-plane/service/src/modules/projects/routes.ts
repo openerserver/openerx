@@ -11,6 +11,7 @@ import {
   costRecords,
   environments,
   organizations,
+  projectTaskRelations,
   projectRoles,
   projects,
   repositories,
@@ -94,6 +95,21 @@ const updateProjectMemberSchema = z.object({
 
 const workflowTemplateBindingSchema = z.object({
   workflowTemplateId: z.string().min(1).nullable(),
+});
+
+const taskRelationTypeSchema = z.enum(["depends-on", "blocks", "spawned-from"]);
+const taskRelationSourceSchema = z.enum(["manual", "system", "task-create"]);
+const upsertProjectTaskRelationsSchema = z.object({
+  relations: z.array(
+    z.object({
+      id: z.string().min(1).optional(),
+      sourceTaskId: z.string().min(1),
+      targetTaskId: z.string().min(1),
+      type: taskRelationTypeSchema,
+      source: taskRelationSourceSchema.optional(),
+      metadata: z.record(z.unknown()).optional(),
+    }),
+  ),
 });
 
 function normalizeProjectSettings(settings: unknown): ProjectSettings | null | undefined {
@@ -210,6 +226,23 @@ async function getVisibleProjectOrNull(user: JWTPayload, projectId: string) {
   }
 
   return getProjectOrNull(projectId);
+}
+
+async function validateProjectTaskRelationEndpoints(projectId: string, taskIds: string[]) {
+  if (taskIds.length === 0) {
+    return null;
+  }
+
+  const rows = await db.query.tasks.findMany({
+    where: inArray(tasks.id, taskIds),
+  });
+  if (rows.length !== taskIds.length) {
+    return { error: "One or more related tasks do not exist" as const };
+  }
+  if (rows.some((task) => task.projectId !== projectId)) {
+    return { error: "Related tasks must belong to the same project" as const };
+  }
+  return null;
 }
 
 type OverviewProjectStatus = "healthy" | "pending_config" | "archived" | "error";
@@ -980,16 +1013,6 @@ projectRoutes.patch(
   },
 );
 
-// GET /api/projects/:projectId
-projectRoutes.get("/:projectId", async (c) => {
-  const projectId = c.req.param("projectId");
-  const project = await getVisibleProjectOrNull(c.get("user"), projectId);
-  if (!project) {
-    return c.json({ error: "Project not found or access denied" }, 404);
-  }
-  return c.json(normalizeProjectRecord(project));
-});
-
 // GET /api/projects/:projectId/workflow-template
 projectRoutes.get(
   "/:projectId/workflow-template",
@@ -1011,6 +1034,116 @@ projectRoutes.get(
     });
   },
 );
+
+projectRoutes.get(
+  "/:projectId/task-relations",
+  requireProjectRole("projectId", "viewer"),
+  async (c) => {
+    const projectId = c.req.param("projectId");
+    const rows = await db.query.projectTaskRelations.findMany({
+      where: eq(projectTaskRelations.projectId, projectId),
+    });
+
+    return c.json({
+      data: rows.map((row) => ({
+        id: row.id,
+        projectId: row.projectId,
+        sourceTaskId: row.sourceTaskId,
+        targetTaskId: row.targetTaskId,
+        type: row.relationType,
+        source: row.relationSource,
+        metadata: row.metadata ?? null,
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt,
+      })),
+    });
+  },
+);
+
+projectRoutes.put(
+  "/:projectId/task-relations",
+  requireProjectRole("projectId", "developer"),
+  zValidator("json", upsertProjectTaskRelationsSchema),
+  async (c) => {
+    const projectId = c.req.param("projectId");
+    const body = c.req.valid("json");
+    const taskIds = Array.from(
+      new Set(body.relations.flatMap((relation) => [relation.sourceTaskId, relation.targetTaskId])),
+    );
+
+    const validationError = await validateProjectTaskRelationEndpoints(projectId, taskIds);
+    if (validationError) {
+      return c.json(validationError, 400);
+    }
+
+    const now = new Date().toISOString();
+    const upserted: Array<Record<string, unknown>> = [];
+
+    for (const relation of body.relations) {
+      const existing = await db.query.projectTaskRelations.findFirst({
+        where: and(
+          eq(projectTaskRelations.projectId, projectId),
+          eq(projectTaskRelations.sourceTaskId, relation.sourceTaskId),
+          eq(projectTaskRelations.targetTaskId, relation.targetTaskId),
+          eq(projectTaskRelations.relationType, relation.type),
+        ),
+      });
+
+      if (existing) {
+        await db
+          .update(projectTaskRelations)
+          .set({
+            relationSource: relation.source ?? existing.relationSource,
+            metadata: relation.metadata ?? existing.metadata,
+            updatedAt: now,
+          })
+          .where(eq(projectTaskRelations.id, existing.id));
+        upserted.push({
+          id: existing.id,
+          sourceTaskId: relation.sourceTaskId,
+          targetTaskId: relation.targetTaskId,
+          type: relation.type,
+          source: relation.source ?? existing.relationSource,
+          metadata: relation.metadata ?? existing.metadata ?? null,
+        });
+        continue;
+      }
+
+      const id = relation.id || crypto.randomUUID();
+      await db.insert(projectTaskRelations).values({
+        id,
+        projectId,
+        sourceTaskId: relation.sourceTaskId,
+        targetTaskId: relation.targetTaskId,
+        relationType: relation.type,
+        relationSource: relation.source ?? "manual",
+        metadata: relation.metadata ?? null,
+        createdAt: now,
+        updatedAt: now,
+      });
+      upserted.push({
+        id,
+        sourceTaskId: relation.sourceTaskId,
+        targetTaskId: relation.targetTaskId,
+        type: relation.type,
+        source: relation.source ?? "manual",
+        metadata: relation.metadata ?? null,
+      });
+    }
+
+    return c.json({ ok: true, data: upserted });
+  },
+);
+
+// GET /api/projects/:projectId
+projectRoutes.get("/:projectId", async (c) => {
+  const projectId = c.req.param("projectId");
+  const project = await getVisibleProjectOrNull(c.get("user"), projectId);
+  if (!project) {
+    return c.json({ error: "Project not found or access denied" }, 404);
+  }
+  return c.json(normalizeProjectRecord(project));
+});
 
 // PUT /api/projects/:projectId/workflow-template
 projectRoutes.put(

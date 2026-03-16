@@ -23,6 +23,22 @@ interface ProjectRecord {
   } | null;
 }
 
+interface ExecutionPlanCandidate {
+  agentRunId?: string;
+}
+
+interface ExecutionPlanRecord {
+  winnerCandidateIndex?: number;
+  candidates?: ExecutionPlanCandidate[];
+}
+
+interface TaskStatusRecord {
+  status: string;
+  result: string | null;
+  finishedAt: string | null;
+  executionPlan?: string | null;
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
 }
@@ -152,13 +168,75 @@ function extractAssistantText(messages: unknown): string {
   return "";
 }
 
+function parseExecutionPlan(raw: string | null | undefined): ExecutionPlanRecord | null {
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as ExecutionPlanRecord;
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveWinnerAgentRunId(
+  taskStatus: TaskStatusRecord,
+  fallbackAgentRunId: string,
+): string {
+  const plan = parseExecutionPlan(taskStatus.executionPlan);
+  if (!plan || !Array.isArray(plan.candidates) || plan.candidates.length === 0) {
+    return fallbackAgentRunId;
+  }
+
+  const winnerIndex =
+    typeof plan.winnerCandidateIndex === "number"
+      ? plan.winnerCandidateIndex
+      : plan.candidates.length === 1
+        ? 0
+        : undefined;
+
+  if (typeof winnerIndex !== "number") {
+    return fallbackAgentRunId;
+  }
+
+  const winner = plan.candidates[winnerIndex];
+  return typeof winner?.agentRunId === "string" && winner.agentRunId.trim().length > 0
+    ? winner.agentRunId
+    : fallbackAgentRunId;
+}
+
+function listExecutionPlanAgentRunIds(
+  taskStatus: TaskStatusRecord,
+  preferredAgentRunId: string,
+): string[] {
+  const plan = parseExecutionPlan(taskStatus.executionPlan);
+  const ordered = [preferredAgentRunId];
+
+  if (!plan || !Array.isArray(plan.candidates)) {
+    return ordered;
+  }
+
+  for (const candidate of plan.candidates) {
+    if (typeof candidate?.agentRunId !== "string" || candidate.agentRunId.trim().length === 0) {
+      continue;
+    }
+    if (!ordered.includes(candidate.agentRunId)) {
+      ordered.push(candidate.agentRunId);
+    }
+  }
+
+  return ordered;
+}
+
 async function waitForCompletedStatus(
   token: string,
   taskId: string,
   agentRunId: string,
 ): Promise<{
   agentStatus: { status: string };
-  taskStatus: { status: string; result: string | null; finishedAt: string | null };
+  taskStatus: TaskStatusRecord;
 }> {
   const startedAt = Date.now();
 
@@ -167,7 +245,7 @@ async function waitForCompletedStatus(
       request<{ status: string }>(`/api/agents/${agentRunId}/status`, {
         headers: { Authorization: `Bearer ${token}` },
       }),
-      request<{ status: string; result: string | null; finishedAt: string | null }>(
+      request<TaskStatusRecord>(
         `/api/tasks/${taskId}`,
         {
           headers: { Authorization: `Bearer ${token}` },
@@ -286,27 +364,27 @@ async function waitForAssistantResult(
   taskId: string,
   agentRunId: string,
 ): Promise<{
-  taskStatus: { status: string; result: string | null; finishedAt: string | null };
+  taskStatus: TaskStatusRecord;
   assistantText: string;
+  resolvedAgentRunId: string;
 }> {
   const startedAt = Date.now();
 
   while (Date.now() - startedAt < 30000) {
-    const [taskStatus, messages] = await Promise.all([
-      request<{ status: string; result: string | null; finishedAt: string | null }>(
-        `/api/tasks/${taskId}`,
-        {
-          headers: { Authorization: `Bearer ${token}` },
-        },
-      ),
-      request(`/api/agents/${agentRunId}/messages`, {
-        headers: { Authorization: `Bearer ${token}` },
-      }),
-    ]);
+    const taskStatus = await request<TaskStatusRecord>(`/api/tasks/${taskId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const resolvedAgentRunId = resolveWinnerAgentRunId(taskStatus, agentRunId);
 
-    const assistantText = extractAssistantText(messages);
-    if (assistantText && taskStatus.result === assistantText) {
-      return { taskStatus, assistantText };
+    for (const candidateAgentRunId of listExecutionPlanAgentRunIds(taskStatus, resolvedAgentRunId)) {
+      const messages = await request(`/api/agents/${candidateAgentRunId}/messages`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      const assistantText = extractAssistantText(messages);
+      if (assistantText && taskStatus.result === assistantText) {
+        return { taskStatus, assistantText, resolvedAgentRunId: candidateAgentRunId };
+      }
     }
 
     await sleep(250);
@@ -451,11 +529,13 @@ async function runCompletionSyncScenario(options: {
     expect(taskStatus.finishedAt).toBeTruthy();
 
     if (options.expectResultSync) {
-      const { taskStatus: finalTaskStatus, assistantText } = await waitForAssistantResult(
+      const { taskStatus: finalTaskStatus, assistantText, resolvedAgentRunId } = await waitForAssistantResult(
         token,
         task.id,
         agentRunId,
       );
+      expect(typeof resolvedAgentRunId).toBe("string");
+      expect(resolvedAgentRunId.length).toBeGreaterThan(0);
       expect(assistantText.length).toBeGreaterThan(0);
       expect(finalTaskStatus.result).toBe(assistantText);
     }

@@ -374,6 +374,150 @@ beforeEach(() => {
 });
 
 describe("TaskDetail", () => {
+  it("renders warning runtime burst status for the selected session", async () => {
+    apiMocks.getTask.mockResolvedValueOnce(makeTask());
+    apiMocks.getTaskSessions.mockResolvedValueOnce({
+      data: [
+        {
+          id: "ses-1",
+          title: "主分支",
+          isActive: true,
+          summary: null,
+          createdAt: "2026-03-10T12:00:00.000Z",
+          updatedAt: "2026-03-10T12:02:00.000Z",
+        },
+      ],
+    });
+    realtimeState.events.splice(0, realtimeState.events.length, {
+      id: "evt-session-status-warning",
+      type: "session.status",
+      ts: "2026-03-10T12:02:15.000Z",
+      taskId: "task-1",
+      sessionId: "ses-1",
+      data: {
+        info: {
+          id: "ses-1",
+          type: "warning",
+          requests: 4,
+          tokens: 128,
+          cost: 0.32,
+          metadata: {
+            source: "runtime_burst_guard",
+            decision: "warning",
+            ratio: 0.82,
+            window: { seconds: 60 },
+          },
+        },
+      },
+    });
+
+    const wrapper = await mountPage();
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("突发预警");
+    expect(wrapper.text()).toContain("1 分钟窗口 使用已逼近上限");
+    expect(wrapper.text()).toContain("4 次请求 / 128 tokens / 成本 0.32 / 阈值占用 82%");
+  });
+
+  it("renders paused-approval runtime burst status for the selected session", async () => {
+    apiMocks.getTask.mockResolvedValueOnce(makeTask());
+    apiMocks.getTaskSessions.mockResolvedValueOnce({
+      data: [
+        {
+          id: "ses-1",
+          title: "主分支",
+          isActive: true,
+          summary: null,
+          createdAt: "2026-03-10T12:00:00.000Z",
+          updatedAt: "2026-03-10T12:02:00.000Z",
+        },
+      ],
+    });
+    realtimeState.events.splice(0, realtimeState.events.length, {
+      id: "evt-session-status-paused",
+      type: "session.status",
+      ts: "2026-03-10T12:02:30.000Z",
+      taskId: "task-1",
+      sessionId: "ses-1",
+      data: {
+        info: {
+          id: "ses-1",
+          type: "paused-approval",
+          requests: 28,
+          tokens: 120000,
+          cost: 6.1,
+          metadata: {
+            source: "runtime_burst_guard",
+            decision: "paused-approval",
+            permission: "model_burst_resume",
+            ratio: 1.42,
+            window: { seconds: 300 },
+          },
+        },
+      },
+    });
+
+    const wrapper = await mountPage();
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("待审批");
+    expect(wrapper.text()).toContain("当前分支已暂停，等待批准继续");
+    expect(wrapper.text()).toContain("审批项：model_burst_resume");
+    expect(wrapper.text()).toContain("28 次请求 / 120000 tokens / 成本 6.10 / 阈值占用 142%");
+  });
+
+  it("renders and updates cooldown countdown from session.status realtime events", async () => {
+    vi.setSystemTime(new Date("2026-03-10T12:00:00.000Z"));
+    apiMocks.getTask.mockResolvedValueOnce(makeTask());
+    apiMocks.getTaskSessions.mockResolvedValueOnce({
+      data: [
+        {
+          id: "ses-1",
+          title: "主分支",
+          isActive: true,
+          summary: null,
+          createdAt: "2026-03-10T12:00:00.000Z",
+          updatedAt: "2026-03-10T12:02:00.000Z",
+        },
+      ],
+    });
+    realtimeState.events.splice(0, realtimeState.events.length, {
+      id: "evt-session-status-cooldown",
+      type: "session.status",
+      ts: "2026-03-10T12:02:30.000Z",
+      taskId: "task-1",
+      sessionId: "ses-1",
+      data: {
+        info: {
+          id: "ses-1",
+          type: "cooldown",
+          until: "2026-03-10T12:01:05.000Z",
+          requests: 28,
+          tokens: 120000,
+          cost: 6.1,
+          metadata: {
+            source: "runtime_burst_guard",
+            decision: "cooldown",
+            ratio: 1.42,
+            window: { seconds: 300 },
+          },
+        },
+      },
+    });
+
+    const wrapper = await mountPage();
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("冷却中");
+    expect(wrapper.text()).toContain("审批已通过，冷却剩余 1 分 5 秒");
+
+    vi.advanceTimersByTime(5000);
+    await nextTick();
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("审批已通过，冷却剩余 1 分钟");
+  });
+
   it("renders separate panels for project role config and runtime intervention facts", async () => {
     apiMocks.getTask.mockResolvedValueOnce(makeTask());
 

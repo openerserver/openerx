@@ -377,12 +377,12 @@ describe("Operating mode pages", () => {
           id: "decision-select-template-1",
           ts: "2026-03-16T09:58:00.000Z",
           decisionType: "select-template",
-          reason: "老板在阶段 release 升级后根据场景 release-guard 的推荐策略，自动切换到模板 tpl-release。",
+          reason: "老板在阶段 release 升级后根据阶段策略，自动切换到模板 tpl-release。",
           metadata: {
-            source: "recommended-profile",
+            source: "stage-policy",
             trigger: "stage-waiting-approval",
             selectedTemplateId: "tpl-release",
-            scenarioReason: "Release window requires guarded flow.",
+            stagePolicyNote: "高风险发布阶段统一切到发布审批模板。",
             governanceReason: "Release approval pending",
           },
           taskId: "task-1",
@@ -474,10 +474,10 @@ describe("Operating mode pages", () => {
     expect(wrapper.text()).toContain("Release candidate");
     expect(wrapper.text()).toContain("人工覆盖历史");
     expect(wrapper.text()).toContain("user-1");
-    expect(wrapper.text()).toContain("场景推荐命中");
+    expect(wrapper.text()).toContain("阶段策略命中");
     expect(wrapper.text()).toContain("升级后二次治理");
     expect(wrapper.text()).toContain("模板 tpl-release");
-    expect(wrapper.text()).toContain("推荐原因：Release window requires guarded flow.");
+    expect(wrapper.text()).toContain("阶段策略：高风险发布阶段统一切到发布审批模板。 · 治理触发：Release approval pending");
   });
 
   it("loads project workflow template page with governance settings", async () => {
@@ -555,7 +555,14 @@ describe("Operating mode pages", () => {
     });
 
     const { default: Page } = await import("../../control-plane/web-ui/src/pages/ProjectWorkflowTemplate.vue");
-    const wrapper = mount(Page);
+    const wrapper = mount(Page, {
+      global: {
+        stubs: {
+          RouterLink: true,
+          "router-link": true,
+        },
+      },
+    });
     await flushPromises();
 
     expect(wrapper.text()).toContain("老板自动切模板");

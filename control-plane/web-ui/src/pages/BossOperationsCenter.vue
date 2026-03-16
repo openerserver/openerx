@@ -188,7 +188,6 @@ import {
   type ProjectBossOperationsView,
   toApiError,
 } from "../lib/api";
-import ProjectSectionNav from "../components/ProjectSectionNav.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -258,6 +257,7 @@ function formatOverrideAction(value?: string | null) {
 }
 
 function formatTemplateDecisionSource(metadata?: Record<string, unknown>) {
+  if (metadata?.source === "stage-policy") return "阶段策略命中";
   if (metadata?.source === "recommended-profile") return "场景推荐命中";
   if (metadata?.source === "project-preferred") return "项目偏好命中";
   return "";
@@ -278,6 +278,9 @@ function formatSelectedTemplate(metadata?: Record<string, unknown>) {
 
 function formatTemplateDecisionReason(metadata?: Record<string, unknown>) {
   const parts: string[] = [];
+  if (typeof metadata?.stagePolicyNote === "string" && metadata.stagePolicyNote.trim()) {
+    parts.push(`阶段策略：${metadata.stagePolicyNote.trim()}`);
+  }
   if (typeof metadata?.scenarioReason === "string" && metadata.scenarioReason.trim()) {
     parts.push(`推荐原因：${metadata.scenarioReason.trim()}`);
   }

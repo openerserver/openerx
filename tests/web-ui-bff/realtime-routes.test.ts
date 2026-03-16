@@ -102,6 +102,20 @@ async function authedRequest(role: string, init?: RequestInit) {
   });
 }
 
+async function authedSessionStatusRequest(role: string, init?: RequestInit) {
+  const token = await createToken(role);
+  const app = createApp();
+  return app.request("/api/realtime/dev/inject-session-status", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+      ...(init?.headers || {}),
+    },
+    body: init?.body,
+  });
+}
+
 beforeEach(() => {
   ensureAgentRunForSessionMock.mockReset();
   findAgentRunBySessionIdMock.mockReset();
@@ -255,6 +269,65 @@ describe("realtime dev injection route", () => {
         properties: {
           toolName: "task_graph_create",
           result: JSON.stringify({ graphId: "graph-fixed-1" }),
+        },
+      },
+    });
+  });
+
+  test("injects a synthetic session.status event for runtime burst state", async () => {
+    const response = await authedSessionStatusRequest("platform_admin", {
+      body: JSON.stringify({
+        taskId: "task-1",
+        projectId: "proj-1",
+        sessionId: "ses-main-1",
+        info: {
+          type: "paused-approval",
+          metadata: {
+            source: "runtime_burst_guard",
+            permission: "model_burst_resume",
+            decision: "paused-approval",
+          },
+          requests: 4,
+          tokens: 128,
+          cost: 0.32,
+        },
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      ok: true,
+      agentRunId: "run-test-1",
+      sessionId: "ses-main-1",
+      taskId: "task-1",
+      projectId: "proj-1",
+      emittedType: "paused-approval",
+    });
+    expect(ensureAgentRunForSessionMock).toHaveBeenCalledWith(
+      "ses-main-1",
+      "task-1",
+      "proj-1",
+      undefined,
+      undefined,
+    );
+    expect(ingestParsedEventMock).toHaveBeenCalledWith("session.status", {
+      directory: ".",
+      sessionId: "ses-main-1",
+      payload: {
+        type: "session.status",
+        sessionId: "ses-main-1",
+        properties: {
+          info: {
+            type: "paused-approval",
+            metadata: {
+              source: "runtime_burst_guard",
+              permission: "model_burst_resume",
+              decision: "paused-approval",
+            },
+            requests: 4,
+            tokens: 128,
+            cost: 0.32,
+          },
         },
       },
     });

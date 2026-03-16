@@ -18,6 +18,8 @@
           <a-tag v-if="node.isActive" color="blue" class="branch-node__tag">当前</a-tag>
           <a-tag v-else-if="node.sourceType === 'root'" color="default" class="branch-node__tag">主线</a-tag>
           <a-tag v-else color="cyan" class="branch-node__tag">分叉节点</a-tag>
+          <a-tag v-if="sessionState" :color="sessionState.badgeColor" class="branch-node__tag">{{ sessionState.badgeLabel }}</a-tag>
+          <a-tag v-if="sessionState?.countdownLabel" color="default" class="branch-node__tag">剩余 {{ sessionState.countdownLabel }}</a-tag>
         </div>
         <div class="branch-node__identity">
           <span class="branch-node__identity-chip">会话 {{ shortSessionId }}</span>
@@ -40,6 +42,10 @@
         <div class="branch-node__meta">
           <span class="branch-node__time">{{ formatTime(node.updatedAt || node.createdAt) }}</span>
           <span class="branch-node__summary">{{ summaryLabel }}</span>
+        </div>
+        <div v-if="sessionState" class="branch-node__guard">
+          <span class="branch-node__guard-summary">{{ sessionState.summary }}</span>
+          <span v-if="sessionState.detail" class="branch-node__guard-detail">{{ sessionState.detail }}</span>
         </div>
       </div>
 
@@ -69,6 +75,7 @@
         :node="child"
         :selected-session-id="selectedSessionId"
         :task-status="taskStatus"
+        :session-state-map="sessionStateMap"
         :depth="depth + 1"
         :parent-title="displayTitle"
         :parent-session-id="node.runtimeSessionId"
@@ -91,6 +98,13 @@ const props = defineProps<{
   node: SessionTreeNode;
   selectedSessionId?: string;
   taskStatus?: string;
+  sessionStateMap?: Record<string, {
+    badgeLabel: string;
+    badgeColor: string;
+    summary: string;
+    detail?: string;
+    countdownLabel?: string;
+  }>;
   depth: number;
   parentTitle?: string;
   parentSessionId?: string;
@@ -110,6 +124,8 @@ const expanded = ref(true);
 const hasChildren = computed(() => props.node.children.length > 0);
 
 const isSelected = computed(() => props.selectedSessionId === props.node.runtimeSessionId);
+
+const sessionState = computed(() => props.sessionStateMap?.[props.node.runtimeSessionId]);
 
 const rowStyle = computed(() => ({
   paddingLeft: `${props.depth * 18 + 10}px`,
@@ -451,6 +467,23 @@ function formatTime(ts: string | null | undefined): string {
   font-size: 11px;
   color: #999;
   margin-top: 2px;
+}
+
+.branch-node__guard {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+}
+
+.branch-node__guard-summary {
+  font-size: 11px;
+  color: #4b5a72;
+}
+
+.branch-node__guard-detail {
+  font-size: 10px;
+  color: #7b8697;
 }
 
 .branch-node__actions {

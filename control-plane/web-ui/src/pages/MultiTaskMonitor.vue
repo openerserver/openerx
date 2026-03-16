@@ -3,7 +3,22 @@
     <header class="monitor-page__header">
       <div>
         <h2 class="monitor-page__title">多任务监控台</h2>
-        <p class="monitor-page__subtitle">在同一张画布上观察多个任务的关键状态与最近动态。</p>
+        <div class="monitor-page__project-switcher">
+          <a-select
+            :value="monitorProjectFilter"
+            class="monitor-page__project-select"
+            @update:value="handleProjectFilterChange"
+          >
+            <a-select-option value="__all__">全部项目</a-select-option>
+            <a-select-option
+              v-for="project in projectStore.projects"
+              :key="project.id"
+              :value="project.id"
+            >
+              {{ project.name }}
+            </a-select-option>
+          </a-select>
+        </div>
       </div>
       <div class="monitor-page__stats">
         <div class="monitor-stat">
@@ -195,18 +210,12 @@
                   </span>
                 </div>
                 <div class="monitor-node__meta">
-                  <span>{{ summaryForTask(slotProps.data.layout.taskId).pipelineLabel }}</span>
+                  <span v-if="summaryForTask(slotProps.data.layout.taskId).modelLabel">{{ summaryForTask(slotProps.data.layout.taskId).modelLabel }}</span>
                   <span>{{ summaryForTask(slotProps.data.layout.taskId).latestActivityLabel }}</span>
                 </div>
               </div>
 
               <div class="monitor-node__actions">
-                <a-button size="small" type="text" @click.stop="monitorStore.toggleDetailsCollapsed(slotProps.data.layout.id)">
-                  {{ isDetailsCollapsed(slotProps.data.layout) ? '展开概览' : '收起概览' }}
-                </a-button>
-                <router-link :to="`/workbench?task=${slotProps.data.layout.taskId}`" @click.stop>
-                  <a-button size="small" type="text">工作台</a-button>
-                </router-link>
                 <router-link :to="`/tasks/${slotProps.data.layout.taskId}`" @click.stop>
                   <a-button size="small" type="text">详情</a-button>
                 </router-link>
@@ -215,48 +224,6 @@
                 </a-button>
               </div>
             </header>
-
-            <section class="monitor-node__overview-shell">
-              <div class="monitor-node__overview-header">
-                <span class="monitor-node__overview-title">任务概览</span>
-                <span class="monitor-node__overview-hint">{{ isDetailsCollapsed(slotProps.data.layout) ? '默认收起' : '已展开' }}</span>
-              </div>
-
-              <div v-if="!isDetailsCollapsed(slotProps.data.layout)" class="monitor-node__overview-body">
-                <div class="monitor-node__summary-row">
-                  <div class="monitor-kpi">
-                    <span class="monitor-kpi__label">任务状态</span>
-                    <strong>{{ statusLabel(summaryForTask(slotProps.data.layout.taskId).status) }}</strong>
-                  </div>
-                  <div class="monitor-kpi">
-                    <span class="monitor-kpi__label">当前会话</span>
-                    <strong>{{ summaryForTask(slotProps.data.layout.taskId).branchLabel }}</strong>
-                  </div>
-                  <div class="monitor-kpi">
-                    <span class="monitor-kpi__label">当前阶段</span>
-                    <strong>{{ summaryForTask(slotProps.data.layout.taskId).pipelineLabel }}</strong>
-                  </div>
-                  <div class="monitor-kpi">
-                    <span class="monitor-kpi__label">异常数</span>
-                    <strong>{{ summaryForTask(slotProps.data.layout.taskId).issueLabel }}</strong>
-                  </div>
-                </div>
-
-                <div class="monitor-node__facts">
-                  <div
-                    v-for="event in summaryForTask(slotProps.data.layout.taskId).events"
-                    :key="event.id"
-                    class="monitor-fact"
-                  >
-                    <div class="monitor-fact__main">
-                      <span class="monitor-fact__label">{{ event.type }}</span>
-                      <span class="monitor-fact__value">{{ event.label }}</span>
-                    </div>
-                    <span class="monitor-fact__time">{{ event.timeLabel }}</span>
-                  </div>
-                </div>
-              </div>
-            </section>
 
             <div class="monitor-node__stream-shell">
               <div class="monitor-node__stream-header">
@@ -279,6 +246,7 @@
                 >
                   <div class="monitor-stream-message__meta">
                     <span class="monitor-stream-message__role">{{ monitorMessageRoleLabel(message) }}</span>
+                    <span v-if="message.modelLabel" class="monitor-stream-message__model">{{ message.modelLabel }}</span>
                     <span class="monitor-stream-message__time">{{ message.createdAtLabel }}</span>
                   </div>
                   <div
@@ -358,6 +326,14 @@ interface MonitorNodeSummary {
   streamStateLabel: string;
   messages: MonitorMessageItem[];
   events: MonitorEventItem[];
+  // Compact info fields
+  completedStages: number;
+  totalStages: number;
+  durationLabel: string;
+  tokenLabel: string;
+  modelLabel: string;
+  branchName: string;
+  changeLabel: string;
 }
 
 interface MonitorLayoutSection {
@@ -398,6 +374,7 @@ interface MonitorMessageItem {
   role: "user" | "assistant";
   text: string;
   agent?: string;
+  modelLabel?: string;
   createdAt?: string;
   createdAtLabel: string;
   isStreaming: boolean;
@@ -405,6 +382,7 @@ interface MonitorMessageItem {
 
 interface StreamingAssistantMeta {
   agent?: string;
+  modelLabel?: string;
   createdAt?: string;
 }
 
@@ -470,6 +448,13 @@ const FALLBACK_SUMMARY: MonitorNodeSummary = {
   streamStateLabel: "等待回复",
   messages: [],
   events: [],
+  completedStages: 0,
+  totalStages: 0,
+  durationLabel: "",
+  tokenLabel: "",
+  modelLabel: "",
+  branchName: "",
+  changeLabel: "",
 };
 
 const LAYOUT_MODE_OPTIONS: LayoutModeOption[] = [
@@ -502,6 +487,7 @@ const realtimeStore = useRealtimeStore();
 const taskPickerValue = ref<string | undefined>();
 const taskPickerLoading = ref(false);
 const taskPickerTasks = ref<Task[]>([]);
+const monitorProjectFilter = ref(projectStore.currentProjectId || "__all__");
 const searchText = ref("");
 const statusFilter = ref("all");
 const monitorStructureSections = ref<MonitorLayoutSection[]>([]);
@@ -1227,7 +1213,10 @@ watch(
 
 watch(
   () => projectStore.currentProjectId,
-  () => {
+  (newId) => {
+    if (monitorProjectFilter.value !== "__all__" && newId && monitorProjectFilter.value !== newId) {
+      monitorProjectFilter.value = newId;
+    }
     taskPickerTasks.value = [];
     void reloadTaskPicker();
   },
@@ -1701,7 +1690,7 @@ function repairFreeLayout(options?: { force?: boolean; updateBaseline?: boolean 
 
   items.forEach((item) => {
     const width = Math.max(item.layout.width, FREE_LAYOUT_CARD_WIDTH);
-    const height = Math.max(item.layout.height, item.estimatedHeight);
+    const height = item.estimatedHeight;
     const currentRect = { x: item.layout.x, y: item.layout.y, width, height };
     const maxX = freeLayoutMaxX(width);
     const needsMove = options?.force
@@ -1776,13 +1765,14 @@ function stabilizeFreeLayout(options?: { force?: boolean; updateBaseline?: boole
 
 async function reloadTaskPicker() {
   if (unmounted) return;
-  if (!projectStore.currentProjectId) {
+  const filterProjectId = monitorProjectFilter.value === "__all__" ? undefined : monitorProjectFilter.value;
+  if (!filterProjectId && monitorProjectFilter.value !== "__all__") {
     taskPickerTasks.value = [];
     return;
   }
   taskPickerLoading.value = true;
   try {
-    const response = await listTasks(projectStore.currentProjectId);
+    const response = await listTasks(filterProjectId);
     taskPickerTasks.value = response.data || [];
     syncRunningTasksToCanvas();
   } catch {
@@ -1790,6 +1780,16 @@ async function reloadTaskPicker() {
   } finally {
     taskPickerLoading.value = false;
   }
+}
+
+function handleProjectFilterChange(value: unknown) {
+  const next = String(value ?? "__all__");
+  monitorProjectFilter.value = next;
+  if (next !== "__all__") {
+    projectStore.switchProject(next);
+  }
+  taskPickerTasks.value = [];
+  void reloadTaskPicker();
 }
 
 function ensureTaskPickerRefreshTimer() {
@@ -1892,8 +1892,7 @@ function filterTaskOption(input: string, option?: { value?: string | number; lab
 }
 
 function estimateLayoutHeight(layout: TaskMonitorNodeLayout, summary: MonitorNodeSummary) {
-  const overviewHeight = isDetailsCollapsed(layout) ? 42 : 140 + Math.min(summary.events.length, 4) * 42;
-  const estimatedHeight = 166 + overviewHeight + Math.min(summary.messages.length, 4) * 44;
+  const estimatedHeight = 130 + Math.min(summary.messages.length, 4) * 44;
   return Math.max(estimatedHeight, renderedNodeHeights[layout.id] || 0);
 }
 
@@ -2328,6 +2327,13 @@ async function refreshNodeSummary(taskId: string, skipIfBusy = false) {
       streamStateLabel: "同步失败",
       messages: [],
       events: [],
+      completedStages: 0,
+      totalStages: 0,
+      durationLabel: "",
+      tokenLabel: "",
+      modelLabel: "",
+      branchName: "",
+      changeLabel: "",
     };
   } finally {
     refreshState[taskId] = false;
@@ -2440,7 +2446,58 @@ function buildSummary(
     streamStateLabel: buildStreamStateLabel(resolvedStatus, messages),
     messages,
     events,
+    completedStages: pipeline?.summary.completedStages ?? 0,
+    totalStages: pipeline?.summary.totalStages ?? 0,
+    durationLabel: buildDurationLabel(task, pipeline),
+    tokenLabel: buildTokenLabel(pipeline),
+    modelLabel: task.selectedModel || "",
+    branchName: task.workingBranch || pipeline?.branchName || "",
+    changeLabel: buildChangeLabel(task),
   };
+}
+
+function buildDurationLabel(task: Task, pipeline: RuntimePipeline | null): string {
+  const ms = pipeline?.summary.totalDurationMs;
+  if (ms && ms > 0) {
+    return formatDurationMs(ms);
+  }
+  if (task.startedAt) {
+    const elapsed = Date.now() - new Date(task.startedAt).getTime();
+    if (elapsed > 0 && elapsed < 86400000) {
+      return formatDurationMs(elapsed);
+    }
+  }
+  return "";
+}
+
+function formatDurationMs(ms: number): string {
+  const totalSeconds = Math.floor(ms / 1000);
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes < 60) return `${minutes}m${seconds > 0 ? `${seconds}s` : ""}`;
+  const hours = Math.floor(minutes / 60);
+  const remainMinutes = minutes % 60;
+  return `${hours}h${remainMinutes > 0 ? `${remainMinutes}m` : ""}`;
+}
+
+function buildTokenLabel(pipeline: RuntimePipeline | null): string {
+  const tokens = pipeline?.summary.totalTokens;
+  if (!tokens || (tokens.input === 0 && tokens.output === 0)) return "";
+  const fmt = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+  return `${fmt(tokens.input)}\u2193 ${fmt(tokens.output)}\u2191`;
+}
+
+function buildChangeLabel(task: Task): string {
+  const cs = task.changesSummary;
+  if (!cs) return "";
+  const parts: string[] = [];
+  const totalFiles = (cs.filesAdded || 0) + (cs.filesModified || 0) + (cs.filesDeleted || 0);
+  if (totalFiles > 0) parts.push(`${totalFiles} files`);
+  const ins = cs.totalInsertions || 0;
+  const del = cs.totalDeletions || 0;
+  if (ins > 0 || del > 0) parts.push(`+${ins}/-${del}`);
+  return parts.join(" · ");
 }
 
 function resolveMonitorTaskStatus(
@@ -2534,6 +2591,7 @@ function buildMonitorMessages(
           role: role === "user" ? "user" : "assistant",
           text: mergedText,
           agent: role === "assistant" && typeof info.agent === "string" ? info.agent : undefined,
+          modelLabel: role === "assistant" ? extractModelLabel(info) : undefined,
           createdAt: parseMessageTimestamp(time.created ?? time.completed),
           createdAtLabel: formatTime(parseMessageTimestamp(time.created ?? time.completed) || undefined),
           isStreaming: role === "assistant" && liveState.incompleteIds.has(messageId),
@@ -2557,6 +2615,7 @@ function buildMonitorMessages(
       role: "assistant",
       text: text || "正在生成...",
       agent: meta?.agent,
+      modelLabel: meta?.modelLabel,
       createdAt: meta?.createdAt,
       createdAtLabel: formatTime(meta?.createdAt),
       isStreaming: liveState.incompleteIds.has(messageId),
@@ -2623,6 +2682,7 @@ function buildLiveAssistantState(taskId: string, sessionId: string | undefined, 
             : undefined;
           metaById.set(messageId, {
             agent: typeof info.agent === "string" ? info.agent : undefined,
+            modelLabel: extractModelLabel(info),
             createdAt: parseMessageTimestamp(time?.created ?? time?.completed),
           });
           rememberAssistantMessage(messageId);
@@ -2829,6 +2889,62 @@ function monitorMessageRoleLabel(message: MonitorMessageItem): string {
   return message.role === "user" ? "用户输入" : message.agent || "模型回复";
 }
 
+function extractModelLabel(info: Record<string, unknown>): string | undefined {
+  const directCandidates = [
+    info.modelLabel,
+    info.modelRoute,
+    info.modelID,
+    info.modelId,
+    info.modelUsed,
+  ];
+
+  for (const candidate of directCandidates) {
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+
+  if (typeof info.model === "string" && info.model.trim()) {
+    return info.model.trim();
+  }
+
+  const model = info.model && typeof info.model === "object" ? (info.model as Record<string, unknown>) : null;
+  if (!model) return undefined;
+
+  const provider = typeof model.providerID === "string"
+    ? model.providerID.trim()
+    : typeof model.providerId === "string"
+      ? model.providerId.trim()
+      : typeof model.provider === "string"
+        ? model.provider.trim()
+        : "";
+  const id = typeof model.modelID === "string"
+    ? model.modelID.trim()
+    : typeof model.modelId === "string"
+      ? model.modelId.trim()
+      : typeof model.id === "string"
+        ? model.id.trim()
+        : "";
+
+  if (provider && id) {
+    return `${provider}:${id}`;
+  }
+
+  const nestedCandidates = [
+    model.route,
+    model.label,
+    id,
+  ];
+
+  for (const candidate of nestedCandidates) {
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+
+  return id || provider || undefined;
+}
+
 function normalizeRealtimeTextParts(parts: Array<Record<string, unknown>>): string | undefined {
   const text = parts
     .filter((part) => part.type === "text" && typeof part.text === "string")
@@ -2923,6 +3039,7 @@ function applyRealtimeEventToLiveState(taskId: string, sessionId: string | undef
           : undefined;
         state.metaById[messageId] = {
           agent: typeof info.agent === "string" ? info.agent : undefined,
+          modelLabel: extractModelLabel(info),
           createdAt: parseMessageTimestamp(time?.created ?? time?.completed),
         };
         rememberLiveAssistantMessage(state, messageId);
@@ -3103,7 +3220,7 @@ function nodeStyle(layout: TaskMonitorNodeLayout) {
 
   return {
     width: `${layout.width}px`,
-    minHeight: `${layout.height}px`,
+    minHeight: '180px',
     zIndex: String(layout.zIndex),
     "--monitor-node-preview-offset-x": `${previewOffset.x}px`,
     "--monitor-node-preview-offset-y": `${previewOffset.y}px`,
@@ -3181,6 +3298,14 @@ function freeLayoutPreviewSlotStyle(slot: { x: number; y: number; width: number;
 .monitor-page__subtitle {
   margin: 8px 0 0;
   color: rgba(216, 231, 255, 0.72);
+}
+
+.monitor-page__project-switcher {
+  margin-top: 6px;
+}
+
+.monitor-page__project-select {
+  min-width: 180px;
 }
 
 .monitor-page__stats {
@@ -3680,66 +3805,46 @@ function freeLayoutPreviewSlotStyle(slot: { x: number; y: number; width: number;
   flex-wrap: wrap;
 }
 
-.monitor-node__overview-shell {
-  padding: 10px 14px 0;
+.monitor-node__compact-info {
+  padding: 6px 14px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
-.monitor-node__overview-header {
+.monitor-node__info-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 10px 12px;
-  border-radius: 14px;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.monitor-node__info-chip {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 8px;
   background: rgba(12, 27, 49, 0.62);
   border: 1px solid rgba(112, 141, 198, 0.14);
+  color: rgba(216, 231, 255, 0.78);
+  white-space: nowrap;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.monitor-node__overview-title {
-  font-size: 12px;
-  color: rgba(216, 231, 255, 0.88);
+.monitor-node__info-chip--branch {
+  color: #b8d4ff;
 }
 
-.monitor-node__overview-hint {
-  font-size: 11px;
-  color: rgba(216, 231, 255, 0.46);
+.monitor-node__info-chip--issue {
+  color: #ffb4a0;
+  border-color: rgba(255, 133, 89, 0.24);
+  background: rgba(255, 133, 89, 0.1);
 }
 
-.monitor-node__overview-body {
-  padding-top: 10px;
-}
-
-.monitor-node__summary-row {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-  padding: 0;
-}
-
-.monitor-kpi {
-  padding: 10px 10px 8px;
-  border-radius: 14px;
-  background: rgba(15, 30, 56, 0.66);
-  border: 1px solid rgba(112, 141, 198, 0.14);
-}
-
-.monitor-kpi__label {
-  display: block;
-  font-size: 11px;
-  color: rgba(216, 231, 255, 0.52);
-}
-
-.monitor-kpi strong {
-  display: block;
-  margin-top: 4px;
-  font-size: 14px;
-  line-height: 1.4;
-}
-
-.monitor-node__facts {
-  display: grid;
-  gap: 8px;
-  margin-top: 10px;
+.monitor-node__info-chip--change {
+  color: #a8e6cf;
+  border-color: rgba(0, 214, 160, 0.2);
 }
 
 .monitor-node__stream-shell {
@@ -3765,7 +3870,7 @@ function freeLayoutPreviewSlotStyle(slot: { x: number; y: number; width: number;
 }
 
 .monitor-node__stream {
-  max-height: 180px;
+  max-height: 280px;
   overflow: auto;
   padding: 10px;
   border-radius: 14px;
@@ -3804,6 +3909,11 @@ function freeLayoutPreviewSlotStyle(slot: { x: number; y: number; width: number;
 
 .monitor-stream-message__role {
   color: #95e7ff;
+}
+
+.monitor-stream-message__model {
+  color: rgba(216, 231, 255, 0.44);
+  font-style: italic;
 }
 
 .monitor-stream-message__body {

@@ -20,6 +20,8 @@
 - 这类执行集成用例已改为在建任务时优先选择可用的 GitHub Copilot 模型，避免回落到本地 runtime 默认模型后因为 provider 不可达而误报失败。
 - Chat Settings 回归分组可直接运行 bun run test:chat-settings:regression；它会顺序执行 BFF chat/apply 集成测试和前端 ChatSettings 页面回归。
 - 浏览器级 Chat Settings 管理员回归可运行 bun run test:e2e:chat-settings；该用例通过 Playwright 覆盖登录、侧边栏导航、发送按钮和应用按钮，并在浏览器层 mock API，适合纳入 CI。
+- 受控 live backend 浏览器回归可运行 bun run test:e2e:live-controlled；当前先收录 runtime burst 状态链路验证，要求本地已有可用的 runtime、service、BFF，并通过 dev-only realtime 注入端点把 session.status 送入同一条 BFF/WS/UI 管道，确认 Task Detail 能看到 warning、paused-approval 与 cooldown。
+- 如需单独跑 runtime burst 这条 live 用例，可继续使用 bun run test:e2e:runtime-burst；它当前只是上述受控 live 回归分组的别名。
 - 如需一次跑完整的 Chat Settings CI 过滤组，使用 bun run test:chat-settings:ci。
 - 根目录可用 bun run typecheck 做三端类型检查，bun run check:all 做 lint、类型检查和默认测试全量校验。
 - 如需共享测试工具，优先在 tests 下新增公共辅助文件，而不是放进业务模块。

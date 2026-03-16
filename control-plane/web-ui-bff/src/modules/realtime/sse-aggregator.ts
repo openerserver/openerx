@@ -378,6 +378,7 @@ class SSEAggregator {
     const eventTypeMap: Record<string, RealtimeEventType> = {
       "session.created": "session.created",
       "session.updated": "session.updated",
+      "session.status": "session.status",
       "session.idle": "session.idle",
       "session.error": "session.error",
       "message.updated": "message.updated",

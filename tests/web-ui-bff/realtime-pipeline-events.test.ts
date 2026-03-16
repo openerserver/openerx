@@ -223,6 +223,66 @@ beforeEach(() => {
 });
 
 describe("SSEAggregator pipeline emitters", () => {
+  test("session.status events are forwarded with runtime burst metadata", async () => {
+    findAgentRunBySessionIdMock.mockReturnValue({
+      subSessionId: "ses-1",
+      taskId: "task-1",
+      projectId: "proj-1",
+      agentRunId: "run-1",
+      status: "paused",
+    });
+
+    const emitted: Array<Record<string, unknown>> = [];
+    const unsubscribe = sseAggregator.onEvent((event) => {
+      emitted.push(event as unknown as Record<string, unknown>);
+    });
+
+    try {
+      await sseAggregator.ingestParsedEvent("session.status", {
+        info: {
+          id: "ses-1",
+          type: "paused-approval",
+          until: "2026-03-12T10:06:00.000Z",
+          metadata: {
+            source: "runtime_burst_guard",
+            decision: "paused-approval",
+            permission: "model_burst_resume",
+            ratio: 1.42,
+            window: { seconds: 300 },
+            limits: {
+              requests: 20,
+              tokens: 100000,
+              cost: 5,
+            },
+          },
+          requests: 28,
+          tokens: 120000,
+          cost: 6.1,
+        },
+      });
+
+      expect(emitted).toHaveLength(1);
+      expect(emitted[0]).toMatchObject({
+        type: "session.status",
+        sessionId: "ses-1",
+        taskId: "task-1",
+        projectId: "proj-1",
+        agentRunId: "run-1",
+        data: {
+          info: {
+            type: "paused-approval",
+            metadata: {
+              source: "runtime_burst_guard",
+              permission: "model_burst_resume",
+            },
+          },
+        },
+      });
+    } finally {
+      unsubscribe();
+    }
+  });
+
   test("post-execution hooks emit task.hooks.updated followed by pipeline.stage.updated", async () => {
     executeLifecycleHooksMock.mockResolvedValue({
       hookExecutions: [

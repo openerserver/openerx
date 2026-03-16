@@ -12,6 +12,7 @@
     "db:seed": "bun run src/db/seed.ts",
     "db:studio": "drizzle-kit studio",
     "cli:task": "bun run src/cli/create-task.ts",
+    "cli:backfill-task-relations": "bun run src/cli/backfill-project-task-relations.ts",
     "cli:repair-graphs": "bun run src/cli/repair-historical-graphs.ts",
     "test": "bun test ../../tests/service --timeout 30000",
     "test:identity": "bun test ../../tests/service/identity-binding.test.ts --timeout 30000",

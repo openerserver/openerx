@@ -21,6 +21,8 @@
     "test:ui:file": "cd control-plane/web-ui && bun run test --",
     "test:chat-settings:regression": "bun run test:bff:chat-settings && bun run test:ui:chat-settings",
     "test:e2e:chat-settings": "playwright test tests/e2e/chat-settings-admin.spec.ts",
+    "test:e2e:live-controlled": "PLAYWRIGHT_LIVE_BACKEND=1 playwright test tests/e2e/runtime-burst-status.spec.ts",
+    "test:e2e:runtime-burst": "bun run test:e2e:live-controlled",
     "test:chat-settings:ci": "bun run test:chat-settings:regression && bun run test:e2e:chat-settings",
     "test:all": "bun run test:service && bun run test:bff && bun run test:ui",
     "test:bff:completion-sync": "cd control-plane/web-ui-bff && bun run test:integration:completion-sync",
@@ -37,7 +39,8 @@
     "opencode:health": "bash scripts/opencode-health-check.sh",
     "opencode:cleanup": "bash scripts/opencode-cleanup.sh",
     "opencode:sync-skills": "bash scripts/sync-skillhub-skills.sh",
-    "cli:task": "cd control-plane/service && bun run cli:task"
+    "cli:task": "cd control-plane/service && bun run cli:task",
+    "backfill:task-relations": "cd control-plane/service && bun run cli:backfill-task-relations"
   },
   "devDependencies": {
     "@playwright/test": "^1.55.0",

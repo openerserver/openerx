@@ -227,15 +227,6 @@ function listSkillSummaries() {
     });
 }
 
-function listSkillDetails() {
-  return listSkillSummaries()
-    .map((summary) => {
-      const detail = readSkillConfig(summary.dirName);
-      return detail ? { dirName: summary.dirName, detail } : null;
-    })
-    .filter((item): item is { dirName: string; detail: NonNullable<ReturnType<typeof readSkillConfig>> } => Boolean(item));
-}
-
 function listCommandSummaries() {
   if (!existsSync(COMMANDS_DIR)) {
     return [] as Array<{ fileName: string; name: string; description: string }>;
@@ -252,15 +243,6 @@ function listCommandSummaries() {
         description: typeof detail?.frontmatter.description === "string" ? detail.frontmatter.description : "",
       };
     });
-}
-
-function listCommandDetails() {
-  return listCommandSummaries()
-    .map((summary) => {
-      const detail = readCommandConfig(summary.name);
-      return detail ? { name: summary.name, detail } : null;
-    })
-    .filter((item): item is { name: string; detail: NonNullable<ReturnType<typeof readCommandConfig>> } => Boolean(item));
 }
 
 function listInstallablePluginSources() {

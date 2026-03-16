@@ -9,6 +9,8 @@
           <a-tag :color="taskStatusColor(task?.status)">{{ taskStatusLabel(task?.status) }}</a-tag>
           <a-tag v-if="taskId" color="default">任务 {{ taskId.slice(0, 8) }}</a-tag>
           <a-tag v-if="selectedSession" color="blue">当前分支 {{ selectedSessionLabel(selectedSession) }}</a-tag>
+          <a-tag v-if="selectedSessionBurstState" :color="selectedSessionBurstState.badgeColor">{{ selectedSessionBurstState.badgeLabel }}</a-tag>
+          <a-tag v-if="selectedSessionBurstState?.countdownLabel" color="default">剩余 {{ selectedSessionBurstState.countdownLabel }}</a-tag>
           <a-tag v-if="task?.selectedModel" color="cyan">{{ task.selectedModel }}</a-tag>
         </a-space>
       </div>
@@ -92,6 +94,7 @@
               <SessionTree
                 :tree="sessionTree"
                 :selected-session-id="selectedSessionId"
+                :session-state-map="runtimeSessionStateMap"
                 :task-status="task?.status"
                 @select="selectSession"
                 @activate="handleActivateSession"
@@ -119,6 +122,14 @@
                     <a-tag :color="session.isActive ? 'blue' : 'default'">
                       {{ session.isActive ? "当前" : "历史" }}
                     </a-tag>
+                    <a-tag
+                      v-if="runtimeSessionStateMap[session.id]"
+                      :color="runtimeSessionStateMap[session.id]?.badgeColor"
+                    >{{ runtimeSessionStateMap[session.id]?.badgeLabel }}</a-tag>
+                    <a-tag
+                      v-if="runtimeSessionStateMap[session.id]?.countdownLabel"
+                      color="default"
+                    >剩余 {{ runtimeSessionStateMap[session.id]?.countdownLabel }}</a-tag>
                   </a-flex>
                   <div :style="taskDetailThemeStyles.sessionExcerptWrap">
                     <a-typography-paragraph
@@ -127,6 +138,11 @@
                       :style="taskDetailThemeStyles.sessionExcerpt"
                     />
                   </div>
+                  <a-typography-text
+                    v-if="runtimeSessionStateMap[session.id]"
+                    type="secondary"
+                    :style="taskDetailThemeStyles.sessionSummary"
+                  >{{ runtimeSessionStateMap[session.id]?.summary }}</a-typography-text>
                   <a-typography-text type="secondary" :style="taskDetailThemeStyles.sessionSummary">
                     {{ sessionSummaryLabel(session.summary) }}
                   </a-typography-text>
@@ -214,9 +230,20 @@
                 >独立窗口</a-button>
                 <a-tag v-if="selectedSession?.isActive" color="blue">活跃分支</a-tag>
                 <a-tag v-if="isAwaitingAssistantResponse" color="processing">执行中</a-tag>
+                <a-tag v-if="selectedSessionBurstState" :color="selectedSessionBurstState.badgeColor">{{ selectedSessionBurstState.badgeLabel }}</a-tag>
+                <a-tag v-if="selectedSessionBurstState?.countdownLabel" color="default">剩余 {{ selectedSessionBurstState.countdownLabel }}</a-tag>
               </a-space>
             </a-flex>
           </template>
+
+          <a-alert
+            v-if="selectedSessionBurstBanner"
+            :type="selectedSessionBurstBanner.alertType"
+            :message="selectedSessionBurstBanner.message"
+            :description="selectedSessionBurstBanner.description"
+            show-icon
+            style="margin-bottom: 12px"
+          />
 
           <div ref="messagesPaneRef" :style="messagesPaneStyle">
             <div v-if="!selectedSessionId && isWorkbenchEmbedded" :style="taskDetailThemeStyles.compactMainEmptyState">
@@ -838,6 +865,16 @@ const isReplyFocusMode = computed(() => route.query.reply === "1");
 const taskDetailEventTableScroll = { y: 220 };
 const REPLY_FOCUS_WINDOW_STORAGE_KEY = "openerx.replyFocusWindowBounds";
 
+type RuntimeBurstSessionState = {
+  kind: "warning" | "paused-approval" | "cooldown";
+  badgeLabel: string;
+  badgeColor: string;
+  summary: string;
+  detail?: string;
+  countdownLabel?: string;
+  alertType: "warning" | "info";
+};
+
 const taskId = computed(() => route.params.taskId as string | undefined);
 const task = ref<Task | null>(null);
 
@@ -1096,9 +1133,11 @@ let liveMessageRefreshInFlight = false;
 let bootstrapRefreshToken = 0;
 let messageAutoScrollFrame: number | null = null;
 let messageAutoScrollTimer: ReturnType<typeof setTimeout> | null = null;
+let runtimeSessionStatusClock: ReturnType<typeof setTimeout> | null = null;
 const BOOTSTRAP_REFRESH_ATTEMPTS = 8;
 const BOOTSTRAP_REFRESH_INTERVAL_MS = 500;
 const LIVE_MESSAGE_REFRESH_INTERVAL_MS = 320;
+const runtimeSessionStatusNowMs = ref(Date.now());
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -1987,6 +2026,10 @@ onUnmounted(() => {
   stopMessageAutoScroll();
   persistReplyFocusWindowBounds();
   stopReplyFocusWindowPersistence();
+  if (runtimeSessionStatusClock) {
+    clearTimeout(runtimeSessionStatusClock);
+    runtimeSessionStatusClock = null;
+  }
   if (refreshTimer) {
     clearTimeout(refreshTimer);
     refreshTimer = null;
@@ -2234,6 +2277,77 @@ const selectedSession = computed(() =>
   sessions.value.find((session) => session.id === selectedSessionId.value),
 );
 
+const runtimeSessionStateMap = computed<Record<string, RuntimeBurstSessionState>>(() => {
+  const states: Record<string, RuntimeBurstSessionState> = {};
+
+  for (const event of taskEvents.value) {
+    if (event.type !== "session.status" || !event.sessionId || states[event.sessionId]) {
+      continue;
+    }
+
+    const normalized = normalizeRuntimeBurstSessionState(event, runtimeSessionStatusNowMs.value);
+    if (normalized) {
+      states[event.sessionId] = normalized;
+    }
+  }
+
+  return states;
+});
+
+const selectedSessionBurstState = computed(() =>
+  selectedSessionId.value ? runtimeSessionStateMap.value[selectedSessionId.value] : undefined,
+);
+
+const selectedSessionBurstBanner = computed(() => {
+  const state = selectedSessionBurstState.value;
+  if (!state) {
+    return null;
+  }
+
+  const descriptionParts = [state.detail];
+  if (state.kind === "paused-approval") {
+    descriptionParts.push("审批项：model_burst_resume");
+  }
+  if (state.countdownLabel && state.kind === "cooldown") {
+    descriptionParts.push(`冷却剩余 ${state.countdownLabel}`);
+  }
+
+  return {
+    alertType: state.alertType,
+    message: state.summary,
+    description: descriptionParts.filter((item): item is string => Boolean(item)).join(" · "),
+  };
+});
+
+function stopRuntimeSessionStatusClock() {
+  if (runtimeSessionStatusClock) {
+    clearTimeout(runtimeSessionStatusClock);
+    runtimeSessionStatusClock = null;
+  }
+}
+
+function scheduleRuntimeSessionStatusClock() {
+  stopRuntimeSessionStatusClock();
+
+  if (selectedSessionBurstState.value?.kind !== "cooldown") {
+    return;
+  }
+
+  runtimeSessionStatusClock = setTimeout(() => {
+    runtimeSessionStatusNowMs.value = Date.now();
+    scheduleRuntimeSessionStatusClock();
+  }, 1000);
+}
+
+watch(
+  selectedSessionBurstState,
+  () => {
+    runtimeSessionStatusNowMs.value = Date.now();
+    scheduleRuntimeSessionStatusClock();
+  },
+  { immediate: true },
+);
+
 const latestAssistantMessageIncomplete = computed(() => {
   if (!Array.isArray(sessionMessages.value) || sessionMessages.value.length === 0) {
     return false;
@@ -2467,6 +2581,149 @@ function getRealtimeInfo(event: RealtimeEvent): Record<string, unknown> | null {
 function getRealtimePart(event: RealtimeEvent): Record<string, unknown> | null {
   if (event.data.part && typeof event.data.part === "object" && !Array.isArray(event.data.part)) {
     return event.data.part as Record<string, unknown>;
+  }
+
+  return null;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+
+  return null;
+}
+
+function asNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
+function formatRuntimeWindow(seconds?: number): string {
+  if (!seconds || seconds <= 0) {
+    return "当前窗口";
+  }
+
+  if (seconds < 60) {
+    return `${seconds} 秒窗口`;
+  }
+
+  const minutes = Math.round(seconds / 60);
+  return `${minutes} 分钟窗口`;
+}
+
+function formatRelativeDuration(ms: number): string | undefined {
+  if (!Number.isFinite(ms) || ms <= 0) {
+    return undefined;
+  }
+
+  const totalSeconds = Math.ceil(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+
+  if (minutes <= 0) {
+    return `${seconds} 秒`;
+  }
+
+  if (seconds === 0) {
+    return `${minutes} 分钟`;
+  }
+
+  return `${minutes} 分 ${seconds} 秒`;
+}
+
+function formatRatio(ratio?: number): string | undefined {
+  if (ratio === undefined || !Number.isFinite(ratio) || ratio <= 0) {
+    return undefined;
+  }
+
+  return `${Math.round(ratio * 100)}%`;
+}
+
+function buildRuntimeBurstMetricsLabel(info: Record<string, unknown>, metadata: Record<string, unknown>) {
+  const parts: string[] = [];
+  const requests = asNumber(info.requests);
+  const tokens = asNumber(info.tokens);
+  const cost = asNumber(info.cost);
+  const ratio = formatRatio(asNumber(metadata.ratio));
+
+  if (requests !== undefined) {
+    parts.push(`${requests} 次请求`);
+  }
+  if (tokens !== undefined) {
+    parts.push(`${tokens} tokens`);
+  }
+  if (cost !== undefined) {
+    parts.push(`成本 ${cost.toFixed(2)}`);
+  }
+  if (ratio) {
+    parts.push(`阈值占用 ${ratio}`);
+  }
+
+  return parts.join(" / ");
+}
+
+function normalizeRuntimeBurstSessionState(
+  event: RealtimeEvent,
+  nowMs: number,
+): RuntimeBurstSessionState | null {
+  const info = getRealtimeInfo(event);
+  if (!info) {
+    return null;
+  }
+
+  const type = asString(info.type);
+  const metadata = asRecord(info.metadata);
+  const source = asString(metadata?.source);
+  if (!type || (source !== "runtime_burst_guard" && type !== "warning" && type !== "paused-approval" && type !== "cooldown")) {
+    return null;
+  }
+
+  const windowConfig = asRecord(metadata?.window);
+  const windowLabel = formatRuntimeWindow(asNumber(windowConfig?.seconds));
+  const metricsLabel = buildRuntimeBurstMetricsLabel(info, metadata || {});
+  const until = asString(info.until) || asString(info.reset);
+  const untilMs = until ? Date.parse(until) : NaN;
+  const countdownLabel = Number.isFinite(untilMs)
+    ? formatRelativeDuration(untilMs - nowMs)
+    : undefined;
+
+  if (type === "warning") {
+    return {
+      kind: "warning",
+      badgeLabel: "突发预警",
+      badgeColor: "gold",
+      summary: `${windowLabel} 使用已逼近上限`,
+      detail: metricsLabel || "请关注当前付费模型调用密度。",
+      alertType: "warning",
+    };
+  }
+
+  if (type === "paused-approval") {
+    return {
+      kind: "paused-approval",
+      badgeLabel: "待审批",
+      badgeColor: "processing",
+      summary: "当前分支已暂停，等待批准继续",
+      detail: metricsLabel || "触发 burst guard，需审批后继续。",
+      countdownLabel,
+      alertType: "info",
+    };
+  }
+
+  if (type === "cooldown") {
+    return {
+      kind: "cooldown",
+      badgeLabel: "冷却中",
+      badgeColor: "orange",
+      summary: countdownLabel ? `审批已通过，冷却剩余 ${countdownLabel}` : "审批已通过，正在冷却",
+      detail: metricsLabel || "冷却期结束后会恢复正常节流状态。",
+      countdownLabel,
+      alertType: "info",
+    };
   }
 
   return null;
@@ -3487,6 +3744,7 @@ function formatEventTypeLabel(type?: string) {
     "task.completed": "任务已完成",
     "task.continued": "任务已续跑",
     "task.hooks.updated": "Hook 已更新",
+    "session.status": "运行状态已更新",
     "session.updated": "分支已更新",
     "message.updated": "消息已更新",
   };

@@ -14,6 +14,7 @@ interface WSClient {
   ws: WebSocket & { send: (data: string) => void };
   userId: string;
   projectIds: Set<string>;
+  subscribedProjects: Set<string>;
   subscribedTasks: Set<string>;
 }
 
@@ -46,6 +47,13 @@ class WSBroadcaster {
     }
   }
 
+  subscribeToProject(clientId: string, projectId: string): void {
+    const client = this.clients.get(clientId);
+    if (client) {
+      client.subscribedProjects.add(projectId);
+    }
+  }
+
   /**
    * Broadcast a RealtimeEvent to all relevant clients.
    */
@@ -62,6 +70,19 @@ class WSBroadcaster {
         continue;
       }
 
+      if (
+        event.projectId &&
+        client.subscribedProjects.size > 0 &&
+        client.subscribedProjects.has(event.projectId)
+      ) {
+        try {
+          client.ws.send(message);
+        } catch {
+          // Client disconnected, will be cleaned up
+        }
+        continue;
+      }
+
       // Filter by task subscription
       if (
         event.taskId &&
@@ -69,6 +90,12 @@ class WSBroadcaster {
         !client.subscribedTasks.has(event.taskId)
       ) {
         continue;
+      }
+
+      if (client.subscribedProjects.size > 0 || client.subscribedTasks.size > 0) {
+        if (!event.projectId && !event.taskId) {
+          continue;
+        }
       }
 
       try {
@@ -140,6 +167,7 @@ export const websocketHandler = {
       ws: ws as WSClient["ws"],
       userId: user.sub,
       projectIds,
+      subscribedProjects: new Set(),
       subscribedTasks: new Set(),
     });
     (ws as unknown as Record<string, string>).__clientId = id;
@@ -168,6 +196,16 @@ export const websocketHandler = {
         }
         wsBroadcaster.subscribeToTask(clientId, data.taskId);
         ws.send(JSON.stringify({ type: "subscribed", taskId: data.taskId }));
+        return;
+      }
+
+      if (data.type === "subscribe_project" && typeof data.projectId === "string") {
+        if (client?.projectIds.size && !client.projectIds.has(data.projectId)) {
+          ws.send(JSON.stringify({ type: "error", error: "No access to this project" }));
+          return;
+        }
+        wsBroadcaster.subscribeToProject(clientId, data.projectId);
+        ws.send(JSON.stringify({ type: "subscribed", projectId: data.projectId }));
       }
     } catch {
       // Malformed message

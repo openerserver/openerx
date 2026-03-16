@@ -1265,6 +1265,21 @@ const createTaskSchema = z.object({
   gitAuthorEmail: z.string().email().max(200).optional(),
   gitCommitterName: z.string().max(200).optional(),
   gitCommitterEmail: z.string().email().max(200).optional(),
+  relations: z.array(
+    z.object({
+      sourceTaskId: z.string().min(1).optional(),
+      targetTaskId: z.string().min(1).optional(),
+      type: z.enum(["depends-on", "blocks", "spawned-from"]),
+      metadata: z.record(z.unknown()).optional(),
+    }),
+  ).optional(),
+  relationContext: z.object({
+    spawnedFromTaskId: z.string().min(1).optional(),
+    dependsOnTaskIds: z.array(z.string().min(1)).optional(),
+    blockedByTaskIds: z.array(z.string().min(1)).optional(),
+    blocksTaskIds: z.array(z.string().min(1)).optional(),
+    metadata: z.record(z.unknown()).optional(),
+  }).optional(),
   operatingMode: taskOperatingModeSchema.optional(),
 });
 

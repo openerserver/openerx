@@ -166,3 +166,64 @@ realtimeRoutes.post(
     });
   },
 );
+
+const injectSessionStatusSchema = z.object({
+  taskId: z.string().min(1),
+  projectId: z.string().min(1),
+  sessionId: z.string().min(1),
+  agentRunId: z.string().min(1).optional(),
+  info: z.object({
+    type: z.enum(["warning", "paused-approval", "cooldown"]),
+    metadata: z.record(z.unknown()).optional(),
+    until: z.string().min(1).optional(),
+    reset: z.string().min(1).optional(),
+    requests: z.number().nonnegative().optional(),
+    tokens: z.number().nonnegative().optional(),
+    cost: z.number().nonnegative().optional(),
+  }),
+});
+
+realtimeRoutes.post(
+  "/dev/inject-session-status",
+  zValidator("json", injectSessionStatusSchema),
+  async (c) => {
+    if (!ensureDevOnlyRoute()) {
+      return c.json({ error: "Not found" }, 404);
+    }
+
+    const adminErr = requireSystemAdmin(c.get("user"));
+    if (adminErr) {
+      return c.json({ error: adminErr }, 403);
+    }
+
+    const body = c.req.valid("json");
+    const agentRunId = ensureAgentRunForSession(
+      body.sessionId,
+      body.taskId,
+      body.projectId,
+      undefined,
+      body.agentRunId,
+    );
+
+    await sseAggregator.ingestParsedEvent("session.status", {
+      directory: ".",
+      sessionId: body.sessionId,
+      payload: {
+        type: "session.status",
+        sessionId: body.sessionId,
+        properties: {
+          info: body.info,
+        },
+      },
+    });
+
+    return c.json({
+      ok: true,
+      agentRunId,
+      sessionId: body.sessionId,
+      taskId: body.taskId,
+      projectId: body.projectId,
+      emittedType: body.info.type,
+    });
+  },
+);

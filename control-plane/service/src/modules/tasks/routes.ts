@@ -5,6 +5,7 @@ import { z } from "zod";
 import { db } from "../../db";
 import {
   agentRuns,
+  projectTaskRelations,
   repositories,
   repositoryCredentials,
   taskEdges,
@@ -15,6 +16,10 @@ import {
 import { type AppEnv, authMiddleware } from "../../middleware/auth";
 import { requireRole } from "../../middleware/rbac";
 import { recordAuditEvent } from "../audit/routes";
+import {
+  collectLinkedTaskIdsFromCreateInput,
+  expandCreateTaskRelations,
+} from "./relation-protocol";
 
 export const taskRoutes = new Hono<AppEnv>();
 
@@ -35,6 +40,21 @@ const createTaskSchema = z.object({
   gitAuthorEmail: z.string().email().max(200).optional(),
   gitCommitterName: z.string().max(200).optional(),
   gitCommitterEmail: z.string().email().max(200).optional(),
+  relations: z.array(
+    z.object({
+      sourceTaskId: z.string().min(1).optional(),
+      targetTaskId: z.string().min(1).optional(),
+      type: z.enum(["depends-on", "blocks", "spawned-from"]),
+      metadata: z.record(z.unknown()).optional(),
+    }),
+  ).optional(),
+  relationContext: z.object({
+    spawnedFromTaskId: z.string().min(1).optional(),
+    dependsOnTaskIds: z.array(z.string().min(1)).optional(),
+    blockedByTaskIds: z.array(z.string().min(1)).optional(),
+    blocksTaskIds: z.array(z.string().min(1)).optional(),
+    metadata: z.record(z.unknown()).optional(),
+  }).optional(),
 });
 
 type CreateTaskInput = z.infer<typeof createTaskSchema>;
@@ -90,6 +110,22 @@ async function validateTaskCreateInput(body: CreateTaskInput) {
     return credentialValidation;
   }
 
+  const linkedTaskIds = collectLinkedTaskIdsFromCreateInput({
+    relations: body.relations,
+    relationContext: body.relationContext,
+  });
+
+  if (linkedTaskIds.length) {
+    for (const linkedTaskId of linkedTaskIds) {
+      const linkedTask = await db.query.tasks.findFirst({
+        where: eq(tasks.id, linkedTaskId),
+      });
+      if (!linkedTask || linkedTask.projectId !== body.projectId) {
+        return { error: `Related task ${linkedTaskId} not found in this project` as const };
+      }
+    }
+  }
+
   return null;
 }
 
@@ -113,10 +149,39 @@ async function insertTask(userId: string, body: CreateTaskInput) {
     gitCommitterEmail: body.gitCommitterEmail ?? null,
   });
 
+  const normalizedRelations = expandCreateTaskRelations({
+    taskId,
+    relations: body.relations,
+    relationContext: body.relationContext,
+  });
+
+  if (normalizedRelations.length > 0) {
+    const now = new Date().toISOString();
+    await db.insert(projectTaskRelations).values(
+      normalizedRelations.map((relation) => ({
+        id: crypto.randomUUID(),
+        projectId: body.projectId,
+        sourceTaskId: relation.sourceTaskId,
+        targetTaskId: relation.targetTaskId,
+        relationType: relation.type,
+        relationSource: "task-create" as const,
+        metadata: relation.metadata ?? null,
+        createdAt: now,
+        updatedAt: now,
+      })),
+    );
+  }
+
   return taskId;
 }
 
 async function recordTaskCreatedAudit(userId: string, taskId: string, body: CreateTaskInput) {
+  const normalizedRelations = expandCreateTaskRelations({
+    taskId,
+    relations: body.relations,
+    relationContext: body.relationContext,
+  });
+
   await recordAuditEvent({
     userId,
     projectId: body.projectId,
@@ -124,7 +189,12 @@ async function recordTaskCreatedAudit(userId: string, taskId: string, body: Crea
     eventType: "task.created",
     action: "create_task",
     target: body.title,
-    detail: { prompt: body.prompt.slice(0, 200) },
+    detail: {
+      prompt: body.prompt.slice(0, 200),
+      relationContext: body.relationContext ?? null,
+      relations: normalizedRelations,
+      relationCount: normalizedRelations.length,
+    },
   });
 }
 
