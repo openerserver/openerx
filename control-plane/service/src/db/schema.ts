@@ -20,6 +20,12 @@ export interface ProjectSettings {
   budgetConfigId?: string;
   warnThreshold?: number;
   throttleThreshold?: number;
+  collaborationMode?: "solo" | "team" | "hybrid";
+  autopilotLevel?: "L0" | "L1" | "L2";
+  bossParticipationMode?: "disabled" | "advisory" | "exception-only" | "full-manager";
+  preferredTemplateId?: string | null;
+  allowBossAutoTemplateSwitch?: boolean;
+  allowHybridEscalation?: boolean;
 }
 
 // ── Organizations ──────────────────────────────────────────────────
@@ -595,6 +601,18 @@ export const workflowTemplates = sqliteTable("workflow_templates", {
   selectableByProjects: integer("selectable_by_projects", { mode: "boolean" })
     .notNull()
     .default(true),
+  defaultCollaborationMode: text("default_collaboration_mode", {
+    enum: ["solo", "team", "hybrid"],
+  }),
+  defaultAutopilotLevel: text("default_autopilot_level", {
+    enum: ["L0", "L1", "L2"],
+  }),
+  defaultBossParticipationMode: text("default_boss_participation_mode", {
+    enum: ["disabled", "advisory", "exception-only", "full-manager"],
+  }),
+  forceBossParticipation: integer("force_boss_participation", { mode: "boolean" })
+    .notNull()
+    .default(false),
   stageOrderJson: text("stage_order_json", { mode: "json" }).$type<string[]>().notNull(),
   defaultRolesJson: text("default_roles_json", { mode: "json" }).$type<string[]>(),
   version: integer("version").notNull().default(1),
@@ -625,6 +643,11 @@ export const workflowTemplateStages = sqliteTable("workflow_template_stages", {
   hooksJson: text("hooks_json", { mode: "json" }),
   gatesJson: text("gates_json", { mode: "json" }),
   approvalsJson: text("approvals_json", { mode: "json" }),
+  stageTemplateStrategyJson: text("stage_template_strategy_json", { mode: "json" }).$type<{
+    onBlockedTemplateId?: string;
+    onWaitingApprovalTemplateId?: string;
+    note?: string;
+  }>(),
   failurePolicyJson: text("failure_policy_json", { mode: "json" }),
   orderIndex: integer("order_index").notNull().default(0),
 });

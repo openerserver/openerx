@@ -35,25 +35,59 @@
                 <a-descriptions-item label="可选模板数">
                   {{ viewModel.selectableTemplates.length }}
                 </a-descriptions-item>
+                <a-descriptions-item label="老板自动切模板">
+                  {{ viewModel.projectSettings.allowBossAutoTemplateSwitch ? '已开启' : '未开启' }}
+                </a-descriptions-item>
+                <a-descriptions-item label="项目偏好模板">
+                  {{ viewModel.projectSettings.preferredTemplateId || '未设置' }}
+                </a-descriptions-item>
               </a-descriptions>
             </a-card>
           </a-col>
 
           <a-col :xs="24" :lg="14">
-            <a-card size="small" title="模板绑定">
+            <a-card size="small" title="模板绑定与治理授权">
               <a-form layout="vertical">
-                <a-form-item label="选择项目模板">
-                  <a-select
-                    :value="selectedTemplateId"
-                    allow-clear
+                <a-row :gutter="16">
+                  <a-col :xs="24" :md="12">
+                    <a-form-item label="选择项目模板">
+                      <a-select
+                        :value="selectedTemplateId"
+                        allow-clear
+                        :disabled="!viewModel.access.canManage"
+                        placeholder="未绑定时，任务不会使用项目级阶段模板"
+                        @update:value="selectedTemplateId = toTemplateId($event)"
+                      >
+                        <a-select-option v-for="template in viewModel.selectableTemplates" :key="template.id" :value="template.id">
+                          {{ template.name }}
+                        </a-select-option>
+                      </a-select>
+                    </a-form-item>
+                  </a-col>
+                  <a-col :xs="24" :md="12">
+                    <a-form-item label="项目偏好模板">
+                      <a-select
+                        :value="preferredTemplateId"
+                        allow-clear
+                        :disabled="!viewModel.access.canManage"
+                        placeholder="未设置时沿用项目当前绑定模板"
+                        @update:value="preferredTemplateId = toTemplateId($event)"
+                      >
+                        <a-select-option v-for="template in viewModel.selectableTemplates" :key="template.id" :value="template.id">
+                          {{ template.name }}
+                        </a-select-option>
+                      </a-select>
+                    </a-form-item>
+                  </a-col>
+                </a-row>
+                <a-form-item label="老板自动切模板">
+                  <a-checkbox
+                    :checked="allowBossAutoTemplateSwitch"
                     :disabled="!viewModel.access.canManage"
-                    placeholder="未绑定时，任务不会使用项目级阶段模板"
-                    @update:value="selectedTemplateId = toTemplateId($event)"
+                    @update:checked="allowBossAutoTemplateSwitch = Boolean($event)"
                   >
-                    <a-select-option v-for="template in viewModel.selectableTemplates" :key="template.id" :value="template.id">
-                      {{ template.name }}
-                    </a-select-option>
-                  </a-select>
+                    允许老板在治理授权范围内自动写入 select-template 决策并切换任务模板
+                  </a-checkbox>
                 </a-form-item>
                 <a-space>
                   <a-button
@@ -72,6 +106,26 @@
             </a-card>
           </a-col>
         </a-row>
+
+        <a-card size="small" title="模板级组织策略" style="margin-bottom: 16px">
+          <a-descriptions :column="2" size="small" bordered>
+            <a-descriptions-item label="默认协作模式">
+              {{ viewModel.currentTemplatePolicy?.defaultCollaborationMode || '未配置' }}
+            </a-descriptions-item>
+            <a-descriptions-item label="默认自动托管等级">
+              {{ viewModel.currentTemplatePolicy?.defaultAutopilotLevel || '未配置' }}
+            </a-descriptions-item>
+            <a-descriptions-item label="默认老板参与方式">
+              {{ viewModel.currentTemplatePolicy?.defaultBossParticipationMode || '未配置' }}
+            </a-descriptions-item>
+            <a-descriptions-item label="是否强制老板参与">
+              {{ viewModel.currentTemplatePolicy?.forceBossParticipation ? '是' : '否' }}
+            </a-descriptions-item>
+          </a-descriptions>
+          <a-typography-paragraph type="secondary" style="margin: 12px 0 0">
+            当老板自动切模板开启后，select-template 决策会优先采用这里定义的默认档位，并在强制老板参与时提升为 full-manager。
+          </a-typography-paragraph>
+        </a-card>
 
         <a-card v-if="selectionDiff" size="small" title="切换前差异摘要" style="margin-bottom: 16px">
           <a-space direction="vertical" style="width: 100%" :size="10">
@@ -214,6 +268,8 @@ const diagramKind = ref("flow");
 const loadError = ref<string | null>(null);
 const viewModel = ref<ProjectWorkflowTemplateView | null>(null);
 const selectedTemplateId = ref<string | undefined>(undefined);
+const preferredTemplateId = ref<string | undefined>(undefined);
+const allowBossAutoTemplateSwitch = ref(false);
 const selectedTemplateStages = ref<ProjectWorkflowTemplateView["stages"]>([]);
 const loadingSelectionDiff = ref(false);
 
@@ -235,6 +291,8 @@ function toTemplateId(value: unknown) {
 async function loadViewModel() {
   viewModel.value = await getProjectWorkflowTemplateView(projectId);
   selectedTemplateId.value = viewModel.value.workflowTemplateId || undefined;
+  preferredTemplateId.value = viewModel.value.projectSettings.preferredTemplateId || undefined;
+  allowBossAutoTemplateSwitch.value = viewModel.value.projectSettings.allowBossAutoTemplateSwitch;
   selectedTemplateStages.value = [...viewModel.value.stages];
   diagramTab.value = "current";
 }
@@ -488,7 +546,11 @@ watch(
 async function saveBinding() {
   saving.value = true;
   try {
-    await updateProjectWorkflowTemplateBinding(projectId, selectedTemplateId.value || null);
+    await updateProjectWorkflowTemplateBinding(projectId, {
+      workflowTemplateId: selectedTemplateId.value || null,
+      preferredTemplateId: preferredTemplateId.value || null,
+      allowBossAutoTemplateSwitch: allowBossAutoTemplateSwitch.value,
+    });
     await loadViewModel();
     message.success(selectedTemplateId.value ? "工作流模板绑定已更新" : "工作流模板已解绑");
   } catch (error) {

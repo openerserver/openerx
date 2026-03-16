@@ -182,7 +182,36 @@ export interface PersistedTaskStrategy {
   effectiveModel?: string;
   executionMode?: ExecutionMode;
   hookExecutions?: HookExecutionRecord[];
+  collaborationMode?: "solo" | "team" | "hybrid";
+  autopilotLevel?: "L0" | "L1" | "L2";
+  bossParticipationMode?: "disabled" | "advisory" | "exception-only" | "full-manager";
+  operatingModeSource?: "system-default" | "project-default" | "task-override" | "boss-decision";
+  currentStageKey?: string;
+  currentStageStatus?: string;
+  bossDecisions?: Array<Record<string, unknown>>;
+  escalationRequests?: Array<Record<string, unknown>>;
   [key: string]: unknown;
+}
+
+export interface RecommendedOperatingProfile {
+  scenarioKey: string;
+  collaborationMode: "solo" | "team" | "hybrid";
+  autopilotLevel: "L0" | "L1" | "L2";
+  bossParticipationMode: "disabled" | "advisory" | "exception-only" | "full-manager";
+  templateHints?: string[];
+  requiredRoleHints?: string[];
+  reason: string;
+}
+
+export interface PlatformOrganizationSettings {
+  defaultCollaborationMode: "solo" | "team" | "hybrid";
+  defaultAutopilotLevel: "L0" | "L1" | "L2";
+  defaultBossParticipationMode: "disabled" | "advisory" | "exception-only" | "full-manager";
+  allowProjectModeOverride: boolean;
+  allowTaskModeOverride: boolean;
+  requireHumanApprovalForL2: boolean;
+  hybridEscalationRules?: Array<Record<string, unknown>>;
+  recommendedProfiles: RecommendedOperatingProfile[];
 }
 
 // ── Orchestration Strategy ─────────────────────────────────────────
@@ -194,6 +223,7 @@ export interface OrchestrationStrategy {
   hooks: LifecycleHook[];
   templates: WorkflowTemplate[];
   judge: JudgeConfig;
+  organizationSettings?: PlatformOrganizationSettings;
 }
 
 export const DEFAULT_EXECUTION_AGENT = "default-executor";
@@ -278,6 +308,16 @@ export const DEFAULT_ORCHESTRATION_STRATEGY: OrchestrationStrategy = {
     timeoutMs: 30000,
     selectionStrategy: "judge-pick",
   },
+  organizationSettings: {
+    defaultCollaborationMode: "solo",
+    defaultAutopilotLevel: "L1",
+    defaultBossParticipationMode: "advisory",
+    allowProjectModeOverride: true,
+    allowTaskModeOverride: true,
+    requireHumanApprovalForL2: true,
+    hybridEscalationRules: [],
+    recommendedProfiles: [],
+  },
 };
 
 function cloneDefaultStrategy(): OrchestrationStrategy {
@@ -339,6 +379,42 @@ function normalizeJudge(raw: Partial<JudgeConfig> | undefined, fallback: JudgeCo
   };
 }
 
+function normalizeOrganizationSettings(
+  raw: Partial<PlatformOrganizationSettings> | undefined,
+  fallback: PlatformOrganizationSettings,
+): PlatformOrganizationSettings {
+  return {
+    defaultCollaborationMode:
+      raw?.defaultCollaborationMode === "solo"
+      || raw?.defaultCollaborationMode === "team"
+      || raw?.defaultCollaborationMode === "hybrid"
+        ? raw.defaultCollaborationMode
+        : fallback.defaultCollaborationMode,
+    defaultAutopilotLevel:
+      raw?.defaultAutopilotLevel === "L0"
+      || raw?.defaultAutopilotLevel === "L1"
+      || raw?.defaultAutopilotLevel === "L2"
+        ? raw.defaultAutopilotLevel
+        : fallback.defaultAutopilotLevel,
+    defaultBossParticipationMode:
+      raw?.defaultBossParticipationMode === "disabled"
+      || raw?.defaultBossParticipationMode === "advisory"
+      || raw?.defaultBossParticipationMode === "exception-only"
+      || raw?.defaultBossParticipationMode === "full-manager"
+        ? raw.defaultBossParticipationMode
+        : fallback.defaultBossParticipationMode,
+    allowProjectModeOverride: raw?.allowProjectModeOverride ?? fallback.allowProjectModeOverride,
+    allowTaskModeOverride: raw?.allowTaskModeOverride ?? fallback.allowTaskModeOverride,
+    requireHumanApprovalForL2: raw?.requireHumanApprovalForL2 ?? fallback.requireHumanApprovalForL2,
+    hybridEscalationRules: Array.isArray(raw?.hybridEscalationRules)
+      ? raw.hybridEscalationRules
+      : fallback.hybridEscalationRules ?? [],
+    recommendedProfiles: Array.isArray(raw?.recommendedProfiles)
+      ? raw.recommendedProfiles
+      : fallback.recommendedProfiles,
+  };
+}
+
 /** Migrate legacy pre/postExecutionReview to hooks array if not yet migrated. */
 function migrateToHooks(raw: Record<string, unknown>): LifecycleHook[] {
   if (Array.isArray(raw.hooks) && raw.hooks.length > 0) {
@@ -383,6 +459,16 @@ export function normalizeOrchestrationStrategy(
   raw: Partial<OrchestrationStrategy> | undefined,
 ): OrchestrationStrategy {
   const defaults = cloneDefaultStrategy();
+  const defaultOrganizationSettings = defaults.organizationSettings ?? {
+    defaultCollaborationMode: "solo",
+    defaultAutopilotLevel: "L1",
+    defaultBossParticipationMode: "advisory",
+    allowProjectModeOverride: true,
+    allowTaskModeOverride: true,
+    requireHumanApprovalForL2: true,
+    hybridEscalationRules: [],
+    recommendedProfiles: [],
+  };
   const rawRecord = (raw as Record<string, unknown> | undefined) ?? {};
   return {
     categoryAgentMap: {
@@ -400,6 +486,7 @@ export function normalizeOrchestrationStrategy(
         ? raw.templates
         : defaults.templates,
     judge: normalizeJudge(raw?.judge, defaults.judge),
+    organizationSettings: normalizeOrganizationSettings(raw?.organizationSettings, defaultOrganizationSettings),
   };
 }
 

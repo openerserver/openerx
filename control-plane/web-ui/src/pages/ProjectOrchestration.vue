@@ -8,6 +8,13 @@
 
     <ProjectSectionNav :project-id="projectId" active-key="orchestration" />
 
+    <a-card size="small" title="组织运行入口" style="margin-bottom: 16px">
+      <a-space wrap>
+        <a-button type="primary" data-testid="open-project-operating-mode-from-orchestration" @click="router.push(`/projects/${projectId}/operating-mode`)">打开运行档位</a-button>
+        <a-button data-testid="open-boss-operations-from-orchestration" @click="router.push(`/projects/${projectId}/boss-operations`)">老板经营视图</a-button>
+      </a-space>
+    </a-card>
+
     <a-spin :spinning="loading" style="display: block">
       <a-alert v-if="loadError" type="error" show-icon style="margin-bottom: 16px" :message="loadError" />
       <a-alert
@@ -314,7 +321,7 @@
 <script setup lang="ts">
 import { message } from "ant-design-vue";
 import { computed, defineAsyncComponent, onMounted, ref } from "vue";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import {
   type OrchestrationStageViewModel,
   type ProjectOrchestrationView,
@@ -325,6 +332,7 @@ import {
 const MermaidRenderer = defineAsyncComponent(() => import("../components/MermaidRenderer.vue"));
 
 const route = useRoute();
+const router = useRouter();
 const projectId = String(route.params.projectId || "");
 
 const loading = ref(true);
@@ -609,7 +617,9 @@ function handleAnomalyOnlyChange(checked: unknown) {
 async function saveBinding() {
   saving.value = true;
   try {
-    await updateProjectWorkflowTemplateBinding(projectId, selectedTemplateId.value || null);
+    await updateProjectWorkflowTemplateBinding(projectId, {
+      workflowTemplateId: selectedTemplateId.value || null,
+    });
     await loadView();
     message.success(selectedTemplateId.value ? "项目模板绑定已更新" : "项目模板已解绑");
   } catch (error) {

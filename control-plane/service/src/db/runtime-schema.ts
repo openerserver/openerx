@@ -103,6 +103,10 @@ export function ensureRuntimeTables(sqlite: Database) {
       category text,
       enabled integer NOT NULL DEFAULT true,
       selectable_by_projects integer NOT NULL DEFAULT true,
+      default_collaboration_mode text,
+      default_autopilot_level text,
+      default_boss_participation_mode text,
+      force_boss_participation integer NOT NULL DEFAULT false,
       stage_order_json text NOT NULL,
       default_roles_json text,
       version integer NOT NULL DEFAULT 1,
@@ -127,6 +131,7 @@ export function ensureRuntimeTables(sqlite: Database) {
       hooks_json text,
       gates_json text,
       approvals_json text,
+      stage_template_strategy_json text,
       failure_policy_json text,
       order_index integer NOT NULL DEFAULT 0
     );
@@ -200,10 +205,51 @@ export function ensureRuntimeTables(sqlite: Database) {
       updated_at text NOT NULL DEFAULT CURRENT_TIMESTAMP,
       resolved_at text
     );
+
+    CREATE TABLE IF NOT EXISTS task_operating_modes (
+      task_id text PRIMARY KEY NOT NULL REFERENCES tasks(id),
+      collaboration_mode text NOT NULL,
+      autopilot_level text NOT NULL,
+      boss_participation_mode text NOT NULL,
+      selected_template_id text,
+      scenario_key text,
+      source text NOT NULL DEFAULT 'task-override',
+      created_at text NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at text NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS boss_decisions (
+      id text PRIMARY KEY NOT NULL,
+      task_id text NOT NULL REFERENCES tasks(id),
+      ts text NOT NULL,
+      decision_type text NOT NULL,
+      reason text NOT NULL,
+      confidence real,
+      stage_key text,
+      metadata_json text,
+      created_at text NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS human_escalations (
+      id text PRIMARY KEY NOT NULL,
+      task_id text NOT NULL REFERENCES tasks(id),
+      ts text NOT NULL,
+      reason text NOT NULL,
+      status text,
+      stage_key text,
+      requested_by text,
+      metadata_json text,
+      created_at text NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
   `);
 
   ensureColumn(sqlite, "role_agents", "allowed_stages_json", `text NOT NULL DEFAULT '["implement"]'`);
   ensureColumn(sqlite, "role_agent_bindings", "project_id", "text REFERENCES projects(id)");
+  ensureColumn(sqlite, "workflow_templates", "default_collaboration_mode", "text");
+  ensureColumn(sqlite, "workflow_templates", "default_autopilot_level", "text");
+  ensureColumn(sqlite, "workflow_templates", "default_boss_participation_mode", "text");
+  ensureColumn(sqlite, "workflow_templates", "force_boss_participation", "integer NOT NULL DEFAULT false");
+  ensureColumn(sqlite, "workflow_template_stages", "stage_template_strategy_json", "text");
   sqlite.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_role_agent_bindings_role_project_key
       ON role_agent_bindings(role_agent_id, COALESCE(project_id, ''), binding_key);
@@ -211,5 +257,13 @@ export function ensureRuntimeTables(sqlite: Database) {
   sqlite.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_role_agent_project_overrides_role_project
       ON role_agent_project_overrides(role_agent_id, project_id);
+  `);
+  sqlite.exec(`
+    CREATE INDEX IF NOT EXISTS idx_boss_decisions_task_ts
+      ON boss_decisions(task_id, ts DESC);
+  `);
+  sqlite.exec(`
+    CREATE INDEX IF NOT EXISTS idx_human_escalations_task_ts
+      ON human_escalations(task_id, ts DESC);
   `);
 }

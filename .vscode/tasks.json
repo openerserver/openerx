@@ -2,6 +2,29 @@
 	"version": "2.0.0",
 	"tasks": [
 		{
+			"label": "start-control-plane-service",
+			"type": "shell",
+			"command": "zsh",
+			"args": [
+				"-lc",
+				"pids=$(lsof -ti tcp:4097 -sTCP:LISTEN 2>/dev/null || true); if [[ -n \"$pids\" ]]; then kill $pids; sleep 1; fi; cd control-plane/service && exec bun run dev"
+			],
+			"isBackground": true,
+			"problemMatcher": {
+				"owner": "custom",
+				"pattern": {
+					"regexp": "^(.*)$",
+					"message": 1
+				},
+				"background": {
+					"activeOnStart": true,
+					"beginsPattern": ".",
+					"endsPattern": "OpenerX Control Plane running on http://localhost:4097"
+				}
+			},
+			"group": "none"
+		},
+		{
 			"label": "start-opencode-runtime",
 			"type": "shell",
 			"command": "zsh",
@@ -71,6 +94,17 @@
 			"group": "none"
 		},
 		{
+			"label": "stop-control-plane-service",
+			"type": "shell",
+			"command": "zsh",
+			"args": [
+				"-lc",
+				"pids=$(lsof -ti tcp:4097 -sTCP:LISTEN 2>/dev/null || true); if [[ -n \"$pids\" ]]; then kill $pids; fi"
+			],
+			"isBackground": false,
+			"group": "none"
+		},
+		{
 			"label": "stop-opencode-runtime",
 			"type": "shell",
 			"command": "zsh",
@@ -101,6 +135,16 @@
 				"pids=$(lsof -ti tcp:5173 -sTCP:LISTEN 2>/dev/null || true); if [[ -n \"$pids\" ]]; then kill $pids; fi; fallback=$(lsof -ti tcp:5174 -sTCP:LISTEN 2>/dev/null || true); if [[ -n \"$fallback\" ]]; then kill $fallback; fi"
 			],
 			"isBackground": false,
+			"group": "none"
+		},
+		{
+			"label": "restart-control-plane-service",
+			"dependsOrder": "sequence",
+			"dependsOn": [
+				"stop-control-plane-service",
+				"start-control-plane-service"
+			],
+			"problemMatcher": [],
 			"group": "none"
 		},
 		{
@@ -137,6 +181,7 @@
 			"label": "start-all-dev",
 			"dependsOrder": "parallel",
 			"dependsOn": [
+				"start-control-plane-service",
 				"start-opencode-runtime",
 				"start-web-ui-bff",
 				"start-web-ui"

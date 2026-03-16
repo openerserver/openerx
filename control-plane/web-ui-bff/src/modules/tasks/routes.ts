@@ -86,6 +86,44 @@ interface ExecutableTask {
   gitAuthorEmail?: string | null;
 }
 
+interface TaskOperatingStateRecord {
+  collaborationMode?: "solo" | "team" | "hybrid";
+  autopilotLevel?: "L0" | "L1" | "L2";
+  bossParticipationMode?: "disabled" | "advisory" | "exception-only" | "full-manager";
+  operatingModeSource?: "system-default" | "project-default" | "task-override" | "boss-decision";
+  currentStageKey?: string;
+  currentStageStatus?: string;
+}
+
+interface OperatingModeSelectionRecord {
+  collaborationMode: "solo" | "team" | "hybrid";
+  autopilotLevel: "L0" | "L1" | "L2";
+  bossParticipationMode: "disabled" | "advisory" | "exception-only" | "full-manager";
+  selectedTemplateId?: string | null;
+  scenarioKey?: string;
+  source: "system-default" | "project-default" | "task-override" | "boss-decision";
+}
+
+interface BossDecisionRecord {
+  id: string;
+  ts: string;
+  decisionType: string;
+  reason: string;
+  confidence?: number;
+  stageKey?: string;
+  metadata?: Record<string, unknown>;
+}
+
+interface HumanEscalationRequest {
+  id: string;
+  ts: string;
+  reason: string;
+  status?: string;
+  stageKey?: string;
+  requestedBy?: string;
+  metadata?: Record<string, unknown>;
+}
+
 type IdentitySnapshot = Record<string, unknown>;
 
 interface PreparedExecutionContext {
@@ -489,6 +527,113 @@ async function buildFallbackTaskSession(
   };
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function asNonEmptyString(value: unknown) {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function normalizeBossDecisionRecord(value: unknown, index: number): BossDecisionRecord | null {
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+
+  return {
+    id: asNonEmptyString(record.id) || `boss-decision-${index + 1}`,
+    ts: asNonEmptyString(record.ts) || new Date(0).toISOString(),
+    decisionType: asNonEmptyString(record.decisionType) || "unknown",
+    reason: asNonEmptyString(record.reason) || "",
+    confidence: typeof record.confidence === "number" ? record.confidence : undefined,
+    stageKey: asNonEmptyString(record.stageKey),
+    metadata: asRecord(record.metadata) || undefined,
+  };
+}
+
+function normalizeHumanEscalationRequest(value: unknown, index: number): HumanEscalationRequest | null {
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+
+  return {
+    id: asNonEmptyString(record.id) || `human-escalation-${index + 1}`,
+    ts: asNonEmptyString(record.ts) || new Date(0).toISOString(),
+    reason: asNonEmptyString(record.reason) || "",
+    status: asNonEmptyString(record.status),
+    stageKey: asNonEmptyString(record.stageKey),
+    requestedBy: asNonEmptyString(record.requestedBy),
+    metadata: asRecord(record.metadata) || undefined,
+  };
+}
+
+function buildTaskOperatingState(task: Pick<ExecutableTask, "strategy">): TaskOperatingStateRecord {
+  const strategy = parseTaskStrategy(task.strategy);
+  return {
+    collaborationMode:
+      strategy.collaborationMode === "solo" || strategy.collaborationMode === "team" || strategy.collaborationMode === "hybrid"
+        ? strategy.collaborationMode
+        : undefined,
+    autopilotLevel:
+      strategy.autopilotLevel === "L0" || strategy.autopilotLevel === "L1" || strategy.autopilotLevel === "L2"
+        ? strategy.autopilotLevel
+        : undefined,
+    bossParticipationMode:
+      strategy.bossParticipationMode === "disabled"
+      || strategy.bossParticipationMode === "advisory"
+      || strategy.bossParticipationMode === "exception-only"
+      || strategy.bossParticipationMode === "full-manager"
+        ? strategy.bossParticipationMode
+        : undefined,
+    operatingModeSource:
+      strategy.operatingModeSource === "system-default"
+      || strategy.operatingModeSource === "project-default"
+      || strategy.operatingModeSource === "task-override"
+      || strategy.operatingModeSource === "boss-decision"
+        ? strategy.operatingModeSource
+        : undefined,
+    currentStageKey: asNonEmptyString(strategy.currentStageKey),
+    currentStageStatus: asNonEmptyString(strategy.currentStageStatus),
+  };
+}
+
+function buildLegacyOperatingMode(task: Pick<ExecutableTask, "strategy">): OperatingModeSelectionRecord | null {
+  const strategy = parseTaskStrategy(task.strategy);
+  const state = buildTaskOperatingState(task);
+  if (!state.collaborationMode || !state.autopilotLevel || !state.bossParticipationMode) {
+    return null;
+  }
+
+  return {
+    collaborationMode: state.collaborationMode,
+    autopilotLevel: state.autopilotLevel,
+    bossParticipationMode: state.bossParticipationMode,
+    selectedTemplateId: asNonEmptyString(strategy.selectedTemplateId) || asNonEmptyString(strategy.workflowTemplateId) || null,
+    scenarioKey: asNonEmptyString(strategy.scenarioKey),
+    source: state.operatingModeSource || "task-override",
+  };
+}
+
+function extractBossDecisions(task: Pick<ExecutableTask, "strategy">) {
+  const strategy = parseTaskStrategy(task.strategy);
+  return Array.isArray(strategy.bossDecisions)
+    ? strategy.bossDecisions.map(normalizeBossDecisionRecord).filter((item): item is BossDecisionRecord => Boolean(item))
+    : [];
+}
+
+function extractEscalationRequests(task: Pick<ExecutableTask, "strategy">) {
+  const strategy = parseTaskStrategy(task.strategy);
+  return Array.isArray(strategy.escalationRequests)
+    ? strategy.escalationRequests
+      .map(normalizeHumanEscalationRequest)
+      .filter((item): item is HumanEscalationRequest => Boolean(item))
+    : [];
+}
+
 async function prepareExecutionContext(
   task: ExecutableTask,
   authorization: string,
@@ -861,6 +1006,170 @@ taskRoutes.get("/:taskId", async (c) => {
   return c.json(result.data, result.ok ? 200 : (result.status as 401 | 404 | 502));
 });
 
+taskRoutes.get("/:taskId/operating-state", async (c) => {
+  const taskId = c.req.param("taskId");
+  const result = await cpFetch<TaskOperatingStateRecord>(
+    `/api/tasks/${encodeURIComponent(taskId)}/operating-runtime/state`,
+    {
+      authorization: authHeader(c),
+    },
+  );
+
+  if (result.ok) {
+    return c.json(result.data);
+  }
+
+  const legacyTaskResult = await cpFetch<ExecutableTask>(`/api/tasks/${encodeURIComponent(taskId)}`, {
+    authorization: authHeader(c),
+  });
+
+  if (!legacyTaskResult.ok) {
+    return c.json(result.data, legacyTaskResult.status as 401 | 404 | 502);
+  }
+
+  return c.json(buildTaskOperatingState(legacyTaskResult.data || {}));
+});
+
+taskRoutes.get("/:taskId/operating-mode", async (c) => {
+  const taskId = c.req.param("taskId");
+  const result = await cpFetch<{ data?: OperatingModeSelectionRecord | null }>(
+    `/api/tasks/${encodeURIComponent(taskId)}/operating-runtime/mode`,
+    {
+      authorization: authHeader(c),
+    },
+  );
+
+  if (result.ok) {
+    return c.json(result.data);
+  }
+
+  const legacyTaskResult = await cpFetch<ExecutableTask>(`/api/tasks/${encodeURIComponent(taskId)}`, {
+    authorization: authHeader(c),
+  });
+  if (!legacyTaskResult.ok) {
+    return c.json(result.data, legacyTaskResult.status as 401 | 404 | 502);
+  }
+
+  return c.json({ data: buildLegacyOperatingMode(legacyTaskResult.data || {}) });
+});
+
+const taskOperatingModeSchema = z.object({
+  collaborationMode: z.enum(["solo", "team", "hybrid"]),
+  autopilotLevel: z.enum(["L0", "L1", "L2"]),
+  bossParticipationMode: z.enum(["disabled", "advisory", "exception-only", "full-manager"]),
+  selectedTemplateId: z.string().min(1).nullable().optional(),
+  scenarioKey: z.string().min(1).optional(),
+  source: z.enum(["system-default", "project-default", "task-override", "boss-decision"]),
+});
+
+taskRoutes.put("/:taskId/operating-mode", zValidator("json", taskOperatingModeSchema), async (c) => {
+  const taskId = c.req.param("taskId");
+  const body = c.req.valid("json");
+  const result = await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}/operating-runtime/mode`, {
+    method: "PUT",
+    body,
+    authorization: authHeader(c),
+  });
+  return c.json(result.data, result.ok ? 200 : (result.status as 400 | 401 | 404 | 502));
+});
+
+taskRoutes.delete("/:taskId/operating-mode", async (c) => {
+  const taskId = c.req.param("taskId");
+  const result = await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}/operating-runtime/mode`, {
+    method: "DELETE",
+    authorization: authHeader(c),
+  });
+  return c.json(result.data, result.ok ? 200 : (result.status as 401 | 404 | 502));
+});
+
+taskRoutes.get("/:taskId/boss-decisions", async (c) => {
+  const taskId = c.req.param("taskId");
+  const result = await cpFetch<{ data: BossDecisionRecord[] }>(
+    `/api/tasks/${encodeURIComponent(taskId)}/operating-runtime/boss-decisions`,
+    {
+      authorization: authHeader(c),
+    },
+  );
+
+  if (result.ok) {
+    return c.json(result.data);
+  }
+
+  const legacyTaskResult = await cpFetch<ExecutableTask>(`/api/tasks/${encodeURIComponent(taskId)}`, {
+    authorization: authHeader(c),
+  });
+
+  if (!legacyTaskResult.ok) {
+    return c.json(result.data, legacyTaskResult.status as 401 | 404 | 502);
+  }
+
+  return c.json({ data: extractBossDecisions(legacyTaskResult.data || {}) });
+});
+
+const bossDecisionSchema = z.object({
+  ts: z.string().datetime().optional(),
+  decisionType: z.string().min(1),
+  reason: z.string().min(1),
+  confidence: z.number().min(0).max(1).optional(),
+  stageKey: z.string().min(1).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+});
+
+taskRoutes.post("/:taskId/boss-decisions", zValidator("json", bossDecisionSchema), async (c) => {
+  const taskId = c.req.param("taskId");
+  const body = c.req.valid("json");
+  const result = await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}/operating-runtime/boss-decisions`, {
+    method: "POST",
+    body,
+    authorization: authHeader(c),
+  });
+  return c.json(result.data, result.ok ? 201 : (result.status as 400 | 401 | 404 | 502));
+});
+
+taskRoutes.get("/:taskId/escalations", async (c) => {
+  const taskId = c.req.param("taskId");
+  const result = await cpFetch<{ data: HumanEscalationRequest[] }>(
+    `/api/tasks/${encodeURIComponent(taskId)}/operating-runtime/escalations`,
+    {
+      authorization: authHeader(c),
+    },
+  );
+
+  if (result.ok) {
+    return c.json(result.data);
+  }
+
+  const legacyTaskResult = await cpFetch<ExecutableTask>(`/api/tasks/${encodeURIComponent(taskId)}`, {
+    authorization: authHeader(c),
+  });
+
+  if (!legacyTaskResult.ok) {
+    return c.json(result.data, legacyTaskResult.status as 401 | 404 | 502);
+  }
+
+  return c.json({ data: extractEscalationRequests(legacyTaskResult.data || {}) });
+});
+
+const escalationSchema = z.object({
+  ts: z.string().datetime().optional(),
+  reason: z.string().min(1),
+  status: z.string().min(1).optional(),
+  stageKey: z.string().min(1).optional(),
+  requestedBy: z.string().min(1).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+});
+
+taskRoutes.post("/:taskId/escalations", zValidator("json", escalationSchema), async (c) => {
+  const taskId = c.req.param("taskId");
+  const body = c.req.valid("json");
+  const result = await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}/operating-runtime/escalations`, {
+    method: "POST",
+    body,
+    authorization: authHeader(c),
+  });
+  return c.json(result.data, result.ok ? 201 : (result.status as 400 | 401 | 404 | 502));
+});
+
 taskRoutes.get("/:taskId/workflow", async (c) => {
   const taskId = c.req.param("taskId");
   const result = await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}/workflow`, {
@@ -954,6 +1263,9 @@ const createTaskSchema = z.object({
   selectedModel: z.string().max(200).optional(),
   gitAuthorName: z.string().max(200).optional(),
   gitAuthorEmail: z.string().email().max(200).optional(),
+  gitCommitterName: z.string().max(200).optional(),
+  gitCommitterEmail: z.string().email().max(200).optional(),
+  operatingMode: taskOperatingModeSchema.optional(),
 });
 
 async function fetchProjectWorkflowTemplateId(projectId: string, authorization: string) {
@@ -976,8 +1288,9 @@ async function snapshotTaskWorkflowTemplate(
   taskId: string,
   projectId: string,
   authorization: string,
+  selectedTemplateId?: string | null,
 ) {
-  const workflowTemplateId = await fetchProjectWorkflowTemplateId(projectId, authorization);
+  const workflowTemplateId = selectedTemplateId || await fetchProjectWorkflowTemplateId(projectId, authorization);
 
   await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
     method: "PATCH",
@@ -993,7 +1306,24 @@ async function snapshotTaskWorkflowTemplate(
 }
 
 async function resolveTaskWorkflowTemplateId(task: ExecutableTask, authorization: string) {
+  const operatingModeResult = await cpFetch<{ data?: OperatingModeSelectionRecord | null }>(
+    `/api/tasks/${encodeURIComponent(task.id)}/operating-runtime/mode`,
+    {
+      authorization,
+    },
+  );
+  const selectedRuntimeTemplateId = typeof operatingModeResult.data?.data?.selectedTemplateId === "string"
+    && operatingModeResult.data.data.selectedTemplateId.trim()
+    ? operatingModeResult.data.data.selectedTemplateId.trim()
+    : null;
+  if (operatingModeResult.ok && selectedRuntimeTemplateId) {
+    return selectedRuntimeTemplateId;
+  }
+
   const parsedStrategy = parseTaskStrategy(task.strategy);
+  if (typeof parsedStrategy.selectedTemplateId === "string" && parsedStrategy.selectedTemplateId.trim()) {
+    return parsedStrategy.selectedTemplateId.trim();
+  }
   if (Object.prototype.hasOwnProperty.call(parsedStrategy, "workflowTemplateId")) {
     return typeof parsedStrategy.workflowTemplateId === "string" && parsedStrategy.workflowTemplateId.trim()
       ? parsedStrategy.workflowTemplateId.trim()
@@ -1007,14 +1337,28 @@ taskRoutes.post("/", zValidator("json", createTaskSchema), async (c) => {
   const body = c.req.valid("json");
   const authorization = authHeader(c);
 
+  const { operatingMode, ...taskCreateBody } = body;
+
   const result = await cpFetch<{ id: string; status: string }>("/api/tasks", {
     method: "POST",
-    body,
+    body: taskCreateBody,
     authorization,
   });
 
   if (result.ok) {
-    await snapshotTaskWorkflowTemplate(result.data.id, body.projectId, authorization);
+    await snapshotTaskWorkflowTemplate(
+      result.data.id,
+      body.projectId,
+      authorization,
+      operatingMode?.selectedTemplateId ?? null,
+    );
+    if (operatingMode) {
+      await cpFetch(`/api/tasks/${encodeURIComponent(result.data.id)}/operating-runtime/mode`, {
+        method: "PUT",
+        body: operatingMode,
+        authorization,
+      });
+    }
     wsBroadcaster.broadcast({
       id: crypto.randomUUID(),
       type: "task.created",

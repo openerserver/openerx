@@ -40,6 +40,8 @@
 - 尽量复用现有 `orchestration-strategy`、`workflow templates`、`task.strategy`、`hooks`、`sse-aggregator`
 - 第一阶段优先以 BFF 编排增强和前端可视化为主
 - 第一阶段避免引入过多新表，优先落在现有 JSON 和模板结构中
+- 前端默认采用“新增页面 / 新路由承载”策略，尽量不直接重构现有主页面
+- 现有页面只承担最小入口挂接职责，例如跳转入口、摘要入口、详情入口
 
 ## 3. 核心技术对象
 

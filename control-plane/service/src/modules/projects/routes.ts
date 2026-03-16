@@ -45,6 +45,12 @@ const projectSettingsSchema = z.object({
   budgetConfigId: z.string().min(1).optional(),
   warnThreshold: z.number().min(0).max(1).optional(),
   throttleThreshold: z.number().min(0).max(1).optional(),
+  collaborationMode: z.enum(["solo", "team", "hybrid"]).optional(),
+  autopilotLevel: z.enum(["L0", "L1", "L2"]).optional(),
+  bossParticipationMode: z.enum(["disabled", "advisory", "exception-only", "full-manager"]).optional(),
+  preferredTemplateId: z.string().min(1).nullable().optional(),
+  allowBossAutoTemplateSwitch: z.boolean().optional(),
+  allowHybridEscalation: z.boolean().optional(),
 });
 
 type Role = "platform_admin" | "org_admin" | "project_admin" | "developer" | "viewer";

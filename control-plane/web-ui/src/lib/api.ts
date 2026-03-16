@@ -764,6 +764,77 @@ export interface ProjectSettings {
   budgetConfigId?: string;
   warnThreshold?: number;
   throttleThreshold?: number;
+  collaborationMode?: CollaborationMode;
+  autopilotLevel?: AutopilotLevel;
+  bossParticipationMode?: BossParticipationMode;
+  preferredTemplateId?: string | null;
+  allowBossAutoTemplateSwitch?: boolean;
+  allowHybridEscalation?: boolean;
+}
+
+export type CollaborationMode = "solo" | "team" | "hybrid";
+
+export type AutopilotLevel = "L0" | "L1" | "L2";
+
+export type BossParticipationMode = "disabled" | "advisory" | "exception-only" | "full-manager";
+
+export interface RecommendedOperatingProfile {
+  scenarioKey: string;
+  collaborationMode: CollaborationMode;
+  autopilotLevel: AutopilotLevel;
+  bossParticipationMode: BossParticipationMode;
+  templateHints?: string[];
+  requiredRoleHints?: string[];
+  reason: string;
+}
+
+export interface PlatformOrganizationSettings {
+  defaultCollaborationMode: CollaborationMode;
+  defaultAutopilotLevel: AutopilotLevel;
+  defaultBossParticipationMode: BossParticipationMode;
+  allowProjectModeOverride: boolean;
+  allowTaskModeOverride: boolean;
+  requireHumanApprovalForL2: boolean;
+  hybridEscalationRules?: Array<Record<string, unknown>>;
+  recommendedProfiles: RecommendedOperatingProfile[];
+}
+
+export interface OperatingModeSelection {
+  collaborationMode: CollaborationMode;
+  autopilotLevel: AutopilotLevel;
+  bossParticipationMode: BossParticipationMode;
+  selectedTemplateId?: string | null;
+  scenarioKey?: string;
+  source: "system-default" | "project-default" | "task-override" | "boss-decision";
+}
+
+export interface BossDecisionRecord {
+  id: string;
+  ts: string;
+  decisionType: string;
+  reason: string;
+  confidence?: number;
+  stageKey?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface HumanEscalationRequest {
+  id: string;
+  ts: string;
+  reason: string;
+  status?: string;
+  stageKey?: string;
+  requestedBy?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface TaskOperatingState {
+  collaborationMode?: CollaborationMode;
+  autopilotLevel?: AutopilotLevel;
+  bossParticipationMode?: BossParticipationMode;
+  operatingModeSource?: OperatingModeSelection["source"];
+  currentStageKey?: string;
+  currentStageStatus?: string;
 }
 
 export interface PolicyTemplate {
@@ -829,6 +900,35 @@ export async function getTask(taskId: string) {
   return request<Task>(`/tasks/${taskId}`);
 }
 
+export async function getTaskOperatingState(taskId: string) {
+  return request<TaskOperatingState>(`/tasks/${taskId}/operating-state`);
+}
+
+export async function getTaskOperatingMode(taskId: string) {
+  return request<{ data: OperatingModeSelection | null }>(`/tasks/${taskId}/operating-mode`);
+}
+
+export async function updateTaskOperatingMode(taskId: string, data: OperatingModeSelection) {
+  return request<{ ok: boolean; data: OperatingModeSelection | null }>(`/tasks/${taskId}/operating-mode`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteTaskOperatingMode(taskId: string) {
+  return request<{ ok: boolean }>(`/tasks/${taskId}/operating-mode`, {
+    method: "DELETE",
+  });
+}
+
+export async function getTaskBossDecisions(taskId: string) {
+  return request<{ data: BossDecisionRecord[] }>(`/tasks/${taskId}/boss-decisions`);
+}
+
+export async function getTaskEscalations(taskId: string) {
+  return request<{ data: HumanEscalationRequest[] }>(`/tasks/${taskId}/escalations`);
+}
+
 export async function updateTask(taskId: string, data: { selectedModel?: string | null }) {
   return request<Partial<Task>>(`/tasks/${taskId}`, {
     method: "PATCH",
@@ -848,6 +948,7 @@ export async function createTask(data: {
   gitAuthorEmail?: string;
   gitCommitterName?: string;
   gitCommitterEmail?: string;
+  operatingMode?: OperatingModeSelection;
 }) {
   return request<{ id: string; status: string }>("/tasks", {
     method: "POST",
@@ -1819,6 +1920,7 @@ export interface OrchestrationStrategy {
   hooks: LifecycleHook[];
   templates: WorkflowTemplate[];
   judge: JudgeConfig;
+  organizationSettings?: PlatformOrganizationSettings;
 }
 
 export async function getOrchestrationStrategy() {
@@ -2328,6 +2430,10 @@ export interface WorkflowTemplateRecord {
   category?: string | null;
   enabled: boolean;
   selectableByProjects: boolean;
+  defaultCollaborationMode?: CollaborationMode | null;
+  defaultAutopilotLevel?: AutopilotLevel | null;
+  defaultBossParticipationMode?: BossParticipationMode | null;
+  forceBossParticipation: boolean;
   stageOrderJson: string[];
   defaultRolesJson?: string[] | null;
   version: number;
@@ -2352,6 +2458,11 @@ export interface WorkflowTemplateStageRecord {
   hooksJson?: Array<Record<string, unknown>> | null;
   gatesJson?: Array<Record<string, unknown>> | null;
   approvalsJson?: Array<Record<string, unknown>> | null;
+  stageTemplateStrategyJson?: {
+    onBlockedTemplateId?: string;
+    onWaitingApprovalTemplateId?: string;
+    note?: string;
+  } | null;
   failurePolicyJson?: Record<string, unknown> | null;
   orderIndex: number;
 }
@@ -2391,6 +2502,16 @@ export interface ProjectWorkflowTemplateView {
   currentTemplateSource: "bound" | "unbound";
   stages: WorkflowTemplateStageRecord[];
   selectableTemplates: WorkflowTemplateRecord[];
+  projectSettings: {
+    preferredTemplateId: string | null;
+    allowBossAutoTemplateSwitch: boolean;
+  };
+  currentTemplatePolicy: {
+    defaultCollaborationMode?: CollaborationMode | null;
+    defaultAutopilotLevel?: AutopilotLevel | null;
+    defaultBossParticipationMode?: BossParticipationMode | null;
+    forceBossParticipation: boolean;
+  } | null;
   stageCatalog: WorkflowStageCatalogItem[];
   access: {
     canManage: boolean;
@@ -2506,6 +2627,73 @@ export interface ProjectOrchestrationView {
   };
 }
 
+export interface ProjectBossOperationTimelineItem extends BossDecisionRecord {
+  taskId: string;
+  taskTitle: string;
+  taskStatus: string;
+  workflowStatus: string;
+  currentStageKey: string;
+  openEscalationCount: number;
+}
+
+export interface ProjectBossEscalationItem extends HumanEscalationRequest {
+  taskId: string;
+  taskTitle: string;
+  taskStatus: string;
+  workflowStatus: string;
+  currentStageKey: string;
+}
+
+export interface ProjectBossAttentionTaskItem {
+  taskId: string;
+  taskTitle: string;
+  taskStatus: string;
+  workflowStatus: string;
+  currentStageKey: string;
+  currentStageLabel: string;
+  currentStageStatus: string;
+  blockingReason?: string;
+  openEscalationCount: number;
+  bossDecisionCount: number;
+  latestDecisionType?: string;
+  latestDecisionReason?: string;
+  latestDecisionTs?: string | null;
+}
+
+export interface ProjectBossOverrideHistoryItem extends BossDecisionRecord {
+  taskId: string;
+  taskTitle: string;
+  taskStatus: string;
+  workflowStatus: string;
+  currentStageKey: string;
+  actorId?: string | null;
+  overrideAction?: string | null;
+  previousMode?: OperatingModeSelection | null;
+  nextMode?: OperatingModeSelection | null;
+}
+
+export interface ProjectBossOperationsView {
+  project: {
+    id: string;
+    name: string;
+    slug: string;
+  };
+  summary: {
+    totalTasks: number;
+    tasksWithBossDecisions: number;
+    totalBossDecisions: number;
+    openEscalations: number;
+    blockedTasks: number;
+    waitingApprovalTasks: number;
+    tasksNeedingAttention: number;
+    manualOverrides: number;
+  };
+  timeline: ProjectBossOperationTimelineItem[];
+  overrideHistory: ProjectBossOverrideHistoryItem[];
+  escalations: ProjectBossEscalationItem[];
+  attentionTasks: ProjectBossAttentionTaskItem[];
+}
+
 export async function listRoleAgents(projectId?: string) {
   const params = new URLSearchParams();
   if (projectId) params.set("projectId", projectId);
@@ -2528,6 +2716,10 @@ export async function createWorkflowTemplate(data: {
   category?: string;
   enabled: boolean;
   selectableByProjects: boolean;
+  defaultCollaborationMode?: CollaborationMode;
+  defaultAutopilotLevel?: AutopilotLevel;
+  defaultBossParticipationMode?: BossParticipationMode;
+  forceBossParticipation?: boolean;
   stageOrder: string[];
   defaultRoles?: string[];
 }) {
@@ -2546,6 +2738,10 @@ export async function updateWorkflowTemplate(
     category: string;
     enabled: boolean;
     selectableByProjects: boolean;
+    defaultCollaborationMode: CollaborationMode;
+    defaultAutopilotLevel: AutopilotLevel;
+    defaultBossParticipationMode: BossParticipationMode;
+    forceBossParticipation: boolean;
     stageOrder: string[];
     defaultRoles: string[];
   }>,
@@ -2566,6 +2762,10 @@ export async function cloneWorkflowTemplate(
     projectId?: string;
     enabled?: boolean;
     selectableByProjects?: boolean;
+    defaultCollaborationMode?: CollaborationMode;
+    defaultAutopilotLevel?: AutopilotLevel;
+    defaultBossParticipationMode?: BossParticipationMode;
+    forceBossParticipation?: boolean;
     defaultRoles?: string[];
   },
 ) {
@@ -2601,6 +2801,11 @@ export async function createWorkflowTemplateStage(
     hooks?: Array<Record<string, unknown>>;
     gates?: Array<Record<string, unknown>>;
     approvals?: Array<Record<string, unknown>>;
+    stageTemplateStrategy?: {
+      onBlockedTemplateId?: string;
+      onWaitingApprovalTemplateId?: string;
+      note?: string;
+    };
     failurePolicy?: Record<string, unknown>;
     orderIndex: number;
   },
@@ -2630,6 +2835,11 @@ export async function updateWorkflowTemplateStage(
     hooks: Array<Record<string, unknown>>;
     gates: Array<Record<string, unknown>>;
     approvals: Array<Record<string, unknown>>;
+    stageTemplateStrategy: {
+      onBlockedTemplateId?: string;
+      onWaitingApprovalTemplateId?: string;
+      note?: string;
+    };
     failurePolicy: Record<string, unknown>;
     orderIndex: number;
   }>,
@@ -2666,13 +2876,25 @@ export async function getProjectWorkflowTemplateView(projectId: string) {
 
 export async function updateProjectWorkflowTemplateBinding(
   projectId: string,
-  workflowTemplateId: string | null,
+  data: {
+    workflowTemplateId: string | null;
+    preferredTemplateId?: string | null;
+    allowBossAutoTemplateSwitch?: boolean;
+  },
 ) {
-  return request<{ projectId: string; workflowTemplateId: string | null; template: WorkflowTemplateRecord | null }>(
+  return request<{
+    projectId: string;
+    workflowTemplateId: string | null;
+    template: WorkflowTemplateRecord | null;
+    projectSettings: {
+      preferredTemplateId: string | null;
+      allowBossAutoTemplateSwitch: boolean;
+    };
+  }>(
     `/workflow-templates/projects/${encodeURIComponent(projectId)}/selection`,
     {
       method: "PUT",
-      body: JSON.stringify({ workflowTemplateId }),
+      body: JSON.stringify(data),
     },
   );
 }
@@ -2689,6 +2911,12 @@ export async function getProjectOrchestrationView(projectId: string, candidateTe
   const suffix = params.toString() ? `?${params.toString()}` : "";
   return request<ProjectOrchestrationView>(
     `/projects/${encodeURIComponent(projectId)}/orchestration-view${suffix}`,
+  );
+}
+
+export async function getProjectBossOperationsView(projectId: string) {
+  return request<ProjectBossOperationsView>(
+    `/projects/${encodeURIComponent(projectId)}/boss-operations-view`,
   );
 }
 

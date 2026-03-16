@@ -57,7 +57,7 @@ export const useChatSettingsOrchestrationStore = defineStore("chat-settings-orch
   const selectableModels = computed(() =>
     availableModels.value.filter((item) => {
       const normalized = item.trim().toLowerCase();
-      return ["claude-sonnet-4", "claude-opus-4", "gpt-4o"].some((marker) => normalized.includes(marker));
+      return ["claude-sonnet-4", "claude-opus-4", "gpt-4o", "o3-mini", "gemini-2.5-pro"].some((marker) => normalized.includes(marker));
     }),
   );
   const categorySummaries = computed(() => context.value?.categorySummaries || []);

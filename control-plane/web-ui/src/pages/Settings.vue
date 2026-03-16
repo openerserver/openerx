@@ -2,6 +2,13 @@
   <div style="padding: 24px">
     <a-typography-title :level="3">设置</a-typography-title>
 
+    <a-card size="small" title="组织运行策略" style="margin-bottom: 16px">
+      <div style="display: flex; justify-content: space-between; gap: 12px; align-items: center; flex-wrap: wrap">
+        <a-typography-text type="secondary">组织架构化 Agent 的平台默认协作模式、托管等级和老板参与方式在独立页面维护。</a-typography-text>
+        <a-button type="primary" data-testid="open-organization-operating-settings" @click="router.push('/settings/organization-operating')">打开组织运行策略</a-button>
+      </div>
+    </a-card>
+
     <a-tabs :activeKey="activeTab" @update:activeKey="setActiveTab">
       <a-tab-pane key="account" tab="账户信息">
         <a-row :gutter="16">
@@ -1132,8 +1139,9 @@
 
 <script setup lang="ts">
 import { message } from "ant-design-vue";
+import type { Key } from "ant-design-vue/es/_util/type";
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from "vue";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import {
   type AdminUser,
   type AgentDetail,
@@ -1196,6 +1204,7 @@ import { useAuthStore } from "../stores/auth";
 // ── Tab ────────────────────────────────────────────────────────────
 const authStore = useAuthStore();
 const route = useRoute();
+const router = useRouter();
 const isSystemAdmin = computed(
   () => authStore.user?.role === "platform_admin" || authStore.user?.role === "org_admin",
 );
@@ -2340,8 +2349,8 @@ const agentGroupKeyByAgentName = computed<Record<string, string>>(() => {
   return mapping;
 });
 
-function onAgentOpenChange(keys: string[]) {
-  agentOpenKeys.value = keys;
+function onAgentOpenChange(keys: Key[]) {
+  agentOpenKeys.value = keys.map((key) => String(key));
 }
 
 async function onAgentSelect({ key }: { key: string | number }) {
@@ -2570,8 +2579,8 @@ const skillGroupKeyBySkillKey = computed<Record<string, string>>(() => {
   return mapping;
 });
 
-function onSkillOpenChange(keys: string[]) {
-  skillOpenKeys.value = keys;
+function onSkillOpenChange(keys: Key[]) {
+  skillOpenKeys.value = keys.map((key) => String(key));
 }
 
 async function onSkillSelect({ key }: { key: string | number }) {

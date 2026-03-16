@@ -115,6 +115,14 @@ function parseModelRoute(route: string): { providerId: string; modelId: string; 
   return null;
 }
 
+const WELL_KNOWN_COPILOT_MODELS = [
+  "claude-sonnet-4-20250514",
+  "claude-opus-4-20250514",
+  "gpt-4o",
+  "o3-mini",
+  "gemini-2.5-pro",
+];
+
 function listConfiguredModels(): string[] {
   const config = readOpencodeJson();
   const rawList = Array.isArray((config.models as Record<string, unknown> | undefined)?.list)
@@ -128,6 +136,28 @@ function listConfiguredModels(): string[] {
       return provider && id ? `${provider}:${id}` : null;
     })
     .filter((item): item is string => Boolean(item));
+
+  // Extract models from provider config (provider.<name>.models)
+  const providers = (config.provider as Record<string, Record<string, unknown>> | undefined) || {};
+  for (const [providerName, providerConfig] of Object.entries(providers)) {
+    if (!providerConfig || typeof providerConfig !== "object") continue;
+
+    // Explicit models
+    if (providerConfig.models && typeof providerConfig.models === "object") {
+      for (const modelId of Object.keys(providerConfig.models as Record<string, unknown>)) {
+        if (modelId.trim()) {
+          routes.push(`${providerName}:${modelId.trim()}`);
+        }
+      }
+    }
+
+    // Add well-known models for copilot providers
+    if (providerName === "github-copilot" || providerName.startsWith("github-copilot-")) {
+      for (const modelId of WELL_KNOWN_COPILOT_MODELS) {
+        routes.push(`${providerName}:${modelId}`);
+      }
+    }
+  }
 
   const defaultRoute = getConfiguredDefaultModelRoute(config);
   if (defaultRoute) {
@@ -677,9 +707,7 @@ chatSettingsRoutes.post("/chat", zValidator("json", chatSchema), async (c) => {
   const availableModels = listConfiguredModels();
   const agentSummaries = listAgentSummaries();
   const skillSummaries = listSkillSummaries();
-  const skillDetails = listSkillDetails();
   const commandSummaries = listCommandSummaries();
-  const commandDetails = listCommandDetails();
   const requestedModel = body.model || availableModels[0];
   const modelErr = assertAllowedChatSettingsModel(requestedModel);
   if (modelErr) {
@@ -703,9 +731,7 @@ chatSettingsRoutes.post("/chat", zValidator("json", chatSchema), async (c) => {
       mcpConfig,
       agentSummaries,
       skillSummaries,
-      skillDetails,
       commandSummaries,
-      commandDetails,
       securityBaseline: readSecurityBaselineConfig(),
       pluginsConfig: readPluginsConfig(),
       allowedPluginSourcePrefixes: getAllowedPluginSourcePrefixes(),

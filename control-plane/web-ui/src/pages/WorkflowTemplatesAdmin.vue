@@ -279,6 +279,10 @@ async function createDefaultTemplate() {
         category: "delivery",
         enabled: true,
         selectableByProjects: true,
+        defaultCollaborationMode: "team",
+        defaultAutopilotLevel: "L1",
+        defaultBossParticipationMode: "advisory",
+        forceBossParticipation: false,
         stageOrder: ["clarify", "design", "implement", "verify", "release"],
         defaultRoles: [
           "role.product",

@@ -38,6 +38,16 @@ const routes: RouteRecordRaw[] = [
         component: () => import("../pages/TaskDetail.vue"),
       },
       {
+        path: "tasks/:taskId/operating-console",
+        name: "TaskOperatingConsole",
+        component: () => import("../pages/TaskOperatingConsole.vue"),
+      },
+      {
+        path: "tasks/:taskId/operating-override",
+        name: "TaskOperatingOverride",
+        component: () => import("../pages/TaskOperatingOverride.vue"),
+      },
+      {
         path: "projects",
         name: "Projects",
         component: () => import("../pages/Projects.vue"),
@@ -77,6 +87,21 @@ const routes: RouteRecordRaw[] = [
         component: () => import("../pages/ProjectOrchestration.vue"),
       },
       {
+        path: "projects/:projectId/operating-mode",
+        name: "ProjectOperatingMode",
+        component: () => import("../pages/ProjectOperatingMode.vue"),
+      },
+      {
+        path: "projects/:projectId/boss-operations",
+        name: "BossOperationsCenter",
+        component: () => import("../pages/BossOperationsCenter.vue"),
+      },
+      {
+        path: "projects/:projectId/operating-mode-launcher",
+        name: "TaskOperatingModeLauncher",
+        component: () => import("../pages/TaskOperatingModeLauncher.vue"),
+      },
+      {
         path: "projects/:projectId/cost",
         name: "ProjectCost",
         component: () => import("../pages/ProjectCost.vue"),
@@ -95,6 +120,11 @@ const routes: RouteRecordRaw[] = [
         path: "settings",
         name: "Settings",
         component: () => import("../pages/Settings.vue"),
+      },
+      {
+        path: "settings/organization-operating",
+        name: "OrganizationOperatingSettings",
+        component: () => import("../pages/OrganizationOperatingSettings.vue"),
       },
       {
         path: "settings/workflow-templates",

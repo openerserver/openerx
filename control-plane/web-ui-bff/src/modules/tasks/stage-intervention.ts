@@ -110,6 +110,7 @@ interface StageInterventionInput {
 export interface StageInterventionResult {
   disposition: "continue" | "blocked" | "waiting-approval";
   decision: ParsedRoleDecision["finalDecision"] | null;
+  reason?: string;
   blockingReason?: string;
 }
 
@@ -298,24 +299,29 @@ function summarizeStageIntervention(
     };
   }
 
+  const dominantReason = dominant.winningRationale?.trim() || "角色审查已完成。";
+
   if (dominant.finalDecision === "block") {
     return {
       disposition: "blocked",
       decision: dominant.finalDecision,
-      blockingReason: dominant.winningRationale?.trim() || "角色审查阻断当前阶段。",
+      reason: dominantReason,
+      blockingReason: dominantReason || "角色审查阻断当前阶段。",
     };
   }
 
-  if (dominant.finalDecision === "needs-approval") {
+  if (dominant.finalDecision === "needs-approval" || dominant.finalDecision === "human-review") {
     return {
       disposition: "waiting-approval",
       decision: dominant.finalDecision,
+      reason: dominantReason,
     };
   }
 
   return {
     disposition: "continue",
     decision: dominant.finalDecision,
+    reason: dominantReason,
   };
 }
 

@@ -8,6 +8,15 @@
 
     <ProjectSectionNav v-if="project" :project-id="project.id" active-key="overview" />
 
+    <a-card v-if="project" size="small" title="组织运行" style="margin-bottom: 16px">
+      <a-space wrap>
+        <a-button type="primary" data-testid="open-project-operating-mode" @click="router.push(`/projects/${project.id}/operating-mode`)">打开运行档位</a-button>
+        <a-button data-testid="open-task-operating-launcher" @click="router.push(`/projects/${project.id}/operating-mode-launcher`)">场景推荐入口</a-button>
+        <a-button @click="router.push(`/projects/${project.id}/orchestration`)">查看介入编排</a-button>
+        <a-button data-testid="open-boss-operations-center" @click="router.push(`/projects/${project.id}/boss-operations`)">老板经营视图</a-button>
+      </a-space>
+    </a-card>
+
     <a-spin :spinning="loading" v-if="loading" style="display: block; text-align: center; padding: 60px" />
 
     <template v-else-if="project">
@@ -138,7 +147,7 @@
 <script setup lang="ts">
 import { message } from "ant-design-vue";
 import { computed, onMounted, ref } from "vue";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { type Project, type ProjectSettings, getProject, updateProject } from "../lib/api";
 import { useAuthStore } from "../stores/auth";
 import { useProjectStore } from "../stores/project";
@@ -148,6 +157,7 @@ interface ProjectWithSettings extends Project {
 }
 
 const route = useRoute();
+const router = useRouter();
 const authStore = useAuthStore();
 const projectStore = useProjectStore();
 

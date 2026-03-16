@@ -16,7 +16,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 
-type ProjectSectionKey = "overview" | "approval-policies" | "role-execution" | "workflow" | "orchestration" | "cost";
+type ProjectSectionKey = "overview" | "approval-policies" | "role-execution" | "workflow" | "orchestration" | "operating-mode" | "boss-operations" | "cost";
 
 const props = defineProps<{
   projectId: string;
@@ -48,6 +48,16 @@ const items = computed(() => [
     key: "orchestration" as const,
     label: "介入编排",
     to: { name: "ProjectOrchestration", params: { projectId: props.projectId } },
+  },
+  {
+    key: "operating-mode" as const,
+    label: "运行档位",
+    to: { name: "ProjectOperatingMode", params: { projectId: props.projectId } },
+  },
+  {
+    key: "boss-operations" as const,
+    label: "老板经营",
+    to: { name: "BossOperationsCenter", params: { projectId: props.projectId } },
   },
   {
     key: "cost" as const,

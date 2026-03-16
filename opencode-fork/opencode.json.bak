@@ -165,6 +165,13 @@
         "id": "gpt-4o",
         "name": "GPT-4o",
         "provider": "github-copilot"
+      },
+      {
+        "id": "claude-sonnet-4.6",
+        "name": "Claude Sonnet 4.6",
+        "provider": "github-copilot",
+        "contextWindow": 200000,
+        "maxTokens": 32000
       }
     ]
   }

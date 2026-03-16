@@ -54,7 +54,7 @@ function readString(value: unknown) {
   return typeof value === "string" && value ? value : null;
 }
 
-function inferWorkflowTemplateId(task: typeof tasks.$inferSelect, strategy: JsonRecord, executionPlan: JsonRecord) {
+function inferWorkflowTemplateId(strategy: JsonRecord, executionPlan: JsonRecord) {
   return (
     readString(strategy.workflowTemplateId)
     || readString(strategy.selectedTemplateId)
@@ -219,7 +219,7 @@ async function ensureLegacyTaskWorkflowRunMigrated(
   }
 
   const executionPlan = parseExecutionPlan(task.executionPlan);
-  const templateId = inferWorkflowTemplateId(task, strategy, executionPlan);
+  const templateId = inferWorkflowTemplateId(strategy, executionPlan);
   const legacyStage = inferLegacyStage(strategy, legacyRoleConclusions);
   const workflowStatus = inferWorkflowStatus(task.status);
   const currentStage = inferCurrentStage(task.status, legacyStage);

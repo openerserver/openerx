@@ -114,6 +114,49 @@
                     </a-form-item>
                   </a-col>
                   <a-col :xs="24" :md="12">
+                    <a-form-item label="模板级组织策略">
+                      <a-row :gutter="12">
+                        <a-col :xs="24" :md="12">
+                          <a-select
+                            :value="templateForm.defaultCollaborationMode || undefined"
+                            allow-clear
+                            :options="collaborationOptions"
+                            placeholder="默认协作模式"
+                            @update:value="templateForm.defaultCollaborationMode = toOptionalOperatingValue($event)"
+                          />
+                        </a-col>
+                        <a-col :xs="24" :md="12">
+                          <a-select
+                            :value="templateForm.defaultAutopilotLevel || undefined"
+                            allow-clear
+                            :options="autopilotOptions"
+                            placeholder="默认自动托管等级"
+                            @update:value="templateForm.defaultAutopilotLevel = toOptionalOperatingValue($event)"
+                          />
+                        </a-col>
+                      </a-row>
+                      <a-row :gutter="12" style="margin-top: 12px">
+                        <a-col :xs="24" :md="12">
+                          <a-select
+                            :value="templateForm.defaultBossParticipationMode || undefined"
+                            allow-clear
+                            :options="bossModeOptions"
+                            placeholder="默认老板参与方式"
+                            @update:value="templateForm.defaultBossParticipationMode = toOptionalOperatingValue($event)"
+                          />
+                        </a-col>
+                        <a-col :xs="24" :md="12">
+                          <a-checkbox
+                            :checked="templateForm.forceBossParticipation"
+                            @update:checked="templateForm.forceBossParticipation = Boolean($event)"
+                          >
+                            强制老板参与
+                          </a-checkbox>
+                        </a-col>
+                      </a-row>
+                    </a-form-item>
+                  </a-col>
+                  <a-col :xs="24" :md="12">
                     <a-form-item label="模板状态">
                       <a-space direction="vertical">
                         <a-checkbox
@@ -334,6 +377,37 @@
                     </a-space>
                   </a-card>
 
+                  <a-card size="small" title="二次治理模板策略" style="margin-bottom: 12px">
+                    <a-row :gutter="16">
+                      <a-col :xs="24" :md="12">
+                        <a-form-item label="阻断后切换模板 ID">
+                          <a-input
+                            :value="stage.stageTemplateStrategy.onBlockedTemplateId"
+                            placeholder="例如：tpl-security-remediation"
+                            @update:value="stage.stageTemplateStrategy.onBlockedTemplateId = String($event ?? '')"
+                          />
+                        </a-form-item>
+                      </a-col>
+                      <a-col :xs="24" :md="12">
+                        <a-form-item label="待审批后切换模板 ID">
+                          <a-input
+                            :value="stage.stageTemplateStrategy.onWaitingApprovalTemplateId"
+                            placeholder="例如：tpl-release-approval"
+                            @update:value="stage.stageTemplateStrategy.onWaitingApprovalTemplateId = String($event ?? '')"
+                          />
+                        </a-form-item>
+                      </a-col>
+                    </a-row>
+                    <a-form-item label="阶段策略说明">
+                      <a-textarea
+                        :value="stage.stageTemplateStrategy.note"
+                        :rows="2"
+                        placeholder="说明这个阶段触发二次治理切换的原因"
+                        @update:value="stage.stageTemplateStrategy.note = String($event ?? '')"
+                      />
+                    </a-form-item>
+                  </a-card>
+
                   <a-card size="small" title="失败策略">
                     <a-row :gutter="16">
                       <a-col :xs="24" :md="8">
@@ -426,6 +500,33 @@
                     </a-form-item>
                   </a-col>
                 </a-row>
+                <a-row :gutter="16">
+                  <a-col :xs="24" :md="12">
+                    <a-form-item label="阻断后切换模板 ID">
+                      <a-input
+                        :value="newStage.stageTemplateStrategy.onBlockedTemplateId"
+                        placeholder="可选"
+                        @update:value="newStage.stageTemplateStrategy.onBlockedTemplateId = String($event ?? '')"
+                      />
+                    </a-form-item>
+                  </a-col>
+                  <a-col :xs="24" :md="12">
+                    <a-form-item label="待审批后切换模板 ID">
+                      <a-input
+                        :value="newStage.stageTemplateStrategy.onWaitingApprovalTemplateId"
+                        placeholder="可选"
+                        @update:value="newStage.stageTemplateStrategy.onWaitingApprovalTemplateId = String($event ?? '')"
+                      />
+                    </a-form-item>
+                  </a-col>
+                </a-row>
+                <a-form-item label="阶段策略说明">
+                  <a-textarea
+                    :value="newStage.stageTemplateStrategy.note"
+                    :rows="2"
+                    @update:value="newStage.stageTemplateStrategy.note = String($event ?? '')"
+                  />
+                </a-form-item>
                 <a-space>
                   <a-checkbox :checked="newStage.enabled" @update:checked="newStage.enabled = Boolean($event)">
                     创建后立即启用
@@ -468,6 +569,7 @@ type StageDraft = {
   exitCriteria: string[];
   gates: GateDraft[];
   approvals: ApprovalDraft[];
+  stageTemplateStrategy: StageTemplateStrategyDraft;
   failurePolicy: FailurePolicyDraft;
   orderIndex: number;
   saving?: boolean;
@@ -495,6 +597,12 @@ type FailurePolicyDraft = {
   action: string;
   fallbackStageKey: string;
   allowManualOverride: boolean;
+  note: string;
+};
+
+type StageTemplateStrategyDraft = {
+  onBlockedTemplateId: string;
+  onWaitingApprovalTemplateId: string;
   note: string;
 };
 
@@ -526,6 +634,10 @@ const templateForm = reactive({
   enabled: true,
   selectableByProjects: true,
   defaultRoles: [] as string[],
+  defaultCollaborationMode: "",
+  defaultAutopilotLevel: "",
+  defaultBossParticipationMode: "",
+  forceBossParticipation: false,
 });
 
 const newStage = reactive({
@@ -535,6 +647,11 @@ const newStage = reactive({
   mode: "single" as "single" | "parallel" | "pipeline",
   primaryRoleAgentId: "",
   participantRoleAgentIds: [] as string[],
+  stageTemplateStrategy: {
+    onBlockedTemplateId: "",
+    onWaitingApprovalTemplateId: "",
+    note: "",
+  },
 });
 
 const diagnosticsSummary = computed(() => {
@@ -572,6 +689,25 @@ const modeOptions = [
   { label: "single", value: "single" },
   { label: "parallel", value: "parallel" },
   { label: "pipeline", value: "pipeline" },
+];
+
+const collaborationOptions = [
+  { label: "单兵模式", value: "solo" },
+  { label: "团队模式", value: "team" },
+  { label: "混合模式", value: "hybrid" },
+];
+
+const autopilotOptions = [
+  { label: "L0 手动监督", value: "L0" },
+  { label: "L1 半自动经营", value: "L1" },
+  { label: "L2 全自动托管", value: "L2" },
+];
+
+const bossModeOptions = [
+  { label: "不参与", value: "disabled" },
+  { label: "建议模式", value: "advisory" },
+  { label: "异常介入", value: "exception-only" },
+  { label: "全面管理", value: "full-manager" },
 ];
 
 const gateTypeOptions = [
@@ -781,6 +917,27 @@ function toMultiline(values: string[]) {
   return values.join("\n");
 }
 
+function toOptionalOperatingValue(value: unknown) {
+  return typeof value === "string" && value.trim() ? value : "";
+}
+
+function asTemplateCollaborationMode(value: string) {
+  return value === "solo" || value === "team" || value === "hybrid" ? value : undefined;
+}
+
+function asTemplateAutopilotLevel(value: string) {
+  return value === "L0" || value === "L1" || value === "L2" ? value : undefined;
+}
+
+function asTemplateBossParticipationMode(value: string) {
+  return value === "disabled"
+    || value === "advisory"
+    || value === "exception-only"
+    || value === "full-manager"
+    ? value
+    : undefined;
+}
+
 function sanitizeMermaidLabel(value: string) {
   return value
     .replace(/"/g, "'")
@@ -876,6 +1033,35 @@ function serializeFailurePolicy(failurePolicy: FailurePolicyDraft) {
     fallbackStageKey: failurePolicy.fallbackStageKey.trim() || undefined,
     allowManualOverride: failurePolicy.allowManualOverride,
     note: failurePolicy.note.trim() || undefined,
+  };
+}
+
+function normalizeStageTemplateStrategy(value: unknown): StageTemplateStrategyDraft {
+  const record = value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+  return {
+    onBlockedTemplateId: typeof record.onBlockedTemplateId === "string" ? record.onBlockedTemplateId : "",
+    onWaitingApprovalTemplateId: typeof record.onWaitingApprovalTemplateId === "string"
+      ? record.onWaitingApprovalTemplateId
+      : "",
+    note: typeof record.note === "string" ? record.note : "",
+  };
+}
+
+function serializeStageTemplateStrategy(stageTemplateStrategy: StageTemplateStrategyDraft) {
+  if (
+    !stageTemplateStrategy.onBlockedTemplateId.trim()
+    && !stageTemplateStrategy.onWaitingApprovalTemplateId.trim()
+    && !stageTemplateStrategy.note.trim()
+  ) {
+    return undefined;
+  }
+
+  return {
+    onBlockedTemplateId: stageTemplateStrategy.onBlockedTemplateId.trim() || undefined,
+    onWaitingApprovalTemplateId: stageTemplateStrategy.onWaitingApprovalTemplateId.trim() || undefined,
+    note: stageTemplateStrategy.note.trim() || undefined,
   };
 }
 
@@ -979,6 +1165,10 @@ function populateEditor(view: WorkflowTemplateEditorView) {
   templateForm.enabled = view.template?.enabled ?? true;
   templateForm.selectableByProjects = view.template?.selectableByProjects ?? true;
   templateForm.defaultRoles = [...(view.template?.defaultRolesJson || [])];
+  templateForm.defaultCollaborationMode = view.template?.defaultCollaborationMode || "";
+  templateForm.defaultAutopilotLevel = view.template?.defaultAutopilotLevel || "";
+  templateForm.defaultBossParticipationMode = view.template?.defaultBossParticipationMode || "";
+  templateForm.forceBossParticipation = view.template?.forceBossParticipation ?? false;
   stageDrafts.value = [...view.stages]
     .sort((left, right) => left.orderIndex - right.orderIndex)
     .map((stage) => ({
@@ -995,6 +1185,7 @@ function populateEditor(view: WorkflowTemplateEditorView) {
       approvals: Array.isArray(stage.approvalsJson)
         ? stage.approvalsJson.map((item, index) => normalizeApproval(item, index))
         : [],
+      stageTemplateStrategy: normalizeStageTemplateStrategy(stage.stageTemplateStrategyJson),
       failurePolicy: normalizeFailurePolicy(stage.failurePolicyJson),
       orderIndex: stage.orderIndex,
     }));
@@ -1004,6 +1195,11 @@ function populateEditor(view: WorkflowTemplateEditorView) {
   newStage.mode = "single";
   newStage.primaryRoleAgentId = view.availableRoles[0]?.id || "";
   newStage.participantRoleAgentIds = [];
+  newStage.stageTemplateStrategy = {
+    onBlockedTemplateId: "",
+    onWaitingApprovalTemplateId: "",
+    note: "",
+  };
 }
 
 async function loadEditor() {
@@ -1037,6 +1233,12 @@ async function saveTemplate() {
       category: templateForm.category.trim(),
       enabled: templateForm.enabled,
       selectableByProjects: templateForm.selectableByProjects,
+      defaultCollaborationMode: asTemplateCollaborationMode(templateForm.defaultCollaborationMode),
+      defaultAutopilotLevel: asTemplateAutopilotLevel(templateForm.defaultAutopilotLevel),
+      defaultBossParticipationMode: templateForm.forceBossParticipation
+        ? "full-manager"
+        : asTemplateBossParticipationMode(templateForm.defaultBossParticipationMode),
+      forceBossParticipation: templateForm.forceBossParticipation,
       defaultRoles: templateForm.defaultRoles,
       stageOrder: stageDrafts.value.map((stage) => stage.stageKey),
     });
@@ -1090,6 +1292,7 @@ async function saveStage(stage: StageDraft, index: number) {
       exitCriteria: stage.exitCriteria,
       gates: serializeGates(stage.gates),
       approvals: serializeApprovals(stage.approvals),
+      stageTemplateStrategy: serializeStageTemplateStrategy(stage.stageTemplateStrategy),
       failurePolicy: serializeFailurePolicy(stage.failurePolicy),
       orderIndex: index,
     });
@@ -1198,6 +1401,7 @@ async function addStage() {
       mode: newStage.mode,
       primaryRoleAgentId: newStage.primaryRoleAgentId,
       participantRoleAgentIds: newStage.participantRoleAgentIds,
+      stageTemplateStrategy: serializeStageTemplateStrategy(newStage.stageTemplateStrategy),
       orderIndex: stageDrafts.value.length,
     });
     await loadEditor();

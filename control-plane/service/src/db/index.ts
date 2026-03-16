@@ -19,4 +19,5 @@ sqlite.exec("PRAGMA foreign_keys = ON");
 ensureRuntimeTables(sqlite);
 
 export const db = drizzle(sqlite, { schema });
+export { sqlite };
 export type DB = typeof db;

@@ -1434,6 +1434,7 @@ function handleViewportChangeEnd(viewport: { x: number; y: number; zoom: number 
 
 function handleViewportChange(viewport: { x: number; y: number; zoom: number }) {
   if (viewportDebounceTimer) clearTimeout(viewportDebounceTimer);
+  monitorStore.setViewport(viewport);
   viewportDebounceTimer = setTimeout(() => {
     monitorStore.setViewport(viewport);
   }, 120);

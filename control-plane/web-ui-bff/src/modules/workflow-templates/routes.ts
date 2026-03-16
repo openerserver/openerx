@@ -1,7 +1,10 @@
 import { Hono } from "hono";
 import { authHeader, cpFetch } from "../../lib/control-plane-client";
+import type { JWTPayload } from "../../middleware/auth";
 
-export const workflowTemplateRoutes = new Hono();
+type AppEnv = { Variables: { user: JWTPayload } };
+
+export const workflowTemplateRoutes = new Hono<AppEnv>();
 
 interface WorkflowTemplateRecord {
   id: string;
@@ -11,6 +14,10 @@ interface WorkflowTemplateRecord {
   category?: string | null;
   enabled: boolean;
   selectableByProjects: boolean;
+  defaultCollaborationMode?: "solo" | "team" | "hybrid" | null;
+  defaultAutopilotLevel?: "L0" | "L1" | "L2" | null;
+  defaultBossParticipationMode?: "disabled" | "advisory" | "exception-only" | "full-manager" | null;
+  forceBossParticipation: boolean;
   stageOrderJson: string[];
   defaultRolesJson?: string[] | null;
   version: number;
@@ -35,6 +42,11 @@ interface WorkflowTemplateStageRecord {
   hooksJson?: Array<Record<string, unknown>> | null;
   gatesJson?: Array<Record<string, unknown>> | null;
   approvalsJson?: Array<Record<string, unknown>> | null;
+  stageTemplateStrategyJson?: {
+    onBlockedTemplateId?: string;
+    onWaitingApprovalTemplateId?: string;
+    note?: string;
+  } | null;
   failurePolicyJson?: Record<string, unknown> | null;
   orderIndex: number;
 }
@@ -51,6 +63,16 @@ interface ProjectWorkflowTemplateBinding {
   projectId: string;
   workflowTemplateId: string | null;
   template: WorkflowTemplateRecord | null;
+}
+
+interface ProjectViewRecord {
+  id: string;
+  name?: string;
+  slug?: string;
+  settings?: {
+    preferredTemplateId?: string | null;
+    allowBossAutoTemplateSwitch?: boolean;
+  } | null;
 }
 
 interface CloneWorkflowTemplatePayload {
@@ -92,13 +114,17 @@ async function fetchTemplates(authorization: string, projectId?: string) {
 async function fetchTemplateById(templateId: string, authorization: string) {
   const result = await fetchTemplates(authorization);
   if (!result.ok) {
-    return result;
+    return {
+      ok: false as const,
+      status: result.status,
+      data: result.data,
+    };
   }
 
   return {
     ok: true as const,
     status: 200,
-    data: result.data.data?.find((item) => item.id === templateId) ?? null,
+    data: result.data?.data?.find((item) => item.id === templateId) ?? null,
   };
 }
 
@@ -204,6 +230,10 @@ workflowTemplateRoutes.post("/:templateId/clone", async (c) => {
       category: body.category ?? sourceTemplate.category ?? undefined,
       enabled: body.enabled ?? sourceTemplate.enabled,
       selectableByProjects: body.selectableByProjects ?? sourceTemplate.selectableByProjects,
+      defaultCollaborationMode: sourceTemplate.defaultCollaborationMode ?? undefined,
+      defaultAutopilotLevel: sourceTemplate.defaultAutopilotLevel ?? undefined,
+      defaultBossParticipationMode: sourceTemplate.defaultBossParticipationMode ?? undefined,
+      forceBossParticipation: sourceTemplate.forceBossParticipation ?? false,
       stageOrder: [...sourceTemplate.stageOrderJson],
       defaultRoles: body.defaultRoles ?? sourceTemplate.defaultRolesJson ?? undefined,
     },
@@ -234,6 +264,7 @@ workflowTemplateRoutes.post("/:templateId/clone", async (c) => {
           hooks: stage.hooksJson ?? undefined,
           gates: stage.gatesJson ?? undefined,
           approvals: stage.approvalsJson ?? undefined,
+          stageTemplateStrategy: stage.stageTemplateStrategyJson ?? undefined,
           failurePolicy: stage.failurePolicyJson ?? undefined,
           orderIndex: stage.orderIndex,
         },
@@ -360,7 +391,7 @@ workflowTemplateRoutes.get("/projects/:projectId/view", async (c) => {
     user.role === "org_admin" ||
     Boolean(user.projects?.some((item) => item.id === projectId && item.role === "project_admin"));
   const [projectResult, bindingResult, templateResult] = await Promise.all([
-    cpFetch<{ id: string; name?: string; slug?: string }>(`/api/projects/${encodeURIComponent(projectId)}`, {
+    cpFetch<ProjectViewRecord>(`/api/projects/${encodeURIComponent(projectId)}`, {
       authorization,
     }),
     cpFetch<ProjectWorkflowTemplateBinding>(`/api/projects/${encodeURIComponent(projectId)}/workflow-template`, {
@@ -383,6 +414,20 @@ workflowTemplateRoutes.get("/projects/:projectId/view", async (c) => {
     (item) => item.enabled && (item.selectableByProjects || item.projectId === projectId),
   );
   const currentTemplate = bindingResult.data.template;
+  const projectSettings = {
+    preferredTemplateId: projectResult.data.settings?.preferredTemplateId || null,
+    allowBossAutoTemplateSwitch: Boolean(projectResult.data.settings?.allowBossAutoTemplateSwitch),
+  };
+  const currentTemplatePolicy = currentTemplate
+    ? {
+        defaultCollaborationMode: currentTemplate.defaultCollaborationMode || null,
+        defaultAutopilotLevel: currentTemplate.defaultAutopilotLevel || null,
+        defaultBossParticipationMode: currentTemplate.forceBossParticipation
+          ? "full-manager"
+          : (currentTemplate.defaultBossParticipationMode || null),
+        forceBossParticipation: Boolean(currentTemplate.forceBossParticipation),
+      }
+    : null;
 
   if (!currentTemplate) {
     return c.json({
@@ -396,6 +441,8 @@ workflowTemplateRoutes.get("/projects/:projectId/view", async (c) => {
       currentTemplateSource: "unbound",
       stages: [],
       selectableTemplates,
+      projectSettings,
+      currentTemplatePolicy,
       stageCatalog: STAGE_CATALOG,
       access: {
         canManage,
@@ -422,6 +469,8 @@ workflowTemplateRoutes.get("/projects/:projectId/view", async (c) => {
     currentTemplateSource: "bound",
     stages: sortStages(stagesResult.data.data || []),
     selectableTemplates,
+    projectSettings,
+    currentTemplatePolicy,
     stageCatalog: STAGE_CATALOG,
     access: {
       canManage,
@@ -433,14 +482,45 @@ workflowTemplateRoutes.get("/projects/:projectId/view", async (c) => {
 workflowTemplateRoutes.put("/projects/:projectId/selection", async (c) => {
   const authorization = authHeader(c);
   const projectId = c.req.param("projectId");
-  const body = await c.req.json();
-  const result = await cpFetch<ProjectWorkflowTemplateBinding>(
+  const body = await c.req.json() as {
+    workflowTemplateId?: string | null;
+    preferredTemplateId?: string | null;
+    allowBossAutoTemplateSwitch?: boolean;
+  };
+
+  const bindingResult = await cpFetch<ProjectWorkflowTemplateBinding>(
     `/api/projects/${encodeURIComponent(projectId)}/workflow-template`,
     {
       method: "PUT",
-      body,
+      body: { workflowTemplateId: body.workflowTemplateId ?? null },
       authorization,
     },
   );
-  return c.json(result.data, result.ok ? 200 : (result.status as 400 | 401 | 403 | 404 | 502));
+
+  if (!bindingResult.ok) {
+    return c.json(bindingResult.data, bindingResult.status as 400 | 401 | 403 | 404 | 502);
+  }
+
+  const settingsPatchResult = await cpFetch<{ id: string }>(`/api/projects/${encodeURIComponent(projectId)}`, {
+    method: "PATCH",
+    body: {
+      settings: {
+        preferredTemplateId: body.preferredTemplateId ?? null,
+        allowBossAutoTemplateSwitch: body.allowBossAutoTemplateSwitch ?? false,
+      },
+    },
+    authorization,
+  });
+
+  if (!settingsPatchResult.ok) {
+    return c.json(settingsPatchResult.data, settingsPatchResult.status as 400 | 401 | 403 | 404 | 502);
+  }
+
+  return c.json({
+    ...bindingResult.data,
+    projectSettings: {
+      preferredTemplateId: body.preferredTemplateId ?? null,
+      allowBossAutoTemplateSwitch: body.allowBossAutoTemplateSwitch ?? false,
+    },
+  }, 200);
 });

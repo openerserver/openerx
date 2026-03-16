@@ -1,11 +1,15 @@
 import { Hono } from "hono";
 import { authHeader, cpFetch } from "../../lib/control-plane-client";
+import type { JWTPayload } from "../../middleware/auth";
 import {
+  buildTaskWorkflowViewModel,
   type ProjectStageRuntimeSummaryViewModel,
   buildProjectWorkflowStageRuntimeSummaries,
 } from "../tasks/workflow-view";
 
-export const projectRoutes = new Hono();
+type AppEnv = { Variables: { user: JWTPayload } };
+
+export const projectRoutes = new Hono<AppEnv>();
 
 interface ProjectRecord {
   id: string;
@@ -176,6 +180,79 @@ interface OrchestrationScenarioViewModel {
   source: "current" | "candidate";
   template: WorkflowTemplateRecord | null;
   stages: OrchestrationStageViewModel[];
+}
+
+interface ProjectTaskRecord {
+  id: string;
+  title?: string | null;
+  status?: string | null;
+  createdAt?: string | null;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  updatedAt?: string | null;
+}
+
+interface BossDecisionRecord {
+  id: string;
+  ts: string;
+  decisionType: string;
+  reason: string;
+  confidence?: number;
+  stageKey?: string;
+  metadata?: Record<string, unknown>;
+}
+
+interface HumanEscalationRequest {
+  id: string;
+  ts: string;
+  reason: string;
+  status?: string;
+  stageKey?: string;
+  requestedBy?: string;
+  metadata?: Record<string, unknown>;
+}
+
+function asOperatingModeSelection(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  const collaborationMode = record.collaborationMode;
+  const autopilotLevel = record.autopilotLevel;
+  const bossParticipationMode = record.bossParticipationMode;
+  const source = record.source;
+
+  if (
+    (collaborationMode !== "solo" && collaborationMode !== "team" && collaborationMode !== "hybrid")
+    || (autopilotLevel !== "L0" && autopilotLevel !== "L1" && autopilotLevel !== "L2")
+    || (bossParticipationMode !== "disabled"
+      && bossParticipationMode !== "advisory"
+      && bossParticipationMode !== "exception-only"
+      && bossParticipationMode !== "full-manager")
+    || (source !== undefined
+      && source !== "system-default"
+      && source !== "project-default"
+      && source !== "task-override"
+      && source !== "boss-decision")
+  ) {
+    return null;
+  }
+
+  return {
+    collaborationMode,
+    autopilotLevel,
+    bossParticipationMode,
+    selectedTemplateId: typeof record.selectedTemplateId === "string" ? record.selectedTemplateId : null,
+    scenarioKey: typeof record.scenarioKey === "string" ? record.scenarioKey : undefined,
+    source: source === undefined ? "task-override" : source,
+  };
+}
+
+function isHumanOverrideDecision(decision: BossDecisionRecord) {
+  return decision.decisionType === "manual-override"
+    || decision.decisionType === "clear-override"
+    || decision.metadata?.actorType === "human";
 }
 
 function roleMode(override: RoleAgentProjectOverrideRecord | null) {
@@ -559,6 +636,192 @@ function buildRoleMatrix(
 
 function sortStages(stages: WorkflowTemplateStageRecord[]) {
   return [...stages].sort((left, right) => left.orderIndex - right.orderIndex);
+}
+
+function isOpenEscalation(status?: string | null) {
+  return status !== "resolved" && status !== "dismissed" && status !== "cancelled";
+}
+
+function severityWeight(input: {
+  workflowStatus: string;
+  openEscalationCount: number;
+  latestDecisionType?: string;
+}) {
+  if (input.workflowStatus === "blocked") return 0;
+  if (input.workflowStatus === "waiting-approval") return 1;
+  if (input.openEscalationCount > 0) return 2;
+  if (input.latestDecisionType === "hold-stage") return 3;
+  if (input.latestDecisionType === "request-approval" || input.latestDecisionType === "escalate-human") return 4;
+  return 5;
+}
+
+async function fetchTaskBossDecisions(taskId: string, authorization: string) {
+  const result = await cpFetch<{ data?: BossDecisionRecord[] }>(
+    `/api/tasks/${encodeURIComponent(taskId)}/operating-runtime/boss-decisions`,
+    { authorization },
+  );
+  return result.ok ? result.data?.data || [] : [];
+}
+
+async function fetchTaskEscalations(taskId: string, authorization: string) {
+  const result = await cpFetch<{ data?: HumanEscalationRequest[] }>(
+    `/api/tasks/${encodeURIComponent(taskId)}/operating-runtime/escalations`,
+    { authorization },
+  );
+  return result.ok ? result.data?.data || [] : [];
+}
+
+async function buildProjectBossOperationsView(projectId: string, authorization: string) {
+  const [projectResult, tasksResult] = await Promise.all([
+    cpFetch<ProjectRecord>(`/api/projects/${encodeURIComponent(projectId)}`, { authorization }),
+    cpFetch<{ data?: ProjectTaskRecord[] }>(`/api/tasks?projectId=${encodeURIComponent(projectId)}&limit=50`, {
+      authorization,
+    }),
+  ]);
+
+  if (!projectResult.ok) {
+    return projectResult;
+  }
+  if (!tasksResult.ok) {
+    return tasksResult;
+  }
+
+  const tasks = tasksResult.data?.data || [];
+  const taskViews = await Promise.all(
+    tasks.map(async (task) => {
+      const [bossDecisions, escalations, workflowView] = await Promise.all([
+        fetchTaskBossDecisions(task.id, authorization),
+        fetchTaskEscalations(task.id, authorization),
+        buildTaskWorkflowViewModel(task.id, authorization, {
+          projectId,
+          taskStatus: task.status,
+        }),
+      ]);
+
+      const openEscalations = escalations.filter((item) => isOpenEscalation(item.status));
+      const latestBossDecision = [...bossDecisions].sort((left, right) => right.ts.localeCompare(left.ts))[0];
+      const currentStage = workflowView.workflow.stages.find(
+        (stage) => stage.stageKey === workflowView.workflow.currentStage,
+      );
+
+      return {
+        task,
+        workflowView,
+        bossDecisions,
+        escalations,
+        openEscalations,
+        latestBossDecision,
+        currentStage,
+      };
+    }),
+  );
+
+  const timeline = taskViews
+    .flatMap(({ task, workflowView, bossDecisions, openEscalations }) =>
+      bossDecisions.map((decision) => ({
+        ...decision,
+        taskId: task.id,
+        taskTitle: task.title || task.id,
+        taskStatus: task.status || "unknown",
+        workflowStatus: workflowView.workflow.status,
+        currentStageKey: workflowView.workflow.currentStage,
+        openEscalationCount: openEscalations.length,
+      })),
+    )
+    .sort((left, right) => right.ts.localeCompare(left.ts));
+
+  const escalations = taskViews
+    .flatMap(({ task, workflowView, openEscalations }) =>
+      openEscalations.map((item) => ({
+        ...item,
+        taskId: task.id,
+        taskTitle: task.title || task.id,
+        taskStatus: task.status || "unknown",
+        workflowStatus: workflowView.workflow.status,
+        currentStageKey: workflowView.workflow.currentStage,
+      })),
+    )
+    .sort((left, right) => right.ts.localeCompare(left.ts));
+
+  const overrideHistory = taskViews
+    .flatMap(({ task, workflowView, bossDecisions }) =>
+      bossDecisions
+        .filter(isHumanOverrideDecision)
+        .map((decision) => ({
+          ...decision,
+          taskId: task.id,
+          taskTitle: task.title || task.id,
+          taskStatus: task.status || "unknown",
+          workflowStatus: workflowView.workflow.status,
+          currentStageKey: workflowView.workflow.currentStage,
+          actorId: typeof decision.metadata?.actorId === "string" ? decision.metadata.actorId : null,
+          overrideAction: typeof decision.metadata?.action === "string" ? decision.metadata.action : null,
+          previousMode: asOperatingModeSelection(decision.metadata?.previousMode),
+          nextMode: asOperatingModeSelection(decision.metadata?.nextMode),
+        })),
+    )
+    .sort((left, right) => right.ts.localeCompare(left.ts));
+
+  const attentionTasks = taskViews
+    .filter(({ workflowView, openEscalations, latestBossDecision }) => (
+      workflowView.workflow.status === "blocked"
+      || workflowView.workflow.status === "waiting-approval"
+      || openEscalations.length > 0
+      || latestBossDecision?.decisionType === "hold-stage"
+      || latestBossDecision?.decisionType === "request-approval"
+      || latestBossDecision?.decisionType === "escalate-human"
+    ))
+    .map(({ task, workflowView, openEscalations, latestBossDecision, bossDecisions, currentStage }) => ({
+      taskId: task.id,
+      taskTitle: task.title || task.id,
+      taskStatus: task.status || "unknown",
+      workflowStatus: workflowView.workflow.status,
+      currentStageKey: workflowView.workflow.currentStage,
+      currentStageLabel: currentStage?.stageLabel || workflowView.workflow.currentStage,
+      currentStageStatus: currentStage?.status || "unknown",
+      blockingReason: currentStage?.blockingReason,
+      openEscalationCount: openEscalations.length,
+      bossDecisionCount: bossDecisions.length,
+      latestDecisionType: latestBossDecision?.decisionType,
+      latestDecisionReason: latestBossDecision?.reason,
+      latestDecisionTs: latestBossDecision?.ts || task.updatedAt || task.finishedAt || task.startedAt || task.createdAt || null,
+    }))
+    .sort((left, right) => {
+      const leftWeight = severityWeight(left);
+      const rightWeight = severityWeight(right);
+      if (leftWeight !== rightWeight) {
+        return leftWeight - rightWeight;
+      }
+      return String(right.latestDecisionTs || "").localeCompare(String(left.latestDecisionTs || ""));
+    });
+
+  const summary = {
+    totalTasks: tasks.length,
+    tasksWithBossDecisions: taskViews.filter((item) => item.bossDecisions.length > 0).length,
+    totalBossDecisions: timeline.length,
+    openEscalations: escalations.length,
+    blockedTasks: taskViews.filter((item) => item.workflowView.workflow.status === "blocked").length,
+    waitingApprovalTasks: taskViews.filter((item) => item.workflowView.workflow.status === "waiting-approval").length,
+    tasksNeedingAttention: attentionTasks.length,
+    manualOverrides: overrideHistory.length,
+  };
+
+  return {
+    ok: true as const,
+    status: 200,
+    data: {
+      project: {
+        id: projectResult.data.id,
+        name: projectResult.data.name || projectResult.data.id,
+        slug: projectResult.data.slug || "",
+      },
+      summary,
+      timeline,
+      overrideHistory,
+      escalations,
+      attentionTasks,
+    },
+  };
 }
 
 async function fetchWorkflowTemplates(authorization: string) {
@@ -996,6 +1259,24 @@ projectRoutes.get("/:projectId/orchestration-view", async (c) => {
   } catch (error) {
     return c.json(
       { message: error instanceof Error ? error.message : "Failed to build orchestration view" },
+      502,
+    );
+  }
+});
+
+projectRoutes.get("/:projectId/boss-operations-view", async (c) => {
+  const projectId = c.req.param("projectId");
+  const authorization = authHeader(c);
+
+  try {
+    const result = await buildProjectBossOperationsView(projectId, authorization);
+    if (!result.ok) {
+      return c.json(result.data, result.status as 401 | 403 | 404 | 502);
+    }
+    return c.json(result.data, 200);
+  } catch (error) {
+    return c.json(
+      { message: error instanceof Error ? error.message : "Failed to build boss operations view" },
       502,
     );
   }

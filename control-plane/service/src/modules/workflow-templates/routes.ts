@@ -20,6 +20,10 @@ const workflowTemplateSchema = z.object({
   category: z.string().optional(),
   enabled: z.boolean(),
   selectableByProjects: z.boolean(),
+  defaultCollaborationMode: z.enum(["solo", "team", "hybrid"]).optional(),
+  defaultAutopilotLevel: z.enum(["L0", "L1", "L2"]).optional(),
+  defaultBossParticipationMode: z.enum(["disabled", "advisory", "exception-only", "full-manager"]).optional(),
+  forceBossParticipation: z.boolean().optional(),
   stageOrder: z.array(z.string()).min(1),
   defaultRoles: z.array(z.string()).optional(),
 });
@@ -40,6 +44,11 @@ const workflowStageSchema = z.object({
   hooks: z.array(z.any()).optional(),
   gates: z.array(z.any()).optional(),
   approvals: z.array(z.any()).optional(),
+  stageTemplateStrategy: z.object({
+    onBlockedTemplateId: z.string().min(1).optional(),
+    onWaitingApprovalTemplateId: z.string().min(1).optional(),
+    note: z.string().optional(),
+  }).optional(),
   failurePolicy: z.any().optional(),
   orderIndex: z.number().int().min(0).default(0),
 });
@@ -66,6 +75,10 @@ workflowTemplateRoutes.post("/", zValidator("json", workflowTemplateSchema), asy
     category: body.category ?? null,
     enabled: body.enabled,
     selectableByProjects: body.selectableByProjects,
+    defaultCollaborationMode: body.defaultCollaborationMode ?? null,
+    defaultAutopilotLevel: body.defaultAutopilotLevel ?? null,
+    defaultBossParticipationMode: body.defaultBossParticipationMode ?? null,
+    forceBossParticipation: body.forceBossParticipation ?? false,
     stageOrderJson: body.stageOrder,
     defaultRolesJson: body.defaultRoles ?? null,
     version: 1,
@@ -90,6 +103,12 @@ workflowTemplateRoutes.patch("/:templateId", zValidator("json", workflowTemplate
   if (body.category !== undefined) updates.category = body.category;
   if (body.enabled !== undefined) updates.enabled = body.enabled;
   if (body.selectableByProjects !== undefined) updates.selectableByProjects = body.selectableByProjects;
+  if (body.defaultCollaborationMode !== undefined) updates.defaultCollaborationMode = body.defaultCollaborationMode;
+  if (body.defaultAutopilotLevel !== undefined) updates.defaultAutopilotLevel = body.defaultAutopilotLevel;
+  if (body.defaultBossParticipationMode !== undefined) {
+    updates.defaultBossParticipationMode = body.defaultBossParticipationMode;
+  }
+  if (body.forceBossParticipation !== undefined) updates.forceBossParticipation = body.forceBossParticipation;
   if (body.stageOrder !== undefined) updates.stageOrderJson = body.stageOrder;
   if (body.defaultRoles !== undefined) updates.defaultRolesJson = body.defaultRoles;
   await db.update(workflowTemplates).set(updates).where(eq(workflowTemplates.id, templateId));
@@ -125,6 +144,7 @@ workflowTemplateRoutes.post("/:templateId/stages", zValidator("json", workflowSt
     hooksJson: body.hooks ?? null,
     gatesJson: body.gates ?? null,
     approvalsJson: body.approvals ?? null,
+    stageTemplateStrategyJson: body.stageTemplateStrategy ?? null,
     failurePolicyJson: body.failurePolicy ?? null,
     orderIndex: body.orderIndex,
   });
@@ -156,6 +176,7 @@ workflowTemplateRoutes.patch(
     if (body.hooks !== undefined) updates.hooksJson = body.hooks;
     if (body.gates !== undefined) updates.gatesJson = body.gates;
     if (body.approvals !== undefined) updates.approvalsJson = body.approvals;
+    if (body.stageTemplateStrategy !== undefined) updates.stageTemplateStrategyJson = body.stageTemplateStrategy;
     if (body.failurePolicy !== undefined) updates.failurePolicyJson = body.failurePolicy;
     if (body.orderIndex !== undefined) updates.orderIndex = body.orderIndex;
 

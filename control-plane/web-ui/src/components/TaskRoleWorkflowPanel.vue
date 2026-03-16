@@ -51,11 +51,11 @@
             </div>
             <a-space size="small" wrap>
               <a-tag :color="stageStatusTone(stage.status)">{{ stageStatusLabel(stage.status) }}</a-tag>
-              <a-tag :color="gateResultColor(stage.runtimeSummary.gateResult)">
-                Gate {{ gateResultLabel(stage.runtimeSummary.gateResult) }}
+              <a-tag :color="gateResultColor(runtimeSummaryOf(stage).gateResult)">
+                Gate {{ gateResultLabel(runtimeSummaryOf(stage).gateResult) }}
               </a-tag>
-              <a-tag :color="approvalResultColor(stage.runtimeSummary.approvalResult)">
-                Approval {{ approvalResultLabel(stage.runtimeSummary.approvalResult) }}
+              <a-tag :color="approvalResultColor(runtimeSummaryOf(stage).approvalResult)">
+                Approval {{ approvalResultLabel(runtimeSummaryOf(stage).approvalResult) }}
               </a-tag>
             </a-space>
           </a-flex>
@@ -63,15 +63,15 @@
           <a-space wrap :style="{ marginTop: '8px' }">
             <a-tag>Gate 配置 {{ stage.gateCount }}</a-tag>
             <a-tag>Approval 配置 {{ stage.approvalCount }}</a-tag>
-            <a-tag>角色结论 {{ stage.runtimeSummary.conclusionCount }}</a-tag>
-            <a-tag v-if="stage.runtimeSummary.blockDecisionCount > 0 || stage.runtimeSummary.manualReviewCount > 0" color="red">
-              阻断结论 {{ stage.runtimeSummary.blockDecisionCount + stage.runtimeSummary.manualReviewCount }}
+            <a-tag>角色结论 {{ runtimeSummaryOf(stage).conclusionCount }}</a-tag>
+            <a-tag v-if="runtimeSummaryOf(stage).blockDecisionCount > 0 || runtimeSummaryOf(stage).manualReviewCount > 0" color="red">
+              阻断结论 {{ runtimeSummaryOf(stage).blockDecisionCount + runtimeSummaryOf(stage).manualReviewCount }}
             </a-tag>
-            <a-tag v-if="stage.runtimeSummary.approvalDecisionCount > 0" color="orange">
-              审批结论 {{ stage.runtimeSummary.approvalDecisionCount }}
+            <a-tag v-if="runtimeSummaryOf(stage).approvalDecisionCount > 0" color="orange">
+              审批结论 {{ runtimeSummaryOf(stage).approvalDecisionCount }}
             </a-tag>
-            <a-tag v-if="stage.runtimeSummary.openChangeRequestCount > 0" color="gold">
-              待修正 {{ stage.runtimeSummary.openChangeRequestCount }}
+            <a-tag v-if="runtimeSummaryOf(stage).openChangeRequestCount > 0" color="gold">
+              待修正 {{ runtimeSummaryOf(stage).openChangeRequestCount }}
             </a-tag>
           </a-space>
 
@@ -84,11 +84,11 @@
           />
 
           <a-space direction="vertical" :size="4" :style="{ marginTop: '8px', width: '100%' }">
-            <a-typography-text v-if="stage.runtimeSummary.latestBlockingRoleLabel" type="danger">
-              最近阻断角色：{{ stage.runtimeSummary.latestBlockingRoleLabel }}
+            <a-typography-text v-if="runtimeSummaryOf(stage).latestBlockingRoleLabel" type="danger">
+              最近阻断角色：{{ runtimeSummaryOf(stage).latestBlockingRoleLabel }}
             </a-typography-text>
-            <a-typography-text v-if="stage.runtimeSummary.latestApprovalRoleLabel" type="warning">
-              最近审批角色：{{ stage.runtimeSummary.latestApprovalRoleLabel }}
+            <a-typography-text v-if="runtimeSummaryOf(stage).latestApprovalRoleLabel" type="warning">
+              最近审批角色：{{ runtimeSummaryOf(stage).latestApprovalRoleLabel }}
             </a-typography-text>
           </a-space>
         </a-card>
@@ -300,6 +300,21 @@ const stageLabelLookup = computed(() =>
 );
 
 const currentStageLabel = computed(() => formatStageLabel(workflowBannerState.value.currentStage));
+
+function runtimeSummaryOf(stage: TaskStageViewModel) {
+  return stage.runtimeSummary || {
+    conclusionCount: 0,
+    blockDecisionCount: 0,
+    approvalDecisionCount: 0,
+    manualReviewCount: 0,
+    openChangeRequestCount: 0,
+    blockingChangeRequestCount: 0,
+    gateResult: "not-configured",
+    approvalResult: "not-configured",
+    latestBlockingRoleLabel: undefined,
+    latestApprovalRoleLabel: undefined,
+  };
+}
 
 const manualInterventionLabel = computed(() => {
   if (manualReviewConclusions.value.length > 0) {

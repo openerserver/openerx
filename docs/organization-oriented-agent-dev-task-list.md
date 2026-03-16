@@ -19,6 +19,8 @@
 - [docs/boss-agent-design.md](docs/boss-agent-design.md)
 - [docs/organization-oriented-agent-technical-checklist.md](docs/organization-oriented-agent-technical-checklist.md)
 - [docs/development-role-agents-plan.md](docs/development-role-agents-plan.md)
+- [docs/organization-oriented-agent-frontend-information-architecture.md](docs/organization-oriented-agent-frontend-information-architecture.md)
+- [docs/organization-oriented-agent-frontend-phase1-page-draft.md](docs/organization-oriented-agent-frontend-phase1-page-draft.md)
 
 ## 2. 实施分层
 
@@ -35,6 +37,19 @@
 - P0：MVP 必做
 - P1：增强闭环
 - P2：高级能力或后续优化
+
+前端实施原则：
+
+- 尽量不直接改造现有主页面
+- 优先通过新增页面、新路由、新面板承载组织架构化能力
+- 现有页面仅做最小入口挂接，例如增加跳转入口、入口卡片或详情链接
+
+当前状态同步（2026-03-15）：
+
+- 第 1 期前端范围已完成：`OrganizationOperatingSettings`、`ProjectOperatingMode`、`TaskOperatingConsole` 已落地
+- 第 1 期前端最小入口已完成：设置页、项目详情页、项目编排页、任务详情页均已接入跳转入口
+- 第 1 期前端测试已完成并通过当前全量 `web-ui` 测试集
+- 当前剩余重点切换为后端闭环与后续阶段能力：优先补任务老板决策 / 升级请求正式接口，再推进 P1 / P2
 
 ## 3. BFF 任务列表
 
@@ -182,6 +197,8 @@
 
 ### 4.5 P2：模板级组织策略
 
+状态：已启动并完成首批落地
+
 目标：模板可定义默认运行档位和老板策略。
 
 任务：
@@ -191,40 +208,51 @@
 3. 支持 `defaultBossParticipationMode`
 4. 支持模板是否强制老板参与
 
+当前实现：
+
+- `workflow_templates` 已增加模板级组织策略字段并兼容旧库补列
+- Workflow Template CRUD / 编辑页已可维护默认协作模式、默认托管等级、默认老板参与方式、强制老板参与
+- 项目模板页已可展示当前模板策略，并保存 `preferredTemplateId` 与 `allowBossAutoTemplateSwitch`
+- `select-template` 老板决策在项目授权开启时会自动写入任务运行档位
+
 ## 5. 前端任务列表
 
 ### 5.1 P0：设置页增加组织运行策略
+
+状态：已完成
 
 目标：管理员能看见并配置协作模式、自动托管等级和老板参与方式。
 
 任务：
 
-1. 在设置页新增“组织运行策略”卡片
-2. 增加协作模式选择器
-3. 增加自动托管等级选择器
-4. 增加老板参与方式选择器
-5. 增加推荐使用场景表展示
+1. 新增独立页面 `OrganizationOperatingSettings.vue`
+2. 在现有设置页仅增加入口卡片或跳转入口
+3. 在新页面中提供协作模式、自动托管等级、老板参与方式配置
+4. 在新页面中展示推荐使用场景表
 
 ### 5.2 P0：项目编排页展示当前档位
+
+状态：已完成
 
 目标：用户在项目编排页中看见当前项目是单兵、团队还是混合，以及托管等级。
 
 任务：
 
-1. 展示当前协作模式
-2. 展示当前自动托管等级
-3. 展示老板参与方式
-4. 展示当前模板来源
+1. 新增独立页面 `ProjectOperatingMode.vue`
+2. 在现有项目编排页仅增加“组织运行视图”入口
+3. 在新页面展示当前协作模式、自动托管等级、老板参与方式和模板来源
 
 ### 5.3 P0：任务详情页展示老板判断
+
+状态：已完成
 
 目标：任务页能直接看到老板的存在和判断。
 
 任务：
 
-1. 增加“当前运行档位”卡片
-2. 增加“老板最近决策”卡片
-3. 增加“是否触发人类升级”标识
+1. 新增独立页面 `TaskOperatingConsole.vue`
+2. 在现有任务详情页仅增加“组织运行详情”入口
+3. 在新页面展示当前运行档位、老板最近决策和升级状态
 
 ### 5.4 P1：模式切换交互
 
@@ -232,9 +260,9 @@
 
 任务：
 
-1. 任务级覆盖表单
-2. 项目级默认档位编辑表单
-3. 模式切换确认提示
+1. 在 `ProjectOperatingMode.vue` 中提供项目级默认档位编辑表单
+2. 新增 `TaskOperatingOverride.vue` 或抽屉式独立面板承载任务级覆盖表单
+3. 增加模式切换确认提示
 
 ### 5.5 P1：场景推荐入口
 
@@ -242,19 +270,30 @@
 
 任务：
 
-1. 任务创建页增加“推荐场景”选择器
-2. 选中场景后自动填充协作模式 / 托管等级 / 老板参与方式
-3. 展示推荐原因说明
+1. 新增 `TaskOperatingModeLauncher.vue` 作为任务创建前置页或独立步骤页
+2. 在该新页面增加“推荐场景”选择器
+3. 选中场景后自动填充协作模式 / 托管等级 / 老板参与方式
+4. 展示推荐原因说明
 
 ### 5.6 P2：老板经营视图
+
+状态：已完成当前 MVP
 
 目标：把老板 Agent 从一个字段升级为一个真实的管理视图。
 
 任务：
 
-1. 项目页显示老板决策时间线
-2. 展示阶段推进历史
-3. 展示升级请求与人工覆盖历史
+1. 新增独立页面 `BossOperationsCenter.vue`
+2. 在该页面展示老板决策时间线
+3. 展示阶段推进历史
+4. 展示升级请求与人工覆盖历史
+
+当前实现：
+
+- 已新增独立页面 `BossOperationsCenter.vue`
+- 已新增项目级聚合接口 `GET /projects/:projectId/boss-operations-view`
+- 当前页面已展示项目级老板决策时间线、人工覆盖历史、开放升级请求和需人工关注任务列表
+- 后续可继续补更细粒度的跨任务阶段历史钻取
 
 ## 6. 数据结构任务列表
 
@@ -404,6 +443,14 @@
 5. 设置页、项目编排页、任务详情页可以展示当前模式和老板参与方式
 6. 有一组稳定的单元测试和接口测试覆盖上述链路
 
+当前完成度同步（2026-03-15）：
+
+- 前端 P0 已完成并通过测试
+- 数据结构 P0 已完成当前阶段所需的 `ProjectSettings`、`OrchestrationStrategy`、`PersistedTaskStrategy` 扩展
+- 控制平面 P0 已完成项目设置扩展，平台组织设置当前先复用 `orchestration-strategy.organizationSettings`
+- BFF P0 已完成配置读写和任务运行态基础结构扩展，但老板决策 / 升级请求正式任务接口仍在补齐中
+- 测试 P0 已完成前端页面、路由与相关回归测试；BFF 任务运行态接口测试继续补充
+
 依赖关系：
 
 1. 先做 [control-plane/service/src/db/schema.ts](control-plane/service/src/db/schema.ts) 的 `ProjectSettings` 扩展
@@ -416,6 +463,12 @@
 - 一个新任务创建后，详情页可见运行档位与老板决策
 - 项目编排页可见项目当前组织运行配置
 - 未启用组织方案时，旧执行链路行为不变
+
+当前剩余工作：
+
+- BFF：补 `GET /api/tasks/:taskId/boss-decisions` 与 `GET /api/tasks/:taskId/escalations`
+- 前端：任务运行详情页切到正式接口，不再直接解析 `task.strategy`
+- 测试：补接口与页面改造后的回归用例
 
 ### 8.2 第 2 期：增强闭环
 
@@ -469,6 +522,17 @@
 3. 老板经营视图可展示时间线、阶段历史和人工覆盖记录
 4. 老板决策、升级请求、任务运行档位可拆到独立运行态表
 5. 端到端测试覆盖设置、任务运行和经营视图
+
+当前完成度同步（2026-03-16）：
+
+- 独立运行态表已落地，并接入真实老板决策 / 升级请求写入点
+- 项目级老板经营视图已补上人工覆盖历史，治理链路覆盖决策、升级、人工覆盖三类事件
+- 模板级组织策略首批能力已落地，项目可配置自动切模板授权，老板 `select-template` 决策可驱动任务模板切换
+- 工作流启动前已补自动模板决策生成：优先使用场景推荐模板，其次回落项目偏好模板，并通过 `select-template` 决策写回运行态
+- 阶段阻断 / 升级时已补二次治理模板切换：若推荐模板或项目偏好模板与当前模板不同，会再次写入 `select-template` 决策并把触发原因写入 metadata
+- 老板经营视图已开始细化展示 `select-template` 来源，可区分场景推荐命中、项目偏好命中，以及启动前/阻断后/升级后二次治理触发
+- 阶段模板已支持定义阻断后 / 待审批后二次治理模板策略，运行时优先级提升为：阶段策略 > 场景推荐 > 项目偏好
+- 任务运行详情页已补齐 `select-template` 来源、触发器、目标模板与治理原因展示，和老板经营视图保持一致
 
 依赖关系：
 
@@ -656,40 +720,42 @@
 - 扩展任务详情视图模型
 - 新增组织运行策略与老板决策相关请求方法
 
+1. [control-plane/web-ui/src/router/index.ts](control-plane/web-ui/src/router/index.ts)
+预计改动：
+
+- 新增组织运行相关页面路由
+- 为平台设置、项目运行视图、任务运行控制台、老板经营视图挂路由入口
+
 1. [control-plane/web-ui/src/pages/Settings.vue](control-plane/web-ui/src/pages/Settings.vue)
 预计改动：
 
-- 第 1 期增加“组织运行策略”区域
-- 增加协作模式、自动托管等级、老板参与方式配置控件
-- 增加推荐场景展示
+- 仅增加组织运行设置页入口
+- 不在现有设置页内直接堆叠完整表单
 
 1. [control-plane/web-ui/src/pages/ProjectOrchestration.vue](control-plane/web-ui/src/pages/ProjectOrchestration.vue)
 预计改动：
 
-- 展示项目当前运行档位
-- 展示模板来源与老板参与方式
-- 第 2 期补阶段推进解释
-- 第 3 期补老板经营时间线入口
+- 仅增加“组织运行视图”入口
+- 保持当前项目编排页主体结构不变
 
 1. [control-plane/web-ui/src/pages/TaskDetail.vue](control-plane/web-ui/src/pages/TaskDetail.vue)
 预计改动：
 
-- 增加当前运行档位卡片
-- 增加老板最近决策卡片
-- 增加升级请求和人工介入状态
+- 仅增加“组织运行详情”入口
+- 保持现有任务详情页主体结构不变
 
 1. [control-plane/web-ui/src/pages/ProjectDetail.vue](control-plane/web-ui/src/pages/ProjectDetail.vue)
 预计改动：
 
-- 第 1 期补项目级默认档位编辑入口
-- 第 2 期补推荐场景套用入口
+- 增加项目级组织运行页面入口
+- 不直接在现有 ProjectDetail 主体内扩展复杂配置表单
 
 1. [control-plane/web-ui/src/pages/WorkflowTemplatesAdmin.vue](control-plane/web-ui/src/pages/WorkflowTemplatesAdmin.vue)
 和 [control-plane/web-ui/src/pages/WorkflowTemplateEditor.vue](control-plane/web-ui/src/pages/WorkflowTemplateEditor.vue)
 预计改动：
 
-- 第 3 期展示模板级组织运行默认值
-- 支持模板强制老板参与设置
+- 第 3 期仅增加进入模板组织策略页的入口或轻量配置区
+- 避免一次性重构现有模板编辑主界面
 
 1. [control-plane/web-ui/src/stores/project.ts](control-plane/web-ui/src/stores/project.ts)
 与 [control-plane/web-ui/src/stores/task-monitor.ts](control-plane/web-ui/src/stores/task-monitor.ts)
@@ -697,6 +763,16 @@
 
 - 缓存项目级组织设置
 - 缓存任务运行档位与老板决策摘要
+
+1. 预计新增前端页面
+预计新增文件：
+
+- `control-plane/web-ui/src/pages/OrganizationOperatingSettings.vue`
+- `control-plane/web-ui/src/pages/ProjectOperatingMode.vue`
+- `control-plane/web-ui/src/pages/TaskOperatingConsole.vue`
+- `control-plane/web-ui/src/pages/TaskOperatingOverride.vue`
+- `control-plane/web-ui/src/pages/TaskOperatingModeLauncher.vue`
+- `control-plane/web-ui/src/pages/BossOperationsCenter.vue`
 
 ### 9.4 数据结构文件级清单
 

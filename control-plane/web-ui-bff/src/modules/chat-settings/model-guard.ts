@@ -1,4 +1,4 @@
-const ALLOWED_MODEL_MARKERS = ["claude-sonnet-4", "claude-opus-4", "gpt-4o"];
+const ALLOWED_MODEL_MARKERS = ["claude-sonnet-4", "claude-opus-4", "gpt-4o", "o3-mini", "gemini-2.5-pro"];
 
 export function isAllowedChatSettingsModel(route: string | undefined | null): boolean {
   if (!route) {
@@ -14,5 +14,5 @@ export function assertAllowedChatSettingsModel(route: string | undefined | null)
     return null;
   }
 
-  return "Chat Settings 仅允许使用 Claude Sonnet 4 / Claude Opus 4 / GPT-4o 级别模型。";
+  return "Chat Settings 仅允许使用 Claude Sonnet 4 / Claude Opus 4 / GPT-4o / o3-mini / Gemini 2.5 Pro 级别模型。";
 }

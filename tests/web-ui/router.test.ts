@@ -32,6 +32,48 @@ vi.mock("../../control-plane/web-ui/src/pages/MultiTaskMonitor.vue", () => ({
   }),
 }));
 
+vi.mock("../../control-plane/web-ui/src/pages/OrganizationOperatingSettings.vue", () => ({
+  default: defineComponent({
+    name: "MockOrganizationOperatingSettingsPage",
+    template: '<div data-testid="organization-operating-settings-page">组织运行策略页</div>',
+  }),
+}));
+
+vi.mock("../../control-plane/web-ui/src/pages/ProjectOperatingMode.vue", () => ({
+  default: defineComponent({
+    name: "MockProjectOperatingModePage",
+    template: '<div data-testid="project-operating-mode-page">项目运行档位页</div>',
+  }),
+}));
+
+vi.mock("../../control-plane/web-ui/src/pages/TaskOperatingConsole.vue", () => ({
+  default: defineComponent({
+    name: "MockTaskOperatingConsolePage",
+    template: '<div data-testid="task-operating-console-page">任务组织运行详情页</div>',
+  }),
+}));
+
+vi.mock("../../control-plane/web-ui/src/pages/TaskOperatingOverride.vue", () => ({
+  default: defineComponent({
+    name: "MockTaskOperatingOverridePage",
+    template: '<div data-testid="task-operating-override-page">任务级覆盖页</div>',
+  }),
+}));
+
+vi.mock("../../control-plane/web-ui/src/pages/TaskOperatingModeLauncher.vue", () => ({
+  default: defineComponent({
+    name: "MockTaskOperatingModeLauncherPage",
+    template: '<div data-testid="task-operating-mode-launcher-page">场景推荐入口页</div>',
+  }),
+}));
+
+vi.mock("../../control-plane/web-ui/src/pages/BossOperationsCenter.vue", () => ({
+  default: defineComponent({
+    name: "MockBossOperationsCenterPage",
+    template: '<div data-testid="boss-operations-center-page">老板经营视图页</div>',
+  }),
+}));
+
 vi.mock("../../control-plane/web-ui/src/pages/ProjectPolicies.vue", () => ({
   default: defineComponent({
     name: "MockProjectPoliciesPage",
@@ -169,5 +211,107 @@ describe("users route auth", () => {
     expect(router.currentRoute.value.name).toBe("MultiTaskMonitor");
     expect(router.currentRoute.value.fullPath).toBe("/multi-task-monitor?embedded=1");
     expect(wrapper.text()).toContain("多任务监控台页面");
+  });
+
+  it("renders the organization operating settings page when authenticated", async () => {
+    authState.token = "test-token";
+
+    const wrapper = mount(RouterHost, {
+      global: {
+        plugins: [router],
+      },
+    });
+
+    await router.push("/settings/organization-operating");
+    await router.isReady();
+    await flushPromises();
+
+    expect(router.currentRoute.value.name).toBe("OrganizationOperatingSettings");
+    expect(wrapper.text()).toContain("组织运行策略页");
+  });
+
+  it("renders the project operating mode page when authenticated", async () => {
+    authState.token = "test-token";
+
+    const wrapper = mount(RouterHost, {
+      global: {
+        plugins: [router],
+      },
+    });
+
+    await router.push("/projects/proj-default/operating-mode");
+    await router.isReady();
+    await flushPromises();
+
+    expect(router.currentRoute.value.name).toBe("ProjectOperatingMode");
+    expect(wrapper.text()).toContain("项目运行档位页");
+  });
+
+  it("renders the task operating console page when authenticated", async () => {
+    authState.token = "test-token";
+
+    const wrapper = mount(RouterHost, {
+      global: {
+        plugins: [router],
+      },
+    });
+
+    await router.push("/tasks/task-1/operating-console");
+    await router.isReady();
+    await flushPromises();
+
+    expect(router.currentRoute.value.name).toBe("TaskOperatingConsole");
+    expect(wrapper.text()).toContain("任务组织运行详情页");
+  });
+
+  it("renders the task operating override page when authenticated", async () => {
+    authState.token = "test-token";
+
+    const wrapper = mount(RouterHost, {
+      global: {
+        plugins: [router],
+      },
+    });
+
+    await router.push("/tasks/task-1/operating-override");
+    await router.isReady();
+    await flushPromises();
+
+    expect(router.currentRoute.value.name).toBe("TaskOperatingOverride");
+    expect(wrapper.text()).toContain("任务级覆盖页");
+  });
+
+  it("renders the task operating mode launcher page when authenticated", async () => {
+    authState.token = "test-token";
+
+    const wrapper = mount(RouterHost, {
+      global: {
+        plugins: [router],
+      },
+    });
+
+    await router.push("/projects/proj-default/operating-mode-launcher");
+    await router.isReady();
+    await flushPromises();
+
+    expect(router.currentRoute.value.name).toBe("TaskOperatingModeLauncher");
+    expect(wrapper.text()).toContain("场景推荐入口页");
+  });
+
+  it("renders the boss operations center page when authenticated", async () => {
+    authState.token = "test-token";
+
+    const wrapper = mount(RouterHost, {
+      global: {
+        plugins: [router],
+      },
+    });
+
+    await router.push("/projects/proj-default/boss-operations");
+    await router.isReady();
+    await flushPromises();
+
+    expect(router.currentRoute.value.name).toBe("BossOperationsCenter");
+    expect(wrapper.text()).toContain("老板经营视图页");
   });
 });

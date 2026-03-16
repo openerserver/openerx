@@ -13,6 +13,18 @@
         </a-space>
       </div>
       <a-space direction="vertical" align="end" size="small">
+        <a-button
+          v-if="taskId && !isWorkbenchEmbedded"
+          data-testid="open-task-operating-console"
+          @click="router.push(`/tasks/${taskId}/operating-console`)">
+          组织运行详情
+        </a-button>
+        <a-button
+          v-if="taskId && !isWorkbenchEmbedded"
+          data-testid="open-task-operating-override"
+          @click="router.push(`/tasks/${taskId}/operating-override`)">
+          任务级覆盖
+        </a-button>
         <router-link
           v-if="taskId"
           :to="{
@@ -551,7 +563,7 @@
               </div>
             </a-collapse-panel>
 
-            <a-collapse-panel v-if="showProjectRoleConfigPanel" key="project-role-config" header="项目角色配置">
+            <a-collapse-panel v-if="showProjectRoleConfigPanel && !useCompactInspector" key="project-role-config" header="项目角色配置">
               <TaskProjectRoleConfigPanel
                 v-if="task?.projectId"
                 :loading="projectRoleConfigLoading"
@@ -563,7 +575,7 @@
               />
             </a-collapse-panel>
 
-            <a-collapse-panel v-if="showRoleWorkflowPanel" key="role-workflow" header="角色实际介入记录">
+            <a-collapse-panel v-if="showRoleWorkflowPanel && !useCompactInspector" key="role-workflow" header="角色实际介入记录">
               <TaskRoleWorkflowPanel
                 :loading="workflowViewLoading"
                 :error="workflowViewError"
@@ -742,6 +754,32 @@
           :scroll="taskDetailEventTableScroll"
         />
       </div>
+
+      <div v-else-if="compactInspectorTab === 'project-role-config'">
+        <TaskProjectRoleConfigPanel
+          v-if="task?.projectId"
+          :loading="projectRoleConfigLoading"
+          :error="projectRoleConfigError"
+          :project-id="task.projectId"
+          :rows="projectRoleConfigRows"
+          :current-stage="workflowSummary?.currentStage"
+          :active-role-agent-ids="activeRoleAgentIds"
+        />
+        <a-empty v-else description="暂无角色配置" />
+      </div>
+
+      <div v-else-if="compactInspectorTab === 'role-workflow'">
+        <TaskRoleWorkflowPanel
+          :loading="workflowViewLoading"
+          :error="workflowViewError"
+          :workflow-summary="workflowSummary"
+          :workflow-stages="workflowStages"
+          :role-conclusions="roleConclusions"
+          :developer-change-requests="developerChangeRequests"
+          :updating-request-ids="updatingChangeRequestIds"
+          @request-status-change="handleRoleWorkflowRequestStatusChange"
+        />
+      </div>
     </a-drawer>
   </div>
 </template>
@@ -905,7 +943,6 @@ const embeddedSidebarPanelCount = computed(
     showContextPanel.value,
     showChangesPanel.value,
     showGovernancePanel.value,
-    showRoleWorkflowPanel.value,
     showHooksPanel.value,
     ...(!useCompactInspector.value ? [showOrchestrationPanel.value, showPipelinePanel.value, showGraphPanel.value, showEventsPanel.value] : []),
   ].filter(Boolean).length,
@@ -967,7 +1004,7 @@ const taskDetailDefaultActivePanels = computed(() => {
     base.push("changes");
   }
 
-  if (showRoleWorkflowPanel.value) {
+  if (showRoleWorkflowPanel.value && !useCompactInspector.value) {
     base.push("role-workflow");
   }
 
@@ -1048,7 +1085,7 @@ const modelsLoading = ref(false);
 const modelsData = ref<Array<Record<string, unknown>> | null>(null);
 const updatingSelectedModel = ref(false);
 const compactInspectorVisible = ref(false);
-const compactInspectorTab = ref<"orchestration" | "pipeline" | "graph" | "events">("orchestration");
+const compactInspectorTab = ref<"orchestration" | "pipeline" | "graph" | "events" | "project-role-config" | "role-workflow">("orchestration");
 const pendingAssistantState = ref<PendingAssistantState | null>(null);
 const messagesPaneRef = ref<HTMLDivElement | null>(null);
 const messageListEndRef = ref<HTMLDivElement | null>(null);
@@ -2786,7 +2823,7 @@ function stopMessageAutoScroll() {
 }
 
 function scrollMessagesToBottom() {
-  if (messageListEndRef.value) {
+  if (messageListEndRef.value && typeof messageListEndRef.value.scrollIntoView === "function") {
     messageListEndRef.value.scrollIntoView({ block: "end", inline: "nearest" });
   }
 
@@ -2794,7 +2831,9 @@ function scrollMessagesToBottom() {
     messagesPaneRef.value.scrollTop = messagesPaneRef.value.scrollHeight;
   }
 
-  window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "auto" });
+  if (typeof window.scrollTo === "function") {
+    window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "auto" });
+  }
 }
 
 async function scheduleMessageAutoScroll() {
@@ -3130,7 +3169,7 @@ function pipelineOutputPanelHeader(stage: RuntimePipelineStage) {
 }
 
 const compactInspectorTabs = computed(() => {
-  const tabs: Array<{ key: "orchestration" | "pipeline" | "graph" | "events"; label: string; count?: number }> = [];
+  const tabs: Array<{ key: "orchestration" | "pipeline" | "graph" | "events" | "project-role-config" | "role-workflow"; label: string; count?: number }> = [];
 
   if (useCompactInspector.value || showOrchestrationPanel.value) {
     tabs.push({ key: "orchestration", label: "编排决策" });
@@ -3148,10 +3187,18 @@ const compactInspectorTabs = computed(() => {
     tabs.push({ key: "events", label: "任务事件", count: taskEvents.value.length || undefined });
   }
 
+  if (showProjectRoleConfigPanel.value) {
+    tabs.push({ key: "project-role-config", label: "角色配置" });
+  }
+
+  if (showRoleWorkflowPanel.value) {
+    tabs.push({ key: "role-workflow", label: "介入记录" });
+  }
+
   return tabs;
 });
 
-function openCompactInspector(preferred?: "orchestration" | "pipeline" | "graph" | "events") {
+function openCompactInspector(preferred?: "orchestration" | "pipeline" | "graph" | "events" | "project-role-config" | "role-workflow") {
   const availableKeys = compactInspectorTabs.value.map((item) => item.key);
   if (preferred && availableKeys.includes(preferred)) {
     compactInspectorTab.value = preferred;

@@ -11,6 +11,10 @@ const routerMocks = vi.hoisted(() => ({
   replace: vi.fn(),
 }));
 
+const routeMocks = vi.hoisted(() => ({
+  query: {} as Record<string, string>,
+}));
+
 const TASK_LIST_LIMIT = 200;
 
 const apiMocks = vi.hoisted(() => ({
@@ -19,6 +23,7 @@ const apiMocks = vi.hoisted(() => ({
   listTasks: vi.fn(),
   listRepositories: vi.fn(),
   listCredentials: vi.fn(),
+  getOrchestrationStrategy: vi.fn(),
   createTask: vi.fn(),
   executeTask: vi.fn(),
   getTask: vi.fn(),
@@ -35,6 +40,7 @@ vi.mock("../../control-plane/web-ui/src/lib/api", () => apiMocks);
 
 vi.mock("vue-router", () => ({
   useRouter: () => routerMocks,
+  useRoute: () => routeMocks,
 }));
 
 vi.mock("ant-design-vue", () => {
@@ -239,6 +245,13 @@ async function mountPage(tasks = [makeTask()]) {
   apiMocks.listTasks.mockResolvedValue({ data: tasks });
   apiMocks.listRepositories.mockResolvedValue({ data: [] });
   apiMocks.listCredentials.mockResolvedValue({ data: [] });
+  apiMocks.getOrchestrationStrategy.mockResolvedValue({
+    data: {
+      organizationSettings: {
+        recommendedProfiles: [],
+      },
+    },
+  });
   apiMocks.createTask.mockResolvedValue({ id: "task-created" });
   apiMocks.executeTask.mockResolvedValue({});
   apiMocks.getTask.mockResolvedValue(makeTask({ id: "task-created", status: "running" }));
@@ -273,6 +286,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   routerMocks.push.mockReset();
   routerMocks.replace.mockReset();
+  routeMocks.query = {};
   localStorage.clear();
   document.body.innerHTML = "";
 });
@@ -412,5 +426,75 @@ describe("Tasks page", () => {
     const monitorLink = wrapper.find('a[data-to="/multi-task-monitor?task=task-monitor"]');
     expect(monitorLink.exists()).toBe(true);
     expect(monitorLink.text()).toContain("监控台");
+  });
+
+  it("applies recommended scenario from route query into create form", async () => {
+    routeMocks.query = {
+      projectId: "proj-1",
+      scenarioKey: "release-guard",
+      openCreate: "1",
+    };
+    apiMocks.getOrchestrationStrategy.mockResolvedValueOnce({
+      data: {
+        organizationSettings: {
+          recommendedProfiles: [
+            {
+              scenarioKey: "release-guard",
+              collaborationMode: "team",
+              autopilotLevel: "L1",
+              bossParticipationMode: "advisory",
+              templateHints: ["tpl-release"],
+              requiredRoleHints: [],
+              reason: "Release window",
+            },
+          ],
+        },
+      },
+    });
+
+    const wrapper = await mountPage([]);
+    const state = getSetupState(wrapper) as {
+      createForm: { operatingMode?: { scenarioKey?: string; selectedTemplateId?: string | null } };
+    };
+
+    expect(state.createForm.operatingMode?.scenarioKey).toBe("release-guard");
+    expect(state.createForm.operatingMode?.selectedTemplateId).toBe("tpl-release");
+  });
+
+  it("sends task operating mode when creating a task", async () => {
+    const wrapper = await mountPage([]);
+    const state = getSetupState(wrapper) as {
+      createForm: {
+        title: string;
+        prompt: string;
+        autoExecute: boolean;
+        operatingMode?: Record<string, unknown>;
+      };
+      handleCreate: () => Promise<void>;
+    };
+
+    state.createForm.title = "Scenario task";
+    state.createForm.prompt = "use recommended mode";
+    state.createForm.autoExecute = false;
+    state.createForm.operatingMode = {
+      collaborationMode: "team",
+      autopilotLevel: "L1",
+      bossParticipationMode: "advisory",
+      selectedTemplateId: "tpl-release",
+      scenarioKey: "release-guard",
+      source: "task-override",
+    };
+
+    await state.handleCreate();
+    await flushPromises();
+
+    expect(apiMocks.createTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operatingMode: expect.objectContaining({
+          scenarioKey: "release-guard",
+          selectedTemplateId: "tpl-release",
+        }),
+      }),
+    );
   });
 });

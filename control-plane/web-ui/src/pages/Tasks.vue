@@ -28,6 +28,9 @@
           <template #icon><SyncOutlined :spin="!!autoRefreshTimer" /></template>
           {{ autoRefreshTimer ? '自动刷新中' : '刷新' }}
         </a-button>
+        <a-button v-if="projectStore.currentProjectId" @click="router.push(`/projects/${projectStore.currentProjectId}/operating-mode-launcher`)">
+          场景推荐入口
+        </a-button>
         <a-button type="primary" @click="showCreateModal = true">
           <template #icon><PlusOutlined /></template>
           新建任务
@@ -163,6 +166,23 @@
           <div v-if="!projectStore.currentProjectId" style="margin-top: 8px; color: #ff4d4f; font-size: 12px">
             请先在侧边栏选择项目。
           </div>
+        </a-form-item>
+        <a-form-item label="任务运行档位">
+          <a-card size="small" :body-style="{ padding: '12px 16px' }">
+            <a-space direction="vertical" style="width: 100%" size="small">
+              <a-typography-text type="secondary">
+                {{ operatingModeSummary }}
+              </a-typography-text>
+              <a-space wrap>
+                <a-button v-if="projectStore.currentProjectId" size="small" @click="openScenarioLauncher">
+                  打开场景推荐入口
+                </a-button>
+                <a-button v-if="createForm.operatingMode" size="small" @click="clearOperatingModeSelection">
+                  清空临时档位
+                </a-button>
+              </a-space>
+            </a-space>
+          </a-card>
         </a-form-item>
         <a-form-item label="关联仓库">
           <a-select
@@ -385,14 +405,20 @@
 import { PlusOutlined, SyncOutlined } from "@ant-design/icons-vue";
 import { message } from "ant-design-vue";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import {
   type ApiError,
+  type CollaborationMode,
   type CommandSummary,
+  getOrchestrationStrategy,
+  type OperatingModeSelection,
   type Repository,
   type RepositoryCredential,
+  type RecommendedOperatingProfile,
   TASK_LIST_LIMIT,
   type Task,
+  type BossParticipationMode,
+  type AutopilotLevel,
   createTask,
   executeTask,
   getModelsList,
@@ -410,6 +436,7 @@ import { useProjectStore } from "../stores/project";
 import { tasksThemeStyles } from "../theme/ui-theme";
 
 const projectStore = useProjectStore();
+const route = useRoute();
 const router = useRouter();
 const loading = ref(false);
 const creating = ref(false);
@@ -613,6 +640,7 @@ type CreateTaskForm = {
   gitAuthorEmail: string;
   gitCommitterName: string;
   gitCommitterEmail: string;
+  operatingMode?: OperatingModeSelection;
 };
 
 function createInitialForm(): CreateTaskForm {
@@ -628,10 +656,22 @@ function createInitialForm(): CreateTaskForm {
     gitAuthorEmail: "",
     gitCommitterName: "",
     gitCommitterEmail: "",
+    operatingMode: undefined,
   };
 }
 
 const createForm = ref<CreateTaskForm>(createInitialForm());
+const recommendedProfiles = ref<RecommendedOperatingProfile[]>([]);
+
+const operatingModeSummary = computed(() => {
+  const mode = createForm.value.operatingMode;
+  if (!mode) {
+    return "当前未设置任务级临时档位，将沿用项目默认或系统默认。";
+  }
+  const scenarioLabel = mode.scenarioKey ? ` · 场景 ${mode.scenarioKey}` : "";
+  const templateLabel = mode.selectedTemplateId ? ` · 模板 ${mode.selectedTemplateId}` : "";
+  return `协作 ${mode.collaborationMode} · 托管 ${mode.autopilotLevel} · 老板 ${mode.bossParticipationMode}${scenarioLabel}${templateLabel}`;
+});
 
 const repos = ref<Repository[]>([]);
 const repoCredentials = ref<RepositoryCredential[]>([]);
@@ -704,6 +744,7 @@ function buildCreatePayload(projectId: string) {
     ...(form.gitAuthorEmail ? { gitAuthorEmail: form.gitAuthorEmail } : {}),
     ...(form.gitCommitterName ? { gitCommitterName: form.gitCommitterName } : {}),
     ...(form.gitCommitterEmail ? { gitCommitterEmail: form.gitCommitterEmail } : {}),
+    ...(form.operatingMode ? { operatingMode: form.operatingMode } : {}),
   };
 }
 
@@ -746,6 +787,67 @@ async function autoExecuteCreatedTask(taskId?: string) {
 function resetCreateForm() {
   createForm.value = createInitialForm();
   selectedCommand.value = undefined;
+}
+
+function clearOperatingModeSelection() {
+  createForm.value.operatingMode = undefined;
+}
+
+function openScenarioLauncher() {
+  if (!projectStore.currentProjectId) {
+    message.warning("请先选择项目");
+    return;
+  }
+  void router.push(`/projects/${projectStore.currentProjectId}/operating-mode-launcher`);
+}
+
+function buildScenarioOperatingMode(profile: RecommendedOperatingProfile): OperatingModeSelection {
+  return {
+    collaborationMode: profile.collaborationMode as CollaborationMode,
+    autopilotLevel: profile.autopilotLevel as AutopilotLevel,
+    bossParticipationMode: profile.bossParticipationMode as BossParticipationMode,
+    selectedTemplateId: profile.templateHints?.[0] || null,
+    scenarioKey: profile.scenarioKey,
+    source: "task-override",
+  };
+}
+
+async function loadRecommendedProfiles() {
+  if (recommendedProfiles.value.length > 0) {
+    return;
+  }
+  try {
+    const result = await getOrchestrationStrategy();
+    recommendedProfiles.value = result.data.organizationSettings?.recommendedProfiles || [];
+  } catch {
+    recommendedProfiles.value = [];
+  }
+}
+
+async function applyScenarioQuerySelection() {
+  const scenarioKey = typeof route.query.scenarioKey === "string" ? route.query.scenarioKey : "";
+  const openCreate = route.query.openCreate === "1";
+  const projectId = typeof route.query.projectId === "string" ? route.query.projectId : "";
+
+  if (!scenarioKey) {
+    if (openCreate) {
+      showCreateModal.value = true;
+    }
+    return;
+  }
+
+  if (projectId) {
+    projectStore.switchProject(projectId);
+  }
+
+  await loadRecommendedProfiles();
+  const matchedProfile = recommendedProfiles.value.find((item) => item.scenarioKey === scenarioKey);
+  if (!matchedProfile) {
+    return;
+  }
+
+  createForm.value.operatingMode = buildScenarioOperatingMode(matchedProfile);
+  showCreateModal.value = true;
 }
 
 // ── Task Templates (localStorage) ──────────────────────────────────
@@ -1036,6 +1138,7 @@ onMounted(async () => {
   if (projectStore.projects.length === 0) {
     await projectStore.loadProjects();
   }
+  await applyScenarioQuerySelection();
 });
 
 onUnmounted(() => {
@@ -1052,5 +1155,12 @@ watch(
     void refresh();
   },
   { immediate: true },
+);
+
+watch(
+  () => route.query,
+  () => {
+    void applyScenarioQuerySelection();
+  },
 );
 </script>

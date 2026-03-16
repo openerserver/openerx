@@ -12,7 +12,6 @@ import type { ChatSettingsMessage } from "./conversation-manager";
 import type {
   ChatSettingsConfigType,
   CommandSummary,
-  MarkdownConfigDetail,
   McpServer,
   ModelsConfig,
   PluginConfigItem,
@@ -61,9 +60,7 @@ function buildPrompt(args: {
   mcpConfig: Record<string, McpServer>;
   agentSummaries: Array<{ fileName: string; name: string; description: string; model: string }>;
   skillSummaries: SkillSummary[];
-  skillDetails: Array<{ dirName: string; detail: MarkdownConfigDetail }>;
   commandSummaries: CommandSummary[];
-  commandDetails: Array<{ name: string; detail: MarkdownConfigDetail }>;
   securityBaseline: SecurityBaselineConfig;
   pluginsConfig: PluginsConfig;
   allowedPluginSourcePrefixes: string[];
@@ -116,12 +113,8 @@ function buildPrompt(args: {
     safeJsonStringify(args.agentSummaries),
     "[SKILL SUMMARIES]",
     safeJsonStringify(args.skillSummaries),
-    "[SKILL DETAILS]",
-    safeJsonStringify(args.skillDetails),
     "[COMMAND SUMMARIES]",
     safeJsonStringify(args.commandSummaries),
-    "[COMMAND DETAILS]",
-    safeJsonStringify(args.commandDetails),
     "[SECURITY BASELINE]",
     safeJsonStringify(args.securityBaseline),
     "[PLUGINS CONFIG]",
@@ -145,7 +138,12 @@ function parseJsonFromText(text: string | undefined): Record<string, unknown> | 
   }
 
   const direct = text.trim();
-  const candidates = [direct, ...(direct.match(/\{[\s\S]*\}/g) || [])];
+
+  // Strip markdown code fences (```json ... ``` or ``` ... ```)
+  const fenceMatch = direct.match(/```(?:json)?\s*\n?([\s\S]*?)```/);
+  const stripped = fenceMatch ? fenceMatch[1].trim() : direct;
+
+  const candidates = [stripped, direct, ...(direct.match(/\{[\s\S]*\}/g) || [])];
   for (const candidate of candidates) {
     try {
       const parsed = JSON.parse(candidate) as Record<string, unknown>;
@@ -382,9 +380,7 @@ export async function runChatSettingsAssistant(args: {
   mcpConfig: Record<string, McpServer>;
   agentSummaries: Array<{ fileName: string; name: string; description: string; model: string }>;
   skillSummaries: SkillSummary[];
-  skillDetails: Array<{ dirName: string; detail: MarkdownConfigDetail }>;
   commandSummaries: CommandSummary[];
-  commandDetails: Array<{ name: string; detail: MarkdownConfigDetail }>;
   securityBaseline: SecurityBaselineConfig;
   pluginsConfig: PluginsConfig;
   allowedPluginSourcePrefixes: string[];

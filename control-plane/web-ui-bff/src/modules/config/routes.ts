@@ -12,6 +12,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { parseFrontmatter, serializeFrontmatter } from "../../lib/frontmatter";
 import {
+  type PlatformOrganizationSettings,
   readOrchestrationStrategy,
   writeOrchestrationStrategy,
 } from "../../lib/orchestration-strategy";
@@ -884,6 +885,27 @@ const judgeConfigSchema = z.object({
   selectionStrategy: z.enum(["judge-pick", "highest-score"]),
 });
 
+const recommendedOperatingProfileSchema = z.object({
+  scenarioKey: z.string().min(1),
+  collaborationMode: z.enum(["solo", "team", "hybrid"]),
+  autopilotLevel: z.enum(["L0", "L1", "L2"]),
+  bossParticipationMode: z.enum(["disabled", "advisory", "exception-only", "full-manager"]),
+  templateHints: z.array(z.string()).optional(),
+  requiredRoleHints: z.array(z.string()).optional(),
+  reason: z.string().min(1),
+});
+
+const organizationSettingsSchema = z.object({
+  defaultCollaborationMode: z.enum(["solo", "team", "hybrid"]),
+  defaultAutopilotLevel: z.enum(["L0", "L1", "L2"]),
+  defaultBossParticipationMode: z.enum(["disabled", "advisory", "exception-only", "full-manager"]),
+  allowProjectModeOverride: z.boolean(),
+  allowTaskModeOverride: z.boolean(),
+  requireHumanApprovalForL2: z.boolean(),
+  hybridEscalationRules: z.array(z.record(z.string(), z.unknown())).optional(),
+  recommendedProfiles: z.array(recommendedOperatingProfileSchema).optional(),
+});
+
 const strategySchema = z.object({
   categoryAgentMap: z.record(z.string(), z.array(z.string())),
   categoryModelMap: z.record(z.string(), z.string()),
@@ -891,12 +913,20 @@ const strategySchema = z.object({
   hooks: z.array(lifecycleHookSchema).optional(),
   templates: z.array(workflowTemplateSchema).optional(),
   judge: judgeConfigSchema.optional(),
+  organizationSettings: organizationSettingsSchema.optional(),
 });
 
 configRoutes.put("/orchestration-strategy", zValidator("json", strategySchema), (c) => {
   const adminErr = requireSystemAdmin(c.get("user"));
   if (adminErr) return c.json({ error: adminErr }, 403);
   const body = c.req.valid("json");
+  const organizationSettings: PlatformOrganizationSettings | undefined = body.organizationSettings
+    ? {
+        ...body.organizationSettings,
+        hybridEscalationRules: body.organizationSettings.hybridEscalationRules ?? [],
+        recommendedProfiles: body.organizationSettings.recommendedProfiles ?? [],
+      }
+    : undefined;
   writeOrchestrationStrategy({
     ...body,
     hooks: body.hooks ?? [],
@@ -909,6 +939,7 @@ configRoutes.put("/orchestration-strategy", zValidator("json", strategySchema), 
       timeoutMs: 30000,
       selectionStrategy: "judge-pick" as const,
     },
+    organizationSettings,
   });
   return c.json({ ok: true });
 });
