@@ -1,5 +1,5 @@
-import type { CSSProperties } from "vue";
 import { theme } from "ant-design-vue";
+import type { CSSProperties } from "vue";
 
 export const palette = {
   primary: "#4b74d1",
@@ -35,7 +35,7 @@ export const palette = {
   shadowLogin: "0 18px 42px rgba(92, 59, 24, 0.12)",
 } as const;
 
-export const appTheme: any = {
+export const appTheme = {
   algorithm: theme.defaultAlgorithm,
   token: {
     colorPrimary: palette.primary,
@@ -481,7 +481,7 @@ export const taskDetailThemeStyles = {
     padding: "10px 12px",
     borderRadius: "10px",
     background: palette.accentFill,
-    border: `1px solid #dcc9b3`,
+    border: "1px solid #dcc9b3",
     display: "flex",
     flexDirection: "column",
     gap: "8px",
@@ -633,7 +633,7 @@ export function buildTaskDetailSessionCardStyle(selected: boolean): CSSPropertie
     cursor: "pointer",
     padding: "12px",
     borderRadius: "10px",
-    border: selected ? `1px solid #9a6731` : `1px solid ${palette.accentCopperSoft}`,
+    border: selected ? "1px solid #9a6731" : `1px solid ${palette.accentCopperSoft}`,
     background: selected ? "#f2e3d1" : palette.containerBg,
     boxShadow: selected ? "0 0 0 2px rgba(154,103,49,0.12)" : "none",
     transition: "all 0.2s ease",
@@ -641,12 +641,9 @@ export function buildTaskDetailSessionCardStyle(selected: boolean): CSSPropertie
 }
 
 export function buildTaskDetailMessageCardStyle(role: string): CSSProperties {
-  const background =
-    role === "assistant" ? "#fff5e6" : role === "user" ? "#edf5ef" : "#f3ece3";
-  const border =
-    role === "assistant" ? "#dfb979" : role === "user" ? "#a9c3b0" : "#d6c4af";
-  const accent =
-    role === "assistant" ? "#b87428" : role === "user" ? "#557a64" : "#8b7862";
+  const background = role === "assistant" ? "#fff5e6" : role === "user" ? "#edf5ef" : "#f3ece3";
+  const border = role === "assistant" ? "#dfb979" : role === "user" ? "#a9c3b0" : "#d6c4af";
+  const accent = role === "assistant" ? "#b87428" : role === "user" ? "#557a64" : "#8b7862";
 
   return {
     padding: "14px 16px",

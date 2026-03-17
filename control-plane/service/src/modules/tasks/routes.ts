@@ -40,21 +40,25 @@ const createTaskSchema = z.object({
   gitAuthorEmail: z.string().email().max(200).optional(),
   gitCommitterName: z.string().max(200).optional(),
   gitCommitterEmail: z.string().email().max(200).optional(),
-  relations: z.array(
-    z.object({
-      sourceTaskId: z.string().min(1).optional(),
-      targetTaskId: z.string().min(1).optional(),
-      type: z.enum(["depends-on", "blocks", "spawned-from"]),
+  relations: z
+    .array(
+      z.object({
+        sourceTaskId: z.string().min(1).optional(),
+        targetTaskId: z.string().min(1).optional(),
+        type: z.enum(["depends-on", "blocks", "spawned-from"]),
+        metadata: z.record(z.unknown()).optional(),
+      }),
+    )
+    .optional(),
+  relationContext: z
+    .object({
+      spawnedFromTaskId: z.string().min(1).optional(),
+      dependsOnTaskIds: z.array(z.string().min(1)).optional(),
+      blockedByTaskIds: z.array(z.string().min(1)).optional(),
+      blocksTaskIds: z.array(z.string().min(1)).optional(),
       metadata: z.record(z.unknown()).optional(),
-    }),
-  ).optional(),
-  relationContext: z.object({
-    spawnedFromTaskId: z.string().min(1).optional(),
-    dependsOnTaskIds: z.array(z.string().min(1)).optional(),
-    blockedByTaskIds: z.array(z.string().min(1)).optional(),
-    blocksTaskIds: z.array(z.string().min(1)).optional(),
-    metadata: z.record(z.unknown()).optional(),
-  }).optional(),
+    })
+    .optional(),
 });
 
 type CreateTaskInput = z.infer<typeof createTaskSchema>;
@@ -500,7 +504,9 @@ const createRunSchema = z.object({
   nodeId: z.string().optional(),
   sessionId: z.string().optional(),
   agentType: z.string().min(1),
-  status: z.enum(["pending", "running", "paused", "completed", "failed", "stopped", "terminated"]).optional(),
+  status: z
+    .enum(["pending", "running", "paused", "completed", "failed", "stopped", "terminated"])
+    .optional(),
   modelUsed: z.string().optional(),
   tokenUsed: z.number().int().optional(),
   result: z.string().optional(),
@@ -538,7 +544,10 @@ taskRoutes.post("/:taskId/runs", zValidator("json", createRunSchema), async (c) 
     candidateIndex: body.candidateIndex ?? null,
     startedAt: body.startedAt ?? (status === "running" ? new Date().toISOString() : null),
     finishedAt:
-      body.finishedAt ?? (["completed", "failed", "stopped", "terminated"].includes(status) ? new Date().toISOString() : null),
+      body.finishedAt ??
+      (["completed", "failed", "stopped", "terminated"].includes(status)
+        ? new Date().toISOString()
+        : null),
   });
 
   return c.json({ id: runId, status }, 201);
@@ -610,68 +619,73 @@ const createTaskSessionSchema = z.object({
   isActive: z.boolean().optional(),
 });
 
-taskRoutes.post("/:taskId/task-sessions", zValidator("json", createTaskSessionSchema), async (c) => {
-  const taskId = c.req.param("taskId");
-  const body = c.req.valid("json");
+taskRoutes.post(
+  "/:taskId/task-sessions",
+  zValidator("json", createTaskSessionSchema),
+  async (c) => {
+    const taskId = c.req.param("taskId");
+    const body = c.req.valid("json");
 
-  const task = await db.query.tasks.findFirst({ where: eq(tasks.id, taskId) });
-  if (!task) return c.json({ error: "Task not found" }, 404);
+    const task = await db.query.tasks.findFirst({ where: eq(tasks.id, taskId) });
+    if (!task) return c.json({ error: "Task not found" }, 404);
 
-  const now = new Date().toISOString();
-  const existingRecord = await db.query.taskSessions.findFirst({
-    where: and(
-      eq(taskSessions.taskId, taskId),
-      eq(taskSessions.runtimeSessionId, body.runtimeSessionId),
-    ),
-  });
+    const now = new Date().toISOString();
+    const existingRecord = await db.query.taskSessions.findFirst({
+      where: and(
+        eq(taskSessions.taskId, taskId),
+        eq(taskSessions.runtimeSessionId, body.runtimeSessionId),
+      ),
+    });
 
-  // If marking this as active, deactivate others first
-  if (body.isActive) {
-    await db
-      .update(taskSessions)
-      .set({ isActive: false, updatedAt: now })
-      .where(and(eq(taskSessions.taskId, taskId), eq(taskSessions.isActive, true)));
-  }
+    // If marking this as active, deactivate others first
+    if (body.isActive) {
+      await db
+        .update(taskSessions)
+        .set({ isActive: false, updatedAt: now })
+        .where(and(eq(taskSessions.taskId, taskId), eq(taskSessions.isActive, true)));
+    }
 
-  if (existingRecord) {
-    await db
-      .update(taskSessions)
-      .set({
-        parentRuntimeSessionId: body.parentRuntimeSessionId ?? existingRecord.parentRuntimeSessionId,
-        forkedFromMessageId: body.forkedFromMessageId ?? existingRecord.forkedFromMessageId,
-        branchName: body.branchName ?? existingRecord.branchName,
-        sourceType: body.sourceType ?? existingRecord.sourceType,
-        isActive: body.isActive ?? existingRecord.isActive,
-        archivedAt: null,
-        updatedAt: now,
-      })
-      .where(eq(taskSessions.id, existingRecord.id));
+    if (existingRecord) {
+      await db
+        .update(taskSessions)
+        .set({
+          parentRuntimeSessionId:
+            body.parentRuntimeSessionId ?? existingRecord.parentRuntimeSessionId,
+          forkedFromMessageId: body.forkedFromMessageId ?? existingRecord.forkedFromMessageId,
+          branchName: body.branchName ?? existingRecord.branchName,
+          sourceType: body.sourceType ?? existingRecord.sourceType,
+          isActive: body.isActive ?? existingRecord.isActive,
+          archivedAt: null,
+          updatedAt: now,
+        })
+        .where(eq(taskSessions.id, existingRecord.id));
 
-    return c.json({
-      id: existingRecord.id,
+      return c.json({
+        id: existingRecord.id,
+        taskId,
+        runtimeSessionId: body.runtimeSessionId,
+        updated: true,
+      });
+    }
+
+    const id = crypto.randomUUID();
+
+    await db.insert(taskSessions).values({
+      id,
       taskId,
       runtimeSessionId: body.runtimeSessionId,
-      updated: true,
+      parentRuntimeSessionId: body.parentRuntimeSessionId ?? null,
+      forkedFromMessageId: body.forkedFromMessageId ?? null,
+      branchName: body.branchName ?? null,
+      sourceType: body.sourceType ?? "root",
+      isActive: body.isActive ?? false,
+      createdAt: now,
+      updatedAt: now,
     });
-  }
 
-  const id = crypto.randomUUID();
-
-  await db.insert(taskSessions).values({
-    id,
-    taskId,
-    runtimeSessionId: body.runtimeSessionId,
-    parentRuntimeSessionId: body.parentRuntimeSessionId ?? null,
-    forkedFromMessageId: body.forkedFromMessageId ?? null,
-    branchName: body.branchName ?? null,
-    sourceType: body.sourceType ?? "root",
-    isActive: body.isActive ?? false,
-    createdAt: now,
-    updatedAt: now,
-  });
-
-  return c.json({ id, taskId, runtimeSessionId: body.runtimeSessionId }, 201);
-});
+    return c.json({ id, taskId, runtimeSessionId: body.runtimeSessionId }, 201);
+  },
+);
 
 // POST /api/tasks/:taskId/task-sessions/:sessionId/activate — Set a branch as active
 taskRoutes.post("/:taskId/task-sessions/:tsId/activate", async (c) => {
@@ -696,10 +710,7 @@ taskRoutes.post("/:taskId/task-sessions/:tsId/activate", async (c) => {
     .where(eq(taskSessions.id, tsId));
 
   // Sync tasks.sessionId to the activated branch's runtime session
-  await db
-    .update(tasks)
-    .set({ sessionId: record.runtimeSessionId })
-    .where(eq(tasks.id, taskId));
+  await db.update(tasks).set({ sessionId: record.runtimeSessionId }).where(eq(tasks.id, taskId));
 
   return c.json({ ok: true, activatedSessionId: record.runtimeSessionId });
 });

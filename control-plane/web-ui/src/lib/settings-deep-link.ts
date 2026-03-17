@@ -108,33 +108,65 @@ export function getSettingsSectionElementId(
   return "";
 }
 
+function shouldOpenSettingsProviderModal(
+  section: SettingsSection | undefined,
+  provider: string | undefined,
+  providerKeys: string[],
+) {
+  if (section === "provider-add") {
+    return true;
+  }
+
+  if (section !== "provider-row" || !provider) {
+    return false;
+  }
+
+  return !providerKeys.includes(provider);
+}
+
+function resolveProviderDraft(shouldOpenProviderModal: boolean, provider: string | undefined) {
+  if (!shouldOpenProviderModal || !provider) {
+    return undefined;
+  }
+
+  return {
+    key: provider,
+    ...(provider.startsWith("github-copilot") ? { api: "github-copilot" as const } : {}),
+  };
+}
+
+function resolveCopilotExpansion(
+  section: SettingsSection | undefined,
+  provider: string | undefined,
+  authenticatedCopilotProviders: string[],
+) {
+  if (section !== "copilot-provider" || !provider) {
+    return undefined;
+  }
+
+  return authenticatedCopilotProviders.includes(provider) ? provider : undefined;
+}
+
 export function resolveSettingsDeepLink(input: SettingsDeepLinkInput): SettingsDeepLinkResolution {
   const activeTab = isSettingsTab(input.tab) ? input.tab : undefined;
   const section = isSettingsSection(input.section) ? input.section : undefined;
   const provider = toStringValue(input.provider);
   const providerKeys = input.providerKeys || [];
   const authenticatedCopilotProviders = input.authenticatedCopilotProviders || [];
-  const hasProviderRow = Boolean(provider && providerKeys.includes(provider));
-  const shouldOpenProviderModal =
-    section === "provider-add" || (section === "provider-row" && provider ? !hasProviderRow : false);
+  const shouldOpenProviderModal = shouldOpenSettingsProviderModal(section, provider, providerKeys);
 
   return {
     activeTab,
     section,
     provider,
     ensureCopilotProvider: section === "copilot-provider" && provider ? provider : undefined,
-    expandCopilotProvider:
-      section === "copilot-provider" && provider && authenticatedCopilotProviders.includes(provider)
-        ? provider
-        : undefined,
+    expandCopilotProvider: resolveCopilotExpansion(
+      section,
+      provider,
+      authenticatedCopilotProviders,
+    ),
     openProviderModal: shouldOpenProviderModal,
-    providerDraft:
-      shouldOpenProviderModal && provider
-        ? {
-            key: provider,
-            ...(provider.startsWith("github-copilot") ? { api: "github-copilot" as const } : {}),
-          }
-        : undefined,
+    providerDraft: resolveProviderDraft(shouldOpenProviderModal, provider),
     targetId: getSettingsSectionElementId(section, { provider, providerKeys }),
   };
 }

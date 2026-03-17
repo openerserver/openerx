@@ -90,16 +90,16 @@
 import { computed, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
-  getTaskBossDecisions,
-  getTaskEscalations,
-  getTaskOperatingState,
-  getTask,
-  getTaskWorkflowView,
   type BossDecisionRecord,
   type HumanEscalationRequest,
   type Task,
   type TaskOperatingState,
   type TaskWorkflowViewModel,
+  getTask,
+  getTaskBossDecisions,
+  getTaskEscalations,
+  getTaskOperatingState,
+  getTaskWorkflowView,
   toApiError,
 } from "../lib/api";
 
@@ -114,9 +114,16 @@ const workflowView = ref<TaskWorkflowViewModel | null>(null);
 const operatingState = ref<TaskOperatingState | null>(null);
 const bossDecisions = ref<BossDecisionRecord[]>([]);
 const escalations = ref<HumanEscalationRequest[]>([]);
-const currentStageLabel = computed(() => operatingState.value?.currentStageKey || workflowView.value?.workflow.currentStage || "未记录");
-const currentStageStatus = computed(() => operatingState.value?.currentStageStatus || workflowView.value?.workflow.status || "未记录");
-const workflowStatus = computed(() => workflowView.value?.workflow.status || task.value?.status || "未知");
+const currentStageLabel = computed(
+  () =>
+    operatingState.value?.currentStageKey || workflowView.value?.workflow.currentStage || "未记录",
+);
+const currentStageStatus = computed(
+  () => operatingState.value?.currentStageStatus || workflowView.value?.workflow.status || "未记录",
+);
+const workflowStatus = computed(
+  () => workflowView.value?.workflow.status || task.value?.status || "未知",
+);
 
 function formatCollaboration(value?: string | null) {
   if (value === "team") return "团队模式";
@@ -169,12 +176,13 @@ async function loadData() {
   loading.value = true;
   loadError.value = "";
   try {
-    const [taskResult, operatingStateResult, bossDecisionResult, escalationResult] = await Promise.all([
-      getTask(taskId),
-      getTaskOperatingState(taskId),
-      getTaskBossDecisions(taskId),
-      getTaskEscalations(taskId),
-    ]);
+    const [taskResult, operatingStateResult, bossDecisionResult, escalationResult] =
+      await Promise.all([
+        getTask(taskId),
+        getTaskOperatingState(taskId),
+        getTaskBossDecisions(taskId),
+        getTaskEscalations(taskId),
+      ]);
     task.value = taskResult;
     operatingState.value = operatingStateResult;
     bossDecisions.value = bossDecisionResult.data;
@@ -185,7 +193,8 @@ async function loadData() {
       workflowView.value = null;
     }
   } catch (error) {
-    loadError.value = toApiError(error)?.message || (error instanceof Error ? error.message : String(error));
+    loadError.value =
+      toApiError(error)?.message || (error instanceof Error ? error.message : String(error));
   } finally {
     loading.value = false;
   }

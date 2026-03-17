@@ -1,12 +1,12 @@
-import { cpFetch } from "./control-plane-client";
-import {
-  type ExecutionCandidate,
-  type ExecutionPlan,
-  type ExecutionStep,
-  type HookExecutionRecord,
-  type PersistedTaskStrategy,
-} from "./orchestration-strategy";
 import { getSessionMessages } from "../modules/agent-control/opencode-adapter";
+import { cpFetch } from "./control-plane-client";
+import type {
+  ExecutionCandidate,
+  ExecutionPlan,
+  ExecutionStep,
+  HookExecutionRecord,
+  PersistedTaskStrategy,
+} from "./orchestration-strategy";
 
 const PIPELINE_AGENTS = ["prometheus-enterprise", "metis-enterprise", "momus-enterprise"] as const;
 
@@ -19,7 +19,11 @@ export interface RuntimePipelineStage {
   label: string;
   status: RuntimePipelineStageStatus;
   order: number;
-  sourceType: "executionPlan.step" | "strategy.hookExecution" | "taskGraph.node" | "session.message";
+  sourceType:
+    | "executionPlan.step"
+    | "strategy.hookExecution"
+    | "taskGraph.node"
+    | "session.message";
   sourceId: string | null;
   agent: string | null;
   model: string | null;
@@ -159,7 +163,10 @@ function truncateOutput(text: string | null | undefined, max = 2000) {
   return normalized.length > max ? `${normalized.slice(0, max)}…` : normalized;
 }
 
-function mapTaskStatus(status: string | undefined, stages: RuntimePipelineStage[]): RuntimePipelineStatus {
+function mapTaskStatus(
+  status: string | undefined,
+  stages: RuntimePipelineStage[],
+): RuntimePipelineStatus {
   if (status === "running") {
     return "running";
   }
@@ -184,10 +191,6 @@ function mapGraphNodeStatus(status: string): RuntimePipelineStageStatus {
       return "failed";
     case "in_progress":
       return "running";
-    case "paused":
-    case "blocked":
-    case "waiting_approval":
-    case "pending":
     default:
       return "pending";
   }
@@ -214,7 +217,6 @@ function stepTypeLabel(step: ExecutionStep["type"]) {
       return "Hook 阶段";
     case "judge":
       return "评判阶段";
-    case "execution":
     default:
       return "执行阶段";
   }
@@ -238,7 +240,8 @@ function stageFromHookExecution(record: HookExecutionRecord, order: number): Run
     durationMs: null,
     output: truncateOutput(record.result),
     error: record.error ?? null,
-    tokens: record.tokenUsed && record.tokenUsed > 0 ? { input: 0, output: record.tokenUsed } : null,
+    tokens:
+      record.tokenUsed && record.tokenUsed > 0 ? { input: 0, output: record.tokenUsed } : null,
     graphNodeId: null,
     dependsOn: [],
   };
@@ -343,7 +346,11 @@ function stageFromExecutionCandidate(
   };
 }
 
-function stageFromJudgeStep(plan: ExecutionPlan, step: ExecutionStep, order: number): RuntimePipelineStage {
+function stageFromJudgeStep(
+  plan: ExecutionPlan,
+  step: ExecutionStep,
+  order: number,
+): RuntimePipelineStage {
   const result = plan.judgeResult;
   const finishedAt = result?.completedAt ?? null;
   return {
@@ -362,7 +369,8 @@ function stageFromJudgeStep(plan: ExecutionPlan, step: ExecutionStep, order: num
     durationMs: null,
     output: truncateOutput(result?.reasoning),
     error: result?.status === "failed" ? result.reasoning : null,
-    tokens: result?.tokenUsed && result.tokenUsed > 0 ? { input: 0, output: result.tokenUsed } : null,
+    tokens:
+      result?.tokenUsed && result.tokenUsed > 0 ? { input: 0, output: result.tokenUsed } : null,
     graphNodeId: null,
     dependsOn: step.dependsOn ?? [],
   };
@@ -394,8 +402,9 @@ function stageFromGraphNode(node: TaskGraphNode, order: number): RuntimePipeline
 function computePipelineSummary(stages: RuntimePipelineStage[]): PipelineSummary {
   const completedStages = stages.filter((stage) => stage.status === "completed").length;
   const failedStages = stages.filter((stage) => stage.status === "failed").length;
-  const currentStage = stages.find((stage) => stage.status === "running")
-    ?? stages.find((stage) => stage.status === "pending");
+  const currentStage =
+    stages.find((stage) => stage.status === "running") ??
+    stages.find((stage) => stage.status === "pending");
 
   return {
     totalStages: stages.length,
@@ -419,10 +428,10 @@ function alignGraphNodesToStages(stages: RuntimePipelineStage[], nodes: TaskGrap
   for (const node of nodes) {
     const matchingStage = executionStages.find(
       (stage) =>
-        stage.sessionId
-        && node.sessionId
-        && stage.sessionId === node.sessionId
-        && !stage.graphNodeId,
+        stage.sessionId &&
+        node.sessionId &&
+        stage.sessionId === node.sessionId &&
+        !stage.graphNodeId,
     );
     if (matchingStage) {
       matchingStage.graphNodeId = node.id;
@@ -431,7 +440,10 @@ function alignGraphNodesToStages(stages: RuntimePipelineStage[], nodes: TaskGrap
   return stages;
 }
 
-function finalizeStagesForTask(task: TaskRecord, stages: RuntimePipelineStage[]): RuntimePipelineStage[] {
+function finalizeStagesForTask(
+  task: TaskRecord,
+  stages: RuntimePipelineStage[],
+): RuntimePipelineStage[] {
   if (task.status !== "failed") {
     return stages;
   }
@@ -461,6 +473,155 @@ function finalizeStagesForTask(task: TaskRecord, stages: RuntimePipelineStage[])
   });
 }
 
+function buildEmptyRuntimePipeline(taskId: string, sessionId?: string, createdAt: string | null = null) {
+  return {
+    taskId,
+    sessionId: sessionId ?? null,
+    branchName: null,
+    status: "idle" as const,
+    createdAt,
+    updatedAt: new Date().toISOString(),
+    stages: [],
+    summary: computePipelineSummary([]),
+  };
+}
+
+async function loadRuntimePipelineResources(args: {
+  taskId: string;
+  requestedSessionId?: string;
+  authorization: string;
+  prefetchedMessages?: unknown[];
+}) {
+  const [lineageResult, graphResult, messagesResult] = await Promise.all([
+    cpFetch<{ data: TaskSessionRecord[] }>(`/api/tasks/${encodeURIComponent(args.taskId)}/task-sessions`, {
+      authorization: args.authorization,
+    }),
+    cpFetch<TaskGraphData>(`/api/tasks/${encodeURIComponent(args.taskId)}/graph`, {
+      authorization: args.authorization,
+    }),
+    args.prefetchedMessages
+      ? Promise.resolve({ ok: true, data: args.prefetchedMessages } as const)
+      : args.requestedSessionId
+        ? getSessionMessages(args.requestedSessionId)
+        : Promise.resolve({ ok: false } as const),
+  ]);
+
+  return { lineageResult, graphResult, messagesResult };
+}
+
+function resolveRuntimePipelineResources(args: {
+  lineageResult: Awaited<ReturnType<typeof cpFetch<{ data: TaskSessionRecord[] }>>>;
+  graphResult: Awaited<ReturnType<typeof cpFetch<TaskGraphData>>>;
+  messagesResult:
+    | { ok: true; data: unknown[] }
+    | { ok: false }
+    | Awaited<ReturnType<typeof getSessionMessages>>;
+  requestedSessionId?: string;
+  task: TaskRecord;
+}) {
+  const lineage =
+    args.lineageResult.ok && Array.isArray(args.lineageResult.data?.data)
+      ? args.lineageResult.data.data.filter((record) => !record.archivedAt)
+      : [];
+  const sessionIsAllowed =
+    !args.requestedSessionId ||
+    args.requestedSessionId === args.task.sessionId ||
+    lineage.length === 0 ||
+    lineage.some((record) => record.runtimeSessionId === args.requestedSessionId);
+  const branchName =
+    lineage.find((record) => record.runtimeSessionId === args.requestedSessionId)?.branchName ?? null;
+  const messages =
+    args.messagesResult.ok && Array.isArray(args.messagesResult.data)
+      ? (args.messagesResult.data as SessionMessageRecord[])
+      : [];
+  const graphNodes =
+    args.graphResult.ok && Array.isArray(args.graphResult.data?.nodes)
+      ? args.graphResult.data.nodes.filter(
+          (node) =>
+            !args.requestedSessionId || node.sessionId === args.requestedSessionId || !node.sessionId,
+        )
+      : [];
+
+  return { lineage, sessionIsAllowed, branchName, messages, graphNodes };
+}
+
+function appendHookExecutionStages(
+  stages: RuntimePipelineStage[],
+  hookExecutions: HookExecutionRecord[],
+  order: number,
+  triggers: HookExecutionRecord["trigger"][],
+) {
+  let nextOrder = order;
+  for (const record of hookExecutions.filter((item) => triggers.includes(item.trigger))) {
+    stages.push(stageFromHookExecution(record, nextOrder));
+    nextOrder += 1;
+  }
+  return nextOrder;
+}
+
+function appendPlanningStages(
+  stages: RuntimePipelineStage[],
+  messages: SessionMessageRecord[],
+  order: number,
+) {
+  let nextOrder = order;
+  for (const agentName of PIPELINE_AGENTS) {
+    const planningStage = stageFromPlanningMessages(agentName, messages, nextOrder);
+    if (!planningStage) {
+      continue;
+    }
+    stages.push(planningStage);
+    nextOrder += 1;
+  }
+  return nextOrder;
+}
+
+function appendPlanStages(stages: RuntimePipelineStage[], plan: ExecutionPlan | null, order: number) {
+  if (!plan) {
+    return order;
+  }
+
+  let nextOrder = order;
+  for (const step of plan.steps) {
+    if (step.type === "hook") {
+      stages.push(stageFromPlanHookStep(step, nextOrder));
+      nextOrder += 1;
+      continue;
+    }
+    if (step.type === "execution") {
+      if (plan.candidates.length === 0) {
+        stages.push(stageFromPlanHookStep(step, nextOrder));
+        nextOrder += 1;
+        continue;
+      }
+      for (const [index, candidate] of plan.candidates.entries()) {
+        stages.push(stageFromExecutionCandidate(step, candidate, index, nextOrder));
+        nextOrder += 1;
+      }
+      continue;
+    }
+    if (step.type === "judge") {
+      stages.push(stageFromJudgeStep(plan, step, nextOrder));
+      nextOrder += 1;
+    }
+  }
+
+  return nextOrder;
+}
+
+function appendGraphNodeStages(
+  stages: RuntimePipelineStage[],
+  graphNodes: TaskGraphNode[],
+  order: number,
+) {
+  let nextOrder = order;
+  for (const node of graphNodes) {
+    stages.push(stageFromGraphNode(node, nextOrder));
+    nextOrder += 1;
+  }
+  return nextOrder;
+}
+
 export async function buildRuntimePipeline(args: {
   taskId: string;
   sessionId?: string;
@@ -472,125 +633,42 @@ export async function buildRuntimePipeline(args: {
   });
 
   if (!taskResult.ok || !taskResult.data) {
-    return {
-      taskId: args.taskId,
-      sessionId: args.sessionId ?? null,
-      branchName: null,
-      status: "idle",
-      createdAt: null,
-      updatedAt: new Date().toISOString(),
-      stages: [],
-      summary: computePipelineSummary([]),
-    };
+    return buildEmptyRuntimePipeline(args.taskId, args.sessionId);
   }
 
   const task = taskResult.data;
   const requestedSessionId = args.sessionId || task.sessionId || undefined;
-
-  const [lineageResult, graphResult, messagesResult] = await Promise.all([
-    cpFetch<{ data: TaskSessionRecord[] }>(`/api/tasks/${encodeURIComponent(args.taskId)}/task-sessions`, {
-      authorization: args.authorization,
-    }),
-    cpFetch<TaskGraphData>(`/api/tasks/${encodeURIComponent(args.taskId)}/graph`, {
-      authorization: args.authorization,
-    }),
-    args.prefetchedMessages
-      ? Promise.resolve({ ok: true, data: args.prefetchedMessages } as const)
-      : requestedSessionId ? getSessionMessages(requestedSessionId) : Promise.resolve({ ok: false } as const),
-  ]);
-
-  const lineage =
-    lineageResult.ok && Array.isArray(lineageResult.data?.data)
-      ? lineageResult.data.data.filter((record) => !record.archivedAt)
-      : [];
-
-  const sessionIsAllowed =
-    !requestedSessionId ||
-    requestedSessionId === task.sessionId ||
-    lineage.length === 0 ||
-    lineage.some((record) => record.runtimeSessionId === requestedSessionId);
+  const loadedResources = await loadRuntimePipelineResources({
+    taskId: args.taskId,
+    requestedSessionId,
+    authorization: args.authorization,
+    prefetchedMessages: args.prefetchedMessages,
+  });
+  const { sessionIsAllowed, branchName, messages, graphNodes } = resolveRuntimePipelineResources({
+    ...loadedResources,
+    requestedSessionId,
+    task,
+  });
 
   if (!sessionIsAllowed) {
-    return {
-      taskId: args.taskId,
-      sessionId: requestedSessionId ?? null,
-      branchName: null,
-      status: "idle",
-      createdAt: task.createdAt ?? null,
-      updatedAt: new Date().toISOString(),
-      stages: [],
-      summary: computePipelineSummary([]),
-    };
+    return buildEmptyRuntimePipeline(args.taskId, requestedSessionId, task.createdAt ?? null);
   }
-
-  const branchName = lineage.find((record) => record.runtimeSessionId === requestedSessionId)?.branchName ?? null;
   const plan = parseJson<ExecutionPlan>(task.executionPlan);
   const strategy = parseJson<PersistedTaskStrategy>(task.strategy);
-  const messages = messagesResult.ok && Array.isArray(messagesResult.data)
-    ? (messagesResult.data as SessionMessageRecord[])
-    : [];
-  const graphNodes =
-    graphResult.ok && Array.isArray(graphResult.data?.nodes)
-      ? graphResult.data.nodes.filter((node) => !requestedSessionId || node.sessionId === requestedSessionId || !node.sessionId)
-      : [];
 
   const stages: RuntimePipelineStage[] = [];
   let order = 0;
 
   const hookExecutions = Array.isArray(strategy?.hookExecutions) ? strategy.hookExecutions : [];
-  for (const record of hookExecutions.filter((item) => item.trigger === "pre-execution" || item.trigger === "pre-resume")) {
-    stages.push(stageFromHookExecution(record, order));
-    order += 1;
-  }
+  order = appendHookExecutionStages(stages, hookExecutions, order, ["pre-execution", "pre-resume"]);
+  order = appendPlanningStages(stages, messages, order);
+  order = appendPlanStages(stages, plan, order);
+  order = appendGraphNodeStages(stages, graphNodes, order);
+  appendHookExecutionStages(stages, hookExecutions, order, ["post-execution", "on-failure"]);
 
-  for (const agentName of PIPELINE_AGENTS) {
-    const planningStage = stageFromPlanningMessages(agentName, messages, order);
-    if (planningStage) {
-      stages.push(planningStage);
-      order += 1;
-    }
-  }
-
-  if (plan) {
-    for (const step of plan.steps) {
-      if (step.type === "hook") {
-        stages.push(stageFromPlanHookStep(step, order));
-        order += 1;
-        continue;
-      }
-
-      if (step.type === "execution") {
-        if (plan.candidates.length === 0) {
-          stages.push(stageFromPlanHookStep(step, order));
-          order += 1;
-          continue;
-        }
-
-        plan.candidates.forEach((candidate, index) => {
-          stages.push(stageFromExecutionCandidate(step, candidate, index, order));
-          order += 1;
-        });
-        continue;
-      }
-
-      if (step.type === "judge") {
-        stages.push(stageFromJudgeStep(plan, step, order));
-        order += 1;
-      }
-    }
-  }
-
-  for (const node of graphNodes) {
-    stages.push(stageFromGraphNode(node, order));
-    order += 1;
-  }
-
-  for (const record of hookExecutions.filter((item) => item.trigger === "post-execution" || item.trigger === "on-failure")) {
-    stages.push(stageFromHookExecution(record, order));
-    order += 1;
-  }
-
-  const alignedStages = alignGraphNodesToStages(stages, graphNodes).sort((left, right) => left.order - right.order);
+  const alignedStages = alignGraphNodesToStages(stages, graphNodes).sort(
+    (left, right) => left.order - right.order,
+  );
   const finalizedStages = finalizeStagesForTask(task, alignedStages);
   const summary = computePipelineSummary(finalizedStages);
 

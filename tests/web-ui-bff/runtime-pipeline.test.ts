@@ -125,8 +125,18 @@ describe("buildRuntimePipeline", () => {
           data: {
             data: [
               { id: "ts-root", runtimeSessionId: "ses-root", branchName: "main", isActive: true },
-              { id: "ts-branch-1", runtimeSessionId: "ses-branch-1", branchName: "候选 A", isActive: false },
-              { id: "ts-branch-2", runtimeSessionId: "ses-branch-2", branchName: "候选 B", isActive: false },
+              {
+                id: "ts-branch-1",
+                runtimeSessionId: "ses-branch-1",
+                branchName: "候选 A",
+                isActive: false,
+              },
+              {
+                id: "ts-branch-2",
+                runtimeSessionId: "ses-branch-2",
+                branchName: "候选 B",
+                isActive: false,
+              },
             ],
           },
         };
@@ -144,7 +154,9 @@ describe("buildRuntimePipeline", () => {
 
     getSessionMessagesMock.mockResolvedValue({ ok: true, data: [] });
 
-    const { buildRuntimePipeline } = await import("../../control-plane/web-ui-bff/src/lib/runtime-pipeline");
+    const { buildRuntimePipeline } = await import(
+      "../../control-plane/web-ui-bff/src/lib/runtime-pipeline"
+    );
     const pipeline = await buildRuntimePipeline({
       taskId: "task-failed",
       authorization: "Bearer test",
@@ -191,7 +203,12 @@ describe("buildRuntimePipeline", () => {
           data: {
             data: [
               { id: "ts-root", runtimeSessionId: "ses-root", branchName: "main", isActive: false },
-              { id: "ts-1", runtimeSessionId: "ses-branch-1", branchName: "feature/runtime", isActive: true },
+              {
+                id: "ts-1",
+                runtimeSessionId: "ses-branch-1",
+                branchName: "feature/runtime",
+                isActive: true,
+              },
             ],
           },
         };
@@ -246,7 +263,10 @@ describe("buildRuntimePipeline", () => {
             agent: "prometheus-enterprise",
             modelID: "gpt-5.4",
             tokens: { input: 120, output: 80 },
-            time: { created: Date.parse("2026-03-12T09:58:10.000Z"), completed: Date.parse("2026-03-12T09:58:12.000Z") },
+            time: {
+              created: Date.parse("2026-03-12T09:58:10.000Z"),
+              completed: Date.parse("2026-03-12T09:58:12.000Z"),
+            },
           },
           parts: [{ type: "text", text: "先分析问题边界" }],
         },
@@ -257,7 +277,10 @@ describe("buildRuntimePipeline", () => {
             agent: "metis-enterprise",
             model: "gpt-5.4",
             tokens: { input: 90, output: 60 },
-            time: { created: Date.parse("2026-03-12T09:58:20.000Z"), completed: Date.parse("2026-03-12T09:58:21.000Z") },
+            time: {
+              created: Date.parse("2026-03-12T09:58:20.000Z"),
+              completed: Date.parse("2026-03-12T09:58:21.000Z"),
+            },
           },
           parts: [{ type: "text", text: "再补执行计划" }],
         },
@@ -272,7 +295,9 @@ describe("buildRuntimePipeline", () => {
       ],
     });
 
-    const { buildRuntimePipeline } = await import("../../control-plane/web-ui-bff/src/lib/runtime-pipeline");
+    const { buildRuntimePipeline } = await import(
+      "../../control-plane/web-ui-bff/src/lib/runtime-pipeline"
+    );
     const pipeline = await buildRuntimePipeline({
       taskId: "task-1",
       sessionId: "ses-branch-1",
@@ -307,7 +332,9 @@ describe("buildRuntimePipeline", () => {
       "执行后 Hook · reviewer",
     ]);
 
-    const runningCandidate = pipeline.stages.find((stage) => stage.id === "candidate:0:ses-branch-1");
+    const runningCandidate = pipeline.stages.find(
+      (stage) => stage.id === "candidate:0:ses-branch-1",
+    );
     expect(runningCandidate).toMatchObject({
       status: "running",
       graphNodeId: "node-1",
@@ -346,7 +373,9 @@ describe("buildRuntimePipeline", () => {
         return {
           ok: true,
           data: {
-            data: [{ id: "ts-root", runtimeSessionId: "ses-root", branchName: "main", isActive: true }],
+            data: [
+              { id: "ts-root", runtimeSessionId: "ses-root", branchName: "main", isActive: true },
+            ],
           },
         };
       }
@@ -361,7 +390,9 @@ describe("buildRuntimePipeline", () => {
       throw new Error(`Unexpected cpFetch url: ${url}`);
     });
 
-    const { buildRuntimePipeline } = await import("../../control-plane/web-ui-bff/src/lib/runtime-pipeline");
+    const { buildRuntimePipeline } = await import(
+      "../../control-plane/web-ui-bff/src/lib/runtime-pipeline"
+    );
     const pipeline = await buildRuntimePipeline({
       taskId: "task-2",
       sessionId: "ses-not-owned",
@@ -398,7 +429,9 @@ describe("buildRuntimePipeline", () => {
             sessionId: "ses-root",
             createdAt: "2026-03-12T12:00:00.000Z",
             executionPlan: null,
-            strategy: JSON.stringify({ selectedAgent: "default-executor" } satisfies PersistedTaskStrategy),
+            strategy: JSON.stringify({
+              selectedAgent: "default-executor",
+            } satisfies PersistedTaskStrategy),
           },
         };
       }
@@ -407,7 +440,9 @@ describe("buildRuntimePipeline", () => {
         return {
           ok: true,
           data: {
-            data: [{ id: "ts-root", runtimeSessionId: "ses-root", branchName: "main", isActive: true }],
+            data: [
+              { id: "ts-root", runtimeSessionId: "ses-root", branchName: "main", isActive: true },
+            ],
           },
         };
       }
@@ -432,14 +467,19 @@ describe("buildRuntimePipeline", () => {
             agent: "momus-enterprise",
             modelID: "gpt-5.4",
             tokens: { input: 30, output: 25 },
-            time: { created: Date.parse("2026-03-12T12:00:10.000Z"), completed: Date.parse("2026-03-12T12:00:12.000Z") },
+            time: {
+              created: Date.parse("2026-03-12T12:00:10.000Z"),
+              completed: Date.parse("2026-03-12T12:00:12.000Z"),
+            },
           },
           parts: [{ type: "text", text: "给出风险清单" }],
         },
       ],
     });
 
-    const { buildRuntimePipeline } = await import("../../control-plane/web-ui-bff/src/lib/runtime-pipeline");
+    const { buildRuntimePipeline } = await import(
+      "../../control-plane/web-ui-bff/src/lib/runtime-pipeline"
+    );
     const pipeline = await buildRuntimePipeline({
       taskId: "task-3",
       authorization: "Bearer test",
@@ -501,7 +541,14 @@ describe("buildRuntimePipeline", () => {
         return {
           ok: true,
           data: {
-            data: [{ id: "ts-shared", runtimeSessionId: "ses-shared", branchName: "shared", isActive: true }],
+            data: [
+              {
+                id: "ts-shared",
+                runtimeSessionId: "ses-shared",
+                branchName: "shared",
+                isActive: true,
+              },
+            ],
           },
         };
       }
@@ -559,7 +606,9 @@ describe("buildRuntimePipeline", () => {
 
     getSessionMessagesMock.mockResolvedValue({ ok: true, data: [] });
 
-    const { buildRuntimePipeline } = await import("../../control-plane/web-ui-bff/src/lib/runtime-pipeline");
+    const { buildRuntimePipeline } = await import(
+      "../../control-plane/web-ui-bff/src/lib/runtime-pipeline"
+    );
     const pipeline = await buildRuntimePipeline({
       taskId: "task-4",
       sessionId: "ses-shared",

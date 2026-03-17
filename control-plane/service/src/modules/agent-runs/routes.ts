@@ -19,7 +19,14 @@ agentRunRoutes.use("*", authMiddleware);
 agentRunRoutes.use("*", requireRole("developer"));
 
 type Role = "platform_admin" | "org_admin" | "project_admin" | "developer" | "viewer";
-type AgentRunStatus = "pending" | "running" | "paused" | "completed" | "failed" | "stopped" | "terminated";
+type AgentRunStatus =
+  | "pending"
+  | "running"
+  | "paused"
+  | "completed"
+  | "failed"
+  | "stopped"
+  | "terminated";
 type QueueType = "attention" | "running" | "recent";
 type BlockerType = "approval" | "stalled" | "manual_resume" | "failed" | "stopped" | null;
 type RiskLevel = "low" | "medium" | "high" | "critical" | null;
@@ -207,10 +214,36 @@ function average(numbers: number[]) {
   return Math.round(numbers.reduce((sum, value) => sum + value, 0) / numbers.length);
 }
 
+function includesAny(text: string, candidates: string[]) {
+  return candidates.some((candidate) => text.includes(candidate));
+}
+
+function isStoppedStatus(status: AgentRunStatus) {
+  return status === "stopped" || status === "terminated";
+}
+
+function isFailedLikeStatus(status: AgentRunStatus) {
+  return status === "failed" || isStoppedStatus(status);
+}
+
+function isEndedStatus(status: AgentRunStatus) {
+  return status === "completed" || isFailedLikeStatus(status);
+}
+
+function incrementCounter(counter: Map<string, number>, key: string) {
+  counter.set(key, (counter.get(key) ?? 0) + 1);
+}
+
+function getItemActivityTimestamp(item: HydratedQueueItem) {
+  return parseDate(item.finishedAt) ?? parseDate(item.lastActivityAt) ?? parseDate(item.startedAt);
+}
+
 function resolveViewScope(user: JWTPayload, ownerScope?: string, projectId?: string) {
   if (ownerScope === "mine") return "mine" as const;
   if (projectId) return "project" as const;
-  return (ROLE_HIERARCHY[user.role as Role] ?? 0) >= ROLE_HIERARCHY.org_admin ? "global" as const : "project" as const;
+  return (ROLE_HIERARCHY[user.role as Role] ?? 0) >= ROLE_HIERARCHY.org_admin
+    ? ("global" as const)
+    : ("project" as const);
 }
 
 function buildActionPermissions(user: JWTPayload, status: AgentRunStatus) {
@@ -244,7 +277,8 @@ function maxRiskLevel(levels: RiskLevel[]): RiskLevel {
 
 function formatChangesSummary(summary: BaseRunRow["taskChangesSummary"]): string | null {
   if (!summary) return null;
-  const files = (summary.filesAdded ?? 0) + (summary.filesModified ?? 0) + (summary.filesDeleted ?? 0);
+  const files =
+    (summary.filesAdded ?? 0) + (summary.filesModified ?? 0) + (summary.filesDeleted ?? 0);
   const insertions = summary.totalInsertions ?? 0;
   const deletions = summary.totalDeletions ?? 0;
   if (!files && !insertions && !deletions) return null;
@@ -286,7 +320,9 @@ function resolveQuickActions(status: AgentRunStatus, blockerType: BlockerType) {
   return Array.from(new Set(actions));
 }
 
-function readRunFilters(c: { req: { query: (name: string) => string | undefined } }): RunFilterOptions {
+function readRunFilters(c: {
+  req: { query: (name: string) => string | undefined };
+}): RunFilterOptions {
   return {
     projectId: c.req.query("projectId"),
     taskId: c.req.query("taskId"),
@@ -298,7 +334,9 @@ function readRunFilters(c: { req: { query: (name: string) => string | undefined 
   };
 }
 
-function readQueueFilters(c: { req: { query: (name: string) => string | undefined } }): QueueFilterOptions {
+function readQueueFilters(c: {
+  req: { query: (name: string) => string | undefined };
+}): QueueFilterOptions {
   return {
     ownerScope: c.req.query("ownerScope") || undefined,
     status: c.req.query("status") || undefined,
@@ -337,14 +375,14 @@ function normalizeFailureReason(item: HydratedQueueItem) {
   if (item.blockerType === "stalled") return "长时间无进展";
   if (item.blockerType === "manual_resume") return "等待人工恢复";
   if (item.blockerType === "stopped") return "人工停止待处理";
-  if (text.includes("timeout") || text.includes("超时")) return "执行超时";
-  if (text.includes("auth") || text.includes("权限") || text.includes("credential") || text.includes("凭证")) {
+  if (includesAny(text, ["timeout", "超时"])) return "执行超时";
+  if (includesAny(text, ["auth", "权限", "credential", "凭证"])) {
     return "认证或权限异常";
   }
-  if (text.includes("model") || text.includes("provider") || text.includes("copilot")) {
+  if (includesAny(text, ["model", "provider", "copilot"])) {
     return "模型或 Provider 异常";
   }
-  if (text.includes("json") || text.includes("schema") || text.includes("parse") || text.includes("结构化")) {
+  if (includesAny(text, ["json", "schema", "parse", "结构化"])) {
     return "结构化结果异常";
   }
   return item.blockerType === "failed" || item.status === "failed" ? "执行失败" : "需要人工处理";
@@ -380,10 +418,16 @@ function buildRanking(
 
   return Array.from(grouped.entries())
     .map(([key, group]) => {
-      const ended = group.items.filter((item) => ["completed", "failed", "stopped", "terminated"].includes(item.status));
+      const ended = group.items.filter((item) =>
+        ["completed", "failed", "stopped", "terminated"].includes(item.status),
+      );
       const completedRuns = group.items.filter((item) => item.status === "completed").length;
-      const failedRuns = group.items.filter((item) => ["failed", "stopped", "terminated"].includes(item.status)).length;
-      const interventionCount = group.items.filter((item) => item.guidanceCount > 0 || item.requiresIntervention).length;
+      const failedRuns = group.items.filter((item) =>
+        ["failed", "stopped", "terminated"].includes(item.status),
+      ).length;
+      const interventionCount = group.items.filter(
+        (item) => item.guidanceCount > 0 || item.requiresIntervention,
+      ).length;
       const durationValues = ended
         .map((item) => item.durationMs)
         .filter((value): value is number => value != null && Number.isFinite(value));
@@ -411,15 +455,68 @@ function buildRanking(
 function toTimelineBucketKey(timestamp: number, bucketUnit: "hour" | "day") {
   const date = new Date(timestamp);
   if (bucketUnit === "hour") {
-    return date.toISOString().slice(0, 13) + ":00:00.000Z";
+    return `${date.toISOString().slice(0, 13)}:00:00.000Z`;
   }
   return date.toISOString().slice(0, 10);
 }
 
 function toTimelineLabel(bucketKey: string, bucketUnit: "hour" | "day") {
-  return bucketUnit === "hour"
-    ? bucketKey.slice(5, 13).replace("T", " ")
-    : bucketKey.slice(5, 10);
+  return bucketUnit === "hour" ? bucketKey.slice(5, 13).replace("T", " ") : bucketKey.slice(5, 10);
+}
+
+function getLastActivityMs(args: {
+  run: BaseRunRow;
+  latestApproval: ApprovalRecord | null;
+  latestAudit: AuditRecord | null;
+  latestChange: ChangeRecord | null;
+}) {
+  const activityCandidates = [
+    parseDate(args.run.finishedAt),
+    parseDate(args.run.startedAt),
+    parseDate(args.run.createdAt),
+    parseDate(args.latestApproval?.resolvedAt),
+    parseDate(args.latestApproval?.createdAt),
+    parseDate(args.latestAudit?.ts),
+    parseDate(args.latestChange?.createdAt),
+  ].filter((value): value is number => value != null);
+
+  return activityCandidates.length > 0 ? Math.max(...activityCandidates) : null;
+}
+
+function getDurationMs(run: BaseRunRow) {
+  const finishedAtMs = parseDate(run.finishedAt);
+  const startedAtMs = parseDate(run.startedAt);
+  return startedAtMs != null ? Math.max(0, (finishedAtMs ?? Date.now()) - startedAtMs) : null;
+}
+
+function resolveBlockerState(args: {
+  status: AgentRunStatus;
+  pendingApproval: ApprovalRecord | null;
+  stalled: boolean;
+}) {
+  if (args.pendingApproval) {
+    return { blockerType: "approval" as const, blockerLabel: "审批阻塞" };
+  }
+  if (args.status === "failed") {
+    return { blockerType: "failed" as const, blockerLabel: "执行失败" };
+  }
+  if (args.status === "paused") {
+    return { blockerType: "manual_resume" as const, blockerLabel: "等待人工恢复" };
+  }
+  if (isStoppedStatus(args.status)) {
+    return { blockerType: "stopped" as const, blockerLabel: "已停止待处理" };
+  }
+  if (args.stalled) {
+    return { blockerType: "stalled" as const, blockerLabel: "长时间无进展" };
+  }
+  if (args.status === "completed") {
+    return { blockerType: null, blockerLabel: "已完成" };
+  }
+  if (args.status === "running") {
+    return { blockerType: null, blockerLabel: "推进中" };
+  }
+
+  return { blockerType: null, blockerLabel: "运行正常" };
 }
 
 function hydrateQueueItem(
@@ -432,50 +529,26 @@ function hydrateQueueItem(
   const latestApproval = approvals[0] ?? null;
   const latestAudit = audits[0] ?? null;
   const latestChange = changes[0] ?? null;
-  const activityCandidates = [
-    parseDate(run.finishedAt),
-    parseDate(run.startedAt),
-    parseDate(run.createdAt),
-    parseDate(latestApproval?.resolvedAt),
-    parseDate(latestApproval?.createdAt),
-    parseDate(latestAudit?.ts),
-    parseDate(latestChange?.createdAt),
-  ].filter((value): value is number => value != null);
-  const lastActivityMs = activityCandidates.length > 0 ? Math.max(...activityCandidates) : null;
-  const finishedAtMs = parseDate(run.finishedAt);
-  const startedAtMs = parseDate(run.startedAt);
-  const durationMs = startedAtMs != null ? Math.max(0, (finishedAtMs ?? Date.now()) - startedAtMs) : null;
-  const stalled = run.status === "running" && lastActivityMs != null && Date.now() - lastActivityMs > 10 * 60 * 1000;
+  const lastActivityMs = getLastActivityMs({ run, latestApproval, latestAudit, latestChange });
+  const durationMs = getDurationMs(run);
+  const stalled =
+    run.status === "running" &&
+    lastActivityMs != null &&
+    Date.now() - lastActivityMs > 10 * 60 * 1000;
   const pendingApproval = approvals.find((approval) => approval.status === "pending") ?? null;
-
-  let blockerType: BlockerType = null;
-  let blockerLabel = "运行正常";
-  if (pendingApproval) {
-    blockerType = "approval";
-    blockerLabel = "审批阻塞";
-  } else if (run.status === "failed") {
-    blockerType = "failed";
-    blockerLabel = "执行失败";
-  } else if (run.status === "paused") {
-    blockerType = "manual_resume";
-    blockerLabel = "等待人工恢复";
-  } else if (run.status === "stopped" || run.status === "terminated") {
-    blockerType = "stopped";
-    blockerLabel = "已停止待处理";
-  } else if (stalled) {
-    blockerType = "stalled";
-    blockerLabel = "长时间无进展";
-  } else if (run.status === "completed") {
-    blockerLabel = "已完成";
-  } else if (run.status === "running") {
-    blockerLabel = "推进中";
-  }
+  const blockerState = resolveBlockerState({
+    status: run.status,
+    pendingApproval,
+    stalled,
+  });
 
   const riskLevel = maxRiskLevel([
     ...approvals.map((approval) => approval.riskLevel),
     ...audits.map((audit) => audit.riskLevel),
   ]);
-  const guidanceCount = audits.filter((audit) => audit.eventType === "guidance" || audit.action.includes("guidance")).length;
+  const guidanceCount = audits.filter(
+    (audit) => audit.eventType === "guidance" || audit.action.includes("guidance"),
+  ).length;
   const summary = buildSummaryText({ run, latestApproval, latestAudit, latestChange, stalled });
 
   return {
@@ -488,12 +561,12 @@ function hydrateQueueItem(
     status: run.status,
     sessionId: run.sessionId,
     currentStage: null,
-    blockerType,
-    blockerLabel,
+    blockerType: blockerState.blockerType,
+    blockerLabel: blockerState.blockerLabel,
     blockerReason: summary,
     riskLevel,
     approvalStatus: pendingApproval?.status || latestApproval?.status || null,
-    requiresIntervention: blockerType !== null,
+    requiresIntervention: blockerState.blockerType !== null,
     startedAt: run.startedAt,
     finishedAt: run.finishedAt,
     lastActivityAt: lastActivityMs != null ? new Date(lastActivityMs).toISOString() : null,
@@ -502,20 +575,19 @@ function hydrateQueueItem(
     tokenUsed: run.tokenUsed,
     resultSummary: summary,
     guidanceCount,
-    primaryAttentionReason: blockerType ? summary : null,
-    quickActions: resolveQuickActions(run.status, blockerType),
+    primaryAttentionReason: blockerState.blockerType ? summary : null,
+    quickActions: resolveQuickActions(run.status, blockerState.blockerType),
     actionPermissions: buildActionPermissions(user, run.status),
   };
 }
 
-async function loadBaseRuns(user: JWTPayload, filters: RunFilterOptions = {}): Promise<BaseRunRow[]> {
-  if (filters.projectId && !hasProjectAccess(user, filters.projectId)) {
-    return [];
-  }
-
+function buildRunQueryConditions(user: JWTPayload, filters: RunFilterOptions) {
   const accessibleProjects = getAccessibleProjectIds(user);
+  if (filters.projectId && !hasProjectAccess(user, filters.projectId)) {
+    return { accessibleProjects, conditions: null as null };
+  }
   if (accessibleProjects && accessibleProjects.length === 0) {
-    return [];
+    return { accessibleProjects, conditions: null as null };
   }
 
   const conditions = [];
@@ -529,6 +601,233 @@ async function loadBaseRuns(user: JWTPayload, filters: RunFilterOptions = {}): P
   }
   if (filters.agentRunId) {
     conditions.push(eq(agentRuns.id, filters.agentRunId));
+  }
+
+  return { accessibleProjects, conditions };
+}
+
+async function loadTokenUsageBySessionId(sessionIds: string[]) {
+  const tokenUsageBySessionId = new Map<string, number>();
+  if (sessionIds.length === 0) {
+    return tokenUsageBySessionId;
+  }
+
+  const nodeRows = await db
+    .select({
+      sessionId: taskNodes.sessionId,
+      tokenUsed: taskNodes.tokenUsed,
+    })
+    .from(taskNodes)
+    .where(inArray(taskNodes.sessionId, sessionIds));
+
+  for (const row of nodeRows) {
+    if (!row.sessionId) continue;
+    tokenUsageBySessionId.set(
+      row.sessionId,
+      (tokenUsageBySessionId.get(row.sessionId) ?? 0) + (row.tokenUsed ?? 0),
+    );
+  }
+
+  return tokenUsageBySessionId;
+}
+
+function enrichRunTokenUsage(rows: BaseRunRow[], tokenUsageBySessionId: Map<string, number>) {
+  return rows.map((row) => ({
+    ...row,
+    tokenUsed:
+      row.tokenUsed > 0
+        ? row.tokenUsed
+        : row.sessionId
+          ? (tokenUsageBySessionId.get(row.sessionId) ?? 0)
+          : 0,
+  }));
+}
+
+function matchesRunFilters(
+  row: BaseRunRow,
+  normalizedAgentType: string | undefined,
+  normalizedModel: string | undefined,
+  fromMs: number | null,
+  toMs: number | null,
+) {
+  if (normalizedAgentType && !row.agentType.toLowerCase().includes(normalizedAgentType)) {
+    return false;
+  }
+  if (normalizedModel) {
+    const modelUsed = row.modelUsed?.toLowerCase() || "";
+    const providerId = parseProviderId(row.modelUsed).toLowerCase();
+    if (!modelUsed.includes(normalizedModel) && providerId !== normalizedModel) {
+      return false;
+    }
+  }
+
+  const activityMs =
+    parseDate(row.finishedAt) ?? parseDate(row.startedAt) ?? parseDate(row.createdAt);
+  if (fromMs != null && activityMs != null && activityMs < fromMs) {
+    return false;
+  }
+  if (toMs != null && activityMs != null && activityMs > toMs) {
+    return false;
+  }
+  return true;
+}
+
+function groupAndSortByRunId<T extends { agentRunId: string | null }>(
+  rows: T[],
+  getTimestamp: (row: T) => string,
+) {
+  const grouped = new Map<string, T[]>();
+  for (const row of rows) {
+    if (!row.agentRunId) continue;
+    const items = grouped.get(row.agentRunId) || [];
+    items.push(row);
+    grouped.set(row.agentRunId, items);
+  }
+  for (const items of grouped.values()) {
+    items.sort((left, right) => Date.parse(getTimestamp(right)) - Date.parse(getTimestamp(left)));
+  }
+  return grouped;
+}
+
+function toRiskLabel(riskLevel: RiskLevel) {
+  if (riskLevel === "critical") return "严重风险";
+  if (riskLevel === "high") return "高风险";
+  if (riskLevel === "medium") return "中风险";
+  return "低风险";
+}
+
+function createEmptyTimelineResponse() {
+  return {
+    generatedAt: new Date().toISOString(),
+    bucketUnit: "day" as const,
+    buckets: [],
+  };
+}
+
+function buildTimelineBuckets(scopedItems: HydratedQueueItem[]) {
+  const timestamps = scopedItems
+    .map(getItemActivityTimestamp)
+    .filter((value): value is number => value != null);
+
+  if (timestamps.length === 0) {
+    return null;
+  }
+
+  const minTs = Math.min(...timestamps);
+  const maxTs = Math.max(...timestamps);
+  const bucketUnit = maxTs - minTs <= 48 * 60 * 60 * 1000 ? "hour" : "day";
+  const buckets = new Map<
+    string,
+    {
+      bucket: string;
+      label: string;
+      totalRuns: number;
+      completedRuns: number;
+      failedRuns: number;
+      attentionRuns: number;
+      interventionRuns: number;
+    }
+  >();
+
+  for (const item of scopedItems) {
+    const timestamp = getItemActivityTimestamp(item);
+    if (timestamp == null) continue;
+    const bucket = toTimelineBucketKey(timestamp, bucketUnit);
+    const existing = buckets.get(bucket) ?? {
+      bucket,
+      label: toTimelineLabel(bucket, bucketUnit),
+      totalRuns: 0,
+      completedRuns: 0,
+      failedRuns: 0,
+      attentionRuns: 0,
+      interventionRuns: 0,
+    };
+
+    existing.totalRuns += 1;
+    if (item.status === "completed") existing.completedRuns += 1;
+    if (isFailedLikeStatus(item.status)) existing.failedRuns += 1;
+    if (item.requiresIntervention) existing.attentionRuns += 1;
+    if (item.guidanceCount > 0 || item.requiresIntervention) existing.interventionRuns += 1;
+    buckets.set(bucket, existing);
+  }
+
+  return {
+    generatedAt: new Date().toISOString(),
+    bucketUnit,
+    buckets: Array.from(buckets.values())
+      .sort((left, right) => left.bucket.localeCompare(right.bucket))
+      .slice(-12),
+  };
+}
+
+function buildLatestEvents(
+  approvals: ApprovalRecord[],
+  audits: AuditRecord[],
+  changes: ChangeRecord[],
+) {
+  return [
+    ...approvals.map((approval) => ({
+      ts: approval.resolvedAt || approval.createdAt,
+      type: `approval.${approval.status}`,
+      summary: `审批 ${approval.status} · ${approval.actionType}`,
+    })),
+    ...audits.map((audit) => ({
+      ts: audit.ts,
+      type: `${audit.eventType}.${audit.action}`,
+      summary:
+        (typeof audit.detail?.message === "string" && audit.detail.message) ||
+        (typeof audit.detail?.reason === "string" && audit.detail.reason) ||
+        audit.action,
+    })),
+    ...changes.map((change) => ({
+      ts: change.createdAt,
+      type: "code_change.recorded",
+      summary: change.summary || "记录了新的代码变更。",
+    })),
+  ]
+    .sort((left, right) => Date.parse(right.ts) - Date.parse(left.ts))
+    .slice(0, 12);
+}
+
+function buildGovernanceSummary(
+  approvals: ApprovalRecord[],
+  audits: AuditRecord[],
+  latestApproval: ApprovalRecord | null,
+  latestHighRiskAudit: AuditRecord | null,
+) {
+  return {
+    approvalTickets: approvals.length,
+    pendingApprovals: approvals.filter((approval) => approval.status === "pending").length,
+    latestApprovalStatus: latestApproval?.status || null,
+    recentAuditEvents: audits.length,
+    latestHighRiskAction:
+      (typeof latestHighRiskAudit?.detail?.message === "string" &&
+        latestHighRiskAudit.detail.message) ||
+      latestHighRiskAudit?.action ||
+      null,
+  };
+}
+
+function buildCodeChangesSummary(run: BaseRunRow, changes: ChangeRecord[]) {
+  return {
+    changeCount: changes.length,
+    files:
+      (run.taskChangesSummary?.filesAdded ?? 0) +
+      (run.taskChangesSummary?.filesModified ?? 0) +
+      (run.taskChangesSummary?.filesDeleted ?? 0),
+    insertions: run.taskChangesSummary?.totalInsertions ?? 0,
+    deletions: run.taskChangesSummary?.totalDeletions ?? 0,
+    latestSummary: changes[0]?.summary || formatChangesSummary(run.taskChangesSummary),
+  };
+}
+
+async function loadBaseRuns(
+  user: JWTPayload,
+  filters: RunFilterOptions = {},
+): Promise<BaseRunRow[]> {
+  const { conditions } = buildRunQueryConditions(user, filters);
+  if (conditions === null) {
+    return [];
   }
 
   const rows = await db
@@ -561,60 +860,16 @@ async function loadBaseRuns(user: JWTPayload, filters: RunFilterOptions = {}): P
   const sessionIds = rows
     .map((row) => row.sessionId)
     .filter((value): value is string => Boolean(value));
-
-  const tokenUsageBySessionId = new Map<string, number>();
-  if (sessionIds.length > 0) {
-    const nodeRows = await db
-      .select({
-        sessionId: taskNodes.sessionId,
-        tokenUsed: taskNodes.tokenUsed,
-      })
-      .from(taskNodes)
-      .where(inArray(taskNodes.sessionId, sessionIds));
-
-    for (const row of nodeRows) {
-      if (!row.sessionId) continue;
-      tokenUsageBySessionId.set(
-        row.sessionId,
-        (tokenUsageBySessionId.get(row.sessionId) ?? 0) + (row.tokenUsed ?? 0),
-      );
-    }
-  }
+  const tokenUsageBySessionId = await loadTokenUsageBySessionId(sessionIds);
 
   const fromMs = parseTimestampQuery(filters.from);
   const toMs = parseTimestampQuery(filters.to);
   const normalizedAgentType = filters.agentType?.trim().toLowerCase();
   const normalizedModel = filters.model?.trim().toLowerCase();
 
-  return rows.map((row) => ({
-    ...row,
-    tokenUsed:
-      row.tokenUsed > 0
-        ? row.tokenUsed
-        : row.sessionId
-          ? (tokenUsageBySessionId.get(row.sessionId) ?? 0)
-          : 0,
-  })).filter((row) => {
-    if (normalizedAgentType && !row.agentType.toLowerCase().includes(normalizedAgentType)) {
-      return false;
-    }
-    if (normalizedModel) {
-      const modelUsed = row.modelUsed?.toLowerCase() || "";
-      const providerId = parseProviderId(row.modelUsed).toLowerCase();
-      if (!modelUsed.includes(normalizedModel) && providerId !== normalizedModel) {
-        return false;
-      }
-    }
-
-    const activityMs = parseDate(row.finishedAt) ?? parseDate(row.startedAt) ?? parseDate(row.createdAt);
-    if (fromMs != null && activityMs != null && activityMs < fromMs) {
-      return false;
-    }
-    if (toMs != null && activityMs != null && activityMs > toMs) {
-      return false;
-    }
-    return true;
-  }) as BaseRunRow[];
+  return enrichRunTokenUsage(rows as BaseRunRow[], tokenUsageBySessionId).filter((row) =>
+    matchesRunFilters(row, normalizedAgentType, normalizedModel, fromMs, toMs),
+  );
 }
 
 async function loadRelatedMaps(runIds: string[]) {
@@ -627,45 +882,25 @@ async function loadRelatedMaps(runIds: string[]) {
   }
 
   const [approvalRows, auditRows, changeRows] = await Promise.all([
-    db.select().from(approvalTickets).where(inArray(approvalTickets.agentRunId, runIds as string[])),
-    db.select().from(auditEvents).where(inArray(auditEvents.agentRunId, runIds as string[])),
-    db.select().from(codeChanges).where(inArray(codeChanges.agentRunId, runIds as string[])),
+    db
+      .select()
+      .from(approvalTickets)
+      .where(inArray(approvalTickets.agentRunId, runIds as string[])),
+    db
+      .select()
+      .from(auditEvents)
+      .where(inArray(auditEvents.agentRunId, runIds as string[])),
+    db
+      .select()
+      .from(codeChanges)
+      .where(inArray(codeChanges.agentRunId, runIds as string[])),
   ]);
 
-  const approvalsByRunId = new Map<string, ApprovalRecord[]>();
-  for (const row of approvalRows as ApprovalRecord[]) {
-    if (!row.agentRunId) continue;
-    const items = approvalsByRunId.get(row.agentRunId) || [];
-    items.push(row);
-    approvalsByRunId.set(row.agentRunId, items);
-  }
-  for (const items of approvalsByRunId.values()) {
-    items.sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt));
-  }
-
-  const auditsByRunId = new Map<string, AuditRecord[]>();
-  for (const row of auditRows as AuditRecord[]) {
-    if (!row.agentRunId) continue;
-    const items = auditsByRunId.get(row.agentRunId) || [];
-    items.push(row);
-    auditsByRunId.set(row.agentRunId, items);
-  }
-  for (const items of auditsByRunId.values()) {
-    items.sort((left, right) => Date.parse(right.ts) - Date.parse(left.ts));
-  }
-
-  const changesByRunId = new Map<string, ChangeRecord[]>();
-  for (const row of changeRows as ChangeRecord[]) {
-    if (!row.agentRunId) continue;
-    const items = changesByRunId.get(row.agentRunId) || [];
-    items.push(row);
-    changesByRunId.set(row.agentRunId, items);
-  }
-  for (const items of changesByRunId.values()) {
-    items.sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt));
-  }
-
-  return { approvalsByRunId, auditsByRunId, changesByRunId };
+  return {
+    approvalsByRunId: groupAndSortByRunId(approvalRows as ApprovalRecord[], (row) => row.createdAt),
+    auditsByRunId: groupAndSortByRunId(auditRows as AuditRecord[], (row) => row.ts),
+    changesByRunId: groupAndSortByRunId(changeRows as ChangeRecord[], (row) => row.createdAt),
+  };
 }
 
 function applySharedFilters(
@@ -683,25 +918,31 @@ function applySharedFilters(
     filtered = filtered.filter((item) => item.status === filters.status);
   }
   if (filters.requiresIntervention !== undefined) {
-    filtered = filtered.filter((item) => item.requiresIntervention === filters.requiresIntervention);
+    filtered = filtered.filter(
+      (item) => item.requiresIntervention === filters.requiresIntervention,
+    );
   }
   if (filters.riskLevel) {
     filtered = filtered.filter((item) => item.riskLevel === filters.riskLevel);
   }
   if (filters.approvalBlocked !== undefined) {
-    filtered = filtered.filter((item) => (item.blockerType === "approval") === filters.approvalBlocked);
+    filtered = filtered.filter(
+      (item) => (item.blockerType === "approval") === filters.approvalBlocked,
+    );
   }
   if (filters.search) {
     const search = filters.search.trim().toLowerCase();
     if (search) {
       filtered = filtered.filter((item) => {
         const run = runsById.get(item.agentRunId);
-        return item.agentRunId.toLowerCase().includes(search)
-          || item.agentType.toLowerCase().includes(search)
-          || item.taskId.toLowerCase().includes(search)
-          || item.taskTitle.toLowerCase().includes(search)
-          || (item.projectName || "").toLowerCase().includes(search)
-          || (run?.modelUsed || "").toLowerCase().includes(search);
+        return (
+          item.agentRunId.toLowerCase().includes(search) ||
+          item.agentType.toLowerCase().includes(search) ||
+          item.taskId.toLowerCase().includes(search) ||
+          item.taskTitle.toLowerCase().includes(search) ||
+          (item.projectName || "").toLowerCase().includes(search) ||
+          (run?.modelUsed || "").toLowerCase().includes(search)
+        );
       });
     }
   }
@@ -754,14 +995,25 @@ agentRunRoutes.get("/overview", async (c) => {
   const attention = filterQueueItems(items, "attention", sharedFilters, user.sub, runsById);
   const running = filterQueueItems(items, "running", sharedFilters, user.sub, runsById);
   const recent = filterQueueItems(items, "recent", sharedFilters, user.sub, runsById);
-  const endedRecent = recent.filter((item) => ["completed", "failed", "stopped", "terminated"].includes(item.status));
-  const failedRecent = endedRecent.filter((item) => ["failed", "stopped", "terminated"].includes(item.status));
-  const avgDurationMs = endedRecent.length > 0
-    ? Math.round(endedRecent.reduce((sum, item) => sum + (item.durationMs || 0), 0) / endedRecent.length)
-    : null;
-  const humanInterventionRate = scopedItems.length > 0
-    ? Number(((scopedItems.filter((item) => item.guidanceCount > 0 || item.requiresIntervention).length / scopedItems.length) * 100).toFixed(2))
-    : 0;
+  const endedRecent = recent.filter((item) => isEndedStatus(item.status));
+  const failedRecent = endedRecent.filter((item) => isFailedLikeStatus(item.status));
+  const avgDurationMs =
+    endedRecent.length > 0
+      ? Math.round(
+          endedRecent.reduce((sum, item) => sum + (item.durationMs || 0), 0) / endedRecent.length,
+        )
+      : null;
+  const humanInterventionRate =
+    scopedItems.length > 0
+      ? Number(
+          (
+            (scopedItems.filter((item) => item.guidanceCount > 0 || item.requiresIntervention)
+              .length /
+              scopedItems.length) *
+            100
+          ).toFixed(2),
+        )
+      : 0;
 
   return c.json({
     viewScope: resolveViewScope(user, ownerScope, filters.projectId),
@@ -769,7 +1021,10 @@ agentRunRoutes.get("/overview", async (c) => {
       attentionCount: attention.length,
       runningCount: running.length,
       completedCount: recent.filter((item) => item.status === "completed").length,
-      failureRate: endedRecent.length > 0 ? Number(((failedRecent.length / endedRecent.length) * 100).toFixed(2)) : 0,
+      failureRate:
+        endedRecent.length > 0
+          ? Number(((failedRecent.length / endedRecent.length) * 100).toFixed(2))
+          : 0,
       avgDurationMs,
       humanInterventionRate,
     },
@@ -779,9 +1034,14 @@ agentRunRoutes.get("/overview", async (c) => {
       recent: recent.length,
     },
     blockerBreakdown: {
-      failedHighRisk: scopedItems.filter((item) => item.blockerType === "failed" && (item.riskLevel === "high" || item.riskLevel === "critical")).length,
+      failedHighRisk: scopedItems.filter(
+        (item) =>
+          item.blockerType === "failed" &&
+          (item.riskLevel === "high" || item.riskLevel === "critical"),
+      ).length,
       approvalBlocked: scopedItems.filter((item) => item.blockerType === "approval").length,
-      pausedAwaitingResume: scopedItems.filter((item) => item.blockerType === "manual_resume").length,
+      pausedAwaitingResume: scopedItems.filter((item) => item.blockerType === "manual_resume")
+        .length,
       stalled: scopedItems.filter((item) => item.blockerType === "stalled").length,
       stoppedPendingReview: scopedItems.filter((item) => item.blockerType === "stopped").length,
     },
@@ -810,11 +1070,19 @@ agentRunRoutes.get("/queues", async (c) => {
     ),
   );
   const runsById = new Map(baseRuns.map((run) => [run.agentRunId, run]));
-  let filtered = filterQueueItems(items, queue, filterOptions, user.sub, runsById);
+  const filtered = filterQueueItems(items, queue, filterOptions, user.sub, runsById);
 
   filtered.sort((left, right) => {
-    const rightTime = parseDate(right.lastActivityAt) ?? parseDate(right.finishedAt) ?? parseDate(right.startedAt) ?? 0;
-    const leftTime = parseDate(left.lastActivityAt) ?? parseDate(left.finishedAt) ?? parseDate(left.startedAt) ?? 0;
+    const rightTime =
+      parseDate(right.lastActivityAt) ??
+      parseDate(right.finishedAt) ??
+      parseDate(right.startedAt) ??
+      0;
+    const leftTime =
+      parseDate(left.lastActivityAt) ??
+      parseDate(left.finishedAt) ??
+      parseDate(left.startedAt) ??
+      0;
     return rightTime - leftTime;
   });
 
@@ -830,10 +1098,12 @@ agentRunRoutes.get("/analytics/health", async (c) => {
   const runFilters = readRunFilters(c);
   const queueFilters = readQueueFilters(c);
   const { scopedItems } = await loadAnalyticsContext(user, runFilters, queueFilters);
-  const endedItems = scopedItems.filter((item) => ["completed", "failed", "stopped", "terminated"].includes(item.status));
+  const endedItems = scopedItems.filter((item) => isEndedStatus(item.status));
   const completedRuns = scopedItems.filter((item) => item.status === "completed").length;
-  const failedRuns = scopedItems.filter((item) => ["failed", "stopped", "terminated"].includes(item.status)).length;
-  const humanInterventionRuns = scopedItems.filter((item) => item.guidanceCount > 0 || item.requiresIntervention).length;
+  const failedRuns = scopedItems.filter((item) => isFailedLikeStatus(item.status)).length;
+  const humanInterventionRuns = scopedItems.filter(
+    (item) => item.guidanceCount > 0 || item.requiresIntervention,
+  ).length;
   const durationValues = endedItems
     .map((item) => item.durationMs)
     .filter((value): value is number => value != null && Number.isFinite(value));
@@ -845,7 +1115,9 @@ agentRunRoutes.get("/analytics/health", async (c) => {
       totalRuns: scopedItems.length,
       completedRuns,
       failedRuns,
-      stoppedRuns: scopedItems.filter((item) => item.status === "stopped" || item.status === "terminated").length,
+      stoppedRuns: scopedItems.filter(
+        (item) => item.status === "stopped" || item.status === "terminated",
+      ).length,
       humanInterventionRuns,
       attentionRuns: scopedItems.filter((item) => item.requiresIntervention).length,
       approvalBlockedRuns: scopedItems.filter((item) => item.blockerType === "approval").length,
@@ -853,7 +1125,11 @@ agentRunRoutes.get("/analytics/health", async (c) => {
       failureRate: roundPercentage(failedRuns, endedItems.length || scopedItems.length),
       interventionRate: roundPercentage(humanInterventionRuns, scopedItems.length),
     },
-    agentRanking: buildRanking(scopedItems, (item) => item.agentType, (item) => item.agentType),
+    agentRanking: buildRanking(
+      scopedItems,
+      (item) => item.agentType,
+      (item) => item.agentType,
+    ),
     modelRanking: buildRanking(
       scopedItems,
       (item) => item.modelUsed || "unknown",
@@ -873,28 +1149,22 @@ agentRunRoutes.get("/analytics/failures", async (c) => {
   const riskCounts = new Map<string, number>();
 
   for (const item of attentionItems) {
-    const blockerLabel = item.blockerLabel || "其他异常";
-    blockerCounts.set(blockerLabel, (blockerCounts.get(blockerLabel) ?? 0) + 1);
-    const reason = normalizeFailureReason(item);
-    reasonCounts.set(reason, (reasonCounts.get(reason) ?? 0) + 1);
+    incrementCounter(blockerCounts, item.blockerLabel || "其他异常");
+    incrementCounter(reasonCounts, normalizeFailureReason(item));
   }
 
   for (const item of scopedItems) {
     if (!item.riskLevel) continue;
-    const riskLabel = item.riskLevel === "critical"
-      ? "严重风险"
-      : item.riskLevel === "high"
-        ? "高风险"
-        : item.riskLevel === "medium"
-          ? "中风险"
-          : "低风险";
-    riskCounts.set(riskLabel, (riskCounts.get(riskLabel) ?? 0) + 1);
+    incrementCounter(riskCounts, toRiskLabel(item.riskLevel));
   }
 
   return c.json({
     generatedAt: new Date().toISOString(),
     totalAttentionRuns: attentionItems.length,
-    blockerBreakdown: buildBreakdownItems(Array.from(blockerCounts.entries()), attentionItems.length),
+    blockerBreakdown: buildBreakdownItems(
+      Array.from(blockerCounts.entries()),
+      attentionItems.length,
+    ),
     failureReasons: buildBreakdownItems(Array.from(reasonCounts.entries()), attentionItems.length),
     riskBreakdown: buildBreakdownItems(Array.from(riskCounts.entries()), scopedItems.length),
   });
@@ -905,59 +1175,7 @@ agentRunRoutes.get("/analytics/timeline", async (c) => {
   const runFilters = readRunFilters(c);
   const queueFilters = readQueueFilters(c);
   const { scopedItems } = await loadAnalyticsContext(user, runFilters, queueFilters);
-  const timestamps = scopedItems
-    .map((item) => parseDate(item.finishedAt) ?? parseDate(item.lastActivityAt) ?? parseDate(item.startedAt))
-    .filter((value): value is number => value != null);
-
-  if (timestamps.length === 0) {
-    return c.json({
-      generatedAt: new Date().toISOString(),
-      bucketUnit: "day",
-      buckets: [],
-    });
-  }
-
-  const minTs = Math.min(...timestamps);
-  const maxTs = Math.max(...timestamps);
-  const bucketUnit = maxTs - minTs <= 48 * 60 * 60 * 1000 ? "hour" : "day";
-  const buckets = new Map<string, {
-    bucket: string;
-    label: string;
-    totalRuns: number;
-    completedRuns: number;
-    failedRuns: number;
-    attentionRuns: number;
-    interventionRuns: number;
-  }>();
-
-  for (const item of scopedItems) {
-    const timestamp = parseDate(item.finishedAt) ?? parseDate(item.lastActivityAt) ?? parseDate(item.startedAt);
-    if (timestamp == null) continue;
-    const bucket = toTimelineBucketKey(timestamp, bucketUnit);
-    const existing = buckets.get(bucket) ?? {
-      bucket,
-      label: toTimelineLabel(bucket, bucketUnit),
-      totalRuns: 0,
-      completedRuns: 0,
-      failedRuns: 0,
-      attentionRuns: 0,
-      interventionRuns: 0,
-    };
-    existing.totalRuns += 1;
-    if (item.status === "completed") existing.completedRuns += 1;
-    if (["failed", "stopped", "terminated"].includes(item.status)) existing.failedRuns += 1;
-    if (item.requiresIntervention) existing.attentionRuns += 1;
-    if (item.guidanceCount > 0 || item.requiresIntervention) existing.interventionRuns += 1;
-    buckets.set(bucket, existing);
-  }
-
-  return c.json({
-    generatedAt: new Date().toISOString(),
-    bucketUnit,
-    buckets: Array.from(buckets.values())
-      .sort((left, right) => left.bucket.localeCompare(right.bucket))
-      .slice(-12),
-  });
+  return c.json(buildTimelineBuckets(scopedItems) ?? createEmptyTimelineResponse());
 });
 
 agentRunRoutes.get("/:agentRunId/summary", async (c) => {
@@ -977,30 +1195,8 @@ agentRunRoutes.get("/:agentRunId/summary", async (c) => {
   const changes = related.changesByRunId.get(agentRunId) || [];
   const item = hydrateQueueItem(user, run, approvals, audits, changes);
   const latestApproval = approvals[0] ?? null;
-  const latestHighRiskAudit = audits.find((audit) => audit.riskLevel === "critical" || audit.riskLevel === "high") ?? null;
-
-  const latestEvents = [
-    ...approvals.map((approval) => ({
-      ts: approval.resolvedAt || approval.createdAt,
-      type: `approval.${approval.status}`,
-      summary: `审批 ${approval.status} · ${approval.actionType}`,
-    })),
-    ...audits.map((audit) => ({
-      ts: audit.ts,
-      type: `${audit.eventType}.${audit.action}`,
-      summary:
-        (typeof audit.detail?.message === "string" && audit.detail.message) ||
-        (typeof audit.detail?.reason === "string" && audit.detail.reason) ||
-        audit.action,
-    })),
-    ...changes.map((change) => ({
-      ts: change.createdAt,
-      type: "code_change.recorded",
-      summary: change.summary || "记录了新的代码变更。",
-    })),
-  ]
-    .sort((left, right) => Date.parse(right.ts) - Date.parse(left.ts))
-    .slice(0, 12);
+  const latestHighRiskAudit =
+    audits.find((audit) => audit.riskLevel === "critical" || audit.riskLevel === "high") ?? null;
 
   return c.json({
     entryContext,
@@ -1027,27 +1223,9 @@ agentRunRoutes.get("/:agentRunId/summary", async (c) => {
     result: run.result || run.taskResult,
     error: run.error,
     longSummary: item.resultSummary,
-    latestEvents,
+    latestEvents: buildLatestEvents(approvals, audits, changes),
     actionPermissions: item.actionPermissions,
-    governance: {
-      approvalTickets: approvals.length,
-      pendingApprovals: approvals.filter((approval) => approval.status === "pending").length,
-      latestApprovalStatus: latestApproval?.status || null,
-      recentAuditEvents: audits.length,
-      latestHighRiskAction:
-        (typeof latestHighRiskAudit?.detail?.message === "string" && latestHighRiskAudit.detail.message)
-        || latestHighRiskAudit?.action
-        || null,
-    },
-    codeChanges: {
-      changeCount: changes.length,
-      files:
-        (run.taskChangesSummary?.filesAdded ?? 0)
-        + (run.taskChangesSummary?.filesModified ?? 0)
-        + (run.taskChangesSummary?.filesDeleted ?? 0),
-      insertions: run.taskChangesSummary?.totalInsertions ?? 0,
-      deletions: run.taskChangesSummary?.totalDeletions ?? 0,
-      latestSummary: changes[0]?.summary || formatChangesSummary(run.taskChangesSummary),
-    },
+    governance: buildGovernanceSummary(approvals, audits, latestApproval, latestHighRiskAudit),
+    codeChanges: buildCodeChangesSummary(run, changes),
   });
 });

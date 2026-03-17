@@ -1,6 +1,4 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import {
   cpFetch,
   createInternalAuthorization,
@@ -10,15 +8,12 @@ import {
   paidExecutionIntegrationTest,
   resolveExecutionIntegrationModel,
 } from "./execution-integration-guard";
+import { buildTaskCleanupStatements, resolveBffUrl, runCleanupStatements } from "./test-env";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-
-const BFF_URL = process.env.TEST_BFF_URL || "http://127.0.0.1:4098";
+const BFF_URL = resolveBffUrl();
 const USERNAME = process.env.TEST_USERNAME || "admin";
 const PASSWORD = process.env.TEST_PASSWORD || "admin123!";
 const PROJECT_ID = process.env.TEST_PROJECT_ID || "proj-default";
-const DB_PATH =
-  process.env.TEST_DB_PATH || resolve(__dirname, "../../control-plane/service/data/openerx.db");
 const executionIntegrationTest = paidExecutionIntegrationTest;
 
 interface HookConfig {
@@ -263,13 +258,10 @@ afterAll(async () => {
     return;
   }
 
-  const { execSync } = await import("node:child_process");
-  const statements = createdTaskIds.map((id) => `DELETE FROM tasks WHERE id='${id}';`);
-  try {
-    execSync(`sqlite3 "${DB_PATH}" "${statements.join(" ")}"`, { timeout: 5000 });
-  } catch {
-    console.warn("Cleanup failed for hooks integration test");
-  }
+  await runCleanupStatements(
+    buildTaskCleanupStatements(createdTaskIds),
+    "workflow evaluation integration test",
+  );
 });
 
 describe("lifecycle hooks integration", () => {
@@ -285,7 +277,10 @@ describe("lifecycle hooks integration", () => {
           await updateOrchestrationStrategy({
             ...originalStrategy,
             categoryAgentMap: Object.fromEntries(
-              Object.keys(originalStrategy.categoryAgentMap).map((key) => [key, ["default-executor"]]),
+              Object.keys(originalStrategy.categoryAgentMap).map((key) => [
+                key,
+                ["default-executor"],
+              ]),
             ),
             hooks: [
               {
@@ -359,7 +354,10 @@ describe("lifecycle hooks integration", () => {
           await updateOrchestrationStrategy({
             ...originalStrategy,
             categoryAgentMap: Object.fromEntries(
-              Object.keys(originalStrategy.categoryAgentMap).map((key) => [key, ["default-executor"]]),
+              Object.keys(originalStrategy.categoryAgentMap).map((key) => [
+                key,
+                ["default-executor"],
+              ]),
             ),
             hooks: [
               {

@@ -145,9 +145,12 @@ describe("task operating routes", () => {
       "../../control-plane/web-ui-bff/src/modules/tasks/routes?task-operating-routes"
     );
 
-    const operatingStateResponse = await taskRoutes.request("http://localhost/task-1/operating-state", {
-      headers: { Authorization: "Bearer test" },
-    });
+    const operatingStateResponse = await taskRoutes.request(
+      "http://localhost/task-1/operating-state",
+      {
+        headers: { Authorization: "Bearer test" },
+      },
+    );
     expect(operatingStateResponse.status).toBe(200);
     await expect(operatingStateResponse.json()).resolves.toMatchObject({
       collaborationMode: "team",
@@ -158,9 +161,12 @@ describe("task operating routes", () => {
       currentStageStatus: "running",
     });
 
-    const operatingModeResponse = await taskRoutes.request("http://localhost/task-1/operating-mode", {
-      headers: { Authorization: "Bearer test" },
-    });
+    const operatingModeResponse = await taskRoutes.request(
+      "http://localhost/task-1/operating-mode",
+      {
+        headers: { Authorization: "Bearer test" },
+      },
+    );
     expect(operatingModeResponse.status).toBe(200);
     await expect(operatingModeResponse.json()).resolves.toMatchObject({
       data: {
@@ -173,9 +179,12 @@ describe("task operating routes", () => {
       },
     });
 
-    const bossDecisionsResponse = await taskRoutes.request("http://localhost/task-1/boss-decisions", {
-      headers: { Authorization: "Bearer test" },
-    });
+    const bossDecisionsResponse = await taskRoutes.request(
+      "http://localhost/task-1/boss-decisions",
+      {
+        headers: { Authorization: "Bearer test" },
+      },
+    );
     expect(bossDecisionsResponse.status).toBe(200);
     await expect(bossDecisionsResponse.json()).resolves.toMatchObject({
       data: [

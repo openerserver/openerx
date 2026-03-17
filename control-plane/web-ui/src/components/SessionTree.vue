@@ -28,13 +28,16 @@ const props = defineProps<{
   tree: SessionTreeNode[];
   selectedSessionId?: string;
   taskStatus?: string;
-  sessionStateMap?: Record<string, {
-    badgeLabel: string;
-    badgeColor: string;
-    summary: string;
-    detail?: string;
-    countdownLabel?: string;
-  }>;
+  sessionStateMap?: Record<
+    string,
+    {
+      badgeLabel: string;
+      badgeColor: string;
+      summary: string;
+      detail?: string;
+      countdownLabel?: string;
+    }
+  >;
 }>();
 
 const emit = defineEmits<{
@@ -86,11 +89,15 @@ function buildDisplayTree(nodes: SessionTreeNode[]): SessionTreeNode[] {
       return true;
     });
     sortDisplayNodes(primaryRoot);
-    regroupedRoots.forEach(sortDisplayNodes);
+    for (const node of regroupedRoots) {
+      sortDisplayNodes(node);
+    }
     return regroupedRoots;
   }
 
-  roots.forEach(sortDisplayNodes);
+  for (const node of roots) {
+    sortDisplayNodes(node);
+  }
   return roots;
 }
 
@@ -108,7 +115,9 @@ function flattenNodes(nodes: SessionTreeNode[]): SessionTreeNode[] {
 function sortDisplayNodes(node: DisplayNode) {
   const children = node.children as DisplayNode[];
   children.sort((left, right) => left._originalIndex - right._originalIndex);
-  children.forEach(sortDisplayNodes);
+  for (const child of children) {
+    sortDisplayNodes(child);
+  }
 }
 
 function onSelect(sessionId: string) {

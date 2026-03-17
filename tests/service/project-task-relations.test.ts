@@ -25,7 +25,10 @@ interface ProjectTaskRelationRecord {
   metadata?: Record<string, unknown> | null;
 }
 
-async function request<T>(path: string, opts: RequestInit = {}): Promise<{ data: T; status: number }> {
+async function request<T>(
+  path: string,
+  opts: RequestInit = {},
+): Promise<{ data: T; status: number }> {
   const response = await fetch(`${CP_URL}${path}`, opts);
   const text = await response.text();
   let data: unknown;
@@ -97,7 +100,10 @@ beforeAll(async () => {
 afterAll(async () => {
   const statements = [
     ...relationIds.map((id) => `DELETE FROM project_task_relations WHERE id='${id}';`),
-    ...createdTaskIds.map((id) => `DELETE FROM project_task_relations WHERE source_task_id='${id}' OR target_task_id='${id}';`),
+    ...createdTaskIds.map(
+      (id) =>
+        `DELETE FROM project_task_relations WHERE source_task_id='${id}' OR target_task_id='${id}';`,
+    ),
     ...createdTaskIds.map((id) => `DELETE FROM tasks WHERE id='${id}';`),
   ];
 
@@ -144,21 +150,21 @@ describe("project task relations", () => {
 
     const dependsOn = data.data.find(
       (relation) =>
-        relation.sourceTaskId === upstreamTaskId
-        && relation.targetTaskId === createdTaskId
-        && relation.type === "depends-on",
+        relation.sourceTaskId === upstreamTaskId &&
+        relation.targetTaskId === createdTaskId &&
+        relation.type === "depends-on",
     );
     const blocks = data.data.find(
       (relation) =>
-        relation.sourceTaskId === blockedTaskId
-        && relation.targetTaskId === upstreamTaskId
-        && relation.type === "blocks",
+        relation.sourceTaskId === blockedTaskId &&
+        relation.targetTaskId === upstreamTaskId &&
+        relation.type === "blocks",
     );
     const spawnedFrom = data.data.find(
       (relation) =>
-        relation.sourceTaskId === upstreamTaskId
-        && relation.targetTaskId === createdTaskId
-        && relation.type === "spawned-from",
+        relation.sourceTaskId === upstreamTaskId &&
+        relation.targetTaskId === createdTaskId &&
+        relation.type === "spawned-from",
     );
 
     expect(dependsOn?.source).toBe("task-create");
@@ -166,30 +172,30 @@ describe("project task relations", () => {
     expect(blocks?.source).toBe("task-create");
     expect(spawnedFrom?.source).toBe("task-create");
 
-    relationIds.push(dependsOn!.id, blocks!.id, spawnedFrom!.id);
+    relationIds.push(dependsOn?.id, blocks?.id, spawnedFrom?.id);
   });
 
   test("upserts project-level relations for existing tasks", async () => {
     const sourceTaskId = await createTask(`批量关系源-${Date.now()}`);
     const targetTaskId = await createTask(`批量关系目标-${Date.now()}`);
 
-    const { data, status } = await authedRequest<{ ok: boolean; data: ProjectTaskRelationRecord[] }>(
-      `/api/projects/${PROJECT_ID}/task-relations`,
-      {
-        method: "PUT",
-        body: JSON.stringify({
-          relations: [
-            {
-              sourceTaskId,
-              targetTaskId,
-              type: "depends-on",
-              source: "manual",
-              metadata: { source: "test" },
-            },
-          ],
-        }),
-      },
-    );
+    const { data, status } = await authedRequest<{
+      ok: boolean;
+      data: ProjectTaskRelationRecord[];
+    }>(`/api/projects/${PROJECT_ID}/task-relations`, {
+      method: "PUT",
+      body: JSON.stringify({
+        relations: [
+          {
+            sourceTaskId,
+            targetTaskId,
+            type: "depends-on",
+            source: "manual",
+            metadata: { source: "test" },
+          },
+        ],
+      }),
+    });
 
     expect(status).toBe(200);
     expect(data.ok).toBe(true);
@@ -218,19 +224,22 @@ describe("project task relations", () => {
     expect(status).toBe(200);
 
     const dependsOn = data.data.find(
-      (relation) => relation.sourceTaskId === upstreamTaskId
-        && relation.targetTaskId === createdTaskId
-        && relation.type === "depends-on",
+      (relation) =>
+        relation.sourceTaskId === upstreamTaskId &&
+        relation.targetTaskId === createdTaskId &&
+        relation.type === "depends-on",
     );
     const spawnedFrom = data.data.find(
-      (relation) => relation.sourceTaskId === upstreamTaskId
-        && relation.targetTaskId === createdTaskId
-        && relation.type === "spawned-from",
+      (relation) =>
+        relation.sourceTaskId === upstreamTaskId &&
+        relation.targetTaskId === createdTaskId &&
+        relation.type === "spawned-from",
     );
     const blocks = data.data.find(
-      (relation) => relation.sourceTaskId === createdTaskId
-        && relation.targetTaskId === blockedTaskId
-        && relation.type === "blocks",
+      (relation) =>
+        relation.sourceTaskId === createdTaskId &&
+        relation.targetTaskId === blockedTaskId &&
+        relation.type === "blocks",
     );
 
     expect(dependsOn?.source).toBe("task-create");
@@ -238,6 +247,6 @@ describe("project task relations", () => {
     expect(blocks?.source).toBe("task-create");
     expect(dependsOn?.metadata?.protocol).toBe("relation-context-v1");
 
-    relationIds.push(dependsOn!.id, spawnedFrom!.id, blocks!.id);
+    relationIds.push(dependsOn?.id, spawnedFrom?.id, blocks?.id);
   });
 });

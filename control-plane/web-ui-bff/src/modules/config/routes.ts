@@ -121,7 +121,9 @@ function writeOpencodeJson(data: Record<string, unknown>): void {
 }
 
 function getStringArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
 }
 
 export function getConfiguredPluginPaths(config: Record<string, unknown>): string[] {
@@ -148,7 +150,7 @@ export function setConfiguredPluginState(
 ): void {
   config.plugin = [...new Set(activePaths)];
   config._disabledPlugins = [...new Set(disabledPaths)];
-  delete config.plugins;
+  config.plugins = undefined;
 }
 
 function validateModelsPayload(list: Array<Record<string, unknown>>): string | null {
@@ -271,10 +273,7 @@ export async function probeModelProviderConnection(provider: Record<string, unkn
   }
 
   const modelCount =
-    typeof body === "object" &&
-    body &&
-    "data" in body &&
-    Array.isArray(body.data)
+    typeof body === "object" && body && "data" in body && Array.isArray(body.data)
       ? body.data.length
       : undefined;
 
@@ -598,8 +597,9 @@ configRoutes.put(
     const config = readOpencodeJson();
     const defaultModel = getTrimmedString((defaults as Record<string, unknown>)?.model);
     const normalizedTestModel =
-      normalizeTestExecutionModel(getTrimmedString((defaults as Record<string, unknown>)?.testModel))
-      || ALLOWED_TEST_EXECUTION_MODELS[0];
+      normalizeTestExecutionModel(
+        getTrimmedString((defaults as Record<string, unknown>)?.testModel),
+      ) || ALLOWED_TEST_EXECUTION_MODELS[0];
 
     config.agents = {
       ...(config.agents as object),
@@ -612,7 +612,7 @@ configRoutes.put(
     if (defaultModel) {
       config.model = toRuntimeModelRoute(defaultModel);
     } else {
-      delete config.model;
+      config.model = undefined;
     }
 
     writeOpencodeJson(config);
@@ -989,9 +989,9 @@ export function getAllowedPluginSourcePrefixes(): string[] {
   return [...ALLOWED_PLUGIN_SOURCE_PREFIXES];
 }
 
-export function resolveAllowedPluginInstallSource(source: string):
-  | { ok: true; sourcePath: string; normalizedSource: string }
-  | { ok: false; error: string } {
+export function resolveAllowedPluginInstallSource(
+  source: string,
+): { ok: true; sourcePath: string; normalizedSource: string } | { ok: false; error: string } {
   const trimmed = source.trim();
   if (!trimmed) {
     return { ok: false, error: "插件来源不能为空" };
@@ -1091,10 +1091,7 @@ configRoutes.get("/plugins/compatibility", (c) => {
   if (adminErr) return c.json({ error: adminErr }, 403);
 
   const config = readOpencodeJson();
-  const allPaths = [
-    ...getConfiguredPluginPaths(config),
-    ...getDisabledPluginPaths(config),
-  ];
+  const allPaths = [...getConfiguredPluginPaths(config), ...getDisabledPluginPaths(config)];
 
   const results = allPaths.map((p) => {
     const fullPath = resolve(OPENCODE_ROOT, p);
@@ -1212,7 +1209,9 @@ function copilotTokenFile(provider = "github-copilot"): string {
 }
 
 /** Read stored Copilot token (if any) */
-function readCopilotToken(provider = "github-copilot"): { access_token?: string; login_at?: string } | null {
+function readCopilotToken(
+  provider = "github-copilot",
+): { access_token?: string; login_at?: string } | null {
   const file = copilotTokenFile(provider);
   if (!existsSync(file)) return null;
   try {
@@ -1231,7 +1230,7 @@ function writeCopilotToken(data: Record<string, unknown>, provider = "github-cop
 configRoutes.get("/copilot/status", (c) => {
   const adminErr = requireSystemAdmin(c.get("user"));
   if (adminErr) return c.json({ error: adminErr }, 403);
-  const provider = (c.req.query("provider") || "github-copilot");
+  const provider = c.req.query("provider") || "github-copilot";
   const token = readCopilotToken(provider);
   if (token?.access_token) {
     return c.json({ data: { authenticated: true, login_at: token.login_at || null } });
@@ -1243,7 +1242,7 @@ configRoutes.get("/copilot/models", async (c) => {
   const adminErr = requireSystemAdmin(c.get("user"));
   if (adminErr) return c.json({ error: adminErr }, 403);
 
-  const provider = (c.req.query("provider") || "github-copilot");
+  const provider = c.req.query("provider") || "github-copilot";
   const token = readCopilotToken(provider);
   if (!token?.access_token) {
     return c.json({ error: "GitHub Copilot 未认证" }, 401);
@@ -1387,13 +1386,16 @@ configRoutes.post(
 
     if (data.access_token) {
       // Store token securely
-      const provider = (c.req.query("provider") || "github-copilot");
-      writeCopilotToken({
-        access_token: data.access_token,
-        token_type: data.token_type,
-        scope: data.scope,
-        login_at: new Date().toISOString(),
-      }, provider);
+      const provider = c.req.query("provider") || "github-copilot";
+      writeCopilotToken(
+        {
+          access_token: data.access_token,
+          token_type: data.token_type,
+          scope: data.scope,
+          login_at: new Date().toISOString(),
+        },
+        provider,
+      );
 
       return c.json({
         data: { status: "success" },
@@ -1409,7 +1411,7 @@ configRoutes.post("/copilot/logout", (c) => {
   const adminErr = requireSystemAdmin(c.get("user"));
   if (adminErr) return c.json({ error: adminErr }, 403);
 
-  const provider = (c.req.query("provider") || "github-copilot");
+  const provider = c.req.query("provider") || "github-copilot";
   const file = copilotTokenFile(provider);
   if (existsSync(file)) {
     writeFileSync(file, "{}", { mode: 0o600 });

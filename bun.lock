@@ -11,6 +11,13 @@
         "typescript": "^5.7.0",
       },
     },
+    "control-plane/app": {
+      "name": "@openerx/app",
+      "version": "0.1.0",
+      "devDependencies": {
+        "typescript": "^5.7.0",
+      },
+    },
     "control-plane/service": {
       "name": "@openerx/control-plane-service",
       "version": "0.1.0",
@@ -20,6 +27,7 @@
         "drizzle-orm": "^0.36.0",
         "hono": "^4.7.0",
         "jose": "^6.0.0",
+        "postgres": "^3.4.8",
         "zod": "^3.24.0",
       },
       "devDependencies": {
@@ -237,6 +245,8 @@
     "@one-ini/wasm": ["@one-ini/wasm@0.1.1", "https://registry.npmmirror.com/@one-ini/wasm/-/wasm-0.1.1.tgz", {}, "sha512-XuySG1E38YScSJoMlqovLru4KTUNSjgVTIjyh7qMX6aNN5HY5Ct5LhRJdxO79JtTzKfzV/bnWpz+zquYrISsvw=="],
 
     "@opencode-ai/sdk": ["@opencode-ai/sdk@1.2.21", "https://registry.npmmirror.com/@opencode-ai/sdk/-/sdk-1.2.21.tgz", {}, "sha512-7XF7QlXDP5iAbGcAsxsrmKlIjRtSzKgbwuDHPPuZbILkhGOfCo05XwPidAZrVWucZ/re44oc/psw2zDECaZOpQ=="],
+
+    "@openerx/app": ["@openerx/app@workspace:control-plane/app"],
 
     "@openerx/control-plane-service": ["@openerx/control-plane-service@workspace:control-plane/service"],
 
@@ -767,6 +777,8 @@
     "points-on-path": ["points-on-path@0.2.1", "https://registry.npmmirror.com/points-on-path/-/points-on-path-0.2.1.tgz", { "dependencies": { "path-data-parser": "0.1.0", "points-on-curve": "0.2.0" } }, "sha512-25ClnWWuw7JbWZcgqY/gJ4FQWadKxGWk+3kR/7kD0tCaDtPPMj7oHu2ToLaVhfpnHrZzYby2w6tUA0eOIuUg8g=="],
 
     "postcss": ["postcss@8.5.8", "https://registry.npmmirror.com/postcss/-/postcss-8.5.8.tgz", { "dependencies": { "nanoid": "^3.3.11", "picocolors": "^1.1.1", "source-map-js": "^1.2.1" } }, "sha512-OW/rX8O/jXnm82Ey1k44pObPtdblfiuWnrd8X7GJ7emImCOstunGbXUpp7HdBrFQX6rJzn3sPT397Wp5aCwCHg=="],
+
+    "postgres": ["postgres@3.4.8", "https://registry.npmmirror.com/postgres/-/postgres-3.4.8.tgz", {}, "sha512-d+JFcLM17njZaOLkv6SCev7uoLaBtfK86vMUXhW1Z4glPWh4jozno9APvW/XKFJ3CCxVoC7OL38BqRydtu5nGg=="],
 
     "proto-list": ["proto-list@1.2.4", "https://registry.npmmirror.com/proto-list/-/proto-list-1.2.4.tgz", {}, "sha512-vtK/94akxsTMhe0/cbfpR+syPuszcuwhqVjJq26CuNDgFGj682oRBXOP5MJpv2r7JtE8MsiepGIqvvOTBwn2vA=="],
 

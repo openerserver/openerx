@@ -541,7 +541,9 @@ function showPaginationTotal(total: number) {
 }
 
 function isProjectOverviewItem(record: unknown): record is ProjectOverviewItem {
-  return !!record && typeof record === "object" && "id" in record && "name" in record && "slug" in record;
+  return (
+    !!record && typeof record === "object" && "id" in record && "name" in record && "slug" in record
+  );
 }
 
 function handleQuickConfigClick(record: Record<string, unknown>) {
@@ -673,7 +675,10 @@ async function handleEdit() {
 
   editing.value = true;
   try {
-    const settings = buildProjectGroupSettings(editForm.value.projectGroupKey, editForm.value.projectGroupLabel);
+    const settings = buildProjectGroupSettings(
+      editForm.value.projectGroupKey,
+      editForm.value.projectGroupLabel,
+    );
     await updateProject(editingProjectId.value, {
       name: editForm.value.name.trim(),
       description: editForm.value.description.trim(),
@@ -729,17 +734,21 @@ function projectGroupDisplay(record: Record<string, unknown>) {
   }
 
   const lookup = buildDerivedProjectGroupLookup(overviewRows.value);
-  return lookup[record.id] ?? {
-    label: record.name,
-    source: "derived" as const,
-  };
+  return (
+    lookup[record.id] ?? {
+      label: record.name,
+      source: "derived" as const,
+    }
+  );
 }
 
 function projectGroupTagColor(record: Record<string, unknown>) {
   return projectGroupDisplay(record).source === "explicit" ? "geekblue" : "default";
 }
 
-function buildDerivedProjectGroupLookup(projects: Array<Pick<ProjectOverviewItem, "id" | "orgId" | "name" | "slug" | "settings">>) {
+function buildDerivedProjectGroupLookup(
+  projects: Array<Pick<ProjectOverviewItem, "id" | "orgId" | "name" | "slug" | "settings">>,
+) {
   const familyCountByScopedKey = new Map<string, number>();
   const candidateByProjectId = new Map<string, string | null>();
 
@@ -760,7 +769,9 @@ function buildDerivedProjectGroupLookup(projects: Array<Pick<ProjectOverviewItem
   const lookup: Record<string, { label: string; source: "derived" }> = {};
   for (const project of projects) {
     const candidate = candidateByProjectId.get(project.id) ?? null;
-    const count = candidate ? familyCountByScopedKey.get(`${project.orgId}::${candidate}`) ?? 0 : 0;
+    const count = candidate
+      ? (familyCountByScopedKey.get(`${project.orgId}::${candidate}`) ?? 0)
+      : 0;
     lookup[project.id] = {
       label: count >= 2 && candidate ? candidate : project.name,
       source: "derived",
@@ -792,7 +803,10 @@ function normalizeProjectGroupSetting(value: unknown) {
   return typeof value === "string" ? value : "";
 }
 
-function buildProjectGroupSettings(projectGroupKey: string, projectGroupLabel: string): Pick<ProjectSettings, "projectGroupKey" | "projectGroupLabel"> | null {
+function buildProjectGroupSettings(
+  projectGroupKey: string,
+  projectGroupLabel: string,
+): Pick<ProjectSettings, "projectGroupKey" | "projectGroupLabel"> | null {
   const normalizedKey = projectGroupKey.trim();
   const normalizedLabel = projectGroupLabel.trim();
 

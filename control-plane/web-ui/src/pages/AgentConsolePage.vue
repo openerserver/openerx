@@ -123,19 +123,8 @@ import { message } from "ant-design-vue";
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
-  getAgentOpsAnalyticsFailures,
-  getAgentOpsAnalyticsHealth,
-  getAgentOpsAnalyticsTimeline,
-  type AgentOpsAnalyticsView,
-  getAgentOpsOverview,
-  getAgentOpsQueue,
-  getAgentRunOpsSummary,
-  injectGuidance,
-  listAgentRuns,
-  pauseAgent,
-  resumeAgent,
-  terminateAgent,
   type AgentOpsActionPermissions,
+  type AgentOpsAnalyticsView,
   type AgentOpsEntryContext,
   type AgentOpsOverview,
   type AgentOpsOwnerScope,
@@ -145,6 +134,17 @@ import {
   type AgentOpsViewMode,
   type AgentRunOpsSummary,
   type AgentRunSummary,
+  getAgentOpsAnalyticsFailures,
+  getAgentOpsAnalyticsHealth,
+  getAgentOpsAnalyticsTimeline,
+  getAgentOpsOverview,
+  getAgentOpsQueue,
+  getAgentRunOpsSummary,
+  injectGuidance,
+  listAgentRuns,
+  pauseAgent,
+  resumeAgent,
+  terminateAgent,
 } from "../lib/api";
 import { useAuthStore } from "../stores/auth";
 import { type RealtimeEvent, useRealtimeStore } from "../stores/realtime";
@@ -310,7 +310,11 @@ function toggleAdvancedFilters() {
 }
 
 function handleAdvancedFilterCollapse(value: unknown) {
-  advancedFilterActiveKeys.value = Array.isArray(value) ? value.map(String) : value == null ? [] : [String(value)];
+  advancedFilterActiveKeys.value = Array.isArray(value)
+    ? value.map(String)
+    : value == null
+      ? []
+      : [String(value)];
 }
 
 function handleDrawerModeChange(value: unknown) {
@@ -322,7 +326,10 @@ function handleInlineGuidanceChange(value: string) {
   inlineGuidance[selectedRunSummaryView.value.agentRunId] = value;
 }
 
-function handleAnalyticsApplyFilters(payload: { queryPatch: Partial<AgentOpsPageQuery>; queueFocus?: QueueFocus }) {
+function handleAnalyticsApplyFilters(payload: {
+  queryPatch: Partial<AgentOpsPageQuery>;
+  queueFocus?: QueueFocus;
+}) {
   Object.assign(pageQuery, payload.queryPatch);
   if (payload.queueFocus) {
     queueFocus.value = payload.queueFocus;
@@ -391,7 +398,8 @@ function eventColor(type: string) {
   if (type.includes("failed") || type.includes("stopped") || type.includes("error")) return "red";
   if (type.includes("paused")) return "orange";
   if (type.includes("completed")) return "green";
-  if (type.includes("started") || type.includes("running") || type.includes("resumed")) return "blue";
+  if (type.includes("started") || type.includes("running") || type.includes("resumed"))
+    return "blue";
   return "default";
 }
 
@@ -435,7 +443,7 @@ function parseDate(value?: string | null) {
     /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(?:\.\d+)?$/,
   );
   if (utcLikeMatch) {
-    const normalizedValue = value.replace(" ", "T") + "Z";
+    const normalizedValue = `${value.replace(" ", "T")}Z`;
     const timestamp = Date.parse(normalizedValue);
     return Number.isFinite(timestamp) ? timestamp : null;
   }
@@ -538,7 +546,7 @@ const connectionTooltip = computed(() => {
   if (realtimeStore.connected) {
     return lastEvent ? `已连接 · 最近事件 ${formatTime(lastEvent.ts)}` : "已连接 · 等待事件";
   }
-  return '未连接 · 点击“重连”恢复实时订阅';
+  return "未连接 · 点击“重连”恢复实时订阅";
 });
 
 const isAdminRole = computed(() => ADMIN_ROLES.has(authStore.user?.role || ""));
@@ -573,7 +581,10 @@ const projectOptions = computed(() =>
 
 const activeProjectLabel = computed(() => {
   if (!pageQuery.projectId) return null;
-  return projectOptions.value.find((project) => project.value === pageQuery.projectId)?.label || pageQuery.projectId;
+  return (
+    projectOptions.value.find((project) => project.value === pageQuery.projectId)?.label ||
+    pageQuery.projectId
+  );
 });
 
 const scopeTagLabel = computed(() => {
@@ -584,7 +595,8 @@ const scopeTagLabel = computed(() => {
 });
 
 const scopeSummaryText = computed(() => {
-  const scopeLabel = pageQuery.ownerScope === "mine" ? "我的视图" : isAdminRole.value ? "管理员视图" : "当前视图";
+  const scopeLabel =
+    pageQuery.ownerScope === "mine" ? "我的视图" : isAdminRole.value ? "管理员视图" : "当前视图";
   return `${scopeLabel}共 ${visibleRunCount.value} 个实例，待处理 ${attentionQueue.value.length} 个。`;
 });
 
@@ -637,9 +649,15 @@ const providerOptions = computed(() =>
   ).sort(),
 );
 
-const allQueueItems = computed(() => [...attentionQueue.value, ...runningQueue.value, ...recentQueue.value]);
+const allQueueItems = computed(() => [
+  ...attentionQueue.value,
+  ...runningQueue.value,
+  ...recentQueue.value,
+]);
 
-const selectedActionPermissions = computed(() => resolveActionPermissions(selectedRunSummaryView.value));
+const selectedActionPermissions = computed(() =>
+  resolveActionPermissions(selectedRunSummaryView.value),
+);
 
 const selectedQueueItem = computed(() =>
   selectedAgentId.value
@@ -652,7 +670,8 @@ const selectedRunSummaryView = computed(() => {
   if (!selectedQueueItem.value) return null;
   return {
     entryContext: pageQuery.entryContext,
-    viewScope: pageQuery.ownerScope === "mine" ? "mine" : pageQuery.projectId ? "project" : "global",
+    viewScope:
+      pageQuery.ownerScope === "mine" ? "mine" : pageQuery.projectId ? "project" : "global",
     agentRunId: selectedQueueItem.value.agentRunId,
     taskId: selectedQueueItem.value.taskId,
     taskTitle: selectedQueueItem.value.taskTitle || selectedQueueItem.value.taskId,
@@ -662,10 +681,16 @@ const selectedRunSummaryView = computed(() => {
     status: selectedQueueItem.value.status,
     sessionId: null,
     modelUsed: null,
-    startedAt: selectedQueueItem.value.startedAt ? new Date(selectedQueueItem.value.startedAt).toISOString() : null,
-    finishedAt: selectedQueueItem.value.finishedAtMs ? new Date(selectedQueueItem.value.finishedAtMs).toISOString() : null,
+    startedAt: selectedQueueItem.value.startedAt
+      ? new Date(selectedQueueItem.value.startedAt).toISOString()
+      : null,
+    finishedAt: selectedQueueItem.value.finishedAtMs
+      ? new Date(selectedQueueItem.value.finishedAtMs).toISOString()
+      : null,
     lastActivityAt: new Date(selectedQueueItem.value.updatedAt).toISOString(),
-    durationMs: selectedQueueItem.value.startedAt ? Math.max(0, Date.now() - selectedQueueItem.value.startedAt) : null,
+    durationMs: selectedQueueItem.value.startedAt
+      ? Math.max(0, Date.now() - selectedQueueItem.value.startedAt)
+      : null,
     tokenUsed: selectedQueueItem.value.tokenUsed,
     blockerType: selectedQueueItem.value.requiresAttention ? "attention" : null,
     blockerLabel: selectedQueueItem.value.blockerLabel,
@@ -680,11 +705,15 @@ const selectedRunSummaryView = computed(() => {
   } satisfies AgentRunOpsSummary;
 });
 
-const filteredRunCount = computed(() => remoteAttentionTotal.value + remoteRunningTotal.value + remoteRecentTotal.value);
+const filteredRunCount = computed(
+  () => remoteAttentionTotal.value + remoteRunningTotal.value + remoteRecentTotal.value,
+);
 const providerFilteredRunCount = computed(
   () => attentionQueue.value.length + runningQueue.value.length + recentQueue.value.length,
 );
-const visibleRunCount = computed(() => (isProviderScoped.value ? providerFilteredRunCount.value : filteredRunCount.value));
+const visibleRunCount = computed(() =>
+  isProviderScoped.value ? providerFilteredRunCount.value : filteredRunCount.value,
+);
 
 const totalKnownRuns = computed(
   () =>
@@ -692,19 +721,27 @@ const totalKnownRuns = computed(
     (agentOverview.value?.queueCounts.running ?? 0) +
     (agentOverview.value?.queueCounts.recent ?? 0),
 );
-const displayedTotalKnownRuns = computed(() => (isProviderScoped.value ? visibleRunCount.value : totalKnownRuns.value));
+const displayedTotalKnownRuns = computed(() =>
+  isProviderScoped.value ? visibleRunCount.value : totalKnownRuns.value,
+);
 
 const completedIn24h = computed(() =>
   isProviderScoped.value
     ? recentQueue.value.filter((run) => run.status === "completed").length
-    : agentOverview.value?.summary.completedCount ?? recentQueue.value.filter((run) => run.status === "completed").length,
+    : (agentOverview.value?.summary.completedCount ??
+      recentQueue.value.filter((run) => run.status === "completed").length),
 );
 
 const failureRate = computed(() => {
-  if (agentOverview.value && !isProviderScoped.value) return `${Math.round(agentOverview.value.summary.failureRate)}%`;
-  const endedRuns = recentQueue.value.filter((run) => ["completed", "failed", "stopped", "terminated"].includes(run.status));
+  if (agentOverview.value && !isProviderScoped.value)
+    return `${Math.round(agentOverview.value.summary.failureRate)}%`;
+  const endedRuns = recentQueue.value.filter((run) =>
+    ["completed", "failed", "stopped", "terminated"].includes(run.status),
+  );
   if (endedRuns.length === 0) return "0%";
-  const failedRuns = endedRuns.filter((run) => ["failed", "stopped", "terminated"].includes(run.status)).length;
+  const failedRuns = endedRuns.filter((run) =>
+    ["failed", "stopped", "terminated"].includes(run.status),
+  ).length;
   return `${Math.round((failedRuns / endedRuns.length) * 100)}%`;
 });
 
@@ -714,12 +751,16 @@ const averageDuration = computed(() => {
   }
   const endedRuns = recentQueue.value.filter((run) => run.startedAt && run.finishedAtMs);
   if (endedRuns.length === 0) return "-";
-  const total = endedRuns.reduce((sum, run) => sum + ((run.finishedAtMs || 0) - (run.startedAt || 0)), 0);
+  const total = endedRuns.reduce(
+    (sum, run) => sum + ((run.finishedAtMs || 0) - (run.startedAt || 0)),
+    0,
+  );
   return formatDuration(Date.now() - total / endedRuns.length, Date.now());
 });
 
 const interventionRate = computed(() => {
-  if (agentOverview.value && !isProviderScoped.value) return `${Math.round(agentOverview.value.summary.humanInterventionRate)}%`;
+  if (agentOverview.value && !isProviderScoped.value)
+    return `${Math.round(agentOverview.value.summary.humanInterventionRate)}%`;
   if (allQueueItems.value.length === 0) return "0%";
   const withGuidance = allQueueItems.value.filter((run) => run.guidanceCount > 0).length;
   return `${Math.round((withGuidance / allQueueItems.value.length) * 100)}%`;
@@ -730,7 +771,9 @@ const summaryCards = computed(() => [
     key: "attention",
     focusKey: "attention" as QueueFocus,
     label: "待处理事项",
-    value: isProviderScoped.value ? attentionQueue.value.length : agentOverview.value?.summary.attentionCount ?? attentionQueue.value.length,
+    value: isProviderScoped.value
+      ? attentionQueue.value.length
+      : (agentOverview.value?.summary.attentionCount ?? attentionQueue.value.length),
     hint: "失败、暂停和无进展实例",
     color: "#dc2626",
   },
@@ -738,7 +781,9 @@ const summaryCards = computed(() => [
     key: "running",
     focusKey: "running" as QueueFocus,
     label: "运行中",
-    value: isProviderScoped.value ? runningQueue.value.length : agentOverview.value?.summary.runningCount ?? runningQueue.value.length,
+    value: isProviderScoped.value
+      ? runningQueue.value.length
+      : (agentOverview.value?.summary.runningCount ?? runningQueue.value.length),
     hint: "正在持续推进的 Agent",
     color: "#2563eb",
   },
@@ -777,10 +822,19 @@ const summaryCards = computed(() => [
 ]);
 
 const keyEvents = computed(() =>
-  agentEvents.value.filter((event) => {
-    if (event.type === "guidance.injected") return true;
-    return ["agent.failed", "agent.paused", "agent.resumed", "agent.completed", "agent.stopped", "agent.started"].includes(event.type);
-  }).slice(0, 12),
+  agentEvents.value
+    .filter((event) => {
+      if (event.type === "guidance.injected") return true;
+      return [
+        "agent.failed",
+        "agent.paused",
+        "agent.resumed",
+        "agent.completed",
+        "agent.stopped",
+        "agent.started",
+      ].includes(event.type);
+    })
+    .slice(0, 12),
 );
 
 const agentSelectOptions = computed(() =>
@@ -1017,32 +1071,44 @@ async function handleQuickGuidance() {
 
 function applyQueryFilters() {
   pageQuery.search = typeof route.query.search === "string" ? route.query.search : undefined;
-  pageQuery.status = typeof route.query.status === "string"
-    ? (route.query.status as AgentOpsPageQuery["status"])
-    : undefined;
-  pageQuery.model = typeof route.query.model === "string"
-    ? route.query.model
-    : typeof route.query.provider === "string"
-      ? route.query.provider
+  pageQuery.status =
+    typeof route.query.status === "string"
+      ? (route.query.status as AgentOpsPageQuery["status"])
       : undefined;
-  pageQuery.ownerScope = route.query.ownerScope === "all" || route.query.ownerScope === "mine"
-    ? route.query.ownerScope
-    : defaultOwnerScope();
-  pageQuery.projectId = typeof route.query.projectId === "string" ? route.query.projectId : undefined;
+  pageQuery.model =
+    typeof route.query.model === "string"
+      ? route.query.model
+      : typeof route.query.provider === "string"
+        ? route.query.provider
+        : undefined;
+  pageQuery.ownerScope =
+    route.query.ownerScope === "all" || route.query.ownerScope === "mine"
+      ? route.query.ownerScope
+      : defaultOwnerScope();
+  pageQuery.projectId =
+    typeof route.query.projectId === "string" ? route.query.projectId : undefined;
   pageQuery.taskId = typeof route.query.taskId === "string" ? route.query.taskId : undefined;
-  pageQuery.agentRunId = typeof route.query.agentRunId === "string" ? route.query.agentRunId : undefined;
+  pageQuery.agentRunId =
+    typeof route.query.agentRunId === "string" ? route.query.agentRunId : undefined;
   pageQuery.entryContext = toEntryContext(route.query.entryContext);
-  pageQuery.riskLevel = typeof route.query.riskLevel === "string"
-    ? (route.query.riskLevel as AgentOpsPageQuery["riskLevel"])
-    : undefined;
+  pageQuery.riskLevel =
+    typeof route.query.riskLevel === "string"
+      ? (route.query.riskLevel as AgentOpsPageQuery["riskLevel"])
+      : undefined;
   pageQuery.approvalBlocked = parseBooleanQueryValue(route.query.approvalBlocked);
   pageQuery.requiresIntervention = parseBooleanQueryValue(route.query.requiresIntervention);
-  pageQuery.agentType = typeof route.query.agentType === "string" ? route.query.agentType : undefined;
+  pageQuery.agentType =
+    typeof route.query.agentType === "string" ? route.query.agentType : undefined;
   pageQuery.from = typeof route.query.from === "string" ? route.query.from : undefined;
   pageQuery.to = typeof route.query.to === "string" ? route.query.to : undefined;
 
   const nextFocus = typeof route.query.focus === "string" ? route.query.focus : defaultQueueFocus();
-  if (nextFocus === "attention" || nextFocus === "running" || nextFocus === "recent" || nextFocus === "all") {
+  if (
+    nextFocus === "attention" ||
+    nextFocus === "running" ||
+    nextFocus === "recent" ||
+    nextFocus === "all"
+  ) {
     queueFocus.value = nextFocus;
   }
 
@@ -1063,9 +1129,11 @@ function syncQueryFilters() {
   if (pageQuery.projectId) query.projectId = pageQuery.projectId;
   if (pageQuery.taskId) query.taskId = pageQuery.taskId;
   if (pageQuery.agentRunId && detailDrawerVisible.value) query.agentRunId = pageQuery.agentRunId;
-  if (pageQuery.entryContext && pageQuery.entryContext !== "nav") query.entryContext = pageQuery.entryContext;
+  if (pageQuery.entryContext && pageQuery.entryContext !== "nav")
+    query.entryContext = pageQuery.entryContext;
   if (pageQuery.riskLevel) query.riskLevel = pageQuery.riskLevel;
-  if (typeof pageQuery.approvalBlocked === "boolean") query.approvalBlocked = String(pageQuery.approvalBlocked);
+  if (typeof pageQuery.approvalBlocked === "boolean")
+    query.approvalBlocked = String(pageQuery.approvalBlocked);
   if (typeof pageQuery.requiresIntervention === "boolean") {
     query.requiresIntervention = String(pageQuery.requiresIntervention);
   }
@@ -1077,8 +1145,9 @@ function syncQueryFilters() {
   const currentQuery = route.query;
   const currentKeys = Object.keys(currentQuery);
   const nextKeys = Object.keys(query);
-  const isSameQuery = currentKeys.length === nextKeys.length
-    && nextKeys.every((key) => String(currentQuery[key] ?? "") === String(query[key] ?? ""));
+  const isSameQuery =
+    currentKeys.length === nextKeys.length &&
+    nextKeys.every((key) => String(currentQuery[key] ?? "") === String(query[key] ?? ""));
 
   if (isSameQuery) return;
 

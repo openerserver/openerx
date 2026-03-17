@@ -210,9 +210,13 @@ const props = defineProps<{
   formatTokenCount: (value?: number | null) => string;
 }>();
 
-const emit = defineEmits<{
-  (e: "applyFilters", payload: { queryPatch: Partial<AgentOpsPageQuery>; queueFocus?: "all" | AgentOpsQueue }): void;
-}>();
+const emit =
+  defineEmits<
+    (
+      e: "applyFilters",
+      payload: { queryPatch: Partial<AgentOpsPageQuery>; queueFocus?: "all" | AgentOpsQueue },
+    ) => void
+  >();
 
 const trendMetric = ref<"attention" | "failed" | "completed" | "intervention">("attention");
 
@@ -238,10 +242,30 @@ const summaryCards = computed(() => {
   const totals = props.health?.totals;
   if (!totals) return [];
   return [
-    { key: "total", label: "总实例数", value: String(totals.totalRuns), hint: `待处理 ${totals.attentionRuns} 个` },
-    { key: "failure", label: "失败率", value: formatPercent(totals.failureRate), hint: `失败 ${totals.failedRuns} 个` },
-    { key: "intervention", label: "介入率", value: formatPercent(totals.interventionRate), hint: `人工介入 ${totals.humanInterventionRuns} 个` },
-    { key: "duration", label: "平均时长", value: formatDuration(totals.avgDurationMs), hint: `审批阻塞 ${totals.approvalBlockedRuns} 个` },
+    {
+      key: "total",
+      label: "总实例数",
+      value: String(totals.totalRuns),
+      hint: `待处理 ${totals.attentionRuns} 个`,
+    },
+    {
+      key: "failure",
+      label: "失败率",
+      value: formatPercent(totals.failureRate),
+      hint: `失败 ${totals.failedRuns} 个`,
+    },
+    {
+      key: "intervention",
+      label: "介入率",
+      value: formatPercent(totals.interventionRate),
+      hint: `人工介入 ${totals.humanInterventionRuns} 个`,
+    },
+    {
+      key: "duration",
+      label: "平均时长",
+      value: formatDuration(totals.avgDurationMs),
+      hint: `审批阻塞 ${totals.approvalBlockedRuns} 个`,
+    },
   ];
 });
 
@@ -255,13 +279,14 @@ const timelineRows = computed(() => {
   });
   const maxValue = Math.max(1, ...metricValues);
   return buckets.map((bucket) => {
-    const metricValue = trendMetric.value === "failed"
-      ? bucket.failedRuns
-      : trendMetric.value === "completed"
-        ? bucket.completedRuns
-        : trendMetric.value === "intervention"
-          ? bucket.interventionRuns
-          : bucket.attentionRuns;
+    const metricValue =
+      trendMetric.value === "failed"
+        ? bucket.failedRuns
+        : trendMetric.value === "completed"
+          ? bucket.completedRuns
+          : trendMetric.value === "intervention"
+            ? bucket.interventionRuns
+            : bucket.attentionRuns;
     return {
       ...bucket,
       metricValue,
@@ -271,7 +296,8 @@ const timelineRows = computed(() => {
 });
 
 function setTrendMetric(value: unknown) {
-  trendMetric.value = value === "failed" || value === "completed" || value === "intervention" ? value : "attention";
+  trendMetric.value =
+    value === "failed" || value === "completed" || value === "intervention" ? value : "attention";
 }
 
 function formatPercent(value?: number | null) {

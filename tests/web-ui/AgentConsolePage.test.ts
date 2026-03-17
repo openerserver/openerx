@@ -1,7 +1,7 @@
 import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
-import { defineComponent } from "vue";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { defineComponent } from "vue";
 import AgentConsolePage from "../../control-plane/web-ui/src/pages/AgentConsolePage.vue";
 import { useAuthStore } from "../../control-plane/web-ui/src/stores/auth";
 
@@ -317,7 +317,9 @@ describe("AgentConsolePage analytics filter regression", () => {
     await flushPromises();
     await flushPromises();
 
-    expect(wrapper.get('[data-testid="active-model"]').text()).toBe("github-copilot:claude-opus-4.6");
+    expect(wrapper.get('[data-testid="active-model"]').text()).toBe(
+      "github-copilot:claude-opus-4.6",
+    );
     expect(wrapper.get('[data-testid="attention-count"]').text()).toBe("1");
     expect(routerState.replace).toHaveBeenCalled();
     expect(lastCallFirstArg(routerState.replace)).toEqual({

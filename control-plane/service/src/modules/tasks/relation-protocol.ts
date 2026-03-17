@@ -30,7 +30,11 @@ function normalizeStringList(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  return Array.from(new Set(value.map((item) => nonEmptyString(item)).filter((item): item is string => Boolean(item))));
+  return Array.from(
+    new Set(
+      value.map((item) => nonEmptyString(item)).filter((item): item is string => Boolean(item)),
+    ),
+  );
 }
 
 function normalizeMetadata(value: unknown): Record<string, unknown> | null {
@@ -41,7 +45,10 @@ function normalizeMetadata(value: unknown): Record<string, unknown> | null {
 }
 
 function mergeMetadata(...values: Array<Record<string, unknown> | null | undefined>) {
-  const merged = Object.assign({}, ...values.filter((value): value is Record<string, unknown> => Boolean(value)));
+  const merged = Object.assign(
+    {},
+    ...values.filter((value): value is Record<string, unknown> => Boolean(value)),
+  );
   return Object.keys(merged).length > 0 ? merged : null;
 }
 
@@ -94,7 +101,11 @@ export function expandCreateTaskRelations(args: {
   const seen = new Set<string>();
 
   const push = (relation: NormalizedTaskRelation) => {
-    if (!relation.sourceTaskId || !relation.targetTaskId || relation.sourceTaskId === relation.targetTaskId) {
+    if (
+      !relation.sourceTaskId ||
+      !relation.targetTaskId ||
+      relation.sourceTaskId === relation.targetTaskId
+    ) {
       return;
     }
     const dedupeKey = `${relation.sourceTaskId}:${relation.targetTaskId}:${relation.type}`;
@@ -178,11 +189,11 @@ export function parseStoredRelationContext(value: unknown): CreateTaskRelationCo
   };
 
   if (
-    !relationContext.spawnedFromTaskId
-    && relationContext.dependsOnTaskIds?.length === 0
-    && relationContext.blockedByTaskIds?.length === 0
-    && relationContext.blocksTaskIds?.length === 0
-    && !relationContext.metadata
+    !relationContext.spawnedFromTaskId &&
+    relationContext.dependsOnTaskIds?.length === 0 &&
+    relationContext.blockedByTaskIds?.length === 0 &&
+    relationContext.blocksTaskIds?.length === 0 &&
+    !relationContext.metadata
   ) {
     return null;
   }
@@ -206,16 +217,20 @@ export function parseStoredRawRelations(value: unknown): CreateTaskRawRelationIn
       return [];
     }
 
-    return [{
-      sourceTaskId: nonEmptyString(record.sourceTaskId) || undefined,
-      targetTaskId: nonEmptyString(record.targetTaskId) || undefined,
-      type,
-      metadata: normalizeMetadata(record.metadata) || undefined,
-    } satisfies CreateTaskRawRelationInput];
+    return [
+      {
+        sourceTaskId: nonEmptyString(record.sourceTaskId) || undefined,
+        targetTaskId: nonEmptyString(record.targetTaskId) || undefined,
+        type,
+        metadata: normalizeMetadata(record.metadata) || undefined,
+      } satisfies CreateTaskRawRelationInput,
+    ];
   });
 }
 
-export function mergeRelationContexts(...contexts: Array<CreateTaskRelationContext | null | undefined>) {
+export function mergeRelationContexts(
+  ...contexts: Array<CreateTaskRelationContext | null | undefined>
+) {
   const merged: CreateTaskRelationContext = {};
 
   for (const context of contexts) {
@@ -225,9 +240,15 @@ export function mergeRelationContexts(...contexts: Array<CreateTaskRelationConte
     if (!merged.spawnedFromTaskId && context.spawnedFromTaskId) {
       merged.spawnedFromTaskId = context.spawnedFromTaskId;
     }
-    merged.dependsOnTaskIds = Array.from(new Set([...(merged.dependsOnTaskIds || []), ...(context.dependsOnTaskIds || [])]));
-    merged.blockedByTaskIds = Array.from(new Set([...(merged.blockedByTaskIds || []), ...(context.blockedByTaskIds || [])]));
-    merged.blocksTaskIds = Array.from(new Set([...(merged.blocksTaskIds || []), ...(context.blocksTaskIds || [])]));
+    merged.dependsOnTaskIds = Array.from(
+      new Set([...(merged.dependsOnTaskIds || []), ...(context.dependsOnTaskIds || [])]),
+    );
+    merged.blockedByTaskIds = Array.from(
+      new Set([...(merged.blockedByTaskIds || []), ...(context.blockedByTaskIds || [])]),
+    );
+    merged.blocksTaskIds = Array.from(
+      new Set([...(merged.blocksTaskIds || []), ...(context.blocksTaskIds || [])]),
+    );
     merged.metadata = mergeMetadata(merged.metadata || null, context.metadata || null) || undefined;
   }
 

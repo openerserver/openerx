@@ -28,7 +28,11 @@ const resolveModelRouteMock = mock((value: string) => ({
   providerId: value.split(":")[0] || "github-copilot",
   modelId: value.split(":").slice(1).join(":") || value,
 }));
-const readOrchestrationStrategyMock = mock(() => ({ hooks: [], templates: [], judge: { enabled: false } }));
+const readOrchestrationStrategyMock = mock(() => ({
+  hooks: [],
+  templates: [],
+  judge: { enabled: false },
+}));
 
 mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () => ({
   authHeader: authHeaderMock,
@@ -83,7 +87,11 @@ beforeEach(() => {
     providerId: value.split(":")[0] || "github-copilot",
     modelId: value.split(":").slice(1).join(":") || value,
   }));
-  readOrchestrationStrategyMock.mockReturnValue({ hooks: [], templates: [], judge: { enabled: false } });
+  readOrchestrationStrategyMock.mockReturnValue({
+    hooks: [],
+    templates: [],
+    judge: { enabled: false },
+  });
   cpFetchMock.mockImplementation(async (path: string) => {
     if (path === "/api/projects/proj-default/runtime-usage-ledgers?limit=10&status=completed") {
       return {

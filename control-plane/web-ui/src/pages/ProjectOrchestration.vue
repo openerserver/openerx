@@ -381,9 +381,10 @@ function riskColor(level: string) {
 }
 
 function normalizeFallbackStage(stage: OrchestrationStageViewModel) {
-  const policy = stage.failurePolicyJson && typeof stage.failurePolicyJson === "object"
-    ? stage.failurePolicyJson as Record<string, unknown>
-    : null;
+  const policy =
+    stage.failurePolicyJson && typeof stage.failurePolicyJson === "object"
+      ? (stage.failurePolicyJson as Record<string, unknown>)
+      : null;
   const fallback = policy?.fallbackStageKey;
   return typeof fallback === "string" && fallback.trim() ? fallback.trim() : "";
 }
@@ -402,11 +403,13 @@ function buildFlowMermaid(stages: OrchestrationStageViewModel[]) {
 
   for (const [index, stage] of ordered.entries()) {
     const nodeId = `stage_${index + 1}`;
-    const label = sanitizeMermaidLabel([
-      `${index + 1}. ${stage.name || stage.stageKey}`,
-      `${stage.stageKey} / ${stage.primaryRoleLabel}`,
-      `参与 ${stage.participantRoleAgentIdsJson.length} / Gate ${stage.gatesJson?.length || 0} / Approval ${stage.approvalsJson?.length || 0}`,
-    ].join("\\n"));
+    const label = sanitizeMermaidLabel(
+      [
+        `${index + 1}. ${stage.name || stage.stageKey}`,
+        `${stage.stageKey} / ${stage.primaryRoleLabel}`,
+        `参与 ${stage.participantRoleAgentIdsJson.length} / Gate ${stage.gatesJson?.length || 0} / Approval ${stage.approvalsJson?.length || 0}`,
+      ].join("\\n"),
+    );
     lines.push(`${nodeId}[\"${label}\"]`);
     lines.push(`class ${nodeId} ${stage.enabled ? "active" : "muted"};`);
     if (index > 0) {
@@ -439,13 +442,17 @@ function buildRoleMapMermaid(stages: OrchestrationStageViewModel[]) {
 
   for (const [index, stage] of ordered.entries()) {
     const stageNodeId = `stage_${index + 1}`;
-    lines.push(`${stageNodeId}[\"${sanitizeMermaidLabel(`${stage.name || stage.stageKey}\\n${stage.stageKey}`)}\"]`);
+    lines.push(
+      `${stageNodeId}[\"${sanitizeMermaidLabel(`${stage.name || stage.stageKey}\\n${stage.stageKey}`)}\"]`,
+    );
     lines.push(`class ${stageNodeId} stage;`);
 
     for (const [roleIndex, roleItem] of stage.roleMatrix.entries()) {
       const roleNodeId = `role_${index + 1}_${roleIndex + 1}`;
       const bindingHint = roleItem.bindingResolution.activeBindings[0]?.label || "无命中执行器";
-      lines.push(`${roleNodeId}[\"${sanitizeMermaidLabel(`${roleItem.roleLabel}\\n${roleItem.involvementKinds.join('/') || '参与'}\\n${bindingHint}`)}\"]`);
+      lines.push(
+        `${roleNodeId}[\"${sanitizeMermaidLabel(`${roleItem.roleLabel}\\n${roleItem.involvementKinds.join("/") || "参与"}\\n${bindingHint}`)}\"]`,
+      );
       lines.push(`${stageNodeId} --> ${roleNodeId}`);
       lines.push(`class ${roleNodeId} role;`);
 
@@ -463,7 +470,9 @@ function buildRoleMapMermaid(stages: OrchestrationStageViewModel[]) {
 
 const candidateScenario = computed(() => viewModel.value?.scenarios.candidate || null);
 
-const stageSourceLabel = computed(() => (stageSource.value === "candidate" && candidateScenario.value ? "候选模板" : "当前绑定"));
+const stageSourceLabel = computed(() =>
+  stageSource.value === "candidate" && candidateScenario.value ? "候选模板" : "当前绑定",
+);
 
 const activeScenario = computed(() => {
   if (stageSource.value === "candidate" && candidateScenario.value) {
@@ -480,10 +489,11 @@ const visibleStages = computed(() => {
   return activeScenario.value.stages.filter(hasRuntimeAnomaly);
 });
 
-const selectedStage = computed(() =>
-  visibleStages.value.find((stage) => stage.stageKey === selectedStageKey.value)
-  || visibleStages.value[0]
-  || null,
+const selectedStage = computed(
+  () =>
+    visibleStages.value.find((stage) => stage.stageKey === selectedStageKey.value) ||
+    visibleStages.value[0] ||
+    null,
 );
 
 const activeDiagramMermaid = computed(() =>
@@ -510,7 +520,9 @@ const selectionDiff = computed(() => {
       const current = currentStages.find((item) => item.stageKey === stage.stageKey);
       const currentCount = current?.gatesJson?.length || 0;
       const nextCount = stage.gatesJson?.length || 0;
-      return currentCount === nextCount ? null : `${stage.stageKey} ${currentCount} -> ${nextCount}`;
+      return currentCount === nextCount
+        ? null
+        : `${stage.stageKey} ${currentCount} -> ${nextCount}`;
     })
     .filter((item): item is string => Boolean(item));
   const approvalChanges = nextStages
@@ -518,13 +530,15 @@ const selectionDiff = computed(() => {
       const current = currentStages.find((item) => item.stageKey === stage.stageKey);
       const currentCount = current?.approvalsJson?.length || 0;
       const nextCount = stage.approvalsJson?.length || 0;
-      return currentCount === nextCount ? null : `${stage.stageKey} ${currentCount} -> ${nextCount}`;
+      return currentCount === nextCount
+        ? null
+        : `${stage.stageKey} ${currentCount} -> ${nextCount}`;
     })
     .filter((item): item is string => Boolean(item));
 
   return {
-    summary: `准备从 ${viewModel.value.currentTemplate?.name || '未绑定'} 切换到 ${candidateScenario.value.template?.name || selectedTemplateId.value}。`,
-    description: `目标模板包含 ${nextOrder.length} 个阶段，新增 ${added.length} 个，移除 ${removed.length} 个。Gate 变化 ${gateChanges.join(' / ') || '无'}；Approval 变化 ${approvalChanges.join(' / ') || '无'}。`,
+    summary: `准备从 ${viewModel.value.currentTemplate?.name || "未绑定"} 切换到 ${candidateScenario.value.template?.name || selectedTemplateId.value}。`,
+    description: `目标模板包含 ${nextOrder.length} 个阶段，新增 ${added.length} 个，移除 ${removed.length} 个。Gate 变化 ${gateChanges.join(" / ") || "无"}；Approval 变化 ${approvalChanges.join(" / ") || "无"}。`,
   };
 });
 
@@ -558,20 +572,24 @@ function hasRuntimeAnomaly(stage: OrchestrationStageViewModel) {
     return false;
   }
 
-  return summary.blockedCount > 0
-    || summary.waitingApprovalCount > 0
-    || summary.blockDecisionCount > 0
-    || summary.approvalDecisionCount > 0;
+  return (
+    summary.blockedCount > 0 ||
+    summary.waitingApprovalCount > 0 ||
+    summary.blockDecisionCount > 0 ||
+    summary.approvalDecisionCount > 0
+  );
 }
 
 async function loadView(candidateTemplateId?: string) {
   viewModel.value = await getProjectOrchestrationView(projectId, candidateTemplateId);
   selectedTemplateId.value = candidateTemplateId || viewModel.value.workflowTemplateId || undefined;
-  stageSource.value = candidateTemplateId && viewModel.value.scenarios.candidate ? "candidate" : "current";
+  stageSource.value =
+    candidateTemplateId && viewModel.value.scenarios.candidate ? "candidate" : "current";
   if (stageSource.value !== "current") {
     anomalyOnly.value = false;
   }
-  selectedStageKey.value = visibleStages.value[0]?.stageKey || activeScenario.value.stages[0]?.stageKey || "";
+  selectedStageKey.value =
+    visibleStages.value[0]?.stageKey || activeScenario.value.stages[0]?.stageKey || "";
 }
 
 async function handleCandidateTemplateChange(value: unknown) {
@@ -606,7 +624,8 @@ function handleStageSourceChange(value: string) {
   if (stageSource.value !== "current") {
     anomalyOnly.value = false;
   }
-  selectedStageKey.value = visibleStages.value[0]?.stageKey || activeScenario.value.stages[0]?.stageKey || "";
+  selectedStageKey.value =
+    visibleStages.value[0]?.stageKey || activeScenario.value.stages[0]?.stageKey || "";
 }
 
 function handleAnomalyOnlyChange(checked: unknown) {

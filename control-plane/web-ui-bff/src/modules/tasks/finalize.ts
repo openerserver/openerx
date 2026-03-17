@@ -1,5 +1,5 @@
-import { type ExecutionPlan } from "../../lib/orchestration-strategy";
 import { cpFetch } from "../../lib/control-plane-client";
+import type { ExecutionPlan } from "../../lib/orchestration-strategy";
 import { syncTaskWorkflowTerminalState } from "./workflow-sync";
 
 type FinalizedTaskStatus = "completed" | "failed" | "cancelled";
@@ -49,6 +49,75 @@ function toCandidateStatus(status: FinalizedTaskStatus): "completed" | "failed" 
   return status === "completed" ? "completed" : "failed";
 }
 
+function findExecutionPlanCandidate(
+  plan: ExecutionPlan,
+  sessionId: string | undefined,
+  agentRunId: string | undefined,
+) {
+  return (
+    plan.candidates.find(
+      (entry) =>
+        (sessionId && entry.sessionId === sessionId) ||
+        (agentRunId && entry.agentRunId === agentRunId),
+    ) || (plan.candidates.length === 1 ? plan.candidates[0] : undefined)
+  );
+}
+
+function updateExecutionPlanCandidate(
+  candidate: ExecutionPlan["candidates"][number],
+  task: FinalizableTaskRecord,
+  candidateStatus: "completed" | "failed",
+  finishedAt: string,
+  result: string | undefined,
+  sessionId: string | undefined,
+  agentRunId: string | undefined,
+) {
+  let changed = false;
+
+  if (sessionId && candidate.sessionId !== sessionId) {
+    candidate.sessionId = sessionId;
+    changed = true;
+  }
+  if (agentRunId && candidate.agentRunId !== agentRunId) {
+    candidate.agentRunId = agentRunId;
+    changed = true;
+  }
+  if (candidate.status !== candidateStatus) {
+    candidate.status = candidateStatus;
+    changed = true;
+  }
+  if (!candidate.startedAt && task.startedAt) {
+    candidate.startedAt = task.startedAt;
+    changed = true;
+  }
+  if (candidate.finishedAt !== finishedAt) {
+    candidate.finishedAt = finishedAt;
+    changed = true;
+  }
+  if (result !== undefined && candidate.result !== result) {
+    candidate.result = result;
+    changed = true;
+  }
+
+  return changed;
+}
+
+function updateSingleExecutionStepStatus(
+  plan: ExecutionPlan,
+  candidateStatus: "completed" | "failed",
+) {
+  const executionSteps = plan.steps.filter((step) => step.type === "execution");
+  if (executionSteps.length !== 1 || !executionSteps[0]) {
+    return false;
+  }
+  if (executionSteps[0].status === candidateStatus) {
+    return false;
+  }
+
+  executionSteps[0].status = candidateStatus;
+  return true;
+}
+
 function updateExecutionPlan(
   plan: ExecutionPlan,
   task: FinalizableTaskRecord,
@@ -59,48 +128,24 @@ function updateExecutionPlan(
   agentRunId: string | undefined,
 ): string | undefined {
   const candidateStatus = toCandidateStatus(status);
-  const candidate =
-    plan.candidates.find(
-      (entry) =>
-        (sessionId && entry.sessionId === sessionId)
-        || (agentRunId && entry.agentRunId === agentRunId),
-    )
-    || (plan.candidates.length === 1 ? plan.candidates[0] : undefined);
+  const candidate = findExecutionPlanCandidate(plan, sessionId, agentRunId);
 
   let changed = false;
 
   if (candidate) {
-    if (sessionId && candidate.sessionId !== sessionId) {
-      candidate.sessionId = sessionId;
-      changed = true;
-    }
-    if (agentRunId && candidate.agentRunId !== agentRunId) {
-      candidate.agentRunId = agentRunId;
-      changed = true;
-    }
-    if (candidate.status !== candidateStatus) {
-      candidate.status = candidateStatus;
-      changed = true;
-    }
-    if (!candidate.startedAt && task.startedAt) {
-      candidate.startedAt = task.startedAt;
-      changed = true;
-    }
-    if (candidate.finishedAt !== finishedAt) {
-      candidate.finishedAt = finishedAt;
-      changed = true;
-    }
-    if (result !== undefined && candidate.result !== result) {
-      candidate.result = result;
-      changed = true;
-    }
+    changed =
+      updateExecutionPlanCandidate(
+        candidate,
+        task,
+        candidateStatus,
+        finishedAt,
+        result,
+        sessionId,
+        agentRunId,
+      ) || changed;
   }
 
-  const executionSteps = plan.steps.filter((step) => step.type === "execution");
-  if (executionSteps.length === 1 && executionSteps[0] && executionSteps[0].status !== candidateStatus) {
-    executionSteps[0].status = candidateStatus;
-    changed = true;
-  }
+  changed = updateSingleExecutionStepStatus(plan, candidateStatus) || changed;
 
   return changed ? JSON.stringify(plan) : undefined;
 }
@@ -119,12 +164,11 @@ async function deactivateTaskSession(
     return;
   }
 
-  const record = lineageResult.data.data.find(
-    (entry) =>
-      !entry.archivedAt
-      && entry.isActive
-      && (!sessionId || entry.runtimeSessionId === sessionId),
-  ) ?? lineageResult.data.data.find((entry) => !entry.archivedAt && entry.isActive);
+  const record =
+    lineageResult.data.data.find(
+      (entry) =>
+        !entry.archivedAt && entry.isActive && (!sessionId || entry.runtimeSessionId === sessionId),
+    ) ?? lineageResult.data.data.find((entry) => !entry.archivedAt && entry.isActive);
 
   if (!record) {
     return;
@@ -144,9 +188,12 @@ async function loadTaskForFinalization(
   authorization: string,
   taskId: string,
 ): Promise<FinalizableTaskRecord | null> {
-  const taskResult = await cpFetch<FinalizableTaskRecord>(`/api/tasks/${encodeURIComponent(taskId)}`, {
-    authorization,
-  });
+  const taskResult = await cpFetch<FinalizableTaskRecord>(
+    `/api/tasks/${encodeURIComponent(taskId)}`,
+    {
+      authorization,
+    },
+  );
 
   if (!taskResult.ok || !taskResult.data) {
     return null;

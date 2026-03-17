@@ -3,7 +3,10 @@ import { authHeader, cpFetch } from "../../lib/control-plane-client";
 
 export const dashboardRoutes = new Hono();
 
-function buildForwardedQuery(c: { req: { query: (name: string) => string | undefined } }, keys: string[]) {
+function buildForwardedQuery(
+  c: { req: { query: (name: string) => string | undefined } },
+  keys: string[],
+) {
   const params = new URLSearchParams();
   for (const key of keys) {
     const value = c.req.query(key);

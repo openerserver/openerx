@@ -58,10 +58,10 @@
 import { onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
-  getOrchestrationStrategy,
-  getProject,
   type Project,
   type RecommendedOperatingProfile,
+  getOrchestrationStrategy,
+  getProject,
   toApiError,
 } from "../lib/api";
 
@@ -85,7 +85,8 @@ async function loadData() {
     project.value = projectResult;
     recommendedProfiles.value = strategyResult.data.organizationSettings?.recommendedProfiles || [];
   } catch (error) {
-    loadError.value = toApiError(error)?.message || (error instanceof Error ? error.message : String(error));
+    loadError.value =
+      toApiError(error)?.message || (error instanceof Error ? error.message : String(error));
   } finally {
     loading.value = false;
   }

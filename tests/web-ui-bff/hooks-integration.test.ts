@@ -1,25 +1,22 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-import {
-  cpFetch,
-  createInternalAuthorization,
-} from "../../control-plane/web-ui-bff/src/lib/control-plane-client";
+import { createInternalAuthorization } from "../../control-plane/web-ui-bff/src/lib/control-plane-client";
 import { sseAggregator } from "../../control-plane/web-ui-bff/src/modules/realtime/sse-aggregator";
 import {
   paidExecutionIntegrationTest,
   resolveExecutionIntegrationModel,
 } from "./execution-integration-guard";
+import {
+  buildTaskCleanupStatements,
+  resolveBffUrl,
+  resolveServiceUrl,
+  runCleanupStatements,
+} from "./test-env";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-
-const BFF_URL = process.env.TEST_BFF_URL || "http://127.0.0.1:4098";
-const SERVICE_URL = process.env.TEST_SERVICE_URL || "http://127.0.0.1:4097";
+const BFF_URL = resolveBffUrl();
+const SERVICE_URL = resolveServiceUrl();
 const USERNAME = process.env.TEST_USERNAME || "admin";
 const PASSWORD = process.env.TEST_PASSWORD || "admin123!";
 const PROJECT_ID = process.env.TEST_PROJECT_ID || "proj-default";
-const DB_PATH =
-  process.env.TEST_DB_PATH || resolve(__dirname, "../../control-plane/service/data/openerx.db");
 const executionIntegrationTest = paidExecutionIntegrationTest;
 
 interface HookConfig {
@@ -338,8 +335,8 @@ async function waitForCostAndAgentAudit(taskId: string) {
     const taskAudits = auditResult.data.filter((event) => event.taskId === taskId);
 
     if (
-      costDetail.records.some((record) => record.taskId === taskId)
-      && taskAudits.some((event) => event.action === "completed")
+      costDetail.records.some((record) => record.taskId === taskId) &&
+      taskAudits.some((event) => event.action === "completed")
     ) {
       return { costDetail, taskAudits };
     }
@@ -430,13 +427,7 @@ afterAll(async () => {
     return;
   }
 
-  const { execSync } = await import("node:child_process");
-  const statements = createdTaskIds.map((id) => `DELETE FROM tasks WHERE id='${id}';`);
-  try {
-    execSync(`sqlite3 "${DB_PATH}" "${statements.join(" ")}"`, { timeout: 5000 });
-  } catch {
-    console.warn("Cleanup failed for hooks integration test");
-  }
+  await runCleanupStatements(buildTaskCleanupStatements(createdTaskIds), "hooks integration test");
 });
 
 describe("lifecycle hooks integration", () => {
@@ -455,7 +446,10 @@ describe("lifecycle hooks integration", () => {
           await updateOrchestrationStrategy({
             ...originalStrategy,
             categoryAgentMap: Object.fromEntries(
-              Object.keys(originalStrategy.categoryAgentMap).map((key) => [key, ["default-executor"]]),
+              Object.keys(originalStrategy.categoryAgentMap).map((key) => [
+                key,
+                ["default-executor"],
+              ]),
             ),
             hooks: [
               {
@@ -535,7 +529,10 @@ describe("lifecycle hooks integration", () => {
           await updateOrchestrationStrategy({
             ...originalStrategy,
             categoryAgentMap: Object.fromEntries(
-              Object.keys(originalStrategy.categoryAgentMap).map((key) => [key, ["default-executor"]]),
+              Object.keys(originalStrategy.categoryAgentMap).map((key) => [
+                key,
+                ["default-executor"],
+              ]),
             ),
             hooks: [
               {
@@ -567,13 +564,16 @@ describe("lifecycle hooks integration", () => {
 
           const authorization = await createInternalAuthorization();
           const resultText = "OK.";
-          await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
+          await serviceRequest(`/api/tasks/${encodeURIComponent(taskId)}`, {
             method: "PATCH",
-            authorization,
-            body: {
+            headers: {
+              Authorization: authorization,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
               status: "completed",
               result: resultText,
-            },
+            }),
           });
 
           await (
@@ -646,7 +646,10 @@ describe("lifecycle hooks integration", () => {
           await updateOrchestrationStrategy({
             ...originalStrategy,
             categoryAgentMap: Object.fromEntries(
-              Object.keys(originalStrategy.categoryAgentMap).map((key) => [key, ["default-executor"]]),
+              Object.keys(originalStrategy.categoryAgentMap).map((key) => [
+                key,
+                ["default-executor"],
+              ]),
             ),
             hooks: [
               {
@@ -694,10 +697,10 @@ describe("lifecycle hooks integration", () => {
             subscription.events,
             "pipeline.stage.updated",
             (event) =>
-              event.taskId === taskId
-              && typeof event.data === "object"
-              && event.data
-              && (event.data as Record<string, unknown>).reason === "task.hooks.updated",
+              event.taskId === taskId &&
+              typeof event.data === "object" &&
+              event.data &&
+              (event.data as Record<string, unknown>).reason === "task.hooks.updated",
             120000,
           );
         } finally {
@@ -724,7 +727,10 @@ describe("lifecycle hooks integration", () => {
           await updateOrchestrationStrategy({
             ...originalStrategy,
             categoryAgentMap: Object.fromEntries(
-              Object.keys(originalStrategy.categoryAgentMap).map((key) => [key, ["default-executor"]]),
+              Object.keys(originalStrategy.categoryAgentMap).map((key) => [
+                key,
+                ["default-executor"],
+              ]),
             ),
             hooks: [
               {
@@ -780,8 +786,12 @@ describe("lifecycle hooks integration", () => {
             180000,
           );
 
-          const preExecution = strategy.hookExecutions?.find((hook) => hook.trigger === "pre-execution");
-          const postExecution = strategy.hookExecutions?.find((hook) => hook.trigger === "post-execution");
+          const preExecution = strategy.hookExecutions?.find(
+            (hook) => hook.trigger === "pre-execution",
+          );
+          const postExecution = strategy.hookExecutions?.find(
+            (hook) => hook.trigger === "post-execution",
+          );
           expect(preExecution?.completedAt).toBeTruthy();
           expect(postExecution?.completedAt).toBeTruthy();
 

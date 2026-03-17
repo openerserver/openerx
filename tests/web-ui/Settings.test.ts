@@ -427,7 +427,8 @@ describe("Settings – test execution model policy", () => {
 
     const { wrapper } = await mountSettings({ role: "platform_admin" });
 
-    const setupState = (wrapper.vm as { $?: { setupState?: Record<string, unknown> } }).$?.setupState;
+    const setupState = (wrapper.vm as { $?: { setupState?: Record<string, unknown> } }).$
+      ?.setupState;
     expect(setupState).toBeTruthy();
     expect(typeof setupState?.setTestExecutionModelValue).toBe("function");
     expect(typeof setupState?.saveModels).toBe("function");
@@ -581,7 +582,7 @@ describe("Settings – strategy agent/model selectors", () => {
     expect(wrapper.findAll('input[placeholder="使用默认模型"]').length).toBe(0);
     expect(wrapper.findAll('input[placeholder="prometheus-enterprise"]').length).toBe(0);
     expect(wrapper.findAll('input[placeholder="留空使用系统默认"]').length).toBe(0);
-    expect(wrapper.findAll('.ant-select').length).toBeGreaterThan(6);
+    expect(wrapper.findAll(".ant-select").length).toBeGreaterThan(6);
   });
 
   it("shows inline help for parallel max count and category defaults", async () => {
@@ -633,7 +634,7 @@ describe("Settings – strategy agent/model selectors", () => {
     await flushPromises();
 
     const templatePanel = wrapper
-      .findAll('.ant-collapse-header')
+      .findAll(".ant-collapse-header")
       .find((panel) => panel.text().includes("并行模板"));
     expect(templatePanel).toBeTruthy();
     await templatePanel?.trigger("click");
@@ -653,16 +654,32 @@ describe("Settings – strategy operational linkages", () => {
         enablePipeline: true,
         hooks: [],
         templates: [],
-        judge: { enabled: false, agent: "", model: "", promptTemplate: "", timeoutMs: 30000, selectionStrategy: "judge-pick" },
+        judge: {
+          enabled: false,
+          agent: "",
+          model: "",
+          promptTemplate: "",
+          timeoutMs: 30000,
+          selectionStrategy: "judge-pick",
+        },
       },
     });
     apiMocks.getContinuationPolicy.mockResolvedValueOnce({
-      data: { autoRetryOnFailure: false, maxRetries: 2, retryableErrors: [], requireApprovalOnRetry: false, fallbackModel: "", enableFallback: false },
+      data: {
+        autoRetryOnFailure: false,
+        maxRetries: 2,
+        retryableErrors: [],
+        requireApprovalOnRetry: false,
+        fallbackModel: "",
+        enableFallback: false,
+      },
     });
 
     const { wrapper } = await mountSettings({ role: "platform_admin" });
 
-    const strategyTab = wrapper.findAll(".ant-tabs-tab").find((tab) => tab.text().includes("编排策略"));
+    const strategyTab = wrapper
+      .findAll(".ant-tabs-tab")
+      .find((tab) => tab.text().includes("编排策略"));
     await strategyTab?.trigger("click");
     await flushPromises();
 
@@ -679,31 +696,45 @@ describe("Settings – strategy operational linkages", () => {
         categoryModelMap: {},
         enablePipeline: true,
         hooks: [],
-        templates: [
-          { id: "s1", name: "单一模板", mode: "single", agents: [], enabled: true },
-        ],
-        judge: { enabled: false, agent: "", model: "", promptTemplate: "", timeoutMs: 30000, selectionStrategy: "judge-pick" },
+        templates: [{ id: "s1", name: "单一模板", mode: "single", agents: [], enabled: true }],
+        judge: {
+          enabled: false,
+          agent: "",
+          model: "",
+          promptTemplate: "",
+          timeoutMs: 30000,
+          selectionStrategy: "judge-pick",
+        },
       },
     });
     apiMocks.getContinuationPolicy.mockResolvedValueOnce({
-      data: { autoRetryOnFailure: false, maxRetries: 2, retryableErrors: [], requireApprovalOnRetry: false, fallbackModel: "", enableFallback: false },
+      data: {
+        autoRetryOnFailure: false,
+        maxRetries: 2,
+        retryableErrors: [],
+        requireApprovalOnRetry: false,
+        fallbackModel: "",
+        enableFallback: false,
+      },
     });
 
     const { wrapper } = await mountSettings({ role: "platform_admin" });
 
-    const strategyTab = wrapper.findAll(".ant-tabs-tab").find((tab) => tab.text().includes("编排策略"));
+    const strategyTab = wrapper
+      .findAll(".ant-tabs-tab")
+      .find((tab) => tab.text().includes("编排策略"));
     await strategyTab?.trigger("click");
     await flushPromises();
 
     expect(wrapper.text()).toContain("当前没有启用的并行竞争模板");
-    const judgeSwitch = wrapper.findAll('.ant-switch').find((_sw, _i, arr) => {
+    const judgeSwitch = wrapper.findAll(".ant-switch").find((_sw, _i, arr) => {
       // The judge switch is the one inside the judge card
       return arr.length > 0;
     });
     // Judge switch should be disabled
-    const judgeCard = wrapper.findAll('.ant-card').find((c) => c.text().includes("裁判配置"));
+    const judgeCard = wrapper.findAll(".ant-card").find((c) => c.text().includes("裁判配置"));
     expect(judgeCard).toBeTruthy();
-    const switchEl = judgeCard?.find('.ant-switch');
+    const switchEl = judgeCard?.find(".ant-switch");
     expect(switchEl?.classes()).toContain("ant-switch-disabled");
   });
 });

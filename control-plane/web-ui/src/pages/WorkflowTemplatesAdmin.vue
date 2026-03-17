@@ -169,13 +169,13 @@
 import { message } from "ant-design-vue";
 import { computed, onMounted, reactive, ref } from "vue";
 import {
+  type Project,
+  type WorkflowTemplateRecord,
   cloneWorkflowTemplate,
   createWorkflowTemplate,
   createWorkflowTemplateStage,
-  type Project,
-  type WorkflowTemplateRecord,
-  listWorkflowTemplates,
   listProjects,
+  listWorkflowTemplates,
 } from "../lib/api";
 
 const DEFAULT_TEMPLATE_ID = "workflow-template-default-delivery";
@@ -362,7 +362,9 @@ async function createDefaultTemplate() {
 }
 
 const enabledTemplates = computed(() => templates.value.filter((item) => item.enabled).length);
-const selectableTemplates = computed(() => templates.value.filter((item) => item.selectableByProjects).length);
+const selectableTemplates = computed(
+  () => templates.value.filter((item) => item.selectableByProjects).length,
+);
 const projectOptions = computed(() =>
   projects.value.map((project) => ({
     label: `${project.name} (${project.slug})`,

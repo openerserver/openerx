@@ -1,7 +1,7 @@
 import {
-  buildRuntimePipeline,
   type RuntimePipeline,
   type RuntimePipelineStage,
+  buildRuntimePipeline,
 } from "../../lib/runtime-pipeline";
 import type { RealtimeEvent } from "../../types/events";
 

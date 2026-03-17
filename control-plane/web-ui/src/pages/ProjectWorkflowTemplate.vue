@@ -313,11 +313,74 @@ function resolveRoleLabel(roleAgentId: string) {
 }
 
 function normalizeFallbackStage(stage: ProjectWorkflowTemplateView["stages"][number]) {
-  const policy = stage.failurePolicyJson && typeof stage.failurePolicyJson === "object"
-    ? stage.failurePolicyJson as Record<string, unknown>
-    : null;
+  const policy =
+    stage.failurePolicyJson && typeof stage.failurePolicyJson === "object"
+      ? (stage.failurePolicyJson as Record<string, unknown>)
+      : null;
   const fallback = policy?.fallbackStageKey;
   return typeof fallback === "string" && fallback.trim() ? fallback.trim() : "";
+}
+
+function getOrderedWorkflowStages(stages: ProjectWorkflowTemplateView["stages"]) {
+  return [...stages].sort((left, right) => left.orderIndex - right.orderIndex);
+}
+
+function getStageNodeId(index: number) {
+  return `stage_${index + 1}`;
+}
+
+function getStageStatCount(value: unknown) {
+  return Array.isArray(value) ? value.length : 0;
+}
+
+function buildFlowStageLabel(stage: ProjectWorkflowTemplateView["stages"][number], index: number) {
+  const gateCount = getStageStatCount(stage.gatesJson);
+  const approvalCount = getStageStatCount(stage.approvalsJson);
+  const participantCount = getStageStatCount(stage.participantRoleAgentIdsJson);
+
+  return sanitizeMermaidLabel(
+    [
+      `${index + 1}. ${stage.name || stage.stageKey}`,
+      `${stage.stageKey} / ${resolveRoleLabel(stage.primaryRoleAgentId)}`,
+      `参与 ${participantCount} / Gate ${gateCount} / Approval ${approvalCount}`,
+    ].join("\\n"),
+  );
+}
+
+function appendFlowFallback(
+  lines: string[],
+  ordered: ProjectWorkflowTemplateView["stages"],
+  nodeId: string,
+  stage: ProjectWorkflowTemplateView["stages"][number],
+) {
+  const fallbackStageKey = normalizeFallbackStage(stage);
+  if (!fallbackStageKey) {
+    return;
+  }
+
+  const fallbackIndex = ordered.findIndex((item) => item.stageKey === fallbackStageKey);
+  if (fallbackIndex >= 0) {
+    lines.push(`${nodeId} -. fallback .-> ${getStageNodeId(fallbackIndex)}`);
+  }
+}
+
+function appendFlowStage(
+  lines: string[],
+  ordered: ProjectWorkflowTemplateView["stages"],
+  stage: ProjectWorkflowTemplateView["stages"][number],
+  index: number,
+) {
+  const nodeId = getStageNodeId(index);
+  const label = buildFlowStageLabel(stage, index);
+
+  lines.push(`${nodeId}["${label}"]`);
+  lines.push(`class ${nodeId} ${stage.enabled ? "active" : "muted"};`);
+
+  if (index > 0) {
+    lines.push(`${getStageNodeId(index - 1)} --> ${nodeId}`);
+  }
+
+  appendFlowFallback(lines, ordered, nodeId, stage);
 }
 
 function buildFlowMermaid(stages: ProjectWorkflowTemplateView["stages"]) {
@@ -325,7 +388,7 @@ function buildFlowMermaid(stages: ProjectWorkflowTemplateView["stages"]) {
     return "";
   }
 
-  const ordered = [...stages].sort((left, right) => left.orderIndex - right.orderIndex);
+  const ordered = getOrderedWorkflowStages(stages);
   const lines = [
     "flowchart TD",
     "classDef active fill:#d9f7be,stroke:#389e0d,color:#135200;",
@@ -333,33 +396,109 @@ function buildFlowMermaid(stages: ProjectWorkflowTemplateView["stages"]) {
   ];
 
   for (const [index, stage] of ordered.entries()) {
-    const nodeId = `stage_${index + 1}`;
-    const gateCount = Array.isArray(stage.gatesJson) ? stage.gatesJson.length : 0;
-    const approvalCount = Array.isArray(stage.approvalsJson) ? stage.approvalsJson.length : 0;
-    const participantCount = Array.isArray(stage.participantRoleAgentIdsJson) ? stage.participantRoleAgentIdsJson.length : 0;
-    const label = sanitizeMermaidLabel([
-      `${index + 1}. ${stage.name || stage.stageKey}`,
-      `${stage.stageKey} / ${resolveRoleLabel(stage.primaryRoleAgentId)}`,
-      `参与 ${participantCount} / Gate ${gateCount} / Approval ${approvalCount}`,
-    ].join("\\n"));
-
-    lines.push(`${nodeId}[\"${label}\"]`);
-    lines.push(`class ${nodeId} ${stage.enabled ? "active" : "muted"};`);
-
-    if (index > 0) {
-      lines.push(`stage_${index} --> ${nodeId}`);
-    }
-
-    const fallbackStageKey = normalizeFallbackStage(stage);
-    if (fallbackStageKey) {
-      const fallbackIndex = ordered.findIndex((item) => item.stageKey === fallbackStageKey);
-      if (fallbackIndex >= 0) {
-        lines.push(`${nodeId} -. fallback .-> stage_${fallbackIndex + 1}`);
-      }
-    }
+    appendFlowStage(lines, ordered, stage, index);
   }
 
   return lines.join("\n");
+}
+
+function toWorkflowControlEntry(entry: unknown) {
+  return entry && typeof entry === "object" ? (entry as Record<string, unknown>) : {};
+}
+
+function createRoleMapStageNode(
+  lines: string[],
+  stage: ProjectWorkflowTemplateView["stages"][number],
+  index: number,
+) {
+  const stageNodeId = getStageNodeId(index);
+  lines.push(
+    `${stageNodeId}["${sanitizeMermaidLabel(`${stage.name || stage.stageKey}\\n${stage.stageKey}`)}"]`,
+  );
+  lines.push(`class ${stageNodeId} stage;`);
+  return stageNodeId;
+}
+
+function appendRoleMapPrimary(
+  lines: string[],
+  stageNodeId: string,
+  primaryRoleAgentId: string,
+  index: number,
+) {
+  if (!primaryRoleAgentId.trim()) {
+    return;
+  }
+
+  const primaryId = `primary_${index + 1}`;
+  lines.push(`${primaryId}["主责: ${sanitizeMermaidLabel(resolveRoleLabel(primaryRoleAgentId))}"]`);
+  lines.push(`${stageNodeId} --> ${primaryId}`);
+  lines.push(`class ${primaryId} primary;`);
+}
+
+function appendRoleMapParticipants(
+  lines: string[],
+  stageNodeId: string,
+  participantRoleAgentIds: string[] | null | undefined,
+  index: number,
+) {
+  for (const [participantIndex, participantRoleId] of (participantRoleAgentIds || []).entries()) {
+    const participantId = `participant_${index + 1}_${participantIndex + 1}`;
+    lines.push(
+      `${participantId}["参与: ${sanitizeMermaidLabel(resolveRoleLabel(participantRoleId))}"]`,
+    );
+    lines.push(`${stageNodeId} --> ${participantId}`);
+    lines.push(`class ${participantId} participant;`);
+  }
+}
+
+function buildGateLabel(gate: Record<string, unknown>, gateIndex: number) {
+  const gateName =
+    typeof gate.name === "string" && gate.name.trim()
+      ? gate.name.trim()
+      : String(gate.type || `Gate ${gateIndex + 1}`);
+  const evaluatorRole = typeof gate.evaluatorRole === "string" ? gate.evaluatorRole : "";
+  return `${gateName}${evaluatorRole ? ` / ${resolveRoleLabel(evaluatorRole)}` : ""}`;
+}
+
+function buildApprovalLabel(approval: Record<string, unknown>, approvalIndex: number) {
+  const approvalName =
+    typeof approval.name === "string" && approval.name.trim()
+      ? approval.name.trim()
+      : `Approval ${approvalIndex + 1}`;
+  const approverRole = typeof approval.approverRole === "string" ? approval.approverRole : "";
+  return `${approvalName}${approverRole ? ` / ${resolveRoleLabel(approverRole)}` : ""}`;
+}
+
+function appendRoleMapControls(
+  lines: string[],
+  stageNodeId: string,
+  entries: unknown[] | null | undefined,
+  index: number,
+  kind: "gate" | "approval",
+) {
+  for (const [controlIndex, entry] of (entries || []).entries()) {
+    const control = toWorkflowControlEntry(entry);
+    const controlId = `${kind}_${index + 1}_${controlIndex + 1}`;
+    const label =
+      kind === "gate"
+        ? `Gate: ${buildGateLabel(control, controlIndex)}`
+        : `Approval: ${buildApprovalLabel(control, controlIndex)}`;
+    lines.push(`${controlId}["${sanitizeMermaidLabel(label)}"]`);
+    lines.push(`${stageNodeId} -.-> ${controlId}`);
+    lines.push(`class ${controlId} control;`);
+  }
+}
+
+function appendRoleMapStage(
+  lines: string[],
+  stage: ProjectWorkflowTemplateView["stages"][number],
+  index: number,
+) {
+  const stageNodeId = createRoleMapStageNode(lines, stage, index);
+  appendRoleMapPrimary(lines, stageNodeId, stage.primaryRoleAgentId, index);
+  appendRoleMapParticipants(lines, stageNodeId, stage.participantRoleAgentIdsJson, index);
+  appendRoleMapControls(lines, stageNodeId, stage.gatesJson, index, "gate");
+  appendRoleMapControls(lines, stageNodeId, stage.approvalsJson, index, "approval");
 }
 
 function buildRoleMapMermaid(stages: ProjectWorkflowTemplateView["stages"]) {
@@ -367,7 +506,7 @@ function buildRoleMapMermaid(stages: ProjectWorkflowTemplateView["stages"]) {
     return "";
   }
 
-  const ordered = [...stages].sort((left, right) => left.orderIndex - right.orderIndex);
+  const ordered = getOrderedWorkflowStages(stages);
   const lines = [
     "flowchart LR",
     "classDef stage fill:#e6f4ff,stroke:#1677ff,color:#003a8c;",
@@ -377,45 +516,7 @@ function buildRoleMapMermaid(stages: ProjectWorkflowTemplateView["stages"]) {
   ];
 
   for (const [index, stage] of ordered.entries()) {
-    const stageNodeId = `stage_${index + 1}`;
-    lines.push(`${stageNodeId}[\"${sanitizeMermaidLabel(`${stage.name || stage.stageKey}\\n${stage.stageKey}`)}\"]`);
-    lines.push(`class ${stageNodeId} stage;`);
-
-    if (stage.primaryRoleAgentId.trim()) {
-      const primaryId = `primary_${index + 1}`;
-      lines.push(`${primaryId}[\"主责: ${sanitizeMermaidLabel(resolveRoleLabel(stage.primaryRoleAgentId))}\"]`);
-      lines.push(`${stageNodeId} --> ${primaryId}`);
-      lines.push(`class ${primaryId} primary;`);
-    }
-
-    for (const [participantIndex, participantRoleId] of (stage.participantRoleAgentIdsJson || []).entries()) {
-      const participantId = `participant_${index + 1}_${participantIndex + 1}`;
-      lines.push(`${participantId}[\"参与: ${sanitizeMermaidLabel(resolveRoleLabel(participantRoleId))}\"]`);
-      lines.push(`${stageNodeId} --> ${participantId}`);
-      lines.push(`class ${participantId} participant;`);
-    }
-
-    for (const [gateIndex, gateEntry] of (stage.gatesJson || []).entries()) {
-      const gate = gateEntry && typeof gateEntry === "object" ? gateEntry as Record<string, unknown> : {};
-      const gateId = `gate_${index + 1}_${gateIndex + 1}`;
-      const gateName = typeof gate.name === "string" && gate.name.trim() ? gate.name.trim() : String(gate.type || `Gate ${gateIndex + 1}`);
-      const evaluatorRole = typeof gate.evaluatorRole === "string" ? gate.evaluatorRole : "";
-      const gateRole = evaluatorRole ? ` / ${resolveRoleLabel(evaluatorRole)}` : "";
-      lines.push(`${gateId}[\"Gate: ${sanitizeMermaidLabel(`${gateName}${gateRole}`)}\"]`);
-      lines.push(`${stageNodeId} -.-> ${gateId}`);
-      lines.push(`class ${gateId} control;`);
-    }
-
-    for (const [approvalIndex, approvalEntry] of (stage.approvalsJson || []).entries()) {
-      const approval = approvalEntry && typeof approvalEntry === "object" ? approvalEntry as Record<string, unknown> : {};
-      const approvalId = `approval_${index + 1}_${approvalIndex + 1}`;
-      const approvalName = typeof approval.name === "string" && approval.name.trim() ? approval.name.trim() : `Approval ${approvalIndex + 1}`;
-      const approverRole = typeof approval.approverRole === "string" ? approval.approverRole : "";
-      const approvalRole = approverRole ? ` / ${resolveRoleLabel(approverRole)}` : "";
-      lines.push(`${approvalId}[\"Approval: ${sanitizeMermaidLabel(`${approvalName}${approvalRole}`)}\"]`);
-      lines.push(`${stageNodeId} -.-> ${approvalId}`);
-      lines.push(`class ${approvalId} control;`);
-    }
+    appendRoleMapStage(lines, stage, index);
   }
 
   return lines.join("\n");
@@ -425,13 +526,20 @@ const showCandidateDiagram = computed(() => {
   if (!viewModel.value) {
     return false;
   }
-  return Boolean(selectedTemplateId.value) && selectedTemplateId.value !== viewModel.value.workflowTemplateId;
+  return (
+    Boolean(selectedTemplateId.value) &&
+    selectedTemplateId.value !== viewModel.value.workflowTemplateId
+  );
 });
 
-const currentDiagramTitle = computed(() => `当前绑定：${viewModel.value?.currentTemplate?.name || "未绑定"}`);
+const currentDiagramTitle = computed(
+  () => `当前绑定：${viewModel.value?.currentTemplate?.name || "未绑定"}`,
+);
 
 const candidateDiagramTitle = computed(() => {
-  const selectedTemplate = viewModel.value?.selectableTemplates.find((template) => template.id === selectedTemplateId.value);
+  const selectedTemplate = viewModel.value?.selectableTemplates.find(
+    (template) => template.id === selectedTemplateId.value,
+  );
   return `候选模板：${selectedTemplate?.name || selectedTemplateId.value || "未选择"}`;
 });
 
@@ -441,19 +549,32 @@ const candidateFlowMermaid = computed(() => buildFlowMermaid(selectedTemplateSta
 
 const currentRoleMapMermaid = computed(() => buildRoleMapMermaid(viewModel.value?.stages || []));
 
-const candidateRoleMapMermaid = computed(() => buildRoleMapMermaid(selectedTemplateStages.value || []));
+const candidateRoleMapMermaid = computed(() =>
+  buildRoleMapMermaid(selectedTemplateStages.value || []),
+);
 
-const currentDiagramMermaid = computed(() => (diagramKind.value === "roles" ? currentRoleMapMermaid.value : currentFlowMermaid.value));
+const currentDiagramMermaid = computed(() =>
+  diagramKind.value === "roles" ? currentRoleMapMermaid.value : currentFlowMermaid.value,
+);
 
-const candidateDiagramMermaid = computed(() => (diagramKind.value === "roles" ? candidateRoleMapMermaid.value : candidateFlowMermaid.value));
+const candidateDiagramMermaid = computed(() =>
+  diagramKind.value === "roles" ? candidateRoleMapMermaid.value : candidateFlowMermaid.value,
+);
 
 function summarizeControlDiff(
   currentStages: ProjectWorkflowTemplateView["stages"],
   nextStages: ProjectWorkflowTemplateView["stages"],
   key: "gatesJson" | "approvalsJson",
 ) {
-  const currentMap = new Map(currentStages.map((stage) => [stage.stageKey, Array.isArray(stage[key]) ? stage[key].length : 0]));
-  const nextMap = new Map(nextStages.map((stage) => [stage.stageKey, Array.isArray(stage[key]) ? stage[key].length : 0]));
+  const currentMap = new Map(
+    currentStages.map((stage) => [
+      stage.stageKey,
+      Array.isArray(stage[key]) ? stage[key].length : 0,
+    ]),
+  );
+  const nextMap = new Map(
+    nextStages.map((stage) => [stage.stageKey, Array.isArray(stage[key]) ? stage[key].length : 0]),
+  );
 
   return [...new Set([...currentMap.keys(), ...nextMap.keys()])]
     .map((stageKey) => {
@@ -473,21 +594,36 @@ const selectionDiff = computed(() => {
   }
 
   const currentTemplate = viewModel.value.currentTemplate;
-  const selectedTemplate = viewModel.value.selectableTemplates.find((template) => template.id === selectedTemplateId.value) || null;
+  const selectedTemplate =
+    viewModel.value.selectableTemplates.find(
+      (template) => template.id === selectedTemplateId.value,
+    ) || null;
   if ((selectedTemplate?.id || null) === (currentTemplate?.id || null)) {
     return null;
   }
 
   const currentOrder = viewModel.value.stages.map((stage) => stage.stageKey);
-  const nextOrder = (selectedTemplateId.value ? selectedTemplateStages.value : []).map((stage) => stage.stageKey);
+  const nextOrder = (selectedTemplateId.value ? selectedTemplateStages.value : []).map(
+    (stage) => stage.stageKey,
+  );
   const currentSet = new Set(currentOrder);
   const nextSet = new Set(nextOrder);
 
   const added = nextOrder.filter((stageKey) => !currentSet.has(stageKey));
   const removed = currentOrder.filter((stageKey) => !nextSet.has(stageKey));
-  const reordered = nextOrder.filter((stageKey, index) => currentSet.has(stageKey) && currentOrder[index] !== stageKey);
-  const gateChanges = summarizeControlDiff(viewModel.value.stages, selectedTemplateStages.value, "gatesJson");
-  const approvalChanges = summarizeControlDiff(viewModel.value.stages, selectedTemplateStages.value, "approvalsJson");
+  const reordered = nextOrder.filter(
+    (stageKey, index) => currentSet.has(stageKey) && currentOrder[index] !== stageKey,
+  );
+  const gateChanges = summarizeControlDiff(
+    viewModel.value.stages,
+    selectedTemplateStages.value,
+    "gatesJson",
+  );
+  const approvalChanges = summarizeControlDiff(
+    viewModel.value.stages,
+    selectedTemplateStages.value,
+    "approvalsJson",
+  );
 
   if (!selectedTemplateId.value) {
     return {
@@ -502,7 +638,7 @@ const selectionDiff = computed(() => {
   }
 
   return {
-    summary: `准备从 ${currentTemplate?.name || '未绑定'} 切换到 ${selectedTemplate?.name || selectedTemplateId.value}。`,
+    summary: `准备从 ${currentTemplate?.name || "未绑定"} 切换到 ${selectedTemplate?.name || selectedTemplateId.value}。`,
     description: loadingSelectionDiff.value
       ? "正在计算候选模板差异。"
       : `目标模板包含 ${nextOrder.length} 个阶段，新增 ${added.length} 个，移除 ${removed.length} 个。`,
@@ -534,7 +670,9 @@ watch(
     loadingSelectionDiff.value = true;
     try {
       const response = await listWorkflowTemplateStages(templateId);
-      selectedTemplateStages.value = (response.data || []).slice().sort((left, right) => left.orderIndex - right.orderIndex);
+      selectedTemplateStages.value = (response.data || [])
+        .slice()
+        .sort((left, right) => left.orderIndex - right.orderIndex);
       diagramTab.value = "candidate";
     } finally {
       loadingSelectionDiff.value = false;

@@ -1,18 +1,18 @@
-import { computed, ref } from "vue";
 import { defineStore } from "pinia";
+import { computed, ref } from "vue";
 import {
-  applyChatSettingsPatch,
-  chatWithChatSettings,
-  getChatSettingsCurrentContext,
   type ChatSettingsCurrentContext,
   type ChatSettingsPendingPatch,
   type OrchestrationCategorySummary,
   type OrchestrationPreviewModel,
+  applyChatSettingsPatch,
+  chatWithChatSettings,
+  getChatSettingsCurrentContext,
 } from "../lib/api";
 import {
+  ORCHESTRATION_CATEGORIES,
   buildOrchestrationContext,
   buildPreviewFromPatch,
-  ORCHESTRATION_CATEGORIES,
 } from "../lib/chat-settings-orchestration-adapter";
 
 export interface OrchestrationUiMessage {
@@ -28,7 +28,8 @@ function nowLabel() {
 }
 
 function resolveRewriteCategory(messages: OrchestrationUiMessage[], activeCategory: string) {
-  const lastUserMessage = [...messages].reverse().find((item) => item.role === "user")?.content || "";
+  const lastUserMessage =
+    [...messages].reverse().find((item) => item.role === "user")?.content || "";
   const matchedCategory = ORCHESTRATION_CATEGORIES.find((category) =>
     lastUserMessage.toLowerCase().includes(category),
   );
@@ -36,11 +37,14 @@ function resolveRewriteCategory(messages: OrchestrationUiMessage[], activeCatego
 }
 
 export const useChatSettingsOrchestrationStore = defineStore("chat-settings-orchestration", () => {
-  const context = ref<(ChatSettingsCurrentContext & {
-    orchestrationVersion: string;
-    categorySummaries: OrchestrationCategorySummary[];
-    supportedCategories: string[];
-  }) | null>(null);
+  const context = ref<
+    | (ChatSettingsCurrentContext & {
+        orchestrationVersion: string;
+        categorySummaries: OrchestrationCategorySummary[];
+        supportedCategories: string[];
+      })
+    | null
+  >(null);
   const activeCategory = ref("deep");
   const selectedModel = ref<string>();
   const draftIntent = ref("");
@@ -57,17 +61,24 @@ export const useChatSettingsOrchestrationStore = defineStore("chat-settings-orch
   const selectableModels = computed(() =>
     availableModels.value.filter((item) => {
       const normalized = item.trim().toLowerCase();
-      return ["claude-sonnet-4", "claude-opus-4", "gpt-4o", "o3-mini", "gemini-2.5-pro"].some((marker) => normalized.includes(marker));
+      return ["claude-sonnet-4", "claude-opus-4", "gpt-4o", "o3-mini", "gemini-2.5-pro"].some(
+        (marker) => normalized.includes(marker),
+      );
     }),
   );
   const categorySummaries = computed(() => context.value?.categorySummaries || []);
   const currentSummary = computed(
-    () => categorySummaries.value.find((item) => item.category === activeCategory.value) || categorySummaries.value[0] || null,
+    () =>
+      categorySummaries.value.find((item) => item.category === activeCategory.value) ||
+      categorySummaries.value[0] ||
+      null,
   );
   const mermaidByCategory = computed(() => context.value?.mermaidByCategory || {});
   const currentMermaid = computed(() => mermaidByCategory.value[activeCategory.value] || "");
   const changeCards = computed(() => orchestrationPreview.value?.changeCards || []);
-  const supportedCategories = computed(() => context.value?.supportedCategories || [...ORCHESTRATION_CATEGORIES]);
+  const supportedCategories = computed(
+    () => context.value?.supportedCategories || [...ORCHESTRATION_CATEGORIES],
+  );
 
   async function loadContext() {
     const response = await getChatSettingsCurrentContext();
@@ -146,14 +157,16 @@ export const useChatSettingsOrchestrationStore = defineStore("chat-settings-orch
       });
 
       if (context.value && patch.configType === "orchestration-strategy") {
-        orchestrationPreview.value = patch.orchestrationPreview || buildPreviewFromPatch(context.value.strategy, patch);
+        orchestrationPreview.value =
+          patch.orchestrationPreview || buildPreviewFromPatch(context.value.strategy, patch);
         const nextCategory = orchestrationPreview.value.affectedCategories[0];
         if (nextCategory) {
           activeCategory.value = nextCategory;
         }
       } else {
         orchestrationPreview.value = null;
-        errorMessage.value = "当前页面只聚焦编排策略；这次建议未返回 orchestration-strategy patch。";
+        errorMessage.value =
+          "当前页面只聚焦编排策略；这次建议未返回 orchestration-strategy patch。";
       }
     } catch (error) {
       errorMessage.value = error instanceof Error ? error.message : "生成编排预览失败，请重试。";

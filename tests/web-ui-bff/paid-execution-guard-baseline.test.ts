@@ -5,7 +5,7 @@ import { evaluatePaidExecutionPreflight } from "../../control-plane/web-ui-bff/s
 
 describe("paid execution guard baseline estimation", () => {
   test("prefers historical runtime baseline over heuristic-only estimate when available", () => {
-    delete process.env.ALLOW_PAID_MODEL_EXECUTION;
+    process.env.ALLOW_PAID_MODEL_EXECUTION = undefined;
 
     const preflight = evaluatePaidExecutionPreflight(
       {
@@ -51,7 +51,7 @@ describe("paid execution guard baseline estimation", () => {
   });
 
   test("uses project-level paid execution permission before falling back to deny", () => {
-    delete process.env.ALLOW_PAID_MODEL_EXECUTION;
+    process.env.ALLOW_PAID_MODEL_EXECUTION = undefined;
 
     const preflight = evaluatePaidExecutionPreflight(
       {

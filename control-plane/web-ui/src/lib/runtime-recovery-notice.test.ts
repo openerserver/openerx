@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { RECOVERY_SUGGESTION_KINDS } from "./recovery-suggestions";
+import { RUNTIME_RECOVERY_ERROR_CODES } from "./runtime-recovery-contract";
 import {
+  RUNTIME_RECOVERY_CONTEXTS,
   buildRuntimeRecoveryNoticeModel,
   getRuntimeRecoveryNoticeTitle,
-  RUNTIME_RECOVERY_CONTEXTS,
 } from "./runtime-recovery-notice";
-import { RECOVERY_SUGGESTION_KINDS } from "./recovery-suggestions";
 import { SETTINGS_SECTIONS, SETTINGS_TAB_MODELS } from "./settings-deep-link";
-import { RUNTIME_RECOVERY_ERROR_CODES } from "./runtime-recovery-contract";
 
 describe("getRuntimeRecoveryNoticeTitle", () => {
   it("returns page-specific titles for supported contexts", () => {

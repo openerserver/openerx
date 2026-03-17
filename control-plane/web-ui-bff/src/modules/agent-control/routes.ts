@@ -2,8 +2,8 @@ import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
 import { z } from "zod";
 import { authHeader, cpFetch, createInternalAuthorization } from "../../lib/control-plane-client";
-import { recordPaidExecutionRuntimeUsage } from "../../lib/paid-execution-runtime";
 import { mergeTaskStrategy, readOrchestrationStrategy } from "../../lib/orchestration-strategy";
+import { recordPaidExecutionRuntimeUsage } from "../../lib/paid-execution-runtime";
 import { executeLifecycleHooks } from "../hooks/lifecycle-hooks";
 import { wsBroadcaster } from "../realtime/ws-broadcaster";
 import {
@@ -211,7 +211,10 @@ interface AgentAnalyticsTimelineResponse {
 
 type PersistedRunStatus = Parameters<typeof patchAgentRunRecord>[0]["status"];
 
-function buildForwardedQuery(c: { req: { query: (name: string) => string | undefined } }, keys: string[]) {
+function buildForwardedQuery(
+  c: { req: { query: (name: string) => string | undefined } },
+  keys: string[],
+) {
   const params = new URLSearchParams();
   for (const key of keys) {
     const value = c.req.query(key);
@@ -242,7 +245,11 @@ function resolveMergedStatus(persistedStatus: string, runtimeStatus: string) {
     : runtimeStatus;
 }
 
-function maybeResyncRuntimeStatus(agentRunId: string, persistedStatus: string, runtimeRun?: RuntimeRun) {
+function maybeResyncRuntimeStatus(
+  agentRunId: string,
+  persistedStatus: string,
+  runtimeRun?: RuntimeRun,
+) {
   if (!runtimeRun || !shouldPreferPersistedStatus(persistedStatus, runtimeRun.status)) {
     return runtimeRun;
   }
@@ -268,7 +275,11 @@ function mergeQueueItemWithRuntime(item: AgentQueueItem, runtimeRun?: RuntimeRun
 }
 
 function mergeSummaryWithRuntime(summary: AgentRunSummaryResponse, runtimeRun?: RuntimeRun) {
-  const effectiveRuntimeRun = maybeResyncRuntimeStatus(summary.agentRunId, summary.status, runtimeRun);
+  const effectiveRuntimeRun = maybeResyncRuntimeStatus(
+    summary.agentRunId,
+    summary.status,
+    runtimeRun,
+  );
   if (!effectiveRuntimeRun) return summary;
   return {
     ...summary,
@@ -323,7 +334,10 @@ async function maybeBackfillTokenUsage(input: {
   return tokenUsed;
 }
 
-async function buildRuntimeOnlySummary(c: { req: { header: (name: string) => string | undefined } }, runtimeRun: RuntimeRun) {
+async function buildRuntimeOnlySummary(
+  c: { req: { header: (name: string) => string | undefined } },
+  runtimeRun: RuntimeRun,
+) {
   const taskResult = await cpFetch<{ id: string; title: string; projectId: string }>(
     `/api/tasks/${encodeURIComponent(runtimeRun.taskId)}`,
     { authorization: authHeader(c) },
@@ -337,7 +351,9 @@ async function buildRuntimeOnlySummary(c: { req: { header: (name: string) => str
     agentType: "Agent",
     status: runtimeRun.status,
     sessionId: runtimeRun.subSessionId,
-    modelUsed: runtimeRun.model ? `${runtimeRun.model.providerId}:${runtimeRun.model.modelId}` : null,
+    modelUsed: runtimeRun.model
+      ? `${runtimeRun.model.providerId}:${runtimeRun.model.modelId}`
+      : null,
     startedAt: runtimeTimestampToIso(runtimeRun.startedAt),
     finishedAt: runtimeTimestampToIso(runtimeRun.finishedAt),
     lastActivityAt:
@@ -346,7 +362,12 @@ async function buildRuntimeOnlySummary(c: { req: { header: (name: string) => str
       runtimeTimestampToIso(runtimeRun.startedAt),
     durationMs: null,
     tokenUsed: 0,
-    blockerType: runtimeRun.status === "paused" ? "manual_resume" : runtimeRun.status === "running" ? null : runtimeRun.status,
+    blockerType:
+      runtimeRun.status === "paused"
+        ? "manual_resume"
+        : runtimeRun.status === "running"
+          ? null
+          : runtimeRun.status,
     blockerLabel:
       runtimeRun.status === "paused"
         ? "等待人工恢复"
@@ -453,7 +474,10 @@ agentControlRoutes.get("/:agentRunId/summary", async (c) => {
     return c.json(result.data, result.status as 401 | 403 | 404 | 502);
   }
 
-  const summary = mergeSummaryWithRuntime(result.data, runtimeRun ? { agentRunId, ...runtimeRun } : undefined);
+  const summary = mergeSummaryWithRuntime(
+    result.data,
+    runtimeRun ? { agentRunId, ...runtimeRun } : undefined,
+  );
   const tokenUsed = await maybeBackfillTokenUsage({
     agentRunId: summary.agentRunId,
     taskId: summary.taskId,
@@ -481,9 +505,12 @@ agentControlRoutes.get("/analytics/health", async (c) => {
     "model",
     "entryContext",
   ]);
-  const result = await cpFetch<AgentAnalyticsHealthResponse>(`/api/agent-runs/analytics/health${query}`, {
-    authorization: authHeader(c),
-  });
+  const result = await cpFetch<AgentAnalyticsHealthResponse>(
+    `/api/agent-runs/analytics/health${query}`,
+    {
+      authorization: authHeader(c),
+    },
+  );
   return c.json(result.data, result.ok ? 200 : (result.status as 401 | 403 | 502));
 });
 
@@ -504,9 +531,12 @@ agentControlRoutes.get("/analytics/failures", async (c) => {
     "model",
     "entryContext",
   ]);
-  const result = await cpFetch<AgentAnalyticsFailuresResponse>(`/api/agent-runs/analytics/failures${query}`, {
-    authorization: authHeader(c),
-  });
+  const result = await cpFetch<AgentAnalyticsFailuresResponse>(
+    `/api/agent-runs/analytics/failures${query}`,
+    {
+      authorization: authHeader(c),
+    },
+  );
   return c.json(result.data, result.ok ? 200 : (result.status as 401 | 403 | 502));
 });
 
@@ -527,9 +557,12 @@ agentControlRoutes.get("/analytics/timeline", async (c) => {
     "model",
     "entryContext",
   ]);
-  const result = await cpFetch<AgentAnalyticsTimelineResponse>(`/api/agent-runs/analytics/timeline${query}`, {
-    authorization: authHeader(c),
-  });
+  const result = await cpFetch<AgentAnalyticsTimelineResponse>(
+    `/api/agent-runs/analytics/timeline${query}`,
+    {
+      authorization: authHeader(c),
+    },
+  );
   return c.json(result.data, result.ok ? 200 : (result.status as 401 | 403 | 502));
 });
 
@@ -768,7 +801,12 @@ async function runPreResumeHooks(
       agentRunId,
     },
     onHookExecuted: async (execution) => {
-      if (!execution.sessionId || !execution.model || !execution.tokenUsed || execution.tokenUsed <= 0) {
+      if (
+        !execution.sessionId ||
+        !execution.model ||
+        !execution.tokenUsed ||
+        execution.tokenUsed <= 0
+      ) {
         return;
       }
 
@@ -793,7 +831,12 @@ async function runPreResumeHooks(
             triggerType: execution.trigger,
             hookId: execution.hookId,
             amplificationSource: "hook",
-            status: execution.status === "failed" ? "failed" : execution.status === "skipped" ? "skipped" : "completed",
+            status:
+              execution.status === "failed"
+                ? "failed"
+                : execution.status === "skipped"
+                  ? "skipped"
+                  : "completed",
             finishedAt: execution.completedAt,
           },
         },
@@ -807,7 +850,8 @@ async function runPreResumeHooks(
       });
 
       if (outcome.tripped) {
-        breakerReason = outcome.breakerReason || "paid execution breaker tripped during pre-resume hooks";
+        breakerReason =
+          outcome.breakerReason || "paid execution breaker tripped during pre-resume hooks";
         return {
           stop: true,
           reason: breakerReason,

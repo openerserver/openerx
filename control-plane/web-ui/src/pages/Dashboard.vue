@@ -881,17 +881,26 @@ const runtimeOrgOptions = computed(() => {
       value: project.orgId,
       label: orgs.value.find((item) => item.id === project.orgId)?.name || project.orgId,
     }))
-    .filter((option, index, list) => list.findIndex((item) => item.value === option.value) === index)
+    .filter(
+      (option, index, list) => list.findIndex((item) => item.value === option.value) === index,
+    )
     .sort((left, right) => left.label.localeCompare(right.label, "zh-CN"));
 
   return [{ value: "all", label: "全部组织" }, ...options];
 });
 const runtimeProjectGroupOptions = computed(() => {
   const options = projectStore.projects
-    .filter((project) => runtimeOrgFilter.value === "all" || project.orgId === runtimeOrgFilter.value)
-    .map((project) => runtimeProjectGroupLookup.value[project.id] ?? createStandaloneProjectGroup(project))
+    .filter(
+      (project) => runtimeOrgFilter.value === "all" || project.orgId === runtimeOrgFilter.value,
+    )
+    .map(
+      (project) =>
+        runtimeProjectGroupLookup.value[project.id] ?? createStandaloneProjectGroup(project),
+    )
     .map((group) => ({ value: group.key, label: group.label }))
-    .filter((option, index, list) => list.findIndex((item) => item.value === option.value) === index)
+    .filter(
+      (option, index, list) => list.findIndex((item) => item.value === option.value) === index,
+    )
     .sort((left, right) => left.label.localeCompare(right.label, "zh-CN"));
 
   return [{ value: "all", label: "全部项目组" }, ...options];
@@ -901,7 +910,10 @@ const filteredRuntimeLedgerItems = computed(() =>
     if (runtimeOrgFilter.value !== "all" && item.orgId !== runtimeOrgFilter.value) {
       return false;
     }
-    if (runtimeProjectGroupFilter.value !== "all" && item.projectGroupKey !== runtimeProjectGroupFilter.value) {
+    if (
+      runtimeProjectGroupFilter.value !== "all" &&
+      item.projectGroupKey !== runtimeProjectGroupFilter.value
+    ) {
       return false;
     }
     return true;
@@ -935,13 +947,15 @@ const runtimeGovernanceProjectCount = computed(() => {
     .filter((project) => matchesRuntimeGovernanceFilters(project))
     .map((project) => project.id);
 
-  return scopedProjectIds.filter((projectId) => !runtimeLedgerData.value?.failedProjectIds.includes(projectId)).length;
+  return scopedProjectIds.filter(
+    (projectId) => !runtimeLedgerData.value?.failedProjectIds.includes(projectId),
+  ).length;
 });
-const runtimeGovernanceFailedProjects = computed(() =>
-  projectStore.projects
-    .filter((project) => matchesRuntimeGovernanceFilters(project))
-    .filter((project) => runtimeLedgerData.value?.failedProjectIds.includes(project.id))
-    .length,
+const runtimeGovernanceFailedProjects = computed(
+  () =>
+    projectStore.projects
+      .filter((project) => matchesRuntimeGovernanceFilters(project))
+      .filter((project) => runtimeLedgerData.value?.failedProjectIds.includes(project.id)).length,
 );
 const providerRows = computed<DisplayProviderItem[]>(() =>
   (providerTokenData.value?.providers ?? []).map((provider) => {
@@ -970,16 +984,23 @@ const abnormalModelTotal = computed(() =>
   providerRows.value.reduce((sum, provider) => sum + provider.abnormalModelCount, 0),
 );
 const showProviderEmpty = computed(
-  () => !providerBootstrapPending.value && !providerTokenLoading.value && providerRows.value.length === 0,
+  () =>
+    !providerBootstrapPending.value &&
+    !providerTokenLoading.value &&
+    providerRows.value.length === 0,
 );
 const showGovernanceEmpty = computed(
-  () => !governanceBootstrapPending.value
-    && !governanceLoading.value
-    && governanceTopRiskRows.value.length === 0
-    && governanceEventRows.value.length === 0,
+  () =>
+    !governanceBootstrapPending.value &&
+    !governanceLoading.value &&
+    governanceTopRiskRows.value.length === 0 &&
+    governanceEventRows.value.length === 0,
 );
 const showRuntimeLedgerEmpty = computed(
-  () => !runtimeLedgerBootstrapPending.value && !runtimeLedgerLoading.value && filteredRuntimeLedgerItems.value.length === 0,
+  () =>
+    !runtimeLedgerBootstrapPending.value &&
+    !runtimeLedgerLoading.value &&
+    filteredRuntimeLedgerItems.value.length === 0,
 );
 
 const governanceTopRiskRows = computed<GovernanceTaskRow[]>(() =>
@@ -992,7 +1013,7 @@ const governanceTopRiskRows = computed<GovernanceTaskRow[]>(() =>
       ...item,
       projectName: project?.name || item.projectId,
       orgName: project
-        ? (orgs.value.find((entry) => entry.id === project.orgId)?.name || project.orgId)
+        ? orgs.value.find((entry) => entry.id === project.orgId)?.name || project.orgId
         : "未知组织",
       projectGroupKey: projectGroup.key,
       projectGroupLabel: projectGroup.label,
@@ -1011,12 +1032,14 @@ const governanceEventRows = computed<GovernanceEventRow[]>(() =>
           slug: item.projectId || "unknown",
           settings: undefined,
         };
-    const projectGroup = runtimeProjectGroupLookup.value[fallbackProject.id] ?? createStandaloneProjectGroup(fallbackProject);
+    const projectGroup =
+      runtimeProjectGroupLookup.value[fallbackProject.id] ??
+      createStandaloneProjectGroup(fallbackProject);
     return {
       ...item,
       projectName: project?.name || item.projectId || "未知项目",
       orgName: project
-        ? (orgs.value.find((entry) => entry.id === project.orgId)?.name || project.orgId)
+        ? orgs.value.find((entry) => entry.id === project.orgId)?.name || project.orgId
         : "未知组织",
       projectGroupKey: projectGroup.key,
       projectGroupLabel: projectGroup.label,
@@ -1093,11 +1116,17 @@ const runtimeAmplificationSummary = computed(() =>
 );
 
 const riskAmplificationTotal = computed(
-  () => runtimeAmplificationSummary.value.parallelCandidates + runtimeAmplificationSummary.value.judgeRequests + runtimeAmplificationSummary.value.hookRequests,
+  () =>
+    runtimeAmplificationSummary.value.parallelCandidates +
+    runtimeAmplificationSummary.value.judgeRequests +
+    runtimeAmplificationSummary.value.hookRequests,
 );
 
-const topAmplifiedLedger = computed(() =>
-  [...filteredRuntimeLedgerItems.value].sort((left, right) => runtimeLedgerRiskScore(right) - runtimeLedgerRiskScore(left))[0] ?? null,
+const topAmplifiedLedger = computed(
+  () =>
+    [...filteredRuntimeLedgerItems.value].sort(
+      (left, right) => runtimeLedgerRiskScore(right) - runtimeLedgerRiskScore(left),
+    )[0] ?? null,
 );
 
 const topAmplifiedLedgerLabel = computed(() => topAmplifiedLedger.value?.runtimeSessionId || "-");
@@ -1105,7 +1134,8 @@ const topAmplifiedLedgerLabel = computed(() => topAmplifiedLedger.value?.runtime
 const runtimeGovernanceInsightTitle = computed(() => {
   if (projectStore.projects.length === 0) return "当前没有可聚合的项目";
   if (filteredRuntimeLedgerItems.value.length === 0) return "当前筛选范围没有可用的 runtime ledger";
-  if (riskAmplificationTotal.value > 0) return `最近窗口内出现 ${riskAmplificationTotal.value} 次风险放大来源`;
+  if (riskAmplificationTotal.value > 0)
+    return `最近窗口内出现 ${riskAmplificationTotal.value} 次风险放大来源`;
   return "最近执行以单路低放大链路为主";
 });
 
@@ -1120,12 +1150,14 @@ const runtimeGovernanceInsightDescription = computed(() => {
   const topText = top
     ? `${top.projectName} / ${top.runtimeSessionId} 当前成本最高，累计 ${formatUsd(top.costUsd)} / ${formatTokenCount(top.totalTokens)}。`
     : "";
-  const amplificationText = riskAmplificationTotal.value > 0
-    ? ` 放大来源中 parallel=${formatCount(runtimeAmplificationSummary.value.parallelCandidates)}，judge=${formatCount(runtimeAmplificationSummary.value.judgeRequests)}，hook=${formatCount(runtimeAmplificationSummary.value.hookRequests)}。`
-    : " 当前窗口未观察到明显放大来源。";
-  const failureText = runtimeGovernanceFailedProjects.value > 0
-    ? ` ${formatCount(runtimeGovernanceFailedProjects.value)} 个项目加载失败，当前结果按已成功项目聚合。`
-    : "";
+  const amplificationText =
+    riskAmplificationTotal.value > 0
+      ? ` 放大来源中 parallel=${formatCount(runtimeAmplificationSummary.value.parallelCandidates)}，judge=${formatCount(runtimeAmplificationSummary.value.judgeRequests)}，hook=${formatCount(runtimeAmplificationSummary.value.hookRequests)}。`
+      : " 当前窗口未观察到明显放大来源。";
+  const failureText =
+    runtimeGovernanceFailedProjects.value > 0
+      ? ` ${formatCount(runtimeGovernanceFailedProjects.value)} 个项目加载失败，当前结果按已成功项目聚合。`
+      : "";
   return `${topText}${amplificationText}${failureText}`.trim();
 });
 
@@ -1180,11 +1212,15 @@ const maxMonthlyAvgCost = computed(() =>
 
 const monthlyEfficiencyRows = computed(() =>
   monthlyTotals.value.map((item) => {
-    const avgTokensPerCompletedRun = item.completedRuns > 0 ? item.tokenUsed / item.completedRuns : 0;
+    const avgTokensPerCompletedRun =
+      item.completedRuns > 0 ? item.tokenUsed / item.completedRuns : 0;
     return {
       month: item.month,
       avgTokensPerCompletedRun,
-      widthPercent: maxMonthlyAvgCost.value > 0 ? (avgTokensPerCompletedRun / maxMonthlyAvgCost.value) * 100 : 0,
+      widthPercent:
+        maxMonthlyAvgCost.value > 0
+          ? (avgTokensPerCompletedRun / maxMonthlyAvgCost.value) * 100
+          : 0,
     };
   }),
 );
@@ -1202,7 +1238,9 @@ const providerInsightTitle = computed(() => {
   if (!projectStore.currentProjectId) return "请先选择项目";
   if (providerRows.value.length === 0) return "当前没有足够数据做模型调整建议";
   const riskCount = providerSummary.value?.riskProviderCount ?? 0;
-  const downgradeCount = providerRows.value.filter((item) => item.recommendationAction === "downgrade").length;
+  const downgradeCount = providerRows.value.filter(
+    (item) => item.recommendationAction === "downgrade",
+  ).length;
   if (downgradeCount > 0) return `存在 ${downgradeCount} 个建议降配的 Provider`;
   return riskCount > 0 ? "存在可优化的模型分配" : "当前模型分配整体稳定";
 });
@@ -1216,17 +1254,18 @@ const providerInsightDescription = computed(() => {
   }
   const top = providerRows.value[0];
   const riskCount = providerSummary.value?.riskProviderCount ?? 0;
-  const downgradeCount = providerRows.value.filter((item) => item.recommendationAction === "downgrade").length;
+  const downgradeCount = providerRows.value.filter(
+    (item) => item.recommendationAction === "downgrade",
+  ).length;
   const monthlyTail =
     monthlyTotals.value.length > 0 ? monthlyTotals.value[monthlyTotals.value.length - 1] : null;
-  const monthText = monthlyTail
-    ? `最近月度总量 ${formatTokenCount(monthlyTail.tokenUsed)}。`
-    : "";
-  const actionText = downgradeCount > 0
-    ? ` 其中 ${downgradeCount} 个 provider 已满足建议降配条件，可直接进入模型设置调整。`
-    : riskCount > 0
-      ? ` 其中 ${riskCount} 个 provider 已进入重点观察区。`
-      : " 暂无明显高风险 provider。";
+  const monthText = monthlyTail ? `最近月度总量 ${formatTokenCount(monthlyTail.tokenUsed)}。` : "";
+  const actionText =
+    downgradeCount > 0
+      ? ` 其中 ${downgradeCount} 个 provider 已满足建议降配条件，可直接进入模型设置调整。`
+      : riskCount > 0
+        ? ` 其中 ${riskCount} 个 provider 已进入重点观察区。`
+        : " 暂无明显高风险 provider。";
   return `${top.label} 当前承担了 ${formatPercent(top.tokenShare)} 的 token 消耗，平均完成成本 ${formatTokenCount(top.avgTokensPerCompletedRun)}。${actionText} ${monthText}`.trim();
 });
 
@@ -1334,7 +1373,8 @@ async function loadRuntimeLedgerOverview() {
       totals.costUsd = Number((totals.costUsd + response.totals.costUsd).toFixed(4));
 
       for (const item of response.items) {
-        const projectGroup = runtimeProjectGroupLookup.value[project.id] ?? createStandaloneProjectGroup(project);
+        const projectGroup =
+          runtimeProjectGroupLookup.value[project.id] ?? createStandaloneProjectGroup(project);
         items.push({
           ...item,
           orgId: project.orgId,
@@ -1366,10 +1406,7 @@ onMounted(async () => {
     if (projectStore.projects.length === 0) {
       await projectStore.loadProjects();
     }
-    await Promise.all([
-      loadApprovals(),
-      loadOrgs(),
-    ]);
+    await Promise.all([loadApprovals(), loadOrgs()]);
     await Promise.all([
       loadProviderTokens(),
       loadGovernanceOverview(),
@@ -1391,11 +1428,14 @@ watch([() => projectStore.currentProjectId, providerRange], async () => {
   await Promise.all([loadProviderTokens(), loadGovernanceOverview()]);
 });
 
-watch(() => projectStore.currentProjectId, async () => {
-  if (runtimeLedgerData.value == null && projectStore.projects.length > 0) {
-    await loadRuntimeLedgerOverview();
-  }
-});
+watch(
+  () => projectStore.currentProjectId,
+  async () => {
+    if (runtimeLedgerData.value == null && projectStore.projects.length > 0) {
+      await loadRuntimeLedgerOverview();
+    }
+  },
+);
 
 watch(
   () => projectStore.projects.map((project) => project.id).join(","),
@@ -1407,7 +1447,11 @@ watch(
 );
 
 watch(runtimeOrgFilter, () => {
-  if (!runtimeProjectGroupOptions.value.some((option) => option.value === runtimeProjectGroupFilter.value)) {
+  if (
+    !runtimeProjectGroupOptions.value.some(
+      (option) => option.value === runtimeProjectGroupFilter.value,
+    )
+  ) {
     runtimeProjectGroupFilter.value = "all";
   }
 });
@@ -1463,7 +1507,10 @@ function formatUsd(value?: number | null) {
   return `$${Number(value ?? 0).toFixed(4)}`;
 }
 
-function formatProviderRiskSummary(riskProviderCount?: number | null, abnormalModelCount?: number | null) {
+function formatProviderRiskSummary(
+  riskProviderCount?: number | null,
+  abnormalModelCount?: number | null,
+) {
   return `${formatCount(riskProviderCount)} / ${formatCount(abnormalModelCount)}`;
 }
 
@@ -1489,57 +1536,74 @@ function formatGovernanceEventKindLabel(kind: "guard" | "breaker") {
   return kind === "breaker" ? "Breaker" : "Guard";
 }
 
-function summarizeGovernanceEventReason(event: DashboardGovernanceOverviewResponse["recentEvents"][number]) {
+type GovernanceReasonRule = {
+  keywords: string[];
+  label: string;
+};
+
+const BREAKER_REASON_RULES: GovernanceReasonRule[] = [
+  { keywords: ["parallel", "candidate"], label: "并行候选超阈值" },
+  { keywords: ["retry", "retries", "repeated"], label: "重复重试触发熔断" },
+  { keywords: ["hook"], label: "Hook 链路触发熔断" },
+  { keywords: ["judge"], label: "Judge 链路触发熔断" },
+  { keywords: ["cost", "budget"], label: "成本阈值触发熔断" },
+];
+
+const GUARD_REASON_RULES: GovernanceReasonRule[] = [
+  { keywords: ["lease"], label: "缺少付费租约" },
+  { keywords: ["amplification", "parallel", "candidate"], label: "请求放大量超阈值" },
+  { keywords: ["budget", "cost"], label: "预算或成本超限" },
+];
+
+const GUARD_DECISION_REASON_LABELS: Partial<Record<string, string>> = {
+  "require-approval": "转人工审批",
+  "allow-with-downgrade": "自动降配放行",
+  deny: "执行已拦截",
+  allow: "允许执行",
+};
+
+function matchesGovernanceReasonRule(normalizedReason: string, keywords: string[]) {
+  return keywords.some((keyword) => normalizedReason.includes(keyword));
+}
+
+function summarizeGovernanceReasonByRules(normalizedReason: string, rules: GovernanceReasonRule[]) {
+  return rules.find((rule) => matchesGovernanceReasonRule(normalizedReason, rule.keywords))?.label;
+}
+
+function summarizeBreakerEventReason(normalizedReason: string) {
+  return (
+    summarizeGovernanceReasonByRules(normalizedReason, BREAKER_REASON_RULES) ?? "执行链路触发熔断"
+  );
+}
+
+function summarizeGuardEventReason(normalizedReason: string, guardDecision?: string | null) {
+  if (guardDecision === "require-approval" || guardDecision === "allow-with-downgrade") {
+    return GUARD_DECISION_REASON_LABELS[guardDecision] ?? "治理规则命中";
+  }
+
+  const matchedLabel = summarizeGovernanceReasonByRules(normalizedReason, GUARD_REASON_RULES);
+  if (matchedLabel) {
+    return matchedLabel;
+  }
+
+  return GUARD_DECISION_REASON_LABELS[guardDecision ?? ""] ?? "治理规则命中";
+}
+
+function summarizeGovernanceEventReason(
+  event: DashboardGovernanceOverviewResponse["recentEvents"][number],
+) {
   const normalizedReason = (event.reason || "").trim().toLowerCase();
 
   if (event.eventKind === "breaker") {
-    if (normalizedReason.includes("parallel") || normalizedReason.includes("candidate")) {
-      return "并行候选超阈值";
-    }
-    if (
-      normalizedReason.includes("retry")
-      || normalizedReason.includes("retries")
-      || normalizedReason.includes("repeated")
-    ) {
-      return "重复重试触发熔断";
-    }
-    if (normalizedReason.includes("hook")) {
-      return "Hook 链路触发熔断";
-    }
-    if (normalizedReason.includes("judge")) {
-      return "Judge 链路触发熔断";
-    }
-    if (normalizedReason.includes("cost") || normalizedReason.includes("budget")) {
-      return "成本阈值触发熔断";
-    }
-    return "执行链路触发熔断";
+    return summarizeBreakerEventReason(normalizedReason);
   }
 
-  if (event.guardDecision === "require-approval") {
-    return "转人工审批";
-  }
-  if (event.guardDecision === "allow-with-downgrade") {
-    return "自动降配放行";
-  }
-  if (normalizedReason.includes("lease")) {
-    return "缺少付费租约";
-  }
-  if (normalizedReason.includes("amplification") || normalizedReason.includes("parallel") || normalizedReason.includes("candidate")) {
-    return "请求放大量超阈值";
-  }
-  if (normalizedReason.includes("budget") || normalizedReason.includes("cost")) {
-    return "预算或成本超限";
-  }
-  if (event.guardDecision === "deny") {
-    return "执行已拦截";
-  }
-  if (event.guardDecision === "allow") {
-    return "允许执行";
-  }
-  return "治理规则命中";
+  return summarizeGuardEventReason(normalizedReason, event.guardDecision);
 }
 
-function governanceEventReasonColor(event: DashboardGovernanceOverviewResponse["recentEvents"][number]) {
+function governanceEventReasonColor(
+  event: DashboardGovernanceOverviewResponse["recentEvents"][number],
+) {
   if (event.eventKind === "breaker") return "volcano";
   if (event.guardDecision === "deny") return "red";
   if (event.guardDecision === "require-approval") return "orange";
@@ -1548,68 +1612,117 @@ function governanceEventReasonColor(event: DashboardGovernanceOverviewResponse["
   return "blue";
 }
 
-function matchesRuntimeGovernanceFilters(project: Pick<Project, "id" | "orgId" | "name" | "slug" | "settings">) {
+function matchesRuntimeGovernanceFilters(
+  project: Pick<Project, "id" | "orgId" | "name" | "slug" | "settings">,
+) {
   if (runtimeOrgFilter.value !== "all" && project.orgId !== runtimeOrgFilter.value) {
     return false;
   }
 
   if (runtimeProjectGroupFilter.value !== "all") {
-    const group = runtimeProjectGroupLookup.value[project.id] ?? createStandaloneProjectGroup(project);
+    const group =
+      runtimeProjectGroupLookup.value[project.id] ?? createStandaloneProjectGroup(project);
     return group.key === runtimeProjectGroupFilter.value;
   }
 
   return true;
 }
 
-function buildRuntimeProjectGroupLookup(projects: Array<Pick<Project, "id" | "orgId" | "name" | "slug" | "settings">>) {
-  const explicitDescriptorByProjectId = new Map<string, ProjectGroupDescriptor>();
-  const explicitLabelByScopedKey = new Map<string, string>();
-  const familyCountByScopedKey = new Map<string, number>();
-  const candidateByProjectId = new Map<string, string | null>();
+type RuntimeProjectGroupLookupMaps = {
+  explicitDescriptorByProjectId: Map<string, ProjectGroupDescriptor>;
+  explicitLabelByScopedKey: Map<string, string>;
+  familyCountByScopedKey: Map<string, number>;
+  candidateByProjectId: Map<string, string | null>;
+};
+
+function createRuntimeProjectGroupLookupMaps(): RuntimeProjectGroupLookupMaps {
+  return {
+    explicitDescriptorByProjectId: new Map<string, ProjectGroupDescriptor>(),
+    explicitLabelByScopedKey: new Map<string, string>(),
+    familyCountByScopedKey: new Map<string, number>(),
+    candidateByProjectId: new Map<string, string | null>(),
+  };
+}
+
+function createRuntimeProjectFamilyKey(orgId: string, candidate: string) {
+  return `${orgId}::${candidate}`;
+}
+
+function collectRuntimeProjectGroupCandidates(
+  projects: Array<Pick<Project, "id" | "orgId" | "name" | "slug" | "settings">>,
+) {
+  const maps = createRuntimeProjectGroupLookupMaps();
 
   for (const project of projects) {
     const explicitGroup = resolveExplicitProjectGroup(project);
     if (explicitGroup) {
-      explicitDescriptorByProjectId.set(project.id, explicitGroup);
-      if (!explicitLabelByScopedKey.has(explicitGroup.key)) {
-        explicitLabelByScopedKey.set(explicitGroup.key, explicitGroup.label);
+      maps.explicitDescriptorByProjectId.set(project.id, explicitGroup);
+      if (!maps.explicitLabelByScopedKey.has(explicitGroup.key)) {
+        maps.explicitLabelByScopedKey.set(explicitGroup.key, explicitGroup.label);
       }
       continue;
     }
 
     const candidate = deriveProjectGroupFamilyCandidate(project.slug, project.name);
-    candidateByProjectId.set(project.id, candidate);
-    if (!candidate) continue;
-
-    const key = `${project.orgId}::${candidate}`;
-    familyCountByScopedKey.set(key, (familyCountByScopedKey.get(key) ?? 0) + 1);
-  }
-
-  const lookup: Record<string, ProjectGroupDescriptor> = {};
-  for (const project of projects) {
-    const explicitGroup = explicitDescriptorByProjectId.get(project.id);
-    if (explicitGroup) {
-      lookup[project.id] = {
-        key: explicitGroup.key,
-        label: explicitLabelByScopedKey.get(explicitGroup.key) ?? explicitGroup.label,
-      };
+    maps.candidateByProjectId.set(project.id, candidate);
+    if (!candidate) {
       continue;
     }
 
-    const candidate = candidateByProjectId.get(project.id) ?? null;
-    const count = candidate ? familyCountByScopedKey.get(`${project.orgId}::${candidate}`) ?? 0 : 0;
-    lookup[project.id] = count >= 2 && candidate
-      ? {
-          key: `family:${project.orgId}:${candidate}`,
-          label: candidate,
-        }
-      : createStandaloneProjectGroup(project);
+    const familyKey = createRuntimeProjectFamilyKey(project.orgId, candidate);
+    maps.familyCountByScopedKey.set(
+      familyKey,
+      (maps.familyCountByScopedKey.get(familyKey) ?? 0) + 1,
+    );
+  }
+
+  return maps;
+}
+
+function buildRuntimeProjectGroupDescriptor(
+  project: Pick<Project, "id" | "orgId" | "name" | "slug" | "settings">,
+  maps: RuntimeProjectGroupLookupMaps,
+) {
+  const explicitGroup = maps.explicitDescriptorByProjectId.get(project.id);
+  if (explicitGroup) {
+    return {
+      key: explicitGroup.key,
+      label: maps.explicitLabelByScopedKey.get(explicitGroup.key) ?? explicitGroup.label,
+    };
+  }
+
+  const candidate = maps.candidateByProjectId.get(project.id) ?? null;
+  const familyCount = candidate
+    ? (maps.familyCountByScopedKey.get(createRuntimeProjectFamilyKey(project.orgId, candidate)) ??
+      0)
+    : 0;
+
+  if (candidate && familyCount >= 2) {
+    return {
+      key: `family:${project.orgId}:${candidate}`,
+      label: candidate,
+    };
+  }
+
+  return createStandaloneProjectGroup(project);
+}
+
+function buildRuntimeProjectGroupLookup(
+  projects: Array<Pick<Project, "id" | "orgId" | "name" | "slug" | "settings">>,
+) {
+  const maps = collectRuntimeProjectGroupCandidates(projects);
+
+  const lookup: Record<string, ProjectGroupDescriptor> = {};
+  for (const project of projects) {
+    lookup[project.id] = buildRuntimeProjectGroupDescriptor(project, maps);
   }
 
   return lookup;
 }
 
-function resolveExplicitProjectGroup(project: Pick<Project, "id" | "orgId" | "settings">): ProjectGroupDescriptor | null {
+function resolveExplicitProjectGroup(
+  project: Pick<Project, "id" | "orgId" | "settings">,
+): ProjectGroupDescriptor | null {
   const rawKey = normalizeProjectGroupMetadataValue(project.settings?.projectGroupKey);
   const rawLabel = normalizeProjectGroupMetadataValue(project.settings?.projectGroupLabel);
 
@@ -1631,7 +1744,7 @@ function resolveExplicitProjectGroup(project: Pick<Project, "id" | "orgId" | "se
 function deriveProjectGroupFamilyCandidate(slug?: string | null, name?: string | null) {
   const slugTokens = tokenizeProjectGroupSource(slug);
   if (slugTokens.length > 0) {
-    return slugTokens[0]!;
+    return slugTokens[0] ?? null;
   }
 
   const nameTokens = tokenizeProjectGroupSource(name);
@@ -1654,7 +1767,9 @@ function normalizeProjectGroupKeySegment(value: string) {
   return tokenizeProjectGroupSource(value).join("-");
 }
 
-function createStandaloneProjectGroup(project: Pick<Project, "id" | "name" | "slug">): ProjectGroupDescriptor {
+function createStandaloneProjectGroup(
+  project: Pick<Project, "id" | "name" | "slug">,
+): ProjectGroupDescriptor {
   const label = project.name?.trim() || project.slug?.trim() || "未分组";
   return {
     key: `project:${project.id}`,
@@ -1802,20 +1917,24 @@ function modelProviderId(model?: { route?: string | null } | null) {
   return route;
 }
 
-function isEmptyRequestModel(model?: {
-  tokenUsed?: number | null;
-  requestCount?: number | null;
-  totalRuns?: number | null;
-  completedRuns?: number | null;
-} | null) {
+function isEmptyRequestModel(
+  model?: {
+    tokenUsed?: number | null;
+    requestCount?: number | null;
+    totalRuns?: number | null;
+    completedRuns?: number | null;
+  } | null,
+) {
   const requestCount = model?.requestCount ?? model?.totalRuns ?? 0;
   return requestCount > 0 && (model?.completedRuns ?? 0) === 0 && (model?.tokenUsed ?? 0) <= 0;
 }
 
-function isFailedRequestModel(model?: {
-  failedRuns?: number | null;
-  failureRate?: number | null;
-} | null) {
+function isFailedRequestModel(
+  model?: {
+    failedRuns?: number | null;
+    failureRate?: number | null;
+  } | null,
+) {
   return (model?.failedRuns ?? 0) > 0 || (model?.failureRate ?? 0) > 0;
 }
 
@@ -1844,7 +1963,8 @@ function modelDisplayGroupOrder(group: ModelDisplayGroup) {
 }
 
 function compareModelsForDisplay(left: DisplayModelItem, right: DisplayModelItem) {
-  const groupDelta = modelDisplayGroupOrder(left.displayGroup) - modelDisplayGroupOrder(right.displayGroup);
+  const groupDelta =
+    modelDisplayGroupOrder(left.displayGroup) - modelDisplayGroupOrder(right.displayGroup);
   if (groupDelta !== 0) return groupDelta;
   if (right.tokenUsed !== left.tokenUsed) return right.tokenUsed - left.tokenUsed;
   return (right.requestCount ?? right.totalRuns) - (left.requestCount ?? left.totalRuns);

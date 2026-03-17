@@ -425,22 +425,22 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
   ApiError,
+  type AutopilotLevel,
+  type BossParticipationMode,
   type CollaborationMode,
   type CommandSummary,
-  getOrchestrationStrategy,
-  getTaskExecutionPreflight,
   type OperatingModeSelection,
+  type RecommendedOperatingProfile,
   type Repository,
   type RepositoryCredential,
-  type RecommendedOperatingProfile,
   TASK_LIST_LIMIT,
   type Task,
-  type BossParticipationMode,
-  type AutopilotLevel,
   createTask,
   executeTask,
   getModelsList,
+  getOrchestrationStrategy,
   getTask,
+  getTaskExecutionPreflight,
   listCommands,
   listCredentials,
   listRepositories,
@@ -848,8 +848,8 @@ async function attemptTaskExecution(taskId: string, fromAutoCreate = false) {
   }
 
   if (
-    preflight.preflight.guardDecision === "allow-with-downgrade"
-    && preflight.policy.suggestedModel
+    preflight.preflight.guardDecision === "allow-with-downgrade" &&
+    preflight.policy.suggestedModel
   ) {
     const confirmed = window.confirm(
       `当前模型需要先降级后才能执行。\n\n建议切换到 ${preflight.policy.suggestedModel} 并立即重试。\n\n原因：${preflight.preflight.guardReason}`,
@@ -871,7 +871,9 @@ async function attemptTaskExecution(taskId: string, fromAutoCreate = false) {
       });
     }
 
-    message.success(fromAutoCreate ? "已自动降级模型并重试执行" : "已切换到低成本模型，正在重试执行");
+    message.success(
+      fromAutoCreate ? "已自动降级模型并重试执行" : "已切换到低成本模型，正在重试执行",
+    );
     return runTaskExecution(taskId);
   }
 
@@ -968,7 +970,12 @@ function readRelationContextFromRouteQuery(query: Record<string, unknown>) {
   const blockedByTaskIds = readQueryTaskIdList(query.blockedByTaskIds ?? query.blockedByTaskId);
   const blocksTaskIds = readQueryTaskIdList(query.blocksTaskIds ?? query.blocksTaskId);
 
-  if (!spawnedFromTaskId && dependsOnTaskIds.length === 0 && blockedByTaskIds.length === 0 && blocksTaskIds.length === 0) {
+  if (
+    !spawnedFromTaskId &&
+    dependsOnTaskIds.length === 0 &&
+    blockedByTaskIds.length === 0 &&
+    blocksTaskIds.length === 0
+  ) {
     return undefined;
   }
 
@@ -987,7 +994,14 @@ function readQueryTaskIdList(value: unknown): string[] {
   if (typeof value !== "string" || !value.trim()) {
     return [];
   }
-  return Array.from(new Set(value.split(",").map((item) => item.trim()).filter(Boolean)));
+  return Array.from(
+    new Set(
+      value
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean),
+    ),
+  );
 }
 
 function readQueryString(value: unknown): string | undefined {
@@ -1002,8 +1016,7 @@ const DEFAULT_TASK_TEMPLATES: TaskTemplate[] = [
   {
     name: "常规缺陷修复",
     title: "修复线上问题",
-    prompt:
-      "请先定位问题根因，给出最小必要修复。\n补充受影响范围、回归风险和验证步骤。",
+    prompt: "请先定位问题根因，给出最小必要修复。\n补充受影响范围、回归风险和验证步骤。",
   },
   {
     name: "功能开发",

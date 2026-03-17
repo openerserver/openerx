@@ -2,6 +2,75 @@
 	"version": "2.0.0",
 	"tasks": [
 		{
+			"label": "start-app",
+			"type": "shell",
+			"command": "zsh",
+			"args": [
+				"-lc",
+				"pids=$(lsof -ti tcp:4098 -sTCP:LISTEN 2>/dev/null || true); if [[ -n \"$pids\" ]]; then kill $pids; sleep 1; fi; cd control-plane/app && exec bun run dev"
+			],
+			"isBackground": true,
+			"problemMatcher": {
+				"owner": "custom",
+				"pattern": {
+					"regexp": "^(.*)$",
+					"message": 1
+				},
+				"background": {
+					"activeOnStart": true,
+					"beginsPattern": ".",
+					"endsPattern": "OpenerX App running on http://localhost:4098"
+				}
+			},
+			"group": "none"
+		},
+		{
+			"label": "start-app-pg",
+			"type": "shell",
+			"command": "zsh",
+			"args": [
+				"-lc",
+				"pids=$(lsof -ti tcp:4098 -sTCP:LISTEN 2>/dev/null || true); if [[ -n \"$pids\" ]]; then kill $pids; sleep 1; fi; APP_PORT=4098 DATABASE_DIALECT=postgres DATABASE_URL=${DATABASE_URL:-postgres://127.0.0.1:5432/openerx} exec bun run control-plane/app/src/index.ts"
+			],
+			"isBackground": true,
+			"problemMatcher": {
+				"owner": "custom",
+				"pattern": {
+					"regexp": "^(.*)$",
+					"message": 1
+				},
+				"background": {
+					"activeOnStart": true,
+					"beginsPattern": ".",
+					"endsPattern": "OpenerX App running on http://localhost:4098"
+				}
+			},
+			"group": "none"
+		},
+		{
+			"label": "start-app-pg-4193",
+			"type": "shell",
+			"command": "zsh",
+			"args": [
+				"-lc",
+				"pids=$(lsof -ti tcp:4193 -sTCP:LISTEN 2>/dev/null || true); if [[ -n \"$pids\" ]]; then kill $pids; sleep 1; fi; APP_PORT=4193 DATABASE_DIALECT=postgres DATABASE_URL=${DATABASE_URL:-postgres://127.0.0.1:5432/openerx} exec bun run control-plane/app/src/index.ts"
+			],
+			"isBackground": true,
+			"problemMatcher": {
+				"owner": "custom",
+				"pattern": {
+					"regexp": "^(.*)$",
+					"message": 1
+				},
+				"background": {
+					"activeOnStart": true,
+					"beginsPattern": ".",
+					"endsPattern": "OpenerX App running on http://localhost:4193"
+				}
+			},
+			"group": "none"
+		},
+		{
 			"label": "start-control-plane-service",
 			"type": "shell",
 			"command": "zsh",
@@ -94,6 +163,28 @@
 			"group": "none"
 		},
 		{
+			"label": "stop-app",
+			"type": "shell",
+			"command": "zsh",
+			"args": [
+				"-lc",
+				"pids=$(lsof -ti tcp:4098 -sTCP:LISTEN 2>/dev/null || true); if [[ -n \"$pids\" ]]; then kill $pids; fi"
+			],
+			"isBackground": false,
+			"group": "none"
+		},
+		{
+			"label": "stop-app-pg-4193",
+			"type": "shell",
+			"command": "zsh",
+			"args": [
+				"-lc",
+				"pids=$(lsof -ti tcp:4193 -sTCP:LISTEN 2>/dev/null || true); if [[ -n \"$pids\" ]]; then kill $pids; fi"
+			],
+			"isBackground": false,
+			"group": "none"
+		},
+		{
 			"label": "stop-control-plane-service",
 			"type": "shell",
 			"command": "zsh",
@@ -138,6 +229,36 @@
 			"group": "none"
 		},
 		{
+			"label": "restart-app",
+			"dependsOrder": "sequence",
+			"dependsOn": [
+				"stop-app",
+				"start-app"
+			],
+			"problemMatcher": [],
+			"group": "none"
+		},
+		{
+			"label": "restart-app-pg",
+			"dependsOrder": "sequence",
+			"dependsOn": [
+				"stop-app",
+				"start-app-pg"
+			],
+			"problemMatcher": [],
+			"group": "none"
+		},
+		{
+			"label": "restart-app-pg-4193",
+			"dependsOrder": "sequence",
+			"dependsOn": [
+				"stop-app-pg-4193",
+				"start-app-pg-4193"
+			],
+			"problemMatcher": [],
+			"group": "none"
+		},
+		{
 			"label": "restart-control-plane-service",
 			"dependsOrder": "sequence",
 			"dependsOn": [
@@ -178,6 +299,17 @@
 			"group": "none"
 		},
 		{
+			"label": "start-single-process-dev",
+			"dependsOrder": "parallel",
+			"dependsOn": [
+				"start-opencode-runtime",
+				"start-app",
+				"start-web-ui"
+			],
+			"problemMatcher": [],
+			"group": "none"
+		},
+		{
 			"label": "start-all-dev",
 			"dependsOrder": "parallel",
 			"dependsOn": [
@@ -190,9 +322,26 @@
 			"group": "none"
 		},
 		{
+			"label": "start-single-process-pg-4193",
+			"dependsOrder": "parallel",
+			"dependsOn": [
+				"start-opencode-runtime",
+				"start-app-pg-4193"
+			],
+			"problemMatcher": [],
+			"group": "none"
+		},
+		{
 			"label": "run-completion-sync-real",
 			"type": "shell",
 			"command": "cd control-plane/web-ui-bff && TEST_BFF_URL=http://127.0.0.1:4098 RUN_EXECUTION_INTEGRATION=1 bun test ../../tests/web-ui-bff/opencode-completion-sync.test.ts --timeout 120000",
+			"isBackground": false,
+			"group": "test"
+		},
+		{
+			"label": "check-app-health",
+			"type": "shell",
+			"command": "curl -s -o /dev/null -w '%{http_code}\\n' http://127.0.0.1:4098/health/live",
 			"isBackground": false,
 			"group": "test"
 		},

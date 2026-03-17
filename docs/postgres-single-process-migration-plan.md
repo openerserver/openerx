@@ -433,6 +433,33 @@ SQLite 到 PostgreSQL 不是简单替换 driver，必须审视以下差异：
 - 不再依赖 SQLite 文件与 runtime table bootstrap
 - runtime-schema.ts 中的双轨表定义全部收归 Drizzle schema，ensureRuntimeTables / ensureColumn 机制消除
 
+### Phase 1 当前完成度评估
+
+截至 2026-03-17，PostgreSQL 基础替换的状态应定义为：**主链路已完成并验证通过，但尚未完成最终收口**。
+
+已完成：
+
+- 已引入 `postgres.js` 与 `drizzle-orm/postgres-js`，PG driver 已进入实际运行路径。
+- 已提供 PostgreSQL 连接实现与运行时切换能力，`DATABASE_DIALECT=postgres` 下控制面可直接运行。
+- 已新增 PostgreSQL Drizzle schema，并将原 `runtime-schema.ts` 中的主要运行时表收入 `pgTable()` 声明。
+- 已生成并落地 PostgreSQL migration 目录与基线 SQL，可执行 `db:migrate:pg`。
+- 已支持 PostgreSQL seed，`db:seed:pg` 可执行。
+- 已在 PostgreSQL + 单进程 app 形态下完成 typecheck、health check 以及 execution 集成回归验证。
+
+未完成：
+
+- SQLite 尚未退出主路径，当前仓库仍保留 `sqlite` / `postgres` 双栈运行分支。
+- `runtime-schema.ts` 尚未删除，`ensureRuntimeTables` / `ensureColumn` 启动期补表机制仍然存在。
+- `sqlite-config.ts`、`sqlite-client.ts` 等 SQLite 专用连接与兼容逻辑仍是活代码，而非纯历史文件。
+- `seed.ts` 仍保留 `sqlite_master`、`PRAGMA table_info`、旧时间字段归一化等 SQLite 兼容分支。
+- 文档要求的“导出 SQLite 历史数据 -> 导入 PostgreSQL -> 行数与关键外键一致性校验”尚未形成独立、完整、可重复执行的数据迁移脚本链路。
+
+当前判定：
+
+- 如果标准是“PostgreSQL 已可作为主运行数据库并通过当前真实链路验证”，则这一目标已经达成。
+- 如果标准是“Phase 1 在代码与运维层面彻底完成，SQLite 不再作为主路径存在”，则目前**尚未全部完成**。
+- 因此当前更准确的状态不是“PG 迁移全部完成”，而是“**PG 主运行链路完成，Phase 1 收口未完成**”。
+
 ### Phase 2. 合并 Control Plane 与 BFF
 
 目标：消除本机 HTTP 回源。

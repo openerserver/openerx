@@ -183,9 +183,9 @@
 import { onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
-  getProjectBossOperationsView,
   type OperatingModeSelection,
   type ProjectBossOperationsView,
+  getProjectBossOperationsView,
   toApiError,
 } from "../lib/api";
 
@@ -265,8 +265,8 @@ function formatTemplateDecisionSource(metadata?: Record<string, unknown>) {
 
 function formatTemplateDecisionTrigger(metadata?: Record<string, unknown>) {
   if (metadata?.trigger === "startup") return "执行启动前";
-  if (metadata?.trigger === "stage-blocked") return `阻断后二次治理`;
-  if (metadata?.trigger === "stage-waiting-approval") return `升级后二次治理`;
+  if (metadata?.trigger === "stage-blocked") return "阻断后二次治理";
+  if (metadata?.trigger === "stage-waiting-approval") return "升级后二次治理";
   return "";
 }
 
@@ -296,7 +296,8 @@ async function loadData() {
   try {
     viewModel.value = await getProjectBossOperationsView(projectId);
   } catch (error) {
-    loadError.value = toApiError(error)?.message || (error instanceof Error ? error.message : String(error));
+    loadError.value =
+      toApiError(error)?.message || (error instanceof Error ? error.message : String(error));
   } finally {
     loading.value = false;
   }

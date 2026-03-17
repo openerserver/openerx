@@ -158,6 +158,117 @@ function buildBindingPatch(
   return patch;
 }
 
+function buildDesiredRole(definition: (typeof DEFAULT_ROLE_AGENT_DEFINITIONS)[number], now: string) {
+  return {
+    id: definition.role.id,
+    projectId: null,
+    name: definition.role.name,
+    description: definition.role.description,
+    scope: definition.role.scope,
+    status: "active" as const,
+    ownerTeam: definition.role.ownerTeam ?? null,
+    permissionProfile: definition.role.permissionProfile,
+    toolProfile: definition.role.toolProfile,
+    defaultExecutionMode: definition.role.defaultExecutionMode,
+    aggregationStrategy: definition.role.aggregationStrategy ?? null,
+    maxActiveBindings: definition.role.maxActiveBindings ?? null,
+    requireConsensus: definition.role.requireConsensus ?? false,
+    riskLevel: definition.role.riskLevel ?? "low",
+    requiresApprovalForWrite: definition.role.requiresApprovalForWrite ?? false,
+    allowedStagesJson: definition.role.allowedStages,
+    outputSchemaId: definition.role.outputSchemaId ?? null,
+    tagsJson: definition.role.tags ?? null,
+    createdAt: now,
+    updatedAt: now,
+  } satisfies typeof roleAgents.$inferInsert;
+}
+
+async function syncDefaultRole(
+  database: DB,
+  definition: (typeof DEFAULT_ROLE_AGENT_DEFINITIONS)[number],
+  desiredRole: typeof roleAgents.$inferInsert,
+  overwrite: boolean,
+  result: BootstrapDefaultRoleAgentsResult,
+) {
+  const existingRole = await database.query.roleAgents.findFirst({
+    where: eq(roleAgents.id, definition.role.id),
+  });
+
+  if (!existingRole) {
+    await database.insert(roleAgents).values(desiredRole);
+    result.createdRoles.push(definition.role.id);
+    return;
+  }
+
+  const patch = buildRolePatch(existingRole, desiredRole, overwrite);
+  if (Object.keys(patch).length === 0) {
+    result.skippedRoles.push(definition.role.id);
+    return;
+  }
+
+  await database
+    .update(roleAgents)
+    .set({ ...patch, updatedAt: desiredRole.updatedAt })
+    .where(eq(roleAgents.id, definition.role.id));
+  result.updatedRoles.push(definition.role.id);
+}
+
+function buildDesiredBinding(
+  roleId: string,
+  binding: (typeof DEFAULT_ROLE_AGENT_DEFINITIONS)[number]["bindings"][number],
+  now: string,
+) {
+  return {
+    id: crypto.randomUUID(),
+    roleAgentId: roleId,
+    bindingKey: binding.bindingKey,
+    runtimeAgent: binding.runtimeAgent,
+    label: binding.label,
+    enabled: binding.enabled ?? true,
+    priority: binding.priority,
+    model: binding.model ?? null,
+    tagsJson: binding.tags ?? null,
+    createdAt: now,
+    updatedAt: now,
+  } satisfies typeof roleAgentBindings.$inferInsert;
+}
+
+async function syncDefaultBindings(
+  database: DB,
+  definition: (typeof DEFAULT_ROLE_AGENT_DEFINITIONS)[number],
+  overwrite: boolean,
+  result: BootstrapDefaultRoleAgentsResult,
+) {
+  const existingBindings = await database
+    .select()
+    .from(roleAgentBindings)
+    .where(eq(roleAgentBindings.roleAgentId, definition.role.id));
+
+  for (const binding of definition.bindings) {
+    const now = new Date().toISOString();
+    const desiredBinding = buildDesiredBinding(definition.role.id, binding, now);
+    const existingBinding = existingBindings.find((item) => item.bindingKey === binding.bindingKey);
+
+    if (!existingBinding) {
+      await database.insert(roleAgentBindings).values(desiredBinding);
+      result.createdBindings.push(`${definition.role.id}:${binding.bindingKey}`);
+      continue;
+    }
+
+    const patch = buildBindingPatch(existingBinding, desiredBinding, overwrite);
+    if (Object.keys(patch).length === 0) {
+      result.skippedBindings.push(`${definition.role.id}:${binding.bindingKey}`);
+      continue;
+    }
+
+    await database
+      .update(roleAgentBindings)
+      .set({ ...patch, updatedAt: now })
+      .where(eq(roleAgentBindings.id, existingBinding.id));
+    result.updatedBindings.push(`${definition.role.id}:${binding.bindingKey}`);
+  }
+}
+
 export async function bootstrapDefaultRoleAgents(
   database: DB,
   options: BootstrapDefaultRoleAgentsOptions = {},
@@ -175,92 +286,14 @@ export async function bootstrapDefaultRoleAgents(
 
   for (const definition of DEFAULT_ROLE_AGENT_DEFINITIONS) {
     const now = new Date().toISOString();
-    const desiredRole: typeof roleAgents.$inferInsert = {
-      id: definition.role.id,
-      projectId: null,
-      name: definition.role.name,
-      description: definition.role.description,
-      scope: definition.role.scope,
-      status: "active",
-      ownerTeam: definition.role.ownerTeam ?? null,
-      permissionProfile: definition.role.permissionProfile,
-      toolProfile: definition.role.toolProfile,
-      defaultExecutionMode: definition.role.defaultExecutionMode,
-      aggregationStrategy: definition.role.aggregationStrategy ?? null,
-      maxActiveBindings: definition.role.maxActiveBindings ?? null,
-      requireConsensus: definition.role.requireConsensus ?? false,
-      riskLevel: definition.role.riskLevel ?? "low",
-      requiresApprovalForWrite: definition.role.requiresApprovalForWrite ?? false,
-      allowedStagesJson: definition.role.allowedStages,
-      outputSchemaId: definition.role.outputSchemaId ?? null,
-      tagsJson: definition.role.tags ?? null,
-      createdAt: now,
-      updatedAt: now,
-    };
-
-    const existingRole = await database.query.roleAgents.findFirst({
-      where: eq(roleAgents.id, definition.role.id),
-    });
-
-    if (!existingRole) {
-      await database.insert(roleAgents).values(desiredRole);
-      result.createdRoles.push(definition.role.id);
-    } else {
-      const patch = buildRolePatch(existingRole, desiredRole, overwrite);
-      if (Object.keys(patch).length > 0) {
-        await database
-          .update(roleAgents)
-          .set({ ...patch, updatedAt: now })
-          .where(eq(roleAgents.id, definition.role.id));
-        result.updatedRoles.push(definition.role.id);
-      } else {
-        result.skippedRoles.push(definition.role.id);
-      }
-    }
+    const desiredRole = buildDesiredRole(definition, now);
+    await syncDefaultRole(database, definition, desiredRole, overwrite, result);
 
     if (!applyBindings) {
       continue;
     }
 
-    const existingBindings = await database
-      .select()
-      .from(roleAgentBindings)
-      .where(eq(roleAgentBindings.roleAgentId, definition.role.id));
-
-    for (const binding of definition.bindings) {
-      const nowBinding = new Date().toISOString();
-      const desiredBinding: typeof roleAgentBindings.$inferInsert = {
-        id: crypto.randomUUID(),
-        roleAgentId: definition.role.id,
-        bindingKey: binding.bindingKey,
-        runtimeAgent: binding.runtimeAgent,
-        label: binding.label,
-        enabled: binding.enabled ?? true,
-        priority: binding.priority,
-        model: binding.model ?? null,
-        tagsJson: binding.tags ?? null,
-        createdAt: nowBinding,
-        updatedAt: nowBinding,
-      };
-      const existingBinding = existingBindings.find((item) => item.bindingKey === binding.bindingKey);
-
-      if (!existingBinding) {
-        await database.insert(roleAgentBindings).values(desiredBinding);
-        result.createdBindings.push(`${definition.role.id}:${binding.bindingKey}`);
-        continue;
-      }
-
-      const patch = buildBindingPatch(existingBinding, desiredBinding, overwrite);
-      if (Object.keys(patch).length > 0) {
-        await database
-          .update(roleAgentBindings)
-          .set({ ...patch, updatedAt: nowBinding })
-          .where(eq(roleAgentBindings.id, existingBinding.id));
-        result.updatedBindings.push(`${definition.role.id}:${binding.bindingKey}`);
-      } else {
-        result.skippedBindings.push(`${definition.role.id}:${binding.bindingKey}`);
-      }
-    }
+    await syncDefaultBindings(database, definition, overwrite, result);
   }
 
   return result;

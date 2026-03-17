@@ -75,13 +75,13 @@ import { message } from "ant-design-vue";
 import { onMounted, reactive, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
+  type OperatingModeSelection,
+  type Task,
+  type TaskOperatingState,
   deleteTaskOperatingMode,
   getTask,
   getTaskOperatingMode,
   getTaskOperatingState,
-  type OperatingModeSelection,
-  type Task,
-  type TaskOperatingState,
   toApiError,
   updateTaskOperatingMode,
 } from "../lib/api";
@@ -134,10 +134,10 @@ function asAutopilotLevel(value: unknown): OperatingModeSelection["autopilotLeve
 }
 
 function asBossMode(value: unknown): OperatingModeSelection["bossParticipationMode"] {
-  return value === "disabled"
-    || value === "advisory"
-    || value === "exception-only"
-    || value === "full-manager"
+  return value === "disabled" ||
+    value === "advisory" ||
+    value === "exception-only" ||
+    value === "full-manager"
     ? value
     : "advisory";
 }
@@ -145,7 +145,8 @@ function asBossMode(value: unknown): OperatingModeSelection["bossParticipationMo
 function applyMode(mode?: OperatingModeSelection | null, state?: TaskOperatingState | null) {
   form.collaborationMode = mode?.collaborationMode || state?.collaborationMode || "solo";
   form.autopilotLevel = mode?.autopilotLevel || state?.autopilotLevel || "L1";
-  form.bossParticipationMode = mode?.bossParticipationMode || state?.bossParticipationMode || "advisory";
+  form.bossParticipationMode =
+    mode?.bossParticipationMode || state?.bossParticipationMode || "advisory";
   form.selectedTemplateId = mode?.selectedTemplateId || null;
   form.scenarioKey = mode?.scenarioKey || undefined;
   form.source = "task-override";
@@ -164,7 +165,8 @@ async function loadData() {
     currentState.value = stateResult;
     applyMode(modeResult.data, stateResult);
   } catch (error) {
-    loadError.value = toApiError(error)?.message || (error instanceof Error ? error.message : String(error));
+    loadError.value =
+      toApiError(error)?.message || (error instanceof Error ? error.message : String(error));
   } finally {
     loading.value = false;
   }
@@ -177,7 +179,9 @@ async function handleSave() {
     message.success("任务级覆盖已保存");
     await loadData();
   } catch (error) {
-    message.error(`保存失败: ${toApiError(error)?.message || (error instanceof Error ? error.message : String(error))}`);
+    message.error(
+      `保存失败: ${toApiError(error)?.message || (error instanceof Error ? error.message : String(error))}`,
+    );
   } finally {
     saving.value = false;
   }
@@ -190,7 +194,9 @@ async function handleClear() {
     message.success("已恢复项目默认档位");
     await loadData();
   } catch (error) {
-    message.error(`恢复失败: ${toApiError(error)?.message || (error instanceof Error ? error.message : String(error))}`);
+    message.error(
+      `恢复失败: ${toApiError(error)?.message || (error instanceof Error ? error.message : String(error))}`,
+    );
   } finally {
     clearing.value = false;
   }

@@ -1,6 +1,6 @@
-import { readOrchestrationStrategy } from "../../lib/orchestration-strategy";
 import { cpFetch } from "../../lib/control-plane-client";
-import { dispatchStageIntervention, type StageInterventionResult } from "./stage-intervention";
+import { readOrchestrationStrategy } from "../../lib/orchestration-strategy";
+import { type StageInterventionResult, dispatchStageIntervention } from "./stage-intervention";
 
 interface WorkflowRunRecord {
   id: string;
@@ -145,7 +145,7 @@ async function fetchTaskOperatingMode(authorization: string, taskId: string) {
     { authorization },
   );
 
-  return result.ok ? (result.data?.data || null) : null;
+  return result.ok ? result.data?.data || null : null;
 }
 
 function findStageStatus(stages: WorkflowStageRecord[], stageKey: string) {
@@ -170,7 +170,7 @@ async function fetchWorkflowTemplateStages(authorization: string, templateId: st
 function orderedStageKeys(stages: WorkflowTemplateStageRecord[]) {
   return stages
     .map((stage) => stage.stageKey)
-    .filter((stageKey): stageKey is string => Boolean(stageKey && stageKey.trim()));
+    .filter((stageKey): stageKey is string => Boolean(stageKey?.trim()));
 }
 
 function resolveExecutionEntryStage(stageKeys: string[]) {
@@ -204,7 +204,10 @@ async function advanceStage(
   });
 }
 
-function buildBossDecisionPayload(stageKey: string, result: StageInterventionResult): BossDecisionPayload | null {
+function buildBossDecisionPayload(
+  stageKey: string,
+  result: StageInterventionResult,
+): BossDecisionPayload | null {
   if (!result.decision) {
     return null;
   }
@@ -242,7 +245,10 @@ function buildBossDecisionPayload(stageKey: string, result: StageInterventionRes
   };
 }
 
-function buildEscalationPayload(stageKey: string, result: StageInterventionResult): EscalationPayload | null {
+function buildEscalationPayload(
+  stageKey: string,
+  result: StageInterventionResult,
+): EscalationPayload | null {
   if (result.disposition !== "waiting-approval" || !result.decision) {
     return null;
   }
@@ -257,6 +263,111 @@ function buildEscalationPayload(stageKey: string, result: StageInterventionResul
       finalDecision: result.decision,
       disposition: result.disposition,
     },
+  };
+}
+
+function resolveCurrentTemplateId(args: {
+  operatingMode: OperatingModeSelectionRecord | null;
+  parsedStrategy: Record<string, unknown>;
+  fallbackTemplateId?: string | null;
+  projectWorkflowTemplateId?: string | null;
+}) {
+  return (
+    asNonEmptyString(args.operatingMode?.selectedTemplateId) ||
+    asNonEmptyString(args.parsedStrategy.selectedTemplateId) ||
+    asNonEmptyString(args.parsedStrategy.workflowTemplateId) ||
+    asNonEmptyString(args.fallbackTemplateId) ||
+    asNonEmptyString(args.projectWorkflowTemplateId) ||
+    null
+  );
+}
+
+function resolveScenarioRecommendation(args: {
+  scenarioKey?: string;
+}) {
+  const organizationSettings = readOrchestrationStrategy().organizationSettings;
+  const matchedProfile = args.scenarioKey
+    ? (organizationSettings?.recommendedProfiles || []).find(
+        (item) => item.scenarioKey === args.scenarioKey,
+      )
+    : undefined;
+
+  return {
+    matchedProfile,
+    recommendedTemplateId: matchedProfile?.templateHints
+      ?.find((item) => typeof item === "string" && item.trim())
+      ?.trim(),
+  };
+}
+
+function resolveStageStrategyTemplateId(options: {
+  trigger: TemplateSelectionTrigger;
+  stageTemplateStrategy?: {
+    onBlockedTemplateId?: string;
+    onWaitingApprovalTemplateId?: string;
+    note?: string;
+  } | null;
+}) {
+  if (options.trigger === "stage-blocked") {
+    return asNonEmptyString(options.stageTemplateStrategy?.onBlockedTemplateId);
+  }
+  if (options.trigger === "stage-waiting-approval") {
+    return asNonEmptyString(options.stageTemplateStrategy?.onWaitingApprovalTemplateId);
+  }
+  return undefined;
+}
+
+function buildTemplateSwitchReason(args: {
+  trigger: TemplateSelectionTrigger;
+  stageKey?: string;
+  targetTemplateId: string;
+  scenarioKey?: string;
+  recommendedTemplateId?: string;
+  stageStrategyTemplateId?: string;
+}) {
+  const triggerReason =
+    args.trigger === "startup"
+      ? "执行启动前"
+      : args.trigger === "stage-blocked"
+        ? `阶段 ${args.stageKey || "unknown"} 阻断后`
+        : `阶段 ${args.stageKey || "unknown"} 升级后`;
+
+  if (args.stageStrategyTemplateId) {
+    return `老板在${triggerReason}根据阶段策略，自动切换到模板 ${args.targetTemplateId}。`;
+  }
+  if (args.recommendedTemplateId) {
+    return `老板在${triggerReason}根据场景 ${args.scenarioKey} 的推荐策略，自动切换到模板 ${args.targetTemplateId}。`;
+  }
+  return `老板在${triggerReason}根据项目偏好策略，自动切换到模板 ${args.targetTemplateId}。`;
+}
+
+function buildTemplateSwitchMetadata(args: {
+  trigger: TemplateSelectionTrigger;
+  selectedTemplateId: string;
+  scenarioKey?: string;
+  scenarioReason?: string;
+  preferredTemplateId?: string;
+  stageStrategyTemplateId?: string;
+  stagePolicyNote?: string;
+  triggerStageKey?: string;
+  governanceReason?: string;
+  recommendedTemplateId?: string;
+}) {
+  return {
+    source: args.stageStrategyTemplateId
+      ? "stage-policy"
+      : args.recommendedTemplateId
+        ? "recommended-profile"
+        : "project-preferred",
+    trigger: args.trigger,
+    selectedTemplateId: args.selectedTemplateId,
+    ...(args.scenarioKey ? { scenarioKey: args.scenarioKey } : {}),
+    ...(args.scenarioReason ? { scenarioReason: args.scenarioReason } : {}),
+    ...(args.preferredTemplateId ? { preferredTemplateId: args.preferredTemplateId } : {}),
+    ...(args.stageStrategyTemplateId ? { stagePolicyTemplateId: args.stageStrategyTemplateId } : {}),
+    ...(args.stagePolicyNote ? { stagePolicyNote: args.stagePolicyNote } : {}),
+    ...(args.triggerStageKey ? { triggerStageKey: args.triggerStageKey } : {}),
+    ...(args.governanceReason ? { governanceReason: args.governanceReason } : {}),
   };
 }
 
@@ -288,42 +399,36 @@ async function maybeAutoSelectWorkflowTemplate(
 
   const operatingMode = await fetchTaskOperatingMode(authorization, taskId);
   const parsedStrategy = parseTaskStrategy(task.strategy);
-  const currentTemplateId = asNonEmptyString(operatingMode?.selectedTemplateId)
-    || asNonEmptyString(parsedStrategy.selectedTemplateId)
-    || asNonEmptyString(parsedStrategy.workflowTemplateId)
-    || asNonEmptyString(fallbackTemplateId)
-    || asNonEmptyString(projectSettings.workflowTemplateId)
-    || null;
-  const scenarioKey = asNonEmptyString(operatingMode?.scenarioKey) || asNonEmptyString(parsedStrategy.scenarioKey);
-
-  const organizationSettings = readOrchestrationStrategy().organizationSettings;
-  const matchedProfile = scenarioKey
-    ? (organizationSettings?.recommendedProfiles || []).find((item) => item.scenarioKey === scenarioKey)
-    : undefined;
-  const recommendedTemplateId = matchedProfile?.templateHints?.find((item) => typeof item === "string" && item.trim())?.trim();
+  const currentTemplateId = resolveCurrentTemplateId({
+    operatingMode,
+    parsedStrategy,
+    fallbackTemplateId,
+    projectWorkflowTemplateId: projectSettings.workflowTemplateId,
+  });
+  const scenarioKey =
+    asNonEmptyString(operatingMode?.scenarioKey) || asNonEmptyString(parsedStrategy.scenarioKey);
+  const { matchedProfile, recommendedTemplateId } = resolveScenarioRecommendation({ scenarioKey });
   const preferredTemplateId = asNonEmptyString(projectSettings.preferredTemplateId);
   const trigger = options?.trigger || "startup";
-  const stageStrategyTemplateId = trigger === "stage-blocked"
-    ? asNonEmptyString(options?.stageTemplateStrategy?.onBlockedTemplateId)
-    : trigger === "stage-waiting-approval"
-      ? asNonEmptyString(options?.stageTemplateStrategy?.onWaitingApprovalTemplateId)
-      : undefined;
-  const targetTemplateId = stageStrategyTemplateId || recommendedTemplateId || preferredTemplateId || currentTemplateId;
+  const stageStrategyTemplateId = resolveStageStrategyTemplateId({
+    trigger,
+    stageTemplateStrategy: options?.stageTemplateStrategy,
+  });
+  const targetTemplateId =
+    stageStrategyTemplateId || recommendedTemplateId || preferredTemplateId || currentTemplateId;
 
   if (!targetTemplateId || targetTemplateId === currentTemplateId) {
     return currentTemplateId;
   }
 
-  const triggerReason = trigger === "startup"
-    ? "执行启动前"
-    : trigger === "stage-blocked"
-      ? `阶段 ${options?.stageKey || "unknown"} 阻断后`
-      : `阶段 ${options?.stageKey || "unknown"} 升级后`;
-  const reason = stageStrategyTemplateId
-    ? `老板在${triggerReason}根据阶段策略，自动切换到模板 ${targetTemplateId}。`
-    : recommendedTemplateId
-    ? `老板在${triggerReason}根据场景 ${scenarioKey} 的推荐策略，自动切换到模板 ${targetTemplateId}。`
-    : `老板在${triggerReason}根据项目偏好策略，自动切换到模板 ${targetTemplateId}。`;
+  const reason = buildTemplateSwitchReason({
+    trigger,
+    stageKey: options?.stageKey,
+    targetTemplateId,
+    scenarioKey,
+    recommendedTemplateId,
+    stageStrategyTemplateId,
+  });
   const selectTemplateResult = await cpFetch<{ ok?: boolean }>(
     `/api/tasks/${encodeURIComponent(taskId)}/operating-runtime/boss-decisions`,
     {
@@ -332,22 +437,18 @@ async function maybeAutoSelectWorkflowTemplate(
       body: {
         decisionType: "select-template",
         reason,
-        metadata: {
-          source: stageStrategyTemplateId
-            ? "stage-policy"
-            : recommendedTemplateId
-              ? "recommended-profile"
-              : "project-preferred",
+        metadata: buildTemplateSwitchMetadata({
           trigger,
           selectedTemplateId: targetTemplateId,
-          ...(scenarioKey ? { scenarioKey } : {}),
-          ...(matchedProfile?.reason ? { scenarioReason: matchedProfile.reason } : {}),
-          ...(preferredTemplateId ? { preferredTemplateId } : {}),
-          ...(stageStrategyTemplateId ? { stagePolicyTemplateId: stageStrategyTemplateId } : {}),
-          ...(options?.stageTemplateStrategy?.note ? { stagePolicyNote: options.stageTemplateStrategy.note } : {}),
-          ...(options?.stageKey ? { triggerStageKey: options.stageKey } : {}),
-          ...(options?.governanceReason ? { governanceReason: options.governanceReason } : {}),
-        },
+          scenarioKey,
+          scenarioReason: matchedProfile?.reason,
+          preferredTemplateId,
+          stageStrategyTemplateId,
+          stagePolicyNote: options?.stageTemplateStrategy?.note,
+          triggerStageKey: options?.stageKey,
+          governanceReason: options?.governanceReason,
+          recommendedTemplateId,
+        }),
       },
     },
   );
@@ -364,7 +465,7 @@ async function persistInterventionRuntimeOutcome(
   authorization: string,
   taskId: string,
   stageKey: string,
-  result: StageInterventionResult | void,
+  result: StageInterventionResult | undefined,
 ) {
   if (!result?.decision) {
     return;
@@ -372,25 +473,35 @@ async function persistInterventionRuntimeOutcome(
 
   const bossDecision = buildBossDecisionPayload(stageKey, result);
   if (bossDecision) {
-    const bossDecisionResult = await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}/operating-runtime/boss-decisions`, {
-      method: "POST",
-      authorization,
-      body: bossDecision,
-    });
+    const bossDecisionResult = await cpFetch(
+      `/api/tasks/${encodeURIComponent(taskId)}/operating-runtime/boss-decisions`,
+      {
+        method: "POST",
+        authorization,
+        body: bossDecision,
+      },
+    );
     if (!bossDecisionResult.ok) {
-      console.warn(`[workflow-sync] failed to persist boss decision for task ${taskId} stage ${stageKey}`);
+      console.warn(
+        `[workflow-sync] failed to persist boss decision for task ${taskId} stage ${stageKey}`,
+      );
     }
   }
 
   const escalation = buildEscalationPayload(stageKey, result);
   if (escalation) {
-    const escalationResult = await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}/operating-runtime/escalations`, {
-      method: "POST",
-      authorization,
-      body: escalation,
-    });
+    const escalationResult = await cpFetch(
+      `/api/tasks/${encodeURIComponent(taskId)}/operating-runtime/escalations`,
+      {
+        method: "POST",
+        authorization,
+        body: escalation,
+      },
+    );
     if (!escalationResult.ok) {
-      console.warn(`[workflow-sync] failed to persist escalation for task ${taskId} stage ${stageKey}`);
+      console.warn(
+        `[workflow-sync] failed to persist escalation for task ${taskId} stage ${stageKey}`,
+      );
     }
   }
 }
@@ -401,7 +512,7 @@ async function applyInterventionOutcome(
   stageKey: string,
   templateId: string,
   stageTemplateStrategy: WorkflowTemplateStageRecord["stageTemplateStrategyJson"],
-  result: StageInterventionResult | void,
+  result: StageInterventionResult | undefined,
 ) {
   await persistInterventionRuntimeOutcome(authorization, taskId, stageKey, result);
 
@@ -502,7 +613,10 @@ export async function ensureTaskWorkflowStarted(
     return;
   }
 
-  const templateStages = await fetchWorkflowTemplateStages(input.authorization, effectiveTemplateId);
+  const templateStages = await fetchWorkflowTemplateStages(
+    input.authorization,
+    effectiveTemplateId,
+  );
   const stageKeys = orderedStageKeys(templateStages);
   if (stageKeys.length === 0) {
     return;
@@ -561,7 +675,10 @@ export async function ensureTaskWorkflowStarted(
     return;
   }
 
-  const currentIndex = Math.max(0, stageKeys.indexOf(workflow.workflowRun.currentStage || initialStage));
+  const currentIndex = Math.max(
+    0,
+    stageKeys.indexOf(workflow.workflowRun.currentStage || initialStage),
+  );
   const targetIndex = Math.max(0, stageKeys.indexOf(executionStage));
 
   await progressWorkflowStages({
@@ -619,8 +736,8 @@ export async function syncTaskWorkflowTerminalState(
   }
 
   if (
-    workflow.workflowRun.status === input.status
-    && (currentStageStatus === "failed" || currentStageStatus === "completed")
+    workflow.workflowRun.status === input.status &&
+    (currentStageStatus === "failed" || currentStageStatus === "completed")
   ) {
     return;
   }

@@ -327,15 +327,16 @@ describe("ChatSettings", () => {
         data: {
           ...baseContext.data,
           orchestrationVersion: "orchestration-version-2",
-          categorySummaries: baseContext.data.categorySummaries.map((item: { category: string; [key: string]: unknown }) =>
-            item.category === "deep"
-              ? {
-                  ...item,
-                  templateName: "tpl-deep-parallel",
-                  executionMode: "parallel",
-                  judgeEnabled: true,
-                }
-              : item,
+          categorySummaries: baseContext.data.categorySummaries.map(
+            (item: { category: string; [key: string]: unknown }) =>
+              item.category === "deep"
+                ? {
+                    ...item,
+                    templateName: "tpl-deep-parallel",
+                    executionMode: "parallel",
+                    judgeEnabled: true,
+                  }
+                : item,
           ),
         },
       });
@@ -382,12 +383,15 @@ describe("ChatSettings", () => {
       handleSendIntent: () => Promise<void>;
     };
 
-    vm.draftIntent = "请严格按下面要求生成编排建议：只修改 ops 分类；patch.templates[0].mode 必须等于 mesh；不要改写成 single 或 parallel；也不要开启 pipeline；不要给替代方案。";
+    vm.draftIntent =
+      "请严格按下面要求生成编排建议：只修改 ops 分类；patch.templates[0].mode 必须等于 mesh；不要改写成 single 或 parallel；也不要开启 pipeline；不要给替代方案。";
     await vm.handleSendIntent();
     await flushPromises();
 
     expect(wrapper.text()).toContain("AI 返回的编排建议暂时无法直接应用");
-    const rewriteButton = wrapper.findAll("button").find((item) => item.text().includes("回填推荐改写示例"));
+    const rewriteButton = wrapper
+      .findAll("button")
+      .find((item) => item.text().includes("回填推荐改写示例"));
     expect(rewriteButton).toBeTruthy();
 
     await rewriteButton?.trigger("click");
@@ -395,6 +399,8 @@ describe("ChatSettings", () => {
 
     const composer = wrapper.find("textarea");
     expect((composer.element as HTMLTextAreaElement).value).toContain("请只修改 ops 分类");
-    expect((composer.element as HTMLTextAreaElement).value).toContain("执行模式请明确写为 single 或 parallel");
+    expect((composer.element as HTMLTextAreaElement).value).toContain(
+      "执行模式请明确写为 single 或 parallel",
+    );
   });
 });

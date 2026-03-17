@@ -495,6 +495,12 @@ import { message } from "ant-design-vue";
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
+  type PaidExecutionLeaseStateResponse,
+  type Project,
+  type ProjectExecutionPreflightResponse,
+  type ProjectRuntimeUsageLedgerDetailResponse,
+  type ProjectRuntimeUsageLedgerListResponse,
+  type ProjectSettings,
   createProjectPaidExecutionLease,
   getProject,
   getProjectPaidExecutionLease,
@@ -502,12 +508,6 @@ import {
   getProjectRuntimeUsageLedgerDetail,
   getProjectRuntimeUsageLedgers,
   revokeProjectPaidExecutionLease,
-  type PaidExecutionLeaseStateResponse,
-  type Project,
-  type ProjectExecutionPreflightResponse,
-  type ProjectRuntimeUsageLedgerDetailResponse,
-  type ProjectRuntimeUsageLedgerListResponse,
-  type ProjectSettings,
   updateProject,
 } from "../lib/api";
 import { useAuthStore } from "../stores/auth";
@@ -574,10 +574,7 @@ onMounted(async () => {
   const projectId = String(route.params.projectId);
   try {
     project.value = (await getProject(projectId)) as ProjectWithSettings;
-    await Promise.all([
-      refreshPaidExecutionState(projectId),
-      refreshRuntimeUsage(projectId),
-    ]);
+    await Promise.all([refreshPaidExecutionState(projectId), refreshRuntimeUsage(projectId)]);
     await maybeOpenRuntimeUsageFromRoute();
   } catch {
     project.value = null;
@@ -678,7 +675,7 @@ const paidExecutionBudgetHeadroomLabel = computed(() => {
     return "当前策略未设置成本余量";
   }
 
-  return `$${budgetHeadroom.remainingUsd} · 单次${budgetHeadroom.enoughForSingleRun ? '可执行' : '超限'} · 套件${budgetHeadroom.enoughForSuiteRun ? '可执行' : '超限'}`;
+  return `$${budgetHeadroom.remainingUsd} · 单次${budgetHeadroom.enoughForSingleRun ? "可执行" : "超限"} · 套件${budgetHeadroom.enoughForSuiteRun ? "可执行" : "超限"}`;
 });
 
 const paidExecutionRequirementLabel = computed(() => {
@@ -703,10 +700,12 @@ const paidExecutionRequirementLabel = computed(() => {
 
 const shouldShowEnablePaidExecutionAction = computed(() => {
   const requirements = paidExecutionPreflight.value?.requirements;
-  return canManage.value
-    && Boolean(project.value)
-    && requirements?.allowPaidExecution === true
-    && requirements.hasAllowPaidExecution !== true;
+  return (
+    canManage.value &&
+    Boolean(project.value) &&
+    requirements?.allowPaidExecution === true &&
+    requirements.hasAllowPaidExecution !== true
+  );
 });
 
 function formatPaidExecutionRiskType(type: string) {
@@ -870,9 +869,13 @@ async function revokeLease() {
 
   leaseMutating.value = true;
   try {
-    await revokeProjectPaidExecutionLease(project.value.id, paidExecutionLease.value.activeLease.id, {
-      reason: "Revoked from project overview",
-    });
+    await revokeProjectPaidExecutionLease(
+      project.value.id,
+      paidExecutionLease.value.activeLease.id,
+      {
+        reason: "Revoked from project overview",
+      },
+    );
     await refreshPaidExecutionState(project.value.id);
     message.success("当前执行许可已关闭");
   } catch (error) {

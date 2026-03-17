@@ -330,7 +330,8 @@ onMounted(async () => {
       listBudgetConfigs(props.projectId),
     ]);
 
-    modelsData.value = modelsResult.status === "fulfilled" ? (modelsResult.value?.data ?? null) : null;
+    modelsData.value =
+      modelsResult.status === "fulfilled" ? (modelsResult.value?.data ?? null) : null;
     environments.value = environmentsResult.status === "fulfilled" ? environmentsResult.value : [];
     budgetConfigs.value = budgetResult.status === "fulfilled" ? budgetResult.value : [];
 
@@ -398,7 +399,9 @@ function toPercent(value: number | undefined) {
 
 function upsertOptionalStringSetting<Key extends keyof ProjectSettings>(key: Key, value: unknown) {
   const normalized = typeof value === "string" ? value.trim() : "";
-  return normalized ? { [key]: normalized } as Pick<ProjectSettings, Key> : { [key]: undefined } as Pick<ProjectSettings, Key>;
+  return normalized
+    ? ({ [key]: normalized } as Pick<ProjectSettings, Key>)
+    : ({ [key]: undefined } as Pick<ProjectSettings, Key>);
 }
 
 function upsertNullableStringSetting<Key extends keyof ProjectSettings>(key: Key, value: unknown) {
@@ -407,7 +410,9 @@ function upsertNullableStringSetting<Key extends keyof ProjectSettings>(key: Key
 }
 
 function upsertOptionalNumberSetting<Key extends keyof ProjectSettings>(key: Key, value: unknown) {
-  return typeof value === "number" ? { [key]: value } as Pick<ProjectSettings, Key> : { [key]: undefined } as Pick<ProjectSettings, Key>;
+  return typeof value === "number"
+    ? ({ [key]: value } as Pick<ProjectSettings, Key>)
+    : ({ [key]: undefined } as Pick<ProjectSettings, Key>);
 }
 
 function resolveLinkedBudget(items: BudgetConfig[]) {

@@ -26,7 +26,9 @@ const noisyPatterns: RegExp[] = [
 
 function shouldSuppressConsoleMessage(args: unknown[]) {
   const text = args
-    .map((value) => (typeof value === "string" ? value : value instanceof Error ? value.message : String(value)))
+    .map((value) =>
+      typeof value === "string" ? value : value instanceof Error ? value.message : String(value),
+    )
     .join(" ");
   return noisyPatterns.some((pattern) => pattern.test(text));
 }

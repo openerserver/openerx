@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "../../control-plane/web-ui-bff/node_modules/hono";
@@ -9,164 +9,174 @@ mock.restore();
 const tempRoot = mkdtempSync(join(tmpdir(), "openerx-chat-settings-"));
 process.env.OPENCODE_ROOT = tempRoot;
 
-const runChatSettingsAssistantMock = mock(async (args: { message: string; modelsConfig: Record<string, unknown>; mcpConfig: Record<string, unknown> }) => {
-  if (args.message.includes("parallel") || args.message.includes("judge")) {
-    return {
-      action: "preview",
-      configType: "orchestration-strategy",
-      explanation: "将 ops 分类切换为并行执行，并启用 judge。",
-      patch: {
-        judge: {
-          enabled: true,
-        },
-        templates: [
-          {
-            id: "tpl-ops-parallel",
-            name: "tpl-ops-parallel",
-            mode: "parallel",
-            agents: ["oracle-enterprise"],
-            enabled: true,
-            categoryDefaults: ["ops"],
-          },
-        ],
-      },
-      rawText: "{}",
-      mermaidPreview: {
-        ops: "sequenceDiagram\nAdmin->>Engine: 提交任务(ops)",
-      },
-      visualizations: [],
-    };
-  }
-
-  if (args.message.includes("gpt-4o")) {
-    const currentModels = args.modelsConfig as {
-      defaults: Record<string, unknown>;
-      providers: Record<string, unknown>;
-      list: Array<Record<string, unknown>>;
-    };
-    return {
-      action: "preview",
-      configType: "models",
-      explanation: "新增 gpt-4o 模型，其他模型配置保持不变。",
-      patch: {
-        defaults: currentModels.defaults,
-        providers: currentModels.providers,
-        list: [...currentModels.list, { id: "gpt-4o", name: "GPT-4o", provider: "github-copilot" }],
-      },
-      rawText: "{}",
-      mermaidPreview: {},
-      visualizations: [],
-    };
-  }
-
-  if (args.message.includes("oracle-enterprise")) {
-    return {
-      action: "preview",
-      configType: "agents",
-      explanation: "仅更新 oracle-enterprise 的 description 字段。",
-      patch: {
-        name: "oracle-enterprise",
-        frontmatterPatch: {
-          description:
-            "Responsible for operations troubleshooting, system inspection, deployment diagnostics, and recovery guidance.",
-        },
-      },
-      rawText: "{}",
-      mermaidPreview: {},
-      visualizations: [],
-    };
-  }
-
-  if (args.message.includes("start-work")) {
-    return {
-      action: "preview",
-      configType: "commands",
-      explanation: "更新 start-work 命令描述，保留现有命令流程。",
-      patch: {
-        name: "start-work",
-        frontmatterPatch: {
-          description: "Start a new work task with planning, validation, and execution orchestration",
-        },
-      },
-      rawText: "{}",
-      mermaidPreview: {},
-      visualizations: [],
-    };
-  }
-
-  if (args.message.includes("handoff plugin")) {
-    return {
-      action: "preview",
-      configType: "plugins",
-      explanation: "禁用 handoff plugin，保留其他插件状态不变。",
-      patch: {
-        plugins: [
-          {
-            path: "./.opencode/plugins/handoff.ts",
-            name: "handoff",
-            enabled: false,
-          },
-          {
-            path: "./.opencode/plugins/logger.ts",
-            name: "logger",
+const runChatSettingsAssistantMock = mock(
+  async (args: {
+    message: string;
+    modelsConfig: Record<string, unknown>;
+    mcpConfig: Record<string, unknown>;
+  }) => {
+    if (args.message.includes("parallel") || args.message.includes("judge")) {
+      return {
+        action: "preview",
+        configType: "orchestration-strategy",
+        explanation: "将 ops 分类切换为并行执行，并启用 judge。",
+        patch: {
+          judge: {
             enabled: true,
           },
-        ],
-      },
-      rawText: "{}",
-      mermaidPreview: {},
-      visualizations: [],
-    };
-  }
+          templates: [
+            {
+              id: "tpl-ops-parallel",
+              name: "tpl-ops-parallel",
+              mode: "parallel",
+              agents: ["oracle-enterprise"],
+              enabled: true,
+              categoryDefaults: ["ops"],
+            },
+          ],
+        },
+        rawText: "{}",
+        mermaidPreview: {
+          ops: "sequenceDiagram\nAdmin->>Engine: 提交任务(ops)",
+        },
+        visualizations: [],
+      };
+    }
 
-  if (args.message.includes("install skills-plugin")) {
+    if (args.message.includes("gpt-4o")) {
+      const currentModels = args.modelsConfig as {
+        defaults: Record<string, unknown>;
+        providers: Record<string, unknown>;
+        list: Array<Record<string, unknown>>;
+      };
+      return {
+        action: "preview",
+        configType: "models",
+        explanation: "新增 gpt-4o 模型，其他模型配置保持不变。",
+        patch: {
+          defaults: currentModels.defaults,
+          providers: currentModels.providers,
+          list: [
+            ...currentModels.list,
+            { id: "gpt-4o", name: "GPT-4o", provider: "github-copilot" },
+          ],
+        },
+        rawText: "{}",
+        mermaidPreview: {},
+        visualizations: [],
+      };
+    }
+
+    if (args.message.includes("oracle-enterprise")) {
+      return {
+        action: "preview",
+        configType: "agents",
+        explanation: "仅更新 oracle-enterprise 的 description 字段。",
+        patch: {
+          name: "oracle-enterprise",
+          frontmatterPatch: {
+            description:
+              "Responsible for operations troubleshooting, system inspection, deployment diagnostics, and recovery guidance.",
+          },
+        },
+        rawText: "{}",
+        mermaidPreview: {},
+        visualizations: [],
+      };
+    }
+
+    if (args.message.includes("start-work")) {
+      return {
+        action: "preview",
+        configType: "commands",
+        explanation: "更新 start-work 命令描述，保留现有命令流程。",
+        patch: {
+          name: "start-work",
+          frontmatterPatch: {
+            description:
+              "Start a new work task with planning, validation, and execution orchestration",
+          },
+        },
+        rawText: "{}",
+        mermaidPreview: {},
+        visualizations: [],
+      };
+    }
+
+    if (args.message.includes("handoff plugin")) {
+      return {
+        action: "preview",
+        configType: "plugins",
+        explanation: "禁用 handoff plugin，保留其他插件状态不变。",
+        patch: {
+          plugins: [
+            {
+              path: "./.opencode/plugins/handoff.ts",
+              name: "handoff",
+              enabled: false,
+            },
+            {
+              path: "./.opencode/plugins/logger.ts",
+              name: "logger",
+              enabled: true,
+            },
+          ],
+        },
+        rawText: "{}",
+        mermaidPreview: {},
+        visualizations: [],
+      };
+    }
+
+    if (args.message.includes("install skills-plugin")) {
+      return {
+        action: "preview",
+        configType: "plugins",
+        explanation: "安装 skills-plugin，并保持其他插件注册状态不变。",
+        patch: {
+          operation: "install",
+          source: "./.opencode/plugins/skills-plugin.ts",
+        },
+        rawText: "{}",
+        mermaidPreview: {},
+        visualizations: [],
+      };
+    }
+
+    if (args.message.includes("uninstall logger plugin")) {
+      return {
+        action: "preview",
+        configType: "plugins",
+        explanation: "卸载 logger plugin，并保持其他插件状态不变。",
+        patch: {
+          operation: "uninstall",
+          name: "logger",
+        },
+        rawText: "{}",
+        mermaidPreview: {},
+        visualizations: [],
+      };
+    }
+
+    const currentMcp = args.mcpConfig as Record<string, unknown>;
     return {
       action: "preview",
-      configType: "plugins",
-      explanation: "安装 skills-plugin，并保持其他插件注册状态不变。",
+      configType: "mcp",
+      explanation: "新增 demo-memory MCP server，保持其余 MCP 配置不变。",
       patch: {
-        operation: "install",
-        source: "./.opencode/plugins/skills-plugin.ts",
+        ...currentMcp,
+        "demo-memory": {
+          type: "local",
+          command: ["npx", "-y", "@modelcontextprotocol/server-memory"],
+          description: "Demo memory MCP for validation",
+        },
       },
       rawText: "{}",
       mermaidPreview: {},
       visualizations: [],
     };
-  }
-
-  if (args.message.includes("uninstall logger plugin")) {
-    return {
-      action: "preview",
-      configType: "plugins",
-      explanation: "卸载 logger plugin，并保持其他插件状态不变。",
-      patch: {
-        operation: "uninstall",
-        name: "logger",
-      },
-      rawText: "{}",
-      mermaidPreview: {},
-      visualizations: [],
-    };
-  }
-
-  const currentMcp = args.mcpConfig as Record<string, unknown>;
-  return {
-    action: "preview",
-    configType: "mcp",
-    explanation: "新增 demo-memory MCP server，保持其余 MCP 配置不变。",
-    patch: {
-      ...currentMcp,
-      "demo-memory": {
-        type: "local",
-        command: ["npx", "-y", "@modelcontextprotocol/server-memory"],
-        description: "Demo memory MCP for validation",
-      },
-    },
-    rawText: "{}",
-    mermaidPreview: {},
-    visualizations: [],
-  };
-});
+  },
+);
 
 mock.module("../../control-plane/web-ui-bff/src/modules/chat-settings/assistant-engine", () => ({
   runChatSettingsAssistant: runChatSettingsAssistantMock,
@@ -239,7 +249,12 @@ function seedOpencodeRoot() {
     )}\n`,
   );
 
-  for (const agentName of ["oracle-enterprise", "explore-enterprise", "hephaestus-enterprise", "prometheus-enterprise"]) {
+  for (const agentName of [
+    "oracle-enterprise",
+    "explore-enterprise",
+    "hephaestus-enterprise",
+    "prometheus-enterprise",
+  ]) {
     writeFileSync(
       join(tempRoot, ".opencode", "agents", `${agentName}.md`),
       [
@@ -269,9 +284,18 @@ function seedOpencodeRoot() {
     ].join("\n"),
   );
 
-  writeFileSync(join(tempRoot, ".opencode", "plugins", "handoff.ts"), "export const name = 'handoff';\n");
-  writeFileSync(join(tempRoot, ".opencode", "plugins", "logger.ts"), "export const name = 'logger';\n");
-  writeFileSync(join(tempRoot, ".opencode", "plugins", "skills-plugin.ts"), "export const name = 'skills-plugin';\n");
+  writeFileSync(
+    join(tempRoot, ".opencode", "plugins", "handoff.ts"),
+    "export const name = 'handoff';\n",
+  );
+  writeFileSync(
+    join(tempRoot, ".opencode", "plugins", "logger.ts"),
+    "export const name = 'logger';\n",
+  );
+  writeFileSync(
+    join(tempRoot, ".opencode", "plugins", "skills-plugin.ts"),
+    "export const name = 'skills-plugin';\n",
+  );
 
   writeFileSync(
     join(tempRoot, ".opencode", "state", "orchestration-strategy.json"),
@@ -363,8 +387,16 @@ describe("chat settings routes", () => {
     };
 
     expect(currentContextPayload.data.orchestrationVersion.length).toBeGreaterThan(0);
-    expect(currentContextPayload.data.categorySummaries.some((item) => item.category === "ops")).toBe(true);
-    expect(currentContextPayload.data.supportedCategories).toEqual(["quick", "deep", "ops", "security", "architecture"]);
+    expect(
+      currentContextPayload.data.categorySummaries.some((item) => item.category === "ops"),
+    ).toBe(true);
+    expect(currentContextPayload.data.supportedCategories).toEqual([
+      "quick",
+      "deep",
+      "ops",
+      "security",
+      "architecture",
+    ]);
 
     const chatResponse = await app.request("/api/chat-settings/chat", {
       method: "POST",
@@ -386,7 +418,11 @@ describe("chat settings routes", () => {
             affectedCategories: string[];
             judgeChange: { changed: boolean; afterEnabled: boolean };
             templateChanges: Array<{ category: string; afterMode: string }>;
-            strategySummaryAfter: Array<{ category: string; executionMode: string; judgeEnabled: boolean }>;
+            strategySummaryAfter: Array<{
+              category: string;
+              executionMode: string;
+              judgeEnabled: boolean;
+            }>;
             riskHints: Array<{ level: string }>;
           };
         };
@@ -395,10 +431,20 @@ describe("chat settings routes", () => {
 
     expect(chatPayload.data.patch.configType).toBe("orchestration-strategy");
     expect(chatPayload.data.patch.orchestrationPreview.affectedCategories).toEqual(["ops"]);
-    expect(chatPayload.data.patch.orchestrationPreview.judgeChange).toMatchObject({ changed: true, afterEnabled: true });
-    expect(chatPayload.data.patch.orchestrationPreview.templateChanges[0]).toMatchObject({ category: "ops", afterMode: "parallel" });
-    expect(chatPayload.data.patch.orchestrationPreview.strategySummaryAfter[0]?.category.length).toBeGreaterThan(0);
-    expect(chatPayload.data.patch.orchestrationPreview.riskHints.some((item) => item.level === "high")).toBe(true);
+    expect(chatPayload.data.patch.orchestrationPreview.judgeChange).toMatchObject({
+      changed: true,
+      afterEnabled: true,
+    });
+    expect(chatPayload.data.patch.orchestrationPreview.templateChanges[0]).toMatchObject({
+      category: "ops",
+      afterMode: "parallel",
+    });
+    expect(
+      chatPayload.data.patch.orchestrationPreview.strategySummaryAfter[0]?.category.length,
+    ).toBeGreaterThan(0);
+    expect(
+      chatPayload.data.patch.orchestrationPreview.riskHints.some((item) => item.level === "high"),
+    ).toBe(true);
 
     const applyResponse = await applyPreview(app, {
       data: {
@@ -431,8 +477,11 @@ describe("chat settings routes", () => {
     expect(applyResponse.status).toBe(200);
 
     const config = readJson(join(tempRoot, "opencode.json"));
-    const models = ((config.models as Record<string, unknown>).list as Array<Record<string, unknown>>) || [];
-    expect(models.some((item) => item.id === "gpt-4o" && item.provider === "github-copilot")).toBe(true);
+    const models =
+      ((config.models as Record<string, unknown>).list as Array<Record<string, unknown>>) || [];
+    expect(models.some((item) => item.id === "gpt-4o" && item.provider === "github-copilot")).toBe(
+      true,
+    );
   });
 
   test("applies a preview by signed fallback patch when in-memory pending state is missing", async () => {
@@ -465,7 +514,10 @@ describe("chat settings routes", () => {
     const applyResponse = await applyPreview(app, preview);
     expect(applyResponse.status).toBe(200);
 
-    const agentFile = readFileSync(join(tempRoot, ".opencode", "agents", "oracle-enterprise.md"), "utf-8");
+    const agentFile = readFileSync(
+      join(tempRoot, ".opencode", "agents", "oracle-enterprise.md"),
+      "utf-8",
+    );
     expect(agentFile).toContain("description: Responsible for operations troubleshooting");
     expect(agentFile).toContain("deployment diagnostics, and recovery guidance.");
   });
@@ -501,7 +553,10 @@ describe("chat settings routes", () => {
     const applyResponse = await applyPreview(app, preview);
     expect(applyResponse.status).toBe(200);
 
-    const commandFile = readFileSync(join(tempRoot, ".opencode", "commands", "start-work.md"), "utf-8");
+    const commandFile = readFileSync(
+      join(tempRoot, ".opencode", "commands", "start-work.md"),
+      "utf-8",
+    );
     expect(commandFile).toContain("planning, validation, and execution orchestration");
     expect(commandFile).toContain("Original start-work command body.");
   });

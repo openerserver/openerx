@@ -409,22 +409,22 @@ function normalizeOrganizationSettings(
 ): PlatformOrganizationSettings {
   return {
     defaultCollaborationMode:
-      raw?.defaultCollaborationMode === "solo"
-      || raw?.defaultCollaborationMode === "team"
-      || raw?.defaultCollaborationMode === "hybrid"
+      raw?.defaultCollaborationMode === "solo" ||
+      raw?.defaultCollaborationMode === "team" ||
+      raw?.defaultCollaborationMode === "hybrid"
         ? raw.defaultCollaborationMode
         : fallback.defaultCollaborationMode,
     defaultAutopilotLevel:
-      raw?.defaultAutopilotLevel === "L0"
-      || raw?.defaultAutopilotLevel === "L1"
-      || raw?.defaultAutopilotLevel === "L2"
+      raw?.defaultAutopilotLevel === "L0" ||
+      raw?.defaultAutopilotLevel === "L1" ||
+      raw?.defaultAutopilotLevel === "L2"
         ? raw.defaultAutopilotLevel
         : fallback.defaultAutopilotLevel,
     defaultBossParticipationMode:
-      raw?.defaultBossParticipationMode === "disabled"
-      || raw?.defaultBossParticipationMode === "advisory"
-      || raw?.defaultBossParticipationMode === "exception-only"
-      || raw?.defaultBossParticipationMode === "full-manager"
+      raw?.defaultBossParticipationMode === "disabled" ||
+      raw?.defaultBossParticipationMode === "advisory" ||
+      raw?.defaultBossParticipationMode === "exception-only" ||
+      raw?.defaultBossParticipationMode === "full-manager"
         ? raw.defaultBossParticipationMode
         : fallback.defaultBossParticipationMode,
     allowProjectModeOverride: raw?.allowProjectModeOverride ?? fallback.allowProjectModeOverride,
@@ -432,7 +432,7 @@ function normalizeOrganizationSettings(
     requireHumanApprovalForL2: raw?.requireHumanApprovalForL2 ?? fallback.requireHumanApprovalForL2,
     hybridEscalationRules: Array.isArray(raw?.hybridEscalationRules)
       ? raw.hybridEscalationRules
-      : fallback.hybridEscalationRules ?? [],
+      : (fallback.hybridEscalationRules ?? []),
     recommendedProfiles: Array.isArray(raw?.recommendedProfiles)
       ? raw.recommendedProfiles
       : fallback.recommendedProfiles,
@@ -510,7 +510,10 @@ export function normalizeOrchestrationStrategy(
         ? raw.templates
         : defaults.templates,
     judge: normalizeJudge(raw?.judge, defaults.judge),
-    organizationSettings: normalizeOrganizationSettings(raw?.organizationSettings, defaultOrganizationSettings),
+    organizationSettings: normalizeOrganizationSettings(
+      raw?.organizationSettings,
+      defaultOrganizationSettings,
+    ),
   };
 }
 

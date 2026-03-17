@@ -152,7 +152,9 @@ function buildDiagnostics(
     .filter(([, count]) => count > 1)
     .map(([key]) => key);
   const configuredKeys = new Set(stages.map((stage) => stage.stageKey));
-  const missingConfiguredStages = (template?.stageOrderJson || []).filter((key) => !configuredKeys.has(key));
+  const missingConfiguredStages = (template?.stageOrderJson || []).filter(
+    (key) => !configuredKeys.has(key),
+  );
   const hasCustomStages = stages.some(
     (stage) => !STAGE_CATALOG.some((catalogItem) => catalogItem.key === stage.stageKey),
   );
@@ -164,94 +166,90 @@ function buildDiagnostics(
   };
 }
 
-workflowTemplateRoutes.get("/", async (c) => {
-  const projectId = c.req.query("projectId");
-  const result = await fetchTemplates(authHeader(c), projectId);
-  return c.json(result.data, result.ok ? 200 : (result.status as 400 | 401 | 403 | 404 | 502));
-});
-
-workflowTemplateRoutes.post("/", async (c) => {
-  const body = await c.req.json();
-  const result = await cpFetch<Record<string, unknown>>("/api/workflow-templates", {
-    method: "POST",
-    body,
-    authorization: authHeader(c),
-  });
-  return c.json(result.data, result.ok ? 201 : (result.status as 400 | 401 | 403 | 404 | 409 | 502));
-});
-
-workflowTemplateRoutes.patch("/:templateId", async (c) => {
-  const templateId = c.req.param("templateId");
-  const body = await c.req.json();
-  const result = await cpFetch<Record<string, unknown>>(
-    `/api/workflow-templates/${encodeURIComponent(templateId)}`,
-    {
-      method: "PATCH",
-      body,
-      authorization: authHeader(c),
-    },
+function canManageWorkflowTemplateProject(
+  user: { role?: string; projects?: Array<{ id: string; role: string }> },
+  projectId: string,
+) {
+  return (
+    user.role === "platform_admin" ||
+    user.role === "org_admin" ||
+    Boolean(user.projects?.some((item) => item.id === projectId && item.role === "project_admin"))
   );
-  return c.json(result.data, result.ok ? 200 : (result.status as 400 | 401 | 403 | 404 | 409 | 502));
-});
+}
 
-workflowTemplateRoutes.post("/:templateId/clone", async (c) => {
-  const authorization = authHeader(c);
-  const templateId = c.req.param("templateId");
-  const body = (await c.req.json()) as CloneWorkflowTemplatePayload;
-
+async function loadCloneWorkflowTemplateSource(templateId: string, authorization: string) {
   const [templateResult, stagesResult] = await Promise.all([
     fetchTemplateById(templateId, authorization),
     fetchStages(templateId, authorization),
   ]);
 
-  if (!templateResult.ok) {
-    return c.json(templateResult.data, templateResult.status as 400 | 401 | 403 | 404 | 502);
+  return { templateResult, stagesResult };
+}
+
+function validateCloneWorkflowTemplateSource(resources: {
+  templateResult: Awaited<ReturnType<typeof fetchTemplateById>>;
+  stagesResult: Awaited<ReturnType<typeof fetchStages>>;
+  body: CloneWorkflowTemplatePayload;
+}) {
+  if (!resources.templateResult.ok) {
+    return {
+      data: resources.templateResult.data,
+      status: resources.templateResult.status as 400 | 401 | 403 | 404 | 502,
+    };
   }
-  if (!templateResult.data) {
-    return c.json({ error: "Source workflow template not found" }, 404);
+  if (!resources.templateResult.data) {
+    return { data: { error: "Source workflow template not found" }, status: 404 as const };
   }
-  if (!stagesResult.ok) {
-    return c.json(stagesResult.data, stagesResult.status as 400 | 401 | 403 | 404 | 502);
+  if (!resources.stagesResult.ok) {
+    return {
+      data: resources.stagesResult.data,
+      status: resources.stagesResult.status as 400 | 401 | 403 | 404 | 502,
+    };
   }
-  if (!body.id?.trim() || !body.name?.trim()) {
-    return c.json({ error: "Template id and name are required" }, 400);
+  if (!resources.body.id?.trim() || !resources.body.name?.trim()) {
+    return { data: { error: "Template id and name are required" }, status: 400 as const };
   }
 
-  const sourceTemplate = templateResult.data;
-  const sourceStages = sortStages(stagesResult.data.data || []);
-  const createTemplateResult = await cpFetch<WorkflowTemplateRecord>("/api/workflow-templates", {
-    method: "POST",
-    authorization,
-    body: {
-      id: body.id.trim(),
-      projectId: body.projectId?.trim() || undefined,
-      name: body.name.trim(),
-      description: body.description ?? sourceTemplate.description ?? undefined,
-      category: body.category ?? sourceTemplate.category ?? undefined,
-      enabled: body.enabled ?? sourceTemplate.enabled,
-      selectableByProjects: body.selectableByProjects ?? sourceTemplate.selectableByProjects,
-      defaultCollaborationMode: sourceTemplate.defaultCollaborationMode ?? undefined,
-      defaultAutopilotLevel: sourceTemplate.defaultAutopilotLevel ?? undefined,
-      defaultBossParticipationMode: sourceTemplate.defaultBossParticipationMode ?? undefined,
-      forceBossParticipation: sourceTemplate.forceBossParticipation ?? false,
-      stageOrder: [...sourceTemplate.stageOrderJson],
-      defaultRoles: body.defaultRoles ?? sourceTemplate.defaultRolesJson ?? undefined,
-    },
-  });
+  return null;
+}
 
-  if (!createTemplateResult.ok) {
-    return c.json(createTemplateResult.data, createTemplateResult.status as 400 | 401 | 403 | 404 | 409 | 502);
-  }
+function buildCloneTemplateCreatePayload(
+  sourceTemplate: WorkflowTemplateRecord,
+  body: CloneWorkflowTemplatePayload,
+) {
+  return {
+    id: body.id.trim(),
+    projectId: body.projectId?.trim() || undefined,
+    name: body.name.trim(),
+    description: body.description ?? sourceTemplate.description ?? undefined,
+    category: body.category ?? sourceTemplate.category ?? undefined,
+    enabled: body.enabled ?? sourceTemplate.enabled,
+    selectableByProjects: body.selectableByProjects ?? sourceTemplate.selectableByProjects,
+    defaultCollaborationMode: sourceTemplate.defaultCollaborationMode ?? undefined,
+    defaultAutopilotLevel: sourceTemplate.defaultAutopilotLevel ?? undefined,
+    defaultBossParticipationMode: sourceTemplate.defaultBossParticipationMode ?? undefined,
+    forceBossParticipation: sourceTemplate.forceBossParticipation ?? false,
+    stageOrder: [...sourceTemplate.stageOrderJson],
+    defaultRoles: body.defaultRoles ?? sourceTemplate.defaultRolesJson ?? undefined,
+  };
+}
 
+async function cloneWorkflowTemplateStages(args: {
+  targetTemplateId: string;
+  sourceStages: WorkflowTemplateStageRecord[];
+  authorization: string;
+  createdTemplate: WorkflowTemplateRecord;
+}) {
   const clonedStages: WorkflowTemplateStageRecord[] = [];
-  for (const stage of sourceStages) {
+
+  for (const stage of args.sourceStages) {
     const createStageResult = await cpFetch<WorkflowTemplateStageRecord>(
-      `/api/workflow-templates/${encodeURIComponent(body.id.trim())}/stages`,
+      `/api/workflow-templates/${encodeURIComponent(args.targetTemplateId)}/stages`,
       {
         method: "POST",
-        authorization,
+        authorization: args.authorization,
         body: {
-          id: `${body.id.trim()}.${stage.stageKey}.${crypto.randomUUID()}`,
+          id: `${args.targetTemplateId}.${stage.stageKey}.${crypto.randomUUID()}`,
           stageKey: stage.stageKey,
           name: stage.name,
           enabled: stage.enabled,
@@ -272,23 +270,191 @@ workflowTemplateRoutes.post("/:templateId/clone", async (c) => {
     );
 
     if (!createStageResult.ok) {
-      return c.json(
-        {
+      return {
+        ok: false as const,
+        data: {
           error: "Workflow template cloned partially",
-          template: createTemplateResult.data,
+          template: args.createdTemplate,
           failedStageKey: stage.stageKey,
         },
-        createStageResult.status as 400 | 401 | 403 | 404 | 409 | 502,
-      );
+        status: createStageResult.status as 400 | 401 | 403 | 404 | 409 | 502,
+      };
     }
 
     clonedStages.push(createStageResult.data);
   }
 
+  return { ok: true as const, data: clonedStages };
+}
+
+async function loadProjectWorkflowTemplateView(projectId: string, authorization: string) {
+  const [projectResult, bindingResult, templateResult] = await Promise.all([
+    cpFetch<ProjectViewRecord>(`/api/projects/${encodeURIComponent(projectId)}`, {
+      authorization,
+    }),
+    cpFetch<ProjectWorkflowTemplateBinding>(
+      `/api/projects/${encodeURIComponent(projectId)}/workflow-template`,
+      {
+        authorization,
+      },
+    ),
+    fetchTemplates(authorization),
+  ]);
+
+  return { projectResult, bindingResult, templateResult };
+}
+
+function findProjectWorkflowTemplateViewError(resources: {
+  projectResult: Awaited<ReturnType<typeof cpFetch<ProjectViewRecord>>>;
+  bindingResult: Awaited<ReturnType<typeof cpFetch<ProjectWorkflowTemplateBinding>>>;
+  templateResult: Awaited<ReturnType<typeof fetchTemplates>>;
+}) {
+  if (!resources.projectResult.ok) {
+    return {
+      data: resources.projectResult.data,
+      status: resources.projectResult.status as 400 | 401 | 403 | 404 | 502,
+    };
+  }
+  if (!resources.bindingResult.ok) {
+    return {
+      data: resources.bindingResult.data,
+      status: resources.bindingResult.status as 400 | 401 | 403 | 404 | 502,
+    };
+  }
+  if (!resources.templateResult.ok) {
+    return {
+      data: resources.templateResult.data,
+      status: resources.templateResult.status as 400 | 401 | 403 | 404 | 502,
+    };
+  }
+
+  return null;
+}
+
+function buildProjectWorkflowTemplateViewPayload(args: {
+  project: ProjectViewRecord;
+  binding: ProjectWorkflowTemplateBinding;
+  selectableTemplates: WorkflowTemplateRecord[];
+  canManage: boolean;
+  stages: WorkflowTemplateStageRecord[];
+}) {
+  const currentTemplate = args.binding.template;
+  const projectSettings = {
+    preferredTemplateId: args.project.settings?.preferredTemplateId || null,
+    allowBossAutoTemplateSwitch: Boolean(args.project.settings?.allowBossAutoTemplateSwitch),
+  };
+  const currentTemplatePolicy = currentTemplate
+    ? {
+        defaultCollaborationMode: currentTemplate.defaultCollaborationMode || null,
+        defaultAutopilotLevel: currentTemplate.defaultAutopilotLevel || null,
+        defaultBossParticipationMode: currentTemplate.forceBossParticipation
+          ? "full-manager"
+          : currentTemplate.defaultBossParticipationMode || null,
+        forceBossParticipation: Boolean(currentTemplate.forceBossParticipation),
+      }
+    : null;
+
+  return {
+    project: {
+      id: args.project.id,
+      name: args.project.name || args.project.id,
+      slug: args.project.slug || "",
+    },
+    currentTemplate,
+    workflowTemplateId: args.binding.workflowTemplateId,
+    currentTemplateSource: currentTemplate ? "bound" : "unbound",
+    stages: args.stages,
+    selectableTemplates: args.selectableTemplates,
+    projectSettings,
+    currentTemplatePolicy,
+    stageCatalog: STAGE_CATALOG,
+    access: {
+      canManage: args.canManage,
+      message: currentTemplate
+        ? null
+        : args.binding.workflowTemplateId
+          ? "项目已记录模板绑定，但模板不存在、无权限访问，或已不再适用于当前项目。"
+          : "当前项目尚未绑定工作流模板。",
+    },
+  };
+}
+
+workflowTemplateRoutes.get("/", async (c) => {
+  const projectId = c.req.query("projectId");
+  const result = await fetchTemplates(authHeader(c), projectId);
+  return c.json(result.data, result.ok ? 200 : (result.status as 400 | 401 | 403 | 404 | 502));
+});
+
+workflowTemplateRoutes.post("/", async (c) => {
+  const body = await c.req.json();
+  const result = await cpFetch<Record<string, unknown>>("/api/workflow-templates", {
+    method: "POST",
+    body,
+    authorization: authHeader(c),
+  });
+  return c.json(
+    result.data,
+    result.ok ? 201 : (result.status as 400 | 401 | 403 | 404 | 409 | 502),
+  );
+});
+
+workflowTemplateRoutes.patch("/:templateId", async (c) => {
+  const templateId = c.req.param("templateId");
+  const body = await c.req.json();
+  const result = await cpFetch<Record<string, unknown>>(
+    `/api/workflow-templates/${encodeURIComponent(templateId)}`,
+    {
+      method: "PATCH",
+      body,
+      authorization: authHeader(c),
+    },
+  );
+  return c.json(
+    result.data,
+    result.ok ? 200 : (result.status as 400 | 401 | 403 | 404 | 409 | 502),
+  );
+});
+
+workflowTemplateRoutes.post("/:templateId/clone", async (c) => {
+  const authorization = authHeader(c);
+  const templateId = c.req.param("templateId");
+  const body = (await c.req.json()) as CloneWorkflowTemplatePayload;
+
+  const resources = await loadCloneWorkflowTemplateSource(templateId, authorization);
+  const validationError = validateCloneWorkflowTemplateSource({ ...resources, body });
+  if (validationError) {
+    return c.json(validationError.data, validationError.status);
+  }
+
+  const sourceTemplate = resources.templateResult.data as WorkflowTemplateRecord;
+  const sourceStages = sortStages(resources.stagesResult.data.data || []);
+  const createTemplateResult = await cpFetch<WorkflowTemplateRecord>("/api/workflow-templates", {
+    method: "POST",
+    authorization,
+    body: buildCloneTemplateCreatePayload(sourceTemplate, body),
+  });
+
+  if (!createTemplateResult.ok) {
+    return c.json(
+      createTemplateResult.data,
+      createTemplateResult.status as 400 | 401 | 403 | 404 | 409 | 502,
+    );
+  }
+
+  const cloneStagesResult = await cloneWorkflowTemplateStages({
+    targetTemplateId: body.id.trim(),
+    sourceStages,
+    authorization,
+    createdTemplate: createTemplateResult.data,
+  });
+  if (!cloneStagesResult.ok) {
+    return c.json(cloneStagesResult.data, cloneStagesResult.status);
+  }
+
   return c.json(
     {
       template: createTemplateResult.data,
-      stages: clonedStages,
+      stages: cloneStagesResult.data,
       sourceTemplateId: templateId,
     },
     201,
@@ -312,7 +478,10 @@ workflowTemplateRoutes.post("/:templateId/stages", async (c) => {
       authorization: authHeader(c),
     },
   );
-  return c.json(result.data, result.ok ? 201 : (result.status as 400 | 401 | 403 | 404 | 409 | 502));
+  return c.json(
+    result.data,
+    result.ok ? 201 : (result.status as 400 | 401 | 403 | 404 | 409 | 502),
+  );
 });
 
 workflowTemplateRoutes.patch("/:templateId/stages/:stageId", async (c) => {
@@ -327,7 +496,10 @@ workflowTemplateRoutes.patch("/:templateId/stages/:stageId", async (c) => {
       authorization: authHeader(c),
     },
   );
-  return c.json(result.data, result.ok ? 200 : (result.status as 400 | 401 | 403 | 404 | 409 | 502));
+  return c.json(
+    result.data,
+    result.ok ? 200 : (result.status as 400 | 401 | 403 | 404 | 409 | 502),
+  );
 });
 
 workflowTemplateRoutes.delete("/:templateId/stages/:stageId", async (c) => {
@@ -340,7 +512,10 @@ workflowTemplateRoutes.delete("/:templateId/stages/:stageId", async (c) => {
       authorization: authHeader(c),
     },
   );
-  return c.json(result.data, result.ok ? 200 : (result.status as 400 | 401 | 403 | 404 | 409 | 502));
+  return c.json(
+    result.data,
+    result.ok ? 200 : (result.status as 400 | 401 | 403 | 404 | 409 | 502),
+  );
 });
 
 workflowTemplateRoutes.get("/:templateId/editor-view", async (c) => {
@@ -386,71 +561,27 @@ workflowTemplateRoutes.get("/projects/:projectId/view", async (c) => {
   const authorization = authHeader(c);
   const projectId = c.req.param("projectId");
   const user = c.get("user") as { role?: string; projects?: Array<{ id: string; role: string }> };
-  const canManage =
-    user.role === "platform_admin" ||
-    user.role === "org_admin" ||
-    Boolean(user.projects?.some((item) => item.id === projectId && item.role === "project_admin"));
-  const [projectResult, bindingResult, templateResult] = await Promise.all([
-    cpFetch<ProjectViewRecord>(`/api/projects/${encodeURIComponent(projectId)}`, {
-      authorization,
-    }),
-    cpFetch<ProjectWorkflowTemplateBinding>(`/api/projects/${encodeURIComponent(projectId)}/workflow-template`, {
-      authorization,
-    }),
-    fetchTemplates(authorization),
-  ]);
-
-  if (!projectResult.ok) {
-    return c.json(projectResult.data, projectResult.status as 400 | 401 | 403 | 404 | 502);
-  }
-  if (!bindingResult.ok) {
-    return c.json(bindingResult.data, bindingResult.status as 400 | 401 | 403 | 404 | 502);
-  }
-  if (!templateResult.ok) {
-    return c.json(templateResult.data, templateResult.status as 400 | 401 | 403 | 404 | 502);
+  const canManage = canManageWorkflowTemplateProject(user, projectId);
+  const resources = await loadProjectWorkflowTemplateView(projectId, authorization);
+  const resourceError = findProjectWorkflowTemplateViewError(resources);
+  if (resourceError) {
+    return c.json(resourceError.data, resourceError.status);
   }
 
-  const selectableTemplates = (templateResult.data.data || []).filter(
+  const selectableTemplates = (resources.templateResult.data.data || []).filter(
     (item) => item.enabled && (item.selectableByProjects || item.projectId === projectId),
   );
-  const currentTemplate = bindingResult.data.template;
-  const projectSettings = {
-    preferredTemplateId: projectResult.data.settings?.preferredTemplateId || null,
-    allowBossAutoTemplateSwitch: Boolean(projectResult.data.settings?.allowBossAutoTemplateSwitch),
-  };
-  const currentTemplatePolicy = currentTemplate
-    ? {
-        defaultCollaborationMode: currentTemplate.defaultCollaborationMode || null,
-        defaultAutopilotLevel: currentTemplate.defaultAutopilotLevel || null,
-        defaultBossParticipationMode: currentTemplate.forceBossParticipation
-          ? "full-manager"
-          : (currentTemplate.defaultBossParticipationMode || null),
-        forceBossParticipation: Boolean(currentTemplate.forceBossParticipation),
-      }
-    : null;
-
+  const currentTemplate = resources.bindingResult.data.template;
   if (!currentTemplate) {
-    return c.json({
-      project: {
-        id: projectResult.data.id,
-        name: projectResult.data.name || projectResult.data.id,
-        slug: projectResult.data.slug || "",
-      },
-      currentTemplate: null,
-      workflowTemplateId: bindingResult.data.workflowTemplateId,
-      currentTemplateSource: "unbound",
-      stages: [],
-      selectableTemplates,
-      projectSettings,
-      currentTemplatePolicy,
-      stageCatalog: STAGE_CATALOG,
-      access: {
+    return c.json(
+      buildProjectWorkflowTemplateViewPayload({
+        project: resources.projectResult.data,
+        binding: resources.bindingResult.data,
+        selectableTemplates,
         canManage,
-        message: bindingResult.data.workflowTemplateId
-          ? "项目已记录模板绑定，但模板不存在、无权限访问，或已不再适用于当前项目。"
-          : "当前项目尚未绑定工作流模板。",
-      },
-    });
+        stages: [],
+      }),
+    );
   }
 
   const stagesResult = await fetchStages(currentTemplate.id, authorization);
@@ -458,31 +589,21 @@ workflowTemplateRoutes.get("/projects/:projectId/view", async (c) => {
     return c.json(stagesResult.data, stagesResult.status as 400 | 401 | 403 | 404 | 502);
   }
 
-  return c.json({
-    project: {
-      id: projectResult.data.id,
-      name: projectResult.data.name || projectResult.data.id,
-      slug: projectResult.data.slug || "",
-    },
-    currentTemplate,
-    workflowTemplateId: bindingResult.data.workflowTemplateId,
-    currentTemplateSource: "bound",
-    stages: sortStages(stagesResult.data.data || []),
-    selectableTemplates,
-    projectSettings,
-    currentTemplatePolicy,
-    stageCatalog: STAGE_CATALOG,
-    access: {
+  return c.json(
+    buildProjectWorkflowTemplateViewPayload({
+      project: resources.projectResult.data,
+      binding: resources.bindingResult.data,
+      selectableTemplates,
       canManage,
-      message: null,
-    },
-  });
+      stages: sortStages(stagesResult.data.data || []),
+    }),
+  );
 });
 
 workflowTemplateRoutes.put("/projects/:projectId/selection", async (c) => {
   const authorization = authHeader(c);
   const projectId = c.req.param("projectId");
-  const body = await c.req.json() as {
+  const body = (await c.req.json()) as {
     workflowTemplateId?: string | null;
     preferredTemplateId?: string | null;
     allowBossAutoTemplateSwitch?: boolean;
@@ -501,26 +622,35 @@ workflowTemplateRoutes.put("/projects/:projectId/selection", async (c) => {
     return c.json(bindingResult.data, bindingResult.status as 400 | 401 | 403 | 404 | 502);
   }
 
-  const settingsPatchResult = await cpFetch<{ id: string }>(`/api/projects/${encodeURIComponent(projectId)}`, {
-    method: "PATCH",
-    body: {
-      settings: {
+  const settingsPatchResult = await cpFetch<{ id: string }>(
+    `/api/projects/${encodeURIComponent(projectId)}`,
+    {
+      method: "PATCH",
+      body: {
+        settings: {
+          preferredTemplateId: body.preferredTemplateId ?? null,
+          allowBossAutoTemplateSwitch: body.allowBossAutoTemplateSwitch ?? false,
+        },
+      },
+      authorization,
+    },
+  );
+
+  if (!settingsPatchResult.ok) {
+    return c.json(
+      settingsPatchResult.data,
+      settingsPatchResult.status as 400 | 401 | 403 | 404 | 502,
+    );
+  }
+
+  return c.json(
+    {
+      ...bindingResult.data,
+      projectSettings: {
         preferredTemplateId: body.preferredTemplateId ?? null,
         allowBossAutoTemplateSwitch: body.allowBossAutoTemplateSwitch ?? false,
       },
     },
-    authorization,
-  });
-
-  if (!settingsPatchResult.ok) {
-    return c.json(settingsPatchResult.data, settingsPatchResult.status as 400 | 401 | 403 | 404 | 502);
-  }
-
-  return c.json({
-    ...bindingResult.data,
-    projectSettings: {
-      preferredTemplateId: body.preferredTemplateId ?? null,
-      allowBossAutoTemplateSwitch: body.allowBossAutoTemplateSwitch ?? false,
-    },
-  }, 200);
+    200,
+  );
 });

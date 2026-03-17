@@ -1,8 +1,8 @@
 import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ProjectSettings } from "../../control-plane/web-ui/src/lib/api";
 import ProjectSettingsPanel from "../../control-plane/web-ui/src/components/ProjectSettingsPanel.vue";
+import type { ProjectSettings } from "../../control-plane/web-ui/src/lib/api";
 import { useAuthStore } from "../../control-plane/web-ui/src/stores/auth";
 
 const apiMocks = vi.hoisted(() => ({

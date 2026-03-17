@@ -165,7 +165,7 @@ import { Button, Modal, message, notification } from "ant-design-vue";
 import type { DefaultOptionType } from "ant-design-vue/es/select";
 import { computed, h, onUnmounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { getTask, listTasks, type Task } from "../lib/api";
+import { type Task, getTask, listTasks } from "../lib/api";
 import { useProjectStore } from "../stores/project";
 import { useWorkbenchStore } from "../stores/workbench";
 import { workbenchThemeStyles } from "../theme/ui-theme";
@@ -318,7 +318,11 @@ function handleTaskPickerChange(value: unknown) {
   const taskId = String(value);
   const task = taskPickerTasks.value.find((item) => item.id === taskId);
 
-  if (taskPickerTarget.value === "secondary" && workbench.activeTaskId && workbench.activeTaskId !== taskId) {
+  if (
+    taskPickerTarget.value === "secondary" &&
+    workbench.activeTaskId &&
+    workbench.activeTaskId !== taskId
+  ) {
     workbench.openTaskInSecondary(taskId, task?.title, task?.status);
     workbench.setSplitMode(true);
   } else {
@@ -336,10 +340,7 @@ function filterTaskOption(input: string, option?: DefaultOptionType) {
   const keyword = input.toLowerCase();
   const optionValue = option?.value == null ? "" : String(option.value).toLowerCase();
   const optionLabel = option?.label == null ? "" : String(option.label).toLowerCase();
-  return (
-    optionValue.includes(keyword) ||
-    optionLabel.includes(keyword)
-  );
+  return optionValue.includes(keyword) || optionLabel.includes(keyword);
 }
 
 function taskStatusLabel(status?: string) {
@@ -362,7 +363,9 @@ function formatTaskPickerTitle(title: string, maxLength: number) {
   return `${title.slice(0, Math.max(0, maxLength - 1))}…`;
 }
 
-function tabStatusBadge(status?: string): "success" | "processing" | "warning" | "error" | "default" {
+function tabStatusBadge(
+  status?: string,
+): "success" | "processing" | "warning" | "error" | "default" {
   if (status === "completed") return "success";
   if (status === "running") return "processing";
   if (status === "pending" || status === "paused") return "warning";
@@ -516,36 +519,35 @@ function showClearUndoNotice(snapshot: ReturnType<typeof workbench.createSnapsho
     duration: 10,
     description: h("div", { style: { paddingRight: "4px", color: "#5c4734", lineHeight: 1.7 } }, [
       h("div", `刚刚关闭了 ${snapshot.tabs.length} 个任务标签。`),
-      h("div", snapshot.splitMode ? "双栏分屏状态也已一并清除。" : "你可以继续从任务列表重新打开任务。"),
       h(
         "div",
-        { style: { marginTop: "12px", display: "flex", gap: "8px", flexWrap: "wrap" } },
-        [
-          h(
-            Button,
-            {
-              type: "primary",
-              size: "small",
-              onClick: () => {
-                workbench.restoreSnapshot(snapshot);
-                notification.close(clearUndoNotificationKey);
-                message.success("工作台已恢复");
-              },
-            },
-            { default: () => "撤销" },
-          ),
-          h(
-            Button,
-            {
-              size: "small",
-              onClick: () => {
-                notification.close(clearUndoNotificationKey);
-              },
-            },
-            { default: () => "知道了" },
-          ),
-        ],
+        snapshot.splitMode ? "双栏分屏状态也已一并清除。" : "你可以继续从任务列表重新打开任务。",
       ),
+      h("div", { style: { marginTop: "12px", display: "flex", gap: "8px", flexWrap: "wrap" } }, [
+        h(
+          Button,
+          {
+            type: "primary",
+            size: "small",
+            onClick: () => {
+              workbench.restoreSnapshot(snapshot);
+              notification.close(clearUndoNotificationKey);
+              message.success("工作台已恢复");
+            },
+          },
+          { default: () => "撤销" },
+        ),
+        h(
+          Button,
+          {
+            size: "small",
+            onClick: () => {
+              notification.close(clearUndoNotificationKey);
+            },
+          },
+          { default: () => "知道了" },
+        ),
+      ]),
     ]),
   });
 }

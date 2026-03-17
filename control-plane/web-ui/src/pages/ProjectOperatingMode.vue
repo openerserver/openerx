@@ -95,11 +95,11 @@ import { message } from "ant-design-vue";
 import { computed, onMounted, reactive, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
-  getProject,
-  getProjectOrchestrationView,
   type Project,
   type ProjectOrchestrationView,
   type ProjectSettings,
+  getProject,
+  getProjectOrchestrationView,
   toApiError,
   updateProject,
 } from "../lib/api";
@@ -147,7 +147,11 @@ const bossModeOptions = [
 const canManage = computed(() => {
   const role = authStore.user?.role;
   if (role === "platform_admin" || role === "org_admin" || role === "admin") return true;
-  return authStore.user?.projects?.some((item) => item.id === projectId && item.role === "project_admin") || false;
+  return (
+    authStore.user?.projects?.some(
+      (item) => item.id === projectId && item.role === "project_admin",
+    ) || false
+  );
 });
 
 function applyProjectSettings(settings?: ProjectSettings | null) {
@@ -181,10 +185,10 @@ function asAutopilotLevel(value: unknown): ProjectSettings["autopilotLevel"] {
 }
 
 function asBossMode(value: unknown): ProjectSettings["bossParticipationMode"] {
-  return value === "disabled"
-    || value === "advisory"
-    || value === "exception-only"
-    || value === "full-manager"
+  return value === "disabled" ||
+    value === "advisory" ||
+    value === "exception-only" ||
+    value === "full-manager"
     ? value
     : undefined;
 }
@@ -201,7 +205,8 @@ async function loadData() {
     orchestrationView.value = orchestrationResult;
     applyProjectSettings(projectResult.settings);
   } catch (error) {
-    loadError.value = toApiError(error)?.message || (error instanceof Error ? error.message : String(error));
+    loadError.value =
+      toApiError(error)?.message || (error instanceof Error ? error.message : String(error));
   } finally {
     loading.value = false;
   }
@@ -224,7 +229,9 @@ async function handleSave() {
     applyProjectSettings(project.value.settings);
     message.success("项目运行档位已保存");
   } catch (error) {
-    message.error(`保存失败: ${toApiError(error)?.message || (error instanceof Error ? error.message : String(error))}`);
+    message.error(
+      `保存失败: ${toApiError(error)?.message || (error instanceof Error ? error.message : String(error))}`,
+    );
   } finally {
     saving.value = false;
   }

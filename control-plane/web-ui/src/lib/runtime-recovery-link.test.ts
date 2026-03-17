@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { buildRuntimeRecoverySettingsTarget } from "./runtime-recovery-link";
-import { SETTINGS_SECTIONS, SETTINGS_TAB_MODELS, resolveSettingsDeepLink } from "./settings-deep-link";
 import { RUNTIME_RECOVERY_ERROR_CODES } from "./runtime-recovery-contract";
+import { buildRuntimeRecoverySettingsTarget } from "./runtime-recovery-link";
+import {
+  SETTINGS_SECTIONS,
+  SETTINGS_TAB_MODELS,
+  resolveSettingsDeepLink,
+} from "./settings-deep-link";
 
 describe("buildRuntimeRecoverySettingsTarget", () => {
   it("routes copilot auth failures to the copilot provider card", () => {

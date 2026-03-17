@@ -162,9 +162,7 @@ const props = defineProps<{
   block: ConfirmationBlock;
 }>();
 
-const emit = defineEmits<{
-  (e: "submit", reply: string): void;
-}>();
+const emit = defineEmits<(e: "submit", reply: string) => void>();
 
 const answers = reactive(new Map<number, string>());
 const customInputVisible = reactive(new Set<number>());

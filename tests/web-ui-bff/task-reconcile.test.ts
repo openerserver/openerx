@@ -2,7 +2,9 @@
 
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 
-const cpFetchMock = mock((async (..._args: unknown[]) => ({ ok: true, data: {} })) as (...args: unknown[]) => Promise<{ ok: boolean; data: unknown }>);
+const cpFetchMock = mock((async (..._args: unknown[]) => ({ ok: true, data: {} })) as (
+  ...args: unknown[]
+) => Promise<{ ok: boolean; data: unknown }>);
 const createInternalAuthorizationMock = mock(async () => "Bearer internal");
 const authHeaderMock = mock(() => "Bearer test");
 const extractAssistantResultFromMessagesMock = mock((() => ({
@@ -16,7 +18,11 @@ const findAgentRunBySessionIdMock = mock(() => undefined);
 const getSessionMessagesMock = mock(async () => ({ ok: true, data: [] }));
 const listSessionsMock = mock(async () => ({ ok: true, data: [{ id: "session-1" }] }));
 const recoverAgentRunMock = mock(() => undefined);
-const runDetachedPromptMock = mock(async () => ({ ok: true, text: "judge result", sessionId: "judge-ses" }));
+const runDetachedPromptMock = mock(async () => ({
+  ok: true,
+  text: "judge result",
+  sessionId: "judge-ses",
+}));
 const updateAgentRunStatusMock = mock(() => undefined);
 
 mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () => ({
@@ -56,7 +62,11 @@ beforeEach(() => {
   getAgentRunMock.mockReturnValue(undefined);
   findAgentRunBySessionIdMock.mockReturnValue(undefined);
   recoverAgentRunMock.mockReturnValue(undefined);
-  runDetachedPromptMock.mockResolvedValue({ ok: true, text: "judge result", sessionId: "judge-ses" });
+  runDetachedPromptMock.mockResolvedValue({
+    ok: true,
+    text: "judge result",
+    sessionId: "judge-ses",
+  });
   updateAgentRunStatusMock.mockImplementation(() => undefined);
   extractAssistantResultFromMessagesMock.mockReturnValue({
     completed: false,
@@ -175,7 +185,9 @@ beforeEach(() => {
 
 describe("reconcileRunningTasksOnStartup", () => {
   test("marks tasks failed when assistant messages contain embedded runtime errors", async () => {
-    const { reconcileRunningTasksOnStartup } = await import("../../control-plane/web-ui-bff/src/modules/tasks/reconcile");
+    const { reconcileRunningTasksOnStartup } = await import(
+      "../../control-plane/web-ui-bff/src/modules/tasks/reconcile"
+    );
 
     const summary = await reconcileRunningTasksOnStartup();
 
@@ -213,7 +225,9 @@ describe("reconcileRunningTasksOnStartup", () => {
       text: "Final answer",
     });
 
-    const { reconcileRunningTasksOnStartup } = await import("../../control-plane/web-ui-bff/src/modules/tasks/reconcile");
+    const { reconcileRunningTasksOnStartup } = await import(
+      "../../control-plane/web-ui-bff/src/modules/tasks/reconcile"
+    );
 
     const summary = await reconcileRunningTasksOnStartup();
 
@@ -315,7 +329,9 @@ describe("reconcileRunningTasksOnStartup", () => {
       return { ok: true, data: { body: options?.body } };
     });
 
-    const { reconcileRunningTasksOnStartup } = await import("../../control-plane/web-ui-bff/src/modules/tasks/reconcile");
+    const { reconcileRunningTasksOnStartup } = await import(
+      "../../control-plane/web-ui-bff/src/modules/tasks/reconcile"
+    );
 
     const summary = await reconcileRunningTasksOnStartup();
 

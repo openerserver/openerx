@@ -236,33 +236,44 @@ import type {
   TaskWorkflowViewModel,
 } from "../lib/api";
 
-const props = withDefaults(defineProps<{
-  loading: boolean;
-  error: string | null;
-  workflowSummary: TaskWorkflowViewModel["workflow"] | null;
-  workflowStages: TaskStageViewModel[];
-  roleConclusions: RoleConclusionViewModel[];
-  developerChangeRequests: DeveloperChangeRequestViewModel[];
-  updatingRequestIds?: string[];
-}>(), {
-  updatingRequestIds: () => [],
-});
+const props = withDefaults(
+  defineProps<{
+    loading: boolean;
+    error: string | null;
+    workflowSummary: TaskWorkflowViewModel["workflow"] | null;
+    workflowStages: TaskStageViewModel[];
+    roleConclusions: RoleConclusionViewModel[];
+    developerChangeRequests: DeveloperChangeRequestViewModel[];
+    updatingRequestIds?: string[];
+  }>(),
+  {
+    updatingRequestIds: () => [],
+  },
+);
 
-const emit = defineEmits<{
-  (e: "request-status-change", payload: { requestId: string; status: "acknowledged" | "resolved" }): void;
-}>();
+const emit =
+  defineEmits<
+    (
+      e: "request-status-change",
+      payload: { requestId: string; status: "acknowledged" | "resolved" },
+    ) => void
+  >();
 
 const expandedRoleReviewIds = ref<string[]>([]);
 const expandedChangeRequestIds = ref<string[]>([]);
 
 const openDeveloperChangeRequests = computed(() =>
-  props.developerChangeRequests.filter((item) => item.status === "open" || item.status === "in-progress"),
+  props.developerChangeRequests.filter(
+    (item) => item.status === "open" || item.status === "in-progress",
+  ),
 );
 const resolvedDeveloperChangeRequests = computed(() =>
   props.developerChangeRequests.filter((item) => item.status === "resolved"),
 );
 const blockingRoleConclusions = computed(() =>
-  props.roleConclusions.filter((item) => item.finalDecision === "block" || item.finalDecision === "human-review"),
+  props.roleConclusions.filter(
+    (item) => item.finalDecision === "block" || item.finalDecision === "human-review",
+  ),
 );
 const manualReviewConclusions = computed(() =>
   props.roleConclusions.filter((item) => item.finalDecision === "human-review"),
@@ -293,27 +304,33 @@ const workflowBannerState = computed(() => ({
   blockingReason: props.workflowStages.find((stage) => stage.blockingReason)?.blockingReason,
 }));
 
-const stageLabelLookup = computed(() =>
-  new Map(
-    props.workflowStages.map((stage) => [stage.stageKey, stage.stageLabel || fallbackStageLabel(stage.stageKey)]),
-  ),
+const stageLabelLookup = computed(
+  () =>
+    new Map(
+      props.workflowStages.map((stage) => [
+        stage.stageKey,
+        stage.stageLabel || fallbackStageLabel(stage.stageKey),
+      ]),
+    ),
 );
 
 const currentStageLabel = computed(() => formatStageLabel(workflowBannerState.value.currentStage));
 
 function runtimeSummaryOf(stage: TaskStageViewModel) {
-  return stage.runtimeSummary || {
-    conclusionCount: 0,
-    blockDecisionCount: 0,
-    approvalDecisionCount: 0,
-    manualReviewCount: 0,
-    openChangeRequestCount: 0,
-    blockingChangeRequestCount: 0,
-    gateResult: "not-configured",
-    approvalResult: "not-configured",
-    latestBlockingRoleLabel: undefined,
-    latestApprovalRoleLabel: undefined,
-  };
+  return (
+    stage.runtimeSummary || {
+      conclusionCount: 0,
+      blockDecisionCount: 0,
+      approvalDecisionCount: 0,
+      manualReviewCount: 0,
+      openChangeRequestCount: 0,
+      blockingChangeRequestCount: 0,
+      gateResult: "not-configured",
+      approvalResult: "not-configured",
+      latestBlockingRoleLabel: undefined,
+      latestApprovalRoleLabel: undefined,
+    }
+  );
 }
 
 const manualInterventionLabel = computed(() => {

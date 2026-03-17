@@ -270,7 +270,14 @@ interface QueueViewItem {
 }
 
 const props = defineProps<{
-  summaryCards: Array<{ key: string; focusKey: "all" | AgentOpsQueue; label: string; value: string | number; hint: string; color: string }>;
+  summaryCards: Array<{
+    key: string;
+    focusKey: "all" | AgentOpsQueue;
+    label: string;
+    value: string | number;
+    hint: string;
+    color: string;
+  }>;
   queueFocus: "all" | AgentOpsQueue;
   queueDataLoading: boolean;
   displayedTotalKnownRuns: number;
@@ -310,7 +317,6 @@ defineEmits<{
 function shouldShowQueue(queue: AgentOpsQueue) {
   return props.queueFocus === "all" || props.queueFocus === queue;
 }
-
 </script>
 
 <style scoped>

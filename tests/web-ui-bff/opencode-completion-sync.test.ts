@@ -1,20 +1,21 @@
-import { expect, test } from "bun:test";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { afterAll, beforeAll, expect, test } from "bun:test";
+import {
+  DEFAULT_ORCHESTRATION_STRATEGY,
+  type OrchestrationStrategy,
+} from "../../control-plane/web-ui-bff/src/lib/orchestration-strategy";
 import {
   paidExecutionIntegrationTest,
   resolveExecutionIntegrationModel,
 } from "./execution-integration-guard";
+import { buildTaskCleanupStatements, resolveBffUrl, runCleanupStatements } from "./test-env";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-
-const BFF_URL = process.env.TEST_BFF_URL || "http://127.0.0.1:4098";
+const BFF_URL = resolveBffUrl();
 const PROJECT_ID = process.env.TEST_PROJECT_ID || "proj-default";
 const USERNAME = process.env.TEST_USERNAME || "admin";
 const PASSWORD = process.env.TEST_PASSWORD || "admin123!";
-const DB_PATH =
-  process.env.TEST_DB_PATH || resolve(__dirname, "../../control-plane/service/data/openerx.db");
 const executionIntegrationTest = paidExecutionIntegrationTest;
+
+let originalOrchestrationStrategy: OrchestrationStrategy | null = null;
 
 interface ConfigModelRecord {
   id?: string;
@@ -69,6 +70,46 @@ async function login(): Promise<string> {
   });
   return data.token;
 }
+
+function cloneStrategy(strategy: OrchestrationStrategy): OrchestrationStrategy {
+  return JSON.parse(JSON.stringify(strategy)) as OrchestrationStrategy;
+}
+
+async function getOrchestrationStrategy(token: string): Promise<OrchestrationStrategy> {
+  const response = await request<{ data: OrchestrationStrategy }>("/api/config/orchestration-strategy", {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return response.data;
+}
+
+async function updateOrchestrationStrategy(
+  token: string,
+  strategy: OrchestrationStrategy,
+): Promise<void> {
+  await request<{ ok: boolean }>("/api/config/orchestration-strategy", {
+    method: "PUT",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(strategy),
+  });
+}
+
+beforeAll(async () => {
+  const token = await login();
+  originalOrchestrationStrategy = await getOrchestrationStrategy(token);
+  await updateOrchestrationStrategy(token, cloneStrategy(DEFAULT_ORCHESTRATION_STRATEGY));
+});
+
+afterAll(async () => {
+  if (!originalOrchestrationStrategy) {
+    return;
+  }
+
+  const token = await login();
+  await updateOrchestrationStrategy(token, originalOrchestrationStrategy);
+});
 
 async function getAvailableCopilotModel(token: string): Promise<string> {
   const authHeaders = {
@@ -164,10 +205,7 @@ function parseExecutionPlan(raw: string | null | undefined): ExecutionPlanRecord
   }
 }
 
-function resolveWinnerAgentRunId(
-  taskStatus: TaskStatusRecord,
-  fallbackAgentRunId: string,
-): string {
+function resolveWinnerAgentRunId(taskStatus: TaskStatusRecord, fallbackAgentRunId: string): string {
   const plan = parseExecutionPlan(taskStatus.executionPlan);
   if (!plan || !Array.isArray(plan.candidates) || plan.candidates.length === 0) {
     return fallbackAgentRunId;
@@ -228,12 +266,9 @@ async function waitForCompletedStatus(
       request<{ status: string }>(`/api/agents/${agentRunId}/status`, {
         headers: { Authorization: `Bearer ${token}` },
       }),
-      request<TaskStatusRecord>(
-        `/api/tasks/${taskId}`,
-        {
-          headers: { Authorization: `Bearer ${token}` },
-        },
-      ),
+      request<TaskStatusRecord>(`/api/tasks/${taskId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      }),
     ]);
     const completedStatuses =
       agentStatus.status === "completed" && taskStatus.status === "completed";
@@ -352,19 +387,30 @@ async function waitForAssistantResult(
   resolvedAgentRunId: string;
 }> {
   const startedAt = Date.now();
+  let lastTaskResult = "";
+  let lastAssistantText = "";
+  let lastResolvedAgentRunId = agentRunId;
 
   while (Date.now() - startedAt < 30000) {
     const taskStatus = await request<TaskStatusRecord>(`/api/tasks/${taskId}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     const resolvedAgentRunId = resolveWinnerAgentRunId(taskStatus, agentRunId);
+    lastTaskResult = String(taskStatus.result ?? "");
+    lastResolvedAgentRunId = resolvedAgentRunId;
 
-    for (const candidateAgentRunId of listExecutionPlanAgentRunIds(taskStatus, resolvedAgentRunId)) {
+    for (const candidateAgentRunId of listExecutionPlanAgentRunIds(
+      taskStatus,
+      resolvedAgentRunId,
+    )) {
       const messages = await request(`/api/agents/${candidateAgentRunId}/messages`, {
         headers: { Authorization: `Bearer ${token}` },
       });
 
       const assistantText = extractAssistantText(messages);
+      if (assistantText) {
+        lastAssistantText = assistantText;
+      }
       if (assistantText && taskStatus.result === assistantText) {
         return { taskStatus, assistantText, resolvedAgentRunId: candidateAgentRunId };
       }
@@ -373,11 +419,13 @@ async function waitForAssistantResult(
     await sleep(250);
   }
 
-  throw new Error(`Timed out waiting for assistant result of task ${taskId}`);
+  throw new Error(
+    `Timed out waiting for assistant result of task ${taskId}; resolvedAgentRunId=${lastResolvedAgentRunId}; taskResult=${JSON.stringify(lastTaskResult)}; assistantText=${JSON.stringify(lastAssistantText)}`,
+  );
 }
 
 async function deleteTask(taskId: string): Promise<void> {
-  await Bun.$`sqlite3 ${DB_PATH} ${`delete from tasks where id='${taskId}';`}`;
+  await runCleanupStatements(buildTaskCleanupStatements([taskId]), "opencode completion sync test");
 }
 
 async function runCompletionSyncScenario(options: {
@@ -498,10 +546,10 @@ async function runCompletionSyncScenario(options: {
       events,
       "pipeline.stage.updated",
       (event) =>
-        event.taskId === task.id
-        && typeof event.data === "object"
-        && event.data
-        && (event.data as Record<string, unknown>).reason === "task.completed",
+        event.taskId === task.id &&
+        typeof event.data === "object" &&
+        event.data &&
+        (event.data as Record<string, unknown>).reason === "task.completed",
       120000,
     );
 
@@ -512,11 +560,11 @@ async function runCompletionSyncScenario(options: {
     expect(taskStatus.finishedAt).toBeTruthy();
 
     if (options.expectResultSync) {
-      const { taskStatus: finalTaskStatus, assistantText, resolvedAgentRunId } = await waitForAssistantResult(
-        token,
-        task.id,
-        agentRunId,
-      );
+      const {
+        taskStatus: finalTaskStatus,
+        assistantText,
+        resolvedAgentRunId,
+      } = await waitForAssistantResult(token, task.id, agentRunId);
       expect(typeof resolvedAgentRunId).toBe("string");
       expect(resolvedAgentRunId.length).toBeGreaterThan(0);
       expect(assistantText.length).toBeGreaterThan(0);
@@ -548,126 +596,124 @@ async function runCompletionSyncScenario(options: {
   }
 }
 
-executionIntegrationTest("task graph injection pushes task.node.updated over websocket", async () => {
-  const health = await request<{ status: string }>("/health");
-  expect(health.status).toBe("ok");
+executionIntegrationTest(
+  "task graph injection pushes task.node.updated over websocket",
+  async () => {
+    const health = await request<{ status: string }>("/health");
+    expect(health.status).toBe("ok");
 
-  const token = await login();
-  const authHeaders = {
-    Authorization: `Bearer ${token}`,
-    "Content-Type": "application/json",
-  };
-  const selectedModel = await getAvailableCopilotModel(token);
+    const token = await login();
+    const authHeaders = {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    };
+    const selectedModel = await getAvailableCopilotModel(token);
 
-  const task = await request<{ id: string }>("/api/tasks", {
-    method: "POST",
-    headers: authHeaders,
-    body: JSON.stringify({
-      title: `task-node-updated-${Date.now()}`,
-      projectId: PROJECT_ID,
-      prompt:
-        "Quick brief reply only. Do not inspect the repository or call tools. Reply with exactly one line: OK.",
-      selectedModel,
-    }),
-  });
-
-  const events: Array<Record<string, unknown>> = [];
-  const wsReady = createDeferred<void>();
-  const ws = new WebSocket(
-    `${BFF_URL.replace("http", "ws")}/ws?token=${encodeURIComponent(token)}`,
-  );
-
-  let agentRunId = "";
-  let completed = false;
-
-  ws.addEventListener("open", () => {
-    ws.send(JSON.stringify({ type: "subscribe_task", taskId: task.id, projectId: PROJECT_ID }));
-    wsReady.resolve();
-  });
-
-  ws.addEventListener("message", (message) => {
-    try {
-      const event = JSON.parse(String(message.data)) as Record<string, unknown>;
-      events.push(event);
-    } catch {
-      // ignore malformed frames
-    }
-  });
-
-  ws.addEventListener("error", (error) => wsReady.reject(error));
-
-  try {
-    await wsReady.promise;
-
-    const execution = await request<{ agentRunId: string; sessionId: string }>(
-      `/api/tasks/${task.id}/execute`,
-      {
-        method: "POST",
-        headers: authHeaders,
-      },
-    );
-    agentRunId = execution.agentRunId;
-
-    await request<{
-      ok: boolean;
-      graphId: string;
-      workspaceDirectory: string;
-      graphPath: string;
-    }>("/api/realtime/dev/inject-task-graph-event", {
+    const task = await request<{ id: string }>("/api/tasks", {
       method: "POST",
       headers: authHeaders,
       body: JSON.stringify({
-        taskId: task.id,
+        title: `task-node-updated-${Date.now()}`,
         projectId: PROJECT_ID,
-        sessionId: execution.sessionId,
-        graph: {
-          status: "running",
-          nodes: [
-            {
-              id: "node-1",
-              subject: "Synthetic graph node",
-              status: "running",
-              agentType: "default-executor",
-            },
-          ],
-          edges: [],
-        },
+        prompt:
+          "Quick brief reply only. Do not inspect the repository or call tools. Reply with exactly one line: OK.",
+        selectedModel,
       }),
     });
 
-    await waitForEvent(
-      events,
-      "task.node.updated",
-      (event) => event.taskId === task.id,
-      30000,
+    const events: Array<Record<string, unknown>> = [];
+    const wsReady = createDeferred<void>();
+    const ws = new WebSocket(
+      `${BFF_URL.replace("http", "ws")}/ws?token=${encodeURIComponent(token)}`,
     );
-    await waitForEvent(
-      events,
-      "pipeline.stage.updated",
-      (event) =>
-        event.taskId === task.id
-        && typeof event.data === "object"
-        && event.data
-        && (event.data as Record<string, unknown>).reason === "task.node.updated",
-      30000,
-    );
-  } finally {
-    ws.close();
 
-    if (agentRunId) {
+    let agentRunId = "";
+    const completed = false;
+
+    ws.addEventListener("open", () => {
+      ws.send(JSON.stringify({ type: "subscribe_task", taskId: task.id, projectId: PROJECT_ID }));
+      wsReady.resolve();
+    });
+
+    ws.addEventListener("message", (message) => {
       try {
-        await request(`/api/agents/${agentRunId}/terminate`, {
-          method: "POST",
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        const event = JSON.parse(String(message.data)) as Record<string, unknown>;
+        events.push(event);
       } catch {
-        // best effort cleanup
+        // ignore malformed frames
       }
-    }
+    });
 
-    await deleteTask(task.id);
-  }
-});
+    ws.addEventListener("error", (error) => wsReady.reject(error));
+
+    try {
+      await wsReady.promise;
+
+      const execution = await request<{ agentRunId: string; sessionId: string }>(
+        `/api/tasks/${task.id}/execute`,
+        {
+          method: "POST",
+          headers: authHeaders,
+        },
+      );
+      agentRunId = execution.agentRunId;
+
+      await request<{
+        ok: boolean;
+        graphId: string;
+        workspaceDirectory: string;
+        graphPath: string;
+      }>("/api/realtime/dev/inject-task-graph-event", {
+        method: "POST",
+        headers: authHeaders,
+        body: JSON.stringify({
+          taskId: task.id,
+          projectId: PROJECT_ID,
+          sessionId: execution.sessionId,
+          graph: {
+            status: "running",
+            nodes: [
+              {
+                id: "node-1",
+                subject: "Synthetic graph node",
+                status: "running",
+                agentType: "default-executor",
+              },
+            ],
+            edges: [],
+          },
+        }),
+      });
+
+      await waitForEvent(events, "task.node.updated", (event) => event.taskId === task.id, 30000);
+      await waitForEvent(
+        events,
+        "pipeline.stage.updated",
+        (event) =>
+          event.taskId === task.id &&
+          typeof event.data === "object" &&
+          event.data &&
+          (event.data as Record<string, unknown>).reason === "task.node.updated",
+        30000,
+      );
+    } finally {
+      ws.close();
+
+      if (agentRunId) {
+        try {
+          await request(`/api/agents/${agentRunId}/terminate`, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${token}` },
+          });
+        } catch {
+          // best effort cleanup
+        }
+      }
+
+      await deleteTask(task.id);
+    }
+  },
+);
 
 executionIntegrationTest("OpenCode completion sync closes pause/guidance/resume flow", async () => {
   await runCompletionSyncScenario({
@@ -692,100 +738,111 @@ executionIntegrationTest(
   },
 );
 
-executionIntegrationTest("OpenCode terminate emits stopped event and persists stopped status", async () => {
-  const health = await request<{ status: string }>("/health");
-  expect(health.status).toBe("ok");
+executionIntegrationTest(
+  "OpenCode terminate emits stopped event and persists stopped status",
+  async () => {
+    const health = await request<{ status: string }>("/health");
+    expect(health.status).toBe("ok");
 
-  const token = await login();
-  const authHeaders = {
-    Authorization: `Bearer ${token}`,
-    "Content-Type": "application/json",
-  };
-  const selectedModel = await getAvailableCopilotModel(token);
+    const token = await login();
+    const authHeaders = {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    };
+    const selectedModel = await getAvailableCopilotModel(token);
 
-  const task = await request<{ id: string }>("/api/tasks", {
-    method: "POST",
-    headers: authHeaders,
-    body: JSON.stringify({
-      title: `terminate-regression-${Date.now()}`,
-      projectId: PROJECT_ID,
-      prompt:
-        "Quick brief reply only. Do not inspect the repository or call tools. Print the word HOLD on 200 separate lines and do not summarize.",
-      selectedModel,
-    }),
-  });
-
-  const events: Array<Record<string, unknown>> = [];
-  const wsReady = createDeferred<void>();
-  const ws = new WebSocket(
-    `${BFF_URL.replace("http", "ws")}/ws?token=${encodeURIComponent(token)}`,
-  );
-
-  let agentRunId = "";
-
-  ws.addEventListener("open", () => {
-    ws.send(JSON.stringify({ type: "subscribe_task", taskId: task.id, projectId: PROJECT_ID }));
-    wsReady.resolve();
-  });
-
-  ws.addEventListener("message", (message) => {
-    try {
-      const event = JSON.parse(String(message.data)) as Record<string, unknown>;
-      events.push(event);
-    } catch {
-      // ignore malformed frames
-    }
-  });
-
-  ws.addEventListener("error", (error) => wsReady.reject(error));
-
-  try {
-    await wsReady.promise;
-
-    const execution = await request<{ agentRunId: string }>(`/api/tasks/${task.id}/execute`, {
+    const task = await request<{ id: string }>("/api/tasks", {
       method: "POST",
       headers: authHeaders,
+      body: JSON.stringify({
+        title: `terminate-regression-${Date.now()}`,
+        projectId: PROJECT_ID,
+        prompt:
+          "Quick brief reply only. Do not inspect the repository or call tools. Print the word HOLD on 200 separate lines and do not summarize.",
+        selectedModel,
+      }),
     });
-    agentRunId = execution.agentRunId;
 
-    await waitForEvent(events, "agent.started", (event) => event.agentRunId === agentRunId, 15000);
-
-    const terminateResult = await request<{ ok: boolean }>(`/api/agents/${agentRunId}/terminate`, {
-      method: "POST",
-      headers: authHeaders,
-    });
-    expect(terminateResult.ok).toBe(true);
-
-    const stoppedEvent = await waitForEvent(
-      events,
-      "agent.stopped",
-      (event) => event.agentRunId === agentRunId,
-      15000,
+    const events: Array<Record<string, unknown>> = [];
+    const wsReady = createDeferred<void>();
+    const ws = new WebSocket(
+      `${BFF_URL.replace("http", "ws")}/ws?token=${encodeURIComponent(token)}`,
     );
-    expect((stoppedEvent.data as Record<string, unknown>)?.reason).toBe("terminated");
 
-    const agentStatus = await waitForStoppedStatus(token, agentRunId);
-    expect(agentStatus.status).toBe("stopped");
+    let agentRunId = "";
 
-    const summary = await waitForAgentSummary(token, agentRunId);
-    expect(summary.agentRunId).toBe(agentRunId);
-    expect(summary.status).toBe("stopped");
-    expect(summary.blockerType).toBe("stopped");
-    expect(summary.blockerLabel).toBe("已停止待处理");
-    expect(summary.finishedAt).toBeTruthy();
+    ws.addEventListener("open", () => {
+      ws.send(JSON.stringify({ type: "subscribe_task", taskId: task.id, projectId: PROJECT_ID }));
+      wsReady.resolve();
+    });
 
-    const recentQueue = await waitForQueueContains(token, "recent", agentRunId);
-    const queuedRun = recentQueue.data.find((item) => item.agentRunId === agentRunId);
-    expect(queuedRun?.status).toBe("stopped");
-    expect(queuedRun?.blockerType).toBe("stopped");
+    ws.addEventListener("message", (message) => {
+      try {
+        const event = JSON.parse(String(message.data)) as Record<string, unknown>;
+        events.push(event);
+      } catch {
+        // ignore malformed frames
+      }
+    });
 
-    const attentionQueue = await waitForQueueContains(token, "attention", agentRunId);
-    const attentionRun = attentionQueue.data.find((item) => item.agentRunId === agentRunId);
-    expect(attentionRun?.status).toBe("stopped");
-    expect(attentionRun?.blockerType).toBe("stopped");
-    expect(attentionRun?.blockerLabel).toBe("已停止待处理");
-  } finally {
-    ws.close();
-    await deleteTask(task.id);
-  }
-});
+    ws.addEventListener("error", (error) => wsReady.reject(error));
+
+    try {
+      await wsReady.promise;
+
+      const execution = await request<{ agentRunId: string }>(`/api/tasks/${task.id}/execute`, {
+        method: "POST",
+        headers: authHeaders,
+      });
+      agentRunId = execution.agentRunId;
+
+      await waitForEvent(
+        events,
+        "agent.started",
+        (event) => event.agentRunId === agentRunId,
+        15000,
+      );
+
+      const terminateResult = await request<{ ok: boolean }>(
+        `/api/agents/${agentRunId}/terminate`,
+        {
+          method: "POST",
+          headers: authHeaders,
+        },
+      );
+      expect(terminateResult.ok).toBe(true);
+
+      const stoppedEvent = await waitForEvent(
+        events,
+        "agent.stopped",
+        (event) => event.agentRunId === agentRunId,
+        15000,
+      );
+      expect((stoppedEvent.data as Record<string, unknown>)?.reason).toBe("terminated");
+
+      const agentStatus = await waitForStoppedStatus(token, agentRunId);
+      expect(agentStatus.status).toBe("stopped");
+
+      const summary = await waitForAgentSummary(token, agentRunId);
+      expect(summary.agentRunId).toBe(agentRunId);
+      expect(summary.status).toBe("stopped");
+      expect(summary.blockerType).toBe("stopped");
+      expect(summary.blockerLabel).toBe("已停止待处理");
+      expect(summary.finishedAt).toBeTruthy();
+
+      const recentQueue = await waitForQueueContains(token, "recent", agentRunId);
+      const queuedRun = recentQueue.data.find((item) => item.agentRunId === agentRunId);
+      expect(queuedRun?.status).toBe("stopped");
+      expect(queuedRun?.blockerType).toBe("stopped");
+
+      const attentionQueue = await waitForQueueContains(token, "attention", agentRunId);
+      const attentionRun = attentionQueue.data.find((item) => item.agentRunId === agentRunId);
+      expect(attentionRun?.status).toBe("stopped");
+      expect(attentionRun?.blockerType).toBe("stopped");
+      expect(attentionRun?.blockerLabel).toBe("已停止待处理");
+    } finally {
+      ws.close();
+      await deleteTask(task.id);
+    }
+  },
+);

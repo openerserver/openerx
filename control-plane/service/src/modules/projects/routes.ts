@@ -12,8 +12,8 @@ import {
   environments,
   organizations,
   paidExecutionLeases,
-  projectTaskRelations,
   projectRoles,
+  projectTaskRelations,
   projects,
   repositories,
   repositoryCredentials,
@@ -55,7 +55,9 @@ const projectSettingsSchema = z.object({
   throttleThreshold: z.number().min(0).max(1).optional(),
   collaborationMode: z.enum(["solo", "team", "hybrid"]).optional(),
   autopilotLevel: z.enum(["L0", "L1", "L2"]).optional(),
-  bossParticipationMode: z.enum(["disabled", "advisory", "exception-only", "full-manager"]).optional(),
+  bossParticipationMode: z
+    .enum(["disabled", "advisory", "exception-only", "full-manager"])
+    .optional(),
   preferredTemplateId: z.string().min(1).nullable().optional(),
   allowBossAutoTemplateSwitch: z.boolean().optional(),
   allowHybridEscalation: z.boolean().optional(),
@@ -217,7 +219,10 @@ async function getProjectOrNull(projectId: string) {
   });
 }
 
-async function getWorkflowTemplateBinding(projectId: string, settings: ProjectSettings | null | undefined) {
+async function getWorkflowTemplateBinding(
+  projectId: string,
+  settings: ProjectSettings | null | undefined,
+) {
   const workflowTemplateId = settings?.workflowTemplateId || null;
   if (!workflowTemplateId) {
     return {
@@ -390,6 +395,8 @@ function roundBaselineValue(value: number | null) {
 }
 
 type RuntimeUsageBaselineMatchScope = z.infer<typeof runtimeUsageBaselineMatchScopeSchema>;
+type SyncRuntimeUsageLedgerPayload = z.infer<typeof syncRuntimeUsageLedgerSchema>;
+type RuntimeUsageLedgerRow = typeof runtimeUsageLedgers.$inferSelect;
 
 type RuntimeUsageBaselineView = {
   id: string;
@@ -464,6 +471,175 @@ function buildRuntimeUsageBaselineId(args: {
   ].join("::");
 }
 
+function buildRuntimeUsageBaselineCandidates(args: {
+  projectId: string;
+  providerId?: string;
+  modelId?: string;
+  entrypointType?: string;
+  orchestrationFingerprint?: string;
+}) {
+  const providerId = args.providerId || "";
+  const modelId = args.modelId || "";
+  const entrypointType = args.entrypointType || "";
+  const orchestrationFingerprint = args.orchestrationFingerprint || "";
+  const providerValue = args.providerId || null;
+  const modelValue = args.modelId || null;
+
+  return [
+    {
+      matchScope: "project+provider+model+entrypoint+fingerprint" as const,
+      providerId,
+      modelId,
+      entrypointType,
+      orchestrationFingerprint,
+      matches: (ledger: RuntimeUsageLedgerRow) =>
+        ledger.projectId === args.projectId &&
+        ledger.defaultProviderId === providerValue &&
+        ledger.defaultModelId === modelValue &&
+        ledger.entrypointType === entrypointType &&
+        (ledger.orchestrationFingerprint || "") === orchestrationFingerprint,
+    },
+    {
+      matchScope: "project+provider+model+entrypoint" as const,
+      providerId,
+      modelId,
+      entrypointType,
+      orchestrationFingerprint: "",
+      matches: (ledger: RuntimeUsageLedgerRow) =>
+        ledger.projectId === args.projectId &&
+        ledger.defaultProviderId === providerValue &&
+        ledger.defaultModelId === modelValue &&
+        ledger.entrypointType === entrypointType,
+    },
+    {
+      matchScope: "project+provider+model" as const,
+      providerId,
+      modelId,
+      entrypointType: "",
+      orchestrationFingerprint: "",
+      matches: (ledger: RuntimeUsageLedgerRow) =>
+        ledger.projectId === args.projectId &&
+        ledger.defaultProviderId === providerValue &&
+        ledger.defaultModelId === modelValue,
+    },
+    {
+      matchScope: "project+entrypoint" as const,
+      providerId: "",
+      modelId: "",
+      entrypointType,
+      orchestrationFingerprint: "",
+      matches: (ledger: RuntimeUsageLedgerRow) =>
+        ledger.projectId === args.projectId && ledger.entrypointType === entrypointType,
+    },
+    {
+      matchScope: "project" as const,
+      providerId: "",
+      modelId: "",
+      entrypointType: "",
+      orchestrationFingerprint: "",
+      matches: (ledger: RuntimeUsageLedgerRow) => ledger.projectId === args.projectId,
+    },
+  ];
+}
+
+function buildRuntimeUsageBaselineSeries(ledgers: RuntimeUsageLedgerRow[]) {
+  const requestCounts = ledgers
+    .map((ledger) => ledger.requestCount)
+    .sort((left, right) => left - right);
+  const inputTokens = ledgers
+    .map((ledger) => ledger.inputTokens)
+    .sort((left, right) => left - right);
+  const outputTokens = ledgers
+    .map((ledger) => ledger.outputTokens)
+    .sort((left, right) => left - right);
+  const totalTokens = ledgers
+    .map((ledger) => ledger.totalTokens)
+    .sort((left, right) => left - right);
+  const costUsd = ledgers.map((ledger) => ledger.costUsd).sort((left, right) => left - right);
+  const lastLedgerAt =
+    ledgers
+      .map((ledger) => ledger.finishedAt || ledger.updatedAt || ledger.createdAt)
+      .filter((value): value is string => Boolean(value))
+      .sort((left, right) => Date.parse(right) - Date.parse(left))[0] || null;
+
+  return {
+    requestCounts,
+    inputTokens,
+    outputTokens,
+    totalTokens,
+    costUsd,
+    lastLedgerAt,
+  };
+}
+
+function buildRuntimeUsageBaselineRecord(args: {
+  projectId: string;
+  candidate: ReturnType<typeof buildRuntimeUsageBaselineCandidates>[number];
+  ledgers: RuntimeUsageLedgerRow[];
+  now: string;
+}) {
+  const series = buildRuntimeUsageBaselineSeries(args.ledgers);
+  return {
+    id: buildRuntimeUsageBaselineId({
+      projectId: args.projectId,
+      providerId: args.candidate.providerId,
+      modelId: args.candidate.modelId,
+      entrypointType: args.candidate.entrypointType,
+      orchestrationFingerprint: args.candidate.orchestrationFingerprint,
+      matchScope: args.candidate.matchScope,
+    }),
+    projectId: args.projectId,
+    providerId: args.candidate.providerId,
+    modelId: args.candidate.modelId,
+    entrypointType: args.candidate.entrypointType,
+    orchestrationFingerprint: args.candidate.orchestrationFingerprint,
+    matchScope: args.candidate.matchScope,
+    sampleSize: args.ledgers.length,
+    p50RequestCount: roundBaselineValue(percentile(series.requestCounts, 0.5)),
+    p90RequestCount: roundBaselineValue(percentile(series.requestCounts, 0.9)),
+    p50InputTokens: roundBaselineValue(percentile(series.inputTokens, 0.5)),
+    p90InputTokens: roundBaselineValue(percentile(series.inputTokens, 0.9)),
+    p50OutputTokens: roundBaselineValue(percentile(series.outputTokens, 0.5)),
+    p90OutputTokens: roundBaselineValue(percentile(series.outputTokens, 0.9)),
+    p50TotalTokens: roundBaselineValue(percentile(series.totalTokens, 0.5)),
+    p90TotalTokens: roundBaselineValue(percentile(series.totalTokens, 0.9)),
+    p50CostUsd: roundBaselineValue(percentile(series.costUsd, 0.5)),
+    p90CostUsd: roundBaselineValue(percentile(series.costUsd, 0.9)),
+    lastLedgerAt: series.lastLedgerAt,
+    generatedAt: args.now,
+    createdAt: args.now,
+    updatedAt: args.now,
+  };
+}
+
+async function upsertRuntimeUsageBaselineRecord(
+  record: ReturnType<typeof buildRuntimeUsageBaselineRecord>,
+  now: string,
+) {
+  await db
+    .insert(runtimeUsageBaselines)
+    .values(record)
+    .onConflictDoUpdate({
+      target: runtimeUsageBaselines.id,
+      set: {
+        sampleSize: record.sampleSize,
+        p50RequestCount: record.p50RequestCount,
+        p90RequestCount: record.p90RequestCount,
+        p50InputTokens: record.p50InputTokens,
+        p90InputTokens: record.p90InputTokens,
+        p50OutputTokens: record.p50OutputTokens,
+        p90OutputTokens: record.p90OutputTokens,
+        p50TotalTokens: record.p50TotalTokens,
+        p90TotalTokens: record.p90TotalTokens,
+        p50CostUsd: record.p50CostUsd,
+        p90CostUsd: record.p90CostUsd,
+        lastLedgerAt: record.lastLedgerAt,
+        generatedAt: now,
+        updatedAt: now,
+      },
+    });
+}
+
 async function rebuildRuntimeUsageBaseline(args: {
   projectId: string;
   providerId?: string;
@@ -471,67 +647,7 @@ async function rebuildRuntimeUsageBaseline(args: {
   entrypointType?: string;
   orchestrationFingerprint?: string;
 }) {
-  const candidates: Array<{
-    matchScope: RuntimeUsageBaselineMatchScope;
-    providerId: string;
-    modelId: string;
-    entrypointType: string;
-    orchestrationFingerprint: string;
-    matches: (ledger: typeof runtimeUsageLedgers.$inferSelect) => boolean;
-  }> = [
-    {
-      matchScope: "project+provider+model+entrypoint+fingerprint",
-      providerId: args.providerId || "",
-      modelId: args.modelId || "",
-      entrypointType: args.entrypointType || "",
-      orchestrationFingerprint: args.orchestrationFingerprint || "",
-      matches: (ledger) =>
-        ledger.projectId === args.projectId
-        && ledger.defaultProviderId === (args.providerId || null)
-        && ledger.defaultModelId === (args.modelId || null)
-        && ledger.entrypointType === (args.entrypointType || "")
-        && (ledger.orchestrationFingerprint || "") === (args.orchestrationFingerprint || ""),
-    },
-    {
-      matchScope: "project+provider+model+entrypoint",
-      providerId: args.providerId || "",
-      modelId: args.modelId || "",
-      entrypointType: args.entrypointType || "",
-      orchestrationFingerprint: "",
-      matches: (ledger) =>
-        ledger.projectId === args.projectId
-        && ledger.defaultProviderId === (args.providerId || null)
-        && ledger.defaultModelId === (args.modelId || null)
-        && ledger.entrypointType === (args.entrypointType || ""),
-    },
-    {
-      matchScope: "project+provider+model",
-      providerId: args.providerId || "",
-      modelId: args.modelId || "",
-      entrypointType: "",
-      orchestrationFingerprint: "",
-      matches: (ledger) =>
-        ledger.projectId === args.projectId
-        && ledger.defaultProviderId === (args.providerId || null)
-        && ledger.defaultModelId === (args.modelId || null),
-    },
-    {
-      matchScope: "project+entrypoint",
-      providerId: "",
-      modelId: "",
-      entrypointType: args.entrypointType || "",
-      orchestrationFingerprint: "",
-      matches: (ledger) => ledger.projectId === args.projectId && ledger.entrypointType === (args.entrypointType || ""),
-    },
-    {
-      matchScope: "project",
-      providerId: "",
-      modelId: "",
-      entrypointType: "",
-      orchestrationFingerprint: "",
-      matches: (ledger) => ledger.projectId === args.projectId,
-    },
-  ];
+  const candidates = buildRuntimeUsageBaselineCandidates(args);
 
   const projectLedgers = await db.query.runtimeUsageLedgers.findMany({
     where: eq(runtimeUsageLedgers.projectId, args.projectId),
@@ -549,70 +665,13 @@ async function rebuildRuntimeUsageBaseline(args: {
       continue;
     }
 
-    const requestCounts = ledgers.map((ledger) => ledger.requestCount).sort((left, right) => left - right);
-    const inputTokens = ledgers.map((ledger) => ledger.inputTokens).sort((left, right) => left - right);
-    const outputTokens = ledgers.map((ledger) => ledger.outputTokens).sort((left, right) => left - right);
-    const totalTokens = ledgers.map((ledger) => ledger.totalTokens).sort((left, right) => left - right);
-    const costUsd = ledgers.map((ledger) => ledger.costUsd).sort((left, right) => left - right);
-    const lastLedgerAt = ledgers
-      .map((ledger) => ledger.finishedAt || ledger.updatedAt || ledger.createdAt)
-      .filter((value): value is string => Boolean(value))
-      .sort((left, right) => Date.parse(right) - Date.parse(left))[0] || null;
-
-    const record = {
-      id: buildRuntimeUsageBaselineId({
-        projectId: args.projectId,
-        providerId: candidate.providerId,
-        modelId: candidate.modelId,
-        entrypointType: candidate.entrypointType,
-        orchestrationFingerprint: candidate.orchestrationFingerprint,
-        matchScope: candidate.matchScope,
-      }),
+    const record = buildRuntimeUsageBaselineRecord({
       projectId: args.projectId,
-      providerId: candidate.providerId,
-      modelId: candidate.modelId,
-      entrypointType: candidate.entrypointType,
-      orchestrationFingerprint: candidate.orchestrationFingerprint,
-      matchScope: candidate.matchScope,
-      sampleSize: ledgers.length,
-      p50RequestCount: roundBaselineValue(percentile(requestCounts, 0.5)),
-      p90RequestCount: roundBaselineValue(percentile(requestCounts, 0.9)),
-      p50InputTokens: roundBaselineValue(percentile(inputTokens, 0.5)),
-      p90InputTokens: roundBaselineValue(percentile(inputTokens, 0.9)),
-      p50OutputTokens: roundBaselineValue(percentile(outputTokens, 0.5)),
-      p90OutputTokens: roundBaselineValue(percentile(outputTokens, 0.9)),
-      p50TotalTokens: roundBaselineValue(percentile(totalTokens, 0.5)),
-      p90TotalTokens: roundBaselineValue(percentile(totalTokens, 0.9)),
-      p50CostUsd: roundBaselineValue(percentile(costUsd, 0.5)),
-      p90CostUsd: roundBaselineValue(percentile(costUsd, 0.9)),
-      lastLedgerAt,
-      generatedAt: now,
-      createdAt: now,
-      updatedAt: now,
-    };
-
-    await db
-      .insert(runtimeUsageBaselines)
-      .values(record)
-      .onConflictDoUpdate({
-        target: runtimeUsageBaselines.id,
-        set: {
-          sampleSize: record.sampleSize,
-          p50RequestCount: record.p50RequestCount,
-          p90RequestCount: record.p90RequestCount,
-          p50InputTokens: record.p50InputTokens,
-          p90InputTokens: record.p90InputTokens,
-          p50OutputTokens: record.p50OutputTokens,
-          p90OutputTokens: record.p90OutputTokens,
-          p50TotalTokens: record.p50TotalTokens,
-          p90TotalTokens: record.p90TotalTokens,
-          p50CostUsd: record.p50CostUsd,
-          p90CostUsd: record.p90CostUsd,
-          lastLedgerAt: record.lastLedgerAt,
-          generatedAt: now,
-          updatedAt: now,
-        },
-      });
+      candidate,
+      ledgers,
+      now,
+    });
+    await upsertRuntimeUsageBaselineRecord(record, now);
 
     const stored = await db.query.runtimeUsageBaselines.findFirst({
       where: eq(runtimeUsageBaselines.id, record.id),
@@ -1028,6 +1087,76 @@ function getProjectLastActivity(
   return lastActivityAt || project.createdAt;
 }
 
+function getProjectOverviewResources(
+  projectId: string,
+  dependencies: {
+    membersByProject: Map<string, (typeof projectRoles.$inferSelect)[]>;
+    envsByProject: Map<string, (typeof environments.$inferSelect)[]>;
+    reposByProject: Map<string, (typeof repositories.$inferSelect)[]>;
+    credsByProject: Map<string, (typeof repositoryCredentials.$inferSelect)[]>;
+    tasksByProject: Map<string, (typeof tasks.$inferSelect)[]>;
+    budgetsByProject: Map<string, (typeof budgetConfigs.$inferSelect)[]>;
+    costsByProject: Map<string, (typeof costRecords.$inferSelect)[]>;
+    approvalsByProject: Map<string, (typeof approvalTickets.$inferSelect)[]>;
+  },
+) {
+  return {
+    members: dependencies.membersByProject.get(projectId) || [],
+    environmentsForProject: dependencies.envsByProject.get(projectId) || [],
+    repositoriesForProject: dependencies.reposByProject.get(projectId) || [],
+    credentialsForProject: dependencies.credsByProject.get(projectId) || [],
+    tasksForProject: dependencies.tasksByProject.get(projectId) || [],
+    budgetsForProject: dependencies.budgetsByProject.get(projectId) || [],
+    costsForProject: dependencies.costsByProject.get(projectId) || [],
+    approvalsForProject: dependencies.approvalsByProject.get(projectId) || [],
+  };
+}
+
+function getProjectSetupCompletion(args: {
+  settings: ProjectSettings;
+  members: (typeof projectRoles.$inferSelect)[];
+  environmentsForProject: (typeof environments.$inferSelect)[];
+  repositoriesForProject: (typeof repositories.$inferSelect)[];
+  credentialsForProject: (typeof repositoryCredentials.$inferSelect)[];
+}) {
+  const hasEnv = args.environmentsForProject.length > 0;
+  const hasRepo = args.repositoriesForProject.some((repository) => repository.status === "active");
+  const hasCred = args.credentialsForProject.some((credential) => credential.status === "active");
+  const hasMember = args.members.length > 0;
+  const hasDefaultEnv = Boolean(args.settings.defaultEnvironmentId);
+  const hasApprovalPolicy = Boolean(args.settings.approvalPolicy);
+  const totalRequiredCount = 6;
+  const completedCount = [
+    hasEnv,
+    hasRepo,
+    hasCred,
+    hasMember,
+    hasDefaultEnv,
+    hasApprovalPolicy,
+  ].filter(Boolean).length;
+
+  return {
+    hasEnv,
+    hasRepo,
+    hasCred,
+    hasMember,
+    hasDefaultEnv,
+    hasApprovalPolicy,
+    totalRequiredCount,
+    completedCount,
+  };
+}
+
+function resolveCurrentUserProjectRole(
+  user: JWTPayload,
+  projectId: string,
+  userRoleMap: Map<string, string>,
+) {
+  return hasGlobalProjectAccess(user)
+    ? userRoleMap.get(projectId) || "org_admin"
+    : userRoleMap.get(projectId) || null;
+}
+
 function buildOverviewItem(
   user: JWTPayload,
   project: typeof projects.$inferSelect,
@@ -1046,56 +1175,38 @@ function buildOverviewItem(
   todayIso: string,
 ): OverviewItem {
   const settings = normalizeProjectSettings(project.settings) ?? {};
-  const members = dependencies.membersByProject.get(project.id) || [];
-  const environmentsForProject = dependencies.envsByProject.get(project.id) || [];
-  const repositoriesForProject = dependencies.reposByProject.get(project.id) || [];
-  const credentialsForProject = dependencies.credsByProject.get(project.id) || [];
-  const tasksForProject = dependencies.tasksByProject.get(project.id) || [];
-  const budgetsForProject = dependencies.budgetsByProject.get(project.id) || [];
-  const costsForProject = dependencies.costsByProject.get(project.id) || [];
-  const approvalsForProject = dependencies.approvalsByProject.get(project.id) || [];
-
-  const hasEnv = environmentsForProject.length > 0;
-  const hasRepo = repositoriesForProject.some((repository) => repository.status === "active");
-  const hasCred = credentialsForProject.some((credential) => credential.status === "active");
-  const hasMember = members.length > 0;
-  const hasDefaultEnv = Boolean(settings.defaultEnvironmentId);
-  const hasApprovalPolicy = Boolean(settings.approvalPolicy);
-  const totalRequiredCount = 6;
-  const completedCount = [
-    hasEnv,
-    hasRepo,
-    hasCred,
-    hasMember,
-    hasDefaultEnv,
-    hasApprovalPolicy,
-  ].filter(Boolean).length;
+  const resources = getProjectOverviewResources(project.id, dependencies);
+  const completion = getProjectSetupCompletion({
+    settings,
+    members: resources.members,
+    environmentsForProject: resources.environmentsForProject,
+    repositoriesForProject: resources.repositoriesForProject,
+    credentialsForProject: resources.credentialsForProject,
+  });
 
   const { risks, budgetBlocking, hasExpiredDefault, hasActiveDefault } = buildProjectRisks({
-    hasRepo,
-    hasCred,
-    hasDefaultEnv,
-    hasApprovalPolicy,
-    hasEnv,
-    hasMember,
-    budgets: budgetsForProject,
-    costs: costsForProject,
-    credentials: credentialsForProject,
+    hasRepo: completion.hasRepo,
+    hasCred: completion.hasCred,
+    hasDefaultEnv: completion.hasDefaultEnv,
+    hasApprovalPolicy: completion.hasApprovalPolicy,
+    hasEnv: completion.hasEnv,
+    hasMember: completion.hasMember,
+    budgets: resources.budgetsForProject,
+    costs: resources.costsForProject,
+    credentials: resources.credentialsForProject,
     budgetMonthly: settings.budgetMonthly,
   });
 
   const projectStatus = deriveOverviewStatus(
     project,
-    completedCount,
-    totalRequiredCount,
+    completion.completedCount,
+    completion.totalRequiredCount,
     budgetBlocking,
     hasExpiredDefault,
     hasActiveDefault,
   );
 
-  const currentUserRole = hasGlobalProjectAccess(user)
-    ? dependencies.userRoleMap.get(project.id) || "org_admin"
-    : dependencies.userRoleMap.get(project.id) || null;
+  const currentUserRole = resolveCurrentUserProjectRole(user, project.id, dependencies.userRoleMap);
 
   return {
     id: project.id,
@@ -1109,25 +1220,177 @@ function buildOverviewItem(
       projectGroupLabel: settings.projectGroupLabel ?? null,
     },
     projectStatus,
-    completedCount,
-    totalRequiredCount,
-    completionPercent: Math.round((completedCount / totalRequiredCount) * 100),
+    completedCount: completion.completedCount,
+    totalRequiredCount: completion.totalRequiredCount,
+    completionPercent: Math.round(
+      (completion.completedCount / completion.totalRequiredCount) * 100,
+    ),
     risks,
-    runningTasks: tasksForProject.filter((task) => task.status === "running").length,
-    pendingApprovals: approvalsForProject.length,
-    failedTasksToday: tasksForProject.filter(
+    runningTasks: resources.tasksForProject.filter((task) => task.status === "running").length,
+    pendingApprovals: resources.approvalsForProject.length,
+    failedTasksToday: resources.tasksForProject.filter(
       (task) => task.status === "failed" && task.finishedAt && task.finishedAt >= todayIso,
     ).length,
-    lastActivityAt: getProjectLastActivity(project, tasksForProject),
-    memberCount: members.length,
-    repositoryCount: repositoriesForProject.filter((repository) => repository.status === "active")
-      .length,
-    environmentCount: environmentsForProject.length,
+    lastActivityAt: getProjectLastActivity(project, resources.tasksForProject),
+    memberCount: resources.members.length,
+    repositoryCount: resources.repositoriesForProject.filter(
+      (repository) => repository.status === "active",
+    ).length,
+    environmentCount: resources.environmentsForProject.length,
     currentUserRole,
     isCurrentUserManager:
       hasGlobalProjectAccess(user) || dependencies.userRoleMap.get(project.id) === "project_admin",
     createdAt: project.createdAt,
   };
+}
+
+async function ensureRuntimeUsageLedger(
+  projectId: string,
+  body: SyncRuntimeUsageLedgerPayload,
+  now: string,
+) {
+  const existingLedger = await db.query.runtimeUsageLedgers.findFirst({
+    where: and(
+      eq(runtimeUsageLedgers.projectId, projectId),
+      eq(runtimeUsageLedgers.runtimeSessionId, body.runtimeSessionId),
+    ),
+  });
+  const ledgerId = existingLedger?.id || crypto.randomUUID();
+
+  if (!existingLedger) {
+    await db.insert(runtimeUsageLedgers).values({
+      id: ledgerId,
+      projectId,
+      taskId: body.taskId,
+      agentRunId: body.agentRunId,
+      runtimeSessionId: body.runtimeSessionId,
+      executionSource: body.executionSource,
+      entrypointType: body.entrypointType,
+      orchestrationFingerprint: body.orchestrationFingerprint,
+      defaultProviderId: body.defaultProviderId,
+      defaultModelId: body.defaultModelId,
+      requestCount: 0,
+      stepCount: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      costUsd: 0,
+      candidateCount: body.candidateCount ?? 1,
+      judgeRequestCount: 0,
+      hookRequestCount: 0,
+      status: body.status,
+      startedAt: body.startedAt,
+      finishedAt: body.finishedAt,
+      syncedAt: body.syncedAt || now,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+
+  return { existingLedger, ledgerId };
+}
+
+async function insertRuntimeUsageLedgerStepIfNeeded(args: {
+  projectId: string;
+  ledgerId: string;
+  body: SyncRuntimeUsageLedgerPayload;
+  now: string;
+}) {
+  const existingStep = args.body.step?.id
+    ? await db.query.runtimeUsageLedgerSteps.findFirst({
+        where: eq(runtimeUsageLedgerSteps.id, args.body.step.id),
+      })
+    : null;
+
+  if (args.body.step && !existingStep) {
+    await db.insert(runtimeUsageLedgerSteps).values({
+      id: args.body.step.id,
+      ledgerId: args.ledgerId,
+      projectId: args.projectId,
+      taskId: args.body.taskId,
+      agentRunId: args.body.agentRunId,
+      runtimeSessionId: args.body.runtimeSessionId,
+      stepType: args.body.step.stepType,
+      triggerType: args.body.step.triggerType,
+      hookId: args.body.step.hookId,
+      candidateIndex: args.body.step.candidateIndex,
+      requestIndex: args.body.step.requestIndex,
+      providerId: args.body.step.providerId,
+      modelId: args.body.step.modelId,
+      inputTokens: args.body.step.inputTokens,
+      outputTokens: args.body.step.outputTokens,
+      totalTokens: args.body.step.totalTokens,
+      costUsd: args.body.step.costUsd,
+      amplificationSource: args.body.step.amplificationSource,
+      status: args.body.step.status,
+      startedAt: args.body.step.startedAt,
+      finishedAt: args.body.step.finishedAt,
+      createdAt: args.now,
+      updatedAt: args.now,
+    });
+  }
+
+  return existingStep;
+}
+
+function buildRuntimeUsageLedgerDeltaSet(
+  body: SyncRuntimeUsageLedgerPayload,
+  ledger: RuntimeUsageLedgerRow,
+  now: string,
+) {
+  return {
+    taskId: body.taskId ?? ledger.taskId,
+    agentRunId: body.agentRunId ?? ledger.agentRunId,
+    executionSource: body.executionSource || ledger.executionSource,
+    entrypointType: body.entrypointType || ledger.entrypointType,
+    orchestrationFingerprint: body.orchestrationFingerprint ?? ledger.orchestrationFingerprint,
+    defaultProviderId: body.defaultProviderId ?? ledger.defaultProviderId,
+    defaultModelId: body.defaultModelId ?? ledger.defaultModelId,
+    requestCount: ledger.requestCount + body.requestCountDelta,
+    stepCount: ledger.stepCount + body.stepCountDelta,
+    inputTokens: ledger.inputTokens + body.inputTokens,
+    outputTokens: ledger.outputTokens + body.outputTokens,
+    totalTokens: ledger.totalTokens + body.totalTokens,
+    costUsd: Number((ledger.costUsd + body.costUsd).toFixed(4)),
+    candidateCount: Math.max(ledger.candidateCount, body.candidateCount ?? 1),
+    judgeRequestCount: ledger.judgeRequestCount + body.judgeRequestCountDelta,
+    hookRequestCount: ledger.hookRequestCount + body.hookRequestCountDelta,
+    status: body.status,
+    startedAt: ledger.startedAt ?? body.startedAt,
+    finishedAt: body.finishedAt ?? ledger.finishedAt,
+    syncedAt: body.syncedAt || now,
+    updatedAt: now,
+  };
+}
+
+function buildRuntimeUsageLedgerTouchSet(
+  body: SyncRuntimeUsageLedgerPayload,
+  ledger: RuntimeUsageLedgerRow,
+  now: string,
+) {
+  return {
+    syncedAt: body.syncedAt || now,
+    updatedAt: now,
+    status: body.status,
+    finishedAt: body.finishedAt ?? ledger.finishedAt,
+  };
+}
+
+async function applyRuntimeUsageLedgerSync(args: {
+  ledgerId: string;
+  body: SyncRuntimeUsageLedgerPayload;
+  ledgerAfterInsert: RuntimeUsageLedgerRow;
+  shouldApplyDelta: boolean;
+  now: string;
+}) {
+  await db
+    .update(runtimeUsageLedgers)
+    .set(
+      args.shouldApplyDelta
+        ? buildRuntimeUsageLedgerDeltaSet(args.body, args.ledgerAfterInsert, args.now)
+        : buildRuntimeUsageLedgerTouchSet(args.body, args.ledgerAfterInsert, args.now),
+    )
+    .where(eq(runtimeUsageLedgers.id, args.ledgerId));
 }
 
 function filterAndSortOverviewItems(items: OverviewItem[], params: OverviewQueryParams) {
@@ -1723,80 +1986,15 @@ projectRoutes.post(
     }
 
     const now = new Date().toISOString();
-    const existingLedger = await db.query.runtimeUsageLedgers.findFirst({
-      where: and(
-        eq(runtimeUsageLedgers.projectId, projectId),
-        eq(runtimeUsageLedgers.runtimeSessionId, body.runtimeSessionId),
-      ),
+    const { ledgerId } = await ensureRuntimeUsageLedger(projectId, body, now);
+    const existingStep = await insertRuntimeUsageLedgerStepIfNeeded({
+      projectId,
+      ledgerId,
+      body,
+      now,
     });
 
-    const existingStep = body.step?.id
-      ? await db.query.runtimeUsageLedgerSteps.findFirst({
-          where: eq(runtimeUsageLedgerSteps.id, body.step.id),
-        })
-      : null;
-
-    const ledgerId = existingLedger?.id || crypto.randomUUID();
-
-    if (!existingLedger) {
-      await db.insert(runtimeUsageLedgers).values({
-        id: ledgerId,
-        projectId,
-        taskId: body.taskId,
-        agentRunId: body.agentRunId,
-        runtimeSessionId: body.runtimeSessionId,
-        executionSource: body.executionSource,
-        entrypointType: body.entrypointType,
-        orchestrationFingerprint: body.orchestrationFingerprint,
-        defaultProviderId: body.defaultProviderId,
-        defaultModelId: body.defaultModelId,
-        requestCount: 0,
-        stepCount: 0,
-        inputTokens: 0,
-        outputTokens: 0,
-        totalTokens: 0,
-        costUsd: 0,
-        candidateCount: body.candidateCount ?? 1,
-        judgeRequestCount: 0,
-        hookRequestCount: 0,
-        status: body.status,
-        startedAt: body.startedAt,
-        finishedAt: body.finishedAt,
-        syncedAt: body.syncedAt || now,
-        createdAt: now,
-        updatedAt: now,
-      });
-    }
-
     const shouldApplyDelta = !body.step || !existingStep;
-
-    if (body.step && !existingStep) {
-      await db.insert(runtimeUsageLedgerSteps).values({
-        id: body.step.id,
-        ledgerId,
-        projectId,
-        taskId: body.taskId,
-        agentRunId: body.agentRunId,
-        runtimeSessionId: body.runtimeSessionId,
-        stepType: body.step.stepType,
-        triggerType: body.step.triggerType,
-        hookId: body.step.hookId,
-        candidateIndex: body.step.candidateIndex,
-        requestIndex: body.step.requestIndex,
-        providerId: body.step.providerId,
-        modelId: body.step.modelId,
-        inputTokens: body.step.inputTokens,
-        outputTokens: body.step.outputTokens,
-        totalTokens: body.step.totalTokens,
-        costUsd: body.step.costUsd,
-        amplificationSource: body.step.amplificationSource,
-        status: body.step.status,
-        startedAt: body.step.startedAt,
-        finishedAt: body.step.finishedAt,
-        createdAt: now,
-        updatedAt: now,
-      });
-    }
 
     const ledgerAfterInsert = await db.query.runtimeUsageLedgers.findFirst({
       where: eq(runtimeUsageLedgers.id, ledgerId),
@@ -1806,47 +2004,13 @@ projectRoutes.post(
       return c.json({ error: "Failed to load runtime usage ledger after sync" }, 500);
     }
 
-    if (shouldApplyDelta) {
-      await db
-        .update(runtimeUsageLedgers)
-        .set({
-          taskId: body.taskId ?? ledgerAfterInsert.taskId,
-          agentRunId: body.agentRunId ?? ledgerAfterInsert.agentRunId,
-          executionSource: body.executionSource || ledgerAfterInsert.executionSource,
-          entrypointType: body.entrypointType || ledgerAfterInsert.entrypointType,
-          orchestrationFingerprint:
-            body.orchestrationFingerprint ?? ledgerAfterInsert.orchestrationFingerprint,
-          defaultProviderId: body.defaultProviderId ?? ledgerAfterInsert.defaultProviderId,
-          defaultModelId: body.defaultModelId ?? ledgerAfterInsert.defaultModelId,
-          requestCount: ledgerAfterInsert.requestCount + body.requestCountDelta,
-          stepCount: ledgerAfterInsert.stepCount + body.stepCountDelta,
-          inputTokens: ledgerAfterInsert.inputTokens + body.inputTokens,
-          outputTokens: ledgerAfterInsert.outputTokens + body.outputTokens,
-          totalTokens: ledgerAfterInsert.totalTokens + body.totalTokens,
-          costUsd: Number((ledgerAfterInsert.costUsd + body.costUsd).toFixed(4)),
-          candidateCount: Math.max(ledgerAfterInsert.candidateCount, body.candidateCount ?? 1),
-          judgeRequestCount:
-            ledgerAfterInsert.judgeRequestCount + body.judgeRequestCountDelta,
-          hookRequestCount:
-            ledgerAfterInsert.hookRequestCount + body.hookRequestCountDelta,
-          status: body.status,
-          startedAt: ledgerAfterInsert.startedAt ?? body.startedAt,
-          finishedAt: body.finishedAt ?? ledgerAfterInsert.finishedAt,
-          syncedAt: body.syncedAt || now,
-          updatedAt: now,
-        })
-        .where(eq(runtimeUsageLedgers.id, ledgerId));
-    } else {
-      await db
-        .update(runtimeUsageLedgers)
-        .set({
-          syncedAt: body.syncedAt || now,
-          updatedAt: now,
-          status: body.status,
-          finishedAt: body.finishedAt ?? ledgerAfterInsert.finishedAt,
-        })
-        .where(eq(runtimeUsageLedgers.id, ledgerId));
-    }
+    await applyRuntimeUsageLedgerSync({
+      ledgerId,
+      body,
+      ledgerAfterInsert,
+      shouldApplyDelta,
+      now,
+    });
 
     const syncedLedger = await db.query.runtimeUsageLedgers.findFirst({
       where: eq(runtimeUsageLedgers.id, ledgerId),
@@ -1872,10 +2036,12 @@ projectRoutes.get("/:projectId/runtime-usage-ledgers", async (c) => {
   const status = c.req.query("status") || undefined;
   const limit = Math.min(Math.max(Number(c.req.query("limit") || 20), 1), 100);
 
-  const ledgers = (await db.query.runtimeUsageLedgers.findMany({
-    where: eq(runtimeUsageLedgers.projectId, projectId),
-    orderBy: [desc(runtimeUsageLedgers.createdAt)],
-  }))
+  const ledgers = (
+    await db.query.runtimeUsageLedgers.findMany({
+      where: eq(runtimeUsageLedgers.projectId, projectId),
+      orderBy: [desc(runtimeUsageLedgers.createdAt)],
+    })
+  )
     .filter((ledger) => (taskId ? ledger.taskId === taskId : true))
     .filter((ledger) => (status ? ledger.status === status : true))
     .slice(0, limit);
@@ -1975,10 +2141,10 @@ projectRoutes.get("/:projectId/runtime-usage-baselines", async (c) => {
     "project",
   ];
 
-  const baseline = preferredMatchOrder
-    .map((scope) => baselines.find((item) => item.matchScope === scope))
-    .find((item) => item && item.sampleSize > 0)
-    || null;
+  const baseline =
+    preferredMatchOrder
+      .map((scope) => baselines.find((item) => item.matchScope === scope))
+      .find((item) => item && item.sampleSize > 0) || null;
 
   return c.json({
     projectId,
@@ -2031,7 +2197,8 @@ projectRoutes.put(
         return c.json({ error: "Workflow template is disabled" }, 400);
       }
 
-      const selectableForProject = template.selectableByProjects || template.projectId === projectId;
+      const selectableForProject =
+        template.selectableByProjects || template.projectId === projectId;
       if (!selectableForProject) {
         return c.json({ error: "Workflow template is not selectable for this project" }, 400);
       }
@@ -2043,7 +2210,7 @@ projectRoutes.put(
     if (body.workflowTemplateId) {
       nextSettings.workflowTemplateId = body.workflowTemplateId;
     } else {
-      delete nextSettings.workflowTemplateId;
+      nextSettings.workflowTemplateId = undefined;
     }
 
     const now = new Date().toISOString();

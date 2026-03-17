@@ -106,6 +106,110 @@ mock.module("../../control-plane/web-ui-bff/src/modules/tasks/stage-intervention
   dispatchStageIntervention: dispatchStageInterventionMock,
 }));
 
+function getTaskExecuteWorkflowResponse() {
+  const workflowFetchCount = cpFetchMock.mock.calls.filter(
+    ([path, requestOptions]) => path === "/api/tasks/task-1/workflow" && !requestOptions?.method,
+  ).length;
+
+  if (workflowFetchCount > 1) {
+    return {
+      ok: true,
+      data: {
+        data: {
+          workflowRun: {
+            id: "wf-1",
+            currentStage: "clarify",
+            status: "running",
+            templateId: "tpl-1",
+          },
+          stages: [
+            {
+              id: "run-clarify",
+              stageKey: "clarify",
+              status: "running",
+              approvalState: "not-required",
+            },
+            {
+              id: "run-design",
+              stageKey: "design",
+              status: "pending",
+              approvalState: "not-required",
+            },
+            {
+              id: "run-implement",
+              stageKey: "implement",
+              status: "pending",
+              approvalState: "not-required",
+            },
+          ],
+        },
+      },
+    };
+  }
+
+  return {
+    ok: true,
+    data: {
+      data: {
+        workflowRun: null,
+        stages: [],
+      },
+    },
+  };
+}
+
+function getTaskExecuteReadResponse(url: string) {
+  if (url === "/api/tasks/task-1") {
+    return { ok: true, data: currentTask };
+  }
+
+  if (url === "/api/projects/proj-1") {
+    return {
+      ok: true,
+      data: {
+        settings: {
+          workflowTemplateId: "tpl-1",
+        },
+      },
+    };
+  }
+
+  if (url === "/api/tasks/task-1/workflow") {
+    return getTaskExecuteWorkflowResponse();
+  }
+
+  if (url === "/api/workflow-templates/tpl-1/stages") {
+    return {
+      ok: true,
+      data: {
+        data: [
+          { id: "stage-clarify", stageKey: "clarify", orderIndex: 0, enabled: true },
+          { id: "stage-design", stageKey: "design", orderIndex: 1, enabled: true },
+          { id: "stage-implement", stageKey: "implement", orderIndex: 2, enabled: true },
+        ],
+      },
+    };
+  }
+
+  return null;
+}
+
+function getTaskExecuteWriteResponse(url: string, method: string, body?: unknown) {
+  if (method === "PATCH" && url === "/api/tasks/task-1") {
+    return { ok: true, data: { ok: true, body } };
+  }
+
+  if (method === "POST" && url === "/api/tasks/task-1/workflow/initialize") {
+    return { ok: true, data: { ok: true, body } };
+  }
+
+  if (method === "POST" && url === "/api/tasks/task-1/workflow/advance") {
+    return { ok: true, data: { ok: true, body } };
+  }
+
+  return null;
+}
+
 beforeEach(() => {
   createSessionMock.mockReset();
   authHeaderMock.mockReset();
@@ -148,76 +252,15 @@ beforeEach(() => {
   });
 
   cpFetchMock.mockImplementation(async (url: string, options?: { method?: string; body?: unknown }) => {
-    if (!options?.method && url === "/api/tasks/task-1") {
-      return { ok: true, data: currentTask };
+    const method = options?.method;
+    if (!method) {
+      return getTaskExecuteReadResponse(url) || { ok: true, data: { ok: true } };
     }
 
-    if (!options?.method && url === "/api/projects/proj-1") {
-      return {
-        ok: true,
-        data: {
-          settings: {
-            workflowTemplateId: "tpl-1",
-          },
-        },
-      };
-    }
-
-    if (!options?.method && url === "/api/tasks/task-1/workflow") {
-      const workflowFetchCount = cpFetchMock.mock.calls.filter(([path, requestOptions]) => path === "/api/tasks/task-1/workflow" && !requestOptions?.method).length;
-      if (workflowFetchCount > 1) {
-        return {
-          ok: true,
-          data: {
-            data: {
-              workflowRun: { id: "wf-1", currentStage: "clarify", status: "running", templateId: "tpl-1" },
-              stages: [
-                { id: "run-clarify", stageKey: "clarify", status: "running", approvalState: "not-required" },
-                { id: "run-design", stageKey: "design", status: "pending", approvalState: "not-required" },
-                { id: "run-implement", stageKey: "implement", status: "pending", approvalState: "not-required" },
-              ],
-            },
-          },
-        };
-      }
-
-      return {
-        ok: true,
-        data: {
-          data: {
-            workflowRun: null,
-            stages: [],
-          },
-        },
-      };
-    }
-
-    if (!options?.method && url === "/api/workflow-templates/tpl-1/stages") {
-      return {
-        ok: true,
-        data: {
-          data: [
-            { id: "stage-clarify", stageKey: "clarify", orderIndex: 0, enabled: true },
-            { id: "stage-design", stageKey: "design", orderIndex: 1, enabled: true },
-            { id: "stage-implement", stageKey: "implement", orderIndex: 2, enabled: true },
-          ],
-        },
-      };
-    }
-
-    if (options?.method === "PATCH" && url === "/api/tasks/task-1") {
-      return { ok: true, data: { ok: true, body: options.body } };
-    }
-
-    if (options?.method === "POST" && url === "/api/tasks/task-1/workflow/initialize") {
-      return { ok: true, data: { ok: true, body: options.body } };
-    }
-
-    if (options?.method === "POST" && url === "/api/tasks/task-1/workflow/advance") {
-      return { ok: true, data: { ok: true, body: options.body } };
-    }
-
-    return { ok: true, data: { ok: true } };
+    return getTaskExecuteWriteResponse(url, method, options?.body) || {
+      ok: true,
+      data: { ok: true },
+    };
   });
 });
 

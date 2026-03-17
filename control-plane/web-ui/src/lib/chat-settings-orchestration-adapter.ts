@@ -12,9 +12,18 @@ import type {
   WorkflowTemplate,
 } from "./api";
 
-export const ORCHESTRATION_CATEGORIES = ["quick", "deep", "ops", "security", "architecture"] as const;
+export const ORCHESTRATION_CATEGORIES = [
+  "quick",
+  "deep",
+  "ops",
+  "security",
+  "architecture",
+] as const;
 
-function resolveTemplateForCategory(strategy: OrchestrationStrategy, category: string): WorkflowTemplate | null {
+function resolveTemplateForCategory(
+  strategy: OrchestrationStrategy,
+  category: string,
+): WorkflowTemplate | null {
   const directMatch = strategy.templates.find(
     (template) => template.enabled !== false && template.categoryDefaults?.includes(category),
   );
@@ -23,16 +32,25 @@ function resolveTemplateForCategory(strategy: OrchestrationStrategy, category: s
   }
 
   const namedMatch = strategy.templates.find(
-    (template) => template.enabled !== false && (template.id === category || template.name === category),
+    (template) =>
+      template.enabled !== false && (template.id === category || template.name === category),
   );
   if (namedMatch) {
     return namedMatch;
   }
 
-  return strategy.templates.find((template) => template.enabled !== false) || strategy.templates[0] || null;
+  return (
+    strategy.templates.find((template) => template.enabled !== false) ||
+    strategy.templates[0] ||
+    null
+  );
 }
 
-function resolvePrimaryAgents(strategy: OrchestrationStrategy, category: string, template: WorkflowTemplate | null): string[] {
+function resolvePrimaryAgents(
+  strategy: OrchestrationStrategy,
+  category: string,
+  template: WorkflowTemplate | null,
+): string[] {
   const categoryAgents = strategy.categoryAgentMap[category];
   if (Array.isArray(categoryAgents) && categoryAgents.length > 0) {
     return categoryAgents;
@@ -53,7 +71,11 @@ function resolveExecutionMode(template: WorkflowTemplate | null): ExecutionMode 
   return template?.mode || "unknown";
 }
 
-function buildSummaryNotes(strategy: OrchestrationStrategy, category: string, template: WorkflowTemplate | null): string[] {
+function buildSummaryNotes(
+  strategy: OrchestrationStrategy,
+  category: string,
+  template: WorkflowTemplate | null,
+): string[] {
   const notes = [
     strategy.enablePipeline ? "pipeline 已启用" : "pipeline 已关闭",
     strategy.judge.enabled ? `judge 使用 ${strategy.judge.selectionStrategy}` : "judge 未启用",
@@ -91,7 +113,10 @@ export function buildCategorySummariesFromStrategy(
   });
 }
 
-function mergeStrategyPatch(strategy: OrchestrationStrategy, patch: Record<string, unknown>): OrchestrationStrategy {
+function mergeStrategyPatch(
+  strategy: OrchestrationStrategy,
+  patch: Record<string, unknown>,
+): OrchestrationStrategy {
   const typedPatch = patch as Partial<OrchestrationStrategy>;
   return {
     ...strategy,
@@ -111,7 +136,9 @@ function mergeStrategyPatch(strategy: OrchestrationStrategy, patch: Record<strin
 export function extractAffectedCategories(patch: ChatSettingsPendingPatch): string[] {
   const categories = new Set<string>();
 
-  Object.keys(patch.mermaidPreview || {}).forEach((category) => categories.add(category));
+  for (const category of Object.keys(patch.mermaidPreview || {})) {
+    categories.add(category);
+  }
 
   const typedPatch = patch.patch as {
     categoryAgentMap?: Record<string, string[]>;
@@ -119,11 +146,17 @@ export function extractAffectedCategories(patch: ChatSettingsPendingPatch): stri
     templates?: Array<{ categoryDefaults?: string[] }>;
   };
 
-  Object.keys(typedPatch.categoryAgentMap || {}).forEach((category) => categories.add(category));
-  Object.keys(typedPatch.categoryModelMap || {}).forEach((category) => categories.add(category));
-  (typedPatch.templates || []).forEach((template) => {
-    (template.categoryDefaults || []).forEach((category) => categories.add(category));
-  });
+  for (const category of Object.keys(typedPatch.categoryAgentMap || {})) {
+    categories.add(category);
+  }
+  for (const category of Object.keys(typedPatch.categoryModelMap || {})) {
+    categories.add(category);
+  }
+  for (const template of typedPatch.templates || []) {
+    for (const category of template.categoryDefaults || []) {
+      categories.add(category);
+    }
+  }
 
   return categories.size > 0 ? [...categories] : ["deep"];
 }
@@ -163,19 +196,19 @@ export function buildTemplateChanges(
   });
 }
 
-export function buildChangeCards(
+function buildCategoryChangeCards(
   strategy: OrchestrationStrategy,
+  nextStrategy: OrchestrationStrategy,
   patch: ChatSettingsPendingPatch,
   affectedCategories: string[],
 ): OrchestrationStrategyChangeCard[] {
-  const nextStrategy = mergeStrategyPatch(strategy, patch.patch);
-  const cards: OrchestrationStrategyChangeCard[] = affectedCategories.map((category) => {
+  return affectedCategories.map((category): OrchestrationStrategyChangeCard => {
     const beforeSummary = buildCategorySummariesFromStrategy(strategy, [category])[0];
     const afterSummary = buildCategorySummariesFromStrategy(nextStrategy, [category])[0];
     return {
       id: `category-${category}`,
       category,
-      changeType: "template",
+      changeType: "template" as const,
       title: `${category} 编排策略预览`,
       summary: `${beforeSummary.executionMode} -> ${afterSummary.executionMode}，模板 ${beforeSummary.templateName} -> ${afterSummary.templateName}`,
       beforeLabel: `${beforeSummary.templateName} / ${beforeSummary.executionMode}`,
@@ -186,38 +219,66 @@ export function buildChangeCards(
       mermaidCode: patch.mermaidPreview?.[category],
     };
   });
+}
 
-  const judgeChange = buildJudgeChange(strategy, patch);
-  if (judgeChange.changed) {
-    cards.unshift({
-      id: "judge-change",
-      category: affectedCategories[0] || "global",
-      changeType: "judge",
-      title: "Judge 策略变化",
-      summary: `${judgeChange.beforeEnabled ? "启用" : "关闭"} -> ${judgeChange.afterEnabled ? "启用" : "关闭"}`,
-      beforeLabel: `${judgeChange.beforeAgent} / ${judgeChange.beforeModel}`,
-      afterLabel: `${judgeChange.afterAgent} / ${judgeChange.afterModel}`,
-      riskLevel: judgeChange.afterEnabled ? "high" : "medium",
-      affectsJudge: true,
-      affectsTemplate: false,
-    });
+function prependJudgeChangeCard(
+  cards: OrchestrationStrategyChangeCard[],
+  judgeChange: OrchestrationJudgeChange,
+  affectedCategories: string[],
+) {
+  if (!judgeChange.changed) {
+    return;
   }
 
+  cards.unshift({
+    id: "judge-change",
+    category: affectedCategories[0] || "global",
+    changeType: "judge",
+    title: "Judge 策略变化",
+    summary: `${judgeChange.beforeEnabled ? "启用" : "关闭"} -> ${judgeChange.afterEnabled ? "启用" : "关闭"}`,
+    beforeLabel: `${judgeChange.beforeAgent} / ${judgeChange.beforeModel}`,
+    afterLabel: `${judgeChange.afterAgent} / ${judgeChange.afterModel}`,
+    riskLevel: judgeChange.afterEnabled ? "high" : "medium",
+    affectsJudge: true,
+    affectsTemplate: false,
+  });
+}
+
+function prependPipelineChangeCard(
+  cards: OrchestrationStrategyChangeCard[],
+  strategy: OrchestrationStrategy,
+  patch: ChatSettingsPendingPatch,
+  affectedCategories: string[],
+) {
   const typedPatch = patch.patch as Partial<OrchestrationStrategy>;
-  if (typeof typedPatch.enablePipeline === "boolean") {
-    cards.unshift({
-      id: "pipeline-change",
-      category: affectedCategories[0] || "global",
-      changeType: "pipeline",
-      title: "Pipeline 开关变化",
-      summary: `${strategy.enablePipeline ? "启用" : "关闭"} -> ${typedPatch.enablePipeline ? "启用" : "关闭"}`,
-      beforeLabel: strategy.enablePipeline ? "pipeline 已启用" : "pipeline 已关闭",
-      afterLabel: typedPatch.enablePipeline ? "pipeline 已启用" : "pipeline 已关闭",
-      riskLevel: typedPatch.enablePipeline ? "medium" : "high",
-      affectsJudge: false,
-      affectsTemplate: false,
-    });
+  if (typeof typedPatch.enablePipeline !== "boolean") {
+    return;
   }
+
+  cards.unshift({
+    id: "pipeline-change",
+    category: affectedCategories[0] || "global",
+    changeType: "pipeline",
+    title: "Pipeline 开关变化",
+    summary: `${strategy.enablePipeline ? "启用" : "关闭"} -> ${typedPatch.enablePipeline ? "启用" : "关闭"}`,
+    beforeLabel: strategy.enablePipeline ? "pipeline 已启用" : "pipeline 已关闭",
+    afterLabel: typedPatch.enablePipeline ? "pipeline 已启用" : "pipeline 已关闭",
+    riskLevel: typedPatch.enablePipeline ? "medium" : "high",
+    affectsJudge: false,
+    affectsTemplate: false,
+  });
+}
+
+export function buildChangeCards(
+  strategy: OrchestrationStrategy,
+  patch: ChatSettingsPendingPatch,
+  affectedCategories: string[],
+): OrchestrationStrategyChangeCard[] {
+  const nextStrategy = mergeStrategyPatch(strategy, patch.patch);
+  const cards = buildCategoryChangeCards(strategy, nextStrategy, patch, affectedCategories);
+  const judgeChange = buildJudgeChange(strategy, patch);
+  prependJudgeChangeCard(cards, judgeChange, affectedCategories);
+  prependPipelineChangeCard(cards, strategy, patch, affectedCategories);
 
   return cards;
 }
@@ -246,7 +307,10 @@ export function buildPreviewFromPatch(
         ? { level: "high", summary: "本次变更会启用 judge，最终候选选择逻辑会发生变化。" }
         : null,
       templateChanges.some((item) => item.beforeMode !== item.afterMode)
-        ? { level: "medium", summary: `执行模式变化影响 ${affectedCategories.join(", ")} 分类的主执行链路。` }
+        ? {
+            level: "medium",
+            summary: `执行模式变化影响 ${affectedCategories.join(", ")} 分类的主执行链路。`,
+          }
         : null,
     ].filter((item): item is OrchestrationRiskHint => Boolean(item)),
     mermaidPreview: patch.mermaidPreview || {},
@@ -263,8 +327,10 @@ export function buildOrchestrationContext(
 } {
   return {
     ...context,
-    orchestrationVersion: context.orchestrationVersion || context.configVersions["orchestration-strategy"],
-    categorySummaries: context.categorySummaries || buildCategorySummariesFromStrategy(context.strategy),
+    orchestrationVersion:
+      context.orchestrationVersion || context.configVersions["orchestration-strategy"],
+    categorySummaries:
+      context.categorySummaries || buildCategorySummariesFromStrategy(context.strategy),
     supportedCategories: context.supportedCategories || [...ORCHESTRATION_CATEGORIES],
   };
 }

@@ -68,59 +68,67 @@ developerChangeRequestRoutes.get("/", async (c) => {
   });
 });
 
-developerChangeRequestRoutes.post("/", zValidator("json", createDeveloperChangeRequestSchema), async (c) => {
-  const taskId = requireTaskId(c);
-  const body = c.req.valid("json");
-  const task = await ensureLegacyRoleWorkflowMigrated(taskId);
-  if (!task) return c.json({ error: "Task not found" }, 404);
-  const requestId = crypto.randomUUID();
-  const now = new Date().toISOString();
-  const payload: typeof developerChangeRequests.$inferInsert = {
-    id: requestId,
-    taskId,
-    taskStageRunId: body.taskStageRunId ?? null,
-    sourceRoleAgentId: body.sourceRoleAgentId,
-    assignedRoleAgentId: "role.developer",
-    priority: body.priority,
-    title: body.title,
-    summary: body.summary,
-    requiredChangesJson: body.requiredChanges,
-    relatedFindingKeysJson: body.relatedFindingKeys ?? [],
-    blocking: body.blocking,
-    approvalRequired: body.approvalRequired,
-    status: "open",
-    resolutionNote: null,
-    createdAt: now,
-    updatedAt: now,
-    resolvedAt: null,
-  };
-  await db.insert(developerChangeRequests).values(payload);
-  return c.json({ ok: true, id: requestId }, 201);
-});
-
-developerChangeRequestRoutes.patch("/", zValidator("json", patchDeveloperChangeRequestSchema), async (c) => {
-  const taskId = requireTaskId(c);
-  const body = c.req.valid("json");
-  const task = await ensureLegacyRoleWorkflowMigrated(taskId);
-  if (!task) return c.json({ error: "Task not found" }, 404);
-  const existing = await db.query.developerChangeRequests.findFirst({
-    where: and(
-      eq(developerChangeRequests.taskId, taskId),
-      eq(developerChangeRequests.id, body.requestId),
-    ),
-  });
-  if (!existing) return c.json({ error: "Change request not found" }, 404);
-
-  const now = new Date().toISOString();
-  await db
-    .update(developerChangeRequests)
-    .set({
-      status: body.status,
-      resolutionNote: body.resolutionNote ?? existing.resolutionNote,
+developerChangeRequestRoutes.post(
+  "/",
+  zValidator("json", createDeveloperChangeRequestSchema),
+  async (c) => {
+    const taskId = requireTaskId(c);
+    const body = c.req.valid("json");
+    const task = await ensureLegacyRoleWorkflowMigrated(taskId);
+    if (!task) return c.json({ error: "Task not found" }, 404);
+    const requestId = crypto.randomUUID();
+    const now = new Date().toISOString();
+    const payload: typeof developerChangeRequests.$inferInsert = {
+      id: requestId,
+      taskId,
+      taskStageRunId: body.taskStageRunId ?? null,
+      sourceRoleAgentId: body.sourceRoleAgentId,
+      assignedRoleAgentId: "role.developer",
+      priority: body.priority,
+      title: body.title,
+      summary: body.summary,
+      requiredChangesJson: body.requiredChanges,
+      relatedFindingKeysJson: body.relatedFindingKeys ?? [],
+      blocking: body.blocking,
+      approvalRequired: body.approvalRequired,
+      status: "open",
+      resolutionNote: null,
+      createdAt: now,
       updatedAt: now,
-      resolvedAt: body.status === "resolved" || body.status === "won't-fix" ? now : null,
-    })
-    .where(eq(developerChangeRequests.id, body.requestId));
+      resolvedAt: null,
+    };
+    await db.insert(developerChangeRequests).values(payload);
+    return c.json({ ok: true, id: requestId }, 201);
+  },
+);
 
-  return c.json({ ok: true });
-});
+developerChangeRequestRoutes.patch(
+  "/",
+  zValidator("json", patchDeveloperChangeRequestSchema),
+  async (c) => {
+    const taskId = requireTaskId(c);
+    const body = c.req.valid("json");
+    const task = await ensureLegacyRoleWorkflowMigrated(taskId);
+    if (!task) return c.json({ error: "Task not found" }, 404);
+    const existing = await db.query.developerChangeRequests.findFirst({
+      where: and(
+        eq(developerChangeRequests.taskId, taskId),
+        eq(developerChangeRequests.id, body.requestId),
+      ),
+    });
+    if (!existing) return c.json({ error: "Change request not found" }, 404);
+
+    const now = new Date().toISOString();
+    await db
+      .update(developerChangeRequests)
+      .set({
+        status: body.status,
+        resolutionNote: body.resolutionNote ?? existing.resolutionNote,
+        updatedAt: now,
+        resolvedAt: body.status === "resolved" || body.status === "won't-fix" ? now : null,
+      })
+      .where(eq(developerChangeRequests.id, body.requestId));
+
+    return c.json({ ok: true });
+  },
+);

@@ -48,7 +48,8 @@ vi.mock("ant-design-vue", async () => {
           h(tag, {
             ...attrs,
             value: String(props.value ?? ""),
-            onInput: (event: Event) => emit("update:value", (event.target as HTMLInputElement | HTMLTextAreaElement).value),
+            onInput: (event: Event) =>
+              emit("update:value", (event.target as HTMLInputElement | HTMLTextAreaElement).value),
             onChange: (event: Event) => emit("change", event),
           });
       },
@@ -92,7 +93,11 @@ vi.mock("ant-design-vue", async () => {
             },
             [
               slots.default ? slots.default() : undefined,
-              h("button", { type: "button", "data-testid": `${name}-ok`, onClick: () => emit("ok") }),
+              h("button", {
+                type: "button",
+                "data-testid": `${name}-ok`,
+                onClick: () => emit("ok"),
+              }),
             ],
           );
       },
@@ -110,7 +115,8 @@ vi.mock("ant-design-vue", async () => {
           {
             ...attrs,
             value: String(props.value ?? ""),
-            onChange: (event: Event) => emit("update:value", (event.target as HTMLSelectElement).value),
+            onChange: (event: Event) =>
+              emit("update:value", (event.target as HTMLSelectElement).value),
           },
           slots.default ? slots.default() : undefined,
         );
@@ -122,7 +128,12 @@ vi.mock("ant-design-vue", async () => {
     inheritAttrs: false,
     props: ["value"],
     setup(props, { slots }) {
-      return () => h("option", { value: String(props.value ?? "") }, slots.default ? slots.default() : undefined);
+      return () =>
+        h(
+          "option",
+          { value: String(props.value ?? "") },
+          slots.default ? slots.default() : undefined,
+        );
     },
   });
 
@@ -131,12 +142,12 @@ vi.mock("ant-design-vue", async () => {
     props: ["dataSource", "columns"],
     setup(props, { slots }) {
       return () => {
-        const rows = ((props.dataSource as Array<Record<string, unknown>> | undefined) ?? []);
+        const rows = (props.dataSource as Array<Record<string, unknown>> | undefined) ?? [];
         return h(
           "div",
           { "data-component": "ATable" },
           rows.flatMap((record) =>
-            (((props.columns as Array<Record<string, unknown>> | undefined) ?? []).map((column) =>
+            ((props.columns as Array<Record<string, unknown>> | undefined) ?? []).map((column) =>
               h(
                 "div",
                 {
@@ -146,7 +157,8 @@ vi.mock("ant-design-vue", async () => {
                 },
                 slots.bodyCell ? slots.bodyCell({ column, record }) : undefined,
               ),
-            ))),
+            ),
+          ),
         );
       };
     },
@@ -194,7 +206,8 @@ vi.mock("ant-design-vue", async () => {
           h("input", {
             type: "checkbox",
             checked: Boolean(props.checked),
-            onChange: (event: Event) => emit("update:checked", (event.target as HTMLInputElement).checked),
+            onChange: (event: Event) =>
+              emit("update:checked", (event.target as HTMLInputElement).checked),
           });
       },
     }),
@@ -242,7 +255,12 @@ beforeEach(() => {
   vi.clearAllMocks();
 
   apiMocks.listOrgs.mockResolvedValue([
-    { id: "org-default", name: "Default Org", slug: "default", createdAt: "2026-03-01T00:00:00.000Z" },
+    {
+      id: "org-default",
+      name: "Default Org",
+      slug: "default",
+      createdAt: "2026-03-01T00:00:00.000Z",
+    },
   ]);
   apiMocks.listProjectOverview.mockResolvedValue({
     data: [
@@ -388,7 +406,10 @@ describe("Projects page", () => {
       handleEdit: () => Promise<void>;
     };
 
-    setupState.openEdit(setupState.overviewRows[0]!);
+    const firstRow = setupState.overviewRows[0];
+    expect(firstRow).toBeDefined();
+    if (!firstRow) throw new Error("Expected first overview row");
+    setupState.openEdit(firstRow);
     expect(setupState.editForm.projectGroupKey).toBe("existing-group");
     expect(setupState.editForm.projectGroupLabel).toBe("现有项目组");
 
@@ -423,7 +444,10 @@ describe("Projects page", () => {
       handleEdit: () => Promise<void>;
     };
 
-    setupState.openEdit(setupState.overviewRows[0]!);
+    const firstRow = setupState.overviewRows[0];
+    expect(firstRow).toBeDefined();
+    if (!firstRow) throw new Error("Expected first overview row");
+    setupState.openEdit(firstRow);
     setupState.editForm.name = "Default Project";
     setupState.editForm.description = "updated desc";
     setupState.editForm.projectGroupKey = "";

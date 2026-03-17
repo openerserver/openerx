@@ -213,11 +213,11 @@ import "@vue-flow/core/dist/style.css";
 import "@vue-flow/core/dist/theme-default.css";
 import "@vue-flow/controls/dist/style.css";
 import {
-  getProjectTaskGraphView,
   type ProjectTaskGraphEdgeView,
   type ProjectTaskGraphTaskView,
+  getProjectTaskGraphView,
 } from "../lib/api";
-import { useRealtimeStore, type RealtimeEvent } from "../stores/realtime";
+import { type RealtimeEvent, useRealtimeStore } from "../stores/realtime";
 
 type LayoutMode = "stage" | "status";
 
@@ -327,14 +327,17 @@ const groupedBuckets = computed(() => {
 
   for (const task of filteredTasks.value) {
     const key = layoutMode.value === "stage" ? resolveStageKey(task) : task.status || "unknown";
-    const title = layoutMode.value === "stage" ? resolveStageLabel(task) : taskStatusLabel(task.status);
+    const title =
+      layoutMode.value === "stage" ? resolveStageLabel(task) : taskStatusLabel(task.status);
     const subtitle = layoutMode.value === "stage" ? buildStageSubtitle(task) : "按状态收拢";
     bucketMap.set(key, [...(bucketMap.get(key) || []), task]);
     labelMap.set(key, title);
     subtitleMap.set(key, subtitle);
   }
 
-  const keys = Array.from(bucketMap.keys()).sort((left, right) => compareBucketKeys(left, right, layoutMode.value));
+  const keys = Array.from(bucketMap.keys()).sort((left, right) =>
+    compareBucketKeys(left, right, layoutMode.value),
+  );
 
   return keys.map((key) => {
     const bucketTasks = [...(bucketMap.get(key) || [])].sort(compareTasksForPriority);
@@ -359,7 +362,9 @@ const flowEdges = computed<Edge[]>(() =>
   buildFlowEdges(relationEdges.value, flowLayout.value.displayNodeByTaskId),
 );
 
-const selectedTask = computed(() => tasks.value.find((task) => task.id === selectedTaskId.value) || null);
+const selectedTask = computed(
+  () => tasks.value.find((task) => task.id === selectedTaskId.value) || null,
+);
 
 async function loadPage() {
   if (!projectId.value) {
@@ -470,7 +475,8 @@ function applyRealtimeEventLocally(event: RealtimeEvent) {
       return;
     case "pipeline.stage.updated":
       patchTask(event.taskId, () => ({
-        currentStageLabel: readString(event.data.stageLabel) || readString(event.data.stageKey) || undefined,
+        currentStageLabel:
+          readString(event.data.stageLabel) || readString(event.data.stageKey) || undefined,
         latestActivityAt: event.ts,
       }));
       return;
@@ -491,7 +497,10 @@ function applyRealtimeEventLocally(event: RealtimeEvent) {
   }
 }
 
-function patchTask(taskId: string | undefined, buildPatch: (task: GraphTask) => Partial<GraphTask>) {
+function patchTask(
+  taskId: string | undefined,
+  buildPatch: (task: GraphTask) => Partial<GraphTask>,
+) {
   if (!taskId) {
     return;
   }
@@ -558,7 +567,9 @@ function handleNodeClick(event: NodeMouseEvent) {
 
 function expandAllGroups() {
   expandedGroups.value = new Set(
-    groupedBuckets.value.filter((bucket) => bucket.hiddenTasks.length > 0).map((bucket) => buildGroupExpansionKey(layoutMode.value, bucket.key)),
+    groupedBuckets.value
+      .filter((bucket) => bucket.hiddenTasks.length > 0)
+      .map((bucket) => buildGroupExpansionKey(layoutMode.value, bucket.key)),
   );
   fitViewTick.value += 1;
 }
@@ -579,7 +590,7 @@ function buildFlowLayout(buckets: GroupedTaskBucket[]): FlowLayoutResult {
   const nodes: Node[] = [];
   const displayNodeByTaskId = new Map<string, string>();
 
-  buckets.forEach((bucket, bucketIndex) => {
+  for (const [bucketIndex, bucket] of buckets.entries()) {
     const x = bucketIndex * (laneWidth + laneGap);
     nodes.push({
       id: `lane-${bucket.key}`,
@@ -596,7 +607,7 @@ function buildFlowLayout(buckets: GroupedTaskBucket[]): FlowLayoutResult {
       },
     });
 
-    bucket.expandedTasks.forEach((task, taskIndex) => {
+    for (const [taskIndex, task] of bucket.expandedTasks.entries()) {
       nodes.push({
         id: task.id,
         type: "task",
@@ -615,7 +626,7 @@ function buildFlowLayout(buckets: GroupedTaskBucket[]): FlowLayoutResult {
         },
       });
       displayNodeByTaskId.set(task.id, task.id);
-    });
+    }
 
     if (bucket.hiddenTasks.length > 0) {
       const groupKey = buildGroupExpansionKey(layoutMode.value, bucket.key);
@@ -637,8 +648,7 @@ function buildFlowLayout(buckets: GroupedTaskBucket[]): FlowLayoutResult {
         displayNodeByTaskId.set(hiddenTask.id, groupId);
       }
     }
-  });
-
+  }
   return { nodes, displayNodeByTaskId };
 }
 
@@ -796,7 +806,16 @@ function stageSortWeight(value: string) {
 }
 
 function statusSortWeight(status: string) {
-  const order = ["running", "in_progress", "waiting_approval", "blocked", "failed", "paused", "pending", "completed"];
+  const order = [
+    "running",
+    "in_progress",
+    "waiting_approval",
+    "blocked",
+    "failed",
+    "paused",
+    "pending",
+    "completed",
+  ];
   const index = order.indexOf(status);
   return index === -1 ? 999 : index;
 }
@@ -860,7 +879,8 @@ function buildTaskBadges(task: GraphTask) {
   if (task.status === "blocked") badges.push("阻塞");
   if (task.status === "waiting_approval") badges.push("待审批");
   if (task.status === "failed") badges.push("失败");
-  if (task.changesSummary && totalChangedFiles(task) > 0) badges.push(`${totalChangedFiles(task)} 文件变更`);
+  if (task.changesSummary && totalChangedFiles(task) > 0)
+    badges.push(`${totalChangedFiles(task)} 文件变更`);
   return badges;
 }
 
@@ -893,7 +913,11 @@ function formatTaskActivity(task: GraphTask) {
 }
 
 function totalChangedFiles(task: GraphTask) {
-  return (task.changesSummary?.filesAdded || 0) + (task.changesSummary?.filesModified || 0) + (task.changesSummary?.filesDeleted || 0);
+  return (
+    (task.changesSummary?.filesAdded || 0) +
+    (task.changesSummary?.filesModified || 0) +
+    (task.changesSummary?.filesDeleted || 0)
+  );
 }
 
 function formatChangeSummary(task: GraphTask) {

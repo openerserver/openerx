@@ -128,7 +128,13 @@ describe("resolveWorkflowTemplate", () => {
           enabled: true,
           categoryDefaults: ["ops"],
         },
-        { id: "generic", name: "Generic", mode: "single", agents: ["default-executor"], enabled: true },
+        {
+          id: "generic",
+          name: "Generic",
+          mode: "single",
+          agents: ["default-executor"],
+          enabled: true,
+        },
       ],
     });
 
@@ -140,7 +146,13 @@ describe("resolveWorkflowTemplate", () => {
     const strategy = buildStrategy({
       templates: [
         { id: "disabled", name: "Off", mode: "single", agents: ["x"], enabled: false },
-        { id: "fallback", name: "Fallback", mode: "single", agents: ["default-executor"], enabled: true },
+        {
+          id: "fallback",
+          name: "Fallback",
+          mode: "single",
+          agents: ["default-executor"],
+          enabled: true,
+        },
       ],
     });
 

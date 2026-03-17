@@ -95,7 +95,13 @@ beforeEach(() => {
     },
   ]);
   apiMocks.listPolicies.mockResolvedValue([]);
-  apiMocks.createPolicy.mockResolvedValue({ id: "policy-1", name: "Project Default Approval Policy", rules: { approvalPolicy: "strict", source: "project-settings" }, appliesTo: "all", type: "command_level" });
+  apiMocks.createPolicy.mockResolvedValue({
+    id: "policy-1",
+    name: "Project Default Approval Policy",
+    rules: { approvalPolicy: "strict", source: "project-settings" },
+    appliesTo: "all",
+    type: "command_level",
+  });
   apiMocks.updateProject.mockResolvedValue({ ok: true });
 });
 
@@ -111,7 +117,7 @@ describe("ProjectPolicies", () => {
     expect(wrapper.text()).toContain("环境审批覆盖");
     expect(wrapper.text()).toContain("Production");
 
-    const saveButton = wrapper.find('button');
+    const saveButton = wrapper.find("button");
     expect(saveButton.exists()).toBe(true);
   });
 

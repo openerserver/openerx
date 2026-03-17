@@ -1,4 +1,4 @@
-import { expect, test, type Page, type Route } from "@playwright/test";
+import { type Page, type Route, expect, test } from "@playwright/test";
 
 function buildTask(taskId: string) {
   return {
@@ -406,7 +406,9 @@ async function installDashboardToTaskDetailMocks(page: Page) {
   });
 }
 
-test("dashboard runtime governance opens task detail with focused runtime ledger", async ({ page }) => {
+test("dashboard runtime governance opens task detail with focused runtime ledger", async ({
+  page,
+}) => {
   await installDashboardToTaskDetailMocks(page);
   await page.goto("/login");
   await page.getByLabel("用户名").fill("admin");

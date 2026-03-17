@@ -57,7 +57,11 @@ function serializePendingPatchForSignature(patch: Omit<PendingPatch, "signature"
 }
 
 function getPendingPatchSigningSecret(): string {
-  return process.env.CHAT_SETTINGS_PENDING_PATCH_SECRET || process.env.OPENCODE_ROOT || "openerx-chat-settings";
+  return (
+    process.env.CHAT_SETTINGS_PENDING_PATCH_SECRET ||
+    process.env.OPENCODE_ROOT ||
+    "openerx-chat-settings"
+  );
 }
 
 export function signPendingPatch(patch: Omit<PendingPatch, "signature">): string {
@@ -67,19 +71,21 @@ export function signPendingPatch(patch: Omit<PendingPatch, "signature">): string
 }
 
 export function verifyPendingPatchSignature(patch: PendingPatch): boolean {
-  return signPendingPatch({
-    index: patch.index,
-    action: patch.action,
-    configType: patch.configType,
-    patch: patch.patch,
-    explanation: patch.explanation,
-    rawText: patch.rawText,
-    mermaidPreview: patch.mermaidPreview,
-    visualizations: patch.visualizations,
-    orchestrationPreview: patch.orchestrationPreview,
-    configVersion: patch.configVersion,
-    createdAt: patch.createdAt,
-  }) === patch.signature;
+  return (
+    signPendingPatch({
+      index: patch.index,
+      action: patch.action,
+      configType: patch.configType,
+      patch: patch.patch,
+      explanation: patch.explanation,
+      rawText: patch.rawText,
+      mermaidPreview: patch.mermaidPreview,
+      visualizations: patch.visualizations,
+      orchestrationPreview: patch.orchestrationPreview,
+      configVersion: patch.configVersion,
+      createdAt: patch.createdAt,
+    }) === patch.signature
+  );
 }
 
 export class ConversationManager {
@@ -114,7 +120,11 @@ export class ConversationManager {
     return conversation;
   }
 
-  appendMessage(conversationId: string, role: "user" | "assistant", content: string): ConversationState {
+  appendMessage(
+    conversationId: string,
+    role: "user" | "assistant",
+    content: string,
+  ): ConversationState {
     const conversation = this.getOrCreate(conversationId);
     conversation.messages.push({ role, content, createdAt: new Date().toISOString() });
     conversation.updatedAt = new Date().toISOString();

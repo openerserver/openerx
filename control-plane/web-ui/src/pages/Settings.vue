@@ -1501,16 +1501,18 @@ function setDefaultAgentModelValue(value: unknown) {
   const normalized = String(value ?? "").trim();
   if (!normalized) {
     modelsData.defaults.model = "";
-    delete modelsData.defaults.provider;
+    modelsData.defaults.provider = undefined;
     return;
   }
 
   const parsed = parseModelRouteValue(normalized);
-  modelsData.defaults.model = parsed.provider ? buildModelRoute(parsed.provider, parsed.modelId) : parsed.modelId;
+  modelsData.defaults.model = parsed.provider
+    ? buildModelRoute(parsed.provider, parsed.modelId)
+    : parsed.modelId;
   if (parsed.provider) {
     modelsData.defaults.provider = parsed.provider;
   } else {
-    delete modelsData.defaults.provider;
+    modelsData.defaults.provider = undefined;
   }
 }
 
@@ -1552,7 +1554,8 @@ function getModelRecordIssue(record: Record<string, unknown>) {
   const provider = getRecordString(record, "provider").trim();
   const id = getRecordString(record, "id").trim();
   if (!provider || !id) return "需要同时填写 Provider 和模型 ID";
-  if (getModelDuplicateRouteCount(record) > 1) return `重复模型路由：${buildModelRoute(provider, id)}`;
+  if (getModelDuplicateRouteCount(record) > 1)
+    return `重复模型路由：${buildModelRoute(provider, id)}`;
   return "";
 }
 
@@ -1575,25 +1578,25 @@ function getModelValidationErrors() {
   const errors: string[] = [];
   const seen = new Map<string, number>();
 
-  modelsData.list.forEach((model, index) => {
+  for (const [index, model] of modelsData.list.entries()) {
     const provider = getRecordString(model, "provider").trim();
     const id = getRecordString(model, "id").trim();
     const rowNumber = index + 1;
 
     if (!provider || !id) {
       errors.push(`第 ${rowNumber} 行缺少 Provider 或模型 ID`);
-      return;
+      return errors;
     }
 
     const route = buildModelRoute(provider, id);
     const firstRow = seen.get(route);
     if (firstRow) {
       errors.push(`第 ${firstRow} 行与第 ${rowNumber} 行存在重复模型路由 ${route}`);
-      return;
+      return errors;
     }
 
     seen.set(route, rowNumber);
-  });
+  }
 
   return errors;
 }
@@ -1825,9 +1828,7 @@ async function chooseProviderModels(key: string) {
     providerModelPicker.models = [];
     providerModelPicker.message = error instanceof Error ? error.message : "读取可用模型失败";
     providerModelPicker.error = true;
-    message.error(
-      error instanceof Error ? `${key}：${error.message}` : `${key}：读取可用模型失败`,
-    );
+    message.error(error instanceof Error ? `${key}：${error.message}` : `${key}：读取可用模型失败`);
   } finally {
     providerModelLoading[key] = false;
   }
@@ -1858,12 +1859,16 @@ function addDiscoveredModelFromRecord(record: Record<string, unknown>) {
 
 function addAllDiscoveredModels() {
   const provider = providerModelPicker.providerKey;
-  const pending = providerModelPicker.models.filter((model) => !isModelConfigured(provider, model.id));
+  const pending = providerModelPicker.models.filter(
+    (model) => !isModelConfigured(provider, model.id),
+  );
   if (!pending.length) {
     message.info("可用模型已全部加入当前配置");
     return;
   }
-  pending.forEach((model) => addDiscoveredModelFor(model, provider));
+  for (const model of pending) {
+    addDiscoveredModelFor(model, provider);
+  }
   message.success(`已添加 ${pending.length} 个模型，请点击“保存模型配置”生效`);
 }
 
@@ -1896,7 +1901,9 @@ function addCopilotProvider() {
 }
 
 function deleteProvider(key: string) {
-  const removedModels = modelsData.list.filter((model) => getRecordString(model, "provider") === key).length;
+  const removedModels = modelsData.list.filter(
+    (model) => getRecordString(model, "provider") === key,
+  ).length;
   delete modelsData.providers[key];
   if (removedModels > 0) {
     modelsData.list = modelsData.list.filter((model) => getRecordString(model, "provider") !== key);
@@ -1933,7 +1940,11 @@ function addModel() {
   modelsData.list.push({ id: "", name: "", provider: "", contextWindow: 200000, maxTokens: 16384 });
 }
 
-function updateModelField(record: Record<string, unknown>, field: "id" | "provider", value: unknown) {
+function updateModelField(
+  record: Record<string, unknown>,
+  field: "id" | "provider",
+  value: unknown,
+) {
   record[field] = String(value ?? "");
   if (clearInvalidDefaultAgentModel()) {
     message.info("已清空失效的默认执行模型");
@@ -2000,7 +2011,9 @@ const countdownTimers: Record<string, ReturnType<typeof setInterval> | null> = {
 
 function getCopilotUnconfiguredCount(provider: string) {
   ensureCopilotAuthState(provider);
-  return (copilotModelsMap[provider]?.items || []).filter((model) => !isModelConfigured(provider, model.id)).length;
+  return (copilotModelsMap[provider]?.items || []).filter(
+    (model) => !isModelConfigured(provider, model.id),
+  ).length;
 }
 
 function getCopilotModelsStatusColor(provider: string) {
@@ -2038,7 +2051,9 @@ function getCopilotModelCollapseActiveKey(provider: string) {
 }
 
 function setCopilotModelCollapseActiveKey(provider: string, value: unknown) {
-  const keys = Array.isArray(value) ? value.map((item) => String(item)) : [String(value ?? "")].filter(Boolean);
+  const keys = Array.isArray(value)
+    ? value.map((item) => String(item))
+    : [String(value ?? "")].filter(Boolean);
   const shouldExpand = keys.includes("models");
   const wasExpanded = Boolean(copilotModelsExpanded[provider]);
   copilotModelsExpanded[provider] = shouldExpand;
@@ -2051,7 +2066,10 @@ function ensureCopilotProviderFor(provider: string) {
   if (!modelsData.providers[provider]) {
     modelsData.providers[provider] = {
       api: "github-copilot",
-      name: provider === "github-copilot" ? "GitHub Copilot" : `GitHub Copilot (${provider.replace("github-copilot-", "")})`,
+      name:
+        provider === "github-copilot"
+          ? "GitHub Copilot"
+          : `GitHub Copilot (${provider.replace("github-copilot-", "")})`,
     };
   }
 }
@@ -2081,15 +2099,18 @@ function addCopilotModelFor(model: CopilotModelInfo, provider: string) {
 }
 
 function addCopilotModelFromRecordFor(record: Record<string, unknown>, provider: string) {
-  addCopilotModelFor({
-    id: String(record.id || ""),
-    name: String(record.name || record.id || ""),
-    vendor: String(record.vendor || ""),
-    version: String(record.version || ""),
-    preview: Boolean(record.preview),
-    contextWindow: typeof record.contextWindow === "number" ? record.contextWindow : null,
-    maxTokens: typeof record.maxTokens === "number" ? record.maxTokens : null,
-  }, provider);
+  addCopilotModelFor(
+    {
+      id: String(record.id || ""),
+      name: String(record.name || record.id || ""),
+      vendor: String(record.vendor || ""),
+      version: String(record.version || ""),
+      preview: Boolean(record.preview),
+      contextWindow: typeof record.contextWindow === "number" ? record.contextWindow : null,
+      maxTokens: typeof record.maxTokens === "number" ? record.maxTokens : null,
+    },
+    provider,
+  );
 }
 
 function addAllCopilotModelsFor(provider: string) {
@@ -2100,17 +2121,21 @@ function addAllCopilotModelsFor(provider: string) {
     message.info("Copilot 模型已全部加入当前配置");
     return;
   }
-  pending.forEach((m) => addCopilotModelFor(m, provider));
+  for (const model of pending) {
+    addCopilotModelFor(model, provider);
+  }
   message.success(`已添加 ${pending.length} 个 Copilot 模型，请点击"保存模型配置"生效`);
 }
 
 function clearCopilotTimersFor(provider: string) {
-  if (pollTimers[provider]) {
-    clearInterval(pollTimers[provider]!);
+  const pollTimer = pollTimers[provider];
+  if (pollTimer) {
+    clearInterval(pollTimer);
     pollTimers[provider] = null;
   }
-  if (countdownTimers[provider]) {
-    clearInterval(countdownTimers[provider]!);
+  const countdownTimer = countdownTimers[provider];
+  if (countdownTimer) {
+    clearInterval(countdownTimer);
     countdownTimers[provider] = null;
   }
 }
@@ -2183,7 +2208,8 @@ async function startCopilotAuthFor(provider: string) {
 function startPollingFor(provider: string) {
   ensureCopilotAuthState(provider);
   const auth = copilotAuthMap[provider];
-  if (pollTimers[provider]) clearInterval(pollTimers[provider]!);
+  const pollTimer = pollTimers[provider];
+  if (pollTimer) clearInterval(pollTimer);
   pollTimers[provider] = setInterval(async () => {
     try {
       const pollRes = await pollCopilotToken(auth.deviceCode, provider);
@@ -2266,7 +2292,15 @@ const agentGroupDefinitions: AgentGroupDefinition[] = [
     key: "planning",
     label: "规划 / 方案",
     priority: 20,
-    keywords: ["planning", "plan", "pre-plan", "post-plan", "requirement", "interviews", "ambiguities"],
+    keywords: [
+      "planning",
+      "plan",
+      "pre-plan",
+      "post-plan",
+      "requirement",
+      "interviews",
+      "ambiguities",
+    ],
   },
   {
     key: "exploration",
@@ -2284,7 +2318,15 @@ const agentGroupDefinitions: AgentGroupDefinition[] = [
     key: "review-validation",
     label: "审核 / 校验",
     priority: 50,
-    keywords: ["validator", "reviews", "audit", "clarity", "completeness", "verifiability", "validates"],
+    keywords: [
+      "validator",
+      "reviews",
+      "audit",
+      "clarity",
+      "completeness",
+      "verifiability",
+      "validates",
+    ],
   },
   {
     key: "operations",
@@ -2319,8 +2361,15 @@ const agentCategoryAliases: Record<string, string> = {
 };
 
 function getAgentSearchText(agent: AgentSummary): string {
-  return [agent.name, agent.description, agent.category, agent.model, ...(agent.tags ?? []), ...(agent.applyTo ?? [])]
-    .filter((part): part is string => Boolean(part && part.trim()))
+  return [
+    agent.name,
+    agent.description,
+    agent.category,
+    agent.model,
+    ...(agent.tags ?? []),
+    ...(agent.applyTo ?? []),
+  ]
+    .filter((part): part is string => Boolean(part?.trim()))
     .join(" ")
     .toLowerCase();
 }
@@ -2332,10 +2381,14 @@ function matchesAgentKeyword(searchText: string, keyword: string): boolean {
 }
 
 function resolveAgentGroup(agent: AgentSummary): { key: string; label: string; priority: number } {
-  const rawCategory = String(agent.category ?? "").trim().toLowerCase();
+  const rawCategory = String(agent.category ?? "")
+    .trim()
+    .toLowerCase();
   if (rawCategory) {
     const aliasKey = agentCategoryAliases[rawCategory];
-    const aliasGroup = aliasKey ? agentGroupDefinitions.find((group) => group.key === aliasKey) : undefined;
+    const aliasGroup = aliasKey
+      ? agentGroupDefinitions.find((group) => group.key === aliasKey)
+      : undefined;
     if (aliasGroup) {
       return { key: aliasGroup.key, label: aliasGroup.label, priority: aliasGroup.priority };
     }
@@ -2360,7 +2413,9 @@ function resolveAgentGroup(agent: AgentSummary): { key: string; label: string; p
 const groupedAgentsList = computed<AgentGroupView[]>(() => {
   const groups = new Map<string, AgentGroupView>();
 
-  for (const agent of [...agentsList.value].sort((left, right) => left.name.localeCompare(right.name, "zh-CN"))) {
+  for (const agent of [...agentsList.value].sort((left, right) =>
+    left.name.localeCompare(right.name, "zh-CN"),
+  )) {
     const groupMeta = resolveAgentGroup(agent);
     const current = groups.get(groupMeta.key);
     if (current) {
@@ -2451,13 +2506,33 @@ const skillGroupDefinitions: SkillGroupDefinition[] = [
     key: "testing-quality",
     label: "测试 / 质量",
     priority: 30,
-    keywords: ["test", "testing", "playwright", "cypress", "vitest", "jest", "review", "lint", "quality"],
+    keywords: [
+      "test",
+      "testing",
+      "playwright",
+      "cypress",
+      "vitest",
+      "jest",
+      "review",
+      "lint",
+      "quality",
+    ],
   },
   {
     key: "security",
     label: "安全",
     priority: 40,
-    keywords: ["security", "auth", "audit", "owasp", "threat", "stride", "vulnerability", "csp", "cors"],
+    keywords: [
+      "security",
+      "auth",
+      "audit",
+      "owasp",
+      "threat",
+      "stride",
+      "vulnerability",
+      "csp",
+      "cors",
+    ],
   },
   {
     key: "git-collaboration",
@@ -2487,7 +2562,17 @@ const skillGroupDefinitions: SkillGroupDefinition[] = [
     key: "data-database",
     label: "数据 / 数据库",
     priority: 90,
-    keywords: ["database", "sql", "postgres", "prisma", "drizzle", "query", "schema", "migration", "model"],
+    keywords: [
+      "database",
+      "sql",
+      "postgres",
+      "prisma",
+      "drizzle",
+      "query",
+      "schema",
+      "migration",
+      "model",
+    ],
   },
   {
     key: "devops-infra",
@@ -2505,7 +2590,16 @@ const skillGroupDefinitions: SkillGroupDefinition[] = [
     key: "development",
     label: "代码开发",
     priority: 120,
-    keywords: ["typescript", "javascript", "python", "go", "rust", "coding", "clean code", "refactor"],
+    keywords: [
+      "typescript",
+      "javascript",
+      "python",
+      "go",
+      "rust",
+      "coding",
+      "clean code",
+      "refactor",
+    ],
   },
 ];
 
@@ -2543,8 +2637,14 @@ function normalizeSkillGroupLabel(value: string): string {
 }
 
 function getSkillSearchText(skill: SkillSummary): string {
-  return [skill.name, skill.description, skill.category, ...(skill.tags ?? []), ...(skill.applyTo ?? [])]
-    .filter((part): part is string => Boolean(part && part.trim()))
+  return [
+    skill.name,
+    skill.description,
+    skill.category,
+    ...(skill.tags ?? []),
+    ...(skill.applyTo ?? []),
+  ]
+    .filter((part): part is string => Boolean(part?.trim()))
     .join(" ")
     .toLowerCase();
 }
@@ -2560,10 +2660,14 @@ function matchesSkillKeyword(searchText: string, keyword: string): boolean {
 }
 
 function resolveSkillGroup(skill: SkillSummary): { key: string; label: string; priority: number } {
-  const rawCategory = String(skill.category ?? "").trim().toLowerCase();
+  const rawCategory = String(skill.category ?? "")
+    .trim()
+    .toLowerCase();
   if (rawCategory) {
     const aliasKey = skillCategoryAliases[rawCategory];
-    const aliasGroup = aliasKey ? skillGroupDefinitions.find((group) => group.key === aliasKey) : undefined;
+    const aliasGroup = aliasKey
+      ? skillGroupDefinitions.find((group) => group.key === aliasKey)
+      : undefined;
     if (aliasGroup) {
       return { key: aliasGroup.key, label: aliasGroup.label, priority: aliasGroup.priority };
     }
@@ -2860,29 +2964,45 @@ const hasEnabledParallelTemplate = computed(() =>
   strategyData.templates.some((t) => t.enabled && t.mode === "parallel"),
 );
 
-function handleTemplateCategoryChange(
+function resolveNewTemplateCategories(
   tpl: OrchestrationStrategy["templates"][number],
   categories: string[],
 ) {
   const oldCategories = tpl.categoryDefaults ?? [];
   tpl.categoryDefaults = categories;
+  return categories.filter((category) => !oldCategories.includes(category));
+}
 
-  // Auto-fill agents when categories are added and agent list is empty
-  if (tpl.agents.length === 0 && categories.length > 0) {
-    const newCats = categories.filter((c) => !oldCategories.includes(c));
-    if (newCats.length > 0) {
-      const agentsToAdd: string[] = [];
-      for (const cat of newCats) {
-        const mapped = strategyData.categoryAgentMap[cat];
-        const source = mapped && mapped.length > 0 ? mapped : DEFAULT_CATEGORY_AGENTS[cat] ?? [];
-        for (const a of source) {
-          if (!agentsToAdd.includes(a)) agentsToAdd.push(a);
-        }
-      }
-      if (agentsToAdd.length > 0) {
-        tpl.agents = agentsToAdd;
+function collectCategoryDefaultAgents(categories: string[]) {
+  const agentsToAdd: string[] = [];
+
+  for (const category of categories) {
+    const mapped = strategyData.categoryAgentMap[category];
+    const source = mapped && mapped.length > 0 ? mapped : (DEFAULT_CATEGORY_AGENTS[category] ?? []);
+    for (const agent of source) {
+      if (!agentsToAdd.includes(agent)) {
+        agentsToAdd.push(agent);
       }
     }
+  }
+
+  return agentsToAdd;
+}
+
+function handleTemplateCategoryChange(
+  tpl: OrchestrationStrategy["templates"][number],
+  categories: string[],
+) {
+  const newCategories = resolveNewTemplateCategories(tpl, categories);
+
+  // Auto-fill agents when categories are added and agent list is empty
+  if (tpl.agents.length > 0 || newCategories.length === 0) {
+    return;
+  }
+
+  const agentsToAdd = collectCategoryDefaultAgents(newCategories);
+  if (agentsToAdd.length > 0) {
+    tpl.agents = agentsToAdd;
   }
 }
 

@@ -88,32 +88,50 @@ const ControlsStub = defineComponent({
   },
 });
 
-vi.mock("ant-design-vue", () => {
-  const passThrough = (name: string) =>
-    defineComponent({
-      name,
-      props: ["message", "description", "spinning", "title", "subTitle"],
-      emits: ["back"],
-      setup(props, { slots, emit }) {
-        return () =>
-          h("div", { class: name }, [
-            props.title ? h("div", String(props.title)) : null,
-            props.subTitle ? h("div", String(props.subTitle)) : null,
-            props.message ? h("div", String(props.message)) : null,
-            props.description ? h("div", String(props.description)) : null,
-            name === "PageHeader"
-              ? h("button", { type: "button", onClick: () => emit("back") }, "back")
-              : null,
-            slots.default?.(),
-          ]);
-      },
-    });
+function renderPassThroughHeader(name: string, props: Record<string, unknown>) {
+  return [
+    props.title ? h("div", String(props.title)) : null,
+    props.subTitle ? h("div", String(props.subTitle)) : null,
+    props.message ? h("div", String(props.message)) : null,
+    props.description ? h("div", String(props.description)) : null,
+  ];
+}
 
+function renderPassThroughBackButton(name: string, emit: (event: "back") => void) {
+  if (name !== "PageHeader") {
+    return null;
+  }
+
+  return h("button", { type: "button", onClick: () => emit("back") }, "back");
+}
+
+function createPassThroughComponent(name: string) {
+  return defineComponent({
+    name,
+    props: ["message", "description", "spinning", "title", "subTitle"],
+    emits: ["back"],
+    setup(props, { slots, emit }) {
+      return () =>
+        h("div", { class: name }, [
+          ...renderPassThroughHeader(name, props as Record<string, unknown>),
+          renderPassThroughBackButton(name, emit),
+          slots.default?.(),
+        ]);
+    },
+  });
+}
+
+vi.mock("ant-design-vue", () => {
   const Button = defineComponent({
     name: "Button",
     emits: ["click"],
     setup(_props, { slots, emit, attrs }) {
-      return () => h("button", { ...attrs, type: "button", onClick: (event: Event) => emit("click", event) }, slots.default?.());
+      return () =>
+        h(
+          "button",
+          { ...attrs, type: "button", onClick: (event: Event) => emit("click", event) },
+          slots.default?.(),
+        );
     },
   });
 
@@ -142,7 +160,8 @@ vi.mock("ant-design-vue", () => {
           {
             ...attrs,
             value: String(props.value ?? ""),
-            onChange: (event: Event) => emit("update:value", (event.target as HTMLSelectElement).value),
+            onChange: (event: Event) =>
+              emit("update:value", (event.target as HTMLSelectElement).value),
           },
           slots.default?.(),
         );
@@ -172,9 +191,9 @@ vi.mock("ant-design-vue", () => {
   });
 
   return {
-    PageHeader: passThrough("PageHeader"),
-    Spin: passThrough("Spin"),
-    Alert: passThrough("Alert"),
+    PageHeader: createPassThroughComponent("PageHeader"),
+    Spin: createPassThroughComponent("Spin"),
+    Alert: createPassThroughComponent("Alert"),
     Button,
     Input,
     Select,
@@ -199,7 +218,9 @@ function buildTask(id: string, overrides?: Record<string, unknown>) {
 }
 
 async function mountPage() {
-  const { default: Page } = await import("../../control-plane/web-ui/src/pages/ProjectTaskGraph.vue");
+  const { default: Page } = await import(
+    "../../control-plane/web-ui/src/pages/ProjectTaskGraph.vue"
+  );
   const wrapper = mount(Page, {
     global: {
       stubs: {
@@ -275,7 +296,11 @@ describe("ProjectTaskGraph", () => {
         buildTask("task-4"),
         buildTask("task-5"),
         buildTask("task-6"),
-        buildTask("task-7", { prompt: "隐藏任务 7 的说明", repoName: "repo-7", workingBranch: "feature/7" }),
+        buildTask("task-7", {
+          prompt: "隐藏任务 7 的说明",
+          repoName: "repo-7",
+          workingBranch: "feature/7",
+        }),
         buildTask("task-8", { prompt: "隐藏任务 8 的说明" }),
       ],
       edges: [],
@@ -299,10 +324,14 @@ describe("ProjectTaskGraph", () => {
     await wrapper.get('[data-node-id="task-7"]').trigger("click");
     await flushPromises();
 
-    expect(wrapper.get('[data-testid="project-task-graph-inspector"]').text()).toContain("隐藏任务 7 的说明");
+    expect(wrapper.get('[data-testid="project-task-graph-inspector"]').text()).toContain(
+      "隐藏任务 7 的说明",
+    );
     expect(wrapper.text()).toContain("repo-7 · feature/7");
 
-    const detailButton = wrapper.findAll("button").find((button) => button.text().includes("打开任务详情"));
+    const detailButton = wrapper
+      .findAll("button")
+      .find((button) => button.text().includes("打开任务详情"));
     await detailButton?.trigger("click");
 
     expect(routerState.push).toHaveBeenCalledWith("/tasks/task-7");

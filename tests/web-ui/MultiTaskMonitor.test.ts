@@ -15,7 +15,9 @@ const VUE_FLOW_EMITS = [
 ] as const;
 
 type VueFlowEmitName = (typeof VUE_FLOW_EMITS)[number];
-const VUE_FLOW_EMIT_OPTIONS = Object.fromEntries(VUE_FLOW_EMITS.map((eventName) => [eventName, (_payload?: unknown) => true]));
+const VUE_FLOW_EMIT_OPTIONS = Object.fromEntries(
+  VUE_FLOW_EMITS.map((eventName) => [eventName, (_payload?: unknown) => true]),
+);
 
 const apiMocks = vi.hoisted(() => ({
   listProjects: vi.fn(),
@@ -35,6 +37,14 @@ class ResizeObserverMock {
 vi.stubGlobal("ResizeObserver", ResizeObserverMock);
 
 vi.mock("../../control-plane/web-ui/src/lib/api", () => apiMocks);
+
+function assertDefined<T>(value: T | null | undefined, message: string): T {
+  expect(value).toBeTruthy();
+  if (value == null) {
+    throw new Error(message);
+  }
+  return value;
+}
 
 vi.mock("vue-router", () => ({
   useRoute: () => ({ query: {} }),
@@ -60,11 +70,22 @@ function prependRealtimeEvent(
   realtimeStore.events = [event, ...realtimeStore.events];
 }
 
+type VueFlowStubExposed = {
+  emitFromTest: (eventName: VueFlowEmitName, payload?: unknown) => void;
+};
+
+type VueFlowStubSetupContext = {
+  slots: Record<string, ((payload?: Record<string, unknown>) => unknown) | undefined>;
+  emit: (eventName: VueFlowEmitName, payload?: unknown) => void;
+  attrs: Record<string, unknown>;
+  expose: (value: VueFlowStubExposed) => void;
+};
+
 vi.mock("../../control-plane/web-ui/src/stores/realtime", () => ({
   useRealtimeStore: useRealtimeStoreMock,
 }));
 
-const VueFlowStub: any = {
+const VueFlowStub = {
   name: "VueFlow",
   inheritAttrs: false,
   props: {
@@ -78,7 +99,7 @@ const VueFlowStub: any = {
     fitViewOnInit: { type: Boolean, default: undefined },
   },
   emits: VUE_FLOW_EMIT_OPTIONS,
-  setup(props: Record<string, unknown>, { slots, emit, attrs, expose }: any) {
+  setup(props: Record<string, unknown>, { slots, emit, attrs, expose }: VueFlowStubSetupContext) {
     expose({
       emitFromTest(eventName: VueFlowEmitName, payload?: unknown) {
         emit(eventName, payload);
@@ -90,11 +111,13 @@ const VueFlowStub: any = {
     });
 
     return () =>
-      h("div", {
-        ...attrs,
-        class: ["vue-flow-stub", attrs.class],
-        style: [attrs.style, { width: "1280px", height: "820px", position: "relative" }],
-      },
+      h(
+        "div",
+        {
+          ...attrs,
+          class: ["vue-flow-stub", attrs.class],
+          style: [attrs.style, { width: "1280px", height: "820px", position: "relative" }],
+        },
         ((props.nodes as Array<Record<string, unknown>>) || []).map((node) => {
           const slotContent = slots[`node-${String(node.type)}`]?.({ data: node.data });
           const normalizedChildren = Array.isArray(slotContent)
@@ -103,7 +126,11 @@ const VueFlowStub: any = {
               ? [slotContent]
               : [];
 
-          return h("div", { class: "vue-flow-node", "data-node-id": String(node.id) }, normalizedChildren);
+          return h(
+            "div",
+            { class: "vue-flow-node", "data-node-id": String(node.id) },
+            normalizedChildren,
+          );
         }),
       );
   },
@@ -114,11 +141,21 @@ vi.mock("@vue-flow/core", () => ({
 }));
 
 vi.mock("@vue-flow/background", () => ({
-  Background: defineComponent({ name: "Background", setup() { return () => h("div", { class: "background-stub" }); } }),
+  Background: defineComponent({
+    name: "Background",
+    setup() {
+      return () => h("div", { class: "background-stub" });
+    },
+  }),
 }));
 
 vi.mock("@vue-flow/controls", () => ({
-  Controls: defineComponent({ name: "Controls", setup() { return () => h("div", { class: "controls-stub" }); } }),
+  Controls: defineComponent({
+    name: "Controls",
+    setup() {
+      return () => h("div", { class: "controls-stub" });
+    },
+  }),
 }));
 
 vi.mock("ant-design-vue", () => {
@@ -128,7 +165,17 @@ vi.mock("ant-design-vue", () => {
     props: ["type", "size", "danger", "loading"],
     emits: ["click"],
     setup(props, { slots, emit, attrs }) {
-      return () => h("button", { ...attrs, type: "button", disabled: Boolean(props.loading), onClick: (event: Event) => emit("click", event) }, slots.default?.());
+      return () =>
+        h(
+          "button",
+          {
+            ...attrs,
+            type: "button",
+            disabled: Boolean(props.loading),
+            onClick: (event: Event) => emit("click", event),
+          },
+          slots.default?.(),
+        );
     },
   });
 
@@ -138,12 +185,18 @@ vi.mock("ant-design-vue", () => {
     props: ["value"],
     emits: ["update:value", "focus"],
     setup(props, { slots, emit, attrs }) {
-      return () => h("select", {
-        ...attrs,
-        value: props.value == null ? "" : String(props.value),
-        onFocus: () => emit("focus"),
-        onChange: (event: Event) => emit("update:value", (event.target as HTMLSelectElement).value || undefined),
-      }, slots.default?.());
+      return () =>
+        h(
+          "select",
+          {
+            ...attrs,
+            value: props.value == null ? "" : String(props.value),
+            onFocus: () => emit("focus"),
+            onChange: (event: Event) =>
+              emit("update:value", (event.target as HTMLSelectElement).value || undefined),
+          },
+          slots.default?.(),
+        );
     },
   });
 
@@ -151,7 +204,8 @@ vi.mock("ant-design-vue", () => {
     name: "ASelectOption",
     props: ["value"],
     setup(props, { slots }) {
-      return () => h("option", { value: props.value == null ? "" : String(props.value) }, slots.default?.());
+      return () =>
+        h("option", { value: props.value == null ? "" : String(props.value) }, slots.default?.());
     },
   });
 
@@ -161,22 +215,24 @@ vi.mock("ant-design-vue", () => {
     props: ["value"],
     emits: ["update:value"],
     setup(props, { emit, attrs }) {
-      return () => h("input", {
-        ...attrs,
-        value: String(props.value ?? ""),
-        onInput: (event: Event) => emit("update:value", (event.target as HTMLInputElement).value),
-      });
+      return () =>
+        h("input", {
+          ...attrs,
+          value: String(props.value ?? ""),
+          onInput: (event: Event) => emit("update:value", (event.target as HTMLInputElement).value),
+        });
     },
   });
 
-  const simple = (name: string, tag = "div") => defineComponent({
-    name,
-    inheritAttrs: false,
-    props: ["description"],
-    setup(props, { slots, attrs }) {
-      return () => h(tag, attrs, slots.default ? slots.default() : props.description);
-    },
-  });
+  const simple = (name: string, tag = "div") =>
+    defineComponent({
+      name,
+      inheritAttrs: false,
+      props: ["description"],
+      setup(props, { slots, attrs }) {
+        return () => h(tag, attrs, slots.default ? slots.default() : props.description);
+      },
+    });
 
   return {
     AButton: buttonLike,
@@ -236,8 +292,11 @@ function buildPipeline(options: {
     stages: options.stages,
     summary: {
       totalStages: options.totalStages ?? options.stages.length,
-      completedStages: options.completedStages ?? options.stages.filter((stage) => stage.status === "completed").length,
-      failedStages: options.failedStages ?? options.stages.filter((stage) => stage.status === "failed").length,
+      completedStages:
+        options.completedStages ??
+        options.stages.filter((stage) => stage.status === "completed").length,
+      failedStages:
+        options.failedStages ?? options.stages.filter((stage) => stage.status === "failed").length,
       currentStageId: options.currentStageId ?? null,
       totalTokens: { input: 0, output: 0 },
       totalDurationMs: 60000,
@@ -247,7 +306,9 @@ function buildPipeline(options: {
 }
 
 async function mountPage() {
-  const { default: MultiTaskMonitor } = await import("../../control-plane/web-ui/src/pages/MultiTaskMonitor.vue");
+  const { default: MultiTaskMonitor } = await import(
+    "../../control-plane/web-ui/src/pages/MultiTaskMonitor.vue"
+  );
   const pinia = createPinia();
   setActivePinia(pinia);
 
@@ -287,7 +348,12 @@ async function mountPage() {
 }
 
 function emitFlowEvent(
-  flow: { vm: { $emit: (eventName: VueFlowEmitName, payload?: unknown) => void; $?: { vnode?: { props?: Record<string, unknown> } } } },
+  flow: {
+    vm: {
+      $emit: (eventName: VueFlowEmitName, payload?: unknown) => void;
+      $?: { vnode?: { props?: Record<string, unknown> } };
+    };
+  },
   eventName: VueFlowEmitName,
   payload?: unknown,
 ) {
@@ -317,7 +383,9 @@ function emitFlowEvent(
 beforeEach(() => {
   vi.clearAllMocks();
   realtimeSubscribeTask.mockReset();
-  apiMocks.listProjects.mockResolvedValue([{ id: "proj-1", orgId: "org-1", name: "Default", slug: "default" }]);
+  apiMocks.listProjects.mockResolvedValue([
+    { id: "proj-1", orgId: "org-1", name: "Default", slug: "default" },
+  ]);
   apiMocks.listTasks.mockResolvedValue({
     data: [
       {
@@ -568,8 +636,8 @@ describe("MultiTaskMonitor", () => {
     expect(firstNode).toBeTruthy();
     expect(secondNode).toBeTruthy();
     expect(
-      secondNode!.x >= firstNode!.x + Math.max(firstNode!.width, 350) + 28
-      || secondNode!.y >= firstNode!.y + firstNode!.height + 28,
+      secondNode?.x >= firstNode?.x + Math.max(firstNode?.width, 350) + 28 ||
+        secondNode?.y >= firstNode?.y + firstNode?.height + 28,
     ).toBe(true);
   });
 
@@ -650,19 +718,23 @@ describe("MultiTaskMonitor", () => {
     try {
       const { taskMonitorStore } = await mountPage();
 
-      const firstNode = taskMonitorStore.nodes.find((node) => node.taskId === "task-1");
-      expect(firstNode).toBeTruthy();
+      const firstNode = assertDefined(
+        taskMonitorStore.nodes.find((node) => node.taskId === "task-1"),
+        "Expected first node",
+      );
 
-      taskMonitorStore.setNodeSize(firstNode!.id, 350, 520);
+      taskMonitorStore.setNodeSize(firstNode.id, 350, 520);
       taskMonitorStore.addTaskNode("task-2");
       taskMonitorStore.addTaskNode("task-3");
       await flushPromises();
 
-      const thirdNode = taskMonitorStore.nodes.find((node) => node.taskId === "task-3");
-      expect(thirdNode).toBeTruthy();
-      expect(thirdNode!.x).toBe(28);
-      expect(thirdNode!.y).toBe(576);
-      expect(thirdNode!.y).toBeGreaterThanOrEqual(firstNode!.y + firstNode!.height + 28);
+      const thirdNode = assertDefined(
+        taskMonitorStore.nodes.find((node) => node.taskId === "task-3"),
+        "Expected third node",
+      );
+      expect(thirdNode.x).toBe(28);
+      expect(thirdNode.y).toBe(576);
+      expect(thirdNode.y).toBeGreaterThanOrEqual(firstNode.y + firstNode.height + 28);
     } finally {
       Object.defineProperty(window, "innerWidth", {
         configurable: true,
@@ -689,14 +761,14 @@ describe("MultiTaskMonitor", () => {
 
       emitFlowEvent(wrapper.findComponent({ name: "VueFlow" }) as never, "node-drag-stop", {
         node: {
-          id: draggedNode!.id,
+          id: draggedNode?.id,
           position: { x: 463, y: 177 },
         },
       });
       await flushPromises();
 
-      expect(draggedNode!.x).toBe(406);
-      expect(draggedNode!.y).toBe(28);
+      expect(draggedNode?.x).toBe(406);
+      expect(draggedNode?.y).toBe(28);
     } finally {
       Object.defineProperty(window, "innerWidth", {
         configurable: true,
@@ -719,76 +791,82 @@ describe("MultiTaskMonitor", () => {
       taskMonitorStore.addTaskNode("task-3");
       await flushPromises();
 
-      const firstNode = taskMonitorStore.nodes.find((node) => node.taskId === "task-1");
-      const shorterNode = taskMonitorStore.nodes.find((node) => node.taskId === "task-2");
-      const tallerNode = taskMonitorStore.nodes.find((node) => node.taskId === "task-3");
-      expect(firstNode).toBeTruthy();
-      expect(shorterNode).toBeTruthy();
-      expect(tallerNode).toBeTruthy();
+      const firstNode = assertDefined(
+        taskMonitorStore.nodes.find((node) => node.taskId === "task-1"),
+        "Expected first node",
+      );
+      const shorterNode = assertDefined(
+        taskMonitorStore.nodes.find((node) => node.taskId === "task-2"),
+        "Expected shorter node",
+      );
+      const tallerNode = assertDefined(
+        taskMonitorStore.nodes.find((node) => node.taskId === "task-3"),
+        "Expected taller node",
+      );
 
-      taskMonitorStore.setNodePosition(firstNode!.id, 28, 28);
-      taskMonitorStore.setNodeSize(firstNode!.id, 350, 320);
-      taskMonitorStore.setNodePosition(shorterNode!.id, 28, 376);
-      taskMonitorStore.setNodeSize(shorterNode!.id, 350, 320);
-      taskMonitorStore.setNodePosition(tallerNode!.id, 28, 724);
-      taskMonitorStore.setNodeSize(tallerNode!.id, 350, 520);
+      taskMonitorStore.setNodePosition(firstNode.id, 28, 28);
+      taskMonitorStore.setNodeSize(firstNode.id, 350, 320);
+      taskMonitorStore.setNodePosition(shorterNode.id, 28, 376);
+      taskMonitorStore.setNodeSize(shorterNode.id, 350, 320);
+      taskMonitorStore.setNodePosition(tallerNode.id, 28, 724);
+      taskMonitorStore.setNodeSize(tallerNode.id, 350, 520);
       await flushPromises();
 
       const flow = wrapper.findComponent({ name: "VueFlow" });
 
       emitFlowEvent(flow as never, "node-drag-start", {
         node: {
-          id: shorterNode!.id,
-          position: { x: shorterNode!.x, y: shorterNode!.y },
+          id: shorterNode.id,
+          position: { x: shorterNode.x, y: shorterNode.y },
         },
       });
       emitFlowEvent(flow as never, "node-drag", {
         node: {
-          id: shorterNode!.id,
+          id: shorterNode.id,
           position: { x: 444, y: 40 },
         },
       });
       emitFlowEvent(flow as never, "node-drag-stop", {
         node: {
-          id: shorterNode!.id,
+          id: shorterNode.id,
           position: { x: 444, y: 40 },
         },
       });
       await flushPromises();
 
-      expect(shorterNode!.x).toBe(406);
-      expect(shorterNode!.y).toBe(28);
+      expect(shorterNode.x).toBe(406);
+      expect(shorterNode.y).toBe(28);
 
-      taskMonitorStore.setNodePosition(firstNode!.id, 28, 28);
-      taskMonitorStore.setNodeSize(firstNode!.id, 350, 320);
-      taskMonitorStore.setNodePosition(shorterNode!.id, 28, 376);
-      taskMonitorStore.setNodeSize(shorterNode!.id, 350, 320);
-      taskMonitorStore.setNodePosition(tallerNode!.id, 28, 724);
-      taskMonitorStore.setNodeSize(tallerNode!.id, 350, 520);
+      taskMonitorStore.setNodePosition(firstNode.id, 28, 28);
+      taskMonitorStore.setNodeSize(firstNode.id, 350, 320);
+      taskMonitorStore.setNodePosition(shorterNode.id, 28, 376);
+      taskMonitorStore.setNodeSize(shorterNode.id, 350, 320);
+      taskMonitorStore.setNodePosition(tallerNode.id, 28, 724);
+      taskMonitorStore.setNodeSize(tallerNode.id, 350, 520);
       await flushPromises();
 
       emitFlowEvent(flow as never, "node-drag-start", {
         node: {
-          id: tallerNode!.id,
-          position: { x: tallerNode!.x, y: tallerNode!.y },
+          id: tallerNode.id,
+          position: { x: tallerNode.x, y: tallerNode.y },
         },
       });
       emitFlowEvent(flow as never, "node-drag", {
         node: {
-          id: tallerNode!.id,
+          id: tallerNode.id,
           position: { x: 444, y: 40 },
         },
       });
       emitFlowEvent(flow as never, "node-drag-stop", {
         node: {
-          id: tallerNode!.id,
+          id: tallerNode.id,
           position: { x: 444, y: 40 },
         },
       });
       await flushPromises();
 
-      expect(tallerNode!.x).toBe(406);
-      expect(tallerNode!.y).toBe(28);
+      expect(tallerNode?.x).toBe(406);
+      expect(tallerNode?.y).toBe(28);
     } finally {
       Object.defineProperty(window, "innerWidth", {
         configurable: true,
@@ -816,13 +894,13 @@ describe("MultiTaskMonitor", () => {
       const flow = wrapper.findComponent({ name: "VueFlow" });
       emitFlowEvent(flow as never, "node-drag-start", {
         node: {
-          id: draggedNode!.id,
-          position: { x: draggedNode!.x, y: draggedNode!.y },
+          id: draggedNode?.id,
+          position: { x: draggedNode?.x, y: draggedNode?.y },
         },
       });
       emitFlowEvent(flow as never, "node-drag", {
         node: {
-          id: draggedNode!.id,
+          id: draggedNode?.id,
           position: { x: 463, y: 177 },
         },
       });
@@ -835,14 +913,14 @@ describe("MultiTaskMonitor", () => {
 
       emitFlowEvent(flow as never, "node-drag-stop", {
         node: {
-          id: draggedNode!.id,
+          id: draggedNode?.id,
           position: { x: 463, y: 177 },
         },
       });
       await flushPromises();
 
-      expect(draggedNode!.x).toBe(406);
-      expect(draggedNode!.y).toBe(28);
+      expect(draggedNode?.x).toBe(406);
+      expect(draggedNode?.y).toBe(28);
     } finally {
       Object.defineProperty(window, "innerWidth", {
         configurable: true,
@@ -870,13 +948,13 @@ describe("MultiTaskMonitor", () => {
       const flow = wrapper.findComponent({ name: "VueFlow" });
       emitFlowEvent(flow as never, "node-drag-start", {
         node: {
-          id: draggedNode!.id,
-          position: { x: draggedNode!.x, y: draggedNode!.y },
+          id: draggedNode?.id,
+          position: { x: draggedNode?.x, y: draggedNode?.y },
         },
       });
       emitFlowEvent(flow as never, "node-drag", {
         node: {
-          id: draggedNode!.id,
+          id: draggedNode?.id,
           position: { x: 463, y: 177 },
         },
       });
@@ -891,14 +969,14 @@ describe("MultiTaskMonitor", () => {
 
       emitFlowEvent(flow as never, "node-drag-stop", {
         node: {
-          id: draggedNode!.id,
+          id: draggedNode?.id,
           position: { x: 463, y: 177 },
         },
       });
       await flushPromises();
 
-      expect(draggedNode!.x).toBe(406);
-      expect(draggedNode!.y).toBe(28);
+      expect(draggedNode?.x).toBe(406);
+      expect(draggedNode?.y).toBe(28);
     } finally {
       Object.defineProperty(window, "innerWidth", {
         configurable: true,
@@ -927,13 +1005,13 @@ describe("MultiTaskMonitor", () => {
       const flow = wrapper.findComponent({ name: "VueFlow" });
       emitFlowEvent(flow as never, "node-drag-start", {
         node: {
-          id: draggedNode!.id,
+          id: draggedNode?.id,
           position: { x: 609, y: 42 },
         },
       });
       emitFlowEvent(flow as never, "node-drag", {
         node: {
-          id: draggedNode!.id,
+          id: draggedNode?.id,
           position: { x: 42, y: 564 },
         },
       });
@@ -946,14 +1024,14 @@ describe("MultiTaskMonitor", () => {
 
       emitFlowEvent(flow as never, "node-drag-stop", {
         node: {
-          id: draggedNode!.id,
+          id: draggedNode?.id,
           position: { x: 42, y: 564 },
         },
       });
       await flushPromises();
 
-      expect(draggedNode!.x).toBe(28);
-      expect(draggedNode!.y).toBe(376);
+      expect(draggedNode?.x).toBe(28);
+      expect(draggedNode?.y).toBe(376);
     } finally {
       Object.defineProperty(window, "innerWidth", {
         configurable: true,
@@ -981,13 +1059,13 @@ describe("MultiTaskMonitor", () => {
       const flow = wrapper.findComponent({ name: "VueFlow" });
       emitFlowEvent(flow as never, "node-drag-start", {
         node: {
-          id: draggedNode!.id,
-          position: { x: draggedNode!.x, y: draggedNode!.y },
+          id: draggedNode?.id,
+          position: { x: draggedNode?.x, y: draggedNode?.y },
         },
       });
       emitFlowEvent(flow as never, "node-drag", {
         node: {
-          id: draggedNode!.id,
+          id: draggedNode?.id,
           position: { x: 44, y: 40 },
         },
       });
@@ -997,13 +1075,19 @@ describe("MultiTaskMonitor", () => {
       expect(wrapper.find('[data-preview-type="target"]').text()).toContain("交换到这里");
       expect(wrapper.find('[data-preview-type="swap"]').exists()).toBe(true);
 
-      const swapTargetNode = wrapper.findAll(".monitor-node").find((node) => node.text().includes("修复登录流程"));
+      const swapTargetNode = wrapper
+        .findAll(".monitor-node")
+        .find((node) => node.text().includes("修复登录流程"));
       expect(swapTargetNode?.classes()).toContain("monitor-node--swap-target");
       expect(swapTargetNode?.classes()).toContain("monitor-node--preview-shifted");
 
-      const draggedNodeCard = wrapper.findAll(".monitor-node").find((node) => node.text().includes("处理构建异常"));
+      const draggedNodeCard = wrapper
+        .findAll(".monitor-node")
+        .find((node) => node.text().includes("处理构建异常"));
       expect(draggedNodeCard?.classes()).toContain("monitor-node--magnetic");
-      expect(draggedNodeCard?.attributes("style") || "").not.toContain("--monitor-node-drag-magnetic-offset-x: 0px");
+      expect(draggedNodeCard?.attributes("style") || "").not.toContain(
+        "--monitor-node-drag-magnetic-offset-x: 0px",
+      );
     } finally {
       Object.defineProperty(window, "innerWidth", {
         configurable: true,
@@ -1032,13 +1116,13 @@ describe("MultiTaskMonitor", () => {
       const flow = wrapper.findComponent({ name: "VueFlow" });
       emitFlowEvent(flow as never, "node-drag-start", {
         node: {
-          id: draggedNode!.id,
-          position: { x: draggedNode!.x, y: draggedNode!.y },
+          id: draggedNode?.id,
+          position: { x: draggedNode?.x, y: draggedNode?.y },
         },
       });
       emitFlowEvent(flow as never, "node-drag", {
         node: {
-          id: draggedNode!.id,
+          id: draggedNode?.id,
           position: { x: 44, y: 40 },
         },
       });
@@ -1081,13 +1165,13 @@ describe("MultiTaskMonitor", () => {
       const flow = wrapper.findComponent({ name: "VueFlow" });
       emitFlowEvent(flow as never, "node-drag-start", {
         node: {
-          id: draggedNode!.id,
-          position: { x: draggedNode!.x, y: draggedNode!.y },
+          id: draggedNode?.id,
+          position: { x: draggedNode?.x, y: draggedNode?.y },
         },
       });
       emitFlowEvent(flow as never, "node-drag", {
         node: {
-          id: draggedNode!.id,
+          id: draggedNode?.id,
           position: { x: 44, y: 40 },
         },
       });
@@ -1129,28 +1213,28 @@ describe("MultiTaskMonitor", () => {
       const flow = wrapper.findComponent({ name: "VueFlow" });
       emitFlowEvent(flow as never, "node-drag-start", {
         node: {
-          id: draggedNode!.id,
-          position: { x: draggedNode!.x, y: draggedNode!.y },
+          id: draggedNode?.id,
+          position: { x: draggedNode?.x, y: draggedNode?.y },
         },
       });
       emitFlowEvent(flow as never, "node-drag", {
         node: {
-          id: draggedNode!.id,
+          id: draggedNode?.id,
           position: { x: 44, y: 40 },
         },
       });
       emitFlowEvent(flow as never, "node-drag-stop", {
         node: {
-          id: draggedNode!.id,
+          id: draggedNode?.id,
           position: { x: 44, y: 40 },
         },
       });
       await flushPromises();
 
-      expect(draggedNode!.x).toBe(28);
-      expect(draggedNode!.y).toBe(28);
-      expect(runningNode!.x).toBe(406);
-      expect(runningNode!.y).toBe(28);
+      expect(draggedNode?.x).toBe(28);
+      expect(draggedNode?.y).toBe(28);
+      expect(runningNode?.x).toBe(406);
+      expect(runningNode?.y).toBe(28);
       expect(wrapper.find('[data-preview-type="target"]').exists()).toBe(false);
     } finally {
       Object.defineProperty(window, "innerWidth", {
@@ -1180,13 +1264,13 @@ describe("MultiTaskMonitor", () => {
       const flow = wrapper.findComponent({ name: "VueFlow" });
       emitFlowEvent(flow as never, "node-drag-start", {
         node: {
-          id: draggedNode!.id,
-          position: { x: draggedNode!.x, y: draggedNode!.y },
+          id: draggedNode?.id,
+          position: { x: draggedNode?.x, y: draggedNode?.y },
         },
       });
       emitFlowEvent(flow as never, "node-drag", {
         node: {
-          id: draggedNode!.id,
+          id: draggedNode?.id,
           position: { x: 46, y: 36 },
         },
       });
@@ -1195,14 +1279,20 @@ describe("MultiTaskMonitor", () => {
       expect(wrapper.find(".monitor-free-layout-preview-row--source").exists()).toBe(true);
       expect(wrapper.find(".monitor-free-layout-preview-row--target").exists()).toBe(true);
 
-      const swapTargetNode = wrapper.findAll(".monitor-node").find((node) => node.text().includes("修复登录流程"));
+      const swapTargetNode = wrapper
+        .findAll(".monitor-node")
+        .find((node) => node.text().includes("修复登录流程"));
       expect(swapTargetNode?.classes()).toContain("monitor-node--swap-target");
       expect(swapTargetNode?.classes()).toContain("monitor-node--preview-shifted");
       expect(swapTargetNode?.attributes("style") || "").toContain("--monitor-node-swap-offset-y");
 
-      const shiftedMiddleNode = wrapper.findAll(".monitor-node").find((node) => node.text().includes("处理构建异常"));
+      const shiftedMiddleNode = wrapper
+        .findAll(".monitor-node")
+        .find((node) => node.text().includes("处理构建异常"));
       expect(shiftedMiddleNode?.classes()).toContain("monitor-node--preview-shifted");
-      expect(shiftedMiddleNode?.attributes("style") || "").toContain("--monitor-node-preview-offset-y: 348px");
+      expect(shiftedMiddleNode?.attributes("style") || "").toContain(
+        "--monitor-node-preview-offset-y: 348px",
+      );
     } finally {
       Object.defineProperty(window, "innerWidth", {
         configurable: true,
@@ -1225,10 +1315,14 @@ describe("MultiTaskMonitor", () => {
       taskMonitorStore.addTaskNode("task-3");
       await flushPromises();
 
-      const removedNodeCard = wrapper.findAll(".monitor-node").find((node) => node.text().includes("处理构建异常"));
+      const removedNodeCard = wrapper
+        .findAll(".monitor-node")
+        .find((node) => node.text().includes("处理构建异常"));
       expect(removedNodeCard).toBeTruthy();
 
-      const removeButton = removedNodeCard?.findAll("button").find((button) => button.text().includes("移除"));
+      const removeButton = removedNodeCard
+        ?.findAll("button")
+        .find((button) => button.text().includes("移除"));
       expect(removeButton).toBeTruthy();
       await removeButton?.trigger("click");
       await flushPromises();
@@ -1237,8 +1331,8 @@ describe("MultiTaskMonitor", () => {
       const remainingNode = taskMonitorStore.nodes.find((node) => node.taskId === "task-3");
       expect(remainingNode).toBeTruthy();
       expect(taskMonitorStore.nodes.some((node) => node.taskId === "task-2")).toBe(false);
-      expect(remainingNode!.x).toBe(406);
-      expect(remainingNode!.y).toBe(28);
+      expect(remainingNode?.x).toBe(406);
+      expect(remainingNode?.y).toBe(28);
     } finally {
       Object.defineProperty(window, "innerWidth", {
         configurable: true,
@@ -1270,8 +1364,11 @@ describe("MultiTaskMonitor", () => {
     const [firstNode, secondNode] = taskMonitorStore.nodes;
     expect(firstNode).toBeTruthy();
     expect(secondNode).toBeTruthy();
-    expect(secondNode!.x >= firstNode!.x + Math.max(firstNode!.width, 350) + 28 || secondNode!.y >= firstNode!.y + firstNode!.height + 28).toBe(true);
-    expect(secondNode!.x).toBeLessThanOrEqual(304);
+    expect(
+      secondNode?.x >= firstNode?.x + Math.max(firstNode?.width, 350) + 28 ||
+        secondNode?.y >= firstNode?.y + firstNode?.height + 28,
+    ).toBe(true);
+    expect(secondNode?.x).toBeLessThanOrEqual(304);
   });
 
   it("switches to status layout mode and renders structure sections", async () => {
@@ -1338,26 +1435,26 @@ describe("MultiTaskMonitor", () => {
     const [firstNode] = taskMonitorStore.nodes;
     expect(firstNode).toBeTruthy();
 
-    taskMonitorStore.setNodeSize(firstNode!.id, 320, firstNode!.height);
-    taskMonitorStore.freeLayoutSnapshot[firstNode!.id] = {
-      x: firstNode!.x,
-      y: firstNode!.y,
+    taskMonitorStore.setNodeSize(firstNode?.id, 320, firstNode?.height);
+    taskMonitorStore.freeLayoutSnapshot[firstNode?.id] = {
+      x: firstNode?.x,
+      y: firstNode?.y,
       width: 320,
-      height: firstNode!.height,
+      height: firstNode?.height,
     };
-    taskMonitorStore.freeLayoutBaseline[firstNode!.id] = {
-      x: firstNode!.x,
-      y: firstNode!.y,
+    taskMonitorStore.freeLayoutBaseline[firstNode?.id] = {
+      x: firstNode?.x,
+      y: firstNode?.y,
       width: 320,
-      height: firstNode!.height,
+      height: firstNode?.height,
     };
 
     const changed = taskMonitorStore.normalizePersistedWindowWidth(350);
 
     expect(changed).toBe(true);
-    expect(firstNode!.width).toBe(350);
-    expect(taskMonitorStore.freeLayoutSnapshot[firstNode!.id]?.width).toBe(350);
-    expect(taskMonitorStore.freeLayoutBaseline[firstNode!.id]?.width).toBe(350);
+    expect(firstNode?.width).toBe(350);
+    expect(taskMonitorStore.freeLayoutSnapshot[firstNode?.id]?.width).toBe(350);
+    expect(taskMonitorStore.freeLayoutBaseline[firstNode?.id]?.width).toBe(350);
   });
 
   it("shows stream directly without the old overview panel", async () => {
@@ -1368,7 +1465,10 @@ describe("MultiTaskMonitor", () => {
 
     expect(wrapper.text()).toContain("实时回复");
 
-    const buttonTexts = wrapper.findAll("button").map((button) => button.text().trim()).filter(Boolean);
+    const buttonTexts = wrapper
+      .findAll("button")
+      .map((button) => button.text().trim())
+      .filter(Boolean);
     expect(buttonTexts).not.toContain("展开概览");
     expect(buttonTexts).not.toContain("折叠");
     expect(buttonTexts).not.toContain("展开");
@@ -1395,8 +1495,9 @@ describe("MultiTaskMonitor", () => {
     expect(failedNode).toBeTruthy();
     expect(runningNode).toBeTruthy();
     expect(
-      (failedNode?.y || 0) < (runningNode?.y || 0)
-      || ((failedNode?.y || 0) === (runningNode?.y || 0) && (failedNode?.x || 0) <= (runningNode?.x || 0)),
+      (failedNode?.y || 0) < (runningNode?.y || 0) ||
+        ((failedNode?.y || 0) === (runningNode?.y || 0) &&
+          (failedNode?.x || 0) <= (runningNode?.x || 0)),
     ).toBe(true);
   });
 
@@ -1547,8 +1648,20 @@ describe("MultiTaskMonitor", () => {
           status: "running",
           updatedAt: "2026-03-14T08:08:00.000Z",
           stages: [
-            buildPipelineStage("stage-1", "检索日志", "completed", "2026-03-14T08:03:00.000Z", "2026-03-14T08:04:00.000Z"),
-            buildPipelineStage("stage-2", "修复认证链路", "running", "2026-03-14T08:05:00.000Z", null),
+            buildPipelineStage(
+              "stage-1",
+              "检索日志",
+              "completed",
+              "2026-03-14T08:03:00.000Z",
+              "2026-03-14T08:04:00.000Z",
+            ),
+            buildPipelineStage(
+              "stage-2",
+              "修复认证链路",
+              "running",
+              "2026-03-14T08:05:00.000Z",
+              null,
+            ),
           ],
           currentStageId: "stage-2",
         });
@@ -1560,8 +1673,20 @@ describe("MultiTaskMonitor", () => {
           status: "running",
           updatedAt: "2026-03-14T08:18:00.000Z",
           stages: [
-            buildPipelineStage("stage-3", "生成基线", "completed", "2026-03-14T08:10:00.000Z", "2026-03-14T08:11:00.000Z"),
-            buildPipelineStage("stage-4", "补回归用例", "running", "2026-03-14T08:12:00.000Z", null),
+            buildPipelineStage(
+              "stage-3",
+              "生成基线",
+              "completed",
+              "2026-03-14T08:10:00.000Z",
+              "2026-03-14T08:11:00.000Z",
+            ),
+            buildPipelineStage(
+              "stage-4",
+              "补回归用例",
+              "running",
+              "2026-03-14T08:12:00.000Z",
+              null,
+            ),
           ],
           currentStageId: "stage-4",
         });
@@ -1596,8 +1721,20 @@ describe("MultiTaskMonitor", () => {
           status: "running",
           updatedAt: taskId === "task-1" ? "2026-03-14T08:08:00.000Z" : "2026-03-14T08:18:00.000Z",
           stages: [
-            buildPipelineStage(`${taskId}-stage-1`, "准备上下文", "completed", "2026-03-14T08:03:00.000Z", "2026-03-14T08:04:00.000Z"),
-            buildPipelineStage(`${taskId}-stage-2`, "修复认证链路", "running", "2026-03-14T08:05:00.000Z", null),
+            buildPipelineStage(
+              `${taskId}-stage-1`,
+              "准备上下文",
+              "completed",
+              "2026-03-14T08:03:00.000Z",
+              "2026-03-14T08:04:00.000Z",
+            ),
+            buildPipelineStage(
+              `${taskId}-stage-2`,
+              "修复认证链路",
+              "running",
+              "2026-03-14T08:05:00.000Z",
+              null,
+            ),
           ],
           currentStageId: `${taskId}-stage-2`,
         });
@@ -1682,7 +1819,15 @@ describe("MultiTaskMonitor", () => {
           taskId,
           status: "running",
           updatedAt: "2026-03-14T08:18:00.000Z",
-          stages: [buildPipelineStage("alpha-stage", "A 阶段", "running", "2026-03-14T08:12:00.000Z", null)],
+          stages: [
+            buildPipelineStage(
+              "alpha-stage",
+              "A 阶段",
+              "running",
+              "2026-03-14T08:12:00.000Z",
+              null,
+            ),
+          ],
           currentStageId: "alpha-stage",
         });
       }
@@ -1692,7 +1837,9 @@ describe("MultiTaskMonitor", () => {
           taskId,
           status: "running",
           updatedAt: "2026-03-14T08:18:00.000Z",
-          stages: [buildPipelineStage("beta-stage", "B 阶段", "running", "2026-03-14T08:12:00.000Z", null)],
+          stages: [
+            buildPipelineStage("beta-stage", "B 阶段", "running", "2026-03-14T08:12:00.000Z", null),
+          ],
           currentStageId: "beta-stage",
         });
       }
@@ -1710,8 +1857,12 @@ describe("MultiTaskMonitor", () => {
     await flushPromises();
 
     const sections = wrapper.findAll(".monitor-structure-section");
-    const sectionTitles = sections.map((section) => section.find(".monitor-structure-section__header strong").text());
-    const expectedTitles = ["A 阶段", "B 阶段"].sort((left, right) => left.localeCompare(right, "zh-CN"));
+    const sectionTitles = sections.map((section) =>
+      section.find(".monitor-structure-section__header strong").text(),
+    );
+    const expectedTitles = ["A 阶段", "B 阶段"].sort((left, right) =>
+      left.localeCompare(right, "zh-CN"),
+    );
 
     expect(sections).toHaveLength(2);
     expect(sectionTitles).toEqual(expectedTitles);
@@ -1723,25 +1874,27 @@ describe("MultiTaskMonitor", () => {
     taskMonitorStore.addTaskNode("task-2");
     await flushPromises();
 
-    const runningNode = taskMonitorStore.nodes.find((node) => node.taskId === "task-1");
-    expect(runningNode).toBeTruthy();
+    const runningNode = assertDefined(
+      taskMonitorStore.nodes.find((node) => node.taskId === "task-1"),
+      "Expected running node",
+    );
 
-    taskMonitorStore.setNodePosition(runningNode!.id, 720, 420);
-    const savedX = runningNode!.x;
-    const savedY = runningNode!.y;
+    taskMonitorStore.setNodePosition(runningNode.id, 720, 420);
+    const savedX = runningNode.x;
+    const savedY = runningNode.y;
 
     taskMonitorStore.setLayoutMode("status");
     await flushPromises();
     await flushPromises();
 
-    expect(runningNode!.x).not.toBe(savedX);
+    expect(runningNode.x).not.toBe(savedX);
 
     taskMonitorStore.setLayoutMode("free");
     await flushPromises();
     await flushPromises();
 
-    expect(runningNode!.x).toBe(savedX);
-    expect(runningNode!.y).toBe(savedY);
+    expect(runningNode.x).toBe(savedX);
+    expect(runningNode.y).toBe(savedY);
   });
 
   it("resets free layout by compacting from the current top-left window", async () => {
@@ -1757,25 +1910,31 @@ describe("MultiTaskMonitor", () => {
       taskMonitorStore.addTaskNode("task-2");
       await flushPromises();
 
-      const runningNode = taskMonitorStore.nodes.find((node) => node.taskId === "task-1");
-      const failedNode = taskMonitorStore.nodes.find((node) => node.taskId === "task-2");
-      expect(runningNode).toBeTruthy();
-      expect(failedNode).toBeTruthy();
+      const runningNode = assertDefined(
+        taskMonitorStore.nodes.find((node) => node.taskId === "task-1"),
+        "Expected running node",
+      );
+      const failedNode = assertDefined(
+        taskMonitorStore.nodes.find((node) => node.taskId === "task-2"),
+        "Expected failed node",
+      );
 
-      taskMonitorStore.setNodePosition(runningNode!.id, 760, 460);
+      taskMonitorStore.setNodePosition(runningNode.id, 760, 460);
       await flushPromises();
 
-      const resetButton = wrapper.findAll("button").find((item) => item.text().includes("重置布局"));
+      const resetButton = wrapper
+        .findAll("button")
+        .find((item) => item.text().includes("重置布局"));
       expect(resetButton).toBeTruthy();
 
       await resetButton?.trigger("click");
       await flushPromises();
       await flushPromises();
 
-      expect(failedNode!.x).toBe(28);
-      expect(failedNode!.y).toBe(28);
-      expect(runningNode!.x).toBe(406);
-      expect(runningNode!.y).toBe(28);
+      expect(failedNode?.x).toBe(28);
+      expect(failedNode?.y).toBe(28);
+      expect(runningNode?.x).toBe(406);
+      expect(runningNode?.y).toBe(28);
     } finally {
       Object.defineProperty(window, "innerWidth", {
         configurable: true,
@@ -1797,18 +1956,32 @@ describe("MultiTaskMonitor", () => {
       finishedAt: "2026-03-14T08:12:00.000Z",
     }));
 
-    apiMocks.getTaskPipeline.mockResolvedValue(buildPipeline({
-      taskId: "task-1",
-      status: "completed",
-      updatedAt: "2026-03-14T08:12:00.000Z",
-      stages: [
-        buildPipelineStage("stage-1", "检索日志", "completed", "2026-03-14T08:03:00.000Z", "2026-03-14T08:04:00.000Z"),
-        buildPipelineStage("stage-2", "修复认证链路", "completed", "2026-03-14T08:05:00.000Z", "2026-03-14T08:12:00.000Z"),
-      ],
-      currentStageId: null,
-      completedStages: 2,
-      totalStages: 2,
-    }));
+    apiMocks.getTaskPipeline.mockResolvedValue(
+      buildPipeline({
+        taskId: "task-1",
+        status: "completed",
+        updatedAt: "2026-03-14T08:12:00.000Z",
+        stages: [
+          buildPipelineStage(
+            "stage-1",
+            "检索日志",
+            "completed",
+            "2026-03-14T08:03:00.000Z",
+            "2026-03-14T08:04:00.000Z",
+          ),
+          buildPipelineStage(
+            "stage-2",
+            "修复认证链路",
+            "completed",
+            "2026-03-14T08:05:00.000Z",
+            "2026-03-14T08:12:00.000Z",
+          ),
+        ],
+        currentStageId: null,
+        completedStages: 2,
+        totalStages: 2,
+      }),
+    );
 
     const { wrapper } = await mountPage();
 

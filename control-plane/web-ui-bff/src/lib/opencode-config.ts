@@ -1,6 +1,6 @@
 import { copyFileSync, existsSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
 import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 import {
   RUNTIME_RECOVERY_ERROR_CODES,
   RUNTIME_RECOVERY_SUGGESTION_IDS,
@@ -13,7 +13,9 @@ const UI_OPENCODE_ROOT = resolve(
   process.env.OPENCODE_ROOT || join(__dirname, "../../../../opencode-fork"),
 );
 const UI_OPENCODE_JSON = join(UI_OPENCODE_ROOT, "opencode.json");
-const WORKSPACE_ROOT = resolve(process.env.OPENCODE_RUNTIME_ROOT || join(__dirname, "../../../../"));
+const WORKSPACE_ROOT = resolve(
+  process.env.OPENCODE_RUNTIME_ROOT || join(__dirname, "../../../../"),
+);
 const RUNTIME_OPENCODE_JSON = join(WORKSPACE_ROOT, "opencode.json");
 const RUNTIME_STATE_DIR = join(WORKSPACE_ROOT, ".opencode", "state");
 const UI_STATE_DIR = join(UI_OPENCODE_ROOT, ".opencode", "state");
@@ -110,10 +112,10 @@ export function readConfiguredTestExecutionModel(): string | undefined {
 
 export function readEnforcedTestExecutionModel(): string {
   return (
-    readConfiguredTestExecutionModel()
-    || normalizeTestExecutionModel(process.env.TEST_EXECUTION_MODEL)
-    || normalizeTestExecutionModel(process.env.LOW_COST_EXECUTION_MODEL)
-    || DEFAULT_TEST_EXECUTION_MODEL
+    readConfiguredTestExecutionModel() ||
+    normalizeTestExecutionModel(process.env.TEST_EXECUTION_MODEL) ||
+    normalizeTestExecutionModel(process.env.LOW_COST_EXECUTION_MODEL) ||
+    DEFAULT_TEST_EXECUTION_MODEL
   );
 }
 
@@ -173,12 +175,14 @@ function readProviderConfig(
   configPath: string,
   source: ConfigSource,
 ): ProviderConfig | null {
-  const providerRoot = ((config.provider as Record<string, unknown> | undefined) || {})[providerId] as
+  const providerRoot = (config.provider as Record<string, unknown> | undefined)?.[providerId] as
     | Record<string, unknown>
     | undefined;
   const modelsProvider = (
-    ((config.models as Record<string, unknown> | undefined)?.providers as Record<string, unknown> | undefined) || {}
-  )[providerId] as Record<string, unknown> | undefined;
+    (config.models as Record<string, unknown> | undefined)?.providers as
+      | Record<string, unknown>
+      | undefined
+  )?.[providerId] as Record<string, unknown> | undefined;
 
   if (!providerRoot && !modelsProvider) {
     return null;
@@ -187,8 +191,7 @@ function readProviderConfig(
   const providerOptions = (providerRoot?.options as Record<string, unknown> | undefined) || {};
   return {
     providerId,
-    api:
-      getTrimmedString(providerRoot?.api) || getTrimmedString(modelsProvider?.api) || undefined,
+    api: getTrimmedString(providerRoot?.api) || getTrimmedString(modelsProvider?.api) || undefined,
     name:
       getTrimmedString(providerRoot?.name) || getTrimmedString(modelsProvider?.name) || undefined,
     baseURL:
@@ -233,8 +236,39 @@ function getProviderConfigCandidates(providerId: string): ProviderConfig[] {
   return candidates;
 }
 
+function detectProviderConfigMismatch(providerCandidates: ProviderConfig[]) {
+  const activeProvider = providerCandidates[0];
+  const alternateProvider = providerCandidates[1];
+  if (
+    !activeProvider ||
+    !alternateProvider ||
+    (activeProvider.baseURL === alternateProvider.baseURL && activeProvider.api === alternateProvider.api)
+  ) {
+    return undefined;
+  }
+
+  return {
+    runtime: {
+      api: activeProvider.source === "runtime" ? activeProvider.api : alternateProvider.api,
+      baseURL:
+        activeProvider.source === "runtime" ? activeProvider.baseURL : alternateProvider.baseURL,
+      configPath:
+        activeProvider.source === "runtime"
+          ? activeProvider.configPath
+          : alternateProvider.configPath,
+    },
+    ui: {
+      api: activeProvider.source === "ui" ? activeProvider.api : alternateProvider.api,
+      baseURL: activeProvider.source === "ui" ? activeProvider.baseURL : alternateProvider.baseURL,
+      configPath:
+        activeProvider.source === "ui" ? activeProvider.configPath : alternateProvider.configPath,
+    },
+  };
+}
+
 function buildCopilotTokenFile(providerId: string, stateDir: string): string {
-  const suffix = providerId === "github-copilot" ? "" : `-${providerId.replace(/[^a-zA-Z0-9-]/g, "")}`;
+  const suffix =
+    providerId === "github-copilot" ? "" : `-${providerId.replace(/[^a-zA-Z0-9-]/g, "")}`;
   return join(stateDir, `copilot-token${suffix}.json`);
 }
 
@@ -327,149 +361,185 @@ async function probeOpenAiCompatibleProvider(provider: ProviderConfig) {
   }
 }
 
-export async function diagnoseModelReadiness(
-  resolvedModel: { providerId: string; modelId: string },
-): Promise<ModelReadinessFailure | null> {
+function buildCopilotCredentialError(args: {
+  resolvedModel: { providerId: string; modelId: string };
+  backupHasCredential: boolean;
+  configMismatch?: {
+    runtime: { api?: string; baseURL?: string; configPath: string };
+    ui: { api?: string; baseURL?: string; configPath: string };
+  };
+}): ModelReadinessFailure {
+  return {
+    status: 503,
+    code: RUNTIME_RECOVERY_ERROR_CODES.providerAuthRequired,
+    error: `模型 ${args.resolvedModel.providerId}:${args.resolvedModel.modelId} 需要 GitHub Copilot 认证，但当前运行时未检测到可用凭据。${
+      args.backupHasCredential
+        ? "检测到有效备份文件 auth.json.bak，可执行 cp ~/.local/share/opencode/auth.json.bak ~/.local/share/opencode/auth.json 恢复，或"
+        : ""
+    }请在系统配置 → 模型完成 GitHub Copilot 登录，或执行 opencode auth login 后重试。`,
+    diagnostics: {
+      providerId: args.resolvedModel.providerId,
+      modelId: args.resolvedModel.modelId,
+      authFile: LEGACY_AUTH_JSON,
+      backupAvailable: args.backupHasCredential,
+      runtimeStateDir: RUNTIME_STATE_DIR,
+      uiStateDir: UI_STATE_DIR,
+      configMismatch: args.configMismatch,
+    },
+    recoverySuggestions: [
+      ...(args.backupHasCredential
+        ? [
+            {
+              id: RUNTIME_RECOVERY_SUGGESTION_IDS.copilotRestoreBackup,
+              kind: RUNTIME_RECOVERY_SUGGESTION_KINDS.command,
+              title: "从备份恢复 Copilot 凭据文件。",
+              detail: "检测到 auth.json.bak 中仍有有效凭据，可能是凭据文件被意外清空。",
+              command:
+                "cp ~/.local/share/opencode/auth.json.bak ~/.local/share/opencode/auth.json",
+            } as const,
+          ]
+        : []),
+      {
+        id: RUNTIME_RECOVERY_SUGGESTION_IDS.copilotLoginSettings,
+        kind: RUNTIME_RECOVERY_SUGGESTION_KINDS.auth,
+        title: "在系统配置 → 模型中重新登录 GitHub Copilot。",
+      },
+      {
+        id: RUNTIME_RECOVERY_SUGGESTION_IDS.copilotLoginRuntime,
+        kind: RUNTIME_RECOVERY_SUGGESTION_KINDS.command,
+        title: "在运行时环境重新建立 Copilot 凭据。",
+        detail: "如果当前任务实际跑在独立 runtime 环境，页面登录后仍可能需要同步运行时凭据。",
+        command: "opencode auth login",
+      },
+    ],
+  };
+}
+
+function hasBackupCopilotCredential(providerId: string) {
+  const backup = readJsonFile(LEGACY_AUTH_BACKUP);
+  if (!backup) {
+    return false;
+  }
+
+  const providerRecord = backup[providerId] as Record<string, unknown> | undefined;
+  return providerRecord != null && typeof providerRecord === "object";
+}
+
+async function diagnoseCopilotProviderReadiness(args: {
+  resolvedModel: { providerId: string; modelId: string };
+  configMismatch?: {
+    runtime: { api?: string; baseURL?: string; configPath: string };
+    ui: { api?: string; baseURL?: string; configPath: string };
+  };
+}): Promise<ModelReadinessFailure | null> {
+  const hasCredential =
+    hasStoredCopilotToken(args.resolvedModel.providerId) ||
+    hasLegacyAuthCredential(args.resolvedModel.providerId);
+  if (!hasCredential) {
+    return buildCopilotCredentialError({
+      resolvedModel: args.resolvedModel,
+      backupHasCredential: hasBackupCopilotCredential(args.resolvedModel.providerId),
+      configMismatch: args.configMismatch,
+    });
+  }
+
+  backupLegacyAuthFile();
+  return null;
+}
+
+function isProbeRequiredProvider(provider: ProviderConfig) {
+  return Boolean(
+    provider.api &&
+      ["openai-completions", "openai-responses", "github-models", "azure-openai"].includes(
+        provider.api,
+      ),
+  );
+}
+
+async function diagnoseReachableProvider(args: {
+  activeProvider?: ProviderConfig;
+  resolvedModel: { providerId: string; modelId: string };
+  configMismatch?: {
+    runtime: { api?: string; baseURL?: string; configPath: string };
+    ui: { api?: string; baseURL?: string; configPath: string };
+  };
+}): Promise<ModelReadinessFailure | null> {
+  if (!args.activeProvider || !isProbeRequiredProvider(args.activeProvider)) {
+    return null;
+  }
+
+  const probe = await probeOpenAiCompatibleProvider(args.activeProvider);
+  const failedProbe = probe.ok ? null : { ...probe, ok: false as const };
+  if (failedProbe) {
+    return buildProviderUnreachableError({
+      resolvedModel: args.resolvedModel,
+      probe: failedProbe,
+      configMismatch: args.configMismatch,
+    });
+  }
+
+  return null;
+}
+
+function buildProviderUnreachableError(args: {
+  resolvedModel: { providerId: string; modelId: string };
+  probe: Awaited<ReturnType<typeof probeOpenAiCompatibleProvider>> & { ok: false };
+  configMismatch?: {
+    runtime: { api?: string; baseURL?: string; configPath: string };
+    ui: { api?: string; baseURL?: string; configPath: string };
+  };
+}): ModelReadinessFailure {
+  return {
+    status: 503,
+    code: RUNTIME_RECOVERY_ERROR_CODES.providerUnreachable,
+    error: `模型 ${args.resolvedModel.providerId}:${args.resolvedModel.modelId} 当前不可达：${args.probe.message}。请检查模型服务地址、网络连通性，或切换到其他可用模型后重试。`,
+    diagnostics: {
+      modelId: args.resolvedModel.modelId,
+      configMismatch: args.configMismatch,
+      ...args.probe.diagnostics,
+    },
+    recoverySuggestions: [
+      {
+        id: RUNTIME_RECOVERY_SUGGESTION_IDS.verifyProviderService,
+        kind: RUNTIME_RECOVERY_SUGGESTION_KINDS.check,
+        title: "检查模型服务是否已启动。",
+        detail: "确认当前 baseURL 可从 BFF 或运行时所在机器访问。",
+      },
+      {
+        id: RUNTIME_RECOVERY_SUGGESTION_IDS.verifyProviderConfig,
+        kind: RUNTIME_RECOVERY_SUGGESTION_KINDS.config,
+        title: "确认运行时实际使用的模型配置与页面配置一致。",
+        detail: "尤其要检查 opencode.json 的 provider 地址、API 类型和运行时加载路径。",
+      },
+    ],
+  };
+}
+
+function backupLegacyAuthFile() {
+  try {
+    if (existsSync(LEGACY_AUTH_JSON)) {
+      copyFileSync(LEGACY_AUTH_JSON, LEGACY_AUTH_BACKUP);
+    }
+  } catch {
+    // best-effort, ignore errors
+  }
+}
+
+export async function diagnoseModelReadiness(resolvedModel: {
+  providerId: string;
+  modelId: string;
+}): Promise<ModelReadinessFailure | null> {
   const providerCandidates = getProviderConfigCandidates(resolvedModel.providerId);
   const activeProvider = providerCandidates[0];
-  const alternateProvider = providerCandidates[1];
-  const configMismatch =
-    activeProvider &&
-    alternateProvider &&
-    (activeProvider.baseURL !== alternateProvider.baseURL || activeProvider.api !== alternateProvider.api)
-      ? {
-          runtime: {
-            api: activeProvider.source === "runtime" ? activeProvider.api : alternateProvider.api,
-            baseURL:
-              activeProvider.source === "runtime"
-                ? activeProvider.baseURL
-                : alternateProvider.baseURL,
-            configPath:
-              activeProvider.source === "runtime"
-                ? activeProvider.configPath
-                : alternateProvider.configPath,
-          },
-          ui: {
-            api: activeProvider.source === "ui" ? activeProvider.api : alternateProvider.api,
-            baseURL:
-              activeProvider.source === "ui" ? activeProvider.baseURL : alternateProvider.baseURL,
-            configPath:
-              activeProvider.source === "ui"
-                ? activeProvider.configPath
-                : alternateProvider.configPath,
-          },
-        }
-      : undefined;
+  const configMismatch = detectProviderConfigMismatch(providerCandidates);
 
   if (resolvedModel.providerId.startsWith("github-copilot")) {
-    const hasCredential =
-      hasStoredCopilotToken(resolvedModel.providerId) || hasLegacyAuthCredential(resolvedModel.providerId);
-    if (!hasCredential) {
-      const backupHasCredential = (() => {
-        const bak = readJsonFile(LEGACY_AUTH_BACKUP);
-        if (!bak) return false;
-        const rec = bak[resolvedModel.providerId] as Record<string, unknown> | undefined;
-        return rec != null && typeof rec === "object";
-      })();
-
-      return {
-        status: 503,
-        code: RUNTIME_RECOVERY_ERROR_CODES.providerAuthRequired,
-        error:
-          `模型 ${resolvedModel.providerId}:${resolvedModel.modelId} 需要 GitHub Copilot 认证，但当前运行时未检测到可用凭据。` +
-          (backupHasCredential
-            ? `检测到有效备份文件 auth.json.bak，可执行 cp ~/.local/share/opencode/auth.json.bak ~/.local/share/opencode/auth.json 恢复，或`
-            : ``) +
-          `请在系统配置 → 模型完成 GitHub Copilot 登录，或执行 opencode auth login 后重试。`,
-        diagnostics: {
-          providerId: resolvedModel.providerId,
-          modelId: resolvedModel.modelId,
-          authFile: LEGACY_AUTH_JSON,
-          backupAvailable: backupHasCredential,
-          runtimeStateDir: RUNTIME_STATE_DIR,
-          uiStateDir: UI_STATE_DIR,
-          configMismatch,
-        },
-        recoverySuggestions: [
-          ...(backupHasCredential
-            ? [
-                {
-                  id: RUNTIME_RECOVERY_SUGGESTION_IDS.copilotRestoreBackup,
-                  kind: RUNTIME_RECOVERY_SUGGESTION_KINDS.command,
-                  title: "从备份恢复 Copilot 凭据文件。",
-                  detail:
-                    "检测到 auth.json.bak 中仍有有效凭据，可能是凭据文件被意外清空。",
-                  command:
-                    "cp ~/.local/share/opencode/auth.json.bak ~/.local/share/opencode/auth.json",
-                } as const,
-              ]
-            : []),
-          {
-            id: RUNTIME_RECOVERY_SUGGESTION_IDS.copilotLoginSettings,
-            kind: RUNTIME_RECOVERY_SUGGESTION_KINDS.auth,
-            title: "在系统配置 → 模型中重新登录 GitHub Copilot。",
-          },
-          {
-            id: RUNTIME_RECOVERY_SUGGESTION_IDS.copilotLoginRuntime,
-            kind: RUNTIME_RECOVERY_SUGGESTION_KINDS.command,
-            title: "在运行时环境重新建立 Copilot 凭据。",
-            detail: "如果当前任务实际跑在独立 runtime 环境，页面登录后仍可能需要同步运行时凭据。",
-            command: "opencode auth login",
-          },
-        ],
-      };
-    }
-
-    // Credentials valid — silently back up auth.json for recovery
-    try {
-      if (existsSync(LEGACY_AUTH_JSON)) {
-        copyFileSync(LEGACY_AUTH_JSON, LEGACY_AUTH_BACKUP);
-      }
-    } catch {
-      // best-effort, ignore errors
-    }
-
-    return null;
+    return diagnoseCopilotProviderReadiness({ resolvedModel, configMismatch });
   }
 
   if (!activeProvider) {
     return null;
   }
 
-  if (
-    activeProvider.api &&
-    ["openai-completions", "openai-responses", "github-models", "azure-openai"].includes(activeProvider.api)
-  ) {
-    const probe = await probeOpenAiCompatibleProvider(activeProvider);
-    if (!probe.ok) {
-      return {
-        status: 503,
-        code: RUNTIME_RECOVERY_ERROR_CODES.providerUnreachable,
-        error:
-          `模型 ${resolvedModel.providerId}:${resolvedModel.modelId} 当前不可达：${probe.message}。` +
-          `请检查模型服务地址、网络连通性，或切换到其他可用模型后重试。`,
-        diagnostics: {
-          modelId: resolvedModel.modelId,
-          configMismatch,
-          ...probe.diagnostics,
-        },
-        recoverySuggestions: [
-          {
-            id: RUNTIME_RECOVERY_SUGGESTION_IDS.verifyProviderService,
-            kind: RUNTIME_RECOVERY_SUGGESTION_KINDS.check,
-            title: "检查模型服务是否已启动。",
-            detail: "确认当前 baseURL 可从 BFF 或运行时所在机器访问。",
-          },
-          {
-            id: RUNTIME_RECOVERY_SUGGESTION_IDS.verifyProviderConfig,
-            kind: RUNTIME_RECOVERY_SUGGESTION_KINDS.config,
-            title: "确认运行时实际使用的模型配置与页面配置一致。",
-            detail: "尤其要检查 opencode.json 的 provider 地址、API 类型和运行时加载路径。",
-          },
-        ],
-      };
-    }
-  }
-
-  return null;
+  return diagnoseReachableProvider({ activeProvider, resolvedModel, configMismatch });
 }

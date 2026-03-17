@@ -1,4 +1,4 @@
-import { cpFetch, type UpstreamResponse } from "./control-plane-client";
+import { type UpstreamResponse, cpFetch } from "./control-plane-client";
 
 export type GuardDecision = "allow" | "allow-with-downgrade" | "require-approval" | "deny";
 export type ModelCostTier = "free" | "low" | "medium" | "high" | "premium";
@@ -164,7 +164,10 @@ const DEFAULT_LOW_COST_EXECUTION_MODEL =
 
 const POLICY_BY_COST_TIER: Record<
   ModelCostTier,
-  Omit<ModelExecutionPolicy, "providerId" | "modelId" | "modelRoute" | "environment" | "suggestedModel">
+  Omit<
+    ModelExecutionPolicy,
+    "providerId" | "modelId" | "modelRoute" | "environment" | "suggestedModel"
+  >
 > = {
   free: {
     costTier: "free",
@@ -268,10 +271,10 @@ interface ShapeMetrics {
 
 function resolveExecutionEnvironment(): "dev" | "test" | "staging" | "prod" {
   const raw = (
-    process.env.OPENERX_EXECUTION_ENV
-    || process.env.BFF_EXECUTION_ENV
-    || process.env.NODE_ENV
-    || "dev"
+    process.env.OPENERX_EXECUTION_ENV ||
+    process.env.BFF_EXECUTION_ENV ||
+    process.env.NODE_ENV ||
+    "dev"
   )
     .trim()
     .toLowerCase();
@@ -309,35 +312,35 @@ function detectModelCostTier(modelRoute: string, providerId: string): ModelCostT
   const normalizedProvider = providerId.toLowerCase();
 
   if (
-    normalizedProvider.includes("local")
-    || normalizedProvider === "opencode"
-    || normalizedProvider === "ollama"
-    || normalizedRoute.includes("big-pickle")
-    || normalizedRoute.includes("gpt-5-mini")
+    normalizedProvider.includes("local") ||
+    normalizedProvider === "opencode" ||
+    normalizedProvider === "ollama" ||
+    normalizedRoute.includes("big-pickle") ||
+    normalizedRoute.includes("gpt-5-mini")
   ) {
     return "free";
   }
 
   if (
-    normalizedRoute.includes("claude-opus")
-    || normalizedRoute.includes("gpt-5")
-    || normalizedRoute.includes("gemini-2.5-pro")
-    || normalizedRoute.includes(" o1")
-    || normalizedRoute.endsWith(":o1")
-    || normalizedRoute.includes(":o1-")
-    || normalizedRoute.includes(":o3")
-    || normalizedRoute.includes("/o3")
-    || normalizedRoute.includes("grok-4")
+    normalizedRoute.includes("claude-opus") ||
+    normalizedRoute.includes("gpt-5") ||
+    normalizedRoute.includes("gemini-2.5-pro") ||
+    normalizedRoute.includes(" o1") ||
+    normalizedRoute.endsWith(":o1") ||
+    normalizedRoute.includes(":o1-") ||
+    normalizedRoute.includes(":o3") ||
+    normalizedRoute.includes("/o3") ||
+    normalizedRoute.includes("grok-4")
   ) {
     return "premium";
   }
 
   if (
-    normalizedRoute.includes("claude-sonnet")
-    || normalizedRoute.includes("gpt-4.1")
-    || normalizedRoute.includes("gpt-4o")
-    || normalizedRoute.includes("o3-mini")
-    || normalizedRoute.includes("gemini")
+    normalizedRoute.includes("claude-sonnet") ||
+    normalizedRoute.includes("gpt-4.1") ||
+    normalizedRoute.includes("gpt-4o") ||
+    normalizedRoute.includes("o3-mini") ||
+    normalizedRoute.includes("gemini")
   ) {
     return "low";
   }
@@ -377,16 +380,19 @@ function parseModelRoute(modelRoute: string | undefined): ResolvedModelLike | un
   };
 }
 
-function buildModelExecutionPolicy(resolvedModel: ResolvedModelLike | undefined): ModelExecutionPolicy {
+function buildModelExecutionPolicy(
+  resolvedModel: ResolvedModelLike | undefined,
+): ModelExecutionPolicy {
   const providerId = resolvedModel?.providerId ?? "runtime-default";
   const modelId = resolvedModel?.modelId ?? "implicit-default";
   const modelRoute = `${providerId}:${modelId}`;
   const environment = resolveExecutionEnvironment();
   const costTier = resolvedModel ? detectModelCostTier(modelRoute, providerId) : "free";
   const policyDefaults = POLICY_BY_COST_TIER[costTier];
-  const suggestedModel = policyDefaults.isPaid && DEFAULT_LOW_COST_EXECUTION_MODEL !== modelRoute
-    ? DEFAULT_LOW_COST_EXECUTION_MODEL
-    : undefined;
+  const suggestedModel =
+    policyDefaults.isPaid && DEFAULT_LOW_COST_EXECUTION_MODEL !== modelRoute
+      ? DEFAULT_LOW_COST_EXECUTION_MODEL
+      : undefined;
 
   return {
     providerId,
@@ -405,6 +411,37 @@ function buildExecutionEstimateRange(min: number, max: number): ExecutionEstimat
   };
 }
 
+function hasHistoricalBaseline(baseline?: RuntimeUsageBaselineLike | null) {
+  return Boolean(
+    baseline &&
+      baseline.sampleSize > 0 &&
+      (baseline.requestCount.p50 != null ||
+        baseline.totalTokens.p50 != null ||
+        baseline.costUsd.p50 != null),
+  );
+}
+
+function resolveBaselineSource(baseline?: RuntimeUsageBaselineLike | null) {
+  return hasHistoricalBaseline(baseline)
+    ? {
+        source: "historical" as const,
+        matchScope: baseline?.matchScope,
+        sampleSize: baseline?.sampleSize,
+        lastLedgerAt: baseline?.lastLedgerAt ?? null,
+      }
+    : {
+        source: "heuristic" as const,
+      };
+}
+
+function buildEstimatedMetric(heuristicValue: number, baselineValue?: number | null) {
+  return Math.max(heuristicValue, Math.ceil(baselineValue ?? 0));
+}
+
+function buildEstimatedCost(totalTokens: number, costRate: number, baselineCost?: number | null) {
+  return Math.max(roundEstimate((totalTokens / 1000) * costRate), roundEstimate(baselineCost ?? 0));
+}
+
 function buildShapeMetrics(
   policy: ModelExecutionPolicy,
   shape: PaidExecutionShape,
@@ -419,44 +456,33 @@ function buildShapeMetrics(
   );
   const heuristicRequestsLower = Math.max(1, candidateCount + (shape.judgeEnabled ? 1 : 0));
   const tokenBaseline = TOKEN_BASELINES[policy.costTier];
-  const heuristicInputUpper = Math.ceil(heuristicRequestsUpper * tokenBaseline.input * REQUEST_SAFETY_FACTOR);
+  const heuristicInputUpper = Math.ceil(
+    heuristicRequestsUpper * tokenBaseline.input * REQUEST_SAFETY_FACTOR,
+  );
   const heuristicInputLower = Math.ceil(heuristicRequestsLower * tokenBaseline.input * 0.75);
-  const heuristicOutputUpper = Math.ceil(heuristicRequestsUpper * tokenBaseline.output * REQUEST_SAFETY_FACTOR);
+  const heuristicOutputUpper = Math.ceil(
+    heuristicRequestsUpper * tokenBaseline.output * REQUEST_SAFETY_FACTOR,
+  );
   const heuristicOutputLower = Math.ceil(heuristicRequestsLower * tokenBaseline.output * 0.6);
   const heuristicTotalUpper = heuristicInputUpper + heuristicOutputUpper;
   const heuristicTotalLower = heuristicInputLower + heuristicOutputLower;
   const costRate = USD_PER_1K_TOKENS[policy.costTier];
-
-  const hasHistoricalBaseline = Boolean(
-    baseline
-      && baseline.sampleSize > 0
-      && (baseline.requestCount.p50 != null
-        || baseline.totalTokens.p50 != null
-        || baseline.costUsd.p50 != null),
-  );
-
-  const estimatedRequestsLower = Math.max(
+  const estimatedRequestsLower = buildEstimatedMetric(
     heuristicRequestsLower,
-    Math.ceil(baseline?.requestCount.p50 ?? 0),
+    baseline?.requestCount.p50,
   );
-  const estimatedRequestsUpper = Math.max(
+  const estimatedRequestsUpper = buildEstimatedMetric(
     heuristicRequestsUpper,
-    Math.ceil(baseline?.requestCount.p90 ?? 0),
+    baseline?.requestCount.p90,
   );
-  const inputLower = Math.max(heuristicInputLower, Math.ceil(baseline?.inputTokens.p50 ?? 0));
-  const inputUpper = Math.max(heuristicInputUpper, Math.ceil(baseline?.inputTokens.p90 ?? 0));
-  const outputLower = Math.max(heuristicOutputLower, Math.ceil(baseline?.outputTokens.p50 ?? 0));
-  const outputUpper = Math.max(heuristicOutputUpper, Math.ceil(baseline?.outputTokens.p90 ?? 0));
-  const totalLower = Math.max(heuristicTotalLower, Math.ceil(baseline?.totalTokens.p50 ?? 0));
-  const totalUpper = Math.max(heuristicTotalUpper, Math.ceil(baseline?.totalTokens.p90 ?? 0));
-  const estimatedCostLower = Math.max(
-    roundEstimate((totalLower / 1000) * costRate),
-    roundEstimate(baseline?.costUsd.p50 ?? 0),
-  );
-  const estimatedCostUpper = Math.max(
-    roundEstimate((totalUpper / 1000) * costRate),
-    roundEstimate(baseline?.costUsd.p90 ?? 0),
-  );
+  const inputLower = buildEstimatedMetric(heuristicInputLower, baseline?.inputTokens.p50);
+  const inputUpper = buildEstimatedMetric(heuristicInputUpper, baseline?.inputTokens.p90);
+  const outputLower = buildEstimatedMetric(heuristicOutputLower, baseline?.outputTokens.p50);
+  const outputUpper = buildEstimatedMetric(heuristicOutputUpper, baseline?.outputTokens.p90);
+  const totalLower = buildEstimatedMetric(heuristicTotalLower, baseline?.totalTokens.p50);
+  const totalUpper = buildEstimatedMetric(heuristicTotalUpper, baseline?.totalTokens.p90);
+  const estimatedCostLower = buildEstimatedCost(totalLower, costRate, baseline?.costUsd.p50);
+  const estimatedCostUpper = buildEstimatedCost(totalUpper, costRate, baseline?.costUsd.p90);
 
   return {
     enabledHookCount,
@@ -470,16 +496,7 @@ function buildShapeMetrics(
     outputUpper,
     totalLower,
     totalUpper,
-    baselineSource: hasHistoricalBaseline
-      ? {
-          source: "historical",
-          matchScope: baseline?.matchScope,
-          sampleSize: baseline?.sampleSize,
-          lastLedgerAt: baseline?.lastLedgerAt ?? null,
-        }
-      : {
-          source: "heuristic",
-        },
+    baselineSource: resolveBaselineSource(baseline),
   };
 }
 
@@ -491,9 +508,103 @@ function buildRequirements(
   return {
     allowPaidExecution: policy.requiresExplicitGate,
     leaseRequired: policy.requiresLease,
-    hasAllowPaidExecution: process.env.ALLOW_PAID_MODEL_EXECUTION === "1" || input.allowPaidExecution === true,
+    hasAllowPaidExecution:
+      process.env.ALLOW_PAID_MODEL_EXECUTION === "1" || input.allowPaidExecution === true,
     hasLease: Boolean(leaseState.activeLease?.id),
     leaseId: leaseState.activeLease?.id ?? null,
+  };
+}
+
+function resolveModelRiskImpact(policy: ModelExecutionPolicy): PaidExecutionRiskDriver["impact"] {
+  if (!policy.isPaid) {
+    return "low";
+  }
+
+  return policy.costTier === "premium" || policy.costTier === "high" ? "high" : "medium";
+}
+
+function buildBaseRiskDrivers(
+  policy: ModelExecutionPolicy,
+  shape: PaidExecutionShape,
+): PaidExecutionRiskDriver[] {
+  return [
+    {
+      type: "model",
+      label: `${policy.providerId}:${policy.modelId}`,
+      impact: resolveModelRiskImpact(policy),
+      detail: `costTier=${policy.costTier}, environment=${policy.environment}`,
+    },
+    {
+      type: "suite",
+      label: shape.suiteLabel,
+      impact: "low",
+      detail: shape.suiteReference,
+    },
+  ];
+}
+
+function buildParallelRiskDriver(
+  policy: ModelExecutionPolicy,
+  shape: PaidExecutionShape,
+): PaidExecutionRiskDriver | null {
+  if (shape.candidateCount <= 1) {
+    return null;
+  }
+
+  return {
+    type: "parallel",
+    label: `parallel candidates x${shape.candidateCount}`,
+    impact: shape.candidateCount > policy.maxParallelCandidates ? "high" : "medium",
+    detail: `policy maxParallelCandidates=${policy.maxParallelCandidates}`,
+  };
+}
+
+function buildJudgeRiskDriver(policy: ModelExecutionPolicy, shape: PaidExecutionShape) {
+  if (!shape.judgeEnabled) {
+    return null;
+  }
+
+  return {
+    type: "judge" as const,
+    label: "judge enabled",
+    impact: policy.allowJudge ? "medium" : "high",
+    detail: `policy allowJudge=${String(policy.allowJudge)}`,
+  };
+}
+
+function buildHookRiskDriver(
+  policy: ModelExecutionPolicy,
+  shape: PaidExecutionShape,
+  metrics: ShapeMetrics,
+) {
+  if (metrics.enabledHookCount <= 0) {
+    return null;
+  }
+
+  return {
+    type: "hook" as const,
+    label: `${metrics.enabledHookCount} lifecycle hook(s) enabled`,
+    impact: policy.allowHooks ? "medium" : "high",
+    detail: shape.enabledHookTriggers.join(", "),
+  };
+}
+
+function buildBudgetRiskDriver(
+  policy: ModelExecutionPolicy,
+  metrics: ShapeMetrics,
+  guardDecision: GuardDecision,
+  guardReason: string,
+): PaidExecutionRiskDriver {
+  return {
+    type: "budget",
+    label: `estimated $${metrics.estimatedCostUpper} / limit $${policy.maxEstimatedCostUsdPerRun}`,
+    impact:
+      guardDecision === "allow"
+        ? "low"
+        : guardDecision === "allow-with-downgrade"
+          ? "medium"
+          : "high",
+    detail: `${guardDecision}: ${guardReason}`,
   };
 }
 
@@ -504,72 +615,32 @@ function buildRiskDrivers(
   guardDecision: GuardDecision,
   guardReason: string,
 ): PaidExecutionRiskDriver[] {
-  const drivers: PaidExecutionRiskDriver[] = [
-    {
-      type: "model",
-      label: `${policy.providerId}:${policy.modelId}`,
-      impact: policy.isPaid ? (policy.costTier === "premium" || policy.costTier === "high" ? "high" : "medium") : "low",
-      detail: `costTier=${policy.costTier}, environment=${policy.environment}`,
-    },
-    {
-      type: "suite",
-      label: shape.suiteLabel,
-      impact: "low",
-      detail: shape.suiteReference,
-    },
-  ];
-
-  if (shape.candidateCount > 1) {
-    drivers.push({
-      type: "parallel",
-      label: `parallel candidates x${shape.candidateCount}`,
-      impact: shape.candidateCount > policy.maxParallelCandidates ? "high" : "medium",
-      detail: `policy maxParallelCandidates=${policy.maxParallelCandidates}`,
-    });
-  }
-
-  if (shape.judgeEnabled) {
-    drivers.push({
-      type: "judge",
-      label: "judge enabled",
-      impact: policy.allowJudge ? "medium" : "high",
-      detail: `policy allowJudge=${String(policy.allowJudge)}`,
-    });
-  }
-
-  if (metrics.enabledHookCount > 0) {
-    drivers.push({
-      type: "hook",
-      label: `${metrics.enabledHookCount} lifecycle hook(s) enabled`,
-      impact: policy.allowHooks ? "medium" : "high",
-      detail: shape.enabledHookTriggers.join(", "),
-    });
-  }
-
-  drivers.push({
-    type: "budget",
-    label: `estimated $${metrics.estimatedCostUpper} / limit $${policy.maxEstimatedCostUsdPerRun}`,
-    impact:
-      guardDecision === "allow"
-        ? "low"
-        : guardDecision === "allow-with-downgrade"
-          ? "medium"
-          : "high",
-    detail: `${guardDecision}: ${guardReason}`,
-  });
-
-  return drivers;
+  return [
+    ...buildBaseRiskDrivers(policy, shape),
+    buildParallelRiskDriver(policy, shape),
+    buildJudgeRiskDriver(policy, shape),
+    buildHookRiskDriver(policy, shape, metrics),
+    buildBudgetRiskDriver(policy, metrics, guardDecision, guardReason),
+  ].filter((driver): driver is PaidExecutionRiskDriver => Boolean(driver));
 }
 
-function exceedsShapePolicy(policy: ModelExecutionPolicy, shape: PaidExecutionShape, metrics: ShapeMetrics) {
-  return shape.candidateCount > policy.maxParallelCandidates
-    || (shape.judgeEnabled && !policy.allowJudge)
-    || (metrics.enabledHookCount > 0 && !policy.allowHooks);
+function exceedsShapePolicy(
+  policy: ModelExecutionPolicy,
+  shape: PaidExecutionShape,
+  metrics: ShapeMetrics,
+) {
+  return (
+    shape.candidateCount > policy.maxParallelCandidates ||
+    (shape.judgeEnabled && !policy.allowJudge) ||
+    (metrics.enabledHookCount > 0 && !policy.allowHooks)
+  );
 }
 
 function exceedsBudgetPolicy(policy: ModelExecutionPolicy, metrics: ShapeMetrics) {
-  return metrics.estimatedRequestsUpper > policy.maxRequestsPerRun
-    || metrics.estimatedCostUpper > policy.maxEstimatedCostUsdPerRun;
+  return (
+    metrics.estimatedRequestsUpper > policy.maxRequestsPerRun ||
+    metrics.estimatedCostUpper > policy.maxEstimatedCostUsdPerRun
+  );
 }
 
 function resolveShapeViolationReasons(
@@ -635,7 +706,9 @@ export function estimatePaidExecutionUsage(
 ) {
   const policy = buildModelExecutionPolicy(resolvedModel);
   const tokenBreakdown = splitTokenUsage(totalTokens);
-  const costUsd = roundEstimate((tokenBreakdown.totalTokens / 1000) * USD_PER_1K_TOKENS[policy.costTier]);
+  const costUsd = roundEstimate(
+    (tokenBreakdown.totalTokens / 1000) * USD_PER_1K_TOKENS[policy.costTier],
+  );
 
   return {
     ...tokenBreakdown,
@@ -682,11 +755,13 @@ export function evaluatePaidExecutionPreflight(
 
   if (policy.requiresExplicitGate && !requirements.hasAllowPaidExecution) {
     guardDecision = "deny";
-    guardReason = "Missing ALLOW_PAID_MODEL_EXECUTION=1; BFF blocks paid execution before creating the runtime session.";
+    guardReason =
+      "Missing ALLOW_PAID_MODEL_EXECUTION=1; BFF blocks paid execution before creating the runtime session.";
     code = "PAID_EXECUTION_GATE_REQUIRED";
   } else if (policy.requiresLease && !requirements.hasLease) {
     guardDecision = "require-approval";
-    guardReason = "The selected model requires an active paid execution lease issued by the control-plane service before execution can proceed.";
+    guardReason =
+      "The selected model requires an active paid execution lease issued by the control-plane service before execution can proceed.";
     code = "PAID_EXECUTION_LEASE_REQUIRED";
   } else if (exceedsShapePolicy(policy, input.shape, metrics)) {
     const reasons = resolveShapeViolationReasons(policy, input.shape, metrics);
@@ -724,9 +799,12 @@ export function evaluatePaidExecutionPreflight(
       costUsd: buildExecutionEstimateRange(metrics.estimatedCostLower, metrics.estimatedCostUpper),
       riskDrivers: buildRiskDrivers(policy, input.shape, metrics, guardDecision, guardReason),
       budgetHeadroom: {
-        remainingUsd: policy.maxEstimatedCostUsdPerRun > 0
-          ? roundEstimate(Math.max(0, policy.maxEstimatedCostUsdPerRun - metrics.estimatedCostUpper))
-          : null,
+        remainingUsd:
+          policy.maxEstimatedCostUsdPerRun > 0
+            ? roundEstimate(
+                Math.max(0, policy.maxEstimatedCostUsdPerRun - metrics.estimatedCostUpper),
+              )
+            : null,
         enoughForSingleRun: metrics.estimatedCostUpper <= policy.maxEstimatedCostUsdPerRun,
         enoughForSuiteRun: metrics.estimatedCostUpper * 4 <= policy.maxEstimatedCostUsdPerRun,
       },

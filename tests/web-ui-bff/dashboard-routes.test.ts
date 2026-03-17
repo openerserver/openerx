@@ -73,11 +73,14 @@ describe("dashboard routes", () => {
       "../../control-plane/web-ui-bff/src/modules/dashboard/routes?dashboard-governance-overview-route-test"
     );
 
-    const response = await dashboardRoutes.request("http://localhost/governance-overview?range=7d", {
-      headers: {
-        Authorization: "Bearer inbound-token",
+    const response = await dashboardRoutes.request(
+      "http://localhost/governance-overview?range=7d",
+      {
+        headers: {
+          Authorization: "Bearer inbound-token",
+        },
       },
-    });
+    );
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
@@ -122,11 +125,14 @@ describe("dashboard routes", () => {
       "../../control-plane/web-ui-bff/src/modules/dashboard/routes?dashboard-governance-overview-error-test"
     );
 
-    const response = await dashboardRoutes.request("http://localhost/governance-overview?range=30d", {
-      headers: {
-        Authorization: "Bearer inbound-token",
+    const response = await dashboardRoutes.request(
+      "http://localhost/governance-overview?range=30d",
+      {
+        headers: {
+          Authorization: "Bearer inbound-token",
+        },
       },
-    });
+    );
 
     expect(response.status).toBe(403);
     await expect(response.json()).resolves.toEqual({

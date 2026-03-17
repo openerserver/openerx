@@ -225,7 +225,9 @@ const approvalTemplates = computed(() =>
     (item) => item.type === "command_level" && item.rules.source === "project-settings",
   ),
 );
-const environmentPolicyCount = computed(() => Object.keys(form.environmentApprovalPolicies || {}).length);
+const environmentPolicyCount = computed(
+  () => Object.keys(form.environmentApprovalPolicies || {}).length,
+);
 
 onMounted(async () => {
   loading.value = true;
@@ -373,7 +375,11 @@ async function upsertEnvironmentPolicies() {
       continue;
     }
 
-    const existing = resolveEnvironmentLinkedPolicy(environment.id, policies.value, form.environmentApprovalPolicies);
+    const existing = resolveEnvironmentLinkedPolicy(
+      environment.id,
+      policies.value,
+      form.environmentApprovalPolicies,
+    );
     const payload = {
       name: `${environment.name} Approval Policy`,
       rules: {
@@ -425,8 +431,14 @@ function syncEnvironmentApprovalPolicies(
   const nextBindings = cloneEnvironmentApprovalPolicies(existingBindings);
 
   for (const environment of environmentItems) {
-    const linkedTemplate = resolveEnvironmentLinkedPolicy(environment.id, policyItems, nextBindings);
-    const approvalPolicy = linkedTemplate ? policyToApprovalPolicy(linkedTemplate.rules) : undefined;
+    const linkedTemplate = resolveEnvironmentLinkedPolicy(
+      environment.id,
+      policyItems,
+      nextBindings,
+    );
+    const approvalPolicy = linkedTemplate
+      ? policyToApprovalPolicy(linkedTemplate.rules)
+      : undefined;
 
     if (approvalPolicy) {
       nextBindings[environment.id] = {
@@ -444,7 +456,10 @@ function syncEnvironmentApprovalPolicies(
   return nextBindings;
 }
 
-function updateEnvironmentApprovalPolicy(environmentId: string, approvalPolicy: ApprovalPolicyMode | undefined) {
+function updateEnvironmentApprovalPolicy(
+  environmentId: string,
+  approvalPolicy: ApprovalPolicyMode | undefined,
+) {
   const nextBindings = cloneEnvironmentApprovalPolicies(form.environmentApprovalPolicies);
 
   if (!approvalPolicy) {
@@ -461,7 +476,11 @@ function updateEnvironmentApprovalPolicy(environmentId: string, approvalPolicy: 
 }
 
 function environmentPolicyTemplateLabel(environmentId: string) {
-  const linkedTemplate = resolveEnvironmentLinkedPolicy(environmentId, policies.value, form.environmentApprovalPolicies);
+  const linkedTemplate = resolveEnvironmentLinkedPolicy(
+    environmentId,
+    policies.value,
+    form.environmentApprovalPolicies,
+  );
   if (linkedTemplate) {
     return `当前模板: ${linkedTemplate.name} (${linkedTemplate.id})`;
   }
@@ -474,9 +493,10 @@ function policyScopeLabel(template: PolicyTemplate) {
   }
 
   if (template.appliesTo === "environment") {
-    const environmentName = typeof template.rules.environmentName === "string"
-      ? template.rules.environmentName
-      : "指定环境";
+    const environmentName =
+      typeof template.rules.environmentName === "string"
+        ? template.rules.environmentName
+        : "指定环境";
     return `环境覆盖模板 · ${environmentName}`;
   }
 

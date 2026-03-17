@@ -566,6 +566,7 @@ import {
   type RoleAgentBindingRecord,
   type RoleAgentProjectOverrideRecord,
   type RoleAgentRecord,
+  type UpsertRoleAgentProjectOverrideInput,
   createRoleAgentBinding,
   getProjectRoleExecutionView,
   listRoleAgentBindings,
@@ -597,7 +598,10 @@ const systemRoleBindings = ref<RoleAgentBindingRecord[]>([]);
 const projectRoleBindings = ref<RoleAgentBindingRecord[]>([]);
 
 type NullableBoolean = boolean | undefined;
-type RoleRow = RoleAgentRecord & { override?: RoleAgentProjectOverrideRecord | null; allowedStages?: string[] };
+type RoleRow = RoleAgentRecord & {
+  override?: RoleAgentProjectOverrideRecord | null;
+  allowedStages?: string[];
+};
 
 interface RoleOverrideFormState {
   name?: string;
@@ -647,19 +651,20 @@ const roleRows = computed<RoleRow[]>(() =>
     .sort((left, right) => left.name.localeCompare(right.name, "zh-CN")),
 );
 
-const projectOverrideCount = computed(() =>
-  Object.values(roleOverrides.value).filter(Boolean).length,
+const projectOverrideCount = computed(
+  () => Object.values(roleOverrides.value).filter(Boolean).length,
 );
 
-const takeoverRoleCount = computed(() =>
-  roleRows.value.filter((item) => item.override?.bindingsMode === "replace").length,
+const takeoverRoleCount = computed(
+  () => roleRows.value.filter((item) => item.override?.bindingsMode === "replace").length,
 );
 
-const riskyRoleCount = computed(() =>
-  roleRows.value.filter((item) => {
-    const risk = item.override?.riskLevel || item.riskLevel;
-    return risk === "high" || risk === "critical";
-  }).length,
+const riskyRoleCount = computed(
+  () =>
+    roleRows.value.filter((item) => {
+      const risk = item.override?.riskLevel || item.riskLevel;
+      return risk === "high" || risk === "critical";
+    }).length,
 );
 
 const stageOptions = computed(() => {
@@ -771,9 +776,7 @@ function bindingPriorityValue(value: unknown) {
 }
 
 function arrayValue(value: unknown) {
-  return Array.isArray(value)
-    ? value.map((item) => String(item).trim()).filter(Boolean)
-    : [];
+  return Array.isArray(value) ? value.map((item) => String(item).trim()).filter(Boolean) : [];
 }
 
 function booleanFieldValue(value: NullableBoolean | boolean) {
@@ -804,7 +807,9 @@ function executionModeLabel(value?: string | null) {
 }
 
 function effectiveStages(role: RoleRow) {
-  return role.override?.allowedStages?.length ? role.override.allowedStages : role.allowedStages || [];
+  return role.override?.allowedStages?.length
+    ? role.override.allowedStages
+    : role.allowedStages || [];
 }
 
 function modeLabel(role: RoleRow) {
@@ -824,12 +829,12 @@ function interventionSummary(role: RoleRow) {
   const requiresApproval = role.override?.requiresApprovalForWrite ?? role.requiresApprovalForWrite;
   const stageText = effectiveStages(role).slice(0, 2).join(" / ");
   if (requiresApproval && (risk === "high" || risk === "critical")) {
-    return `${stageText || '对应阶段'} 可阻断并请求审批`;
+    return `${stageText || "对应阶段"} 可阻断并请求审批`;
   }
   if (risk === "high" || risk === "critical") {
-    return `${stageText || '对应阶段'} 可发起修正请求并阻断推进`;
+    return `${stageText || "对应阶段"} 可发起修正请求并阻断推进`;
   }
-  return `${stageText || '对应阶段'} 提供建议与修正请求`;
+  return `${stageText || "对应阶段"} 提供建议与修正请求`;
 }
 
 function overrideSummary(role: RoleRow) {
@@ -840,10 +845,11 @@ function overrideSummary(role: RoleRow) {
   const summary: string[] = [];
   if (role.override.name) summary.push(`名称: ${role.override.name}`);
   if (role.override.status) summary.push(`状态: ${role.override.status}`);
-  if (role.override.defaultExecutionMode) summary.push(`执行: ${role.override.defaultExecutionMode}`);
+  if (role.override.defaultExecutionMode)
+    summary.push(`执行: ${role.override.defaultExecutionMode}`);
   if (role.override.riskLevel) summary.push(`风险: ${role.override.riskLevel}`);
   if (role.override.allowedStages?.length) {
-    summary.push(`阶段: ${role.override.allowedStages.join('/')}`);
+    summary.push(`阶段: ${role.override.allowedStages.join("/")}`);
   }
   if (role.override.bindingsMode === "replace") {
     summary.push("项目完全接管执行器");
@@ -851,26 +857,126 @@ function overrideSummary(role: RoleRow) {
   return summary.join(" · ") || "该项目已存在角色定制，但当前没有显式字段覆盖。";
 }
 
+function nullToUndefined<T>(value: T | null | undefined) {
+  return value ?? undefined;
+}
+
+function createRoleOverrideForm(role: RoleRow): RoleOverrideFormState {
+  const override: Partial<RoleAgentProjectOverrideRecord> = role.override ?? {};
+  const {
+    name,
+    description,
+    status,
+    ownerTeam,
+    permissionProfile,
+    toolProfile,
+    defaultExecutionMode,
+    aggregationStrategy,
+    maxActiveBindings,
+    requireConsensus,
+    riskLevel,
+    requiresApprovalForWrite,
+    allowedStages,
+    outputSchemaId,
+    tagsJson,
+    bindingsMode,
+  } = override;
+
+  return {
+    name: nullToUndefined(name),
+    description: nullToUndefined(description),
+    status: nullToUndefined(status),
+    ownerTeam: nullToUndefined(ownerTeam),
+    permissionProfile: nullToUndefined(permissionProfile),
+    toolProfile: nullToUndefined(toolProfile),
+    defaultExecutionMode: nullToUndefined(defaultExecutionMode),
+    aggregationStrategy: nullToUndefined(aggregationStrategy),
+    maxActiveBindings: nullToUndefined(maxActiveBindings),
+    requireConsensus: nullToUndefined(requireConsensus),
+    riskLevel: nullToUndefined(riskLevel),
+    requiresApprovalForWrite: nullToUndefined(requiresApprovalForWrite),
+    allowedStages: allowedStages ?? [],
+    outputSchemaId: nullToUndefined(outputSchemaId),
+    tagsJson: tagsJson ?? [],
+    bindingsMode: nullToUndefined(bindingsMode),
+  };
+}
+
+function assignRoleOverride(roleAgentId: string, override: RoleAgentProjectOverrideRecord) {
+  roleOverrides.value = {
+    ...roleOverrides.value,
+    [roleAgentId]: override,
+  };
+}
+
+function appendStringField<T extends keyof UpsertRoleAgentProjectOverrideInput>(
+  payload: UpsertRoleAgentProjectOverrideInput,
+  key: T,
+  value: UpsertRoleAgentProjectOverrideInput[T],
+) {
+  if (typeof value === "string" && value.length > 0) {
+    payload[key] = value;
+  }
+}
+
+function appendBooleanField<T extends keyof UpsertRoleAgentProjectOverrideInput>(
+  payload: UpsertRoleAgentProjectOverrideInput,
+  key: T,
+  value: UpsertRoleAgentProjectOverrideInput[T],
+) {
+  if (typeof value === "boolean") {
+    payload[key] = value;
+  }
+}
+
+function appendNumberField<T extends keyof UpsertRoleAgentProjectOverrideInput>(
+  payload: UpsertRoleAgentProjectOverrideInput,
+  key: T,
+  value: UpsertRoleAgentProjectOverrideInput[T],
+) {
+  if (typeof value === "number") {
+    payload[key] = value;
+  }
+}
+
+function appendStringArrayField<T extends keyof UpsertRoleAgentProjectOverrideInput>(
+  payload: UpsertRoleAgentProjectOverrideInput,
+  key: T,
+  value: UpsertRoleAgentProjectOverrideInput[T],
+) {
+  if (Array.isArray(value) && value.length > 0) {
+    payload[key] = value;
+  }
+}
+
+function buildRoleOverridePayload(
+  form: RoleOverrideFormState,
+): UpsertRoleAgentProjectOverrideInput {
+  const payload: UpsertRoleAgentProjectOverrideInput = {};
+
+  appendStringField(payload, "name", form.name);
+  appendStringField(payload, "description", form.description);
+  appendStringField(payload, "status", form.status);
+  appendStringField(payload, "ownerTeam", form.ownerTeam);
+  appendStringField(payload, "permissionProfile", form.permissionProfile);
+  appendStringField(payload, "toolProfile", form.toolProfile);
+  appendStringField(payload, "defaultExecutionMode", form.defaultExecutionMode);
+  appendStringField(payload, "aggregationStrategy", form.aggregationStrategy);
+  appendNumberField(payload, "maxActiveBindings", form.maxActiveBindings);
+  appendBooleanField(payload, "requireConsensus", form.requireConsensus);
+  appendStringField(payload, "riskLevel", form.riskLevel);
+  appendBooleanField(payload, "requiresApprovalForWrite", form.requiresApprovalForWrite);
+  appendStringArrayField(payload, "allowedStages", form.allowedStages);
+  appendStringField(payload, "outputSchemaId", form.outputSchemaId);
+  appendStringArrayField(payload, "tagsJson", form.tagsJson);
+  appendStringField(payload, "bindingsMode", form.bindingsMode);
+
+  return payload;
+}
+
 async function openRoleOverrideEditor(role: RoleRow) {
   editingRole.value = role;
-  roleOverrideForm.value = {
-    name: role.override?.name ?? undefined,
-    description: role.override?.description ?? undefined,
-    status: role.override?.status ?? undefined,
-    ownerTeam: role.override?.ownerTeam ?? undefined,
-    permissionProfile: role.override?.permissionProfile ?? undefined,
-    toolProfile: role.override?.toolProfile ?? undefined,
-    defaultExecutionMode: role.override?.defaultExecutionMode ?? undefined,
-    aggregationStrategy: role.override?.aggregationStrategy ?? undefined,
-    maxActiveBindings: role.override?.maxActiveBindings ?? undefined,
-    requireConsensus: role.override?.requireConsensus ?? undefined,
-    riskLevel: role.override?.riskLevel ?? undefined,
-    requiresApprovalForWrite: role.override?.requiresApprovalForWrite ?? undefined,
-    allowedStages: role.override?.allowedStages ?? [],
-    outputSchemaId: role.override?.outputSchemaId ?? undefined,
-    tagsJson: role.override?.tagsJson ?? [],
-    bindingsMode: role.override?.bindingsMode ?? undefined,
-  };
+  roleOverrideForm.value = createRoleOverrideForm(role);
   roleEditorOpen.value = true;
   await loadRoleBindings(role.id);
 }
@@ -888,50 +994,17 @@ function closeRoleOverrideEditor() {
 }
 
 async function saveRoleOverride() {
-  if (!editingRole.value) {
+  const role = editingRole.value;
+  if (!role) {
     return;
   }
 
-  const payload = {
-    ...(roleOverrideForm.value.name ? { name: roleOverrideForm.value.name } : {}),
-    ...(roleOverrideForm.value.description ? { description: roleOverrideForm.value.description } : {}),
-    ...(roleOverrideForm.value.status ? { status: roleOverrideForm.value.status } : {}),
-    ...(roleOverrideForm.value.ownerTeam ? { ownerTeam: roleOverrideForm.value.ownerTeam } : {}),
-    ...(roleOverrideForm.value.permissionProfile
-      ? { permissionProfile: roleOverrideForm.value.permissionProfile }
-      : {}),
-    ...(roleOverrideForm.value.toolProfile ? { toolProfile: roleOverrideForm.value.toolProfile } : {}),
-    ...(roleOverrideForm.value.defaultExecutionMode
-      ? { defaultExecutionMode: roleOverrideForm.value.defaultExecutionMode }
-      : {}),
-    ...(roleOverrideForm.value.aggregationStrategy
-      ? { aggregationStrategy: roleOverrideForm.value.aggregationStrategy }
-      : {}),
-    ...(typeof roleOverrideForm.value.maxActiveBindings === "number"
-      ? { maxActiveBindings: roleOverrideForm.value.maxActiveBindings }
-      : {}),
-    ...(typeof roleOverrideForm.value.requireConsensus === "boolean"
-      ? { requireConsensus: roleOverrideForm.value.requireConsensus }
-      : {}),
-    ...(roleOverrideForm.value.riskLevel ? { riskLevel: roleOverrideForm.value.riskLevel } : {}),
-    ...(typeof roleOverrideForm.value.requiresApprovalForWrite === "boolean"
-      ? { requiresApprovalForWrite: roleOverrideForm.value.requiresApprovalForWrite }
-      : {}),
-    ...(roleOverrideForm.value.allowedStages.length > 0
-      ? { allowedStages: roleOverrideForm.value.allowedStages }
-      : {}),
-    ...(roleOverrideForm.value.outputSchemaId ? { outputSchemaId: roleOverrideForm.value.outputSchemaId } : {}),
-    ...(roleOverrideForm.value.tagsJson.length > 0 ? { tagsJson: roleOverrideForm.value.tagsJson } : {}),
-    ...(roleOverrideForm.value.bindingsMode ? { bindingsMode: roleOverrideForm.value.bindingsMode } : {}),
-  };
+  const payload = buildRoleOverridePayload(roleOverrideForm.value);
 
   savingRoleOverride.value = true;
   try {
-    const response = await upsertRoleAgentProjectOverride(editingRole.value.id, projectId, payload);
-    roleOverrides.value = {
-      ...roleOverrides.value,
-      [editingRole.value.id]: response.data,
-    };
+    const response = await upsertRoleAgentProjectOverride(role.id, projectId, payload);
+    assignRoleOverride(role.id, response.data);
     message.success("项目角色执行配置已保存");
     closeRoleOverrideEditor();
   } catch (error) {
@@ -966,7 +1039,11 @@ async function saveBinding() {
     return;
   }
 
-  if (!bindingForm.value.bindingKey || !bindingForm.value.label || !bindingForm.value.runtimeAgent) {
+  if (
+    !bindingForm.value.bindingKey ||
+    !bindingForm.value.label ||
+    !bindingForm.value.runtimeAgent
+  ) {
     message.error("请完整填写 bindingKey、显示名称和 Runtime Agent");
     return;
   }

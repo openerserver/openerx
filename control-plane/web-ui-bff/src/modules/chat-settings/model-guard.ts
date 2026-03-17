@@ -1,4 +1,10 @@
-const ALLOWED_MODEL_MARKERS = ["claude-sonnet-4", "claude-opus-4", "gpt-4o", "o3-mini", "gemini-2.5-pro"];
+const ALLOWED_MODEL_MARKERS = [
+  "claude-sonnet-4",
+  "claude-opus-4",
+  "gpt-4o",
+  "o3-mini",
+  "gemini-2.5-pro",
+];
 
 export function isAllowedChatSettingsModel(route: string | undefined | null): boolean {
   if (!route) {

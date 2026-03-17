@@ -6,7 +6,10 @@ import { Hono } from "../../control-plane/web-ui-bff/node_modules/hono";
 
 const ensureAgentRunForSessionMock = mock(() => "run-test-1");
 const findAgentRunBySessionIdMock = mock(() => undefined);
-const getSessionMessagesMock = mock(async () => ({ ok: true, data: [] as Array<Record<string, unknown>> }));
+const getSessionMessagesMock = mock(async () => ({
+  ok: true,
+  data: [] as Array<Record<string, unknown>>,
+}));
 const runDetachedPromptMock = mock(async () => ({ ok: true, text: "", sessionId: "ses-judge" }));
 const subscribeSessionMock = mock(async () => undefined);
 const ingestParsedEventMock = mock(async () => undefined);
@@ -36,7 +39,9 @@ mock.module("../../control-plane/web-ui-bff/src/modules/realtime/ws-broadcaster"
 }));
 
 const { authMiddleware } = await import("../../control-plane/web-ui-bff/src/middleware/auth");
-const { realtimeRoutes } = await import("../../control-plane/web-ui-bff/src/modules/realtime/routes");
+const { realtimeRoutes } = await import(
+  "../../control-plane/web-ui-bff/src/modules/realtime/routes"
+);
 
 const JWT_SECRET = new TextEncoder().encode(
   process.env.JWT_SECRET || "openerx-dev-secret-change-in-production",
@@ -146,19 +151,18 @@ afterEach(() => {
 
 describe("realtime dev injection route", () => {
   test("rejects non-admin callers", async () => {
-    const response = await authedRequest(
-      "developer",
-      {
-        body: JSON.stringify({
-          taskId: "task-1",
-          projectId: "proj-1",
-          sessionId: "ses-1",
-          graph: {
-            nodes: [{ id: "node-1", subject: "Node", status: "running", agentType: "default-executor" }],
-          },
-        }),
-      },
-    );
+    const response = await authedRequest("developer", {
+      body: JSON.stringify({
+        taskId: "task-1",
+        projectId: "proj-1",
+        sessionId: "ses-1",
+        graph: {
+          nodes: [
+            { id: "node-1", subject: "Node", status: "running", agentType: "default-executor" },
+          ],
+        },
+      }),
+    });
 
     expect(response.status).toBe(403);
     expect(await response.json()).toEqual({ error: "Requires org_admin role" });
@@ -168,19 +172,18 @@ describe("realtime dev injection route", () => {
   test("is disabled in production", async () => {
     process.env.NODE_ENV = "production";
 
-    const response = await authedRequest(
-      "platform_admin",
-      {
-        body: JSON.stringify({
-          taskId: "task-1",
-          projectId: "proj-1",
-          sessionId: "ses-1",
-          graph: {
-            nodes: [{ id: "node-1", subject: "Node", status: "running", agentType: "default-executor" }],
-          },
-        }),
-      },
-    );
+    const response = await authedRequest("platform_admin", {
+      body: JSON.stringify({
+        taskId: "task-1",
+        projectId: "proj-1",
+        sessionId: "ses-1",
+        graph: {
+          nodes: [
+            { id: "node-1", subject: "Node", status: "running", agentType: "default-executor" },
+          ],
+        },
+      }),
+    });
 
     expect(response.status).toBe(404);
     expect(await response.json()).toEqual({ error: "Not found" });
@@ -191,30 +194,27 @@ describe("realtime dev injection route", () => {
     const workspaceDirectory = mkdtempSync(join(tmpdir(), "openerx-realtime-route-"));
     tempDirs.push(workspaceDirectory);
 
-    const response = await authedRequest(
-      "platform_admin",
-      {
-        body: JSON.stringify({
-          taskId: "task-1",
-          projectId: "proj-1",
-          sessionId: "ses-main-1",
-          workspaceDirectory,
-          graph: {
-            id: "graph-fixed-1",
-            status: "running",
-            nodes: [
-              {
-                id: "node-1",
-                subject: "Synthetic graph node",
-                status: "running",
-                agentType: "default-executor",
-              },
-            ],
-            edges: [{ from: "node-1", to: "node-2" }],
-          },
-        }),
-      },
-    );
+    const response = await authedRequest("platform_admin", {
+      body: JSON.stringify({
+        taskId: "task-1",
+        projectId: "proj-1",
+        sessionId: "ses-main-1",
+        workspaceDirectory,
+        graph: {
+          id: "graph-fixed-1",
+          status: "running",
+          nodes: [
+            {
+              id: "node-1",
+              subject: "Synthetic graph node",
+              status: "running",
+              agentType: "default-executor",
+            },
+          ],
+          edges: [{ from: "node-1", to: "node-2" }],
+        },
+      }),
+    });
 
     expect(response.status).toBe(200);
     const payload = await response.json();
@@ -250,9 +250,7 @@ describe("realtime dev injection route", () => {
         maxRetries: 0,
       }),
     ]);
-    expect(writtenGraph.edges).toEqual([
-      { from: "node-1", to: "node-2", type: "blocks" },
-    ]);
+    expect(writtenGraph.edges).toEqual([{ from: "node-1", to: "node-2", type: "blocks" }]);
 
     expect(ensureAgentRunForSessionMock).toHaveBeenCalledWith(
       "ses-main-1",

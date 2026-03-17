@@ -63,7 +63,10 @@ interface GovernanceOverviewResponse {
   }>;
 }
 
-async function request<T>(path: string, opts: RequestInit = {}): Promise<{ data: T; status: number }> {
+async function request<T>(
+  path: string,
+  opts: RequestInit = {},
+): Promise<{ data: T; status: number }> {
   const response = await fetch(`${CP_URL}${path}`, opts);
   const text = await response.text();
   let data: unknown;
@@ -133,39 +136,41 @@ function insertLedger(args: {
   createdAt: string;
   updatedAt: string;
 }) {
-  sqlite.query(
-    `INSERT INTO runtime_usage_ledgers (
+  sqlite
+    .query(
+      `INSERT INTO runtime_usage_ledgers (
       id, project_id, task_id, runtime_session_id, execution_source, entrypoint_type,
       orchestration_fingerprint, default_provider_id, default_model_id, request_count, step_count,
       input_tokens, output_tokens, total_tokens, cost_usd, candidate_count, judge_request_count,
       hook_request_count, status, started_at, finished_at, synced_at, created_at, updated_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    args.id,
-    PROJECT_ID,
-    args.taskId,
-    args.runtimeSessionId,
-    "task-execute",
-    "parallel-candidate",
-    `fp-${args.id}`,
-    "github-copilot",
-    "gpt-5-mini",
-    args.requestCount,
-    args.requestCount,
-    Math.floor(args.totalTokens * 0.6),
-    Math.ceil(args.totalTokens * 0.4),
-    args.totalTokens,
-    args.costUsd,
-    args.candidateCount,
-    args.judgeRequestCount,
-    args.hookRequestCount,
-    "completed",
-    args.createdAt,
-    args.updatedAt,
-    args.updatedAt,
-    args.createdAt,
-    args.updatedAt,
-  );
+    )
+    .run(
+      args.id,
+      PROJECT_ID,
+      args.taskId,
+      args.runtimeSessionId,
+      "task-execute",
+      "parallel-candidate",
+      `fp-${args.id}`,
+      "github-copilot",
+      "gpt-5-mini",
+      args.requestCount,
+      args.requestCount,
+      Math.floor(args.totalTokens * 0.6),
+      Math.ceil(args.totalTokens * 0.4),
+      args.totalTokens,
+      args.costUsd,
+      args.candidateCount,
+      args.judgeRequestCount,
+      args.hookRequestCount,
+      "completed",
+      args.createdAt,
+      args.updatedAt,
+      args.updatedAt,
+      args.createdAt,
+      args.updatedAt,
+    );
   createdLedgerIds.push(args.id);
 }
 
@@ -177,41 +182,45 @@ function insertAudit(args: {
   ts: string;
   detail?: Record<string, unknown>;
 }) {
-  sqlite.query(
-    `INSERT INTO audit_events (
+  sqlite
+    .query(
+      `INSERT INTO audit_events (
       id, ts, user_id, project_id, session_id, task_id, event_type, action, target, detail, risk_level
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    args.id,
-    args.ts,
-    currentUserId,
-    PROJECT_ID,
-    args.sessionId,
-    args.taskId,
-    "paid_execution",
-    args.action,
-    args.taskId,
-    args.detail ? JSON.stringify(args.detail) : null,
-    "high",
-  );
+    )
+    .run(
+      args.id,
+      args.ts,
+      currentUserId,
+      PROJECT_ID,
+      args.sessionId,
+      args.taskId,
+      "paid_execution",
+      args.action,
+      args.taskId,
+      args.detail ? JSON.stringify(args.detail) : null,
+      "high",
+    );
   createdAuditIds.push(args.id);
 }
 
 function insertActiveLease(id: string, expiresAt: string, createdAt: string) {
-  sqlite.query(
-    `INSERT INTO paid_execution_leases (
+  sqlite
+    .query(
+      `INSERT INTO paid_execution_leases (
       id, project_id, issued_by_user_id, reason, status, expires_at, created_at, updated_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    id,
-    PROJECT_ID,
-    currentUserId,
-    "dashboard governance overview test",
-    "active",
-    expiresAt,
-    createdAt,
-    createdAt,
-  );
+    )
+    .run(
+      id,
+      PROJECT_ID,
+      currentUserId,
+      "dashboard governance overview test",
+      "active",
+      expiresAt,
+      createdAt,
+      createdAt,
+    );
   createdLeaseIds.push(id);
 }
 
@@ -237,7 +246,9 @@ afterAll(() => {
 describe("dashboard governance overview route", () => {
   test("aggregates blocked, breaker, lease, and top-risk task metrics", async () => {
     const unique = Date.now();
-    const baseline = await authedRequest<GovernanceOverviewResponse>("/api/dashboard/governance-overview?range=24h");
+    const baseline = await authedRequest<GovernanceOverviewResponse>(
+      "/api/dashboard/governance-overview?range=24h",
+    );
     expect(baseline.status).toBe(200);
 
     const primaryTaskTitle = `治理风险主任务-${unique}`;
@@ -314,7 +325,9 @@ describe("dashboard governance overview route", () => {
     });
     insertActiveLease(leaseId, leaseExpiresAt, primaryCreatedAt);
 
-    const response = await authedRequest<GovernanceOverviewResponse>("/api/dashboard/governance-overview?range=24h");
+    const response = await authedRequest<GovernanceOverviewResponse>(
+      "/api/dashboard/governance-overview?range=24h",
+    );
 
     expect(response.status).toBe(200);
     expect(response.data.range).toBe("24h");
@@ -325,7 +338,9 @@ describe("dashboard governance overview route", () => {
       topRiskTaskCount: Math.min(5, baseline.data.summary.topRiskTaskCount + 1),
     });
 
-    const primaryRiskTask = response.data.topRiskTasks.find((item) => item.taskId === primaryTaskId);
+    const primaryRiskTask = response.data.topRiskTasks.find(
+      (item) => item.taskId === primaryTaskId,
+    );
     expect(primaryRiskTask).toBeTruthy();
     expect(primaryRiskTask).toMatchObject({
       taskId: primaryTaskId,

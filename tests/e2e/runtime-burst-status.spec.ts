@@ -74,9 +74,13 @@ async function waitForTaskSession(
 ): Promise<void> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < 30000) {
-    const payload = await apiRequest<TaskSessionsPayload>(request, `/api/tasks/${taskId}/sessions`, {
-      token,
-    });
+    const payload = await apiRequest<TaskSessionsPayload>(
+      request,
+      `/api/tasks/${taskId}/sessions`,
+      {
+        token,
+      },
+    );
     if (payload.data.some((item) => item.id === sessionId)) {
       return;
     }
@@ -143,148 +147,160 @@ async function injectSessionStatus(
   });
 }
 
-liveBackendTest("task detail shows warning then paused approval and cooldown from runtime session.status", async ({ page, request }) => {
-  test.setTimeout(90_000);
+liveBackendTest(
+  "task detail shows warning then paused approval and cooldown from runtime session.status",
+  async ({ page, request }) => {
+    test.setTimeout(90_000);
 
-  const auth = await login(request);
-  const token = auth.token;
-  const modelList = await apiRequest<{ data?: Array<{ id?: string; provider?: string }> }>(
-    request,
-    "/api/config/models/list",
-    { token },
-  );
-  const preferredModel = (modelList.data || []).find(
-    (item) =>
-      typeof item.provider === "string"
-      && item.provider.startsWith("github-copilot")
-      && typeof item.id === "string"
-      && item.id.trim().length > 0,
-  );
-  const selectedModel = preferredModel ? `${preferredModel.provider}:${preferredModel.id}` : "github-copilot:gpt-5.4";
+    const auth = await login(request);
+    const token = auth.token;
+    const modelList = await apiRequest<{ data?: Array<{ id?: string; provider?: string }> }>(
+      request,
+      "/api/config/models/list",
+      { token },
+    );
+    const preferredModel = (modelList.data || []).find(
+      (item) =>
+        typeof item.provider === "string" &&
+        item.provider.startsWith("github-copilot") &&
+        typeof item.id === "string" &&
+        item.id.trim().length > 0,
+    );
+    const selectedModel = preferredModel
+      ? `${preferredModel.provider}:${preferredModel.id}`
+      : "github-copilot:gpt-5.4";
 
-  const createdTask = await apiRequest<TaskCreatePayload>(request, "/api/tasks", {
-    method: "POST",
-    token,
-    data: {
-      title: `runtime-burst-e2e-${Date.now()}`,
-      prompt: "Reply with exactly one line: RUNTIME_BURST_E2E",
-      projectId: PROJECT_ID,
-      selectedModel,
-    },
-  });
-
-  let agentRunId: string | null = null;
-
-  try {
-    const execution = await apiRequest<TaskExecutePayload>(request, `/api/tasks/${createdTask.id}/execute`, {
+    const createdTask = await apiRequest<TaskCreatePayload>(request, "/api/tasks", {
       method: "POST",
       token,
-    });
-    agentRunId = execution.agentRunId;
-
-    await ensureControlPlaneTaskSession(request, token, createdTask.id, execution.sessionId);
-    await waitForTaskSession(request, token, createdTask.id, execution.sessionId);
-
-    await page.addInitScript(
-      ({ token: authToken, user }) => {
-        window.localStorage.setItem(
-          "auth",
-          JSON.stringify({ token: authToken, user }),
-        );
-      },
-      { token, user: auth.user },
-    );
-
-    await page.goto(`${UI_URL}/tasks/${createdTask.id}`);
-    await page.waitForLoadState("domcontentloaded");
-
-    await expect(page.getByText("回复主视图")).toBeVisible();
-
-    await injectSessionStatus(request, token, {
-      taskId: createdTask.id,
-      projectId: PROJECT_ID,
-      sessionId: execution.sessionId,
-      agentRunId: execution.agentRunId,
-      info: {
-        type: "warning",
-        metadata: {
-          source: "runtime_burst_guard",
-          decision: "warning",
-          ratio: 0.82,
-          window: { seconds: 60 },
-        },
-        requests: 4,
-        tokens: 128,
-        cost: 0.32,
+      data: {
+        title: `runtime-burst-e2e-${Date.now()}`,
+        prompt: "Reply with exactly one line: RUNTIME_BURST_E2E",
+        projectId: PROJECT_ID,
+        selectedModel,
       },
     });
 
-    await expect(page.getByText("突发预警").first()).toBeVisible();
-    await expect(page.getByText("1 分钟窗口 使用已逼近上限").first()).toBeVisible();
-    await expect(page.getByText("4 次请求 / 128 tokens / 成本 0.32 / 阈值占用 82%").first()).toBeVisible();
+    let agentRunId: string | null = null;
 
-    await injectSessionStatus(request, token, {
-      taskId: createdTask.id,
-      projectId: PROJECT_ID,
-      sessionId: execution.sessionId,
-      agentRunId: execution.agentRunId,
-      info: {
-        type: "paused-approval",
-        metadata: {
-          source: "runtime_burst_guard",
-          permission: "model_burst_resume",
-          decision: "paused-approval",
-          window: { seconds: 60 },
+    try {
+      const execution = await apiRequest<TaskExecutePayload>(
+        request,
+        `/api/tasks/${createdTask.id}/execute`,
+        {
+          method: "POST",
+          token,
         },
-        requests: 4,
-        tokens: 128,
-        cost: 0.32,
-      },
-    });
+      );
+      agentRunId = execution.agentRunId;
 
-    await expect(page.getByText("当前分支已暂停，等待批准继续").first()).toBeVisible();
-    await expect(page.getByText("审批项：model_burst_resume")).toBeVisible();
-    await expect(page.getByText("待审批").first()).toBeVisible();
+      await ensureControlPlaneTaskSession(request, token, createdTask.id, execution.sessionId);
+      await waitForTaskSession(request, token, createdTask.id, execution.sessionId);
 
-    const cooldownUntil = new Date(Date.now() + 65_000).toISOString();
-    await injectSessionStatus(request, token, {
-      taskId: createdTask.id,
-      projectId: PROJECT_ID,
-      sessionId: execution.sessionId,
-      agentRunId: execution.agentRunId,
-      info: {
-        type: "cooldown",
-        metadata: {
-          source: "runtime_burst_guard",
-          permission: "model_burst_resume",
-          decision: "cooldown",
-          window: { seconds: 60 },
+      await page.addInitScript(
+        ({ token: authToken, user }) => {
+          window.localStorage.setItem("auth", JSON.stringify({ token: authToken, user }));
         },
-        until: cooldownUntil,
-        requests: 4,
-        tokens: 128,
-        cost: 0.32,
-      },
-    });
+        { token, user: auth.user },
+      );
 
-    await expect(page.getByText(/审批已通过，冷却剩余/).first()).toBeVisible();
-    await expect(page.getByText(/冷却剩余/).first()).toBeVisible();
-    await expect(page.getByText("冷却中").first()).toBeVisible();
-  } finally {
-    if (agentRunId) {
-      await request.fetch(`${BFF_URL}/api/agents/${agentRunId}/terminate`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
+      await page.goto(`${UI_URL}/tasks/${createdTask.id}`);
+      await page.waitForLoadState("domcontentloaded");
+
+      await expect(page.getByText("回复主视图")).toBeVisible();
+
+      await injectSessionStatus(request, token, {
+        taskId: createdTask.id,
+        projectId: PROJECT_ID,
+        sessionId: execution.sessionId,
+        agentRunId: execution.agentRunId,
+        info: {
+          type: "warning",
+          metadata: {
+            source: "runtime_burst_guard",
+            decision: "warning",
+            ratio: 0.82,
+            window: { seconds: 60 },
+          },
+          requests: 4,
+          tokens: 128,
+          cost: 0.32,
         },
-      }).catch(() => undefined);
+      });
+
+      await expect(page.getByText("突发预警").first()).toBeVisible();
+      await expect(page.getByText("1 分钟窗口 使用已逼近上限").first()).toBeVisible();
+      await expect(
+        page.getByText("4 次请求 / 128 tokens / 成本 0.32 / 阈值占用 82%").first(),
+      ).toBeVisible();
+
+      await injectSessionStatus(request, token, {
+        taskId: createdTask.id,
+        projectId: PROJECT_ID,
+        sessionId: execution.sessionId,
+        agentRunId: execution.agentRunId,
+        info: {
+          type: "paused-approval",
+          metadata: {
+            source: "runtime_burst_guard",
+            permission: "model_burst_resume",
+            decision: "paused-approval",
+            window: { seconds: 60 },
+          },
+          requests: 4,
+          tokens: 128,
+          cost: 0.32,
+        },
+      });
+
+      await expect(page.getByText("当前分支已暂停，等待批准继续").first()).toBeVisible();
+      await expect(page.getByText("审批项：model_burst_resume")).toBeVisible();
+      await expect(page.getByText("待审批").first()).toBeVisible();
+
+      const cooldownUntil = new Date(Date.now() + 65_000).toISOString();
+      await injectSessionStatus(request, token, {
+        taskId: createdTask.id,
+        projectId: PROJECT_ID,
+        sessionId: execution.sessionId,
+        agentRunId: execution.agentRunId,
+        info: {
+          type: "cooldown",
+          metadata: {
+            source: "runtime_burst_guard",
+            permission: "model_burst_resume",
+            decision: "cooldown",
+            window: { seconds: 60 },
+          },
+          until: cooldownUntil,
+          requests: 4,
+          tokens: 128,
+          cost: 0.32,
+        },
+      });
+
+      await expect(page.getByText(/审批已通过，冷却剩余/).first()).toBeVisible();
+      await expect(page.getByText(/冷却剩余/).first()).toBeVisible();
+      await expect(page.getByText("冷却中").first()).toBeVisible();
+    } finally {
+      if (agentRunId) {
+        await request
+          .fetch(`${BFF_URL}/api/agents/${agentRunId}/terminate`, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          })
+          .catch(() => undefined);
+      }
+
+      await request
+        .fetch(`${BFF_URL}/api/tasks/${createdTask.id}`, {
+          method: "DELETE",
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        })
+        .catch(() => undefined);
     }
-
-    await request.fetch(`${BFF_URL}/api/tasks/${createdTask.id}`, {
-      method: "DELETE",
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    }).catch(() => undefined);
-  }
-});
+  },
+);

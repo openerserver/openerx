@@ -1,5 +1,5 @@
 import { useAuthStore } from "../stores/auth";
-import { normalizeRecoverySuggestions, type RecoverySuggestion } from "./recovery-suggestions";
+import { type RecoverySuggestion, normalizeRecoverySuggestions } from "./recovery-suggestions";
 
 const BASE_URL = "/api";
 
@@ -53,7 +53,9 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   }
 
   if (!response.ok) {
-    const error = (await response.json().catch(() => ({ error: "Request failed" }))) as ApiErrorPayload;
+    const error = (await response
+      .json()
+      .catch(() => ({ error: "Request failed" }))) as ApiErrorPayload;
     throw new ApiError({
       ...error,
       status: response.status,
@@ -278,10 +280,10 @@ export async function listAgentRuns() {
   return request<AgentRunSummary[]>("/agents");
 }
 
-export type AgentOpsViewMode = 'user' | 'admin';
-export type AgentOpsOwnerScope = 'mine' | 'all';
-export type AgentOpsQueue = 'attention' | 'running' | 'recent';
-export type AgentOpsEntryContext = 'nav' | 'task' | 'workbench' | 'approval' | 'alert';
+export type AgentOpsViewMode = "user" | "admin";
+export type AgentOpsOwnerScope = "mine" | "all";
+export type AgentOpsQueue = "attention" | "running" | "recent";
+export type AgentOpsEntryContext = "nav" | "task" | "workbench" | "approval" | "alert";
 
 export interface AgentOpsActionPermissions {
   canPause: boolean;
@@ -301,8 +303,8 @@ export interface AgentOpsPageQuery {
   taskId?: string;
   agentRunId?: string;
   search?: string;
-  status?: 'running' | 'paused' | 'failed' | 'completed' | 'stopped' | 'terminated';
-  riskLevel?: 'low' | 'medium' | 'high' | 'critical';
+  status?: "running" | "paused" | "failed" | "completed" | "stopped" | "terminated";
+  riskLevel?: "low" | "medium" | "high" | "critical";
   approvalBlocked?: boolean;
   requiresIntervention?: boolean;
   agentType?: string;
@@ -313,7 +315,7 @@ export interface AgentOpsPageQuery {
 }
 
 export interface AgentOpsOverview {
-  viewScope?: 'mine' | 'project' | 'global';
+  viewScope?: "mine" | "project" | "global";
   summary: {
     attentionCount: number;
     runningCount: number;
@@ -380,7 +382,7 @@ export interface AgentOpsQueueQuery extends AgentOpsPageQuery {
 export interface AgentRunOpsSummary {
   agentRunId: string;
   entryContext?: AgentOpsEntryContext;
-  viewScope?: 'mine' | 'project' | 'global';
+  viewScope?: "mine" | "project" | "global";
   taskId: string;
   taskTitle: string;
   projectId: string;
@@ -436,7 +438,7 @@ export interface AgentOpsAnalyticsRankingItem {
 }
 
 export interface AgentOpsAnalyticsHealthView {
-  viewScope?: 'mine' | 'project' | 'global';
+  viewScope?: "mine" | "project" | "global";
   generatedAt: string;
   totals: {
     totalRuns: number;
@@ -481,7 +483,7 @@ export interface AgentOpsAnalyticsTimelineBucket {
 
 export interface AgentOpsAnalyticsTimelineView {
   generatedAt: string;
-  bucketUnit: 'hour' | 'day';
+  bucketUnit: "hour" | "day";
   buckets: AgentOpsAnalyticsTimelineBucket[];
 }
 
@@ -623,97 +625,134 @@ export interface DashboardGovernanceOverviewResponse {
 
 export async function getAgentOpsOverview(query: AgentOpsPageQuery = {}) {
   const params = new URLSearchParams();
-  if (query.ownerScope) params.set('ownerScope', query.ownerScope);
-  if (query.projectId) params.set('projectId', query.projectId);
-  if (query.taskId) params.set('taskId', query.taskId);
-  if (query.agentRunId) params.set('agentRunId', query.agentRunId);
-  if (query.status) params.set('status', query.status);
-  if (query.search) params.set('search', query.search);
-  if (query.riskLevel) params.set('riskLevel', query.riskLevel);
-  if (typeof query.approvalBlocked === 'boolean') {
-    params.set('approvalBlocked', String(query.approvalBlocked));
-  }
-  if (typeof query.requiresIntervention === 'boolean') {
-    params.set('requiresIntervention', String(query.requiresIntervention));
-  }
-  if (query.agentType) params.set('agentType', query.agentType);
-  if (query.model) params.set('model', query.model);
-  if (query.from) params.set('from', query.from);
-  if (query.to) params.set('to', query.to);
-  if (query.entryContext) params.set('entryContext', query.entryContext);
-  return request<AgentOpsOverview>(`/agents/overview${params.toString() ? `?${params.toString()}` : ''}`);
-}
-
-export async function getAgentOpsQueue(
-  queue: AgentOpsQueue,
-  query: AgentOpsQueueQuery = {},
-) {
-  const params = new URLSearchParams({ queue });
-  if (query.ownerScope) params.set('ownerScope', query.ownerScope);
-  if (query.projectId) params.set('projectId', query.projectId);
-  if (query.taskId) params.set('taskId', query.taskId);
-  if (query.agentRunId) params.set('agentRunId', query.agentRunId);
+  if (query.ownerScope) params.set("ownerScope", query.ownerScope);
+  if (query.projectId) params.set("projectId", query.projectId);
+  if (query.taskId) params.set("taskId", query.taskId);
+  if (query.agentRunId) params.set("agentRunId", query.agentRunId);
   if (query.status) params.set("status", query.status);
   if (query.search) params.set("search", query.search);
-  if (query.riskLevel) params.set('riskLevel', query.riskLevel);
-  if (typeof query.approvalBlocked === 'boolean') {
-    params.set('approvalBlocked', String(query.approvalBlocked));
+  if (query.riskLevel) params.set("riskLevel", query.riskLevel);
+  if (typeof query.approvalBlocked === "boolean") {
+    params.set("approvalBlocked", String(query.approvalBlocked));
   }
   if (typeof query.requiresIntervention === "boolean") {
     params.set("requiresIntervention", String(query.requiresIntervention));
   }
-  if (query.agentType) params.set('agentType', query.agentType);
-  if (query.model) params.set('model', query.model);
-  if (query.from) params.set('from', query.from);
-  if (query.to) params.set('to', query.to);
-  if (query.entryContext) params.set('entryContext', query.entryContext);
+  if (query.agentType) params.set("agentType", query.agentType);
+  if (query.model) params.set("model", query.model);
+  if (query.from) params.set("from", query.from);
+  if (query.to) params.set("to", query.to);
+  if (query.entryContext) params.set("entryContext", query.entryContext);
+  return request<AgentOpsOverview>(
+    `/agents/overview${params.toString() ? `?${params.toString()}` : ""}`,
+  );
+}
+
+function appendAgentOpsQueueQueryParams(
+  params: URLSearchParams,
+  query: AgentOpsQueueQuery,
+) {
+  appendAgentOpsQueueIdentityParams(params, query);
+  appendAgentOpsQueueFilterParams(params, query);
+  appendAgentOpsQueuePaginationParams(params, query);
+}
+
+function appendAgentOpsQueueIdentityParams(
+  params: URLSearchParams,
+  query: AgentOpsQueueQuery,
+) {
+  if (query.ownerScope) params.set("ownerScope", query.ownerScope);
+  if (query.projectId) params.set("projectId", query.projectId);
+  if (query.taskId) params.set("taskId", query.taskId);
+  if (query.agentRunId) params.set("agentRunId", query.agentRunId);
+}
+
+function appendAgentOpsQueueFilterParams(
+  params: URLSearchParams,
+  query: AgentOpsQueueQuery,
+) {
+  if (query.status) params.set("status", query.status);
+  if (query.search) params.set("search", query.search);
+  if (query.riskLevel) params.set("riskLevel", query.riskLevel);
+  if (typeof query.approvalBlocked === "boolean") {
+    params.set("approvalBlocked", String(query.approvalBlocked));
+  }
+  if (typeof query.requiresIntervention === "boolean") {
+    params.set("requiresIntervention", String(query.requiresIntervention));
+  }
+  if (query.agentType) params.set("agentType", query.agentType);
+  if (query.model) params.set("model", query.model);
+  if (query.from) params.set("from", query.from);
+  if (query.to) params.set("to", query.to);
+  if (query.entryContext) params.set("entryContext", query.entryContext);
+}
+
+function appendAgentOpsQueuePaginationParams(
+  params: URLSearchParams,
+  query: AgentOpsQueueQuery,
+) {
   if (query.page) params.set("page", String(query.page));
   if (query.pageSize) params.set("pageSize", String(query.pageSize));
+}
+
+export async function getAgentOpsQueue(queue: AgentOpsQueue, query: AgentOpsQueueQuery = {}) {
+  const params = new URLSearchParams({ queue });
+  appendAgentOpsQueueQueryParams(params, query);
   return request<AgentOpsQueueResponse>(`/agents/queues?${params.toString()}`);
 }
 
 export async function getAgentRunOpsSummary(
   agentRunId: string,
-  query: Pick<AgentOpsPageQuery, 'entryContext' | 'ownerScope'> = {},
+  query: Pick<AgentOpsPageQuery, "entryContext" | "ownerScope"> = {},
 ) {
   const params = new URLSearchParams();
-  if (query.entryContext) params.set('entryContext', query.entryContext);
-  if (query.ownerScope) params.set('ownerScope', query.ownerScope);
-  return request<AgentRunOpsSummary>(`/agents/${agentRunId}/summary${params.toString() ? `?${params.toString()}` : ''}`);
+  if (query.entryContext) params.set("entryContext", query.entryContext);
+  if (query.ownerScope) params.set("ownerScope", query.ownerScope);
+  return request<AgentRunOpsSummary>(
+    `/agents/${agentRunId}/summary${params.toString() ? `?${params.toString()}` : ""}`,
+  );
 }
 
 function buildAgentOpsAnalyticsParams(query: AgentOpsPageQuery = {}) {
   const params = new URLSearchParams();
-  if (query.ownerScope) params.set('ownerScope', query.ownerScope);
-  if (query.projectId) params.set('projectId', query.projectId);
-  if (query.taskId) params.set('taskId', query.taskId);
-  if (query.agentRunId) params.set('agentRunId', query.agentRunId);
-  if (query.status) params.set('status', query.status);
-  if (query.search) params.set('search', query.search);
-  if (query.riskLevel) params.set('riskLevel', query.riskLevel);
-  if (typeof query.approvalBlocked === 'boolean') params.set('approvalBlocked', String(query.approvalBlocked));
-  if (typeof query.requiresIntervention === 'boolean') params.set('requiresIntervention', String(query.requiresIntervention));
-  if (query.agentType) params.set('agentType', query.agentType);
-  if (query.model) params.set('model', query.model);
-  if (query.from) params.set('from', query.from);
-  if (query.to) params.set('to', query.to);
-  if (query.entryContext) params.set('entryContext', query.entryContext);
+  if (query.ownerScope) params.set("ownerScope", query.ownerScope);
+  if (query.projectId) params.set("projectId", query.projectId);
+  if (query.taskId) params.set("taskId", query.taskId);
+  if (query.agentRunId) params.set("agentRunId", query.agentRunId);
+  if (query.status) params.set("status", query.status);
+  if (query.search) params.set("search", query.search);
+  if (query.riskLevel) params.set("riskLevel", query.riskLevel);
+  if (typeof query.approvalBlocked === "boolean")
+    params.set("approvalBlocked", String(query.approvalBlocked));
+  if (typeof query.requiresIntervention === "boolean")
+    params.set("requiresIntervention", String(query.requiresIntervention));
+  if (query.agentType) params.set("agentType", query.agentType);
+  if (query.model) params.set("model", query.model);
+  if (query.from) params.set("from", query.from);
+  if (query.to) params.set("to", query.to);
+  if (query.entryContext) params.set("entryContext", query.entryContext);
   return params;
 }
 
 export async function getAgentOpsAnalyticsHealth(query: AgentOpsPageQuery = {}) {
   const params = buildAgentOpsAnalyticsParams(query);
-  return request<AgentOpsAnalyticsHealthView>(`/agents/analytics/health${params.toString() ? `?${params.toString()}` : ''}`);
+  return request<AgentOpsAnalyticsHealthView>(
+    `/agents/analytics/health${params.toString() ? `?${params.toString()}` : ""}`,
+  );
 }
 
 export async function getAgentOpsAnalyticsFailures(query: AgentOpsPageQuery = {}) {
   const params = buildAgentOpsAnalyticsParams(query);
-  return request<AgentOpsAnalyticsFailuresView>(`/agents/analytics/failures${params.toString() ? `?${params.toString()}` : ''}`);
+  return request<AgentOpsAnalyticsFailuresView>(
+    `/agents/analytics/failures${params.toString() ? `?${params.toString()}` : ""}`,
+  );
 }
 
 export async function getAgentOpsAnalyticsTimeline(query: AgentOpsPageQuery = {}) {
   const params = buildAgentOpsAnalyticsParams(query);
-  return request<AgentOpsAnalyticsTimelineView>(`/agents/analytics/timeline${params.toString() ? `?${params.toString()}` : ''}`);
+  return request<AgentOpsAnalyticsTimelineView>(
+    `/agents/analytics/timeline${params.toString() ? `?${params.toString()}` : ""}`,
+  );
 }
 
 export async function getDashboardProviderTokens(
@@ -724,11 +763,11 @@ export async function getDashboardProviderTokens(
   return request<DashboardProviderTokenResponse>(`/dashboard/provider-tokens?${params.toString()}`);
 }
 
-export async function getDashboardGovernanceOverview(
-  range: DashboardProviderTokenRange = "24h",
-) {
+export async function getDashboardGovernanceOverview(range: DashboardProviderTokenRange = "24h") {
   const params = new URLSearchParams({ range });
-  return request<DashboardGovernanceOverviewResponse>(`/dashboard/governance-overview?${params.toString()}`);
+  return request<DashboardGovernanceOverviewResponse>(
+    `/dashboard/governance-overview?${params.toString()}`,
+  );
 }
 
 export async function getAgentMessages(agentRunId: string) {
@@ -1148,10 +1187,13 @@ export async function getTaskOperatingMode(taskId: string) {
 }
 
 export async function updateTaskOperatingMode(taskId: string, data: OperatingModeSelection) {
-  return request<{ ok: boolean; data: OperatingModeSelection | null }>(`/tasks/${taskId}/operating-mode`, {
-    method: "PUT",
-    body: JSON.stringify(data),
-  });
+  return request<{ ok: boolean; data: OperatingModeSelection | null }>(
+    `/tasks/${taskId}/operating-mode`,
+    {
+      method: "PUT",
+      body: JSON.stringify(data),
+    },
+  );
 }
 
 export async function deleteTaskOperatingMode(taskId: string) {
@@ -1260,7 +1302,11 @@ export interface RuntimePipelineStage {
   label: string;
   status: RuntimePipelineStageStatus;
   order: number;
-  sourceType: "executionPlan.step" | "strategy.hookExecution" | "taskGraph.node" | "session.message";
+  sourceType:
+    | "executionPlan.step"
+    | "strategy.hookExecution"
+    | "taskGraph.node"
+    | "session.message";
   sourceId: string | null;
   agent: string | null;
   model: string | null;
@@ -1300,7 +1346,9 @@ export interface RuntimePipeline {
 export async function getTaskPipeline(taskId: string, sessionId?: string) {
   const params = new URLSearchParams();
   if (sessionId) params.set("sessionId", sessionId);
-  return request<RuntimePipeline>(`/tasks/${taskId}/pipeline${params.toString() ? `?${params.toString()}` : ""}`);
+  return request<RuntimePipeline>(
+    `/tasks/${taskId}/pipeline${params.toString() ? `?${params.toString()}` : ""}`,
+  );
 }
 
 // ── Session History ────────────────────────────────────────────────
@@ -1329,14 +1377,22 @@ export async function continueTask(taskId: string, prompt: string, sessionId?: s
   });
 }
 
-export async function forkTaskSession(taskId: string, sessionId: string, title?: string, messageId?: string) {
-  return request<{ ok: boolean; sessionId: string; title?: string; parentSessionId?: string; forkedFromMessageId?: string }>(
-    `/tasks/${taskId}/sessions/${sessionId}/fork`,
-    {
-      method: "POST",
-      body: JSON.stringify({ title, messageId }),
-    },
-  );
+export async function forkTaskSession(
+  taskId: string,
+  sessionId: string,
+  title?: string,
+  messageId?: string,
+) {
+  return request<{
+    ok: boolean;
+    sessionId: string;
+    title?: string;
+    parentSessionId?: string;
+    forkedFromMessageId?: string;
+  }>(`/tasks/${taskId}/sessions/${sessionId}/fork`, {
+    method: "POST",
+    body: JSON.stringify({ title, messageId }),
+  });
 }
 
 // ── Session Tree (Branch Lineage) ──────────────────────────────────
@@ -1371,10 +1427,9 @@ export async function activateSession(taskId: string, sessionId: string) {
 }
 
 export async function archiveTaskSession(taskId: string, sessionId: string) {
-  return request<{ ok: boolean }>(
-    `/tasks/${taskId}/sessions/${sessionId}/archive`,
-    { method: "POST" },
-  );
+  return request<{ ok: boolean }>(`/tasks/${taskId}/sessions/${sessionId}/archive`, {
+    method: "POST",
+  });
 }
 
 // ── Plugin Lifecycle ───────────────────────────────────────────────
@@ -1413,7 +1468,14 @@ export interface PluginCompatResult {
 
 export interface WorkbenchLayoutPayload {
   // New multi-pane format
-  panes?: Array<{ id: string; taskId: string; sessionId?: string; title?: string; status?: string; pinned?: boolean }>;
+  panes?: Array<{
+    id: string;
+    taskId: string;
+    sessionId?: string;
+    title?: string;
+    status?: string;
+    pinned?: boolean;
+  }>;
   activePaneId?: string;
   columns?: number;
   // Legacy format (readable for migration)
@@ -1496,7 +1558,9 @@ export async function revokeProjectPaidExecutionLease(
 }
 
 export async function getProjectPaidExecutionPreflight(projectId: string) {
-  return request<ProjectExecutionPreflightResponse>(`/projects/${projectId}/paid-execution-preflight`);
+  return request<ProjectExecutionPreflightResponse>(
+    `/projects/${projectId}/paid-execution-preflight`,
+  );
 }
 
 export async function getProjectRuntimeUsageLedgers(
@@ -1508,7 +1572,9 @@ export async function getProjectRuntimeUsageLedgers(
   if (params?.taskId) search.set("taskId", params.taskId);
   if (params?.status) search.set("status", params.status);
   const suffix = search.toString() ? `?${search.toString()}` : "";
-  return request<ProjectRuntimeUsageLedgerListResponse>(`/projects/${projectId}/runtime-usage-ledgers${suffix}`);
+  return request<ProjectRuntimeUsageLedgerListResponse>(
+    `/projects/${projectId}/runtime-usage-ledgers${suffix}`,
+  );
 }
 
 export async function getProjectRuntimeUsageLedgerDetail(projectId: string, ledgerId: string) {
@@ -2104,13 +2170,10 @@ export async function testModelProvider(data: { key?: string; provider: Record<s
       modelCount?: number;
       models?: DiscoveredProviderModel[];
     };
-  }>(
-    "/config/models/providers/test",
-    {
-      method: "POST",
-      body: JSON.stringify(data),
-    },
-  );
+  }>("/config/models/providers/test", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
 }
 
 // MCP
@@ -2254,7 +2317,15 @@ export async function updateOrchestrationStrategy(data: OrchestrationStrategy) {
 export interface ChatSettingsPendingPatch {
   index: number;
   action: "preview" | "apply" | "explain" | "validate";
-  configType: "orchestration-strategy" | "models" | "agents" | "mcp" | "skills" | "commands" | "security" | "plugins";
+  configType:
+    | "orchestration-strategy"
+    | "models"
+    | "agents"
+    | "mcp"
+    | "skills"
+    | "commands"
+    | "security"
+    | "plugins";
   patch: Record<string, unknown>;
   explanation: string;
   rawText: string;
@@ -2480,11 +2551,16 @@ export async function pollCopilotToken(device_code: string, provider = "github-c
 }
 
 export async function copilotLogout(provider = "github-copilot") {
-  return request<{ ok: boolean }>(`/config/copilot/logout?provider=${encodeURIComponent(provider)}`, { method: "POST" });
+  return request<{ ok: boolean }>(
+    `/config/copilot/logout?provider=${encodeURIComponent(provider)}`,
+    { method: "POST" },
+  );
 }
 
 export async function getCopilotModels(provider = "github-copilot") {
-  return request<{ data: CopilotModelInfo[] }>(`/config/copilot/models?provider=${encodeURIComponent(provider)}`);
+  return request<{ data: CopilotModelInfo[] }>(
+    `/config/copilot/models?provider=${encodeURIComponent(provider)}`,
+  );
 }
 
 // ── Code Changes ───────────────────────────────────────────────────
@@ -2930,14 +3006,16 @@ export interface ProjectOrchestrationView {
     canManage: boolean;
     message?: string | null;
   };
-  roleCapabilities: Array<ProjectRoleExecutionViewRow & {
-    executionModeLabel: string;
-    projectModeLabel: string;
-    bindingCounts: {
-      system: number;
-      project: number;
-    };
-  }>;
+  roleCapabilities: Array<
+    ProjectRoleExecutionViewRow & {
+      executionModeLabel: string;
+      projectModeLabel: string;
+      bindingCounts: {
+        system: number;
+        project: number;
+      };
+    }
+  >;
   scenarios: {
     current: OrchestrationScenarioViewModel;
     candidate: OrchestrationScenarioViewModel | null;
@@ -3258,13 +3336,10 @@ export async function updateProjectWorkflowTemplateBinding(
       preferredTemplateId: string | null;
       allowBossAutoTemplateSwitch: boolean;
     };
-  }>(
-    `/workflow-templates/projects/${encodeURIComponent(projectId)}/selection`,
-    {
-      method: "PUT",
-      body: JSON.stringify(data),
-    },
-  );
+  }>(`/workflow-templates/projects/${encodeURIComponent(projectId)}/selection`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
 }
 
 export async function getProjectRoleExecutionView(projectId: string) {
@@ -3323,11 +3398,17 @@ export async function listRoleAgentBindings(roleAgentId: string, projectId?: str
   );
 }
 
-export async function createRoleAgentBinding(roleAgentId: string, data: UpsertRoleAgentBindingInput) {
-  return request<RoleAgentBindingRecord>(`/role-agents/${encodeURIComponent(roleAgentId)}/bindings`, {
-    method: "POST",
-    body: JSON.stringify(data),
-  });
+export async function createRoleAgentBinding(
+  roleAgentId: string,
+  data: UpsertRoleAgentBindingInput,
+) {
+  return request<RoleAgentBindingRecord>(
+    `/role-agents/${encodeURIComponent(roleAgentId)}/bindings`,
+    {
+      method: "POST",
+      body: JSON.stringify(data),
+    },
+  );
 }
 
 export async function updateRoleAgentBinding(
@@ -3345,13 +3426,15 @@ export async function updateRoleAgentBinding(
 }
 
 export async function getTaskWorkflow(taskId: string) {
-  return request<{ data: { workflowRun: Record<string, unknown> | null; stages: TaskStageViewModel[] } }>(
-    `/tasks/${encodeURIComponent(taskId)}/workflow`,
-  );
+  return request<{
+    data: { workflowRun: Record<string, unknown> | null; stages: TaskStageViewModel[] };
+  }>(`/tasks/${encodeURIComponent(taskId)}/workflow`);
 }
 
 export async function getTaskRoleConclusions(taskId: string) {
-  return request<{ data: RoleConclusionViewModel[] }>(`/tasks/${encodeURIComponent(taskId)}/role-conclusions`);
+  return request<{ data: RoleConclusionViewModel[] }>(
+    `/tasks/${encodeURIComponent(taskId)}/role-conclusions`,
+  );
 }
 
 export async function getDeveloperChangeRequests(taskId: string) {
@@ -3360,15 +3443,21 @@ export async function getDeveloperChangeRequests(taskId: string) {
   );
 }
 
-export async function updateDeveloperChangeRequest(taskId: string, data: {
-  requestId: string;
-  status: "open" | "acknowledged" | "in-progress" | "resolved" | "won't-fix";
-  resolutionNote?: string;
-}) {
-  return request<{ ok: boolean }>(`/tasks/${encodeURIComponent(taskId)}/developer-change-requests`, {
-    method: "PATCH",
-    body: JSON.stringify(data),
-  });
+export async function updateDeveloperChangeRequest(
+  taskId: string,
+  data: {
+    requestId: string;
+    status: "open" | "acknowledged" | "in-progress" | "resolved" | "won't-fix";
+    resolutionNote?: string;
+  },
+) {
+  return request<{ ok: boolean }>(
+    `/tasks/${encodeURIComponent(taskId)}/developer-change-requests`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    },
+  );
 }
 
 export async function getTaskWorkflowView(taskId: string) {

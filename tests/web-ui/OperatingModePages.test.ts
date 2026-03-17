@@ -50,7 +50,7 @@ vi.mock("vue-router", () => ({
   RouterLink: {
     name: "RouterLink",
     props: ["to"],
-    template: '<a :href="typeof to === \'string\' ? to : \'#\'"><slot /></a>',
+    template: "<a :href=\"typeof to === 'string' ? to : '#'\"><slot /></a>",
   },
 }));
 
@@ -106,7 +106,9 @@ describe("Operating mode pages", () => {
       },
     });
 
-    const { default: Page } = await import("../../control-plane/web-ui/src/pages/OrganizationOperatingSettings.vue");
+    const { default: Page } = await import(
+      "../../control-plane/web-ui/src/pages/OrganizationOperatingSettings.vue"
+    );
     const wrapper = mount(Page, {
       global: {
         stubs: {
@@ -120,7 +122,9 @@ describe("Operating mode pages", () => {
 
     expect(wrapper.text()).toContain("组织运行策略");
 
-    const saveButton = wrapper.findAll("button").find((item) => item.text().includes("保存组织运行策略"));
+    const saveButton = wrapper
+      .findAll("button")
+      .find((item) => item.text().includes("保存组织运行策略"));
     await saveButton?.trigger("click");
     await flushPromises();
 
@@ -161,13 +165,17 @@ describe("Operating mode pages", () => {
       },
     });
 
-    const { default: Page } = await import("../../control-plane/web-ui/src/pages/ProjectOperatingMode.vue");
+    const { default: Page } = await import(
+      "../../control-plane/web-ui/src/pages/ProjectOperatingMode.vue"
+    );
     const wrapper = mount(Page);
     await flushPromises();
 
     expect(wrapper.text()).toContain("运行档位");
 
-    const saveButton = wrapper.findAll("button").find((item) => item.text().includes("保存项目档位"));
+    const saveButton = wrapper
+      .findAll("button")
+      .find((item) => item.text().includes("保存项目档位"));
     await saveButton?.trigger("click");
     await flushPromises();
 
@@ -225,21 +233,32 @@ describe("Operating mode pages", () => {
     });
     apiMocks.getTaskWorkflowView.mockResolvedValueOnce({
       taskId: "task-1",
-      workflow: { templateId: "tpl-1", currentStage: "implementation", status: "running", stages: [] },
+      workflow: {
+        templateId: "tpl-1",
+        currentStage: "implementation",
+        status: "running",
+        stages: [],
+      },
       roleConclusions: [],
       developerChangeRequests: [],
     });
 
-    const { default: Page } = await import("../../control-plane/web-ui/src/pages/TaskOperatingConsole.vue");
+    const { default: Page } = await import(
+      "../../control-plane/web-ui/src/pages/TaskOperatingConsole.vue"
+    );
     const wrapper = mount(Page);
     await flushPromises();
 
     expect(wrapper.text()).toContain("Task 1 / 组织运行详情");
-    expect(wrapper.text()).toContain("老板在阶段 verify 升级后根据阶段策略，自动切换到模板 tpl-approval。");
+    expect(wrapper.text()).toContain(
+      "老板在阶段 verify 升级后根据阶段策略，自动切换到模板 tpl-approval。",
+    );
     expect(wrapper.text()).toContain("阶段策略命中");
     expect(wrapper.text()).toContain("升级后二次治理");
     expect(wrapper.text()).toContain("模板 tpl-approval");
-    expect(wrapper.text()).toContain("阶段策略：高风险阶段进入审批模板。 · 治理触发：Need approval");
+    expect(wrapper.text()).toContain(
+      "阶段策略：高风险阶段进入审批模板。 · 治理触发：Need approval",
+    );
     expect(wrapper.text()).toContain("Need approval");
   });
 
@@ -296,11 +315,15 @@ describe("Operating mode pages", () => {
       },
     });
 
-    const { default: Page } = await import("../../control-plane/web-ui/src/pages/TaskOperatingOverride.vue");
+    const { default: Page } = await import(
+      "../../control-plane/web-ui/src/pages/TaskOperatingOverride.vue"
+    );
     const wrapper = mount(Page);
     await flushPromises();
 
-    const saveButton = wrapper.findAll("button").find((item) => item.text().includes("保存任务级覆盖"));
+    const saveButton = wrapper
+      .findAll("button")
+      .find((item) => item.text().includes("保存任务级覆盖"));
     await saveButton?.trigger("click");
     await flushPromises();
 
@@ -341,15 +364,21 @@ describe("Operating mode pages", () => {
       },
     });
 
-    const { default: Page } = await import("../../control-plane/web-ui/src/pages/RecommendedScenarios.vue");
+    const { default: Page } = await import(
+      "../../control-plane/web-ui/src/pages/RecommendedScenarios.vue"
+    );
     const wrapper = mount(Page);
     await flushPromises();
 
     expect(wrapper.find('[data-testid="project-section-nav"]').exists()).toBe(false);
-    expect(wrapper.text()).toContain("任务创建前，从平台推荐场景中选择一组运行模式，并直接带入任务创建器");
+    expect(wrapper.text()).toContain(
+      "任务创建前，从平台推荐场景中选择一组运行模式，并直接带入任务创建器",
+    );
     expect(wrapper.text()).toContain("项目运行档位");
 
-    const actionButton = wrapper.findAll("button").find((item) => item.text().includes("带入新建任务"));
+    const actionButton = wrapper
+      .findAll("button")
+      .find((item) => item.text().includes("带入新建任务"));
     await actionButton?.trigger("click");
 
     expect(routerState.push).toHaveBeenCalledWith({
@@ -414,7 +443,8 @@ describe("Operating mode pages", () => {
           id: "decision-override-1",
           ts: "2026-03-16T10:06:00.000Z",
           decisionType: "manual-override",
-          reason: "人工覆盖任务运行档位：solo / L1 / advisory -> team / L2 / advisory / tpl-release",
+          reason:
+            "人工覆盖任务运行档位：solo / L1 / advisory -> team / L2 / advisory / tpl-release",
           taskId: "task-1",
           taskTitle: "Release candidate",
           taskStatus: "running",
@@ -469,7 +499,9 @@ describe("Operating mode pages", () => {
       ],
     });
 
-    const { default: Page } = await import("../../control-plane/web-ui/src/pages/BossOperationsCenter.vue");
+    const { default: Page } = await import(
+      "../../control-plane/web-ui/src/pages/BossOperationsCenter.vue"
+    );
     const wrapper = mount(Page);
     await flushPromises();
 
@@ -481,7 +513,9 @@ describe("Operating mode pages", () => {
     expect(wrapper.text()).toContain("阶段策略命中");
     expect(wrapper.text()).toContain("升级后二次治理");
     expect(wrapper.text()).toContain("模板 tpl-release");
-    expect(wrapper.text()).toContain("阶段策略：高风险发布阶段统一切到发布审批模板。 · 治理触发：Release approval pending");
+    expect(wrapper.text()).toContain(
+      "阶段策略：高风险发布阶段统一切到发布审批模板。 · 治理触发：Release approval pending",
+    );
   });
 
   it("loads project workflow template page with governance settings", async () => {
@@ -549,16 +583,16 @@ describe("Operating mode pages", () => {
         defaultBossParticipationMode: "advisory",
         forceBossParticipation: false,
       },
-      stageCatalog: [
-        { key: "clarify", label: "需求澄清", description: "澄清需求" },
-      ],
+      stageCatalog: [{ key: "clarify", label: "需求澄清", description: "澄清需求" }],
       access: {
         canManage: true,
         message: null,
       },
     });
 
-    const { default: Page } = await import("../../control-plane/web-ui/src/pages/ProjectWorkflowTemplate.vue");
+    const { default: Page } = await import(
+      "../../control-plane/web-ui/src/pages/ProjectWorkflowTemplate.vue"
+    );
     const wrapper = mount(Page, {
       global: {
         stubs: {

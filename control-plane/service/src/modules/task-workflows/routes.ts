@@ -23,7 +23,9 @@ const advanceWorkflowSchema = z.object({
   toStage: z.string().min(1).optional(),
   status: z.enum(["running", "blocked", "waiting-approval", "failed", "completed"]),
   blockingReason: z.string().optional(),
-  approvalState: z.enum(["not-required", "pending", "approved", "rejected", "expired", "cancelled"]).optional(),
+  approvalState: z
+    .enum(["not-required", "pending", "approved", "rejected", "expired", "cancelled"])
+    .optional(),
 });
 
 const retryStageSchema = z.object({
@@ -40,7 +42,9 @@ taskWorkflowRoutes.get("/", async (c) => {
   if (!task) {
     return c.json({ error: "Task not found" }, 404);
   }
-  const workflowRun = await db.query.taskWorkflowRuns.findFirst({ where: eq(taskWorkflowRuns.taskId, taskId) });
+  const workflowRun = await db.query.taskWorkflowRuns.findFirst({
+    where: eq(taskWorkflowRuns.taskId, taskId),
+  });
 
   if (!workflowRun) {
     return c.json({ data: { workflowRun: null, stages: [] } });
@@ -78,7 +82,8 @@ taskWorkflowRoutes.post("/initialize", zValidator("json", initializeWorkflowSche
   });
 
   if (templateStages.length > 0) {
-    const stageRunPayloads: Array<typeof taskStageRuns.$inferInsert> = templateStages.map((stage) => ({
+    const stageRunPayloads: Array<typeof taskStageRuns.$inferInsert> = templateStages.map(
+      (stage) => ({
         id: crypto.randomUUID(),
         workflowRunId,
         stageKey: stage.stageKey,
@@ -92,11 +97,14 @@ taskWorkflowRoutes.post("/initialize", zValidator("json", initializeWorkflowSche
         artifactsSummaryJson: null,
         createdAt: now,
         updatedAt: now,
-      }));
+      }),
+    );
     await db.insert(taskStageRuns).values(stageRunPayloads);
   }
 
-  const workflowRun = await db.query.taskWorkflowRuns.findFirst({ where: eq(taskWorkflowRuns.id, workflowRunId) });
+  const workflowRun = await db.query.taskWorkflowRuns.findFirst({
+    where: eq(taskWorkflowRuns.id, workflowRunId),
+  });
   return c.json({ data: workflowRun }, 201);
 });
 
@@ -105,12 +113,17 @@ taskWorkflowRoutes.post("/advance", zValidator("json", advanceWorkflowSchema), a
   const body = c.req.valid("json");
   const task = await ensureLegacyRoleWorkflowMigrated(taskId);
   if (!task) return c.json({ error: "Task not found" }, 404);
-  const workflowRun = await db.query.taskWorkflowRuns.findFirst({ where: eq(taskWorkflowRuns.taskId, taskId) });
+  const workflowRun = await db.query.taskWorkflowRuns.findFirst({
+    where: eq(taskWorkflowRuns.taskId, taskId),
+  });
   if (!workflowRun) return c.json({ error: "Workflow run not found" }, 404);
 
   const now = new Date().toISOString();
   const currentStageRun = await db.query.taskStageRuns.findFirst({
-    where: and(eq(taskStageRuns.workflowRunId, workflowRun.id), eq(taskStageRuns.stageKey, body.fromStage)),
+    where: and(
+      eq(taskStageRuns.workflowRunId, workflowRun.id),
+      eq(taskStageRuns.stageKey, body.fromStage),
+    ),
   });
   if (currentStageRun) {
     await db
@@ -127,7 +140,10 @@ taskWorkflowRoutes.post("/advance", zValidator("json", advanceWorkflowSchema), a
 
   if (body.toStage) {
     const nextStageRun = await db.query.taskStageRuns.findFirst({
-      where: and(eq(taskStageRuns.workflowRunId, workflowRun.id), eq(taskStageRuns.stageKey, body.toStage)),
+      where: and(
+        eq(taskStageRuns.workflowRunId, workflowRun.id),
+        eq(taskStageRuns.stageKey, body.toStage),
+      ),
     });
     if (nextStageRun) {
       await db
@@ -138,15 +154,23 @@ taskWorkflowRoutes.post("/advance", zValidator("json", advanceWorkflowSchema), a
   }
 
   const nextWorkflowStatus = body.toStage
-    ? (body.status === "completed" ? "running" : body.status)
+    ? body.status === "completed"
+      ? "running"
+      : body.status
     : body.status;
 
   await db
     .update(taskWorkflowRuns)
-    .set({ currentStage: body.toStage ?? body.fromStage, status: nextWorkflowStatus, updatedAt: now })
+    .set({
+      currentStage: body.toStage ?? body.fromStage,
+      status: nextWorkflowStatus,
+      updatedAt: now,
+    })
     .where(eq(taskWorkflowRuns.id, workflowRun.id));
 
-  const updated = await db.query.taskWorkflowRuns.findFirst({ where: eq(taskWorkflowRuns.id, workflowRun.id) });
+  const updated = await db.query.taskWorkflowRuns.findFirst({
+    where: eq(taskWorkflowRuns.id, workflowRun.id),
+  });
   return c.json({ data: updated });
 });
 
@@ -155,11 +179,16 @@ taskWorkflowRoutes.post("/retry-stage", zValidator("json", retryStageSchema), as
   const body = c.req.valid("json");
   const task = await ensureLegacyRoleWorkflowMigrated(taskId);
   if (!task) return c.json({ error: "Task not found" }, 404);
-  const workflowRun = await db.query.taskWorkflowRuns.findFirst({ where: eq(taskWorkflowRuns.taskId, taskId) });
+  const workflowRun = await db.query.taskWorkflowRuns.findFirst({
+    where: eq(taskWorkflowRuns.taskId, taskId),
+  });
   if (!workflowRun) return c.json({ error: "Workflow run not found" }, 404);
 
   const stageRun = await db.query.taskStageRuns.findFirst({
-    where: and(eq(taskStageRuns.workflowRunId, workflowRun.id), eq(taskStageRuns.stageKey, body.stageKey)),
+    where: and(
+      eq(taskStageRuns.workflowRunId, workflowRun.id),
+      eq(taskStageRuns.stageKey, body.stageKey),
+    ),
   });
   if (!stageRun) return c.json({ error: "Stage run not found" }, 404);
 

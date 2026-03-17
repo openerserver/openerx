@@ -38,3 +38,20 @@ costRoutes.patch("/budget/:budgetId", async (c) => {
   });
   return c.json(result.data, result.ok ? 200 : (result.status as 400 | 401 | 403 | 404 | 502));
 });
+
+costRoutes.get("/detail", async (c) => {
+  const taskId = c.req.query("taskId") || "";
+  const params = new URLSearchParams();
+  if (taskId) {
+    params.set("taskId", taskId);
+  }
+
+  const query = params.toString();
+  const result = await cpFetch<Record<string, unknown>>(
+    `/api/cost/detail${query ? `?${query}` : ""}`,
+    {
+      authorization: authHeader(c),
+    },
+  );
+  return c.json(result.data, result.ok ? 200 : (result.status as 400 | 401 | 403 | 404 | 502));
+});

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  RECOVERY_SUGGESTION_KINDS,
   normalizeRecoverySuggestion,
   normalizeRecoverySuggestions,
-  RECOVERY_SUGGESTION_KINDS,
 } from "./recovery-suggestions";
 
 describe("normalizeRecoverySuggestion", () => {

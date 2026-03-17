@@ -45,30 +45,59 @@ const SUB_BULLET_RE = /^\s+[-*]\s+(.+)/;
 /** Yes/no question indicators */
 const YES_NO_RE = /可以吗|是否|是不是|对吗|行吗|ok\?|okay\?|符合预期/i;
 
-/**
- * Parse raw markdown text and extract confirmation blocks.
- * Returns null if no confirmation pattern is detected.
- */
-export function parseConfirmationBlock(markdown: string): ConfirmationBlock | null {
-  const lines = markdown.split("\n");
-
-  let headingText: string | null = null;
-  let headingLineIdx = -1;
-
-  // Find a heading that matches confirmation keywords
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim();
+function findConfirmationHeading(lines: string[]) {
+  for (const [index, rawLine] of lines.entries()) {
+    const line = rawLine.trim();
     const headingMatch = line.match(/^#{1,4}\s+(.+)/);
     if (headingMatch && CONFIRMATION_HEADING_RE.test(headingMatch[1])) {
-      headingText = headingMatch[1];
-      headingLineIdx = i;
-      break;
+      return {
+        headingText: headingMatch[1],
+        headingLineIdx: index,
+      };
     }
   }
 
-  if (!headingText || headingLineIdx < 0) return null;
+  return {
+    headingText: null,
+    headingLineIdx: -1,
+  };
+}
 
-  // Parse numbered items after the heading
+function startQuestion(numberedMatch: RegExpMatchArray) {
+  return {
+    index: Number.parseInt(numberedMatch[1], 10),
+    title: numberedMatch[2],
+    descLines: [] as string[],
+    options: [] as ConfirmationOption[],
+  };
+}
+
+function appendQuestionLine(
+  current: {
+    index: number;
+    title: string;
+    descLines: string[];
+    options: ConfirmationOption[];
+  } | null,
+  line: string,
+  trimmed: string,
+) {
+  if (!current) {
+    return;
+  }
+
+  const bulletMatch = trimmed.match(SUB_BULLET_RE) || line.match(SUB_BULLET_RE);
+  if (bulletMatch) {
+    current.options.push({ text: bulletMatch[1].trim() });
+    return;
+  }
+
+  if (trimmed) {
+    current.descLines.push(trimmed);
+  }
+}
+
+function parseConfirmationQuestions(lines: string[], headingLineIdx: number) {
   const questions: ConfirmationQuestion[] = [];
   let current: {
     index: number;
@@ -81,21 +110,16 @@ export function parseConfirmationBlock(markdown: string): ConfirmationBlock | nu
     const line = lines[i];
     const trimmed = line.trim();
 
-    // Stop at next heading
-    if (/^#{1,4}\s+/.test(trimmed) && !NUMBERED_ITEM_RE.test(trimmed)) break;
+    if (/^#{1,4}\s+/.test(trimmed) && !NUMBERED_ITEM_RE.test(trimmed)) {
+      break;
+    }
 
     const numberedMatch = trimmed.match(NUMBERED_ITEM_RE);
     if (numberedMatch) {
       if (current) {
         questions.push(finalizeQuestion(current));
       }
-      current = {
-        index: Number.parseInt(numberedMatch[1], 10),
-        title: numberedMatch[2],
-        descLines: [],
-        options: [],
-      };
-      // Check if there's text after the bold title on the same line
+      current = startQuestion(numberedMatch);
       const afterTitle = trimmed.slice(numberedMatch[0].length).trim();
       if (afterTitle) {
         current.descLines.push(afterTitle);
@@ -103,19 +127,27 @@ export function parseConfirmationBlock(markdown: string): ConfirmationBlock | nu
       continue;
     }
 
-    if (!current) continue;
-
-    const bulletMatch = trimmed.match(SUB_BULLET_RE) || line.match(SUB_BULLET_RE);
-    if (bulletMatch) {
-      current.options.push({ text: bulletMatch[1].trim() });
-    } else if (trimmed) {
-      current.descLines.push(trimmed);
-    }
+    appendQuestionLine(current, line, trimmed);
   }
 
   if (current) {
     questions.push(finalizeQuestion(current));
   }
+
+  return questions;
+}
+
+/**
+ * Parse raw markdown text and extract confirmation blocks.
+ * Returns null if no confirmation pattern is detected.
+ */
+export function parseConfirmationBlock(markdown: string): ConfirmationBlock | null {
+  const lines = markdown.split("\n");
+  const { headingText, headingLineIdx } = findConfirmationHeading(lines);
+
+  if (!headingText || headingLineIdx < 0) return null;
+
+  const questions = parseConfirmationQuestions(lines, headingLineIdx);
 
   if (questions.length === 0) return null;
 

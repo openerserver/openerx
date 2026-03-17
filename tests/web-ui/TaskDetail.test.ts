@@ -156,9 +156,9 @@ vi.mock("ant-design-vue", async () => {
           },
           [
             vue.h("option", { value: "" }, String(props.placeholder ?? "")),
-            ...(((props.options as Array<{ value: string; label: string }> | undefined) ?? []).map((option) =>
-              vue.h("option", { key: option.value, value: option.value }, option.label)
-            )),
+            ...((props.options as Array<{ value: string; label: string }> | undefined) ?? []).map(
+              (option) => vue.h("option", { key: option.value, value: option.value }, option.label),
+            ),
           ],
         );
     },
@@ -302,10 +302,7 @@ function getSetupState(wrapper: Awaited<ReturnType<typeof mountPage>>) {
   return (wrapper.vm as unknown as { $: { setupState: Record<string, unknown> } }).$.setupState;
 }
 
-function readSetupValue<T>(
-  setupState: Record<string, unknown>,
-  key: string,
-) {
+function readSetupValue<T>(setupState: Record<string, unknown>, key: string) {
   const value = setupState[key] as { value?: T } | T;
   if (value && typeof value === "object" && "value" in value) {
     return value.value as T;
@@ -577,17 +574,25 @@ describe("TaskDetail", () => {
       limit: 12,
       taskId: "task-1",
     });
-    expect(readSetupValue<Array<{ label: string; value: string }>>(setupState, "taskRuntimeUsageSummaryItems")).toEqual(
+    expect(
+      readSetupValue<Array<{ label: string; value: string }>>(
+        setupState,
+        "taskRuntimeUsageSummaryItems",
+      ),
+    ).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ label: "账本批次", value: "1" }),
         expect.objectContaining({ label: "总成本", value: "$0.4800" }),
         expect.objectContaining({ label: "当前分支账本", value: "ses-1 · $0.4800" }),
       ]),
     );
-    expect(readSetupValue<{ runtimeSessionId: string; executionSource: string; entrypointType: string } | null>(
-      setupState,
-      "focusedTaskRuntimeLedger",
-    )).toMatchObject({
+    expect(
+      readSetupValue<{
+        runtimeSessionId: string;
+        executionSource: string;
+        entrypointType: string;
+      } | null>(setupState, "focusedTaskRuntimeLedger"),
+    ).toMatchObject({
       runtimeSessionId: "ses-1",
       executionSource: "task-run",
       entrypointType: "dashboard",
@@ -690,15 +695,26 @@ describe("TaskDetail", () => {
     const setupState = getSetupState(wrapper);
     await flushPromises();
 
-    expect(readSetupValue<Array<{ label: string; value: string }>>(setupState, "taskRuntimeUsageSummaryItems")).toEqual(
+    expect(
+      readSetupValue<Array<{ label: string; value: string }>>(
+        setupState,
+        "taskRuntimeUsageSummaryItems",
+      ),
+    ).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ label: "定位账本", value: "ses-branch · $0.5500" }),
       ]),
     );
-    expect(readSetupValue<{ id: string; runtimeSessionId: string; executionSource: string; entrypointType: string; totalTokens: number; costUsd: number } | null>(
-      setupState,
-      "focusedTaskRuntimeLedger",
-    )).toMatchObject({
+    expect(
+      readSetupValue<{
+        id: string;
+        runtimeSessionId: string;
+        executionSource: string;
+        entrypointType: string;
+        totalTokens: number;
+        costUsd: number;
+      } | null>(setupState, "focusedTaskRuntimeLedger"),
+    ).toMatchObject({
       id: "ledger-focused",
       runtimeSessionId: "ses-branch",
       executionSource: "workflow-evaluation",
@@ -962,7 +978,10 @@ describe("TaskDetail", () => {
       judgeResult?: { winnerIndex: number; reasoning: string; scores: number[] };
     } | null>(setupState, "executionPlan");
 
-    expect(executionPlan?.candidates.map((candidate) => candidate.label)).toEqual(["候选 1", "候选 2"]);
+    expect(executionPlan?.candidates.map((candidate) => candidate.label)).toEqual([
+      "候选 1",
+      "候选 2",
+    ]);
     expect(executionPlan?.judgeResult?.winnerIndex).toBe(1);
     expect(executionPlan?.judgeResult?.reasoning).toBe("候选 2 更完整，风险更低。");
     expect(executionPlan?.judgeResult?.scores).toEqual([82.5, 91.2]);
@@ -995,8 +1014,14 @@ describe("TaskDetail", () => {
       candidates: Array<{ label: string; status: string }>;
     } | null>(setupState, "executionPlan");
 
-    expect(executionPlan?.candidates.map((candidate) => candidate.label)).toEqual(["候选 1", "候选 2"]);
-    expect(executionPlan?.candidates.map((candidate) => candidate.status)).toEqual(["completed", "failed"]);
+    expect(executionPlan?.candidates.map((candidate) => candidate.label)).toEqual([
+      "候选 1",
+      "候选 2",
+    ]);
+    expect(executionPlan?.candidates.map((candidate) => candidate.status)).toEqual([
+      "completed",
+      "failed",
+    ]);
   });
 
   it("updates selected model from the task detail composer", async () => {
@@ -1011,13 +1036,17 @@ describe("TaskDetail", () => {
 
     expect(apiMocks.getModelsList).toHaveBeenCalledTimes(1);
 
-    await (setupState.handleSelectedModelChange as (value: unknown) => Promise<void>)("gpt-5.3-codex");
+    await (setupState.handleSelectedModelChange as (value: unknown) => Promise<void>)(
+      "gpt-5.3-codex",
+    );
     await flushPromises();
 
     expect(apiMocks.updateTask).toHaveBeenCalledWith("task-1", {
       selectedModel: "gpt-5.3-codex",
     });
-    expect((setupState.task as { selectedModel?: string | null }).selectedModel).toBe("gpt-5.3-codex");
+    expect((setupState.task as { selectedModel?: string | null }).selectedModel).toBe(
+      "gpt-5.3-codex",
+    );
   });
 
   it("submits the reply composer with Enter by default", async () => {

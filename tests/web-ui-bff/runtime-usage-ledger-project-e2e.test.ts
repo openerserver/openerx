@@ -81,7 +81,11 @@ const resolveModelRouteMock = mock((value: string) => ({
   providerId: value.split(":")[0] || "github-copilot",
   modelId: value.split(":").slice(1).join(":") || value,
 }));
-const readOrchestrationStrategyMock = mock(() => ({ hooks: [], templates: [], judge: { enabled: false } }));
+const readOrchestrationStrategyMock = mock(() => ({
+  hooks: [],
+  templates: [],
+  judge: { enabled: false },
+}));
 
 const ledgers = new Map<string, LedgerRecord>();
 const stepsByLedger = new Map<string, StepRecord[]>();
@@ -130,6 +134,243 @@ function computeTotals(items: LedgerRecord[]) {
   );
 }
 
+function buildBaseLedger(body: Record<string, unknown>, existing: LedgerRecord | undefined, now: string) {
+  return (
+    existing || {
+      id: existing?.id || `ledger-${ledgers.size + 1}`,
+      projectId: "proj-default",
+      taskId: typeof body.taskId === "string" ? body.taskId : undefined,
+      agentRunId: typeof body.agentRunId === "string" ? body.agentRunId : undefined,
+      runtimeSessionId: String(body.runtimeSessionId || ""),
+      executionSource: String(body.executionSource || ""),
+      entrypointType: String(body.entrypointType || ""),
+      orchestrationFingerprint:
+        typeof body.orchestrationFingerprint === "string" ? body.orchestrationFingerprint : undefined,
+      defaultProviderId:
+        typeof body.defaultProviderId === "string" ? body.defaultProviderId : undefined,
+      defaultModelId: typeof body.defaultModelId === "string" ? body.defaultModelId : undefined,
+      requestCount: 0,
+      stepCount: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      costUsd: 0,
+      candidateCount: Number(body.candidateCount || 1),
+      judgeRequestCount: 0,
+      hookRequestCount: 0,
+      status: String(body.status || "completed"),
+      startedAt: typeof body.startedAt === "string" ? body.startedAt : undefined,
+      finishedAt: typeof body.finishedAt === "string" ? body.finishedAt : undefined,
+      syncedAt: typeof body.syncedAt === "string" ? body.syncedAt : now,
+      createdAt: now,
+      updatedAt: now,
+    }
+  );
+}
+
+function readOptionalString(record: Record<string, unknown>, key: string) {
+  return typeof record[key] === "string" ? String(record[key]) : undefined;
+}
+
+function readOptionalNumber(record: Record<string, unknown>, key: string) {
+  return typeof record[key] === "number" ? Number(record[key]) : undefined;
+}
+
+function buildStepRecord(
+  ledgerId: string,
+  body: Record<string, unknown>,
+  step: Record<string, unknown>,
+  now: string,
+): StepRecord {
+  return {
+    id: String(step.id),
+    ledgerId,
+    projectId: "proj-default",
+    taskId: readOptionalString(body, "taskId"),
+    agentRunId: readOptionalString(body, "agentRunId"),
+    runtimeSessionId: String(body.runtimeSessionId || ""),
+    stepType: String(step.stepType || "other"),
+    triggerType: readOptionalString(step, "triggerType"),
+    hookId: readOptionalString(step, "hookId"),
+    candidateIndex: readOptionalNumber(step, "candidateIndex"),
+    requestIndex: Number(step.requestIndex || 0),
+    providerId: readOptionalString(step, "providerId"),
+    modelId: readOptionalString(step, "modelId"),
+    inputTokens: Number(step.inputTokens || 0),
+    outputTokens: Number(step.outputTokens || 0),
+    totalTokens: Number(step.totalTokens || 0),
+    costUsd: Number(step.costUsd || 0),
+    amplificationSource: readOptionalString(step, "amplificationSource"),
+    status: String(step.status || "completed"),
+    startedAt: readOptionalString(step, "startedAt"),
+    finishedAt: readOptionalString(step, "finishedAt"),
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+function appendLedgerStep(
+  ledgerId: string,
+  body: Record<string, unknown>,
+  step: Record<string, unknown>,
+  now: string,
+) {
+  const stepId = typeof step.id === "string" ? step.id : undefined;
+  const ledgerSteps = stepsByLedger.get(ledgerId) || [];
+  const existingStep = stepId ? ledgerSteps.find((item) => item.id === stepId) : undefined;
+
+  if (stepId && !existingStep) {
+    ledgerSteps.push(buildStepRecord(ledgerId, body, step, now));
+    stepsByLedger.set(ledgerId, ledgerSteps);
+  }
+
+  return { stepId, existingStep };
+}
+
+function buildLedgerStatusPatch(base: LedgerRecord, body: Record<string, unknown>, now: string) {
+  return {
+    status: String(body.status || base.status),
+    finishedAt: typeof body.finishedAt === "string" ? body.finishedAt : base.finishedAt,
+    syncedAt: typeof body.syncedAt === "string" ? body.syncedAt : now,
+    updatedAt: now,
+  } satisfies Partial<LedgerRecord>;
+}
+
+function buildLedgerDeltaPatch(base: LedgerRecord, body: Record<string, unknown>) {
+  return {
+    requestCount: base.requestCount + Number(body.requestCountDelta || 1),
+    stepCount: base.stepCount + Number(body.stepCountDelta || 1),
+    inputTokens: base.inputTokens + Number(body.inputTokens || 0),
+    outputTokens: base.outputTokens + Number(body.outputTokens || 0),
+    totalTokens: base.totalTokens + Number(body.totalTokens || 0),
+    costUsd: Number((base.costUsd + Number(body.costUsd || 0)).toFixed(4)),
+    candidateCount: Math.max(base.candidateCount, Number(body.candidateCount || 1)),
+    judgeRequestCount: base.judgeRequestCount + Number(body.judgeRequestCountDelta || 0),
+    hookRequestCount: base.hookRequestCount + Number(body.hookRequestCountDelta || 0),
+  } satisfies Partial<LedgerRecord>;
+}
+
+function applyLedgerUpdate(
+  base: LedgerRecord,
+  body: Record<string, unknown>,
+  applyDelta: boolean,
+  now: string,
+) {
+  return {
+    ...base,
+    ...(applyDelta ? buildLedgerDeltaPatch(base, body) : {}),
+    ...buildLedgerStatusPatch(base, body, now),
+  } satisfies LedgerRecord;
+}
+
+function handleLedgerSync(options?: { body?: Record<string, unknown> }) {
+  const body = options?.body as Record<string, unknown>;
+  const runtimeSessionId = String(body.runtimeSessionId || "");
+  const existing = [...ledgers.values()].find((item) => item.runtimeSessionId === runtimeSessionId);
+  const now = "2026-03-17T10:00:00.000Z";
+  const ledgerId = existing?.id || `ledger-${ledgers.size + 1}`;
+  const step = body.step as Record<string, unknown> | undefined;
+  const { existingStep } = step ? appendLedgerStep(ledgerId, body, step, now) : { existingStep: undefined };
+  const applyDelta = !step || !existingStep;
+  const base = buildBaseLedger(body, existing, now);
+  const updated = applyLedgerUpdate(base, body, applyDelta, now);
+
+  ledgers.set(ledgerId, updated);
+
+  return {
+    ok: true,
+    status: 200,
+    data: {
+      projectId: "proj-default",
+      ledger: updated,
+      stepInserted: Boolean(step && !existingStep),
+      deltaApplied: applyDelta,
+    },
+  };
+}
+
+function handleLedgerList(path: string) {
+  const url = new URL(`http://localhost${path}`);
+  const limit = Number(url.searchParams.get("limit") || 20);
+  const taskId = url.searchParams.get("taskId");
+  const status = url.searchParams.get("status");
+  const items = [...ledgers.values()]
+    .filter((item) => (taskId ? item.taskId === taskId : true))
+    .filter((item) => (status ? item.status === status : true))
+    .slice(0, limit);
+
+  return {
+    ok: true,
+    status: 200,
+    data: {
+      projectId: "proj-default",
+      totals: computeTotals(items),
+      items,
+    },
+  };
+}
+
+function handleLedgerDetail(path: string) {
+  const ledgerId = path.split("/").pop() || "";
+  const ledger = ledgers.get(ledgerId);
+  if (!ledger) {
+    return {
+      ok: false,
+      status: 404,
+      data: { error: "Runtime usage ledger not found" },
+    };
+  }
+
+  const steps = stepsByLedger.get(ledgerId) || [];
+  const byStepType = steps.reduce(
+    (acc, step) => {
+      acc[step.stepType] = (acc[step.stepType] || 0) + 1;
+      return acc;
+    },
+    {} as Record<string, number>,
+  );
+
+  return {
+    ok: true,
+    status: 200,
+    data: {
+      projectId: "proj-default",
+      ledger,
+      steps,
+      breakdown: {
+        byStepType,
+      },
+    },
+  };
+}
+
+function getRuntimeUsageLedgerResponse(
+  path: string,
+  options?: { method?: string; body?: Record<string, unknown> },
+) {
+  const method = options?.method || "GET";
+
+  if (method === "POST" && path === "/api/projects/proj-default/runtime-usage-ledgers/sync") {
+    return handleLedgerSync(options);
+  }
+
+  if (method === "GET" && path.startsWith("/api/projects/proj-default/runtime-usage-ledgers?")) {
+    return handleLedgerList(path);
+  }
+
+  if (method === "GET" && path.startsWith("/api/projects/proj-default/runtime-usage-ledgers/")) {
+    return handleLedgerDetail(path);
+  }
+
+  return {
+    ok: false,
+    status: 404,
+    data: {
+      error: `Unhandled path: ${path}`,
+    },
+  };
+}
+
 beforeEach(() => {
   cpFetchMock.mockReset();
   authHeaderMock.mockReset();
@@ -168,179 +409,16 @@ beforeEach(() => {
     providerId: value.split(":")[0] || "github-copilot",
     modelId: value.split(":").slice(1).join(":") || value,
   }));
-  readOrchestrationStrategyMock.mockReturnValue({ hooks: [], templates: [], judge: { enabled: false } });
-
-  cpFetchMock.mockImplementation(async (path: string, options?: { method?: string; body?: Record<string, unknown> }) => {
-    const method = options?.method || "GET";
-
-    if (method === "POST" && path === "/api/projects/proj-default/runtime-usage-ledgers/sync") {
-      const body = options?.body as Record<string, unknown>;
-      const runtimeSessionId = String(body.runtimeSessionId || "");
-      const existing = [...ledgers.values()].find((item) => item.runtimeSessionId === runtimeSessionId);
-      const now = "2026-03-17T10:00:00.000Z";
-      const ledgerId = existing?.id || `ledger-${ledgers.size + 1}`;
-      const step = body.step as Record<string, unknown> | undefined;
-      const stepId = typeof step?.id === "string" ? step.id : undefined;
-      const ledgerSteps = stepsByLedger.get(ledgerId) || [];
-      const existingStep = stepId ? ledgerSteps.find((item) => item.id === stepId) : undefined;
-      const applyDelta = !step || !existingStep;
-
-      const base: LedgerRecord = existing || {
-        id: ledgerId,
-        projectId: "proj-default",
-        taskId: typeof body.taskId === "string" ? body.taskId : undefined,
-        agentRunId: typeof body.agentRunId === "string" ? body.agentRunId : undefined,
-        runtimeSessionId,
-        executionSource: String(body.executionSource || ""),
-        entrypointType: String(body.entrypointType || ""),
-        orchestrationFingerprint: typeof body.orchestrationFingerprint === "string" ? body.orchestrationFingerprint : undefined,
-        defaultProviderId: typeof body.defaultProviderId === "string" ? body.defaultProviderId : undefined,
-        defaultModelId: typeof body.defaultModelId === "string" ? body.defaultModelId : undefined,
-        requestCount: 0,
-        stepCount: 0,
-        inputTokens: 0,
-        outputTokens: 0,
-        totalTokens: 0,
-        costUsd: 0,
-        candidateCount: Number(body.candidateCount || 1),
-        judgeRequestCount: 0,
-        hookRequestCount: 0,
-        status: String(body.status || "completed"),
-        startedAt: typeof body.startedAt === "string" ? body.startedAt : undefined,
-        finishedAt: typeof body.finishedAt === "string" ? body.finishedAt : undefined,
-        syncedAt: typeof body.syncedAt === "string" ? body.syncedAt : now,
-        createdAt: now,
-        updatedAt: now,
-      };
-
-      if (step && !existingStep && stepId) {
-        ledgerSteps.push({
-          id: stepId,
-          ledgerId,
-          projectId: "proj-default",
-          taskId: typeof body.taskId === "string" ? body.taskId : undefined,
-          agentRunId: typeof body.agentRunId === "string" ? body.agentRunId : undefined,
-          runtimeSessionId,
-          stepType: String(step.stepType || "other"),
-          triggerType: typeof step.triggerType === "string" ? step.triggerType : undefined,
-          hookId: typeof step.hookId === "string" ? step.hookId : undefined,
-          candidateIndex: typeof step.candidateIndex === "number" ? step.candidateIndex : undefined,
-          requestIndex: Number(step.requestIndex || 0),
-          providerId: typeof step.providerId === "string" ? step.providerId : undefined,
-          modelId: typeof step.modelId === "string" ? step.modelId : undefined,
-          inputTokens: Number(step.inputTokens || 0),
-          outputTokens: Number(step.outputTokens || 0),
-          totalTokens: Number(step.totalTokens || 0),
-          costUsd: Number(step.costUsd || 0),
-          amplificationSource: typeof step.amplificationSource === "string" ? step.amplificationSource : undefined,
-          status: String(step.status || "completed"),
-          startedAt: typeof step.startedAt === "string" ? step.startedAt : undefined,
-          finishedAt: typeof step.finishedAt === "string" ? step.finishedAt : undefined,
-          createdAt: now,
-          updatedAt: now,
-        });
-        stepsByLedger.set(ledgerId, ledgerSteps);
-      }
-
-      const updated: LedgerRecord = applyDelta
-        ? {
-            ...base,
-            requestCount: base.requestCount + Number(body.requestCountDelta || 1),
-            stepCount: base.stepCount + Number(body.stepCountDelta || 1),
-            inputTokens: base.inputTokens + Number(body.inputTokens || 0),
-            outputTokens: base.outputTokens + Number(body.outputTokens || 0),
-            totalTokens: base.totalTokens + Number(body.totalTokens || 0),
-            costUsd: Number((base.costUsd + Number(body.costUsd || 0)).toFixed(4)),
-            candidateCount: Math.max(base.candidateCount, Number(body.candidateCount || 1)),
-            judgeRequestCount: base.judgeRequestCount + Number(body.judgeRequestCountDelta || 0),
-            hookRequestCount: base.hookRequestCount + Number(body.hookRequestCountDelta || 0),
-            status: String(body.status || base.status),
-            finishedAt: typeof body.finishedAt === "string" ? body.finishedAt : base.finishedAt,
-            syncedAt: typeof body.syncedAt === "string" ? body.syncedAt : now,
-            updatedAt: now,
-          }
-        : {
-            ...base,
-            status: String(body.status || base.status),
-            finishedAt: typeof body.finishedAt === "string" ? body.finishedAt : base.finishedAt,
-            syncedAt: typeof body.syncedAt === "string" ? body.syncedAt : now,
-            updatedAt: now,
-          };
-
-      ledgers.set(ledgerId, updated);
-
-      return {
-        ok: true,
-        status: 200,
-        data: {
-          projectId: "proj-default",
-          ledger: updated,
-          stepInserted: Boolean(step && !existingStep),
-          deltaApplied: applyDelta,
-        },
-      };
-    }
-
-    if (method === "GET" && path.startsWith("/api/projects/proj-default/runtime-usage-ledgers?")) {
-      const url = new URL(`http://localhost${path}`);
-      const limit = Number(url.searchParams.get("limit") || 20);
-      const taskId = url.searchParams.get("taskId");
-      const status = url.searchParams.get("status");
-      const items = [...ledgers.values()]
-        .filter((item) => (taskId ? item.taskId === taskId : true))
-        .filter((item) => (status ? item.status === status : true))
-        .slice(0, limit);
-
-      return {
-        ok: true,
-        status: 200,
-        data: {
-          projectId: "proj-default",
-          totals: computeTotals(items),
-          items,
-        },
-      };
-    }
-
-    if (method === "GET" && path.startsWith("/api/projects/proj-default/runtime-usage-ledgers/")) {
-      const ledgerId = path.split("/").pop() || "";
-      const ledger = ledgers.get(ledgerId);
-      if (!ledger) {
-        return {
-          ok: false,
-          status: 404,
-          data: { error: "Runtime usage ledger not found" },
-        };
-      }
-
-      const steps = stepsByLedger.get(ledgerId) || [];
-      const byStepType = steps.reduce((acc, step) => {
-        acc[step.stepType] = (acc[step.stepType] || 0) + 1;
-        return acc;
-      }, {} as Record<string, number>);
-
-      return {
-        ok: true,
-        status: 200,
-        data: {
-          projectId: "proj-default",
-          ledger,
-          steps,
-          breakdown: {
-            byStepType,
-          },
-        },
-      };
-    }
-
-    return {
-      ok: false,
-      status: 404,
-      data: {
-        error: `Unhandled path: ${path}`,
-      },
-    };
+  readOrchestrationStrategyMock.mockReturnValue({
+    hooks: [],
+    templates: [],
+    judge: { enabled: false },
   });
+
+  cpFetchMock.mockImplementation(
+    async (path: string, options?: { method?: string; body?: Record<string, unknown> }) =>
+      getRuntimeUsageLedgerResponse(path, options),
+  );
 });
 
 describe("runtime usage ledger project read path", () => {

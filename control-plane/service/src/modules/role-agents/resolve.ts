@@ -61,7 +61,10 @@ interface TemplateRoleExecutionPolicy {
   aggregationStrategy?: "first-pass" | "majority" | "merge-summary" | "human-review";
 }
 
-function mergeStringArray(value: string[] | null | undefined, fallback: string[] | null | undefined) {
+function mergeStringArray(
+  value: string[] | null | undefined,
+  fallback: string[] | null | undefined,
+) {
   return value ?? fallback ?? [];
 }
 
@@ -74,7 +77,9 @@ function isWriteCapableNonDeveloperRole(role: {
     return false;
   }
 
-  return role.permissionProfile === "perm.code-implementation" || role.toolProfile.includes("write");
+  return (
+    role.permissionProfile === "perm.code-implementation" || role.toolProfile.includes("write")
+  );
 }
 
 function parseTemplatePolicy(raw: unknown, roleAgentId: string) {
@@ -90,38 +95,41 @@ function parseTemplatePolicy(raw: unknown, roleAgentId: string) {
   return (match as TemplateRoleExecutionPolicy | undefined) ?? null;
 }
 
-export async function resolveRoleAgentForExecution(
-  input: ResolveRoleAgentInput,
-): Promise<ResolvedRoleAgentResult | null> {
-  const role = await db.query.roleAgents.findFirst({ where: eq(roleAgents.id, input.roleAgentId) });
-  if (!role) {
+async function loadProjectOverride(roleAgentId: string, projectId?: string) {
+  if (!projectId) {
     return null;
   }
 
-  const projectOverride = input.projectId
-    ? await db.query.roleAgentProjectOverrides.findFirst({
-        where: and(
-          eq(roleAgentProjectOverrides.roleAgentId, role.id),
-          eq(roleAgentProjectOverrides.projectId, input.projectId),
-        ),
-      })
-    : null;
+  return db.query.roleAgentProjectOverrides.findFirst({
+    where: and(
+      eq(roleAgentProjectOverrides.roleAgentId, roleAgentId),
+      eq(roleAgentProjectOverrides.projectId, projectId),
+    ),
+  });
+}
 
-  const bindings = await db
+async function loadBindings(roleAgentId: string, projectId?: string) {
+  return db
     .select()
     .from(roleAgentBindings)
     .where(
-      input.projectId
+      projectId
         ? and(
-            eq(roleAgentBindings.roleAgentId, role.id),
-            or(eq(roleAgentBindings.projectId, input.projectId), isNull(roleAgentBindings.projectId)),
+            eq(roleAgentBindings.roleAgentId, roleAgentId),
+            or(eq(roleAgentBindings.projectId, projectId), isNull(roleAgentBindings.projectId)),
           )
-        : and(eq(roleAgentBindings.roleAgentId, role.id), isNull(roleAgentBindings.projectId)),
+        : and(eq(roleAgentBindings.roleAgentId, roleAgentId), isNull(roleAgentBindings.projectId)),
     );
+}
 
-  const mergedRole = {
+function mergeResolvedRole(
+  role: NonNullable<Awaited<ReturnType<typeof db.query.roleAgents.findFirst>>>,
+  projectOverride: Awaited<ReturnType<typeof loadProjectOverride>>,
+  projectId?: string,
+) {
+  return {
     ...role,
-    projectId: input.projectId ?? role.projectId ?? null,
+    projectId: projectId ?? role.projectId ?? null,
     name: projectOverride?.name ?? role.name,
     description: projectOverride?.description ?? role.description,
     status: projectOverride?.status ?? role.status,
@@ -139,64 +147,98 @@ export async function resolveRoleAgentForExecution(
     outputSchemaId: projectOverride?.outputSchemaId ?? role.outputSchemaId,
     tagsJson: projectOverride?.tagsJson ?? role.tagsJson,
   };
+}
 
-  let policySource: "role-default" | "template-stage" = "role-default";
-  let executionMode = mergedRole.defaultExecutionMode;
-  let aggregationStrategy = mergedRole.aggregationStrategy ?? undefined;
-  let maxActiveBindings = mergedRole.maxActiveBindings ?? undefined;
-
-  if (input.templateId && input.stage) {
-    const stage = await db.query.workflowTemplateStages.findFirst({
-      where: and(
-        eq(workflowTemplateStages.templateId, input.templateId),
-        eq(workflowTemplateStages.stageKey, input.stage),
-      ),
-    });
-
-    const policy = parseTemplatePolicy(stage?.roleExecutionPoliciesJson, input.roleAgentId);
-    if (policy) {
-      policySource = "template-stage";
-      executionMode = policy.executionMode ?? executionMode;
-      aggregationStrategy = policy.aggregationStrategy ?? aggregationStrategy;
-      maxActiveBindings = policy.maxBindings ?? maxActiveBindings;
-    }
+async function resolveTemplateExecutionPolicy(
+  templateId: string | undefined,
+  stage: string | undefined,
+  roleAgentId: string,
+  defaults: {
+    executionMode: NonNullable<ResolvedRoleAgentResult["role"]["defaultExecutionMode"]>;
+    aggregationStrategy?: ResolvedRoleAgentResult["role"]["aggregationPolicy"] extends infer T
+      ? T extends { strategy: infer S }
+        ? S
+        : never
+      : never;
+    maxActiveBindings?: number;
+  },
+) {
+  if (!templateId || !stage) {
+    return {
+      policySource: "role-default" as const,
+      executionMode: defaults.executionMode,
+      aggregationStrategy: defaults.aggregationStrategy,
+      maxActiveBindings: defaults.maxActiveBindings,
+    };
   }
 
-  const bindingsMode = projectOverride?.bindingsMode ?? "inherit";
-  const projectScopedBindings = bindings.filter((binding) => binding.projectId === input.projectId);
-  const selectedBindings =
-    input.projectId && bindingsMode === "replace" ? projectScopedBindings : bindings;
+  const stageRow = await db.query.workflowTemplateStages.findFirst({
+    where: and(
+      eq(workflowTemplateStages.templateId, templateId),
+      eq(workflowTemplateStages.stageKey, stage),
+    ),
+  });
+  const policy = parseTemplatePolicy(stageRow?.roleExecutionPoliciesJson, roleAgentId);
+  if (!policy) {
+    return {
+      policySource: "role-default" as const,
+      executionMode: defaults.executionMode,
+      aggregationStrategy: defaults.aggregationStrategy,
+      maxActiveBindings: defaults.maxActiveBindings,
+    };
+  }
 
-  const dedupedBindings = Array.from(
-    selectedBindings.reduce((map, binding) => {
-      const previous = map.get(binding.bindingKey);
-      if (!previous) {
-        map.set(binding.bindingKey, binding);
+  return {
+    policySource: "template-stage" as const,
+    executionMode: policy.executionMode ?? defaults.executionMode,
+    aggregationStrategy: policy.aggregationStrategy ?? defaults.aggregationStrategy,
+    maxActiveBindings: policy.maxBindings ?? defaults.maxActiveBindings,
+  };
+}
+
+function dedupeBindings(bindings: Array<typeof roleAgentBindings.$inferSelect>) {
+  return Array.from(
+    bindings
+      .reduce((map, binding) => {
+        const previous = map.get(binding.bindingKey);
+        if (!previous) {
+          map.set(binding.bindingKey, binding);
+          return map;
+        }
+
+        const previousSpecificity = previous.projectId ? 1 : 0;
+        const currentSpecificity = binding.projectId ? 1 : 0;
+        if (
+          currentSpecificity > previousSpecificity ||
+          (currentSpecificity === previousSpecificity && binding.priority < previous.priority)
+        ) {
+          map.set(binding.bindingKey, binding);
+        }
+
         return map;
-      }
-
-      const previousSpecificity = previous.projectId ? 1 : 0;
-      const currentSpecificity = binding.projectId ? 1 : 0;
-      if (
-        currentSpecificity > previousSpecificity ||
-        (currentSpecificity === previousSpecificity && binding.priority < previous.priority)
-      ) {
-        map.set(binding.bindingKey, binding);
-      }
-
-      return map;
-    }, new Map<string, (typeof bindings)[number]>())
-    .values(),
+      }, new Map<string, (typeof bindings)[number]>())
+      .values(),
   );
+}
 
-  const allowedStages = mergedRole.allowedStagesJson ?? [];
-  const enabledBindings = dedupedBindings
+function selectBindingsForExecution(
+  bindings: Array<typeof roleAgentBindings.$inferSelect>,
+  projectId: string | undefined,
+  bindingsMode: string,
+) {
+  const projectScopedBindings = bindings.filter((binding) => binding.projectId === projectId);
+  const selected = projectId && bindingsMode === "replace" ? projectScopedBindings : bindings;
+  return dedupeBindings(selected);
+}
+
+function buildEnabledBindings(
+  bindings: Array<typeof roleAgentBindings.$inferSelect>,
+  maxActiveBindings: number | undefined,
+) {
+  return bindings
     .filter((binding) => binding.enabled)
     .sort((left, right) => left.priority - right.priority)
-    .slice(
-      0,
-      maxActiveBindings && maxActiveBindings > 0 ? maxActiveBindings : dedupedBindings.length,
-    )
+    .slice(0, maxActiveBindings && maxActiveBindings > 0 ? maxActiveBindings : bindings.length)
     .map((binding) => ({
       bindingId: binding.id,
       runtimeAgent: binding.runtimeAgent,
@@ -206,24 +248,71 @@ export async function resolveRoleAgentForExecution(
       model: binding.model ?? null,
       tags: binding.tagsJson ?? null,
     }));
+}
 
+function collectResolutionReasons(
+  role: {
+    id: string;
+    status: string;
+    permissionProfile: string;
+    toolProfile: string;
+  },
+  stage: string | undefined,
+  allowedStages: string[],
+  enabledBindings: ResolvedRoleAgentResult["role"]["bindings"],
+) {
   const reasons: string[] = [];
-  if (mergedRole.status !== "active") {
-    reasons.push(`role status is ${mergedRole.status}`);
+  if (role.status !== "active") {
+    reasons.push(`role status is ${role.status}`);
   }
-  if (input.stage && !allowedStages.includes(input.stage)) {
-    reasons.push(`stage ${input.stage} is not allowed`);
+  if (stage && !allowedStages.includes(stage)) {
+    reasons.push(`stage ${stage} is not allowed`);
   }
   if (enabledBindings.length === 0) {
     reasons.push("no enabled bindings available");
   }
-  if (isWriteCapableNonDeveloperRole({
-    id: role.id,
-    permissionProfile: mergedRole.permissionProfile,
-    toolProfile: mergedRole.toolProfile,
-  })) {
+  if (isWriteCapableNonDeveloperRole(role)) {
     reasons.push("non-developer role cannot hold code write capability");
   }
+  return reasons;
+}
+
+export async function resolveRoleAgentForExecution(
+  input: ResolveRoleAgentInput,
+): Promise<ResolvedRoleAgentResult | null> {
+  const role = await db.query.roleAgents.findFirst({ where: eq(roleAgents.id, input.roleAgentId) });
+  if (!role) {
+    return null;
+  }
+
+  const [projectOverride, bindings] = await Promise.all([
+    loadProjectOverride(role.id, input.projectId),
+    loadBindings(role.id, input.projectId),
+  ]);
+  const mergedRole = mergeResolvedRole(role, projectOverride, input.projectId);
+  const { policySource, executionMode, aggregationStrategy, maxActiveBindings } =
+    await resolveTemplateExecutionPolicy(input.templateId, input.stage, input.roleAgentId, {
+      executionMode: mergedRole.defaultExecutionMode,
+      aggregationStrategy: mergedRole.aggregationStrategy ?? undefined,
+      maxActiveBindings: mergedRole.maxActiveBindings ?? undefined,
+    });
+
+  const bindingsMode = projectOverride?.bindingsMode ?? "inherit";
+  const dedupedBindings = selectBindingsForExecution(bindings, input.projectId, bindingsMode);
+
+  const allowedStages = mergedRole.allowedStagesJson ?? [];
+  const enabledBindings = buildEnabledBindings(dedupedBindings, maxActiveBindings);
+  const reasons = collectResolutionReasons(
+    {
+      id: role.id,
+      status: mergedRole.status,
+      permissionProfile: mergedRole.permissionProfile,
+      toolProfile: mergedRole.toolProfile,
+    },
+    input.stage,
+    allowedStages,
+    enabledBindings,
+  );
 
   return {
     role: {

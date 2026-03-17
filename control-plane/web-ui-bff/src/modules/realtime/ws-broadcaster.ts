@@ -18,6 +18,60 @@ interface WSClient {
   subscribedTasks: Set<string>;
 }
 
+function canClientAccessEventProject(client: WSClient, event: RealtimeEvent) {
+  return !(
+    event.projectId &&
+    client.projectIds.size > 0 &&
+    !client.projectIds.has(event.projectId)
+  );
+}
+
+function isProjectSubscribed(client: WSClient, event: RealtimeEvent) {
+  return Boolean(
+    event.projectId &&
+      client.subscribedProjects.size > 0 &&
+      client.subscribedProjects.has(event.projectId),
+  );
+}
+
+function isTaskFilteredOut(client: WSClient, event: RealtimeEvent) {
+  return Boolean(
+    event.taskId && client.subscribedTasks.size > 0 && !client.subscribedTasks.has(event.taskId),
+  );
+}
+
+function requiresExplicitMatch(client: WSClient) {
+  return client.subscribedProjects.size > 0 || client.subscribedTasks.size > 0;
+}
+
+function shouldBroadcastEventToClient(client: WSClient, event: RealtimeEvent) {
+  if (!canClientAccessEventProject(client, event)) {
+    return false;
+  }
+
+  if (isProjectSubscribed(client, event)) {
+    return true;
+  }
+
+  if (isTaskFilteredOut(client, event)) {
+    return false;
+  }
+
+  if (requiresExplicitMatch(client) && !event.projectId && !event.taskId) {
+    return false;
+  }
+
+  return true;
+}
+
+function sendMessageToClient(client: WSClient, message: string) {
+  try {
+    client.ws.send(message);
+  } catch {
+    // Client disconnected, will be cleaned up
+  }
+}
+
 class WSBroadcaster {
   private clients = new Map<string, WSClient>();
 
@@ -61,48 +115,10 @@ class WSBroadcaster {
     const message = JSON.stringify(event);
 
     for (const [, client] of this.clients) {
-      // Filter by project — only deliver if client has access to the event's project
-      if (
-        event.projectId &&
-        client.projectIds.size > 0 &&
-        !client.projectIds.has(event.projectId)
-      ) {
+      if (!shouldBroadcastEventToClient(client, event)) {
         continue;
       }
-
-      if (
-        event.projectId &&
-        client.subscribedProjects.size > 0 &&
-        client.subscribedProjects.has(event.projectId)
-      ) {
-        try {
-          client.ws.send(message);
-        } catch {
-          // Client disconnected, will be cleaned up
-        }
-        continue;
-      }
-
-      // Filter by task subscription
-      if (
-        event.taskId &&
-        client.subscribedTasks.size > 0 &&
-        !client.subscribedTasks.has(event.taskId)
-      ) {
-        continue;
-      }
-
-      if (client.subscribedProjects.size > 0 || client.subscribedTasks.size > 0) {
-        if (!event.projectId && !event.taskId) {
-          continue;
-        }
-      }
-
-      try {
-        client.ws.send(message);
-      } catch {
-        // Client disconnected, will be cleaned up
-      }
+      sendMessageToClient(client, message);
     }
   }
 

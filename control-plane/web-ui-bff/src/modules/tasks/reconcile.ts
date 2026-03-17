@@ -1,5 +1,4 @@
 import { cpFetch, createInternalAuthorization } from "../../lib/control-plane-client";
-import { finalizeTaskState } from "./finalize";
 import {
   extractAssistantResultFromMessages,
   getAgentRun,
@@ -7,6 +6,7 @@ import {
   listSessions,
   recoverAgentRun,
 } from "../agent-control/opencode-adapter";
+import { finalizeTaskState } from "./finalize";
 
 interface RunningTaskRecord {
   id: string;
@@ -246,7 +246,9 @@ function planNeedsTerminalRepair(task: RunningTaskRecord): boolean {
 }
 
 function taskLooksHistoricallyInconsistent(task: RunningTaskRecord) {
-  return Boolean(inferTerminalStatus(task) && (planNeedsTerminalRepair(task) || task.status === "running"));
+  return Boolean(
+    inferTerminalStatus(task) && (planNeedsTerminalRepair(task) || task.status === "running"),
+  );
 }
 
 async function loadTaskSessions(authorization: string, taskId: string) {
@@ -432,9 +434,12 @@ export async function reconcileRunningTasksOnStartup(): Promise<RunningTaskRecon
   }
 
   const reconcileCandidates = mergeUniqueTasks(runningTasks, recentTasks);
-  const historicalTasks = reconcileCandidates.filter((task) => taskLooksHistoricallyInconsistent(task));
+  const historicalTasks = reconcileCandidates.filter((task) =>
+    taskLooksHistoricallyInconsistent(task),
+  );
   const runningOnlyTasks = reconcileCandidates.filter(
-    (task) => task.status === "running" && !historicalTasks.some((candidate) => candidate.id === task.id),
+    (task) =>
+      task.status === "running" && !historicalTasks.some((candidate) => candidate.id === task.id),
   );
 
   if (runningOnlyTasks.length === 0 && historicalTasks.length === 0) {

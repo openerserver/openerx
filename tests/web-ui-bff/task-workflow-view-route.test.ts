@@ -63,6 +63,141 @@ mock.module("../../control-plane/web-ui-bff/src/modules/realtime/ws-broadcaster"
   },
 }));
 
+function buildTaskWorkflowStageRuntimeResponses(taskId: string) {
+  return {
+    [`/api/tasks/${taskId}`]: {
+      ok: true,
+      data: {
+        id: taskId,
+        projectId: "project-1",
+        status: "running",
+      },
+    },
+    [`/api/tasks/${taskId}/workflow`]: {
+      ok: true,
+      data: {
+        data: {
+          workflowRun: {
+            id: `wf-${taskId}`,
+            templateId: "tpl-1",
+            currentStage: "verify",
+            status: "blocked",
+          },
+          stages: [
+            {
+              id: "run-clarify",
+              stageKey: "clarify",
+              status: "completed",
+              approvalState: "not-required",
+              primaryRoleAgentId: "role.product",
+            },
+            {
+              id: "run-verify",
+              stageKey: "verify",
+              status: "blocked",
+              approvalState: "pending",
+              blockingReason: "Security gate blocked release.",
+              primaryRoleAgentId: "role.qa",
+            },
+          ],
+        },
+      },
+    },
+    [`/api/tasks/${taskId}/role-conclusions`]: {
+      ok: true,
+      data: {
+        data: [
+          {
+            id: "conclusion-security",
+            roleAgentId: "role.security",
+            stage: "verify",
+            finalDecision: "block",
+            aggregateRiskLevel: "high",
+            consensusScore: 1,
+            winningRationale: "Security gate blocked release.",
+            mergedFindings: [],
+            minorityFindings: [],
+            conflicts: [],
+            approvalRecommendation: { required: true },
+          },
+        ],
+      },
+    },
+    [`/api/tasks/${taskId}/developer-change-requests`]: {
+      ok: true,
+      data: {
+        data: [
+          {
+            id: "request-verify",
+            taskStageRunId: "run-verify",
+            sourceRoleAgentId: "role.security",
+            priority: "high",
+            title: "修复安全问题",
+            summary: "修复漏洞后重新验证。",
+            requiredChanges: ["补充安全修复"],
+            blocking: true,
+            approvalRequired: true,
+            status: "open",
+          },
+        ],
+      },
+    },
+    "/api/workflow-templates/tpl-1/stages": {
+      ok: true,
+      data: {
+        data: [
+          {
+            id: "stage-clarify",
+            stageKey: "clarify",
+            name: "需求澄清",
+            primaryRoleAgentId: "role.product",
+            gatesJson: [],
+            approvalsJson: [],
+          },
+          {
+            id: "stage-verify",
+            stageKey: "verify",
+            name: "集成验证",
+            primaryRoleAgentId: "role.qa",
+            gatesJson: [{ name: "Security Gate" }],
+            approvalsJson: [{ name: "QA Approval" }],
+          },
+        ],
+      },
+    },
+  };
+}
+
+function getTaskWorkflowStageRuntimeResponse(url: string, responseMap: Record<string, unknown>) {
+  const directResponse = responseMap[url];
+  if (directResponse) {
+    return directResponse;
+  }
+
+  if (url.startsWith("/api/role-agents/role.security/resolve")) {
+    return {
+      ok: true,
+      data: { data: { role: { name: "安全 Agent" } } },
+    };
+  }
+
+  if (url.startsWith("/api/role-agents/role.qa/resolve")) {
+    return {
+      ok: true,
+      data: { data: { role: { name: "QA Agent" } } },
+    };
+  }
+
+  if (url.startsWith("/api/role-agents/role.product/resolve")) {
+    return {
+      ok: true,
+      data: { data: { role: { name: "产品 Agent" } } },
+    };
+  }
+
+  return { ok: true, data: {} };
+}
+
 describe("task workflow view route", () => {
   beforeEach(() => {
     cpFetchMock.mockReset();
@@ -192,145 +327,10 @@ describe("task workflow view route", () => {
   });
 
   test("derives gate, approval and block actual state for task workflow stages", async () => {
-    cpFetchMock.mockImplementation(async (url: string) => {
-      if (url === "/api/tasks/task-3") {
-        return {
-          ok: true,
-          data: {
-            id: "task-3",
-            projectId: "project-1",
-            status: "running",
-          },
-        };
-      }
-
-      if (url === "/api/tasks/task-3/workflow") {
-        return {
-          ok: true,
-          data: {
-            data: {
-              workflowRun: {
-                id: "wf-3",
-                templateId: "tpl-1",
-                currentStage: "verify",
-                status: "blocked",
-              },
-              stages: [
-                {
-                  id: "run-clarify",
-                  stageKey: "clarify",
-                  status: "completed",
-                  approvalState: "not-required",
-                  primaryRoleAgentId: "role.product",
-                },
-                {
-                  id: "run-verify",
-                  stageKey: "verify",
-                  status: "blocked",
-                  approvalState: "pending",
-                  blockingReason: "Security gate blocked release.",
-                  primaryRoleAgentId: "role.qa",
-                },
-              ],
-            },
-          },
-        };
-      }
-
-      if (url === "/api/tasks/task-3/role-conclusions") {
-        return {
-          ok: true,
-          data: {
-            data: [
-              {
-                id: "conclusion-security",
-                roleAgentId: "role.security",
-                stage: "verify",
-                finalDecision: "block",
-                aggregateRiskLevel: "high",
-                consensusScore: 1,
-                winningRationale: "Security gate blocked release.",
-                mergedFindings: [],
-                minorityFindings: [],
-                conflicts: [],
-                approvalRecommendation: { required: true },
-              },
-            ],
-          },
-        };
-      }
-
-      if (url === "/api/tasks/task-3/developer-change-requests") {
-        return {
-          ok: true,
-          data: {
-            data: [
-              {
-                id: "request-verify",
-                taskStageRunId: "run-verify",
-                sourceRoleAgentId: "role.security",
-                priority: "high",
-                title: "修复安全问题",
-                summary: "修复漏洞后重新验证。",
-                requiredChanges: ["补充安全修复"],
-                blocking: true,
-                approvalRequired: true,
-                status: "open",
-              },
-            ],
-          },
-        };
-      }
-
-      if (url === "/api/workflow-templates/tpl-1/stages") {
-        return {
-          ok: true,
-          data: {
-            data: [
-              {
-                id: "stage-clarify",
-                stageKey: "clarify",
-                name: "需求澄清",
-                primaryRoleAgentId: "role.product",
-                gatesJson: [],
-                approvalsJson: [],
-              },
-              {
-                id: "stage-verify",
-                stageKey: "verify",
-                name: "集成验证",
-                primaryRoleAgentId: "role.qa",
-                gatesJson: [{ name: "Security Gate" }],
-                approvalsJson: [{ name: "QA Approval" }],
-              },
-            ],
-          },
-        };
-      }
-
-      if (url.startsWith("/api/role-agents/role.security/resolve")) {
-        return {
-          ok: true,
-          data: { data: { role: { name: "安全 Agent" } } },
-        };
-      }
-
-      if (url.startsWith("/api/role-agents/role.qa/resolve")) {
-        return {
-          ok: true,
-          data: { data: { role: { name: "QA Agent" } } },
-        };
-      }
-
-      if (url.startsWith("/api/role-agents/role.product/resolve")) {
-        return {
-          ok: true,
-          data: { data: { role: { name: "产品 Agent" } } },
-        };
-      }
-
-      return { ok: true, data: {} };
-    });
+    const responseMap = buildTaskWorkflowStageRuntimeResponses("task-3");
+    cpFetchMock.mockImplementation(async (url: string) =>
+      getTaskWorkflowStageRuntimeResponse(url, responseMap),
+    );
 
     const { taskRoutes } = await import(
       "../../control-plane/web-ui-bff/src/modules/tasks/routes?task-workflow-view-route-stage-runtime"

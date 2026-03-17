@@ -1,4 +1,4 @@
-import { expect, test, type Page, type Route } from "@playwright/test";
+import { type Page, type Route, expect, test } from "@playwright/test";
 
 interface GraphTask {
   id: string;
@@ -131,7 +131,11 @@ async function installRealtimeMock(page: Page) {
         });
         for (const socket of MockWebSocket.instances) {
           const projectId = typeof event.projectId === "string" ? event.projectId : undefined;
-          if (projectId && socket.subscribedProjects.size > 0 && !socket.subscribedProjects.has(projectId)) {
+          if (
+            projectId &&
+            socket.subscribedProjects.size > 0 &&
+            !socket.subscribedProjects.has(projectId)
+          ) {
             continue;
           }
           socket.onmessage?.(messageEvent);
@@ -260,7 +264,10 @@ test("project task graph applies project realtime events incrementally", async (
 
   await expect(page.getByText("Default Project / 任务总图")).toBeVisible();
   await expect(page.getByTestId("project-task-graph-stat-running")).toHaveText("2");
-  await expect(page.locator('[data-task-id="task-beta"]')).toHaveAttribute("data-group-label", "Design");
+  await expect(page.locator('[data-task-id="task-beta"]')).toHaveAttribute(
+    "data-group-label",
+    "Design",
+  );
 
   graphView.tasks = graphView.tasks.map((task) =>
     task.id === "task-alpha"
@@ -274,9 +281,11 @@ test("project task graph applies project realtime events incrementally", async (
   );
 
   await page.evaluate(() => {
-    (window as unknown as {
-      __openerxEmitRealtimeEvent: (event: Record<string, unknown>) => void;
-    }).__openerxEmitRealtimeEvent({
+    (
+      window as unknown as {
+        __openerxEmitRealtimeEvent: (event: Record<string, unknown>) => void;
+      }
+    ).__openerxEmitRealtimeEvent({
       id: "evt-task-completed",
       type: "task.completed",
       ts: "2026-03-16T09:05:00.000Z",
@@ -287,7 +296,10 @@ test("project task graph applies project realtime events incrementally", async (
   });
 
   await expect(page.getByTestId("project-task-graph-stat-running")).toHaveText("1");
-  await expect(page.locator('[data-task-id="task-alpha"]')).toHaveAttribute("data-status-label", "已完成");
+  await expect(page.locator('[data-task-id="task-alpha"]')).toHaveAttribute(
+    "data-status-label",
+    "已完成",
+  );
 
   graphView.tasks = graphView.tasks.map((task) =>
     task.id === "task-beta"
@@ -300,9 +312,11 @@ test("project task graph applies project realtime events incrementally", async (
   );
 
   await page.evaluate(() => {
-    (window as unknown as {
-      __openerxEmitRealtimeEvent: (event: Record<string, unknown>) => void;
-    }).__openerxEmitRealtimeEvent({
+    (
+      window as unknown as {
+        __openerxEmitRealtimeEvent: (event: Record<string, unknown>) => void;
+      }
+    ).__openerxEmitRealtimeEvent({
       id: "evt-approval-required",
       type: "approval.required",
       ts: "2026-03-16T09:06:00.000Z",
@@ -313,7 +327,10 @@ test("project task graph applies project realtime events incrementally", async (
   });
 
   await expect(page.getByTestId("project-task-graph-stat-waiting-approval")).toHaveText("1");
-  await expect(page.locator('[data-task-id="task-beta"]')).toHaveAttribute("data-status-label", "待审批");
+  await expect(page.locator('[data-task-id="task-beta"]')).toHaveAttribute(
+    "data-status-label",
+    "待审批",
+  );
 
   graphView.tasks = graphView.tasks.map((task) =>
     task.id === "task-beta"
@@ -326,9 +343,11 @@ test("project task graph applies project realtime events incrementally", async (
   );
 
   await page.evaluate(() => {
-    (window as unknown as {
-      __openerxEmitRealtimeEvent: (event: Record<string, unknown>) => void;
-    }).__openerxEmitRealtimeEvent({
+    (
+      window as unknown as {
+        __openerxEmitRealtimeEvent: (event: Record<string, unknown>) => void;
+      }
+    ).__openerxEmitRealtimeEvent({
       id: "evt-pipeline-stage-updated",
       type: "pipeline.stage.updated",
       ts: "2026-03-16T09:07:00.000Z",
@@ -340,5 +359,8 @@ test("project task graph applies project realtime events incrementally", async (
     });
   });
 
-  await expect(page.locator('[data-task-id="task-beta"]')).toHaveAttribute("data-group-label", "Verify");
+  await expect(page.locator('[data-task-id="task-beta"]')).toHaveAttribute(
+    "data-group-label",
+    "Verify",
+  );
 });

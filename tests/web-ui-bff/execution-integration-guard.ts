@@ -5,7 +5,10 @@ interface ConfigModelRecord {
   provider?: string;
 }
 
-const ALLOWED_EXECUTION_TEST_MODELS = ["github-copilot:gpt-5-mini", "github-copilot:gpt-4o"] as const;
+const ALLOWED_EXECUTION_TEST_MODELS = [
+  "github-copilot:gpt-5-mini",
+  "github-copilot:gpt-4o",
+] as const;
 
 function normalizeExecutionTestModel(raw?: string | null) {
   if (!raw) {
@@ -27,9 +30,9 @@ function normalizeExecutionTestModel(raw?: string | null) {
 
 function getDefaultLowCostExecutionModel() {
   return (
-    normalizeExecutionTestModel(process.env.TEST_EXECUTION_MODEL)
-    || normalizeExecutionTestModel(process.env.LOW_COST_EXECUTION_MODEL)
-    || ALLOWED_EXECUTION_TEST_MODELS[0]
+    normalizeExecutionTestModel(process.env.TEST_EXECUTION_MODEL) ||
+    normalizeExecutionTestModel(process.env.LOW_COST_EXECUTION_MODEL) ||
+    ALLOWED_EXECUTION_TEST_MODELS[0]
   );
 }
 
@@ -50,11 +53,11 @@ export function getExecutionIntegrationGuardSummary() {
   };
 }
 
-export const paidExecutionIntegrationTest =
-  isExecutionIntegrationEnabled() ? test : test.skip;
+export const paidExecutionIntegrationTest = isExecutionIntegrationEnabled() ? test : test.skip;
 
-export const paidExecutionIntegrationDescribe =
-  isExecutionIntegrationEnabled() ? describe : describe.skip;
+export const paidExecutionIntegrationDescribe = isExecutionIntegrationEnabled()
+  ? describe
+  : describe.skip;
 
 export function resolveExecutionIntegrationModel(
   configuredModels: ConfigModelRecord[],

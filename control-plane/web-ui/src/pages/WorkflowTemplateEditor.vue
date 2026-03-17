@@ -547,9 +547,9 @@ import { message } from "ant-design-vue";
 import { computed, defineAsyncComponent, onMounted, reactive, ref } from "vue";
 import { useRoute } from "vue-router";
 import {
+  type WorkflowTemplateEditorView,
   createWorkflowTemplateStage,
   deleteWorkflowTemplateStage,
-  type WorkflowTemplateEditorView,
   getWorkflowTemplateEditorView,
   updateWorkflowTemplate,
   updateWorkflowTemplateStage,
@@ -665,24 +665,28 @@ const diagnosticsSummary = computed(() => {
     notes.push("含自定义阶段");
   }
   if (diagnostics.duplicateStageKeys.length > 0) {
-    notes.push(`重复阶段 ${diagnostics.duplicateStageKeys.join('/')}`);
+    notes.push(`重复阶段 ${diagnostics.duplicateStageKeys.join("/")}`);
   }
   if (diagnostics.missingConfiguredStages.length > 0) {
-    notes.push(`缺失配置 ${diagnostics.missingConfiguredStages.join('/')}`);
+    notes.push(`缺失配置 ${diagnostics.missingConfiguredStages.join("/")}`);
   }
-  return notes.join('；') || '无异常';
+  return notes.join("；") || "无异常";
 });
 
 const roleOptions = computed(() =>
   (editorView.value?.availableRoles || []).map((item) => ({ label: item.name, value: item.id })),
 );
 
-const roleLabelMap = computed(() =>
-  new Map((editorView.value?.availableRoles || []).map((item) => [item.id, item.name] as const)),
+const roleLabelMap = computed(
+  () =>
+    new Map((editorView.value?.availableRoles || []).map((item) => [item.id, item.name] as const)),
 );
 
 const stageCatalogOptions = computed(() =>
-  (editorView.value?.stageCatalog || []).map((item) => ({ label: `${item.label} (${item.key})`, value: item.key })),
+  (editorView.value?.stageCatalog || []).map((item) => ({
+    label: `${item.label} (${item.key})`,
+    value: item.key,
+  })),
 );
 
 const modeOptions = [
@@ -740,11 +744,13 @@ const stageFlowMermaid = computed(() => {
     const nodeId = `stage_${index + 1}`;
     const gateCount = stage.gates.filter((gate) => gate.required).length;
     const approvalCount = stage.approvals.filter((approval) => approval.required).length;
-    const label = sanitizeMermaidLabel([
-      `${index + 1}. ${stage.name || stageCatalogLabel(stage.stageKey)}`,
-      `${stage.stageKey} | ${resolveRoleLabel(stage.primaryRoleAgentId)}`,
-      `Gate ${gateCount} | Approval ${approvalCount}`,
-    ].join("\\n"));
+    const label = sanitizeMermaidLabel(
+      [
+        `${index + 1}. ${stage.name || stageCatalogLabel(stage.stageKey)}`,
+        `${stage.stageKey} | ${resolveRoleLabel(stage.primaryRoleAgentId)}`,
+        `Gate ${gateCount} | Approval ${approvalCount}`,
+      ].join("\\n"),
+    );
     lines.push(`${nodeId}[\"${label}\"]`);
     lines.push(`class ${nodeId} ${stage.enabled ? "active" : "muted"};`);
 
@@ -753,15 +759,72 @@ const stageFlowMermaid = computed(() => {
     }
 
     if (stage.failurePolicy.fallbackStageKey.trim()) {
-      const fallbackIndex = stageDrafts.value.findIndex((item) => item.stageKey === stage.failurePolicy.fallbackStageKey);
+      const fallbackIndex = stageDrafts.value.findIndex(
+        (item) => item.stageKey === stage.failurePolicy.fallbackStageKey,
+      );
       if (fallbackIndex >= 0) {
-        lines.push(`${nodeId} -. ${sanitizeMermaidLabel(stage.failurePolicy.action || "fallback")} .-> stage_${fallbackIndex + 1}`);
+        lines.push(
+          `${nodeId} -. ${sanitizeMermaidLabel(stage.failurePolicy.action || "fallback")} .-> stage_${fallbackIndex + 1}`,
+        );
       }
     }
   }
 
   return lines.join("\n");
 });
+
+function appendRoleMapPrimary(lines: string[], stageNodeId: string, stage: StageDraft, index: number) {
+  if (!stage.primaryRoleAgentId.trim()) {
+    return;
+  }
+
+  const primaryId = `role_primary_${index + 1}`;
+  lines.push(
+    `${primaryId}["主责: ${sanitizeMermaidLabel(resolveRoleLabel(stage.primaryRoleAgentId))}"]`,
+  );
+  lines.push(`${stageNodeId} --> ${primaryId}`);
+  lines.push(`class ${primaryId} primary;`);
+}
+
+function appendRoleMapParticipants(
+  lines: string[],
+  stageNodeId: string,
+  stage: StageDraft,
+  index: number,
+) {
+  for (const [participantIndex, participantRoleId] of stage.participantRoleAgentIds.entries()) {
+    const participantId = `role_participant_${index + 1}_${participantIndex + 1}`;
+    lines.push(
+      `${participantId}["参与: ${sanitizeMermaidLabel(resolveRoleLabel(participantRoleId))}"]`,
+    );
+    lines.push(`${stageNodeId} --> ${participantId}`);
+    lines.push(`class ${participantId} participant;`);
+  }
+}
+
+function appendRoleMapControls(lines: string[], stageNodeId: string, stage: StageDraft, index: number) {
+  for (const [gateIndex, gate] of stage.gates.entries()) {
+    const gateId = `gate_${index + 1}_${gateIndex + 1}`;
+    const gateRole = gate.evaluatorRole.trim() ? ` / ${resolveRoleLabel(gate.evaluatorRole)}` : "";
+    lines.push(
+      `${gateId}["Gate: ${sanitizeMermaidLabel(gate.name || gate.type)}${sanitizeMermaidLabel(gateRole)}"]`,
+    );
+    lines.push(`${stageNodeId} -.-> ${gateId}`);
+    lines.push(`class ${gateId} control;`);
+  }
+
+  for (const [approvalIndex, approval] of stage.approvals.entries()) {
+    const approvalId = `approval_${index + 1}_${approvalIndex + 1}`;
+    const approvalRole = approval.approverRole.trim()
+      ? ` / ${resolveRoleLabel(approval.approverRole)}`
+      : "";
+    lines.push(
+      `${approvalId}["Approval: ${sanitizeMermaidLabel(approval.name || "审批")}${sanitizeMermaidLabel(approvalRole)}"]`,
+    );
+    lines.push(`${stageNodeId} -.-> ${approvalId}`);
+    lines.push(`class ${approvalId} control;`);
+  }
+}
 
 const roleMapMermaid = computed(() => {
   if (stageDrafts.value.length === 0) {
@@ -778,38 +841,13 @@ const roleMapMermaid = computed(() => {
 
   for (const [index, stage] of stageDrafts.value.entries()) {
     const stageNodeId = `or_stage_${index + 1}`;
-    lines.push(`${stageNodeId}[\"${sanitizeMermaidLabel(`${stage.name || stageCatalogLabel(stage.stageKey)}\\n${stage.stageKey}`)}\"]`);
+    lines.push(
+      `${stageNodeId}[\"${sanitizeMermaidLabel(`${stage.name || stageCatalogLabel(stage.stageKey)}\\n${stage.stageKey}`)}\"]`,
+    );
     lines.push(`class ${stageNodeId} stage;`);
-
-    if (stage.primaryRoleAgentId.trim()) {
-      const primaryId = `role_primary_${index + 1}`;
-      lines.push(`${primaryId}[\"主责: ${sanitizeMermaidLabel(resolveRoleLabel(stage.primaryRoleAgentId))}\"]`);
-      lines.push(`${stageNodeId} --> ${primaryId}`);
-      lines.push(`class ${primaryId} primary;`);
-    }
-
-    for (const [participantIndex, participantRoleId] of stage.participantRoleAgentIds.entries()) {
-      const participantId = `role_participant_${index + 1}_${participantIndex + 1}`;
-      lines.push(`${participantId}[\"参与: ${sanitizeMermaidLabel(resolveRoleLabel(participantRoleId))}\"]`);
-      lines.push(`${stageNodeId} --> ${participantId}`);
-      lines.push(`class ${participantId} participant;`);
-    }
-
-    for (const [gateIndex, gate] of stage.gates.entries()) {
-      const gateId = `gate_${index + 1}_${gateIndex + 1}`;
-      const gateRole = gate.evaluatorRole.trim() ? ` / ${resolveRoleLabel(gate.evaluatorRole)}` : "";
-      lines.push(`${gateId}[\"Gate: ${sanitizeMermaidLabel(gate.name || gate.type)}${sanitizeMermaidLabel(gateRole)}\"]`);
-      lines.push(`${stageNodeId} -.-> ${gateId}`);
-      lines.push(`class ${gateId} control;`);
-    }
-
-    for (const [approvalIndex, approval] of stage.approvals.entries()) {
-      const approvalId = `approval_${index + 1}_${approvalIndex + 1}`;
-      const approvalRole = approval.approverRole.trim() ? ` / ${resolveRoleLabel(approval.approverRole)}` : "";
-      lines.push(`${approvalId}[\"Approval: ${sanitizeMermaidLabel(approval.name || "审批")}${sanitizeMermaidLabel(approvalRole)}\"]`);
-      lines.push(`${stageNodeId} -.-> ${approvalId}`);
-      lines.push(`class ${approvalId} control;`);
-    }
+    appendRoleMapPrimary(lines, stageNodeId, stage, index);
+    appendRoleMapParticipants(lines, stageNodeId, stage, index);
+    appendRoleMapControls(lines, stageNodeId, stage, index);
   }
 
   return lines.join("\n");
@@ -906,7 +944,9 @@ const stagePresets: StagePreset[] = [
 ];
 
 function toRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
 }
 
 function toStringArray(value: unknown) {
@@ -930,10 +970,10 @@ function asTemplateAutopilotLevel(value: string) {
 }
 
 function asTemplateBossParticipationMode(value: string) {
-  return value === "disabled"
-    || value === "advisory"
-    || value === "exception-only"
-    || value === "full-manager"
+  return value === "disabled" ||
+    value === "advisory" ||
+    value === "exception-only" ||
+    value === "full-manager"
     ? value
     : undefined;
 }
@@ -987,7 +1027,9 @@ function normalizeFailurePolicy(value: unknown): FailurePolicyDraft {
   const record = toRecord(value);
   return {
     action: String(record.action ?? record.strategy ?? ""),
-    fallbackStageKey: String(record.fallbackStageKey ?? record.rollbackStageKey ?? record.targetStageKey ?? ""),
+    fallbackStageKey: String(
+      record.fallbackStageKey ?? record.rollbackStageKey ?? record.targetStageKey ?? "",
+    ),
     allowManualOverride: Boolean(record.allowManualOverride ?? record.manualOverride ?? false),
     note: String(record.note ?? record.reason ?? record.description ?? ""),
   };
@@ -1008,7 +1050,9 @@ function serializeGates(gates: GateDraft[]) {
 
 function serializeApprovals(approvals: ApprovalDraft[]) {
   return approvals
-    .filter((approval) => approval.name.trim() || approval.approverRole.trim() || approval.note.trim())
+    .filter(
+      (approval) => approval.name.trim() || approval.approverRole.trim() || approval.note.trim(),
+    )
     .map((approval) => ({
       key: approval.key,
       name: approval.name.trim() || approval.key,
@@ -1037,30 +1081,34 @@ function serializeFailurePolicy(failurePolicy: FailurePolicyDraft) {
 }
 
 function normalizeStageTemplateStrategy(value: unknown): StageTemplateStrategyDraft {
-  const record = value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {};
+  const record =
+    value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {};
   return {
-    onBlockedTemplateId: typeof record.onBlockedTemplateId === "string" ? record.onBlockedTemplateId : "",
-    onWaitingApprovalTemplateId: typeof record.onWaitingApprovalTemplateId === "string"
-      ? record.onWaitingApprovalTemplateId
-      : "",
+    onBlockedTemplateId:
+      typeof record.onBlockedTemplateId === "string" ? record.onBlockedTemplateId : "",
+    onWaitingApprovalTemplateId:
+      typeof record.onWaitingApprovalTemplateId === "string"
+        ? record.onWaitingApprovalTemplateId
+        : "",
     note: typeof record.note === "string" ? record.note : "",
   };
 }
 
 function serializeStageTemplateStrategy(stageTemplateStrategy: StageTemplateStrategyDraft) {
   if (
-    !stageTemplateStrategy.onBlockedTemplateId.trim()
-    && !stageTemplateStrategy.onWaitingApprovalTemplateId.trim()
-    && !stageTemplateStrategy.note.trim()
+    !stageTemplateStrategy.onBlockedTemplateId.trim() &&
+    !stageTemplateStrategy.onWaitingApprovalTemplateId.trim() &&
+    !stageTemplateStrategy.note.trim()
   ) {
     return undefined;
   }
 
   return {
     onBlockedTemplateId: stageTemplateStrategy.onBlockedTemplateId.trim() || undefined,
-    onWaitingApprovalTemplateId: stageTemplateStrategy.onWaitingApprovalTemplateId.trim() || undefined,
+    onWaitingApprovalTemplateId:
+      stageTemplateStrategy.onWaitingApprovalTemplateId.trim() || undefined,
     note: stageTemplateStrategy.note.trim() || undefined,
   };
 }
@@ -1133,7 +1181,9 @@ function stagePresetOptions(stage: StageDraft) {
 }
 
 function applyStagePreset(stage: StageDraft, presetKey: string) {
-  const preset = stagePresets.find((item) => item.key === presetKey && item.stageKey === stage.stageKey);
+  const preset = stagePresets.find(
+    (item) => item.key === presetKey && item.stageKey === stage.stageKey,
+  );
   if (!preset) {
     return;
   }
@@ -1181,7 +1231,9 @@ function populateEditor(view: WorkflowTemplateEditorView) {
       participantRoleAgentIds: [...stage.participantRoleAgentIdsJson],
       entryCriteria: toStringArray(stage.entryCriteriaJson),
       exitCriteria: toStringArray(stage.exitCriteriaJson),
-      gates: Array.isArray(stage.gatesJson) ? stage.gatesJson.map((item, index) => normalizeGate(item, index)) : [],
+      gates: Array.isArray(stage.gatesJson)
+        ? stage.gatesJson.map((item, index) => normalizeGate(item, index))
+        : [],
       approvals: Array.isArray(stage.approvalsJson)
         ? stage.approvalsJson.map((item, index) => normalizeApproval(item, index))
         : [],
@@ -1273,7 +1325,9 @@ async function saveStage(stage: StageDraft, index: number) {
     return;
   }
 
-  const duplicateCount = stageDrafts.value.filter((item) => item.stageKey === stage.stageKey).length;
+  const duplicateCount = stageDrafts.value.filter(
+    (item) => item.stageKey === stage.stageKey,
+  ).length;
   if (duplicateCount > 1) {
     message.error(`阶段 Key ${stage.stageKey} 重复`);
     return;

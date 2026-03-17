@@ -1,7 +1,7 @@
 import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
-import { Fragment, defineComponent, h } from "vue";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { Fragment, defineComponent, h } from "vue";
 import Dashboard from "../../control-plane/web-ui/src/pages/Dashboard.vue";
 import { useProjectStore } from "../../control-plane/web-ui/src/stores/project";
 
@@ -48,9 +48,11 @@ const TableStub = defineComponent({
     type TableColumnVNode = {
       type?: { name?: string } | symbol;
       props?: Record<string, unknown>;
-      children?: {
-        default?: (args: { record: Record<string, unknown> }) => unknown;
-      } | unknown;
+      children?:
+        | {
+            default?: (args: { record: Record<string, unknown> }) => unknown;
+          }
+        | unknown;
     };
 
     const flattenColumnNodes = (nodes: unknown[]): TableColumnVNode[] =>
@@ -71,14 +73,19 @@ const TableStub = defineComponent({
     const renderColumnCell = (column: TableColumnVNode, record: Record<string, unknown>) => {
       const slotDefault =
         column.children && typeof column.children === "object" && "default" in column.children
-          ? (column.children as { default?: (args: { record: Record<string, unknown> }) => unknown }).default
+          ? (
+              column.children as {
+                default?: (args: { record: Record<string, unknown> }) => unknown;
+              }
+            ).default
           : undefined;
 
       if (slotDefault) {
         return slotDefault({ record });
       }
 
-      const dataIndex = typeof column.props?.dataIndex === "string" ? column.props.dataIndex : undefined;
+      const dataIndex =
+        typeof column.props?.dataIndex === "string" ? column.props.dataIndex : undefined;
       if (dataIndex) {
         return String(record[dataIndex] ?? "");
       }
@@ -105,9 +112,7 @@ const TableStub = defineComponent({
                       "td",
                       {
                         "data-column-key": String(
-                          column.props?.key
-                            ?? column.props?.dataIndex
-                            ?? "",
+                          column.props?.key ?? column.props?.dataIndex ?? "",
                         ),
                       },
                       Array.isArray(renderColumnCell(column, record))
@@ -119,7 +124,8 @@ const TableStub = defineComponent({
               ];
             }
 
-            const rowProps = typeof props.customRow === "function" ? props.customRow(record) || {} : {};
+            const rowProps =
+              typeof props.customRow === "function" ? props.customRow(record) || {} : {};
             const rows = [
               h(
                 "tr",
@@ -133,24 +139,21 @@ const TableStub = defineComponent({
                   h(
                     "td",
                     { "data-column-key": String(column.key ?? "") },
-                    slots.bodyCell?.({ column, record }) ?? String(record[String(column.key ?? "")] ?? ""),
+                    slots.bodyCell?.({ column, record }) ??
+                      String(record[String(column.key ?? "")] ?? ""),
                   ),
                 ),
               ),
             ];
             if (slots.expandedRowRender) {
               rows.push(
-                h(
-                  "tr",
-                  { "data-expanded-for": String(record.providerId ?? record.route ?? "") },
-                  [
-                    h(
-                      "td",
-                      { colspan: Math.max((props.columns as Array<unknown>).length, 1) },
-                      slots.expandedRowRender({ record }),
-                    ),
-                  ],
-                ),
+                h("tr", { "data-expanded-for": String(record.providerId ?? record.route ?? "") }, [
+                  h(
+                    "td",
+                    { colspan: Math.max((props.columns as Array<unknown>).length, 1) },
+                    slots.expandedRowRender({ record }),
+                  ),
+                ]),
               );
             }
             return rows;
@@ -203,15 +206,17 @@ function createProviderResponse(action: "keep" | "observe" | "downgrade" = "keep
         avgTokensPerCompletedRun: 30666,
         latestRunAt: "2026-03-13T00:00:00.000Z",
         trend: [],
-        monthly: [{
-          month: "2026-03",
-          tokenUsed: 92000,
-          completedRuns: 3,
-          failureRate: 0,
-          interventionRate: 0.25,
-          avgTokensPerCompletedRun: 30666,
-        }],
-        health: action === "downgrade" ? "risk" as const : "healthy" as const,
+        monthly: [
+          {
+            month: "2026-03",
+            tokenUsed: 92000,
+            completedRuns: 3,
+            failureRate: 0,
+            interventionRate: 0.25,
+            avgTokensPerCompletedRun: 30666,
+          },
+        ],
+        health: action === "downgrade" ? ("risk" as const) : ("healthy" as const),
         reasons: [],
         recommendationAction: action,
         recommendationLabel: action === "downgrade" ? "建议降配" : "保持主力",
@@ -292,7 +297,10 @@ function readSetupValue<T>(setupState: Record<string, unknown>, key: string) {
   return value as T;
 }
 
-function sectionText(wrapper: Awaited<ReturnType<typeof mountDashboard>>["wrapper"], testId: string) {
+function sectionText(
+  wrapper: Awaited<ReturnType<typeof mountDashboard>>["wrapper"],
+  testId: string,
+) {
   return wrapper.find(`[data-testid="${testId}"]`).text();
 }
 
@@ -560,7 +568,12 @@ beforeEach(() => {
   pushMock.mockReset();
   apiMocks.listApprovals.mockResolvedValue([]);
   apiMocks.listOrgs.mockResolvedValue([
-    { id: "org-default", name: "Default Org", slug: "default", createdAt: "2026-03-01T00:00:00.000Z" },
+    {
+      id: "org-default",
+      name: "Default Org",
+      slug: "default",
+      createdAt: "2026-03-01T00:00:00.000Z",
+    },
     { id: "org-beta", name: "Beta Org", slug: "beta", createdAt: "2026-03-01T00:00:00.000Z" },
   ]);
   apiMocks.listProjects.mockResolvedValue([
@@ -618,7 +631,9 @@ describe("Dashboard provider navigation", () => {
     expect(wrapper.text()).toContain("风险 Provider / 异常模型");
     expect(wrapper.text()).toContain("0 / 2");
 
-    const abnormalButtons = wrapper.findAll("button").filter((item) => item.text().includes("去调整模型"));
+    const abnormalButtons = wrapper
+      .findAll("button")
+      .filter((item) => item.text().includes("去调整模型"));
     expect(abnormalButtons.length).toBeGreaterThan(0);
 
     await abnormalButtons[0]?.trigger("click");
@@ -651,7 +666,8 @@ describe("Dashboard provider navigation", () => {
     expect(wrapper.text()).toContain("有请求但未完成，且未产生 token 消耗");
     expect(wrapper.text()).toContain("存在失败请求，建议优先检查失败原因与模型适配");
 
-    const orderedRoutes = wrapper.findAll('tr[data-route]')
+    const orderedRoutes = wrapper
+      .findAll("tr[data-route]")
       .map((item) => item.attributes("data-route"))
       .filter(Boolean);
     expect(orderedRoutes).toEqual([
@@ -662,7 +678,8 @@ describe("Dashboard provider navigation", () => {
   });
 
   it("does not flash the empty provider state before project bootstrap finishes", async () => {
-    const deferredProjects = createDeferred<Array<{ id: string; orgId: string; name: string; slug: string }>>();
+    const deferredProjects =
+      createDeferred<Array<{ id: string; orgId: string; name: string; slug: string }>>();
     apiMocks.listProjects.mockReturnValue(deferredProjects.promise);
 
     const pinia = createPinia();
@@ -698,10 +715,9 @@ describe("Dashboard provider navigation", () => {
   it("renders runtime governance overview with high-cost executions and amplification sources", async () => {
     const { wrapper } = await mountDashboard();
     const setupState = getSetupState(wrapper);
-    const highCostLedgerRows = readSetupValue<Array<{ projectName: string; orgName: string; projectGroupLabel: string }>>(
-      setupState,
-      "highCostLedgerRows",
-    );
+    const highCostLedgerRows = readSetupValue<
+      Array<{ projectName: string; orgName: string; projectGroupLabel: string }>
+    >(setupState, "highCostLedgerRows");
 
     expect(wrapper.text()).toContain("跨项目运行治理总览");
     expect(wrapper.text()).toContain("最近高消耗执行");
@@ -718,7 +734,9 @@ describe("Dashboard provider navigation", () => {
       orgName: "Beta Org",
       projectGroupLabel: "Beta Project",
     });
-    expect(apiMocks.getProjectRuntimeUsageLedgers).toHaveBeenCalledWith("proj-default", { limit: 20 });
+    expect(apiMocks.getProjectRuntimeUsageLedgers).toHaveBeenCalledWith("proj-default", {
+      limit: 20,
+    });
     expect(apiMocks.getProjectRuntimeUsageLedgers).toHaveBeenCalledWith("proj-beta", { limit: 20 });
   });
 
@@ -776,7 +794,12 @@ describe("Dashboard provider navigation", () => {
 
   it("uses shared family group only when sibling projects actually share it", async () => {
     apiMocks.listOrgs.mockResolvedValue([
-      { id: "org-default", name: "Default Org", slug: "default", createdAt: "2026-03-01T00:00:00.000Z" },
+      {
+        id: "org-default",
+        name: "Default Org",
+        slug: "default",
+        createdAt: "2026-03-01T00:00:00.000Z",
+      },
     ]);
     apiMocks.listProjects.mockResolvedValue([
       { id: "proj-alpha-api", orgId: "org-default", name: "Alpha API", slug: "alpha-api" },
@@ -786,7 +809,10 @@ describe("Dashboard provider navigation", () => {
 
     const { wrapper } = await mountDashboard();
     const setupState = getSetupState(wrapper);
-    const groupOptions = readSetupValue<Array<{ value: string; label: string }>>(setupState, "runtimeProjectGroupOptions");
+    const groupOptions = readSetupValue<Array<{ value: string; label: string }>>(
+      setupState,
+      "runtimeProjectGroupOptions",
+    );
 
     expect(groupOptions).toEqual(
       expect.arrayContaining([
@@ -799,7 +825,12 @@ describe("Dashboard provider navigation", () => {
 
   it("prefers explicit project group metadata before derived family fallback", async () => {
     apiMocks.listOrgs.mockResolvedValue([
-      { id: "org-default", name: "Default Org", slug: "default", createdAt: "2026-03-01T00:00:00.000Z" },
+      {
+        id: "org-default",
+        name: "Default Org",
+        slug: "default",
+        createdAt: "2026-03-01T00:00:00.000Z",
+      },
     ]);
     apiMocks.listProjects.mockResolvedValue([
       {
@@ -821,7 +852,10 @@ describe("Dashboard provider navigation", () => {
 
     const { wrapper } = await mountDashboard();
     const setupState = getSetupState(wrapper);
-    const groupOptions = readSetupValue<Array<{ value: string; label: string }>>(setupState, "runtimeProjectGroupOptions");
+    const groupOptions = readSetupValue<Array<{ value: string; label: string }>>(
+      setupState,
+      "runtimeProjectGroupOptions",
+    );
 
     expect(groupOptions).toEqual(
       expect.arrayContaining([
@@ -845,9 +879,10 @@ describe("Dashboard provider navigation", () => {
 
     expect(readSetupValue(setupState, "runtimeOrgFilter")).toBe("org-default");
     expect(
-      readSetupValue<Array<{ projectName: string }>>(setupState, "filteredRuntimeLedgerItems").every(
-        (item) => item.projectName === "Default Project",
-      ),
+      readSetupValue<Array<{ projectName: string }>>(
+        setupState,
+        "filteredRuntimeLedgerItems",
+      ).every((item) => item.projectName === "Default Project"),
     ).toBe(true);
     expect(
       readSetupValue<Array<{ projectName: string }>>(setupState, "highCostLedgerRows").every(
@@ -859,14 +894,18 @@ describe("Dashboard provider navigation", () => {
     expect(runtimeSectionText).toContain("$0.8000");
     expect(runtimeSectionText).not.toContain("Beta Project");
 
-    const defaultProjectGroup = readSetupValue<Array<{ value: string; label: string }>>(setupState, "runtimeProjectGroupOptions")
-      .find((option) => option.label === "Default Project");
+    const defaultProjectGroup = readSetupValue<Array<{ value: string; label: string }>>(
+      setupState,
+      "runtimeProjectGroupOptions",
+    ).find((option) => option.label === "Default Project");
     expect(defaultProjectGroup).toBeTruthy();
 
     setupState.runtimeProjectGroupFilter = defaultProjectGroup?.value ?? "all";
     await flushPromises();
 
-    expect(readSetupValue(setupState, "runtimeProjectGroupFilter")).toBe(defaultProjectGroup?.value);
+    expect(readSetupValue(setupState, "runtimeProjectGroupFilter")).toBe(
+      defaultProjectGroup?.value,
+    );
     expect(sectionText(wrapper, "dashboard-runtime-ledger-section")).toContain("Default Project");
   });
 
@@ -874,7 +913,9 @@ describe("Dashboard provider navigation", () => {
     const { wrapper } = await mountDashboard();
     const runtimeSection = wrapper.find('[data-testid="dashboard-runtime-ledger-section"]');
 
-    const openLedgerButton = runtimeSection.find('[data-testid="open-runtime-ledger-ledger-beta-1"]');
+    const openLedgerButton = runtimeSection.find(
+      '[data-testid="open-runtime-ledger-ledger-beta-1"]',
+    );
     expect(openLedgerButton.exists()).toBe(true);
     await openLedgerButton.trigger("click");
 
@@ -889,7 +930,9 @@ describe("Dashboard provider navigation", () => {
       },
     });
 
-    const openTaskButton = runtimeSection.find('[data-testid="open-runtime-ledger-task-task-beta-1"]');
+    const openTaskButton = runtimeSection.find(
+      '[data-testid="open-runtime-ledger-task-task-beta-1"]',
+    );
     expect(openTaskButton.exists()).toBe(true);
     await openTaskButton.trigger("click");
 
@@ -923,7 +966,9 @@ describe("Dashboard provider navigation", () => {
       },
     });
 
-    const projectButton = governanceSection.find('[data-testid="open-governance-project-proj-beta"]');
+    const projectButton = governanceSection.find(
+      '[data-testid="open-governance-project-proj-beta"]',
+    );
     expect(projectButton.exists()).toBe(true);
     await projectButton.trigger("click");
 

@@ -1,12 +1,12 @@
 import {
+  type ChatSettingsVisualization,
   buildJsonVisualizations,
   buildModelsVisualizations,
   buildStrategyVisualizations,
-  type ChatSettingsVisualization,
 } from "../../lib/chat-settings-visualization";
+import { buildStrategyMermaidMap } from "../../lib/orchestration-mermaid";
 import type { OrchestrationStrategy, WorkflowTemplate } from "../../lib/orchestration-strategy";
 import { normalizeOrchestrationStrategy } from "../../lib/orchestration-strategy";
-import { buildStrategyMermaidMap } from "../../lib/orchestration-mermaid";
 import { runDetachedPrompt } from "../agent-control/opencode-adapter";
 import type { ChatSettingsMessage } from "./conversation-manager";
 import type {
@@ -188,7 +188,11 @@ function resolveTemplateForCategory(
     return directMatch;
   }
 
-  return strategy.templates.find((template) => template.enabled !== false) || strategy.templates[0] || null;
+  return (
+    strategy.templates.find((template) => template.enabled !== false) ||
+    strategy.templates[0] ||
+    null
+  );
 }
 
 function inferTemplateMode(
@@ -220,6 +224,58 @@ function inferTemplateMode(
   return agents.length > 1 ? "parallel" : "single";
 }
 
+function assertTemplatePatch(template: unknown, index: number): Record<string, unknown> {
+  if (!template || typeof template !== "object") {
+    throw buildAssistantPatchError(`第 ${index + 1} 个模板配置不是合法对象。`);
+  }
+
+  return { ...(template as Record<string, unknown>) };
+}
+
+function normalizeTemplateMode(
+  strategy: OrchestrationStrategy,
+  templatePatch: Record<string, unknown>,
+): { templatePatch: Record<string, unknown>; enablePipeline: boolean } {
+  const rawMode = templatePatch.mode;
+  if (rawMode === undefined) {
+    return { templatePatch, enablePipeline: false };
+  }
+
+  if (rawMode === "single" || rawMode === "parallel") {
+    return { templatePatch, enablePipeline: false };
+  }
+
+  if (typeof rawMode !== "string") {
+    throw buildAssistantPatchError(
+      `模板执行模式填写为 ${String(rawMode)}，但当前只支持 single 或 parallel。`,
+    );
+  }
+
+  const normalizedMode = rawMode.trim().toLowerCase();
+  if (normalizedMode === "pipeline") {
+    templatePatch.mode = inferTemplateMode(strategy, templatePatch);
+    return { templatePatch, enablePipeline: true };
+  }
+
+  if (normalizedMode === "serial" || normalizedMode === "sequential") {
+    templatePatch.mode = "single";
+    return { templatePatch, enablePipeline: false };
+  }
+
+  if (
+    normalizedMode === "concurrent" ||
+    normalizedMode === "multi" ||
+    normalizedMode === "multi-agent"
+  ) {
+    templatePatch.mode = "parallel";
+    return { templatePatch, enablePipeline: false };
+  }
+
+  throw buildAssistantPatchError(
+    `模板执行模式填写为 ${rawMode}，但当前只支持 single 或 parallel；如果你想控制 pipeline，请明确说明开启或关闭 pipeline。`,
+  );
+}
+
 function normalizeOrchestrationPatch(
   strategy: OrchestrationStrategy,
   patch: Record<string, unknown>,
@@ -229,42 +285,10 @@ function normalizeOrchestrationPatch(
 
   if (Array.isArray(patch.templates)) {
     normalizedPatch.templates = patch.templates.map((template, index) => {
-      if (!template || typeof template !== "object") {
-        throw buildAssistantPatchError(`第 ${index + 1} 个模板配置不是合法对象。`);
-      }
-
-      const templatePatch = { ...(template as Record<string, unknown>) };
-      const rawMode = templatePatch.mode;
-      if (rawMode === undefined) {
-        return templatePatch;
-      }
-
-      if (rawMode === "single" || rawMode === "parallel") {
-        return templatePatch;
-      }
-
-      if (typeof rawMode !== "string") {
-        throw buildAssistantPatchError(`模板执行模式填写为 ${String(rawMode)}，但当前只支持 single 或 parallel。`);
-      }
-
-      const normalizedMode = rawMode.trim().toLowerCase();
-      if (normalizedMode === "pipeline") {
-        shouldEnablePipeline = true;
-        templatePatch.mode = inferTemplateMode(strategy, templatePatch);
-        return templatePatch;
-      }
-
-      if (normalizedMode === "serial" || normalizedMode === "sequential") {
-        templatePatch.mode = "single";
-        return templatePatch;
-      }
-
-      if (normalizedMode === "concurrent" || normalizedMode === "multi" || normalizedMode === "multi-agent") {
-        templatePatch.mode = "parallel";
-        return templatePatch;
-      }
-
-      throw buildAssistantPatchError(`模板执行模式填写为 ${rawMode}，但当前只支持 single 或 parallel；如果你想控制 pipeline，请明确说明开启或关闭 pipeline。`);
+      const templatePatch = assertTemplatePatch(template, index);
+      const normalizedTemplate = normalizeTemplateMode(strategy, templatePatch);
+      shouldEnablePipeline ||= normalizedTemplate.enablePipeline;
+      return normalizedTemplate.templatePatch;
     });
   }
 
@@ -276,7 +300,13 @@ function normalizeOrchestrationPatch(
 }
 
 function normalizeConfigType(value: unknown): ChatSettingsConfigType {
-  return value === "models" || value === "agents" || value === "mcp" || value === "skills" || value === "commands" || value === "security" || value === "plugins"
+  return value === "models" ||
+    value === "agents" ||
+    value === "mcp" ||
+    value === "skills" ||
+    value === "commands" ||
+    value === "security" ||
+    value === "plugins"
     ? value
     : "orchestration-strategy";
 }
@@ -329,14 +359,22 @@ function normalizeVisualizations(args: {
   }
 
   if (args.configType === "plugins") {
-    const patch = args.patch as { operation?: string; source?: string; name?: string; plugins?: PluginConfigItem[] };
+    const patch = args.patch as {
+      operation?: string;
+      source?: string;
+      name?: string;
+      plugins?: PluginConfigItem[];
+    };
     return {
       mermaidPreview: {},
       visualizations: buildJsonVisualizations("插件配置预览", patch),
     };
   }
 
-  const nextStrategy = mergeStrategyPatch(args.strategy, args.patch as Partial<OrchestrationStrategy>);
+  const nextStrategy = mergeStrategyPatch(
+    args.strategy,
+    args.patch as Partial<OrchestrationStrategy>,
+  );
   return {
     mermaidPreview: buildStrategyMermaidMap(nextStrategy),
     visualizations: buildStrategyVisualizations(nextStrategy),
@@ -349,7 +387,8 @@ function normalizeAssistantResponse(
   fallbackText: string,
 ): ChatSettingsAssistantResponse {
   const configType = normalizeConfigType(raw.configType);
-  const rawPatch = raw.patch && typeof raw.patch === "object" ? (raw.patch as Record<string, unknown>) : {};
+  const rawPatch =
+    raw.patch && typeof raw.patch === "object" ? (raw.patch as Record<string, unknown>) : {};
   const patch =
     configType === "orchestration-strategy"
       ? normalizeOrchestrationPatch(strategy, rawPatch)
@@ -409,13 +448,17 @@ export async function runChatSettingsAssistant(args: {
 
   if (!parsed) {
     const retryPrompt = `${prompt}\n\n请仅输出严格 JSON 对象，不要包含解释文本。`;
-    const retryResult = await runDetachedPrompt("[Chat Settings Retry] configuration", retryPrompt, {
-      timeoutMs: 45000,
-      model: {
-        providerId: args.model.providerId,
-        modelId: args.model.modelId,
+    const retryResult = await runDetachedPrompt(
+      "[Chat Settings Retry] configuration",
+      retryPrompt,
+      {
+        timeoutMs: 45000,
+        model: {
+          providerId: args.model.providerId,
+          modelId: args.model.modelId,
+        },
       },
-    });
+    );
 
     if (!retryResult.ok) {
       throw new Error(retryResult.error || "配置助手重试失败");

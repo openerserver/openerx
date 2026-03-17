@@ -8,23 +8,24 @@
  *           with seed data already applied (admin/admin123!, proj-default).
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { selectCredentialForIdentity } from "../../control-plane/web-ui-bff/src/modules/tasks/routes";
 import {
   paidExecutionIntegrationDescribe,
   resolveExecutionIntegrationModel,
 } from "./execution-integration-guard";
+import {
+  buildTaskCleanupStatements,
+  buildDeleteStatements,
+  resolveBffUrl,
+  resolveControlPlaneUrl,
+  runCleanupStatements,
+} from "./test-env";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-
-const BFF_URL = process.env.TEST_BFF_URL || "http://127.0.0.1:4098";
-const CP_URL = process.env.TEST_CP_URL || "http://127.0.0.1:4097";
+const BFF_URL = resolveBffUrl();
+const CP_URL = resolveControlPlaneUrl();
 const PROJECT_ID = process.env.TEST_PROJECT_ID || "proj-default";
 const USERNAME = process.env.TEST_USERNAME || "admin";
 const PASSWORD = process.env.TEST_PASSWORD || "admin123!";
-const DB_PATH =
-  process.env.TEST_DB_PATH || resolve(__dirname, "../../control-plane/service/data/openerx.db");
 const executionIntegrationDescribe = paidExecutionIntegrationDescribe;
 
 interface ConfigModelRecord {
@@ -90,9 +91,12 @@ async function login(): Promise<string> {
 async function getAvailableCopilotModel(token: string): Promise<string> {
   const [{ data: modelList, status: modelStatus }, { data: testPolicy }] = await Promise.all([
     bffRequest<{ data?: ConfigModelRecord[] }>(token, "/api/config/models/list"),
-    bffRequest<{ data?: { effectiveModel?: string | null } }>(token, "/api/config/models/test-policy"),
+    bffRequest<{ data?: { effectiveModel?: string | null } }>(
+      token,
+      "/api/config/models/test-policy",
+    ),
   ]);
-  const configuredModels = modelStatus === 200 ? (modelList.data || []) : [];
+  const configuredModels = modelStatus === 200 ? modelList.data || [] : [];
   return resolveExecutionIntegrationModel(configuredModels, testPolicy.data?.effectiveModel);
 }
 
@@ -104,18 +108,11 @@ const createdRepositoryIds: string[] = [];
 
 afterAll(async () => {
   const stmts = [
-    ...createdTaskIds.map((id) => `DELETE FROM tasks WHERE id='${id}';`),
-    ...createdCredentialIds.map((id) => `DELETE FROM repository_credentials WHERE id='${id}';`),
-    ...createdRepositoryIds.map((id) => `DELETE FROM repositories WHERE id='${id}';`),
+    ...buildTaskCleanupStatements(createdTaskIds),
+    ...buildDeleteStatements("repository_credentials", createdCredentialIds),
+    ...buildDeleteStatements("repositories", createdRepositoryIds),
   ];
-  if (stmts.length > 0) {
-    const { execSync } = await import("node:child_process");
-    try {
-      execSync(`sqlite3 "${DB_PATH}" "${stmts.join(" ")}"`, { timeout: 5000 });
-    } catch {
-      console.warn("Cleanup failed — test data may remain");
-    }
-  }
+  await runCleanupStatements(stmts, "identity binding test");
 });
 
 // ── State ──────────────────────────────────────────────────────────

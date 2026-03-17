@@ -16,11 +16,14 @@
     "test:integration:hooks": "RUN_EXECUTION_INTEGRATION=1 bun test ../../tests/web-ui-bff/hooks-integration.test.ts --timeout 120000",
     "test:integration:workflow-evaluation": "RUN_EXECUTION_INTEGRATION=1 bun test ../../tests/web-ui-bff/workflow-evaluation.test.ts --timeout 120000",
     "test:integration:identity-execute": "RUN_EXECUTION_INTEGRATION=1 bun test ../../tests/web-ui-bff/identity-binding.test.ts --timeout 120000",
-    "test:integration:execution": "OPENCODE_MIN_ACTIVE_BEFORE_PAUSE_MS=500 RUN_EXECUTION_INTEGRATION=1 bun test ../../tests/web-ui-bff/opencode-completion-sync.test.ts --timeout 120000 && RUN_EXECUTION_INTEGRATION=1 bun test ../../tests/web-ui-bff/identity-binding.test.ts --timeout 120000 && RUN_EXECUTION_INTEGRATION=1 bun test ../../tests/web-ui-bff/hooks-integration.test.ts --timeout 120000 && RUN_EXECUTION_INTEGRATION=1 bun test ../../tests/web-ui-bff/workflow-evaluation.test.ts --timeout 120000",
+    "test:integration:execution:core": "RUN_EXECUTION_INTEGRATION=1 bun test ../../tests/web-ui-bff/identity-binding.test.ts --timeout 120000 && RUN_EXECUTION_INTEGRATION=1 bun test ../../tests/web-ui-bff/workflow-evaluation.test.ts --timeout 120000",
+    "test:integration:execution:full": "OPENCODE_MIN_ACTIVE_BEFORE_PAUSE_MS=500 RUN_EXECUTION_INTEGRATION=1 bun test ../../tests/web-ui-bff/opencode-completion-sync.test.ts --timeout 120000 && RUN_EXECUTION_INTEGRATION=1 bun test ../../tests/web-ui-bff/identity-binding.test.ts --timeout 120000 && RUN_EXECUTION_INTEGRATION=1 bun test ../../tests/web-ui-bff/hooks-integration.test.ts --timeout 120000 && RUN_EXECUTION_INTEGRATION=1 bun test ../../tests/web-ui-bff/workflow-evaluation.test.ts --timeout 120000",
+    "test:integration:execution:smoke": "bun run test:integration:execution:core",
+    "test:integration:execution": "bun run test:integration:execution:smoke",
     "test:integration:dag-sync": "bun test ../../tests/web-ui-bff/dag-sync.test.ts --timeout 30000",
     "test:identity": "bun test ../../tests/web-ui-bff/identity-binding.test.ts --timeout 30000",
     "test:user-management": "bun test ../../tests/web-ui-bff/user-management.test.ts --timeout 30000",
-    "test:external-execute": "bun run test:integration:execution"
+    "test:external-execute": "bun run test:integration:execution:smoke"
   },
   "dependencies": {
     "@hono/zod-validator": "^0.4.0",

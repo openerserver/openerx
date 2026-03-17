@@ -8,9 +8,13 @@
     "build": "bun build src/index.ts --outdir dist --target bun",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "db:generate": "drizzle-kit generate",
+    "db:generate:pg": "DATABASE_DIALECT=postgres drizzle-kit generate",
     "db:migrate": "bun run src/db/migrate.ts",
+    "db:migrate:pg": "DATABASE_DIALECT=postgres bun run src/db/migrate.ts",
     "db:seed": "bun run src/db/seed.ts",
+    "db:seed:pg": "DATABASE_DIALECT=postgres bun run src/db/seed.ts",
     "db:studio": "drizzle-kit studio",
+    "db:studio:pg": "DATABASE_DIALECT=postgres drizzle-kit studio",
     "cli:task": "bun run src/cli/create-task.ts",
     "cli:backfill-task-relations": "bun run src/cli/backfill-project-task-relations.ts",
     "cli:repair-graphs": "bun run src/cli/repair-historical-graphs.ts",
@@ -19,12 +23,13 @@
     "test:user-management": "bun test ../../tests/service/user-management.test.ts --timeout 30000"
   },
   "dependencies": {
-    "hono": "^4.7.0",
     "@hono/zod-validator": "^0.4.0",
-    "drizzle-orm": "^0.36.0",
-    "zod": "^3.24.0",
     "@opencode-ai/sdk": "^1.0.0",
-    "jose": "^6.0.0"
+    "drizzle-orm": "^0.36.0",
+    "hono": "^4.7.0",
+    "jose": "^6.0.0",
+    "postgres": "^3.4.8",
+    "zod": "^3.24.0"
   },
   "devDependencies": {
     "drizzle-kit": "^0.30.0",

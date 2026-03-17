@@ -218,8 +218,8 @@
 </template>
 
 <script setup lang="ts">
-import type { Key } from "ant-design-vue/es/_util/type";
 import { message } from "ant-design-vue";
+import type { Key } from "ant-design-vue/es/_util/type";
 import { storeToRefs } from "pinia";
 import { computed, defineAsyncComponent, onMounted, ref } from "vue";
 import { useChatSettingsOrchestrationStore } from "../stores/chat-settings-orchestration";
@@ -246,19 +246,29 @@ const {
 
 const previewCategory = ref("deep");
 
-const modelOptions = computed(() => selectableModels.value.map((item) => ({ label: item, value: item })));
-const orchestrationVersion = computed(() => orchestrationStore.context?.orchestrationVersion || "-");
+const modelOptions = computed(() =>
+  selectableModels.value.map((item) => ({ label: item, value: item })),
+);
+const orchestrationVersion = computed(
+  () => orchestrationStore.context?.orchestrationVersion || "-",
+);
 const previewTabs = computed(() => Object.keys(orchestrationPreview.value?.mermaidPreview || {}));
 const previewRiskHints = computed(() => orchestrationPreview.value?.riskHints || []);
-const recommendedRewriteExample = computed(() => orchestrationStore.buildRecommendedRewriteExample());
+const recommendedRewriteExample = computed(() =>
+  orchestrationStore.buildRecommendedRewriteExample(),
+);
 const previewCurrentDiff = computed(() => {
   if (!orchestrationPreview.value) {
     return null;
   }
 
   const category = orchestrationPreview.value.affectedCategories[0] || activeCategory.value;
-  const before = orchestrationPreview.value.strategySummaryBefore?.find((item) => item.category === category);
-  const after = orchestrationPreview.value.strategySummaryAfter?.find((item) => item.category === category);
+  const before = orchestrationPreview.value.strategySummaryBefore?.find(
+    (item) => item.category === category,
+  );
+  const after = orchestrationPreview.value.strategySummaryAfter?.find(
+    (item) => item.category === category,
+  );
 
   if (!before || !after) {
     return null;
@@ -270,7 +280,9 @@ const previewCurrentDiff = computed(() => {
 function messageClass(role: "user" | "assistant") {
   return [
     "chat-settings-page__message",
-    role === "user" ? "chat-settings-page__message--user" : "chat-settings-page__message--assistant",
+    role === "user"
+      ? "chat-settings-page__message--user"
+      : "chat-settings-page__message--assistant",
   ];
 }
 

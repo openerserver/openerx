@@ -54,25 +54,30 @@
 import { computed } from "vue";
 import type { ProjectRoleExecutionViewRow } from "../lib/api";
 
-const props = withDefaults(defineProps<{
-  loading: boolean;
-  error: string | null;
-  projectId: string;
-  rows: ProjectRoleExecutionViewRow[];
-  currentStage?: string;
-  activeRoleAgentIds?: string[];
-}>(), {
-  currentStage: undefined,
-  activeRoleAgentIds: () => [],
-});
+const props = withDefaults(
+  defineProps<{
+    loading: boolean;
+    error: string | null;
+    projectId: string;
+    rows: ProjectRoleExecutionViewRow[];
+    currentStage?: string;
+    activeRoleAgentIds?: string[];
+  }>(),
+  {
+    currentStage: undefined,
+    activeRoleAgentIds: () => [],
+  },
+);
 
 const filteredRows = computed(() => {
   if (!props.currentStage) {
     return props.rows;
   }
 
-  const matched = props.rows.filter((row) =>
-    row.effectiveStages.length === 0 || row.effectiveStages.includes(props.currentStage as string),
+  const matched = props.rows.filter(
+    (row) =>
+      row.effectiveStages.length === 0 ||
+      row.effectiveStages.includes(props.currentStage as string),
   );
 
   if (matched.length > 0) {

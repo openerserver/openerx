@@ -40,7 +40,10 @@ interface RuntimeUsageLedgerStepRecord {
   status: string;
 }
 
-async function request<T>(path: string, opts: RequestInit = {}): Promise<{ data: T; status: number }> {
+async function request<T>(
+  path: string,
+  opts: RequestInit = {},
+): Promise<{ data: T; status: number }> {
   const response = await fetch(`${CP_URL}${path}`, opts);
   const text = await response.text();
   let data: unknown;
@@ -309,8 +312,12 @@ describe("runtime usage ledger routes", () => {
     expect(listResult.data.totals.requestCount).toBeGreaterThanOrEqual(2);
     expect(listResult.data.totals.stepCount).toBeGreaterThanOrEqual(2);
 
-    const itemA = listResult.data.items.find((item) => item.runtimeSessionId === syncPayloads[0].runtimeSessionId);
-    const itemB = listResult.data.items.find((item) => item.runtimeSessionId === syncPayloads[1].runtimeSessionId);
+    const itemA = listResult.data.items.find(
+      (item) => item.runtimeSessionId === syncPayloads[0].runtimeSessionId,
+    );
+    const itemB = listResult.data.items.find(
+      (item) => item.runtimeSessionId === syncPayloads[1].runtimeSessionId,
+    );
 
     expect(itemA?.totalTokens).toBe(150);
     expect(itemA?.hookRequestCount).toBe(1);
@@ -321,7 +328,9 @@ describe("runtime usage ledger routes", () => {
       ledger: RuntimeUsageLedgerRecord;
       steps: RuntimeUsageLedgerStepRecord[];
       breakdown: { byStepType: Record<string, number> };
-    }>(`/api/projects/${PROJECT_ID}/runtime-usage-ledgers/${encodeURIComponent(String(itemB?.id))}`);
+    }>(
+      `/api/projects/${PROJECT_ID}/runtime-usage-ledgers/${encodeURIComponent(String(itemB?.id))}`,
+    );
 
     expect(detailResult.status).toBe(200);
     expect(detailResult.data.ledger.runtimeSessionId).toBe(syncPayloads[1].runtimeSessionId);

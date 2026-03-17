@@ -1,9 +1,6 @@
 import { cpFetch, createInternalAuthorization } from "../../lib/control-plane-client";
 import { resolveModelRoute } from "../../lib/opencode-config";
 import {
-  type PaidExecutionGuardState,
-} from "../../lib/paid-execution-guard";
-import {
   type ExecutionCandidate,
   type ExecutionPlan,
   type JudgeResult,
@@ -12,6 +9,7 @@ import {
   readOrchestrationStrategy,
   renderPromptTemplate,
 } from "../../lib/orchestration-strategy";
+import type { PaidExecutionGuardState } from "../../lib/paid-execution-guard";
 import type { RealtimeEvent, RealtimeEventType } from "../../types/events";
 import {
   extractAssistantResultFromMessages,
@@ -28,9 +26,9 @@ import {
 } from "../agent-control/run-persistence";
 import { collectChangesFromSession } from "../code-changes/change-collector";
 import { executeLifecycleHooks } from "../hooks/lifecycle-hooks";
+import { finalizeTaskState } from "../tasks/finalize";
 import { observeGraphWorkspaceDir, onGraphToolExecuted } from "./dag-sync";
 import { buildPipelineStageUpdatedEvents } from "./pipeline-events";
-import { finalizeTaskState } from "../tasks/finalize";
 
 // Subscribes to OpenCode Runtime SSE events and transforms them into
 // standard RealtimeEvent format for WebSocket broadcast.
@@ -170,8 +168,8 @@ class SSEAggregator {
     const overRequestLimit =
       currentGuard.maxRequestsPerRun > 0 && nextActualRequests > currentGuard.maxRequestsPerRun;
     const overCostLimit =
-      currentGuard.maxEstimatedCostUsdPerRun > 0
-      && nextActualCost > currentGuard.maxEstimatedCostUsdPerRun;
+      currentGuard.maxEstimatedCostUsdPerRun > 0 &&
+      nextActualCost > currentGuard.maxEstimatedCostUsdPerRun;
     const breakerReason = overRequestLimit
       ? `actual requests ${nextActualRequests} exceeded ${currentGuard.maxRequestsPerRun}`
       : overCostLimit
@@ -353,7 +351,13 @@ class SSEAggregator {
     projectId?: string;
     agentRunId?: string;
     authorization: string;
-    reason: "task.continued" | "task.completed" | "task.failed" | "task.hooks.updated" | "task.node.updated" | "agent.completed";
+    reason:
+      | "task.continued"
+      | "task.completed"
+      | "task.failed"
+      | "task.hooks.updated"
+      | "task.node.updated"
+      | "agent.completed";
   }): Promise<void> {
     const events = await buildPipelineStageUpdatedEvents(args);
     for (const event of events) {
@@ -394,7 +398,9 @@ class SSEAggregator {
 
     const task = taskResult.data;
     const taskStrategy = parseTaskStrategy(task.strategy);
-    const paidExecutionGuard = taskStrategy.paidExecutionGuard as PaidExecutionGuardState | undefined;
+    const paidExecutionGuard = taskStrategy.paidExecutionGuard as
+      | PaidExecutionGuardState
+      | undefined;
     if (paidExecutionGuard?.postHooksDisabled || this.isPaidExecutionBreakerTripped(taskId)) {
       await recordAgentAudit({
         projectId: task.projectId,
@@ -439,11 +445,18 @@ class SSEAggregator {
       },
       onHookExecuted: async (execution) => {
         const modelRoute =
-          execution.model
-          || (typeof taskStrategy.effectiveModel === "string" ? taskStrategy.effectiveModel : undefined)
-          || task.selectedModel
-          || paidExecutionGuard?.modelRoute;
-        if (!execution.sessionId || !modelRoute || !execution.tokenUsed || execution.tokenUsed <= 0) {
+          execution.model ||
+          (typeof taskStrategy.effectiveModel === "string"
+            ? taskStrategy.effectiveModel
+            : undefined) ||
+          task.selectedModel ||
+          paidExecutionGuard?.modelRoute;
+        if (
+          !execution.sessionId ||
+          !modelRoute ||
+          !execution.tokenUsed ||
+          execution.tokenUsed <= 0
+        ) {
           return;
         }
 
@@ -469,7 +482,12 @@ class SSEAggregator {
               triggerType: execution.trigger,
               hookId: execution.hookId,
               amplificationSource: "hook",
-              status: execution.status === "failed" ? "failed" : execution.status === "skipped" ? "skipped" : "completed",
+              status:
+                execution.status === "failed"
+                  ? "failed"
+                  : execution.status === "skipped"
+                    ? "skipped"
+                    : "completed",
               finishedAt: execution.completedAt,
             },
           },
@@ -495,7 +513,8 @@ class SSEAggregator {
           return {
             stop: true,
             reason:
-              guardOutcome.breakerReason || "Stopped remaining hooks after the paid execution breaker tripped.",
+              guardOutcome.breakerReason ||
+              "Stopped remaining hooks after the paid execution breaker tripped.",
           };
         }
 
@@ -663,10 +682,7 @@ class SSEAggregator {
     await this.processParsedEvent(type, parsed);
   }
 
-  private async processParsedEvent(
-    type: string,
-    parsed: Record<string, unknown>,
-  ): Promise<void> {
+  private async processParsedEvent(type: string, parsed: Record<string, unknown>): Promise<void> {
     const workspaceDirectory =
       typeof parsed.directory === "string" ? String(parsed.directory || "") : "";
     observeGraphWorkspaceDir(workspaceDirectory);
@@ -790,7 +806,7 @@ class SSEAggregator {
       const errorMessage =
         typeof errorData?.message === "string"
           ? errorData.message
-          : error.name ?? "Provider authentication failed";
+          : (error.name ?? "Provider authentication failed");
       if (runtimeRun?.taskId) {
         await Promise.all([
           patchAgentRunRecord({
@@ -885,9 +901,10 @@ class SSEAggregator {
       const assistantResult = await this.getLatestAssistantResult(
         event.sessionId,
         event.type === "session.idle" ? 20000 : 8000,
+        run.lastPromptAt,
       );
 
-      if (event.type === "session.idle" && !assistantResult.completed) {
+      if (!assistantResult.completed) {
         return;
       }
 
@@ -1381,7 +1398,9 @@ class SSEAggregator {
 
     const task = taskResult.data;
     const taskStrategy = parseTaskStrategy(task.strategy);
-    const paidExecutionGuard = taskStrategy.paidExecutionGuard as PaidExecutionGuardState | undefined;
+    const paidExecutionGuard = taskStrategy.paidExecutionGuard as
+      | PaidExecutionGuardState
+      | undefined;
     if (this.isPaidExecutionBreakerTripped(taskId)) {
       await recordAgentAudit({
         projectId: task.projectId,
@@ -1414,11 +1433,18 @@ class SSEAggregator {
       },
       onHookExecuted: async (execution) => {
         const modelRoute =
-          execution.model
-          || (typeof taskStrategy.effectiveModel === "string" ? taskStrategy.effectiveModel : undefined)
-          || task.selectedModel
-          || paidExecutionGuard?.modelRoute;
-        if (!execution.sessionId || !modelRoute || !execution.tokenUsed || execution.tokenUsed <= 0) {
+          execution.model ||
+          (typeof taskStrategy.effectiveModel === "string"
+            ? taskStrategy.effectiveModel
+            : undefined) ||
+          task.selectedModel ||
+          paidExecutionGuard?.modelRoute;
+        if (
+          !execution.sessionId ||
+          !modelRoute ||
+          !execution.tokenUsed ||
+          execution.tokenUsed <= 0
+        ) {
           return;
         }
 
@@ -1444,7 +1470,12 @@ class SSEAggregator {
               triggerType: execution.trigger,
               hookId: execution.hookId,
               amplificationSource: "hook",
-              status: execution.status === "failed" ? "failed" : execution.status === "skipped" ? "skipped" : "completed",
+              status:
+                execution.status === "failed"
+                  ? "failed"
+                  : execution.status === "skipped"
+                    ? "skipped"
+                    : "completed",
               finishedAt: execution.completedAt,
             },
           },
@@ -1470,7 +1501,8 @@ class SSEAggregator {
           return {
             stop: true,
             reason:
-              guardOutcome.breakerReason || "Stopped remaining failure hooks after the paid execution breaker tripped.",
+              guardOutcome.breakerReason ||
+              "Stopped remaining failure hooks after the paid execution breaker tripped.",
           };
         }
 
@@ -1495,6 +1527,7 @@ class SSEAggregator {
   private async getLatestAssistantResult(
     sessionId: string,
     timeoutMs: number,
+    minCompletedAt?: number,
   ): Promise<{ text?: string; completed: boolean; tokenUsed: number }> {
     const deadline = Date.now() + timeoutMs;
     let fallbackText: string | undefined;
@@ -1506,7 +1539,9 @@ class SSEAggregator {
         return { text: fallbackText, completed: false, tokenUsed: fallbackTokenUsed };
       }
 
-      const assistantResult = extractAssistantResultFromMessages(messagesResult.data);
+      const assistantResult = extractAssistantResultFromMessages(messagesResult.data, {
+        minCompletedAt,
+      });
       if (assistantResult.text) {
         fallbackText = assistantResult.text;
       }
@@ -1627,7 +1662,9 @@ class SSEAggregator {
 
       const task = taskResult.data;
       const taskStrategy = parseTaskStrategy(task.strategy);
-      const paidExecutionGuard = taskStrategy.paidExecutionGuard as PaidExecutionGuardState | undefined;
+      const paidExecutionGuard = taskStrategy.paidExecutionGuard as
+        | PaidExecutionGuardState
+        | undefined;
       let plan: ExecutionPlan | undefined;
       if (task.executionPlan) {
         try {
@@ -1654,8 +1691,8 @@ class SSEAggregator {
       let judgeResult: JudgeResult | undefined;
 
       const judgeDisabledByGuard = Boolean(
-        paidExecutionGuard?.overridesApplied?.includes("judge-disabled")
-          || this.isPaidExecutionBreakerTripped(taskId),
+        paidExecutionGuard?.overridesApplied?.includes("judge-disabled") ||
+          this.isPaidExecutionBreakerTripped(taskId),
       );
 
       if (judgeConfig.enabled && candidateResults.length > 1 && !judgeDisabledByGuard) {
@@ -1665,7 +1702,12 @@ class SSEAggregator {
           judgeConfig,
           authorization,
         );
-        if (judgeResult?.sessionId && judgeResult.model && judgeResult.tokenUsed && judgeResult.tokenUsed > 0) {
+        if (
+          judgeResult?.sessionId &&
+          judgeResult.model &&
+          judgeResult.tokenUsed &&
+          judgeResult.tokenUsed > 0
+        ) {
           const resolvedModel = parseModelString(judgeResult.model);
           const guardOutcome = await this.recordPaidExecutionUsageEvent({
             taskId,
@@ -1834,7 +1876,9 @@ class SSEAggregator {
       return {
         status: "failed",
         sessionId: result.sessionId,
-        model: result.model ? `${result.model.providerId}:${result.model.modelId}` : judgeConfig.model,
+        model: result.model
+          ? `${result.model.providerId}:${result.model.modelId}`
+          : judgeConfig.model,
         tokenUsed: result.tokenUsed,
         reasoning: result.error || "Judge evaluation failed",
         completedAt: new Date().toISOString(),
@@ -1875,7 +1919,9 @@ class SSEAggregator {
           sessionId: result.sessionId,
           winnerIndex,
           scores: parsed.scores,
-          model: result.model ? `${result.model.providerId}:${result.model.modelId}` : judgeConfig.model,
+          model: result.model
+            ? `${result.model.providerId}:${result.model.modelId}`
+            : judgeConfig.model,
           tokenUsed: result.tokenUsed,
           reasoning: parsed.reasoning || result.text,
           completedAt: new Date().toISOString(),
@@ -1889,7 +1935,9 @@ class SSEAggregator {
       status: "completed",
       sessionId: result.sessionId,
       winnerIndex: 0,
-      model: result.model ? `${result.model.providerId}:${result.model.modelId}` : judgeConfig.model,
+      model: result.model
+        ? `${result.model.providerId}:${result.model.modelId}`
+        : judgeConfig.model,
       tokenUsed: result.tokenUsed,
       reasoning: result.text,
       completedAt: new Date().toISOString(),

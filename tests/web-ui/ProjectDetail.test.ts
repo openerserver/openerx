@@ -340,7 +340,9 @@ describe("ProjectDetail", () => {
     expect(wrapper.text()).toContain("开启项目付费执行权限");
     expect(wrapper.text()).toContain("重点关注项");
     expect(wrapper.text()).toContain("当前还未开启付费执行权限，请联系平台管理员开通后再重试。");
-    expect(wrapper.text()).toContain("原始说明：The selected model requires an active paid execution lease.");
+    expect(wrapper.text()).toContain(
+      "原始说明：The selected model requires an active paid execution lease.",
+    );
     expect(wrapper.text()).toContain("开启 30 分钟执行许可");
     expect(wrapper.text()).toContain("parallel candidates x2");
     expect(wrapper.text()).toContain("2 lifecycle hook(s) enabled");
@@ -357,15 +359,19 @@ describe("ProjectDetail", () => {
     expect(wrapper.text()).toContain("$0.2000");
     expect(apiMocks.getProjectPaidExecutionPreflight).toHaveBeenCalledWith("proj-default");
     expect(apiMocks.getProjectPaidExecutionLease).toHaveBeenCalledWith("proj-default");
-    expect(apiMocks.getProjectRuntimeUsageLedgers).toHaveBeenCalledWith("proj-default", { limit: 8 });
+    expect(apiMocks.getProjectRuntimeUsageLedgers).toHaveBeenCalledWith("proj-default", {
+      limit: 8,
+    });
   });
 
   it("enables project paid execution permission from the preflight card", async () => {
     const wrapper = await mountPage();
-    const actionButton = wrapper.findAll("button").find((item) => item.text().includes("开启项目付费执行权限"));
+    const actionButton = wrapper
+      .findAll("button")
+      .find((item) => item.text().includes("开启项目付费执行权限"));
 
     expect(actionButton).toBeTruthy();
-    await actionButton!.trigger("click");
+    await actionButton?.trigger("click");
     await flushPromises();
     await flushPromises();
 
@@ -399,11 +405,14 @@ describe("ProjectDetail", () => {
     const actionButton = wrapper.findAll("button").find((item) => item.text().includes("查看明细"));
 
     expect(actionButton).toBeTruthy();
-    await actionButton!.trigger("click");
+    await actionButton?.trigger("click");
     await flushPromises();
     await flushPromises();
 
-    expect(apiMocks.getProjectRuntimeUsageLedgerDetail).toHaveBeenCalledWith("proj-default", "ledger-1");
+    expect(apiMocks.getProjectRuntimeUsageLedgerDetail).toHaveBeenCalledWith(
+      "proj-default",
+      "ledger-1",
+    );
     expect(document.body.textContent || "").toContain("对话调用明细");
     expect(document.body.textContent || "").toContain("对话分支 ID");
     expect(document.body.textContent || "").toContain("关联任务");
@@ -422,7 +431,10 @@ describe("ProjectDetail", () => {
 
     await mountPage();
 
-    expect(apiMocks.getProjectRuntimeUsageLedgerDetail).toHaveBeenCalledWith("proj-default", "ledger-1");
+    expect(apiMocks.getProjectRuntimeUsageLedgerDetail).toHaveBeenCalledWith(
+      "proj-default",
+      "ledger-1",
+    );
     expect(document.body.textContent || "").toContain("对话调用明细");
     expect(document.body.textContent || "").toContain("session-1");
   });

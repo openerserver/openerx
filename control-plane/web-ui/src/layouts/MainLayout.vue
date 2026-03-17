@@ -117,18 +117,18 @@
 
 <script setup lang="ts">
 import {
+  AppstoreOutlined,
   AuditOutlined,
   DashboardOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   MessageOutlined,
+  PoweroffOutlined,
   ProjectOutlined,
   RobotOutlined,
   SettingOutlined,
   TeamOutlined,
   UnorderedListOutlined,
-  AppstoreOutlined,
-  PoweroffOutlined,
 } from "@ant-design/icons-vue";
 import { message } from "ant-design-vue";
 import { computed, h, reactive, ref, watch } from "vue";
@@ -146,7 +146,9 @@ const realtimeStore = useRealtimeStore();
 const embeddedMode = computed(() => route.query.embedded === "1");
 const SIDEBAR_COLLAPSED_KEY = "openerx-sidebar-collapsed";
 const siderCollapsed = ref(
-  typeof window !== "undefined" ? window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1" : false,
+  typeof window !== "undefined"
+    ? window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1"
+    : false,
 );
 
 watch(siderCollapsed, (collapsed) => {
@@ -190,7 +192,11 @@ const menuItems = computed(() => {
   ];
 
   if (authStore.user?.role === "platform_admin" || authStore.user?.role === "org_admin") {
-    items.splice(6, 0, { key: "/chat-settings", icon: () => h(MessageOutlined), label: "对话配置" });
+    items.splice(6, 0, {
+      key: "/chat-settings",
+      icon: () => h(MessageOutlined),
+      label: "对话配置",
+    });
     items.splice(5, 0, { key: "/users", icon: () => h(TeamOutlined), label: "用户管理" });
   }
 

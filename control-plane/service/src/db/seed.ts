@@ -1,33 +1,54 @@
-import { Database } from "bun:sqlite";
 import { eq } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/bun-sqlite";
-import * as schema from "./schema";
-import { ensureRuntimeTables } from "./runtime-schema";
-import { configureSqliteConnection, resolveDatabaseUrl } from "./sqlite-config";
 import { bootstrapDefaultRoleAgents } from "../modules/role-agents/bootstrap";
+import { closeDatabase, db, dbDialect, sqlite } from "./index";
+import * as schema from "./schema";
 
-const DATABASE_URL = resolveDatabaseUrl();
-
-const sqlite = new Database(DATABASE_URL, { create: true });
-configureSqliteConnection(sqlite, {
-  databaseUrl: DATABASE_URL,
-  logPrefix: "[db:seed]",
-});
-ensureRuntimeTables(sqlite);
-
-const db = drizzle(sqlite, { schema });
 const BAD_TIMESTAMP_LITERAL = "(datetime('now'))";
 
 function nowIso() {
   return new Date().toISOString();
 }
 
+function hasTable(tableName: string) {
+  if (!sqlite) {
+    return false;
+  }
+
+  const result = sqlite
+    .query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?1")
+    .get(tableName) as { name?: string } | null;
+
+  return result?.name === tableName;
+}
+
+function hasColumn(tableName: string, columnName: string) {
+  if (!sqlite) {
+    return false;
+  }
+
+  const rows = sqlite.query(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>;
+  return rows.some((row) => row.name === columnName);
+}
+
 function normalizeLegacyCreatedAt(tableName: string, columnName = "created_at") {
+  if (!sqlite) {
+    return;
+  }
+
+  if (!hasTable(tableName) || !hasColumn(tableName, columnName)) {
+    return;
+  }
+
   sqlite
     .query(
       `UPDATE ${tableName} SET ${columnName} = ?1 WHERE ${columnName} = '${BAD_TIMESTAMP_LITERAL.replace(/'/g, "''")}'`,
     )
     .run(nowIso());
+}
+
+async function findFirst<T>(rows: Promise<T[]>) {
+  const [row] = await rows;
+  return row ?? null;
 }
 
 function defaultWorkflowTemplateDefinition() {
@@ -106,65 +127,66 @@ function defaultWorkflowTemplateDefinition() {
   };
 }
 
-function bootstrapDefaultWorkflowTemplate(projectId: string) {
+async function bootstrapDefaultWorkflowTemplate(projectId: string) {
   const now = nowIso();
   const definition = defaultWorkflowTemplateDefinition();
 
-  const existingTemplate = db
-    .select()
-    .from(schema.workflowTemplates)
-    .where(eq(schema.workflowTemplates.id, definition.template.id))
-    .get();
+  const existingTemplate = await findFirst(
+    db
+      .select()
+      .from(schema.workflowTemplates)
+      .where(eq(schema.workflowTemplates.id, definition.template.id))
+      .limit(1),
+  );
 
   if (!existingTemplate) {
-    db.insert(schema.workflowTemplates)
-      .values({
-        ...definition.template,
-        projectId: null,
-        createdBy: "system:seed",
-        updatedBy: "system:seed",
-        createdAt: now,
-        updatedAt: now,
-      })
-      .run();
+    await db.insert(schema.workflowTemplates).values({
+      ...definition.template,
+      projectId: null,
+      createdBy: "system:seed",
+      updatedBy: "system:seed",
+      createdAt: now,
+      updatedAt: now,
+    });
     console.log("  ✓ Created default workflow template");
   } else {
     console.log("  ○ Default workflow template already exists");
   }
 
   for (const stage of definition.stages) {
-    const existingStage = db
-      .select()
-      .from(schema.workflowTemplateStages)
-      .where(eq(schema.workflowTemplateStages.id, stage.id))
-      .get();
+    const existingStage = await findFirst(
+      db
+        .select()
+        .from(schema.workflowTemplateStages)
+        .where(eq(schema.workflowTemplateStages.id, stage.id))
+        .limit(1),
+    );
+
     if (existingStage) {
       continue;
     }
 
-    db.insert(schema.workflowTemplateStages)
-      .values({
-        ...stage,
-        templateId: definition.template.id,
-        roleExecutionPoliciesJson: null,
-        entryCriteriaJson: null,
-        exitCriteriaJson: null,
-        hooksJson: null,
-        gatesJson: null,
-        approvalsJson: null,
-        failurePolicyJson: null,
-      })
-      .run();
+    await db.insert(schema.workflowTemplateStages).values({
+      ...stage,
+      templateId: definition.template.id,
+      roleExecutionPoliciesJson: null,
+      entryCriteriaJson: null,
+      exitCriteriaJson: null,
+      hooksJson: null,
+      gatesJson: null,
+      approvalsJson: null,
+      failurePolicyJson: null,
+    });
   }
 
-  const existingProject = db
-    .select()
-    .from(schema.projects)
-    .where(eq(schema.projects.id, projectId))
-    .get();
+  const existingProject = await findFirst(
+    db.select().from(schema.projects).where(eq(schema.projects.id, projectId)).limit(1),
+  );
   const projectSettings = (existingProject?.settings || {}) as schema.ProjectSettings;
+
   if (existingProject && !projectSettings.workflowTemplateId) {
-    db.update(schema.projects)
+    await db
+      .update(schema.projects)
       .set({
         settings: {
           ...projectSettings,
@@ -172,79 +194,69 @@ function bootstrapDefaultWorkflowTemplate(projectId: string) {
         },
         updatedAt: now,
       })
-      .where(eq(schema.projects.id, projectId))
-      .run();
+      .where(eq(schema.projects.id, projectId));
     console.log("  ✓ Bound default workflow template to default project");
   }
 }
 
 async function seed() {
-  console.log("Seeding database...");
+  console.log(`Seeding database using ${dbDialect}...`);
 
-  normalizeLegacyCreatedAt("organizations");
-  normalizeLegacyCreatedAt("projects");
-  normalizeLegacyCreatedAt("environments");
-  normalizeLegacyCreatedAt("users");
-  normalizeLegacyCreatedAt("policy_templates");
-  normalizeLegacyCreatedAt("approval_tickets");
-  normalizeLegacyCreatedAt("budget_configs");
-  normalizeLegacyCreatedAt("tasks");
-  normalizeLegacyCreatedAt("sessions", "started_at");
-  normalizeLegacyCreatedAt("role_agents");
-  normalizeLegacyCreatedAt("role_agent_bindings");
-  normalizeLegacyCreatedAt("workflow_templates");
-  normalizeLegacyCreatedAt("workflow_template_stages");
+  if (dbDialect === "sqlite") {
+    normalizeLegacyCreatedAt("organizations");
+    normalizeLegacyCreatedAt("projects");
+    normalizeLegacyCreatedAt("environments");
+    normalizeLegacyCreatedAt("users");
+    normalizeLegacyCreatedAt("policy_templates");
+    normalizeLegacyCreatedAt("approval_tickets");
+    normalizeLegacyCreatedAt("budget_configs");
+    normalizeLegacyCreatedAt("tasks");
+    normalizeLegacyCreatedAt("sessions", "started_at");
+    normalizeLegacyCreatedAt("role_agents");
+    normalizeLegacyCreatedAt("role_agent_bindings");
+    normalizeLegacyCreatedAt("workflow_templates");
+    normalizeLegacyCreatedAt("workflow_template_stages");
+  }
 
-  // ── 1. Default Organization ───────────────────────────────────
   const orgId = "org-default";
-  const existingOrg = db
-    .select()
-    .from(schema.organizations)
-    .where(eq(schema.organizations.id, orgId))
-    .get();
+  const existingOrg = await findFirst(
+    db.select().from(schema.organizations).where(eq(schema.organizations.id, orgId)).limit(1),
+  );
   if (!existingOrg) {
-    db.insert(schema.organizations)
-      .values({
-        id: orgId,
-        name: "OpenerX",
-        slug: "openerx",
-        createdAt: nowIso(),
-      })
-      .run();
+    await db.insert(schema.organizations).values({
+      id: orgId,
+      name: "OpenerX",
+      slug: "openerx",
+      createdAt: nowIso(),
+    });
     console.log("  ✓ Created default organization: OpenerX");
   } else {
     console.log("  ○ Default organization already exists");
   }
 
-  // ── 2. Default Project ────────────────────────────────────────
   const projectId = "proj-default";
-  const existingProject = db
-    .select()
-    .from(schema.projects)
-    .where(eq(schema.projects.id, projectId))
-    .get();
+  const existingProject = await findFirst(
+    db.select().from(schema.projects).where(eq(schema.projects.id, projectId)).limit(1),
+  );
   if (!existingProject) {
-    db.insert(schema.projects)
-      .values({
-        id: projectId,
-        orgId,
-        name: "Default Project",
-        slug: "default",
-        description: "Default OpenerX project",
-        settings: {
-          defaultModel: "anthropic/claude-sonnet-4-20250514",
-          maxConcurrency: 5,
-          budgetMonthly: 500,
-        },
-        createdAt: nowIso(),
-      })
-      .run();
+    await db.insert(schema.projects).values({
+      id: projectId,
+      orgId,
+      name: "Default Project",
+      slug: "default",
+      description: "Default OpenerX project",
+      settings: {
+        defaultModel: "anthropic/claude-sonnet-4-20250514",
+        maxConcurrency: 5,
+        budgetMonthly: 500,
+      },
+      createdAt: nowIso(),
+    });
     console.log("  ✓ Created default project");
   } else {
     console.log("  ○ Default project already exists");
   }
 
-  // ── 3. Environments ───────────────────────────────────────────
   const envs = [
     {
       id: "env-dev",
@@ -271,83 +283,70 @@ async function seed() {
       createdAt: nowIso(),
     },
   ];
+
   for (const env of envs) {
-    const existing = db
-      .select()
-      .from(schema.environments)
-      .where(eq(schema.environments.id, env.id))
-      .get();
-    if (!existing) {
-      db.insert(schema.environments).values(env).run();
+    const existingEnv = await findFirst(
+      db.select().from(schema.environments).where(eq(schema.environments.id, env.id)).limit(1),
+    );
+    if (!existingEnv) {
+      await db.insert(schema.environments).values(env);
       console.log(`  ✓ Created environment: ${env.name}`);
     }
   }
 
-  // ── 4. Admin User ─────────────────────────────────────────────
   const adminUsername = process.env.ADMIN_USERNAME || "admin";
   const adminPassword = process.env.ADMIN_PASSWORD || "admin123!";
   const adminId = "user-admin";
+  const existingAdmin = await findFirst(
+    db.select().from(schema.users).where(eq(schema.users.id, adminId)).limit(1),
+  );
 
-  const existingAdmin = db.select().from(schema.users).where(eq(schema.users.id, adminId)).get();
   if (!existingAdmin) {
     const passwordHash = await Bun.password.hash(adminPassword, { algorithm: "bcrypt", cost: 12 });
-    db.insert(schema.users)
-      .values({
-        id: adminId,
-        username: adminUsername,
-        passwordHash,
-        displayName: "Admin",
-        role: "platform_admin",
-        createdAt: nowIso(),
-      })
-      .run();
+    await db.insert(schema.users).values({
+      id: adminId,
+      username: adminUsername,
+      passwordHash,
+      displayName: "Admin",
+      role: "platform_admin",
+      createdAt: nowIso(),
+    });
     console.log(`  ✓ Created admin user: ${adminUsername} / ${adminPassword}`);
   } else {
     console.log("  ○ Admin user already exists");
   }
 
-  // ── 5. Admin Project Role ─────────────────────────────────────
   const roleId = "role-admin-default";
-  const existingRole = db
-    .select()
-    .from(schema.projectRoles)
-    .where(eq(schema.projectRoles.id, roleId))
-    .get();
+  const existingRole = await findFirst(
+    db.select().from(schema.projectRoles).where(eq(schema.projectRoles.id, roleId)).limit(1),
+  );
   if (!existingRole) {
-    db.insert(schema.projectRoles)
-      .values({
-        id: roleId,
-        userId: adminId,
-        projectId,
-        role: "project_admin",
-      })
-      .run();
+    await db.insert(schema.projectRoles).values({
+      id: roleId,
+      userId: adminId,
+      projectId,
+      role: "project_admin",
+    });
     console.log("  ✓ Assigned admin to default project");
   }
 
-  // ── 6. Default Budget Config ──────────────────────────────────
   const budgetId = "budget-default";
-  const existingBudget = db
-    .select()
-    .from(schema.budgetConfigs)
-    .where(eq(schema.budgetConfigs.id, budgetId))
-    .get();
+  const existingBudget = await findFirst(
+    db.select().from(schema.budgetConfigs).where(eq(schema.budgetConfigs.id, budgetId)).limit(1),
+  );
   if (!existingBudget) {
-    db.insert(schema.budgetConfigs)
-      .values({
-        id: budgetId,
-        projectId,
-        period: "monthly",
-        limitAmount: 500,
-        warnThreshold: 0.8,
-        throttleThreshold: 0.95,
-        createdAt: nowIso(),
-      })
-      .run();
+    await db.insert(schema.budgetConfigs).values({
+      id: budgetId,
+      projectId,
+      period: "monthly",
+      limitAmount: 500,
+      warnThreshold: 0.8,
+      throttleThreshold: 0.95,
+      createdAt: nowIso(),
+    });
     console.log("  ✓ Created default budget config ($500/month)");
   }
 
-  // ── 7. Default Role Agents ───────────────────────────────────
   const roleBootstrap = await bootstrapDefaultRoleAgents(db, {
     applyBindings: true,
     overwriteUnmodifiedRecords: false,
@@ -359,18 +358,19 @@ async function seed() {
     `  ✓ Bootstrapped role bindings (created: ${roleBootstrap.createdBindings.length}, updated: ${roleBootstrap.updatedBindings.length}, skipped: ${roleBootstrap.skippedBindings.length})`,
   );
 
-  // ── 8. Default Workflow Template ─────────────────────────────
-  bootstrapDefaultWorkflowTemplate(projectId);
+  await bootstrapDefaultWorkflowTemplate(projectId);
 
   console.log("\nSeed complete! Login with:");
   console.log(`  Username: ${adminUsername}`);
   console.log(`  Password: ${adminPassword}`);
   console.log("\n⚠️  Change the admin password after first login!");
-
-  sqlite.close();
 }
 
-seed().catch((err) => {
-  console.error("Seed failed:", err);
-  process.exit(1);
-});
+seed()
+  .catch((err) => {
+    console.error("Seed failed:", err);
+    process.exitCode = 1;
+  })
+  .finally(async () => {
+    await closeDatabase();
+  });

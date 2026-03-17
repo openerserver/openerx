@@ -1,6 +1,11 @@
-import { expect, test, type Page, type Route } from "@playwright/test";
+import { type Page, type Route, expect, test } from "@playwright/test";
 
-function buildTask(taskId: string, title: string, status: string, overrides: Record<string, unknown> = {}) {
+function buildTask(
+  taskId: string,
+  title: string,
+  status: string,
+  overrides: Record<string, unknown> = {},
+) {
   return {
     id: taskId,
     projectId: "proj-default",
@@ -281,28 +286,40 @@ async function installMonitorMocks(page: Page) {
   });
 
   await page.route("**/api/tasks/task-stage-1/sessions", async (route) => {
-    await fulfillJson(route, { data: [buildSession("session-stage", "主分支", "2026-03-14T08:09:00.000Z")] });
+    await fulfillJson(route, {
+      data: [buildSession("session-stage", "主分支", "2026-03-14T08:09:00.000Z")],
+    });
   });
 
   await page.route("**/api/tasks/task-fallback-1/sessions", async (route) => {
-    await fulfillJson(route, { data: [buildSession("session-fallback-done", "回归分支", "2026-03-14T07:10:00.000Z")] });
+    await fulfillJson(route, {
+      data: [buildSession("session-fallback-done", "回归分支", "2026-03-14T07:10:00.000Z")],
+    });
   });
 
   await page.route("**/api/tasks/task-fallback-2/sessions", async (route) => {
-    await fulfillJson(route, { data: [buildSession("session-fallback-live", "巡检分支", "2026-03-14T08:16:00.000Z")] });
+    await fulfillJson(route, {
+      data: [buildSession("session-fallback-live", "巡检分支", "2026-03-14T08:16:00.000Z")],
+    });
   });
 
   await page.route("**/api/tasks/task-stage-1/sessions/session-stage/messages", async (route) => {
     await fulfillJson(route, buildMessages("2026-03-14T08:09:00.000Z", "认证修复仍在推进。"));
   });
 
-  await page.route("**/api/tasks/task-fallback-1/sessions/session-fallback-done/messages", async (route) => {
-    await fulfillJson(route, buildMessages("2026-03-14T07:09:00.000Z", "构建修复记录已结束。"));
-  });
+  await page.route(
+    "**/api/tasks/task-fallback-1/sessions/session-fallback-done/messages",
+    async (route) => {
+      await fulfillJson(route, buildMessages("2026-03-14T07:09:00.000Z", "构建修复记录已结束。"));
+    },
+  );
 
-  await page.route("**/api/tasks/task-fallback-2/sessions/session-fallback-live/messages", async (route) => {
-    await fulfillJson(route, buildMessages("2026-03-14T08:16:00.000Z", "巡检任务仍在执行。"));
-  });
+  await page.route(
+    "**/api/tasks/task-fallback-2/sessions/session-fallback-live/messages",
+    async (route) => {
+      await fulfillJson(route, buildMessages("2026-03-14T08:16:00.000Z", "巡检任务仍在执行。"));
+    },
+  );
 
   await page.route("**/api/tasks/task-stage-1/pipeline**", async (route) => {
     await fulfillJson(route, buildStagePipeline());
@@ -313,7 +330,11 @@ async function installMonitorMocks(page: Page) {
   });
 
   await page.route("**/api/tasks/task-fallback-2/pipeline**", async (route) => {
-    await route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "no pipeline" }) });
+    await route.fulfill({
+      status: 500,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "no pipeline" }),
+    });
   });
 }
 
@@ -344,33 +365,63 @@ async function installDenseStatusMonitorMocks(page: Page) {
   });
 
   await page.route("**/api/tasks/task-failed-2/sessions", async (route) => {
-    await fulfillJson(route, { data: [buildSession("session-failed-2", "审批回退分支", "2026-03-14T06:55:00.000Z")] });
+    await fulfillJson(route, {
+      data: [buildSession("session-failed-2", "审批回退分支", "2026-03-14T06:55:00.000Z")],
+    });
   });
   await page.route("**/api/tasks/task-completed-1/sessions", async (route) => {
-    await fulfillJson(route, { data: [buildSession("session-completed-1", "发布分支", "2026-03-14T05:48:00.000Z")] });
+    await fulfillJson(route, {
+      data: [buildSession("session-completed-1", "发布分支", "2026-03-14T05:48:00.000Z")],
+    });
   });
   await page.route("**/api/tasks/task-completed-2/sessions", async (route) => {
-    await fulfillJson(route, { data: [buildSession("session-completed-2", "清理分支", "2026-03-14T04:52:00.000Z")] });
+    await fulfillJson(route, {
+      data: [buildSession("session-completed-2", "清理分支", "2026-03-14T04:52:00.000Z")],
+    });
   });
 
-  await page.route("**/api/tasks/task-failed-2/sessions/session-failed-2/messages", async (route) => {
-    await fulfillJson(route, buildMessages("2026-03-14T06:55:00.000Z", "审批回退已终止，等待人工介入。"));
-  });
-  await page.route("**/api/tasks/task-completed-1/sessions/session-completed-1/messages", async (route) => {
-    await fulfillJson(route, buildMessages("2026-03-14T05:48:00.000Z", "发布巡检已完成归档。"));
-  });
-  await page.route("**/api/tasks/task-completed-2/sessions/session-completed-2/messages", async (route) => {
-    await fulfillJson(route, buildMessages("2026-03-14T04:52:00.000Z", "日志清理任务已结束。"));
-  });
+  await page.route(
+    "**/api/tasks/task-failed-2/sessions/session-failed-2/messages",
+    async (route) => {
+      await fulfillJson(
+        route,
+        buildMessages("2026-03-14T06:55:00.000Z", "审批回退已终止，等待人工介入。"),
+      );
+    },
+  );
+  await page.route(
+    "**/api/tasks/task-completed-1/sessions/session-completed-1/messages",
+    async (route) => {
+      await fulfillJson(route, buildMessages("2026-03-14T05:48:00.000Z", "发布巡检已完成归档。"));
+    },
+  );
+  await page.route(
+    "**/api/tasks/task-completed-2/sessions/session-completed-2/messages",
+    async (route) => {
+      await fulfillJson(route, buildMessages("2026-03-14T04:52:00.000Z", "日志清理任务已结束。"));
+    },
+  );
 
   await page.route("**/api/tasks/task-failed-2/pipeline**", async (route) => {
-    await route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "no pipeline" }) });
+    await route.fulfill({
+      status: 500,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "no pipeline" }),
+    });
   });
   await page.route("**/api/tasks/task-completed-1/pipeline**", async (route) => {
-    await route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "no pipeline" }) });
+    await route.fulfill({
+      status: 500,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "no pipeline" }),
+    });
   });
   await page.route("**/api/tasks/task-completed-2/pipeline**", async (route) => {
-    await route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "no pipeline" }) });
+    await route.fulfill({
+      status: 500,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "no pipeline" }),
+    });
   });
 }
 
@@ -405,21 +456,34 @@ async function dragNodeBy(page: Page, title: string, deltaX: number, deltaY: num
 }
 
 async function readNodeTranslate(page: Page, title: string) {
-  return page.locator(".vue-flow__node").filter({ hasText: title }).first().evaluate((node) => {
-    const style = node.getAttribute("style") || "";
-    const match = style.match(/translate\(([-\d.]+)px,\s*([-\d.]+)px\)/);
-    return match ? { x: Number(match[1]), y: Number(match[2]) } : null;
-  });
+  return page
+    .locator(".vue-flow__node")
+    .filter({ hasText: title })
+    .first()
+    .evaluate((node) => {
+      const style = node.getAttribute("style") || "";
+      const match = style.match(/translate\(([-\d.]+)px,\s*([-\d.]+)px\)/);
+      return match ? { x: Number(match[1]), y: Number(match[2]) } : null;
+    });
 }
 
 async function readNodeBox(page: Page, title: string) {
-  const box = await page.locator(".vue-flow__node").filter({ hasText: title }).first().boundingBox();
+  const box = await page
+    .locator(".vue-flow__node")
+    .filter({ hasText: title })
+    .first()
+    .boundingBox();
   expect(box).not.toBeNull();
-  return box!;
+  if (!box) {
+    throw new Error(`Unable to find node box for ${title}`);
+  }
+  return box;
 }
 
 test.describe("Multi-task monitor browser flows", () => {
-  test("status mode handles dense failed and completed lanes without shrinking cards", async ({ page }) => {
+  test("status mode handles dense failed and completed lanes without shrinking cards", async ({
+    page,
+  }) => {
     await installDenseStatusMonitorMocks(page);
     await loginAsAdmin(page);
 
@@ -457,7 +521,9 @@ test.describe("Multi-task monitor browser flows", () => {
     expect(completedSectionBox?.width || 0).toBeGreaterThanOrEqual(completedBox.width + 120);
   });
 
-  test("status mode keeps cards equal-width and stacks lower-priority lanes vertically", async ({ page }) => {
+  test("status mode keeps cards equal-width and stacks lower-priority lanes vertically", async ({
+    page,
+  }) => {
     await installMonitorMocks(page);
     await loginAsAdmin(page);
 
@@ -483,9 +549,13 @@ test.describe("Multi-task monitor browser flows", () => {
     expect(runningSectionBox).not.toBeNull();
     expect(failedSectionBox).not.toBeNull();
     expect(runningBox.x).toBeGreaterThanOrEqual((runningSectionBox?.x || 0) + 12);
-    expect(runningBox.x + runningBox.width).toBeLessThanOrEqual((runningSectionBox?.x || 0) + (runningSectionBox?.width || 0) - 12);
+    expect(runningBox.x + runningBox.width).toBeLessThanOrEqual(
+      (runningSectionBox?.x || 0) + (runningSectionBox?.width || 0) - 12,
+    );
     expect(failedBox.x).toBeGreaterThanOrEqual((failedSectionBox?.x || 0) + 12);
-    expect(failedBox.x + failedBox.width).toBeLessThanOrEqual((failedSectionBox?.x || 0) + (failedSectionBox?.width || 0) - 12);
+    expect(failedBox.x + failedBox.width).toBeLessThanOrEqual(
+      (failedSectionBox?.x || 0) + (failedSectionBox?.width || 0) - 12,
+    );
     expect(failedBox.y).toBeGreaterThan(runningBox.y + runningBox.height);
   });
 
@@ -503,14 +573,26 @@ test.describe("Multi-task monitor browser flows", () => {
 
     await expect(page.locator(".monitor-layout-banner")).toContainText("按阶段");
     await expect(page.locator(".monitor-structure-section")).toHaveCount(2);
-    await expect(page.locator(".monitor-structure-section--running").first()).toContainText("修复认证链路");
-    await expect(page.locator(".monitor-structure-section--neutral").first()).toContainText("未识别");
-    await expect(page.locator(".monitor-structure-section--neutral").first()).toContainText("阶段信息不完整时暂时归并到这里");
-    await expect(page.locator(".monitor-structure-section--neutral").first()).not.toContainText("1/3");
-    await expect(page.locator(".monitor-structure-section--neutral").first()).toContainText("2 个任务");
+    await expect(page.locator(".monitor-structure-section--running").first()).toContainText(
+      "修复认证链路",
+    );
+    await expect(page.locator(".monitor-structure-section--neutral").first()).toContainText(
+      "未识别",
+    );
+    await expect(page.locator(".monitor-structure-section--neutral").first()).toContainText(
+      "阶段信息不完整时暂时归并到这里",
+    );
+    await expect(page.locator(".monitor-structure-section--neutral").first()).not.toContainText(
+      "1/3",
+    );
+    await expect(page.locator(".monitor-structure-section--neutral").first()).toContainText(
+      "2 个任务",
+    );
   });
 
-  test("stage mode keeps lane placement stable and switching back restores the free-layout snapshot", async ({ page }) => {
+  test("stage mode keeps lane placement stable and switching back restores the free-layout snapshot", async ({
+    page,
+  }) => {
     await installMonitorMocks(page);
     await loginAsAdmin(page);
 
@@ -522,7 +604,12 @@ test.describe("Multi-task monitor browser flows", () => {
     const stageBox = await readNodeBox(page, "认证链路修复");
     expect(canvasBox).not.toBeNull();
     expect(fallbackBox.y).toBeGreaterThanOrEqual((canvasBox?.y || 0) + 20);
-    expect(stageBox.x + stageBox.width + 24 <= fallbackBox.x || fallbackBox.x + fallbackBox.width + 24 <= stageBox.x || stageBox.y + stageBox.height + 24 <= fallbackBox.y || fallbackBox.y + fallbackBox.height + 24 <= stageBox.y).toBe(true);
+    expect(
+      stageBox.x + stageBox.width + 24 <= fallbackBox.x ||
+        fallbackBox.x + fallbackBox.width + 24 <= stageBox.x ||
+        stageBox.y + stageBox.height + 24 <= fallbackBox.y ||
+        fallbackBox.y + fallbackBox.height + 24 <= stageBox.y,
+    ).toBe(true);
 
     const targetNode = page.locator(".vue-flow__node").filter({ hasText: "灰度巡检" }).first();
     await targetNode.click();
@@ -567,7 +654,9 @@ test.describe("Multi-task monitor browser flows", () => {
     expect(Math.abs((restored?.y || 0) - (moved?.y || 0))).toBeLessThanOrEqual(8);
   });
 
-  test("structured modes ignore direct mouse dragging and keep node coordinates stable", async ({ page }) => {
+  test("structured modes ignore direct mouse dragging and keep node coordinates stable", async ({
+    page,
+  }) => {
     await installMonitorMocks(page);
     await loginAsAdmin(page);
 

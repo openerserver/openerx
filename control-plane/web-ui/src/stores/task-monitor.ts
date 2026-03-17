@@ -36,26 +36,24 @@ function overlaps(
   padding = 18,
 ) {
   return !(
-    left.x + left.width + padding <= right.x
-    || right.x + right.width + padding <= left.x
-    || left.y + left.height + padding <= right.y
-    || right.y + right.height + padding <= left.y
+    left.x + left.width + padding <= right.x ||
+    right.x + right.width + padding <= left.x ||
+    left.y + left.height + padding <= right.y ||
+    right.y + right.height + padding <= left.y
   );
 }
 
-function findAvailablePosition(
-  nodes: TaskMonitorNodeLayout[],
-  width: number,
-  height: number,
-) {
+function findAvailablePosition(nodes: TaskMonitorNodeLayout[], width: number, height: number) {
   const startX = 28;
   const startY = 28;
   const gap = 28;
-  const viewportWidth = typeof window === "undefined"
-    ? 1440
-    : Math.max(window.innerWidth - 320, width + startX * 2);
+  const viewportWidth =
+    typeof window === "undefined" ? 1440 : Math.max(window.innerWidth - 320, width + startX * 2);
   const columnCount = Math.max(1, Math.floor((viewportWidth - startX * 2 + gap) / (width + gap)));
-  const columnXs = Array.from({ length: columnCount }, (_, index) => startX + index * (width + gap));
+  const columnXs = Array.from(
+    { length: columnCount },
+    (_, index) => startX + index * (width + gap),
+  );
 
   const rowTolerance = 8;
   const groupedRows = nodes
@@ -79,11 +77,11 @@ function findAvailablePosition(
   if (groupedRows.length === 0) {
     candidateRows.push({ y: startY, height: Math.max(320, height) });
   } else {
-    groupedRows.forEach((row) => {
+    for (const row of groupedRows) {
       const normalizedY = Math.max(row.y, nextRowY);
       candidateRows.push({ y: normalizedY, height: Math.max(320, row.height) });
       nextRowY = normalizedY + Math.max(320, row.height) + gap;
-    });
+    }
   }
 
   while (candidateRows.length < 200) {
@@ -122,7 +120,9 @@ export const useTaskMonitorStore = defineStore(
     const freeLayoutSnapshot = ref<Record<string, TaskMonitorSavedLayout>>({});
     const freeLayoutBaseline = ref<Record<string, TaskMonitorSavedLayout>>({});
 
-    const sortedNodes = computed(() => [...nodes.value].sort((left, right) => left.zIndex - right.zIndex));
+    const sortedNodes = computed(() =>
+      [...nodes.value].sort((left, right) => left.zIndex - right.zIndex),
+    );
 
     function nextZIndex() {
       return nodes.value.reduce((max, node) => Math.max(max, node.zIndex), 0) + 1;
@@ -165,7 +165,10 @@ export const useTaskMonitorStore = defineStore(
       return nodes.value.find((node) => node.taskId === taskId) || null;
     }
 
-    function addTaskNode(taskId: string, options?: Partial<Omit<TaskMonitorNodeLayout, "id" | "taskId">>) {
+    function addTaskNode(
+      taskId: string,
+      options?: Partial<Omit<TaskMonitorNodeLayout, "id" | "taskId">>,
+    ) {
       const existing = getNode(taskId);
       if (existing) {
         existing.zIndex = nextZIndex();
@@ -174,9 +177,10 @@ export const useTaskMonitorStore = defineStore(
 
       const width = options?.width ?? 350;
       const height = options?.height ?? 260;
-      const autoPosition = options?.x == null || options?.y == null
-        ? findAvailablePosition(nodes.value, width, height)
-        : null;
+      const autoPosition =
+        options?.x == null || options?.y == null
+          ? findAvailablePosition(nodes.value, width, height)
+          : null;
 
       const node: TaskMonitorNodeLayout = {
         id: nextNodeId(),
@@ -236,7 +240,7 @@ export const useTaskMonitorStore = defineStore(
     function toggleDetailsCollapsed(nodeId: string) {
       const node = nodes.value.find((item) => item.id === nodeId);
       if (!node) return;
-      node.detailsCollapsed = node.detailsCollapsed === false ? true : false;
+      node.detailsCollapsed = node.detailsCollapsed === false;
       node.zIndex = nextZIndex();
     }
 
@@ -258,11 +262,10 @@ export const useTaskMonitorStore = defineStore(
       layoutMode.value = nextLayoutMode;
     }
 
-    function normalizePersistedWindowWidth(width: number) {
-      const normalizedWidth = Math.max(280, Math.round(width));
+    function normalizeNodeWindowWidth(normalizedWidth: number) {
       let changed = false;
 
-      nodes.value.forEach((node) => {
+      for (const node of nodes.value) {
         if (node.collapsed) {
           node.collapsed = false;
           changed = true;
@@ -271,10 +274,19 @@ export const useTaskMonitorStore = defineStore(
           node.width = normalizedWidth;
           changed = true;
         }
-      });
+      }
 
-      const nextSnapshot = { ...freeLayoutSnapshot.value };
-      Object.keys(nextSnapshot).forEach((nodeId) => {
+      return changed;
+    }
+
+    function normalizePersistedWidths(
+      snapshot: Record<string, TaskMonitorSavedLayout>,
+      normalizedWidth: number,
+    ) {
+      let changed = false;
+      const nextSnapshot: Record<string, TaskMonitorSavedLayout> = { ...snapshot };
+
+      for (const nodeId of Object.keys(nextSnapshot)) {
         const saved = nextSnapshot[nodeId];
         if (saved && saved.width !== normalizedWidth) {
           nextSnapshot[nodeId] = {
@@ -283,23 +295,20 @@ export const useTaskMonitorStore = defineStore(
           };
           changed = true;
         }
-      });
-      freeLayoutSnapshot.value = nextSnapshot;
+      }
 
-      const nextBaseline = { ...freeLayoutBaseline.value };
-      Object.keys(nextBaseline).forEach((nodeId) => {
-        const saved = nextBaseline[nodeId];
-        if (saved && saved.width !== normalizedWidth) {
-          nextBaseline[nodeId] = {
-            ...saved,
-            width: normalizedWidth,
-          };
-          changed = true;
-        }
-      });
-      freeLayoutBaseline.value = nextBaseline;
+      return { changed, nextSnapshot };
+    }
 
-      return changed;
+    function normalizePersistedWindowWidth(width: number) {
+      const normalizedWidth = Math.max(280, Math.round(width));
+      const nodesChanged = normalizeNodeWindowWidth(normalizedWidth);
+      const snapshotResult = normalizePersistedWidths(freeLayoutSnapshot.value, normalizedWidth);
+      freeLayoutSnapshot.value = snapshotResult.nextSnapshot;
+      const baselineResult = normalizePersistedWidths(freeLayoutBaseline.value, normalizedWidth);
+      freeLayoutBaseline.value = baselineResult.nextSnapshot;
+
+      return nodesChanged || snapshotResult.changed || baselineResult.changed;
     }
 
     function resetCanvas() {

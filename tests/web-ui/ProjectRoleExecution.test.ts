@@ -50,7 +50,8 @@ async function mountPage(options?: { role?: string; projectRole?: string }) {
 
   const drawerStub = defineComponent({
     props: { open: { type: Boolean, default: false } },
-    template: '<section v-if="open"><header><slot name="title" /></header><div><slot /></div></section>',
+    template:
+      '<section v-if="open"><header><slot name="title" /></header><div><slot /></div></section>',
   });
 
   const modalStub = defineComponent({
@@ -84,7 +85,13 @@ async function mountPage(options?: { role?: string; projectRole?: string }) {
     mustChangePassword: false,
     lastLoginAt: null,
     createdAt: "2026-03-01T00:00:00.000Z",
-    projects: [{ id: "proj-default", role: options?.projectRole || "project_admin", name: "Default Project" }],
+    projects: [
+      {
+        id: "proj-default",
+        role: options?.projectRole || "project_admin",
+        name: "Default Project",
+      },
+    ],
   });
 
   const wrapper = mount(ProjectRoleExecution, {
@@ -175,9 +182,11 @@ beforeEach(() => {
       message: null,
     },
   });
-  apiMocks.listRoleAgentBindings.mockImplementation(async (_roleAgentId: string, bindingProjectId?: string) => ({
-    data: bindingProjectId ? projectBindings : systemBindings,
-  }));
+  apiMocks.listRoleAgentBindings.mockImplementation(
+    async (_roleAgentId: string, bindingProjectId?: string) => ({
+      data: bindingProjectId ? projectBindings : systemBindings,
+    }),
+  );
   apiMocks.upsertRoleAgentProjectOverride.mockResolvedValue({
     data: {
       id: "override-1",
@@ -203,24 +212,26 @@ beforeEach(() => {
       updatedAt: "2026-03-15T00:00:00.000Z",
     },
   });
-  apiMocks.createRoleAgentBinding.mockImplementation(async (_roleAgentId: string, payload: Record<string, unknown>) => {
-    projectBindings = [
-      ...projectBindings,
-      {
-        id: "project-binding-1",
-        roleAgentId: "role.product",
-        projectId: payload.projectId,
-        bindingKey: payload.bindingKey,
-        runtimeAgent: payload.runtimeAgent,
-        label: payload.label,
-        enabled: payload.enabled,
-        priority: payload.priority,
-        model: payload.model ?? null,
-        tagsJson: payload.tagsJson ?? [],
-      },
-    ];
-    return { data: projectBindings[projectBindings.length - 1] };
-  });
+  apiMocks.createRoleAgentBinding.mockImplementation(
+    async (_roleAgentId: string, payload: Record<string, unknown>) => {
+      projectBindings = [
+        ...projectBindings,
+        {
+          id: "project-binding-1",
+          roleAgentId: "role.product",
+          projectId: payload.projectId,
+          bindingKey: payload.bindingKey,
+          runtimeAgent: payload.runtimeAgent,
+          label: payload.label,
+          enabled: payload.enabled,
+          priority: payload.priority,
+          model: payload.model ?? null,
+          tagsJson: payload.tagsJson ?? [],
+        },
+      ];
+      return { data: projectBindings[projectBindings.length - 1] };
+    },
+  );
 });
 
 describe("ProjectRoleExecution", () => {
@@ -239,7 +250,9 @@ describe("ProjectRoleExecution", () => {
     await flushPromises();
     await flushPromises();
 
-    const input = wrapper.find('[data-testid="role-override-name-input"] input, input[data-testid="role-override-name-input"]');
+    const input = wrapper.find(
+      '[data-testid="role-override-name-input"] input, input[data-testid="role-override-name-input"]',
+    );
     expect(input.exists()).toBe(true);
     await input.setValue("项目产品 Agent");
     await flushPromises();
@@ -252,9 +265,13 @@ describe("ProjectRoleExecution", () => {
 
     expect(apiMocks.listRoleAgentBindings).toHaveBeenCalledWith("role.product");
     expect(apiMocks.listRoleAgentBindings).toHaveBeenCalledWith("role.product", "proj-default");
-    expect(apiMocks.upsertRoleAgentProjectOverride).toHaveBeenCalledWith("role.product", "proj-default", {
-      name: "项目产品 Agent",
-    });
+    expect(apiMocks.upsertRoleAgentProjectOverride).toHaveBeenCalledWith(
+      "role.product",
+      "proj-default",
+      {
+        name: "项目产品 Agent",
+      },
+    );
     expect(wrapper.text()).toContain("项目产品 Agent");
     expect(wrapper.text()).toContain("项目增强");
   });
@@ -276,7 +293,9 @@ describe("ProjectRoleExecution", () => {
       .get('[data-testid="binding-label-input"] input, input[data-testid="binding-label-input"]')
       .setValue("项目产品主执行器");
     await wrapper
-      .get('[data-testid="binding-runtime-agent-input"] input, input[data-testid="binding-runtime-agent-input"]')
+      .get(
+        '[data-testid="binding-runtime-agent-input"] input, input[data-testid="binding-runtime-agent-input"]',
+      )
       .setValue("planner-project");
     await wrapper
       .get('[data-testid="binding-model-input"] input, input[data-testid="binding-model-input"]')
@@ -345,9 +364,10 @@ describe("ProjectRoleExecution", () => {
       access: {
         overrideReadable: false,
         fallbackToSystemDefaults: true,
-        message: createForbiddenError().message === "Forbidden"
-          ? "当前账号无法读取项目级定制字段，已回退展示平台默认角色配置。"
-          : null,
+        message:
+          createForbiddenError().message === "Forbidden"
+            ? "当前账号无法读取项目级定制字段，已回退展示平台默认角色配置。"
+            : null,
       },
     });
 

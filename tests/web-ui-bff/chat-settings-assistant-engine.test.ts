@@ -27,7 +27,9 @@ mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-a
   runDetachedPrompt: runDetachedPromptMock,
 }));
 
-const { runChatSettingsAssistant } = await import("../../control-plane/web-ui-bff/src/modules/chat-settings/assistant-engine");
+const { runChatSettingsAssistant } = await import(
+  "../../control-plane/web-ui-bff/src/modules/chat-settings/assistant-engine"
+);
 
 const baseStrategy: OrchestrationStrategy = {
   categoryAgentMap: {
@@ -89,7 +91,12 @@ describe("chat settings assistant engine", () => {
       pluginsConfig: { plugins: [] },
       allowedPluginSourcePrefixes: [],
       installablePluginSources: [],
-      availableAgents: ["oracle-enterprise", "explore-enterprise", "hephaestus-enterprise", "prometheus-enterprise"],
+      availableAgents: [
+        "oracle-enterprise",
+        "explore-enterprise",
+        "hephaestus-enterprise",
+        "prometheus-enterprise",
+      ],
       availableModels: ["github-copilot:claude-opus-4.6"],
       history: [],
       message: "Please enable pipeline mode alias for ops only.",
@@ -102,8 +109,13 @@ describe("chat settings assistant engine", () => {
 
     expect(response.configType).toBe("orchestration-strategy");
     expect(response.patch.enablePipeline).toBe(true);
-    expect((response.patch.templates as Array<{ mode: string; categoryDefaults?: string[] }>)?.[0]?.mode).toBe("single");
-    expect((response.patch.templates as Array<{ mode: string; categoryDefaults?: string[] }>)?.[0]?.categoryDefaults).toEqual(["ops"]);
+    expect(
+      (response.patch.templates as Array<{ mode: string; categoryDefaults?: string[] }>)?.[0]?.mode,
+    ).toBe("single");
+    expect(
+      (response.patch.templates as Array<{ mode: string; categoryDefaults?: string[] }>)?.[0]
+        ?.categoryDefaults,
+    ).toEqual(["ops"]);
   });
 
   test("returns an admin-facing error for unsupported orchestration mode values", async () => {
@@ -147,7 +159,12 @@ describe("chat settings assistant engine", () => {
         pluginsConfig: { plugins: [] },
         allowedPluginSourcePrefixes: [],
         installablePluginSources: [],
-        availableAgents: ["oracle-enterprise", "explore-enterprise", "hephaestus-enterprise", "prometheus-enterprise"],
+        availableAgents: [
+          "oracle-enterprise",
+          "explore-enterprise",
+          "hephaestus-enterprise",
+          "prometheus-enterprise",
+        ],
         availableModels: ["github-copilot:claude-opus-4.6"],
         history: [],
         message: "Please set ops to mesh mode.",
@@ -190,7 +207,12 @@ describe("chat settings assistant engine", () => {
         pluginsConfig: { plugins: [] },
         allowedPluginSourcePrefixes: [],
         installablePluginSources: [],
-        availableAgents: ["oracle-enterprise", "explore-enterprise", "hephaestus-enterprise", "prometheus-enterprise"],
+        availableAgents: [
+          "oracle-enterprise",
+          "explore-enterprise",
+          "hephaestus-enterprise",
+          "prometheus-enterprise",
+        ],
         availableModels: ["github-copilot:claude-opus-4.6"],
         history: [],
         message: "Please set ops to mesh mode.",

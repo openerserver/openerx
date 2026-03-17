@@ -1,5 +1,5 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ensureLegacyRoleWorkflowMigrated } from "../../control-plane/service/src/modules/task-workflows/legacy-role-workflow-storage";
@@ -89,7 +89,7 @@ function createWorkflowTemplateFixture(templateId: string, stageKeys: string[]) 
     ) VALUES (?1, ?2, ?3, ?4, 1, 'single', ?5, ?6, ?7)`,
   );
 
-  stageKeys.forEach((stageKey, index) => {
+  for (const [index, stageKey] of stageKeys.entries()) {
     insertStage.run(
       `${templateId}-${stageKey}`,
       templateId,
@@ -99,7 +99,7 @@ function createWorkflowTemplateFixture(templateId: string, stageKeys: string[]) 
       JSON.stringify([]),
       index,
     );
-  });
+  }
 }
 
 function countWorkflowRuns(taskId: string) {
@@ -125,14 +125,22 @@ afterAll(async () => {
     const deleteTaskStageRuns = testDatabase.query(
       "DELETE FROM task_stage_runs WHERE workflow_run_id IN (SELECT id FROM task_workflow_runs WHERE task_id = ?1)",
     );
-    const deleteTaskWorkflowRuns = testDatabase.query("DELETE FROM task_workflow_runs WHERE task_id = ?1");
-    const deleteChangeRequests = testDatabase.query("DELETE FROM developer_change_requests WHERE task_id = ?1");
-    const deleteRoleConclusions = testDatabase.query("DELETE FROM role_aggregate_conclusions WHERE task_id = ?1");
+    const deleteTaskWorkflowRuns = testDatabase.query(
+      "DELETE FROM task_workflow_runs WHERE task_id = ?1",
+    );
+    const deleteChangeRequests = testDatabase.query(
+      "DELETE FROM developer_change_requests WHERE task_id = ?1",
+    );
+    const deleteRoleConclusions = testDatabase.query(
+      "DELETE FROM role_aggregate_conclusions WHERE task_id = ?1",
+    );
     const deleteTaskSessions = testDatabase.query("DELETE FROM task_sessions WHERE task_id = ?1");
     const deleteAuditEvents = testDatabase.query("DELETE FROM audit_events WHERE task_id = ?1");
     const deleteAgentRuns = testDatabase.query("DELETE FROM agent_runs WHERE task_id = ?1");
     const deleteTasks = testDatabase.query("DELETE FROM tasks WHERE id = ?1");
-    const deleteTemplateStages = testDatabase.query("DELETE FROM workflow_template_stages WHERE template_id = ?1");
+    const deleteTemplateStages = testDatabase.query(
+      "DELETE FROM workflow_template_stages WHERE template_id = ?1",
+    );
     const deleteTemplates = testDatabase.query("DELETE FROM workflow_templates WHERE id = ?1");
 
     for (const taskId of createdTaskIds) {
@@ -181,14 +189,13 @@ describe("Role workflow storage (service)", () => {
       approvalRecommendation: { required: true },
     };
 
-    const postConclusion = await authedRequest<{ ok: boolean; data: Array<Record<string, unknown>> }>(
-      token,
-      `/api/tasks/${taskId}/role-conclusions`,
-      {
-        method: "POST",
-        body: JSON.stringify(roleConclusion),
-      },
-    );
+    const postConclusion = await authedRequest<{
+      ok: boolean;
+      data: Array<Record<string, unknown>>;
+    }>(token, `/api/tasks/${taskId}/role-conclusions`, {
+      method: "POST",
+      body: JSON.stringify(roleConclusion),
+    });
     expect(postConclusion.status).toBe(200);
     expect(postConclusion.data.ok).toBe(true);
 
@@ -303,27 +310,30 @@ describe("Role workflow storage (service)", () => {
     });
     expect(patchTask.status).toBe(200);
 
-    const migratedConclusions = await authedRequest<{ data: Array<{ id: string; roleAgentId: string }> }>(
-      token,
-      `/api/tasks/${taskId}/role-conclusions`,
-    );
+    const migratedConclusions = await authedRequest<{
+      data: Array<{ id: string; roleAgentId: string }>;
+    }>(token, `/api/tasks/${taskId}/role-conclusions`);
     expect(migratedConclusions.status).toBe(200);
     expect(migratedConclusions.data.data).toEqual([
       expect.objectContaining({ id: "legacy-conclusion-1", roleAgentId: "role.architect" }),
     ]);
 
-    const migratedRequests = await authedRequest<{ data: Array<{ id: string; sourceRoleAgentId: string }> }>(
-      token,
-      `/api/tasks/${taskId}/developer-change-requests`,
-    );
+    const migratedRequests = await authedRequest<{
+      data: Array<{ id: string; sourceRoleAgentId: string }>;
+    }>(token, `/api/tasks/${taskId}/developer-change-requests`);
     expect(migratedRequests.status).toBe(200);
     expect(migratedRequests.data.data).toEqual([
       expect.objectContaining({ id: "legacy-request-1", sourceRoleAgentId: "role.qa" }),
     ]);
 
-    const taskAfterMigration = await authedRequest<{ strategy?: string | null }>(token, `/api/tasks/${taskId}`);
+    const taskAfterMigration = await authedRequest<{ strategy?: string | null }>(
+      token,
+      `/api/tasks/${taskId}`,
+    );
     expect(taskAfterMigration.status).toBe(200);
-    const parsedStrategy = taskAfterMigration.data.strategy ? JSON.parse(taskAfterMigration.data.strategy) : {};
+    const parsedStrategy = taskAfterMigration.data.strategy
+      ? JSON.parse(taskAfterMigration.data.strategy)
+      : {};
     expect(parsedStrategy.roleAggregateConclusions).toBeUndefined();
     expect(parsedStrategy.developerChangeRequests).toBeUndefined();
   });
@@ -463,10 +473,14 @@ describe("Role workflow storage (service)", () => {
     expect(workflow.data.data.stages).toHaveLength(2);
     expect(countStageRunsForTask(taskId)).toBe(2);
 
-    const retryStage = await authedRequest<{ ok: boolean }>(token, `/api/tasks/${taskId}/workflow/retry-stage`, {
-      method: "POST",
-      body: JSON.stringify({ stageKey: "verify" }),
-    });
+    const retryStage = await authedRequest<{ ok: boolean }>(
+      token,
+      `/api/tasks/${taskId}/workflow/retry-stage`,
+      {
+        method: "POST",
+        body: JSON.stringify({ stageKey: "verify" }),
+      },
+    );
     expect(retryStage.status).toBe(200);
     expect(retryStage.data.ok).toBe(true);
   });

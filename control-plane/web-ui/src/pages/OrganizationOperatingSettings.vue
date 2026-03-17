@@ -67,9 +67,9 @@ import { message } from "ant-design-vue";
 import { computed, onMounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
 import {
-  getOrchestrationStrategy,
   type OrchestrationStrategy,
   type PlatformOrganizationSettings,
+  getOrchestrationStrategy,
   toApiError,
   updateOrchestrationStrategy,
 } from "../lib/api";
@@ -129,10 +129,10 @@ function asAutopilotLevel(value: unknown) {
 }
 
 function asBossParticipationMode(value: unknown) {
-  return value === "disabled"
-    || value === "advisory"
-    || value === "exception-only"
-    || value === "full-manager"
+  return value === "disabled" ||
+    value === "advisory" ||
+    value === "exception-only" ||
+    value === "full-manager"
     ? value
     : "advisory";
 }
@@ -156,7 +156,8 @@ async function loadData() {
     strategy.value = result.data;
     applyOrganizationSettings(result.data.organizationSettings);
   } catch (error) {
-    loadError.value = toApiError(error)?.message || (error instanceof Error ? error.message : String(error));
+    loadError.value =
+      toApiError(error)?.message || (error instanceof Error ? error.message : String(error));
   } finally {
     loading.value = false;
   }
@@ -178,7 +179,9 @@ async function handleSave() {
     message.success("组织运行策略已保存");
     await loadData();
   } catch (error) {
-    message.error(`保存失败: ${toApiError(error)?.message || (error instanceof Error ? error.message : String(error))}`);
+    message.error(
+      `保存失败: ${toApiError(error)?.message || (error instanceof Error ? error.message : String(error))}`,
+    );
   } finally {
     saving.value = false;
   }

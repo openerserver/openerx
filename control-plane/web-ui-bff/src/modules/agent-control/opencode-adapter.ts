@@ -1,10 +1,7 @@
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  DEFAULT_EXECUTION_AGENT,
-  isDefaultExecutionAgent,
-} from "../../lib/orchestration-strategy";
+import { DEFAULT_EXECUTION_AGENT, isDefaultExecutionAgent } from "../../lib/orchestration-strategy";
 import type { AgentRunStatus } from "../../types/events";
 
 // ── OpenCode Adapter ───────────────────────────────────────────────
@@ -135,7 +132,9 @@ function resolvePromptAgent(agentName?: string): string | undefined {
     return agentName;
   }
 
-  console.warn(`[opencode-adapter] agent definition not found for ${agentName}; falling back to runtime default agent`);
+  console.warn(
+    `[opencode-adapter] agent definition not found for ${agentName}; falling back to runtime default agent`,
+  );
   return undefined;
 }
 
@@ -236,7 +235,12 @@ type OpcallOptions = {
   circuitKey?: string;
 };
 
-async function opcall(method: string, path: string, body?: unknown, options: OpcallOptions = {}): Promise<OpencodeResponse> {
+async function opcall(
+  method: string,
+  path: string,
+  body?: unknown,
+  options: OpcallOptions = {},
+): Promise<OpencodeResponse> {
   const { timeoutMs = 4_000, circuitKey } = options;
 
   if (isCircuitOpen(circuitKey)) {
@@ -525,14 +529,22 @@ export async function pauseAgent(agentRunId: string): Promise<OpencodeResponse> 
     return { ok: false, error: `Cannot pause: status is ${run.status}` };
 
   await waitForPauseWindow(run);
-  updateAgentRunStatus(agentRunId, "paused");
-  run.pausedAt = Date.now();
+  if (run.status !== "running") {
+    return { ok: false, error: `Cannot pause: status is ${run.status}` };
+  }
+
   const result = await opcall("POST", `/session/${run.subSessionId}/abort`);
 
   if (!result.ok) {
-    updateAgentRunStatus(agentRunId, "running");
-    run.pausedAt = undefined;
+    return result;
   }
+
+  if (run.status !== "running") {
+    return { ok: false, error: `Cannot pause: status is ${run.status}` };
+  }
+
+  updateAgentRunStatus(agentRunId, "paused");
+  run.pausedAt = Date.now();
 
   return result;
 }
@@ -666,7 +678,35 @@ function isCompletedAssistantMessage(info: Record<string, unknown> | undefined):
   return typeof completed === "number" || typeof completed === "string";
 }
 
-function extractAssistantErrorMessage(info: Record<string, unknown> | undefined): string | undefined {
+function readAssistantCompletedAt(info: Record<string, unknown> | undefined): number | undefined {
+  const time =
+    typeof info?.time === "object" && info.time
+      ? (info.time as Record<string, unknown>)
+      : undefined;
+  const completed = time?.completed;
+
+  if (typeof completed === "number" && Number.isFinite(completed)) {
+    return completed;
+  }
+
+  if (typeof completed === "string") {
+    const numeric = Number(completed);
+    if (Number.isFinite(numeric)) {
+      return numeric;
+    }
+
+    const parsed = Date.parse(completed);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  return undefined;
+}
+
+function extractAssistantErrorMessage(
+  info: Record<string, unknown> | undefined,
+): string | undefined {
   const rawError = info?.error;
   if (typeof rawError === "string") {
     const trimmed = rawError.trim();
@@ -718,7 +758,10 @@ function extractAssistantTokenUsage(info: Record<string, unknown> | undefined): 
   );
 }
 
-export function extractAssistantResultFromMessages(messages: unknown): {
+export function extractAssistantResultFromMessages(
+  messages: unknown,
+  options?: { minCompletedAt?: number },
+): {
   text?: string;
   completed: boolean;
   failed: boolean;
@@ -748,6 +791,15 @@ export function extractAssistantResultFromMessages(messages: unknown): {
       continue;
     }
 
+    const completedAt = readAssistantCompletedAt(info);
+    if (
+      options?.minCompletedAt !== undefined &&
+      completedAt !== undefined &&
+      completedAt < options.minCompletedAt
+    ) {
+      continue;
+    }
+
     const text = readAssistantText(getMessageParts(message));
     if (text) {
       fallbackText = text;
@@ -755,7 +807,13 @@ export function extractAssistantResultFromMessages(messages: unknown): {
 
     const errorMessage = extractAssistantErrorMessage(info);
     if (errorMessage) {
-      return { text: fallbackText ?? text, completed: false, failed: true, error: errorMessage, tokenUsed };
+      return {
+        text: fallbackText ?? text,
+        completed: false,
+        failed: true,
+        error: errorMessage,
+        tokenUsed,
+      };
     }
 
     if (text && isCompletedAssistantMessage(info)) {
@@ -771,7 +829,14 @@ export function extractAssistantResultFromMessages(messages: unknown): {
 async function waitForSessionText(
   sessionId: string,
   timeoutMs: number,
-): Promise<{ text?: string; completed: boolean; failed: boolean; error?: string; tokenUsed: number }> {
+  options?: { minCompletedAt?: number },
+): Promise<{
+  text?: string;
+  completed: boolean;
+  failed: boolean;
+  error?: string;
+  tokenUsed: number;
+}> {
   const deadline = Date.now() + timeoutMs;
   let fallbackText: string | undefined;
   let fallbackTokenUsed = 0;
@@ -782,7 +847,7 @@ async function waitForSessionText(
       return { text: fallbackText, completed: false, failed: false, tokenUsed: fallbackTokenUsed };
     }
 
-    const assistantResult = extractAssistantResultFromMessages(messagesResult.data);
+    const assistantResult = extractAssistantResultFromMessages(messagesResult.data, options);
     if (assistantResult.text) {
       fallbackText = assistantResult.text;
     }
@@ -817,16 +882,18 @@ export async function listSessions(limit = 20): Promise<OpencodeResponse> {
   }
   const promise = opcall("GET", `/session?limit=${limit}`, undefined, {
     circuitKey: SESSION_READ_CIRCUIT_KEY,
-  }).then((result) => {
-    if (result.ok) {
-      listSessionsCache.set(cacheKey, { ts: Date.now(), result });
-    }
-    listSessionsInflight.delete(cacheKey);
-    return result;
-  }).catch((err) => {
-    listSessionsInflight.delete(cacheKey);
-    throw err;
-  });
+  })
+    .then((result) => {
+      if (result.ok) {
+        listSessionsCache.set(cacheKey, { ts: Date.now(), result });
+      }
+      listSessionsInflight.delete(cacheKey);
+      return result;
+    })
+    .catch((err) => {
+      listSessionsInflight.delete(cacheKey);
+      throw err;
+    });
   listSessionsInflight.set(cacheKey, promise);
   return promise;
 }
@@ -849,7 +916,7 @@ export async function forkSession(
   return {
     ...result,
     sessionId: sessionData?.id || sessionData?.sessionID,
-  }; 
+  };
 }
 
 export async function runDetachedPrompt(

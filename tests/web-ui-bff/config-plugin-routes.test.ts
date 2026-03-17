@@ -38,10 +38,7 @@ describe("plugin config compatibility helpers", () => {
 
     setConfiguredPluginState(
       config,
-      [
-        "./.opencode/plugins/orchestrator-plugin.ts",
-        "./.opencode/plugins/orchestrator-plugin.ts",
-      ],
+      ["./.opencode/plugins/orchestrator-plugin.ts", "./.opencode/plugins/orchestrator-plugin.ts"],
       ["./.opencode/plugins/tmux-plugin.ts"],
     );
 

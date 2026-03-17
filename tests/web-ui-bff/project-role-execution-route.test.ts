@@ -89,13 +89,18 @@ beforeEach(() => {
 
 describe("project role execution aggregate route", () => {
   test("falls back to system defaults when override reads return 403", async () => {
-    const { projectRoutes } = await import("../../control-plane/web-ui-bff/src/modules/projects/routes");
+    const { projectRoutes } = await import(
+      "../../control-plane/web-ui-bff/src/modules/projects/routes"
+    );
 
-    const response = await projectRoutes.request("http://localhost/proj-default/role-execution-view", {
-      headers: {
-        Authorization: "Bearer inbound-token",
+    const response = await projectRoutes.request(
+      "http://localhost/proj-default/role-execution-view",
+      {
+        headers: {
+          Authorization: "Bearer inbound-token",
+        },
       },
-    });
+    );
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
@@ -185,13 +190,18 @@ describe("project role execution aggregate route", () => {
       };
     });
 
-    const { projectRoutes } = await import("../../control-plane/web-ui-bff/src/modules/projects/routes");
+    const { projectRoutes } = await import(
+      "../../control-plane/web-ui-bff/src/modules/projects/routes"
+    );
 
-    const response = await projectRoutes.request("http://localhost/proj-default/role-execution-view", {
-      headers: {
-        Authorization: "Bearer inbound-token",
+    const response = await projectRoutes.request(
+      "http://localhost/proj-default/role-execution-view",
+      {
+        headers: {
+          Authorization: "Bearer inbound-token",
+        },
       },
-    });
+    );
 
     expect(response.status).toBe(404);
     await expect(response.json()).resolves.toEqual({
@@ -238,13 +248,18 @@ describe("project role execution aggregate route", () => {
       };
     });
 
-    const { projectRoutes } = await import("../../control-plane/web-ui-bff/src/modules/projects/routes");
+    const { projectRoutes } = await import(
+      "../../control-plane/web-ui-bff/src/modules/projects/routes"
+    );
 
-    const response = await projectRoutes.request("http://localhost/proj-default/role-execution-view", {
-      headers: {
-        Authorization: "Bearer inbound-token",
+    const response = await projectRoutes.request(
+      "http://localhost/proj-default/role-execution-view",
+      {
+        headers: {
+          Authorization: "Bearer inbound-token",
+        },
       },
-    });
+    );
 
     expect(response.status).toBe(502);
     await expect(response.json()).resolves.toEqual({

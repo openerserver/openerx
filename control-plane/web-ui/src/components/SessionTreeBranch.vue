@@ -98,13 +98,16 @@ const props = defineProps<{
   node: SessionTreeNode;
   selectedSessionId?: string;
   taskStatus?: string;
-  sessionStateMap?: Record<string, {
-    badgeLabel: string;
-    badgeColor: string;
-    summary: string;
-    detail?: string;
-    countdownLabel?: string;
-  }>;
+  sessionStateMap?: Record<
+    string,
+    {
+      badgeLabel: string;
+      badgeColor: string;
+      summary: string;
+      detail?: string;
+      countdownLabel?: string;
+    }
+  >;
   depth: number;
   parentTitle?: string;
   parentSessionId?: string;

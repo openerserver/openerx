@@ -1,4 +1,8 @@
-import { cpFetch, createInternalAuthorization, type UpstreamResponse } from "./control-plane-client";
+import {
+  type UpstreamResponse,
+  cpFetch,
+  createInternalAuthorization,
+} from "./control-plane-client";
 
 export type RuntimeUsageLedgerStatus = "running" | "completed" | "failed" | "cancelled";
 export type RuntimeUsageLedgerStepType = "execution" | "judge" | "hook" | "resume" | "other";
@@ -142,57 +146,65 @@ function buildStableStepId(input: SyncRuntimeUsageLedgerInput) {
   ].join(":");
 }
 
-export async function syncRuntimeUsageLedger(
-  input: SyncRuntimeUsageLedgerInput,
-): Promise<UpstreamResponse<{ projectId: string; ledger: RuntimeUsageLedgerRecord | null; stepInserted: boolean; deltaApplied: boolean }>> {
+export async function syncRuntimeUsageLedger(input: SyncRuntimeUsageLedgerInput): Promise<
+  UpstreamResponse<{
+    projectId: string;
+    ledger: RuntimeUsageLedgerRecord | null;
+    stepInserted: boolean;
+    deltaApplied: boolean;
+  }>
+> {
   const authorization = await createInternalAuthorization();
-  return cpFetch(`/api/projects/${encodeURIComponent(input.projectId)}/runtime-usage-ledgers/sync`, {
-    method: "POST",
-    authorization,
-    body: {
-      taskId: input.taskId,
-      agentRunId: input.agentRunId,
-      runtimeSessionId: input.runtimeSessionId,
-      executionSource: input.executionSource,
-      entrypointType: input.entrypointType,
-      orchestrationFingerprint: input.orchestrationFingerprint,
-      defaultProviderId: input.defaultProviderId,
-      defaultModelId: input.defaultModelId,
-      requestCountDelta: input.requestCountDelta ?? 1,
-      stepCountDelta: input.stepCountDelta ?? 1,
-      inputTokens: input.inputTokens,
-      outputTokens: input.outputTokens,
-      totalTokens: input.totalTokens,
-      costUsd: input.costUsd,
-      candidateCount: input.candidateCount,
-      judgeRequestCountDelta: input.judgeRequestCountDelta ?? 0,
-      hookRequestCountDelta: input.hookRequestCountDelta ?? 0,
-      status: input.status ?? "completed",
-      startedAt: input.startedAt,
-      finishedAt: input.finishedAt,
-      syncedAt: input.syncedAt,
-      step: input.step
-        ? {
-            id: buildStableStepId(input),
-            stepType: input.step.stepType,
-            triggerType: input.step.triggerType,
-            hookId: input.step.hookId,
-            candidateIndex: input.step.candidateIndex,
-            requestIndex: input.step.requestIndex ?? 0,
-            providerId: input.step.providerId,
-            modelId: input.step.modelId,
-            inputTokens: input.step.inputTokens,
-            outputTokens: input.step.outputTokens,
-            totalTokens: input.step.totalTokens,
-            costUsd: input.step.costUsd,
-            amplificationSource: input.step.amplificationSource,
-            status: input.step.status ?? "completed",
-            startedAt: input.step.startedAt,
-            finishedAt: input.step.finishedAt,
-          }
-        : undefined,
+  return cpFetch(
+    `/api/projects/${encodeURIComponent(input.projectId)}/runtime-usage-ledgers/sync`,
+    {
+      method: "POST",
+      authorization,
+      body: {
+        taskId: input.taskId,
+        agentRunId: input.agentRunId,
+        runtimeSessionId: input.runtimeSessionId,
+        executionSource: input.executionSource,
+        entrypointType: input.entrypointType,
+        orchestrationFingerprint: input.orchestrationFingerprint,
+        defaultProviderId: input.defaultProviderId,
+        defaultModelId: input.defaultModelId,
+        requestCountDelta: input.requestCountDelta ?? 1,
+        stepCountDelta: input.stepCountDelta ?? 1,
+        inputTokens: input.inputTokens,
+        outputTokens: input.outputTokens,
+        totalTokens: input.totalTokens,
+        costUsd: input.costUsd,
+        candidateCount: input.candidateCount,
+        judgeRequestCountDelta: input.judgeRequestCountDelta ?? 0,
+        hookRequestCountDelta: input.hookRequestCountDelta ?? 0,
+        status: input.status ?? "completed",
+        startedAt: input.startedAt,
+        finishedAt: input.finishedAt,
+        syncedAt: input.syncedAt,
+        step: input.step
+          ? {
+              id: buildStableStepId(input),
+              stepType: input.step.stepType,
+              triggerType: input.step.triggerType,
+              hookId: input.step.hookId,
+              candidateIndex: input.step.candidateIndex,
+              requestIndex: input.step.requestIndex ?? 0,
+              providerId: input.step.providerId,
+              modelId: input.step.modelId,
+              inputTokens: input.step.inputTokens,
+              outputTokens: input.step.outputTokens,
+              totalTokens: input.step.totalTokens,
+              costUsd: input.step.costUsd,
+              amplificationSource: input.step.amplificationSource,
+              status: input.step.status ?? "completed",
+              startedAt: input.step.startedAt,
+              finishedAt: input.step.finishedAt,
+            }
+          : undefined,
+      },
     },
-  });
+  );
 }
 
 export async function fetchProjectRuntimeUsageLedgers(
@@ -239,9 +251,12 @@ export async function fetchProjectRuntimeUsageLedgerDetail(
     ledger: RuntimeUsageLedgerRecord;
     steps: RuntimeUsageLedgerStepRecord[];
     breakdown: { byStepType: Record<string, number> };
-  }>(`/api/projects/${encodeURIComponent(projectId)}/runtime-usage-ledgers/${encodeURIComponent(ledgerId)}`, {
-    authorization,
-  });
+  }>(
+    `/api/projects/${encodeURIComponent(projectId)}/runtime-usage-ledgers/${encodeURIComponent(ledgerId)}`,
+    {
+      authorization,
+    },
+  );
 }
 
 export async function fetchProjectRuntimeUsageBaseline(
@@ -258,7 +273,8 @@ export async function fetchProjectRuntimeUsageBaseline(
   if (params?.providerId) search.set("providerId", params.providerId);
   if (params?.modelId) search.set("modelId", params.modelId);
   if (params?.entrypointType) search.set("entrypointType", params.entrypointType);
-  if (params?.orchestrationFingerprint) search.set("orchestrationFingerprint", params.orchestrationFingerprint);
+  if (params?.orchestrationFingerprint)
+    search.set("orchestrationFingerprint", params.orchestrationFingerprint);
   const suffix = search.toString() ? `?${search.toString()}` : "";
 
   return cpFetch<{

@@ -40,7 +40,12 @@ mock.module("../../control-plane/web-ui-bff/src/lib/orchestration-strategy", () 
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter", () => ({
-  extractAssistantResultFromMessages: mock(() => ({ completed: true, failed: false, tokenUsed: 0, text: "" })),
+  extractAssistantResultFromMessages: mock(() => ({
+    completed: true,
+    failed: false,
+    tokenUsed: 0,
+    text: "",
+  })),
   findAgentRunBySessionId: mock(() => undefined),
   getSessionMessages: mock(async () => ({ ok: true, data: [] })),
   runDetachedPrompt: runDetachedPromptMock,
@@ -79,57 +84,59 @@ beforeEach(() => {
     model: { providerId: "github-copilot", modelId: "gpt-5.4" },
   });
 
-  cpFetchMock.mockImplementation(async (url: string, options?: { method?: string; body?: unknown }) => {
-    if ((options?.method || "GET") === "GET" && url === "/api/tasks/task-judge") {
-      return {
-        ok: true,
-        status: 200,
-        data: {
-          id: "task-judge",
-          title: "Judge task",
-          prompt: "Choose the better implementation",
-          projectId: "proj-judge",
-          sessionId: "ses-root",
-          strategy: JSON.stringify({
-            effectiveModel: "github-copilot:gpt-5.4",
-            paidExecutionGuard: {
-              enabled: true,
-              providerId: "github-copilot",
-              modelId: "gpt-5.4",
-              modelRoute: "github-copilot:gpt-5.4",
-              guardDecision: "allow",
-              guardReason: "approved",
-              estimatedRequestUpperBound: 3,
-              estimatedTokenUpperBound: 9000,
-              estimatedCostUpperBound: 4,
-              actualRequests: 0,
-              actualTokenUsage: 0,
-              actualCost: 0,
-              maxRequestsPerRun: 4,
-              maxEstimatedCostUsdPerRun: 5,
-              overridesApplied: [],
-              postHooksDisabled: false,
-            },
-          }),
-          selectedModel: "github-copilot:gpt-5.4",
-          executionPlan: JSON.stringify({
-            templateId: "parallel-template",
-            mode: "parallel",
-            steps: [
-              { id: "exec-0", type: "execution", status: "completed" },
-              { id: "judge-0", type: "judge", status: "pending", dependsOn: ["exec-0"] },
-            ],
-            candidates: [
-              { label: "A", agent: "agent-a", status: "running" },
-              { label: "B", agent: "agent-b", status: "running" },
-            ],
-          }),
-        },
-      };
-    }
+  cpFetchMock.mockImplementation(
+    async (url: string, options?: { method?: string; body?: unknown }) => {
+      if ((options?.method || "GET") === "GET" && url === "/api/tasks/task-judge") {
+        return {
+          ok: true,
+          status: 200,
+          data: {
+            id: "task-judge",
+            title: "Judge task",
+            prompt: "Choose the better implementation",
+            projectId: "proj-judge",
+            sessionId: "ses-root",
+            strategy: JSON.stringify({
+              effectiveModel: "github-copilot:gpt-5.4",
+              paidExecutionGuard: {
+                enabled: true,
+                providerId: "github-copilot",
+                modelId: "gpt-5.4",
+                modelRoute: "github-copilot:gpt-5.4",
+                guardDecision: "allow",
+                guardReason: "approved",
+                estimatedRequestUpperBound: 3,
+                estimatedTokenUpperBound: 9000,
+                estimatedCostUpperBound: 4,
+                actualRequests: 0,
+                actualTokenUsage: 0,
+                actualCost: 0,
+                maxRequestsPerRun: 4,
+                maxEstimatedCostUsdPerRun: 5,
+                overridesApplied: [],
+                postHooksDisabled: false,
+              },
+            }),
+            selectedModel: "github-copilot:gpt-5.4",
+            executionPlan: JSON.stringify({
+              templateId: "parallel-template",
+              mode: "parallel",
+              steps: [
+                { id: "exec-0", type: "execution", status: "completed" },
+                { id: "judge-0", type: "judge", status: "pending", dependsOn: ["exec-0"] },
+              ],
+              candidates: [
+                { label: "A", agent: "agent-a", status: "running" },
+                { label: "B", agent: "agent-b", status: "running" },
+              ],
+            }),
+          },
+        };
+      }
 
-    return { ok: true, status: 200, data: { body: options?.body } };
-  });
+      return { ok: true, status: 200, data: { body: options?.body } };
+    },
+  );
 });
 
 describe("judge usage accounting", () => {
@@ -142,7 +149,11 @@ describe("judge usage accounting", () => {
       parallelCandidateResults: Map<string, Map<number, { sessionId: string; result?: string }>>;
       parallelTaskSessions: Map<string, Set<string>>;
       judgingTasks: Set<string>;
-      finalizeParallelTask: (taskId: string, projectId: string, authorization: string) => Promise<void>;
+      finalizeParallelTask: (
+        taskId: string,
+        projectId: string,
+        authorization: string,
+      ) => Promise<void>;
     };
 
     aggregator.parallelCandidateResults.set(
@@ -158,20 +169,29 @@ describe("judge usage accounting", () => {
     await aggregator.finalizeParallelTask("task-judge", "proj-judge", "Bearer internal");
 
     const costRecordCalls = cpFetchMock.mock.calls.filter(
-      (call) => call[0] === "/api/cost/records" && (call[1] as { method?: string })?.method === "POST",
+      (call) =>
+        call[0] === "/api/cost/records" && (call[1] as { method?: string })?.method === "POST",
     );
     const auditCalls = cpFetchMock.mock.calls.filter(
       (call) => call[0] === "/api/audit" && (call[1] as { method?: string })?.method === "POST",
     );
     const patchCalls = cpFetchMock.mock.calls.filter(
-      (call) => call[0] === "/api/tasks/task-judge" && (call[1] as { method?: string })?.method === "PATCH",
+      (call) =>
+        call[0] === "/api/tasks/task-judge" && (call[1] as { method?: string })?.method === "PATCH",
     );
 
     expect(costRecordCalls).toHaveLength(1);
-    expect(auditCalls.some((call) => (call[1] as { body?: { action?: string } }).body?.action === "judge_usage_recorded")).toBe(true);
+    expect(
+      auditCalls.some(
+        (call) =>
+          (call[1] as { body?: { action?: string } }).body?.action === "judge_usage_recorded",
+      ),
+    ).toBe(true);
     expect(
       patchCalls.some((call) =>
-        String((call[1] as { body?: { strategy?: string } }).body?.strategy || "").includes('"tokenUsed":2600'),
+        String((call[1] as { body?: { strategy?: string } }).body?.strategy || "").includes(
+          '"tokenUsed":2600',
+        ),
       ),
     ).toBe(true);
   });

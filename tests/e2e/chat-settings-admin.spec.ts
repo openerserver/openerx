@@ -1,4 +1,4 @@
-import { expect, test, type Page, type Route } from "@playwright/test";
+import { type Page, type Route, expect, test } from "@playwright/test";
 
 type ChatSettingsContext = {
   data: {
@@ -304,7 +304,12 @@ async function installApiMocks(page: Page) {
       strategySummaryBefore: currentContext.data.categorySummaries,
       strategySummaryAfter: currentContext.data.categorySummaries.map((item) =>
         item.category === "deep"
-          ? { ...item, templateName: "tpl-deep-parallel", executionMode: "parallel", judgeEnabled: true }
+          ? {
+              ...item,
+              templateName: "tpl-deep-parallel",
+              executionMode: "parallel",
+              judgeEnabled: true,
+            }
           : item,
       ),
       riskHints: [
@@ -412,7 +417,12 @@ async function installApiMocks(page: Page) {
     currentContext.data.configVersions["orchestration-strategy"] = "orchestration-version-2";
     currentContext.data.categorySummaries = currentContext.data.categorySummaries.map((item) =>
       item.category === "deep"
-        ? { ...item, templateName: "tpl-deep-parallel", executionMode: "parallel", judgeEnabled: true }
+        ? {
+            ...item,
+            templateName: "tpl-deep-parallel",
+            executionMode: "parallel",
+            judgeEnabled: true,
+          }
         : item,
     );
 
@@ -432,7 +442,9 @@ async function installApiMocks(page: Page) {
 }
 
 test.describe("Chat Settings admin browser flow", () => {
-  test("admin can login, navigate, and inspect orchestration strategy by category", async ({ page }) => {
+  test("admin can login, navigate, and inspect orchestration strategy by category", async ({
+    page,
+  }) => {
     await installApiMocks(page);
 
     await page.goto("/login");
@@ -456,7 +468,9 @@ test.describe("Chat Settings admin browser flow", () => {
     await expect(page.getByText("github-copilot:gpt-4o").first()).toBeVisible();
   });
 
-  test("admin can preview an orchestration change with before after diff and risk hints", async ({ page }) => {
+  test("admin can preview an orchestration change with before after diff and risk hints", async ({
+    page,
+  }) => {
     await installApiMocks(page);
 
     await page.goto("/login");
@@ -503,7 +517,9 @@ test.describe("Chat Settings admin browser flow", () => {
     await expect(page.getByText("已启用").first()).toBeVisible();
   });
 
-  test("admin sees an orchestration error hint and can refill the recommended rewrite", async ({ page }) => {
+  test("admin sees an orchestration error hint and can refill the recommended rewrite", async ({
+    page,
+  }) => {
     await installApiMocks(page);
 
     await page.goto("/login");
@@ -516,15 +532,24 @@ test.describe("Chat Settings admin browser flow", () => {
 
     await page
       .getByPlaceholder(/例如：请把 deep 分类改成并行执行，并启用 judge。/)
-      .fill("请严格按下面要求生成编排建议：只修改 ops 分类；patch.templates[0].mode 必须等于 mesh；不要改写成 single 或 parallel；也不要开启 pipeline；不要给替代方案。");
+      .fill(
+        "请严格按下面要求生成编排建议：只修改 ops 分类；patch.templates[0].mode 必须等于 mesh；不要改写成 single 或 parallel；也不要开启 pipeline；不要给替代方案。",
+      );
     await page.getByRole("button", { name: "生成预览" }).click();
 
-    await expect(page.locator(".ant-alert").filter({ hasText: /AI 返回的编排建议暂时无法直接应用/ }).first()).toBeVisible();
+    await expect(
+      page
+        .locator(".ant-alert")
+        .filter({ hasText: /AI 返回的编排建议暂时无法直接应用/ })
+        .first(),
+    ).toBeVisible();
     await expect(page.getByRole("button", { name: "回填推荐改写示例" })).toBeVisible();
 
     await page.getByRole("button", { name: "回填推荐改写示例" }).click();
 
-    await expect(page.getByPlaceholder(/例如：请把 deep 分类改成并行执行，并启用 judge。/)).toHaveValue(
+    await expect(
+      page.getByPlaceholder(/例如：请把 deep 分类改成并行执行，并启用 judge。/),
+    ).toHaveValue(
       /请只修改 ops 分类，并保持其他分类不变。执行模式请明确写为 single 或 parallel；如果需要 pipeline，请单独说明开启或关闭 pipeline。请返回可直接应用的 orchestration-strategy patch。/,
     );
   });

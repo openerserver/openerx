@@ -1,6 +1,6 @@
 import type { ModelsConfig } from "../modules/chat-settings/types";
-import type { OrchestrationStrategy } from "./orchestration-strategy";
 import { buildStrategyMermaidMap } from "./orchestration-mermaid";
+import type { OrchestrationStrategy } from "./orchestration-strategy";
 
 export interface ChatSettingsVisualization {
   kind: "mermaid" | "json";
@@ -10,33 +10,36 @@ export interface ChatSettingsVisualization {
 
 export function buildModelsFlowchart(config: ModelsConfig): string {
   const lines = ["flowchart LR", "  Defaults[默认模型]"];
-  const defaultModel = typeof config.defaults?.model === "string" ? config.defaults.model.trim() : "";
+  const defaultModel =
+    typeof config.defaults?.model === "string" ? config.defaults.model.trim() : "";
 
   if (defaultModel) {
     lines.push(`  Defaults --> DefaultRoute[${defaultModel.replace(/"/g, "'")}]`);
   }
 
   const providers = Object.keys(config.providers || {});
-  providers.forEach((providerKey, providerIndex) => {
+  for (const [providerIndex, providerKey] of providers.entries()) {
     const providerNode = `Provider_${providerIndex}`;
     lines.push(`  ${providerNode}[${providerKey.replace(/"/g, "'")}]`);
     const providerModels = config.list.filter((item) => item.provider === providerKey);
     if (providerModels.length === 0) {
       lines.push(`  ${providerNode} --> ${providerNode}_empty[无模型]`);
-      return;
+      continue;
     }
 
-    providerModels.forEach((item, index) => {
+    for (const [index, item] of providerModels.entries()) {
       const modelNode = `${providerNode}_Model_${index}`;
       const modelLabel = `${String(item.id || "unknown")}`.replace(/"/g, "'");
       lines.push(`  ${providerNode} --> ${modelNode}[${modelLabel}]`);
-    });
-  });
+    }
+  }
 
   return lines.join("\n");
 }
 
-export function buildStrategyVisualizations(strategy: OrchestrationStrategy): ChatSettingsVisualization[] {
+export function buildStrategyVisualizations(
+  strategy: OrchestrationStrategy,
+): ChatSettingsVisualization[] {
   return Object.entries(buildStrategyMermaidMap(strategy)).map(([category, content]) => ({
     kind: "mermaid",
     title: `编排时序 · ${category}`,
@@ -59,7 +62,10 @@ export function buildModelsVisualizations(config: ModelsConfig): ChatSettingsVis
   ];
 }
 
-export function buildJsonVisualizations(title: string, value: unknown): ChatSettingsVisualization[] {
+export function buildJsonVisualizations(
+  title: string,
+  value: unknown,
+): ChatSettingsVisualization[] {
   return [
     {
       kind: "json",

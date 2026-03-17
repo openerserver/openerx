@@ -5,7 +5,12 @@ function hasColumn(sqlite: Database, tableName: string, columnName: string) {
   return rows.some((row) => row.name === columnName);
 }
 
-function ensureColumn(sqlite: Database, tableName: string, columnName: string, columnDefinition: string) {
+function ensureColumn(
+  sqlite: Database,
+  tableName: string,
+  columnName: string,
+  columnDefinition: string,
+) {
   if (!hasColumn(sqlite, tableName, columnName)) {
     sqlite.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnDefinition}`);
   }
@@ -374,12 +379,22 @@ export function ensureRuntimeTables(sqlite: Database) {
       ON runtime_usage_baselines(project_id, generated_at DESC);
   `);
 
-  ensureColumn(sqlite, "role_agents", "allowed_stages_json", `text NOT NULL DEFAULT '["implement"]'`);
+  ensureColumn(
+    sqlite,
+    "role_agents",
+    "allowed_stages_json",
+    `text NOT NULL DEFAULT '["implement"]'`,
+  );
   ensureColumn(sqlite, "role_agent_bindings", "project_id", "text REFERENCES projects(id)");
   ensureColumn(sqlite, "workflow_templates", "default_collaboration_mode", "text");
   ensureColumn(sqlite, "workflow_templates", "default_autopilot_level", "text");
   ensureColumn(sqlite, "workflow_templates", "default_boss_participation_mode", "text");
-  ensureColumn(sqlite, "workflow_templates", "force_boss_participation", "integer NOT NULL DEFAULT false");
+  ensureColumn(
+    sqlite,
+    "workflow_templates",
+    "force_boss_participation",
+    "integer NOT NULL DEFAULT false",
+  );
   ensureColumn(sqlite, "workflow_template_stages", "stage_template_strategy_json", "text");
   sqlite.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_role_agent_bindings_role_project_key

@@ -1,6 +1,6 @@
 import { defineStore } from "pinia";
 import { ref, watch } from "vue";
-import { getWorkbenchLayout, saveWorkbenchLayout, type WorkbenchLayoutPayload } from "../lib/api";
+import { type WorkbenchLayoutPayload, getWorkbenchLayout, saveWorkbenchLayout } from "../lib/api";
 
 export interface WorkbenchTaskTab {
   taskId: string;
@@ -155,7 +155,11 @@ export const useWorkbenchStore = defineStore(
     function setActiveTask(taskId: string) {
       if (tabs.value.some((tab) => tab.taskId === taskId)) {
         activeTaskId.value = taskId;
-        if (splitMode.value && secondaryPane.value?.taskId === taskId && !secondaryPane.value?.sessionId) {
+        if (
+          splitMode.value &&
+          secondaryPane.value?.taskId === taskId &&
+          !secondaryPane.value?.sessionId
+        ) {
           const fallback = tabs.value.find((tab) => tab.taskId !== taskId);
           secondaryPane.value = fallback ? { taskId: fallback.taskId } : null;
         }
@@ -197,7 +201,10 @@ export const useWorkbenchStore = defineStore(
         activeTaskId.value = tabs.value[0]?.taskId || "";
       }
 
-      if (!secondaryPane.value?.taskId || (secondaryPane.value.taskId === activeTaskId.value && !secondaryPane.value.sessionId)) {
+      if (
+        !secondaryPane.value?.taskId ||
+        (secondaryPane.value.taskId === activeTaskId.value && !secondaryPane.value.sessionId)
+      ) {
         const fallback = tabs.value.find((tab) => tab.taskId !== activeTaskId.value);
         secondaryPane.value = fallback ? { taskId: fallback.taskId } : null;
       }
@@ -212,28 +219,25 @@ export const useWorkbenchStore = defineStore(
       };
     }
 
-    function restoreSnapshot(snapshot: WorkbenchSnapshot | null) {
-      if (!snapshot || snapshot.tabs.length === 0) {
-        clearWorkbench();
-        return;
-      }
-
-      tabs.value = snapshot.tabs.map((tab) => ({ ...tab }));
-
+    function resolveRestoredActiveTaskId(snapshot: WorkbenchSnapshot) {
       const activeExists = tabs.value.some((tab) => tab.taskId === snapshot.activeTaskId);
-      activeTaskId.value = activeExists ? snapshot.activeTaskId : tabs.value[0]?.taskId || "";
+      return activeExists ? snapshot.activeTaskId : tabs.value[0]?.taskId || "";
+    }
 
+    function resolveRestoredSecondaryPane(snapshot: WorkbenchSnapshot) {
       const secondaryTaskId = snapshot.secondaryPane?.taskId || "";
       const secondaryExists = tabs.value.some((tab) => tab.taskId === secondaryTaskId);
-      secondaryPane.value = secondaryExists && snapshot.secondaryPane
-        ? { ...snapshot.secondaryPane }
-        : null;
+      return secondaryExists && snapshot.secondaryPane ? { ...snapshot.secondaryPane } : null;
+    }
 
+    function normalizeSecondaryPaneAfterRestore() {
       if (secondaryPane.value?.taskId === activeTaskId.value && !secondaryPane.value.sessionId) {
         const fallback = tabs.value.find((tab) => tab.taskId !== activeTaskId.value);
         secondaryPane.value = fallback ? { taskId: fallback.taskId } : null;
       }
+    }
 
+    function applyRestoredSplitMode(snapshot: WorkbenchSnapshot) {
       splitMode.value = snapshot.splitMode;
       if (!splitMode.value) {
         secondaryPane.value = null;
@@ -244,6 +248,19 @@ export const useWorkbenchStore = defineStore(
         splitMode.value = false;
         secondaryPane.value = null;
       }
+    }
+
+    function restoreSnapshot(snapshot: WorkbenchSnapshot | null) {
+      if (!snapshot || snapshot.tabs.length === 0) {
+        clearWorkbench();
+        return;
+      }
+
+      tabs.value = snapshot.tabs.map((tab) => ({ ...tab }));
+      activeTaskId.value = resolveRestoredActiveTaskId(snapshot);
+      secondaryPane.value = resolveRestoredSecondaryPane(snapshot);
+      normalizeSecondaryPaneAfterRestore();
+      applyRestoredSplitMode(snapshot);
     }
 
     function clearWorkbench() {
@@ -268,7 +285,10 @@ export const useWorkbenchStore = defineStore(
       if (!tabs.value.some((t) => t.taskId === activeTaskId.value)) {
         activeTaskId.value = keepTaskId;
       }
-      if (secondaryPane.value && !tabs.value.some((t) => t.taskId === secondaryPane.value?.taskId)) {
+      if (
+        secondaryPane.value &&
+        !tabs.value.some((t) => t.taskId === secondaryPane.value?.taskId)
+      ) {
         secondaryPane.value = null;
       }
       if (tabs.value.length < 2) {
@@ -284,7 +304,10 @@ export const useWorkbenchStore = defineStore(
       if (!tabs.value.some((t) => t.taskId === activeTaskId.value)) {
         activeTaskId.value = tabs.value[tabs.value.length - 1]?.taskId || "";
       }
-      if (secondaryPane.value && !tabs.value.some((t) => t.taskId === secondaryPane.value?.taskId)) {
+      if (
+        secondaryPane.value &&
+        !tabs.value.some((t) => t.taskId === secondaryPane.value?.taskId)
+      ) {
         secondaryPane.value = null;
       }
       if (tabs.value.length < 2) {

@@ -2,11 +2,11 @@ import { Button, Space, Typography, message, notification } from "ant-design-vue
 import { h } from "vue";
 import type { Router } from "vue-router";
 import { type ApiError, toApiError } from "./api";
-import {
-  buildRuntimeRecoveryNoticeModel,
-  type RuntimeRecoveryNoticeContext,
-} from "./runtime-recovery-notice";
 import { RUNTIME_RECOVERY_ERROR_PREFIX } from "./runtime-recovery-contract";
+import {
+  type RuntimeRecoveryNoticeContext,
+  buildRuntimeRecoveryNoticeModel,
+} from "./runtime-recovery-notice";
 
 type RuntimeRecoveryOptions = {
   title?: string;
@@ -42,11 +42,10 @@ function formatDiagnostics(error: ApiError) {
       },
     },
     pairs.map(([label, value]) =>
-      h(
-        "div",
-        { style: { fontSize: "12px", lineHeight: 1.6, color: "#6b5a45" } },
-        [h("strong", { style: { color: "#3e3328", marginRight: "6px" } }, `${label}:`), String(value)],
-      ),
+      h("div", { style: { fontSize: "12px", lineHeight: 1.6, color: "#6b5a45" } }, [
+        h("strong", { style: { color: "#3e3328", marginRight: "6px" } }, `${label}:`),
+        String(value),
+      ]),
     ),
   );
 }
@@ -89,7 +88,11 @@ export function showRuntimeRecoveryNotice(error: unknown, options: RuntimeRecove
     duration: 0,
     placement: "topRight",
     description: h("div", { style: { paddingRight: "4px" } }, [
-      h(Typography.Text, { style: { display: "block", whiteSpace: "pre-wrap", color: "#4b3f34" } }, () => apiError.message),
+      h(
+        Typography.Text,
+        { style: { display: "block", whiteSpace: "pre-wrap", color: "#4b3f34" } },
+        () => apiError.message,
+      ),
       suggestions.length
         ? h(
             "div",
@@ -97,14 +100,27 @@ export function showRuntimeRecoveryNotice(error: unknown, options: RuntimeRecove
             suggestions.map((item) =>
               h(
                 "div",
-                { style: { fontSize: "12px", lineHeight: 1.6, color: "#6b5a45", marginBottom: "6px" } },
+                {
+                  style: {
+                    fontSize: "12px",
+                    lineHeight: 1.6,
+                    color: "#6b5a45",
+                    marginBottom: "6px",
+                  },
+                },
                 [
                   h("div", `• ${item.title}`),
                   item.detail
                     ? h("div", { style: { paddingLeft: "12px", color: "#8a775f" } }, item.detail)
                     : null,
                   item.command
-                    ? h("div", { style: { paddingLeft: "12px", color: "#8a775f", fontFamily: "monospace" } }, item.command)
+                    ? h(
+                        "div",
+                        {
+                          style: { paddingLeft: "12px", color: "#8a775f", fontFamily: "monospace" },
+                        },
+                        item.command,
+                      )
                     : null,
                 ],
               ),
@@ -129,12 +145,15 @@ export function showRuntimeRecoveryNotice(error: unknown, options: RuntimeRecove
                     void options.router.push(target);
                   } else {
                     const query = new URLSearchParams(
-                      Object.entries(target.query).reduce<Record<string, string>>((acc, [queryKey, value]) => {
-                        if (typeof value === "string") {
-                          acc[queryKey] = value;
-                        }
-                        return acc;
-                      }, {}),
+                      Object.entries(target.query).reduce<Record<string, string>>(
+                        (acc, [queryKey, value]) => {
+                          if (typeof value === "string") {
+                            acc[queryKey] = value;
+                          }
+                          return acc;
+                        },
+                        {},
+                      ),
                     ).toString();
                     window.location.href = `${target.path}${query ? `?${query}` : ""}`;
                   }

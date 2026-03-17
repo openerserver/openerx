@@ -5,7 +5,13 @@ export const roleAgentRoutes = new Hono();
 
 roleAgentRoutes.get("/", async (c) => {
   const params = new URLSearchParams();
-  for (const key of ["projectId", "scope", "status", "includeBindings", "includeDisabledBindings"]) {
+  for (const key of [
+    "projectId",
+    "scope",
+    "status",
+    "includeBindings",
+    "includeDisabledBindings",
+  ]) {
     const value = c.req.query(key);
     if (value) {
       params.set(key, value);
@@ -24,9 +30,12 @@ roleAgentRoutes.get("/", async (c) => {
 
 roleAgentRoutes.get("/:roleAgentId", async (c) => {
   const roleAgentId = c.req.param("roleAgentId");
-  const result = await cpFetch<Record<string, unknown>>(`/api/role-agents/${encodeURIComponent(roleAgentId)}`, {
-    authorization: authHeader(c),
-  });
+  const result = await cpFetch<Record<string, unknown>>(
+    `/api/role-agents/${encodeURIComponent(roleAgentId)}`,
+    {
+      authorization: authHeader(c),
+    },
+  );
   return c.json(result.data, result.ok ? 200 : (result.status as 400 | 401 | 403 | 404 | 502));
 });
 
@@ -79,7 +88,10 @@ roleAgentRoutes.post("/:roleAgentId/bindings", async (c) => {
       authorization: authHeader(c),
     },
   );
-  return c.json(result.data, result.ok ? 201 : (result.status as 400 | 401 | 403 | 404 | 409 | 502));
+  return c.json(
+    result.data,
+    result.ok ? 201 : (result.status as 400 | 401 | 403 | 404 | 409 | 502),
+  );
 });
 
 roleAgentRoutes.patch("/:roleAgentId/bindings/:bindingId", async (c) => {
@@ -94,7 +106,10 @@ roleAgentRoutes.patch("/:roleAgentId/bindings/:bindingId", async (c) => {
       authorization: authHeader(c),
     },
   );
-  return c.json(result.data, result.ok ? 200 : (result.status as 400 | 401 | 403 | 404 | 409 | 502));
+  return c.json(
+    result.data,
+    result.ok ? 200 : (result.status as 400 | 401 | 403 | 404 | 409 | 502),
+  );
 });
 
 roleAgentRoutes.get("/:roleAgentId/projects/:projectId/override", async (c) => {

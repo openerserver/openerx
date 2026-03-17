@@ -277,20 +277,20 @@
 import { Background } from "@vue-flow/background";
 import { Controls } from "@vue-flow/controls";
 import { VueFlow } from "@vue-flow/core";
-import { loadYoga } from "yoga-layout/load";
-import type { Yoga as YogaLayoutApi } from "yoga-layout/load";
 import type { ComponentPublicInstance } from "vue";
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { useRoute } from "vue-router";
+import { loadYoga } from "yoga-layout/load";
+import type { Yoga as YogaLayoutApi } from "yoga-layout/load";
 import {
-  getTask,
-  getTaskPipeline,
-  getSessionMessages,
-  getTaskSessions,
-  listTasks,
   type RuntimePipeline,
   type SessionInfo,
   type Task,
+  getSessionMessages,
+  getTask,
+  getTaskPipeline,
+  getTaskSessions,
+  listTasks,
 } from "../lib/api";
 import { renderMarkdown } from "../lib/markdown";
 import { useProjectStore } from "../stores/project";
@@ -384,6 +384,13 @@ interface StreamingAssistantMeta {
   agent?: string;
   modelLabel?: string;
   createdAt?: string;
+}
+
+interface LiveAssistantSnapshot {
+  orderedAssistantMessageIds: string[];
+  metaById: Map<string, StreamingAssistantMeta>;
+  textById: Map<string, string>;
+  incompleteIds: Set<string>;
 }
 
 interface MonitorTaskContext {
@@ -517,7 +524,6 @@ const freeLayoutDragPreview = ref<FreeLayoutDragPreviewState>({
   dragCoordinateSpace: "canvas",
 });
 
-
 function unprojectViewportPosition(position: { x: number; y: number }) {
   const zoom = Math.max(monitorStore.viewport.zoom || 1, 0.4);
   return {
@@ -542,7 +548,8 @@ function resolveDragCoordinateSpace(
 
   const projectedX = projectCanvasOffsetX(draggedNode.x);
   const projectedY = projectCanvasOffsetY(draggedNode.y);
-  const canvasDistance = Math.abs(position.x - draggedNode.x) + Math.abs(position.y - draggedNode.y);
+  const canvasDistance =
+    Math.abs(position.x - draggedNode.x) + Math.abs(position.y - draggedNode.y);
   const screenDistance = Math.abs(position.x - projectedX) + Math.abs(position.y - projectedY);
 
   return screenDistance + 4 < canvasDistance ? "screen" : "canvas";
@@ -604,11 +611,15 @@ const taskPickerOptions = computed(() =>
 
 const currentLayoutMode = computed(() => monitorStore.layoutMode);
 const currentLayoutMeta = computed(
-  () => LAYOUT_MODE_OPTIONS.find((option) => option.value === currentLayoutMode.value) || LAYOUT_MODE_OPTIONS[0],
+  () =>
+    LAYOUT_MODE_OPTIONS.find((option) => option.value === currentLayoutMode.value) ||
+    LAYOUT_MODE_OPTIONS[0],
 );
 const canvasShellRef = ref<HTMLElement | null>(null);
 
-let flowViewportController: { setViewport?: (viewport: { x: number; y: number; zoom: number }) => void } | null = null;
+let flowViewportController: {
+  setViewport?: (viewport: { x: number; y: number; zoom: number }) => void;
+} | null = null;
 
 function canvasShellWidth() {
   const measured = canvasShellRef.value?.clientWidth || 0;
@@ -667,22 +678,22 @@ function rectsOverlap(
   gap = FREE_LAYOUT_GAP,
 ) {
   return !(
-    left.x + left.width + gap <= right.x
-    || right.x + right.width + gap <= left.x
-    || left.y + left.height + gap <= right.y
-    || right.y + right.height + gap <= left.y
+    left.x + left.width + gap <= right.x ||
+    right.x + right.width + gap <= left.x ||
+    left.y + left.height + gap <= right.y ||
+    right.y + right.height + gap <= left.y
   );
 }
 
 function freeLayoutMaxX(width: number) {
-  return Math.max(
-    FREE_LAYOUT_LEFT,
-    canvasInnerWidth() - width + FREE_LAYOUT_LEFT,
-  );
+  return Math.max(FREE_LAYOUT_LEFT, canvasInnerWidth() - width + FREE_LAYOUT_LEFT);
 }
 
 function freeLayoutColumnCount(width: number) {
-  return Math.max(1, Math.floor((canvasInnerWidth() + FREE_LAYOUT_GAP) / (width + FREE_LAYOUT_GAP)));
+  return Math.max(
+    1,
+    Math.floor((canvasInnerWidth() + FREE_LAYOUT_GAP) / (width + FREE_LAYOUT_GAP)),
+  );
 }
 
 function freeLayoutColumnX(index: number, width: number) {
@@ -694,10 +705,15 @@ function freeLayoutRowY(index: number) {
 }
 
 function freeLayoutGridRowHeight(heights: number[]) {
-  return Math.max(FREE_LAYOUT_ROW_MIN_HEIGHT, ...heights.map((height) => Math.max(0, Math.round(height))));
+  return Math.max(
+    FREE_LAYOUT_ROW_MIN_HEIGHT,
+    ...heights.map((height) => Math.max(0, Math.round(height))),
+  );
 }
 
-function buildFreeLayoutRows(rects: Array<{ x: number; y: number; width: number; height: number }>) {
+function buildFreeLayoutRows(
+  rects: Array<{ x: number; y: number; width: number; height: number }>,
+) {
   const rowTolerance = 8;
   const groupedRows = rects
     .slice()
@@ -717,11 +733,14 @@ function buildFreeLayoutRows(rects: Array<{ x: number; y: number; width: number;
   const normalizedRows: Array<{ y: number; height: number }> = [];
   let nextRowY = FREE_LAYOUT_TOP;
 
-  groupedRows.forEach((row) => {
+  for (const row of groupedRows) {
     const normalizedY = Math.max(row.y, nextRowY);
-    normalizedRows.push({ y: normalizedY, height: Math.max(FREE_LAYOUT_ROW_MIN_HEIGHT, row.height) });
+    normalizedRows.push({
+      y: normalizedY,
+      height: Math.max(FREE_LAYOUT_ROW_MIN_HEIGHT, row.height),
+    });
     nextRowY = normalizedY + Math.max(FREE_LAYOUT_ROW_MIN_HEIGHT, row.height) + FREE_LAYOUT_GAP;
-  });
+  }
 
   return normalizedRows;
 }
@@ -736,9 +755,7 @@ function buildFreeLayoutCandidateRows(
 
   while (candidates.length < limit) {
     const previousRow = candidates[candidates.length - 1];
-    const y = previousRow
-      ? previousRow.y + previousRow.height + FREE_LAYOUT_GAP
-      : FREE_LAYOUT_TOP;
+    const y = previousRow ? previousRow.y + previousRow.height + FREE_LAYOUT_GAP : FREE_LAYOUT_TOP;
     candidates.push({ y, height: Math.max(FREE_LAYOUT_ROW_MIN_HEIGHT, candidateHeight) });
   }
 
@@ -795,8 +812,12 @@ function findClosestFreeLayoutGridSlot(width: number, targetX: number, targetY: 
     }
   }
 
-  candidates.sort((left, right) => left.distance - right.distance || left.y - right.y || left.x - right.x);
-  return candidates[0] ? { x: candidates[0].x, y: candidates[0].y } : { x: FREE_LAYOUT_LEFT, y: FREE_LAYOUT_TOP };
+  candidates.sort(
+    (left, right) => left.distance - right.distance || left.y - right.y || left.x - right.x,
+  );
+  return candidates[0]
+    ? { x: candidates[0].x, y: candidates[0].y }
+    : { x: FREE_LAYOUT_LEFT, y: FREE_LAYOUT_TOP };
 }
 
 function findNearestFreeLayoutSlot(args: {
@@ -826,18 +847,24 @@ function findNearestFreeLayoutSlot(args: {
     }
   }
 
-  candidates.sort((left, right) => left.distance - right.distance || left.y - right.y || left.x - right.x);
+  candidates.sort(
+    (left, right) => left.distance - right.distance || left.y - right.y || left.x - right.x,
+  );
 
   const slot = candidates.find((candidate) => {
     const rect = { x: candidate.x, y: candidate.y, width: args.width, height: args.height };
     return args.occupiedRects.every((occupiedRect) => !rectsOverlap(rect, occupiedRect));
   });
 
-  return slot ? { x: slot.x, y: slot.y } : findFreeLayoutSlot(args.occupiedRects, args.width, args.height);
+  return slot
+    ? { x: slot.x, y: slot.y }
+    : findFreeLayoutSlot(args.occupiedRects, args.width, args.height);
 }
 
 function findLayoutAtSlot(x: number, y: number, excludedId?: string) {
-  return monitorStore.nodes.find((layout) => layout.id !== excludedId && layout.x === x && layout.y === y);
+  return monitorStore.nodes.find(
+    (layout) => layout.id !== excludedId && layout.x === x && layout.y === y,
+  );
 }
 
 function layoutGridOrder(left: { x: number; y: number }, right: { x: number; y: number }) {
@@ -846,7 +873,9 @@ function layoutGridOrder(left: { x: number; y: number }, right: { x: number; y: 
 
 function buildFreeLayoutInsertionPlan(nodeId: string, targetX: number, targetY: number) {
   const rowTolerance = 8;
-  const sortedLayouts = monitorStore.nodes.slice().sort((left, right) => layoutGridOrder(left, right));
+  const sortedLayouts = monitorStore.nodes
+    .slice()
+    .sort((left, right) => layoutGridOrder(left, right));
   const draggedIndex = sortedLayouts.findIndex((layout) => layout.id === nodeId);
   if (draggedIndex < 0) {
     return null;
@@ -893,14 +922,14 @@ function buildFreeLayoutInsertionPlacements(nodeId: string, targetX: number, tar
   let cursor = 0;
   let currentRowY = FREE_LAYOUT_TOP;
 
-  plan.slotRows.forEach((row) => {
+  for (const row of plan.slotRows) {
     const rowItems = items.slice(cursor, cursor + row.slots.length);
     const rowHeight = freeLayoutGridRowHeight(rowItems.map((item) => item.estimatedHeight));
 
-    rowItems.forEach((item, index) => {
+    for (const [index, item] of rowItems.entries()) {
       const slot = row.slots[index];
       if (!slot) {
-        return;
+        continue;
       }
 
       placements[item.layout.id] = {
@@ -909,11 +938,11 @@ function buildFreeLayoutInsertionPlacements(nodeId: string, targetX: number, tar
         width: FREE_LAYOUT_CARD_WIDTH,
         height: item.estimatedHeight,
       };
-    });
+    }
 
     cursor += row.slots.length;
     currentRowY += rowHeight + FREE_LAYOUT_GAP;
-  });
+  }
 
   return placements;
 }
@@ -925,10 +954,10 @@ function applyFreeLayoutInsertionPlacements(nodeId: string, targetX: number, tar
   }
 
   let changed = false;
-  monitorStore.nodes.forEach((layout) => {
+  for (const layout of monitorStore.nodes) {
     const placement = placements[layout.id];
     if (!placement) {
-      return;
+      continue;
     }
 
     if (layout.width !== placement.width || layout.height !== placement.height) {
@@ -940,12 +969,12 @@ function applyFreeLayoutInsertionPlacements(nodeId: string, targetX: number, tar
       monitorStore.setNodePosition(layout.id, placement.x, placement.y);
       changed = true;
     }
-  });
+  }
 
   if (changed) {
-    monitorStore.nodes.forEach((layout) => {
+    for (const layout of monitorStore.nodes) {
       monitorStore.rememberFreeLayout(layout.id, "baseline");
-    });
+    }
   }
 
   return true;
@@ -962,56 +991,73 @@ function computeMagneticOffset(current: number, target: number) {
   return Math.round(Math.max(-16, Math.min(16, delta * strength)));
 }
 
-function buildFreeLayoutPreviewOffsets(nodeId: string, targetX: number, targetY: number) {
-  const sortedLayouts = monitorStore.nodes.slice().sort((left, right) => layoutGridOrder(left, right));
-  const draggedIndex = sortedLayouts.findIndex((layout) => layout.id === nodeId);
-  if (draggedIndex < 0) {
+function sortLayoutsByGridOrder() {
+  return monitorStore.nodes.slice().sort((left, right) => layoutGridOrder(left, right));
+}
+
+function buildPreviewOffsetsFromOrderedLayouts(
+  previewOrder: TaskMonitorNodeLayout[],
+  slots: Array<{ x: number; y: number }>,
+  nodeId: string,
+) {
+  const offsets: Record<string, { x: number; y: number }> = {};
+
+  for (const [index, layout] of previewOrder.entries()) {
+    if (layout.id === nodeId) {
+      continue;
+    }
+
+    const desiredSlot = slots[index];
+    if (!desiredSlot) {
+      continue;
+    }
+
+    const deltaX = desiredSlot.x - layout.x;
+    const deltaY = desiredSlot.y - layout.y;
+    if (deltaX !== 0 || deltaY !== 0) {
+      offsets[layout.id] = { x: deltaX, y: deltaY };
+    }
+  }
+
+  return offsets;
+}
+
+function buildOccupiedTargetPreviewOffsets(
+  sortedLayouts: TaskMonitorNodeLayout[],
+  nodeId: string,
+  targetX: number,
+  targetY: number,
+) {
+  const draggedLayout = sortedLayouts.find((layout) => layout.id === nodeId);
+  if (!draggedLayout) {
     return {};
   }
 
-  const targetOccupied = sortedLayouts.some((layout) => layout.id !== nodeId && layout.x === targetX && layout.y === targetY);
-  if (targetOccupied) {
-    const draggedLayout = sortedLayouts[draggedIndex];
-    const slots = sortedLayouts.map((layout) => ({ x: layout.x, y: layout.y }));
-    const targetIndex = slots.findIndex((slot) => slot.x === targetX && slot.y === targetY);
-    const previewOrder = sortedLayouts.filter((layout) => layout.id !== nodeId);
-    previewOrder.splice(targetIndex >= 0 ? targetIndex : previewOrder.length, 0, draggedLayout);
+  const slots = sortedLayouts.map((layout) => ({ x: layout.x, y: layout.y }));
+  const targetIndex = slots.findIndex((slot) => slot.x === targetX && slot.y === targetY);
+  const previewOrder = sortedLayouts.filter((layout) => layout.id !== nodeId);
+  previewOrder.splice(targetIndex >= 0 ? targetIndex : previewOrder.length, 0, draggedLayout);
 
-    const offsets: Record<string, { x: number; y: number }> = {};
-    previewOrder.forEach((layout, index) => {
-      if (layout.id === nodeId) {
-        return;
-      }
+  return buildPreviewOffsetsFromOrderedLayouts(previewOrder, slots, nodeId);
+}
 
-      const desiredSlot = slots[index];
-      if (!desiredSlot) {
-        return;
-      }
-
-      const deltaX = desiredSlot.x - layout.x;
-      const deltaY = desiredSlot.y - layout.y;
-      if (deltaX !== 0 || deltaY !== 0) {
-        offsets[layout.id] = { x: deltaX, y: deltaY };
-      }
-    });
-
-    return offsets;
-  }
-
-  const placements = buildFreeLayoutInsertionPlacements(nodeId, targetX, targetY);
+function buildInsertionPreviewOffsets(
+  nodeId: string,
+  placements: Record<string, { x: number; y: number; width: number; height: number }> | null,
+) {
   if (!placements) {
     return {};
   }
 
   const offsets: Record<string, { x: number; y: number }> = {};
-  monitorStore.nodes.forEach((layout) => {
+  for (const layout of monitorStore.nodes) {
     if (layout.id === nodeId) {
-      return;
+      continue;
     }
 
     const desiredPlacement = placements[layout.id];
     if (!desiredPlacement) {
-      return;
+      return {};
     }
 
     const deltaX = desiredPlacement.x - layout.x;
@@ -1019,9 +1065,26 @@ function buildFreeLayoutPreviewOffsets(nodeId: string, targetX: number, targetY:
     if (deltaX !== 0 || deltaY !== 0) {
       offsets[layout.id] = { x: deltaX, y: deltaY };
     }
-  });
+  }
 
   return offsets;
+}
+
+function buildFreeLayoutPreviewOffsets(nodeId: string, targetX: number, targetY: number) {
+  const sortedLayouts = sortLayoutsByGridOrder();
+  if (!sortedLayouts.some((layout) => layout.id === nodeId)) {
+    return {};
+  }
+
+  const targetOccupied = sortedLayouts.some(
+    (layout) => layout.id !== nodeId && layout.x === targetX && layout.y === targetY,
+  );
+  if (targetOccupied) {
+    return buildOccupiedTargetPreviewOffsets(sortedLayouts, nodeId, targetX, targetY);
+  }
+
+  const placements = buildFreeLayoutInsertionPlacements(nodeId, targetX, targetY);
+  return buildInsertionPreviewOffsets(nodeId, placements);
 }
 
 function clearFreeLayoutDragPreview() {
@@ -1060,7 +1123,7 @@ function resolveFreeLayoutDropTarget(args: {
     .map((layout) => layoutRect(layout));
   const nearestGridSlot = findClosestFreeLayoutGridSlot(args.width, args.pointerX, args.pointerY);
   const swapLayout =
-    (nearestGridSlot.x === draggedNode.x && nearestGridSlot.y === draggedNode.y)
+    nearestGridSlot.x === draggedNode.x && nearestGridSlot.y === draggedNode.y
       ? undefined
       : findLayoutAtSlot(nearestGridSlot.x, nearestGridSlot.y, draggedNode.id);
 
@@ -1070,7 +1133,10 @@ function resolveFreeLayoutDropTarget(args: {
       targetY: nearestGridSlot.y,
       swapNodeId: swapLayout.id,
       swapWidth: Math.max(swapLayout.width, FREE_LAYOUT_CARD_WIDTH),
-      swapHeight: Math.max(swapLayout.height, renderedNodeHeights[swapLayout.id] || FREE_LAYOUT_ROW_MIN_HEIGHT),
+      swapHeight: Math.max(
+        swapLayout.height,
+        renderedNodeHeights[swapLayout.id] || FREE_LAYOUT_ROW_MIN_HEIGHT,
+      ),
     };
   }
 
@@ -1128,9 +1194,16 @@ function updateFreeLayoutDragPreview(
     swapNodeId: resolvedTarget.swapNodeId,
     swapWidth: resolvedTarget.swapWidth,
     swapHeight: resolvedTarget.swapHeight,
-    magneticOffsetX: computeMagneticOffset(normalizedDragPosition.position.x, resolvedTarget.targetX),
-    magneticOffsetY: computeMagneticOffset(normalizedDragPosition.position.y, resolvedTarget.targetY),
-    previewOffsets: buildFreeLayoutPreviewOffsets(nodeId, resolvedTarget.targetX, resolvedTarget.targetY),
+    magneticOffsetX: computeMagneticOffset(
+      normalizedDragPosition.position.x,
+      resolvedTarget.targetX,
+    ),
+    magneticOffsetY: computeMagneticOffset(
+      normalizedDragPosition.position.y,
+      resolvedTarget.targetY,
+    ),
+    previewOffsets:
+      buildFreeLayoutPreviewOffsets(nodeId, resolvedTarget.targetX, resolvedTarget.targetY) ?? {},
     dragCoordinateSpace: normalizedDragPosition.dragCoordinateSpace,
   };
 
@@ -1157,10 +1230,10 @@ const visibleLayouts = computed(() => {
   return monitorStore.sortedNodes.filter((layout) => {
     const summary = summaryForTask(layout.taskId);
     const matchesKeyword =
-      keyword.length === 0
-      || summary.title.toLowerCase().includes(keyword)
-      || layout.taskId.toLowerCase().includes(keyword)
-      || summary.events.some((event) => event.label.toLowerCase().includes(keyword));
+      keyword.length === 0 ||
+      summary.title.toLowerCase().includes(keyword) ||
+      layout.taskId.toLowerCase().includes(keyword) ||
+      summary.events.some((event) => event.label.toLowerCase().includes(keyword));
     const matchesStatus = statusFilter.value === "all" || summary.status === statusFilter.value;
     return matchesKeyword && matchesStatus;
   });
@@ -1180,8 +1253,16 @@ const flowNodes = computed(() =>
 );
 
 const defaultViewport = computed(() => ({ ...monitorStore.viewport }));
-const runningCount = computed(() => visibleLayouts.value.filter((layout) => summaryForTask(layout.taskId).status === "running").length);
-const issueCount = computed(() => visibleLayouts.value.filter((layout) => isIssueStatus(summaryForTask(layout.taskId).status)).length);
+const runningCount = computed(
+  () =>
+    visibleLayouts.value.filter((layout) => summaryForTask(layout.taskId).status === "running")
+      .length,
+);
+const issueCount = computed(
+  () =>
+    visibleLayouts.value.filter((layout) => isIssueStatus(summaryForTask(layout.taskId).status))
+      .length,
+);
 const taskRealtimeEvents = computed(() => {
   const taskIds = new Set(monitorStore.nodes.map((node) => node.taskId));
   return realtimeStore.events.filter((event) => event.taskId && taskIds.has(event.taskId));
@@ -1203,10 +1284,10 @@ const visibleLayoutSignature = computed(() =>
 watch(
   requestedTaskIds,
   (taskIds) => {
-    taskIds.forEach((taskId) => {
+    for (const taskId of taskIds) {
       monitorStore.addTaskNode(taskId);
       void refreshNodeSummary(taskId);
-    });
+    }
   },
   { immediate: true },
 );
@@ -1227,10 +1308,10 @@ watch(
   () => monitorStore.nodes.map((node) => node.taskId).join("|"),
   () => {
     const taskIds = monitorStore.nodes.map((node) => node.taskId);
-    taskIds.forEach((taskId) => {
+    for (const taskId of taskIds) {
       realtimeStore.subscribeTask(taskId);
       void refreshNodeSummary(taskId, true);
-    });
+    }
 
     if (taskIds.length > 0 && !refreshTimer) {
       refreshTimer = setInterval(() => {
@@ -1255,37 +1336,31 @@ watch(
   },
 );
 
-watch(
-  currentLayoutMode,
-  (nextMode, previousMode) => {
-    clearFreeLayoutDragPreview();
-    if (previousMode === "free" && nextMode !== "free") {
-      monitorStore.nodes.forEach((layout) => {
-        monitorStore.rememberFreeLayout(layout.id, "snapshot");
-      });
+watch(currentLayoutMode, (nextMode, previousMode) => {
+  clearFreeLayoutDragPreview();
+  if (previousMode === "free" && nextMode !== "free") {
+    for (const layout of monitorStore.nodes) {
+      monitorStore.rememberFreeLayout(layout.id, "snapshot");
     }
+  }
 
-    if (nextMode === "free") {
-      monitorStructureSections.value = [];
-      restoreFreeLayoutFromSnapshot();
-      void nextTick().then(() => alignViewportToVisibleNodes());
-      return;
-    }
+  if (nextMode === "free") {
+    monitorStructureSections.value = [];
+    restoreFreeLayoutFromSnapshot();
+    void nextTick().then(() => alignViewportToVisibleNodes());
+    return;
+  }
 
-    void nextTick().then(() => autoArrangeNodes());
-  },
-);
+  void nextTick().then(() => autoArrangeNodes());
+});
 
-watch(
-  visibleLayoutSignature,
-  () => {
-    if (currentLayoutMode.value === "free") {
-      return;
-    }
+watch(visibleLayoutSignature, () => {
+  if (currentLayoutMode.value === "free") {
+    return;
+  }
 
-    void nextTick().then(() => autoArrangeNodes());
-  },
-);
+  void nextTick().then(() => autoArrangeNodes());
+});
 
 watch(
   monitorMessageSignature,
@@ -1299,60 +1374,7 @@ watch(
 watch(
   () => taskRealtimeEvents.value.map((event) => event.id).join("|"),
   async () => {
-    const taskIds = new Set(monitorStore.nodes.map((node) => node.taskId));
-    for (const taskId of taskIds) {
-      const activeSessionId = extractActiveSessionId(summaryForTask(taskId)) || extractActiveSessionIdFromContext(taskId);
-      const relevantEvents = taskRealtimeEvents.value
-        .filter((event) => event.taskId === taskId && (!activeSessionId || event.sessionId === activeSessionId))
-        .slice()
-        .reverse();
-
-      if (relevantEvents.length === 0) {
-        continue;
-      }
-
-      const lastHandledEventId = lastRealtimeEventIds[taskId];
-      const lastHandledIndex = lastHandledEventId
-        ? relevantEvents.findIndex((event) => event.id === lastHandledEventId)
-        : -1;
-      const pendingEvents = lastHandledIndex >= 0 ? relevantEvents.slice(lastHandledIndex + 1) : relevantEvents;
-
-      if (pendingEvents.length === 0) {
-        continue;
-      }
-
-      let shouldRefreshPersistedMessages = false;
-
-      for (const event of pendingEvents) {
-        const rawType = getRealtimeRawType(event);
-        if (rawType === "message.part.updated" || rawType === "message.updated") {
-          applyRealtimeEventToLiveState(taskId, activeSessionId, event);
-        }
-
-        if (rawType === "message.updated") {
-          const info = getRealtimeInfo(event);
-          const time = info?.time && typeof info.time === "object"
-            ? (info.time as Record<string, unknown>)
-            : undefined;
-          if (typeof time?.completed === "number" || typeof time?.completed === "string") {
-            shouldRefreshPersistedMessages = Boolean(activeSessionId);
-          }
-        }
-
-        if (rawType !== "message.updated" && rawType !== "message.part.updated") {
-          void refreshNodeSummary(taskId, true);
-        }
-      }
-
-      lastRealtimeEventIds[taskId] = pendingEvents[pendingEvents.length - 1]?.id || lastHandledEventId || "";
-
-      if (shouldRefreshPersistedMessages && activeSessionId) {
-        await refreshSessionMessagesForMonitor(taskId, activeSessionId, true);
-      }
-
-      rebuildSummaryFromCache(taskId);
-    }
-    void nextTick().then(() => scheduleStreamAutoScroll());
+    await processRealtimeMonitorEvents();
   },
 );
 
@@ -1399,12 +1421,16 @@ onUnmounted(() => {
     clearTimeout(viewportDebounceTimer);
     viewportDebounceTimer = null;
   }
-  monitorNodeResizeObservers.forEach((observer) => observer.disconnect());
+  for (const observer of monitorNodeResizeObservers.values()) {
+    observer.disconnect();
+  }
   monitorNodeResizeObservers.clear();
   stopMonitorStreamingReveal();
 });
 
-function handlePaneReady(instance: { setViewport?: (viewport: { x: number; y: number; zoom: number }) => void }) {
+function handlePaneReady(instance: {
+  setViewport?: (viewport: { x: number; y: number; zoom: number }) => void;
+}) {
   flowViewportController = instance;
   instance.setViewport?.(monitorStore.viewport);
   void nextTick().then(() => {
@@ -1481,9 +1507,10 @@ function handleNodeDragStop(event: { node?: { id: string; position: { x: number;
 
   const width = Math.max(draggedNode.width, FREE_LAYOUT_CARD_WIDTH);
   const height = Math.max(draggedNode.height, renderedNodeHeights[draggedNode.id] || 0);
-  const preview = freeLayoutDragPreview.value.active && freeLayoutDragPreview.value.nodeId === draggedNode.id
-    ? freeLayoutDragPreview.value
-    : updateFreeLayoutDragPreview(draggedNode.id, event.node.position.x, event.node.position.y);
+  const preview =
+    freeLayoutDragPreview.value.active && freeLayoutDragPreview.value.nodeId === draggedNode.id
+      ? freeLayoutDragPreview.value
+      : updateFreeLayoutDragPreview(draggedNode.id, event.node.position.x, event.node.position.y);
 
   if (!preview) {
     clearFreeLayoutDragPreview();
@@ -1492,15 +1519,18 @@ function handleNodeDragStop(event: { node?: { id: string; position: { x: number;
 
   monitorStore.setNodeSize(draggedNode.id, width, height);
 
-  if (preview.swapNodeId && (preview.targetX !== preview.sourceX || preview.targetY !== preview.sourceY)) {
+  if (
+    preview.swapNodeId &&
+    (preview.targetX !== preview.sourceX || preview.targetY !== preview.sourceY)
+  ) {
     const swapNode = monitorStore.nodes.find((layout) => layout.id === preview.swapNodeId);
     if (swapNode) {
       monitorStore.setNodePosition(swapNode.id, preview.sourceX, preview.sourceY);
     }
     monitorStore.setNodePosition(draggedNode.id, preview.targetX, preview.targetY);
-    monitorStore.nodes.forEach((layout) => {
+    for (const layout of monitorStore.nodes) {
       monitorStore.rememberFreeLayout(layout.id, "baseline");
-    });
+    }
     clearFreeLayoutDragPreview();
     return;
   }
@@ -1510,7 +1540,10 @@ function handleNodeDragStop(event: { node?: { id: string; position: { x: number;
 }
 
 function handleRemoveNode(nodeId: string) {
-  if (freeLayoutDragPreview.value.nodeId === nodeId || freeLayoutDragPreview.value.swapNodeId === nodeId) {
+  if (
+    freeLayoutDragPreview.value.nodeId === nodeId ||
+    freeLayoutDragPreview.value.swapNodeId === nodeId
+  ) {
     clearFreeLayoutDragPreview();
   }
   const shouldCompactFreeLayout = currentLayoutMode.value === "free";
@@ -1622,19 +1655,113 @@ function normalizeMonitorNodePositions() {
   const maxY = Math.max(minY, canvasShellHeight() - 260);
 
   let adjusted = false;
-  monitorStore.nodes.forEach((layout) => {
+  for (const layout of monitorStore.nodes) {
     const x = Math.min(Math.max(layout.x, minX), maxX);
     const y = Math.min(Math.max(layout.y, minY), maxY);
     if (x !== layout.x || y !== layout.y) {
       monitorStore.setNodePosition(layout.id, x, y);
       adjusted = true;
     }
-  });
+  }
 
   if (adjusted) {
     if (currentLayoutMode.value !== "free") {
       autoArrangeNodes();
     }
+  }
+}
+
+function rememberFreeLayoutBaselineIfNeeded(updateBaseline?: boolean) {
+  if (updateBaseline === false) {
+    return;
+  }
+
+  for (const layout of monitorStore.nodes) {
+    monitorStore.rememberFreeLayout(layout.id, "baseline");
+  }
+}
+
+function applyForcedFreeLayoutRepair(
+  items: LayoutPlacementItem[],
+  options?: { updateBaseline?: boolean },
+) {
+  const availableWidth = canvasInnerWidth();
+  const columnWidth = FREE_LAYOUT_CARD_WIDTH;
+  const gap = FREE_LAYOUT_GAP;
+  const columnCount = Math.max(1, Math.floor((availableWidth + gap) / (columnWidth + gap)));
+  let changed = false;
+  let currentRowY = FREE_LAYOUT_TOP;
+
+  for (let startIndex = 0; startIndex < items.length; startIndex += columnCount) {
+    const rowItems = items.slice(startIndex, startIndex + columnCount);
+    const rowHeight = freeLayoutGridRowHeight(rowItems.map((item) => item.estimatedHeight));
+
+    for (const [columnIndex, item] of rowItems.entries()) {
+      const x = FREE_LAYOUT_LEFT + columnIndex * (columnWidth + gap);
+      const y = currentRowY;
+
+      if (item.layout.width !== columnWidth || item.layout.height !== item.estimatedHeight) {
+        monitorStore.setNodeSize(item.layout.id, columnWidth, item.estimatedHeight);
+        changed = true;
+      }
+
+      if (item.layout.x !== x || item.layout.y !== y) {
+        monitorStore.setNodePosition(item.layout.id, x, y);
+        changed = true;
+      }
+    }
+
+    currentRowY += rowHeight + gap;
+  }
+
+  if (changed) {
+    rememberFreeLayoutBaselineIfNeeded(options?.updateBaseline);
+  }
+}
+
+function shouldRepositionFreeLayoutItem(
+  rect: { x: number; y: number; width: number; height: number },
+  occupiedRects: Array<{ x: number; y: number; width: number; height: number }>,
+  force?: boolean,
+) {
+  return (
+    Boolean(force) ||
+    rect.x < FREE_LAYOUT_LEFT ||
+    rect.y < FREE_LAYOUT_TOP ||
+    rect.x > freeLayoutMaxX(rect.width) ||
+    occupiedRects.some((occupied) => rectsOverlap(rect, occupied))
+  );
+}
+
+function applyMeasuredFreeLayoutRepair(
+  items: LayoutPlacementItem[],
+  options?: { force?: boolean; updateBaseline?: boolean },
+) {
+  const occupiedRects: Array<{ x: number; y: number; width: number; height: number }> = [];
+  let changed = false;
+
+  for (const item of items) {
+    const width = Math.max(item.layout.width, FREE_LAYOUT_CARD_WIDTH);
+    const height = item.estimatedHeight;
+    const currentRect = { x: item.layout.x, y: item.layout.y, width, height };
+    const needsMove = shouldRepositionFreeLayoutItem(currentRect, occupiedRects, options?.force);
+    const nextPosition = needsMove ? findFreeLayoutSlot(occupiedRects, width, height) : currentRect;
+
+    if (item.layout.width !== width || item.layout.height !== height) {
+      monitorStore.setNodeSize(item.layout.id, width, height);
+      changed = true;
+    }
+
+    if (item.layout.x !== nextPosition.x || item.layout.y !== nextPosition.y) {
+      monitorStore.setNodePosition(item.layout.id, nextPosition.x, nextPosition.y);
+      changed = true;
+    }
+
+    occupiedRects.push({ x: nextPosition.x, y: nextPosition.y, width, height });
+  }
+
+  if (changed) {
+    rememberFreeLayoutBaselineIfNeeded(options?.updateBaseline);
   }
 }
 
@@ -1648,82 +1775,11 @@ function repairFreeLayout(options?: { force?: boolean; updateBaseline?: boolean 
     .sort((left, right) => left.layout.y - right.layout.y || left.layout.x - right.layout.x);
 
   if (options?.force) {
-    const availableWidth = canvasInnerWidth();
-    const columnWidth = FREE_LAYOUT_CARD_WIDTH;
-    const gap = FREE_LAYOUT_GAP;
-    const columnCount = Math.max(1, Math.floor((availableWidth + gap) / (columnWidth + gap)));
-    let changed = false;
-    let currentRowY = FREE_LAYOUT_TOP;
-
-    for (let startIndex = 0; startIndex < items.length; startIndex += columnCount) {
-      const rowItems = items.slice(startIndex, startIndex + columnCount);
-      const rowHeight = freeLayoutGridRowHeight(rowItems.map((item) => item.estimatedHeight));
-
-      rowItems.forEach((item, columnIndex) => {
-        const x = FREE_LAYOUT_LEFT + columnIndex * (columnWidth + gap);
-        const y = currentRowY;
-
-        if (item.layout.width !== columnWidth || item.layout.height !== item.estimatedHeight) {
-          monitorStore.setNodeSize(item.layout.id, columnWidth, item.estimatedHeight);
-          changed = true;
-        }
-
-        if (item.layout.x !== x || item.layout.y !== y) {
-          monitorStore.setNodePosition(item.layout.id, x, y);
-          changed = true;
-        }
-      });
-
-      currentRowY += rowHeight + gap;
-    }
-
-    if (changed && options?.updateBaseline !== false) {
-      monitorStore.nodes.forEach((layout) => {
-        monitorStore.rememberFreeLayout(layout.id, "baseline");
-      });
-    }
+    applyForcedFreeLayoutRepair(items, options);
     return;
   }
 
-  const occupiedRects: Array<{ x: number; y: number; width: number; height: number }> = [];
-  let changed = false;
-
-  items.forEach((item) => {
-    const width = Math.max(item.layout.width, FREE_LAYOUT_CARD_WIDTH);
-    const height = item.estimatedHeight;
-    const currentRect = { x: item.layout.x, y: item.layout.y, width, height };
-    const maxX = freeLayoutMaxX(width);
-    const needsMove = options?.force
-      || currentRect.x < FREE_LAYOUT_LEFT
-      || currentRect.y < FREE_LAYOUT_TOP
-      || currentRect.x > maxX
-      || occupiedRects.some((rect) => rectsOverlap(currentRect, rect));
-    const nextPosition = needsMove ? findFreeLayoutSlot(occupiedRects, width, height) : currentRect;
-
-    if (item.layout.width !== width || item.layout.height !== height) {
-      monitorStore.setNodeSize(item.layout.id, width, height);
-      changed = true;
-    }
-
-    if (item.layout.x !== nextPosition.x || item.layout.y !== nextPosition.y) {
-      monitorStore.setNodePosition(item.layout.id, nextPosition.x, nextPosition.y);
-      changed = true;
-    }
-
-    if (changed && options?.updateBaseline !== false) {
-      monitorStore.rememberFreeLayout(item.layout.id, "baseline");
-    }
-
-    occupiedRects.push({ x: nextPosition.x, y: nextPosition.y, width, height });
-  });
-
-  if (changed) {
-    monitorStore.nodes.forEach((layout) => {
-      if (options?.updateBaseline !== false) {
-        monitorStore.rememberFreeLayout(layout.id, "baseline");
-      }
-    });
-  }
+  applyMeasuredFreeLayoutRepair(items, options);
 }
 
 function alignViewportToVisibleNodes() {
@@ -1735,10 +1791,10 @@ function alignViewportToVisibleNodes() {
   const hasVisibleNode = monitorStore.nodes.some((layout) => {
     const rect = layoutRect(layout);
     return !(
-      rect.x + rect.width < bounds.x
-      || rect.x > bounds.x + bounds.width
-      || rect.y + rect.height < bounds.y
-      || rect.y > bounds.y + bounds.height
+      rect.x + rect.width < bounds.x ||
+      rect.x > bounds.x + bounds.width ||
+      rect.y + rect.height < bounds.y ||
+      rect.y > bounds.y + bounds.height
     );
   });
 
@@ -1746,7 +1802,9 @@ function alignViewportToVisibleNodes() {
     return;
   }
 
-  const topMostNode = monitorStore.nodes.slice().sort((left, right) => left.y - right.y || left.x - right.x)[0];
+  const topMostNode = monitorStore.nodes
+    .slice()
+    .sort((left, right) => left.y - right.y || left.x - right.x)[0];
   if (!topMostNode) {
     return;
   }
@@ -1765,7 +1823,8 @@ function stabilizeFreeLayout(options?: { force?: boolean; updateBaseline?: boole
 
 async function reloadTaskPicker() {
   if (unmounted) return;
-  const filterProjectId = monitorProjectFilter.value === "__all__" ? undefined : monitorProjectFilter.value;
+  const filterProjectId =
+    monitorProjectFilter.value === "__all__" ? undefined : monitorProjectFilter.value;
   if (!filterProjectId && monitorProjectFilter.value !== "__all__") {
     taskPickerTasks.value = [];
     return;
@@ -1815,14 +1874,14 @@ function syncRunningTasksToCanvas() {
   const runningTasks = taskPickerTasks.value.filter((task) => task.status === "running");
   const newTaskIds: string[] = [];
 
-  runningTasks.forEach((task) => {
+  for (const task of runningTasks) {
     if (monitorStore.getNode(task.id)) {
-      return;
+      continue;
     }
 
     monitorStore.addTaskNode(task.id);
     newTaskIds.push(task.id);
-  });
+  }
 
   if (newTaskIds.length > 0) {
     void refreshNodesBatched(newTaskIds);
@@ -1872,11 +1931,13 @@ function handleTaskPickerChange(value: unknown) {
 }
 
 function handleAddRunningTasks() {
-  const runningTasks = taskPickerTasks.value.filter((task) => task.status === "running").slice(0, 6);
-  runningTasks.forEach((task) => {
+  const runningTasks = taskPickerTasks.value
+    .filter((task) => task.status === "running")
+    .slice(0, 6);
+  for (const task of runningTasks) {
     monitorStore.addTaskNode(task.id);
     void refreshNodeSummary(task.id);
-  });
+  }
   if (currentLayoutMode.value === "free") {
     void nextTick().then(() => stabilizeFreeLayout({ updateBaseline: true }));
     return;
@@ -1887,8 +1948,14 @@ function handleAddRunningTasks() {
 
 function filterTaskOption(input: string, option?: { value?: string | number; label?: string }) {
   const keyword = input.toLowerCase();
-  return String(option?.value ?? "").toLowerCase().includes(keyword)
-    || String(option?.label ?? "").toLowerCase().includes(keyword);
+  return (
+    String(option?.value ?? "")
+      .toLowerCase()
+      .includes(keyword) ||
+    String(option?.label ?? "")
+      .toLowerCase()
+      .includes(keyword)
+  );
 }
 
 function estimateLayoutHeight(layout: TaskMonitorNodeLayout, summary: MonitorNodeSummary) {
@@ -1915,7 +1982,7 @@ function applyFreeLayout(items: LayoutPlacementItem[]) {
   const columnCount = Math.max(1, Math.floor((availableWidth + gap) / (columnWidth + gap)));
   const rowHeight = freeLayoutGridRowHeight(items.map((item) => item.estimatedHeight));
 
-  items.forEach((item, index) => {
+  for (const [index, item] of items.entries()) {
     const targetColumn = index % columnCount;
     const targetRow = Math.floor(index / columnCount);
     const x = FREE_LAYOUT_LEFT + targetColumn * (columnWidth + gap);
@@ -1923,108 +1990,136 @@ function applyFreeLayout(items: LayoutPlacementItem[]) {
     monitorStore.setNodePosition(item.layout.id, x, y);
     monitorStore.setNodeSize(item.layout.id, columnWidth, item.estimatedHeight);
     monitorStore.rememberFreeLayout(item.layout.id, "baseline");
-  });
+  }
 
   alignViewportToVisibleNodes();
   queueFreeLayoutMeasuredReflow({ force: true, updateBaseline: true });
 }
 
 function restoreFreeLayoutFromSnapshot() {
-  monitorStore.nodes.forEach((layout) => {
-    const saved = monitorStore.getSavedFreeLayout(layout.id, "snapshot") || monitorStore.getSavedFreeLayout(layout.id, "baseline");
+  for (const layout of monitorStore.nodes) {
+    const saved =
+      monitorStore.getSavedFreeLayout(layout.id, "snapshot") ||
+      monitorStore.getSavedFreeLayout(layout.id, "baseline");
     if (!saved) {
       placeNodeInFreeCanvasSlot(layout.id);
       monitorStore.rememberFreeLayout(layout.id, "snapshot");
-      return;
+      continue;
     }
 
     monitorStore.setNodePosition(layout.id, saved.x, saved.y);
     monitorStore.setNodeSize(layout.id, saved.width, saved.height);
-  });
+  }
 }
 
 function resetFreeLayoutToBaseline() {
   const items = buildLayoutPlacementItems(monitorStore.nodes);
-  const hasBaselineForAll = monitorStore.nodes.every((layout) => monitorStore.getSavedFreeLayout(layout.id, "baseline"));
+  const hasBaselineForAll = monitorStore.nodes.every((layout) =>
+    monitorStore.getSavedFreeLayout(layout.id, "baseline"),
+  );
 
   if (!hasBaselineForAll) {
     applyFreeLayout(items);
     return;
   }
 
-  monitorStore.nodes.forEach((layout) => {
+  for (const layout of monitorStore.nodes) {
     const saved = monitorStore.getSavedFreeLayout(layout.id, "baseline");
     if (!saved) {
-      return;
+      continue;
     }
 
     monitorStore.setNodePosition(layout.id, saved.x, saved.y);
     monitorStore.setNodeSize(layout.id, saved.width, saved.height);
-  });
+  }
 }
 
 function buildStatusLayoutSections(items: LayoutPlacementItem[]) {
   const groups = [
-    { id: "running", title: "运行中", tone: "running" as const, description: "优先关注仍在推进且仍在输出的任务。" },
-    { id: "paused", title: "已暂停", tone: "paused" as const, description: "等待人工恢复或外部条件满足后继续。" },
-    { id: "failed", title: "异常", tone: "issue" as const, description: "需要优先处理失败、停止或明显异常的任务。" },
-    { id: "completed", title: "已完成", tone: "completed" as const, description: "已经结束的任务靠后展示，不挤占首屏。" },
+    {
+      id: "running",
+      title: "运行中",
+      tone: "running" as const,
+      description: "优先关注仍在推进且仍在输出的任务。",
+    },
+    {
+      id: "paused",
+      title: "已暂停",
+      tone: "paused" as const,
+      description: "等待人工恢复或外部条件满足后继续。",
+    },
+    {
+      id: "failed",
+      title: "异常",
+      tone: "issue" as const,
+      description: "需要优先处理失败、停止或明显异常的任务。",
+    },
+    {
+      id: "completed",
+      title: "已完成",
+      tone: "completed" as const,
+      description: "已经结束的任务靠后展示，不挤占首屏。",
+    },
   ].map((group) => ({ ...group, items: [] as LayoutPlacementItem[] }));
 
-  items
+  for (const item of items
     .slice()
-    .sort((left, right) => right.latestActivityTs - left.latestActivityTs)
-    .forEach((item) => {
-      if (item.summary.status === "running") {
-        groups[0]?.items.push(item);
-        return;
-      }
-      if (item.summary.status === "paused") {
-        groups[1]?.items.push(item);
-        return;
-      }
-      if (item.summary.status === "completed") {
-        groups[3]?.items.push(item);
-        return;
-      }
-      groups[2]?.items.push(item);
-    });
+    .sort((left, right) => right.latestActivityTs - left.latestActivityTs)) {
+    if (item.summary.status === "running") {
+      groups[0]?.items.push(item);
+      continue;
+    }
+    if (item.summary.status === "paused") {
+      groups[1]?.items.push(item);
+      continue;
+    }
+    if (item.summary.status === "completed") {
+      groups[3]?.items.push(item);
+      continue;
+    }
+    groups[2]?.items.push(item);
+  }
 
   return groups.filter((group) => group.items.length > 0);
 }
 
 function buildStageLayoutSections(items: LayoutPlacementItem[]) {
-  const stageMap = new Map<string, {
-    title: string;
-    isFallback: boolean;
-    latestActivityTs: number;
-    items: LayoutPlacementItem[];
-  }>();
+  const stageMap = new Map<
+    string,
+    {
+      title: string;
+      isFallback: boolean;
+      latestActivityTs: number;
+      items: LayoutPlacementItem[];
+    }
+  >();
 
-  items
+  for (const item of items
     .slice()
-    .sort((left, right) => right.latestActivityTs - left.latestActivityTs)
-    .forEach((item) => {
-      const normalizedStageTitle = item.summary.pipelineLabel?.trim();
-      const isFallbackStage = !normalizedStageTitle || normalizedStageTitle === "暂无" || /^\d+\/\d+$/.test(normalizedStageTitle);
-      const stageTitle = isFallbackStage ? "未识别" : normalizedStageTitle;
-      if (!stageMap.has(stageTitle)) {
-        stageMap.set(stageTitle, {
-          title: stageTitle,
-          isFallback: isFallbackStage,
-          latestActivityTs: item.latestActivityTs,
-          items: [],
-        });
-      }
+    .sort((left, right) => right.latestActivityTs - left.latestActivityTs)) {
+    const normalizedStageTitle = item.summary.pipelineLabel?.trim();
+    const isFallbackStage =
+      !normalizedStageTitle ||
+      normalizedStageTitle === "暂无" ||
+      /^\d+\/\d+$/.test(normalizedStageTitle);
+    const stageTitle = isFallbackStage ? "未识别" : normalizedStageTitle;
+    if (!stageMap.has(stageTitle)) {
+      stageMap.set(stageTitle, {
+        title: stageTitle,
+        isFallback: isFallbackStage,
+        latestActivityTs: item.latestActivityTs,
+        items: [],
+      });
+    }
 
-      const stageGroup = stageMap.get(stageTitle);
-      if (!stageGroup) {
-        return;
-      }
+    const stageGroup = stageMap.get(stageTitle);
+    if (!stageGroup) {
+      continue;
+    }
 
-      stageGroup.items.push(item);
-      stageGroup.latestActivityTs = Math.max(stageGroup.latestActivityTs, item.latestActivityTs);
-    });
+    stageGroup.items.push(item);
+    stageGroup.latestActivityTs = Math.max(stageGroup.latestActivityTs, item.latestActivityTs);
+  }
 
   return Array.from(stageMap.values())
     .sort((left, right) => {
@@ -2039,7 +2134,7 @@ function buildStageLayoutSections(items: LayoutPlacementItem[]) {
     .map((group, index) => ({
       id: `stage-${index}`,
       title: group.title,
-      tone: group.isFallback ? "neutral" as const : "running" as const,
+      tone: group.isFallback ? ("neutral" as const) : ("running" as const),
       description: group.isFallback
         ? "阶段信息不完整时暂时归并到这里。"
         : "同阶段任务放在同一区域，便于识别集中阻塞点。",
@@ -2048,12 +2143,29 @@ function buildStageLayoutSections(items: LayoutPlacementItem[]) {
 }
 
 function buildTimeLayoutSections(items: LayoutPlacementItem[]) {
-  const sortedItems = items.slice().sort((left, right) => right.latestActivityTs - left.latestActivityTs);
+  const sortedItems = items
+    .slice()
+    .sort((left, right) => right.latestActivityTs - left.latestActivityTs);
   const chunkSize = Math.max(1, Math.ceil(sortedItems.length / 3));
   const titles = [
-    { id: "time-recent", title: "最近活跃", tone: "running" as const, description: "最新变化优先显示在最前面的区域。" },
-    { id: "time-middle", title: "较早活动", tone: "neutral" as const, description: "最近有活动但优先级低于首批变化。" },
-    { id: "time-older", title: "更早活动", tone: "completed" as const, description: "较久未更新的任务放在后侧，便于观察停滞。" },
+    {
+      id: "time-recent",
+      title: "最近活跃",
+      tone: "running" as const,
+      description: "最新变化优先显示在最前面的区域。",
+    },
+    {
+      id: "time-middle",
+      title: "较早活动",
+      tone: "neutral" as const,
+      description: "最近有活动但优先级低于首批变化。",
+    },
+    {
+      id: "time-older",
+      title: "更早活动",
+      tone: "completed" as const,
+      description: "较久未更新的任务放在后侧，便于观察停滞。",
+    },
   ];
 
   return titles
@@ -2169,7 +2281,9 @@ async function layoutStructuredSectionsWithYoga(args: {
 
       const itemLayouts = cardBindings.map(({ item, cardNode }) => ({
         layout: item.layout,
-        x: Math.round(computedSection.x + contentNode.getComputedLeft() + cardNode.getComputedLeft()),
+        x: Math.round(
+          computedSection.x + contentNode.getComputedLeft() + cardNode.getComputedLeft(),
+        ),
         y: Math.round(computedSection.y + contentNode.getComputedTop() + cardNode.getComputedTop()),
         width: Math.round(cardNode.getComputedWidth()),
         height: Math.round(cardNode.getComputedHeight()),
@@ -2185,9 +2299,7 @@ async function layoutStructuredSectionsWithYoga(args: {
   }
 }
 
-function arrangeStatusLaneSections(
-  sections: StructuredLayoutInputSection[],
-) {
+function arrangeStatusLaneSections(sections: StructuredLayoutInputSection[]) {
   const laneX = STRUCTURE_SECTION_SIDE_PADDING;
   const laneWidth = Math.max(FREE_LAYOUT_CARD_WIDTH + 32, canvasInnerWidth());
   const lanePadding = 16;
@@ -2209,20 +2321,18 @@ function arrangeStatusLaneSections(
     contentBottomPadding: 12,
     contentGap: cardGap,
   }).then((results) => {
-    results.forEach(({ itemLayouts }) => {
-      itemLayouts.forEach((itemLayout) => {
+    for (const { itemLayouts } of results) {
+      for (const itemLayout of itemLayouts) {
         monitorStore.setNodePosition(itemLayout.layout.id, itemLayout.x, itemLayout.y);
         monitorStore.setNodeSize(itemLayout.layout.id, itemLayout.width, itemLayout.height);
-      });
-    });
+      }
+    }
 
     return results.map((result) => result.section);
   });
 }
 
-function arrangeLayoutSections(
-  sections: StructuredLayoutInputSection[],
-) {
+function arrangeLayoutSections(sections: StructuredLayoutInputSection[]) {
   const availableCanvasWidth = canvasInnerWidth();
   const sectionGap = STRUCTURE_SECTION_GAP;
   const rowGap = STRUCTURE_SECTION_ROW_GAP;
@@ -2255,12 +2365,12 @@ function arrangeLayoutSections(
     contentBottomPadding: 10,
     contentGap: cardGap,
   }).then((results) => {
-    results.forEach(({ itemLayouts }) => {
-      itemLayouts.forEach((itemLayout) => {
+    for (const { itemLayouts } of results) {
+      for (const itemLayout of itemLayouts) {
         monitorStore.setNodePosition(itemLayout.layout.id, itemLayout.x, itemLayout.y);
         monitorStore.setNodeSize(itemLayout.layout.id, itemLayout.width, itemLayout.height);
-      });
-    });
+      }
+    }
 
     return results.map((result) => result.section);
   });
@@ -2281,7 +2391,9 @@ async function autoArrangeNodes() {
   }
 
   if (currentLayoutMode.value === "status") {
-    monitorStructureSections.value = await arrangeStatusLaneSections(buildStatusLayoutSections(items));
+    monitorStructureSections.value = await arrangeStatusLaneSections(
+      buildStatusLayoutSections(items),
+    );
     return;
   }
 
@@ -2370,6 +2482,293 @@ function rebuildSummaryFromCache(taskId: string) {
   );
 }
 
+function getObjectRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function getNonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function createLiveAssistantSnapshot(): LiveAssistantSnapshot {
+  return {
+    orderedAssistantMessageIds: [],
+    metaById: new Map<string, StreamingAssistantMeta>(),
+    textById: new Map<string, string>(),
+    incompleteIds: new Set<string>(),
+  };
+}
+
+function rememberAssistantMessageInSnapshot(snapshot: LiveAssistantSnapshot, messageId: string) {
+  if (!snapshot.orderedAssistantMessageIds.includes(messageId)) {
+    snapshot.orderedAssistantMessageIds.push(messageId);
+  }
+}
+
+function buildLiveAssistantSnapshotFromCache(cachedState: LiveMessageState): LiveAssistantSnapshot {
+  return {
+    orderedAssistantMessageIds: [...cachedState.orderedAssistantMessageIds],
+    metaById: new Map(Object.entries(cachedState.metaById)),
+    textById: new Map(Object.entries(cachedState.textById)),
+    incompleteIds: new Set(cachedState.incompleteIds),
+  };
+}
+
+function listRelevantRealtimeEvents(
+  taskId: string,
+  sessionId: string,
+  realtimeEvents: RealtimeEvent[],
+) {
+  return realtimeEvents
+    .filter((event) => event.taskId === taskId && event.sessionId === sessionId)
+    .slice()
+    .reverse();
+}
+
+function extractRealtimeTime(info: Record<string, unknown>) {
+  return getObjectRecord(info.time) ?? undefined;
+}
+
+function updateSnapshotAssistantMeta(
+  snapshot: LiveAssistantSnapshot,
+  messageId: string,
+  info: Record<string, unknown>,
+) {
+  const time = extractRealtimeTime(info);
+  snapshot.metaById.set(messageId, {
+    agent: getNonEmptyString(info.agent),
+    modelLabel: extractModelLabel(info),
+    createdAt: parseMessageTimestamp(time?.created ?? time?.completed),
+  });
+}
+
+function updateSnapshotIncompleteState(
+  snapshot: LiveAssistantSnapshot,
+  messageId: string,
+  completedValue: unknown,
+) {
+  if (typeof completedValue === "number" || typeof completedValue === "string") {
+    snapshot.incompleteIds.delete(messageId);
+    return;
+  }
+
+  snapshot.incompleteIds.add(messageId);
+}
+
+function applyRealtimeMessageUpdatedToSnapshot(
+  snapshot: LiveAssistantSnapshot,
+  event: RealtimeEvent,
+) {
+  const info = getRealtimeInfo(event);
+  if (!info) {
+    return;
+  }
+
+  const messageId = getNonEmptyString(info.id);
+  if (!messageId || info.role !== "assistant") {
+    return;
+  }
+
+  const time = extractRealtimeTime(info);
+  rememberAssistantMessageInSnapshot(snapshot, messageId);
+  updateSnapshotAssistantMeta(snapshot, messageId, info);
+  updateSnapshotIncompleteState(snapshot, messageId, time?.completed);
+}
+
+function applyRealtimeTextPartToSnapshot(snapshot: LiveAssistantSnapshot, event: RealtimeEvent) {
+  const part = getRealtimePart(event);
+  if (!part) {
+    return;
+  }
+
+  const messageId = getNonEmptyString(part.messageID);
+  const text = typeof part.text === "string" ? part.text : null;
+  if (!messageId || part.type !== "text" || text === null) {
+    return;
+  }
+
+  rememberAssistantMessageInSnapshot(snapshot, messageId);
+  snapshot.textById.set(messageId, mergeStreamingText(snapshot.textById.get(messageId), text));
+}
+
+function extractPersistedMessageParts(raw: Record<string, unknown>) {
+  return Array.isArray(raw.parts) ? (raw.parts as Array<Record<string, unknown>>) : [];
+}
+
+function extractPersistedMessageEnvelope(message: unknown) {
+  const raw = getObjectRecord(message) ?? {};
+  const info = getObjectRecord(raw.info) ?? {};
+  const time = getObjectRecord(info.time) ?? {};
+  const parts = extractPersistedMessageParts(raw);
+  return { raw, info, time, parts };
+}
+
+function extractPersistedMessageText(
+  role: string,
+  messageId: string,
+  parts: Array<Record<string, unknown>>,
+  liveState: LiveAssistantSnapshot,
+) {
+  const persistedText = normalizeRealtimeTextParts(parts);
+  const liveText = role === "assistant" ? liveState.textById.get(messageId) : undefined;
+  return liveText && liveText.length > (persistedText?.length ?? 0) ? liveText : persistedText;
+}
+
+function buildPersistedMonitorMessage(
+  message: unknown,
+  index: number,
+  liveState: LiveAssistantSnapshot,
+): MonitorMessageItem | null {
+  const { info, time, parts } = extractPersistedMessageEnvelope(message);
+  const messageId = getNonEmptyString(info.id) ?? `${index}`;
+  const role = getNonEmptyString(info.role) ?? "system";
+  if (role !== "assistant" && role !== "user") {
+    return null;
+  }
+
+  const mergedText = extractPersistedMessageText(role, messageId, parts, liveState);
+  if (!mergedText) {
+    return null;
+  }
+
+  const createdAt = parseMessageTimestamp(time.created ?? time.completed);
+  return {
+    key: messageId,
+    role: role === "user" ? "user" : "assistant",
+    text: mergedText,
+    agent: role === "assistant" ? getNonEmptyString(info.agent) : undefined,
+    modelLabel: role === "assistant" ? extractModelLabel(info) : undefined,
+    createdAt,
+    createdAtLabel: formatTime(createdAt),
+    isStreaming: role === "assistant" && liveState.incompleteIds.has(messageId),
+  } satisfies MonitorMessageItem;
+}
+
+function buildPersistedMonitorMessages(
+  sessionMessages: unknown[],
+  liveState: LiveAssistantSnapshot,
+) {
+  if (!Array.isArray(sessionMessages)) {
+    return [];
+  }
+
+  return sessionMessages
+    .map((message, index) => buildPersistedMonitorMessage(message, index, liveState))
+    .filter((item): item is MonitorMessageItem => Boolean(item));
+}
+
+function appendLiveOnlyAssistantMessages(
+  items: MonitorMessageItem[],
+  liveState: LiveAssistantSnapshot,
+) {
+  for (let index = liveState.orderedAssistantMessageIds.length - 1; index >= 0; index -= 1) {
+    const messageId = liveState.orderedAssistantMessageIds[index];
+    if (items.some((item) => item.key === messageId)) {
+      continue;
+    }
+    const text = liveState.textById.get(messageId)?.trim();
+    const meta = liveState.metaById.get(messageId);
+    if (!text && !meta) {
+      continue;
+    }
+    items.push({
+      key: messageId,
+      role: "assistant",
+      text: text || STREAMING_PLACEHOLDER_TEXT,
+      agent: meta?.agent,
+      modelLabel: meta?.modelLabel,
+      createdAt: meta?.createdAt,
+      createdAtLabel: formatTime(meta?.createdAt),
+      isStreaming: liveState.incompleteIds.has(messageId),
+    });
+  }
+}
+
+function ensurePromptMessage(items: MonitorMessageItem[], taskId: string, taskPrompt: string) {
+  if (items.some((item) => item.role === "user") || !taskPrompt.trim()) {
+    return;
+  }
+
+  items.unshift({
+    key: `task-prompt:${taskId}`,
+    role: "user",
+    text: taskPrompt.trim(),
+    createdAtLabel: "刚刚",
+    isStreaming: false,
+  });
+}
+
+function buildSummaryEvents(
+  task: Task,
+  resolvedStatus: string,
+  activeSession: SessionInfo | null,
+  currentStage: RuntimePipeline["stages"][number] | null,
+  pipelineStages: RuntimePipeline["stages"],
+) {
+  return [
+    buildEvent(
+      "task-status",
+      "任务状态",
+      statusLabel(resolvedStatus),
+      task.finishedAt || task.startedAt || task.createdAt,
+    ),
+    activeSession
+      ? buildEvent(
+          `session-${activeSession.id}`,
+          "当前会话",
+          activeSession.title || activeSession.id,
+          activeSession.updatedAt || activeSession.createdAt || task.createdAt,
+        )
+      : null,
+    currentStage
+      ? buildEvent(
+          `stage-${currentStage.id}`,
+          currentStage.status === "failed" ? "异常阶段" : "当前阶段",
+          currentStage.label,
+          currentStage.finishedAt || currentStage.startedAt || task.createdAt,
+        )
+      : null,
+    issueCountValueFromTask(task.status, pipelineStages) > 0
+      ? buildEvent(
+          "task-issues",
+          "异常数量",
+          `${issueCountValueFromTask(resolvedStatus, pipelineStages)} 项`,
+          task.finishedAt || currentStage?.finishedAt || currentStage?.startedAt || task.createdAt,
+        )
+      : null,
+  ]
+    .filter((item): item is MonitorEventItem => Boolean(item))
+    .sort((left, right) => toTimestamp(right.ts) - toTimestamp(left.ts))
+    .slice(0, 4);
+}
+
+function resolveCurrentPipelineStage(
+  pipeline: RuntimePipeline | null,
+  resolvedStatus: string,
+  pipelineStages: RuntimePipeline["stages"],
+) {
+  if (pipeline?.summary.currentStageId) {
+    return pipeline.stages.find((stage) => stage.id === pipeline.summary.currentStageId) || null;
+  }
+
+  return resolvedStatus === "running" ? pipelineStages[0] || null : null;
+}
+
+function buildPipelineSummaryLabel(
+  pipeline: RuntimePipeline | null,
+  currentStage: RuntimePipeline["stages"][number] | null,
+) {
+  if (currentStage) {
+    return currentStage.label;
+  }
+
+  return pipeline?.summary.totalStages
+    ? `${pipeline.summary.completedStages}/${pipeline.summary.totalStages}`
+    : "暂无";
+}
+
 function buildSummary(
   task: Task,
   sessions: SessionInfo[],
@@ -2379,52 +2778,30 @@ function buildSummary(
 ): MonitorNodeSummary {
   const pipelineStages = (pipeline?.stages || [])
     .filter((stage) => stage.startedAt || stage.finishedAt)
-    .sort((left, right) => toTimestamp(right.finishedAt || right.startedAt) - toTimestamp(left.finishedAt || left.startedAt));
+    .sort(
+      (left, right) =>
+        toTimestamp(right.finishedAt || right.startedAt) -
+        toTimestamp(left.finishedAt || left.startedAt),
+    );
 
   const activeSession = sessions.find((session) => session.isActive) || sessions[0] || null;
-  const messages = buildMonitorMessages(task.id, task.prompt || task.title || task.id, activeSession?.id, sessionMessages, realtimeEvents);
+  const messages = buildMonitorMessages(
+    task.id,
+    task.prompt || task.title || task.id,
+    activeSession?.id,
+    sessionMessages,
+    realtimeEvents,
+  );
   const resolvedStatus = resolveMonitorTaskStatus(task, pipeline, sessions, messages);
-  const currentStage = pipeline?.summary.currentStageId
-    ? pipeline?.stages.find((stage) => stage.id === pipeline.summary.currentStageId) || null
-    : resolvedStatus === "running"
-      ? pipelineStages[0] || null
-      : null;
+  const currentStage = resolveCurrentPipelineStage(pipeline, resolvedStatus, pipelineStages);
 
-  const events = [
-    buildEvent(
-      "task-status",
-      "任务状态",
-      statusLabel(resolvedStatus),
-      task.finishedAt || task.startedAt || task.createdAt,
-    ),
-    activeSession
-      ? buildEvent(
-        `session-${activeSession.id}`,
-        "当前会话",
-        activeSession.title || activeSession.id,
-        activeSession.updatedAt || activeSession.createdAt || task.createdAt,
-      )
-      : null,
-    currentStage
-      ? buildEvent(
-        `stage-${currentStage.id}`,
-        currentStage.status === "failed" ? "异常阶段" : "当前阶段",
-        currentStage.label,
-        currentStage.finishedAt || currentStage.startedAt || task.createdAt,
-      )
-      : null,
-    issueCountValueFromTask(task.status, pipelineStages) > 0
-      ? buildEvent(
-        "task-issues",
-        "异常数量",
-        `${issueCountValueFromTask(resolvedStatus, pipelineStages)} 项`,
-        task.finishedAt || currentStage?.finishedAt || currentStage?.startedAt || task.createdAt,
-      )
-      : null,
-  ]
-    .filter((item): item is MonitorEventItem => Boolean(item))
-    .sort((left, right) => toTimestamp(right.ts) - toTimestamp(left.ts))
-    .slice(0, 4);
+  const events = buildSummaryEvents(
+    task,
+    resolvedStatus,
+    activeSession,
+    currentStage,
+    pipelineStages,
+  );
 
   const latestActivity = events[0]?.ts || task.finishedAt || task.startedAt || task.createdAt;
   const issueCountValue = issueCountValueFromTask(resolvedStatus, pipelineStages);
@@ -2437,11 +2814,7 @@ function buildSummary(
     latestActivityLabel: `最近 ${formatTime(latestActivity)}`,
     latestActivityTs: latestActivity,
     sessionCount: sessions.length,
-    pipelineLabel: currentStage
-      ? currentStage.label
-      : pipeline?.summary.totalStages
-        ? `${pipeline.summary.completedStages}/${pipeline.summary.totalStages}`
-        : "暂无",
+    pipelineLabel: buildPipelineSummaryLabel(pipeline, currentStage),
     issueLabel: String(issueCountValue),
     streamStateLabel: buildStreamStateLabel(resolvedStatus, messages),
     messages,
@@ -2484,7 +2857,7 @@ function formatDurationMs(ms: number): string {
 function buildTokenLabel(pipeline: RuntimePipeline | null): string {
   const tokens = pipeline?.summary.totalTokens;
   if (!tokens || (tokens.input === 0 && tokens.output === 0)) return "";
-  const fmt = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+  const fmt = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
   return `${fmt(tokens.input)}\u2193 ${fmt(tokens.output)}\u2191`;
 }
 
@@ -2510,15 +2883,19 @@ function resolveMonitorTaskStatus(
     return inferCompletedTaskStatus(task.status, task, pipeline, sessions, messages);
   }
 
-  if (pipeline.status === "completed" || pipeline.status === "failed" || pipeline.status === "paused") {
+  if (
+    pipeline.status === "completed" ||
+    pipeline.status === "failed" ||
+    pipeline.status === "paused"
+  ) {
     return pipeline.status;
   }
 
   if (
-    pipeline.summary.totalStages > 0
-    && pipeline.summary.currentStageId == null
-    && pipeline.summary.completedStages >= pipeline.summary.totalStages
-    && pipeline.summary.failedStages === 0
+    pipeline.summary.totalStages > 0 &&
+    pipeline.summary.currentStageId == null &&
+    pipeline.summary.completedStages >= pipeline.summary.totalStages &&
+    pipeline.summary.failedStages === 0
   ) {
     return "completed";
   }
@@ -2542,12 +2919,19 @@ function inferCompletedTaskStatus(
   }
 
   const hasAssistantReply = messages.some((message) => message.role === "assistant");
-  const hasStreamingAssistantReply = messages.some((message) => message.role === "assistant" && message.isStreaming);
+  const hasStreamingAssistantReply = messages.some(
+    (message) => message.role === "assistant" && message.isStreaming,
+  );
   const hasActiveSession = sessions.some((session) => session.isActive);
   const latestVisibleMessage = messages[messages.length - 1];
-  const latestAssistantReplyFinished = latestVisibleMessage?.role === "assistant" && !latestVisibleMessage.isStreaming;
+  const latestAssistantReplyFinished =
+    latestVisibleMessage?.role === "assistant" && !latestVisibleMessage.isStreaming;
 
-  if ((task.result || latestAssistantReplyFinished) && !hasStreamingAssistantReply && (!pipeline || pipeline.status !== "running")) {
+  if (
+    (task.result || latestAssistantReplyFinished) &&
+    !hasStreamingAssistantReply &&
+    (!pipeline || pipeline.status !== "running")
+  ) {
     return "completed";
   }
 
@@ -2566,156 +2950,45 @@ function buildMonitorMessages(
   realtimeEvents: RealtimeEvent[],
 ): MonitorMessageItem[] {
   const liveState = buildLiveAssistantState(taskId, sessionId, realtimeEvents);
-  const persistedItems = Array.isArray(sessionMessages)
-    ? sessionMessages
-      .map((message, index): MonitorMessageItem | null => {
-        const raw = message && typeof message === "object" ? (message as Record<string, unknown>) : {};
-        const info = raw.info && typeof raw.info === "object" ? (raw.info as Record<string, unknown>) : {};
-        const time = info.time && typeof info.time === "object" ? (info.time as Record<string, unknown>) : {};
-        const parts = Array.isArray(raw.parts) ? (raw.parts as Array<Record<string, unknown>>) : [];
-        const messageId = typeof info.id === "string" ? info.id : `${index}`;
-        const role = typeof info.role === "string" ? info.role : "system";
-        if (role !== "assistant" && role !== "user") {
-          return null;
-        }
-        const persistedText = normalizeRealtimeTextParts(parts);
-        const liveText = role === "assistant" ? liveState.textById.get(messageId) : undefined;
-        const mergedText = liveText && liveText.length > (persistedText?.length ?? 0)
-          ? liveText
-          : persistedText;
-        if (!mergedText) {
-          return null;
-        }
-        return {
-          key: messageId,
-          role: role === "user" ? "user" : "assistant",
-          text: mergedText,
-          agent: role === "assistant" && typeof info.agent === "string" ? info.agent : undefined,
-          modelLabel: role === "assistant" ? extractModelLabel(info) : undefined,
-          createdAt: parseMessageTimestamp(time.created ?? time.completed),
-          createdAtLabel: formatTime(parseMessageTimestamp(time.created ?? time.completed) || undefined),
-          isStreaming: role === "assistant" && liveState.incompleteIds.has(messageId),
-        } satisfies MonitorMessageItem;
-      })
-      .filter((item): item is MonitorMessageItem => Boolean(item))
-    : [];
+  const persistedItems = buildPersistedMonitorMessages(sessionMessages, liveState);
 
-  for (let index = liveState.orderedAssistantMessageIds.length - 1; index >= 0; index -= 1) {
-    const messageId = liveState.orderedAssistantMessageIds[index];
-    if (persistedItems.some((item) => item.key === messageId)) {
-      continue;
-    }
-    const text = liveState.textById.get(messageId)?.trim();
-    const meta = liveState.metaById.get(messageId);
-    if (!text && !meta) {
-      continue;
-    }
-    persistedItems.push({
-      key: messageId,
-      role: "assistant",
-      text: text || "正在生成...",
-      agent: meta?.agent,
-      modelLabel: meta?.modelLabel,
-      createdAt: meta?.createdAt,
-      createdAtLabel: formatTime(meta?.createdAt),
-      isStreaming: liveState.incompleteIds.has(messageId),
-    });
-  }
-
-  if (!persistedItems.some((item) => item.role === "user") && taskPrompt.trim()) {
-    persistedItems.unshift({
-      key: `task-prompt:${taskId}`,
-      role: "user",
-      text: taskPrompt.trim(),
-      createdAtLabel: "刚刚",
-      isStreaming: false,
-    });
-  }
+  appendLiveOnlyAssistantMessages(persistedItems, liveState);
+  ensurePromptMessage(persistedItems, taskId, taskPrompt);
 
   return persistedItems.slice(-10);
 }
 
-function buildLiveAssistantState(taskId: string, sessionId: string | undefined, realtimeEvents: RealtimeEvent[]) {
+function buildLiveAssistantState(
+  taskId: string,
+  sessionId: string | undefined,
+  realtimeEvents: RealtimeEvent[],
+) {
   const liveStateKey = buildLiveMessageStateKey(taskId, sessionId);
   const cachedState = liveMessageStates[liveStateKey];
   if (cachedState) {
-    return {
-      orderedAssistantMessageIds: [...cachedState.orderedAssistantMessageIds],
-      metaById: new Map(Object.entries(cachedState.metaById)),
-      textById: new Map(Object.entries(cachedState.textById)),
-      incompleteIds: new Set(cachedState.incompleteIds),
-    };
+    return buildLiveAssistantSnapshotFromCache(cachedState);
   }
 
-  const orderedAssistantMessageIds: string[] = [];
-  const knownAssistantIds = new Set<string>();
-  const metaById = new Map<string, StreamingAssistantMeta>();
-  const textById = new Map<string, string>();
-  const incompleteIds = new Set<string>();
+  const snapshot = createLiveAssistantSnapshot();
 
   if (!sessionId) {
-    return { orderedAssistantMessageIds, metaById, textById, incompleteIds };
+    return snapshot;
   }
 
-  const relevantEvents = realtimeEvents
-    .filter((event) => event.taskId === taskId && event.sessionId === sessionId)
-    .slice()
-    .reverse();
-
-  const rememberAssistantMessage = (messageId: string) => {
-    if (!knownAssistantIds.has(messageId)) {
-      orderedAssistantMessageIds.push(messageId);
-      knownAssistantIds.add(messageId);
-    }
-  };
+  const relevantEvents = listRelevantRealtimeEvents(taskId, sessionId, realtimeEvents);
 
   for (const event of relevantEvents) {
     const rawType = getRealtimeRawType(event);
     if (rawType === "message.updated") {
-      const info = getRealtimeInfo(event);
-      if (info) {
-        const messageId = typeof info.id === "string" ? info.id : null;
-        const role = typeof info.role === "string" ? info.role : null;
-        if (messageId && role === "assistant") {
-          const time = info.time && typeof info.time === "object"
-            ? (info.time as Record<string, unknown>)
-            : undefined;
-          metaById.set(messageId, {
-            agent: typeof info.agent === "string" ? info.agent : undefined,
-            modelLabel: extractModelLabel(info),
-            createdAt: parseMessageTimestamp(time?.created ?? time?.completed),
-          });
-          rememberAssistantMessage(messageId);
-          if (typeof time?.completed === "number" || typeof time?.completed === "string") {
-            incompleteIds.delete(messageId);
-          } else {
-            incompleteIds.add(messageId);
-          }
-        }
-      }
+      applyRealtimeMessageUpdatedToSnapshot(snapshot, event);
     }
 
-    if (rawType !== "message.updated" && rawType !== "message.part.updated") {
-      continue;
+    if (rawType === "message.part.updated") {
+      applyRealtimeTextPartToSnapshot(snapshot, event);
     }
-
-    const part = getRealtimePart(event);
-    if (!part) {
-      continue;
-    }
-
-    const messageId = typeof part.messageID === "string" ? part.messageID : null;
-    const partType = typeof part.type === "string" ? part.type : null;
-    const text = typeof part.text === "string" ? part.text : null;
-    if (!messageId || partType !== "text" || text === null) {
-      continue;
-    }
-
-    rememberAssistantMessage(messageId);
-    textById.set(messageId, mergeStreamingText(textById.get(messageId), text));
   }
 
-  return { orderedAssistantMessageIds, metaById, textById, incompleteIds };
+  return snapshot;
 }
 
 function mergeStreamingText(existing: string | undefined, incoming: string): string {
@@ -2759,7 +3032,10 @@ function isStreamingPlaceholderText(text?: string) {
   return !text || text === STREAMING_PLACEHOLDER_TEXT;
 }
 
-function nextStreamingRevealProgress(fullText: string, currentLength: number): { nextLength: number; delay: number } {
+function nextStreamingRevealProgress(
+  fullText: string,
+  currentLength: number,
+): { nextLength: number; delay: number } {
   const remaining = Math.max(fullText.length - currentLength, 0);
   if (remaining <= 0) {
     return { nextLength: fullText.length, delay: STREAMING_REVEAL_INTERVAL_MS };
@@ -2820,6 +3096,46 @@ function shouldAnimateMonitorMessage(taskId: string, item: MonitorMessageItem) {
   return item.isStreaming;
 }
 
+function updateRevealForMessage(
+  taskId: string,
+  item: MonitorMessageItem,
+  nextReveal: Record<string, string>,
+) {
+  const revealKey = monitorMessageRevealKey(taskId, item.key);
+  if (!shouldAnimateMonitorMessage(taskId, item)) {
+    if (item.text && !isStreamingPlaceholderText(item.text)) {
+      nextReveal[revealKey] = item.text;
+    }
+    return { hasPendingReveal: false, delay: STREAMING_REVEAL_INTERVAL_MS };
+  }
+
+  const current = monitorStreamingRevealText.value[revealKey] ?? "";
+  const progress = nextStreamingRevealProgress(item.text, current.length);
+  nextReveal[revealKey] = item.text.slice(0, progress.nextLength);
+
+  return {
+    hasPendingReveal: progress.nextLength < item.text.length,
+    delay: progress.delay,
+  };
+}
+
+function updateRevealForSummary(
+  taskId: string,
+  summary: MonitorNodeSummary,
+  nextReveal: Record<string, string>,
+) {
+  let hasPendingReveal = false;
+  let nextDelay = STREAMING_REVEAL_INTERVAL_MS;
+
+  for (const item of summary.messages) {
+    const result = updateRevealForMessage(taskId, item, nextReveal);
+    hasPendingReveal ||= result.hasPendingReveal;
+    nextDelay = Math.max(nextDelay, result.delay);
+  }
+
+  return { hasPendingReveal, nextDelay };
+}
+
 function syncMonitorStreamingReveal() {
   const nextReveal: Record<string, string> = {};
   let hasPendingReveal = false;
@@ -2827,24 +3143,9 @@ function syncMonitorStreamingReveal() {
 
   for (const layout of visibleLayouts.value) {
     const summary = summaryForTask(layout.taskId);
-    for (const item of summary.messages) {
-      const revealKey = monitorMessageRevealKey(layout.taskId, item.key);
-      if (!shouldAnimateMonitorMessage(layout.taskId, item)) {
-        if (item.text && !isStreamingPlaceholderText(item.text)) {
-          nextReveal[revealKey] = item.text;
-        }
-        continue;
-      }
-
-      const current = monitorStreamingRevealText.value[revealKey] ?? "";
-      const progress = nextStreamingRevealProgress(item.text, current.length);
-      nextReveal[revealKey] = item.text.slice(0, progress.nextLength);
-      nextDelay = Math.max(nextDelay, progress.delay);
-
-      if (progress.nextLength < item.text.length) {
-        hasPendingReveal = true;
-      }
-    }
+    const result = updateRevealForSummary(layout.taskId, summary, nextReveal);
+    hasPendingReveal ||= result.hasPendingReveal;
+    nextDelay = Math.max(nextDelay, result.nextDelay);
   }
 
   monitorStreamingRevealText.value = nextReveal;
@@ -2889,60 +3190,50 @@ function monitorMessageRoleLabel(message: MonitorMessageItem): string {
   return message.role === "user" ? "用户输入" : message.agent || "模型回复";
 }
 
+function extractModelProvider(model: Record<string, unknown>) {
+  return (
+    getNonEmptyString(model.providerID) ??
+    getNonEmptyString(model.providerId) ??
+    getNonEmptyString(model.provider)
+  );
+}
+
+function extractModelIdentifier(model: Record<string, unknown>) {
+  return (
+    getNonEmptyString(model.modelID) ??
+    getNonEmptyString(model.modelId) ??
+    getNonEmptyString(model.id)
+  );
+}
+
+function extractNestedModelLabel(model: Record<string, unknown>, id?: string) {
+  return getNonEmptyString(model.route) ?? getNonEmptyString(model.label) ?? id ?? undefined;
+}
+
 function extractModelLabel(info: Record<string, unknown>): string | undefined {
-  const directCandidates = [
-    info.modelLabel,
-    info.modelRoute,
-    info.modelID,
-    info.modelId,
-    info.modelUsed,
-  ];
-
-  for (const candidate of directCandidates) {
-    if (typeof candidate === "string" && candidate.trim()) {
-      return candidate.trim();
-    }
+  const directLabel =
+    getNonEmptyString(info.modelLabel) ??
+    getNonEmptyString(info.modelRoute) ??
+    getNonEmptyString(info.modelID) ??
+    getNonEmptyString(info.modelId) ??
+    getNonEmptyString(info.modelUsed) ??
+    getNonEmptyString(info.model);
+  if (directLabel) {
+    return directLabel;
   }
 
-  if (typeof info.model === "string" && info.model.trim()) {
-    return info.model.trim();
+  const model = getObjectRecord(info.model);
+  if (!model) {
+    return undefined;
   }
 
-  const model = info.model && typeof info.model === "object" ? (info.model as Record<string, unknown>) : null;
-  if (!model) return undefined;
-
-  const provider = typeof model.providerID === "string"
-    ? model.providerID.trim()
-    : typeof model.providerId === "string"
-      ? model.providerId.trim()
-      : typeof model.provider === "string"
-        ? model.provider.trim()
-        : "";
-  const id = typeof model.modelID === "string"
-    ? model.modelID.trim()
-    : typeof model.modelId === "string"
-      ? model.modelId.trim()
-      : typeof model.id === "string"
-        ? model.id.trim()
-        : "";
-
+  const provider = extractModelProvider(model);
+  const id = extractModelIdentifier(model);
   if (provider && id) {
     return `${provider}:${id}`;
   }
 
-  const nestedCandidates = [
-    model.route,
-    model.label,
-    id,
-  ];
-
-  for (const candidate of nestedCandidates) {
-    if (typeof candidate === "string" && candidate.trim()) {
-      return candidate.trim();
-    }
-  }
-
-  return id || provider || undefined;
+  return extractNestedModelLabel(model, id) ?? provider;
 }
 
 function normalizeRealtimeTextParts(parts: Array<Record<string, unknown>>): string | undefined {
@@ -3020,7 +3311,135 @@ function setIncompleteState(state: LiveMessageState, messageId: string, incomple
   state.incompleteIds = state.incompleteIds.filter((id) => id !== messageId);
 }
 
-function applyRealtimeEventToLiveState(taskId: string, sessionId: string | undefined, event: RealtimeEvent) {
+function shouldRefreshPersistedMessagesFromEvent(event: RealtimeEvent) {
+  if (getRealtimeRawType(event) !== "message.updated") {
+    return false;
+  }
+
+  const info = getRealtimeInfo(event);
+  const time = info ? extractRealtimeTime(info) : undefined;
+  return typeof time?.completed === "number" || typeof time?.completed === "string";
+}
+
+function processPendingRealtimeEvents(
+  taskId: string,
+  activeSessionId: string | undefined,
+  pendingEvents: RealtimeEvent[],
+) {
+  let shouldRefreshPersistedMessages = false;
+
+  for (const event of pendingEvents) {
+    const rawType = getRealtimeRawType(event);
+    if (rawType === "message.part.updated" || rawType === "message.updated") {
+      applyRealtimeEventToLiveState(taskId, activeSessionId, event);
+      shouldRefreshPersistedMessages ||=
+        Boolean(activeSessionId) && shouldRefreshPersistedMessagesFromEvent(event);
+      continue;
+    }
+
+    void refreshNodeSummary(taskId, true);
+  }
+
+  return shouldRefreshPersistedMessages;
+}
+
+function getPendingRealtimeEventsForTask(taskId: string, activeSessionId: string | undefined) {
+  const relevantEvents = taskRealtimeEvents.value
+    .filter(
+      (event) =>
+        event.taskId === taskId && (!activeSessionId || event.sessionId === activeSessionId),
+    )
+    .slice()
+    .reverse();
+  if (relevantEvents.length === 0) {
+    return { relevantEvents, pendingEvents: [] as RealtimeEvent[] };
+  }
+
+  const lastHandledEventId = lastRealtimeEventIds[taskId];
+  const lastHandledIndex = lastHandledEventId
+    ? relevantEvents.findIndex((event) => event.id === lastHandledEventId)
+    : -1;
+  const pendingEvents =
+    lastHandledIndex >= 0 ? relevantEvents.slice(lastHandledIndex + 1) : relevantEvents;
+
+  return { relevantEvents, pendingEvents };
+}
+
+async function processRealtimeEventsForTask(taskId: string) {
+  const activeSessionId =
+    extractActiveSessionId(summaryForTask(taskId)) || extractActiveSessionIdFromContext(taskId);
+  const { relevantEvents, pendingEvents } = getPendingRealtimeEventsForTask(
+    taskId,
+    activeSessionId,
+  );
+  if (relevantEvents.length === 0 || pendingEvents.length === 0) {
+    return;
+  }
+
+  const shouldRefreshPersistedMessages = processPendingRealtimeEvents(
+    taskId,
+    activeSessionId,
+    pendingEvents,
+  );
+  lastRealtimeEventIds[taskId] =
+    pendingEvents[pendingEvents.length - 1]?.id || lastRealtimeEventIds[taskId] || "";
+
+  if (shouldRefreshPersistedMessages && activeSessionId) {
+    await refreshSessionMessagesForMonitor(taskId, activeSessionId, true);
+  }
+
+  rebuildSummaryFromCache(taskId);
+}
+
+async function processRealtimeMonitorEvents() {
+  const taskIds = new Set(monitorStore.nodes.map((node) => node.taskId));
+  for (const taskId of taskIds) {
+    await processRealtimeEventsForTask(taskId);
+  }
+  void nextTick().then(() => scheduleStreamAutoScroll());
+}
+
+function applyRealtimeAssistantUpdateToLiveState(
+  state: LiveMessageState,
+  info: Record<string, unknown>,
+) {
+  const messageId = getNonEmptyString(info.id);
+  const role = getNonEmptyString(info.role);
+  if (!messageId || role !== "assistant") {
+    return;
+  }
+
+  const time = extractRealtimeTime(info);
+  state.metaById[messageId] = {
+    agent: getNonEmptyString(info.agent),
+    modelLabel: extractModelLabel(info),
+    createdAt: parseMessageTimestamp(time?.created ?? time?.completed),
+  };
+  rememberLiveAssistantMessage(state, messageId);
+  setIncompleteState(
+    state,
+    messageId,
+    !(typeof time?.completed === "number" || typeof time?.completed === "string"),
+  );
+}
+
+function applyRealtimeTextPartToLiveState(state: LiveMessageState, part: Record<string, unknown>) {
+  const messageId = getNonEmptyString(part.messageID);
+  const text = typeof part.text === "string" ? part.text : null;
+  if (!messageId || part.type !== "text" || text === null) {
+    return;
+  }
+
+  rememberLiveAssistantMessage(state, messageId);
+  state.textById[messageId] = mergeStreamingText(state.textById[messageId], text);
+  setIncompleteState(state, messageId, true);
+}
+
+function applyRealtimeEventToLiveState(
+  taskId: string,
+  sessionId: string | undefined,
+  event: RealtimeEvent,
+) {
   if (!sessionId) {
     return;
   }
@@ -3031,24 +3450,7 @@ function applyRealtimeEventToLiveState(taskId: string, sessionId: string | undef
   if (rawType === "message.updated") {
     const info = getRealtimeInfo(event);
     if (info) {
-      const messageId = typeof info.id === "string" ? info.id : null;
-      const role = typeof info.role === "string" ? info.role : null;
-      if (messageId && role === "assistant") {
-        const time = info.time && typeof info.time === "object"
-          ? (info.time as Record<string, unknown>)
-          : undefined;
-        state.metaById[messageId] = {
-          agent: typeof info.agent === "string" ? info.agent : undefined,
-          modelLabel: extractModelLabel(info),
-          createdAt: parseMessageTimestamp(time?.created ?? time?.completed),
-        };
-        rememberLiveAssistantMessage(state, messageId);
-        setIncompleteState(
-          state,
-          messageId,
-          !(typeof time?.completed === "number" || typeof time?.completed === "string"),
-        );
-      }
+      applyRealtimeAssistantUpdateToLiveState(state, info);
     }
   }
 
@@ -3060,17 +3462,7 @@ function applyRealtimeEventToLiveState(taskId: string, sessionId: string | undef
   if (!part) {
     return;
   }
-
-  const messageId = typeof part.messageID === "string" ? part.messageID : null;
-  const partType = typeof part.type === "string" ? part.type : null;
-  const text = typeof part.text === "string" ? part.text : null;
-  if (!messageId || partType !== "text" || text === null) {
-    return;
-  }
-
-  rememberLiveAssistantMessage(state, messageId);
-  state.textById[messageId] = mergeStreamingText(state.textById[messageId], text);
-  setIncompleteState(state, messageId, true);
+  applyRealtimeTextPartToLiveState(state, part);
 }
 
 function extractActiveSessionId(summary?: MonitorNodeSummary) {
@@ -3079,7 +3471,8 @@ function extractActiveSessionId(summary?: MonitorNodeSummary) {
 
 function extractActiveSessionIdFromContext(taskId: string) {
   const context = taskContexts[taskId];
-  const activeSession = context?.sessions.find((session) => session.isActive) || context?.sessions[0];
+  const activeSession =
+    context?.sessions.find((session) => session.isActive) || context?.sessions[0];
   return activeSession?.id;
 }
 
@@ -3121,8 +3514,14 @@ function formatTime(value?: string | null) {
   });
 }
 
-function issueCountValueFromTask(status: string | undefined, pipelineStages: Array<{ status?: string }>) {
-  return Number(isIssueStatus(status)) + pipelineStages.filter((stage) => stage.status === "failed").length;
+function issueCountValueFromTask(
+  status: string | undefined,
+  pipelineStages: Array<{ status?: string }>,
+) {
+  return (
+    Number(isIssueStatus(status)) +
+    pipelineStages.filter((stage) => stage.status === "failed").length
+  );
 }
 
 function toTimestamp(value?: string | null) {
@@ -3141,7 +3540,7 @@ function statusLabel(status?: string) {
     cancelled: "已取消",
     stopped: "已停止",
   };
-  return map[status || "pending"] || (status || "未知");
+  return map[status || "pending"] || status || "未知";
 }
 
 function isIssueStatus(status?: string) {
@@ -3160,18 +3559,23 @@ function monitorNodeClass(layout: TaskMonitorNodeLayout, status?: string) {
   const previewOffset = freeLayoutDragPreview.value.previewOffsets[layout.id];
   return {
     ...statusClass(status),
-    "monitor-node--dragging": freeLayoutDragPreview.value.active && freeLayoutDragPreview.value.nodeId === layout.id,
-    "monitor-node--magnetic": freeLayoutDragPreview.value.active
-      && freeLayoutDragPreview.value.nodeId === layout.id
-      && (freeLayoutDragPreview.value.magneticOffsetX !== 0 || freeLayoutDragPreview.value.magneticOffsetY !== 0),
-    "monitor-node--preview-shifted": Boolean(previewOffset && (previewOffset.x !== 0 || previewOffset.y !== 0)),
-    "monitor-node--swap-target": freeLayoutDragPreview.value.active && freeLayoutDragPreview.value.swapNodeId === layout.id,
-    "monitor-node--swap-origin": freeLayoutDragPreview.value.active
-      && freeLayoutDragPreview.value.swapNodeId === layout.id
-      && (
-        freeLayoutDragPreview.value.sourceX !== freeLayoutDragPreview.value.targetX
-        || freeLayoutDragPreview.value.sourceY !== freeLayoutDragPreview.value.targetY
-      ),
+    "monitor-node--dragging":
+      freeLayoutDragPreview.value.active && freeLayoutDragPreview.value.nodeId === layout.id,
+    "monitor-node--magnetic":
+      freeLayoutDragPreview.value.active &&
+      freeLayoutDragPreview.value.nodeId === layout.id &&
+      (freeLayoutDragPreview.value.magneticOffsetX !== 0 ||
+        freeLayoutDragPreview.value.magneticOffsetY !== 0),
+    "monitor-node--preview-shifted": Boolean(
+      previewOffset && (previewOffset.x !== 0 || previewOffset.y !== 0),
+    ),
+    "monitor-node--swap-target":
+      freeLayoutDragPreview.value.active && freeLayoutDragPreview.value.swapNodeId === layout.id,
+    "monitor-node--swap-origin":
+      freeLayoutDragPreview.value.active &&
+      freeLayoutDragPreview.value.swapNodeId === layout.id &&
+      (freeLayoutDragPreview.value.sourceX !== freeLayoutDragPreview.value.targetX ||
+        freeLayoutDragPreview.value.sourceY !== freeLayoutDragPreview.value.targetY),
   };
 }
 
@@ -3211,16 +3615,23 @@ function isDetailsCollapsed(layout: TaskMonitorNodeLayout) {
 }
 
 function nodeStyle(layout: TaskMonitorNodeLayout) {
-  const isDraggedNode = freeLayoutDragPreview.value.active && freeLayoutDragPreview.value.nodeId === layout.id;
-  const isSwapTarget = freeLayoutDragPreview.value.active && freeLayoutDragPreview.value.swapNodeId === layout.id;
+  const isDraggedNode =
+    freeLayoutDragPreview.value.active && freeLayoutDragPreview.value.nodeId === layout.id;
+  const isSwapTarget =
+    freeLayoutDragPreview.value.active && freeLayoutDragPreview.value.swapNodeId === layout.id;
   const previewOffset = freeLayoutDragPreview.value.previewOffsets[layout.id] || { x: 0, y: 0 };
-  const deltaX = isSwapTarget ? freeLayoutDragPreview.value.sourceX - freeLayoutDragPreview.value.targetX : 0;
-  const deltaY = isSwapTarget ? freeLayoutDragPreview.value.sourceY - freeLayoutDragPreview.value.targetY : 0;
-  const clampOffset = (value: number) => Math.max(-18, Math.min(18, value === 0 ? 0 : Math.sign(value) * 14));
+  const deltaX = isSwapTarget
+    ? freeLayoutDragPreview.value.sourceX - freeLayoutDragPreview.value.targetX
+    : 0;
+  const deltaY = isSwapTarget
+    ? freeLayoutDragPreview.value.sourceY - freeLayoutDragPreview.value.targetY
+    : 0;
+  const clampOffset = (value: number) =>
+    Math.max(-18, Math.min(18, value === 0 ? 0 : Math.sign(value) * 14));
 
   return {
     width: `${layout.width}px`,
-    minHeight: '180px',
+    minHeight: "180px",
     zIndex: String(layout.zIndex),
     "--monitor-node-preview-offset-x": `${previewOffset.x}px`,
     "--monitor-node-preview-offset-y": `${previewOffset.y}px`,

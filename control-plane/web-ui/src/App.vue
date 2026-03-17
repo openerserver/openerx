@@ -1,12 +1,14 @@
 <template>
-  <a-config-provider :theme="appTheme">
+  <a-config-provider :theme="configProviderTheme">
     <router-view />
   </a-config-provider>
 </template>
 
 <script setup lang="ts">
+import type { ThemeConfig } from "ant-design-vue/es/config-provider/context";
 import { appTheme, palette } from "./theme/ui-theme";
 
+const configProviderTheme = appTheme as ThemeConfig;
 const appBodyBackground = palette.layoutBg;
 const appBodyColor = palette.text;
 </script>

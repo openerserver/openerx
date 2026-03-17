@@ -93,7 +93,7 @@ beforeEach(() => {
 
 describe("project paid execution preflight route", () => {
   test("aggregates project default model and active lease state", async () => {
-    delete process.env.ALLOW_PAID_MODEL_EXECUTION;
+    process.env.ALLOW_PAID_MODEL_EXECUTION = undefined;
 
     const { projectRoutes } = await import(
       "../../control-plane/web-ui-bff/src/modules/projects/routes"
@@ -130,7 +130,7 @@ describe("project paid execution preflight route", () => {
   });
 
   test("treats project-level paid execution permission as an explicit gate override", async () => {
-    delete process.env.ALLOW_PAID_MODEL_EXECUTION;
+    process.env.ALLOW_PAID_MODEL_EXECUTION = undefined;
     cpFetchMock.mockImplementation(async (...args: unknown[]) => {
       const [path] = args as [string];
       if (path === "/api/projects/proj-default") {

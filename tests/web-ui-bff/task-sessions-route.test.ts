@@ -5,8 +5,14 @@ import { beforeEach, describe, expect, mock, test } from "bun:test";
 const cpFetchMock = mock(async (..._args: unknown[]) => ({ ok: true, data: {} }));
 const authHeaderMock = mock(() => "Bearer test");
 const createInternalAuthorizationMock = mock(async () => "Bearer internal");
-const listSessionsMock = mock(async () => ({ ok: true, data: [] as Array<Record<string, unknown>> }));
-const getSessionMessagesMock = mock(async () => ({ ok: true, data: [] as Array<Record<string, unknown>> }));
+const listSessionsMock = mock(async () => ({
+  ok: true,
+  data: [] as Array<Record<string, unknown>>,
+}));
+const getSessionMessagesMock = mock(async () => ({
+  ok: true,
+  data: [] as Array<Record<string, unknown>>,
+}));
 
 mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () => ({
   authHeader: authHeaderMock,
@@ -76,7 +82,10 @@ beforeEach(() => {
         id: "session-1",
         title: "[Task task-1] finished session",
         summary: { additions: 1, deletions: 0, files: 1 },
-        time: { created: Date.parse("2026-03-14T10:00:00.000Z"), updated: Date.parse("2026-03-14T10:05:00.000Z") },
+        time: {
+          created: Date.parse("2026-03-14T10:00:00.000Z"),
+          updated: Date.parse("2026-03-14T10:05:00.000Z"),
+        },
       },
     ],
   });

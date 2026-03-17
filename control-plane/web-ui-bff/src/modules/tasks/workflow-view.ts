@@ -204,7 +204,9 @@ async function resolveRoleLabels(
     projectId?: string | null;
   } = {},
 ) {
-  const uniqueIds = Array.from(new Set(roleAgentIds.filter((value): value is string => Boolean(value))));
+  const uniqueIds = Array.from(
+    new Set(roleAgentIds.filter((value): value is string => Boolean(value))),
+  );
   const labelEntries = await Promise.all(
     uniqueIds.map(async (roleAgentId) => {
       const query = new URLSearchParams();
@@ -248,7 +250,9 @@ function inferWorkflowStatus(
     return "blocked";
   }
 
-  if (stages.some((stage) => stage.status === "waiting-approval" || stage.approvalState === "pending")) {
+  if (
+    stages.some((stage) => stage.status === "waiting-approval" || stage.approvalState === "pending")
+  ) {
     return "waiting-approval";
   }
 
@@ -284,18 +288,20 @@ function inferWorkflowCurrentStage(
 
   const activeStage = stages.find(
     (stage) =>
-      Boolean(stage.stageKey)
-      && (stage.status === "running"
-        || stage.status === "blocked"
-        || stage.status === "waiting-approval"
-        || stage.approvalState === "pending"
-        || (workflowStatus === "running" && stage.status === "pending")),
+      Boolean(stage.stageKey) &&
+      (stage.status === "running" ||
+        stage.status === "blocked" ||
+        stage.status === "waiting-approval" ||
+        stage.approvalState === "pending" ||
+        (workflowStatus === "running" && stage.status === "pending")),
   );
   if (activeStage?.stageKey) {
     return activeStage.stageKey;
   }
 
-  const completedStage = [...stages].reverse().find((stage) => stage.stageKey && stage.status === "completed");
+  const completedStage = [...stages]
+    .reverse()
+    .find((stage) => stage.stageKey && stage.status === "completed");
   if (completedStage?.stageKey) {
     return completedStage.stageKey;
   }
@@ -318,7 +324,201 @@ function normalizeApprovalRequired(item: RoleConclusionPayload) {
 function normalizeTemplateControls(templateStage?: WorkflowTemplateStagePayload | null) {
   return {
     gateCount: Array.isArray(templateStage?.gatesJson) ? templateStage.gatesJson.length : 0,
-    approvalCount: Array.isArray(templateStage?.approvalsJson) ? templateStage.approvalsJson.length : 0,
+    approvalCount: Array.isArray(templateStage?.approvalsJson)
+      ? templateStage.approvalsJson.length
+      : 0,
+  };
+}
+
+function resolveRoleLabel(
+  roleAgentId: string | null | undefined,
+  roleLabels: Map<string, string>,
+) {
+  return roleLabels.get(roleAgentId || "") || fallbackRoleLabelFromId(roleAgentId);
+}
+
+function computeStageDecisionCounters(conclusions: RoleConclusionPayload[]) {
+  return {
+    manualReviewCount: conclusions.filter((item) => item.finalDecision === "human-review").length,
+    blockDecisionCount: conclusions.filter((item) => item.finalDecision === "block").length,
+    approvalDecisionCount: conclusions.filter(
+      (item) => item.finalDecision === "needs-approval" || normalizeApprovalRequired(item),
+    ).length,
+  };
+}
+
+function computeStageRequestCounters(
+  requests: Array<DeveloperChangeRequestPayload & { stageKey?: string }>,
+) {
+  const openRequests = requests.filter(
+    (item) => item.status !== "resolved" && item.status !== "won't-fix",
+  );
+
+  return {
+    openRequests,
+    blockingChangeRequestCount: openRequests.filter((item) => item.blocking).length,
+  };
+}
+
+function resolveLatestStageRoleLabel(
+  conclusion: RoleConclusionPayload | undefined,
+  roleLabels: Map<string, string>,
+) {
+  return conclusion?.roleAgentId ? resolveRoleLabel(conclusion.roleAgentId, roleLabels) : undefined;
+}
+
+function buildGateResult(input: {
+  gateCount: number;
+  hasBlocking: boolean;
+  stageStatus?: string | null;
+}): TaskStageRuntimeSummaryViewModel["gateResult"] {
+  if (input.gateCount === 0) {
+    return "not-configured";
+  }
+  if (input.hasBlocking) {
+    return "blocked";
+  }
+  if (input.stageStatus === "completed") {
+    return "passed";
+  }
+  return "pending";
+}
+
+function buildApprovalResult(input: {
+  approvalCount: number;
+  hasApprovalPending: boolean;
+  stageStatus?: string | null;
+  approvalState?: string | null;
+}): TaskStageRuntimeSummaryViewModel["approvalResult"] {
+  if (input.approvalCount === 0) {
+    return "not-configured";
+  }
+  if (input.hasApprovalPending) {
+    return "pending";
+  }
+  if (input.stageStatus === "failed" || input.approvalState === "rejected") {
+    return "rejected";
+  }
+  if (input.stageStatus === "completed") {
+    return "approved";
+  }
+  return "pending";
+}
+
+function mapRoleFindings(
+  findings: RoleConclusionPayload["mergedFindings"] | RoleConclusionPayload["minorityFindings"],
+  index: number,
+  prefix: "merged" | "minority",
+) {
+  if (!Array.isArray(findings)) {
+    return [];
+  }
+
+  return findings.map((finding, findingIndex) => ({
+    key: finding?.key || `${index}-${prefix}-${findingIndex}`,
+    title: finding?.title || "未命名发现",
+    severity: finding?.severity || "low",
+  }));
+}
+
+function mapRoleConflicts(conflicts: RoleConclusionPayload["conflicts"]) {
+  if (!Array.isArray(conflicts)) {
+    return [];
+  }
+
+  return conflicts.map((conflict) => ({
+    type: conflict?.type || "unknown",
+    severity: conflict?.severity || "low",
+    summary: conflict?.summary || "未提供冲突摘要",
+  }));
+}
+
+function mapRoleConclusionItem(
+  item: RoleConclusionPayload,
+  index: number,
+  roleLabels: Map<string, string>,
+) {
+  return {
+    id: item.id || `${item.roleAgentId || "role"}-${item.stage || index}`,
+    roleAgentId: item.roleAgentId || "unknown",
+    roleLabel: resolveRoleLabel(item.roleAgentId, roleLabels),
+    stage: item.stage || "unknown",
+    finalDecision: item.finalDecision || "observe",
+    aggregateRiskLevel: item.aggregateRiskLevel || "low",
+    consensusScore: typeof item.consensusScore === "number" ? item.consensusScore : 0,
+    winningRationale: item.winningRationale || "",
+    mergedFindings: mapRoleFindings(item.mergedFindings, index, "merged"),
+    minorityFindings: mapRoleFindings(item.minorityFindings, index, "minority"),
+    conflicts: mapRoleConflicts(item.conflicts),
+    approvalRequired: normalizeApprovalRequired(item),
+  };
+}
+
+function createEmptyProjectStageSummary(): ProjectStageRuntimeSummaryViewModel {
+  return {
+    totalTasks: 0,
+    runningCount: 0,
+    blockedCount: 0,
+    waitingApprovalCount: 0,
+    completedCount: 0,
+    failedCount: 0,
+    blockDecisionCount: 0,
+    approvalDecisionCount: 0,
+    openChangeRequestCount: 0,
+    blockingChangeRequestCount: 0,
+    latestTask: null,
+  };
+}
+
+function createProjectStageSummaries(stageKeys: string[]) {
+  return Object.fromEntries(
+    stageKeys.map((stageKey) => [stageKey, createEmptyProjectStageSummary()]),
+  ) as Record<string, ProjectStageRuntimeSummaryViewModel>;
+}
+
+function applyProjectStageStatusCounts(
+  summary: ProjectStageRuntimeSummaryViewModel,
+  stage: WorkflowViewModel["workflow"]["stages"][number],
+  workflowStatus: string,
+) {
+  summary.totalTasks += 1;
+  if (stage.status === "running") summary.runningCount += 1;
+  if (stage.status === "blocked") summary.blockedCount += 1;
+  if (stage.status === "waiting-approval" || stage.approvalState === "pending") {
+    summary.waitingApprovalCount += 1;
+  }
+  if (stage.status === "completed") summary.completedCount += 1;
+  if (stage.status === "failed" || workflowStatus === "failed") summary.failedCount += 1;
+}
+
+function applyProjectStageRuntimeCounts(
+  summary: ProjectStageRuntimeSummaryViewModel,
+  runtimeSummary: TaskStageRuntimeSummaryViewModel,
+) {
+  summary.blockDecisionCount += runtimeSummary.blockDecisionCount + runtimeSummary.manualReviewCount;
+  summary.approvalDecisionCount += runtimeSummary.approvalDecisionCount;
+  summary.openChangeRequestCount += runtimeSummary.openChangeRequestCount;
+  summary.blockingChangeRequestCount += runtimeSummary.blockingChangeRequestCount;
+}
+
+function updateLatestProjectTaskSummary(
+  summary: ProjectStageRuntimeSummaryViewModel,
+  task: TaskListItemPayload,
+  workflowStatus: string,
+  stage: WorkflowViewModel["workflow"]["stages"][number],
+) {
+  if (summary.latestTask) {
+    return;
+  }
+
+  summary.latestTask = {
+    taskId: task.id,
+    title: task.title || task.id,
+    workflowStatus,
+    stageStatus: stage.status,
+    approvalState: stage.approvalState,
+    blockingReason: stage.blockingReason,
+    timestamp: task.finishedAt || task.startedAt || task.createdAt,
   };
 }
 
@@ -329,13 +529,9 @@ function buildStageRuntimeSummary(input: {
   roleLabels: Map<string, string>;
   templateStage?: WorkflowTemplateStagePayload | null;
 }): TaskStageRuntimeSummaryViewModel {
-  const manualReviewCount = input.conclusions.filter((item) => item.finalDecision === "human-review").length;
-  const blockDecisionCount = input.conclusions.filter((item) => item.finalDecision === "block").length;
-  const approvalDecisionCount = input.conclusions.filter(
-    (item) => item.finalDecision === "needs-approval" || normalizeApprovalRequired(item),
-  ).length;
-  const openRequests = input.requests.filter((item) => item.status !== "resolved" && item.status !== "won't-fix");
-  const blockingChangeRequestCount = openRequests.filter((item) => item.blocking).length;
+  const { manualReviewCount, blockDecisionCount, approvalDecisionCount } =
+    computeStageDecisionCounters(input.conclusions);
+  const { openRequests, blockingChangeRequestCount } = computeStageRequestCounters(input.requests);
   const controls = normalizeTemplateControls(input.templateStage);
   const blockingConclusion = input.conclusions.find(
     (item) => item.finalDecision === "block" || item.finalDecision === "human-review",
@@ -344,8 +540,15 @@ function buildStageRuntimeSummary(input: {
     (item) => item.finalDecision === "needs-approval" || normalizeApprovalRequired(item),
   );
 
-  const hasBlocking = blockDecisionCount > 0 || manualReviewCount > 0 || blockingChangeRequestCount > 0 || input.stage.status === "blocked";
-  const hasApprovalPending = approvalDecisionCount > 0 || input.stage.approvalState === "pending" || input.stage.status === "waiting-approval";
+  const hasBlocking =
+    blockDecisionCount > 0 ||
+    manualReviewCount > 0 ||
+    blockingChangeRequestCount > 0 ||
+    input.stage.status === "blocked";
+  const hasApprovalPending =
+    approvalDecisionCount > 0 ||
+    input.stage.approvalState === "pending" ||
+    input.stage.status === "waiting-approval";
 
   return {
     conclusionCount: input.conclusions.length,
@@ -354,28 +557,19 @@ function buildStageRuntimeSummary(input: {
     manualReviewCount,
     openChangeRequestCount: openRequests.length,
     blockingChangeRequestCount,
-    gateResult: controls.gateCount === 0
-      ? "not-configured"
-      : hasBlocking
-        ? "blocked"
-        : input.stage.status === "completed"
-          ? "passed"
-          : "pending",
-    approvalResult: controls.approvalCount === 0
-      ? "not-configured"
-      : hasApprovalPending
-        ? "pending"
-        : input.stage.status === "failed" || input.stage.approvalState === "rejected"
-          ? "rejected"
-          : input.stage.status === "completed"
-            ? "approved"
-            : "pending",
-    latestBlockingRoleLabel: blockingConclusion?.roleAgentId
-      ? input.roleLabels.get(blockingConclusion.roleAgentId) || fallbackRoleLabelFromId(blockingConclusion.roleAgentId)
-      : undefined,
-    latestApprovalRoleLabel: approvalConclusion?.roleAgentId
-      ? input.roleLabels.get(approvalConclusion.roleAgentId) || fallbackRoleLabelFromId(approvalConclusion.roleAgentId)
-      : undefined,
+    gateResult: buildGateResult({
+      gateCount: controls.gateCount,
+      hasBlocking,
+      stageStatus: input.stage.status,
+    }),
+    approvalResult: buildApprovalResult({
+      approvalCount: controls.approvalCount,
+      hasApprovalPending,
+      stageStatus: input.stage.status,
+      approvalState: input.stage.approvalState,
+    }),
+    latestBlockingRoleLabel: resolveLatestStageRoleLabel(blockingConclusion, input.roleLabels),
+    latestApprovalRoleLabel: resolveLatestStageRoleLabel(approvalConclusion, input.roleLabels),
   };
 }
 
@@ -394,29 +588,33 @@ export async function buildTaskWorkflowViewModel(
   options: { projectId?: string | null; taskStatus?: string | null } = {},
 ): Promise<WorkflowViewModel> {
   const [workflowResult, conclusionsResult, requestsResult] = await Promise.all([
-    cpFetch<{ data?: { workflowRun?: WorkflowRunPayload | null; stages?: WorkflowStagePayload[] | null } }>(
-      `/api/tasks/${encodeURIComponent(taskId)}/workflow`,
-      { authorization },
+    cpFetch<{
+      data?: { workflowRun?: WorkflowRunPayload | null; stages?: WorkflowStagePayload[] | null };
+    }>(`/api/tasks/${encodeURIComponent(taskId)}/workflow`, { authorization }),
+    cpFetch<{ data?: RoleConclusionPayload[] }>(
+      `/api/tasks/${encodeURIComponent(taskId)}/role-conclusions`,
+      {
+        authorization,
+      },
     ),
-    cpFetch<{ data?: RoleConclusionPayload[] }>(`/api/tasks/${encodeURIComponent(taskId)}/role-conclusions`, {
-      authorization,
-    }),
     cpFetch<{ data?: DeveloperChangeRequestPayload[] }>(
       `/api/tasks/${encodeURIComponent(taskId)}/developer-change-requests`,
       { authorization },
     ),
   ]);
 
-  const workflowRun = workflowResult.ok ? workflowResult.data?.data?.workflowRun ?? null : null;
-  const stages = workflowResult.ok ? workflowResult.data?.data?.stages ?? [] : [];
-  const conclusions = conclusionsResult.ok ? conclusionsResult.data?.data ?? [] : [];
-  const requests = requestsResult.ok ? requestsResult.data?.data ?? [] : [];
+  const workflowRun = workflowResult.ok ? (workflowResult.data?.data?.workflowRun ?? null) : null;
+  const stages = workflowResult.ok ? (workflowResult.data?.data?.stages ?? []) : [];
+  const conclusions = conclusionsResult.ok ? (conclusionsResult.data?.data ?? []) : [];
+  const requests = requestsResult.ok ? (requestsResult.data?.data ?? []) : [];
   const templateStages = workflowRun?.templateId
     ? await fetchWorkflowTemplateStages(workflowRun.templateId, authorization)
     : [];
   const templateStageMap = new Map(
     templateStages
-      .filter((stage): stage is WorkflowTemplateStagePayload & { stageKey: string } => Boolean(stage.stageKey))
+      .filter((stage): stage is WorkflowTemplateStagePayload & { stageKey: string } =>
+        Boolean(stage.stageKey),
+      )
       .map((stage) => [stage.stageKey, stage] as const),
   );
   const roleLabels = await resolveRoleLabels(
@@ -438,7 +636,9 @@ export async function buildTaskWorkflowViewModel(
   );
   const stageRunIdToKey = new Map(
     stages
-      .filter((stage): stage is WorkflowStagePayload & { id: string; stageKey: string } => Boolean(stage.id && stage.stageKey))
+      .filter((stage): stage is WorkflowStagePayload & { id: string; stageKey: string } =>
+        Boolean(stage.id && stage.stageKey),
+      )
       .map((stage) => [stage.id, stage.stageKey] as const),
   );
   const mappedRequests = requests.map((item) => ({
@@ -464,8 +664,8 @@ export async function buildTaskWorkflowViewModel(
           approvalState: stage.approvalState || "not-required",
           blockingReason: stage.blockingReason || undefined,
           primaryRoleLabel:
-            roleLabels.get(stage.primaryRoleAgentId || templateStage?.primaryRoleAgentId || "")
-            || fallbackRoleLabelFromId(stage.primaryRoleAgentId || templateStage?.primaryRoleAgentId),
+            roleLabels.get(stage.primaryRoleAgentId || templateStage?.primaryRoleAgentId || "") ||
+            fallbackRoleLabelFromId(stage.primaryRoleAgentId || templateStage?.primaryRoleAgentId),
           gateCount: controls.gateCount,
           approvalCount: controls.approvalCount,
           runtimeSummary: buildStageRuntimeSummary({
@@ -478,44 +678,13 @@ export async function buildTaskWorkflowViewModel(
         };
       }),
     },
-    roleConclusions: conclusions.map((item, index) => ({
-      id: item.id || `${item.roleAgentId || "role"}-${item.stage || index}`,
-      roleAgentId: item.roleAgentId || "unknown",
-      roleLabel: roleLabels.get(item.roleAgentId || "") || fallbackRoleLabelFromId(item.roleAgentId),
-      stage: item.stage || "unknown",
-      finalDecision: item.finalDecision || "observe",
-      aggregateRiskLevel: item.aggregateRiskLevel || "low",
-      consensusScore: typeof item.consensusScore === "number" ? item.consensusScore : 0,
-      winningRationale: item.winningRationale || "",
-      mergedFindings: Array.isArray(item.mergedFindings)
-        ? item.mergedFindings.map((finding, findingIndex) => ({
-            key: finding?.key || `${index}-merged-${findingIndex}`,
-            title: finding?.title || "未命名发现",
-            severity: finding?.severity || "low",
-          }))
-        : [],
-      minorityFindings: Array.isArray(item.minorityFindings)
-        ? item.minorityFindings.map((finding, findingIndex) => ({
-            key: finding?.key || `${index}-minority-${findingIndex}`,
-            title: finding?.title || "未命名发现",
-            severity: finding?.severity || "low",
-          }))
-        : [],
-      conflicts: Array.isArray(item.conflicts)
-        ? item.conflicts.map((conflict) => ({
-            type: conflict?.type || "unknown",
-            severity: conflict?.severity || "low",
-            summary: conflict?.summary || "未提供冲突摘要",
-          }))
-        : [],
-      approvalRequired: normalizeApprovalRequired(item),
-    })),
+    roleConclusions: conclusions.map((item, index) => mapRoleConclusionItem(item, index, roleLabels)),
     developerChangeRequests: mappedRequests.map((item, index) => ({
       id: item.id || `${item.sourceRoleAgentId || "role"}-request-${index}`,
       sourceRoleAgentId: item.sourceRoleAgentId || "unknown",
       sourceRoleLabel:
-        roleLabels.get(item.sourceRoleAgentId || "")
-        || fallbackRoleLabelFromId(item.sourceRoleAgentId),
+        roleLabels.get(item.sourceRoleAgentId || "") ||
+        fallbackRoleLabelFromId(item.sourceRoleAgentId),
       stageKey: item.stageKey,
       priority: item.priority || "medium",
       title: item.title || "未命名修正请求",
@@ -541,21 +710,7 @@ export async function buildProjectWorkflowStageRuntimeSummaries(input: {
   );
 
   const tasks = taskListResult.ok ? taskListResult.data?.data || [] : [];
-  const summaries = Object.fromEntries(
-    input.stageKeys.map((stageKey) => [stageKey, {
-      totalTasks: 0,
-      runningCount: 0,
-      blockedCount: 0,
-      waitingApprovalCount: 0,
-      completedCount: 0,
-      failedCount: 0,
-      blockDecisionCount: 0,
-      approvalDecisionCount: 0,
-      openChangeRequestCount: 0,
-      blockingChangeRequestCount: 0,
-      latestTask: null,
-    } satisfies ProjectStageRuntimeSummaryViewModel]),
-  ) as Record<string, ProjectStageRuntimeSummaryViewModel>;
+  const summaries = createProjectStageSummaries(input.stageKeys);
 
   const workflowViews = await Promise.all(
     tasks.map(async (task) => ({
@@ -578,28 +733,9 @@ export async function buildProjectWorkflowStageRuntimeSummaries(input: {
         continue;
       }
 
-      summary.totalTasks += 1;
-      if (stage.status === "running") summary.runningCount += 1;
-      if (stage.status === "blocked") summary.blockedCount += 1;
-      if (stage.status === "waiting-approval" || stage.approvalState === "pending") summary.waitingApprovalCount += 1;
-      if (stage.status === "completed") summary.completedCount += 1;
-      if (stage.status === "failed" || view.workflow.status === "failed") summary.failedCount += 1;
-      summary.blockDecisionCount += stage.runtimeSummary.blockDecisionCount + stage.runtimeSummary.manualReviewCount;
-      summary.approvalDecisionCount += stage.runtimeSummary.approvalDecisionCount;
-      summary.openChangeRequestCount += stage.runtimeSummary.openChangeRequestCount;
-      summary.blockingChangeRequestCount += stage.runtimeSummary.blockingChangeRequestCount;
-
-      if (!summary.latestTask) {
-        summary.latestTask = {
-          taskId: task.id,
-          title: task.title || task.id,
-          workflowStatus: view.workflow.status,
-          stageStatus: stage.status,
-          approvalState: stage.approvalState,
-          blockingReason: stage.blockingReason,
-          timestamp: task.finishedAt || task.startedAt || task.createdAt,
-        };
-      }
+      applyProjectStageStatusCounts(summary, stage, view.workflow.status);
+      applyProjectStageRuntimeCounts(summary, stage.runtimeSummary);
+      updateLatestProjectTaskSummary(summary, task, view.workflow.status, stage);
     }
   }
 

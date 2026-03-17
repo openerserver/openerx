@@ -160,8 +160,17 @@
 </template>
 
 <script setup lang="ts">
-import { PauseCircleOutlined, PlayCircleOutlined, RobotOutlined, StopOutlined } from "@ant-design/icons-vue";
-import type { AgentOpsActionPermissions, AgentOpsViewMode, AgentRunOpsSummary } from "../../lib/api";
+import {
+  PauseCircleOutlined,
+  PlayCircleOutlined,
+  RobotOutlined,
+  StopOutlined,
+} from "@ant-design/icons-vue";
+import type {
+  AgentOpsActionPermissions,
+  AgentOpsViewMode,
+  AgentRunOpsSummary,
+} from "../../lib/api";
 
 defineProps<{
   open: boolean;

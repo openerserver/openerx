@@ -1,7 +1,7 @@
 import type { ApiError } from "./api";
 import type { RecoverySuggestion } from "./recovery-suggestions";
-import type { SettingsRouteTarget } from "./settings-deep-link";
 import { buildRuntimeRecoverySettingsTarget } from "./runtime-recovery-link";
+import type { SettingsRouteTarget } from "./settings-deep-link";
 
 export const RUNTIME_RECOVERY_CONTEXTS = {
   taskCreateExecute: "task-create-execute",

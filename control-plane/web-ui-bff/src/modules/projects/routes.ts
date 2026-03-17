@@ -1,18 +1,18 @@
 import { Hono } from "hono";
 import { authHeader, cpFetch } from "../../lib/control-plane-client";
+import { readDefaultExecutionModel, resolveModelRoute } from "../../lib/opencode-config";
+import { readOrchestrationStrategy } from "../../lib/orchestration-strategy";
 import {
   buildPreflightOrchestrationFingerprint,
   evaluatePaidExecutionPreflight,
   fetchProjectPaidExecutionLeaseState,
 } from "../../lib/paid-execution-guard";
-import { readDefaultExecutionModel, resolveModelRoute } from "../../lib/opencode-config";
-import { readOrchestrationStrategy } from "../../lib/orchestration-strategy";
 import { fetchProjectRuntimeUsageBaseline } from "../../lib/runtime-usage-ledger";
 import type { JWTPayload } from "../../middleware/auth";
 import {
-  buildTaskWorkflowViewModel,
   type ProjectStageRuntimeSummaryViewModel,
   buildProjectWorkflowStageRuntimeSummaries,
+  buildTaskWorkflowViewModel,
 } from "../tasks/workflow-view";
 
 type AppEnv = { Variables: { user: JWTPayload } };
@@ -261,6 +261,19 @@ interface OrchestrationScenarioViewModel {
   stages: OrchestrationStageViewModel[];
 }
 
+interface ProjectRoleExecutionViewRow {
+  role: RoleAgentRecord;
+  override: RoleAgentProjectOverrideRecord | null;
+  mode: "platform-default" | "project-extend" | "project-takeover";
+  effectiveStages: string[];
+  overrideSummary: string;
+}
+
+interface ProjectRoleExecutionViewData {
+  access: { allowed: boolean; message?: string };
+  rows: ProjectRoleExecutionViewRow[];
+}
+
 interface ProjectTaskRecord {
   id: string;
   title?: string | null;
@@ -303,17 +316,19 @@ function asOperatingModeSelection(value: unknown) {
   const source = record.source;
 
   if (
-    (collaborationMode !== "solo" && collaborationMode !== "team" && collaborationMode !== "hybrid")
-    || (autopilotLevel !== "L0" && autopilotLevel !== "L1" && autopilotLevel !== "L2")
-    || (bossParticipationMode !== "disabled"
-      && bossParticipationMode !== "advisory"
-      && bossParticipationMode !== "exception-only"
-      && bossParticipationMode !== "full-manager")
-    || (source !== undefined
-      && source !== "system-default"
-      && source !== "project-default"
-      && source !== "task-override"
-      && source !== "boss-decision")
+    (collaborationMode !== "solo" &&
+      collaborationMode !== "team" &&
+      collaborationMode !== "hybrid") ||
+    (autopilotLevel !== "L0" && autopilotLevel !== "L1" && autopilotLevel !== "L2") ||
+    (bossParticipationMode !== "disabled" &&
+      bossParticipationMode !== "advisory" &&
+      bossParticipationMode !== "exception-only" &&
+      bossParticipationMode !== "full-manager") ||
+    (source !== undefined &&
+      source !== "system-default" &&
+      source !== "project-default" &&
+      source !== "task-override" &&
+      source !== "boss-decision")
   ) {
     return null;
   }
@@ -322,16 +337,19 @@ function asOperatingModeSelection(value: unknown) {
     collaborationMode,
     autopilotLevel,
     bossParticipationMode,
-    selectedTemplateId: typeof record.selectedTemplateId === "string" ? record.selectedTemplateId : null,
+    selectedTemplateId:
+      typeof record.selectedTemplateId === "string" ? record.selectedTemplateId : null,
     scenarioKey: typeof record.scenarioKey === "string" ? record.scenarioKey : undefined,
     source: source === undefined ? "task-override" : source,
   };
 }
 
 function isHumanOverrideDecision(decision: BossDecisionRecord) {
-  return decision.decisionType === "manual-override"
-    || decision.decisionType === "clear-override"
-    || decision.metadata?.actorType === "human";
+  return (
+    decision.decisionType === "manual-override" ||
+    decision.decisionType === "clear-override" ||
+    decision.metadata?.actorType === "human"
+  );
 }
 
 function roleMode(override: RoleAgentProjectOverrideRecord | null) {
@@ -344,11 +362,8 @@ function roleMode(override: RoleAgentProjectOverrideRecord | null) {
   return "platform-default" as const;
 }
 
-function effectiveStages(
-  role: RoleAgentRecord,
-  override: RoleAgentProjectOverrideRecord | null,
-) {
-  return override?.allowedStages?.length ? override.allowedStages : (role.allowedStages || []);
+function effectiveStages(role: RoleAgentRecord, override: RoleAgentProjectOverrideRecord | null) {
+  return override?.allowedStages?.length ? override.allowedStages : role.allowedStages || [];
 }
 
 function buildOverrideSummary(
@@ -370,7 +385,7 @@ function buildOverrideSummary(
   if (override.bindingsMode === "replace") {
     summary.push("项目完全接管执行器");
   }
-  return summary.join(" · ") || `沿用 ${role.name} 默认配置`; 
+  return summary.join(" · ") || `沿用 ${role.name} 默认配置`;
 }
 
 function executionModeLabel(value?: string | null) {
@@ -379,13 +394,14 @@ function executionModeLabel(value?: string | null) {
       return "并行评审";
     case "round-robin":
       return "轮询执行";
-    case "single":
     default:
       return "单执行器";
   }
 }
 
-function projectModeLabel(mode: "platform-default" | "project-extend" | "project-takeover" | "unregistered") {
+function projectModeLabel(
+  mode: "platform-default" | "project-extend" | "project-takeover" | "unregistered",
+) {
   if (mode === "project-takeover") return "项目接管";
   if (mode === "project-extend") return "项目增强";
   if (mode === "unregistered") return "未注册";
@@ -398,7 +414,8 @@ function interventionSummary(role: {
   effectiveStages: string[];
 }) {
   const risk = role.override?.riskLevel || role.role.riskLevel;
-  const requiresApproval = role.override?.requiresApprovalForWrite ?? role.role.requiresApprovalForWrite;
+  const requiresApproval =
+    role.override?.requiresApprovalForWrite ?? role.role.requiresApprovalForWrite;
   const stageText = role.effectiveStages.slice(0, 2).join(" / ");
   if (requiresApproval && (risk === "high" || risk === "critical")) {
     return `${stageText || "对应阶段"} 可阻断并请求审批`;
@@ -409,7 +426,10 @@ function interventionSummary(role: {
   return `${stageText || "对应阶段"} 提供建议与修正请求`;
 }
 
-function normalizeBindings(bindings: RoleAgentBindingRecord[] | undefined, source: "system" | "project") {
+function normalizeBindings(
+  bindings: RoleAgentBindingRecord[] | undefined,
+  source: "system" | "project",
+) {
   return (bindings || [])
     .map((binding) => ({
       id: binding.id,
@@ -437,39 +457,57 @@ function toPositiveNumber(value: unknown) {
 }
 
 function findStagePolicy(stage: WorkflowTemplateStageRecord, roleAgentId: string) {
-  return (stage.roleExecutionPoliciesJson || []).find((item) => item?.roleAgentId === roleAgentId) || null;
+  return (
+    (stage.roleExecutionPoliciesJson || []).find((item) => item?.roleAgentId === roleAgentId) ||
+    null
+  );
 }
 
 function describeGateSource(gateEntry: unknown) {
-  const gate = gateEntry && typeof gateEntry === "object" ? gateEntry as Record<string, unknown> : {};
-  const gateName = typeof gate.name === "string" && gate.name.trim() ? gate.name.trim() : String(gate.type || "Gate");
-  const evaluatorRole = typeof gate.evaluatorRole === "string" && gate.evaluatorRole.trim()
-    ? gate.evaluatorRole.trim()
-    : "未指定评估角色";
+  const gate =
+    gateEntry && typeof gateEntry === "object" ? (gateEntry as Record<string, unknown>) : {};
+  const gateName =
+    typeof gate.name === "string" && gate.name.trim()
+      ? gate.name.trim()
+      : String(gate.type || "Gate");
+  const evaluatorRole =
+    typeof gate.evaluatorRole === "string" && gate.evaluatorRole.trim()
+      ? gate.evaluatorRole.trim()
+      : "未指定评估角色";
   return `Gate：${gateName}，评估角色 ${evaluatorRole}`;
 }
 
 function describeApprovalSource(approvalEntry: unknown) {
-  const approval = approvalEntry && typeof approvalEntry === "object" ? approvalEntry as Record<string, unknown> : {};
-  const approvalName = typeof approval.name === "string" && approval.name.trim() ? approval.name.trim() : "审批项";
-  const approverRole = typeof approval.approverRole === "string" && approval.approverRole.trim()
-    ? approval.approverRole.trim()
-    : "未指定审批角色";
+  const approval =
+    approvalEntry && typeof approvalEntry === "object"
+      ? (approvalEntry as Record<string, unknown>)
+      : {};
+  const approvalName =
+    typeof approval.name === "string" && approval.name.trim() ? approval.name.trim() : "审批项";
+  const approverRole =
+    typeof approval.approverRole === "string" && approval.approverRole.trim()
+      ? approval.approverRole.trim()
+      : "未指定审批角色";
   return `Approval：${approvalName}，审批角色 ${approverRole}`;
 }
 
 function describeFailureFallback(stage: WorkflowTemplateStageRecord) {
-  const policy = stage.failurePolicyJson && typeof stage.failurePolicyJson === "object"
-    ? stage.failurePolicyJson as Record<string, unknown>
-    : null;
+  const policy =
+    stage.failurePolicyJson && typeof stage.failurePolicyJson === "object"
+      ? (stage.failurePolicyJson as Record<string, unknown>)
+      : null;
   if (!policy) {
     return null;
   }
 
-  const fallbackStageKey = typeof policy.fallbackStageKey === "string" && policy.fallbackStageKey.trim()
-    ? policy.fallbackStageKey.trim()
-    : "";
-  const action = typeof policy.action === "string" && policy.action.trim() ? policy.action.trim() : "manual-intervention";
+  const fallbackStageKey =
+    typeof policy.fallbackStageKey === "string" && policy.fallbackStageKey.trim()
+      ? policy.fallbackStageKey.trim()
+      : "";
+  const action =
+    typeof policy.action === "string" && policy.action.trim()
+      ? policy.action.trim()
+      : "manual-intervention";
   if (fallbackStageKey) {
     return `失败回退：当前阶段失败后按 ${action} 回到 ${fallbackStageKey}`;
   }
@@ -528,56 +566,33 @@ function resolveBindingResolution(
   systemBindings: RoleAgentBindingRecord[] | undefined,
   projectBindings: RoleAgentBindingRecord[] | undefined,
 ): BindingResolutionViewModel {
-  const activeSystem = normalizeBindings((systemBindings || []).filter((binding) => binding.enabled), "system");
-  const activeProject = normalizeBindings((projectBindings || []).filter((binding) => binding.enabled), "project");
+  const activeSystem = normalizeBindings(
+    (systemBindings || []).filter((binding) => binding.enabled),
+    "system",
+  );
+  const activeProject = normalizeBindings(
+    (projectBindings || []).filter((binding) => binding.enabled),
+    "project",
+  );
 
-  let candidatePool: BindingViewModel[] = [];
-  let source: BindingResolutionViewModel["source"] = "none";
-  let sourceReason = "当前没有可用执行器。";
-
-  if (roleRow?.mode === "project-takeover") {
-    candidatePool = [...activeProject];
-    source = candidatePool.length > 0 ? "project" : "none";
-    sourceReason = candidatePool.length > 0
-      ? "项目已接管该角色，仅使用项目专属执行器。"
-      : "项目已接管该角色，但当前没有启用的项目执行器。";
-  } else {
-    candidatePool = [...activeProject, ...activeSystem].sort((left, right) => {
-      if (left.priority !== right.priority) {
-        return left.priority - right.priority;
-      }
-      if (left.source !== right.source) {
-        return left.source === "project" ? -1 : 1;
-      }
-      return left.label.localeCompare(right.label, "zh-CN");
-    });
-    if (activeProject.length > 0 && activeSystem.length > 0) {
-      source = "mixed";
-      sourceReason = "项目增强模式下，平台默认执行器与项目专属执行器共同组成候选池。";
-    } else if (activeProject.length > 0) {
-      source = "project";
-      sourceReason = "当前仅命中项目专属执行器。";
-    } else if (activeSystem.length > 0) {
-      source = "system";
-      sourceReason = "当前沿用平台默认执行器。";
-    }
-  }
-
-  let activeCount = candidatePool.length;
-  if (executionMode === "single") {
-    activeCount = Math.min(1, candidatePool.length);
-    sourceReason = `${sourceReason} 单执行器模式下只命中优先级最高的 1 个执行器。`;
-  } else if (executionMode === "parallel-review") {
-    activeCount = maxBindings ? Math.min(maxBindings, candidatePool.length) : candidatePool.length;
-    sourceReason = `${sourceReason} 并行评审模式会并发命中 ${activeCount} 个执行器。`;
-  } else if (executionMode === "round-robin") {
-    activeCount = Math.min(1, candidatePool.length);
-    sourceReason = `${sourceReason} 轮询模式会从候选池中按顺序轮转，本次默认首选优先级最高的执行器。`;
-  }
+  const candidatePool =
+    roleRow?.mode === "project-takeover"
+      ? [...activeProject]
+      : [...activeProject, ...activeSystem].sort((left, right) => {
+          if (left.priority !== right.priority) {
+            return left.priority - right.priority;
+          }
+          if (left.source !== right.source) {
+            return left.source === "project" ? -1 : 1;
+          }
+          return left.label.localeCompare(right.label, "zh-CN");
+        });
+  const sourceInfo = resolveBindingSourceInfo(roleRow, activeProject, activeSystem, candidatePool);
+  const activeCount = resolveActiveBindingCount(candidatePool.length, executionMode, maxBindings);
 
   return {
-    source,
-    sourceReason,
+    source: sourceInfo.source,
+    sourceReason: describeBindingExecutionMode(sourceInfo.reason, executionMode, activeCount),
     activeBindings: candidatePool.slice(0, activeCount),
     standbyBindings: candidatePool.slice(activeCount),
     candidatePoolSize: candidatePool.length,
@@ -585,126 +600,271 @@ function resolveBindingResolution(
   };
 }
 
-function buildRoleMatrix(
-  stage: WorkflowTemplateStageRecord,
-  roleRows: Array<{
+function resolveBindingSourceInfo(
+  roleRow: {
+    mode: "platform-default" | "project-extend" | "project-takeover";
+  } | null,
+  activeProject: BindingViewModel[],
+  activeSystem: BindingViewModel[],
+  candidatePool: BindingViewModel[],
+) {
+  if (roleRow?.mode === "project-takeover") {
+    return {
+      source: candidatePool.length > 0 ? ("project" as const) : ("none" as const),
+      reason:
+        candidatePool.length > 0
+          ? "项目已接管该角色，仅使用项目专属执行器。"
+          : "项目已接管该角色，但当前没有启用的项目执行器。",
+    };
+  }
+
+  if (activeProject.length > 0 && activeSystem.length > 0) {
+    return {
+      source: "mixed" as const,
+      reason: "项目增强模式下，平台默认执行器与项目专属执行器共同组成候选池。",
+    };
+  }
+  if (activeProject.length > 0) {
+    return { source: "project" as const, reason: "当前仅命中项目专属执行器。" };
+  }
+  if (activeSystem.length > 0) {
+    return { source: "system" as const, reason: "当前沿用平台默认执行器。" };
+  }
+
+  return { source: "none" as const, reason: "当前没有可用执行器。" };
+}
+
+function resolveActiveBindingCount(
+  candidatePoolSize: number,
+  executionMode: string,
+  maxBindings: number | null,
+) {
+  if (executionMode === "single" || executionMode === "round-robin") {
+    return Math.min(1, candidatePoolSize);
+  }
+  if (executionMode === "parallel-review") {
+    return maxBindings ? Math.min(maxBindings, candidatePoolSize) : candidatePoolSize;
+  }
+  return candidatePoolSize;
+}
+
+function describeBindingExecutionMode(
+  sourceReason: string,
+  executionMode: string,
+  activeCount: number,
+) {
+  if (executionMode === "single") {
+    return `${sourceReason} 单执行器模式下只命中优先级最高的 1 个执行器。`;
+  }
+  if (executionMode === "parallel-review") {
+    return `${sourceReason} 并行评审模式会并发命中 ${activeCount} 个执行器。`;
+  }
+  if (executionMode === "round-robin") {
+    return `${sourceReason} 轮询模式会从候选池中按顺序轮转，本次默认首选优先级最高的执行器。`;
+  }
+  return sourceReason;
+}
+
+function buildRoleMatrixWarnings(args: {
+  roleRow: {
     role: RoleAgentRecord;
     override: RoleAgentProjectOverrideRecord | null;
     mode: "platform-default" | "project-extend" | "project-takeover";
     effectiveStages: string[];
     overrideSummary: string;
-  }>,
-  bindingsByRoleId: Record<string, { system: RoleAgentBindingRecord[]; project: RoleAgentBindingRecord[] }>,
-) {
-  const roleMap = new Map(roleRows.map((row) => [row.role.id, row] as const));
-  const matrix = new Map<string, StageRoleMatrixRowViewModel>();
+  } | null;
+  stageCovered: boolean;
+  stageKey: string;
+  bindingResolution: BindingResolutionViewModel;
+}) {
+  const warnings: string[] = [];
+  if (!args.roleRow) {
+    warnings.push("模板引用了未注册角色，当前无法解析其项目能力与执行器。");
+  }
+  if (args.roleRow?.role.status && args.roleRow.role.status !== "active") {
+    warnings.push(`角色状态为 ${args.roleRow.role.status}，运行时可能被跳过。`);
+  }
+  if (!args.stageCovered) {
+    warnings.push(`角色有效阶段未覆盖 ${args.stageKey}，模板与角色配置存在冲突。`);
+  }
+  if (args.bindingResolution.candidatePoolSize === 0) {
+    warnings.push("当前没有命中可用执行器，阶段虽有配置但运行时无法派发。");
+  }
+  return warnings;
+}
 
-  function ensure(roleAgentId: string) {
+function createRoleMatrixRow(args: {
+  roleAgentId: string;
+  roleRow: {
+    role: RoleAgentRecord;
+    override: RoleAgentProjectOverrideRecord | null;
+    mode: "platform-default" | "project-extend" | "project-takeover";
+    effectiveStages: string[];
+    overrideSummary: string;
+  } | null;
+  stage: WorkflowTemplateStageRecord;
+  bindingResolution: BindingResolutionViewModel;
+  executionMethod: ReturnType<typeof resolveExecutionMethod>;
+  stageCovered: boolean;
+}): StageRoleMatrixRowViewModel {
+  return {
+    roleAgentId: args.roleAgentId,
+    roleLabel: args.roleRow?.role.name || args.roleAgentId,
+    involvementKinds: [],
+    reasons: [],
+    executionMode: args.executionMethod.executionMode,
+    executionModeLabel: args.executionMethod.executionModeLabel,
+    executionMethodSource: args.executionMethod.executionMethodSource,
+    executionMethodSourceLabel: args.executionMethod.executionMethodSourceLabel,
+    projectMode: args.roleRow?.mode || "unregistered",
+    projectModeLabel: projectModeLabel(args.roleRow?.mode || "unregistered"),
+    impactSummary: args.roleRow
+      ? interventionSummary(args.roleRow)
+      : `${args.stage.stageKey} 由模板直接引用，当前无法判断更细的项目影响。`,
+    riskLevel: args.roleRow?.override?.riskLevel || args.roleRow?.role.riskLevel || "low",
+    stageCovered: args.stageCovered,
+    bindingResolution: args.bindingResolution,
+    warnings: buildRoleMatrixWarnings({
+      roleRow: args.roleRow,
+      stageCovered: args.stageCovered,
+      stageKey: args.stage.stageKey,
+      bindingResolution: args.bindingResolution,
+    }),
+  };
+}
+
+function createRoleMatrixEnsure(
+  stage: WorkflowTemplateStageRecord,
+  roleMap: Map<
+    string,
+    {
+      role: RoleAgentRecord;
+      override: RoleAgentProjectOverrideRecord | null;
+      mode: "platform-default" | "project-extend" | "project-takeover";
+      effectiveStages: string[];
+      overrideSummary: string;
+    }
+  >,
+  bindingsByRoleId: Record<
+    string,
+    { system: RoleAgentBindingRecord[]; project: RoleAgentBindingRecord[] }
+  >,
+  matrix: Map<string, StageRoleMatrixRowViewModel>,
+) {
+  return (roleAgentId: string) => {
     const existing = matrix.get(roleAgentId);
     if (existing) {
       return existing;
     }
+
     const roleRow = roleMap.get(roleAgentId) || null;
     const effectiveStageList = roleRow?.effectiveStages || [];
-    const stageCovered = effectiveStageList.length === 0 || effectiveStageList.includes(stage.stageKey);
+    const stageCovered =
+      effectiveStageList.length === 0 || effectiveStageList.includes(stage.stageKey);
     const executionMethod = resolveExecutionMethod(roleRow, stage, roleAgentId);
+    const bindings = bindingsByRoleId[roleAgentId];
     const bindingResolution = resolveBindingResolution(
       roleRow,
       executionMethod.executionMode,
       executionMethod.maxBindings,
-      bindingsByRoleId[roleAgentId]?.system,
-      bindingsByRoleId[roleAgentId]?.project,
+      bindings?.system,
+      bindings?.project,
     );
-    const warnings: string[] = [];
-    if (!roleRow) {
-      warnings.push("模板引用了未注册角色，当前无法解析其项目能力与执行器。");
-    }
-    if (roleRow?.role.status && roleRow.role.status !== "active") {
-      warnings.push(`角色状态为 ${roleRow.role.status}，运行时可能被跳过。`);
-    }
-    if (!stageCovered) {
-      warnings.push(`角色有效阶段未覆盖 ${stage.stageKey}，模板与角色配置存在冲突。`);
-    }
-    if (bindingResolution.candidatePoolSize === 0) {
-      warnings.push("当前没有命中可用执行器，阶段虽有配置但运行时无法派发。");
-    }
-    const created: StageRoleMatrixRowViewModel = {
+    const created = createRoleMatrixRow({
       roleAgentId,
-      roleLabel: roleRow?.role.name || roleAgentId,
-      involvementKinds: [],
-      reasons: [],
-      executionMode: executionMethod.executionMode,
-      executionModeLabel: executionMethod.executionModeLabel,
-      executionMethodSource: executionMethod.executionMethodSource,
-      executionMethodSourceLabel: executionMethod.executionMethodSourceLabel,
-      projectMode: roleRow?.mode || "unregistered",
-      projectModeLabel: projectModeLabel(roleRow?.mode || "unregistered"),
-      impactSummary: roleRow
-        ? interventionSummary(roleRow)
-        : `${stage.stageKey} 由模板直接引用，当前无法判断更细的项目影响。`,
-      riskLevel: roleRow?.override?.riskLevel || roleRow?.role.riskLevel || "low",
-      stageCovered,
+      roleRow,
+      stage,
       bindingResolution,
-      warnings,
-    };
+      executionMethod,
+      stageCovered,
+    });
     matrix.set(roleAgentId, created);
     return created;
-  }
+  };
+}
 
-  if (stage.primaryRoleAgentId) {
-    const row = ensure(stage.primaryRoleAgentId);
-    row.involvementKinds.push("主责");
-    row.reasons.push(`模板主责：${stage.stageKey} 由该角色负责推进`);
-  }
+function addPrimaryRoleToMatrix(
+  stage: WorkflowTemplateStageRecord,
+  ensure: (roleAgentId: string) => StageRoleMatrixRowViewModel,
+) {
+  const primary = ensure(stage.primaryRoleAgentId);
+  primary.involvementKinds.push("primary");
+  primary.reasons.push(`主角色：${stage.name} 的默认负责人。`);
+}
 
-  for (const participantRoleId of stage.participantRoleAgentIdsJson || []) {
-    const row = ensure(participantRoleId);
-    row.involvementKinds.push("参与");
-    row.reasons.push(`模板参与：${stage.stageKey} 将该角色列为协同参与者`);
-  }
-
-  for (const gateEntry of stage.gatesJson || []) {
-    const gate = gateEntry && typeof gateEntry === "object" ? gateEntry : {};
-    const evaluatorRole = typeof gate.evaluatorRole === "string" ? gate.evaluatorRole : "";
-    if (!evaluatorRole) {
-      if (stage.primaryRoleAgentId) {
-        ensure(stage.primaryRoleAgentId).reasons.push(`阶段控制：${describeGateSource(gateEntry)}`);
-      }
+function addParticipantRolesToMatrix(
+  stage: WorkflowTemplateStageRecord,
+  ensure: (roleAgentId: string) => StageRoleMatrixRowViewModel,
+) {
+  for (const roleAgentId of stage.participantRoleAgentIdsJson || []) {
+    if (!roleAgentId) {
       continue;
     }
-    const row = ensure(evaluatorRole);
-    row.involvementKinds.push("Gate 评估");
-    row.reasons.push(describeGateSource(gateEntry));
-    if (stage.primaryRoleAgentId && stage.primaryRoleAgentId !== evaluatorRole) {
-      ensure(stage.primaryRoleAgentId).reasons.push(`阶段控制：${describeGateSource(gateEntry)}`);
-    }
+    const participant = ensure(roleAgentId);
+    participant.involvementKinds.push("participant");
+    participant.reasons.push(`参与角色：${stage.name} 会并行纳入该角色的意见。`);
   }
+}
 
-  for (const approvalEntry of stage.approvalsJson || []) {
-    const approval = approvalEntry && typeof approvalEntry === "object" ? approvalEntry : {};
-    const approverRole = typeof approval.approverRole === "string" ? approval.approverRole : "";
-    if (!approverRole) {
-      if (stage.primaryRoleAgentId) {
-        ensure(stage.primaryRoleAgentId).reasons.push(`阶段控制：${describeApprovalSource(approvalEntry)}`);
-      }
+function addGateRolesToMatrix(
+  stage: WorkflowTemplateStageRecord,
+  ensure: (roleAgentId: string) => StageRoleMatrixRowViewModel,
+) {
+  for (const gate of stage.gatesJson || []) {
+    if (typeof gate?.evaluatorRole !== "string" || !gate.evaluatorRole.trim()) {
       continue;
     }
-    const row = ensure(approverRole);
-    row.involvementKinds.push("审批");
-    row.reasons.push(describeApprovalSource(approvalEntry));
-    if (stage.primaryRoleAgentId && stage.primaryRoleAgentId !== approverRole) {
-      ensure(stage.primaryRoleAgentId).reasons.push(`阶段控制：${describeApprovalSource(approvalEntry)}`);
+    const gateRow = ensure(gate.evaluatorRole.trim());
+    gateRow.involvementKinds.push("gate");
+    gateRow.reasons.push(describeGateSource(gate));
+  }
+}
+
+function addApprovalRolesToMatrix(
+  stage: WorkflowTemplateStageRecord,
+  ensure: (roleAgentId: string) => StageRoleMatrixRowViewModel,
+) {
+  for (const approval of stage.approvalsJson || []) {
+    if (typeof approval?.approverRole !== "string" || !approval.approverRole.trim()) {
+      continue;
     }
+    const approvalRow = ensure(approval.approverRole.trim());
+    approvalRow.involvementKinds.push("approval");
+    approvalRow.reasons.push(describeApprovalSource(approval));
+  }
+}
+
+function applyFailureFallbackReason(
+  stage: WorkflowTemplateStageRecord,
+  matrix: Map<string, StageRoleMatrixRowViewModel>,
+) {
+  const fallbackReason = describeFailureFallback(stage);
+  if (!fallbackReason) {
+    return;
   }
 
-  const failureFallbackReason = describeFailureFallback(stage);
-  if (failureFallbackReason) {
-    for (const row of matrix.values()) {
-      if (row.involvementKinds.includes("主责") || row.involvementKinds.includes("Gate 评估") || row.involvementKinds.includes("审批")) {
-        row.reasons.push(failureFallbackReason);
-      }
-    }
+  for (const row of matrix.values()) {
+    row.reasons.push(fallbackReason);
   }
+}
+
+function buildRoleMatrix(
+  stage: WorkflowTemplateStageRecord,
+  roleRows: ProjectRoleExecutionViewRow[],
+  bindingsByRoleId: Record<
+    string,
+    { system: RoleAgentBindingRecord[]; project: RoleAgentBindingRecord[] }
+  >,
+) {
+  const roleMap = new Map(roleRows.map((row) => [row.role.id, row] as const));
+  const matrix = new Map<string, StageRoleMatrixRowViewModel>();
+  const ensure = createRoleMatrixEnsure(stage, roleMap, bindingsByRoleId, matrix);
+
+  addPrimaryRoleToMatrix(stage, ensure);
+  addParticipantRolesToMatrix(stage, ensure);
+  addGateRolesToMatrix(stage, ensure);
+  addApprovalRolesToMatrix(stage, ensure);
+  applyFailureFallbackReason(stage, matrix);
 
   return Array.from(matrix.values()).map((item) => ({
     ...item,
@@ -730,7 +890,11 @@ function severityWeight(input: {
   if (input.workflowStatus === "waiting-approval") return 1;
   if (input.openEscalationCount > 0) return 2;
   if (input.latestDecisionType === "hold-stage") return 3;
-  if (input.latestDecisionType === "request-approval" || input.latestDecisionType === "escalate-human") return 4;
+  if (
+    input.latestDecisionType === "request-approval" ||
+    input.latestDecisionType === "escalate-human"
+  )
+    return 4;
   return 5;
 }
 
@@ -753,9 +917,12 @@ async function fetchTaskEscalations(taskId: string, authorization: string) {
 async function buildProjectBossOperationsView(projectId: string, authorization: string) {
   const [projectResult, tasksResult] = await Promise.all([
     cpFetch<ProjectRecord>(`/api/projects/${encodeURIComponent(projectId)}`, { authorization }),
-    cpFetch<{ data?: ProjectTaskRecord[] }>(`/api/tasks?projectId=${encodeURIComponent(projectId)}&limit=50`, {
-      authorization,
-    }),
+    cpFetch<{ data?: ProjectTaskRecord[] }>(
+      `/api/tasks?projectId=${encodeURIComponent(projectId)}&limit=50`,
+      {
+        authorization,
+      },
+    ),
   ]);
 
   if (!projectResult.ok) {
@@ -778,7 +945,9 @@ async function buildProjectBossOperationsView(projectId: string, authorization: 
       ]);
 
       const openEscalations = escalations.filter((item) => isOpenEscalation(item.status));
-      const latestBossDecision = [...bossDecisions].sort((left, right) => right.ts.localeCompare(left.ts))[0];
+      const latestBossDecision = [...bossDecisions].sort((left, right) =>
+        right.ts.localeCompare(left.ts),
+      )[0];
       const currentStage = workflowView.workflow.stages.find(
         (stage) => stage.stageKey === workflowView.workflow.currentStage,
       );
@@ -824,54 +993,71 @@ async function buildProjectBossOperationsView(projectId: string, authorization: 
 
   const overrideHistory = taskViews
     .flatMap(({ task, workflowView, bossDecisions }) =>
-      bossDecisions
-        .filter(isHumanOverrideDecision)
-        .map((decision) => ({
-          ...decision,
-          taskId: task.id,
-          taskTitle: task.title || task.id,
-          taskStatus: task.status || "unknown",
-          workflowStatus: workflowView.workflow.status,
-          currentStageKey: workflowView.workflow.currentStage,
-          actorId: typeof decision.metadata?.actorId === "string" ? decision.metadata.actorId : null,
-          overrideAction: typeof decision.metadata?.action === "string" ? decision.metadata.action : null,
-          previousMode: asOperatingModeSelection(decision.metadata?.previousMode),
-          nextMode: asOperatingModeSelection(decision.metadata?.nextMode),
-        })),
+      bossDecisions.filter(isHumanOverrideDecision).map((decision) => ({
+        ...decision,
+        taskId: task.id,
+        taskTitle: task.title || task.id,
+        taskStatus: task.status || "unknown",
+        workflowStatus: workflowView.workflow.status,
+        currentStageKey: workflowView.workflow.currentStage,
+        actorId: typeof decision.metadata?.actorId === "string" ? decision.metadata.actorId : null,
+        overrideAction:
+          typeof decision.metadata?.action === "string" ? decision.metadata.action : null,
+        previousMode: asOperatingModeSelection(decision.metadata?.previousMode),
+        nextMode: asOperatingModeSelection(decision.metadata?.nextMode),
+      })),
     )
     .sort((left, right) => right.ts.localeCompare(left.ts));
 
   const attentionTasks = taskViews
-    .filter(({ workflowView, openEscalations, latestBossDecision }) => (
-      workflowView.workflow.status === "blocked"
-      || workflowView.workflow.status === "waiting-approval"
-      || openEscalations.length > 0
-      || latestBossDecision?.decisionType === "hold-stage"
-      || latestBossDecision?.decisionType === "request-approval"
-      || latestBossDecision?.decisionType === "escalate-human"
-    ))
-    .map(({ task, workflowView, openEscalations, latestBossDecision, bossDecisions, currentStage }) => ({
-      taskId: task.id,
-      taskTitle: task.title || task.id,
-      taskStatus: task.status || "unknown",
-      workflowStatus: workflowView.workflow.status,
-      currentStageKey: workflowView.workflow.currentStage,
-      currentStageLabel: currentStage?.stageLabel || workflowView.workflow.currentStage,
-      currentStageStatus: currentStage?.status || "unknown",
-      blockingReason: currentStage?.blockingReason,
-      openEscalationCount: openEscalations.length,
-      bossDecisionCount: bossDecisions.length,
-      latestDecisionType: latestBossDecision?.decisionType,
-      latestDecisionReason: latestBossDecision?.reason,
-      latestDecisionTs: latestBossDecision?.ts || task.updatedAt || task.finishedAt || task.startedAt || task.createdAt || null,
-    }))
+    .filter(
+      ({ workflowView, openEscalations, latestBossDecision }) =>
+        workflowView.workflow.status === "blocked" ||
+        workflowView.workflow.status === "waiting-approval" ||
+        openEscalations.length > 0 ||
+        latestBossDecision?.decisionType === "hold-stage" ||
+        latestBossDecision?.decisionType === "request-approval" ||
+        latestBossDecision?.decisionType === "escalate-human",
+    )
+    .map(
+      ({
+        task,
+        workflowView,
+        openEscalations,
+        latestBossDecision,
+        bossDecisions,
+        currentStage,
+      }) => ({
+        taskId: task.id,
+        taskTitle: task.title || task.id,
+        taskStatus: task.status || "unknown",
+        workflowStatus: workflowView.workflow.status,
+        currentStageKey: workflowView.workflow.currentStage,
+        currentStageLabel: currentStage?.stageLabel || workflowView.workflow.currentStage,
+        currentStageStatus: currentStage?.status || "unknown",
+        blockingReason: currentStage?.blockingReason,
+        openEscalationCount: openEscalations.length,
+        bossDecisionCount: bossDecisions.length,
+        latestDecisionType: latestBossDecision?.decisionType,
+        latestDecisionReason: latestBossDecision?.reason,
+        latestDecisionTs:
+          latestBossDecision?.ts ||
+          task.updatedAt ||
+          task.finishedAt ||
+          task.startedAt ||
+          task.createdAt ||
+          null,
+      }),
+    )
     .sort((left, right) => {
       const leftWeight = severityWeight(left);
       const rightWeight = severityWeight(right);
       if (leftWeight !== rightWeight) {
         return leftWeight - rightWeight;
       }
-      return String(right.latestDecisionTs || "").localeCompare(String(left.latestDecisionTs || ""));
+      return String(right.latestDecisionTs || "").localeCompare(
+        String(left.latestDecisionTs || ""),
+      );
     });
 
   const summary = {
@@ -879,8 +1065,11 @@ async function buildProjectBossOperationsView(projectId: string, authorization: 
     tasksWithBossDecisions: taskViews.filter((item) => item.bossDecisions.length > 0).length,
     totalBossDecisions: timeline.length,
     openEscalations: escalations.length,
-    blockedTasks: taskViews.filter((item) => item.workflowView.workflow.status === "blocked").length,
-    waitingApprovalTasks: taskViews.filter((item) => item.workflowView.workflow.status === "waiting-approval").length,
+    blockedTasks: taskViews.filter((item) => item.workflowView.workflow.status === "blocked")
+      .length,
+    waitingApprovalTasks: taskViews.filter(
+      (item) => item.workflowView.workflow.status === "waiting-approval",
+    ).length,
     tasksNeedingAttention: attentionTasks.length,
     manualOverrides: overrideHistory.length,
   };
@@ -938,22 +1127,28 @@ async function buildProjectTaskGraphView(projectId: string, authorization: strin
     return relationResult;
   }
 
-  const tasks = (taskResult.data?.data || []).map((task) => ({
-    ...task,
-    currentStageLabel: inferTaskStageLabel(task),
-    latestActivityAt: task.finishedAt || task.startedAt || task.createdAt || null,
-  } satisfies ProjectTaskGraphTaskViewModel));
+  const tasks = (taskResult.data?.data || []).map(
+    (task) =>
+      ({
+        ...task,
+        currentStageLabel: inferTaskStageLabel(task),
+        latestActivityAt: task.finishedAt || task.startedAt || task.createdAt || null,
+      }) satisfies ProjectTaskGraphTaskViewModel,
+  );
 
   const taskIds = new Set(tasks.map((task) => task.id));
-  const edges = (relationResult.data?.data || []).filter(
-    (relation) => taskIds.has(relation.sourceTaskId) && taskIds.has(relation.targetTaskId),
-  ).map((relation) => ({
-    id: relation.id,
-    sourceTaskId: relation.sourceTaskId,
-    targetTaskId: relation.targetTaskId,
-    type: relation.type,
-    source: relation.source,
-  } satisfies ProjectTaskGraphEdgeViewModel));
+  const edges = (relationResult.data?.data || [])
+    .filter((relation) => taskIds.has(relation.sourceTaskId) && taskIds.has(relation.targetTaskId))
+    .map(
+      (relation) =>
+        ({
+          id: relation.id,
+          sourceTaskId: relation.sourceTaskId,
+          targetTaskId: relation.targetTaskId,
+          type: relation.type,
+          source: relation.source,
+        }) satisfies ProjectTaskGraphEdgeViewModel,
+    );
 
   const relationTypes = new Set(edges.map((edge) => edge.type));
 
@@ -1027,7 +1222,10 @@ function buildScenario(
     effectiveStages: string[];
     overrideSummary: string;
   }>,
-  bindingsByRoleId: Record<string, { system: RoleAgentBindingRecord[]; project: RoleAgentBindingRecord[] }>,
+  bindingsByRoleId: Record<
+    string,
+    { system: RoleAgentBindingRecord[]; project: RoleAgentBindingRecord[] }
+  >,
   runtimeSummaries: Record<string, ProjectStageRuntimeSummaryViewModel> = {},
 ): OrchestrationScenarioViewModel {
   return {
@@ -1041,7 +1239,9 @@ function buildScenario(
       mode: stage.mode,
       orderIndex: stage.orderIndex,
       primaryRoleAgentId: stage.primaryRoleAgentId,
-      primaryRoleLabel: roleRows.find((row) => row.role.id === stage.primaryRoleAgentId)?.role.name || stage.primaryRoleAgentId,
+      primaryRoleLabel:
+        roleRows.find((row) => row.role.id === stage.primaryRoleAgentId)?.role.name ||
+        stage.primaryRoleAgentId,
       participantRoleAgentIdsJson: stage.participantRoleAgentIdsJson || [],
       gatesJson: stage.gatesJson || [],
       approvalsJson: stage.approvalsJson || [],
@@ -1057,7 +1257,7 @@ async function getProjectRoleExecutionView(projectId: string, authorization: str
     cpFetch<ProjectRecord>(`/api/projects/${encodeURIComponent(projectId)}`, {
       authorization,
     }),
-    cpFetch<{ data?: RoleAgentRecord[] }>(`/api/role-agents?scope=system`, {
+    cpFetch<{ data?: RoleAgentRecord[] }>("/api/role-agents?scope=system", {
       authorization,
     }),
   ]);
@@ -1139,6 +1339,306 @@ async function getProjectRoleExecutionView(projectId: string, authorization: str
           : "当前账号无法读取项目级定制字段，已回退展示平台默认角色配置。",
       },
     },
+  };
+}
+
+function canManageProjectOrchestrationView(
+  user: {
+    role?: string;
+    projects?: Array<{ id: string; role: string }>;
+  },
+  projectId: string,
+) {
+  return (
+    user.role === "platform_admin" ||
+    user.role === "org_admin" ||
+    Boolean(user.projects?.some((item) => item.id === projectId && item.role === "project_admin"))
+  );
+}
+
+async function loadProjectOrchestrationResources(projectId: string, authorization: string) {
+  const [projectResult, roleExecutionResult, bindingResult, templatesResult] = await Promise.all([
+    cpFetch<ProjectRecord>(`/api/projects/${encodeURIComponent(projectId)}`, { authorization }),
+    getProjectRoleExecutionView(projectId, authorization),
+    fetchProjectWorkflowBinding(projectId, authorization),
+    fetchWorkflowTemplates(authorization),
+  ]);
+
+  return { projectResult, roleExecutionResult, bindingResult, templatesResult };
+}
+
+function findProjectOrchestrationErrorResponse(resources: {
+  projectResult: Awaited<ReturnType<typeof cpFetch<ProjectRecord>>>;
+  roleExecutionResult: Awaited<ReturnType<typeof getProjectRoleExecutionView>>;
+  bindingResult: Awaited<ReturnType<typeof fetchProjectWorkflowBinding>>;
+  templatesResult: Awaited<ReturnType<typeof fetchWorkflowTemplates>>;
+}) {
+  if (!resources.projectResult.ok) {
+    return {
+      data: resources.projectResult.data,
+      status: resources.projectResult.status as 401 | 403 | 404 | 502,
+    };
+  }
+  if (!resources.roleExecutionResult.ok) {
+    return {
+      data: resources.roleExecutionResult.data,
+      status: resources.roleExecutionResult.status as 401 | 403 | 404 | 502,
+    };
+  }
+  if (!resources.bindingResult.ok) {
+    return {
+      data: resources.bindingResult.data,
+      status: resources.bindingResult.status as 401 | 403 | 404 | 502,
+    };
+  }
+  if (!resources.templatesResult.ok) {
+    return {
+      data: resources.templatesResult.data,
+      status: resources.templatesResult.status as 401 | 403 | 404 | 502,
+    };
+  }
+
+  return null;
+}
+
+function selectProjectWorkflowTemplates(
+  templates: WorkflowTemplateRecord[],
+  projectId: string,
+) {
+  return templates.filter(
+    (item) => item.enabled && (item.selectableByProjects || item.projectId === projectId),
+  );
+}
+
+async function loadCurrentWorkflowStages(
+  currentTemplate: WorkflowTemplateRecord | null,
+  authorization: string,
+) {
+  if (!currentTemplate) {
+    return {
+      ok: true as const,
+      status: 200 as const,
+      data: { data: [] as WorkflowTemplateStageRecord[] },
+    };
+  }
+
+  return fetchWorkflowTemplateStages(currentTemplate.id, authorization);
+}
+
+async function loadBindingsByRoleId(
+  roleRows: ProjectRoleExecutionViewRow[],
+  projectId: string,
+  authorization: string,
+) {
+  return Object.fromEntries(
+    await Promise.all(
+      roleRows.map(
+        async (row) =>
+          [row.role.id, await fetchRoleBindings(row.role.id, projectId, authorization)] as const,
+      ),
+    ),
+  );
+}
+
+async function buildCandidateScenario(args: {
+  candidateTemplateId: string | undefined;
+  currentTemplateId: string | null;
+  selectableTemplates: WorkflowTemplateRecord[];
+  authorization: string;
+  roleRows: ProjectRoleExecutionViewRow[];
+  bindingsByRoleId: Record<
+    string,
+    { system: RoleAgentBindingRecord[]; project: RoleAgentBindingRecord[] }
+  >;
+}) {
+  if (!args.candidateTemplateId || args.candidateTemplateId === args.currentTemplateId) {
+    return { scenario: null, error: null };
+  }
+
+  const candidateTemplate =
+    args.selectableTemplates.find((item) => item.id === args.candidateTemplateId) || null;
+  if (!candidateTemplate) {
+    return { scenario: null, error: null };
+  }
+
+  const candidateStagesResult = await fetchWorkflowTemplateStages(
+    candidateTemplate.id,
+    args.authorization,
+  );
+  if (!candidateStagesResult.ok) {
+    return {
+      scenario: null,
+      error: {
+        data: candidateStagesResult.data,
+        status: candidateStagesResult.status as 401 | 403 | 404 | 502,
+      },
+    };
+  }
+
+  return {
+    scenario: buildScenario(
+      "candidate",
+      candidateTemplate,
+      candidateStagesResult.data.data || [],
+      args.roleRows,
+      args.bindingsByRoleId,
+    ),
+    error: null,
+  };
+}
+
+async function buildCurrentScenario(args: {
+  projectId: string;
+  currentTemplate: WorkflowTemplateRecord | null;
+  currentStages: WorkflowTemplateStageRecord[];
+  roleRows: ProjectRoleExecutionViewRow[];
+  bindingsByRoleId: Record<
+    string,
+    { system: RoleAgentBindingRecord[]; project: RoleAgentBindingRecord[] }
+  >;
+  authorization: string;
+}) {
+  const runtimeSummaries = args.currentTemplate
+    ? await buildProjectWorkflowStageRuntimeSummaries({
+        projectId: args.projectId,
+        templateId: args.currentTemplate.id,
+        stageKeys: args.currentStages.map((stage) => stage.stageKey),
+        authorization: args.authorization,
+      })
+    : {};
+
+  return buildScenario(
+    "current",
+    args.currentTemplate,
+    args.currentStages,
+    args.roleRows,
+    args.bindingsByRoleId,
+    runtimeSummaries,
+  );
+}
+
+function buildProjectOrchestrationViewPayload(args: {
+  project: ProjectRecord;
+  workflowTemplateId: string | null;
+  currentTemplate: WorkflowTemplateRecord | null;
+  selectableTemplates: WorkflowTemplateRecord[];
+  canManage: boolean;
+  roleExecutionView: ProjectRoleExecutionViewData;
+  bindingsByRoleId: Record<
+    string,
+    { system: RoleAgentBindingRecord[]; project: RoleAgentBindingRecord[] }
+  >;
+  currentScenario: OrchestrationScenarioViewModel;
+  candidateScenario: OrchestrationScenarioViewModel | null;
+}) {
+  return {
+    project: {
+      id: args.project.id,
+      name: args.project.name || args.project.id,
+      slug: args.project.slug || "",
+    },
+    workflowTemplateId: args.workflowTemplateId,
+    currentTemplate: args.currentTemplate,
+    selectableTemplates: args.selectableTemplates,
+    access: {
+      canManage: args.canManage,
+      message: args.roleExecutionView.access.message || null,
+    },
+    roleCapabilities: args.roleExecutionView.rows.map((row) => ({
+      ...row,
+      executionModeLabel: executionModeLabel(
+        row.override?.defaultExecutionMode || row.role.defaultExecutionMode,
+      ),
+      projectModeLabel: projectModeLabel(row.mode),
+      bindingCounts: {
+        system:
+          args.bindingsByRoleId[row.role.id]?.system.filter((binding) => binding.enabled).length ||
+          0,
+        project:
+          args.bindingsByRoleId[row.role.id]?.project.filter((binding) => binding.enabled).length ||
+          0,
+      },
+    })),
+    scenarios: {
+      current: args.currentScenario,
+      candidate: args.candidateScenario,
+    },
+  };
+}
+
+async function buildProjectOrchestrationView(args: {
+  projectId: string;
+  authorization: string;
+  candidateTemplateId?: string;
+  user: {
+    role?: string;
+    projects?: Array<{ id: string; role: string }>;
+  };
+}) {
+  const canManage = canManageProjectOrchestrationView(args.user, args.projectId);
+  const resources = await loadProjectOrchestrationResources(args.projectId, args.authorization);
+  const resourceError = findProjectOrchestrationErrorResponse(resources);
+  if (resourceError) {
+    return resourceError;
+  }
+
+  const project = resources.projectResult.data;
+  const roleExecutionView = resources.roleExecutionResult.data as ProjectRoleExecutionViewData;
+  const workflowBinding = resources.bindingResult.data;
+  const selectableTemplates = selectProjectWorkflowTemplates(
+    resources.templatesResult.data.data || [],
+    args.projectId,
+  );
+  const currentTemplate = workflowBinding.template;
+  const currentStagesResult = await loadCurrentWorkflowStages(currentTemplate, args.authorization);
+  if (!currentStagesResult.ok) {
+    return {
+      data: currentStagesResult.data,
+      status: currentStagesResult.status as 401 | 403 | 404 | 502,
+    };
+  }
+
+  const currentStages = currentStagesResult.data.data || [];
+  const roleRows = roleExecutionView.rows;
+  const bindingsByRoleId = await loadBindingsByRoleId(
+    roleRows,
+    args.projectId,
+    args.authorization,
+  );
+  const candidateScenarioResult = await buildCandidateScenario({
+    candidateTemplateId: args.candidateTemplateId,
+    currentTemplateId: workflowBinding.workflowTemplateId,
+    selectableTemplates,
+    authorization: args.authorization,
+    roleRows,
+    bindingsByRoleId,
+  });
+  if (candidateScenarioResult.error) {
+    return candidateScenarioResult.error;
+  }
+
+  const currentScenario = await buildCurrentScenario({
+    projectId: args.projectId,
+    currentTemplate,
+    currentStages,
+    roleRows,
+    bindingsByRoleId,
+    authorization: args.authorization,
+  });
+
+  return {
+    data: buildProjectOrchestrationViewPayload({
+      project,
+      workflowTemplateId: workflowBinding.workflowTemplateId,
+      currentTemplate,
+      selectableTemplates,
+      canManage,
+      roleExecutionView,
+      bindingsByRoleId,
+      currentScenario,
+      candidateScenario: candidateScenarioResult.scenario,
+    }),
+    status: 200 as const,
   };
 }
 
@@ -1295,7 +1795,10 @@ projectRoutes.post("/:projectId/paid-execution-lease", async (c) => {
       authorization: authHeader(c),
     },
   );
-  return c.json(result.data, result.ok ? 201 : (result.status as 400 | 401 | 403 | 404 | 409 | 502));
+  return c.json(
+    result.data,
+    result.ok ? 201 : (result.status as 400 | 401 | 403 | 404 | 409 | 502),
+  );
 });
 
 projectRoutes.delete("/:projectId/paid-execution-lease/:leaseId", async (c) => {
@@ -1358,16 +1861,19 @@ projectRoutes.get("/:projectId/paid-execution-preflight", async (c) => {
     leaseResult.data,
   );
 
-  return c.json({
-    projectId,
-    defaultModel: projectResult.data.settings?.defaultModel || null,
-    effectiveModel: defaultModel || `${preflight.policy.providerId}:${preflight.policy.modelId}`,
-    allowed: preflight.allowed,
-    activeLease: preflight.activeLease,
-    policy: preflight.policy,
-    requirements: preflight.requirements,
-    preflight: preflight.estimate,
-  }, 200);
+  return c.json(
+    {
+      projectId,
+      defaultModel: projectResult.data.settings?.defaultModel || null,
+      effectiveModel: defaultModel || `${preflight.policy.providerId}:${preflight.policy.modelId}`,
+      allowed: preflight.allowed,
+      activeLease: preflight.activeLease,
+      policy: preflight.policy,
+      requirements: preflight.requirements,
+      preflight: preflight.estimate,
+    },
+    200,
+  );
 });
 
 projectRoutes.get("/:projectId/runtime-usage-ledgers", async (c) => {
@@ -1439,112 +1945,15 @@ projectRoutes.get("/:projectId/orchestration-view", async (c) => {
     role?: string;
     projects?: Array<{ id: string; role: string }>;
   };
-  const canManage =
-    user.role === "platform_admin"
-    || user.role === "org_admin"
-    || Boolean(user.projects?.some((item) => item.id === projectId && item.role === "project_admin"));
 
   try {
-    const [projectResult, roleExecutionResult, bindingResult, templatesResult] = await Promise.all([
-      cpFetch<ProjectRecord>(`/api/projects/${encodeURIComponent(projectId)}`, { authorization }),
-      getProjectRoleExecutionView(projectId, authorization),
-      fetchProjectWorkflowBinding(projectId, authorization),
-      fetchWorkflowTemplates(authorization),
-    ]);
-
-    if (!projectResult.ok) {
-      return c.json(projectResult.data, projectResult.status as 401 | 403 | 404 | 502);
-    }
-    if (!roleExecutionResult.ok) {
-      return c.json(roleExecutionResult.data, roleExecutionResult.status as 401 | 403 | 404 | 502);
-    }
-    if (!bindingResult.ok) {
-      return c.json(bindingResult.data, bindingResult.status as 401 | 403 | 404 | 502);
-    }
-    if (!templatesResult.ok) {
-      return c.json(templatesResult.data, templatesResult.status as 401 | 403 | 404 | 502);
-    }
-
-    const selectableTemplates = (templatesResult.data.data || []).filter(
-      (item) => item.enabled && (item.selectableByProjects || item.projectId === projectId),
-    );
-    const currentTemplate = bindingResult.data.template;
-    const currentStagesResult = currentTemplate
-      ? await fetchWorkflowTemplateStages(currentTemplate.id, authorization)
-      : { ok: true as const, status: 200, data: { data: [] as WorkflowTemplateStageRecord[] } };
-
-    if (!currentStagesResult.ok) {
-      return c.json(currentStagesResult.data, currentStagesResult.status as 401 | 403 | 404 | 502);
-    }
-
-    const roleRows = roleExecutionResult.data.rows;
-    const bindingsByRoleId = Object.fromEntries(
-      await Promise.all(
-        roleRows.map(async (row) => [row.role.id, await fetchRoleBindings(row.role.id, projectId, authorization)] as const),
-      ),
-    );
-
-    let candidateScenario: OrchestrationScenarioViewModel | null = null;
-    if (candidateTemplateId && candidateTemplateId !== bindingResult.data.workflowTemplateId) {
-      const candidateTemplate = selectableTemplates.find((item) => item.id === candidateTemplateId) || null;
-      if (candidateTemplate) {
-        const candidateStagesResult = await fetchWorkflowTemplateStages(candidateTemplate.id, authorization);
-        if (!candidateStagesResult.ok) {
-          return c.json(candidateStagesResult.data, candidateStagesResult.status as 401 | 403 | 404 | 502);
-        }
-        candidateScenario = buildScenario(
-          "candidate",
-          candidateTemplate,
-          candidateStagesResult.data.data || [],
-          roleRows,
-          bindingsByRoleId,
-        );
-      }
-    }
-
-    const currentScenario = buildScenario(
-      "current",
-      currentTemplate,
-      currentStagesResult.data.data || [],
-      roleRows,
-      bindingsByRoleId,
-      currentTemplate
-        ? await buildProjectWorkflowStageRuntimeSummaries({
-            projectId,
-            templateId: currentTemplate.id,
-            stageKeys: (currentStagesResult.data.data || []).map((stage) => stage.stageKey),
-            authorization,
-          })
-        : {},
-    );
-
-    return c.json({
-      project: {
-        id: projectResult.data.id,
-        name: projectResult.data.name || projectResult.data.id,
-        slug: projectResult.data.slug || "",
-      },
-      workflowTemplateId: bindingResult.data.workflowTemplateId,
-      currentTemplate,
-      selectableTemplates,
-      access: {
-        canManage,
-        message: roleExecutionResult.data.access.message || null,
-      },
-      roleCapabilities: roleRows.map((row) => ({
-        ...row,
-        executionModeLabel: executionModeLabel(row.override?.defaultExecutionMode || row.role.defaultExecutionMode),
-        projectModeLabel: projectModeLabel(row.mode),
-        bindingCounts: {
-          system: bindingsByRoleId[row.role.id]?.system.filter((binding) => binding.enabled).length || 0,
-          project: bindingsByRoleId[row.role.id]?.project.filter((binding) => binding.enabled).length || 0,
-        },
-      })),
-      scenarios: {
-        current: currentScenario,
-        candidate: candidateScenario,
-      },
-    }, 200);
+    const result = await buildProjectOrchestrationView({
+      projectId,
+      authorization,
+      candidateTemplateId,
+      user,
+    });
+    return c.json(result.data, result.status);
   } catch (error) {
     return c.json(
       { message: error instanceof Error ? error.message : "Failed to build orchestration view" },
@@ -1583,7 +1992,9 @@ projectRoutes.get("/:projectId/task-graph-view", async (c) => {
     return c.json(result.data, 200);
   } catch (error) {
     return c.json(
-      { message: error instanceof Error ? error.message : "Failed to build project task graph view" },
+      {
+        message: error instanceof Error ? error.message : "Failed to build project task graph view",
+      },
       502,
     );
   }

@@ -3,19 +3,19 @@ import { join, resolve } from "node:path";
 import { z } from "zod";
 import { parseFrontmatter, serializeFrontmatter } from "../../lib/frontmatter";
 import {
+  type OrchestrationStrategy,
+  getOrchestrationStrategyVersion,
+  normalizeOrchestrationStrategy,
+  readOrchestrationStrategy,
+  writeOrchestrationStrategy,
+} from "../../lib/orchestration-strategy";
+import {
   getConfiguredPluginPaths,
   getDisabledPluginPaths,
   normalizePluginConfigPath,
   resolveAllowedPluginInstallSource,
   setConfiguredPluginState,
 } from "../config/routes";
-import {
-  getOrchestrationStrategyVersion,
-  normalizeOrchestrationStrategy,
-  readOrchestrationStrategy,
-  type OrchestrationStrategy,
-  writeOrchestrationStrategy,
-} from "../../lib/orchestration-strategy";
 import type {
   MarkdownConfigDetail,
   McpServer,
@@ -127,7 +127,11 @@ export function readModelsConfig(): ModelsConfig {
   const config = readOpencodeJson();
   const models = (config.models as Record<string, unknown>) || {};
   return {
-    defaults: ((config.agents as Record<string, unknown> | undefined)?.defaults as Record<string, unknown>) || {},
+    defaults:
+      ((config.agents as Record<string, unknown> | undefined)?.defaults as Record<
+        string,
+        unknown
+      >) || {},
     providers: (models.providers as Record<string, unknown>) || {},
     list: (models.list as Array<Record<string, unknown>>) || [],
   };
@@ -186,44 +190,93 @@ function isSafeConfigName(name: string): boolean {
   return /^[A-Za-z0-9._-]+$/.test(name);
 }
 
+function resolveMarkdownConfigFilePath(kind: "agent" | "skill" | "command", name: string) {
+  return kind === "agent"
+    ? join(AGENTS_DIR, `${name}.md`)
+    : kind === "skill"
+      ? join(SKILLS_DIR, name, "SKILL.md")
+      : join(COMMANDS_DIR, `${name}.md`);
+}
+
+function getMarkdownConfigVersion(kind: "agent" | "skill" | "command", name: string) {
+  return kind === "agent"
+    ? getAgentConfigVersion(name)
+    : kind === "skill"
+      ? getSkillConfigVersion(name)
+      : getCommandConfigVersion(name);
+}
+
+function getMarkdownConfigVersionConflictMessage(kind: "agent" | "skill" | "command") {
+  return kind === "agent"
+    ? "Agent 配置已更新，请刷新后重试。"
+    : kind === "skill"
+      ? "Skill 配置已更新，请刷新后重试。"
+      : "命令配置已更新，请刷新后重试。";
+}
+
+function validateRequiredFrontmatterKeys(
+  frontmatter: Record<string, unknown>,
+  kind: "agent" | "skill" | "command",
+  requiredFrontmatterKeys?: string[],
+) {
+  for (const key of requiredFrontmatterKeys || []) {
+    const value = frontmatter[key];
+    if (typeof value !== "string" || !value.trim()) {
+      return { ok: false as const, status: 400, error: `${kind} frontmatter 必须保留 ${key}` };
+    }
+  }
+
+  return { ok: true as const };
+}
+
+function writeMarkdownPatchedConfig(
+  filePath: string,
+  kind: "agent" | "skill" | "command",
+  name: string,
+  frontmatter: Record<string, unknown>,
+  body: string,
+) {
+  writeFileSync(filePath, serializeFrontmatter(frontmatter, body), "utf-8");
+  return {
+    ok: true as const,
+    data: { name, frontmatter, body },
+    configVersion: getMarkdownConfigVersion(kind, name),
+  };
+}
+
 function applyMarkdownPatch(args: {
   patch: Record<string, unknown>;
   configVersion: string;
   kind: "agent" | "skill" | "command";
   requiredFrontmatterKeys?: string[];
 }):
-  | { ok: true; data: { name: string; frontmatter: Record<string, unknown>; body: string }; configVersion: string }
+  | {
+      ok: true;
+      data: { name: string; frontmatter: Record<string, unknown>; body: string };
+      configVersion: string;
+    }
   | { ok: false; status: number; error: string } {
   const parsed = agentPatchSchema.safeParse(args.patch);
   if (!parsed.success) {
-    return { ok: false, status: 400, error: `${args.kind} patch 非法: ${parsed.error.issues[0]?.message || "unknown error"}` };
+    return {
+      ok: false,
+      status: 400,
+      error: `${args.kind} patch 非法: ${parsed.error.issues[0]?.message || "unknown error"}`,
+    };
   }
   if (!isSafeConfigName(parsed.data.name)) {
     return { ok: false, status: 400, error: `${args.kind} 名称非法: ${parsed.data.name}` };
   }
 
-  const filePath =
-    args.kind === "agent"
-      ? join(AGENTS_DIR, `${parsed.data.name}.md`)
-      : args.kind === "skill"
-        ? join(SKILLS_DIR, parsed.data.name, "SKILL.md")
-        : join(COMMANDS_DIR, `${parsed.data.name}.md`);
-
-  const currentVersion =
-    args.kind === "agent"
-      ? getAgentConfigVersion(parsed.data.name)
-      : args.kind === "skill"
-        ? getSkillConfigVersion(parsed.data.name)
-        : getCommandConfigVersion(parsed.data.name);
+  const filePath = resolveMarkdownConfigFilePath(args.kind, parsed.data.name);
+  const currentVersion = getMarkdownConfigVersion(args.kind, parsed.data.name);
 
   if (args.configVersion !== currentVersion) {
-    const message =
-      args.kind === "agent"
-        ? "Agent 配置已更新，请刷新后重试。"
-        : args.kind === "skill"
-          ? "Skill 配置已更新，请刷新后重试。"
-          : "命令配置已更新，请刷新后重试。";
-    return { ok: false, status: 409, error: message };
+    return {
+      ok: false,
+      status: 409,
+      error: getMarkdownConfigVersionConflictMessage(args.kind),
+    };
   }
   if (!existsSync(filePath)) {
     return { ok: false, status: 404, error: `${args.kind} 不存在: ${parsed.data.name}` };
@@ -235,32 +288,22 @@ function applyMarkdownPatch(args: {
     ...(parsed.data.frontmatterPatch || {}),
   };
   const body = parsed.data.body ?? current.body;
-  for (const key of args.requiredFrontmatterKeys || []) {
-    const value = frontmatter[key];
-    if (typeof value !== "string" || !value.trim()) {
-      return { ok: false, status: 400, error: `${args.kind} frontmatter 必须保留 ${key}` };
-    }
+  const frontmatterValidation = validateRequiredFrontmatterKeys(
+    frontmatter,
+    args.kind,
+    args.requiredFrontmatterKeys,
+  );
+  if (!frontmatterValidation.ok) {
+    return frontmatterValidation;
   }
-  writeFileSync(filePath, serializeFrontmatter(frontmatter, body), "utf-8");
 
-  const nextVersion =
-    args.kind === "agent"
-      ? getAgentConfigVersion(parsed.data.name)
-      : args.kind === "skill"
-        ? getSkillConfigVersion(parsed.data.name)
-        : getCommandConfigVersion(parsed.data.name);
-
-  return {
-    ok: true,
-    data: { name: parsed.data.name, frontmatter, body },
-    configVersion: nextVersion,
-  };
+  return writeMarkdownPatchedConfig(filePath, args.kind, parsed.data.name, frontmatter, body);
 }
 
 function getConfiguredModels(): string[] {
   const config = readOpencodeJson();
   const list = Array.isArray((config.models as Record<string, unknown> | undefined)?.list)
-    ? (((config.models as Record<string, unknown>).list as Array<Record<string, unknown>>) || [])
+    ? ((config.models as Record<string, unknown>).list as Array<Record<string, unknown>>) || []
     : [];
 
   return list
@@ -274,22 +317,28 @@ function getConfiguredModels(): string[] {
 
 function collectReferencedAgents(strategy: OrchestrationStrategy): string[] {
   return Array.from(
-    new Set([
-      ...Object.values(strategy.categoryAgentMap).flat(),
-      ...strategy.hooks.map((hook) => hook.agent),
-      ...strategy.templates.flatMap((template) => template.agents),
-      strategy.judge.agent,
-    ].filter(Boolean)),
+    new Set(
+      [
+        ...Object.values(strategy.categoryAgentMap).flat(),
+        ...strategy.hooks.map((hook) => hook.agent),
+        ...strategy.templates.flatMap((template) => template.agents),
+        strategy.judge.agent,
+      ].filter(Boolean),
+    ),
   );
 }
 
 function collectReferencedModels(strategy: OrchestrationStrategy): string[] {
   return Array.from(
-    new Set([
-      ...Object.values(strategy.categoryModelMap).filter(Boolean),
-      ...strategy.hooks.map((hook) => hook.model).filter((value): value is string => Boolean(value)),
-      strategy.judge.model,
-    ].filter(Boolean)),
+    new Set(
+      [
+        ...Object.values(strategy.categoryModelMap).filter(Boolean),
+        ...strategy.hooks
+          .map((hook) => hook.model)
+          .filter((value): value is string => Boolean(value)),
+        strategy.judge.model,
+      ].filter(Boolean),
+    ),
   );
 }
 
@@ -297,7 +346,9 @@ export function applyOrchestrationStrategyPatch(args: {
   patch: Record<string, unknown>;
   configVersion: string;
   availableAgents: string[];
-}): { ok: true; strategy: OrchestrationStrategy; configVersion: string } | { ok: false; status: number; error: string } {
+}):
+  | { ok: true; strategy: OrchestrationStrategy; configVersion: string }
+  | { ok: false; status: number; error: string } {
   const currentVersion = getOrchestrationStrategyVersion();
   if (args.configVersion !== currentVersion) {
     return { ok: false, status: 409, error: "配置已更新，请刷新后重试。" };
@@ -305,7 +356,11 @@ export function applyOrchestrationStrategyPatch(args: {
 
   const parsedPatch = patchSchema.safeParse(args.patch);
   if (!parsedPatch.success) {
-    return { ok: false, status: 400, error: `Patch 非法: ${parsedPatch.error.issues[0]?.message || "unknown error"}` };
+    return {
+      ok: false,
+      status: 400,
+      error: `Patch 非法: ${parsedPatch.error.issues[0]?.message || "unknown error"}`,
+    };
   }
 
   const current = readOrchestrationStrategy();
@@ -368,17 +423,24 @@ const agentPatchSchema = z.object({
 export function applyModelsPatch(args: {
   patch: Record<string, unknown>;
   configVersion: string;
-}): { ok: true; data: ModelsConfig; configVersion: string } | { ok: false; status: number; error: string } {
+}):
+  | { ok: true; data: ModelsConfig; configVersion: string }
+  | { ok: false; status: number; error: string } {
   const currentVersion = getModelsConfigVersion();
   if (args.configVersion !== currentVersion) {
     return { ok: false, status: 409, error: "模型配置已更新，请刷新后重试。" };
   }
   const parsed = modelsSchema.safeParse(args.patch);
   if (!parsed.success) {
-    return { ok: false, status: 400, error: `Models patch 非法: ${parsed.error.issues[0]?.message || "unknown error"}` };
+    return {
+      ok: false,
+      status: 400,
+      error: `Models patch 非法: ${parsed.error.issues[0]?.message || "unknown error"}`,
+    };
   }
   const config = readOpencodeJson();
-  const defaultModel = typeof parsed.data.defaults.model === "string" ? parsed.data.defaults.model.trim() : "";
+  const defaultModel =
+    typeof parsed.data.defaults.model === "string" ? parsed.data.defaults.model.trim() : "";
   config.agents = { ...(config.agents as object), defaults: parsed.data.defaults };
   config.models = { providers: parsed.data.providers, list: parsed.data.list };
   if (defaultModel) {
@@ -391,14 +453,20 @@ export function applyModelsPatch(args: {
 export function applyMcpPatch(args: {
   patch: Record<string, unknown>;
   configVersion: string;
-}): { ok: true; data: Record<string, McpServer>; configVersion: string } | { ok: false; status: number; error: string } {
+}):
+  | { ok: true; data: Record<string, McpServer>; configVersion: string }
+  | { ok: false; status: number; error: string } {
   const currentVersion = getMcpConfigVersion();
   if (args.configVersion !== currentVersion) {
     return { ok: false, status: 409, error: "MCP 配置已更新，请刷新后重试。" };
   }
   const parsed = mcpSchema.safeParse(args.patch);
   if (!parsed.success) {
-    return { ok: false, status: 400, error: `MCP patch 非法: ${parsed.error.issues[0]?.message || "unknown error"}` };
+    return {
+      ok: false,
+      status: 400,
+      error: `MCP patch 非法: ${parsed.error.issues[0]?.message || "unknown error"}`,
+    };
   }
   const config = readOpencodeJson();
   config.mcp = parsed.data;
@@ -409,7 +477,13 @@ export function applyMcpPatch(args: {
 export function applyAgentPatch(args: {
   patch: Record<string, unknown>;
   configVersion: string;
-}): { ok: true; data: { name: string; frontmatter: Record<string, unknown>; body: string }; configVersion: string } | { ok: false; status: number; error: string } {
+}):
+  | {
+      ok: true;
+      data: { name: string; frontmatter: Record<string, unknown>; body: string };
+      configVersion: string;
+    }
+  | { ok: false; status: number; error: string } {
   return applyMarkdownPatch({
     patch: args.patch,
     configVersion: args.configVersion,
@@ -421,15 +495,35 @@ export function applyAgentPatch(args: {
 export function applySkillPatch(args: {
   patch: Record<string, unknown>;
   configVersion: string;
-}): { ok: true; data: { name: string; frontmatter: Record<string, unknown>; body: string }; configVersion: string } | { ok: false; status: number; error: string } {
-  return applyMarkdownPatch({ patch: args.patch, configVersion: args.configVersion, kind: "skill" });
+}):
+  | {
+      ok: true;
+      data: { name: string; frontmatter: Record<string, unknown>; body: string };
+      configVersion: string;
+    }
+  | { ok: false; status: number; error: string } {
+  return applyMarkdownPatch({
+    patch: args.patch,
+    configVersion: args.configVersion,
+    kind: "skill",
+  });
 }
 
 export function applyCommandPatch(args: {
   patch: Record<string, unknown>;
   configVersion: string;
-}): { ok: true; data: { name: string; frontmatter: Record<string, unknown>; body: string }; configVersion: string } | { ok: false; status: number; error: string } {
-  return applyMarkdownPatch({ patch: args.patch, configVersion: args.configVersion, kind: "command" });
+}):
+  | {
+      ok: true;
+      data: { name: string; frontmatter: Record<string, unknown>; body: string };
+      configVersion: string;
+    }
+  | { ok: false; status: number; error: string } {
+  return applyMarkdownPatch({
+    patch: args.patch,
+    configVersion: args.configVersion,
+    kind: "command",
+  });
 }
 
 const securityPatchSchema = z.object({
@@ -466,33 +560,51 @@ const pluginOperationSchema = z.discriminatedUnion("operation", [
 export function applySecurityPatch(args: {
   patch: Record<string, unknown>;
   configVersion: string;
-}): { ok: true; data: SecurityBaselineConfig; configVersion: string } | { ok: false; status: number; error: string } {
+}):
+  | { ok: true; data: SecurityBaselineConfig; configVersion: string }
+  | { ok: false; status: number; error: string } {
   const currentVersion = getSecurityConfigVersion();
   if (args.configVersion !== currentVersion) {
     return { ok: false, status: 409, error: "安全基线已更新，请刷新后重试。" };
   }
   const parsed = securityPatchSchema.safeParse(args.patch);
   if (!parsed.success) {
-    return { ok: false, status: 400, error: `Security patch 非法: ${parsed.error.issues[0]?.message || "unknown error"}` };
+    return {
+      ok: false,
+      status: 400,
+      error: `Security patch 非法: ${parsed.error.issues[0]?.message || "unknown error"}`,
+    };
   }
   writeFileSync(SECURITY_BASELINE_PATH, parsed.data.raw, "utf-8");
-  return { ok: true, data: readSecurityBaselineConfig(), configVersion: getSecurityConfigVersion() };
+  return {
+    ok: true,
+    data: readSecurityBaselineConfig(),
+    configVersion: getSecurityConfigVersion(),
+  };
 }
 
 export function applyPluginsPatch(args: {
   patch: Record<string, unknown>;
   configVersion: string;
-}): { ok: true; data: PluginsConfig; configVersion: string } | { ok: false; status: number; error: string } {
+}):
+  | { ok: true; data: PluginsConfig; configVersion: string }
+  | { ok: false; status: number; error: string } {
   const currentVersion = getPluginsConfigVersion();
   if (args.configVersion !== currentVersion) {
     return { ok: false, status: 409, error: "插件配置已更新，请刷新后重试。" };
   }
 
   const parsed = pluginOperationSchema.safeParse(
-    "operation" in args.patch ? args.patch : { operation: "replace", plugins: (args.patch as { plugins?: unknown }).plugins },
+    "operation" in args.patch
+      ? args.patch
+      : { operation: "replace", plugins: (args.patch as { plugins?: unknown }).plugins },
   );
   if (!parsed.success) {
-    return { ok: false, status: 400, error: `Plugins patch 非法: ${parsed.error.issues[0]?.message || "unknown error"}` };
+    return {
+      ok: false,
+      status: 400,
+      error: `Plugins patch 非法: ${parsed.error.issues[0]?.message || "unknown error"}`,
+    };
   }
   const config = readOpencodeJson();
 
@@ -502,7 +614,9 @@ export function applyPluginsPatch(args: {
       return { ok: false, status: 400, error: sourceResult.error };
     }
 
-    const fileName = parsed.data.name ? `${parsed.data.name}.ts` : sourceResult.sourcePath.split("/").at(-1) || "plugin.ts";
+    const fileName = parsed.data.name
+      ? `${parsed.data.name}.ts`
+      : sourceResult.sourcePath.split("/").at(-1) || "plugin.ts";
     const relativePath = normalizePluginConfigPath(fileName);
     const pluginPaths = getConfiguredPluginPaths(config);
     const disabledPaths = getDisabledPluginPaths(config).filter((path) => path !== relativePath);
@@ -524,8 +638,12 @@ export function applyPluginsPatch(args: {
       };
     });
 
-    const activePaths = normalizedPaths.filter((plugin) => plugin.enabled !== false).map((plugin) => plugin.path);
-    const disabledPaths = normalizedPaths.filter((plugin) => plugin.enabled === false).map((plugin) => plugin.path);
+    const activePaths = normalizedPaths
+      .filter((plugin) => plugin.enabled !== false)
+      .map((plugin) => plugin.path);
+    const disabledPaths = normalizedPaths
+      .filter((plugin) => plugin.enabled === false)
+      .map((plugin) => plugin.path);
     setConfiguredPluginState(config, activePaths, disabledPaths);
   }
 

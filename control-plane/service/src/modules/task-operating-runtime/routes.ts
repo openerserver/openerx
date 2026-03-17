@@ -1,9 +1,17 @@
 import { zValidator } from "@hono/zod-validator";
-import { eq } from "drizzle-orm";
+import { count, desc, eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
-import { db, sqlite } from "../../db";
-import { projects, tasks, workflowTemplates } from "../../db/schema";
+import { db } from "../../db";
+import {
+  bossDecisions,
+  humanEscalations,
+  projects,
+  taskOperatingModes,
+  taskWorkflowRuns,
+  tasks,
+  workflowTemplates,
+} from "../../db/schema";
 import { type AppEnv, authMiddleware } from "../../middleware/auth";
 import { requireRole } from "../../middleware/rbac";
 
@@ -70,7 +78,9 @@ function asNonEmptyString(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function asCollaborationMode(value: unknown): OperatingModeSelection["collaborationMode"] | undefined {
+function asCollaborationMode(
+  value: unknown,
+): OperatingModeSelection["collaborationMode"] | undefined {
   return value === "solo" || value === "team" || value === "hybrid" ? value : undefined;
 }
 
@@ -78,11 +88,13 @@ function asAutopilotLevel(value: unknown): OperatingModeSelection["autopilotLeve
   return value === "L0" || value === "L1" || value === "L2" ? value : undefined;
 }
 
-function asBossParticipationMode(value: unknown): OperatingModeSelection["bossParticipationMode"] | undefined {
-  return value === "disabled"
-    || value === "advisory"
-    || value === "exception-only"
-    || value === "full-manager"
+function asBossParticipationMode(
+  value: unknown,
+): OperatingModeSelection["bossParticipationMode"] | undefined {
+  return value === "disabled" ||
+    value === "advisory" ||
+    value === "exception-only" ||
+    value === "full-manager"
     ? value
     : undefined;
 }
@@ -102,15 +114,12 @@ function parseTaskStrategy(strategy: unknown) {
 }
 
 async function getTaskOrNull(taskId: string) {
-  return db.query.tasks.findFirst({
-    where: eq(tasks.id, taskId),
-  });
+  const [task] = await db.select().from(tasks).where(eq(tasks.id, taskId)).limit(1);
+  return task ?? null;
 }
 
 async function getProjectDefaults(projectId: string): Promise<OperatingModeSelection | null> {
-  const project = await db.query.projects.findFirst({
-    where: eq(projects.id, projectId),
-  });
+  const [project] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
   const settings = (() => {
     if (!project?.settings) return null;
     if (typeof project.settings === "string") {
@@ -145,9 +154,11 @@ async function getProjectDefaults(projectId: string): Promise<OperatingModeSelec
 }
 
 async function getTemplateStrategy(templateId: string, projectId: string) {
-  const template = await db.query.workflowTemplates.findFirst({
-    where: eq(workflowTemplates.id, templateId),
-  });
+  const [template] = await db
+    .select()
+    .from(workflowTemplates)
+    .where(eq(workflowTemplates.id, templateId))
+    .limit(1);
   if (!template || !template.enabled) {
     return null;
   }
@@ -160,17 +171,14 @@ async function getTemplateStrategy(templateId: string, projectId: string) {
   return template;
 }
 
-function readCurrentStage(taskId: string) {
-  const row = sqlite
-    .query(
-      `SELECT current_stage
-       FROM task_workflow_runs
-       WHERE task_id = ?1
-       ORDER BY updated_at DESC
-       LIMIT 1`,
-    )
-    .get(taskId) as { current_stage: string | null } | null;
-  return row?.current_stage || undefined;
+async function readCurrentStage(taskId: string) {
+  const [row] = await db
+    .select({ currentStage: taskWorkflowRuns.currentStage })
+    .from(taskWorkflowRuns)
+    .where(eq(taskWorkflowRuns.taskId, taskId))
+    .orderBy(desc(taskWorkflowRuns.updatedAt))
+    .limit(1);
+  return row?.currentStage || undefined;
 }
 
 async function resolveEffectiveOperatingMode(
@@ -178,17 +186,18 @@ async function resolveEffectiveOperatingMode(
   projectId: string,
   strategy: Record<string, unknown>,
 ): Promise<OperatingModeSelection> {
-  return normalizeOperatingModeRow(readOperatingModeRow(taskId))
-    || extractLegacyOperatingMode(strategy)
-    || (await getProjectDefaults(projectId))
-    || {
+  return (
+    normalizeOperatingModeRow(await readOperatingModeRow(taskId)) ||
+    extractLegacyOperatingMode(strategy) ||
+    (await getProjectDefaults(projectId)) || {
       collaborationMode: "solo" as const,
       autopilotLevel: "L1" as const,
       bossParticipationMode: "advisory" as const,
       selectedTemplateId: null,
       scenarioKey: undefined,
       source: "project-default" as const,
-    };
+    }
+  );
 }
 
 function formatModeSummary(mode: OperatingModeSelection | null | undefined) {
@@ -198,7 +207,7 @@ function formatModeSummary(mode: OperatingModeSelection | null | undefined) {
   return `${mode.collaborationMode} / ${mode.autopilotLevel} / ${mode.bossParticipationMode}${mode.selectedTemplateId ? ` / ${mode.selectedTemplateId}` : ""}`;
 }
 
-function createManualOverrideRecord(
+async function createManualOverrideRecord(
   taskId: string,
   userId: string,
   action: "manual-override" | "clear-override" | "select-template",
@@ -212,7 +221,7 @@ function createManualOverrideRecord(
     decisionType: action,
     reason,
     confidence: null,
-    stageKey: readCurrentStage(taskId) ?? null,
+    stageKey: (await readCurrentStage(taskId)) ?? null,
     metadata: {
       actorType: "human",
       actorId: userId,
@@ -223,7 +232,11 @@ function createManualOverrideRecord(
   };
 }
 
-async function applyBossTemplateSelection(taskId: string, taskProjectId: string, selectedTemplateId: string) {
+async function applyBossTemplateSelection(
+  taskId: string,
+  taskProjectId: string,
+  selectedTemplateId: string,
+) {
   const task = await getTaskOrNull(taskId);
   if (!task) {
     return null;
@@ -237,108 +250,113 @@ async function applyBossTemplateSelection(taskId: string, taskProjectId: string,
 
   const templateCollaborationMode = asCollaborationMode(template.defaultCollaborationMode);
   const templateAutopilotLevel = asAutopilotLevel(template.defaultAutopilotLevel);
-  const templateBossParticipationMode = asBossParticipationMode(template.defaultBossParticipationMode);
+  const templateBossParticipationMode = asBossParticipationMode(
+    template.defaultBossParticipationMode,
+  );
 
   const nextMode: OperatingModeSelection = {
     collaborationMode: templateCollaborationMode || currentMode.collaborationMode,
     autopilotLevel: templateAutopilotLevel || currentMode.autopilotLevel,
     bossParticipationMode: template.forceBossParticipation
       ? "full-manager"
-      : (templateBossParticipationMode || currentMode.bossParticipationMode),
+      : templateBossParticipationMode || currentMode.bossParticipationMode,
     selectedTemplateId: template.id,
     scenarioKey: currentMode.scenarioKey,
     source: "boss-decision",
   };
 
-  insertOperatingMode(taskId, nextMode);
+  await insertOperatingMode(taskId, nextMode);
   return nextMode;
 }
 
-function readOperatingModeRow(taskId: string) {
-  return sqlite
-    .query(
-      `SELECT collaboration_mode, autopilot_level, boss_participation_mode, selected_template_id, scenario_key, source
-       FROM task_operating_modes
-       WHERE task_id = ?1
-       LIMIT 1`,
-    )
-    .get(taskId) as
-    | {
-        collaboration_mode: string;
-        autopilot_level: string;
-        boss_participation_mode: string;
-        selected_template_id: string | null;
-        scenario_key: string | null;
-        source: string;
-      }
-    | null;
+async function readOperatingModeRow(taskId: string) {
+  const [row] = await db
+    .select({
+      collaborationMode: taskOperatingModes.collaborationMode,
+      autopilotLevel: taskOperatingModes.autopilotLevel,
+      bossParticipationMode: taskOperatingModes.bossParticipationMode,
+      selectedTemplateId: taskOperatingModes.selectedTemplateId,
+      scenarioKey: taskOperatingModes.scenarioKey,
+      source: taskOperatingModes.source,
+    })
+    .from(taskOperatingModes)
+    .where(eq(taskOperatingModes.taskId, taskId))
+    .limit(1);
+  return row ?? null;
 }
 
 function normalizeOperatingModeRow(
-  row:
-    | {
-        collaboration_mode: string;
-        autopilot_level: string;
-        boss_participation_mode: string;
-        selected_template_id: string | null;
-        scenario_key: string | null;
-        source: string;
-      }
-    | null,
+  row: {
+    collaborationMode: string;
+    autopilotLevel: string;
+    bossParticipationMode: string;
+    selectedTemplateId: string | null;
+    scenarioKey: string | null;
+    source: string;
+  } | null,
 ): OperatingModeSelection | null {
   if (!row) {
     return null;
   }
 
   if (
-    (row.collaboration_mode !== "solo" && row.collaboration_mode !== "team" && row.collaboration_mode !== "hybrid")
-    || (row.autopilot_level !== "L0" && row.autopilot_level !== "L1" && row.autopilot_level !== "L2")
-    || (row.boss_participation_mode !== "disabled"
-      && row.boss_participation_mode !== "advisory"
-      && row.boss_participation_mode !== "exception-only"
-      && row.boss_participation_mode !== "full-manager")
-    || (row.source !== "system-default"
-      && row.source !== "project-default"
-      && row.source !== "task-override"
-      && row.source !== "boss-decision")
+    (row.collaborationMode !== "solo" &&
+      row.collaborationMode !== "team" &&
+      row.collaborationMode !== "hybrid") ||
+    (row.autopilotLevel !== "L0" && row.autopilotLevel !== "L1" && row.autopilotLevel !== "L2") ||
+    (row.bossParticipationMode !== "disabled" &&
+      row.bossParticipationMode !== "advisory" &&
+      row.bossParticipationMode !== "exception-only" &&
+      row.bossParticipationMode !== "full-manager") ||
+    (row.source !== "system-default" &&
+      row.source !== "project-default" &&
+      row.source !== "task-override" &&
+      row.source !== "boss-decision")
   ) {
     return null;
   }
 
   return {
-    collaborationMode: row.collaboration_mode,
-    autopilotLevel: row.autopilot_level,
-    bossParticipationMode: row.boss_participation_mode,
-    selectedTemplateId: row.selected_template_id,
-    scenarioKey: row.scenario_key || undefined,
+    collaborationMode: row.collaborationMode,
+    autopilotLevel: row.autopilotLevel,
+    bossParticipationMode: row.bossParticipationMode,
+    selectedTemplateId: row.selectedTemplateId,
+    scenarioKey: row.scenarioKey || undefined,
     source: row.source,
   };
 }
 
-function extractLegacyOperatingMode(strategy: Record<string, unknown>): OperatingModeSelection | null {
+function extractLegacyOperatingMode(
+  strategy: Record<string, unknown>,
+): OperatingModeSelection | null {
   const collaborationMode = strategy.collaborationMode;
   const autopilotLevel = strategy.autopilotLevel;
   const bossParticipationMode = strategy.bossParticipationMode;
   const source = strategy.operatingModeSource;
   if (
-    (collaborationMode === "solo" || collaborationMode === "team" || collaborationMode === "hybrid")
-    && (autopilotLevel === "L0" || autopilotLevel === "L1" || autopilotLevel === "L2")
-    && (bossParticipationMode === "disabled"
-      || bossParticipationMode === "advisory"
-      || bossParticipationMode === "exception-only"
-      || bossParticipationMode === "full-manager")
+    (collaborationMode === "solo" ||
+      collaborationMode === "team" ||
+      collaborationMode === "hybrid") &&
+    (autopilotLevel === "L0" || autopilotLevel === "L1" || autopilotLevel === "L2") &&
+    (bossParticipationMode === "disabled" ||
+      bossParticipationMode === "advisory" ||
+      bossParticipationMode === "exception-only" ||
+      bossParticipationMode === "full-manager")
   ) {
     return {
       collaborationMode,
       autopilotLevel,
       bossParticipationMode,
-      selectedTemplateId: asNonEmptyString(strategy.selectedTemplateId) || asNonEmptyString(strategy.workflowTemplateId) || null,
+      selectedTemplateId:
+        asNonEmptyString(strategy.selectedTemplateId) ||
+        asNonEmptyString(strategy.workflowTemplateId) ||
+        null,
       scenarioKey: asNonEmptyString(strategy.scenarioKey),
       source:
-        source === "system-default"
-        || source === "project-default"
-        || source === "task-override"
-        || source === "boss-decision"
+        source === "system-default" ||
+        source === "project-default" ||
+        source === "task-override" ||
+        source === "boss-decision"
           ? source
           : "task-override",
     };
@@ -347,39 +365,48 @@ function extractLegacyOperatingMode(strategy: Record<string, unknown>): Operatin
   return null;
 }
 
-function insertOperatingMode(taskId: string, value: OperatingModeSelection) {
+async function insertOperatingMode(taskId: string, value: OperatingModeSelection) {
   const now = new Date().toISOString();
-  sqlite
-    .query(
-      `INSERT INTO task_operating_modes (
-        task_id, collaboration_mode, autopilot_level, boss_participation_mode,
-        selected_template_id, scenario_key, source, created_at, updated_at
-      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)
-      ON CONFLICT(task_id) DO UPDATE SET
-        collaboration_mode = excluded.collaboration_mode,
-        autopilot_level = excluded.autopilot_level,
-        boss_participation_mode = excluded.boss_participation_mode,
-        selected_template_id = excluded.selected_template_id,
-        scenario_key = excluded.scenario_key,
-        source = excluded.source,
-        updated_at = excluded.updated_at`,
-    )
-    .run(
+  await db
+    .insert(taskOperatingModes)
+    .values({
       taskId,
-      value.collaborationMode,
-      value.autopilotLevel,
-      value.bossParticipationMode,
-      value.selectedTemplateId ?? null,
-      value.scenarioKey ?? null,
-      value.source,
-      now,
-    );
+      collaborationMode: value.collaborationMode,
+      autopilotLevel: value.autopilotLevel,
+      bossParticipationMode: value.bossParticipationMode,
+      selectedTemplateId: value.selectedTemplateId ?? null,
+      scenarioKey: value.scenarioKey ?? null,
+      source: value.source,
+      createdAt: now,
+      updatedAt: now,
+    })
+    .onConflictDoUpdate({
+      target: taskOperatingModes.taskId,
+      set: {
+        collaborationMode: value.collaborationMode,
+        autopilotLevel: value.autopilotLevel,
+        bossParticipationMode: value.bossParticipationMode,
+        selectedTemplateId: value.selectedTemplateId ?? null,
+        scenarioKey: value.scenarioKey ?? null,
+        source: value.source,
+        updatedAt: now,
+      },
+    });
 }
 
-function countRows(tableName: "boss_decisions" | "human_escalations", taskId: string) {
-  const row = sqlite
-    .query(`SELECT COUNT(1) as count FROM ${tableName} WHERE task_id = ?1`)
-    .get(taskId) as { count: number } | null;
+async function countRows(tableName: "boss_decisions" | "human_escalations", taskId: string) {
+  if (tableName === "boss_decisions") {
+    const [row] = await db
+      .select({ count: count() })
+      .from(bossDecisions)
+      .where(eq(bossDecisions.taskId, taskId));
+    return Number(row?.count || 0);
+  }
+
+  const [row] = await db
+    .select({ count: count() })
+    .from(humanEscalations)
+    .where(eq(humanEscalations.taskId, taskId));
   return Number(row?.count || 0);
 }
 
@@ -417,126 +444,107 @@ function normalizeEscalation(value: unknown, index: number) {
   };
 }
 
-function insertBossDecision(taskId: string, value: ReturnType<typeof normalizeBossDecision> extends infer T ? T : never) {
+async function insertBossDecision(
+  taskId: string,
+  value: ReturnType<typeof normalizeBossDecision> extends infer T ? T : never,
+) {
   if (!value) {
     return;
   }
-  sqlite
-    .query(
-      `INSERT OR IGNORE INTO boss_decisions (
-        id, task_id, ts, decision_type, reason, confidence, stage_key, metadata_json, created_at
-      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
-    )
-    .run(
-      value.id,
+  await db
+    .insert(bossDecisions)
+    .values({
+      id: value.id,
       taskId,
-      value.ts,
-      value.decisionType,
-      value.reason,
-      value.confidence,
-      value.stageKey,
-      value.metadata ? JSON.stringify(value.metadata) : null,
-      new Date().toISOString(),
-    );
+      ts: value.ts,
+      decisionType: value.decisionType,
+      reason: value.reason,
+      confidence: value.confidence,
+      stageKey: value.stageKey,
+      metadataJson: value.metadata ?? null,
+      createdAt: new Date().toISOString(),
+    })
+    .onConflictDoNothing();
 }
 
-function insertEscalation(taskId: string, value: ReturnType<typeof normalizeEscalation> extends infer T ? T : never) {
+async function insertEscalation(
+  taskId: string,
+  value: ReturnType<typeof normalizeEscalation> extends infer T ? T : never,
+) {
   if (!value) {
     return;
   }
-  sqlite
-    .query(
-      `INSERT OR IGNORE INTO human_escalations (
-        id, task_id, ts, reason, status, stage_key, requested_by, metadata_json, created_at
-      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
-    )
-    .run(
-      value.id,
+  await db
+    .insert(humanEscalations)
+    .values({
+      id: value.id,
       taskId,
-      value.ts,
-      value.reason,
-      value.status,
-      value.stageKey,
-      value.requestedBy,
-      value.metadata ? JSON.stringify(value.metadata) : null,
-      new Date().toISOString(),
-    );
+      ts: value.ts,
+      reason: value.reason,
+      status: value.status,
+      stageKey: value.stageKey,
+      requestedBy: value.requestedBy,
+      metadataJson: value.metadata ?? null,
+      createdAt: new Date().toISOString(),
+    })
+    .onConflictDoNothing();
 }
 
 async function migrateLegacyRuntime(taskId: string, strategy: Record<string, unknown>) {
-  if (!readOperatingModeRow(taskId)) {
+  if (!(await readOperatingModeRow(taskId))) {
     const legacyMode = extractLegacyOperatingMode(strategy);
     if (legacyMode) {
-      insertOperatingMode(taskId, legacyMode);
+      await insertOperatingMode(taskId, legacyMode);
     }
   }
 
-  if (countRows("boss_decisions", taskId) === 0 && Array.isArray(strategy.bossDecisions)) {
-    strategy.bossDecisions
-      .map(normalizeBossDecision)
-      .forEach((decision) => insertBossDecision(taskId, decision));
+  if ((await countRows("boss_decisions", taskId)) === 0 && Array.isArray(strategy.bossDecisions)) {
+    for (const decision of strategy.bossDecisions.map(normalizeBossDecision)) {
+      await insertBossDecision(taskId, decision);
+    }
   }
 
-  if (countRows("human_escalations", taskId) === 0 && Array.isArray(strategy.escalationRequests)) {
-    strategy.escalationRequests
-      .map(normalizeEscalation)
-      .forEach((escalation) => insertEscalation(taskId, escalation));
+  if (
+    (await countRows("human_escalations", taskId)) === 0 &&
+    Array.isArray(strategy.escalationRequests)
+  ) {
+    for (const escalation of strategy.escalationRequests.map(normalizeEscalation)) {
+      await insertEscalation(taskId, escalation);
+    }
   }
 }
 
-function listBossDecisions(taskId: string) {
-  const rows = sqlite
-    .query(
-      `SELECT id, ts, decision_type, reason, confidence, stage_key, metadata_json
-       FROM boss_decisions
-       WHERE task_id = ?1
-       ORDER BY ts DESC, created_at DESC`,
-    )
-    .all(taskId) as Array<{
-      id: string;
-      ts: string;
-      decision_type: string;
-      reason: string;
-      confidence: number | null;
-      stage_key: string | null;
-      metadata_json: string | null;
-    }>;
+async function listBossDecisions(taskId: string) {
+  const rows = await db
+    .select()
+    .from(bossDecisions)
+    .where(eq(bossDecisions.taskId, taskId))
+    .orderBy(desc(bossDecisions.ts), desc(bossDecisions.createdAt));
   return rows.map((row) => ({
     id: row.id,
     ts: row.ts,
-    decisionType: row.decision_type,
+    decisionType: row.decisionType,
     reason: row.reason,
     confidence: row.confidence ?? undefined,
-    stageKey: row.stage_key ?? undefined,
-    metadata: row.metadata_json ? (JSON.parse(row.metadata_json) as Record<string, unknown>) : undefined,
+    stageKey: row.stageKey ?? undefined,
+    metadata: row.metadataJson ?? undefined,
   }));
 }
 
-function listEscalations(taskId: string) {
-  const rows = sqlite
-    .query(
-      `SELECT id, ts, reason, status, stage_key, requested_by, metadata_json
-       FROM human_escalations
-       WHERE task_id = ?1
-       ORDER BY ts DESC, created_at DESC`,
-    )
-    .all(taskId) as Array<{
-      id: string;
-      ts: string;
-      reason: string;
-      status: string | null;
-      stage_key: string | null;
-      requested_by: string | null;
-      metadata_json: string | null;
-    }>;
+async function listEscalations(taskId: string) {
+  const rows = await db
+    .select()
+    .from(humanEscalations)
+    .where(eq(humanEscalations.taskId, taskId))
+    .orderBy(desc(humanEscalations.ts), desc(humanEscalations.createdAt));
   return rows.map((row) => ({
     id: row.id,
     ts: row.ts,
     reason: row.reason,
     status: row.status ?? undefined,
-    stageKey: row.stage_key ?? undefined,
-    requestedBy: row.requested_by ?? undefined,
-    metadata: row.metadata_json ? (JSON.parse(row.metadata_json) as Record<string, unknown>) : undefined,
+    stageKey: row.stageKey ?? undefined,
+    requestedBy: row.requestedBy ?? undefined,
+    metadata: row.metadataJson ?? undefined,
   }));
 }
 
@@ -557,25 +565,23 @@ taskOperatingRuntimeRoutes.get("/state", async (c) => {
   }
 
   const strategy = parseTaskStrategy(task.strategy);
-  const mode = normalizeOperatingModeRow(readOperatingModeRow(taskId))
-    || extractLegacyOperatingMode(strategy)
-    || (await getProjectDefaults(task.projectId));
-  const workflowRun = sqlite
-    .query(
-      `SELECT current_stage, status
-       FROM task_workflow_runs
-       WHERE task_id = ?1
-       ORDER BY updated_at DESC
-       LIMIT 1`,
-    )
-    .get(taskId) as { current_stage: string | null; status: string | null } | null;
+  const mode =
+    normalizeOperatingModeRow(await readOperatingModeRow(taskId)) ||
+    extractLegacyOperatingMode(strategy) ||
+    (await getProjectDefaults(task.projectId));
+  const [workflowRun] = await db
+    .select({ currentStage: taskWorkflowRuns.currentStage, status: taskWorkflowRuns.status })
+    .from(taskWorkflowRuns)
+    .where(eq(taskWorkflowRuns.taskId, taskId))
+    .orderBy(desc(taskWorkflowRuns.updatedAt))
+    .limit(1);
 
   return c.json({
     collaborationMode: mode?.collaborationMode,
     autopilotLevel: mode?.autopilotLevel,
     bossParticipationMode: mode?.bossParticipationMode,
     operatingModeSource: mode?.source,
-    currentStageKey: workflowRun?.current_stage || asNonEmptyString(strategy.currentStageKey),
+    currentStageKey: workflowRun?.currentStage || asNonEmptyString(strategy.currentStageKey),
     currentStageStatus: workflowRun?.status || asNonEmptyString(strategy.currentStageStatus),
   });
 });
@@ -588,7 +594,7 @@ taskOperatingRuntimeRoutes.get("/mode", async (c) => {
   }
 
   return c.json({
-    data: normalizeOperatingModeRow(readOperatingModeRow(taskId)),
+    data: normalizeOperatingModeRow(await readOperatingModeRow(taskId)),
   });
 });
 
@@ -602,10 +608,10 @@ taskOperatingRuntimeRoutes.put("/mode", zValidator("json", operatingModeSchema),
   const body = c.req.valid("json");
   const strategy = parseTaskStrategy(task.strategy);
   const previousMode = await resolveEffectiveOperatingMode(taskId, task.projectId, strategy);
-  insertOperatingMode(taskId, body);
+  await insertOperatingMode(taskId, body);
 
   if (body.source === "task-override") {
-    const record = createManualOverrideRecord(
+    const record = await createManualOverrideRecord(
       taskId,
       c.get("user").sub,
       "manual-override",
@@ -613,10 +619,10 @@ taskOperatingRuntimeRoutes.put("/mode", zValidator("json", operatingModeSchema),
       previousMode,
       body,
     );
-    insertBossDecision(taskId, record);
+    await insertBossDecision(taskId, record);
   }
 
-  return c.json({ ok: true, data: normalizeOperatingModeRow(readOperatingModeRow(taskId)) });
+  return c.json({ ok: true, data: normalizeOperatingModeRow(await readOperatingModeRow(taskId)) });
 });
 
 taskOperatingRuntimeRoutes.delete("/mode", async (c) => {
@@ -628,10 +634,10 @@ taskOperatingRuntimeRoutes.delete("/mode", async (c) => {
 
   const strategy = parseTaskStrategy(task.strategy);
   const previousMode = await resolveEffectiveOperatingMode(taskId, task.projectId, strategy);
-  sqlite.query(`DELETE FROM task_operating_modes WHERE task_id = ?1`).run(taskId);
+  await db.delete(taskOperatingModes).where(eq(taskOperatingModes.taskId, taskId));
 
   const restoredMode = await resolveEffectiveOperatingMode(taskId, task.projectId, strategy);
-  const record = createManualOverrideRecord(
+  const record = await createManualOverrideRecord(
     taskId,
     c.get("user").sub,
     "clear-override",
@@ -639,7 +645,7 @@ taskOperatingRuntimeRoutes.delete("/mode", async (c) => {
     previousMode,
     restoredMode,
   );
-  insertBossDecision(taskId, record);
+  await insertBossDecision(taskId, record);
   return c.json({ ok: true });
 });
 
@@ -650,55 +656,71 @@ taskOperatingRuntimeRoutes.get("/boss-decisions", async (c) => {
     return c.json({ error: "Task not found" }, 404);
   }
 
-  return c.json({ data: listBossDecisions(taskId) });
+  return c.json({ data: await listBossDecisions(taskId) });
 });
 
-taskOperatingRuntimeRoutes.post("/boss-decisions", zValidator("json", bossDecisionSchema), async (c) => {
-  const taskId = requireTaskId(c);
-  const task = await requireTask(taskId);
-  if (!task) {
-    return c.json({ error: "Task not found" }, 404);
-  }
+taskOperatingRuntimeRoutes.post(
+  "/boss-decisions",
+  zValidator("json", bossDecisionSchema),
+  async (c) => {
+    const taskId = requireTaskId(c);
+    const task = await requireTask(taskId);
+    if (!task) {
+      return c.json({ error: "Task not found" }, 404);
+    }
 
-  const body = c.req.valid("json");
-  const record = {
-    id: crypto.randomUUID(),
-    ts: body.ts || new Date().toISOString(),
-    decisionType: body.decisionType,
-    reason: body.reason,
-    confidence: body.confidence ?? null,
-    stageKey: body.stageKey ?? null,
-    metadata: body.metadata ?? null,
-  };
-  insertBossDecision(taskId, record);
+    const body = c.req.valid("json");
+    const record = {
+      id: crypto.randomUUID(),
+      ts: body.ts || new Date().toISOString(),
+      decisionType: body.decisionType,
+      reason: body.reason,
+      confidence: body.confidence ?? null,
+      stageKey: body.stageKey ?? null,
+      metadata: body.metadata ?? null,
+    };
+    await insertBossDecision(taskId, record);
 
-  if (body.decisionType === "select-template") {
-    const project = await db.query.projects.findFirst({
-      where: eq(projects.id, task.projectId),
-    });
-    const settings = (() => {
-      if (!project?.settings) return null;
-      if (typeof project.settings === "string") {
-        try {
-          return asRecord(JSON.parse(project.settings));
-        } catch {
-          return null;
+    if (body.decisionType === "select-template") {
+      const [project] = await db
+        .select()
+        .from(projects)
+        .where(eq(projects.id, task.projectId))
+        .limit(1);
+      const settings = (() => {
+        if (!project?.settings) return null;
+        if (typeof project.settings === "string") {
+          try {
+            return asRecord(JSON.parse(project.settings));
+          } catch {
+            return null;
+          }
+        }
+        return asRecord(project.settings);
+      })();
+      const selectedTemplateId = asNonEmptyString(body.metadata?.selectedTemplateId);
+
+      if (settings?.allowBossAutoTemplateSwitch && selectedTemplateId) {
+        const nextMode = await applyBossTemplateSelection(
+          taskId,
+          task.projectId,
+          selectedTemplateId,
+        );
+        if (nextMode) {
+          return c.json(
+            {
+              ok: true,
+              data: { ...record, metadata: { ...(record.metadata || {}), appliedMode: nextMode } },
+            },
+            201,
+          );
         }
       }
-      return asRecord(project.settings);
-    })();
-    const selectedTemplateId = asNonEmptyString(body.metadata?.selectedTemplateId);
-
-    if (settings?.allowBossAutoTemplateSwitch && selectedTemplateId) {
-      const nextMode = await applyBossTemplateSelection(taskId, task.projectId, selectedTemplateId);
-      if (nextMode) {
-        return c.json({ ok: true, data: { ...record, metadata: { ...(record.metadata || {}), appliedMode: nextMode } } }, 201);
-      }
     }
-  }
 
-  return c.json({ ok: true, data: record }, 201);
-});
+    return c.json({ ok: true, data: record }, 201);
+  },
+);
 
 taskOperatingRuntimeRoutes.get("/escalations", async (c) => {
   const taskId = requireTaskId(c);
@@ -707,7 +729,7 @@ taskOperatingRuntimeRoutes.get("/escalations", async (c) => {
     return c.json({ error: "Task not found" }, 404);
   }
 
-  return c.json({ data: listEscalations(taskId) });
+  return c.json({ data: await listEscalations(taskId) });
 });
 
 taskOperatingRuntimeRoutes.post("/escalations", zValidator("json", escalationSchema), async (c) => {
@@ -727,6 +749,6 @@ taskOperatingRuntimeRoutes.post("/escalations", zValidator("json", escalationSch
     requestedBy: body.requestedBy ?? null,
     metadata: body.metadata ?? null,
   };
-  insertEscalation(taskId, record);
+  await insertEscalation(taskId, record);
   return c.json({ ok: true, data: record }, 201);
 });

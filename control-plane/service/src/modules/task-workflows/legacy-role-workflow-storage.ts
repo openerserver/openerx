@@ -10,9 +10,14 @@ import {
 } from "../../db/schema";
 
 type JsonRecord = Record<string, unknown>;
-type WorkflowStatus = typeof taskWorkflowRuns.$inferSelect.status | typeof tasks.$inferSelect.status;
+type WorkflowStatus =
+  | typeof taskWorkflowRuns.$inferSelect.status
+  | typeof tasks.$inferSelect.status;
 
-const legacyWorkflowMigrationInflight = new Map<string, Promise<typeof tasks.$inferSelect | null>>();
+const legacyWorkflowMigrationInflight = new Map<
+  string,
+  Promise<typeof tasks.$inferSelect | null>
+>();
 
 function parseTaskStrategy(raw: string | null | undefined) {
   if (!raw) {
@@ -54,12 +59,133 @@ function readString(value: unknown) {
   return typeof value === "string" && value ? value : null;
 }
 
+function isStringMember<T extends readonly string[]>(
+  value: unknown,
+  members: T,
+): value is T[number] {
+  return typeof value === "string" && members.includes(value);
+}
+
+function readTimestamp(value: unknown, fallback: string) {
+  return typeof value === "string" ? value : fallback;
+}
+
+function normalizeStringArray(value: unknown) {
+  return normalizeArray(value).map((item) => String(item));
+}
+
+const LEGACY_AGGREGATION_STRATEGIES = [
+  "first-pass",
+  "majority",
+  "merge-summary",
+  "human-review",
+] as const;
+
+const LEGACY_CONCLUSION_STATUSES = [
+  "aligned",
+  "partially-aligned",
+  "conflicted",
+  "escalated",
+  "blocked",
+] as const;
+
+const LEGACY_FINAL_DECISIONS = [
+  "allow",
+  "notify-developer",
+  "needs-approval",
+  "block",
+  "observe",
+  "human-review",
+] as const;
+
+const LEGACY_RISK_LEVELS = ["low", "medium", "high", "critical"] as const;
+
+const LEGACY_CHANGE_REQUEST_STATUSES = [
+  "open",
+  "acknowledged",
+  "in-progress",
+  "resolved",
+  "won't-fix",
+] as const;
+
+function normalizeLegacyRoleConclusion(
+  item: unknown,
+  taskId: string,
+  now: string,
+): typeof roleAggregateConclusions.$inferInsert {
+  const entry = isNonEmptyObject(item) ? item : {};
+  return {
+    id: typeof entry.id === "string" && entry.id ? entry.id : crypto.randomUUID(),
+    taskId,
+    taskStageRunId: typeof entry.taskStageRunId === "string" ? entry.taskStageRunId : null,
+    roleAgentId: typeof entry.roleAgentId === "string" ? entry.roleAgentId : "role.unknown",
+    stage: typeof entry.stage === "string" ? entry.stage : "unknown",
+    aggregationStrategy: isStringMember(entry.aggregationStrategy, LEGACY_AGGREGATION_STRATEGIES)
+      ? entry.aggregationStrategy
+      : "merge-summary",
+    status: isStringMember(entry.status, LEGACY_CONCLUSION_STATUSES) ? entry.status : "aligned",
+    finalDecision: isStringMember(entry.finalDecision, LEGACY_FINAL_DECISIONS)
+      ? entry.finalDecision
+      : "observe",
+    aggregateRiskLevel: isStringMember(entry.aggregateRiskLevel, LEGACY_RISK_LEVELS)
+      ? entry.aggregateRiskLevel
+      : "medium",
+    confidenceScore: typeof entry.confidenceScore === "number" ? entry.confidenceScore : 0,
+    consensusScore: typeof entry.consensusScore === "number" ? entry.consensusScore : 0,
+    winningRationale: typeof entry.winningRationale === "string" ? entry.winningRationale : "",
+    mergedFindingsJson: normalizeArray(entry.mergedFindings) as JsonRecord[],
+    minorityFindingsJson: normalizeArray(entry.minorityFindings) as JsonRecord[],
+    conflictsJson: normalizeArray(entry.conflicts) as JsonRecord[],
+    approvalRecommendationJson: isNonEmptyObject(entry.approvalRecommendation)
+      ? entry.approvalRecommendation
+      : null,
+    generatedAt: readTimestamp(entry.generatedAt, now),
+    createdAt: readTimestamp(entry.createdAt, now),
+    updatedAt: readTimestamp(entry.updatedAt, now),
+  };
+}
+
+function normalizeLegacyChangeRequest(
+  item: unknown,
+  taskId: string,
+  now: string,
+): typeof developerChangeRequests.$inferInsert {
+  const entry = isNonEmptyObject(item) ? item : {};
+  const status = isStringMember(entry.status, LEGACY_CHANGE_REQUEST_STATUSES)
+    ? entry.status
+    : "open";
+  return {
+    id: typeof entry.id === "string" && entry.id ? entry.id : crypto.randomUUID(),
+    taskId,
+    taskStageRunId: typeof entry.taskStageRunId === "string" ? entry.taskStageRunId : null,
+    sourceRoleAgentId:
+      typeof entry.sourceRoleAgentId === "string" ? entry.sourceRoleAgentId : "role.unknown",
+    assignedRoleAgentId:
+      typeof entry.assignedRoleAgentId === "string" && entry.assignedRoleAgentId
+        ? entry.assignedRoleAgentId
+        : "role.developer",
+    priority: isStringMember(entry.priority, LEGACY_RISK_LEVELS) ? entry.priority : "medium",
+    title: typeof entry.title === "string" ? entry.title : "",
+    summary: typeof entry.summary === "string" ? entry.summary : "",
+    requiredChangesJson: normalizeStringArray(entry.requiredChanges),
+    relatedFindingKeysJson: normalizeStringArray(entry.relatedFindingKeys),
+    blocking: Boolean(entry.blocking),
+    approvalRequired: Boolean(entry.approvalRequired),
+    status,
+    resolutionNote: typeof entry.resolutionNote === "string" ? entry.resolutionNote : null,
+    createdAt: readTimestamp(entry.createdAt, now),
+    updatedAt: readTimestamp(entry.updatedAt, now),
+    resolvedAt:
+      status === "resolved" || status === "won't-fix" ? readTimestamp(entry.resolvedAt, now) : null,
+  };
+}
+
 function inferWorkflowTemplateId(strategy: JsonRecord, executionPlan: JsonRecord) {
   return (
-    readString(strategy.workflowTemplateId)
-    || readString(strategy.selectedTemplateId)
-    || readString(executionPlan.templateId)
-    || "legacy-unspecified"
+    readString(strategy.workflowTemplateId) ||
+    readString(strategy.selectedTemplateId) ||
+    readString(executionPlan.templateId) ||
+    "legacy-unspecified"
   );
 }
 
@@ -97,7 +223,10 @@ function inferWorkflowStatus(taskStatus: typeof tasks.$inferSelect.status) {
   }
 }
 
-function inferCurrentStage(taskStatus: typeof tasks.$inferSelect.status, legacyStage: string | null) {
+function inferCurrentStage(
+  taskStatus: typeof tasks.$inferSelect.status,
+  legacyStage: string | null,
+) {
   switch (taskStatus) {
     case "completed":
       return "done";
@@ -169,38 +298,58 @@ async function ensureWorkflowStageRunsMigrated(
     return;
   }
 
-  const orderedStages = [...templateStages].sort((left, right) => left.orderIndex - right.orderIndex);
+  const orderedStages = [...templateStages].sort(
+    (left, right) => left.orderIndex - right.orderIndex,
+  );
   const fallbackStageKey = orderedStages[0]?.stageKey ?? workflowRun.currentStage;
   const activeStageKey = orderedStages.some((stage) => stage.stageKey === workflowRun.currentStage)
     ? workflowRun.currentStage
-    : (workflowRun.status === "completed" ? orderedStages[orderedStages.length - 1]?.stageKey : legacyStage) ?? fallbackStageKey;
-  const activeIndex = Math.max(0, orderedStages.findIndex((stage) => stage.stageKey === activeStageKey));
+    : ((workflowRun.status === "completed"
+        ? orderedStages[orderedStages.length - 1]?.stageKey
+        : legacyStage) ?? fallbackStageKey);
+  const activeIndex = Math.max(
+    0,
+    orderedStages.findIndex((stage) => stage.stageKey === activeStageKey),
+  );
   const now = new Date().toISOString();
   const startedAt = workflowRun.startedAt ?? task.startedAt ?? task.createdAt ?? now;
-  const finishedAt = workflowRun.finishedAt
-    ?? (workflowRun.status === "completed" || workflowRun.status === "failed" || workflowRun.status === "cancelled" ? now : null);
+  const finishedAt =
+    workflowRun.finishedAt ??
+    (workflowRun.status === "completed" ||
+    workflowRun.status === "failed" ||
+    workflowRun.status === "cancelled"
+      ? now
+      : null);
 
-  const stagePayloads: Array<typeof taskStageRuns.$inferInsert> = orderedStages.map((stage, index) => {
-    const status = buildStageRunStatus(workflowRun.status, stage.stageKey, activeStageKey, index, activeIndex);
-    return {
-      id: crypto.randomUUID(),
-      workflowRunId: workflowRun.id,
-      stageKey: stage.stageKey,
-      status,
-      primaryRoleAgentId: stage.primaryRoleAgentId,
-      participantRoleAgentIdsJson: stage.participantRoleAgentIdsJson,
-      startedAt: status === "pending" ? null : startedAt,
-      finishedAt:
-        status === "completed" || status === "failed" || status === "cancelled"
-          ? finishedAt ?? now
-          : null,
-      blockingReason: status === "blocked" ? "历史任务暂停，待人工恢复" : null,
-      approvalState: status === "waiting-approval" ? "pending" : "not-required",
-      artifactsSummaryJson: null,
-      createdAt: task.createdAt ?? now,
-      updatedAt: now,
-    };
-  });
+  const stagePayloads: Array<typeof taskStageRuns.$inferInsert> = orderedStages.map(
+    (stage, index) => {
+      const status = buildStageRunStatus(
+        workflowRun.status,
+        stage.stageKey,
+        activeStageKey,
+        index,
+        activeIndex,
+      );
+      return {
+        id: crypto.randomUUID(),
+        workflowRunId: workflowRun.id,
+        stageKey: stage.stageKey,
+        status,
+        primaryRoleAgentId: stage.primaryRoleAgentId,
+        participantRoleAgentIdsJson: stage.participantRoleAgentIdsJson,
+        startedAt: status === "pending" ? null : startedAt,
+        finishedAt:
+          status === "completed" || status === "failed" || status === "cancelled"
+            ? (finishedAt ?? now)
+            : null,
+        blockingReason: status === "blocked" ? "历史任务暂停，待人工恢复" : null,
+        approvalState: status === "waiting-approval" ? "pending" : "not-required",
+        artifactsSummaryJson: null,
+        createdAt: task.createdAt ?? now,
+        updatedAt: now,
+      };
+    },
+  );
 
   await db.insert(taskStageRuns).values(stagePayloads);
 }
@@ -214,7 +363,11 @@ async function ensureLegacyTaskWorkflowRunMigrated(
     where: eq(taskWorkflowRuns.taskId, task.id),
   });
   if (existingWorkflowRun) {
-    await ensureWorkflowStageRunsMigrated(existingWorkflowRun, task, inferLegacyStage(strategy, legacyRoleConclusions));
+    await ensureWorkflowStageRunsMigrated(
+      existingWorkflowRun,
+      task,
+      inferLegacyStage(strategy, legacyRoleConclusions),
+    );
     return existingWorkflowRun;
   }
 
@@ -225,7 +378,11 @@ async function ensureLegacyTaskWorkflowRunMigrated(
   const currentStage = inferCurrentStage(task.status, legacyStage);
   const now = new Date().toISOString();
   const startedAt = task.startedAt ?? task.createdAt ?? now;
-  const finishedAt = task.finishedAt ?? (task.status === "completed" || task.status === "failed" || task.status === "cancelled" ? now : null);
+  const finishedAt =
+    task.finishedAt ??
+    (task.status === "completed" || task.status === "failed" || task.status === "cancelled"
+      ? now
+      : null);
   const workflowRunId = crypto.randomUUID();
 
   await db.insert(taskWorkflowRuns).values({
@@ -240,7 +397,9 @@ async function ensureLegacyTaskWorkflowRunMigrated(
     updatedAt: now,
   });
 
-  const createdWorkflowRun = await db.query.taskWorkflowRuns.findFirst({ where: eq(taskWorkflowRuns.id, workflowRunId) });
+  const createdWorkflowRun = await db.query.taskWorkflowRuns.findFirst({
+    where: eq(taskWorkflowRuns.id, workflowRunId),
+  });
   if (createdWorkflowRun) {
     await ensureWorkflowStageRunsMigrated(createdWorkflowRun, task, legacyStage);
   }
@@ -266,60 +425,9 @@ async function ensureLegacyRoleWorkflowMigratedInternal(taskId: string) {
     .where(eq(roleAggregateConclusions.taskId, taskId));
   if (existingRoleConclusions.length === 0 && legacyRoleConclusions.length > 0) {
     const now = new Date().toISOString();
-    const migratedRoleConclusions: Array<typeof roleAggregateConclusions.$inferInsert> =
-      legacyRoleConclusions.map((item) => {
-        const entry = isNonEmptyObject(item) ? item : {};
-        return {
-          id: typeof entry.id === "string" && entry.id ? entry.id : crypto.randomUUID(),
-          taskId,
-          taskStageRunId: typeof entry.taskStageRunId === "string" ? entry.taskStageRunId : null,
-          roleAgentId: typeof entry.roleAgentId === "string" ? entry.roleAgentId : "role.unknown",
-          stage: typeof entry.stage === "string" ? entry.stage : "unknown",
-          aggregationStrategy:
-            entry.aggregationStrategy === "first-pass"
-            || entry.aggregationStrategy === "majority"
-            || entry.aggregationStrategy === "merge-summary"
-            || entry.aggregationStrategy === "human-review"
-              ? entry.aggregationStrategy
-              : "merge-summary",
-          status:
-            entry.status === "aligned"
-            || entry.status === "partially-aligned"
-            || entry.status === "conflicted"
-            || entry.status === "escalated"
-            || entry.status === "blocked"
-              ? entry.status
-              : "aligned",
-          finalDecision:
-            entry.finalDecision === "allow"
-            || entry.finalDecision === "notify-developer"
-            || entry.finalDecision === "needs-approval"
-            || entry.finalDecision === "block"
-            || entry.finalDecision === "observe"
-            || entry.finalDecision === "human-review"
-              ? entry.finalDecision
-              : "observe",
-          aggregateRiskLevel:
-            entry.aggregateRiskLevel === "low"
-            || entry.aggregateRiskLevel === "medium"
-            || entry.aggregateRiskLevel === "high"
-            || entry.aggregateRiskLevel === "critical"
-              ? entry.aggregateRiskLevel
-              : "medium",
-          confidenceScore: typeof entry.confidenceScore === "number" ? entry.confidenceScore : 0,
-          consensusScore: typeof entry.consensusScore === "number" ? entry.consensusScore : 0,
-          winningRationale: typeof entry.winningRationale === "string" ? entry.winningRationale : "",
-          mergedFindingsJson: normalizeArray(entry.mergedFindings) as JsonRecord[],
-          minorityFindingsJson: normalizeArray(entry.minorityFindings) as JsonRecord[],
-          conflictsJson: normalizeArray(entry.conflicts) as JsonRecord[],
-          approvalRecommendationJson: isNonEmptyObject(entry.approvalRecommendation)
-            ? entry.approvalRecommendation
-            : null,
-          generatedAt: typeof entry.generatedAt === "string" ? entry.generatedAt : now,
-          createdAt: typeof entry.createdAt === "string" ? entry.createdAt : now,
-          updatedAt: typeof entry.updatedAt === "string" ? entry.updatedAt : now,
-        };
-      });
+    const migratedRoleConclusions = legacyRoleConclusions.map((item) =>
+      normalizeLegacyRoleConclusion(item, taskId, now),
+    );
     await db.insert(roleAggregateConclusions).values(migratedRoleConclusions);
   }
 
@@ -329,56 +437,15 @@ async function ensureLegacyRoleWorkflowMigratedInternal(taskId: string) {
     .where(eq(developerChangeRequests.taskId, taskId));
   if (existingChangeRequests.length === 0 && legacyChangeRequests.length > 0) {
     const now = new Date().toISOString();
-    const migratedChangeRequests: Array<typeof developerChangeRequests.$inferInsert> =
-      legacyChangeRequests.map((item) => {
-        const entry = isNonEmptyObject(item) ? item : {};
-        const status =
-          entry.status === "open"
-          || entry.status === "acknowledged"
-          || entry.status === "in-progress"
-          || entry.status === "resolved"
-          || entry.status === "won't-fix"
-            ? entry.status
-            : "open";
-        return {
-          id: typeof entry.id === "string" && entry.id ? entry.id : crypto.randomUUID(),
-          taskId,
-          taskStageRunId: typeof entry.taskStageRunId === "string" ? entry.taskStageRunId : null,
-          sourceRoleAgentId:
-            typeof entry.sourceRoleAgentId === "string" ? entry.sourceRoleAgentId : "role.unknown",
-          assignedRoleAgentId:
-            typeof entry.assignedRoleAgentId === "string" && entry.assignedRoleAgentId
-              ? entry.assignedRoleAgentId
-              : "role.developer",
-          priority:
-            entry.priority === "low"
-            || entry.priority === "medium"
-            || entry.priority === "high"
-            || entry.priority === "critical"
-              ? entry.priority
-              : "medium",
-          title: typeof entry.title === "string" ? entry.title : "",
-          summary: typeof entry.summary === "string" ? entry.summary : "",
-          requiredChangesJson: normalizeArray(entry.requiredChanges).map((change) => String(change)),
-          relatedFindingKeysJson: normalizeArray(entry.relatedFindingKeys).map((key) => String(key)),
-          blocking: Boolean(entry.blocking),
-          approvalRequired: Boolean(entry.approvalRequired),
-          status,
-          resolutionNote: typeof entry.resolutionNote === "string" ? entry.resolutionNote : null,
-          createdAt: typeof entry.createdAt === "string" ? entry.createdAt : now,
-          updatedAt: typeof entry.updatedAt === "string" ? entry.updatedAt : now,
-          resolvedAt:
-            status === "resolved" || status === "won't-fix"
-              ? (typeof entry.resolvedAt === "string" ? entry.resolvedAt : now)
-              : null,
-        };
-      });
+    const migratedChangeRequests = legacyChangeRequests.map((item) =>
+      normalizeLegacyChangeRequest(item, taskId, now),
+    );
     await db.insert(developerChangeRequests).values(migratedChangeRequests);
   }
 
   if ("roleAggregateConclusions" in strategy || "developerChangeRequests" in strategy) {
-    delete strategy.roleAggregateConclusions;
-    delete strategy.developerChangeRequests;
+    strategy.roleAggregateConclusions = undefined;
+    strategy.developerChangeRequests = undefined;
     await db
       .update(tasks)
       .set({ strategy: serializeTaskStrategy(strategy) })

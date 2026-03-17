@@ -1,4 +1,4 @@
-import { expect, test, type Page, type Route } from "@playwright/test";
+import { type Page, type Route, expect, test } from "@playwright/test";
 
 async function fulfillJson(route: Route, payload: unknown) {
   await route.fulfill({
@@ -308,10 +308,14 @@ test.describe("Agent console analytics regression", () => {
     await installApprovalMocks(page);
   });
 
-  test("preserves task deep-link query when analytics writes back a model filter", async ({ page }) => {
+  test("preserves task deep-link query when analytics writes back a model filter", async ({
+    page,
+  }) => {
     await login(page);
 
-    await page.goto("/agents?entryContext=task&focus=attention&ownerScope=all&taskId=task-task-1&projectId=proj-default");
+    await page.goto(
+      "/agents?entryContext=task&focus=attention&ownerScope=all&taskId=task-task-1&projectId=proj-default",
+    );
 
     await expect(page.getByRole("heading", { name: "Agent 运营中心" })).toBeVisible();
     await expect(page.getByText("管理员分析视图")).toBeVisible();
@@ -327,7 +331,9 @@ test.describe("Agent console analytics regression", () => {
     await expect(page.getByText("explore-enterprise").first()).toBeVisible();
   });
 
-  test("navigates from approvals and preserves approval deep-link query when analytics adds risk filter", async ({ page }) => {
+  test("navigates from approvals and preserves approval deep-link query when analytics adds risk filter", async ({
+    page,
+  }) => {
     await login(page);
 
     await page.goto("/approvals");

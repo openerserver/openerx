@@ -16,7 +16,16 @@
 <script setup lang="ts">
 import { computed } from "vue";
 
-type ProjectSectionKey = "overview" | "approval-policies" | "role-execution" | "workflow" | "orchestration" | "task-graph" | "operating-mode" | "boss-operations" | "cost";
+type ProjectSectionKey =
+  | "overview"
+  | "approval-policies"
+  | "role-execution"
+  | "workflow"
+  | "orchestration"
+  | "task-graph"
+  | "operating-mode"
+  | "boss-operations"
+  | "cost";
 
 const props = defineProps<{
   projectId: string;

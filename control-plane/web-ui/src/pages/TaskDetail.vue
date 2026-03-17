@@ -874,8 +874,8 @@ import {
   continueTask,
   forkTaskSession,
   getModelsList,
-  getProjectRuntimeUsageLedgers,
   getProjectRoleExecutionView,
+  getProjectRuntimeUsageLedgers,
   getSessionMessages,
   getSessionTree,
   getTask,
@@ -886,9 +886,9 @@ import {
   updateDeveloperChangeRequest,
   updateTask,
 } from "../lib/api";
-import { showRuntimeRecoveryNotice } from "../lib/runtime-recovery";
+import { type ConfirmationBlock, parseConfirmationBlock } from "../lib/confirmation-parser";
 import { renderMarkdown } from "../lib/markdown";
-import { parseConfirmationBlock, type ConfirmationBlock } from "../lib/confirmation-parser";
+import { showRuntimeRecoveryNotice } from "../lib/runtime-recovery";
 import { RUNTIME_RECOVERY_CONTEXTS } from "../lib/runtime-recovery-notice";
 import { type RealtimeEvent, useRealtimeStore } from "../stores/realtime";
 import {
@@ -898,8 +898,12 @@ import {
 } from "../theme/ui-theme";
 
 const ConfirmationForm = defineAsyncComponent(() => import("../components/ConfirmationForm.vue"));
-const TaskProjectRoleConfigPanel = defineAsyncComponent(() => import("../components/TaskProjectRoleConfigPanel.vue"));
-const TaskRoleWorkflowPanel = defineAsyncComponent(() => import("../components/TaskRoleWorkflowPanel.vue"));
+const TaskProjectRoleConfigPanel = defineAsyncComponent(
+  () => import("../components/TaskProjectRoleConfigPanel.vue"),
+);
+const TaskRoleWorkflowPanel = defineAsyncComponent(
+  () => import("../components/TaskRoleWorkflowPanel.vue"),
+);
 
 const route = useRoute();
 const router = useRouter();
@@ -926,11 +930,12 @@ const hasCodeContext = computed(() => Boolean(task.value?.repoId));
 
 const hasCodeChanges = computed(() => {
   const summary = task.value?.changesSummary;
-  const total = (summary?.filesAdded ?? 0)
-    + (summary?.filesModified ?? 0)
-    + (summary?.filesDeleted ?? 0)
-    + (summary?.totalInsertions ?? 0)
-    + (summary?.totalDeletions ?? 0);
+  const total =
+    (summary?.filesAdded ?? 0) +
+    (summary?.filesModified ?? 0) +
+    (summary?.filesDeleted ?? 0) +
+    (summary?.totalInsertions ?? 0) +
+    (summary?.totalDeletions ?? 0);
 
   return Boolean(task.value?.finalCommitSha || total > 0);
 });
@@ -945,19 +950,19 @@ const hasGovernanceData = computed(() => {
   }
 
   return Boolean(
-    governance.value.approvalRequired
-      || governance.value.violations.length > 0
-      || governance.value.overallRisk !== "low",
+    governance.value.approvalRequired ||
+      governance.value.violations.length > 0 ||
+      governance.value.overallRisk !== "low",
   );
 });
 
 const hasOrchestrationData = computed(() =>
   Boolean(
-    task.value?.category
-      || strategy.value
-      || task.value?.selectedModel
-      || executionPlan.value
-      || (task.value?.executionMode && task.value.executionMode !== "single"),
+    task.value?.category ||
+      strategy.value ||
+      task.value?.selectedModel ||
+      executionPlan.value ||
+      (task.value?.executionMode && task.value.executionMode !== "single"),
   ),
 );
 
@@ -966,10 +971,10 @@ const hasTaskEventsData = computed(() => taskEvents.value.length > 0);
 const hasHookData = computed(() => Boolean(strategy.value?.hookExecutions?.length));
 const hasRoleWorkflowData = computed(() =>
   Boolean(
-    workflowSummary.value?.currentStage
-      || workflowStages.value.length > 0
-      || roleConclusions.value.length > 0
-      || developerChangeRequests.value.length > 0,
+    workflowSummary.value?.currentStage ||
+      workflowStages.value.length > 0 ||
+      roleConclusions.value.length > 0 ||
+      developerChangeRequests.value.length > 0,
   ),
 );
 const hasProjectRoleConfigData = computed(() => projectRoleConfigRows.value.length > 0);
@@ -978,11 +983,20 @@ const showGraphPanel = computed(() => !isWorkbenchEmbedded.value || hasTaskGraph
 const showContextPanel = computed(() => !isWorkbenchEmbedded.value || hasCodeContext.value);
 const showChangesPanel = computed(() => !isWorkbenchEmbedded.value || hasCodeChanges.value);
 const showGovernancePanel = computed(() => !isWorkbenchEmbedded.value || hasGovernanceData.value);
-const showOrchestrationPanel = computed(() => !isWorkbenchEmbedded.value || hasOrchestrationData.value);
+const showOrchestrationPanel = computed(
+  () => !isWorkbenchEmbedded.value || hasOrchestrationData.value,
+);
 const showPipelinePanel = computed(() => !isWorkbenchEmbedded.value || hasPipelineData.value);
-const showHooksPanel = computed(() => !isWorkbenchEmbedded.value ? Boolean(strategy.value?.hookExecutions?.length) : hasHookData.value);
-const showProjectRoleConfigPanel = computed(() => !isWorkbenchEmbedded.value || hasProjectRoleConfigData.value || projectRoleConfigLoading.value);
-const showRoleWorkflowPanel = computed(() => !isWorkbenchEmbedded.value || hasRoleWorkflowData.value || workflowViewLoading.value);
+const showHooksPanel = computed(() =>
+  !isWorkbenchEmbedded.value ? Boolean(strategy.value?.hookExecutions?.length) : hasHookData.value,
+);
+const showProjectRoleConfigPanel = computed(
+  () =>
+    !isWorkbenchEmbedded.value || hasProjectRoleConfigData.value || projectRoleConfigLoading.value,
+);
+const showRoleWorkflowPanel = computed(
+  () => !isWorkbenchEmbedded.value || hasRoleWorkflowData.value || workflowViewLoading.value,
+);
 const showEventsPanel = computed(() => !isWorkbenchEmbedded.value || hasTaskEventsData.value);
 const useCompactInspector = computed(() => isWorkbenchEmbedded.value);
 const orchestrationSummaryItems = computed(() => {
@@ -1020,18 +1034,30 @@ const orchestrationSummaryItems = computed(() => {
 });
 
 const embeddedSidebarPanelCount = computed(
-  () => [
-    showContextPanel.value,
-    showChangesPanel.value,
-    showGovernancePanel.value,
-    showHooksPanel.value,
-    ...(!useCompactInspector.value ? [showOrchestrationPanel.value, showPipelinePanel.value, showGraphPanel.value, showEventsPanel.value] : []),
-  ].filter(Boolean).length,
+  () =>
+    [
+      showContextPanel.value,
+      showChangesPanel.value,
+      showGovernancePanel.value,
+      showHooksPanel.value,
+      ...(!useCompactInspector.value
+        ? [
+            showOrchestrationPanel.value,
+            showPipelinePanel.value,
+            showGraphPanel.value,
+            showEventsPanel.value,
+          ]
+        : []),
+    ].filter(Boolean).length,
 );
 
-const showSidebar = computed(() => !isWorkbenchEmbedded.value || embeddedSidebarPanelCount.value > 0);
+const showSidebar = computed(
+  () => !isWorkbenchEmbedded.value || embeddedSidebarPanelCount.value > 0,
+);
 const sidebarColSpan = computed(() => (isWorkbenchEmbedded.value ? 6 : 8));
-const showEmbeddedGraphSummary = computed(() => isWorkbenchEmbedded.value && hasTaskGraphData.value && !useCompactInspector.value);
+const showEmbeddedGraphSummary = computed(
+  () => isWorkbenchEmbedded.value && hasTaskGraphData.value && !useCompactInspector.value,
+);
 const pageStyle = computed(() => ({
   ...taskDetailThemeStyles.page,
   ...(isReplyFocusMode.value
@@ -1069,7 +1095,9 @@ const composerStyle = computed(() =>
   isCompactMainEmpty.value ? taskDetailThemeStyles.compactComposer : taskDetailThemeStyles.composer,
 );
 const composerFormItemStyle = computed(() =>
-  isCompactMainEmpty.value ? taskDetailThemeStyles.compactComposerFormItem : taskDetailThemeStyles.composerFormItem,
+  isCompactMainEmpty.value
+    ? taskDetailThemeStyles.compactComposerFormItem
+    : taskDetailThemeStyles.composerFormItem,
 );
 const composerRows = computed(() => (isCompactMainEmpty.value ? 2 : 3));
 const composerMaxRows = computed(() => (isReplyFocusMode.value ? 7 : 8));
@@ -1111,8 +1139,8 @@ const pipelineCurrentStep = computed(() => {
     }
   }
 
-  const idx = pipelineStages.value.findIndex((stage) =>
-    stage.status !== "completed" && stage.status !== "skipped",
+  const idx = pipelineStages.value.findIndex(
+    (stage) => stage.status !== "completed" && stage.status !== "skipped",
   );
   return idx === -1 ? pipelineStages.value.length : idx;
 });
@@ -1129,7 +1157,11 @@ const runtimePipelineSummaryItems = computed(() => {
     items.push({ label: "分支", value: runtimePipeline.value.branchName, tone: "blue" });
   }
 
-  items.push({ label: "阶段", value: `${summary.completedStages}/${summary.totalStages}`, tone: "geekblue" });
+  items.push({
+    label: "阶段",
+    value: `${summary.completedStages}/${summary.totalStages}`,
+    tone: "geekblue",
+  });
 
   if (currentStage) {
     items.push({ label: "当前", value: currentStage.label, tone: "processing" });
@@ -1155,13 +1187,18 @@ const taskRuntimeUsageError = ref<string | null>(null);
 
 const taskRuntimeUsageRows = computed(() => taskRuntimeUsage.value?.items ?? []);
 const focusedTaskRuntimeLedger = computed(() => {
-  const routeLedgerId = typeof route.query.runtimeLedger === "string" ? route.query.runtimeLedger : undefined;
+  const routeLedgerId =
+    typeof route.query.runtimeLedger === "string" ? route.query.runtimeLedger : undefined;
   if (routeLedgerId) {
     return taskRuntimeUsageRows.value.find((item) => item.id === routeLedgerId) ?? null;
   }
 
   if (selectedSessionId.value) {
-    return taskRuntimeUsageRows.value.find((item) => item.runtimeSessionId === selectedSessionId.value) ?? null;
+    return (
+      taskRuntimeUsageRows.value.find(
+        (item) => item.runtimeSessionId === selectedSessionId.value,
+      ) ?? null
+    );
   }
 
   return taskRuntimeUsageRows.value[0] ?? null;
@@ -1173,8 +1210,16 @@ const taskRuntimeUsageSummaryItems = computed(() => {
 
   const items: Array<{ label: string; value: string; tone?: string }> = [
     { label: "账本批次", value: String(taskRuntimeUsage.value.totals.ledgerCount), tone: "blue" },
-    { label: "总请求", value: String(taskRuntimeUsage.value.totals.requestCount), tone: "geekblue" },
-    { label: "总 Token", value: formatCompactTokenCount(taskRuntimeUsage.value.totals.totalTokens), tone: "cyan" },
+    {
+      label: "总请求",
+      value: String(taskRuntimeUsage.value.totals.requestCount),
+      tone: "geekblue",
+    },
+    {
+      label: "总 Token",
+      value: formatCompactTokenCount(taskRuntimeUsage.value.totals.totalTokens),
+      tone: "cyan",
+    },
     { label: "总成本", value: formatUsd(taskRuntimeUsage.value.totals.costUsd), tone: "gold" },
   ];
 
@@ -1205,7 +1250,9 @@ const modelsLoading = ref(false);
 const modelsData = ref<Array<Record<string, unknown>> | null>(null);
 const updatingSelectedModel = ref(false);
 const compactInspectorVisible = ref(false);
-const compactInspectorTab = ref<"orchestration" | "pipeline" | "graph" | "events" | "project-role-config" | "role-workflow">("orchestration");
+const compactInspectorTab = ref<
+  "orchestration" | "pipeline" | "graph" | "events" | "project-role-config" | "role-workflow"
+>("orchestration");
 const pendingAssistantState = ref<PendingAssistantState | null>(null);
 const messagesPaneRef = ref<HTMLDivElement | null>(null);
 const messageListEndRef = ref<HTMLDivElement | null>(null);
@@ -1303,7 +1350,10 @@ async function refreshProjectRoleConfig(projectId: string) {
   }
 }
 
-async function handleDeveloperChangeRequestStatus(requestId: string, status: "acknowledged" | "resolved") {
+async function handleDeveloperChangeRequestStatus(
+  requestId: string,
+  status: "acknowledged" | "resolved",
+) {
   if (!taskId.value || updatingChangeRequestIds.value.includes(requestId)) {
     return;
   }
@@ -1322,19 +1372,24 @@ async function handleDeveloperChangeRequestStatus(requestId: string, status: "ac
   } catch (error) {
     message.error(`更新修正请求失败: ${error instanceof Error ? error.message : String(error)}`);
   } finally {
-    updatingChangeRequestIds.value = updatingChangeRequestIds.value.filter((item) => item !== requestId);
+    updatingChangeRequestIds.value = updatingChangeRequestIds.value.filter(
+      (item) => item !== requestId,
+    );
   }
 }
 
-function handleRoleWorkflowRequestStatusChange(payload: { requestId: string; status: "acknowledged" | "resolved" }) {
+function handleRoleWorkflowRequestStatusChange(payload: {
+  requestId: string;
+  status: "acknowledged" | "resolved";
+}) {
   void handleDeveloperChangeRequestStatus(payload.requestId, payload.status);
 }
 
 function filterModelOption(input: string, option: { value?: string; label?: string }) {
   const keyword = input.toLowerCase();
   return (
-    (option.value?.toLowerCase().includes(keyword) ?? false)
-    || (option.label?.toLowerCase().includes(keyword) ?? false)
+    (option.value?.toLowerCase().includes(keyword) ?? false) ||
+    (option.label?.toLowerCase().includes(keyword) ?? false)
   );
 }
 
@@ -1411,10 +1466,7 @@ async function refreshTaskData(
   }
 
   if (options.pipeline) {
-    jobs.push(
-      refreshPipelineData(id)
-        .catch(() => {}),
-    );
+    jobs.push(refreshPipelineData(id).catch(() => {}));
   }
 
   if (options.sessions) {
@@ -1495,7 +1547,8 @@ async function refreshTaskRuntimeUsage(projectId: string, currentTaskId: string)
 }
 
 function getPreferredPipelineSessionId() {
-  const requestedSessionId = typeof route.query.session === "string" ? route.query.session : undefined;
+  const requestedSessionId =
+    typeof route.query.session === "string" ? route.query.session : undefined;
   return requestedSessionId || selectedSessionId.value || task.value?.sessionId;
 }
 
@@ -1537,14 +1590,14 @@ function isPipelineSummary(value: unknown): value is PipelineSummary {
 
   const candidate = value as Record<string, unknown>;
   return (
-    typeof candidate.totalStages === "number"
-    && typeof candidate.completedStages === "number"
-    && typeof candidate.failedStages === "number"
-    && (typeof candidate.currentStageId === "string" || candidate.currentStageId === null)
-    && typeof candidate.totalDurationMs === "number"
-    && typeof candidate.replanCount === "number"
-    && typeof candidate.totalTokens === "object"
-    && candidate.totalTokens !== null
+    typeof candidate.totalStages === "number" &&
+    typeof candidate.completedStages === "number" &&
+    typeof candidate.failedStages === "number" &&
+    (typeof candidate.currentStageId === "string" || candidate.currentStageId === null) &&
+    typeof candidate.totalDurationMs === "number" &&
+    typeof candidate.replanCount === "number" &&
+    typeof candidate.totalTokens === "object" &&
+    candidate.totalTokens !== null
   );
 }
 
@@ -1555,15 +1608,17 @@ function isRuntimePipelineStage(value: unknown): value is RuntimePipelineStage {
 
   const candidate = value as Record<string, unknown>;
   return (
-    typeof candidate.id === "string"
-    && typeof candidate.label === "string"
-    && typeof candidate.order === "number"
-    && typeof candidate.status === "string"
-    && Array.isArray(candidate.dependsOn)
+    typeof candidate.id === "string" &&
+    typeof candidate.label === "string" &&
+    typeof candidate.order === "number" &&
+    typeof candidate.status === "string" &&
+    Array.isArray(candidate.dependsOn)
   );
 }
 
-function parsePipelineStageUpdatedEventData(event: RealtimeEvent): PipelineStageUpdatedEventData | null {
+function parsePipelineStageUpdatedEventData(
+  event: RealtimeEvent,
+): PipelineStageUpdatedEventData | null {
   if (event.type !== "pipeline.stage.updated") {
     return null;
   }
@@ -1584,19 +1639,78 @@ function parsePipelineStageUpdatedEventData(event: RealtimeEvent): PipelineStage
   return data;
 }
 
+function resolvePipelinePatchSessionId(event: RealtimeEvent) {
+  const targetSessionId = event.sessionId || getPreferredPipelineSessionId();
+  if (!targetSessionId) {
+    return null;
+  }
+
+  const preferredSessionId = getPreferredPipelineSessionId();
+  if (preferredSessionId && targetSessionId !== preferredSessionId) {
+    return null;
+  }
+
+  return targetSessionId;
+}
+
+function buildPatchedPipelineState(
+  pipeline: RuntimePipeline,
+  event: RealtimeEvent,
+  data: PipelineStageUpdatedEventData,
+  stages: RuntimePipelineStage[],
+): RuntimePipeline {
+  return {
+    ...pipeline,
+    updatedAt: event.ts,
+    summary: data.summary ?? pipeline.summary,
+    status: data.status ?? pipeline.status,
+    branchName: data.branchName ?? pipeline.branchName,
+    stages,
+  };
+}
+
+function applyPipelineStageRemoval(
+  pipeline: RuntimePipeline,
+  event: RealtimeEvent,
+  data: PipelineStageUpdatedEventData,
+) {
+  if (data.patch?.type !== "remove" || !data.patch.stageId) {
+    return null;
+  }
+
+  const stages = pipeline.stages.filter((stage) => stage.id !== data.patch?.stageId);
+  return buildPatchedPipelineState(pipeline, event, data, stages);
+}
+
+function applyPipelineStageUpsert(
+  pipeline: RuntimePipeline,
+  event: RealtimeEvent,
+  data: PipelineStageUpdatedEventData,
+) {
+  if (data.patch?.type !== "upsert" || !data.patch.stage) {
+    return null;
+  }
+
+  const stages = [...pipeline.stages];
+  const existingIndex = stages.findIndex((stage) => stage.id === data.patch?.stage?.id);
+  if (existingIndex >= 0) {
+    stages.splice(existingIndex, 1, data.patch.stage);
+  } else {
+    stages.push(data.patch.stage);
+  }
+
+  stages.sort((left, right) => left.order - right.order);
+  return buildPatchedPipelineState(pipeline, event, data, stages);
+}
+
 function applyPipelineStagePatch(event: RealtimeEvent) {
   const data = parsePipelineStageUpdatedEventData(event);
   if (!data || !taskId.value || event.taskId !== taskId.value) {
     return false;
   }
 
-  const targetSessionId = event.sessionId || getPreferredPipelineSessionId();
+  const targetSessionId = resolvePipelinePatchSessionId(event);
   if (!targetSessionId) {
-    return false;
-  }
-
-  const preferredSessionId = getPreferredPipelineSessionId();
-  if (preferredSessionId && targetSessionId !== preferredSessionId) {
     return false;
   }
 
@@ -1605,37 +1719,15 @@ function applyPipelineStagePatch(event: RealtimeEvent) {
     return true;
   }
 
-  const stages = [...runtimePipeline.value.stages];
-  if (data.patch?.type === "remove" && data.patch.stageId) {
-    const nextStages = stages.filter((stage) => stage.id !== data.patch?.stageId);
-    runtimePipeline.value = {
-      ...runtimePipeline.value,
-      updatedAt: event.ts,
-      summary: data.summary ?? runtimePipeline.value.summary,
-      status: data.status ?? runtimePipeline.value.status,
-      branchName: data.branchName ?? runtimePipeline.value.branchName,
-      stages: nextStages,
-    };
+  const removePatch = applyPipelineStageRemoval(runtimePipeline.value, event, data);
+  if (removePatch) {
+    runtimePipeline.value = removePatch;
     return true;
   }
 
-  if (data.patch?.type === "upsert" && data.patch.stage) {
-    const existingIndex = stages.findIndex((stage) => stage.id === data.patch?.stage?.id);
-    if (existingIndex >= 0) {
-      stages.splice(existingIndex, 1, data.patch.stage);
-    } else {
-      stages.push(data.patch.stage);
-    }
-
-    stages.sort((left, right) => left.order - right.order);
-    runtimePipeline.value = {
-      ...runtimePipeline.value,
-      updatedAt: event.ts,
-      summary: data.summary ?? runtimePipeline.value.summary,
-      status: data.status ?? runtimePipeline.value.status,
-      branchName: data.branchName ?? runtimePipeline.value.branchName,
-      stages,
-    };
+  const upsertPatch = applyPipelineStageUpsert(runtimePipeline.value, event, data);
+  if (upsertPatch) {
+    runtimePipeline.value = upsertPatch;
     return true;
   }
 
@@ -1643,7 +1735,8 @@ function applyPipelineStagePatch(event: RealtimeEvent) {
 }
 
 function ensureSelectedSession() {
-  const requestedSessionId = typeof route.query.session === "string" ? route.query.session : undefined;
+  const requestedSessionId =
+    typeof route.query.session === "string" ? route.query.session : undefined;
 
   if (sessions.value.length === 0) {
     selectedSessionId.value = undefined;
@@ -1656,11 +1749,15 @@ function ensureSelectedSession() {
     return;
   }
 
-  if (selectedSessionId.value && sessions.value.some((session) => session.id === selectedSessionId.value)) {
+  if (
+    selectedSessionId.value &&
+    sessions.value.some((session) => session.id === selectedSessionId.value)
+  ) {
     return;
   }
 
-  selectedSessionId.value = sessions.value.find((session) => session.isActive)?.id || sessions.value[0]?.id;
+  selectedSessionId.value =
+    sessions.value.find((session) => session.isActive)?.id || sessions.value[0]?.id;
 }
 
 function flattenTree(nodes: SessionTreeNode[]): SessionTreeNode[] {
@@ -1679,7 +1776,8 @@ function ensureSelectedSessionFromTree() {
   if (selectedSessionId.value) return; // already selected via flat sessions
 
   const flat = flattenTree(sessionTree.value);
-  const requestedSessionId = typeof route.query.session === "string" ? route.query.session : undefined;
+  const requestedSessionId =
+    typeof route.query.session === "string" ? route.query.session : undefined;
 
   if (requestedSessionId && flat.some((n) => n.runtimeSessionId === requestedSessionId)) {
     selectedSessionId.value = requestedSessionId;
@@ -1702,7 +1800,12 @@ async function handleActivateSession(sessionId: string) {
     await activateSession(taskId.value, sessionId);
     message.success("已切换到目标分支");
     selectedSessionId.value = sessionId;
-    await refreshTaskData(taskId.value, { task: true, pipeline: false, sessions: true, governance: false });
+    await refreshTaskData(taskId.value, {
+      task: true,
+      pipeline: false,
+      sessions: true,
+      governance: false,
+    });
   } catch {
     message.error("切换分支失败");
   } finally {
@@ -1710,11 +1813,7 @@ async function handleActivateSession(sessionId: string) {
   }
 }
 
-async function refreshSessionMessages(
-  currentTaskId: string,
-  sessionId: string,
-  silent = false,
-) {
+async function refreshSessionMessages(currentTaskId: string, sessionId: string, silent = false) {
   if (!silent) {
     messagesLoading.value = true;
   }
@@ -1886,92 +1985,24 @@ const persistedSessionMessageIds = computed(() => {
 });
 
 const liveAssistantState = computed(() => {
-  const orderedAssistantMessageIds: string[] = [];
-  const knownAssistantIds = new Set<string>();
-  const metaById = new Map<string, StreamingAssistantMeta>();
-  const textById = new Map<string, string>();
-  const incompleteIds = new Set<string>();
-
   if (!selectedSessionId.value) {
     return {
-      orderedAssistantMessageIds,
-      metaById,
-      textById,
-      incompleteIds,
+      orderedAssistantMessageIds: [] as string[],
+      metaById: new Map<string, StreamingAssistantMeta>(),
+      textById: new Map<string, string>(),
+      incompleteIds: new Set<string>(),
     };
   }
 
-  const relevantEvents = taskEvents.value
-    .filter((event) => event.sessionId === selectedSessionId.value)
-    .slice()
-    .reverse();
-
-  const rememberAssistantMessage = (messageId: string) => {
-    if (!knownAssistantIds.has(messageId)) {
-      orderedAssistantMessageIds.push(messageId);
-      knownAssistantIds.add(messageId);
-    }
-  };
-
-  for (const event of relevantEvents) {
-    const rawType = getRealtimeRawType(event);
-
-    if (rawType === "message.updated") {
-      const info = getRealtimeInfo(event);
-      if (info) {
-        const messageId = typeof info.id === "string" ? info.id : null;
-        const role = typeof info.role === "string" ? info.role : null;
-
-        if (messageId && role === "assistant") {
-          const time = info.time && typeof info.time === "object"
-            ? (info.time as Record<string, unknown>)
-            : undefined;
-
-          metaById.set(messageId, {
-            agent: typeof info.agent === "string" ? info.agent : undefined,
-            createdAt: parseMessageTimestamp(time?.created ?? time?.completed),
-          });
-          rememberAssistantMessage(messageId);
-
-          if (typeof time?.completed === "number") {
-            incompleteIds.delete(messageId);
-          } else {
-            incompleteIds.add(messageId);
-          }
-        }
-      }
-    }
-
-    if (rawType !== "message.updated" && rawType !== "message.part.updated") {
-      continue;
-    }
-
-    const part = getRealtimePart(event);
-    if (!part) {
-      continue;
-    }
-
-    const messageId = typeof part.messageID === "string" ? part.messageID : null;
-    const partType = typeof part.type === "string" ? part.type : null;
-    const text = typeof part.text === "string" ? part.text : null;
-    if (!messageId || partType !== "text" || text === null) {
-      continue;
-    }
-
-    rememberAssistantMessage(messageId);
-    textById.set(messageId, text);
-  }
-
-  return {
-    orderedAssistantMessageIds,
-    metaById,
-    textById,
-    incompleteIds,
-  };
+  return collectLiveAssistantState(taskEvents.value, selectedSessionId.value);
 });
 
 const streamingAssistantDraft = computed<SessionMessageView | null>(() => {
-  for (let index = liveAssistantState.value.orderedAssistantMessageIds.length - 1; index >= 0; index -= 1) {
+  for (
+    let index = liveAssistantState.value.orderedAssistantMessageIds.length - 1;
+    index >= 0;
+    index -= 1
+  ) {
     const messageId = liveAssistantState.value.orderedAssistantMessageIds[index];
     if (persistedSessionMessageIds.value.has(messageId)) {
       continue;
@@ -2009,30 +2040,7 @@ const pendingAssistantMessage = computed<SessionMessageView | null>(() => {
 
   const pendingTime = Date.parse(pending.sentAt);
   if (Number.isFinite(pendingTime) && Array.isArray(sessionMessages.value)) {
-    const hasAssistantReply = sessionMessages.value.some((message) => {
-      if (!message || typeof message !== "object") {
-        return false;
-      }
-
-      const info = (message as Record<string, unknown>).info;
-      if (!info || typeof info !== "object") {
-        return false;
-      }
-
-      const role = (info as Record<string, unknown>).role;
-      if (role !== "assistant") {
-        return false;
-      }
-
-      const time = (info as Record<string, unknown>).time;
-      const created = time && typeof time === "object"
-        ? (time as Record<string, unknown>).created
-        : undefined;
-
-      return typeof created === "number" && created >= pendingTime;
-    });
-
-    if (hasAssistantReply) {
+    if (hasAssistantReplyAfter(sessionMessages.value, pendingTime)) {
       return null;
     }
   }
@@ -2081,7 +2089,8 @@ watch(selectedSessionId, (sessionId) => {
     return;
   }
 
-  const currentQuerySession = typeof route.query.session === "string" ? route.query.session : undefined;
+  const currentQuerySession =
+    typeof route.query.session === "string" ? route.query.session : undefined;
   if (currentQuerySession !== sessionId) {
     void router.replace({
       query: {
@@ -2095,20 +2104,21 @@ watch(selectedSessionId, (sessionId) => {
   void refreshPipelineData(taskId.value, sessionId);
 });
 
-watch(
-  [streamingAssistantDraft, pendingAssistantMessage],
-  ([streamingDraft, pendingMessage]) => {
-    if (streamingDraft || !pendingMessage) {
-      pendingAssistantState.value = null;
-    }
-  },
-);
+watch([streamingAssistantDraft, pendingAssistantMessage], ([streamingDraft, pendingMessage]) => {
+  if (streamingDraft || !pendingMessage) {
+    pendingAssistantState.value = null;
+  }
+});
 
 watch(
   () => route.query.session,
   (sessionQuery) => {
     const sessionId = typeof sessionQuery === "string" ? sessionQuery : undefined;
-    if (sessionId && sessionId !== selectedSessionId.value && sessions.value.some((session) => session.id === sessionId)) {
+    if (
+      sessionId &&
+      sessionId !== selectedSessionId.value &&
+      sessions.value.some((session) => session.id === sessionId)
+    ) {
       selectedSessionId.value = sessionId;
     }
   },
@@ -2221,10 +2231,15 @@ async function handleForkToSecondary() {
 
   forking.value = true;
   try {
-    const nextTitle = `${selectedSessionLabel(selectedSession.value || { id: selectedSessionId.value, title: "", isActive: false, summary: null, createdAt: null, updatedAt: null } as SessionInfo)} 分叉`;
+    const nextTitle = `${selectedSessionLabel(selectedSession.value || ({ id: selectedSessionId.value, title: "", isActive: false, summary: null, createdAt: null, updatedAt: null } as SessionInfo))} 分叉`;
     const result = await forkTaskSession(taskId.value, selectedSessionId.value, nextTitle);
     message.success("已创建分叉分支");
-    await refreshTaskData(taskId.value, { task: false, pipeline: false, sessions: true, governance: false });
+    await refreshTaskData(taskId.value, {
+      task: false,
+      pipeline: false,
+      sessions: true,
+      governance: false,
+    });
     if (result.sessionId) {
       selectedSessionId.value = result.sessionId;
     }
@@ -2254,7 +2269,7 @@ async function handleForkAndRun() {
   forkAndRunning.value = true;
   const prompt = continuePrompt.value.trim();
   try {
-    const nextTitle = `${selectedSessionLabel(selectedSession.value || { id: selectedSessionId.value, title: "", isActive: false, summary: null, createdAt: null, updatedAt: null } as SessionInfo)} 分叉`;
+    const nextTitle = `${selectedSessionLabel(selectedSession.value || ({ id: selectedSessionId.value, title: "", isActive: false, summary: null, createdAt: null, updatedAt: null } as SessionInfo))} 分叉`;
     const result = await forkTaskSession(taskId.value, selectedSessionId.value, nextTitle);
     if (result.sessionId) {
       selectedSessionId.value = result.sessionId;
@@ -2269,7 +2284,12 @@ async function handleForkAndRun() {
       continuePrompt.value = "";
       const t = await getTask(taskId.value);
       task.value = t;
-      await refreshTaskData(taskId.value, { task: false, pipeline: false, sessions: true, governance: false });
+      await refreshTaskData(taskId.value, {
+        task: false,
+        pipeline: false,
+        sessions: true,
+        governance: false,
+      });
       scheduleSessionRefresh();
     }
   } catch (error) {
@@ -2306,7 +2326,10 @@ function handleCopyMessage(text?: string) {
 
 function handleQuoteToInput(text?: string) {
   if (!text) return;
-  const quoted = text.split("\n").map((line) => `> ${line}`).join("\n");
+  const quoted = text
+    .split("\n")
+    .map((line) => `> ${line}`)
+    .join("\n");
   continuePrompt.value = continuePrompt.value
     ? `${continuePrompt.value}\n\n${quoted}\n\n`
     : `${quoted}\n\n`;
@@ -2348,16 +2371,27 @@ async function handleForkFromMessage(messageId: string) {
   if (!taskId.value || !selectedSessionId.value) return;
   forkingMessageId.value = messageId;
   try {
-    const nextTitle = `${selectedSessionLabel(selectedSession.value || { id: selectedSessionId.value, title: "", isActive: false, summary: null, createdAt: null, updatedAt: null } as SessionInfo)} 分叉`;
-    const result = await forkTaskSession(taskId.value, selectedSessionId.value, nextTitle, messageId);
+    const nextTitle = `${selectedSessionLabel(selectedSession.value || ({ id: selectedSessionId.value, title: "", isActive: false, summary: null, createdAt: null, updatedAt: null } as SessionInfo))} 分叉`;
+    const result = await forkTaskSession(
+      taskId.value,
+      selectedSessionId.value,
+      nextTitle,
+      messageId,
+    );
     message.success("已从此消息创建分叉分支");
-    await refreshTaskData(taskId.value, { task: false, pipeline: false, sessions: true, governance: false });
+    await refreshTaskData(taskId.value, {
+      task: false,
+      pipeline: false,
+      sessions: true,
+      governance: false,
+    });
     if (result.sessionId) {
       selectedSessionId.value = result.sessionId;
       // 预填输入框，引用 fork 源消息
       const sourceMsg = sessionMessageItems.value.find((m) => m.key === messageId);
       if (sourceMsg?.text) {
-        const snippet = sourceMsg.text.length > 120 ? `${sourceMsg.text.slice(0, 120)}…` : sourceMsg.text;
+        const snippet =
+          sourceMsg.text.length > 120 ? `${sourceMsg.text.slice(0, 120)}…` : sourceMsg.text;
         continuePrompt.value = `基于前面的分析：\n> ${snippet}\n\n`;
       }
     }
@@ -2375,7 +2409,12 @@ async function handleForkFromSession(runtimeSessionId: string) {
     const nextTitle = `Session ${runtimeSessionId.slice(0, 8)} 分叉`;
     const result = await forkTaskSession(taskId.value, runtimeSessionId, nextTitle);
     message.success("已创建分叉分支");
-    await refreshTaskData(taskId.value, { task: false, pipeline: false, sessions: true, governance: false });
+    await refreshTaskData(taskId.value, {
+      task: false,
+      pipeline: false,
+      sessions: true,
+      governance: false,
+    });
     if (result.sessionId) {
       selectedSessionId.value = result.sessionId;
     }
@@ -2391,7 +2430,12 @@ async function handleArchiveSession(runtimeSessionId: string) {
   try {
     await archiveTaskSession(taskId.value, runtimeSessionId);
     message.success("分支已归档");
-    await refreshTaskData(taskId.value, { task: false, pipeline: false, sessions: true, governance: false });
+    await refreshTaskData(taskId.value, {
+      task: false,
+      pipeline: false,
+      sessions: true,
+      governance: false,
+    });
   } catch (error) {
     message.error(`归档失败: ${error}`);
   }
@@ -2477,35 +2521,8 @@ const latestAssistantMessageIncomplete = computed(() => {
     return false;
   }
 
-  for (let index = sessionMessages.value.length - 1; index >= 0; index -= 1) {
-    const message = sessionMessages.value[index];
-    if (!message || typeof message !== "object") {
-      continue;
-    }
-
-    const info = (message as Record<string, unknown>).info;
-    if (!info || typeof info !== "object") {
-      continue;
-    }
-
-    const role = (info as Record<string, unknown>).role;
-    if (role !== "assistant") {
-      if (role === "user") {
-        return false;
-      }
-
-      continue;
-    }
-
-    const time = (info as Record<string, unknown>).time;
-    const completed = time && typeof time === "object"
-      ? (time as Record<string, unknown>).completed
-      : undefined;
-
-    return typeof completed !== "number";
-  }
-
-  return false;
+  const latest = getLatestInteractiveMessageInfo(sessionMessages.value);
+  return latest?.role === "assistant" ? typeof latest.completed !== "number" : false;
 });
 
 const latestInteractiveMessageRole = computed(() => {
@@ -2513,24 +2530,7 @@ const latestInteractiveMessageRole = computed(() => {
     return null as string | null;
   }
 
-  for (let index = sessionMessages.value.length - 1; index >= 0; index -= 1) {
-    const message = sessionMessages.value[index];
-    if (!message || typeof message !== "object") {
-      continue;
-    }
-
-    const info = (message as Record<string, unknown>).info;
-    if (!info || typeof info !== "object") {
-      continue;
-    }
-
-    const role = (info as Record<string, unknown>).role;
-    if (role === "user" || role === "assistant") {
-      return role;
-    }
-  }
-
-  return null as string | null;
+  return getLatestInteractiveMessageInfo(sessionMessages.value)?.role ?? null;
 });
 
 const isAwaitingAssistantResponse = computed(() => {
@@ -2554,7 +2554,9 @@ const isAwaitingAssistantResponse = computed(() => {
 });
 
 const canContinueCurrentSession = computed(
-  () => Boolean(selectedSessionId.value && continuePrompt.value.trim()) && !isAwaitingAssistantResponse.value,
+  () =>
+    Boolean(selectedSessionId.value && continuePrompt.value.trim()) &&
+    !isAwaitingAssistantResponse.value,
 );
 
 function stopLiveMessageRefresh() {
@@ -2583,13 +2585,12 @@ function scheduleLiveMessageRefresh() {
     }
 
     liveMessageRefreshInFlight = true;
-    void refreshSessionMessages(taskId.value, selectedSessionId.value, true)
-      .finally(() => {
-        liveMessageRefreshInFlight = false;
-        if (isAwaitingAssistantResponse.value) {
-          scheduleLiveMessageRefresh();
-        }
-      });
+    void refreshSessionMessages(taskId.value, selectedSessionId.value, true).finally(() => {
+      liveMessageRefreshInFlight = false;
+      if (isAwaitingAssistantResponse.value) {
+        scheduleLiveMessageRefresh();
+      }
+    });
   }, LIVE_MESSAGE_REFRESH_INTERVAL_MS);
 }
 
@@ -2665,6 +2666,165 @@ interface PendingAssistantState {
   sessionId: string;
   prompt: string;
   sentAt: string;
+}
+
+function getMessageRecord(message: unknown): Record<string, unknown> | null {
+  return message && typeof message === "object" ? (message as Record<string, unknown>) : null;
+}
+
+function getMessageInfoRecord(message: unknown): Record<string, unknown> | null {
+  return asRecord(getMessageRecord(message)?.info);
+}
+
+function getMessageTimeRecord(messageOrInfo: unknown): Record<string, unknown> | null {
+  return (
+    asRecord(getMessageInfoRecord(messageOrInfo)?.time) ?? asRecord(asRecord(messageOrInfo)?.time)
+  );
+}
+
+function getMessageRoleValue(message: unknown): string | undefined {
+  return asString(getMessageInfoRecord(message)?.role);
+}
+
+function getMessageAgentValue(message: unknown): string | undefined {
+  return asString(getMessageInfoRecord(message)?.agent);
+}
+
+function getMessageIdValue(message: unknown, fallback: string): string {
+  return asString(getMessageInfoRecord(message)?.id) ?? fallback;
+}
+
+function getMessageCreatedAt(message: unknown): string | undefined {
+  const time = getMessageTimeRecord(message);
+  return parseMessageTimestamp(time?.created ?? time?.completed);
+}
+
+function getMessageParts(message: unknown): SessionPart[] {
+  const record = getMessageRecord(message);
+  return Array.isArray(record?.parts) ? (record.parts as SessionPart[]) : [];
+}
+
+function rememberOrderedMessageId(
+  orderedAssistantMessageIds: string[],
+  knownAssistantIds: Set<string>,
+  messageId: string,
+) {
+  if (!knownAssistantIds.has(messageId)) {
+    orderedAssistantMessageIds.push(messageId);
+    knownAssistantIds.add(messageId);
+  }
+}
+
+function readAssistantMessageMeta(info: Record<string, unknown>): StreamingAssistantMeta {
+  const time = asRecord(info.time);
+  return {
+    agent: asString(info.agent),
+    createdAt: parseMessageTimestamp(time?.created ?? time?.completed),
+  };
+}
+
+function processLiveAssistantMetaEvent(
+  event: RealtimeEvent,
+  orderedAssistantMessageIds: string[],
+  knownAssistantIds: Set<string>,
+  metaById: Map<string, StreamingAssistantMeta>,
+  incompleteIds: Set<string>,
+) {
+  const info = getRealtimeInfo(event);
+  if (!info) {
+    return;
+  }
+  const messageId = asString(info?.id);
+  if (!messageId || asString(info?.role) !== "assistant") {
+    return;
+  }
+
+  metaById.set(messageId, readAssistantMessageMeta(info));
+  rememberOrderedMessageId(orderedAssistantMessageIds, knownAssistantIds, messageId);
+  if (typeof getMessageTimeRecord(info)?.completed === "number") {
+    incompleteIds.delete(messageId);
+  } else {
+    incompleteIds.add(messageId);
+  }
+}
+
+function processLiveAssistantTextEvent(
+  event: RealtimeEvent,
+  orderedAssistantMessageIds: string[],
+  knownAssistantIds: Set<string>,
+  textById: Map<string, string>,
+) {
+  const part = getRealtimePart(event);
+  const messageId = asString(part?.messageID);
+  if (!messageId || asString(part?.type) !== "text" || typeof part?.text !== "string") {
+    return;
+  }
+
+  rememberOrderedMessageId(orderedAssistantMessageIds, knownAssistantIds, messageId);
+  textById.set(messageId, part.text);
+}
+
+function getLatestInteractiveMessageInfo(messages: unknown[]) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    const role = getMessageRoleValue(message);
+    if (role === "user" || role === "assistant") {
+      return {
+        role,
+        completed: getMessageTimeRecord(message)?.completed,
+      };
+    }
+  }
+
+  return null;
+}
+
+function collectLiveAssistantState(events: RealtimeEvent[], sessionId: string) {
+  const orderedAssistantMessageIds: string[] = [];
+  const knownAssistantIds = new Set<string>();
+  const metaById = new Map<string, StreamingAssistantMeta>();
+  const textById = new Map<string, string>();
+  const incompleteIds = new Set<string>();
+
+  for (const event of events
+    .filter((item) => item.sessionId === sessionId)
+    .slice()
+    .reverse()) {
+    const rawType = getRealtimeRawType(event);
+    if (rawType === "message.updated") {
+      processLiveAssistantMetaEvent(
+        event,
+        orderedAssistantMessageIds,
+        knownAssistantIds,
+        metaById,
+        incompleteIds,
+      );
+    }
+
+    if (rawType !== "message.updated" && rawType !== "message.part.updated") {
+      continue;
+    }
+
+    processLiveAssistantTextEvent(event, orderedAssistantMessageIds, knownAssistantIds, textById);
+  }
+
+  return {
+    orderedAssistantMessageIds,
+    metaById,
+    textById,
+    incompleteIds,
+  };
+}
+
+function hasAssistantReplyAfter(messages: unknown[], pendingTime: number) {
+  return messages.some((message) => {
+    if (getMessageRoleValue(message) !== "assistant") {
+      return false;
+    }
+
+    const created = getMessageTimeRecord(message)?.created;
+    return typeof created === "number" && created >= pendingTime;
+  });
 }
 
 function parseMessageTimestamp(value: unknown): string | undefined {
@@ -2767,7 +2927,24 @@ function formatRatio(ratio?: number): string | undefined {
   return `${Math.round(ratio * 100)}%`;
 }
 
-function buildRuntimeBurstMetricsLabel(info: Record<string, unknown>, metadata: Record<string, unknown>) {
+function resolveRuntimeBurstEventType(source: string | undefined, type: string | undefined) {
+  if (
+    !type ||
+    (source !== "runtime_burst_guard" &&
+      type !== "warning" &&
+      type !== "paused-approval" &&
+      type !== "cooldown")
+  ) {
+    return null;
+  }
+
+  return type;
+}
+
+function buildRuntimeBurstMetricsLabel(
+  info: Record<string, unknown>,
+  metadata: Record<string, unknown>,
+) {
   const parts: string[] = [];
   const requests = asNumber(info.requests);
   const tokens = asNumber(info.tokens);
@@ -2790,6 +2967,52 @@ function buildRuntimeBurstMetricsLabel(info: Record<string, unknown>, metadata: 
   return parts.join(" / ");
 }
 
+function buildRuntimeBurstState(args: {
+  type: string;
+  windowLabel: string;
+  metricsLabel: string;
+  countdownLabel?: string;
+}): RuntimeBurstSessionState | null {
+  if (args.type === "warning") {
+    return {
+      kind: "warning",
+      badgeLabel: "突发预警",
+      badgeColor: "gold",
+      summary: `${args.windowLabel} 使用已逼近上限`,
+      detail: args.metricsLabel || "请关注当前付费模型调用密度。",
+      alertType: "warning",
+    };
+  }
+
+  if (args.type === "paused-approval") {
+    return {
+      kind: "paused-approval",
+      badgeLabel: "待审批",
+      badgeColor: "processing",
+      summary: "当前分支已暂停，等待批准继续",
+      detail: args.metricsLabel || "触发 burst guard，需审批后继续。",
+      countdownLabel: args.countdownLabel,
+      alertType: "info",
+    };
+  }
+
+  if (args.type === "cooldown") {
+    return {
+      kind: "cooldown",
+      badgeLabel: "冷却中",
+      badgeColor: "orange",
+      summary: args.countdownLabel
+        ? `审批已通过，冷却剩余 ${args.countdownLabel}`
+        : "审批已通过，正在冷却",
+      detail: args.metricsLabel || "冷却期结束后会恢复正常节流状态。",
+      countdownLabel: args.countdownLabel,
+      alertType: "info",
+    };
+  }
+
+  return null;
+}
+
 function normalizeRuntimeBurstSessionState(
   event: RealtimeEvent,
   nowMs: number,
@@ -2801,8 +3024,8 @@ function normalizeRuntimeBurstSessionState(
 
   const type = asString(info.type);
   const metadata = asRecord(info.metadata);
-  const source = asString(metadata?.source);
-  if (!type || (source !== "runtime_burst_guard" && type !== "warning" && type !== "paused-approval" && type !== "cooldown")) {
+  const resolvedType = resolveRuntimeBurstEventType(asString(metadata?.source), type);
+  if (!resolvedType) {
     return null;
   }
 
@@ -2810,47 +3033,17 @@ function normalizeRuntimeBurstSessionState(
   const windowLabel = formatRuntimeWindow(asNumber(windowConfig?.seconds));
   const metricsLabel = buildRuntimeBurstMetricsLabel(info, metadata || {});
   const until = asString(info.until) || asString(info.reset);
-  const untilMs = until ? Date.parse(until) : NaN;
+  const untilMs = until ? Date.parse(until) : Number.NaN;
   const countdownLabel = Number.isFinite(untilMs)
     ? formatRelativeDuration(untilMs - nowMs)
     : undefined;
 
-  if (type === "warning") {
-    return {
-      kind: "warning",
-      badgeLabel: "突发预警",
-      badgeColor: "gold",
-      summary: `${windowLabel} 使用已逼近上限`,
-      detail: metricsLabel || "请关注当前付费模型调用密度。",
-      alertType: "warning",
-    };
-  }
-
-  if (type === "paused-approval") {
-    return {
-      kind: "paused-approval",
-      badgeLabel: "待审批",
-      badgeColor: "processing",
-      summary: "当前分支已暂停，等待批准继续",
-      detail: metricsLabel || "触发 burst guard，需审批后继续。",
-      countdownLabel,
-      alertType: "info",
-    };
-  }
-
-  if (type === "cooldown") {
-    return {
-      kind: "cooldown",
-      badgeLabel: "冷却中",
-      badgeColor: "orange",
-      summary: countdownLabel ? `审批已通过，冷却剩余 ${countdownLabel}` : "审批已通过，正在冷却",
-      detail: metricsLabel || "冷却期结束后会恢复正常节流状态。",
-      countdownLabel,
-      alertType: "info",
-    };
-  }
-
-  return null;
+  return buildRuntimeBurstState({
+    type: resolvedType,
+    windowLabel,
+    metricsLabel,
+    countdownLabel,
+  });
 }
 
 function summarizeUnknownValue(value: unknown): string | undefined {
@@ -2934,7 +3127,10 @@ function normalizeToolInput(part: SessionPart): Record<string, unknown> {
   return {};
 }
 
-function normalizePreviewText(value: unknown, maxLength = 800): { text?: string; truncated: boolean } {
+function normalizePreviewText(
+  value: unknown,
+  maxLength = 800,
+): { text?: string; truncated: boolean } {
   const raw =
     typeof value === "string"
       ? value.trim()
@@ -2987,7 +3183,10 @@ function extractTaggedContent(source: string | undefined, tag: string): string |
   return match?.[1]?.trim() || undefined;
 }
 
-function buildReadPreview(outputText: string | undefined): { filePath?: string; readPreview?: string } {
+function buildReadPreview(outputText: string | undefined): {
+  filePath?: string;
+  readPreview?: string;
+} {
   const filePath = extractTaggedContent(outputText, "path");
   const content = extractTaggedContent(outputText, "content");
   const entries = extractTaggedContent(outputText, "entries");
@@ -2999,7 +3198,12 @@ function buildReadPreview(outputText: string | undefined): { filePath?: string; 
   };
 }
 
-function buildToolRawContent(part: SessionPart, input: Record<string, unknown>, state: ToolStateView, status?: string) {
+function buildToolRawContent(
+  part: SessionPart,
+  input: Record<string, unknown>,
+  state: ToolStateView,
+  status?: string,
+) {
   const payload = {
     tool: part.toolName ?? part.tool,
     status,
@@ -3095,6 +3299,41 @@ function stateColorFromStatus(status?: string): string {
   return "default";
 }
 
+function getToolStateLabel(status?: string) {
+  if (status === "completed") return "完成";
+  if (status === "running") return "执行中";
+  if (status === "error" || status === "failed") return "失败";
+  return status || "已触发";
+}
+
+function getToolDisplayLabel(part: SessionPart) {
+  return summarizeUnknownValue(part.toolName) ?? summarizeUnknownValue(part.tool) ?? "工具调用";
+}
+
+function buildPersistedSessionMessage(message: unknown, index: number): SessionMessageView | null {
+  const parts = getMessageParts(message);
+  const toolCalls = parts
+    .map((part, partIndex) => buildToolCallView(part, partIndex))
+    .filter((item): item is ToolCallView => Boolean(item));
+  const messageId = getMessageIdValue(message, `${index}`);
+  const persistedText = normalizeTextParts(parts);
+  const liveText = liveAssistantState.value.textById.get(messageId);
+  const mergedText =
+    liveText && liveText.length > (persistedText?.length ?? 0) ? liveText : persistedText;
+  const role = getMessageRoleValue(message) ?? "system";
+  const item = {
+    key: messageId,
+    role,
+    agent: getMessageAgentValue(message),
+    text: mergedText,
+    toolCalls,
+    createdAt: getMessageCreatedAt(message),
+    isStreaming: role === "assistant" && liveAssistantState.value.incompleteIds.has(messageId),
+  } satisfies SessionMessageView;
+
+  return item.text || item.toolCalls.length > 0 || item.isStreaming ? item : null;
+}
+
 function buildToolCallView(part: SessionPart, index: number): ToolCallView | null {
   if (part.type !== "tool") {
     return null;
@@ -3105,15 +3344,8 @@ function buildToolCallView(part: SessionPart, index: number): ToolCallView | nul
   const input = normalizeToolInput(part);
   const fullOutput = stringifyUnknownValue(state.output ?? state.error);
   const output = normalizePreviewText(state.output ?? state.error);
-  const stateLabel =
-    status === "completed"
-      ? "完成"
-      : status === "running"
-        ? "执行中"
-        : status === "error" || status === "failed"
-          ? "失败"
-          : status || "已触发";
-  const label = summarizeUnknownValue(part.toolName) ?? summarizeUnknownValue(part.tool) ?? "工具调用";
+  const stateLabel = getToolStateLabel(status);
+  const label = getToolDisplayLabel(part);
   const toolKind = String(part.toolName ?? part.tool ?? "tool");
   const readDetails = toolKind === "read" ? buildReadPreview(fullOutput) : {};
 
@@ -3124,7 +3356,8 @@ function buildToolCallView(part: SessionPart, index: number): ToolCallView | nul
     stateLabel,
     stateColor: stateColorFromStatus(status),
     headline: buildToolHeadline(label, input),
-    description: summarizeUnknownValue(input.description) ?? summarizeUnknownValue(input.explanation),
+    description:
+      summarizeUnknownValue(input.description) ?? summarizeUnknownValue(input.explanation),
     goal: summarizeUnknownValue(input.goal),
     command: toolKind === "bash" ? summarizeUnknownValue(input.command) : undefined,
     filePath: summarizeUnknownValue(input.filePath) ?? readDetails.filePath,
@@ -3141,33 +3374,8 @@ function buildToolCallView(part: SessionPart, index: number): ToolCallView | nul
 const sessionMessageItems = computed<SessionMessageView[]>(() => {
   const persistedItems = Array.isArray(sessionMessages.value)
     ? sessionMessages.value
-    .map((message, index) => {
-      const raw = message && typeof message === "object" ? (message as Record<string, unknown>) : {};
-      const info = raw.info && typeof raw.info === "object" ? (raw.info as Record<string, unknown>) : {};
-      const time = info.time && typeof info.time === "object" ? (info.time as Record<string, unknown>) : {};
-      const parts = Array.isArray(raw.parts) ? (raw.parts as SessionPart[]) : [];
-      const toolCalls = parts
-        .map((part, partIndex) => buildToolCallView(part, partIndex))
-        .filter((item): item is ToolCallView => Boolean(item));
-      const messageId = typeof info.id === "string" ? info.id : `${index}`;
-      const persistedText = normalizeTextParts(parts);
-      const liveText = liveAssistantState.value.textById.get(messageId);
-      const mergedText = liveText && liveText.length > (persistedText?.length ?? 0)
-        ? liveText
-        : persistedText;
-      const role = typeof info.role === "string" ? info.role : "system";
-
-      return {
-        key: messageId,
-        role,
-        agent: typeof info.agent === "string" ? info.agent : undefined,
-        text: mergedText,
-        toolCalls,
-        createdAt: parseMessageTimestamp(time.created ?? time.completed),
-        isStreaming: role === "assistant" && liveAssistantState.value.incompleteIds.has(messageId),
-      } satisfies SessionMessageView;
-    })
-    .filter((item) => item.text || item.toolCalls.length > 0 || item.isStreaming)
+        .map((message, index) => buildPersistedSessionMessage(message, index))
+        .filter((item): item is SessionMessageView => Boolean(item))
     : [];
 
   if (
@@ -3233,7 +3441,10 @@ async function scheduleMessageAutoScroll() {
   });
 }
 
-function nextStreamingRevealProgress(fullText: string, currentLength: number): { nextLength: number; delay: number } {
+function nextStreamingRevealProgress(
+  fullText: string,
+  currentLength: number,
+): { nextLength: number; delay: number } {
   const remaining = Math.max(fullText.length - currentLength, 0);
   if (remaining <= 0) {
     return { nextLength: fullText.length, delay: STREAMING_REVEAL_INTERVAL_MS };
@@ -3357,7 +3568,8 @@ function getConfirmationBlock(item: SessionMessageView): ConfirmationBlock | nul
   if (item.role !== "assistant" || !item.text || item.isStreaming || item.isPending) return null;
   const text = messageDisplayText(item);
   if (!text) return null;
-  if (confirmationBlockCache.has(item.key)) return confirmationBlockCache.get(item.key)!;
+  const cached = confirmationBlockCache.get(item.key);
+  if (cached) return cached;
   const result = parseConfirmationBlock(text);
   confirmationBlockCache.set(item.key, result);
   return result;
@@ -3365,14 +3577,16 @@ function getConfirmationBlock(item: SessionMessageView): ConfirmationBlock | nul
 
 /** Non-null version for template binding (guarded by v-if) */
 function getConfirmationBlockNonNull(item: SessionMessageView): ConfirmationBlock {
-  return getConfirmationBlock(item)!;
+  const block = getConfirmationBlock(item);
+  if (!block) {
+    throw new Error("Confirmation block is unavailable for the selected message.");
+  }
+  return block;
 }
 
 function handleConfirmationSubmit(reply: string) {
   if (!reply.trim()) return;
-  continuePrompt.value = continuePrompt.value
-    ? `${continuePrompt.value}\n\n${reply}`
-    : reply;
+  continuePrompt.value = continuePrompt.value ? `${continuePrompt.value}\n\n${reply}` : reply;
   // Scroll to the composer for visibility
   nextTick(() => {
     const composer = document.querySelector(".reply-composer-shell__textarea");
@@ -3519,8 +3733,6 @@ function pipelineStepStatus(status: RuntimePipelineStage["status"]) {
       return "process" as const;
     case "failed":
       return "error" as const;
-    case "pending":
-    case "skipped":
     default:
       return "wait" as const;
   }
@@ -3550,14 +3762,28 @@ function pipelineOutputPanelHeader(stage: RuntimePipelineStage) {
 }
 
 const compactInspectorTabs = computed(() => {
-  const tabs: Array<{ key: "orchestration" | "pipeline" | "graph" | "events" | "project-role-config" | "role-workflow"; label: string; count?: number }> = [];
+  const tabs: Array<{
+    key:
+      | "orchestration"
+      | "pipeline"
+      | "graph"
+      | "events"
+      | "project-role-config"
+      | "role-workflow";
+    label: string;
+    count?: number;
+  }> = [];
 
   if (useCompactInspector.value || showOrchestrationPanel.value) {
     tabs.push({ key: "orchestration", label: "编排决策" });
   }
 
   if (useCompactInspector.value || showPipelinePanel.value) {
-    tabs.push({ key: "pipeline", label: "运行流水线", count: pipelineStages.value.length || undefined });
+    tabs.push({
+      key: "pipeline",
+      label: "运行流水线",
+      count: pipelineStages.value.length || undefined,
+    });
   }
 
   if (useCompactInspector.value || showGraphPanel.value) {
@@ -3579,7 +3805,15 @@ const compactInspectorTabs = computed(() => {
   return tabs;
 });
 
-function openCompactInspector(preferred?: "orchestration" | "pipeline" | "graph" | "events" | "project-role-config" | "role-workflow") {
+function openCompactInspector(
+  preferred?:
+    | "orchestration"
+    | "pipeline"
+    | "graph"
+    | "events"
+    | "project-role-config"
+    | "role-workflow",
+) {
   const availableKeys = compactInspectorTabs.value.map((item) => item.key);
   if (preferred && availableKeys.includes(preferred)) {
     compactInspectorTab.value = preferred;
@@ -3600,7 +3834,9 @@ function openReplyFocusWindow() {
   query.set("workbench", "1");
   query.set("reply", "1");
 
-  const sessionId = selectedSessionId.value || (typeof route.query.session === "string" ? route.query.session : undefined);
+  const sessionId =
+    selectedSessionId.value ||
+    (typeof route.query.session === "string" ? route.query.session : undefined);
   if (sessionId) {
     query.set("session", sessionId);
   }
@@ -3746,12 +3982,16 @@ watch(
   { immediate: true },
 );
 
-watch(compactInspectorTabs, (tabs) => {
-  const availableKeys = tabs.map((item) => item.key);
-  if (!availableKeys.includes(compactInspectorTab.value)) {
-    compactInspectorTab.value = availableKeys[0] || "orchestration";
-  }
-}, { immediate: true });
+watch(
+  compactInspectorTabs,
+  (tabs) => {
+    const availableKeys = tabs.map((item) => item.key);
+    if (!availableKeys.includes(compactInspectorTab.value)) {
+      compactInspectorTab.value = availableKeys[0] || "orchestration";
+    }
+  },
+  { immediate: true },
+);
 
 function riskColor(level: string) {
   const map: Record<string, string> = {

@@ -82,7 +82,13 @@ interface ResolvedRoleAgentResult {
 }
 
 interface ParsedRoleDecision {
-  finalDecision: "allow" | "notify-developer" | "needs-approval" | "block" | "observe" | "human-review";
+  finalDecision:
+    | "allow"
+    | "notify-developer"
+    | "needs-approval"
+    | "block"
+    | "observe"
+    | "human-review";
   aggregateRiskLevel: "low" | "medium" | "high" | "critical";
   winningRationale: string;
   summary: string;
@@ -193,90 +199,93 @@ function extractJsonObject(text: string) {
   }
 }
 
+function buildFallbackRoleDecision(
+  text: string,
+  finalDecision: ParsedRoleDecision["finalDecision"],
+  aggregateRiskLevel: ParsedRoleDecision["aggregateRiskLevel"],
+  requiredChanges: string[] = [],
+  approvalRequired = false,
+): ParsedRoleDecision {
+  return {
+    finalDecision,
+    aggregateRiskLevel,
+    winningRationale: text.trim() || "未提供说明。",
+    summary: text.trim() || "未提供摘要。",
+    requiredChanges,
+    mergedFindings: [],
+    approvalRequired,
+    confidenceScore: 0.5,
+  };
+}
+
+function parseJsonRoleDecision(
+  payload: Record<string, unknown>,
+  text: string,
+): ParsedRoleDecision {
+  const winningRationale =
+    (typeof payload.winningRationale === "string" && payload.winningRationale.trim()) ||
+    (typeof payload.summary === "string" && payload.summary.trim()) ||
+    text.trim() ||
+    "未提供说明。";
+  const summary =
+    (typeof payload.summary === "string" && payload.summary.trim()) ||
+    (typeof payload.winningRationale === "string" && payload.winningRationale.trim()) ||
+    text.trim() ||
+    "未提供摘要。";
+
+  return {
+    finalDecision: normalizeDecision(payload.finalDecision),
+    aggregateRiskLevel: normalizeRisk(payload.aggregateRiskLevel),
+    winningRationale,
+    summary,
+    requiredChanges: Array.isArray(payload.requiredChanges)
+      ? payload.requiredChanges.map((item) => String(item)).filter(Boolean)
+      : [],
+    mergedFindings: Array.isArray(payload.mergedFindings)
+      ? (payload.mergedFindings.filter((item) => item && typeof item === "object") as Array<
+          Record<string, unknown>
+        >)
+      : [],
+    approvalRequired: Boolean(payload.approvalRequired),
+    confidenceScore: clampScore(payload.confidenceScore, 0.7),
+  };
+}
+
+function matchFallbackRoleDecision(text: string) {
+  const lowered = text.toLowerCase();
+
+  if (lowered.includes("block") || lowered.includes("阻断")) {
+    return buildFallbackRoleDecision(text, "block", "high");
+  }
+  if (lowered.includes("approval") || lowered.includes("审批")) {
+    return buildFallbackRoleDecision(text, "needs-approval", "medium", [], true);
+  }
+  if (lowered.includes("change") || lowered.includes("修改") || lowered.includes("fix")) {
+    return buildFallbackRoleDecision(
+      text,
+      "notify-developer",
+      "medium",
+      [text.trim() || "请根据角色建议调整当前阶段产出。"],
+    );
+  }
+
+  return buildFallbackRoleDecision(text, "allow", "low");
+}
+
 function parseRoleDecision(text: string): ParsedRoleDecision {
   const payload = extractJsonObject(text);
   if (payload) {
-    return {
-      finalDecision: normalizeDecision(payload.finalDecision),
-      aggregateRiskLevel: normalizeRisk(payload.aggregateRiskLevel),
-      winningRationale:
-        (typeof payload.winningRationale === "string" && payload.winningRationale.trim())
-        || (typeof payload.summary === "string" && payload.summary.trim())
-        || text.trim()
-        || "未提供说明。",
-      summary:
-        (typeof payload.summary === "string" && payload.summary.trim())
-        || (typeof payload.winningRationale === "string" && payload.winningRationale.trim())
-        || text.trim()
-        || "未提供摘要。",
-      requiredChanges: Array.isArray(payload.requiredChanges)
-        ? payload.requiredChanges.map((item) => String(item)).filter(Boolean)
-        : [],
-      mergedFindings: Array.isArray(payload.mergedFindings)
-        ? payload.mergedFindings.filter((item) => Boolean(item && typeof item === "object")) as Array<Record<string, unknown>>
-        : [],
-      approvalRequired: Boolean(payload.approvalRequired),
-      confidenceScore: clampScore(payload.confidenceScore, 0.7),
-    };
+    return parseJsonRoleDecision(payload, text);
   }
 
-  const lowered = text.toLowerCase();
-  if (lowered.includes("block") || lowered.includes("阻断")) {
-    return {
-      finalDecision: "block",
-      aggregateRiskLevel: "high",
-      winningRationale: text.trim() || "未提供说明。",
-      summary: text.trim() || "未提供摘要。",
-      requiredChanges: [],
-      mergedFindings: [],
-      approvalRequired: false,
-      confidenceScore: 0.5,
-    };
-  }
-  if (lowered.includes("approval") || lowered.includes("审批")) {
-    return {
-      finalDecision: "needs-approval",
-      aggregateRiskLevel: "medium",
-      winningRationale: text.trim() || "未提供说明。",
-      summary: text.trim() || "未提供摘要。",
-      requiredChanges: [],
-      mergedFindings: [],
-      approvalRequired: true,
-      confidenceScore: 0.5,
-    };
-  }
-  if (lowered.includes("change") || lowered.includes("修改") || lowered.includes("fix")) {
-    return {
-      finalDecision: "notify-developer",
-      aggregateRiskLevel: "medium",
-      winningRationale: text.trim() || "未提供说明。",
-      summary: text.trim() || "未提供摘要。",
-      requiredChanges: [text.trim() || "请根据角色建议调整当前阶段产出。"],
-      mergedFindings: [],
-      approvalRequired: false,
-      confidenceScore: 0.5,
-    };
-  }
-
-  return {
-    finalDecision: "allow",
-    aggregateRiskLevel: "low",
-    winningRationale: text.trim() || "未提供说明。",
-    summary: text.trim() || "未提供摘要。",
-    requiredChanges: [],
-    mergedFindings: [],
-    approvalRequired: false,
-    confidenceScore: 0.5,
-  };
+  return matchFallbackRoleDecision(text);
 }
 
 function dedupeStrings(values: string[]) {
   return Array.from(new Set(values.filter(Boolean)));
 }
 
-function summarizeStageIntervention(
-  conclusions: RoleConclusionPayload[],
-): StageInterventionResult {
+function summarizeStageIntervention(conclusions: RoleConclusionPayload[]): StageInterventionResult {
   const dominant = [...conclusions]
     .filter((item) => Boolean(item.finalDecision))
     .sort((left, right) => {
@@ -327,11 +336,14 @@ function summarizeStageIntervention(
 
 function pickDominantDecision(values: RoleExecutionRecord[]) {
   return [...values].sort((left, right) => {
-    const decisionGap = DECISION_WEIGHT[right.parsed.finalDecision] - DECISION_WEIGHT[left.parsed.finalDecision];
+    const decisionGap =
+      DECISION_WEIGHT[right.parsed.finalDecision] - DECISION_WEIGHT[left.parsed.finalDecision];
     if (decisionGap !== 0) {
       return decisionGap;
     }
-    return RISK_WEIGHT[right.parsed.aggregateRiskLevel] - RISK_WEIGHT[left.parsed.aggregateRiskLevel];
+    return (
+      RISK_WEIGHT[right.parsed.aggregateRiskLevel] - RISK_WEIGHT[left.parsed.aggregateRiskLevel]
+    );
   })[0]?.parsed;
 }
 
@@ -361,13 +373,14 @@ function aggregateRoleExecutions(
   }
   const topBucket = Math.max(...decisionHistogram.values(), 0);
   const consensusScore = executions.length > 0 ? topBucket / executions.length : 0;
-  const conflicts = executions.length > 1 && decisionHistogram.size > 1
-    ? executions.map((execution) => ({
-        type: "binding-decision-mismatch",
-        severity: execution.parsed.aggregateRiskLevel,
-        summary: `${execution.bindingLabel} 给出 ${execution.parsed.finalDecision}。`,
-      }))
-    : [];
+  const conflicts =
+    executions.length > 1 && decisionHistogram.size > 1
+      ? executions.map((execution) => ({
+          type: "binding-decision-mismatch",
+          severity: execution.parsed.aggregateRiskLevel,
+          summary: `${execution.bindingLabel} 给出 ${execution.parsed.finalDecision}。`,
+        }))
+      : [];
 
   const finalDecision = dominant.finalDecision;
   let status: "aligned" | "partially-aligned" | "conflicted" | "escalated" | "blocked" = "aligned";
@@ -381,23 +394,29 @@ function aggregateRoleExecutions(
 
   return {
     ...dominant,
-    aggregateRiskLevel: executions.reduce<ParsedRoleDecision["aggregateRiskLevel"]>((current, execution) => (
-      RISK_WEIGHT[execution.parsed.aggregateRiskLevel] > RISK_WEIGHT[current]
-        ? execution.parsed.aggregateRiskLevel
-        : current
-    ), dominant.aggregateRiskLevel),
+    aggregateRiskLevel: executions.reduce<ParsedRoleDecision["aggregateRiskLevel"]>(
+      (current, execution) =>
+        RISK_WEIGHT[execution.parsed.aggregateRiskLevel] > RISK_WEIGHT[current]
+          ? execution.parsed.aggregateRiskLevel
+          : current,
+      dominant.aggregateRiskLevel,
+    ),
     summary: dedupeStrings(executions.map((execution) => execution.parsed.summary)).join("\n"),
     winningRationale: dominant.winningRationale,
-    requiredChanges: dedupeStrings(executions.flatMap((execution) => execution.parsed.requiredChanges)),
+    requiredChanges: dedupeStrings(
+      executions.flatMap((execution) => execution.parsed.requiredChanges),
+    ),
     mergedFindings: executions.flatMap((execution) => execution.parsed.mergedFindings),
     approvalRequired: Boolean(
-      role.requiresApprovalForWrite
-      || dominant.approvalRequired
-      || finalDecision === "needs-approval",
+      role.requiresApprovalForWrite ||
+        dominant.approvalRequired ||
+        finalDecision === "needs-approval",
     ),
-    confidenceScore: executions.length > 0
-      ? executions.reduce((sum, execution) => sum + execution.parsed.confidenceScore, 0) / executions.length
-      : 0,
+    confidenceScore:
+      executions.length > 0
+        ? executions.reduce((sum, execution) => sum + execution.parsed.confidenceScore, 0) /
+          executions.length
+        : 0,
     consensusScore,
     conflicts,
     status,
@@ -412,7 +431,9 @@ function buildRolePrompt(input: {
 }) {
   const entryCriteria = (input.stage.entryCriteriaJson || []).join("; ");
   const exitCriteria = (input.stage.exitCriteriaJson || []).join("; ");
-  const resultSummary = input.task.result?.trim() ? `\n任务当前结果摘要：${input.task.result.trim()}` : "";
+  const resultSummary = input.task.result?.trim()
+    ? `\n任务当前结果摘要：${input.task.result.trim()}`
+    : "";
   return [
     `你当前作为 ${input.role.name} 参与 OpenerX 工作流阶段审查。`,
     `任务标题：${input.task.title}`,
@@ -427,11 +448,15 @@ function buildRolePrompt(input: {
     "aggregateRiskLevel 只能是 low, medium, high, critical。",
     "requiredChanges 必须是字符串数组；没有时返回空数组。",
     "mergedFindings 必须是对象数组；没有时返回空数组。",
-  ].filter(Boolean).join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 async function fetchTask(authorization: string, taskId: string) {
-  const result = await cpFetch<TaskRecord>(`/api/tasks/${encodeURIComponent(taskId)}`, { authorization });
+  const result = await cpFetch<TaskRecord>(`/api/tasks/${encodeURIComponent(taskId)}`, {
+    authorization,
+  });
   return result.ok ? result.data : null;
 }
 
@@ -447,10 +472,13 @@ async function fetchTemplateStage(authorization: string, templateId: string, sta
 }
 
 async function fetchWorkflowStages(authorization: string, taskId: string) {
-  const result = await cpFetch<TaskWorkflowPayload>(`/api/tasks/${encodeURIComponent(taskId)}/workflow`, {
-    authorization,
-  });
-  return result.ok ? (result.data?.data?.stages || []) : [];
+  const result = await cpFetch<TaskWorkflowPayload>(
+    `/api/tasks/${encodeURIComponent(taskId)}/workflow`,
+    {
+      authorization,
+    },
+  );
+  return result.ok ? result.data?.data?.stages || [] : [];
 }
 
 async function fetchExistingRoleConclusions(authorization: string, taskId: string) {
@@ -458,7 +486,7 @@ async function fetchExistingRoleConclusions(authorization: string, taskId: strin
     `/api/tasks/${encodeURIComponent(taskId)}/role-conclusions`,
     { authorization },
   );
-  return result.ok ? (result.data?.data || []) : [];
+  return result.ok ? result.data?.data || [] : [];
 }
 
 async function fetchExistingChangeRequests(authorization: string, taskId: string) {
@@ -466,7 +494,7 @@ async function fetchExistingChangeRequests(authorization: string, taskId: string
     `/api/tasks/${encodeURIComponent(taskId)}/developer-change-requests`,
     { authorization },
   );
-  return result.ok ? (result.data?.data || []) : [];
+  return result.ok ? result.data?.data || [] : [];
 }
 
 async function resolveRoleExecution(
@@ -517,9 +545,10 @@ async function executeRoleBindings(input: {
   role: ResolvedRoleAgentResult["role"];
   stageStatus: string;
 }) {
-  const bindings = input.role.defaultExecutionMode === "parallel-review"
-    ? input.role.bindings
-    : input.role.bindings.slice(0, 1);
+  const bindings =
+    input.role.defaultExecutionMode === "parallel-review"
+      ? input.role.bindings
+      : input.role.bindings.slice(0, 1);
 
   const executions = await Promise.all(
     bindings.map(async (binding) => {
@@ -538,7 +567,10 @@ async function executeRoleBindings(input: {
             ? (() => {
                 const index = binding.model.indexOf(":");
                 return index > 0
-                  ? { providerId: binding.model.slice(0, index), modelId: binding.model.slice(index + 1) }
+                  ? {
+                      providerId: binding.model.slice(0, index),
+                      modelId: binding.model.slice(index + 1),
+                    }
                   : undefined;
               })()
             : undefined,
@@ -548,9 +580,10 @@ async function executeRoleBindings(input: {
         },
       );
 
-      const text = typeof result.text === "string" && result.text.trim()
-        ? result.text.trim()
-        : result.error || "未返回内容";
+      const text =
+        typeof result.text === "string" && result.text.trim()
+          ? result.text.trim()
+          : result.error || "未返回内容";
 
       return {
         bindingId: binding.bindingId,
@@ -612,16 +645,17 @@ async function persistDeveloperChangeRequest(input: {
   }
 
   if (
-    input.execution.finalDecision !== "notify-developer"
-    && input.execution.finalDecision !== "needs-approval"
-    && input.execution.finalDecision !== "block"
+    input.execution.finalDecision !== "notify-developer" &&
+    input.execution.finalDecision !== "needs-approval" &&
+    input.execution.finalDecision !== "block"
   ) {
     return;
   }
 
-  const requiredChanges = input.execution.requiredChanges.length > 0
-    ? input.execution.requiredChanges
-    : [input.execution.summary || `${input.role.name} 对 ${input.stageKey} 阶段提出修正建议。`];
+  const requiredChanges =
+    input.execution.requiredChanges.length > 0
+      ? input.execution.requiredChanges
+      : [input.execution.summary || `${input.role.name} 对 ${input.stageKey} 阶段提出修正建议。`];
 
   await cpFetch(`/api/tasks/${encodeURIComponent(input.taskId)}/developer-change-requests`, {
     method: "POST",
@@ -629,11 +663,12 @@ async function persistDeveloperChangeRequest(input: {
     body: {
       taskStageRunId: input.stageRunId,
       sourceRoleAgentId: input.role.id,
-      priority: input.execution.aggregateRiskLevel === "critical"
-        ? "critical"
-        : input.execution.aggregateRiskLevel === "high"
-          ? "high"
-          : "medium",
+      priority:
+        input.execution.aggregateRiskLevel === "critical"
+          ? "critical"
+          : input.execution.aggregateRiskLevel === "high"
+            ? "high"
+            : "medium",
       title,
       summary: input.execution.summary,
       requiredChanges,
@@ -643,7 +678,110 @@ async function persistDeveloperChangeRequest(input: {
   });
 }
 
-export async function dispatchStageIntervention(input: StageInterventionInput): Promise<StageInterventionResult> {
+function buildSyntheticInterventionConclusion(resolved: ResolvedRoleAgentResult) {
+  return {
+    finalDecision: "human-review" as const,
+    aggregateRiskLevel: resolved.role.riskLevel === "low" ? "medium" : resolved.role.riskLevel,
+    winningRationale: `未执行 ${resolved.role.name}：${resolved.validation.reasons.join("; ") || "缺少可用 binding"}`,
+    summary: `未执行 ${resolved.role.name}：${resolved.validation.reasons.join("; ") || "缺少可用 binding"}`,
+    requiredChanges: [],
+    mergedFindings: [],
+    approvalRequired: false,
+    confidenceScore: 0,
+    consensusScore: 0,
+    conflicts: [],
+    status: "escalated" as const,
+  };
+}
+
+function appendStageConclusion(
+  stageConclusions: RoleConclusionPayload[],
+  roleId: string,
+  stageKey: string,
+  decision: {
+    finalDecision: ParsedRoleDecision["finalDecision"];
+    aggregateRiskLevel: ParsedRoleDecision["aggregateRiskLevel"];
+    winningRationale: string;
+    approvalRequired: boolean;
+  },
+) {
+  stageConclusions.push({
+    roleAgentId: roleId,
+    stage: stageKey,
+    finalDecision: decision.finalDecision,
+    aggregateRiskLevel: decision.aggregateRiskLevel,
+    winningRationale: decision.winningRationale,
+    approvalRecommendation: {
+      required: decision.approvalRequired,
+    },
+  });
+}
+
+async function processStageRoleIntervention(input: {
+  authorization: string;
+  task: TaskRecord;
+  templateId: string;
+  stageKey: string;
+  stage: WorkflowTemplateStageRecord;
+  stageStatus: string;
+  stageRunId?: string;
+  roleAgentId: string;
+  existingRequests: DeveloperChangeRequestPayload[];
+  stageConclusions: RoleConclusionPayload[];
+}) {
+  const resolved = await resolveRoleExecution(
+    input.authorization,
+    input.roleAgentId,
+    input.task.projectId,
+    input.templateId,
+    input.stageKey,
+  );
+  if (!resolved) {
+    return;
+  }
+
+  if (!resolved.validation.executable || resolved.role.bindings.length === 0) {
+    const synthetic = buildSyntheticInterventionConclusion(resolved);
+    await persistRoleConclusion({
+      authorization: input.authorization,
+      taskId: input.task.id,
+      role: resolved.role,
+      stageKey: input.stageKey,
+      execution: synthetic,
+    });
+    appendStageConclusion(input.stageConclusions, resolved.role.id, input.stageKey, synthetic);
+    return;
+  }
+
+  const executions = await executeRoleBindings({
+    task: input.task,
+    stage: input.stage,
+    role: resolved.role,
+    stageStatus: input.stageStatus,
+  });
+  const aggregate = aggregateRoleExecutions(resolved.role, input.stageKey, executions);
+  await persistRoleConclusion({
+    authorization: input.authorization,
+    taskId: input.task.id,
+    role: resolved.role,
+    stageKey: input.stageKey,
+    execution: aggregate,
+  });
+  appendStageConclusion(input.stageConclusions, resolved.role.id, input.stageKey, aggregate);
+  await persistDeveloperChangeRequest({
+    authorization: input.authorization,
+    taskId: input.task.id,
+    role: resolved.role,
+    stageKey: input.stageKey,
+    stageRunId: input.stageRunId,
+    execution: aggregate,
+    existingRequests: input.existingRequests,
+  });
+}
+
+export async function dispatchStageIntervention(
+  input: StageInterventionInput,
+): Promise<StageInterventionResult> {
   const [task, stage, workflowStages, existingConclusions, existingRequests] = await Promise.all([
     fetchTask(input.authorization, input.taskId),
     fetchTemplateStage(input.authorization, input.templateId, input.stageKey),
@@ -660,7 +798,8 @@ export async function dispatchStageIntervention(input: StageInterventionInput): 
   }
 
   const stageRunId = workflowStages.find((entry) => entry.stageKey === input.stageKey)?.id;
-  const stageStatus = workflowStages.find((entry) => entry.stageKey === input.stageKey)?.status || "running";
+  const stageStatus =
+    workflowStages.find((entry) => entry.stageKey === input.stageKey)?.status || "running";
   const involvedRoles = collectStageRoleIds(stage);
   const stageConclusions = existingConclusions.filter((item) => item.stage === input.stageKey);
 
@@ -672,83 +811,17 @@ export async function dispatchStageIntervention(input: StageInterventionInput): 
       continue;
     }
 
-    const resolved = await resolveRoleExecution(
-      input.authorization,
-      roleAgentId,
-      task.projectId,
-      input.templateId,
-      input.stageKey,
-    );
-    if (!resolved) {
-      continue;
-    }
-
-    if (!resolved.validation.executable || resolved.role.bindings.length === 0) {
-      const synthetic = {
-        finalDecision: "human-review" as const,
-        aggregateRiskLevel: resolved.role.riskLevel === "low" ? "medium" : resolved.role.riskLevel,
-        winningRationale: `未执行 ${resolved.role.name}：${resolved.validation.reasons.join("; ") || "缺少可用 binding"}`,
-        summary: `未执行 ${resolved.role.name}：${resolved.validation.reasons.join("; ") || "缺少可用 binding"}`,
-        requiredChanges: [],
-        mergedFindings: [],
-        approvalRequired: false,
-        confidenceScore: 0,
-        consensusScore: 0,
-        conflicts: [],
-        status: "escalated" as const,
-      };
-      await persistRoleConclusion({
-        authorization: input.authorization,
-        taskId: input.taskId,
-        role: resolved.role,
-        stageKey: input.stageKey,
-        execution: synthetic,
-      });
-      stageConclusions.push({
-        roleAgentId: resolved.role.id,
-        stage: input.stageKey,
-        finalDecision: synthetic.finalDecision,
-        aggregateRiskLevel: synthetic.aggregateRiskLevel,
-        winningRationale: synthetic.winningRationale,
-        approvalRecommendation: {
-          required: synthetic.approvalRequired,
-        },
-      });
-      continue;
-    }
-
-    const executions = await executeRoleBindings({
+    await processStageRoleIntervention({
+      authorization: input.authorization,
       task,
+      templateId: input.templateId,
+      stageKey: input.stageKey,
       stage,
-      role: resolved.role,
       stageStatus,
-    });
-    const aggregate = aggregateRoleExecutions(resolved.role, input.stageKey, executions);
-    await persistRoleConclusion({
-      authorization: input.authorization,
-      taskId: input.taskId,
-      role: resolved.role,
-      stageKey: input.stageKey,
-      execution: aggregate,
-    });
-    stageConclusions.push({
-      roleAgentId: resolved.role.id,
-      stage: input.stageKey,
-      finalDecision: aggregate.finalDecision,
-      aggregateRiskLevel: aggregate.aggregateRiskLevel,
-      winningRationale: aggregate.winningRationale,
-      approvalRecommendation: {
-        required: aggregate.approvalRequired,
-      },
-    });
-    await persistDeveloperChangeRequest({
-      authorization: input.authorization,
-      taskId: input.taskId,
-      role: resolved.role,
-      stageKey: input.stageKey,
       stageRunId,
-      execution: aggregate,
+      roleAgentId,
       existingRequests,
+      stageConclusions,
     });
   }
 

@@ -314,7 +314,12 @@ async function mountPage(tasks = [makeTask()]) {
           name: "RouterLink",
           props: ["to"],
           setup(props, { slots }) {
-            return () => h("a", { "data-to": typeof props.to === "string" ? props.to : String(props.to ?? "") }, slots.default ? slots.default() : undefined);
+            return () =>
+              h(
+                "a",
+                { "data-to": typeof props.to === "string" ? props.to : String(props.to ?? "") },
+                slots.default ? slots.default() : undefined,
+              );
           },
         }),
       },

@@ -1,7 +1,7 @@
-import { cpFetch } from "./control-plane-client";
-import { type PaidExecutionGuardState } from "./paid-execution-guard";
-import { mergeTaskStrategy, parseTaskStrategy } from "./orchestration-strategy";
 import { recordAgentAudit, recordModelUsage } from "../modules/agent-control/run-persistence";
+import { cpFetch } from "./control-plane-client";
+import { mergeTaskStrategy, parseTaskStrategy } from "./orchestration-strategy";
+import type { PaidExecutionGuardState } from "./paid-execution-guard";
 
 interface TaskGuardRecord {
   projectId: string;
@@ -91,25 +91,135 @@ function buildGuardDetail(
   };
 }
 
+function buildNoTripOutcome() {
+  return { tripped: false } satisfies PaidExecutionRuntimeOutcome;
+}
+
+function resolveRuntimeModelRoute(input: {
+  modelRoute: string;
+  currentGuard?: PaidExecutionGuardState;
+  selectedModel?: string | null;
+}) {
+  return parseModelRoute(
+    input.modelRoute ||
+      input.currentGuard?.modelRoute ||
+      input.selectedModel ||
+      "github-copilot:gpt-5-mini",
+  );
+}
+
+function computeNextPaidExecutionGuardState(args: {
+  currentGuard: PaidExecutionGuardState;
+  requestDelta: number;
+  tokenUsed: number;
+  costUsd: number;
+}) {
+  const nextActualRequests = (args.currentGuard.actualRequests || 0) + args.requestDelta;
+  const nextActualTokenUsage = (args.currentGuard.actualTokenUsage || 0) + args.tokenUsed;
+  const nextActualCost = Number(((args.currentGuard.actualCost || 0) + args.costUsd).toFixed(2));
+  const overRequestLimit =
+    args.currentGuard.maxRequestsPerRun > 0 &&
+    nextActualRequests > args.currentGuard.maxRequestsPerRun;
+  const overCostLimit =
+    args.currentGuard.maxEstimatedCostUsdPerRun > 0 &&
+    nextActualCost > args.currentGuard.maxEstimatedCostUsdPerRun;
+  const breakerReason = overRequestLimit
+    ? `actual requests ${nextActualRequests} exceeded ${args.currentGuard.maxRequestsPerRun}`
+    : overCostLimit
+      ? `actual cost $${nextActualCost} exceeded $${args.currentGuard.maxEstimatedCostUsdPerRun}`
+      : undefined;
+
+  return {
+    nextGuard: {
+      ...args.currentGuard,
+      actualRequests: nextActualRequests,
+      actualTokenUsage: nextActualTokenUsage,
+      actualCost: nextActualCost,
+      ...(breakerReason
+        ? {
+            breakerReason,
+            breakerTrippedAt: args.currentGuard.breakerTrippedAt || new Date().toISOString(),
+          }
+        : {}),
+    } satisfies PaidExecutionGuardState,
+    breakerReason,
+  };
+}
+
+async function persistPaidExecutionGuardState(input: {
+  authorization: string;
+  taskId: string;
+  strategy?: string | null;
+  nextGuard: PaidExecutionGuardState;
+}) {
+  await cpFetch(`/api/tasks/${encodeURIComponent(input.taskId)}`, {
+    method: "PATCH",
+    authorization: input.authorization,
+    body: {
+      strategy: mergeTaskStrategy(input.strategy, {
+        paidExecutionGuard: input.nextGuard,
+      }),
+    },
+  });
+}
+
+async function recordBreakerAuditIfNeeded(input: {
+  breakerReason?: string;
+  currentGuard?: PaidExecutionGuardState;
+  nextGuard: PaidExecutionGuardState;
+  projectId: string;
+  taskId: string;
+  sessionId?: string;
+  agentRunId?: string;
+  action?: string;
+  providerId: string;
+  modelId: string;
+}) {
+  if (!input.breakerReason || input.currentGuard?.breakerTrippedAt) {
+    return;
+  }
+
+  await recordAgentAudit({
+    projectId: input.projectId,
+    taskId: input.taskId,
+    sessionId: input.sessionId,
+    agentRunId: input.agentRunId,
+    eventType: "paid_execution",
+    action: "breaker_tripped",
+    detail: buildGuardDetail(input.nextGuard, {
+      sourceAction: input.action,
+      providerId: input.providerId,
+      modelId: input.modelId,
+    }),
+    riskLevel: "high",
+  });
+}
+
 export async function recordPaidExecutionRuntimeUsage(
   input: RecordPaidExecutionRuntimeUsageInput,
 ): Promise<PaidExecutionRuntimeOutcome> {
   if (input.tokenUsed <= 0) {
-    return { tripped: false };
+    return buildNoTripOutcome();
   }
 
-  const taskResult = await cpFetch<TaskGuardRecord>(`/api/tasks/${encodeURIComponent(input.taskId)}`, {
-    authorization: input.authorization,
-  });
+  const taskResult = await cpFetch<TaskGuardRecord>(
+    `/api/tasks/${encodeURIComponent(input.taskId)}`,
+    {
+      authorization: input.authorization,
+    },
+  );
   if (!taskResult.ok) {
-    return { tripped: false };
+    return buildNoTripOutcome();
   }
 
   const task = taskResult.data;
   const taskStrategy = parseTaskStrategy(task.strategy);
   const currentGuard = taskStrategy.paidExecutionGuard as PaidExecutionGuardState | undefined;
-
-  const resolvedModel = parseModelRoute(input.modelRoute || currentGuard?.modelRoute || task.selectedModel || "github-copilot:gpt-5-mini");
+  const resolvedModel = resolveRuntimeModelRoute({
+    modelRoute: input.modelRoute,
+    currentGuard,
+    selectedModel: task.selectedModel,
+  });
   const usage = await recordModelUsage({
     projectId: input.projectId || task.projectId,
     taskId: input.taskId,
@@ -119,78 +229,49 @@ export async function recordPaidExecutionRuntimeUsage(
     modelId: resolvedModel.modelId,
     tokenUsed: input.tokenUsed,
     runtimeLedger: input.runtimeLedger,
-    audit: input.action
-      && currentGuard?.enabled
-      ? {
-          projectId: input.projectId || task.projectId,
-          taskId: input.taskId,
-          sessionId: input.sessionId,
-          agentRunId: input.agentRunId,
-          eventType: "paid_execution",
-          action: input.action,
-          detail: input.detail,
-          riskLevel: input.riskLevel,
-        }
-      : undefined,
+    audit:
+      input.action && currentGuard?.enabled
+        ? {
+            projectId: input.projectId || task.projectId,
+            taskId: input.taskId,
+            sessionId: input.sessionId,
+            agentRunId: input.agentRunId,
+            eventType: "paid_execution",
+            action: input.action,
+            detail: input.detail,
+            riskLevel: input.riskLevel,
+          }
+        : undefined,
   });
 
   if (!currentGuard?.enabled) {
-    return { tripped: false };
+    return buildNoTripOutcome();
   }
-
-  const nextActualRequests = (currentGuard.actualRequests || 0) + input.requestDelta;
-  const nextActualTokenUsage = (currentGuard.actualTokenUsage || 0) + usage.totalTokens;
-  const nextActualCost = Number(((currentGuard.actualCost || 0) + usage.costUsd).toFixed(2));
-  const overRequestLimit =
-    currentGuard.maxRequestsPerRun > 0 && nextActualRequests > currentGuard.maxRequestsPerRun;
-  const overCostLimit =
-    currentGuard.maxEstimatedCostUsdPerRun > 0
-    && nextActualCost > currentGuard.maxEstimatedCostUsdPerRun;
-  const breakerReason = overRequestLimit
-    ? `actual requests ${nextActualRequests} exceeded ${currentGuard.maxRequestsPerRun}`
-    : overCostLimit
-      ? `actual cost $${nextActualCost} exceeded $${currentGuard.maxEstimatedCostUsdPerRun}`
-      : undefined;
-
-  const nextGuard: PaidExecutionGuardState = {
-    ...currentGuard,
-    actualRequests: nextActualRequests,
-    actualTokenUsage: nextActualTokenUsage,
-    actualCost: nextActualCost,
-    ...(breakerReason
-      ? {
-          breakerReason,
-          breakerTrippedAt: currentGuard.breakerTrippedAt || new Date().toISOString(),
-        }
-      : {}),
-  };
-
-  await cpFetch(`/api/tasks/${encodeURIComponent(input.taskId)}`, {
-    method: "PATCH",
-    authorization: input.authorization,
-    body: {
-      strategy: mergeTaskStrategy(task.strategy, {
-        paidExecutionGuard: nextGuard,
-      }),
-    },
+  const { nextGuard, breakerReason } = computeNextPaidExecutionGuardState({
+    currentGuard,
+    requestDelta: input.requestDelta,
+    tokenUsed: usage.totalTokens,
+    costUsd: usage.costUsd,
   });
 
-  if (breakerReason && !currentGuard.breakerTrippedAt) {
-    await recordAgentAudit({
-      projectId: input.projectId || task.projectId,
-      taskId: input.taskId,
-      sessionId: input.sessionId,
-      agentRunId: input.agentRunId,
-      eventType: "paid_execution",
-      action: "breaker_tripped",
-      detail: buildGuardDetail(nextGuard, {
-        sourceAction: input.action,
-        providerId: resolvedModel.providerId,
-        modelId: resolvedModel.modelId,
-      }),
-      riskLevel: "high",
-    });
-  }
+  await persistPaidExecutionGuardState({
+    authorization: input.authorization,
+    taskId: input.taskId,
+    strategy: task.strategy,
+    nextGuard,
+  });
+  await recordBreakerAuditIfNeeded({
+    breakerReason,
+    currentGuard,
+    nextGuard,
+    projectId: input.projectId || task.projectId,
+    taskId: input.taskId,
+    sessionId: input.sessionId,
+    agentRunId: input.agentRunId,
+    action: input.action,
+    providerId: resolvedModel.providerId,
+    modelId: resolvedModel.modelId,
+  });
 
   return {
     guardState: nextGuard,

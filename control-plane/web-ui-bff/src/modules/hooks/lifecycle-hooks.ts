@@ -30,7 +30,10 @@ export interface ExecuteLifecycleHooksOptions {
   repoContext?: RepoContext;
   onHookExecuted?: (
     execution: HookExecutionRecord,
-  ) => Promise<{ stop?: boolean; reason?: string } | void> | { stop?: boolean; reason?: string } | void;
+  ) =>
+    | Promise<{ stop?: boolean; reason?: string } | undefined>
+    | { stop?: boolean; reason?: string }
+    | undefined;
 }
 
 export interface ExecuteLifecycleHooksResult {
@@ -157,7 +160,8 @@ export async function executeLifecycleHooks(
           buildSkippedHookExecution(
             options,
             remainingHook,
-            continuation.reason || "Stopped after the previous hook exceeded the paid execution limit.",
+            continuation.reason ||
+              "Stopped after the previous hook exceeded the paid execution limit.",
           ),
         );
       }

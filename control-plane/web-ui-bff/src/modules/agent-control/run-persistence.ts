@@ -1,8 +1,15 @@
-import { estimatePaidExecutionUsage } from "../../lib/paid-execution-guard";
 import { cpFetch, createInternalAuthorization } from "../../lib/control-plane-client";
+import { estimatePaidExecutionUsage } from "../../lib/paid-execution-guard";
 import { syncRuntimeUsageLedger } from "../../lib/runtime-usage-ledger";
 
-type AgentRunStatus = "pending" | "running" | "paused" | "completed" | "failed" | "stopped" | "terminated";
+type AgentRunStatus =
+  | "pending"
+  | "running"
+  | "paused"
+  | "completed"
+  | "failed"
+  | "stopped"
+  | "terminated";
 type RiskLevel = "low" | "medium" | "high" | "critical";
 
 function toModelUsed(model?: { providerId: string; modelId: string }) {
@@ -126,25 +133,31 @@ export async function createAgentRunRecord(input: CreateAgentRunRecordInput): Pr
   });
 
   if (!response.ok && response.status !== 409) {
-    console.warn(`[agent-run-persistence] failed to create run ${input.agentRunId}:`, response.data);
+    console.warn(
+      `[agent-run-persistence] failed to create run ${input.agentRunId}:`,
+      response.data,
+    );
   }
 }
 
 export async function patchAgentRunRecord(input: PatchAgentRunRecordInput): Promise<void> {
   const authorization = await createInternalAuthorization();
-  const response = await cpFetch(`/api/tasks/${encodeURIComponent(input.taskId)}/runs/${encodeURIComponent(input.agentRunId)}`, {
-    method: "PATCH",
-    authorization,
-    body: {
-      status: input.status,
-      modelUsed: toModelUsed(input.model),
-      startedAt: input.startedAt,
-      finishedAt: input.finishedAt,
-      tokenUsed: input.tokenUsed,
-      result: input.result,
-      error: input.error,
+  const response = await cpFetch(
+    `/api/tasks/${encodeURIComponent(input.taskId)}/runs/${encodeURIComponent(input.agentRunId)}`,
+    {
+      method: "PATCH",
+      authorization,
+      body: {
+        status: input.status,
+        modelUsed: toModelUsed(input.model),
+        startedAt: input.startedAt,
+        finishedAt: input.finishedAt,
+        tokenUsed: input.tokenUsed,
+        result: input.result,
+        error: input.error,
+      },
     },
-  });
+  );
 
   if (!response.ok) {
     console.warn(`[agent-run-persistence] failed to patch run ${input.agentRunId}:`, response.data);
@@ -169,7 +182,10 @@ export async function recordAgentAudit(input: RecordAgentAuditInput): Promise<vo
   });
 
   if (!response.ok) {
-    console.warn(`[agent-run-persistence] failed to record audit ${input.eventType}.${input.action}:`, response.data);
+    console.warn(
+      `[agent-run-persistence] failed to record audit ${input.eventType}.${input.action}:`,
+      response.data,
+    );
   }
 }
 

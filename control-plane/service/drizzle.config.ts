@@ -1,10 +1,14 @@
 import { defineConfig } from "drizzle-kit";
+import { resolveDatabaseConfig } from "./src/db/config";
+
+const database = resolveDatabaseConfig();
+const drizzleDialect = database.dialect === "postgres" ? "postgresql" : "sqlite";
 
 export default defineConfig({
-  schema: "./src/db/schema.ts",
-  out: "./drizzle",
-  dialect: "sqlite",
+  schema: database.dialect === "postgres" ? "./src/db/schema.pg.ts" : "./src/db/schema.sqlite.ts",
+  out: database.dialect === "postgres" ? "./drizzle-pg" : "./drizzle",
+  dialect: drizzleDialect,
   dbCredentials: {
-    url: process.env.DATABASE_URL || "./data/openerx.db",
+    url: database.url,
   },
 });
