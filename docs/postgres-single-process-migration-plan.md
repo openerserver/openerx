@@ -464,6 +464,7 @@ SQLite 到 PostgreSQL 不是简单替换 driver，必须审视以下差异：
 1. 输出 web-ui 构建产物
 2. 统一 app 直接托管静态资源
 3. 开发态保留可选 Vite HMR 辅助，不再作为必需运行节点
+4. 调整根目录 `dev / build / test` 脚本与 VS Code tasks，使标准运行路径切到单入口 app
 
 完成标准：
 
@@ -477,6 +478,26 @@ SQLite 到 PostgreSQL 不是简单替换 driver，必须审视以下差异：
 1. 删除旧的 control-plane/service 与 web-ui-bff 间回源耦合
 2. 清理旧任务脚本与多端口文档
 3. 更新启动任务、README、架构图、测试入口
+4. 更新根目录 `.env`、检查脚本、健康检查与 smoke test 入口
+5. 输出切换 runbook 与回滚 runbook
+
+### Phase 5. 切换演练与正式切换
+
+目标：在真实切流前验证单进程 + PG 方案具备可上线与可回滚能力。
+
+工作项：
+
+1. 在预发环境执行一次完整迁移演练
+2. 校验 SQLite 快照、PG 导入结果、关键表行数与抽样数据一致性
+3. 按 runbook 执行单进程启动、health check、smoke check、真实执行集成验证
+4. 记录切换耗时、失败点、人工介入点，并收敛到正式 runbook
+5. 明确回滚触发条件，并验证回滚路径可执行
+
+完成标准：
+
+- 至少一次预发演练成功
+- 正式切换步骤与回滚步骤都经过验证
+- 演练后形成可直接执行的运维手册
 
 ## 7. 具体代码改造清单
 
@@ -567,6 +588,34 @@ cpFetch 被 18+ 个文件、约 100+ 个独立调用点使用，覆盖所有核�
 - 统一 server 的静态资源托管模块
 - VS Code tasks 与本地启动脚本
 
+### 7.4.1 脚本与任务切换矩阵
+
+当前根目录和工作区脚本仍然默认三进程模型：
+
+- 根目录 `package.json` 中 `dev` 仍并行启动 `dev:service / dev:bff / dev:ui`
+- `.vscode/tasks.json` 中仍维护 `start-control-plane-service`、`start-web-ui-bff`、`start-web-ui` 三组启动与停止任务
+- `scripts/check-all.sh` 仍分别探测 `4097/health` 与 `4098/health`
+
+迁移后建议按下面矩阵处理：
+
+1. 新增单入口脚本
+   - `dev:app` — 启动统一 app
+   - `build:app` — 构建统一 app + UI 产物
+   - `test:app` — 跑统一入口相关测试与 smoke test
+
+2. 保留过渡脚本
+   - `dev:service` / `dev:bff` / `dev:ui` 在过渡期保留，仅用于回归对照与问题定位
+   - 明确标记为 legacy / compatibility，不再作为标准启动方式
+
+3. 更新 VS Code tasks
+   - 新增 `start-app` / `stop-app` / `restart-app`
+   - `start-all-dev` 改为 `start-app + start-opencode-runtime`，可选再附带 `start-web-ui` 作为 HMR 加速器
+   - 所有 `problemMatcher.endsPattern` 从多端口启动日志改为单入口 app 日志
+
+4. 更新检查脚本
+   - `scripts/check-all.sh` 改为检查统一 app health、数据库就绪和 runtime 可达
+   - 删除对独立 BFF / Control Plane 的默认依赖
+
 ### 7.5 Auth 合并策略
 
 当前 Service 和 BFF 的 auth 行为有本质差异：
@@ -613,6 +662,29 @@ cpFetch 被 18+ 个文件、约 100+ 个独立调用点使用，覆盖所有核�
 
 建议在 Phase 2 完成后输出统一的 `.env.example`。
 
+### 7.6.1 环境变量过渡与兼容策略
+
+当前根目录 `.env` 仍采用双服务配置形态：
+
+- `PORT=4097`
+- `BFF_PORT=4098`
+- `CONTROL_PLANE_URL=http://localhost:4097`
+- `OPENCODE_BASE_URL=http://localhost:4096`
+
+而代码中 BFF 侧更常使用的是 `OPENCODE_URL`。这意味着迁移时不仅要做变量收敛，还要解决命名不一致问题。
+
+建议按两阶段处理：
+
+1. 过渡阶段
+   - 新增统一变量：`APP_PORT`
+   - 统一读取 `OPENCODE_URL`，并允许 `OPENCODE_BASE_URL` 作为兼容别名一段时间
+   - `PORT` 暂时仍映射到单入口 app，避免一次性打断现有脚本
+
+2. 收敛阶段
+   - 删除 `BFF_PORT`、`CONTROL_PLANE_URL`
+   - 删除 `OPENCODE_BASE_URL`，只保留 `OPENCODE_URL`
+   - 输出最终版 `.env.example` 和迁移说明
+
 ### 7.7 后台定时任务合并
 
 BFF 独有以下后台任务，Service 无后台任务：
@@ -622,6 +694,78 @@ BFF 独有以下后台任务，Service 无后台任务：
 3. SSE 重连定时器 — SSE 连接断开后自动重连 OpenCode Runtime
 
 合并后这些逻辑应作为单进程内部模块保留。其中 reconcile 相关逻辑当前通过 cpFetch 查询/更新 task 状态，需改为直接 service call。
+
+### 7.8 测试迁移策略
+
+当前测试不仅存在端口硬编码问题，还存在明确的“双后端职责分层”假设：
+
+- service tests 直接调用 `TEST_CP_URL`（默认 `4097`）
+- web-ui-bff tests 直接调用 `TEST_BFF_URL`（默认 `4098`）
+- e2e tests 同时依赖 `PLAYWRIGHT_BFF_URL` 与 `PLAYWRIGHT_CONTROL_PLANE_URL`
+
+迁移后建议按测试层级重组：
+
+1. 统一入口测试
+   - 所有 API 契约测试默认打统一 app base URL
+   - Playwright / e2e 默认只依赖一个前台入口和一个 app API 入口
+
+2. 内部模块测试
+   - 原 service 侧纯业务逻辑测试下沉为 service / repository / module 级单测
+   - 不再要求独立 HTTP 端口存在
+
+3. 真实执行集成测试
+   - 继续保留对外部 OpenCode Runtime `:4096` 的依赖
+   - 但控制面入口统一为单入口 app
+
+4. 过渡期兼容
+   - 在一段时间内允许 `TEST_CP_URL`、`TEST_BFF_URL` 映射到同一个 app URL
+   - 最终删除双 URL 模式，只保留一个 `TEST_APP_URL`
+
+### 7.9 健康检查与就绪语义
+
+当前检查脚本与任务系统把 `4097/health` 和 `4098/health` 视为两个独立服务。单进程后需要明确新的探针语义，避免出现“进程活着但系统不可用”的灰区。
+
+建议至少区分三类检查：
+
+1. Liveness
+   - 进程已启动，HTTP server 可响应
+
+2. Readiness
+   - PostgreSQL 连接成功
+   - schema migration 已完成
+   - 关键依赖初始化成功（auth、路由、realtime registry）
+
+3. Dependency status
+   - OpenCode Runtime `:4096` 是否可达单独暴露为依赖状态
+   - Runtime 不可达时应区分为 degraded，而不是直接把 app 判死
+
+建议在统一 app 中提供：
+
+- `/health/live`
+- `/health/ready`
+- `/health/deps`
+
+并同步更新 `scripts/check-all.sh`、VS Code tasks 的 readiness 判定以及部署探针。
+
+### 7.10 文档联动更新清单
+
+当前有多份文档把 `5173 / 4098 / 4097` 三段式结构写成事实性结论。若只更新本方案文档，实施后会留下大量与现状冲突的设计说明。
+
+建议至少同步更新：
+
+- `docs/architecture-overview.md`
+- `docs/runtime-process-architecture.md`
+- `docs/api-boundary.md`
+- `docs/opencode-internals.md`
+- `docs/integration-test-10x-report.md`
+- 任何仍把 BFF 视为固定独立入口的设计文档
+
+这些文档的更新应包含：
+
+1. 当前态与目标态边界说明
+2. 端口与启动方式变化
+3. `/api`、`/ws`、静态资源的统一入口说明
+4. OpenCode Runtime 仍外置保留的边界说明
 
 ## 8. 风险与取舍
 
@@ -658,6 +802,17 @@ SQLite 换 PG 本身属于典型基础设施迁移。
 
 如果进程合并后不重做测试入口，会出现大量“业务没坏，但测试基建全坏”的噪音。
 
+### 8.4 最大切换风险在“半迁移状态”
+
+本次改造不是单纯代码提交问题，而是运行拓扑切换问题。最危险的状态不是旧架构，也不是新架构，而是：
+
+- 代码已切到单进程，但脚本仍按三进程启动
+- App 已切到 PG，但环境变量和 `.env` 仍指向 SQLite / 双服务配置
+- 测试仍依赖 `TEST_CP_URL + TEST_BFF_URL` 双 URL
+- 文档仍指导团队按 `5173 -> 4098 -> 4097` 排障
+
+因此实施时必须把脚本、环境、测试、文档作为同一批次的切换项统一收口，避免长期处于半迁移状态。
+
 ## 9. 验收标准
 
 本方案的最低验收标准建议如下。
@@ -675,6 +830,7 @@ SQLite 换 PG 本身属于典型基础设施迁移。
 2. 不再存在 BFF 到 localhost:4097 的本机 HTTP 回源。
 3. 标准启动命令只需一个应用进程。
 4. 5173 / 4097 / 4098 不再同时作为系统运行前提。
+5. 根目录脚本、VS Code tasks、check-all 脚本默认都已切到单入口模型。
 
 ### 9.3 质量门槛
 
@@ -683,8 +839,59 @@ SQLite 换 PG 本身属于典型基础设施迁移。
 3. runtime ledger 与 governance 相关测试通过。
 4. 至少一组真实执行集成验证通过。
 5. 启动与重启过程中不再出现 SQLite 锁竞争类故障。
+6. 单入口 health / ready / deps 检查通过。
 
-## 10. 推荐结论
+### 9.4 运维切换完成标准
+
+1. 已形成正式切换 runbook。
+2. 已形成正式回滚 runbook。
+3. 至少完成一次预发切换演练。
+4. SQLite 快照、PG 导入校验、smoke check、真实执行验证都有记录。
+
+## 10. 切换与回滚 Runbook
+
+### 10.1 切换前准备
+
+1. 确认冻结窗口与回滚负责人。
+2. 备份 SQLite 文件并记录快照路径、生成时间、文件校验值。
+3. 准备 PostgreSQL 数据库、连接串、权限与 migration 执行账号。
+4. 准备统一 app 所需 `.env`，确认 `APP_PORT / PORT / OPENCODE_URL / JWT_SECRET / DATABASE_URL` 已对齐。
+5. 确认 OpenCode Runtime `:4096` 可独立健康运行。
+
+### 10.2 正式切换步骤
+
+1. 冻结控制面写流量。
+2. 导出并快照 SQLite 数据。
+3. 执行 PG migration。
+4. 导入历史数据并做行数与关键表抽样校验。
+5. 启动统一 app。
+6. 执行 `/health/live`、`/health/ready`、`/health/deps` 检查。
+7. 执行 smoke check：登录、项目列表、任务列表、任务详情、审批、dashboard、realtime 连接。
+8. 执行至少一组真实执行集成验证。
+9. 验证通过后解除冻结。
+
+### 10.3 回滚触发条件
+
+出现以下任一条件时应进入回滚评估：
+
+- PG migration 失败且无法快速修复
+- 关键表校验不一致
+- 单入口 app 无法通过 readiness
+- 登录、任务执行、审批、dashboard 任一核心路径不可用
+- 真实执行集成验证失败且无法在窗口内修复
+
+### 10.4 回滚步骤
+
+1. 重新冻结控制面写流量。
+2. 停止统一 app。
+3. 恢复旧 `.env` 与旧脚本入口。
+4. 恢复 SQLite 快照。
+5. 按旧拓扑启动 `service + bff + ui`。
+6. 检查 `4097/health`、`4098/health`、`5173` 页面可达。
+7. 执行旧架构 smoke check，确认核心路径恢复。
+8. 保留 PG 数据库与失败现场，供后续问题分析，不在回滚窗口内继续修复。
+
+## 11. 推荐结论
 
 推荐采用下面的总路线：
 
