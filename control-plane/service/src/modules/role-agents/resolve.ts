@@ -61,6 +61,30 @@ interface TemplateRoleExecutionPolicy {
   aggregationStrategy?: "first-pass" | "majority" | "merge-summary" | "human-review";
 }
 
+function toRoleScope(value: string | null | undefined): "system" | "project" {
+  return value === "project" ? "project" : "system";
+}
+
+function toRoleStatus(
+  value: string | null | undefined,
+): "active" | "disabled" | "deprecated" {
+  if (value === "disabled" || value === "deprecated") {
+    return value;
+  }
+
+  return "active";
+}
+
+function toRiskLevel(
+  value: string | null | undefined,
+): "low" | "medium" | "high" | "critical" {
+  if (value === "medium" || value === "high" || value === "critical") {
+    return value;
+  }
+
+  return "low";
+}
+
 function mergeStringArray(
   value: string[] | null | undefined,
   fallback: string[] | null | undefined,
@@ -319,9 +343,9 @@ export async function resolveRoleAgentForExecution(
       id: role.id,
       projectId: mergedRole.projectId,
       name: mergedRole.name,
-      scope: role.scope,
-      status: mergedRole.status,
-      riskLevel: mergedRole.riskLevel,
+      scope: toRoleScope(role.scope),
+      status: toRoleStatus(mergedRole.status),
+      riskLevel: toRiskLevel(mergedRole.riskLevel),
       allowedStages,
       permissionProfile: mergedRole.permissionProfile,
       toolProfile: mergedRole.toolProfile,
@@ -338,7 +362,7 @@ export async function resolveRoleAgentForExecution(
       bindings: enabledBindings,
     },
     source: {
-      baseScope: role.scope,
+      baseScope: toRoleScope(role.scope),
       overrideApplied: Boolean(projectOverride),
       policySource,
     },

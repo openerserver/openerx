@@ -1,5 +1,14 @@
 import { sql } from "drizzle-orm";
-import { boolean, doublePrecision, integer, jsonb, pgTable, text } from "drizzle-orm/pg-core";
+import {
+  boolean,
+  doublePrecision,
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  text,
+  uniqueIndex,
+} from "drizzle-orm/pg-core";
 
 export type ApprovalPolicyMode = "balanced" | "strict" | "manual";
 
@@ -115,119 +124,163 @@ export const projectRoles = pgTable("project_roles", {
   }).notNull(),
 });
 
-export const paidExecutionLeases = pgTable("paid_execution_leases", {
-  id: text("id").primaryKey(),
-  projectId: text("project_id")
-    .notNull()
-    .references(() => projects.id),
-  issuedByUserId: text("issued_by_user_id")
-    .notNull()
-    .references(() => users.id),
-  revokedByUserId: text("revoked_by_user_id").references(() => users.id),
-  reason: text("reason"),
-  status: text("status").notNull().default("active"),
-  expiresAt: text("expires_at").notNull(),
-  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-  revokedAt: text("revoked_at"),
-});
+export const paidExecutionLeases = pgTable(
+  "paid_execution_leases",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    issuedByUserId: text("issued_by_user_id")
+      .notNull()
+      .references(() => users.id),
+    revokedByUserId: text("revoked_by_user_id").references(() => users.id),
+    reason: text("reason"),
+    status: text("status").notNull().default("active"),
+    expiresAt: text("expires_at").notNull(),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    revokedAt: text("revoked_at"),
+  },
+  (table) => [
+    index("idx_paid_execution_leases_project_status").on(
+      table.projectId,
+      table.status,
+      table.expiresAt,
+    ),
+  ],
+);
 
-export const runtimeUsageLedgers = pgTable("runtime_usage_ledgers", {
-  id: text("id").primaryKey(),
-  projectId: text("project_id")
-    .notNull()
-    .references(() => projects.id),
-  taskId: text("task_id").references(() => tasks.id),
-  agentRunId: text("agent_run_id").references(() => agentRuns.id),
-  runtimeSessionId: text("runtime_session_id").notNull(),
-  executionSource: text("execution_source").notNull(),
-  entrypointType: text("entrypoint_type").notNull(),
-  orchestrationFingerprint: text("orchestration_fingerprint"),
-  defaultProviderId: text("default_provider_id"),
-  defaultModelId: text("default_model_id"),
-  requestCount: integer("request_count").notNull().default(0),
-  stepCount: integer("step_count").notNull().default(0),
-  inputTokens: integer("input_tokens").notNull().default(0),
-  outputTokens: integer("output_tokens").notNull().default(0),
-  totalTokens: integer("total_tokens").notNull().default(0),
-  costUsd: doublePrecision("cost_usd").notNull().default(0),
-  candidateCount: integer("candidate_count").notNull().default(1),
-  judgeRequestCount: integer("judge_request_count").notNull().default(0),
-  hookRequestCount: integer("hook_request_count").notNull().default(0),
-  status: text("status").notNull().default("running"),
-  startedAt: text("started_at"),
-  finishedAt: text("finished_at"),
-  syncedAt: text("synced_at"),
-  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-});
+export const runtimeUsageLedgers = pgTable(
+  "runtime_usage_ledgers",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    taskId: text("task_id").references(() => tasks.id),
+    agentRunId: text("agent_run_id").references(() => agentRuns.id),
+    runtimeSessionId: text("runtime_session_id").notNull(),
+    executionSource: text("execution_source").notNull(),
+    entrypointType: text("entrypoint_type").notNull(),
+    orchestrationFingerprint: text("orchestration_fingerprint"),
+    defaultProviderId: text("default_provider_id"),
+    defaultModelId: text("default_model_id"),
+    requestCount: integer("request_count").notNull().default(0),
+    stepCount: integer("step_count").notNull().default(0),
+    inputTokens: integer("input_tokens").notNull().default(0),
+    outputTokens: integer("output_tokens").notNull().default(0),
+    totalTokens: integer("total_tokens").notNull().default(0),
+    costUsd: doublePrecision("cost_usd").notNull().default(0),
+    candidateCount: integer("candidate_count").notNull().default(1),
+    judgeRequestCount: integer("judge_request_count").notNull().default(0),
+    hookRequestCount: integer("hook_request_count").notNull().default(0),
+    status: text("status").notNull().default("running"),
+    startedAt: text("started_at"),
+    finishedAt: text("finished_at"),
+    syncedAt: text("synced_at"),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex("idx_runtime_usage_ledgers_runtime_session").on(table.runtimeSessionId),
+    index("idx_runtime_usage_ledgers_project_time").on(table.projectId, table.createdAt),
+    index("idx_runtime_usage_ledgers_agent_run").on(table.agentRunId),
+  ],
+);
 
-export const runtimeUsageLedgerSteps = pgTable("runtime_usage_ledger_steps", {
-  id: text("id").primaryKey(),
-  ledgerId: text("ledger_id")
-    .notNull()
-    .references(() => runtimeUsageLedgers.id),
-  projectId: text("project_id")
-    .notNull()
-    .references(() => projects.id),
-  taskId: text("task_id").references(() => tasks.id),
-  agentRunId: text("agent_run_id").references(() => agentRuns.id),
-  runtimeSessionId: text("runtime_session_id"),
-  stepType: text("step_type").notNull(),
-  triggerType: text("trigger_type"),
-  hookId: text("hook_id"),
-  candidateIndex: integer("candidate_index"),
-  requestIndex: integer("request_index").notNull().default(0),
-  providerId: text("provider_id"),
-  modelId: text("model_id"),
-  inputTokens: integer("input_tokens").notNull().default(0),
-  outputTokens: integer("output_tokens").notNull().default(0),
-  totalTokens: integer("total_tokens").notNull().default(0),
-  costUsd: doublePrecision("cost_usd").notNull().default(0),
-  amplificationSource: text("amplification_source"),
-  status: text("status").notNull().default("completed"),
-  startedAt: text("started_at"),
-  finishedAt: text("finished_at"),
-  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-});
+export const runtimeUsageLedgerSteps = pgTable(
+  "runtime_usage_ledger_steps",
+  {
+    id: text("id").primaryKey(),
+    ledgerId: text("ledger_id")
+      .notNull()
+      .references(() => runtimeUsageLedgers.id),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    taskId: text("task_id").references(() => tasks.id),
+    agentRunId: text("agent_run_id").references(() => agentRuns.id),
+    runtimeSessionId: text("runtime_session_id"),
+    stepType: text("step_type").notNull(),
+    triggerType: text("trigger_type"),
+    hookId: text("hook_id"),
+    candidateIndex: integer("candidate_index"),
+    requestIndex: integer("request_index").notNull().default(0),
+    providerId: text("provider_id"),
+    modelId: text("model_id"),
+    inputTokens: integer("input_tokens").notNull().default(0),
+    outputTokens: integer("output_tokens").notNull().default(0),
+    totalTokens: integer("total_tokens").notNull().default(0),
+    costUsd: doublePrecision("cost_usd").notNull().default(0),
+    amplificationSource: text("amplification_source"),
+    status: text("status").notNull().default("completed"),
+    startedAt: text("started_at"),
+    finishedAt: text("finished_at"),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    index("idx_runtime_usage_ledger_steps_ledger_request").on(table.ledgerId, table.requestIndex),
+    index("idx_runtime_usage_ledger_steps_project_time").on(table.projectId, table.createdAt),
+    index("idx_runtime_usage_ledger_steps_task_type").on(
+      table.taskId,
+      table.stepType,
+      table.triggerType,
+    ),
+  ],
+);
 
-export const runtimeUsageBaselines = pgTable("runtime_usage_baselines", {
-  id: text("id").primaryKey(),
-  projectId: text("project_id")
-    .notNull()
-    .references(() => projects.id),
-  providerId: text("provider_id").notNull().default(""),
-  modelId: text("model_id").notNull().default(""),
-  entrypointType: text("entrypoint_type").notNull().default(""),
-  orchestrationFingerprint: text("orchestration_fingerprint").notNull().default(""),
-  matchScope: text("match_scope", {
-    enum: [
-      "project+provider+model+entrypoint+fingerprint",
-      "project+provider+model+entrypoint",
-      "project+provider+model",
-      "project+entrypoint",
-      "project",
-    ],
-  })
-    .notNull()
-    .default("project"),
-  sampleSize: integer("sample_size").notNull().default(0),
-  p50RequestCount: doublePrecision("p50_request_count"),
-  p90RequestCount: doublePrecision("p90_request_count"),
-  p50InputTokens: doublePrecision("p50_input_tokens"),
-  p90InputTokens: doublePrecision("p90_input_tokens"),
-  p50OutputTokens: doublePrecision("p50_output_tokens"),
-  p90OutputTokens: doublePrecision("p90_output_tokens"),
-  p50TotalTokens: doublePrecision("p50_total_tokens"),
-  p90TotalTokens: doublePrecision("p90_total_tokens"),
-  p50CostUsd: doublePrecision("p50_cost_usd"),
-  p90CostUsd: doublePrecision("p90_cost_usd"),
-  lastLedgerAt: text("last_ledger_at"),
-  generatedAt: text("generated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-});
+export const runtimeUsageBaselines = pgTable(
+  "runtime_usage_baselines",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    providerId: text("provider_id").notNull().default(""),
+    modelId: text("model_id").notNull().default(""),
+    entrypointType: text("entrypoint_type").notNull().default(""),
+    orchestrationFingerprint: text("orchestration_fingerprint").notNull().default(""),
+    matchScope: text("match_scope", {
+      enum: [
+        "project+provider+model+entrypoint+fingerprint",
+        "project+provider+model+entrypoint",
+        "project+provider+model",
+        "project+entrypoint",
+        "project",
+      ],
+    })
+      .notNull()
+      .default("project"),
+    sampleSize: integer("sample_size").notNull().default(0),
+    p50RequestCount: doublePrecision("p50_request_count"),
+    p90RequestCount: doublePrecision("p90_request_count"),
+    p50InputTokens: doublePrecision("p50_input_tokens"),
+    p90InputTokens: doublePrecision("p90_input_tokens"),
+    p50OutputTokens: doublePrecision("p50_output_tokens"),
+    p90OutputTokens: doublePrecision("p90_output_tokens"),
+    p50TotalTokens: doublePrecision("p50_total_tokens"),
+    p90TotalTokens: doublePrecision("p90_total_tokens"),
+    p50CostUsd: doublePrecision("p50_cost_usd"),
+    p90CostUsd: doublePrecision("p90_cost_usd"),
+    lastLedgerAt: text("last_ledger_at"),
+    generatedAt: text("generated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex("idx_runtime_usage_baselines_project_scope").on(
+      table.projectId,
+      table.providerId,
+      table.modelId,
+      table.entrypointType,
+      table.orchestrationFingerprint,
+      table.matchScope,
+    ),
+    index("idx_runtime_usage_baselines_project_generated").on(table.projectId, table.generatedAt),
+  ],
+);
 
 // ── Sessions (extends OpenCode sessions) ───────────────────────────
 
@@ -511,23 +564,35 @@ export const taskEdges = pgTable("task_edges", {
 
 // ── Project Task Relations (cross-task graph) ─────────────────────
 
-export const projectTaskRelations = pgTable("project_task_relations", {
-  id: text("id").primaryKey(),
-  projectId: text("project_id")
-    .notNull()
-    .references(() => projects.id),
-  sourceTaskId: text("source_task_id")
-    .notNull()
-    .references(() => tasks.id),
-  targetTaskId: text("target_task_id")
-    .notNull()
-    .references(() => tasks.id),
-  relationType: text("relation_type").notNull(),
-  relationSource: text("relation_source").notNull().default("manual"),
-  metadata: jsonb("metadata").$type<Record<string, unknown>>(),
-  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-});
+export const projectTaskRelations = pgTable(
+  "project_task_relations",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    sourceTaskId: text("source_task_id")
+      .notNull()
+      .references(() => tasks.id),
+    targetTaskId: text("target_task_id")
+      .notNull()
+      .references(() => tasks.id),
+    relationType: text("relation_type").notNull(),
+    relationSource: text("relation_source").notNull().default("manual"),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>(),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex("idx_project_task_relations_unique_edge").on(
+      table.projectId,
+      table.sourceTaskId,
+      table.targetTaskId,
+      table.relationType,
+    ),
+    index("idx_project_task_relations_project").on(table.projectId, table.relationType),
+  ],
+);
 
 // ── Agent Runs (individual agent execution records) ────────────────
 
@@ -662,54 +727,73 @@ export const roleAgents = pgTable("role_agents", {
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
-export const roleAgentBindings = pgTable("role_agent_bindings", {
-  id: text("id").primaryKey(),
-  roleAgentId: text("role_agent_id")
-    .notNull()
-    .references(() => roleAgents.id),
-  projectId: text("project_id").references(() => projects.id),
-  bindingKey: text("binding_key").notNull(),
-  runtimeAgent: text("runtime_agent").notNull(),
-  label: text("label").notNull(),
-  enabled: boolean("enabled").notNull().default(true),
-  priority: integer("priority").notNull().default(1),
-  model: text("model"),
-  tagsJson: jsonb("tags_json").$type<string[]>(),
-  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-});
+export const roleAgentBindings = pgTable(
+  "role_agent_bindings",
+  {
+    id: text("id").primaryKey(),
+    roleAgentId: text("role_agent_id")
+      .notNull()
+      .references(() => roleAgents.id),
+    projectId: text("project_id").references(() => projects.id),
+    bindingKey: text("binding_key").notNull(),
+    runtimeAgent: text("runtime_agent").notNull(),
+    label: text("label").notNull(),
+    enabled: boolean("enabled").notNull().default(true),
+    priority: integer("priority").notNull().default(1),
+    model: text("model"),
+    tagsJson: jsonb("tags_json").$type<string[]>(),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex("idx_role_agent_bindings_role_project_key").on(
+      table.roleAgentId,
+      table.projectId,
+      table.bindingKey,
+    ),
+  ],
+);
 
-export const roleAgentProjectOverrides = pgTable("role_agent_project_overrides", {
-  id: text("id").primaryKey(),
-  roleAgentId: text("role_agent_id")
-    .notNull()
-    .references(() => roleAgents.id),
-  projectId: text("project_id")
-    .notNull()
-    .references(() => projects.id),
-  name: text("name"),
-  description: text("description"),
-  status: text("status"),
-  ownerTeam: text("owner_team"),
-  permissionProfile: text("permission_profile"),
-  toolProfile: text("tool_profile"),
-  defaultExecutionMode: text("default_execution_mode", {
-    enum: ["single", "parallel-review", "round-robin"],
-  }),
-  aggregationStrategy: text("aggregation_strategy", {
-    enum: ["first-pass", "majority", "merge-summary", "human-review"],
-  }),
-  maxActiveBindings: integer("max_active_bindings"),
-  requireConsensus: boolean("require_consensus"),
-  riskLevel: text("risk_level"),
-  requiresApprovalForWrite: boolean("requires_approval_for_write"),
-  allowedStagesJson: jsonb("allowed_stages_json").$type<string[]>(),
-  outputSchemaId: text("output_schema_id"),
-  tagsJson: jsonb("tags_json").$type<string[]>(),
-  bindingsMode: text("bindings_mode").notNull().default("inherit"),
-  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-});
+export const roleAgentProjectOverrides = pgTable(
+  "role_agent_project_overrides",
+  {
+    id: text("id").primaryKey(),
+    roleAgentId: text("role_agent_id")
+      .notNull()
+      .references(() => roleAgents.id),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    name: text("name"),
+    description: text("description"),
+    status: text("status"),
+    ownerTeam: text("owner_team"),
+    permissionProfile: text("permission_profile"),
+    toolProfile: text("tool_profile"),
+    defaultExecutionMode: text("default_execution_mode", {
+      enum: ["single", "parallel-review", "round-robin"],
+    }),
+    aggregationStrategy: text("aggregation_strategy", {
+      enum: ["first-pass", "majority", "merge-summary", "human-review"],
+    }),
+    maxActiveBindings: integer("max_active_bindings"),
+    requireConsensus: boolean("require_consensus"),
+    riskLevel: text("risk_level"),
+    requiresApprovalForWrite: boolean("requires_approval_for_write"),
+    allowedStagesJson: jsonb("allowed_stages_json").$type<string[]>(),
+    outputSchemaId: text("output_schema_id"),
+    tagsJson: jsonb("tags_json").$type<string[]>(),
+    bindingsMode: text("bindings_mode").notNull().default("inherit"),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex("idx_role_agent_project_overrides_role_project").on(
+      table.roleAgentId,
+      table.projectId,
+    ),
+  ],
+);
 
 // ── Workflow Templates ────────────────────────────────────────────
 
@@ -895,30 +979,38 @@ export const taskOperatingModes = pgTable("task_operating_modes", {
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
-export const bossDecisions = pgTable("boss_decisions", {
-  id: text("id").primaryKey(),
-  taskId: text("task_id")
-    .notNull()
-    .references(() => tasks.id),
-  ts: text("ts").notNull(),
-  decisionType: text("decision_type").notNull(),
-  reason: text("reason").notNull(),
-  confidence: doublePrecision("confidence"),
-  stageKey: text("stage_key"),
-  metadataJson: jsonb("metadata_json").$type<Record<string, unknown> | null>(),
-  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-});
+export const bossDecisions = pgTable(
+  "boss_decisions",
+  {
+    id: text("id").primaryKey(),
+    taskId: text("task_id")
+      .notNull()
+      .references(() => tasks.id),
+    ts: text("ts").notNull(),
+    decisionType: text("decision_type").notNull(),
+    reason: text("reason").notNull(),
+    confidence: doublePrecision("confidence"),
+    stageKey: text("stage_key"),
+    metadataJson: jsonb("metadata_json").$type<Record<string, unknown> | null>(),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [index("idx_boss_decisions_task_ts").on(table.taskId, table.ts)],
+);
 
-export const humanEscalations = pgTable("human_escalations", {
-  id: text("id").primaryKey(),
-  taskId: text("task_id")
-    .notNull()
-    .references(() => tasks.id),
-  ts: text("ts").notNull(),
-  reason: text("reason").notNull(),
-  status: text("status"),
-  stageKey: text("stage_key"),
-  requestedBy: text("requested_by"),
-  metadataJson: jsonb("metadata_json").$type<Record<string, unknown> | null>(),
-  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-});
+export const humanEscalations = pgTable(
+  "human_escalations",
+  {
+    id: text("id").primaryKey(),
+    taskId: text("task_id")
+      .notNull()
+      .references(() => tasks.id),
+    ts: text("ts").notNull(),
+    reason: text("reason").notNull(),
+    status: text("status"),
+    stageKey: text("stage_key"),
+    requestedBy: text("requested_by"),
+    metadataJson: jsonb("metadata_json").$type<Record<string, unknown> | null>(),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [index("idx_human_escalations_task_ts").on(table.taskId, table.ts)],
+);

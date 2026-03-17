@@ -79,6 +79,10 @@ const bootstrapDefaultsSchema = z.object({
   overwriteUnmodifiedRecords: z.boolean().default(false),
 });
 
+function toRoleScope(value: string | null | undefined): "system" | "project" {
+  return value === "project" ? "project" : "system";
+}
+
 function parseBooleanQuery(value: string | undefined) {
   return value === "true" || value === "1";
 }
@@ -193,7 +197,7 @@ function buildRoleAgentValidationInput(
   body: z.infer<typeof roleAgentPatchSchema>,
 ) {
   return {
-    scope: body.scope ?? existing.scope,
+    scope: body.scope ?? toRoleScope(existing.scope),
     projectId: body.projectId ?? existing.projectId ?? undefined,
     permissionProfile: body.permissionProfile ?? existing.permissionProfile,
     toolProfile: body.toolProfile ?? existing.toolProfile,
@@ -251,7 +255,7 @@ function buildOverrideValidationInput(
   existing?: typeof roleAgentProjectOverrides.$inferSelect,
 ) {
   return {
-    scope: roleAgent.scope,
+    scope: toRoleScope(roleAgent.scope),
     projectId,
     permissionProfile:
       body.permissionProfile ?? existing?.permissionProfile ?? roleAgent.permissionProfile,

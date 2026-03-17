@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import postgres from "../../control-plane/service/node_modules/postgres";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -9,16 +10,33 @@ const CP_URL = process.env.TEST_CP_URL || "http://127.0.0.1:4097";
 const PROJECT_ID = process.env.TEST_PROJECT_ID || "proj-default";
 const USERNAME = process.env.TEST_USERNAME || "admin";
 const PASSWORD = process.env.TEST_PASSWORD || "admin123!";
+const DATABASE_URL = process.env.TEST_DATABASE_URL || process.env.DATABASE_URL || "";
 const DB_PATH =
   process.env.TEST_DB_PATH || resolve(__dirname, "../../control-plane/service/data/openerx.db");
+const USE_POSTGRES = /^(postgres|postgresql):\/\//i.test(DATABASE_URL);
 
-const sqlite = new Database(DB_PATH, { create: false, strict: true });
+const sqlite = USE_POSTGRES ? null : new Database(DB_PATH, { create: false, strict: true });
+const sql = USE_POSTGRES ? postgres(DATABASE_URL, { max: 1, prepare: false }) : null;
 const createdTaskIds: string[] = [];
 const createdLedgerIds: string[] = [];
 const createdAuditIds: string[] = [];
 const createdLeaseIds: string[] = [];
 let token = "";
 let currentUserId = "";
+
+function toPostgresPlaceholders(query: string) {
+  let index = 0;
+  return query.replace(/\?(\d+)?/g, () => `$${++index}`);
+}
+
+async function writeDb(query: string, params: unknown[]) {
+  if (sql) {
+    await sql.unsafe(toPostgresPlaceholders(query), params as never[]);
+    return;
+  }
+
+  sqlite?.query(query).run(...params);
+}
 
 interface GovernanceOverviewResponse {
   range: "24h" | "7d" | "30d" | "monthly";
@@ -123,7 +141,7 @@ async function createTask(title: string) {
   return data.id;
 }
 
-function insertLedger(args: {
+async function insertLedger(args: {
   id: string;
   taskId: string;
   runtimeSessionId: string;
@@ -136,16 +154,14 @@ function insertLedger(args: {
   createdAt: string;
   updatedAt: string;
 }) {
-  sqlite
-    .query(
-      `INSERT INTO runtime_usage_ledgers (
+  await writeDb(
+    `INSERT INTO runtime_usage_ledgers (
       id, project_id, task_id, runtime_session_id, execution_source, entrypoint_type,
       orchestration_fingerprint, default_provider_id, default_model_id, request_count, step_count,
       input_tokens, output_tokens, total_tokens, cost_usd, candidate_count, judge_request_count,
       hook_request_count, status, started_at, finished_at, synced_at, created_at, updated_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run(
+    [
       args.id,
       PROJECT_ID,
       args.taskId,
@@ -170,11 +186,12 @@ function insertLedger(args: {
       args.updatedAt,
       args.createdAt,
       args.updatedAt,
-    );
+    ],
+  );
   createdLedgerIds.push(args.id);
 }
 
-function insertAudit(args: {
+async function insertAudit(args: {
   id: string;
   taskId: string;
   sessionId: string;
@@ -182,13 +199,11 @@ function insertAudit(args: {
   ts: string;
   detail?: Record<string, unknown>;
 }) {
-  sqlite
-    .query(
-      `INSERT INTO audit_events (
+  await writeDb(
+    `INSERT INTO audit_events (
       id, ts, user_id, project_id, session_id, task_id, event_type, action, target, detail, risk_level
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run(
+    [
       args.id,
       args.ts,
       currentUserId,
@@ -198,20 +213,19 @@ function insertAudit(args: {
       "paid_execution",
       args.action,
       args.taskId,
-      args.detail ? JSON.stringify(args.detail) : null,
+      sql && args.detail ? args.detail : args.detail ? JSON.stringify(args.detail) : null,
       "high",
-    );
+    ],
+  );
   createdAuditIds.push(args.id);
 }
 
-function insertActiveLease(id: string, expiresAt: string, createdAt: string) {
-  sqlite
-    .query(
-      `INSERT INTO paid_execution_leases (
+async function insertActiveLease(id: string, expiresAt: string, createdAt: string) {
+  await writeDb(
+    `INSERT INTO paid_execution_leases (
       id, project_id, issued_by_user_id, reason, status, expires_at, created_at, updated_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run(
+    [
       id,
       PROJECT_ID,
       currentUserId,
@@ -220,7 +234,8 @@ function insertActiveLease(id: string, expiresAt: string, createdAt: string) {
       expiresAt,
       createdAt,
       createdAt,
-    );
+    ],
+  );
   createdLeaseIds.push(id);
 }
 
@@ -229,18 +244,22 @@ beforeAll(async () => {
   currentUserId = decodeJwtPayload(token).sub;
 });
 
-afterAll(() => {
-  const deleteByIds = (table: string, ids: string[]) => {
+afterAll(async () => {
+  const deleteByIds = async (table: string, ids: string[]) => {
     for (const id of ids) {
-      sqlite.query(`DELETE FROM ${table} WHERE id = ?`).run(id);
+      await writeDb(`DELETE FROM ${table} WHERE id = ?`, [id]);
     }
   };
 
-  deleteByIds("audit_events", createdAuditIds);
-  deleteByIds("paid_execution_leases", createdLeaseIds);
-  deleteByIds("runtime_usage_ledgers", createdLedgerIds);
-  deleteByIds("tasks", createdTaskIds);
-  sqlite.close();
+  await deleteByIds("audit_events", createdAuditIds);
+  await deleteByIds("paid_execution_leases", createdLeaseIds);
+  await deleteByIds("runtime_usage_ledgers", createdLedgerIds);
+  await deleteByIds("tasks", createdTaskIds);
+
+  sqlite?.close();
+  if (sql) {
+    await sql.end();
+  }
 });
 
 describe("dashboard governance overview route", () => {
@@ -266,7 +285,7 @@ describe("dashboard governance overview route", () => {
     const blockedPrimaryFinalAt = new Date(now - 60 * 1000).toISOString();
     const leaseExpiresAt = new Date(now + 60 * 60 * 1000).toISOString();
 
-    insertLedger({
+    await insertLedger({
       id: primaryLedgerId,
       taskId: primaryTaskId,
       runtimeSessionId: primarySessionId,
@@ -280,7 +299,7 @@ describe("dashboard governance overview route", () => {
       updatedAt: primaryUpdatedAt,
     });
 
-    insertAudit({
+    await insertAudit({
       id: `audit-governance-block-primary-${unique}`,
       taskId: primaryTaskId,
       sessionId: primarySessionId,
@@ -291,7 +310,7 @@ describe("dashboard governance overview route", () => {
         guardReason: "Estimated amplification exceeds policy.",
       },
     });
-    insertAudit({
+    await insertAudit({
       id: `audit-governance-breaker-primary-${unique}`,
       taskId: primaryTaskId,
       sessionId: primarySessionId,
@@ -301,7 +320,7 @@ describe("dashboard governance overview route", () => {
         breakerReason: "Parallel candidate burst exceeded the breaker threshold.",
       },
     });
-    insertAudit({
+    await insertAudit({
       id: `audit-governance-block-primary-retry-${unique}`,
       taskId: primaryTaskId,
       sessionId: primarySessionId,
@@ -312,7 +331,7 @@ describe("dashboard governance overview route", () => {
         guardReason: "Retry amplification still exceeds policy.",
       },
     });
-    insertAudit({
+    await insertAudit({
       id: `audit-governance-block-primary-final-${unique}`,
       taskId: primaryTaskId,
       sessionId: primarySessionId,
@@ -323,7 +342,7 @@ describe("dashboard governance overview route", () => {
         guardReason: "Final retry still exceeds amplification threshold.",
       },
     });
-    insertActiveLease(leaseId, leaseExpiresAt, primaryCreatedAt);
+    await insertActiveLease(leaseId, leaseExpiresAt, primaryCreatedAt);
 
     const response = await authedRequest<GovernanceOverviewResponse>(
       "/api/dashboard/governance-overview?range=24h",

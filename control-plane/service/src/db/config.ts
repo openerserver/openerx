@@ -1,50 +1,51 @@
 import { dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export type DatabaseDialect = "sqlite" | "postgres";
+export type DatabaseDialect = "postgres";
 
 const DB_DIR = dirname(fileURLToPath(import.meta.url));
 const SERVICE_ROOT = resolve(DB_DIR, "../..");
 
-function inferDatabaseDialectFromUrl(databaseUrl?: string): DatabaseDialect {
-  if (!databaseUrl) {
-    return "sqlite";
-  }
-
-  return /^(postgres|postgresql):\/\//i.test(databaseUrl) ? "postgres" : "sqlite";
-}
-
 export function resolveDatabaseDialect(
-  databaseDialect = process.env.DATABASE_DIALECT,
-  databaseUrl = process.env.DATABASE_URL,
+  databaseDialect = process.env.DATABASE_DIALECT || process.env.TEST_DATABASE_DIALECT,
+  databaseUrl = process.env.DATABASE_URL || process.env.TEST_DATABASE_URL,
 ): DatabaseDialect {
-  if (!databaseDialect) {
-    return inferDatabaseDialectFromUrl(databaseUrl);
-  }
+  if (!databaseDialect || databaseDialect === "postgres") {
+    if (databaseUrl && !/^(postgres|postgresql):\/\//i.test(databaseUrl)) {
+      throw new Error(
+        `DATABASE_URL must be a PostgreSQL URL. Received: ${databaseUrl}. SQLite runtime support has been removed; use the offline migration scripts under src/db/migration to export old SQLite snapshots.`,
+      );
+    }
 
-  if (databaseDialect === "sqlite" || databaseDialect === "postgres") {
-    return databaseDialect;
+    return "postgres";
   }
 
   throw new Error(
-    `Unsupported DATABASE_DIALECT: ${databaseDialect}. Expected \"sqlite\" or \"postgres\".`,
+    `Unsupported DATABASE_DIALECT: ${databaseDialect}. PostgreSQL is now the only supported runtime database. Use the offline SQLite migration scripts to move historical snapshots.`,
   );
 }
 
-export function resolveDatabaseUrl(databaseUrl = process.env.DATABASE_URL) {
-  const dialect = resolveDatabaseDialect(process.env.DATABASE_DIALECT, databaseUrl);
-
+export function resolveDatabaseUrl(
+  databaseUrl = process.env.DATABASE_URL || process.env.TEST_DATABASE_URL,
+) {
   if (!databaseUrl) {
-    return dialect === "postgres"
-      ? "postgres://127.0.0.1:5432/openerx"
-      : resolve(SERVICE_ROOT, "data/openerx.db");
+    return "postgres://127.0.0.1:5432/openerx";
   }
 
-  if (dialect === "postgres") {
+  if (/^(postgres|postgresql):\/\//i.test(databaseUrl)) {
     return databaseUrl;
   }
 
-  return isAbsolute(databaseUrl) ? databaseUrl : resolve(SERVICE_ROOT, databaseUrl);
+  if (isAbsolute(databaseUrl)) {
+    throw new Error(
+      `Absolute SQLite path ${databaseUrl} is no longer supported for runtime startup. Provide a PostgreSQL DATABASE_URL instead.`,
+    );
+  }
+
+  const resolvedPath = resolve(SERVICE_ROOT, databaseUrl);
+  throw new Error(
+    `Resolved DATABASE_URL ${resolvedPath} is not a PostgreSQL URL. Runtime SQLite support has been removed.`,
+  );
 }
 
 export function resolveDatabaseConfig() {
@@ -57,26 +58,8 @@ export function resolveDatabaseConfig() {
   };
 }
 
-export function resolveSqliteDatabaseUrl() {
-  const config = resolveDatabaseConfig();
-
-  if (config.dialect !== "sqlite") {
-    throw new Error(
-      `DATABASE_DIALECT=${config.dialect} is not supported by the current SQLite bootstrap path. PostgreSQL wiring must be completed before switching the runtime dialect.`,
-    );
-  }
-
-  return config.url;
-}
-
 export function resolvePostgresDatabaseUrl() {
   const config = resolveDatabaseConfig();
-
-  if (config.dialect !== "postgres") {
-    throw new Error(
-      `DATABASE_DIALECT=${config.dialect} is not supported by the PostgreSQL bootstrap path.`,
-    );
-  }
 
   return config.url;
 }

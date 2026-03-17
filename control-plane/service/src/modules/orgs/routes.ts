@@ -76,7 +76,8 @@ orgRoutes.get("/:orgId", async (c) => {
       .from(projectRoles)
       .innerJoin(projects, eq(projectRoles.projectId, projects.id))
       .where(and(eq(projectRoles.userId, user.sub), eq(projects.orgId, orgId)))
-      .get();
+      .limit(1)
+      .then((rows) => rows[0] ?? null);
 
     if (!membership) {
       return c.json({ error: "Organization not found or access denied" }, 404);

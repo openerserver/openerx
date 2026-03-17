@@ -1,49 +1,10 @@
 import { eq } from "drizzle-orm";
 import { bootstrapDefaultRoleAgents } from "../modules/role-agents/bootstrap";
-import { closeDatabase, db, dbDialect, sqlite } from "./index";
+import { closeDatabase, db, dbDialect } from "./index";
 import * as schema from "./schema";
-
-const BAD_TIMESTAMP_LITERAL = "(datetime('now'))";
 
 function nowIso() {
   return new Date().toISOString();
-}
-
-function hasTable(tableName: string) {
-  if (!sqlite) {
-    return false;
-  }
-
-  const result = sqlite
-    .query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?1")
-    .get(tableName) as { name?: string } | null;
-
-  return result?.name === tableName;
-}
-
-function hasColumn(tableName: string, columnName: string) {
-  if (!sqlite) {
-    return false;
-  }
-
-  const rows = sqlite.query(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>;
-  return rows.some((row) => row.name === columnName);
-}
-
-function normalizeLegacyCreatedAt(tableName: string, columnName = "created_at") {
-  if (!sqlite) {
-    return;
-  }
-
-  if (!hasTable(tableName) || !hasColumn(tableName, columnName)) {
-    return;
-  }
-
-  sqlite
-    .query(
-      `UPDATE ${tableName} SET ${columnName} = ?1 WHERE ${columnName} = '${BAD_TIMESTAMP_LITERAL.replace(/'/g, "''")}'`,
-    )
-    .run(nowIso());
 }
 
 async function findFirst<T>(rows: Promise<T[]>) {
@@ -201,22 +162,6 @@ async function bootstrapDefaultWorkflowTemplate(projectId: string) {
 
 async function seed() {
   console.log(`Seeding database using ${dbDialect}...`);
-
-  if (dbDialect === "sqlite") {
-    normalizeLegacyCreatedAt("organizations");
-    normalizeLegacyCreatedAt("projects");
-    normalizeLegacyCreatedAt("environments");
-    normalizeLegacyCreatedAt("users");
-    normalizeLegacyCreatedAt("policy_templates");
-    normalizeLegacyCreatedAt("approval_tickets");
-    normalizeLegacyCreatedAt("budget_configs");
-    normalizeLegacyCreatedAt("tasks");
-    normalizeLegacyCreatedAt("sessions", "started_at");
-    normalizeLegacyCreatedAt("role_agents");
-    normalizeLegacyCreatedAt("role_agent_bindings");
-    normalizeLegacyCreatedAt("workflow_templates");
-    normalizeLegacyCreatedAt("workflow_template_stages");
-  }
 
   const orgId = "org-default";
   const existingOrg = await findFirst(

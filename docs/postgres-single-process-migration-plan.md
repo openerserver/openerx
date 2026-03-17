@@ -435,30 +435,86 @@ SQLite 到 PostgreSQL 不是简单替换 driver，必须审视以下差异：
 
 ### Phase 1 当前完成度评估
 
-截至 2026-03-17，PostgreSQL 基础替换的状态应定义为：**主链路已完成并验证通过，但尚未完成最终收口**。
+截至 2026-03-17，PostgreSQL 基础替换的状态应定义为：**Phase 1 已完成**。
 
 已完成：
 
-- 已引入 `postgres.js` 与 `drizzle-orm/postgres-js`，PG driver 已进入实际运行路径。
-- 已提供 PostgreSQL 连接实现与运行时切换能力，`DATABASE_DIALECT=postgres` 下控制面可直接运行。
-- 已新增 PostgreSQL Drizzle schema，并将原 `runtime-schema.ts` 中的主要运行时表收入 `pgTable()` 声明。
-- 已生成并落地 PostgreSQL migration 目录与基线 SQL，可执行 `db:migrate:pg`。
-- 已支持 PostgreSQL seed，`db:seed:pg` 可执行。
-- 已在 PostgreSQL + 单进程 app 形态下完成 typecheck、health check 以及 execution 集成回归验证。
-
-未完成：
-
-- SQLite 尚未退出主路径，当前仓库仍保留 `sqlite` / `postgres` 双栈运行分支。
-- `runtime-schema.ts` 尚未删除，`ensureRuntimeTables` / `ensureColumn` 启动期补表机制仍然存在。
-- `sqlite-config.ts`、`sqlite-client.ts` 等 SQLite 专用连接与兼容逻辑仍是活代码，而非纯历史文件。
-- `seed.ts` 仍保留 `sqlite_master`、`PRAGMA table_info`、旧时间字段归一化等 SQLite 兼容分支。
-- 文档要求的“导出 SQLite 历史数据 -> 导入 PostgreSQL -> 行数与关键外键一致性校验”尚未形成独立、完整、可重复执行的数据迁移脚本链路。
+- 已引入 `postgres.js` 与 `drizzle-orm/postgres-js`，控制面运行时只保留 PostgreSQL 主路径。
+- `db/index.ts`、`schema.ts`、`migrate.ts`、`seed.ts` 已收口为 PostgreSQL 实现；`runtime-schema.ts`、`sqlite-client.ts`、`sqlite-config.ts`、`schema.sqlite.ts` 已退出运行时代码。
+- 已将启动期补表逻辑转为正式 schema 与 migration，新增 PostgreSQL 索引迁移 `drizzle-pg/0002_purple_lorna_dane.sql`。
+- 已补齐离线 SQLite 快照迁移链路：`db:export:sqlite`、`db:transform:sqlite-export`、`db:import:pg`、`db:validate:pg`、`db:migrate:sqlite-snapshot`。
+- 已完成一次真实 SQLite 快照演练，产物落在 `tmp/sqlite-pg-migration-phase1/`，演练链路覆盖导出、规范化、导入和一致性校验。
+- 已在 PostgreSQL 唯一路径下完成根级 typecheck、单进程 app health check、BFF execution 相关回归，以及完整 service test 回归。
 
 当前判定：
 
-- 如果标准是“PostgreSQL 已可作为主运行数据库并通过当前真实链路验证”，则这一目标已经达成。
-- 如果标准是“Phase 1 在代码与运维层面彻底完成，SQLite 不再作为主路径存在”，则目前**尚未全部完成**。
-- 因此当前更准确的状态不是“PG 迁移全部完成”，而是“**PG 主运行链路完成，Phase 1 收口未完成**”。
+- PostgreSQL 已是唯一标准运行数据库，SQLite 仅保留为离线历史数据迁移输入。
+- Phase 1 的代码收口、运维脚本补齐和验证闭环均已完成，可进入 Phase 2。
+
+### Phase 1 收尾 Checklist
+
+下面的 checklist 已全部完成，用于记录 Phase 1 收口的最终状态。
+
+#### A. 清理 SQLite 运行主路径
+
+- [x] 从 `db/index.ts` 中移除 `sqlite` / `postgres` 双分支，统一以 PostgreSQL client 作为默认且唯一主路径。
+- [x] 移除 `sqlite-client.ts` 在运行时入口中的直接依赖，确保控制面默认启动不会再打开 SQLite 文件。
+- [x] 将 `bun:sqlite` 和 `drizzle-orm/bun-sqlite` 从控制面主运行路径中彻底移除。
+- [x] 明确保留 SQLite 仅用于离线迁移的脚本边界，运行时代码不再引用 SQLite helper。
+
+验收口径：
+
+- [x] `DATABASE_DIALECT=postgres` 成为唯一标准运行配置。
+- [x] 正常启动、测试、seed、migrate 不再依赖 SQLite runtime 对象。
+
+#### B. 删除启动期补表与兼容 bootstrap
+
+- [x] 将 `runtime-schema.ts` 的剩余表定义与列补齐逻辑完全收归到 Drizzle schema / migration。
+- [x] 删除 `ensureRuntimeTables()` 与 `ensureColumn()` 及其调用链。
+- [x] 从 `db/migrate.ts` 中删除“迁移失败后 fallback 到 runtime bootstrap”的兼容分支。
+- [x] 确认运行时建表行为只通过正式 migration 完成，不再通过启动代码隐式创建。
+
+验收口径：
+
+- [x] 全新 PostgreSQL 库仅通过 `db:migrate:pg` 即可获得完整 schema。
+- [x] 应用首次启动时不再打印或触发任何 runtime compatibility table 相关日志。
+
+#### C. 收口 schema 与 seed
+
+- [x] 将 `schema.ts` 从“按 dialect 切换 sqlite/pg schema”收口为 PostgreSQL 主 schema 导出。
+- [x] 移除 `schema.sqlite.ts` 中不再需要的导出与类型桥接，避免新代码继续误接 SQLite 表定义。
+- [x] 从 `seed.ts` 中删除 `sqlite_master`、`PRAGMA table_info`、旧时间字段修复等 SQLite 专属分支。
+- [x] 确认 seed 逻辑只面向 PostgreSQL 当前 schema，不再维护双栈兼容行为。
+
+验收口径：
+
+- [x] `db:seed:pg` 不包含任何 SQLite 条件逻辑。
+- [x] schema 导出关系清晰，不再依赖 runtime dialect 做表定义切换。
+
+#### D. 补齐历史数据迁移链路
+
+- [x] 增加 SQLite 导出脚本，支持按表导出 JSONL。
+- [x] 增加字段规范化转换步骤，覆盖历史 timestamp 字段、JSON string 字段、布尔值和脏数据清理。
+- [x] 增加 PostgreSQL 导入脚本与一键迁移流程。
+- [x] 增加一致性校验脚本，覆盖表行数、主键覆盖率、关键外键覆盖率与抽样核对。
+- [x] 产出一次真实 SQLite 快照迁移记录，作为正式切换前的演练基线。
+
+验收口径：
+
+- [x] 能从一份 SQLite 快照自动完成导出、转换、导入、校验。
+- [x] 校验结果可重复执行，且有明确失败输出与人工介入点说明。
+
+#### E. 最终验证与文档收口
+
+- [x] 在纯 PostgreSQL 路径下重新执行 typecheck、service tests、BFF execution 相关回归和单进程 execution 回归。
+- [x] 更新 `.env.example`、启动脚本和相关说明，明确 PostgreSQL 为默认运行数据库。
+- [x] 在本方案文档中将 Phase 1 状态从“收尾中”更新为“完成”，前提是以上 checklist 全部通过。
+
+验收口径：
+
+- [x] 代码层面不再存在 SQLite 作为主运行前提。
+- [x] 运维层面具备清晰的导入、验证说明。
+- [x] 测试层面已在 PostgreSQL 唯一路径下完成一轮 service 全量 + BFF execution 相关回归。
 
 ### Phase 2. 合并 Control Plane 与 BFF
 

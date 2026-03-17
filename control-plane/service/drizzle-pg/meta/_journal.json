@@ -15,6 +15,13 @@
       "when": 1773737661441,
       "tag": "0001_parched_hellion",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1773763702812,
+      "tag": "0002_purple_lorna_dane",
+      "breakpoints": true
     }
   ]
 }

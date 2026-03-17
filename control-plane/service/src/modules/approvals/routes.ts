@@ -10,6 +10,16 @@ import { recordAuditEvent } from "../audit/routes";
 
 export const approvalRoutes = new Hono<AppEnv>();
 
+function toAuditRiskLevel(
+  value: string | null | undefined,
+): "low" | "medium" | "high" | "critical" | undefined {
+  if (value === "low" || value === "medium" || value === "high" || value === "critical") {
+    return value;
+  }
+
+  return undefined;
+}
+
 approvalRoutes.use("*", authMiddleware);
 
 const approvalStatusSchema = z.enum(["pending", "approved", "rejected", "expired"]);
@@ -100,7 +110,7 @@ approvalRoutes.post(
       action: newStatus,
       target: ticketId,
       detail: { comment, actionType: ticket.actionType, riskLevel: ticket.riskLevel },
-      riskLevel: ticket.riskLevel,
+      riskLevel: toAuditRiskLevel(ticket.riskLevel),
     });
 
     return c.json({ id: ticketId, status: newStatus, approver: user.sub, comment });

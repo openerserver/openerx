@@ -428,7 +428,7 @@ async function ensureLegacyRoleWorkflowMigratedInternal(taskId: string) {
     const migratedRoleConclusions = legacyRoleConclusions.map((item) =>
       normalizeLegacyRoleConclusion(item, taskId, now),
     );
-    await db.insert(roleAggregateConclusions).values(migratedRoleConclusions);
+    await db.insert(roleAggregateConclusions).values(migratedRoleConclusions).onConflictDoNothing();
   }
 
   const existingChangeRequests = await db
@@ -440,7 +440,7 @@ async function ensureLegacyRoleWorkflowMigratedInternal(taskId: string) {
     const migratedChangeRequests = legacyChangeRequests.map((item) =>
       normalizeLegacyChangeRequest(item, taskId, now),
     );
-    await db.insert(developerChangeRequests).values(migratedChangeRequests);
+    await db.insert(developerChangeRequests).values(migratedChangeRequests).onConflictDoNothing();
   }
 
   if ("roleAggregateConclusions" in strategy || "developerChangeRequests" in strategy) {

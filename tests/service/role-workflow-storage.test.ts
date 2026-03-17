@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import postgres from "../../control-plane/service/node_modules/postgres";
 import { ensureLegacyRoleWorkflowMigrated } from "../../control-plane/service/src/modules/task-workflows/legacy-role-workflow-storage";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -10,9 +11,38 @@ const CP_URL = process.env.TEST_CP_URL || "http://127.0.0.1:4097";
 const PROJECT_ID = process.env.TEST_PROJECT_ID || "proj-default";
 const USERNAME = process.env.TEST_USERNAME || "admin";
 const PASSWORD = process.env.TEST_PASSWORD || "admin123!";
+const DATABASE_URL = process.env.TEST_DATABASE_URL || process.env.DATABASE_URL || "";
 const DB_PATH =
   process.env.TEST_DB_PATH || resolve(__dirname, "../../control-plane/service/data/openerx.db");
-const testDatabase = new Database(DB_PATH, { create: true });
+const USE_POSTGRES = /^(postgres|postgresql):\/\//i.test(DATABASE_URL);
+const testDatabase = USE_POSTGRES ? null : new Database(DB_PATH, { create: true });
+const sql = USE_POSTGRES ? postgres(DATABASE_URL, { max: 1, prepare: false }) : null;
+
+function toPostgresPlaceholders(query: string) {
+  let index = 0;
+  return query.replace(/\?(\d+)?/g, () => `$${++index}`);
+}
+
+async function writeDb(query: string, params: unknown[]) {
+  if (sql) {
+    await sql.unsafe(toPostgresPlaceholders(query), params as never[]);
+    return;
+  }
+
+  testDatabase?.query(query).run(...params);
+}
+
+async function readCount(query: string, params: unknown[]) {
+  if (sql) {
+    const rows = (await sql.unsafe(toPostgresPlaceholders(query), params as never[])) as Array<{
+      count: string | number;
+    }>;
+    return Number(rows[0]?.count ?? 0);
+  }
+
+  const row = testDatabase?.query(query).get(...params) as { count: number | bigint } | undefined;
+  return Number(row?.count ?? 0);
+}
 
 async function request<T>(
   path: string,
@@ -71,95 +101,73 @@ async function createTask(token: string, title: string) {
   return data.id;
 }
 
-function createWorkflowTemplateFixture(templateId: string, stageKeys: string[]) {
+async function createWorkflowTemplateFixture(templateId: string, stageKeys: string[]) {
   const now = new Date().toISOString();
   createdWorkflowTemplateIds.push(templateId);
 
-  testDatabase
-    .query(
-      `INSERT INTO workflow_templates (
+  await writeDb(
+    `INSERT INTO workflow_templates (
         id, name, enabled, selectable_by_projects, stage_order_json, version, created_at, updated_at
-      ) VALUES (?1, ?2, 1, 1, ?3, 1, ?4, ?5)`,
-    )
-    .run(templateId, `Test Template ${templateId}`, JSON.stringify(stageKeys), now, now);
-
-  const insertStage = testDatabase.query(
-    `INSERT INTO workflow_template_stages (
-      id, template_id, stage_key, name, enabled, mode, primary_role_agent_id, participant_role_agent_ids_json, order_index
-    ) VALUES (?1, ?2, ?3, ?4, 1, 'single', ?5, ?6, ?7)`,
+      ) VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6, ?7)`,
+    [templateId, `Test Template ${templateId}`, true, true, JSON.stringify(stageKeys), now, now],
   );
 
+  const insertStageQuery = `INSERT INTO workflow_template_stages (
+      id, template_id, stage_key, name, enabled, mode, primary_role_agent_id, participant_role_agent_ids_json, order_index
+    ) VALUES (?1, ?2, ?3, ?4, ?5, 'single', ?6, ?7, ?8)`;
+
   for (const [index, stageKey] of stageKeys.entries()) {
-    insertStage.run(
+    await writeDb(insertStageQuery, [
       `${templateId}-${stageKey}`,
       templateId,
       stageKey,
       stageKey,
+      true,
       `role.${stageKey}`,
       JSON.stringify([]),
       index,
-    );
+    ]);
   }
 }
 
-function countWorkflowRuns(taskId: string) {
-  const row = testDatabase
-    .query("SELECT COUNT(*) AS count FROM task_workflow_runs WHERE task_id = ?1")
-    .get(taskId) as { count: number | bigint };
-  return Number(row.count ?? 0);
+async function countWorkflowRuns(taskId: string) {
+  return readCount("SELECT COUNT(*) AS count FROM task_workflow_runs WHERE task_id = ?1", [taskId]);
 }
 
-function countStageRunsForTask(taskId: string) {
-  const row = testDatabase
-    .query(
-      `SELECT COUNT(*) AS count
+async function countStageRunsForTask(taskId: string) {
+  return readCount(
+    `SELECT COUNT(*) AS count
        FROM task_stage_runs
        WHERE workflow_run_id IN (SELECT id FROM task_workflow_runs WHERE task_id = ?1)`,
-    )
-    .get(taskId) as { count: number | bigint };
-  return Number(row.count ?? 0);
+    [taskId],
+  );
 }
 
 afterAll(async () => {
   try {
-    const deleteTaskStageRuns = testDatabase.query(
-      "DELETE FROM task_stage_runs WHERE workflow_run_id IN (SELECT id FROM task_workflow_runs WHERE task_id = ?1)",
-    );
-    const deleteTaskWorkflowRuns = testDatabase.query(
-      "DELETE FROM task_workflow_runs WHERE task_id = ?1",
-    );
-    const deleteChangeRequests = testDatabase.query(
-      "DELETE FROM developer_change_requests WHERE task_id = ?1",
-    );
-    const deleteRoleConclusions = testDatabase.query(
-      "DELETE FROM role_aggregate_conclusions WHERE task_id = ?1",
-    );
-    const deleteTaskSessions = testDatabase.query("DELETE FROM task_sessions WHERE task_id = ?1");
-    const deleteAuditEvents = testDatabase.query("DELETE FROM audit_events WHERE task_id = ?1");
-    const deleteAgentRuns = testDatabase.query("DELETE FROM agent_runs WHERE task_id = ?1");
-    const deleteTasks = testDatabase.query("DELETE FROM tasks WHERE id = ?1");
-    const deleteTemplateStages = testDatabase.query(
-      "DELETE FROM workflow_template_stages WHERE template_id = ?1",
-    );
-    const deleteTemplates = testDatabase.query("DELETE FROM workflow_templates WHERE id = ?1");
-
     for (const taskId of createdTaskIds) {
-      deleteTaskStageRuns.run(taskId);
-      deleteTaskWorkflowRuns.run(taskId);
-      deleteChangeRequests.run(taskId);
-      deleteRoleConclusions.run(taskId);
-      deleteTaskSessions.run(taskId);
-      deleteAuditEvents.run(taskId);
-      deleteAgentRuns.run(taskId);
-      deleteTasks.run(taskId);
+      await writeDb(
+        "DELETE FROM task_stage_runs WHERE workflow_run_id IN (SELECT id FROM task_workflow_runs WHERE task_id = ?1)",
+        [taskId],
+      );
+      await writeDb("DELETE FROM task_workflow_runs WHERE task_id = ?1", [taskId]);
+      await writeDb("DELETE FROM developer_change_requests WHERE task_id = ?1", [taskId]);
+      await writeDb("DELETE FROM role_aggregate_conclusions WHERE task_id = ?1", [taskId]);
+      await writeDb("DELETE FROM task_sessions WHERE task_id = ?1", [taskId]);
+      await writeDb("DELETE FROM audit_events WHERE task_id = ?1", [taskId]);
+      await writeDb("DELETE FROM agent_runs WHERE task_id = ?1", [taskId]);
+      await writeDb("DELETE FROM tasks WHERE id = ?1", [taskId]);
     }
 
     for (const templateId of createdWorkflowTemplateIds) {
-      deleteTemplateStages.run(templateId);
-      deleteTemplates.run(templateId);
+      await writeDb("DELETE FROM workflow_template_stages WHERE template_id = ?1", [templateId]);
+      await writeDb("DELETE FROM workflow_templates WHERE id = ?1", [templateId]);
     }
   } finally {
-    testDatabase.close();
+    testDatabase?.close();
+    if (sql) {
+      await sql.end();
+    }
   }
 });
 
@@ -414,13 +422,13 @@ describe("Role workflow storage (service)", () => {
       ensureLegacyRoleWorkflowMigrated(taskId),
     ]);
 
-    expect(countWorkflowRuns(taskId)).toBe(1);
+    expect(await countWorkflowRuns(taskId)).toBe(1);
   });
 
   test("backfills missing stage runs when a historical task already has workflow run", async () => {
     const taskId = await createTask(token, `legacy-task-stage-backfill-${Date.now()}`);
     const templateId = `legacy-template-backfill-${Date.now()}`;
-    createWorkflowTemplateFixture(templateId, ["design", "verify"]);
+    await createWorkflowTemplateFixture(templateId, ["design", "verify"]);
 
     const patchTask = await authedRequest<Record<string, unknown>>(token, `/api/tasks/${taskId}`, {
       method: "PATCH",
@@ -449,13 +457,12 @@ describe("Role workflow storage (service)", () => {
     expect(patchTask.status).toBe(200);
 
     const now = new Date().toISOString();
-    testDatabase
-      .query(
-        `INSERT INTO task_workflow_runs (
+    await writeDb(
+      `INSERT INTO task_workflow_runs (
           id, task_id, template_id, current_stage, status, started_at, created_at, updated_at
         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`,
-      )
-      .run(`workflow-run-${taskId}`, taskId, templateId, "verify", "running", now, now, now);
+      [`workflow-run-${taskId}`, taskId, templateId, "verify", "running", now, now, now],
+    );
 
     const workflow = await authedRequest<{
       data: {
@@ -471,7 +478,7 @@ describe("Role workflow storage (service)", () => {
       status: "running",
     });
     expect(workflow.data.data.stages).toHaveLength(2);
-    expect(countStageRunsForTask(taskId)).toBe(2);
+    expect(await countStageRunsForTask(taskId)).toBe(2);
 
     const retryStage = await authedRequest<{ ok: boolean }>(
       token,
