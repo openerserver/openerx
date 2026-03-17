@@ -22,6 +22,13 @@ const LEGACY_AUTH_BACKUP = `${LEGACY_AUTH_JSON}.bak`;
 
 type ConfigSource = "runtime" | "ui";
 
+export const ALLOWED_TEST_EXECUTION_MODELS = [
+  "github-copilot:gpt-5-mini",
+  "github-copilot:gpt-4o",
+] as const;
+
+const DEFAULT_TEST_EXECUTION_MODEL = ALLOWED_TEST_EXECUTION_MODELS[0];
+
 type ProviderConfig = {
   providerId: string;
   api?: string;
@@ -69,6 +76,20 @@ function getTrimmedString(value: unknown): string | undefined {
   return trimmed || undefined;
 }
 
+export function normalizeTestExecutionModel(raw: string | undefined | null): string | undefined {
+  const value = getTrimmedString(raw);
+  if (!value) {
+    return undefined;
+  }
+
+  const normalized = value.includes(":") ? value : `github-copilot:${value}`;
+  return ALLOWED_TEST_EXECUTION_MODELS.includes(
+    normalized as (typeof ALLOWED_TEST_EXECUTION_MODELS)[number],
+  )
+    ? normalized
+    : undefined;
+}
+
 export function readDefaultExecutionModel(): string | undefined {
   const config = readOpencodeJson();
   const defaults = (config.agents as Record<string, unknown> | undefined)?.defaults as
@@ -76,6 +97,24 @@ export function readDefaultExecutionModel(): string | undefined {
     | undefined;
 
   return getTrimmedString(defaults?.model) ?? getTrimmedString(config.model);
+}
+
+export function readConfiguredTestExecutionModel(): string | undefined {
+  const config = readOpencodeJson();
+  const defaults = (config.agents as Record<string, unknown> | undefined)?.defaults as
+    | Record<string, unknown>
+    | undefined;
+
+  return normalizeTestExecutionModel(getTrimmedString(defaults?.testModel));
+}
+
+export function readEnforcedTestExecutionModel(): string {
+  return (
+    readConfiguredTestExecutionModel()
+    || normalizeTestExecutionModel(process.env.TEST_EXECUTION_MODEL)
+    || normalizeTestExecutionModel(process.env.LOW_COST_EXECUTION_MODEL)
+    || DEFAULT_TEST_EXECUTION_MODEL
+  );
 }
 
 /**

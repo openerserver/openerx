@@ -6,6 +6,10 @@ import {
   createInternalAuthorization,
 } from "../../control-plane/web-ui-bff/src/lib/control-plane-client";
 import { sseAggregator } from "../../control-plane/web-ui-bff/src/modules/realtime/sse-aggregator";
+import {
+  paidExecutionIntegrationTest,
+  resolveExecutionIntegrationModel,
+} from "./execution-integration-guard";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -15,7 +19,7 @@ const PASSWORD = process.env.TEST_PASSWORD || "admin123!";
 const PROJECT_ID = process.env.TEST_PROJECT_ID || "proj-default";
 const DB_PATH =
   process.env.TEST_DB_PATH || resolve(__dirname, "../../control-plane/service/data/openerx.db");
-const executionIntegrationTest = process.env.RUN_EXECUTION_INTEGRATION === "1" ? test : test.skip;
+const executionIntegrationTest = paidExecutionIntegrationTest;
 
 interface HookConfig {
   enabled: boolean;
@@ -65,12 +69,6 @@ interface TaskRecord {
   status: string;
   agentRunId?: string | null;
   strategy?: string | null;
-}
-
-interface ProjectRecord {
-  settings?: {
-    defaultModel?: string;
-  } | null;
 }
 
 interface ConfigModelRecord {
@@ -172,31 +170,16 @@ async function createTask(
 }
 
 async function getAvailableCopilotModel(): Promise<string> {
-  const modelList = await request<{ data?: ConfigModelRecord[] }>("/api/config/models/list", {
-    headers: authHeaders(),
-  });
+  const [modelList, testPolicy] = await Promise.all([
+    request<{ data?: ConfigModelRecord[] }>("/api/config/models/list", {
+      headers: authHeaders(),
+    }),
+    request<{ data?: { effectiveModel?: string | null } }>("/api/config/models/test-policy", {
+      headers: authHeaders(),
+    }),
+  ]);
 
-  const configuredCopilotModel = (modelList.data || []).find(
-    (model) =>
-      typeof model.provider === "string"
-      && model.provider.startsWith("github-copilot")
-      && typeof model.id === "string"
-      && model.id.trim().length > 0,
-  );
-
-  if (configuredCopilotModel?.provider && configuredCopilotModel.id) {
-    return `${configuredCopilotModel.provider}:${configuredCopilotModel.id}`;
-  }
-
-  const project = await request<ProjectRecord>(`/api/projects/${PROJECT_ID}`, {
-    headers: authHeaders(),
-  });
-
-  if (project.settings?.defaultModel?.startsWith("github-copilot")) {
-    return project.settings.defaultModel;
-  }
-
-  return "github-copilot:claude-sonnet-4";
+  return resolveExecutionIntegrationModel(modelList.data || [], testPolicy.data?.effectiveModel);
 }
 
 async function executeTask(taskId: string): Promise<{ agentRunId: string; sessionId: string }> {

@@ -12,6 +12,11 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { parseFrontmatter, serializeFrontmatter } from "../../lib/frontmatter";
 import {
+  ALLOWED_TEST_EXECUTION_MODELS,
+  normalizeTestExecutionModel,
+  readEnforcedTestExecutionModel,
+} from "../../lib/opencode-config";
+import {
   type PlatformOrganizationSettings,
   readOrchestrationStrategy,
   writeOrchestrationStrategy,
@@ -86,6 +91,14 @@ function getConfiguredDefaultExecutionModel(config: Record<string, unknown>): st
     | undefined;
 
   return getTrimmedString(defaults?.model) ?? getTrimmedString(config.model) ?? null;
+}
+
+function getConfiguredTestExecutionModel(config: Record<string, unknown>): string | null {
+  const defaults = (config.agents as Record<string, unknown> | undefined)?.defaults as
+    | Record<string, unknown>
+    | undefined;
+
+  return normalizeTestExecutionModel(getTrimmedString(defaults?.testModel)) ?? null;
 }
 
 function toRuntimeModelRoute(raw: string): string {
@@ -538,6 +551,18 @@ configRoutes.get("/models/list", (c) => {
   });
 });
 
+configRoutes.get("/models/test-policy", (c) => {
+  const config = readOpencodeJson();
+  return c.json({
+    data: {
+      configuredModel: getConfiguredTestExecutionModel(config),
+      effectiveModel: readEnforcedTestExecutionModel(),
+      allowedModels: [...ALLOWED_TEST_EXECUTION_MODELS],
+      enforced: true,
+    },
+  });
+});
+
 // GET /config/models/available — list configured model IDs from opencode.json provider + model config
 // Used for pre-flight validation before task execution
 configRoutes.get("/models/available", (c) => {
@@ -572,8 +597,17 @@ configRoutes.put(
     }
     const config = readOpencodeJson();
     const defaultModel = getTrimmedString((defaults as Record<string, unknown>)?.model);
+    const normalizedTestModel =
+      normalizeTestExecutionModel(getTrimmedString((defaults as Record<string, unknown>)?.testModel))
+      || ALLOWED_TEST_EXECUTION_MODELS[0];
 
-    config.agents = { ...(config.agents as object), defaults };
+    config.agents = {
+      ...(config.agents as object),
+      defaults: {
+        ...(defaults as Record<string, unknown>),
+        testModel: normalizedTestModel,
+      },
+    };
     config.models = { providers, list };
     if (defaultModel) {
       config.model = toRuntimeModelRoute(defaultModel);

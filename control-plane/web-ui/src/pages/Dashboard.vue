@@ -288,6 +288,382 @@
       </template>
     </a-card>
 
+    <div data-testid="dashboard-governance-overview-section" style="margin-bottom: 16px">
+      <a-card size="small">
+      <template #title>
+        <a-flex justify="space-between" align="center" wrap="wrap" :gap="12">
+          <span>付费执行治理总览</span>
+          <a-button size="small" :loading="governanceLoading" @click="loadGovernanceOverview">
+            刷新
+          </a-button>
+        </a-flex>
+      </template>
+
+      <a-alert
+        style="margin-bottom: 16px"
+        :type="governanceInsightTone"
+        show-icon
+        :message="governanceInsightTitle"
+        :description="governanceInsightDescription"
+      />
+
+      <a-empty
+        v-if="showGovernanceEmpty"
+        description="当前窗口没有 paid execution 治理事件与风险任务"
+      />
+
+      <template v-else>
+        <a-row :gutter="[12, 12]" style="margin-bottom: 16px">
+          <a-col :xs="24" :sm="12" :xl="6">
+            <a-card size="small" :loading="governanceLoading">
+              <div class="provider-card-label">Block 命中</div>
+              <div class="provider-card-value">{{ formatCount(governanceSummary?.blockedCount) }}</div>
+              <div class="provider-card-hint">当前窗口被 guard 拦截的 paid execution 次数</div>
+            </a-card>
+          </a-col>
+          <a-col :xs="24" :sm="12" :xl="6">
+            <a-card size="small" :loading="governanceLoading">
+              <div class="provider-card-label">Breaker 触发</div>
+              <div class="provider-card-value">{{ formatCount(governanceSummary?.breakerCount) }}</div>
+              <div class="provider-card-hint">运行中熔断并终止后续请求的次数</div>
+            </a-card>
+          </a-col>
+          <a-col :xs="24" :sm="12" :xl="6">
+            <a-card size="small" :loading="governanceLoading">
+              <div class="provider-card-label">Active Lease</div>
+              <div class="provider-card-value">{{ formatCount(governanceSummary?.activeLeaseCount) }}</div>
+              <div class="provider-card-hint">当前仍有效的付费执行租约数</div>
+            </a-card>
+          </a-col>
+          <a-col :xs="24" :sm="12" :xl="6">
+            <a-card size="small" :loading="governanceLoading">
+              <div class="provider-card-label">Top 风险任务</div>
+              <div class="provider-card-value">{{ formatCount(governanceSummary?.topRiskTaskCount) }}</div>
+              <div class="provider-card-hint">按风险评分排序的高风险任务 Top 5</div>
+            </a-card>
+          </a-col>
+        </a-row>
+
+        <a-row :gutter="[16, 16]">
+          <a-col :xs="24" :xl="16">
+            <div data-testid="dashboard-governance-top-risk-card">
+              <a-card size="small" title="Top 风险任务" :loading="governanceLoading">
+                <a-table
+                  :data-source="governanceTopRiskRows"
+                  :pagination="false"
+                  size="small"
+                  row-key="taskId"
+                >
+            <a-table-column title="任务 / 项目" key="task">
+              <template #default="{ record }">
+                <div>
+                  <div>{{ record.title || '未记录' }}</div>
+                  <div style="color: rgba(0, 0, 0, 0.45)">{{ record.projectName }} / {{ record.orgName }}</div>
+                  <div style="color: rgba(0, 0, 0, 0.45)">{{ record.projectGroupLabel }}</div>
+                </div>
+              </template>
+            </a-table-column>
+            <a-table-column title="治理信号" key="signals" :width="220">
+              <template #default="{ record }">
+                <a-space wrap :size="4">
+                  <a-tag v-if="record.blockedCount > 0" color="red">block {{ record.blockedCount }}</a-tag>
+                  <a-tag v-if="record.breakerCount > 0" color="volcano">breaker {{ record.breakerCount }}</a-tag>
+                  <a-tag v-if="record.parallelCandidateCount > 0">parallel {{ record.parallelCandidateCount }}</a-tag>
+                  <a-tag v-if="record.judgeRequestCount > 0">judge {{ record.judgeRequestCount }}</a-tag>
+                  <a-tag v-if="record.hookRequestCount > 0">hook {{ record.hookRequestCount }}</a-tag>
+                </a-space>
+              </template>
+            </a-table-column>
+            <a-table-column title="风险分" key="riskScore" :width="110">
+              <template #default="{ record }">
+                <div>
+                  <div>{{ formatCount(record.riskScore) }}</div>
+                  <div style="color: rgba(0, 0, 0, 0.45)">{{ formatGovernanceDriverLabel(record.dominantDriver) }}</div>
+                </div>
+              </template>
+            </a-table-column>
+            <a-table-column title="调用 / 成本" key="usage" :width="160">
+              <template #default="{ record }">
+                <div>
+                  <div>{{ formatCount(record.requestCount) }} 次</div>
+                  <div style="color: rgba(0, 0, 0, 0.45)">{{ formatUsd(record.costUsd) }} / {{ formatTokenCount(record.totalTokens) }}</div>
+                </div>
+              </template>
+            </a-table-column>
+            <a-table-column title="最近 Guard" key="decision" :width="200">
+              <template #default="{ record }">
+                <div>
+                  <div>{{ formatGuardDecisionLabel(record.lastGuardDecision) }}</div>
+                  <div style="color: rgba(0, 0, 0, 0.45)">{{ record.lastGuardReason || '无最近 guard 原因' }}</div>
+                </div>
+              </template>
+            </a-table-column>
+            <a-table-column title="最近 Breaker" key="breaker" :width="220">
+              <template #default="{ record }">
+                <div>
+                  <div>{{ record.breakerCount > 0 ? '最近熔断原因' : '未触发' }}</div>
+                  <div style="color: rgba(0, 0, 0, 0.45)">{{ record.lastBreakerReason || '无最近 breaker 原因' }}</div>
+                </div>
+              </template>
+            </a-table-column>
+            <a-table-column title="跳转" key="actions" :width="160">
+              <template #default="{ record }">
+                <a-space wrap :size="4">
+                  <a-button
+                    type="link"
+                    size="small"
+                    :data-testid="`open-governance-task-${record.taskId}`"
+                    @click="openGovernanceTask(record)"
+                  >
+                    任务详情
+                  </a-button>
+                  <a-button
+                    type="link"
+                    size="small"
+                    :data-testid="`open-governance-project-${record.projectId}`"
+                    @click="openGovernanceProject(record)"
+                  >
+                    项目页
+                  </a-button>
+                </a-space>
+              </template>
+            </a-table-column>
+                </a-table>
+              </a-card>
+            </div>
+          </a-col>
+
+          <a-col :xs="24" :xl="8">
+            <div data-testid="dashboard-governance-event-stream-card">
+              <a-card size="small" title="最近 breaker / guard 事件流" :loading="governanceLoading">
+                <a-empty
+                  v-if="governanceEventRows.length === 0"
+                  description="当前窗口没有可展示的治理事件"
+                />
+                <div v-else class="governance-event-stream">
+                  <div
+                    v-for="event in governanceEventRows"
+                    :key="event.id"
+                    class="governance-event-item"
+                    :data-testid="`governance-event-${event.id}`"
+                  >
+                    <a-space wrap :size="6" style="margin-bottom: 4px">
+                      <a-tag :color="event.eventKind === 'breaker' ? 'volcano' : 'blue'">
+                        {{ event.eventKindLabel }}
+                      </a-tag>
+                      <a-typography-text type="secondary">{{ formatTime(event.occurredAt) }}</a-typography-text>
+                    </a-space>
+                    <div class="governance-event-item__title">{{ event.projectName }} / {{ event.title }}</div>
+                    <div class="governance-event-item__meta">{{ event.orgName }} / {{ event.projectGroupLabel }}</div>
+                    <div v-if="event.guardDecisionLabel && event.eventKind === 'guard'" class="governance-event-item__decision">
+                      {{ event.guardDecisionLabel }}
+                    </div>
+                    <div class="governance-event-item__summary">
+                      <a-tag :color="event.reasonSummaryColor">{{ event.reasonSummaryLabel }}</a-tag>
+                    </div>
+                    <div class="governance-event-item__reason">{{ event.reason || '未记录原因' }}</div>
+                  </div>
+                </div>
+              </a-card>
+            </div>
+          </a-col>
+        </a-row>
+      </template>
+      </a-card>
+    </div>
+
+    <div data-testid="dashboard-runtime-ledger-section" style="margin-bottom: 16px">
+      <a-card size="small">
+      <template #title>
+        <a-flex justify="space-between" align="center" wrap="wrap" :gap="12">
+          <span>跨项目运行治理总览</span>
+          <a-space wrap>
+            <a-select
+              :value="runtimeOrgFilter"
+              style="min-width: 160px"
+              :options="runtimeOrgOptions"
+              size="small"
+              @update:value="runtimeOrgFilter = String($event || 'all')"
+            />
+            <a-select
+              :value="runtimeProjectGroupFilter"
+              style="min-width: 180px"
+              :options="runtimeProjectGroupOptions"
+              size="small"
+              @update:value="runtimeProjectGroupFilter = String($event || 'all')"
+            />
+            <a-button
+              size="small"
+              :loading="runtimeLedgerLoading"
+              @click="loadRuntimeLedgerOverview"
+            >
+              刷新
+            </a-button>
+          </a-space>
+        </a-flex>
+      </template>
+
+      <a-alert
+        style="margin-bottom: 16px"
+        :type="runtimeGovernanceInsightTone"
+        show-icon
+        :message="runtimeGovernanceInsightTitle"
+        :description="runtimeGovernanceInsightDescription"
+      />
+
+      <a-empty
+        v-if="showRuntimeLedgerEmpty"
+        description="当前没有可用的 runtime usage ledger，可在项目页或执行链路落下首批账本后再查看。"
+      />
+
+      <template v-else>
+        <a-row :gutter="[12, 12]" style="margin-bottom: 16px">
+          <a-col :xs="24" :sm="12" :xl="6">
+            <a-card size="small" :loading="runtimeLedgerLoading">
+              <div class="provider-card-label">覆盖项目</div>
+              <div class="provider-card-value">{{ formatCount(runtimeGovernanceProjectCount) }}</div>
+              <div class="provider-card-hint">失败加载 {{ formatCount(runtimeGovernanceFailedProjects) }}</div>
+            </a-card>
+          </a-col>
+          <a-col :xs="24" :sm="12" :xl="6">
+            <a-card size="small" :loading="runtimeLedgerLoading">
+              <div class="provider-card-label">账本批次</div>
+              <div class="provider-card-value">{{ formatCount(runtimeLedgerSummary?.ledgerCount) }}</div>
+              <div class="provider-card-hint">总请求 {{ formatCount(runtimeLedgerSummary?.requestCount) }}</div>
+            </a-card>
+          </a-col>
+          <a-col :xs="24" :sm="12" :xl="6">
+            <a-card size="small" :loading="runtimeLedgerLoading">
+              <div class="provider-card-label">累计 Token</div>
+              <div class="provider-card-value">{{ formatTokenCount(runtimeLedgerSummary?.totalTokens) }}</div>
+              <div class="provider-card-hint">累计成本 {{ formatUsd(runtimeLedgerSummary?.costUsd) }}</div>
+            </a-card>
+          </a-col>
+          <a-col :xs="24" :sm="12" :xl="6">
+            <a-card size="small" :loading="runtimeLedgerLoading">
+              <div class="provider-card-label">高消耗执行</div>
+              <div class="provider-card-value">{{ formatCount(highCostLedgerRows.length) }}</div>
+              <div class="provider-card-hint">跨项目按成本排序的最近窗口 Top 5</div>
+            </a-card>
+          </a-col>
+        </a-row>
+
+        <a-row :gutter="[16, 16]">
+          <a-col :xs="24" :xl="15">
+            <div data-testid="dashboard-runtime-high-cost-card">
+              <a-card size="small" title="最近高消耗执行" :loading="runtimeLedgerLoading">
+              <a-table
+                :data-source="highCostLedgerRows"
+                :pagination="false"
+                size="small"
+                row-key="id"
+              >
+                <a-table-column title="项目 / 会话" key="session">
+                  <template #default="{ record }">
+                    <div>
+                      <div>{{ record.projectName }}</div>
+                      <div style="color: rgba(0, 0, 0, 0.45)">{{ record.orgName }} / {{ record.projectGroupLabel }}</div>
+                      <div style="color: rgba(0, 0, 0, 0.45)">{{ record.runtimeSessionId }}</div>
+                    </div>
+                  </template>
+                </a-table-column>
+                <a-table-column title="任务" key="task" :width="150">
+                  <template #default="{ record }">
+                    <div>
+                      <div>{{ record.taskId || '未绑定任务' }}</div>
+                      <div>{{ record.runtimeSessionId }}</div>
+                    </div>
+                  </template>
+                </a-table-column>
+                <a-table-column title="入口" key="entrypoint" :width="150">
+                  <template #default="{ record }">
+                    <div>
+                      <div>{{ record.executionSource }}</div>
+                      <div style="color: rgba(0, 0, 0, 0.45)">{{ record.entrypointType }}</div>
+                    </div>
+                  </template>
+                </a-table-column>
+                <a-table-column title="放大来源" key="amplification" :width="180">
+                  <template #default="{ record }">
+                    <a-space wrap :size="4">
+                      <a-tag v-for="label in runtimeLedgerAmplificationTags(record)" :key="label">
+                        {{ label }}
+                      </a-tag>
+                    </a-space>
+                  </template>
+                </a-table-column>
+                <a-table-column title="Token" data-index="totalTokens" key="totalTokens" :width="110" />
+                <a-table-column title="成本" key="cost" :width="110">
+                  <template #default="{ record }">
+                    {{ formatUsd(record.costUsd) }}
+                  </template>
+                </a-table-column>
+                <a-table-column title="完成时间" key="finishedAt" :width="140">
+                  <template #default="{ record }">
+                    {{ formatTime(record.finishedAt || record.updatedAt) }}
+                  </template>
+                </a-table-column>
+                <a-table-column title="跳转" key="actions" :width="190">
+                  <template #default="{ record }">
+                    <a-space wrap :size="4">
+                      <a-button
+                        type="link"
+                        size="small"
+                        :data-testid="`open-runtime-ledger-${record.id}`"
+                        @click="openProjectRuntimeLedger(record)"
+                      >
+                        打开账本
+                      </a-button>
+                      <a-button
+                        v-if="record.taskId"
+                        type="link"
+                        size="small"
+                        :data-testid="`open-runtime-ledger-task-${record.taskId}`"
+                        @click="openRuntimeLedgerTask(record)"
+                      >
+                        任务详情
+                      </a-button>
+                    </a-space>
+                  </template>
+                </a-table-column>
+              </a-table>
+              </a-card>
+            </div>
+          </a-col>
+
+          <a-col :xs="24" :xl="9">
+            <div data-testid="dashboard-runtime-amplification-card">
+              <a-card size="small" title="风险放大来源概览" :loading="runtimeLedgerLoading">
+              <a-space direction="vertical" style="width: 100%" :size="12">
+                <div class="monthly-summary-item">
+                  <div class="provider-card-label">Parallel 候选放大</div>
+                  <div class="provider-card-value">{{ formatCount(runtimeAmplificationSummary.parallelCandidates) }}</div>
+                  <div class="provider-card-hint">candidateCount 大于 1 的执行批次累计候选数</div>
+                </div>
+                <div class="monthly-summary-item">
+                  <div class="provider-card-label">Judge 请求放大</div>
+                  <div class="provider-card-value">{{ formatCount(runtimeAmplificationSummary.judgeRequests) }}</div>
+                  <div class="provider-card-hint">judgeRequestCount 累计命中</div>
+                </div>
+                <div class="monthly-summary-item">
+                  <div class="provider-card-label">Hook 请求放大</div>
+                  <div class="provider-card-value">{{ formatCount(runtimeAmplificationSummary.hookRequests) }}</div>
+                  <div class="provider-card-hint">hookRequestCount 累计命中</div>
+                </div>
+                <div class="monthly-summary-item">
+                  <div class="provider-card-label">最近风险会话</div>
+                  <div class="provider-card-value">{{ topAmplifiedLedgerLabel }}</div>
+                  <div class="provider-card-hint">当前窗口内放大来源最多的执行批次</div>
+                </div>
+              </a-space>
+              </a-card>
+            </div>
+          </a-col>
+        </a-row>
+      </template>
+      </a-card>
+    </div>
+
     <a-row :gutter="[16, 16]">
       <!-- Active Tasks -->
       <a-col :xs="24" :lg="8">
@@ -373,12 +749,22 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import type {
+  DashboardGovernanceOverviewResponse,
   DashboardProviderModelItem,
   DashboardProviderTokenItem,
   DashboardProviderTokenRange,
   DashboardProviderTokenResponse,
+  Org,
+  Project,
+  RuntimeUsageLedgerRecord,
 } from "../lib/api";
-import { getDashboardProviderTokens, listApprovals } from "../lib/api";
+import {
+  getDashboardGovernanceOverview,
+  getDashboardProviderTokens,
+  getProjectRuntimeUsageLedgers,
+  listApprovals,
+  listOrgs,
+} from "../lib/api";
 import { useProjectStore } from "../stores/project";
 import { useRealtimeStore } from "../stores/realtime";
 
@@ -388,9 +774,18 @@ const router = useRouter();
 const approvals = ref<unknown[]>([]);
 const providerRange = ref<DashboardProviderTokenRange>("24h");
 const monthlyViewMode = ref<"trend" | "share" | "efficiency">("share");
+const runtimeOrgFilter = ref("all");
+const runtimeProjectGroupFilter = ref("all");
 const providerTokenLoading = ref(true);
 const providerBootstrapPending = ref(true);
 const providerTokenData = ref<DashboardProviderTokenResponse | null>(null);
+const governanceLoading = ref(true);
+const governanceBootstrapPending = ref(true);
+const governanceData = ref<DashboardGovernanceOverviewResponse | null>(null);
+const runtimeLedgerLoading = ref(true);
+const runtimeLedgerBootstrapPending = ref(true);
+const runtimeLedgerData = ref<RuntimeGovernanceOverview | null>(null);
+const orgs = ref<Org[]>([]);
 
 const providerColumns = [
   { title: "Provider", key: "provider", width: 220 },
@@ -423,12 +818,131 @@ type DisplayProviderItem = DashboardProviderTokenItem & {
   normalModelCount: number;
 };
 
+type CrossProjectRuntimeUsageLedgerRecord = RuntimeUsageLedgerRecord & {
+  orgId: string;
+  orgName: string;
+  projectName: string;
+  projectSlug?: string | null;
+  projectGroupKey: string;
+  projectGroupLabel: string;
+};
+
+type RuntimeGovernanceOverview = {
+  totals: {
+    ledgerCount: number;
+    requestCount: number;
+    stepCount: number;
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    costUsd: number;
+  };
+  items: CrossProjectRuntimeUsageLedgerRecord[];
+  failedProjectIds: string[];
+};
+
+type GovernanceTaskRow = DashboardGovernanceOverviewResponse["topRiskTasks"][number] & {
+  projectName: string;
+  orgName: string;
+  projectGroupKey: string;
+  projectGroupLabel: string;
+};
+
+type GovernanceEventRow = DashboardGovernanceOverviewResponse["recentEvents"][number] & {
+  projectName: string;
+  orgName: string;
+  projectGroupKey: string;
+  projectGroupLabel: string;
+  eventKindLabel: string;
+  guardDecisionLabel: string | null;
+  reasonSummaryLabel: string;
+  reasonSummaryColor: string;
+};
+
+type ProjectGroupDescriptor = {
+  key: string;
+  label: string;
+};
+
 const events = computed(() => {
   if (!projectStore.currentProjectId) return [];
   return realtimeStore.events.filter((event) => event.projectId === projectStore.currentProjectId);
 });
 
 const providerSummary = computed(() => providerTokenData.value?.summary ?? null);
+const governanceSummary = computed(() => governanceData.value?.summary ?? null);
+const runtimeLedgerItems = computed(() => runtimeLedgerData.value?.items ?? []);
+const runtimeProjectGroupLookup = computed<Record<string, ProjectGroupDescriptor>>(() =>
+  buildRuntimeProjectGroupLookup(projectStore.projects),
+);
+const runtimeOrgOptions = computed(() => {
+  const options = projectStore.projects
+    .map((project) => ({
+      value: project.orgId,
+      label: orgs.value.find((item) => item.id === project.orgId)?.name || project.orgId,
+    }))
+    .filter((option, index, list) => list.findIndex((item) => item.value === option.value) === index)
+    .sort((left, right) => left.label.localeCompare(right.label, "zh-CN"));
+
+  return [{ value: "all", label: "全部组织" }, ...options];
+});
+const runtimeProjectGroupOptions = computed(() => {
+  const options = projectStore.projects
+    .filter((project) => runtimeOrgFilter.value === "all" || project.orgId === runtimeOrgFilter.value)
+    .map((project) => runtimeProjectGroupLookup.value[project.id] ?? createStandaloneProjectGroup(project))
+    .map((group) => ({ value: group.key, label: group.label }))
+    .filter((option, index, list) => list.findIndex((item) => item.value === option.value) === index)
+    .sort((left, right) => left.label.localeCompare(right.label, "zh-CN"));
+
+  return [{ value: "all", label: "全部项目组" }, ...options];
+});
+const filteredRuntimeLedgerItems = computed(() =>
+  runtimeLedgerItems.value.filter((item) => {
+    if (runtimeOrgFilter.value !== "all" && item.orgId !== runtimeOrgFilter.value) {
+      return false;
+    }
+    if (runtimeProjectGroupFilter.value !== "all" && item.projectGroupKey !== runtimeProjectGroupFilter.value) {
+      return false;
+    }
+    return true;
+  }),
+);
+const runtimeLedgerSummary = computed(() =>
+  filteredRuntimeLedgerItems.value.reduce(
+    (acc, item) => {
+      acc.ledgerCount += 1;
+      acc.requestCount += item.requestCount;
+      acc.stepCount += item.stepCount;
+      acc.inputTokens += item.inputTokens;
+      acc.outputTokens += item.outputTokens;
+      acc.totalTokens += item.totalTokens;
+      acc.costUsd = Number((acc.costUsd + item.costUsd).toFixed(4));
+      return acc;
+    },
+    {
+      ledgerCount: 0,
+      requestCount: 0,
+      stepCount: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      costUsd: 0,
+    },
+  ),
+);
+const runtimeGovernanceProjectCount = computed(() => {
+  const scopedProjectIds = projectStore.projects
+    .filter((project) => matchesRuntimeGovernanceFilters(project))
+    .map((project) => project.id);
+
+  return scopedProjectIds.filter((projectId) => !runtimeLedgerData.value?.failedProjectIds.includes(projectId)).length;
+});
+const runtimeGovernanceFailedProjects = computed(() =>
+  projectStore.projects
+    .filter((project) => matchesRuntimeGovernanceFilters(project))
+    .filter((project) => runtimeLedgerData.value?.failedProjectIds.includes(project.id))
+    .length,
+);
 const providerRows = computed<DisplayProviderItem[]>(() =>
   (providerTokenData.value?.providers ?? []).map((provider) => {
     const models = [...provider.models]
@@ -458,6 +972,167 @@ const abnormalModelTotal = computed(() =>
 const showProviderEmpty = computed(
   () => !providerBootstrapPending.value && !providerTokenLoading.value && providerRows.value.length === 0,
 );
+const showGovernanceEmpty = computed(
+  () => !governanceBootstrapPending.value
+    && !governanceLoading.value
+    && governanceTopRiskRows.value.length === 0
+    && governanceEventRows.value.length === 0,
+);
+const showRuntimeLedgerEmpty = computed(
+  () => !runtimeLedgerBootstrapPending.value && !runtimeLedgerLoading.value && filteredRuntimeLedgerItems.value.length === 0,
+);
+
+const governanceTopRiskRows = computed<GovernanceTaskRow[]>(() =>
+  (governanceData.value?.topRiskTasks ?? []).map((item) => {
+    const project = projectStore.projects.find((entry) => entry.id === item.projectId);
+    const projectGroup = project
+      ? (runtimeProjectGroupLookup.value[project.id] ?? createStandaloneProjectGroup(project))
+      : { key: `project:${item.projectId}`, label: item.projectId };
+    return {
+      ...item,
+      projectName: project?.name || item.projectId,
+      orgName: project
+        ? (orgs.value.find((entry) => entry.id === project.orgId)?.name || project.orgId)
+        : "未知组织",
+      projectGroupKey: projectGroup.key,
+      projectGroupLabel: projectGroup.label,
+    };
+  }),
+);
+const governanceEventRows = computed<GovernanceEventRow[]>(() =>
+  (governanceData.value?.recentEvents ?? []).map((item) => {
+    const project = projectStore.projects.find((entry) => entry.id === item.projectId);
+    const fallbackProject = project
+      ? project
+      : {
+          id: item.projectId,
+          orgId: item.projectId,
+          name: item.projectId || "未知项目",
+          slug: item.projectId || "unknown",
+          settings: undefined,
+        };
+    const projectGroup = runtimeProjectGroupLookup.value[fallbackProject.id] ?? createStandaloneProjectGroup(fallbackProject);
+    return {
+      ...item,
+      projectName: project?.name || item.projectId || "未知项目",
+      orgName: project
+        ? (orgs.value.find((entry) => entry.id === project.orgId)?.name || project.orgId)
+        : "未知组织",
+      projectGroupKey: projectGroup.key,
+      projectGroupLabel: projectGroup.label,
+      eventKindLabel: formatGovernanceEventKindLabel(item.eventKind),
+      guardDecisionLabel: formatGuardDecisionLabel(item.guardDecision),
+      reasonSummaryLabel: summarizeGovernanceEventReason(item),
+      reasonSummaryColor: governanceEventReasonColor(item),
+    };
+  }),
+);
+
+const governanceInsightTitle = computed(() => {
+  if (governanceTopRiskRows.value.length === 0 && governanceEventRows.value.length === 0) {
+    return "当前窗口没有高风险 paid execution 任务";
+  }
+  if (governanceTopRiskRows.value.length === 0) {
+    return `最近窗口记录了 ${formatCount(governanceEventRows.value.length)} 条治理事件`;
+  }
+  if ((governanceSummary.value?.breakerCount ?? 0) > 0) {
+    return `最近窗口触发 ${formatCount(governanceSummary.value?.breakerCount)} 次 breaker`;
+  }
+  if ((governanceSummary.value?.blockedCount ?? 0) > 0) {
+    return `最近窗口拦截 ${formatCount(governanceSummary.value?.blockedCount)} 次 paid execution`;
+  }
+  return `当前共有 ${formatCount(governanceSummary.value?.topRiskTaskCount)} 个高风险任务进入治理视野`;
+});
+
+const governanceInsightDescription = computed(() => {
+  if (governanceTopRiskRows.value.length === 0 && governanceEventRows.value.length === 0) {
+    return "Dashboard 会在 paid execution 发生 block、breaker、租约生效或高风险放大时，把任务排进治理总览。";
+  }
+  if (governanceTopRiskRows.value.length === 0) {
+    const recent = governanceEventRows.value[0];
+    return recent
+      ? `${recent.projectName} / ${recent.title} 最近触发了 ${recent.eventKindLabel} 事件。`
+      : "Dashboard 会在 paid execution 发生 block、breaker、租约生效或高风险放大时，把任务排进治理总览。";
+  }
+  const top = governanceTopRiskRows.value[0];
+  const leaseText = `${formatCount(governanceSummary.value?.activeLeaseCount)} 个 active lease 正在生效。`;
+  return `${top.projectName} / ${top.title} 当前风险最高，累计 ${formatCount(top.requestCount)} 次调用、${formatUsd(top.costUsd)}。${leaseText}`;
+});
+
+const governanceInsightTone = computed(() => {
+  if ((governanceSummary.value?.breakerCount ?? 0) > 0) return "warning" as const;
+  if ((governanceSummary.value?.blockedCount ?? 0) > 0) return "info" as const;
+  return "success" as const;
+});
+
+const highCostLedgerRows = computed(() =>
+  [...filteredRuntimeLedgerItems.value]
+    .sort((left, right) => {
+      if (right.costUsd !== left.costUsd) return right.costUsd - left.costUsd;
+      return right.totalTokens - left.totalTokens;
+    })
+    .slice(0, 5),
+);
+
+const runtimeAmplificationSummary = computed(() =>
+  filteredRuntimeLedgerItems.value.reduce(
+    (acc, ledger) => {
+      if ((ledger.candidateCount ?? 1) > 1) {
+        acc.parallelCandidates += ledger.candidateCount;
+      }
+      acc.judgeRequests += ledger.judgeRequestCount ?? 0;
+      acc.hookRequests += ledger.hookRequestCount ?? 0;
+      return acc;
+    },
+    {
+      parallelCandidates: 0,
+      judgeRequests: 0,
+      hookRequests: 0,
+    },
+  ),
+);
+
+const riskAmplificationTotal = computed(
+  () => runtimeAmplificationSummary.value.parallelCandidates + runtimeAmplificationSummary.value.judgeRequests + runtimeAmplificationSummary.value.hookRequests,
+);
+
+const topAmplifiedLedger = computed(() =>
+  [...filteredRuntimeLedgerItems.value].sort((left, right) => runtimeLedgerRiskScore(right) - runtimeLedgerRiskScore(left))[0] ?? null,
+);
+
+const topAmplifiedLedgerLabel = computed(() => topAmplifiedLedger.value?.runtimeSessionId || "-");
+
+const runtimeGovernanceInsightTitle = computed(() => {
+  if (projectStore.projects.length === 0) return "当前没有可聚合的项目";
+  if (filteredRuntimeLedgerItems.value.length === 0) return "当前筛选范围没有可用的 runtime ledger";
+  if (riskAmplificationTotal.value > 0) return `最近窗口内出现 ${riskAmplificationTotal.value} 次风险放大来源`;
+  return "最近执行以单路低放大链路为主";
+});
+
+const runtimeGovernanceInsightDescription = computed(() => {
+  if (projectStore.projects.length === 0) {
+    return "Dashboard 会在有项目数据后展示跨项目的高消耗执行排行，以及并行、judge、hook 的放大来源。";
+  }
+  if (filteredRuntimeLedgerItems.value.length === 0) {
+    return "当前没有跨项目账本数据，暂时无法判断哪些执行批次消耗最高、哪些链路最容易放大请求。";
+  }
+  const top = highCostLedgerRows.value[0];
+  const topText = top
+    ? `${top.projectName} / ${top.runtimeSessionId} 当前成本最高，累计 ${formatUsd(top.costUsd)} / ${formatTokenCount(top.totalTokens)}。`
+    : "";
+  const amplificationText = riskAmplificationTotal.value > 0
+    ? ` 放大来源中 parallel=${formatCount(runtimeAmplificationSummary.value.parallelCandidates)}，judge=${formatCount(runtimeAmplificationSummary.value.judgeRequests)}，hook=${formatCount(runtimeAmplificationSummary.value.hookRequests)}。`
+    : " 当前窗口未观察到明显放大来源。";
+  const failureText = runtimeGovernanceFailedProjects.value > 0
+    ? ` ${formatCount(runtimeGovernanceFailedProjects.value)} 个项目加载失败，当前结果按已成功项目聚合。`
+    : "";
+  return `${topText}${amplificationText}${failureText}`.trim();
+});
+
+const runtimeGovernanceInsightTone = computed(() => {
+  if (riskAmplificationTotal.value > 0) return "warning" as const;
+  return "info" as const;
+});
 const monthlyTotals = computed(() => providerSummary.value?.monthlyTotals ?? []);
 const maxMonthlyToken = computed(() =>
   monthlyTotals.value.reduce((max, item) => Math.max(max, item.tokenUsed), 0),
@@ -563,6 +1238,14 @@ async function loadApprovals() {
   }
 }
 
+async function loadOrgs() {
+  try {
+    orgs.value = await listOrgs();
+  } catch {
+    orgs.value = [];
+  }
+}
+
 async function loadProviderTokens() {
   if (!projectStore.currentProjectId) {
     providerTokenData.value = null;
@@ -582,24 +1265,151 @@ async function loadProviderTokens() {
   }
 }
 
+async function loadGovernanceOverview() {
+  governanceLoading.value = true;
+  try {
+    governanceData.value = await getDashboardGovernanceOverview(providerRange.value);
+  } catch {
+    governanceData.value = null;
+  } finally {
+    governanceLoading.value = false;
+  }
+}
+
+async function loadRuntimeLedgerOverview() {
+  if (projectStore.projects.length === 0) {
+    runtimeLedgerData.value = null;
+    runtimeLedgerLoading.value = false;
+    return;
+  }
+
+  runtimeLedgerLoading.value = true;
+  try {
+    const settled = await Promise.all(
+      projectStore.projects.map(async (project) => {
+        try {
+          const response = await getProjectRuntimeUsageLedgers(project.id, {
+            limit: 20,
+          });
+          return {
+            status: "fulfilled" as const,
+            project,
+            response,
+          };
+        } catch (error) {
+          return {
+            status: "rejected" as const,
+            project,
+            error,
+          };
+        }
+      }),
+    );
+
+    const totals = {
+      ledgerCount: 0,
+      requestCount: 0,
+      stepCount: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      costUsd: 0,
+    };
+    const items: CrossProjectRuntimeUsageLedgerRecord[] = [];
+    const failedProjectIds: string[] = [];
+
+    for (const result of settled) {
+      if (result.status !== "fulfilled") {
+        failedProjectIds.push(result.project.id);
+        continue;
+      }
+
+      const { project, response } = result;
+      totals.ledgerCount += response.totals.ledgerCount;
+      totals.requestCount += response.totals.requestCount;
+      totals.stepCount += response.totals.stepCount;
+      totals.inputTokens += response.totals.inputTokens;
+      totals.outputTokens += response.totals.outputTokens;
+      totals.totalTokens += response.totals.totalTokens;
+      totals.costUsd = Number((totals.costUsd + response.totals.costUsd).toFixed(4));
+
+      for (const item of response.items) {
+        const projectGroup = runtimeProjectGroupLookup.value[project.id] ?? createStandaloneProjectGroup(project);
+        items.push({
+          ...item,
+          orgId: project.orgId,
+          orgName: orgs.value.find((entry) => entry.id === project.orgId)?.name || project.orgId,
+          projectName: project.name,
+          projectSlug: project.slug,
+          projectGroupKey: projectGroup.key,
+          projectGroupLabel: projectGroup.label,
+        });
+      }
+    }
+
+    runtimeLedgerData.value = {
+      totals,
+      items,
+      failedProjectIds,
+    };
+  } catch {
+    runtimeLedgerData.value = null;
+  } finally {
+    runtimeLedgerLoading.value = false;
+  }
+}
+
 onMounted(async () => {
   providerBootstrapPending.value = true;
+  runtimeLedgerBootstrapPending.value = true;
   try {
     if (projectStore.projects.length === 0) {
       await projectStore.loadProjects();
     }
-    await loadApprovals();
-    await loadProviderTokens();
+    await Promise.all([
+      loadApprovals(),
+      loadOrgs(),
+    ]);
+    await Promise.all([
+      loadProviderTokens(),
+      loadGovernanceOverview(),
+      loadRuntimeLedgerOverview(),
+    ]);
   } finally {
     providerBootstrapPending.value = false;
+    governanceBootstrapPending.value = false;
+    runtimeLedgerBootstrapPending.value = false;
     if (!projectStore.currentProjectId) {
       providerTokenLoading.value = false;
+      governanceLoading.value = false;
+      runtimeLedgerLoading.value = false;
     }
   }
 });
 
 watch([() => projectStore.currentProjectId, providerRange], async () => {
-  await loadProviderTokens();
+  await Promise.all([loadProviderTokens(), loadGovernanceOverview()]);
+});
+
+watch(() => projectStore.currentProjectId, async () => {
+  if (runtimeLedgerData.value == null && projectStore.projects.length > 0) {
+    await loadRuntimeLedgerOverview();
+  }
+});
+
+watch(
+  () => projectStore.projects.map((project) => project.id).join(","),
+  async (next, prev) => {
+    if (next !== prev) {
+      await loadRuntimeLedgerOverview();
+    }
+  },
+);
+
+watch(runtimeOrgFilter, () => {
+  if (!runtimeProjectGroupOptions.value.some((option) => option.value === runtimeProjectGroupFilter.value)) {
+    runtimeProjectGroupFilter.value = "all";
+  }
 });
 
 const activeTasks = computed(() => {
@@ -649,8 +1459,207 @@ function formatCount(value?: number | null) {
   return new Intl.NumberFormat("zh-CN").format(Math.round(value ?? 0));
 }
 
+function formatUsd(value?: number | null) {
+  return `$${Number(value ?? 0).toFixed(4)}`;
+}
+
 function formatProviderRiskSummary(riskProviderCount?: number | null, abnormalModelCount?: number | null) {
   return `${formatCount(riskProviderCount)} / ${formatCount(abnormalModelCount)}`;
+}
+
+function formatGovernanceDriverLabel(driver?: string | null) {
+  if (driver === "breaker") return "熔断触发";
+  if (driver === "blocked") return "预检拦截";
+  if (driver === "parallel") return "并行放大";
+  if (driver === "hook") return "Hook 放大";
+  if (driver === "judge") return "Judge 放大";
+  if (driver === "cost") return "成本抬升";
+  return "治理信号";
+}
+
+function formatGuardDecisionLabel(decision?: string | null) {
+  if (decision === "allow") return "允许执行";
+  if (decision === "allow-with-downgrade") return "允许降配执行";
+  if (decision === "require-approval") return "需要审批";
+  if (decision === "deny") return "已拒绝";
+  return null;
+}
+
+function formatGovernanceEventKindLabel(kind: "guard" | "breaker") {
+  return kind === "breaker" ? "Breaker" : "Guard";
+}
+
+function summarizeGovernanceEventReason(event: DashboardGovernanceOverviewResponse["recentEvents"][number]) {
+  const normalizedReason = (event.reason || "").trim().toLowerCase();
+
+  if (event.eventKind === "breaker") {
+    if (normalizedReason.includes("parallel") || normalizedReason.includes("candidate")) {
+      return "并行候选超阈值";
+    }
+    if (
+      normalizedReason.includes("retry")
+      || normalizedReason.includes("retries")
+      || normalizedReason.includes("repeated")
+    ) {
+      return "重复重试触发熔断";
+    }
+    if (normalizedReason.includes("hook")) {
+      return "Hook 链路触发熔断";
+    }
+    if (normalizedReason.includes("judge")) {
+      return "Judge 链路触发熔断";
+    }
+    if (normalizedReason.includes("cost") || normalizedReason.includes("budget")) {
+      return "成本阈值触发熔断";
+    }
+    return "执行链路触发熔断";
+  }
+
+  if (event.guardDecision === "require-approval") {
+    return "转人工审批";
+  }
+  if (event.guardDecision === "allow-with-downgrade") {
+    return "自动降配放行";
+  }
+  if (normalizedReason.includes("lease")) {
+    return "缺少付费租约";
+  }
+  if (normalizedReason.includes("amplification") || normalizedReason.includes("parallel") || normalizedReason.includes("candidate")) {
+    return "请求放大量超阈值";
+  }
+  if (normalizedReason.includes("budget") || normalizedReason.includes("cost")) {
+    return "预算或成本超限";
+  }
+  if (event.guardDecision === "deny") {
+    return "执行已拦截";
+  }
+  if (event.guardDecision === "allow") {
+    return "允许执行";
+  }
+  return "治理规则命中";
+}
+
+function governanceEventReasonColor(event: DashboardGovernanceOverviewResponse["recentEvents"][number]) {
+  if (event.eventKind === "breaker") return "volcano";
+  if (event.guardDecision === "deny") return "red";
+  if (event.guardDecision === "require-approval") return "orange";
+  if (event.guardDecision === "allow-with-downgrade") return "gold";
+  if (event.guardDecision === "allow") return "green";
+  return "blue";
+}
+
+function matchesRuntimeGovernanceFilters(project: Pick<Project, "id" | "orgId" | "name" | "slug" | "settings">) {
+  if (runtimeOrgFilter.value !== "all" && project.orgId !== runtimeOrgFilter.value) {
+    return false;
+  }
+
+  if (runtimeProjectGroupFilter.value !== "all") {
+    const group = runtimeProjectGroupLookup.value[project.id] ?? createStandaloneProjectGroup(project);
+    return group.key === runtimeProjectGroupFilter.value;
+  }
+
+  return true;
+}
+
+function buildRuntimeProjectGroupLookup(projects: Array<Pick<Project, "id" | "orgId" | "name" | "slug" | "settings">>) {
+  const explicitDescriptorByProjectId = new Map<string, ProjectGroupDescriptor>();
+  const explicitLabelByScopedKey = new Map<string, string>();
+  const familyCountByScopedKey = new Map<string, number>();
+  const candidateByProjectId = new Map<string, string | null>();
+
+  for (const project of projects) {
+    const explicitGroup = resolveExplicitProjectGroup(project);
+    if (explicitGroup) {
+      explicitDescriptorByProjectId.set(project.id, explicitGroup);
+      if (!explicitLabelByScopedKey.has(explicitGroup.key)) {
+        explicitLabelByScopedKey.set(explicitGroup.key, explicitGroup.label);
+      }
+      continue;
+    }
+
+    const candidate = deriveProjectGroupFamilyCandidate(project.slug, project.name);
+    candidateByProjectId.set(project.id, candidate);
+    if (!candidate) continue;
+
+    const key = `${project.orgId}::${candidate}`;
+    familyCountByScopedKey.set(key, (familyCountByScopedKey.get(key) ?? 0) + 1);
+  }
+
+  const lookup: Record<string, ProjectGroupDescriptor> = {};
+  for (const project of projects) {
+    const explicitGroup = explicitDescriptorByProjectId.get(project.id);
+    if (explicitGroup) {
+      lookup[project.id] = {
+        key: explicitGroup.key,
+        label: explicitLabelByScopedKey.get(explicitGroup.key) ?? explicitGroup.label,
+      };
+      continue;
+    }
+
+    const candidate = candidateByProjectId.get(project.id) ?? null;
+    const count = candidate ? familyCountByScopedKey.get(`${project.orgId}::${candidate}`) ?? 0 : 0;
+    lookup[project.id] = count >= 2 && candidate
+      ? {
+          key: `family:${project.orgId}:${candidate}`,
+          label: candidate,
+        }
+      : createStandaloneProjectGroup(project);
+  }
+
+  return lookup;
+}
+
+function resolveExplicitProjectGroup(project: Pick<Project, "id" | "orgId" | "settings">): ProjectGroupDescriptor | null {
+  const rawKey = normalizeProjectGroupMetadataValue(project.settings?.projectGroupKey);
+  const rawLabel = normalizeProjectGroupMetadataValue(project.settings?.projectGroupLabel);
+
+  if (!rawKey && !rawLabel) {
+    return null;
+  }
+
+  const normalizedKey = rawKey
+    ? normalizeProjectGroupKeySegment(rawKey)
+    : normalizeProjectGroupKeySegment(rawLabel || "");
+  const label = rawLabel || rawKey || "未分组";
+
+  return {
+    key: `explicit:${project.orgId}:${normalizedKey || project.id}`,
+    label,
+  };
+}
+
+function deriveProjectGroupFamilyCandidate(slug?: string | null, name?: string | null) {
+  const slugTokens = tokenizeProjectGroupSource(slug);
+  if (slugTokens.length > 0) {
+    return slugTokens[0]!;
+  }
+
+  const nameTokens = tokenizeProjectGroupSource(name);
+  return nameTokens[0] ?? null;
+}
+
+function tokenizeProjectGroupSource(value?: string | null) {
+  return (value || "")
+    .trim()
+    .toLowerCase()
+    .split(/[\s._:/-]+/)
+    .filter(Boolean);
+}
+
+function normalizeProjectGroupMetadataValue(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function normalizeProjectGroupKeySegment(value: string) {
+  return tokenizeProjectGroupSource(value).join("-");
+}
+
+function createStandaloneProjectGroup(project: Pick<Project, "id" | "name" | "slug">): ProjectGroupDescriptor {
+  const label = project.name?.trim() || project.slug?.trim() || "未分组";
+  return {
+    key: `project:${project.id}`,
+    label,
+  };
 }
 
 function handleRangeChange(value: string | number | boolean) {
@@ -688,6 +1697,59 @@ function openProviderSettings(providerId: string) {
       tab: "models",
       section: "provider-row",
       provider: providerId,
+    },
+  });
+}
+
+function openProjectRuntimeLedger(record: CrossProjectRuntimeUsageLedgerRecord) {
+  void router.push({
+    name: "ProjectDetail",
+    params: {
+      projectId: record.projectId,
+    },
+    query: {
+      tab: "overview",
+      runtimeLedger: record.id,
+    },
+  });
+}
+
+function openGovernanceTask(record: GovernanceTaskRow) {
+  void router.push({
+    name: "TaskDetail",
+    params: {
+      taskId: record.taskId,
+    },
+    query: record.runtimeSessionId ? { session: record.runtimeSessionId } : {},
+  });
+}
+
+function openGovernanceProject(record: GovernanceTaskRow) {
+  void router.push({
+    name: "ProjectDetail",
+    params: {
+      projectId: record.projectId,
+    },
+    query: {
+      tab: "overview",
+    },
+  });
+}
+
+function openRuntimeLedgerTask(record: CrossProjectRuntimeUsageLedgerRecord) {
+  if (!record.taskId) {
+    openProjectRuntimeLedger(record);
+    return;
+  }
+
+  void router.push({
+    name: "TaskDetail",
+    params: {
+      taskId: record.taskId,
+    },
+    query: {
+      session: record.runtimeSessionId,
+      runtimeLedger: record.id,
     },
   });
 }
@@ -799,6 +1861,25 @@ function statusColor(status: string) {
   };
   return map[status] || "default";
 }
+
+function runtimeLedgerAmplificationTags(record: RuntimeUsageLedgerRecord) {
+  const tags: string[] = [];
+  if ((record.candidateCount ?? 1) > 1) {
+    tags.push(`parallel x${record.candidateCount}`);
+  }
+  if ((record.judgeRequestCount ?? 0) > 0) {
+    tags.push(`judge ${record.judgeRequestCount}`);
+  }
+  if ((record.hookRequestCount ?? 0) > 0) {
+    tags.push(`hook ${record.hookRequestCount}`);
+  }
+  return tags.length > 0 ? tags : ["single-path"];
+}
+
+function runtimeLedgerRiskScore(record: RuntimeUsageLedgerRecord) {
+  const parallelScore = Math.max(0, (record.candidateCount ?? 1) - 1);
+  return parallelScore + (record.judgeRequestCount ?? 0) + (record.hookRequestCount ?? 0);
+}
 </script>
 
 <style scoped>
@@ -825,6 +1906,49 @@ function statusColor(status: string) {
   border: 1px solid #e2e8f0;
   border-radius: 8px;
   padding: 10px 12px;
+}
+
+.governance-event-stream {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.governance-event-item {
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: #f8fafc;
+}
+
+.governance-event-item__title {
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.governance-event-item__meta {
+  color: #64748b;
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+
+.governance-event-item__decision {
+  color: #0f172a;
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.governance-event-item__summary {
+  margin-bottom: 6px;
+}
+
+.governance-event-item__reason {
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .monthly-chart-row {

@@ -1920,3 +1920,468 @@ interface PaidExecutionEstimate {
 - 真实付费流量，全程留痕
 
 只有这样，OpenerX 才能真正把“成本、预算、审批、审计”从展示能力推进为运行时内核约束能力。
+
+## 14. 已落地状态（截至 2026-03-17）
+
+本节用于把“目标方案”和“当前实现”明确分开。
+
+前文第 1 到 13 节描述的是目标治理方案与推荐演进方向，并不等价于“当前仓库已全部上线”。当前代码库里已经落地的是其中一部分关键控制点；若本节与前文某些理想化描述存在差异，应以当前实现与回归测试结果为准。
+
+### 14.1 已落地的控制点
+
+当前仓库内，以下能力已经进入可运行状态：
+
+1. 已有统一的 paid model preflight / guard 核心逻辑。
+  - BFF 已实现模型分级、风险预估、准入判定、自动降级建议与 guard state 结构，核心位于 [control-plane/web-ui-bff/src/lib/paid-execution-guard.ts](../control-plane/web-ui-bff/src/lib/paid-execution-guard.ts)。
+
+2. 已有项目级 paid execution lease 能力。
+  - Service 侧已落表 `paid_execution_leases`，并提供签发、查询、撤销接口，见 [control-plane/service/src/db/runtime-schema.ts](../control-plane/service/src/db/runtime-schema.ts)、[control-plane/service/src/db/schema.ts](../control-plane/service/src/db/schema.ts)、[control-plane/service/src/modules/projects/routes.ts](../control-plane/service/src/modules/projects/routes.ts)。
+  - BFF 侧已代理这些接口，并提供项目预检聚合接口，见 [control-plane/web-ui-bff/src/modules/projects/routes.ts](../control-plane/web-ui-bff/src/modules/projects/routes.ts)。
+
+3. 任务执行与继续执行已经接入执行前阻断。
+  - `execute` 与 `continue` 在创建 runtime session 或发送后续 prompt 之前，都会先跑 preflight；命中 deny / require-approval 时会直接返回，不再先放流量再记账，见 [control-plane/web-ui-bff/src/modules/tasks/routes.ts](../control-plane/web-ui-bff/src/modules/tasks/routes.ts)。
+
+4. 已有付费执行安全覆盖层。
+  - 当命中付费模型 guard 时，当前实现会对高风险编排做安全收敛：parallel collapse、judge disable、post-hook disable，并将状态写回 task strategy，而不是原样继承持久化策略。
+  - 这部分逻辑位于 [control-plane/web-ui-bff/src/modules/tasks/routes.ts](../control-plane/web-ui-bff/src/modules/tasks/routes.ts)。
+
+5. 运行中 breaker 已覆盖主执行与关键放大路径。
+  - 当前已经把 runtime 使用量累计、超限后熔断、剩余 candidate 终止、hook 停止等能力接入主执行链路。
+  - 相关代码位于 [control-plane/web-ui-bff/src/lib/paid-execution-runtime.ts](../control-plane/web-ui-bff/src/lib/paid-execution-runtime.ts)、[control-plane/web-ui-bff/src/modules/realtime/sse-aggregator.ts](../control-plane/web-ui-bff/src/modules/realtime/sse-aggregator.ts)、[control-plane/web-ui-bff/src/modules/agent-control/routes.ts](../control-plane/web-ui-bff/src/modules/agent-control/routes.ts)。
+
+6. pre-execution / pre-resume / judge / post-hook 的使用量记账已接入。
+  - 当前不是只统计主 agent run；pre-execution hook、pre-resume hook、judge、post-execution / on-failure hook 的 token 使用与审计也已经进入治理链路。
+
+7. cost records 与 paid execution audit 已形成基础闭环。
+  - Service 侧已提供 `cost_records` 写入口，见 [control-plane/service/src/modules/cost/routes.ts](../control-plane/service/src/modules/cost/routes.ts)。
+  - BFF 侧会在 runtime 使用量落库时同步写 `cost_records` 与 `paid_execution` 审计，见 [control-plane/web-ui-bff/src/modules/agent-control/run-persistence.ts](../control-plane/web-ui-bff/src/modules/agent-control/run-persistence.ts)。
+
+8. 项目页和设置页已暴露当前治理入口。
+  - 设置页已提供“测试专用模型”配置，并强制测试模型只从允许列表中选择，见 [control-plane/web-ui/src/pages/Settings.vue](../control-plane/web-ui/src/pages/Settings.vue)。
+  - 项目页已提供 paid execution preflight 卡片、租约状态、签发 / 撤销操作，见 [control-plane/web-ui/src/pages/ProjectDetail.vue](../control-plane/web-ui/src/pages/ProjectDetail.vue)。
+
+9. 测试链路已补齐针对当前实现的回归覆盖。
+  - 已有 preflight、breaker、judge usage、项目预检、设置页、任务页等单测 / 集成回归。
+  - 近期已验证通过根目录 `bun run typecheck`、`bun run test:bff:paid-execution-regression`，以及 hooks / completion sync / identity binding / workflow evaluation 四组真实执行验证。
+
+### 14.2 当前已经落地，但与原方案描述不完全一致的边界
+
+以下是当前实现边界，必须明确说明，避免把“目标状态”误当成“现状行为”：
+
+1. 当前测试默认策略是“强制低成本测试模型优先”，不是“所有真实执行一律必须带 paid gate + lease”。
+  - 当前测试模型配置通过 [control-plane/web-ui-bff/src/modules/config/routes.ts](../control-plane/web-ui-bff/src/modules/config/routes.ts) 的 `/api/config/models/test-policy` 暴露。
+  - 设置页允许的测试模型只有 `github-copilot:gpt-5-mini` 与 `github-copilot:gpt-4o`。
+  - 现实行为是：默认受控模型优先把真实测试导向低成本路径，而不是把每一次真实执行都当成高成本 paid run 处理。
+
+2. `ALLOW_PAID_MODEL_EXECUTION=1` 不是当前所有真实执行测试的统一前提，而是命中付费档策略时的额外门控。
+  - 当测试最终落到 `gpt-5-mini` 这类免费档模型时，可以只依赖 `RUN_EXECUTION_INTEGRATION=1` 跑通真实链路。
+  - 当测试或任务改成 guard 视为付费档的模型时，才会要求显式 paid gate，必要时再叠加 lease。
+
+3. `github-copilot:gpt-4o` 当前只是“允许在测试策略里选择”，并不等于“无条件免 gate”。
+  - 在当前 guard 实现里，`gpt-4o` 仍被归为 `low` cost tier，而 `low` tier 依然属于 `isPaid = true` 的受控路径，见 [control-plane/web-ui-bff/src/lib/paid-execution-guard.ts](../control-plane/web-ui-bff/src/lib/paid-execution-guard.ts)。
+  - 这意味着：`gpt-4o` 可以作为测试策略选项，但一旦真的被 guard 解析为执行模型，仍可能要求 `ALLOW_PAID_MODEL_EXECUTION=1`。
+
+4. 项目页当前展示的是 guard 预估，不是 runtime ledger 真值回放。
+  - 现在项目页能看到请求区间、token 区间、成本区间、risk drivers 和租约状态。
+  - 但这些数据仍属于 BFF 的启发式 preflight 估算，不是基于 `runtime_usage_ledgers` / `runtime_usage_ledger_steps` 的下钻式事实回放。
+
+5. 当前 runtime breaker 已经能在执行中止损，但组织级预算与审批体系还没有完全接上。
+  - 也就是说，现状已经具备“运行前阻断 + 运行中熔断 + 审计留痕”的基础闭环。
+  - 但“组织级配额、用户级预算、正式审批工作流、首页治理总览”还没有完整落地。
+
+### 14.3 尚未落地或仅部分落地的规划项
+
+以下内容仍应视为后续工作，不应误认为已经上线：
+
+1. `model_execution_policies`、`guard_events` 等完整治理表还未按方案落地。
+  - 当前真正已落表的是 `paid_execution_leases`；模型策略主体仍以代码侧规则和启发式映射为主，而不是数据库驱动的可运营策略系统。
+
+2. runtime usage ledger 三层账本尚未建成。
+  - 文中建议的 `runtime_usage_ledgers`、`runtime_usage_ledger_steps`、`runtime_usage_baselines` 目前还没有作为正式表结构进入控制面。
+  - 因此，当前还不能在项目治理页完整回答“底层到底打了几次模型、每一步谁放大了请求”。
+
+3. 组织级 / 项目级 / 用户级预算治理尚未完整落地。
+  - 当前 guard 已能基于模型档位与单次上界做限制。
+  - 但项目日预算、月预算、用户级测试预算、组织级高成本配额等规划项还未形成完整执行体系。
+
+4. 审批标准体系尚未真正闭环到执行入口。
+  - 当前已有 lease 与风险提示，但文中设想的 `audit_only / require_approval / block_only` 多档审批动作、管理员审批恢复等能力，还没有全部接入。
+
+5. 首页 / 治理页的运营可见性仍不完整。
+  - 当前项目页已经有 preflight 卡片，但首页级“最近 24h 拦截次数、熔断次数、活跃租约数、Top 风险任务”等视图尚未形成。
+
+6. 真实执行测试的三层拆分只部分落地。
+  - 当前已经有默认回归与低成本真实执行回归的明显分层趋势。
+  - 但“付费执行验证”作为单独的人控测试层，还没有完全独立为一套稳定脚本和操作规约。
+
+### 14.4 建议如何解读本方案
+
+为了避免后续沟通继续混淆，建议按以下方式解读本文：
+
+1. 第 1 到 13 节：目标方案、推荐演进方向、验收标准与理想架构。
+2. 第 14 节：当前仓库已经实现的能力，以及必须明确接受的现状边界。
+3. 若要继续拆任务，应优先补齐第 14.3 节中的缺口，而不是重复改写已经生效的 guard 主链路。
+
+换句话说，当前 OpenerX 已经不再处于“只有提醒、没有硬闸”的阶段；但它也还没有完全达到本文前半部分定义的组织级治理终态。当前状态更准确的描述是：
+
+- 已完成 P0 与 P1 的关键骨架
+- 已进入 P2 的部分运行中闭环
+- 距离 P2 的完整可视化与 P3 的组织级治理还有明显差距
+
+## 15. 下一步任务拆解（优先补 runtime usage ledger 与首页治理视图）
+
+本节把第 14.3 节中的缺口进一步拆成可执行任务，优先级按以下顺序排列：
+
+1. 先补 runtime usage ledger
+2. 再补首页治理视图
+3. 最后再补组织级预算、审批恢复与完整治理总览
+
+这样安排的原因很直接：
+
+- 没有 runtime usage ledger，首页治理页只能展示启发式预估，无法提供执行后事实回放
+- 没有首页治理视图，已存在的 guard / lease / breaker 只能算“内核能力”，还不能形成管理员可用的治理操作面
+
+### 15.1 Epic A：补齐 runtime usage ledger
+
+目标：把“执行后到底打了几次模型、每一步消耗了多少 token、是谁放大了请求”从运行时内部事实，沉淀为控制面可查询、可聚合、可审计的数据结构。
+
+#### A1. Service 落表 runtime usage ledger 头表
+
+任务目标：新增 `runtime_usage_ledgers`，承载一次 task execution / agent run / runtime session 的总账信息。
+
+建议字段以第 10.1.3 节草案为准，至少包括：
+
+- `project_id`
+- `task_id`
+- `agent_run_id`
+- `runtime_session_id`
+- `execution_source`
+- `entrypoint_type`
+- `request_count`
+- `input_tokens`
+- `output_tokens`
+- `total_tokens`
+- `cost_usd`
+- `candidate_count`
+- `judge_request_count`
+- `hook_request_count`
+- `status`
+- `started_at`
+- `finished_at`
+- `synced_at`
+
+代码落点：
+
+- [control-plane/service/src/db/runtime-schema.ts](../control-plane/service/src/db/runtime-schema.ts)
+- [control-plane/service/src/db/schema.ts](../control-plane/service/src/db/schema.ts)
+
+验收标准：
+
+1. 本地数据库可自动创建新表与索引。
+2. 同一 `runtime_session_id` 不会重复写入多条头记录。
+3. 新表不会破坏现有 `agent_runs`、`cost_records`、`paid_execution_leases` 结构。
+
+#### A2. Service 落表 runtime usage ledger step 明细表
+
+任务目标：新增 `runtime_usage_ledger_steps`，记录 execution / judge / hook 等逐步调用事实。
+
+至少包括：
+
+- `ledger_id`
+- `step_type`
+- `trigger_type`
+- `hook_id`
+- `agent_run_id`
+- `runtime_session_id`
+- `provider_id`
+- `model_id`
+- `input_tokens`
+- `output_tokens`
+- `total_tokens`
+- `cost_usd`
+- `request_index`
+- `started_at`
+- `finished_at`
+- `status`
+
+建议补充字段：
+
+- `candidate_index`
+- `judge_enabled`
+- `orchestration_fingerprint`
+- `amplification_source`
+
+验收标准：
+
+1. 能区分主执行、judge、pre/post hook、failure hook。
+2. 能按一次执行回放放大来源。
+3. 能支撑后续项目页展示“这次从 1 次放大到 N 次”的解释。
+
+#### A3. BFF 增加 runtime usage ledger 写入协调器
+
+任务目标：在 BFF 增加统一的 ledger sync 层，而不是分散在各处直接拼装写表。
+
+建议新增模块：
+
+- `RuntimeUsageLedgerSync`
+
+职责：
+
+1. 在 task execute / continue / resume / judge / hook 完成时汇总 usage
+2. 把头记录与 step 明细写入控制面
+3. 负责幂等更新与状态推进
+4. 为 `cost_records`、`agent_runs` 建立关联锚点
+
+优先接入点：
+
+- 主执行完成路径
+- judge 完成路径
+- pre-execution / pre-resume hook 路径
+- post-execution / on-failure hook 路径
+
+代码落点建议：
+
+- 新增 [control-plane/web-ui-bff/src/lib/runtime-usage-ledger.ts](../control-plane/web-ui-bff/src/lib/runtime-usage-ledger.ts)
+- 对接 [control-plane/web-ui-bff/src/modules/realtime/sse-aggregator.ts](../control-plane/web-ui-bff/src/modules/realtime/sse-aggregator.ts)
+- 对接 [control-plane/web-ui-bff/src/modules/tasks/routes.ts](../control-plane/web-ui-bff/src/modules/tasks/routes.ts)
+- 对接 [control-plane/web-ui-bff/src/modules/agent-control/routes.ts](../control-plane/web-ui-bff/src/modules/agent-control/routes.ts)
+
+验收标准：
+
+1. 同一 execution 不会因重复事件写出重复 step。
+2. judge / hook 使用量不再只是审计与成本记录，也会同步进入 ledger。
+3. ledger 与 `paidExecutionGuard.actualRequests / actualTokenUsage / actualCost` 能对齐解释。
+
+#### A4. Service / BFF 暴露项目级 ledger 查询接口
+
+任务目标：提供项目页和治理页可直接消费的查询接口，而不是让前端拼接底层多源数据。
+
+建议接口：
+
+1. `GET /api/projects/:projectId/runtime-usage-ledgers`
+2. `GET /api/projects/:projectId/runtime-usage-ledgers/:ledgerId`
+3. `GET /api/projects/:projectId/runtime-usage-baselines`
+
+返回能力至少应包括：
+
+- 最近执行列表
+- 单次执行明细
+- request / token / cost 分项
+- amplification breakdown
+- 按模型、provider、hook、judge 的聚合切片
+
+验收标准：
+
+1. 项目页无需再自己串接 `agent_runs`、`cost_records`、task strategy 才能拿到回放。
+2. 单次 ledger 查询可直接支撑“事实回放抽屉”。
+3. baseline 查询可供 preflight 估算后续接入历史基线。
+
+#### A5. 补齐 runtime usage baseline 聚合
+
+任务目标：从 ledger / step 明细沉淀预估基线，替代当前纯启发式 token / cost 基线。
+
+第一阶段建议按以下维度聚合：
+
+- `project_id`
+- `provider_id`
+- `model_id`
+- `entrypoint_type`
+- `orchestration_fingerprint`
+- `step_type`
+
+验收标准：
+
+1. preflight 的 request / token / cost 区间可逐步从“硬编码基线”迁移到“历史基线 + 安全系数”。
+2. 可以解释为什么某个工作流模板会被估算为高风险。
+
+#### A6. 补测试与验证
+
+任务目标：给 ledger 增加独立的 Service / BFF / integration 回归，避免只靠现有 paid regression 间接覆盖。
+
+至少新增：
+
+1. 头表 / step 表 schema 单测
+2. BFF ledger sync 幂等单测
+3. judge / hook usage 写入 ledger 的回归
+4. 项目级 ledger 查询接口测试
+5. 真实执行链路至少 1 组端到端验证
+
+建议新增测试分组：
+
+- `test:bff:runtime-ledger`
+- `test:service:runtime-ledger`
+
+### 15.2 Epic B：补首页治理视图
+
+目标：把已有 guard / lease / breaker / 预检能力转成管理员能直接消费的治理总览，而不是继续散落在项目页、任务页和审计流里。
+
+该 epic 需要与 [docs/dashboard-provider-token-stats-plan.md](docs/dashboard-provider-token-stats-plan.md) 以及 [docs/raw-audit-trace-plan.md](docs/raw-audit-trace-plan.md) 对齐。
+
+#### B1. 明确首页治理视图与现有 Dashboard 的边界
+
+任务目标：先确定首页是“加一块治理总览区”，还是拆成单独治理页面。
+
+当前建议：
+
+1. Dashboard 保留总览角色
+2. 在 Dashboard 增加“治理总览区”
+3. 项目页保留项目级 preflight / 租约操作
+4. 审计页保留证据回放与导出职责
+
+需要明确的卡片：
+
+- 最近 24h 付费模型请求数
+- 最近 24h guard 拦截数
+- 最近 24h breaker 触发数
+- 当前活跃租约数
+- Top 风险任务数
+
+验收标准：
+
+1. 首页不与 Agent Console、项目页、审计页职责冲突。
+2. 管理员可以在首页一眼看到治理风险，而不是进入单任务逐个排查。
+
+#### B2. Service / BFF 提供首页治理总览接口
+
+任务目标：提供 Dashboard 统一消费的治理聚合接口。
+
+建议接口：
+
+- `GET /api/dashboard/governance-overview?window=24h|7d|30d`
+
+建议返回：
+
+- `paidRequestCount`
+- `guardBlockedCount`
+- `breakerTrippedCount`
+- `activeLeaseCount`
+- `topRiskTasks`
+- `providerRiskSummary`
+- `recentGuardEvents`
+
+数据来源建议：
+
+- 第一阶段：`audit_events` + `paid_execution_leases` + `agent_runs`
+- 第二阶段：叠加 `runtime_usage_ledgers` / `cost_records`
+
+验收标准：
+
+1. 首页不需要直接消费多个底层接口做前端聚合。
+2. 所有治理指标都能给出明确数据来源口径。
+
+#### B3. 首页新增治理总览区与风险列表
+
+任务目标：在 Dashboard 页新增治理总览区，至少包括卡片、风险列表、趋势入口。
+
+建议第一阶段 UI 结构：
+
+1. 顶部 4 到 5 张治理卡片
+2. 中部风险任务列表
+3. 右侧最近 guard / breaker 事件流
+4. 跳转到项目页、审计页、任务详情的快捷入口
+
+代码落点：
+
+- [control-plane/web-ui/src/pages/Dashboard.vue](../control-plane/web-ui/src/pages/Dashboard.vue)
+- [control-plane/web-ui/src/lib/api.ts](../control-plane/web-ui/src/lib/api.ts)
+
+验收标准：
+
+1. 首页可以直接看出当前系统是否处于“有租约但高风险”“无租约但有人尝试 paid run”“breaker 频繁触发”等状态。
+2. 风险任务项可直达任务详情或项目详情，不需要再次搜索。
+
+#### B4. Provider 治理与 token 总览并轨
+
+任务目标：把 provider token 总览从“运营统计”升级为“治理统计”。
+
+建议在已有 provider token 规划基础上增加：
+
+1. provider 级 paid request 数
+2. provider 级 blocker / breaker 命中数
+3. provider 级平均 token / completed run
+4. provider 级风险状态标记
+
+这样首页可以回答两个问题：
+
+1. 谁最耗 token
+2. 谁最容易触发治理风险
+
+验收标准：
+
+1. token 统计和治理统计使用统一 provider 识别规则。
+2. 首页不会出现 token 口径与治理口径互相打架。
+
+#### B5. 首页增加“Top 风险任务”定义与排序规则
+
+任务目标：把“Top 风险任务”从概念变成稳定排序规则。
+
+第一阶段建议排序信号：
+
+1. 最近窗口内被 block 次数
+2. 最近窗口内 breaker 次数
+3. 估算成本上界
+4. 实际 request 放大量
+5. 是否命中过 judge / hook / parallel
+
+输出字段建议：
+
+- `taskId`
+- `projectId`
+- `title`
+- `riskScore`
+- `lastGuardDecision`
+- `lastGuardReason`
+- `lastBreakerReason`
+- `providerId`
+- `modelId`
+- `estimatedCostUpperBound`
+- `actualRequestCount`
+
+#### B6. 首页治理视图测试补齐
+
+任务目标：补首页治理聚合与渲染测试，避免只验证接口不验证页面。
+
+至少新增：
+
+1. governance overview 接口聚合测试
+2. Dashboard 治理卡片渲染测试
+3. Top 风险任务排序测试
+4. provider 治理汇总测试
+
+### 15.3 建议实施顺序
+
+建议按下面的顺序推进，而不是同时大面积铺开：
+
+1. A1 + A2：先落表
+2. A3：补 ledger sync 主链路
+3. A4 + A6：先让查询与回归可用
+4. A5：再把 baseline 接入 preflight
+5. B1 + B2：把首页治理聚合口径先定下来
+6. B3 + B4 + B5：再做首页治理视图
+7. B6：最后补前端聚合回归
+
+### 15.4 建议拆成的具体开发任务
+
+若直接落到任务系统，建议最少拆成以下 10 个任务：
+
+1. Service：新增 runtime usage ledger 表与索引
+2. Service：新增 runtime usage ledger steps 表与索引
+3. BFF：实现 RuntimeUsageLedgerSync 并接入主执行链路
+4. BFF：接入 judge / hook / resume 的 ledger 事件写入
+5. Service/BFF：新增项目级 runtime usage ledger 查询接口
+6. BFF：用 runtime usage baselines 改造 preflight 基线来源
+7. Dashboard：新增 governance overview 聚合接口
+8. Dashboard：新增治理总览区与 Top 风险任务列表
+9. Dashboard：把 provider token 总览升级为治理视角
+10. Tests：补齐 runtime ledger 与首页治理回归组
+
+### 15.5 完成判定
+
+这两条主线完成后，才算真正跨过“只有 guard 内核，没有治理操作面”的阶段。
+
+最低完成标准应是：
+
+1. 管理员可以在项目页或审计页看到单次执行的 request / token / cost 事实回放。
+2. 首页可以直接看到最近窗口内的 block / breaker / active lease / top risk tasks。
+3. preflight 的估算可以逐步引用 runtime 历史基线，而不再完全依赖固定启发式。
+4. provider token 统计与 paid governance 统计可以在同一页面统一解释。

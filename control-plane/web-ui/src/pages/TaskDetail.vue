@@ -557,6 +557,48 @@
                     </a-tag>
                   </a-descriptions-item>
                 </a-descriptions>
+                <div style="margin-top: 12px">
+                  <a-typography-text strong>Runtime 账本成本摘要</a-typography-text>
+                  <a-spin v-if="taskRuntimeUsageLoading" style="display: block; margin-top: 8px" />
+                  <a-alert
+                    v-else-if="taskRuntimeUsageError"
+                    type="error"
+                    show-icon
+                    :message="taskRuntimeUsageError"
+                    style="margin-top: 8px"
+                  />
+                  <a-empty
+                    v-else-if="taskRuntimeUsageRows.length === 0"
+                    description="该任务暂无 runtime ledger 成本摘要"
+                    style="margin-top: 8px"
+                  />
+                  <template v-else>
+                    <div class="reply-composer-shell__summary-inline" style="margin-top: 8px">
+                      <div class="reply-composer-shell__summary-inline-list">
+                        <span
+                          v-for="item in taskRuntimeUsageSummaryItems"
+                          :key="item.label"
+                          class="reply-composer-shell__summary-chip"
+                        >
+                          <span class="reply-composer-shell__summary-chip-label">{{ item.label }}</span>
+                          <a-tag v-if="item.tone" :color="item.tone">{{ item.value }}</a-tag>
+                          <span v-else class="reply-composer-shell__summary-chip-value">{{ item.value }}</span>
+                        </span>
+                      </div>
+                    </div>
+                    <a-descriptions v-if="focusedTaskRuntimeLedger" :column="1" bordered size="small" style="margin-top: 8px">
+                      <a-descriptions-item label="聚焦会话">
+                        {{ focusedTaskRuntimeLedger.runtimeSessionId }}
+                      </a-descriptions-item>
+                      <a-descriptions-item label="来源 / 入口">
+                        {{ focusedTaskRuntimeLedger.executionSource }} / {{ focusedTaskRuntimeLedger.entrypointType }}
+                      </a-descriptions-item>
+                      <a-descriptions-item label="成本 / Token">
+                        {{ formatUsd(focusedTaskRuntimeLedger.costUsd) }} / {{ formatCompactTokenCount(focusedTaskRuntimeLedger.totalTokens) }}
+                      </a-descriptions-item>
+                    </a-descriptions>
+                  </template>
+                </div>
                 <div v-if="governance.violations.length > 0" :style="taskDetailThemeStyles.governanceViolations">
                   <a-typography-text strong>命中规则</a-typography-text>
                   <div style="margin: 8px 0 12px 0">
@@ -820,6 +862,7 @@ import {
   type GovernanceSummary,
   type PipelineSummary,
   type ProjectRoleExecutionView,
+  type ProjectRuntimeUsageLedgerListResponse,
   type RuntimePipeline,
   type RuntimePipelineStage,
   type SessionInfo,
@@ -831,6 +874,7 @@ import {
   continueTask,
   forkTaskSession,
   getModelsList,
+  getProjectRuntimeUsageLedgers,
   getProjectRoleExecutionView,
   getSessionMessages,
   getSessionTree,
@@ -1105,6 +1149,45 @@ const activating = ref(false);
 // Governance
 const governance = ref<GovernanceSummary | null>(null);
 const governanceLoading = ref(false);
+const taskRuntimeUsage = ref<ProjectRuntimeUsageLedgerListResponse | null>(null);
+const taskRuntimeUsageLoading = ref(false);
+const taskRuntimeUsageError = ref<string | null>(null);
+
+const taskRuntimeUsageRows = computed(() => taskRuntimeUsage.value?.items ?? []);
+const focusedTaskRuntimeLedger = computed(() => {
+  const routeLedgerId = typeof route.query.runtimeLedger === "string" ? route.query.runtimeLedger : undefined;
+  if (routeLedgerId) {
+    return taskRuntimeUsageRows.value.find((item) => item.id === routeLedgerId) ?? null;
+  }
+
+  if (selectedSessionId.value) {
+    return taskRuntimeUsageRows.value.find((item) => item.runtimeSessionId === selectedSessionId.value) ?? null;
+  }
+
+  return taskRuntimeUsageRows.value[0] ?? null;
+});
+const taskRuntimeUsageSummaryItems = computed(() => {
+  if (!taskRuntimeUsage.value) {
+    return [] as Array<{ label: string; value: string; tone?: string }>;
+  }
+
+  const items: Array<{ label: string; value: string; tone?: string }> = [
+    { label: "账本批次", value: String(taskRuntimeUsage.value.totals.ledgerCount), tone: "blue" },
+    { label: "总请求", value: String(taskRuntimeUsage.value.totals.requestCount), tone: "geekblue" },
+    { label: "总 Token", value: formatCompactTokenCount(taskRuntimeUsage.value.totals.totalTokens), tone: "cyan" },
+    { label: "总成本", value: formatUsd(taskRuntimeUsage.value.totals.costUsd), tone: "gold" },
+  ];
+
+  if (focusedTaskRuntimeLedger.value) {
+    items.push({
+      label: route.query.runtimeLedger ? "定位账本" : "当前分支账本",
+      value: `${focusedTaskRuntimeLedger.value.runtimeSessionId} · ${formatUsd(focusedTaskRuntimeLedger.value.costUsd)}`,
+      tone: "purple",
+    });
+  }
+
+  return items;
+});
 
 // Role workflow placeholders
 const workflowViewLoading = ref(false);
@@ -1302,6 +1385,7 @@ async function refreshTaskData(
     governance?: boolean;
     workflow?: boolean;
     roleConfig?: boolean;
+    runtimeUsage?: boolean;
   } = {
     task: true,
     pipeline: true,
@@ -1309,6 +1393,7 @@ async function refreshTaskData(
     governance: true,
     workflow: true,
     roleConfig: true,
+    runtimeUsage: true,
   },
 ) {
   const jobs: Promise<unknown>[] = [];
@@ -1380,11 +1465,49 @@ async function refreshTaskData(
       projectRoleConfigError.value = null;
     }
   }
+
+  if (options.runtimeUsage !== false) {
+    const nextProjectId = refreshedTaskProjectId || task.value?.projectId || null;
+    if (nextProjectId) {
+      await refreshTaskRuntimeUsage(nextProjectId, id);
+    } else {
+      taskRuntimeUsage.value = null;
+      taskRuntimeUsageError.value = null;
+    }
+  }
+}
+
+async function refreshTaskRuntimeUsage(projectId: string, currentTaskId: string) {
+  taskRuntimeUsageLoading.value = true;
+  taskRuntimeUsageError.value = null;
+
+  try {
+    taskRuntimeUsage.value = await getProjectRuntimeUsageLedgers(projectId, {
+      taskId: currentTaskId,
+      limit: 12,
+    });
+  } catch (error) {
+    taskRuntimeUsage.value = null;
+    taskRuntimeUsageError.value = `加载任务账本摘要失败: ${error}`;
+  } finally {
+    taskRuntimeUsageLoading.value = false;
+  }
 }
 
 function getPreferredPipelineSessionId() {
   const requestedSessionId = typeof route.query.session === "string" ? route.query.session : undefined;
   return requestedSessionId || selectedSessionId.value || task.value?.sessionId;
+}
+
+function formatUsd(value?: number | null) {
+  return `$${Number(value ?? 0).toFixed(4)}`;
+}
+
+function formatCompactTokenCount(value?: number | null) {
+  if (value == null || !Number.isFinite(value) || value <= 0) return "-";
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
+  return String(Math.round(value));
 }
 
 async function refreshPipelineData(id: string, sessionId?: string) {
@@ -1678,6 +1801,7 @@ async function bootstrapTaskRefresh(id: string) {
       pipeline: false,
       sessions: true,
       governance: false,
+      runtimeUsage: false,
     });
   }
 }

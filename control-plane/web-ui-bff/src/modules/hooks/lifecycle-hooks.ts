@@ -28,6 +28,9 @@ export interface ExecuteLifecycleHooksOptions {
   context: Record<string, string | undefined | null>;
   titlePrefix: string;
   repoContext?: RepoContext;
+  onHookExecuted?: (
+    execution: HookExecutionRecord,
+  ) => Promise<{ stop?: boolean; reason?: string } | void> | { stop?: boolean; reason?: string } | void;
 }
 
 export interface ExecuteLifecycleHooksResult {
@@ -68,15 +71,34 @@ function buildHookExecution(
       trigger: options.trigger,
       status: result.ok && result.completed ? "completed" : "failed",
       agent: hook.agent,
-      model: hook.model,
+      model: result.model ? `${result.model.providerId}:${result.model.modelId}` : hook.model,
       prompt,
       result: result.text,
       error: result.ok ? (result.completed ? undefined : "Hook timed out") : result.error,
       sessionId: result.sessionId,
+      tokenUsed: result.tokenUsed,
       decision,
       completedAt: new Date().toISOString(),
     },
     rewrittenPrompt: decision?.action === "rewrite-prompt" ? decision.rewrittenPrompt : undefined,
+  };
+}
+
+function buildSkippedHookExecution(
+  options: ExecuteLifecycleHooksOptions,
+  hook: OrchestrationStrategy["hooks"][number],
+  reason: string,
+): HookExecutionRecord {
+  return {
+    hookId: hook.id,
+    trigger: options.trigger,
+    status: "skipped",
+    agent: hook.agent,
+    model: hook.model,
+    prompt: buildHookPrompt(options, hook),
+    error: reason,
+    tokenUsed: 0,
+    completedAt: new Date().toISOString(),
   };
 }
 
@@ -126,6 +148,21 @@ export async function executeLifecycleHooks(
     const executionResult = await executeSingleLifecycleHook(options, hook);
     rewrittenPrompt = executionResult.rewrittenPrompt ?? rewrittenPrompt;
     hookExecutions.push(executionResult.execution);
+
+    const continuation = await options.onHookExecuted?.(executionResult.execution);
+    if (continuation?.stop) {
+      const remainingHooks = hooks.slice(hookExecutions.length);
+      for (const remainingHook of remainingHooks) {
+        hookExecutions.push(
+          buildSkippedHookExecution(
+            options,
+            remainingHook,
+            continuation.reason || "Stopped after the previous hook exceeded the paid execution limit.",
+          ),
+        );
+      }
+      break;
+    }
   }
 
   return {

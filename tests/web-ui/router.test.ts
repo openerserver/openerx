@@ -60,10 +60,10 @@ vi.mock("../../control-plane/web-ui/src/pages/TaskOperatingOverride.vue", () => 
   }),
 }));
 
-vi.mock("../../control-plane/web-ui/src/pages/TaskOperatingModeLauncher.vue", () => ({
+vi.mock("../../control-plane/web-ui/src/pages/RecommendedScenarios.vue", () => ({
   default: defineComponent({
-    name: "MockTaskOperatingModeLauncherPage",
-    template: '<div data-testid="task-operating-mode-launcher-page">场景推荐入口页</div>',
+    name: "MockRecommendedScenariosPage",
+    template: '<div data-testid="recommended-scenarios-page">推荐场景页</div>',
   }),
 }));
 
@@ -290,12 +290,12 @@ describe("users route auth", () => {
       },
     });
 
-    await router.push("/projects/proj-default/operating-mode-launcher");
+    await router.push("/projects/proj-default/recommended-scenarios");
     await router.isReady();
     await flushPromises();
 
-    expect(router.currentRoute.value.name).toBe("TaskOperatingModeLauncher");
-    expect(wrapper.text()).toContain("场景推荐入口页");
+    expect(router.currentRoute.value.name).toBe("RecommendedScenarios");
+    expect(wrapper.text()).toContain("推荐场景页");
   });
 
   it("renders the boss operations center page when authenticated", async () => {

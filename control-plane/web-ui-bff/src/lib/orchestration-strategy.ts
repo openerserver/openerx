@@ -64,6 +64,7 @@ export interface HookExecutionRecord {
   result?: string;
   error?: string;
   sessionId?: string;
+  tokenUsed?: number;
   decision?: HookDecision;
   completedAt: string;
 }
@@ -165,6 +166,8 @@ export interface JudgeResult {
   sessionId?: string;
   winnerIndex?: number;
   scores?: number[];
+  model?: string;
+  tokenUsed?: number;
   reasoning: string;
   completedAt: string;
 }
@@ -190,6 +193,27 @@ export interface PersistedTaskStrategy {
   currentStageStatus?: string;
   bossDecisions?: Array<Record<string, unknown>>;
   escalationRequests?: Array<Record<string, unknown>>;
+  paidExecutionGuard?: {
+    enabled?: boolean;
+    providerId?: string;
+    modelId?: string;
+    modelRoute?: string;
+    leaseId?: string | null;
+    guardDecision?: string;
+    guardReason?: string;
+    estimatedRequestUpperBound?: number;
+    estimatedTokenUpperBound?: number;
+    estimatedCostUpperBound?: number;
+    actualRequests?: number;
+    actualTokenUsage?: number;
+    actualCost?: number;
+    maxRequestsPerRun?: number;
+    maxEstimatedCostUsdPerRun?: number;
+    overridesApplied?: string[];
+    postHooksDisabled?: boolean;
+    breakerTrippedAt?: string;
+    breakerReason?: string;
+  };
   [key: string]: unknown;
 }
 

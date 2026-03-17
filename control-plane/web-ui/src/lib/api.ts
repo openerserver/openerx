@@ -574,6 +574,53 @@ export interface DashboardProviderTokenResponse {
   providers: DashboardProviderTokenItem[];
 }
 
+export interface DashboardGovernanceTopRiskTaskItem {
+  taskId: string;
+  projectId: string;
+  title: string;
+  runtimeSessionId: string | null;
+  requestCount: number;
+  totalTokens: number;
+  costUsd: number;
+  blockedCount: number;
+  breakerCount: number;
+  judgeRequestCount: number;
+  hookRequestCount: number;
+  parallelCandidateCount: number;
+  riskScore: number;
+  dominantDriver: string;
+  lastGuardDecision: string | null;
+  lastGuardReason: string | null;
+  lastBreakerReason: string | null;
+  lastActivityAt: string | null;
+}
+
+export interface DashboardGovernanceRecentEventItem {
+  id: string;
+  projectId: string;
+  taskId: string | null;
+  title: string;
+  runtimeSessionId: string | null;
+  eventKind: "guard" | "breaker";
+  action: string;
+  guardDecision: string | null;
+  reason: string | null;
+  occurredAt: string;
+}
+
+export interface DashboardGovernanceOverviewResponse {
+  range: DashboardProviderTokenRange;
+  generatedAt: string;
+  summary: {
+    blockedCount: number;
+    breakerCount: number;
+    activeLeaseCount: number;
+    topRiskTaskCount: number;
+  };
+  topRiskTasks: DashboardGovernanceTopRiskTaskItem[];
+  recentEvents: DashboardGovernanceRecentEventItem[];
+}
+
 export async function getAgentOpsOverview(query: AgentOpsPageQuery = {}) {
   const params = new URLSearchParams();
   if (query.ownerScope) params.set('ownerScope', query.ownerScope);
@@ -677,6 +724,13 @@ export async function getDashboardProviderTokens(
   return request<DashboardProviderTokenResponse>(`/dashboard/provider-tokens?${params.toString()}`);
 }
 
+export async function getDashboardGovernanceOverview(
+  range: DashboardProviderTokenRange = "24h",
+) {
+  const params = new URLSearchParams({ range });
+  return request<DashboardGovernanceOverviewResponse>(`/dashboard/governance-overview?${params.toString()}`);
+}
+
 export async function getAgentMessages(agentRunId: string) {
   return request<{ ok: boolean; data?: unknown }>(`/agents/${agentRunId}/messages`);
 }
@@ -755,8 +809,11 @@ export interface EnvironmentApprovalPolicyBinding {
 export interface ProjectSettings {
   defaultModel?: string;
   defaultEnvironmentId?: string;
+  allowPaidExecution?: boolean;
   workflowTemplateId?: string;
   approvalPolicyTemplateId?: string;
+  projectGroupKey?: string | null;
+  projectGroupLabel?: string | null;
   approvalPolicy?: ApprovalPolicyMode;
   environmentApprovalPolicies?: Record<string, EnvironmentApprovalPolicyBinding>;
   maxConcurrency?: number;
@@ -770,6 +827,188 @@ export interface ProjectSettings {
   preferredTemplateId?: string | null;
   allowBossAutoTemplateSwitch?: boolean;
   allowHybridEscalation?: boolean;
+}
+
+export type GuardDecision = "allow" | "allow-with-downgrade" | "require-approval" | "deny";
+
+export interface ExecutionEstimateRange {
+  min: number;
+  max: number;
+}
+
+export interface PaidExecutionRiskDriver {
+  type: "parallel" | "judge" | "hook" | "suite" | "model" | "budget";
+  label: string;
+  impact: "low" | "medium" | "high";
+  detail: string;
+}
+
+export interface PaidExecutionEstimate {
+  providerId: string;
+  modelId: string;
+  requestCount: ExecutionEstimateRange;
+  inputTokens: ExecutionEstimateRange;
+  outputTokens: ExecutionEstimateRange;
+  totalTokens: ExecutionEstimateRange;
+  costUsd: ExecutionEstimateRange;
+  riskDrivers: PaidExecutionRiskDriver[];
+  budgetHeadroom: {
+    remainingUsd: number | null;
+    enoughForSingleRun: boolean;
+    enoughForSuiteRun: boolean;
+  };
+  baselineSource?: {
+    source: "historical" | "heuristic";
+    matchScope?: string;
+    sampleSize?: number;
+    lastLedgerAt?: string | null;
+  };
+  guardDecision: GuardDecision;
+  guardReason: string;
+  generatedAt: string;
+}
+
+export interface ModelExecutionPolicy {
+  providerId: string;
+  modelId: string;
+  modelRoute: string;
+  environment: "dev" | "test" | "staging" | "prod";
+  costTier: "free" | "low" | "medium" | "high" | "premium";
+  isPaid: boolean;
+  defaultDecision: GuardDecision;
+  maxRequestsPerRun: number;
+  maxEstimatedCostUsdPerRun: number;
+  maxParallelCandidates: number;
+  allowJudge: boolean;
+  allowHooks: boolean;
+  requiresExplicitGate: boolean;
+  requiresLease: boolean;
+  suggestedModel?: string;
+}
+
+export interface PaidExecutionLeaseRecord {
+  id: string;
+  projectId: string;
+  issuedByUserId?: string | null;
+  revokedByUserId?: string | null;
+  reason?: string | null;
+  status: "active" | "revoked" | "expired";
+  expiresAt: string;
+  createdAt: string;
+  updatedAt: string;
+  revokedAt?: string | null;
+}
+
+export interface PaidExecutionRequirements {
+  allowPaidExecution: boolean;
+  leaseRequired: boolean;
+  hasAllowPaidExecution: boolean;
+  hasLease: boolean;
+  leaseId: string | null;
+}
+
+export interface TaskExecutionPreflightResponse {
+  taskId: string;
+  allowed: boolean;
+  effectiveModel: string;
+  activeLease: PaidExecutionLeaseRecord | null;
+  policy: ModelExecutionPolicy;
+  requirements: PaidExecutionRequirements;
+  preflight: PaidExecutionEstimate;
+}
+
+export interface ProjectExecutionPreflightResponse {
+  projectId: string;
+  defaultModel: string | null;
+  effectiveModel: string;
+  allowed: boolean;
+  activeLease: PaidExecutionLeaseRecord | null;
+  policy: ModelExecutionPolicy;
+  requirements: PaidExecutionRequirements;
+  preflight: PaidExecutionEstimate;
+}
+
+export interface PaidExecutionLeaseStateResponse {
+  projectId: string;
+  activeLease: PaidExecutionLeaseRecord | null;
+  now: string;
+}
+
+export interface RuntimeUsageLedgerRecord {
+  id: string;
+  projectId: string;
+  taskId?: string | null;
+  agentRunId?: string | null;
+  runtimeSessionId: string;
+  executionSource: string;
+  entrypointType: string;
+  orchestrationFingerprint?: string | null;
+  defaultProviderId?: string | null;
+  defaultModelId?: string | null;
+  requestCount: number;
+  stepCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  costUsd: number;
+  candidateCount: number;
+  judgeRequestCount: number;
+  hookRequestCount: number;
+  status: "running" | "completed" | "failed" | "cancelled";
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  syncedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RuntimeUsageLedgerStepRecord {
+  id: string;
+  ledgerId: string;
+  projectId: string;
+  taskId?: string | null;
+  agentRunId?: string | null;
+  runtimeSessionId?: string | null;
+  stepType: "execution" | "judge" | "hook" | "resume" | "other";
+  triggerType?: string | null;
+  hookId?: string | null;
+  candidateIndex?: number | null;
+  requestIndex: number;
+  providerId?: string | null;
+  modelId?: string | null;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  costUsd: number;
+  amplificationSource?: string | null;
+  status: "pending" | "completed" | "failed" | "skipped";
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProjectRuntimeUsageLedgerListResponse {
+  projectId: string;
+  totals: {
+    ledgerCount: number;
+    requestCount: number;
+    stepCount: number;
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    costUsd: number;
+  };
+  items: RuntimeUsageLedgerRecord[];
+}
+
+export interface ProjectRuntimeUsageLedgerDetailResponse {
+  projectId: string;
+  ledger: RuntimeUsageLedgerRecord;
+  steps: RuntimeUsageLedgerStepRecord[];
+  breakdown: {
+    byStepType: Record<string, number>;
+  };
 }
 
 export type CollaborationMode = "solo" | "team" | "hybrid";
@@ -934,6 +1173,10 @@ export async function updateTask(taskId: string, data: { selectedModel?: string 
     method: "PATCH",
     body: JSON.stringify(data),
   });
+}
+
+export async function getTaskExecutionPreflight(taskId: string) {
+  return request<TaskExecutionPreflightResponse>(`/tasks/${taskId}/execute/preflight`);
 }
 
 export async function createTask(data: {
@@ -1222,6 +1465,56 @@ export async function updateProject(
     method: "PATCH",
     body: JSON.stringify(data),
   });
+}
+
+export async function getProjectPaidExecutionLease(projectId: string) {
+  return request<PaidExecutionLeaseStateResponse>(`/projects/${projectId}/paid-execution-lease`);
+}
+
+export async function createProjectPaidExecutionLease(
+  projectId: string,
+  data: { durationMinutes: number; reason?: string },
+) {
+  return request<PaidExecutionLeaseStateResponse>(`/projects/${projectId}/paid-execution-lease`, {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function revokeProjectPaidExecutionLease(
+  projectId: string,
+  leaseId: string,
+  data?: { reason?: string },
+) {
+  return request<{ ok: boolean; leaseId: string; projectId: string }>(
+    `/projects/${projectId}/paid-execution-lease/${leaseId}`,
+    {
+      method: "DELETE",
+      body: JSON.stringify(data || {}),
+    },
+  );
+}
+
+export async function getProjectPaidExecutionPreflight(projectId: string) {
+  return request<ProjectExecutionPreflightResponse>(`/projects/${projectId}/paid-execution-preflight`);
+}
+
+export async function getProjectRuntimeUsageLedgers(
+  projectId: string,
+  params?: { limit?: number; taskId?: string; status?: string },
+) {
+  const search = new URLSearchParams();
+  if (params?.limit) search.set("limit", String(params.limit));
+  if (params?.taskId) search.set("taskId", params.taskId);
+  if (params?.status) search.set("status", params.status);
+  const suffix = search.toString() ? `?${search.toString()}` : "";
+  return request<ProjectRuntimeUsageLedgerListResponse>(`/projects/${projectId}/runtime-usage-ledgers${suffix}`);
+}
+
+export async function getProjectRuntimeUsageLedgerDetail(projectId: string, ledgerId: string) {
+  return request<ProjectRuntimeUsageLedgerDetailResponse>(
+    `/projects/${projectId}/runtime-usage-ledgers/${ledgerId}`,
+  );
 }
 
 export async function listProjectMembers(projectId: string) {
@@ -1530,6 +1823,7 @@ export interface ProjectOverviewItem {
   name: string;
   slug: string;
   description?: string | null;
+  settings?: Pick<ProjectSettings, "projectGroupKey" | "projectGroupLabel"> | null;
   projectStatus: "healthy" | "pending_config" | "archived" | "error";
   completedCount: number;
   totalRequiredCount: number;
@@ -1691,6 +1985,13 @@ export interface ModelsConfig {
   list: Array<Record<string, unknown>>;
 }
 
+export interface ModelsTestPolicy {
+  configuredModel: string | null;
+  effectiveModel: string;
+  allowedModels: string[];
+  enforced: boolean;
+}
+
 export interface CopilotModelInfo {
   id: string;
   name: string;
@@ -1784,6 +2085,9 @@ export async function getModelsConfig() {
 }
 export async function getModelsList() {
   return request<{ data: Array<Record<string, unknown>> }>("/config/models/list");
+}
+export async function getModelsTestPolicy() {
+  return request<{ data: ModelsTestPolicy }>("/config/models/test-policy");
 }
 export async function updateModelsConfig(data: ModelsConfig) {
   return request<{ ok: boolean; restartRequired: boolean }>("/config/models", {

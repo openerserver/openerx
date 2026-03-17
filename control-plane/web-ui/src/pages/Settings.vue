@@ -391,6 +391,17 @@
                   @update:value="setDefaultAgentModelValue($event)"
                 />
               </a-form-item>
+              <a-form-item label="测试专用模型">
+                <a-select
+                  :value="getTestExecutionModelValue()"
+                  style="width: 100%"
+                  :options="testExecutionModelSelectOptions"
+                  @update:value="setTestExecutionModelValue($event)"
+                />
+                <div style="margin-top: 6px; color: #888; font-size: 12px">
+                  强制规则：所有真实测试默认只会使用 GPT-5 mini 或 GPT-4o，避免误用其他付费模型造成测试费用激增。
+                </div>
+              </a-form-item>
             </a-form>
           </a-card>
 
@@ -1174,6 +1185,7 @@ import {
   getCopilotStatus,
   getMcpConfig,
   getModelsConfig,
+  getModelsTestPolicy,
   getMyProfile,
   getOrchestrationStrategy,
   getSecurityBaseline,
@@ -1438,6 +1450,19 @@ const modelsData = reactive<{
   list: [],
 });
 
+const allowedTestExecutionModels = ["github-copilot:gpt-5-mini", "github-copilot:gpt-4o"];
+
+function normalizeTestExecutionModelValue(value: unknown) {
+  const normalized = String(value ?? "").trim();
+  if (!normalized) {
+    return allowedTestExecutionModels[0];
+  }
+
+  return allowedTestExecutionModels.includes(normalized)
+    ? normalized
+    : allowedTestExecutionModels[0];
+}
+
 function buildModelRoute(provider: string, modelId: string) {
   if (!provider || !modelId) return "";
   return `${provider}:${modelId}`;
@@ -1487,6 +1512,14 @@ function setDefaultAgentModelValue(value: unknown) {
   } else {
     delete modelsData.defaults.provider;
   }
+}
+
+function getTestExecutionModelValue() {
+  return normalizeTestExecutionModelValue(getRecordString(modelsData.defaults, "testModel"));
+}
+
+function setTestExecutionModelValue(value: unknown) {
+  modelsData.defaults.testModel = normalizeTestExecutionModelValue(value);
 }
 
 function isDefaultAgentModelConfigured() {
@@ -1593,6 +1626,15 @@ function buildModelSelectOptions(currentModel = "") {
 
 const defaultModelSelectOptions = computed(() =>
   buildModelSelectOptions(getDefaultAgentModelValue()),
+);
+
+const testExecutionModelSelectOptions = computed(() =>
+  allowedTestExecutionModels.map((route) => ({
+    value: route,
+    label: modelsData.list.some((model) => getConfiguredModelKey(model) === route)
+      ? route
+      : `${route} (推荐值)`,
+  })),
 );
 
 const agentModelSelectOptions = computed(() =>
@@ -2961,6 +3003,7 @@ async function saveModels() {
   try {
     clearInvalidDefaultAgentModel();
     setDefaultAgentModelValue(getDefaultAgentModelValue());
+    setTestExecutionModelValue(getTestExecutionModelValue());
     const validationErrors = getModelValidationErrors();
     if (validationErrors.length > 0) {
       message.error(validationErrors[0]);
@@ -3072,6 +3115,7 @@ onMounted(async () => {
       agentsList.value = d.agents;
       skillsList.value = d.skills as SkillSummary[];
       Object.assign(modelsData.defaults, d.models.defaults);
+      setTestExecutionModelValue(getRecordString(d.models.defaults, "testModel"));
       modelsData.list = d.models.list;
 
       // MCP
@@ -3086,9 +3130,18 @@ onMounted(async () => {
     // Load models providers separately (overview doesn't include them)
     try {
       const modelsRes = await getModelsConfig();
+      Object.assign(modelsData.defaults, modelsRes.data.defaults || {});
+      setTestExecutionModelValue(getRecordString(modelsRes.data.defaults || {}, "testModel"));
       Object.assign(modelsData.providers, modelsRes.data.providers);
     } catch {
       /* ignore */
+    }
+
+    try {
+      const modelsPolicy = await getModelsTestPolicy();
+      setTestExecutionModelValue(modelsPolicy.data.effectiveModel);
+    } catch {
+      setTestExecutionModelValue(getTestExecutionModelValue());
     }
 
     // Copilot auth status depends on configured providers.

@@ -341,9 +341,13 @@ describe("Operating mode pages", () => {
       },
     });
 
-    const { default: Page } = await import("../../control-plane/web-ui/src/pages/TaskOperatingModeLauncher.vue");
+    const { default: Page } = await import("../../control-plane/web-ui/src/pages/RecommendedScenarios.vue");
     const wrapper = mount(Page);
     await flushPromises();
+
+    expect(wrapper.find('[data-testid="project-section-nav"]').exists()).toBe(false);
+    expect(wrapper.text()).toContain("任务创建前，从平台推荐场景中选择一组运行模式，并直接带入任务创建器");
+    expect(wrapper.text()).toContain("项目运行档位");
 
     const actionButton = wrapper.findAll("button").find((item) => item.text().includes("带入新建任务"));
     await actionButton?.trigger("click");

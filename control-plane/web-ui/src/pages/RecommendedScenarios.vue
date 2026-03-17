@@ -1,12 +1,17 @@
 <template>
   <div style="padding: 24px">
     <a-page-header
-      :title="project ? `${project.name} / 场景推荐入口` : '场景推荐入口'"
-      sub-title="从平台预设场景中选择推荐运行档位，并带入任务创建器"
+      :title="project ? `${project.name} / 推荐场景` : '推荐场景'"
+      sub-title="任务创建前，从平台推荐场景中选择一组运行模式，并直接带入任务创建器"
       @back="router.push(`/projects/${projectId}`)"
-    />
-
-    <ProjectSectionNav :project-id="projectId" active-key="overview" />
+    >
+      <template #extra>
+        <a-space wrap>
+          <a-button @click="router.push(`/projects/${projectId}`)">项目概览</a-button>
+          <a-button type="primary" @click="router.push(`/projects/${projectId}/operating-mode`)">项目运行档位</a-button>
+        </a-space>
+      </template>
+    </a-page-header>
 
     <a-spin :spinning="loading" style="display: block">
       <a-alert v-if="loadError" type="error" show-icon style="margin-bottom: 16px" :message="loadError" />

@@ -20,3 +20,11 @@ dashboardRoutes.get("/provider-tokens", async (c) => {
   });
   return c.json(result.data, result.status as 200 | 400 | 401 | 403 | 500 | 502);
 });
+
+dashboardRoutes.get("/governance-overview", async (c) => {
+  const query = buildForwardedQuery(c, ["range"]);
+  const result = await cpFetch(`/api/dashboard/governance-overview${query}`, {
+    authorization: authHeader(c),
+  });
+  return c.json(result.data, result.status as 200 | 400 | 401 | 403 | 500 | 502);
+});

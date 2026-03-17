@@ -102,9 +102,17 @@ const routes: RouteRecordRaw[] = [
         component: () => import("../pages/BossOperationsCenter.vue"),
       },
       {
+        path: "projects/:projectId/recommended-scenarios",
+        name: "RecommendedScenarios",
+        component: () => import("../pages/RecommendedScenarios.vue"),
+      },
+      {
         path: "projects/:projectId/operating-mode-launcher",
-        name: "TaskOperatingModeLauncher",
-        component: () => import("../pages/TaskOperatingModeLauncher.vue"),
+        redirect: (to) => ({
+          name: "RecommendedScenarios",
+          params: to.params,
+          query: to.query,
+        }),
       },
       {
         path: "projects/:projectId/cost",

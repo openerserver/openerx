@@ -11,8 +11,11 @@ export interface EnvironmentApprovalPolicyBinding {
 export interface ProjectSettings {
   defaultModel?: string;
   defaultEnvironmentId?: string;
+  allowPaidExecution?: boolean;
   workflowTemplateId?: string;
   approvalPolicyTemplateId?: string;
+  projectGroupKey?: string | null;
+  projectGroupLabel?: string | null;
   approvalPolicy?: ApprovalPolicyMode;
   environmentApprovalPolicies?: Record<string, EnvironmentApprovalPolicyBinding>;
   maxConcurrency?: number;
@@ -27,6 +30,17 @@ export interface ProjectSettings {
   allowBossAutoTemplateSwitch?: boolean;
   allowHybridEscalation?: boolean;
 }
+
+export type PaidExecutionLeaseStatus = "active" | "revoked" | "expired";
+export type RuntimeUsageLedgerStatus = "running" | "completed" | "failed" | "cancelled";
+export type RuntimeUsageLedgerStepType = "execution" | "judge" | "hook" | "resume" | "other";
+export type RuntimeUsageLedgerStepStatus = "pending" | "completed" | "failed" | "skipped";
+export type RuntimeUsageBaselineMatchScope =
+  | "project+provider+model+entrypoint+fingerprint"
+  | "project+provider+model+entrypoint"
+  | "project+provider+model"
+  | "project+entrypoint"
+  | "project";
 
 // ── Organizations ──────────────────────────────────────────────────
 
@@ -105,6 +119,127 @@ export const projectRoles = sqliteTable("project_roles", {
   role: text("role", {
     enum: ["project_admin", "developer", "viewer"],
   }).notNull(),
+});
+
+export const paidExecutionLeases = sqliteTable("paid_execution_leases", {
+  id: text("id").primaryKey(),
+  projectId: text("project_id")
+    .notNull()
+    .references(() => projects.id),
+  issuedByUserId: text("issued_by_user_id")
+    .notNull()
+    .references(() => users.id),
+  revokedByUserId: text("revoked_by_user_id").references(() => users.id),
+  reason: text("reason"),
+  status: text("status", { enum: ["active", "revoked", "expired"] })
+    .notNull()
+    .default("active"),
+  expiresAt: text("expires_at").notNull(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  revokedAt: text("revoked_at"),
+});
+
+export const runtimeUsageLedgers = sqliteTable("runtime_usage_ledgers", {
+  id: text("id").primaryKey(),
+  projectId: text("project_id")
+    .notNull()
+    .references(() => projects.id),
+  taskId: text("task_id").references(() => tasks.id),
+  agentRunId: text("agent_run_id").references(() => agentRuns.id),
+  runtimeSessionId: text("runtime_session_id").notNull(),
+  executionSource: text("execution_source").notNull(),
+  entrypointType: text("entrypoint_type").notNull(),
+  orchestrationFingerprint: text("orchestration_fingerprint"),
+  defaultProviderId: text("default_provider_id"),
+  defaultModelId: text("default_model_id"),
+  requestCount: integer("request_count").notNull().default(0),
+  stepCount: integer("step_count").notNull().default(0),
+  inputTokens: integer("input_tokens").notNull().default(0),
+  outputTokens: integer("output_tokens").notNull().default(0),
+  totalTokens: integer("total_tokens").notNull().default(0),
+  costUsd: real("cost_usd").notNull().default(0),
+  candidateCount: integer("candidate_count").notNull().default(1),
+  judgeRequestCount: integer("judge_request_count").notNull().default(0),
+  hookRequestCount: integer("hook_request_count").notNull().default(0),
+  status: text("status", { enum: ["running", "completed", "failed", "cancelled"] })
+    .notNull()
+    .default("running"),
+  startedAt: text("started_at"),
+  finishedAt: text("finished_at"),
+  syncedAt: text("synced_at"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const runtimeUsageLedgerSteps = sqliteTable("runtime_usage_ledger_steps", {
+  id: text("id").primaryKey(),
+  ledgerId: text("ledger_id")
+    .notNull()
+    .references(() => runtimeUsageLedgers.id),
+  projectId: text("project_id")
+    .notNull()
+    .references(() => projects.id),
+  taskId: text("task_id").references(() => tasks.id),
+  agentRunId: text("agent_run_id").references(() => agentRuns.id),
+  runtimeSessionId: text("runtime_session_id"),
+  stepType: text("step_type", { enum: ["execution", "judge", "hook", "resume", "other"] })
+    .notNull(),
+  triggerType: text("trigger_type"),
+  hookId: text("hook_id"),
+  candidateIndex: integer("candidate_index"),
+  requestIndex: integer("request_index").notNull().default(0),
+  providerId: text("provider_id"),
+  modelId: text("model_id"),
+  inputTokens: integer("input_tokens").notNull().default(0),
+  outputTokens: integer("output_tokens").notNull().default(0),
+  totalTokens: integer("total_tokens").notNull().default(0),
+  costUsd: real("cost_usd").notNull().default(0),
+  amplificationSource: text("amplification_source"),
+  status: text("status", { enum: ["pending", "completed", "failed", "skipped"] })
+    .notNull()
+    .default("completed"),
+  startedAt: text("started_at"),
+  finishedAt: text("finished_at"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const runtimeUsageBaselines = sqliteTable("runtime_usage_baselines", {
+  id: text("id").primaryKey(),
+  projectId: text("project_id")
+    .notNull()
+    .references(() => projects.id),
+  providerId: text("provider_id").notNull().default(""),
+  modelId: text("model_id").notNull().default(""),
+  entrypointType: text("entrypoint_type").notNull().default(""),
+  orchestrationFingerprint: text("orchestration_fingerprint").notNull().default(""),
+  matchScope: text("match_scope", {
+    enum: [
+      "project+provider+model+entrypoint+fingerprint",
+      "project+provider+model+entrypoint",
+      "project+provider+model",
+      "project+entrypoint",
+      "project",
+    ],
+  })
+    .notNull()
+    .default("project"),
+  sampleSize: integer("sample_size").notNull().default(0),
+  p50RequestCount: real("p50_request_count"),
+  p90RequestCount: real("p90_request_count"),
+  p50InputTokens: real("p50_input_tokens"),
+  p90InputTokens: real("p90_input_tokens"),
+  p50OutputTokens: real("p50_output_tokens"),
+  p90OutputTokens: real("p90_output_tokens"),
+  p50TotalTokens: real("p50_total_tokens"),
+  p90TotalTokens: real("p90_total_tokens"),
+  p50CostUsd: real("p50_cost_usd"),
+  p90CostUsd: real("p90_cost_usd"),
+  lastLedgerAt: text("last_ledger_at"),
+  generatedAt: text("generated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
 // ── Sessions (extends OpenCode sessions) ───────────────────────────

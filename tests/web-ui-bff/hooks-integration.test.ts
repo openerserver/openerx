@@ -6,16 +6,21 @@ import {
   createInternalAuthorization,
 } from "../../control-plane/web-ui-bff/src/lib/control-plane-client";
 import { sseAggregator } from "../../control-plane/web-ui-bff/src/modules/realtime/sse-aggregator";
+import {
+  paidExecutionIntegrationTest,
+  resolveExecutionIntegrationModel,
+} from "./execution-integration-guard";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const BFF_URL = process.env.TEST_BFF_URL || "http://127.0.0.1:4098";
+const SERVICE_URL = process.env.TEST_SERVICE_URL || "http://127.0.0.1:4097";
 const USERNAME = process.env.TEST_USERNAME || "admin";
 const PASSWORD = process.env.TEST_PASSWORD || "admin123!";
 const PROJECT_ID = process.env.TEST_PROJECT_ID || "proj-default";
 const DB_PATH =
   process.env.TEST_DB_PATH || resolve(__dirname, "../../control-plane/service/data/openerx.db");
-const executionIntegrationTest = process.env.RUN_EXECUTION_INTEGRATION === "1" ? test : test.skip;
+const executionIntegrationTest = paidExecutionIntegrationTest;
 
 interface HookConfig {
   enabled: boolean;
@@ -67,10 +72,17 @@ interface TaskRecord {
   strategy?: string | null;
 }
 
-interface ProjectRecord {
-  settings?: {
-    defaultModel?: string;
-  } | null;
+interface PaidExecutionLeaseRecord {
+  id: string;
+  projectId: string;
+  status: "active" | "revoked" | "expired";
+  expiresAt: string;
+}
+
+interface PaidExecutionLeaseStateResponse {
+  projectId: string;
+  activeLease: PaidExecutionLeaseRecord | null;
+  now: string;
 }
 
 interface ConfigModelRecord {
@@ -88,6 +100,26 @@ function sleep(ms: number): Promise<void> {
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(`${BFF_URL}${path}`, options);
+  const text = await response.text();
+
+  let data: unknown;
+  try {
+    data = text ? JSON.parse(text) : undefined;
+  } catch {
+    data = text;
+  }
+
+  if (!response.ok) {
+    throw new Error(
+      `${options.method || "GET"} ${path} failed: ${response.status} ${JSON.stringify(data)}`,
+    );
+  }
+
+  return data as T;
+}
+
+async function serviceRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const response = await fetch(`${SERVICE_URL}${path}`, options);
   const text = await response.text();
 
   let data: unknown;
@@ -185,31 +217,65 @@ async function getTask(taskId: string): Promise<TaskRecord> {
 }
 
 async function getAvailableCopilotModel(): Promise<string> {
-  const modelList = await request<{ data?: ConfigModelRecord[] }>("/api/config/models/list", {
-    headers: authHeaders(),
-  });
+  const [modelList, testPolicy] = await Promise.all([
+    request<{ data?: ConfigModelRecord[] }>("/api/config/models/list", {
+      headers: authHeaders(),
+    }),
+    request<{ data?: { effectiveModel?: string | null } }>("/api/config/models/test-policy", {
+      headers: authHeaders(),
+    }),
+  ]);
 
-  const configuredCopilotModel = (modelList.data || []).find(
-    (model) =>
-      typeof model.provider === "string"
-      && model.provider.startsWith("github-copilot")
-      && typeof model.id === "string"
-      && model.id.trim().length > 0,
+  return resolveExecutionIntegrationModel(modelList.data || [], testPolicy.data?.effectiveModel);
+}
+
+async function getAvailableHookCompatibleModel(): Promise<string> {
+  return getAvailableCopilotModel();
+}
+
+async function ensurePaidExecutionLease(): Promise<{ leaseId: string; createdByTest: boolean }> {
+  const current = await request<PaidExecutionLeaseStateResponse>(
+    `/api/projects/${PROJECT_ID}/paid-execution-lease`,
+    {
+      headers: authHeaders(),
+    },
   );
 
-  if (configuredCopilotModel?.provider && configuredCopilotModel.id) {
-    return `${configuredCopilotModel.provider}:${configuredCopilotModel.id}`;
+  if (current.activeLease?.id) {
+    return {
+      leaseId: current.activeLease.id,
+      createdByTest: false,
+    };
   }
 
-  const project = await request<ProjectRecord>(`/api/projects/${PROJECT_ID}`, {
+  const created = await request<PaidExecutionLeaseStateResponse>(
+    `/api/projects/${PROJECT_ID}/paid-execution-lease`,
+    {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({
+        durationMinutes: 30,
+        reason: "hooks integration test",
+      }),
+    },
+  );
+
+  if (!created.activeLease?.id) {
+    throw new Error("Failed to create paid execution lease for integration test");
+  }
+
+  return {
+    leaseId: created.activeLease.id,
+    createdByTest: true,
+  };
+}
+
+async function revokePaidExecutionLease(leaseId: string): Promise<void> {
+  await request(`/api/projects/${PROJECT_ID}/paid-execution-lease/${leaseId}`, {
+    method: "DELETE",
     headers: authHeaders(),
+    body: JSON.stringify({ reason: "hooks integration cleanup" }),
   });
-
-  if (project.settings?.defaultModel?.startsWith("github-copilot")) {
-    return project.settings.defaultModel;
-  }
-
-  return "github-copilot:claude-sonnet-4";
 }
 
 async function terminateAgent(agentRunId: string): Promise<void> {
@@ -236,6 +302,52 @@ async function waitForTaskStrategy(
   }
 
   throw new Error(`Timed out waiting for hook execution on task ${taskId}`);
+}
+
+async function waitForCostAndAgentAudit(taskId: string) {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < 120000) {
+    const [costDetail, auditResult] = await Promise.all([
+      serviceRequest<{
+        taskId: string;
+        totalCost: number;
+        totalInputTokens: number;
+        totalOutputTokens: number;
+        records: Array<{
+          sessionId?: string | null;
+          taskId?: string | null;
+          cost: number;
+        }>;
+      }>(`/api/cost/detail?taskId=${encodeURIComponent(taskId)}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      }),
+      serviceRequest<{
+        data: Array<{
+          taskId?: string | null;
+          action: string;
+          eventType: string;
+          sessionId?: string | null;
+          detail?: Record<string, unknown> | null;
+        }>;
+      }>(`/api/audit?projectId=${encodeURIComponent(PROJECT_ID)}&type=agent&limit=200`, {
+        headers: { Authorization: `Bearer ${token}` },
+      }),
+    ]);
+
+    const taskAudits = auditResult.data.filter((event) => event.taskId === taskId);
+
+    if (
+      costDetail.records.some((record) => record.taskId === taskId)
+      && taskAudits.some((event) => event.action === "completed")
+    ) {
+      return { costDetail, taskAudits };
+    }
+
+    await sleep(500);
+  }
+
+  throw new Error(`Timed out waiting for cost/audit persistence for task ${taskId}`);
 }
 
 async function waitForEvent(
@@ -333,11 +445,13 @@ describe("lifecycle hooks integration", () => {
     async () => {
       await withStrategyLock(async () => {
         const originalStrategy = await getOrchestrationStrategy();
-        const executionModel = await getAvailableCopilotModel();
+        const executionModel = await getAvailableHookCompatibleModel();
         const hookModel = executionModel;
         let agentRunId: string | undefined;
+        let leaseCleanup: { leaseId: string; createdByTest: boolean } | undefined;
 
         try {
+          leaseCleanup = await ensurePaidExecutionLease();
           await updateOrchestrationStrategy({
             ...originalStrategy,
             categoryAgentMap: Object.fromEntries(
@@ -394,6 +508,9 @@ describe("lifecycle hooks integration", () => {
           if (agentRunId) {
             await terminateAgent(agentRunId).catch(() => undefined);
           }
+          if (leaseCleanup?.createdByTest) {
+            await revokePaidExecutionLease(leaseCleanup.leaseId).catch(() => undefined);
+          }
           await updateOrchestrationStrategy(originalStrategy);
         }
       });
@@ -405,14 +522,16 @@ describe("lifecycle hooks integration", () => {
     async () => {
       await withStrategyLock(async () => {
         const originalStrategy = await getOrchestrationStrategy();
-        const executionModel = await getAvailableCopilotModel();
+        const executionModel = await getAvailableHookCompatibleModel();
         const hookModel = executionModel;
         const events: Array<Record<string, unknown>> = [];
         const unsubscribe = sseAggregator.onEvent((event) => {
           events.push(event as unknown as Record<string, unknown>);
         });
+        let leaseCleanup: { leaseId: string; createdByTest: boolean } | undefined;
 
         try {
+          leaseCleanup = await ensurePaidExecutionLease();
           await updateOrchestrationStrategy({
             ...originalStrategy,
             categoryAgentMap: Object.fromEntries(
@@ -498,6 +617,9 @@ describe("lifecycle hooks integration", () => {
           expect(postExecution?.completedAt).toBeTruthy();
         } finally {
           unsubscribe();
+          if (leaseCleanup?.createdByTest) {
+            await revokePaidExecutionLease(leaseCleanup.leaseId).catch(() => undefined);
+          }
           await updateOrchestrationStrategy(originalStrategy);
         }
       });
@@ -509,7 +631,7 @@ describe("lifecycle hooks integration", () => {
     async () => {
       await withStrategyLock(async () => {
         const originalStrategy = await getOrchestrationStrategy();
-        const executionModel = await getAvailableCopilotModel();
+        const executionModel = await getAvailableHookCompatibleModel();
         const hookModel = executionModel;
         let subscription:
           | {
@@ -517,8 +639,10 @@ describe("lifecycle hooks integration", () => {
               close: () => void;
             }
           | undefined;
+        let leaseCleanup: { leaseId: string; createdByTest: boolean } | undefined;
 
         try {
+          leaseCleanup = await ensurePaidExecutionLease();
           await updateOrchestrationStrategy({
             ...originalStrategy,
             categoryAgentMap: Object.fromEntries(
@@ -578,6 +702,97 @@ describe("lifecycle hooks integration", () => {
           );
         } finally {
           subscription?.close();
+          if (leaseCleanup?.createdByTest) {
+            await revokePaidExecutionLease(leaseCleanup.leaseId).catch(() => undefined);
+          }
+          await updateOrchestrationStrategy(originalStrategy);
+        }
+      });
+    },
+  );
+
+  executionIntegrationTest(
+    "persists costRecords and agent audits for real test-model hook execution",
+    async () => {
+      await withStrategyLock(async () => {
+        const originalStrategy = await getOrchestrationStrategy();
+        const executionModel = await getAvailableHookCompatibleModel();
+        let leaseCleanup: { leaseId: string; createdByTest: boolean } | undefined;
+
+        try {
+          leaseCleanup = await ensurePaidExecutionLease();
+          await updateOrchestrationStrategy({
+            ...originalStrategy,
+            categoryAgentMap: Object.fromEntries(
+              Object.keys(originalStrategy.categoryAgentMap).map((key) => [key, ["default-executor"]]),
+            ),
+            hooks: [
+              {
+                id: "pre-execution-cost-test",
+                trigger: "pre-execution",
+                enabled: true,
+                agent: "default-executor",
+                model: executionModel,
+                timeoutMs: 15000,
+                promptTemplate: [
+                  "Pre-execution reviewer for OpenerX task.",
+                  "Task title: {{taskTitle}}",
+                  "Task prompt:",
+                  "{{taskPrompt}}",
+                ].join("\n"),
+                order: 0,
+              },
+              {
+                id: "post-execution-cost-test",
+                trigger: "post-execution",
+                enabled: true,
+                agent: "default-executor",
+                model: executionModel,
+                timeoutMs: 15000,
+                promptTemplate: [
+                  "Post-execution reviewer for OpenerX task.",
+                  "Task title: {{taskTitle}}",
+                  "Execution result:",
+                  "{{taskResult}}",
+                ].join("\n"),
+                order: 1,
+              },
+            ],
+          });
+
+          const taskId = await createTask(
+            `hook-cost-audit-${Date.now()}`,
+            "Quick brief reply only. Do not inspect the repository or call tools. Reply with exactly one line: OK.",
+            {
+              selectedModel: executionModel,
+            },
+          );
+          await executeTask(taskId);
+
+          const { strategy } = await waitForTaskStrategy(
+            taskId,
+            (currentStrategy, task) => {
+              const hookExecutions = currentStrategy.hookExecutions || [];
+              const hasPre = hookExecutions.some((hook) => hook.trigger === "pre-execution");
+              const hasPost = hookExecutions.some((hook) => hook.trigger === "post-execution");
+              return task.status === "completed" && hasPre && hasPost;
+            },
+            180000,
+          );
+
+          const preExecution = strategy.hookExecutions?.find((hook) => hook.trigger === "pre-execution");
+          const postExecution = strategy.hookExecutions?.find((hook) => hook.trigger === "post-execution");
+          expect(preExecution?.completedAt).toBeTruthy();
+          expect(postExecution?.completedAt).toBeTruthy();
+
+          const { costDetail, taskAudits } = await waitForCostAndAgentAudit(taskId);
+
+          expect(costDetail.records.some((record) => record.taskId === taskId)).toBe(true);
+          expect(taskAudits.some((event) => event.action === "completed")).toBe(true);
+        } finally {
+          if (leaseCleanup?.createdByTest) {
+            await revokePaidExecutionLease(leaseCleanup.leaseId).catch(() => undefined);
+          }
           await updateOrchestrationStrategy(originalStrategy);
         }
       });

@@ -26,7 +26,9 @@ const apiMocks = vi.hoisted(() => ({
   getOrchestrationStrategy: vi.fn(),
   createTask: vi.fn(),
   executeTask: vi.fn(),
+  getTaskExecutionPreflight: vi.fn(),
   getTask: vi.fn(),
+  updateTask: vi.fn(),
   updateTaskStatus: vi.fn(),
 }));
 
@@ -254,7 +256,52 @@ async function mountPage(tasks = [makeTask()]) {
   });
   apiMocks.createTask.mockResolvedValue({ id: "task-created" });
   apiMocks.executeTask.mockResolvedValue({});
+  apiMocks.getTaskExecutionPreflight.mockResolvedValue({
+    taskId: "task-created",
+    allowed: true,
+    effectiveModel: "github-copilot:gpt-5-mini",
+    activeLease: null,
+    policy: {
+      providerId: "github-copilot",
+      modelId: "gpt-5-mini",
+      modelRoute: "github-copilot:gpt-5-mini",
+      environment: "dev",
+      costTier: "free",
+      isPaid: false,
+      defaultDecision: "allow",
+      maxRequestsPerRun: 20,
+      maxEstimatedCostUsdPerRun: 0,
+      maxParallelCandidates: 4,
+      allowJudge: true,
+      allowHooks: true,
+      requiresExplicitGate: false,
+      requiresLease: false,
+      suggestedModel: undefined,
+    },
+    requirements: {
+      allowPaidExecution: false,
+      leaseRequired: false,
+      hasAllowPaidExecution: true,
+      hasLease: false,
+      leaseId: null,
+    },
+    preflight: {
+      providerId: "github-copilot",
+      modelId: "gpt-5-mini",
+      requestCount: { min: 1, max: 1 },
+      inputTokens: { min: 1, max: 1 },
+      outputTokens: { min: 1, max: 1 },
+      totalTokens: { min: 2, max: 2 },
+      costUsd: { min: 0, max: 0 },
+      riskDrivers: [],
+      budgetHeadroom: { remainingUsd: null, enoughForSingleRun: true, enoughForSuiteRun: true },
+      guardDecision: "allow",
+      guardReason: "ok",
+      generatedAt: "2026-03-10T00:00:00.000Z",
+    },
+  });
   apiMocks.getTask.mockResolvedValue(makeTask({ id: "task-created", status: "running" }));
+  apiMocks.updateTask.mockResolvedValue({});
   apiMocks.updateTaskStatus.mockResolvedValue({});
 
   const wrapper = mount(Tasks, {
@@ -327,9 +374,116 @@ describe("Tasks page", () => {
     await state.handleExecute("task-exec");
     await flushPromises();
 
+    expect(apiMocks.getTaskExecutionPreflight).toHaveBeenCalledWith("task-exec");
     expect(apiMocks.executeTask).toHaveBeenCalledWith("task-exec");
     expect(apiMocks.getTask).toHaveBeenCalledWith("task-exec");
     expect(apiMocks.listTasks).toHaveBeenCalledTimes(2);
+  });
+
+  it("downgrades model and retries when preflight asks for allow-with-downgrade", async () => {
+    vi.spyOn(window, "confirm").mockReturnValueOnce(true);
+    apiMocks.getTaskExecutionPreflight
+      .mockResolvedValueOnce({
+        taskId: "task-exec",
+        allowed: false,
+        effectiveModel: "github-copilot:gpt-5.4",
+        activeLease: null,
+        policy: {
+          providerId: "github-copilot",
+          modelId: "gpt-5.4",
+          modelRoute: "github-copilot:gpt-5.4",
+          environment: "dev",
+          costTier: "premium",
+          isPaid: true,
+          defaultDecision: "require-approval",
+          maxRequestsPerRun: 2,
+          maxEstimatedCostUsdPerRun: 5,
+          maxParallelCandidates: 1,
+          allowJudge: false,
+          allowHooks: false,
+          requiresExplicitGate: true,
+          requiresLease: true,
+          suggestedModel: "github-copilot:gpt-5-mini",
+        },
+        requirements: {
+          allowPaidExecution: true,
+          leaseRequired: false,
+          hasAllowPaidExecution: true,
+          hasLease: false,
+          leaseId: null,
+        },
+        preflight: {
+          providerId: "github-copilot",
+          modelId: "gpt-5.4",
+          requestCount: { min: 1, max: 2 },
+          inputTokens: { min: 1, max: 2 },
+          outputTokens: { min: 1, max: 2 },
+          totalTokens: { min: 2, max: 4 },
+          costUsd: { min: 1, max: 2 },
+          riskDrivers: [],
+          budgetHeadroom: { remainingUsd: 0, enoughForSingleRun: false, enoughForSuiteRun: false },
+          guardDecision: "allow-with-downgrade",
+          guardReason: "Retry with github-copilot:gpt-5-mini",
+          generatedAt: "2026-03-10T00:00:00.000Z",
+        },
+      })
+      .mockResolvedValueOnce({
+        taskId: "task-exec",
+        allowed: true,
+        effectiveModel: "github-copilot:gpt-5-mini",
+        activeLease: null,
+        policy: {
+          providerId: "github-copilot",
+          modelId: "gpt-5-mini",
+          modelRoute: "github-copilot:gpt-5-mini",
+          environment: "dev",
+          costTier: "free",
+          isPaid: false,
+          defaultDecision: "allow",
+          maxRequestsPerRun: 20,
+          maxEstimatedCostUsdPerRun: 0,
+          maxParallelCandidates: 4,
+          allowJudge: true,
+          allowHooks: true,
+          requiresExplicitGate: false,
+          requiresLease: false,
+          suggestedModel: undefined,
+        },
+        requirements: {
+          allowPaidExecution: false,
+          leaseRequired: false,
+          hasAllowPaidExecution: true,
+          hasLease: false,
+          leaseId: null,
+        },
+        preflight: {
+          providerId: "github-copilot",
+          modelId: "gpt-5-mini",
+          requestCount: { min: 1, max: 1 },
+          inputTokens: { min: 1, max: 1 },
+          outputTokens: { min: 1, max: 1 },
+          totalTokens: { min: 2, max: 2 },
+          costUsd: { min: 0, max: 0 },
+          riskDrivers: [],
+          budgetHeadroom: { remainingUsd: null, enoughForSingleRun: true, enoughForSuiteRun: true },
+          guardDecision: "allow",
+          guardReason: "ok",
+          generatedAt: "2026-03-10T00:00:00.000Z",
+        },
+      });
+
+    const wrapper = await mountPage([makeTask({ id: "task-exec", status: "pending" })]);
+
+    const state = getSetupState(wrapper) as {
+      handleExecute: (taskId: string) => Promise<void>;
+    };
+    await state.handleExecute("task-exec");
+    await flushPromises();
+
+    expect(apiMocks.updateTask).toHaveBeenCalledWith("task-exec", {
+      selectedModel: "github-copilot:gpt-5-mini",
+    });
+    expect(apiMocks.executeTask).toHaveBeenCalledWith("task-exec");
   });
 
   it("keeps locally created task in running state when immediate execute settles after list refresh", async () => {

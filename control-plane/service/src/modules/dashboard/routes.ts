@@ -1,7 +1,7 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, lt } from "drizzle-orm";
 import { Hono } from "hono";
 import { db } from "../../db";
-import { agentRuns, auditEvents, projects, tasks } from "../../db/schema";
+import { agentRuns, auditEvents, paidExecutionLeases, projects, runtimeUsageLedgers, tasks } from "../../db/schema";
 import { type AppEnv, type JWTPayload, authMiddleware } from "../../middleware/auth";
 import { requireRole } from "../../middleware/rbac";
 
@@ -150,6 +150,58 @@ interface SummaryResponse {
   monthlyTotals?: Array<{ month: string; tokenUsed: number; completedRuns: number }>;
 }
 
+interface GovernanceTopRiskTaskItem {
+  taskId: string;
+  projectId: string;
+  title: string;
+  runtimeSessionId: string | null;
+  requestCount: number;
+  totalTokens: number;
+  costUsd: number;
+  blockedCount: number;
+  breakerCount: number;
+  judgeRequestCount: number;
+  hookRequestCount: number;
+  parallelCandidateCount: number;
+  riskScore: number;
+  dominantDriver: string;
+  lastGuardDecision: string | null;
+  lastGuardReason: string | null;
+  lastBreakerReason: string | null;
+  lastActivityAt: string | null;
+}
+
+interface GovernanceRecentEventItem {
+  id: string;
+  projectId: string;
+  taskId: string | null;
+  title: string;
+  runtimeSessionId: string | null;
+  eventKind: "guard" | "breaker";
+  action: string;
+  guardDecision: string | null;
+  reason: string | null;
+  occurredAt: string;
+}
+
+interface GovernanceOverviewResponse {
+  range: DashboardRange;
+  generatedAt: string;
+  summary: {
+    blockedCount: number;
+    breakerCount: number;
+    activeLeaseCount: number;
+    topRiskTaskCount: number;
+  };
+  topRiskTasks: GovernanceTopRiskTaskItem[];
+  recentEvents: GovernanceRecentEventItem[];
+}
+
+interface MutableGovernanceTopRiskTaskItem extends GovernanceTopRiskTaskItem {
+  lastGuardAuditAtMs: number | null;
+  lastBreakerAuditAtMs: number | null;
+}
+
 function parseDateMs(value?: string | null): number | null {
   if (!value) return null;
   const parsed = Date.parse(value);
@@ -259,6 +311,30 @@ function getRangeBounds(range: DashboardRange, nowMs: number) {
 
 function toIso(value: number | null) {
   return value == null ? null : new Date(value).toISOString();
+}
+
+function dominantGovernanceDriver(args: {
+  blockedCount: number;
+  breakerCount: number;
+  judgeRequestCount: number;
+  hookRequestCount: number;
+  parallelCandidateCount: number;
+  costUsd: number;
+}) {
+  if (args.breakerCount > 0) return "breaker";
+  if (args.blockedCount > 0) return "blocked";
+
+  const amplificationCandidates = [
+    { label: "parallel", score: args.parallelCandidateCount },
+    { label: "hook", score: args.hookRequestCount },
+    { label: "judge", score: args.judgeRequestCount },
+  ].sort((left, right) => right.score - left.score);
+
+  if ((amplificationCandidates[0]?.score ?? 0) > 0) {
+    return amplificationCandidates[0]?.label || "cost";
+  }
+
+  return "cost";
 }
 
 function resolveRunTimestampMs(run: RunRecord) {
@@ -706,4 +782,267 @@ dashboardRoutes.get("/provider-tokens", async (c) => {
     summary,
     providers: providerItems,
   });
+});
+
+dashboardRoutes.get("/governance-overview", async (c) => {
+  const user = c.get("user") as JWTPayload;
+  const range = parseRange(c.req.query("range"));
+  const nowMs = Date.now();
+  const bounds = getRangeBounds(range, nowMs);
+  const accessibleProjectIds = getAccessibleProjectIds(user);
+
+  const projectRows = await db.query.projects.findMany({
+    where: accessibleProjectIds == null ? undefined : inArray(projects.id, accessibleProjectIds),
+    orderBy: [asc(projects.createdAt)],
+  });
+  const projectIds = projectRows.map((project) => project.id);
+
+  if (projectIds.length === 0) {
+    const empty: GovernanceOverviewResponse = {
+      range,
+      generatedAt: new Date(nowMs).toISOString(),
+      summary: {
+        blockedCount: 0,
+        breakerCount: 0,
+        activeLeaseCount: 0,
+        topRiskTaskCount: 0,
+      },
+      topRiskTasks: [],
+      recentEvents: [],
+    };
+    return c.json(empty);
+  }
+
+  const startIso = new Date(bounds.currentStartMs).toISOString();
+  const endIso = new Date(bounds.currentEndMs).toISOString();
+  const nowIso = new Date(nowMs).toISOString();
+
+  const [ledgers, audits, activeLeases] = await Promise.all([
+    db.query.runtimeUsageLedgers.findMany({
+      where: and(
+        inArray(runtimeUsageLedgers.projectId, projectIds),
+        gte(runtimeUsageLedgers.createdAt, startIso),
+        lt(runtimeUsageLedgers.createdAt, endIso),
+      ),
+      orderBy: [desc(runtimeUsageLedgers.createdAt)],
+    }),
+    db.query.auditEvents.findMany({
+      where: and(
+        inArray(auditEvents.projectId, projectIds),
+        eq(auditEvents.eventType, "paid_execution"),
+        gte(auditEvents.ts, startIso),
+        lt(auditEvents.ts, endIso),
+      ),
+      orderBy: [desc(auditEvents.ts)],
+    }),
+    db.query.paidExecutionLeases.findMany({
+      where: and(
+        inArray(paidExecutionLeases.projectId, projectIds),
+        eq(paidExecutionLeases.status, "active"),
+        gte(paidExecutionLeases.expiresAt, nowIso),
+      ),
+    }),
+  ]);
+
+  const relevantTaskIds = Array.from(
+    new Set([
+      ...ledgers.map((ledger) => ledger.taskId).filter((taskId): taskId is string => Boolean(taskId)),
+      ...audits.map((audit) => audit.taskId).filter((taskId): taskId is string => Boolean(taskId)),
+    ]),
+  );
+  const taskRows = relevantTaskIds.length > 0
+    ? await db.query.tasks.findMany({
+        where: inArray(tasks.id, relevantTaskIds),
+      })
+    : [];
+  const taskById = new Map(taskRows.map((task) => [task.id, task]));
+
+  const recentEvents: GovernanceRecentEventItem[] = audits
+    .filter((audit) => {
+      const detail = (audit.detail || {}) as Record<string, unknown>;
+      return audit.action === "breaker_tripped"
+        || audit.action.includes("blocked")
+        || typeof detail.guardDecision === "string"
+        || typeof detail.guardReason === "string"
+        || typeof detail.breakerReason === "string";
+    })
+    .map((audit) => {
+      const detail = (audit.detail || {}) as Record<string, unknown>;
+      const task = audit.taskId ? taskById.get(audit.taskId) : undefined;
+      const eventKind = audit.action === "breaker_tripped" ? "breaker" as const : "guard" as const;
+      const reason = eventKind === "breaker"
+        ? (typeof detail.breakerReason === "string"
+          ? detail.breakerReason
+          : (typeof detail.reason === "string" ? detail.reason : null))
+        : (typeof detail.guardReason === "string"
+          ? detail.guardReason
+          : (typeof detail.reason === "string" ? detail.reason : null));
+
+      return {
+        id: audit.id,
+        projectId: audit.projectId || task?.projectId || "",
+        taskId: audit.taskId || null,
+        title: task?.title || audit.taskId || audit.projectId || "未关联任务",
+        runtimeSessionId: typeof audit.sessionId === "string" ? audit.sessionId : null,
+        eventKind,
+        action: audit.action,
+        guardDecision: typeof detail.guardDecision === "string" ? detail.guardDecision : null,
+        reason,
+        occurredAt: audit.ts,
+      };
+    })
+    .slice(0, 8);
+
+  const topRiskTasks = new Map<string, MutableGovernanceTopRiskTaskItem>();
+  for (const ledger of ledgers) {
+    if (!ledger.taskId) continue;
+    const task = taskById.get(ledger.taskId);
+    const existing = topRiskTasks.get(ledger.taskId) || {
+      taskId: ledger.taskId,
+      projectId: ledger.projectId,
+      title: task?.title || ledger.taskId,
+      runtimeSessionId: ledger.runtimeSessionId || null,
+      requestCount: 0,
+      totalTokens: 0,
+      costUsd: 0,
+      blockedCount: 0,
+      breakerCount: 0,
+      judgeRequestCount: 0,
+      hookRequestCount: 0,
+      parallelCandidateCount: 0,
+      riskScore: 0,
+      dominantDriver: "cost",
+      lastGuardDecision: null,
+      lastGuardReason: null,
+      lastBreakerReason: null,
+      lastActivityAt: ledger.finishedAt || ledger.updatedAt || ledger.createdAt || null,
+      lastGuardAuditAtMs: null,
+      lastBreakerAuditAtMs: null,
+    };
+
+    existing.requestCount += ledger.requestCount;
+    existing.totalTokens += ledger.totalTokens;
+    existing.costUsd = Number((existing.costUsd + ledger.costUsd).toFixed(4));
+    existing.judgeRequestCount += ledger.judgeRequestCount;
+    existing.hookRequestCount += ledger.hookRequestCount;
+    if ((ledger.candidateCount ?? 1) > 1) {
+      existing.parallelCandidateCount += Math.max(0, ledger.candidateCount - 1);
+    }
+    existing.runtimeSessionId = existing.runtimeSessionId || ledger.runtimeSessionId || null;
+    existing.lastActivityAt = existing.lastActivityAt && ledger.finishedAt
+      ? (Date.parse(existing.lastActivityAt) >= Date.parse(ledger.finishedAt) ? existing.lastActivityAt : ledger.finishedAt)
+      : (existing.lastActivityAt || ledger.finishedAt || ledger.updatedAt || ledger.createdAt || null);
+    topRiskTasks.set(ledger.taskId, existing);
+  }
+
+  let blockedCount = 0;
+  let breakerCount = 0;
+  for (const audit of audits) {
+    const taskId = audit.taskId;
+    if (audit.action.includes("blocked")) {
+      blockedCount += 1;
+    }
+    if (audit.action === "breaker_tripped") {
+      breakerCount += 1;
+    }
+    if (!taskId) continue;
+
+    const task = taskById.get(taskId);
+    const existing = topRiskTasks.get(taskId) || {
+      taskId,
+      projectId: audit.projectId || task?.projectId || "",
+      title: task?.title || taskId,
+      runtimeSessionId: typeof audit.sessionId === "string" ? audit.sessionId : null,
+      requestCount: 0,
+      totalTokens: 0,
+      costUsd: 0,
+      blockedCount: 0,
+      breakerCount: 0,
+      judgeRequestCount: 0,
+      hookRequestCount: 0,
+      parallelCandidateCount: 0,
+      riskScore: 0,
+      dominantDriver: "blocked",
+      lastGuardDecision: null,
+      lastGuardReason: null,
+      lastBreakerReason: null,
+      lastActivityAt: audit.ts,
+      lastGuardAuditAtMs: null,
+      lastBreakerAuditAtMs: null,
+    };
+
+    const detail = (audit.detail || {}) as Record<string, unknown>;
+    const auditTsMs = parseDateMs(audit.ts);
+    if (audit.action.includes("blocked")) {
+      existing.blockedCount += 1;
+    }
+    if (audit.action === "breaker_tripped") {
+      existing.breakerCount += 1;
+      if (
+        auditTsMs != null
+        && (existing.lastBreakerAuditAtMs == null || auditTsMs >= existing.lastBreakerAuditAtMs)
+      ) {
+        existing.lastBreakerReason = typeof detail.breakerReason === "string"
+          ? detail.breakerReason
+          : (typeof detail.reason === "string" ? detail.reason : null);
+        existing.lastBreakerAuditAtMs = auditTsMs;
+      }
+    }
+
+    const isGuardAudit = audit.action.includes("blocked")
+      || typeof detail.guardDecision === "string"
+      || typeof detail.guardReason === "string";
+    if (
+      isGuardAudit
+      && auditTsMs != null
+      && (existing.lastGuardAuditAtMs == null || auditTsMs >= existing.lastGuardAuditAtMs)
+    ) {
+      existing.lastGuardDecision = typeof detail.guardDecision === "string" ? detail.guardDecision : null;
+      existing.lastGuardReason = typeof detail.guardReason === "string" ? detail.guardReason : null;
+      existing.lastGuardAuditAtMs = auditTsMs;
+    }
+    existing.lastActivityAt = existing.lastActivityAt && audit.ts
+      ? (Date.parse(existing.lastActivityAt) >= Date.parse(audit.ts) ? existing.lastActivityAt : audit.ts)
+      : (existing.lastActivityAt || audit.ts || null);
+
+    topRiskTasks.set(taskId, existing);
+  }
+
+  const rankedTopRiskTasks = Array.from(topRiskTasks.values())
+    .map((item) => ({
+      ...item,
+      riskScore: item.blockedCount * 5
+        + item.breakerCount * 7
+        + item.parallelCandidateCount
+        + item.judgeRequestCount
+        + item.hookRequestCount
+        + Math.min(10, Math.round(item.costUsd * 10))
+        + Math.round(item.requestCount / 2),
+    }))
+    .map((item) => ({
+      ...item,
+      dominantDriver: dominantGovernanceDriver(item),
+    }))
+    .sort((left, right) => {
+      if (right.riskScore !== left.riskScore) return right.riskScore - left.riskScore;
+      if (right.costUsd !== left.costUsd) return right.costUsd - left.costUsd;
+      return right.requestCount - left.requestCount;
+    })
+    .map(({ lastGuardAuditAtMs: _lastGuardAuditAtMs, lastBreakerAuditAtMs: _lastBreakerAuditAtMs, ...item }) => item)
+    .slice(0, 5);
+
+  const response: GovernanceOverviewResponse = {
+    range,
+    generatedAt: new Date(nowMs).toISOString(),
+    summary: {
+      blockedCount,
+      breakerCount,
+      activeLeaseCount: activeLeases.length,
+      topRiskTaskCount: rankedTopRiskTasks.length,
+    },
+    topRiskTasks: rankedTopRiskTasks,
+    recentEvents,
+  };
+
+  return c.json(response);
 });

@@ -29,6 +29,7 @@ const realtimeState = reactive(realtimeBase);
 
 const apiMocks = vi.hoisted(() => ({
   continueTask: vi.fn(),
+  getProjectRuntimeUsageLedgers: vi.fn(),
   getProjectRoleExecutionView: vi.fn(),
   getSessionMessages: vi.fn(),
   getSessionTree: vi.fn(),
@@ -370,6 +371,43 @@ beforeEach(() => {
     approvalRequired: false,
     violations: [],
   });
+  apiMocks.getProjectRuntimeUsageLedgers.mockResolvedValue({
+    projectId: "proj-1",
+    totals: {
+      ledgerCount: 1,
+      requestCount: 3,
+      stepCount: 3,
+      inputTokens: 800,
+      outputTokens: 400,
+      totalTokens: 1200,
+      costUsd: 0.48,
+    },
+    items: [
+      {
+        id: "ledger-1",
+        projectId: "proj-1",
+        taskId: "task-1",
+        runtimeSessionId: "ses-1",
+        executionSource: "task-run",
+        entrypointType: "dashboard",
+        requestCount: 3,
+        stepCount: 3,
+        inputTokens: 800,
+        outputTokens: 400,
+        totalTokens: 1200,
+        costUsd: 0.48,
+        candidateCount: 1,
+        judgeRequestCount: 0,
+        hookRequestCount: 0,
+        status: "completed",
+        startedAt: "2026-03-10T12:00:10.000Z",
+        finishedAt: "2026-03-10T12:01:00.000Z",
+        syncedAt: "2026-03-10T12:01:05.000Z",
+        createdAt: "2026-03-10T12:01:05.000Z",
+        updatedAt: "2026-03-10T12:01:05.000Z",
+      },
+    ],
+  });
   apiMocks.updateTask.mockResolvedValue({ selectedModel: "gpt-5.3-codex" });
 });
 
@@ -526,6 +564,148 @@ describe("TaskDetail", () => {
     expect(apiMocks.getProjectRoleExecutionView).toHaveBeenCalledWith("proj-1");
     expect(wrapper.text()).toContain("项目角色配置");
     expect(wrapper.text()).toContain("角色实际介入记录");
+  });
+
+  it("renders task runtime usage ledger summary in governance panel", async () => {
+    apiMocks.getTask.mockResolvedValueOnce(makeTask());
+
+    const wrapper = await mountPage();
+    const setupState = getSetupState(wrapper);
+    await flushPromises();
+
+    expect(apiMocks.getProjectRuntimeUsageLedgers).toHaveBeenCalledWith("proj-1", {
+      limit: 12,
+      taskId: "task-1",
+    });
+    expect(readSetupValue<Array<{ label: string; value: string }>>(setupState, "taskRuntimeUsageSummaryItems")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ label: "账本批次", value: "1" }),
+        expect.objectContaining({ label: "总成本", value: "$0.4800" }),
+        expect.objectContaining({ label: "当前分支账本", value: "ses-1 · $0.4800" }),
+      ]),
+    );
+    expect(readSetupValue<{ runtimeSessionId: string; executionSource: string; entrypointType: string } | null>(
+      setupState,
+      "focusedTaskRuntimeLedger",
+    )).toMatchObject({
+      runtimeSessionId: "ses-1",
+      executionSource: "task-run",
+      entrypointType: "dashboard",
+    });
+  });
+
+  it("focuses runtime usage summary by routed ledger id", async () => {
+    routeState.query = {
+      session: "ses-branch",
+      runtimeLedger: "ledger-focused",
+    };
+    apiMocks.getTask.mockResolvedValueOnce(
+      makeTaskWithOverrides({
+        sessionId: "ses-root",
+        status: "running",
+      }),
+    );
+    apiMocks.getTaskSessions.mockResolvedValueOnce({
+      data: [
+        {
+          id: "ses-root",
+          title: "主分支",
+          isActive: false,
+          summary: null,
+          createdAt: "2026-03-10T12:00:00.000Z",
+          updatedAt: "2026-03-10T12:01:00.000Z",
+        },
+        {
+          id: "ses-branch",
+          title: "特性分支",
+          isActive: true,
+          summary: null,
+          createdAt: "2026-03-10T12:02:00.000Z",
+          updatedAt: "2026-03-10T12:03:00.000Z",
+        },
+      ],
+    });
+    apiMocks.getProjectRuntimeUsageLedgers.mockResolvedValueOnce({
+      projectId: "proj-1",
+      totals: {
+        ledgerCount: 2,
+        requestCount: 5,
+        stepCount: 5,
+        inputTokens: 1200,
+        outputTokens: 600,
+        totalTokens: 1800,
+        costUsd: 0.75,
+      },
+      items: [
+        {
+          id: "ledger-other",
+          projectId: "proj-1",
+          taskId: "task-1",
+          runtimeSessionId: "ses-root",
+          executionSource: "task-run",
+          entrypointType: "project",
+          requestCount: 2,
+          stepCount: 2,
+          inputTokens: 400,
+          outputTokens: 200,
+          totalTokens: 600,
+          costUsd: 0.2,
+          candidateCount: 1,
+          judgeRequestCount: 0,
+          hookRequestCount: 0,
+          status: "completed",
+          startedAt: "2026-03-10T12:00:10.000Z",
+          finishedAt: "2026-03-10T12:00:40.000Z",
+          syncedAt: "2026-03-10T12:00:41.000Z",
+          createdAt: "2026-03-10T12:00:41.000Z",
+          updatedAt: "2026-03-10T12:00:41.000Z",
+        },
+        {
+          id: "ledger-focused",
+          projectId: "proj-1",
+          taskId: "task-1",
+          runtimeSessionId: "ses-branch",
+          executionSource: "workflow-evaluation",
+          entrypointType: "dashboard",
+          requestCount: 3,
+          stepCount: 3,
+          inputTokens: 800,
+          outputTokens: 400,
+          totalTokens: 1200,
+          costUsd: 0.55,
+          candidateCount: 1,
+          judgeRequestCount: 1,
+          hookRequestCount: 0,
+          status: "completed",
+          startedAt: "2026-03-10T12:02:10.000Z",
+          finishedAt: "2026-03-10T12:03:00.000Z",
+          syncedAt: "2026-03-10T12:03:01.000Z",
+          createdAt: "2026-03-10T12:03:01.000Z",
+          updatedAt: "2026-03-10T12:03:01.000Z",
+        },
+      ],
+    });
+
+    const wrapper = await mountPage();
+    const setupState = getSetupState(wrapper);
+    await flushPromises();
+
+    expect(readSetupValue<Array<{ label: string; value: string }>>(setupState, "taskRuntimeUsageSummaryItems")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ label: "定位账本", value: "ses-branch · $0.5500" }),
+      ]),
+    );
+    expect(readSetupValue<{ id: string; runtimeSessionId: string; executionSource: string; entrypointType: string; totalTokens: number; costUsd: number } | null>(
+      setupState,
+      "focusedTaskRuntimeLedger",
+    )).toMatchObject({
+      id: "ledger-focused",
+      runtimeSessionId: "ses-branch",
+      executionSource: "workflow-evaluation",
+      entrypointType: "dashboard",
+      totalTokens: 1200,
+      costUsd: 0.55,
+    });
   });
 
   it("renders workflow fact sections with involved roles, pending items and governance summary", async () => {

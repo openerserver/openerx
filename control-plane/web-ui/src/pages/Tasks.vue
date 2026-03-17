@@ -28,8 +28,8 @@
           <template #icon><SyncOutlined :spin="!!autoRefreshTimer" /></template>
           {{ autoRefreshTimer ? '自动刷新中' : '刷新' }}
         </a-button>
-        <a-button v-if="projectStore.currentProjectId" @click="router.push(`/projects/${projectStore.currentProjectId}/operating-mode-launcher`)">
-          场景推荐入口
+        <a-button v-if="projectStore.currentProjectId" @click="router.push(`/projects/${projectStore.currentProjectId}/recommended-scenarios`)">
+          推荐场景
         </a-button>
         <a-button v-if="projectStore.currentProjectId" @click="router.push(`/projects/${projectStore.currentProjectId}/task-graph`)">
           任务总图
@@ -178,7 +178,7 @@
               </a-typography-text>
               <a-space wrap>
                 <a-button v-if="projectStore.currentProjectId" size="small" @click="openScenarioLauncher">
-                  打开场景推荐入口
+                  打开推荐场景
                 </a-button>
                 <a-button v-if="createForm.operatingMode" size="small" @click="clearOperatingModeSelection">
                   清空临时档位
@@ -424,10 +424,11 @@ import { message } from "ant-design-vue";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
-  type ApiError,
+  ApiError,
   type CollaborationMode,
   type CommandSummary,
   getOrchestrationStrategy,
+  getTaskExecutionPreflight,
   type OperatingModeSelection,
   type Repository,
   type RepositoryCredential,
@@ -444,6 +445,7 @@ import {
   listCredentials,
   listRepositories,
   listTasks,
+  updateTask,
   updateTaskStatus,
 } from "../lib/api";
 import { showRuntimeRecoveryNotice } from "../lib/runtime-recovery";
@@ -802,19 +804,15 @@ async function autoExecuteCreatedTask(taskId?: string) {
   }
 
   try {
-    await executeTask(taskId);
-    upsertTaskSnapshot({
-      id: taskId,
-      status: "running",
-      startedAt: new Date().toISOString(),
-    });
-
-    const latestTask = await waitForExecutionState(taskId);
-    if (latestTask) {
-      upsertTaskSnapshot(latestTask);
+    const latestTask = await attemptTaskExecution(taskId, true);
+    if (latestTask === null) {
+      return undefined;
     }
 
     message.success("Agent 已开始执行");
+    if (latestTask) {
+      upsertTaskSnapshot(latestTask);
+    }
     return latestTask;
   } catch (e) {
     if (
@@ -830,6 +828,58 @@ async function autoExecuteCreatedTask(taskId?: string) {
     }
     return undefined;
   }
+}
+
+async function runTaskExecution(taskId: string) {
+  await executeTask(taskId);
+  upsertTaskSnapshot({
+    id: taskId,
+    status: "running",
+    startedAt: new Date().toISOString(),
+  });
+
+  return waitForExecutionState(taskId);
+}
+
+async function attemptTaskExecution(taskId: string, fromAutoCreate = false) {
+  const preflight = await getTaskExecutionPreflight(taskId);
+  if (preflight.allowed) {
+    return runTaskExecution(taskId);
+  }
+
+  if (
+    preflight.preflight.guardDecision === "allow-with-downgrade"
+    && preflight.policy.suggestedModel
+  ) {
+    const confirmed = window.confirm(
+      `当前模型需要先降级后才能执行。\n\n建议切换到 ${preflight.policy.suggestedModel} 并立即重试。\n\n原因：${preflight.preflight.guardReason}`,
+    );
+
+    if (!confirmed) {
+      return null;
+    }
+
+    await updateTask(taskId, { selectedModel: preflight.policy.suggestedModel });
+    upsertTaskSnapshot({ id: taskId, selectedModel: preflight.policy.suggestedModel });
+
+    const retriedPreflight = await getTaskExecutionPreflight(taskId);
+    if (!retriedPreflight.allowed) {
+      throw new ApiError({
+        error: retriedPreflight.preflight.guardReason,
+        code: retriedPreflight.preflight.guardDecision,
+        status: 409,
+      });
+    }
+
+    message.success(fromAutoCreate ? "已自动降级模型并重试执行" : "已切换到低成本模型，正在重试执行");
+    return runTaskExecution(taskId);
+  }
+
+  throw new ApiError({
+    error: preflight.preflight.guardReason,
+    code: preflight.preflight.guardDecision,
+    status: preflight.preflight.guardDecision === "allow-with-downgrade" ? 409 : 403,
+  });
 }
 
 function resetCreateForm() {
@@ -850,7 +900,7 @@ function openScenarioLauncher() {
     message.warning("请先选择项目");
     return;
   }
-  void router.push(`/projects/${projectStore.currentProjectId}/operating-mode-launcher`);
+  void router.push(`/projects/${projectStore.currentProjectId}/recommended-scenarios`);
 }
 
 function buildScenarioOperatingMode(profile: RecommendedOperatingProfile): OperatingModeSelection {
@@ -1138,14 +1188,11 @@ async function handleCreate() {
 async function handleExecute(taskId: string) {
   executingId.value = taskId;
   try {
-    await executeTask(taskId);
-    upsertTaskSnapshot({
-      id: taskId,
-      status: "running",
-      startedAt: new Date().toISOString(),
-    });
+    const latestTask = await attemptTaskExecution(taskId);
+    if (latestTask === null) {
+      return;
+    }
 
-    const latestTask = await waitForExecutionState(taskId);
     message.success("Agent 已开始执行");
     await refresh();
     if (latestTask) {

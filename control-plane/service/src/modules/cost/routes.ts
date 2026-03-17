@@ -160,6 +160,20 @@ const updateBudgetSchema = z.object({
   throttleThreshold: z.number().min(0).max(1).optional(),
 });
 
+const createCostRecordSchema = z.object({
+  projectId: z.string().min(1),
+  userId: z.string().min(1).optional(),
+  sessionId: z.string().min(1).optional(),
+  taskId: z.string().min(1).optional(),
+  agentRunId: z.string().min(1).optional(),
+  modelId: z.string().min(1),
+  providerId: z.string().min(1),
+  inputTokens: z.number().int().min(0),
+  outputTokens: z.number().int().min(0),
+  cost: z.number().min(0),
+  budgetPeriod: z.enum(["daily", "weekly", "monthly"]).optional(),
+});
+
 costRoutes.post("/budget", zValidator("json", budgetSchema), async (c) => {
   const body = c.req.valid("json");
   const user = c.get("user") as JWTPayload;
@@ -223,6 +237,34 @@ costRoutes.patch("/budget/:budgetId", zValidator("json", updateBudgetSchema), as
     warnThreshold: body.warnThreshold ?? existing.warnThreshold,
     throttleThreshold: body.throttleThreshold ?? existing.throttleThreshold,
   });
+});
+
+costRoutes.post("/records", zValidator("json", createCostRecordSchema), async (c) => {
+  const body = c.req.valid("json");
+  const user = c.get("user") as JWTPayload;
+
+  if (!hasProjectAccess(user, body.projectId, "developer")) {
+    return c.json({ error: "No access to this project" }, 403);
+  }
+
+  const record = {
+    id: crypto.randomUUID(),
+    ts: new Date().toISOString(),
+    projectId: body.projectId,
+    userId: body.userId,
+    sessionId: body.sessionId,
+    taskId: body.taskId,
+    agentRunId: body.agentRunId,
+    modelId: body.modelId,
+    providerId: body.providerId,
+    inputTokens: body.inputTokens,
+    outputTokens: body.outputTokens,
+    cost: body.cost,
+    budgetPeriod: body.budgetPeriod,
+  };
+
+  await db.insert(costRecords).values(record);
+  return c.json(record, 201);
 });
 
 // GET /api/cost/detail?taskId=

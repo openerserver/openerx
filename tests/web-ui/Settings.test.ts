@@ -14,6 +14,7 @@ const apiMocks = vi.hoisted(() => ({
   getMyProfile: vi.fn(),
   updateMyProfile: vi.fn(),
   getModelsConfig: vi.fn(),
+  getModelsTestPolicy: vi.fn(),
   testModelProvider: vi.fn(),
   getConfigOverview: vi.fn(),
   getCopilotStatus: vi.fn(),
@@ -87,6 +88,14 @@ beforeEach(() => {
   routeState.path = "/settings";
   routeState.params = {};
   routeState.query = {};
+  apiMocks.getModelsTestPolicy.mockResolvedValue({
+    data: {
+      configuredModel: "github-copilot:gpt-5-mini",
+      effectiveModel: "github-copilot:gpt-5-mini",
+      allowedModels: ["github-copilot:gpt-5-mini", "github-copilot:gpt-4o"],
+      enforced: true,
+    },
+  });
 });
 
 describe("Settings – profile save", () => {
@@ -362,6 +371,79 @@ describe("Settings – models loading state", () => {
     expect(wrapper.text()).toContain("GitHub Copilot 账号");
     expect(wrapper.text()).not.toContain("还没有 Provider");
     expect(wrapper.text()).not.toContain("还没有模型");
+  });
+});
+
+describe("Settings – test execution model policy", () => {
+  it("persists the enforced test model from settings", async () => {
+    apiMocks.getConfigOverview.mockResolvedValueOnce({
+      data: {
+        agents: [],
+        skills: [],
+        models: {
+          defaults: {
+            model: "github-copilot:gpt-5-mini",
+            testModel: "github-copilot:gpt-5-mini",
+          },
+          list: [
+            {
+              id: "gpt-5-mini",
+              provider: "github-copilot",
+              name: "GPT-5 mini",
+            },
+            {
+              id: "gpt-4o",
+              provider: "github-copilot",
+              name: "GPT-4o",
+            },
+          ],
+        },
+        mcp: {},
+        plugins: [],
+      },
+    });
+    apiMocks.getModelsConfig.mockResolvedValueOnce({
+      data: {
+        defaults: {
+          model: "github-copilot:gpt-5-mini",
+          testModel: "github-copilot:gpt-5-mini",
+        },
+        providers: {},
+        list: [
+          {
+            id: "gpt-5-mini",
+            provider: "github-copilot",
+            name: "GPT-5 mini",
+          },
+          {
+            id: "gpt-4o",
+            provider: "github-copilot",
+            name: "GPT-4o",
+          },
+        ],
+      },
+    });
+    apiMocks.updateModelsConfig.mockResolvedValueOnce({ restartRequired: false });
+
+    const { wrapper } = await mountSettings({ role: "platform_admin" });
+
+    const setupState = (wrapper.vm as { $?: { setupState?: Record<string, unknown> } }).$?.setupState;
+    expect(setupState).toBeTruthy();
+    expect(typeof setupState?.setTestExecutionModelValue).toBe("function");
+    expect(typeof setupState?.saveModels).toBe("function");
+    (setupState?.setTestExecutionModelValue as (value: string) => void)("github-copilot:gpt-4o");
+    await flushPromises();
+
+    await (setupState?.saveModels as () => Promise<void>)();
+    await flushPromises();
+
+    expect(apiMocks.updateModelsConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        defaults: expect.objectContaining({
+          testModel: "github-copilot:gpt-4o",
+        }),
+      }),
+    );
   });
 });
 

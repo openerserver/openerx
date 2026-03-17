@@ -3,13 +3,16 @@ import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import * as schema from "./schema";
 import { ensureRuntimeTables } from "./runtime-schema";
+import { configureSqliteConnection, resolveDatabaseUrl } from "./sqlite-config";
 import { bootstrapDefaultRoleAgents } from "../modules/role-agents/bootstrap";
 
-const DATABASE_URL = process.env.DATABASE_URL || "./data/openerx.db";
+const DATABASE_URL = resolveDatabaseUrl();
 
 const sqlite = new Database(DATABASE_URL, { create: true });
-sqlite.exec("PRAGMA journal_mode = WAL");
-sqlite.exec("PRAGMA foreign_keys = ON");
+configureSqliteConnection(sqlite, {
+  databaseUrl: DATABASE_URL,
+  logPrefix: "[db:seed]",
+});
 ensureRuntimeTables(sqlite);
 
 const db = drizzle(sqlite, { schema });

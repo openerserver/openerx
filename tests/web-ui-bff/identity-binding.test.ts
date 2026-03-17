@@ -11,6 +11,10 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { selectCredentialForIdentity } from "../../control-plane/web-ui-bff/src/modules/tasks/routes";
+import {
+  paidExecutionIntegrationDescribe,
+  resolveExecutionIntegrationModel,
+} from "./execution-integration-guard";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -21,18 +25,11 @@ const USERNAME = process.env.TEST_USERNAME || "admin";
 const PASSWORD = process.env.TEST_PASSWORD || "admin123!";
 const DB_PATH =
   process.env.TEST_DB_PATH || resolve(__dirname, "../../control-plane/service/data/openerx.db");
-const executionIntegrationDescribe =
-  process.env.RUN_EXECUTION_INTEGRATION === "1" ? describe : describe.skip;
+const executionIntegrationDescribe = paidExecutionIntegrationDescribe;
 
 interface ConfigModelRecord {
   id?: string;
   provider?: string;
-}
-
-interface ProjectRecord {
-  settings?: {
-    defaultModel?: string;
-  } | null;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -91,33 +88,12 @@ async function login(): Promise<string> {
 }
 
 async function getAvailableCopilotModel(token: string): Promise<string> {
-  const { data: modelList, status: modelStatus } = await bffRequest<{ data?: ConfigModelRecord[] }>(
-    token,
-    "/api/config/models/list",
-  );
-  if (modelStatus === 200) {
-    const configuredCopilotModel = (modelList.data || []).find(
-      (model) =>
-        typeof model.provider === "string"
-        && model.provider.startsWith("github-copilot")
-        && typeof model.id === "string"
-        && model.id.trim().length > 0,
-    );
-
-    if (configuredCopilotModel?.provider && configuredCopilotModel.id) {
-      return `${configuredCopilotModel.provider}:${configuredCopilotModel.id}`;
-    }
-  }
-
-  const { data: project, status: projectStatus } = await bffRequest<ProjectRecord>(
-    token,
-    `/api/projects/${PROJECT_ID}`,
-  );
-  if (projectStatus === 200 && project.settings?.defaultModel?.startsWith("github-copilot")) {
-    return project.settings.defaultModel;
-  }
-
-  return "github-copilot:claude-sonnet-4";
+  const [{ data: modelList, status: modelStatus }, { data: testPolicy }] = await Promise.all([
+    bffRequest<{ data?: ConfigModelRecord[] }>(token, "/api/config/models/list"),
+    bffRequest<{ data?: { effectiveModel?: string | null } }>(token, "/api/config/models/test-policy"),
+  ]);
+  const configuredModels = modelStatus === 200 ? (modelList.data || []) : [];
+  return resolveExecutionIntegrationModel(configuredModels, testPolicy.data?.effectiveModel);
 }
 
 // ── Cleanup ────────────────────────────────────────────────────────

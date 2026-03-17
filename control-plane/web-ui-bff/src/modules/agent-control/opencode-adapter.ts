@@ -194,18 +194,23 @@ function buildExecutionContext(options?: PromptOptions): string {
 function buildPromptBody(text: string, options?: PromptOptions): Record<string, unknown> {
   const executionContext = buildExecutionContext(options);
   const agent = resolvePromptAgent(options?.agent);
-
-  const modelProvider = options?.model?.providerId || OPENCODE_PROVIDER_ID;
-  const modelId = options?.model?.modelId || OPENCODE_MODEL_ID;
+  const model = resolvePromptModel(options);
 
   return {
     parts: [{ type: "text", text: `${executionContext}${text}` }],
     model: {
-      providerID: modelProvider,
-      modelID: modelId,
+      providerID: model.providerId,
+      modelID: model.modelId,
     },
     ...(agent ? { agent } : {}),
     ...(typeof options?.noReply === "boolean" ? { noReply: options.noReply } : {}),
+  };
+}
+
+function resolvePromptModel(options?: PromptOptions): { providerId: string; modelId: string } {
+  return {
+    providerId: options?.model?.providerId || OPENCODE_PROVIDER_ID,
+    modelId: options?.model?.modelId || OPENCODE_MODEL_ID,
   };
 }
 
@@ -851,16 +856,29 @@ export async function runDetachedPrompt(
   title: string,
   prompt: string,
   options?: PromptOptions & { timeoutMs?: number },
-): Promise<OpencodeResponse & { sessionId?: string; text?: string; completed?: boolean }> {
+): Promise<
+  OpencodeResponse & {
+    sessionId?: string;
+    text?: string;
+    completed?: boolean;
+    tokenUsed?: number;
+    model?: { providerId: string; modelId: string };
+  }
+> {
+  const model = resolvePromptModel(options);
   const sessionResult = await opcall("POST", "/session", { title });
   if (!sessionResult.ok) {
-    return { ok: false, error: sessionResult.error || "Failed to create detached session" };
+    return {
+      ok: false,
+      error: sessionResult.error || "Failed to create detached session",
+      model,
+    };
   }
 
   const sessionData = sessionResult.data as { id?: string; sessionID?: string };
   const sessionId = sessionData.id || sessionData.sessionID;
   if (!sessionId) {
-    return { ok: false, error: "No session ID returned from OpenCode" };
+    return { ok: false, error: "No session ID returned from OpenCode", model };
   }
 
   const promptResult = await opcall(
@@ -873,6 +891,7 @@ export async function runDetachedPrompt(
       ok: false,
       error: promptResult.error || "Detached session created but prompt failed",
       sessionId,
+      model,
     };
   }
 
@@ -882,6 +901,8 @@ export async function runDetachedPrompt(
     sessionId,
     text: result.text,
     completed: result.completed,
+    tokenUsed: result.tokenUsed,
+    model,
   };
 }
 

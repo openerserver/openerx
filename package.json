@@ -13,6 +13,7 @@
     "build:ui": "cd control-plane/web-ui && bun run build",
     "test:service": "cd control-plane/service && bun run test",
     "test:bff": "cd control-plane/web-ui-bff && bun run test",
+    "test:bff:paid-execution-regression": "cd control-plane/web-ui-bff && bun run test:paid-execution:unit",
     "test:bff:chat-settings": "cd control-plane/web-ui-bff && bun test ../../tests/web-ui-bff/chat-settings-routes.test.ts --timeout 120000",
     "test:bff:realtime-regression": "cd control-plane/web-ui-bff && bun run test:realtime-regression",
     "test:bff:execution-integration": "cd control-plane/web-ui-bff && bun run test:integration:execution",

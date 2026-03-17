@@ -270,7 +270,7 @@
 
 任务：
 
-1. 新增 `TaskOperatingModeLauncher.vue` 作为任务创建前置页或独立步骤页
+1. 新增 `RecommendedScenarios.vue` 作为任务创建前置页或独立步骤页
 2. 在该新页面增加“推荐场景”选择器
 3. 选中场景后自动填充协作模式 / 托管等级 / 老板参与方式
 4. 展示推荐原因说明
@@ -771,7 +771,7 @@
 - `control-plane/web-ui/src/pages/ProjectOperatingMode.vue`
 - `control-plane/web-ui/src/pages/TaskOperatingConsole.vue`
 - `control-plane/web-ui/src/pages/TaskOperatingOverride.vue`
-- `control-plane/web-ui/src/pages/TaskOperatingModeLauncher.vue`
+- `control-plane/web-ui/src/pages/RecommendedScenarios.vue`
 - `control-plane/web-ui/src/pages/BossOperationsCenter.vue`
 
 ### 9.4 数据结构文件级清单

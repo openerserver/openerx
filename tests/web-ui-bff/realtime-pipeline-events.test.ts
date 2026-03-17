@@ -87,6 +87,7 @@ mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-a
   listSessions: listSessionsMock,
   recoverAgentRun: recoverAgentRunMock,
   runDetachedPrompt: runDetachedPromptMock,
+  terminateAgent: mock(async () => ({ ok: true })),
   updateAgentRunStatus: updateAgentRunStatusMock,
 }));
 
@@ -119,6 +120,7 @@ function resetAggregatorState() {
     parallelCandidateResults: Map<string, Map<number, { sessionId: string; result?: string }>>;
     sessionToCandidateMap: Map<string, { taskId: string; candidateIndex: number }>;
     judgingTasks: Set<string>;
+    paidExecutionRuntime: Map<string, { tripped: boolean; reason?: string }>;
   };
 
   aggregator.finalizedAgentRuns.clear();
@@ -127,6 +129,7 @@ function resetAggregatorState() {
   aggregator.parallelCandidateResults.clear();
   aggregator.sessionToCandidateMap.clear();
   aggregator.judgingTasks.clear();
+  aggregator.paidExecutionRuntime.clear();
 }
 
 beforeEach(() => {
@@ -346,6 +349,164 @@ describe("SSEAggregator pipeline emitters", () => {
     } finally {
       unsubscribe();
     }
+  });
+
+  test("post-execution hooks are skipped when paid execution guard disables them", async () => {
+    cpFetchMock.mockImplementationOnce(async (url: string, options?: { method?: string }) => {
+      if ((options?.method || "GET") === "GET" && url === "/api/tasks/task-1") {
+        return {
+          ok: true,
+          status: 200,
+          data: {
+            id: "task-1",
+            title: "Runtime pipeline task",
+            prompt: "Summarize progress",
+            projectId: "proj-1",
+            sessionId: "ses-task-main",
+            agentRunId: "run-1",
+            result: "Done",
+            strategy: JSON.stringify({
+              paidExecutionGuard: {
+                enabled: true,
+                providerId: "github-copilot",
+                modelId: "gpt-5.4",
+                modelRoute: "github-copilot:gpt-5.4",
+                guardDecision: "allow",
+                guardReason: "safe overlay applied",
+                estimatedRequestUpperBound: 1,
+                estimatedTokenUpperBound: 2000,
+                estimatedCostUpperBound: 1.2,
+                actualRequests: 1,
+                actualTokenUsage: 1200,
+                actualCost: 0.8,
+                maxRequestsPerRun: 2,
+                maxEstimatedCostUsdPerRun: 5,
+                overridesApplied: ["post-hook-disabled"],
+                postHooksDisabled: true,
+              },
+            }),
+            selectedModel: "gpt-5.4",
+          },
+        };
+      }
+
+      return { ok: true, status: 200, data: {} };
+    });
+
+    await (
+      sseAggregator as unknown as {
+        triggerPostExecutionHooks: (
+          taskId: string,
+          resultText: string | undefined,
+          authorization: string,
+        ) => Promise<void>;
+      }
+    ).triggerPostExecutionHooks("task-1", "Done", "Bearer internal");
+
+    expect(executeLifecycleHooksMock).not.toHaveBeenCalled();
+  });
+
+  test("post-execution hook usage is recorded once and remaining hooks stop after breaker trips", async () => {
+    cpFetchMock.mockImplementation(async (url: string, options?: { method?: string; body?: unknown }) => {
+      if ((options?.method || "GET") === "GET" && url === "/api/tasks/task-1") {
+        return {
+          ok: true,
+          status: 200,
+          data: {
+            id: "task-1",
+            title: "Runtime pipeline task",
+            prompt: "Summarize progress",
+            projectId: "proj-1",
+            sessionId: "ses-task-main",
+            agentRunId: "run-1",
+            result: "Done",
+            strategy: JSON.stringify({
+              effectiveModel: "github-copilot:gpt-5.4",
+              paidExecutionGuard: {
+                enabled: true,
+                providerId: "github-copilot",
+                modelId: "gpt-5.4",
+                modelRoute: "github-copilot:gpt-5.4",
+                guardDecision: "allow",
+                guardReason: "safe overlay applied",
+                estimatedRequestUpperBound: 1,
+                estimatedTokenUpperBound: 4000,
+                estimatedCostUpperBound: 2,
+                actualRequests: 1,
+                actualTokenUsage: 1200,
+                actualCost: 0.8,
+                maxRequestsPerRun: 1,
+                maxEstimatedCostUsdPerRun: 5,
+                overridesApplied: [],
+                postHooksDisabled: false,
+              },
+            }),
+            selectedModel: "github-copilot:gpt-5.4",
+          },
+        };
+      }
+
+      return { ok: true, status: 200, data: { body: options?.body } };
+    });
+
+    executeLifecycleHooksMock.mockImplementation(async (options?: {
+      onHookExecuted?: (execution: Record<string, unknown>) => Promise<{ stop?: boolean; reason?: string } | void>;
+    }) => {
+      const firstExecution = {
+        hookId: "post-review-1",
+        trigger: "post-execution",
+        status: "completed",
+        agent: "reviewer",
+        model: "github-copilot:gpt-5.4",
+        prompt: "Review result",
+        result: "Looks good.",
+        sessionId: "ses-hook-1",
+        tokenUsed: 2400,
+        completedAt: "2026-03-12T10:05:00.000Z",
+      };
+      const continuation = await options?.onHookExecuted?.(firstExecution);
+      return {
+        hookExecutions: [
+          firstExecution,
+          {
+            hookId: "post-review-2",
+            trigger: "post-execution",
+            status: "skipped",
+            agent: "reviewer",
+            model: "github-copilot:gpt-5.4",
+            prompt: "Review result again",
+            error:
+              continuation && "reason" in continuation && typeof continuation.reason === "string"
+                ? continuation.reason
+                : "skipped",
+            sessionId: undefined,
+            tokenUsed: 0,
+            completedAt: "2026-03-12T10:05:01.000Z",
+          },
+        ],
+      };
+    });
+
+    await (
+      sseAggregator as unknown as {
+        triggerPostExecutionHooks: (
+          taskId: string,
+          resultText: string | undefined,
+          authorization: string,
+        ) => Promise<void>;
+      }
+    ).triggerPostExecutionHooks("task-1", "Done", "Bearer internal");
+
+    const costRecordCalls = cpFetchMock.mock.calls.filter(
+      (call) => call[0] === "/api/cost/records" && (call[1] as { method?: string })?.method === "POST",
+    );
+    const auditCalls = cpFetchMock.mock.calls.filter(
+      (call) => call[0] === "/api/audit" && (call[1] as { method?: string })?.method === "POST",
+    );
+
+    expect(costRecordCalls).toHaveLength(1);
+    expect(auditCalls.some((call) => (call[1] as { body?: { action?: string } }).body?.action === "hook_usage_recorded")).toBe(true);
+    expect(auditCalls.some((call) => (call[1] as { body?: { action?: string } }).body?.action === "breaker_tripped")).toBe(true);
   });
 
   test("completion finalization emits task.completed and pipeline.stage.updated for single-mode runs", async () => {

@@ -1,5 +1,13 @@
 import { Hono } from "hono";
 import { authHeader, cpFetch } from "../../lib/control-plane-client";
+import {
+  buildPreflightOrchestrationFingerprint,
+  evaluatePaidExecutionPreflight,
+  fetchProjectPaidExecutionLeaseState,
+} from "../../lib/paid-execution-guard";
+import { readDefaultExecutionModel, resolveModelRoute } from "../../lib/opencode-config";
+import { readOrchestrationStrategy } from "../../lib/orchestration-strategy";
+import { fetchProjectRuntimeUsageBaseline } from "../../lib/runtime-usage-ledger";
 import type { JWTPayload } from "../../middleware/auth";
 import {
   buildTaskWorkflowViewModel,
@@ -16,6 +24,10 @@ interface ProjectRecord {
   name?: string;
   slug?: string;
   description?: string | null;
+  settings?: {
+    defaultModel?: string;
+    allowPaidExecution?: boolean;
+  } | null;
 }
 
 interface ProjectTaskGraphTaskRecord {
@@ -1258,7 +1270,138 @@ projectRoutes.delete("/:projectId/members/:userId", async (c) => {
       authorization: authHeader(c),
     },
   );
+  return c.json(result.data, result.ok ? 200 : (result.status as 401 | 403 | 404 | 502));
+});
+
+projectRoutes.get("/:projectId/paid-execution-lease", async (c) => {
+  const projectId = c.req.param("projectId");
+  const result = await cpFetch<Record<string, unknown>>(
+    `/api/projects/${projectId}/paid-execution-lease`,
+    {
+      authorization: authHeader(c),
+    },
+  );
+  return c.json(result.data, result.ok ? 200 : (result.status as 401 | 403 | 404 | 502));
+});
+
+projectRoutes.post("/:projectId/paid-execution-lease", async (c) => {
+  const projectId = c.req.param("projectId");
+  const body = await c.req.json();
+  const result = await cpFetch<Record<string, unknown>>(
+    `/api/projects/${projectId}/paid-execution-lease`,
+    {
+      method: "POST",
+      body,
+      authorization: authHeader(c),
+    },
+  );
+  return c.json(result.data, result.ok ? 201 : (result.status as 400 | 401 | 403 | 404 | 409 | 502));
+});
+
+projectRoutes.delete("/:projectId/paid-execution-lease/:leaseId", async (c) => {
+  const projectId = c.req.param("projectId");
+  const leaseId = c.req.param("leaseId");
+  const body = await c.req.json().catch(() => undefined);
+  const result = await cpFetch<Record<string, unknown>>(
+    `/api/projects/${projectId}/paid-execution-lease/${leaseId}`,
+    {
+      method: "DELETE",
+      body,
+      authorization: authHeader(c),
+    },
+  );
   return c.json(result.data, result.ok ? 200 : (result.status as 400 | 401 | 403 | 404 | 502));
+});
+
+projectRoutes.get("/:projectId/paid-execution-preflight", async (c) => {
+  const projectId = c.req.param("projectId");
+  const authorization = authHeader(c);
+  const [projectResult, leaseResult] = await Promise.all([
+    cpFetch<ProjectRecord>(`/api/projects/${projectId}`, { authorization }),
+    fetchProjectPaidExecutionLeaseState(projectId, authorization),
+  ]);
+
+  if (!projectResult.ok) {
+    return c.json(projectResult.data, projectResult.status as 401 | 403 | 404 | 502);
+  }
+  if (!leaseResult.ok) {
+    return c.json(leaseResult.data, leaseResult.status as 401 | 403 | 404 | 502);
+  }
+
+  const defaultModel = projectResult.data.settings?.defaultModel || readDefaultExecutionModel();
+  const resolvedModel = defaultModel ? resolveModelRoute(defaultModel) : undefined;
+  const strategy = readOrchestrationStrategy();
+  const enabledHookTriggers = strategy.hooks
+    .filter((hook) => hook.enabled && hook.trigger !== "pre-resume")
+    .map((hook) => hook.trigger);
+  const shape = {
+    candidateCount: 1,
+    judgeEnabled: false,
+    enabledHookTriggers,
+    suiteLabel: "project default execute profile",
+    suiteReference: `project=${projectId}`,
+  };
+  const baselineResult = await fetchProjectRuntimeUsageBaseline(projectId, authorization, {
+    providerId: resolvedModel?.providerId,
+    modelId: resolvedModel?.modelId,
+    entrypointType: "single-task",
+    orchestrationFingerprint: buildPreflightOrchestrationFingerprint(shape),
+  });
+  const preflight = evaluatePaidExecutionPreflight(
+    {
+      projectId,
+      allowPaidExecution: projectResult.data.settings?.allowPaidExecution === true,
+      resolvedModel: resolvedModel || undefined,
+      shape,
+      baseline: baselineResult.ok ? baselineResult.data.baseline : null,
+    },
+    leaseResult.data,
+  );
+
+  return c.json({
+    projectId,
+    defaultModel: projectResult.data.settings?.defaultModel || null,
+    effectiveModel: defaultModel || `${preflight.policy.providerId}:${preflight.policy.modelId}`,
+    allowed: preflight.allowed,
+    activeLease: preflight.activeLease,
+    policy: preflight.policy,
+    requirements: preflight.requirements,
+    preflight: preflight.estimate,
+  }, 200);
+});
+
+projectRoutes.get("/:projectId/runtime-usage-ledgers", async (c) => {
+  const projectId = c.req.param("projectId");
+  const search = new URLSearchParams();
+  for (const key of ["limit", "taskId", "status"]) {
+    const value = c.req.query(key);
+    if (value) {
+      search.set(key, value);
+    }
+  }
+
+  const suffix = search.toString() ? `?${search.toString()}` : "";
+  const result = await cpFetch<Record<string, unknown>>(
+    `/api/projects/${projectId}/runtime-usage-ledgers${suffix}`,
+    {
+      authorization: authHeader(c),
+    },
+  );
+
+  return c.json(result.data, result.ok ? 200 : (result.status as 401 | 403 | 404 | 502));
+});
+
+projectRoutes.get("/:projectId/runtime-usage-ledgers/:ledgerId", async (c) => {
+  const projectId = c.req.param("projectId");
+  const ledgerId = c.req.param("ledgerId");
+  const result = await cpFetch<Record<string, unknown>>(
+    `/api/projects/${projectId}/runtime-usage-ledgers/${ledgerId}`,
+    {
+      authorization: authHeader(c),
+    },
+  );
+
+  return c.json(result.data, result.ok ? 200 : (result.status as 401 | 403 | 404 | 502));
 });
 
 // GET /api/projects/:projectId

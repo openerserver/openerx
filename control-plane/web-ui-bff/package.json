@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "bun test ../../tests/web-ui-bff --timeout 120000",
     "test:realtime:unit": "bun test ../../tests/web-ui-bff/realtime-routes.test.ts --timeout 30000 && bun test ../../tests/web-ui-bff/realtime-pipeline-events.test.ts --timeout 30000 && bun test ../../tests/web-ui-bff/pipeline-events.test.ts --timeout 30000 && bun test ../../tests/web-ui-bff/runtime-pipeline.test.ts --timeout 30000",
+    "test:paid-execution:unit": "bun test ../../tests/web-ui-bff/lifecycle-hooks-behavior.test.ts --timeout 30000 && bun test ../../tests/web-ui-bff/realtime-pipeline-events.test.ts --timeout 30000 && bun test ../../tests/web-ui-bff/project-paid-execution-preflight-route.test.ts --timeout 30000 && bun test ../../tests/web-ui-bff/execution-integration-guard.test.ts --timeout 30000 && bun test ../../tests/web-ui-bff/judge-usage-accounting.test.ts --timeout 30000",
     "test:integration:completion-sync": "OPENCODE_MIN_ACTIVE_BEFORE_PAUSE_MS=500 bun test ../../tests/web-ui-bff/opencode-completion-sync.test.ts --timeout 120000",
     "test:integration:realtime": "OPENCODE_MIN_ACTIVE_BEFORE_PAUSE_MS=500 RUN_EXECUTION_INTEGRATION=1 bun test ../../tests/web-ui-bff/opencode-completion-sync.test.ts --timeout 120000 && RUN_EXECUTION_INTEGRATION=1 bun test ../../tests/web-ui-bff/hooks-integration.test.ts --timeout 120000",
     "test:realtime-regression": "bun run test:realtime:unit && bun run test:integration:realtime",

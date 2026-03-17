@@ -7,6 +7,9 @@ import {
 
 mock.restore();
 
+const originalAllowPaidExecution = process.env.ALLOW_PAID_MODEL_EXECUTION;
+const originalLowCostExecutionModel = process.env.LOW_COST_EXECUTION_MODEL;
+
 async function loadLifecycleHooksModule() {
   return import(
     "../../control-plane/web-ui-bff/src/modules/hooks/lifecycle-hooks?lifecycle-hooks-behavior-test"
@@ -31,6 +34,7 @@ const runDetachedPromptMock = mock(async () => ({
   text: "",
   sessionId: "session-test",
 }));
+const continueSessionMock = mock(async () => ({ ok: true }));
 const createSessionMock = mock(async () => ({
   ok: true,
   sessionId: "session-test",
@@ -85,6 +89,7 @@ let currentTask = {
   title: "Paused task",
   prompt: "Original paused prompt",
   projectId: "proj-1",
+  sessionId: "session-existing",
   strategy: "{}",
   status: "pending",
 };
@@ -103,7 +108,7 @@ const broadcastMock = mock(() => undefined);
 
 mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter", () => ({
   createSession: createSessionMock,
-  continueSession: mock(async () => ({ ok: true })),
+  continueSession: continueSessionMock,
   ensureAgentRunForSession: mock(() => "run-test"),
   extractAssistantResultFromMessages: mock(() => ({
     completed: false,
@@ -168,6 +173,7 @@ function buildStrategy(overrides: Partial<OrchestrationStrategy> = {}): Orchestr
 
 beforeEach(() => {
   runDetachedPromptMock.mockReset();
+  continueSessionMock.mockReset();
   createSessionMock.mockReset();
   getAgentRunMock.mockReset();
   injectGuidanceMock.mockReset();
@@ -201,6 +207,7 @@ beforeEach(() => {
     title: "Paused task",
     prompt: "Original paused prompt",
     projectId: "proj-1",
+    sessionId: "session-existing",
     strategy: "{}",
     status: "pending",
   };
@@ -217,6 +224,7 @@ beforeEach(() => {
     sessionId: "session-test",
     agentRunId: "run-test",
   });
+  continueSessionMock.mockResolvedValue({ ok: true });
   authHeaderMock.mockReturnValue("Bearer test");
   readDefaultExecutionModelMock.mockReturnValue(undefined);
   validateModelProviderMock.mockReturnValue({ valid: true });
@@ -229,6 +237,17 @@ beforeEach(() => {
   cpFetchMock.mockImplementation(
     async (url: string, options?: { method?: string; body?: unknown }) => {
       if (!options?.method) {
+        if (url.includes("/paid-execution-lease")) {
+          return {
+            ok: true,
+            data: {
+              projectId: "proj-1",
+              activeLease: null,
+              now: "2026-03-10T00:00:00.000Z",
+            },
+          };
+        }
+
         if (url.includes("/api/projects/")) {
           return { ok: true, data: { settings: {} } };
         }
@@ -243,10 +262,23 @@ beforeEach(() => {
     },
   );
   createInternalAuthorizationMock.mockResolvedValue("Bearer internal");
+
+  if (originalAllowPaidExecution === undefined) {
+    delete process.env.ALLOW_PAID_MODEL_EXECUTION;
+  } else {
+    process.env.ALLOW_PAID_MODEL_EXECUTION = originalAllowPaidExecution;
+  }
+
+  if (originalLowCostExecutionModel === undefined) {
+    delete process.env.LOW_COST_EXECUTION_MODEL;
+  } else {
+    process.env.LOW_COST_EXECUTION_MODEL = originalLowCostExecutionModel;
+  }
 });
 
 afterEach(() => {
   runDetachedPromptMock.mockReset();
+  continueSessionMock.mockReset();
   createSessionMock.mockReset();
   getAgentRunMock.mockReset();
   injectGuidanceMock.mockReset();
@@ -258,6 +290,18 @@ afterEach(() => {
   cpFetchMock.mockReset();
   createInternalAuthorizationMock.mockReset();
   broadcastMock.mockReset();
+
+  if (originalAllowPaidExecution === undefined) {
+    delete process.env.ALLOW_PAID_MODEL_EXECUTION;
+  } else {
+    process.env.ALLOW_PAID_MODEL_EXECUTION = originalAllowPaidExecution;
+  }
+
+  if (originalLowCostExecutionModel === undefined) {
+    delete process.env.LOW_COST_EXECUTION_MODEL;
+  } else {
+    process.env.LOW_COST_EXECUTION_MODEL = originalLowCostExecutionModel;
+  }
 });
 
 afterAll(() => {
@@ -503,6 +547,8 @@ describe("executeLifecycleHooks behavior", () => {
       selectedModel: undefined,
     };
 
+    process.env.ALLOW_PAID_MODEL_EXECUTION = "1";
+
     const { taskRoutes } = await loadTaskRoutesModule();
 
     readDefaultExecutionModelMock.mockReturnValueOnce("github-copilot:gemini-3-flash-preview");
@@ -531,5 +577,328 @@ describe("executeLifecycleHooks behavior", () => {
         modelId: "qwen/qwen3.5-35b-a3b",
       },
     });
+  });
+
+  test("preflight endpoint returns a structured deny estimate for paid models without the explicit gate", async () => {
+    currentStrategy = buildStrategy({ hooks: [] });
+    currentTask = {
+      ...currentTask,
+      title: "Premium model task",
+      prompt: "Ship the full feature with GPT-5.4.",
+      selectedModel: "github-copilot:gpt-5.4",
+    };
+    delete process.env.ALLOW_PAID_MODEL_EXECUTION;
+
+    const { taskRoutes } = await loadTaskRoutesModule();
+    const response = await taskRoutes.request("http://localhost/task-1/execute/preflight", {
+      method: "GET",
+      headers: { Authorization: "Bearer test" },
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({
+      taskId: "task-1",
+      allowed: false,
+      effectiveModel: "github-copilot:gpt-5.4",
+      requirements: {
+        allowPaidExecution: true,
+        leaseRequired: true,
+        hasAllowPaidExecution: false,
+        hasLease: false,
+      },
+      preflight: {
+        providerId: "github-copilot",
+        modelId: "gpt-5.4",
+        guardDecision: "deny",
+      },
+    });
+    expect(body.preflight.guardReason).toContain("ALLOW_PAID_MODEL_EXECUTION=1");
+    expect(createSessionMock).not.toHaveBeenCalled();
+  });
+
+  test("execute route rejects paid execution before creating a runtime session when the explicit gate is missing", async () => {
+    currentStrategy = buildStrategy({ hooks: [] });
+    currentTask = {
+      ...currentTask,
+      title: "Premium model task",
+      prompt: "Ship the full feature with GPT-5.4.",
+      selectedModel: "github-copilot:gpt-5.4",
+    };
+    delete process.env.ALLOW_PAID_MODEL_EXECUTION;
+
+    const { taskRoutes } = await loadTaskRoutesModule();
+    const response = await taskRoutes.request("http://localhost/task-1/execute", {
+      method: "POST",
+      headers: { Authorization: "Bearer test" },
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(403);
+    expect(body).toMatchObject({
+      code: "PAID_EXECUTION_GATE_REQUIRED",
+      taskId: "task-1",
+      allowed: false,
+      effectiveModel: "github-copilot:gpt-5.4",
+      guardDecision: "deny",
+    });
+    expect(body.guardReason).toContain("ALLOW_PAID_MODEL_EXECUTION=1");
+    expect(createSessionMock).not.toHaveBeenCalled();
+  });
+
+  test("execute route requires a lease for premium paid models even after the explicit gate is enabled", async () => {
+    currentStrategy = buildStrategy({ hooks: [] });
+    currentTask = {
+      ...currentTask,
+      title: "Premium model task",
+      prompt: "Ship the full feature with GPT-5.4.",
+      selectedModel: "github-copilot:gpt-5.4",
+    };
+    process.env.ALLOW_PAID_MODEL_EXECUTION = "1";
+
+    const { taskRoutes } = await loadTaskRoutesModule();
+    const response = await taskRoutes.request("http://localhost/task-1/execute", {
+      method: "POST",
+      headers: { Authorization: "Bearer test" },
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(403);
+    expect(body).toMatchObject({
+      code: "PAID_EXECUTION_LEASE_REQUIRED",
+      taskId: "task-1",
+      allowed: false,
+      guardDecision: "require-approval",
+      requirements: {
+        allowPaidExecution: true,
+        leaseRequired: true,
+        hasAllowPaidExecution: true,
+        hasLease: false,
+      },
+    });
+    expect(body.guardReason).toContain("active paid execution lease");
+    expect(createSessionMock).not.toHaveBeenCalled();
+  });
+
+  test("continue route rejects paid execution before sending follow-up prompts when the explicit gate is missing", async () => {
+    currentStrategy = buildStrategy({ hooks: [] });
+    currentTask = {
+      ...currentTask,
+      title: "Premium continuation task",
+      prompt: "Continue the premium task",
+      selectedModel: "github-copilot:gpt-5.4",
+    };
+    delete process.env.ALLOW_PAID_MODEL_EXECUTION;
+
+    const { taskRoutes } = await loadTaskRoutesModule();
+    const response = await taskRoutes.request("http://localhost/task-1/continue", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer test",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ prompt: "Please continue" }),
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(403);
+    expect(body).toMatchObject({
+      code: "PAID_EXECUTION_GATE_REQUIRED",
+      taskId: "task-1",
+      allowed: false,
+      guardDecision: "deny",
+    });
+    expect(body.guardReason).toContain("ALLOW_PAID_MODEL_EXECUTION=1");
+    expect(continueSessionMock).not.toHaveBeenCalled();
+  });
+
+  test("execute route stops before runtime start when pre-execution hook trips the paid execution breaker", async () => {
+    currentStrategy = buildStrategy({
+      hooks: [
+        {
+          id: "pre-execution-budget",
+          trigger: "pre-execution",
+          enabled: true,
+          agent: "reviewer",
+          model: "github-copilot:claude-sonnet-4",
+          promptTemplate: "Review {{taskPrompt}}",
+          timeoutMs: 1000,
+          order: 0,
+        },
+      ],
+    });
+    currentTask = {
+      ...currentTask,
+      title: "Budgeted pre-execution task",
+      prompt: "Do the minimal change.",
+      selectedModel: "github-copilot:claude-sonnet-4",
+    };
+    process.env.ALLOW_PAID_MODEL_EXECUTION = "1";
+
+    cpFetchMock.mockImplementation(async (url: string, options?: { method?: string; body?: { strategy?: string } }) => {
+      if (!options?.method) {
+        if (url.includes("/paid-execution-lease")) {
+          return {
+            ok: true,
+            data: {
+              projectId: "proj-1",
+              activeLease: null,
+              now: "2026-03-10T00:00:00.000Z",
+            },
+          };
+        }
+
+        if (url.includes("/api/projects/")) {
+          return { ok: true, data: { settings: {} } };
+        }
+
+        return { ok: true, data: currentTask };
+      }
+
+      if (options.method === "PATCH" && options.body?.strategy) {
+        currentTask = {
+          ...currentTask,
+          strategy: options.body.strategy,
+        };
+      }
+
+      return { ok: true, data: { body: options.body } };
+    });
+
+    runDetachedPromptMock.mockResolvedValueOnce({
+      ok: true,
+      completed: true,
+      text: "Preflight review result",
+      sessionId: "session-pre-execution",
+      tokenUsed: 40000,
+      model: {
+        providerId: "github-copilot",
+        modelId: "claude-sonnet-4",
+      },
+    });
+    executeLifecycleHooksMock.mockImplementationOnce(async (options?: {
+      onHookExecuted?: (execution: Record<string, unknown>) => Promise<{ stop?: boolean; reason?: string } | void>;
+    }) => {
+      const execution = {
+        hookId: "pre-execution-budget",
+        trigger: "pre-execution",
+        status: "completed",
+        agent: "reviewer",
+        model: "github-copilot:claude-sonnet-4",
+        prompt: "Review Do the minimal change.",
+        result: "Preflight review result",
+        sessionId: "session-pre-execution",
+        tokenUsed: 40000,
+        completedAt: "2026-03-17T00:00:00.000Z",
+      };
+      await options?.onHookExecuted?.(execution);
+      return {
+        hookExecutions: [execution],
+        combinedResultText: execution.result,
+        rewrittenPrompt: undefined,
+      };
+    });
+
+    const { taskRoutes } = await loadTaskRoutesModule();
+    const response = await taskRoutes.request("http://localhost/task-1/execute", {
+      method: "POST",
+      headers: { Authorization: "Bearer test" },
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(body).toMatchObject({
+      code: "PAID_EXECUTION_BREAKER_TRIPPED",
+      taskId: "task-1",
+      allowed: false,
+    });
+    expect(createSessionMock).not.toHaveBeenCalled();
+  });
+
+  test("resume route stops when pre-resume hook trips the paid execution breaker", async () => {
+    currentStrategy = buildStrategy({
+      hooks: [
+        {
+          id: "pre-resume-budget",
+          trigger: "pre-resume",
+          enabled: true,
+          agent: "reviewer",
+          model: "github-copilot:claude-sonnet-4",
+          promptTemplate: "Resume {{taskPrompt}}",
+          timeoutMs: 1000,
+          order: 0,
+        },
+      ],
+    });
+    currentTask = {
+      ...currentTask,
+      strategy: JSON.stringify({
+        paidExecutionGuard: {
+          enabled: true,
+          providerId: "github-copilot",
+          modelId: "claude-sonnet-4",
+          modelRoute: "github-copilot:claude-sonnet-4",
+          leaseId: null,
+          guardDecision: "allow",
+          guardReason: "approved",
+          estimatedRequestUpperBound: 2,
+          estimatedTokenUpperBound: 4000,
+          estimatedCostUpperBound: 0.75,
+          actualRequests: 0,
+          actualTokenUsage: 0,
+          actualCost: 0,
+          maxRequestsPerRun: 6,
+          maxEstimatedCostUsdPerRun: 0.75,
+          overridesApplied: [],
+          postHooksDisabled: false,
+        },
+      }),
+    };
+    process.env.ALLOW_PAID_MODEL_EXECUTION = "1";
+
+    runDetachedPromptMock.mockResolvedValueOnce({
+      ok: true,
+      completed: true,
+      text: "Resume review result",
+      sessionId: "session-pre-resume",
+      tokenUsed: 40000,
+      model: {
+        providerId: "github-copilot",
+        modelId: "claude-sonnet-4",
+      },
+    });
+    executeLifecycleHooksMock.mockImplementationOnce(async (options?: {
+      onHookExecuted?: (execution: Record<string, unknown>) => Promise<{ stop?: boolean; reason?: string } | void>;
+    }) => {
+      const execution = {
+        hookId: "pre-resume-budget",
+        trigger: "pre-resume",
+        status: "completed",
+        agent: "reviewer",
+        model: "github-copilot:claude-sonnet-4",
+        prompt: "Resume Continue the premium task",
+        result: "Resume review result",
+        sessionId: "session-pre-resume",
+        tokenUsed: 40000,
+        completedAt: "2026-03-17T00:00:00.000Z",
+      };
+      await options?.onHookExecuted?.(execution);
+      return {
+        hookExecutions: [execution],
+        combinedResultText: execution.result,
+        rewrittenPrompt: undefined,
+      };
+    });
+
+    const { agentControlRoutes } = await loadAgentControlRoutesModule();
+    const response = await agentControlRoutes.request("http://localhost/run-1/resume", {
+      method: "POST",
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(body.ok).toBe(false);
+    expect(String(body.error || "")).toContain("exceeded");
+    expect(resumeAgentMock).not.toHaveBeenCalled();
   });
 });

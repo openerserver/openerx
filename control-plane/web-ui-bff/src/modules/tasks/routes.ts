@@ -19,13 +19,25 @@ import {
   DEFAULT_EXECUTION_AGENT,
   type ExecutionPlan,
   type HookExecutionRecord,
+  type OrchestrationStrategy,
   buildExecutionPlan,
   mergeTaskStrategy,
   parseTaskStrategy,
   readOrchestrationStrategy,
   resolveWorkflowTemplate,
 } from "../../lib/orchestration-strategy";
+import {
+  buildPreflightOrchestrationFingerprint,
+  type PaidExecutionPreflightResult,
+  type PaidExecutionGuardState,
+  type PaidExecutionOverride,
+  createPaidExecutionGuardState,
+  evaluatePaidExecutionPreflight,
+  fetchProjectPaidExecutionLeaseState,
+} from "../../lib/paid-execution-guard";
+import { recordPaidExecutionRuntimeUsage } from "../../lib/paid-execution-runtime";
 import { buildRuntimePipeline } from "../../lib/runtime-pipeline";
+import { fetchProjectRuntimeUsageBaseline } from "../../lib/runtime-usage-ledger";
 import type { JWTPayload } from "../../middleware/auth";
 import {
   continueSession,
@@ -35,7 +47,10 @@ import {
   getSessionMessages,
   listSessions,
 } from "../agent-control/opencode-adapter";
-import { createAgentRunRecord } from "../agent-control/run-persistence";
+import {
+  createAgentRunRecord,
+  recordAgentAudit,
+} from "../agent-control/run-persistence";
 import { executeLifecycleHooks } from "../hooks/lifecycle-hooks";
 import { syncGraphsForSessionTask, syncGraphsForTask } from "../realtime/dag-sync";
 import { buildPipelineStageUpdatedEvents } from "../realtime/pipeline-events";
@@ -56,7 +71,7 @@ type ResolvedModel = { providerId: string; modelId: string };
 type SessionStartResult = Awaited<ReturnType<typeof createSession>>;
 
 interface StartExecutionResponse {
-  status: 200 | 502;
+  status: 200 | 403 | 409 | 502;
   body: Record<string, unknown>;
 }
 
@@ -74,6 +89,7 @@ interface ExecutableTask {
   prompt: string;
   status: string;
   projectId: string;
+  sessionId?: string | null;
   title: string;
   strategy?: string | null;
   selectedModel?: string | null;
@@ -132,11 +148,13 @@ interface PreparedExecutionContext {
   identitySnapshot: IdentitySnapshot;
   classification: IntentClassification;
   executionAgent: string;
+  strategy: OrchestrationStrategy;
   plan: ExecutionPlan;
   workflowTemplateId: string | null;
   repoContext: ReturnType<typeof buildRepoContext>;
   resolvedModel?: ResolvedModel;
   effectiveModel?: string;
+  paidExecutionGuard?: PaidExecutionGuardState;
 }
 
 interface ExecutionContext extends PreparedExecutionContext {
@@ -147,6 +165,257 @@ interface ExecutionContext extends PreparedExecutionContext {
 interface ParallelCandidateAttempt {
   index: number;
   sessionResult?: SessionStartResult;
+}
+
+function buildBlockedExecutionResponse(taskId: string, preflight: PaidExecutionPreflightResult): StartExecutionResponse {
+  const status = preflight.estimate.guardDecision === "allow-with-downgrade" ? 409 : 403;
+
+  return {
+    status,
+    body: {
+      error: preflight.estimate.guardReason,
+      code: preflight.code,
+      taskId,
+      allowed: false,
+      effectiveModel: `${preflight.policy.providerId}:${preflight.policy.modelId}`,
+      guardDecision: preflight.estimate.guardDecision,
+      guardReason: preflight.estimate.guardReason,
+      suggestedModel: preflight.policy.suggestedModel,
+      activeLease: preflight.activeLease,
+      requirements: preflight.requirements,
+      policy: preflight.policy,
+      preflight: preflight.estimate,
+    },
+  };
+}
+
+function buildPaidExecutionAuditDetail(
+  preflight: PaidExecutionPreflightResult,
+  guardState?: PaidExecutionGuardState,
+  detail: Record<string, unknown> = {},
+) {
+  return {
+    leaseId: preflight.requirements.leaseId,
+    guardDecision: preflight.estimate.guardDecision,
+    guardReason: preflight.estimate.guardReason,
+    estimatedRequestUpperBound: preflight.estimate.requestCount.max,
+    estimatedTokenUpperBound: preflight.estimate.totalTokens.max,
+    estimatedCostUpperBound: preflight.estimate.costUsd.max,
+    actualTokenUsage: guardState?.actualTokenUsage ?? 0,
+    actualCost: guardState?.actualCost ?? 0,
+    guardOverridesApplied: guardState?.overridesApplied ?? [],
+    ...detail,
+  };
+}
+
+async function recordPaidExecutionAuditEvent(args: {
+  projectId: string;
+  taskId: string;
+  sessionId?: string;
+  agentRunId?: string;
+  action: string;
+  preflight: PaidExecutionPreflightResult;
+  guardState?: PaidExecutionGuardState;
+  riskLevel?: "low" | "medium" | "high" | "critical";
+  detail?: Record<string, unknown>;
+}) {
+  if (!args.preflight.policy.isPaid) {
+    return;
+  }
+
+  await recordAgentAudit({
+    projectId: args.projectId,
+    taskId: args.taskId,
+    sessionId: args.sessionId,
+    agentRunId: args.agentRunId,
+    eventType: "paid_execution",
+    action: args.action,
+    detail: buildPaidExecutionAuditDetail(args.preflight, args.guardState, args.detail),
+    riskLevel: args.riskLevel,
+  });
+}
+
+async function recordPaidExecutionGuardStateEvent(args: {
+  projectId: string;
+  taskId: string;
+  sessionId?: string;
+  agentRunId?: string;
+  action: string;
+  guardState?: PaidExecutionGuardState;
+  detail?: Record<string, unknown>;
+  riskLevel?: "low" | "medium" | "high" | "critical";
+}) {
+  if (!args.guardState?.enabled) {
+    return;
+  }
+
+  await recordAgentAudit({
+    projectId: args.projectId,
+    taskId: args.taskId,
+    sessionId: args.sessionId,
+    agentRunId: args.agentRunId,
+    eventType: "paid_execution",
+    action: args.action,
+    detail: {
+      leaseId: args.guardState.leaseId,
+      guardDecision: args.guardState.guardDecision,
+      guardReason: args.guardState.guardReason,
+      estimatedRequestUpperBound: args.guardState.estimatedRequestUpperBound,
+      estimatedTokenUpperBound: args.guardState.estimatedTokenUpperBound,
+      estimatedCostUpperBound: args.guardState.estimatedCostUpperBound,
+      actualTokenUsage: args.guardState.actualTokenUsage,
+      actualCost: args.guardState.actualCost,
+      guardOverridesApplied: args.guardState.overridesApplied,
+      ...args.detail,
+    },
+    riskLevel: args.riskLevel,
+  });
+}
+
+function collapseExecutionPlanToSingle(
+  plan: ExecutionPlan,
+  executionAgent: string,
+): ExecutionPlan {
+  const primaryCandidate = plan.candidates[0];
+  return {
+    templateId: plan.templateId,
+    mode: "single",
+    steps: [{ id: "exec-0", type: "execution" as const, status: "pending" as const }],
+    candidates: [
+      {
+        label: primaryCandidate?.label || "主执行",
+        agent: primaryCandidate?.agent || executionAgent,
+        role: primaryCandidate?.role,
+        model: primaryCandidate?.model,
+        status: "pending" as const,
+      },
+    ],
+  };
+}
+
+function applyPaidExecutionSafetyOverlay(context: PreparedExecutionContext): {
+  context: PreparedExecutionContext;
+  overridesApplied: PaidExecutionOverride[];
+} {
+  const overridesApplied: PaidExecutionOverride[] = [];
+
+  const safePlan = isParallelExecution(context.plan)
+    ? (() => {
+        overridesApplied.push("parallel-collapsed");
+        return collapseExecutionPlanToSingle(context.plan, context.executionAgent);
+      })()
+    : {
+        ...context.plan,
+        mode: "single" as const,
+        steps: [{ id: "exec-0", type: "execution" as const, status: "pending" as const }],
+        candidates: [
+          {
+            ...(context.plan.candidates[0] || {
+              label: "主执行",
+              agent: context.executionAgent,
+            }),
+            status: "pending" as const,
+          },
+        ],
+        judgeResult: undefined,
+        winnerCandidateIndex: undefined,
+      };
+
+  if (context.strategy.hooks.some((hook) => hook.enabled && hook.trigger === "post-execution")) {
+    overridesApplied.push("post-hook-disabled");
+  }
+  if (context.strategy.judge.enabled) {
+    overridesApplied.push("judge-disabled");
+  }
+
+  return {
+    context: {
+      ...context,
+      plan: safePlan,
+      strategy: {
+        ...context.strategy,
+        judge: {
+          ...context.strategy.judge,
+          enabled: false,
+        },
+        hooks: context.strategy.hooks.map((hook) =>
+          hook.enabled && hook.trigger === "post-execution"
+            ? { ...hook, enabled: false }
+            : hook,
+        ),
+      },
+    },
+    overridesApplied,
+  };
+}
+
+async function preparePaidExecutionContext(
+  context: PreparedExecutionContext,
+  authorization: string,
+): Promise<
+  | { ok: true; context: PreparedExecutionContext; preflight: PaidExecutionPreflightResult }
+  | { ok: false; status: number; data: Record<string, unknown> }
+> {
+  const rawPreflight = await buildTaskExecutionPreflight(context, authorization);
+  if (!rawPreflight.ok) {
+    return {
+      ok: false,
+      status: rawPreflight.status,
+      data: rawPreflight.data as unknown as Record<string, unknown>,
+    };
+  }
+
+  if (!rawPreflight.data.policy.isPaid) {
+    return {
+      ok: true,
+      context,
+      preflight: rawPreflight.data,
+    };
+  }
+
+  const overlay = applyPaidExecutionSafetyOverlay(context);
+  const safePreflight = await buildTaskExecutionPreflight(overlay.context, authorization);
+  if (!safePreflight.ok) {
+    return {
+      ok: false,
+      status: safePreflight.status,
+      data: safePreflight.data as unknown as Record<string, unknown>,
+    };
+  }
+
+  return {
+    ok: true,
+    context: {
+      ...overlay.context,
+      paidExecutionGuard: createPaidExecutionGuardState(safePreflight.data, overlay.overridesApplied),
+    },
+    preflight: safePreflight.data,
+  };
+}
+
+async function persistPaidExecutionConfiguration(context: PreparedExecutionContext) {
+  if (!context.paidExecutionGuard?.enabled) {
+    return true;
+  }
+
+  const result = await cpFetch(`/api/tasks/${encodeURIComponent(context.task.id)}`, {
+    method: "PATCH",
+    authorization: context.authorization,
+    body: {
+      executionMode: context.plan.mode,
+      executionPlan: JSON.stringify(context.plan),
+      strategy: mergeTaskStrategy(context.task.strategy, {
+        selectedTemplateId: context.plan.templateId,
+        workflowTemplateId: context.workflowTemplateId,
+        selectedAgent: context.executionAgent,
+        effectiveModel: context.effectiveModel,
+        executionMode: context.plan.mode,
+        paidExecutionGuard: context.paidExecutionGuard,
+      }),
+    },
+  });
+
+  return result.ok;
 }
 
 function requireSystemAdmin(user: JWTPayload): string | null {
@@ -192,6 +461,59 @@ async function fetchExecutableTask(taskId: string, authorization: string) {
   return cpFetch<ExecutableTask>(`/api/tasks/${encodeURIComponent(taskId)}`, {
     authorization,
   });
+}
+
+async function fetchProjectPaidExecutionSettings(projectId: string, authorization: string) {
+  return cpFetch<{ settings?: { allowPaidExecution?: boolean } }>(`/api/projects/${encodeURIComponent(projectId)}`, {
+    authorization,
+  });
+}
+
+async function buildTaskExecutionPreflight(
+  context: PreparedExecutionContext,
+  authorization: string,
+) {
+  const leaseResult = await fetchProjectPaidExecutionLeaseState(context.task.projectId, authorization);
+  if (!leaseResult.ok) {
+    return {
+      ok: false as const,
+      status: leaseResult.status,
+      data: leaseResult.data,
+    };
+  }
+
+  const enabledHookTriggers = context.strategy.hooks
+    .filter((hook) => hook.enabled && hook.trigger !== "pre-resume")
+    .map((hook) => hook.trigger);
+  const shape = {
+    candidateCount: Math.max(1, context.plan.candidates.length),
+    judgeEnabled: context.strategy.judge.enabled && context.plan.candidates.length > 1,
+    enabledHookTriggers,
+    suiteLabel: "single-task execute",
+    suiteReference: `task=${context.task.id}`,
+  };
+  const baselineResult = await fetchProjectRuntimeUsageBaseline(context.task.projectId, authorization, {
+    providerId: context.resolvedModel?.providerId,
+    modelId: context.resolvedModel?.modelId,
+    entrypointType: "single-task",
+    orchestrationFingerprint: buildPreflightOrchestrationFingerprint(shape),
+  });
+  const projectResult = await fetchProjectPaidExecutionSettings(context.task.projectId, authorization);
+
+  return {
+    ok: true as const,
+    status: 200 as const,
+    data: evaluatePaidExecutionPreflight(
+      {
+        projectId: context.task.projectId,
+        allowPaidExecution: projectResult.ok ? projectResult.data.settings?.allowPaidExecution === true : false,
+        resolvedModel: context.resolvedModel,
+        shape,
+        baseline: baselineResult.ok ? baselineResult.data.baseline : null,
+      },
+      leaseResult.data,
+    ),
+  };
 }
 
 async function resolveExecutionIdentity(task: ExecutableTask, authorization: string) {
@@ -311,6 +633,7 @@ function buildTaskPatchBody(
     plan?: ExecutionPlan;
     workflowTemplateId?: string | null;
     hookExecutions?: HookExecutionRecord[];
+    paidExecutionGuard?: PaidExecutionGuardState;
   },
 ) {
   return {
@@ -331,6 +654,7 @@ function buildTaskPatchBody(
       effectiveModel: executionMeta.effectiveModel,
       executionMode: executionMeta.plan?.mode,
       hookExecutions: executionMeta.hookExecutions,
+      paidExecutionGuard: executionMeta.paidExecutionGuard,
     }),
     ...identitySnapshot,
   };
@@ -358,8 +682,10 @@ async function runPreExecutionHooks(
   repoContext: ReturnType<typeof buildRepoContext>,
   executionAgent: string,
   effectiveModel: string | undefined,
+  authorization: string,
 ) {
   const strategy = readOrchestrationStrategy();
+  let breakerReason: string | undefined;
   const hookResult = await executeLifecycleHooks({
     strategy,
     trigger: "pre-execution",
@@ -375,6 +701,52 @@ async function runPreExecutionHooks(
       taskResult: "",
       changesSummary: "",
     }),
+    onHookExecuted: async (execution) => {
+      if (!execution.sessionId || !execution.model || !execution.tokenUsed || execution.tokenUsed <= 0) {
+        return;
+      }
+
+      const outcome = await recordPaidExecutionRuntimeUsage({
+        authorization,
+        taskId: task.id,
+        projectId: task.projectId,
+        sessionId: execution.sessionId,
+        modelRoute: execution.model,
+        tokenUsed: execution.tokenUsed,
+        requestDelta: 1,
+        action: "pre_execution_usage_recorded",
+        runtimeLedger: {
+          executionSource: "task-pre-execution-hook",
+          entrypointType: "hook-only",
+          hookRequestCountDelta: 1,
+          status: execution.status === "failed" ? "failed" : "completed",
+          finishedAt: execution.completedAt,
+          step: {
+            stepType: "hook",
+            triggerType: execution.trigger,
+            hookId: execution.hookId,
+            amplificationSource: "hook",
+            status: execution.status === "failed" ? "failed" : execution.status === "skipped" ? "skipped" : "completed",
+            finishedAt: execution.completedAt,
+          },
+        },
+        detail: {
+          hookId: execution.hookId,
+          trigger: execution.trigger,
+          status: execution.status,
+          agent: execution.agent,
+        },
+        riskLevel: "medium",
+      });
+
+      if (outcome.tripped) {
+        breakerReason = outcome.breakerReason || "paid execution breaker tripped during pre-execution hooks";
+        return {
+          stop: true,
+          reason: breakerReason,
+        };
+      }
+    },
   });
 
   if (hookResult.hookExecutions.length === 0) {
@@ -388,6 +760,7 @@ async function runPreExecutionHooks(
     return {
       prompt: hookResult.rewrittenPrompt,
       hookExecutions: hookResult.hookExecutions,
+      breakerReason,
     };
   }
 
@@ -403,6 +776,7 @@ async function runPreExecutionHooks(
   return {
     prompt: promptWithReview,
     hookExecutions: hookResult.hookExecutions,
+    breakerReason,
   };
 }
 
@@ -654,6 +1028,7 @@ async function prepareExecutionContext(
     identitySnapshot,
     classification,
     executionAgent,
+    strategy,
     plan,
     workflowTemplateId,
     repoContext,
@@ -666,18 +1041,29 @@ async function prepareExecutionContext(
 
 async function finalizePreExecutionContext(
   context: PreparedExecutionContext,
-): Promise<ExecutionContext> {
+): Promise<{ ok: true; context: ExecutionContext } | { ok: false; reason: string }> {
   const preExecutionHooks = await runPreExecutionHooks(
     context.task,
     context.repoContext,
     context.executionAgent,
     context.effectiveModel,
+    context.authorization,
   );
 
+  if (preExecutionHooks.breakerReason) {
+    return {
+      ok: false,
+      reason: preExecutionHooks.breakerReason,
+    };
+  }
+
   return {
-    ...context,
-    prompt: preExecutionHooks.prompt,
-    hookExecutions: [...preExecutionHooks.hookExecutions],
+    ok: true,
+    context: {
+      ...context,
+      prompt: preExecutionHooks.prompt,
+      hookExecutions: [...preExecutionHooks.hookExecutions],
+    },
   };
 }
 
@@ -769,6 +1155,7 @@ async function persistExecutionStart(
       plan: context.plan,
       workflowTemplateId: context.workflowTemplateId,
       hookExecutions: context.hookExecutions,
+      paidExecutionGuard: context.paidExecutionGuard,
     }),
     authorization: context.authorization,
   });
@@ -953,6 +1340,19 @@ async function startSingleExecution(context: ExecutionContext): Promise<StartExe
 
   attachSingleCandidate(context.plan, execResult);
   await persistExecutionStart(context, execResult);
+  await recordPaidExecutionGuardStateEvent({
+    projectId: context.task.projectId,
+    taskId: context.task.id,
+    sessionId: execResult.sessionId,
+    agentRunId: execResult.agentRunId,
+    action: "started",
+    guardState: context.paidExecutionGuard,
+    detail: {
+      executionMode: context.plan.mode,
+      effectiveModel: context.effectiveModel,
+    },
+    riskLevel: context.paidExecutionGuard?.enabled ? "medium" : undefined,
+  });
   broadcastSingleExecutionStarted(context, execResult);
 
   // Register root branch in task_sessions lineage
@@ -1387,6 +1787,44 @@ taskRoutes.post("/", zValidator("json", createTaskSchema), async (c) => {
   return c.json(result.data, result.ok ? 201 : (result.status as 400 | 401 | 502));
 });
 
+taskRoutes.get("/:taskId/execute/preflight", async (c) => {
+  const taskId = c.req.param("taskId");
+  const authorization = authHeader(c);
+  const taskResult = await fetchExecutableTask(taskId, authorization);
+  if (!taskResult.ok) {
+    return c.json({ error: "Task not found" }, 404);
+  }
+
+  const task = taskResult.data;
+  const validationError = validateExecutableTask(task);
+  if (validationError) {
+    return c.json({ error: validationError }, 400);
+  }
+
+  const preparedContext = await prepareExecutionContext(task, authorization);
+  const modelValidationError = await validateResolvedModel(preparedContext.resolvedModel);
+  if (modelValidationError) {
+    return c.json(modelValidationError.body, modelValidationError.status);
+  }
+
+  const preflightResult = await buildTaskExecutionPreflight(preparedContext, authorization);
+  if (!preflightResult.ok) {
+    return c.json(preflightResult.data, preflightResult.status as 401 | 403 | 404 | 502);
+  }
+
+  const preflight = preflightResult.data;
+
+  return c.json({
+    taskId,
+    allowed: preflight.allowed,
+    effectiveModel: preparedContext.effectiveModel,
+    activeLease: preflight.activeLease,
+    policy: preflight.policy,
+    requirements: preflight.requirements,
+    preflight: preflight.estimate,
+  });
+});
+
 // POST /api/tasks/:taskId/execute — Start agent execution for a task
 taskRoutes.post("/:taskId/execute", async (c) => {
   const taskId = c.req.param("taskId");
@@ -1408,7 +1846,43 @@ taskRoutes.post("/:taskId/execute", async (c) => {
     return c.json(modelValidationError.body, modelValidationError.status);
   }
 
-  const executionContext = await finalizePreExecutionContext(preparedContext);
+  const guardPreparation = await preparePaidExecutionContext(preparedContext, authorization);
+  if (!guardPreparation.ok) {
+    return c.json(guardPreparation.data, guardPreparation.status as 401 | 403 | 404 | 502);
+  }
+
+  const preflight = guardPreparation.preflight;
+  if (!preflight.allowed) {
+    await recordPaidExecutionAuditEvent({
+      projectId: preparedContext.task.projectId,
+      taskId,
+      action: "blocked",
+      preflight,
+      guardState: guardPreparation.ok ? guardPreparation.context.paidExecutionGuard : undefined,
+      riskLevel: preflight.estimate.guardDecision === "allow-with-downgrade" ? "medium" : "high",
+    });
+    const blockedResponse = buildBlockedExecutionResponse(taskId, preflight);
+    return c.json(blockedResponse.body, blockedResponse.status);
+  }
+
+  if (!(await persistPaidExecutionConfiguration(guardPreparation.context))) {
+    return c.json({ error: "Failed to persist paid execution guard configuration" }, 502);
+  }
+
+  const executionContextResult = await finalizePreExecutionContext(guardPreparation.context);
+  if (!executionContextResult.ok) {
+    return c.json(
+      {
+        error: executionContextResult.reason,
+        code: "PAID_EXECUTION_BREAKER_TRIPPED",
+        taskId,
+        allowed: false,
+      },
+      409,
+    );
+  }
+
+  const executionContext = executionContextResult.context;
   const response = isParallelExecution(executionContext.plan)
     ? await startParallelExecution(executionContext)
     : await startSingleExecution(executionContext);
@@ -1561,30 +2035,25 @@ const continueSchema = z.object({
 taskRoutes.post("/:taskId/continue", zValidator("json", continueSchema), async (c) => {
   const taskId = c.req.param("taskId");
   const { prompt, sessionId: overrideSessionId } = c.req.valid("json");
+  const authorization = authHeader(c);
 
-  // Get the task's session
-  const taskResult = await cpFetch<{
-    sessionId?: string;
-    projectId: string;
-    selectedModel?: string | null;
-  }>(`/api/tasks/${encodeURIComponent(taskId)}`, { authorization: authHeader(c) });
+  const taskResult = await fetchExecutableTask(taskId, authorization);
 
   if (!taskResult.ok) return c.json({ error: "Task not found" }, 404);
 
-  const sid = overrideSessionId || taskResult.data?.sessionId;
+  const task = taskResult.data;
+
+  const sid = overrideSessionId || task.sessionId;
   if (!sid) return c.json({ error: "No session associated with this task" }, 400);
 
   // Resolve model for continuation (same priority as initial execution)
   const resolvedModel = await resolveExecutionModel(
     {
-      id: taskId,
+      ...task,
       prompt,
       status: "running",
-      projectId: taskResult.data.projectId,
-      title: "",
-      selectedModel: taskResult.data.selectedModel,
     },
-    authHeader(c),
+    authorization,
   );
 
   // Pre-flight: validate model provider
@@ -1595,10 +2064,78 @@ taskRoutes.post("/:taskId/continue", zValidator("json", continueSchema), async (
     }
   }
 
+  const leaseResult = await fetchProjectPaidExecutionLeaseState(task.projectId, authorization);
+  if (!leaseResult.ok) {
+    return c.json(leaseResult.data, leaseResult.status as 401 | 403 | 404 | 502);
+  }
+
+  const continuationShape = {
+    candidateCount: 1,
+    judgeEnabled: false,
+    enabledHookTriggers: [],
+    suiteLabel: "task continue",
+    suiteReference: `task=${task.id}:continue`,
+  };
+  const continuationBaseline = await fetchProjectRuntimeUsageBaseline(task.projectId, authorization, {
+    providerId: resolvedModel?.providerId,
+    modelId: resolvedModel?.modelId,
+    entrypointType: "single-task",
+    orchestrationFingerprint: buildPreflightOrchestrationFingerprint(continuationShape),
+  });
+  const continuationProjectResult = await fetchProjectPaidExecutionSettings(task.projectId, authorization);
+
+  const continuationPreflight = evaluatePaidExecutionPreflight(
+    {
+      projectId: task.projectId,
+      allowPaidExecution: continuationProjectResult.ok ? continuationProjectResult.data.settings?.allowPaidExecution === true : false,
+      resolvedModel,
+      shape: continuationShape,
+      baseline: continuationBaseline.ok ? continuationBaseline.data.baseline : null,
+    },
+    leaseResult.data,
+  );
+
+  const continuationGuard = continuationPreflight.policy.isPaid
+    ? createPaidExecutionGuardState(continuationPreflight, ["judge-disabled", "post-hook-disabled"])
+    : undefined;
+
+  if (!continuationPreflight.allowed) {
+    await recordPaidExecutionAuditEvent({
+      projectId: task.projectId,
+      taskId,
+      sessionId: sid,
+      action: "continue_blocked",
+      preflight: continuationPreflight,
+      guardState: continuationGuard,
+      riskLevel: continuationPreflight.estimate.guardDecision === "allow-with-downgrade" ? "medium" : "high",
+    });
+    const blockedResponse = buildBlockedExecutionResponse(taskId, continuationPreflight);
+    return c.json(blockedResponse.body, blockedResponse.status);
+  }
+
+  if (continuationGuard?.enabled) {
+    const patchResult = await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
+      method: "PATCH",
+      authorization,
+      body: {
+        strategy: mergeTaskStrategy(task.strategy, {
+          effectiveModel: resolvedModel
+            ? `${resolvedModel.providerId}:${resolvedModel.modelId}`
+            : undefined,
+          paidExecutionGuard: continuationGuard,
+        }),
+      },
+    });
+
+    if (!patchResult.ok) {
+      return c.json({ error: "Failed to persist continuation guard configuration" }, 502);
+    }
+  }
+
   const agentRunId = ensureAgentRunForSession(
     sid,
     taskId,
-    taskResult.data.projectId,
+    task.projectId,
     resolvedModel,
   );
 
@@ -1609,7 +2146,22 @@ taskRoutes.post("/:taskId/continue", zValidator("json", continueSchema), async (
   await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
     method: "PATCH",
     body: { status: "running" },
-    authorization: authHeader(c),
+    authorization,
+  });
+
+  await recordPaidExecutionGuardStateEvent({
+    projectId: task.projectId,
+    taskId,
+    sessionId: sid,
+    agentRunId,
+    action: "continued",
+    guardState: continuationGuard,
+    detail: {
+      effectiveModel: resolvedModel
+        ? `${resolvedModel.providerId}:${resolvedModel.modelId}`
+        : undefined,
+    },
+    riskLevel: continuationGuard?.enabled ? "medium" : undefined,
   });
 
   wsBroadcaster.broadcast({
@@ -1617,7 +2169,7 @@ taskRoutes.post("/:taskId/continue", zValidator("json", continueSchema), async (
     type: "task.continued",
     ts: new Date().toISOString(),
     taskId,
-    projectId: taskResult.data?.projectId,
+    projectId: task.projectId,
     agentRunId,
     data: { sessionId: sid, agentRunId },
   });
@@ -1625,9 +2177,9 @@ taskRoutes.post("/:taskId/continue", zValidator("json", continueSchema), async (
   void buildPipelineStageUpdatedEvents({
     taskId,
     sessionId: sid,
-    projectId: taskResult.data?.projectId,
+    projectId: task.projectId,
     agentRunId,
-    authorization: authHeader(c),
+    authorization,
     reason: "task.continued",
   }).then((events) => {
     for (const event of events) {

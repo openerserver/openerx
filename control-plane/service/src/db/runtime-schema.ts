@@ -253,6 +253,125 @@ export function ensureRuntimeTables(sqlite: Database) {
       created_at text NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at text NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
+
+    CREATE TABLE IF NOT EXISTS paid_execution_leases (
+      id text PRIMARY KEY NOT NULL,
+      project_id text NOT NULL REFERENCES projects(id),
+      issued_by_user_id text NOT NULL REFERENCES users(id),
+      revoked_by_user_id text REFERENCES users(id),
+      reason text,
+      status text NOT NULL DEFAULT 'active',
+      expires_at text NOT NULL,
+      created_at text NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at text NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      revoked_at text
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_paid_execution_leases_project_status
+      ON paid_execution_leases(project_id, status, expires_at);
+
+    CREATE TABLE IF NOT EXISTS runtime_usage_ledgers (
+      id text PRIMARY KEY NOT NULL,
+      project_id text NOT NULL REFERENCES projects(id),
+      task_id text REFERENCES tasks(id),
+      agent_run_id text REFERENCES agent_runs(id),
+      runtime_session_id text NOT NULL,
+      execution_source text NOT NULL,
+      entrypoint_type text NOT NULL,
+      orchestration_fingerprint text,
+      default_provider_id text,
+      default_model_id text,
+      request_count integer NOT NULL DEFAULT 0,
+      step_count integer NOT NULL DEFAULT 0,
+      input_tokens integer NOT NULL DEFAULT 0,
+      output_tokens integer NOT NULL DEFAULT 0,
+      total_tokens integer NOT NULL DEFAULT 0,
+      cost_usd real NOT NULL DEFAULT 0,
+      candidate_count integer NOT NULL DEFAULT 1,
+      judge_request_count integer NOT NULL DEFAULT 0,
+      hook_request_count integer NOT NULL DEFAULT 0,
+      status text NOT NULL DEFAULT 'running',
+      started_at text,
+      finished_at text,
+      synced_at text,
+      created_at text NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at text NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS runtime_usage_ledger_steps (
+      id text PRIMARY KEY NOT NULL,
+      ledger_id text NOT NULL REFERENCES runtime_usage_ledgers(id),
+      project_id text NOT NULL REFERENCES projects(id),
+      task_id text REFERENCES tasks(id),
+      agent_run_id text REFERENCES agent_runs(id),
+      runtime_session_id text,
+      step_type text NOT NULL,
+      trigger_type text,
+      hook_id text,
+      candidate_index integer,
+      request_index integer NOT NULL DEFAULT 0,
+      provider_id text,
+      model_id text,
+      input_tokens integer NOT NULL DEFAULT 0,
+      output_tokens integer NOT NULL DEFAULT 0,
+      total_tokens integer NOT NULL DEFAULT 0,
+      cost_usd real NOT NULL DEFAULT 0,
+      amplification_source text,
+      status text NOT NULL DEFAULT 'completed',
+      started_at text,
+      finished_at text,
+      created_at text NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at text NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_runtime_usage_ledgers_runtime_session
+      ON runtime_usage_ledgers(runtime_session_id);
+
+    CREATE INDEX IF NOT EXISTS idx_runtime_usage_ledgers_project_time
+      ON runtime_usage_ledgers(project_id, created_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_runtime_usage_ledgers_agent_run
+      ON runtime_usage_ledgers(agent_run_id);
+
+    CREATE INDEX IF NOT EXISTS idx_runtime_usage_ledger_steps_ledger_request
+      ON runtime_usage_ledger_steps(ledger_id, request_index);
+
+    CREATE INDEX IF NOT EXISTS idx_runtime_usage_ledger_steps_project_time
+      ON runtime_usage_ledger_steps(project_id, created_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_runtime_usage_ledger_steps_task_type
+      ON runtime_usage_ledger_steps(task_id, step_type, trigger_type);
+
+    CREATE TABLE IF NOT EXISTS runtime_usage_baselines (
+      id text PRIMARY KEY NOT NULL,
+      project_id text NOT NULL REFERENCES projects(id),
+      provider_id text NOT NULL DEFAULT '',
+      model_id text NOT NULL DEFAULT '',
+      entrypoint_type text NOT NULL DEFAULT '',
+      orchestration_fingerprint text NOT NULL DEFAULT '',
+      match_scope text NOT NULL DEFAULT 'project',
+      sample_size integer NOT NULL DEFAULT 0,
+      p50_request_count real,
+      p90_request_count real,
+      p50_input_tokens real,
+      p90_input_tokens real,
+      p50_output_tokens real,
+      p90_output_tokens real,
+      p50_total_tokens real,
+      p90_total_tokens real,
+      p50_cost_usd real,
+      p90_cost_usd real,
+      last_ledger_at text,
+      generated_at text NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      created_at text NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at text NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_runtime_usage_baselines_project_scope
+      ON runtime_usage_baselines(project_id, provider_id, model_id, entrypoint_type, orchestration_fingerprint, match_scope);
+
+    CREATE INDEX IF NOT EXISTS idx_runtime_usage_baselines_project_generated
+      ON runtime_usage_baselines(project_id, generated_at DESC);
   `);
 
   ensureColumn(sqlite, "role_agents", "allowed_stages_json", `text NOT NULL DEFAULT '["implement"]'`);

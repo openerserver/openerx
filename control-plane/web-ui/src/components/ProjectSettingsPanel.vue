@@ -23,6 +23,15 @@
             <a-descriptions-item label="默认环境">
               {{ selectedEnvironmentLabel }}
             </a-descriptions-item>
+            <a-descriptions-item label="付费执行权限">
+              {{ form.allowPaidExecution ? '已开启' : '未开启' }}
+            </a-descriptions-item>
+              <a-descriptions-item label="项目组标识">
+                {{ form.projectGroupKey || '未配置' }}
+              </a-descriptions-item>
+              <a-descriptions-item label="项目组展示名">
+                {{ form.projectGroupLabel || '未配置' }}
+              </a-descriptions-item>
             <a-descriptions-item label="预算配置状态">
               <a-space direction="vertical" :size="2">
                 <a-space>
@@ -86,6 +95,21 @@
           </a-col>
 
           <a-col :xs="24" :lg="12">
+            <a-form-item label="付费执行权限">
+              <a-switch
+                :checked="form.allowPaidExecution === true"
+                :disabled="!canManage"
+                checked-children="已开启"
+                un-checked-children="未开启"
+                @update:checked="form.allowPaidExecution = Boolean($event)"
+              />
+              <a-typography-text type="secondary" style="display: block; margin-top: 8px">
+                开启后，项目可以通过当前项目设置放行付费执行，无需再依赖单独的环境变量开关。
+              </a-typography-text>
+            </a-form-item>
+          </a-col>
+
+          <a-col :xs="24" :lg="12">
             <a-form-item label="默认环境">
               <a-select
                 :value="form.defaultEnvironmentId || undefined"
@@ -96,6 +120,34 @@
                 :disabled="!canManage"
                 @update:value="form.defaultEnvironmentId = valueToString($event)"
               />
+            </a-form-item>
+          </a-col>
+
+          <a-col :xs="24" :lg="12">
+            <a-form-item label="项目组标识">
+              <a-input
+                :value="form.projectGroupKey || ''"
+                placeholder="例如 core-platform"
+                :disabled="!canManage"
+                @update:value="form.projectGroupKey = valueToNullableString($event)"
+              />
+              <a-typography-text type="secondary">
+                Dashboard 会优先按这个标识聚合项目；同组织下标识一致的项目会归到同一项目组。
+              </a-typography-text>
+            </a-form-item>
+          </a-col>
+
+          <a-col :xs="24" :lg="12">
+            <a-form-item label="项目组展示名">
+              <a-input
+                :value="form.projectGroupLabel || ''"
+                placeholder="例如 核心平台"
+                :disabled="!canManage"
+                @update:value="form.projectGroupLabel = valueToNullableString($event)"
+              />
+              <a-typography-text type="secondary">
+                为空时会回退显示项目组标识；两个字段都不填时，Dashboard 才会使用派生规则兜底。
+              </a-typography-text>
             </a-form-item>
           </a-col>
 
@@ -195,6 +247,7 @@ const budgetConfigs = ref<BudgetConfig[]>([]);
 const form = reactive<ProjectSettings>({
   defaultModel: "",
   defaultEnvironmentId: "",
+  allowPaidExecution: false,
   maxConcurrency: undefined,
   budgetMonthly: undefined,
   warnThreshold: 0.8,
@@ -251,6 +304,9 @@ watch(
   (settings) => {
     form.defaultModel = settings?.defaultModel || "";
     form.defaultEnvironmentId = settings?.defaultEnvironmentId || "";
+    form.allowPaidExecution = settings?.allowPaidExecution === true;
+    form.projectGroupKey = settings?.projectGroupKey || null;
+    form.projectGroupLabel = settings?.projectGroupLabel || null;
     form.maxConcurrency = settings?.maxConcurrency;
     form.budgetMonthly = settings?.budgetMonthly;
     form.warnThreshold = settings?.warnThreshold ?? 0.8;
@@ -297,13 +353,16 @@ async function handleSave() {
 
     const settings: ProjectSettings = {
       ...(props.settings || {}),
-      ...(form.defaultModel ? { defaultModel: form.defaultModel } : {}),
-      ...(form.defaultEnvironmentId ? { defaultEnvironmentId: form.defaultEnvironmentId } : {}),
-      ...(typeof form.maxConcurrency === "number" ? { maxConcurrency: form.maxConcurrency } : {}),
-      ...(typeof form.budgetMonthly === "number" ? { budgetMonthly: form.budgetMonthly } : {}),
-      ...(linkedBudget?.id ? { budgetConfigId: linkedBudget.id } : {}),
-      ...(typeof form.warnThreshold === "number" ? { warnThreshold: form.warnThreshold } : {}),
-      ...(typeof form.throttleThreshold === "number" ? { throttleThreshold: form.throttleThreshold } : {}),
+      ...upsertOptionalStringSetting("defaultModel", form.defaultModel),
+      ...upsertOptionalStringSetting("defaultEnvironmentId", form.defaultEnvironmentId),
+      allowPaidExecution: form.allowPaidExecution === true,
+      ...upsertNullableStringSetting("projectGroupKey", form.projectGroupKey),
+      ...upsertNullableStringSetting("projectGroupLabel", form.projectGroupLabel),
+      ...upsertOptionalNumberSetting("maxConcurrency", form.maxConcurrency),
+      ...upsertOptionalNumberSetting("budgetMonthly", form.budgetMonthly),
+      ...upsertOptionalStringSetting("budgetConfigId", linkedBudget?.id),
+      ...upsertOptionalNumberSetting("warnThreshold", form.warnThreshold),
+      ...upsertOptionalNumberSetting("throttleThreshold", form.throttleThreshold),
     };
 
     await updateProject(props.projectId, { settings });
@@ -320,6 +379,11 @@ function valueToString(value: unknown) {
   return value == null ? "" : String(value);
 }
 
+function valueToNullableString(value: unknown) {
+  const normalized = value == null ? "" : String(value).trim();
+  return normalized || null;
+}
+
 function valueToNumber(value: unknown) {
   return typeof value === "number" ? value : undefined;
 }
@@ -330,6 +394,20 @@ function percentToRatio(value: unknown) {
 
 function toPercent(value: number | undefined) {
   return typeof value === "number" ? Math.round(value * 100) : undefined;
+}
+
+function upsertOptionalStringSetting<Key extends keyof ProjectSettings>(key: Key, value: unknown) {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  return normalized ? { [key]: normalized } as Pick<ProjectSettings, Key> : { [key]: undefined } as Pick<ProjectSettings, Key>;
+}
+
+function upsertNullableStringSetting<Key extends keyof ProjectSettings>(key: Key, value: unknown) {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  return { [key]: normalized || null } as Pick<ProjectSettings, Key>;
+}
+
+function upsertOptionalNumberSetting<Key extends keyof ProjectSettings>(key: Key, value: unknown) {
+  return typeof value === "number" ? { [key]: value } as Pick<ProjectSettings, Key> : { [key]: undefined } as Pick<ProjectSettings, Key>;
 }
 
 function resolveLinkedBudget(items: BudgetConfig[]) {

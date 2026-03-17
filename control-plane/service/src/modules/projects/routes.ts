@@ -1,5 +1,5 @@
 import { zValidator } from "@hono/zod-validator";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 import { db } from "../../db";
@@ -11,11 +11,15 @@ import {
   costRecords,
   environments,
   organizations,
+  paidExecutionLeases,
   projectTaskRelations,
   projectRoles,
   projects,
   repositories,
   repositoryCredentials,
+  runtimeUsageBaselines,
+  runtimeUsageLedgerSteps,
+  runtimeUsageLedgers,
   tasks,
   users,
   workflowTemplates,
@@ -37,8 +41,11 @@ const environmentApprovalPolicyBindingSchema = z.object({
 const projectSettingsSchema = z.object({
   defaultModel: z.string().min(1).optional(),
   defaultEnvironmentId: z.string().min(1).optional(),
+  allowPaidExecution: z.boolean().optional(),
   workflowTemplateId: z.string().min(1).optional(),
   approvalPolicyTemplateId: z.string().min(1).optional(),
+  projectGroupKey: z.string().min(1).nullable().optional(),
+  projectGroupLabel: z.string().min(1).nullable().optional(),
   approvalPolicy: approvalPolicyModeSchema.optional(),
   environmentApprovalPolicies: z.record(environmentApprovalPolicyBindingSchema).optional(),
   maxConcurrency: z.number().int().min(1).max(100).optional(),
@@ -96,6 +103,71 @@ const updateProjectMemberSchema = z.object({
 const workflowTemplateBindingSchema = z.object({
   workflowTemplateId: z.string().min(1).nullable(),
 });
+
+const createPaidExecutionLeaseSchema = z.object({
+  durationMinutes: z.number().int().min(5).max(480).default(30),
+  reason: z.string().trim().max(500).optional(),
+});
+
+const revokePaidExecutionLeaseSchema = z.object({
+  reason: z.string().trim().max(500).optional(),
+});
+
+const runtimeUsageLedgerStatusSchema = z.enum(["running", "completed", "failed", "cancelled"]);
+const runtimeUsageLedgerStepTypeSchema = z.enum(["execution", "judge", "hook", "resume", "other"]);
+const runtimeUsageLedgerStepStatusSchema = z.enum(["pending", "completed", "failed", "skipped"]);
+
+const runtimeUsageLedgerStepSyncSchema = z.object({
+  id: z.string().min(1),
+  stepType: runtimeUsageLedgerStepTypeSchema,
+  triggerType: z.string().trim().min(1).optional(),
+  hookId: z.string().trim().min(1).optional(),
+  candidateIndex: z.number().int().min(0).optional(),
+  requestIndex: z.number().int().min(0).default(0),
+  providerId: z.string().trim().min(1).optional(),
+  modelId: z.string().trim().min(1).optional(),
+  inputTokens: z.number().int().min(0),
+  outputTokens: z.number().int().min(0),
+  totalTokens: z.number().int().min(0),
+  costUsd: z.number().min(0),
+  amplificationSource: z.string().trim().min(1).optional(),
+  status: runtimeUsageLedgerStepStatusSchema.default("completed"),
+  startedAt: z.string().trim().min(1).optional(),
+  finishedAt: z.string().trim().min(1).optional(),
+});
+
+const syncRuntimeUsageLedgerSchema = z.object({
+  taskId: z.string().min(1).optional(),
+  agentRunId: z.string().min(1).optional(),
+  runtimeSessionId: z.string().min(1),
+  executionSource: z.string().trim().min(1),
+  entrypointType: z.string().trim().min(1),
+  orchestrationFingerprint: z.string().trim().min(1).optional(),
+  defaultProviderId: z.string().trim().min(1).optional(),
+  defaultModelId: z.string().trim().min(1).optional(),
+  requestCountDelta: z.number().int().min(0).default(1),
+  stepCountDelta: z.number().int().min(0).default(1),
+  inputTokens: z.number().int().min(0),
+  outputTokens: z.number().int().min(0),
+  totalTokens: z.number().int().min(0),
+  costUsd: z.number().min(0),
+  candidateCount: z.number().int().min(1).optional(),
+  judgeRequestCountDelta: z.number().int().min(0).default(0),
+  hookRequestCountDelta: z.number().int().min(0).default(0),
+  status: runtimeUsageLedgerStatusSchema.default("completed"),
+  startedAt: z.string().trim().min(1).optional(),
+  finishedAt: z.string().trim().min(1).optional(),
+  syncedAt: z.string().trim().min(1).optional(),
+  step: runtimeUsageLedgerStepSyncSchema.optional(),
+});
+
+const runtimeUsageBaselineMatchScopeSchema = z.enum([
+  "project+provider+model+entrypoint+fingerprint",
+  "project+provider+model+entrypoint",
+  "project+provider+model",
+  "project+entrypoint",
+  "project",
+]);
 
 const taskRelationTypeSchema = z.enum(["depends-on", "blocks", "spawned-from"]);
 const taskRelationSourceSchema = z.enum(["manual", "system", "task-create"]);
@@ -228,6 +300,367 @@ async function getVisibleProjectOrNull(user: JWTPayload, projectId: string) {
   return getProjectOrNull(projectId);
 }
 
+function normalizeLeaseRecord(lease: typeof paidExecutionLeases.$inferSelect) {
+  return {
+    id: lease.id,
+    projectId: lease.projectId,
+    issuedByUserId: lease.issuedByUserId,
+    revokedByUserId: lease.revokedByUserId,
+    reason: lease.reason,
+    status: lease.status,
+    expiresAt: lease.expiresAt,
+    createdAt: lease.createdAt,
+    updatedAt: lease.updatedAt,
+    revokedAt: lease.revokedAt,
+  };
+}
+
+function normalizeRuntimeUsageLedgerRecord(ledger: typeof runtimeUsageLedgers.$inferSelect) {
+  return {
+    id: ledger.id,
+    projectId: ledger.projectId,
+    taskId: ledger.taskId,
+    agentRunId: ledger.agentRunId,
+    runtimeSessionId: ledger.runtimeSessionId,
+    executionSource: ledger.executionSource,
+    entrypointType: ledger.entrypointType,
+    orchestrationFingerprint: ledger.orchestrationFingerprint,
+    defaultProviderId: ledger.defaultProviderId,
+    defaultModelId: ledger.defaultModelId,
+    requestCount: ledger.requestCount,
+    stepCount: ledger.stepCount,
+    inputTokens: ledger.inputTokens,
+    outputTokens: ledger.outputTokens,
+    totalTokens: ledger.totalTokens,
+    costUsd: ledger.costUsd,
+    candidateCount: ledger.candidateCount,
+    judgeRequestCount: ledger.judgeRequestCount,
+    hookRequestCount: ledger.hookRequestCount,
+    status: ledger.status,
+    startedAt: ledger.startedAt,
+    finishedAt: ledger.finishedAt,
+    syncedAt: ledger.syncedAt,
+    createdAt: ledger.createdAt,
+    updatedAt: ledger.updatedAt,
+  };
+}
+
+function normalizeRuntimeUsageLedgerStepRecord(step: typeof runtimeUsageLedgerSteps.$inferSelect) {
+  return {
+    id: step.id,
+    ledgerId: step.ledgerId,
+    projectId: step.projectId,
+    taskId: step.taskId,
+    agentRunId: step.agentRunId,
+    runtimeSessionId: step.runtimeSessionId,
+    stepType: step.stepType,
+    triggerType: step.triggerType,
+    hookId: step.hookId,
+    candidateIndex: step.candidateIndex,
+    requestIndex: step.requestIndex,
+    providerId: step.providerId,
+    modelId: step.modelId,
+    inputTokens: step.inputTokens,
+    outputTokens: step.outputTokens,
+    totalTokens: step.totalTokens,
+    costUsd: step.costUsd,
+    amplificationSource: step.amplificationSource,
+    status: step.status,
+    startedAt: step.startedAt,
+    finishedAt: step.finishedAt,
+    createdAt: step.createdAt,
+    updatedAt: step.updatedAt,
+  };
+}
+
+function percentile(sortedValues: number[], ratio: number) {
+  if (sortedValues.length === 0) return null;
+  if (sortedValues.length === 1) return sortedValues[0] ?? null;
+  const index = (sortedValues.length - 1) * ratio;
+  const lower = Math.floor(index);
+  const upper = Math.ceil(index);
+  const lowerValue = sortedValues[lower] ?? sortedValues[sortedValues.length - 1] ?? 0;
+  const upperValue = sortedValues[upper] ?? lowerValue;
+  if (lower === upper) return lowerValue;
+  return lowerValue + (upperValue - lowerValue) * (index - lower);
+}
+
+function roundBaselineValue(value: number | null) {
+  return value == null ? null : Number(value.toFixed(4));
+}
+
+type RuntimeUsageBaselineMatchScope = z.infer<typeof runtimeUsageBaselineMatchScopeSchema>;
+
+type RuntimeUsageBaselineView = {
+  id: string;
+  projectId: string;
+  providerId: string | null;
+  modelId: string | null;
+  entrypointType: string | null;
+  orchestrationFingerprint: string | null;
+  matchScope: RuntimeUsageBaselineMatchScope;
+  sampleSize: number;
+  requestCount: { p50: number | null; p90: number | null };
+  inputTokens: { p50: number | null; p90: number | null };
+  outputTokens: { p50: number | null; p90: number | null };
+  totalTokens: { p50: number | null; p90: number | null };
+  costUsd: { p50: number | null; p90: number | null };
+  lastLedgerAt: string | null;
+  generatedAt: string;
+};
+
+function normalizeRuntimeUsageBaselineRecord(
+  baseline: typeof runtimeUsageBaselines.$inferSelect,
+): RuntimeUsageBaselineView {
+  return {
+    id: baseline.id,
+    projectId: baseline.projectId,
+    providerId: baseline.providerId || null,
+    modelId: baseline.modelId || null,
+    entrypointType: baseline.entrypointType || null,
+    orchestrationFingerprint: baseline.orchestrationFingerprint || null,
+    matchScope: baseline.matchScope,
+    sampleSize: baseline.sampleSize,
+    requestCount: {
+      p50: roundBaselineValue(baseline.p50RequestCount),
+      p90: roundBaselineValue(baseline.p90RequestCount),
+    },
+    inputTokens: {
+      p50: roundBaselineValue(baseline.p50InputTokens),
+      p90: roundBaselineValue(baseline.p90InputTokens),
+    },
+    outputTokens: {
+      p50: roundBaselineValue(baseline.p50OutputTokens),
+      p90: roundBaselineValue(baseline.p90OutputTokens),
+    },
+    totalTokens: {
+      p50: roundBaselineValue(baseline.p50TotalTokens),
+      p90: roundBaselineValue(baseline.p90TotalTokens),
+    },
+    costUsd: {
+      p50: roundBaselineValue(baseline.p50CostUsd),
+      p90: roundBaselineValue(baseline.p90CostUsd),
+    },
+    lastLedgerAt: baseline.lastLedgerAt || null,
+    generatedAt: baseline.generatedAt,
+  };
+}
+
+function buildRuntimeUsageBaselineId(args: {
+  projectId: string;
+  providerId: string;
+  modelId: string;
+  entrypointType: string;
+  orchestrationFingerprint: string;
+  matchScope: RuntimeUsageBaselineMatchScope;
+}) {
+  return [
+    args.projectId,
+    args.providerId || "all",
+    args.modelId || "all",
+    args.entrypointType || "all",
+    args.orchestrationFingerprint || "all",
+    args.matchScope,
+  ].join("::");
+}
+
+async function rebuildRuntimeUsageBaseline(args: {
+  projectId: string;
+  providerId?: string;
+  modelId?: string;
+  entrypointType?: string;
+  orchestrationFingerprint?: string;
+}) {
+  const candidates: Array<{
+    matchScope: RuntimeUsageBaselineMatchScope;
+    providerId: string;
+    modelId: string;
+    entrypointType: string;
+    orchestrationFingerprint: string;
+    matches: (ledger: typeof runtimeUsageLedgers.$inferSelect) => boolean;
+  }> = [
+    {
+      matchScope: "project+provider+model+entrypoint+fingerprint",
+      providerId: args.providerId || "",
+      modelId: args.modelId || "",
+      entrypointType: args.entrypointType || "",
+      orchestrationFingerprint: args.orchestrationFingerprint || "",
+      matches: (ledger) =>
+        ledger.projectId === args.projectId
+        && ledger.defaultProviderId === (args.providerId || null)
+        && ledger.defaultModelId === (args.modelId || null)
+        && ledger.entrypointType === (args.entrypointType || "")
+        && (ledger.orchestrationFingerprint || "") === (args.orchestrationFingerprint || ""),
+    },
+    {
+      matchScope: "project+provider+model+entrypoint",
+      providerId: args.providerId || "",
+      modelId: args.modelId || "",
+      entrypointType: args.entrypointType || "",
+      orchestrationFingerprint: "",
+      matches: (ledger) =>
+        ledger.projectId === args.projectId
+        && ledger.defaultProviderId === (args.providerId || null)
+        && ledger.defaultModelId === (args.modelId || null)
+        && ledger.entrypointType === (args.entrypointType || ""),
+    },
+    {
+      matchScope: "project+provider+model",
+      providerId: args.providerId || "",
+      modelId: args.modelId || "",
+      entrypointType: "",
+      orchestrationFingerprint: "",
+      matches: (ledger) =>
+        ledger.projectId === args.projectId
+        && ledger.defaultProviderId === (args.providerId || null)
+        && ledger.defaultModelId === (args.modelId || null),
+    },
+    {
+      matchScope: "project+entrypoint",
+      providerId: "",
+      modelId: "",
+      entrypointType: args.entrypointType || "",
+      orchestrationFingerprint: "",
+      matches: (ledger) => ledger.projectId === args.projectId && ledger.entrypointType === (args.entrypointType || ""),
+    },
+    {
+      matchScope: "project",
+      providerId: "",
+      modelId: "",
+      entrypointType: "",
+      orchestrationFingerprint: "",
+      matches: (ledger) => ledger.projectId === args.projectId,
+    },
+  ];
+
+  const projectLedgers = await db.query.runtimeUsageLedgers.findMany({
+    where: eq(runtimeUsageLedgers.projectId, args.projectId),
+    orderBy: [desc(runtimeUsageLedgers.finishedAt), desc(runtimeUsageLedgers.updatedAt)],
+  });
+
+  const now = new Date().toISOString();
+  const rebuilt: RuntimeUsageBaselineView[] = [];
+
+  for (const candidate of candidates) {
+    const ledgers = projectLedgers
+      .filter(candidate.matches)
+      .filter((ledger) => ledger.requestCount > 0 || ledger.totalTokens > 0);
+    if (ledgers.length === 0) {
+      continue;
+    }
+
+    const requestCounts = ledgers.map((ledger) => ledger.requestCount).sort((left, right) => left - right);
+    const inputTokens = ledgers.map((ledger) => ledger.inputTokens).sort((left, right) => left - right);
+    const outputTokens = ledgers.map((ledger) => ledger.outputTokens).sort((left, right) => left - right);
+    const totalTokens = ledgers.map((ledger) => ledger.totalTokens).sort((left, right) => left - right);
+    const costUsd = ledgers.map((ledger) => ledger.costUsd).sort((left, right) => left - right);
+    const lastLedgerAt = ledgers
+      .map((ledger) => ledger.finishedAt || ledger.updatedAt || ledger.createdAt)
+      .filter((value): value is string => Boolean(value))
+      .sort((left, right) => Date.parse(right) - Date.parse(left))[0] || null;
+
+    const record = {
+      id: buildRuntimeUsageBaselineId({
+        projectId: args.projectId,
+        providerId: candidate.providerId,
+        modelId: candidate.modelId,
+        entrypointType: candidate.entrypointType,
+        orchestrationFingerprint: candidate.orchestrationFingerprint,
+        matchScope: candidate.matchScope,
+      }),
+      projectId: args.projectId,
+      providerId: candidate.providerId,
+      modelId: candidate.modelId,
+      entrypointType: candidate.entrypointType,
+      orchestrationFingerprint: candidate.orchestrationFingerprint,
+      matchScope: candidate.matchScope,
+      sampleSize: ledgers.length,
+      p50RequestCount: roundBaselineValue(percentile(requestCounts, 0.5)),
+      p90RequestCount: roundBaselineValue(percentile(requestCounts, 0.9)),
+      p50InputTokens: roundBaselineValue(percentile(inputTokens, 0.5)),
+      p90InputTokens: roundBaselineValue(percentile(inputTokens, 0.9)),
+      p50OutputTokens: roundBaselineValue(percentile(outputTokens, 0.5)),
+      p90OutputTokens: roundBaselineValue(percentile(outputTokens, 0.9)),
+      p50TotalTokens: roundBaselineValue(percentile(totalTokens, 0.5)),
+      p90TotalTokens: roundBaselineValue(percentile(totalTokens, 0.9)),
+      p50CostUsd: roundBaselineValue(percentile(costUsd, 0.5)),
+      p90CostUsd: roundBaselineValue(percentile(costUsd, 0.9)),
+      lastLedgerAt,
+      generatedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    await db
+      .insert(runtimeUsageBaselines)
+      .values(record)
+      .onConflictDoUpdate({
+        target: runtimeUsageBaselines.id,
+        set: {
+          sampleSize: record.sampleSize,
+          p50RequestCount: record.p50RequestCount,
+          p90RequestCount: record.p90RequestCount,
+          p50InputTokens: record.p50InputTokens,
+          p90InputTokens: record.p90InputTokens,
+          p50OutputTokens: record.p50OutputTokens,
+          p90OutputTokens: record.p90OutputTokens,
+          p50TotalTokens: record.p50TotalTokens,
+          p90TotalTokens: record.p90TotalTokens,
+          p50CostUsd: record.p50CostUsd,
+          p90CostUsd: record.p90CostUsd,
+          lastLedgerAt: record.lastLedgerAt,
+          generatedAt: now,
+          updatedAt: now,
+        },
+      });
+
+    const stored = await db.query.runtimeUsageBaselines.findFirst({
+      where: eq(runtimeUsageBaselines.id, record.id),
+    });
+
+    if (stored) {
+      rebuilt.push(normalizeRuntimeUsageBaselineRecord(stored));
+    }
+  }
+
+  return rebuilt;
+}
+
+async function getActivePaidExecutionLease(projectId: string) {
+  const now = new Date().toISOString();
+  const activeLease = await db.query.paidExecutionLeases.findFirst({
+    where: and(
+      eq(paidExecutionLeases.projectId, projectId),
+      eq(paidExecutionLeases.status, "active"),
+      gt(paidExecutionLeases.expiresAt, now),
+    ),
+    orderBy: [desc(paidExecutionLeases.createdAt)],
+  });
+
+  const staleLease = await db.query.paidExecutionLeases.findFirst({
+    where: and(
+      eq(paidExecutionLeases.projectId, projectId),
+      eq(paidExecutionLeases.status, "active"),
+    ),
+    orderBy: [desc(paidExecutionLeases.createdAt)],
+  });
+
+  if (!activeLease && staleLease && staleLease.expiresAt <= now) {
+    await db
+      .update(paidExecutionLeases)
+      .set({
+        status: "expired",
+        updatedAt: now,
+      })
+      .where(eq(paidExecutionLeases.id, staleLease.id));
+  }
+
+  return {
+    now,
+    activeLease: activeLease ? normalizeLeaseRecord(activeLease) : null,
+  };
+}
+
 async function validateProjectTaskRelationEndpoints(projectId: string, taskIds: string[]) {
   if (taskIds.length === 0) {
     return null;
@@ -267,6 +700,10 @@ interface OverviewItem {
   name: string;
   slug: string;
   description: string | null | undefined;
+  settings?: {
+    projectGroupKey?: string | null;
+    projectGroupLabel?: string | null;
+  } | null;
   projectStatus: OverviewProjectStatus;
   completedCount: number;
   totalRequiredCount: number;
@@ -667,6 +1104,10 @@ function buildOverviewItem(
     name: project.name,
     slug: project.slug,
     description: project.description,
+    settings: {
+      projectGroupKey: settings.projectGroupKey ?? null,
+      projectGroupLabel: settings.projectGroupLabel ?? null,
+    },
     projectStatus,
     completedCount,
     totalRequiredCount,
@@ -1136,6 +1577,422 @@ projectRoutes.put(
 );
 
 // GET /api/projects/:projectId
+projectRoutes.get("/:projectId/paid-execution-lease", async (c) => {
+  const projectId = c.req.param("projectId");
+  const project = await getVisibleProjectOrNull(c.get("user"), projectId);
+  if (!project) {
+    return c.json({ error: "Project not found or access denied" }, 404);
+  }
+
+  const leaseState = await getActivePaidExecutionLease(projectId);
+  return c.json({ projectId, ...leaseState });
+});
+
+projectRoutes.post(
+  "/:projectId/paid-execution-lease",
+  requireProjectRole("projectId", "project_admin"),
+  zValidator("json", createPaidExecutionLeaseSchema),
+  async (c) => {
+    const projectId = c.req.param("projectId");
+    const user = c.get("user");
+    const body = c.req.valid("json");
+    const project = await getProjectOrNull(projectId);
+
+    if (!project) {
+      return c.json({ error: "Project not found" }, 404);
+    }
+
+    const existingLeaseState = await getActivePaidExecutionLease(projectId);
+    if (existingLeaseState.activeLease) {
+      return c.json(
+        {
+          error: "An active paid execution lease already exists",
+          activeLease: existingLeaseState.activeLease,
+        },
+        409,
+      );
+    }
+
+    const now = new Date();
+    const createdAt = now.toISOString();
+    const expiresAt = new Date(now.getTime() + body.durationMinutes * 60_000).toISOString();
+    const lease = {
+      id: crypto.randomUUID(),
+      projectId,
+      issuedByUserId: user.sub,
+      revokedByUserId: null,
+      reason: body.reason || null,
+      status: "active" as const,
+      expiresAt,
+      createdAt,
+      updatedAt: createdAt,
+      revokedAt: null,
+    };
+
+    await db.insert(paidExecutionLeases).values(lease);
+    await db.insert(auditEvents).values({
+      id: crypto.randomUUID(),
+      ts: createdAt,
+      userId: user.sub,
+      projectId,
+      eventType: "project.paid_execution_lease.created",
+      action: "issue_paid_execution_lease",
+      target: lease.id,
+      detail: {
+        durationMinutes: body.durationMinutes,
+        expiresAt,
+        reason: body.reason || null,
+      },
+      riskLevel: "medium",
+    });
+
+    return c.json(
+      {
+        projectId,
+        activeLease: normalizeLeaseRecord(lease),
+        now: createdAt,
+      },
+      201,
+    );
+  },
+);
+
+projectRoutes.delete(
+  "/:projectId/paid-execution-lease/:leaseId",
+  requireProjectRole("projectId", "project_admin"),
+  async (c) => {
+    const projectId = c.req.param("projectId");
+    const leaseId = c.req.param("leaseId");
+    const user = c.get("user");
+    const body = await c.req.json().catch(() => ({}));
+    const parsedBody = revokePaidExecutionLeaseSchema.safeParse(body);
+    if (!parsedBody.success) {
+      return c.json({ error: "Invalid revoke payload" }, 400);
+    }
+
+    const lease = await db.query.paidExecutionLeases.findFirst({
+      where: and(eq(paidExecutionLeases.id, leaseId), eq(paidExecutionLeases.projectId, projectId)),
+    });
+
+    if (!lease) {
+      return c.json({ error: "Paid execution lease not found" }, 404);
+    }
+
+    const now = new Date().toISOString();
+    await db
+      .update(paidExecutionLeases)
+      .set({
+        status: lease.status === "expired" ? "expired" : "revoked",
+        revokedAt: now,
+        revokedByUserId: user.sub,
+        updatedAt: now,
+        reason: parsedBody.data.reason || lease.reason,
+      })
+      .where(eq(paidExecutionLeases.id, leaseId));
+
+    await db.insert(auditEvents).values({
+      id: crypto.randomUUID(),
+      ts: now,
+      userId: user.sub,
+      projectId,
+      eventType: "project.paid_execution_lease.revoked",
+      action: "revoke_paid_execution_lease",
+      target: leaseId,
+      detail: {
+        reason: parsedBody.data.reason || null,
+        previousStatus: lease.status,
+      },
+      riskLevel: "medium",
+    });
+
+    return c.json({ ok: true, leaseId, projectId });
+  },
+);
+
+projectRoutes.post(
+  "/:projectId/runtime-usage-ledgers/sync",
+  requireProjectRole("projectId", "developer"),
+  zValidator("json", syncRuntimeUsageLedgerSchema),
+  async (c) => {
+    const projectId = c.req.param("projectId");
+    const body = c.req.valid("json");
+    const project = await getProjectOrNull(projectId);
+
+    if (!project) {
+      return c.json({ error: "Project not found" }, 404);
+    }
+
+    const now = new Date().toISOString();
+    const existingLedger = await db.query.runtimeUsageLedgers.findFirst({
+      where: and(
+        eq(runtimeUsageLedgers.projectId, projectId),
+        eq(runtimeUsageLedgers.runtimeSessionId, body.runtimeSessionId),
+      ),
+    });
+
+    const existingStep = body.step?.id
+      ? await db.query.runtimeUsageLedgerSteps.findFirst({
+          where: eq(runtimeUsageLedgerSteps.id, body.step.id),
+        })
+      : null;
+
+    const ledgerId = existingLedger?.id || crypto.randomUUID();
+
+    if (!existingLedger) {
+      await db.insert(runtimeUsageLedgers).values({
+        id: ledgerId,
+        projectId,
+        taskId: body.taskId,
+        agentRunId: body.agentRunId,
+        runtimeSessionId: body.runtimeSessionId,
+        executionSource: body.executionSource,
+        entrypointType: body.entrypointType,
+        orchestrationFingerprint: body.orchestrationFingerprint,
+        defaultProviderId: body.defaultProviderId,
+        defaultModelId: body.defaultModelId,
+        requestCount: 0,
+        stepCount: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+        costUsd: 0,
+        candidateCount: body.candidateCount ?? 1,
+        judgeRequestCount: 0,
+        hookRequestCount: 0,
+        status: body.status,
+        startedAt: body.startedAt,
+        finishedAt: body.finishedAt,
+        syncedAt: body.syncedAt || now,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+
+    const shouldApplyDelta = !body.step || !existingStep;
+
+    if (body.step && !existingStep) {
+      await db.insert(runtimeUsageLedgerSteps).values({
+        id: body.step.id,
+        ledgerId,
+        projectId,
+        taskId: body.taskId,
+        agentRunId: body.agentRunId,
+        runtimeSessionId: body.runtimeSessionId,
+        stepType: body.step.stepType,
+        triggerType: body.step.triggerType,
+        hookId: body.step.hookId,
+        candidateIndex: body.step.candidateIndex,
+        requestIndex: body.step.requestIndex,
+        providerId: body.step.providerId,
+        modelId: body.step.modelId,
+        inputTokens: body.step.inputTokens,
+        outputTokens: body.step.outputTokens,
+        totalTokens: body.step.totalTokens,
+        costUsd: body.step.costUsd,
+        amplificationSource: body.step.amplificationSource,
+        status: body.step.status,
+        startedAt: body.step.startedAt,
+        finishedAt: body.step.finishedAt,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+
+    const ledgerAfterInsert = await db.query.runtimeUsageLedgers.findFirst({
+      where: eq(runtimeUsageLedgers.id, ledgerId),
+    });
+
+    if (!ledgerAfterInsert) {
+      return c.json({ error: "Failed to load runtime usage ledger after sync" }, 500);
+    }
+
+    if (shouldApplyDelta) {
+      await db
+        .update(runtimeUsageLedgers)
+        .set({
+          taskId: body.taskId ?? ledgerAfterInsert.taskId,
+          agentRunId: body.agentRunId ?? ledgerAfterInsert.agentRunId,
+          executionSource: body.executionSource || ledgerAfterInsert.executionSource,
+          entrypointType: body.entrypointType || ledgerAfterInsert.entrypointType,
+          orchestrationFingerprint:
+            body.orchestrationFingerprint ?? ledgerAfterInsert.orchestrationFingerprint,
+          defaultProviderId: body.defaultProviderId ?? ledgerAfterInsert.defaultProviderId,
+          defaultModelId: body.defaultModelId ?? ledgerAfterInsert.defaultModelId,
+          requestCount: ledgerAfterInsert.requestCount + body.requestCountDelta,
+          stepCount: ledgerAfterInsert.stepCount + body.stepCountDelta,
+          inputTokens: ledgerAfterInsert.inputTokens + body.inputTokens,
+          outputTokens: ledgerAfterInsert.outputTokens + body.outputTokens,
+          totalTokens: ledgerAfterInsert.totalTokens + body.totalTokens,
+          costUsd: Number((ledgerAfterInsert.costUsd + body.costUsd).toFixed(4)),
+          candidateCount: Math.max(ledgerAfterInsert.candidateCount, body.candidateCount ?? 1),
+          judgeRequestCount:
+            ledgerAfterInsert.judgeRequestCount + body.judgeRequestCountDelta,
+          hookRequestCount:
+            ledgerAfterInsert.hookRequestCount + body.hookRequestCountDelta,
+          status: body.status,
+          startedAt: ledgerAfterInsert.startedAt ?? body.startedAt,
+          finishedAt: body.finishedAt ?? ledgerAfterInsert.finishedAt,
+          syncedAt: body.syncedAt || now,
+          updatedAt: now,
+        })
+        .where(eq(runtimeUsageLedgers.id, ledgerId));
+    } else {
+      await db
+        .update(runtimeUsageLedgers)
+        .set({
+          syncedAt: body.syncedAt || now,
+          updatedAt: now,
+          status: body.status,
+          finishedAt: body.finishedAt ?? ledgerAfterInsert.finishedAt,
+        })
+        .where(eq(runtimeUsageLedgers.id, ledgerId));
+    }
+
+    const syncedLedger = await db.query.runtimeUsageLedgers.findFirst({
+      where: eq(runtimeUsageLedgers.id, ledgerId),
+    });
+
+    return c.json({
+      projectId,
+      ledger: syncedLedger ? normalizeRuntimeUsageLedgerRecord(syncedLedger) : null,
+      stepInserted: Boolean(body.step && !existingStep),
+      deltaApplied: shouldApplyDelta,
+    });
+  },
+);
+
+projectRoutes.get("/:projectId/runtime-usage-ledgers", async (c) => {
+  const projectId = c.req.param("projectId");
+  const project = await getVisibleProjectOrNull(c.get("user"), projectId);
+  if (!project) {
+    return c.json({ error: "Project not found or access denied" }, 404);
+  }
+
+  const taskId = c.req.query("taskId") || undefined;
+  const status = c.req.query("status") || undefined;
+  const limit = Math.min(Math.max(Number(c.req.query("limit") || 20), 1), 100);
+
+  const ledgers = (await db.query.runtimeUsageLedgers.findMany({
+    where: eq(runtimeUsageLedgers.projectId, projectId),
+    orderBy: [desc(runtimeUsageLedgers.createdAt)],
+  }))
+    .filter((ledger) => (taskId ? ledger.taskId === taskId : true))
+    .filter((ledger) => (status ? ledger.status === status : true))
+    .slice(0, limit);
+
+  const totals = ledgers.reduce(
+    (acc, ledger) => {
+      acc.requestCount += ledger.requestCount;
+      acc.stepCount += ledger.stepCount;
+      acc.inputTokens += ledger.inputTokens;
+      acc.outputTokens += ledger.outputTokens;
+      acc.totalTokens += ledger.totalTokens;
+      acc.costUsd = Number((acc.costUsd + ledger.costUsd).toFixed(4));
+      return acc;
+    },
+    {
+      ledgerCount: ledgers.length,
+      requestCount: 0,
+      stepCount: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      costUsd: 0,
+    },
+  );
+
+  return c.json({
+    projectId,
+    totals,
+    items: ledgers.map(normalizeRuntimeUsageLedgerRecord),
+  });
+});
+
+projectRoutes.get("/:projectId/runtime-usage-ledgers/:ledgerId", async (c) => {
+  const projectId = c.req.param("projectId");
+  const ledgerId = c.req.param("ledgerId");
+  const project = await getVisibleProjectOrNull(c.get("user"), projectId);
+  if (!project) {
+    return c.json({ error: "Project not found or access denied" }, 404);
+  }
+
+  const ledger = await db.query.runtimeUsageLedgers.findFirst({
+    where: and(eq(runtimeUsageLedgers.id, ledgerId), eq(runtimeUsageLedgers.projectId, projectId)),
+  });
+
+  if (!ledger) {
+    return c.json({ error: "Runtime usage ledger not found" }, 404);
+  }
+
+  const steps = await db.query.runtimeUsageLedgerSteps.findMany({
+    where: eq(runtimeUsageLedgerSteps.ledgerId, ledgerId),
+    orderBy: [asc(runtimeUsageLedgerSteps.requestIndex), asc(runtimeUsageLedgerSteps.createdAt)],
+  });
+
+  const stepBreakdown = steps.reduce(
+    (acc, step) => {
+      acc[step.stepType] = (acc[step.stepType] || 0) + 1;
+      return acc;
+    },
+    {} as Record<string, number>,
+  );
+
+  return c.json({
+    projectId,
+    ledger: normalizeRuntimeUsageLedgerRecord(ledger),
+    steps: steps.map(normalizeRuntimeUsageLedgerStepRecord),
+    breakdown: {
+      byStepType: stepBreakdown,
+    },
+  });
+});
+
+projectRoutes.get("/:projectId/runtime-usage-baselines", async (c) => {
+  const projectId = c.req.param("projectId");
+  const project = await getVisibleProjectOrNull(c.get("user"), projectId);
+  if (!project) {
+    return c.json({ error: "Project not found or access denied" }, 404);
+  }
+
+  const providerId = c.req.query("providerId")?.trim() || undefined;
+  const modelId = c.req.query("modelId")?.trim() || undefined;
+  const entrypointType = c.req.query("entrypointType")?.trim() || undefined;
+  const orchestrationFingerprint = c.req.query("orchestrationFingerprint")?.trim() || undefined;
+
+  const baselines = await rebuildRuntimeUsageBaseline({
+    projectId,
+    providerId,
+    modelId,
+    entrypointType,
+    orchestrationFingerprint,
+  });
+
+  const preferredMatchOrder: RuntimeUsageBaselineMatchScope[] = [
+    "project+provider+model+entrypoint+fingerprint",
+    "project+provider+model+entrypoint",
+    "project+provider+model",
+    "project+entrypoint",
+    "project",
+  ];
+
+  const baseline = preferredMatchOrder
+    .map((scope) => baselines.find((item) => item.matchScope === scope))
+    .find((item) => item && item.sampleSize > 0)
+    || null;
+
+  return c.json({
+    projectId,
+    query: {
+      providerId: providerId || null,
+      modelId: modelId || null,
+      entrypointType: entrypointType || null,
+      orchestrationFingerprint: orchestrationFingerprint || null,
+    },
+    baseline,
+    candidates: baselines,
+  });
+});
+
 projectRoutes.get("/:projectId", async (c) => {
   const projectId = c.req.param("projectId");
   const project = await getVisibleProjectOrNull(c.get("user"), projectId);

@@ -59,13 +59,13 @@
 
 - `TaskOperatingConsole`
 - `TaskOperatingOverride`
-- `TaskOperatingModeLauncher`
+- `RecommendedScenarios`
 
 职责：
 
 - `TaskOperatingConsole`：查看任务运行档位、老板决策、升级请求、阶段摘要
 - `TaskOperatingOverride`：编辑任务级运行覆盖
-- `TaskOperatingModeLauncher`：创建任务前按推荐场景选择运行模式
+- `RecommendedScenarios`：创建任务前按推荐场景选择运行模式
 
 ### 2.4 老板经营层
 
@@ -99,8 +99,8 @@
 5. `/tasks/:taskId/operating-override`
 路由名：`TaskOperatingOverride`
 
-6. `/projects/:projectId/task-operating-launch`
-路由名：`TaskOperatingModeLauncher`
+6. `/projects/:projectId/recommended-scenarios`
+路由名：`RecommendedScenarios`
 
 ## 4. 现有页面入口挂接点
 
@@ -162,7 +162,7 @@ flowchart TD
   B --> B1[OrganizationOperatingSettings]
 
   C --> C1[ProjectOperatingMode]
-  C --> C2[TaskOperatingModeLauncher]
+  C --> C2[RecommendedScenarios]
   C --> C3[BossOperationsCenter]
 
   D --> C1
@@ -185,7 +185,7 @@ flowchart TD
 flowchart LR
   S[/settings/] --> SO[/settings/organization-operating/]
   P[/projects/:projectId/] --> PM[/projects/:projectId/operating-mode/]
-  P --> PL[/projects/:projectId/task-operating-launch/]
+  P --> PL[/projects/:projectId/recommended-scenarios/]
   P --> PB[/projects/:projectId/boss-operations/]
   PO[/projects/:projectId/orchestration/] --> PM
   PO --> PB
@@ -201,7 +201,7 @@ flowchart LR
 | `ProjectOperatingMode` | 项目运行层 | `/projects/:projectId`、`/projects/:projectId/orchestration-view` | `/api/projects/:projectId` | 是 |
 | `TaskOperatingConsole` | 任务运行层 | `/tasks/:taskId`、`/tasks/:taskId/boss-decisions`、`/tasks/:taskId/escalations` | 无或轻量操作 | 是 |
 | `TaskOperatingOverride` | 任务运行层 | `/tasks/:taskId` | `/tasks/:taskId` | 第 2 期 |
-| `TaskOperatingModeLauncher` | 任务运行层 | `/config/recommended-operating-profiles`、`/projects/:projectId` | `/tasks` | 第 2 期 |
+| `RecommendedScenarios` | 任务运行层 | `/config/recommended-operating-profiles`、`/projects/:projectId` | `/tasks` | 第 2 期 |
 | `BossOperationsCenter` | 老板经营层 | `/projects/:projectId/boss-decisions`、`/projects/:projectId/orchestration-view` | 第 3 期视情况增加 | 第 3 期 |
 
 ## 8. 第 1 期最小导航闭环

@@ -2,6 +2,7 @@ import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
 import { z } from "zod";
 import { authHeader, cpFetch, createInternalAuthorization } from "../../lib/control-plane-client";
+import { recordPaidExecutionRuntimeUsage } from "../../lib/paid-execution-runtime";
 import { mergeTaskStrategy, readOrchestrationStrategy } from "../../lib/orchestration-strategy";
 import { executeLifecycleHooks } from "../hooks/lifecycle-hooks";
 import { wsBroadcaster } from "../realtime/ws-broadcaster";
@@ -588,7 +589,7 @@ agentControlRoutes.post("/:agentRunId/resume", async (c) => {
   if (run?.taskId) {
     const preResume = await runPreResumeHooks(run.taskId, run.projectId, agentRunId);
     if (!preResume.ok) {
-      return c.json({ ok: false, error: preResume.error }, 400);
+      return c.json({ ok: false, error: preResume.error }, preResume.status || 400);
     }
   }
 
@@ -734,8 +735,9 @@ async function runPreResumeHooks(
   taskId: string,
   _projectId: string,
   agentRunId: string,
-): Promise<{ ok: true } | { ok: false; error: string }> {
+): Promise<{ ok: true } | { ok: false; error: string; status?: 400 | 409 }> {
   const strategyConfig = readOrchestrationStrategy();
+  let breakerReason: string | undefined;
 
   const authorization = await createInternalAuthorization();
   const taskResult = await cpFetch<{
@@ -765,7 +767,58 @@ async function runPreResumeHooks(
       taskPrompt: task.prompt,
       agentRunId,
     },
+    onHookExecuted: async (execution) => {
+      if (!execution.sessionId || !execution.model || !execution.tokenUsed || execution.tokenUsed <= 0) {
+        return;
+      }
+
+      const outcome = await recordPaidExecutionRuntimeUsage({
+        authorization,
+        taskId: task.id,
+        projectId: task.projectId,
+        sessionId: execution.sessionId,
+        agentRunId,
+        modelRoute: execution.model,
+        tokenUsed: execution.tokenUsed,
+        requestDelta: 1,
+        action: "pre_resume_usage_recorded",
+        runtimeLedger: {
+          executionSource: "task-pre-resume-hook",
+          entrypointType: "hook-only",
+          hookRequestCountDelta: 1,
+          status: execution.status === "failed" ? "failed" : "completed",
+          finishedAt: execution.completedAt,
+          step: {
+            stepType: "resume",
+            triggerType: execution.trigger,
+            hookId: execution.hookId,
+            amplificationSource: "hook",
+            status: execution.status === "failed" ? "failed" : execution.status === "skipped" ? "skipped" : "completed",
+            finishedAt: execution.completedAt,
+          },
+        },
+        detail: {
+          hookId: execution.hookId,
+          trigger: execution.trigger,
+          status: execution.status,
+          agent: execution.agent,
+        },
+        riskLevel: "medium",
+      });
+
+      if (outcome.tripped) {
+        breakerReason = outcome.breakerReason || "paid execution breaker tripped during pre-resume hooks";
+        return {
+          stop: true,
+          reason: breakerReason,
+        };
+      }
+    },
   });
+
+  if (breakerReason) {
+    return { ok: false, error: breakerReason, status: 409 };
+  }
 
   if (hookResult.rewrittenPrompt) {
     const guidanceResult = await injectGuidance(

@@ -133,6 +133,17 @@
           {{ record.orgName }}
         </template>
 
+        <template v-if="column.key === 'projectGroup'">
+          <a-space wrap :size="4">
+            <a-tag :color="projectGroupTagColor(record)">
+              {{ projectGroupDisplay(record).label }}
+            </a-tag>
+            <a-tag :color="projectGroupDisplay(record).source === 'explicit' ? 'blue' : 'default'">
+              {{ projectGroupDisplay(record).source === 'explicit' ? '显式' : '派生' }}
+            </a-tag>
+          </a-space>
+        </template>
+
         <template v-if="column.key === 'projectStatus'">
           <a-tag :color="statusColor(record.projectStatus)">
             {{ statusLabel(record.projectStatus) }}
@@ -278,6 +289,28 @@
             @update:value="createForm.description = String($event ?? '')"
           />
         </a-form-item>
+        <a-form-item label="项目组标识">
+          <a-input
+            :value="createForm.projectGroupKey"
+            placeholder="例如 core-platform"
+            :maxlength="100"
+            @update:value="createForm.projectGroupKey = String($event ?? '')"
+          />
+          <div style="font-size: 12px; color: #8c8c8c; margin-top: 4px">
+            可选。Dashboard 会优先使用这个标识做同组织项目聚合。
+          </div>
+        </a-form-item>
+        <a-form-item label="项目组展示名">
+          <a-input
+            :value="createForm.projectGroupLabel"
+            placeholder="例如 核心平台"
+            :maxlength="100"
+            @update:value="createForm.projectGroupLabel = String($event ?? '')"
+          />
+          <div style="font-size: 12px; color: #8c8c8c; margin-top: 4px">
+            可选。留空时会回退显示标识；两个字段都为空时才使用派生项目组规则。
+          </div>
+        </a-form-item>
       </a-form>
     </a-modal>
 
@@ -308,6 +341,22 @@
             @update:value="editForm.description = String($event ?? '')"
           />
         </a-form-item>
+        <a-form-item label="项目组标识">
+          <a-input
+            :value="editForm.projectGroupKey"
+            placeholder="例如 core-platform"
+            :maxlength="100"
+            @update:value="editForm.projectGroupKey = String($event ?? '')"
+          />
+        </a-form-item>
+        <a-form-item label="项目组展示名">
+          <a-input
+            :value="editForm.projectGroupLabel"
+            placeholder="例如 核心平台"
+            :maxlength="100"
+            @update:value="editForm.projectGroupLabel = String($event ?? '')"
+          />
+        </a-form-item>
       </a-form>
     </a-modal>
   </div>
@@ -321,6 +370,7 @@ import { useRouter } from "vue-router";
 import {
   type Org,
   type ProjectOverviewItem,
+  type ProjectSettings,
   archiveProject,
   createProject,
   listOrgs,
@@ -372,11 +422,15 @@ const createForm = ref({
   name: "",
   slug: "",
   description: "",
+  projectGroupKey: "",
+  projectGroupLabel: "",
 });
 
 const editForm = ref({
   name: "",
   description: "",
+  projectGroupKey: "",
+  projectGroupLabel: "",
 });
 
 // ── Table columns ──────────────────────────────────────────────────
@@ -384,6 +438,7 @@ const editForm = ref({
 const columns = [
   { title: "项目名称", key: "name", dataIndex: "name", width: 220 },
   { title: "所属组织", key: "orgName", dataIndex: "orgName", width: 120 },
+  { title: "项目组", key: "projectGroup", width: 170 },
   { title: "状态", key: "projectStatus", dataIndex: "projectStatus", width: 90 },
   { title: "配置完成度", key: "completion", width: 180 },
   { title: "风险提示", key: "risks", width: 200 },
@@ -560,7 +615,7 @@ async function handleCreate() {
     return;
   }
 
-  const { orgId, name, slug, description } = createForm.value;
+  const { orgId, name, slug, description, projectGroupKey, projectGroupLabel } = createForm.value;
   if (!orgId || !name.trim() || !slug.trim()) {
     message.warning("请填写必填字段");
     return;
@@ -572,16 +627,25 @@ async function handleCreate() {
 
   creating.value = true;
   try {
+    const settings = buildProjectGroupSettings(projectGroupKey, projectGroupLabel);
     const project = await createProject({
       orgId,
       name: name.trim(),
       slug: slug.trim(),
       description: description.trim() || undefined,
+      ...(settings ? { settings } : {}),
     });
     message.success("项目创建成功");
     projectStore.addProject(project);
     showCreateModal.value = false;
-    createForm.value = { orgId: orgs.value[0]?.id || "", name: "", slug: "", description: "" };
+    createForm.value = {
+      orgId: orgs.value[0]?.id || "",
+      name: "",
+      slug: "",
+      description: "",
+      projectGroupKey: "",
+      projectGroupLabel: "",
+    };
     await loadOverview();
   } catch (e) {
     message.error(`创建失败: ${e}`);
@@ -595,6 +659,8 @@ function openEdit(record: ProjectOverviewItem) {
   editForm.value = {
     name: record.name || "",
     description: record.description || "",
+    projectGroupKey: normalizeProjectGroupSetting(record.settings?.projectGroupKey),
+    projectGroupLabel: normalizeProjectGroupSetting(record.settings?.projectGroupLabel),
   };
   showEditModal.value = true;
 }
@@ -607,9 +673,14 @@ async function handleEdit() {
 
   editing.value = true;
   try {
+    const settings = buildProjectGroupSettings(editForm.value.projectGroupKey, editForm.value.projectGroupLabel);
     await updateProject(editingProjectId.value, {
       name: editForm.value.name.trim(),
       description: editForm.value.description.trim(),
+      settings: {
+        projectGroupKey: settings?.projectGroupKey ?? null,
+        projectGroupLabel: settings?.projectGroupLabel ?? null,
+      },
     });
     message.success("保存成功");
     showEditModal.value = false;
@@ -637,5 +708,101 @@ function formatRelativeTime(ts?: string | null) {
   const days = Math.floor(hours / 24);
   if (days < 30) return `${days} 天前`;
   return formatTime(ts);
+}
+
+function projectGroupDisplay(record: Record<string, unknown>) {
+  if (!isProjectOverviewItem(record)) {
+    return {
+      label: "未分组",
+      source: "derived" as const,
+    };
+  }
+
+  const explicitKey = normalizeProjectGroupSetting(record.settings?.projectGroupKey).trim();
+  const explicitLabel = normalizeProjectGroupSetting(record.settings?.projectGroupLabel).trim();
+
+  if (explicitKey || explicitLabel) {
+    return {
+      label: explicitLabel || explicitKey,
+      source: "explicit" as const,
+    };
+  }
+
+  const lookup = buildDerivedProjectGroupLookup(overviewRows.value);
+  return lookup[record.id] ?? {
+    label: record.name,
+    source: "derived" as const,
+  };
+}
+
+function projectGroupTagColor(record: Record<string, unknown>) {
+  return projectGroupDisplay(record).source === "explicit" ? "geekblue" : "default";
+}
+
+function buildDerivedProjectGroupLookup(projects: Array<Pick<ProjectOverviewItem, "id" | "orgId" | "name" | "slug" | "settings">>) {
+  const familyCountByScopedKey = new Map<string, number>();
+  const candidateByProjectId = new Map<string, string | null>();
+
+  for (const project of projects) {
+    const explicitKey = normalizeProjectGroupSetting(project.settings?.projectGroupKey).trim();
+    const explicitLabel = normalizeProjectGroupSetting(project.settings?.projectGroupLabel).trim();
+    if (explicitKey || explicitLabel) {
+      continue;
+    }
+
+    const candidate = deriveProjectGroupFamilyCandidate(project.slug, project.name);
+    candidateByProjectId.set(project.id, candidate);
+    if (!candidate) continue;
+    const scopedKey = `${project.orgId}::${candidate}`;
+    familyCountByScopedKey.set(scopedKey, (familyCountByScopedKey.get(scopedKey) ?? 0) + 1);
+  }
+
+  const lookup: Record<string, { label: string; source: "derived" }> = {};
+  for (const project of projects) {
+    const candidate = candidateByProjectId.get(project.id) ?? null;
+    const count = candidate ? familyCountByScopedKey.get(`${project.orgId}::${candidate}`) ?? 0 : 0;
+    lookup[project.id] = {
+      label: count >= 2 && candidate ? candidate : project.name,
+      source: "derived",
+    };
+  }
+
+  return lookup;
+}
+
+function deriveProjectGroupFamilyCandidate(slug?: string | null, name?: string | null) {
+  const slugTokens = tokenizeProjectGroupSource(slug);
+  if (slugTokens.length > 0) {
+    return slugTokens[0] ?? null;
+  }
+
+  const nameTokens = tokenizeProjectGroupSource(name);
+  return nameTokens[0] ?? null;
+}
+
+function tokenizeProjectGroupSource(value?: string | null) {
+  return (value || "")
+    .trim()
+    .toLowerCase()
+    .split(/[\s._:/-]+/)
+    .filter(Boolean);
+}
+
+function normalizeProjectGroupSetting(value: unknown) {
+  return typeof value === "string" ? value : "";
+}
+
+function buildProjectGroupSettings(projectGroupKey: string, projectGroupLabel: string): Pick<ProjectSettings, "projectGroupKey" | "projectGroupLabel"> | null {
+  const normalizedKey = projectGroupKey.trim();
+  const normalizedLabel = projectGroupLabel.trim();
+
+  if (!normalizedKey && !normalizedLabel) {
+    return null;
+  }
+
+  return {
+    projectGroupKey: normalizedKey || null,
+    projectGroupLabel: normalizedLabel || null,
+  };
 }
 </script>

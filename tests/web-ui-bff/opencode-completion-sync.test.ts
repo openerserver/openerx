@@ -1,6 +1,10 @@
 import { expect, test } from "bun:test";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  paidExecutionIntegrationTest,
+  resolveExecutionIntegrationModel,
+} from "./execution-integration-guard";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -10,17 +14,11 @@ const USERNAME = process.env.TEST_USERNAME || "admin";
 const PASSWORD = process.env.TEST_PASSWORD || "admin123!";
 const DB_PATH =
   process.env.TEST_DB_PATH || resolve(__dirname, "../../control-plane/service/data/openerx.db");
-const executionIntegrationTest = process.env.RUN_EXECUTION_INTEGRATION === "1" ? test : test.skip;
+const executionIntegrationTest = paidExecutionIntegrationTest;
 
 interface ConfigModelRecord {
   id?: string;
   provider?: string;
-}
-
-interface ProjectRecord {
-  settings?: {
-    defaultModel?: string;
-  } | null;
 }
 
 interface ExecutionPlanCandidate {
@@ -78,31 +76,16 @@ async function getAvailableCopilotModel(token: string): Promise<string> {
     "Content-Type": "application/json",
   };
 
-  const modelList = await request<{ data?: ConfigModelRecord[] }>("/api/config/models/list", {
-    headers: authHeaders,
-  });
+  const [modelList, testPolicy] = await Promise.all([
+    request<{ data?: ConfigModelRecord[] }>("/api/config/models/list", {
+      headers: authHeaders,
+    }),
+    request<{ data?: { effectiveModel?: string | null } }>("/api/config/models/test-policy", {
+      headers: authHeaders,
+    }),
+  ]);
 
-  const configuredCopilotModel = (modelList.data || []).find(
-    (model) =>
-      typeof model.provider === "string"
-      && model.provider.startsWith("github-copilot")
-      && typeof model.id === "string"
-      && model.id.trim().length > 0,
-  );
-
-  if (configuredCopilotModel?.provider && configuredCopilotModel.id) {
-    return `${configuredCopilotModel.provider}:${configuredCopilotModel.id}`;
-  }
-
-  const project = await request<ProjectRecord>(`/api/projects/${PROJECT_ID}`, {
-    headers: authHeaders,
-  });
-
-  if (project.settings?.defaultModel?.startsWith("github-copilot")) {
-    return project.settings.defaultModel;
-  }
-
-  return "github-copilot:claude-sonnet-4";
+  return resolveExecutionIntegrationModel(modelList.data || [], testPolicy.data?.effectiveModel);
 }
 
 function createDeferred<T>() {

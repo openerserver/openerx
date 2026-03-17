@@ -15,7 +15,7 @@
 不在第 1 期实现：
 
 - `TaskOperatingOverride`
-- `TaskOperatingModeLauncher`
+- `RecommendedScenarios`
 - `BossOperationsCenter`
 
 这些页面留到第 2 期和第 3 期再接入。
