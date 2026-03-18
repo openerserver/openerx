@@ -284,71 +284,6 @@ OpenCode 通过 `opencode.json` 配置加载 TypeScript 插件，每个插件通
 - **Ralph Loop**：连续迭代执行，内置停滞检测（3 轮无进展 → 终止）
 - **上下文剪枝**：去重读取、压缩错误输出、追踪 token 节省
 
-#### 4.2 Task Graph Plugin（DAG 任务图）
-
-核心能力：
-
-- 构建**有向无环图（DAG）**管理子任务依赖
-- 节点状态机：`pending → in_progress → completed/failed/blocked`
-- 边类型：`blocks`（硬依赖）/ `informs`（软依赖）
-- 核心算法：`getReadyNodes()` 返回可执行节点、`unblockCompletedDependents()` 级联解锁下游、`checkGraphCompletion()` 检测全局完成
-- 持久化到 `~/.opencode/state/task-graphs/{graphId}.json`
-
-##### 4.2.1 历史 Graph 修复运维
-
-当旧任务在控制平面或前端中显示为空图，但运行时目录里仍保留 `task-graphs/*.json` 时，可使用一次性修复脚本将历史图重新镜像回控制平面数据库。
-
-脚本位置：`control-plane/service/src/cli/repair-historical-graphs.ts`
-
-脚本入口：
-
-```bash
-cd control-plane/service
-bun run cli:repair-graphs --dry-run
-```
-
-正式执行：
-
-```bash
-cd control-plane/service
-bun run cli:repair-graphs
-```
-
-可选参数：
-
-- `--dry-run`：仅输出将要修复的 graph，不写数据库、不改 runtime graph 文件
-- `--graph-dir <path>`：覆盖默认运行时 graph 目录
-- `--graph-id <id>`：只修复单个 graph 文件
-- `--task-id <id>`：只修复将被解析到指定任务的 graph
-- `--no-rewrite`：只回填控制平面数据库，不改写 runtime graph 文件中的 `taskId`
-
-脚本行为：
-
-- 扫描 runtime graph 目录中的 JSON 文件
-- 优先使用控制平面中的 `tasks`、`sessions`、`agent_runs`、`task_nodes` 映射解析真实任务 ID
-- 如历史 graph 使用了伪造 `taskId`，再回读主会话消息，从 `create_sub_session`、`task_graph_create`、`task_graph_query` 中反推真实任务 ID
-- 将解析后的节点和边重建到控制平面数据库中的 `task_nodes`、`task_edges`
-- 默认会把 runtime graph 文件中的 `taskId` 改写为真实任务 ID，便于后续排障
-
-验收方式：
-
-```bash
-cd control-plane/service
-psql "$DATABASE_URL" -c "select task_id, graph_id, count(*) as nodes from task_nodes where task_id = '<task-id>' group by task_id, graph_id;"
-```
-
-也可直接检查前端接口：
-
-```bash
-curl http://127.0.0.1:4098/api/tasks/<task-id>/graph
-```
-
-已知边界：
-
-- 该脚本只能恢复运行时文件和主会话消息里确实存在的数据，不能凭空重建从未持久化的边或节点语义
-- 如果原始 graph 文件只有节点、没有边，那么修复后前端仍会显示 `0` 条边，这是源数据缺失，不是修复失败
-- 若 graph 无法映射到任何真实控制平面任务，脚本会将其标记为 `skipped`，不会强行落库
-
 #### 4.3 Context Injection Plugin（上下文注入）
 
 核心能力：
@@ -386,7 +321,7 @@ OpenCode 配置了 9 个专业化 Agent（Markdown 定义在 `.opencode/agents/`
 
 | Agent | 角色 |
 |-------|------|
-| **Sisyphus** | 主编排器：接收复杂任务 → 调度规划 → 创建 DAG → 分配子任务，从不直接写代码 |
+| **Sisyphus** | 主编排器：接收复杂任务 → 调度规划 → 分配子任务，从不直接写代码 |
 | **Prometheus** | 规划器：强制面试用户（≥3 个问题）→ 生成结构化 JSON 计划 |
 | **Metis** | 假设审计：识别技术/业务/集成/性能维度的隐藏假设 |
 | **Momus** | 计划验证：评分 clarity/completeness/verifiability/feasibility（≥3 分通过） |
@@ -405,9 +340,8 @@ OpenCode 配置了 9 个专业化 Agent（Markdown 定义在 `.opencode/agents/`
   → Sisyphus 调度 Prometheus 制定计划
   → Metis 审计隐藏假设
   → Momus 验证计划可行性
-  → task_graph_create() 创建 DAG
-  → 按依赖顺序分派节点给 Hephaestus/Oracle/Librarian
-  → 节点完成 → 级联解锁下游
+  → 按计划和阶段顺序分派任务给 Hephaestus/Oracle/Librarian
+  → 子任务完成后汇总结果并进入下一阶段
   → 全部完成 → Sisyphus 生成交接摘要
 ```
 
@@ -430,16 +364,10 @@ OpenerX 的 BFF 层通过以下三个模块实现与 OpenCode Runtime 的集成�
 - 检测完成信号 → 触发 `task.completed`
 - 指数退避重连（最多 10 次）
 
-**DAG Sync**（`web-ui-bff/src/modules/realtime/dag-sync.ts`）：
-
-- 监听 `tool.execute.after` 中的 `task_graph_*` 事件
-- 从文件系统读取 graph JSON → 同步到控制平面 DB
-
 数据流闭环：
 
 ```
 OpenCode Runtime → SSE → BFF Aggregator → WebSocket → 前端实时更新
-                                        → DAG Sync → Control Plane DB
 ```
 
 ---

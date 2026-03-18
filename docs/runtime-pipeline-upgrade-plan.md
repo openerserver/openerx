@@ -1,8 +1,9 @@
 # 运行流水线（Runtime Pipeline）升级方案
 
 > 适用范围：OpenerX 控制平面 — 任务运行可观测性与流水线引擎升级
->
 > 目标：将当前"消息回溯式规划摘要"升级为"分支感知、事件驱动的运行流水线"，在 UI 上呈现"计划步骤 → 运行节点 → 输出结果"的完整映射
+> 状态说明：本文档中涉及旧版图模型兼容层的设计已经过时。
+> 当前实现已移除独立 DAG 兼容层，运行流水线只围绕 Workflow 阶段、ExecutionPlan、Hook 执行记录和实时事件展开。阅读本文件时，请以 [docs/dag-node-execution-plan-v2.md](docs/dag-node-execution-plan-v2.md) 的清理结论为准。
 
 ## 1. 文档目标
 
@@ -12,7 +13,7 @@
 - 运行流水线的目标模型是什么
 - 数据模型、API、BFF、前端分别需要做哪些变更
 - 分哪几个阶段推进，每阶段交付什么
-- 与现有 executionPlan / taskGraph / session 机制怎样复用与对齐
+- 与现有 executionPlan / session 机制怎样复用与对齐
 
 ## 2. 现状分析
 
@@ -26,15 +27,13 @@
 | 刷新时机 | 前端收到 `task.continued` 事件时全量重新拉取 | `TaskDetail.vue` `scheduleTaskRefresh` |
 | 分支感知 | 无 — 始终读 task 创建时的 sessionId，不跟随用户切换的活跃分支 | 同上 |
 | 与 executionPlan 关系 | 无 — 完全独立；executionPlan 有自己的 steps/candidates 但 pipeline 不消费 | — |
-| 与 taskGraph 关系 | 无 — 任务图有自己的 DAG 节点，pipeline 不关联 | — |
 
 ### 2.2 核心问题
 
 1. **静态快照而非运行态**：只反映任务首次规划阶段的 3 个 agent 输出，后续追问不更新也不新增步骤。
 2. **不感知分支**：用户 fork 到新分支后，pipeline 仍然读 root session 的消息。
 3. **不消费已有编排数据**：executionPlan（steps + candidates + judgeResult）和 task strategy（hookExecutions）已落库，但 pipeline 端点完全绕过了这些数据。
-4. **不对齐任务图**：taskGraph 的 DAG 节点有独立的 status/output/token，但 pipeline 无法关联。
-5. **无增量更新**：前端只在 `task.continued` 时做全量 HTTP 拉取，没有事件驱动增量推送。
+4. **无增量更新**：前端只在 `task.continued` 时做全量 HTTP 拉取，没有事件驱动增量推送。
 
 ### 2.3 可复用的基础设施
 
@@ -42,8 +41,7 @@
 | -------- | -------- | -------- |
 | `ExecutionPlan` 数据模型 | steps + candidates + dependsOn + judgeResult，已持久化到 `tasks.executionPlan` JSON 字段 | 作为运行流水线的核心数据源 |
 | `PersistedTaskStrategy` | hookExecutions 追加记录，已持久化到 `tasks.strategy` JSON 字段 | 作为 hook 阶段数据源 |
-| `TaskGraph` DAG | nodes + edges，runtime 产出 → `dag-sync` → service DB，前端 vue-flow 渲染 | 作为 graph 对齐层 |
-| SSE 事件体系 | `agent.started`, `task.completed`, `task.continued`, `task.hooks.updated`, `task.node.updated` 等 | 作为增量推送通道 |
+| SSE 事件体系 | `agent.started`, `task.completed`, `task.continued`, `task.hooks.updated` 等 | 作为增量推送通道 |
 | session lineage | `task_sessions` 表，root/fork/sub_session 血统，`session.activated` 事件 | 作为分支感知的数据依据 |
 | `mergeTaskStrategy()` | 追加 hookExecutions 到 strategy JSON | 复用追加逻辑扩展到 pipeline steps |
 
@@ -51,7 +49,7 @@
 
 ### 3.1 概念定义
 
-**运行流水线（Runtime Pipeline）** 是一个分支感知、事件驱动的执行进度视图。它将任务的 executionPlan、hook 执行记录、task graph 节点和实时 SSE 事件统一投射到一条有序的阶段序列上，让用户在 UI 上看到"当前分支正在执行到哪一步"。
+**运行流水线（Runtime Pipeline）** 是一个分支感知、事件驱动的执行进度视图。它将任务的 executionPlan、hook 执行记录和实时 SSE 事件统一投射到一条有序的阶段序列上，让用户在 UI 上看到"当前分支正在执行到哪一步"。
 
 它不是独立的 DAG 执行引擎（这部分由 OpenCode Runtime + SSE Aggregator 承担），而是一个**聚合视图层**，从多个已有数据源计算出统一的流水线状态。
 
@@ -72,14 +70,14 @@ RuntimePipeline {
 
 RuntimePipelineStage {
   id: string                 // 全局唯一，如 "hook:pre-execution:0" 或 "exec:candidate:1"
-  type: "hook" | "planning" | "execution" | "judge" | "post-hook" | "graph-node"
+  type: "hook" | "planning" | "execution" | "judge" | "post-hook"
   label: string              // UI 显示名
   status: "pending" | "running" | "completed" | "failed" | "skipped"
   order: number              // 排序序号
 
   // 关联引用
-  sourceType: "executionPlan.step" | "strategy.hookExecution" | "taskGraph.node" | "session.message"
-  sourceId: string | null    // 对应 step.id / hookExecution.hookId / node.id / messageId
+  sourceType: "executionPlan.step" | "strategy.hookExecution" | "session.message"
+  sourceId: string | null    // 对应 step.id / hookExecution.hookId / messageId
 
   // 执行详情
   agent: string | null
@@ -95,9 +93,6 @@ RuntimePipelineStage {
 
   // 成本
   tokens: { input: number; output: number } | null
-
-  // DAG 对齐
-  graphNodeId: string | null  // 关联的 taskGraph node ID（如果有）
   dependsOn: string[]         // 依赖的 stage id 列表
 }
 
@@ -118,11 +113,10 @@ PipelineSummary {
 ExecutionPlan.steps → RuntimePipelineStage（type = step.type）
 ExecutionPlan.candidates → RuntimePipelineStage（type = "execution"，一个 candidate 一个 stage）
 PersistedTaskStrategy.hookExecutions → RuntimePipelineStage（type = "hook" 或 "post-hook"）
-TaskGraph.nodes → RuntimePipelineStage（type = "graph-node"，可双向关联）
 Session messages（规划 agent） → RuntimePipelineStage（type = "planning"，保留向后兼容）
 ```
 
-映射优先级：executionPlan > hookExecutions > taskGraph nodes > session messages。当多个来源指向同一逻辑步骤时，以 executionPlan 的步骤为锚点，其余合并到同一 stage。
+映射优先级：executionPlan > hookExecutions > session messages。当多个来源指向同一逻辑步骤时，以 executionPlan 的步骤为锚点，其余合并到同一 stage。
 
 ### 3.4 分支感知逻辑
 
@@ -133,11 +127,10 @@ Session messages（规划 agent） → RuntimePipelineStage（type = "planning"�
   a. Phase 1-3：统一读取 tasks.executionPlan，分支之间共享同一份 plan
   b. Phase 4：如引入 `task_sessions.executionPlanSnapshot`，则 fork 分支优先读快照，否则回退到 tasks.executionPlan
 4. 读该 session 的消息历史用于填充 planning stage
-5. 读该 session 关联的 graph nodes（通过 taskGraph.nodes.sessionId 匹配）
-6. 汇总 hook 执行记录
+5. 汇总 hook 执行记录
   a. Phase 1-3：hookExecutions 仍按 task 级记录展示，不承诺严格 session 隔离
   b. Phase 4：如 hookExecution 增加 session 关联字段，再做严格分支过滤
-7. 计算 stages 排序和状态
+6. 计算 stages 排序和状态
 ```
 
 ### 3.5 增量更新通道
@@ -148,7 +141,6 @@ Session messages（规划 agent） → RuntimePipelineStage（type = "planning"�
 | ---- | -------- |
 | `agent.started` | 标记 execution stage → running |
 | `task.hooks.updated` | 追加或更新 hook stage |
-| `task.node.updated` | 追加或更新 graph-node stage |
 | `task.completed` / `agent.completed` | 标记 execution stage → completed，触发全量刷新确保一致性 |
 | `task.continued` | 触发当前分支流水线重算或刷新；是否新增 execution stage 取决于是否进入重规划能力 |
 | `session.activated` | 切换 pipeline 到新分支的 session，全量刷新 |
@@ -201,11 +193,7 @@ async function buildRuntimePipeline(taskId: string, sessionId?: string): Promise
   const plan: ExecutionPlan | null = task.executionPlan ? JSON.parse(task.executionPlan) : null
   const strategy: PersistedTaskStrategy | null = task.strategy ? JSON.parse(task.strategy) : null
 
-  // 4. 获取 graph nodes（按 session 做视图过滤；并不代表分支有独立 graph 快照）
-  const graph = await getTaskGraph(taskId)
-  const sessionNodes = graph.nodes.filter(n => n.sessionId === targetSessionId || !n.sessionId)
-
-  // 5. 获取 session 消息用于 planning stages
+  // 4. 获取 session 消息用于 planning stages
   const messages = await getSessionMessages(targetSessionId)
 
   // 6. 组装 stages
@@ -280,7 +268,7 @@ async function buildRuntimePipeline(taskId: string, sessionId?: string): Promise
 在 `sse-aggregator.ts` 中，每次已有事件触发 task 状态变更后，额外计算 pipeline stage diff 并广播：
 
 ```typescript
-// 在 maybeFinalizeRun()、hook 完成、dag-sync 完成后调用
+// 在运行结束、hook 完成或阶段状态刷新后调用
 async function emitPipelineStagePatch(taskId: string, sessionId: string, changedStage: RuntimePipelineStage) {
   const summary = await computeQuickSummary(taskId, sessionId)
   broadcastToTask(taskId, {
@@ -402,40 +390,10 @@ watch(activeSessionId, (newSid) => {
 | 交互 | 行为 |
 | ---- | ---- |
 | 点击任意 stage | 展开详情：output 预览、token、耗时、agent、model |
-| 点击 graph-node 类型 stage | 高亮 TaskGraph 中对应节点（双向联动） |
+| 点击 stage | 展开详情：output 预览、token、耗时、agent、model |
 | 分支下拉切换 | 调用 `refreshPipeline(newSessionId)`，切换视图 |
 | Stage 状态为 failed | 红色标记 + 展开 error 信息 |
 | 续问后新增步骤 | 插入新 stage 并标记"重规划"标签 |
-
-### 5.3 任务图双向联动
-
-TaskGraph 和 RuntimePipeline 通过 `graphNodeId` 关联：
-
-```typescript
-// TaskGraph.vue — 新增 prop
-props: {
-  highlightNodeId: string | null  // 来自 pipeline 面板选中
-}
-
-// 点击 graph node 时 emit
-emit('node-selected', nodeId)
-
-// TaskDetail.vue 中桥接
-const selectedGraphNode = ref<string | null>(null)
-const selectedPipelineStage = ref<string | null>(null)
-
-// pipeline stage 选中 → 高亮 graph node
-watch(selectedPipelineStage, (stageId) => {
-  const stage = runtimePipeline.value?.stages.find(s => s.id === stageId)
-  selectedGraphNode.value = stage?.graphNodeId ?? null
-})
-
-// graph node 选中 → 高亮 pipeline stage
-function onGraphNodeSelected(nodeId: string) {
-  const stage = runtimePipeline.value?.stages.find(s => s.graphNodeId === nodeId)
-  selectedPipelineStage.value = stage?.id ?? null
-}
-```
 
 ## 6. 分阶段交付计划
 
@@ -467,7 +425,7 @@ function onGraphNodeSelected(nodeId: string) {
 
 | 层 | 文件 | 变更 |
 | -- | ---- | ---- |
-| BFF | `modules/realtime/sse-aggregator.ts` | 在 `maybeFinalizeRun()`、hook 完成、`maybeSyncDag()` 后调用 `emitPipelineStagePatch()` |
+| BFF | `modules/realtime/sse-aggregator.ts` | 在 `maybeFinalizeRun()`、hook 完成后调用 `emitPipelineStagePatch()` |
 | BFF | `lib/runtime-pipeline.ts` | 新增 `computeStageDiff()`，对比前后 stage 状态 |
 | 前端 | `pages/TaskDetail.vue` | 监听 `pipeline.stage.updated` 事件，增量 patch `runtimePipeline` |
 | 前端 | `stores/realtime.ts` | 注册 `pipeline.stage.updated` 事件类型 |
@@ -478,25 +436,7 @@ function onGraphNodeSelected(nodeId: string) {
 - Hook 执行结果实时追加到 pipeline
 - `task.continued` 在 Phase 2 只要求触发刷新，不要求自动生成新的 plan/stage
 
-### Phase 3：任务图对齐 + 双向联动（可视化层）
-
-**目标**：pipeline stage 与 taskGraph node 双向对齐，点击可联动。
-
-**变更清单**：
-
-| 层 | 文件 | 变更 |
-| -- | ---- | ---- |
-| BFF | `lib/runtime-pipeline.ts` | `alignGraphNodesToStages()` 实现，graph node 嵌套在 execution stage 下 |
-| 前端 | `components/TaskGraph.vue` | 新增 `highlightNodeId` prop + `node-selected` emit |
-| 前端 | `pages/TaskDetail.vue` | 桥接 pipeline ↔ graph 的选中状态 |
-| 前端 | CSS | 高亮选中节点的视觉样式 |
-
-**验收标准**：
-- 点击 pipeline 中某个 graph-node stage，TaskGraph 高亮对应节点
-- 点击 TaskGraph 某节点，pipeline 面板滚动到对应 stage
-- DAG 节点嵌套在执行 stage 下，呈父子缩进
-
-### Phase 4：续问重规划 + 差异对比（推演层）
+### Phase 3：续问重规划 + 差异对比（推演层）
 
 **目标**：用户续问后，pipeline 能展示新增/跳过/失效的步骤，并可对比初始计划。
 
@@ -514,7 +454,7 @@ function onGraphNodeSelected(nodeId: string) {
 - 续问后 pipeline 中新增步骤标记可见
 - Diff 视图可展示"原计划步骤 A→B→C" vs "实际路径 A→B→D→E"
 
-### Phase 5：人工干预 + 成本分析 + 异常诊断（高级能力层）
+### Phase 4：人工干预 + 成本分析 + 异常诊断（高级能力层）
 
 **目标**：支持对单个 stage 的操控和诊断。此阶段可根据产品优先级拆分为独立子项。
 
@@ -550,8 +490,8 @@ Phase 1 中 planning stage 仍然保留，原因是当前 UI 上用户已经看�
 因此本方案默认：
 
 - Phase 1-2 只做只读观测，不开放 stage action API
-- Phase 3 仍只做双向联动，不写执行状态
-- 只有在 Phase 5 才评估把 pipeline 从观测面升级为控制面
+- Phase 3 只做重规划与差异展示，不写执行状态
+- 只有在 Phase 4 才评估把 pipeline 从观测面升级为控制面
 
 ### 7.1 不新增 DB 表
 
@@ -569,9 +509,8 @@ Phase 1 中 planning stage 仍然保留，原因是当前 UI 上用户已经看�
 
 ### 7.3 性能考量
 
-- `buildRuntimePipeline()` 需要 3 次 IO（getTask、getTaskGraph、getSessionMessages），可并行
+- `buildRuntimePipeline()` 需要 2-3 次 IO（getTask、getSessionMessages，以及按需读取其他聚合数据），可并行
 - 增量推送后，前端正常场景下只在分支切换和任务完成时做全量 HTTP 拉取
-- graph node 数量较大时（> 50），only 关联到 execution stage 的节点加入 pipeline，其余仍在 TaskGraph DAG 中独立展示
 
 ### 7.4 executionPlan 冻结与分支快照
 
@@ -586,10 +525,8 @@ Phase 1 中 planning stage 仍然保留，原因是当前 UI 上用户已经看�
 | 编排策略 | `web-ui-bff/src/lib/orchestration-strategy.ts` | 策略读写、plan 构建 | 只读复用 |
 | SSE 聚合器 | `web-ui-bff/src/modules/realtime/sse-aggregator.ts` | 事件转换、完成检测 | Phase 2 |
 | 任务执行 | `web-ui-bff/src/modules/tasks/routes.ts` | 任务创建/执行/续问 | Phase 4 |
-| DAG 同步 | `web-ui-bff/src/lib/dag-sync.ts` | runtime → DB 图同步 | Phase 3 |
 | 前端 API | `web-ui/src/lib/api.ts` | pipeline API 调用 | Phase 1 |
 | 任务详情 | `web-ui/src/pages/TaskDetail.vue` | pipeline 面板渲染 | Phase 1-4 |
-| 任务图 | `web-ui/src/components/TaskGraph.vue` | DAG 渲染 | Phase 3 |
 | 类型定义 | `web-ui/src/types/pipeline.ts`（新建） | — | Phase 1 |
 | Service 任务 | `service/src/modules/tasks/routes.ts` | task CRUD | 不变 |
 | Service Schema | `service/src/db/schema.ts` | tasks / task_sessions 表 | Phase 4（新增字段） |
@@ -599,7 +536,6 @@ Phase 1 中 planning stage 仍然保留，原因是当前 UI 上用户已经看�
 | 风险 | 影响 | 缓解措施 |
 | ---- | ---- | -------- |
 | executionPlan 为空（旧任务没有 plan） | pipeline 退化为只有 planning agent stages | 当 plan 为空时 fallback 到现有消息回溯逻辑 |
-| graph node 和 executionPlan 步骤不一致 | pipeline 出现"孤儿"节点 | 不一致的 graph node 单独作为 `graph-node` type 展示，不影响主流程 |
 | fork session 无独立 plan 快照 | 多分支共享同一 plan，差异对比无意义 | Phase 1-3 不做分支 plan diff；Phase 4 引入快照 |
 | 增量推送导致前端 stage 列表与服务端不一致 | 极端情况下 stage 丢失或重复 | 每次 task.completed 时做全量刷新兜底 |
 | hook 异步完成导致 stage 顺序错乱 | UI 显示跳跃 | stage 始终按 order 排序，hook 完成时更新 finishedAt 但不改 order |
@@ -621,11 +557,6 @@ export async function buildRuntimePipeline(args: {
 }): Promise<RuntimePipeline>
 
 export function computePipelineSummary(stages: RuntimePipelineStage[]): PipelineSummary
-
-export function alignGraphNodesToStages(
-  stages: RuntimePipelineStage[],
-  nodes: TaskGraphNode[],
-): RuntimePipelineStage[]
 
 export function taskStatusToPipelineStatus(
   taskStatus: string,
@@ -681,8 +612,7 @@ Phase 2 只做“已知事件触发后的 pipeline patch 推送”，不做独�
 2. `task.hooks.updated` 产生后：补发 hook stage upsert
 3. `maybeFinalizeRun()` 成功收尾后：把相关 stage 置为 `completed`
 4. `maybeFinalizeFailure()` 后：把当前 stage 置为 `failed`
-5. `maybeSyncDag()` 同步图节点后：补发 graph-node stage upsert
-6. `session.activated` 不直接发 patch，只让前端全量刷新
+5. `session.activated` 不直接发 patch，只让前端全量刷新
 
 建议新增辅助函数：
 
@@ -694,8 +624,7 @@ async function emitPipelinePatchForTask(args: {
     | "agent.started"
     | "task.hooks.updated"
     | "task.completed"
-    | "task.failed"
-    | "task.node.updated";
+    | "task.failed";
 }): Promise<void>
 ```
 
@@ -793,18 +722,7 @@ const pipelineCompletionPercent = computed(() => {
 })
 ```
 
-### 11.4 TaskGraph 联动
-
-目标文件：`web-ui/src/components/TaskGraph.vue`
-
-Phase 3 只做联动，不做图内嵌复杂布局改造。建议最小改造项：
-
-1. 新增 `highlightNodeId?: string | null` prop
-2. 节点点击时 `emit("node-selected", nodeId)`
-3. 高亮节点增加边框和背景态，避免只靠颜色微差
-4. `TaskDetail.vue` 负责桥接 pipeline 选中态和 graph 选中态
-
-### 11.5 前端测试清单
+### 11.4 前端测试清单
 
 建议补充以下测试：
 
@@ -812,8 +730,6 @@ Phase 3 只做联动，不做图内嵌复杂布局改造。建议最小改造项
 | ---- | ---- |
 | activeSessionId 切换 | pipeline API 带上新的 sessionId |
 | 收到 `pipeline.stage.updated` | 列表按 order 插入或覆盖正确 stage |
-| graph 节点点击 | pipeline 选中态同步 |
-| pipeline stage 点击 | TaskGraph 高亮对应 node |
 | pipeline summary 更新 | 进度百分比与摘要栏同步更新 |
 
 ## 12. 事件契约草案
@@ -830,7 +746,7 @@ type RuntimePipelineRealtimeEvent =
 命名原则：
 
 - 先只做 `updated`，不拆成 `created/completed/removed`
-- 事件名保持与现有 `task.node.updated` 风格一致
+- 事件名保持与现有实时事件命名风格一致
 - 具体动作放进 `patch.type`
 
 ### 12.2 事件载荷
@@ -849,8 +765,7 @@ interface PipelineStageUpdatedEventData {
     | "agent.started"
     | "task.hooks.updated"
     | "task.completed"
-    | "task.failed"
-    | "task.node.updated";
+    | "task.failed";
 }
 ```
 
@@ -908,4 +823,4 @@ type FutureRuntimePipelineEvent =
 3. 前端 TaskDetail 改成消费 `RuntimePipeline`
 4. 补单测，确认单执行 / 并行 / fork session 三类任务都能读
 5. 再接 `pipeline.stage.updated` 事件，做增量 patch
-6. 最后做 TaskGraph 双向联动
+6. 最后做前端交互与事件收尾

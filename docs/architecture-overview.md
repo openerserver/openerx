@@ -1,5 +1,9 @@
 # OpenerX 当前系统架构说明
 
+> 状态说明：本文档部分章节仍保留了历史图模型兼容架构描述。
+>
+> 当前正式实现已移除旧版图模型兼容链路。涉及历史图镜像或旧同步机制的描述，应以 [docs/dag-node-execution-plan-v2.md](docs/dag-node-execution-plan-v2.md) 的最新结论为准。
+
 ## 1. 文档目的
 
 本文档面向产品、研发、测试和运维团队，描述当前 OpenerX 控制平面的实际系统架构。内容基于当前代码实现整理，重点回答三个问题：
@@ -131,9 +135,9 @@ flowchart LR
 
 BFF 当前主要包含五类能力：
 
-- realtime：实时状态、会话订阅、事件广播、DAG 同步触发
+- realtime：实时状态、会话订阅、事件广播
 - agent-control：暂停、恢复、注入指导、终止、消息读取、session 续跑
-- tasks：面向前端的任务视图聚合、graph 同步、pipeline 查询、session 历史
+- tasks：面向前端的任务视图聚合、pipeline 查询、session 历史
 - config：Agent/Skill/Command/Model/MCP/插件生命周期/编排策略/恢复策略配置管理
 - approvals：审批代理与响应透传
 
@@ -145,7 +149,7 @@ BFF 当前主要包含五类能力：
 
 - Login：登录页
 - Dashboard：仪表盘，展示任务、审批和事件流
-- TaskDetail：任务详情页，展示任务图（DAG 可视化）、Agent 控制台、编排决策、规划流水线、会话历史和任务事件
+- TaskDetail：任务详情页，展示 Workflow 阶段、Agent 控制台、编排决策、规划流水线、会话历史和任务事件
 - Settings：配置页（模型、Agent、Skill、命令、MCP 服务、安全基线、插件生命周期、编排策略、恢复策略）
 
 状态管理拆分为：
@@ -171,15 +175,15 @@ PostgreSQL 中当前的核心表包括：
 - approval_tickets：审批单
 - budget_configs：预算配置
 
-**任务编排模型**（运行时 DAG 镜像）：
+**任务执行模型**：
 
-- task_nodes：DAG 任务节点（对齐 task-graph-plugin 的 TaskNode 字段）
-- task_edges：DAG 依赖边（blocks / informs）
+- tasks：任务主记录，承载状态、executionPlan、strategy 等信息
+- task_workflow_runs / task_stage_runs：Workflow 阶段执行状态与阶段产出摘要
 - agent_runs：Agent 执行记录
+- approval_tickets：审批阻断与人工介入
 - plugins：插件元数据与生命周期状态
-- tasks 表新增 category（意图分类）和 strategy（编排策略）字段
 
-模型设计覆盖"治理侧元数据与追踪"和"运行时编排穿透"两个方向。详见 [oh-my-openagent 实现说明](./oh-my-openagent-implementation.md)。
+模型设计覆盖治理元数据、Workflow 阶段推进、执行记录与审批治理几个方向。当前执行主方案见 [dag-node-execution-plan-v2.md](./dag-node-execution-plan-v2.md)。
 
 ## 7. 关键业务链路
 
@@ -237,18 +241,17 @@ PostgreSQL 中当前的核心表包括：
 
 ## 9. 当前架构判断
 
-从代码实现看，当前系统已经从纯治理侧控制面向"运行时穿透"方向演进：
+从代码实现看，当前系统已经从早期的运行时穿透尝试，收口为 Workflow 驱动的控制平面：
 
 - 治理能力（审批、审计、成本、策略）已成熟
-- 运行时 DAG 穿透已实现（task-graph-plugin → dag-sync → 控制面数据库镜像）
-- 编排可视化已落地（意图分类、规划流水线、编排决策面板）
+- 编排可视化已收口到 Workflow 阶段、规划流水线、编排决策面板
 - 插件生命周期控制面已闭合（启用/禁用/安装/卸载/兼容性检查）
 - 连续执行机制已暴露到 UI（session 历史、续跑、恢复策略）
 - BFF 和控制平面边界已形成，职责划分清晰
 
 因此，当前架构可定义为：
 
-> 一个以审批、审计、成本为治理内核，以运行时 DAG 穿透、编排可视化和插件治理为编排内核的 AI Agent 控制平面系统。
+> 一个以审批、审计、成本为治理内核，以 Workflow 阶段执行、并行/顺序编排、插件治理为执行内核的 AI Agent 控制平面系统。
 
 详细的运行时穿透能力实现，见 [oh-my-openagent 实现说明](./oh-my-openagent-implementation.md)。
 
@@ -290,11 +293,11 @@ BFF 的职责已收缩为：
 
 WebSocket 连接建立时已验证 JWT，绑定 userId 和项目范围。无效 token 的连接会被拒绝（close 4401）。事件广播按项目和任务订阅进行过滤，`subscribe_task` 指令包含项目级权限校验。
 
-### 10.5 ✅ 运行时状态已建立控制面镜像
+### 10.5 ✅ Workflow 执行主路径已完成收口
 
-运行时 DAG 状态通过 dag-sync 机制同步到控制面数据库（task_nodes、task_edges、agent_runs），节点状态集与 task-graph-plugin 保持一致。意图分类和编排策略通过 tasks.category/strategy 字段持久化。
+当前执行主路径已经统一到 Workflow 阶段、executionPlan、hook 执行与 agent_runs 记录，不再依赖旧图模型镜像层。
 
-仍需注意：实时事件与 DB 镜像之间可能存在短暂不一致窗口，前端采用"API 主数据 + 实时事件增量"策略降低影响。
+仍需注意：不同环境需要持续确保 migration 与代码版本同步，避免旧 schema 残留导致环境漂移。
 
 ### 10.6 持久化层已切换为 PostgreSQL
 
@@ -334,7 +337,6 @@ WebSocket 连接建立时已验证 JWT，绑定 userId 和项目范围。无效 
 建议新增独立任务域对象与持久化结构，例如：
 
 - tasks
-- task_nodes
 - agent_runs
 - task_transitions
 

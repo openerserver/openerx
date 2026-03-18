@@ -313,12 +313,14 @@ Agent 执行结束时（session complete 回调）：
 4. Service 已移除任务 graph API、历史 graph 修复脚本、基于 `taskNodes` 的 token 回填逻辑
 5. 数据 schema 已移除 `taskNodes` / `taskEdges` 定义，以及 `agentRuns.nodeId`、`approvalTickets.nodeId` 残留字段
 6. migration metadata 已同步移除 `task_nodes` / `task_edges` 和相关外键校验规则
+7. PostgreSQL migration 已生成并在本地库执行完成，`task_nodes` / `task_edges` 表与 `agent_runs.node_id`、`approval_tickets.node_id` 已实际删除
+8. 已完成一轮基于真实数据库的 service 冒烟检查：健康检查、登录、任务创建、agent run 创建/读取、审批列表读取均通过
 
 ### 数据库层剩余项
 
-1. 物理数据库中的旧表/旧列仍需要通过独立 migration 或人工清理落库删除
-2. 历史数据若仍包含 `task_nodes` / `task_edges`，本方案不做迁移，只做下线与清表
-3. 若生产环境仍有依赖旧审批详情里 `nodeId` 的外部消费者，需要在执行 DB migration 前完成兼容确认
+1. 本地数据库已完成删除；其他环境仍需执行同一条 migration 才能与代码层保持一致
+2. 历史数据若仍包含 `task_nodes` / `task_edges`，本方案不做迁移映射，只做下线与清表
+3. 若生产环境仍有依赖旧审批详情里 `nodeId` 的外部消费者，需要在部署 migration 前完成兼容确认
 
 ### Phase 2：打通阶段上下文与自动推进
 
@@ -477,8 +479,8 @@ MVP 不做：
 
 应对：
 
-1. 先停止新写入，再延后删除旧展示
-2. 保留 `taskNodes` / `taskEdges` 只读兼容一段时间
+1. 先停止新写入，再删除旧展示与 schema 引用
+2. 在其他环境执行 migration 前，先完成依赖扫描与接口兼容确认
 
 ### 风险二：自动推进误判，导致阶段跳过
 

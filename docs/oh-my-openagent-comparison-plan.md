@@ -1,5 +1,9 @@
 # oh-my-openagent 对 OpenerX 的功能对比与可执行方案
 
+> 状态说明：本文档是历史对比/差距分析，不再代表当前实现状态。
+>
+> 其中关于 `task-graph-plugin`、graph API、`task_nodes` / `task_edges` 数据模型的差距描述已被后续清理工作覆盖。当前实现状态请以 [docs/dag-node-execution-plan-v2.md](docs/dag-node-execution-plan-v2.md) 和现行 schema / migration 为准。
+
 ## 0. 审核修订说明（2026-03-09）
 
 > **重大修正**：原始文档仅审核了控制面层（BFF + Service + Web UI），遗漏了 `opencode-fork/` 下已实现的运行时层能力。

@@ -1,8 +1,10 @@
 # 统一 Workflow 执行主方案
 
-> 目标：不再把 Workflow 和 DAG 作为两套平行体系维护，而是统一为一套 Workflow Execution 体系。
+> 状态：已归档。
 >
-> 说明：本文档是该能力的唯一主方案。后续不再维护“独立 DAG 方案”，而是将节点图能力收敛为 Workflow 的阶段内执行模式。
+> 当前唯一维护版本为 [docs/dag-node-execution-plan-v2.md](docs/dag-node-execution-plan-v2.md)。
+>
+> 原因：本文件仍保留了“Stage 内 Node Graph”这一中间态设计；当前代码、migration 与数据库已收口为“Workflow Stage + Hook + parallel/sequential execution”主方案，不再保留 DAG 兼容语义。
 
 ## 1. 要解决的问题
 

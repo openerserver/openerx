@@ -26,9 +26,10 @@ OpenCode 的整体关注边界另见 [OpenCode 关注边界说明](./opencode-fo
 | --- | --- | --- | --- |
 | GET | `/api/tasks` | 任务列表 | CP `/api/audit` 聚合 |
 | GET | `/api/tasks/:taskId` | 任务详情 | CP `/api/audit` 聚合 |
-| GET | `/api/tasks/:taskId/graph` | 任务 DAG 图 | BFF 自有 |
 
 ### 2.3 审批（需要 token）
+
+说明：历史 `GET /api/tasks/:taskId/graph` 已下线，任务执行可视化统一收敛到 Workflow 阶段、运行流水线与审批/执行状态接口，不再暴露 Task Graph 独立接口。
 
 | 方法 | 路径 | 说明 | 回源目标 |
 | --- | --- | --- | --- |

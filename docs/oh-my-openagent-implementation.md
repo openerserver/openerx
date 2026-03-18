@@ -1,5 +1,9 @@
 # oh-my-openagent 借鉴方案实现说明
 
+> 状态说明：本文档记录的是一轮历史实现方案，其中涉及旧图模型兼容层的章节已不再代表当前代码。
+>
+> 当前系统已完成旧兼容层下线与数据库清理；阅读本文件时，请将相关章节视为历史背景，而不是现行架构说明。
+
 ## 1. 文档目的
 
 本文档基于 [oh-my-openagent Issue 工作包清单](./oh-my-openagent-issue-breakdown.md) 的 4 个 Epic、19 个 Issue，记录全部实现内容。
@@ -26,151 +30,24 @@
 
 ## 3. Epic 1: 任务编排主模型
 
-### 3.1 控制面 DAG 镜像数据模型（Issue 1.1 + 1.2）
+### 3.1 已归档的历史编排实现
 
-在控制面数据库中新增 4 张表，镜像运行时 task-graph-plugin 的 DAG 模型。
+本章原先记录的是一套旧版运行时编排镜像实现，包括图模型持久化、同步链路和独立可视化视图。
 
-**`task_nodes` 表** — 任务图节点
+上述内容已经全部下线，不再属于当前系统实现：
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| id | text PK | 节点 ID |
-| task_id | text FK→tasks | 所属任务 |
-| graph_id | text | 运行时图 ID |
-| subject | text | 节点描述 |
-| status | text | 状态枚举（见下方状态机） |
-| agent_type | text | Agent 名称 |
-| session_id | text? | OpenCode session ID |
-| retry_count | integer | 已重试次数，默认 0 |
-| max_retries | integer | 最大重试次数，默认 2 |
-| output | text? | 执行输出 |
-| error | text? | 错误信息 |
-| token_used | integer | Token 消耗，默认 0 |
-| started_at / finished_at | text? | 执行时间窗口 |
-| created_at | timestamp | 创建时间 |
+1. 旧版 runtime 兼容插件已移除
+2. 图模型相关 schema、migration 与关联字段已删除
+3. 旧版图查询接口已下线
+4. 独立图视图页面与组件已删除
 
-**`task_edges` 表** — DAG 依赖边
+现行替代方案：
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| id | text PK | 边 ID |
-| task_id | text FK→tasks | 所属任务 |
-| graph_id | text | 运行时图 ID |
-| from_node_id | text FK→task_nodes | 起始节点 |
-| to_node_id | text FK→task_nodes | 目标节点 |
-| edge_type | text | `blocks` \| `informs`，默认 `blocks` |
+1. Workflow Stage 作为唯一执行骨架
+2. ExecutionPlan 承载 single / parallel / sequential-chain 模式
+3. Hook 与 runtime pipeline 承担阶段执行治理与可观测性
 
-**`agent_runs` 表** — Agent 执行记录
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| id | text PK | 执行记录 ID |
-| task_id | text FK→tasks | 所属任务 |
-| node_id | text? FK→task_nodes | 关联 DAG 节点 |
-| session_id | text? | OpenCode session ID |
-| agent_type | text | Agent 名称 |
-| status | text | pending\|running\|paused\|completed\|failed\|stopped\|terminated |
-| model_used | text? | 使用的模型 |
-| token_used | integer | Token 消耗 |
-| result / error | text? | 结果或错误 |
-| started_at / finished_at | text? | 执行时间窗口 |
-| created_at | timestamp | 创建时间 |
-
-**`plugins` 表** — 插件元数据（Epic 3 共用）
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| id | text PK | 插件 ID |
-| name | text UNIQUE | 插件名称 |
-| display_name | text | 显示名称 |
-| plugin_path | text | opencode.json 中的路径 |
-| version | text? | 版本号 |
-| source | text | `builtin` \| `local` \| `registry` |
-| status | text | `enabled` \| `disabled` \| `error` \| `not_installed` |
-| description | text? | 插件描述 |
-| capabilities | JSON | 工具名称数组 |
-| last_verified_at / error_detail | text? | 最近验证时间和错误详情 |
-| created_at / updated_at | timestamp | 时间戳 |
-
-**迁移文件**：`control-plane/service/drizzle/0002_numerous_bastion.sql`
-
-**tasks 表新增字段**：
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| category | text | 意图分类：quick\|deep\|ops\|security\|architecture |
-| strategy | JSON | 编排策略详情 |
-
-### 3.2 节点状态机与运行时对齐（Issue 1.3）
-
-共享类型定义在 `control-plane/service/src/types/graph.ts`。
-
-**节点状态集合**（与 task-graph-plugin 一致）：
-
-```
-pending → in_progress, blocked
-in_progress → completed, failed, stopped, paused, waiting_approval
-failed → in_progress, stopped
-blocked → pending
-paused → in_progress, stopped
-waiting_approval → in_progress, stopped
-completed → （终态）
-stopped → （终态）
-```
-
-**状态颜色映射**（前端 TaskGraph 使用）：
-
-| 状态 | 颜色 |
-|------|------|
-| completed | 绿色 |
-| in_progress / running | 蓝色 |
-| failed | 红色 |
-| pending | 灰色 |
-| paused / waiting_approval | 橙色 |
-
-### 3.3 Graph 接口对接运行时 DAG（Issue 1.4）
-
-**BFF 接口**：`GET /api/tasks/:taskId/graph`
-
-工作流程：
-
-1. 调用 `syncGraphsForTask(taskId)` 从运行时 JSON 文件同步最新 DAG
-2. 访问控制面 `GET /api/tasks/:taskId/graph` 获取已持久化的图数据
-3. 返回 `{ taskId, nodes: TaskGraphNode[], edges: TaskGraphEdge[] }`
-
-控制面 Service 接口：
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/api/tasks/:taskId/graph` | 查询持久化的 DAG 数据 |
-| PUT | `/api/tasks/:taskId/graph` | 写入/更新 DAG 数据 |
-
-### 3.4 运行时 DAG 到控制面 DB 同步（Issue 1.5）
-
-实现在 `control-plane/web-ui-bff/src/modules/realtime/dag-sync.ts`。
-
-**同步触发方式**：
-
-1. **SSE 事件驱动**：当 SSE 聚合器收到 `tool.execute.after` 事件且 toolName 以 `task_graph_` 开头时，自动触发同步
-2. **按需同步**：前端请求 graph 接口时，先调用 `syncGraphsForTask(taskId)` 确保数据最新
-3. **批量同步**：`syncAllGraphs()` 可批量同步所有运行时图
-
-**同步机制**：
-
-- 读取 `{OPENCODE_DIR}/.opencode/state/task-graphs/{graphId}.json`
-- 将运行时时间戳（ms）转换为 ISO 字符串
-- 通过 `PUT /api/tasks/{taskId}/graph` 写入控制面 DB
-- 维护 `lastSyncTimestamps` 避免重复同步
-
-### 3.5 TaskGraph 基于真实接口渲染（Issue 1.6）
-
-TaskGraph 组件（`control-plane/web-ui/src/components/TaskGraph.vue`）改造为 API 优先模式：
-
-- **页面加载**：通过 `getTaskGraph(taskId)` 拉取完整 DAG 数据
-- **增量更新**：WebSocket 实时事件仅做叠加刷新
-- **降级方案**：无数据时显示占位符
-- **布局算法**：使用 dagre 自动计算节点布局
-- **可视化**：使用 @vue-flow/core 渲染，节点颜色按状态显示
+详细现行方案见 [docs/dag-node-execution-plan-v2.md](docs/dag-node-execution-plan-v2.md)。
 
 ---
 
@@ -462,76 +339,14 @@ TaskDetail 新增"会话历史"卡片：
 
 ---
 
-## 7. 变更文件清单
+## 7. 历史实现附录 [归档]
 
-### 控制面 Service
+本节原先逐文件记录了一套旧版图模型兼容实现清单，并附带对应的数据流图。
 
-| 文件 | 变更 |
-|------|------|
-| `src/db/schema.ts` | 新增 task_nodes、task_edges、agent_runs、plugins 四表；tasks 表新增 category、strategy 字段 |
-| `src/types/graph.ts` | **新建** — 共享类型定义（NodeStatus、EdgeType、TaskCategory、AgentRunStatus 等） |
-| `src/modules/tasks/routes.ts` | 新增 graph GET/PUT、runs GET/POST/PATCH、task PATCH 扩展 category/strategy |
-| `src/modules/plugins/routes.ts` | **新建** — 插件 CRUD 路由 |
-| `src/index.ts` | 注册 plugins 路由 |
-| `drizzle/0002_numerous_bastion.sql` | **新建** — 迁移文件 |
+这些内容已整体失效，原因如下：
 
-### BFF 聚合层
+1. 相关 runtime 插件、BFF 同步链路、前端图视图和 service schema 已在当前仓库中删除。
+2. 当前系统不再通过图镜像表达执行主路径，而是以 Workflow Stage、ExecutionPlan、Hook、agent_runs 和 runtime pipeline 为中心。
+3. 若继续保留旧文件清单和旧数据流图，会把已经移除的能力误写成现状。
 
-| 文件 | 变更 |
-|------|------|
-| `src/modules/tasks/routes.ts` | 新增 pipeline、sessions、messages、continue、graph 同步路由 |
-| `src/modules/config/routes.ts` | 新增插件启用/禁用/安装/卸载/兼容性检查、编排策略、恢复策略路由 |
-| `src/modules/realtime/dag-sync.ts` | **新建** — DAG 同步服务 |
-| `src/modules/realtime/sse-aggregator.ts` | 集成 DAG 同步触发 |
-| `src/modules/agent-control/opencode-adapter.ts` | 新增 listSessions、getSessionMessages、continueSession |
-| `src/lib/intent-classifier.ts` | **新建** — 意图分类器 |
-| `src/types/events.ts` | 新增 `task.continued` 事件类型 |
-
-### Web UI
-
-| 文件 | 变更 |
-|------|------|
-| `src/lib/api.ts` | 新增 TaskGraphNode/Edge/Data、PipelineStage、SessionInfo 等接口；新增 15+ API 函数 |
-| `src/components/TaskGraph.vue` | 重写为 API 优先渲染模式 |
-| `src/pages/TaskDetail.vue` | 新增编排决策、规划流水线、会话历史面板 |
-| `src/pages/Settings.vue` | 新增插件生命周期控制台、编排策略 tab、恢复策略 tab |
-
----
-
-## 8. 数据流架构
-
-```
-┌─────────────────────────────────────────────────────────┐
-│ OpenCode Runtime (:4096)                                │
-│   task-graph-plugin → .opencode/state/task-graphs/*.json│
-│   orchestrator-plugin → 意图分类 + Agent 路由           │
-│   session-tools → session list/read/continue            │
-│   SSE /global/event → 实时事件                          │
-└────┬──────────────────────────┬──────────────────────────┘
-     │ SSE events               │ HTTP API
-     ▼                          ▼
-┌─────────────────────────────────────────────────────────┐
-│ BFF (:4098)                                             │
-│   SSEAggregator → tool.execute.after → DAG sync trigger │
-│   intent-classifier → 任务分类                          │
-│   dag-sync → 读 JSON → PUT graph → 控制面 DB           │
-│   opencode-adapter → session list/continue              │
-└────┬──────────────────────────┬──────────────────────────┘
-     │ WebSocket                │ HTTP → cpFetch
-     ▼                          ▼
-┌──────────────┐  ┌───────────────────────────────────────┐
-│ Web UI       │  │ Control Plane Service (:4097)          │
-│ (:5173)      │  │   tasks → graph → task_nodes/edges    │
-│ TaskDetail   │  │   plugins → CRUD                      │
-│ Settings     │  │   PostgreSQL                          │
-│ TaskGraph    │  │                                       │
-└──────────────┘  └───────────────────────────────────────┘
-```
-
-**DAG 同步路径**：Runtime JSON → BFF dag-sync → PUT CP Service → PostgreSQL → BFF GET → Frontend
-
-**意图分类路径**：用户 prompt → BFF execute → intent-classifier → tasks.category/strategy → TaskDetail 编排决策面板
-
-**插件管理路径**：Settings UI → BFF config → opencode.json + _disabledPlugins → CP plugins 表
-
-**续跑路径**：TaskDetail 续跑按钮 → BFF continue → OpenCode prompt_async → session 续执行
+因此本附录不再展开旧版文件级设计。当前有效实现与后续迭代方向，请以 [docs/dag-node-execution-plan-v2.md](docs/dag-node-execution-plan-v2.md) 为准。

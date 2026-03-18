@@ -3,6 +3,9 @@
 > 适用范围：OpenerX 控制平面任务执行能力演进
 >
 > 目标：从当前"单 Agent 执行 + 固定执行前/执行后 Hook"模式，演进为"多 Agent 并行执行 + 通用生命周期 Hook + 聚合评判"模式
+> 状态说明：本文档中把 `task-graph-plugin`、`taskNodes`、`taskEdges` 作为执行落地层的部分已经过时。
+>
+> 当前主方案已收口到 Workflow Stage、ExecutionPlan、Hook 与 parallel/sequential execution，不再依赖独立 DAG 兼容层。请与 [docs/dag-node-execution-plan-v2.md](docs/dag-node-execution-plan-v2.md) 对照阅读。
 
 ## 1. 文档目标
 

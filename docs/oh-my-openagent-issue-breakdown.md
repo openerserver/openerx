@@ -1,11 +1,15 @@
 # oh-my-openagent 借鉴方案的 Issue 级工作包清单
 
+> 状态说明：本文档中的多个 Epic / Issue 以旧版图模型穿透控制面为前提，现已转为历史计划，不再指导当前实现。
+>
+> 相关旧兼容层工作项已被新的 Workflow Stage 主方案替代。当前执行方向请以 [docs/dag-node-execution-plan-v2.md](docs/dag-node-execution-plan-v2.md) 为准。
+
 ## 0. 审核修订说明（2026-03-09）
 
 > **重大修正**：原始 issue 清单基于"运行时编排能力缺失"的错误前提制定。
-> 经复审，`opencode-fork/.opencode/` 下已实现大量编排能力（9 个 Agent、orchestrator-plugin、task-graph-plugin、session-tools 等）。
+> 经复审，`opencode-fork/.opencode/` 下已实现大量编排能力（9 个 Agent、orchestrator-plugin、session-tools 等）。
 >
-> **修正方向**：所有 issue 的焦点从"从零建编排"调整为"运行时 → 控制面穿透"。
+> **修正方向**：所有 issue 的焦点从"从零建编排"调整为"运行时能力进入控制面主链路"。
 > 标注 `[修订]` 的 issue 为本次审核后调整的内容。
 
 > **实现状态（2026-03-09）**：全部 4 个 Epic、19 个 Issue 已实现完毕，通过编译和格式检查。
@@ -32,181 +36,17 @@
 
 ---
 
-## Epic 1: 任务编排主模型（运行时 → 控制面穿透）[修订]
+## Epic 1: 任务编排主模型（历史方案）[归档]
 
-> **背景修正**：task-graph-plugin 已在运行时实现了完整的 DAG 模型（TaskNode、TaskEdge、状态机、重试、JSON 持久化至 `.opencode/state/task-graphs/`）。本 Epic 的目标从"从零建 DAG"调整为"让控制面能持久化和查询运行时 DAG"。
+本 Epic 原本围绕旧版运行时图模型进入控制面展开，包括图模型持久化、同步链路和独立图视图。
 
-### Issue 1.1 ✅ 设计控制面 DAG 镜像数据模型 [修订]
+这些工作项对应的实现和计划现已整体归档，不再进入当前迭代：
 
-目标：
-在控制面数据库中建立 task-graph-plugin DAG 的镜像模型，用于持久化存储、跨会话查询和审计。
+1. 代码、schema、migration 与数据库已经完成旧兼容层删除
+2. 产品与前端不再暴露 Task Graph 独立能力
+3. 当前执行模型以 Workflow Stage、ExecutionPlan、Hook、runtime pipeline 为主
 
-建议标题：
-`design control plane DAG mirror schema`
-
-范围：
-
-- 设计 `task_nodes` 表（对齐 task-graph-plugin 的 TaskNode 字段：id、subject、status、agentType、sessionId、retryCount、output、error、tokens、timestamps）
-- 设计 `task_edges` 表（对齐 TaskEdge：from、to、type=blocks|informs）
-- 设计 `agent_runs` 表
-- 明确与现有 `tasks`、`sessions`、`audit_events` 的关系
-- 参考 `opencode-fork/.opencode/plugins/task-graph-plugin.ts` 中的 NodeStatus 状态集
-
-交付物：
-
-- 数据模型设计说明（与 task-graph-plugin 字段的映射表）
-- Drizzle schema 草案
-
-依赖：
-
-- 无
-
-验收标准：
-
-- 能存储 task-graph-plugin 产出的节点和依赖
-- 能表达节点与 agent run、session 的关联
-- 字段语义与运行时 DAG 一致
-
-### Issue 1.2 ✅ 实现 DAG 镜像表迁移 [修订]
-
-目标：
-把任务节点模型落到数据库。
-
-建议标题：
-`add task nodes and agent runs migration`
-
-范围：
-
-- 新增 migration
-- 更新 Drizzle schema
-- 补齐基础索引和外键
-
-交付物：
-
-- migration 文件
-- 更新后的 schema
-
-依赖：
-
-- Issue 1.1
-
-验收标准：
-
-- 本地 migration 可成功执行
-- 新表可被 service 正常读取和写入
-
-### Issue 1.3 ✅ 定义节点状态机与运行时对齐规则 [修订]
-
-目标：
-确保控制面状态集与 task-graph-plugin 的 NodeStatus 一致，避免前后端各自定义。
-
-建议标题：
-`align control plane node states with runtime`
-
-范围：
-
-- 对齐 task-graph-plugin 的节点状态集合（pending、in_progress、completed、failed、retry 等）
-- 定义允许的状态流转（与运行时一致）
-- 明确失败、暂停、审批等待、取消等状态语义
-
-交付物：
-
-- 状态机文档（与 task-graph-plugin 的映射说明）
-- TypeScript 类型定义
-
-依赖：
-
-- Issue 1.1
-
-验收标准：
-
-- 后端、前端、实时事件使用同一组状态命名
-- 每种状态转移都有明确触发条件
-
-### Issue 1.4 ✅ 实现 graph 接口对接运行时 DAG [修订]
-
-目标：
-让 graph 接口返回 task-graph-plugin 产出的真实节点和依赖边，而不是占位响应。
-
-建议标题：
-`implement graph api reading runtime DAG`
-
-范围：
-
-- 改造 `/api/tasks/:taskId/graph`
-- 从 `.opencode/state/task-graphs/` JSON 文件或 OpenCode 事件流读取 DAG 数据
-- 返回节点、边、当前状态、执行摘要
-
-交付物：
-
-- BFF graph route
-- 前端可消费的 graph payload
-
-依赖：
-
-- Issue 1.2
-- Issue 1.3
-
-验收标准：
-
-- 前端任务图页面可稳定展示真实节点和依赖边
-- 页面不再依赖“没有节点就放 placeholder”的临时模式作为主要路径
-
-### Issue 1.5 ✅ 实现运行时 DAG 到控制面 DB 的同步 [修订]
-
-目标：
-把运行时 task-graph-plugin 产出的 DAG 状态回写到控制面数据库，支持跨会话查询和审计。
-
-建议标题：
-`sync runtime DAG to control plane db`
-
-范围：
-
-- 通过 SSE 事件回写或定期读取 JSON 文件，将 DAG 节点和边同步到 DB
-- 处理增量更新（节点状态变更、新增节点/边）
-- 保存 agentRunId、sessionId、result、error
-
-交付物：
-
-- 改造后的同步逻辑
-- 基础单元或集成测试
-
-依赖：
-
-- Issue 1.2
-- Issue 1.3
-
-验收标准：
-
-- 运行时 DAG 状态变更能及时反映到控制面 DB
-- 失败节点的状态和错误信息可在 DB 中查询
-
-### Issue 1.6 ✅ 让 TaskGraph 基于真实接口渲染 [修订]
-
-目标：
-把 TaskGraph 从"纯实时事件驱动"升级为"graph API 主数据 + 实时事件增量更新"。
-
-建议标题：
-`switch task graph to model-backed rendering`
-
-范围：
-
-- 页面加载时先拉 graph API
-- 实时事件只做增量刷新
-- 缺失字段和状态统一回退规则
-
-交付物：
-
-- 改造后的 TaskDetail 和 TaskGraph
-
-依赖：
-
-- Issue 1.4
-
-验收标准：
-
-- 刷新页面后图仍然完整
-- 即使丢失部分实时事件也不会导致任务图不可用
+后续若需要追溯历史设计，请参考仓库历史；当前执行方向以 [docs/dag-node-execution-plan-v2.md](docs/dag-node-execution-plan-v2.md) 为准。
 
 ---
 
@@ -585,7 +425,7 @@
 
 范围：
 
-- 明确哪些错误可自动重试（对齐 task-graph-plugin 的 retry 逻辑）
+- 明确哪些错误可自动重试（对齐现有运行时 retry 逻辑）
 - 明确何时切换模型或策略（对齐 orchestrator-plugin 的 fallback 逻辑）
 - 明确何时必须触发审批或人工介入
 - 将恢复行为写入 audit_events
@@ -614,32 +454,32 @@
 
 建议按以下顺序推进：
 
-1. **先打通运行时 DAG → 控制面**：Epic 1 的 Issue 1.1 到 1.4。
-2. **并行推进 DAG 同步和编排可视化**：Issue 1.5、1.6 和 Epic 2 的 Issue 2.1、2.2。
-3. **在控制面能感知运行时后启动插件治理**：Epic 3。
-4. **最后暴露恢复能力**：Epic 4（运行时已有，控制面暴露投入较小）。
+1. **先统一 Workflow Stage 主模型**：把执行阶段、Hook、ExecutionPlan、agent_runs 的主链路收敛到同一模型。
+2. **再补运行时编排与可视化读取**：优先补全 pipeline、并行执行、顺序执行与当前 session 视角。
+3. **在执行主路径稳定后推进插件治理**：Epic 3。
+4. **最后补恢复与暴露能力**：Epic 4。
 
 原因：
 
-- 运行时编排能力已存在，控制面穿透是最高 ROI 投入。
-- 控制面能感知运行时后，治理约束才有挂载点。
-- 恢复机制在运行时已运转，控制面暴露可后置。
+- 执行主模型必须先统一，否则前端、BFF 与 service 会长期并存多套语义。
+- pipeline 与 session 读取稳定之后，治理约束才有可靠挂载点。
+- 恢复机制属于主路径补充能力，可在模型稳定后暴露。
 
 ## 4. 建议的首批迭代范围 [修订]
 
 如果只做第一轮迭代，建议先立这 6 个 issue：
 
-1. Issue 1.1 设计控制面 DAG 镜像数据模型
-2. Issue 1.2 实现 DAG 镜像表迁移
-3. Issue 1.3 定义节点状态机与运行时对齐规则
-4. Issue 1.4 实现 graph 接口对接运行时 DAG
+1. Issue 1.1 统一 Workflow Stage 与执行记录模型
+2. Issue 1.2 收敛 BFF runtime pipeline 聚合口径
+3. Issue 1.3 支持用户并行执行与结果比较
+4. Issue 1.4 支持用户顺序执行与阶段推进
 5. Issue 2.1 将运行时意图分类结果同步到控制面
 6. Issue 3.1 设计插件元数据模型与状态模型
 
-核心思路是"让控制面能看见运行时"，而非"从零建编排"。
+核心思路是"统一执行主模型并暴露运行时能力"，而非重建一套独立编排内核。
 
 ## 5. 一页式结论 [修订]
 
 ~~原结论称需要按"任务主模型、规划路由、插件生命周期、恢复机制"从零建设。~~
 
-经复审修正：OpenerX 在运行时层（opencode-fork）已实现大部分编排能力（9 Agent、DAG、规划流水线、意图路由、会话续跑）。最合理的方式是按"**运行时 DAG 穿透 → 编排可视化 → 插件治理 → 恢复暴露**"的顺序，让控制面逐步感知和治理运行时已有能力。这样既保持控制面稳定性，又不重复建设运行时已有的编排内核。
+经复审修正：OpenerX 在运行时层已具备大部分编排基础能力，控制面不应继续维护一套平行的旧图模型语义。更合理的顺序是按"**Workflow Stage 主模型统一 → 运行时执行与可视化暴露 → 插件治理 → 恢复暴露**"推进，让控制面以同一执行语义感知和治理运行时已有能力。

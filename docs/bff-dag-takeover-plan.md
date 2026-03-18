@@ -1,6 +1,6 @@
 # BFF 接管 DAG 方案
 
-本文档内容已并入主方案，请以后只维护 [docs/dag-node-execution-plan.md](docs/dag-node-execution-plan.md)。
+本文档内容已废弃，请以后只维护 [docs/dag-node-execution-plan-v2.md](docs/dag-node-execution-plan-v2.md)。
 
 保留此文件仅为避免旧链接失效。
 
