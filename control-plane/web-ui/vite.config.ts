@@ -4,8 +4,9 @@ import { AntDesignVueResolver } from "unplugin-vue-components/resolvers";
 import Components from "unplugin-vue-components/vite";
 import { defineConfig } from "vite";
 
-const bffHttpTarget = process.env.VITE_BFF_TARGET || "http://127.0.0.1:4098";
-const bffWsTarget = process.env.VITE_BFF_WS_TARGET || "ws://127.0.0.1:4098";
+const appPort = process.env.VITE_APP_PORT || process.env.APP_PORT || "4098";
+const bffHttpTarget = process.env.VITE_BFF_TARGET || `http://127.0.0.1:${appPort}`;
+const bffWsTarget = process.env.VITE_BFF_WS_TARGET || `ws://127.0.0.1:${appPort}`;
 
 function manualChunks(id: string) {
   if (!id.includes("node_modules")) return undefined;

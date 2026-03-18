@@ -1,11 +1,10 @@
-# OpenerX PostgreSQL 与单进程合并方案
+# OpenerX PostgreSQL 迁移与现状运行说明
 
 ## 1. 目标
 
-本方案重新定义 OpenerX 控制面的基础运行形态，目标有两条：
+本说明用于收口 OpenerX 控制面的 PostgreSQL 迁移结果，并明确当前运行边界。当前目标只有一条：
 
-1. 将当前控制面主数据存储从 SQLite 切换到 PostgreSQL。
-2. 将当前开发和部署中的 3 个核心运行进程合并为 1 个应用进程。
+1. 将当前控制面主数据存储从 SQLite 切换到 PostgreSQL，并保持现有多进程运行形态。
 
 这里的“3 个运行进程”定义为：
 
@@ -13,15 +12,17 @@
 - Web UI BFF :4098
 - Web UI Dev / 静态托管层 :5173
 
-当前外部 OpenCode Runtime :4096 不纳入本次“一并合并成 1 个”的范围。原因很直接：它不是简单的 API 代理层，而是独立的会话执行运行时，包含 SSE、session lifecycle、provider 调用、插件和 MCP 进程拉起职责。把它也强行并入当前进程，会显著放大改造风险，且不能直接解决这次暴露出的 SQLite 锁竞争和三层控制面割裂问题。
+当前外部 OpenCode Runtime :4096 不纳入本次范围。原因很直接：它不是简单的 API 代理层，而是独立的会话执行运行时，包含 SSE、session lifecycle、provider 调用、插件和 MCP 进程拉起职责。
 
-因此，本方案推荐的第一阶段目标架构是：
+当前确认保留的运行形态是：
 
-- 1 个 OpenerX App 进程
 - 1 个 PostgreSQL 数据库
-- 1 个外部 OpenCode Runtime 进程
+- 1 个 Control Plane Service 进程 :4097
+- 1 个 Web UI BFF 进程 :4098
+- 1 个 Web UI Dev / 静态托管层 :5173
+- 1 个外部 OpenCode Runtime 进程 :4096
 
-这已经能把当前 4097 / 4098 / 5173 三段式控制面合并为单一服务入口，并消除 SQLite 文件锁和跨进程 API 回环的主要问题。
+本次决策是：数据库迁移继续保持为正式路径；Control Plane、BFF、UI 托管层不再继续推进合并，后续保持现状并按需要做局部优化。
 
 ## 2. 触发原因
 
@@ -80,87 +81,53 @@ SQLite 适合轻量嵌入、单进程或低并发写入，不适合当前这个�
 
 继续维持两个 Hono 服务，只会让演进成本越来越高。
 
-## 3. 改造目标架构
+## 3. 当前目标架构
 
 ### 3.1 目标拓扑
 
 ```mermaid
 flowchart LR
     Browser["浏览器"]
-    App["OpenerX App\nBun + Hono\n单进程\nUI + API + Realtime + Runtime Adapter"]
+      UI["Web UI / Vite\n:5173"]
+      BFF["Web UI BFF\n:4098"]
+      CP["Control Plane Service\n:4097"]
     PG[("PostgreSQL")]
     OCR["OpenCode Runtime\n外部保留\n:4096"]
     Model["GitHub Copilot / 外部模型"]
     MCP["MCP / Plugin 子进程"]
 
-    Browser -->|HTTP / WS| App
-    App -->|SQL| PG
-    App -->|Session / SSE / Control| OCR
+      Browser -->|HTTP| UI
+      UI -->|/api / /ws| BFF
+      BFF -->|HTTP| CP
+      CP -->|SQL| PG
+      BFF -->|Session / SSE / Control| OCR
     OCR --> Model
     OCR --> MCP
 ```
 
-### 3.2 合并后的单进程职责
+### 3.2 当前职责边界
 
-新单进程应用统一承载：
+当前多进程职责保持如下：
 
-- Web UI 静态资源托管
-- 所有 /api 接口
-- JWT 认证与鉴权
-- 任务、审批、审计、成本、治理主业务
-- OpenCode Runtime 适配
-- WebSocket 广播与 realtime 聚合
-- 配置与 opencode.json 文件读写
+- Web UI / Vite :5173 负责前端开发态 HMR 与静态资源托管。
+- Web UI BFF :4098 负责前端接口整形、Runtime 适配、WebSocket / SSE 聚合，以及部分控制面编排逻辑。
+- Control Plane Service :4097 负责主数据、认证、任务、审批、审计、成本、治理等核心业务与 PostgreSQL 读写。
+- OpenCode Runtime :4096 继续保持外部运行时边界。
 
-换句话说，当前：
+这里不再追求把上述职责硬收敛到单一 server 入口，而是接受当前边界，优先保证 PostgreSQL 唯一路径、历史数据迁移能力与运行稳定性。
 
-- control-plane/service
-- control-plane/web-ui-bff
-- control-plane/web-ui 的托管层
+### 3.3 当前代码组织说明
 
-会被合并为一个新的 server 入口。
-
-### 3.3 推荐的代码组织方式
-
-推荐不是把所有文件硬塞进一个目录，而是“单进程、模块化单体”：
+当前代码组织继续保持现有多项目结构：
 
 ```text
-control-plane/app/
-  src/
-    index.ts                # 唯一 server 入口
-    server/
-      app.ts                # Hono app 装配
-      auth.ts
-      websocket.ts
-      static-ui.ts
-    modules/
-      auth/
-      projects/
-      tasks/
-      approvals/
-      audit/
-      cost/
-      dashboard/
-      config/
-      realtime/
-      runtime-adapter/
-    db/
-      client.ts
-      schema.ts
-      migrate.ts
-      seed.ts
-      repositories/
-    services/
-      paid-execution/
-      runtime-ledger/
-      governance/
+control-plane/service/      # 主业务与 PostgreSQL 数据层
+control-plane/web-ui-bff/   # 前端 BFF 与 runtime adapter
+control-plane/web-ui/       # 前端界面与 Vite 开发服务器
+control-plane/app/          # 已存在的统一 app 实验入口，仅保留作兼容/验证资产
 ```
 
-这里的关键不是目录名，而是原则：
-
-- 只保留一个 HTTP 入口
-- 业务逻辑直接调用服务层和仓储层，不再通过本机 HTTP 回源
-- runtime 适配逻辑作为应用内部模块，而不是独立 BFF 进程
+这里的关键是边界清晰：生产与开发默认仍以 `service + bff + ui (+ runtime)` 为准，不再把 `control-plane/app` 视为后续必须替代的目标形态。
 
 ## 4. PostgreSQL 替换方案
 
@@ -302,90 +269,59 @@ SQLite 到 PostgreSQL 不是简单替换 driver，必须审视以下差异：
 3. 避免继续依赖“启动时补表”的 compatibility bootstrap
    - SQLite 时代的 ensureRuntimeTables 是兼容性补丁，不应继续成为 PG 常态。
 
-## 5. 单进程合并方案
+## 5. 保持现状的运行原则
 
-### 5.1 合并原则
+### 5.1 当前原则
 
-不是把 BFF 简单复制到 Control Plane，而是按下面原则收敛：
+既然决定不再继续合并多个进程，后续原则调整为：
 
-1. HTTP 入口只有一个
-2. 浏览器访问一个端口
-3. 业务模块之间用函数调用，不再用本机 HTTP
-4. OpenCode Runtime 仍通过 adapter 边界访问
-5. UI 构建产物由同一进程直接托管
+1. PostgreSQL 是唯一标准运行数据库。
+2. `service + bff + ui + runtime` 继续作为标准运行拓扑。
+3. 不再以消除本机 HTTP 回源为近期目标。
+4. 现有 API 路径、端口边界和前端接入方式保持稳定。
+5. 后续优化以稳定性、测试覆盖、配置治理和历史数据迁移可审计为主，不再以单进程收敛为导向。
 
-### 5.2 推荐的接口边界重组
-
-#### A. 现 BFF 路由整体保留为外部 API 面
+### 5.2 接口边界维持策略
 
 当前前端已经消费的大量接口位于：
 
 - control-plane/web-ui-bff/src/index.ts
 - control-plane/web-ui-bff/src/modules/*
 
-这些 API 作为前端契约，短期不应大改路径。
+当前策略是继续保持这些接口为外部 API 面，不做大规模路径调整。
 
-建议：
-
-- 保留现有 /api 路径与返回结构
-- 但其实现改为直接调用内部 service / repository 层
-- 删除 cpFetch 本机回源模式
-
-#### B. 现 Control Plane 路由改为内部业务模块
-
-当前 Control Plane 的路由定义位于：
+Control Plane 继续作为独立 HTTP 服务存在：
 
 - control-plane/service/src/index.ts
 
-建议将其从“对外 HTTP 服务”改成“内部模块装配层”，即：
+也就是说：
 
-- 把 auth、projects、tasks、audit、cost、dashboard 等模块提炼为服务层
-- 被新的统一 Hono app 直接调用
+- 保留 `BFF -> Control Plane` 的现有回源模式
+- 保留 `Browser -> 5173 -> 4098 -> 4097` 的默认排障思路
+- 不再把 `cpFetch` 清理列为当前阶段目标
 
 ### 5.3 UI 托管策略
 
-单进程后，不再需要单独的 5173 进程作为最终形态。
+`5173` 继续作为标准前端开发入口存在。
 
-建议：
+当前说明：
 
-1. 生产态
-   - web-ui 构建到 dist
-   - Hono 直接托管静态资源
+1. 开发态
+   - `control-plane/web-ui` 继续通过 Vite HMR 提供前端调试体验
+   - `5173` 仍是日常开发和问题复现的标准前台入口
 
-2. 开发态
-   二选一：
+2. 运行态
+   - 不要求把 UI 托管统一收进单个 app
+   - 若存在 `control-plane/app` 相关能力，仅视为兼容/实验资产，不再作为统一替代目标
 
-   方案 A，推荐：
-   - 仍允许前端单独跑 Vite HMR，仅作为前端开发工具
-   - 但“系统标准运行形态”定义为单进程 app
-   - 即开发时可临时有 HMR 辅助，不再把它算作架构必须进程
+### 5.4 realtime 与 Runtime 适配边界
 
-   方案 B，更彻底：
-   - 在统一 app 中集成 Vite middleware 模式
-   - 直接由单进程接管 HMR 与 API
-
-对当前仓库来说，推荐先走方案 A。理由：
-
-- 改造量更小
-- 不影响前端开发体验
-- 生产架构已经收敛为单进程
-- 开发架构也可以只靠一个 app 进程运行，Vite 只是可选加速器而不是必需组件
-
-### 5.4 realtime 与 WebSocket 合并
-
-当前 WebSocket、SSE 聚合和 runtime 事件转换主要在 BFF：
+当前 WebSocket、SSE 聚合和 runtime 事件转换仍主要位于 BFF：
 
 - control-plane/web-ui-bff/src/modules/realtime/sse-aggregator.ts
 - control-plane/web-ui-bff/src/modules/realtime/routes.ts
 
-这些逻辑在单进程后应保留，但不再挂在独立 BFF 进程里，而是成为统一 app 的内部模块。
-
-改造重点：
-
-- 统一 request context
-- 统一 auth middleware
-- 统一 websocket registry
-- 统一 task / project / user scope 过滤
+这些逻辑继续保留在 BFF 内，不再规划迁入统一 app。
 
 ### 5.5 runtime 配置与文件边界处理
 
@@ -400,18 +336,19 @@ SQLite 到 PostgreSQL 不是简单替换 driver，必须审视以下差异：
 - control-plane/web-ui-bff/src/modules/chat-settings/routes.ts
 - control-plane/web-ui-bff/src/modules/chat-settings/config-patch-applier.ts
 
-单进程后，这些逻辑仍可保留，但建议补一层 RuntimeConfigService，把文件 IO 与 API 路由隔离开。否则即使进程合并，代码边界仍然混乱。
+这些逻辑继续保留在 BFF 侧；如后续需要做边界治理，目标也应是局部抽服务，而不是为进程合并做预处理。
 
 ## 6. 推荐实施路径
 
 ### Phase 0. 冻结目标边界
 
-先做两件事：
+当前边界重新定义为：
 
-1. 确认第一阶段不合并 OpenCode Runtime。
-2. 确认对外唯一入口为新的 OpenerX App。
+1. PostgreSQL 迁移继续作为正式方向。
+2. OpenCode Runtime 继续保持外置。
+3. Control Plane、Web UI BFF、Web UI 不再继续推进合并。
 
-这一步必须先定，否则后续所有设计都会摇摆。
+这一步已经确认，后续文档、脚本、测试和排障说明都应以此为准。
 
 ### Phase 1. PostgreSQL 基础替换
 
@@ -444,12 +381,12 @@ SQLite 到 PostgreSQL 不是简单替换 driver，必须审视以下差异：
 - 已将启动期补表逻辑转为正式 schema 与 migration，新增 PostgreSQL 索引迁移 `drizzle-pg/0002_purple_lorna_dane.sql`。
 - 已补齐离线 SQLite 快照迁移链路：`db:export:sqlite`、`db:transform:sqlite-export`、`db:import:pg`、`db:validate:pg`、`db:migrate:sqlite-snapshot`。
 - 已完成一次真实 SQLite 快照演练，产物落在 `tmp/sqlite-pg-migration-phase1/`，演练链路覆盖导出、规范化、导入和一致性校验。
-- 已在 PostgreSQL 唯一路径下完成根级 typecheck、单进程 app health check、BFF execution 相关回归，以及完整 service test 回归。
+- 已在 PostgreSQL 唯一路径下完成根级 typecheck、app health check、BFF execution 相关回归，以及完整 service test 回归。
 
 当前判定：
 
 - PostgreSQL 已是唯一标准运行数据库，SQLite 仅保留为离线历史数据迁移输入。
-- Phase 1 的代码收口、运维脚本补齐和验证闭环均已完成，可进入 Phase 2。
+- Phase 1 的代码收口、运维脚本补齐和验证闭环均已完成。
 
 ### Phase 1 收尾 Checklist
 
@@ -506,7 +443,7 @@ SQLite 到 PostgreSQL 不是简单替换 driver，必须审视以下差异：
 
 #### E. 最终验证与文档收口
 
-- [x] 在纯 PostgreSQL 路径下重新执行 typecheck、service tests、BFF execution 相关回归和单进程 execution 回归。
+- [x] 在纯 PostgreSQL 路径下重新执行 typecheck、service tests、BFF execution 相关回归和 app 侧 execution 回归。
 - [x] 更新 `.env.example`、启动脚本和相关说明，明确 PostgreSQL 为默认运行数据库。
 - [x] 在本方案文档中将 Phase 1 状态从“收尾中”更新为“完成”，前提是以上 checklist 全部通过。
 
@@ -516,71 +453,26 @@ SQLite 到 PostgreSQL 不是简单替换 driver，必须审视以下差异：
 - [x] 运维层面具备清晰的导入、验证说明。
 - [x] 测试层面已在 PostgreSQL 唯一路径下完成一轮 service 全量 + BFF execution 相关回归。
 
-### Phase 2. 合并 Control Plane 与 BFF
+### Phase 2. 停止推进进程合并
 
-目标：消除本机 HTTP 回源。
+当前结论：
 
-工作项：
+1. 不再继续推进 `Control Plane + BFF + UI` 合并。
+2. 不再以消除 `cpFetch` 或统一对外端口为里程碑。
+3. `control-plane/app` 仅保留为兼容/实验资产，不作为默认路线。
 
-1. 新建统一 server 入口
-2. 将 BFF API 作为外部路由面保留
-3. 将 Control Plane 模块改造为内部 service 调用
-4. 移除 cpFetch 到 localhost:4097 的依赖（详见 §7.2 分批策略）
-5. 合并 auth 中间件（详见 §7.5 Auth 合并策略）
-6. 合并 error handler / logging / requestId
-7. 将 BFF 后台定时任务（periodic reconcile、startup reconcile）合并为内部模块
-8. 输出合并后的环境变量清单，废弃不再需要的变量（详见 §7.6）
+### Phase 3. 继续做局部稳定性优化
 
-完成标准：
+后续工作重点应调整为：
 
-- 原前端调用路径保持不变
-- 4097 / 4098 合并为一个端口
-- 本机 HTTP 回环消失
-- `CONTROL_PLANE_URL`、`BFF_PORT`、`INTERNAL_SERVICE_USER_ID` 等进程间通信变量已废弃
+1. 保持 PostgreSQL 路径下的回归测试完整。
+2. 持续修正文档、脚本、任务系统与实际运行形态的偏差。
+3. 在现有多进程架构下修复具体问题，例如代理目标、历史数据展示、stale 状态恢复、测试收集遗漏等。
+4. 对必须治理的边界问题做局部抽象，而不是以进程合并为前提展开重构。
 
-### Phase 3. 合并 UI 托管层
+### Phase 4. 运维与切换说明继续有效
 
-目标：让 5173 不再是系统必须进程。
-
-工作项：
-
-1. 输出 web-ui 构建产物
-2. 统一 app 直接托管静态资源
-3. 开发态保留可选 Vite HMR 辅助，不再作为必需运行节点
-4. 调整根目录 `dev / build / test` 脚本与 VS Code tasks，使标准运行路径切到单入口 app
-
-完成标准：
-
-- 标准启动命令只需要一个应用进程
-- 浏览器访问同一入口即可拿到页面、API、WS
-
-### Phase 4. 清理历史遗留
-
-工作项：
-
-1. 删除旧的 control-plane/service 与 web-ui-bff 间回源耦合
-2. 清理旧任务脚本与多端口文档
-3. 更新启动任务、README、架构图、测试入口
-4. 更新根目录 `.env`、检查脚本、健康检查与 smoke test 入口
-5. 输出切换 runbook 与回滚 runbook
-
-### Phase 5. 切换演练与正式切换
-
-目标：在真实切流前验证单进程 + PG 方案具备可上线与可回滚能力。
-
-工作项：
-
-1. 在预发环境执行一次完整迁移演练
-2. 校验 SQLite 快照、PG 导入结果、关键表行数与抽样数据一致性
-3. 按 runbook 执行单进程启动、health check、smoke check、真实执行集成验证
-4. 记录切换耗时、失败点、人工介入点，并收敛到正式 runbook
-5. 明确回滚触发条件，并验证回滚路径可执行
-
-完成标准：
-
-- 至少一次预发演练成功
-- 正式切换步骤与回滚步骤都经过验证
-- 演练后形成可直接执行的运维手册
+SQLite -> PostgreSQL 的正式切换 runbook、回滚 runbook 与演练要求继续有效；取消的是进程合并路线，不是 PostgreSQL 迁移路线。
 
 ## 7. 具体代码改造清单
 
@@ -607,313 +499,150 @@ SQLite 到 PostgreSQL 不是简单替换 driver，必须审视以下差异：
 
 ### 7.2 本机 HTTP 回源清理
 
-重点改造：
+当前状态说明：
 
 - control-plane/web-ui-bff/src/lib/control-plane-client.ts
 - 所有依赖 cpFetch 的 BFF 模块
 
-cpFetch 被 18+ 个文件、约 100+ 个独立调用点使用，覆盖所有核心业务路径。这是 Phase 2 最大的单项工作量。
+`cpFetch` 被 18+ 个文件、约 100+ 个独立调用点使用，覆盖所有核心业务路径。既然不再继续推进进程合并，这部分不再作为当前阶段的清理目标，而应视为现有架构的一部分。
 
-推荐按模块优先级分批改造，而不是一次性全量替换：
+后续只在以下场景做局部修改：
 
-1. 第一批：高频核心路径
-   - modules/tasks/ — ~25 处调用（含 routes、finalize、workflow-sync、stage-intervention、workflow-view）
-   - modules/projects/ — ~30 处调用
-   - modules/auth/ — 3 处调用
+1. 明确存在性能或稳定性问题。
+2. 某条路径需要减少回源层级以便排障。
+3. 某模块需要抽离公共逻辑，但不要求改变进程边界。
 
-2. 第二批：配套业务路径
-   - modules/approvals/ — 审批查询与解决
-   - modules/audit/ — 审计查询
-   - modules/cost/ — 成本与预算
-   - modules/policies/ — 策略管理
-   - modules/dashboard/ — 治理概览与 token 统计
+### 7.3 现有入口与服务边界
 
-3. 第三批：低频管理路径
-   - modules/credentials/ — 凭证管理
-   - modules/repositories/ — 仓库管理
-   - modules/workbench/ — 工作台布局
-   - modules/envs/ — 环境管理
-   - modules/orgs/ — 组织管理
-   - modules/users/ — 用户管理
+当前保持如下入口划分：
 
-4. 第四批：realtime 与 agent-control 内部路径
-   - modules/realtime/sse-aggregator.ts — 回写 task 状态、ledger sync
-   - modules/realtime/dag-sync.ts — graph PUT
-   - modules/agent-control/run-persistence.ts — run/audit/cost 写入
-   - lib/runtime-usage-ledger.ts — ledger sync 与 baseline
+- `control-plane/service/src/index.ts` 继续承载 Control Plane HTTP 服务。
+- `control-plane/web-ui-bff/src/index.ts` 继续承载 BFF、WebSocket、SSE 聚合与 Runtime 适配。
+- `control-plane/web-ui` 继续承载前端开发入口。
+- `control-plane/app` 不作为默认入口，只保留为兼容/实验资产。
 
-目标：
+### 7.4 UI 托管与脚本现状
 
-- 内部 service 调用替代 HTTP loopback
-- 保留必要的外部 runtime adapter（OPENCODE_URL 到 :4096 的调用不在此范围）
+当前标准运行形态应明确为多进程：
 
-### 7.3 统一 server 入口
+- 根目录 `package.json`、VS Code tasks、检查脚本若存在单入口 app 路径，应视为兼容或实验路径，不再作为文档推荐默认值。
+- 日常开发与排障仍以 `start-control-plane-service`、`start-web-ui-bff`、`start-web-ui` 以及对应端口为准。
+- 如保留 `start-app`、`dev:app`、`build:app` 等脚本，应在文档中明确标注为非默认路径。
 
-重点参考：
+### 7.4.1 脚本与任务说明
 
-- control-plane/service/src/index.ts — 纯 HTTP，`export default { port, fetch: app.fetch }`
-- control-plane/web-ui-bff/src/index.ts — HTTP + WebSocket，`export default { port, fetch(req, server) {...}, websocket: websocketHandler }`
+当前建议按下面矩阵理解：
 
-合并后的单进程入口必须同时处理 HTTP 路由和 WebSocket 升级。当前 Service 使用 Bun 原生 HTTP server export，BFF 使用带 `websocket` handler 的扩展格式。合并后需要采用 BFF 的扩展 export 格式，在 `fetch` 中处理 WS upgrade 与 Hono 路由分派。
+1. 标准开发脚本
+   - `dev:service` / `start-control-plane-service`
+   - `dev:bff` / `start-web-ui-bff`
+   - `dev:ui` / `start-web-ui`
 
-目标：
+2. 兼容脚本
+   - `dev:app` / `start-app`
+   - 仅用于兼容验证、迁移演练或局部实验，不作为默认依赖
 
-- 合并为一个 Hono app
-- 一个统一的 middleware 链
-- 一个统一的监听端口
-- WebSocket upgrade 与 HTTP 路由在同一个 `fetch` handler 中处理
+3. 检查脚本
+   - health、smoke、集成测试说明要明确标注自己依赖的是哪一组端口，不再默认假设已经收敛为单入口
 
-### 7.4 UI 托管
-
-重点改造：
-
-- control-plane/web-ui 构建脚本
-- 统一 server 的静态资源托管模块
-- VS Code tasks 与本地启动脚本
-
-### 7.4.1 脚本与任务切换矩阵
-
-当前根目录和工作区脚本仍然默认三进程模型：
-
-- 根目录 `package.json` 中 `dev` 仍并行启动 `dev:service / dev:bff / dev:ui`
-- `.vscode/tasks.json` 中仍维护 `start-control-plane-service`、`start-web-ui-bff`、`start-web-ui` 三组启动与停止任务
-- `scripts/check-all.sh` 仍分别探测 `4097/health` 与 `4098/health`
-
-迁移后建议按下面矩阵处理：
-
-1. 新增单入口脚本
-   - `dev:app` — 启动统一 app
-   - `build:app` — 构建统一 app + UI 产物
-   - `test:app` — 跑统一入口相关测试与 smoke test
-
-2. 保留过渡脚本
-   - `dev:service` / `dev:bff` / `dev:ui` 在过渡期保留，仅用于回归对照与问题定位
-   - 明确标记为 legacy / compatibility，不再作为标准启动方式
-
-3. 更新 VS Code tasks
-   - 新增 `start-app` / `stop-app` / `restart-app`
-   - `start-all-dev` 改为 `start-app + start-opencode-runtime`，可选再附带 `start-web-ui` 作为 HMR 加速器
-   - 所有 `problemMatcher.endsPattern` 从多端口启动日志改为单入口 app 日志
-
-4. 更新检查脚本
-   - `scripts/check-all.sh` 改为检查统一 app health、数据库就绪和 runtime 可达
-   - 删除对独立 BFF / Control Plane 的默认依赖
-
-### 7.5 Auth 合并策略
+### 7.5 Auth 边界说明
 
 当前 Service 和 BFF 的 auth 行为有本质差异：
 
-| | Service Auth | BFF Auth |
-|---|---|---|
-| JWT 验证 | 有 | 有 |
-| DB 查 accountStatus | **是** | **否** |
-| DB 查 tokenVersion | **是** | **否** |
-| system: 前缀跳过 DB 查询 | **是** | **否** |
+- JWT 验证：Service 与 BFF 都有。
+- DB 查 `accountStatus`：Service 有，BFF 没有。
+- DB 查 `tokenVersion`：Service 有，BFF 没有。
+- `system:` 前缀跳过 DB 查询：Service 有，BFF 没有。
 
-单进程后需要：
-
-1. 全局 auth 统一为 Service 的强校验模式（验 JWT + 查 DB accountStatus / tokenVersion）
-2. 移除 `createInternalAuthorization()` 机制 — BFF 当前签发 `system:bff` 内部 JWT（5 分钟有效期）用于进程间调用，合并后不再需要
-3. 废弃 `INTERNAL_SERVICE_USER_ID` / `INTERNAL_SERVICE_ORG_ID` 环境变量
-4. JWT Secret 统一为单一变量（当前两个服务各自读取 `JWT_SECRET`，默认值相同但配置分散）
+当前文档应接受这一现实差异，并在需要时分别说明，不再把“全局 auth 合并”作为后续默认目标。
 
 ### 7.6 环境变量治理
 
-当前两个服务共有 25+ 个环境变量，合并后需要分类处理：
+当前环境变量治理目标改为“减少混乱，但不强制消灭多进程变量”：
 
-**需废弃的变量（进程间通信）：**
+1. `JWT_SECRET`、`CORS_ORIGIN` 等重叠配置可继续收口，但前提是不能打破当前多进程部署。
+2. `CONTROL_PLANE_URL`、`BFF_PORT`、`PORT` 等变量继续视为有效现状变量。
+3. `OPENCODE_URL` 与 `OPENCODE_BASE_URL` 的命名关系应在文档中明确，但不要求立即通过进程合并消除。
 
-- `CONTROL_PLANE_URL` — 不再需要本机回源
-- `BFF_PORT` — 不再独立端口
-- `INTERNAL_SERVICE_USER_ID` / `INTERNAL_SERVICE_ORG_ID` — 内部 JWT 机制废弃
-
-**需统一的变量（重叠配置）：**
-
-- `JWT_SECRET` — 两处相同默认值，收敛为单一读取入口
-- `CORS_ORIGIN` — 两处均引用，合并后只需一处
-- `PORT` — 确定合并后的唯一监听端口
-
-**需保留的 BFF 侧变量（合并后继续有效）：**
-
-- `OPENCODE_URL` — 连接外部 OpenCode Runtime :4096
-- `OPENCODE_ROOT` / `OPENCODE_RUNTIME_ROOT` / `OPENCODE_DIR` — 配置文件路径
-- `OPENCODE_PROVIDER_ID` / `OPENCODE_MODEL_ID` — 运行时模型配置
-- `LOW_COST_EXECUTION_MODEL` — 付费执行降级模型
-- `ALLOW_PAID_MODEL_EXECUTION` — 付费执行开关
-- `STALE_RUNNING_TASK_OFFLINE_MS` / `PERIODIC_RECONCILE_MS` — 后台对账定时器
-- `CHAT_SETTINGS_PENDING_PATCH_SECRET` — 配置补丁签名
-
-建议在 Phase 2 完成后输出统一的 `.env.example`。
-
-### 7.6.1 环境变量过渡与兼容策略
-
-当前根目录 `.env` 仍采用双服务配置形态：
-
-- `PORT=4097`
-- `BFF_PORT=4098`
-- `CONTROL_PLANE_URL=http://localhost:4097`
-- `OPENCODE_BASE_URL=http://localhost:4096`
-
-而代码中 BFF 侧更常使用的是 `OPENCODE_URL`。这意味着迁移时不仅要做变量收敛，还要解决命名不一致问题。
-
-建议按两阶段处理：
-
-1. 过渡阶段
-   - 新增统一变量：`APP_PORT`
-   - 统一读取 `OPENCODE_URL`，并允许 `OPENCODE_BASE_URL` 作为兼容别名一段时间
-   - `PORT` 暂时仍映射到单入口 app，避免一次性打断现有脚本
-
-2. 收敛阶段
-   - 删除 `BFF_PORT`、`CONTROL_PLANE_URL`
-   - 删除 `OPENCODE_BASE_URL`，只保留 `OPENCODE_URL`
-   - 输出最终版 `.env.example` 和迁移说明
-
-### 7.7 后台定时任务合并
+### 7.7 后台定时任务说明
 
 BFF 独有以下后台任务，Service 无后台任务：
 
-1. `startPeriodicReconcile()` — `setInterval` 每 5 分钟执行，检查 running task 是否过期/完成，当前通过 cpFetch 查询和更新 CP Service
+1. `startPeriodicReconcile()` — `setInterval` 每 5 分钟执行，检查 running task 是否过期/完成，当前通过 `cpFetch` 查询和更新 CP Service
 2. `reconcileRunningTasksOnStartup()` — 启动时一次性清理
 3. SSE 重连定时器 — SSE 连接断开后自动重连 OpenCode Runtime
 
-合并后这些逻辑应作为单进程内部模块保留。其中 reconcile 相关逻辑当前通过 cpFetch 查询/更新 task 状态，需改为直接 service call。
+这些逻辑继续保留在 BFF 进程内；后续若要优化，也以局部稳定性调整为主，不以迁入统一 app 为目标。
 
-### 7.8 测试迁移策略
+### 7.8 测试策略
 
-当前测试不仅存在端口硬编码问题，还存在明确的“双后端职责分层”假设：
+当前测试仍存在明确的双后端职责分层假设：
 
 - service tests 直接调用 `TEST_CP_URL`（默认 `4097`）
 - web-ui-bff tests 直接调用 `TEST_BFF_URL`（默认 `4098`）
 - e2e tests 同时依赖 `PLAYWRIGHT_BFF_URL` 与 `PLAYWRIGHT_CONTROL_PLANE_URL`
 
-迁移后建议按测试层级重组：
+既然保持多进程现状，测试策略也应保持对应关系：
 
-1. 统一入口测试
-   - 所有 API 契约测试默认打统一 app base URL
-   - Playwright / e2e 默认只依赖一个前台入口和一个 app API 入口
-
-2. 内部模块测试
-   - 原 service 侧纯业务逻辑测试下沉为 service / repository / module 级单测
-   - 不再要求独立 HTTP 端口存在
-
-3. 真实执行集成测试
-   - 继续保留对外部 OpenCode Runtime `:4096` 的依赖
-   - 但控制面入口统一为单入口 app
-
-4. 过渡期兼容
-   - 在一段时间内允许 `TEST_CP_URL`、`TEST_BFF_URL` 映射到同一个 app URL
-   - 最终删除双 URL 模式，只保留一个 `TEST_APP_URL`
+1. 不强制把所有测试重写为单入口 app 测试。
+2. 继续允许 `TEST_CP_URL` 与 `TEST_BFF_URL` 并存。
+3. 回归重点放在 PostgreSQL 路径、BFF 与 UI 集成、真实执行链路，以及当前标准开发拓扑的可用性。
 
 ### 7.9 健康检查与就绪语义
 
-当前检查脚本与任务系统把 `4097/health` 和 `4098/health` 视为两个独立服务。单进程后需要明确新的探针语义，避免出现“进程活着但系统不可用”的灰区。
+当前检查脚本与任务系统应继续区分 `4097/health` 与 `4098/health` 的服务语义，不再默认假设存在单一入口即可覆盖全部健康状态。
 
 建议至少区分三类检查：
 
-1. Liveness
-   - 进程已启动，HTTP server 可响应
-
-2. Readiness
-   - PostgreSQL 连接成功
-   - schema migration 已完成
-   - 关键依赖初始化成功（auth、路由、realtime registry）
-
-3. Dependency status
-   - OpenCode Runtime `:4096` 是否可达单独暴露为依赖状态
-   - Runtime 不可达时应区分为 degraded，而不是直接把 app 判死
-
-建议在统一 app 中提供：
-
-- `/health/live`
-- `/health/ready`
-- `/health/deps`
-
-并同步更新 `scripts/check-all.sh`、VS Code tasks 的 readiness 判定以及部署探针。
+1. Service 自身存活与数据库 readiness
+2. BFF 自身存活与 Runtime 依赖状态
+3. 前端入口与代理链路可用性
 
 ### 7.10 文档联动更新清单
 
-当前有多份文档把 `5173 / 4098 / 4097` 三段式结构写成事实性结论。若只更新本方案文档，实施后会留下大量与现状冲突的设计说明。
-
-建议至少同步更新：
+当前有多份文档把单入口或进程合并写成默认方向。既然路线已经调整，这些文档后续应同步改成“PG 已切换，多进程保持现状”：
 
 - `docs/architecture-overview.md`
 - `docs/runtime-process-architecture.md`
 - `docs/api-boundary.md`
 - `docs/opencode-internals.md`
 - `docs/integration-test-10x-report.md`
-- 任何仍把 BFF 视为固定独立入口的设计文档
-
-这些文档的更新应包含：
-
-1. 当前态与目标态边界说明
-2. 端口与启动方式变化
-3. `/api`、`/ws`、静态资源的统一入口说明
-4. OpenCode Runtime 仍外置保留的边界说明
+- 任何仍把单入口 app 视为既定目标的设计文档
 
 ## 8. 风险与取舍
 
-### 8.1 最大风险不是 PG，而是边界重组
+### 8.1 当前主要收益已经落在 PostgreSQL 迁移
 
-SQLite 换 PG 本身属于典型基础设施迁移。
+SQLite -> PostgreSQL 已经解决了最关键的文件锁与运行时写入扩展问题。继续强推进程合并的收益已不足以覆盖当前改造成本与回归风险。
 
-真正高风险的是：
+### 8.2 当前主要风险在文档与实际运行形态不一致
 
-- BFF 与 Control Plane 的职责重组
-- cpFetch 回源改为内部 service 调用
-- realtime 和 runtime adapter 融入统一 app
+当前更现实的风险不是“不够单进程”，而是：
 
-所以建议先 PG，后合并进程，而不是两件事在同一个提交里同时爆改。
+- 脚本默认路径与团队实际使用路径不一致
+- 文档仍把单入口 app 写成既定目标
+- 测试和排障说明混杂了两套路由与端口假设
 
-### 8.2 不建议第一阶段就把 Runtime 也并进来
+### 8.3 不再以“半迁移到单进程”作为可接受状态
 
-原因：
-
-- Runtime 是执行引擎，不只是接口层
-- 它管理外部模型调用和子进程工具
-- 当前 chat settings、opencode.json、agent session、SSE 事件都与其强耦合
-
-第一阶段强行把 4096 一起并掉，会把问题从“控制面重构”放大成“整套执行内核重构”。这不划算。
-
-### 8.3 文档、测试、脚本必须同步重做
-
-当前很多测试和脚本默认写死：
-
-- 4097
-- 4098
-- 5173
-- opencode runtime 独立可达
-
-如果进程合并后不重做测试入口，会出现大量“业务没坏，但测试基建全坏”的噪音。
-
-### 8.4 最大切换风险在“半迁移状态”
-
-本次改造不是单纯代码提交问题，而是运行拓扑切换问题。最危险的状态不是旧架构，也不是新架构，而是：
-
-- 代码已切到单进程，但脚本仍按三进程启动
-- App 已切到 PG，但环境变量和 `.env` 仍指向 SQLite / 双服务配置
-- 测试仍依赖 `TEST_CP_URL + TEST_BFF_URL` 双 URL
-- 文档仍指导团队按 `5173 -> 4098 -> 4097` 排障
-
-因此实施时必须把脚本、环境、测试、文档作为同一批次的切换项统一收口，避免长期处于半迁移状态。
+既然已经决定停止推进进程合并，就不应继续让默认脚本、默认文档和默认 runbook 假设系统会很快切到单入口。否则会长期制造误导。
 
 ## 9. 验收标准
 
-本方案的最低验收标准建议如下。
+本说明的最低验收标准调整为：
 
-### 9.1 PG 替换完成标准
+### 9.1 PostgreSQL 替换完成标准
 
 1. 控制面不再依赖 SQLite 文件。
 2. 所有核心表完成 PostgreSQL migration。
 3. 任务、审批、审计、成本、治理、runtime ledger 能在 PG 上正常读写。
 4. 启动过程不再包含 SQLite compatibility bootstrap。
 
-### 9.2 单进程完成标准
+### 9.2 当前多进程运行完成标准
 
-1. 浏览器、API、WS 由单一应用入口提供。
-2. 不再存在 BFF 到 localhost:4097 的本机 HTTP 回源。
-3. 标准启动命令只需一个应用进程。
-4. 5173 / 4097 / 4098 不再同时作为系统运行前提。
-5. 根目录脚本、VS Code tasks、check-all 脚本默认都已切到单入口模型。
+1. `4097`、`4098`、`5173`、`4096` 的职责边界在文档中表述一致。
+2. 默认启动、排障、健康检查说明与当前实际运行形态一致。
+3. 不再把单入口 app 作为默认前提写入脚本说明、runbook 或验收口径。
 
 ### 9.3 质量门槛
 
@@ -921,14 +650,14 @@ SQLite 换 PG 本身属于典型基础设施迁移。
 2. paid execution regression 通过。
 3. runtime ledger 与 governance 相关测试通过。
 4. 至少一组真实执行集成验证通过。
-5. 启动与重启过程中不再出现 SQLite 锁竞争类故障。
-6. 单入口 health / ready / deps 检查通过。
+5. PostgreSQL 路径下不再出现 SQLite 锁竞争类故障。
+6. 当前标准拓扑下的 health、smoke、集成验证说明完整可执行。
 
 ### 9.4 运维切换完成标准
 
 1. 已形成正式切换 runbook。
 2. 已形成正式回滚 runbook。
-3. 至少完成一次预发切换演练。
+3. 至少完成一次 PostgreSQL 目标库迁移演练。
 4. SQLite 快照、PG 导入校验、smoke check、真实执行验证都有记录。
 
 ## 10. 切换与回滚 Runbook
@@ -938,20 +667,37 @@ SQLite 换 PG 本身属于典型基础设施迁移。
 1. 确认冻结窗口与回滚负责人。
 2. 备份 SQLite 文件并记录快照路径、生成时间、文件校验值。
 3. 准备 PostgreSQL 数据库、连接串、权限与 migration 执行账号。
-4. 准备统一 app 所需 `.env`，确认 `APP_PORT / PORT / OPENCODE_URL / JWT_SECRET / DATABASE_URL` 已对齐。
+4. 准备当前多进程运行所需 `.env`，确认 `PORT / BFF_PORT / CONTROL_PLANE_URL / OPENCODE_URL / JWT_SECRET / DATABASE_URL` 已对齐。
 5. 确认 OpenCode Runtime `:4096` 可独立健康运行。
+6. 明确本次切换目标库必须是“干净目标库”，不要直接把当前长期运行的 `openerx` 数据库当作 SQLite 快照的镜像校验基准；该库已发生后续运行态写入，会与规范化快照出现预期差异。
+
+### 10.1.1 已完成的正式演练基线
+
+- 已在干净目标库 `openerx_sqlite_rehearsal_20260318` 上完成一次完整 SQLite -> PostgreSQL 导入演练。
+- 演练产物位于 `tmp/sqlite-pg-clean-rehearsal/run-2026-03-17T22-48-31.917Z/`，包含 `run-summary.json` 与 `validation-report.json`。
+- 已验证 PostgreSQL 目标库可被当前控制面链路使用；后续是否通过 `app` 还是 `service + bff + ui` 启动，不再作为本说明默认路线的一部分。
 
 ### 10.2 正式切换步骤
 
 1. 冻结控制面写流量。
-2. 导出并快照 SQLite 数据。
-3. 执行 PG migration。
-4. 导入历史数据并做行数与关键表抽样校验。
-5. 启动统一 app。
-6. 执行 `/health/live`、`/health/ready`、`/health/deps` 检查。
-7. 执行 smoke check：登录、项目列表、任务列表、任务详情、审批、dashboard、realtime 连接。
-8. 执行至少一组真实执行集成验证。
-9. 验证通过后解除冻结。
+2. 导出并快照 SQLite 数据，记录输入文件路径和校验值，保留为只读证据。
+3. 创建一个新的干净 PostgreSQL 目标库，例如 `openerx_pg_cutover_<timestamp>`。
+4. 在目标库上执行基线 migration：`cd control-plane/service && DATABASE_URL=postgres://127.0.0.1:5432/<target_db> bun run db:migrate`。
+5. 在同一目标库上执行完整快照迁移：`DATABASE_URL=postgres://127.0.0.1:5432/<target_db> bun run db:migrate:sqlite-snapshot`，或在仓库根目录执行 `DATABASE_URL=postgres://127.0.0.1:5432/<target_db> bun run db:migrate:sqlite-snapshot`。
+6. 检查迁移产物中的 `run-summary.json` 与 `validation-report.json`，确认关键表行数、主键和外键校验全部通过。
+7. 按当前标准拓扑启动 `service + bff + ui + runtime`，并让它们共同指向目标 PostgreSQL 库。
+8. 分别执行健康检查与 smoke check，至少覆盖：Control Plane、BFF、登录、项目列表、任务列表、dashboard。
+9. 执行至少一组真实执行集成验证，确认运行时 `:4096` 依赖、执行落库、治理统计与审计链路正常。
+10. 记录本次切换耗时、人工介入点、异常与处置。
+11. 验证通过后解除冻结，并保留 SQLite 快照、迁移产物目录和目标库名称作为审计记录。
+
+### 10.2.1 推荐 smoke check 最小命令集
+
+1. 登录并拿 token：`curl -X POST http://127.0.0.1:4098/api/auth/login -H 'Content-Type: application/json' -d '{"username":"admin","password":"admin123!"}'`
+2. 项目列表：`curl http://127.0.0.1:4098/api/projects -H "Authorization: Bearer <token>"`
+3. 任务列表：`curl 'http://127.0.0.1:4098/api/tasks?limit=5' -H "Authorization: Bearer <token>"`
+4. dashboard：`curl 'http://127.0.0.1:4098/api/dashboard/governance-overview?range=24h' -H "Authorization: Bearer <token>"`
+5. 如需完整放行标准，再补 `4097/health`、任务详情、审批列表与 realtime 连接验证。
 
 ### 10.3 回滚触发条件
 
@@ -959,36 +705,35 @@ SQLite 换 PG 本身属于典型基础设施迁移。
 
 - PG migration 失败且无法快速修复
 - 关键表校验不一致
-- 单入口 app 无法通过 readiness
+- `4097` 或 `4098` 任一核心服务无法通过 readiness
 - 登录、任务执行、审批、dashboard 任一核心路径不可用
 - 真实执行集成验证失败且无法在窗口内修复
+- 迁移后数据库需要依赖手工修表、补数据或跳过校验才能继续推进
 
 ### 10.4 回滚步骤
 
 1. 重新冻结控制面写流量。
-2. 停止统一 app。
+2. 停止 `service + bff + ui` 相关进程。
 3. 恢复旧 `.env` 与旧脚本入口。
 4. 恢复 SQLite 快照。
 5. 按旧拓扑启动 `service + bff + ui`。
 6. 检查 `4097/health`、`4098/health`、`5173` 页面可达。
 7. 执行旧架构 smoke check，确认核心路径恢复。
-8. 保留 PG 数据库与失败现场，供后续问题分析，不在回滚窗口内继续修复。
+8. 保留失败的 PostgreSQL 目标库、迁移产物目录和相关日志，供后续问题分析，不在回滚窗口内继续修复。
+9. 回滚窗口内不对失败目标库继续写入，避免污染二次排查证据。
 
 ## 11. 推荐结论
 
-推荐采用下面的总路线：
+当前推荐结论调整为：
 
-1. 先把控制面数据库从 SQLite 切到 PostgreSQL。
-2. 再把 Control Plane Service、Web UI BFF、Web UI 托管层合并为单进程应用。
-3. 第一阶段保留 OpenCode Runtime 外部边界，不把 4096 强行并入。
+1. PostgreSQL 迁移路线继续保留并作为正式标准。
+2. Control Plane Service、Web UI BFF、Web UI 托管层保持现有多进程形态，不再继续推进合并。
+3. OpenCode Runtime 继续保持外部边界，不把 `4096` 强行并入控制面。
 
-这是当前最稳妥、收益最高、风险可控的方案。
+这代表当前路线已经从“PG + 单进程”调整为“PG + 保持现状”。
 
-如果继续维持 SQLite + 4097/4098/5173 三段式结构，后续每加一层治理、账本、实时协调和配置同步，系统都会继续在文件锁、端口耦合、本机回源和职责交叉上反复付利息。相反，PG + 单进程控制面可以一次性解决当前最明显的四类问题：
+后续优化重点应是：
 
-- 文件锁
-- 本机 HTTP 回环
-- 多服务重启与排障成本
-- 控制面职责分裂
-
-因此，这不是“是否值得优化”的问题，而是“是否继续接受当前架构的持续摩擦成本”的问题。
+1. 文档与脚本一致性。
+2. PostgreSQL 路径下的稳定性与可验证性。
+3. 当前多进程架构中的具体缺陷修复，而不是再启动一轮大规模边界重组。

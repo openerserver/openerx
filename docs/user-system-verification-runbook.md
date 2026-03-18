@@ -9,7 +9,7 @@
 | 条件 | 说明 |
 |------|------|
 | 服务状态 | `control-plane` 与 `web-ui-bff` 服务均已启动 |
-| 数据库 | SQLite 数据库已完成迁移（`bun run db:migrate`） |
+| 数据库 | PostgreSQL 数据库已完成 migration（`bun run db:migrate`） |
 | 初始账号 | 至少存在一个 `platform_admin` 角色账号 |
 | 浏览器 | 通过前端地址可正常访问登录页 |
 | 自动化检查 | `bun run check:all` 通过 |

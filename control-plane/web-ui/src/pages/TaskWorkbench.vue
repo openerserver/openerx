@@ -165,7 +165,7 @@ import { Button, Modal, message, notification } from "ant-design-vue";
 import type { DefaultOptionType } from "ant-design-vue/es/select";
 import { computed, h, onUnmounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { type Task, getTask, listTasks } from "../lib/api";
+import { type Task, getTask, listTasks, toApiError } from "../lib/api";
 import { useProjectStore } from "../stores/project";
 import { useWorkbenchStore } from "../stores/workbench";
 import { workbenchThemeStyles } from "../theme/ui-theme";
@@ -180,6 +180,7 @@ const taskPickerLoading = ref(false);
 const taskPickerTasks = ref<Task[]>([]);
 const clearUndoNotificationKey = "workbench-clear-undo";
 let tabRefreshTimer: ReturnType<typeof setInterval> | null = null;
+const missingTaskNoticeShown = ref(false);
 
 const requestedTaskIds = computed(() => {
   const value = route.query.task;
@@ -267,7 +268,10 @@ async function ensureTaskMeta(taskId: string) {
   try {
     const task = await getTask(taskId);
     workbench.updateTaskMeta(taskId, { title: task.title, status: task.status });
-  } catch {
+  } catch (error) {
+    if (toApiError(error)?.status === 404) {
+      handleMissingTask(taskId);
+    }
     // Ignore title lookup failures in workbench shell.
   }
 }
@@ -279,11 +283,24 @@ async function refreshOpenTabMeta() {
       try {
         const task = await getTask(taskId);
         workbench.updateTaskMeta(taskId, { title: task.title, status: task.status });
-      } catch {
+      } catch (error) {
+        if (toApiError(error)?.status === 404) {
+          handleMissingTask(taskId);
+          return;
+        }
         // Ignore transient refresh failures.
       }
     }),
   );
+}
+
+function handleMissingTask(taskId: string) {
+  workbench.pruneMissingTasks([taskId]);
+
+  if (!missingTaskNoticeShown.value) {
+    missingTaskNoticeShown.value = true;
+    message.warning("已自动清理当前数据库中不存在的历史任务标签。若需查看旧历史，请让 UI 指向对应的 app 数据库实例。");
+  }
 }
 
 async function reloadTaskPicker() {

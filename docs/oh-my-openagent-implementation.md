@@ -523,12 +523,12 @@ TaskDetail 新增"会话历史"卡片：
 │ Web UI       │  │ Control Plane Service (:4097)          │
 │ (:5173)      │  │   tasks → graph → task_nodes/edges    │
 │ TaskDetail   │  │   plugins → CRUD                      │
-│ Settings     │  │   SQLite (openerx.db)                 │
+│ Settings     │  │   PostgreSQL                          │
 │ TaskGraph    │  │                                       │
 └──────────────┘  └───────────────────────────────────────┘
 ```
 
-**DAG 同步路径**：Runtime JSON → BFF dag-sync → PUT CP Service → SQLite → BFF GET → Frontend
+**DAG 同步路径**：Runtime JSON → BFF dag-sync → PUT CP Service → PostgreSQL → BFF GET → Frontend
 
 **意图分类路径**：用户 prompt → BFF execute → intent-classifier → tasks.category/strategy → TaskDetail 编排决策面板
 

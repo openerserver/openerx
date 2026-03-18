@@ -385,6 +385,23 @@ describe("Tasks page", () => {
     expect(apiMocks.listTasks).toHaveBeenCalledTimes(2);
   });
 
+  it("opens workbench reply focus when continuing a completed task", async () => {
+    const wrapper = await mountPage([makeTask({ id: "task-done", status: "completed" })]);
+
+    const state = getSetupState(wrapper) as {
+      handleContinue: (taskId: string) => void;
+    };
+    state.handleContinue("task-done");
+
+    expect(routerMocks.push).toHaveBeenCalledWith({
+      path: "/workbench",
+      query: {
+        task: "task-done",
+        reply: "1",
+      },
+    });
+  });
+
   it("downgrades model and retries when preflight asks for allow-with-downgrade", async () => {
     vi.spyOn(window, "confirm").mockReturnValueOnce(true);
     apiMocks.getTaskExecutionPreflight

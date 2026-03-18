@@ -6,6 +6,8 @@
 - BFF 对前端暴露统一的 `/api/*` 和 `/ws`
 - 控制平面服务 (`:4097`) 仅由 BFF 回源调用，不对外暴露
 
+当前这些接口边界继续保持为正式默认形态。虽然仓库中仍保留 `control-plane/app` 等兼容/实验入口，但不再把单入口合并作为本阶段默认路线。
+
 OpenCode 的整体关注边界另见 [OpenCode 关注边界说明](./opencode-focus-boundary.md)。本文档只描述当前接口收敛方式，不覆盖 OpenCode 产品能力取舍。
 
 ## 2. BFF 对前端暴露的接口
@@ -13,7 +15,7 @@ OpenCode 的整体关注边界另见 [OpenCode 关注边界说明](./opencode-fo
 ### 2.1 认证（公开，无需 token）
 
 | 方法 | 路径 | 说明 | 回源目标 |
-|------|------|------|----------|
+| --- | --- | --- | --- |
 | POST | `/api/auth/login` | 登录 | CP `/api/auth/login` |
 | POST | `/api/auth/refresh` | 刷新 token | CP `/api/auth/refresh` |
 | GET | `/api/auth/me` | 获取当前用户 | CP `/api/auth/me` |
@@ -21,7 +23,7 @@ OpenCode 的整体关注边界另见 [OpenCode 关注边界说明](./opencode-fo
 ### 2.2 任务（需要 token）
 
 | 方法 | 路径 | 说明 | 回源目标 |
-|------|------|------|----------|
+| --- | --- | --- | --- |
 | GET | `/api/tasks` | 任务列表 | CP `/api/audit` 聚合 |
 | GET | `/api/tasks/:taskId` | 任务详情 | CP `/api/audit` 聚合 |
 | GET | `/api/tasks/:taskId/graph` | 任务 DAG 图 | BFF 自有 |
@@ -29,7 +31,7 @@ OpenCode 的整体关注边界另见 [OpenCode 关注边界说明](./opencode-fo
 ### 2.3 审批（需要 token）
 
 | 方法 | 路径 | 说明 | 回源目标 |
-|------|------|------|----------|
+| --- | --- | --- | --- |
 | GET | `/api/approvals` | 审批列表 | CP `/api/approvals` |
 | POST | `/api/approvals/:ticketId/resolve` | 处理审批 | CP `/api/approvals/:ticketId/resolve` |
 
@@ -40,7 +42,7 @@ OpenCode Runtime 的真实协议差异见：
 - [docs/opencode-runtime-protocol.md](docs/opencode-runtime-protocol.md)
 
 | 方法 | 路径 | 说明 | 回源目标 |
-|------|------|------|----------|
+| --- | --- | --- | --- |
 | POST | `/api/agents/:agentRunId/pause` | 暂停 Agent | OpenCode Runtime |
 | POST | `/api/agents/:agentRunId/resume` | 恢复 Agent | OpenCode Runtime |
 | POST | `/api/agents/:agentRunId/guidance` | 注入指导 | OpenCode Runtime |
@@ -51,7 +53,7 @@ OpenCode Runtime 的真实协议差异见：
 ### 2.5 实时（需要 token）
 
 | 方法 | 路径 | 说明 | 回源目标 |
-|------|------|------|----------|
+| --- | --- | --- | --- |
 | GET | `/api/realtime/status` | WS 客户端数 | BFF 自有 |
 | POST | `/api/realtime/subscribe-session` | 订阅 SSE 会话 | BFF 自有 |
 | WS | `/ws?token=xxx` | WebSocket 实时连接 | BFF 自有 |
@@ -78,7 +80,7 @@ OpenCode Runtime 的真实协议差异见：
 这些接口仅 BFF 可调用，不对外暴露：
 
 | 模块 | 路径前缀 | 说明 |
-|------|----------|------|
+| --- | --- | --- |
 | auth | `/api/auth/*` | 登录、刷新、用户信息 |
 | orgs | `/api/orgs/*` | 组织管理 |
 | projects | `/api/projects/*` | 项目管理 |

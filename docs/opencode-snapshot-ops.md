@@ -1,6 +1,8 @@
 # OpenCode Snapshot 运维方案
 
 > 基于 2026-03-11 实际排查结论。当前环境：macOS arm64 / 24GB RAM / Bun 运行时。
+>
+> 说明：本文档中提到的 `~/.local/share/opencode/opencode.db` 是 OpenCode Runtime 自身的内部 SQLite 数据库，不是 OpenerX 控制面的主数据库。控制面正式运行数据库当前已切到 PostgreSQL。
 
 ---
 

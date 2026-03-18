@@ -131,12 +131,11 @@
                 取消
               </a-button>
             </a-popconfirm>
-            <router-link
+            <a-button
               v-if="record.status === 'failed' || record.status === 'completed'"
-              :to="`/workbench?task=${record.id}`"
-            >
-              <a-button size="small">续跑</a-button>
-            </router-link>
+              size="small"
+              @click="handleContinue(record.id)"
+            >续跑</a-button>
             <router-link :to="`/workbench?task=${record.id}`">
               <a-button type="link" size="small">工作台</a-button>
             </router-link>
@@ -1243,6 +1242,16 @@ async function handleCancel(taskId: string) {
   } finally {
     cancellingId.value = null;
   }
+}
+
+function handleContinue(taskId: string) {
+  void router.push({
+    path: "/workbench",
+    query: {
+      task: taskId,
+      reply: "1",
+    },
+  });
 }
 
 function formatDuration(task: { startedAt?: string; finishedAt?: string }) {

@@ -7,7 +7,7 @@
 			"command": "zsh",
 			"args": [
 				"-lc",
-				"pids=$(lsof -ti tcp:4098 -sTCP:LISTEN 2>/dev/null || true); if [[ -n \"$pids\" ]]; then kill $pids; sleep 1; fi; cd control-plane/app && exec bun run dev"
+				"pids=$(lsof -ti tcp:4098 -sTCP:LISTEN 2>/dev/null || true); if [[ -n \"$pids\" ]]; then kill $pids; sleep 1; fi; cd control-plane/app && UI_DEV_SERVER_URL=${UI_DEV_SERVER_URL:-http://127.0.0.1:5173} exec bun run dev"
 			],
 			"isBackground": true,
 			"problemMatcher": {
@@ -30,7 +30,7 @@
 			"command": "zsh",
 			"args": [
 				"-lc",
-				"pids=$(lsof -ti tcp:4098 -sTCP:LISTEN 2>/dev/null || true); if [[ -n \"$pids\" ]]; then kill $pids; sleep 1; fi; APP_PORT=4098 DATABASE_DIALECT=postgres DATABASE_URL=${DATABASE_URL:-postgres://127.0.0.1:5432/openerx} exec bun run control-plane/app/src/index.ts"
+				"pids=$(lsof -ti tcp:4098 -sTCP:LISTEN 2>/dev/null || true); if [[ -n \"$pids\" ]]; then kill $pids; sleep 1; fi; APP_PORT=4098 UI_DEV_SERVER_URL=${UI_DEV_SERVER_URL:-http://127.0.0.1:5173} DATABASE_DIALECT=postgres DATABASE_URL=${DATABASE_URL:-postgres://127.0.0.1:5432/openerx} exec bun run control-plane/app/src/index.ts"
 			],
 			"isBackground": true,
 			"problemMatcher": {
@@ -53,7 +53,7 @@
 			"command": "zsh",
 			"args": [
 				"-lc",
-				"pids=$(lsof -ti tcp:4193 -sTCP:LISTEN 2>/dev/null || true); if [[ -n \"$pids\" ]]; then kill $pids; sleep 1; fi; APP_PORT=4193 DATABASE_DIALECT=postgres DATABASE_URL=${DATABASE_URL:-postgres://127.0.0.1:5432/openerx} exec bun run control-plane/app/src/index.ts"
+				"pids=$(lsof -ti tcp:4193 -sTCP:LISTEN 2>/dev/null || true); if [[ -n \"$pids\" ]]; then kill $pids; sleep 1; fi; APP_PORT=4193 UI_DEV_SERVER_URL=${UI_DEV_SERVER_URL:-http://127.0.0.1:5173} DATABASE_DIALECT=postgres DATABASE_URL=${DATABASE_URL:-postgres://127.0.0.1:5432/openerx} exec bun run control-plane/app/src/index.ts"
 			],
 			"isBackground": true,
 			"problemMatcher": {
@@ -145,7 +145,7 @@
 			"command": "zsh",
 			"args": [
 				"-lc",
-				"pids=$(lsof -ti tcp:5173 -sTCP:LISTEN 2>/dev/null || true); if [[ -n \"$pids\" ]]; then kill $pids; fi; fallback=$(lsof -ti tcp:5174 -sTCP:LISTEN 2>/dev/null || true); if [[ -n \"$fallback\" ]]; then kill $fallback; fi; sleep 1; cd control-plane/web-ui && exec bun run dev --host 127.0.0.1 --port 5173"
+				"pids=(${(f)\"$(lsof -ti tcp:5173 -sTCP:LISTEN 2>/dev/null || true)\"}); if (( ${#pids[@]} )); then kill \"${pids[@]}\"; fi; fallback=(${(f)\"$(lsof -ti tcp:5174 -sTCP:LISTEN 2>/dev/null || true)\"}); if (( ${#fallback[@]} )); then kill \"${fallback[@]}\"; fi; sleep 1; cd control-plane/web-ui && VITE_APP_PORT=${VITE_APP_PORT:-${APP_PORT:-4098}} exec bun run dev --host 127.0.0.1 --port 5173"
 			],
 			"isBackground": true,
 			"problemMatcher": {
@@ -223,7 +223,7 @@
 			"command": "zsh",
 			"args": [
 				"-lc",
-				"pids=$(lsof -ti tcp:5173 -sTCP:LISTEN 2>/dev/null || true); if [[ -n \"$pids\" ]]; then kill $pids; fi; fallback=$(lsof -ti tcp:5174 -sTCP:LISTEN 2>/dev/null || true); if [[ -n \"$fallback\" ]]; then kill $fallback; fi"
+				"pids=(${(f)\"$(lsof -ti tcp:5173 -sTCP:LISTEN 2>/dev/null || true)\"}); if (( ${#pids[@]} )); then kill \"${pids[@]}\"; fi; fallback=(${(f)\"$(lsof -ti tcp:5174 -sTCP:LISTEN 2>/dev/null || true)\"}); if (( ${#fallback[@]} )); then kill \"${fallback[@]}\"; fi"
 			],
 			"isBackground": false,
 			"group": "none"
@@ -313,9 +313,8 @@
 			"label": "start-all-dev",
 			"dependsOrder": "parallel",
 			"dependsOn": [
-				"start-control-plane-service",
+				"start-app",
 				"start-opencode-runtime",
-				"start-web-ui-bff",
 				"start-web-ui"
 			],
 			"problemMatcher": [],
@@ -334,7 +333,7 @@
 		{
 			"label": "run-completion-sync-real",
 			"type": "shell",
-			"command": "cd control-plane/web-ui-bff && TEST_BFF_URL=http://127.0.0.1:4098 RUN_EXECUTION_INTEGRATION=1 bun test ../../tests/web-ui-bff/opencode-completion-sync.test.ts --timeout 120000",
+			"command": "cd control-plane/web-ui-bff && TEST_APP_URL=http://127.0.0.1:4098 RUN_EXECUTION_INTEGRATION=1 bun test ../../tests/web-ui-bff/opencode-completion-sync.test.ts --timeout 120000",
 			"isBackground": false,
 			"group": "test"
 		},
@@ -355,7 +354,7 @@
 		{
 			"label": "run-completion-sync-real-2",
 			"type": "shell",
-			"command": "cd control-plane/web-ui-bff && TEST_BFF_URL=http://127.0.0.1:4098 RUN_EXECUTION_INTEGRATION=1 bun test ../../tests/web-ui-bff/opencode-completion-sync.test.ts --timeout 120000",
+			"command": "cd control-plane/web-ui-bff && TEST_APP_URL=http://127.0.0.1:4098 RUN_EXECUTION_INTEGRATION=1 bun test ../../tests/web-ui-bff/opencode-completion-sync.test.ts --timeout 120000",
 			"isBackground": false,
 			"group": "test"
 		},

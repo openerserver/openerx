@@ -71,7 +71,6 @@
         </div>
         <a-space size="small" wrap>
           <a-tag :color="taskStatusColor(task?.status)">{{ taskStatusLabel(task?.status) }}</a-tag>
-          <a-tag v-if="taskEvents.length" color="blue">事件 {{ taskEvents.length }}</a-tag>
           <a-tag v-if="agentRuns.length" color="geekblue">活跃 Agent {{ activeAgentCount }}/{{ agentRuns.length }}</a-tag>
           <a-tag v-if="latestTaskEvent?.ts" color="default">{{ formatTime(latestTaskEvent.ts) }}</a-tag>
         </a-space>
@@ -245,7 +244,52 @@
             style="margin-bottom: 12px"
           />
 
-          <div ref="messagesPaneRef" :style="messagesPaneStyle">
+          <a-alert
+            v-if="executionFeedbackNotice"
+            :type="executionFeedbackNotice.type"
+            :message="executionFeedbackNotice.message"
+            :description="executionFeedbackNotice.description"
+            show-icon
+            style="margin-bottom: 12px"
+          />
+
+          <a-alert
+            v-if="assistantWaitNotice"
+            :type="assistantWaitNotice.type"
+            :message="assistantWaitNotice.message"
+            :description="assistantWaitNotice.description"
+            show-icon
+            style="margin-bottom: 12px"
+          />
+
+          <a-space
+            v-if="assistantWaitNotice && currentControllableAgentRunId"
+            size="small"
+            style="margin: -4px 0 12px 0; flex-wrap: wrap"
+          >
+            <a-button
+              danger
+              size="small"
+              data-testid="terminate-current-execution"
+              :loading="terminatingExecution"
+              @click="handleTerminateExecution"
+            >终止执行</a-button>
+          </a-space>
+
+          <a-space v-if="executionFeedbackActions.length > 0" size="small" style="margin: -4px 0 12px 0; flex-wrap: wrap">
+            <a-button
+              v-for="action in executionFeedbackActions"
+              :key="action.key"
+              type="primary"
+              size="small"
+              :data-testid="`execution-feedback-action-${action.key}`"
+              @click="action.onClick"
+            >
+              {{ action.label }}
+            </a-button>
+          </a-space>
+
+          <div ref="messagesPaneRef" :style="messagesPaneStyle" @scroll.passive="handleMessagesPaneScroll">
             <div v-if="!selectedSessionId && isWorkbenchEmbedded" :style="taskDetailThemeStyles.compactMainEmptyState">
               <a-typography-text type="secondary" :style="taskDetailThemeStyles.compactMainEmptyText">
                 请选择分支
@@ -304,11 +348,17 @@
                   </a-space>
                 </a-flex>
 
+                <pre
+                  v-if="messageDisplayText(item) && shouldRenderStreamingPlainText(item)"
+                  class="message-streaming-plain"
+                  :style="taskDetailThemeStyles.messagePre"
+                >{{ messageDisplayText(item) }}</pre>
+
                 <div
-                  v-if="messageDisplayText(item)"
+                  v-else-if="messageDisplayText(item)"
                   class="message-markdown"
                   :style="taskDetailThemeStyles.messagePre"
-                  v-html="renderMarkdown(messageDisplayText(item) || '')"
+                  v-html="renderMessageHtml(item)"
                 />
 
                 <ConfirmationForm
@@ -461,6 +511,16 @@
                     当前任务执行中，先等待本轮输出完成。
                   </span>
                   <span v-else class="reply-composer-shell__counter">{{ continuePrompt.length }} / 50000</span>
+
+                  <button
+                    v-if="isAwaitingAssistantResponse && currentControllableAgentRunId"
+                    type="button"
+                    class="reply-composer-action"
+                    :disabled="terminatingExecution"
+                    @click="handleTerminateExecution"
+                  >
+                    {{ terminatingExecution ? '终止中' : '终止执行' }}
+                  </button>
 
                   <button
                     v-if="taskId && selectedSessionId && !isWorkbenchEmbedded"
@@ -657,7 +717,7 @@
               />
             </a-collapse-panel>
 
-            <a-collapse-panel v-if="showHooksPanel" key="hooks" header="Hook 执行记录">
+            <a-collapse-panel v-if="showHooksPanel && !useCompactInspector" key="hooks" header="Hook 执行记录">
               <a-table
                 :data-source="strategy?.hookExecutions || []"
                 :columns="hookColumns"
@@ -695,18 +755,7 @@
               </a-table>
             </a-collapse-panel>
 
-            <a-collapse-panel v-if="showEventsPanel && !useCompactInspector" key="events" header="任务事件">
-              <a-empty v-if="taskEvents.length === 0" description="暂无任务事件" />
-              <a-table
-                v-else
-                :data-source="displayedTaskEvents"
-                :columns="eventColumns"
-                :pagination="false"
-                size="small"
-                row-key="tableKey"
-                :scroll="taskDetailEventTableScroll"
-              />
-            </a-collapse-panel>
+
           </a-collapse>
         </a-space>
       </a-col>
@@ -721,7 +770,6 @@
         title="工作台面板"
       >
         <span class="compact-inspector-launcher__icon" aria-hidden="true">◫</span>
-        <span v-if="showEventsPanel" class="compact-inspector-launcher__count">{{ taskEvents.length }}</span>
       </button>
     </div>
 
@@ -811,18 +859,7 @@
         </a-card>
       </div>
 
-      <div v-else-if="compactInspectorTab === 'events'">
-        <a-empty v-if="taskEvents.length === 0" description="暂无任务事件" />
-        <a-table
-          v-else
-          :data-source="displayedTaskEvents"
-          :columns="eventColumns"
-          :pagination="false"
-          size="small"
-          row-key="tableKey"
-          :scroll="taskDetailEventTableScroll"
-        />
-      </div>
+
 
       <div v-else-if="compactInspectorTab === 'project-role-config'">
         <TaskProjectRoleConfigPanel
@@ -835,6 +872,46 @@
           :active-role-agent-ids="activeRoleAgentIds"
         />
         <a-empty v-else description="暂无角色配置" />
+      </div>
+
+      <div v-else-if="compactInspectorTab === 'hooks'">
+        <a-empty v-if="!strategy?.hookExecutions?.length" description="暂无 Hook 记录" />
+        <a-table
+          v-else
+          :data-source="strategy.hookExecutions"
+          :columns="hookColumns"
+          :pagination="false"
+          size="small"
+          row-key="hookId"
+        >
+          <template #bodyCell="{ column, record }">
+            <template v-if="column.dataIndex === 'trigger'">
+              <a-tag>{{ hookTriggerLabel(record.trigger) }}</a-tag>
+            </template>
+            <template v-else-if="column.dataIndex === 'status'">
+              <a-tag :color="evaluationStatusColor(record.status)">{{ evaluationStatusLabel(record.status) }}</a-tag>
+            </template>
+            <template v-else-if="column.dataIndex === 'agent'">
+              <a-tag color="blue">{{ formatAgentLabel(record.agent) }}</a-tag>
+            </template>
+            <template v-else-if="column.dataIndex === 'result'">
+              <a-typography-text v-if="record.error" type="danger">{{ record.error }}</a-typography-text>
+              <a-typography-paragraph
+                v-else-if="record.result"
+                :ellipsis="{ rows: 2, expandable: true }"
+                :content="record.result"
+                :style="taskDetailThemeStyles.hookResult"
+              />
+              <span v-else>-</span>
+            </template>
+            <template v-else-if="column.dataIndex === 'decision'">
+              <template v-if="record.decision">
+                <a-tag :color="record.decision.action === 'allow' ? 'green' : record.decision.action === 'rewrite-prompt' ? 'orange' : 'red'">{{ record.decision.action }}</a-tag>
+              </template>
+              <span v-else>-</span>
+            </template>
+          </template>
+        </a-table>
       </div>
 
       <div v-else-if="compactInspectorTab === 'role-workflow'">
@@ -859,8 +936,13 @@ import { message } from "ant-design-vue";
 import { computed, defineAsyncComponent, nextTick, onUnmounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
+  toApiError,
+  type GuardDecision,
   type GovernanceSummary,
+  type ModelExecutionPolicy,
   type PipelineSummary,
+  type PaidExecutionEstimate,
+  type PaidExecutionRequirements,
   type ProjectRoleExecutionView,
   type ProjectRuntimeUsageLedgerListResponse,
   type RuntimePipeline,
@@ -883,6 +965,7 @@ import {
   getTaskPipeline,
   getTaskSessions,
   getTaskWorkflowView,
+  terminateAgent,
   updateDeveloperChangeRequest,
   updateTask,
 } from "../lib/api";
@@ -890,6 +973,7 @@ import { type ConfirmationBlock, parseConfirmationBlock } from "../lib/confirmat
 import { renderMarkdown } from "../lib/markdown";
 import { showRuntimeRecoveryNotice } from "../lib/runtime-recovery";
 import { RUNTIME_RECOVERY_CONTEXTS } from "../lib/runtime-recovery-notice";
+import { SETTINGS_SECTIONS, SETTINGS_TAB_MODELS } from "../lib/settings-deep-link";
 import { type RealtimeEvent, useRealtimeStore } from "../stores/realtime";
 import {
   buildTaskDetailMessageCardStyle,
@@ -923,8 +1007,34 @@ type RuntimeBurstSessionState = {
   alertType: "warning" | "info";
 };
 
+type ExecutionFeedbackNotice = {
+  type: "info" | "warning" | "error";
+  message: string;
+  description?: string;
+  actionKeys?: ExecutionFeedbackActionKey[];
+};
+
+type ExecutionFeedbackActionKey =
+  | "model-settings"
+  | "project-lease"
+  | "project-execution-gate";
+
+type ExecutionFeedbackAction = {
+  key: ExecutionFeedbackActionKey;
+  label: string;
+  onClick: () => void;
+};
+
+const MISSING_TASK_NOTICE_MESSAGE = "当前任务不存在";
+const MISSING_TASK_NOTICE_DESCRIPTION =
+  "当前 UI 指向的 app 数据库实例中找不到这个任务，可能是历史标签仍指向旧数据库实例。请切换到正确的数据库实例，或关闭这个 Workbench 标签。";
+const ASSISTANT_WAIT_NOTICE_MS = 4_000;
+const ASSISTANT_WAIT_SLOW_MS = 15_000;
+
 const taskId = computed(() => route.params.taskId as string | undefined);
 const task = ref<Task | null>(null);
+const executionFeedbackNotice = ref<ExecutionFeedbackNotice | null>(null);
+const lastMissingTaskNoticeTaskId = ref<string | null>(null);
 
 const hasCodeContext = computed(() => Boolean(task.value?.repoId));
 
@@ -1083,6 +1193,13 @@ const latestTaskEventTypeLabel = computed(() => formatEventTypeLabel(latestTaskE
 const activeAgentCount = computed(
   () => agentRuns.value.filter((run) => run.status === "running" || run.status === "paused").length,
 );
+const currentControllableAgentRunId = computed(() => {
+  if (!selectedSessionId.value) {
+    return null;
+  }
+
+  return agentRuns.value.find((run) => run.status === "running" || run.status === "paused")?.id ?? null;
+});
 const isCompactMainEmpty = computed(() => isWorkbenchEmbedded.value && !selectedSessionId.value);
 const messagesPaneStyle = computed(() => {
   if (isCompactMainEmpty.value) {
@@ -1117,9 +1234,7 @@ const taskDetailDefaultActivePanels = computed(() => {
     base.push("role-workflow");
   }
 
-  if (showEventsPanel.value && isWorkbenchEmbedded.value) {
-    base.push("events");
-  }
+
 
   return base;
 });
@@ -1251,11 +1366,14 @@ const modelsData = ref<Array<Record<string, unknown>> | null>(null);
 const updatingSelectedModel = ref(false);
 const compactInspectorVisible = ref(false);
 const compactInspectorTab = ref<
-  "orchestration" | "pipeline" | "graph" | "events" | "project-role-config" | "role-workflow"
+  "orchestration" | "pipeline" | "graph" | "events" | "hooks" | "project-role-config" | "role-workflow"
 >("orchestration");
 const pendingAssistantState = ref<PendingAssistantState | null>(null);
+const terminatedAwaitingSessionId = ref<string | null>(null);
+const terminatingExecution = ref(false);
 const messagesPaneRef = ref<HTMLDivElement | null>(null);
 const messageListEndRef = ref<HTMLDivElement | null>(null);
+const assistantWaitNowMs = ref(Date.now());
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
 let messageRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 let liveMessageRefreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1263,15 +1381,22 @@ let liveMessageRefreshInFlight = false;
 let bootstrapRefreshToken = 0;
 let messageAutoScrollFrame: number | null = null;
 let messageAutoScrollTimer: ReturnType<typeof setTimeout> | null = null;
+let streamingRevealFrame: number | null = null;
 let runtimeSessionStatusClock: ReturnType<typeof setTimeout> | null = null;
+let assistantWaitClock: ReturnType<typeof setTimeout> | null = null;
 const BOOTSTRAP_REFRESH_ATTEMPTS = 8;
 const BOOTSTRAP_REFRESH_INTERVAL_MS = 500;
 const LIVE_MESSAGE_REFRESH_INTERVAL_MS = 320;
 const runtimeSessionStatusNowMs = ref(Date.now());
+const shouldAutoScrollMessages = ref(true);
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+const suppressAssistantWaitingForSelectedSession = computed(
+  () => Boolean(selectedSessionId.value && terminatedAwaitingSessionId.value === selectedSessionId.value),
+);
 
 async function loadModels() {
   modelsLoading.value = true;
@@ -1431,6 +1556,249 @@ async function handleSelectedModelChange(value: unknown) {
   }
 }
 
+function formatErrorMessage(error: unknown) {
+  const apiError = toApiError(error);
+  if (apiError) {
+    return apiError.message;
+  }
+
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return String(error);
+}
+
+function buildExecutionFeedbackNotice(error: unknown): ExecutionFeedbackNotice | null {
+  const apiError = toApiError(error);
+  if (!apiError) {
+    return null;
+  }
+
+  if (apiError.status === 404) {
+    return {
+      type: "warning",
+      message: MISSING_TASK_NOTICE_MESSAGE,
+      description: MISSING_TASK_NOTICE_DESCRIPTION,
+    };
+  }
+
+  if (apiError.status === 403 || apiError.status === 409) {
+    const actionKeys: ExecutionFeedbackActionKey[] = [];
+
+    if (apiError.requirements?.allowPaidExecution && !apiError.requirements.hasAllowPaidExecution) {
+      actionKeys.push("project-execution-gate");
+    }
+
+    if (apiError.requirements?.leaseRequired && !apiError.requirements.hasLease) {
+      actionKeys.push("project-lease");
+    }
+
+    if (apiError.suggestedModel || apiError.effectiveModel || actionKeys.length === 0) {
+      actionKeys.push("model-settings");
+    }
+
+    return {
+      type: "warning",
+      message: apiError.message,
+      description: buildPaidExecutionBlockDetail({
+        code: apiError.code,
+        guardDecision: apiError.guardDecision,
+        guardReason: apiError.guardReason,
+        suggestedModel: apiError.suggestedModel,
+        effectiveModel: apiError.effectiveModel,
+        requirements: apiError.requirements,
+        policy: apiError.policy,
+        preflight: apiError.preflight,
+      }),
+      actionKeys,
+    };
+  }
+
+  return {
+    type: "error",
+    message: apiError.message,
+    description: apiError.code ? `错误代码: ${apiError.code}` : undefined,
+  };
+}
+
+function buildTerminateFailureNotice(error: unknown): ExecutionFeedbackNotice | null {
+  const apiError = toApiError(error);
+  if (!apiError) {
+    return null;
+  }
+
+  if (apiError.code === "AGENT_RUN_SUMMARY_NOT_FOUND") {
+    return {
+      type: "warning",
+      message: "当前历史执行缺少可恢复摘要，无法直接终止",
+      description:
+        "这个 agent run 没有持久化 summary，通常说明它来自较早历史数据或当时未完成摘要落库。页面目前无法重新附着到原始运行时实例，请刷新任务状态并确认它是否已经自然结束。",
+    };
+  }
+
+  if (apiError.code === "AGENT_RUN_SUMMARY_INCOMPLETE") {
+    return {
+      type: "warning",
+      message: "当前历史执行摘要不完整，无法安全恢复后再终止",
+      description:
+        "已找到历史 summary，但缺少 sessionId、taskId 或 projectId 等关键字段。页面无法安全恢复对应运行时实例，请先刷新任务状态，再决定是否重试或人工排查这条历史执行记录。",
+    };
+  }
+
+  return buildExecutionFeedbackNotice(error);
+}
+
+function formatGuardDecisionLabel(value?: GuardDecision) {
+  switch (value) {
+    case "deny":
+      return "已拒绝";
+    case "require-approval":
+      return "需要审批";
+    case "allow-with-downgrade":
+      return "需降级后重试";
+    case "allow":
+      return "允许";
+    default:
+      return null;
+  }
+}
+
+function buildPaidExecutionBlockDetail(args: {
+  code?: string;
+  guardDecision?: GuardDecision;
+  guardReason?: string;
+  suggestedModel?: string;
+  effectiveModel?: string;
+  requirements?: PaidExecutionRequirements;
+  policy?: ModelExecutionPolicy;
+  preflight?: PaidExecutionEstimate;
+}) {
+  const lines: string[] = [];
+
+  if (args.requirements?.allowPaidExecution && !args.requirements.hasAllowPaidExecution) {
+    lines.push("缺少 allowPaidExecution 授权，当前续跑被付费模型执行开关拦截。");
+  }
+
+  if (args.requirements?.leaseRequired && !args.requirements.hasLease) {
+    lines.push("缺少 paid execution lease，当前模型需要先领取有效租约后才能继续执行。");
+  }
+
+  if (args.code === "PAID_EXECUTION_DOWNGRADE_REQUIRED" && args.suggestedModel) {
+    lines.push(`建议切换到低成本模型 ${args.suggestedModel} 后重试。`);
+  } else if (args.suggestedModel) {
+    lines.push(`可优先尝试切换到建议模型 ${args.suggestedModel}。`);
+  }
+
+  if (args.preflight) {
+    lines.push(
+      `预估上限：请求 ${args.preflight.requestCount.max} 次，成本 $${args.preflight.costUsd.max.toFixed(2)}。`,
+    );
+  }
+
+  if (args.policy) {
+    lines.push(
+      `当前模型 ${args.policy.providerId}:${args.policy.modelId} 属于 ${args.policy.costTier} 成本档，单次上限 ${args.policy.maxRequestsPerRun} 次请求 / $${args.policy.maxEstimatedCostUsdPerRun.toFixed(2)}。`,
+    );
+  } else if (args.effectiveModel) {
+    lines.push(`当前命中的执行模型是 ${args.effectiveModel}。`);
+  }
+
+  const decisionLabel = formatGuardDecisionLabel(args.guardDecision);
+  if (decisionLabel && args.guardReason) {
+    lines.push(`策略判定：${decisionLabel}。${args.guardReason}`);
+  } else if (args.guardReason) {
+    lines.push(args.guardReason);
+  }
+
+  if (lines.length === 0) {
+    return "当前续跑请求被执行保护规则拦截。请切换允许的模型、确认执行授权，或调整项目执行策略后重试。";
+  }
+
+  return lines.join(" ");
+}
+
+function navigateToModelSettings() {
+  void router.push({
+    path: "/settings",
+    query: {
+      tab: SETTINGS_TAB_MODELS,
+      section: SETTINGS_SECTIONS.models,
+    },
+  });
+}
+
+function navigateToProjectLease() {
+  const projectId = task.value?.projectId;
+  if (!projectId) {
+    navigateToProjectExecutionGate();
+    return;
+  }
+
+  void router.push(`/projects/${projectId}`);
+}
+
+function navigateToProjectExecutionGate() {
+  const projectId = task.value?.projectId;
+  if (!projectId) {
+    void router.push("/settings/organization-operating");
+    return;
+  }
+
+  void router.push(`/projects/${projectId}/operating-mode`);
+}
+
+const executionFeedbackActions = computed<ExecutionFeedbackAction[]>(() => {
+  const actionKeys = executionFeedbackNotice.value?.actionKeys ?? [];
+  return actionKeys.map((key) => {
+    if (key === "project-execution-gate") {
+      return {
+        key,
+        label: "去打开项目执行授权设置",
+        onClick: navigateToProjectExecutionGate,
+      } satisfies ExecutionFeedbackAction;
+    }
+
+    if (key === "project-lease") {
+      return {
+        key,
+        label: "去申请 lease",
+        onClick: navigateToProjectLease,
+      } satisfies ExecutionFeedbackAction;
+    }
+
+    return {
+      key,
+      label: "去切换模型",
+      onClick: navigateToModelSettings,
+    } satisfies ExecutionFeedbackAction;
+  });
+});
+
+function handleMissingTask(id: string) {
+  task.value = null;
+  sessions.value = [];
+  sessionTree.value = [];
+  selectedSessionId.value = undefined;
+  sessionMessages.value = [];
+  runtimePipeline.value = null;
+  governance.value = null;
+  workflowView.value = null;
+  projectRoleExecutionView.value = null;
+  taskRuntimeUsage.value = null;
+  taskRuntimeUsageError.value = null;
+  executionFeedbackNotice.value = {
+    type: "warning",
+    message: MISSING_TASK_NOTICE_MESSAGE,
+    description: MISSING_TASK_NOTICE_DESCRIPTION,
+  };
+
+  if (lastMissingTaskNoticeTaskId.value !== id) {
+    lastMissingTaskNoticeTaskId.value = id;
+    message.warning(MISSING_TASK_NOTICE_MESSAGE);
+  }
+}
+
 async function refreshTaskData(
   id: string,
   options: {
@@ -1460,8 +1828,15 @@ async function refreshTaskData(
         .then((t) => {
           task.value = t;
           refreshedTaskProjectId = t.projectId || null;
+          if (executionFeedbackNotice.value?.message === MISSING_TASK_NOTICE_MESSAGE) {
+            executionFeedbackNotice.value = null;
+          }
         })
-        .catch(() => {}),
+        .catch((error) => {
+          if (toApiError(error)?.status === 404) {
+            handleMissingTask(id);
+          }
+        }),
     );
   }
 
@@ -1998,6 +2373,10 @@ const liveAssistantState = computed(() => {
 });
 
 const streamingAssistantDraft = computed<SessionMessageView | null>(() => {
+  if (suppressAssistantWaitingForSelectedSession.value) {
+    return null;
+  }
+
   for (
     let index = liveAssistantState.value.orderedAssistantMessageIds.length - 1;
     index >= 0;
@@ -2029,6 +2408,10 @@ const streamingAssistantDraft = computed<SessionMessageView | null>(() => {
 });
 
 const pendingAssistantMessage = computed<SessionMessageView | null>(() => {
+  if (suppressAssistantWaitingForSelectedSession.value) {
+    return null;
+  }
+
   const pending = pendingAssistantState.value;
   if (!pending || selectedSessionId.value !== pending.sessionId) {
     return null;
@@ -2108,7 +2491,24 @@ watch([streamingAssistantDraft, pendingAssistantMessage], ([streamingDraft, pend
   if (streamingDraft || !pendingMessage) {
     pendingAssistantState.value = null;
   }
+
+  if (streamingDraft || pendingMessage) {
+    terminatedAwaitingSessionId.value = null;
+  }
 });
+
+watch(
+  [selectedSessionId, () => getLatestInteractiveMessageInfo(sessionMessages.value)?.role ?? null],
+  ([sessionId, latestRole]) => {
+  if (!terminatedAwaitingSessionId.value) {
+    return;
+  }
+
+  if (!sessionId || terminatedAwaitingSessionId.value !== sessionId || latestRole === "assistant") {
+    terminatedAwaitingSessionId.value = null;
+  }
+  },
+);
 
 watch(
   () => route.query.session,
@@ -2160,6 +2560,7 @@ onUnmounted(() => {
   stopMessageAutoScroll();
   persistReplyFocusWindowBounds();
   stopReplyFocusWindowPersistence();
+  stopAssistantWaitClock();
   if (runtimeSessionStatusClock) {
     clearTimeout(runtimeSessionStatusClock);
     runtimeSessionStatusClock = null;
@@ -2179,9 +2580,11 @@ onUnmounted(() => {
 async function handleContinue() {
   if (!taskId.value || !selectedSessionId.value || !continuePrompt.value.trim()) return;
   continuing.value = true;
+  executionFeedbackNotice.value = null;
   const sessionId = selectedSessionId.value;
   const prompt = continuePrompt.value.trim();
   const sentAt = new Date().toISOString();
+  terminatedAwaitingSessionId.value = null;
   pendingAssistantState.value = {
     sessionId,
     prompt,
@@ -2204,7 +2607,17 @@ async function handleContinue() {
       return;
     }
 
-    message.error(`续跑失败: ${e}`);
+    const nextNotice = buildExecutionFeedbackNotice(e);
+    if (nextNotice) {
+      executionFeedbackNotice.value = nextNotice;
+      if (nextNotice.type === "warning") {
+        message.warning(nextNotice.message);
+      } else {
+        message.error(nextNotice.message);
+      }
+    } else {
+      message.error(`续跑失败: ${formatErrorMessage(e)}`);
+    }
     pendingAssistantState.value = null;
   } finally {
     continuing.value = false;
@@ -2268,6 +2681,7 @@ async function handleForkAndRun() {
   if (!taskId.value || !selectedSessionId.value || !continuePrompt.value.trim()) return;
   forkAndRunning.value = true;
   const prompt = continuePrompt.value.trim();
+  terminatedAwaitingSessionId.value = null;
   try {
     const nextTitle = `${selectedSessionLabel(selectedSession.value || ({ id: selectedSessionId.value, title: "", isActive: false, summary: null, createdAt: null, updatedAt: null } as SessionInfo))} 分叉`;
     const result = await forkTaskSession(taskId.value, selectedSessionId.value, nextTitle);
@@ -2297,6 +2711,48 @@ async function handleForkAndRun() {
     pendingAssistantState.value = null;
   } finally {
     forkAndRunning.value = false;
+  }
+}
+
+async function handleTerminateExecution() {
+  const agentRunId = currentControllableAgentRunId.value;
+  const sessionId = selectedSessionId.value;
+
+  if (!agentRunId || !sessionId) {
+    return;
+  }
+
+  terminatingExecution.value = true;
+
+  try {
+    await terminateAgent(agentRunId);
+    pendingAssistantState.value = null;
+    terminatedAwaitingSessionId.value = sessionId;
+    executionFeedbackNotice.value = {
+      type: "info",
+      message: "已请求终止当前执行",
+      description: "系统已收到终止指令，当前会话不会继续保持等待状态。",
+    };
+    message.success("已请求终止当前执行");
+    scheduleSessionRefresh();
+
+    if (taskId.value) {
+      void getTask(taskId.value)
+        .then((nextTask) => {
+          task.value = nextTask;
+        })
+        .catch(() => undefined);
+    }
+  } catch (error) {
+    const nextNotice = buildTerminateFailureNotice(error);
+    if (nextNotice) {
+      executionFeedbackNotice.value = nextNotice;
+      message.error(nextNotice.message);
+    } else {
+      message.error(`终止执行失败: ${formatErrorMessage(error)}`);
+    }
+  } finally {
+    terminatingExecution.value = false;
   }
 }
 
@@ -2517,6 +2973,10 @@ watch(
 );
 
 const latestAssistantMessageIncomplete = computed(() => {
+  if (suppressAssistantWaitingForSelectedSession.value) {
+    return false;
+  }
+
   if (!Array.isArray(sessionMessages.value) || sessionMessages.value.length === 0) {
     return false;
   }
@@ -2533,9 +2993,65 @@ const latestInteractiveMessageRole = computed(() => {
   return getLatestInteractiveMessageInfo(sessionMessages.value)?.role ?? null;
 });
 
+const awaitingAssistantSinceMs = computed(() => {
+  const pending = pendingAssistantState.value;
+  if (pending && selectedSessionId.value === pending.sessionId) {
+    const parsed = Date.parse(pending.sentAt);
+    if (!Number.isNaN(parsed)) {
+      return parsed;
+    }
+  }
+
+  if (!Array.isArray(sessionMessages.value) || sessionMessages.value.length === 0) {
+    return null;
+  }
+
+  const latest = getLatestInteractiveMessageInfo(sessionMessages.value);
+  if (latest?.role !== "user" || !latest.createdAt) {
+    return null;
+  }
+
+  const parsed = Date.parse(latest.createdAt);
+  return Number.isNaN(parsed) ? null : parsed;
+});
+
+const assistantWaitElapsedMs = computed(() => {
+  if (!isAwaitingAssistantResponse.value || awaitingAssistantSinceMs.value == null) {
+    return 0;
+  }
+
+  return Math.max(0, assistantWaitNowMs.value - awaitingAssistantSinceMs.value);
+});
+
+const assistantWaitNotice = computed<ExecutionFeedbackNotice | null>(() => {
+  if (!isAwaitingAssistantResponse.value || assistantWaitElapsedMs.value < ASSISTANT_WAIT_NOTICE_MS) {
+    return null;
+  }
+
+  const seconds = Math.max(1, Math.floor(assistantWaitElapsedMs.value / 1000));
+
+  if (assistantWaitElapsedMs.value >= ASSISTANT_WAIT_SLOW_MS) {
+    return {
+      type: "warning",
+      message: "模型响应较慢",
+      description: `请求已发送，已等待 ${seconds} 秒，暂未收到模型输出。可继续等待，或检查模型配置与运行状态。`,
+    };
+  }
+
+  return {
+    type: "info",
+    message: "消息已发送，正在等待模型回复",
+    description: `当前已等待 ${seconds} 秒，系统仍在处理本轮请求。`,
+  };
+});
+
 const isAwaitingAssistantResponse = computed(() => {
-  if (continuing.value || forkAndRunning.value) {
+  if (continuing.value || forkAndRunning.value || terminatingExecution.value) {
     return true;
+  }
+
+  if (suppressAssistantWaitingForSelectedSession.value) {
+    return false;
   }
 
   if (
@@ -2564,6 +3080,26 @@ function stopLiveMessageRefresh() {
     clearTimeout(liveMessageRefreshTimer);
     liveMessageRefreshTimer = null;
   }
+}
+
+function stopAssistantWaitClock() {
+  if (assistantWaitClock) {
+    clearTimeout(assistantWaitClock);
+    assistantWaitClock = null;
+  }
+}
+
+function scheduleAssistantWaitClock() {
+  stopAssistantWaitClock();
+
+  if (!isAwaitingAssistantResponse.value) {
+    return;
+  }
+
+  assistantWaitClock = setTimeout(() => {
+    assistantWaitNowMs.value = Date.now();
+    scheduleAssistantWaitClock();
+  }, 1000);
 }
 
 function scheduleLiveMessageRefresh() {
@@ -2599,9 +3135,12 @@ watch(
   ([sessionId, awaiting]) => {
     if (!sessionId || !awaiting) {
       stopLiveMessageRefresh();
+      stopAssistantWaitClock();
       return;
     }
 
+    assistantWaitNowMs.value = Date.now();
+    scheduleAssistantWaitClock();
     scheduleLiveMessageRefresh();
   },
   { immediate: true },
@@ -2741,7 +3280,7 @@ function processLiveAssistantMetaEvent(
 
   metaById.set(messageId, readAssistantMessageMeta(info));
   rememberOrderedMessageId(orderedAssistantMessageIds, knownAssistantIds, messageId);
-  if (typeof getMessageTimeRecord(info)?.completed === "number") {
+  if (hasCompletedTimestamp(getMessageTimeRecord(info)?.completed)) {
     incompleteIds.delete(messageId);
   } else {
     incompleteIds.add(messageId);
@@ -2756,12 +3295,23 @@ function processLiveAssistantTextEvent(
 ) {
   const part = getRealtimePart(event);
   const messageId = asString(part?.messageID);
-  if (!messageId || asString(part?.type) !== "text" || typeof part?.text !== "string") {
+  const delta = typeof event.data.delta === "string" ? event.data.delta : undefined;
+  const incomingText =
+    typeof delta === "string" && delta.trim().length > 0
+      ? delta
+      : typeof part?.text === "string"
+        ? part.text
+        : undefined;
+  if (!messageId || asString(part?.type) !== "text" || typeof incomingText !== "string") {
     return;
   }
 
   rememberOrderedMessageId(orderedAssistantMessageIds, knownAssistantIds, messageId);
-  textById.set(messageId, part.text);
+  const existingText = textById.get(messageId);
+  textById.set(
+    messageId,
+    normalizeStreamingAssistantText(mergeStreamingText(existingText, incomingText)),
+  );
 }
 
 function getLatestInteractiveMessageInfo(messages: unknown[]) {
@@ -2772,6 +3322,7 @@ function getLatestInteractiveMessageInfo(messages: unknown[]) {
       return {
         role,
         completed: getMessageTimeRecord(message)?.completed,
+        createdAt: getMessageCreatedAt(message),
       };
     }
   }
@@ -3328,7 +3879,10 @@ function buildPersistedSessionMessage(message: unknown, index: number): SessionM
     text: mergedText,
     toolCalls,
     createdAt: getMessageCreatedAt(message),
-    isStreaming: role === "assistant" && liveAssistantState.value.incompleteIds.has(messageId),
+    isStreaming:
+      !suppressAssistantWaitingForSelectedSession.value &&
+      role === "assistant" &&
+      liveAssistantState.value.incompleteIds.has(messageId),
   } satisfies SessionMessageView;
 
   return item.text || item.toolCalls.length > 0 || item.isStreaming ? item : null;
@@ -3398,6 +3952,80 @@ const STREAMING_PLACEHOLDER_TEXT = "正在生成...";
 const STREAMING_REVEAL_INTERVAL_MS = 22;
 const STREAMING_MINOR_PAUSE_MS = 90;
 const STREAMING_MAJOR_PAUSE_MS = 180;
+const STREAMING_REVEAL_TARGET_DURATION_MS = 2800;
+const MESSAGE_AUTO_SCROLL_THRESHOLD_PX = 120;
+const STREAMING_REPEAT_MIN_PATTERN_LENGTH = 6;
+const STREAMING_REPEAT_MAX_PATTERN_LENGTH = 80;
+const STREAMING_REPEAT_MIN_COUNT = 4;
+const STREAMING_REPEAT_KEEP_COUNT = 2;
+const renderedMessageHtmlCache = new Map<string, { text: string; html: string }>();
+
+function hasCompletedTimestamp(value: unknown): boolean {
+  return typeof value === "number" || typeof value === "string";
+}
+
+function mergeStreamingText(existing: string | undefined, incoming: string): string {
+  const next = incoming.trim();
+  if (!existing) {
+    return next;
+  }
+  if (!next) {
+    return existing;
+  }
+  if (next.startsWith(existing)) {
+    return next;
+  }
+  if (existing === next || existing.endsWith(next)) {
+    return existing;
+  }
+  return `${existing}${next}`;
+}
+
+function collapseRepeatedStreamingTail(text: string): string {
+  const normalized = text.replace(/\r\n?/g, "\n");
+  const maxPatternLength = Math.min(
+    STREAMING_REPEAT_MAX_PATTERN_LENGTH,
+    Math.floor(normalized.length / STREAMING_REPEAT_MIN_COUNT),
+  );
+
+  for (let patternLength = maxPatternLength; patternLength >= STREAMING_REPEAT_MIN_PATTERN_LENGTH; patternLength -= 1) {
+    const pattern = normalized.slice(-patternLength);
+    if (!pattern.trim()) {
+      continue;
+    }
+
+    let repeatCount = 0;
+    let cursor = normalized.length;
+    while (cursor >= patternLength && normalized.slice(cursor - patternLength, cursor) === pattern) {
+      repeatCount += 1;
+      cursor -= patternLength;
+    }
+
+    if (repeatCount >= STREAMING_REPEAT_MIN_COUNT) {
+      return `${normalized.slice(0, cursor)}${pattern.repeat(STREAMING_REPEAT_KEEP_COUNT)}`;
+    }
+  }
+
+  return normalized;
+}
+
+function normalizeStreamingAssistantText(text: string): string {
+  return collapseRepeatedStreamingTail(text);
+}
+
+function isMessagesPaneNearBottom(): boolean {
+  const pane = messagesPaneRef.value;
+  if (!pane) {
+    return true;
+  }
+
+  const distanceToBottom = pane.scrollHeight - pane.scrollTop - pane.clientHeight;
+  return distanceToBottom <= MESSAGE_AUTO_SCROLL_THRESHOLD_PX;
+}
+
+function handleMessagesPaneScroll() {
+  shouldAutoScrollMessages.value = isMessagesPaneNearBottom();
+}
 
 function stopMessageAutoScroll() {
   if (messageAutoScrollFrame !== null) {
@@ -3412,20 +4040,21 @@ function stopMessageAutoScroll() {
 }
 
 function scrollMessagesToBottom() {
+  if (messagesPaneRef.value) {
+    messagesPaneRef.value.scrollTop = messagesPaneRef.value.scrollHeight;
+    return;
+  }
+
   if (messageListEndRef.value && typeof messageListEndRef.value.scrollIntoView === "function") {
     messageListEndRef.value.scrollIntoView({ block: "end", inline: "nearest" });
   }
-
-  if (messagesPaneRef.value) {
-    messagesPaneRef.value.scrollTop = messagesPaneRef.value.scrollHeight;
-  }
-
-  if (typeof window.scrollTo === "function") {
-    window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "auto" });
-  }
 }
 
-async function scheduleMessageAutoScroll() {
+async function scheduleMessageAutoScroll(force = false) {
+  if (!force && !shouldAutoScrollMessages.value) {
+    return;
+  }
+
   stopMessageAutoScroll();
 
   await nextTick();
@@ -3450,7 +4079,15 @@ function nextStreamingRevealProgress(
     return { nextLength: fullText.length, delay: STREAMING_REVEAL_INTERVAL_MS };
   }
 
-  const baseStep = remaining > 320 ? 5 : remaining > 180 ? 4 : remaining > 96 ? 3 : 2;
+  const targetTickCount = Math.max(
+    1,
+    Math.round(STREAMING_REVEAL_TARGET_DURATION_MS / STREAMING_REVEAL_INTERVAL_MS),
+  );
+  const targetStep = Math.max(2, Math.ceil(fullText.length / targetTickCount));
+  const baseStep = Math.max(
+    targetStep,
+    remaining > 640 ? 18 : remaining > 320 ? 10 : remaining > 180 ? 6 : remaining > 96 ? 4 : 2,
+  );
   const lookahead = Math.min(6, remaining);
   const upcoming = fullText.slice(currentLength, currentLength + lookahead);
   const punctuationIndex = upcoming.search(/[，,、；：]/u);
@@ -3489,10 +4126,26 @@ function isStreamingPlaceholderText(text?: string): boolean {
 }
 
 function stopStreamingReveal() {
+  if (streamingRevealFrame !== null) {
+    cancelAnimationFrame(streamingRevealFrame);
+    streamingRevealFrame = null;
+  }
+
   if (streamingRevealTimer) {
     clearTimeout(streamingRevealTimer);
     streamingRevealTimer = null;
   }
+}
+
+function scheduleStreamingRevealSync() {
+  if (streamingRevealFrame !== null) {
+    return;
+  }
+
+  streamingRevealFrame = requestAnimationFrame(() => {
+    streamingRevealFrame = null;
+    syncStreamingReveal();
+  });
 }
 
 function syncStreamingReveal() {
@@ -3558,6 +4211,22 @@ function messageDisplayText(item: SessionMessageView): string | undefined {
   return item.text;
 }
 
+function shouldRenderStreamingPlainText(item: SessionMessageView): boolean {
+  return Boolean(item.isStreaming || shouldAnimateMessage(item));
+}
+
+function renderMessageHtml(item: SessionMessageView): string {
+  const text = messageDisplayText(item) || "";
+  const cached = renderedMessageHtmlCache.get(item.key);
+  if (cached?.text === text) {
+    return cached.html;
+  }
+
+  const html = renderMarkdown(text);
+  renderedMessageHtmlCache.set(item.key, { text, html });
+  return html;
+}
+
 function shouldShowStreamingSkeleton(item: SessionMessageView): boolean {
   return Boolean(item.isStreaming && isStreamingPlaceholderText(item.text));
 }
@@ -3611,14 +4280,15 @@ function shouldAnimateMessage(item: SessionMessageView): boolean {
 watch(
   sessionMessageItems,
   () => {
-    syncStreamingReveal();
+    scheduleStreamingRevealSync();
     void scheduleMessageAutoScroll();
   },
   { immediate: true },
 );
 
 watch(selectedSessionId, () => {
-  void scheduleMessageAutoScroll();
+  shouldAutoScrollMessages.value = true;
+  void scheduleMessageAutoScroll(true);
 });
 
 const strategy = computed(() => {
@@ -3768,6 +4438,7 @@ const compactInspectorTabs = computed(() => {
       | "pipeline"
       | "graph"
       | "events"
+      | "hooks"
       | "project-role-config"
       | "role-workflow";
     label: string;
@@ -3790,8 +4461,14 @@ const compactInspectorTabs = computed(() => {
     tabs.push({ key: "graph", label: "任务图" });
   }
 
-  if (useCompactInspector.value || showEventsPanel.value) {
-    tabs.push({ key: "events", label: "任务事件", count: taskEvents.value.length || undefined });
+
+
+  if (showHooksPanel.value) {
+    tabs.push({
+      key: "hooks",
+      label: "Hook 记录",
+      count: strategy.value?.hookExecutions?.length || undefined,
+    });
   }
 
   if (showProjectRoleConfigPanel.value) {
@@ -3811,6 +4488,7 @@ function openCompactInspector(
     | "pipeline"
     | "graph"
     | "events"
+    | "hooks"
     | "project-role-config"
     | "role-workflow",
 ) {

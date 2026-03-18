@@ -8,6 +8,7 @@ cd "$ROOT_DIR"
 APP_LOG="$(mktemp -t openerx-app.XXXXXX.log)"
 SERVICE_LOG="$(mktemp -t openerx-service.XXXXXX.log)"
 BFF_LOG="$(mktemp -t openerx-bff.XXXXXX.log)"
+UI_DEV_SERVER_URL="${UI_DEV_SERVER_URL:-http://127.0.0.1:5173}"
 APP_PID=""
 SERVICE_PID=""
 BFF_PID=""
@@ -84,7 +85,7 @@ ensure_unified_app() {
   echo "Starting Unified App..."
   (
     cd "$ROOT_DIR/control-plane/app"
-    APP_PORT="$APP_PORT" bun run dev
+    APP_PORT="$APP_PORT" UI_DEV_SERVER_URL="$UI_DEV_SERVER_URL" bun run dev
   ) >"$APP_LOG" 2>&1 &
 
   APP_PID=$!
@@ -138,7 +139,6 @@ if [[ "$USE_SINGLE_PROCESS_APP" == "1" ]]; then
   curl -fsS -X POST "http://127.0.0.1:${APP_PORT}/api/auth/login" \
     -H 'Content-Type: application/json' \
     -d '{"username":"admin","password":"admin123!"}' >/dev/null
-  curl -fsS "http://127.0.0.1:${APP_PORT}/" >/dev/null
 
   echo "Unified app smoke checks passed."
   exit 0

@@ -1,6 +1,6 @@
 # OpenerX 运行架构图
 
-本文档描述当前仓库在开发态的实际运行架构，重点标出各个进程、监听端口、依赖关系，以及关键共享文件。
+本文档描述当前仓库在开发态的实际运行架构，重点标出各个进程、监听端口、依赖关系，以及关键共享文件。当前默认拓扑仍是 `5173 -> 4098 -> 4097 -> PostgreSQL`，并继续保留外部 Runtime `:4096`；不再继续推进单进程合并作为默认路线。
 
 ## 1. 总览图
 
@@ -10,7 +10,7 @@ flowchart LR
     UI["Web UI Dev Server\nVite / Node\n:5173\ncontrol-plane/web-ui"]
     BFF["Web UI BFF\nBun + Hono\n:4098\ncontrol-plane/web-ui-bff"]
     CP["Control Plane Service\nBun + Hono\n:4097\ncontrol-plane/service"]
-    DB[("SQLite\nopenerx.db\ncontrol-plane/service/data")]
+    DB[("PostgreSQL")]
     OCR["OpenCode Runtime\nopencode serve\n:4096\nopencode-fork"]
     CFG["运行时配置与状态文件\nopencode-fork/opencode.json\nopencode-fork/.opencode/state"]
     Qwen["Qwen 推理服务\nOpenAI Compatible API\n192.168.31.103:8000"]
@@ -39,7 +39,7 @@ flowchart LR
 | Web UI BFF | `control-plane/web-ui-bff` | 4098 | `bun run src/index.ts` | 前端统一入口，JWT 校验，代理 Control Plane，适配 OpenCode Runtime |
 | Control Plane Service | `control-plane/service` | 4097 | `bun run src/index.ts` | 认证、项目、用户、任务、审批、审计、配置主数据 |
 | OpenCode Runtime | `opencode-fork` / 本机 `opencode` 可执行文件 | 4096 | `opencode serve --hostname 127.0.0.1 --port 4096 --print-logs` | Agent 会话执行、消息流、SSE 输出、模型调用、插件/MCP 调用 |
-| SQLite | `control-plane/service/data/openerx.db` | 无 | 被 Control Plane 进程直接打开 | Control Plane 主数据存储 |
+| PostgreSQL | 外部数据库实例 | 无 | 由 Control Plane 通过连接串访问 | Control Plane 主数据存储 |
 | Qwen 推理服务 | 外部机器 | 192.168.31.103:8000 | 外部独立服务 | 为 `qwen-local` provider 提供 OpenAI 兼容推理接口 |
 | GitHub Copilot / 其他外部模型服务 | 外部服务 | 外部 | 外部服务 | 为 Runtime 提供云端模型能力 |
 | MCP / Plugin 子进程 | 由 Runtime 按需拉起 | 动态 | Runtime 内部触发 | 搜索、浏览器自动化、知识库、任务编排等工具能力 |
@@ -95,7 +95,7 @@ flowchart LR
   -> opencode-fork/.opencode/state/*
 
 4097 Control Plane Service
-  -> control-plane/service/data/openerx.db
+  -> PostgreSQL
 
 4096 OpenCode Runtime
   -> 192.168.31.103:8000 Qwen 推理服务
@@ -139,7 +139,7 @@ sequenceDiagram
   participant UI as Web UI :5173
   participant BFF as BFF :4098
   participant CP as Control Plane :4097
-  participant DB as SQLite
+  participant DB as PostgreSQL
 
   Browser->>UI: 打开登录页
   Browser->>UI: 提交用户名/密码
@@ -160,7 +160,7 @@ sequenceDiagram
   participant UI as Web UI :5173
   participant BFF as BFF :4098
   participant CP as Control Plane :4097
-  participant DB as SQLite
+  participant DB as PostgreSQL
 
   Browser->>UI: 打开任务列表页
   UI->>BFF: GET /api/tasks?status=running
@@ -206,7 +206,7 @@ flowchart TD
   CP["4097 Control Plane"]
   OCR["4096 OpenCode Runtime"]
   Qwen["192.168.31.103:8000 Qwen API"]
-  DB["SQLite openerx.db"]
+  DB["PostgreSQL"]
   CFG["opencode-fork/opencode.json"]
 
   Browser --> UI
@@ -219,7 +219,7 @@ flowchart TD
 
   UI -. 页面打不开 .-> UI_ERR["检查 Vite 是否存活\n检查 5173 是否监听\n检查 localhost / 127.0.0.1 绑定"]
   BFF -. API 500 / 登录失败 .-> BFF_ERR["检查 4098 health\n检查 JWT 配置\n检查 BFF 日志"]
-  CP -. Control plane unreachable .-> CP_ERR["检查 4097 是否启动\n检查 Control Plane 日志\n检查数据库文件是否可读"]
+  CP -. Control plane unreachable .-> CP_ERR["检查 4097 是否启动\n检查 Control Plane 日志\n检查 PostgreSQL 连接是否正常"]
   OCR -. 任务不推进 / 无实时事件 .-> OCR_ERR["检查 4096 health/session\n检查 Runtime 是否启动\n检查 SSE 事件是否输出"]
   Qwen -. Provider 测试失败 / 选择模型失败 .-> QWEN_ERR["检查 baseURL / apiKey\n检查局域网连通性\n检查 /v1/models 与 /chat/completions"]
   CFG -. 配置改了不生效 .-> CFG_ERR["检查 BFF 写入的 opencode-fork/opencode.json\n检查 Runtime 是否读取同一份配置"]

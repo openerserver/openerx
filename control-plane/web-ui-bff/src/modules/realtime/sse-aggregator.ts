@@ -862,7 +862,8 @@ class SSEAggregator {
       const finish = typeof info?.finish === "string" ? info.finish : undefined;
       return (
         info?.role === "assistant" &&
-        finish === "stop" &&
+        finish !== "" &&
+        finish !== undefined &&
         (typeof completed === "number" || typeof completed === "string")
       );
     }

@@ -3,6 +3,8 @@
 > 适用范围：OpenerX Control Plane Service
 >
 > 目标：把角色注册表、工作流模板、阶段运行、聚合结论、开发者修正请求落成贴近当前 Drizzle + Hono 风格的 schema 与 routes 草案，作为后续真实实现的起点
+>
+> 说明：本文档中的 `sqliteTable()` 与 SQLite 相关 schema 片段保留的是草案形成时的历史上下文，不代表当前控制面运行数据库。当前正式运行路径已切到 PostgreSQL。
 
 ## 1. 文档目标
 
@@ -22,9 +24,9 @@
 
 ## 2. 与现有代码风格的对齐
 
-当前控制平面服务的特点：
+当前控制平面服务在该草案形成时的特点：
 
-- 使用 Drizzle + SQLite，schema 集中定义在 [control-plane/service/src/db/schema.ts](control-plane/service/src/db/schema.ts)
+- 当时使用 Drizzle + SQLite，schema 集中定义在 [control-plane/service/src/db/schema.ts](control-plane/service/src/db/schema.ts)
 - 模块按 `src/modules/<domain>/routes.ts` 组织，例如 [control-plane/service/src/modules/tasks/routes.ts](control-plane/service/src/modules/tasks/routes.ts)
 - 路由层直接使用 `db.query.*` 和 `db.insert/update`
 - 输入校验使用 `zod` + `zValidator`

@@ -270,6 +270,54 @@ export const useWorkbenchStore = defineStore(
       splitMode.value = false;
     }
 
+    function pruneMissingTasks(taskIds: string[]) {
+      if (taskIds.length === 0) {
+        return;
+      }
+
+      const missingTaskIds = new Set(taskIds.filter(Boolean));
+      if (missingTaskIds.size === 0) {
+        return;
+      }
+
+      tabs.value = tabs.value.filter((tab) => !missingTaskIds.has(tab.taskId));
+
+      if (missingTaskIds.has(activeTaskId.value)) {
+        activeTaskId.value = tabs.value[0]?.taskId || "";
+      }
+
+      if (secondaryPane.value?.taskId && missingTaskIds.has(secondaryPane.value.taskId)) {
+        secondaryPane.value = null;
+      }
+
+      if (tabs.value.length === 0) {
+        clearWorkbench();
+        return;
+      }
+
+      if (!tabs.value.some((tab) => tab.taskId === activeTaskId.value)) {
+        activeTaskId.value = tabs.value[0]?.taskId || "";
+      }
+
+      if (
+        secondaryPane.value?.taskId &&
+        !tabs.value.some((tab) => tab.taskId === secondaryPane.value?.taskId)
+      ) {
+        secondaryPane.value = null;
+      }
+
+      if (tabs.value.length < 2) {
+        splitMode.value = false;
+        secondaryPane.value = null;
+      } else if (
+        secondaryPane.value?.taskId === activeTaskId.value &&
+        !secondaryPane.value.sessionId
+      ) {
+        const fallback = tabs.value.find((tab) => tab.taskId !== activeTaskId.value);
+        secondaryPane.value = fallback ? { taskId: fallback.taskId } : null;
+      }
+    }
+
     function pinTask(taskId: string) {
       const tab = tabs.value.find((t) => t.taskId === taskId);
       if (tab) tab.pinned = true;
@@ -372,6 +420,7 @@ export const useWorkbenchStore = defineStore(
       createSnapshot,
       restoreSnapshot,
       clearWorkbench,
+      pruneMissingTasks,
       pinTask,
       unpinTask,
       closeOtherTasks,

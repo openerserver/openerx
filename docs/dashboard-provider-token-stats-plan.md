@@ -492,7 +492,7 @@ const selectedProviderId = ref<string | null>(null);
 ### 10.3 性能要求
 
 - Dashboard 首屏额外聚合请求控制在 1 次
-- 默认窗口 `24h` 聚合响应应可在当前 SQLite 规模下稳定返回
+- 默认窗口 `24h` 聚合响应应可在当前 PostgreSQL 数据规模下稳定返回
 - 趋势分桶不要把首页变成重计算页，必要时限制 provider 数量与窗口粒度
 - 月度统计默认只回传最近 6 个月，避免首页一次性拉取过长历史
 

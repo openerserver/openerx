@@ -8,7 +8,7 @@
 - 组件之间如何协作
 - 当前架构的已知问题和后续演进方向是什么
 
-本文档描述的是“当前实现”，不是目标蓝图。
+本文档描述的是“当前实现”，不是目标蓝图。当前已确认 PostgreSQL 是唯一标准运行数据库，`service + bff + ui + runtime` 多进程形态保持现状，不再继续推进单进程合并作为默认路线。
 
 相关补充文档：
 
@@ -62,7 +62,7 @@ BFF 是面向前端的后端聚合层，承担统一鉴权校验、接口转发�
 
 控制平面服务是系统的业务核心与数据主服务，负责主数据管理和治理能力落库。
 
-- 技术栈：Bun、Hono、Drizzle ORM、SQLite
+- 技术栈：Bun、Hono、Drizzle ORM、PostgreSQL
 - 默认端口：4097
 - 主要职责：
   - 登录认证与 JWT 签发
@@ -92,8 +92,8 @@ flowchart LR
     U[用户浏览器]
     UI[Web UI\nReact + Vite\n:5173]
     BFF[BFF\nHono + Bun\n:4098]
-    CP[Control Plane Service\nHono + Drizzle + SQLite\n:4097]
-    DB[(SQLite\nopenerx.db)]
+    CP[Control Plane Service\nHono + Drizzle + PostgreSQL\n:4097]
+    DB[(PostgreSQL)]
     OCR[OpenCode Runtime\nAgent Runtime\n:4096]
     SSE[SSE 聚合器]
     WS[WebSocket 广播器]
@@ -155,9 +155,10 @@ BFF 当前主要包含五类能力：
 
 ## 6. 数据模型概览
 
-SQLite 中当前的核心表包括：
+PostgreSQL 中当前的核心表包括：
 
 **治理元数据**：
+
 - organizations：组织
 - projects：项目
 - environments：环境
@@ -171,6 +172,7 @@ SQLite 中当前的核心表包括：
 - budget_configs：预算配置
 
 **任务编排模型**（运行时 DAG 镜像）：
+
 - task_nodes：DAG 任务节点（对齐 task-graph-plugin 的 TaskNode 字段）
 - task_edges：DAG 依赖边（blocks / informs）
 - agent_runs：Agent 执行记录
@@ -238,7 +240,7 @@ SQLite 中当前的核心表包括：
 从代码实现看，当前系统已经从纯治理侧控制面向"运行时穿透"方向演进：
 
 - 治理能力（审批、审计、成本、策略）已成熟
-- 运行时 DAG 穿透已实现（task-graph-plugin → dag-sync → SQLite 镜像）
+- 运行时 DAG 穿透已实现（task-graph-plugin → dag-sync → 控制面数据库镜像）
 - 编排可视化已落地（意图分类、规划流水线、编排决策面板）
 - 插件生命周期控制面已闭合（启用/禁用/安装/卸载/兼容性检查）
 - 连续执行机制已暴露到 UI（session 历史、续跑、恢复策略）
@@ -294,13 +296,9 @@ WebSocket 连接建立时已验证 JWT，绑定 userId 和项目范围。无效 
 
 仍需注意：实时事件与 DB 镜像之间可能存在短暂不一致窗口，前端采用"API 主数据 + 实时事件增量"策略降低影响。
 
-### 10.6 持久化层仍以 SQLite 为主
+### 10.6 持久化层已切换为 PostgreSQL
 
-SQLite 适合当前原型和单机部署，但如果进入多人协作、长时间运行和高频审计写入场景，会逐步暴露限制：
-
-- 并发写入能力有限
-- 运营与备份策略受限
-- 面向报表与分析的扩展性较弱
+当前控制面已经以 PostgreSQL 作为唯一标准运行数据库，这解决了此前 SQLite 在并发写入、备份治理和长期运行上的主要限制。
 
 ### 10.7 审批、预算、策略尚未与编排内核完全打通
 
@@ -374,16 +372,16 @@ SQLite 适合当前原型和单机部署，但如果进入多人协作、长时�
 
 这样系统才能从“事后审计”升级到“事中治理”。
 
-### 11.7 预留数据库演进路径
+### 11.7 保持数据库抽象稳定
 
-短期仍可继续使用 SQLite，但建议尽早保证以下抽象稳定：
+虽然 PostgreSQL 路线已经落地，但仍建议持续保持以下抽象稳定：
 
 - ORM schema
 - 数据访问层边界
 - 迁移脚本规范
 - 备份恢复流程
 
-这样未来迁移到 PostgreSQL 时成本会显著降低。
+这样后续 schema 演进、备份恢复和历史数据迁移成本会显著降低。
 
 ## 12. 推荐的下一阶段架构目标
 

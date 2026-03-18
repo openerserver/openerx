@@ -8,7 +8,7 @@
 - 目标架构希望收敛成什么形态
 - 需要按什么顺序推进演进
 
-这份文档适合用于架构评审、阶段规划和团队同步。
+这份文档适合用于架构评审、阶段规划和团队同步。当前需要额外说明的是：PostgreSQL 已经成为标准运行数据库，而 `service + bff + ui + runtime` 多进程拓扑继续保持现状；因此本文档中的“目标架构”应理解为能力边界演进方向，而不是继续推进单进程合并的执行计划。
 
 相关补充文档：
 
@@ -35,7 +35,7 @@ flowchart LR
     UI[Web UI\nReact + Vite]
     BFF[BFF\n接口聚合 + Runtime 适配]
     CP[Control Plane Service\n主数据 + 审批 + 审计 + 成本]
-    DB[(SQLite)]
+    DB[(PostgreSQL)]
     OCR[OpenCode Runtime]
 
     U --> UI
@@ -51,6 +51,7 @@ flowchart LR
 - 前端访问入口基本统一到 BFF
 - 控制平面已承载治理相关核心能力
 - BFF 已承担运行时适配职责
+- PostgreSQL 已成为控制面唯一标准运行数据库
 - 任务视图仍较多依赖审计事件反推
 - 认证入口和状态源仍未完全收敛
 

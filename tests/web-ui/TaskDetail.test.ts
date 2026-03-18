@@ -3,6 +3,43 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { defineComponent, nextTick, reactive } from "vue";
 import TaskDetail from "../../control-plane/web-ui/src/pages/TaskDetail.vue";
 
+class MockApiError extends Error {
+  status: number;
+  code?: string;
+  guardDecision?: string;
+  guardReason?: string;
+  suggestedModel?: string;
+  effectiveModel?: string;
+  requirements?: Record<string, unknown>;
+  policy?: Record<string, unknown>;
+  preflight?: Record<string, unknown>;
+
+  constructor(payload: {
+    error: string;
+    status: number;
+    code?: string;
+    guardDecision?: string;
+    guardReason?: string;
+    suggestedModel?: string;
+    effectiveModel?: string;
+    requirements?: Record<string, unknown>;
+    policy?: Record<string, unknown>;
+    preflight?: Record<string, unknown>;
+  }) {
+    super(payload.error);
+    this.name = "ApiError";
+    this.status = payload.status;
+    this.code = payload.code;
+    this.guardDecision = payload.guardDecision;
+    this.guardReason = payload.guardReason;
+    this.suggestedModel = payload.suggestedModel;
+    this.effectiveModel = payload.effectiveModel;
+    this.requirements = payload.requirements;
+    this.policy = payload.policy;
+    this.preflight = payload.preflight;
+  }
+}
+
 const routeState = vi.hoisted(() => ({
   params: { taskId: "task-1" },
   query: {},
@@ -39,12 +76,15 @@ const apiMocks = vi.hoisted(() => ({
   getTaskPipeline: vi.fn(),
   getTaskSessions: vi.fn(),
   getTaskWorkflowView: vi.fn(),
+  terminateAgent: vi.fn(),
+  toApiError: vi.fn((error: unknown) => (error instanceof MockApiError ? error : null)),
   updateTask: vi.fn(),
 }));
 
 const messageMocks = vi.hoisted(() => ({
   success: vi.fn(),
   error: vi.fn(),
+  warning: vi.fn(),
 }));
 
 vi.mock("vue-router", () => ({
@@ -363,6 +403,7 @@ beforeEach(() => {
       { id: "gpt-5.3-codex", name: "GPT-5.3 Codex", provider: "github-copilot" },
     ],
   });
+  apiMocks.terminateAgent.mockResolvedValue({ ok: true });
   apiMocks.getTaskGovernance.mockResolvedValue({
     overallRisk: "low",
     approvalRequired: false,
@@ -409,6 +450,300 @@ beforeEach(() => {
 });
 
 describe("TaskDetail", () => {
+  it("shows a visible notice when the current task no longer exists", async () => {
+    apiMocks.getTask.mockRejectedValueOnce(
+      new MockApiError({ error: "Task not found", status: 404, code: "TASK_NOT_FOUND" }),
+    );
+
+    const wrapper = await mountPage();
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("当前任务不存在");
+    expect(wrapper.text()).toContain("当前 UI 指向的 app 数据库实例中找不到这个任务");
+  });
+
+  it("shows a guard notice when continue is blocked with 403", async () => {
+    apiMocks.getTask.mockResolvedValueOnce(makeTaskWithOverrides({ status: "completed" }));
+    apiMocks.getTaskSessions.mockResolvedValueOnce({
+      data: [
+        {
+          id: "ses-1",
+          title: "主分支",
+          isActive: true,
+          summary: null,
+          createdAt: "2026-03-10T12:00:00.000Z",
+          updatedAt: "2026-03-10T12:02:00.000Z",
+        },
+      ],
+    });
+    apiMocks.continueTask.mockRejectedValueOnce(
+      new MockApiError({
+        error: "当前模型执行被保护规则拦截，请切换到允许的模型后重试。",
+        status: 403,
+        code: "PAID_EXECUTION_GATE_REQUIRED",
+        guardDecision: "deny",
+        guardReason:
+          "Missing ALLOW_PAID_MODEL_EXECUTION=1; BFF blocks paid execution before creating the runtime session.",
+        suggestedModel: "github-copilot:gpt-5-mini",
+        effectiveModel: "github-copilot:gpt-5.3-codex",
+        requirements: {
+          allowPaidExecution: true,
+          leaseRequired: true,
+          hasAllowPaidExecution: false,
+          hasLease: false,
+          leaseId: null,
+        },
+        policy: {
+          providerId: "github-copilot",
+          modelId: "gpt-5.3-codex",
+          costTier: "high",
+          maxRequestsPerRun: 3,
+          maxEstimatedCostUsdPerRun: 3,
+        },
+        preflight: {
+          requestCount: { max: 5 },
+          costUsd: { max: 4.5 },
+        },
+      }),
+    );
+
+    const wrapper = await mountPage();
+  await wrapper.find("textarea").setValue("继续执行");
+
+  const setupState = getSetupState(wrapper);
+
+    await (setupState.handleContinue as () => Promise<void>)();
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("当前模型执行被保护规则拦截，请切换到允许的模型后重试。");
+    expect(wrapper.text()).toContain("缺少 allowPaidExecution 授权");
+    expect(wrapper.text()).toContain("缺少 paid execution lease");
+    expect(wrapper.text()).toContain("可优先尝试切换到建议模型 github-copilot:gpt-5-mini");
+    expect(wrapper.text()).toContain("预估上限：请求 5 次，成本 $4.50");
+    expect(wrapper.text()).toContain(
+      "当前模型 github-copilot:gpt-5.3-codex 属于 high 成本档，单次上限 3 次请求 / $3.00",
+    );
+    expect(wrapper.text()).toContain("策略判定：已拒绝");
+    expect(wrapper.text()).toContain("去打开项目执行授权设置");
+    expect(wrapper.text()).toContain("去申请 lease");
+    expect(wrapper.text()).toContain("去切换模型");
+
+    const buttons = wrapper.findAll("button");
+    const modelButton = buttons.find((button) => button.text() === "去切换模型");
+    const leaseButton = buttons.find((button) => button.text() === "去申请 lease");
+    const gateButton = buttons.find((button) => button.text() === "去打开项目执行授权设置");
+
+    expect(modelButton).toBeDefined();
+    expect(leaseButton).toBeDefined();
+    expect(gateButton).toBeDefined();
+
+    await modelButton!.trigger("click");
+    expect(routerState.push).toHaveBeenLastCalledWith({
+      path: "/settings",
+      query: {
+        tab: "models",
+        section: "models",
+      },
+    });
+
+    await leaseButton!.trigger("click");
+    expect(routerState.push).toHaveBeenLastCalledWith("/projects/proj-1");
+
+    await gateButton!.trigger("click");
+    expect(routerState.push).toHaveBeenLastCalledWith("/projects/proj-1/operating-mode");
+  });
+
+  it("shows waiting feedback after sending a continuation prompt", async () => {
+    vi.setSystemTime(new Date("2026-03-10T12:00:00.000Z"));
+    apiMocks.getTask.mockResolvedValueOnce(makeTaskWithOverrides({ status: "completed" }));
+    apiMocks.getTask.mockResolvedValueOnce(makeTaskWithOverrides({ status: "running" }));
+    apiMocks.getTaskSessions.mockResolvedValueOnce({
+      data: [
+        {
+          id: "ses-1",
+          title: "主分支",
+          isActive: true,
+          summary: null,
+          createdAt: "2026-03-10T12:00:00.000Z",
+          updatedAt: "2026-03-10T12:02:00.000Z",
+        },
+      ],
+    });
+    apiMocks.continueTask.mockResolvedValueOnce({ ok: true, sessionId: "ses-1" });
+
+    const wrapper = await mountPage();
+  await wrapper.find("textarea").setValue("继续执行");
+
+  const setupState = getSetupState(wrapper);
+
+    await (setupState.handleContinue as () => Promise<void>)();
+    await flushPromises();
+
+    vi.advanceTimersByTime(4_500);
+    await nextTick();
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("消息已发送，正在等待模型回复");
+
+    vi.advanceTimersByTime(11_000);
+    await nextTick();
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("模型响应较慢");
+  });
+
+  it("allows terminating the current execution while waiting for the model", async () => {
+    vi.setSystemTime(new Date("2026-03-10T12:00:00.000Z"));
+    apiMocks.getTask.mockResolvedValueOnce(makeTaskWithOverrides({ status: "completed" }));
+    apiMocks.getTask.mockResolvedValueOnce(makeTaskWithOverrides({ status: "running" }));
+    apiMocks.getTask.mockResolvedValueOnce(makeTaskWithOverrides({ status: "stopped" }));
+    apiMocks.getTaskSessions.mockResolvedValueOnce({
+      data: [
+        {
+          id: "ses-1",
+          title: "主分支",
+          isActive: true,
+          summary: null,
+          createdAt: "2026-03-10T12:00:00.000Z",
+          updatedAt: "2026-03-10T12:02:00.000Z",
+        },
+      ],
+    });
+    apiMocks.continueTask.mockResolvedValueOnce({ ok: true, sessionId: "ses-1" });
+
+    const wrapper = await mountPage();
+  await wrapper.find("textarea").setValue("继续执行");
+
+  const setupState = getSetupState(wrapper);
+
+    await (setupState.handleContinue as () => Promise<void>)();
+    await flushPromises();
+
+    vi.advanceTimersByTime(4_500);
+    await nextTick();
+    await flushPromises();
+
+    const terminateButton = wrapper.find('[data-testid="terminate-current-execution"]');
+    expect(terminateButton.exists()).toBe(true);
+
+    await terminateButton.trigger("click");
+    await flushPromises();
+
+    expect(apiMocks.terminateAgent).toHaveBeenCalledWith("run-1");
+    expect(wrapper.text()).toContain("已请求终止当前执行");
+    expect(wrapper.text()).not.toContain("消息已发送，正在等待模型回复");
+  });
+
+  it("suppresses lingering streaming status after terminate succeeds", async () => {
+    vi.setSystemTime(new Date("2026-03-10T12:00:00.000Z"));
+    apiMocks.getTask.mockResolvedValueOnce(makeTaskWithOverrides({ status: "completed" }));
+    apiMocks.getTask.mockResolvedValueOnce(makeTaskWithOverrides({ status: "running" }));
+    apiMocks.getTask.mockResolvedValueOnce(makeTaskWithOverrides({ status: "stopped" }));
+    apiMocks.getTaskSessions.mockResolvedValueOnce({
+      data: [
+        {
+          id: "ses-1",
+          title: "主分支",
+          isActive: true,
+          summary: null,
+          createdAt: "2026-03-10T12:00:00.000Z",
+          updatedAt: "2026-03-10T12:02:00.000Z",
+        },
+      ],
+    });
+    apiMocks.continueTask.mockResolvedValueOnce({ ok: true, sessionId: "ses-1" });
+
+    const wrapper = await mountPage();
+    await wrapper.find("textarea").setValue("继续执行");
+
+    const setupState = getSetupState(wrapper);
+
+    await (setupState.handleContinue as () => Promise<void>)();
+    await flushPromises();
+
+    vi.advanceTimersByTime(4_500);
+    await nextTick();
+    await flushPromises();
+
+    await wrapper.find('[data-testid="terminate-current-execution"]').trigger("click");
+    await flushPromises();
+
+    realtimeState.events.splice(0, realtimeState.events.length, {
+      id: "evt-message-updated-incomplete",
+      type: "message.updated",
+      ts: "2026-03-10T12:00:10.000Z",
+      taskId: "task-1",
+      sessionId: "ses-1",
+      agentRunId: "run-1",
+      data: {
+        rawType: "message.updated",
+        info: {
+          id: "msg-stream-1",
+          role: "assistant",
+          agent: "default-executor",
+          time: {
+            created: Date.parse("2026-03-10T12:00:10.000Z"),
+          },
+        },
+      },
+    }, {
+      id: "evt-message-part-updated-incomplete",
+      type: "message.part.updated",
+      ts: "2026-03-10T12:00:10.100Z",
+      taskId: "task-1",
+      sessionId: "ses-1",
+      agentRunId: "run-1",
+      data: {
+        rawType: "message.part.updated",
+        part: {
+          type: "text",
+          text: "正在生成...",
+          messageID: "msg-stream-1",
+        },
+      },
+    });
+    await nextTick();
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("已请求终止当前执行");
+    expect(wrapper.text()).not.toContain("当前任务执行中，先等待本轮输出完成。");
+    expect(wrapper.text()).not.toContain("生成中");
+  });
+
+  it("shows a clearer warning when terminating a historical run without persisted summary", async () => {
+    apiMocks.getTask.mockResolvedValueOnce(makeTaskWithOverrides({ status: "running" }));
+    apiMocks.getTaskSessions.mockResolvedValueOnce({
+      data: [
+        {
+          id: "ses-1",
+          title: "主分支",
+          isActive: true,
+          summary: null,
+          createdAt: "2026-03-10T12:00:00.000Z",
+          updatedAt: "2026-03-10T12:02:00.000Z",
+        },
+      ],
+    });
+    apiMocks.terminateAgent.mockRejectedValueOnce(
+      new MockApiError({
+        error:
+          "Persisted summary for this historical agent run is unavailable, so the runtime instance cannot be recovered.",
+        status: 404,
+        code: "AGENT_RUN_SUMMARY_NOT_FOUND",
+      }),
+    );
+
+    const wrapper = await mountPage();
+    await flushPromises();
+
+    const setupState = getSetupState(wrapper);
+    await (setupState.handleTerminateExecution as () => Promise<void>)();
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("当前历史执行缺少可恢复摘要，无法直接终止");
+    expect(wrapper.text()).toContain("这个 agent run 没有持久化 summary");
+  });
+
   it("renders warning runtime burst status for the selected session", async () => {
     apiMocks.getTask.mockResolvedValueOnce(makeTask());
     apiMocks.getTaskSessions.mockResolvedValueOnce({

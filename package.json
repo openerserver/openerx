@@ -8,12 +8,13 @@
     "control-plane/app"
   ],
   "scripts": {
-    "dev:app": "cd control-plane/app && bun run dev",
+    "dev:app": "cd control-plane/app && UI_DEV_SERVER_URL=${UI_DEV_SERVER_URL:-http://127.0.0.1:5173} bun run dev",
     "dev:app:pg": "APP_PORT=${APP_PORT:-4098} DATABASE_DIALECT=postgres DATABASE_URL=${DATABASE_URL:-postgres://127.0.0.1:5432/openerx} bun run control-plane/app/src/index.ts",
     "dev:service": "cd control-plane/service && bun run dev",
     "dev:bff": "cd control-plane/web-ui-bff && bun run dev",
-    "dev:ui": "cd control-plane/web-ui && bun run dev",
-    "dev": "bun run dev:service & bun run dev:bff & bun run dev:ui",
+    "dev:ui": "cd control-plane/web-ui && VITE_APP_PORT=${VITE_APP_PORT:-${APP_PORT:-4098}} bun run dev",
+    "dev": "bun run dev:app & bun run dev:ui",
+    "dev:legacy": "bun run dev:service & bun run dev:bff & bun run dev:ui",
     "build:app": "cd control-plane/app && bun run build",
     "build": "bun run build:service && bun run build:bff && bun run build:ui && bun run build:app",
     "build:service": "cd control-plane/service && bun run build",

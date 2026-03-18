@@ -6,6 +6,7 @@ import { mergeTaskStrategy, readOrchestrationStrategy } from "../../lib/orchestr
 import { recordPaidExecutionRuntimeUsage } from "../../lib/paid-execution-runtime";
 import { executeLifecycleHooks } from "../hooks/lifecycle-hooks";
 import { wsBroadcaster } from "../realtime/ws-broadcaster";
+import { finalizeTaskState } from "../tasks/finalize";
 import {
   extractAssistantResultFromMessages,
   getAgentMessages,
@@ -14,6 +15,7 @@ import {
   injectGuidance,
   listAgentRuns,
   pauseAgent,
+  recoverAgentRun,
   resumeAgent,
   terminateAgent,
   updateAgentRunStatus,
@@ -211,6 +213,17 @@ interface AgentAnalyticsTimelineResponse {
 
 type PersistedRunStatus = Parameters<typeof patchAgentRunRecord>[0]["status"];
 
+type RuntimeRunRecoveryFailure = {
+  status: 404 | 409;
+  code: "AGENT_RUN_SUMMARY_NOT_FOUND" | "AGENT_RUN_SUMMARY_INCOMPLETE";
+  error: string;
+};
+
+type RuntimeRunRecoveryResult = {
+  run?: RuntimeRun;
+  failure?: RuntimeRunRecoveryFailure;
+};
+
 function buildForwardedQuery(
   c: { req: { query: (name: string) => string | undefined } },
   keys: string[],
@@ -293,6 +306,84 @@ function mergeSummaryWithRuntime(summary: AgentRunSummaryResponse, runtimeRun?: 
       runtimeTimestampToIso(effectiveRuntimeRun.startedAt),
     subSessionId: effectiveRuntimeRun.subSessionId,
   };
+}
+
+function parsePersistedModel(modelUsed?: string | null) {
+  if (!modelUsed) {
+    return undefined;
+  }
+
+  const delimiterIndex = modelUsed.indexOf(":");
+  if (delimiterIndex <= 0 || delimiterIndex >= modelUsed.length - 1) {
+    return undefined;
+  }
+
+  return {
+    providerId: modelUsed.slice(0, delimiterIndex),
+    modelId: modelUsed.slice(delimiterIndex + 1),
+  };
+}
+
+async function ensureRuntimeRunFromSummary(
+  c: Parameters<typeof authHeader>[0],
+  agentRunId: string,
+) {
+  const result = await ensureRuntimeRunFromSummaryDetailed(c, agentRunId);
+  return result.run;
+}
+
+async function ensureRuntimeRunFromSummaryDetailed(
+  c: Parameters<typeof authHeader>[0],
+  agentRunId: string,
+): Promise<RuntimeRunRecoveryResult> {
+  const existing = getAgentRun(agentRunId);
+  if (existing) {
+    return { run: existing };
+  }
+
+  const summaryResult = await cpFetch<AgentRunSummaryResponse>(
+    `/api/agent-runs/${encodeURIComponent(agentRunId)}/summary`,
+    {
+      authorization: authHeader(c),
+    },
+  );
+
+  if (!summaryResult.ok || !summaryResult.data) {
+    return {
+      failure: {
+        status: 404,
+        code: "AGENT_RUN_SUMMARY_NOT_FOUND",
+        error:
+          "Persisted summary for this historical agent run is unavailable, so the runtime instance cannot be recovered.",
+      },
+    };
+  }
+
+  if (!summaryResult.data.sessionId || !summaryResult.data.taskId || !summaryResult.data.projectId) {
+    return {
+      failure: {
+        status: 409,
+        code: "AGENT_RUN_SUMMARY_INCOMPLETE",
+        error:
+          "Persisted summary for this agent run is incomplete, so the runtime instance cannot be recovered safely.",
+      },
+    };
+  }
+
+  recoverAgentRun(
+    agentRunId,
+    summaryResult.data.sessionId,
+    summaryResult.data.taskId,
+    summaryResult.data.projectId,
+    summaryResult.data.startedAt,
+    parsePersistedModel(summaryResult.data.modelUsed),
+  );
+
+  if (summaryResult.data.status && summaryResult.data.status !== "running") {
+    updateAgentRunStatus(agentRunId, summaryResult.data.status as RuntimeRun["status"]);
+  }
+
+  return { run: getAgentRun(agentRunId) };
 }
 
 async function loadSessionTokenUsage(sessionId?: string | null): Promise<number> {
@@ -575,10 +666,11 @@ agentControlRoutes.get("/", (c) => {
 // POST /api/agents/:agentRunId/pause
 agentControlRoutes.post("/:agentRunId/pause", async (c) => {
   const agentRunId = c.req.param("agentRunId");
+  let run = await ensureRuntimeRunFromSummary(c, agentRunId);
   const result = await pauseAgent(agentRunId);
 
   if (result.ok) {
-    const run = getAgentRun(agentRunId);
+    run = getAgentRun(agentRunId) ?? run;
     if (run?.taskId) {
       await Promise.all([
         patchAgentRunRecord({
@@ -616,9 +708,9 @@ agentControlRoutes.post("/:agentRunId/pause", async (c) => {
 // POST /api/agents/:agentRunId/resume
 agentControlRoutes.post("/:agentRunId/resume", async (c) => {
   const agentRunId = c.req.param("agentRunId");
+  let run = await ensureRuntimeRunFromSummary(c, agentRunId);
 
   // Run pre-resume hooks before the actual resume
-  const run = getAgentRun(agentRunId);
   if (run?.taskId) {
     const preResume = await runPreResumeHooks(run.taskId, run.projectId, agentRunId);
     if (!preResume.ok) {
@@ -629,7 +721,7 @@ agentControlRoutes.post("/:agentRunId/resume", async (c) => {
   const result = await resumeAgent(agentRunId);
 
   if (result.ok) {
-    const currentRun = getAgentRun(agentRunId);
+    const currentRun = getAgentRun(agentRunId) ?? run;
     if (currentRun?.taskId) {
       await Promise.all([
         patchAgentRunRecord({
@@ -673,10 +765,11 @@ const guidanceSchema = z.object({
 agentControlRoutes.post("/:agentRunId/guidance", zValidator("json", guidanceSchema), async (c) => {
   const agentRunId = c.req.param("agentRunId");
   const { content, mode } = c.req.valid("json");
+  let run = await ensureRuntimeRunFromSummary(c, agentRunId);
   const result = await injectGuidance(agentRunId, content, mode);
 
   if (result.ok) {
-    const run = getAgentRun(agentRunId);
+    run = getAgentRun(agentRunId) ?? run;
     if (run?.taskId) {
       await recordAgentAudit({
         projectId: run.projectId,
@@ -706,11 +799,36 @@ agentControlRoutes.post("/:agentRunId/guidance", zValidator("json", guidanceSche
 // POST /api/agents/:agentRunId/terminate
 agentControlRoutes.post("/:agentRunId/terminate", async (c) => {
   const agentRunId = c.req.param("agentRunId");
+  const authorization = authHeader(c);
+  const recovery = await ensureRuntimeRunFromSummaryDetailed(c, agentRunId);
+  let run = recovery.run;
+
+  if (!run && recovery.failure) {
+    return c.json(
+      {
+        ok: false,
+        error: recovery.failure.error,
+        code: recovery.failure.code,
+      },
+      recovery.failure.status,
+    );
+  }
+
+  const previousStatus = run?.status;
+  if (previousStatus && previousStatus !== "stopped") {
+    updateAgentRunStatus(agentRunId, "stopped");
+  }
+
   const result = await terminateAgent(agentRunId);
 
+  if (!result.ok && previousStatus && previousStatus !== "stopped") {
+    updateAgentRunStatus(agentRunId, previousStatus);
+  }
+
   if (result.ok) {
-    const run = getAgentRun(agentRunId);
+    run = getAgentRun(agentRunId) ?? run;
     const tokenUsed = await loadSessionTokenUsage(run?.subSessionId);
+    const finishedAt = new Date().toISOString();
     if (run?.taskId) {
       await Promise.all([
         patchAgentRunRecord({
@@ -719,7 +837,7 @@ agentControlRoutes.post("/:agentRunId/terminate", async (c) => {
           status: "stopped",
           model: run.model,
           tokenUsed,
-          finishedAt: new Date().toISOString(),
+          finishedAt,
         }),
         recordAgentAudit({
           projectId: run.projectId,
@@ -730,6 +848,19 @@ agentControlRoutes.post("/:agentRunId/terminate", async (c) => {
           action: "stopped",
           detail: { agentRunId, reason: "terminated" },
           riskLevel: "high",
+        }),
+        finalizeTaskState({
+          authorization,
+          taskId: run.taskId,
+          status: "cancelled",
+          sessionId: run.subSessionId,
+          agentRunId,
+          task: {
+            id: run.taskId,
+            status: "running",
+            sessionId: run.subSessionId,
+            agentRunId,
+          },
         }),
       ]);
     }
@@ -750,6 +881,7 @@ agentControlRoutes.post("/:agentRunId/terminate", async (c) => {
 // GET /api/agents/:agentRunId/messages
 agentControlRoutes.get("/:agentRunId/messages", async (c) => {
   const agentRunId = c.req.param("agentRunId");
+  await ensureRuntimeRunFromSummary(c, agentRunId);
   const result = await getAgentMessages(agentRunId);
   return c.json(result, result.ok ? 200 : 400);
 });
@@ -757,7 +889,7 @@ agentControlRoutes.get("/:agentRunId/messages", async (c) => {
 // GET /api/agents/:agentRunId/status
 agentControlRoutes.get("/:agentRunId/status", async (c) => {
   const agentRunId = c.req.param("agentRunId");
-  const run = getAgentRun(agentRunId);
+  const run = (await ensureRuntimeRunFromSummary(c, agentRunId)) ?? getAgentRun(agentRunId);
   if (!run) return c.json({ error: "Agent run not found" }, 404);
   return c.json(run);
 });

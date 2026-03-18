@@ -46,4 +46,25 @@ describe("useWorkbenchStore", () => {
     expect(store.splitMode).toBe(false);
     expect(store.secondaryPane).toBeNull();
   });
+
+  it("prunes missing tasks from restored tabs", () => {
+    const store = useWorkbenchStore();
+
+    store.restoreSnapshot({
+      tabs: [
+        { taskId: "task-stale", title: "旧任务", status: "completed" },
+        { taskId: "task-live", title: "当前任务", status: "running" },
+      ],
+      activeTaskId: "task-stale",
+      secondaryPane: { taskId: "task-live" },
+      splitMode: true,
+    });
+
+    store.pruneMissingTasks(["task-stale"]);
+
+    expect(store.tabs).toEqual([{ taskId: "task-live", title: "当前任务", status: "running" }]);
+    expect(store.activeTaskId).toBe("task-live");
+    expect(store.secondaryPane).toBeNull();
+    expect(store.splitMode).toBe(false);
+  });
 });

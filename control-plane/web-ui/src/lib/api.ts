@@ -9,6 +9,16 @@ export interface ApiErrorPayload {
   status?: number;
   diagnostics?: Record<string, unknown>;
   recoverySuggestions?: Array<RecoverySuggestion | string>;
+  taskId?: string;
+  allowed?: boolean;
+  effectiveModel?: string;
+  guardDecision?: GuardDecision;
+  guardReason?: string;
+  suggestedModel?: string;
+  activeLease?: PaidExecutionLeaseRecord | null;
+  policy?: ModelExecutionPolicy;
+  requirements?: PaidExecutionRequirements;
+  preflight?: PaidExecutionEstimate;
 }
 
 export class ApiError extends Error {
@@ -16,6 +26,16 @@ export class ApiError extends Error {
   code?: string;
   diagnostics?: Record<string, unknown>;
   recoverySuggestions: RecoverySuggestion[];
+  taskId?: string;
+  allowed?: boolean;
+  effectiveModel?: string;
+  guardDecision?: GuardDecision;
+  guardReason?: string;
+  suggestedModel?: string;
+  activeLease?: PaidExecutionLeaseRecord | null;
+  policy?: ModelExecutionPolicy;
+  requirements?: PaidExecutionRequirements;
+  preflight?: PaidExecutionEstimate;
 
   constructor(payload: ApiErrorPayload) {
     super(payload.error || `HTTP ${payload.status || 500}`);
@@ -24,6 +44,16 @@ export class ApiError extends Error {
     this.code = payload.code;
     this.diagnostics = payload.diagnostics;
     this.recoverySuggestions = normalizeRecoverySuggestions(payload.recoverySuggestions);
+    this.taskId = payload.taskId;
+    this.allowed = payload.allowed;
+    this.effectiveModel = payload.effectiveModel;
+    this.guardDecision = payload.guardDecision;
+    this.guardReason = payload.guardReason;
+    this.suggestedModel = payload.suggestedModel;
+    this.activeLease = payload.activeLease;
+    this.policy = payload.policy;
+    this.requirements = payload.requirements;
+    this.preflight = payload.preflight;
   }
 }
 

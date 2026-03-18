@@ -18,7 +18,7 @@ OpenCode 是一个**独立编译的 AI Agent 运行时二进制文件**，安装
 
 它不是 Node.js 库，而是独立进程，对外暴露 REST API + SSE 事件流。通过插件系统（`@opencode-ai/plugin`）和 SDK（`@opencode-ai/sdk`）可扩展和集成。
 
-在 OpenerX 体系中，OpenCode 位于最底层的执行层，与 BFF 聚合层、控制平面服务、Web UI 共同构成四层架构：
+在 OpenerX 体系中，OpenCode 位于最底层的执行层，与 BFF 聚合层、控制平面服务、Web UI 共同构成四层架构。当前默认仍保持这套多进程拓扑，不再继续推进单进程合并作为默认路线：
 
 ```
 用户浏览器 → Web UI (:5173) → BFF (:4098) → Control Plane (:4097)
@@ -334,7 +334,7 @@ bun run cli:repair-graphs
 
 ```bash
 cd control-plane/service
-sqlite3 data/openerx.db "select task_id, graph_id, count(*) as nodes from task_nodes where task_id = '<task-id>' group by task_id, graph_id;"
+psql "$DATABASE_URL" -c "select task_id, graph_id, count(*) as nodes from task_nodes where task_id = '<task-id>' group by task_id, graph_id;"
 ```
 
 也可直接检查前端接口：

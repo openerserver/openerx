@@ -1062,34 +1062,6 @@ async function validateResolvedModel(resolvedModel: ResolvedModel | undefined) {
   };
 }
 
-function parseMessageTimeValue(message: unknown, key: "created" | "updated") {
-  if (!message || typeof message !== "object") {
-    return null;
-  }
-
-  const info =
-    "info" in message && typeof message.info === "object" && message.info
-      ? (message.info as Record<string, unknown>)
-      : undefined;
-  const time =
-    info && typeof info.time === "object" && info.time
-      ? (info.time as Record<string, unknown>)
-      : undefined;
-  const value = time?.[key] ?? time?.started ?? time?.completed;
-
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return new Date(value).toISOString();
-  }
-  if (typeof value === "string") {
-    const parsed = Date.parse(value);
-    if (!Number.isNaN(parsed)) {
-      return new Date(parsed).toISOString();
-    }
-  }
-
-  return null;
-}
-
 /**
  * Build a minimal session record from CP data only — no OpenCode calls.
  * Used when OpenCode is unreachable to avoid cascading timeouts.
@@ -1114,30 +1086,6 @@ function buildCpOnlyFallbackSession(
     summary: null,
     createdAt: task.createdAt ?? null,
     updatedAt: task.updatedAt ?? null,
-  };
-}
-
-async function buildFallbackTaskSession(
-  taskId: string,
-  task: { sessionId?: string; title?: string; status?: string },
-): Promise<SessionSummaryRecord | null> {
-  if (!task.sessionId) {
-    return null;
-  }
-
-  const messagesResult = await getSessionMessages(task.sessionId);
-  const messages = Array.isArray(messagesResult.data) ? messagesResult.data : [];
-  const lastMessage = messages[messages.length - 1];
-
-  return {
-    id: task.sessionId,
-    title: task.title
-      ? `[Task ${taskId.slice(0, 8)}] ${task.title}`
-      : `[Task ${taskId.slice(0, 8)}] 主会话`,
-    isActive: task.status === "running",
-    summary: null,
-    createdAt: parseMessageTimeValue(messages[0], "created"),
-    updatedAt: parseMessageTimeValue(lastMessage, "updated"),
   };
 }
 
@@ -2293,60 +2241,76 @@ taskRoutes.get("/:taskId/pipeline", async (c) => {
 // GET /api/tasks/:taskId/sessions — List sessions related to a task
 taskRoutes.get("/:taskId/sessions", async (c) => {
   const taskId = c.req.param("taskId");
+  const authorization = authHeader(c);
 
   // Get task to find its sessionId
   const taskResult = await cpFetch<{ sessionId?: string; title?: string; status?: string }>(
     `/api/tasks/${encodeURIComponent(taskId)}`,
-    { authorization: authHeader(c) },
+    { authorization },
   );
 
   if (!taskResult.ok) {
     return c.json({ data: [] });
   }
 
-  const sessionIsActive = taskResult.data?.status === "running";
+  const lineageResult = await cpFetch<{ data: TaskSessionRecord[] }>(
+    `/api/tasks/${encodeURIComponent(taskId)}/task-sessions`,
+    { authorization },
+  );
 
-  // List recent sessions from OpenCode and filter by task reference
-  const sessResult = await listSessions(50);
-  if (!sessResult.ok || !Array.isArray(sessResult.data)) {
-    // OpenCode is unreachable — build fallback from CP data only.
-    // Do NOT call getSessionMessages here: it would trigger another
-    // OpenCode timeout and double the response latency.
-    const fallback = buildCpOnlyFallbackSession(taskId, taskResult.data || {});
-    return c.json({ data: fallback ? [fallback] : [] });
-  }
+  const lineageRecords: TaskSessionRecord[] =
+    lineageResult.ok && Array.isArray(lineageResult.data?.data)
+      ? lineageResult.data.data.filter((record) => !record.archivedAt)
+      : [];
 
-  const taskPrefix = `[Task ${taskId.slice(0, 8)}]`;
-  const sessions: SessionSummaryRecord[] = (
-    sessResult.data as Array<{
-      id: string;
-      title?: string;
-      version?: string;
-      summary?: { additions: number; deletions: number; files: number };
-      time?: { created: number; updated: number };
-    }>
-  )
-    .filter((s) => s.id === taskResult.data?.sessionId || s.title?.includes(taskPrefix))
-    .map((s) => ({
-      id: s.id,
-      title: s.title || "",
-      isActive: sessionIsActive && s.id === taskResult.data?.sessionId,
-      summary: s.summary || null,
-      createdAt: s.time?.created ? new Date(s.time.created).toISOString() : null,
-      updatedAt: s.time?.updated ? new Date(s.time.updated).toISOString() : null,
-    }));
+  const runtimeMap = await fetchRuntimeSessionMap(100);
 
-  if (
-    taskResult.data?.sessionId &&
-    !sessions.some((session) => session.id === taskResult.data?.sessionId)
-  ) {
-    const fallback = await buildFallbackTaskSession(taskId, taskResult.data);
-    if (fallback) {
-      sessions.unshift(fallback);
+  if (lineageRecords.length > 0) {
+    const { records: normalizedRecords, repaired } = normalizeLineageRecords(lineageRecords);
+    if (repaired.length > 0) {
+      await persistLineageRepairs(taskId, repaired, authorization);
     }
+
+    const sessions = normalizedRecords.map((record) => {
+      const runtime = runtimeMap.get(record.runtimeSessionId);
+      return {
+        id: record.runtimeSessionId,
+        title: runtime?.title ?? record.branchName ?? "",
+        isActive: record.isActive || record.runtimeSessionId === taskResult.data?.sessionId,
+        summary: runtime?.summary ?? null,
+        createdAt: runtime?.createdAt ?? record.createdAt ?? null,
+        updatedAt: runtime?.updatedAt ?? record.updatedAt ?? null,
+      } satisfies SessionSummaryRecord;
+    });
+
+    return c.json({ data: sessions });
   }
 
-  return c.json({ data: sessions });
+  const synthesizedRecords = synthesizeLineageRecordsFromRuntime(
+    taskId,
+    taskResult.data?.sessionId,
+    runtimeMap,
+  );
+
+  if (synthesizedRecords.length > 0) {
+    await persistLineageRepairs(taskId, synthesizedRecords, authorization);
+    return c.json({
+      data: synthesizedRecords.map((record) => {
+        const runtime = runtimeMap.get(record.runtimeSessionId);
+        return {
+          id: record.runtimeSessionId,
+          title: runtime?.title ?? record.branchName ?? "",
+          isActive: record.isActive,
+          summary: runtime?.summary ?? null,
+          createdAt: runtime?.createdAt ?? record.createdAt ?? null,
+          updatedAt: runtime?.updatedAt ?? record.updatedAt ?? null,
+        } satisfies SessionSummaryRecord;
+      }),
+    });
+  }
+
+  const fallback = buildCpOnlyFallbackSession(taskId, taskResult.data || {});
+  return c.json({ data: fallback ? [fallback] : [] });
 });
 
 // GET /api/tasks/:taskId/sessions/:sessionId/messages — Get session messages
