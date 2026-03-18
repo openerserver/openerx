@@ -14,7 +14,6 @@
             <template #overlay>
               <a-menu>
                 <a-menu-item @click="router.push(`/projects/${project.id}/orchestration`)">查看介入编排</a-menu-item>
-                <a-menu-item data-testid="open-project-task-graph" @click="router.push(`/projects/${project.id}/task-graph`)">任务总图</a-menu-item>
                 <a-menu-item data-testid="open-boss-operations-center" @click="router.push(`/projects/${project.id}/boss-operations`)">老板经营视图</a-menu-item>
               </a-menu>
             </template>

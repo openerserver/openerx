@@ -57,6 +57,7 @@ const realtimeBase = vi.hoisted(() => ({
     ts: string;
     taskId?: string;
     sessionId?: string;
+    agentRunId?: string;
     data: Record<string, unknown>;
   }>,
   subscribeTask: vi.fn(),

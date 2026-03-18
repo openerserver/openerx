@@ -176,7 +176,6 @@ export interface AuditEvent {
   ts: string;
   userId: string | null;
   projectId: string | null;
-  sessionId: string | null;
   taskId: string | null;
   agentRunId: string | null;
   eventType: string;
@@ -1284,43 +1283,6 @@ export async function createTask(data: {
   });
 }
 
-export interface TaskGraphNode {
-  id: string;
-  taskId: string;
-  graphId: string;
-  subject: string;
-  status: string;
-  agentType: string;
-  sessionId: string | null;
-  retryCount: number;
-  maxRetries: number;
-  output: string | null;
-  error: string | null;
-  tokenUsed: number;
-  startedAt: string | null;
-  finishedAt: string | null;
-  createdAt: string;
-}
-
-export interface TaskGraphEdge {
-  id: string;
-  taskId: string;
-  graphId: string;
-  fromNodeId: string;
-  toNodeId: string;
-  edgeType: string;
-}
-
-export interface TaskGraphData {
-  taskId: string;
-  nodes: TaskGraphNode[];
-  edges: TaskGraphEdge[];
-}
-
-export async function getTaskGraph(taskId: string) {
-  return request<TaskGraphData>(`/tasks/${taskId}/graph`);
-}
-
 // ── Runtime Pipeline ───────────────────────────────────────────────
 
 export type RuntimePipelineStatus = "idle" | "running" | "completed" | "failed" | "paused";
@@ -1328,14 +1290,13 @@ export type RuntimePipelineStageStatus = "pending" | "running" | "completed" | "
 
 export interface RuntimePipelineStage {
   id: string;
-  type: "hook" | "planning" | "execution" | "judge" | "post-hook" | "graph-node";
+  type: "hook" | "planning" | "execution" | "judge" | "post-hook";
   label: string;
   status: RuntimePipelineStageStatus;
   order: number;
   sourceType:
     | "executionPlan.step"
     | "strategy.hookExecution"
-    | "taskGraph.node"
     | "session.message";
   sourceId: string | null;
   agent: string | null;
@@ -3119,57 +3080,6 @@ export interface ProjectBossOperationsView {
   attentionTasks: ProjectBossAttentionTaskItem[];
 }
 
-export interface ProjectTaskGraphTaskView {
-  id: string;
-  projectId: string;
-  userId: string;
-  title: string;
-  prompt: string;
-  status: string;
-  category?: string | null;
-  strategy?: string | null;
-  repoName?: string | null;
-  workingBranch?: string | null;
-  selectedModel?: string | null;
-  changesSummary?: {
-    filesAdded?: number;
-    filesModified?: number;
-    filesDeleted?: number;
-    totalInsertions?: number;
-    totalDeletions?: number;
-  } | null;
-  createdAt?: string | null;
-  startedAt?: string | null;
-  finishedAt?: string | null;
-  currentStageLabel?: string | null;
-  latestActivityAt?: string | null;
-}
-
-export interface ProjectTaskGraphEdgeView {
-  id: string;
-  sourceTaskId: string;
-  targetTaskId: string;
-  type: "depends-on" | "blocks" | "spawned-from";
-  source: "task-graph" | "task-fork" | "future-source";
-}
-
-export interface ProjectTaskGraphView {
-  project: {
-    id: string;
-    name: string;
-    slug: string;
-    description: string | null;
-  };
-  tasks: ProjectTaskGraphTaskView[];
-  edges: ProjectTaskGraphEdgeView[];
-  capabilities: {
-    supportsDependsOn: boolean;
-    supportsBlocks: boolean;
-    supportsSpawnedFrom: boolean;
-  };
-  refreshedAt: string;
-}
-
 export async function listRoleAgents(projectId?: string) {
   const params = new URLSearchParams();
   if (projectId) params.set("projectId", projectId);
@@ -3390,12 +3300,6 @@ export async function getProjectOrchestrationView(projectId: string, candidateTe
 export async function getProjectBossOperationsView(projectId: string) {
   return request<ProjectBossOperationsView>(
     `/projects/${encodeURIComponent(projectId)}/boss-operations-view`,
-  );
-}
-
-export async function getProjectTaskGraphView(projectId: string) {
-  return request<ProjectTaskGraphView>(
-    `/projects/${encodeURIComponent(projectId)}/task-graph-view`,
   );
 }
 

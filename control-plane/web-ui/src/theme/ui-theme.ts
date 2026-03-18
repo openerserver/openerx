@@ -321,6 +321,8 @@ export const taskDetailThemeStyles = {
   page: {
     padding: "24px",
     background: palette.layoutBg,
+    minHeight: "100%",
+    boxSizing: "border-box",
   } satisfies CSSProperties,
   header: {
     marginBottom: "16px",
@@ -328,28 +330,7 @@ export const taskDetailThemeStyles = {
   } satisfies CSSProperties,
   title: {
     margin: 0,
-    color: palette.textStrong,
-  } satisfies CSSProperties,
-  graphSummaryCard: {
-    marginBottom: "16px",
-    background: palette.containerBg,
-    borderColor: palette.accentCopperSoft,
-    boxShadow: palette.shadowSoft,
-  } satisfies CSSProperties,
-  graphSummaryBody: {
-    padding: "12px 16px",
-  } satisfies CSSProperties,
-  graphSummaryHeader: {
-    gap: "12px",
-    flexWrap: "wrap",
-  } satisfies CSSProperties,
-  graphSummaryTitle: {
-    fontWeight: 600,
-    color: palette.textStrong,
-  } satisfies CSSProperties,
-  graphSummaryText: {
-    fontSize: "12px",
-    color: palette.textMuted,
+    color: palette.text,
   } satisfies CSSProperties,
   statusTags: {
     marginTop: "8px",

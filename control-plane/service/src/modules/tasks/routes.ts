@@ -8,8 +8,6 @@ import {
   projectTaskRelations,
   repositories,
   repositoryCredentials,
-  taskEdges,
-  taskNodes,
   taskSessions,
   tasks,
 } from "../../db/schema";
@@ -379,112 +377,6 @@ taskRoutes.patch("/:taskId", zValidator("json", updateStatusSchema), async (c) =
   return c.json({ id: taskId, ...updates });
 });
 
-// ── Task Graph (DAG nodes + edges) ─────────────────────────────────
-
-taskRoutes.get("/:taskId/graph", async (c) => {
-  const taskId = c.req.param("taskId");
-
-  const task = await db.query.tasks.findFirst({ where: eq(tasks.id, taskId) });
-  if (!task) return c.json({ error: "Task not found" }, 404);
-
-  const nodes = await db.select().from(taskNodes).where(eq(taskNodes.taskId, taskId));
-  const edges = await db.select().from(taskEdges).where(eq(taskEdges.taskId, taskId));
-
-  return c.json({ taskId, nodes, edges });
-});
-
-// ── Sync Nodes (bulk upsert from runtime) ──────────────────────────
-
-const syncNodesSchema = z.object({
-  graphId: z.string().min(1),
-  nodes: z.array(
-    z.object({
-      id: z.string(),
-      subject: z.string(),
-      status: z.enum([
-        "pending",
-        "in_progress",
-        "completed",
-        "failed",
-        "blocked",
-        "stopped",
-        "paused",
-        "waiting_approval",
-      ]),
-      agentType: z.string(),
-      sessionId: z.string().nullable().optional(),
-      retryCount: z.number().int().optional(),
-      maxRetries: z.number().int().optional(),
-      output: z.string().nullable().optional(),
-      error: z.string().nullable().optional(),
-      tokenUsed: z.number().int().optional(),
-      startedAt: z.string().nullable().optional(),
-      finishedAt: z.string().nullable().optional(),
-    }),
-  ),
-  edges: z.array(
-    z.object({
-      from: z.string(),
-      to: z.string(),
-      type: z.enum(["blocks", "informs"]).optional(),
-    }),
-  ),
-});
-
-taskRoutes.put("/:taskId/graph", zValidator("json", syncNodesSchema), async (c) => {
-  const taskId = c.req.param("taskId");
-  const body = c.req.valid("json");
-
-  const task = await db.query.tasks.findFirst({ where: eq(tasks.id, taskId) });
-  if (!task) return c.json({ error: "Task not found" }, 404);
-
-  // Delete existing graph data for this task+graphId, then re-insert
-  await db
-    .delete(taskEdges)
-    .where(and(eq(taskEdges.taskId, taskId), eq(taskEdges.graphId, body.graphId)));
-  await db
-    .delete(taskNodes)
-    .where(and(eq(taskNodes.taskId, taskId), eq(taskNodes.graphId, body.graphId)));
-
-  // Insert nodes
-  if (body.nodes.length > 0) {
-    await db.insert(taskNodes).values(
-      body.nodes.map((n) => ({
-        id: n.id,
-        taskId,
-        graphId: body.graphId,
-        subject: n.subject,
-        status: n.status,
-        agentType: n.agentType,
-        sessionId: n.sessionId ?? null,
-        retryCount: n.retryCount ?? 0,
-        maxRetries: n.maxRetries ?? 2,
-        output: n.output ?? null,
-        error: n.error ?? null,
-        tokenUsed: n.tokenUsed ?? 0,
-        startedAt: n.startedAt ?? null,
-        finishedAt: n.finishedAt ?? null,
-      })),
-    );
-  }
-
-  // Insert edges
-  if (body.edges.length > 0) {
-    await db.insert(taskEdges).values(
-      body.edges.map((e) => ({
-        id: crypto.randomUUID(),
-        taskId,
-        graphId: body.graphId,
-        fromNodeId: e.from,
-        toNodeId: e.to,
-        edgeType: e.type ?? "blocks",
-      })),
-    );
-  }
-
-  return c.json({ taskId, graphId: body.graphId, synced: true });
-});
-
 // ── Agent Runs ─────────────────────────────────────────────────────
 
 taskRoutes.get("/:taskId/runs", async (c) => {
@@ -501,7 +393,6 @@ taskRoutes.get("/:taskId/runs", async (c) => {
 
 const createRunSchema = z.object({
   id: z.string().optional(),
-  nodeId: z.string().optional(),
   sessionId: z.string().optional(),
   agentType: z.string().min(1),
   status: z
@@ -533,7 +424,6 @@ taskRoutes.post("/:taskId/runs", zValidator("json", createRunSchema), async (c) 
   await db.insert(agentRuns).values({
     id: runId,
     taskId,
-    nodeId: body.nodeId ?? null,
     sessionId: body.sessionId ?? null,
     agentType: body.agentType,
     status,

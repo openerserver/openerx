@@ -31,9 +31,6 @@
         <a-button v-if="projectStore.currentProjectId" @click="router.push(`/projects/${projectStore.currentProjectId}/recommended-scenarios`)">
           推荐场景
         </a-button>
-        <a-button v-if="projectStore.currentProjectId" @click="router.push(`/projects/${projectStore.currentProjectId}/task-graph`)">
-          任务总图
-        </a-button>
         <a-button type="primary" @click="showCreateModal = true">
           <template #icon><PlusOutlined /></template>
           新建任务

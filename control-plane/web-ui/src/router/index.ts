@@ -87,11 +87,6 @@ const routes: RouteRecordRaw[] = [
         component: () => import("../pages/ProjectOrchestration.vue"),
       },
       {
-        path: "projects/:projectId/task-graph",
-        name: "ProjectTaskGraph",
-        component: () => import("../pages/ProjectTaskGraph.vue"),
-      },
-      {
         path: "projects/:projectId/operating-mode",
         name: "ProjectOperatingMode",
         component: () => import("../pages/ProjectOperatingMode.vue"),

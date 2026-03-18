@@ -496,7 +496,6 @@ export const approvalTickets = pgTable("approval_tickets", {
   id: text("id").primaryKey(),
   taskId: text("task_id").notNull(),
   agentRunId: text("agent_run_id"),
-  nodeId: text("node_id"),
   actionType: text("action_type", {
     enum: ["production_write", "level3_command", "budget_exceed", "batch_edit", "external_api"],
   }).notNull(),
@@ -508,58 +507,6 @@ export const approvalTickets = pgTable("approval_tickets", {
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   resolvedAt: text("resolved_at"),
   expiresAt: text("expires_at").notNull(),
-});
-
-// ── Task Nodes (DAG mirror from runtime task-graph-plugin) ─────────
-
-export const taskNodes = pgTable("task_nodes", {
-  id: text("id").primaryKey(),
-  taskId: text("task_id")
-    .notNull()
-    .references(() => tasks.id),
-  graphId: text("graph_id").notNull(), // runtime task-graph-plugin graph ID
-  subject: text("subject").notNull(),
-  status: text("status", {
-    enum: [
-      "pending",
-      "in_progress",
-      "completed",
-      "failed",
-      "blocked",
-      "stopped",
-      "paused",
-      "waiting_approval",
-    ],
-  })
-    .notNull()
-    .default("pending"),
-  agentType: text("agent_type").notNull(),
-  sessionId: text("session_id"),
-  retryCount: integer("retry_count").notNull().default(0),
-  maxRetries: integer("max_retries").notNull().default(2),
-  output: text("output"),
-  error: text("error"),
-  tokenUsed: integer("token_used").notNull().default(0),
-  startedAt: text("started_at"),
-  finishedAt: text("finished_at"),
-  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-});
-
-// ── Task Edges (DAG dependencies from runtime) ─────────────────────
-
-export const taskEdges = pgTable("task_edges", {
-  id: text("id").primaryKey(),
-  taskId: text("task_id")
-    .notNull()
-    .references(() => tasks.id),
-  graphId: text("graph_id").notNull(),
-  fromNodeId: text("from_node_id")
-    .notNull()
-    .references(() => taskNodes.id),
-  toNodeId: text("to_node_id")
-    .notNull()
-    .references(() => taskNodes.id),
-  edgeType: text("edge_type").notNull().default("blocks"),
 });
 
 // ── Project Task Relations (cross-task graph) ─────────────────────
@@ -601,7 +548,6 @@ export const agentRuns = pgTable("agent_runs", {
   taskId: text("task_id")
     .notNull()
     .references(() => tasks.id),
-  nodeId: text("node_id").references(() => taskNodes.id),
   sessionId: text("session_id"),
   agentType: text("agent_type").notNull(),
   status: text("status", {

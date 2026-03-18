@@ -49,7 +49,6 @@ import {
 } from "../agent-control/opencode-adapter";
 import { createAgentRunRecord, recordAgentAudit } from "../agent-control/run-persistence";
 import { executeLifecycleHooks } from "../hooks/lifecycle-hooks";
-import { syncGraphsForSessionTask, syncGraphsForTask } from "../realtime/dag-sync";
 import { buildPipelineStageUpdatedEvents } from "../realtime/pipeline-events";
 import { sseAggregator } from "../realtime/sse-aggregator";
 import { wsBroadcaster } from "../realtime/ws-broadcaster";
@@ -157,6 +156,28 @@ interface PreparedExecutionContext {
 interface ExecutionContext extends PreparedExecutionContext {
   prompt: string;
   hookExecutions: HookExecutionRecord[];
+}
+
+interface WorkflowPromptContextRecord {
+  [key: string]: string | null | undefined;
+  taskId: string;
+  projectId: string;
+  taskTitle: string;
+  taskPrompt: string;
+  repoName?: string | null;
+  remoteUrl?: string | null;
+  workingBranch?: string | null;
+  workflowStatus?: string;
+  currentStageKey?: string;
+  currentStageLabel?: string;
+  currentStageStatus?: string;
+  completedStageSummaries?: string;
+  openChangeRequestSummary?: string;
+  activeRoleSummary?: string;
+  selectedAgent?: string;
+  selectedModel?: string;
+  taskResult?: string;
+  changesSummary?: string;
 }
 
 interface ParallelCandidateAttempt {
@@ -361,7 +382,18 @@ async function continueTaskExecution(input: ContinueTaskInput) {
   }
 
   const agentRunId = ensureAgentRunForSession(sessionId, input.taskId, task.projectId, resolvedModel);
-  const result = await continueSession(sessionId, input.prompt, { model: resolvedModel });
+  const workflowContext = await buildWorkflowPromptContext(task, input.authorization, {
+    selectedModel: resolvedModel
+      ? `${resolvedModel.providerId}:${resolvedModel.modelId}`
+      : undefined,
+    taskResult: "",
+    changesSummary: "",
+  });
+  const result = await continueSession(
+    sessionId,
+    prependWorkflowContextToPrompt(input.prompt, workflowContext),
+    { model: resolvedModel },
+  );
   if (!result.ok) {
     return { status: 502 as const, body: { error: result.error || "Failed to continue session" } };
   }
@@ -878,10 +910,56 @@ function buildTaskPatchBody(
   };
 }
 
-function buildWorkflowPromptContext(
+async function buildWorkflowPromptContext(
   task: ExecutableTask,
+  authorization: string,
   extras: Record<string, string | undefined | null>,
-) {
+): Promise<WorkflowPromptContextRecord> {
+  let workflowStatus: string | undefined;
+  let currentStageKey: string | undefined;
+  let currentStageLabel: string | undefined;
+  let currentStageStatus: string | undefined;
+  let completedStageSummaries: string | undefined;
+  let openChangeRequestSummary: string | undefined;
+  let activeRoleSummary: string | undefined;
+
+  try {
+    const workflowView = await buildTaskWorkflowViewModel(task.id, authorization, {
+      projectId: task.projectId,
+      taskStatus: task.status,
+    });
+    workflowStatus = workflowView.workflow.status;
+    currentStageKey = workflowView.workflow.currentStage;
+    const currentStage = workflowView.workflow.stages.find(
+      (stage) => stage.stageKey === workflowView.workflow.currentStage,
+    );
+    currentStageLabel = currentStage?.stageLabel;
+    currentStageStatus = currentStage?.status;
+    const completedStages = workflowView.workflow.stages
+      .filter((stage) => stage.status === "completed")
+      .map((stage) => `${stage.stageLabel}(${stage.stageKey})`);
+    completedStageSummaries = completedStages.length > 0 ? completedStages.join(" -> ") : undefined;
+    const openRequests = workflowView.developerChangeRequests.filter(
+      (item) => item.status !== "resolved",
+    );
+    if (openRequests.length > 0) {
+      openChangeRequestSummary = openRequests
+        .slice(0, 3)
+        .map((item) => `${item.sourceRoleLabel}:${item.title}`)
+        .join("; ");
+    }
+    const activeRoles = Array.from(
+      new Set(
+        workflowView.roleConclusions
+          .filter((item) => item.stage === workflowView.workflow.currentStage)
+          .map((item) => item.roleLabel),
+      ),
+    );
+    activeRoleSummary = activeRoles.length > 0 ? activeRoles.join(" / ") : undefined;
+  } catch {
+    // Workflow context is additive; execution can proceed without it.
+  }
+
   return {
     taskId: task.id,
     projectId: task.projectId,
@@ -890,8 +968,42 @@ function buildWorkflowPromptContext(
     repoName: task.repoName,
     remoteUrl: task.remoteUrl,
     workingBranch: task.workingBranch,
+    workflowStatus,
+    currentStageKey,
+    currentStageLabel,
+    currentStageStatus,
+    completedStageSummaries,
+    openChangeRequestSummary,
+    activeRoleSummary,
     ...extras,
   };
+}
+
+function prependWorkflowContextToPrompt(
+  prompt: string,
+  context: WorkflowPromptContextRecord,
+): string {
+  const lines = [
+    "Workflow execution context:",
+    `- Task: ${context.taskTitle}`,
+    context.workflowStatus ? `- Workflow status: ${context.workflowStatus}` : undefined,
+    context.currentStageLabel || context.currentStageKey
+      ? `- Current stage: ${context.currentStageLabel || context.currentStageKey}${context.currentStageStatus ? ` (${context.currentStageStatus})` : ""}`
+      : undefined,
+    context.activeRoleSummary ? `- Active roles in stage: ${context.activeRoleSummary}` : undefined,
+    context.completedStageSummaries
+      ? `- Completed stages: ${context.completedStageSummaries}`
+      : undefined,
+    context.openChangeRequestSummary
+      ? `- Open change requests: ${context.openChangeRequestSummary}`
+      : undefined,
+    context.selectedAgent ? `- Execution agent: ${context.selectedAgent}` : undefined,
+    context.selectedModel ? `- Execution model: ${context.selectedModel}` : undefined,
+    "",
+    "Follow the current workflow stage as the primary execution boundary. If the request spans multiple steps, keep the output aligned to the current stage and only prepare the next stage when the current stage is complete.",
+  ].filter(Boolean);
+
+  return `${lines.join("\n")}\n\n${prompt}`;
 }
 
 async function runPreExecutionHooks(
@@ -903,6 +1015,12 @@ async function runPreExecutionHooks(
 ) {
   const strategy = readOrchestrationStrategy();
   let breakerReason: string | undefined;
+  const workflowContext = await buildWorkflowPromptContext(task, authorization, {
+    selectedAgent: executionAgent,
+    selectedModel: effectiveModel,
+    taskResult: "",
+    changesSummary: "",
+  });
   const hookResult = await executeLifecycleHooks({
     strategy,
     trigger: "pre-execution",
@@ -912,12 +1030,7 @@ async function runPreExecutionHooks(
     taskPrompt: task.prompt,
     titlePrefix: "Preflight",
     repoContext,
-    context: buildWorkflowPromptContext(task, {
-      selectedAgent: executionAgent,
-      selectedModel: effectiveModel,
-      taskResult: "",
-      changesSummary: "",
-    }),
+    context: workflowContext,
     onHookExecuted: async (execution) => {
       if (
         !execution.sessionId ||
@@ -979,14 +1092,14 @@ async function runPreExecutionHooks(
 
   if (hookResult.hookExecutions.length === 0) {
     return {
-      prompt: task.prompt,
+      prompt: prependWorkflowContextToPrompt(task.prompt, workflowContext),
       hookExecutions: [] as HookExecutionRecord[],
     };
   }
 
   if (hookResult.rewrittenPrompt) {
     return {
-      prompt: hookResult.rewrittenPrompt,
+      prompt: prependWorkflowContextToPrompt(hookResult.rewrittenPrompt, workflowContext),
       hookExecutions: hookResult.hookExecutions,
       breakerReason,
     };
@@ -994,6 +1107,7 @@ async function runPreExecutionHooks(
 
   // Default: prepend the review as context for the execution agent
   const promptWithReview = [
+    prependWorkflowContextToPrompt("", workflowContext).trim(),
     "Pre-execution assessment from the configured review agent:",
     hookResult.combinedResultText || "",
     "",
@@ -2183,19 +2297,6 @@ taskRoutes.post("/reconcile-running", async (c) => {
 // GET /api/tasks/:taskId/graph — Get DAG visualization data
 taskRoutes.get("/:taskId/graph", async (c) => {
   const taskId = c.req.param("taskId");
-  const taskResult = await cpFetch<{ sessionId?: string }>(
-    `/api/tasks/${encodeURIComponent(taskId)}`,
-    {
-      authorization: authHeader(c),
-    },
-  );
-
-  // Sync latest runtime DAG state before returning
-  await syncGraphsForSessionTask(
-    taskId,
-    taskResult.ok ? taskResult.data?.sessionId : undefined,
-  ).catch(() => {});
-  await syncGraphsForTask(taskId).catch(() => {});
   const result = await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}/graph`, {
     authorization: authHeader(c),
   });
@@ -2217,18 +2318,10 @@ taskRoutes.get("/:taskId/pipeline", async (c) => {
   const requestedSessionId = c.req.query("sessionId");
   const authorization = authHeader(c);
 
-  // syncGraphsForSessionTask already fetches session messages from OpenCode;
-  // capture them so buildRuntimePipeline can reuse without a second call.
-  const syncResult = await syncGraphsForSessionTask(taskId, requestedSessionId).catch(() => ({
-    synced: 0,
-  }));
-  await syncGraphsForTask(taskId).catch(() => {});
-
   const pipeline = await buildRuntimePipeline({
     taskId,
     sessionId: requestedSessionId,
     authorization,
-    prefetchedMessages: (syncResult as { messages?: unknown[] }).messages,
   });
 
   return c.json(pipeline);

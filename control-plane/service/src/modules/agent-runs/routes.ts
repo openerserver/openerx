@@ -7,7 +7,6 @@ import {
   auditEvents,
   codeChanges,
   projects,
-  taskNodes,
   tasks,
 } from "../../db/schema";
 import { type AppEnv, type JWTPayload, authMiddleware } from "../../middleware/auth";
@@ -606,43 +605,6 @@ function buildRunQueryConditions(user: JWTPayload, filters: RunFilterOptions) {
   return { accessibleProjects, conditions };
 }
 
-async function loadTokenUsageBySessionId(sessionIds: string[]) {
-  const tokenUsageBySessionId = new Map<string, number>();
-  if (sessionIds.length === 0) {
-    return tokenUsageBySessionId;
-  }
-
-  const nodeRows = await db
-    .select({
-      sessionId: taskNodes.sessionId,
-      tokenUsed: taskNodes.tokenUsed,
-    })
-    .from(taskNodes)
-    .where(inArray(taskNodes.sessionId, sessionIds));
-
-  for (const row of nodeRows) {
-    if (!row.sessionId) continue;
-    tokenUsageBySessionId.set(
-      row.sessionId,
-      (tokenUsageBySessionId.get(row.sessionId) ?? 0) + (row.tokenUsed ?? 0),
-    );
-  }
-
-  return tokenUsageBySessionId;
-}
-
-function enrichRunTokenUsage(rows: BaseRunRow[], tokenUsageBySessionId: Map<string, number>) {
-  return rows.map((row) => ({
-    ...row,
-    tokenUsed:
-      row.tokenUsed > 0
-        ? row.tokenUsed
-        : row.sessionId
-          ? (tokenUsageBySessionId.get(row.sessionId) ?? 0)
-          : 0,
-  }));
-}
-
 function matchesRunFilters(
   row: BaseRunRow,
   normalizedAgentType: string | undefined,
@@ -857,17 +819,12 @@ async function loadBaseRuns(
     .where(conditions.length > 0 ? and(...conditions) : undefined)
     .orderBy(desc(agentRuns.createdAt));
 
-  const sessionIds = rows
-    .map((row) => row.sessionId)
-    .filter((value): value is string => Boolean(value));
-  const tokenUsageBySessionId = await loadTokenUsageBySessionId(sessionIds);
-
   const fromMs = parseTimestampQuery(filters.from);
   const toMs = parseTimestampQuery(filters.to);
   const normalizedAgentType = filters.agentType?.trim().toLowerCase();
   const normalizedModel = filters.model?.trim().toLowerCase();
 
-  return enrichRunTokenUsage(rows as BaseRunRow[], tokenUsageBySessionId).filter((row) =>
+  return (rows as BaseRunRow[]).filter((row) =>
     matchesRunFilters(row, normalizedAgentType, normalizedModel, fromMs, toMs),
   );
 }

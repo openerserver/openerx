@@ -27,7 +27,6 @@ import {
 import { collectChangesFromSession } from "../code-changes/change-collector";
 import { executeLifecycleHooks } from "../hooks/lifecycle-hooks";
 import { finalizeTaskState } from "../tasks/finalize";
-import { observeGraphWorkspaceDir, onGraphToolExecuted } from "./dag-sync";
 import { buildPipelineStageUpdatedEvents } from "./pipeline-events";
 
 // Subscribes to OpenCode Runtime SSE events and transforms them into
@@ -683,9 +682,6 @@ class SSEAggregator {
   }
 
   private async processParsedEvent(type: string, parsed: Record<string, unknown>): Promise<void> {
-    const workspaceDirectory =
-      typeof parsed.directory === "string" ? String(parsed.directory || "") : "";
-    observeGraphWorkspaceDir(workspaceDirectory);
     const payload =
       typeof parsed.payload === "object" && parsed.payload
         ? (parsed.payload as Record<string, unknown>)
@@ -709,8 +705,6 @@ class SSEAggregator {
       }
       void this.maybeFinalizeRun(event);
     }
-
-    await this.maybeSyncDag(type, payload, parsed, workspaceDirectory);
   }
 
   /**
@@ -1584,51 +1578,6 @@ class SSEAggregator {
     }
 
     return undefined;
-  }
-
-  private async maybeSyncDag(
-    type: string,
-    payload: Record<string, unknown> | null,
-    parsed: Record<string, unknown>,
-    workspaceDirectory?: string,
-  ): Promise<void> {
-    const eventType = payload ? String(payload.type || type) : type;
-    if (eventType !== "tool.execute.after") return;
-
-    const props =
-      (typeof payload?.properties === "object" && payload.properties
-        ? (payload.properties as Record<string, unknown>)
-        : parsed) || {};
-    const toolName = String(props.toolName || props.name || "");
-    if (!toolName.startsWith("task_graph_")) return;
-
-    const toolResult = String(props.result || props.output || "{}");
-    const sessionId = this.extractSessionId(eventType, payload ?? parsed);
-    await onGraphToolExecuted(toolName, toolResult, workspaceDirectory, sessionId);
-    if (!sessionId) return;
-
-    const run = findAgentRunBySessionId(sessionId);
-    if (!run?.taskId) return;
-
-    const authorization = await createInternalAuthorization();
-    this.emit({
-      id: crypto.randomUUID(),
-      type: "task.node.updated",
-      ts: new Date().toISOString(),
-      sessionId,
-      taskId: run.taskId,
-      projectId: run.projectId,
-      agentRunId: run.agentRunId,
-      data: { toolName },
-    });
-    await this.emitPipelineStageUpdates({
-      taskId: run.taskId,
-      sessionId,
-      projectId: run.projectId,
-      agentRunId: run.agentRunId,
-      authorization,
-      reason: "task.node.updated",
-    });
   }
 
   onEvent(handler: EventHandler): () => void {

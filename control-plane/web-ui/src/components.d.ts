@@ -97,7 +97,6 @@ declare module 'vue' {
     SessionTree: typeof import('./components/SessionTree.vue')['default']
     SessionTreeBranch: typeof import('./components/SessionTreeBranch.vue')['default']
     TaskCodeChanges: typeof import('./components/TaskCodeChanges.vue')['default']
-    TaskGraph: typeof import('./components/TaskGraph.vue')['default']
     TaskProjectRoleConfigPanel: typeof import('./components/TaskProjectRoleConfigPanel.vue')['default']
     TaskRoleWorkflowPanel: typeof import('./components/TaskRoleWorkflowPanel.vue')['default']
   }

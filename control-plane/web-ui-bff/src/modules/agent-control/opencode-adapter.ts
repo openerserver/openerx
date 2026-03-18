@@ -170,23 +170,10 @@ function appendRepoContextLines(lines: string[], repoContext?: PromptOptions["re
   }
 }
 
-function appendTaskGraphToolingNotes(lines: string[], options?: PromptOptions): void {
-  if (!options?.taskId || !options?.projectId) {
-    return;
-  }
-
-  lines.push(
-    "- If you call create_sub_session, dispatch_to_agent, list_sub_sessions, or any task_graph_* tool, you MUST use the exact OpenerX task ID above as taskId.",
-    "- For task_graph_create, nodes must use JSON objects shaped like {subject, agentType, maxRetries?}.",
-    "- For task_graph_create, edges must use JSON objects shaped like {fromIndex, toIndex, type?} where indexes reference the nodes array.",
-  );
-}
-
 function buildExecutionContext(options?: PromptOptions): string {
   const lines: string[] = [];
   appendExecutionContextLines(lines, options);
   appendRepoContextLines(lines, options?.repoContext);
-  appendTaskGraphToolingNotes(lines, options);
   return lines.length > 0 ? `${lines.join("\n")}\n\n` : "";
 }
 
@@ -380,7 +367,13 @@ export function updateAgentRunStatus(agentRunId: string, status: AgentRunStatus)
 }
 
 export function getAgentRun(agentRunId: string) {
-  return agentRunRegistry.get(agentRunId);
+  const run = agentRunRegistry.get(agentRunId);
+  return run
+    ? {
+        agentRunId,
+        ...run,
+      }
+    : undefined;
 }
 
 export function findAgentRunBySessionId(sessionId: string) {

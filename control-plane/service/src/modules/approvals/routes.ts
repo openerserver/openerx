@@ -123,7 +123,6 @@ approvalRoutes.post(
 export async function createApprovalTicket(ticket: {
   taskId: string;
   agentRunId?: string;
-  nodeId?: string;
   actionType:
     | "production_write"
     | "level3_command"
@@ -140,7 +139,6 @@ export async function createApprovalTicket(ticket: {
     id,
     taskId: ticket.taskId,
     agentRunId: ticket.agentRunId,
-    nodeId: ticket.nodeId,
     actionType: ticket.actionType,
     riskLevel: ticket.riskLevel,
     requestDetail: ticket.requestDetail,

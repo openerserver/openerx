@@ -22,7 +22,6 @@
     "db:migrate:sqlite-snapshot": "bun run src/db/migration/sqlite-to-postgres.ts",
     "cli:task": "bun run src/cli/create-task.ts",
     "cli:backfill-task-relations": "bun run src/cli/backfill-project-task-relations.ts",
-    "cli:repair-graphs": "bun run src/cli/repair-historical-graphs.ts",
     "test": "bun test ../../tests/service --timeout 30000",
     "test:identity": "bun test ../../tests/service/identity-binding.test.ts --timeout 30000",
     "test:user-management": "bun test ../../tests/service/user-management.test.ts --timeout 30000"

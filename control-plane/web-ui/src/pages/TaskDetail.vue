@@ -56,27 +56,6 @@
       </a-space>
     </a-flex>
 
-    <a-card
-      v-if="showEmbeddedGraphSummary && !isReplyFocusMode"
-      size="small"
-      :body-style="taskDetailThemeStyles.graphSummaryBody"
-      :style="taskDetailThemeStyles.graphSummaryCard"
-    >
-      <a-flex justify="space-between" align="flex-start" :style="taskDetailThemeStyles.graphSummaryHeader">
-        <div>
-          <div :style="taskDetailThemeStyles.graphSummaryTitle">任务图摘要</div>
-          <a-typography-text type="secondary" :style="taskDetailThemeStyles.graphSummaryText">
-            {{ latestTaskEvent ? `最近事件：${latestTaskEventTypeLabel}` : '任务运行后会在这里显示流程摘要' }}
-          </a-typography-text>
-        </div>
-        <a-space size="small" wrap>
-          <a-tag :color="taskStatusColor(task?.status)">{{ taskStatusLabel(task?.status) }}</a-tag>
-          <a-tag v-if="agentRuns.length" color="geekblue">活跃 Agent {{ activeAgentCount }}/{{ agentRuns.length }}</a-tag>
-          <a-tag v-if="latestTaskEvent?.ts" color="default">{{ formatTime(latestTaskEvent.ts) }}</a-tag>
-        </a-space>
-      </a-flex>
-    </a-card>
-
     <a-row :gutter="[16, 16]" align="top">
       <a-col v-if="!isReplyFocusMode" :xs="24" :xxl="5">
         <a-collapse
@@ -566,14 +545,6 @@
       <a-col v-if="showSidebar" :xs="24" :xxl="sidebarColSpan">
         <a-space direction="vertical" :style="taskDetailThemeStyles.sidebar" :size="16">
           <a-collapse size="small" :default-active-key="taskDetailDefaultActivePanels" :style="taskDetailThemeStyles.collapse">
-            <a-collapse-panel v-if="showGraphPanel && !useCompactInspector" key="graph" header="任务图">
-              <a-card size="small" :bordered="false" :style="taskDetailThemeStyles.graphCard">
-                <div :style="taskDetailThemeStyles.graphWrap">
-                  <TaskGraph :task-id="taskId || ''" :events="taskEvents" :fallback-status="task?.status" />
-                </div>
-              </a-card>
-            </a-collapse-panel>
-
             <a-collapse-panel v-if="showContextPanel" key="context" header="代码上下文">
               <a-descriptions v-if="task?.repoId" :column="1" bordered size="small">
                 <a-descriptions-item label="仓库">
@@ -851,16 +822,6 @@
         </template>
       </div>
 
-      <div v-else-if="compactInspectorTab === 'graph'">
-        <a-card size="small" :bordered="false" :style="taskDetailThemeStyles.graphCard">
-          <div :style="taskDetailThemeStyles.graphWrap">
-            <TaskGraph :task-id="taskId || ''" :events="taskEvents" :fallback-status="task?.status" />
-          </div>
-        </a-card>
-      </div>
-
-
-
       <div v-else-if="compactInspectorTab === 'project-role-config'">
         <TaskProjectRoleConfigPanel
           v-if="task?.projectId"
@@ -1050,10 +1011,6 @@ const hasCodeChanges = computed(() => {
   return Boolean(task.value?.finalCommitSha || total > 0);
 });
 
-const hasTaskGraphData = computed(
-  () => task.value?.status === "running" || taskEvents.value.length > 0,
-);
-
 const hasGovernanceData = computed(() => {
   if (!governance.value) {
     return false;
@@ -1089,7 +1046,6 @@ const hasRoleWorkflowData = computed(() =>
 );
 const hasProjectRoleConfigData = computed(() => projectRoleConfigRows.value.length > 0);
 
-const showGraphPanel = computed(() => !isWorkbenchEmbedded.value || hasTaskGraphData.value);
 const showContextPanel = computed(() => !isWorkbenchEmbedded.value || hasCodeContext.value);
 const showChangesPanel = computed(() => !isWorkbenchEmbedded.value || hasCodeChanges.value);
 const showGovernancePanel = computed(() => !isWorkbenchEmbedded.value || hasGovernanceData.value);
@@ -1154,7 +1110,6 @@ const embeddedSidebarPanelCount = computed(
         ? [
             showOrchestrationPanel.value,
             showPipelinePanel.value,
-            showGraphPanel.value,
             showEventsPanel.value,
           ]
         : []),
@@ -1165,9 +1120,6 @@ const showSidebar = computed(
   () => !isWorkbenchEmbedded.value || embeddedSidebarPanelCount.value > 0,
 );
 const sidebarColSpan = computed(() => (isWorkbenchEmbedded.value ? 6 : 8));
-const showEmbeddedGraphSummary = computed(
-  () => isWorkbenchEmbedded.value && hasTaskGraphData.value && !useCompactInspector.value,
-);
 const pageStyle = computed(() => ({
   ...taskDetailThemeStyles.page,
   ...(isReplyFocusMode.value
@@ -1366,7 +1318,7 @@ const modelsData = ref<Array<Record<string, unknown>> | null>(null);
 const updatingSelectedModel = ref(false);
 const compactInspectorVisible = ref(false);
 const compactInspectorTab = ref<
-  "orchestration" | "pipeline" | "graph" | "events" | "hooks" | "project-role-config" | "role-workflow"
+  "orchestration" | "pipeline" | "events" | "hooks" | "project-role-config" | "role-workflow"
 >("orchestration");
 const pendingAssistantState = ref<PendingAssistantState | null>(null);
 const terminatedAwaitingSessionId = ref<string | null>(null);
@@ -4410,7 +4362,7 @@ function pipelineStepStatus(status: RuntimePipelineStage["status"]) {
 
 function pipelineStageDescription(stage: RuntimePipelineStage) {
   const parts = [
-    stage.type === "graph-node" ? "图节点" : stage.type,
+    stage.type,
     stage.agent ? formatAgentLabel(stage.agent) : null,
     stage.model || null,
     formatDurationMs(stage.durationMs),
@@ -4436,7 +4388,6 @@ const compactInspectorTabs = computed(() => {
     key:
       | "orchestration"
       | "pipeline"
-      | "graph"
       | "events"
       | "hooks"
       | "project-role-config"
@@ -4456,12 +4407,6 @@ const compactInspectorTabs = computed(() => {
       count: pipelineStages.value.length || undefined,
     });
   }
-
-  if (useCompactInspector.value || showGraphPanel.value) {
-    tabs.push({ key: "graph", label: "任务图" });
-  }
-
-
 
   if (showHooksPanel.value) {
     tabs.push({
@@ -4486,7 +4431,6 @@ function openCompactInspector(
   preferred?:
     | "orchestration"
     | "pipeline"
-    | "graph"
     | "events"
     | "hooks"
     | "project-role-config"

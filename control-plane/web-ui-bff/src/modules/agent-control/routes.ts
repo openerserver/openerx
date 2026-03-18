@@ -558,7 +558,7 @@ agentControlRoutes.get("/:agentRunId/summary", async (c) => {
 
   if (!result.ok) {
     if (result.status === 404 && runtimeRun) {
-      const fallback = await buildRuntimeOnlySummary(c, { agentRunId, ...runtimeRun });
+      const fallback = await buildRuntimeOnlySummary(c, runtimeRun);
       const tokenUsed = await loadSessionTokenUsage(fallback.sessionId);
       return c.json({ ...fallback, tokenUsed: tokenUsed || fallback.tokenUsed }, 200);
     }
@@ -567,7 +567,7 @@ agentControlRoutes.get("/:agentRunId/summary", async (c) => {
 
   const summary = mergeSummaryWithRuntime(
     result.data,
-    runtimeRun ? { agentRunId, ...runtimeRun } : undefined,
+    runtimeRun,
   );
   const tokenUsed = await maybeBackfillTokenUsage({
     agentRunId: summary.agentRunId,

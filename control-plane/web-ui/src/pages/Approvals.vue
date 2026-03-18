@@ -136,9 +136,6 @@
           <a-descriptions-item v-if="detailTicket.agentRunId" label="Agent Run">
             <a-typography-text code>{{ detailTicket.agentRunId.slice(0, 12) }}</a-typography-text>
           </a-descriptions-item>
-          <a-descriptions-item v-if="detailTicket.nodeId" label="DAG 节点">
-            <a-typography-text code>{{ detailTicket.nodeId.slice(0, 12) }}</a-typography-text>
-          </a-descriptions-item>
           <a-descriptions-item label="创建时间">{{ formatTime(detailTicket.createdAt) }}</a-descriptions-item>
           <a-descriptions-item label="过期时间">{{ formatTime(detailTicket.expiresAt) }}</a-descriptions-item>
           <a-descriptions-item v-if="detailTicket.approver" label="审批人">{{ detailTicket.approver }}</a-descriptions-item>
@@ -222,7 +219,6 @@ interface ApprovalTicket {
   id: string;
   taskId: string;
   agentRunId?: string;
-  nodeId?: string;
   actionType: string;
   riskLevel: string;
   status: string;

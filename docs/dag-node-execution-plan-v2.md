@@ -29,7 +29,7 @@
 管理员可以为 Workflow 的每个阶段配置以下 Hook：
 
 | Hook 触发点 | 说明 | 典型用途 |
-|------------|------|----------|
+| ---------- | ---- | -------- |
 | `pre-execution` | 阶段执行前触发 | 检查前置条件、注入额外上下文、改写 Prompt |
 | `post-execution` | 阶段执行后触发 | 自动审查产出、触发通知、记录审计 |
 | `on-failure` | 阶段执行失败时触发 | 自动重试策略、降级处理、告警 |
@@ -154,7 +154,7 @@ Agent 执行完成
 ## 3. 不做什么
 
 | 不做的事 | 原因 |
-|----------|------|
+| -------- | ---- |
 | Stage 内部 Node Graph | 用户的并行/顺序编排已覆盖细粒度执行需求 |
 | 三层权限模型 | 现有项目角色（admin / developer / viewer）已覆盖 |
 | 节点级重试和失败恢复 | 阶段级重试（已有 `retry-stage`）+ Hook `on-failure` 够用 |
@@ -172,14 +172,15 @@ Agent 执行完成
 
 ### 清理 DAG 相关
 
-1. `taskNodes` / `taskEdges` 表保留但不再写入新数据
-2. `task-graph-plugin` 从 runtime 移除
-3. BFF Prompt 注入逻辑中删除 `task_graph_*` 工具提示
+1. 删除 `taskNodes` / `taskEdges` 的 schema 定义与迁移元数据引用，不再保留为 active schema
+2. 删除 `agentRuns.nodeId`、`approvalTickets.nodeId` 这类 DAG 残留字段
+3. `task-graph-plugin` 从 runtime 移除
+4. BFF Prompt 注入逻辑中删除 `task_graph_*` 工具提示
 
 ## 5. 接口改动
 
 | 接口 | 改动 | 新增/改动 |
-|------|------|----------|
+| ---- | ---- | -------- |
 | `POST /api/tasks/:taskId/execute` | 注入阶段 Prompt 上下文；支持 `mode` 参数（`single` / `parallel` / `sequential-chain`）；执行前触发阶段 `pre-execution` Hook | 改动 |
 | `POST /api/tasks/:taskId/continue` | 注入阶段 Prompt 上下文 | 改动 |
 | `POST /workflow/advance` | 执行完成后自动调用；推进前触发阶段 `post-execution` Hook | 改动 |
@@ -295,11 +296,29 @@ Agent 执行结束时（session complete 回调）：
 2. BFF 停止向新任务写入 `taskNodes` / `taskEdges`
 3. 前端不再展示 DAG 相关入口或摘要
 4. 新任务工作台只显示 Workflow 阶段信息
+5. Service schema 与 migration metadata 中移除 `taskNodes` / `taskEdges` 与相关外键字段
 
 完成标志：
 
 1. 新任务执行链路不再依赖 runtime DAG
-2. 旧任务数据仍可读，但不再增量写入
+2. 运行时与控制面主路径不再引用 DAG schema
+
+## 17. 当前清理进展
+
+### 已完成的清理范围
+
+1. Runtime 已移除 `task-graph-plugin.ts`，不再加载 DAG 插件
+2. BFF 已移除 DAG 自动同步、图相关 Prompt 提示、项目/任务 graph 入口
+3. Web UI 已移除 Task Graph / Project Task Graph 页面、导航与摘要展示
+4. Service 已移除任务 graph API、历史 graph 修复脚本、基于 `taskNodes` 的 token 回填逻辑
+5. 数据 schema 已移除 `taskNodes` / `taskEdges` 定义，以及 `agentRuns.nodeId`、`approvalTickets.nodeId` 残留字段
+6. migration metadata 已同步移除 `task_nodes` / `task_edges` 和相关外键校验规则
+
+### 数据库层剩余项
+
+1. 物理数据库中的旧表/旧列仍需要通过独立 migration 或人工清理落库删除
+2. 历史数据若仍包含 `task_nodes` / `task_edges`，本方案不做迁移，只做下线与清表
+3. 若生产环境仍有依赖旧审批详情里 `nodeId` 的外部消费者，需要在执行 DB migration 前完成兼容确认
 
 ### Phase 2：打通阶段上下文与自动推进
 
