@@ -11,6 +11,8 @@ import {
 } from "../../lib/opencode-config";
 import {
   DEFAULT_EXECUTION_AGENT,
+  type ChainStepInput,
+  type ExecutionMode,
   type ExecutionPlan,
   type HookExecutionRecord,
   type OrchestrationStrategy,
@@ -48,11 +50,17 @@ import {
   listSessions,
 } from "../agent-control/opencode-adapter";
 import { createAgentRunRecord, recordAgentAudit } from "../agent-control/run-persistence";
-import { executeLifecycleHooks } from "../hooks/lifecycle-hooks";
+import { executeLifecycleHooks, mergeStageAndStrategyHooks, parseStageHooks } from "../hooks/lifecycle-hooks";
 import { buildPipelineStageUpdatedEvents } from "../realtime/pipeline-events";
 import { sseAggregator } from "../realtime/sse-aggregator";
 import { wsBroadcaster } from "../realtime/ws-broadcaster";
 import { reconcileRunningTasksOnStartup } from "./reconcile";
+import {
+  buildStageArtifactSummary,
+  buildWorkflowExecutionPromptSnapshot,
+  fetchCurrentStageHooks,
+  persistWorkflowStageExecutionOutcome,
+} from "./workflow-stage-execution";
 import { ensureTaskWorkflowStarted } from "./workflow-sync";
 import { buildTaskWorkflowViewModel } from "./workflow-view";
 
@@ -159,7 +167,7 @@ interface ExecutionContext extends PreparedExecutionContext {
 }
 
 interface WorkflowPromptContextRecord {
-  [key: string]: string | null | undefined;
+  [key: string]: string | string[] | null | undefined;
   taskId: string;
   projectId: string;
   taskTitle: string;
@@ -171,7 +179,9 @@ interface WorkflowPromptContextRecord {
   currentStageKey?: string;
   currentStageLabel?: string;
   currentStageStatus?: string;
-  completedStageSummaries?: string;
+  currentStageExitCriteria?: string[];
+  completedStageOutputs?: string[];
+  pendingStageLabels?: string[];
   openChangeRequestSummary?: string;
   activeRoleSummary?: string;
   selectedAgent?: string;
@@ -184,6 +194,34 @@ interface ParallelCandidateAttempt {
   index: number;
   sessionResult?: SessionStartResult;
 }
+
+/** Optional overrides the user can pass in POST /:taskId/execute body. */
+interface ExecuteOverrides {
+  mode?: ExecutionMode;
+  candidates?: Array<{ model: string; label?: string }>;
+  steps?: ChainStepInput[];
+}
+
+const executeBodySchema = z
+  .object({
+    mode: z.enum(["single", "parallel", "sequential-chain"]).optional(),
+    candidates: z
+      .array(z.object({ model: z.string().min(1), label: z.string().optional() }))
+      .max(5)
+      .optional(),
+    steps: z
+      .array(
+        z.object({
+          id: z.string().min(1),
+          title: z.string().min(1),
+          instruction: z.string().min(1),
+          model: z.string().optional(),
+        }),
+      )
+      .max(20)
+      .optional(),
+  })
+  .optional();
 
 interface ContinueTaskInput {
   taskId: string;
@@ -380,6 +418,13 @@ async function continueTaskExecution(input: ContinueTaskInput) {
   if (!guardPersistResult.ok) {
     return { status: guardPersistResult.status, body: guardPersistResult.data };
   }
+
+  const workflowTemplateId = await resolveTaskWorkflowTemplateId(task, input.authorization);
+  await ensureTaskWorkflowStarted({
+    authorization: input.authorization,
+    taskId: input.taskId,
+    templateId: workflowTemplateId,
+  });
 
   const agentRunId = ensureAgentRunForSession(sessionId, input.taskId, task.projectId, resolvedModel);
   const workflowContext = await buildWorkflowPromptContext(task, input.authorization, {
@@ -780,16 +825,16 @@ async function resolveExecutionIdentity(task: ExecutableTask, authorization: str
   return credResult ?? ({} satisfies IdentitySnapshot);
 }
 
-function selectExecutionAgent(prompt: string) {
+function selectExecutionAgent(prompt: string, overrides?: ExecuteOverrides) {
   const strategy = readOrchestrationStrategy();
   const classification = classifyIntent(prompt);
   const configuredAgents = strategy.categoryAgentMap[classification.category] || [];
   const suggestedAgents =
     configuredAgents.length > 0 ? configuredAgents : classification.suggestedAgents;
 
-  // Resolve template and build execution plan
+  // Resolve template and build execution plan (with optional user overrides)
   const template = resolveWorkflowTemplate(strategy, classification.category);
-  const plan = buildExecutionPlan(template, strategy, classification.category);
+  const plan = buildExecutionPlan(template, strategy, classification.category, overrides);
 
   // For single mode, the execution agent is the sole candidate
   const executionAgent = plan.candidates[0]?.agent || suggestedAgents[0] || DEFAULT_EXECUTION_AGENT;
@@ -919,26 +964,33 @@ async function buildWorkflowPromptContext(
   let currentStageKey: string | undefined;
   let currentStageLabel: string | undefined;
   let currentStageStatus: string | undefined;
-  let completedStageSummaries: string | undefined;
+  let currentStageExitCriteria: string[] = [];
+  let completedStageOutputs: string[] = [];
+  let pendingStageLabels: string[] = [];
   let openChangeRequestSummary: string | undefined;
   let activeRoleSummary: string | undefined;
 
   try {
+    const executionSnapshot = await buildWorkflowExecutionPromptSnapshot(task.id, authorization);
+    workflowStatus = executionSnapshot?.workflowStatus;
+    currentStageKey = executionSnapshot?.currentStageKey;
+    currentStageLabel = executionSnapshot?.currentStageLabel;
+    currentStageStatus = executionSnapshot?.currentStageStatus;
+    currentStageExitCriteria = executionSnapshot?.currentStageExitCriteria || [];
+    completedStageOutputs = executionSnapshot?.completedStageOutputs || [];
+    pendingStageLabels = executionSnapshot?.pendingStageLabels || [];
+
     const workflowView = await buildTaskWorkflowViewModel(task.id, authorization, {
       projectId: task.projectId,
       taskStatus: task.status,
     });
-    workflowStatus = workflowView.workflow.status;
-    currentStageKey = workflowView.workflow.currentStage;
+    workflowStatus ||= workflowView.workflow.status;
+    currentStageKey ||= workflowView.workflow.currentStage;
     const currentStage = workflowView.workflow.stages.find(
       (stage) => stage.stageKey === workflowView.workflow.currentStage,
     );
-    currentStageLabel = currentStage?.stageLabel;
-    currentStageStatus = currentStage?.status;
-    const completedStages = workflowView.workflow.stages
-      .filter((stage) => stage.status === "completed")
-      .map((stage) => `${stage.stageLabel}(${stage.stageKey})`);
-    completedStageSummaries = completedStages.length > 0 ? completedStages.join(" -> ") : undefined;
+    currentStageLabel ||= currentStage?.stageLabel;
+    currentStageStatus ||= currentStage?.status;
     const openRequests = workflowView.developerChangeRequests.filter(
       (item) => item.status !== "resolved",
     );
@@ -972,7 +1024,9 @@ async function buildWorkflowPromptContext(
     currentStageKey,
     currentStageLabel,
     currentStageStatus,
-    completedStageSummaries,
+    currentStageExitCriteria,
+    completedStageOutputs,
+    pendingStageLabels,
     openChangeRequestSummary,
     activeRoleSummary,
     ...extras,
@@ -984,26 +1038,42 @@ function prependWorkflowContextToPrompt(
   context: WorkflowPromptContextRecord,
 ): string {
   const lines = [
-    "Workflow execution context:",
-    `- Task: ${context.taskTitle}`,
-    context.workflowStatus ? `- Workflow status: ${context.workflowStatus}` : undefined,
+    "## 当前执行上下文",
+    `任务：${context.taskTitle}`,
+    context.workflowStatus ? `流程状态：${context.workflowStatus}` : undefined,
     context.currentStageLabel || context.currentStageKey
-      ? `- Current stage: ${context.currentStageLabel || context.currentStageKey}${context.currentStageStatus ? ` (${context.currentStageStatus})` : ""}`
+      ? `当前阶段：${context.currentStageLabel || context.currentStageKey}${context.currentStageStatus ? `（${context.currentStageStatus}）` : ""}`
       : undefined,
-    context.activeRoleSummary ? `- Active roles in stage: ${context.activeRoleSummary}` : undefined,
-    context.completedStageSummaries
-      ? `- Completed stages: ${context.completedStageSummaries}`
+    context.currentStageExitCriteria && context.currentStageExitCriteria.length > 0
+      ? `阶段目标：${context.currentStageExitCriteria.join("；")}`
       : undefined,
-    context.openChangeRequestSummary
-      ? `- Open change requests: ${context.openChangeRequestSummary}`
-      : undefined,
-    context.selectedAgent ? `- Execution agent: ${context.selectedAgent}` : undefined,
-    context.selectedModel ? `- Execution model: ${context.selectedModel}` : undefined,
+    context.activeRoleSummary ? `当前阶段角色：${context.activeRoleSummary}` : undefined,
+    context.selectedAgent ? `执行 Agent：${context.selectedAgent}` : undefined,
+    context.selectedModel ? `执行模型：${context.selectedModel}` : undefined,
+    context.openChangeRequestSummary ? `待处理修正项：${context.openChangeRequestSummary}` : undefined,
+    "已完成阶段及产出：",
+    ...(context.completedStageOutputs && context.completedStageOutputs.length > 0
+      ? context.completedStageOutputs.map((item) => `- ${item}`)
+      : ["- 暂无已完成阶段产出"]),
+    `待完成阶段：${context.pendingStageLabels && context.pendingStageLabels.length > 0 ? context.pendingStageLabels.join(" → ") : "无（当前可能已是最后阶段）"}`,
     "",
-    "Follow the current workflow stage as the primary execution boundary. If the request spans multiple steps, keep the output aligned to the current stage and only prepare the next stage when the current stage is complete.",
+    "请只完成当前阶段的目标。",
+    "完成后请输出本阶段产出摘要。",
+    "如果你认为当前阶段已经完成，请在输出末尾单独追加 [STAGE_COMPLETE]。",
   ].filter(Boolean);
 
   return `${lines.join("\n")}\n\n${prompt}`;
+}
+
+function flattenWorkflowContextForHooks(
+  context: WorkflowPromptContextRecord,
+): Record<string, string | null | undefined> {
+  return {
+    ...context,
+    currentStageExitCriteria: context.currentStageExitCriteria?.join("；"),
+    completedStageOutputs: context.completedStageOutputs?.join("\n"),
+    pendingStageLabels: context.pendingStageLabels?.join(" → "),
+  };
 }
 
 async function runPreExecutionHooks(
@@ -1021,8 +1091,15 @@ async function runPreExecutionHooks(
     taskResult: "",
     changesSummary: "",
   });
+
+  // Merge stage-level hooks with strategy-level hooks (stage takes priority)
+  const rawStageHooks = await fetchCurrentStageHooks(task.id, authorization);
+  const stageHooks = parseStageHooks(rawStageHooks);
+  const mergedHooks = mergeStageAndStrategyHooks(stageHooks, strategy.hooks);
+  const mergedStrategy: typeof strategy = { ...strategy, hooks: mergedHooks };
+
   const hookResult = await executeLifecycleHooks({
-    strategy,
+    strategy: mergedStrategy,
     trigger: "pre-execution",
     taskId: task.id,
     projectId: task.projectId,
@@ -1030,7 +1107,7 @@ async function runPreExecutionHooks(
     taskPrompt: task.prompt,
     titlePrefix: "Preflight",
     repoContext,
-    context: workflowContext,
+      context: flattenWorkflowContextForHooks(workflowContext),
     onHookExecuted: async (execution) => {
       if (
         !execution.sessionId ||
@@ -1097,11 +1174,59 @@ async function runPreExecutionHooks(
     };
   }
 
+  // Check for deny decision — any hook that returned deny blocks the execution
+  const denyExecution = hookResult.hookExecutions.find(
+    (exec) => exec.decision?.action === "deny",
+  );
+  if (denyExecution) {
+    void recordAgentAudit({
+      projectId: task.projectId,
+      taskId: task.id,
+      eventType: "lifecycle_hook",
+      action: "pre_execution_denied",
+      detail: {
+        hookId: denyExecution.hookId,
+        reason: denyExecution.decision?.reason,
+        agent: denyExecution.agent,
+      },
+      riskLevel: "high",
+    });
+    return {
+      prompt: prependWorkflowContextToPrompt(task.prompt, workflowContext),
+      hookExecutions: hookResult.hookExecutions,
+      breakerReason,
+      denied: true,
+      denyReason: denyExecution.decision?.reason || "Blocked by pre-execution hook",
+    };
+  }
+
+  // Check for switch-model decision — the last one wins
+  const switchModelExecution = [...hookResult.hookExecutions]
+    .reverse()
+    .find((exec) => exec.decision?.action === "switch-model" && exec.decision.targetModel);
+  const switchedModel = switchModelExecution?.decision?.targetModel;
+
+  if (switchedModel) {
+    void recordAgentAudit({
+      projectId: task.projectId,
+      taskId: task.id,
+      eventType: "lifecycle_hook",
+      action: "pre_execution_switch_model",
+      detail: {
+        hookId: switchModelExecution?.hookId,
+        targetModel: switchedModel,
+        reason: switchModelExecution?.decision?.reason,
+      },
+      riskLevel: "medium",
+    });
+  }
+
   if (hookResult.rewrittenPrompt) {
     return {
       prompt: prependWorkflowContextToPrompt(hookResult.rewrittenPrompt, workflowContext),
       hookExecutions: hookResult.hookExecutions,
       breakerReason,
+      switchedModel,
     };
   }
 
@@ -1119,6 +1244,7 @@ async function runPreExecutionHooks(
     prompt: promptWithReview,
     hookExecutions: hookResult.hookExecutions,
     breakerReason,
+    switchedModel,
   };
 }
 
@@ -1327,9 +1453,13 @@ function extractEscalationRequests(task: Pick<ExecutableTask, "strategy">) {
 async function prepareExecutionContext(
   task: ExecutableTask,
   authorization: string,
+  overrides?: ExecuteOverrides,
 ): Promise<PreparedExecutionContext> {
   const identitySnapshot = await resolveExecutionIdentity(task, authorization);
-  const { classification, executionAgent, strategy, plan } = selectExecutionAgent(task.prompt);
+  const { classification, executionAgent, strategy, plan } = selectExecutionAgent(
+    task.prompt,
+    overrides,
+  );
   const resolvedModel = await resolveExecutionModel(
     task,
     authorization,
@@ -1373,10 +1503,32 @@ async function finalizePreExecutionContext(
     };
   }
 
+  if (preExecutionHooks.denied) {
+    return {
+      ok: false,
+      reason: preExecutionHooks.denyReason || "Blocked by pre-execution hook",
+    };
+  }
+
+  // Apply switch-model decision if present
+  let resolvedModel = context.resolvedModel;
+  let effectiveModel = context.effectiveModel;
+  if (preExecutionHooks.switchedModel) {
+    const parts = preExecutionHooks.switchedModel.split(":");
+    const [providerId, ...modelParts] = parts;
+    const modelId = modelParts.join(":");
+    if (providerId && modelId) {
+      resolvedModel = { providerId, modelId };
+      effectiveModel = preExecutionHooks.switchedModel;
+    }
+  }
+
   return {
     ok: true,
     context: {
       ...context,
+      resolvedModel,
+      effectiveModel,
       prompt: preExecutionHooks.prompt,
       hookExecutions: [...preExecutionHooks.hookExecutions],
     },
@@ -1385,6 +1537,10 @@ async function finalizePreExecutionContext(
 
 function isParallelExecution(plan: ExecutionPlan) {
   return plan.mode === "parallel" && plan.candidates.length > 1;
+}
+
+function isSequentialChainExecution(plan: ExecutionPlan) {
+  return plan.mode === "sequential-chain" && plan.steps.some((s) => s.type === "chain-step");
 }
 
 async function createParallelCandidateAttempts(
@@ -1699,6 +1855,161 @@ async function startSingleExecution(context: ExecutionContext): Promise<StartExe
       agentRunId: execResult.agentRunId,
       status: "running",
       executionMode: "single",
+    },
+  };
+}
+
+// ── Sequential-chain execution engine ───────────────────────────────
+
+function buildChainStepPrompt(
+  basePrompt: string,
+  step: ExecutionPlan["steps"][0],
+  stepIndex: number,
+  allSteps: ExecutionPlan["steps"],
+): string {
+  const chainSteps = allSteps.filter((s) => s.type === "chain-step");
+  const totalSteps = chainSteps.length;
+
+  const parts: string[] = [basePrompt];
+
+  // Inject completed step results as context
+  const completedSteps = chainSteps.filter((s) => s.status === "completed" && s.result);
+  if (completedSteps.length > 0) {
+    parts.push("\n\n## 已完成步骤产出\n");
+    for (const cs of completedSteps) {
+      parts.push(`### ${cs.title}\n${cs.result}\n`);
+    }
+  }
+
+  parts.push(`\n## 当前步骤 (${stepIndex + 1}/${totalSteps}): ${step.title}\n`);
+  parts.push(step.instruction || "");
+  parts.push("\n请只完成当前步骤的目标。完成后输出本步骤产出摘要。");
+
+  return parts.join("\n");
+}
+
+async function startSequentialChainExecution(
+  context: ExecutionContext,
+): Promise<StartExecutionResponse> {
+  const plan = context.plan;
+  const stepIndex = plan.currentChainStepIndex ?? 0;
+  const chainSteps = plan.steps.filter((s) => s.type === "chain-step");
+  const currentStep = chainSteps[stepIndex];
+  if (!currentStep) {
+    return {
+      status: 502,
+      body: { error: "No chain step available to execute" },
+    };
+  }
+
+  // Build the prompt for the first step
+  const stepPrompt = buildChainStepPrompt(context.prompt, currentStep, stepIndex, plan.steps);
+
+  // Resolve model override if the step specifies one
+  let resolvedModel = context.resolvedModel;
+  if (currentStep.model) {
+    resolvedModel = parseModelString(currentStep.model);
+  }
+
+  currentStep.status = "running";
+
+  const execResult = await createSession(
+    context.task.id,
+    context.task.projectId,
+    stepPrompt,
+    {
+      agent: context.executionAgent,
+      repoContext: context.repoContext,
+      model: resolvedModel,
+    },
+  );
+
+  if (execResult.agentRunId) {
+    await createAgentRunRecord({
+      taskId: context.task.id,
+      agentRunId: execResult.agentRunId,
+      sessionId: execResult.sessionId,
+      agentType: context.executionAgent,
+      status: execResult.ok ? "running" : "failed",
+      model: resolvedModel,
+      candidateIndex: stepIndex,
+      error: execResult.ok ? undefined : execResult.error,
+      startedAt: new Date().toISOString(),
+      finishedAt: execResult.ok ? undefined : new Date().toISOString(),
+    });
+  }
+
+  if (!execResult.ok) {
+    currentStep.status = "failed";
+    await markTaskFailed(context.task.id, context.authorization);
+    return {
+      status: 502,
+      body: { error: execResult.error || "Failed to start chain step" },
+    };
+  }
+
+  plan.candidates[0] = {
+    ...plan.candidates[0],
+    agent: plan.candidates[0]?.agent || "executor",
+    sessionId: execResult.sessionId,
+    agentRunId: execResult.agentRunId,
+    status: "running",
+    startedAt: new Date().toISOString(),
+  };
+
+  await persistExecutionStart(context, execResult);
+
+  // Register for sequential chain tracking in SSE aggregator
+  sseAggregator.registerSequentialChainTask(
+    context.task.id,
+    execResult.sessionId!,
+    plan,
+    context.authorization,
+  );
+
+  wsBroadcaster.broadcast({
+    id: crypto.randomUUID(),
+    type: "agent.started",
+    ts: new Date().toISOString(),
+    taskId: context.task.id,
+    projectId: context.task.projectId,
+    agentRunId: execResult.agentRunId,
+    sessionId: execResult.sessionId,
+    data: {
+      taskId: context.task.id,
+      title: context.task.title,
+      agentRunId: execResult.agentRunId,
+      agent: context.executionAgent,
+      executionMode: "sequential-chain",
+      chainStepIndex: stepIndex,
+      chainStepTitle: currentStep.title,
+      totalSteps: chainSteps.length,
+    },
+  });
+
+  if (execResult.sessionId) {
+    await cpFetch(`/api/tasks/${encodeURIComponent(context.task.id)}/task-sessions`, {
+      method: "POST",
+      body: {
+        runtimeSessionId: execResult.sessionId,
+        branchName: `${context.task.title} — ${currentStep.title}`,
+        sourceType: "root",
+        isActive: true,
+      },
+      authorization: context.authorization,
+    });
+  }
+
+  return {
+    status: 200,
+    body: {
+      taskId: context.task.id,
+      sessionId: execResult.sessionId,
+      agentRunId: execResult.agentRunId,
+      status: "running",
+      executionMode: "sequential-chain",
+      chainStepIndex: stepIndex,
+      totalSteps: chainSteps.length,
     },
   };
 }
@@ -2219,6 +2530,21 @@ taskRoutes.get("/:taskId/execute/preflight", async (c) => {
 taskRoutes.post("/:taskId/execute", async (c) => {
   const taskId = c.req.param("taskId");
   const authorization = authHeader(c);
+
+  // Parse optional execution overrides from body
+  let overrides: ExecuteOverrides | undefined;
+  try {
+    const rawBody = await c.req.json().catch(() => undefined);
+    if (rawBody) {
+      const parsed = executeBodySchema.safeParse(rawBody);
+      if (parsed.success && parsed.data) {
+        overrides = parsed.data;
+      }
+    }
+  } catch {
+    // No body or invalid body — proceed with defaults
+  }
+
   const taskResult = await fetchExecutableTask(taskId, authorization);
   if (!taskResult.ok) {
     return c.json({ error: "Task not found" }, 404);
@@ -2230,7 +2556,7 @@ taskRoutes.post("/:taskId/execute", async (c) => {
     return c.json({ error: validationError }, 400);
   }
 
-  const preparedContext = await prepareExecutionContext(task, authorization);
+  const preparedContext = await prepareExecutionContext(task, authorization, overrides);
   const modelValidationError = await validateResolvedModel(preparedContext.resolvedModel);
   if (modelValidationError) {
     return c.json(modelValidationError.body, modelValidationError.status);
@@ -2259,6 +2585,12 @@ taskRoutes.post("/:taskId/execute", async (c) => {
     return c.json({ error: "Failed to persist paid execution guard configuration" }, 502);
   }
 
+  await ensureTaskWorkflowStarted({
+    authorization,
+    taskId,
+    templateId: preparedContext.workflowTemplateId,
+  });
+
   const executionContextResult = await finalizePreExecutionContext(guardPreparation.context);
   if (!executionContextResult.ok) {
     return c.json(
@@ -2273,11 +2605,213 @@ taskRoutes.post("/:taskId/execute", async (c) => {
   }
 
   const executionContext = executionContextResult.context;
-  const response = isParallelExecution(executionContext.plan)
-    ? await startParallelExecution(executionContext)
-    : await startSingleExecution(executionContext);
+  const response = isSequentialChainExecution(executionContext.plan)
+    ? await startSequentialChainExecution(executionContext)
+    : isParallelExecution(executionContext.plan)
+      ? await startParallelExecution(executionContext)
+      : await startSingleExecution(executionContext);
 
   return c.json(response.body, response.status);
+});
+
+// POST /api/tasks/:taskId/candidates/:index/adopt — Manually adopt a parallel candidate
+taskRoutes.post("/:taskId/candidates/:index/adopt", async (c) => {
+  const taskId = c.req.param("taskId");
+  const candidateIndex = Number.parseInt(c.req.param("index"), 10);
+  const authorization = authHeader(c);
+
+  if (Number.isNaN(candidateIndex) || candidateIndex < 0) {
+    return c.json({ error: "Invalid candidate index" }, 400);
+  }
+
+  // Fetch the task
+  const taskResult = await cpFetch<ExecutableTask & { executionPlan?: string; result?: string }>(
+    `/api/tasks/${encodeURIComponent(taskId)}`,
+    { authorization },
+  );
+  if (!taskResult.ok) {
+    return c.json({ error: "Task not found" }, 404);
+  }
+
+  const task = taskResult.data;
+  if (!task.executionPlan) {
+    return c.json({ error: "Task has no execution plan" }, 400);
+  }
+
+  let plan: ExecutionPlan;
+  try {
+    plan = JSON.parse(task.executionPlan) as ExecutionPlan;
+  } catch {
+    return c.json({ error: "Invalid execution plan" }, 400);
+  }
+
+  if (plan.mode !== "parallel") {
+    return c.json({ error: "Candidate adoption is only available for parallel execution" }, 400);
+  }
+
+  const candidate = plan.candidates[candidateIndex];
+  if (!candidate) {
+    return c.json({ error: `Candidate ${candidateIndex} not found` }, 404);
+  }
+
+  if (candidate.status !== "completed") {
+    return c.json({ error: `Candidate ${candidateIndex} is not completed (status: ${candidate.status})` }, 400);
+  }
+
+  // Set the winner
+  plan.winnerCandidateIndex = candidateIndex;
+  const winnerResult = candidate.result;
+
+  await persistWorkflowStageExecutionOutcome({
+    taskId,
+    authorization,
+    resultText: winnerResult,
+    source: "manual-adopt",
+  }).catch((error) => {
+    console.error(`Failed to persist workflow stage outcome for adopted candidate:`, error);
+  });
+
+  // Update the task
+  await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
+    method: "PATCH",
+    authorization,
+    body: {
+      status: "completed",
+      executionPlan: JSON.stringify(plan),
+      ...(winnerResult ? { result: winnerResult } : {}),
+    },
+  });
+
+  await recordAgentAudit({
+    projectId: task.projectId,
+    taskId,
+    eventType: "task",
+    action: "candidate_adopted",
+    detail: {
+      candidateIndex,
+      executionMode: "parallel",
+      hasResult: Boolean(winnerResult),
+    },
+    riskLevel: "low",
+  });
+
+  wsBroadcaster.broadcast({
+    id: crypto.randomUUID(),
+    type: "task.completed",
+    ts: new Date().toISOString(),
+    taskId,
+    projectId: task.projectId,
+    data: {
+      status: "completed",
+      executionMode: "parallel",
+      winnerCandidateIndex: candidateIndex,
+      adoptedManually: true,
+      ...(winnerResult ? { result: winnerResult } : {}),
+    },
+  });
+
+  return c.json({ ok: true, winnerCandidateIndex: candidateIndex });
+});
+
+taskRoutes.post("/:taskId/complete", async (c) => {
+  const taskId = c.req.param("taskId");
+  const authorization = authHeader(c);
+
+  const taskResult = await cpFetch<ExecutableTask & { result?: string }>(
+    `/api/tasks/${encodeURIComponent(taskId)}`,
+    { authorization },
+  );
+  if (!taskResult.ok) {
+    return c.json({ error: "Task not found" }, 404);
+  }
+
+  const task = taskResult.data;
+  const workflowResult = await cpFetch<{
+    data?: {
+      workflowRun?: { currentStage?: string | null } | null;
+      stages?: Array<{ stageKey?: string | null; artifactsSummaryJson?: unknown }>;
+    };
+  }>(`/api/tasks/${encodeURIComponent(taskId)}/workflow`, { authorization });
+
+  await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
+    method: "PATCH",
+    authorization,
+    body: { status: "completed" },
+  });
+
+  const currentStage = workflowResult.ok
+    ? workflowResult.data?.data?.workflowRun?.currentStage ?? undefined
+    : undefined;
+  const stageSummary = buildStageArtifactSummary(task.result ?? undefined);
+  const existingSummary = workflowResult.ok
+    ? workflowResult.data?.data?.stages?.find((stage) => stage.stageKey === currentStage)
+        ?.artifactsSummaryJson
+    : undefined;
+
+  if (currentStage) {
+    await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}/workflow/advance`, {
+      method: "POST",
+      authorization,
+      body: {
+        fromStage: currentStage,
+        status: "completed",
+        artifactsSummaryJson: existingSummary ?? stageSummary,
+      },
+    });
+  }
+
+  wsBroadcaster.broadcast({
+    id: crypto.randomUUID(),
+    type: "task.completed",
+    ts: new Date().toISOString(),
+    taskId,
+    projectId: task.projectId,
+    data: {
+      status: "completed",
+      explicitCompletion: true,
+      ...(task.result ? { result: task.result } : {}),
+    },
+  });
+
+  return c.json({ ok: true });
+});
+
+taskRoutes.post("/:taskId/workflow/advance", async (c) => {
+  const taskId = c.req.param("taskId");
+  const authorization = authHeader(c);
+
+  const taskResult = await cpFetch<ExecutableTask & { result?: string }>(
+    `/api/tasks/${encodeURIComponent(taskId)}`,
+    { authorization },
+  );
+  if (!taskResult.ok) {
+    return c.json({ error: "Task not found" }, 404);
+  }
+
+  const task = taskResult.data;
+  await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
+    method: "PATCH",
+    authorization,
+    body: { status: "completed" },
+  });
+
+  const outcome = await persistWorkflowStageExecutionOutcome({
+    taskId,
+    authorization,
+    resultText: task.result ?? "[STAGE_COMPLETE]",
+    source: "assistant-output",
+    forceAdvance: true,
+  });
+
+  if (!outcome.updated) {
+    return c.json({ error: "Workflow stage not found or not updated" }, 404);
+  }
+
+  return c.json({
+    ok: true,
+    nextStageKey: outcome.nextStageKey,
+    spawnedTaskId: outcome.spawnedTaskId,
+  });
 });
 
 // POST /api/tasks/reconcile-running — Manually reconcile persisted running tasks
@@ -2696,7 +3230,7 @@ function extractMessagePreview(message: unknown) {
 
   const preferredBlock =
     blocks.find((block) => !block.startsWith("Execution context:")) ??
-    blocks.find((block) => !block.startsWith("- OpenerX task ID:")) ??
+    blocks.find((block) => !block.startsWith("- Opener-X task ID:")) ??
     blocks[0] ??
     text;
 

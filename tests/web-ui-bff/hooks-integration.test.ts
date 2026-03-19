@@ -460,7 +460,7 @@ describe("lifecycle hooks integration", () => {
                 model: hookModel,
                 timeoutMs: 15000,
                 promptTemplate: [
-                  "Pre-flight reviewer for OpenerX task.",
+                  "Pre-flight reviewer for Opener-X task.",
                   "Task title: {{taskTitle}}",
                   "Task prompt:",
                   "{{taskPrompt}}",
@@ -543,7 +543,7 @@ describe("lifecycle hooks integration", () => {
                 model: hookModel,
                 timeoutMs: 15000,
                 promptTemplate: [
-                  "Post-execution reviewer for OpenerX task.",
+                  "Post-execution reviewer for Opener-X task.",
                   "Task title: {{taskTitle}}",
                   "Execution result:",
                   "{{taskResult}}",
@@ -660,7 +660,7 @@ describe("lifecycle hooks integration", () => {
                 model: hookModel,
                 timeoutMs: 15000,
                 promptTemplate: [
-                  "Post-execution reviewer for OpenerX task.",
+                  "Post-execution reviewer for Opener-X task.",
                   "Task title: {{taskTitle}}",
                   "Execution result:",
                   "{{taskResult}}",
@@ -741,7 +741,7 @@ describe("lifecycle hooks integration", () => {
                 model: executionModel,
                 timeoutMs: 15000,
                 promptTemplate: [
-                  "Pre-execution reviewer for OpenerX task.",
+                  "Pre-execution reviewer for Opener-X task.",
                   "Task title: {{taskTitle}}",
                   "Task prompt:",
                   "{{taskPrompt}}",
@@ -756,7 +756,7 @@ describe("lifecycle hooks integration", () => {
                 model: executionModel,
                 timeoutMs: 15000,
                 promptTemplate: [
-                  "Post-execution reviewer for OpenerX task.",
+                  "Post-execution reviewer for Opener-X task.",
                   "Task title: {{taskTitle}}",
                   "Execution result:",
                   "{{taskResult}}",

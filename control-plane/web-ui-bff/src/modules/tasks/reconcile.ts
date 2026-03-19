@@ -7,6 +7,7 @@ import {
   recoverAgentRun,
 } from "../agent-control/opencode-adapter";
 import { finalizeTaskState } from "./finalize";
+import { persistWorkflowStageExecutionOutcome } from "./workflow-stage-execution";
 
 interface RunningTaskRecord {
   id: string;
@@ -38,6 +39,7 @@ export interface RunningTaskReconcileSummary {
 
 const DEFAULT_RUNNING_TASK_LIMIT = 200;
 const DEFAULT_STALE_RUNNING_OFFLINE_MS = 2 * 60 * 60 * 1000;
+const DEFAULT_RECENT_TERMINAL_SESSION_REPAIR_MS = 30 * 60 * 1000;
 const DEFAULT_PERIODIC_RECONCILE_MS = 5 * 60 * 1000; // 5 minutes
 
 function parseTimestamp(value?: string | null): number {
@@ -52,12 +54,26 @@ function getTaskAgeMs(task: RunningTaskRecord): number {
   return Math.max(0, Date.now() - referenceTs);
 }
 
+function getTaskTerminalAgeMs(task: RunningTaskRecord): number {
+  const referenceTs =
+    parseTimestamp(task.finishedAt) || parseTimestamp(task.createdAt) || Date.now();
+  return Math.max(0, Date.now() - referenceTs);
+}
+
 function getOfflineStaleThresholdMs(): number {
   const configured = Number(process.env.STALE_RUNNING_TASK_OFFLINE_MS || "");
   if (Number.isFinite(configured) && configured > 0) {
     return configured;
   }
   return DEFAULT_STALE_RUNNING_OFFLINE_MS;
+}
+
+function getRecentTerminalSessionRepairThresholdMs(): number {
+  const configured = Number(process.env.RECENT_TERMINAL_SESSION_REPAIR_MS || "");
+  if (Number.isFinite(configured) && configured > 0) {
+    return configured;
+  }
+  return DEFAULT_RECENT_TERMINAL_SESSION_REPAIR_MS;
 }
 
 function sessionIdFromEntry(entry: SessionListEntry): string | undefined {
@@ -78,6 +94,7 @@ async function markTaskFailed(
     sessionId: task.sessionId ?? undefined,
     agentRunId: task.agentRunId ?? undefined,
     result: reason,
+    task,
   });
 }
 
@@ -86,14 +103,31 @@ async function markTaskCompleted(
   task: RunningTaskRecord,
   resultText?: string,
 ): Promise<boolean> {
-  return finalizeTaskState({
+  const updated = await finalizeTaskState({
     authorization,
     taskId: task.id,
     status: "completed",
     sessionId: task.sessionId ?? undefined,
     agentRunId: task.agentRunId ?? undefined,
     result: resultText,
+    task,
+    syncWorkflowTerminalState: false,
   });
+
+  if (!updated) {
+    return false;
+  }
+
+  await persistWorkflowStageExecutionOutcome({
+    taskId: task.id,
+    authorization,
+    resultText,
+    source: "assistant-output",
+  }).catch((error) => {
+    console.error(`Failed to persist workflow stage outcome during reconcile for task ${task.id}:`, error);
+  });
+
+  return true;
 }
 
 function emptyReconcileSummary(runtimeAvailable = false): RunningTaskReconcileSummary {
@@ -251,6 +285,15 @@ function taskLooksHistoricallyInconsistent(task: RunningTaskRecord) {
   );
 }
 
+function taskNeedsRecentTerminalSessionRepair(task: RunningTaskRecord) {
+  const terminalStatus = inferTerminalStatus(task);
+  if (terminalStatus !== "completed" || !task.sessionId) {
+    return false;
+  }
+
+  return getTaskTerminalAgeMs(task) <= getRecentTerminalSessionRepairThresholdMs();
+}
+
 async function loadTaskSessions(authorization: string, taskId: string) {
   const lineageResult = await cpFetch<{ data?: TaskSessionRecord[] }>(
     `/api/tasks/${encodeURIComponent(taskId)}/task-sessions`,
@@ -275,9 +318,45 @@ async function reconcileHistoricallyInconsistentTask(
 
   const lineageRecords = await loadTaskSessions(context.authorization, task.id);
   const hasActiveSession = lineageRecords.some((record) => !record.archivedAt && record.isActive);
+  const needsPlanRepair = planNeedsTerminalRepair(task);
 
-  if (!hasActiveSession && !planNeedsTerminalRepair(task) && isTerminalStatus(task.status)) {
+  if (terminalStatus === "completed" && hasActiveSession && task.sessionId && context.runtimeAvailable) {
+    const messagesResult = await getSessionMessages(task.sessionId);
+    if (messagesResult.ok) {
+      const assistantResult = extractAssistantResultFromMessages(messagesResult.data);
+      if (assistantResult.failed) {
+        return failTaskWithReason(
+          task,
+          context,
+          `Recovered from failed assistant session: ${assistantResult.error || "Assistant message ended with an error."}`,
+        );
+      }
+
+      if (assistantResult.completed) {
+        const updated = await markTaskCompleted(
+          context.authorization,
+          task,
+          assistantResult.text ?? task.result ?? undefined,
+        );
+        return updated ? "completed" : "skipped";
+      }
+    } else if (!needsPlanRepair) {
+      return "skipped";
+    }
+  }
+
+  if (!hasActiveSession && !needsPlanRepair && isTerminalStatus(task.status)) {
     return "skipped";
+  }
+
+  if (terminalStatus === "completed") {
+    const updated = await markTaskCompleted(
+      context.authorization,
+      task,
+      task.result ?? undefined,
+    );
+
+    return updated ? "completed" : "skipped";
   }
 
   const updated = await finalizeTaskState({
@@ -435,7 +514,7 @@ export async function reconcileRunningTasksOnStartup(): Promise<RunningTaskRecon
 
   const reconcileCandidates = mergeUniqueTasks(runningTasks, recentTasks);
   const historicalTasks = reconcileCandidates.filter((task) =>
-    taskLooksHistoricallyInconsistent(task),
+    taskLooksHistoricallyInconsistent(task) || taskNeedsRecentTerminalSessionRepair(task),
   );
   const runningOnlyTasks = reconcileCandidates.filter(
     (task) =>

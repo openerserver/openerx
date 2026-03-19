@@ -203,7 +203,7 @@ export const TmuxPlugin: Plugin = async ({ $, directory }) => {
       }),
 
       tmux_list_sessions: tool({
-        description: "List all active OpenerX tmux sessions with their status and purpose",
+        description: "List all active Opener-X tmux sessions with their status and purpose",
         args: {},
         async execute() {
           if (!tmuxAvailable) {

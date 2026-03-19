@@ -170,11 +170,11 @@ async function seed() {
   if (!existingOrg) {
     await db.insert(schema.organizations).values({
       id: orgId,
-      name: "OpenerX",
+      name: "Opener-X",
       slug: "openerx",
       createdAt: nowIso(),
     });
-    console.log("  ✓ Created default organization: OpenerX");
+    console.log("  ✓ Created default organization: Opener-X");
   } else {
     console.log("  ○ Default organization already exists");
   }
@@ -189,7 +189,7 @@ async function seed() {
       orgId,
       name: "Default Project",
       slug: "default",
-      description: "Default OpenerX project",
+      description: "Default Opener-X project",
       settings: {
         defaultModel: "anthropic/claude-sonnet-4-20250514",
         maxConcurrency: 5,

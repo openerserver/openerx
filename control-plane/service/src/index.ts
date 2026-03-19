@@ -11,4 +11,4 @@ export default {
   fetch: app.fetch,
 };
 
-console.log(`OpenerX Control Plane running on http://localhost:${port}`);
+console.log(`Opener-X Control Plane running on http://localhost:${port}`);

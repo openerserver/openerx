@@ -29,6 +29,20 @@
       "when": 1773843974670,
       "tag": "0003_smiling_nightcrawler",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1773896400000,
+      "tag": "0004_crystal_forge",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1773902400000,
+      "tag": "0005_mellow_turbine",
+      "breakpoints": true
     }
   ]
 }

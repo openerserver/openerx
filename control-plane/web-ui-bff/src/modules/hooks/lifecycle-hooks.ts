@@ -2,11 +2,19 @@ import { resolveModelRoute } from "../../lib/opencode-config";
 import {
   type HookExecutionRecord,
   type HookTrigger,
+  type LifecycleHook,
   type OrchestrationStrategy,
   parseHookDecision,
   renderPromptTemplate,
 } from "../../lib/orchestration-strategy";
 import { runDetachedPrompt } from "../agent-control/opencode-adapter";
+
+const VALID_TRIGGERS = new Set<HookTrigger>([
+  "pre-execution",
+  "post-execution",
+  "on-failure",
+  "pre-resume",
+]);
 
 type RepoContext = {
   repoName?: string;
@@ -174,4 +182,61 @@ export async function executeLifecycleHooks(
     combinedResultText: combineHookResultText(hookExecutions),
     rewrittenPrompt,
   };
+}
+
+// ── Stage-level Hook Parsing & Merging ─────────────────────────────
+
+/**
+ * Parse raw stage hooksJson (persisted as `Array<Record<string, unknown>>`)
+ * into validated `LifecycleHook[]`.
+ */
+export function parseStageHooks(raw: Array<Record<string, unknown>> | null | undefined): LifecycleHook[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.reduce<LifecycleHook[]>((hooks, item, index) => {
+      const trigger = typeof item.trigger === "string" ? item.trigger : "";
+      if (!VALID_TRIGGERS.has(trigger as HookTrigger)) return hooks;
+      const id = typeof item.id === "string" && item.id ? item.id : `stage-hook-${index}`;
+      const agent = typeof item.agent === "string" && item.agent ? item.agent : "";
+      if (!agent) return hooks;
+      hooks.push({
+        id,
+        trigger: trigger as HookTrigger,
+        enabled: item.enabled !== false,
+        agent,
+        model: typeof item.model === "string" && item.model ? item.model : undefined,
+        promptTemplate: typeof item.promptTemplate === "string" ? item.promptTemplate : "",
+        timeoutMs: typeof item.timeoutMs === "number" && item.timeoutMs > 0 ? item.timeoutMs : 60_000,
+        order: typeof item.order === "number" ? item.order : 0,
+      } satisfies LifecycleHook);
+      return hooks;
+    }, []);
+}
+
+/**
+ * Merge stage-level hooks (higher priority) with strategy-level hooks.
+ * Stage hooks come first when order values are equal.
+ * Deduplicates by hook id — stage-level wins on conflict.
+ */
+export function mergeStageAndStrategyHooks(
+  stageHooks: LifecycleHook[],
+  strategyHooks: LifecycleHook[],
+): LifecycleHook[] {
+  const seenIds = new Set<string>();
+  const merged: LifecycleHook[] = [];
+
+  // Stage hooks take priority
+  for (const hook of stageHooks) {
+    if (!seenIds.has(hook.id)) {
+      seenIds.add(hook.id);
+      merged.push(hook);
+    }
+  }
+  for (const hook of strategyHooks) {
+    if (!seenIds.has(hook.id)) {
+      seenIds.add(hook.id);
+      merged.push(hook);
+    }
+  }
+
+  return merged.sort((a, b) => a.order - b.order);
 }

@@ -33,7 +33,7 @@ interface WorkflowTemplateStageRecord {
   stageKey: string;
   name: string;
   enabled: boolean;
-  mode: "single" | "parallel" | "pipeline";
+  mode: "single" | "parallel" | "sequential-chain";
   primaryRoleAgentId: string;
   participantRoleAgentIdsJson: string[];
   roleExecutionPoliciesJson?: Array<Record<string, unknown>> | null;

@@ -409,6 +409,7 @@ export const tasks = pgTable("tasks", {
   // ── Multi-agent execution ───────────────────────────────────────
   executionMode: text("execution_mode").default("single"),
   executionPlan: text("execution_plan"), // JSON: ExecutionPlan
+  autoAdvanceStages: boolean("auto_advance_stages").notNull().default(false),
 
   // ── Identity snapshot (frozen at execution start) ───────────────
   credentialId: text("credential_id").references(() => repositoryCredentials.id),
@@ -784,6 +785,34 @@ export const workflowTemplateStages = pgTable("workflow_template_stages", {
   roleExecutionPoliciesJson: jsonb("role_execution_policies_json"),
   entryCriteriaJson: jsonb("entry_criteria_json").$type<string[]>(),
   exitCriteriaJson: jsonb("exit_criteria_json").$type<string[]>(),
+  initialTaskDefinitionJson: jsonb("initial_task_definition_json").$type<{
+    version: 1;
+    titleTemplate: string;
+    goalTemplate: string;
+    instructionTemplate: string;
+    doneWhen?: string[];
+    defaultExecutionMode?: "single" | "parallel" | "sequential-chain";
+    defaultCandidates?: Array<{
+      model: string;
+      label?: string;
+    }>;
+    defaultSteps?: Array<{
+      id: string;
+      title: string;
+      instruction: string;
+      model?: string;
+    }>;
+    contextBindings?: {
+      includeProjectBrief?: boolean;
+      includePreviousStageSummary?: boolean;
+      includeCurrentStageExitCriteria?: boolean;
+    };
+    outputContract?: {
+      summaryLabel?: string;
+      artifactKeys?: string[];
+      requireStageCompleteMarker?: boolean;
+    };
+  }>(),
   hooksJson: jsonb("hooks_json"),
   gatesJson: jsonb("gates_json"),
   approvalsJson: jsonb("approvals_json"),

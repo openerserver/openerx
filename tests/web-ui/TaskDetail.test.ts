@@ -66,6 +66,7 @@ const realtimeBase = vi.hoisted(() => ({
 const realtimeState = reactive(realtimeBase);
 
 const apiMocks = vi.hoisted(() => ({
+  adoptParallelCandidate: vi.fn(),
   continueTask: vi.fn(),
   getProjectRuntimeUsageLedgers: vi.fn(),
   getProjectRoleExecutionView: vi.fn(),
@@ -293,6 +294,23 @@ vi.mock("ant-design-vue", async () => {
     AModal: simple("AModal"),
     AForm: simple("AForm", "form"),
     AFormItem: simple("AFormItem"),
+    APopconfirm: vue.defineComponent({
+      name: "APopconfirm",
+      inheritAttrs: false,
+      emits: ["confirm"],
+      setup(_props, { slots, emit, attrs }) {
+        return () =>
+          vue.h(
+            "div",
+            {
+              ...attrs,
+              class: "popconfirm-stub",
+              onClick: () => emit("confirm"),
+            },
+            slots.default ? slots.default() : undefined,
+          );
+      },
+    }),
     ATable,
   };
 });
@@ -1321,6 +1339,11 @@ describe("TaskDetail", () => {
     expect(executionPlan?.judgeResult?.winnerIndex).toBe(1);
     expect(executionPlan?.judgeResult?.reasoning).toBe("候选 2 更完整，风险更低。");
     expect(executionPlan?.judgeResult?.scores).toEqual([82.5, 91.2]);
+    expect(wrapper.text()).toContain("并行候选");
+    expect(wrapper.text()).toContain("候选 1");
+    expect(wrapper.text()).toContain("候选 2");
+    expect(wrapper.text()).toContain("胜出");
+    expect(wrapper.text()).toContain("Judge 已选出 候选 2");
   });
 
   it("falls back to generated candidate labels for legacy parallel execution plans", async () => {
@@ -1358,6 +1381,69 @@ describe("TaskDetail", () => {
       "completed",
       "failed",
     ]);
+  });
+
+  it("renders sequential-chain steps directly from task executionPlan", async () => {
+    apiMocks.getTask.mockResolvedValueOnce(
+      makeTaskWithOverrides({
+        executionMode: "single",
+        executionPlan: JSON.stringify({
+          mode: "single",
+          candidates: [
+            {
+              label: "主执行",
+              agent: "default-executor",
+              model: "github-copilot:gpt-5.4",
+              status: "pending",
+            },
+          ],
+          steps: [
+            {
+              id: "step-analysis",
+              type: "execution",
+              status: "completed",
+              title: "分析现状",
+              instruction: "先总结约束和已有实现。",
+              model: "github-copilot:gpt-5.4",
+              sourceType: "initialTask.sequentialChain.step",
+            },
+            {
+              id: "step-design",
+              type: "execution",
+              status: "pending",
+              dependsOn: ["step-analysis"],
+              title: "给出方案",
+              instruction: "输出模块划分和接口设计。",
+              model: "github-copilot:claude-sonnet-4",
+              sourceType: "initialTask.sequentialChain.step",
+            },
+          ],
+          pipelineMetadata: {
+            requestedMode: "sequential-chain",
+            stepCount: 2,
+          },
+        }),
+        strategy: JSON.stringify({ executionMode: "single" }),
+      }),
+    );
+
+    const wrapper = await mountPage();
+    const setupState = getSetupState(wrapper);
+    const resolvedExecutionMode = readSetupValue<string | undefined>(setupState, "resolvedExecutionMode");
+    const executionPlan = readSetupValue<{
+      steps?: Array<{ title?: string; instruction?: string }>;
+      pipelineMetadata?: { requestedMode?: string };
+    } | null>(setupState, "executionPlan");
+
+    expect(resolvedExecutionMode).toBe("sequential-chain");
+    expect(executionPlan?.pipelineMetadata?.requestedMode).toBe("sequential-chain");
+    expect(executionPlan?.steps?.map((step) => step.title)).toEqual(["分析现状", "给出方案"]);
+    expect(wrapper.text()).toContain("顺序编排");
+    expect(wrapper.text()).toContain("执行步骤");
+    expect(wrapper.text()).toContain("分析现状");
+    expect(wrapper.text()).toContain("给出方案");
+    expect(wrapper.text()).toContain("依赖：step-analysis");
+    expect(wrapper.text()).toContain("输出模块划分和接口设计。");
   });
 
   it("updates selected model from the task detail composer", async () => {
@@ -1928,5 +2014,178 @@ describe("TaskDetail", () => {
         completedAt: "2026-03-10T12:02:00.000Z",
       },
     ]);
+  });
+
+  it("shows adopt button on completed parallel candidates when no winner exists", async () => {
+    apiMocks.getTask.mockResolvedValueOnce(
+      makeTaskWithOverrides({
+        executionMode: "parallel",
+        executionPlan: JSON.stringify({
+          mode: "parallel",
+          candidates: [
+            { label: "候选 A", agent: "default-executor", model: "github-copilot:gpt-5-mini", status: "completed", result: "Result A" },
+            { label: "候选 B", agent: "oracle-enterprise", model: "github-copilot:claude-sonnet-4", status: "completed", result: "Result B" },
+          ],
+        }),
+        strategy: JSON.stringify({ executionMode: "parallel" }),
+      }),
+    );
+
+    const wrapper = await mountPage();
+    const setupState = getSetupState(wrapper);
+    const allSettled = readSetupValue<boolean>(setupState, "allCandidatesSettled");
+    expect(allSettled).toBe(true);
+
+    const canAdopt = setupState.canAdoptCandidate as (candidate: { status: string }, index: number) => boolean;
+    expect(canAdopt({ status: "completed" }, 0)).toBe(true);
+    expect(canAdopt({ status: "completed" }, 1)).toBe(true);
+    expect(canAdopt({ status: "failed" }, 0)).toBe(false);
+  });
+
+  it("hides adopt button when a winner already exists", async () => {
+    apiMocks.getTask.mockResolvedValueOnce(
+      makeTaskWithOverrides({
+        executionMode: "parallel",
+        executionPlan: JSON.stringify({
+          mode: "parallel",
+          candidates: [
+            { label: "候选 A", status: "completed", result: "Result A" },
+            { label: "候选 B", status: "completed", result: "Result B" },
+          ],
+          judgeResult: { winnerIndex: 0, reasoning: "A更好", scores: [95, 80] },
+        }),
+        strategy: JSON.stringify({ executionMode: "parallel" }),
+      }),
+    );
+
+    const wrapper = await mountPage();
+    const setupState = getSetupState(wrapper);
+    const canAdopt = setupState.canAdoptCandidate as (candidate: { status: string }, index: number) => boolean;
+    expect(canAdopt({ status: "completed" }, 0)).toBe(false);
+  });
+
+  it("calls adoptParallelCandidate API and refreshes task", async () => {
+    apiMocks.getTask.mockResolvedValueOnce(
+      makeTaskWithOverrides({
+        executionMode: "parallel",
+        executionPlan: JSON.stringify({
+          mode: "parallel",
+          candidates: [
+            { label: "候选 A", status: "completed", result: "Result A" },
+            { label: "候选 B", status: "completed", result: "Result B" },
+          ],
+        }),
+        strategy: JSON.stringify({ executionMode: "parallel" }),
+      }),
+    );
+    apiMocks.adoptParallelCandidate.mockResolvedValueOnce({});
+    apiMocks.getTask.mockResolvedValueOnce(
+      makeTaskWithOverrides({
+        executionMode: "parallel",
+        executionPlan: JSON.stringify({
+          mode: "parallel",
+          candidates: [
+            { label: "候选 A", status: "completed", result: "Result A" },
+            { label: "候选 B", status: "completed", result: "Result B" },
+          ],
+          judgeResult: { winnerIndex: 1, reasoning: "手动采纳", scores: [] },
+        }),
+        strategy: JSON.stringify({ executionMode: "parallel" }),
+      }),
+    );
+
+    const wrapper = await mountPage();
+    const setupState = getSetupState(wrapper);
+    const handleAdopt = setupState.handleAdoptCandidate as (index: number) => Promise<void>;
+    await handleAdopt(1);
+    await flushPromises();
+
+    expect(apiMocks.adoptParallelCandidate).toHaveBeenCalledWith("task-1", 1);
+    expect(messageMocks.error).not.toHaveBeenCalled();
+    expect(apiMocks.getTask).toHaveBeenCalledTimes(2);
+  });
+
+  it("computes chain step progress label for sequential-chain execution", async () => {
+    apiMocks.getTask.mockResolvedValueOnce(
+      makeTaskWithOverrides({
+        executionMode: "sequential-chain",
+        executionPlan: JSON.stringify({
+          mode: "sequential-chain",
+          candidates: [{ label: "主执行", status: "running" }],
+          steps: [
+            { id: "step-1", title: "分析", instruction: "分析现状", status: "completed", result: "分析完成" },
+            { id: "step-2", title: "实施", instruction: "动手改", status: "running" },
+            { id: "step-3", title: "验证", instruction: "跑测试", status: "pending" },
+          ],
+        }),
+        strategy: JSON.stringify({ executionMode: "sequential-chain" }),
+      }),
+    );
+
+    const wrapper = await mountPage();
+    const setupState = getSetupState(wrapper);
+    const label = readSetupValue<string>(setupState, "chainStepProgressLabel");
+    expect(label).toBe("步骤 2 / 3 执行中");
+    expect(wrapper.text()).toContain("步骤 2 / 3 执行中");
+  });
+
+  it("shows all-done chain step progress when all steps completed", async () => {
+    apiMocks.getTask.mockResolvedValueOnce(
+      makeTaskWithOverrides({
+        executionMode: "sequential-chain",
+        executionPlan: JSON.stringify({
+          mode: "sequential-chain",
+          candidates: [{ label: "主执行", status: "completed" }],
+          steps: [
+            { id: "step-1", title: "分析", instruction: "分析现状", status: "completed", result: "Done 1" },
+            { id: "step-2", title: "实施", instruction: "动手改", status: "completed", result: "Done 2" },
+          ],
+        }),
+        strategy: JSON.stringify({ executionMode: "sequential-chain" }),
+      }),
+    );
+
+    const wrapper = await mountPage();
+    const setupState = getSetupState(wrapper);
+    const label = readSetupValue<string>(setupState, "chainStepProgressLabel");
+    expect(label).toBe("全部 2 步已完成");
+  });
+
+  it("renders step result text for completed sequential-chain steps", async () => {
+    apiMocks.getTask.mockResolvedValueOnce(
+      makeTaskWithOverrides({
+        executionMode: "sequential-chain",
+        executionPlan: JSON.stringify({
+          mode: "sequential-chain",
+          candidates: [{ label: "主执行", status: "running" }],
+          steps: [
+            { id: "step-1", title: "分析", instruction: "分析现状", status: "completed", result: "现状分析完毕，发现3个关键问题。" },
+            { id: "step-2", title: "实施", instruction: "动手改", status: "pending" },
+          ],
+        }),
+        strategy: JSON.stringify({ executionMode: "sequential-chain" }),
+      }),
+    );
+
+    const wrapper = await mountPage();
+    expect(wrapper.text()).toContain("现状分析完毕，发现3个关键问题。");
+  });
+
+  it("does not show adopt button for single-mode execution", async () => {
+    apiMocks.getTask.mockResolvedValueOnce(
+      makeTaskWithOverrides({
+        executionMode: "single",
+        executionPlan: JSON.stringify({
+          mode: "single",
+          candidates: [{ label: "主执行", agent: "default-executor", status: "completed" }],
+        }),
+        strategy: JSON.stringify({ executionMode: "single" }),
+      }),
+    );
+
+    const wrapper = await mountPage();
+    const setupState = getSetupState(wrapper);
+    const allSettled = readSetupValue<boolean>(setupState, "allCandidatesSettled");
+    expect(allSettled).toBe(false);
   });
 });

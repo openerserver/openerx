@@ -1,0 +1,81 @@
+<template>
+  <a-card size="small" :bordered="false" :body-style="{ padding: '8px 12px' }">
+    <a-flex justify="space-between" align="center" style="margin-bottom: 8px">
+      <a-typography-text strong style="font-size: 13px">执行配置</a-typography-text>
+      <a-space size="small">
+        <a-tag>{{ modeLabel }}</a-tag>
+        <a-tooltip title="阶段自动推进：开启后，当前阶段完成时自动启动下一阶段初始任务">
+          <a-switch
+            :checked="autoAdvance"
+            checked-children="自动推进"
+            un-checked-children="手动推进"
+            size="small"
+            @change="handleAutoAdvanceChange"
+          />
+        </a-tooltip>
+      </a-space>
+    </a-flex>
+
+    <a-space v-if="!isExecuting" size="small" wrap>
+      <a-button
+        type="primary"
+        size="small"
+        data-testid="quick-execute-btn"
+        :loading="executing"
+        @click="$emit('execute')"
+      >
+        开始执行
+      </a-button>
+      <a-button
+        size="small"
+        data-testid="choose-mode-btn"
+        @click="$emit('choose-mode')"
+      >
+        选择模式
+      </a-button>
+    </a-space>
+    <a-typography-text v-else type="secondary" style="font-size: 12px">
+      <a-tag color="processing">执行中</a-tag>
+      {{ executionHint }}
+    </a-typography-text>
+  </a-card>
+</template>
+
+<script setup lang="ts">
+import { computed } from "vue";
+import type { ExecutionMode } from "../../lib/api";
+
+const props = defineProps<{
+  executionMode: ExecutionMode | undefined;
+  autoAdvance: boolean;
+  isExecuting: boolean;
+  executing: boolean;
+}>();
+
+const emit = defineEmits<{
+  (e: "execute"): void;
+  (e: "choose-mode"): void;
+  (e: "update:auto-advance", value: boolean): void;
+}>();
+
+const modeLabel = computed(() => {
+  switch (props.executionMode) {
+    case "parallel":
+      return "并行比较";
+    case "sequential-chain":
+      return "顺序编排";
+    default:
+      return "单次执行";
+  }
+});
+
+const executionHint = computed(() => {
+  if (props.executionMode === "parallel") return "多候选并行中…";
+  if (props.executionMode === "sequential-chain") return "步骤串行中…";
+  return "模型生成中…";
+});
+
+function handleAutoAdvanceChange(checked: boolean | string | number) {
+  emit("update:auto-advance", Boolean(checked));
+}
+</script>

@@ -48,7 +48,6 @@ declare module 'vue' {
     AMenu: typeof import('ant-design-vue/es')['Menu']
     AMenuDivider: typeof import('ant-design-vue/es')['MenuDivider']
     AMenuItem: typeof import('ant-design-vue/es')['MenuItem']
-    AMenuItemGroup: typeof import('ant-design-vue/es')['MenuItemGroup']
     AModal: typeof import('ant-design-vue/es')['Modal']
     APageHeader: typeof import('ant-design-vue/es')['PageHeader']
     APopconfirm: typeof import('ant-design-vue/es')['Popconfirm']
@@ -83,6 +82,7 @@ declare module 'vue' {
     ATypographyText: typeof import('ant-design-vue/es')['TypographyText']
     ATypographyTitle: typeof import('ant-design-vue/es')['TypographyTitle']
     ConfirmationForm: typeof import('./components/ConfirmationForm.vue')['default']
+    ExecutionModeModal: typeof import('./components/ExecutionModeModal.vue')['default']
     MarkdownContent: typeof import('./components/MarkdownContent.vue')['default']
     MermaidRenderer: typeof import('./components/MermaidRenderer.vue')['default']
     ProjectCredentialsPanel: typeof import('./components/ProjectCredentialsPanel.vue')['default']
@@ -97,7 +97,12 @@ declare module 'vue' {
     SessionTree: typeof import('./components/SessionTree.vue')['default']
     SessionTreeBranch: typeof import('./components/SessionTreeBranch.vue')['default']
     TaskCodeChanges: typeof import('./components/TaskCodeChanges.vue')['default']
+    TaskCompletionActionsCard: typeof import('./components/task-detail/TaskCompletionActionsCard.vue')['default']
+    TaskDetailQuickOverview: typeof import('./components/task-detail/TaskDetailQuickOverview.vue')['default']
+    TaskExecutionControlCard: typeof import('./components/task-detail/TaskExecutionControlCard.vue')['default']
+    TaskParallelCandidatesCard: typeof import('./components/task-detail/TaskParallelCandidatesCard.vue')['default']
     TaskProjectRoleConfigPanel: typeof import('./components/TaskProjectRoleConfigPanel.vue')['default']
     TaskRoleWorkflowPanel: typeof import('./components/TaskRoleWorkflowPanel.vue')['default']
+    TaskWorkflowStageOverviewCard: typeof import('./components/task-detail/TaskWorkflowStageOverviewCard.vue')['default']
   }
 }

@@ -1,5 +1,5 @@
 {
-  "name": "openerx",
+  "name": "opener-x",
   "private": true,
   "workspaces": [
     "control-plane/service",

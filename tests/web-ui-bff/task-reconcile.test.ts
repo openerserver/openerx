@@ -24,6 +24,10 @@ const runDetachedPromptMock = mock(async () => ({
   sessionId: "judge-ses",
 }));
 const updateAgentRunStatusMock = mock(() => undefined);
+const persistWorkflowStageExecutionOutcomeMock = mock(async () => ({
+  updated: true,
+  advanced: false,
+}));
 
 mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () => ({
   authHeader: authHeaderMock,
@@ -42,6 +46,10 @@ mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-a
   updateAgentRunStatus: updateAgentRunStatusMock,
 }));
 
+mock.module("../../control-plane/web-ui-bff/src/modules/tasks/workflow-stage-execution", () => ({
+  persistWorkflowStageExecutionOutcome: persistWorkflowStageExecutionOutcomeMock,
+}));
+
 beforeEach(() => {
   cpFetchMock.mockReset();
   createInternalAuthorizationMock.mockReset();
@@ -54,6 +62,7 @@ beforeEach(() => {
   recoverAgentRunMock.mockReset();
   runDetachedPromptMock.mockReset();
   updateAgentRunStatusMock.mockReset();
+  persistWorkflowStageExecutionOutcomeMock.mockReset();
 
   createInternalAuthorizationMock.mockResolvedValue("Bearer internal");
   authHeaderMock.mockReturnValue("Bearer test");
@@ -68,6 +77,10 @@ beforeEach(() => {
     sessionId: "judge-ses",
   });
   updateAgentRunStatusMock.mockImplementation(() => undefined);
+  persistWorkflowStageExecutionOutcomeMock.mockResolvedValue({
+    updated: true,
+    advanced: false,
+  });
   extractAssistantResultFromMessagesMock.mockReturnValue({
     completed: false,
     failed: true,
@@ -357,5 +370,115 @@ describe("reconcileRunningTasksOnStartup", () => {
         }),
       }),
     );
+    expect(persistWorkflowStageExecutionOutcomeMock).toHaveBeenCalledWith({
+      taskId: "task-historical",
+      authorization: "Bearer internal",
+      resultText: "Already done",
+      source: "assistant-output",
+    });
+  });
+
+  test("repairs recently completed tasks with active sessions using the latest assistant output", async () => {
+    extractAssistantResultFromMessagesMock.mockReturnValue({
+      completed: true,
+      failed: false,
+      error: undefined,
+      tokenUsed: 12,
+      text: "Verify stage complete\n[STAGE_COMPLETE]",
+    });
+
+    const recentFinishedAt = new Date().toISOString();
+
+    cpFetchMock.mockImplementation(async (...args: unknown[]) => {
+      const [url, options] = args as [string, { method?: string; body?: unknown }?];
+      if (!options?.method) {
+        if (url.includes("/api/tasks?status=running")) {
+          return { ok: true, data: { data: [] } };
+        }
+
+        if (url === "/api/tasks?limit=200") {
+          return {
+            ok: true,
+            data: {
+              data: [
+                {
+                  id: "task-completed-active",
+                  projectId: "proj-1",
+                  title: "Completed but active session",
+                  status: "completed",
+                  sessionId: "session-completed-active",
+                  agentRunId: "run-completed-active",
+                  result: "Old result",
+                  finishedAt: recentFinishedAt,
+                  executionPlan: JSON.stringify({
+                    templateId: "single-default",
+                    mode: "single",
+                    steps: [{ id: "exec-1", type: "execution", status: "completed" }],
+                    candidates: [
+                      {
+                        label: "Default executor",
+                        agent: "default-executor",
+                        sessionId: "session-completed-active",
+                        agentRunId: "run-completed-active",
+                        status: "completed",
+                        startedAt: recentFinishedAt,
+                        finishedAt: recentFinishedAt,
+                      },
+                    ],
+                  }),
+                },
+              ],
+            },
+          };
+        }
+
+        if (url === "/api/tasks/task-completed-active/task-sessions") {
+          return {
+            ok: true,
+            data: {
+              data: [
+                {
+                  runtimeSessionId: "session-completed-active",
+                  isActive: true,
+                  archivedAt: null,
+                },
+              ],
+            },
+          };
+        }
+      }
+
+      return { ok: true, data: { body: options?.body } };
+    });
+
+    getSessionMessagesMock.mockResolvedValue({
+      ok: true,
+      data: [{ id: "msg-1" }],
+    });
+
+    const { reconcileRunningTasksOnStartup } = await import(
+      "../../control-plane/web-ui-bff/src/modules/tasks/reconcile"
+    );
+
+    const summary = await reconcileRunningTasksOnStartup();
+
+    expect(summary.completed).toBe(1);
+    expect(cpFetchMock).toHaveBeenCalledWith(
+      "/api/tasks/task-completed-active",
+      expect.objectContaining({
+        method: "PATCH",
+        body: expect.objectContaining({
+          status: "completed",
+          result: "Verify stage complete\n[STAGE_COMPLETE]",
+          executionPlan: expect.stringContaining('"status":"completed"'),
+        }),
+      }),
+    );
+    expect(persistWorkflowStageExecutionOutcomeMock).toHaveBeenCalledWith({
+      taskId: "task-completed-active",
+      authorization: "Bearer internal",
+      resultText: "Verify stage complete\n[STAGE_COMPLETE]",
+      source: "assistant-output",
+    });
   });
 });

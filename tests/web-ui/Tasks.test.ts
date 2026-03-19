@@ -374,13 +374,15 @@ describe("Tasks page", () => {
     const wrapper = await mountPage([makeTask({ id: "task-exec", status: "pending" })]);
 
     const state = getSetupState(wrapper) as {
-      handleExecute: (taskId: string) => Promise<void>;
+      handleExecute: (taskId: string) => void;
+      handleExecutionModeConfirm: (overrides: unknown) => Promise<void>;
     };
-    await state.handleExecute("task-exec");
+    state.handleExecute("task-exec");
+    await state.handleExecutionModeConfirm(null);
     await flushPromises();
 
     expect(apiMocks.getTaskExecutionPreflight).toHaveBeenCalledWith("task-exec");
-    expect(apiMocks.executeTask).toHaveBeenCalledWith("task-exec");
+    expect(apiMocks.executeTask).toHaveBeenCalledWith("task-exec", undefined);
     expect(apiMocks.getTask).toHaveBeenCalledWith("task-exec");
     expect(apiMocks.listTasks).toHaveBeenCalledTimes(2);
   });
@@ -497,15 +499,17 @@ describe("Tasks page", () => {
     const wrapper = await mountPage([makeTask({ id: "task-exec", status: "pending" })]);
 
     const state = getSetupState(wrapper) as {
-      handleExecute: (taskId: string) => Promise<void>;
+      handleExecute: (taskId: string) => void;
+      handleExecutionModeConfirm: (overrides: unknown) => Promise<void>;
     };
-    await state.handleExecute("task-exec");
+    state.handleExecute("task-exec");
+    await state.handleExecutionModeConfirm(null);
     await flushPromises();
 
     expect(apiMocks.updateTask).toHaveBeenCalledWith("task-exec", {
       selectedModel: "github-copilot:gpt-5-mini",
     });
-    expect(apiMocks.executeTask).toHaveBeenCalledWith("task-exec");
+    expect(apiMocks.executeTask).toHaveBeenCalledWith("task-exec", undefined);
   });
 
   it("keeps locally created task in running state when immediate execute settles after list refresh", async () => {
@@ -552,7 +556,7 @@ describe("Tasks page", () => {
     await state.handleCreate();
     await flushPromises();
 
-    expect(apiMocks.executeTask).toHaveBeenCalledWith("task-created");
+    expect(apiMocks.executeTask).toHaveBeenCalledWith("task-created", undefined);
     expect(state.filteredTasks[0]?.status).toBe("running");
   });
 
@@ -720,5 +724,72 @@ describe("Tasks page", () => {
         },
       }),
     );
+  });
+
+  it("passes parallel overrides to executeTask when user selects parallel mode", async () => {
+    const wrapper = await mountPage([makeTask({ id: "task-p", status: "pending" })]);
+
+    const state = getSetupState(wrapper) as {
+      handleExecute: (taskId: string) => void;
+      handleExecutionModeConfirm: (overrides: unknown) => Promise<void>;
+    };
+    state.handleExecute("task-p");
+    await state.handleExecutionModeConfirm({
+      mode: "parallel",
+      candidates: [
+        { model: "github-copilot:gpt-5-mini", label: "候选 A" },
+        { model: "github-copilot:claude-sonnet-4", label: "候选 B" },
+      ],
+    });
+    await flushPromises();
+
+    expect(apiMocks.executeTask).toHaveBeenCalledWith("task-p", {
+      mode: "parallel",
+      candidates: [
+        { model: "github-copilot:gpt-5-mini", label: "候选 A" },
+        { model: "github-copilot:claude-sonnet-4", label: "候选 B" },
+      ],
+    });
+  });
+
+  it("passes sequential-chain overrides to executeTask when user selects chain mode", async () => {
+    const wrapper = await mountPage([makeTask({ id: "task-sc", status: "pending" })]);
+
+    const state = getSetupState(wrapper) as {
+      handleExecute: (taskId: string) => void;
+      handleExecutionModeConfirm: (overrides: unknown) => Promise<void>;
+    };
+    state.handleExecute("task-sc");
+    await state.handleExecutionModeConfirm({
+      mode: "sequential-chain",
+      steps: [
+        { id: "step-1", title: "分析", instruction: "先分析" },
+        { id: "step-2", title: "实施", instruction: "再动手", model: "github-copilot:gpt-5.4" },
+      ],
+    });
+    await flushPromises();
+
+    expect(apiMocks.executeTask).toHaveBeenCalledWith("task-sc", {
+      mode: "sequential-chain",
+      steps: [
+        { id: "step-1", title: "分析", instruction: "先分析" },
+        { id: "step-2", title: "实施", instruction: "再动手", model: "github-copilot:gpt-5.4" },
+      ],
+    });
+  });
+
+  it("opens execution mode modal when handleExecute is called", async () => {
+    const wrapper = await mountPage([makeTask({ id: "task-modal", status: "pending" })]);
+
+    const state = getSetupState(wrapper) as {
+      handleExecute: (taskId: string) => void;
+      showExecutionModeModal: boolean;
+      executionModeTargetTaskId: string | null;
+    };
+    state.handleExecute("task-modal");
+    await flushPromises();
+
+    expect(state.showExecutionModeModal).toBe(true);
+    expect(state.executionModeTargetTaskId).toBe("task-modal");
   });
 });

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# OpenerX VM Setup Script
+# Opener-X VM Setup Script
 # Run as root on a fresh Ubuntu 22.04+ / Debian 12+ VM
 set -euo pipefail
 
-echo "=== OpenerX VM Setup ==="
+echo "=== Opener-X VM Setup ==="
 
 # ── 1. System packages ──────────────────────────────────────────────
 
@@ -55,7 +55,7 @@ chown -R openerx:openerx "$DEPLOY_DIR"
 # ── 6. Environment file ─────────────────────────────────────────────
 
 cat > /opt/openerx/.env <<'ENVEOF'
-# OpenerX Environment Configuration
+# Opener-X Environment Configuration
 NODE_ENV=production
 
 # Control Plane

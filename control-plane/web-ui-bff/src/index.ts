@@ -12,4 +12,4 @@ export default {
   websocket: server.websocket,
 };
 
-console.log(`OpenerX BFF running on http://localhost:${port}`);
+console.log(`Opener-X BFF running on http://localhost:${port}`);

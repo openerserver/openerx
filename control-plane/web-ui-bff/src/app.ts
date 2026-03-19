@@ -27,7 +27,7 @@ import { workflowTemplateRoutes } from "./modules/workflow-templates/routes";
 
 type ServerUpgrade = { upgrade: (req: Request, opts?: unknown) => boolean };
 
-export function createBffApp(serviceName = "openerx-bff") {
+export function createBffApp(serviceName = "opener-x-bff") {
   const app = new Hono();
 
   app.use("*", logger());

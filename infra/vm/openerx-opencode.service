@@ -1,5 +1,5 @@
 [Unit]
-Description=OpenerX OpenCode Runtime (serve mode)
+Description=Opener-X OpenCode Runtime (serve mode)
 After=network.target
 Before=openerx-bff.service
 Wants=network-online.target

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# OpenerX Restore Script
+# Opener-X Restore Script
 # Restores from a backup tarball
 set -euo pipefail
 
@@ -18,7 +18,7 @@ if [ ! -f "$BACKUP_FILE" ]; then
   exit 1
 fi
 
-echo "=== OpenerX Restore ==="
+echo "=== Opener-X Restore ==="
 echo "Backup: $BACKUP_FILE"
 echo ""
 echo "WARNING: This will overwrite the current database!"

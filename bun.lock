@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "openerx",
+      "name": "opener-x",
       "devDependencies": {
         "@biomejs/biome": "^1.9.0",
         "@playwright/test": "^1.55.0",
@@ -12,14 +12,14 @@
       },
     },
     "control-plane/app": {
-      "name": "@openerx/app",
+      "name": "@opener-x/app",
       "version": "0.1.0",
       "devDependencies": {
         "typescript": "^5.7.0",
       },
     },
     "control-plane/service": {
-      "name": "@openerx/control-plane-service",
+      "name": "@opener-x/control-plane-service",
       "version": "0.1.0",
       "dependencies": {
         "@hono/zod-validator": "^0.4.0",
@@ -36,7 +36,7 @@
       },
     },
     "control-plane/web-ui": {
-      "name": "@openerx/web-ui",
+      "name": "@opener-x/web-ui",
       "version": "0.1.0",
       "dependencies": {
         "@ant-design/icons-vue": "^7.0.0",
@@ -70,7 +70,7 @@
       },
     },
     "control-plane/web-ui-bff": {
-      "name": "@openerx/web-ui-bff",
+      "name": "@opener-x/web-ui-bff",
       "version": "0.1.0",
       "dependencies": {
         "@hono/zod-validator": "^0.4.0",
@@ -246,13 +246,13 @@
 
     "@opencode-ai/sdk": ["@opencode-ai/sdk@1.2.21", "https://registry.npmmirror.com/@opencode-ai/sdk/-/sdk-1.2.21.tgz", {}, "sha512-7XF7QlXDP5iAbGcAsxsrmKlIjRtSzKgbwuDHPPuZbILkhGOfCo05XwPidAZrVWucZ/re44oc/psw2zDECaZOpQ=="],
 
-    "@openerx/app": ["@openerx/app@workspace:control-plane/app"],
+    "@opener-x/app": ["@opener-x/app@workspace:control-plane/app"],
 
-    "@openerx/control-plane-service": ["@openerx/control-plane-service@workspace:control-plane/service"],
+    "@opener-x/control-plane-service": ["@opener-x/control-plane-service@workspace:control-plane/service"],
 
-    "@openerx/web-ui": ["@openerx/web-ui@workspace:control-plane/web-ui"],
+    "@opener-x/web-ui": ["@opener-x/web-ui@workspace:control-plane/web-ui"],
 
-    "@openerx/web-ui-bff": ["@openerx/web-ui-bff@workspace:control-plane/web-ui-bff"],
+    "@opener-x/web-ui-bff": ["@opener-x/web-ui-bff@workspace:control-plane/web-ui-bff"],
 
     "@petamoriken/float16": ["@petamoriken/float16@3.9.3", "https://registry.npmmirror.com/@petamoriken/float16/-/float16-3.9.3.tgz", {}, "sha512-8awtpHXCx/bNpFt4mt2xdkgtgVvKqty8VbjHI/WWWQuEw+KLzFot3f4+LkQY9YmOtq7A5GdOnqoIC8Pdygjk2g=="],
 

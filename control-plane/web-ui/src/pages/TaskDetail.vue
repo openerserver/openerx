@@ -147,7 +147,75 @@
                 </span>
               </div>
             </div>
-            <a-empty v-else description="暂无编排数据" />
+            <template v-if="executionPlanCandidates.length > 0 || executionPlanSteps.length > 0 || executionPlanJudgeSummary">
+              <div v-if="executionPlanCandidates.length > 0" :style="taskDetailThemeStyles.toolSummaryList">
+                <a-typography-text strong>并行候选</a-typography-text>
+                <div
+                  v-for="(candidate, index) in executionPlanCandidates"
+                  :key="`${candidate.label}-${index}`"
+                  :style="taskDetailThemeStyles.toolCallCard"
+                >
+                  <a-space size="small" wrap>
+                    <a-tag color="blue">{{ candidate.label }}</a-tag>
+                    <a-tag :color="executionCandidateStatusColor(candidate.status)">
+                      {{ executionCandidateStatusLabel(candidate.status) }}
+                    </a-tag>
+                    <a-tag v-if="executionPlanWinnerIndex === index" color="gold">胜出</a-tag>
+                    <a-tag color="geekblue">{{ formatAgentLabel(candidate.agent) }}</a-tag>
+                    <a-tag v-if="candidate.model" color="cyan">{{ candidate.model }}</a-tag>
+                    <a-popconfirm
+                      v-if="canAdoptCandidate(candidate, index)"
+                      title="确认采纳该候选结果？"
+                      ok-text="采纳"
+                      cancel-text="取消"
+                      @confirm="handleAdoptCandidate(index)"
+                    >
+                      <a-button type="primary" size="small" ghost :loading="adoptingCandidateIndex === index">采纳</a-button>
+                    </a-popconfirm>
+                  </a-space>
+                  <div v-if="candidate.sessionId || candidate.agentRunId" :style="taskDetailThemeStyles.toolCallMeta">
+                    {{ executionCandidateIdentity(candidate) }}
+                  </div>
+                  <pre v-if="candidate.result" :style="taskDetailThemeStyles.toolCallCode">{{ candidate.result }}</pre>
+                </div>
+              </div>
+
+              <div v-if="executionPlanSteps.length > 0" :style="taskDetailThemeStyles.toolSummaryList">
+                <a-flex justify="space-between" align="center">
+                  <a-typography-text strong>执行步骤</a-typography-text>
+                  <a-tag v-if="chainStepProgressLabel" color="processing">{{ chainStepProgressLabel }}</a-tag>
+                </a-flex>
+                <div
+                  v-for="(step, index) in executionPlanSteps"
+                  :key="step.id"
+                  :style="taskDetailThemeStyles.toolCallCard"
+                >
+                  <a-space size="small" wrap>
+                    <a-tag color="default">步骤 {{ index + 1 }}</a-tag>
+                    <a-tag :color="executionStepStatusColor(step.status)">
+                      {{ executionStepStatusLabel(step.status) }}
+                    </a-tag>
+                    <a-tag color="purple">{{ executionStepTitle(step, index) }}</a-tag>
+                    <a-tag v-if="step.model" color="cyan">{{ step.model }}</a-tag>
+                  </a-space>
+                  <div v-if="step.dependsOn?.length" :style="taskDetailThemeStyles.toolCallMeta">
+                    依赖：{{ step.dependsOn.join(" -> ") }}
+                  </div>
+                  <pre v-if="step.instruction" :style="taskDetailThemeStyles.toolCallCode">{{ step.instruction }}</pre>
+                  <pre v-if="step.result" :style="taskDetailThemeStyles.toolCallCode">{{ step.result }}</pre>
+                </div>
+              </div>
+
+              <a-alert
+                v-if="executionPlanJudgeSummary"
+                type="info"
+                show-icon
+                :message="executionPlanJudgeSummary"
+                :description="executionPlanJudgeReasoning"
+                style="margin-top: 12px"
+              />
+            </template>
+            <a-empty v-else-if="orchestrationSummaryItems.length === 0" description="暂无编排数据" />
           </a-collapse-panel>
 
           <a-collapse-panel v-if="showPipelinePanel && !useCompactInspector" key="pipeline" header="运行流水线">
@@ -267,6 +335,39 @@
               {{ action.label }}
             </a-button>
           </a-space>
+
+          <TaskDetailQuickOverview
+            v-if="workflowSummary || executionPlanCandidates.length >= 2"
+            :workflow-summary="workflowSummary"
+            :workflow-stages="workflowStages"
+            :execution-mode="resolvedExecutionMode"
+            :auto-advance="autoAdvanceStages"
+            :is-executing="isAwaitingAssistantResponse"
+            :executing="false"
+            :candidates="executionPlanCandidates"
+            :winner-index="executionPlanWinnerIndex"
+            :all-candidates-settled="allCandidatesSettled"
+            :adopting-index="adoptingCandidateIndex"
+            :judge-summary="executionPlanJudgeSummary"
+            :judge-reasoning="executionPlanJudgeReasoning"
+            :task-status="task?.status ?? ''"
+            @execute="handleQuickExecute"
+            @choose-mode="showExecutionModeModal = true"
+            @update:auto-advance="handleAutoAdvanceToggle"
+            @adopt="handleAdoptCandidate"
+            @complete="handleCompleteTask"
+            @advance="handleAdvanceStage"
+          />
+
+          <ExecutionModeModal
+            :open="showExecutionModeModal"
+            :loading="false"
+            :model-options="modelOptions"
+            :models-loading="modelsLoading"
+            :filter-model-option="filterModelOption"
+            @update:open="showExecutionModeModal = $event"
+            @confirm="handleExecutionModeConfirm"
+          />
 
           <div ref="messagesPaneRef" :style="messagesPaneStyle" @scroll.passive="handleMessagesPaneScroll">
             <div v-if="!selectedSessionId && isWorkbenchEmbedded" :style="taskDetailThemeStyles.compactMainEmptyState">
@@ -782,6 +883,74 @@
             </span>
           </div>
         </div>
+        <template v-if="executionPlanCandidates.length > 0 || executionPlanSteps.length > 0 || executionPlanJudgeSummary">
+          <div v-if="executionPlanCandidates.length > 0" :style="taskDetailThemeStyles.toolSummaryList">
+            <a-typography-text strong>并行候选</a-typography-text>
+            <div
+              v-for="(candidate, index) in executionPlanCandidates"
+              :key="`${candidate.label}-${index}`"
+              :style="taskDetailThemeStyles.toolCallCard"
+            >
+              <a-space size="small" wrap>
+                <a-tag color="blue">{{ candidate.label }}</a-tag>
+                <a-tag :color="executionCandidateStatusColor(candidate.status)">
+                  {{ executionCandidateStatusLabel(candidate.status) }}
+                </a-tag>
+                <a-tag v-if="executionPlanWinnerIndex === index" color="gold">胜出</a-tag>
+                <a-tag color="geekblue">{{ formatAgentLabel(candidate.agent) }}</a-tag>
+                <a-tag v-if="candidate.model" color="cyan">{{ candidate.model }}</a-tag>
+                <a-popconfirm
+                  v-if="canAdoptCandidate(candidate, index)"
+                  title="确认采纳该候选结果？"
+                  ok-text="采纳"
+                  cancel-text="取消"
+                  @confirm="handleAdoptCandidate(index)"
+                >
+                  <a-button type="primary" size="small" ghost :loading="adoptingCandidateIndex === index">采纳</a-button>
+                </a-popconfirm>
+              </a-space>
+              <div v-if="candidate.sessionId || candidate.agentRunId" :style="taskDetailThemeStyles.toolCallMeta">
+                {{ executionCandidateIdentity(candidate) }}
+              </div>
+              <pre v-if="candidate.result" :style="taskDetailThemeStyles.toolCallCode">{{ candidate.result }}</pre>
+            </div>
+          </div>
+
+          <div v-if="executionPlanSteps.length > 0" :style="taskDetailThemeStyles.toolSummaryList">
+            <a-flex justify="space-between" align="center">
+              <a-typography-text strong>执行步骤</a-typography-text>
+              <a-tag v-if="chainStepProgressLabel" color="processing">{{ chainStepProgressLabel }}</a-tag>
+            </a-flex>
+            <div
+              v-for="(step, index) in executionPlanSteps"
+              :key="step.id"
+              :style="taskDetailThemeStyles.toolCallCard"
+            >
+              <a-space size="small" wrap>
+                <a-tag color="default">步骤 {{ index + 1 }}</a-tag>
+                <a-tag :color="executionStepStatusColor(step.status)">
+                  {{ executionStepStatusLabel(step.status) }}
+                </a-tag>
+                <a-tag color="purple">{{ executionStepTitle(step, index) }}</a-tag>
+                <a-tag v-if="step.model" color="cyan">{{ step.model }}</a-tag>
+              </a-space>
+              <div v-if="step.dependsOn?.length" :style="taskDetailThemeStyles.toolCallMeta">
+                依赖：{{ step.dependsOn.join(" -> ") }}
+              </div>
+              <pre v-if="step.instruction" :style="taskDetailThemeStyles.toolCallCode">{{ step.instruction }}</pre>
+              <pre v-if="step.result" :style="taskDetailThemeStyles.toolCallCode">{{ step.result }}</pre>
+            </div>
+          </div>
+
+          <a-alert
+            v-if="executionPlanJudgeSummary"
+            type="info"
+            show-icon
+            :message="executionPlanJudgeSummary"
+            :description="executionPlanJudgeReasoning"
+            style="margin-top: 12px"
+          />
+        </template>
         <a-empty v-else description="暂无编排数据" />
       </div>
 
@@ -898,6 +1067,11 @@ import { computed, defineAsyncComponent, nextTick, onUnmounted, ref, watch } fro
 import { useRoute, useRouter } from "vue-router";
 import {
   toApiError,
+  type ChainStepInput,
+  type ExecutionCandidate,
+  type ExecutionMode,
+  type ExecutionPlan as TaskExecutionPlan,
+  type ExecutionStep,
   type GuardDecision,
   type GovernanceSummary,
   type ModelExecutionPolicy,
@@ -913,8 +1087,12 @@ import {
   type Task,
   type TaskWorkflowViewModel,
   activateSession,
+  advanceWorkflowStage,
+  adoptParallelCandidate,
   archiveTaskSession,
+  completeTask,
   continueTask,
+  executeTask,
   forkTaskSession,
   getModelsList,
   getProjectRoleExecutionView,
@@ -948,6 +1126,12 @@ const TaskProjectRoleConfigPanel = defineAsyncComponent(
 );
 const TaskRoleWorkflowPanel = defineAsyncComponent(
   () => import("../components/TaskRoleWorkflowPanel.vue"),
+);
+const ExecutionModeModal = defineAsyncComponent(
+  () => import("../components/ExecutionModeModal.vue"),
+);
+const TaskDetailQuickOverview = defineAsyncComponent(
+  () => import("../components/task-detail/TaskDetailQuickOverview.vue"),
 );
 
 const route = useRoute();
@@ -1087,12 +1271,17 @@ const orchestrationSummaryItems = computed(() => {
     });
   }
 
-  const mode = task.value?.executionMode || strategy.value?.executionMode;
+  const mode = resolvedExecutionMode.value;
   if (mode) {
     items.push({
       label: "模式",
-      value: mode === "parallel" ? "并行竞争" : "单一执行",
-      tone: mode === "parallel" ? "volcano" : "blue",
+      value:
+        mode === "parallel"
+          ? "并行竞争"
+          : mode === "sequential-chain"
+            ? "顺序编排"
+            : "单一执行",
+      tone: mode === "parallel" ? "volcano" : mode === "sequential-chain" ? "purple" : "blue",
     });
   }
 
@@ -4278,33 +4467,206 @@ const strategy = computed(() => {
 const executionPlan = computed(() => {
   if (!task.value?.executionPlan) return null;
   try {
-    const parsed = JSON.parse(task.value.executionPlan) as {
-      mode: string;
-      candidates: Array<{
-        label?: string;
-        agent: string;
-        model?: string;
-        sessionId?: string;
-        agentRunId?: string;
-        status: string;
-        result?: string;
-      }>;
-      judgeResult?: {
-        winnerIndex: number;
-        scores: number[];
-        reasoning: string;
-      };
-    };
+    const parsed = JSON.parse(task.value.executionPlan) as TaskExecutionPlan;
+    const candidates = Array.isArray(parsed.candidates) ? parsed.candidates : [];
+    const steps = Array.isArray(parsed.steps) ? parsed.steps : [];
     return {
       ...parsed,
-      candidates: parsed.candidates.map((candidate, index) => ({
+      candidates: candidates.map((candidate, index) => ({
         ...candidate,
         label: candidate.label || `候选 ${index + 1}`,
+      })),
+      steps: steps.map((step, index) => ({
+        ...step,
+        id: step.id || `step-${index + 1}`,
+        title: step.title || undefined,
       })),
     };
   } catch {
     return null;
   }
+});
+
+const resolvedExecutionMode = computed<"single" | "parallel" | "sequential-chain" | undefined>(() => {
+  if (executionPlan.value?.pipelineMetadata?.requestedMode === "sequential-chain") {
+    return "sequential-chain";
+  }
+
+  if (executionPlan.value?.pipelineMetadata?.requestedMode === "pipeline") {
+    return "sequential-chain";
+  }
+
+  if ((executionPlan.value?.steps?.length || 0) > 1 && task.value?.executionMode === "single") {
+    return "sequential-chain";
+  }
+
+  const mode = task.value?.executionMode || strategy.value?.executionMode;
+  if (mode === "pipeline") {
+    return "sequential-chain";
+  }
+  return mode === "parallel" || mode === "single" || mode === "sequential-chain"
+    ? mode
+    : undefined;
+});
+
+const executionPlanCandidates = computed(() => executionPlan.value?.candidates ?? []);
+const executionPlanSteps = computed(() => executionPlan.value?.steps ?? []);
+const executionPlanWinnerIndex = computed(() => {
+  if (typeof executionPlan.value?.winnerCandidateIndex === "number") {
+    return executionPlan.value.winnerCandidateIndex;
+  }
+
+  if (typeof executionPlan.value?.judgeResult?.winnerIndex === "number") {
+    return executionPlan.value.judgeResult.winnerIndex;
+  }
+
+  return -1;
+});
+const executionPlanJudgeReasoning = computed(() => executionPlan.value?.judgeResult?.reasoning || "");
+const executionPlanJudgeSummary = computed(() => {
+  const judgeResult = executionPlan.value?.judgeResult;
+  if (!judgeResult) {
+    return "";
+  }
+
+  const winnerLabel =
+    typeof judgeResult.winnerIndex === "number"
+      ? executionPlanCandidates.value[judgeResult.winnerIndex]?.label || `候选 ${judgeResult.winnerIndex + 1}`
+      : undefined;
+
+  if (winnerLabel && Array.isArray(judgeResult.scores) && judgeResult.scores.length > 0) {
+    return `Judge 已选出 ${winnerLabel}，得分 ${judgeResult.scores
+      .map((score) => Number(score).toFixed(1))
+      .join(" / ")}`;
+  }
+
+  return winnerLabel ? `Judge 已选出 ${winnerLabel}` : "Judge 已返回评估结果";
+});
+
+const adoptingCandidateIndex = ref<number | null>(null);
+
+const allCandidatesSettled = computed(() =>
+  executionPlanCandidates.value.length >= 2 &&
+  executionPlanCandidates.value.every((c) => c.status === "completed" || c.status === "failed"),
+);
+
+function canAdoptCandidate(candidate: ExecutionCandidate, index: number) {
+  return (
+    allCandidatesSettled.value &&
+    candidate.status === "completed" &&
+    executionPlanWinnerIndex.value < 0
+  );
+}
+
+async function handleAdoptCandidate(index: number) {
+  if (!taskId.value) return;
+  adoptingCandidateIndex.value = index;
+  try {
+    await adoptParallelCandidate(taskId.value, index);
+    message.success("已采纳候选结果");
+    const t = await getTask(taskId.value);
+    task.value = t;
+  } catch (e) {
+    message.error(`采纳失败: ${e instanceof Error ? e.message : e}`);
+  } finally {
+    adoptingCandidateIndex.value = null;
+  }
+}
+
+// ── Workflow Quick Overview ─────────────────────────────────────────
+
+const autoAdvanceStages = ref(false);
+const showExecutionModeModal = ref(false);
+
+watch(
+  () => task.value?.autoAdvanceStages,
+  (value) => {
+    autoAdvanceStages.value = value === true;
+  },
+  { immediate: true },
+);
+
+type ExecutionOverrides = {
+  mode: ExecutionMode;
+  candidates?: Array<{ model: string; label?: string }>;
+  steps?: ChainStepInput[];
+} | null;
+
+async function handleAutoAdvanceToggle(value: boolean) {
+  if (!taskId.value) return;
+  autoAdvanceStages.value = value;
+  try {
+    await updateTask(taskId.value, { autoAdvanceStages: value });
+    if (task.value) {
+      task.value = {
+        ...task.value,
+        autoAdvanceStages: value,
+      };
+    }
+  } catch (e) {
+    autoAdvanceStages.value = !value;
+    message.error(`更新失败: ${e instanceof Error ? e.message : e}`);
+  }
+}
+
+async function handleQuickExecute(overrides?: ExecutionOverrides) {
+  if (!taskId.value) return;
+  try {
+    await executeTask(taskId.value, overrides ?? undefined);
+    message.success("执行已启动");
+    const t = await getTask(taskId.value);
+    task.value = t;
+    scheduleSessionRefresh();
+  } catch (e) {
+    if (
+      !showRuntimeRecoveryNotice(e, {
+        context: RUNTIME_RECOVERY_CONTEXTS.taskContinue,
+      })
+    ) {
+      message.error(`执行失败: ${e instanceof Error ? e.message : e}`);
+    }
+  }
+}
+
+async function handleExecutionModeConfirm(overrides: ExecutionOverrides) {
+  showExecutionModeModal.value = false;
+  await handleQuickExecute(overrides);
+}
+
+async function handleCompleteTask() {
+  if (!taskId.value) return;
+  try {
+    await completeTask(taskId.value);
+    message.success("任务已完结");
+    const t = await getTask(taskId.value);
+    task.value = t;
+  } catch (e) {
+    message.error(`完结失败: ${e instanceof Error ? e.message : e}`);
+  }
+}
+
+async function handleAdvanceStage() {
+  if (!taskId.value) return;
+  try {
+    const result = await advanceWorkflowStage(taskId.value);
+    message.success(result.nextStageKey ? `已推进到阶段 ${result.nextStageKey}` : "阶段已推进");
+    const t = await getTask(taskId.value);
+    task.value = t;
+    refreshWorkflowView(taskId.value);
+  } catch (e) {
+    message.error(`推进失败: ${e instanceof Error ? e.message : e}`);
+  }
+}
+
+const chainStepProgressLabel = computed(() => {
+  const plan = executionPlan.value;
+  if (!plan?.steps?.length || plan.mode !== "sequential-chain") return "";
+  const total = plan.steps.length;
+  const completed = plan.steps.filter((s) => s.status === "completed").length;
+  const running = plan.steps.find((s) => s.status === "running");
+  if (running) return `步骤 ${completed + 1} / ${total} 执行中`;
+  if (completed === total) return `全部 ${total} 步已完成`;
+  return `${completed} / ${total} 已完成`;
 });
 
 const categoryLabels: Record<string, string> = {
@@ -4327,6 +4689,73 @@ function formatAgentLabel(agent: string | undefined | null) {
   }
 
   return agent === "build" || agent === "default-executor" ? "default-executor" : agent;
+}
+
+function executionCandidateStatusLabel(status: string | undefined) {
+  switch (status) {
+    case "completed":
+      return "已完成";
+    case "running":
+      return "执行中";
+    case "failed":
+      return "失败";
+    default:
+      return "待执行";
+  }
+}
+
+function executionCandidateStatusColor(status: string | undefined) {
+  switch (status) {
+    case "completed":
+      return "green";
+    case "running":
+      return "processing";
+    case "failed":
+      return "red";
+    default:
+      return "default";
+  }
+}
+
+function executionStepStatusLabel(status: string | undefined) {
+  switch (status) {
+    case "completed":
+      return "已完成";
+    case "running":
+      return "执行中";
+    case "failed":
+      return "失败";
+    default:
+      return "待执行";
+  }
+}
+
+function executionStepStatusColor(status: string | undefined) {
+  switch (status) {
+    case "completed":
+      return "green";
+    case "running":
+      return "processing";
+    case "failed":
+      return "red";
+    default:
+      return "default";
+  }
+}
+
+function executionStepTitle(step: ExecutionStep, index: number) {
+  return step.title || step.id || `步骤 ${index + 1}`;
+}
+
+function executionCandidateIdentity(candidate: ExecutionCandidate) {
+  const parts: string[] = [];
+  if (candidate.sessionId) {
+    parts.push(`Session ${candidate.sessionId}`);
+  }
+  if (candidate.agentRunId) {
+    parts.push(`Run ${candidate.agentRunId}`);
+  }
+  return parts.join(" · ");
 }
 
 function formatDurationMs(durationMs: number | null | undefined) {

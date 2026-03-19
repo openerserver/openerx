@@ -819,6 +819,7 @@ export interface Task {
   strategy?: string;
   executionMode?: ExecutionMode;
   executionPlan?: string;
+  autoAdvanceStages?: boolean;
   repoId?: string | null;
   workspaceRoot?: string | null;
   baseRevision?: string | null;
@@ -1239,7 +1240,10 @@ export async function getTaskEscalations(taskId: string) {
   return request<{ data: HumanEscalationRequest[] }>(`/tasks/${taskId}/escalations`);
 }
 
-export async function updateTask(taskId: string, data: { selectedModel?: string | null }) {
+export async function updateTask(
+  taskId: string,
+  data: { selectedModel?: string | null; autoAdvanceStages?: boolean },
+) {
   return request<Partial<Task>>(`/tasks/${taskId}`, {
     method: "PATCH",
     body: JSON.stringify(data),
@@ -1939,13 +1943,30 @@ export async function archiveProject(projectId: string) {
   });
 }
 
-export async function executeTask(taskId: string) {
+export async function executeTask(
+  taskId: string,
+  overrides?: {
+    mode?: ExecutionMode;
+    candidates?: Array<{ model: string; label?: string }>;
+    steps?: ChainStepInput[];
+  },
+) {
   return request<{
     taskId: string;
     sessionId: string;
     agentRunId: string;
     status: string;
-  }>(`/tasks/${taskId}/execute`, { method: "POST" });
+  }>(`/tasks/${taskId}/execute`, {
+    method: "POST",
+    ...(overrides ? { body: JSON.stringify(overrides) } : {}),
+  });
+}
+
+export async function adoptParallelCandidate(taskId: string, candidateIndex: number) {
+  return request<{ ok: boolean; winnerCandidateIndex: number }>(
+    `/tasks/${taskId}/candidates/${candidateIndex}/adopt`,
+    { method: "POST" },
+  );
 }
 
 export async function updateTaskStatus(taskId: string, status: string) {
@@ -1953,6 +1974,19 @@ export async function updateTaskStatus(taskId: string, status: string) {
     method: "PATCH",
     body: JSON.stringify({ status }),
   });
+}
+
+export async function completeTask(taskId: string) {
+  return request<{ ok: boolean }>(`/tasks/${taskId}/complete`, {
+    method: "POST",
+  });
+}
+
+export async function advanceWorkflowStage(taskId: string) {
+  return request<{ ok: boolean; nextStageKey?: string }>(
+    `/tasks/${taskId}/workflow/advance`,
+    { method: "POST" },
+  );
 }
 
 export async function reconcileRunningTasks() {
@@ -2207,7 +2241,7 @@ export interface LifecycleHook {
   order: number;
 }
 
-export type ExecutionMode = "single" | "parallel";
+export type ExecutionMode = "single" | "parallel" | "sequential-chain";
 
 export interface WorkflowTemplate {
   id: string;
@@ -2241,12 +2275,39 @@ export interface ExecutionCandidate {
   finishedAt?: string;
 }
 
+export interface ExecutionStep {
+  id: string;
+  type: "hook" | "execution" | "judge" | "chain-step";
+  status: "pending" | "running" | "completed" | "failed";
+  dependsOn?: string[];
+  title?: string;
+  instruction?: string;
+  model?: string | null;
+  sourceType?: string;
+  result?: string;
+  finishedAt?: string;
+}
+
+export interface ChainStepInput {
+  id: string;
+  title: string;
+  instruction: string;
+  model?: string;
+}
+
 export interface ExecutionPlan {
   templateId: string;
   mode: ExecutionMode;
+  steps?: ExecutionStep[];
   candidates: ExecutionCandidate[];
   judgeResult?: JudgeResult;
   winnerCandidateIndex?: number;
+  currentChainStepIndex?: number;
+  chainResult?: string;
+  pipelineMetadata?: {
+    requestedMode?: "sequential-chain";
+    stepCount?: number;
+  };
 }
 
 export interface JudgeResult {
@@ -2833,12 +2894,13 @@ export interface WorkflowTemplateStageRecord {
   stageKey: string;
   name: string;
   enabled: boolean;
-  mode: "single" | "parallel" | "pipeline";
+  mode: "single" | "parallel" | "sequential-chain";
   primaryRoleAgentId: string;
   participantRoleAgentIdsJson: string[];
   roleExecutionPoliciesJson?: Array<Record<string, unknown>> | null;
   entryCriteriaJson?: string[] | null;
   exitCriteriaJson?: string[] | null;
+  initialTaskDefinitionJson?: WorkflowTemplateStageInitialTaskDefinition | null;
   hooksJson?: Array<Record<string, unknown>> | null;
   gatesJson?: Array<Record<string, unknown>> | null;
   approvalsJson?: Array<Record<string, unknown>> | null;
@@ -2849,6 +2911,35 @@ export interface WorkflowTemplateStageRecord {
   } | null;
   failurePolicyJson?: Record<string, unknown> | null;
   orderIndex: number;
+}
+
+export interface WorkflowTemplateStageInitialTaskDefinition {
+  version: 1;
+  titleTemplate: string;
+  goalTemplate: string;
+  instructionTemplate: string;
+  doneWhen?: string[];
+  defaultExecutionMode?: "single" | "parallel" | "sequential-chain";
+  defaultCandidates?: Array<{
+    model: string;
+    label?: string;
+  }>;
+  defaultSteps?: Array<{
+    id: string;
+    title: string;
+    instruction: string;
+    model?: string;
+  }>;
+  contextBindings?: {
+    includeProjectBrief?: boolean;
+    includePreviousStageSummary?: boolean;
+    includeCurrentStageExitCriteria?: boolean;
+  };
+  outputContract?: {
+    summaryLabel?: string;
+    artifactKeys?: string[];
+    requireStageCompleteMarker?: boolean;
+  };
 }
 
 export interface WorkflowStageCatalogItem {
@@ -2946,7 +3037,7 @@ export interface OrchestrationStageViewModel {
   stageKey: string;
   name: string;
   enabled: boolean;
-  mode: "single" | "parallel" | "pipeline";
+  mode: "single" | "parallel" | "sequential-chain";
   orderIndex: number;
   primaryRoleAgentId: string;
   primaryRoleLabel: string;
@@ -3178,12 +3269,13 @@ export async function createWorkflowTemplateStage(
     stageKey: string;
     name: string;
     enabled: boolean;
-    mode: "single" | "parallel" | "pipeline";
+    mode: "single" | "parallel" | "sequential-chain";
     primaryRoleAgentId: string;
     participantRoleAgentIds: string[];
     roleExecutionPolicies?: Array<Record<string, unknown>>;
     entryCriteria?: string[];
     exitCriteria?: string[];
+    initialTaskDefinition?: WorkflowTemplateStageInitialTaskDefinition;
     hooks?: Array<Record<string, unknown>>;
     gates?: Array<Record<string, unknown>>;
     approvals?: Array<Record<string, unknown>>;
@@ -3212,12 +3304,13 @@ export async function updateWorkflowTemplateStage(
     stageKey: string;
     name: string;
     enabled: boolean;
-    mode: "single" | "parallel" | "pipeline";
+    mode: "single" | "parallel" | "sequential-chain";
     primaryRoleAgentId: string;
     participantRoleAgentIds: string[];
     roleExecutionPolicies: Array<Record<string, unknown>>;
     entryCriteria: string[];
     exitCriteria: string[];
+    initialTaskDefinition: WorkflowTemplateStageInitialTaskDefinition;
     hooks: Array<Record<string, unknown>>;
     gates: Array<Record<string, unknown>>;
     approvals: Array<Record<string, unknown>>;

@@ -13,7 +13,7 @@
       <div :style="logoStyle">
         <a-flex justify="space-between" align="center" :style="layoutThemeStyles.logoHeader">
           <div v-if="!siderCollapsed">
-            <h1 :style="layoutThemeStyles.logoTitle">OpenerX</h1>
+            <h1 :style="layoutThemeStyles.logoTitle">Opener-X</h1>
             <p :style="layoutThemeStyles.logoSubtitle">
               Enterprise AI Dev/Ops
             </p>

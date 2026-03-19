@@ -108,7 +108,7 @@ export function parseHookDecision(text: string | undefined): HookDecision | unde
 
 // ── Phase 2: Workflow Templates & Execution Plan ───────────────────
 
-export type ExecutionMode = "single" | "parallel";
+export type ExecutionMode = "single" | "parallel" | "sequential-chain";
 
 export interface WorkflowTemplate {
   id: string;
@@ -122,7 +122,7 @@ export interface WorkflowTemplate {
 }
 
 export interface ExecutionCandidate {
-  label: string;
+  label?: string;
   agent: string;
   model?: string;
   role?: "planner" | "executor" | "reviewer" | "judge" | "merger";
@@ -136,9 +136,21 @@ export interface ExecutionCandidate {
 
 export interface ExecutionStep {
   id: string;
-  type: "hook" | "execution" | "judge";
+  type: "hook" | "execution" | "judge" | "chain-step";
   status: "pending" | "running" | "completed" | "failed";
   dependsOn?: string[];
+  title?: string;
+  instruction?: string;
+  model?: string;
+  result?: string;
+  finishedAt?: string;
+}
+
+export interface ChainStepInput {
+  id: string;
+  title: string;
+  instruction: string;
+  model?: string;
 }
 
 export interface ExecutionPlan {
@@ -148,6 +160,10 @@ export interface ExecutionPlan {
   candidates: ExecutionCandidate[];
   judgeResult?: JudgeResult;
   winnerCandidateIndex?: number;
+  /** For sequential-chain mode: index of the step currently executing (0-based). */
+  currentChainStepIndex?: number;
+  /** Aggregated result from all completed chain steps. */
+  chainResult?: string;
 }
 
 // ── Phase 3: Judge ─────────────────────────────────────────────────
@@ -258,7 +274,7 @@ export function isDefaultExecutionAgent(agentName: string | undefined | null): b
 }
 
 const DEFAULT_PRE_PROMPT = [
-  "You are performing a pre-execution assessment for an OpenerX task.",
+  "You are performing a pre-execution assessment for an Opener-X task.",
   "Summarize the task intent, key risks, required clarifications, and a concise execution recommendation.",
   "Return a short structured assessment suitable to hand off to the main execution agent.",
   "",
@@ -268,7 +284,7 @@ const DEFAULT_PRE_PROMPT = [
 ].join("\n");
 
 const DEFAULT_POST_PROMPT = [
-  "You are performing a post-execution review for an OpenerX task.",
+  "You are performing a post-execution review for an Opener-X task.",
   "Assess result quality, remaining risks, and any follow-up actions.",
   "Keep the response concise and action-oriented.",
   "",
@@ -284,7 +300,7 @@ const DEFAULT_POST_PROMPT = [
 ].join("\n");
 
 const DEFAULT_JUDGE_PROMPT = [
-  "你是 OpenerX 聚合评判 Agent。以下是同一个任务交给多个不同 Agent 执行的结果。",
+  "你是 Opener-X 聚合评判 Agent。以下是同一个任务交给多个不同 Agent 执行的结果。",
   "请根据代码质量、任务完成度和实现合理性为每个 Candidate 打分(0-100)，并选出最佳结果。",
   "",
   "任务标题: {{taskTitle}}",
@@ -621,10 +637,24 @@ export function buildExecutionPlan(
   template: WorkflowTemplate,
   strategy: OrchestrationStrategy,
   category: string,
+  overrides?: {
+    mode?: ExecutionMode;
+    candidates?: Array<{ model: string; label?: string }>;
+    steps?: ChainStepInput[];
+  },
 ): ExecutionPlan {
   const configuredAgents = strategy.categoryAgentMap[category] || [];
+  const effectiveMode = overrides?.mode ?? template.mode;
 
-  if (template.mode === "single") {
+  if (effectiveMode === "sequential-chain") {
+    return buildSequentialChainPlan(
+      template,
+      configuredAgents,
+      overrides?.steps ?? [],
+    );
+  }
+
+  if (effectiveMode === "single") {
     const agent = template.agents[0] || configuredAgents[0] || DEFAULT_EXECUTION_AGENT;
     return {
       templateId: template.id,
@@ -637,12 +667,22 @@ export function buildExecutionPlan(
   // parallel mode
   const maxCandidates = template.maxParallelCandidates ?? 3;
   const agents = template.agents.length > 0 ? template.agents : configuredAgents;
-  const candidates: ExecutionCandidate[] = agents.slice(0, maxCandidates).map((agent, index) => ({
-    label: `候选 ${index + 1}`,
-    agent,
-    role: "executor" as const,
-    status: "pending" as const,
-  }));
+
+  // If user provided explicit candidates with model overrides, use those
+  const candidates: ExecutionCandidate[] = overrides?.candidates
+    ? overrides.candidates.slice(0, maxCandidates).map((c, index) => ({
+        label: c.label || `候选 ${index + 1}`,
+        agent: agents[index] || agents[0] || DEFAULT_EXECUTION_AGENT,
+        model: c.model,
+        role: "executor" as const,
+        status: "pending" as const,
+      }))
+    : agents.slice(0, maxCandidates).map((agent, index) => ({
+        label: `候选 ${index + 1}`,
+        agent,
+        role: "executor" as const,
+        status: "pending" as const,
+      }));
 
   const steps: ExecutionStep[] = [{ id: "exec-parallel", type: "execution", status: "pending" }];
 
@@ -655,5 +695,31 @@ export function buildExecutionPlan(
     mode: "parallel",
     steps,
     candidates,
+  };
+}
+
+function buildSequentialChainPlan(
+  template: WorkflowTemplate,
+  configuredAgents: string[],
+  chainSteps: ChainStepInput[],
+): ExecutionPlan {
+  const agent = template.agents[0] || configuredAgents[0] || DEFAULT_EXECUTION_AGENT;
+
+  const steps: ExecutionStep[] = chainSteps.map((s, idx) => ({
+    id: s.id || `chain-step-${idx}`,
+    type: "chain-step" as const,
+    status: "pending" as const,
+    title: s.title,
+    instruction: s.instruction,
+    model: s.model,
+    dependsOn: idx > 0 ? [chainSteps[idx - 1]?.id || `chain-step-${idx - 1}`] : undefined,
+  }));
+
+  return {
+    templateId: template.id,
+    mode: "sequential-chain",
+    steps,
+    candidates: [{ label: "主执行", agent, status: "pending" }],
+    currentChainStepIndex: 0,
   };
 }

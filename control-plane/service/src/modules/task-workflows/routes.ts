@@ -23,6 +23,7 @@ const advanceWorkflowSchema = z.object({
   toStage: z.string().min(1).optional(),
   status: z.enum(["running", "blocked", "waiting-approval", "failed", "completed"]),
   blockingReason: z.string().optional(),
+  artifactsSummaryJson: z.any().optional(),
   approvalState: z
     .enum(["not-required", "pending", "approved", "rejected", "expired", "cancelled"])
     .optional(),
@@ -132,6 +133,10 @@ taskWorkflowRoutes.post("/advance", zValidator("json", advanceWorkflowSchema), a
         status: body.status,
         blockingReason: body.blockingReason ?? null,
         approvalState: body.approvalState ?? currentStageRun.approvalState,
+        artifactsSummaryJson:
+          body.artifactsSummaryJson !== undefined
+            ? body.artifactsSummaryJson
+            : currentStageRun.artifactsSummaryJson,
         finishedAt: body.status === "completed" ? now : currentStageRun.finishedAt,
         updatedAt: now,
       })

@@ -32,17 +32,55 @@ const workflowTemplateSchema = z.object({
 
 const workflowTemplatePatchSchema = workflowTemplateSchema.partial().omit({ id: true });
 
+const initialTaskCandidateSchema = z.object({
+  model: z.string().min(1),
+  label: z.string().optional(),
+});
+
+const initialTaskStepSchema = z.object({
+  id: z.string().min(1),
+  title: z.string().min(1),
+  instruction: z.string().min(1),
+  model: z.string().optional(),
+});
+
+const initialTaskDefinitionSchema = z.object({
+  version: z.literal(1),
+  titleTemplate: z.string().min(1),
+  goalTemplate: z.string().min(1),
+  instructionTemplate: z.string().min(1),
+  doneWhen: z.array(z.string()).optional(),
+  defaultExecutionMode: z.enum(["single", "parallel", "sequential-chain"]).optional(),
+  defaultCandidates: z.array(initialTaskCandidateSchema).optional(),
+  defaultSteps: z.array(initialTaskStepSchema).optional(),
+  contextBindings: z
+    .object({
+      includeProjectBrief: z.boolean().optional(),
+      includePreviousStageSummary: z.boolean().optional(),
+      includeCurrentStageExitCriteria: z.boolean().optional(),
+    })
+    .optional(),
+  outputContract: z
+    .object({
+      summaryLabel: z.string().optional(),
+      artifactKeys: z.array(z.string()).optional(),
+      requireStageCompleteMarker: z.boolean().optional(),
+    })
+    .optional(),
+});
+
 const workflowStageSchema = z.object({
   id: z.string().min(1),
   stageKey: z.string().min(1),
   name: z.string().min(1),
   enabled: z.boolean(),
-  mode: z.enum(["single", "parallel", "pipeline"]),
+  mode: z.enum(["single", "parallel", "sequential-chain"]),
   primaryRoleAgentId: z.string().min(1),
   participantRoleAgentIds: z.array(z.string()).default([]),
   roleExecutionPolicies: z.array(z.any()).optional(),
   entryCriteria: z.array(z.string()).optional(),
   exitCriteria: z.array(z.string()).optional(),
+  initialTaskDefinition: initialTaskDefinitionSchema.optional(),
   hooks: z.array(z.any()).optional(),
   gates: z.array(z.any()).optional(),
   approvals: z.array(z.any()).optional(),
@@ -161,6 +199,7 @@ workflowTemplateRoutes.post(
       roleExecutionPoliciesJson: body.roleExecutionPolicies ?? null,
       entryCriteriaJson: body.entryCriteria ?? null,
       exitCriteriaJson: body.exitCriteria ?? null,
+      initialTaskDefinitionJson: body.initialTaskDefinition ?? null,
       hooksJson: body.hooks ?? null,
       gatesJson: body.gates ?? null,
       approvalsJson: body.approvals ?? null,
@@ -192,6 +231,9 @@ function buildWorkflowStageUpdates(body: z.infer<typeof workflowStagePatchSchema
       : {}),
     ...(body.entryCriteria !== undefined ? { entryCriteriaJson: body.entryCriteria } : {}),
     ...(body.exitCriteria !== undefined ? { exitCriteriaJson: body.exitCriteria } : {}),
+    ...(body.initialTaskDefinition !== undefined
+      ? { initialTaskDefinitionJson: body.initialTaskDefinition }
+      : {}),
     ...(body.hooks !== undefined ? { hooksJson: body.hooks } : {}),
     ...(body.gates !== undefined ? { gatesJson: body.gates } : {}),
     ...(body.approvals !== undefined ? { approvalsJson: body.approvals } : {}),

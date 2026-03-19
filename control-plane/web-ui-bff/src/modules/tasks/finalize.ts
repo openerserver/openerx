@@ -27,6 +27,7 @@ interface FinalizeTaskStateInput {
   agentRunId?: string;
   result?: string;
   task?: FinalizableTaskRecord;
+  syncWorkflowTerminalState?: boolean;
 }
 
 function parseExecutionPlan(raw: FinalizableTaskRecord["executionPlan"]): ExecutionPlan | null {
@@ -241,10 +242,13 @@ export async function finalizeTaskState(input: FinalizeTaskStateInput): Promise<
   }
 
   await deactivateTaskSession(input.authorization, input.taskId, resolvedSessionId);
-  await syncTaskWorkflowTerminalState({
-    authorization: input.authorization,
-    taskId: input.taskId,
-    status: input.status,
-  });
+
+  if (input.syncWorkflowTerminalState !== false) {
+    await syncTaskWorkflowTerminalState({
+      authorization: input.authorization,
+      taskId: input.taskId,
+      status: input.status,
+    });
+  }
   return true;
 }

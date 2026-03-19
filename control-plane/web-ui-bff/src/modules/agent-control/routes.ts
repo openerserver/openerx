@@ -4,9 +4,10 @@ import { z } from "zod";
 import { authHeader, cpFetch, createInternalAuthorization } from "../../lib/control-plane-client";
 import { mergeTaskStrategy, readOrchestrationStrategy } from "../../lib/orchestration-strategy";
 import { recordPaidExecutionRuntimeUsage } from "../../lib/paid-execution-runtime";
-import { executeLifecycleHooks } from "../hooks/lifecycle-hooks";
+import { executeLifecycleHooks, mergeStageAndStrategyHooks, parseStageHooks } from "../hooks/lifecycle-hooks";
 import { wsBroadcaster } from "../realtime/ws-broadcaster";
 import { finalizeTaskState } from "../tasks/finalize";
+import { fetchCurrentStageHooks } from "../tasks/workflow-stage-execution";
 import {
   extractAssistantResultFromMessages,
   getAgentMessages,
@@ -916,9 +917,15 @@ async function runPreResumeHooks(
     return { ok: false, error: `Failed to load task ${taskId} before resume` };
   }
 
+  // Merge stage-level hooks with strategy-level hooks
+  const rawStageHooks = await fetchCurrentStageHooks(taskId, authorization);
+  const stageHooks = parseStageHooks(rawStageHooks);
+  const mergedHooks = mergeStageAndStrategyHooks(stageHooks, strategyConfig.hooks);
+  const mergedStrategy: typeof strategyConfig = { ...strategyConfig, hooks: mergedHooks };
+
   const task = taskResult.data;
   const hookResult = await executeLifecycleHooks({
-    strategy: strategyConfig,
+    strategy: mergedStrategy,
     trigger: "pre-resume",
     taskId: task.id,
     projectId: task.projectId,

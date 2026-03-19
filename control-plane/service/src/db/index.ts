@@ -5,6 +5,16 @@ import * as schema from "./schema";
 
 const postgresRuntime = openPostgresDatabase();
 
+await postgresRuntime.sql`
+  ALTER TABLE IF EXISTS "workflow_template_stages"
+  ADD COLUMN IF NOT EXISTS "initial_task_definition_json" jsonb
+`;
+
+await postgresRuntime.sql`
+  ALTER TABLE IF EXISTS "tasks"
+  ADD COLUMN IF NOT EXISTS "auto_advance_stages" boolean DEFAULT false
+`;
+
 export const dbDialect = "postgres" as const;
 export const db = drizzlePostgres(postgresRuntime.sql, { schema });
 export const postgresSql = postgresRuntime.sql as Sql;

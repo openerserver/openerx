@@ -449,7 +449,7 @@ test.describe("Chat Settings admin browser flow", () => {
 
     await page.goto("/login");
 
-    await expect(page.getByRole("heading", { name: "OpenerX" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Opener-X" })).toBeVisible();
     await page.getByLabel("用户名").fill("admin");
     await page.getByLabel("密码").fill("admin123!");
     await page.getByRole("button", { name: /^登\s*录$/ }).click();

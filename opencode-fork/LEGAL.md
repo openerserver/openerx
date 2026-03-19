@@ -4,7 +4,7 @@
 
 - **OpenCode**: MIT License — free to use, modify, distribute.
 - **Oh-My-OpenAgent**: SUL License (restricted) — **DO NOT** vendor, copy, or fork any code.
-- **OpenerX Enterprise Extensions**: MIT License (our own code).
+- **Opener-X Enterprise Extensions**: MIT License (our own code).
 
 ## Clean-Room Rules
 

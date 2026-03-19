@@ -3,6 +3,7 @@ import { resolveModelRoute } from "../../lib/opencode-config";
 import {
   type ExecutionCandidate,
   type ExecutionPlan,
+  type ExecutionStep,
   type JudgeResult,
   mergeTaskStrategy,
   parseTaskStrategy,
@@ -12,6 +13,7 @@ import {
 import type { PaidExecutionGuardState } from "../../lib/paid-execution-guard";
 import type { RealtimeEvent, RealtimeEventType } from "../../types/events";
 import {
+  createSession,
   extractAssistantResultFromMessages,
   findAgentRunBySessionId,
   getSessionMessages,
@@ -20,13 +22,15 @@ import {
   updateAgentRunStatus,
 } from "../agent-control/opencode-adapter";
 import {
+  createAgentRunRecord,
   patchAgentRunRecord,
   recordAgentAudit,
   recordModelUsage,
 } from "../agent-control/run-persistence";
 import { collectChangesFromSession } from "../code-changes/change-collector";
-import { executeLifecycleHooks } from "../hooks/lifecycle-hooks";
+import { executeLifecycleHooks, mergeStageAndStrategyHooks, parseStageHooks } from "../hooks/lifecycle-hooks";
 import { finalizeTaskState } from "../tasks/finalize";
+import { fetchCurrentStageHooks, persistWorkflowStageExecutionOutcome } from "../tasks/workflow-stage-execution";
 import { buildPipelineStageUpdatedEvents } from "./pipeline-events";
 
 // Subscribes to OpenCode Runtime SSE events and transforms them into
@@ -130,6 +134,19 @@ class SSEAggregator {
   >();
   private judgingTasks = new Set<string>();
   private paidExecutionRuntime = new Map<string, { tripped: boolean; reason?: string }>();
+
+  // ── Sequential-chain execution tracking ─────────────────────────
+  // Maps taskId → chain execution context
+  private sequentialChainTasks = new Map<
+    string,
+    {
+      plan: ExecutionPlan;
+      authorization: string;
+      projectId?: string;
+    }
+  >();
+  // Maps sessionId → { taskId, stepIndex } for chain step sessions
+  private sessionToChainStepMap = new Map<string, { taskId: string; stepIndex: number }>();
 
   private isPaidExecutionBreakerTripped(taskId: string): boolean {
     return this.paidExecutionRuntime.get(taskId)?.tripped === true;
@@ -378,12 +395,30 @@ class SSEAggregator {
     this.parallelCandidateResults.set(taskId, new Map());
   }
 
+  /** Register a sequential-chain task for step-by-step tracking. */
+  registerSequentialChainTask(
+    taskId: string,
+    sessionId: string,
+    plan: ExecutionPlan,
+    authorization: string,
+  ): void {
+    this.sequentialChainTasks.set(taskId, { plan, authorization });
+    const stepIndex = plan.currentChainStepIndex ?? 0;
+    this.sessionToChainStepMap.set(sessionId, { taskId, stepIndex });
+  }
+
   private async triggerPostExecutionHooks(
     taskId: string,
     resultText: string | undefined,
     authorization: string,
   ): Promise<void> {
     const strategyConfig = readOrchestrationStrategy();
+
+    // Merge stage-level hooks with strategy-level hooks
+    const rawStageHooks = await fetchCurrentStageHooks(taskId, authorization);
+    const stageHooks = parseStageHooks(rawStageHooks);
+    const mergedHooks = mergeStageAndStrategyHooks(stageHooks, strategyConfig.hooks);
+    const mergedStrategy: typeof strategyConfig = { ...strategyConfig, hooks: mergedHooks };
 
     const taskResult = await cpFetch<CompletedTaskContext>(
       `/api/tasks/${encodeURIComponent(taskId)}`,
@@ -418,7 +453,7 @@ class SSEAggregator {
     }
 
     const hookResult = await executeLifecycleHooks({
-      strategy: strategyConfig,
+      strategy: mergedStrategy,
       trigger: "post-execution",
       taskId: task.id,
       projectId: task.projectId,
@@ -906,6 +941,67 @@ class SSEAggregator {
       const resultText = assistantResult.text;
       const tokenUsed = assistantResult.tokenUsed;
 
+      // Check if this is a sequential-chain step completion
+      const chainStepInfo = this.sessionToChainStepMap.get(event.sessionId);
+      if (chainStepInfo) {
+        const chainCtx = this.sequentialChainTasks.get(chainStepInfo.taskId);
+        if (chainCtx) {
+          updateAgentRunStatus(event.agentRunId, "completed");
+          await Promise.all([
+            patchAgentRunRecord({
+              taskId: event.taskId,
+              agentRunId: event.agentRunId,
+              status: "completed",
+              model: run.model,
+              tokenUsed,
+              result: resultText,
+              finishedAt: new Date().toISOString(),
+            }),
+            recordAgentAudit({
+              projectId: event.projectId,
+              taskId: event.taskId,
+              sessionId: event.sessionId,
+              agentRunId: event.agentRunId,
+              eventType: "agent",
+              action: "chain_step_completed",
+              detail: {
+                stepIndex: chainStepInfo.stepIndex,
+                executionMode: "sequential-chain",
+                result: resultText,
+              },
+              riskLevel: "low",
+            }),
+          ]);
+          this.finalizedAgentRuns.add(event.agentRunId);
+          this.sessionToChainStepMap.delete(event.sessionId);
+
+          this.emit({
+            id: crypto.randomUUID(),
+            type: "agent.completed",
+            ts: new Date().toISOString(),
+            sessionId: event.sessionId,
+            taskId: event.taskId,
+            projectId: event.projectId,
+            agentRunId: event.agentRunId,
+            data: {
+              sourceEvent: event.type,
+              executionMode: "sequential-chain",
+              chainStepIndex: chainStepInfo.stepIndex,
+              ...(resultText ? { result: resultText } : {}),
+            },
+          });
+
+          void this.advanceSequentialChainStep(
+            chainStepInfo.taskId,
+            chainStepInfo.stepIndex,
+            resultText,
+            event.projectId ?? "",
+            authorization,
+          );
+          return;
+        }
+      }
+
       // Check if this is a parallel candidate completion
       const candidateInfo = this.sessionToCandidateMap.get(event.sessionId);
       const parallelSessions = candidateInfo
@@ -1047,11 +1143,20 @@ class SSEAggregator {
         sessionId: event.sessionId,
         agentRunId: event.agentRunId,
         result: resultText,
+        syncWorkflowTerminalState: false,
       });
 
       if (!taskUpdate) {
         throw new Error(`Task completion sync failed for ${event.taskId}`);
       }
+
+      await persistWorkflowStageExecutionOutcome({
+        taskId: event.taskId,
+        authorization,
+        resultText,
+      }).catch((error) => {
+        console.error(`Failed to persist workflow stage outcome for task ${event.taskId}:`, error);
+      });
 
       updateAgentRunStatus(event.agentRunId, "completed");
       await Promise.all([
@@ -1315,6 +1420,50 @@ class SSEAggregator {
       return;
     }
 
+    // Check if this is a sequential-chain step failure
+    const chainStepInfo = this.sessionToChainStepMap.get(event.sessionId);
+    if (chainStepInfo) {
+      const chainCtx = this.sequentialChainTasks.get(chainStepInfo.taskId);
+      if (chainCtx) {
+        // Mark the current step as failed in the plan
+        const chainSteps = chainCtx.plan.steps.filter((s) => s.type === "chain-step");
+        const failedStep = chainSteps[chainStepInfo.stepIndex];
+        if (failedStep) {
+          failedStep.status = "failed";
+          failedStep.result = `[FAILED] ${errorMessage}`;
+          failedStep.finishedAt = new Date().toISOString();
+        }
+
+        this.sessionToChainStepMap.delete(event.sessionId);
+
+        this.emit({
+          id: crypto.randomUUID(),
+          type: "agent.completed",
+          ts: new Date().toISOString(),
+          sessionId: event.sessionId,
+          taskId: event.taskId,
+          projectId: event.projectId,
+          agentRunId: run.agentRunId,
+          data: {
+            sourceEvent: event.type,
+            executionMode: "sequential-chain",
+            chainStepIndex: chainStepInfo.stepIndex,
+            error: errorMessage,
+            status: "failed",
+          },
+        });
+
+        // Fail the entire chain
+        void this.finalizeSequentialChainTask(
+          chainStepInfo.taskId,
+          event.projectId ?? "",
+          failureAuthorization,
+          errorMessage,
+        );
+        return;
+      }
+    }
+
     // Single mode: patch task as failed + trigger on-failure hooks
     try {
       const authorization = failureAuthorization;
@@ -1385,6 +1534,13 @@ class SSEAggregator {
     authorization: string,
   ): Promise<void> {
     const strategyConfig = readOrchestrationStrategy();
+
+    // Merge stage-level hooks with strategy-level hooks
+    const rawStageHooks = await fetchCurrentStageHooks(taskId, authorization);
+    const stageHooks = parseStageHooks(rawStageHooks);
+    const mergedHooks = mergeStageAndStrategyHooks(stageHooks, strategyConfig.hooks);
+    const mergedStrategy: typeof strategyConfig = { ...strategyConfig, hooks: mergedHooks };
+
     const taskResult = await cpFetch<CompletedTaskContext>(
       `/api/tasks/${encodeURIComponent(taskId)}`,
       { authorization },
@@ -1412,7 +1568,7 @@ class SSEAggregator {
     }
 
     const hookResult = await executeLifecycleHooks({
-      strategy: strategyConfig,
+      strategy: mergedStrategy,
       trigger: "on-failure",
       taskId: task.id,
       projectId: task.projectId,
@@ -1585,6 +1741,265 @@ class SSEAggregator {
     return () => this.handlers.delete(handler);
   }
 
+  // ── Sequential-chain step advancement ───────────────────────────
+
+  /**
+   * Advance to the next chain step after the current one completes.
+   * If all steps are done, finalize the chain task.
+   */
+  private async advanceSequentialChainStep(
+    taskId: string,
+    completedStepIndex: number,
+    stepResult: string | undefined,
+    projectId: string,
+    authorization: string,
+  ): Promise<void> {
+    const chainCtx = this.sequentialChainTasks.get(taskId);
+    if (!chainCtx) return;
+
+    const { plan } = chainCtx;
+    const chainSteps = plan.steps.filter((s) => s.type === "chain-step");
+
+    // Mark completed step
+    const completedStep = chainSteps[completedStepIndex];
+    if (completedStep) {
+      completedStep.status = "completed";
+      completedStep.result = stepResult;
+      completedStep.finishedAt = new Date().toISOString();
+    }
+
+    const nextIndex = completedStepIndex + 1;
+    plan.currentChainStepIndex = nextIndex;
+
+    // Persist intermediate plan progress
+    await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
+      method: "PATCH",
+      authorization,
+      body: { executionPlan: JSON.stringify(plan) },
+    });
+
+    // All steps done?
+    if (nextIndex >= chainSteps.length) {
+      void this.finalizeSequentialChainTask(taskId, projectId, authorization);
+      return;
+    }
+
+    // Start next step
+    const nextStep = chainSteps[nextIndex];
+    if (!nextStep) {
+      void this.finalizeSequentialChainTask(taskId, projectId, authorization);
+      return;
+    }
+
+    nextStep.status = "running";
+
+    // Fetch the task to get prompt and context
+    const taskResult = await cpFetch<CompletedTaskContext>(
+      `/api/tasks/${encodeURIComponent(taskId)}`,
+      { authorization },
+    );
+    if (!taskResult.ok) {
+      void this.finalizeSequentialChainTask(taskId, projectId, authorization, "Failed to fetch task for next chain step");
+      return;
+    }
+
+    const task = taskResult.data;
+
+    // Build prompt with completed step results injected
+    const stepPrompt = this.buildChainStepPrompt(task.prompt || "", nextStep, nextIndex, plan.steps);
+
+    // Resolve model override
+    let resolvedModel: { providerId: string; modelId: string } | undefined;
+    if (nextStep.model) {
+      resolvedModel = parseModelString(nextStep.model);
+    } else if (task.selectedModel) {
+      resolvedModel = parseModelString(task.selectedModel);
+    }
+
+    const execResult = await createSession(
+      taskId,
+      task.projectId,
+      stepPrompt,
+      {
+        agent: undefined,
+        model: resolvedModel,
+      },
+    );
+
+    if (execResult.agentRunId) {
+      await createAgentRunRecord({
+        taskId,
+        agentRunId: execResult.agentRunId,
+        sessionId: execResult.sessionId,
+        agentType: "coder",
+        status: execResult.ok ? "running" : "failed",
+        model: resolvedModel,
+        candidateIndex: nextIndex,
+        error: execResult.ok ? undefined : execResult.error,
+        startedAt: new Date().toISOString(),
+        finishedAt: execResult.ok ? undefined : new Date().toISOString(),
+      });
+    }
+
+    if (!execResult.ok || !execResult.sessionId) {
+      nextStep.status = "failed";
+      void this.finalizeSequentialChainTask(taskId, projectId, authorization, execResult.error || "Failed to start next chain step");
+      return;
+    }
+
+    // Register the new session for tracking
+    this.sessionToChainStepMap.set(execResult.sessionId, { taskId, stepIndex: nextIndex });
+
+    // Update plan with new session info
+    plan.candidates[0] = {
+      ...plan.candidates[0],
+      agent: plan.candidates[0]?.agent || "executor",
+      sessionId: execResult.sessionId,
+      agentRunId: execResult.agentRunId,
+      status: "running",
+      startedAt: new Date().toISOString(),
+    };
+
+    await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
+      method: "PATCH",
+      authorization,
+      body: { executionPlan: JSON.stringify(plan) },
+    });
+
+    this.emit({
+      id: crypto.randomUUID(),
+      type: "agent.started",
+      ts: new Date().toISOString(),
+      taskId,
+      projectId,
+      agentRunId: execResult.agentRunId,
+      sessionId: execResult.sessionId,
+      data: {
+        taskId,
+        executionMode: "sequential-chain",
+        chainStepIndex: nextIndex,
+        chainStepTitle: nextStep.title,
+        totalSteps: chainSteps.length,
+      },
+    });
+  }
+
+  /**
+   * Finalize the sequential chain task — aggregate all step results and complete.
+   */
+  private async finalizeSequentialChainTask(
+    taskId: string,
+    projectId: string,
+    authorization: string,
+    failureError?: string,
+  ): Promise<void> {
+    const chainCtx = this.sequentialChainTasks.get(taskId);
+    if (!chainCtx) return;
+
+    try {
+      const { plan } = chainCtx;
+      const chainSteps = plan.steps.filter((s) => s.type === "chain-step");
+      const isFailed = Boolean(failureError);
+      const status = isFailed ? "failed" : "completed";
+
+      // Aggregate results from all chain steps
+      const aggregatedParts: string[] = [];
+      for (const step of chainSteps) {
+        if (step.result && step.status === "completed") {
+          aggregatedParts.push(`## ${step.title}\n${step.result}`);
+        }
+      }
+      const chainResult = aggregatedParts.join("\n\n") || failureError || undefined;
+      plan.chainResult = chainResult;
+
+      await persistWorkflowStageExecutionOutcome({
+        taskId,
+        authorization,
+        resultText: chainResult,
+        source: "sequential-chain",
+      }).catch((error) => {
+        console.error(`Failed to persist workflow stage outcome for chain task ${taskId}:`, error);
+      });
+
+      await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
+        method: "PATCH",
+        authorization,
+        body: {
+          status,
+          executionPlan: JSON.stringify(plan),
+          ...(chainResult ? { result: chainResult } : {}),
+        },
+      });
+
+      this.emit({
+        id: crypto.randomUUID(),
+        type: "task.completed",
+        ts: new Date().toISOString(),
+        taskId,
+        projectId,
+        data: {
+          status,
+          executionMode: "sequential-chain",
+          totalSteps: chainSteps.length,
+          completedSteps: chainSteps.filter((s) => s.status === "completed").length,
+          ...(chainResult ? { result: chainResult } : {}),
+          ...(failureError ? { error: failureError } : {}),
+        },
+      });
+
+      await this.emitPipelineStageUpdates({
+        taskId,
+        projectId,
+        authorization,
+        reason: isFailed ? "task.failed" : "task.completed",
+      });
+
+      if (!isFailed) {
+        this.triggerPostExecutionHooks(taskId, chainResult, authorization).catch((err) => {
+          console.error(`Post-execution hooks failed for chain task ${taskId}:`, err);
+        });
+      } else {
+        void this.triggerOnFailureHooks(taskId, failureError || "Chain execution failed", authorization);
+      }
+    } catch (error) {
+      console.error(`Failed to finalize sequential chain task ${taskId}:`, error);
+    } finally {
+      // Clean up tracking state
+      this.sequentialChainTasks.delete(taskId);
+      for (const [sid, info] of this.sessionToChainStepMap) {
+        if (info.taskId === taskId) this.sessionToChainStepMap.delete(sid);
+      }
+    }
+  }
+
+  /**
+   * Build a prompt for a specific chain step, injecting completed step results.
+   */
+  private buildChainStepPrompt(
+    basePrompt: string,
+    step: ExecutionStep,
+    stepIndex: number,
+    allSteps: ExecutionStep[],
+  ): string {
+    const chainSteps = allSteps.filter((s) => s.type === "chain-step");
+    const totalSteps = chainSteps.length;
+    const parts: string[] = [basePrompt];
+
+    const completedSteps = chainSteps.filter((s) => s.status === "completed" && s.result);
+    if (completedSteps.length > 0) {
+      parts.push("\n\n## 已完成步骤产出\n");
+      for (const cs of completedSteps) {
+        parts.push(`### ${cs.title}\n${cs.result}\n`);
+      }
+    }
+
+    parts.push(`\n## 当前步骤 (${stepIndex + 1}/${totalSteps}): ${step.title}\n`);
+    parts.push(step.instruction || "");
+    parts.push("\n请只完成当前步骤的目标。完成后输出本步骤产出摘要。");
+
+    return parts.join("\n");
+  }
+
   /**
    * Finalize a parallel task after all candidates have completed.
    * Optionally triggers a judge evaluation.
@@ -1713,6 +2128,15 @@ class SSEAggregator {
       // Use winner's result as the task result
       const winnerIdx = plan?.winnerCandidateIndex ?? candidateResults[0]?.[0] ?? 0;
       const winnerResult = results?.get(winnerIdx)?.result;
+
+      await persistWorkflowStageExecutionOutcome({
+        taskId,
+        authorization,
+        resultText: winnerResult,
+        source: "parallel-winner",
+      }).catch((error) => {
+        console.error(`Failed to persist workflow stage outcome for parallel task ${taskId}:`, error);
+      });
 
       // Final PATCH to complete the task
       await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}`, {

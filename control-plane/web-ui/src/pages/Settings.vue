@@ -761,7 +761,7 @@
 
           <a-card title="生命周期 Hooks" size="small" style="margin-top: 16px">
             <a-typography-text type="secondary" style="display: block; margin-bottom: 12px; font-size: 12px">
-              使用统一 hooks 配置执行前、执行后、失败后、续跑前的治理逻辑。前置/后置评估已合并到 hooks 视图管理。
+              使用统一 hooks 配置执行前、执行后、失败后、续跑前的治理逻辑。失败后 Hook 当前仅覆盖 runtime/session 级硬失败；续跑前 Hook 仅在恢复已暂停的 agent run 时触发，不覆盖普通继续对话。
             </a-typography-text>
             <a-row :gutter="16">
               <a-col v-for="section in HOOK_SECTIONS" :key="section.trigger" :xs="24" :xl="12" style="margin-bottom: 16px">
@@ -769,6 +769,9 @@
                   <template #extra>
                     <a-button size="small" type="dashed" @click="addHook(section.trigger)">+ 新增</a-button>
                   </template>
+                  <a-typography-text type="secondary" style="display: block; margin-bottom: 12px; font-size: 12px">
+                    {{ section.description }}
+                  </a-typography-text>
                   <a-empty v-if="hooksByTrigger(section.trigger).length === 0" :description="section.emptyText" />
                   <a-collapse v-else size="small">
                     <a-collapse-panel
@@ -3007,10 +3010,30 @@ function handleTemplateCategoryChange(
 }
 
 const HOOK_SECTIONS = [
-  { trigger: "pre-execution", title: "执行前 Hook", emptyText: "暂无执行前 Hook" },
-  { trigger: "post-execution", title: "执行后 Hook", emptyText: "暂无执行后 Hook" },
-  { trigger: "on-failure", title: "失败后 Hook", emptyText: "暂无失败后 Hook" },
-  { trigger: "pre-resume", title: "续跑前 Hook", emptyText: "暂无续跑前 Hook" },
+  {
+    trigger: "pre-execution",
+    title: "执行前 Hook",
+    emptyText: "暂无执行前 Hook",
+    description: "任务首次执行前触发，适合做准入审查、Prompt 改写和模型切换。",
+  },
+  {
+    trigger: "post-execution",
+    title: "执行后 Hook",
+    emptyText: "暂无执行后 Hook",
+    description: "任务执行完成后触发，适合做结果复核、审计记录和后置通知。",
+  },
+  {
+    trigger: "on-failure",
+    title: "失败后 Hook",
+    emptyText: "暂无失败后 Hook",
+    description: "仅在 runtime/session 级硬失败时触发，不覆盖结果质量差、未达成阶段目标等软失败。",
+  },
+  {
+    trigger: "pre-resume",
+    title: "续跑前 Hook",
+    emptyText: "暂无续跑前 Hook",
+    description: "仅在恢复已暂停的 agent run 前触发，用于恢复前检查和补充指导，不覆盖普通 continue。",
+  },
 ] as const;
 
 function hooksByTrigger(trigger: LifecycleHook["trigger"]) {

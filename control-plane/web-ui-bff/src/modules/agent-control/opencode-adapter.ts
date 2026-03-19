@@ -145,7 +145,7 @@ function appendExecutionContextLines(lines: string[], options?: PromptOptions): 
 
   lines.push(
     "Execution context:",
-    `- OpenerX task ID: ${options.taskId}`,
+    `- Opener-X task ID: ${options.taskId}`,
     `- Project ID: ${options.projectId}`,
   );
 }

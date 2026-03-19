@@ -76,7 +76,7 @@ export interface PluginOperationPatch {
   plugins?: PluginConfigItem[];
 }
 
-export type OrchestrationExecutionMode = "single" | "parallel" | "unknown";
+export type OrchestrationExecutionMode = "single" | "parallel" | "sequential-chain" | "unknown";
 
 export interface OrchestrationCategorySummary {
   category: string;

@@ -19,7 +19,7 @@
 				"background": {
 					"activeOnStart": true,
 					"beginsPattern": ".",
-					"endsPattern": "OpenerX App running on http://localhost:4098"
+					"endsPattern": "Opener-X App running on http://localhost:4098"
 				}
 			},
 			"group": "none"
@@ -42,7 +42,7 @@
 				"background": {
 					"activeOnStart": true,
 					"beginsPattern": ".",
-					"endsPattern": "OpenerX App running on http://localhost:4098"
+					"endsPattern": "Opener-X App running on http://localhost:4098"
 				}
 			},
 			"group": "none"
@@ -65,7 +65,7 @@
 				"background": {
 					"activeOnStart": true,
 					"beginsPattern": ".",
-					"endsPattern": "OpenerX App running on http://localhost:4193"
+					"endsPattern": "Opener-X App running on http://localhost:4193"
 				}
 			},
 			"group": "none"
@@ -88,7 +88,7 @@
 				"background": {
 					"activeOnStart": true,
 					"beginsPattern": ".",
-					"endsPattern": "OpenerX Control Plane running on http://localhost:4097"
+					"endsPattern": "Opener-X Control Plane running on http://localhost:4097"
 				}
 			},
 			"group": "none"
@@ -134,7 +134,7 @@
 				"background": {
 					"activeOnStart": true,
 					"beginsPattern": ".",
-					"endsPattern": "Started development server: http://localhost:4098|OpenerX BFF running on http://localhost:4098"
+					"endsPattern": "Started development server: http://localhost:4098|Opener-X BFF running on http://localhost:4098"
 				}
 			},
 			"group": "none"

@@ -1,7 +1,7 @@
 <template>
   <div :style="loginThemeStyles.page">
     <a-card :style="loginThemeStyles.card" :bordered="true">
-      <h1 :style="loginThemeStyles.title">OpenerX</h1>
+      <h1 :style="loginThemeStyles.title">Opener-X</h1>
       <p :style="loginThemeStyles.subtitle">
         Enterprise AI Dev/Ops Platform
       </p>

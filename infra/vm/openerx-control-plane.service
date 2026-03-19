@@ -1,5 +1,5 @@
 [Unit]
-Description=OpenerX Control Plane API
+Description=Opener-X Control Plane API
 After=network.target
 Wants=network-online.target
 

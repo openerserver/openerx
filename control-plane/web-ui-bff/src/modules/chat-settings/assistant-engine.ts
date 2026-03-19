@@ -5,7 +5,11 @@ import {
   buildStrategyVisualizations,
 } from "../../lib/chat-settings-visualization";
 import { buildStrategyMermaidMap } from "../../lib/orchestration-mermaid";
-import type { OrchestrationStrategy, WorkflowTemplate } from "../../lib/orchestration-strategy";
+import type {
+  ExecutionMode,
+  OrchestrationStrategy,
+  WorkflowTemplate,
+} from "../../lib/orchestration-strategy";
 import { normalizeOrchestrationStrategy } from "../../lib/orchestration-strategy";
 import { runDetachedPrompt } from "../agent-control/opencode-adapter";
 import type { ChatSettingsMessage } from "./conversation-manager";
@@ -76,7 +80,7 @@ function buildPrompt(args: {
 
   return [
     "[SYSTEM INSTRUCTIONS]",
-    "你是 OpenerX Chat Settings 配置助手。你只能生成系统配置变更建议，不能生成无关代码。",
+    "你是 Opener-X Chat Settings 配置助手。你只能生成系统配置变更建议，不能生成无关代码。",
     "你必须输出一个 JSON 对象，不要输出 Markdown 代码块。",
     "JSON 格式为:",
     safeJsonStringify({
@@ -198,7 +202,7 @@ function resolveTemplateForCategory(
 function inferTemplateMode(
   strategy: OrchestrationStrategy,
   templatePatch: Record<string, unknown>,
-): "single" | "parallel" {
+): ExecutionMode {
   const templateId = typeof templatePatch.id === "string" ? templatePatch.id : "";
   if (templateId) {
     const existingTemplate = strategy.templates.find((template) => template.id === templateId);

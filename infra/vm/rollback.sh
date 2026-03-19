@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# OpenerX Rollback Script
+# Opener-X Rollback Script
 # Rolls back to the previous deployment version
 set -euo pipefail
 
@@ -36,7 +36,7 @@ if [ -z "$ROLLBACK_TO" ]; then
   exit 1
 fi
 
-echo "=== OpenerX Rollback ==="
+echo "=== Opener-X Rollback ==="
 echo "Current: $(basename "$CURRENT")"
 echo "Rolling back to: $ROLLBACK_TO"
 echo ""

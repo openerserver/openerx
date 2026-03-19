@@ -411,6 +411,17 @@
         </a-form-item>
       </a-form>
     </a-modal>
+
+    <!-- Execution Mode Modal -->
+    <ExecutionModeModal
+      :open="showExecutionModeModal"
+      :loading="!!executingId"
+      :model-options="modelOptions"
+      :models-loading="modelsLoading"
+      :filter-model-option="filterModelOption"
+      @update:open="showExecutionModeModal = $event"
+      @confirm="handleExecutionModeConfirm"
+    />
   </div>
 </template>
 
@@ -418,13 +429,16 @@
 import { PlusOutlined, SyncOutlined } from "@ant-design/icons-vue";
 import { message } from "ant-design-vue";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import ExecutionModeModal from "../components/ExecutionModeModal.vue";
 import { useRoute, useRouter } from "vue-router";
 import {
   ApiError,
   type AutopilotLevel,
   type BossParticipationMode,
+  type ChainStepInput,
   type CollaborationMode,
   type CommandSummary,
+  type ExecutionMode,
   type OperatingModeSelection,
   type RecommendedOperatingProfile,
   type Repository,
@@ -468,6 +482,15 @@ const modelsData = ref<Array<Record<string, unknown>> | null>(null);
 const EXECUTION_SETTLE_TIMEOUT_MS = 3000;
 const EXECUTION_SETTLE_INTERVAL_MS = 200;
 const AUTO_REFRESH_INTERVAL_MS = 8000;
+
+const showExecutionModeModal = ref(false);
+const executionModeTargetTaskId = ref<string | null>(null);
+type ExecutionOverrides = {
+  mode: ExecutionMode;
+  candidates?: Array<{ model: string; label?: string }>;
+  steps?: ChainStepInput[];
+} | null;
+const pendingExecutionOverrides = ref<ExecutionOverrides>(null);
 
 const autoRefreshTimer = ref<ReturnType<typeof setInterval> | null>(null);
 const hasActiveTasks = computed(() =>
@@ -826,8 +849,8 @@ async function autoExecuteCreatedTask(taskId?: string) {
   }
 }
 
-async function runTaskExecution(taskId: string) {
-  await executeTask(taskId);
+async function runTaskExecution(taskId: string, overrides?: ExecutionOverrides) {
+  await executeTask(taskId, overrides ?? undefined);
   upsertTaskSnapshot({
     id: taskId,
     status: "running",
@@ -840,7 +863,7 @@ async function runTaskExecution(taskId: string) {
 async function attemptTaskExecution(taskId: string, fromAutoCreate = false) {
   const preflight = await getTaskExecutionPreflight(taskId);
   if (preflight.allowed) {
-    return runTaskExecution(taskId);
+    return runTaskExecution(taskId, fromAutoCreate ? undefined : pendingExecutionOverrides.value);
   }
 
   if (
@@ -870,7 +893,7 @@ async function attemptTaskExecution(taskId: string, fromAutoCreate = false) {
     message.success(
       fromAutoCreate ? "已自动降级模型并重试执行" : "已切换到低成本模型，正在重试执行",
     );
-    return runTaskExecution(taskId);
+    return runTaskExecution(taskId, fromAutoCreate ? undefined : pendingExecutionOverrides.value);
   }
 
   throw new ApiError({
@@ -1194,7 +1217,19 @@ async function handleCreate() {
   }
 }
 
-async function handleExecute(taskId: string) {
+function handleExecute(taskId: string) {
+  executionModeTargetTaskId.value = taskId;
+  pendingExecutionOverrides.value = null;
+  if (!modelsData.value) loadModels();
+  showExecutionModeModal.value = true;
+}
+
+async function handleExecutionModeConfirm(overrides: ExecutionOverrides) {
+  showExecutionModeModal.value = false;
+  const taskId = executionModeTargetTaskId.value;
+  if (!taskId) return;
+  executionModeTargetTaskId.value = null;
+  pendingExecutionOverrides.value = overrides;
   executingId.value = taskId;
   try {
     const latestTask = await attemptTaskExecution(taskId);
@@ -1225,6 +1260,7 @@ async function handleExecute(taskId: string) {
     }
   } finally {
     executingId.value = null;
+    pendingExecutionOverrides.value = null;
   }
 }
 

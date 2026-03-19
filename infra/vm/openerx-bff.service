@@ -1,5 +1,5 @@
 [Unit]
-Description=OpenerX Web UI BFF
+Description=Opener-X Web UI BFF
 After=network.target openerx-control-plane.service
 Wants=openerx-control-plane.service
 

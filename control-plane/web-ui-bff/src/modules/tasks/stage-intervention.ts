@@ -15,11 +15,12 @@ interface WorkflowTemplateStageRecord {
   stageKey: string;
   name: string;
   enabled: boolean;
-  mode: "single" | "parallel" | "pipeline";
+  mode: "single" | "parallel" | "sequential-chain";
   primaryRoleAgentId: string;
   participantRoleAgentIdsJson: string[];
   entryCriteriaJson?: string[] | null;
   exitCriteriaJson?: string[] | null;
+  hooksJson?: Array<Record<string, unknown>> | null;
   gatesJson?: Array<Record<string, unknown>> | null;
   approvalsJson?: Array<Record<string, unknown>> | null;
 }
@@ -435,7 +436,7 @@ function buildRolePrompt(input: {
     ? `\n任务当前结果摘要：${input.task.result.trim()}`
     : "";
   return [
-    `你当前作为 ${input.role.name} 参与 OpenerX 工作流阶段审查。`,
+    `你当前作为 ${input.role.name} 参与 Opener-X 工作流阶段审查。`,
     `任务标题：${input.task.title}`,
     `任务说明：${input.task.prompt}`,
     `阶段：${input.stage.name} (${input.stage.stageKey})，当前状态 ${input.stageStatus}`,

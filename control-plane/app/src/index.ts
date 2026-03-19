@@ -18,7 +18,7 @@ setControlPlaneFetchHandler((request) => controlPlaneApp.fetch(request));
 
 const bffServer = createBffServer({
   startBackgroundJobs: true,
-  serviceName: "openerx-app",
+  serviceName: "opener-x-app",
 });
 
 function jsonResponse(body: unknown, status = 200) {
@@ -81,7 +81,7 @@ export default {
     const url = new URL(req.url);
 
     if (url.pathname === "/health" || url.pathname === "/health/live") {
-      return jsonResponse({ status: "ok", service: "openerx-app" });
+      return jsonResponse({ status: "ok", service: "opener-x-app" });
     }
 
     if (url.pathname === "/health/ready") {
@@ -114,4 +114,4 @@ export default {
   websocket: bffServer.websocket,
 };
 
-console.log(`OpenerX App running on http://localhost:${port}`);
+console.log(`Opener-X App running on http://localhost:${port}`);

@@ -5,9 +5,9 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-APP_LOG="$(mktemp -t openerx-app.XXXXXX.log)"
-SERVICE_LOG="$(mktemp -t openerx-service.XXXXXX.log)"
-BFF_LOG="$(mktemp -t openerx-bff.XXXXXX.log)"
+APP_LOG="$(mktemp -t opener-x-app.XXXXXX.log)"
+SERVICE_LOG="$(mktemp -t opener-x-service.XXXXXX.log)"
+BFF_LOG="$(mktemp -t opener-x-bff.XXXXXX.log)"
 UI_DEV_SERVER_URL="${UI_DEV_SERVER_URL:-http://127.0.0.1:5173}"
 APP_PID=""
 SERVICE_PID=""

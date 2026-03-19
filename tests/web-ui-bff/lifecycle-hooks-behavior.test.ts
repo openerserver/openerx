@@ -154,6 +154,8 @@ mock.module("../../control-plane/web-ui-bff/src/lib/orchestration-strategy", () 
 
 mock.module("../../control-plane/web-ui-bff/src/modules/hooks/lifecycle-hooks", () => ({
   executeLifecycleHooks: executeLifecycleHooksMock,
+  parseStageHooks: (raw: unknown) => (Array.isArray(raw) ? raw : []),
+  mergeStageAndStrategyHooks: (_stage: unknown[], strategy: unknown[]) => strategy ?? [],
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/modules/realtime/ws-broadcaster", () => ({

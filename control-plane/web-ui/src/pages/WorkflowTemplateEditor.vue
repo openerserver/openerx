@@ -300,6 +300,220 @@
                     </a-col>
                   </a-row>
 
+                  <a-card size="small" title="阶段初始任务定义" style="margin-bottom: 12px">
+                    <a-row :gutter="16">
+                      <a-col :xs="24" :md="12">
+                        <a-form-item label="任务标题模板" extra="输入控件：单行输入。校验：必填。">
+                          <a-input
+                            :value="stage.initialTaskDefinition.titleTemplate"
+                            placeholder="例如：Clarify：澄清需求范围"
+                            @update:value="stage.initialTaskDefinition.titleTemplate = String($event ?? '')"
+                          />
+                        </a-form-item>
+                      </a-col>
+                      <a-col :xs="24" :md="12">
+                        <a-form-item label="默认执行模式" extra="输入控件：下拉选择。校验：可为空，留空时沿用阶段模式。">
+                          <a-select
+                            :value="stage.initialTaskDefinition.defaultExecutionMode"
+                            :options="initialTaskExecutionModeOptions"
+                            @update:value="stage.initialTaskDefinition.defaultExecutionMode = normalizeInitialTaskExecutionMode($event)"
+                          />
+                        </a-form-item>
+                      </a-col>
+                    </a-row>
+                    <a-row :gutter="16">
+                      <a-col :xs="24" :md="12">
+                        <a-form-item label="任务目标模板" extra="输入控件：多行文本。校验：必填。">
+                          <a-textarea
+                            :value="stage.initialTaskDefinition.goalTemplate"
+                            :rows="3"
+                            placeholder="说明这个阶段首个任务要达成什么目标"
+                            @update:value="stage.initialTaskDefinition.goalTemplate = String($event ?? '')"
+                          />
+                        </a-form-item>
+                      </a-col>
+                      <a-col :xs="24" :md="12">
+                        <a-form-item label="任务完成条件" extra="输入控件：多行文本，每行一条。校验：可选。">
+                          <a-textarea
+                            :value="toMultiline(stage.initialTaskDefinition.doneWhen)"
+                            :rows="3"
+                            placeholder="每行一条，例如：范围和约束已经明确"
+                            @update:value="setInitialTaskDoneWhen(stage.initialTaskDefinition, $event)"
+                          />
+                        </a-form-item>
+                      </a-col>
+                    </a-row>
+                    <a-form-item label="首轮指令模板" extra="输入控件：多行文本。校验：必填。">
+                      <a-textarea
+                        :value="stage.initialTaskDefinition.instructionTemplate"
+                        :rows="5"
+                        placeholder="填写该阶段初始任务启动时发给模型的主指令"
+                        @update:value="stage.initialTaskDefinition.instructionTemplate = String($event ?? '')"
+                      />
+                    </a-form-item>
+
+                    <a-card
+                      v-if="stage.initialTaskDefinition.defaultExecutionMode === 'parallel'"
+                      size="small"
+                      title="默认候选模型"
+                      style="margin-bottom: 12px"
+                    >
+                      <a-space direction="vertical" style="width: 100%" :size="12">
+                        <a-alert
+                          type="info"
+                          show-icon
+                          message="输入控件：模型与标签。校验：并行模式下至少 2 个候选模型，且 model 必填。"
+                        />
+                        <a-empty v-if="stage.initialTaskDefinition.defaultCandidates.length === 0" description="当前未配置默认候选模型" />
+                        <a-card
+                          v-for="(candidate, candidateIndex) in stage.initialTaskDefinition.defaultCandidates"
+                          :key="candidate.key"
+                          size="small"
+                        >
+                          <a-row :gutter="16">
+                            <a-col :xs="24" :md="12">
+                              <a-form-item label="模型 ID">
+                                <a-input
+                                  :value="candidate.model"
+                                  placeholder="例如：gpt-5.4 / claude-sonnet"
+                                  @update:value="candidate.model = String($event ?? '')"
+                                />
+                              </a-form-item>
+                            </a-col>
+                            <a-col :xs="24" :md="12">
+                              <a-form-item label="展示标签">
+                                <a-input
+                                  :value="candidate.label"
+                                  placeholder="例如：主方案 / 对照方案"
+                                  @update:value="candidate.label = String($event ?? '')"
+                                />
+                              </a-form-item>
+                            </a-col>
+                          </a-row>
+                          <a-button danger size="small" @click="removeInitialTaskCandidate(stage.initialTaskDefinition, candidateIndex)">
+                            删除候选模型
+                          </a-button>
+                        </a-card>
+                        <a-button size="small" @click="addInitialTaskCandidate(stage.initialTaskDefinition)">
+                          新增候选模型
+                        </a-button>
+                      </a-space>
+                    </a-card>
+
+                    <a-card
+                      v-if="stage.initialTaskDefinition.defaultExecutionMode === 'sequential-chain'"
+                      size="small"
+                      title="默认步骤"
+                      style="margin-bottom: 12px"
+                    >
+                      <a-space direction="vertical" style="width: 100%" :size="12">
+                        <a-alert
+                          type="info"
+                          show-icon
+                          message="输入控件：步骤标题、指令、模型。校验：sequential-chain 模式至少 1 步，且标题和指令必填。"
+                        />
+                        <a-empty v-if="stage.initialTaskDefinition.defaultSteps.length === 0" description="当前未配置默认步骤" />
+                        <a-card
+                          v-for="(step, stepIndex) in stage.initialTaskDefinition.defaultSteps"
+                          :key="step.id"
+                          size="small"
+                        >
+                          <a-row :gutter="16">
+                            <a-col :xs="24" :md="8">
+                              <a-form-item label="步骤标题">
+                                <a-input
+                                  :value="step.title"
+                                  placeholder="例如：先做需求分析"
+                                  @update:value="step.title = String($event ?? '')"
+                                />
+                              </a-form-item>
+                            </a-col>
+                            <a-col :xs="24" :md="8">
+                              <a-form-item label="步骤模型">
+                                <a-input
+                                  :value="step.model"
+                                  placeholder="可选，留空则沿用当前模型"
+                                  @update:value="step.model = String($event ?? '')"
+                                />
+                              </a-form-item>
+                            </a-col>
+                            <a-col :xs="24" :md="8">
+                              <a-form-item label="步骤 ID">
+                                <a-input :value="step.id" disabled />
+                              </a-form-item>
+                            </a-col>
+                          </a-row>
+                          <a-form-item label="步骤指令">
+                            <a-textarea
+                              :value="step.instruction"
+                              :rows="3"
+                              placeholder="填写该步骤的执行指令"
+                              @update:value="step.instruction = String($event ?? '')"
+                            />
+                          </a-form-item>
+                          <a-button danger size="small" @click="removeInitialTaskStep(stage.initialTaskDefinition, stepIndex)">
+                            删除步骤
+                          </a-button>
+                        </a-card>
+                        <a-button size="small" @click="addInitialTaskStep(stage.initialTaskDefinition)">
+                          新增步骤
+                        </a-button>
+                      </a-space>
+                    </a-card>
+
+                    <a-row :gutter="16">
+                      <a-col :xs="24" :md="12">
+                        <a-form-item label="摘要标签" extra="输入控件：单行输入。校验：可选。">
+                          <a-input
+                            :value="stage.initialTaskDefinition.outputContract.summaryLabel"
+                            placeholder="例如：clarify-summary"
+                            @update:value="stage.initialTaskDefinition.outputContract.summaryLabel = String($event ?? '')"
+                          />
+                        </a-form-item>
+                      </a-col>
+                      <a-col :xs="24" :md="12">
+                        <a-form-item label="产物键列表" extra="输入控件：标签输入。校验：可选。">
+                          <a-select
+                            :value="stage.initialTaskDefinition.outputContract.artifactKeys"
+                            mode="tags"
+                            placeholder="输入 artifact key，例如 scope、constraints"
+                            @update:value="stage.initialTaskDefinition.outputContract.artifactKeys = Array.isArray($event) ? $event.map((item) => String(item)) : []"
+                          />
+                        </a-form-item>
+                      </a-col>
+                    </a-row>
+
+                    <a-space direction="vertical" style="width: 100%" :size="8">
+                      <a-typography-text type="secondary">上下文与输出约束</a-typography-text>
+                      <a-space wrap>
+                        <a-checkbox
+                          :checked="stage.initialTaskDefinition.contextBindings.includeProjectBrief"
+                          @update:checked="stage.initialTaskDefinition.contextBindings.includeProjectBrief = Boolean($event)"
+                        >
+                          注入项目背景
+                        </a-checkbox>
+                        <a-checkbox
+                          :checked="stage.initialTaskDefinition.contextBindings.includePreviousStageSummary"
+                          @update:checked="stage.initialTaskDefinition.contextBindings.includePreviousStageSummary = Boolean($event)"
+                        >
+                          注入前序阶段摘要
+                        </a-checkbox>
+                        <a-checkbox
+                          :checked="stage.initialTaskDefinition.contextBindings.includeCurrentStageExitCriteria"
+                          @update:checked="stage.initialTaskDefinition.contextBindings.includeCurrentStageExitCriteria = Boolean($event)"
+                        >
+                          注入当前阶段退出条件
+                        </a-checkbox>
+                        <a-checkbox
+                          :checked="stage.initialTaskDefinition.outputContract.requireStageCompleteMarker"
+                          @update:checked="stage.initialTaskDefinition.outputContract.requireStageCompleteMarker = Boolean($event)"
+                        >
+                          要求输出 [STAGE_COMPLETE]
+                        </a-checkbox>
+                      </a-space>
+                    </a-space>
+                  </a-card>
+
                   <a-card size="small" title="Gate 配置" style="margin-bottom: 12px">
                     <a-space direction="vertical" style="width: 100%" :size="12">
                       <a-empty v-if="stage.gates.length === 0" description="当前未配置 Gate" />
@@ -527,6 +741,175 @@
                     @update:value="newStage.stageTemplateStrategy.note = String($event ?? '')"
                   />
                 </a-form-item>
+                <a-card size="small" title="阶段初始任务定义" style="margin-bottom: 16px">
+                  <a-row :gutter="16">
+                    <a-col :xs="24" :md="12">
+                      <a-form-item label="任务标题模板" extra="输入控件：单行输入。校验：必填。">
+                        <a-input
+                          :value="newStage.initialTaskDefinition.titleTemplate"
+                          @update:value="newStage.initialTaskDefinition.titleTemplate = String($event ?? '')"
+                        />
+                      </a-form-item>
+                    </a-col>
+                    <a-col :xs="24" :md="12">
+                      <a-form-item label="默认执行模式" extra="输入控件：下拉选择。校验：可为空，留空时沿用阶段模式。">
+                        <a-select
+                          :value="newStage.initialTaskDefinition.defaultExecutionMode"
+                          :options="initialTaskExecutionModeOptions"
+                          @update:value="newStage.initialTaskDefinition.defaultExecutionMode = normalizeInitialTaskExecutionMode($event)"
+                        />
+                      </a-form-item>
+                    </a-col>
+                  </a-row>
+                  <a-row :gutter="16">
+                    <a-col :xs="24" :md="12">
+                      <a-form-item label="任务目标模板" extra="输入控件：多行文本。校验：必填。">
+                        <a-textarea
+                          :value="newStage.initialTaskDefinition.goalTemplate"
+                          :rows="3"
+                          @update:value="newStage.initialTaskDefinition.goalTemplate = String($event ?? '')"
+                        />
+                      </a-form-item>
+                    </a-col>
+                    <a-col :xs="24" :md="12">
+                      <a-form-item label="任务完成条件" extra="输入控件：多行文本，每行一条。校验：可选。">
+                        <a-textarea
+                          :value="toMultiline(newStage.initialTaskDefinition.doneWhen)"
+                          :rows="3"
+                          @update:value="setInitialTaskDoneWhen(newStage.initialTaskDefinition, $event)"
+                        />
+                      </a-form-item>
+                    </a-col>
+                  </a-row>
+                  <a-form-item label="首轮指令模板" extra="输入控件：多行文本。校验：必填。">
+                    <a-textarea
+                      :value="newStage.initialTaskDefinition.instructionTemplate"
+                      :rows="5"
+                      @update:value="newStage.initialTaskDefinition.instructionTemplate = String($event ?? '')"
+                    />
+                  </a-form-item>
+                  <a-row :gutter="16">
+                    <a-col :xs="24" :md="12">
+                      <a-form-item label="摘要标签" extra="输入控件：单行输入。校验：可选。">
+                        <a-input
+                          :value="newStage.initialTaskDefinition.outputContract.summaryLabel"
+                          @update:value="newStage.initialTaskDefinition.outputContract.summaryLabel = String($event ?? '')"
+                        />
+                      </a-form-item>
+                    </a-col>
+                    <a-col :xs="24" :md="12">
+                      <a-form-item label="产物键列表" extra="输入控件：标签输入。校验：可选。">
+                        <a-select
+                          :value="newStage.initialTaskDefinition.outputContract.artifactKeys"
+                          mode="tags"
+                          @update:value="newStage.initialTaskDefinition.outputContract.artifactKeys = Array.isArray($event) ? $event.map((item) => String(item)) : []"
+                        />
+                      </a-form-item>
+                    </a-col>
+                  </a-row>
+                  <a-space wrap style="margin-bottom: 12px">
+                    <a-checkbox
+                      :checked="newStage.initialTaskDefinition.contextBindings.includeProjectBrief"
+                      @update:checked="newStage.initialTaskDefinition.contextBindings.includeProjectBrief = Boolean($event)"
+                    >
+                      注入项目背景
+                    </a-checkbox>
+                    <a-checkbox
+                      :checked="newStage.initialTaskDefinition.contextBindings.includePreviousStageSummary"
+                      @update:checked="newStage.initialTaskDefinition.contextBindings.includePreviousStageSummary = Boolean($event)"
+                    >
+                      注入前序阶段摘要
+                    </a-checkbox>
+                    <a-checkbox
+                      :checked="newStage.initialTaskDefinition.contextBindings.includeCurrentStageExitCriteria"
+                      @update:checked="newStage.initialTaskDefinition.contextBindings.includeCurrentStageExitCriteria = Boolean($event)"
+                    >
+                      注入当前阶段退出条件
+                    </a-checkbox>
+                    <a-checkbox
+                      :checked="newStage.initialTaskDefinition.outputContract.requireStageCompleteMarker"
+                      @update:checked="newStage.initialTaskDefinition.outputContract.requireStageCompleteMarker = Boolean($event)"
+                    >
+                      要求输出 [STAGE_COMPLETE]
+                    </a-checkbox>
+                  </a-space>
+
+                  <a-card
+                    v-if="newStage.initialTaskDefinition.defaultExecutionMode === 'parallel'"
+                    size="small"
+                    title="默认候选模型"
+                    style="margin-bottom: 12px"
+                  >
+                    <a-space direction="vertical" style="width: 100%" :size="12">
+                      <a-card
+                        v-for="(candidate, candidateIndex) in newStage.initialTaskDefinition.defaultCandidates"
+                        :key="candidate.key"
+                        size="small"
+                      >
+                        <a-row :gutter="16">
+                          <a-col :xs="24" :md="12">
+                            <a-form-item label="模型 ID">
+                              <a-input :value="candidate.model" @update:value="candidate.model = String($event ?? '')" />
+                            </a-form-item>
+                          </a-col>
+                          <a-col :xs="24" :md="12">
+                            <a-form-item label="展示标签">
+                              <a-input :value="candidate.label" @update:value="candidate.label = String($event ?? '')" />
+                            </a-form-item>
+                          </a-col>
+                        </a-row>
+                        <a-button danger size="small" @click="removeInitialTaskCandidate(newStage.initialTaskDefinition, candidateIndex)">
+                          删除候选模型
+                        </a-button>
+                      </a-card>
+                      <a-button size="small" @click="addInitialTaskCandidate(newStage.initialTaskDefinition)">
+                        新增候选模型
+                      </a-button>
+                    </a-space>
+                  </a-card>
+
+                  <a-card
+                    v-if="newStage.initialTaskDefinition.defaultExecutionMode === 'sequential-chain'"
+                    size="small"
+                    title="默认步骤"
+                    style="margin-bottom: 12px"
+                  >
+                    <a-space direction="vertical" style="width: 100%" :size="12">
+                      <a-card
+                        v-for="(step, stepIndex) in newStage.initialTaskDefinition.defaultSteps"
+                        :key="step.id"
+                        size="small"
+                      >
+                        <a-row :gutter="16">
+                          <a-col :xs="24" :md="8">
+                            <a-form-item label="步骤标题">
+                              <a-input :value="step.title" @update:value="step.title = String($event ?? '')" />
+                            </a-form-item>
+                          </a-col>
+                          <a-col :xs="24" :md="8">
+                            <a-form-item label="步骤模型">
+                              <a-input :value="step.model" @update:value="step.model = String($event ?? '')" />
+                            </a-form-item>
+                          </a-col>
+                          <a-col :xs="24" :md="8">
+                            <a-form-item label="步骤 ID">
+                              <a-input :value="step.id" disabled />
+                            </a-form-item>
+                          </a-col>
+                        </a-row>
+                        <a-form-item label="步骤指令">
+                          <a-textarea :value="step.instruction" :rows="3" @update:value="step.instruction = String($event ?? '')" />
+                        </a-form-item>
+                        <a-button danger size="small" @click="removeInitialTaskStep(newStage.initialTaskDefinition, stepIndex)">
+                          删除步骤
+                        </a-button>
+                      </a-card>
+                      <a-button size="small" @click="addInitialTaskStep(newStage.initialTaskDefinition)">
+                        新增步骤
+                      </a-button>
+                    </a-space>
+                  </a-card>
+                </a-card>
                 <a-space>
                   <a-checkbox :checked="newStage.enabled" @update:checked="newStage.enabled = Boolean($event)">
                     创建后立即启用
@@ -547,6 +930,7 @@ import { message } from "ant-design-vue";
 import { computed, defineAsyncComponent, onMounted, reactive, ref } from "vue";
 import { useRoute } from "vue-router";
 import {
+  type WorkflowTemplateStageInitialTaskDefinition,
   type WorkflowTemplateEditorView,
   createWorkflowTemplateStage,
   deleteWorkflowTemplateStage,
@@ -562,11 +946,12 @@ type StageDraft = {
   stageKey: string;
   name: string;
   enabled: boolean;
-  mode: "single" | "parallel" | "pipeline";
+  mode: "single" | "parallel" | "sequential-chain";
   primaryRoleAgentId: string;
   participantRoleAgentIds: string[];
   entryCriteria: string[];
   exitCriteria: string[];
+  initialTaskDefinition: InitialTaskDefinitionDraft;
   gates: GateDraft[];
   approvals: ApprovalDraft[];
   stageTemplateStrategy: StageTemplateStrategyDraft;
@@ -604,6 +989,45 @@ type StageTemplateStrategyDraft = {
   onBlockedTemplateId: string;
   onWaitingApprovalTemplateId: string;
   note: string;
+};
+
+type InitialTaskExecutionMode = "" | "single" | "parallel" | "sequential-chain";
+
+type InitialTaskCandidateDraft = {
+  key: string;
+  model: string;
+  label: string;
+};
+
+type InitialTaskStepDraft = {
+  id: string;
+  title: string;
+  instruction: string;
+  model: string;
+};
+
+type InitialTaskContextBindingsDraft = {
+  includeProjectBrief: boolean;
+  includePreviousStageSummary: boolean;
+  includeCurrentStageExitCriteria: boolean;
+};
+
+type InitialTaskOutputContractDraft = {
+  summaryLabel: string;
+  artifactKeys: string[];
+  requireStageCompleteMarker: boolean;
+};
+
+type InitialTaskDefinitionDraft = {
+  titleTemplate: string;
+  goalTemplate: string;
+  instructionTemplate: string;
+  doneWhen: string[];
+  defaultExecutionMode: InitialTaskExecutionMode;
+  defaultCandidates: InitialTaskCandidateDraft[];
+  defaultSteps: InitialTaskStepDraft[];
+  contextBindings: InitialTaskContextBindingsDraft;
+  outputContract: InitialTaskOutputContractDraft;
 };
 
 type StagePreset = {
@@ -644,9 +1068,10 @@ const newStage = reactive({
   stageKey: "",
   name: "",
   enabled: true,
-  mode: "single" as "single" | "parallel" | "pipeline",
+  mode: "single" as "single" | "parallel" | "sequential-chain",
   primaryRoleAgentId: "",
   participantRoleAgentIds: [] as string[],
+  initialTaskDefinition: createDefaultInitialTaskDefinition("", ""),
   stageTemplateStrategy: {
     onBlockedTemplateId: "",
     onWaitingApprovalTemplateId: "",
@@ -692,7 +1117,14 @@ const stageCatalogOptions = computed(() =>
 const modeOptions = [
   { label: "single", value: "single" },
   { label: "parallel", value: "parallel" },
-  { label: "pipeline", value: "pipeline" },
+  { label: "sequential-chain", value: "sequential-chain" },
+];
+
+const initialTaskExecutionModeOptions = [
+  { label: "沿用阶段模式", value: "" },
+  { label: "single", value: "single" },
+  { label: "parallel", value: "parallel" },
+  { label: "sequential-chain（顺序编排）", value: "sequential-chain" },
 ];
 
 const collaborationOptions = [
@@ -961,6 +1393,15 @@ function toOptionalOperatingValue(value: unknown) {
   return typeof value === "string" && value.trim() ? value : "";
 }
 
+function normalizeInitialTaskExecutionMode(value: unknown): InitialTaskExecutionMode {
+  if (value === "pipeline") {
+    return "sequential-chain";
+  }
+  return value === "single" || value === "parallel" || value === "sequential-chain"
+    ? value
+    : "";
+}
+
 function asTemplateCollaborationMode(value: string) {
   return value === "solo" || value === "team" || value === "hybrid" ? value : undefined;
 }
@@ -1033,6 +1474,203 @@ function normalizeFailurePolicy(value: unknown): FailurePolicyDraft {
     allowManualOverride: Boolean(record.allowManualOverride ?? record.manualOverride ?? false),
     note: String(record.note ?? record.reason ?? record.description ?? ""),
   };
+}
+
+function createDefaultInitialTaskDefinition(
+  stageKey: string,
+  stageName: string,
+): InitialTaskDefinitionDraft {
+  const resolvedName = stageName.trim() || stageCatalogLabel(stageKey) || stageKey || "未命名阶段";
+  return {
+    titleTemplate: `${resolvedName}：初始任务`,
+    goalTemplate: `完成 ${resolvedName} 阶段的首个任务目标，并输出可用于后续推进的阶段摘要。`,
+    instructionTemplate: `请聚焦 ${resolvedName} 阶段目标，结合当前任务和已有上下文，输出结构化结果，并在完成时给出阶段摘要。`,
+    doneWhen: [],
+    defaultExecutionMode: "",
+    defaultCandidates: [],
+    defaultSteps: [],
+    contextBindings: {
+      includeProjectBrief: true,
+      includePreviousStageSummary: true,
+      includeCurrentStageExitCriteria: true,
+    },
+    outputContract: {
+      summaryLabel: "",
+      artifactKeys: [],
+      requireStageCompleteMarker: true,
+    },
+  };
+}
+
+function normalizeInitialTaskCandidate(value: unknown, index: number): InitialTaskCandidateDraft {
+  const record = toRecord(value);
+  return {
+    key: String(record.key ?? `candidate-${index + 1}-${crypto.randomUUID()}`),
+    model: String(record.model ?? ""),
+    label: String(record.label ?? ""),
+  };
+}
+
+function normalizeInitialTaskStep(value: unknown, index: number): InitialTaskStepDraft {
+  const record = toRecord(value);
+  return {
+    id: String(record.id ?? `step-${index + 1}-${crypto.randomUUID()}`),
+    title: String(record.title ?? ""),
+    instruction: String(record.instruction ?? ""),
+    model: String(record.model ?? ""),
+  };
+}
+
+function normalizeInitialTaskDefinition(
+  value: WorkflowTemplateStageInitialTaskDefinition | null | undefined,
+  stageKey: string,
+  stageName: string,
+): InitialTaskDefinitionDraft {
+  const fallback = createDefaultInitialTaskDefinition(stageKey, stageName);
+  const record = toRecord(value);
+  const contextBindings = toRecord(record.contextBindings);
+  const outputContract = toRecord(record.outputContract);
+  return {
+    titleTemplate:
+      typeof record.titleTemplate === "string" && record.titleTemplate.trim()
+        ? record.titleTemplate
+        : fallback.titleTemplate,
+    goalTemplate:
+      typeof record.goalTemplate === "string" && record.goalTemplate.trim()
+        ? record.goalTemplate
+        : fallback.goalTemplate,
+    instructionTemplate:
+      typeof record.instructionTemplate === "string" && record.instructionTemplate.trim()
+        ? record.instructionTemplate
+        : fallback.instructionTemplate,
+    doneWhen: toStringArray(record.doneWhen),
+    defaultExecutionMode: normalizeInitialTaskExecutionMode(record.defaultExecutionMode),
+    defaultCandidates: Array.isArray(record.defaultCandidates)
+      ? record.defaultCandidates.map((item, index) => normalizeInitialTaskCandidate(item, index))
+      : [],
+    defaultSteps: Array.isArray(record.defaultSteps)
+      ? record.defaultSteps.map((item, index) => normalizeInitialTaskStep(item, index))
+      : [],
+    contextBindings: {
+      includeProjectBrief: Boolean(contextBindings.includeProjectBrief ?? true),
+      includePreviousStageSummary: Boolean(contextBindings.includePreviousStageSummary ?? true),
+      includeCurrentStageExitCriteria: Boolean(
+        contextBindings.includeCurrentStageExitCriteria ?? true,
+      ),
+    },
+    outputContract: {
+      summaryLabel: String(outputContract.summaryLabel ?? ""),
+      artifactKeys: toStringArray(outputContract.artifactKeys),
+      requireStageCompleteMarker: Boolean(outputContract.requireStageCompleteMarker ?? true),
+    },
+  };
+}
+
+function serializeInitialTaskDefinition(
+  initialTaskDefinition: InitialTaskDefinitionDraft,
+): WorkflowTemplateStageInitialTaskDefinition {
+  return {
+    version: 1,
+    titleTemplate: initialTaskDefinition.titleTemplate.trim(),
+    goalTemplate: initialTaskDefinition.goalTemplate.trim(),
+    instructionTemplate: initialTaskDefinition.instructionTemplate.trim(),
+    doneWhen: initialTaskDefinition.doneWhen.map((item) => item.trim()).filter(Boolean),
+    defaultExecutionMode: initialTaskDefinition.defaultExecutionMode || undefined,
+    defaultCandidates:
+      initialTaskDefinition.defaultExecutionMode === "parallel"
+        ? initialTaskDefinition.defaultCandidates
+            .filter((item) => item.model.trim())
+            .map((item) => ({ model: item.model.trim(), label: item.label.trim() || undefined }))
+        : undefined,
+    defaultSteps:
+      initialTaskDefinition.defaultExecutionMode === "sequential-chain"
+        ? initialTaskDefinition.defaultSteps
+            .filter((item) => item.title.trim() || item.instruction.trim() || item.model.trim())
+            .map((item) => ({
+              id: item.id,
+              title: item.title.trim(),
+              instruction: item.instruction.trim(),
+              model: item.model.trim() || undefined,
+            }))
+        : undefined,
+    contextBindings: {
+      includeProjectBrief: initialTaskDefinition.contextBindings.includeProjectBrief,
+      includePreviousStageSummary:
+        initialTaskDefinition.contextBindings.includePreviousStageSummary,
+      includeCurrentStageExitCriteria:
+        initialTaskDefinition.contextBindings.includeCurrentStageExitCriteria,
+    },
+    outputContract: {
+      summaryLabel: initialTaskDefinition.outputContract.summaryLabel.trim() || undefined,
+      artifactKeys: initialTaskDefinition.outputContract.artifactKeys
+        .map((item) => item.trim())
+        .filter(Boolean),
+      requireStageCompleteMarker:
+        initialTaskDefinition.outputContract.requireStageCompleteMarker,
+    },
+  };
+}
+
+function addInitialTaskCandidate(initialTaskDefinition: InitialTaskDefinitionDraft) {
+  initialTaskDefinition.defaultCandidates.push({
+    key: `candidate-${crypto.randomUUID()}`,
+    model: "",
+    label: "",
+  });
+}
+
+function removeInitialTaskCandidate(initialTaskDefinition: InitialTaskDefinitionDraft, index: number) {
+  initialTaskDefinition.defaultCandidates.splice(index, 1);
+}
+
+function addInitialTaskStep(initialTaskDefinition: InitialTaskDefinitionDraft) {
+  initialTaskDefinition.defaultSteps.push({
+    id: `step-${crypto.randomUUID()}`,
+    title: "",
+    instruction: "",
+    model: "",
+  });
+}
+
+function removeInitialTaskStep(initialTaskDefinition: InitialTaskDefinitionDraft, index: number) {
+  initialTaskDefinition.defaultSteps.splice(index, 1);
+}
+
+function setInitialTaskDoneWhen(initialTaskDefinition: InitialTaskDefinitionDraft, value: unknown) {
+  initialTaskDefinition.doneWhen = fromMultiline(value);
+}
+
+function validateInitialTaskDefinition(initialTaskDefinition: InitialTaskDefinitionDraft) {
+  if (!initialTaskDefinition.titleTemplate.trim()) {
+    return "初始任务标题模板不能为空";
+  }
+  if (!initialTaskDefinition.goalTemplate.trim()) {
+    return "初始任务目标模板不能为空";
+  }
+  if (!initialTaskDefinition.instructionTemplate.trim()) {
+    return "初始任务指令模板不能为空";
+  }
+
+  if (initialTaskDefinition.defaultExecutionMode === "parallel") {
+    const validCandidates = initialTaskDefinition.defaultCandidates.filter((item) => item.model.trim());
+    if (validCandidates.length < 2) {
+      return "并行模式至少需要配置 2 个默认候选模型";
+    }
+  }
+
+  if (initialTaskDefinition.defaultExecutionMode === "sequential-chain") {
+    const steps = initialTaskDefinition.defaultSteps.filter(
+      (item) => item.title.trim() || item.instruction.trim() || item.model.trim(),
+    );
+    if (steps.length === 0) {
+      return "sequential-chain 模式至少需要配置 1 个默认步骤";
+    }
+    if (steps.some((item) => !item.title.trim() || !item.instruction.trim())) {
+      return "sequential-chain 步骤必须填写标题和指令";
+    }
+  }
+
+  return null;
 }
 
 function serializeGates(gates: GateDraft[]) {
@@ -1114,7 +1752,10 @@ function serializeStageTemplateStrategy(stageTemplateStrategy: StageTemplateStra
 }
 
 function toStageMode(value: unknown): StageDraft["mode"] {
-  return value === "parallel" || value === "pipeline" ? value : "single";
+  if (value === "pipeline") {
+    return "sequential-chain";
+  }
+  return value === "parallel" || value === "sequential-chain" ? value : "single";
 }
 
 function setStageMode(stage: StageDraft, value: unknown) {
@@ -1231,6 +1872,11 @@ function populateEditor(view: WorkflowTemplateEditorView) {
       participantRoleAgentIds: [...stage.participantRoleAgentIdsJson],
       entryCriteria: toStringArray(stage.entryCriteriaJson),
       exitCriteria: toStringArray(stage.exitCriteriaJson),
+      initialTaskDefinition: normalizeInitialTaskDefinition(
+        stage.initialTaskDefinitionJson,
+        stage.stageKey,
+        stage.name,
+      ),
       gates: Array.isArray(stage.gatesJson)
         ? stage.gatesJson.map((item, index) => normalizeGate(item, index))
         : [],
@@ -1247,6 +1893,7 @@ function populateEditor(view: WorkflowTemplateEditorView) {
   newStage.mode = "single";
   newStage.primaryRoleAgentId = view.availableRoles[0]?.id || "";
   newStage.participantRoleAgentIds = [];
+  newStage.initialTaskDefinition = createDefaultInitialTaskDefinition("", "");
   newStage.stageTemplateStrategy = {
     onBlockedTemplateId: "",
     onWaitingApprovalTemplateId: "",
@@ -1307,12 +1954,20 @@ function handleStageKeyChange(stage: StageDraft) {
   if (!stage.name.trim()) {
     stage.name = stageCatalogLabel(stage.stageKey);
   }
+  if (!stage.initialTaskDefinition.titleTemplate.trim()) {
+    stage.initialTaskDefinition = normalizeInitialTaskDefinition(undefined, stage.stageKey, stage.name);
+  }
 }
 
 function handleNewStageKeyChange() {
   if (!newStage.name.trim()) {
     newStage.name = stageCatalogLabel(newStage.stageKey);
   }
+  newStage.initialTaskDefinition = normalizeInitialTaskDefinition(
+    undefined,
+    newStage.stageKey,
+    newStage.name,
+  );
 }
 
 async function saveStage(stage: StageDraft, index: number) {
@@ -1333,6 +1988,12 @@ async function saveStage(stage: StageDraft, index: number) {
     return;
   }
 
+  const initialTaskValidation = validateInitialTaskDefinition(stage.initialTaskDefinition);
+  if (initialTaskValidation) {
+    message.error(initialTaskValidation);
+    return;
+  }
+
   stage.saving = true;
   try {
     await updateWorkflowTemplateStage(templateId, stage.id, {
@@ -1344,6 +2005,7 @@ async function saveStage(stage: StageDraft, index: number) {
       participantRoleAgentIds: stage.participantRoleAgentIds,
       entryCriteria: stage.entryCriteria,
       exitCriteria: stage.exitCriteria,
+      initialTaskDefinition: serializeInitialTaskDefinition(stage.initialTaskDefinition),
       gates: serializeGates(stage.gates),
       approvals: serializeApprovals(stage.approvals),
       stageTemplateStrategy: serializeStageTemplateStrategy(stage.stageTemplateStrategy),
@@ -1445,6 +2107,12 @@ async function addStage() {
     return;
   }
 
+  const initialTaskValidation = validateInitialTaskDefinition(newStage.initialTaskDefinition);
+  if (initialTaskValidation) {
+    message.error(initialTaskValidation);
+    return;
+  }
+
   creatingStage.value = true;
   try {
     await createWorkflowTemplateStage(templateId, {
@@ -1455,6 +2123,7 @@ async function addStage() {
       mode: newStage.mode,
       primaryRoleAgentId: newStage.primaryRoleAgentId,
       participantRoleAgentIds: newStage.participantRoleAgentIds,
+      initialTaskDefinition: serializeInitialTaskDefinition(newStage.initialTaskDefinition),
       stageTemplateStrategy: serializeStageTemplateStrategy(newStage.stageTemplateStrategy),
       orderIndex: stageDrafts.value.length,
     });

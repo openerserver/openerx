@@ -43,7 +43,7 @@ export function createControlPlaneApp() {
     return c.json({ error: error instanceof Error ? error.message : "Internal Server Error" }, 500);
   });
 
-  app.get("/health", (c) => c.json({ status: "ok", service: "openerx-control-plane" }));
+  app.get("/health", (c) => c.json({ status: "ok", service: "opener-x-control-plane" }));
 
   app.route("/api/auth", authRoutes);
   app.route("/api/orgs", orgRoutes);

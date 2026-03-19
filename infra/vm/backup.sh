@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# OpenerX Backup Script
+# Opener-X Backup Script
 # Backs up the SQLite database and configuration
 set -euo pipefail
 
@@ -10,7 +10,7 @@ BACKUP_FILE="$BACKUP_DIR/openerx_backup_$TIMESTAMP.tar.gz"
 
 mkdir -p "$BACKUP_DIR"
 
-echo "=== OpenerX Backup: $TIMESTAMP ==="
+echo "=== Opener-X Backup: $TIMESTAMP ==="
 
 # 1. SQLite hot backup (using .backup command for consistency)
 sqlite3 "$DATA_DIR/openerx.db" ".backup '$DATA_DIR/openerx_backup.db'"
