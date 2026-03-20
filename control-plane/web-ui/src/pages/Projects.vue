@@ -201,6 +201,9 @@
             <router-link :to="`/projects/${record.id}`">
               <a-button type="link" size="small">详情</a-button>
             </router-link>
+            <router-link :to="`/projects/${record.id}/task-graph`">
+              <a-button type="link" size="small">任务总图</a-button>
+            </router-link>
             <a-button
               v-if="record.risks.length > 0"
               type="link"

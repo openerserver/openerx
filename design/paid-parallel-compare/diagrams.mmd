@@ -1,0 +1,23 @@
+sequenceDiagram
+    participant Client
+    participant API_GW as API Gateway
+    participant Orchestrator
+    participant Payment as Payment Service
+    participant Queue
+    participant Worker
+    participant Storage
+    participant Audit
+
+    Client->>API_GW: POST /compare {idempotency_key, payload}
+    API_GW->>API_GW: authenticate & rate-limit
+    API_GW->>Orchestrator: create operation (operation_id)
+    API_GW->>Payment: authorize (operation_id, amount)
+    Payment-->>API_GW: auth_ok (payment_operation_id)
+    Orchestrator->>Queue: enqueue shards (operation_id, shard_id)
+    Queue->>Worker: deliver shard
+    Worker->>Storage: upload shard result
+    Worker->>Queue: emit shard_complete (operation_id, shard_id)
+    Orchestrator->>Orchestrator: aggregate shards
+    Orchestrator->>Payment: capture (operation_id, payment_operation_id)
+    Payment-->>Orchestrator: capture_ok
+    Orchestrator->>Audit: append final event

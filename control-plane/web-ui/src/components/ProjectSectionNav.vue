@@ -22,6 +22,7 @@ type ProjectSectionKey =
   | "role-execution"
   | "workflow"
   | "orchestration"
+  | "task-graph"
   | "operating-mode"
   | "boss-operations"
   | "cost";
@@ -56,6 +57,11 @@ const items = computed(() => [
     key: "orchestration" as const,
     label: "介入编排",
     to: { name: "ProjectOrchestration", params: { projectId: props.projectId } },
+  },
+  {
+    key: "task-graph" as const,
+    label: "任务总图",
+    to: { name: "ProjectTaskGraph", params: { projectId: props.projectId } },
   },
   {
     key: "operating-mode" as const,

@@ -14,63 +14,24 @@
           <a-tag v-if="task?.selectedModel" color="cyan">{{ task.selectedModel }}</a-tag>
         </a-space>
       </div>
-      <a-space direction="vertical" align="end" size="small">
-        <a-button
-          v-if="taskId && !isWorkbenchEmbedded"
-          data-testid="open-task-operating-console"
-          @click="router.push(`/tasks/${taskId}/operating-console`)">
-          组织运行详情
-        </a-button>
-        <a-button
-          v-if="taskId && !isWorkbenchEmbedded"
-          data-testid="open-task-operating-override"
-          @click="router.push(`/tasks/${taskId}/operating-override`)">
-          任务级覆盖
-        </a-button>
-        <router-link
-          v-if="taskId"
-          :to="{
-            path: '/agents',
-            query: {
-              entryContext: 'task',
-              focus: 'attention',
-              taskId,
-              ...(task?.projectId ? { projectId: task.projectId } : {}),
-              ...(task?.agentRunId ? { agentRunId: task.agentRunId } : {}),
-              ...(governance?.approvalRequired ? { approvalBlocked: 'true' } : {}),
-              ...(governance && governance.overallRisk !== 'low' ? { riskLevel: governance.overallRisk } : {}),
-            },
-          }"
-        >
-          <a-button>查看 Agent 运行</a-button>
-        </router-link>
-        <router-link v-if="taskId && !isWorkbenchEmbedded" :to="`/workbench?task=${taskId}`">
-          <a-button type="primary">在工作台打开</a-button>
-        </router-link>
-        <a-button
-          v-if="taskId && selectedSessionId && isWorkbenchEmbedded"
-          :loading="forking"
-          :disabled="task?.status === 'running'"
-          @click="handleForkToSecondary"
-        >从当前分支分叉到副窗</a-button>
-      </a-space>
+
+      <router-link v-if="taskId" :to="`/tasks/${taskId}/v2`">
+        <a-button>精简视图</a-button>
+      </router-link>
+
     </a-flex>
 
     <a-row :gutter="[16, 16]" align="top">
       <a-col v-if="!isReplyFocusMode" :xs="24" :xxl="5">
         <a-collapse
           size="small"
-          :default-active-key="[
-            'sessions',
-            ...(showOrchestrationPanel ? ['orchestration'] : []),
-            ...(showPipelinePanel && pipelineStages.length > 0 ? ['pipeline'] : []),
-          ]"
+          :default-active-key="['sessions']"
           :style="taskDetailThemeStyles.collapse"
         >
-          <a-collapse-panel key="sessions" header="分支 / 会话">
-            <template v-if="sessionTree.length > 0">
+          <a-collapse-panel key="sessions" header="会话分支">
+            <template v-if="visibleSessionTree.length > 0">
               <SessionTree
-                :tree="sessionTree"
+                :tree="visibleSessionTree"
                 :selected-session-id="selectedSessionId"
                 :session-state-map="runtimeSessionStateMap"
                 :task-status="task?.status"
@@ -80,10 +41,10 @@
                 @archive="handleArchiveSession"
               />
             </template>
-            <template v-else-if="sessions.length > 0">
+            <template v-else-if="visibleSessions.length > 0">
               <div :style="taskDetailThemeStyles.sessionsList">
                 <div
-                  v-for="session in sessions"
+                  v-for="session in visibleSessions"
                   :key="session.id"
                   @click="selectSession(session.id)"
                   :style="sessionCardStyle(session.id === selectedSessionId)"
@@ -132,128 +93,6 @@
             </div>
             <a-empty v-else description="暂无会话" />
           </a-collapse-panel>
-
-          <a-collapse-panel v-if="showOrchestrationPanel && !useCompactInspector" key="orchestration" header="编排决策">
-            <div v-if="orchestrationSummaryItems.length > 0" class="reply-composer-shell__summary-inline">
-              <div class="reply-composer-shell__summary-inline-list">
-                <span
-                  v-for="item in orchestrationSummaryItems"
-                  :key="item.label"
-                  class="reply-composer-shell__summary-chip"
-                >
-                  <span class="reply-composer-shell__summary-chip-label">{{ item.label }}</span>
-                  <a-tag v-if="item.tone" :color="item.tone">{{ item.value }}</a-tag>
-                  <span v-else class="reply-composer-shell__summary-chip-value">{{ item.value }}</span>
-                </span>
-              </div>
-            </div>
-            <template v-if="executionPlanCandidates.length > 0 || executionPlanSteps.length > 0 || executionPlanJudgeSummary">
-              <div v-if="executionPlanCandidates.length > 0" :style="taskDetailThemeStyles.toolSummaryList">
-                <a-typography-text strong>并行候选</a-typography-text>
-                <div
-                  v-for="(candidate, index) in executionPlanCandidates"
-                  :key="`${candidate.label}-${index}`"
-                  :style="taskDetailThemeStyles.toolCallCard"
-                >
-                  <a-space size="small" wrap>
-                    <a-tag color="blue">{{ candidate.label }}</a-tag>
-                    <a-tag :color="executionCandidateStatusColor(candidate.status)">
-                      {{ executionCandidateStatusLabel(candidate.status) }}
-                    </a-tag>
-                    <a-tag v-if="executionPlanWinnerIndex === index" color="gold">胜出</a-tag>
-                    <a-tag color="geekblue">{{ formatAgentLabel(candidate.agent) }}</a-tag>
-                    <a-tag v-if="candidate.model" color="cyan">{{ candidate.model }}</a-tag>
-                    <a-popconfirm
-                      v-if="canAdoptCandidate(candidate, index)"
-                      title="确认采纳该候选结果？"
-                      ok-text="采纳"
-                      cancel-text="取消"
-                      @confirm="handleAdoptCandidate(index)"
-                    >
-                      <a-button type="primary" size="small" ghost :loading="adoptingCandidateIndex === index">采纳</a-button>
-                    </a-popconfirm>
-                  </a-space>
-                  <div v-if="candidate.sessionId || candidate.agentRunId" :style="taskDetailThemeStyles.toolCallMeta">
-                    {{ executionCandidateIdentity(candidate) }}
-                  </div>
-                  <pre v-if="candidate.result" :style="taskDetailThemeStyles.toolCallCode">{{ candidate.result }}</pre>
-                </div>
-              </div>
-
-              <div v-if="executionPlanSteps.length > 0" :style="taskDetailThemeStyles.toolSummaryList">
-                <a-flex justify="space-between" align="center">
-                  <a-typography-text strong>执行步骤</a-typography-text>
-                  <a-tag v-if="chainStepProgressLabel" color="processing">{{ chainStepProgressLabel }}</a-tag>
-                </a-flex>
-                <div
-                  v-for="(step, index) in executionPlanSteps"
-                  :key="step.id"
-                  :style="taskDetailThemeStyles.toolCallCard"
-                >
-                  <a-space size="small" wrap>
-                    <a-tag color="default">步骤 {{ index + 1 }}</a-tag>
-                    <a-tag :color="executionStepStatusColor(step.status)">
-                      {{ executionStepStatusLabel(step.status) }}
-                    </a-tag>
-                    <a-tag color="purple">{{ executionStepTitle(step, index) }}</a-tag>
-                    <a-tag v-if="step.model" color="cyan">{{ step.model }}</a-tag>
-                  </a-space>
-                  <div v-if="step.dependsOn?.length" :style="taskDetailThemeStyles.toolCallMeta">
-                    依赖：{{ step.dependsOn.join(" -> ") }}
-                  </div>
-                  <pre v-if="step.instruction" :style="taskDetailThemeStyles.toolCallCode">{{ step.instruction }}</pre>
-                  <pre v-if="step.result" :style="taskDetailThemeStyles.toolCallCode">{{ step.result }}</pre>
-                </div>
-              </div>
-
-              <a-alert
-                v-if="executionPlanJudgeSummary"
-                type="info"
-                show-icon
-                :message="executionPlanJudgeSummary"
-                :description="executionPlanJudgeReasoning"
-                style="margin-top: 12px"
-              />
-            </template>
-            <a-empty v-else-if="orchestrationSummaryItems.length === 0" description="暂无编排数据" />
-          </a-collapse-panel>
-
-          <a-collapse-panel v-if="showPipelinePanel && !useCompactInspector" key="pipeline" header="运行流水线">
-            <a-empty v-if="pipelineStages.length === 0" description="暂无运行数据" />
-            <template v-else>
-              <div v-if="runtimePipelineSummaryItems.length > 0" class="reply-composer-shell__summary-inline">
-                <div class="reply-composer-shell__summary-inline-list">
-                  <span
-                    v-for="item in runtimePipelineSummaryItems"
-                    :key="item.label"
-                    class="reply-composer-shell__summary-chip"
-                  >
-                    <span class="reply-composer-shell__summary-chip-label">{{ item.label }}</span>
-                    <a-tag v-if="item.tone" :color="item.tone">{{ item.value }}</a-tag>
-                    <span v-else class="reply-composer-shell__summary-chip-value">{{ item.value }}</span>
-                  </span>
-                </div>
-              </div>
-              <a-steps :current="pipelineCurrentStep" size="small" direction="vertical">
-                <a-step
-                  v-for="stage in pipelineStages"
-                  :key="stage.id"
-                  :title="stage.label"
-                  :description="pipelineStageDescription(stage)"
-                  :status="pipelineStepStatus(stage.status)"
-                />
-              </a-steps>
-              <a-collapse v-if="pipelineOutputStages.length > 0" size="small" :style="taskDetailThemeStyles.pipelineOutputs">
-                <a-collapse-panel
-                  v-for="stage in pipelineOutputStages"
-                  :key="stage.id"
-                  :header="pipelineOutputPanelHeader(stage)"
-                >
-                  <pre :style="taskDetailThemeStyles.pipelineOutputPre">{{ stage.error || stage.output }}</pre>
-                </a-collapse-panel>
-              </a-collapse>
-            </template>
-          </a-collapse-panel>
         </a-collapse>
       </a-col>
 
@@ -262,18 +101,12 @@
           <template v-if="!isReplyFocusMode" #title>
             <a-flex justify="space-between" align="center" :style="taskDetailThemeStyles.mainHeader">
               <div>
-                <div :style="taskDetailThemeStyles.mainHeaderTitle">回复主视图</div>
+                <div :style="taskDetailThemeStyles.mainHeaderTitle">执行详情</div>
                 <a-typography-text v-if="selectedSession" type="secondary" :style="taskDetailThemeStyles.selectedSessionHint">
                   {{ selectedSessionLabel(selectedSession) }}
                 </a-typography-text>
               </div>
               <a-space size="small">
-                <a-button
-                  v-if="taskId && !isReplyFocusMode"
-                  type="text"
-                  size="small"
-                  @click="openReplyFocusWindow"
-                >独立窗口</a-button>
                 <a-tag v-if="selectedSession?.isActive" color="blue">活跃分支</a-tag>
                 <a-tag v-if="isAwaitingAssistantResponse" color="processing">执行中</a-tag>
                 <a-tag v-if="selectedSessionBurstState" :color="selectedSessionBurstState.badgeColor">{{ selectedSessionBurstState.badgeLabel }}</a-tag>
@@ -337,24 +170,18 @@
           </a-space>
 
           <TaskDetailQuickOverview
-            v-if="workflowSummary || executionPlanCandidates.length >= 2"
+            v-if="workflowSummary"
             :workflow-summary="workflowSummary"
             :workflow-stages="workflowStages"
             :execution-mode="resolvedExecutionMode"
             :auto-advance="autoAdvanceStages"
             :is-executing="isAwaitingAssistantResponse"
             :executing="false"
-            :candidates="executionPlanCandidates"
-            :winner-index="executionPlanWinnerIndex"
-            :all-candidates-settled="allCandidatesSettled"
-            :adopting-index="adoptingCandidateIndex"
-            :judge-summary="executionPlanJudgeSummary"
-            :judge-reasoning="executionPlanJudgeReasoning"
             :task-status="task?.status ?? ''"
-            @execute="handleQuickExecute"
+            :completing="completingTask"
+            :advancing="advancingWorkflowStage"
             @choose-mode="showExecutionModeModal = true"
             @update:auto-advance="handleAutoAdvanceToggle"
-            @adopt="handleAdoptCandidate"
             @complete="handleCompleteTask"
             @advance="handleAdvanceStage"
           />
@@ -365,185 +192,442 @@
             :model-options="modelOptions"
             :models-loading="modelsLoading"
             :filter-model-option="filterModelOption"
+            :initial-mode="editableExecutionMode"
+            :initial-candidates="editableParallelCandidates"
+            :initial-steps="editableSequentialSteps"
             @update:open="showExecutionModeModal = $event"
             @confirm="handleExecutionModeConfirm"
           />
 
-          <div ref="messagesPaneRef" :style="messagesPaneStyle" @scroll.passive="handleMessagesPaneScroll">
-            <div v-if="!selectedSessionId && isWorkbenchEmbedded" :style="taskDetailThemeStyles.compactMainEmptyState">
-              <a-typography-text type="secondary" :style="taskDetailThemeStyles.compactMainEmptyText">
-                请选择分支
-              </a-typography-text>
-            </div>
-            <a-empty v-else-if="!selectedSessionId" description="请选择分支" />
-            <a-spin v-else-if="messagesLoading" />
-            <a-empty v-else-if="sessionMessageItems.length === 0" description="当前分支还没有可展示的消息" />
-            <div v-else :style="taskDetailThemeStyles.messageList">
-              <div
-                v-for="item in sessionMessageItems"
-                :key="item.key"
-                :style="messageCardStyle(item.role)"
-              >
-                <a-flex justify="space-between" align="center" :style="taskDetailThemeStyles.messageHeader">
+          <a-tabs :activeKey="taskDetailPrimaryTab" size="small" class="task-detail-primary-tabs" @update:activeKey="taskDetailPrimaryTab = String($event ?? 'messages')">
+            <a-tab-pane key="messages" tab="会话消息视图">
+              <div ref="messagesPaneRef" :style="messagesPaneStyle" @scroll.passive="handleMessagesPaneScroll">
+                <div v-if="!selectedSessionId && isWorkbenchEmbedded && parallelComparisonCards.length === 0" :style="taskDetailThemeStyles.compactMainEmptyState">
+                  <a-typography-text type="secondary" :style="taskDetailThemeStyles.compactMainEmptyText">
+                    请选择分支
+                  </a-typography-text>
+                </div>
+                <a-empty v-else-if="!selectedSessionId && parallelComparisonCards.length === 0" description="请选择分支" />
+                <a-spin v-else-if="messagesLoading" />
+                <div
+                  v-if="parallelComparisonCards.length > 0"
+                  style="display: grid; gap: 12px; margin-bottom: 16px"
+                >
                   <a-space size="small" wrap>
-                    <a-tag :color="messageRoleColor(item.role)">{{ messageRoleLabel(item.role) }}</a-tag>
-                    <a-tag v-if="item.agent" color="geekblue">{{ formatAgentLabel(item.agent) }}</a-tag>
-                    <a-tag v-if="item.isPending" color="gold" class="message-state-tag message-state-tag--pending">等待中</a-tag>
-                    <a-tag v-if="item.isStreaming" color="processing" class="message-state-tag message-state-tag--streaming">生成中</a-tag>
-                  </a-space>
-                  <a-space size="small">
-                    <a-button
-                      v-if="item.text && !item.isPending"
-                      type="text"
-                      size="small"
-                      :style="{ opacity: 0.6 }"
-                      @click="handleCopyMessage(item.text)"
-                    >
-                      <template #icon><CopyOutlined /></template>
-                    </a-button>
-                    <a-button
-                      v-if="item.text && !item.isPending"
-                      type="text"
-                      size="small"
-                      :style="{ opacity: 0.6 }"
-                      @click="handleQuoteToInput(item.text)"
-                    >
-                      <template #icon><EnterOutlined /></template>
-                    </a-button>
-                    <a-button
-                      v-if="selectedSessionId && task?.status !== 'running' && !item.isPending"
-                      type="text"
-                      size="small"
-                      :loading="forkingMessageId === item.key"
-                      :disabled="!!forkingMessageId"
-                      :style="{ opacity: 0.6 }"
-                      @click="handleForkFromMessage(item.key)"
-                    >
-                      <template #icon><BranchesOutlined /></template>
-                      从这里分叉
-                    </a-button>
-                    <a-typography-text type="secondary" :style="taskDetailThemeStyles.itemTime">
-                      {{ formatTime(item.createdAt || "") }}
+                    <a-tag color="volcano">并行模型回复比较</a-tag>
+                    <a-typography-text type="secondary" style="font-size: 12px">
+                      同一条用户消息会同时发给多个模型，这里直接对比它们各自的最新回复。
                     </a-typography-text>
                   </a-space>
-                </a-flex>
-
-                <pre
-                  v-if="messageDisplayText(item) && shouldRenderStreamingPlainText(item)"
-                  class="message-streaming-plain"
-                  :style="taskDetailThemeStyles.messagePre"
-                >{{ messageDisplayText(item) }}</pre>
-
-                <div
-                  v-else-if="messageDisplayText(item)"
-                  class="message-markdown"
-                  :style="taskDetailThemeStyles.messagePre"
-                  v-html="renderMessageHtml(item)"
-                />
-
-                <ConfirmationForm
-                  v-if="getConfirmationBlock(item)"
-                  :block="getConfirmationBlockNonNull(item)"
-                  @submit="handleConfirmationSubmit"
-                />
-
-                <div
-                  v-if="!messageDisplayText(item) && shouldShowStreamingSkeleton(item)"
-                  class="streaming-skeleton"
-                  :style="taskDetailThemeStyles.messagePre"
-                  aria-label="等待首字节"
-                >
-                  <div class="streaming-skeleton__inline" aria-hidden="true">
-                    <span class="streaming-skeleton__inline-dot">.</span>
-                    <span class="streaming-skeleton__inline-dot">.</span>
-                    <span class="streaming-skeleton__inline-dot">.</span>
-                    <span class="streaming-skeleton__inline-dot">.</span>
+                  <div style="display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr))">
+                    <div
+                      v-for="candidate in parallelComparisonCards"
+                      :key="candidate.key"
+                      style="border: 1px solid #e8e8e8; border-radius: 12px; padding: 12px; background: #fff"
+                    >
+                      <a-space size="small" wrap style="margin-bottom: 8px">
+                        <a-tag color="blue">{{ candidate.label }}</a-tag>
+                        <a-tag v-if="candidate.model" color="cyan">{{ candidate.model }}</a-tag>
+                        <a-tag :color="executionCandidateStatusColor(candidate.status)">
+                          {{ executionCandidateStatusLabel(candidate.status) }}
+                        </a-tag>
+                      </a-space>
+                      <a-typography-text v-if="candidate.meta" type="secondary" style="display:block; margin-bottom: 8px; font-size: 12px">
+                        {{ candidate.meta }}
+                      </a-typography-text>
+                      <a-typography-text v-if="candidate.loading" type="secondary">正在加载回复...</a-typography-text>
+                      <a-typography-text v-else-if="!candidate.reply" type="secondary">该模型暂时还没有回复。</a-typography-text>
+                      <div
+                        v-else
+                        class="message-markdown"
+                        v-html="candidate.replyHtml"
+                      />
+                    </div>
                   </div>
                 </div>
-
-                <div v-if="item.toolCalls.length" :style="taskDetailThemeStyles.toolSummaryList">
+                <a-empty v-else-if="conversationSessionMessageItems.length === 0" description="当前分支还没有可展示的消息" />
+                <div v-else :style="taskDetailThemeStyles.messageList">
                   <div
-                    class="tool-fold-header"
-                    @click="toggleToolFold(item.key)"
+                    v-for="item in conversationSessionMessageItems"
+                    :key="item.key"
+                    :style="messageCardStyle(item.role)"
                   >
-                    <span>{{ toolFoldExpanded[item.key] ? '▾' : '▸' }} {{ toolGroupTitle(item.toolCalls) }}</span>
+                    <a-flex justify="space-between" align="center" :style="taskDetailThemeStyles.messageHeader">
+                      <a-space size="small" wrap>
+                        <a-tag :color="messageRoleColor(item.role)">{{ messageRoleLabel(item.role) }}</a-tag>
+                        <a-tag v-if="item.agent" color="geekblue">{{ formatAgentLabel(item.agent) }}</a-tag>
+                        <a-tag v-if="item.isPending" color="gold" class="message-state-tag message-state-tag--pending">等待中</a-tag>
+                        <a-tag v-if="item.isStreaming" color="processing" class="message-state-tag message-state-tag--streaming">生成中</a-tag>
+                      </a-space>
+                      <a-space size="small">
+                        <a-button
+                          v-if="conversationMessageDisplayText(item) && !item.isPending"
+                          type="text"
+                          size="small"
+                          :style="{ opacity: 0.6 }"
+                          @click="handleCopyMessage(conversationMessageDisplayText(item))"
+                        >
+                          <template #icon><CopyOutlined /></template>
+                        </a-button>
+                        <a-button
+                          v-if="conversationMessageDisplayText(item) && !item.isPending"
+                          type="text"
+                          size="small"
+                          :style="{ opacity: 0.6 }"
+                          @click="handleQuoteToInput(conversationMessageDisplayText(item))"
+                        >
+                          <template #icon><EnterOutlined /></template>
+                        </a-button>
+                        <a-button
+                          v-if="selectedSessionId && !isParallelComparisonMode && task?.status !== 'running' && !item.isPending"
+                          type="text"
+                          size="small"
+                          :loading="forkingMessageId === item.key"
+                          :disabled="!!forkingMessageId"
+                          :style="{ opacity: 0.6 }"
+                          @click="handleForkFromMessage(item.key)"
+                        >
+                          <template #icon><BranchesOutlined /></template>
+                          从这里分叉
+                        </a-button>
+                        <a-typography-text type="secondary" :style="taskDetailThemeStyles.itemTime">
+                          {{ formatTime(item.createdAt || "") }}
+                        </a-typography-text>
+                      </a-space>
+                    </a-flex>
+
+                    <div
+                      v-if="conversationMessageDisplayText(item)"
+                      class="message-markdown"
+                      :style="taskDetailThemeStyles.messagePre"
+                      v-html="renderConversationMessageHtml(item)"
+                    />
+
+                    <ConfirmationForm
+                      v-if="getConfirmationBlock(item)"
+                      :block="getConfirmationBlockNonNull(item)"
+                      @submit="handleConfirmationSubmit"
+                    />
+
+                    <div
+                      v-if="!messageDisplayText(item) && shouldShowStreamingSkeleton(item)"
+                      class="streaming-skeleton"
+                      :style="taskDetailThemeStyles.messagePre"
+                      aria-label="等待首字节"
+                    >
+                      <div class="streaming-skeleton__inline" aria-hidden="true">
+                        <span class="streaming-skeleton__inline-dot">.</span>
+                        <span class="streaming-skeleton__inline-dot">.</span>
+                        <span class="streaming-skeleton__inline-dot">.</span>
+                        <span class="streaming-skeleton__inline-dot">.</span>
+                      </div>
+                    </div>
+
+                    <div v-if="item.toolCalls.length" :style="taskDetailThemeStyles.toolSummaryList">
+                      <div
+                        class="tool-fold-header"
+                        @click="toggleToolFold(item.key)"
+                      >
+                        <span>{{ toolFoldExpanded[item.key] ? '▾' : '▸' }} {{ toolGroupTitle(item.toolCalls) }}</span>
+                      </div>
+                      <template v-if="toolFoldExpanded[item.key]">
+                        <div
+                          v-for="tool in item.toolCalls.slice(0, toolShowAll[item.key] ? undefined : 2)"
+                          :key="tool.key"
+                          :style="taskDetailThemeStyles.toolCallCard"
+                        >
+                          <a-flex justify="space-between" align="start" :style="taskDetailThemeStyles.toolCallHeader">
+                            <div :style="taskDetailThemeStyles.toolCallTitleGroup">
+                              <a-space size="small" wrap>
+                                <strong>{{ tool.label }}</strong>
+                                <a-tag :color="tool.stateColor">{{ tool.stateLabel }}</a-tag>
+                                <a-tag v-if="tool.exitCode !== undefined" :color="tool.exitCode === 0 ? 'green' : 'red'">
+                                  exit {{ tool.exitCode }}
+                                </a-tag>
+                              </a-space>
+                              <div v-if="tool.headline" :style="taskDetailThemeStyles.toolCallHeadline">{{ tool.headline }}</div>
+                            </div>
+                            <a-space size="small" :style="taskDetailThemeStyles.toolCallActions">
+                              <a-button
+                                v-if="tool.outputTruncated"
+                                type="text"
+                                size="small"
+                                @click="toggleToolOutput(tool.key)"
+                              >
+                                {{ toolOutputExpanded[tool.key] ? '收起输出' : '展开完整输出' }}
+                              </a-button>
+                              <a-button
+                                type="text"
+                                size="small"
+                                @click="handleCopyToolRaw(tool)"
+                              >
+                                <template #icon><CopyOutlined /></template>
+                                复制原始内容
+                              </a-button>
+                            </a-space>
+                          </a-flex>
+                          <div v-if="tool.kind === 'bash' && tool.command" :style="taskDetailThemeStyles.toolCallSection">
+                            <div :style="taskDetailThemeStyles.toolCallSectionLabel">命令</div>
+                            <pre :style="taskDetailThemeStyles.toolCallCommand">{{ tool.command }}</pre>
+                          </div>
+                          <div v-if="tool.kind === 'read' && tool.filePath" :style="taskDetailThemeStyles.toolCallSection">
+                            <div :style="taskDetailThemeStyles.toolCallSectionLabel">文件路径</div>
+                            <pre :style="taskDetailThemeStyles.toolCallPath">{{ tool.filePath }}</pre>
+                          </div>
+                          <div v-if="tool.kind === 'read' && tool.readPreview" :style="taskDetailThemeStyles.toolCallSection">
+                            <div :style="taskDetailThemeStyles.toolCallSectionLabel">内容摘要</div>
+                            <pre :style="taskDetailThemeStyles.toolCallCode">{{ tool.readPreview }}</pre>
+                          </div>
+                          <div v-if="tool.description" :style="taskDetailThemeStyles.toolCallMeta">{{ tool.description }}</div>
+                          <div v-if="tool.goal" :style="taskDetailThemeStyles.toolCallMeta">目标：{{ tool.goal }}</div>
+                          <div v-if="tool.inputPreview && tool.kind !== 'bash' && tool.kind !== 'read'" :style="taskDetailThemeStyles.toolCallSection">
+                            <div :style="taskDetailThemeStyles.toolCallSectionLabel">输入</div>
+                            <pre :style="taskDetailThemeStyles.toolCallCode">{{ tool.inputPreview }}</pre>
+                          </div>
+                          <div v-if="tool.outputPreview" :style="taskDetailThemeStyles.toolCallSection">
+                            <div :style="taskDetailThemeStyles.toolCallSectionLabel">输出</div>
+                            <pre :style="taskDetailThemeStyles.toolCallCode">{{ toolDisplayOutput(tool) }}</pre>
+                            <div v-if="tool.outputTruncated" :style="taskDetailThemeStyles.toolCallMoreHint">
+                              {{ toolOutputExpanded[tool.key] ? '当前显示完整输出' : '输出已截断，可展开查看完整内容' }}
+                            </div>
+                          </div>
+                        </div>
+                        <div
+                          v-if="item.toolCalls.length > 2 && !toolShowAll[item.key]"
+                          class="tool-fold-header"
+                          :style="{ fontSize: '12px', paddingTop: '2px' }"
+                          @click.stop="toolShowAll[item.key] = true"
+                        >
+                          … 还有 {{ item.toolCalls.length - 2 }} 个工具
+                        </div>
+                      </template>
+                    </div>
                   </div>
-                  <template v-if="toolFoldExpanded[item.key]">
-                    <div
-                      v-for="tool in item.toolCalls.slice(0, toolShowAll[item.key] ? undefined : 2)"
-                      :key="tool.key"
-                      :style="taskDetailThemeStyles.toolCallCard"
-                    >
-                      <a-flex justify="space-between" align="start" :style="taskDetailThemeStyles.toolCallHeader">
-                        <div :style="taskDetailThemeStyles.toolCallTitleGroup">
-                          <a-space size="small" wrap>
-                            <strong>{{ tool.label }}</strong>
-                            <a-tag :color="tool.stateColor">{{ tool.stateLabel }}</a-tag>
-                            <a-tag v-if="tool.exitCode !== undefined" :color="tool.exitCode === 0 ? 'green' : 'red'">
-                              exit {{ tool.exitCode }}
-                            </a-tag>
-                          </a-space>
-                          <div v-if="tool.headline" :style="taskDetailThemeStyles.toolCallHeadline">{{ tool.headline }}</div>
-                        </div>
-                        <a-space size="small" :style="taskDetailThemeStyles.toolCallActions">
-                          <a-button
-                            v-if="tool.outputTruncated"
-                            type="text"
-                            size="small"
-                            @click="toggleToolOutput(tool.key)"
-                          >
-                            {{ toolOutputExpanded[tool.key] ? '收起输出' : '展开完整输出' }}
-                          </a-button>
-                          <a-button
-                            type="text"
-                            size="small"
-                            @click="handleCopyToolRaw(tool)"
-                          >
-                            <template #icon><CopyOutlined /></template>
-                            复制原始内容
-                          </a-button>
-                        </a-space>
-                      </a-flex>
-                      <div v-if="tool.kind === 'bash' && tool.command" :style="taskDetailThemeStyles.toolCallSection">
-                        <div :style="taskDetailThemeStyles.toolCallSectionLabel">命令</div>
-                        <pre :style="taskDetailThemeStyles.toolCallCommand">{{ tool.command }}</pre>
-                      </div>
-                      <div v-if="tool.kind === 'read' && tool.filePath" :style="taskDetailThemeStyles.toolCallSection">
-                        <div :style="taskDetailThemeStyles.toolCallSectionLabel">文件路径</div>
-                        <pre :style="taskDetailThemeStyles.toolCallPath">{{ tool.filePath }}</pre>
-                      </div>
-                      <div v-if="tool.kind === 'read' && tool.readPreview" :style="taskDetailThemeStyles.toolCallSection">
-                        <div :style="taskDetailThemeStyles.toolCallSectionLabel">内容摘要</div>
-                        <pre :style="taskDetailThemeStyles.toolCallCode">{{ tool.readPreview }}</pre>
-                      </div>
-                      <div v-if="tool.description" :style="taskDetailThemeStyles.toolCallMeta">{{ tool.description }}</div>
-                      <div v-if="tool.goal" :style="taskDetailThemeStyles.toolCallMeta">目标：{{ tool.goal }}</div>
-                      <div v-if="tool.inputPreview && tool.kind !== 'bash' && tool.kind !== 'read'" :style="taskDetailThemeStyles.toolCallSection">
-                        <div :style="taskDetailThemeStyles.toolCallSectionLabel">输入</div>
-                        <pre :style="taskDetailThemeStyles.toolCallCode">{{ tool.inputPreview }}</pre>
-                      </div>
-                      <div v-if="tool.outputPreview" :style="taskDetailThemeStyles.toolCallSection">
-                        <div :style="taskDetailThemeStyles.toolCallSectionLabel">输出</div>
-                        <pre :style="taskDetailThemeStyles.toolCallCode">{{ toolDisplayOutput(tool) }}</pre>
-                        <div v-if="tool.outputTruncated" :style="taskDetailThemeStyles.toolCallMoreHint">
-                          {{ toolOutputExpanded[tool.key] ? '当前显示完整输出' : '输出已截断，可展开查看完整内容' }}
-                        </div>
-                      </div>
-                    </div>
-                    <div
-                      v-if="item.toolCalls.length > 2 && !toolShowAll[item.key]"
-                      class="tool-fold-header"
-                      :style="{ fontSize: '12px', paddingTop: '2px' }"
-                      @click.stop="toolShowAll[item.key] = true"
-                    >
-                      … 还有 {{ item.toolCalls.length - 2 }} 个工具
-                    </div>
-                  </template>
+                  <div ref="messageListEndRef"></div>
                 </div>
               </div>
-              <div ref="messageListEndRef"></div>
-            </div>
-          </div>
+            </a-tab-pane>
+
+            <a-tab-pane key="trace" tab="原始执行追踪">
+              <div class="task-trace-view">
+                <div v-if="taskExecutionTraceSummaryItems.length > 0" class="reply-composer-shell__summary-inline">
+                  <div class="reply-composer-shell__summary-inline-list">
+                    <span
+                      v-for="item in taskExecutionTraceSummaryItems"
+                      :key="item.label"
+                      class="reply-composer-shell__summary-chip"
+                    >
+                      <span class="reply-composer-shell__summary-chip-label">{{ item.label }}</span>
+                      <a-tag v-if="item.tone" :color="item.tone">{{ item.value }}</a-tag>
+                      <span v-else class="reply-composer-shell__summary-chip-value">{{ item.value }}</span>
+                    </span>
+                  </div>
+                </div>
+
+                <a-alert
+                  v-if="taskExecutionTrace?.truncated"
+                  type="warning"
+                  show-icon
+                  message="当前只读取了最近一段 session 原始消息"
+                  :description="`runtime 接口当前限制为最近 ${taskExecutionTrace.messageLimit || 200} 条消息，超长会话会被截断。`"
+                  style="margin-bottom: 12px"
+                />
+
+                <a-alert
+                  v-if="taskExecutionTraceError"
+                  type="error"
+                  show-icon
+                  :message="taskExecutionTraceError"
+                  style="margin-bottom: 12px"
+                />
+
+                <a-spin v-if="taskExecutionTraceLoading && !taskExecutionTrace" />
+                <a-empty
+                  v-else-if="!taskExecutionTrace"
+                  description="当前任务还没有可展示的执行追踪"
+                />
+                <div v-else class="task-trace-view__grid">
+                  <section class="task-trace-panel">
+                    <div class="task-trace-panel__header">
+                      <div>
+                        <strong>来源拆解</strong>
+                        <div class="task-trace-panel__sub">按用户输入、工作流上下文、Hook、最终 Prompt 和模型回复拆开</div>
+                      </div>
+                      <a-space size="small" wrap style="margin-top: 6px">
+                        <a-radio-group v-model:value="traceSegmentFilter" size="small" button-style="solid">
+                          <a-radio-button value="all">全部</a-radio-button>
+                          <a-radio-button value="user-input">用户输入</a-radio-button>
+                          <a-radio-button value="hook">Hook</a-radio-button>
+                          <a-radio-button value="model-response">模型回复</a-radio-button>
+                        </a-radio-group>
+                      </a-space>
+                    </div>
+
+                    <div v-if="executionPlanSteps.length > 0 || executionPlanJudgeSummary" class="task-trace-execution-plan">
+                      <div v-if="executionPlanSteps.length > 0" class="task-trace-execution-plan__section">
+                        <a-flex justify="space-between" align="center">
+                          <a-typography-text strong>执行步骤</a-typography-text>
+                          <a-tag v-if="chainStepProgressLabel" color="processing">{{ chainStepProgressLabel }}</a-tag>
+                        </a-flex>
+                        <div
+                          v-for="(step, index) in executionPlanSteps"
+                          :key="step.id"
+                          class="task-trace-execution-plan__card"
+                        >
+                          <a-space size="small" wrap>
+                            <a-tag color="default">步骤 {{ index + 1 }}</a-tag>
+                            <a-tag :color="executionStepStatusColor(step.status)">
+                              {{ executionStepStatusLabel(step.status) }}
+                            </a-tag>
+                            <a-tag color="purple">{{ executionStepTitle(step, index) }}</a-tag>
+                            <a-tag v-if="step.model" color="cyan">{{ step.model }}</a-tag>
+                          </a-space>
+                          <div v-if="step.dependsOn?.length" class="task-trace-execution-plan__meta">
+                            依赖：{{ step.dependsOn.join(" -> ") }}
+                          </div>
+                          <pre v-if="step.instruction" class="task-trace-execution-plan__pre">{{ step.instruction }}</pre>
+                          <pre v-if="step.result" class="task-trace-execution-plan__pre">{{ step.result }}</pre>
+                        </div>
+                      </div>
+
+                      <a-alert
+                        v-if="executionPlanJudgeSummary"
+                        type="info"
+                        show-icon
+                        :message="executionPlanJudgeSummary"
+                        :description="executionPlanJudgeReasoning"
+                        style="margin-top: 10px"
+                      />
+                    </div>
+
+                    <a-space v-if="executionPlanCandidates.length > 0" size="small" wrap style="margin-bottom: 12px">
+                      <a-tag color="blue">并行候选结果</a-tag>
+                    </a-space>
+
+                    <div
+                      v-for="(segment, index) in filteredTraceSegments"
+                      :key="traceSegmentKey(segment, index)"
+                      class="task-trace-segment"
+                      :class="`task-trace-segment--${traceSegmentTone(segment.type)}`"
+                    >
+                      <button
+                        type="button"
+                        class="task-trace-segment__header"
+                        @click="toggleTraceSegment(traceSegmentKey(segment, index))"
+                      >
+                        <span class="task-trace-segment__left">
+                          <span class="task-trace-segment__badge">{{ traceSegmentLabel(segment.type) }}</span>
+                          <span class="task-trace-segment__title">{{ segment.label }}</span>
+                        </span>
+                        <span class="task-trace-segment__right">
+                          <span v-if="segment.timestamp" class="task-trace-segment__time">{{ formatTime(segment.timestamp) }}</span>
+                          <span>{{ isTraceSegmentExpanded(traceSegmentKey(segment, index)) ? '收起' : '展开' }}</span>
+                        </span>
+                      </button>
+                      <div v-if="segment.hookAgent || segment.hookDecisionAction" class="task-trace-segment__meta">
+                        <span v-if="segment.hookAgent">Agent: {{ formatAgentLabel(segment.hookAgent) }}</span>
+                        <span v-if="segment.hookDecisionAction">决策: {{ segment.hookDecisionAction }}</span>
+                        <span v-if="segment.hookTrigger">触发: {{ segment.hookTrigger }}</span>
+                      </div>
+                      <div v-if="isTraceSegmentExpanded(traceSegmentKey(segment, index))" class="task-trace-segment__body">
+                        <a-space size="small" style="margin-bottom: 8px">
+                          <a-button size="small" @click="handleCopyMessage(segment.content || '(空)')">
+                            <template #icon><CopyOutlined /></template>
+                            复制原文
+                          </a-button>
+                        </a-space>
+                        <pre class="task-trace-segment__content">{{ segment.content || '(空)' }}</pre>
+                      </div>
+                    </div>
+
+                    <div v-if="taskExecutionTrace.hookExecutions.length > 0" class="task-trace-hooks">
+                      <div class="task-trace-panel__header task-trace-panel__header--nested">
+                        <div>
+                          <strong>Hook 原始记录</strong>
+                          <div class="task-trace-panel__sub">保留 prompt、result 和 decision 原文</div>
+                        </div>
+                      </div>
+                      <div
+                        v-for="(hook, index) in taskExecutionTrace.hookExecutions"
+                        :key="`${hook.hookId}-${hook.completedAt}-${index}`"
+                        class="task-trace-hook"
+                      >
+                        <div class="task-trace-hook__header">
+                          <a-space size="small" wrap>
+                            <a-tag color="blue">{{ hook.hookId }}</a-tag>
+                            <a-tag>{{ hook.trigger }}</a-tag>
+                            <a-tag :color="evaluationStatusColor(hook.status)">{{ evaluationStatusLabel(hook.status) }}</a-tag>
+                            <a-tag v-if="hook.model" color="cyan">{{ hook.model }}</a-tag>
+                          </a-space>
+                          <span class="task-trace-hook__time">{{ formatTime(hook.completedAt) }}</span>
+                        </div>
+                        <div class="task-trace-hook__meta">{{ formatAgentLabel(hook.agent) }}</div>
+                        <pre v-if="hook.prompt" class="task-trace-hook__block">{{ hook.prompt }}</pre>
+                        <pre v-if="hook.result" class="task-trace-hook__block">{{ hook.result }}</pre>
+                        <pre v-if="hook.decision" class="task-trace-hook__block">{{ stringifyTraceRaw(hook.decision) }}</pre>
+                      </div>
+                    </div>
+                  </section>
+
+                  <section class="task-trace-panel">
+                    <div class="task-trace-panel__header">
+                      <div>
+                        <strong>会话原始消息</strong>
+                        <div class="task-trace-panel__sub">按 session 原始 message 顺序展示，并可展开查看完整 JSON</div>
+                      </div>
+                      <a-flex align="center" style="margin-top: 6px; gap: 8px; flex-wrap: wrap">
+                        <a-radio-group v-model:value="traceMessageRoleFilter" size="small" button-style="solid">
+                          <a-radio-button value="all">全部</a-radio-button>
+                          <a-radio-button value="user">用户消息</a-radio-button>
+                          <a-radio-button value="assistant">模型消息</a-radio-button>
+                          <a-radio-button value="tool">工具消息</a-radio-button>
+                        </a-radio-group>
+                        <a-button size="small" @click="handleCopyAllMessagesJson">
+                          <template #icon><CopyOutlined /></template>
+                          复制全部 JSON
+                        </a-button>
+                      </a-flex>
+                    </div>
+
+                    <a-empty
+                      v-if="filteredTraceMessages.length === 0"
+                      description="当前会话没有可展示的原始消息"
+                    />
+
+                    <div
+                      v-for="rawMessage in filteredTraceMessages"
+                      :key="rawMessage.id"
+                      class="task-trace-message"
+                    >
+                      <div class="task-trace-message__header">
+                        <a-space size="small" wrap>
+                          <a-tag :color="traceMessageRoleColor(rawMessage.role)">{{ traceMessageRoleLabel(rawMessage.role) }}</a-tag>
+                          <a-tag color="default">{{ rawMessage.id.slice(0, 10) }}</a-tag>
+                        </a-space>
+                        <span class="task-trace-message__time">{{ formatTime(rawMessage.createdAt || '') }}</span>
+                      </div>
+                      <pre class="task-trace-message__content">{{ rawMessage.text || '(该消息没有 text part)' }}</pre>
+                      <a-space size="small" style="margin-top: 8px">
+                        <a-button size="small" @click="handleCopyMessage(rawMessage.text || stringifyTraceRaw(rawMessage.raw))">
+                          <template #icon><CopyOutlined /></template>
+                          复制文本
+                        </a-button>
+                        <a-button size="small" @click="handleCopyMessage(stringifyTraceRaw(rawMessage.raw))">
+                          <template #icon><CopyOutlined /></template>
+                          复制原始 JSON
+                        </a-button>
+                        <a-button size="small" @click="toggleTraceMessageRaw(rawMessage.id)">
+                          {{ isTraceMessageRawExpanded(rawMessage.id) ? '收起 JSON' : '展开 JSON' }}
+                        </a-button>
+                      </a-space>
+                      <pre v-if="isTraceMessageRawExpanded(rawMessage.id)" class="task-trace-message__raw">{{ stringifyTraceRaw(rawMessage.raw) }}</pre>
+                    </div>
+                  </section>
+                </div>
+              </div>
+            </a-tab-pane>
+
+          </a-tabs>
 
           <div :style="composerStyle">
             <div class="reply-composer-shell">
@@ -553,7 +637,7 @@
                 :auto-size="{ minRows: composerRows, maxRows: composerMaxRows }"
                 :maxlength="50000"
                 placeholder="描述下一步要构建的内容"
-                :disabled="!selectedSessionId"
+                :disabled="!taskId"
                 :bordered="false"
                 @keydown="handleComposerKeydown"
                 @update:value="continuePrompt = String($event ?? '')"
@@ -603,7 +687,7 @@
                   </button>
 
                   <button
-                    v-if="taskId && selectedSessionId && !isWorkbenchEmbedded"
+                    v-if="taskId && selectedSessionId && !isWorkbenchEmbedded && !isParallelComparisonMode"
                     type="button"
                     class="reply-composer-action reply-composer-action--icon"
                     :disabled="isAwaitingAssistantResponse"
@@ -614,7 +698,7 @@
                   </button>
 
                   <button
-                    v-if="taskId && selectedSessionId"
+                    v-if="taskId && selectedSessionId && !isParallelComparisonMode"
                     type="button"
                     class="reply-composer-action"
                     :disabled="!canContinueCurrentSession"
@@ -646,147 +730,8 @@
       <a-col v-if="showSidebar" :xs="24" :xxl="sidebarColSpan">
         <a-space direction="vertical" :style="taskDetailThemeStyles.sidebar" :size="16">
           <a-collapse size="small" :default-active-key="taskDetailDefaultActivePanels" :style="taskDetailThemeStyles.collapse">
-            <a-collapse-panel v-if="showContextPanel" key="context" header="代码上下文">
-              <a-descriptions v-if="task?.repoId" :column="1" bordered size="small">
-                <a-descriptions-item label="仓库">
-                  {{ task.repoName || task.repoId }}
-                </a-descriptions-item>
-                <a-descriptions-item label="远程地址">
-                  <a-typography-text v-if="task.remoteUrl" copyable>{{ task.remoteUrl }}</a-typography-text>
-                  <span v-else>-</span>
-                </a-descriptions-item>
-                <a-descriptions-item label="工作分支">
-                  <a-tag v-if="task.workingBranch" color="blue">{{ task.workingBranch }}</a-tag>
-                  <span v-else>-</span>
-                </a-descriptions-item>
-                <a-descriptions-item label="工作目录">
-                  <a-typography-text v-if="task.workspaceRoot" code>{{ task.workspaceRoot }}</a-typography-text>
-                  <span v-else>-</span>
-                </a-descriptions-item>
-                <a-descriptions-item label="基线版本">
-                  <a-typography-text v-if="task.baseRevision" code>{{ task.baseRevision?.slice(0, 12) }}</a-typography-text>
-                  <span v-else>-</span>
-                </a-descriptions-item>
-              </a-descriptions>
-              <a-empty v-else description="暂无代码上下文" />
-            </a-collapse-panel>
-
             <a-collapse-panel v-if="showChangesPanel" key="changes" header="代码变更">
               <TaskCodeChanges v-if="taskId" :task-id="taskId" />
-            </a-collapse-panel>
-
-            <a-collapse-panel v-if="showGovernancePanel" key="governance" header="治理评估">
-              <a-spin v-if="governanceLoading" />
-              <a-empty v-else-if="!governance" description="暂无治理数据" />
-              <div v-else>
-                <a-descriptions :column="1" bordered size="small">
-                  <a-descriptions-item label="风险等级">
-                    <a-tag :color="riskColor(governance.overallRisk)">{{ riskLabel(governance.overallRisk) }}</a-tag>
-                  </a-descriptions-item>
-                  <a-descriptions-item label="需要审批">
-                    <a-tag :color="governance.approvalRequired ? 'red' : 'green'">
-                      {{ governance.approvalRequired ? '是' : '否' }}
-                    </a-tag>
-                  </a-descriptions-item>
-                </a-descriptions>
-                <div style="margin-top: 12px">
-                  <a-typography-text strong>Runtime 账本成本摘要</a-typography-text>
-                  <a-spin v-if="taskRuntimeUsageLoading" style="display: block; margin-top: 8px" />
-                  <a-alert
-                    v-else-if="taskRuntimeUsageError"
-                    type="error"
-                    show-icon
-                    :message="taskRuntimeUsageError"
-                    style="margin-top: 8px"
-                  />
-                  <a-empty
-                    v-else-if="taskRuntimeUsageRows.length === 0"
-                    description="该任务暂无 runtime ledger 成本摘要"
-                    style="margin-top: 8px"
-                  />
-                  <template v-else>
-                    <div class="reply-composer-shell__summary-inline" style="margin-top: 8px">
-                      <div class="reply-composer-shell__summary-inline-list">
-                        <span
-                          v-for="item in taskRuntimeUsageSummaryItems"
-                          :key="item.label"
-                          class="reply-composer-shell__summary-chip"
-                        >
-                          <span class="reply-composer-shell__summary-chip-label">{{ item.label }}</span>
-                          <a-tag v-if="item.tone" :color="item.tone">{{ item.value }}</a-tag>
-                          <span v-else class="reply-composer-shell__summary-chip-value">{{ item.value }}</span>
-                        </span>
-                      </div>
-                    </div>
-                    <a-descriptions v-if="focusedTaskRuntimeLedger" :column="1" bordered size="small" style="margin-top: 8px">
-                      <a-descriptions-item label="聚焦会话">
-                        {{ focusedTaskRuntimeLedger.runtimeSessionId }}
-                      </a-descriptions-item>
-                      <a-descriptions-item label="来源 / 入口">
-                        {{ focusedTaskRuntimeLedger.executionSource }} / {{ focusedTaskRuntimeLedger.entrypointType }}
-                      </a-descriptions-item>
-                      <a-descriptions-item label="成本 / Token">
-                        {{ formatUsd(focusedTaskRuntimeLedger.costUsd) }} / {{ formatCompactTokenCount(focusedTaskRuntimeLedger.totalTokens) }}
-                      </a-descriptions-item>
-                    </a-descriptions>
-                  </template>
-                </div>
-                <div v-if="governance.violations.length > 0" :style="taskDetailThemeStyles.governanceViolations">
-                  <a-typography-text strong>命中规则</a-typography-text>
-                  <div style="margin: 8px 0 12px 0">
-                    <router-link
-                      v-if="taskId"
-                      :to="{
-                        path: '/agents',
-                        query: {
-                          entryContext: 'task',
-                          focus: 'attention',
-                          taskId,
-                          ...(task?.projectId ? { projectId: task.projectId } : {}),
-                          ...(task?.agentRunId ? { agentRunId: task.agentRunId } : {}),
-                          ...(governance.approvalRequired ? { approvalBlocked: 'true' } : {}),
-                          ...(governance.overallRisk !== 'low' ? { riskLevel: governance.overallRisk } : {}),
-                        },
-                      }"
-                    >
-                      <a-button size="small">带筛选查看 Agent</a-button>
-                    </router-link>
-                  </div>
-                  <a-list size="small" :data-source="governance.violations" :style="taskDetailThemeStyles.governanceList">
-                    <template #renderItem="{ item }">
-                      <a-list-item>
-                        <a-tag :color="riskColor(item.level)">{{ item.level }}</a-tag>
-                        <a-typography-text strong>{{ item.ruleName }}</a-typography-text>
-                      </a-list-item>
-                    </template>
-                  </a-list>
-                </div>
-              </div>
-            </a-collapse-panel>
-
-            <a-collapse-panel v-if="showProjectRoleConfigPanel && !useCompactInspector" key="project-role-config" header="项目角色配置">
-              <TaskProjectRoleConfigPanel
-                v-if="task?.projectId"
-                :loading="projectRoleConfigLoading"
-                :error="projectRoleConfigError"
-                :project-id="task.projectId"
-                :rows="projectRoleConfigRows"
-                :current-stage="workflowSummary?.currentStage"
-                :active-role-agent-ids="activeRoleAgentIds"
-              />
-            </a-collapse-panel>
-
-            <a-collapse-panel v-if="showRoleWorkflowPanel && !useCompactInspector" key="role-workflow" header="角色实际介入记录">
-              <TaskRoleWorkflowPanel
-                :loading="workflowViewLoading"
-                :error="workflowViewError"
-                :workflow-summary="workflowSummary"
-                :workflow-stages="workflowStages"
-                :role-conclusions="roleConclusions"
-                :developer-change-requests="developerChangeRequests"
-                :updating-request-ids="updatingChangeRequestIds"
-                @request-status-change="handleRoleWorkflowRequestStatusChange"
-              />
             </a-collapse-panel>
 
             <a-collapse-panel v-if="showHooksPanel && !useCompactInspector" key="hooks" header="Hook 执行记录">
@@ -883,39 +828,7 @@
             </span>
           </div>
         </div>
-        <template v-if="executionPlanCandidates.length > 0 || executionPlanSteps.length > 0 || executionPlanJudgeSummary">
-          <div v-if="executionPlanCandidates.length > 0" :style="taskDetailThemeStyles.toolSummaryList">
-            <a-typography-text strong>并行候选</a-typography-text>
-            <div
-              v-for="(candidate, index) in executionPlanCandidates"
-              :key="`${candidate.label}-${index}`"
-              :style="taskDetailThemeStyles.toolCallCard"
-            >
-              <a-space size="small" wrap>
-                <a-tag color="blue">{{ candidate.label }}</a-tag>
-                <a-tag :color="executionCandidateStatusColor(candidate.status)">
-                  {{ executionCandidateStatusLabel(candidate.status) }}
-                </a-tag>
-                <a-tag v-if="executionPlanWinnerIndex === index" color="gold">胜出</a-tag>
-                <a-tag color="geekblue">{{ formatAgentLabel(candidate.agent) }}</a-tag>
-                <a-tag v-if="candidate.model" color="cyan">{{ candidate.model }}</a-tag>
-                <a-popconfirm
-                  v-if="canAdoptCandidate(candidate, index)"
-                  title="确认采纳该候选结果？"
-                  ok-text="采纳"
-                  cancel-text="取消"
-                  @confirm="handleAdoptCandidate(index)"
-                >
-                  <a-button type="primary" size="small" ghost :loading="adoptingCandidateIndex === index">采纳</a-button>
-                </a-popconfirm>
-              </a-space>
-              <div v-if="candidate.sessionId || candidate.agentRunId" :style="taskDetailThemeStyles.toolCallMeta">
-                {{ executionCandidateIdentity(candidate) }}
-              </div>
-              <pre v-if="candidate.result" :style="taskDetailThemeStyles.toolCallCode">{{ candidate.result }}</pre>
-            </div>
-          </div>
-
+        <template v-if="executionPlanSteps.length > 0">
           <div v-if="executionPlanSteps.length > 0" :style="taskDetailThemeStyles.toolSummaryList">
             <a-flex justify="space-between" align="center">
               <a-typography-text strong>执行步骤</a-typography-text>
@@ -942,14 +855,6 @@
             </div>
           </div>
 
-          <a-alert
-            v-if="executionPlanJudgeSummary"
-            type="info"
-            show-icon
-            :message="executionPlanJudgeSummary"
-            :description="executionPlanJudgeReasoning"
-            style="margin-top: 12px"
-          />
         </template>
         <a-empty v-else description="暂无编排数据" />
       </div>
@@ -1068,6 +973,8 @@ import { useRoute, useRouter } from "vue-router";
 import {
   toApiError,
   type ChainStepInput,
+  type ExecutionTraceMessage,
+  type ExecutionTraceSegment,
   type ExecutionCandidate,
   type ExecutionMode,
   type ExecutionPlan as TaskExecutionPlan,
@@ -1085,6 +992,7 @@ import {
   type SessionInfo,
   type SessionTreeNode,
   type Task,
+  type TaskExecutionTrace,
   type TaskWorkflowViewModel,
   activateSession,
   advanceWorkflowStage,
@@ -1092,12 +1000,12 @@ import {
   archiveTaskSession,
   completeTask,
   continueTask,
-  executeTask,
   forkTaskSession,
   getModelsList,
   getProjectRoleExecutionView,
   getProjectRuntimeUsageLedgers,
   getSessionMessages,
+  getTaskExecutionTraceView,
   getSessionTree,
   getTask,
   getTaskGovernance,
@@ -1180,6 +1088,14 @@ const taskId = computed(() => route.params.taskId as string | undefined);
 const task = ref<Task | null>(null);
 const executionFeedbackNotice = ref<ExecutionFeedbackNotice | null>(null);
 const lastMissingTaskNoticeTaskId = ref<string | null>(null);
+const taskDetailPrimaryTab = ref("messages");
+const taskExecutionTrace = ref<TaskExecutionTrace | null>(null);
+const taskExecutionTraceLoading = ref(false);
+const taskExecutionTraceError = ref<string | null>(null);
+const traceSegmentExpanded = ref<Record<string, boolean>>({});
+const traceMessageRawExpanded = ref<Record<string, boolean>>({});
+const traceSegmentFilter = ref<'all' | 'user-input' | 'hook' | 'model-response'>('all');
+const traceMessageRoleFilter = ref<'all' | 'user' | 'assistant' | 'tool'>('all');
 
 const hasCodeContext = computed(() => Boolean(task.value?.repoId));
 
@@ -1291,23 +1207,12 @@ const orchestrationSummaryItems = computed(() => {
 const embeddedSidebarPanelCount = computed(
   () =>
     [
-      showContextPanel.value,
       showChangesPanel.value,
-      showGovernancePanel.value,
       showHooksPanel.value,
-      ...(!useCompactInspector.value
-        ? [
-            showOrchestrationPanel.value,
-            showPipelinePanel.value,
-            showEventsPanel.value,
-          ]
-        : []),
     ].filter(Boolean).length,
 );
 
-const showSidebar = computed(
-  () => !isWorkbenchEmbedded.value || embeddedSidebarPanelCount.value > 0,
-);
+const showSidebar = computed(() => embeddedSidebarPanelCount.value > 0);
 const sidebarColSpan = computed(() => (isWorkbenchEmbedded.value ? 6 : 8));
 const pageStyle = computed(() => ({
   ...taskDetailThemeStyles.page,
@@ -1322,8 +1227,12 @@ const mainContentColSpan = computed(() => {
     return 24;
   }
 
+  if (!showSidebar.value) {
+    return 24;
+  }
+
   if (!isWorkbenchEmbedded.value) {
-    return 11;
+    return 16;
   }
 
   return showSidebar.value ? 13 : 19;
@@ -1363,19 +1272,13 @@ const composerMaxRows = computed(() => (isReplyFocusMode.value ? 7 : 8));
 const taskDetailDefaultActivePanels = computed(() => {
   const base: string[] = [];
 
-  if (showContextPanel.value) {
-    base.push("context");
-  }
-
   if (showChangesPanel.value) {
     base.push("changes");
   }
 
-  if (showRoleWorkflowPanel.value && !useCompactInspector.value) {
-    base.push("role-workflow");
+  if (showHooksPanel.value) {
+    base.push("hooks");
   }
-
-
 
   return base;
 });
@@ -1431,6 +1334,7 @@ const sessions = ref<SessionInfo[]>([]);
 const sessionTree = ref<SessionTreeNode[]>([]);
 const selectedSessionId = ref<string | undefined>(undefined);
 const sessionMessages = ref<unknown[]>([]);
+const parallelCandidateMessages = ref<Record<string, unknown[]>>({});
 const messagesLoading = ref(false);
 const activating = ref(false);
 
@@ -1651,11 +1555,12 @@ function handleRoleWorkflowRequestStatusChange(payload: {
   void handleDeveloperChangeRequestStatus(payload.requestId, payload.status);
 }
 
-function filterModelOption(input: string, option: { value?: string; label?: string }) {
+function filterModelOption(input: string, option?: unknown) {
   const keyword = input.toLowerCase();
+  const normalized = option as { value?: string | number | null; label?: string | number | null } | undefined;
   return (
-    (option.value?.toLowerCase().includes(keyword) ?? false) ||
-    (option.label?.toLowerCase().includes(keyword) ?? false)
+    (String(normalized?.value ?? "").toLowerCase().includes(keyword) ?? false) ||
+    (String(normalized?.label ?? "").toLowerCase().includes(keyword) ?? false)
   );
 }
 
@@ -1950,6 +1855,7 @@ async function refreshTaskData(
     workflow?: boolean;
     roleConfig?: boolean;
     runtimeUsage?: boolean;
+    trace?: boolean;
   } = {
     task: true,
     pipeline: true,
@@ -1958,6 +1864,7 @@ async function refreshTaskData(
     workflow: true,
     roleConfig: true,
     runtimeUsage: true,
+    trace: true,
   },
 ) {
   const jobs: Promise<unknown>[] = [];
@@ -2041,6 +1948,38 @@ async function refreshTaskData(
     } else {
       taskRuntimeUsage.value = null;
       taskRuntimeUsageError.value = null;
+    }
+  }
+
+  if (options.trace !== false) {
+    await refreshTaskExecutionTrace(id, selectedSessionId.value || task.value?.sessionId || undefined);
+  }
+
+  if (resolvedExecutionMode.value === "parallel") {
+    await refreshParallelCandidateMessages(id, true);
+  } else {
+    parallelCandidateMessages.value = {};
+  }
+}
+
+async function refreshTaskExecutionTrace(currentTaskId: string, sessionId?: string, silent = false) {
+  if (!silent) {
+    taskExecutionTraceLoading.value = true;
+  }
+  taskExecutionTraceError.value = null;
+
+  try {
+    taskExecutionTrace.value = await getTaskExecutionTraceView(currentTaskId, sessionId);
+    traceSegmentExpanded.value = {};
+    traceMessageRawExpanded.value = {};
+  } catch (error) {
+    if (!silent) {
+      taskExecutionTrace.value = null;
+    }
+    taskExecutionTraceError.value = error instanceof Error ? error.message : "加载执行追踪失败";
+  } finally {
+    if (!silent) {
+      taskExecutionTraceLoading.value = false;
     }
   }
 }
@@ -2348,6 +2287,30 @@ async function refreshSessionMessages(currentTaskId: string, sessionId: string, 
   }
 }
 
+async function refreshParallelCandidateMessages(currentTaskId: string, silent = false) {
+  const candidateSessionIds = executionPlanCandidates.value
+    .map((candidate) => candidate.sessionId)
+    .filter((sessionId): sessionId is string => Boolean(sessionId));
+
+  if (candidateSessionIds.length === 0) {
+    parallelCandidateMessages.value = {};
+    return;
+  }
+
+  const entries = await Promise.all(
+    candidateSessionIds.map(async (sessionId) => {
+      try {
+        const response = await getSessionMessages(currentTaskId, sessionId);
+        return [sessionId, Array.isArray(response.data) ? response.data : []] as const;
+      } catch {
+        return [sessionId, silent ? parallelCandidateMessages.value[sessionId] ?? [] : []] as const;
+      }
+    }),
+  );
+
+  parallelCandidateMessages.value = Object.fromEntries(entries);
+}
+
 function scheduleSessionRefresh() {
   if (!taskId.value || !selectedSessionId.value) {
     return;
@@ -2467,6 +2430,13 @@ function scheduleTaskRefresh(reason: string) {
         ["message.updated", "session.updated", "task.continued", "task.completed"].includes(reason)
       ) {
         await refreshSessionMessages(taskId.value as string, selectedSessionId.value, true);
+      }
+
+      if (
+        resolvedExecutionMode.value === "parallel" &&
+        ["message.updated", "session.updated", "task.continued", "task.completed"].includes(reason)
+      ) {
+        await refreshParallelCandidateMessages(taskId.value as string, true);
       }
     })();
   }, delay);
@@ -2610,6 +2580,7 @@ watch(selectedSessionId, (sessionId) => {
   if (!taskId.value || !sessionId) {
     sessionMessages.value = [];
     runtimePipeline.value = null;
+    taskExecutionTrace.value = null;
     return;
   }
 
@@ -2626,6 +2597,7 @@ watch(selectedSessionId, (sessionId) => {
 
   void refreshSessionMessages(taskId.value, sessionId);
   void refreshPipelineData(taskId.value, sessionId);
+  void refreshTaskExecutionTrace(taskId.value, sessionId);
 });
 
 watch([streamingAssistantDraft, pendingAssistantMessage], ([streamingDraft, pendingMessage]) => {
@@ -2719,20 +2691,30 @@ onUnmounted(() => {
 });
 
 async function handleContinue() {
-  if (!taskId.value || !selectedSessionId.value || !continuePrompt.value.trim()) return;
+  if (!taskId.value || !continuePrompt.value.trim()) return;
   continuing.value = true;
   executionFeedbackNotice.value = null;
-  const sessionId = selectedSessionId.value;
+  const sessionId = selectedSessionId.value || task.value?.sessionId;
   const prompt = continuePrompt.value.trim();
   const sentAt = new Date().toISOString();
   terminatedAwaitingSessionId.value = null;
-  pendingAssistantState.value = {
-    sessionId,
-    prompt,
-    sentAt,
-  };
+  pendingAssistantState.value = sessionId
+    ? {
+        sessionId,
+        prompt,
+        sentAt,
+      }
+    : null;
   try {
-    await continueTask(taskId.value, prompt, sessionId);
+    const result = await continueTask(taskId.value, prompt, sessionId);
+    if (result.sessionId) {
+      selectedSessionId.value = result.sessionId;
+      pendingAssistantState.value = {
+        sessionId: result.sessionId,
+        prompt,
+        sentAt,
+      };
+    }
     message.success("续跑指令已发送");
     continuePrompt.value = "";
     const t = await getTask(taskId.value);
@@ -2921,6 +2903,14 @@ function handleCopyMessage(text?: string) {
   );
 }
 
+function handleCopyAllMessagesJson() {
+  const json = stringifyTraceRaw(filteredTraceMessages.value.map(m => m.raw));
+  navigator.clipboard.writeText(json).then(
+    () => message.success(`已复制 ${filteredTraceMessages.value.length} 条消息 JSON`),
+    () => message.error("复制失败"),
+  );
+}
+
 function handleQuoteToInput(text?: string) {
   if (!text) return;
   const quoted = text
@@ -3041,6 +3031,35 @@ async function handleArchiveSession(runtimeSessionId: string) {
 const selectedSession = computed(() =>
   sessions.value.find((session) => session.id === selectedSessionId.value),
 );
+
+const isParallelComparisonMode = computed(() => {
+  if (task.value?.executionMode === "parallel") {
+    return true;
+  }
+
+  return typeof task.value?.executionPlan === "string" && task.value.executionPlan.includes('"mode":"parallel"');
+});
+
+const visibleSessions = computed(() => {
+  if (!isParallelComparisonMode.value) {
+    return sessions.value;
+  }
+
+  const primarySessionId = task.value?.sessionId || selectedSessionId.value;
+  if (!primarySessionId) {
+    return sessions.value.slice(0, 1);
+  }
+
+  return sessions.value.filter((session) => session.id === primarySessionId);
+});
+
+const visibleSessionTree = computed(() => {
+  if (!isParallelComparisonMode.value) {
+    return sessionTree.value;
+  }
+
+  return [] as SessionTreeNode[];
+});
 
 const runtimeSessionStateMap = computed<Record<string, RuntimeBurstSessionState>>(() => {
   const states: Record<string, RuntimeBurstSessionState> = {};
@@ -3212,7 +3231,7 @@ const isAwaitingAssistantResponse = computed(() => {
 
 const canContinueCurrentSession = computed(
   () =>
-    Boolean(selectedSessionId.value && continuePrompt.value.trim()) &&
+    Boolean(taskId.value && continuePrompt.value.trim()) &&
     !isAwaitingAssistantResponse.value,
 );
 
@@ -3262,7 +3281,12 @@ function scheduleLiveMessageRefresh() {
     }
 
     liveMessageRefreshInFlight = true;
-    void refreshSessionMessages(taskId.value, selectedSessionId.value, true).finally(() => {
+    void Promise.all([
+      refreshSessionMessages(taskId.value, selectedSessionId.value, true),
+      isParallelComparisonMode.value
+        ? refreshParallelCandidateMessages(taskId.value, true)
+        : Promise.resolve(),
+    ]).finally(() => {
       liveMessageRefreshInFlight = false;
       if (isAwaitingAssistantResponse.value) {
         scheduleLiveMessageRefresh();
@@ -3283,6 +3307,16 @@ watch(
     assistantWaitNowMs.value = Date.now();
     scheduleAssistantWaitClock();
     scheduleLiveMessageRefresh();
+  },
+  { immediate: true },
+);
+
+watch(
+  () => task.value?.sessionId,
+  (sessionId) => {
+    if (isParallelComparisonMode.value && sessionId) {
+      selectedSessionId.value = sessionId;
+    }
   },
   { immediate: true },
 );
@@ -4081,10 +4115,87 @@ const sessionMessageItems = computed<SessionMessageView[]>(() => {
   }
 
   if (pendingAssistantMessage.value) {
-    return [...persistedItems, pendingAssistantMessage.value];
+    return [...persistedItems, pendingAssistantMessage.value].filter((item) => item.role !== "system");
   }
 
-  return persistedItems;
+  return persistedItems.filter((item) => item.role !== "system");
+});
+
+const conversationSessionMessageItems = computed<SessionMessageView[]>(() =>
+  sessionMessageItems.value.filter((item) => item.role === "user" || item.role === "assistant"),
+);
+
+type ParallelComparisonCard = {
+  key: string;
+  label: string;
+  model?: string;
+  status: string;
+  meta?: string;
+  loading: boolean;
+  reply?: string;
+  replyHtml?: string;
+};
+
+function latestAssistantReplyText(messages: unknown[], sessionId: string): string | undefined {
+  const persistedMessages = Array.isArray(messages) ? messages : [];
+  let persistedText: string | undefined;
+
+  for (let index = persistedMessages.length - 1; index >= 0; index -= 1) {
+    const message = persistedMessages[index];
+    if (getMessageRoleValue(message) !== "assistant") {
+      continue;
+    }
+
+    persistedText = normalizeTextParts(getMessageParts(message));
+    if (persistedText) {
+      break;
+    }
+  }
+
+  const liveState = collectLiveAssistantState(taskEvents.value, sessionId);
+  const latestLiveId = liveState.orderedAssistantMessageIds[liveState.orderedAssistantMessageIds.length - 1];
+  const liveText = latestLiveId ? liveState.textById.get(latestLiveId) : undefined;
+  const merged = liveText && liveText.length > (persistedText?.length ?? 0) ? liveText : persistedText;
+  return merged ? stripStageCompleteMarker(merged) : undefined;
+}
+
+function renderParallelComparisonHtml(key: string, text: string): string {
+  const cacheKey = `parallel:${key}`;
+  const cached = renderedMessageHtmlCache.get(cacheKey);
+  if (cached?.text === text) {
+    return cached.html;
+  }
+
+  const html = renderMarkdown(text);
+  renderedMessageHtmlCache.set(cacheKey, { text, html });
+  return html;
+}
+
+const parallelComparisonCards = computed<ParallelComparisonCard[]>(() => {
+  if (!isParallelComparisonMode.value || executionPlanCandidates.value.length < 2) {
+    return [];
+  }
+
+  return executionPlanCandidates.value.map((candidate, index) => {
+    const sessionId = candidate.sessionId;
+    const messages = sessionId ? parallelCandidateMessages.value[sessionId] ?? [] : [];
+    const reply = sessionId ? latestAssistantReplyText(messages, sessionId) : undefined;
+    const replyHtml = reply ? renderParallelComparisonHtml(`${sessionId || index}`, reply) : undefined;
+    const metaParts = [candidate.agent, sessionId ? `Session ${sessionId.slice(0, 8)}` : undefined].filter(
+      (value): value is string => Boolean(value),
+    );
+
+    return {
+      key: sessionId || `candidate-${index}`,
+      label: candidate.label || `候选 ${index + 1}`,
+      model: candidate.model,
+      status: candidate.status || "pending",
+      meta: metaParts.join(" · ") || undefined,
+      loading: !reply && candidate.status === "running",
+      reply,
+      replyHtml,
+    };
+  });
 });
 
 const streamingRevealText = ref<Record<string, string>>({});
@@ -4352,8 +4463,73 @@ function messageDisplayText(item: SessionMessageView): string | undefined {
   return item.text;
 }
 
-function shouldRenderStreamingPlainText(item: SessionMessageView): boolean {
-  return Boolean(item.isStreaming || shouldAnimateMessage(item));
+function stripWorkflowExecutionContextPrefix(text: string): string {
+  const normalized = text.replace(/\r\n?/g, "\n").trim();
+  if (!normalized) {
+    return normalized;
+  }
+
+  const contextMarkers = [
+    "Execution context:",
+    "当前执行上下文",
+    "请只完成当前阶段的目标。",
+    "完成后请输出本阶段产出摘要。",
+    "如果你认为当前阶段已经完成，请在输出末尾单独追加 [STAGE_COMPLETE]。",
+    "如果你认为当前阶段已经完成，请在输出末尾单独追加",
+  ];
+
+  const hasContextPrefix = contextMarkers.some((marker) => normalized.includes(marker));
+  if (!hasContextPrefix) {
+    return normalized;
+  }
+
+  const cutMarkers = [
+    "如果你认为当前阶段已经完成，请在输出末尾单独追加 [STAGE_COMPLETE]。",
+    "如果你认为当前阶段已经完成，请在输出末尾单独追加 [STAGE_COMPLETE]",
+    "如果你认为当前阶段已经完成，请在输出末尾单独追加",
+    "完成后请输出本阶段产出摘要。",
+    "请只完成当前阶段的目标。",
+  ];
+
+  for (const marker of cutMarkers) {
+    const markerIndex = normalized.lastIndexOf(marker);
+    if (markerIndex < 0) {
+      continue;
+    }
+    const stripped = normalized.slice(markerIndex + marker.length).trim();
+    if (stripped) {
+      return stripped;
+    }
+  }
+
+  const lastDoubleBreak = normalized.lastIndexOf("\n\n");
+  if (lastDoubleBreak >= 0) {
+    const stripped = normalized.slice(lastDoubleBreak + 2).trim();
+    if (stripped) {
+      return stripped;
+    }
+  }
+
+  return normalized;
+}
+
+function stripStageCompleteMarker(text: string): string {
+  return text
+    .replace(/^\s*\[STAGE_COMPLETE\]\s*$/gmu, "")
+    .replace(/\s*\[STAGE_COMPLETE\]\s*/gu, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function conversationMessageDisplayText(item: SessionMessageView): string | undefined {
+  const text = messageDisplayText(item);
+  if (!text) {
+    return text;
+  }
+  if (item.role !== "user") {
+    return stripStageCompleteMarker(text);
+  }
+  return stripStageCompleteMarker(stripWorkflowExecutionContextPrefix(text));
 }
 
 function renderMessageHtml(item: SessionMessageView): string {
@@ -4365,6 +4541,19 @@ function renderMessageHtml(item: SessionMessageView): string {
 
   const html = renderMarkdown(text);
   renderedMessageHtmlCache.set(item.key, { text, html });
+  return html;
+}
+
+function renderConversationMessageHtml(item: SessionMessageView): string {
+  const text = conversationMessageDisplayText(item) || "";
+  const cacheKey = `conversation:${item.key}`;
+  const cached = renderedMessageHtmlCache.get(cacheKey);
+  if (cached?.text === text) {
+    return cached.html;
+  }
+
+  const html = renderMarkdown(text);
+  renderedMessageHtmlCache.set(cacheKey, { text, html });
   return html;
 }
 
@@ -4443,11 +4632,18 @@ const strategy = computed(() => {
       selectedAgent?: string;
       selectedTemplateId?: string;
       executionMode?: string;
+      parallelCandidates?: Array<{
+        model: string;
+        label?: string;
+      }>;
+      sequentialSteps?: ChainStepInput[];
       hookExecutions?: Array<{
         hookId: string;
         trigger: string;
         status: string;
         agent: string;
+        prompt?: string;
+        model?: string;
         result?: string;
         error?: string;
         startedAt?: string;
@@ -4456,6 +4652,7 @@ const strategy = computed(() => {
           action: string;
           reason?: string;
           rewrittenPrompt?: string;
+          targetModel?: string;
         };
       }>;
     };
@@ -4463,6 +4660,141 @@ const strategy = computed(() => {
     return null;
   }
 });
+
+const taskExecutionTraceSegments = computed(() => taskExecutionTrace.value?.segments ?? []);
+const taskExecutionTraceMessages = computed<ExecutionTraceMessage[]>(
+  () => taskExecutionTrace.value?.messages ?? [],
+);
+
+const filteredTraceSegments = computed(() => {
+  const segments = taskExecutionTraceSegments.value;
+  if (traceSegmentFilter.value === 'all') return segments;
+  if (traceSegmentFilter.value === 'hook') {
+    return segments.filter(s => ['hook-injection', 'hook-result', 'hook-rewrite'].includes(s.type));
+  }
+  return segments.filter(s => s.type === traceSegmentFilter.value);
+});
+
+const filteredTraceMessages = computed(() => {
+  const msgs = taskExecutionTraceMessages.value;
+  if (traceMessageRoleFilter.value === 'all') return msgs;
+  return msgs.filter(m => m.role === traceMessageRoleFilter.value);
+});
+
+const taskExecutionTraceSummaryItems = computed(() => {
+  if (!taskExecutionTrace.value) {
+    return [] as Array<{ label: string; value: string; tone?: string }>;
+  }
+
+  const items: Array<{ label: string; value: string; tone?: string }> = [];
+  items.push({
+    label: "追踪会话",
+    value: taskExecutionTrace.value.sessionId?.slice(0, 18) || "无",
+    tone: "blue",
+  });
+  items.push({
+    label: "来源段",
+    value: String(taskExecutionTrace.value.segments.length),
+    tone: "processing",
+  });
+  items.push({
+    label: "原始消息",
+    value: String(taskExecutionTraceMessages.value.length),
+    tone: "purple",
+  });
+  if (taskExecutionTrace.value.truncated) {
+    items.push({ label: "会话截断", value: "是", tone: "warning" });
+  }
+  return items;
+});
+
+function traceSegmentKey(segment: ExecutionTraceSegment, index: number) {
+  return `${segment.type}:${segment.hookId || segment.label}:${index}`;
+}
+
+function toggleTraceSegment(key: string) {
+  traceSegmentExpanded.value = {
+    ...traceSegmentExpanded.value,
+    [key]: !traceSegmentExpanded.value[key],
+  };
+}
+
+function isTraceSegmentExpanded(key: string) {
+  return Boolean(traceSegmentExpanded.value[key]);
+}
+
+function toggleTraceMessageRaw(messageId: string) {
+  traceMessageRawExpanded.value = {
+    ...traceMessageRawExpanded.value,
+    [messageId]: !traceMessageRawExpanded.value[messageId],
+  };
+}
+
+function isTraceMessageRawExpanded(messageId: string) {
+  return Boolean(traceMessageRawExpanded.value[messageId]);
+}
+
+function traceSegmentLabel(type: ExecutionTraceSegment["type"]) {
+  switch (type) {
+    case "user-input":
+      return "用户输入";
+    case "workflow-context":
+      return "工作流上下文";
+    case "hook-injection":
+      return "Hook 输入";
+    case "hook-result":
+      return "Hook 输出";
+    case "hook-rewrite":
+      return "Hook 重写";
+    case "final-prompt":
+      return "最终 Prompt";
+    case "model-response":
+      return "模型回复";
+    default:
+      return "数据段";
+  }
+}
+
+function traceSegmentTone(type: ExecutionTraceSegment["type"]) {
+  switch (type) {
+    case "user-input":
+      return "user";
+    case "workflow-context":
+      return "context";
+    case "hook-injection":
+    case "hook-result":
+    case "hook-rewrite":
+      return "hook";
+    case "final-prompt":
+      return "prompt";
+    case "model-response":
+      return "response";
+    default:
+      return "default";
+  }
+}
+
+function traceMessageRoleColor(role: string) {
+  if (role === "user") return "blue";
+  if (role === "assistant") return "purple";
+  if (role === "tool") return "cyan";
+  return "default";
+}
+
+function traceMessageRoleLabel(role: string) {
+  if (role === "user") return "用户消息";
+  if (role === "assistant") return "模型消息";
+  if (role === "tool") return "工具消息";
+  return role || "未知";
+}
+
+function stringifyTraceRaw(value: unknown) {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
 
 const executionPlan = computed(() => {
   if (!task.value?.executionPlan) return null;
@@ -4507,6 +4839,51 @@ const resolvedExecutionMode = computed<"single" | "parallel" | "sequential-chain
   return mode === "parallel" || mode === "single" || mode === "sequential-chain"
     ? mode
     : undefined;
+});
+
+const editableExecutionMode = computed<ExecutionMode>(() => {
+  return resolvedExecutionMode.value ?? "single";
+});
+
+const editableParallelCandidates = computed(() => {
+  if (Array.isArray(strategy.value?.parallelCandidates) && strategy.value.parallelCandidates.length > 0) {
+    return strategy.value.parallelCandidates
+      .filter((candidate) => typeof candidate?.model === "string" && candidate.model.trim())
+      .map((candidate, index) => ({
+        model: candidate.model,
+        label: candidate.label || `候选 ${String.fromCharCode(65 + index)}`,
+      }));
+  }
+
+  if (executionPlanCandidates.value.length > 0) {
+    return executionPlanCandidates.value
+      .filter((candidate) => typeof candidate.model === "string" && candidate.model.trim())
+      .map((candidate, index) => ({
+        model: candidate.model!,
+        label: candidate.label || `候选 ${String.fromCharCode(65 + index)}`,
+      }));
+  }
+
+  return [] as Array<{ model: string; label?: string }>;
+});
+
+const editableSequentialSteps = computed<ChainStepInput[]>(() => {
+  if (Array.isArray(strategy.value?.sequentialSteps) && strategy.value.sequentialSteps.length > 0) {
+    return strategy.value.sequentialSteps;
+  }
+
+  if (executionPlanSteps.value.length > 0) {
+    return executionPlanSteps.value
+      .filter((step) => step.type === "chain-step" && step.title && step.instruction)
+      .map((step, index) => ({
+        id: step.id || `step-${index + 1}`,
+        title: step.title || `步骤 ${index + 1}`,
+        instruction: step.instruction || "",
+        ...(step.model ? { model: step.model } : {}),
+      }));
+  }
+
+  return [];
 });
 
 const executionPlanCandidates = computed(() => executionPlan.value?.candidates ?? []);
@@ -4577,6 +4954,8 @@ async function handleAdoptCandidate(index: number) {
 
 const autoAdvanceStages = ref(false);
 const showExecutionModeModal = ref(false);
+const completingTask = ref(false);
+const advancingWorkflowStage = ref(false);
 
 watch(
   () => task.value?.autoAdvanceStages,
@@ -4591,6 +4970,88 @@ type ExecutionOverrides = {
   candidates?: Array<{ model: string; label?: string }>;
   steps?: ChainStepInput[];
 } | null;
+
+function buildSavedExecutionPlan(overrides: ExecutionOverrides): string {
+  if (overrides?.mode === "parallel") {
+    const candidates = (overrides.candidates ?? []).map((candidate, index) => ({
+      label: candidate.label || `候选 ${index + 1}`,
+      agent: "default-executor",
+      model: candidate.model,
+      role: "executor",
+      status: "pending",
+    }));
+
+    return JSON.stringify({
+      mode: "parallel",
+      steps: [{ id: "exec-parallel", type: "execution", status: "pending" }],
+      candidates,
+    });
+  }
+
+  if (overrides?.mode === "sequential-chain") {
+    const steps = (overrides.steps ?? []).map((step, index) => ({
+      id: step.id || `step-${index + 1}`,
+      type: "chain-step",
+      status: "pending",
+      title: step.title,
+      instruction: step.instruction,
+      ...(step.model ? { model: step.model } : {}),
+      ...(index > 0 ? { dependsOn: [overrides.steps?.[index - 1]?.id || `step-${index}`] } : {}),
+    }));
+
+    return JSON.stringify({
+      mode: "sequential-chain",
+      steps,
+      candidates: [
+        {
+          label: "主执行",
+          agent: "default-executor",
+          ...(task.value?.selectedModel ? { model: task.value.selectedModel } : {}),
+          status: "pending",
+        },
+      ],
+      currentChainStepIndex: 0,
+    });
+  }
+
+  return JSON.stringify({
+    mode: "single",
+    steps: [{ id: "exec-0", type: "execution", status: "pending" }],
+    candidates: [
+      {
+        label: "主执行",
+        agent: "default-executor",
+        ...(task.value?.selectedModel ? { model: task.value.selectedModel } : {}),
+        status: "pending",
+      },
+    ],
+  });
+}
+
+function serializeTaskStrategy(overrides: ExecutionOverrides) {
+  const current =
+    task.value?.strategy && task.value.strategy.trim()
+      ? JSON.parse(task.value.strategy) as Record<string, unknown>
+      : {};
+
+  const next: Record<string, unknown> = {
+    ...current,
+    executionMode: overrides?.mode ?? "single",
+  };
+
+  if (overrides?.mode === "parallel") {
+    next.parallelCandidates = overrides.candidates ?? [];
+    delete next.sequentialSteps;
+  } else if (overrides?.mode === "sequential-chain") {
+    next.sequentialSteps = overrides.steps ?? [];
+    delete next.parallelCandidates;
+  } else {
+    delete next.parallelCandidates;
+    delete next.sequentialSteps;
+  }
+
+  return JSON.stringify(next);
+}
 
 async function handleAutoAdvanceToggle(value: boolean) {
   if (!taskId.value) return;
@@ -4609,32 +5070,29 @@ async function handleAutoAdvanceToggle(value: boolean) {
   }
 }
 
-async function handleQuickExecute(overrides?: ExecutionOverrides) {
+async function handleExecutionModeConfirm(overrides: ExecutionOverrides) {
   if (!taskId.value) return;
+  showExecutionModeModal.value = false;
   try {
-    await executeTask(taskId.value, overrides ?? undefined);
-    message.success("执行已启动");
+    const strategy = serializeTaskStrategy(overrides);
+    const executionMode = overrides?.mode ?? "single";
+    const executionPlan = buildSavedExecutionPlan(overrides);
+    await updateTask(taskId.value, {
+      strategy,
+      executionMode,
+      executionPlan,
+    });
     const t = await getTask(taskId.value);
     task.value = t;
-    scheduleSessionRefresh();
+    message.success("执行模式已保存，下一次发送消息时生效");
   } catch (e) {
-    if (
-      !showRuntimeRecoveryNotice(e, {
-        context: RUNTIME_RECOVERY_CONTEXTS.taskContinue,
-      })
-    ) {
-      message.error(`执行失败: ${e instanceof Error ? e.message : e}`);
-    }
+    message.error(`保存执行模式失败: ${e instanceof Error ? e.message : e}`);
   }
 }
 
-async function handleExecutionModeConfirm(overrides: ExecutionOverrides) {
-  showExecutionModeModal.value = false;
-  await handleQuickExecute(overrides);
-}
-
 async function handleCompleteTask() {
-  if (!taskId.value) return;
+  if (!taskId.value || completingTask.value || task.value?.status === "completed") return;
+  completingTask.value = true;
   try {
     await completeTask(taskId.value);
     message.success("任务已完结");
@@ -4642,11 +5100,14 @@ async function handleCompleteTask() {
     task.value = t;
   } catch (e) {
     message.error(`完结失败: ${e instanceof Error ? e.message : e}`);
+  } finally {
+    completingTask.value = false;
   }
 }
 
 async function handleAdvanceStage() {
-  if (!taskId.value) return;
+  if (!taskId.value || advancingWorkflowStage.value) return;
+  advancingWorkflowStage.value = true;
   try {
     const result = await advanceWorkflowStage(taskId.value);
     message.success(result.nextStageKey ? `已推进到阶段 ${result.nextStageKey}` : "阶段已推进");
@@ -4655,6 +5116,8 @@ async function handleAdvanceStage() {
     refreshWorkflowView(taskId.value);
   } catch (e) {
     message.error(`推进失败: ${e instanceof Error ? e.message : e}`);
+  } finally {
+    advancingWorkflowStage.value = false;
   }
 }
 
@@ -5545,19 +6008,19 @@ const eventColumns = [
   min-width: 0;
   padding: 6px 10px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.05);
+  background: rgba(15, 23, 42, 0.04);
 }
 
 .reply-composer-shell__summary-chip-label {
   font-size: 11px;
   letter-spacing: 0.04em;
-  color: rgba(226, 232, 240, 0.48);
+  color: rgba(15, 23, 42, 0.55);
   white-space: nowrap;
 }
 
 .reply-composer-shell__summary-chip-value {
   min-width: 0;
-  color: rgba(241, 245, 249, 0.88);
+  color: rgba(15, 23, 42, 0.85);
   font-size: 12px;
   line-height: 1;
   white-space: nowrap;
@@ -5876,6 +6339,240 @@ const eventColumns = [
 
 .message-state-tag--streaming::after {
   content: "...";
+}
+
+.task-detail-primary-tabs {
+  margin-top: 12px;
+}
+
+.task-detail-primary-tabs :deep(.ant-tabs-nav) {
+  padding-left: 8px;
+}
+
+.task-detail-primary-tabs :deep(.ant-tabs-content-holder) {
+  padding-top: 8px;
+}
+
+.task-trace-view {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.task-trace-view__grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+}
+
+.task-trace-panel {
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 14px;
+  background: #fff;
+  padding: 14px;
+  min-width: 0;
+}
+
+.task-trace-panel__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.task-trace-panel__header strong {
+  color: rgba(15, 23, 42, 0.92);
+  font-size: 14px;
+}
+
+.task-trace-panel__header--nested {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.task-trace-panel__sub {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: rgba(15, 23, 42, 0.8);
+}
+
+.task-trace-segment {
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 12px;
+  overflow: hidden;
+  background: #fcfcfd;
+}
+
+.task-trace-segment + .task-trace-segment {
+  margin-top: 10px;
+}
+
+.task-trace-segment--user {
+  border-color: rgba(37, 99, 235, 0.18);
+}
+
+.task-trace-segment--context {
+  border-color: rgba(8, 145, 178, 0.18);
+}
+
+.task-trace-segment--hook {
+  border-color: rgba(234, 88, 12, 0.2);
+}
+
+.task-trace-segment--prompt {
+  border-color: rgba(22, 163, 74, 0.2);
+}
+
+.task-trace-segment--response {
+  border-color: rgba(126, 34, 206, 0.18);
+}
+
+.task-trace-segment__header {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  padding: 12px 14px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.task-trace-segment__left,
+.task-trace-segment__right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.task-trace-segment__right {
+  flex-shrink: 0;
+  color: rgba(15, 23, 42, 0.55);
+  font-size: 12px;
+}
+
+.task-trace-segment__badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  background: rgba(15, 23, 42, 0.08);
+  color: rgba(15, 23, 42, 0.76);
+}
+
+.task-trace-segment__title {
+  font-weight: 600;
+  color: rgba(15, 23, 42, 0.92);
+}
+
+.task-trace-segment__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 0 14px 10px;
+  font-size: 12px;
+  color: rgba(15, 23, 42, 0.6);
+}
+
+.task-trace-segment__body {
+  padding: 0 14px 14px;
+}
+
+.task-trace-segment__content,
+.task-trace-hook__block,
+.task-trace-message__content,
+.task-trace-message__raw {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border-radius: 10px;
+  padding: 12px;
+  background: #f7f8fa;
+  color: #0f172a;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.task-trace-hooks {
+  margin-top: 6px;
+}
+
+.task-trace-hook {
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 12px;
+  padding: 12px;
+  background: #fafafa;
+}
+
+.task-trace-hook + .task-trace-hook {
+  margin-top: 10px;
+}
+
+.task-trace-hook__header,
+.task-trace-message__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.task-trace-hook__time,
+.task-trace-message__time {
+  color: rgba(15, 23, 42, 0.55);
+  font-size: 12px;
+}
+
+.task-trace-hook__meta {
+  margin: 8px 0;
+  color: rgba(15, 23, 42, 0.66);
+  font-size: 12px;
+}
+
+.task-trace-hook__block + .task-trace-hook__block {
+  margin-top: 8px;
+}
+
+.task-trace-message {
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 12px;
+  padding: 12px;
+  background: #fff;
+}
+
+.task-trace-message + .task-trace-message {
+  margin-top: 10px;
+}
+
+.task-trace-message__content {
+  margin-top: 10px;
+}
+
+.task-trace-message__raw {
+  margin-top: 10px;
+  background: #101827;
+  color: #e5eefc;
+}
+
+.task-trace-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: rgba(15, 23, 42, 0.68);
+}
+
+@media (max-width: 1100px) {
+  .task-trace-view__grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @keyframes waiting-dots {

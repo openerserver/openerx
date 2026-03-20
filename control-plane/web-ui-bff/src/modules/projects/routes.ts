@@ -1,7 +1,12 @@
 import { Hono } from "hono";
 import { authHeader, cpFetch } from "../../lib/control-plane-client";
-import { readDefaultExecutionModel, resolveModelRoute } from "../../lib/opencode-config";
+import {
+  formatModelRoute,
+  readDefaultExecutionModel,
+  resolveModelRoute,
+} from "../../lib/opencode-config";
 import { readOrchestrationStrategy } from "../../lib/orchestration-strategy";
+import type { HookExecutionRecord } from "../../lib/orchestration-strategy";
 import {
   buildPreflightOrchestrationFingerprint,
   evaluatePaidExecutionPreflight,
@@ -9,6 +14,7 @@ import {
 } from "../../lib/paid-execution-guard";
 import { fetchProjectRuntimeUsageBaseline } from "../../lib/runtime-usage-ledger";
 import type { JWTPayload } from "../../middleware/auth";
+import { getSessionMessages } from "../agent-control/opencode-adapter";
 import {
   type ProjectStageRuntimeSummaryViewModel,
   buildProjectWorkflowStageRuntimeSummaries,
@@ -28,6 +34,72 @@ interface ProjectRecord {
     defaultModel?: string;
     allowPaidExecution?: boolean;
   } | null;
+}
+
+interface ProjectTaskGraphTaskRecord {
+  id: string;
+  projectId: string;
+  userId: string;
+  title: string;
+  prompt: string;
+  status: string;
+  category?: string | null;
+  strategy?: string | null;
+  repoName?: string | null;
+  workingBranch?: string | null;
+  selectedModel?: string | null;
+  changesSummary?: {
+    filesAdded?: number;
+    filesModified?: number;
+    filesDeleted?: number;
+    totalInsertions?: number;
+    totalDeletions?: number;
+  } | null;
+  createdAt?: string | null;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+}
+
+interface ProjectTaskGraphEdgeViewModel {
+  id: string;
+  sourceTaskId: string;
+  targetTaskId: string;
+  type: "depends-on" | "blocks" | "spawned-from";
+  source: "manual" | "system" | "task-create";
+}
+
+interface ProjectTaskGraphTaskViewModel extends ProjectTaskGraphTaskRecord {
+  currentStageLabel: string | null;
+  latestActivityAt: string | null;
+}
+
+interface ProjectTaskGraphViewModel {
+  project: {
+    id: string;
+    name: string;
+    slug: string;
+    description: string | null;
+  };
+  tasks: ProjectTaskGraphTaskViewModel[];
+  edges: ProjectTaskGraphEdgeViewModel[];
+  capabilities: {
+    supportsDependsOn: boolean;
+    supportsBlocks: boolean;
+    supportsSpawnedFrom: boolean;
+  };
+  refreshedAt: string;
+}
+
+interface ProjectTaskRelationRecord {
+  id: string;
+  projectId: string;
+  sourceTaskId: string;
+  targetTaskId: string;
+  type: "depends-on" | "blocks" | "spawned-from";
+  source: "manual" | "system" | "task-create";
+  metadata?: Record<string, unknown> | null;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 interface RoleAgentRecord {
@@ -1026,6 +1098,124 @@ async function buildProjectBossOperationsView(projectId: string, authorization: 
   };
 }
 
+function inferTaskStageLabel(task: ProjectTaskGraphTaskRecord): string | null {
+  if (typeof task.category === "string" && task.category.trim()) {
+    return task.category.trim();
+  }
+  if (typeof task.strategy === "string" && task.strategy.trim()) {
+    return task.strategy.trim();
+  }
+  return null;
+}
+
+async function buildProjectTaskGraphView(projectId: string, authorization: string) {
+  const [projectResult, taskResult, relationResult, bindingResult] = await Promise.all([
+    cpFetch<ProjectRecord>(`/api/projects/${encodeURIComponent(projectId)}`, { authorization }),
+    cpFetch<{ data?: ProjectTaskGraphTaskRecord[] }>(
+      `/api/tasks?projectId=${encodeURIComponent(projectId)}&limit=200`,
+      { authorization },
+    ),
+    cpFetch<{ data?: ProjectTaskRelationRecord[] }>(
+      `/api/projects/${encodeURIComponent(projectId)}/task-relations`,
+      { authorization },
+    ),
+    fetchProjectWorkflowBinding(projectId, authorization),
+  ]);
+
+  if (!projectResult.ok) {
+    return projectResult;
+  }
+
+  if (!taskResult.ok) {
+    return taskResult;
+  }
+
+  if (!relationResult.ok) {
+    return relationResult;
+  }
+
+  const rawTasks = taskResult.data?.data || [];
+
+  // Build stageKey → human-readable name map from workflow template
+  const stageKeyToName = new Map<string, string>();
+  const templateId = bindingResult.ok ? bindingResult.data?.workflowTemplateId : null;
+  if (templateId) {
+    const stagesResult = await fetchWorkflowTemplateStages(templateId, authorization);
+    if (stagesResult.ok && stagesResult.data?.data) {
+      for (const stage of stagesResult.data.data) {
+        if (stage.stageKey && stage.name) {
+          stageKeyToName.set(stage.stageKey, stage.name);
+        }
+      }
+    }
+  }
+
+  // Fetch workflow runs in parallel to get currentStage for each task
+  const taskStageMap = new Map<string, string>();
+  await Promise.all(
+    rawTasks.map((task) =>
+      cpFetch<{ data?: { workflowRun?: { currentStage?: string } | null } }>(
+        `/api/tasks/${encodeURIComponent(task.id)}/workflow`,
+        { authorization },
+      ).then((result) => {
+        const stageKey = result.ok ? result.data?.data?.workflowRun?.currentStage : undefined;
+        if (stageKey) {
+          taskStageMap.set(task.id, stageKey);
+        }
+      }),
+    ),
+  );
+
+  const tasks = rawTasks.map(
+    (task) => {
+      const stageKey = taskStageMap.get(task.id);
+      const stageName = stageKey ? (stageKeyToName.get(stageKey) || stageKey) : null;
+      return {
+        ...task,
+        currentStageLabel: stageName || inferTaskStageLabel(task),
+        latestActivityAt: task.finishedAt || task.startedAt || task.createdAt || null,
+      } satisfies ProjectTaskGraphTaskViewModel;
+    },
+  );
+
+  const taskIds = new Set(tasks.map((task) => task.id));
+  const edges = (relationResult.data?.data || [])
+    .filter((relation) => taskIds.has(relation.sourceTaskId) && taskIds.has(relation.targetTaskId))
+    .map(
+      (relation) =>
+        ({
+          id: relation.id,
+          sourceTaskId: relation.sourceTaskId,
+          targetTaskId: relation.targetTaskId,
+          type: relation.type,
+          source: relation.source,
+        }) satisfies ProjectTaskGraphEdgeViewModel,
+    );
+
+  const relationTypes = new Set(edges.map((edge) => edge.type));
+
+  return {
+    ok: true as const,
+    status: 200 as const,
+    data: {
+      project: {
+        id: projectResult.data.id,
+        name: projectResult.data.name || projectResult.data.id,
+        slug: projectResult.data.slug || "",
+        description: projectResult.data.description || null,
+      },
+      tasks,
+      edges,
+      capabilities: {
+        supportsDependsOn: relationTypes.has("depends-on"),
+        supportsBlocks: relationTypes.has("blocks"),
+        supportsSpawnedFrom: relationTypes.has("spawned-from"),
+      },
+      refreshedAt: new Date().toISOString(),
+    } satisfies ProjectTaskGraphViewModel,
+  };
+}
+
 async function fetchWorkflowTemplates(authorization: string) {
   return cpFetch<{ data?: WorkflowTemplateRecord[] }>("/api/workflow-templates", { authorization });
 }
@@ -1717,7 +1907,12 @@ projectRoutes.get("/:projectId/paid-execution-preflight", async (c) => {
     {
       projectId,
       defaultModel: projectResult.data.settings?.defaultModel || null,
-      effectiveModel: defaultModel || `${preflight.policy.providerId}:${preflight.policy.modelId}`,
+      effectiveModel:
+        defaultModel ||
+        formatModelRoute({
+          providerId: preflight.policy.providerId,
+          modelId: preflight.policy.modelId,
+        }),
       allowed: preflight.allowed,
       activeLease: preflight.activeLease,
       policy: preflight.policy,
@@ -1827,6 +2022,232 @@ projectRoutes.get("/:projectId/boss-operations-view", async (c) => {
   } catch (error) {
     return c.json(
       { message: error instanceof Error ? error.message : "Failed to build boss operations view" },
+      502,
+    );
+  }
+});
+
+projectRoutes.get("/:projectId/task-graph-view", async (c) => {
+  const projectId = c.req.param("projectId");
+  const authorization = authHeader(c);
+
+  try {
+    const result = await buildProjectTaskGraphView(projectId, authorization);
+    if (!result.ok) {
+      return c.json(result.data, result.status as 401 | 403 | 404 | 502);
+    }
+    return c.json(result.data, 200);
+  } catch (error) {
+    return c.json(
+      {
+        message: error instanceof Error ? error.message : "Failed to build project task graph view",
+      },
+      502,
+    );
+  }
+});
+
+// ── Execution Trace Types ─────────────────────────────────────────
+
+interface ExecutionTraceSegment {
+  type: "user-input" | "workflow-context" | "hook-injection" | "hook-rewrite" | "final-prompt" | "model-response";
+  label: string;
+  content: string;
+  hookId?: string;
+  hookTrigger?: string;
+  hookAgent?: string;
+  hookDecisionAction?: string;
+  timestamp?: string;
+}
+
+interface TaskExecutionTrace {
+  taskId: string;
+  sessionId: string | null;
+  segments: ExecutionTraceSegment[];
+  hookExecutions: Array<{
+    hookId: string;
+    trigger: string;
+    status: string;
+    agent: string;
+    model?: string;
+    prompt: string;
+    result?: string;
+    decision?: {
+      action: string;
+      reason?: string;
+      rewrittenPrompt?: string;
+      targetModel?: string;
+    };
+    completedAt: string;
+  }>;
+}
+
+interface FullTaskRecord {
+  id: string;
+  projectId: string;
+  sessionId?: string | null;
+  strategy?: string | null;
+  prompt: string;
+  title: string;
+  status: string;
+  repoName?: string | null;
+  workingBranch?: string | null;
+}
+
+function parseStrategyHookExecutions(strategyJson: string | null | undefined): HookExecutionRecord[] {
+  if (!strategyJson) return [];
+  try {
+    const strategy = JSON.parse(strategyJson);
+    if (Array.isArray(strategy?.hookExecutions)) {
+      return strategy.hookExecutions as HookExecutionRecord[];
+    }
+    return [];
+  } catch {
+    return [];
+  }
+}
+
+function extractSessionMessageText(message: unknown): string {
+  if (!message || typeof message !== "object") return "";
+  const parts = (message as Record<string, unknown>).parts;
+  if (!Array.isArray(parts)) return "";
+  return parts
+    .map((part: unknown) => {
+      if (part && typeof part === "object" && "text" in part) {
+        return String((part as { text: unknown }).text || "");
+      }
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function extractSessionMessageRole(message: unknown): string {
+  if (!message || typeof message !== "object") return "unknown";
+  return String((message as Record<string, unknown>).role || "unknown");
+}
+
+async function buildTaskExecutionTrace(
+  taskId: string,
+  authorization: string,
+): Promise<{ ok: true; status: 200; data: TaskExecutionTrace } | { ok: false; status: number; data: unknown }> {
+  const taskResult = await cpFetch<FullTaskRecord>(
+    `/api/tasks/${encodeURIComponent(taskId)}`,
+    { authorization },
+  );
+  if (!taskResult.ok) return { ok: false as const, status: taskResult.status, data: taskResult.data };
+
+  const task = taskResult.data;
+  const hookExecutions = parseStrategyHookExecutions(task.strategy);
+  const segments: ExecutionTraceSegment[] = [];
+
+  // 1. User input segment
+  segments.push({
+    type: "user-input",
+    label: "用户原始输入",
+    content: task.prompt || "",
+  });
+
+  // 2. Hook injection segments
+  for (const hook of hookExecutions) {
+    if (hook.trigger === "pre-execution") {
+      segments.push({
+        type: "hook-injection",
+        label: `Hook: ${hook.hookId} (${hook.trigger})`,
+        content: hook.prompt || "",
+        hookId: hook.hookId,
+        hookTrigger: hook.trigger,
+        hookAgent: hook.agent,
+        hookDecisionAction: hook.decision?.action,
+        timestamp: hook.completedAt,
+      });
+
+      if (hook.decision?.action === "rewrite-prompt" && hook.decision.rewrittenPrompt) {
+        segments.push({
+          type: "hook-rewrite",
+          label: `Hook 重写结果: ${hook.hookId}`,
+          content: hook.decision.rewrittenPrompt,
+          hookId: hook.hookId,
+          hookTrigger: hook.trigger,
+          hookAgent: hook.agent,
+          hookDecisionAction: hook.decision.action,
+          timestamp: hook.completedAt,
+        });
+      }
+    }
+  }
+
+  // 3. Session messages (final prompt + model response)
+  if (task.sessionId) {
+    const messagesResult = await getSessionMessages(task.sessionId);
+    if (messagesResult.ok && Array.isArray(messagesResult.data)) {
+      const messages = messagesResult.data as unknown[];
+
+      // Find the last user message (final prompt sent to model)
+      const userMessages = messages.filter((m) => extractSessionMessageRole(m) === "user");
+      if (userMessages.length > 0) {
+        const lastUserMsg = userMessages[userMessages.length - 1];
+        segments.push({
+          type: "final-prompt",
+          label: "最终发送给模型的 Prompt",
+          content: extractSessionMessageText(lastUserMsg),
+        });
+      }
+
+      // Find the last assistant message (model response)
+      const assistantMessages = messages.filter((m) => extractSessionMessageRole(m) === "assistant");
+      if (assistantMessages.length > 0) {
+        const lastAssistantMsg = assistantMessages[assistantMessages.length - 1];
+        segments.push({
+          type: "model-response",
+          label: "模型回复",
+          content: extractSessionMessageText(lastAssistantMsg),
+        });
+      }
+    }
+  }
+
+  return {
+    ok: true,
+    status: 200,
+    data: {
+      taskId: task.id,
+      sessionId: task.sessionId || null,
+      segments,
+      hookExecutions: hookExecutions.map((h) => ({
+        hookId: h.hookId,
+        trigger: h.trigger,
+        status: h.status,
+        agent: h.agent,
+        model: h.model,
+        prompt: h.prompt,
+        result: h.result,
+        decision: h.decision ? {
+          action: h.decision.action,
+          reason: h.decision.reason,
+          rewrittenPrompt: h.decision.rewrittenPrompt,
+          targetModel: h.decision.targetModel,
+        } : undefined,
+        completedAt: h.completedAt,
+      })),
+    },
+  };
+}
+
+// GET /api/projects/:projectId/task-execution-trace/:taskId
+projectRoutes.get("/:projectId/task-execution-trace/:taskId", async (c) => {
+  const taskId = c.req.param("taskId");
+  const authorization = authHeader(c);
+
+  try {
+    const result = await buildTaskExecutionTrace(taskId, authorization);
+    if (!result.ok) {
+      return c.json(result.data, result.status as 401 | 403 | 404 | 502);
+    }
+    return c.json(result.data, 200);
+  } catch (error) {
+    return c.json(
+      { message: error instanceof Error ? error.message : "Failed to build execution trace" },
       502,
     );
   }

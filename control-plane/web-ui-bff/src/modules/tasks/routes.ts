@@ -4,6 +4,7 @@ import { z } from "zod";
 import { authHeader, cpFetch } from "../../lib/control-plane-client";
 import { classifyIntent } from "../../lib/intent-classifier";
 import {
+  formatModelRoute,
   diagnoseModelReadiness,
   readDefaultExecutionModel,
   resolveModelRoute,
@@ -30,6 +31,7 @@ import {
   createPaidExecutionGuardState,
   evaluatePaidExecutionPreflight,
   fetchProjectPaidExecutionLeaseState,
+  isFreeExecutionModelRoute,
 } from "../../lib/paid-execution-guard";
 import { recordPaidExecutionRuntimeUsage } from "../../lib/paid-execution-runtime";
 import { buildRuntimePipeline } from "../../lib/runtime-pipeline";
@@ -94,6 +96,8 @@ interface ExecutableTask {
   status: string;
   projectId: string;
   sessionId?: string | null;
+  executionMode?: ExecutionMode | null;
+  executionPlan?: string | null;
   title: string;
   strategy?: string | null;
   selectedModel?: string | null;
@@ -190,6 +194,61 @@ interface WorkflowPromptContextRecord {
   changesSummary?: string;
 }
 
+interface ExecutionTraceSegmentRecord {
+  type:
+    | "user-input"
+    | "workflow-context"
+    | "hook-injection"
+    | "hook-result"
+    | "hook-rewrite"
+    | "final-prompt"
+    | "model-response";
+  label: string;
+  content: string;
+  hookId?: string;
+  hookTrigger?: string;
+  hookAgent?: string;
+  hookDecisionAction?: string;
+  timestamp?: string;
+}
+
+interface ExecutionTraceMessageRecord {
+  id: string;
+  role: string;
+  text: string;
+  createdAt?: string;
+  raw: unknown;
+}
+
+interface TaskExecutionTraceRecord {
+  taskId: string;
+  sessionId: string | null;
+  workflowContext: string | null;
+  finalPrompt: string | null;
+  latestResponse: string | null;
+  truncated: boolean;
+  messageLimit: number;
+  segments: ExecutionTraceSegmentRecord[];
+  messages: ExecutionTraceMessageRecord[];
+  hookExecutions: Array<{
+    hookId: string;
+    trigger: string;
+    status: string;
+    agent: string;
+    model?: string;
+    prompt: string;
+    result?: string;
+    error?: string;
+    decision?: {
+      action: string;
+      reason?: string;
+      rewrittenPrompt?: string;
+      targetModel?: string;
+    };
+    completedAt: string;
+  }>;
+}
+
 interface ParallelCandidateAttempt {
   index: number;
   sessionResult?: SessionStartResult;
@@ -243,7 +302,10 @@ function buildBlockedExecutionResponse(
       code: preflight.code,
       taskId,
       allowed: false,
-      effectiveModel: `${preflight.policy.providerId}:${preflight.policy.modelId}`,
+      effectiveModel: formatModelRoute({
+        providerId: preflight.policy.providerId,
+        modelId: preflight.policy.modelId,
+      }),
       guardDecision: preflight.estimate.guardDecision,
       guardReason: preflight.estimate.guardReason,
       suggestedModel: preflight.policy.suggestedModel,
@@ -278,6 +340,7 @@ async function buildContinuationPreflight(input: {
   task: ExecutableTask;
   authorization: string;
   resolvedModel?: ResolvedModel;
+  candidateCount?: number;
 }) {
   const leaseResult = await fetchProjectPaidExecutionLeaseState(
     input.task.projectId,
@@ -292,7 +355,7 @@ async function buildContinuationPreflight(input: {
   }
 
   const continuationShape = {
-    candidateCount: 1,
+    candidateCount: Math.max(1, input.candidateCount ?? 1),
     judgeEnabled: false,
     enabledHookTriggers: [],
     suiteLabel: "task continue",
@@ -346,9 +409,7 @@ async function persistContinuationGuard(args: {
     authorization: args.authorization,
     body: {
       strategy: mergeTaskStrategy(args.strategy, {
-        effectiveModel: args.resolvedModel
-          ? `${args.resolvedModel.providerId}:${args.resolvedModel.modelId}`
-          : undefined,
+        effectiveModel: args.resolvedModel ? formatModelRoute(args.resolvedModel) : undefined,
         paidExecutionGuard: args.guard,
       }),
     },
@@ -359,6 +420,306 @@ async function persistContinuationGuard(args: {
     : ({ ok: false as const, status: 502 as const, data: { error: "Failed to persist continuation guard configuration" } } as const);
 }
 
+function parseStoredExecutionPlan(task: Pick<ExecutableTask, "executionPlan">): ExecutionPlan | null {
+  if (!task.executionPlan) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(task.executionPlan) as ExecutionPlan;
+    if (parsed?.mode !== "parallel" || !Array.isArray(parsed.candidates)) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function buildStoredParallelPlan(task: Pick<ExecutableTask, "strategy">): ExecutionPlan | null {
+  const parsedStrategy = parseTaskStrategy(task.strategy);
+  const candidates = Array.isArray(parsedStrategy.parallelCandidates)
+    ? parsedStrategy.parallelCandidates.filter(
+        (candidate): candidate is { model: string; label?: string } =>
+          Boolean(candidate && typeof candidate.model === "string" && candidate.model.trim()),
+      )
+    : [];
+
+  if (parsedStrategy.executionMode !== "parallel" || candidates.length < 2) {
+    return null;
+  }
+
+  return {
+    templateId:
+      typeof parsedStrategy.selectedTemplateId === "string" && parsedStrategy.selectedTemplateId.trim()
+        ? parsedStrategy.selectedTemplateId.trim()
+        : "saved-parallel",
+    mode: "parallel",
+    steps: [{ id: "exec-parallel", type: "execution", status: "pending" }],
+    candidates: candidates.map((candidate, index) => ({
+      label: candidate.label || `候选 ${index + 1}`,
+      agent: DEFAULT_EXECUTION_AGENT,
+      model: candidate.model,
+      role: "executor",
+      status: "pending",
+    })),
+  };
+}
+
+function resolveParallelContinuationPlan(task: Pick<ExecutableTask, "executionPlan" | "strategy">) {
+  return parseStoredExecutionPlan(task) || buildStoredParallelPlan(task);
+}
+
+function resolveCandidateExecutionModel(
+  candidate: ExecutionPlan["candidates"][number],
+  fallbackModel?: ResolvedModel,
+): ResolvedModel | undefined {
+  if (candidate.model) {
+    return parseModelString(candidate.model);
+  }
+
+  return fallbackModel;
+}
+
+function resolvePreflightModelForParallelPlan(
+  plan: Pick<ExecutionPlan, "candidates">,
+  fallbackModel?: ResolvedModel,
+): ResolvedModel | undefined {
+  const parsedCandidates = plan.candidates
+    .map((candidate) => candidate.model)
+    .filter((model): model is string => Boolean(model && model.trim()))
+    .map((model) => {
+      const resolved = parseModelString(model);
+      return {
+        resolved,
+        isFree: isFreeExecutionModelRoute(model, resolved.providerId),
+      };
+    });
+
+  if (parsedCandidates.length === 0) {
+    return fallbackModel;
+  }
+
+  if (parsedCandidates.every((candidate) => candidate.isFree)) {
+    return parsedCandidates[0]?.resolved;
+  }
+
+  return parsedCandidates.find((candidate) => !candidate.isFree)?.resolved ?? fallbackModel;
+}
+
+async function registerPrimaryTaskSession(
+  task: Pick<ExecutableTask, "id">,
+  sessionId: string | undefined,
+  branchName: string,
+  authorization: string,
+) {
+  if (!sessionId) {
+    return;
+  }
+
+  await cpFetch(`/api/tasks/${encodeURIComponent(task.id)}/task-sessions`, {
+    method: "POST",
+    body: {
+      runtimeSessionId: sessionId,
+      branchName,
+      sourceType: "root",
+      isActive: true,
+    },
+    authorization,
+  }).catch(() => null);
+}
+
+function broadcastParallelContinuationStarted(
+  task: Pick<ExecutableTask, "id" | "projectId" | "title">,
+  candidates: ExecutionPlan["candidates"],
+) {
+  for (const candidate of candidates) {
+    if (candidate.status !== "running") {
+      continue;
+    }
+
+    wsBroadcaster.broadcast({
+      id: crypto.randomUUID(),
+      type: "agent.started",
+      ts: new Date().toISOString(),
+      taskId: task.id,
+      projectId: task.projectId,
+      agentRunId: candidate.agentRunId,
+      sessionId: candidate.sessionId,
+      data: {
+        taskId: task.id,
+        title: task.title,
+        agentRunId: candidate.agentRunId,
+        agent: candidate.agent,
+        executionMode: "parallel",
+      },
+    });
+  }
+}
+
+async function continueParallelTaskExecution(input: ContinueTaskInput & {
+  task: ExecutableTask;
+  resolvedModel?: ResolvedModel;
+  guard?: PaidExecutionGuardState;
+}) {
+  const plan = resolveParallelContinuationPlan(input.task);
+  if (!plan || plan.candidates.length < 2) {
+    return { status: 400 as const, body: { error: "No parallel candidates configured for this task" } };
+  }
+
+  const repoContext = buildRepoContext(input.task, {});
+  const workflowContext = await buildWorkflowPromptContext(input.task, input.authorization, {
+    selectedModel: input.resolvedModel ? formatModelRoute(input.resolvedModel) : undefined,
+    taskResult: "",
+    changesSummary: "",
+  });
+  const prompt = prependWorkflowContextToPrompt(input.prompt, workflowContext);
+  const attempts = await Promise.all(
+    plan.candidates.map(async (candidate, index) => {
+      const candidateModel = resolveCandidateExecutionModel(candidate, input.resolvedModel);
+      if (candidateModel) {
+        const validationError = await validateResolvedModel(candidateModel);
+        if (validationError) {
+          return {
+            index,
+            ok: false,
+            error:
+              typeof validationError.body?.error === "string"
+                ? validationError.body.error
+                : "Selected model is not available",
+          };
+        }
+      }
+
+      if (candidate.sessionId) {
+        const agentRunId = ensureAgentRunForSession(
+          candidate.sessionId,
+          input.taskId,
+          input.task.projectId,
+          candidateModel,
+        );
+        const continuedResult = await continueSession(candidate.sessionId, prompt, {
+          model: candidateModel,
+        });
+        return {
+          index,
+          ok: continuedResult.ok,
+          sessionId: candidate.sessionId,
+          agentRunId,
+          error:
+            continuedResult.ok
+              ? undefined
+              : continuedResult.error || "Failed to continue candidate session",
+        };
+      }
+
+      const sessionResult = await createSession(input.taskId, input.task.projectId, prompt, {
+        agent: candidate.agent,
+        candidateIndex: index,
+        repoContext,
+        model: candidateModel,
+      });
+
+      if (sessionResult.agentRunId) {
+        await createAgentRunRecord({
+          taskId: input.task.id,
+          agentRunId: sessionResult.agentRunId,
+          sessionId: sessionResult.sessionId,
+          agentType: candidate.agent,
+          status: sessionResult.ok ? "running" : "failed",
+          model: candidateModel,
+          candidateIndex: index,
+          error: sessionResult.ok ? undefined : sessionResult.error,
+          startedAt: new Date().toISOString(),
+          finishedAt: sessionResult.ok ? undefined : new Date().toISOString(),
+        });
+      }
+
+      return {
+        index,
+        ok: sessionResult.ok,
+        sessionId: sessionResult.sessionId,
+        agentRunId: sessionResult.agentRunId,
+        error: sessionResult.ok ? undefined : sessionResult.error || "Failed to start parallel candidate",
+      };
+    }),
+  );
+
+  let hasAnySuccess = false;
+  for (const attempt of attempts) {
+    const candidate = plan.candidates[attempt.index];
+    if (!candidate) {
+      continue;
+    }
+
+    candidate.sessionId = attempt.sessionId || candidate.sessionId;
+    candidate.agentRunId = attempt.agentRunId || candidate.agentRunId;
+    candidate.status = attempt.ok ? "running" : "failed";
+    if (attempt.ok) {
+      candidate.startedAt = new Date().toISOString();
+      candidate.finishedAt = undefined;
+      hasAnySuccess = true;
+    } else {
+      candidate.finishedAt = new Date().toISOString();
+    }
+  }
+
+  if (!hasAnySuccess) {
+    return {
+      status: 502 as const,
+      body: {
+        error:
+          attempts.map((attempt) => attempt.error).find((value): value is string => Boolean(value)) ||
+          "All parallel candidates failed to continue",
+      },
+    };
+  }
+
+  const primaryCandidate = plan.candidates.find((candidate) => candidate.status === "running");
+  await cpFetch(`/api/tasks/${encodeURIComponent(input.taskId)}`, {
+    method: "PATCH",
+    body: {
+      status: "running",
+      sessionId: primaryCandidate?.sessionId,
+      agentRunId: primaryCandidate?.agentRunId,
+      executionMode: "parallel",
+      executionPlan: JSON.stringify(plan),
+      strategy: mergeTaskStrategy(input.task.strategy, {
+        executionMode: "parallel",
+        effectiveModel: input.resolvedModel ? formatModelRoute(input.resolvedModel) : undefined,
+        paidExecutionGuard: input.guard,
+      }),
+    },
+    authorization: input.authorization,
+  });
+
+  await registerPrimaryTaskSession(
+    input.task,
+    primaryCandidate?.sessionId,
+    input.task.title,
+    input.authorization,
+  );
+  sseAggregator.registerParallelTask(input.task.id, plan.candidates);
+  broadcastParallelContinuationStarted(input.task, plan.candidates);
+
+  return {
+    status: 200 as const,
+    body: {
+      ok: true,
+      sessionId: primaryCandidate?.sessionId,
+      agentRunId: primaryCandidate?.agentRunId,
+      executionMode: "parallel",
+      candidates: plan.candidates.map((candidate) => ({
+        label: candidate.label,
+        model: candidate.model,
+        sessionId: candidate.sessionId,
+        agentRunId: candidate.agentRunId,
+        status: candidate.status,
+      })),
+    },
+  };
+}
+
 async function continueTaskExecution(input: ContinueTaskInput) {
   const taskResult = await fetchExecutableTask(input.taskId, input.authorization);
   if (!taskResult.ok) {
@@ -366,8 +727,9 @@ async function continueTaskExecution(input: ContinueTaskInput) {
   }
 
   const task = taskResult.data;
-  const sessionId = input.overrideSessionId || task.sessionId;
-  if (!sessionId) {
+  const parallelPlan = resolveParallelContinuationPlan(task);
+  const sessionId = input.overrideSessionId || task.sessionId || undefined;
+  if (!sessionId && !parallelPlan) {
     return { status: 400 as const, body: { error: "No session associated with this task" } };
   }
 
@@ -375,6 +737,9 @@ async function continueTaskExecution(input: ContinueTaskInput) {
     { ...task, prompt: input.prompt, status: "running" },
     input.authorization,
   );
+  const preflightModel = parallelPlan
+    ? resolvePreflightModelForParallelPlan(parallelPlan, resolvedModel)
+    : resolvedModel;
   if (resolvedModel) {
     const modelValidationError = await validateResolvedModel(resolvedModel);
     if (modelValidationError) {
@@ -385,7 +750,8 @@ async function continueTaskExecution(input: ContinueTaskInput) {
   const preflightResult = await buildContinuationPreflight({
     task,
     authorization: input.authorization,
-    resolvedModel,
+    resolvedModel: preflightModel,
+    candidateCount: parallelPlan?.candidates.length,
   });
   if (!preflightResult.ok) {
     return { status: preflightResult.status, body: preflightResult.data };
@@ -426,11 +792,73 @@ async function continueTaskExecution(input: ContinueTaskInput) {
     templateId: workflowTemplateId,
   });
 
+  if (parallelPlan) {
+    const parallelResult = await continueParallelTaskExecution({
+      ...input,
+      task,
+      resolvedModel,
+      guard: preflightResult.guard,
+    });
+
+    if (parallelResult.status === 200) {
+      await recordPaidExecutionGuardStateEvent({
+        projectId: task.projectId,
+        taskId: input.taskId,
+        sessionId: typeof parallelResult.body.sessionId === "string" ? parallelResult.body.sessionId : undefined,
+        agentRunId:
+          typeof parallelResult.body.agentRunId === "string" ? parallelResult.body.agentRunId : undefined,
+        action: "continued",
+        guardState: preflightResult.guard,
+        detail: {
+          effectiveModel: resolvedModel ? formatModelRoute(resolvedModel) : undefined,
+          executionMode: "parallel",
+          candidateCount: parallelPlan.candidates.length,
+        },
+        riskLevel: preflightResult.guard?.enabled ? "medium" : undefined,
+      });
+
+      wsBroadcaster.broadcast({
+        id: crypto.randomUUID(),
+        type: "task.continued",
+        ts: new Date().toISOString(),
+        taskId: input.taskId,
+        projectId: task.projectId,
+        agentRunId:
+          typeof parallelResult.body.agentRunId === "string" ? parallelResult.body.agentRunId : undefined,
+        data: {
+          sessionId: parallelResult.body.sessionId,
+          agentRunId: parallelResult.body.agentRunId,
+          executionMode: "parallel",
+          candidateCount: parallelPlan.candidates.length,
+        },
+      });
+
+      void buildPipelineStageUpdatedEvents({
+        taskId: input.taskId,
+        sessionId:
+          typeof parallelResult.body.sessionId === "string" ? parallelResult.body.sessionId : undefined,
+        projectId: task.projectId,
+        agentRunId:
+          typeof parallelResult.body.agentRunId === "string" ? parallelResult.body.agentRunId : undefined,
+        authorization: input.authorization,
+        reason: "task.continued",
+      }).then((events) => {
+        for (const event of events) {
+          wsBroadcaster.broadcast(event);
+        }
+      });
+    }
+
+    return parallelResult;
+  }
+
+  if (!sessionId) {
+    return { status: 400 as const, body: { error: "No session associated with this task" } };
+  }
+
   const agentRunId = ensureAgentRunForSession(sessionId, input.taskId, task.projectId, resolvedModel);
   const workflowContext = await buildWorkflowPromptContext(task, input.authorization, {
-    selectedModel: resolvedModel
-      ? `${resolvedModel.providerId}:${resolvedModel.modelId}`
-      : undefined,
+    selectedModel: resolvedModel ? formatModelRoute(resolvedModel) : undefined,
     taskResult: "",
     changesSummary: "",
   });
@@ -457,9 +885,7 @@ async function continueTaskExecution(input: ContinueTaskInput) {
     action: "continued",
     guardState: preflightResult.guard,
     detail: {
-      effectiveModel: resolvedModel
-        ? `${resolvedModel.providerId}:${resolvedModel.modelId}`
-        : undefined,
+      effectiveModel: resolvedModel ? formatModelRoute(resolvedModel) : undefined,
     },
     riskLevel: preflightResult.guard?.enabled ? "medium" : undefined,
   });
@@ -554,51 +980,17 @@ async function recordPaidExecutionGuardStateEvent(args: {
   });
 }
 
-function collapseExecutionPlanToSingle(plan: ExecutionPlan, executionAgent: string): ExecutionPlan {
-  const primaryCandidate = plan.candidates[0];
-  return {
-    templateId: plan.templateId,
-    mode: "single",
-    steps: [{ id: "exec-0", type: "execution" as const, status: "pending" as const }],
-    candidates: [
-      {
-        label: primaryCandidate?.label || "主执行",
-        agent: primaryCandidate?.agent || executionAgent,
-        role: primaryCandidate?.role,
-        model: primaryCandidate?.model,
-        status: "pending" as const,
-      },
-    ],
-  };
-}
-
 function applyPaidExecutionSafetyOverlay(context: PreparedExecutionContext): {
   context: PreparedExecutionContext;
   overridesApplied: PaidExecutionOverride[];
 } {
   const overridesApplied: PaidExecutionOverride[] = [];
 
-  const safePlan = isParallelExecution(context.plan)
-    ? (() => {
-        overridesApplied.push("parallel-collapsed");
-        return collapseExecutionPlanToSingle(context.plan, context.executionAgent);
-      })()
-    : {
-        ...context.plan,
-        mode: "single" as const,
-        steps: [{ id: "exec-0", type: "execution" as const, status: "pending" as const }],
-        candidates: [
-          {
-            ...(context.plan.candidates[0] || {
-              label: "主执行",
-              agent: context.executionAgent,
-            }),
-            status: "pending" as const,
-          },
-        ],
-        judgeResult: undefined,
-        winnerCandidateIndex: undefined,
-      };
+  const safePlan = {
+    ...context.plan,
+    judgeResult: undefined,
+    winnerCandidateIndex: undefined,
+  };
 
   if (context.strategy.hooks.some((hook) => hook.enabled && hook.trigger === "post-execution")) {
     overridesApplied.push("post-hook-disabled");
@@ -778,12 +1170,15 @@ async function buildTaskExecutionPreflight(
     suiteLabel: "single-task execute",
     suiteReference: `task=${context.task.id}`,
   };
+  const preflightModel = isParallelExecution(context.plan)
+    ? resolvePreflightModelForParallelPlan(context.plan, context.resolvedModel)
+    : context.resolvedModel;
   const baselineResult = await fetchProjectRuntimeUsageBaseline(
     context.task.projectId,
     authorization,
     {
-      providerId: context.resolvedModel?.providerId,
-      modelId: context.resolvedModel?.modelId,
+      providerId: preflightModel?.providerId,
+      modelId: preflightModel?.modelId,
       entrypointType: "single-task",
       orchestrationFingerprint: buildPreflightOrchestrationFingerprint(shape),
     },
@@ -802,7 +1197,7 @@ async function buildTaskExecutionPreflight(
         allowPaidExecution: projectResult.ok
           ? projectResult.data.settings?.allowPaidExecution === true
           : false,
-        resolvedModel: context.resolvedModel,
+        resolvedModel: preflightModel,
         shape,
         baseline: baselineResult.ok ? baselineResult.data.baseline : null,
       },
@@ -1063,6 +1458,418 @@ function prependWorkflowContextToPrompt(
   ].filter(Boolean);
 
   return `${lines.join("\n")}\n\n${prompt}`;
+}
+
+function renderWorkflowContextBlock(context: WorkflowPromptContextRecord): string {
+  return prependWorkflowContextToPrompt("", context).trim();
+}
+
+function parseExecutionTraceStrategy(strategyJson: string | null | undefined): {
+  selectedAgent?: string;
+  hookExecutions: HookExecutionRecord[];
+} {
+  if (!strategyJson) {
+    return { hookExecutions: [] };
+  }
+
+  try {
+    const strategy = JSON.parse(strategyJson) as {
+      selectedAgent?: string;
+      hookExecutions?: HookExecutionRecord[];
+    };
+    return {
+      selectedAgent: typeof strategy?.selectedAgent === "string" ? strategy.selectedAgent : undefined,
+      hookExecutions: Array.isArray(strategy?.hookExecutions) ? strategy.hookExecutions : [],
+    };
+  } catch {
+    return { hookExecutions: [] };
+  }
+}
+
+function extractSessionMessageText(message: unknown): string {
+  if (!message || typeof message !== "object") {
+    return "";
+  }
+
+  const record = message as Record<string, unknown>;
+  const parts = Array.isArray(record.parts) ? record.parts : [];
+  return parts
+    .map((part) => {
+      if (!part || typeof part !== "object") {
+        return "";
+      }
+
+      const typedPart = part as Record<string, unknown>;
+      if (typedPart.type === "text" && typeof typedPart.text === "string") {
+        return typedPart.text;
+      }
+
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
+}
+
+function extractSessionMessageRole(message: unknown): string {
+  if (!message || typeof message !== "object") {
+    return "unknown";
+  }
+
+  const info = (message as Record<string, unknown>).info;
+  if (info && typeof info === "object" && typeof (info as Record<string, unknown>).role === "string") {
+    return String((info as Record<string, unknown>).role);
+  }
+
+  return "unknown";
+}
+
+function extractExecutionTraceMessageId(message: unknown, fallback: string): string {
+  if (!message || typeof message !== "object") {
+    return fallback;
+  }
+
+  const info = (message as Record<string, unknown>).info;
+  if (info && typeof info === "object" && typeof (info as Record<string, unknown>).id === "string") {
+    return String((info as Record<string, unknown>).id);
+  }
+
+  return fallback;
+}
+
+function extractSessionMessageCreatedAt(message: unknown): string | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+
+  const info = (message as Record<string, unknown>).info;
+  if (!info || typeof info !== "object") {
+    return undefined;
+  }
+
+  const time = (info as Record<string, unknown>).time;
+  if (!time || typeof time !== "object") {
+    return undefined;
+  }
+
+  const created = (time as Record<string, unknown>).created;
+  if (typeof created === "number" && Number.isFinite(created)) {
+    return new Date(created).toISOString();
+  }
+  if (typeof created === "string") {
+    const parsed = Date.parse(created);
+    if (!Number.isNaN(parsed)) {
+      return new Date(parsed).toISOString();
+    }
+  }
+
+  return undefined;
+}
+
+function parseTraceSegmentTimestamp(value?: string): number | null {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function stripWorkflowExecutionContextPrefix(text: string): string {
+  const normalized = text.replace(/\r\n?/g, "\n").trim();
+  if (!normalized) {
+    return normalized;
+  }
+
+  const contextMarkers = [
+    "Execution context:",
+    "当前执行上下文",
+    "请只完成当前阶段的目标。",
+    "完成后请输出本阶段产出摘要。",
+    "如果你认为当前阶段已经完成，请在输出末尾单独追加 [STAGE_COMPLETE]。",
+    "如果你认为当前阶段已经完成，请在输出末尾单独追加",
+  ];
+
+  const hasContextPrefix = contextMarkers.some((marker) => normalized.includes(marker));
+  if (!hasContextPrefix) {
+    return normalized;
+  }
+
+  const cutMarkers = [
+    "如果你认为当前阶段已经完成，请在输出末尾单独追加 [STAGE_COMPLETE]。",
+    "如果你认为当前阶段已经完成，请在输出末尾单独追加 [STAGE_COMPLETE]",
+    "如果你认为当前阶段已经完成，请在输出末尾单独追加",
+    "完成后请输出本阶段产出摘要。",
+    "请只完成当前阶段的目标。",
+  ];
+
+  for (const marker of cutMarkers) {
+    const markerIndex = normalized.lastIndexOf(marker);
+    if (markerIndex < 0) {
+      continue;
+    }
+
+    const stripped = normalized.slice(markerIndex + marker.length).trim();
+    if (stripped) {
+      return stripped;
+    }
+  }
+
+  const lastDoubleBreak = normalized.lastIndexOf("\n\n");
+  if (lastDoubleBreak >= 0) {
+    const stripped = normalized.slice(lastDoubleBreak + 2).trim();
+    if (stripped) {
+      return stripped;
+    }
+  }
+
+  return normalized;
+}
+
+function buildExecutionTraceConversationSegments(
+  messages: ExecutionTraceMessageRecord[],
+): ExecutionTraceSegmentRecord[] {
+  const timedSegments: Array<{ segment: ExecutionTraceSegmentRecord; sortTime: number; sequence: number }> = [];
+  let userIndex = 0;
+  let assistantIndex = 0;
+  let sequence = 0;
+
+  for (const message of messages) {
+    if (!message.text) {
+      continue;
+    }
+
+    if (message.role === "user") {
+      const actualInput = stripWorkflowExecutionContextPrefix(message.text);
+      userIndex += 1;
+      timedSegments.push({
+        segment: {
+          type: "user-input",
+          label: userIndex > 1 ? `用户输入 ${userIndex}` : "用户输入",
+          content: actualInput,
+          timestamp: message.createdAt,
+        },
+        sortTime: parseTraceSegmentTimestamp(message.createdAt) ?? Number.MAX_SAFE_INTEGER,
+        sequence: sequence++,
+      });
+
+      if (actualInput !== message.text) {
+        timedSegments.push({
+          segment: {
+            type: "final-prompt",
+            label: userIndex > 1 ? `最终 Prompt ${userIndex}` : "最终 Prompt",
+            content: message.text,
+            timestamp: message.createdAt,
+          },
+          sortTime: parseTraceSegmentTimestamp(message.createdAt) ?? Number.MAX_SAFE_INTEGER,
+          sequence: sequence++,
+        });
+      }
+      continue;
+    }
+
+    if (message.role === "assistant") {
+      assistantIndex += 1;
+      timedSegments.push({
+        segment: {
+          type: "model-response",
+          label: assistantIndex > 1 ? `模型回复 ${assistantIndex}` : "模型回复",
+          content: message.text,
+          timestamp: message.createdAt,
+        },
+        sortTime: parseTraceSegmentTimestamp(message.createdAt) ?? Number.MAX_SAFE_INTEGER,
+        sequence: sequence++,
+      });
+    }
+  }
+
+  timedSegments.sort((left, right) => {
+    if (left.sortTime !== right.sortTime) {
+      return left.sortTime - right.sortTime;
+    }
+    return left.sequence - right.sequence;
+  });
+
+  return timedSegments.map((item) => item.segment);
+}
+
+async function buildTaskExecutionTrace(
+  taskId: string,
+  authorization: string,
+  requestedSessionId?: string,
+): Promise<{ ok: true; status: 200; data: TaskExecutionTraceRecord } | { ok: false; status: number; data: unknown }> {
+  const taskResult = await cpFetch<ExecutableTask>(`/api/tasks/${encodeURIComponent(taskId)}`, {
+    authorization,
+  });
+  if (!taskResult.ok) {
+    return { ok: false as const, status: taskResult.status, data: taskResult.data };
+  }
+
+  const task = taskResult.data;
+  const parsedStrategy = parseExecutionTraceStrategy(task.strategy);
+  const workflowContextRecord = await buildWorkflowPromptContext(task, authorization, {
+    selectedAgent: parsedStrategy.selectedAgent,
+    selectedModel: task.selectedModel || undefined,
+    taskResult: "",
+    changesSummary: "",
+  });
+  const workflowContext = renderWorkflowContextBlock(workflowContextRecord);
+  const segments: ExecutionTraceSegmentRecord[] = [];
+  if (workflowContext) {
+    segments.push({
+      type: "workflow-context",
+      label: "工作流注入上下文",
+      content: workflowContext,
+    });
+  }
+
+  const timedSegments: Array<{ segment: ExecutionTraceSegmentRecord; sortTime: number; sequence: number }> = [];
+  let timedSequence = 0;
+
+  for (const hook of parsedStrategy.hookExecutions) {
+    const hookTime = parseTraceSegmentTimestamp(hook.completedAt) ?? Number.MAX_SAFE_INTEGER;
+
+    if (hook.prompt) {
+      timedSegments.push({
+        segment: {
+          type: "hook-injection",
+          label: `Hook 输入: ${hook.hookId}`,
+          content: hook.prompt,
+          hookId: hook.hookId,
+          hookTrigger: hook.trigger,
+          hookAgent: hook.agent,
+          hookDecisionAction: hook.decision?.action,
+          timestamp: hook.completedAt,
+        },
+        sortTime: hookTime,
+        sequence: timedSequence++,
+      });
+    }
+
+    if (hook.result) {
+      timedSegments.push({
+        segment: {
+          type: "hook-result",
+          label: `Hook 输出: ${hook.hookId}`,
+          content: hook.result,
+          hookId: hook.hookId,
+          hookTrigger: hook.trigger,
+          hookAgent: hook.agent,
+          hookDecisionAction: hook.decision?.action,
+          timestamp: hook.completedAt,
+        },
+        sortTime: hookTime,
+        sequence: timedSequence++,
+      });
+    }
+
+    if (hook.decision?.action === "rewrite-prompt" && hook.decision.rewrittenPrompt) {
+      timedSegments.push({
+        segment: {
+          type: "hook-rewrite",
+          label: `Hook 重写 Prompt: ${hook.hookId}`,
+          content: hook.decision.rewrittenPrompt,
+          hookId: hook.hookId,
+          hookTrigger: hook.trigger,
+          hookAgent: hook.agent,
+          hookDecisionAction: hook.decision.action,
+          timestamp: hook.completedAt,
+        },
+        sortTime: hookTime,
+        sequence: timedSequence++,
+      });
+    }
+  }
+
+  const sessionId = requestedSessionId || task.sessionId || null;
+  const messages: ExecutionTraceMessageRecord[] = [];
+  let finalPrompt: string | null = null;
+  let latestResponse: string | null = null;
+  let truncated = false;
+
+  if (sessionId) {
+    const messagesResult = await getSessionMessages(sessionId);
+    if (messagesResult.ok && Array.isArray(messagesResult.data)) {
+      const rawMessages = messagesResult.data as unknown[];
+      truncated = rawMessages.length >= 200;
+
+      for (let index = 0; index < rawMessages.length; index += 1) {
+        const rawMessage = rawMessages[index];
+        const role = extractSessionMessageRole(rawMessage);
+        const text = extractSessionMessageText(rawMessage);
+        messages.push({
+          id: extractExecutionTraceMessageId(rawMessage, `${index}`),
+          role,
+          text,
+          createdAt: extractSessionMessageCreatedAt(rawMessage),
+          raw: rawMessage,
+        });
+      }
+
+      const userMessages = messages.filter((item) => item.role === "user" && item.text);
+      if (userMessages.length > 0) {
+        finalPrompt = userMessages[userMessages.length - 1]?.text || null;
+      }
+
+      const assistantMessages = messages.filter((item) => item.role === "assistant" && item.text);
+      if (assistantMessages.length > 0) {
+        latestResponse = assistantMessages[assistantMessages.length - 1]?.text || null;
+      }
+
+      segments.push(...buildExecutionTraceConversationSegments(messages));
+    }
+  }
+
+  if (messages.length === 0 && task.prompt) {
+    segments.push({
+      type: "user-input",
+      label: "用户输入",
+      content: task.prompt,
+    });
+  }
+
+  timedSegments.sort((left, right) => {
+    if (left.sortTime !== right.sortTime) {
+      return left.sortTime - right.sortTime;
+    }
+    return left.sequence - right.sequence;
+  });
+  segments.push(...timedSegments.map((item) => item.segment));
+
+  return {
+    ok: true,
+    status: 200,
+    data: {
+      taskId: task.id,
+      sessionId,
+      workflowContext,
+      finalPrompt,
+      latestResponse,
+      truncated,
+      messageLimit: 200,
+      segments,
+      messages,
+      hookExecutions: parsedStrategy.hookExecutions.map((hook) => ({
+        hookId: hook.hookId,
+        trigger: hook.trigger,
+        status: hook.status,
+        agent: hook.agent,
+        model: hook.model,
+        prompt: hook.prompt,
+        result: hook.result,
+        error: hook.error,
+        decision: hook.decision
+          ? {
+              action: hook.decision.action,
+              reason: hook.decision.reason,
+              rewrittenPrompt: hook.decision.rewrittenPrompt,
+              targetModel: hook.decision.targetModel,
+            }
+          : undefined,
+        completedAt: hook.completedAt,
+      })),
+    },
+  };
 }
 
 function flattenWorkflowContextForHooks(
@@ -1479,9 +2286,7 @@ async function prepareExecutionContext(
     workflowTemplateId,
     repoContext,
     resolvedModel,
-    effectiveModel: resolvedModel
-      ? `${resolvedModel.providerId}:${resolvedModel.modelId}`
-      : undefined,
+    effectiveModel: resolvedModel ? formatModelRoute(resolvedModel) : undefined,
   };
 }
 
@@ -1549,6 +2354,7 @@ async function createParallelCandidateAttempts(
   return Promise.all(
     context.plan.candidates.map(async (candidate, index) => {
       try {
+        const candidateModel = resolveCandidateExecutionModel(candidate, context.resolvedModel);
         const sessionResult = await createSession(
           context.task.id,
           context.task.projectId,
@@ -1557,7 +2363,7 @@ async function createParallelCandidateAttempts(
             agent: candidate.agent,
             candidateIndex: index,
             repoContext: context.repoContext,
-            model: context.resolvedModel,
+            model: candidateModel,
           },
         );
         if (sessionResult.agentRunId) {
@@ -1567,7 +2373,7 @@ async function createParallelCandidateAttempts(
             sessionId: sessionResult.sessionId,
             agentType: candidate.agent,
             status: sessionResult.ok ? "running" : "failed",
-            model: context.resolvedModel,
+            model: candidateModel,
             candidateIndex: index,
             error: sessionResult.ok ? undefined : sessionResult.error,
             startedAt: new Date().toISOString(),
@@ -1713,20 +2519,12 @@ async function startParallelExecution(context: ExecutionContext): Promise<StartE
   });
   sseAggregator.registerParallelTask(context.task.id, context.plan.candidates);
   broadcastParallelExecutionStarted(context);
-
-  // Register root branch in task_sessions lineage for primary candidate
-  if (primaryCandidate?.sessionId) {
-    await cpFetch(`/api/tasks/${encodeURIComponent(context.task.id)}/task-sessions`, {
-      method: "POST",
-      body: {
-        runtimeSessionId: primaryCandidate.sessionId,
-        branchName: context.task.title,
-        sourceType: "root",
-        isActive: true,
-      },
-      authorization: context.authorization,
-    });
-  }
+  await registerPrimaryTaskSession(
+    context.task,
+    primaryCandidate?.sessionId,
+    context.task.title,
+    context.authorization,
+  );
 
   return buildParallelExecutionResponse(context.task.id, primaryCandidate, context.plan.candidates);
 }
@@ -2948,6 +3746,20 @@ taskRoutes.get("/:taskId/sessions/:sessionId/messages", async (c) => {
     return c.json({ data: [] });
   }
   return c.json({ data: result.data });
+});
+
+// GET /api/tasks/:taskId/execution-trace — Get full execution trace for task detail
+taskRoutes.get(":taskId/execution-trace", async (c) => {
+  const taskId = c.req.param("taskId") as string;
+  const authorization = authHeader(c);
+  const requestedSessionId = c.req.query("sessionId") || undefined;
+
+  const result = await buildTaskExecutionTrace(taskId, authorization, requestedSessionId);
+  if (!result.ok) {
+    return c.json(result.data, result.status as 401 | 403 | 404 | 502);
+  }
+
+  return c.json(result.data, 200);
 });
 
 // POST /api/tasks/:taskId/continue — Continue a task (send follow-up prompt to its session)

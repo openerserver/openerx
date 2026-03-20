@@ -31,6 +31,9 @@
         <a-button v-if="projectStore.currentProjectId" @click="router.push(`/projects/${projectStore.currentProjectId}/recommended-scenarios`)">
           推荐场景
         </a-button>
+        <a-button v-if="projectStore.currentProjectId" @click="router.push(`/projects/${projectStore.currentProjectId}/task-graph`)">
+          任务总图
+        </a-button>
         <a-button type="primary" @click="showCreateModal = true">
           <template #icon><PlusOutlined /></template>
           新建任务
@@ -138,6 +141,9 @@
             </router-link>
             <router-link :to="`/multi-task-monitor?task=${record.id}`">
               <a-button type="link" size="small">监控台</a-button>
+            </router-link>
+            <router-link :to="`/tasks/${record.id}/v2`">
+              <a-button type="link" size="small">精简视图</a-button>
             </router-link>
           </a-space>
         </template>
@@ -619,11 +625,12 @@ const modelOptions = computed(() => {
     .filter((option): option is { value: string; label: string } => Boolean(option));
 });
 
-function filterModelOption(input: string, option: { value?: string; label?: string }) {
+function filterModelOption(input: string, option?: unknown) {
   const keyword = input.toLowerCase();
+  const normalized = option as { value?: string | number | null; label?: string | number | null } | undefined;
   return (
-    (option.value?.toLowerCase().includes(keyword) ?? false) ||
-    (option.label?.toLowerCase().includes(keyword) ?? false)
+    String(normalized?.value ?? "").toLowerCase().includes(keyword) ||
+    String(normalized?.label ?? "").toLowerCase().includes(keyword)
   );
 }
 

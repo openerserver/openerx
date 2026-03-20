@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 
-import { resolveModelRoute } from "../../control-plane/web-ui-bff/src/lib/opencode-config";
+import {
+  formatModelRoute,
+  resolveModelRoute,
+} from "../../control-plane/web-ui-bff/src/lib/opencode-config";
 
 describe("resolveModelRoute", () => {
   test("uses the fallback provider for plain Copilot model ids", () => {
@@ -22,5 +25,14 @@ describe("resolveModelRoute", () => {
       providerId: "github-copilot",
       modelId: "claude-sonnet-4",
     });
+  });
+
+  test("formats direct provider model ids without duplicating the provider prefix", () => {
+    expect(
+      formatModelRoute({
+        providerId: "anthropic",
+        modelId: "anthropic/claude-sonnet-4-20250514",
+      }),
+    ).toBe("anthropic/claude-sonnet-4-20250514");
   });
 });

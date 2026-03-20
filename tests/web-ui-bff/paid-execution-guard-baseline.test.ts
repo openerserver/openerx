@@ -80,4 +80,33 @@ describe("paid execution guard baseline estimation", () => {
     expect(preflight.requirements.hasAllowPaidExecution).toBe(true);
     expect(preflight.estimate.guardDecision).toBe("require-approval");
   });
+
+  test("preserves direct provider routes in policy metadata", () => {
+    process.env.ALLOW_PAID_MODEL_EXECUTION = undefined;
+
+    const preflight = evaluatePaidExecutionPreflight(
+      {
+        projectId: "proj-default",
+        resolvedModel: {
+          providerId: "anthropic",
+          modelId: "anthropic/claude-sonnet-4-20250514",
+        },
+        shape: {
+          candidateCount: 1,
+          judgeEnabled: false,
+          enabledHookTriggers: [],
+          suiteLabel: "single-task execute",
+          suiteReference: "task=task-1",
+        },
+        baseline: null,
+      },
+      {
+        projectId: "proj-default",
+        activeLease: null,
+        now: "2026-03-17T00:00:00.000Z",
+      },
+    );
+
+    expect(preflight.policy.modelRoute).toBe("anthropic/claude-sonnet-4-20250514");
+  });
 });

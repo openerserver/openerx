@@ -1,0 +1,214 @@
+<template>
+  <div class="v2-panel" data-testid="task-detail-v2-trace-panel">
+    <a-flex justify="space-between" align="center" class="v2-panel__header">
+      <a-typography-text strong class="v2-panel__title">执行追踪</a-typography-text>
+      <a-space size="small">
+        <a-button type="text" size="small" @click="() => void refresh()">刷新</a-button>
+        <a-button type="text" size="small" @click="collapsed = !collapsed">
+          {{ collapsed ? "展开" : "收起" }}
+        </a-button>
+      </a-space>
+    </a-flex>
+
+    <div v-show="!collapsed" class="trace-panel__body">
+      <a-spin v-if="loading" />
+      <a-alert v-else-if="error" type="error" show-icon :message="error" />
+      <template v-else-if="trace">
+        <a-space size="small" wrap class="trace-panel__summary">
+          <a-tag v-for="item in summaryItems" :key="item.label" :color="tagTone(item.tone)">
+            {{ item.label }}: {{ item.value }}
+          </a-tag>
+        </a-space>
+
+        <a-space direction="vertical" style="width: 100%" size="small">
+          <a-radio-group :value="segmentFilter" size="small" button-style="solid" @update:value="segmentFilter = $event">
+            <a-radio-button value="all">全部</a-radio-button>
+            <a-radio-button value="user-input">用户输入</a-radio-button>
+            <a-radio-button value="hook">Hook</a-radio-button>
+            <a-radio-button value="model-response">模型回复</a-radio-button>
+          </a-radio-group>
+
+          <div class="trace-panel__segments">
+            <a-card
+              v-for="(segment, index) in filteredSegments"
+              :key="`${segment.type}-${segment.hookId || segment.label}-${index}`"
+              size="small"
+              :bordered="false"
+              :body-style="{ padding: '8px 12px' }"
+            >
+              <a-space size="small" style="margin-bottom: 4px" wrap>
+                <a-tag :color="segmentColor(segment.type)">{{ segmentLabel(segment.type) }}</a-tag>
+                <a-typography-text type="secondary" style="font-size: 12px">
+                  {{ segment.label }}
+                </a-typography-text>
+              </a-space>
+              <pre class="trace-panel__content">{{ segment.content }}</pre>
+            </a-card>
+          </div>
+
+          <a-divider style="margin: 4px 0" />
+
+          <a-radio-group :value="messageRoleFilter" size="small" button-style="solid" @update:value="messageRoleFilter = $event">
+            <a-radio-button value="all">全部消息</a-radio-button>
+            <a-radio-button value="user">用户</a-radio-button>
+            <a-radio-button value="assistant">模型</a-radio-button>
+            <a-radio-button value="tool">工具</a-radio-button>
+          </a-radio-group>
+
+          <div class="trace-panel__messages">
+            <a-card
+              v-for="message in filteredMessages"
+              :key="message.id"
+              size="small"
+              :bordered="false"
+              :body-style="{ padding: '8px 12px' }"
+            >
+              <a-flex justify="space-between" align="center" style="margin-bottom: 4px">
+                <a-space size="small" wrap>
+                  <a-tag :color="traceRoleColor(message.role)">{{ traceRoleLabel(message.role) }}</a-tag>
+                  <a-typography-text type="secondary" style="font-size: 12px">
+                    {{ message.id.slice(0, 8) }}
+                  </a-typography-text>
+                </a-space>
+                <a-button type="text" size="small" @click="toggleMessageRaw(message.id)">
+                  {{ expandedMessageRaw[message.id] ? "收起 JSON" : "展开 JSON" }}
+                </a-button>
+              </a-flex>
+              <pre class="trace-panel__content">{{ message.text }}</pre>
+              <pre v-if="expandedMessageRaw[message.id]" class="trace-panel__raw">{{ JSON.stringify(message.raw, null, 2) }}</pre>
+            </a-card>
+          </div>
+        </a-space>
+      </template>
+      <a-empty v-else description="暂无执行追踪" />
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { computed, ref, toRef } from "vue";
+import { useTaskExecutionTrace } from "../../composables/useTaskExecutionTrace";
+
+const props = defineProps<{
+  taskId: string;
+  sessionId?: string;
+}>();
+
+const collapsed = ref(false);
+
+const taskIdRef = toRef(props, "taskId");
+const sessionIdRef = toRef(props, "sessionId");
+const {
+  trace,
+  loading,
+  error,
+  segmentFilter,
+  messageRoleFilter,
+  expandedMessageRaw,
+  refresh,
+  filteredSegments,
+  filteredMessages,
+  summaryItems,
+} = useTaskExecutionTrace(computed(() => taskIdRef.value), computed(() => sessionIdRef.value));
+
+function segmentColor(type: string) {
+  if (type === "user-input") return "blue";
+  if (type === "workflow-context") return "cyan";
+  if (type === "model-response") return "green";
+  if (type === "final-prompt") return "purple";
+  return "orange";
+}
+
+function segmentLabel(type: string) {
+  const labels: Record<string, string> = {
+    "user-input": "用户输入",
+    "workflow-context": "工作流上下文",
+    "hook-injection": "Hook 注入",
+    "hook-result": "Hook 结果",
+    "hook-rewrite": "Hook 重写",
+    "final-prompt": "最终 Prompt",
+    "model-response": "模型回复",
+  };
+  return labels[type] ?? type;
+}
+
+function tagTone(value?: string) {
+  if (value === "warning") return "orange";
+  if (value === "purple") return "purple";
+  return value || "default";
+}
+
+function traceRoleColor(role: string) {
+  if (role === "assistant") return "cyan";
+  if (role === "user") return "gold";
+  if (role === "tool") return "purple";
+  return "default";
+}
+
+function traceRoleLabel(role: string) {
+  if (role === "assistant") return "模型";
+  if (role === "user") return "用户";
+  if (role === "tool") return "工具";
+  return role || "系统";
+}
+
+function toggleMessageRaw(messageId: string) {
+  expandedMessageRaw.value = {
+    ...expandedMessageRaw.value,
+    [messageId]: !expandedMessageRaw.value[messageId],
+  };
+}
+</script>
+
+<style scoped>
+.v2-panel {
+  border: 1px solid #e8e8e8;
+  border-radius: 8px;
+  padding: 8px;
+  background: #fafafa;
+}
+
+.v2-panel__header {
+  margin-bottom: 4px;
+  padding: 0 4px;
+}
+
+.v2-panel__title {
+  font-size: 13px;
+}
+
+.trace-panel__body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.trace-panel__summary {
+  margin-bottom: 4px;
+}
+
+.trace-panel__segments,
+.trace-panel__messages {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.trace-panel__content,
+.trace-panel__raw {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-x: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+
+.trace-panel__raw {
+  margin-top: 8px;
+  padding: 8px;
+  border-radius: 8px;
+  background: #f5f5f5;
+}
+</style>

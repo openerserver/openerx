@@ -1,4 +1,4 @@
-import { resolveModelRoute } from "../../lib/opencode-config";
+import { formatModelRoute, resolveModelRoute } from "../../lib/opencode-config";
 import {
   type HookExecutionRecord,
   type HookTrigger,
@@ -82,7 +82,7 @@ function buildHookExecution(
       trigger: options.trigger,
       status: result.ok && result.completed ? "completed" : "failed",
       agent: hook.agent,
-      model: result.model ? `${result.model.providerId}:${result.model.modelId}` : hook.model,
+      model: result.model ? formatModelRoute(result.model) : hook.model,
       prompt,
       result: result.text,
       error: result.ok ? (result.completed ? undefined : "Hook timed out") : result.error,

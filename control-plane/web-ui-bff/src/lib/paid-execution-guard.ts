@@ -1,8 +1,9 @@
 import { type UpstreamResponse, cpFetch } from "./control-plane-client";
+import { formatModelRoute, resolveModelRoute } from "./opencode-config";
 
 export type GuardDecision = "allow" | "allow-with-downgrade" | "require-approval" | "deny";
 export type ModelCostTier = "free" | "low" | "medium" | "high" | "premium";
-export type PaidExecutionOverride = "parallel-collapsed" | "judge-disabled" | "post-hook-disabled";
+export type PaidExecutionOverride = "judge-disabled" | "post-hook-disabled";
 
 export interface ResolvedModelLike {
   providerId: string;
@@ -187,7 +188,7 @@ const POLICY_BY_COST_TIER: Record<
     defaultDecision: "deny",
     maxRequestsPerRun: 6,
     maxEstimatedCostUsdPerRun: 0.75,
-    maxParallelCandidates: 1,
+    maxParallelCandidates: 5,
     allowJudge: false,
     allowHooks: true,
     requiresExplicitGate: true,
@@ -199,7 +200,7 @@ const POLICY_BY_COST_TIER: Record<
     defaultDecision: "deny",
     maxRequestsPerRun: 5,
     maxEstimatedCostUsdPerRun: 1.5,
-    maxParallelCandidates: 1,
+    maxParallelCandidates: 5,
     allowJudge: false,
     allowHooks: true,
     requiresExplicitGate: true,
@@ -211,7 +212,7 @@ const POLICY_BY_COST_TIER: Record<
     defaultDecision: "require-approval",
     maxRequestsPerRun: 3,
     maxEstimatedCostUsdPerRun: 3,
-    maxParallelCandidates: 1,
+    maxParallelCandidates: 5,
     allowJudge: false,
     allowHooks: false,
     requiresExplicitGate: true,
@@ -223,7 +224,7 @@ const POLICY_BY_COST_TIER: Record<
     defaultDecision: "require-approval",
     maxRequestsPerRun: 2,
     maxEstimatedCostUsdPerRun: 5,
-    maxParallelCandidates: 1,
+    maxParallelCandidates: 5,
     allowJudge: false,
     allowHooks: false,
     requiresExplicitGate: true,
@@ -348,36 +349,17 @@ function detectModelCostTier(modelRoute: string, providerId: string): ModelCostT
   return "medium";
 }
 
+export function isFreeExecutionModelRoute(modelRoute: string, providerId: string): boolean {
+  return detectModelCostTier(modelRoute, providerId) === "free";
+}
+
 function parseModelRoute(modelRoute: string | undefined): ResolvedModelLike | undefined {
   if (!modelRoute) {
     return undefined;
   }
 
   const value = modelRoute.trim();
-  if (!value) {
-    return undefined;
-  }
-
-  const colonIndex = value.indexOf(":");
-  if (colonIndex > 0) {
-    return {
-      providerId: value.slice(0, colonIndex),
-      modelId: value.slice(colonIndex + 1),
-    };
-  }
-
-  const slashIndex = value.indexOf("/");
-  if (slashIndex > 0) {
-    return {
-      providerId: value.slice(0, slashIndex),
-      modelId: value.slice(slashIndex + 1),
-    };
-  }
-
-  return {
-    providerId: "github-copilot",
-    modelId: value,
-  };
+  return value ? resolveModelRoute(value) : undefined;
 }
 
 function buildModelExecutionPolicy(
@@ -385,7 +367,7 @@ function buildModelExecutionPolicy(
 ): ModelExecutionPolicy {
   const providerId = resolvedModel?.providerId ?? "runtime-default";
   const modelId = resolvedModel?.modelId ?? "implicit-default";
-  const modelRoute = `${providerId}:${modelId}`;
+  const modelRoute = formatModelRoute({ providerId, modelId });
   const environment = resolveExecutionEnvironment();
   const costTier = resolvedModel ? detectModelCostTier(modelRoute, providerId) : "free";
   const policyDefaults = POLICY_BY_COST_TIER[costTier];
@@ -530,7 +512,7 @@ function buildBaseRiskDrivers(
   return [
     {
       type: "model",
-      label: `${policy.providerId}:${policy.modelId}`,
+      label: formatModelRoute({ providerId: policy.providerId, modelId: policy.modelId }),
       impact: resolveModelRiskImpact(policy),
       detail: `costTier=${policy.costTier}, environment=${policy.environment}`,
     },

@@ -6,6 +6,7 @@
         type="primary"
         size="small"
         data-testid="complete-task-btn"
+        :disabled="completing"
         :loading="completing"
         @click="$emit('complete')"
       >
@@ -15,6 +16,7 @@
         v-if="canAdvance"
         size="small"
         data-testid="advance-stage-btn"
+        :disabled="advancing"
         :loading="advancing"
         @click="$emit('advance')"
       >

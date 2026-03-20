@@ -6,6 +6,12 @@ const cpFetchMock = mock(async (..._args: unknown[]) => ({ ok: true, status: 200
 const authHeaderMock = mock(() => "Bearer test-token");
 const createInternalAuthorizationMock = mock(async () => "Bearer internal-token");
 const readDefaultExecutionModelMock = mock(() => "github-copilot:gpt-5.4");
+const formatModelRouteMock = mock((resolved: { providerId: string; modelId: string }) =>
+  resolved.modelId.startsWith(`${resolved.providerId}/`) ||
+  resolved.modelId.startsWith(`${resolved.providerId}:`)
+    ? resolved.modelId
+    : `${resolved.providerId}:${resolved.modelId}`,
+);
 const resolveModelRouteMock = mock((value: string) => ({
   providerId: value.split(":")[0] || "github-copilot",
   modelId: value.split(":").slice(1).join(":") || value,
@@ -15,6 +21,8 @@ const readOrchestrationStrategyMock = mock(() => ({
   templates: [],
   judge: { enabled: false },
 }));
+const DEFAULT_EXECUTION_AGENT = "coder";
+const isDefaultExecutionAgentMock = mock((agentName?: string | null) => !agentName || agentName === "coder");
 
 mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () => ({
   authHeader: authHeaderMock,
@@ -23,11 +31,14 @@ mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () =>
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/lib/opencode-config", () => ({
+  formatModelRoute: formatModelRouteMock,
   readDefaultExecutionModel: readDefaultExecutionModelMock,
   resolveModelRoute: resolveModelRouteMock,
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/lib/orchestration-strategy", () => ({
+  DEFAULT_EXECUTION_AGENT,
+  isDefaultExecutionAgent: isDefaultExecutionAgentMock,
   readOrchestrationStrategy: readOrchestrationStrategyMock,
 }));
 
@@ -36,12 +47,23 @@ beforeEach(() => {
   authHeaderMock.mockReset();
   createInternalAuthorizationMock.mockReset();
   readDefaultExecutionModelMock.mockReset();
+  formatModelRouteMock.mockReset();
+  isDefaultExecutionAgentMock.mockReset();
   resolveModelRouteMock.mockReset();
   readOrchestrationStrategyMock.mockReset();
 
   authHeaderMock.mockReturnValue("Bearer test-token");
   createInternalAuthorizationMock.mockResolvedValue("Bearer internal-token");
   readDefaultExecutionModelMock.mockReturnValue("github-copilot:gpt-5.4");
+  isDefaultExecutionAgentMock.mockImplementation(
+    (agentName?: string | null) => !agentName || agentName === "coder",
+  );
+  formatModelRouteMock.mockImplementation((resolved: { providerId: string; modelId: string }) =>
+    resolved.modelId.startsWith(`${resolved.providerId}/`) ||
+    resolved.modelId.startsWith(`${resolved.providerId}:`)
+      ? resolved.modelId
+      : `${resolved.providerId}:${resolved.modelId}`,
+  );
   resolveModelRouteMock.mockImplementation((value: string) => ({
     providerId: value.split(":")[0] || "github-copilot",
     modelId: value.split(":").slice(1).join(":") || value,
@@ -193,6 +215,74 @@ describe("project paid execution preflight route", () => {
       },
       preflight: {
         guardDecision: "require-approval",
+      },
+    });
+  });
+
+  test("keeps direct provider models intact in effectiveModel", async () => {
+    process.env.ALLOW_PAID_MODEL_EXECUTION = undefined;
+    cpFetchMock.mockImplementation(async (...args: unknown[]) => {
+      const [path] = args as [string];
+      if (path === "/api/projects/proj-default") {
+        return {
+          ok: true,
+          status: 200,
+          data: {
+            id: "proj-default",
+            name: "Default Project",
+            slug: "default",
+            settings: {
+              defaultModel: "anthropic/claude-sonnet-4-20250514",
+            },
+          },
+        };
+      }
+
+      if (path === "/api/projects/proj-default/paid-execution-lease") {
+        return {
+          ok: true,
+          status: 200,
+          data: {
+            projectId: "proj-default",
+            activeLease: null,
+            now: "2026-03-10T00:00:00.000Z",
+          },
+        };
+      }
+
+      return {
+        ok: false,
+        status: 404,
+        data: {
+          error: `Unhandled path: ${path}`,
+        },
+      };
+    });
+    resolveModelRouteMock.mockImplementation((value: string) => ({
+      providerId: "anthropic",
+      modelId: value,
+    }));
+
+    const { projectRoutes } = await import(
+      "../../control-plane/web-ui-bff/src/modules/projects/routes"
+    );
+
+    const response = await projectRoutes.request(
+      "http://localhost/proj-default/paid-execution-preflight",
+      {
+        headers: {
+          Authorization: "Bearer inbound-token",
+        },
+      },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      defaultModel: "anthropic/claude-sonnet-4-20250514",
+      effectiveModel: "anthropic/claude-sonnet-4-20250514",
+      preflight: {
+        providerId: "anthropic",
+        modelId: "anthropic/claude-sonnet-4-20250514",
       },
     });
   });

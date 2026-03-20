@@ -610,6 +610,110 @@ describe("MultiTaskMonitor", () => {
     expect(wrapper.text()).toContain("github-copilot:gemini-3-flash-preview");
   });
 
+  it("renders monitor messages using the same cleaned conversation text as task detail", async () => {
+    apiMocks.getSessionMessages.mockResolvedValue({
+      data: [
+        {
+          info: {
+            id: "message-0",
+            role: "user",
+            time: {
+              created: "2026-03-14T08:03:30.000Z",
+            },
+          },
+          parts: [
+            {
+              type: "text",
+              text: "Execution context:\n\nOpener-X task ID: task-1\nProject ID: proj-1\n\n当前执行上下文\n任务：修复登录流程\n请只完成当前阶段的目标。\n完成后请输出本阶段产出摘要。\n如果你认为当前阶段已经完成，请在输出末尾单独追加 [STAGE_COMPLETE]。\n\n真正的用户问题",
+            },
+          ],
+        },
+        {
+          info: {
+            id: "message-1",
+            role: "assistant",
+            agent: "oracle-enterprise",
+            model: {
+              providerID: "github-copilot",
+              modelID: "gemini-3-flash-preview",
+            },
+            time: {
+              created: "2026-03-14T08:04:00.000Z",
+              completed: "2026-03-14T08:04:20.000Z",
+            },
+          },
+          parts: [
+            {
+              type: "text",
+              text: "这是任务回复摘要。\n\n[STAGE_COMPLETE]",
+            },
+          ],
+        },
+      ],
+    });
+
+    const { wrapper, taskMonitorStore } = await mountPage();
+
+    taskMonitorStore.addTaskNode("task-1");
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("真正的用户问题");
+    expect(wrapper.text()).not.toContain("Execution context:");
+    expect(wrapper.text()).not.toContain("当前执行上下文");
+    expect(wrapper.text()).toContain("这是任务回复摘要。");
+    expect(wrapper.text()).not.toContain("[STAGE_COMPLETE]");
+  });
+
+  it("renders tool calls as structured cards in the monitor window", async () => {
+    apiMocks.getSessionMessages.mockResolvedValue({
+      data: [
+        {
+          info: {
+            id: "message-0",
+            role: "assistant",
+            agent: "oracle-enterprise",
+            model: {
+              providerID: "github-copilot",
+              modelID: "gpt-5-mini",
+            },
+            time: {
+              created: "2026-03-14T08:04:00.000Z",
+              completed: "2026-03-14T08:04:20.000Z",
+            },
+          },
+          parts: [
+            {
+              type: "tool",
+              id: "tool-1",
+              toolName: "bash",
+              input: {
+                command: 'rg -n "authMiddleware" control-plane/service/src',
+                goal: "定位 auth 中间件入口",
+              },
+              state: {
+                status: "completed",
+                exit: 0,
+                output:
+                  "control-plane/service/src/middleware/auth.ts:12:export function authMiddleware() {}",
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    const { wrapper, taskMonitorStore } = await mountPage();
+
+    taskMonitorStore.addTaskNode("task-1");
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('工具调用 · bash · rg -n "authMiddleware" control-plane/service/src');
+    expect(wrapper.text()).toContain('rg -n "authMiddleware" control-plane/service/src');
+    expect(wrapper.text()).not.toContain("exit 0");
+    expect(wrapper.text()).not.toContain("输出");
+    expect(wrapper.text()).not.toContain("定位 auth 中间件入口");
+  });
+
   it("imports running tasks from the toolbar", async () => {
     const { wrapper, taskMonitorStore } = await mountPage();
 
@@ -622,6 +726,24 @@ describe("MultiTaskMonitor", () => {
     expect(taskMonitorStore.nodes.some((node) => node.taskId === "task-2")).toBe(false);
     expect(wrapper.text()).toContain("修复登录流程");
     expect(wrapper.text()).not.toContain("处理构建异常");
+  });
+
+  it("does not route remove-button mousedown into node bring-to-front behavior", async () => {
+    const { wrapper, taskMonitorStore } = await mountPage();
+
+    taskMonitorStore.addTaskNode("task-2");
+    await flushPromises();
+
+    const bringToFrontSpy = vi.spyOn(taskMonitorStore, "bringToFront");
+    const removeButtons = wrapper
+      .findAll("button")
+      .filter((item) => item.text().trim() === "移除");
+
+    expect(removeButtons.length).toBeGreaterThan(0);
+
+    await removeButtons[0]?.trigger("mousedown");
+
+    expect(bringToFrontSpy).not.toHaveBeenCalled();
   });
 
   it("places newly opened monitor windows into free positions instead of overlapping", async () => {
@@ -2033,7 +2155,7 @@ describe("MultiTaskMonitor", () => {
     expect(wrapper.text()).toContain("已完成");
   });
 
-  it("marks the window completed when the latest visible assistant reply has already finished", async () => {
+  it("switches the window to completed once the assistant reply has fully displayed", async () => {
     apiMocks.getTask.mockImplementation(async (taskId: string) => ({
       id: taskId,
       projectId: "proj-1",
@@ -2066,7 +2188,167 @@ describe("MultiTaskMonitor", () => {
 
     expect(wrapper.findAll(".monitor-node--running")).toHaveLength(0);
     expect(wrapper.findAll(".monitor-node--completed").length).toBeGreaterThan(0);
-    expect(wrapper.text()).toContain("已完成");
+    expect(wrapper.find(".monitor-node__status-pill").text()).toBe("已完成");
+    expect(wrapper.find(".monitor-node__stream-state").text()).toBe("已完成");
+  });
+
+  it("switches the window to running as soon as the user input is visible", async () => {
+    apiMocks.getTask.mockImplementation(async (taskId: string) => ({
+      id: taskId,
+      projectId: "proj-1",
+      userId: "user-1",
+      title: "修复登录流程",
+      prompt: "修复生产登录故障",
+      status: "completed",
+      createdAt: "2026-03-14T08:00:00.000Z",
+      startedAt: "2026-03-14T08:02:00.000Z",
+      finishedAt: "2026-03-14T08:02:10.000Z",
+    }));
+
+    apiMocks.getTaskSessions.mockResolvedValue({
+      data: [
+        {
+          id: "session-1",
+          title: "主分支",
+          isActive: false,
+          summary: null,
+          createdAt: "2026-03-14T08:01:00.000Z",
+          updatedAt: "2026-03-14T08:12:00.000Z",
+        },
+      ],
+    });
+
+    apiMocks.getSessionMessages.mockResolvedValue({
+      data: [
+        {
+          info: {
+            id: "message-0",
+            role: "user",
+            time: {
+              created: "2026-03-14T08:03:30.000Z",
+            },
+          },
+          parts: [
+            {
+              type: "text",
+              text: "修复生产登录故障",
+            },
+          ],
+        },
+      ],
+    });
+
+    apiMocks.getTaskPipeline.mockResolvedValue(null);
+
+    const { wrapper } = await mountPage();
+
+    await flushPromises();
+
+    expect(wrapper.find(".monitor-node__status-pill").text()).toBe("运行中");
+    expect(wrapper.find(".monitor-node__stream-state").text()).toBe("运行中");
+    expect(wrapper.find(".monitor-node__activity-pill").text()).toBe("运行中");
+    expect(wrapper.findAll(".monitor-node--running").length).toBeGreaterThan(0);
+    expect(wrapper.findAll(".monitor-node--completed")).toHaveLength(0);
+  });
+
+  it("keeps the monitor card in running state when realtime streaming continues after task status flips completed", async () => {
+    apiMocks.getTask.mockImplementation(async (taskId: string) => ({
+      id: taskId,
+      projectId: "proj-1",
+      userId: "user-1",
+      title: "修复登录流程",
+      prompt: "修复生产登录故障",
+      status: "completed",
+      createdAt: "2026-03-14T08:00:00.000Z",
+      startedAt: "2026-03-14T08:02:00.000Z",
+      finishedAt: "2026-03-14T08:05:00.000Z",
+    }));
+
+    apiMocks.getTaskSessions.mockResolvedValue({
+      data: [
+        {
+          id: "session-1",
+          title: "主分支",
+          isActive: false,
+          summary: null,
+          createdAt: "2026-03-14T08:01:00.000Z",
+          updatedAt: "2026-03-14T08:12:00.000Z",
+        },
+      ],
+    });
+
+    apiMocks.getSessionMessages.mockResolvedValue({
+      data: [
+        {
+          info: {
+            id: "message-0",
+            role: "user",
+            time: {
+              created: "2026-03-14T08:03:30.000Z",
+            },
+          },
+          parts: [
+            {
+              type: "text",
+              text: "修复生产登录故障",
+            },
+          ],
+        },
+      ],
+    });
+
+    apiMocks.getTaskPipeline.mockResolvedValue(null);
+
+    const { wrapper, taskMonitorStore, realtimeStore } = await mountPage();
+
+    taskMonitorStore.addTaskNode("task-1");
+    await flushPromises();
+
+    prependRealtimeEvent(realtimeStore, {
+      id: "evt-completed-task-message-updated",
+      type: "message.updated",
+      ts: "2026-03-14T08:05:00.000Z",
+      taskId: "task-1",
+      sessionId: "session-1",
+      data: {
+        rawType: "message.updated",
+        info: {
+          id: "message-stream-completed-task",
+          role: "assistant",
+          agent: "oracle-enterprise",
+          model: {
+            providerID: "github-copilot",
+            modelID: "claude-sonnet-4",
+          },
+          time: {
+            created: "2026-03-14T08:05:00.000Z",
+          },
+        },
+      },
+    });
+    prependRealtimeEvent(realtimeStore, {
+      id: "evt-completed-task-message-part",
+      type: "message.part.updated",
+      ts: "2026-03-14T08:05:01.000Z",
+      taskId: "task-1",
+      sessionId: "session-1",
+      data: {
+        rawType: "message.part.updated",
+        part: {
+          messageID: "message-stream-completed-task",
+          type: "text",
+          text: "仍在继续输出修复结果。",
+        },
+      },
+    });
+
+    await flushPromises();
+    await flushPromises();
+
+    expect(wrapper.findAll(".monitor-node--running").length).toBeGreaterThan(0);
+    expect(wrapper.findAll(".monitor-node--completed")).toHaveLength(0);
+    expect(wrapper.text()).toContain("运行中");
+    expect(wrapper.text()).not.toContain("已完成");
   });
 
   it("keeps the monitor card stable when realtime assistant events arrive", async () => {
@@ -2128,6 +2410,14 @@ describe("MultiTaskMonitor", () => {
         },
       },
     });
+
+    await flushPromises();
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("运行中");
+    expect(wrapper.text()).not.toContain("生成中");
+    expect(wrapper.find(".monitor-node__activity-pill").text()).toBe("运行中");
+
     prependRealtimeEvent(realtimeStore, {
       id: "evt-message-updated-complete",
       type: "message.updated",
@@ -2159,7 +2449,146 @@ describe("MultiTaskMonitor", () => {
     expect(wrapper.text()).toContain("实时回复");
     expect(wrapper.text()).toContain("已定位到登录态丢失的根因");
     expect(wrapper.text()).toContain("github-copilot:claude-sonnet-4");
-    expect(wrapper.text()).toContain("已完成");
+    expect(wrapper.text()).toContain("运行中");
     expect(wrapper.text()).not.toContain("生成中");
+    expect(wrapper.find(".monitor-node__activity-pill").text()).toBe("运行中");
+  });
+
+  it("keeps the main status running while assistant text is still revealing after completion", async () => {
+    vi.useFakeTimers();
+
+    apiMocks.getTask.mockImplementation(async (taskId: string) => ({
+      id: taskId,
+      projectId: "proj-1",
+      userId: "user-1",
+      title: "修复登录流程",
+      prompt: "修复生产登录故障",
+      status: "running",
+      createdAt: "2026-03-14T08:00:00.000Z",
+      startedAt: "2026-03-14T08:02:00.000Z",
+    }));
+
+    apiMocks.getTaskSessions.mockResolvedValue({
+      data: [
+        {
+          id: "session-1",
+          title: "主分支",
+          isActive: true,
+          summary: null,
+          createdAt: "2026-03-14T08:01:00.000Z",
+          updatedAt: "2026-03-14T08:12:00.000Z",
+        },
+      ],
+    });
+
+    apiMocks.getSessionMessages.mockResolvedValue({ data: [] });
+    apiMocks.getTaskPipeline.mockResolvedValue(null);
+
+    const { wrapper, taskMonitorStore, realtimeStore } = await mountPage();
+
+    taskMonitorStore.addTaskNode("task-1");
+    await flushPromises();
+
+    prependRealtimeEvent(realtimeStore, {
+      id: "evt-reveal-main-status-start",
+      type: "message.updated",
+      ts: "2026-03-14T08:05:00.000Z",
+      taskId: "task-1",
+      sessionId: "session-1",
+      data: {
+        rawType: "message.updated",
+        info: {
+          id: "message-stream-reveal-main-status",
+          role: "assistant",
+          agent: "oracle-enterprise",
+          model: {
+            providerID: "github-copilot",
+            modelID: "claude-sonnet-4",
+          },
+          time: {
+            created: "2026-03-14T08:05:00.000Z",
+          },
+        },
+      },
+    });
+    prependRealtimeEvent(realtimeStore, {
+      id: "evt-reveal-main-status-part",
+      type: "message.part.updated",
+      ts: "2026-03-14T08:05:01.000Z",
+      taskId: "task-1",
+      sessionId: "session-1",
+      data: {
+        rawType: "message.part.updated",
+        part: {
+          messageID: "message-stream-reveal-main-status",
+          type: "text",
+          text: "这是一个足够长的逐字揭示文本，用来验证回复完成后动画未结束时主状态仍保持运行中。",
+        },
+      },
+    });
+
+    await flushPromises();
+    await vi.advanceTimersByTimeAsync(80);
+    await flushPromises();
+
+    apiMocks.getTask.mockImplementation(async (taskId: string) => ({
+      id: taskId,
+      projectId: "proj-1",
+      userId: "user-1",
+      title: "修复登录流程",
+      prompt: "修复生产登录故障",
+      status: "completed",
+      createdAt: "2026-03-14T08:00:00.000Z",
+      startedAt: "2026-03-14T08:02:00.000Z",
+      finishedAt: "2026-03-14T08:05:03.000Z",
+    }));
+    apiMocks.getTaskSessions.mockResolvedValue({
+      data: [
+        {
+          id: "session-1",
+          title: "主分支",
+          isActive: false,
+          summary: null,
+          createdAt: "2026-03-14T08:01:00.000Z",
+          updatedAt: "2026-03-14T08:12:00.000Z",
+        },
+      ],
+    });
+
+    prependRealtimeEvent(realtimeStore, {
+      id: "evt-reveal-main-status-complete",
+      type: "message.updated",
+      ts: "2026-03-14T08:05:03.000Z",
+      taskId: "task-1",
+      sessionId: "session-1",
+      data: {
+        rawType: "message.updated",
+        info: {
+          id: "message-stream-reveal-main-status",
+          role: "assistant",
+          agent: "oracle-enterprise",
+          model: {
+            providerID: "github-copilot",
+            modelID: "claude-sonnet-4",
+          },
+          time: {
+            created: "2026-03-14T08:05:00.000Z",
+            completed: "2026-03-14T08:05:03.000Z",
+          },
+        },
+      },
+    });
+
+    await flushPromises();
+    await vi.advanceTimersByTimeAsync(80);
+    await flushPromises();
+
+    expect(wrapper.find(".monitor-node__status-pill").text()).toBe("运行中");
+    expect(wrapper.find(".monitor-node__stream-state").text()).toBe("运行中");
+    expect(wrapper.find(".monitor-node__activity-pill").text()).toBe("运行中");
+    expect(wrapper.findAll(".monitor-node--running").length).toBeGreaterThan(0);
+    expect(wrapper.findAll(".monitor-node--completed")).toHaveLength(0);
+
+    vi.useRealTimers();
   });
 });

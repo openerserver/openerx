@@ -77,6 +77,136 @@ describe("extractAssistantResultFromMessages", () => {
 });
 
 describe("opencode adapter resilience", () => {
+  test("normalizes direct provider model ids before sending prompt_async", async () => {
+    const fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/session") && init?.method === "POST") {
+        return new Response(JSON.stringify({ id: "session-1" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.endsWith("/session/session-1/prompt_async") && init?.method === "POST") {
+        return new Response(null, { status: 204 });
+      }
+      if (url.endsWith("/session/session-1/message?limit=200") && init?.method === "GET") {
+        return new Response(JSON.stringify([{ info: { role: "user" }, parts: [] }]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      return new Response("not found", { status: 404 });
+    });
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    const { createSession } = await loadOpencodeAdapter();
+    const result = await createSession("task-1", "proj-1", "hello", {
+      model: {
+        providerId: "anthropic",
+        modelId: "anthropic/claude-sonnet-4-20250514",
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    const promptCall = fetchMock.mock.calls[1];
+    const body = JSON.parse(String(promptCall?.[1]?.body)) as {
+      model?: { providerID?: string; modelID?: string };
+    };
+    expect(body.model).toEqual({
+      providerID: "anthropic",
+      modelID: "claude-sonnet-4-20250514",
+    });
+  });
+
+  test("retries createSession prompt when runtime accepts but does not persist messages", async () => {
+    let promptAttempts = 0;
+    const fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/session") && init?.method === "POST") {
+        return new Response(JSON.stringify({ id: "session-1" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.endsWith("/session/session-1/prompt_async") && init?.method === "POST") {
+        promptAttempts += 1;
+        return new Response(null, { status: 204 });
+      }
+      if (url.endsWith("/session/session-1/message?limit=200") && init?.method === "GET") {
+        if (promptAttempts < 2) {
+          return new Response(JSON.stringify([]), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+
+        return new Response(JSON.stringify([{ info: { role: "user" }, parts: [] }]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      return new Response("not found", { status: 404 });
+    });
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    const { createSession } = await loadOpencodeAdapter();
+    const result = await createSession("task-1", "proj-1", "hello", {
+      model: {
+        providerId: "github-copilot",
+        modelId: "gpt-4o",
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(promptAttempts).toBe(2);
+  });
+
+  test("retries continueSession prompt when message count does not advance", async () => {
+    let promptAttempts = 0;
+    const fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/session/session-1/prompt_async") && init?.method === "POST") {
+        promptAttempts += 1;
+        return new Response(null, { status: 204 });
+      }
+      if (url.endsWith("/session/session-1/message?limit=200") && init?.method === "GET") {
+        if (promptAttempts < 2) {
+          return new Response(JSON.stringify([{ info: { role: "user" }, parts: [] }]), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+
+        return new Response(
+          JSON.stringify([
+            { info: { role: "user" }, parts: [] },
+            { info: { role: "user" }, parts: [] },
+          ]),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+
+      return new Response("not found", { status: 404 });
+    });
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    const { continueSession } = await loadOpencodeAdapter();
+    const result = await continueSession("session-1", "hello", {
+      model: {
+        providerId: "github-copilot",
+        modelId: "gpt-4o",
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(promptAttempts).toBe(2);
+  });
+
   test("keeps session-read circuit breaker scoped away from write operations", async () => {
     const fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);

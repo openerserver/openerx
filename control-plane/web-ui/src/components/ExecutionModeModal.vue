@@ -3,7 +3,7 @@
     :open="open"
     title="选择执行模式"
     :confirm-loading="loading"
-    ok-text="开始执行"
+    ok-text="保存配置"
     cancel-text="取消"
     :width="640"
     @ok="handleOk"
@@ -73,6 +73,79 @@
             </a-typography-text>
           </div>
         </a-form-item>
+
+        <a-card size="small" :bordered="false" :body-style="{ padding: '12px' }" style="margin-bottom: 16px; background: #fafafa">
+          <a-flex justify="space-between" align="center" style="margin-bottom: 8px">
+            <a-space size="small">
+              <a-typography-text strong>裁判评选</a-typography-text>
+              <a-tag v-if="judge.enabled" color="processing">已启用</a-tag>
+            </a-space>
+            <a-switch :checked="judge.enabled" @update:checked="updateJudgeEnabled" />
+          </a-flex>
+
+          <a-typography-text type="secondary" style="font-size: 12px; display: block; margin-bottom: 8px">
+            候选全部完成后，自动让 Judge 对每个结果评分并选出最佳方案。
+          </a-typography-text>
+
+          <div v-if="judge.enabled" style="display: flex; flex-direction: column; gap: 12px">
+            <a-form-item label="Judge Agent" style="margin-bottom: 0">
+              <a-input
+                :value="judge.agent"
+                placeholder="例如 prometheus-enterprise"
+                :maxlength="100"
+                @update:value="updateJudgeField('agent', $event)"
+              />
+            </a-form-item>
+
+            <a-form-item label="Judge 模型" style="margin-bottom: 0">
+              <a-select
+                :value="judge.model || undefined"
+                placeholder="选择 Judge 使用的模型"
+                show-search
+                allow-clear
+                :filter-option="filterModelOption"
+                :loading="modelsLoading"
+                @update:value="updateJudgeField('model', $event)"
+              >
+                <a-select-option v-for="m in modelOptions" :key="m.value" :value="m.value">
+                  {{ m.label }}
+                </a-select-option>
+              </a-select>
+            </a-form-item>
+
+            <a-form-item label="评选策略" style="margin-bottom: 0">
+              <a-radio-group :value="judge.selectionStrategy" @update:value="updateJudgeSelectionStrategy">
+                <a-radio value="judge-pick">裁判直接指定最佳候选</a-radio>
+                <a-radio value="highest-score">按评分最高者自动胜出</a-radio>
+              </a-radio-group>
+            </a-form-item>
+
+            <a-collapse size="small" ghost>
+              <a-collapse-panel key="advanced" header="高级设置">
+                <a-form-item label="评审 Prompt 模板" style="margin-bottom: 12px">
+                  <a-textarea
+                    :value="judge.promptTemplate"
+                    :rows="6"
+                    :maxlength="12000"
+                    placeholder="可使用 {{taskTitle}}、{{taskPrompt}}、{{candidateResults}} 变量"
+                    @update:value="updateJudgeField('promptTemplate', $event)"
+                  />
+                </a-form-item>
+
+                <a-form-item label="超时时间（秒）" style="margin-bottom: 0">
+                  <a-input-number
+                    :value="Math.max(10, Math.round(judge.timeoutMs / 1000))"
+                    :min="10"
+                    :max="120"
+                    :step="5"
+                    style="width: 100%"
+                    @update:value="updateJudgeTimeout"
+                  />
+                </a-form-item>
+              </a-collapse-panel>
+            </a-collapse>
+          </div>
+        </a-card>
       </template>
 
       <!-- Sequential chain: steps -->
@@ -148,14 +221,19 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import type { ExecutionMode, ChainStepInput } from "../lib/api";
+import type { ExecutionMode, ChainStepInput, JudgeConfig } from "../lib/api";
+import { DEFAULT_JUDGE_CONFIG } from "../lib/taskExecutionMode";
 
 const props = defineProps<{
   open: boolean;
   loading: boolean;
   modelOptions: Array<{ value: string; label: string }>;
   modelsLoading: boolean;
-  filterModelOption: (input: string, option: { value?: string; label?: string }) => boolean;
+  filterModelOption: (input: string, option?: unknown) => boolean;
+  initialMode?: ExecutionMode;
+  initialCandidates?: Array<{ model: string; label?: string }>;
+  initialSteps?: ChainStepInput[];
+  initialJudge?: JudgeConfig;
 }>();
 
 const emit = defineEmits<{
@@ -166,6 +244,7 @@ const emit = defineEmits<{
       mode: ExecutionMode;
       candidates?: Array<{ model: string; label?: string }>;
       steps?: ChainStepInput[];
+      judge?: JudgeConfig;
     } | null,
   ): void;
 }>();
@@ -181,19 +260,54 @@ const steps = ref<Array<{ title: string; instruction: string; model: string | un
   { title: "", instruction: "", model: undefined },
 ]);
 
+const judge = ref<JudgeConfig>({ ...DEFAULT_JUDGE_CONFIG });
+
 watch(
   () => props.open,
   (open) => {
     if (open) {
-      mode.value = "single";
-      candidates.value = [
-        { model: "", label: "候选 A" },
-        { model: "", label: "候选 B" },
-      ];
-      steps.value = [{ title: "", instruction: "", model: undefined }];
+      mode.value = props.initialMode ?? "single";
+      candidates.value = buildCandidateDefaults(props.initialCandidates);
+      steps.value = buildStepDefaults(props.initialSteps);
+      judge.value = buildJudgeDefaults(props.initialJudge);
     }
   },
 );
+
+function buildCandidateDefaults(
+  initialCandidates?: Array<{ model: string; label?: string }>,
+) {
+  if (Array.isArray(initialCandidates) && initialCandidates.length > 0) {
+    return initialCandidates.slice(0, 5).map((candidate, index) => ({
+      model: candidate.model,
+      label: candidate.label || `候选 ${String.fromCharCode(65 + index)}`,
+    }));
+  }
+
+  return [
+    { model: "", label: "候选 A" },
+    { model: "", label: "候选 B" },
+  ];
+}
+
+function buildStepDefaults(initialSteps?: ChainStepInput[]) {
+  if (Array.isArray(initialSteps) && initialSteps.length > 0) {
+    return initialSteps.slice(0, 20).map((step) => ({
+      title: step.title,
+      instruction: step.instruction,
+      model: step.model,
+    }));
+  }
+
+  return [{ title: "", instruction: "", model: undefined }];
+}
+
+function buildJudgeDefaults(initialJudge?: JudgeConfig): JudgeConfig {
+  return {
+    ...DEFAULT_JUDGE_CONFIG,
+    ...(initialJudge ?? {}),
+  };
+}
 
 const modeDescription = computed(() => {
   switch (mode.value) {
@@ -226,6 +340,36 @@ function addCandidate() {
 
 function removeCandidate(idx: number) {
   candidates.value.splice(idx, 1);
+}
+
+function updateJudgeEnabled(value: boolean | string | number) {
+  judge.value = {
+    ...judge.value,
+    enabled: Boolean(value),
+  };
+}
+
+function updateJudgeField(field: "agent" | "model" | "promptTemplate", value: unknown) {
+  const nextValue = value != null ? String(value) : "";
+  judge.value = {
+    ...judge.value,
+    [field]: nextValue,
+  };
+}
+
+function updateJudgeSelectionStrategy(value: unknown) {
+  judge.value = {
+    ...judge.value,
+    selectionStrategy: value === "highest-score" ? "highest-score" : "judge-pick",
+  };
+}
+
+function updateJudgeTimeout(value: unknown) {
+  const nextSeconds = typeof value === "number" && Number.isFinite(value) ? value : 30;
+  judge.value = {
+    ...judge.value,
+    timeoutMs: Math.max(10, Math.min(120, Math.round(nextSeconds))) * 1000,
+  };
 }
 
 function updateStep(idx: number, field: "title" | "instruction" | "model", value: unknown) {
@@ -262,6 +406,9 @@ function handleOk() {
         model: c.model,
         ...(c.label ? { label: c.label } : {}),
       })),
+      judge: {
+        ...judge.value,
+      },
     });
     return;
   }

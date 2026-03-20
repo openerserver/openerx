@@ -67,10 +67,14 @@ const realtimeState = reactive(realtimeBase);
 
 const apiMocks = vi.hoisted(() => ({
   adoptParallelCandidate: vi.fn(),
+  advanceWorkflowStage: vi.fn(),
+  completeTask: vi.fn(),
   continueTask: vi.fn(),
+  executeTask: vi.fn(),
   getProjectRuntimeUsageLedgers: vi.fn(),
   getProjectRoleExecutionView: vi.fn(),
   getSessionMessages: vi.fn(),
+  getTaskExecutionTraceView: vi.fn(),
   getSessionTree: vi.fn(),
   getTask: vi.fn(),
   getModelsList: vi.fn(),
@@ -400,6 +404,18 @@ beforeEach(() => {
   });
   apiMocks.getTaskPipeline.mockResolvedValue({ stages: [] });
   apiMocks.getTaskSessions.mockResolvedValue({ data: [] });
+  apiMocks.getTaskExecutionTraceView.mockResolvedValue({
+    taskId: "task-1",
+    sessionId: "ses-1",
+    workflowContext: null,
+    finalPrompt: null,
+    latestResponse: null,
+    truncated: false,
+    messageLimit: 200,
+    segments: [],
+    messages: [],
+    hookExecutions: [],
+  });
   apiMocks.getTaskWorkflowView.mockResolvedValue({
     taskId: "task-1",
     workflow: {
@@ -466,6 +482,8 @@ beforeEach(() => {
     ],
   });
   apiMocks.updateTask.mockResolvedValue({ selectedModel: "gpt-5.3-codex" });
+  apiMocks.completeTask.mockResolvedValue({ ok: true });
+  apiMocks.advanceWorkflowStage.mockResolvedValue({ nextStageKey: "verify" });
 });
 
 describe("TaskDetail", () => {
@@ -913,8 +931,9 @@ describe("TaskDetail", () => {
     const wrapper = await mountPage();
 
     expect(apiMocks.getProjectRoleExecutionView).toHaveBeenCalledWith("proj-1");
-    expect(wrapper.text()).toContain("项目角色配置");
-    expect(wrapper.text()).toContain("角色实际介入记录");
+    expect(wrapper.text()).toContain("代码变更");
+    expect(wrapper.text()).not.toContain("项目角色配置");
+    expect(wrapper.text()).not.toContain("角色实际介入记录");
   });
 
   it("renders task runtime usage ledger summary in governance panel", async () => {
@@ -1144,15 +1163,12 @@ describe("TaskDetail", () => {
     const wrapper = await mountPage();
     await flushPromises();
 
-    expect(wrapper.text()).toContain("当前阶段");
+    expect(wrapper.text()).toContain("Workflow 速览");
+    expect(wrapper.text()).toContain("阶段");
     expect(wrapper.text()).toContain("评审");
-    expect(wrapper.text()).toContain("已介入角色列表");
-    expect(wrapper.text()).toContain("开发者待处理项");
-    expect(wrapper.text()).toContain("审批与人工接管状态");
-    expect(wrapper.text()).toContain("安全 Agent");
-    expect(wrapper.text()).toContain("补充输入校验");
-    expect(wrapper.text()).toContain("需要人工复核");
-    expect(wrapper.text()).toContain("等待安全负责人审批");
+    expect(wrapper.text()).toContain("已阻断");
+    expect(wrapper.text()).not.toContain("已介入角色列表");
+    expect(wrapper.text()).not.toContain("开发者待处理项");
   });
 
   it("renders human-friendly labels for terminal and keyed workflow stages", async () => {
@@ -1160,9 +1176,16 @@ describe("TaskDetail", () => {
     apiMocks.getTaskWorkflowView.mockResolvedValueOnce({
       taskId: "task-1",
       workflow: {
-        currentStage: "done",
+        currentStage: "verify",
         status: "completed",
-        stages: [],
+        stages: [
+          {
+            id: "stage-verify",
+            stageKey: "verify",
+            stageLabel: "集成验证",
+            status: "completed",
+          },
+        ],
       },
       roleConclusions: [
         {
@@ -1212,7 +1235,7 @@ describe("TaskDetail", () => {
 
     expect(realtimeState.subscribeTask).toHaveBeenCalledWith("task-1");
     expect(apiMocks.getTask).toHaveBeenCalledTimes(1);
-    expect(wrapper.text()).toContain("编排决策");
+    expect(wrapper.text()).toContain("原始执行追踪");
 
     realtimeState.events.unshift({
       id: "evt-1",
@@ -1275,7 +1298,7 @@ describe("TaskDetail", () => {
     const wrapper = await mountPage();
 
     expect(apiMocks.getTask).toHaveBeenCalledTimes(1);
-    expect(wrapper.text()).toContain("暂无编排数据");
+    expect(wrapper.text()).toContain("原始执行追踪");
 
     await vi.advanceTimersByTimeAsync(500);
     await flushPromises();
@@ -1326,23 +1349,14 @@ describe("TaskDetail", () => {
     );
 
     const wrapper = await mountPage();
-    const setupState = getSetupState(wrapper);
-    const executionPlan = readSetupValue<{
-      candidates: Array<{ label: string }>;
-      judgeResult?: { winnerIndex: number; reasoning: string; scores: number[] };
-    } | null>(setupState, "executionPlan");
+  const setupState = getSetupState(wrapper);
+  setupState.taskDetailPrimaryTab = "trace";
+  await nextTick();
+    const candidateSectionMatches = wrapper.text().match(/并行候选结果/g) ?? [];
 
-    expect(executionPlan?.candidates.map((candidate) => candidate.label)).toEqual([
-      "候选 1",
-      "候选 2",
-    ]);
-    expect(executionPlan?.judgeResult?.winnerIndex).toBe(1);
-    expect(executionPlan?.judgeResult?.reasoning).toBe("候选 2 更完整，风险更低。");
-    expect(executionPlan?.judgeResult?.scores).toEqual([82.5, 91.2]);
-    expect(wrapper.text()).toContain("并行候选");
-    expect(wrapper.text()).toContain("候选 1");
+    expect(candidateSectionMatches).toHaveLength(1);
+    expect(wrapper.text()).toContain("并行候选结果");
     expect(wrapper.text()).toContain("候选 2");
-    expect(wrapper.text()).toContain("胜出");
     expect(wrapper.text()).toContain("Judge 已选出 候选 2");
   });
 
@@ -1369,18 +1383,85 @@ describe("TaskDetail", () => {
 
     const wrapper = await mountPage();
     const setupState = getSetupState(wrapper);
-    const executionPlan = readSetupValue<{
-      candidates: Array<{ label: string; status: string }>;
-    } | null>(setupState, "executionPlan");
+    setupState.taskDetailPrimaryTab = "trace";
+    await nextTick();
+    const candidateSectionMatches = wrapper.text().match(/并行候选结果/g) ?? [];
 
-    expect(executionPlan?.candidates.map((candidate) => candidate.label)).toEqual([
-      "候选 1",
-      "候选 2",
-    ]);
-    expect(executionPlan?.candidates.map((candidate) => candidate.status)).toEqual([
-      "completed",
-      "failed",
-    ]);
+    expect(candidateSectionMatches).toHaveLength(1);
+    expect(wrapper.text()).toContain("并行候选结果");
+    expect(wrapper.text()).not.toContain("胜出");
+  });
+
+  it("renders parallel comparison replies from multiple model sessions", async () => {
+    apiMocks.getTask.mockResolvedValueOnce(
+      makeTaskWithOverrides({
+        sessionId: "ses-main",
+        executionMode: "parallel",
+        executionPlan: JSON.stringify({
+          mode: "parallel",
+          candidates: [
+            {
+              label: "Claude",
+              agent: "default-executor",
+              model: "github-copilot:claude-sonnet-4",
+              sessionId: "ses-claude",
+              status: "completed",
+            },
+            {
+              label: "GPT",
+              agent: "default-executor",
+              model: "github-copilot:gpt-5.4",
+              sessionId: "ses-gpt",
+              status: "completed",
+            },
+          ],
+        }),
+        strategy: JSON.stringify({ executionMode: "parallel" }),
+      }),
+    );
+    apiMocks.getSessionMessages.mockImplementation(async (_taskId: string, sessionId: string) => {
+      if (sessionId === "ses-claude") {
+        return {
+          data: [
+            {
+              info: {
+                id: "msg-claude-1",
+                role: "assistant",
+                time: { created: Date.parse("2026-03-10T12:00:00.000Z") },
+              },
+              parts: [{ type: "text", text: "Claude reply" }],
+            },
+          ],
+        };
+      }
+
+      if (sessionId === "ses-gpt") {
+        return {
+          data: [
+            {
+              info: {
+                id: "msg-gpt-1",
+                role: "assistant",
+                time: { created: Date.parse("2026-03-10T12:00:01.000Z") },
+              },
+              parts: [{ type: "text", text: "GPT reply" }],
+            },
+          ],
+        };
+      }
+
+      return { data: [] };
+    });
+
+    const wrapper = await mountPage();
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("并行模型回复比较");
+    expect(wrapper.text()).toContain("Claude");
+    expect(wrapper.text()).toContain("GPT");
+    expect(wrapper.text()).toContain("Claude reply");
+    expect(wrapper.text()).toContain("GPT reply");
+    expect(wrapper.text()).not.toContain("从这里分叉");
   });
 
   it("renders sequential-chain steps directly from task executionPlan", async () => {
@@ -1428,16 +1509,9 @@ describe("TaskDetail", () => {
     );
 
     const wrapper = await mountPage();
-    const setupState = getSetupState(wrapper);
-    const resolvedExecutionMode = readSetupValue<string | undefined>(setupState, "resolvedExecutionMode");
-    const executionPlan = readSetupValue<{
-      steps?: Array<{ title?: string; instruction?: string }>;
-      pipelineMetadata?: { requestedMode?: string };
-    } | null>(setupState, "executionPlan");
+    getSetupState(wrapper).taskDetailPrimaryTab = "trace";
+    await nextTick();
 
-    expect(resolvedExecutionMode).toBe("sequential-chain");
-    expect(executionPlan?.pipelineMetadata?.requestedMode).toBe("sequential-chain");
-    expect(executionPlan?.steps?.map((step) => step.title)).toEqual(["分析现状", "给出方案"]);
     expect(wrapper.text()).toContain("顺序编排");
     expect(wrapper.text()).toContain("执行步骤");
     expect(wrapper.text()).toContain("分析现状");
@@ -1471,6 +1545,45 @@ describe("TaskDetail", () => {
     );
   });
 
+  it("disables complete button after click and hides it once task becomes completed", async () => {
+    let resolveCompleteTask: (() => void) | undefined;
+    apiMocks.getTask.mockResolvedValueOnce(
+      makeTaskWithOverrides({
+        status: "running",
+      }),
+    );
+    apiMocks.completeTask.mockImplementationOnce(
+      () =>
+        new Promise<{ ok: true }>((resolve) => {
+          resolveCompleteTask = () => resolve({ ok: true });
+        }),
+    );
+    apiMocks.getTask.mockResolvedValueOnce(
+      makeTaskWithOverrides({
+        status: "completed",
+      }),
+    );
+
+    const wrapper = await mountPage();
+  await flushPromises();
+
+    const completeButton = wrapper.get('[data-testid="complete-task-btn"]');
+    expect((completeButton.element as HTMLButtonElement).disabled).toBe(false);
+
+    await completeButton.trigger("click");
+    await nextTick();
+
+    expect(apiMocks.completeTask).toHaveBeenCalledTimes(1);
+    expect((wrapper.get('[data-testid="complete-task-btn"]').element as HTMLButtonElement).disabled).toBe(true);
+
+    if (typeof resolveCompleteTask === "function") {
+      resolveCompleteTask();
+    }
+    await flushPromises();
+
+    expect(wrapper.find('[data-testid="complete-task-btn"]').exists()).toBe(false);
+  });
+
   it("submits the reply composer with Enter by default", async () => {
     apiMocks.getTask.mockResolvedValue(makeTaskWithOverrides({ status: "pending" }));
     apiMocks.continueTask.mockResolvedValue({ ok: true });
@@ -1485,6 +1598,108 @@ describe("TaskDetail", () => {
     expect(apiMocks.continueTask).toHaveBeenCalledWith("task-1", "继续处理剩余问题", "ses-1");
   });
 
+  it("saves parallel execution mode without starting execution", async () => {
+    apiMocks.getTask.mockResolvedValueOnce(
+      makeTaskWithOverrides({
+        status: "pending",
+      }),
+    );
+    apiMocks.updateTask.mockResolvedValueOnce({});
+    apiMocks.getTask.mockResolvedValueOnce(
+      makeTaskWithOverrides({
+        status: "pending",
+        strategy: JSON.stringify({
+          executionMode: "parallel",
+          parallelCandidates: [
+            { model: "github-copilot:model-a", label: "候选 A" },
+            { model: "github-copilot:model-b", label: "候选 B" },
+          ],
+        }),
+      }),
+    );
+
+    const wrapper = await mountPage();
+    const setupState = getSetupState(wrapper) as {
+      handleExecutionModeConfirm: (payload: {
+        mode: "parallel";
+        candidates: Array<{ model: string; label?: string }>;
+      }) => Promise<void>;
+    };
+
+    await setupState.handleExecutionModeConfirm({
+      mode: "parallel",
+      candidates: [
+        { model: "github-copilot:model-a", label: "候选 A" },
+        { model: "github-copilot:model-b", label: "候选 B" },
+      ],
+    });
+    await flushPromises();
+
+    expect(apiMocks.updateTask).toHaveBeenCalledWith("task-1", {
+      strategy: JSON.stringify({
+        executionMode: "parallel",
+        parallelCandidates: [
+          { model: "github-copilot:model-a", label: "候选 A" },
+          { model: "github-copilot:model-b", label: "候选 B" },
+        ],
+      }),
+      executionMode: "parallel",
+      executionPlan: JSON.stringify({
+        mode: "parallel",
+        steps: [{ id: "exec-parallel", type: "execution", status: "pending" }],
+        candidates: [
+          {
+            label: "候选 A",
+            agent: "default-executor",
+            model: "github-copilot:model-a",
+            role: "executor",
+            status: "pending",
+          },
+          {
+            label: "候选 B",
+            agent: "default-executor",
+            model: "github-copilot:model-b",
+            role: "executor",
+            status: "pending",
+          },
+        ],
+      }),
+    });
+    expect(apiMocks.executeTask).not.toHaveBeenCalled();
+  });
+
+  it("submits the reply composer without a selected session and adopts returned primary session", async () => {
+    apiMocks.getSessionTree.mockResolvedValueOnce({ data: [] });
+    apiMocks.getTask.mockResolvedValueOnce(
+      makeTaskWithOverrides({
+        status: "pending",
+        sessionId: undefined,
+      }),
+    );
+    apiMocks.continueTask.mockResolvedValueOnce({ ok: true, sessionId: "ses-parallel-a" });
+    apiMocks.getTask.mockResolvedValueOnce(
+      makeTaskWithOverrides({
+        status: "running",
+        sessionId: "ses-parallel-a",
+      }),
+    );
+
+    const wrapper = await mountPage();
+    expect(readSetupValue<string | undefined>(getSetupState(wrapper), "selectedSessionId")).toBe(
+      undefined,
+    );
+
+    const textarea = wrapper.find("textarea");
+    await textarea.setValue("并行比较这个方案");
+    await textarea.trigger("keydown", { key: "Enter" });
+    await flushPromises();
+
+    expect(apiMocks.continueTask).toHaveBeenCalledWith("task-1", "并行比较这个方案", undefined);
+    expect(readSetupValue<string | undefined>(getSetupState(wrapper), "selectedSessionId")).toBe(
+      "ses-parallel-a",
+    );
+  });
+
   it("keeps Shift+Enter available for multiline input", async () => {
     apiMocks.getTask.mockResolvedValue(makeTaskWithOverrides({ status: "pending" }));
 
@@ -1496,6 +1711,73 @@ describe("TaskDetail", () => {
     await flushPromises();
 
     expect(apiMocks.continueTask).not.toHaveBeenCalled();
+  });
+
+  it("shows only the user's actual input when workflow execution context is prefixed into a user message", async () => {
+    apiMocks.getSessionMessages.mockResolvedValueOnce({
+      data: [
+        {
+          info: {
+            id: "msg-user-1",
+            role: "user",
+            time: {
+              created: Date.parse("2026-03-10T12:00:00.000Z"),
+            },
+          },
+          parts: [
+            {
+              type: "text",
+              text: [
+                "Execution context:",
+                "",
+                "Opener-X task ID: 8f04ece4-e2f9-488b-98cd-59b01ccb759d",
+                "Project ID: proj-default",
+                "当前执行上下文",
+                "任务：实现新功能",
+                "流程状态：waiting-approval",
+                "当前阶段：方案设计（waiting-approval）",
+                "请只完成当前阶段的目标。",
+                "完成后请输出本阶段产出摘要。",
+                "如果你认为当前阶段已经完成，请在输出末尾单独追加 [STAGE_COMPLETE]。",
+                "",
+                "开发一个ios平台下的输入法",
+                "请先梳理需求和边界条件，再实现功能代码。",
+                "同时补充必要测试，并说明使用方式和影响范围。",
+              ].join("\n"),
+            },
+          ],
+        },
+        {
+          info: {
+            id: "msg-assistant-1",
+            role: "assistant",
+            agent: "oracle-enterprise",
+            time: {
+              created: Date.parse("2026-03-10T12:00:10.000Z"),
+            },
+          },
+          parts: [
+            {
+              type: "text",
+              text: "先整理需求边界，再给出实现方案。\n\n[STAGE_COMPLETE]",
+            },
+          ],
+        },
+      ],
+    });
+
+    const wrapper = await mountPage();
+
+    expect(wrapper.text()).toContain("开发一个ios平台下的输入法");
+    expect(wrapper.text()).toContain("请先梳理需求和边界条件，再实现功能代码。");
+    expect(wrapper.text()).toContain("同时补充必要测试，并说明使用方式和影响范围。");
+    expect(wrapper.text()).toContain("先整理需求边界，再给出实现方案。");
+    expect(wrapper.text()).not.toContain("[STAGE_COMPLETE]");
+    expect(wrapper.text()).not.toContain("如果你认为当前阶段已经完成，请在输出末尾单独追加");
+    expect(wrapper.text()).not.toContain("Execution context:");
+    expect(wrapper.text()).not.toContain("Opener-X task ID:");
+    expect(wrapper.text()).not.toContain("当前执行上下文");
+    expect(wrapper.text()).not.toContain("请只完成当前阶段的目标。");
   });
 
   it("loads runtime pipeline for the currently selected session branch", async () => {
@@ -2126,6 +2408,8 @@ describe("TaskDetail", () => {
     const setupState = getSetupState(wrapper);
     const label = readSetupValue<string>(setupState, "chainStepProgressLabel");
     expect(label).toBe("步骤 2 / 3 执行中");
+    setupState.taskDetailPrimaryTab = "trace";
+    await nextTick();
     expect(wrapper.text()).toContain("步骤 2 / 3 执行中");
   });
 
@@ -2168,6 +2452,9 @@ describe("TaskDetail", () => {
     );
 
     const wrapper = await mountPage();
+    const setupState = getSetupState(wrapper);
+    setupState.taskDetailPrimaryTab = "trace";
+    await nextTick();
     expect(wrapper.text()).toContain("现状分析完毕，发现3个关键问题。");
   });
 

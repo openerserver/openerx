@@ -202,11 +202,11 @@
                   <strong class="monitor-node__title">{{ summaryForTask(slotProps.data.layout.taskId).title }}</strong>
                   <span class="monitor-node__status-pill">{{ statusLabel(summaryForTask(slotProps.data.layout.taskId).status) }}</span>
                   <span
-                    v-if="activityStateForSummary(summaryForTask(slotProps.data.layout.taskId))"
+                    v-if="activityStateForSummary(slotProps.data.layout.taskId, summaryForTask(slotProps.data.layout.taskId))"
                     class="monitor-node__activity-pill"
-                    :class="activityStateClass(summaryForTask(slotProps.data.layout.taskId))"
+                    :class="activityStateClass(slotProps.data.layout.taskId, summaryForTask(slotProps.data.layout.taskId))"
                   >
-                    {{ activityStateForSummary(summaryForTask(slotProps.data.layout.taskId)) }}
+                    {{ activityStateForSummary(slotProps.data.layout.taskId, summaryForTask(slotProps.data.layout.taskId)) }}
                   </span>
                 </div>
                 <div class="monitor-node__meta">
@@ -215,7 +215,7 @@
                 </div>
               </div>
 
-              <div class="monitor-node__actions">
+              <div class="monitor-node__actions" @mousedown.stop @pointerdown.stop>
                 <router-link :to="`/tasks/${slotProps.data.layout.taskId}`" @click.stop>
                   <a-button size="small" type="text">详情</a-button>
                 </router-link>
@@ -250,9 +250,9 @@
                     <span class="monitor-stream-message__time">{{ message.createdAtLabel }}</span>
                   </div>
                   <div
-                    v-if="monitorMessageDisplayText(slotProps.data.layout.taskId, message)"
+                    v-if="monitorConversationMessageDisplayText(slotProps.data.layout.taskId, message)"
                     class="monitor-stream-message__body"
-                    v-html="renderMarkdown(monitorMessageDisplayText(slotProps.data.layout.taskId, message) || '')"
+                    v-html="renderMonitorMessageHtml(slotProps.data.layout.taskId, message)"
                   ></div>
                   <div
                     v-else-if="shouldShowMonitorStreamingSkeleton(slotProps.data.layout.taskId, message)"
@@ -261,6 +261,19 @@
                     <span class="monitor-stream-message__skeleton-dot"></span>
                     <span class="monitor-stream-message__skeleton-dot"></span>
                     <span class="monitor-stream-message__skeleton-dot"></span>
+                  </div>
+                  <div v-if="message.toolCalls.length" class="monitor-tool-summary-list">
+                    <div class="monitor-tool-summary-title">{{ monitorToolGroupTitle(message.toolCalls) }}</div>
+                    <div
+                      v-for="tool in message.toolCalls.slice(0, 2)"
+                      :key="tool.key"
+                      class="monitor-tool-call-card"
+                    >
+                      <pre class="monitor-tool-call-card__code monitor-tool-call-card__code--command">{{ monitorToolCallCommand(tool) }}</pre>
+                    </div>
+                    <div v-if="message.toolCalls.length > 2" class="monitor-tool-summary-more">
+                      … 还有 {{ message.toolCalls.length - 2 }} 个工具
+                    </div>
                   </div>
                 </article>
               </div>
@@ -373,11 +386,30 @@ interface MonitorMessageItem {
   key: string;
   role: "user" | "assistant";
   text: string;
+  toolCalls: MonitorToolCallView[];
   agent?: string;
   modelLabel?: string;
   createdAt?: string;
   createdAtLabel: string;
   isStreaming: boolean;
+}
+
+interface MonitorToolCallView {
+  key: string;
+  kind: string;
+  label: string;
+  stateLabel: string;
+  stateColor: string;
+  headline?: string;
+  description?: string;
+  goal?: string;
+  command?: string;
+  filePath?: string;
+  readPreview?: string;
+  inputPreview?: string;
+  outputPreview?: string;
+  outputTruncated: boolean;
+  exitCode?: number;
 }
 
 interface StreamingAssistantMeta {
@@ -2616,12 +2648,266 @@ function extractPersistedMessageText(
   return liveText && liveText.length > (persistedText?.length ?? 0) ? liveText : persistedText;
 }
 
+function summarizeUnknownValue(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed || undefined;
+  }
+
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+
+  if (Array.isArray(value)) {
+    const joined = value
+      .map((item) => summarizeUnknownValue(item))
+      .filter((item): item is string => Boolean(item))
+      .join(", ");
+    return joined || undefined;
+  }
+
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    for (const key of [
+      "status",
+      "state",
+      "label",
+      "message",
+      "command",
+      "filePath",
+      "path",
+      "query",
+      "name",
+      "toolName",
+      "tool",
+    ] as const) {
+      const summarized = summarizeUnknownValue(record[key]);
+      if (summarized) {
+        return summarized;
+      }
+    }
+
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return undefined;
+    }
+  }
+
+  return undefined;
+}
+
+function stringifyUnknownValue(value: unknown): string | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function normalizePreviewText(value: unknown, maxLength = 500) {
+  const raw =
+    typeof value === "string"
+      ? value.trim()
+      : value === undefined || value === null
+        ? ""
+        : (() => {
+            try {
+              return JSON.stringify(value, null, 2);
+            } catch {
+              return String(value);
+            }
+          })();
+
+  if (!raw) {
+    return { text: undefined, truncated: false };
+  }
+
+  if (raw.length <= maxLength) {
+    return { text: raw, truncated: false };
+  }
+
+  return {
+    text: `${raw.slice(0, maxLength).trimEnd()}\n...`,
+    truncated: true,
+  };
+}
+
+function getToolState(part: Record<string, unknown>) {
+  return getObjectRecord(part.state) ?? {};
+}
+
+function getToolStatus(part: Record<string, unknown>) {
+  if (typeof part.state === "string") {
+    return part.state;
+  }
+
+  return summarizeUnknownValue(getToolState(part).status);
+}
+
+function normalizeToolInput(part: Record<string, unknown>) {
+  const directInput = getObjectRecord(part.input);
+  if (directInput) {
+    return directInput;
+  }
+
+  return getObjectRecord(getToolState(part).input) ?? {};
+}
+
+function buildToolInputPreview(input: Record<string, unknown>) {
+  const lines: string[] = [];
+  const pushLine = (label: string, value: unknown) => {
+    const summarized = summarizeUnknownValue(value);
+    if (summarized) {
+      lines.push(`${label}: ${summarized}`);
+    }
+  };
+
+  pushLine("command", input.command);
+  pushLine("filePath", input.filePath);
+  pushLine("path", input.path);
+  pushLine("pattern", input.pattern);
+  pushLine("query", input.query);
+  pushLine("url", input.url);
+  pushLine("description", input.description);
+  pushLine("explanation", input.explanation);
+  pushLine("goal", input.goal);
+
+  if (lines.length > 0) {
+    return lines.join("\n");
+  }
+
+  return normalizePreviewText(input).text;
+}
+
+function buildToolHeadline(label: string, input: Record<string, unknown>) {
+  if (label === "bash") {
+    return summarizeUnknownValue(input.command);
+  }
+
+  return (
+    summarizeUnknownValue(input.command) ??
+    summarizeUnknownValue(input.filePath) ??
+    summarizeUnknownValue(input.path) ??
+    summarizeUnknownValue(input.pattern) ??
+    summarizeUnknownValue(input.query) ??
+    summarizeUnknownValue(input.url)
+  );
+}
+
+function stateColorFromStatus(status?: string) {
+  if (status === "completed") return "green";
+  if (status === "running") return "processing";
+  if (status === "error" || status === "failed") return "red";
+  return "default";
+}
+
+function getToolStateLabel(status?: string) {
+  if (status === "completed") return "完成";
+  if (status === "running") return "执行中";
+  if (status === "error" || status === "failed") return "失败";
+  return status || "已触发";
+}
+
+function getToolDisplayLabel(part: Record<string, unknown>) {
+  return summarizeUnknownValue(part.toolName) ?? summarizeUnknownValue(part.tool) ?? "工具调用";
+}
+
+function extractTaggedContent(source: string | undefined, tag: string): string | undefined {
+  if (!source) {
+    return undefined;
+  }
+
+  const match = source.match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, "i"));
+  return match?.[1]?.trim() || undefined;
+}
+
+function buildReadPreview(outputText: string | undefined) {
+  const filePath = extractTaggedContent(outputText, "path");
+  const content = extractTaggedContent(outputText, "content");
+  const entries = extractTaggedContent(outputText, "entries");
+  const preview = normalizePreviewText(content ?? entries, 500).text;
+
+  return {
+    filePath,
+    readPreview: preview,
+  };
+}
+
+function buildMonitorToolCallView(
+  part: Record<string, unknown>,
+  index: number,
+): MonitorToolCallView | null {
+  if (part.type !== "tool") {
+    return null;
+  }
+
+  const state = getToolState(part);
+  const status = getToolStatus(part);
+  const input = normalizeToolInput(part);
+  const outputSource = state.output ?? state.error;
+  const output = normalizePreviewText(outputSource);
+  const fullOutput = stringifyUnknownValue(outputSource);
+  const toolKind = String(part.toolName ?? part.tool ?? "tool");
+  const label = getToolDisplayLabel(part);
+  const readDetails: { filePath?: string; readPreview?: string } =
+    toolKind === "read" ? buildReadPreview(fullOutput) : {};
+
+  return {
+    key: String(part.id ?? part.callID ?? `${label}-${index}`),
+    kind: toolKind,
+    label,
+    stateLabel: getToolStateLabel(status),
+    stateColor: stateColorFromStatus(status),
+    headline: buildToolHeadline(label, input),
+    description:
+      summarizeUnknownValue(input.description) ?? summarizeUnknownValue(input.explanation),
+    goal: summarizeUnknownValue(input.goal),
+    command: toolKind === "bash" ? summarizeUnknownValue(input.command) : undefined,
+    filePath: summarizeUnknownValue(input.filePath) ?? readDetails.filePath,
+    readPreview: readDetails.readPreview,
+    inputPreview: buildToolInputPreview(input),
+    outputPreview: output.text,
+    outputTruncated: output.truncated,
+    exitCode: typeof state.exit === "number" ? state.exit : undefined,
+  };
+}
+
+function monitorToolGroupTitle(toolCalls: MonitorToolCallView[]) {
+  const firstTool = toolCalls[0];
+  if (!firstTool) {
+    return "工具调用";
+  }
+
+  const title = firstTool.headline || firstTool.description || firstTool.label;
+  const compactTitle = title.length > 80 ? `${title.slice(0, 79)}…` : title;
+
+  if (toolCalls.length === 1) {
+    return `工具调用 · ${firstTool.label} · ${compactTitle}`;
+  }
+
+  return `工具调用 (${toolCalls.length}) · ${firstTool.label} · ${compactTitle}`;
+}
+
+function monitorToolCallCommand(tool: MonitorToolCallView) {
+  return tool.command || tool.headline || tool.filePath || tool.inputPreview || tool.label;
+}
+
 function buildPersistedMonitorMessage(
   message: unknown,
   index: number,
   liveState: LiveAssistantSnapshot,
 ): MonitorMessageItem | null {
   const { info, time, parts } = extractPersistedMessageEnvelope(message);
+  const toolCalls = parts
+    .map((part, partIndex) => buildMonitorToolCallView(part, partIndex))
+    .filter((item): item is MonitorToolCallView => Boolean(item));
   const messageId = getNonEmptyString(info.id) ?? `${index}`;
   const role = getNonEmptyString(info.role) ?? "system";
   if (role !== "assistant" && role !== "user") {
@@ -2629,7 +2915,7 @@ function buildPersistedMonitorMessage(
   }
 
   const mergedText = extractPersistedMessageText(role, messageId, parts, liveState);
-  if (!mergedText) {
+  if (!mergedText && toolCalls.length === 0) {
     return null;
   }
 
@@ -2637,7 +2923,8 @@ function buildPersistedMonitorMessage(
   return {
     key: messageId,
     role: role === "user" ? "user" : "assistant",
-    text: mergedText,
+    text: mergedText || "",
+    toolCalls,
     agent: role === "assistant" ? getNonEmptyString(info.agent) : undefined,
     modelLabel: role === "assistant" ? extractModelLabel(info) : undefined,
     createdAt,
@@ -2677,6 +2964,7 @@ function appendLiveOnlyAssistantMessages(
       key: messageId,
       role: "assistant",
       text: text || STREAMING_PLACEHOLDER_TEXT,
+      toolCalls: [],
       agent: meta?.agent,
       modelLabel: meta?.modelLabel,
       createdAt: meta?.createdAt,
@@ -2695,6 +2983,7 @@ function ensurePromptMessage(items: MonitorMessageItem[], taskId: string, taskPr
     key: `task-prompt:${taskId}`,
     role: "user",
     text: taskPrompt.trim(),
+    toolCalls: [],
     createdAtLabel: "刚刚",
     isStreaming: false,
   });
@@ -2910,6 +3199,37 @@ function inferCompletedTaskStatus(
   sessions: SessionInfo[],
   messages: MonitorMessageItem[],
 ) {
+  if (taskStatus === "failed" || taskStatus === "stopped" || taskStatus === "cancelled") {
+    return taskStatus;
+  }
+
+  const hasStreamingAssistantReply = messages.some(
+    (message) => message.role === "assistant" && message.isStreaming,
+  );
+  const hasAnimatedAssistantReveal = messages.some((message) =>
+    shouldAnimateMonitorMessage(task.id, message),
+  );
+  const hasActiveSession = sessions.some((session) => session.isActive);
+  const latestInteractiveMessage = findLatestVisibleInteractiveMonitorMessage(task.id, messages);
+  const isAwaitingAssistantReply = latestInteractiveMessage?.role === "user";
+
+  if (
+    hasStreamingAssistantReply ||
+    hasAnimatedAssistantReveal ||
+    isAwaitingAssistantReply ||
+    pipeline?.status === "running"
+  ) {
+    return "running";
+  }
+
+  if (!latestInteractiveMessage && hasActiveSession) {
+    return "running";
+  }
+
+  if (latestInteractiveMessage?.role === "assistant") {
+    return "completed";
+  }
+
   if (taskStatus !== "running") {
     return taskStatus;
   }
@@ -2918,24 +3238,7 @@ function inferCompletedTaskStatus(
     return "completed";
   }
 
-  const hasAssistantReply = messages.some((message) => message.role === "assistant");
-  const hasStreamingAssistantReply = messages.some(
-    (message) => message.role === "assistant" && message.isStreaming,
-  );
-  const hasActiveSession = sessions.some((session) => session.isActive);
-  const latestVisibleMessage = messages[messages.length - 1];
-  const latestAssistantReplyFinished =
-    latestVisibleMessage?.role === "assistant" && !latestVisibleMessage.isStreaming;
-
-  if (
-    (task.result || latestAssistantReplyFinished) &&
-    !hasStreamingAssistantReply &&
-    (!pipeline || pipeline.status !== "running")
-  ) {
-    return "completed";
-  }
-
-  if (hasAssistantReply && !hasStreamingAssistantReply && !hasActiveSession) {
+  if (task.result) {
     return "completed";
   }
 
@@ -3015,11 +3318,14 @@ function buildStreamStateLabel(taskStatus: string, messages: MonitorMessageItem[
   if (taskStatus === "completed") {
     return "已完成";
   }
+  if (taskStatus === "running" && messages.some((message) => message.role === "user")) {
+    return "运行中";
+  }
   if (messages.some((message) => message.role === "assistant" && message.isStreaming)) {
-    return "生成中";
+    return taskStatus === "running" ? "运行中" : statusLabel(taskStatus);
   }
   if (messages.some((message) => message.role === "assistant")) {
-    return "已完成";
+    return taskStatus === "running" ? "运行中" : statusLabel(taskStatus);
   }
   return messages.some((message) => message.role === "user") ? "等待回复" : "等待回复";
 }
@@ -3180,6 +3486,101 @@ function monitorMessageDisplayText(taskId: string, item: MonitorMessageItem): st
   }
 
   return item.text;
+}
+
+function stripWorkflowExecutionContextPrefix(text: string) {
+  const normalized = text.replace(/\r\n?/g, "\n").trim();
+  if (!normalized) {
+    return normalized;
+  }
+
+  const contextMarkers = [
+    "Execution context:",
+    "当前执行上下文",
+    "请只完成当前阶段的目标。",
+    "完成后请输出本阶段产出摘要。",
+    "如果你认为当前阶段已经完成，请在输出末尾单独追加 [STAGE_COMPLETE]。",
+    "如果你认为当前阶段已经完成，请在输出末尾单独追加",
+  ];
+
+  const hasContextPrefix = contextMarkers.some((marker) => normalized.includes(marker));
+  if (!hasContextPrefix) {
+    return normalized;
+  }
+
+  const cutMarkers = [
+    "如果你认为当前阶段已经完成，请在输出末尾单独追加 [STAGE_COMPLETE]。",
+    "如果你认为当前阶段已经完成，请在输出末尾单独追加 [STAGE_COMPLETE]",
+    "如果你认为当前阶段已经完成，请在输出末尾单独追加",
+    "完成后请输出本阶段产出摘要。",
+    "请只完成当前阶段的目标。",
+  ];
+
+  for (const marker of cutMarkers) {
+    const markerIndex = normalized.lastIndexOf(marker);
+    if (markerIndex < 0) {
+      continue;
+    }
+
+    const stripped = normalized.slice(markerIndex + marker.length).trim();
+    if (stripped) {
+      return stripped;
+    }
+  }
+
+  const lastDoubleBreak = normalized.lastIndexOf("\n\n");
+  if (lastDoubleBreak >= 0) {
+    const stripped = normalized.slice(lastDoubleBreak + 2).trim();
+    if (stripped) {
+      return stripped;
+    }
+  }
+
+  return normalized;
+}
+
+function stripStageCompleteMarker(text: string) {
+  return text
+    .replace(/^\s*\[STAGE_COMPLETE\]\s*$/gmu, "")
+    .replace(/\s*\[STAGE_COMPLETE\]\s*/gu, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function monitorConversationMessageDisplayText(taskId: string, item: MonitorMessageItem) {
+  const text = monitorMessageDisplayText(taskId, item);
+  if (!text) {
+    return text;
+  }
+
+  if (item.role !== "user") {
+    return stripStageCompleteMarker(text);
+  }
+
+  return stripStageCompleteMarker(stripWorkflowExecutionContextPrefix(text));
+}
+
+function findLatestVisibleInteractiveMonitorMessage(
+  taskId: string,
+  messages: MonitorMessageItem[],
+) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const item = messages[index];
+    if (!item || (item.role !== "user" && item.role !== "assistant")) {
+      continue;
+    }
+
+    const visibleText = monitorConversationMessageDisplayText(taskId, item);
+    if (visibleText || item.isStreaming) {
+      return item;
+    }
+  }
+
+  return null;
+}
+
+function renderMonitorMessageHtml(taskId: string, item: MonitorMessageItem) {
+  return renderMarkdown(monitorConversationMessageDisplayText(taskId, item) || "");
 }
 
 function shouldShowMonitorStreamingSkeleton(taskId: string, item: MonitorMessageItem) {
@@ -3579,14 +3980,30 @@ function monitorNodeClass(layout: TaskMonitorNodeLayout, status?: string) {
   };
 }
 
-function activityStateForSummary(summary: MonitorNodeSummary) {
+function isSummaryInRunningVisualState(taskId: string, summary: MonitorNodeSummary) {
+  const latestInteractiveMessage = findLatestVisibleInteractiveMonitorMessage(
+    taskId,
+    summary.messages,
+  );
+
+  return (
+    summary.messages.some((item) => shouldAnimateMonitorMessage(taskId, item)) ||
+    latestInteractiveMessage?.role === "user"
+  );
+}
+
+function activityStateForSummary(taskId: string, summary: MonitorNodeSummary) {
   if (summary.status !== "running") {
     return undefined;
   }
 
+  if (isSummaryInRunningVisualState(taskId, summary)) {
+    return "运行中";
+  }
+
   const age = Date.now() - toTimestamp(summary.latestActivityTs);
   if (age <= 30 * 1000) {
-    return "活跃中";
+    return "运行中";
   }
   if (age >= 2 * 60 * 1000) {
     return "疑似停滞";
@@ -3594,10 +4011,11 @@ function activityStateForSummary(summary: MonitorNodeSummary) {
   return undefined;
 }
 
-function activityStateClass(summary: MonitorNodeSummary) {
+function activityStateClass(taskId: string, summary: MonitorNodeSummary) {
   return {
-    "monitor-node__activity-pill--live": activityStateForSummary(summary) === "活跃中",
-    "monitor-node__activity-pill--stalled": activityStateForSummary(summary) === "疑似停滞",
+    "monitor-node__activity-pill--live": activityStateForSummary(taskId, summary) === "运行中",
+    "monitor-node__activity-pill--stalled":
+      activityStateForSummary(taskId, summary) === "疑似停滞",
   };
 }
 
@@ -4021,6 +4439,10 @@ function freeLayoutPreviewSlotStyle(slot: { x: number; y: number; width: number;
   box-shadow: 0 0 0 1px rgba(0, 214, 201, 0.08) inset, 0 0 26px rgba(0, 214, 201, 0.08);
 }
 
+.monitor-node--running:not(.monitor-node--dragging):not(.monitor-node--swap-target) {
+  animation: monitor-node-running-aura 2.8s ease-in-out infinite;
+}
+
 .monitor-node--running::before {
   inset: 0 10px auto;
   height: 3px;
@@ -4119,6 +4541,25 @@ function freeLayoutPreviewSlotStyle(slot: { x: number; y: number; width: number;
   }
 }
 
+@keyframes monitor-node-running-aura {
+  0%,
+  100% {
+    border-color: rgba(0, 214, 201, 0.42);
+    box-shadow:
+      0 0 0 1px rgba(0, 214, 201, 0.08) inset,
+      0 0 18px rgba(0, 214, 201, 0.08),
+      0 0 0 rgba(0, 214, 201, 0);
+  }
+
+  50% {
+    border-color: rgba(113, 246, 238, 0.72);
+    box-shadow:
+      0 0 0 1px rgba(0, 214, 201, 0.12) inset,
+      0 0 30px rgba(0, 214, 201, 0.14),
+      0 0 54px rgba(0, 214, 201, 0.16);
+  }
+}
+
 @keyframes monitor-node-running-breathe {
   0%,
   100% {
@@ -4193,6 +4634,10 @@ function freeLayoutPreviewSlotStyle(slot: { x: number; y: number; width: number;
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .monitor-node--running {
+    animation: none;
+  }
+
   .monitor-node--running::before,
   .monitor-node--running::after,
   .monitor-node__activity-pill--live {
@@ -4282,7 +4727,8 @@ function freeLayoutPreviewSlotStyle(slot: { x: number; y: number; width: number;
 
 .monitor-node__stream {
   max-height: 280px;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   padding: 10px;
   border-radius: 14px;
   background: rgba(6, 15, 28, 0.7);
@@ -4331,6 +4777,20 @@ function freeLayoutPreviewSlotStyle(slot: { x: number; y: number; width: number;
   font-size: 12px;
   line-height: 1.5;
   color: #eef6ff;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.monitor-stream-message__body :deep(pre),
+.monitor-stream-message__body :deep(code),
+.monitor-stream-message__body :deep(table) {
+  max-width: 100%;
+}
+
+.monitor-stream-message__body :deep(pre) {
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: hidden;
 }
 
 .monitor-stream-message__skeleton {
@@ -4354,6 +4814,45 @@ function freeLayoutPreviewSlotStyle(slot: { x: number; y: number; width: number;
 
 .monitor-stream-message__skeleton-dot:nth-child(3) {
   animation-delay: 0.36s;
+}
+
+.monitor-tool-summary-list {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.monitor-tool-summary-title,
+.monitor-tool-summary-more {
+  font-size: 12px;
+  color: rgba(216, 231, 255, 0.64);
+}
+
+.monitor-tool-call-card {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(20, 33, 57, 0.78);
+  border: 1px solid rgba(112, 141, 198, 0.16);
+}
+
+.monitor-tool-call-card__code {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(8, 16, 28, 0.82);
+  border: 1px solid rgba(112, 141, 198, 0.14);
+  font-size: 12px;
+  line-height: 1.5;
+  color: #eef6ff;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace;
+}
+
+.monitor-tool-call-card__code--command {
+  background: rgba(28, 35, 48, 0.9);
 }
 
 @keyframes monitor-stream-pulse {

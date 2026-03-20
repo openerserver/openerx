@@ -3,7 +3,7 @@
     <a-flex justify="space-between" align="center" style="margin-bottom: 8px">
       <a-typography-text strong style="font-size: 13px">执行配置</a-typography-text>
       <a-space size="small">
-        <a-tag>{{ modeLabel }}</a-tag>
+        <a-tag style="cursor:pointer" @click="$emit('choose-mode')">{{ modeLabel }}</a-tag>
         <a-tooltip title="阶段自动推进：开启后，当前阶段完成时自动启动下一阶段初始任务">
           <a-switch
             :checked="autoAdvance"
@@ -16,25 +16,7 @@
       </a-space>
     </a-flex>
 
-    <a-space v-if="!isExecuting" size="small" wrap>
-      <a-button
-        type="primary"
-        size="small"
-        data-testid="quick-execute-btn"
-        :loading="executing"
-        @click="$emit('execute')"
-      >
-        开始执行
-      </a-button>
-      <a-button
-        size="small"
-        data-testid="choose-mode-btn"
-        @click="$emit('choose-mode')"
-      >
-        选择模式
-      </a-button>
-    </a-space>
-    <a-typography-text v-else type="secondary" style="font-size: 12px">
+    <a-typography-text v-if="isExecuting" type="secondary" style="font-size: 12px">
       <a-tag color="processing">执行中</a-tag>
       {{ executionHint }}
     </a-typography-text>
@@ -53,7 +35,6 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  (e: "execute"): void;
   (e: "choose-mode"): void;
   (e: "update:auto-advance", value: boolean): void;
 }>();

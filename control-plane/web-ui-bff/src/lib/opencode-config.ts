@@ -152,6 +152,26 @@ export function resolveModelRoute(
   return { providerId: fallbackProviderId, modelId: value };
 }
 
+export function formatModelRoute(resolvedModel: {
+  providerId: string;
+  modelId: string;
+}): string {
+  const providerId = resolvedModel.providerId.trim();
+  const modelId = resolvedModel.modelId.trim();
+
+  if (!providerId) {
+    return modelId;
+  }
+  if (!modelId) {
+    return providerId;
+  }
+  if (modelId.startsWith(`${providerId}/`) || modelId.startsWith(`${providerId}:`)) {
+    return modelId;
+  }
+
+  return `${providerId}:${modelId}`;
+}
+
 /**
  * Validate that a model's provider is configured and return a descriptive error if not.
  */

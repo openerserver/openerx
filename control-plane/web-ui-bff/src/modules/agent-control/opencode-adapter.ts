@@ -177,6 +177,23 @@ function buildExecutionContext(options?: PromptOptions): string {
   return lines.length > 0 ? `${lines.join("\n")}\n\n` : "";
 }
 
+function normalizeRuntimeModelId(providerId: string, modelId: string): string {
+  const trimmedProviderId = providerId.trim();
+  const trimmedModelId = modelId.trim();
+
+  if (!trimmedProviderId || !trimmedModelId) {
+    return trimmedModelId;
+  }
+  if (trimmedModelId.startsWith(`${trimmedProviderId}/`)) {
+    return trimmedModelId.slice(trimmedProviderId.length + 1);
+  }
+  if (trimmedModelId.startsWith(`${trimmedProviderId}:`)) {
+    return trimmedModelId.slice(trimmedProviderId.length + 1);
+  }
+
+  return trimmedModelId;
+}
+
 function buildPromptBody(text: string, options?: PromptOptions): Record<string, unknown> {
   const executionContext = buildExecutionContext(options);
   const agent = resolvePromptAgent(options?.agent);
@@ -194,9 +211,12 @@ function buildPromptBody(text: string, options?: PromptOptions): Record<string, 
 }
 
 function resolvePromptModel(options?: PromptOptions): { providerId: string; modelId: string } {
+  const providerId = options?.model?.providerId || OPENCODE_PROVIDER_ID;
+  const modelId = options?.model?.modelId || OPENCODE_MODEL_ID;
+
   return {
-    providerId: options?.model?.providerId || OPENCODE_PROVIDER_ID,
-    modelId: options?.model?.modelId || OPENCODE_MODEL_ID,
+    providerId,
+    modelId: normalizeRuntimeModelId(providerId, modelId),
   };
 }
 
@@ -221,6 +241,9 @@ type OpcallOptions = {
   timeoutMs?: number;
   circuitKey?: string;
 };
+
+const PROMPT_PERSIST_SETTLE_MS = 1_500;
+const PROMPT_PERSIST_POLL_MS = 150;
 
 async function opcall(
   method: string,
@@ -266,6 +289,66 @@ async function opcall(
       clearTimeout(timer);
     }
   }
+}
+
+async function readSessionMessageCount(sessionId: string): Promise<number | undefined> {
+  const result = await getSessionMessages(sessionId);
+  if (!result.ok || !Array.isArray(result.data)) {
+    return undefined;
+  }
+
+  return result.data.length;
+}
+
+async function waitForSessionMessageCount(
+  sessionId: string,
+  expectedMinCount: number,
+  timeoutMs = PROMPT_PERSIST_SETTLE_MS,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    const count = await readSessionMessageCount(sessionId);
+    if (count !== undefined && count >= expectedMinCount) {
+      return true;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, PROMPT_PERSIST_POLL_MS));
+  }
+
+  return false;
+}
+
+async function sendPromptWithPersistenceCheck(
+  sessionId: string,
+  promptBody: Record<string, unknown>,
+  baselineMessageCount = 0,
+): Promise<OpencodeResponse> {
+  const initialResult = await opcall("POST", `/session/${sessionId}/prompt_async`, promptBody);
+  if (!initialResult.ok) {
+    return initialResult;
+  }
+
+  const expectedMinCount = Math.max(0, baselineMessageCount) + 1;
+  const initialPersisted = await waitForSessionMessageCount(sessionId, expectedMinCount);
+  if (initialPersisted) {
+    return initialResult;
+  }
+
+  const retryResult = await opcall("POST", `/session/${sessionId}/prompt_async`, promptBody);
+  if (!retryResult.ok) {
+    return retryResult;
+  }
+
+  const retryPersisted = await waitForSessionMessageCount(sessionId, expectedMinCount);
+  if (retryPersisted) {
+    return retryResult;
+  }
+
+  return {
+    ok: false,
+    error: "OpenCode accepted prompt_async but did not persist the prompt",
+  };
 }
 
 // ── Agent Run Registry ─────────────────────────────────────────────
@@ -482,17 +565,14 @@ export async function createSession(
   );
 
   // 3. Send initial prompt to start execution
-  const messageResult = await opcall(
-    "POST",
-    `/session/${sessionId}/prompt_async`,
-    buildPromptBody(prompt, {
-      agent: options?.agent || DEFAULT_EXECUTION_AGENT,
-      model: options?.model,
-      taskId,
-      projectId,
-      repoContext: options?.repoContext,
-    }),
-  );
+  const promptBody = buildPromptBody(prompt, {
+    agent: options?.agent || DEFAULT_EXECUTION_AGENT,
+    model: options?.model,
+    taskId,
+    projectId,
+    repoContext: options?.repoContext,
+  });
+  const messageResult = await sendPromptWithPersistenceCheck(sessionId, promptBody, 0);
 
   if (!messageResult.ok) {
     // Session created but message failed — still return IDs so caller can retry
@@ -971,9 +1051,10 @@ export async function continueSession(
   prompt: string,
   options?: { model?: { providerId: string; modelId: string } },
 ): Promise<OpencodeResponse> {
-  return await opcall(
-    "POST",
-    `/session/${sessionId}/prompt_async`,
+  const baselineMessageCount = (await readSessionMessageCount(sessionId)) ?? 0;
+  return await sendPromptWithPersistenceCheck(
+    sessionId,
     buildPromptBody(prompt, { model: options?.model }),
+    baselineMessageCount,
   );
 }

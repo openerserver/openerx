@@ -23,6 +23,7 @@ import { reconcileRunningTasksOnStartup, startPeriodicReconcile } from "./module
 import { taskRoutes } from "./modules/tasks/routes";
 import { userRoutes } from "./modules/users/routes";
 import { workbenchRoutes } from "./modules/workbench/routes";
+import { workspaceFileRoutes } from "./modules/workspace-files/routes";
 import { workflowTemplateRoutes } from "./modules/workflow-templates/routes";
 
 type ServerUpgrade = { upgrade: (req: Request, opts?: unknown) => boolean };
@@ -64,6 +65,7 @@ export function createBffApp(serviceName = "opener-x-bff") {
   app.route("/api/chat-settings", chatSettingsRoutes);
   app.route("/api/workflow-templates", workflowTemplateRoutes);
   app.route("/api/workbench", workbenchRoutes);
+  app.route("/api/workspace-files", workspaceFileRoutes);
 
   return app;
 }

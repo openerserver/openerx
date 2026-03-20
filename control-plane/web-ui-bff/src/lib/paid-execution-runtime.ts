@@ -1,5 +1,6 @@
 import { recordAgentAudit, recordModelUsage } from "../modules/agent-control/run-persistence";
 import { cpFetch } from "./control-plane-client";
+import { resolveModelRoute } from "./opencode-config";
 import { mergeTaskStrategy, parseTaskStrategy } from "./orchestration-strategy";
 import type { PaidExecutionGuardState } from "./paid-execution-guard";
 
@@ -52,18 +53,7 @@ export interface PaidExecutionRuntimeOutcome {
 }
 
 function parseModelRoute(modelRoute: string) {
-  const separatorIndex = modelRoute.indexOf(":");
-  if (separatorIndex > 0) {
-    return {
-      providerId: modelRoute.slice(0, separatorIndex),
-      modelId: modelRoute.slice(separatorIndex + 1),
-    };
-  }
-
-  return {
-    providerId: "github-copilot",
-    modelId: modelRoute,
-  };
+  return resolveModelRoute(modelRoute);
 }
 
 function buildGuardDetail(

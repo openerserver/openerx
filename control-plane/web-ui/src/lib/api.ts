@@ -143,6 +143,30 @@ export async function getMyProfile() {
   return request<CurrentUserProfile>("/auth/me");
 }
 
+export async function getWorkspaceFileContent(path: string) {
+  const query = new URLSearchParams({ path });
+  return request<{
+    path: string;
+    content: string;
+    size: number;
+    truncated: boolean;
+    previewBytes: number;
+    canExpand: boolean;
+  }>(`/workspace-files/content?${query.toString()}`);
+}
+
+export async function getWorkspaceFileContentFull(path: string) {
+  const query = new URLSearchParams({ path, full: "true" });
+  return request<{
+    path: string;
+    content: string;
+    size: number;
+    truncated: boolean;
+    previewBytes: number;
+    canExpand: boolean;
+  }>(`/workspace-files/content?${query.toString()}`);
+}
+
 export async function updateMyProfile(data: {
   displayName?: string;
   email?: string | null;
@@ -1242,7 +1266,13 @@ export async function getTaskEscalations(taskId: string) {
 
 export async function updateTask(
   taskId: string,
-  data: { selectedModel?: string | null; autoAdvanceStages?: boolean },
+  data: {
+    selectedModel?: string | null;
+    autoAdvanceStages?: boolean;
+    strategy?: string;
+    executionMode?: ExecutionMode;
+    executionPlan?: string;
+  },
 ) {
   return request<Partial<Task>>(`/tasks/${taskId}`, {
     method: "PATCH",
@@ -3393,6 +3423,136 @@ export async function getProjectOrchestrationView(projectId: string, candidateTe
 export async function getProjectBossOperationsView(projectId: string) {
   return request<ProjectBossOperationsView>(
     `/projects/${encodeURIComponent(projectId)}/boss-operations-view`,
+  );
+}
+
+export interface ProjectTaskGraphTaskView {
+  id: string;
+  projectId: string;
+  userId: string;
+  title: string;
+  prompt: string;
+  status: string;
+  category?: string | null;
+  strategy?: string | null;
+  repoName?: string | null;
+  workingBranch?: string | null;
+  selectedModel?: string | null;
+  changesSummary?: {
+    filesAdded?: number;
+    filesModified?: number;
+    filesDeleted?: number;
+    totalInsertions?: number;
+    totalDeletions?: number;
+  } | null;
+  createdAt?: string | null;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  currentStageLabel?: string | null;
+  latestActivityAt?: string | null;
+}
+
+export interface ProjectTaskGraphEdgeView {
+  id: string;
+  sourceTaskId: string;
+  targetTaskId: string;
+  type: "depends-on" | "blocks" | "spawned-from";
+  source: "task-graph" | "task-fork" | "future-source";
+}
+
+export interface ProjectTaskGraphView {
+  project: {
+    id: string;
+    name: string;
+    slug: string;
+    description: string | null;
+  };
+  tasks: ProjectTaskGraphTaskView[];
+  edges: ProjectTaskGraphEdgeView[];
+  capabilities: {
+    supportsDependsOn: boolean;
+    supportsBlocks: boolean;
+    supportsSpawnedFrom: boolean;
+  };
+  refreshedAt: string;
+}
+
+export async function getProjectTaskGraphView(projectId: string) {
+  return request<ProjectTaskGraphView>(
+    `/projects/${encodeURIComponent(projectId)}/task-graph-view`,
+  );
+}
+
+// ── Task Execution Trace ──────────────────────────────────────────
+
+export interface ExecutionTraceSegment {
+  type:
+    | "user-input"
+    | "workflow-context"
+    | "hook-injection"
+    | "hook-result"
+    | "hook-rewrite"
+    | "final-prompt"
+    | "model-response";
+  label: string;
+  content: string;
+  hookId?: string;
+  hookTrigger?: string;
+  hookAgent?: string;
+  hookDecisionAction?: string;
+  timestamp?: string;
+}
+
+export interface ExecutionTraceMessage {
+  id: string;
+  role: string;
+  text: string;
+  createdAt?: string;
+  raw: unknown;
+}
+
+export interface TaskExecutionTrace {
+  taskId: string;
+  sessionId: string | null;
+  workflowContext?: string | null;
+  finalPrompt?: string | null;
+  latestResponse?: string | null;
+  truncated?: boolean;
+  messageLimit?: number;
+  segments: ExecutionTraceSegment[];
+  messages?: ExecutionTraceMessage[];
+  hookExecutions: Array<{
+    hookId: string;
+    trigger: string;
+    status: string;
+    agent: string;
+    model?: string;
+    prompt: string;
+    result?: string;
+    decision?: {
+      action: string;
+      reason?: string;
+      rewrittenPrompt?: string;
+      targetModel?: string;
+    };
+    completedAt: string;
+  }>;
+}
+
+export async function getTaskExecutionTrace(projectId: string, taskId: string) {
+  return request<TaskExecutionTrace>(
+    `/projects/${encodeURIComponent(projectId)}/task-execution-trace/${encodeURIComponent(taskId)}`,
+  );
+}
+
+export async function getTaskExecutionTraceView(taskId: string, sessionId?: string) {
+  const params = new URLSearchParams();
+  if (sessionId) {
+    params.set("sessionId", sessionId);
+  }
+  const query = params.toString();
+  return request<TaskExecutionTrace>(
+    `/tasks/${encodeURIComponent(taskId)}/execution-trace${query ? `?${query}` : ""}`,
   );
 }
 

@@ -64,6 +64,10 @@ const resolveModelRouteMock = mock((raw: string) => {
 
   return { providerId: "github-copilot", modelId: value };
 });
+const formatModelRouteMock = mock(
+  (resolvedModel: { providerId: string; modelId: string }) =>
+    `${resolvedModel.providerId}:${resolvedModel.modelId}`,
+);
 const validateModelProviderMock = mock(() => ({ valid: true as const }));
 const diagnoseModelReadinessMock = mock(
   async () => undefined as undefined | Record<string, unknown>,
@@ -141,6 +145,7 @@ mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () =>
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/lib/opencode-config", () => ({
+  formatModelRoute: formatModelRouteMock,
   readDefaultExecutionModel: readDefaultExecutionModelMock,
   resolveModelRoute: resolveModelRouteMock,
   validateModelProvider: validateModelProviderMock,
@@ -185,6 +190,7 @@ beforeEach(() => {
   registerParallelTaskMock.mockReset();
   authHeaderMock.mockReset();
   readDefaultExecutionModelMock.mockReset();
+  formatModelRouteMock.mockReset();
   resolveModelRouteMock.mockClear();
   validateModelProviderMock.mockReset();
   diagnoseModelReadinessMock.mockReset();
@@ -231,6 +237,10 @@ beforeEach(() => {
   continueSessionMock.mockResolvedValue({ ok: true });
   authHeaderMock.mockReturnValue("Bearer test");
   readDefaultExecutionModelMock.mockReturnValue(undefined);
+  formatModelRouteMock.mockImplementation(
+    (resolvedModel: { providerId: string; modelId: string }) =>
+      `${resolvedModel.providerId}:${resolvedModel.modelId}`,
+  );
   validateModelProviderMock.mockReturnValue({ valid: true });
   diagnoseModelReadinessMock.mockResolvedValue(undefined);
   executeLifecycleHooksMock.mockResolvedValue({
@@ -289,6 +299,7 @@ afterEach(() => {
   resumeAgentMock.mockReset();
   registerParallelTaskMock.mockReset();
   authHeaderMock.mockReset();
+  formatModelRouteMock.mockReset();
   diagnoseModelReadinessMock.mockReset();
   executeLifecycleHooksMock.mockReset();
   cpFetchMock.mockReset();
@@ -714,6 +725,87 @@ describe("executeLifecycleHooks behavior", () => {
     });
     expect(body.guardReason).toContain("ALLOW_PAID_MODEL_EXECUTION=1");
     expect(continueSessionMock).not.toHaveBeenCalled();
+  });
+
+  test("continue route falls back to strategy candidates when stored parallel executionPlan is incomplete", async () => {
+    currentStrategy = buildStrategy({ hooks: [] });
+    currentTask = {
+      ...currentTask,
+      title: "Parallel continuation task",
+      prompt: "Compare responses and continue the task",
+      sessionId: undefined,
+      executionMode: "parallel",
+      strategy: JSON.stringify({
+        executionMode: "parallel",
+        parallelCandidates: [
+          { model: "github-copilot:gpt-5-mini", label: "候选 A" },
+          { model: "gemini-3-flash-preview", label: "候选 B" },
+        ],
+      }),
+      executionPlan: JSON.stringify({
+        templateId: "tpl-ops-parallel",
+        mode: "parallel",
+        steps: [{ id: "exec-parallel", type: "execution", status: "completed" }],
+        candidates: [
+          {
+            label: "候选 1",
+            agent: "oracle-enterprise",
+            role: "executor",
+            status: "completed",
+            sessionId: "session-existing",
+          },
+        ],
+      }),
+    };
+
+    createSessionMock
+      .mockResolvedValueOnce({ ok: true, sessionId: "session-a", agentRunId: "run-a" })
+      .mockResolvedValueOnce({ ok: true, sessionId: "session-b", agentRunId: "run-b" });
+
+    const { taskRoutes } = await loadTaskRoutesModule();
+    const response = await taskRoutes.request("http://localhost/task-1/continue", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer test",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ prompt: "Please continue" }),
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({
+      ok: true,
+      executionMode: "parallel",
+      candidates: [
+        { sessionId: "session-a", status: "running" },
+        { sessionId: "session-b", status: "running" },
+      ],
+    });
+    expect(createSessionMock).toHaveBeenCalledTimes(2);
+    expect(continueSessionMock).not.toHaveBeenCalled();
+
+    const patchCalls = getPatchCalls();
+    const runningPatch = patchCalls.find(
+      (call) =>
+        (call[0] as string) === "/api/tasks/task-1" &&
+        (call[1] as { body?: { status?: string } })?.body?.status === "running",
+    );
+    expect(runningPatch).toBeDefined();
+
+    const patchedBody = (runningPatch?.[1] as {
+      body?: { executionPlan?: string; strategy?: string };
+    })?.body;
+    const patchedPlan = JSON.parse(patchedBody?.executionPlan || "null") as {
+      candidates?: Array<{ sessionId?: string }>;
+    } | null;
+    const patchedStrategy = JSON.parse(patchedBody?.strategy || "{}") as {
+      parallelCandidates?: Array<{ model: string }>;
+    };
+
+    expect(patchedPlan?.candidates).toHaveLength(2);
+    expect(patchedStrategy.parallelCandidates).toHaveLength(2);
+    expect(registerParallelTaskMock).toHaveBeenCalledTimes(1);
   });
 
   test("execute route stops before runtime start when pre-execution hook trips the paid execution breaker", async () => {

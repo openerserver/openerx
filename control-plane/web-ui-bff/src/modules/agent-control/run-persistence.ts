@@ -1,4 +1,5 @@
 import { cpFetch, createInternalAuthorization } from "../../lib/control-plane-client";
+import { formatModelRoute } from "../../lib/opencode-config";
 import { estimatePaidExecutionUsage } from "../../lib/paid-execution-guard";
 import { syncRuntimeUsageLedger } from "../../lib/runtime-usage-ledger";
 
@@ -13,7 +14,7 @@ type AgentRunStatus =
 type RiskLevel = "low" | "medium" | "high" | "critical";
 
 function toModelUsed(model?: { providerId: string; modelId: string }) {
-  return model ? `${model.providerId}:${model.modelId}` : undefined;
+  return model ? formatModelRoute(model) : undefined;
 }
 
 interface CreateAgentRunRecordInput {

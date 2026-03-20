@@ -2,6 +2,7 @@ import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
 import { z } from "zod";
 import { authHeader, cpFetch, createInternalAuthorization } from "../../lib/control-plane-client";
+import { formatModelRoute } from "../../lib/opencode-config";
 import { mergeTaskStrategy, readOrchestrationStrategy } from "../../lib/orchestration-strategy";
 import { recordPaidExecutionRuntimeUsage } from "../../lib/paid-execution-runtime";
 import { executeLifecycleHooks, mergeStageAndStrategyHooks, parseStageHooks } from "../hooks/lifecycle-hooks";
@@ -443,9 +444,7 @@ async function buildRuntimeOnlySummary(
     agentType: "Agent",
     status: runtimeRun.status,
     sessionId: runtimeRun.subSessionId,
-    modelUsed: runtimeRun.model
-      ? `${runtimeRun.model.providerId}:${runtimeRun.model.modelId}`
-      : null,
+    modelUsed: runtimeRun.model ? formatModelRoute(runtimeRun.model) : null,
     startedAt: runtimeTimestampToIso(runtimeRun.startedAt),
     finishedAt: runtimeTimestampToIso(runtimeRun.finishedAt),
     lastActivityAt:

@@ -33,6 +33,11 @@ const routes: RouteRecordRaw[] = [
         component: () => import("../pages/MultiTaskMonitor.vue"),
       },
       {
+        path: "tasks/:taskId/v2",
+        name: "TaskDetailV2",
+        component: () => import("../pages/TaskDetailV2.vue"),
+      },
+      {
         path: "tasks/:taskId",
         name: "TaskDetail",
         component: () => import("../pages/TaskDetail.vue"),
@@ -85,6 +90,11 @@ const routes: RouteRecordRaw[] = [
         path: "projects/:projectId/orchestration",
         name: "ProjectOrchestration",
         component: () => import("../pages/ProjectOrchestration.vue"),
+      },
+      {
+        path: "projects/:projectId/task-graph",
+        name: "ProjectTaskGraph",
+        component: () => import("../pages/ProjectTaskGraph.vue"),
       },
       {
         path: "projects/:projectId/operating-mode",

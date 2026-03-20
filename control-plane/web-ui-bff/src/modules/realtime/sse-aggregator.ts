@@ -1,5 +1,5 @@
 import { cpFetch, createInternalAuthorization } from "../../lib/control-plane-client";
-import { resolveModelRoute } from "../../lib/opencode-config";
+import { formatModelRoute, resolveModelRoute } from "../../lib/opencode-config";
 import {
   type ExecutionCandidate,
   type ExecutionPlan,
@@ -2250,9 +2250,7 @@ class SSEAggregator {
       return {
         status: "failed",
         sessionId: result.sessionId,
-        model: result.model
-          ? `${result.model.providerId}:${result.model.modelId}`
-          : judgeConfig.model,
+        model: result.model ? formatModelRoute(result.model) : judgeConfig.model,
         tokenUsed: result.tokenUsed,
         reasoning: result.error || "Judge evaluation failed",
         completedAt: new Date().toISOString(),
@@ -2293,9 +2291,7 @@ class SSEAggregator {
           sessionId: result.sessionId,
           winnerIndex,
           scores: parsed.scores,
-          model: result.model
-            ? `${result.model.providerId}:${result.model.modelId}`
-            : judgeConfig.model,
+          model: result.model ? formatModelRoute(result.model) : judgeConfig.model,
           tokenUsed: result.tokenUsed,
           reasoning: parsed.reasoning || result.text,
           completedAt: new Date().toISOString(),
@@ -2309,9 +2305,7 @@ class SSEAggregator {
       status: "completed",
       sessionId: result.sessionId,
       winnerIndex: 0,
-      model: result.model
-        ? `${result.model.providerId}:${result.model.modelId}`
-        : judgeConfig.model,
+      model: result.model ? formatModelRoute(result.model) : judgeConfig.model,
       tokenUsed: result.tokenUsed,
       reasoning: result.text,
       completedAt: new Date().toISOString(),

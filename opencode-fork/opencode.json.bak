@@ -47,7 +47,6 @@
   },
   "plugin": [
     "./.opencode/plugins/orchestrator-plugin.ts",
-    "./.opencode/plugins/task-graph-plugin.ts",
     "./.opencode/plugins/hashline-edit-plugin.ts",
     "./.opencode/plugins/context-injection-plugin.ts",
     "./.opencode/plugins/tmux-plugin.ts",
@@ -57,38 +56,22 @@
   "mcp": {
     "exa": {
       "type": "local",
-      "command": [
-        "npx",
-        "-y",
-        "@anthropic-ai/exa-mcp-server"
-      ],
+      "command": ["npx", "-y", "@anthropic-ai/exa-mcp-server"],
       "environment": {
         "EXA_API_KEY": "${EXA_API_KEY}"
       }
     },
     "context7": {
       "type": "local",
-      "command": [
-        "npx",
-        "-y",
-        "@anthropic-ai/context7-mcp-server"
-      ]
+      "command": ["npx", "-y", "@anthropic-ai/context7-mcp-server"]
     },
     "grep-app": {
       "type": "local",
-      "command": [
-        "npx",
-        "-y",
-        "@anthropic-ai/grep-app-mcp-server"
-      ]
+      "command": ["npx", "-y", "@anthropic-ai/grep-app-mcp-server"]
     },
     "demo-memory": {
       "type": "local",
-      "command": [
-        "npx",
-        "-y",
-        "@modelcontextprotocol/server-memory"
-      ],
+      "command": ["npx", "-y", "@modelcontextprotocol/server-memory"],
       "description": "Demo memory MCP for validation"
     }
   },
@@ -116,16 +99,6 @@
       }
     },
     "list": [
-      {
-        "id": "qwen/qwen3.5-35b-a3b",
-        "name": "Qwen 3.5 35B A3B",
-        "provider": "qwen-local"
-      },
-      {
-        "id": "zai-org/glm-4.7-flash",
-        "name": "GLM 4.7 Flash",
-        "provider": "qwen-local"
-      },
       {
         "id": "gpt-5.4",
         "name": "GPT-5.4",

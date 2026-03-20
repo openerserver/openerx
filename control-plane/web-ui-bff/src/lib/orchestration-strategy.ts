@@ -200,6 +200,8 @@ export interface PersistedTaskStrategy {
   selectedAgent?: string;
   effectiveModel?: string;
   executionMode?: ExecutionMode;
+  parallelCandidates?: Array<{ model: string; label?: string }>;
+  sequentialSteps?: ChainStepInput[];
   hookExecutions?: HookExecutionRecord[];
   collaborationMode?: "solo" | "team" | "hybrid";
   autopilotLevel?: "L0" | "L1" | "L2";
