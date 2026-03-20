@@ -725,6 +725,8 @@ class SSEAggregator {
     const event = payload
       ? this.transformEvent(String(payload.type || type), {
           ...parsed,
+          ...(typeof payload.sessionId === "string" ? { sessionId: payload.sessionId } : {}),
+          ...(typeof payload.sessionID === "string" ? { sessionID: payload.sessionID } : {}),
           ...(typeof payload.properties === "object" && payload.properties
             ? payload.properties
             : {}),
@@ -737,6 +739,9 @@ class SSEAggregator {
       if (event.type === "session.error") {
         void this.maybeEmitAuthError(event);
         void this.maybeFinalizeFailure(event);
+      }
+      if (event.type === "tool.execute.before") {
+        void this.maybeFailParallelQuestionTool(event);
       }
       void this.maybeFinalizeRun(event);
     }
@@ -1008,6 +1013,8 @@ class SSEAggregator {
         ? this.parallelTaskSessions.get(candidateInfo.taskId)
         : undefined;
       if (candidateInfo) {
+        const finishedAt = new Date().toISOString();
+
         // Record this candidate's result
         const taskResults = this.parallelCandidateResults.get(candidateInfo.taskId);
         if (taskResults) {
@@ -1027,7 +1034,7 @@ class SSEAggregator {
               model: run.model,
               tokenUsed,
               result: resultText,
-              finishedAt: new Date().toISOString(),
+              finishedAt,
             }),
             recordAgentAudit({
               projectId: event.projectId,
@@ -1042,6 +1049,14 @@ class SSEAggregator {
                 result: resultText,
               },
               riskLevel: "low",
+            }),
+            this.updateParallelCandidatePlanState({
+              taskId: event.taskId,
+              authorization,
+              candidateIndex: candidateInfo.candidateIndex,
+              status: "completed",
+              result: resultText,
+              finishedAt,
             }),
           ]);
 
@@ -1382,6 +1397,17 @@ class SSEAggregator {
 
     // Check if this is a parallel candidate failure
     if (candidateInfo) {
+      const finishedAt = new Date().toISOString();
+
+      await this.updateParallelCandidatePlanState({
+        taskId: event.taskId,
+        authorization: failureAuthorization,
+        candidateIndex: candidateInfo.candidateIndex,
+        status: "failed",
+        result: `[FAILED] ${errorMessage}`,
+        finishedAt,
+      });
+
       this.emit({
         id: crypto.randomUUID(),
         type: "agent.completed",
@@ -1507,6 +1533,173 @@ class SSEAggregator {
     }
   }
 
+  private async maybeFailParallelQuestionTool(event: RealtimeEvent): Promise<void> {
+    if (event.type !== "tool.execute.before" || !event.sessionId || !event.taskId) {
+      return;
+    }
+
+    const candidateInfo = this.sessionToCandidateMap.get(event.sessionId);
+    if (!candidateInfo) {
+      return;
+    }
+
+    const toolName = this.readToolName(event.data);
+    if (toolName !== "question") {
+      return;
+    }
+
+    const run = findAgentRunBySessionId(event.sessionId);
+    if (!run?.agentRunId || run.status !== "running") {
+      return;
+    }
+
+    if (
+      this.finalizedAgentRuns.has(run.agentRunId) ||
+      this.finalizingAgentRuns.has(run.agentRunId)
+    ) {
+      return;
+    }
+
+    const errorMessage =
+      "Parallel candidate requested interactive clarification via question tool, which is not supported in unattended parallel execution.";
+    const resultText = `[FAILED] ${errorMessage}`;
+    const finishedAt = new Date().toISOString();
+    const authorization = await createInternalAuthorization();
+    const assistantResult = await this.getLatestAssistantResult(event.sessionId, 1000);
+    const tokenUsed = assistantResult.tokenUsed;
+
+    try {
+      const terminateResult = await terminateAgent(run.agentRunId);
+      if (!terminateResult.ok) {
+        console.warn(
+          `Failed to abort parallel question candidate ${run.agentRunId}: ${terminateResult.error}`,
+        );
+      }
+
+      updateAgentRunStatus(run.agentRunId, "failed");
+
+      await Promise.all([
+        patchAgentRunRecord({
+          taskId: event.taskId,
+          agentRunId: run.agentRunId,
+          status: "failed",
+          model: run.model,
+          tokenUsed,
+          error: errorMessage,
+          finishedAt,
+        }),
+        recordAgentAudit({
+          projectId: event.projectId,
+          taskId: event.taskId,
+          sessionId: event.sessionId,
+          agentRunId: run.agentRunId,
+          eventType: "agent",
+          action: "failed",
+          detail: {
+            error: errorMessage,
+            sourceEvent: event.type,
+            candidateIndex: candidateInfo.candidateIndex,
+            executionMode: "parallel",
+            tool: toolName,
+            failureKind: "interactive-question-blocked",
+          },
+          riskLevel: "medium",
+        }),
+        this.updateParallelCandidatePlanState({
+          taskId: event.taskId,
+          authorization,
+          candidateIndex: candidateInfo.candidateIndex,
+          status: "failed",
+          result: resultText,
+          finishedAt,
+        }),
+      ]);
+
+      const model = run.model || parseModelString("github-copilot:claude-sonnet-4");
+      const guardOutcome = await this.recordPaidExecutionUsageEvent({
+        taskId: event.taskId,
+        projectId: event.projectId,
+        sessionId: event.sessionId,
+        agentRunId: run.agentRunId,
+        authorization,
+        providerId: model.providerId,
+        modelId: model.modelId,
+        tokenUsed,
+        requestDelta: 1,
+        runtimeLedger: {
+          executionSource: "task-execute",
+          entrypointType: "parallel-candidate",
+          status: "failed",
+          finishedAt,
+          step: {
+            stepType: "execution",
+            candidateIndex: candidateInfo.candidateIndex,
+            amplificationSource: "parallel",
+            status: "failed",
+            finishedAt,
+          },
+        },
+      });
+      if (guardOutcome.tripped) {
+        await this.tripPaidExecutionBreaker({
+          taskId: event.taskId,
+          projectId: event.projectId,
+          completedSessionId: event.sessionId,
+          authorization,
+          guardState: guardOutcome.guardState,
+          reason: guardOutcome.breakerReason || "paid execution breaker tripped",
+        });
+      }
+
+      const taskResults = this.parallelCandidateResults.get(candidateInfo.taskId);
+      if (taskResults) {
+        taskResults.set(candidateInfo.candidateIndex, {
+          sessionId: event.sessionId,
+          result: resultText,
+        });
+      }
+
+      this.finalizedAgentRuns.add(run.agentRunId);
+
+      this.emit({
+        id: crypto.randomUUID(),
+        type: "agent.completed",
+        ts: finishedAt,
+        sessionId: event.sessionId,
+        taskId: event.taskId,
+        projectId: event.projectId,
+        agentRunId: run.agentRunId,
+        data: {
+          sourceEvent: event.type,
+          candidateIndex: candidateInfo.candidateIndex,
+          executionMode: "parallel",
+          error: errorMessage,
+          status: "failed",
+          tool: toolName,
+        },
+      });
+
+      await this.emitPipelineStageUpdates({
+        taskId: event.taskId,
+        sessionId: event.sessionId,
+        projectId: event.projectId,
+        agentRunId: run.agentRunId,
+        authorization,
+        reason: "agent.completed",
+      });
+
+      const allSessions = this.parallelTaskSessions.get(candidateInfo.taskId);
+      if (allSessions && taskResults && taskResults.size >= allSessions.size) {
+        void this.finalizeParallelTask(candidateInfo.taskId, event.projectId ?? "", authorization);
+      }
+    } catch (error) {
+      console.error(
+        `Failed to handle question-tool stall for parallel candidate ${run.agentRunId}:`,
+        error,
+      );
+    }
+  }
+
   private extractErrorMessage(event: RealtimeEvent): string {
     const error =
       typeof event.data.error === "object" && event.data.error
@@ -1523,6 +1716,72 @@ class SSEAggregator {
       return String(data?.message ?? error.message ?? error.name ?? "Unknown error");
     }
     return "Session error";
+  }
+
+  private readToolName(data: Record<string, unknown>): string | undefined {
+    const tool = data.tool;
+    if (typeof tool === "string") {
+      return tool;
+    }
+
+    const toolName = data.toolName;
+    if (typeof toolName === "string") {
+      return toolName;
+    }
+
+    const name = data.name;
+    if (typeof name === "string") {
+      return name;
+    }
+
+    return undefined;
+  }
+
+  private async updateParallelCandidatePlanState(args: {
+    taskId: string;
+    authorization: string;
+    candidateIndex: number;
+    status: ExecutionCandidate["status"];
+    result?: string;
+    finishedAt?: string;
+  }): Promise<void> {
+    const taskResult = await cpFetch<CompletedTaskContext & { executionPlan?: string }>(
+      `/api/tasks/${encodeURIComponent(args.taskId)}`,
+      { authorization: args.authorization },
+    );
+    if (!taskResult.ok || !taskResult.data.executionPlan) {
+      return;
+    }
+
+    let plan: ExecutionPlan;
+    try {
+      plan = JSON.parse(taskResult.data.executionPlan) as ExecutionPlan;
+    } catch {
+      return;
+    }
+
+    if (plan.mode !== "parallel") {
+      return;
+    }
+
+    const candidate = plan.candidates[args.candidateIndex];
+    if (!candidate) {
+      return;
+    }
+
+    candidate.status = args.status;
+    if (args.result !== undefined) {
+      candidate.result = args.result;
+    }
+    candidate.finishedAt = args.finishedAt || new Date().toISOString();
+
+    await cpFetch(`/api/tasks/${encodeURIComponent(args.taskId)}`, {
+      method: "PATCH",
+      authorization: args.authorization,
+      body: {
+        executionPlan: JSON.stringify(plan),
+      },
+    });
   }
 
   /**
@@ -2116,36 +2375,15 @@ class SSEAggregator {
         }
         if (plan && judgeResult) {
           plan.judgeResult = judgeResult;
-          plan.winnerCandidateIndex = judgeResult.winnerIndex;
-        }
-      } else if (candidateResults.length > 0) {
-        // No judge: pick the first completed candidate as the winner
-        if (plan) {
-          plan.winnerCandidateIndex = candidateResults[0]?.[0] ?? 0;
         }
       }
 
-      // Use winner's result as the task result
-      const winnerIdx = plan?.winnerCandidateIndex ?? candidateResults[0]?.[0] ?? 0;
-      const winnerResult = results?.get(winnerIdx)?.result;
-
-      await persistWorkflowStageExecutionOutcome({
-        taskId,
-        authorization,
-        resultText: winnerResult,
-        source: "parallel-winner",
-      }).catch((error) => {
-        console.error(`Failed to persist workflow stage outcome for parallel task ${taskId}:`, error);
-      });
-
-      // Final PATCH to complete the task
+      // Persist comparison results and optional judge recommendation, but leave final adoption to the user.
       await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
         method: "PATCH",
         authorization,
         body: {
-          status: "completed",
           executionPlan: plan ? JSON.stringify(plan) : undefined,
-          ...(winnerResult ? { result: winnerResult } : {}),
           strategy: mergeTaskStrategy(task.strategy, {
             hookExecutions: judgeResult
               ? [
@@ -2165,34 +2403,6 @@ class SSEAggregator {
               : undefined,
           }),
         },
-      });
-
-      this.emit({
-        id: crypto.randomUUID(),
-        type: "task.completed",
-        ts: new Date().toISOString(),
-        taskId,
-        projectId,
-        data: {
-          status: "completed",
-          executionMode: "parallel",
-          winnerCandidateIndex: winnerIdx,
-          candidateCount: candidateResults.length,
-          hasJudge: !!judgeResult,
-          ...(winnerResult ? { result: winnerResult } : {}),
-        },
-      });
-
-      await this.emitPipelineStageUpdates({
-        taskId,
-        projectId,
-        authorization,
-        reason: "task.completed",
-      });
-
-      // Run post-execution hooks after parallel completion
-      this.triggerPostExecutionHooks(taskId, winnerResult, authorization).catch((err) => {
-        console.error(`Post-execution hooks failed for parallel task ${taskId}:`, err);
       });
     } catch (error) {
       console.error(`Failed to finalize parallel task ${taskId}:`, error);

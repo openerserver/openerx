@@ -128,6 +128,10 @@ function resolvePromptAgent(agentName?: string): string | undefined {
     return undefined;
   }
 
+  if (agentName === DEFAULT_EXECUTION_AGENT) {
+    return undefined;
+  }
+
   if (hasRuntimeAgentDefinition(agentName)) {
     return agentName;
   }
@@ -291,8 +295,11 @@ async function opcall(
   }
 }
 
-async function readSessionMessageCount(sessionId: string): Promise<number | undefined> {
-  const result = await getSessionMessages(sessionId);
+async function readSessionMessageCount(
+  sessionId: string,
+  options?: { bypassCircuitBreaker?: boolean },
+): Promise<number | undefined> {
+  const result = await getSessionMessages(sessionId, options);
   if (!result.ok || !Array.isArray(result.data)) {
     return undefined;
   }
@@ -308,7 +315,9 @@ async function waitForSessionMessageCount(
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
-    const count = await readSessionMessageCount(sessionId);
+    const count = await readSessionMessageCount(sessionId, {
+      bypassCircuitBreaker: true,
+    });
     if (count !== undefined && count >= expectedMinCount) {
       return true;
     }
@@ -698,7 +707,14 @@ export async function getAgentMessages(agentRunId: string): Promise<OpencodeResp
 
 const sessionMessagesInflight = new Map<string, Promise<OpencodeResponse>>();
 
-export async function getSessionMessages(sessionId: string): Promise<OpencodeResponse> {
+export async function getSessionMessages(
+  sessionId: string,
+  options?: { bypassCircuitBreaker?: boolean },
+): Promise<OpencodeResponse> {
+  if (options?.bypassCircuitBreaker) {
+    return opcall("GET", `/session/${sessionId}/message?limit=200`);
+  }
+
   const existing = sessionMessagesInflight.get(sessionId);
   if (existing) {
     return existing;

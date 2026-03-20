@@ -729,6 +729,33 @@ describe("executeLifecycleHooks behavior", () => {
 
   test("continue route falls back to strategy candidates when stored parallel executionPlan is incomplete", async () => {
     currentStrategy = buildStrategy({ hooks: [] });
+    process.env.ALLOW_PAID_MODEL_EXECUTION = "1";
+    cpFetchMock.mockImplementation(async (url: string, options?: { method?: string; body?: unknown }) => {
+      if (!options?.method) {
+        if (url.includes("/paid-execution-lease")) {
+          return {
+            ok: true,
+            data: {
+              projectId: "proj-1",
+              activeLease: { id: "lease-test" },
+              now: "2026-03-10T00:00:00.000Z",
+            },
+          };
+        }
+
+        if (url.includes("/api/projects/")) {
+          return { ok: true, data: { settings: {} } };
+        }
+
+        return {
+          ok: true,
+          data: currentTask,
+        };
+      }
+
+      return { ok: true, data: { body: options.body } };
+    });
+
     currentTask = {
       ...currentTask,
       title: "Parallel continuation task",
@@ -739,7 +766,7 @@ describe("executeLifecycleHooks behavior", () => {
         executionMode: "parallel",
         parallelCandidates: [
           { model: "github-copilot:gpt-5-mini", label: "候选 A" },
-          { model: "gemini-3-flash-preview", label: "候选 B" },
+          { model: "github-copilot:gpt-4o", label: "候选 B" },
         ],
       }),
       executionPlan: JSON.stringify({
@@ -806,6 +833,319 @@ describe("executeLifecycleHooks behavior", () => {
     expect(patchedPlan?.candidates).toHaveLength(2);
     expect(patchedStrategy.parallelCandidates).toHaveLength(2);
     expect(registerParallelTaskMock).toHaveBeenCalledTimes(1);
+
+    const lineageWrites = cpFetchMock.mock.calls.filter(
+      ([url, options]) =>
+        url === "/api/tasks/task-1/task-sessions" &&
+        (options as { method?: string } | undefined)?.method === "POST",
+    );
+    expect(lineageWrites).toHaveLength(2);
+    expect((lineageWrites[0]?.[1] as { body?: Record<string, unknown> })?.body).toMatchObject({
+      runtimeSessionId: "session-a",
+      branchName: "候选 A",
+      sourceType: "root",
+    });
+    expect((lineageWrites[1]?.[1] as { body?: Record<string, unknown> })?.body).toMatchObject({
+      runtimeSessionId: "session-b",
+      parentRuntimeSessionId: "session-a",
+      branchName: "候选 B",
+      sourceType: "fork",
+    });
+  });
+
+  test("continue route resets stale parallel candidate state after manual adoption before starting a new round", async () => {
+    currentStrategy = buildStrategy({ hooks: [] });
+    process.env.ALLOW_PAID_MODEL_EXECUTION = "1";
+    cpFetchMock.mockImplementation(async (url: string, options?: { method?: string; body?: unknown }) => {
+      if (!options?.method) {
+        if (url.includes("/paid-execution-lease")) {
+          return {
+            ok: true,
+            data: {
+              projectId: "proj-1",
+              activeLease: { id: "lease-test" },
+              now: "2026-03-10T00:00:00.000Z",
+            },
+          };
+        }
+
+        if (url.includes("/api/projects/")) {
+          return { ok: true, data: { settings: {} } };
+        }
+
+        return {
+          ok: true,
+          data: currentTask,
+        };
+      }
+
+      return { ok: true, data: { body: options.body } };
+    });
+
+    currentTask = {
+      ...currentTask,
+      title: "Parallel task after manual adoption",
+      prompt: "Run the comparison again",
+      sessionId: "session-existing-a",
+      status: "completed",
+      executionMode: "parallel",
+      strategy: JSON.stringify({
+        executionMode: "parallel",
+        parallelCandidates: [
+          { model: "github-copilot:gpt-5-mini", label: "候选 A" },
+          { model: "github-copilot:gpt-4o", label: "候选 B" },
+        ],
+      }),
+      executionPlan: JSON.stringify({
+        templateId: "tpl-ops-parallel",
+        mode: "parallel",
+        steps: [{ id: "exec-parallel", type: "execution", status: "completed" }],
+        candidates: [
+          {
+            label: "候选 A",
+            agent: "default-executor",
+            role: "executor",
+            model: "github-copilot:gpt-5-mini",
+            status: "completed",
+            sessionId: "session-existing-a",
+            agentRunId: "run-existing-a",
+            result: "old result a",
+          },
+          {
+            label: "候选 B",
+            agent: "default-executor",
+            role: "executor",
+            model: "github-copilot:gpt-4o",
+            status: "stopped",
+            sessionId: "session-existing-b",
+            agentRunId: "run-existing-b",
+            result: "old result b",
+          },
+        ],
+        judgeResult: {
+          status: "completed",
+          winnerIndex: 0,
+          reasoning: "old judge decision",
+          completedAt: "2026-03-20T00:00:00.000Z",
+        },
+        winnerCandidateIndex: 0,
+      }),
+    };
+
+    createSessionMock
+      .mockResolvedValueOnce({ ok: true, sessionId: "session-new-a", agentRunId: "run-new-a" })
+      .mockResolvedValueOnce({ ok: true, sessionId: "session-new-b", agentRunId: "run-new-b" });
+
+    const { taskRoutes } = await loadTaskRoutesModule();
+    const response = await taskRoutes.request("http://localhost/task-1/continue", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer test",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ prompt: "Please continue" }),
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({
+      ok: true,
+      executionMode: "parallel",
+      candidates: [
+        { sessionId: "session-new-a", status: "running" },
+        { sessionId: "session-new-b", status: "running" },
+      ],
+    });
+    expect(createSessionMock).toHaveBeenCalledTimes(2);
+    expect(continueSessionMock).not.toHaveBeenCalled();
+
+    const patchCalls = getPatchCalls();
+    const runningPatch = patchCalls.find(
+      (call) =>
+        (call[0] as string) === "/api/tasks/task-1" &&
+        (call[1] as { body?: { status?: string } })?.body?.status === "running",
+    );
+    expect(runningPatch).toBeDefined();
+
+    const patchedBody = (runningPatch?.[1] as {
+      body?: { executionPlan?: string };
+    })?.body;
+    const patchedPlan = JSON.parse(patchedBody?.executionPlan || "null") as {
+      candidates?: Array<{
+        agent?: string;
+        label?: string;
+        model?: string;
+        role?: string;
+        status?: string;
+        sessionId?: string;
+        agentRunId?: string;
+        result?: string;
+        startedAt?: string;
+      }>;
+      judgeResult?: unknown;
+      winnerCandidateIndex?: number;
+    } | null;
+
+    expect(patchedPlan?.winnerCandidateIndex).toBeUndefined();
+    expect(patchedPlan?.judgeResult).toBeUndefined();
+    expect(patchedPlan?.candidates).toHaveLength(2);
+    expect(patchedPlan?.candidates?.[0]).toMatchObject({
+      label: "候选 A",
+      agent: "default-executor",
+      model: "github-copilot:gpt-5-mini",
+      role: "executor",
+      status: "running",
+      sessionId: "session-new-a",
+      agentRunId: "run-new-a",
+    });
+    expect(patchedPlan?.candidates?.[1]).toMatchObject({
+      label: "候选 B",
+      agent: "default-executor",
+      model: "github-copilot:gpt-4o",
+      role: "executor",
+      status: "running",
+      sessionId: "session-new-b",
+      agentRunId: "run-new-b",
+    });
+    expect(patchedPlan?.candidates?.every((candidate) => !candidate.result)).toBe(true);
+    expect(patchedPlan?.candidates?.every((candidate) => Boolean(candidate.startedAt))).toBe(true);
+    expect(registerParallelTaskMock).toHaveBeenCalledTimes(1);
+
+    const lineageWrites = cpFetchMock.mock.calls.filter(
+      ([url, options]) =>
+        url === "/api/tasks/task-1/task-sessions" &&
+        (options as { method?: string } | undefined)?.method === "POST",
+    );
+    expect(lineageWrites).toHaveLength(3);
+    expect((lineageWrites[0]?.[1] as { body?: Record<string, unknown> })?.body).toMatchObject({
+      runtimeSessionId: "session-existing-a",
+      branchName: "Parallel task after manual adoption",
+      sourceType: "root",
+    });
+    expect((lineageWrites[1]?.[1] as { body?: Record<string, unknown> })?.body).toMatchObject({
+      runtimeSessionId: "session-new-a",
+      parentRuntimeSessionId: "session-existing-a",
+      branchName: "候选 A",
+      sourceType: "fork",
+    });
+    expect((lineageWrites[2]?.[1] as { body?: Record<string, unknown> })?.body).toMatchObject({
+      runtimeSessionId: "session-new-b",
+      parentRuntimeSessionId: "session-existing-a",
+      branchName: "候选 B",
+      sourceType: "fork",
+    });
+  });
+
+  test("execute route registers parallel candidates under the current task session lineage", async () => {
+    currentTask = {
+      ...currentTask,
+      title: "Parallel execute task",
+      prompt: "Please execute again",
+      sessionId: "session-existing-parent",
+      strategy: JSON.stringify({ executionMode: "parallel" }),
+    };
+
+    createSessionMock
+      .mockResolvedValueOnce({ ok: true, sessionId: "session-new-a", agentRunId: "run-new-a" })
+      .mockResolvedValueOnce({ ok: true, sessionId: "session-new-b", agentRunId: "run-new-b" });
+
+    const { taskRoutes } = await loadTaskRoutesModule();
+    const response = await taskRoutes.request("http://localhost/task-1/execute", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer test",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        mode: "parallel",
+        candidates: [
+          { model: "local:test-model-a", label: "候选 A" },
+          { model: "local:test-model-b", label: "候选 B" },
+        ],
+      }),
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({
+      executionMode: "parallel",
+      candidates: [
+        { sessionId: "session-new-a", status: "running" },
+        { sessionId: "session-new-b", status: "running" },
+      ],
+    });
+
+    const lineageWrites = cpFetchMock.mock.calls.filter(
+      ([url, options]) =>
+        url === "/api/tasks/task-1/task-sessions" &&
+        (options as { method?: string } | undefined)?.method === "POST",
+    );
+    expect(lineageWrites).toHaveLength(3);
+    expect((lineageWrites[0]?.[1] as { body?: Record<string, unknown> })?.body).toMatchObject({
+      runtimeSessionId: "session-existing-parent",
+      sourceType: "root",
+      isActive: false,
+    });
+    expect((lineageWrites[1]?.[1] as { body?: Record<string, unknown> })?.body).toMatchObject({
+      runtimeSessionId: "session-new-a",
+      parentRuntimeSessionId: "session-existing-parent",
+      branchName: "候选 A",
+      sourceType: "fork",
+    });
+    expect((lineageWrites[2]?.[1] as { body?: Record<string, unknown> })?.body).toMatchObject({
+      runtimeSessionId: "session-new-b",
+      parentRuntimeSessionId: "session-existing-parent",
+      branchName: "候选 B",
+      sourceType: "fork",
+    });
+  });
+
+  test("execute route registers single execution under the current task session lineage", async () => {
+    currentTask = {
+      ...currentTask,
+      title: "Single execute task",
+      prompt: "Please execute single",
+      sessionId: "session-existing-parent",
+    };
+
+    createSessionMock.mockResolvedValueOnce({
+      ok: true,
+      sessionId: "session-new-single",
+      agentRunId: "run-new-single",
+    });
+
+    const { taskRoutes } = await loadTaskRoutesModule();
+    const response = await taskRoutes.request("http://localhost/task-1/execute", {
+      method: "POST",
+      headers: { Authorization: "Bearer test" },
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({
+      executionMode: "single",
+      sessionId: "session-new-single",
+      agentRunId: "run-new-single",
+    });
+
+    const lineageWrites = cpFetchMock.mock.calls.filter(
+      ([url, options]) =>
+        url === "/api/tasks/task-1/task-sessions" &&
+        (options as { method?: string } | undefined)?.method === "POST",
+    );
+    expect(lineageWrites).toHaveLength(2);
+    expect((lineageWrites[0]?.[1] as { body?: Record<string, unknown> })?.body).toMatchObject({
+      runtimeSessionId: "session-existing-parent",
+      sourceType: "root",
+      isActive: false,
+    });
+    expect((lineageWrites[1]?.[1] as { body?: Record<string, unknown> })?.body).toMatchObject({
+      runtimeSessionId: "session-new-single",
+      parentRuntimeSessionId: "session-existing-parent",
+      branchName: "Single execute task",
+      sourceType: "fork",
+      isActive: true,
+    });
   });
 
   test("execute route stops before runtime start when pre-execution hook trips the paid execution breaker", async () => {

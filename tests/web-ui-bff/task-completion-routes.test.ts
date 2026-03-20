@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, mock, test } from "bun:test";
 const cpFetchMock = mock(async (..._args: unknown[]) => ({ ok: true, data: {} }));
 const authHeaderMock = mock(() => "Bearer test");
 const createInternalAuthorizationMock = mock(async () => "Bearer internal");
+const terminateAgentMock = mock(async () => ({ ok: true }));
 const buildStageArtifactSummaryMock = mock((resultText?: string) => ({
   summary: resultText ? resultText.replace(/\n\[STAGE_COMPLETE\]$/, "") : "",
   excerpt: resultText ?? "",
@@ -48,7 +49,7 @@ mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-a
   listSessions: mock(async () => ({ ok: true, data: [] })),
   recoverAgentRun: mock(() => undefined),
   runDetachedPrompt: mock(async () => ({ ok: true, sessionId: "session-detached", text: "{}" })),
-  terminateAgent: mock(async () => ({ ok: true })),
+  terminateAgent: terminateAgentMock,
   updateAgentRunStatus: mock(() => undefined),
 }));
 
@@ -109,12 +110,14 @@ describe("task completion routes", () => {
     cpFetchMock.mockReset();
     authHeaderMock.mockReset();
     createInternalAuthorizationMock.mockReset();
+    terminateAgentMock.mockReset();
     buildStageArtifactSummaryMock.mockClear();
     persistWorkflowStageExecutionOutcomeMock.mockReset();
     wsBroadcastMock.mockReset();
 
     authHeaderMock.mockReturnValue("Bearer test");
     createInternalAuthorizationMock.mockResolvedValue("Bearer internal");
+    terminateAgentMock.mockResolvedValue({ ok: true });
     persistWorkflowStageExecutionOutcomeMock.mockResolvedValue({
       updated: true,
       advanced: true,
@@ -675,6 +678,422 @@ describe("task completion routes", () => {
         }),
       },
     });
+  });
+
+  test("POST /:taskId/candidates/:index/adopt stops unfinished losing candidates", async () => {
+    cpFetchMock.mockImplementation(async (...args: unknown[]) => {
+      const [url, options] = args as [string, RouteFetchOptions | undefined];
+      if (!options?.method && url === "/api/tasks/task-adopt-running") {
+        return {
+          ok: true,
+          data: {
+            id: "task-adopt-running",
+            title: "Parallel clarify",
+            projectId: "proj-adopt",
+            prompt: "Clarify scope",
+            status: "running",
+            executionPlan: JSON.stringify({
+              templateId: "tmpl-1",
+              mode: "parallel",
+              steps: [],
+              candidates: [
+                {
+                  label: "Claude",
+                  agent: "executor",
+                  status: "completed",
+                  result: "候选结果 A",
+                  sessionId: "ses-a",
+                  agentRunId: "run-a",
+                },
+                {
+                  label: "GPT",
+                  agent: "executor",
+                  status: "running",
+                  sessionId: "ses-b",
+                  agentRunId: "run-b",
+                },
+              ],
+            }),
+          },
+        };
+      }
+
+      if (!options?.method && url === "/api/tasks/task-adopt-running/task-sessions") {
+        return {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "ts-root",
+                runtimeSessionId: "ses-root",
+                branchName: "main",
+                isActive: true,
+              },
+              {
+                id: "ts-a",
+                runtimeSessionId: "ses-a",
+                branchName: "winner",
+                isActive: false,
+              },
+              {
+                id: "ts-b",
+                runtimeSessionId: "ses-b",
+                branchName: "loser",
+                isActive: false,
+              },
+            ],
+          },
+        };
+      }
+
+      if (
+        options?.method === "POST" &&
+        url === "/api/tasks/task-adopt-running/task-sessions/ts-a/activate"
+      ) {
+        return { ok: true, data: { ok: true } };
+      }
+
+      if (options?.method === "PATCH" && url === "/api/tasks/task-adopt-running") {
+        return { ok: true, data: { ok: true, body: options.body } };
+      }
+
+      return { ok: true, data: {} };
+    });
+
+    const { taskRoutes } = await loadTaskRoutes();
+    const response = await taskRoutes.request(
+      "http://localhost/task-adopt-running/candidates/0/adopt",
+      {
+        method: "POST",
+        headers: { Authorization: "Bearer test" },
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expect(terminateAgentMock).toHaveBeenCalledWith("run-b");
+    expect(cpFetchMock).toHaveBeenCalledWith(
+      "/api/tasks/task-adopt-running/task-sessions/ts-a/activate",
+      {
+        method: "POST",
+        authorization: "Bearer test",
+      },
+    );
+
+    const patchCall = (cpFetchMock.mock.calls as unknown as Array<[string, RouteFetchOptions]>).find(
+      ([url, options]) => url === "/api/tasks/task-adopt-running" && options?.method === "PATCH",
+    );
+    expect(patchCall).toBeDefined();
+    const patchBody = patchCall?.[1]?.body as { executionPlan?: string; result?: string; status?: string };
+    expect(patchBody.status).toBe("completed");
+    expect(patchBody.result).toBe("候选结果 A");
+    expect(JSON.parse(String(patchBody.executionPlan))).toEqual({
+      templateId: "tmpl-1",
+      mode: "parallel",
+      steps: [],
+      candidates: [
+        {
+          label: "Claude",
+          agent: "executor",
+          status: "completed",
+          result: "候选结果 A",
+          sessionId: "ses-a",
+          agentRunId: "run-a",
+        },
+        {
+          label: "GPT",
+          agent: "executor",
+          status: "stopped",
+          sessionId: "ses-b",
+          agentRunId: "run-b",
+          result:
+            "[STOPPED] Manual candidate adoption ended this parallel run before the candidate completed.",
+          finishedAt: expect.any(String),
+        },
+      ],
+      winnerCandidateIndex: 0,
+    });
+
+    const broadcasts = wsBroadcastMock.mock.calls as unknown as Array<[Record<string, unknown>]>;
+    expect(broadcasts[0]?.[0]).toMatchObject({
+      type: "session.activated",
+      taskId: "task-adopt-running",
+      projectId: "proj-adopt",
+      data: {
+        sessionId: "ses-a",
+        branchName: "winner",
+        source: "candidate-adopt",
+      },
+    });
+    expect(broadcasts[1]?.[0]).toMatchObject({
+      type: "task.completed",
+      taskId: "task-adopt-running",
+      projectId: "proj-adopt",
+      data: {
+        status: "completed",
+        winnerCandidateIndex: 0,
+        adoptedManually: true,
+        result: "候选结果 A",
+      },
+    });
+  });
+
+  test("POST /:taskId/candidates/:index/adopt activates the winner task session lineage", async () => {
+    cpFetchMock.mockImplementation(async (...args: unknown[]) => {
+      const [url, options] = args as [string, RouteFetchOptions | undefined];
+      if (!options?.method && url === "/api/tasks/task-adopt-activate") {
+        return {
+          ok: true,
+          data: {
+            id: "task-adopt-activate",
+            title: "Parallel clarify",
+            projectId: "proj-adopt",
+            prompt: "Clarify scope",
+            status: "running",
+            executionPlan: JSON.stringify({
+              templateId: "tmpl-1",
+              mode: "parallel",
+              steps: [],
+              candidates: [
+                {
+                  label: "Claude",
+                  agent: "executor",
+                  status: "completed",
+                  result: "候选结果 A",
+                  sessionId: "ses-winner",
+                  agentRunId: "run-a",
+                },
+              ],
+            }),
+          },
+        };
+      }
+
+      if (!options?.method && url === "/api/tasks/task-adopt-activate/task-sessions") {
+        return {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "ts-root",
+                runtimeSessionId: "ses-root",
+                branchName: "main",
+                isActive: true,
+              },
+              {
+                id: "ts-winner",
+                runtimeSessionId: "ses-winner",
+                branchName: "winner",
+                isActive: false,
+              },
+            ],
+          },
+        };
+      }
+
+      if (
+        options?.method === "POST" &&
+        url === "/api/tasks/task-adopt-activate/task-sessions/ts-winner/activate"
+      ) {
+        return { ok: true, data: { ok: true } };
+      }
+
+      if (options?.method === "PATCH" && url === "/api/tasks/task-adopt-activate") {
+        return { ok: true, data: { ok: true, body: options.body } };
+      }
+
+      return { ok: true, data: {} };
+    });
+
+    const { taskRoutes } = await loadTaskRoutes();
+    const response = await taskRoutes.request(
+      "http://localhost/task-adopt-activate/candidates/0/adopt",
+      {
+        method: "POST",
+        headers: { Authorization: "Bearer test" },
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expect(cpFetchMock).toHaveBeenCalledWith(
+      "/api/tasks/task-adopt-activate/task-sessions/ts-winner/activate",
+      {
+        method: "POST",
+        authorization: "Bearer test",
+      },
+    );
+
+    const broadcasts = wsBroadcastMock.mock.calls as unknown as Array<[Record<string, unknown>]>;
+    expect(broadcasts).toHaveLength(2);
+    expect(broadcasts[0]?.[0]).toMatchObject({
+      type: "session.activated",
+      taskId: "task-adopt-activate",
+      projectId: "proj-adopt",
+      data: {
+        sessionId: "ses-winner",
+        branchName: "winner",
+        source: "candidate-adopt",
+      },
+    });
+    expect(broadcasts[1]?.[0]).toMatchObject({
+      type: "task.completed",
+      taskId: "task-adopt-activate",
+      projectId: "proj-adopt",
+      data: {
+        status: "completed",
+        winnerCandidateIndex: 0,
+        adoptedManually: true,
+        result: "候选结果 A",
+      },
+    });
+  });
+
+  test("POST /:taskId/candidates/:index/adopt repairs missing candidate lineage before activation", async () => {
+    let lineageReadCount = 0;
+
+    cpFetchMock.mockImplementation(async (...args: unknown[]) => {
+      const [url, options] = args as [string, RouteFetchOptions | undefined];
+      if (!options?.method && url === "/api/tasks/task-adopt-repair") {
+        return {
+          ok: true,
+          data: {
+            id: "task-adopt-repair",
+            title: "Parallel clarify",
+            projectId: "proj-adopt",
+            prompt: "Clarify scope",
+            status: "running",
+            sessionId: "ses-root",
+            executionPlan: JSON.stringify({
+              templateId: "tmpl-1",
+              mode: "parallel",
+              steps: [],
+              candidates: [
+                {
+                  label: "Claude",
+                  agent: "executor",
+                  status: "completed",
+                  result: "候选结果 A",
+                  sessionId: "ses-winner",
+                  agentRunId: "run-a",
+                },
+                {
+                  label: "GPT",
+                  agent: "executor",
+                  status: "completed",
+                  result: "候选结果 B",
+                  sessionId: "ses-other",
+                  agentRunId: "run-b",
+                },
+              ],
+            }),
+          },
+        };
+      }
+
+      if (!options?.method && url === "/api/tasks/task-adopt-repair/task-sessions") {
+        lineageReadCount += 1;
+        return {
+          ok: true,
+          data: {
+            data:
+              lineageReadCount === 1
+                ? [
+                    {
+                      id: "ts-root",
+                      runtimeSessionId: "ses-root",
+                      branchName: "main",
+                      sourceType: "root",
+                      isActive: true,
+                      archivedAt: null,
+                    },
+                  ]
+                : [
+                    {
+                      id: "ts-root",
+                      runtimeSessionId: "ses-root",
+                      branchName: "main",
+                      sourceType: "root",
+                      isActive: true,
+                      archivedAt: null,
+                    },
+                    {
+                      id: "ts-winner",
+                      runtimeSessionId: "ses-winner",
+                      branchName: "Claude",
+                      sourceType: "fork",
+                      isActive: false,
+                      archivedAt: null,
+                    },
+                    {
+                      id: "ts-other",
+                      runtimeSessionId: "ses-other",
+                      branchName: "GPT",
+                      sourceType: "fork",
+                      isActive: false,
+                      archivedAt: null,
+                    },
+                  ],
+          },
+        };
+      }
+
+      if (options?.method === "POST" && url === "/api/tasks/task-adopt-repair/task-sessions") {
+        return { ok: true, data: { ok: true } };
+      }
+
+      if (
+        options?.method === "POST" &&
+        url === "/api/tasks/task-adopt-repair/task-sessions/ts-winner/activate"
+      ) {
+        return { ok: true, data: { ok: true } };
+      }
+
+      if (options?.method === "PATCH" && url === "/api/tasks/task-adopt-repair") {
+        return { ok: true, data: { ok: true, body: options.body } };
+      }
+
+      return { ok: true, data: {} };
+    });
+
+    const { taskRoutes } = await loadTaskRoutes();
+    const response = await taskRoutes.request(
+      "http://localhost/task-adopt-repair/candidates/0/adopt",
+      {
+        method: "POST",
+        headers: { Authorization: "Bearer test" },
+      },
+    );
+
+    expect(response.status).toBe(200);
+
+    const lineageWrites = (cpFetchMock.mock.calls as unknown as Array<[string, RouteFetchOptions]>)
+      .filter(
+        ([url, options]) =>
+          url === "/api/tasks/task-adopt-repair/task-sessions" && options?.method === "POST",
+      )
+      .map(([, options]) => options.body as Record<string, unknown>);
+
+    expect(lineageWrites).toEqual([
+      expect.objectContaining({
+        runtimeSessionId: "ses-winner",
+        parentRuntimeSessionId: "ses-root",
+        branchName: "Claude",
+        sourceType: "fork",
+      }),
+      expect.objectContaining({
+        runtimeSessionId: "ses-other",
+        parentRuntimeSessionId: "ses-root",
+        branchName: "GPT",
+        sourceType: "fork",
+      }),
+    ]);
+
+    expect(cpFetchMock).toHaveBeenCalledWith(
+      "/api/tasks/task-adopt-repair/task-sessions/ts-winner/activate",
+      {
+        method: "POST",
+        authorization: "Bearer test",
+      },
+    );
   });
 
   test("POST /:taskId/candidates/:index/adopt returns 400 for invalid candidate index", async () => {

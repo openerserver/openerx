@@ -310,3 +310,13 @@ export function serializeTaskStrategy(
 
   return JSON.stringify(next);
 }
+
+export function buildExecutionModeTaskUpdate(
+  task: Pick<Task, "strategy"> | null | undefined,
+  overrides: ExecutionOverrides,
+) {
+  return {
+    strategy: serializeTaskStrategy(task, overrides),
+    executionMode: overrides?.mode ?? "single",
+  } satisfies Pick<Task, "strategy" | "executionMode">;
+}

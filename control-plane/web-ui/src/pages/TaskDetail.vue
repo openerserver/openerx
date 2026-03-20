@@ -1021,6 +1021,7 @@ import { renderMarkdown } from "../lib/markdown";
 import { showRuntimeRecoveryNotice } from "../lib/runtime-recovery";
 import { RUNTIME_RECOVERY_CONTEXTS } from "../lib/runtime-recovery-notice";
 import { SETTINGS_SECTIONS, SETTINGS_TAB_MODELS } from "../lib/settings-deep-link";
+import { normalizeWorkspaceFilePath } from "../lib/workspace-file-path";
 import { type RealtimeEvent, useRealtimeStore } from "../stores/realtime";
 import {
   buildTaskDetailMessageCardStyle,
@@ -3913,7 +3914,7 @@ function buildReadPreview(outputText: string | undefined): {
   filePath?: string;
   readPreview?: string;
 } {
-  const filePath = extractTaggedContent(outputText, "path");
+  const filePath = normalizeWorkspaceFilePath(extractTaggedContent(outputText, "path"));
   const content = extractTaggedContent(outputText, "content");
   const entries = extractTaggedContent(outputText, "entries");
   const preview = normalizePreviewText(content ?? entries, 500).text;
@@ -4010,8 +4011,8 @@ function buildToolHeadline(label: string, input: Record<string, unknown>): strin
 
   return (
     summarizeUnknownValue(input.command) ??
-    summarizeUnknownValue(input.filePath) ??
-    summarizeUnknownValue(input.path) ??
+    normalizeWorkspaceFilePath(summarizeUnknownValue(input.filePath)) ??
+    normalizeWorkspaceFilePath(summarizeUnknownValue(input.path)) ??
     summarizeUnknownValue(input.pattern) ??
     summarizeUnknownValue(input.query) ??
     summarizeUnknownValue(input.url)
@@ -4089,7 +4090,7 @@ function buildToolCallView(part: SessionPart, index: number): ToolCallView | nul
       summarizeUnknownValue(input.description) ?? summarizeUnknownValue(input.explanation),
     goal: summarizeUnknownValue(input.goal),
     command: toolKind === "bash" ? summarizeUnknownValue(input.command) : undefined,
-    filePath: summarizeUnknownValue(input.filePath) ?? readDetails.filePath,
+    filePath: normalizeWorkspaceFilePath(summarizeUnknownValue(input.filePath)) ?? readDetails.filePath,
     readPreview: readDetails.readPreview,
     inputPreview: buildToolInputPreview(input),
     fullOutput,
@@ -5076,11 +5077,9 @@ async function handleExecutionModeConfirm(overrides: ExecutionOverrides) {
   try {
     const strategy = serializeTaskStrategy(overrides);
     const executionMode = overrides?.mode ?? "single";
-    const executionPlan = buildSavedExecutionPlan(overrides);
     await updateTask(taskId.value, {
       strategy,
       executionMode,
-      executionPlan,
     });
     const t = await getTask(taskId.value);
     task.value = t;

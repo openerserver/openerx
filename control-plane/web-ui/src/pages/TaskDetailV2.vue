@@ -53,6 +53,7 @@
               :loading="messagesLoading"
               :error="messagesError"
               @open-file-preview="handleOpenFilePreview"
+              @adopt-candidate="handleAdoptCandidate"
             />
 
             <ChatComposer
@@ -114,11 +115,15 @@ import { defineAsyncComponent, computed, onBeforeUnmount, ref, watch } from "vue
 import { useRoute, useRouter } from "vue-router";
 import { message } from "ant-design-vue";
 import {
+  adoptParallelCandidate,
   type ChainStepInput,
   continueTask,
+  type ExecutionCandidate,
+  type ExecutionPlan,
   type ExecutionMode,
   forkTaskSession,
   getModelsList,
+  getSessionMessages as getTaskSessionMessages,
   getTask,
   getTaskWorkflowView,
   terminateAgent,
@@ -126,8 +131,9 @@ import {
   type TaskWorkflowViewModel,
   updateTask,
 } from "../lib/api";
+import { renderMarkdown } from "../lib/markdown";
 import {
-  buildSavedExecutionPlan,
+  buildExecutionModeTaskUpdate,
   DEFAULT_JUDGE_CONFIG,
   resolveEditableExecutionMode,
   resolveEditableJudgeConfig,
@@ -137,7 +143,13 @@ import {
   type ExecutionOverrides,
 } from "../lib/taskExecutionMode";
 import { useSessionFlow } from "../composables/useSessionFlow";
-import { useTaskMessages } from "../composables/useTaskMessages";
+import {
+  normalizeSessionConversationItems,
+  type TaskConversationListItem,
+  type TaskConversationParallelItem,
+  type TaskParallelComparisonCard,
+  useTaskMessages,
+} from "../composables/useTaskMessages";
 import { useRealtimeStore } from "../stores/realtime";
 
 const TaskDetailQuickOverview = defineAsyncComponent(
@@ -177,11 +189,13 @@ const modelsData = ref<Array<Record<string, unknown>>>([]);
 const modelsLoading = ref(false);
 const continuing = ref(false);
 const forking = ref(false);
+const adoptingCandidateIndex = ref<number | null>(null);
 const composerResetToken = ref(0);
 const showExecutionModeModal = ref(false);
 const executionModeSaving = ref(false);
 const queuedContinuations = ref<Array<{ id: string; prompt: string; sessionId?: string; queuedAt: string }>>([]);
 const previewFile = ref<{ filePath: string; content?: string } | null>(null);
+const parallelCandidateMessages = ref<Record<string, unknown[]>>({});
 
 const {
   flatNodes,
@@ -190,12 +204,12 @@ const {
 } = useSessionFlow(taskId, selectedSessionId);
 
 const {
-  conversationItems,
+  conversationItems: baseConversationItems,
   hasStreamingAssistant,
   loading: messagesLoading,
   error: messagesError,
   refresh: refreshMessages,
-} = useTaskMessages(taskId, selectedSessionId);
+} = useTaskMessages(taskId, selectedSessionId, { includeLineage: true });
 
 const workflowSummary = computed(() => workflowView.value?.workflow ?? null);
 const workflowStages = computed(() => workflowView.value?.workflow.stages ?? []);
@@ -213,6 +227,75 @@ const editableExecutionMode = computed<ExecutionMode>(() => resolveEditableExecu
 const editableJudgeConfig = computed(() => resolveEditableJudgeConfig(task.value));
 const editableParallelCandidates = computed(() => resolveEditableParallelCandidates(task.value));
 const editableSequentialSteps = computed<ChainStepInput[]>(() => resolveEditableSequentialSteps(task.value));
+const executionPlan = computed<ExecutionPlan | null>(() => {
+  const raw = task.value?.executionPlan;
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as ExecutionPlan;
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+});
+const executionPlanCandidates = computed<ExecutionCandidate[]>(() => executionPlan.value?.candidates ?? []);
+const executionPlanAdoptedIndex = computed(() => {
+  if (typeof executionPlan.value?.winnerCandidateIndex === "number") {
+    return executionPlan.value.winnerCandidateIndex;
+  }
+
+  return -1;
+});
+const adoptedCandidateSessionId = computed(() => {
+  if (executionPlanAdoptedIndex.value < 0) {
+    return undefined;
+  }
+
+  const sessionId = executionPlanCandidates.value[executionPlanAdoptedIndex.value]?.sessionId;
+  return typeof sessionId === "string" && sessionId.length > 0 ? sessionId : undefined;
+});
+
+const executionPlanRecommendedIndex = computed(() => {
+  if (typeof executionPlan.value?.judgeResult?.winnerIndex === "number") {
+    return executionPlan.value.judgeResult.winnerIndex;
+  }
+
+  return -1;
+});
+const executionPlanJudgeReasoning = computed(() => executionPlan.value?.judgeResult?.reasoning || "");
+const executionPlanJudgeSummary = computed(() => {
+  const judgeResult = executionPlan.value?.judgeResult;
+  if (!judgeResult) {
+    return "";
+  }
+
+  const winnerLabel =
+    typeof judgeResult.winnerIndex === "number"
+      ? executionPlanCandidates.value[judgeResult.winnerIndex]?.label || `候选 ${judgeResult.winnerIndex + 1}`
+      : undefined;
+
+  if (winnerLabel && Array.isArray(judgeResult.scores) && judgeResult.scores.length > 0) {
+    return `Judge 推荐 ${winnerLabel}，得分 ${judgeResult.scores
+      .map((score) => Number(score).toFixed(1))
+      .join(" / ")}`;
+  }
+
+  return winnerLabel ? `Judge 推荐 ${winnerLabel}` : "Judge 已返回评估结果";
+});
+const isParallelComparisonMode = computed(() => {
+  if (task.value?.executionMode === "parallel") {
+    return true;
+  }
+
+  return executionPlan.value?.mode === "parallel";
+});
+const allCandidatesSettled = computed(() =>
+  executionPlanCandidates.value.length >= 2 &&
+  executionPlanCandidates.value.every((candidate) =>
+    candidate.status === "completed" || candidate.status === "failed"),
+);
 const canDispatchQueuedContinuation = computed(
   () =>
     queuedContinuations.value.length > 0 &&
@@ -254,6 +337,89 @@ const modelOptions = computed(() => {
   return options;
 });
 
+const parallelComparisonCards = computed<TaskParallelComparisonCard[]>(() => {
+  if (!isParallelComparisonMode.value || executionPlanCandidates.value.length < 2) {
+    return [];
+  }
+
+  return executionPlanCandidates.value.map((candidate, index) => {
+    const sessionId = candidate.sessionId;
+    const messages = sessionId ? parallelCandidateMessages.value[sessionId] ?? [] : [];
+    const items = normalizeSessionConversationItems(messages).filter((item) => item.role !== "user");
+    const metaParts = [candidate.agent, sessionId ? `Session ${sessionId.slice(0, 8)}` : undefined].filter(
+      (value): value is string => Boolean(value),
+    );
+
+    return {
+      key: sessionId || `candidate-${index}`,
+      index,
+      label: candidate.label || `候选 ${index + 1}`,
+      model: candidate.model,
+      status: candidate.status || "pending",
+      meta: metaParts.join(" · ") || undefined,
+      loading: items.length === 0 && candidate.status === "running",
+      items,
+      canAdopt:
+        allCandidatesSettled.value &&
+        candidate.status === "completed" &&
+        executionPlanAdoptedIndex.value < 0,
+      isAdopted: executionPlanAdoptedIndex.value === index,
+      isRecommended:
+        executionPlanAdoptedIndex.value < 0 && executionPlanRecommendedIndex.value === index,
+    };
+  });
+});
+
+const parallelConversationItem = computed<TaskConversationParallelItem | null>(() => {
+  if (parallelComparisonCards.value.length === 0) {
+    return null;
+  }
+
+  const createdAt = executionPlanCandidates.value
+    .map((candidate) => candidate.finishedAt || candidate.startedAt)
+    .find((value): value is string => typeof value === "string" && value.length > 0);
+
+  return {
+    key: `parallel-${task.value?.id || taskId.value}`,
+    role: "parallel",
+    createdAt,
+    candidates: parallelComparisonCards.value,
+    judgeSummary: executionPlanJudgeSummary.value || undefined,
+    judgeReasoning: executionPlanJudgeReasoning.value || undefined,
+    raw: executionPlan.value,
+    toolCalls: [],
+  };
+});
+
+const shouldHideUnadoptedParallelMessages = computed(
+  () => isParallelComparisonMode.value && parallelComparisonCards.value.length > 0 && executionPlanAdoptedIndex.value < 0,
+);
+
+const conversationItems = computed<TaskConversationListItem[]>(() => {
+  const inlineParallelItem = parallelConversationItem.value;
+  const items = shouldHideUnadoptedParallelMessages.value
+    ? baseConversationItems.value.filter((item) => item.role === "user")
+    : [...baseConversationItems.value];
+  if (!inlineParallelItem) {
+    return items;
+  }
+
+  let insertAfterIndex = -1;
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    if (items[index]?.role === "user") {
+      insertAfterIndex = index;
+      break;
+    }
+  }
+
+  if (insertAfterIndex >= 0) {
+    items.splice(insertAfterIndex + 1, 0, inlineParallelItem);
+    return items;
+  }
+
+  return [...items, inlineParallelItem];
+});
+
 function filterModelOption(input: string, option?: unknown) {
   const keyword = input.toLowerCase();
   const normalized = option as { value?: string | number | null; label?: string | number | null } | undefined;
@@ -263,11 +429,47 @@ function filterModelOption(input: string, option?: unknown) {
   );
 }
 
+function executionCandidateStatusLabel(status: string | undefined) {
+  switch (status) {
+    case "completed":
+      return "已完成";
+    case "running":
+      return "执行中";
+    case "failed":
+      return "失败";
+    case "pending":
+      return "待执行";
+    default:
+      return status || "未知";
+  }
+}
+
+function executionCandidateStatusColor(status: string | undefined) {
+  switch (status) {
+    case "completed":
+      return "success";
+    case "running":
+      return "processing";
+    case "failed":
+      return "error";
+    default:
+      return "default";
+  }
+}
+
 function resolveRequestedSessionId() {
   return typeof route.query.session === "string" ? route.query.session : undefined;
 }
 
 function ensureSelectedSession() {
+  if (
+    adoptedCandidateSessionId.value &&
+    flatNodes.value.some((node) => node.runtimeSessionId === adoptedCandidateSessionId.value)
+  ) {
+    selectedSessionId.value = adoptedCandidateSessionId.value;
+    return;
+  }
+
   const requestedSessionId = resolveRequestedSessionId();
   if (requestedSessionId && flatNodes.value.some((node) => node.runtimeSessionId === requestedSessionId)) {
     selectedSessionId.value = requestedSessionId;
@@ -313,6 +515,12 @@ async function refreshTaskSnapshot(options?: { workflow?: boolean; flow?: boolea
 
     if (options?.messages) {
       await refreshMessages(true);
+    }
+
+    if (isParallelComparisonMode.value) {
+      await refreshParallelCandidateMessages(taskId.value, true);
+    } else {
+      parallelCandidateMessages.value = {};
     }
 
     ensureSelectedSession();
@@ -373,6 +581,11 @@ async function loadTaskDetail() {
     ]);
     task.value = nextTask;
     workflowView.value = nextWorkflow;
+    if (resolveEditableExecutionMode(nextTask) === "parallel") {
+      await refreshParallelCandidateMessages(taskId.value, true);
+    } else {
+      parallelCandidateMessages.value = {};
+    }
     ensureSelectedSession();
     realtimeStore.subscribeTask(taskId.value);
   } catch (error) {
@@ -437,6 +650,47 @@ function handleTaskSwitch(nextTaskId: string) {
 function handleOpenFilePreview(payload: { filePath: string; content?: string }) {
   previewFile.value = payload;
   sidebarCollapsed.value = false;
+}
+
+async function refreshParallelCandidateMessages(currentTaskId: string, silent = false) {
+  const candidateSessionIds = executionPlanCandidates.value
+    .map((candidate) => candidate.sessionId)
+    .filter((sessionId): sessionId is string => Boolean(sessionId));
+
+  if (candidateSessionIds.length === 0) {
+    parallelCandidateMessages.value = {};
+    return;
+  }
+
+  const entries = await Promise.all(
+    candidateSessionIds.map(async (sessionId) => {
+      try {
+        const response = await getTaskSessionMessages(currentTaskId, sessionId);
+        return [sessionId, Array.isArray(response.data) ? response.data : []] as const;
+      } catch {
+        return [sessionId, silent ? parallelCandidateMessages.value[sessionId] ?? [] : []] as const;
+      }
+    }),
+  );
+
+  parallelCandidateMessages.value = Object.fromEntries(entries);
+}
+
+async function handleAdoptCandidate(index: number) {
+  if (!taskId.value) {
+    return;
+  }
+
+  adoptingCandidateIndex.value = index;
+  try {
+    await adoptParallelCandidate(taskId.value, index);
+    message.success("已采纳候选结果");
+    await refreshTaskSnapshot({ workflow: true, flow: true, messages: true });
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : "采纳候选失败");
+  } finally {
+    adoptingCandidateIndex.value = null;
+  }
 }
 
 function syncSelectedSessionToRoute(sessionId: string | undefined) {
@@ -598,15 +852,9 @@ async function handleExecutionModeConfirm(overrides: ExecutionOverrides) {
 
   executionModeSaving.value = true;
   try {
-    const strategy = serializeTaskStrategy(task.value, overrides);
-    const executionMode = overrides?.mode ?? "single";
-    const executionPlan = buildSavedExecutionPlan(task.value, overrides);
-    await updateTask(taskId.value, {
-      strategy,
-      executionMode,
-      executionPlan,
-    });
+    await updateTask(taskId.value, buildExecutionModeTaskUpdate(task.value, overrides));
     showExecutionModeModal.value = false;
+    const executionMode = overrides?.mode ?? "single";
     const judgeEnabled = executionMode === "parallel" && (overrides?.judge ?? DEFAULT_JUDGE_CONFIG).enabled;
     message.success(judgeEnabled ? "执行模式与并行 Judge 配置已保存" : "执行模式已保存，下一次发送消息时生效");
     await loadTaskDetail();

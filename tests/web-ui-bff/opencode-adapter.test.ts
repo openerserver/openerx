@@ -119,6 +119,40 @@ describe("opencode adapter resilience", () => {
     });
   });
 
+  test("does not forward the platform placeholder execution agent to runtime", async () => {
+    const fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/session") && init?.method === "POST") {
+        return new Response(JSON.stringify({ id: "session-1" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.endsWith("/session/session-1/prompt_async") && init?.method === "POST") {
+        return new Response(null, { status: 204 });
+      }
+      if (url.endsWith("/session/session-1/message?limit=200") && init?.method === "GET") {
+        return new Response(JSON.stringify([{ info: { role: "user" }, parts: [] }]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      return new Response("not found", { status: 404 });
+    });
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    const { createSession } = await loadOpencodeAdapter();
+    const result = await createSession("task-1", "proj-1", "hello");
+
+    expect(result.ok).toBe(true);
+    const promptCall = fetchMock.mock.calls[1];
+    const body = JSON.parse(String(promptCall?.[1]?.body)) as {
+      agent?: string;
+    };
+    expect(body.agent).toBeUndefined();
+  });
+
   test("retries createSession prompt when runtime accepts but does not persist messages", async () => {
     let promptAttempts = 0;
     const fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -257,6 +291,47 @@ describe("opencode adapter resilience", () => {
     expect(third.ok).toBe(false);
     expect(third.error).toContain("circuit breaker open");
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  test("still confirms prompt persistence after the shared session-read circuit is open", async () => {
+    let listReadAttempts = 0;
+    const fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/session?limit=20")) {
+        listReadAttempts += 1;
+        throw new Error("runtime unavailable");
+      }
+      if (url.endsWith("/session") && init?.method === "POST") {
+        return new Response(JSON.stringify({ id: "session-1" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.endsWith("/session/session-1/prompt_async") && init?.method === "POST") {
+        return new Response(null, { status: 204 });
+      }
+      if (url.endsWith("/session/session-1/message?limit=200") && init?.method === "GET") {
+        return new Response(JSON.stringify([{ info: { role: "user" }, parts: [] }]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      return new Response("not found", { status: 404 });
+    });
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    const { createSession, listSessions } = await loadOpencodeAdapter();
+
+    await listSessions();
+    await listSessions();
+    const breakerState = await listSessions();
+    const result = await createSession("task-1", "proj-1", "hello");
+
+    expect(listReadAttempts).toBe(2);
+    expect(breakerState.ok).toBe(false);
+    expect(breakerState.error).toContain("circuit breaker open");
+    expect(result.ok).toBe(true);
   });
 
   test("clears opcall timeout timers after fetch failures", async () => {

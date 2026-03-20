@@ -70,6 +70,7 @@ const getSessionMessagesMock = mock(async () => ({
 }));
 const listSessionsMock = mock(async () => ({ ok: true, data: [{ id: "ses-1" }] }));
 const recoverAgentRunMock = mock(() => undefined);
+const terminateAgentMock = mock(async () => ({ ok: true }));
 const updateAgentRunStatusMock = mock(() => undefined);
 const runDetachedPromptMock = mock(async () => ({
   ok: true,
@@ -84,19 +85,24 @@ const onGraphToolExecutedMock = mock(async () => undefined);
 const buildPipelineStageUpdatedEventsMock = mock(async () => [] as Array<Record<string, unknown>>);
 
 mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () => ({
+  authHeader: () => "Bearer test",
   cpFetch: cpFetchMock,
   createInternalAuthorization: createInternalAuthorizationMock,
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter", () => ({
+  continueSession: mock(async () => ({ ok: true })),
+  createSession: mock(async () => ({ ok: true, sessionId: "ses-1", agentRunId: "run-1" })),
+  ensureAgentRunForSession: mock(() => "run-1"),
   extractAssistantResultFromMessages: extractAssistantResultFromMessagesMock,
   findAgentRunBySessionId: findAgentRunBySessionIdMock,
+  forkSession: mock(async () => ({ ok: true, sessionId: "ses-fork-1" })),
   getAgentRun: getAgentRunMock,
   getSessionMessages: getSessionMessagesMock,
   listSessions: listSessionsMock,
   recoverAgentRun: recoverAgentRunMock,
   runDetachedPrompt: runDetachedPromptMock,
-  terminateAgent: mock(async () => ({ ok: true })),
+  terminateAgent: terminateAgentMock,
   updateAgentRunStatus: updateAgentRunStatusMock,
 }));
 
@@ -106,6 +112,8 @@ mock.module("../../control-plane/web-ui-bff/src/modules/code-changes/change-coll
 
 mock.module("../../control-plane/web-ui-bff/src/modules/hooks/lifecycle-hooks", () => ({
   executeLifecycleHooks: executeLifecycleHooksMock,
+  mergeStageAndStrategyHooks: (_stage: unknown[], strategy: unknown[]) => strategy ?? [],
+  parseStageHooks: (raw: unknown) => (Array.isArray(raw) ? raw : []),
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/modules/realtime/dag-sync", () => ({
@@ -150,6 +158,7 @@ beforeEach(() => {
   getSessionMessagesMock.mockReset();
   listSessionsMock.mockReset();
   recoverAgentRunMock.mockReset();
+  terminateAgentMock.mockReset();
   updateAgentRunStatusMock.mockReset();
   runDetachedPromptMock.mockReset();
   collectChangesFromSessionMock.mockReset();
@@ -224,6 +233,7 @@ beforeEach(() => {
   getSessionMessagesMock.mockResolvedValue({ ok: true, data: [] });
   listSessionsMock.mockResolvedValue({ ok: true, data: [{ id: "ses-1" }] });
   recoverAgentRunMock.mockImplementation(() => undefined);
+  terminateAgentMock.mockResolvedValue({ ok: true });
   updateAgentRunStatusMock.mockImplementation(() => undefined);
   runDetachedPromptMock.mockResolvedValue({
     ok: true,
@@ -633,6 +643,110 @@ describe("SSEAggregator pipeline emitters", () => {
     }
   });
 
+  test("parallel finalization keeps winner selection manual", async () => {
+    cpFetchMock.mockImplementation(async (url: string, options?: { method?: string; body?: unknown }) => {
+      if ((options?.method || "GET") === "GET" && url === "/api/tasks/task-1") {
+        return {
+          ok: true,
+          status: 200,
+          data: {
+            id: "task-1",
+            title: "Runtime pipeline task",
+            prompt: "Summarize progress",
+            projectId: "proj-1",
+            sessionId: "ses-main",
+            agentRunId: "run-main",
+            result: null,
+            strategy: null,
+            selectedModel: "gpt-5.4",
+            executionPlan: JSON.stringify({
+              templateId: "parallel-default",
+              mode: "parallel",
+              steps: [{ id: "exec-parallel", type: "execution", status: "completed" }],
+              candidates: [
+                {
+                  label: "Candidate A",
+                  agent: "executor",
+                  sessionId: "ses-1",
+                  agentRunId: "run-1",
+                  status: "completed",
+                  result: "Answer A",
+                },
+                {
+                  label: "Candidate B",
+                  agent: "executor",
+                  sessionId: "ses-2",
+                  agentRunId: "run-2",
+                  status: "completed",
+                  result: "Answer B",
+                },
+              ],
+            }),
+          },
+        };
+      }
+
+      return { ok: true, status: 200, data: { ok: true, body: options?.body } };
+    });
+
+    const aggregator = sseAggregator as unknown as {
+      parallelCandidateResults: Map<string, Map<number, { sessionId: string; result?: string }>>;
+      parallelTaskSessions: Map<string, Set<string>>;
+      finalizeParallelTask: (taskId: string, projectId: string, authorization: string) => Promise<void>;
+    };
+    aggregator.parallelCandidateResults.set(
+      "task-1",
+      new Map([
+        [0, { sessionId: "ses-1", result: "Answer A" }],
+        [1, { sessionId: "ses-2", result: "Answer B" }],
+      ]),
+    );
+    aggregator.parallelTaskSessions.set("task-1", new Set(["ses-1", "ses-2"]));
+
+    const emitted: Array<Record<string, unknown>> = [];
+    const unsubscribe = sseAggregator.onEvent((event) => {
+      emitted.push(event as unknown as Record<string, unknown>);
+    });
+
+    try {
+      await aggregator.finalizeParallelTask("task-1", "proj-1", "Bearer internal");
+
+      const taskPatchCall = (
+        cpFetchMock.mock.calls as unknown as Array<
+          [string, { method?: string; authorization?: string; body?: Record<string, unknown> }]
+        >
+      ).find(([url, options]) => url === "/api/tasks/task-1" && options?.method === "PATCH");
+      expect(taskPatchCall).toBeDefined();
+      expect(taskPatchCall?.[1]?.body?.status).toBeUndefined();
+      expect(taskPatchCall?.[1]?.body?.result).toBeUndefined();
+      const patchedPlan = JSON.parse(String(taskPatchCall?.[1]?.body?.executionPlan)) as {
+        winnerCandidateIndex?: number;
+        judgeResult?: { winnerIndex?: number };
+        candidates: Array<{ result?: string; status?: string; finishedAt?: string }>;
+      };
+      expect(patchedPlan.winnerCandidateIndex).toBeUndefined();
+      expect(patchedPlan.judgeResult?.winnerIndex).toBe(0);
+      expect(patchedPlan.candidates).toEqual([
+        expect.objectContaining({
+          status: "completed",
+          result: "Answer A",
+          finishedAt: expect.any(String),
+        }),
+        expect.objectContaining({
+          status: "completed",
+          result: "Answer B",
+          finishedAt: expect.any(String),
+        }),
+      ]);
+      expect(emitted.some((event) => event.type === "task.completed")).toBe(false);
+      expect(buildPipelineStageUpdatedEventsMock).not.toHaveBeenCalledWith(
+        expect.objectContaining({ reason: "task.completed" }),
+      );
+    } finally {
+      unsubscribe();
+    }
+  });
+
   test("dag sync waits for graph persistence before emitting task.node.updated and pipeline.stage.updated", async () => {
     let releaseGraphSync: (() => void) | undefined;
     onGraphToolExecutedMock.mockImplementation(
@@ -774,6 +888,142 @@ describe("SSEAggregator pipeline emitters", () => {
         "task.node.updated",
         "pipeline.stage.updated",
       ]);
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  test("parallel question tools are failed instead of staying running forever", async () => {
+    cpFetchMock.mockImplementation(async (url: string, options?: { method?: string; body?: unknown }) => {
+      if ((options?.method || "GET") === "GET" && url === "/api/tasks/task-1") {
+        return {
+          ok: true,
+          status: 200,
+          data: {
+            id: "task-1",
+            title: "Runtime pipeline task",
+            prompt: "Summarize progress",
+            projectId: "proj-1",
+            sessionId: "ses-task-main",
+            agentRunId: "run-1",
+            result: "Done",
+            strategy: null,
+            selectedModel: "gpt-5.4",
+            executionPlan: JSON.stringify({
+              templateId: "parallel-default",
+              mode: "parallel",
+              steps: [],
+              candidates: [
+                {
+                  label: "Candidate A",
+                  agent: "executor",
+                  sessionId: "ses-1",
+                  agentRunId: "run-1",
+                  status: "running",
+                },
+                {
+                  label: "Candidate B",
+                  agent: "executor",
+                  sessionId: "ses-2",
+                  agentRunId: "run-2",
+                  status: "running",
+                },
+              ],
+            }),
+          },
+        };
+      }
+
+      return { ok: true, status: 200, data: { ok: true, body: options?.body } };
+    });
+
+    findAgentRunBySessionIdMock.mockImplementation((sessionId?: string) => {
+      if (sessionId === "ses-1") {
+        return {
+          subSessionId: "ses-1",
+          taskId: "task-1",
+          projectId: "proj-1",
+          agentRunId: "run-1",
+          status: "running",
+        };
+      }
+
+      return undefined;
+    });
+    extractAssistantResultFromMessagesMock.mockReturnValue({
+      completed: true,
+      failed: false,
+      error: undefined,
+      tokenUsed: 42,
+      text: "Need clarification",
+    });
+
+    const aggregator = sseAggregator as unknown as {
+      parallelTaskSessions: Map<string, Set<string>>;
+      parallelCandidateResults: Map<string, Map<number, { sessionId: string; result?: string }>>;
+      sessionToCandidateMap: Map<string, { taskId: string; candidateIndex: number }>;
+    };
+    aggregator.parallelTaskSessions.set("task-1", new Set(["ses-1", "ses-2"]));
+    aggregator.parallelCandidateResults.set("task-1", new Map());
+    aggregator.sessionToCandidateMap.set("ses-1", { taskId: "task-1", candidateIndex: 0 });
+
+    const emitted: Array<Record<string, unknown>> = [];
+    const unsubscribe = sseAggregator.onEvent((event) => {
+      emitted.push(event as unknown as Record<string, unknown>);
+    });
+
+    try {
+      await (
+        sseAggregator as unknown as {
+          maybeFailParallelQuestionTool: (event: Record<string, unknown>) => Promise<void>;
+        }
+      ).maybeFailParallelQuestionTool({
+        type: "tool.execute.before",
+        sessionId: "ses-1",
+        taskId: "task-1",
+        projectId: "proj-1",
+        agentRunId: "run-1",
+        data: {
+          tool: "question",
+        },
+      });
+
+      expect(terminateAgentMock).toHaveBeenCalledWith("run-1");
+      expect(updateAgentRunStatusMock).toHaveBeenCalledWith("run-1", "failed");
+      const taskPatchCall = (
+        cpFetchMock.mock.calls as unknown as Array<
+          [string, { method?: string; authorization?: string; body?: { executionPlan?: string } }]
+        >
+      ).find(
+        ([url, options]) => url === "/api/tasks/task-1" && options?.method === "PATCH",
+      );
+      expect(taskPatchCall).toBeDefined();
+      expect(taskPatchCall?.[1]?.authorization).toBe("Bearer internal");
+      expect(JSON.parse(String(taskPatchCall?.[1]?.body?.executionPlan))).toEqual({
+        templateId: "parallel-default",
+        mode: "parallel",
+        steps: [],
+        candidates: [
+          {
+            label: "Candidate A",
+            agent: "executor",
+            sessionId: "ses-1",
+            agentRunId: "run-1",
+            status: "failed",
+            result:
+              "[FAILED] Parallel candidate requested interactive clarification via question tool, which is not supported in unattended parallel execution.",
+            finishedAt: expect.any(String),
+          },
+          {
+            label: "Candidate B",
+            agent: "executor",
+            sessionId: "ses-2",
+            agentRunId: "run-2",
+            status: "running",
+          },
+        ],
+      });
+      expect(emitted.map((event) => event.type)).toContain("agent.completed");
     } finally {
       unsubscribe();
     }

@@ -1,5 +1,6 @@
 import { computed, ref, watch, type Ref } from "vue";
 import { getSessionMessages } from "../lib/api";
+import { normalizeWorkspaceFilePath } from "../lib/workspace-file-path";
 import { type RealtimeEvent, useRealtimeStore } from "../stores/realtime";
 
 export interface TaskConversationMessageItem {
@@ -12,6 +13,33 @@ export interface TaskConversationMessageItem {
   raw: unknown;
   isStreaming?: boolean;
 }
+
+export interface TaskParallelComparisonCard {
+  key: string;
+  index: number;
+  label: string;
+  model?: string;
+  status: string;
+  meta?: string;
+  loading: boolean;
+  items: TaskConversationMessageItem[];
+  canAdopt: boolean;
+  isAdopted: boolean;
+  isRecommended: boolean;
+}
+
+export interface TaskConversationParallelItem {
+  key: string;
+  role: "parallel";
+  createdAt?: string;
+  candidates: TaskParallelComparisonCard[];
+  judgeSummary?: string;
+  judgeReasoning?: string;
+  raw: unknown;
+  toolCalls: [];
+}
+
+export type TaskConversationListItem = TaskConversationMessageItem | TaskConversationParallelItem;
 
 export interface TaskConversationToolCallItem {
   key: string;
@@ -190,7 +218,7 @@ function extractTaggedContent(source: string | undefined, tag: string): string |
 function buildReadPreview(output: unknown) {
   const outputText = summarizeValue(output);
   return {
-    filePath: extractTaggedContent(outputText, "path"),
+    filePath: normalizeWorkspaceFilePath(extractTaggedContent(outputText, "path")),
     rawContent: extractTaggedContent(outputText, "content") ?? extractTaggedContent(outputText, "entries"),
     content: normalizePreviewText(
       extractTaggedContent(outputText, "content") ?? extractTaggedContent(outputText, "entries"),
@@ -206,9 +234,8 @@ function extractPatchFilePaths(patchText: string | undefined): string[] {
 
   const matches = [...patchText.matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/gmu)];
   const paths = matches
-    .map((match) => match[1]?.trim())
-    .filter((value): value is string => Boolean(value))
-    .map((value) => value.replace(/^\/Users\/wanglei\/Downloads\/phones-cloud\/openerx\//, ""));
+    .map((match) => normalizeWorkspaceFilePath(match[1]?.trim()))
+    .filter((value): value is string => Boolean(value));
 
   return [...new Set(paths)];
 }
@@ -227,10 +254,9 @@ function extractToolOutputFilePaths(output: unknown): string[] {
   const paths = lines
     .map((line) => {
       const match = line.match(/^(?:[AMD]|R\d+|\+|-)\s+(.+)$/u);
-      return match?.[1]?.trim();
+      return normalizeWorkspaceFilePath(match?.[1]?.trim());
     })
-    .filter((value): value is string => Boolean(value))
-    .map((value) => value.replace(/^\/Users\/wanglei\/Downloads\/phones-cloud\/openerx\//, ""));
+    .filter((value): value is string => Boolean(value));
 
   return [...new Set(paths)];
 }
@@ -350,7 +376,12 @@ function buildToolCall(part: Record<string, unknown>, index: number): TaskConver
   const kind = asString(part.toolName) ?? asString(part.tool) ?? "tool";
   const readPreview = kind === "read" ? buildReadPreview(state.output) : undefined;
   const outputFilePath = firstToolOutputFilePath(state);
-  const derivedFilePath = summarizeValue(input.filePath) ?? summarizeValue(input.path) ?? firstPatchFilePath(input) ?? outputFilePath ?? readPreview?.filePath;
+  const derivedFilePath =
+    normalizeWorkspaceFilePath(summarizeValue(input.filePath)) ??
+    normalizeWorkspaceFilePath(summarizeValue(input.path)) ??
+    firstPatchFilePath(input) ??
+    outputFilePath ??
+    readPreview?.filePath;
   const headline = buildToolHeadline(kind, input) ?? derivedFilePath;
 
   return {
@@ -479,7 +510,29 @@ function normalizeMessage(
   };
 }
 
-export function useTaskMessages(taskId: Ref<string>, sessionId: Ref<string | undefined>) {
+function createEmptyLiveAssistantState() {
+  return {
+    orderedAssistantMessageIds: [] as string[],
+    metaById: new Map<string, LiveAssistantMeta>(),
+    textById: new Map<string, string>(),
+    incompleteIds: new Set<string>(),
+  };
+}
+
+export function normalizeSessionConversationItems(messages: unknown[]): TaskConversationMessageItem[] {
+  const liveState = createEmptyLiveAssistantState();
+
+  return messages
+    .map((message, index) => normalizeMessage(message, index, liveState))
+    .filter((item): item is TaskConversationMessageItem => item != null)
+    .filter((item) => item.role !== "system");
+}
+
+export function useTaskMessages(
+  taskId: Ref<string>,
+  sessionId: Ref<string | undefined>,
+  options?: { includeLineage?: boolean },
+) {
   const realtimeStore = useRealtimeStore();
   const rawMessages = ref<unknown[]>([]);
   const loading = ref(false);
@@ -498,7 +551,9 @@ export function useTaskMessages(taskId: Ref<string>, sessionId: Ref<string | und
     error.value = null;
 
     try {
-      const response = await getSessionMessages(taskId.value, sessionId.value);
+      const response = await getSessionMessages(taskId.value, sessionId.value, {
+        includeLineage: options?.includeLineage === true,
+      });
       rawMessages.value = Array.isArray(response.data) ? response.data : [];
     } catch (nextError) {
       rawMessages.value = [];
@@ -525,12 +580,7 @@ export function useTaskMessages(taskId: Ref<string>, sessionId: Ref<string | und
 
   const liveAssistantState = computed(() => {
     if (!sessionId.value) {
-      return {
-        orderedAssistantMessageIds: [] as string[],
-        metaById: new Map<string, LiveAssistantMeta>(),
-        textById: new Map<string, string>(),
-        incompleteIds: new Set<string>(),
-      };
+      return createEmptyLiveAssistantState();
     }
 
     return collectLiveAssistantState(taskEvents.value, sessionId.value);
@@ -571,7 +621,7 @@ export function useTaskMessages(taskId: Ref<string>, sessionId: Ref<string | und
     return null;
   });
 
-  const conversationItems = computed(() =>
+  const conversationItems = computed<TaskConversationListItem[]>(() =>
     [...items.value, ...(streamingAssistantDraft.value ? [streamingAssistantDraft.value] : [])].filter(
       (item) => item.role === "user" || item.role === "assistant" || item.role === "tool",
     ),

@@ -261,4 +261,28 @@ export const DEFAULT_ROLE_AGENT_DEFINITIONS: RoleAgentSeedDefinition[] = [
       },
     ],
   },
+  {
+    role: {
+      id: "role.flash-assistant",
+      name: "Flash 助手",
+      description: "使用 Gemini Flash 模型的通用辅助 Agent，适用于低延迟、高吞吐的简单任务。",
+      scope: "system",
+      permissionProfile: "perm.readonly-analysis",
+      toolProfile: "tools.discovery+design",
+      defaultExecutionMode: "single",
+      allowedStages: ["clarify", "plan", "review"],
+      ownerTeam: "platform",
+      tags: ["default", "flash"],
+    },
+    bindings: [
+      {
+        bindingKey: "flash-main",
+        runtimeAgent: "prometheus-enterprise",
+        label: "Flash 主执行",
+        enabled: true,
+        priority: 1,
+        model: "github-copilot:gemini-3-flash-preview",
+      },
+    ],
+  },
 ];

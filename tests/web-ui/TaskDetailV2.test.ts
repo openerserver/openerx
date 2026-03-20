@@ -11,7 +11,11 @@ import {
   serializeTaskStrategy,
 } from "../../control-plane/web-ui/src/lib/taskExecutionMode";
 import { sessionTreeToFlow } from "../../control-plane/web-ui/src/composables/useSessionFlow";
-import { useTaskMessages } from "../../control-plane/web-ui/src/composables/useTaskMessages";
+import {
+  type TaskConversationMessageItem,
+  normalizeSessionConversationItems,
+  useTaskMessages,
+} from "../../control-plane/web-ui/src/composables/useTaskMessages";
 
 const apiMocks = vi.hoisted(() => ({
   getSessionMessages: vi.fn(),
@@ -126,9 +130,11 @@ describe("TaskDetailV2 composables", () => {
 
     expect(apiMocks.getSessionMessages).toHaveBeenCalledWith("task-1", "session-1");
     expect(state.conversationItems.value).toHaveLength(2);
-    expect(state.conversationItems.value[0]?.text).toBe("第一条消息");
-    expect(state.conversationItems.value[1]?.agent).toBe("planner");
-    expect(state.conversationItems.value[1]?.role).toBe("assistant");
+    const firstItem = state.conversationItems.value[0] as TaskConversationMessageItem | undefined;
+    const secondItem = state.conversationItems.value[1] as TaskConversationMessageItem | undefined;
+    expect(firstItem?.text).toBe("第一条消息");
+    expect(secondItem?.agent).toBe("planner");
+    expect(secondItem?.role).toBe("assistant");
   });
 
   it("merges realtime assistant chunks into a streaming draft", async () => {
@@ -246,6 +252,67 @@ describe("TaskDetailV2 composables", () => {
         filePath: "docs/result.md",
       }),
     ]);
+  });
+
+  it("normalizes a candidate session into multiple adoption-ready conversation items", () => {
+    const items = normalizeSessionConversationItems([
+      {
+        info: {
+          id: "candidate-user-1",
+          role: "user",
+          time: { created: "2026-03-20T00:00:01.000Z" },
+        },
+        parts: [{ text: "请先检查现状" }],
+      },
+      {
+        info: {
+          id: "candidate-assistant-1",
+          role: "assistant",
+          agent: "builder",
+          time: { completed: "2026-03-20T00:00:02.000Z" },
+        },
+        parts: [{ text: "先给出第一轮分析。" }],
+      },
+      {
+        info: {
+          id: "candidate-assistant-2",
+          role: "assistant",
+          agent: "builder",
+          time: { completed: "2026-03-20T00:00:03.000Z" },
+        },
+        parts: [
+          {
+            type: "tool",
+            id: "candidate-tool-1",
+            toolName: "read",
+            input: { filePath: "docs/spec.md" },
+            state: {
+              status: "completed",
+              output: {
+                path: "docs/spec.md",
+                content: "spec content",
+              },
+            },
+          },
+          { text: "第二轮结合工具结果给出修正。" },
+        ],
+      },
+    ]);
+
+    expect(items).toHaveLength(3);
+    expect(items[0]).toMatchObject({ role: "user", text: "请先检查现状" });
+    expect(items[1]).toMatchObject({ role: "assistant", text: "先给出第一轮分析。" });
+    expect(items[2]).toMatchObject({
+      role: "assistant",
+      text: "第二轮结合工具结果给出修正。",
+      toolCalls: [
+        expect.objectContaining({
+          kind: "read",
+          filePath: "docs/spec.md",
+          stateLabel: "完成",
+        }),
+      ],
+    });
   });
 
   it("extracts file path from apply_patch payloads", async () => {

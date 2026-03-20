@@ -1391,8 +1391,18 @@ export async function getTaskSessions(taskId: string) {
   return request<{ data: SessionInfo[] }>(`/tasks/${taskId}/sessions`);
 }
 
-export async function getSessionMessages(taskId: string, sessionId: string) {
-  return request<{ data: unknown[] }>(`/tasks/${taskId}/sessions/${sessionId}/messages`);
+export async function getSessionMessages(
+  taskId: string,
+  sessionId: string,
+  options?: { includeLineage?: boolean },
+) {
+  const query = new URLSearchParams();
+  if (options?.includeLineage) {
+    query.set("includeLineage", "true");
+  }
+
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request<{ data: unknown[] }>(`/tasks/${taskId}/sessions/${sessionId}/messages${suffix}`);
 }
 
 export async function continueTask(taskId: string, prompt: string, sessionId?: string) {

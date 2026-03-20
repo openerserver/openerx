@@ -306,6 +306,7 @@ import {
   listTasks,
 } from "../lib/api";
 import { renderMarkdown } from "../lib/markdown";
+import { normalizeWorkspaceFilePath } from "../lib/workspace-file-path";
 import { useProjectStore } from "../stores/project";
 import { type RealtimeEvent, useRealtimeStore } from "../stores/realtime";
 import {
@@ -2793,8 +2794,8 @@ function buildToolHeadline(label: string, input: Record<string, unknown>) {
 
   return (
     summarizeUnknownValue(input.command) ??
-    summarizeUnknownValue(input.filePath) ??
-    summarizeUnknownValue(input.path) ??
+    normalizeWorkspaceFilePath(summarizeUnknownValue(input.filePath)) ??
+    normalizeWorkspaceFilePath(summarizeUnknownValue(input.path)) ??
     summarizeUnknownValue(input.pattern) ??
     summarizeUnknownValue(input.query) ??
     summarizeUnknownValue(input.url)
@@ -2829,7 +2830,7 @@ function extractTaggedContent(source: string | undefined, tag: string): string |
 }
 
 function buildReadPreview(outputText: string | undefined) {
-  const filePath = extractTaggedContent(outputText, "path");
+  const filePath = normalizeWorkspaceFilePath(extractTaggedContent(outputText, "path"));
   const content = extractTaggedContent(outputText, "content");
   const entries = extractTaggedContent(outputText, "entries");
   const preview = normalizePreviewText(content ?? entries, 500).text;
@@ -2870,7 +2871,7 @@ function buildMonitorToolCallView(
       summarizeUnknownValue(input.description) ?? summarizeUnknownValue(input.explanation),
     goal: summarizeUnknownValue(input.goal),
     command: toolKind === "bash" ? summarizeUnknownValue(input.command) : undefined,
-    filePath: summarizeUnknownValue(input.filePath) ?? readDetails.filePath,
+    filePath: normalizeWorkspaceFilePath(summarizeUnknownValue(input.filePath)) ?? readDetails.filePath,
     readPreview: readDetails.readPreview,
     inputPreview: buildToolInputPreview(input),
     outputPreview: output.text,

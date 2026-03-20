@@ -5,57 +5,201 @@
     <a-empty v-else-if="items.length === 0" description="当前分支还没有可展示的消息" />
     <div v-else class="chat-message-list__items">
       <article v-for="item in items" :key="item.key" class="chat-message-card" :class="`chat-message-card--${item.role}`">
-        <a-flex justify="space-between" align="center" class="chat-message-card__header">
-          <a-space size="small" wrap>
-            <a-tag :color="roleColor(item.role)">{{ roleLabel(item.role) }}</a-tag>
-            <a-tag v-if="item.agent" color="geekblue">{{ item.agent }}</a-tag>
-            <a-tag v-if="item.isStreaming" color="processing" class="chat-message-card__streaming-tag">生成中</a-tag>
-            <a-typography-text v-if="item.createdAt" type="secondary" class="chat-message-card__time">
-              {{ formatTime(item.createdAt) }}
-            </a-typography-text>
-          </a-space>
-          <a-button v-if="canCopy(item)" type="text" size="small" @click="handleCopy(copyText(item))">复制</a-button>
-        </a-flex>
+        <template v-if="isParallelComparisonItem(item)">
+          <div class="chat-message-card__parallel-group">
+            <a-space size="small" wrap>
+              <a-tag color="volcano">并行模型结果</a-tag>
+              <a-typography-text type="secondary" class="chat-message-card__parallel-hint">
+                多个模型会同时回复，请在这里对比后手动决定采纳哪个结果。
+              </a-typography-text>
+            </a-space>
 
-        <div v-if="item.toolCalls.length > 0" class="chat-message-card__tools">
-          <div v-for="tool in item.toolCalls" :key="tool.key" class="chat-tool-call">
-            <a-flex justify="space-between" align="start" gap="small" wrap="wrap">
-              <a-space size="small" wrap>
-                <a-tag :color="tool.stateColor">{{ tool.stateLabel }}</a-tag>
-                <span class="chat-tool-call__label">{{ tool.label }}</span>
-              </a-space>
-              <button
-                v-if="tool.filePath"
-                type="button"
-                class="chat-tool-call__path-button"
-                @click="emit('openFilePreview', { filePath: tool.filePath, content: tool.fileContent })"
+            <div class="chat-message-card__parallel-grid">
+              <div
+                v-for="candidate in item.candidates"
+                :key="candidate.key"
+                class="chat-message-card__parallel-card"
+                :class="{
+                  'chat-message-card__parallel-card--winner': candidate.isAdopted,
+                  'chat-message-card__parallel-card--recommended': candidate.isRecommended,
+                }"
               >
-                {{ tool.filePath }}
-              </button>
-            </a-flex>
-            <div v-if="toolHeadlineText(tool)" class="chat-tool-call__headline">
-              {{ toolHeadlineText(tool) }}
-            </div>
-            <pre v-if="toolDetailText(tool)" class="chat-tool-call__detail">{{ toolDetailText(tool) }}</pre>
-          </div>
-        </div>
+                <a-flex justify="space-between" align="start" gap="small">
+                  <a-space size="small" wrap>
+                    <a-tag color="blue">{{ candidate.label }}</a-tag>
+                    <a-tag v-if="candidate.model" color="cyan">{{ candidate.model }}</a-tag>
+                    <a-tag :color="candidateStatusColor(candidate.status)">
+                      {{ candidateStatusLabel(candidate.status) }}
+                    </a-tag>
+                    <a-tag v-if="candidate.isAdopted" color="gold">已采纳</a-tag>
+                    <a-tag v-else-if="candidate.isRecommended" color="geekblue">Judge 推荐</a-tag>
+                  </a-space>
+                  <a-button
+                    v-if="candidate.canAdopt"
+                    type="primary"
+                    size="small"
+                    @click="emit('adoptCandidate', candidate.index)"
+                  >
+                    采纳为回复
+                  </a-button>
+                </a-flex>
 
-        <div
-          v-if="item.role === 'assistant' && item.text && shouldRenderMarkdown(item)"
-          class="chat-message-card__markdown"
-          v-html="render(displayText(item) || sanitizedItemText(item) || item.text)"
-        ></div>
-        <div v-else-if="item.isStreaming && !displayText(item) && item.toolCalls.length === 0" class="streaming-skeleton" aria-hidden="true">
-          <span class="streaming-skeleton__dot">.</span>
-          <span class="streaming-skeleton__dot">.</span>
-          <span class="streaming-skeleton__dot">.</span>
-          <span class="streaming-skeleton__dot">.</span>
-        </div>
-        <pre
-          v-else-if="displayText(item) || sanitizedItemText(item) || (!item.toolCalls.length && !item.isStreaming)"
-          class="chat-message-card__plain"
-          :class="{ 'chat-message-card__plain--streaming': item.isStreaming || isRevealing(item) }"
-        >{{ displayText(item) || sanitizedItemText(item) || '暂无文本内容' }}</pre>
+                <a-typography-text v-if="candidate.meta" type="secondary" class="chat-message-card__parallel-meta">
+                  {{ candidate.meta }}
+                </a-typography-text>
+
+                <a-typography-text v-if="candidate.loading" type="secondary">
+                  正在等待该模型返回结果...
+                </a-typography-text>
+                <a-typography-text v-else-if="candidate.items.length === 0" type="secondary">
+                  该模型暂时还没有可展示的回复。
+                </a-typography-text>
+                <div v-else class="chat-message-card__parallel-thread">
+                  <div
+                    v-for="entry in candidate.items"
+                    :key="entry.key"
+                    class="chat-message-card__parallel-entry"
+                    :class="`chat-message-card__parallel-entry--${entry.role}`"
+                  >
+                    <a-flex justify="space-between" align="center" class="chat-message-card__parallel-entry-header">
+                      <div class="chat-message-card__parallel-entry-header-main">
+                        <span class="chat-message-card__parallel-entry-kicker">
+                          {{ entry.role === 'assistant' ? '模型回复' : entry.role === 'tool' ? '工具输出' : roleLabel(entry.role) }}
+                        </span>
+                        <a-space size="small" wrap>
+                          <a-tag :color="roleColor(entry.role)">{{ roleLabel(entry.role) }}</a-tag>
+                          <a-tag v-if="entry.agent" color="geekblue">{{ entry.agent }}</a-tag>
+                          <a-tag v-if="entry.isStreaming" color="processing">生成中</a-tag>
+                        </a-space>
+                      </div>
+                      <a-typography-text v-if="entry.createdAt" type="secondary" class="chat-message-card__time">
+                        {{ formatTime(entry.createdAt) }}
+                      </a-typography-text>
+                    </a-flex>
+
+                    <div v-if="entry.toolCalls.length > 0" class="chat-message-card__tools">
+                      <div v-for="tool in entry.toolCalls" :key="tool.key" class="chat-tool-call">
+                        <a-flex justify="space-between" align="start" gap="small" wrap="wrap">
+                          <a-space size="small" wrap>
+                            <a-tag :color="tool.stateColor">{{ tool.stateLabel }}</a-tag>
+                            <span class="chat-tool-call__label">{{ tool.label }}</span>
+                          </a-space>
+                          <a-space size="small" wrap>
+                            <button
+                              v-if="tool.filePath"
+                              type="button"
+                              class="chat-tool-call__path-button"
+                              @click="emit('openFilePreview', { filePath: tool.filePath, content: tool.fileContent })"
+                            >
+                              {{ tool.filePath }}
+                            </button>
+                            <button
+                              v-if="toolDetailText(tool)"
+                              type="button"
+                              class="chat-tool-call__toggle"
+                              @click="toggleCandidateTool(tool.key)"
+                            >
+                              {{ isCandidateToolExpanded(tool.key) ? '收起详情' : '展开详情' }}
+                            </button>
+                          </a-space>
+                        </a-flex>
+                        <div v-if="toolHeadlineText(tool)" class="chat-tool-call__headline">
+                          {{ toolHeadlineText(tool) }}
+                        </div>
+                        <div v-if="toolSummaryText(tool)" class="chat-tool-call__summary">
+                          {{ toolSummaryText(tool) }}
+                        </div>
+                        <pre v-if="toolDetailText(tool) && isCandidateToolExpanded(tool.key)" class="chat-tool-call__detail">{{ toolDetailText(tool) }}</pre>
+                      </div>
+                    </div>
+
+                    <div
+                      v-if="entry.role === 'assistant' && entry.text && shouldRenderMarkdown(entry)"
+                      class="chat-message-card__markdown"
+                      v-html="render(displayText(entry) || sanitizedItemText(entry) || entry.text)"
+                    ></div>
+                    <div
+                      v-else-if="entry.isStreaming && !displayText(entry) && entry.toolCalls.length === 0"
+                      class="streaming-skeleton"
+                      aria-hidden="true"
+                    >
+                      <span class="streaming-skeleton__dot">.</span>
+                      <span class="streaming-skeleton__dot">.</span>
+                      <span class="streaming-skeleton__dot">.</span>
+                      <span class="streaming-skeleton__dot">.</span>
+                    </div>
+                    <pre
+                      v-else-if="displayText(entry) || sanitizedItemText(entry) || (!entry.toolCalls.length && !entry.isStreaming)"
+                      class="chat-message-card__plain chat-message-card__parallel-plain"
+                      :class="{ 'chat-message-card__plain--streaming': entry.isStreaming || isRevealing(entry) }"
+                    >{{ displayText(entry) || sanitizedItemText(entry) || '暂无文本内容' }}</pre>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <a-alert
+              v-if="item.judgeSummary"
+              type="info"
+              show-icon
+              :message="item.judgeSummary"
+              :description="item.judgeReasoning"
+            />
+          </div>
+        </template>
+        <template v-else>
+          <a-flex justify="space-between" align="center" class="chat-message-card__header">
+            <a-space size="small" wrap>
+              <a-tag :color="roleColor(item.role)">{{ roleLabel(item.role) }}</a-tag>
+              <a-tag v-if="item.agent" color="geekblue">{{ item.agent }}</a-tag>
+              <a-tag v-if="item.isStreaming" color="processing" class="chat-message-card__streaming-tag">生成中</a-tag>
+              <a-typography-text v-if="item.createdAt" type="secondary" class="chat-message-card__time">
+                {{ formatTime(item.createdAt) }}
+              </a-typography-text>
+            </a-space>
+            <a-button v-if="canCopy(item)" type="text" size="small" @click="handleCopy(copyText(item))">复制</a-button>
+          </a-flex>
+
+          <div v-if="item.toolCalls.length > 0" class="chat-message-card__tools">
+            <div v-for="tool in item.toolCalls" :key="tool.key" class="chat-tool-call">
+              <a-flex justify="space-between" align="start" gap="small" wrap="wrap">
+                <a-space size="small" wrap>
+                  <a-tag :color="tool.stateColor">{{ tool.stateLabel }}</a-tag>
+                  <span class="chat-tool-call__label">{{ tool.label }}</span>
+                </a-space>
+                <button
+                  v-if="tool.filePath"
+                  type="button"
+                  class="chat-tool-call__path-button"
+                  @click="emit('openFilePreview', { filePath: tool.filePath, content: tool.fileContent })"
+                >
+                  {{ tool.filePath }}
+                </button>
+              </a-flex>
+              <div v-if="toolHeadlineText(tool)" class="chat-tool-call__headline">
+                {{ toolHeadlineText(tool) }}
+              </div>
+              <pre v-if="toolDetailText(tool)" class="chat-tool-call__detail">{{ toolDetailText(tool) }}</pre>
+            </div>
+          </div>
+
+          <div
+            v-if="item.role === 'assistant' && item.text && shouldRenderMarkdown(item)"
+            class="chat-message-card__markdown"
+            v-html="render(displayText(item) || sanitizedItemText(item) || item.text)"
+          ></div>
+          <div v-else-if="item.isStreaming && !displayText(item) && item.toolCalls.length === 0" class="streaming-skeleton" aria-hidden="true">
+            <span class="streaming-skeleton__dot">.</span>
+            <span class="streaming-skeleton__dot">.</span>
+            <span class="streaming-skeleton__dot">.</span>
+            <span class="streaming-skeleton__dot">.</span>
+          </div>
+          <pre
+            v-else-if="displayText(item) || sanitizedItemText(item) || (!item.toolCalls.length && !item.isStreaming)"
+            class="chat-message-card__plain"
+            :class="{ 'chat-message-card__plain--streaming': item.isStreaming || isRevealing(item) }"
+          >{{ displayText(item) || sanitizedItemText(item) || '暂无文本内容' }}</pre>
+        </template>
       </article>
     </div>
   </div>
@@ -64,21 +208,28 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { renderMarkdown } from "../../lib/markdown";
-import type { TaskConversationMessageItem, TaskConversationToolCallItem } from "../../composables/useTaskMessages";
+import type {
+  TaskConversationListItem,
+  TaskConversationMessageItem,
+  TaskConversationParallelItem,
+  TaskConversationToolCallItem,
+} from "../../composables/useTaskMessages";
 
 const props = defineProps<{
-  items: TaskConversationMessageItem[];
+  items: TaskConversationListItem[];
   loading: boolean;
   error: string | null;
 }>();
 
 const emit = defineEmits<{
   (e: "openFilePreview", payload: { filePath: string; content?: string }): void;
+  (e: "adoptCandidate", index: number): void;
 }>();
 
 const scrollContainer = ref<HTMLElement | null>(null);
 const shouldAutoScroll = ref(true);
 const revealText = ref<Record<string, string>>({});
+const expandedCandidateTools = ref<Record<string, boolean>>({});
 const STREAMING_PLACEHOLDER_TEXT = "正在生成...";
 const AUTO_SCROLL_THRESHOLD_PX = 120;
 const REVEAL_INTERVAL_MS = 22;
@@ -87,13 +238,20 @@ const REVEAL_MAJOR_PAUSE_MS = 180;
 let revealTimer: ReturnType<typeof setTimeout> | null = null;
 
 const itemsSignature = computed(() =>
-  props.items.map((item) => `${item.key}:${item.text || ""}:${item.isStreaming ? 1 : 0}`).join("|"),
+  props.items
+    .map((item) =>
+      isParallelComparisonItem(item)
+        ? `${item.key}:${item.candidates.map((candidate) => `${candidate.key}:${candidate.status}:${candidate.items.map((entry) => `${entry.key}:${entry.text || ""}:${entry.toolCalls.length}`).join("!")}`).join("~")}`
+        : `${item.key}:${item.text || ""}:${item.isStreaming ? 1 : 0}`,
+    )
+    .join("|"),
 );
 
 function roleColor(role: string) {
   if (role === "assistant") return "cyan";
   if (role === "user") return "gold";
   if (role === "tool") return "purple";
+  if (role === "parallel") return "volcano";
   return "default";
 }
 
@@ -101,7 +259,27 @@ function roleLabel(role: string) {
   if (role === "assistant") return "模型回复";
   if (role === "user") return "用户输入";
   if (role === "tool") return "工具输出";
+  if (role === "parallel") return "并行回复";
   return role || "系统";
+}
+
+function isParallelComparisonItem(item: TaskConversationListItem): item is TaskConversationParallelItem {
+  return item.role === "parallel";
+}
+
+function candidateStatusLabel(status: string | undefined) {
+  if (status === "completed") return "已完成";
+  if (status === "running") return "执行中";
+  if (status === "failed") return "失败";
+  if (status === "pending") return "待执行";
+  return status || "未知";
+}
+
+function candidateStatusColor(status: string | undefined) {
+  if (status === "completed") return "success";
+  if (status === "running") return "processing";
+  if (status === "failed") return "error";
+  return "default";
 }
 
 function formatTime(value: string) {
@@ -254,6 +432,10 @@ function syncReveal() {
   let nextDelay = REVEAL_INTERVAL_MS;
 
   for (const item of props.items) {
+    if (isParallelComparisonItem(item)) {
+      continue;
+    }
+
     const fullText = item.text;
     if (!fullText) {
       continue;
@@ -336,6 +518,31 @@ function toolDetailText(tool: TaskConversationToolCallItem) {
   return tool.command || tool.outputPreview || tool.inputPreview;
 }
 
+function toolSummaryText(tool: TaskConversationToolCallItem) {
+  const detail = toolDetailText(tool)?.trim();
+  if (!detail) {
+    return tool.description;
+  }
+
+  const summary = detail.split(/\r?\n/u).find((line) => line.trim().length > 0)?.trim();
+  if (!summary) {
+    return tool.description;
+  }
+
+  return summary.length > 140 ? `${summary.slice(0, 140).trimEnd()}...` : summary;
+}
+
+function isCandidateToolExpanded(key: string) {
+  return expandedCandidateTools.value[key] === true;
+}
+
+function toggleCandidateTool(key: string) {
+  expandedCandidateTools.value = {
+    ...expandedCandidateTools.value,
+    [key]: !expandedCandidateTools.value[key],
+  };
+}
+
 function buildToolCopyText(tool: TaskConversationToolCallItem) {
   return [
     `工具: ${tool.label}`,
@@ -348,7 +555,10 @@ function buildToolCopyText(tool: TaskConversationToolCallItem) {
     .join("\n");
 }
 
-function canCopy(item: TaskConversationMessageItem) {
+function canCopy(item: TaskConversationListItem) {
+  if (isParallelComparisonItem(item)) {
+    return false;
+  }
   return Boolean(displayText(item) || sanitizedItemText(item) || item.toolCalls.length);
 }
 
@@ -397,6 +607,10 @@ onBeforeUnmount(() => {
 
 .chat-message-card--user {
   background: #fffbe6;
+}
+
+.chat-message-card--parallel {
+  background: linear-gradient(180deg, #fffaf2 0%, #ffffff 100%);
 }
 
 .chat-message-card__header {
@@ -452,6 +666,177 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 8px;
   margin-bottom: 10px;
+}
+
+.chat-message-card__parallel-group {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.chat-message-card__parallel-hint {
+  font-size: 12px;
+}
+
+.chat-message-card__parallel-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.chat-message-card__parallel-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid #e8e8e8;
+  background: #ffffff;
+  min-height: 180px;
+}
+
+.chat-message-card__parallel-card--winner {
+  border-color: #f0b429;
+  box-shadow: inset 0 0 0 1px rgba(240, 180, 41, 0.25);
+  background: #fffbe8;
+}
+
+.chat-message-card__parallel-card--recommended {
+  border-color: #91caff;
+  box-shadow: inset 0 0 0 1px rgba(145, 202, 255, 0.25);
+  background: #f0f7ff;
+}
+
+.chat-message-card__parallel-meta {
+  display: block;
+  font-size: 12px;
+}
+
+.chat-message-card__parallel-thread {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  position: relative;
+  padding-left: 18px;
+}
+
+.chat-message-card__parallel-thread::before {
+  content: "";
+  position: absolute;
+  left: 6px;
+  top: 2px;
+  bottom: 2px;
+  width: 1px;
+  background: linear-gradient(180deg, rgba(140, 140, 140, 0.1) 0%, rgba(140, 140, 140, 0.45) 18%, rgba(140, 140, 140, 0.45) 82%, rgba(140, 140, 140, 0.1) 100%);
+}
+
+.chat-message-card__parallel-entry {
+  position: relative;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid #ececec;
+  background: #ffffff;
+  box-shadow: 0 1px 0 rgba(15, 23, 42, 0.03);
+}
+
+.chat-message-card__parallel-entry::before {
+  content: "";
+  position: absolute;
+  left: -17px;
+  top: 18px;
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: #ffffff;
+  border: 2px solid #d9d9d9;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.9);
+}
+
+.chat-message-card__parallel-entry--assistant {
+  background: linear-gradient(180deg, #f8fcff 0%, #ffffff 100%);
+  border-left: 4px solid #91caff;
+}
+
+.chat-message-card__parallel-entry--assistant::before {
+  border-color: #91caff;
+}
+
+.chat-message-card__parallel-entry--tool {
+  background: linear-gradient(180deg, #fcf8ff 0%, #ffffff 100%);
+  border-left: 4px solid #c8a6ff;
+}
+
+.chat-message-card__parallel-entry--tool::before {
+  border-color: #c8a6ff;
+}
+
+.chat-message-card__parallel-entry--user {
+  background: linear-gradient(180deg, #fffaf0 0%, #ffffff 100%);
+  border-left: 4px solid #f7c97f;
+}
+
+.chat-message-card__parallel-entry--user::before {
+  border-color: #f7c97f;
+}
+
+.chat-message-card__parallel-entry-header {
+  margin-bottom: 8px;
+  gap: 12px;
+}
+
+.chat-message-card__parallel-entry-header-main {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.chat-message-card__parallel-entry-kicker {
+  color: #8c6b2e;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.chat-message-card__parallel-plain {
+  margin-bottom: 0;
+}
+
+.chat-message-card__parallel-entry :deep(.chat-tool-call) {
+  border: 1px solid #eadcff;
+  background: #faf6ff;
+}
+
+.chat-message-card__parallel-entry :deep(.chat-tool-call__headline) {
+  font-weight: 600;
+}
+
+.chat-message-card__parallel-entry :deep(.chat-tool-call__summary) {
+  color: #6b7280;
+  font-size: 12px;
+  line-height: 1.55;
+  margin-top: 6px;
+}
+
+.chat-message-card__parallel-entry :deep(.chat-tool-call__toggle) {
+  border: 0;
+  background: transparent;
+  color: #7c4dff;
+  font-size: 12px;
+  padding: 0;
+  cursor: pointer;
+}
+
+.chat-message-card__parallel-entry :deep(.chat-tool-call__toggle:hover) {
+  color: #5b21b6;
+}
+
+.chat-message-card__parallel-entry :deep(.chat-message-card__markdown) {
+  margin-top: 2px;
 }
 
 .chat-tool-call {
