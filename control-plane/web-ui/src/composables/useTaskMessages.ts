@@ -1,5 +1,5 @@
 import { computed, ref, watch, type Ref } from "vue";
-import { getSessionMessages } from "../lib/api";
+import { getTaskConversationMessages } from "../lib/api";
 import { normalizeWorkspaceFilePath } from "../lib/workspace-file-path";
 import { type RealtimeEvent, useRealtimeStore } from "../stores/realtime";
 
@@ -551,9 +551,11 @@ export function useTaskMessages(
     error.value = null;
 
     try {
-      const response = await getSessionMessages(taskId.value, sessionId.value, {
-        includeLineage: options?.includeLineage === true,
-      });
+      const response = options?.includeLineage === true
+        ? await getTaskConversationMessages(taskId.value, sessionId.value, {
+            includeLineage: true,
+          })
+        : await getTaskConversationMessages(taskId.value, sessionId.value);
       rawMessages.value = Array.isArray(response.data) ? response.data : [];
     } catch (nextError) {
       rawMessages.value = [];

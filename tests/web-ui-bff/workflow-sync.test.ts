@@ -232,7 +232,7 @@ describe("workflow-sync", () => {
     });
 
     installFetchHandlers(
-      staticRoute("/api/tasks/task-auto", {
+      staticRoute("/api/project-tree/tasks/task-auto", {
         id: "task-auto",
         projectId: "proj-default",
         strategy: JSON.stringify({
@@ -507,7 +507,7 @@ describe("workflow-sync", () => {
     });
 
     installFetchHandlers(
-      staticRoute("/api/tasks/task-4b", {
+      staticRoute("/api/project-tree/tasks/task-4b", {
         id: "task-4b",
         projectId: "proj-blocked",
         strategy: JSON.stringify({
@@ -593,7 +593,7 @@ describe("workflow-sync", () => {
       });
 
     installFetchHandlers(
-      staticRoute("/api/tasks/task-5", {
+      staticRoute("/api/project-tree/tasks/task-5", {
         id: "task-5",
         projectId: "proj-approval",
         strategy: JSON.stringify({ workflowTemplateId: "tpl-4" }),
@@ -699,7 +699,7 @@ describe("workflow-sync", () => {
     });
 
     installFetchHandlers(
-      staticRoute("/api/tasks/task-5b", {
+      staticRoute("/api/project-tree/tasks/task-5b", {
         id: "task-5b",
         projectId: "proj-approval",
         strategy: JSON.stringify({ workflowTemplateId: "tpl-4" }),

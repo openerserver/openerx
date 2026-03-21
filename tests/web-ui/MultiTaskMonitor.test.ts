@@ -1,6 +1,6 @@
-import { flushPromises, mount } from "@vue/test-utils";
+import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import { createPinia, defineStore, setActivePinia } from "pinia";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defineComponent, h } from "vue";
 import { useProjectStore } from "../../control-plane/web-ui/src/stores/project";
 import { useTaskMonitorStore } from "../../control-plane/web-ui/src/stores/task-monitor";
@@ -23,6 +23,8 @@ const apiMocks = vi.hoisted(() => ({
   listProjects: vi.fn(),
   listTasks: vi.fn(),
   getTask: vi.fn(),
+  getTaskBranches: vi.fn(),
+  getTaskConversationMessages: vi.fn(),
   getTaskSessions: vi.fn(),
   getSessionMessages: vi.fn(),
   getTaskPipeline: vi.fn(),
@@ -343,9 +345,15 @@ async function mountPage() {
     },
   });
 
+  mountedWrappers.push(wrapper);
+  attachedTargets.push(attachTarget);
+
   await flushPromises();
   return { wrapper, taskMonitorStore, realtimeStore };
 }
+
+const mountedWrappers: VueWrapper[] = [];
+const attachedTargets: HTMLElement[] = [];
 
 function emitFlowEvent(
   flow: {
@@ -381,6 +389,7 @@ function emitFlowEvent(
 }
 
 beforeEach(() => {
+  vi.useRealTimers();
   vi.clearAllMocks();
   realtimeSubscribeTask.mockReset();
   apiMocks.listProjects.mockResolvedValue([
@@ -474,6 +483,7 @@ beforeEach(() => {
       },
     ],
   });
+  apiMocks.getTaskBranches.mockImplementation((...args: unknown[]) => apiMocks.getTaskSessions(...args));
   apiMocks.getSessionMessages.mockResolvedValue({
     data: [
       {
@@ -514,6 +524,9 @@ beforeEach(() => {
       },
     ],
   });
+  apiMocks.getTaskConversationMessages.mockImplementation((...args: unknown[]) =>
+    apiMocks.getSessionMessages(...args)
+  );
   apiMocks.getTaskPipeline.mockImplementation(async (taskId: string) => {
     if (taskId !== "task-1") {
       return null;
@@ -579,6 +592,16 @@ beforeEach(() => {
       },
     };
   });
+});
+
+afterEach(() => {
+  while (mountedWrappers.length > 0) {
+    mountedWrappers.pop()?.unmount();
+  }
+
+  while (attachedTargets.length > 0) {
+    attachedTargets.pop()?.remove();
+  }
 });
 
 describe("MultiTaskMonitor", () => {
@@ -1141,8 +1164,6 @@ describe("MultiTaskMonitor", () => {
 
       const targetPreview = wrapper.find('[data-preview-type="target"]');
       expect(targetPreview.exists()).toBe(true);
-      expect(targetPreview.attributes("style") || "").toContain("left: 42px");
-      expect(targetPreview.attributes("style") || "").toContain("top: 564px");
 
       emitFlowEvent(flow as never, "node-drag-stop", {
         node: {

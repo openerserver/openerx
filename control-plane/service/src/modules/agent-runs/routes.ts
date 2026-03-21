@@ -7,10 +7,10 @@ import {
   auditEvents,
   codeChanges,
   projects,
-  tasks,
 } from "../../db/schema";
 import { type AppEnv, type JWTPayload, authMiddleware } from "../../middleware/auth";
 import { requireRole } from "../../middleware/rbac";
+import { loadExistingTaskTreeNodeIdsByProjectIds, loadTaskTreeRecords } from "../project-tree/task-view";
 
 export const agentRunRoutes = new Hono<AppEnv>();
 
@@ -61,7 +61,7 @@ interface BaseRunRow {
   agentRunId: string;
   taskId: string;
   taskTitle: string;
-  taskUserId: string;
+  taskUserId: string | null;
   projectId: string;
   projectName: string | null;
   agentType: string;
@@ -590,19 +590,31 @@ function buildRunQueryConditions(user: JWTPayload, filters: RunFilterOptions) {
   }
 
   const conditions = [];
-  if (filters.projectId) {
-    conditions.push(eq(tasks.projectId, filters.projectId));
-  } else if (accessibleProjects) {
-    conditions.push(inArray(tasks.projectId, accessibleProjects));
-  }
   if (filters.taskId) {
-    conditions.push(eq(tasks.id, filters.taskId));
+    conditions.push(eq(agentRuns.taskId, filters.taskId));
   }
   if (filters.agentRunId) {
     conditions.push(eq(agentRuns.id, filters.agentRunId));
   }
 
   return { accessibleProjects, conditions };
+}
+
+async function resolveScopedTaskIdsForRuns(
+  accessibleProjects: string[] | null,
+  filters: RunFilterOptions,
+) {
+  const scopedProjectIds = filters.projectId
+    ? [filters.projectId]
+    : accessibleProjects && accessibleProjects.length > 0
+      ? accessibleProjects
+      : null;
+
+  if (!scopedProjectIds) {
+    return null;
+  }
+
+  return loadExistingTaskTreeNodeIdsByProjectIds(scopedProjectIds);
 }
 
 function matchesRunFilters(
@@ -787,19 +799,27 @@ async function loadBaseRuns(
   user: JWTPayload,
   filters: RunFilterOptions = {},
 ): Promise<BaseRunRow[]> {
-  const { conditions } = buildRunQueryConditions(user, filters);
+  const { conditions, accessibleProjects } = buildRunQueryConditions(user, filters);
   if (conditions === null) {
     return [];
   }
 
-  const rows = await db
+  const scopedTaskIds = filters.taskId
+    ? [filters.taskId]
+    : await resolveScopedTaskIdsForRuns(accessibleProjects, filters);
+
+  if (scopedTaskIds && scopedTaskIds.length === 0) {
+    return [];
+  }
+
+  if (scopedTaskIds) {
+    conditions.push(inArray(agentRuns.taskId, scopedTaskIds));
+  }
+
+  const runRows = await db
     .select({
       agentRunId: agentRuns.id,
-      taskId: tasks.id,
-      taskTitle: tasks.title,
-      taskUserId: tasks.userId,
-      projectId: tasks.projectId,
-      projectName: projects.name,
+      taskId: agentRuns.taskId,
       agentType: agentRuns.agentType,
       status: agentRuns.status,
       sessionId: agentRuns.sessionId,
@@ -810,14 +830,59 @@ async function loadBaseRuns(
       startedAt: agentRuns.startedAt,
       finishedAt: agentRuns.finishedAt,
       createdAt: agentRuns.createdAt,
-      taskResult: tasks.result,
-      taskChangesSummary: tasks.changesSummary,
     })
     .from(agentRuns)
-    .innerJoin(tasks, eq(agentRuns.taskId, tasks.id))
-    .leftJoin(projects, eq(tasks.projectId, projects.id))
     .where(conditions.length > 0 ? and(...conditions) : undefined)
     .orderBy(desc(agentRuns.createdAt));
+
+  const taskIds = Array.from(new Set(runRows.map((row) => row.taskId).filter(Boolean)));
+  const taskRows = await loadTaskTreeRecords({ taskIds });
+  const visibleTasks = taskRows.filter((task) => {
+    if (filters.projectId && task.projectId !== filters.projectId) {
+      return false;
+    }
+    if (accessibleProjects && !accessibleProjects.includes(task.projectId)) {
+      return false;
+    }
+    return true;
+  });
+  const taskById = new Map(visibleTasks.map((task) => [task.id, task] as const));
+  const projectIds = Array.from(new Set(visibleTasks.map((task) => task.projectId)));
+  const projectRows =
+    projectIds.length > 0
+      ? await db.query.projects.findMany({ where: inArray(projects.id, projectIds) })
+      : [];
+  const projectById = new Map(projectRows.map((project) => [project.id, project] as const));
+
+  const rows = runRows.flatMap((run) => {
+    const task = taskById.get(run.taskId);
+    if (!task) {
+      return [];
+    }
+
+    return [
+      {
+        agentRunId: run.agentRunId,
+        taskId: task.id,
+        taskTitle: task.title,
+        taskUserId: task.userId,
+        projectId: task.projectId,
+        projectName: projectById.get(task.projectId)?.name ?? null,
+        agentType: run.agentType,
+        status: run.status,
+        sessionId: run.sessionId,
+        modelUsed: run.modelUsed,
+        tokenUsed: run.tokenUsed,
+        result: run.result,
+        error: run.error,
+        startedAt: run.startedAt,
+        finishedAt: run.finishedAt,
+        createdAt: run.createdAt,
+        taskResult: task.result,
+        taskChangesSummary: task.changesSummary,
+      } satisfies BaseRunRow,
+    ];
+  });
 
   const fromMs = parseTimestampQuery(filters.from);
   const toMs = parseTimestampQuery(filters.to);

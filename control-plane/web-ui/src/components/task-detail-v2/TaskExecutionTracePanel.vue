@@ -20,6 +20,16 @@
           </a-tag>
         </a-space>
 
+        <a-alert
+          v-if="trace.timelineMeta?.cacheState && trace.timelineMeta.cacheState !== 'complete'"
+          type="warning"
+          show-icon
+          :message="trace.timelineMeta.cacheState === 'partial' ? '时间线缓存仅部分可用' : '时间线缓存暂不可用'"
+          :description="trace.timelineMeta.cacheState === 'partial'
+            ? '当前时间线直接来自 service tree events，但只覆盖了部分 lineage session。'
+            : '当前时间线数据面还没有可用的 tree events 缓存。'"
+        />
+
         <a-space direction="vertical" style="width: 100%" size="small">
           <a-radio-group :value="segmentFilter" size="small" button-style="solid" @update:value="segmentFilter = $event">
             <a-radio-button value="all">全部</a-radio-button>
@@ -49,13 +59,14 @@
           <a-divider style="margin: 4px 0" />
 
           <a-radio-group :value="messageRoleFilter" size="small" button-style="solid" @update:value="messageRoleFilter = $event">
-            <a-radio-button value="all">全部消息</a-radio-button>
+            <a-radio-button value="all">全部时间线</a-radio-button>
             <a-radio-button value="user">用户</a-radio-button>
             <a-radio-button value="assistant">模型</a-radio-button>
             <a-radio-button value="tool">工具</a-radio-button>
           </a-radio-group>
 
           <div class="trace-panel__messages">
+            <a-empty v-if="filteredMessages.length === 0" description="当前时间线没有可展示的事件项" />
             <a-card
               v-for="message in filteredMessages"
               :key="message.id"
@@ -69,13 +80,19 @@
                   <a-typography-text type="secondary" style="font-size: 12px">
                     {{ message.id.slice(0, 8) }}
                   </a-typography-text>
+                  <a-tag v-for="eventType in message.sourceEventTypes || []" :key="eventType" color="default">
+                    {{ eventType }}
+                  </a-tag>
                 </a-space>
-                <a-button type="text" size="small" @click="toggleMessageRaw(message.id)">
+                <a-button type="text" size="small" :disabled="!message.raw" @click="toggleMessageRaw(message.id)">
                   {{ expandedMessageRaw[message.id] ? "收起 JSON" : "展开 JSON" }}
                 </a-button>
               </a-flex>
+              <a-typography-text type="secondary" style="font-size: 12px; display: block; margin-bottom: 6px">
+                {{ formatTimelineTime(message.createdAt, message.completedAt) }}
+              </a-typography-text>
               <pre class="trace-panel__content">{{ message.text }}</pre>
-              <pre v-if="expandedMessageRaw[message.id]" class="trace-panel__raw">{{ JSON.stringify(message.raw, null, 2) }}</pre>
+              <pre v-if="expandedMessageRaw[message.id] && message.raw" class="trace-panel__raw">{{ JSON.stringify(message.raw, null, 2) }}</pre>
             </a-card>
           </div>
         </a-space>
@@ -150,6 +167,17 @@ function traceRoleLabel(role: string) {
   if (role === "user") return "用户";
   if (role === "tool") return "工具";
   return role || "系统";
+}
+
+function formatTimelineTime(createdAt?: string, completedAt?: string | null) {
+  const parts: string[] = [];
+  if (createdAt) {
+    parts.push(`创建 ${createdAt}`);
+  }
+  if (completedAt) {
+    parts.push(`完成 ${completedAt}`);
+  }
+  return parts.join(" · ") || "无时间信息";
 }
 
 function toggleMessageRaw(messageId: string) {

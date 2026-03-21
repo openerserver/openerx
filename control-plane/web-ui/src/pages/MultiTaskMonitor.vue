@@ -297,12 +297,12 @@ import { loadYoga } from "yoga-layout/load";
 import type { Yoga as YogaLayoutApi } from "yoga-layout/load";
 import {
   type RuntimePipeline,
-  type SessionInfo,
+  type TaskBranchRecord,
   type Task,
-  getSessionMessages,
+  getTaskConversationMessages,
   getTask,
   getTaskPipeline,
-  getTaskSessions,
+  getTaskBranches,
   listTasks,
 } from "../lib/api";
 import { renderMarkdown } from "../lib/markdown";
@@ -428,7 +428,7 @@ interface LiveAssistantSnapshot {
 
 interface MonitorTaskContext {
   task: Task;
-  sessions: SessionInfo[];
+  sessions: TaskBranchRecord[];
   pipeline: RuntimePipeline | null;
 }
 
@@ -2445,7 +2445,7 @@ async function refreshNodeSummary(taskId: string, skipIfBusy = false) {
   try {
     const [task, sessionsResult, pipelineResult] = await Promise.all([
       getTask(taskId),
-      getTaskSessions(taskId).catch(() => ({ data: [] as SessionInfo[] })),
+      getTaskBranches(taskId).catch(() => ({ data: [] as TaskBranchRecord[] })),
       getTaskPipeline(taskId).catch(() => null as RuntimePipeline | null),
     ]);
     const sessions = sessionsResult.data || [];
@@ -2491,7 +2491,7 @@ async function refreshSessionMessagesForMonitor(taskId: string, sessionId: strin
     return;
   }
   try {
-    const response = await getSessionMessages(taskId, sessionId);
+    const response = await getTaskConversationMessages(taskId, sessionId);
     persistedMessages[taskId] = Array.isArray(response.data) ? response.data : [];
   } catch {
     if (!silent) {
@@ -2993,7 +2993,7 @@ function ensurePromptMessage(items: MonitorMessageItem[], taskId: string, taskPr
 function buildSummaryEvents(
   task: Task,
   resolvedStatus: string,
-  activeSession: SessionInfo | null,
+  activeSession: TaskBranchRecord | null,
   currentStage: RuntimePipeline["stages"][number] | null,
   pipelineStages: RuntimePipeline["stages"],
 ) {
@@ -3061,7 +3061,7 @@ function buildPipelineSummaryLabel(
 
 function buildSummary(
   task: Task,
-  sessions: SessionInfo[],
+  sessions: TaskBranchRecord[],
   pipeline: RuntimePipeline | null,
   sessionMessages: unknown[],
   realtimeEvents: RealtimeEvent[],
@@ -3166,7 +3166,7 @@ function buildChangeLabel(task: Task): string {
 function resolveMonitorTaskStatus(
   task: Task,
   pipeline: RuntimePipeline | null,
-  sessions: SessionInfo[],
+  sessions: TaskBranchRecord[],
   messages: MonitorMessageItem[],
 ) {
   if (!pipeline) {
@@ -3197,7 +3197,7 @@ function inferCompletedTaskStatus(
   taskStatus: string,
   task: Task,
   pipeline: RuntimePipeline | null,
-  sessions: SessionInfo[],
+  sessions: TaskBranchRecord[],
   messages: MonitorMessageItem[],
 ) {
   if (taskStatus === "failed" || taskStatus === "stopped" || taskStatus === "cancelled") {

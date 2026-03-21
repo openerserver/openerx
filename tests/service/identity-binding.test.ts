@@ -19,6 +19,12 @@ const USERNAME = process.env.TEST_USERNAME || "admin";
 const PASSWORD = process.env.TEST_PASSWORD || "admin123!";
 const DB_PATH =
   process.env.TEST_DB_PATH || resolve(__dirname, "../../control-plane/service/data/openerx.db");
+const DATABASE_URL =
+  process.env.TEST_DATABASE_URL || process.env.DATABASE_URL || "postgres://127.0.0.1:5432/openerx";
+const DATABASE_DIALECT =
+  process.env.TEST_DATABASE_DIALECT ||
+  process.env.DATABASE_DIALECT ||
+  (/^(postgres|postgresql):\/\//i.test(DATABASE_URL) ? "postgres" : "sqlite");
 
 // ── Helpers ────────────────────────────────────────────────────────
 
@@ -69,21 +75,30 @@ const createdTaskIds: string[] = [];
 const createdChangeIds: string[] = [];
 
 afterAll(async () => {
-  // Clean up test data via sqlite3 to avoid cascading issues
   const ids = [
     ...createdCredentialIds.map((id) => `DELETE FROM repository_credentials WHERE id='${id}';`),
     ...createdChangeIds.map(
       (id) =>
         `DELETE FROM file_changes WHERE change_id='${id}'; DELETE FROM code_changes WHERE id='${id}';`,
     ),
-    ...createdTaskIds.map((id) => `DELETE FROM tasks WHERE id='${id}';`),
+    ...createdTaskIds.map((id) => `DELETE FROM project_tree_events WHERE node_id='${id}';`),
+    ...createdTaskIds.map(
+      (id) => `DELETE FROM project_tree_branches WHERE task_node_id='${id}' OR head_node_id='${id}';`,
+    ),
+    ...createdTaskIds.map((id) => `DELETE FROM project_tree_nodes WHERE id='${id}';`),
   ];
   if (ids.length > 0) {
     const { execSync } = await import("node:child_process");
     try {
-      execSync(`sqlite3 "${DB_PATH}" "${ids.join(" ")}"`, { timeout: 5000 });
+      if (DATABASE_DIALECT === "postgres") {
+        execSync(`psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 -c "${ids.join(" ")}"`, {
+          timeout: 5000,
+        });
+      } else {
+        execSync(`sqlite3 "${DB_PATH}" "${ids.join(" ")}"`, { timeout: 5000 });
+      }
     } catch {
-      console.warn("Cleanup via sqlite3 failed — test data may remain in DB");
+      console.warn("Cleanup failed — test data may remain in DB");
     }
   }
 });
@@ -291,7 +306,7 @@ describe("Task Identity Fields", () => {
   test("GET task detail returns identity snapshot", async () => {
     const { data, status } = await authedRequest<Record<string, unknown>>(
       token,
-      `/api/tasks/${taskId}`,
+      `/api/project-tree/tasks/${taskId}`,
     );
 
     expect(status).toBe(200);
@@ -335,7 +350,7 @@ describe("Task Identity Fields", () => {
   test("GET task detail includes post-execution facts", async () => {
     const { data, status } = await authedRequest<Record<string, unknown>>(
       token,
-      `/api/tasks/${taskId}`,
+      `/api/project-tree/tasks/${taskId}`,
     );
 
     expect(status).toBe(200);
@@ -376,7 +391,7 @@ describe("Task Identity Fields", () => {
     // Detail should have null identity fields
     const { data: detail } = await authedRequest<Record<string, unknown>>(
       token,
-      `/api/tasks/${data.id}`,
+      `/api/project-tree/tasks/${data.id}`,
     );
     expect(detail.credentialId).toBeNull();
     expect(detail.gitAuthorName).toBeNull();
@@ -386,7 +401,7 @@ describe("Task Identity Fields", () => {
   test("GET task list includes credentialLabel", async () => {
     const { data, status } = await authedRequest<{ data: Array<Record<string, unknown>> }>(
       token,
-      `/api/tasks?projectId=${PROJECT_ID}`,
+      `/api/project-tree/tasks?projectId=${PROJECT_ID}`,
     );
 
     expect(status).toBe(200);

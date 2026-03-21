@@ -1,7 +1,13 @@
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { cpFetch, createInternalAuthorization } from "../../lib/control-plane-client";
 import { DEFAULT_EXECUTION_AGENT, isDefaultExecutionAgent } from "../../lib/orchestration-strategy";
+import {
+  fetchTaskSessionLineageRecords,
+  fetchTaskSessionMessagesFromTreeSource as fetchTaskSessionMessagesFromCompatSource,
+  type TaskSessionLineageRecord,
+} from "../tasks/task-session-compat";
 import type { AgentRunStatus } from "../../types/events";
 
 // ── OpenCode Adapter ───────────────────────────────────────────────
@@ -63,6 +69,13 @@ interface OpencodeResponse {
   ok: boolean;
   data?: unknown;
   error?: string;
+}
+
+interface GetSessionMessagesOptions {
+  bypassCircuitBreaker?: boolean;
+  taskId?: string;
+  authorization?: string;
+  includeLineage?: boolean;
 }
 
 interface AgentRunRecord {
@@ -707,9 +720,159 @@ export async function getAgentMessages(agentRunId: string): Promise<OpencodeResp
 
 const sessionMessagesInflight = new Map<string, Promise<OpencodeResponse>>();
 
-export async function getSessionMessages(
+function extractSessionMessageId(message: unknown) {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+
+  const record = message as Record<string, unknown>;
+  const info =
+    record.info && typeof record.info === "object"
+      ? (record.info as Record<string, unknown>)
+      : undefined;
+
+  const infoId = info?.id;
+  if (typeof infoId === "string" && infoId.trim()) {
+    return infoId;
+  }
+
+  const directId = record.id;
+  return typeof directId === "string" && directId.trim() ? directId : undefined;
+}
+
+function sliceMessagesForLineageBoundary(
+  messages: unknown[],
+  childRecord?: TaskSessionLineageRecord,
+) {
+  if (!childRecord?.forkedFromMessageId) {
+    return messages;
+  }
+
+  const boundaryIndex = messages.findIndex(
+    (message) => extractSessionMessageId(message) === childRecord.forkedFromMessageId,
+  );
+
+  if (boundaryIndex < 0) {
+    return messages;
+  }
+
+  return messages.slice(0, boundaryIndex + 1);
+}
+
+function dedupeMergedSessionMessages(messages: unknown[]) {
+  const seen = new Set<string>();
+  let anonymousIndex = 0;
+
+  return messages.filter((message) => {
+    const messageId = extractSessionMessageId(message) || `anonymous-${anonymousIndex++}`;
+    if (seen.has(messageId)) {
+      return false;
+    }
+
+    seen.add(messageId);
+    return true;
+  });
+}
+
+function compareLineageTime(left?: string | null, right?: string | null) {
+  const leftTime = left ? Date.parse(left) : Number.POSITIVE_INFINITY;
+  const rightTime = right ? Date.parse(right) : Number.POSITIVE_INFINITY;
+  return leftTime - rightTime;
+}
+
+function dedupeTaskLineageRecords(records: TaskSessionLineageRecord[]) {
+  const byRuntimeSessionId = new Map<string, TaskSessionLineageRecord>();
+
+  for (const record of records) {
+    const existing = byRuntimeSessionId.get(record.runtimeSessionId);
+    if (!existing) {
+      byRuntimeSessionId.set(record.runtimeSessionId, record);
+      continue;
+    }
+
+    const existingScore =
+      Number(Boolean(existing.parentRuntimeSessionId)) + Number(Boolean(existing.forkedFromMessageId));
+    const nextScore =
+      Number(Boolean(record.parentRuntimeSessionId)) + Number(Boolean(record.forkedFromMessageId));
+    const existingUpdated = existing.updatedAt ? Date.parse(existing.updatedAt) : 0;
+    const nextUpdated = record.updatedAt ? Date.parse(record.updatedAt) : 0;
+
+    if (nextScore > existingScore || nextUpdated > existingUpdated) {
+      byRuntimeSessionId.set(record.runtimeSessionId, record);
+    }
+  }
+
+  return Array.from(byRuntimeSessionId.values()).sort((left, right) =>
+    compareLineageTime(left.createdAt, right.createdAt),
+  );
+}
+
+function findLineageRootRecord(records: TaskSessionLineageRecord[]) {
+  return (
+    records.find((record) => record.sourceType === "root") ??
+    records.slice().sort((left, right) => compareLineageTime(left.createdAt, right.createdAt))[0]
+  );
+}
+
+function repairLineageRecord(record: TaskSessionLineageRecord, rootRuntimeSessionId: string) {
+  const previousParent = record.parentRuntimeSessionId;
+  const previousSourceType = record.sourceType;
+
+  if (record.runtimeSessionId === rootRuntimeSessionId) {
+    record.parentRuntimeSessionId = null;
+    record.sourceType = "root";
+  } else if (!record.parentRuntimeSessionId) {
+    record.parentRuntimeSessionId = rootRuntimeSessionId;
+    if (record.sourceType !== "sub_session") {
+      record.sourceType = "fork";
+    }
+  } else if (record.sourceType === "root") {
+    record.sourceType = "fork";
+  }
+
+  return (
+    record.parentRuntimeSessionId !== previousParent || record.sourceType !== previousSourceType
+  );
+}
+
+function normalizeLineageRecords(records: TaskSessionLineageRecord[]) {
+  const normalized = dedupeTaskLineageRecords(records).map((record) => ({ ...record }));
+  if (normalized.length <= 1) {
+    return normalized;
+  }
+
+  const rootRecord = findLineageRootRecord(normalized);
+  if (!rootRecord) {
+    return normalized;
+  }
+
+  for (const record of normalized) {
+    repairLineageRecord(record, rootRecord.runtimeSessionId);
+  }
+
+  return normalized;
+}
+
+function buildLineagePath(records: TaskSessionLineageRecord[], runtimeSessionId: string) {
+  const recordMap = new Map(records.map((record) => [record.runtimeSessionId, record] as const));
+  const path: TaskSessionLineageRecord[] = [];
+  const visited = new Set<string>();
+
+  let current = recordMap.get(runtimeSessionId);
+  while (current && !visited.has(current.runtimeSessionId)) {
+    path.push(current);
+    visited.add(current.runtimeSessionId);
+    current = current.parentRuntimeSessionId
+      ? recordMap.get(current.parentRuntimeSessionId)
+      : undefined;
+  }
+
+  return path.reverse();
+}
+
+async function fetchRuntimeSessionMessages(
   sessionId: string,
-  options?: { bypassCircuitBreaker?: boolean },
+  options?: Pick<GetSessionMessagesOptions, "bypassCircuitBreaker">,
 ): Promise<OpencodeResponse> {
   if (options?.bypassCircuitBreaker) {
     return opcall("GET", `/session/${sessionId}/message?limit=200`);
@@ -719,6 +882,7 @@ export async function getSessionMessages(
   if (existing) {
     return existing;
   }
+
   const promise = opcall("GET", `/session/${sessionId}/message?limit=200`, undefined, {
     circuitKey: SESSION_READ_CIRCUIT_KEY,
   }).finally(() => {
@@ -726,6 +890,110 @@ export async function getSessionMessages(
   });
   sessionMessagesInflight.set(sessionId, promise);
   return promise;
+}
+
+async function loadTaskLineageMessages(
+  taskId: string,
+  sessionId: string,
+  options?: GetSessionMessagesOptions,
+): Promise<OpencodeResponse | null> {
+  const authorization = options?.authorization?.trim()
+    ? options.authorization
+    : await createInternalAuthorization();
+
+  const lineageResult = await fetchTaskSessionLineageRecords(taskId, authorization);
+  const lineageRecords = lineageResult.activeRecords;
+
+  if (lineageRecords.length === 0) {
+    return null;
+  }
+
+  const lineagePath = buildLineagePath(normalizeLineageRecords(lineageRecords), sessionId);
+  if (lineagePath.length === 0) {
+    return null;
+  }
+
+  const aggregatedTreeFetchResult = await fetchTaskSessionMessagesFromCompatSource(
+    taskId,
+    sessionId,
+    authorization,
+    { includeLineage: true },
+  );
+  const aggregatedTreeResult =
+    aggregatedTreeFetchResult.ok && Array.isArray(aggregatedTreeFetchResult.data?.data)
+      ? {
+          ok: true,
+          data: aggregatedTreeFetchResult.data.data,
+          meta: aggregatedTreeFetchResult.data.meta,
+        }
+      : null;
+  const aggregatedMeta =
+    aggregatedTreeResult && typeof aggregatedTreeResult === "object" && "meta" in aggregatedTreeResult
+      ? ((aggregatedTreeResult as { meta?: { cacheState?: string; complete?: boolean } }).meta ??
+        undefined)
+      : undefined;
+  if (
+    aggregatedTreeResult?.ok &&
+    (aggregatedMeta?.cacheState === "complete" || aggregatedMeta?.complete === true)
+  ) {
+    return aggregatedTreeResult;
+  }
+
+  const messageResults = await Promise.all(
+    lineagePath.map(async (record) => {
+      const cachedFetchResult = await fetchTaskSessionMessagesFromCompatSource(
+        taskId,
+        record.runtimeSessionId,
+        authorization,
+      );
+      const cachedMeta = cachedFetchResult.data?.meta;
+      const cachedMessages = Array.isArray(cachedFetchResult.data?.data)
+        ? cachedFetchResult.data.data
+        : null;
+      if (
+        cachedFetchResult.ok &&
+        cachedMessages &&
+        (
+          cachedMeta?.cacheState === "complete" ||
+          cachedMeta?.complete === true ||
+          cachedMessages.length > 0
+        )
+      ) {
+        return {
+          ok: true,
+          data: cachedMessages,
+        };
+      }
+
+      return fetchRuntimeSessionMessages(record.runtimeSessionId, {
+        bypassCircuitBreaker: options?.bypassCircuitBreaker,
+      });
+    }),
+  );
+
+  const mergedMessages = messageResults.flatMap((result, index) => {
+    const data = result.ok && Array.isArray(result.data) ? result.data : [];
+    return sliceMessagesForLineageBoundary(data, lineagePath[index + 1]);
+  });
+
+  return {
+    ok: true,
+    data: dedupeMergedSessionMessages(mergedMessages),
+  };
+}
+
+export async function getSessionMessages(
+  sessionId: string,
+  options?: GetSessionMessagesOptions,
+): Promise<OpencodeResponse> {
+  if (options?.taskId && options.includeLineage !== false) {
+    const lineageResult = await loadTaskLineageMessages(options.taskId, sessionId, options);
+    if (lineageResult) {
+      return lineageResult;
+    }
+  }
+
+  return fetchRuntimeSessionMessages(sessionId, options);
 }
 
 function getAssistantMessageInfo(message: unknown): Record<string, unknown> | undefined {

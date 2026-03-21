@@ -420,13 +420,16 @@ async function loadRuntimePipelineResources(args: {
   prefetchedMessages?: unknown[];
 }) {
   const [lineageResult, messagesResult] = await Promise.all([
-    cpFetch<{ data: TaskSessionRecord[] }>(`/api/tasks/${encodeURIComponent(args.taskId)}/task-sessions`, {
+    cpFetch<{ data: TaskSessionRecord[] }>(`/api/tasks/${encodeURIComponent(args.taskId)}/branches`, {
       authorization: args.authorization,
     }),
     args.prefetchedMessages
       ? Promise.resolve({ ok: true, data: args.prefetchedMessages } as const)
       : args.requestedSessionId
-        ? getSessionMessages(args.requestedSessionId)
+        ? getSessionMessages(args.requestedSessionId, {
+            taskId: args.taskId,
+            authorization: args.authorization,
+          })
         : Promise.resolve({ ok: false } as const),
   ]);
 
@@ -454,7 +457,7 @@ function resolveRuntimePipelineResources(args: {
   const branchName =
     lineage.find((record) => record.runtimeSessionId === args.requestedSessionId)?.branchName ?? null;
   const messages =
-    args.messagesResult.ok && Array.isArray(args.messagesResult.data)
+      args.messagesResult?.ok && Array.isArray(args.messagesResult.data)
       ? (args.messagesResult.data as SessionMessageRecord[])
       : [];
 
@@ -531,9 +534,12 @@ export async function buildRuntimePipeline(args: {
   authorization: string;
   prefetchedMessages?: unknown[];
 }): Promise<RuntimePipeline> {
-  const taskResult = await cpFetch<TaskRecord>(`/api/tasks/${encodeURIComponent(args.taskId)}`, {
-    authorization: args.authorization,
-  });
+  const taskResult = await cpFetch<TaskRecord>(
+    `/api/project-tree/tasks/${encodeURIComponent(args.taskId)}`,
+    {
+      authorization: args.authorization,
+    },
+  );
 
   if (!taskResult.ok || !taskResult.data) {
     return buildEmptyRuntimePipeline(args.taskId, args.sessionId);

@@ -226,6 +226,17 @@ async function fulfillJson(route: Route, payload: unknown) {
 }
 
 async function installApiMocks(page: Page) {
+  await page.route("**/api/**", async (route) => {
+    const url = route.request().url();
+
+    if (url.includes("/chat-settings/history")) {
+      await fulfillJson(route, { data: [] });
+      return;
+    }
+
+    await fulfillJson(route, {});
+  });
+
   const currentContext = buildContext();
   const previewPatch = {
     index: 0,
@@ -441,25 +452,38 @@ async function installApiMocks(page: Page) {
   });
 }
 
+async function loginAsAdmin(page: Page) {
+  await page.goto("/login");
+
+  await expect(page.getByRole("heading", { name: "Opener-X" })).toBeVisible();
+  await page.getByLabel("用户名").fill("admin");
+  await page.getByLabel("密码").fill("admin123!");
+
+  await Promise.all([
+    page.waitForResponse((response) => response.url().includes("/api/auth/me") && response.ok()),
+    page.getByRole("button", { name: /^登\s*录$/ }).click(),
+  ]);
+
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible();
+}
+
+async function openChatSettings(page: Page) {
+  const menuItem = page.locator(".ant-menu-item").filter({ hasText: "对话配置" }).first();
+  await expect(menuItem).toBeVisible();
+
+  await Promise.all([page.waitForURL(/\/chat-settings$/), menuItem.click()]);
+  await expect(page.getByRole("heading", { name: "编排策略控制台" })).toBeVisible();
+}
+
 test.describe("Chat Settings admin browser flow", () => {
   test("admin can login, navigate, and inspect orchestration strategy by category", async ({
     page,
   }) => {
     await installApiMocks(page);
 
-    await page.goto("/login");
-
-    await expect(page.getByRole("heading", { name: "Opener-X" })).toBeVisible();
-    await page.getByLabel("用户名").fill("admin");
-    await page.getByLabel("密码").fill("admin123!");
-    await page.getByRole("button", { name: /^登\s*录$/ }).click();
-
-    await expect(page).toHaveURL(/\/$/);
-    await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible();
-
-    await page.getByRole("menuitem", { name: /对话配置/ }).click();
-    await expect(page).toHaveURL(/\/chat-settings$/);
-    await expect(page.getByRole("heading", { name: "编排策略控制台" })).toBeVisible();
+    await loginAsAdmin(page);
+    await openChatSettings(page);
     await expect(page.getByText("tpl-deep-single").first()).toBeVisible();
 
     await page.getByRole("tab", { name: "ops" }).click();
@@ -473,13 +497,8 @@ test.describe("Chat Settings admin browser flow", () => {
   }) => {
     await installApiMocks(page);
 
-    await page.goto("/login");
-    await page.getByLabel("用户名").fill("admin");
-    await page.getByLabel("密码").fill("admin123!");
-    await page.getByRole("button", { name: /^登\s*录$/ }).click();
-
-    await page.getByRole("menuitem", { name: /对话配置/ }).click();
-    await expect(page).toHaveURL(/\/chat-settings$/);
+    await loginAsAdmin(page);
+    await openChatSettings(page);
 
     await page
       .getByPlaceholder(/例如：请把 deep 分类改成并行执行，并启用 judge。/)
@@ -495,13 +514,8 @@ test.describe("Chat Settings admin browser flow", () => {
   test("admin can apply an orchestration change and see refreshed summary", async ({ page }) => {
     await installApiMocks(page);
 
-    await page.goto("/login");
-    await page.getByLabel("用户名").fill("admin");
-    await page.getByLabel("密码").fill("admin123!");
-    await page.getByRole("button", { name: /^登\s*录$/ }).click();
-
-    await page.getByRole("menuitem", { name: /对话配置/ }).click();
-    await expect(page).toHaveURL(/\/chat-settings$/);
+    await loginAsAdmin(page);
+    await openChatSettings(page);
 
     await page
       .getByPlaceholder(/例如：请把 deep 分类改成并行执行，并启用 judge。/)
@@ -522,13 +536,8 @@ test.describe("Chat Settings admin browser flow", () => {
   }) => {
     await installApiMocks(page);
 
-    await page.goto("/login");
-    await page.getByLabel("用户名").fill("admin");
-    await page.getByLabel("密码").fill("admin123!");
-    await page.getByRole("button", { name: /^登\s*录$/ }).click();
-
-    await page.getByRole("menuitem", { name: /对话配置/ }).click();
-    await expect(page).toHaveURL(/\/chat-settings$/);
+    await loginAsAdmin(page);
+    await openChatSettings(page);
 
     await page
       .getByPlaceholder(/例如：请把 deep 分类改成并行执行，并启用 judge。/)

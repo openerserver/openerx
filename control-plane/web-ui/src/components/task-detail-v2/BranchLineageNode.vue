@@ -1,5 +1,5 @@
 <template>
-  <div class="session-flow-node" :class="{ 'session-flow-node--selected': data.selected }">
+  <div class="branch-lineage-node" :class="{ 'branch-lineage-node--selected': data.selected }">
     <a-card size="small" :bordered="false" :body-style="{ padding: '8px 12px' }">
       <a-space size="small" wrap style="margin-bottom: 4px">
         <a-tag :color="data.sourceType === 'root' ? 'blue' : 'default'">
@@ -8,15 +8,15 @@
         <a-tag v-if="data.isActive" color="processing">当前</a-tag>
       </a-space>
 
-      <a-typography-text strong class="session-flow-node__title">
+      <a-typography-text strong class="branch-lineage-node__title">
         {{ data.title }}
       </a-typography-text>
 
-      <a-typography-text type="secondary" class="session-flow-node__meta">
+      <a-typography-text type="secondary" class="branch-lineage-node__meta">
         {{ data.shortId }}
       </a-typography-text>
 
-      <a-typography-text v-if="summaryLabel" type="secondary" class="session-flow-node__meta">
+      <a-typography-text v-if="summaryLabel" type="secondary" class="branch-lineage-node__meta">
         {{ summaryLabel }}
       </a-typography-text>
     </a-card>
@@ -29,10 +29,10 @@
 <script setup lang="ts">
 import { Handle, Position } from "@vue-flow/core";
 import { computed } from "vue";
-import type { SessionFlowNodeData } from "../../composables/useSessionFlow";
+import type { BranchLineageFlowNodeData } from "../../composables/useBranchLineageFlow";
 
 const props = defineProps<{
-  data: SessionFlowNodeData;
+  data: BranchLineageFlowNodeData;
 }>();
 
 const summaryLabel = computed(() => {
@@ -44,24 +44,24 @@ const summaryLabel = computed(() => {
 </script>
 
 <style scoped>
-.session-flow-node {
+.branch-lineage-node {
   width: 200px;
   border: 1px solid #e8e8e8;
   border-radius: 8px;
   background: #fafafa;
 }
 
-.session-flow-node--selected {
+.branch-lineage-node--selected {
   border: 2px solid #1677ff;
 }
 
-.session-flow-node__title {
+.branch-lineage-node__title {
   display: block;
   margin-bottom: 4px;
   font-size: 13px;
 }
 
-.session-flow-node__meta {
+.branch-lineage-node__meta {
   display: block;
   font-size: 12px;
 }

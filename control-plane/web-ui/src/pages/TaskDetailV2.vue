@@ -101,7 +101,7 @@
                 :content="previewFile.content"
                 @close="previewFile = null"
               />
-              <TaskExecutionTracePanel :task-id="task.id" :session-id="selectedSessionId" />
+              <TaskExecutionTracePanel :task-id="task.id" :session-id="selectedBranchSessionId" />
             </template>
           </aside>
         </div>
@@ -121,9 +121,9 @@ import {
   type ExecutionCandidate,
   type ExecutionPlan,
   type ExecutionMode,
-  forkTaskSession,
+  forkTaskBranch,
   getModelsList,
-  getSessionMessages as getTaskSessionMessages,
+  getTaskConversationMessages,
   getTask,
   getTaskWorkflowView,
   terminateAgent,
@@ -142,7 +142,7 @@ import {
   serializeTaskStrategy,
   type ExecutionOverrides,
 } from "../lib/taskExecutionMode";
-import { useSessionFlow } from "../composables/useSessionFlow";
+import { useBranchLineageFlow } from "../composables/useBranchLineageFlow";
 import {
   normalizeSessionConversationItems,
   type TaskConversationListItem,
@@ -179,7 +179,7 @@ const router = useRouter();
 const realtimeStore = useRealtimeStore();
 
 const taskId = computed(() => String(route.params.taskId || ""));
-const selectedSessionId = ref<string | undefined>(undefined);
+const selectedBranchSessionId = ref<string | undefined>(undefined);
 const task = ref<Task | null>(null);
 const workflowView = ref<TaskWorkflowViewModel | null>(null);
 const pageLoading = ref(false);
@@ -201,7 +201,7 @@ const {
   flatNodes,
   selectedNode,
   refresh: refreshFlow,
-} = useSessionFlow(taskId, selectedSessionId);
+} = useBranchLineageFlow(taskId, selectedBranchSessionId);
 
 const {
   conversationItems: baseConversationItems,
@@ -209,7 +209,7 @@ const {
   loading: messagesLoading,
   error: messagesError,
   refresh: refreshMessages,
-} = useTaskMessages(taskId, selectedSessionId, { includeLineage: true });
+} = useTaskMessages(taskId, selectedBranchSessionId, { includeLineage: true });
 
 const workflowSummary = computed(() => workflowView.value?.workflow ?? null);
 const workflowStages = computed(() => workflowView.value?.workflow.stages ?? []);
@@ -346,7 +346,7 @@ const parallelComparisonCards = computed<TaskParallelComparisonCard[]>(() => {
     const sessionId = candidate.sessionId;
     const messages = sessionId ? parallelCandidateMessages.value[sessionId] ?? [] : [];
     const items = normalizeSessionConversationItems(messages).filter((item) => item.role !== "user");
-    const metaParts = [candidate.agent, sessionId ? `Session ${sessionId.slice(0, 8)}` : undefined].filter(
+    const metaParts = [candidate.agent, sessionId ? `Branch ${sessionId.slice(0, 8)}` : undefined].filter(
       (value): value is string => Boolean(value),
     );
 
@@ -461,30 +461,30 @@ function resolveRequestedSessionId() {
   return typeof route.query.session === "string" ? route.query.session : undefined;
 }
 
-function ensureSelectedSession() {
+function ensureSelectedBranch() {
   if (
     adoptedCandidateSessionId.value &&
     flatNodes.value.some((node) => node.runtimeSessionId === adoptedCandidateSessionId.value)
   ) {
-    selectedSessionId.value = adoptedCandidateSessionId.value;
+    selectedBranchSessionId.value = adoptedCandidateSessionId.value;
     return;
   }
 
   const requestedSessionId = resolveRequestedSessionId();
   if (requestedSessionId && flatNodes.value.some((node) => node.runtimeSessionId === requestedSessionId)) {
-    selectedSessionId.value = requestedSessionId;
+    selectedBranchSessionId.value = requestedSessionId;
     return;
   }
 
   if (
-    selectedSessionId.value &&
-    flatNodes.value.some((node) => node.runtimeSessionId === selectedSessionId.value)
+    selectedBranchSessionId.value &&
+    flatNodes.value.some((node) => node.runtimeSessionId === selectedBranchSessionId.value)
   ) {
     return;
   }
 
   const active = flatNodes.value.find((node) => node.isActive);
-  selectedSessionId.value = active?.runtimeSessionId || task.value?.sessionId || flatNodes.value[0]?.runtimeSessionId;
+  selectedBranchSessionId.value = active?.runtimeSessionId || task.value?.sessionId || flatNodes.value[0]?.runtimeSessionId;
 }
 
 function clearScheduledTaskRefresh() {
@@ -523,7 +523,7 @@ async function refreshTaskSnapshot(options?: { workflow?: boolean; flow?: boolea
       parallelCandidateMessages.value = {};
     }
 
-    ensureSelectedSession();
+    ensureSelectedBranch();
   } catch {
     // Keep current page state when a silent refresh fails.
   }
@@ -586,7 +586,7 @@ async function loadTaskDetail() {
     } else {
       parallelCandidateMessages.value = {};
     }
-    ensureSelectedSession();
+    ensureSelectedBranch();
     realtimeStore.subscribeTask(taskId.value);
   } catch (error) {
     task.value = null;
@@ -637,7 +637,7 @@ async function handleSelectedModelChange(model: string) {
 
 function buildForkTitle(sessionId: string) {
   const node = flatNodes.value.find((item) => item.runtimeSessionId === sessionId);
-  return `${node?.title || node?.branchName || `Session ${sessionId.slice(0, 8)}`} 分叉`;
+  return `${node?.title || node?.branchName || `Branch ${sessionId.slice(0, 8)}`} 分叉`;
 }
 
 function handleTaskSwitch(nextTaskId: string) {
@@ -665,7 +665,7 @@ async function refreshParallelCandidateMessages(currentTaskId: string, silent = 
   const entries = await Promise.all(
     candidateSessionIds.map(async (sessionId) => {
       try {
-        const response = await getTaskSessionMessages(currentTaskId, sessionId);
+        const response = await getTaskConversationMessages(currentTaskId, sessionId);
         return [sessionId, Array.isArray(response.data) ? response.data : []] as const;
       } catch {
         return [sessionId, silent ? parallelCandidateMessages.value[sessionId] ?? [] : []] as const;
@@ -712,7 +712,7 @@ function syncSelectedSessionToRoute(sessionId: string | undefined) {
 }
 
 function handleSelectSession(sessionId: string) {
-  selectedSessionId.value = sessionId;
+  selectedBranchSessionId.value = sessionId;
 }
 
 function queueContinuation(prompt: string, sessionId?: string) {
@@ -763,7 +763,7 @@ async function dispatchContinuePrompt(
       };
     }
     if (result.sessionId) {
-      selectedSessionId.value = result.sessionId;
+      selectedBranchSessionId.value = result.sessionId;
     }
     if (source === "direct") {
       composerResetToken.value += 1;
@@ -786,7 +786,7 @@ async function handleContinue(prompt: string) {
     return;
   }
 
-  const targetSessionId = selectedSessionId.value || task.value?.sessionId;
+  const targetSessionId = selectedBranchSessionId.value || task.value?.sessionId;
   if (isExecuting.value || hasStreamingAssistant.value) {
     queueContinuation(prompt, targetSessionId);
     return;
@@ -796,7 +796,7 @@ async function handleContinue(prompt: string) {
 }
 
 async function handleFork(prompt: string) {
-  const baseSessionId = selectedSessionId.value || task.value?.sessionId;
+  const baseSessionId = selectedBranchSessionId.value || task.value?.sessionId;
   if (!taskId.value || !baseSessionId) {
     message.warning("当前没有可分叉的分支");
     return;
@@ -805,9 +805,9 @@ async function handleFork(prompt: string) {
   forking.value = true;
   try {
     const nextTitle = `${selectedSessionLabel.value || baseSessionId.slice(0, 8)} 分叉`;
-    const forkResult = await forkTaskSession(taskId.value, baseSessionId, nextTitle);
+    const forkResult = await forkTaskBranch(taskId.value, baseSessionId, nextTitle);
     if (forkResult.sessionId) {
-      selectedSessionId.value = forkResult.sessionId;
+      selectedBranchSessionId.value = forkResult.sessionId;
       await continueTask(taskId.value, prompt, forkResult.sessionId);
     }
     if (task.value) {
@@ -887,7 +887,7 @@ function handleUnavailableAction(label: string) {
 }
 
 watch(taskId, () => {
-  selectedSessionId.value = undefined;
+  selectedBranchSessionId.value = undefined;
   previewFile.value = null;
   void loadTaskDetail();
 }, { immediate: true });
@@ -903,10 +903,10 @@ watch(
 );
 
 watch([flatNodes, () => task.value?.sessionId], () => {
-  ensureSelectedSession();
+  ensureSelectedBranch();
 });
 
-watch(selectedSessionId, (sessionId) => {
+watch(selectedBranchSessionId, (sessionId) => {
   syncSelectedSessionToRoute(sessionId);
 });
 

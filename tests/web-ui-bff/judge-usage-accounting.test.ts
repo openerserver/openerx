@@ -17,6 +17,8 @@ mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () =>
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/lib/opencode-config", () => ({
+  formatModelRoute: (resolved: { providerId: string; modelId: string }) =>
+    `${resolved.providerId}:${resolved.modelId}`,
   resolveModelRoute: (value: string) => ({
     providerId: value.split(":")[0] || "github-copilot",
     modelId: value.split(":").slice(1).join(":") || value,
@@ -40,6 +42,11 @@ mock.module("../../control-plane/web-ui-bff/src/lib/orchestration-strategy", () 
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter", () => ({
+  createSession: mock(async () => ({
+    ok: true,
+    sessionId: "exec-ses",
+    agentRunId: "run-judge",
+  })),
   extractAssistantResultFromMessages: mock(() => ({
     completed: true,
     failed: false,
@@ -59,6 +66,8 @@ mock.module("../../control-plane/web-ui-bff/src/modules/code-changes/change-coll
 
 mock.module("../../control-plane/web-ui-bff/src/modules/hooks/lifecycle-hooks", () => ({
   executeLifecycleHooks: mock(async () => ({ hookExecutions: [] })),
+  parseStageHooks: (raw: unknown) => (Array.isArray(raw) ? raw : []),
+  mergeStageAndStrategyHooks: (_stage: unknown[], strategy: unknown[]) => strategy ?? [],
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/modules/realtime/dag-sync", () => ({

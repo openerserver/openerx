@@ -4,10 +4,12 @@ import { beforeEach, describe, expect, mock, test } from "bun:test";
 
 const cpFetchMock = mock(async (..._args: unknown[]) => ({ ok: true, status: 200, data: {} }));
 const authHeaderMock = mock(() => "Bearer test-token");
+const createInternalAuthorizationMock = mock(async () => "Bearer internal-token");
 
 mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () => ({
   authHeader: authHeaderMock,
   cpFetch: cpFetchMock,
+  createInternalAuthorization: createInternalAuthorizationMock,
 }));
 
 const projectOrchestrationResponseMap: Record<string, { ok: boolean; status: number; data: unknown }> = {
@@ -158,7 +160,7 @@ const projectOrchestrationResponseMap: Record<string, { ok: boolean; status: num
     status: 200,
     data: { data: [] },
   },
-  "/api/tasks?projectId=proj-default&limit=20": {
+  "/api/project-tree/tasks?projectId=proj-default&limit=20": {
     ok: true,
     status: 200,
     data: {
@@ -272,7 +274,9 @@ function getProjectOrchestrationResponse(path: string) {
 beforeEach(() => {
   cpFetchMock.mockReset();
   authHeaderMock.mockReset();
+  createInternalAuthorizationMock.mockReset();
   authHeaderMock.mockReturnValue("Bearer test-token");
+  createInternalAuthorizationMock.mockResolvedValue("Bearer internal-token");
 
   cpFetchMock.mockImplementation(async (path: string) => getProjectOrchestrationResponse(path));
 });

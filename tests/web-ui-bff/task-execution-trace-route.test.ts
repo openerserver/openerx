@@ -1,9 +1,12 @@
 /// <reference types="bun-types" />
 
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import * as strategyModule from "../../control-plane/web-ui-bff/src/lib/orchestration-strategy";
 
 const cpFetchMock = mock(async (..._args: unknown[]) => ({ ok: true, data: {} }));
 const authHeaderMock = mock(() => "Bearer test");
+const createInternalAuthorizationMock = mock(async () => "Bearer internal");
+const setControlPlaneFetchHandlerMock = mock(() => undefined);
 const getSessionMessagesMock = mock(async () => ({
   ok: true,
   data: [] as Array<Record<string, unknown>>,
@@ -36,6 +39,8 @@ const buildTaskWorkflowViewModelMock = mock(async () => ({
 mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () => ({
   authHeader: authHeaderMock,
   cpFetch: cpFetchMock,
+  createInternalAuthorization: createInternalAuthorizationMock,
+  setControlPlaneFetchHandler: setControlPlaneFetchHandlerMock,
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/lib/intent-classifier", () => ({
@@ -51,19 +56,9 @@ mock.module("../../control-plane/web-ui-bff/src/lib/opencode-config", () => ({
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/lib/orchestration-strategy", () => ({
-  DEFAULT_EXECUTION_AGENT: "default-executor",
-  buildExecutionPlan: mock(() => ({ mode: "single", candidates: [] })),
-  mergeTaskStrategy: mock((value: unknown) => value),
+  ...strategyModule,
   parseTaskStrategy: mock(() => ({ selectedAgent: "oracle-enterprise" })),
   readOrchestrationStrategy: mock(async () => ({ hooks: [], templates: [], judge: {} })),
-  resolveWorkflowTemplate: mock(() => null),
-}));
-
-mock.module("../../control-plane/web-ui-bff/src/lib/paid-execution-guard", () => ({
-  buildPreflightOrchestrationFingerprint: mock(() => "fingerprint"),
-  createPaidExecutionGuardState: mock(() => ({})),
-  evaluatePaidExecutionPreflight: mock(async () => ({ allowed: true })),
-  fetchProjectPaidExecutionLeaseState: mock(async () => null),
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/lib/paid-execution-runtime", () => ({
@@ -74,17 +69,30 @@ mock.module("../../control-plane/web-ui-bff/src/lib/runtime-pipeline", () => ({
   buildRuntimePipeline: mock(async () => ({ stages: [] })),
 }));
 
-mock.module("../../control-plane/web-ui-bff/src/lib/runtime-usage-ledger", () => ({
-  fetchProjectRuntimeUsageBaseline: mock(async () => null),
-}));
-
 mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter", () => ({
   continueSession: mock(async () => ({ ok: true })),
   createSession: mock(async () => ({ ok: true, sessionId: "session-1", agentRunId: "run-1" })),
   ensureAgentRunForSession: mock(() => "run-1"),
+  extractAssistantResultFromMessages: mock(() => ({
+    completed: false,
+    failed: false,
+    error: undefined,
+    tokenUsed: 0,
+  })),
   forkSession: mock(async () => ({ ok: true, sessionId: "session-2" })),
+  getAgentMessages: mock(async () => ({ ok: true, data: [] })),
+  getAgentRun: mock(() => undefined),
   getSessionMessages: getSessionMessagesMock,
+  injectGuidance: mock(async () => ({ ok: true })),
+  listAgentRuns: mock(() => []),
   listSessions: mock(async () => ({ ok: true, data: [] })),
+  pauseAgent: mock(async () => ({ ok: true })),
+  recoverAgentRun: mock(() => undefined),
+  registerAgentRun: mock(() => undefined),
+  resumeAgent: mock(async () => ({ ok: true })),
+  runDetachedPrompt: mock(async () => ({ ok: true, sessionId: "detached", text: "{}" })),
+  terminateAgent: mock(async () => ({ ok: true })),
+  updateAgentRunStatus: mock(() => undefined),
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/run-persistence", () => ({
@@ -125,22 +133,15 @@ mock.module("../../control-plane/web-ui-bff/src/modules/tasks/workflow-stage-exe
   persistWorkflowStageExecutionOutcome: mock(async () => undefined),
 }));
 
-mock.module("../../control-plane/web-ui-bff/src/modules/tasks/workflow-sync", () => ({
-  ensureTaskWorkflowStarted: mock(async () => undefined),
-}));
-
-mock.module("../../control-plane/web-ui-bff/src/modules/tasks/workflow-view", () => ({
-  buildTaskWorkflowViewModel: buildTaskWorkflowViewModelMock,
-}));
-
 beforeEach(() => {
   cpFetchMock.mockReset();
   authHeaderMock.mockReset();
+  createInternalAuthorizationMock.mockReset();
   getSessionMessagesMock.mockReset();
   buildWorkflowExecutionPromptSnapshotMock.mockReset();
-  buildTaskWorkflowViewModelMock.mockReset();
 
   authHeaderMock.mockReturnValue("Bearer test");
+  createInternalAuthorizationMock.mockResolvedValue("Bearer internal");
   buildWorkflowExecutionPromptSnapshotMock.mockResolvedValue({
     workflowStatus: "running",
     currentStageKey: "implement",
@@ -150,24 +151,9 @@ beforeEach(() => {
     completedStageOutputs: [],
     pendingStageLabels: ["验证"],
   });
-  buildTaskWorkflowViewModelMock.mockResolvedValue({
-    workflow: {
-      status: "running",
-      currentStage: "implement",
-      stages: [
-        {
-          stageKey: "implement",
-          stageLabel: "实现",
-          status: "running",
-        },
-      ],
-    },
-    roleConclusions: [],
-    developerChangeRequests: [],
-  });
 
   cpFetchMock.mockImplementation(async (url: string) => {
-    if (url === "/api/tasks/task-1") {
+    if (url === "/api/project-tree/tasks/task-1") {
       return {
         ok: true,
         data: {
@@ -182,6 +168,19 @@ beforeEach(() => {
             selectedAgent: "oracle-enterprise",
             hookExecutions: [],
           }),
+        },
+      };
+    }
+    if (url === "/api/tasks/task-1/branches/ses-1/timeline?includeLineage=true") {
+      return {
+        ok: true,
+        data: {
+          data: [],
+          meta: {
+            cacheState: "partial",
+            complete: false,
+            itemCount: 0,
+          },
         },
       };
     }
@@ -262,6 +261,109 @@ beforeEach(() => {
 });
 
 describe("task execution trace route", () => {
+  test("prefers service timeline aggregation when tree events cache is complete", async () => {
+    cpFetchMock.mockImplementation(async (url: string) => {
+      if (url === "/api/project-tree/tasks/task-1") {
+        return {
+          ok: true,
+          data: {
+            id: "task-1",
+            projectId: "proj-1",
+            title: "trace task",
+            prompt: "第一轮用户输入",
+            status: "running",
+            sessionId: "ses-1",
+            selectedModel: "github-copilot:gpt-5.4",
+            strategy: JSON.stringify({
+              selectedAgent: "oracle-enterprise",
+              hookExecutions: [],
+            }),
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/branches/ses-1/timeline?includeLineage=true") {
+        return {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "msg-1",
+                role: "user",
+                text: [
+                  "Execution context:",
+                  "",
+                  "Opener-X task ID: task-1",
+                  "Project ID: proj-1",
+                  "当前执行上下文",
+                  "任务：trace task",
+                  "请只完成当前阶段的目标。",
+                  "完成后请输出本阶段产出摘要。",
+                  "如果你认为当前阶段已经完成，请在输出末尾单独追加 [STAGE_COMPLETE]。",
+                  "",
+                  "第一轮用户输入",
+                ].join("\n"),
+                createdAt: "2026-03-19T10:00:00.000Z",
+              },
+              {
+                id: "msg-2",
+                role: "assistant",
+                text: "第一轮模型回复",
+                createdAt: "2026-03-19T10:00:05.000Z",
+              },
+              {
+                id: "msg-3",
+                role: "user",
+                text: [
+                  "Execution context:",
+                  "",
+                  "Opener-X task ID: task-1",
+                  "Project ID: proj-1",
+                  "当前执行上下文",
+                  "任务：trace task",
+                  "请只完成当前阶段的目标。",
+                  "完成后请输出本阶段产出摘要。",
+                  "如果你认为当前阶段已经完成，请在输出末尾单独追加 [STAGE_COMPLETE]。",
+                  "",
+                  "第二轮用户输入",
+                ].join("\n"),
+                createdAt: "2026-03-19T10:01:00.000Z",
+              },
+              {
+                id: "msg-4",
+                role: "assistant",
+                text: "第二轮模型回复",
+                createdAt: "2026-03-19T10:01:08.000Z",
+              },
+            ],
+            meta: {
+              cacheState: "complete",
+              complete: true,
+              itemCount: 4,
+            },
+          },
+        };
+      }
+
+      return { ok: true, data: {} };
+    });
+    getSessionMessagesMock.mockRejectedValue(new Error("should not hit runtime messages"));
+
+    const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
+
+    const response = await taskRoutes.request("http://localhost/task-1/execution-trace", {
+      headers: {
+        Authorization: "Bearer test",
+      },
+    });
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload.finalPrompt).toContain("第二轮用户输入");
+    expect(payload.latestResponse).toBe("第二轮模型回复");
+    expect(getSessionMessagesMock).not.toHaveBeenCalled();
+  });
+
   test("converts every user and assistant turn into trace segments in chronological order", async () => {
     const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
 

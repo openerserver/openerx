@@ -52,7 +52,7 @@ export function useTaskExecutionTrace(taskId: Ref<string>, sessionId: Ref<string
   });
 
   const filteredMessages = computed(() => {
-    const messages = trace.value?.messages ?? [];
+    const messages = trace.value?.timeline ?? [];
     if (messageRoleFilter.value === "all") {
       return messages;
     }
@@ -76,11 +76,19 @@ export function useTaskExecutionTrace(taskId: Ref<string>, sessionId: Ref<string
         tone: "processing",
       },
       {
-        label: "原始消息",
-        value: String(trace.value.messages?.length ?? 0),
+        label: "时间线项",
+        value: String(trace.value.timeline?.length ?? 0),
         tone: "purple",
       },
     ];
+
+    if (trace.value.timelineMeta?.cacheState && trace.value.timelineMeta.cacheState !== "complete") {
+      items.push({
+        label: "时间线缓存",
+        value: trace.value.timelineMeta.cacheState === "partial" ? "部分" : "未命中",
+        tone: "warning",
+      });
+    }
 
     if (trace.value.truncated) {
       items.push({ label: "会话截断", value: "是", tone: "warning" });

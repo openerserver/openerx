@@ -30,7 +30,9 @@ import {
 import { collectChangesFromSession } from "../code-changes/change-collector";
 import { executeLifecycleHooks, mergeStageAndStrategyHooks, parseStageHooks } from "../hooks/lifecycle-hooks";
 import { finalizeTaskState } from "../tasks/finalize";
+import { persistTaskSessionMessageSnapshot } from "../tasks/task-session-compat";
 import { fetchCurrentStageHooks, persistWorkflowStageExecutionOutcome } from "../tasks/workflow-stage-execution";
+import { observeGraphWorkspaceDir, onGraphToolExecuted } from "./dag-sync";
 import { buildPipelineStageUpdatedEvents } from "./pipeline-events";
 
 // Subscribes to OpenCode Runtime SSE events and transforms them into
@@ -164,7 +166,7 @@ class SSEAggregator {
     requestDelta: number;
   }): Promise<{ guardState?: PaidExecutionGuardState; tripped: boolean; breakerReason?: string }> {
     const taskResult = await cpFetch<CompletedTaskContext>(
-      `/api/tasks/${encodeURIComponent(args.taskId)}`,
+      `/api/project-tree/tasks/${encodeURIComponent(args.taskId)}`,
       { authorization: args.authorization },
     );
     if (!taskResult.ok) {
@@ -421,7 +423,7 @@ class SSEAggregator {
     const mergedStrategy: typeof strategyConfig = { ...strategyConfig, hooks: mergedHooks };
 
     const taskResult = await cpFetch<CompletedTaskContext>(
-      `/api/tasks/${encodeURIComponent(taskId)}`,
+      `/api/project-tree/tasks/${encodeURIComponent(taskId)}`,
       {
         authorization,
       },
@@ -601,6 +603,102 @@ class SSEAggregator {
     });
   }
 
+  private readWorkspaceDirectory(parsed: Record<string, unknown>): string | undefined {
+    return typeof parsed.directory === "string" && parsed.directory.trim()
+      ? parsed.directory.trim()
+      : undefined;
+  }
+
+  private isGraphMutationTool(
+    type: string,
+    data: Record<string, unknown> | null,
+  ): { toolName: string; sessionId?: string } | null {
+    if (type !== "tool.execute.after" || !data) {
+      return null;
+    }
+
+    const properties =
+      typeof data.properties === "object" && data.properties
+        ? (data.properties as Record<string, unknown>)
+        : undefined;
+    const toolNameCandidates = [properties?.toolName, data.toolName, data.tool, data.name];
+    const toolName = toolNameCandidates.find(
+      (value): value is string => typeof value === "string" && value.trim().length > 0,
+    );
+
+    if (!toolName || !toolName.startsWith("task_graph_")) {
+      return null;
+    }
+
+    const sessionId =
+      (typeof data.sessionId === "string" && data.sessionId) ||
+      (typeof data.sessionID === "string" && data.sessionID) ||
+      undefined;
+
+    return { toolName, sessionId };
+  }
+
+  private async persistSessionMessageSnapshot(event: RealtimeEvent): Promise<void> {
+    if (event.type !== "message.updated" || !event.taskId || !event.sessionId) {
+      return;
+    }
+
+    const authorization = await createInternalAuthorization();
+    await persistTaskSessionMessageSnapshot(event.taskId, authorization, {
+      runtimeSessionId: event.sessionId,
+      message: event.data,
+    });
+  }
+
+  private async maybeSyncDag(
+    type: string,
+    payload: Record<string, unknown> | null,
+    parsed: Record<string, unknown>,
+    workspaceDirectory?: string,
+  ): Promise<void> {
+    const graphMutation = this.isGraphMutationTool(type, payload);
+    if (!graphMutation?.sessionId) {
+      return;
+    }
+
+    const runtimeRun = findAgentRunBySessionId(graphMutation.sessionId);
+    if (!runtimeRun?.taskId || !runtimeRun.projectId) {
+      return;
+    }
+
+    const effectiveWorkspaceDirectory =
+      workspaceDirectory || this.readWorkspaceDirectory(parsed);
+    if (effectiveWorkspaceDirectory) {
+      observeGraphWorkspaceDir(effectiveWorkspaceDirectory);
+    }
+
+    await onGraphToolExecuted();
+
+    const authorization = await createInternalAuthorization();
+    this.emit({
+      id: crypto.randomUUID(),
+      type: "task.node.updated",
+      ts: new Date().toISOString(),
+      sessionId: graphMutation.sessionId,
+      taskId: runtimeRun.taskId,
+      projectId: runtimeRun.projectId,
+      agentRunId: runtimeRun.agentRunId,
+      data: {
+        sourceEvent: type,
+        toolName: graphMutation.toolName,
+      },
+    });
+
+    await this.emitPipelineStageUpdates({
+      taskId: runtimeRun.taskId,
+      sessionId: graphMutation.sessionId,
+      projectId: runtimeRun.projectId,
+      agentRunId: runtimeRun.agentRunId,
+      authorization,
+      reason: "task.node.updated",
+    });
+  }
+
   /**
    * Subscribe to the global OpenCode SSE event stream.
    */
@@ -736,6 +834,19 @@ class SSEAggregator {
 
     if (event) {
       this.emit(event);
+      if (event.type === "message.updated") {
+        void this.persistSessionMessageSnapshot(event).catch((error) => {
+          console.error(`Failed to persist message snapshot for task ${event.taskId}:`, error);
+        });
+      }
+      if (event.type === "tool.execute.after") {
+        await this.maybeSyncDag(
+          String(payload?.type || type),
+          payload,
+          parsed,
+          this.readWorkspaceDirectory(parsed),
+        );
+      }
       if (event.type === "session.error") {
         void this.maybeEmitAuthError(event);
         void this.maybeFinalizeFailure(event);
@@ -936,6 +1047,8 @@ class SSEAggregator {
       const assistantResult = await this.getLatestAssistantResult(
         event.sessionId,
         event.type === "session.idle" ? 20000 : 8000,
+        event.taskId,
+        authorization,
         run.lastPromptAt,
       );
 
@@ -1275,25 +1388,24 @@ class SSEAggregator {
 
       // Collect code changes first, then run any configured post-execution hooks.
       const completedTaskId = event.taskId;
-      collectChangesFromSession({
+      await collectChangesFromSession({
         taskId: event.taskId,
         sessionId: event.sessionId,
         agentRunId: event.agentRunId,
         authorization,
-      })
-        .catch((err) => {
-          console.error(`Change collection failed for task ${event.taskId}:`, err);
-        })
-        .finally(() => {
-          if (!completedTaskId) {
-            return;
-          }
-          this.triggerPostExecutionHooks(completedTaskId, resultText, authorization).catch(
-            (err) => {
-              console.error(`Post-execution hooks failed for task ${completedTaskId}:`, err);
-            },
-          );
-        });
+      }).catch((err) => {
+        console.error(`Change collection failed for task ${event.taskId}:`, err);
+      });
+
+      if (!completedTaskId) {
+        return;
+      }
+
+      await this.triggerPostExecutionHooks(completedTaskId, resultText, authorization).catch(
+        (err) => {
+          console.error(`Post-execution hooks failed for task ${completedTaskId}:`, err);
+        },
+      );
     } catch (error) {
       console.error(`Failed to finalize agent run ${event.agentRunId}:`, error);
     } finally {
@@ -1327,7 +1439,13 @@ class SSEAggregator {
     }
 
     const errorMessage = this.extractErrorMessage(event);
-    const assistantResult = await this.getLatestAssistantResult(event.sessionId, 1000);
+    const authorization = await createInternalAuthorization();
+    const assistantResult = await this.getLatestAssistantResult(
+      event.sessionId,
+      1000,
+      event.taskId,
+      authorization,
+    );
     const tokenUsed = assistantResult.tokenUsed;
     const candidateInfo = this.sessionToCandidateMap.get(event.sessionId);
 
@@ -1565,7 +1683,12 @@ class SSEAggregator {
     const resultText = `[FAILED] ${errorMessage}`;
     const finishedAt = new Date().toISOString();
     const authorization = await createInternalAuthorization();
-    const assistantResult = await this.getLatestAssistantResult(event.sessionId, 1000);
+    const assistantResult = await this.getLatestAssistantResult(
+      event.sessionId,
+      1000,
+      event.taskId,
+      authorization,
+    );
     const tokenUsed = assistantResult.tokenUsed;
 
     try {
@@ -1746,7 +1869,7 @@ class SSEAggregator {
     finishedAt?: string;
   }): Promise<void> {
     const taskResult = await cpFetch<CompletedTaskContext & { executionPlan?: string }>(
-      `/api/tasks/${encodeURIComponent(args.taskId)}`,
+      `/api/project-tree/tasks/${encodeURIComponent(args.taskId)}`,
       { authorization: args.authorization },
     );
     if (!taskResult.ok || !taskResult.data.executionPlan) {
@@ -1801,7 +1924,7 @@ class SSEAggregator {
     const mergedStrategy: typeof strategyConfig = { ...strategyConfig, hooks: mergedHooks };
 
     const taskResult = await cpFetch<CompletedTaskContext>(
-      `/api/tasks/${encodeURIComponent(taskId)}`,
+      `/api/project-tree/tasks/${encodeURIComponent(taskId)}`,
       { authorization },
     );
     if (!taskResult.ok) return;
@@ -1937,6 +2060,8 @@ class SSEAggregator {
   private async getLatestAssistantResult(
     sessionId: string,
     timeoutMs: number,
+    taskId?: string,
+    authorization?: string,
     minCompletedAt?: number,
   ): Promise<{ text?: string; completed: boolean; tokenUsed: number }> {
     const deadline = Date.now() + timeoutMs;
@@ -1944,7 +2069,10 @@ class SSEAggregator {
     let fallbackTokenUsed = 0;
 
     while (Date.now() < deadline) {
-      const messagesResult = await getSessionMessages(sessionId);
+      const messagesResult = await getSessionMessages(
+        sessionId,
+        taskId ? { taskId, authorization } : undefined,
+      );
       if (!messagesResult.ok || !Array.isArray(messagesResult.data)) {
         return { text: fallbackText, completed: false, tokenUsed: fallbackTokenUsed };
       }
@@ -2054,7 +2182,7 @@ class SSEAggregator {
 
     // Fetch the task to get prompt and context
     const taskResult = await cpFetch<CompletedTaskContext>(
-      `/api/tasks/${encodeURIComponent(taskId)}`,
+      `/api/project-tree/tasks/${encodeURIComponent(taskId)}`,
       { authorization },
     );
     if (!taskResult.ok) {
@@ -2279,7 +2407,7 @@ class SSEAggregator {
 
       // Fetch the task to get its execution plan
       const taskResult = await cpFetch<CompletedTaskContext & { executionPlan?: string }>(
-        `/api/tasks/${encodeURIComponent(taskId)}`,
+        `/api/project-tree/tasks/${encodeURIComponent(taskId)}`,
         { authorization },
       );
       if (!taskResult.ok) return;

@@ -380,6 +380,7 @@ Control Plane 继续作为独立 HTTP 服务存在：
 - `db/index.ts`、`schema.ts`、`migrate.ts`、`seed.ts` 已收口为 PostgreSQL 实现；`runtime-schema.ts`、`sqlite-client.ts`、`sqlite-config.ts`、`schema.sqlite.ts` 已退出运行时代码。
 - 已将启动期补表逻辑转为正式 schema 与 migration，新增 PostgreSQL 索引迁移 `drizzle-pg/0002_purple_lorna_dane.sql`。
 - 已补齐离线 SQLite 快照迁移链路：`db:export:sqlite`、`db:transform:sqlite-export`、`db:import:pg`、`db:validate:pg`、`db:migrate:sqlite-snapshot`。
+- 2026-03-21 起，SQLite 快照迁移链已进一步收口：`transform-export` 会把 legacy `tasks` / `sessions` 事实合成到 `project_tree_nodes` / `project_tree_branches`，`tasks` / `sessions` 不再作为 PostgreSQL 导入目标表前提。
 - 已完成一次真实 SQLite 快照演练，产物落在 `tmp/sqlite-pg-migration-phase1/`，演练链路覆盖导出、规范化、导入和一致性校验。
 - 已在 PostgreSQL 唯一路径下完成根级 typecheck、app health check、BFF execution 相关回归，以及完整 service test 回归。
 

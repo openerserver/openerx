@@ -65,7 +65,7 @@ import {
   persistWorkflowStageExecutionOutcome,
 } from "./workflow-stage-execution";
 import { ensureTaskWorkflowStarted } from "./workflow-sync";
-import { buildTaskWorkflowViewModel } from "./workflow-view";
+import { buildTaskWorkflowViewModel, fetchTaskWorkflowState } from "./workflow-view";
 
 // ── Task Routes (BFF) ──────────────────────────────────────────────
 
@@ -137,6 +137,88 @@ interface BossDecisionRecord {
   confidence?: number;
   stageKey?: string;
   metadata?: Record<string, unknown>;
+}
+
+interface UpsertTaskSessionLineageInput {
+  runtimeSessionId: string;
+  parentRuntimeSessionId?: string;
+  forkedFromMessageId?: string;
+  branchName?: string;
+  sourceType?: "root" | "fork" | "sub_session";
+  isActive: boolean;
+}
+
+async function fetchTaskSessionLineageRecords(taskId: string, authorization: string) {
+  const lineageResult = await cpFetch<{ data: TaskSessionRecord[] }>(
+    `/api/tasks/${encodeURIComponent(taskId)}/branches`,
+    { authorization },
+  );
+
+  const records =
+    lineageResult.ok && Array.isArray(lineageResult.data?.data)
+      ? lineageResult.data.data
+      : [];
+
+  return {
+    ok: lineageResult.ok,
+    status: lineageResult.status,
+    records,
+    activeRecords: records.filter((record) => !record.archivedAt),
+  };
+}
+
+async function upsertTaskSessionLineageRecord(
+  taskId: string,
+  authorization: string,
+  input: UpsertTaskSessionLineageInput,
+) {
+  return cpFetch(`/api/tasks/${encodeURIComponent(taskId)}/branches`, {
+    method: "POST",
+    body: {
+      runtimeSessionId: input.runtimeSessionId,
+      parentRuntimeSessionId: input.parentRuntimeSessionId,
+      forkedFromMessageId: input.forkedFromMessageId,
+      branchName: input.branchName,
+      sourceType: input.sourceType,
+      isActive: input.isActive,
+    },
+    authorization,
+  });
+}
+
+async function fetchTaskSessionTimeline(
+  taskId: string,
+  sessionId: string,
+  authorization: string,
+  options?: { includeLineage?: boolean },
+) {
+  const suffix = options?.includeLineage ? "?includeLineage=true" : "";
+  return cpFetch<TaskSessionTimelineResponseRecord>(
+    `/api/tasks/${encodeURIComponent(taskId)}/branches/${encodeURIComponent(sessionId)}/timeline${suffix}`,
+    { authorization },
+  );
+}
+
+async function activateTaskSessionLineageByRecordId(
+  taskId: string,
+  recordId: string,
+  authorization: string,
+) {
+  return cpFetch(
+    `/api/tasks/${encodeURIComponent(taskId)}/branches/${encodeURIComponent(recordId)}/activate`,
+    { method: "POST", authorization },
+  );
+}
+
+async function archiveTaskSessionLineageByRecordId(
+  taskId: string,
+  recordId: string,
+  authorization: string,
+) {
+  return cpFetch(
+    `/api/tasks/${encodeURIComponent(taskId)}/branches/${encodeURIComponent(recordId)}/archive`,
+    { method: "POST", authorization },
+  );
 }
 
 interface HumanEscalationRequest {
@@ -222,6 +304,30 @@ interface ExecutionTraceMessageRecord {
   raw: unknown;
 }
 
+interface TaskSessionTimelineItemRecord {
+  id: string;
+  role: string;
+  text: string;
+  createdAt?: string;
+  completedAt?: string | null;
+  raw?: unknown;
+  sourceEventTypes?: string[];
+}
+
+interface TaskSessionTimelineMetaRecord {
+  cacheState?: "none" | "partial" | "complete";
+  complete?: boolean;
+  includeLineage?: boolean;
+  lineagePath?: string[];
+  cachedSessionCount?: number;
+  itemCount?: number;
+}
+
+interface TaskSessionTimelineResponseRecord {
+  data: TaskSessionTimelineItemRecord[];
+  meta?: TaskSessionTimelineMetaRecord;
+}
+
 interface TaskExecutionTraceRecord {
   taskId: string;
   sessionId: string | null;
@@ -232,6 +338,8 @@ interface TaskExecutionTraceRecord {
   messageLimit: number;
   segments: ExecutionTraceSegmentRecord[];
   messages: ExecutionTraceMessageRecord[];
+  timeline: TaskSessionTimelineItemRecord[];
+  timelineMeta?: TaskSessionTimelineMetaRecord;
   hookExecutions: Array<{
     hookId: string;
     trigger: string;
@@ -344,18 +452,6 @@ async function buildContinuationPreflight(input: {
   resolvedModel?: ResolvedModel;
   candidateCount?: number;
 }) {
-  const leaseResult = await fetchProjectPaidExecutionLeaseState(
-    input.task.projectId,
-    input.authorization,
-  );
-  if (!leaseResult.ok) {
-    return {
-      ok: false as const,
-      status: leaseResult.status as 401 | 403 | 404 | 502,
-      data: leaseResult.data,
-    };
-  }
-
   const continuationShape = {
     candidateCount: Math.max(1, input.candidateCount ?? 1),
     judgeEnabled: false,
@@ -363,28 +459,21 @@ async function buildContinuationPreflight(input: {
     suiteLabel: "task continue",
     suiteReference: `task=${input.task.id}:continue`,
   };
-  const [continuationBaseline, continuationProjectResult] = await Promise.all([
-    fetchProjectRuntimeUsageBaseline(input.task.projectId, input.authorization, {
-      providerId: input.resolvedModel?.providerId,
-      modelId: input.resolvedModel?.modelId,
-      entrypointType: "single-task",
-      orchestrationFingerprint: buildPreflightOrchestrationFingerprint(continuationShape),
-    }),
-    fetchProjectPaidExecutionSettings(input.task.projectId, input.authorization),
-  ]);
+  const rawPreflight = await buildPaidExecutionPreflight({
+    projectId: input.task.projectId,
+    authorization: input.authorization,
+    resolvedModel: input.resolvedModel,
+    shape: continuationShape,
+  });
+  if (!rawPreflight.ok) {
+    return {
+      ok: false as const,
+      status: rawPreflight.status as 401 | 403 | 404 | 502,
+      data: rawPreflight.data,
+    };
+  }
 
-  const preflight = evaluatePaidExecutionPreflight(
-    {
-      projectId: input.task.projectId,
-      allowPaidExecution: continuationProjectResult.ok
-        ? continuationProjectResult.data.settings?.allowPaidExecution === true
-        : false,
-      resolvedModel: input.resolvedModel,
-      shape: continuationShape,
-      baseline: continuationBaseline.ok ? continuationBaseline.data.baseline : null,
-    },
-    leaseResult.data,
-  );
+  const preflight = rawPreflight.data;
 
   return {
     ok: true as const,
@@ -586,14 +675,8 @@ async function registerParallelTaskSessions(
     return;
   }
 
-  const lineageResult = await cpFetch<{ data: TaskSessionRecord[] }>(
-    `/api/tasks/${encodeURIComponent(task.id)}/task-sessions`,
-    { authorization },
-  );
-  const existingRecords =
-    lineageResult.ok && Array.isArray(lineageResult.data?.data)
-      ? lineageResult.data.data.filter((record: TaskSessionRecord) => !record.archivedAt)
-      : [];
+  const lineageResult = await fetchTaskSessionLineageRecords(task.id, authorization);
+  const existingRecords = lineageResult.activeRecords;
   const { records: normalizedRecords } = normalizeLineageRecords(existingRecords);
   const existingSessionIds = new Set(normalizedRecords.map((record) => record.runtimeSessionId));
   const existingRecordMap = new Map(
@@ -645,16 +728,12 @@ async function registerParallelTaskSessions(
       continue;
     }
 
-    await cpFetch(`/api/tasks/${encodeURIComponent(task.id)}/task-sessions`, {
-      method: "POST",
-      body: {
-        runtimeSessionId: candidate.sessionId,
-        parentRuntimeSessionId,
-        branchName: candidate.branchName,
-        sourceType: nextSourceType,
-        isActive: task.sessionId === candidate.sessionId,
-      },
-      authorization,
+    await upsertTaskSessionLineageRecord(task.id, authorization, {
+      runtimeSessionId: candidate.sessionId,
+      parentRuntimeSessionId,
+      branchName: candidate.branchName,
+      sourceType: nextSourceType,
+      isActive: task.sessionId === candidate.sessionId,
     });
     existingSessionIds.add(candidate.sessionId);
     existingRecordMap.set(candidate.sessionId, {
@@ -1272,7 +1351,7 @@ async function recordManualReconcileAudit(
 }
 
 async function fetchExecutableTask(taskId: string, authorization: string) {
-  return cpFetch<ExecutableTask>(`/api/tasks/${encodeURIComponent(taskId)}`, {
+  return cpFetch<ExecutableTask>(`/api/project-tree/tasks/${encodeURIComponent(taskId)}`, {
     authorization,
   });
 }
@@ -1286,13 +1365,21 @@ async function fetchProjectPaidExecutionSettings(projectId: string, authorizatio
   );
 }
 
-async function buildTaskExecutionPreflight(
-  context: PreparedExecutionContext,
-  authorization: string,
-) {
+async function buildPaidExecutionPreflight(input: {
+  projectId: string;
+  authorization: string;
+  resolvedModel?: ResolvedModel;
+  shape: {
+    candidateCount: number;
+    judgeEnabled: boolean;
+    enabledHookTriggers: string[];
+    suiteLabel: string;
+    suiteReference: string;
+  };
+}) {
   const leaseResult = await fetchProjectPaidExecutionLeaseState(
-    context.task.projectId,
-    authorization,
+    input.projectId,
+    input.authorization,
   );
   if (!leaseResult.ok) {
     return {
@@ -1302,6 +1389,38 @@ async function buildTaskExecutionPreflight(
     };
   }
 
+  const [baselineResult, projectResult] = await Promise.all([
+    fetchProjectRuntimeUsageBaseline(input.projectId, input.authorization, {
+      providerId: input.resolvedModel?.providerId,
+      modelId: input.resolvedModel?.modelId,
+      entrypointType: "single-task",
+      orchestrationFingerprint: buildPreflightOrchestrationFingerprint(input.shape),
+    }),
+    fetchProjectPaidExecutionSettings(input.projectId, input.authorization),
+  ]);
+
+  return {
+    ok: true as const,
+    status: 200 as const,
+    data: evaluatePaidExecutionPreflight(
+      {
+        projectId: input.projectId,
+        allowPaidExecution: projectResult.ok
+          ? projectResult.data.settings?.allowPaidExecution === true
+          : false,
+        resolvedModel: input.resolvedModel,
+        shape: input.shape,
+        baseline: baselineResult.ok ? baselineResult.data.baseline : null,
+      },
+      leaseResult.data,
+    ),
+  };
+}
+
+async function buildTaskExecutionPreflight(
+  context: PreparedExecutionContext,
+  authorization: string,
+) {
   const enabledHookTriggers = context.strategy.hooks
     .filter((hook) => hook.enabled && hook.trigger !== "pre-resume")
     .map((hook) => hook.trigger);
@@ -1315,37 +1434,13 @@ async function buildTaskExecutionPreflight(
   const preflightModel = isParallelExecution(context.plan)
     ? resolvePreflightModelForParallelPlan(context.plan, context.resolvedModel)
     : context.resolvedModel;
-  const baselineResult = await fetchProjectRuntimeUsageBaseline(
-    context.task.projectId,
-    authorization,
-    {
-      providerId: preflightModel?.providerId,
-      modelId: preflightModel?.modelId,
-      entrypointType: "single-task",
-      orchestrationFingerprint: buildPreflightOrchestrationFingerprint(shape),
-    },
-  );
-  const projectResult = await fetchProjectPaidExecutionSettings(
-    context.task.projectId,
-    authorization,
-  );
 
-  return {
-    ok: true as const,
-    status: 200 as const,
-    data: evaluatePaidExecutionPreflight(
-      {
-        projectId: context.task.projectId,
-        allowPaidExecution: projectResult.ok
-          ? projectResult.data.settings?.allowPaidExecution === true
-          : false,
-        resolvedModel: preflightModel,
-        shape,
-        baseline: baselineResult.ok ? baselineResult.data.baseline : null,
-      },
-      leaseResult.data,
-    ),
-  };
+  return buildPaidExecutionPreflight({
+    projectId: context.task.projectId,
+    authorization,
+    resolvedModel: preflightModel,
+    shape,
+  });
 }
 
 async function resolveExecutionIdentity(task: ExecutableTask, authorization: string) {
@@ -1708,6 +1803,62 @@ function extractSessionMessageCreatedAt(message: unknown): string | undefined {
   return undefined;
 }
 
+function buildSyntheticExecutionTraceRawMessage(item: TaskSessionTimelineItemRecord) {
+  return {
+    info: {
+      id: item.id,
+      role: item.role,
+      time: {
+        created: item.createdAt,
+        completed: item.completedAt ?? undefined,
+      },
+    },
+    parts: item.text
+      ? [
+          {
+            type: "text",
+            text: item.text,
+          },
+        ]
+      : [],
+  };
+}
+
+function mapTimelineItemsToExecutionTraceMessages(
+  items: TaskSessionTimelineItemRecord[],
+): ExecutionTraceMessageRecord[] {
+  return items.map((item, index) => ({
+    id: item.id || `${index}`,
+    role: item.role || "unknown",
+    text: item.text || "",
+    createdAt: item.createdAt,
+    raw: item.raw ?? buildSyntheticExecutionTraceRawMessage(item),
+  }));
+}
+
+async function loadExecutionTraceMessagesFromTimeline(
+  taskId: string,
+  sessionId: string,
+  authorization: string,
+  options?: { includeLineage?: boolean },
+) {
+  const timelineResult = await fetchTaskSessionTimeline(taskId, sessionId, authorization, {
+    includeLineage: options?.includeLineage === true,
+  });
+
+  if (!timelineResult.ok || !Array.isArray(timelineResult.data?.data)) {
+    return null;
+  }
+
+  return {
+    items: timelineResult.data.data,
+    messages: mapTimelineItemsToExecutionTraceMessages(timelineResult.data.data),
+    meta: timelineResult.data.meta,
+    complete: timelineResult.data.meta?.cacheState === "complete",
+    messageLimit: timelineResult.data.meta?.itemCount ?? timelineResult.data.data.length,
+  };
+}
+
 function parseTraceSegmentTimestamp(value?: string): number | null {
   if (!value) {
     return null;
@@ -1839,10 +1990,14 @@ async function buildTaskExecutionTrace(
   taskId: string,
   authorization: string,
   requestedSessionId?: string,
+  includeLineage = true,
 ): Promise<{ ok: true; status: 200; data: TaskExecutionTraceRecord } | { ok: false; status: number; data: unknown }> {
-  const taskResult = await cpFetch<ExecutableTask>(`/api/tasks/${encodeURIComponent(taskId)}`, {
-    authorization,
-  });
+  const taskResult = await cpFetch<ExecutableTask>(
+    `/api/project-tree/tasks/${encodeURIComponent(taskId)}`,
+    {
+      authorization,
+    },
+  );
   if (!taskResult.ok) {
     return { ok: false as const, status: taskResult.status, data: taskResult.data };
   }
@@ -1925,29 +2080,52 @@ async function buildTaskExecutionTrace(
 
   const sessionId = requestedSessionId || task.sessionId || null;
   const messages: ExecutionTraceMessageRecord[] = [];
+  let timeline: TaskSessionTimelineItemRecord[] = [];
   let finalPrompt: string | null = null;
   let latestResponse: string | null = null;
   let truncated = false;
+  let messageLimit = 200;
+  let timelineMeta: TaskSessionTimelineMetaRecord | undefined;
 
   if (sessionId) {
-    const messagesResult = await getSessionMessages(sessionId);
-    if (messagesResult.ok && Array.isArray(messagesResult.data)) {
-      const rawMessages = messagesResult.data as unknown[];
-      truncated = rawMessages.length >= 200;
+    const timelineMessages = await loadExecutionTraceMessagesFromTimeline(task.id, sessionId, authorization, {
+      includeLineage,
+    });
 
-      for (let index = 0; index < rawMessages.length; index += 1) {
-        const rawMessage = rawMessages[index];
-        const role = extractSessionMessageRole(rawMessage);
-        const text = extractSessionMessageText(rawMessage);
-        messages.push({
-          id: extractExecutionTraceMessageId(rawMessage, `${index}`),
-          role,
-          text,
-          createdAt: extractSessionMessageCreatedAt(rawMessage),
-          raw: rawMessage,
-        });
+    if (timelineMessages) {
+      timeline = timelineMessages.items;
+      timelineMeta = timelineMessages.meta;
+    }
+
+    if (timelineMessages?.complete) {
+      messages.push(...timelineMessages.messages);
+      messageLimit = timelineMessages.messageLimit;
+    } else {
+      const messagesResult = await getSessionMessages(sessionId, {
+        taskId: task.id,
+        authorization,
+      });
+      if (messagesResult.ok && Array.isArray(messagesResult.data)) {
+        const rawMessages = messagesResult.data as unknown[];
+        truncated = rawMessages.length >= 200;
+        messageLimit = 200;
+
+        for (let index = 0; index < rawMessages.length; index += 1) {
+          const rawMessage = rawMessages[index];
+          const role = extractSessionMessageRole(rawMessage);
+          const text = extractSessionMessageText(rawMessage);
+          messages.push({
+            id: extractExecutionTraceMessageId(rawMessage, `${index}`),
+            role,
+            text,
+            createdAt: extractSessionMessageCreatedAt(rawMessage),
+            raw: rawMessage,
+          });
+        }
       }
+    }
 
+    if (messages.length > 0) {
       const userMessages = messages.filter((item) => item.role === "user" && item.text);
       if (userMessages.length > 0) {
         finalPrompt = userMessages[userMessages.length - 1]?.text || null;
@@ -1988,9 +2166,11 @@ async function buildTaskExecutionTrace(
       finalPrompt,
       latestResponse,
       truncated,
-      messageLimit: 200,
+      messageLimit,
       segments,
       messages,
+      timeline,
+      timelineMeta,
       hookExecutions: parsedStrategy.hookExecutions.map((hook) => ({
         hookId: hook.hookId,
         trigger: hook.trigger,
@@ -2251,33 +2431,6 @@ async function validateResolvedModel(resolvedModel: ResolvedModel | undefined) {
   };
 }
 
-/**
- * Build a minimal session record from CP data only — no OpenCode calls.
- * Used when OpenCode is unreachable to avoid cascading timeouts.
- */
-function buildCpOnlyFallbackSession(
-  taskId: string,
-  task: {
-    sessionId?: string;
-    title?: string;
-    status?: string;
-    createdAt?: string;
-    updatedAt?: string;
-  },
-): SessionSummaryRecord | null {
-  if (!task.sessionId) return null;
-  return {
-    id: task.sessionId,
-    title: task.title
-      ? `[Task ${taskId.slice(0, 8)}] ${task.title}`
-      : `[Task ${taskId.slice(0, 8)}] 主会话`,
-    isActive: task.status === "running",
-    summary: null,
-    createdAt: task.createdAt ?? null,
-    updatedAt: task.updatedAt ?? null,
-  };
-}
-
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -2359,28 +2512,6 @@ function buildTaskOperatingState(task: Pick<ExecutableTask, "strategy">): TaskOp
   };
 }
 
-function buildLegacyOperatingMode(
-  task: Pick<ExecutableTask, "strategy">,
-): OperatingModeSelectionRecord | null {
-  const strategy = parseTaskStrategy(task.strategy);
-  const state = buildTaskOperatingState(task);
-  if (!state.collaborationMode || !state.autopilotLevel || !state.bossParticipationMode) {
-    return null;
-  }
-
-  return {
-    collaborationMode: state.collaborationMode,
-    autopilotLevel: state.autopilotLevel,
-    bossParticipationMode: state.bossParticipationMode,
-    selectedTemplateId:
-      asNonEmptyString(strategy.selectedTemplateId) ||
-      asNonEmptyString(strategy.workflowTemplateId) ||
-      null,
-    scenarioKey: asNonEmptyString(strategy.scenarioKey),
-    source: state.operatingModeSource || "task-override",
-  };
-}
-
 async function registerPrimaryTaskSession(
   task: Pick<ExecutableTask, "id">,
   sessionId: string | undefined,
@@ -2398,39 +2529,17 @@ async function registerPrimaryTaskSession(
     );
   }
 
-  await cpFetch(`/api/tasks/${encodeURIComponent(task.id)}/task-sessions`, {
-    method: "POST",
-    body: {
-      runtimeSessionId: sessionId,
-      parentRuntimeSessionId:
-        options?.parentSessionId && options.parentSessionId !== sessionId
-          ? options.parentSessionId
-          : undefined,
-      branchName,
-      sourceType:
-        options?.parentSessionId && options.parentSessionId !== sessionId ? "fork" : "root",
-      isActive: true,
-    },
-    authorization,
+  await upsertTaskSessionLineageRecord(task.id, authorization, {
+    runtimeSessionId: sessionId,
+    parentRuntimeSessionId:
+      options?.parentSessionId && options.parentSessionId !== sessionId
+        ? options.parentSessionId
+        : undefined,
+    branchName,
+    sourceType:
+      options?.parentSessionId && options.parentSessionId !== sessionId ? "fork" : "root",
+    isActive: true,
   }).catch(() => null);
-}
-
-function extractBossDecisions(task: Pick<ExecutableTask, "strategy">) {
-  const strategy = parseTaskStrategy(task.strategy);
-  return Array.isArray(strategy.bossDecisions)
-    ? strategy.bossDecisions
-        .map(normalizeBossDecisionRecord)
-        .filter((item): item is BossDecisionRecord => Boolean(item))
-    : [];
-}
-
-function extractEscalationRequests(task: Pick<ExecutableTask, "strategy">) {
-  const strategy = parseTaskStrategy(task.strategy);
-  return Array.isArray(strategy.escalationRequests)
-    ? strategy.escalationRequests
-        .map(normalizeHumanEscalationRequest)
-        .filter((item): item is HumanEscalationRequest => Boolean(item))
-    : [];
 }
 
 async function prepareExecutionContext(
@@ -2987,7 +3096,7 @@ taskRoutes.get("/", async (c) => {
   if (status) params.set("status", status);
   if (repoId) params.set("repoId", repoId);
 
-  const result = await cpFetch(`/api/tasks?${params.toString()}`, {
+  const result = await cpFetch(`/api/project-tree/tasks?${params.toString()}`, {
     authorization: authHeader(c),
   });
   return c.json(result.data, result.ok ? 200 : (result.status as 401 | 502));
@@ -2996,7 +3105,7 @@ taskRoutes.get("/", async (c) => {
 // GET /api/tasks/:taskId — Get task detail
 taskRoutes.get("/:taskId", async (c) => {
   const taskId = c.req.param("taskId");
-  const result = await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
+  const result = await cpFetch(`/api/project-tree/tasks/${encodeURIComponent(taskId)}`, {
     authorization: authHeader(c),
   });
   return c.json(result.data, result.ok ? 200 : (result.status as 401 | 404 | 502));
@@ -3011,22 +3120,7 @@ taskRoutes.get("/:taskId/operating-state", async (c) => {
     },
   );
 
-  if (result.ok) {
-    return c.json(result.data);
-  }
-
-  const legacyTaskResult = await cpFetch<ExecutableTask>(
-    `/api/tasks/${encodeURIComponent(taskId)}`,
-    {
-      authorization: authHeader(c),
-    },
-  );
-
-  if (!legacyTaskResult.ok) {
-    return c.json(result.data, legacyTaskResult.status as 401 | 404 | 502);
-  }
-
-  return c.json(buildTaskOperatingState(legacyTaskResult.data || {}));
+  return c.json(result.data, result.ok ? 200 : (result.status as 401 | 404 | 502));
 });
 
 taskRoutes.get("/:taskId/operating-mode", async (c) => {
@@ -3038,21 +3132,7 @@ taskRoutes.get("/:taskId/operating-mode", async (c) => {
     },
   );
 
-  if (result.ok) {
-    return c.json(result.data);
-  }
-
-  const legacyTaskResult = await cpFetch<ExecutableTask>(
-    `/api/tasks/${encodeURIComponent(taskId)}`,
-    {
-      authorization: authHeader(c),
-    },
-  );
-  if (!legacyTaskResult.ok) {
-    return c.json(result.data, legacyTaskResult.status as 401 | 404 | 502);
-  }
-
-  return c.json({ data: buildLegacyOperatingMode(legacyTaskResult.data || {}) });
+  return c.json(result.data, result.ok ? 200 : (result.status as 401 | 404 | 502));
 });
 
 const taskOperatingModeSchema = z.object({
@@ -3100,22 +3180,7 @@ taskRoutes.get("/:taskId/boss-decisions", async (c) => {
     },
   );
 
-  if (result.ok) {
-    return c.json(result.data);
-  }
-
-  const legacyTaskResult = await cpFetch<ExecutableTask>(
-    `/api/tasks/${encodeURIComponent(taskId)}`,
-    {
-      authorization: authHeader(c),
-    },
-  );
-
-  if (!legacyTaskResult.ok) {
-    return c.json(result.data, legacyTaskResult.status as 401 | 404 | 502);
-  }
-
-  return c.json({ data: extractBossDecisions(legacyTaskResult.data || {}) });
+  return c.json(result.data, result.ok ? 200 : (result.status as 401 | 404 | 502));
 });
 
 const bossDecisionSchema = z.object({
@@ -3150,22 +3215,7 @@ taskRoutes.get("/:taskId/escalations", async (c) => {
     },
   );
 
-  if (result.ok) {
-    return c.json(result.data);
-  }
-
-  const legacyTaskResult = await cpFetch<ExecutableTask>(
-    `/api/tasks/${encodeURIComponent(taskId)}`,
-    {
-      authorization: authHeader(c),
-    },
-  );
-
-  if (!legacyTaskResult.ok) {
-    return c.json(result.data, legacyTaskResult.status as 401 | 404 | 502);
-  }
-
-  return c.json({ data: extractEscalationRequests(legacyTaskResult.data || {}) });
+  return c.json(result.data, result.ok ? 200 : (result.status as 401 | 404 | 502));
 });
 
 const escalationSchema = z.object({
@@ -3246,7 +3296,7 @@ taskRoutes.get(":taskId/workflow-view", async (c) => {
   const taskId = c.req.param("taskId");
   const authorization = authHeader(c);
   const taskResult = await cpFetch<{ projectId?: string | null; status?: string | null }>(
-    `/api/tasks/${encodeURIComponent(taskId)}`,
+    `/api/project-tree/tasks/${encodeURIComponent(taskId)}`,
     {
       authorization,
     },
@@ -3548,12 +3598,6 @@ taskRoutes.post("/:taskId/execute", async (c) => {
     return c.json({ error: "Failed to persist paid execution guard configuration" }, 502);
   }
 
-  await ensureTaskWorkflowStarted({
-    authorization,
-    taskId,
-    templateId: preparedContext.workflowTemplateId,
-  });
-
   const executionContextResult = await finalizePreExecutionContext(guardPreparation.context);
   if (!executionContextResult.ok) {
     return c.json(
@@ -3589,7 +3633,7 @@ taskRoutes.post("/:taskId/candidates/:index/adopt", async (c) => {
 
   // Fetch the task
   const taskResult = await cpFetch<ExecutableTask & { executionPlan?: string; result?: string }>(
-    `/api/tasks/${encodeURIComponent(taskId)}`,
+    `/api/project-tree/tasks/${encodeURIComponent(taskId)}`,
     { authorization },
   );
   if (!taskResult.ok) {
@@ -3720,21 +3764,16 @@ taskRoutes.post("/:taskId/complete", async (c) => {
   const taskId = c.req.param("taskId");
   const authorization = authHeader(c);
 
-  const taskResult = await cpFetch<ExecutableTask & { result?: string }>(
-    `/api/tasks/${encodeURIComponent(taskId)}`,
-    { authorization },
-  );
-  if (!taskResult.ok) {
+  const workflowState = await fetchTaskWorkflowState({
+    taskId,
+    authorization,
+    includeTask: true,
+  });
+  if (!workflowState.task?.id || !workflowState.task.projectId) {
     return c.json({ error: "Task not found" }, 404);
   }
 
-  const task = taskResult.data;
-  const workflowResult = await cpFetch<{
-    data?: {
-      workflowRun?: { currentStage?: string | null } | null;
-      stages?: Array<{ stageKey?: string | null; artifactsSummaryJson?: unknown }>;
-    };
-  }>(`/api/tasks/${encodeURIComponent(taskId)}/workflow`, { authorization });
+  const task = workflowState.task;
 
   await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
     method: "PATCH",
@@ -3742,14 +3781,10 @@ taskRoutes.post("/:taskId/complete", async (c) => {
     body: { status: "completed" },
   });
 
-  const currentStage = workflowResult.ok
-    ? workflowResult.data?.data?.workflowRun?.currentStage ?? undefined
-    : undefined;
+  const currentStage = workflowState.workflowRun?.currentStage ?? undefined;
   const stageSummary = buildStageArtifactSummary(task.result ?? undefined);
-  const existingSummary = workflowResult.ok
-    ? workflowResult.data?.data?.stages?.find((stage) => stage.stageKey === currentStage)
-        ?.artifactsSummaryJson
-    : undefined;
+  const existingSummary = workflowState.stages.find((stage) => stage.stageKey === currentStage)
+    ?.artifactsSummaryJson;
 
   if (currentStage) {
     await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}/workflow/advance`, {
@@ -3784,7 +3819,7 @@ taskRoutes.post("/:taskId/workflow/advance", async (c) => {
   const authorization = authHeader(c);
 
   const taskResult = await cpFetch<ExecutableTask & { result?: string }>(
-    `/api/tasks/${encodeURIComponent(taskId)}`,
+    `/api/project-tree/tasks/${encodeURIComponent(taskId)}`,
     { authorization },
   );
   if (!taskResult.ok) {
@@ -3865,17 +3900,17 @@ taskRoutes.get("/:taskId/pipeline", async (c) => {
 });
 
 // ═══════════════════════════════════════════════════════════════════
-// SESSION ROUTES — Expose OpenCode session operations
+// BRANCH ROUTES — Expose task branch and lineage views
 // ═══════════════════════════════════════════════════════════════════
 
-// GET /api/tasks/:taskId/sessions — List sessions related to a task
-taskRoutes.get("/:taskId/sessions", async (c) => {
+// GET /api/tasks/:taskId/branches — List task branches
+taskRoutes.get("/:taskId/branches", async (c) => {
   const taskId = c.req.param("taskId");
   const authorization = authHeader(c);
 
   // Get task to find its sessionId
   const taskResult = await cpFetch<{ sessionId?: string; title?: string; status?: string }>(
-    `/api/tasks/${encodeURIComponent(taskId)}`,
+    `/api/project-tree/tasks/${encodeURIComponent(taskId)}`,
     { authorization },
   );
 
@@ -3883,15 +3918,8 @@ taskRoutes.get("/:taskId/sessions", async (c) => {
     return c.json({ data: [] });
   }
 
-  const lineageResult = await cpFetch<{ data: TaskSessionRecord[] }>(
-    `/api/tasks/${encodeURIComponent(taskId)}/task-sessions`,
-    { authorization },
-  );
-
-  const lineageRecords: TaskSessionRecord[] =
-    lineageResult.ok && Array.isArray(lineageResult.data?.data)
-      ? lineageResult.data.data.filter((record) => !record.archivedAt)
-      : [];
+  const lineageResult = await fetchTaskSessionLineageRecords(taskId, authorization);
+  const lineageRecords = lineageResult.activeRecords;
 
   const runtimeMap = await fetchRuntimeSessionMap(100);
 
@@ -3939,26 +3967,7 @@ taskRoutes.get("/:taskId/sessions", async (c) => {
     });
   }
 
-  const fallback = buildCpOnlyFallbackSession(taskId, taskResult.data || {});
-  return c.json({ data: fallback ? [fallback] : [] });
-});
-
-// GET /api/tasks/:taskId/sessions/:sessionId/messages — Get session messages
-taskRoutes.get("/:taskId/sessions/:sessionId/messages", async (c) => {
-  const taskId = c.req.param("taskId") as string;
-  const sessionId = c.req.param("sessionId") as string;
-  const includeLineage = c.req.query("includeLineage") === "true";
-
-  if (includeLineage) {
-    const data = await loadSessionMessagesWithLineage(taskId, sessionId, authHeader(c));
-    return c.json({ data });
-  }
-
-  const result = await getSessionMessages(sessionId);
-  if (!result.ok) {
-    return c.json({ data: [] });
-  }
-  return c.json({ data: result.data });
+  return c.json({ data: [] });
 });
 
 // GET /api/tasks/:taskId/execution-trace — Get full execution trace for task detail
@@ -3966,8 +3975,9 @@ taskRoutes.get(":taskId/execution-trace", async (c) => {
   const taskId = c.req.param("taskId") as string;
   const authorization = authHeader(c);
   const requestedSessionId = c.req.query("sessionId") || undefined;
+  const includeLineage = c.req.query("includeLineage") !== "false";
 
-  const result = await buildTaskExecutionTrace(taskId, authorization, requestedSessionId);
+  const result = await buildTaskExecutionTrace(taskId, authorization, requestedSessionId, includeLineage);
   if (!result.ok) {
     return c.json(result.data, result.status as 401 | 403 | 404 | 502);
   }
@@ -3999,69 +4009,83 @@ const forkSessionSchema = z.object({
   messageId: z.string().optional(),
 });
 
-taskRoutes.post(
-  "/:taskId/sessions/:sessionId/fork",
-  zValidator("json", forkSessionSchema),
-  async (c) => {
-    const taskId = c.req.param("taskId");
-    const sessionId = c.req.param("sessionId");
-    const { title, messageId } = c.req.valid("json");
-    const authorization = authHeader(c);
+async function executeTaskBranchFork(args: {
+  taskId: string;
+  sessionId: string;
+  title?: string;
+  messageId?: string;
+  authorization: string;
+}) {
+  const taskResult = await cpFetch<{ projectId?: string; title?: string }>(
+    `/api/project-tree/tasks/${encodeURIComponent(args.taskId)}`,
+    { authorization: args.authorization },
+  );
 
-    const taskResult = await cpFetch<{ projectId?: string; title?: string }>(
-      `/api/tasks/${encodeURIComponent(taskId)}`,
-      { authorization },
-    );
+  if (!taskResult.ok) {
+    return { status: 404 as const, body: { error: "Task not found" } };
+  }
 
-    if (!taskResult.ok) {
-      return c.json({ error: "Task not found" }, 404);
-    }
+  await ensureParentLineageRecord(
+    args.taskId,
+    args.sessionId,
+    args.authorization,
+    taskResult.data?.title,
+  );
 
-    await ensureParentLineageRecord(taskId, sessionId, authorization, taskResult.data?.title);
+  const defaultTitle =
+    args.title || `[Task ${args.taskId.slice(0, 8)}] Fork ${new Date().toLocaleTimeString()}`;
+  const result = await forkSession(args.sessionId, { title: defaultTitle });
 
-    const defaultTitle =
-      title || `[Task ${taskId.slice(0, 8)}] Fork ${new Date().toLocaleTimeString()}`;
-    const result = await forkSession(sessionId, { title: defaultTitle });
+  if (!result.ok || !result.sessionId) {
+    return { status: 502 as const, body: { error: result.error || "Failed to fork session" } };
+  }
 
-    if (!result.ok || !result.sessionId) {
-      return c.json({ error: result.error || "Failed to fork session" }, 502);
-    }
+  await upsertTaskSessionLineageRecord(args.taskId, args.authorization, {
+    runtimeSessionId: result.sessionId,
+    parentRuntimeSessionId: args.sessionId,
+    forkedFromMessageId: args.messageId,
+    branchName: defaultTitle,
+    sourceType: "fork",
+    isActive: true,
+  });
 
-    // Persist branch lineage in task_sessions
-    await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}/task-sessions`, {
-      method: "POST",
-      body: {
-        runtimeSessionId: result.sessionId,
-        parentRuntimeSessionId: sessionId,
-        forkedFromMessageId: messageId,
-        branchName: defaultTitle,
-        sourceType: "fork",
-        isActive: true,
-      },
-      authorization,
-    });
+  wsBroadcaster.broadcast({
+    id: crypto.randomUUID(),
+    type: "task.forked",
+    ts: new Date().toISOString(),
+    taskId: args.taskId,
+    projectId: taskResult.data?.projectId,
+    sessionId: result.sessionId,
+    data: {
+      parentSessionId: args.sessionId,
+      title: defaultTitle,
+      forkedFromMessageId: args.messageId,
+    },
+  });
 
-    wsBroadcaster.broadcast({
-      id: crypto.randomUUID(),
-      type: "task.forked",
-      ts: new Date().toISOString(),
-      taskId,
-      projectId: taskResult.data?.projectId,
-      sessionId: result.sessionId,
-      data: {
-        parentSessionId: sessionId,
-        title: defaultTitle,
-        forkedFromMessageId: messageId,
-      },
-    });
-
-    return c.json({
+  return {
+    status: 200 as const,
+    body: {
       ok: true,
       sessionId: result.sessionId,
       title: defaultTitle,
-      parentSessionId: sessionId,
-      forkedFromMessageId: messageId,
+      parentSessionId: args.sessionId,
+      forkedFromMessageId: args.messageId,
+    },
+  };
+}
+
+taskRoutes.post(
+  "/:taskId/branches/:sessionId/fork",
+  zValidator("json", forkSessionSchema),
+  async (c) => {
+    const result = await executeTaskBranchFork({
+      taskId: c.req.param("taskId"),
+      sessionId: c.req.param("sessionId"),
+      ...c.req.valid("json"),
+      authorization: authHeader(c),
     });
+    return c.json(result.body, result.status);
   },
 );
 
@@ -4118,54 +4142,6 @@ function extractSessionMessageId(message: unknown) {
   const record = asRecord(message);
   const info = asRecord(record?.info);
   return asNonEmptyString(info?.id) || asNonEmptyString(record?.id);
-}
-
-function sliceMessagesForLineageBoundary(messages: unknown[], childRecord?: TaskSessionRecord) {
-  if (!childRecord?.forkedFromMessageId) {
-    return messages;
-  }
-
-  const boundaryIndex = messages.findIndex(
-    (message) => extractSessionMessageId(message) === childRecord.forkedFromMessageId,
-  );
-
-  if (boundaryIndex < 0) {
-    return messages;
-  }
-
-  return messages.slice(0, boundaryIndex + 1);
-}
-
-function dedupeMergedSessionMessages(messages: unknown[]) {
-  const seen = new Set<string>();
-  let anonymousIndex = 0;
-
-  return messages.filter((message) => {
-    const messageId = extractSessionMessageId(message) || `anonymous-${anonymousIndex++}`;
-    if (seen.has(messageId)) {
-      return false;
-    }
-
-    seen.add(messageId);
-    return true;
-  });
-}
-
-function buildLineagePath(records: TaskSessionRecord[], runtimeSessionId: string) {
-  const recordMap = new Map(records.map((record) => [record.runtimeSessionId, record] as const));
-  const path: TaskSessionRecord[] = [];
-  const visited = new Set<string>();
-
-  let current = recordMap.get(runtimeSessionId);
-  while (current && !visited.has(current.runtimeSessionId)) {
-    path.push(current);
-    visited.add(current.runtimeSessionId);
-    current = current.parentRuntimeSessionId
-      ? recordMap.get(current.parentRuntimeSessionId)
-      : undefined;
-  }
-
-  return path.reverse();
 }
 
 function dedupeTaskSessionRecords(records: TaskSessionRecord[]) {
@@ -4245,48 +4221,6 @@ function normalizeLineageRecords(records: TaskSessionRecord[]) {
   }
 
   return { records: normalized, repaired };
-}
-
-async function loadSessionMessagesWithLineage(
-  taskId: string,
-  sessionId: string,
-  authorization: string,
-) {
-  const lineageResult = await cpFetch<{ data: TaskSessionRecord[] }>(
-    `/api/tasks/${encodeURIComponent(taskId)}/task-sessions`,
-    { authorization },
-  );
-
-  const lineageRecords: TaskSessionRecord[] =
-    lineageResult.ok && Array.isArray(lineageResult.data?.data)
-      ? lineageResult.data.data.filter((record) => !record.archivedAt)
-      : [];
-
-  if (lineageRecords.length === 0) {
-    const result = await getSessionMessages(sessionId);
-    return result.ok && Array.isArray(result.data) ? result.data : [];
-  }
-
-  const { records: normalizedRecords } = normalizeLineageRecords(lineageRecords);
-  const lineagePath = buildLineagePath(normalizedRecords, sessionId);
-
-  if (lineagePath.length === 0) {
-    const result = await getSessionMessages(sessionId);
-    return result.ok && Array.isArray(result.data) ? result.data : [];
-  }
-
-  const messageResults = await Promise.all(
-    lineagePath.map(async (record) => {
-      const result = await getSessionMessages(record.runtimeSessionId);
-      return result.ok && Array.isArray(result.data) ? result.data : [];
-    }),
-  );
-
-  const mergedMessages = messageResults.flatMap((messages, index) =>
-    sliceMessagesForLineageBoundary(messages, lineagePath[index + 1]),
-  );
-
-  return dedupeMergedSessionMessages(mergedMessages);
 }
 
 async function fetchRuntimeSessionMap(limit = 50) {
@@ -4521,22 +4455,18 @@ async function persistLineageRepairs(
   authorization: string,
 ) {
   for (const record of records) {
-    await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}/task-sessions`, {
-      method: "POST",
-      body: {
-        runtimeSessionId: record.runtimeSessionId,
-        parentRuntimeSessionId: record.parentRuntimeSessionId ?? undefined,
-        forkedFromMessageId: record.forkedFromMessageId ?? undefined,
-        branchName: record.branchName ?? undefined,
-        sourceType:
-          record.sourceType === "sub_session"
-            ? "sub_session"
-            : record.sourceType === "root"
-              ? "root"
-              : "fork",
-        isActive: record.isActive,
-      },
-      authorization,
+    await upsertTaskSessionLineageRecord(taskId, authorization, {
+      runtimeSessionId: record.runtimeSessionId,
+      parentRuntimeSessionId: record.parentRuntimeSessionId ?? undefined,
+      forkedFromMessageId: record.forkedFromMessageId ?? undefined,
+      branchName: record.branchName ?? undefined,
+      sourceType:
+        record.sourceType === "sub_session"
+          ? "sub_session"
+          : record.sourceType === "root"
+            ? "root"
+            : "fork",
+      isActive: record.isActive,
     });
   }
 }
@@ -4547,15 +4477,8 @@ async function ensureParentLineageRecord(
   authorization: string,
   taskTitle?: string,
 ) {
-  const lineageResult = await cpFetch<{ data: TaskSessionRecord[] }>(
-    `/api/tasks/${encodeURIComponent(taskId)}/task-sessions`,
-    { authorization },
-  );
-
-  const existingRecords =
-    lineageResult.ok && Array.isArray(lineageResult.data?.data)
-      ? lineageResult.data.data.filter((record: TaskSessionRecord) => !record.archivedAt)
-      : [];
+  const lineageResult = await fetchTaskSessionLineageRecords(taskId, authorization);
+  const existingRecords = lineageResult.activeRecords;
 
   if (existingRecords.some((record) => record.runtimeSessionId === parentSessionId)) {
     return;
@@ -4570,16 +4493,12 @@ async function ensureParentLineageRecord(
       ? rootRecord.runtimeSessionId
       : undefined;
 
-  await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}/task-sessions`, {
-    method: "POST",
-    body: {
-      runtimeSessionId: parentSessionId,
-      parentRuntimeSessionId: inferredParentId,
-      branchName: runtime?.title ?? taskTitle,
-      sourceType: inferredParentId ? "fork" : "root",
-      isActive: false,
-    },
-    authorization,
+  await upsertTaskSessionLineageRecord(taskId, authorization, {
+    runtimeSessionId: parentSessionId,
+    parentRuntimeSessionId: inferredParentId,
+    branchName: runtime?.title ?? taskTitle,
+    sourceType: inferredParentId ? "fork" : "root",
+    isActive: false,
   });
 }
 
@@ -4650,25 +4569,23 @@ async function activateTaskSessionLineage(
   sessionId: string,
   authorization: string,
 ): Promise<{ ok: true; branchName: string | null } | { ok: false; status: 404 | 502; error: string }> {
-  const lineageResult = await cpFetch<{ data: TaskSessionRecord[] }>(
-    `/api/tasks/${encodeURIComponent(taskId)}/task-sessions`,
-    { authorization },
-  );
+  const lineageResult = await fetchTaskSessionLineageRecords(taskId, authorization);
 
-  if (!lineageResult.ok || !Array.isArray(lineageResult.data?.data)) {
+  if (!lineageResult.ok) {
     return { ok: false, status: 502, error: "Failed to fetch branch lineage" };
   }
 
-  const record = lineageResult.data.data.find(
+  const record = lineageResult.records.find(
     (r: TaskSessionRecord) => r.runtimeSessionId === sessionId,
   );
   if (!record) {
     return { ok: false, status: 404, error: "Session not found in branch lineage" };
   }
 
-  const activateResult = await cpFetch(
-    `/api/tasks/${encodeURIComponent(taskId)}/task-sessions/${encodeURIComponent(record.id)}/activate`,
-    { method: "POST", authorization },
+  const activateResult = await activateTaskSessionLineageByRecordId(
+    taskId,
+    record.id,
+    authorization,
   );
 
   if (!activateResult.ok) {
@@ -4678,26 +4595,75 @@ async function activateTaskSessionLineage(
   return { ok: true, branchName: record.branchName };
 }
 
-// GET /api/tasks/:taskId/session-tree — Return branch tree for a task
-taskRoutes.get("/:taskId/session-tree", async (c) => {
+async function executeTaskBranchActivation(args: {
+  taskId: string;
+  sessionId: string;
+  authorization: string;
+}) {
+  const activation = await activateTaskSessionLineage(
+    args.taskId,
+    args.sessionId,
+    args.authorization,
+  );
+  if (!activation.ok) {
+    return { status: activation.status, body: { error: activation.error } };
+  }
+
+  wsBroadcaster.broadcast({
+    id: crypto.randomUUID(),
+    type: "session.activated",
+    ts: new Date().toISOString(),
+    taskId: args.taskId,
+    data: { sessionId: args.sessionId, branchName: activation.branchName },
+  });
+
+  return { status: 200 as const, body: { ok: true, sessionId: args.sessionId } };
+}
+
+async function executeTaskBranchArchive(args: {
+  taskId: string;
+  sessionId: string;
+  authorization: string;
+}) {
+  const lineageResult = await fetchTaskSessionLineageRecords(args.taskId, args.authorization);
+
+  if (!lineageResult.ok) {
+    return { status: 502 as const, body: { error: "Failed to fetch branch lineage" } };
+  }
+
+  const record = lineageResult.records.find(
+    (r: TaskSessionRecord) => r.runtimeSessionId === args.sessionId,
+  );
+  if (!record) {
+    return { status: 404 as const, body: { error: "Session not found in branch lineage" } };
+  }
+
+  const archiveResult = await archiveTaskSessionLineageByRecordId(
+    args.taskId,
+    record.id,
+    args.authorization,
+  );
+
+  if (!archiveResult.ok) {
+    return { status: 502 as const, body: { error: "Failed to archive session" } };
+  }
+
+  return { status: 200 as const, body: { ok: true } };
+}
+
+// GET /api/tasks/:taskId/branch-lineage — Return branch lineage tree for a task
+taskRoutes.get("/:taskId/branch-lineage", async (c) => {
   const taskId = c.req.param("taskId");
   const authorization = authHeader(c);
 
   const taskResult = await cpFetch<{ sessionId?: string }>(
-    `/api/tasks/${encodeURIComponent(taskId)}`,
+    `/api/project-tree/tasks/${encodeURIComponent(taskId)}`,
     { authorization },
   );
 
   // Fetch task_sessions lineage from control plane
-  const lineageResult = await cpFetch<{ data: TaskSessionRecord[] }>(
-    `/api/tasks/${encodeURIComponent(taskId)}/task-sessions`,
-    { authorization },
-  );
-
-  const lineageRecords: TaskSessionRecord[] =
-    lineageResult.ok && Array.isArray(lineageResult.data?.data)
-      ? lineageResult.data.data.filter((r: TaskSessionRecord) => !r.archivedAt)
-      : [];
+  const lineageResult = await fetchTaskSessionLineageRecords(taskId, authorization);
+  const lineageRecords = lineageResult.activeRecords;
 
   const runtimeMap = await fetchRuntimeSessionMap(100);
   const forkMessagePreviewMap = await buildForkMessagePreviewMap(lineageRecords);
@@ -4733,58 +4699,24 @@ taskRoutes.get("/:taskId/session-tree", async (c) => {
   return c.json({ data: tree });
 });
 
-// POST /api/tasks/:taskId/sessions/:sessionId/activate — Activate a branch
-taskRoutes.post("/:taskId/sessions/:sessionId/activate", async (c) => {
-  const taskId = c.req.param("taskId");
-  const sessionId = c.req.param("sessionId");
-  const activation = await activateTaskSessionLineage(taskId, sessionId, authHeader(c));
-  if (!activation.ok) {
-    return c.json({ error: activation.error }, activation.status);
-  }
-
-  wsBroadcaster.broadcast({
-    id: crypto.randomUUID(),
-    type: "session.activated",
-    ts: new Date().toISOString(),
-    taskId,
-    data: { sessionId, branchName: activation.branchName },
+// POST /api/tasks/:taskId/branches/:sessionId/activate — Activate a branch
+taskRoutes.post("/:taskId/branches/:sessionId/activate", async (c) => {
+  const result = await executeTaskBranchActivation({
+    taskId: c.req.param("taskId"),
+    sessionId: c.req.param("sessionId"),
+    authorization: authHeader(c),
   });
-
-  return c.json({ ok: true, sessionId });
+  return c.json(result.body, result.status);
 });
 
-// POST /api/tasks/:taskId/sessions/:sessionId/archive — Archive a branch
-taskRoutes.post("/:taskId/sessions/:sessionId/archive", async (c) => {
-  const taskId = c.req.param("taskId");
-  const sessionId = c.req.param("sessionId");
-
-  // Find the task_sessions record by runtimeSessionId
-  const lineageResult = await cpFetch<{ data: TaskSessionRecord[] }>(
-    `/api/tasks/${encodeURIComponent(taskId)}/task-sessions`,
-    { authorization: authHeader(c) },
-  );
-
-  if (!lineageResult.ok || !Array.isArray(lineageResult.data?.data)) {
-    return c.json({ error: "Failed to fetch branch lineage" }, 502);
-  }
-
-  const record = lineageResult.data.data.find(
-    (r: TaskSessionRecord) => r.runtimeSessionId === sessionId,
-  );
-  if (!record) {
-    return c.json({ error: "Session not found in branch lineage" }, 404);
-  }
-
-  const archiveResult = await cpFetch(
-    `/api/tasks/${encodeURIComponent(taskId)}/task-sessions/${encodeURIComponent(record.id)}/archive`,
-    { method: "POST", authorization: authHeader(c) },
-  );
-
-  if (!archiveResult.ok) {
-    return c.json({ error: "Failed to archive session" }, 502);
-  }
-
-  return c.json({ ok: true });
+// POST /api/tasks/:taskId/branches/:sessionId/archive — Archive a branch
+taskRoutes.post("/:taskId/branches/:sessionId/archive", async (c) => {
+  const result = await executeTaskBranchArchive({
+    taskId: c.req.param("taskId"),
+    sessionId: c.req.param("sessionId"),
+    authorization: authHeader(c),
+  });
+  return c.json(result.body, result.status);
 });
 
 // ═══════════════════════════════════════════════════════════════════

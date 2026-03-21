@@ -1,6 +1,7 @@
 /// <reference types="bun-types" />
 
 import { afterEach, describe, expect, mock, test } from "bun:test";
+import { setControlPlaneFetchHandler } from "../../control-plane/web-ui-bff/src/lib/control-plane-client";
 
 mock.restore();
 
@@ -14,6 +15,7 @@ async function loadOpencodeAdapter() {
 }
 
 afterEach(() => {
+  setControlPlaneFetchHandler(null);
   mock.restore();
 });
 
@@ -358,5 +360,258 @@ describe("opencode adapter resilience", () => {
       globalThis.setTimeout = originalSetTimeout;
       globalThis.clearTimeout = originalClearTimeout;
     }
+  });
+
+  test("prefers complete lineage aggregation from service tree source before runtime reads", async () => {
+    const runtimeFetchMock = mock(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/session/session-leaf/message?limit=200")) {
+        throw new Error("runtime leaf read should not be reached when service lineage cache is complete");
+      }
+
+      return new Response("not found", { status: 404 });
+    });
+    globalThis.fetch = runtimeFetchMock as typeof fetch;
+
+    setControlPlaneFetchHandler(async (request: Request) => {
+      const url = new URL(request.url);
+
+      if (url.pathname === "/api/tasks/task-1/branches") {
+        return new Response(
+          JSON.stringify({
+            data: [
+              {
+                runtimeSessionId: "session-root",
+                parentRuntimeSessionId: null,
+                forkedFromMessageId: null,
+                sourceType: "root",
+                archivedAt: null,
+                createdAt: "2026-03-20T10:00:00.000Z",
+                updatedAt: "2026-03-20T10:00:00.000Z",
+              },
+              {
+                runtimeSessionId: "session-leaf",
+                parentRuntimeSessionId: "session-root",
+                forkedFromMessageId: "root-assistant",
+                sourceType: "fork",
+                archivedAt: null,
+                createdAt: "2026-03-20T10:01:00.000Z",
+                updatedAt: "2026-03-20T10:01:00.000Z",
+              },
+            ],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+
+      if (
+        url.pathname === "/api/tasks/task-1/branches/session-leaf/messages" &&
+        url.searchParams.get("includeLineage") === "true"
+      ) {
+        return new Response(
+          JSON.stringify({
+            data: [
+              {
+                info: { id: "root-user", role: "user" },
+                parts: [{ type: "text", text: "历史提问" }],
+              },
+              {
+                info: { id: "root-assistant", role: "assistant" },
+                parts: [{ type: "text", text: "历史回答" }],
+              },
+              {
+                info: { id: "leaf-user", role: "user" },
+                parts: [{ type: "text", text: "当前提问" }],
+              },
+              {
+                info: { id: "leaf-assistant", role: "assistant" },
+                parts: [{ type: "text", text: "当前回答" }],
+              },
+            ],
+            meta: {
+              includeLineage: true,
+              complete: true,
+              lineagePath: ["session-root", "session-leaf"],
+              cachedSessionCount: 2,
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+
+      return new Response(JSON.stringify({ data: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+
+    const { getSessionMessages } = await loadOpencodeAdapter();
+    const result = await getSessionMessages("session-leaf", {
+      taskId: "task-1",
+      authorization: "Bearer test",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.data).toEqual([
+      {
+        info: { id: "root-user", role: "user" },
+        parts: [{ type: "text", text: "历史提问" }],
+      },
+      {
+        info: { id: "root-assistant", role: "assistant" },
+        parts: [{ type: "text", text: "历史回答" }],
+      },
+      {
+        info: { id: "leaf-user", role: "user" },
+        parts: [{ type: "text", text: "当前提问" }],
+      },
+      {
+        info: { id: "leaf-assistant", role: "assistant" },
+        parts: [{ type: "text", text: "当前回答" }],
+      },
+    ]);
+    expect(runtimeFetchMock).not.toHaveBeenCalled();
+  });
+
+  test("falls back to runtime reads when service lineage cache state is partial", async () => {
+    const runtimeFetchMock = mock(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/session/session-root/message?limit=200")) {
+        return new Response(
+          JSON.stringify([
+            {
+              info: { id: "root-user", role: "user" },
+              parts: [{ type: "text", text: "历史提问" }],
+            },
+            {
+              info: { id: "root-assistant", role: "assistant" },
+              parts: [{ type: "text", text: "历史回答" }],
+            },
+          ]),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+
+      if (url.endsWith("/session/session-leaf/message?limit=200")) {
+        return new Response(
+          JSON.stringify([
+            {
+              info: { id: "leaf-user", role: "user" },
+              parts: [{ type: "text", text: "当前提问" }],
+            },
+            {
+              info: { id: "leaf-assistant", role: "assistant" },
+              parts: [{ type: "text", text: "当前回答" }],
+            },
+          ]),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+
+      return new Response("not found", { status: 404 });
+    });
+    globalThis.fetch = runtimeFetchMock as typeof fetch;
+
+    setControlPlaneFetchHandler(async (request: Request) => {
+      const url = new URL(request.url);
+
+      if (url.pathname === "/api/tasks/task-1/branches") {
+        return new Response(
+          JSON.stringify({
+            data: [
+              {
+                runtimeSessionId: "session-root",
+                parentRuntimeSessionId: null,
+                forkedFromMessageId: null,
+                sourceType: "root",
+                archivedAt: null,
+                createdAt: "2026-03-20T10:00:00.000Z",
+                updatedAt: "2026-03-20T10:00:00.000Z",
+              },
+              {
+                runtimeSessionId: "session-leaf",
+                parentRuntimeSessionId: "session-root",
+                forkedFromMessageId: "root-assistant",
+                sourceType: "fork",
+                archivedAt: null,
+                createdAt: "2026-03-20T10:01:00.000Z",
+                updatedAt: "2026-03-20T10:01:00.000Z",
+              },
+            ],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+
+      if (
+        url.pathname === "/api/tasks/task-1/branches/session-leaf/messages" &&
+        url.searchParams.get("includeLineage") === "true"
+      ) {
+        return new Response(
+          JSON.stringify({
+            data: [
+              {
+                info: { id: "leaf-user", role: "user" },
+                parts: [{ type: "text", text: "当前提问" }],
+              },
+            ],
+            meta: {
+              includeLineage: true,
+              cacheState: "partial",
+              complete: false,
+              lineagePath: ["session-root", "session-leaf"],
+              cachedSessionCount: 1,
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+
+      if (url.pathname === "/api/tasks/task-1/branches/session-root/messages") {
+        return new Response(JSON.stringify({ data: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      if (url.pathname === "/api/tasks/task-1/branches/session-leaf/messages") {
+        return new Response(JSON.stringify({ data: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      return new Response(JSON.stringify({ data: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+
+    const { getSessionMessages } = await loadOpencodeAdapter();
+    const result = await getSessionMessages("session-leaf", {
+      taskId: "task-1",
+      authorization: "Bearer test",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.data).toEqual([
+      {
+        info: { id: "root-user", role: "user" },
+        parts: [{ type: "text", text: "历史提问" }],
+      },
+      {
+        info: { id: "root-assistant", role: "assistant" },
+        parts: [{ type: "text", text: "历史回答" }],
+      },
+      {
+        info: { id: "leaf-user", role: "user" },
+        parts: [{ type: "text", text: "当前提问" }],
+      },
+      {
+        info: { id: "leaf-assistant", role: "assistant" },
+        parts: [{ type: "text", text: "当前回答" }],
+      },
+    ]);
+    expect(runtimeFetchMock).toHaveBeenCalledTimes(2);
   });
 });

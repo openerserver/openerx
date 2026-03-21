@@ -1,6 +1,8 @@
 /// <reference types="bun-types" />
 
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import * as paidExecutionGuardModule from "../../control-plane/web-ui-bff/src/lib/paid-execution-guard";
+import * as strategyModule from "../../control-plane/web-ui-bff/src/lib/orchestration-strategy";
 
 const cpFetchMock = mock(async (..._args: unknown[]) => ({ ok: true, status: 200, data: {} }));
 const authHeaderMock = mock(() => "Bearer test-token");
@@ -37,19 +39,24 @@ const readOrchestrationStrategyMock = mock(() => ({
 mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () => ({
   authHeader: authHeaderMock,
   cpFetch: cpFetchMock,
+  createInternalAuthorization: mock(async () => "Bearer internal"),
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/lib/paid-execution-guard", () => ({
+  ...paidExecutionGuardModule,
   evaluatePaidExecutionPreflight: evaluatePaidExecutionPreflightMock,
   fetchProjectPaidExecutionLeaseState: fetchProjectPaidExecutionLeaseStateMock,
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/lib/opencode-config", () => ({
+  formatModelRoute: (resolved: { providerId: string; modelId: string }) =>
+    `${resolved.providerId}:${resolved.modelId}`,
   readDefaultExecutionModel: readDefaultExecutionModelMock,
   resolveModelRoute: resolveModelRouteMock,
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/lib/orchestration-strategy", () => ({
+  ...strategyModule,
   readOrchestrationStrategy: readOrchestrationStrategyMock,
 }));
 

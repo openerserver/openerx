@@ -41,6 +41,7 @@ function makeSystemRole() {
 mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () => ({
   authHeader: authHeaderMock,
   cpFetch: cpFetchMock,
+  createInternalAuthorization: mock(async () => "Bearer internal"),
 }));
 
 beforeEach(() => {

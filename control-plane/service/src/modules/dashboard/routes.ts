@@ -7,10 +7,13 @@ import {
   paidExecutionLeases,
   projects,
   runtimeUsageLedgers,
-  tasks,
 } from "../../db/schema";
 import { type AppEnv, type JWTPayload, authMiddleware } from "../../middleware/auth";
 import { requireRole } from "../../middleware/rbac";
+import {
+  loadExistingTaskTreeNodeIdsByProjectIds,
+  loadTaskTreeRecords,
+} from "../project-tree/task-view";
 
 export const dashboardRoutes = new Hono<AppEnv>();
 
@@ -462,12 +465,6 @@ function createModelAggregate(ref: ModelReference): ModelAggregate {
     totalRuns: 0,
     latestRunAtMs: null,
   };
-}
-
-function buildProjectWhere(projectId: string, accessibleProjectIds: string[] | null) {
-  return accessibleProjectIds == null
-    ? eq(tasks.projectId, projectId)
-    : and(eq(tasks.projectId, projectId), inArray(tasks.projectId, accessibleProjectIds));
 }
 
 async function loadGuidanceAgentRunIds(candidateRunIds: string[]) {
@@ -1200,27 +1197,27 @@ dashboardRoutes.get("/provider-tokens", async (c) => {
   const range = parseRange(c.req.query("range"));
   const nowMs = Date.now();
   const bounds = getRangeBounds(range, nowMs);
-  const accessibleProjectIds = getAccessibleProjectIds(user);
-  const projectWhere = buildProjectWhere(projectId, accessibleProjectIds);
+  const taskIds = await loadExistingTaskTreeNodeIdsByProjectIds([projectId]);
 
-  const runRows = await db
-    .select({
-      agentRunId: agentRuns.id,
-      taskId: agentRuns.taskId,
-      projectId: tasks.projectId,
-      status: agentRuns.status,
-      modelUsed: agentRuns.modelUsed,
-      tokenUsed: agentRuns.tokenUsed,
-      startedAt: agentRuns.startedAt,
-      finishedAt: agentRuns.finishedAt,
-      createdAt: agentRuns.createdAt,
-    })
-    .from(agentRuns)
-    .innerJoin(tasks, eq(agentRuns.taskId, tasks.id))
-    .innerJoin(projects, eq(tasks.projectId, projects.id))
-    .where(projectWhere);
+  const runRows =
+    taskIds.length > 0
+      ? await db
+          .select({
+            agentRunId: agentRuns.id,
+            taskId: agentRuns.taskId,
+            status: agentRuns.status,
+            modelUsed: agentRuns.modelUsed,
+            tokenUsed: agentRuns.tokenUsed,
+            startedAt: agentRuns.startedAt,
+            finishedAt: agentRuns.finishedAt,
+            createdAt: agentRuns.createdAt,
+          })
+          .from(agentRuns)
+          .where(inArray(agentRuns.taskId, taskIds))
+      : [];
+  const scopedRunRows = runRows.map((run) => ({ ...run, projectId }));
 
-  const candidateRuns = runRows.filter(
+  const candidateRuns = scopedRunRows.filter(
     (run) => resolveRunTimestampMs(run) >= bounds.previousStartMs,
   );
   const candidateRunIds = candidateRuns.map((run) => run.agentRunId).filter(Boolean);
@@ -1338,12 +1335,7 @@ dashboardRoutes.get("/governance-overview", async (c) => {
       ...audits.map((audit) => audit.taskId).filter((taskId): taskId is string => Boolean(taskId)),
     ]),
   );
-  const taskRows =
-    relevantTaskIds.length > 0
-      ? await db.query.tasks.findMany({
-          where: inArray(tasks.id, relevantTaskIds),
-        })
-      : [];
+  const taskRows = await loadTaskTreeRecords({ taskIds: relevantTaskIds });
   const taskById = new Map(taskRows.map((task) => [task.id, task]));
   const recentEvents = buildGovernanceRecentEvents(audits, taskById);
   const summaryCounts = summarizeGovernanceAudits(audits);

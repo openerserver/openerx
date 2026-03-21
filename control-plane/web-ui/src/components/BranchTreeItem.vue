@@ -22,7 +22,7 @@
           <a-tag v-if="sessionState?.countdownLabel" color="default" class="branch-node__tag">剩余 {{ sessionState.countdownLabel }}</a-tag>
         </div>
         <div class="branch-node__identity">
-          <span class="branch-node__identity-chip">会话 {{ shortSessionId }}</span>
+          <span class="branch-node__identity-chip">分支 {{ shortSessionId }}</span>
           <span v-if="postForkPromptLabel" class="branch-node__identity-chip branch-node__identity-chip--message" :title="postForkPromptTitle">
             {{ postForkPromptLabel }}
           </span>
@@ -37,7 +37,7 @@
         <div v-if="showLineage" class="branch-node__lineage">
           <span class="branch-node__lineage-badge">{{ lineageBadge }}</span>
           <span class="branch-node__lineage-text">{{ lineageText }}</span>
-          <span v-if="node.forkedFromMessageId" class="branch-node__lineage-hint">基于该会话中的历史回复分叉</span>
+          <span v-if="node.forkedFromMessageId" class="branch-node__lineage-hint">基于该分支中的历史回复分叉</span>
         </div>
         <div class="branch-node__meta">
           <span class="branch-node__time">{{ formatTime(node.updatedAt || node.createdAt) }}</span>
@@ -69,11 +69,11 @@
     </div>
 
     <div v-if="hasChildren && expanded" class="branch-node__children">
-      <SessionTreeBranch
+      <BranchTreeItem
         v-for="(child, childIndex) in node.children"
         :key="child.runtimeSessionId"
         :node="child"
-        :selected-session-id="selectedSessionId"
+        :selected-branch-session-id="selectedBranchSessionId"
         :task-status="taskStatus"
         :session-state-map="sessionStateMap"
         :depth="depth + 1"
@@ -92,11 +92,15 @@
 
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import type { SessionTreeNode } from "../lib/api";
+import type { TaskBranchLineageNode } from "../lib/api";
+
+defineOptions({
+  name: "BranchTreeItem",
+});
 
 const props = defineProps<{
-  node: SessionTreeNode;
-  selectedSessionId?: string;
+  node: TaskBranchLineageNode;
+  selectedBranchSessionId?: string;
   taskStatus?: string;
   sessionStateMap?: Record<
     string,
@@ -126,7 +130,7 @@ const expanded = ref(true);
 
 const hasChildren = computed(() => props.node.children.length > 0);
 
-const isSelected = computed(() => props.selectedSessionId === props.node.runtimeSessionId);
+const isSelected = computed(() => props.selectedBranchSessionId === props.node.runtimeSessionId);
 
 const sessionState = computed(() => props.sessionStateMap?.[props.node.runtimeSessionId]);
 
@@ -137,7 +141,7 @@ const rowStyle = computed(() => ({
 
 const displayTitle = computed(() => {
   const raw = props.node.title?.trim() || props.node.branchName?.trim();
-  return raw || `Session ${props.node.runtimeSessionId.slice(0, 8)}`;
+  return raw || `分支 ${props.node.runtimeSessionId.slice(0, 8)}`;
 });
 
 const shortSessionId = computed(() => props.node.runtimeSessionId.slice(0, 8));
@@ -163,18 +167,6 @@ const forkSourceTitle = computed(() => {
 
   if (props.node.forkedFromMessageId) {
     return `消息 ${props.node.forkedFromMessageId}`;
-  }
-
-  return "";
-});
-
-const forkSourceLabel = computed(() => {
-  if (props.node.forkedFromMessagePreview) {
-    return `${forkSourceRoleLabel.value}：${props.node.forkedFromMessagePreview}`;
-  }
-
-  if (props.node.forkedFromMessageId) {
-    return `消息 ${shortMessageId.value}`;
   }
 
   return "";
@@ -227,7 +219,7 @@ const branchBadgeStyle = computed(() => ({
 const parentDisplayTitle = computed(() => {
   const raw = props.parentTitle?.trim();
   if (raw) return raw;
-  if (props.parentSessionId) return `Session ${props.parentSessionId.slice(0, 8)}`;
+  if (props.parentSessionId) return `分支 ${props.parentSessionId.slice(0, 8)}`;
   return "主线起点";
 });
 

@@ -14,6 +14,7 @@ interface WorkflowStagePayload {
   approvalState?: string | null;
   blockingReason?: string | null;
   primaryRoleAgentId?: string | null;
+  artifactsSummaryJson?: unknown;
 }
 
 interface RoleConclusionPayload {
@@ -44,6 +45,29 @@ interface DeveloperChangeRequestPayload {
   status?: string | null;
 }
 
+export interface TaskDetailPayload {
+  id?: string;
+  title?: string | null;
+  prompt?: string | null;
+  projectId?: string | null;
+  status?: string | null;
+  result?: string | null;
+}
+
+export interface TaskWorkflowResources {
+  task: TaskDetailPayload | null;
+  workflowRun: WorkflowRunPayload | null;
+  stages: WorkflowStagePayload[];
+  conclusions: RoleConclusionPayload[];
+  requests: DeveloperChangeRequestPayload[];
+}
+
+export interface TaskWorkflowStateResources {
+  task: TaskDetailPayload | null;
+  workflowRun: WorkflowRunPayload | null;
+  stages: WorkflowStagePayload[];
+}
+
 interface WorkflowTemplateStagePayload {
   id?: string;
   stageKey?: string | null;
@@ -53,13 +77,44 @@ interface WorkflowTemplateStagePayload {
   approvalsJson?: Array<Record<string, unknown>> | null;
 }
 
-interface TaskListItemPayload {
+export interface ProjectTaskListItemPayload {
   id: string;
+  projectId?: string | null;
   title?: string | null;
   status?: string | null;
+  category?: string | null;
+  strategy?: string | null;
+  repoName?: string | null;
+  workingBranch?: string | null;
+  selectedModel?: string | null;
+  changesSummary?: {
+    filesAdded?: number;
+    filesModified?: number;
+    filesDeleted?: number;
+    totalInsertions?: number;
+    totalDeletions?: number;
+  } | null;
   createdAt?: string | null;
   startedAt?: string | null;
   finishedAt?: string | null;
+  updatedAt?: string | null;
+}
+
+export async function fetchProjectTaskList(input: {
+  projectId: string;
+  authorization: string;
+  limit?: number;
+}) {
+  const limit = Math.max(1, input.limit || 20);
+  const taskListResult = await cpFetch<{ data?: ProjectTaskListItemPayload[] }>(
+    `/api/project-tree/tasks?projectId=${encodeURIComponent(input.projectId)}&limit=${limit}`,
+    { authorization: input.authorization },
+  );
+
+  return {
+    ...taskListResult,
+    data: taskListResult.data?.data || [],
+  };
 }
 
 export interface TaskStageRuntimeSummaryViewModel {
@@ -503,7 +558,7 @@ function applyProjectStageRuntimeCounts(
 
 function updateLatestProjectTaskSummary(
   summary: ProjectStageRuntimeSummaryViewModel,
-  task: TaskListItemPayload,
+  task: ProjectTaskListItemPayload,
   workflowStatus: string,
   stage: WorkflowViewModel["workflow"]["stages"][number],
 ) {
@@ -582,31 +637,79 @@ async function fetchWorkflowTemplateStages(templateId: string, authorization: st
   return result.ok ? result.data?.data || [] : [];
 }
 
-export async function buildTaskWorkflowViewModel(
-  taskId: string,
-  authorization: string,
-  options: { projectId?: string | null; taskStatus?: string | null } = {},
-): Promise<WorkflowViewModel> {
-  const [workflowResult, conclusionsResult, requestsResult] = await Promise.all([
+export async function fetchTaskWorkflowState(input: {
+  taskId: string;
+  authorization: string;
+  includeTask?: boolean;
+}): Promise<TaskWorkflowStateResources> {
+  const taskResultPromise = input.includeTask
+    ? cpFetch<TaskDetailPayload>(`/api/project-tree/tasks/${encodeURIComponent(input.taskId)}`, {
+        authorization: input.authorization,
+      })
+    : Promise.resolve(null);
+
+  const [taskResult, workflowResult] = await Promise.all([
+    taskResultPromise,
     cpFetch<{
       data?: { workflowRun?: WorkflowRunPayload | null; stages?: WorkflowStagePayload[] | null };
-    }>(`/api/tasks/${encodeURIComponent(taskId)}/workflow`, { authorization }),
+    }>(`/api/tasks/${encodeURIComponent(input.taskId)}/workflow`, {
+      authorization: input.authorization,
+    }),
+  ]);
+
+  return {
+    task: taskResult?.ok ? (taskResult.data ?? null) : null,
+    workflowRun: workflowResult.ok ? (workflowResult.data?.data?.workflowRun ?? null) : null,
+    stages: workflowResult.ok ? (workflowResult.data?.data?.stages ?? []) : [],
+  };
+}
+
+export async function fetchTaskWorkflowResources(input: {
+  taskId: string;
+  authorization: string;
+  includeTask?: boolean;
+}): Promise<TaskWorkflowResources> {
+  const [workflowState, conclusionsResult, requestsResult] = await Promise.all([
+    fetchTaskWorkflowState(input),
     cpFetch<{ data?: RoleConclusionPayload[] }>(
-      `/api/tasks/${encodeURIComponent(taskId)}/role-conclusions`,
+      `/api/tasks/${encodeURIComponent(input.taskId)}/role-conclusions`,
       {
-        authorization,
+        authorization: input.authorization,
       },
     ),
     cpFetch<{ data?: DeveloperChangeRequestPayload[] }>(
-      `/api/tasks/${encodeURIComponent(taskId)}/developer-change-requests`,
-      { authorization },
+      `/api/tasks/${encodeURIComponent(input.taskId)}/developer-change-requests`,
+      { authorization: input.authorization },
     ),
   ]);
 
-  const workflowRun = workflowResult.ok ? (workflowResult.data?.data?.workflowRun ?? null) : null;
-  const stages = workflowResult.ok ? (workflowResult.data?.data?.stages ?? []) : [];
-  const conclusions = conclusionsResult.ok ? (conclusionsResult.data?.data ?? []) : [];
-  const requests = requestsResult.ok ? (requestsResult.data?.data ?? []) : [];
+  return {
+    ...workflowState,
+    conclusions: conclusionsResult.ok ? (conclusionsResult.data?.data ?? []) : [],
+    requests: requestsResult.ok ? (requestsResult.data?.data ?? []) : [],
+  };
+}
+
+export async function buildTaskWorkflowViewModel(
+  taskId: string,
+  authorization: string,
+  options: {
+    projectId?: string | null;
+    taskStatus?: string | null;
+    prefetched?: TaskWorkflowResources | null;
+  } = {},
+): Promise<WorkflowViewModel> {
+  const resources =
+    options.prefetched ||
+    (await fetchTaskWorkflowResources({
+      taskId,
+      authorization,
+    }));
+
+  const workflowRun = resources.workflowRun;
+  const stages = resources.stages;
+  const conclusions = resources.conclusions;
+  const requests = resources.requests;
   const templateStages = workflowRun?.templateId
     ? await fetchWorkflowTemplateStages(workflowRun.templateId, authorization)
     : [];
@@ -625,14 +728,18 @@ export async function buildTaskWorkflowViewModel(
       ...requests.map((item) => item.sourceRoleAgentId),
     ],
     authorization,
-    { projectId: options.projectId },
+    { projectId: options.projectId ?? resources.task?.projectId },
   );
-  const inferredWorkflowStatus = inferWorkflowStatus(workflowRun, stages, options.taskStatus);
+  const inferredWorkflowStatus = inferWorkflowStatus(
+    workflowRun,
+    stages,
+    options.taskStatus ?? resources.task?.status,
+  );
   const inferredCurrentStage = inferWorkflowCurrentStage(
     workflowRun,
     stages,
     inferredWorkflowStatus,
-    options.taskStatus,
+    options.taskStatus ?? resources.task?.status,
   );
   const stageRunIdToKey = new Map(
     stages
@@ -704,12 +811,13 @@ export async function buildProjectWorkflowStageRuntimeSummaries(input: {
   authorization: string;
   maxTasks?: number;
 }) {
-  const taskListResult = await cpFetch<{ data?: TaskListItemPayload[] }>(
-    `/api/tasks?projectId=${encodeURIComponent(input.projectId)}&limit=${Math.max(1, input.maxTasks || 20)}`,
-    { authorization: input.authorization },
-  );
+  const taskListResult = await fetchProjectTaskList({
+    projectId: input.projectId,
+    authorization: input.authorization,
+    limit: input.maxTasks || 20,
+  });
 
-  const tasks = taskListResult.ok ? taskListResult.data?.data || [] : [];
+  const tasks = taskListResult.ok ? taskListResult.data : [];
   const summaries = createProjectStageSummaries(input.stageKeys);
 
   const workflowViews = await Promise.all(

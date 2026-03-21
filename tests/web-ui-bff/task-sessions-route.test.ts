@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, mock, test } from "bun:test";
 const cpFetchMock = mock(async (..._args: unknown[]) => ({ ok: true, data: {} }));
 const authHeaderMock = mock(() => "Bearer test");
 const createInternalAuthorizationMock = mock(async () => "Bearer internal");
+const setControlPlaneFetchHandlerMock = mock(() => undefined);
 const listSessionsMock = mock(async () => ({
   ok: true,
   data: [] as Array<Record<string, unknown>>,
@@ -18,6 +19,7 @@ mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () =>
   authHeader: authHeaderMock,
   cpFetch: cpFetchMock,
   createInternalAuthorization: createInternalAuthorizationMock,
+  setControlPlaneFetchHandler: setControlPlaneFetchHandlerMock,
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter", () => ({
@@ -125,7 +127,7 @@ describe("task sessions route", () => {
   test("marks the task session as active when it matches the persisted sessionId", async () => {
     const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
 
-    const response = await taskRoutes.request("http://localhost/task-1/sessions", {
+    const response = await taskRoutes.request("http://localhost/task-1/branches", {
       headers: {
         Authorization: "Bearer test",
       },
@@ -146,42 +148,34 @@ describe("task sessions route", () => {
     });
   });
 
-  test("includeLineage returns merged root and branch messages for selected session", async () => {
-    cpFetchMock.mockImplementation(async (url: string) => {
-      if (url === "/api/tasks/task-1/task-sessions") {
+  test("activates task session by runtime session id via lineage record", async () => {
+    cpFetchMock.mockImplementation(async (url: string, options?: { method?: string }) => {
+      if (url === "/api/tasks/task-1/branches" && !options?.method) {
         return {
           ok: true,
           data: {
             data: [
               {
                 id: "ts-root",
-                taskId: "task-1",
                 runtimeSessionId: "session-root",
-                parentRuntimeSessionId: null,
-                forkedFromMessageId: null,
-                branchName: "root",
-                sourceType: "root",
-                isActive: false,
-                createdAt: "2026-03-14T10:00:00.000Z",
-                updatedAt: "2026-03-14T10:00:00.000Z",
+                branchName: "main",
+                isActive: true,
                 archivedAt: null,
               },
               {
                 id: "ts-leaf",
-                taskId: "task-1",
                 runtimeSessionId: "session-leaf",
-                parentRuntimeSessionId: "session-root",
-                forkedFromMessageId: null,
-                branchName: "leaf",
-                sourceType: "fork",
-                isActive: true,
-                createdAt: "2026-03-14T10:01:00.000Z",
-                updatedAt: "2026-03-14T10:01:00.000Z",
+                branchName: "branch-leaf",
+                isActive: false,
                 archivedAt: null,
               },
             ],
           },
         };
+      }
+
+      if (url === "/api/tasks/task-1/branches/ts-leaf/activate" && options?.method === "POST") {
+        return { ok: true, data: { ok: true } };
       }
 
       if (url === "/api/tasks/task-1") {
@@ -191,7 +185,7 @@ describe("task sessions route", () => {
             id: "task-1",
             title: "finished task",
             status: "completed",
-            sessionId: "session-leaf",
+            sessionId: "session-root",
           },
         };
       }
@@ -199,75 +193,151 @@ describe("task sessions route", () => {
       return { ok: true, data: {} };
     });
 
-    getSessionMessagesMock.mockImplementation(async (sessionId: string) => {
-      if (sessionId === "session-root") {
-        return {
-          ok: true,
-          data: [
-            { info: { id: "root-user", role: "user" }, parts: [{ type: "text", text: "历史提问" }] },
-            { info: { id: "root-assistant", role: "assistant" }, parts: [{ type: "text", text: "历史回答" }] },
-          ],
-        };
-      }
-
-      if (sessionId === "session-leaf") {
-        return {
-          ok: true,
-          data: [
-            { info: { id: "leaf-user", role: "user" }, parts: [{ type: "text", text: "当前提问" }] },
-            { info: { id: "leaf-assistant", role: "assistant" }, parts: [{ type: "text", text: "当前回答" }] },
-          ],
-        };
-      }
-
-      return { ok: true, data: [] };
-    });
-
     const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
 
-    const response = await taskRoutes.request(
-      "http://localhost/task-1/sessions/session-leaf/messages?includeLineage=true",
-      {
-        headers: {
-          Authorization: "Bearer test",
-        },
-      },
-    );
-
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({
-      data: [
-        { info: { id: "root-user", role: "user" }, parts: [{ type: "text", text: "历史提问" }] },
-        { info: { id: "root-assistant", role: "assistant" }, parts: [{ type: "text", text: "历史回答" }] },
-        { info: { id: "leaf-user", role: "user" }, parts: [{ type: "text", text: "当前提问" }] },
-        { info: { id: "leaf-assistant", role: "assistant" }, parts: [{ type: "text", text: "当前回答" }] },
-      ],
-    });
-  });
-
-  test("session messages remain leaf-only when includeLineage is absent", async () => {
-    getSessionMessagesMock.mockResolvedValue({
-      ok: true,
-      data: [
-        { info: { id: "leaf-user", role: "user" }, parts: [{ type: "text", text: "当前提问" }] },
-        { info: { id: "leaf-assistant", role: "assistant" }, parts: [{ type: "text", text: "当前回答" }] },
-      ],
-    });
-
-    const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
-
-    const response = await taskRoutes.request("http://localhost/task-1/sessions/session-leaf/messages", {
+    const response = await taskRoutes.request("http://localhost/task-1/branches/session-leaf/activate", {
+      method: "POST",
       headers: {
         Authorization: "Bearer test",
       },
     });
 
     expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ ok: true, sessionId: "session-leaf" });
+    expect(cpFetchMock).toHaveBeenCalledWith("/api/tasks/task-1/branches/ts-leaf/activate", {
+      method: "POST",
+      authorization: "Bearer test",
+    });
+  });
+
+  test("archives task session by runtime session id via lineage record", async () => {
+    cpFetchMock.mockImplementation(async (url: string, options?: { method?: string }) => {
+      if (url === "/api/tasks/task-1/branches" && !options?.method) {
+        return {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "ts-root",
+                runtimeSessionId: "session-root",
+                branchName: "main",
+                isActive: true,
+                archivedAt: null,
+              },
+              {
+                id: "ts-leaf",
+                runtimeSessionId: "session-leaf",
+                branchName: "branch-leaf",
+                isActive: false,
+                archivedAt: null,
+              },
+            ],
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/branches/ts-leaf/archive" && options?.method === "POST") {
+        return { ok: true, data: { ok: true } };
+      }
+
+      if (url === "/api/tasks/task-1") {
+        return {
+          ok: true,
+          data: {
+            id: "task-1",
+            title: "finished task",
+            status: "completed",
+            sessionId: "session-root",
+          },
+        };
+      }
+
+      return { ok: true, data: {} };
+    });
+
+    const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
+
+    const response = await taskRoutes.request("http://localhost/task-1/branches/session-leaf/archive", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer test",
+      },
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ ok: true });
+    expect(cpFetchMock).toHaveBeenCalledWith("/api/tasks/task-1/branches/ts-leaf/archive", {
+      method: "POST",
+      authorization: "Bearer test",
+    });
+  });
+
+  test("forks task branch via branch route", async () => {
+    cpFetchMock.mockImplementation(async (url: string) => {
+      if (url === "/api/tasks/task-1") {
+        return {
+          ok: true,
+          data: {
+            id: "task-1",
+            projectId: "project-1",
+            title: "finished task",
+            status: "completed",
+            sessionId: "session-root",
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/branches") {
+        return {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "ts-root",
+                runtimeSessionId: "session-root",
+                branchName: "main",
+                sourceType: "root",
+                isActive: true,
+                archivedAt: null,
+              },
+            ],
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/branches/upsert-lineage") {
+        return {
+          ok: true,
+          data: {
+            data: {
+              id: "ts-branch",
+              runtimeSessionId: "session-2",
+            },
+          },
+        };
+      }
+
+      return { ok: true, data: {} };
+    });
+
+    const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
+
+    const response = await taskRoutes.request("http://localhost/task-1/branches/session-root/fork", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer test",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ title: "新分支", messageId: "msg-1" }),
+    });
+
+    expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
-      data: [
-        { info: { id: "leaf-user", role: "user" }, parts: [{ type: "text", text: "当前提问" }] },
-        { info: { id: "leaf-assistant", role: "assistant" }, parts: [{ type: "text", text: "当前回答" }] },
-      ],
+      ok: true,
+      sessionId: "session-2",
+      title: "新分支",
+      parentSessionId: "session-root",
+      forkedFromMessageId: "msg-1",
     });
   });
 });

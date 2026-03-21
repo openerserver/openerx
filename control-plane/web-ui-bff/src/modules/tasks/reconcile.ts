@@ -7,6 +7,7 @@ import {
   recoverAgentRun,
 } from "../agent-control/opencode-adapter";
 import { finalizeTaskState } from "./finalize";
+import { fetchTaskSessionLineageRecords } from "./task-session-compat";
 import { persistWorkflowStageExecutionOutcome } from "./workflow-stage-execution";
 
 interface RunningTaskRecord {
@@ -143,7 +144,7 @@ function emptyReconcileSummary(runtimeAvailable = false): RunningTaskReconcileSu
 
 async function loadRunningTasks(authorization: string) {
   const runningTasksResult = await cpFetch<{ data?: RunningTaskRecord[] }>(
-    `/api/tasks?status=running&limit=${DEFAULT_RUNNING_TASK_LIMIT}`,
+    `/api/project-tree/tasks?status=running&limit=${DEFAULT_RUNNING_TASK_LIMIT}`,
     { authorization },
   );
 
@@ -156,7 +157,7 @@ async function loadRunningTasks(authorization: string) {
 
 async function loadRecentTasks(authorization: string) {
   const tasksResult = await cpFetch<{ data?: RunningTaskRecord[] }>(
-    `/api/tasks?limit=${DEFAULT_RUNNING_TASK_LIMIT}`,
+    `/api/project-tree/tasks?limit=${DEFAULT_RUNNING_TASK_LIMIT}`,
     { authorization },
   );
 
@@ -171,9 +172,21 @@ function mergeUniqueTasks(...taskLists: Array<RunningTaskRecord[] | null>) {
   const merged = new Map<string, RunningTaskRecord>();
   for (const taskList of taskLists) {
     for (const task of taskList || []) {
-      if (!merged.has(task.id)) {
+      const existing = merged.get(task.id);
+      if (!existing) {
         merged.set(task.id, task);
+        continue;
       }
+
+      const next = { ...existing } as RunningTaskRecord;
+      for (const [key, value] of Object.entries(task) as Array<
+        [keyof RunningTaskRecord, RunningTaskRecord[keyof RunningTaskRecord]]
+      >) {
+        if (value !== undefined) {
+          next[key] = value;
+        }
+      }
+      merged.set(task.id, next);
     }
   }
   return Array.from(merged.values());
@@ -201,12 +214,6 @@ interface ReconcileTaskContext {
 }
 
 type ReconcileTaskOutcome = "completed" | "failed" | "recovered" | "skipped";
-
-interface TaskSessionRecord {
-  runtimeSessionId: string;
-  isActive: boolean;
-  archivedAt?: string | null;
-}
 
 interface ParsedExecutionPlanCandidate {
   status?: string;
@@ -295,16 +302,8 @@ function taskNeedsRecentTerminalSessionRepair(task: RunningTaskRecord) {
 }
 
 async function loadTaskSessions(authorization: string, taskId: string) {
-  const lineageResult = await cpFetch<{ data?: TaskSessionRecord[] }>(
-    `/api/tasks/${encodeURIComponent(taskId)}/task-sessions`,
-    { authorization },
-  );
-
-  if (!lineageResult.ok || !Array.isArray(lineageResult.data?.data)) {
-    return [] as TaskSessionRecord[];
-  }
-
-  return lineageResult.data.data;
+  const lineageResult = await fetchTaskSessionLineageRecords(taskId, authorization);
+  return lineageResult.records;
 }
 
 async function reconcileHistoricallyInconsistentTask(
@@ -321,7 +320,10 @@ async function reconcileHistoricallyInconsistentTask(
   const needsPlanRepair = planNeedsTerminalRepair(task);
 
   if (terminalStatus === "completed" && hasActiveSession && task.sessionId && context.runtimeAvailable) {
-    const messagesResult = await getSessionMessages(task.sessionId);
+    const messagesResult = await getSessionMessages(task.sessionId, {
+      taskId: task.id,
+      authorization: context.authorization,
+    });
     if (messagesResult.ok) {
       const assistantResult = extractAssistantResultFromMessages(messagesResult.data);
       if (assistantResult.failed) {
@@ -439,7 +441,10 @@ async function reconcileSingleRunningTask(
     return reconcileTaskWithoutRuntime(task, context);
   }
 
-  const messagesResult = await getSessionMessages(task.sessionId);
+  const messagesResult = await getSessionMessages(task.sessionId, {
+    taskId: task.id,
+    authorization: context.authorization,
+  });
   if (!messagesResult.ok) {
     return reconcileTaskWithUnreadableSession(task, context);
   }

@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import * as paidExecutionGuardModule from "../../control-plane/web-ui-bff/src/lib/paid-execution-guard";
+import * as strategyModule from "../../control-plane/web-ui-bff/src/lib/orchestration-strategy";
 
 type LedgerRecord = {
   id: string;
@@ -97,16 +99,20 @@ mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () =>
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/lib/paid-execution-guard", () => ({
+  ...paidExecutionGuardModule,
   evaluatePaidExecutionPreflight: evaluatePaidExecutionPreflightMock,
   fetchProjectPaidExecutionLeaseState: fetchProjectPaidExecutionLeaseStateMock,
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/lib/opencode-config", () => ({
+  formatModelRoute: (resolved: { providerId: string; modelId: string }) =>
+    `${resolved.providerId}:${resolved.modelId}`,
   readDefaultExecutionModel: readDefaultExecutionModelMock,
   resolveModelRoute: resolveModelRouteMock,
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/lib/orchestration-strategy", () => ({
+  ...strategyModule,
   readOrchestrationStrategy: readOrchestrationStrategyMock,
 }));
 

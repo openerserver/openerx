@@ -40,6 +40,7 @@ let currentStrategy = normalizeOrchestrationStrategy({
     },
   ],
 });
+let workflowInitialized = false;
 
 mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter", () => ({
   continueSession: mock(async () => ({ ok: true })),
@@ -52,11 +53,20 @@ mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-a
     tokenUsed: 0,
   })),
   forkSession: mock(async () => ({ ok: true, sessionId: "forked-session" })),
+  findAgentRunBySessionId: mock(() => undefined),
   getAgentRun: mock(() => undefined),
+  getAgentMessages: mock(async () => ({ ok: true, data: [] })),
   getSessionMessages: mock(async () => ({ ok: true, data: [] })),
+  injectGuidance: mock(async () => ({ ok: true })),
+  listAgentRuns: mock(() => []),
   listSessions: mock(async () => ({ ok: true, data: [] })),
+  pauseAgent: mock(async () => ({ ok: true })),
+  registerAgentRun: mock(() => undefined),
   recoverAgentRun: mock(() => undefined),
+  resumeAgent: mock(async () => ({ ok: true })),
   runDetachedPrompt: mock(async () => ({ ok: true, sessionId: "detached", text: "{}" })),
+  terminateAgent: mock(async () => ({ ok: true })),
+  updateAgentRunStatus: mock(() => undefined),
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () => ({
@@ -65,7 +75,22 @@ mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () =>
   createInternalAuthorization: mock(async () => "Bearer internal"),
 }));
 
+mock.module("../../control-plane/web-ui-bff/src/lib/intent-classifier", () => ({
+  classifyIntent: mock(() => ({
+    category: "implementation",
+    complexity: "medium",
+    suggestedAgents: ["default-executor"],
+    requiresPlan: false,
+    confidence: 0.9,
+  })),
+}));
+
 mock.module("../../control-plane/web-ui-bff/src/lib/opencode-config", () => ({
+  formatModelRoute: mock((value: { providerId?: string; modelId?: string } | string) =>
+    typeof value === "string"
+      ? value
+      : `${value.providerId || "github-copilot"}:${value.modelId || "gpt-5.4"}`,
+  ),
   readDefaultExecutionModel: mock(() => undefined),
   resolveModelRoute: mock((raw: string) => ({ providerId: "github-copilot", modelId: raw })),
   validateModelProvider: mock(() => ({ valid: true })),
@@ -79,10 +104,14 @@ mock.module("../../control-plane/web-ui-bff/src/lib/orchestration-strategy", () 
 
 mock.module("../../control-plane/web-ui-bff/src/modules/hooks/lifecycle-hooks", () => ({
   executeLifecycleHooks: executeLifecycleHooksMock,
+  mergeStageAndStrategyHooks: mock((_stageHooks: unknown, strategyHooks: unknown) => strategyHooks ?? []),
+  parseStageHooks: mock(() => []),
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/run-persistence", () => ({
   createAgentRunRecord: mock(async () => undefined),
+  recordAgentAudit: mock(async () => undefined),
+  recordModelUsage: mock(async () => undefined),
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/modules/realtime/dag-sync", () => ({
@@ -107,11 +136,7 @@ mock.module("../../control-plane/web-ui-bff/src/modules/tasks/stage-intervention
 }));
 
 function getTaskExecuteWorkflowResponse() {
-  const workflowFetchCount = cpFetchMock.mock.calls.filter(
-    ([path, requestOptions]) => path === "/api/tasks/task-1/workflow" && !requestOptions?.method,
-  ).length;
-
-  if (workflowFetchCount > 1) {
+  if (workflowInitialized) {
     return {
       ok: true,
       data: {
@@ -200,6 +225,7 @@ function getTaskExecuteWriteResponse(url: string, method: string, body?: unknown
   }
 
   if (method === "POST" && url === "/api/tasks/task-1/workflow/initialize") {
+    workflowInitialized = true;
     return { ok: true, data: { ok: true, body } };
   }
 
@@ -238,6 +264,7 @@ beforeEach(() => {
       },
     ],
   });
+  workflowInitialized = false;
 
   createSessionMock.mockResolvedValue({
     ok: true,

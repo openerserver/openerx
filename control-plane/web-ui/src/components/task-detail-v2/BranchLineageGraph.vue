@@ -1,5 +1,5 @@
 <template>
-  <div class="v2-panel" data-testid="task-detail-v2-session-flow" @click="closeContextMenu">
+  <div class="v2-panel" data-testid="task-detail-v2-branch-lineage" @click="closeContextMenu">
     <a-flex justify="space-between" align="center" class="v2-panel__header">
       <a-space size="small">
         <a-typography-text strong class="v2-panel__title">分支拓扑</a-typography-text>
@@ -19,7 +19,7 @@
       <a-empty v-else-if="nodes.length === 0" description="暂无分支" />
       <VueFlow
         v-else
-        class="session-flow-graph"
+        class="branch-lineage-graph"
         :nodes="nodes"
         :edges="edges"
         :min-zoom="0.4"
@@ -33,8 +33,8 @@
 
         <template #node-session="slotProps">
           <div
-            class="session-flow-node"
-            :class="{ 'session-flow-node--selected': slotProps.data.selected }"
+            class="branch-lineage-node"
+            :class="{ 'branch-lineage-node--selected': slotProps.data.selected }"
             @contextmenu.prevent.stop="openContextMenu($event, slotProps.data)"
           >
             <a-card size="small" :bordered="false" :body-style="{ padding: '8px 12px' }">
@@ -47,26 +47,26 @@
 
               <a-flex justify="space-between" align="start" :gap="8">
                 <div style="min-width: 0; flex: 1">
-                  <a-typography-text strong class="session-flow-node__title">
+                  <a-typography-text strong class="branch-lineage-node__title">
                     {{ slotProps.data.title }}
                   </a-typography-text>
 
                   <a-tag
                     v-if="feedbackBySession[slotProps.data.sessionId]"
                     :color="feedbackBySession[slotProps.data.sessionId]?.tone || 'processing'"
-                    class="session-flow-node__feedback"
+                    class="branch-lineage-node__feedback"
                   >
                     {{ feedbackBySession[slotProps.data.sessionId]?.label }}
                   </a-tag>
 
-                  <a-typography-text type="secondary" class="session-flow-node__meta">
+                  <a-typography-text type="secondary" class="branch-lineage-node__meta">
                     {{ slotProps.data.shortId }}
                   </a-typography-text>
 
                   <a-typography-text
                     v-if="slotProps.data.summary"
                     type="secondary"
-                    class="session-flow-node__meta"
+                    class="branch-lineage-node__meta"
                   >
                     +{{ slotProps.data.summary.additions }} -{{ slotProps.data.summary.deletions }}
                     ({{ slotProps.data.summary.files }} files)
@@ -106,7 +106,7 @@
                       </a-button>
                     </a-space>
                   </template>
-                  <a-button type="text" size="small" class="session-flow-node__more" @click.stop>
+                  <a-button type="text" size="small" class="branch-lineage-node__more" @click.stop>
                     <template #icon>
                       <EllipsisOutlined />
                     </template>
@@ -120,11 +120,11 @@
 
       <div
         v-if="contextMenu.visible && contextMenu.node"
-        class="session-flow-context-menu"
+        class="branch-lineage-context-menu"
         :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }"
         @click.stop
       >
-        <div class="session-flow-context-menu__header">
+        <div class="branch-lineage-context-menu__header">
           <strong>{{ contextMenu.node.title }}</strong>
           <span>{{ contextMenu.node.shortId }}</span>
         </div>
@@ -167,7 +167,7 @@ import { Background } from "@vue-flow/background";
 import { Controls } from "@vue-flow/controls";
 import { VueFlow, type Edge, type Node, type NodeMouseEvent } from "@vue-flow/core";
 import { computed, ref } from "vue";
-import type { SessionFlowNodeData } from "../../composables/useSessionFlow";
+import type { BranchLineageFlowNodeData } from "../../composables/useBranchLineageFlow";
 import "@vue-flow/core/dist/style.css";
 import "@vue-flow/core/dist/theme-default.css";
 import "@vue-flow/controls/dist/style.css";
@@ -199,7 +199,7 @@ const contextMenu = ref<{
   visible: boolean;
   x: number;
   y: number;
-  node: SessionFlowNodeData | null;
+  node: BranchLineageFlowNodeData | null;
 }>({
   visible: false,
   x: 0,
@@ -212,7 +212,7 @@ function handleNodeClick(event: NodeMouseEvent) {
   emit("select", String(event.node.id));
 }
 
-function openContextMenu(event: MouseEvent, node: SessionFlowNodeData) {
+function openContextMenu(event: MouseEvent, node: BranchLineageFlowNodeData) {
   const body = graphBodyRef.value;
   if (!body) {
     return;
@@ -244,7 +244,7 @@ function closeContextMenu() {
   };
 }
 
-function canArchive(node: SessionFlowNodeData) {
+function canArchive(node: BranchLineageFlowNodeData) {
   return !node.isActive && node.sourceType !== "root";
 }
 
@@ -295,44 +295,44 @@ function emitArchive(sessionId: string, closeMenu = false) {
   height: 320px;
 }
 
-.session-flow-graph {
+.branch-lineage-graph {
   height: 100%;
   background: #fff;
   border-radius: 8px;
 }
 
-.session-flow-node {
+.branch-lineage-node {
   width: 200px;
   border: 1px solid #e8e8e8;
   border-radius: 8px;
   background: #fafafa;
 }
 
-.session-flow-node--selected {
+.branch-lineage-node--selected {
   border: 2px solid #1677ff;
 }
 
-.session-flow-node__title {
+.branch-lineage-node__title {
   display: block;
   margin-bottom: 4px;
   font-size: 13px;
 }
 
-.session-flow-node__feedback {
+.branch-lineage-node__feedback {
   margin-bottom: 4px;
 }
 
-.session-flow-node__meta {
+.branch-lineage-node__meta {
   display: block;
   font-size: 12px;
 }
 
-.session-flow-node__more {
+.branch-lineage-node__more {
   flex-shrink: 0;
   margin-top: -4px;
 }
 
-.session-flow-context-menu {
+.branch-lineage-context-menu {
   position: absolute;
   z-index: 10;
   width: 196px;
@@ -351,7 +351,7 @@ function emitArchive(sessionId: string, closeMenu = false) {
   position: relative;
 }
 
-.session-flow-context-menu__header {
+.branch-lineage-context-menu__header {
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -359,12 +359,12 @@ function emitArchive(sessionId: string, closeMenu = false) {
   border-bottom: 1px solid #f0f0f0;
 }
 
-.session-flow-context-menu__header strong {
+.branch-lineage-context-menu__header strong {
   font-size: 13px;
   color: rgba(0, 0, 0, 0.88);
 }
 
-.session-flow-context-menu__header span {
+.branch-lineage-context-menu__header span {
   font-size: 12px;
   color: rgba(0, 0, 0, 0.45);
 }

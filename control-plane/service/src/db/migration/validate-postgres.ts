@@ -33,6 +33,23 @@ export interface ValidatePostgresSnapshotOptions {
   outputDir?: string;
 }
 
+async function loadExistingTableNames(tableNames: string[]) {
+  const { sql } = openPostgresDatabase({ logPrefix: "[db:validate:pg:schema]" });
+  try {
+    const rows = (await sql.unsafe(
+      `SELECT table_name
+         FROM information_schema.tables
+        WHERE table_schema = 'public'
+          AND table_name = ANY($1::text[])`,
+      [tableNames] as never[],
+    )) as Array<{ table_name: string }>;
+
+    return new Set(rows.map((row) => row.table_name));
+  } finally {
+    await sql.end();
+  }
+}
+
 async function queryOne<T>(query: string, values: unknown[] = []) {
   const { sql } = openPostgresDatabase({ logPrefix: "[db:validate:pg]" });
   try {
@@ -89,6 +106,10 @@ async function buildTableReport(inputDir: string, table: SnapshotManifest["table
 }
 
 async function validateForeignKeys() {
+  const referencedTables = Array.from(
+    new Set(KEY_FOREIGN_KEYS.flatMap((rule) => [rule.table, rule.targetTable])),
+  );
+  const existingTables = await loadExistingTableNames(referencedTables);
   const results: Array<{
     table: string;
     column: string;
@@ -98,6 +119,10 @@ async function validateForeignKeys() {
   }> = [];
 
   for (const rule of KEY_FOREIGN_KEYS) {
+    if (!existingTables.has(rule.table) || !existingTables.has(rule.targetTable)) {
+      continue;
+    }
+
     const targetColumn = rule.targetColumn ?? "id";
     const row =
       (await queryOne<{ count: string }>(
@@ -126,8 +151,19 @@ export async function validatePostgresSnapshot(options: ValidatePostgresSnapshot
   await ensureDir(outputDir);
 
   const manifest = await readJsonFile<SnapshotManifest>(join(inputDir, "manifest.json"));
+  const existingTables = await loadExistingTableNames(manifest.tables.map((table) => table.name));
+  const skippedTables = manifest.tables
+    .map((table) => table.name)
+    .filter((tableName) => !existingTables.has(tableName));
   const tableReports: TableValidationReport[] = [];
   for (const table of manifest.tables) {
+    if (!existingTables.has(table.name)) {
+      console.warn(
+        `[db:validate:pg:${table.name}] Skipped retired table because it is absent from current PostgreSQL schema.`,
+      );
+      continue;
+    }
+
     tableReports.push(await buildTableReport(inputDir, table));
   }
 
@@ -136,6 +172,7 @@ export async function validatePostgresSnapshot(options: ValidatePostgresSnapshot
     generatedAt: nowIso(),
     tableReports,
     foreignKeyReports,
+    skippedTables,
     sampleTablesCovered: SAMPLE_TABLES.filter((tableName) =>
       tableReports.some((report) => report.table === tableName),
     ),
@@ -144,7 +181,7 @@ export async function validatePostgresSnapshot(options: ValidatePostgresSnapshot
   await writeJsonFile(join(outputDir, "validation-report.json"), {
     kind: "validation-report",
     generatedAt: summary.generatedAt,
-    tables: manifest.tables,
+    tables: manifest.tables.filter((table) => existingTables.has(table.name)),
     stats: summary,
   });
 

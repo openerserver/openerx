@@ -9,6 +9,7 @@ import {
   text,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { ltree } from "./custom-types";
 
 export type ApprovalPolicyMode = "balanced" | "strict" | "manual";
 
@@ -39,6 +40,22 @@ export interface ProjectSettings {
   allowBossAutoTemplateSwitch?: boolean;
   allowHybridEscalation?: boolean;
 }
+
+export type ProjectTreeNodeType =
+  | "project_root"
+  | "task"
+  | "session"
+  | "message"
+  | "context"
+  | "fork_point";
+
+export type ProjectTreeLinkType =
+  | "depends-on"
+  | "blocks"
+  | "cites"
+  | "forked-from"
+  | "spawned"
+  | "related";
 
 export type PaidExecutionLeaseStatus = "active" | "revoked" | "expired";
 export type RuntimeUsageLedgerStatus = "running" | "completed" | "failed" | "cancelled";
@@ -75,6 +92,109 @@ export const projects = pgTable("projects", {
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
+
+// ── Project Tree ──────────────────────────────────────────────────
+
+export const projectTreeNodes = pgTable(
+  "project_tree_nodes",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    parentId: text("parent_id"),
+    path: ltree("path").notNull(),
+    depth: integer("depth").notNull().default(0),
+    nodeType: text("node_type").$type<ProjectTreeNodeType>().notNull(),
+    role: text("role"),
+    contentText: text("content_text"),
+    contentJson: jsonb("content_json").$type<Record<string, unknown>>(),
+    tokenCount: integer("token_count"),
+    runtimeSessionId: text("runtime_session_id"),
+    runtimeMessageId: text("runtime_message_id"),
+    branchName: text("branch_name"),
+    isActive: boolean("is_active").notNull().default(true),
+    supersededBy: text("superseded_by"),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    archivedAt: text("archived_at"),
+  },
+  (table) => [
+    index("idx_ptn_project_path").using("gist", table.path),
+    index("idx_ptn_project_id").on(table.projectId),
+    index("idx_ptn_parent_id").on(table.parentId),
+    index("idx_ptn_node_type").on(table.projectId, table.nodeType),
+  ],
+);
+
+export const projectTreeBranches = pgTable("project_tree_branches", {
+  id: text("id").primaryKey(),
+  projectId: text("project_id")
+    .notNull()
+    .references(() => projects.id),
+  taskNodeId: text("task_node_id").references(() => projectTreeNodes.id),
+  branchName: text("branch_name").notNull(),
+  headNodeId: text("head_node_id")
+    .notNull()
+    .references(() => projectTreeNodes.id),
+  isDefault: boolean("is_default").notNull().default(false),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const projectTreeEvents = pgTable(
+  "project_tree_events",
+  {
+    id: text("id").primaryKey(),
+    nodeId: text("node_id").references(() => projectTreeNodes.id),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    eventType: text("event_type").notNull(),
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+    seq: integer("seq").notNull(),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    index("idx_pte_node_seq").on(table.nodeId, table.seq),
+    index("idx_pte_project_time").on(table.projectId, table.createdAt),
+  ],
+);
+
+export const projectTreeLinks = pgTable(
+  "project_tree_links",
+  {
+    id: text("id").primaryKey(),
+    sourceNodeId: text("source_node_id")
+      .notNull()
+      .references(() => projectTreeNodes.id),
+    sourceProjectId: text("source_project_id")
+      .notNull()
+      .references(() => projects.id),
+    targetNodeId: text("target_node_id")
+      .notNull()
+      .references(() => projectTreeNodes.id),
+    targetProjectId: text("target_project_id")
+      .notNull()
+      .references(() => projects.id),
+    linkType: text("link_type").$type<ProjectTreeLinkType>().notNull(),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>(),
+    bidirectional: boolean("bidirectional").notNull().default(false),
+    createdBy: text("created_by"),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex("idx_ptl_unique_edge").on(
+      table.sourceNodeId,
+      table.targetNodeId,
+      table.linkType,
+    ),
+    index("idx_ptl_source").on(table.sourceNodeId),
+    index("idx_ptl_target").on(table.targetNodeId),
+    index("idx_ptl_source_project").on(table.sourceProjectId, table.linkType),
+    index("idx_ptl_target_project").on(table.targetProjectId, table.linkType),
+  ],
+);
 
 // ── Environments ───────────────────────────────────────────────────
 
@@ -158,7 +278,7 @@ export const runtimeUsageLedgers = pgTable(
     projectId: text("project_id")
       .notNull()
       .references(() => projects.id),
-    taskId: text("task_id").references(() => tasks.id),
+    taskId: text("task_id").references(() => projectTreeNodes.id),
     agentRunId: text("agent_run_id").references(() => agentRuns.id),
     runtimeSessionId: text("runtime_session_id").notNull(),
     executionSource: text("execution_source").notNull(),
@@ -199,7 +319,7 @@ export const runtimeUsageLedgerSteps = pgTable(
     projectId: text("project_id")
       .notNull()
       .references(() => projects.id),
-    taskId: text("task_id").references(() => tasks.id),
+    taskId: text("task_id").references(() => projectTreeNodes.id),
     agentRunId: text("agent_run_id").references(() => agentRuns.id),
     runtimeSessionId: text("runtime_session_id"),
     stepType: text("step_type").notNull(),
@@ -282,47 +402,6 @@ export const runtimeUsageBaselines = pgTable(
   ],
 );
 
-// ── Sessions (extends OpenCode sessions) ───────────────────────────
-
-export const sessions = pgTable("sessions", {
-  id: text("id").primaryKey(), // maps to OpenCode sessionId
-  projectId: text("project_id")
-    .notNull()
-    .references(() => projects.id),
-  userId: text("user_id")
-    .notNull()
-    .references(() => users.id),
-  taskId: text("task_id"),
-  tokensUsed: integer("tokens_used").default(0),
-  cost: doublePrecision("cost").default(0),
-  modelUsed: text("model_used"),
-  agentUsed: text("agent_used"),
-  startedAt: text("started_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-  finishedAt: text("finished_at"),
-});
-
-// ── Task Sessions (branch lineage for fork tree) ───────────────────
-
-export const taskSessions = pgTable("task_sessions", {
-  id: text("id").primaryKey(),
-  taskId: text("task_id")
-    .notNull()
-    .references(() => tasks.id),
-  runtimeSessionId: text("runtime_session_id").notNull(), // OpenCode session ID
-  parentRuntimeSessionId: text("parent_runtime_session_id"), // parent session, null = root
-  forkedFromMessageId: text("forked_from_message_id"), // message-level fork point
-  branchName: text("branch_name"),
-  sourceType: text("source_type", {
-    enum: ["root", "fork", "sub_session"],
-  })
-    .notNull()
-    .default("root"),
-  isActive: boolean("is_active").notNull().default(false),
-  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-  archivedAt: text("archived_at"),
-});
-
 // ── Repositories ───────────────────────────────────────────────────
 
 export const repositories = pgTable("repositories", {
@@ -372,66 +451,6 @@ export const repositoryCredentials = pgTable("repository_credentials", {
   status: text("status").notNull().default("active"),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-});
-
-// ── Tasks ──────────────────────────────────────────────────────────
-
-export const tasks = pgTable("tasks", {
-  id: text("id").primaryKey(),
-  projectId: text("project_id")
-    .notNull()
-    .references(() => projects.id),
-  userId: text("user_id")
-    .notNull()
-    .references(() => users.id),
-  title: text("title").notNull(),
-  prompt: text("prompt").notNull(),
-  status: text("status", {
-    enum: ["pending", "running", "paused", "completed", "failed", "cancelled"],
-  })
-    .notNull()
-    .default("pending"),
-  sessionId: text("session_id"), // OpenCode session ID once execution starts
-  agentRunId: text("agent_run_id"),
-  result: text("result"),
-  category: text("category", {
-    enum: ["quick", "deep", "ops", "security", "architecture"],
-  }),
-  strategy: text("strategy"), // JSON summary of execution strategy from orchestrator-plugin
-  repoId: text("repo_id").references(() => repositories.id),
-  workspaceRoot: text("workspace_root"),
-  baseRevision: text("base_revision"),
-  workingBranch: text("working_branch"),
-
-  // ── Model selection ─────────────────────────────────────────────
-  selectedModel: text("selected_model"), // user-chosen model at task creation
-
-  // ── Multi-agent execution ───────────────────────────────────────
-  executionMode: text("execution_mode").default("single"),
-  executionPlan: text("execution_plan"), // JSON: ExecutionPlan
-  autoAdvanceStages: boolean("auto_advance_stages").notNull().default(false),
-
-  // ── Identity snapshot (frozen at execution start) ───────────────
-  credentialId: text("credential_id").references(() => repositoryCredentials.id),
-  gitAuthorName: text("git_author_name"),
-  gitAuthorEmail: text("git_author_email"),
-  gitCommitterName: text("git_committer_name"),
-  gitCommitterEmail: text("git_committer_email"),
-
-  // ── Post-execution facts ────────────────────────────────────────
-  finalCommitSha: text("final_commit_sha"),
-  finalBranchName: text("final_branch_name"),
-  changesSummary: jsonb("changes_summary").$type<{
-    filesAdded?: number;
-    filesModified?: number;
-    filesDeleted?: number;
-    totalInsertions?: number;
-    totalDeletions?: number;
-  }>(),
-
-  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-  startedAt: text("started_at"),
-  finishedAt: text("finished_at"),
 });
 
 // ── Policy Templates ───────────────────────────────────────────────
@@ -510,45 +529,13 @@ export const approvalTickets = pgTable("approval_tickets", {
   expiresAt: text("expires_at").notNull(),
 });
 
-// ── Project Task Relations (cross-task graph) ─────────────────────
-
-export const projectTaskRelations = pgTable(
-  "project_task_relations",
-  {
-    id: text("id").primaryKey(),
-    projectId: text("project_id")
-      .notNull()
-      .references(() => projects.id),
-    sourceTaskId: text("source_task_id")
-      .notNull()
-      .references(() => tasks.id),
-    targetTaskId: text("target_task_id")
-      .notNull()
-      .references(() => tasks.id),
-    relationType: text("relation_type").notNull(),
-    relationSource: text("relation_source").notNull().default("manual"),
-    metadata: jsonb("metadata").$type<Record<string, unknown>>(),
-    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-  },
-  (table) => [
-    uniqueIndex("idx_project_task_relations_unique_edge").on(
-      table.projectId,
-      table.sourceTaskId,
-      table.targetTaskId,
-      table.relationType,
-    ),
-    index("idx_project_task_relations_project").on(table.projectId, table.relationType),
-  ],
-);
-
 // ── Agent Runs (individual agent execution records) ────────────────
 
 export const agentRuns = pgTable("agent_runs", {
   id: text("id").primaryKey(),
   taskId: text("task_id")
     .notNull()
-    .references(() => tasks.id),
+    .references(() => projectTreeNodes.id),
   sessionId: text("session_id"),
   agentType: text("agent_type").notNull(),
   status: text("status", {
@@ -572,7 +559,7 @@ export const codeChanges = pgTable("code_changes", {
   id: text("id").primaryKey(),
   taskId: text("task_id")
     .notNull()
-    .references(() => tasks.id),
+    .references(() => projectTreeNodes.id),
   repoId: text("repo_id").references(() => repositories.id),
   agentRunId: text("agent_run_id").references(() => agentRuns.id),
   changeSource: text("change_source", {
@@ -831,7 +818,7 @@ export const taskWorkflowRuns = pgTable("task_workflow_runs", {
   id: text("id").primaryKey(),
   taskId: text("task_id")
     .notNull()
-    .references(() => tasks.id),
+    .references(() => projectTreeNodes.id),
   templateId: text("template_id").notNull(),
   currentStage: text("current_stage").notNull(),
   status: text("status", {
@@ -884,7 +871,7 @@ export const roleAggregateConclusions = pgTable("role_aggregate_conclusions", {
   id: text("id").primaryKey(),
   taskId: text("task_id")
     .notNull()
-    .references(() => tasks.id),
+    .references(() => projectTreeNodes.id),
   taskStageRunId: text("task_stage_run_id"),
   roleAgentId: text("role_agent_id").notNull(),
   stage: text("stage").notNull(),
@@ -918,7 +905,7 @@ export const developerChangeRequests = pgTable("developer_change_requests", {
   id: text("id").primaryKey(),
   taskId: text("task_id")
     .notNull()
-    .references(() => tasks.id),
+    .references(() => projectTreeNodes.id),
   taskStageRunId: text("task_stage_run_id"),
   sourceRoleAgentId: text("source_role_agent_id").notNull(),
   assignedRoleAgentId: text("assigned_role_agent_id").notNull().default("role.developer"),
@@ -943,7 +930,7 @@ export const developerChangeRequests = pgTable("developer_change_requests", {
 export const taskOperatingModes = pgTable("task_operating_modes", {
   taskId: text("task_id")
     .primaryKey()
-    .references(() => tasks.id),
+    .references(() => projectTreeNodes.id),
   collaborationMode: text("collaboration_mode").notNull(),
   autopilotLevel: text("autopilot_level").notNull(),
   bossParticipationMode: text("boss_participation_mode").notNull(),
@@ -960,7 +947,7 @@ export const bossDecisions = pgTable(
     id: text("id").primaryKey(),
     taskId: text("task_id")
       .notNull()
-      .references(() => tasks.id),
+      .references(() => projectTreeNodes.id),
     ts: text("ts").notNull(),
     decisionType: text("decision_type").notNull(),
     reason: text("reason").notNull(),
@@ -978,7 +965,7 @@ export const humanEscalations = pgTable(
     id: text("id").primaryKey(),
     taskId: text("task_id")
       .notNull()
-      .references(() => tasks.id),
+      .references(() => projectTreeNodes.id),
     ts: text("ts").notNull(),
     reason: text("reason").notNull(),
     status: text("status"),

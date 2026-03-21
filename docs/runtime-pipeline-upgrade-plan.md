@@ -42,7 +42,7 @@
 | `ExecutionPlan` 数据模型 | steps + candidates + dependsOn + judgeResult，已持久化到 `tasks.executionPlan` JSON 字段 | 作为运行流水线的核心数据源 |
 | `PersistedTaskStrategy` | hookExecutions 追加记录，已持久化到 `tasks.strategy` JSON 字段 | 作为 hook 阶段数据源 |
 | SSE 事件体系 | `agent.started`, `task.completed`, `task.continued`, `task.hooks.updated` 等 | 作为增量推送通道 |
-| session lineage | `task_sessions` 表，root/fork/sub_session 血统，`session.activated` 事件 | 作为分支感知的数据依据 |
+| session lineage | 通过 `/api/tasks/:taskId/branches*` 路由暴露的 root/fork/sub_session 血统，底层由 project-tree/session 节点承载 | 作为分支感知的数据依据 |
 | `mergeTaskStrategy()` | 追加 hookExecutions 到 strategy JSON | 复用追加逻辑扩展到 pipeline steps |
 
 ## 3. 目标模型
@@ -122,7 +122,7 @@ Session messages（规划 agent） → RuntimePipelineStage（type = "planning"�
 
 ```
 1. 前端传入 sessionId（当前活跃分支的 session）
-2. BFF 根据 sessionId 从 task_sessions 确认属于该 task
+2. BFF 根据 sessionId 从 `/api/tasks/:taskId/branches*` lineage 视图确认属于该 task
 3. 读该 session 对应的 executionPlan —— 分阶段处理：
   a. Phase 1-3：统一读取 tasks.executionPlan，分支之间共享同一份 plan
   b. Phase 4：如引入 `task_sessions.executionPlanSnapshot`，则 fork 分支优先读快照，否则回退到 tasks.executionPlan
@@ -285,7 +285,7 @@ async function emitPipelineStagePatch(taskId: string, sessionId: string, changed
 
 ### 4.3 Service 层 — Phase 1-3 无新增端点
 
-运行流水线在 Phase 1-3 保持为 BFF 聚合视图，不在 service 层新建表或端点。所有数据源（tasks、task_sessions、task_graph_nodes/edges）已存在。只有在 Phase 4 需要分支级 plan 快照时，才评估是否扩展 `task_sessions` schema。
+运行流水线在 Phase 1-3 保持为 BFF 聚合视图，不在 service 层新建表或端点。现有数据源包括 `tasks.executionPlan`、兼容 lineage 路由以及任务图数据。只有在 Phase 4 仍明确需要分支级 plan 快照时，才评估把快照写入树侧结构或专用新表；不默认继续扩展 `task_sessions`。
 
 ### 4.4 前端 — 新增 API 调用
 
@@ -514,7 +514,7 @@ Phase 1 中 planning stage 仍然保留，原因是当前 UI 上用户已经看�
 
 ### 7.4 executionPlan 冻结与分支快照
 
-当前 executionPlan 存在 task 级别（`tasks.executionPlan`），fork 时不会复制一份到分支。Phase 1-3 暂不改变这一点，因此“分支感知”准确含义是“分支视角下的运行状态和图节点不同”，而不是“分支拥有独立 plan”。Phase 4 如果要支持真正的重规划和分支对比，再在 `task_sessions` 表新增 `executionPlanSnapshot` 字段，fork 时复制当前 plan 到新分支。
+当前 executionPlan 存在 task 级别（`tasks.executionPlan`），fork 时不会复制一份到分支。Phase 1-3 暂不改变这一点，因此“分支感知”准确含义是“分支视角下的运行状态和图节点不同”，而不是“分支拥有独立 plan”。Phase 4 如果要支持真正的重规划和分支对比，应优先考虑写入 session tree node 的 `content_json` 或独立快照表，而不是继续把新语义叠加到 `task_sessions` 兼容表。
 
 ## 8. 相关代码位置索引
 
@@ -529,7 +529,7 @@ Phase 1 中 planning stage 仍然保留，原因是当前 UI 上用户已经看�
 | 任务详情 | `web-ui/src/pages/TaskDetail.vue` | pipeline 面板渲染 | Phase 1-4 |
 | 类型定义 | `web-ui/src/types/pipeline.ts`（新建） | — | Phase 1 |
 | Service 任务 | `service/src/modules/tasks/routes.ts` | task CRUD | 不变 |
-| Service Schema | `service/src/db/schema.ts` | tasks / task_sessions 表 | Phase 4（新增字段） |
+| Service Schema | `service/src/db/schema.ts` | tasks + 兼容 lineage 表 / tree schema | Phase 4（若仍需快照则新增 tree-adjacent 结构） |
 
 ## 9. 风险与缓解
 
@@ -641,7 +641,7 @@ Phase 1-2 不新增 service 端点，但后端实现时要遵守以下边界：
 
 - 不把 `RuntimePipeline` 持久化回 service
 - 不向 `tasks` 表新增字段
-- `task_sessions` 仍只作为 session 血统来源，不承载 pipeline 运行态
+- 兼容 `task_sessions` 视图/存储仍只作为 session 血统来源，不承载 pipeline 运行态，也不应继续承接新业务字段
 
 ### 10.5 后端测试清单
 

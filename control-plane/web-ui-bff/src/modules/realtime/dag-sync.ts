@@ -4,12 +4,16 @@ export function observeGraphWorkspaceDir(directory?: string | null): void {
   observedWorkspaceDir = typeof directory === "string" && directory.trim() ? directory.trim() : null;
 }
 
-export function resolveGraphStorageDirs(): string[] {
-  if (!observedWorkspaceDir) {
+export function resolveGraphStorageDirs(directory?: string | null): string[] {
+  const explicitDirectory =
+    typeof directory === "string" && directory.trim() ? directory.trim() : null;
+  const resolvedDirectory = explicitDirectory || observedWorkspaceDir;
+
+  if (!resolvedDirectory) {
     return [];
   }
 
-  return [`${observedWorkspaceDir}/.opencode/state/task-graphs`];
+  return [`${resolvedDirectory}/.opencode/state/task-graphs`];
 }
 
 export async function onGraphToolExecuted(): Promise<void> {

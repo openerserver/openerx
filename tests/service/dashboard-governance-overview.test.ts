@@ -254,7 +254,19 @@ afterAll(async () => {
   await deleteByIds("audit_events", createdAuditIds);
   await deleteByIds("paid_execution_leases", createdLeaseIds);
   await deleteByIds("runtime_usage_ledgers", createdLedgerIds);
-  await deleteByIds("tasks", createdTaskIds);
+
+  for (const taskId of createdTaskIds) {
+    await writeDb("DELETE FROM project_tree_links WHERE source_node_id = ? OR target_node_id = ?", [
+      taskId,
+      taskId,
+    ]);
+    await writeDb("DELETE FROM project_tree_events WHERE node_id = ?", [taskId]);
+    await writeDb(
+      "DELETE FROM project_tree_branches WHERE task_node_id = ? OR head_node_id = ?",
+      [taskId, taskId],
+    );
+    await writeDb("DELETE FROM project_tree_nodes WHERE id = ?", [taskId]);
+  }
 
   sqlite?.close();
   if (sql) {

@@ -91,7 +91,7 @@ beforeEach(() => {
   cpFetchMock.mockImplementation(async (...args: unknown[]) => {
     const [url, options] = args as [string, { method?: string; body?: unknown }?];
     if (!options?.method) {
-      if (url.includes("/api/tasks?status=running")) {
+      if (url.includes("/api/project-tree/tasks?status=running")) {
         return {
           ok: true,
           data: {
@@ -111,7 +111,7 @@ beforeEach(() => {
         };
       }
 
-      if (url === "/api/tasks?limit=200") {
+      if (url === "/api/project-tree/tasks?limit=200") {
         return {
           ok: true,
           data: {
@@ -176,7 +176,7 @@ beforeEach(() => {
         };
       }
 
-      if (url === "/api/tasks/task-1/task-sessions") {
+      if (url === "/api/tasks/task-1/branches") {
         return {
           ok: true,
           data: {
@@ -218,7 +218,7 @@ describe("reconcileRunningTasksOnStartup", () => {
       }),
     );
     expect(cpFetchMock).toHaveBeenCalledWith(
-      "/api/tasks/task-1/task-sessions",
+      "/api/tasks/task-1/branches",
       expect.objectContaining({
         method: "POST",
         body: expect.objectContaining({
@@ -257,7 +257,7 @@ describe("reconcileRunningTasksOnStartup", () => {
       }),
     );
     expect(cpFetchMock).toHaveBeenCalledWith(
-      "/api/tasks/task-1/task-sessions",
+      "/api/tasks/task-1/branches",
       expect.objectContaining({
         method: "POST",
         body: expect.objectContaining({
@@ -279,7 +279,7 @@ describe("reconcileRunningTasksOnStartup", () => {
     cpFetchMock.mockImplementation(async (...args: unknown[]) => {
       const [url, options] = args as [string, { method?: string; body?: unknown }?];
       if (!options?.method) {
-        if (url.includes("/api/tasks?status=running")) {
+        if (url.includes("/api/project-tree/tasks?status=running")) {
           return {
             ok: true,
             data: {
@@ -288,7 +288,7 @@ describe("reconcileRunningTasksOnStartup", () => {
           };
         }
 
-        if (url === "/api/tasks?limit=200") {
+        if (url === "/api/project-tree/tasks?limit=200") {
           return {
             ok: true,
             data: {
@@ -323,7 +323,7 @@ describe("reconcileRunningTasksOnStartup", () => {
           };
         }
 
-        if (url === "/api/tasks/task-historical/task-sessions") {
+        if (url === "/api/tasks/task-historical/branches") {
           return {
             ok: true,
             data: {
@@ -361,7 +361,7 @@ describe("reconcileRunningTasksOnStartup", () => {
       }),
     );
     expect(cpFetchMock).toHaveBeenCalledWith(
-      "/api/tasks/task-historical/task-sessions",
+      "/api/tasks/task-historical/branches",
       expect.objectContaining({
         method: "POST",
         body: expect.objectContaining({
@@ -392,11 +392,11 @@ describe("reconcileRunningTasksOnStartup", () => {
     cpFetchMock.mockImplementation(async (...args: unknown[]) => {
       const [url, options] = args as [string, { method?: string; body?: unknown }?];
       if (!options?.method) {
-        if (url.includes("/api/tasks?status=running")) {
+        if (url.includes("/api/project-tree/tasks?status=running")) {
           return { ok: true, data: { data: [] } };
         }
 
-        if (url === "/api/tasks?limit=200") {
+        if (url === "/api/project-tree/tasks?limit=200") {
           return {
             ok: true,
             data: {
@@ -432,7 +432,7 @@ describe("reconcileRunningTasksOnStartup", () => {
           };
         }
 
-        if (url === "/api/tasks/task-completed-active/task-sessions") {
+        if (url === "/api/tasks/task-completed-active/branches") {
           return {
             ok: true,
             data: {

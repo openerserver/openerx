@@ -1,5 +1,9 @@
 import { cpFetch } from "../../lib/control-plane-client";
 import type { ExecutionPlan } from "../../lib/orchestration-strategy";
+import {
+  fetchTaskSessionLineageRecords,
+  upsertTaskSessionLineageRecord,
+} from "./task-session-compat";
 import { syncTaskWorkflowTerminalState } from "./workflow-sync";
 
 type FinalizedTaskStatus = "completed" | "failed" | "cancelled";
@@ -11,12 +15,6 @@ interface FinalizableTaskRecord {
   agentRunId?: string | null;
   executionPlan?: string | null;
   startedAt?: string | null;
-}
-
-interface TaskSessionRecord {
-  runtimeSessionId: string;
-  isActive: boolean;
-  archivedAt?: string | null;
 }
 
 interface FinalizeTaskStateInput {
@@ -156,32 +154,24 @@ async function deactivateTaskSession(
   taskId: string,
   sessionId: string | undefined,
 ): Promise<void> {
-  const lineageResult = await cpFetch<{ data?: TaskSessionRecord[] }>(
-    `/api/tasks/${encodeURIComponent(taskId)}/task-sessions`,
-    { authorization },
-  );
-
-  if (!lineageResult.ok || !Array.isArray(lineageResult.data?.data)) {
+  const lineageResult = await fetchTaskSessionLineageRecords(taskId, authorization);
+  if (!lineageResult.ok) {
     return;
   }
 
   const record =
-    lineageResult.data.data.find(
+    lineageResult.records.find(
       (entry) =>
         !entry.archivedAt && entry.isActive && (!sessionId || entry.runtimeSessionId === sessionId),
-    ) ?? lineageResult.data.data.find((entry) => !entry.archivedAt && entry.isActive);
+    ) ?? lineageResult.records.find((entry) => !entry.archivedAt && entry.isActive);
 
   if (!record) {
     return;
   }
 
-  await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}/task-sessions`, {
-    method: "POST",
-    authorization,
-    body: {
-      runtimeSessionId: record.runtimeSessionId,
-      isActive: false,
-    },
+  await upsertTaskSessionLineageRecord(taskId, authorization, {
+    runtimeSessionId: record.runtimeSessionId,
+    isActive: false,
   });
 }
 
@@ -190,7 +180,7 @@ async function loadTaskForFinalization(
   taskId: string,
 ): Promise<FinalizableTaskRecord | null> {
   const taskResult = await cpFetch<FinalizableTaskRecord>(
-    `/api/tasks/${encodeURIComponent(taskId)}`,
+    `/api/project-tree/tasks/${encodeURIComponent(taskId)}`,
     {
       authorization,
     },

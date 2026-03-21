@@ -1,5 +1,6 @@
 import { useAuthStore } from "../stores/auth";
 import { type RecoverySuggestion, normalizeRecoverySuggestions } from "./recovery-suggestions";
+import { buildSessionMessagesFromExecutionTrace } from "./task-message-source";
 
 const BASE_URL = "/api";
 
@@ -1387,22 +1388,22 @@ export interface SessionInfo {
   updatedAt: string | null;
 }
 
-export async function getTaskSessions(taskId: string) {
-  return request<{ data: SessionInfo[] }>(`/tasks/${taskId}/sessions`);
+export type TaskBranchRecord = SessionInfo;
+
+export async function getTaskBranches(taskId: string) {
+  return request<{ data: TaskBranchRecord[] }>(`/tasks/${taskId}/branches`);
 }
 
-export async function getSessionMessages(
+export async function getTaskConversationMessages(
   taskId: string,
   sessionId: string,
   options?: { includeLineage?: boolean },
 ) {
-  const query = new URLSearchParams();
-  if (options?.includeLineage) {
-    query.set("includeLineage", "true");
-  }
-
-  const suffix = query.toString() ? `?${query.toString()}` : "";
-  return request<{ data: unknown[] }>(`/tasks/${taskId}/sessions/${sessionId}/messages${suffix}`);
+  const trace = await getTaskExecutionTraceView(taskId, sessionId, options);
+  return {
+    data: buildSessionMessagesFromExecutionTrace(trace, options),
+    meta: trace.timelineMeta,
+  };
 }
 
 export async function continueTask(taskId: string, prompt: string, sessionId?: string) {
@@ -1412,7 +1413,7 @@ export async function continueTask(taskId: string, prompt: string, sessionId?: s
   });
 }
 
-export async function forkTaskSession(
+export async function forkTaskBranch(
   taskId: string,
   sessionId: string,
   title?: string,
@@ -1424,15 +1425,15 @@ export async function forkTaskSession(
     title?: string;
     parentSessionId?: string;
     forkedFromMessageId?: string;
-  }>(`/tasks/${taskId}/sessions/${sessionId}/fork`, {
+  }>(`/tasks/${taskId}/branches/${sessionId}/fork`, {
     method: "POST",
     body: JSON.stringify({ title, messageId }),
   });
 }
 
-// ── Session Tree (Branch Lineage) ──────────────────────────────────
+// ── Branch Lineage Tree ────────────────────────────────────────────
 
-export interface SessionTreeNode {
+export interface BranchLineageNode {
   id: string;
   runtimeSessionId: string;
   parentRuntimeSessionId: string | null;
@@ -1447,22 +1448,24 @@ export interface SessionTreeNode {
   summary: { additions: number; deletions: number; files: number } | null;
   createdAt: string | null;
   updatedAt: string | null;
-  children: SessionTreeNode[];
+  children: BranchLineageNode[];
 }
 
-export async function getSessionTree(taskId: string) {
-  return request<{ data: SessionTreeNode[] }>(`/tasks/${taskId}/session-tree`);
+export type TaskBranchLineageNode = BranchLineageNode;
+
+export async function getTaskBranchLineage(taskId: string) {
+  return request<{ data: TaskBranchLineageNode[] }>(`/tasks/${taskId}/branch-lineage`);
 }
 
-export async function activateSession(taskId: string, sessionId: string) {
+export async function activateTaskBranch(taskId: string, sessionId: string) {
   return request<{ ok: boolean; sessionId: string }>(
-    `/tasks/${taskId}/sessions/${sessionId}/activate`,
+    `/tasks/${taskId}/branches/${sessionId}/activate`,
     { method: "POST" },
   );
 }
 
-export async function archiveTaskSession(taskId: string, sessionId: string) {
-  return request<{ ok: boolean }>(`/tasks/${taskId}/sessions/${sessionId}/archive`, {
+export async function archiveTaskBranch(taskId: string, sessionId: string) {
+  return request<{ ok: boolean }>(`/tasks/${taskId}/branches/${sessionId}/archive`, {
     method: "POST",
   });
 }
@@ -1539,6 +1542,205 @@ export async function listProjects(orgId?: string) {
 
 export async function getProject(projectId: string) {
   return request<Project>(`/projects/${projectId}`);
+}
+
+export type ProjectTreeNodeType =
+  | "project_root"
+  | "task"
+  | "session"
+  | "message"
+  | "context"
+  | "fork_point";
+
+export type ProjectTreeLinkType =
+  | "depends-on"
+  | "blocks"
+  | "cites"
+  | "forked-from"
+  | "spawned"
+  | "related";
+
+export interface ProjectTreeNodeRecord {
+  id: string;
+  projectId: string;
+  parentId?: string | null;
+  path: string;
+  depth: number;
+  nodeType: ProjectTreeNodeType;
+  role?: string | null;
+  contentText?: string | null;
+  contentJson?: Record<string, unknown> | null;
+  tokenCount?: number | null;
+  runtimeSessionId?: string | null;
+  runtimeMessageId?: string | null;
+  branchName?: string | null;
+  isActive: boolean;
+  supersededBy?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  archivedAt?: string | null;
+}
+
+export interface ProjectTreeBranchRecord {
+  id: string;
+  projectId: string;
+  taskNodeId?: string | null;
+  branchName: string;
+  headNodeId: string;
+  isDefault: boolean;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
+
+export interface ProjectTreeLinkRecord {
+  id: string;
+  sourceNodeId: string;
+  sourceProjectId: string;
+  targetNodeId: string;
+  targetProjectId: string;
+  linkType: ProjectTreeLinkType;
+  metadata?: Record<string, unknown> | null;
+  bidirectional?: boolean;
+  createdBy?: string | null;
+  createdAt?: string | null;
+  direction?: "incoming" | "outgoing" | "self";
+}
+
+export interface CreateProjectTreeChildInput {
+  id?: string;
+  nodeType: ProjectTreeNodeType;
+  role?: string | null;
+  contentText?: string | null;
+  contentJson?: Record<string, unknown> | null;
+  tokenCount?: number | null;
+  runtimeSessionId?: string | null;
+  runtimeMessageId?: string | null;
+  branchName?: string | null;
+  isActive?: boolean;
+  archivedAt?: string | null;
+}
+
+export interface UpdateProjectTreeBranchInput {
+  headNodeId: string;
+  isDefault?: boolean;
+}
+
+export interface CreateProjectTreeLinkInput {
+  targetNodeId: string;
+  targetProjectId?: string;
+  linkType: ProjectTreeLinkType;
+  metadata?: Record<string, unknown> | null;
+  bidirectional?: boolean;
+}
+
+export async function getProjectTree(
+  projectId: string,
+  options: { depth?: number; nodeType?: ProjectTreeNodeType } = {},
+) {
+  const params = new URLSearchParams();
+  if (typeof options.depth === "number") {
+    params.set("depth", String(options.depth));
+  }
+  if (options.nodeType) {
+    params.set("nodeType", options.nodeType);
+  }
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  const response = await request<{ data: ProjectTreeNodeRecord[] }>(
+    `/projects/${encodeURIComponent(projectId)}/tree${suffix}`,
+  );
+  return response.data;
+}
+
+export async function getProjectTreeNode(projectId: string, nodeId: string) {
+  return request<ProjectTreeNodeRecord>(
+    `/projects/${encodeURIComponent(projectId)}/tree/${encodeURIComponent(nodeId)}`,
+  );
+}
+
+export async function getProjectTreeChildren(projectId: string, nodeId: string) {
+  const response = await request<{ data: ProjectTreeNodeRecord[] }>(
+    `/projects/${encodeURIComponent(projectId)}/tree/${encodeURIComponent(nodeId)}/children`,
+  );
+  return response.data;
+}
+
+export async function createProjectTreeChild(
+  projectId: string,
+  nodeId: string,
+  body: CreateProjectTreeChildInput,
+) {
+  return request<ProjectTreeNodeRecord>(
+    `/projects/${encodeURIComponent(projectId)}/tree/${encodeURIComponent(nodeId)}/children`,
+    {
+      method: "POST",
+      body: JSON.stringify(body),
+    },
+  );
+}
+
+export async function getProjectTreeAncestors(projectId: string, nodeId: string) {
+  const response = await request<{ data: ProjectTreeNodeRecord[] }>(
+    `/projects/${encodeURIComponent(projectId)}/tree/${encodeURIComponent(nodeId)}/ancestors`,
+  );
+  return response.data;
+}
+
+export async function getProjectTreeBranches(projectId: string) {
+  const response = await request<{ data: ProjectTreeBranchRecord[] }>(
+    `/projects/${encodeURIComponent(projectId)}/branches`,
+  );
+  return response.data;
+}
+
+export async function updateProjectTreeBranch(
+  projectId: string,
+  branchId: string,
+  body: UpdateProjectTreeBranchInput,
+) {
+  return request<ProjectTreeBranchRecord>(
+    `/projects/${encodeURIComponent(projectId)}/branches/${encodeURIComponent(branchId)}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(body),
+    },
+  );
+}
+
+export async function getProjectTreeNodeLinks(projectId: string, nodeId: string) {
+  const response = await request<{ data: ProjectTreeLinkRecord[] }>(
+    `/projects/${encodeURIComponent(projectId)}/tree/${encodeURIComponent(nodeId)}/links`,
+  );
+  return response.data;
+}
+
+export async function createProjectTreeLink(
+  projectId: string,
+  nodeId: string,
+  body: CreateProjectTreeLinkInput,
+) {
+  return request<ProjectTreeLinkRecord>(
+    `/projects/${encodeURIComponent(projectId)}/tree/${encodeURIComponent(nodeId)}/links`,
+    {
+      method: "POST",
+      body: JSON.stringify(body),
+    },
+  );
+}
+
+export async function getProjectTreeLinks(projectId: string) {
+  const response = await request<{ data: ProjectTreeLinkRecord[] }>(
+    `/projects/${encodeURIComponent(projectId)}/links`,
+  );
+  return response.data;
+}
+
+export async function deleteProjectTreeLink(projectId: string, linkId: string) {
+  return request<{ ok: boolean }>(
+    `/projects/${encodeURIComponent(projectId)}/links/${encodeURIComponent(linkId)}`,
+    {
+      method: "DELETE",
+    },
+  );
 }
 
 export async function createProject(data: {
@@ -3521,6 +3723,25 @@ export interface ExecutionTraceMessage {
   raw: unknown;
 }
 
+export interface ExecutionTraceTimelineItem {
+  id: string;
+  role: string;
+  text: string;
+  createdAt?: string;
+  completedAt?: string | null;
+  raw?: unknown;
+  sourceEventTypes?: string[];
+}
+
+export interface ExecutionTraceTimelineMeta {
+  cacheState?: "none" | "partial" | "complete";
+  complete?: boolean;
+  includeLineage?: boolean;
+  lineagePath?: string[];
+  cachedSessionCount?: number;
+  itemCount?: number;
+}
+
 export interface TaskExecutionTrace {
   taskId: string;
   sessionId: string | null;
@@ -3531,6 +3752,8 @@ export interface TaskExecutionTrace {
   messageLimit?: number;
   segments: ExecutionTraceSegment[];
   messages?: ExecutionTraceMessage[];
+  timeline?: ExecutionTraceTimelineItem[];
+  timelineMeta?: ExecutionTraceTimelineMeta;
   hookExecutions: Array<{
     hookId: string;
     trigger: string;
@@ -3555,10 +3778,17 @@ export async function getTaskExecutionTrace(projectId: string, taskId: string) {
   );
 }
 
-export async function getTaskExecutionTraceView(taskId: string, sessionId?: string) {
+export async function getTaskExecutionTraceView(
+  taskId: string,
+  sessionId?: string,
+  options?: { includeLineage?: boolean },
+) {
   const params = new URLSearchParams();
   if (sessionId) {
     params.set("sessionId", sessionId);
+  }
+  if (options?.includeLineage === false) {
+    params.set("includeLineage", "false");
   }
   const query = params.toString();
   return request<TaskExecutionTrace>(

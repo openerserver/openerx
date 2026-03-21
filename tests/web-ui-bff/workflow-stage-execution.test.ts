@@ -124,7 +124,7 @@ describe("workflow-stage-execution", () => {
 
   test("persistWorkflowStageExecutionOutcome advances to next stage when completion marker exists", async () => {
     cpFetchMock.mockImplementation(async (path: string, options?: FetchOptions) => {
-      if (path === "/api/tasks/task-2" && !options?.method) {
+      if (path === "/api/project-tree/tasks/task-2" && !options?.method) {
         return ok({
           id: "task-2",
           title: "Clarify Task",
@@ -265,7 +265,7 @@ describe("workflow-stage-execution", () => {
         });
       }
 
-      if (path === "/api/tasks/task-3" && !options?.method) {
+      if (path === "/api/project-tree/tasks/task-3" && !options?.method) {
         return ok({
           id: "task-3",
           title: "Clarify Task",
@@ -436,7 +436,7 @@ describe("workflow-stage-execution", () => {
         });
       }
 
-      if (path === "/api/tasks/task-5" && !options?.method) {
+      if (path === "/api/project-tree/tasks/task-5" && !options?.method) {
         return ok({
           id: "task-5",
           title: "Clarify Task",
@@ -510,7 +510,7 @@ describe("workflow-stage-execution", () => {
 
   test("persistWorkflowStageExecutionOutcome does not advance when autoAdvanceStages is disabled", async () => {
     cpFetchMock.mockImplementation(async (path: string, options?: FetchOptions) => {
-      if (path === "/api/tasks/task-6" && !options?.method) {
+      if (path === "/api/project-tree/tasks/task-6" && !options?.method) {
         return ok({
           id: "task-6",
           title: "Clarify Task",

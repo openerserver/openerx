@@ -65,6 +65,44 @@ async function fulfillJson(route: Route, payload: unknown) {
   });
 }
 
+function buildExecutionTracePayload() {
+  const messages = [
+    {
+      info: {
+        id: "msg-user-1",
+        role: "user",
+        time: { created: "2026-03-17T08:02:00.000Z" },
+      },
+      parts: [{ type: "text", text: "请继续排查核心平台执行抖动" }],
+    },
+    {
+      info: {
+        id: "msg-assistant-1",
+        role: "assistant",
+        agent: "oracle-enterprise",
+        time: {
+          created: "2026-03-17T08:03:00.000Z",
+          completed: "2026-03-17T08:04:00.000Z",
+        },
+      },
+      parts: [{ type: "text", text: "已定位到账本批次并完成风险归因。" }],
+    },
+  ];
+
+  return {
+    taskId: "task-alpha-1",
+    sessionId: "session-alpha-1",
+    segments: [],
+    messages: messages.map((entry) => ({
+      id: String(entry.info.id),
+      role: String(entry.info.role),
+      text: String((entry.parts[0] as { text: string }).text),
+      createdAt: String(entry.info.time.created),
+      raw: entry,
+    })),
+  };
+}
+
 async function installDashboardToTaskDetailMocks(page: Page) {
   await page.route("**/api/**", async (route) => {
     const url = route.request().url();
@@ -241,7 +279,7 @@ async function installDashboardToTaskDetailMocks(page: Page) {
     await fulfillJson(route, buildTask("task-alpha-1"));
   });
 
-  await page.route("**/api/tasks/task-alpha-1/sessions", async (route) => {
+  await page.route("**/api/tasks/task-alpha-1/branches", async (route) => {
     await fulfillJson(route, {
       data: [
         {
@@ -256,7 +294,7 @@ async function installDashboardToTaskDetailMocks(page: Page) {
     });
   });
 
-  await page.route("**/api/tasks/task-alpha-1/session-tree", async (route) => {
+  await page.route("**/api/tasks/task-alpha-1/branch-lineage", async (route) => {
     await fulfillJson(route, {
       data: [
         {
@@ -280,31 +318,8 @@ async function installDashboardToTaskDetailMocks(page: Page) {
     });
   });
 
-  await page.route("**/api/tasks/task-alpha-1/sessions/session-alpha-1/messages", async (route) => {
-    await fulfillJson(route, {
-      data: [
-        {
-          info: {
-            id: "msg-user-1",
-            role: "user",
-            time: { created: "2026-03-17T08:02:00.000Z" },
-          },
-          parts: [{ type: "text", text: "请继续排查核心平台执行抖动" }],
-        },
-        {
-          info: {
-            id: "msg-assistant-1",
-            role: "assistant",
-            agent: "oracle-enterprise",
-            time: {
-              created: "2026-03-17T08:03:00.000Z",
-              completed: "2026-03-17T08:04:00.000Z",
-            },
-          },
-          parts: [{ type: "text", text: "已定位到账本批次并完成风险归因。" }],
-        },
-      ],
-    });
+  await page.route("**/api/tasks/task-alpha-1/execution-trace**", async (route) => {
+    await fulfillJson(route, buildExecutionTracePayload());
   });
 
   await page.route("**/api/tasks/task-alpha-1/pipeline**", async (route) => {

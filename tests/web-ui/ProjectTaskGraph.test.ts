@@ -1,5 +1,5 @@
-import { flushPromises, mount } from "@vue/test-utils";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defineComponent, h } from "vue";
 
 class ResizeObserverMock {
@@ -232,17 +232,27 @@ async function mountPage() {
       },
     },
   });
+  mountedWrappers.push(wrapper);
   await flushPromises();
   await flushPromises();
   return wrapper;
 }
 
+const mountedWrappers: VueWrapper[] = [];
+
 describe("ProjectTaskGraph", () => {
   beforeEach(() => {
+    vi.useRealTimers();
     vi.clearAllMocks();
     routeState.params = { projectId: "proj-default" };
     realtimeStoreMock.connected = true;
     realtimeStoreMock.events = [];
+  });
+
+  afterEach(() => {
+    while (mountedWrappers.length > 0) {
+      mountedWrappers.pop()?.unmount();
+    }
   });
 
   it("folds large stage groups by default", async () => {

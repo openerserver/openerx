@@ -193,7 +193,7 @@ export async function recordPaidExecutionRuntimeUsage(
   }
 
   const taskResult = await cpFetch<TaskGuardRecord>(
-    `/api/tasks/${encodeURIComponent(input.taskId)}`,
+    `/api/project-tree/tasks/${encodeURIComponent(input.taskId)}`,
     {
       authorization: input.authorization,
     },

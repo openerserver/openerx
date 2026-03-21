@@ -1,9 +1,11 @@
 import { zValidator } from "@hono/zod-validator";
-import { and, asc, desc, eq, gt, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, lte, or, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 import { db } from "../../db";
 import {
+  type ProjectTreeLinkType,
+  type ProjectTreeNodeType,
   type ProjectSettings,
   approvalTickets,
   auditEvents,
@@ -13,19 +15,26 @@ import {
   organizations,
   paidExecutionLeases,
   projectRoles,
-  projectTaskRelations,
+  projectTreeBranches,
+  projectTreeLinks,
+  projectTreeNodes,
   projects,
   repositories,
   repositoryCredentials,
   runtimeUsageBaselines,
   runtimeUsageLedgerSteps,
   runtimeUsageLedgers,
-  tasks,
   users,
   workflowTemplates,
 } from "../../db/schema";
 import { type AppEnv, type JWTPayload, authMiddleware } from "../../middleware/auth";
 import { requireProjectRole, requireRole } from "../../middleware/rbac";
+import {
+  createProjectTreeChildNode,
+  ensureProjectRootNode,
+  getProjectRootNodeId,
+} from "../project-tree/storage";
+import { type TaskTreeRecord, loadTaskTreeRecords } from "../project-tree/task-view";
 
 export const projectRoutes = new Hono<AppEnv>();
 
@@ -115,6 +124,51 @@ const revokePaidExecutionLeaseSchema = z.object({
   reason: z.string().trim().max(500).optional(),
 });
 
+const projectTreeNodeTypeSchema = z.enum([
+  "project_root",
+  "task",
+  "session",
+  "message",
+  "context",
+  "fork_point",
+]);
+
+const projectTreeLinkTypeSchema = z.enum([
+  "depends-on",
+  "blocks",
+  "cites",
+  "forked-from",
+  "spawned",
+  "related",
+]);
+
+const createProjectTreeChildNodeSchema = z.object({
+  id: z.string().min(1).optional(),
+  nodeType: projectTreeNodeTypeSchema,
+  role: z.string().min(1).max(50).optional(),
+  contentText: z.string().max(50000).optional(),
+  contentJson: z.record(z.unknown()).optional(),
+  tokenCount: z.number().int().min(0).optional(),
+  runtimeSessionId: z.string().min(1).optional(),
+  runtimeMessageId: z.string().min(1).optional(),
+  branchName: z.string().max(200).optional(),
+  isActive: z.boolean().optional(),
+  archivedAt: z.string().min(1).optional(),
+});
+
+const createProjectTreeLinkSchema = z.object({
+  targetNodeId: z.string().min(1),
+  targetProjectId: z.string().min(1).optional(),
+  linkType: projectTreeLinkTypeSchema,
+  metadata: z.record(z.unknown()).optional(),
+  bidirectional: z.boolean().optional(),
+});
+
+const updateProjectTreeBranchSchema = z.object({
+  headNodeId: z.string().min(1),
+  isDefault: z.boolean().optional(),
+});
+
 const runtimeUsageLedgerStatusSchema = z.enum(["running", "completed", "failed", "cancelled"]);
 const runtimeUsageLedgerStepTypeSchema = z.enum(["execution", "judge", "hook", "resume", "other"]);
 const runtimeUsageLedgerStepStatusSchema = z.enum(["pending", "completed", "failed", "skipped"]);
@@ -171,20 +225,6 @@ const runtimeUsageBaselineMatchScopeSchema = z.enum([
   "project",
 ]);
 
-const taskRelationTypeSchema = z.enum(["depends-on", "blocks", "spawned-from"]);
-const taskRelationSourceSchema = z.enum(["manual", "system", "task-create"]);
-const upsertProjectTaskRelationsSchema = z.object({
-  relations: z.array(
-    z.object({
-      id: z.string().min(1).optional(),
-      sourceTaskId: z.string().min(1),
-      targetTaskId: z.string().min(1),
-      type: taskRelationTypeSchema,
-      source: taskRelationSourceSchema.optional(),
-      metadata: z.record(z.unknown()).optional(),
-    }),
-  ),
-});
 
 function normalizeProjectSettings(settings: unknown): ProjectSettings | null | undefined {
   if (settings == null) {
@@ -720,23 +760,6 @@ async function getActivePaidExecutionLease(projectId: string) {
   };
 }
 
-async function validateProjectTaskRelationEndpoints(projectId: string, taskIds: string[]) {
-  if (taskIds.length === 0) {
-    return null;
-  }
-
-  const rows = await db.query.tasks.findMany({
-    where: inArray(tasks.id, taskIds),
-  });
-  if (rows.length !== taskIds.length) {
-    return { error: "One or more related tasks do not exist" as const };
-  }
-  if (rows.some((task) => task.projectId !== projectId)) {
-    return { error: "Related tasks must belong to the same project" as const };
-  }
-  return null;
-}
-
 type OverviewProjectStatus = "healthy" | "pending_config" | "archived" | "error";
 type OverviewConfigStatus = "configured" | "pending" | "risk";
 type OverviewSortBy = "last_activity_desc" | "created_at_desc" | "name_asc";
@@ -876,7 +899,7 @@ function groupByProjectId<T extends { projectId: string }>(items: T[]) {
 }
 
 function mapApprovalsByProject(
-  allTasks: (typeof tasks.$inferSelect)[],
+  allTasks: Array<Pick<TaskTreeRecord, "id" | "projectId">>,
   allPendingApprovals: (typeof approvalTickets.$inferSelect)[],
   projectIds: string[],
 ) {
@@ -920,7 +943,7 @@ async function loadOverviewDependencies(projectIds: string[]) {
     db.query.repositoryCredentials.findMany({
       where: inArray(repositoryCredentials.projectId, projectIds),
     }),
-    db.query.tasks.findMany({ where: inArray(tasks.projectId, projectIds) }),
+    loadTaskTreeRecords({ projectIds }),
     db.query.approvalTickets.findMany({ where: eq(approvalTickets.status, "pending") }),
     db.query.budgetConfigs.findMany({ where: inArray(budgetConfigs.projectId, projectIds) }),
     db.query.costRecords.findMany({ where: inArray(costRecords.projectId, projectIds) }),
@@ -1068,7 +1091,7 @@ function deriveOverviewStatus(
 
 function getProjectLastActivity(
   project: typeof projects.$inferSelect,
-  projectTasks: (typeof tasks.$inferSelect)[],
+  projectTasks: TaskTreeRecord[],
 ) {
   let lastActivityAt: string | null = null;
 
@@ -1094,7 +1117,7 @@ function getProjectOverviewResources(
     envsByProject: Map<string, (typeof environments.$inferSelect)[]>;
     reposByProject: Map<string, (typeof repositories.$inferSelect)[]>;
     credsByProject: Map<string, (typeof repositoryCredentials.$inferSelect)[]>;
-    tasksByProject: Map<string, (typeof tasks.$inferSelect)[]>;
+    tasksByProject: Map<string, TaskTreeRecord[]>;
     budgetsByProject: Map<string, (typeof budgetConfigs.$inferSelect)[]>;
     costsByProject: Map<string, (typeof costRecords.$inferSelect)[]>;
     approvalsByProject: Map<string, (typeof approvalTickets.$inferSelect)[]>;
@@ -1166,7 +1189,7 @@ function buildOverviewItem(
     envsByProject: Map<string, (typeof environments.$inferSelect)[]>;
     reposByProject: Map<string, (typeof repositories.$inferSelect)[]>;
     credsByProject: Map<string, (typeof repositoryCredentials.$inferSelect)[]>;
-    tasksByProject: Map<string, (typeof tasks.$inferSelect)[]>;
+    tasksByProject: Map<string, TaskTreeRecord[]>;
     budgetsByProject: Map<string, (typeof budgetConfigs.$inferSelect)[]>;
     costsByProject: Map<string, (typeof costRecords.$inferSelect)[]>;
     approvalsByProject: Map<string, (typeof approvalTickets.$inferSelect)[]>;
@@ -1521,7 +1544,358 @@ projectRoutes.post(
       role: "project_admin",
     });
 
-    return c.json({ id, ...body, createdAt }, 201);
+    await ensureProjectRootNode(id);
+
+    return c.json({ id, rootNodeId: getProjectRootNodeId(id), ...body, createdAt }, 201);
+  },
+);
+
+projectRoutes.get("/:projectId/tree", requireProjectRole("projectId", "viewer"), async (c) => {
+  const projectId = c.req.param("projectId");
+  const rawDepth = c.req.query("depth");
+  const requestedNodeType = c.req.query("nodeType");
+  const parsedDepth = rawDepth == null ? null : Number(rawDepth);
+
+  await ensureProjectRootNode(projectId);
+
+  const conditions = [eq(projectTreeNodes.projectId, projectId)];
+  if (requestedNodeType) {
+    conditions.push(eq(projectTreeNodes.nodeType, requestedNodeType as typeof projectTreeNodes.$inferSelect.nodeType));
+  }
+  if (parsedDepth != null && Number.isFinite(parsedDepth) && parsedDepth >= 0) {
+    conditions.push(lte(projectTreeNodes.depth, parsedDepth));
+  }
+
+  const nodes = await db
+    .select()
+    .from(projectTreeNodes)
+    .where(and(...conditions))
+    .orderBy(asc(projectTreeNodes.depth), asc(projectTreeNodes.createdAt));
+
+  return c.json({ data: nodes });
+});
+
+projectRoutes.get(
+  "/:projectId/tree/:nodeId",
+  requireProjectRole("projectId", "viewer"),
+  async (c) => {
+    const projectId = c.req.param("projectId");
+    const nodeId = c.req.param("nodeId");
+
+    const node = await db.query.projectTreeNodes.findFirst({
+      where: and(eq(projectTreeNodes.projectId, projectId), eq(projectTreeNodes.id, nodeId)),
+    });
+
+    if (!node) {
+      return c.json({ error: "Tree node not found" }, 404);
+    }
+
+    return c.json(node);
+  },
+);
+
+projectRoutes.get(
+  "/:projectId/tree/:nodeId/children",
+  requireProjectRole("projectId", "viewer"),
+  async (c) => {
+    const projectId = c.req.param("projectId");
+    const nodeId = c.req.param("nodeId");
+
+    const node = await db.query.projectTreeNodes.findFirst({
+      where: and(eq(projectTreeNodes.projectId, projectId), eq(projectTreeNodes.id, nodeId)),
+    });
+
+    if (!node) {
+      return c.json({ error: "Tree node not found" }, 404);
+    }
+
+    const children = await db
+      .select()
+      .from(projectTreeNodes)
+      .where(and(eq(projectTreeNodes.projectId, projectId), eq(projectTreeNodes.parentId, nodeId)))
+      .orderBy(asc(projectTreeNodes.createdAt));
+
+    return c.json({ data: children });
+  },
+);
+
+projectRoutes.post(
+  "/:projectId/tree/:nodeId/children",
+  requireProjectRole("projectId", "developer"),
+  zValidator("json", createProjectTreeChildNodeSchema),
+  async (c) => {
+    const projectId = c.req.param("projectId");
+    const nodeId = c.req.param("nodeId");
+    const body = c.req.valid("json");
+
+    const created = await createProjectTreeChildNode({
+      projectId,
+      parentId: nodeId,
+      id: body.id,
+      nodeType: body.nodeType as ProjectTreeNodeType,
+      role: body.role ?? null,
+      contentText: body.contentText ?? null,
+      contentJson: body.contentJson ?? null,
+      tokenCount: body.tokenCount ?? null,
+      runtimeSessionId: body.runtimeSessionId ?? null,
+      runtimeMessageId: body.runtimeMessageId ?? null,
+      branchName: body.branchName ?? null,
+      isActive: body.isActive ?? true,
+      archivedAt: body.archivedAt ?? null,
+    });
+
+    return c.json(created, 201);
+  },
+);
+
+projectRoutes.get(
+  "/:projectId/tree/:nodeId/ancestors",
+  requireProjectRole("projectId", "viewer"),
+  async (c) => {
+    const projectId = c.req.param("projectId");
+    const nodeId = c.req.param("nodeId");
+
+    const node = await db.query.projectTreeNodes.findFirst({
+      where: and(eq(projectTreeNodes.projectId, projectId), eq(projectTreeNodes.id, nodeId)),
+    });
+
+    if (!node) {
+      return c.json({ error: "Tree node not found" }, 404);
+    }
+
+    const ancestors = await db
+      .select()
+      .from(projectTreeNodes)
+      .where(
+        and(
+          eq(projectTreeNodes.projectId, projectId),
+          sql<boolean>`${projectTreeNodes.path} @> CAST(${node.path} AS ltree)`,
+        ),
+      )
+      .orderBy(asc(projectTreeNodes.depth), asc(projectTreeNodes.createdAt));
+
+    return c.json({ data: ancestors });
+  },
+);
+
+projectRoutes.get(
+  "/:projectId/branches",
+  requireProjectRole("projectId", "viewer"),
+  async (c) => {
+    const projectId = c.req.param("projectId");
+
+    const branches = await db
+      .select()
+      .from(projectTreeBranches)
+      .where(eq(projectTreeBranches.projectId, projectId))
+      .orderBy(desc(projectTreeBranches.isDefault), asc(projectTreeBranches.branchName));
+
+    return c.json({ data: branches });
+  },
+);
+
+projectRoutes.put(
+  "/:projectId/branches/:branchId",
+  requireProjectRole("projectId", "developer"),
+  zValidator("json", updateProjectTreeBranchSchema),
+  async (c) => {
+    const projectId = c.req.param("projectId");
+    const branchId = c.req.param("branchId");
+    const body = c.req.valid("json");
+    const now = new Date().toISOString();
+
+    const existing = await db.query.projectTreeBranches.findFirst({
+      where: and(eq(projectTreeBranches.id, branchId), eq(projectTreeBranches.projectId, projectId)),
+    });
+    if (!existing) {
+      return c.json({ error: "Branch not found" }, 404);
+    }
+
+    const headNode = await db.query.projectTreeNodes.findFirst({
+      where: and(
+        eq(projectTreeNodes.id, body.headNodeId),
+        eq(projectTreeNodes.projectId, projectId),
+      ),
+    });
+    if (!headNode) {
+      return c.json({ error: "Branch head node not found" }, 404);
+    }
+
+    if (body.isDefault) {
+      await db
+        .update(projectTreeBranches)
+        .set({ isDefault: false, updatedAt: now })
+        .where(eq(projectTreeBranches.projectId, projectId));
+    }
+
+    await db
+      .update(projectTreeBranches)
+      .set({
+        headNodeId: body.headNodeId,
+        isDefault: body.isDefault ?? existing.isDefault,
+        updatedAt: now,
+      })
+      .where(eq(projectTreeBranches.id, branchId));
+
+    const updated = await db.query.projectTreeBranches.findFirst({
+      where: eq(projectTreeBranches.id, branchId),
+    });
+
+    return c.json(updated);
+  },
+);
+
+projectRoutes.get(
+  "/:projectId/tree/:nodeId/links",
+  requireProjectRole("projectId", "viewer"),
+  async (c) => {
+    const projectId = c.req.param("projectId");
+    const nodeId = c.req.param("nodeId");
+
+    const node = await db.query.projectTreeNodes.findFirst({
+      where: and(eq(projectTreeNodes.projectId, projectId), eq(projectTreeNodes.id, nodeId)),
+    });
+    if (!node) {
+      return c.json({ error: "Tree node not found" }, 404);
+    }
+
+    const links = await db
+      .select()
+      .from(projectTreeLinks)
+      .where(or(eq(projectTreeLinks.sourceNodeId, nodeId), eq(projectTreeLinks.targetNodeId, nodeId)))
+      .orderBy(desc(projectTreeLinks.createdAt));
+
+    return c.json({
+      data: links.map((link) => ({
+        ...link,
+        direction:
+          link.sourceNodeId === nodeId
+            ? link.targetNodeId === nodeId
+              ? "self"
+              : "outgoing"
+            : "incoming",
+      })),
+    });
+  },
+);
+
+projectRoutes.post(
+  "/:projectId/tree/:nodeId/links",
+  requireProjectRole("projectId", "developer"),
+  zValidator("json", createProjectTreeLinkSchema),
+  async (c) => {
+    const user = c.get("user");
+    const projectId = c.req.param("projectId");
+    const nodeId = c.req.param("nodeId");
+    const body = c.req.valid("json");
+    const targetProjectId = body.targetProjectId ?? projectId;
+
+    const sourceNode = await db.query.projectTreeNodes.findFirst({
+      where: and(eq(projectTreeNodes.projectId, projectId), eq(projectTreeNodes.id, nodeId)),
+    });
+    if (!sourceNode) {
+      return c.json({ error: "Source tree node not found" }, 404);
+    }
+
+    const visibleTargetProject =
+      targetProjectId === projectId
+        ? await getProjectOrNull(projectId)
+        : await getVisibleProjectOrNull(user, targetProjectId);
+    if (!visibleTargetProject) {
+      return c.json({ error: "Target project not found or inaccessible" }, 404);
+    }
+
+    const targetNode = await db.query.projectTreeNodes.findFirst({
+      where: and(
+        eq(projectTreeNodes.projectId, targetProjectId),
+        eq(projectTreeNodes.id, body.targetNodeId),
+      ),
+    });
+    if (!targetNode) {
+      return c.json({ error: "Target tree node not found" }, 404);
+    }
+
+    const existing = await db.query.projectTreeLinks.findFirst({
+      where: and(
+        eq(projectTreeLinks.sourceNodeId, nodeId),
+        eq(projectTreeLinks.targetNodeId, body.targetNodeId),
+        eq(projectTreeLinks.linkType, body.linkType as ProjectTreeLinkType),
+      ),
+    });
+    if (existing) {
+      return c.json(existing, 200);
+    }
+
+    const id = crypto.randomUUID();
+    const createdAt = new Date().toISOString();
+    await db.insert(projectTreeLinks).values({
+      id,
+      sourceNodeId: nodeId,
+      sourceProjectId: projectId,
+      targetNodeId: body.targetNodeId,
+      targetProjectId,
+      linkType: body.linkType as ProjectTreeLinkType,
+      metadata: body.metadata ?? null,
+      bidirectional: body.bidirectional ?? false,
+      createdBy: user.sub,
+      createdAt,
+    });
+
+    return c.json(
+      {
+        id,
+        sourceNodeId: nodeId,
+        sourceProjectId: projectId,
+        targetNodeId: body.targetNodeId,
+        targetProjectId,
+        linkType: body.linkType,
+        metadata: body.metadata ?? null,
+        bidirectional: body.bidirectional ?? false,
+        createdBy: user.sub,
+        createdAt,
+      },
+      201,
+    );
+  },
+);
+
+projectRoutes.get("/:projectId/links", requireProjectRole("projectId", "viewer"), async (c) => {
+  const projectId = c.req.param("projectId");
+
+  const links = await db
+    .select()
+    .from(projectTreeLinks)
+    .where(
+      or(
+        eq(projectTreeLinks.sourceProjectId, projectId),
+        eq(projectTreeLinks.targetProjectId, projectId),
+      ),
+    )
+    .orderBy(desc(projectTreeLinks.createdAt));
+
+  return c.json({ data: links });
+});
+
+projectRoutes.delete(
+  "/:projectId/links/:linkId",
+  requireProjectRole("projectId", "developer"),
+  async (c) => {
+    const projectId = c.req.param("projectId");
+    const linkId = c.req.param("linkId");
+
+    const existing = await db.query.projectTreeLinks.findFirst({
+      where: eq(projectTreeLinks.id, linkId),
+    });
+    if (!existing) {
+      return c.json({ error: "Link not found" }, 404);
+    }
+
+    if (existing.sourceProjectId !== projectId && existing.targetProjectId !== projectId) {
+      return c.json({ error: "Link not found in this project" }, 404);
+    }
+
+    await db.delete(projectTreeLinks).where(eq(projectTreeLinks.id, linkId));
+    return c.json({ ok: true });
   },
 );
 
@@ -1739,106 +2113,6 @@ projectRoutes.get(
   },
 );
 
-projectRoutes.get(
-  "/:projectId/task-relations",
-  requireProjectRole("projectId", "viewer"),
-  async (c) => {
-    const projectId = c.req.param("projectId");
-    const rows = await db.query.projectTaskRelations.findMany({
-      where: eq(projectTaskRelations.projectId, projectId),
-    });
-
-    return c.json({
-      data: rows.map((row) => ({
-        id: row.id,
-        projectId: row.projectId,
-        sourceTaskId: row.sourceTaskId,
-        targetTaskId: row.targetTaskId,
-        type: row.relationType,
-        source: row.relationSource,
-        metadata: row.metadata ?? null,
-        createdAt: row.createdAt,
-        updatedAt: row.updatedAt,
-      })),
-    });
-  },
-);
-
-projectRoutes.put(
-  "/:projectId/task-relations",
-  requireProjectRole("projectId", "developer"),
-  zValidator("json", upsertProjectTaskRelationsSchema),
-  async (c) => {
-    const projectId = c.req.param("projectId");
-    const body = c.req.valid("json");
-    const taskIds = Array.from(
-      new Set(body.relations.flatMap((relation) => [relation.sourceTaskId, relation.targetTaskId])),
-    );
-
-    const validationError = await validateProjectTaskRelationEndpoints(projectId, taskIds);
-    if (validationError) {
-      return c.json(validationError, 400);
-    }
-
-    const now = new Date().toISOString();
-    const upserted: Array<Record<string, unknown>> = [];
-
-    for (const relation of body.relations) {
-      const existing = await db.query.projectTaskRelations.findFirst({
-        where: and(
-          eq(projectTaskRelations.projectId, projectId),
-          eq(projectTaskRelations.sourceTaskId, relation.sourceTaskId),
-          eq(projectTaskRelations.targetTaskId, relation.targetTaskId),
-          eq(projectTaskRelations.relationType, relation.type),
-        ),
-      });
-
-      if (existing) {
-        await db
-          .update(projectTaskRelations)
-          .set({
-            relationSource: relation.source ?? existing.relationSource,
-            metadata: relation.metadata ?? existing.metadata,
-            updatedAt: now,
-          })
-          .where(eq(projectTaskRelations.id, existing.id));
-        upserted.push({
-          id: existing.id,
-          sourceTaskId: relation.sourceTaskId,
-          targetTaskId: relation.targetTaskId,
-          type: relation.type,
-          source: relation.source ?? existing.relationSource,
-          metadata: relation.metadata ?? existing.metadata ?? null,
-        });
-        continue;
-      }
-
-      const id = relation.id || crypto.randomUUID();
-      await db.insert(projectTaskRelations).values({
-        id,
-        projectId,
-        sourceTaskId: relation.sourceTaskId,
-        targetTaskId: relation.targetTaskId,
-        relationType: relation.type,
-        relationSource: relation.source ?? "manual",
-        metadata: relation.metadata ?? null,
-        createdAt: now,
-        updatedAt: now,
-      });
-      upserted.push({
-        id,
-        sourceTaskId: relation.sourceTaskId,
-        targetTaskId: relation.targetTaskId,
-        type: relation.type,
-        source: relation.source ?? "manual",
-        metadata: relation.metadata ?? null,
-      });
-    }
-
-    return c.json({ ok: true, data: upserted });
-  },
-);
-
 // GET /api/projects/:projectId
 projectRoutes.get("/:projectId/paid-execution-lease", async (c) => {
   const projectId = c.req.param("projectId");
@@ -1983,6 +2257,13 @@ projectRoutes.post(
 
     if (!project) {
       return c.json({ error: "Project not found" }, 404);
+    }
+
+    if (body.taskId) {
+      const [task] = await loadTaskTreeRecords({ taskIds: [body.taskId] });
+      if (!task || task.projectId !== projectId) {
+        return c.json({ error: "Task not found" }, 404);
+      }
     }
 
     const now = new Date().toISOString();

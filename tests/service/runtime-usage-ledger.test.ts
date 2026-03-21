@@ -10,6 +10,12 @@ const USERNAME = process.env.TEST_USERNAME || "admin";
 const PASSWORD = process.env.TEST_PASSWORD || "admin123!";
 const DB_PATH =
   process.env.TEST_DB_PATH || resolve(__dirname, "../../control-plane/service/data/openerx.db");
+const DATABASE_URL =
+  process.env.TEST_DATABASE_URL || process.env.DATABASE_URL || "postgres://127.0.0.1:5432/openerx";
+const DATABASE_DIALECT =
+  process.env.TEST_DATABASE_DIALECT ||
+  process.env.DATABASE_DIALECT ||
+  (/^(postgres|postgresql):\/\//i.test(DATABASE_URL) ? "postgres" : "sqlite");
 
 const createdTaskIds: string[] = [];
 const createdLedgerIds: string[] = [];
@@ -100,7 +106,11 @@ afterAll(async () => {
   const statements = [
     ...createdStepIds.map((id) => `DELETE FROM runtime_usage_ledger_steps WHERE id='${id}';`),
     ...createdLedgerIds.map((id) => `DELETE FROM runtime_usage_ledgers WHERE id='${id}';`),
-    ...createdTaskIds.map((id) => `DELETE FROM tasks WHERE id='${id}';`),
+    ...createdTaskIds.map((id) => `DELETE FROM project_tree_events WHERE node_id='${id}';`),
+    ...createdTaskIds.map(
+      (id) => `DELETE FROM project_tree_branches WHERE task_node_id='${id}' OR head_node_id='${id}';`,
+    ),
+    ...createdTaskIds.map((id) => `DELETE FROM project_tree_nodes WHERE id='${id}';`),
   ];
 
   if (statements.length === 0) {
@@ -109,7 +119,13 @@ afterAll(async () => {
 
   const { execSync } = await import("node:child_process");
   try {
-    execSync(`sqlite3 "${DB_PATH}" "${statements.join(" ")}"`, { timeout: 5000 });
+    if (DATABASE_DIALECT === "postgres") {
+      execSync(`psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 -c "${statements.join(" ")}"`, {
+        timeout: 5000,
+      });
+    } else {
+      execSync(`sqlite3 "${DB_PATH}" "${statements.join(" ")}"`, { timeout: 5000 });
+    }
   } catch {
     console.warn("Cleanup failed for runtime-usage-ledger.test.ts");
   }

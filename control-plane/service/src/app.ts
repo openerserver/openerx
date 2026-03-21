@@ -15,6 +15,7 @@ import { governanceRoutes } from "./modules/governance/routes";
 import { orgRoutes } from "./modules/orgs/routes";
 import { pluginRoutes } from "./modules/plugins/routes";
 import { policyRoutes } from "./modules/policies/routes";
+import { projectTreeRoutes } from "./modules/project-tree/routes";
 import { projectRoutes } from "./modules/projects/routes";
 import { repositoryRoutes } from "./modules/repositories/routes";
 import { roleAgentRoutes } from "./modules/role-agents/routes";
@@ -56,6 +57,7 @@ export function createControlPlaneApp() {
   app.route("/api/dashboard", dashboardRoutes);
   app.route("/api/approvals", approvalRoutes);
   app.route("/api/agent-runs", agentRunRoutes);
+  app.route("/api/project-tree", projectTreeRoutes);
   app.route("/api/tasks", taskRoutes);
   app.route("/api/tasks/:taskId/operating-runtime", taskOperatingRuntimeRoutes);
   app.route("/api/plugins", pluginRoutes);

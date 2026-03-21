@@ -434,9 +434,12 @@ function buildSpawnedTaskPrompt(args: {
 }
 
 async function fetchTask(taskId: string, authorization: string) {
-  const taskResult = await cpFetch<TaskPayload>(`/api/tasks/${encodeURIComponent(taskId)}`, {
-    authorization,
-  });
+  const taskResult = await cpFetch<TaskPayload>(
+    `/api/project-tree/tasks/${encodeURIComponent(taskId)}`,
+    {
+      authorization,
+    },
+  );
   return taskResult.ok ? taskResult.data : null;
 }
 

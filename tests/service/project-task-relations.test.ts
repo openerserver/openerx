@@ -10,18 +10,24 @@ const USERNAME = process.env.TEST_USERNAME || "admin";
 const PASSWORD = process.env.TEST_PASSWORD || "admin123!";
 const DB_PATH =
   process.env.TEST_DB_PATH || resolve(__dirname, "../../control-plane/service/data/openerx.db");
+const DATABASE_URL =
+  process.env.TEST_DATABASE_URL || process.env.DATABASE_URL || "postgres://127.0.0.1:5432/openerx";
+const DATABASE_DIALECT =
+  process.env.TEST_DATABASE_DIALECT ||
+  process.env.DATABASE_DIALECT ||
+  (/^(postgres|postgresql):\/\//i.test(DATABASE_URL) ? "postgres" : "sqlite");
 
 const createdTaskIds: string[] = [];
 const relationIds: string[] = [];
 let token = "";
 
-interface ProjectTaskRelationRecord {
+interface ProjectTreeLinkRecord {
   id: string;
-  projectId: string;
-  sourceTaskId: string;
-  targetTaskId: string;
-  type: "depends-on" | "blocks" | "spawned-from";
-  source: "manual" | "system" | "task-create";
+  sourceNodeId: string;
+  sourceProjectId: string;
+  targetNodeId: string;
+  targetProjectId: string;
+  linkType: "depends-on" | "blocks" | "cites" | "forked-from" | "spawned" | "related";
   metadata?: Record<string, unknown> | null;
 }
 
@@ -99,12 +105,15 @@ beforeAll(async () => {
 
 afterAll(async () => {
   const statements = [
-    ...relationIds.map((id) => `DELETE FROM project_task_relations WHERE id='${id}';`),
+    ...relationIds.map((id) => `DELETE FROM project_tree_links WHERE id='${id}';`),
     ...createdTaskIds.map(
-      (id) =>
-        `DELETE FROM project_task_relations WHERE source_task_id='${id}' OR target_task_id='${id}';`,
+      (id) => `DELETE FROM project_tree_links WHERE source_node_id='${id}' OR target_node_id='${id}';`,
     ),
-    ...createdTaskIds.map((id) => `DELETE FROM tasks WHERE id='${id}';`),
+    ...createdTaskIds.map((id) => `DELETE FROM project_tree_events WHERE node_id='${id}';`),
+    ...createdTaskIds.map(
+      (id) => `DELETE FROM project_tree_branches WHERE task_node_id='${id}' OR head_node_id='${id}';`,
+    ),
+    ...createdTaskIds.map((id) => `DELETE FROM project_tree_nodes WHERE id='${id}';`),
   ];
 
   if (statements.length === 0) {
@@ -113,14 +122,20 @@ afterAll(async () => {
 
   const { execSync } = await import("node:child_process");
   try {
-    execSync(`sqlite3 "${DB_PATH}" "${statements.join(" ")}"`, { timeout: 5000 });
+    if (DATABASE_DIALECT === "postgres") {
+      execSync(`psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 -c "${statements.join(" ")}"`, {
+        timeout: 5000,
+      });
+    } else {
+      execSync(`sqlite3 "${DB_PATH}" "${statements.join(" ")}"`, { timeout: 5000 });
+    }
   } catch {
     console.warn("Cleanup failed for project-task-relations.test.ts");
   }
 });
 
-describe("project task relations", () => {
-  test("persists relations on task creation and exposes them via project route", async () => {
+describe("project tree task links", () => {
+  test("persists task relations on create and exposes them via project links route", async () => {
     const upstreamTaskId = await createTask(`依赖源任务-${Date.now()}`);
     const blockedTaskId = await createTask(`阻塞目标任务-${Date.now()}`);
     const createdTaskId = await createTask(`派生任务-${Date.now()}`, [
@@ -142,70 +157,64 @@ describe("project task relations", () => {
       },
     ]);
 
-    const { data, status } = await authedRequest<{ data: ProjectTaskRelationRecord[] }>(
-      `/api/projects/${PROJECT_ID}/task-relations`,
+    const { data, status } = await authedRequest<{ data: ProjectTreeLinkRecord[] }>(
+      `/api/projects/${PROJECT_ID}/links`,
     );
 
     expect(status).toBe(200);
 
     const dependsOn = data.data.find(
       (relation) =>
-        relation.sourceTaskId === upstreamTaskId &&
-        relation.targetTaskId === createdTaskId &&
-        relation.type === "depends-on",
+        relation.sourceNodeId === upstreamTaskId &&
+        relation.targetNodeId === createdTaskId &&
+        relation.linkType === "depends-on",
     );
     const blocks = data.data.find(
       (relation) =>
-        relation.sourceTaskId === blockedTaskId &&
-        relation.targetTaskId === upstreamTaskId &&
-        relation.type === "blocks",
+        relation.sourceNodeId === blockedTaskId &&
+        relation.targetNodeId === upstreamTaskId &&
+        relation.linkType === "blocks",
     );
     const spawnedFrom = data.data.find(
       (relation) =>
-        relation.sourceTaskId === upstreamTaskId &&
-        relation.targetTaskId === createdTaskId &&
-        relation.type === "spawned-from",
+        relation.sourceNodeId === upstreamTaskId &&
+        relation.targetNodeId === createdTaskId &&
+        relation.linkType === "spawned",
     );
 
-    expect(dependsOn?.source).toBe("task-create");
-    expect(dependsOn?.metadata).toEqual({ reason: "wait-for-upstream" });
-    expect(blocks?.source).toBe("task-create");
-    expect(spawnedFrom?.source).toBe("task-create");
+    expect(dependsOn?.metadata).toEqual({
+      reason: "wait-for-upstream",
+      relationSource: "task-create",
+    });
+    expect(blocks?.metadata?.relationSource).toBe("task-create");
+    expect(spawnedFrom?.metadata?.relationSource).toBe("task-create");
 
     relationIds.push(dependsOn?.id, blocks?.id, spawnedFrom?.id);
   });
 
-  test("upserts project-level relations for existing tasks", async () => {
+  test("creates project-level manual links via tree link route", async () => {
     const sourceTaskId = await createTask(`批量关系源-${Date.now()}`);
     const targetTaskId = await createTask(`批量关系目标-${Date.now()}`);
 
-    const { data, status } = await authedRequest<{
-      ok: boolean;
-      data: ProjectTaskRelationRecord[];
-    }>(`/api/projects/${PROJECT_ID}/task-relations`, {
-      method: "PUT",
+    const { data, status } = await authedRequest<ProjectTreeLinkRecord>(
+      `/api/projects/${PROJECT_ID}/tree/${sourceTaskId}/links`,
+      {
+      method: "POST",
       body: JSON.stringify({
-        relations: [
-          {
-            sourceTaskId,
-            targetTaskId,
-            type: "depends-on",
-            source: "manual",
-            metadata: { source: "test" },
-          },
-        ],
+        targetNodeId: targetTaskId,
+        linkType: "depends-on",
+        metadata: { source: "test", relationSource: "manual" },
       }),
     });
 
-    expect(status).toBe(200);
-    expect(data.ok).toBe(true);
-    expect(data.data[0]?.type).toBe("depends-on");
-    expect(data.data[0]?.source).toBe("manual");
+    expect(status).toBe(201);
+    expect(data.linkType).toBe("depends-on");
+    expect(data.metadata).toEqual({ source: "test", relationSource: "manual" });
 
-    relationIds.push(String(data.data[0]?.id));
+    relationIds.push(String(data.id));
   });
 
-  test("expands relationContext into default cross-task relations", async () => {
+  test("expands relationContext into default cross-task tree links", async () => {
     const upstreamTaskId = await createTask(`协议依赖源-${Date.now()}`);
     const blockedTaskId = await createTask(`协议阻塞目标-${Date.now()}`);
 
@@ -217,36 +226,57 @@ describe("project task relations", () => {
       },
     });
 
-    const { data, status } = await authedRequest<{ data: ProjectTaskRelationRecord[] }>(
-      `/api/projects/${PROJECT_ID}/task-relations`,
+    const { data, status } = await authedRequest<{ data: ProjectTreeLinkRecord[] }>(
+      `/api/projects/${PROJECT_ID}/links`,
     );
 
     expect(status).toBe(200);
 
     const dependsOn = data.data.find(
       (relation) =>
-        relation.sourceTaskId === upstreamTaskId &&
-        relation.targetTaskId === createdTaskId &&
-        relation.type === "depends-on",
+        relation.sourceNodeId === upstreamTaskId &&
+        relation.targetNodeId === createdTaskId &&
+        relation.linkType === "depends-on",
     );
     const spawnedFrom = data.data.find(
       (relation) =>
-        relation.sourceTaskId === upstreamTaskId &&
-        relation.targetTaskId === createdTaskId &&
-        relation.type === "spawned-from",
+        relation.sourceNodeId === upstreamTaskId &&
+        relation.targetNodeId === createdTaskId &&
+        relation.linkType === "spawned",
     );
     const blocks = data.data.find(
       (relation) =>
-        relation.sourceTaskId === createdTaskId &&
-        relation.targetTaskId === blockedTaskId &&
-        relation.type === "blocks",
+        relation.sourceNodeId === createdTaskId &&
+        relation.targetNodeId === blockedTaskId &&
+        relation.linkType === "blocks",
     );
 
-    expect(dependsOn?.source).toBe("task-create");
-    expect(spawnedFrom?.source).toBe("task-create");
-    expect(blocks?.source).toBe("task-create");
+    expect(dependsOn?.metadata?.relationSource).toBe("task-create");
+    expect(spawnedFrom?.metadata?.relationSource).toBe("task-create");
+    expect(blocks?.metadata?.relationSource).toBe("task-create");
     expect(dependsOn?.metadata?.protocol).toBe("relation-context-v1");
 
     relationIds.push(dependsOn?.id, spawnedFrom?.id, blocks?.id);
+  });
+
+  test("rejects create-time relations that reference missing tasks", async () => {
+    const missingTaskId = `missing-task-${Date.now()}`;
+    const { data, status } = await authedRequest<{ error: string }>("/api/tasks", {
+      method: "POST",
+      body: JSON.stringify({
+        title: `非法关系任务-${Date.now()}`,
+        prompt: "关系校验",
+        projectId: PROJECT_ID,
+        relations: [
+          {
+            sourceTaskId: missingTaskId,
+            type: "depends-on",
+          },
+        ],
+      }),
+    });
+
+    expect(status).toBe(400);
+    expect(data.error).toBe(`Related task ${missingTaskId} not found in this project`);
   });
 });

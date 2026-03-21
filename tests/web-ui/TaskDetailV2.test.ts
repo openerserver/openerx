@@ -10,7 +10,7 @@ import {
   resolveEditableSequentialSteps,
   serializeTaskStrategy,
 } from "../../control-plane/web-ui/src/lib/taskExecutionMode";
-import { sessionTreeToFlow } from "../../control-plane/web-ui/src/composables/useSessionFlow";
+import { branchLineageToFlow } from "../../control-plane/web-ui/src/composables/useBranchLineageFlow";
 import {
   type TaskConversationMessageItem,
   normalizeSessionConversationItems,
@@ -18,7 +18,7 @@ import {
 } from "../../control-plane/web-ui/src/composables/useTaskMessages";
 
 const apiMocks = vi.hoisted(() => ({
-  getSessionMessages: vi.fn(),
+  getTaskConversationMessages: vi.fn(),
 }));
 
 const realtimeStoreMock = vi.hoisted(() => ({
@@ -35,7 +35,7 @@ vi.mock("../../control-plane/web-ui/src/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../control-plane/web-ui/src/lib/api")>();
   return {
     ...actual,
-    getSessionMessages: apiMocks.getSessionMessages,
+    getTaskConversationMessages: apiMocks.getTaskConversationMessages,
   };
 });
 
@@ -45,7 +45,7 @@ vi.mock("../../control-plane/web-ui/src/stores/realtime", () => ({
 
 describe("TaskDetailV2 composables", () => {
   beforeEach(() => {
-    apiMocks.getSessionMessages.mockReset();
+    apiMocks.getTaskConversationMessages.mockReset();
     realtimeStoreMock.events = [];
   });
 
@@ -88,7 +88,7 @@ describe("TaskDetailV2 composables", () => {
       },
     ];
 
-    const result = sessionTreeToFlow(tree, "session-child");
+    const result = branchLineageToFlow(tree, "session-child");
     const rootNode = result.nodes.find((node) => node.id === "session-root");
     const childNode = result.nodes.find((node) => node.id === "session-child");
 
@@ -100,7 +100,7 @@ describe("TaskDetailV2 composables", () => {
   });
 
   it("normalizes session messages into conversation items", async () => {
-    apiMocks.getSessionMessages.mockResolvedValue({
+    apiMocks.getTaskConversationMessages.mockResolvedValue({
       data: [
         {
           info: {
@@ -128,7 +128,7 @@ describe("TaskDetailV2 composables", () => {
 
     await flushPromises();
 
-    expect(apiMocks.getSessionMessages).toHaveBeenCalledWith("task-1", "session-1");
+    expect(apiMocks.getTaskConversationMessages).toHaveBeenCalledWith("task-1", "session-1");
     expect(state.conversationItems.value).toHaveLength(2);
     const firstItem = state.conversationItems.value[0] as TaskConversationMessageItem | undefined;
     const secondItem = state.conversationItems.value[1] as TaskConversationMessageItem | undefined;
@@ -138,7 +138,7 @@ describe("TaskDetailV2 composables", () => {
   });
 
   it("merges realtime assistant chunks into a streaming draft", async () => {
-    apiMocks.getSessionMessages.mockResolvedValue({
+    apiMocks.getTaskConversationMessages.mockResolvedValue({
       data: [
         {
           info: {
@@ -200,7 +200,7 @@ describe("TaskDetailV2 composables", () => {
   });
 
   it("keeps tool-only assistant messages and extracts tool summaries", async () => {
-    apiMocks.getSessionMessages.mockResolvedValue({
+    apiMocks.getTaskConversationMessages.mockResolvedValue({
       data: [
         {
           info: {
@@ -316,7 +316,7 @@ describe("TaskDetailV2 composables", () => {
   });
 
   it("extracts file path from apply_patch payloads", async () => {
-    apiMocks.getSessionMessages.mockResolvedValue({
+    apiMocks.getTaskConversationMessages.mockResolvedValue({
       data: [
         {
           info: {
@@ -359,7 +359,7 @@ describe("TaskDetailV2 composables", () => {
   });
 
   it("extracts file path from apply_patch output when patch input is unavailable", async () => {
-    apiMocks.getSessionMessages.mockResolvedValue({
+    apiMocks.getTaskConversationMessages.mockResolvedValue({
       data: [
         {
           info: {

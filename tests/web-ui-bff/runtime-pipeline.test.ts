@@ -23,6 +23,10 @@ mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-a
   getSessionMessages: getSessionMessagesMock,
 }));
 
+async function loadRuntimePipelineModule() {
+  return import("../../control-plane/web-ui-bff/src/lib/runtime-pipeline?runtime-pipeline-test");
+}
+
 function createExecutionPlan(overrides: Partial<ExecutionPlan> = {}): ExecutionPlan {
   return {
     templateId: "parallel-template",
@@ -103,7 +107,7 @@ describe("buildRuntimePipeline", () => {
     const strategy = createStrategy();
 
     cpFetchMock.mockImplementation(async (url: string) => {
-      if (url === "/api/tasks/task-failed") {
+      if (url === "/api/project-tree/tasks/task-failed") {
         return {
           ok: true,
           data: {
@@ -119,7 +123,7 @@ describe("buildRuntimePipeline", () => {
         };
       }
 
-      if (url === "/api/tasks/task-failed/task-sessions") {
+      if (url === "/api/tasks/task-failed/branches") {
         return {
           ok: true,
           data: {
@@ -154,9 +158,7 @@ describe("buildRuntimePipeline", () => {
 
     getSessionMessagesMock.mockResolvedValue({ ok: true, data: [] });
 
-    const { buildRuntimePipeline } = await import(
-      "../../control-plane/web-ui-bff/src/lib/runtime-pipeline"
-    );
+    const { buildRuntimePipeline } = await loadRuntimePipelineModule();
     const pipeline = await buildRuntimePipeline({
       taskId: "task-failed",
       authorization: "Bearer test",
@@ -178,12 +180,12 @@ describe("buildRuntimePipeline", () => {
     });
   });
 
-  test("aggregates hooks, planning, execution plan and graph nodes for the selected branch", async () => {
+  test("aggregates hooks, planning and execution plan stages for the selected branch", async () => {
     const plan = createExecutionPlan();
     const strategy = createStrategy();
 
     cpFetchMock.mockImplementation(async (url: string) => {
-      if (url === "/api/tasks/task-1") {
+      if (url === "/api/project-tree/tasks/task-1") {
         return {
           ok: true,
           data: {
@@ -197,7 +199,7 @@ describe("buildRuntimePipeline", () => {
         };
       }
 
-      if (url === "/api/tasks/task-1/task-sessions") {
+      if (url === "/api/tasks/task-1/branches") {
         return {
           ok: true,
           data: {
@@ -295,16 +297,17 @@ describe("buildRuntimePipeline", () => {
       ],
     });
 
-    const { buildRuntimePipeline } = await import(
-      "../../control-plane/web-ui-bff/src/lib/runtime-pipeline"
-    );
+    const { buildRuntimePipeline } = await loadRuntimePipelineModule();
     const pipeline = await buildRuntimePipeline({
       taskId: "task-1",
       sessionId: "ses-branch-1",
       authorization: "Bearer test",
     });
 
-    expect(getSessionMessagesMock).toHaveBeenCalledWith("ses-branch-1");
+    expect(getSessionMessagesMock).toHaveBeenCalledWith("ses-branch-1", {
+      taskId: "task-1",
+      authorization: "Bearer test",
+    });
     expect(pipeline.taskId).toBe("task-1");
     expect(pipeline.sessionId).toBe("ses-branch-1");
     expect(pipeline.branchName).toBe("feature/runtime");
@@ -317,7 +320,6 @@ describe("buildRuntimePipeline", () => {
       "execution",
       "execution",
       "judge",
-      "graph-node",
       "post-hook",
     ]);
 
@@ -328,7 +330,6 @@ describe("buildRuntimePipeline", () => {
       "候选 A",
       "候选 B",
       "评判 / 聚合",
-      "DAG · 编写实现",
       "执行后 Hook · reviewer",
     ]);
 
@@ -337,25 +338,25 @@ describe("buildRuntimePipeline", () => {
     );
     expect(runningCandidate).toMatchObject({
       status: "running",
-      graphNodeId: "node-1",
+      graphNodeId: null,
       sessionId: "ses-branch-1",
       output: "正在生成实现",
     });
 
     expect(pipeline.stages.find((stage) => stage.id === "graph:node-other")).toBeUndefined();
     expect(pipeline.summary).toMatchObject({
-      totalStages: 8,
+      totalStages: 7,
       completedStages: 4,
       failedStages: 0,
       currentStageId: "candidate:0:ses-branch-1",
-      totalTokens: { input: 210, output: 461 },
+      totalTokens: { input: 210, output: 140 },
       replanCount: 0,
     });
   });
 
   test("returns an empty idle pipeline when the requested session does not belong to the task", async () => {
     cpFetchMock.mockImplementation(async (url: string) => {
-      if (url === "/api/tasks/task-2") {
+      if (url === "/api/project-tree/tasks/task-2") {
         return {
           ok: true,
           data: {
@@ -369,7 +370,7 @@ describe("buildRuntimePipeline", () => {
         };
       }
 
-      if (url === "/api/tasks/task-2/task-sessions") {
+      if (url === "/api/tasks/task-2/branches") {
         return {
           ok: true,
           data: {
@@ -390,9 +391,7 @@ describe("buildRuntimePipeline", () => {
       throw new Error(`Unexpected cpFetch url: ${url}`);
     });
 
-    const { buildRuntimePipeline } = await import(
-      "../../control-plane/web-ui-bff/src/lib/runtime-pipeline"
-    );
+    const { buildRuntimePipeline } = await loadRuntimePipelineModule();
     const pipeline = await buildRuntimePipeline({
       taskId: "task-2",
       sessionId: "ses-not-owned",
@@ -415,12 +414,15 @@ describe("buildRuntimePipeline", () => {
         replanCount: 0,
       },
     });
-    expect(getSessionMessagesMock).toHaveBeenCalledWith("ses-not-owned");
+    expect(getSessionMessagesMock).toHaveBeenCalledWith("ses-not-owned", {
+      taskId: "task-2",
+      authorization: "Bearer test",
+    });
   });
 
   test("falls back to planning stages when the task has no execution plan", async () => {
     cpFetchMock.mockImplementation(async (url: string) => {
-      if (url === "/api/tasks/task-3") {
+      if (url === "/api/project-tree/tasks/task-3") {
         return {
           ok: true,
           data: {
@@ -436,7 +438,7 @@ describe("buildRuntimePipeline", () => {
         };
       }
 
-      if (url === "/api/tasks/task-3/task-sessions") {
+      if (url === "/api/tasks/task-3/branches") {
         return {
           ok: true,
           data: {
@@ -477,9 +479,7 @@ describe("buildRuntimePipeline", () => {
       ],
     });
 
-    const { buildRuntimePipeline } = await import(
-      "../../control-plane/web-ui-bff/src/lib/runtime-pipeline"
-    );
+    const { buildRuntimePipeline } = await loadRuntimePipelineModule();
     const pipeline = await buildRuntimePipeline({
       taskId: "task-3",
       authorization: "Bearer test",
@@ -503,7 +503,7 @@ describe("buildRuntimePipeline", () => {
     });
   });
 
-  test("associates graph nodes deterministically when multiple candidates share a session and leaves sessionless nodes standalone", async () => {
+  test("keeps duplicate-session candidates distinct without graph-node enrichment", async () => {
     const plan = createExecutionPlan({
       candidates: [
         {
@@ -523,7 +523,7 @@ describe("buildRuntimePipeline", () => {
     });
 
     cpFetchMock.mockImplementation(async (url: string) => {
-      if (url === "/api/tasks/task-4") {
+      if (url === "/api/project-tree/tasks/task-4") {
         return {
           ok: true,
           data: {
@@ -537,7 +537,7 @@ describe("buildRuntimePipeline", () => {
         };
       }
 
-      if (url === "/api/tasks/task-4/task-sessions") {
+      if (url === "/api/tasks/task-4/branches") {
         return {
           ok: true,
           data: {
@@ -606,9 +606,7 @@ describe("buildRuntimePipeline", () => {
 
     getSessionMessagesMock.mockResolvedValue({ ok: true, data: [] });
 
-    const { buildRuntimePipeline } = await import(
-      "../../control-plane/web-ui-bff/src/lib/runtime-pipeline"
-    );
+    const { buildRuntimePipeline } = await loadRuntimePipelineModule();
     const pipeline = await buildRuntimePipeline({
       taskId: "task-4",
       sessionId: "ses-shared",
@@ -617,20 +615,14 @@ describe("buildRuntimePipeline", () => {
 
     const firstCandidate = pipeline.stages.find((stage) => stage.id === "candidate:0:ses-shared");
     const secondCandidate = pipeline.stages.find((stage) => stage.id === "candidate:1:ses-shared");
-    const sessionlessNode = pipeline.stages.find((stage) => stage.id === "graph:node-no-session");
-
     expect(firstCandidate).toMatchObject({
-      graphNodeId: "node-shared-1",
+      graphNodeId: null,
       sessionId: "ses-shared",
     });
     expect(secondCandidate).toMatchObject({
-      graphNodeId: "node-shared-2",
+      graphNodeId: null,
       sessionId: "ses-shared",
     });
-    expect(sessionlessNode).toMatchObject({
-      type: "graph-node",
-      graphNodeId: "node-no-session",
-      output: "公共输出",
-    });
+    expect(pipeline.stages.find((stage) => stage.id === "graph:node-no-session")).toBeUndefined();
   });
 });

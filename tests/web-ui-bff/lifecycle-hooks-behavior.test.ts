@@ -111,6 +111,10 @@ const cpFetchMock = mock(async (_url: string, options?: { method?: string }) => 
 });
 const createInternalAuthorizationMock = mock(async () => "Bearer internal");
 const broadcastMock = mock(() => undefined);
+const patchAgentRunRecordMock = mock(async () => undefined);
+const recordAgentAuditMock = mock(async () => undefined);
+const recordPaidExecutionRuntimeUsageMock = mock(async () => ({ tripped: false }));
+const buildPipelineStageUpdatedEventsMock = mock(async () => [] as Array<Record<string, unknown>>);
 
 mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter", () => ({
   createSession: createSessionMock,
@@ -176,6 +180,21 @@ mock.module("../../control-plane/web-ui-bff/src/modules/realtime/dag-sync", () =
   syncGraphsForTask: mock(async () => undefined),
 }));
 
+mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/run-persistence", () => ({
+  createAgentRunRecord: mock(async () => undefined),
+  patchAgentRunRecord: patchAgentRunRecordMock,
+  recordAgentAudit: recordAgentAuditMock,
+  recordModelUsage: mock(async () => undefined),
+}));
+
+mock.module("../../control-plane/web-ui-bff/src/lib/paid-execution-runtime", () => ({
+  recordPaidExecutionRuntimeUsage: recordPaidExecutionRuntimeUsageMock,
+}));
+
+mock.module("../../control-plane/web-ui-bff/src/modules/realtime/pipeline-events", () => ({
+  buildPipelineStageUpdatedEvents: buildPipelineStageUpdatedEventsMock,
+}));
+
 function buildStrategy(overrides: Partial<OrchestrationStrategy> = {}): OrchestrationStrategy {
   return normalizeOrchestrationStrategy(overrides);
 }
@@ -198,6 +217,10 @@ beforeEach(() => {
   cpFetchMock.mockReset();
   createInternalAuthorizationMock.mockReset();
   broadcastMock.mockReset();
+  patchAgentRunRecordMock.mockReset();
+  recordAgentAuditMock.mockReset();
+  recordPaidExecutionRuntimeUsageMock.mockReset();
+  buildPipelineStageUpdatedEventsMock.mockReset();
 
   currentStrategy = buildStrategy({
     hooks: [
@@ -276,6 +299,10 @@ beforeEach(() => {
     },
   );
   createInternalAuthorizationMock.mockResolvedValue("Bearer internal");
+  patchAgentRunRecordMock.mockResolvedValue(undefined);
+  recordAgentAuditMock.mockResolvedValue(undefined);
+  recordPaidExecutionRuntimeUsageMock.mockResolvedValue({ tripped: false });
+  buildPipelineStageUpdatedEventsMock.mockResolvedValue([]);
 
   if (originalAllowPaidExecution === undefined) {
     process.env.ALLOW_PAID_MODEL_EXECUTION = undefined;
@@ -305,6 +332,10 @@ afterEach(() => {
   cpFetchMock.mockReset();
   createInternalAuthorizationMock.mockReset();
   broadcastMock.mockReset();
+  patchAgentRunRecordMock.mockReset();
+  recordAgentAuditMock.mockReset();
+  recordPaidExecutionRuntimeUsageMock.mockReset();
+  buildPipelineStageUpdatedEventsMock.mockReset();
 
   if (originalAllowPaidExecution === undefined) {
     process.env.ALLOW_PAID_MODEL_EXECUTION = undefined;
@@ -487,6 +518,10 @@ describe("executeLifecycleHooks behavior", () => {
       .mockResolvedValueOnce({ ok: false, error: "candidate B failed" });
 
     const { taskRoutes } = await loadTaskRoutesModule();
+    recordPaidExecutionRuntimeUsageMock.mockResolvedValueOnce({
+      tripped: true,
+      breakerReason: "Estimated paid execution budget exceeded.",
+    });
     const response = await taskRoutes.request("http://localhost/task-1/execute", {
       method: "POST",
       headers: { Authorization: "Bearer test" },
@@ -836,7 +871,7 @@ describe("executeLifecycleHooks behavior", () => {
 
     const lineageWrites = cpFetchMock.mock.calls.filter(
       ([url, options]) =>
-        url === "/api/tasks/task-1/task-sessions" &&
+        url === "/api/tasks/task-1/branches" &&
         (options as { method?: string } | undefined)?.method === "POST",
     );
     expect(lineageWrites).toHaveLength(2);
@@ -1013,7 +1048,7 @@ describe("executeLifecycleHooks behavior", () => {
 
     const lineageWrites = cpFetchMock.mock.calls.filter(
       ([url, options]) =>
-        url === "/api/tasks/task-1/task-sessions" &&
+        url === "/api/tasks/task-1/branches" &&
         (options as { method?: string } | undefined)?.method === "POST",
     );
     expect(lineageWrites).toHaveLength(3);
@@ -1077,7 +1112,7 @@ describe("executeLifecycleHooks behavior", () => {
 
     const lineageWrites = cpFetchMock.mock.calls.filter(
       ([url, options]) =>
-        url === "/api/tasks/task-1/task-sessions" &&
+        url === "/api/tasks/task-1/branches" &&
         (options as { method?: string } | undefined)?.method === "POST",
     );
     expect(lineageWrites).toHaveLength(3);
@@ -1130,7 +1165,7 @@ describe("executeLifecycleHooks behavior", () => {
 
     const lineageWrites = cpFetchMock.mock.calls.filter(
       ([url, options]) =>
-        url === "/api/tasks/task-1/task-sessions" &&
+        url === "/api/tasks/task-1/branches" &&
         (options as { method?: string } | undefined)?.method === "POST",
     );
     expect(lineageWrites).toHaveLength(2);
@@ -1240,6 +1275,10 @@ describe("executeLifecycleHooks behavior", () => {
         };
       },
     );
+    recordPaidExecutionRuntimeUsageMock.mockResolvedValue({
+      tripped: true,
+      breakerReason: "Estimated paid execution budget exceeded.",
+    });
 
     const { taskRoutes } = await loadTaskRoutesModule();
     const response = await taskRoutes.request("http://localhost/task-1/execute", {
@@ -1337,6 +1376,10 @@ describe("executeLifecycleHooks behavior", () => {
     );
 
     const { agentControlRoutes } = await loadAgentControlRoutesModule();
+    recordPaidExecutionRuntimeUsageMock.mockResolvedValueOnce({
+      tripped: true,
+      breakerReason: "Estimated paid execution budget exceeded.",
+    });
     const response = await agentControlRoutes.request("http://localhost/run-1/resume", {
       method: "POST",
     });

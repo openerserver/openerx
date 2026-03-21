@@ -1,15 +1,15 @@
 import { zValidator } from "@hono/zod-validator";
-import { count, desc, eq } from "drizzle-orm";
+import { and, count, desc, eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 import { db } from "../../db";
 import {
   bossDecisions,
   humanEscalations,
+  projectTreeNodes,
   projects,
   taskOperatingModes,
   taskWorkflowRuns,
-  tasks,
   workflowTemplates,
 } from "../../db/schema";
 import { type AppEnv, authMiddleware } from "../../middleware/auth";
@@ -114,8 +114,24 @@ function parseTaskStrategy(strategy: unknown) {
 }
 
 async function getTaskOrNull(taskId: string) {
-  const [task] = await db.select().from(tasks).where(eq(tasks.id, taskId)).limit(1);
-  return task ?? null;
+  const node = await db.query.projectTreeNodes.findFirst({
+    where: and(eq(projectTreeNodes.id, taskId), eq(projectTreeNodes.nodeType, "task")),
+  });
+
+  if (!node) {
+    return null;
+  }
+
+  const content =
+    node.contentJson && typeof node.contentJson === "object"
+      ? (node.contentJson as Record<string, unknown>)
+      : {};
+
+  return {
+    id: node.id,
+    projectId: node.projectId,
+    strategy: content.strategy ?? null,
+  };
 }
 
 async function getProjectDefaults(projectId: string): Promise<OperatingModeSelection | null> {

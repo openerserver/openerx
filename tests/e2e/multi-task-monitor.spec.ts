@@ -81,6 +81,22 @@ function buildMessages(sessionTime: string, assistantText: string) {
   };
 }
 
+function buildExecutionTrace(sessionTime: string, assistantText: string) {
+  const messages = buildMessages(sessionTime, assistantText).data;
+  return {
+    taskId: `task-${sessionTime}`,
+    sessionId: `session-${sessionTime}`,
+    segments: [],
+    messages: messages.map((entry) => ({
+      id: String(entry.info.id),
+      role: String(entry.info.role),
+      text: String((entry.parts[0] as { text: string }).text),
+      createdAt: String(entry.info.time.created),
+      raw: entry,
+    })),
+  };
+}
+
 function buildStagePipeline() {
   return {
     taskId: tasks.taskStage.id,
@@ -285,39 +301,39 @@ async function installMonitorMocks(page: Page) {
     await fulfillJson(route, tasks.taskFallbackLive);
   });
 
-  await page.route("**/api/tasks/task-stage-1/sessions", async (route) => {
+  await page.route("**/api/tasks/task-stage-1/branches", async (route) => {
     await fulfillJson(route, {
       data: [buildSession("session-stage", "主分支", "2026-03-14T08:09:00.000Z")],
     });
   });
 
-  await page.route("**/api/tasks/task-fallback-1/sessions", async (route) => {
+  await page.route("**/api/tasks/task-fallback-1/branches", async (route) => {
     await fulfillJson(route, {
       data: [buildSession("session-fallback-done", "回归分支", "2026-03-14T07:10:00.000Z")],
     });
   });
 
-  await page.route("**/api/tasks/task-fallback-2/sessions", async (route) => {
+  await page.route("**/api/tasks/task-fallback-2/branches", async (route) => {
     await fulfillJson(route, {
       data: [buildSession("session-fallback-live", "巡检分支", "2026-03-14T08:16:00.000Z")],
     });
   });
 
-  await page.route("**/api/tasks/task-stage-1/sessions/session-stage/messages", async (route) => {
-    await fulfillJson(route, buildMessages("2026-03-14T08:09:00.000Z", "认证修复仍在推进。"));
+  await page.route("**/api/tasks/task-stage-1/execution-trace**", async (route) => {
+    await fulfillJson(route, buildExecutionTrace("2026-03-14T08:09:00.000Z", "认证修复仍在推进。"));
   });
 
   await page.route(
-    "**/api/tasks/task-fallback-1/sessions/session-fallback-done/messages",
+    "**/api/tasks/task-fallback-1/execution-trace**",
     async (route) => {
-      await fulfillJson(route, buildMessages("2026-03-14T07:09:00.000Z", "构建修复记录已结束。"));
+      await fulfillJson(route, buildExecutionTrace("2026-03-14T07:09:00.000Z", "构建修复记录已结束。"));
     },
   );
 
   await page.route(
-    "**/api/tasks/task-fallback-2/sessions/session-fallback-live/messages",
+    "**/api/tasks/task-fallback-2/execution-trace**",
     async (route) => {
-      await fulfillJson(route, buildMessages("2026-03-14T08:16:00.000Z", "巡检任务仍在执行。"));
+      await fulfillJson(route, buildExecutionTrace("2026-03-14T08:16:00.000Z", "巡检任务仍在执行。"));
     },
   );
 
@@ -364,41 +380,41 @@ async function installDenseStatusMonitorMocks(page: Page) {
     await fulfillJson(route, tasks.taskCompleted2);
   });
 
-  await page.route("**/api/tasks/task-failed-2/sessions", async (route) => {
+  await page.route("**/api/tasks/task-failed-2/branches", async (route) => {
     await fulfillJson(route, {
       data: [buildSession("session-failed-2", "审批回退分支", "2026-03-14T06:55:00.000Z")],
     });
   });
-  await page.route("**/api/tasks/task-completed-1/sessions", async (route) => {
+  await page.route("**/api/tasks/task-completed-1/branches", async (route) => {
     await fulfillJson(route, {
       data: [buildSession("session-completed-1", "发布分支", "2026-03-14T05:48:00.000Z")],
     });
   });
-  await page.route("**/api/tasks/task-completed-2/sessions", async (route) => {
+  await page.route("**/api/tasks/task-completed-2/branches", async (route) => {
     await fulfillJson(route, {
       data: [buildSession("session-completed-2", "清理分支", "2026-03-14T04:52:00.000Z")],
     });
   });
 
   await page.route(
-    "**/api/tasks/task-failed-2/sessions/session-failed-2/messages",
+    "**/api/tasks/task-failed-2/execution-trace**",
     async (route) => {
       await fulfillJson(
         route,
-        buildMessages("2026-03-14T06:55:00.000Z", "审批回退已终止，等待人工介入。"),
+        buildExecutionTrace("2026-03-14T06:55:00.000Z", "审批回退已终止，等待人工介入。"),
       );
     },
   );
   await page.route(
-    "**/api/tasks/task-completed-1/sessions/session-completed-1/messages",
+    "**/api/tasks/task-completed-1/execution-trace**",
     async (route) => {
-      await fulfillJson(route, buildMessages("2026-03-14T05:48:00.000Z", "发布巡检已完成归档。"));
+      await fulfillJson(route, buildExecutionTrace("2026-03-14T05:48:00.000Z", "发布巡检已完成归档。"));
     },
   );
   await page.route(
-    "**/api/tasks/task-completed-2/sessions/session-completed-2/messages",
+    "**/api/tasks/task-completed-2/execution-trace**",
     async (route) => {
-      await fulfillJson(route, buildMessages("2026-03-14T04:52:00.000Z", "日志清理任务已结束。"));
+      await fulfillJson(route, buildExecutionTrace("2026-03-14T04:52:00.000Z", "日志清理任务已结束。"));
     },
   );
 

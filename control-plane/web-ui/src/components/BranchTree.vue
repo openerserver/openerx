@@ -1,12 +1,12 @@
 <template>
-  <div class="session-tree">
+  <div class="branch-tree">
     <a-empty v-if="treeNodes.length === 0" description="暂无分支记录" />
-    <div v-else class="session-tree__list">
-      <SessionTreeBranch
+    <div v-else class="branch-tree__list">
+      <BranchTreeItem
         v-for="node in treeNodes"
         :key="node.runtimeSessionId"
         :node="node"
-        :selected-session-id="selectedSessionId"
+        :selected-branch-session-id="selectedBranchSessionId"
         :task-status="taskStatus"
         :session-state-map="sessionStateMap"
         :depth="0"
@@ -22,11 +22,15 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
-import type { SessionTreeNode } from "../lib/api";
+import type { TaskBranchLineageNode } from "../lib/api";
+
+defineOptions({
+  name: "BranchTree",
+});
 
 const props = defineProps<{
-  tree: SessionTreeNode[];
-  selectedSessionId?: string;
+  tree: TaskBranchLineageNode[];
+  selectedBranchSessionId?: string;
   taskStatus?: string;
   sessionStateMap?: Record<
     string,
@@ -47,12 +51,12 @@ const emit = defineEmits<{
   (e: "archive", sessionId: string): void;
 }>();
 
-type DisplayNode = SessionTreeNode & { children: DisplayNode[]; _originalIndex: number };
+type DisplayNode = TaskBranchLineageNode & { children: DisplayNode[]; _originalIndex: number };
 
 const treeNodes = computed(() => buildDisplayTree(props.tree));
 
-function buildDisplayTree(nodes: SessionTreeNode[]): SessionTreeNode[] {
-  const flatNodes = flattenNodes(nodes);
+function buildDisplayTree(nodes: TaskBranchLineageNode[]): TaskBranchLineageNode[] {
+  const flatNodes = flattenBranchNodes(nodes);
   if (flatNodes.length <= 1) {
     return nodes;
   }
@@ -101,12 +105,12 @@ function buildDisplayTree(nodes: SessionTreeNode[]): SessionTreeNode[] {
   return roots;
 }
 
-function flattenNodes(nodes: SessionTreeNode[]): SessionTreeNode[] {
-  const result: SessionTreeNode[] = [];
+function flattenBranchNodes(nodes: TaskBranchLineageNode[]): TaskBranchLineageNode[] {
+  const result: TaskBranchLineageNode[] = [];
   for (const node of nodes) {
     result.push(node);
     if (node.children.length > 0) {
-      result.push(...flattenNodes(node.children));
+      result.push(...flattenBranchNodes(node.children));
     }
   }
   return result;
@@ -138,11 +142,11 @@ function onArchive(sessionId: string) {
 </script>
 
 <style scoped>
-.session-tree {
+.branch-tree {
   width: 100%;
 }
 
-.session-tree__list {
+.branch-tree__list {
   display: flex;
   flex-direction: column;
   gap: 2px;

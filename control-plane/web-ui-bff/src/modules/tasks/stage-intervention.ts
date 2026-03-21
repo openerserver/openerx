@@ -1,5 +1,6 @@
 import { cpFetch } from "../../lib/control-plane-client";
 import { runDetachedPrompt } from "../agent-control/opencode-adapter";
+import { fetchTaskWorkflowResources } from "./workflow-view";
 
 interface TaskRecord {
   id: string;
@@ -454,13 +455,6 @@ function buildRolePrompt(input: {
     .join("\n");
 }
 
-async function fetchTask(authorization: string, taskId: string) {
-  const result = await cpFetch<TaskRecord>(`/api/tasks/${encodeURIComponent(taskId)}`, {
-    authorization,
-  });
-  return result.ok ? result.data : null;
-}
-
 async function fetchTemplateStage(authorization: string, templateId: string, stageKey: string) {
   const result = await cpFetch<{ data?: WorkflowTemplateStageRecord[] }>(
     `/api/workflow-templates/${encodeURIComponent(templateId)}/stages`,
@@ -470,32 +464,6 @@ async function fetchTemplateStage(authorization: string, templateId: string, sta
     return null;
   }
   return (result.data?.data || []).find((stage) => stage.stageKey === stageKey) || null;
-}
-
-async function fetchWorkflowStages(authorization: string, taskId: string) {
-  const result = await cpFetch<TaskWorkflowPayload>(
-    `/api/tasks/${encodeURIComponent(taskId)}/workflow`,
-    {
-      authorization,
-    },
-  );
-  return result.ok ? result.data?.data?.stages || [] : [];
-}
-
-async function fetchExistingRoleConclusions(authorization: string, taskId: string) {
-  const result = await cpFetch<{ data?: RoleConclusionPayload[] }>(
-    `/api/tasks/${encodeURIComponent(taskId)}/role-conclusions`,
-    { authorization },
-  );
-  return result.ok ? result.data?.data || [] : [];
-}
-
-async function fetchExistingChangeRequests(authorization: string, taskId: string) {
-  const result = await cpFetch<{ data?: DeveloperChangeRequestPayload[] }>(
-    `/api/tasks/${encodeURIComponent(taskId)}/developer-change-requests`,
-    { authorization },
-  );
-  return result.ok ? result.data?.data || [] : [];
 }
 
 async function resolveRoleExecution(
@@ -783,13 +751,31 @@ async function processStageRoleIntervention(input: {
 export async function dispatchStageIntervention(
   input: StageInterventionInput,
 ): Promise<StageInterventionResult> {
-  const [task, stage, workflowStages, existingConclusions, existingRequests] = await Promise.all([
-    fetchTask(input.authorization, input.taskId),
+  const [taskResources, stage] = await Promise.all([
+    fetchTaskWorkflowResources({
+      taskId: input.taskId,
+      authorization: input.authorization,
+      includeTask: true,
+    }),
     fetchTemplateStage(input.authorization, input.templateId, input.stageKey),
-    fetchWorkflowStages(input.authorization, input.taskId),
-    fetchExistingRoleConclusions(input.authorization, input.taskId),
-    fetchExistingChangeRequests(input.authorization, input.taskId),
   ]);
+
+  const task =
+    taskResources.task?.id &&
+    taskResources.task?.title &&
+    taskResources.task?.prompt &&
+    taskResources.task?.projectId
+      ? {
+          id: taskResources.task.id,
+          title: taskResources.task.title,
+          prompt: taskResources.task.prompt,
+          projectId: taskResources.task.projectId,
+          result: taskResources.task.result ?? null,
+        }
+      : null;
+  const workflowStages = taskResources.stages as TaskWorkflowStageRecord[];
+  const existingConclusions = taskResources.conclusions as RoleConclusionPayload[];
+  const existingRequests = taskResources.requests as DeveloperChangeRequestPayload[];
 
   if (!task || !stage || !task.projectId) {
     return {

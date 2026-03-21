@@ -43,6 +43,48 @@
       "when": 1773902400000,
       "tag": "0005_mellow_turbine",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1773945600000,
+      "tag": "0006_project_tree_foundation",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1774015116020,
+      "tag": "0007_narrow_prism",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1774047600000,
+      "tag": "0008_retire_project_task_relations",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1774094400000,
+      "tag": "0009_task_fk_to_project_tree_nodes",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1774099800000,
+      "tag": "0010_drop_tasks_and_sessions",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1774101600000,
+      "tag": "0011_drop_task_sessions",
+      "breakpoints": true
     }
   ]
 }

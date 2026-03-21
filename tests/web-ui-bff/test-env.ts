@@ -68,10 +68,9 @@ export function buildTaskCleanupStatements(taskIds: string[]) {
       `DELETE FROM code_changes WHERE task_id='${id}';`,
       `DELETE FROM task_stage_runs WHERE workflow_run_id IN (SELECT id FROM task_workflow_runs WHERE task_id='${id}');`,
       `DELETE FROM task_workflow_runs WHERE task_id='${id}';`,
-      `DELETE FROM project_task_relations WHERE source_task_id='${id}' OR target_task_id='${id}';`,
+      `DELETE FROM project_tree_links WHERE source_node_id='${id}' OR target_node_id='${id}';`,
       `DELETE FROM task_edges WHERE task_id='${id}';`,
       `DELETE FROM task_nodes WHERE task_id='${id}';`,
-      `DELETE FROM task_sessions WHERE task_id='${id}';`,
       `DELETE FROM role_aggregate_conclusions WHERE task_id='${id}';`,
       `DELETE FROM developer_change_requests WHERE task_id='${id}';`,
       `DELETE FROM approval_tickets WHERE task_id='${id}';`,
@@ -79,7 +78,9 @@ export function buildTaskCleanupStatements(taskIds: string[]) {
       `DELETE FROM boss_decisions WHERE task_id='${id}';`,
       `DELETE FROM human_escalations WHERE task_id='${id}';`,
       `DELETE FROM agent_runs WHERE task_id='${id}';`,
-      `DELETE FROM tasks WHERE id='${id}';`,
+      `DELETE FROM project_tree_events WHERE node_id='${id}';`,
+      `DELETE FROM project_tree_branches WHERE task_node_id='${id}' OR head_node_id='${id}';`,
+      `DELETE FROM project_tree_nodes WHERE id='${id}';`,
     ];
   });
 }

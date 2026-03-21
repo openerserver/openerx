@@ -6,6 +6,7 @@ import { db } from "../../db";
 import { codeChanges, fileChanges } from "../../db/schema";
 import { type AppEnv, authMiddleware } from "../../middleware/auth";
 import { requireRole } from "../../middleware/rbac";
+import { loadTaskTreeRecord } from "../project-tree/task-view";
 
 export const codeChangeRoutes = new Hono<AppEnv>();
 
@@ -67,6 +68,10 @@ const createChangeSchema = z.object({
 
 codeChangeRoutes.post("/code-changes", zValidator("json", createChangeSchema), async (c) => {
   const body = c.req.valid("json");
+  const task = await loadTaskTreeRecord(body.taskId);
+  if (!task) {
+    return c.json({ error: "Task not found" }, 404);
+  }
   const changeId = crypto.randomUUID();
 
   await db.insert(codeChanges).values({

@@ -3,7 +3,6 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import postgres from "../../control-plane/service/node_modules/postgres";
-import { ensureLegacyRoleWorkflowMigrated } from "../../control-plane/service/src/modules/task-workflows/legacy-role-workflow-storage";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -17,10 +16,18 @@ const DB_PATH =
 const USE_POSTGRES = /^(postgres|postgresql):\/\//i.test(DATABASE_URL);
 const testDatabase = USE_POSTGRES ? null : new Database(DB_PATH, { create: true });
 const sql = USE_POSTGRES ? postgres(DATABASE_URL, { max: 1, prepare: false }) : null;
+let ensureLegacyRoleWorkflowMigrated: typeof import("../../control-plane/service/src/modules/task-workflows/legacy-role-workflow-storage").ensureLegacyRoleWorkflowMigrated;
 
 function toPostgresPlaceholders(query: string) {
   let index = 0;
-  return query.replace(/\?(\d+)?/g, () => `$${++index}`);
+  return query.replace(/\?(\d+)?/g, (_match, explicitIndex) => {
+    if (explicitIndex) {
+      return `$${Number(explicitIndex)}`;
+    }
+
+    index += 1;
+    return `$${index}`;
+  });
 }
 
 async function writeDb(query: string, params: unknown[]) {
@@ -88,7 +95,7 @@ const createdTaskIds: string[] = [];
 const createdWorkflowTemplateIds: string[] = [];
 
 async function createTask(token: string, title: string) {
-  const { data, status } = await authedRequest<{ id: string }>(token, "/api/tasks", {
+  const { data, status } = await authedRequest<{ id: string; nodeId: string }>(token, "/api/tasks", {
     method: "POST",
     body: JSON.stringify({
       title,
@@ -98,7 +105,7 @@ async function createTask(token: string, title: string) {
   });
   expect(status).toBe(201);
   createdTaskIds.push(data.id);
-  return data.id;
+  return data;
 }
 
 async function createWorkflowTemplateFixture(templateId: string, stageKeys: string[]) {
@@ -153,10 +160,12 @@ afterAll(async () => {
       await writeDb("DELETE FROM task_workflow_runs WHERE task_id = ?1", [taskId]);
       await writeDb("DELETE FROM developer_change_requests WHERE task_id = ?1", [taskId]);
       await writeDb("DELETE FROM role_aggregate_conclusions WHERE task_id = ?1", [taskId]);
-      await writeDb("DELETE FROM task_sessions WHERE task_id = ?1", [taskId]);
-      await writeDb("DELETE FROM audit_events WHERE task_id = ?1", [taskId]);
       await writeDb("DELETE FROM agent_runs WHERE task_id = ?1", [taskId]);
-      await writeDb("DELETE FROM tasks WHERE id = ?1", [taskId]);
+      await writeDb("DELETE FROM audit_events WHERE task_id = ?1", [taskId]);
+      await writeDb("DELETE FROM project_tree_links WHERE source_node_id = ?1 OR target_node_id = ?1", [taskId]);
+      await writeDb("DELETE FROM project_tree_events WHERE node_id = ?1", [taskId]);
+      await writeDb("DELETE FROM project_tree_branches WHERE task_node_id = ?1 OR head_node_id = ?1", [taskId]);
+      await writeDb("DELETE FROM project_tree_nodes WHERE id = ?1", [taskId]);
     }
 
     for (const templateId of createdWorkflowTemplateIds) {
@@ -174,12 +183,15 @@ afterAll(async () => {
 let token = "";
 
 beforeAll(async () => {
+  ({ ensureLegacyRoleWorkflowMigrated } = await import(
+    "../../control-plane/service/src/modules/task-workflows/legacy-role-workflow-storage"
+  ));
   token = await login();
 });
 
 describe("Role workflow storage (service)", () => {
   test("stores role conclusions and developer change requests in formal tables", async () => {
-    const taskId = await createTask(token, `role-workflow-${Date.now()}`);
+    const { id: taskId } = await createTask(token, `role-workflow-${Date.now()}`);
 
     const roleConclusion = {
       roleAgentId: "role.security",
@@ -274,12 +286,14 @@ describe("Role workflow storage (service)", () => {
   });
 
   test("lazily migrates legacy strategy role workflow data into formal tables", async () => {
-    const taskId = await createTask(token, `legacy-role-workflow-${Date.now()}`);
+    const { id: taskId } = await createTask(token, `legacy-role-workflow-${Date.now()}`);
+    const legacyConclusionId = `legacy-conclusion-${taskId}`;
+    const legacyRequestId = `legacy-request-${taskId}`;
 
     const legacyStrategy = {
       roleAggregateConclusions: [
         {
-          id: "legacy-conclusion-1",
+          id: legacyConclusionId,
           roleAgentId: "role.architect",
           stage: "design",
           aggregationStrategy: "merge-summary",
@@ -297,7 +311,7 @@ describe("Role workflow storage (service)", () => {
       ],
       developerChangeRequests: [
         {
-          id: "legacy-request-1",
+          id: legacyRequestId,
           sourceRoleAgentId: "role.qa",
           priority: "medium",
           title: "补充回归测试",
@@ -323,7 +337,7 @@ describe("Role workflow storage (service)", () => {
     }>(token, `/api/tasks/${taskId}/role-conclusions`);
     expect(migratedConclusions.status).toBe(200);
     expect(migratedConclusions.data.data).toEqual([
-      expect.objectContaining({ id: "legacy-conclusion-1", roleAgentId: "role.architect" }),
+      expect.objectContaining({ id: legacyConclusionId, roleAgentId: "role.architect" }),
     ]);
 
     const migratedRequests = await authedRequest<{
@@ -331,23 +345,27 @@ describe("Role workflow storage (service)", () => {
     }>(token, `/api/tasks/${taskId}/developer-change-requests`);
     expect(migratedRequests.status).toBe(200);
     expect(migratedRequests.data.data).toEqual([
-      expect.objectContaining({ id: "legacy-request-1", sourceRoleAgentId: "role.qa" }),
+      expect.objectContaining({ id: legacyRequestId, sourceRoleAgentId: "role.qa" }),
     ]);
 
-    const taskAfterMigration = await authedRequest<{ strategy?: string | null }>(
+    const taskAfterMigration = await authedRequest<{
+      strategy?: {
+        roleAggregateConclusions?: unknown;
+        developerChangeRequests?: unknown;
+      } | null;
+    }>(
       token,
-      `/api/tasks/${taskId}`,
+      `/api/project-tree/tasks/${taskId}`,
     );
     expect(taskAfterMigration.status).toBe(200);
-    const parsedStrategy = taskAfterMigration.data.strategy
-      ? JSON.parse(taskAfterMigration.data.strategy)
-      : {};
+    const parsedStrategy = taskAfterMigration.data.strategy ?? {};
     expect(parsedStrategy.roleAggregateConclusions).toBeUndefined();
     expect(parsedStrategy.developerChangeRequests).toBeUndefined();
   });
 
   test("lazily creates a workflow run for historical tasks when workflow data is missing", async () => {
-    const taskId = await createTask(token, `legacy-task-workflow-${Date.now()}`);
+    const { id: taskId } = await createTask(token, `legacy-task-workflow-${Date.now()}`);
+    const legacyConclusionId = `legacy-conclusion-wf-${taskId}`;
 
     const patchTask = await authedRequest<Record<string, unknown>>(token, `/api/tasks/${taskId}`, {
       method: "PATCH",
@@ -357,7 +375,7 @@ describe("Role workflow storage (service)", () => {
           selectedTemplateId: "legacy-template-1",
           roleAggregateConclusions: [
             {
-              id: "legacy-conclusion-wf-1",
+              id: legacyConclusionId,
               roleAgentId: "role.qa",
               stage: "verify",
               aggregationStrategy: "merge-summary",
@@ -390,7 +408,8 @@ describe("Role workflow storage (service)", () => {
   });
 
   test("keeps lazy workflow migration idempotent under concurrent reads", async () => {
-    const taskId = await createTask(token, `legacy-task-workflow-concurrent-${Date.now()}`);
+    const { id: taskId } = await createTask(token, `legacy-task-workflow-concurrent-${Date.now()}`);
+    const legacyConclusionId = `legacy-conclusion-concurrent-${taskId}`;
 
     const patchTask = await authedRequest<Record<string, unknown>>(token, `/api/tasks/${taskId}`, {
       method: "PATCH",
@@ -400,7 +419,7 @@ describe("Role workflow storage (service)", () => {
           selectedTemplateId: "legacy-template-concurrent",
           roleAggregateConclusions: [
             {
-              id: "legacy-conclusion-concurrent-1",
+              id: legacyConclusionId,
               roleAgentId: "role.qa",
               stage: "verify",
               aggregationStrategy: "merge-summary",
@@ -426,8 +445,9 @@ describe("Role workflow storage (service)", () => {
   });
 
   test("backfills missing stage runs when a historical task already has workflow run", async () => {
-    const taskId = await createTask(token, `legacy-task-stage-backfill-${Date.now()}`);
+    const { id: taskId } = await createTask(token, `legacy-task-stage-backfill-${Date.now()}`);
     const templateId = `legacy-template-backfill-${Date.now()}`;
+    const legacyConclusionId = `legacy-conclusion-stage-backfill-${taskId}`;
     await createWorkflowTemplateFixture(templateId, ["design", "verify"]);
 
     const patchTask = await authedRequest<Record<string, unknown>>(token, `/api/tasks/${taskId}`, {
@@ -439,7 +459,7 @@ describe("Role workflow storage (service)", () => {
           currentStage: "verify",
           roleAggregateConclusions: [
             {
-              id: "legacy-conclusion-stage-backfill-1",
+              id: legacyConclusionId,
               roleAgentId: "role.qa",
               stage: "verify",
               aggregationStrategy: "merge-summary",
@@ -490,5 +510,49 @@ describe("Role workflow storage (service)", () => {
     );
     expect(retryStage.status).toBe(200);
     expect(retryStage.data.ok).toBe(true);
+  });
+
+  test("workflow migration stays available without any legacy task mirror", async () => {
+    const { id: taskId } = await createTask(token, `legacy-task-tree-first-${Date.now()}`);
+    const legacyConclusionId = `legacy-conclusion-tree-first-${taskId}`;
+
+    const patchTask = await authedRequest<Record<string, unknown>>(token, `/api/tasks/${taskId}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        status: "running",
+        strategy: JSON.stringify({
+          selectedTemplateId: "legacy-template-tree-first",
+          roleAggregateConclusions: [
+            {
+              id: legacyConclusionId,
+              roleAgentId: "role.qa",
+              stage: "verify",
+              aggregationStrategy: "merge-summary",
+              status: "aligned",
+              finalDecision: "allow",
+              aggregateRiskLevel: "medium",
+              confidenceScore: 0.8,
+              consensusScore: 0.75,
+              winningRationale: "切树后 workflow 仍可从 task tree 恢复。",
+            },
+          ],
+        }),
+      }),
+    });
+    expect(patchTask.status).toBe(200);
+
+    const workflow = await authedRequest<{
+      data: {
+        workflowRun: { templateId: string; currentStage: string; status: string } | null;
+        stages: Array<Record<string, unknown>>;
+      };
+    }>(token, `/api/tasks/${taskId}/workflow`);
+
+    expect(workflow.status).toBe(200);
+    expect(workflow.data.data.workflowRun).toMatchObject({
+      templateId: "legacy-template-tree-first",
+      currentStage: "verify",
+      status: "running",
+    });
   });
 });

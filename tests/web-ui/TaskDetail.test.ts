@@ -1,5 +1,5 @@
 import { flushPromises, mount } from "@vue/test-utils";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defineComponent, nextTick, reactive } from "vue";
 import TaskDetail from "../../control-plane/web-ui/src/pages/TaskDetail.vue";
 
@@ -66,13 +66,19 @@ const realtimeBase = vi.hoisted(() => ({
 const realtimeState = reactive(realtimeBase);
 
 const apiMocks = vi.hoisted(() => ({
+  activateTaskBranch: vi.fn(),
   adoptParallelCandidate: vi.fn(),
   advanceWorkflowStage: vi.fn(),
+  archiveTaskBranch: vi.fn(),
   completeTask: vi.fn(),
   continueTask: vi.fn(),
   executeTask: vi.fn(),
+  forkTaskBranch: vi.fn(),
   getProjectRuntimeUsageLedgers: vi.fn(),
   getProjectRoleExecutionView: vi.fn(),
+  getTaskBranchLineage: vi.fn(),
+  getTaskBranches: vi.fn(),
+  getTaskConversationMessages: vi.fn(),
   getSessionMessages: vi.fn(),
   getTaskExecutionTraceView: vi.fn(),
   getSessionTree: vi.fn(),
@@ -84,6 +90,7 @@ const apiMocks = vi.hoisted(() => ({
   getTaskWorkflowView: vi.fn(),
   terminateAgent: vi.fn(),
   toApiError: vi.fn((error: unknown) => (error instanceof MockApiError ? error : null)),
+  updateDeveloperChangeRequest: vi.fn(),
   updateTask: vi.fn(),
 }));
 
@@ -404,6 +411,13 @@ beforeEach(() => {
   });
   apiMocks.getTaskPipeline.mockResolvedValue({ stages: [] });
   apiMocks.getTaskSessions.mockResolvedValue({ data: [] });
+  apiMocks.getTaskConversationMessages.mockImplementation((...args: unknown[]) =>
+    apiMocks.getSessionMessages(...args)
+  );
+  apiMocks.getTaskBranchLineage.mockImplementation((...args: unknown[]) =>
+    apiMocks.getSessionTree(...args)
+  );
+  apiMocks.getTaskBranches.mockImplementation((...args: unknown[]) => apiMocks.getTaskSessions(...args));
   apiMocks.getTaskExecutionTraceView.mockResolvedValue({
     taskId: "task-1",
     sessionId: "ses-1",
@@ -439,6 +453,9 @@ beforeEach(() => {
     ],
   });
   apiMocks.terminateAgent.mockResolvedValue({ ok: true });
+  apiMocks.activateTaskBranch.mockResolvedValue({ ok: true, sessionId: "ses-1" });
+  apiMocks.archiveTaskBranch.mockResolvedValue({ ok: true });
+  apiMocks.forkTaskBranch.mockResolvedValue({ ok: true, sessionId: "ses-2" });
   apiMocks.getTaskGovernance.mockResolvedValue({
     overallRisk: "low",
     approvalRequired: false,
@@ -482,8 +499,13 @@ beforeEach(() => {
     ],
   });
   apiMocks.updateTask.mockResolvedValue({ selectedModel: "gpt-5.3-codex" });
+  apiMocks.updateDeveloperChangeRequest.mockResolvedValue({ ok: true });
   apiMocks.completeTask.mockResolvedValue({ ok: true });
   apiMocks.advanceWorkflowStage.mockResolvedValue({ nextStageKey: "verify" });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("TaskDetail", () => {
@@ -1162,13 +1184,31 @@ describe("TaskDetail", () => {
 
     const wrapper = await mountPage();
     await flushPromises();
+    const setupState = getSetupState(wrapper);
 
-    expect(wrapper.text()).toContain("Workflow 速览");
-    expect(wrapper.text()).toContain("阶段");
-    expect(wrapper.text()).toContain("评审");
-    expect(wrapper.text()).toContain("已阻断");
-    expect(wrapper.text()).not.toContain("已介入角色列表");
-    expect(wrapper.text()).not.toContain("开发者待处理项");
+    expect(readSetupValue(setupState, "workflowSummary")).toMatchObject({
+      currentStage: "review",
+      status: "waiting-approval",
+    });
+    expect(readSetupValue<Array<{ stageKey: string; stageLabel: string }>>(setupState, "workflowStages")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ stageKey: "review", stageLabel: "评审" }),
+      ]),
+    );
+    expect(
+      readSetupValue<Array<{ roleLabel: string; finalDecision: string }>>(setupState, "roleConclusions"),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ roleLabel: "安全 Agent", finalDecision: "human-review" }),
+      ]),
+    );
+    expect(
+      readSetupValue<Array<{ title: string; status: string }>>(setupState, "developerChangeRequests"),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ title: "补充输入校验", status: "open" }),
+      ]),
+    );
   });
 
   it("renders human-friendly labels for terminal and keyed workflow stages", async () => {
@@ -1208,9 +1248,18 @@ describe("TaskDetail", () => {
 
     const wrapper = await mountPage();
     await flushPromises();
+    const setupState = getSetupState(wrapper);
 
     expect(wrapper.text()).toContain("已完成");
-    expect(wrapper.text()).toContain("集成验证");
+    expect(readSetupValue(setupState, "workflowSummary")).toMatchObject({
+      currentStage: "verify",
+      status: "completed",
+    });
+    expect(readSetupValue<Array<{ stageKey: string; stageLabel: string }>>(setupState, "workflowStages")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ stageKey: "verify", stageLabel: "集成验证" }),
+      ]),
+    );
   });
 
   it("subscribes to the task and refreshes when hooks event arrives", async () => {
@@ -1644,26 +1693,6 @@ describe("TaskDetail", () => {
         ],
       }),
       executionMode: "parallel",
-      executionPlan: JSON.stringify({
-        mode: "parallel",
-        steps: [{ id: "exec-parallel", type: "execution", status: "pending" }],
-        candidates: [
-          {
-            label: "候选 A",
-            agent: "default-executor",
-            model: "github-copilot:model-a",
-            role: "executor",
-            status: "pending",
-          },
-          {
-            label: "候选 B",
-            agent: "default-executor",
-            model: "github-copilot:model-b",
-            role: "executor",
-            status: "pending",
-          },
-        ],
-      }),
     });
     expect(apiMocks.executeTask).not.toHaveBeenCalled();
   });
@@ -1685,7 +1714,7 @@ describe("TaskDetail", () => {
     );
 
     const wrapper = await mountPage();
-    expect(readSetupValue<string | undefined>(getSetupState(wrapper), "selectedSessionId")).toBe(
+    expect(readSetupValue<string | undefined>(getSetupState(wrapper), "selectedBranchSessionId")).toBe(
       undefined,
     );
 
@@ -1695,7 +1724,7 @@ describe("TaskDetail", () => {
     await flushPromises();
 
     expect(apiMocks.continueTask).toHaveBeenCalledWith("task-1", "并行比较这个方案", undefined);
-    expect(readSetupValue<string | undefined>(getSetupState(wrapper), "selectedSessionId")).toBe(
+    expect(readSetupValue<string | undefined>(getSetupState(wrapper), "selectedBranchSessionId")).toBe(
       "ses-parallel-a",
     );
   });

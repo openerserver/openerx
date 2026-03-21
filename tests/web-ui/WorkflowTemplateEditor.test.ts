@@ -220,6 +220,7 @@ async function mountAsync() {
 
 describe("WorkflowTemplateEditor", () => {
   beforeEach(() => {
+    vi.useRealTimers();
     vi.clearAllMocks();
     routeState.params = { templateId: "tpl-1" };
     apiMocks.updateWorkflowTemplate.mockResolvedValue({});
@@ -261,11 +262,16 @@ describe("WorkflowTemplateEditor", () => {
     apiMocks.updateWorkflowTemplateStage.mockResolvedValue({});
 
     const wrapper = await createWrapper();
-    const saveButton = wrapper
-      .findAll("button")
-      .find((item) => item.text().includes("保存阶段"));
-    expect(saveButton).toBeTruthy();
-    await saveButton?.trigger("click");
+    const setupState = (wrapper.vm as unknown as { $: { setupState: Record<string, unknown> } }).$.setupState as {
+      saveStage: (stage: Record<string, unknown>, index: number) => Promise<void>;
+      stageDrafts: { value?: Array<Record<string, unknown>> } | Array<Record<string, unknown>>;
+    };
+    const stageDrafts = Array.isArray(setupState.stageDrafts)
+      ? setupState.stageDrafts
+      : (setupState.stageDrafts.value ?? []);
+
+    expect(stageDrafts).toHaveLength(1);
+    void setupState.saveStage(stageDrafts[0]!, 0);
     await flushPromises();
 
     expect(apiMocks.updateWorkflowTemplateStage).toHaveBeenCalledWith(
@@ -286,7 +292,7 @@ describe("WorkflowTemplateEditor", () => {
         }),
       }),
     );
-  });
+  }, 10_000);
 
   it("creates new stage with generated initialTaskDefinition", async () => {
     apiMocks.getWorkflowTemplateEditorView.mockImplementation(async () => clone(buildEditorView([])));

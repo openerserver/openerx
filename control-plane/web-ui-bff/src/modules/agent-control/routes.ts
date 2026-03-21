@@ -388,12 +388,19 @@ async function ensureRuntimeRunFromSummaryDetailed(
   return { run: getAgentRun(agentRunId) };
 }
 
-async function loadSessionTokenUsage(sessionId?: string | null): Promise<number> {
+async function loadSessionTokenUsage(
+  sessionId?: string | null,
+  taskId?: string,
+  authorization?: string,
+): Promise<number> {
   if (!sessionId) {
     return 0;
   }
 
-  const messagesResult = await getSessionMessages(sessionId);
+  const messagesResult = await getSessionMessages(
+    sessionId,
+    taskId ? { taskId, authorization } : undefined,
+  );
   if (!messagesResult.ok) {
     return 0;
   }
@@ -407,12 +414,17 @@ async function maybeBackfillTokenUsage(input: {
   sessionId?: string | null;
   status: string;
   tokenUsed: number;
+  authorization?: string;
 }) {
   if (input.tokenUsed > 0 || !input.sessionId) {
     return input.tokenUsed;
   }
 
-  const tokenUsed = await loadSessionTokenUsage(input.sessionId);
+  const tokenUsed = await loadSessionTokenUsage(
+    input.sessionId,
+    input.taskId,
+    input.authorization,
+  );
   if (tokenUsed <= 0) {
     return input.tokenUsed;
   }
@@ -432,7 +444,7 @@ async function buildRuntimeOnlySummary(
   runtimeRun: RuntimeRun,
 ) {
   const taskResult = await cpFetch<{ id: string; title: string; projectId: string }>(
-    `/api/tasks/${encodeURIComponent(runtimeRun.taskId)}`,
+    `/api/project-tree/tasks/${encodeURIComponent(runtimeRun.taskId)}`,
     { authorization: authHeader(c) },
   );
   return {
@@ -537,6 +549,7 @@ agentControlRoutes.get("/queues", async (c) => {
         sessionId: item.sessionId,
         status: item.status,
         tokenUsed: item.tokenUsed,
+        authorization: authHeader(c),
       });
       return mergeQueueItemWithRuntime({ ...item, tokenUsed }, runtimeMap.get(item.agentRunId));
     }),
@@ -559,7 +572,11 @@ agentControlRoutes.get("/:agentRunId/summary", async (c) => {
   if (!result.ok) {
     if (result.status === 404 && runtimeRun) {
       const fallback = await buildRuntimeOnlySummary(c, runtimeRun);
-      const tokenUsed = await loadSessionTokenUsage(fallback.sessionId);
+      const tokenUsed = await loadSessionTokenUsage(
+        fallback.sessionId,
+        runtimeRun.taskId,
+        authHeader(c),
+      );
       return c.json({ ...fallback, tokenUsed: tokenUsed || fallback.tokenUsed }, 200);
     }
     return c.json(result.data, result.status as 401 | 403 | 404 | 502);
@@ -575,6 +592,7 @@ agentControlRoutes.get("/:agentRunId/summary", async (c) => {
     sessionId: summary.sessionId,
     status: summary.status,
     tokenUsed: summary.tokenUsed,
+    authorization: authHeader(c),
   });
   return c.json({ ...summary, tokenUsed });
 });
@@ -827,7 +845,11 @@ agentControlRoutes.post("/:agentRunId/terminate", async (c) => {
 
   if (result.ok) {
     run = getAgentRun(agentRunId) ?? run;
-    const tokenUsed = await loadSessionTokenUsage(run?.subSessionId);
+    const tokenUsed = await loadSessionTokenUsage(
+      run?.subSessionId,
+      run?.taskId,
+      authorization,
+    );
     const finishedAt = new Date().toISOString();
     if (run?.taskId) {
       await Promise.all([
@@ -911,7 +933,7 @@ async function runPreResumeHooks(
     prompt: string;
     projectId: string;
     strategy?: string | null;
-  }>(`/api/tasks/${encodeURIComponent(taskId)}`, { authorization });
+  }>(`/api/project-tree/tasks/${encodeURIComponent(taskId)}`, { authorization });
   if (!taskResult.ok) {
     return { ok: false, error: `Failed to load task ${taskId} before resume` };
   }

@@ -124,7 +124,7 @@ async function fetchTaskWorkflow(context: TaskWorkflowContext) {
 }
 
 async function fetchTaskRecord(authorization: string, taskId: string) {
-  const result = await cpFetch<TaskRecord>(`/api/tasks/${encodeURIComponent(taskId)}`, {
+  const result = await cpFetch<TaskRecord>(`/api/project-tree/tasks/${encodeURIComponent(taskId)}`, {
     authorization,
   });
 

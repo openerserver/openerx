@@ -142,6 +142,8 @@ mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/run-persis
 
 mock.module("../../control-plane/web-ui-bff/src/modules/hooks/lifecycle-hooks", () => ({
   executeLifecycleHooks: executeLifecycleHooksMock,
+  parseStageHooks: (raw: unknown) => (Array.isArray(raw) ? raw : []),
+  mergeStageAndStrategyHooks: (_stage: unknown[], strategy: unknown[]) => strategy ?? [],
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/modules/realtime/ws-broadcaster", () => ({

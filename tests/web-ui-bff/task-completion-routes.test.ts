@@ -129,7 +129,7 @@ describe("task completion routes", () => {
   test("POST /:taskId/complete marks the task completed and persists current stage summary", async () => {
     cpFetchMock.mockImplementation(async (...args: unknown[]) => {
       const [url, options] = args as [string, RouteFetchOptions | undefined];
-      if (!options?.method && url === "/api/tasks/task-1") {
+      if (!options?.method && url === "/api/project-tree/tasks/task-1") {
         return {
           ok: true,
           data: {
@@ -225,7 +225,7 @@ describe("task completion routes", () => {
   test("POST /:taskId/complete falls back to generated stage summary when no persisted summary exists", async () => {
     cpFetchMock.mockImplementation(async (...args: unknown[]) => {
       const [url, options] = args as [string, RouteFetchOptions | undefined];
-      if (!options?.method && url === "/api/tasks/task-1b") {
+      if (!options?.method && url === "/api/project-tree/tasks/task-1b") {
         return {
           ok: true,
           data: {
@@ -292,7 +292,7 @@ describe("task completion routes", () => {
   test("POST /:taskId/complete skips workflow advance when there is no current stage", async () => {
     cpFetchMock.mockImplementation(async (...args: unknown[]) => {
       const [url, options] = args as [string, RouteFetchOptions | undefined];
-      if (!options?.method && url === "/api/tasks/task-1c") {
+      if (!options?.method && url === "/api/project-tree/tasks/task-1c") {
         return {
           ok: true,
           data: {
@@ -343,7 +343,7 @@ describe("task completion routes", () => {
   test("POST /:taskId/complete returns 404 when task does not exist", async () => {
     cpFetchMock.mockImplementation(async (...args: unknown[]) => {
       const [url, options] = args as [string, RouteFetchOptions | undefined];
-      if (!options?.method && url === "/api/tasks/task-missing") {
+      if (!options?.method && url === "/api/project-tree/tasks/task-missing") {
         return { ok: false, status: 404, data: { error: "Task not found" } };
       }
 
@@ -363,7 +363,7 @@ describe("task completion routes", () => {
   test("POST /:taskId/workflow/advance forces workflow advancement and returns spawned task info", async () => {
     cpFetchMock.mockImplementation(async (...args: unknown[]) => {
       const [url, options] = args as [string, RouteFetchOptions | undefined];
-      if (!options?.method && url === "/api/tasks/task-2") {
+      if (!options?.method && url === "/api/project-tree/tasks/task-2") {
         return {
           ok: true,
           data: {
@@ -421,7 +421,7 @@ describe("task completion routes", () => {
   test("POST /:taskId/workflow/advance falls back to [STAGE_COMPLETE] when task result is empty", async () => {
     cpFetchMock.mockImplementation(async (...args: unknown[]) => {
       const [url, options] = args as [string, RouteFetchOptions | undefined];
-      if (!options?.method && url === "/api/tasks/task-2b") {
+      if (!options?.method && url === "/api/project-tree/tasks/task-2b") {
         return {
           ok: true,
           data: {
@@ -461,7 +461,7 @@ describe("task completion routes", () => {
   test("POST /:taskId/workflow/advance returns 404 when workflow outcome is not updated", async () => {
     cpFetchMock.mockImplementation(async (...args: unknown[]) => {
       const [url, options] = args as [string, RouteFetchOptions | undefined];
-      if (!options?.method && url === "/api/tasks/task-3") {
+      if (!options?.method && url === "/api/project-tree/tasks/task-3") {
         return {
           ok: true,
           data: {
@@ -505,7 +505,7 @@ describe("task completion routes", () => {
   test("POST /:taskId/workflow/advance returns 404 when task does not exist", async () => {
     cpFetchMock.mockImplementation(async (...args: unknown[]) => {
       const [url, options] = args as [string, RouteFetchOptions | undefined];
-      if (!options?.method && url === "/api/tasks/task-404") {
+      if (!options?.method && url === "/api/project-tree/tasks/task-404") {
         return { ok: false, status: 404, data: { error: "Task not found" } };
       }
 
@@ -525,7 +525,7 @@ describe("task completion routes", () => {
   test("POST /:taskId/candidates/:index/adopt marks the winner, persists summary, and broadcasts completion", async () => {
     cpFetchMock.mockImplementation(async (...args: unknown[]) => {
       const [url, options] = args as [string, RouteFetchOptions | undefined];
-      if (!options?.method && url === "/api/tasks/task-adopt-1") {
+      if (!options?.method && url === "/api/project-tree/tasks/task-adopt-1") {
         return {
           ok: true,
           data: {
@@ -625,7 +625,7 @@ describe("task completion routes", () => {
   test("POST /:taskId/candidates/:index/adopt allows adopting a completed candidate without result text", async () => {
     cpFetchMock.mockImplementation(async (...args: unknown[]) => {
       const [url, options] = args as [string, RouteFetchOptions | undefined];
-      if (!options?.method && url === "/api/tasks/task-adopt-2") {
+      if (!options?.method && url === "/api/project-tree/tasks/task-adopt-2") {
         return {
           ok: true,
           data: {
@@ -683,7 +683,7 @@ describe("task completion routes", () => {
   test("POST /:taskId/candidates/:index/adopt stops unfinished losing candidates", async () => {
     cpFetchMock.mockImplementation(async (...args: unknown[]) => {
       const [url, options] = args as [string, RouteFetchOptions | undefined];
-      if (!options?.method && url === "/api/tasks/task-adopt-running") {
+      if (!options?.method && url === "/api/project-tree/tasks/task-adopt-running") {
         return {
           ok: true,
           data: {
@@ -718,7 +718,7 @@ describe("task completion routes", () => {
         };
       }
 
-      if (!options?.method && url === "/api/tasks/task-adopt-running/task-sessions") {
+      if (!options?.method && url === "/api/tasks/task-adopt-running/branches") {
         return {
           ok: true,
           data: {
@@ -748,7 +748,7 @@ describe("task completion routes", () => {
 
       if (
         options?.method === "POST" &&
-        url === "/api/tasks/task-adopt-running/task-sessions/ts-a/activate"
+        url === "/api/tasks/task-adopt-running/branches/ts-a/activate"
       ) {
         return { ok: true, data: { ok: true } };
       }
@@ -772,7 +772,7 @@ describe("task completion routes", () => {
     expect(response.status).toBe(200);
     expect(terminateAgentMock).toHaveBeenCalledWith("run-b");
     expect(cpFetchMock).toHaveBeenCalledWith(
-      "/api/tasks/task-adopt-running/task-sessions/ts-a/activate",
+      "/api/tasks/task-adopt-running/branches/ts-a/activate",
       {
         method: "POST",
         authorization: "Bearer test",
@@ -840,7 +840,7 @@ describe("task completion routes", () => {
   test("POST /:taskId/candidates/:index/adopt activates the winner task session lineage", async () => {
     cpFetchMock.mockImplementation(async (...args: unknown[]) => {
       const [url, options] = args as [string, RouteFetchOptions | undefined];
-      if (!options?.method && url === "/api/tasks/task-adopt-activate") {
+      if (!options?.method && url === "/api/project-tree/tasks/task-adopt-activate") {
         return {
           ok: true,
           data: {
@@ -868,7 +868,7 @@ describe("task completion routes", () => {
         };
       }
 
-      if (!options?.method && url === "/api/tasks/task-adopt-activate/task-sessions") {
+      if (!options?.method && url === "/api/tasks/task-adopt-activate/branches") {
         return {
           ok: true,
           data: {
@@ -892,7 +892,7 @@ describe("task completion routes", () => {
 
       if (
         options?.method === "POST" &&
-        url === "/api/tasks/task-adopt-activate/task-sessions/ts-winner/activate"
+        url === "/api/tasks/task-adopt-activate/branches/ts-winner/activate"
       ) {
         return { ok: true, data: { ok: true } };
       }
@@ -915,7 +915,7 @@ describe("task completion routes", () => {
 
     expect(response.status).toBe(200);
     expect(cpFetchMock).toHaveBeenCalledWith(
-      "/api/tasks/task-adopt-activate/task-sessions/ts-winner/activate",
+      "/api/tasks/task-adopt-activate/branches/ts-winner/activate",
       {
         method: "POST",
         authorization: "Bearer test",
@@ -952,7 +952,7 @@ describe("task completion routes", () => {
 
     cpFetchMock.mockImplementation(async (...args: unknown[]) => {
       const [url, options] = args as [string, RouteFetchOptions | undefined];
-      if (!options?.method && url === "/api/tasks/task-adopt-repair") {
+      if (!options?.method && url === "/api/project-tree/tasks/task-adopt-repair") {
         return {
           ok: true,
           data: {
@@ -989,7 +989,7 @@ describe("task completion routes", () => {
         };
       }
 
-      if (!options?.method && url === "/api/tasks/task-adopt-repair/task-sessions") {
+      if (!options?.method && url === "/api/tasks/task-adopt-repair/branches") {
         lineageReadCount += 1;
         return {
           ok: true,
@@ -1036,13 +1036,13 @@ describe("task completion routes", () => {
         };
       }
 
-      if (options?.method === "POST" && url === "/api/tasks/task-adopt-repair/task-sessions") {
+      if (options?.method === "POST" && url === "/api/tasks/task-adopt-repair/branches") {
         return { ok: true, data: { ok: true } };
       }
 
       if (
         options?.method === "POST" &&
-        url === "/api/tasks/task-adopt-repair/task-sessions/ts-winner/activate"
+        url === "/api/tasks/task-adopt-repair/branches/ts-winner/activate"
       ) {
         return { ok: true, data: { ok: true } };
       }
@@ -1068,7 +1068,7 @@ describe("task completion routes", () => {
     const lineageWrites = (cpFetchMock.mock.calls as unknown as Array<[string, RouteFetchOptions]>)
       .filter(
         ([url, options]) =>
-          url === "/api/tasks/task-adopt-repair/task-sessions" && options?.method === "POST",
+          url === "/api/tasks/task-adopt-repair/branches" && options?.method === "POST",
       )
       .map(([, options]) => options.body as Record<string, unknown>);
 
@@ -1088,7 +1088,7 @@ describe("task completion routes", () => {
     ]);
 
     expect(cpFetchMock).toHaveBeenCalledWith(
-      "/api/tasks/task-adopt-repair/task-sessions/ts-winner/activate",
+      "/api/tasks/task-adopt-repair/branches/ts-winner/activate",
       {
         method: "POST",
         authorization: "Bearer test",
@@ -1110,7 +1110,7 @@ describe("task completion routes", () => {
   test("POST /:taskId/candidates/:index/adopt returns 400 when task has no execution plan", async () => {
     cpFetchMock.mockImplementation(async (...args: unknown[]) => {
       const [url, options] = args as [string, RouteFetchOptions | undefined];
-      if (!options?.method && url === "/api/tasks/task-adopt-no-plan") {
+      if (!options?.method && url === "/api/project-tree/tasks/task-adopt-no-plan") {
         return {
           ok: true,
           data: {
@@ -1139,7 +1139,7 @@ describe("task completion routes", () => {
   test("POST /:taskId/candidates/:index/adopt returns 400 when execution plan is not parallel", async () => {
     cpFetchMock.mockImplementation(async (...args: unknown[]) => {
       const [url, options] = args as [string, RouteFetchOptions | undefined];
-      if (!options?.method && url === "/api/tasks/task-adopt-single") {
+      if (!options?.method && url === "/api/project-tree/tasks/task-adopt-single") {
         return {
           ok: true,
           data: {
@@ -1176,7 +1176,7 @@ describe("task completion routes", () => {
   test("POST /:taskId/candidates/:index/adopt returns 404 when candidate does not exist", async () => {
     cpFetchMock.mockImplementation(async (...args: unknown[]) => {
       const [url, options] = args as [string, RouteFetchOptions | undefined];
-      if (!options?.method && url === "/api/tasks/task-adopt-missing-candidate") {
+      if (!options?.method && url === "/api/project-tree/tasks/task-adopt-missing-candidate") {
         return {
           ok: true,
           data: {
@@ -1214,7 +1214,7 @@ describe("task completion routes", () => {
   test("POST /:taskId/candidates/:index/adopt returns 400 when candidate is not completed", async () => {
     cpFetchMock.mockImplementation(async (...args: unknown[]) => {
       const [url, options] = args as [string, RouteFetchOptions | undefined];
-      if (!options?.method && url === "/api/tasks/task-adopt-pending") {
+      if (!options?.method && url === "/api/project-tree/tasks/task-adopt-pending") {
         return {
           ok: true,
           data: {

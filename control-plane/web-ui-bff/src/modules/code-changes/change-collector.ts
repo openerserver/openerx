@@ -86,7 +86,10 @@ export async function collectChangesFromSession(params: {
   authorization: string;
 }): Promise<{ ok: boolean; changeId?: string; error?: string }> {
   try {
-    const msgResult = await getSessionMessages(params.sessionId);
+    const msgResult = await getSessionMessages(params.sessionId, {
+      taskId: params.taskId,
+      authorization: params.authorization,
+    });
     if (!msgResult.ok || !Array.isArray(msgResult.data)) {
       return { ok: false, error: "Failed to fetch session messages" };
     }

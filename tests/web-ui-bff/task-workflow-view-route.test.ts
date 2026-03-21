@@ -23,11 +23,20 @@ mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-a
     tokenUsed: 0,
   })),
   forkSession: mock(async () => ({ ok: true, sessionId: "session-2" })),
+  findAgentRunBySessionId: mock(() => undefined),
   getAgentRun: mock(() => undefined),
+  getAgentMessages: mock(async () => ({ ok: true, data: [] })),
   getSessionMessages: mock(async () => ({ ok: true, data: [] })),
+  injectGuidance: mock(async () => ({ ok: true })),
+  listAgentRuns: mock(() => []),
   listSessions: mock(async () => ({ ok: true, data: [] })),
+  pauseAgent: mock(async () => ({ ok: true })),
+  registerAgentRun: mock(() => undefined),
   recoverAgentRun: mock(() => undefined),
+  resumeAgent: mock(async () => ({ ok: true })),
   runDetachedPrompt: mock(async () => ({ ok: true, sessionId: "session-detached", text: "{}" })),
+  terminateAgent: mock(async () => ({ ok: true })),
+  updateAgentRunStatus: mock(() => undefined),
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/modules/hooks/lifecycle-hooks", () => ({
@@ -36,10 +45,14 @@ mock.module("../../control-plane/web-ui-bff/src/modules/hooks/lifecycle-hooks", 
     combinedResultText: undefined,
     rewrittenPrompt: undefined,
   })),
+  mergeStageAndStrategyHooks: mock((_stageHooks: unknown, strategyHooks: unknown) => strategyHooks ?? []),
+  parseStageHooks: mock(() => []),
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/run-persistence", () => ({
   createAgentRunRecord: mock(async () => undefined),
+  recordAgentAudit: mock(async () => undefined),
+  recordModelUsage: mock(async () => undefined),
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/modules/realtime/dag-sync", () => ({
@@ -65,7 +78,7 @@ mock.module("../../control-plane/web-ui-bff/src/modules/realtime/ws-broadcaster"
 
 function buildTaskWorkflowStageRuntimeResponses(taskId: string) {
   return {
-    [`/api/tasks/${taskId}`]: {
+    [`/api/project-tree/tasks/${taskId}`]: {
       ok: true,
       data: {
         id: taskId,
@@ -210,7 +223,7 @@ describe("task workflow view route", () => {
 
   test("falls back to completed task status when workflow run is missing", async () => {
     cpFetchMock.mockImplementation(async (url: string) => {
-      if (url === "/api/tasks/task-1") {
+      if (url === "/api/project-tree/tasks/task-1") {
         return {
           ok: true,
           data: {
@@ -269,7 +282,7 @@ describe("task workflow view route", () => {
 
   test("falls back to failed task status when workflow run is missing", async () => {
     cpFetchMock.mockImplementation(async (url: string) => {
-      if (url === "/api/tasks/task-2") {
+      if (url === "/api/project-tree/tasks/task-2") {
         return {
           ok: true,
           data: {

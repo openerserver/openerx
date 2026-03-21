@@ -35,7 +35,7 @@ const cpFetchMock = mock(async (url: string, options?: { method?: string }) => {
     };
   }
 
-  if ((options?.method || "GET") === "GET" && url === "/api/tasks/task-1/task-sessions") {
+  if ((options?.method || "GET") === "GET" && url === "/api/tasks/task-1/branches") {
     return {
       ok: true,
       status: 200,
@@ -201,7 +201,7 @@ beforeEach(() => {
       };
     }
 
-    if ((options?.method || "GET") === "GET" && url === "/api/tasks/task-1/task-sessions") {
+    if ((options?.method || "GET") === "GET" && url === "/api/tasks/task-1/branches") {
       return {
         ok: true,
         status: 200,
@@ -375,7 +375,7 @@ describe("SSEAggregator pipeline emitters", () => {
   });
 
   test("post-execution hooks are skipped when paid execution guard disables them", async () => {
-    cpFetchMock.mockImplementationOnce(async (url: string, options?: { method?: string }) => {
+    cpFetchMock.mockImplementation(async (url: string, options?: { method?: string }) => {
       if ((options?.method || "GET") === "GET" && url === "/api/tasks/task-1") {
         return {
           ok: true,
@@ -629,7 +629,7 @@ describe("SSEAggregator pipeline emitters", () => {
         }),
       );
       expect(cpFetchMock).toHaveBeenCalledWith(
-        "/api/tasks/task-1/task-sessions",
+        "/api/tasks/task-1/branches",
         expect.objectContaining({
           method: "POST",
           body: expect.objectContaining({

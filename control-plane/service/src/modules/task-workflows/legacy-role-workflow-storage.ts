@@ -2,33 +2,38 @@ import { eq } from "drizzle-orm";
 import { db } from "../../db";
 import {
   developerChangeRequests,
+  projectTreeNodes,
   roleAggregateConclusions,
   taskStageRuns,
   taskWorkflowRuns,
-  tasks,
   workflowTemplateStages,
 } from "../../db/schema";
+import { loadTaskTreeRecord, type TaskTreeRecord } from "../project-tree/task-view";
 
 type JsonRecord = Record<string, unknown>;
 type WorkflowStatus =
   | typeof taskWorkflowRuns.$inferSelect.status
-  | typeof tasks.$inferSelect.status;
+  | TaskTreeRecord["status"];
 
 const legacyWorkflowMigrationInflight = new Map<
   string,
-  Promise<typeof tasks.$inferSelect | null>
+  Promise<TaskTreeRecord | null>
 >();
 
-function parseTaskStrategy(raw: string | null | undefined) {
+function parseTaskStrategy(raw: unknown) {
   if (!raw) {
     return {} as JsonRecord;
   }
 
-  try {
-    return JSON.parse(raw) as JsonRecord;
-  } catch {
-    return {} as JsonRecord;
+  if (typeof raw === "string") {
+    try {
+      return JSON.parse(raw) as JsonRecord;
+    } catch {
+      return {} as JsonRecord;
+    }
   }
+
+  return isNonEmptyObject(raw) ? raw : ({} as JsonRecord);
 }
 
 function normalizeArray(value: unknown) {
@@ -43,16 +48,20 @@ function serializeTaskStrategy(strategy: JsonRecord) {
   return Object.keys(strategy).length > 0 ? JSON.stringify(strategy) : null;
 }
 
-function parseExecutionPlan(raw: string | null | undefined) {
+function parseExecutionPlan(raw: unknown) {
   if (!raw) {
     return {} as JsonRecord;
   }
 
-  try {
-    return JSON.parse(raw) as JsonRecord;
-  } catch {
-    return {} as JsonRecord;
+  if (typeof raw === "string") {
+    try {
+      return JSON.parse(raw) as JsonRecord;
+    } catch {
+      return {} as JsonRecord;
+    }
   }
+
+  return isNonEmptyObject(raw) ? raw : ({} as JsonRecord);
 }
 
 function readString(value: unknown) {
@@ -206,7 +215,7 @@ function inferLegacyStage(strategy: JsonRecord, legacyRoleConclusions: unknown[]
   return null;
 }
 
-function inferWorkflowStatus(taskStatus: typeof tasks.$inferSelect.status) {
+function inferWorkflowStatus(taskStatus: TaskTreeRecord["status"]) {
   switch (taskStatus) {
     case "running":
       return "running" as const;
@@ -224,7 +233,7 @@ function inferWorkflowStatus(taskStatus: typeof tasks.$inferSelect.status) {
 }
 
 function inferCurrentStage(
-  taskStatus: typeof tasks.$inferSelect.status,
+  taskStatus: TaskTreeRecord["status"],
   legacyStage: string | null,
 ) {
   switch (taskStatus) {
@@ -279,7 +288,7 @@ function buildStageRunStatus(
 
 async function ensureWorkflowStageRunsMigrated(
   workflowRun: typeof taskWorkflowRuns.$inferSelect,
-  task: typeof tasks.$inferSelect,
+  task: TaskTreeRecord,
   legacyStage: string | null,
 ) {
   const existingStageRun = await db.query.taskStageRuns.findFirst({
@@ -355,7 +364,7 @@ async function ensureWorkflowStageRunsMigrated(
 }
 
 async function ensureLegacyTaskWorkflowRunMigrated(
-  task: typeof tasks.$inferSelect,
+  task: TaskTreeRecord,
   strategy: JsonRecord,
   legacyRoleConclusions: unknown[],
 ) {
@@ -408,7 +417,7 @@ async function ensureLegacyTaskWorkflowRunMigrated(
 }
 
 async function ensureLegacyRoleWorkflowMigratedInternal(taskId: string) {
-  const task = await db.query.tasks.findFirst({ where: eq(tasks.id, taskId) });
+  const task = await loadTaskTreeRecord(taskId);
   if (!task) {
     return null;
   }
@@ -446,10 +455,24 @@ async function ensureLegacyRoleWorkflowMigratedInternal(taskId: string) {
   if ("roleAggregateConclusions" in strategy || "developerChangeRequests" in strategy) {
     strategy.roleAggregateConclusions = undefined;
     strategy.developerChangeRequests = undefined;
+    const serializedStrategy = serializeTaskStrategy(strategy);
+
+    const treeNode = await db.query.projectTreeNodes.findFirst({
+      where: eq(projectTreeNodes.id, taskId),
+    });
+    const nextContentJson = {
+      ...((treeNode?.contentJson && typeof treeNode.contentJson === "object"
+        ? treeNode.contentJson
+        : {}) as Record<string, unknown>),
+      strategy: serializedStrategy,
+    };
     await db
-      .update(tasks)
-      .set({ strategy: serializeTaskStrategy(strategy) })
-      .where(eq(tasks.id, taskId));
+      .update(projectTreeNodes)
+      .set({
+        contentJson: nextContentJson,
+        updatedAt: new Date().toISOString(),
+      })
+      .where(eq(projectTreeNodes.id, taskId));
   }
 
   return task;

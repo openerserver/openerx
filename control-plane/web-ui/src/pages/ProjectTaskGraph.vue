@@ -54,6 +54,229 @@
           </div>
         </section>
 
+        <section class="project-tree-workbench">
+          <header class="project-tree-workbench__header">
+            <div>
+              <h3>项目树工作台</h3>
+              <p>直接查看 root、task、session、message 与跨树 links，不再依赖段落拼装。</p>
+            </div>
+            <a-button size="small" :loading="treeLoading" @click="loadTreeWorkspace">刷新树状态</a-button>
+          </header>
+
+          <div class="project-tree-workbench__stats">
+            <div class="project-tree-workbench__stat">
+              <span>节点总数</span>
+              <strong>{{ treeStats.total }}</strong>
+            </div>
+            <div class="project-tree-workbench__stat">
+              <span>任务节点</span>
+              <strong>{{ treeStats.tasks }}</strong>
+            </div>
+            <div class="project-tree-workbench__stat">
+              <span>会话节点</span>
+              <strong>{{ treeStats.sessions }}</strong>
+            </div>
+            <div class="project-tree-workbench__stat">
+              <span>消息节点</span>
+              <strong>{{ treeStats.messages }}</strong>
+            </div>
+            <div class="project-tree-workbench__stat">
+              <span>链接数</span>
+              <strong>{{ treeStats.links }}</strong>
+            </div>
+          </div>
+
+          <a-alert
+            v-if="treeError"
+            type="error"
+            show-icon
+            :message="treeError"
+            style="margin-bottom: 12px"
+          />
+
+          <div class="project-tree-workbench__grid">
+            <section class="project-tree-workbench__panel project-tree-workbench__panel--explorer">
+              <div class="project-tree-workbench__panel-header">
+                <div>
+                  <h4>树浏览</h4>
+                  <p>默认聚焦默认分支头节点，可切换到任意节点看祖先、子节点和链接。</p>
+                </div>
+              </div>
+
+              <div class="project-tree-workbench__branch-list">
+                <button
+                  v-for="branch in treeBranches"
+                  :key="branch.id"
+                  type="button"
+                  class="project-tree-branch-card"
+                  :class="{ 'project-tree-branch-card--default': branch.isDefault }"
+                  @click="selectTreeNode(branch.headNodeId)"
+                >
+                  <div class="project-tree-branch-card__header">
+                    <strong>{{ branch.branchName }}</strong>
+                    <a-tag v-if="branch.isDefault" color="blue">默认</a-tag>
+                  </div>
+                  <p>{{ describeBranchHead(branch) }}</p>
+                </button>
+              </div>
+
+              <a-spin :spinning="treeLoading">
+                <a-empty v-if="treeData.length === 0" description="暂无项目树节点" />
+                <a-tree
+                  v-else
+                  class="project-tree-workbench__tree"
+                  :tree-data="treeData"
+                  :selected-keys="selectedTreeNodeId ? [selectedTreeNodeId] : []"
+                  :default-expand-all="true"
+                  block-node
+                  @select="handleTreeSelect"
+                />
+              </a-spin>
+            </section>
+
+            <section class="project-tree-workbench__panel project-tree-workbench__panel--detail">
+              <div class="project-tree-workbench__panel-header">
+                <div>
+                  <h4>节点详情</h4>
+                  <p>查看当前节点的路径、继承链、子节点、links，并可把分支头切到当前节点。</p>
+                </div>
+              </div>
+
+              <a-spin :spinning="treeDetailLoading">
+                <template v-if="selectedTreeNode">
+                  <div class="project-tree-node-card">
+                    <div class="project-tree-node-card__header">
+                      <div>
+                        <h5>{{ treeNodeTitle(selectedTreeNode) }}</h5>
+                        <p>{{ treeNodeMeta(selectedTreeNode) }}</p>
+                      </div>
+                      <a-tag color="geekblue">{{ treeNodeTypeLabel(selectedTreeNode.nodeType) }}</a-tag>
+                    </div>
+
+                    <div class="project-tree-node-card__meta-row">
+                      <span>创建于 {{ formatNodeTimestamp(selectedTreeNode.createdAt) }}</span>
+                      <span>更新于 {{ formatNodeTimestamp(selectedTreeNode.updatedAt) }}</span>
+                    </div>
+
+                    <a-alert
+                      v-if="selectedTreeNode.archivedAt"
+                      type="warning"
+                      show-icon
+                      :message="`已归档：${formatNodeTimestamp(selectedTreeNode.archivedAt)}`"
+                      style="margin-bottom: 12px"
+                    />
+                    <a-alert
+                      v-else-if="selectedTreeNode.isActive === false"
+                      type="info"
+                      show-icon
+                      message="当前节点为非激活状态"
+                      style="margin-bottom: 12px"
+                    />
+
+                    <div class="project-tree-node-card__section">
+                      <span class="project-tree-node-card__label">路径</span>
+                      <strong>{{ selectedTreeNode.path }}</strong>
+                    </div>
+                    <div class="project-tree-node-card__section">
+                      <span class="project-tree-node-card__label">内容摘要</span>
+                      <p>{{ selectedTreeNode.contentText || "暂无文本内容" }}</p>
+                    </div>
+
+                    <div class="project-tree-node-card__section">
+                      <div class="project-tree-node-card__section-header">
+                        <span class="project-tree-node-card__label">祖先链</span>
+                        <span>{{ selectedTreeNodeAncestors.length }} 个节点</span>
+                      </div>
+                      <div class="project-tree-node-card__chips">
+                        <button
+                          v-for="ancestor in selectedTreeNodeAncestors"
+                          :key="ancestor.id"
+                          type="button"
+                          class="project-tree-chip"
+                          @click="selectTreeNode(ancestor.id)"
+                        >
+                          {{ treeNodeTypeLabel(ancestor.nodeType) }} · {{ treeNodeTitle(ancestor) }}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div class="project-tree-node-card__section">
+                      <div class="project-tree-node-card__section-header">
+                        <span class="project-tree-node-card__label">直接子节点</span>
+                        <span>{{ selectedTreeNodeChildren.length }} 个</span>
+                      </div>
+                      <div v-if="selectedTreeNodeChildren.length > 0" class="project-tree-node-list">
+                        <button
+                          v-for="child in selectedTreeNodeChildren"
+                          :key="child.id"
+                          type="button"
+                          class="project-tree-node-list__item"
+                          @click="selectTreeNode(child.id)"
+                        >
+                          <strong>{{ treeNodeTitle(child) }}</strong>
+                          <span>{{ treeNodeTypeLabel(child.nodeType) }} · {{ formatNodeTimestamp(child.createdAt) }}</span>
+                        </button>
+                      </div>
+                      <a-empty v-else description="暂无子节点" />
+                    </div>
+
+                    <div class="project-tree-node-card__section">
+                      <div class="project-tree-node-card__section-header">
+                        <span class="project-tree-node-card__label">分支头管理</span>
+                        <span>默认分支：{{ defaultTreeBranch?.branchName || "未设置" }}</span>
+                      </div>
+                      <div class="project-tree-node-list">
+                        <div v-for="branch in treeBranches" :key="branch.id" class="project-tree-node-list__item project-tree-node-list__item--branch">
+                          <div>
+                            <strong>{{ branch.branchName }}</strong>
+                            <span>{{ describeBranchHead(branch) }}</span>
+                          </div>
+                          <div class="project-tree-branch-actions">
+                            <a-button
+                              size="small"
+                              :loading="branchUpdateTargetId === branch.id"
+                              @click="moveBranchHead(branch, false)"
+                            >
+                              指向当前节点
+                            </a-button>
+                            <a-button
+                              size="small"
+                              type="primary"
+                              :loading="branchUpdateTargetId === branch.id"
+                              @click="moveBranchHead(branch, true)"
+                            >
+                              设为默认
+                            </a-button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="project-tree-node-card__section">
+                      <div class="project-tree-node-card__section-header">
+                        <span class="project-tree-node-card__label">关联 links</span>
+                        <span>{{ selectedTreeNodeLinks.length }} 条</span>
+                      </div>
+                      <div v-if="selectedTreeNodeLinks.length > 0" class="project-tree-node-list">
+                        <div v-for="link in selectedTreeNodeLinks" :key="link.id" class="project-tree-node-list__item project-tree-node-list__item--link">
+                          <div>
+                            <strong>{{ linkDirectionLabel(link.direction) }} · {{ link.linkType }}</strong>
+                            <span>
+                              {{ resolveLinkNodeLabel(link.sourceNodeId) }} → {{ resolveLinkNodeLabel(link.targetNodeId) }}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                      <a-empty v-else description="暂无关联 links" />
+                    </div>
+                  </div>
+                </template>
+                <a-empty v-else description="请选择一个树节点" />
+              </a-spin>
+            </section>
+          </div>
+        </section>
+
         <section class="project-task-graph-canvas-shell">
           <div class="project-task-graph-canvas-shell__controls">
             <div class="project-task-graph-control-card">
@@ -213,11 +436,22 @@ import "@vue-flow/core/dist/theme-default.css";
 import "@vue-flow/controls/dist/style.css";
 import {
   type ExecutionTraceSegment,
+  type ProjectTreeBranchRecord,
+  type ProjectTreeLinkRecord,
+  type ProjectTreeNodeRecord,
   type ProjectTaskGraphEdgeView,
   type ProjectTaskGraphTaskView,
   type TaskExecutionTrace,
+  getProjectTree,
+  getProjectTreeAncestors,
+  getProjectTreeBranches,
+  getProjectTreeChildren,
+  getProjectTreeLinks,
+  getProjectTreeNode,
+  getProjectTreeNodeLinks,
   getProjectTaskGraphView,
   getTaskExecutionTrace,
+  updateProjectTreeBranch,
 } from "../lib/api";
 import { type RealtimeEvent, useRealtimeStore } from "../stores/realtime";
 
@@ -260,6 +494,18 @@ const loadError = ref("");
 const project = ref<GraphProject | null>(null);
 const tasks = ref<GraphTask[]>([]);
 const relationEdges = ref<ProjectTaskGraphEdgeView[]>([]);
+const treeNodes = ref<ProjectTreeNodeRecord[]>([]);
+const treeBranches = ref<ProjectTreeBranchRecord[]>([]);
+const projectLinks = ref<ProjectTreeLinkRecord[]>([]);
+const treeLoading = ref(false);
+const treeDetailLoading = ref(false);
+const treeError = ref("");
+const selectedTreeNodeId = ref<string | null>(null);
+const selectedTreeNode = ref<ProjectTreeNodeRecord | null>(null);
+const selectedTreeNodeAncestors = ref<ProjectTreeNodeRecord[]>([]);
+const selectedTreeNodeChildren = ref<ProjectTreeNodeRecord[]>([]);
+const selectedTreeNodeLinks = ref<ProjectTreeLinkRecord[]>([]);
+const branchUpdateTargetId = ref<string | null>(null);
 
 const layoutMode = ref<LayoutMode>("stage");
 const searchText = ref("");
@@ -327,6 +573,22 @@ const statusCounts = computed(() => ({
   failed: tasks.value.filter((task) => task.status === "failed").length,
 }));
 
+const treeNodeMap = computed(() => new Map(treeNodes.value.map((node) => [node.id, node])));
+
+const treeStats = computed(() => ({
+  total: treeNodes.value.length,
+  tasks: treeNodes.value.filter((node) => node.nodeType === "task").length,
+  sessions: treeNodes.value.filter((node) => node.nodeType === "session").length,
+  messages: treeNodes.value.filter((node) => node.nodeType === "message").length,
+  links: projectLinks.value.length,
+}));
+
+const defaultTreeBranch = computed(
+  () => treeBranches.value.find((branch) => branch.isDefault) || null,
+);
+
+const treeData = computed(() => buildTreeData(null));
+
 const groupedBuckets = computed(() => {
   const bucketMap = new Map<string, GraphTask[]>();
   const labelMap = new Map<string, string>();
@@ -378,6 +640,14 @@ async function loadPage() {
     project.value = null;
     tasks.value = [];
     relationEdges.value = [];
+    treeNodes.value = [];
+    treeBranches.value = [];
+    projectLinks.value = [];
+    selectedTreeNodeId.value = null;
+    selectedTreeNode.value = null;
+    selectedTreeNodeAncestors.value = [];
+    selectedTreeNodeChildren.value = [];
+    selectedTreeNodeLinks.value = [];
     loading.value = false;
     return;
   }
@@ -386,11 +656,13 @@ async function loadPage() {
   loadError.value = "";
   selectedTaskId.value = null;
   try {
+    const treePromise = loadTreeWorkspace();
     const view = await getProjectTaskGraphView(projectId.value);
     project.value = view.project;
     tasks.value = view.tasks as GraphTask[];
     relationEdges.value = view.edges || [];
     fitViewTick.value += 1;
+    await treePromise;
   } catch (error) {
     project.value = null;
     tasks.value = [];
@@ -398,6 +670,104 @@ async function loadPage() {
     loadError.value = error instanceof Error ? error.message : "加载任务总图失败";
   } finally {
     loading.value = false;
+  }
+}
+
+async function loadTreeWorkspace() {
+  if (!projectId.value) {
+    treeNodes.value = [];
+    treeBranches.value = [];
+    projectLinks.value = [];
+    selectedTreeNodeId.value = null;
+    selectedTreeNode.value = null;
+    selectedTreeNodeAncestors.value = [];
+    selectedTreeNodeChildren.value = [];
+    selectedTreeNodeLinks.value = [];
+    return;
+  }
+
+  treeLoading.value = true;
+  treeError.value = "";
+
+  try {
+    const [nodes, branches, links] = await Promise.all([
+      getProjectTree(projectId.value),
+      getProjectTreeBranches(projectId.value),
+      getProjectTreeLinks(projectId.value),
+    ]);
+
+    treeNodes.value = nodes;
+    treeBranches.value = branches;
+    projectLinks.value = links;
+
+    const fallbackNodeId =
+      (selectedTreeNodeId.value && nodes.some((node) => node.id === selectedTreeNodeId.value)
+        ? selectedTreeNodeId.value
+        : null) ||
+      branches.find((branch) => branch.isDefault)?.headNodeId ||
+      nodes.find((node) => node.nodeType === "project_root")?.id ||
+      null;
+
+    if (fallbackNodeId) {
+      await selectTreeNode(fallbackNodeId);
+    } else {
+      selectedTreeNodeId.value = null;
+      selectedTreeNode.value = null;
+      selectedTreeNodeAncestors.value = [];
+      selectedTreeNodeChildren.value = [];
+      selectedTreeNodeLinks.value = [];
+    }
+  } catch (error) {
+    treeError.value = error instanceof Error ? error.message : "加载项目树失败";
+  } finally {
+    treeLoading.value = false;
+  }
+}
+
+async function selectTreeNode(nodeId: string) {
+  if (!projectId.value) {
+    return;
+  }
+
+  selectedTreeNodeId.value = nodeId;
+  treeDetailLoading.value = true;
+  treeError.value = "";
+
+  try {
+    const [node, ancestors, children, links] = await Promise.all([
+      getProjectTreeNode(projectId.value, nodeId),
+      getProjectTreeAncestors(projectId.value, nodeId),
+      getProjectTreeChildren(projectId.value, nodeId),
+      getProjectTreeNodeLinks(projectId.value, nodeId),
+    ]);
+    selectedTreeNode.value = node;
+    selectedTreeNodeAncestors.value = ancestors;
+    selectedTreeNodeChildren.value = children;
+    selectedTreeNodeLinks.value = links;
+  } catch (error) {
+    treeError.value = error instanceof Error ? error.message : "加载树节点详情失败";
+  } finally {
+    treeDetailLoading.value = false;
+  }
+}
+
+async function moveBranchHead(branch: ProjectTreeBranchRecord, setDefault: boolean) {
+  if (!projectId.value || !selectedTreeNodeId.value) {
+    return;
+  }
+
+  branchUpdateTargetId.value = branch.id;
+  treeError.value = "";
+  try {
+    await updateProjectTreeBranch(projectId.value, branch.id, {
+      headNodeId: selectedTreeNodeId.value,
+      isDefault: setDefault || branch.isDefault,
+    });
+    await loadTreeWorkspace();
+  } catch (error) {
+    treeError.value = error instanceof Error ? error.message : "更新分支指向失败";
+  } finally {
+    branchUpdateTargetId.value = null;
   }
 }
 
@@ -948,6 +1318,127 @@ function readString(value: unknown) {
   return typeof value === "string" && value.trim() ? value : null;
 }
 
+function buildTreeData(parentId: string | null): Array<Record<string, unknown>> {
+  const children = treeNodes.value
+    .filter((node) => (parentId ? node.parentId === parentId : !node.parentId))
+    .sort(compareTreeNodes);
+
+  return children.map((node) => ({
+    key: node.id,
+    title: `${treeNodeTypeLabel(node.nodeType)} · ${treeNodeTitle(node)}`,
+    children: buildTreeData(node.id),
+  }));
+}
+
+function compareTreeNodes(left: ProjectTreeNodeRecord, right: ProjectTreeNodeRecord) {
+  const depthDiff = left.depth - right.depth;
+  if (depthDiff !== 0) {
+    return depthDiff;
+  }
+  const leftTime = left.createdAt ? new Date(left.createdAt).getTime() : 0;
+  const rightTime = right.createdAt ? new Date(right.createdAt).getTime() : 0;
+  if (leftTime !== rightTime) {
+    return leftTime - rightTime;
+  }
+  return left.id.localeCompare(right.id);
+}
+
+function handleTreeSelect(keys: Array<string | number>) {
+  const nextNodeId = keys[0] ? String(keys[0]) : "";
+  if (!nextNodeId) {
+    return;
+  }
+  void selectTreeNode(nextNodeId);
+}
+
+function treeNodeTypeLabel(type: ProjectTreeNodeRecord["nodeType"]) {
+  switch (type) {
+    case "project_root":
+      return "项目根";
+    case "task":
+      return "任务";
+    case "session":
+      return "会话";
+    case "message":
+      return "消息";
+    case "context":
+      return "上下文";
+    case "fork_point":
+      return "分叉点";
+    default:
+      return type;
+  }
+}
+
+function treeNodeTitle(node: ProjectTreeNodeRecord) {
+  return (
+    node.contentText ||
+    node.branchName ||
+    node.runtimeMessageId ||
+    node.runtimeSessionId ||
+    node.id
+  );
+}
+
+function treeNodeMeta(node: ProjectTreeNodeRecord) {
+  const parts = [node.path];
+  if (node.branchName) {
+    parts.push(`分支 ${node.branchName}`);
+  }
+  if (node.runtimeSessionId) {
+    parts.push(`会话 ${node.runtimeSessionId}`);
+  }
+  if (node.role) {
+    parts.push(`角色 ${node.role}`);
+  }
+  return parts.join(" · ");
+}
+
+function formatNodeTimestamp(value?: string | null) {
+  if (!value) {
+    return "暂无时间";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function describeBranchHead(branch: ProjectTreeBranchRecord) {
+  const node = treeNodeMap.value.get(branch.headNodeId);
+  if (!node) {
+    return branch.headNodeId;
+  }
+  return `${treeNodeTypeLabel(node.nodeType)} · ${treeNodeTitle(node)}`;
+}
+
+function resolveLinkNodeLabel(nodeId: string) {
+  const node = treeNodeMap.value.get(nodeId);
+  if (!node) {
+    return nodeId;
+  }
+  return `${treeNodeTypeLabel(node.nodeType)} · ${treeNodeTitle(node)}`;
+}
+
+function linkDirectionLabel(direction?: ProjectTreeLinkRecord["direction"]) {
+  switch (direction) {
+    case "incoming":
+      return "入链";
+    case "outgoing":
+      return "出链";
+    case "self":
+      return "自环";
+    default:
+      return "链接";
+  }
+}
+
 async function loadExecutionTrace(taskId: string) {
   traceLoading.value = true;
   traceError.value = "";
@@ -1089,6 +1580,225 @@ function openFollowUpTask(task: GraphTask | null) {
   justify-content: center;
   gap: 10px;
   padding: 14px;
+}
+
+.project-tree-workbench {
+  margin-bottom: 16px;
+  padding: 18px;
+  border: 1px solid #dbe5ec;
+  border-radius: 28px;
+  background:
+    radial-gradient(circle at top right, rgba(160, 208, 197, 0.18), transparent 24%),
+    linear-gradient(180deg, #fcfefd 0%, #f1f7f4 100%);
+}
+
+.project-tree-workbench__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.project-tree-workbench__header h3,
+.project-tree-workbench__panel-header h4,
+.project-tree-node-card__header h5 {
+  margin: 0;
+  color: #17324a;
+}
+
+.project-tree-workbench__header p,
+.project-tree-workbench__panel-header p,
+.project-tree-node-card__header p {
+  margin: 6px 0 0;
+  color: rgba(23, 50, 74, 0.64);
+  line-height: 1.6;
+}
+
+.project-tree-workbench__stats {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.project-tree-workbench__stat {
+  padding: 12px 14px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.76);
+  border: 1px solid rgba(23, 50, 74, 0.08);
+}
+
+.project-tree-workbench__stat span {
+  display: block;
+  font-size: 12px;
+  color: rgba(23, 50, 74, 0.56);
+}
+
+.project-tree-workbench__stat strong {
+  display: block;
+  margin-top: 6px;
+  font-size: 22px;
+  color: #17324a;
+}
+
+.project-tree-workbench__grid {
+  display: grid;
+  grid-template-columns: minmax(320px, 0.95fr) minmax(420px, 1.25fr);
+  gap: 16px;
+}
+
+.project-tree-workbench__panel {
+  min-height: 420px;
+  padding: 16px;
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(23, 50, 74, 0.08);
+}
+
+.project-tree-workbench__panel-header {
+  margin-bottom: 14px;
+}
+
+.project-tree-workbench__branch-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.project-tree-branch-card {
+  padding: 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(23, 50, 74, 0.08);
+  background: #f7fbf9;
+  text-align: left;
+}
+
+.project-tree-branch-card--default {
+  border-color: #5f92d6;
+  background: #eef5ff;
+}
+
+.project-tree-branch-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.project-tree-branch-card p {
+  margin: 8px 0 0;
+  color: rgba(23, 50, 74, 0.62);
+  line-height: 1.5;
+}
+
+.project-tree-workbench__tree {
+  padding: 8px;
+  border-radius: 16px;
+  background: rgba(244, 248, 251, 0.88);
+}
+
+.project-tree-node-card__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.project-tree-node-card__meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 10px 0 14px;
+  font-size: 12px;
+  color: rgba(23, 50, 74, 0.58);
+}
+
+.project-tree-node-card__section {
+  padding: 14px 0;
+  border-top: 1px solid rgba(23, 50, 74, 0.08);
+}
+
+.project-tree-node-card__label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: rgba(23, 50, 74, 0.56);
+}
+
+.project-tree-node-card__section strong,
+.project-tree-node-card__section p {
+  margin: 0;
+  color: #17324a;
+  line-height: 1.6;
+}
+
+.project-tree-node-card__section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: rgba(23, 50, 74, 0.6);
+}
+
+.project-tree-node-card__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.project-tree-chip,
+.project-tree-node-list__item {
+  border: 1px solid rgba(23, 50, 74, 0.08);
+  background: #f8fbfd;
+}
+
+.project-tree-chip {
+  padding: 6px 10px;
+  border-radius: 999px;
+  color: #17324a;
+}
+
+.project-tree-node-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.project-tree-node-list__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 12px;
+  border-radius: 14px;
+  text-align: left;
+}
+
+.project-tree-node-list__item strong,
+.project-tree-node-list__item span {
+  display: block;
+}
+
+.project-tree-node-list__item span {
+  margin-top: 4px;
+  font-size: 12px;
+  color: rgba(23, 50, 74, 0.58);
+}
+
+.project-tree-node-list__item--branch,
+.project-tree-node-list__item--link {
+  align-items: flex-start;
+}
+
+.project-tree-branch-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
 .project-task-graph-canvas-shell {
@@ -1528,6 +2238,11 @@ function openFollowUpTask(task: GraphTask | null) {
     flex-direction: row;
     flex-wrap: wrap;
   }
+
+  .project-tree-workbench__stats,
+  .project-tree-workbench__grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 960px) {
@@ -1537,6 +2252,17 @@ function openFollowUpTask(task: GraphTask | null) {
 
   .project-task-graph-page__stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .project-tree-workbench__stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .project-tree-workbench__header,
+  .project-tree-node-list__item,
+  .project-tree-branch-actions {
+    flex-direction: column;
+    align-items: stretch;
   }
 
   .project-task-graph-canvas-shell {

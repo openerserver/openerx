@@ -8,9 +8,9 @@
         <a-space size="small" :style="taskDetailThemeStyles.statusTags">
           <a-tag :color="taskStatusColor(task?.status)">{{ taskStatusLabel(task?.status) }}</a-tag>
           <a-tag v-if="taskId" color="default">任务 {{ taskId.slice(0, 8) }}</a-tag>
-          <a-tag v-if="selectedSession" color="blue">当前分支 {{ selectedSessionLabel(selectedSession) }}</a-tag>
-          <a-tag v-if="selectedSessionBurstState" :color="selectedSessionBurstState.badgeColor">{{ selectedSessionBurstState.badgeLabel }}</a-tag>
-          <a-tag v-if="selectedSessionBurstState?.countdownLabel" color="default">剩余 {{ selectedSessionBurstState.countdownLabel }}</a-tag>
+          <a-tag v-if="selectedBranch" color="blue">当前分支 {{ selectedBranchLabel(selectedBranch) }}</a-tag>
+          <a-tag v-if="selectedBranchBurstState" :color="selectedBranchBurstState.badgeColor">{{ selectedBranchBurstState.badgeLabel }}</a-tag>
+          <a-tag v-if="selectedBranchBurstState?.countdownLabel" color="default">剩余 {{ selectedBranchBurstState.countdownLabel }}</a-tag>
           <a-tag v-if="task?.selectedModel" color="cyan">{{ task.selectedModel }}</a-tag>
         </a-space>
       </div>
@@ -29,16 +29,16 @@
           :style="taskDetailThemeStyles.collapse"
         >
           <a-collapse-panel key="sessions" header="会话分支">
-            <template v-if="visibleSessionTree.length > 0">
-              <SessionTree
-                :tree="visibleSessionTree"
-                :selected-session-id="selectedSessionId"
+            <template v-if="visibleBranchTree.length > 0">
+              <BranchTree
+                :tree="visibleBranchTree"
+                :selected-branch-session-id="selectedBranchSessionId"
                 :session-state-map="runtimeSessionStateMap"
                 :task-status="task?.status"
                 @select="selectSession"
-                @activate="handleActivateSession"
-                @fork="handleForkFromSession"
-                @archive="handleArchiveSession"
+                @activate="handleActivateBranch"
+                @fork="handleForkFromBranch"
+                @archive="handleArchiveBranch"
               />
             </template>
             <template v-else-if="visibleSessions.length > 0">
@@ -47,12 +47,12 @@
                   v-for="session in visibleSessions"
                   :key="session.id"
                   @click="selectSession(session.id)"
-                  :style="sessionCardStyle(session.id === selectedSessionId)"
+                  :style="sessionCardStyle(session.id === selectedBranchSessionId)"
                 >
                   <a-flex justify="space-between" align="flex-start" :style="taskDetailThemeStyles.sessionHeader">
                     <div :style="taskDetailThemeStyles.sessionMetaBlock">
                       <div :style="taskDetailThemeStyles.sessionTitle">
-                        {{ selectedSessionLabel(session) }}
+                        {{ selectedBranchLabel(session) }}
                       </div>
                       <a-typography-text type="secondary" :style="taskDetailThemeStyles.sessionMeta">
                         {{ formatTime(session.updatedAt || session.createdAt || "") }}
@@ -102,24 +102,24 @@
             <a-flex justify="space-between" align="center" :style="taskDetailThemeStyles.mainHeader">
               <div>
                 <div :style="taskDetailThemeStyles.mainHeaderTitle">执行详情</div>
-                <a-typography-text v-if="selectedSession" type="secondary" :style="taskDetailThemeStyles.selectedSessionHint">
-                  {{ selectedSessionLabel(selectedSession) }}
+                <a-typography-text v-if="selectedBranch" type="secondary" :style="taskDetailThemeStyles.selectedSessionHint">
+                  {{ selectedBranchLabel(selectedBranch) }}
                 </a-typography-text>
               </div>
               <a-space size="small">
-                <a-tag v-if="selectedSession?.isActive" color="blue">活跃分支</a-tag>
+                <a-tag v-if="selectedBranch?.isActive" color="blue">活跃分支</a-tag>
                 <a-tag v-if="isAwaitingAssistantResponse" color="processing">执行中</a-tag>
-                <a-tag v-if="selectedSessionBurstState" :color="selectedSessionBurstState.badgeColor">{{ selectedSessionBurstState.badgeLabel }}</a-tag>
-                <a-tag v-if="selectedSessionBurstState?.countdownLabel" color="default">剩余 {{ selectedSessionBurstState.countdownLabel }}</a-tag>
+                <a-tag v-if="selectedBranchBurstState" :color="selectedBranchBurstState.badgeColor">{{ selectedBranchBurstState.badgeLabel }}</a-tag>
+                <a-tag v-if="selectedBranchBurstState?.countdownLabel" color="default">剩余 {{ selectedBranchBurstState.countdownLabel }}</a-tag>
               </a-space>
             </a-flex>
           </template>
 
           <a-alert
-            v-if="selectedSessionBurstBanner"
-            :type="selectedSessionBurstBanner.alertType"
-            :message="selectedSessionBurstBanner.message"
-            :description="selectedSessionBurstBanner.description"
+            v-if="selectedBranchBurstBanner"
+            :type="selectedBranchBurstBanner.alertType"
+            :message="selectedBranchBurstBanner.message"
+            :description="selectedBranchBurstBanner.description"
             show-icon
             style="margin-bottom: 12px"
           />
@@ -202,12 +202,12 @@
           <a-tabs :activeKey="taskDetailPrimaryTab" size="small" class="task-detail-primary-tabs" @update:activeKey="taskDetailPrimaryTab = String($event ?? 'messages')">
             <a-tab-pane key="messages" tab="会话消息视图">
               <div ref="messagesPaneRef" :style="messagesPaneStyle" @scroll.passive="handleMessagesPaneScroll">
-                <div v-if="!selectedSessionId && isWorkbenchEmbedded && parallelComparisonCards.length === 0" :style="taskDetailThemeStyles.compactMainEmptyState">
+                <div v-if="!selectedBranchSessionId && isWorkbenchEmbedded && parallelComparisonCards.length === 0" :style="taskDetailThemeStyles.compactMainEmptyState">
                   <a-typography-text type="secondary" :style="taskDetailThemeStyles.compactMainEmptyText">
                     请选择分支
                   </a-typography-text>
                 </div>
-                <a-empty v-else-if="!selectedSessionId && parallelComparisonCards.length === 0" description="请选择分支" />
+                <a-empty v-else-if="!selectedBranchSessionId && parallelComparisonCards.length === 0" description="请选择分支" />
                 <a-spin v-else-if="messagesLoading" />
                 <div
                   v-if="parallelComparisonCards.length > 0"
@@ -279,7 +279,7 @@
                           <template #icon><EnterOutlined /></template>
                         </a-button>
                         <a-button
-                          v-if="selectedSessionId && !isParallelComparisonMode && task?.status !== 'running' && !item.isPending"
+                          v-if="selectedBranchSessionId && !isParallelComparisonMode && task?.status !== 'running' && !item.isPending"
                           type="text"
                           size="small"
                           :loading="forkingMessageId === item.key"
@@ -434,6 +434,17 @@
                 />
 
                 <a-alert
+                  v-if="taskExecutionTrace?.timelineMeta?.cacheState && taskExecutionTrace.timelineMeta.cacheState !== 'complete'"
+                  type="info"
+                  show-icon
+                  :message="taskExecutionTrace.timelineMeta.cacheState === 'partial' ? '时间线缓存部分命中' : '时间线缓存暂不可用'"
+                  :description="taskExecutionTrace.timelineMeta.cacheState === 'partial'
+                    ? '当前时间线直接来自 service tree events，但只覆盖了部分 lineage。'
+                    : '当前时间线数据面还没有可展示的 tree events 缓存。'"
+                  style="margin-bottom: 12px"
+                />
+
+                <a-alert
                   v-if="taskExecutionTraceError"
                   type="error"
                   show-icon
@@ -454,7 +465,7 @@
                         <div class="task-trace-panel__sub">按用户输入、工作流上下文、Hook、最终 Prompt 和模型回复拆开</div>
                       </div>
                       <a-space size="small" wrap style="margin-top: 6px">
-                        <a-radio-group v-model:value="traceSegmentFilter" size="small" button-style="solid">
+                        <a-radio-group :value="traceSegmentFilter" size="small" button-style="solid" @update:value="traceSegmentFilter = $event">
                           <a-radio-button value="all">全部</a-radio-button>
                           <a-radio-button value="user-input">用户输入</a-radio-button>
                           <a-radio-button value="hook">Hook</a-radio-button>
@@ -572,11 +583,11 @@
                   <section class="task-trace-panel">
                     <div class="task-trace-panel__header">
                       <div>
-                        <strong>会话原始消息</strong>
-                        <div class="task-trace-panel__sub">按 session 原始 message 顺序展示，并可展开查看完整 JSON</div>
+                        <strong>事件时间线</strong>
+                        <div class="task-trace-panel__sub">直接展示 service tree events 聚合出的 timeline 项，并可展开查看原始快照</div>
                       </div>
                       <a-flex align="center" style="margin-top: 6px; gap: 8px; flex-wrap: wrap">
-                        <a-radio-group v-model:value="traceMessageRoleFilter" size="small" button-style="solid">
+                        <a-radio-group :value="traceMessageRoleFilter" size="small" button-style="solid" @update:value="traceMessageRoleFilter = $event">
                           <a-radio-button value="all">全部</a-radio-button>
                           <a-radio-button value="user">用户消息</a-radio-button>
                           <a-radio-button value="assistant">模型消息</a-radio-button>
@@ -591,7 +602,7 @@
 
                     <a-empty
                       v-if="filteredTraceMessages.length === 0"
-                      description="当前会话没有可展示的原始消息"
+                      description="当前时间线没有可展示的事件项"
                     />
 
                     <div
@@ -603,24 +614,28 @@
                         <a-space size="small" wrap>
                           <a-tag :color="traceMessageRoleColor(rawMessage.role)">{{ traceMessageRoleLabel(rawMessage.role) }}</a-tag>
                           <a-tag color="default">{{ rawMessage.id.slice(0, 10) }}</a-tag>
+                          <a-tag v-for="eventType in rawMessage.sourceEventTypes || []" :key="eventType" color="default">
+                            {{ eventType }}
+                          </a-tag>
                         </a-space>
                         <span class="task-trace-message__time">{{ formatTime(rawMessage.createdAt || '') }}</span>
                       </div>
+                      <div v-if="rawMessage.completedAt" class="task-trace-message__meta">完成时间：{{ formatTime(rawMessage.completedAt) }}</div>
                       <pre class="task-trace-message__content">{{ rawMessage.text || '(该消息没有 text part)' }}</pre>
                       <a-space size="small" style="margin-top: 8px">
-                        <a-button size="small" @click="handleCopyMessage(rawMessage.text || stringifyTraceRaw(rawMessage.raw))">
+                        <a-button size="small" @click="handleCopyMessage(rawMessage.text || stringifyTraceRaw(rawMessage.raw ?? rawMessage))">
                           <template #icon><CopyOutlined /></template>
                           复制文本
                         </a-button>
-                        <a-button size="small" @click="handleCopyMessage(stringifyTraceRaw(rawMessage.raw))">
+                        <a-button size="small" :disabled="!rawMessage.raw" @click="handleCopyMessage(stringifyTraceRaw(rawMessage.raw))">
                           <template #icon><CopyOutlined /></template>
                           复制原始 JSON
                         </a-button>
-                        <a-button size="small" @click="toggleTraceMessageRaw(rawMessage.id)">
+                        <a-button size="small" :disabled="!rawMessage.raw" @click="toggleTraceMessageRaw(rawMessage.id)">
                           {{ isTraceMessageRawExpanded(rawMessage.id) ? '收起 JSON' : '展开 JSON' }}
                         </a-button>
                       </a-space>
-                      <pre v-if="isTraceMessageRawExpanded(rawMessage.id)" class="task-trace-message__raw">{{ stringifyTraceRaw(rawMessage.raw) }}</pre>
+                      <pre v-if="isTraceMessageRawExpanded(rawMessage.id) && rawMessage.raw" class="task-trace-message__raw">{{ stringifyTraceRaw(rawMessage.raw) }}</pre>
                     </div>
                   </section>
                 </div>
@@ -687,7 +702,7 @@
                   </button>
 
                   <button
-                    v-if="taskId && selectedSessionId && !isWorkbenchEmbedded && !isParallelComparisonMode"
+                    v-if="taskId && selectedBranchSessionId && !isWorkbenchEmbedded && !isParallelComparisonMode"
                     type="button"
                     class="reply-composer-action reply-composer-action--icon"
                     :disabled="isAwaitingAssistantResponse"
@@ -698,7 +713,7 @@
                   </button>
 
                   <button
-                    v-if="taskId && selectedSessionId && !isParallelComparisonMode"
+                    v-if="taskId && selectedBranchSessionId && !isParallelComparisonMode"
                     type="button"
                     class="reply-composer-action"
                     :disabled="!canContinueCurrentSession"
@@ -973,7 +988,7 @@ import { useRoute, useRouter } from "vue-router";
 import {
   toApiError,
   type ChainStepInput,
-  type ExecutionTraceMessage,
+  type ExecutionTraceTimelineItem,
   type ExecutionTraceSegment,
   type ExecutionCandidate,
   type ExecutionMode,
@@ -989,28 +1004,28 @@ import {
   type ProjectRuntimeUsageLedgerListResponse,
   type RuntimePipeline,
   type RuntimePipelineStage,
-  type SessionInfo,
-  type SessionTreeNode,
+  type TaskBranchLineageNode,
+  type TaskBranchRecord,
   type Task,
   type TaskExecutionTrace,
   type TaskWorkflowViewModel,
-  activateSession,
+  activateTaskBranch,
   advanceWorkflowStage,
   adoptParallelCandidate,
-  archiveTaskSession,
+  archiveTaskBranch,
   completeTask,
   continueTask,
-  forkTaskSession,
+  forkTaskBranch,
   getModelsList,
   getProjectRoleExecutionView,
   getProjectRuntimeUsageLedgers,
-  getSessionMessages,
+  getTaskConversationMessages,
   getTaskExecutionTraceView,
-  getSessionTree,
+  getTaskBranchLineage,
   getTask,
   getTaskGovernance,
   getTaskPipeline,
-  getTaskSessions,
+  getTaskBranches,
   getTaskWorkflowView,
   terminateAgent,
   updateDeveloperChangeRequest,
@@ -1245,13 +1260,13 @@ const activeAgentCount = computed(
   () => agentRuns.value.filter((run) => run.status === "running" || run.status === "paused").length,
 );
 const currentControllableAgentRunId = computed(() => {
-  if (!selectedSessionId.value) {
+  if (!selectedBranchSessionId.value) {
     return null;
   }
 
   return agentRuns.value.find((run) => run.status === "running" || run.status === "paused")?.id ?? null;
 });
-const isCompactMainEmpty = computed(() => isWorkbenchEmbedded.value && !selectedSessionId.value);
+const isCompactMainEmpty = computed(() => isWorkbenchEmbedded.value && !selectedBranchSessionId.value);
 const messagesPaneStyle = computed(() => {
   if (isCompactMainEmpty.value) {
     return taskDetailThemeStyles.compactMessagesPane;
@@ -1331,10 +1346,10 @@ const runtimePipelineSummaryItems = computed(() => {
 });
 
 // Sessions
-const sessions = ref<SessionInfo[]>([]);
-const sessionTree = ref<SessionTreeNode[]>([]);
-const selectedSessionId = ref<string | undefined>(undefined);
-const sessionMessages = ref<unknown[]>([]);
+const branches = ref<TaskBranchRecord[]>([]);
+const branchLineage = ref<TaskBranchLineageNode[]>([]);
+const selectedBranchSessionId = ref<string | undefined>(undefined);
+const conversationMessages = ref<unknown[]>([]);
 const parallelCandidateMessages = ref<Record<string, unknown[]>>({});
 const messagesLoading = ref(false);
 const activating = ref(false);
@@ -1354,10 +1369,10 @@ const focusedTaskRuntimeLedger = computed(() => {
     return taskRuntimeUsageRows.value.find((item) => item.id === routeLedgerId) ?? null;
   }
 
-  if (selectedSessionId.value) {
+  if (selectedBranchSessionId.value) {
     return (
       taskRuntimeUsageRows.value.find(
-        (item) => item.runtimeSessionId === selectedSessionId.value,
+        (item) => item.runtimeSessionId === selectedBranchSessionId.value,
       ) ?? null
     );
   }
@@ -1440,8 +1455,8 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-const suppressAssistantWaitingForSelectedSession = computed(
-  () => Boolean(selectedSessionId.value && terminatedAwaitingSessionId.value === selectedSessionId.value),
+const suppressAssistantWaitingForSelectedBranch = computed(
+  () => Boolean(selectedBranchSessionId.value && terminatedAwaitingSessionId.value === selectedBranchSessionId.value),
 );
 
 async function loadModels() {
@@ -1824,10 +1839,10 @@ const executionFeedbackActions = computed<ExecutionFeedbackAction[]>(() => {
 
 function handleMissingTask(id: string) {
   task.value = null;
-  sessions.value = [];
-  sessionTree.value = [];
-  selectedSessionId.value = undefined;
-  sessionMessages.value = [];
+  branches.value = [];
+  branchLineage.value = [];
+  selectedBranchSessionId.value = undefined;
+  conversationMessages.value = [];
   runtimePipeline.value = null;
   governance.value = null;
   workflowView.value = null;
@@ -1895,18 +1910,18 @@ async function refreshTaskData(
 
   if (options.sessions) {
     jobs.push(
-      getTaskSessions(id)
+      getTaskBranches(id)
         .then((r) => {
-          sessions.value = r.data;
-          ensureSelectedSession();
+          branches.value = r.data;
+          ensureSelectedBranch();
         })
         .catch(() => {}),
     );
     jobs.push(
-      getSessionTree(id)
+      getTaskBranchLineage(id)
         .then((r) => {
-          sessionTree.value = r.data;
-          ensureSelectedSessionFromTree();
+          branchLineage.value = r.data;
+          ensureSelectedBranchFromTree();
         })
         .catch(() => {}),
     );
@@ -1953,7 +1968,7 @@ async function refreshTaskData(
   }
 
   if (options.trace !== false) {
-    await refreshTaskExecutionTrace(id, selectedSessionId.value || task.value?.sessionId || undefined);
+    await refreshTaskExecutionTrace(id, selectedBranchSessionId.value || task.value?.sessionId || undefined);
   }
 
   if (resolvedExecutionMode.value === "parallel") {
@@ -2005,7 +2020,7 @@ async function refreshTaskRuntimeUsage(projectId: string, currentTaskId: string)
 function getPreferredPipelineSessionId() {
   const requestedSessionId =
     typeof route.query.session === "string" ? route.query.session : undefined;
-  return requestedSessionId || selectedSessionId.value || task.value?.sessionId;
+  return requestedSessionId || selectedBranchSessionId.value || task.value?.sessionId;
 }
 
 function formatUsd(value?: number | null) {
@@ -2190,34 +2205,34 @@ function applyPipelineStagePatch(event: RealtimeEvent) {
   return false;
 }
 
-function ensureSelectedSession() {
+function ensureSelectedBranch() {
   const requestedSessionId =
     typeof route.query.session === "string" ? route.query.session : undefined;
 
-  if (sessions.value.length === 0) {
-    selectedSessionId.value = undefined;
-    sessionMessages.value = [];
+  if (branches.value.length === 0) {
+    selectedBranchSessionId.value = undefined;
+    conversationMessages.value = [];
     return;
   }
 
-  if (requestedSessionId && sessions.value.some((session) => session.id === requestedSessionId)) {
-    selectedSessionId.value = requestedSessionId;
+  if (requestedSessionId && branches.value.some((session) => session.id === requestedSessionId)) {
+    selectedBranchSessionId.value = requestedSessionId;
     return;
   }
 
   if (
-    selectedSessionId.value &&
-    sessions.value.some((session) => session.id === selectedSessionId.value)
+    selectedBranchSessionId.value &&
+    branches.value.some((session) => session.id === selectedBranchSessionId.value)
   ) {
     return;
   }
 
-  selectedSessionId.value =
-    sessions.value.find((session) => session.isActive)?.id || sessions.value[0]?.id;
+  selectedBranchSessionId.value =
+    branches.value.find((session) => session.isActive)?.id || branches.value[0]?.id;
 }
 
-function flattenTree(nodes: SessionTreeNode[]): SessionTreeNode[] {
-  const result: SessionTreeNode[] = [];
+function flattenTree(nodes: TaskBranchLineageNode[]): TaskBranchLineageNode[] {
+  const result: TaskBranchLineageNode[] = [];
   for (const node of nodes) {
     result.push(node);
     if (node.children.length > 0) {
@@ -2227,35 +2242,35 @@ function flattenTree(nodes: SessionTreeNode[]): SessionTreeNode[] {
   return result;
 }
 
-function ensureSelectedSessionFromTree() {
-  if (sessionTree.value.length === 0) return;
-  if (selectedSessionId.value) return; // already selected via flat sessions
+function ensureSelectedBranchFromTree() {
+  if (branchLineage.value.length === 0) return;
+  if (selectedBranchSessionId.value) return; // already selected via flat sessions
 
-  const flat = flattenTree(sessionTree.value);
+  const flat = flattenTree(branchLineage.value);
   const requestedSessionId =
     typeof route.query.session === "string" ? route.query.session : undefined;
 
   if (requestedSessionId && flat.some((n) => n.runtimeSessionId === requestedSessionId)) {
-    selectedSessionId.value = requestedSessionId;
+    selectedBranchSessionId.value = requestedSessionId;
     return;
   }
 
   const active = flat.find((n) => n.isActive);
   if (active) {
-    selectedSessionId.value = active.runtimeSessionId;
+    selectedBranchSessionId.value = active.runtimeSessionId;
     return;
   }
 
-  selectedSessionId.value = flat[0]?.runtimeSessionId;
+  selectedBranchSessionId.value = flat[0]?.runtimeSessionId;
 }
 
-async function handleActivateSession(sessionId: string) {
+async function handleActivateBranch(sessionId: string) {
   if (!taskId.value || activating.value) return;
   activating.value = true;
   try {
-    await activateSession(taskId.value, sessionId);
+    await activateTaskBranch(taskId.value, sessionId);
     message.success("已切换到目标分支");
-    selectedSessionId.value = sessionId;
+    selectedBranchSessionId.value = sessionId;
     await refreshTaskData(taskId.value, {
       task: true,
       pipeline: false,
@@ -2269,17 +2284,17 @@ async function handleActivateSession(sessionId: string) {
   }
 }
 
-async function refreshSessionMessages(currentTaskId: string, sessionId: string, silent = false) {
+async function refreshConversationMessages(currentTaskId: string, sessionId: string, silent = false) {
   if (!silent) {
     messagesLoading.value = true;
   }
 
   try {
-    const response = await getSessionMessages(currentTaskId, sessionId);
-    sessionMessages.value = Array.isArray(response.data) ? response.data : [];
+    const response = await getTaskConversationMessages(currentTaskId, sessionId);
+    conversationMessages.value = Array.isArray(response.data) ? response.data : [];
   } catch {
     if (!silent) {
-      sessionMessages.value = [];
+      conversationMessages.value = [];
     }
   } finally {
     if (!silent) {
@@ -2301,7 +2316,7 @@ async function refreshParallelCandidateMessages(currentTaskId: string, silent = 
   const entries = await Promise.all(
     candidateSessionIds.map(async (sessionId) => {
       try {
-        const response = await getSessionMessages(currentTaskId, sessionId);
+        const response = await getTaskConversationMessages(currentTaskId, sessionId);
         return [sessionId, Array.isArray(response.data) ? response.data : []] as const;
       } catch {
         return [sessionId, silent ? parallelCandidateMessages.value[sessionId] ?? [] : []] as const;
@@ -2312,8 +2327,8 @@ async function refreshParallelCandidateMessages(currentTaskId: string, silent = 
   parallelCandidateMessages.value = Object.fromEntries(entries);
 }
 
-function scheduleSessionRefresh() {
-  if (!taskId.value || !selectedSessionId.value) {
+function scheduleConversationRefresh() {
+  if (!taskId.value || !selectedBranchSessionId.value) {
     return;
   }
 
@@ -2323,7 +2338,7 @@ function scheduleSessionRefresh() {
 
   messageRefreshTimer = setTimeout(() => {
     messageRefreshTimer = null;
-    void refreshSessionMessages(taskId.value as string, selectedSessionId.value as string, true);
+    void refreshConversationMessages(taskId.value as string, selectedBranchSessionId.value as string, true);
   }, 250);
 }
 
@@ -2352,7 +2367,7 @@ function shouldBootstrapRefresh() {
     !task.value.strategy &&
       !task.value.agentRunId &&
       !task.value.sessionId &&
-      sessions.value.length === 0 &&
+      branches.value.length === 0 &&
       !hasExecutionSignals,
   );
 }
@@ -2427,10 +2442,10 @@ function scheduleTaskRefresh(reason: string) {
       });
 
       if (
-        selectedSessionId.value &&
+        selectedBranchSessionId.value &&
         ["message.updated", "session.updated", "task.continued", "task.completed"].includes(reason)
       ) {
-        await refreshSessionMessages(taskId.value as string, selectedSessionId.value, true);
+        await refreshConversationMessages(taskId.value as string, selectedBranchSessionId.value, true);
       }
 
       if (
@@ -2448,11 +2463,11 @@ const taskEvents = computed(() => realtimeStore.events.filter((e) => e.taskId ==
 const persistedSessionMessageIds = computed(() => {
   const ids = new Set<string>();
 
-  if (!Array.isArray(sessionMessages.value)) {
+  if (!Array.isArray(conversationMessages.value)) {
     return ids;
   }
 
-  for (const message of sessionMessages.value) {
+  for (const message of conversationMessages.value) {
     if (!message || typeof message !== "object") {
       continue;
     }
@@ -2472,7 +2487,7 @@ const persistedSessionMessageIds = computed(() => {
 });
 
 const liveAssistantState = computed(() => {
-  if (!selectedSessionId.value) {
+  if (!selectedBranchSessionId.value) {
     return {
       orderedAssistantMessageIds: [] as string[],
       metaById: new Map<string, StreamingAssistantMeta>(),
@@ -2481,11 +2496,11 @@ const liveAssistantState = computed(() => {
     };
   }
 
-  return collectLiveAssistantState(taskEvents.value, selectedSessionId.value);
+  return collectLiveAssistantState(taskEvents.value, selectedBranchSessionId.value);
 });
 
 const streamingAssistantDraft = computed<SessionMessageView | null>(() => {
-  if (suppressAssistantWaitingForSelectedSession.value) {
+  if (suppressAssistantWaitingForSelectedBranch.value) {
     return null;
   }
 
@@ -2520,12 +2535,12 @@ const streamingAssistantDraft = computed<SessionMessageView | null>(() => {
 });
 
 const pendingAssistantMessage = computed<SessionMessageView | null>(() => {
-  if (suppressAssistantWaitingForSelectedSession.value) {
+  if (suppressAssistantWaitingForSelectedBranch.value) {
     return null;
   }
 
   const pending = pendingAssistantState.value;
-  if (!pending || selectedSessionId.value !== pending.sessionId) {
+  if (!pending || selectedBranchSessionId.value !== pending.sessionId) {
     return null;
   }
 
@@ -2534,8 +2549,8 @@ const pendingAssistantMessage = computed<SessionMessageView | null>(() => {
   }
 
   const pendingTime = Date.parse(pending.sentAt);
-  if (Number.isFinite(pendingTime) && Array.isArray(sessionMessages.value)) {
-    if (hasAssistantReplyAfter(sessionMessages.value, pendingTime)) {
+  if (Number.isFinite(pendingTime) && Array.isArray(conversationMessages.value)) {
+    if (hasAssistantReplyAfter(conversationMessages.value, pendingTime)) {
       return null;
     }
   }
@@ -2566,8 +2581,8 @@ watch(
   (id) => {
     if (id) {
       realtimeStore.subscribeTask(id);
-      selectedSessionId.value = undefined;
-      sessionMessages.value = [];
+      selectedBranchSessionId.value = undefined;
+      conversationMessages.value = [];
       void loadModels();
       void refreshTaskData(id).then(() => bootstrapTaskRefresh(id));
     }
@@ -2575,11 +2590,11 @@ watch(
   { immediate: true },
 );
 
-watch(selectedSessionId, (sessionId) => {
+watch(selectedBranchSessionId, (sessionId) => {
   stopLiveMessageRefresh();
 
   if (!taskId.value || !sessionId) {
-    sessionMessages.value = [];
+    conversationMessages.value = [];
     runtimePipeline.value = null;
     taskExecutionTrace.value = null;
     return;
@@ -2596,7 +2611,7 @@ watch(selectedSessionId, (sessionId) => {
     });
   }
 
-  void refreshSessionMessages(taskId.value, sessionId);
+  void refreshConversationMessages(taskId.value, sessionId);
   void refreshPipelineData(taskId.value, sessionId);
   void refreshTaskExecutionTrace(taskId.value, sessionId);
 });
@@ -2612,7 +2627,7 @@ watch([streamingAssistantDraft, pendingAssistantMessage], ([streamingDraft, pend
 });
 
 watch(
-  [selectedSessionId, () => getLatestInteractiveMessageInfo(sessionMessages.value)?.role ?? null],
+  [selectedBranchSessionId, () => getLatestInteractiveMessageInfo(conversationMessages.value)?.role ?? null],
   ([sessionId, latestRole]) => {
   if (!terminatedAwaitingSessionId.value) {
     return;
@@ -2630,10 +2645,10 @@ watch(
     const sessionId = typeof sessionQuery === "string" ? sessionQuery : undefined;
     if (
       sessionId &&
-      sessionId !== selectedSessionId.value &&
-      sessions.value.some((session) => session.id === sessionId)
+      sessionId !== selectedBranchSessionId.value &&
+      branches.value.some((session) => session.id === sessionId)
     ) {
-      selectedSessionId.value = sessionId;
+      selectedBranchSessionId.value = sessionId;
     }
   },
 );
@@ -2695,7 +2710,7 @@ async function handleContinue() {
   if (!taskId.value || !continuePrompt.value.trim()) return;
   continuing.value = true;
   executionFeedbackNotice.value = null;
-  const sessionId = selectedSessionId.value || task.value?.sessionId;
+  const sessionId = selectedBranchSessionId.value || task.value?.sessionId;
   const prompt = continuePrompt.value.trim();
   const sentAt = new Date().toISOString();
   terminatedAwaitingSessionId.value = null;
@@ -2709,7 +2724,7 @@ async function handleContinue() {
   try {
     const result = await continueTask(taskId.value, prompt, sessionId);
     if (result.sessionId) {
-      selectedSessionId.value = result.sessionId;
+      selectedBranchSessionId.value = result.sessionId;
       pendingAssistantState.value = {
         sessionId: result.sessionId,
         prompt,
@@ -2720,7 +2735,7 @@ async function handleContinue() {
     continuePrompt.value = "";
     const t = await getTask(taskId.value);
     task.value = t;
-    scheduleSessionRefresh();
+    scheduleConversationRefresh();
   } catch (e) {
     if (
       showRuntimeRecoveryNotice(e, {
@@ -2762,14 +2777,14 @@ function handleComposerKeydown(event: KeyboardEvent) {
 }
 
 async function handleForkToSecondary() {
-  if (!taskId.value || !selectedSessionId.value) {
+  if (!taskId.value || !selectedBranchSessionId.value) {
     return;
   }
 
   forking.value = true;
   try {
-    const nextTitle = `${selectedSessionLabel(selectedSession.value || ({ id: selectedSessionId.value, title: "", isActive: false, summary: null, createdAt: null, updatedAt: null } as SessionInfo))} 分叉`;
-    const result = await forkTaskSession(taskId.value, selectedSessionId.value, nextTitle);
+    const nextTitle = `${selectedBranchLabel(selectedBranch.value || ({ id: selectedBranchSessionId.value, title: "", isActive: false, summary: null, createdAt: null, updatedAt: null } as TaskBranchRecord))} 分叉`;
+    const result = await forkTaskBranch(taskId.value, selectedBranchSessionId.value, nextTitle);
     message.success("已创建分叉分支");
     await refreshTaskData(taskId.value, {
       task: false,
@@ -2778,7 +2793,7 @@ async function handleForkToSecondary() {
       governance: false,
     });
     if (result.sessionId) {
-      selectedSessionId.value = result.sessionId;
+      selectedBranchSessionId.value = result.sessionId;
     }
 
     if (isWorkbenchEmbedded.value) {
@@ -2802,15 +2817,15 @@ async function handleForkToSecondary() {
 const forkAndRunning = ref(false);
 
 async function handleForkAndRun() {
-  if (!taskId.value || !selectedSessionId.value || !continuePrompt.value.trim()) return;
+  if (!taskId.value || !selectedBranchSessionId.value || !continuePrompt.value.trim()) return;
   forkAndRunning.value = true;
   const prompt = continuePrompt.value.trim();
   terminatedAwaitingSessionId.value = null;
   try {
-    const nextTitle = `${selectedSessionLabel(selectedSession.value || ({ id: selectedSessionId.value, title: "", isActive: false, summary: null, createdAt: null, updatedAt: null } as SessionInfo))} 分叉`;
-    const result = await forkTaskSession(taskId.value, selectedSessionId.value, nextTitle);
+    const nextTitle = `${selectedBranchLabel(selectedBranch.value || ({ id: selectedBranchSessionId.value, title: "", isActive: false, summary: null, createdAt: null, updatedAt: null } as TaskBranchRecord))} 分叉`;
+    const result = await forkTaskBranch(taskId.value, selectedBranchSessionId.value, nextTitle);
     if (result.sessionId) {
-      selectedSessionId.value = result.sessionId;
+      selectedBranchSessionId.value = result.sessionId;
       const sentAt = new Date().toISOString();
       pendingAssistantState.value = {
         sessionId: result.sessionId,
@@ -2828,7 +2843,7 @@ async function handleForkAndRun() {
         sessions: true,
         governance: false,
       });
-      scheduleSessionRefresh();
+      scheduleConversationRefresh();
     }
   } catch (error) {
     message.error(`分叉执行失败: ${error}`);
@@ -2840,7 +2855,7 @@ async function handleForkAndRun() {
 
 async function handleTerminateExecution() {
   const agentRunId = currentControllableAgentRunId.value;
-  const sessionId = selectedSessionId.value;
+  const sessionId = selectedBranchSessionId.value;
 
   if (!agentRunId || !sessionId) {
     return;
@@ -2858,7 +2873,7 @@ async function handleTerminateExecution() {
       description: "系统已收到终止指令，当前会话不会继续保持等待状态。",
     };
     message.success("已请求终止当前执行");
-    scheduleSessionRefresh();
+    scheduleConversationRefresh();
 
     if (taskId.value) {
       void getTask(taskId.value)
@@ -2905,9 +2920,9 @@ function handleCopyMessage(text?: string) {
 }
 
 function handleCopyAllMessagesJson() {
-  const json = stringifyTraceRaw(filteredTraceMessages.value.map(m => m.raw));
+  const json = stringifyTraceRaw(filteredTraceMessages.value.map(m => m.raw ?? m));
   navigator.clipboard.writeText(json).then(
-    () => message.success(`已复制 ${filteredTraceMessages.value.length} 条消息 JSON`),
+    () => message.success(`已复制 ${filteredTraceMessages.value.length} 条时间线 JSON`),
     () => message.error("复制失败"),
   );
 }
@@ -2956,13 +2971,13 @@ function toolGroupTitle(toolCalls: ToolCallView[]) {
 }
 
 async function handleForkFromMessage(messageId: string) {
-  if (!taskId.value || !selectedSessionId.value) return;
+  if (!taskId.value || !selectedBranchSessionId.value) return;
   forkingMessageId.value = messageId;
   try {
-    const nextTitle = `${selectedSessionLabel(selectedSession.value || ({ id: selectedSessionId.value, title: "", isActive: false, summary: null, createdAt: null, updatedAt: null } as SessionInfo))} 分叉`;
-    const result = await forkTaskSession(
+    const nextTitle = `${selectedBranchLabel(selectedBranch.value || ({ id: selectedBranchSessionId.value, title: "", isActive: false, summary: null, createdAt: null, updatedAt: null } as TaskBranchRecord))} 分叉`;
+    const result = await forkTaskBranch(
       taskId.value,
-      selectedSessionId.value,
+      selectedBranchSessionId.value,
       nextTitle,
       messageId,
     );
@@ -2974,7 +2989,7 @@ async function handleForkFromMessage(messageId: string) {
       governance: false,
     });
     if (result.sessionId) {
-      selectedSessionId.value = result.sessionId;
+      selectedBranchSessionId.value = result.sessionId;
       // 预填输入框，引用 fork 源消息
       const sourceMsg = sessionMessageItems.value.find((m) => m.key === messageId);
       if (sourceMsg?.text) {
@@ -2990,12 +3005,12 @@ async function handleForkFromMessage(messageId: string) {
   }
 }
 
-async function handleForkFromSession(runtimeSessionId: string) {
+async function handleForkFromBranch(runtimeSessionId: string) {
   if (!taskId.value) return;
   forking.value = true;
   try {
-    const nextTitle = `Session ${runtimeSessionId.slice(0, 8)} 分叉`;
-    const result = await forkTaskSession(taskId.value, runtimeSessionId, nextTitle);
+    const nextTitle = `Branch ${runtimeSessionId.slice(0, 8)} 分叉`;
+    const result = await forkTaskBranch(taskId.value, runtimeSessionId, nextTitle);
     message.success("已创建分叉分支");
     await refreshTaskData(taskId.value, {
       task: false,
@@ -3004,7 +3019,7 @@ async function handleForkFromSession(runtimeSessionId: string) {
       governance: false,
     });
     if (result.sessionId) {
-      selectedSessionId.value = result.sessionId;
+      selectedBranchSessionId.value = result.sessionId;
     }
   } catch (error) {
     message.error(`分叉失败: ${error}`);
@@ -3013,10 +3028,10 @@ async function handleForkFromSession(runtimeSessionId: string) {
   }
 }
 
-async function handleArchiveSession(runtimeSessionId: string) {
+async function handleArchiveBranch(runtimeSessionId: string) {
   if (!taskId.value) return;
   try {
-    await archiveTaskSession(taskId.value, runtimeSessionId);
+    await archiveTaskBranch(taskId.value, runtimeSessionId);
     message.success("分支已归档");
     await refreshTaskData(taskId.value, {
       task: false,
@@ -3029,8 +3044,8 @@ async function handleArchiveSession(runtimeSessionId: string) {
   }
 }
 
-const selectedSession = computed(() =>
-  sessions.value.find((session) => session.id === selectedSessionId.value),
+const selectedBranch = computed(() =>
+  branches.value.find((session) => session.id === selectedBranchSessionId.value),
 );
 
 const isParallelComparisonMode = computed(() => {
@@ -3043,23 +3058,23 @@ const isParallelComparisonMode = computed(() => {
 
 const visibleSessions = computed(() => {
   if (!isParallelComparisonMode.value) {
-    return sessions.value;
+    return branches.value;
   }
 
-  const primarySessionId = task.value?.sessionId || selectedSessionId.value;
+  const primarySessionId = task.value?.sessionId || selectedBranchSessionId.value;
   if (!primarySessionId) {
-    return sessions.value.slice(0, 1);
+    return branches.value.slice(0, 1);
   }
 
-  return sessions.value.filter((session) => session.id === primarySessionId);
+  return branches.value.filter((session) => session.id === primarySessionId);
 });
 
-const visibleSessionTree = computed(() => {
+const visibleBranchTree = computed(() => {
   if (!isParallelComparisonMode.value) {
-    return sessionTree.value;
+    return branchLineage.value;
   }
 
-  return [] as SessionTreeNode[];
+  return [] as TaskBranchLineageNode[];
 });
 
 const runtimeSessionStateMap = computed<Record<string, RuntimeBurstSessionState>>(() => {
@@ -3079,12 +3094,12 @@ const runtimeSessionStateMap = computed<Record<string, RuntimeBurstSessionState>
   return states;
 });
 
-const selectedSessionBurstState = computed(() =>
-  selectedSessionId.value ? runtimeSessionStateMap.value[selectedSessionId.value] : undefined,
+const selectedBranchBurstState = computed(() =>
+  selectedBranchSessionId.value ? runtimeSessionStateMap.value[selectedBranchSessionId.value] : undefined,
 );
 
-const selectedSessionBurstBanner = computed(() => {
-  const state = selectedSessionBurstState.value;
+const selectedBranchBurstBanner = computed(() => {
+  const state = selectedBranchBurstState.value;
   if (!state) {
     return null;
   }
@@ -3114,7 +3129,7 @@ function stopRuntimeSessionStatusClock() {
 function scheduleRuntimeSessionStatusClock() {
   stopRuntimeSessionStatusClock();
 
-  if (selectedSessionBurstState.value?.kind !== "cooldown") {
+  if (selectedBranchBurstState.value?.kind !== "cooldown") {
     return;
   }
 
@@ -3125,7 +3140,7 @@ function scheduleRuntimeSessionStatusClock() {
 }
 
 watch(
-  selectedSessionBurstState,
+  selectedBranchBurstState,
   () => {
     runtimeSessionStatusNowMs.value = Date.now();
     scheduleRuntimeSessionStatusClock();
@@ -3134,40 +3149,40 @@ watch(
 );
 
 const latestAssistantMessageIncomplete = computed(() => {
-  if (suppressAssistantWaitingForSelectedSession.value) {
+  if (suppressAssistantWaitingForSelectedBranch.value) {
     return false;
   }
 
-  if (!Array.isArray(sessionMessages.value) || sessionMessages.value.length === 0) {
+  if (!Array.isArray(conversationMessages.value) || conversationMessages.value.length === 0) {
     return false;
   }
 
-  const latest = getLatestInteractiveMessageInfo(sessionMessages.value);
+  const latest = getLatestInteractiveMessageInfo(conversationMessages.value);
   return latest?.role === "assistant" ? typeof latest.completed !== "number" : false;
 });
 
 const latestInteractiveMessageRole = computed(() => {
-  if (!Array.isArray(sessionMessages.value) || sessionMessages.value.length === 0) {
+  if (!Array.isArray(conversationMessages.value) || conversationMessages.value.length === 0) {
     return null as string | null;
   }
 
-  return getLatestInteractiveMessageInfo(sessionMessages.value)?.role ?? null;
+  return getLatestInteractiveMessageInfo(conversationMessages.value)?.role ?? null;
 });
 
 const awaitingAssistantSinceMs = computed(() => {
   const pending = pendingAssistantState.value;
-  if (pending && selectedSessionId.value === pending.sessionId) {
+  if (pending && selectedBranchSessionId.value === pending.sessionId) {
     const parsed = Date.parse(pending.sentAt);
     if (!Number.isNaN(parsed)) {
       return parsed;
     }
   }
 
-  if (!Array.isArray(sessionMessages.value) || sessionMessages.value.length === 0) {
+  if (!Array.isArray(conversationMessages.value) || conversationMessages.value.length === 0) {
     return null;
   }
 
-  const latest = getLatestInteractiveMessageInfo(sessionMessages.value);
+  const latest = getLatestInteractiveMessageInfo(conversationMessages.value);
   if (latest?.role !== "user" || !latest.createdAt) {
     return null;
   }
@@ -3211,7 +3226,7 @@ const isAwaitingAssistantResponse = computed(() => {
     return true;
   }
 
-  if (suppressAssistantWaitingForSelectedSession.value) {
+  if (suppressAssistantWaitingForSelectedBranch.value) {
     return false;
   }
 
@@ -3223,7 +3238,7 @@ const isAwaitingAssistantResponse = computed(() => {
     return true;
   }
 
-  if (selectedSessionId.value && latestInteractiveMessageRole.value === "user") {
+  if (selectedBranchSessionId.value && latestInteractiveMessageRole.value === "user") {
     return true;
   }
 
@@ -3268,7 +3283,7 @@ function scheduleLiveMessageRefresh() {
     liveMessageRefreshTimer ||
     liveMessageRefreshInFlight ||
     !taskId.value ||
-    !selectedSessionId.value ||
+    !selectedBranchSessionId.value ||
     !isAwaitingAssistantResponse.value
   ) {
     return;
@@ -3277,13 +3292,13 @@ function scheduleLiveMessageRefresh() {
   liveMessageRefreshTimer = setTimeout(() => {
     liveMessageRefreshTimer = null;
 
-    if (!taskId.value || !selectedSessionId.value || !isAwaitingAssistantResponse.value) {
+    if (!taskId.value || !selectedBranchSessionId.value || !isAwaitingAssistantResponse.value) {
       return;
     }
 
     liveMessageRefreshInFlight = true;
     void Promise.all([
-      refreshSessionMessages(taskId.value, selectedSessionId.value, true),
+      refreshConversationMessages(taskId.value, selectedBranchSessionId.value, true),
       isParallelComparisonMode.value
         ? refreshParallelCandidateMessages(taskId.value, true)
         : Promise.resolve(),
@@ -3297,7 +3312,7 @@ function scheduleLiveMessageRefresh() {
 }
 
 watch(
-  [selectedSessionId, isAwaitingAssistantResponse],
+  [selectedBranchSessionId, isAwaitingAssistantResponse],
   ([sessionId, awaiting]) => {
     if (!sessionId || !awaiting) {
       stopLiveMessageRefresh();
@@ -3316,7 +3331,7 @@ watch(
   () => task.value?.sessionId,
   (sessionId) => {
     if (isParallelComparisonMode.value && sessionId) {
-      selectedSessionId.value = sessionId;
+      selectedBranchSessionId.value = sessionId;
     }
   },
   { immediate: true },
@@ -4056,7 +4071,7 @@ function buildPersistedSessionMessage(message: unknown, index: number): SessionM
     toolCalls,
     createdAt: getMessageCreatedAt(message),
     isStreaming:
-      !suppressAssistantWaitingForSelectedSession.value &&
+      !suppressAssistantWaitingForSelectedBranch.value &&
       role === "assistant" &&
       liveAssistantState.value.incompleteIds.has(messageId),
   } satisfies SessionMessageView;
@@ -4102,8 +4117,8 @@ function buildToolCallView(part: SessionPart, index: number): ToolCallView | nul
 }
 
 const sessionMessageItems = computed<SessionMessageView[]>(() => {
-  const persistedItems = Array.isArray(sessionMessages.value)
-    ? sessionMessages.value
+  const persistedItems = Array.isArray(conversationMessages.value)
+    ? conversationMessages.value
         .map((message, index) => buildPersistedSessionMessage(message, index))
         .filter((item): item is SessionMessageView => Boolean(item))
     : [];
@@ -4617,7 +4632,7 @@ watch(
   { immediate: true },
 );
 
-watch(selectedSessionId, () => {
+watch(selectedBranchSessionId, () => {
   shouldAutoScrollMessages.value = true;
   void scheduleMessageAutoScroll(true);
 });
@@ -4663,8 +4678,8 @@ const strategy = computed(() => {
 });
 
 const taskExecutionTraceSegments = computed(() => taskExecutionTrace.value?.segments ?? []);
-const taskExecutionTraceMessages = computed<ExecutionTraceMessage[]>(
-  () => taskExecutionTrace.value?.messages ?? [],
+const taskExecutionTraceMessages = computed<ExecutionTraceTimelineItem[]>(
+  () => taskExecutionTrace.value?.timeline ?? [],
 );
 
 const filteredTraceSegments = computed(() => {
@@ -4699,10 +4714,17 @@ const taskExecutionTraceSummaryItems = computed(() => {
     tone: "processing",
   });
   items.push({
-    label: "原始消息",
+    label: "时间线项",
     value: String(taskExecutionTraceMessages.value.length),
     tone: "purple",
   });
+  if (taskExecutionTrace.value.timelineMeta?.cacheState && taskExecutionTrace.value.timelineMeta.cacheState !== "complete") {
+    items.push({
+      label: "时间线缓存",
+      value: taskExecutionTrace.value.timelineMeta.cacheState === "partial" ? "部分" : "无",
+      tone: "warning",
+    });
+  }
   if (taskExecutionTrace.value.truncated) {
     items.push({ label: "会话截断", value: "是", tone: "warning" });
   }
@@ -5348,7 +5370,7 @@ function openReplyFocusWindow() {
   query.set("reply", "1");
 
   const sessionId =
-    selectedSessionId.value ||
+    selectedBranchSessionId.value ||
     (typeof route.query.session === "string" ? route.query.session : undefined);
   if (sessionId) {
     query.set("session", sessionId);
@@ -5568,12 +5590,12 @@ function taskStatusLabel(status?: string) {
   return map[status || ""] || status || "未知";
 }
 
-function selectedSessionLabel(session: SessionInfo) {
+function selectedBranchLabel(session: TaskBranchRecord) {
   const raw = session.title?.trim();
-  return raw || `Session ${session.id.slice(0, 8)}`;
+  return raw || `Branch ${session.id.slice(0, 8)}`;
 }
 
-function sessionSummaryLabel(summary: SessionInfo["summary"]) {
+function sessionSummaryLabel(summary: TaskBranchRecord["summary"]) {
   if (!summary) {
     return "暂无代码变更摘要";
   }
@@ -5582,7 +5604,7 @@ function sessionSummaryLabel(summary: SessionInfo["summary"]) {
 }
 
 function selectSession(sessionId: string) {
-  selectedSessionId.value = sessionId;
+  selectedBranchSessionId.value = sessionId;
 }
 
 function sessionCardStyle(selected: boolean) {

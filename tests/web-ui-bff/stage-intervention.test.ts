@@ -28,10 +28,27 @@ const runDetachedPromptMock = mock(async () => ({
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () => ({
+  authHeader: mock(() => "Bearer test"),
   cpFetch: cpFetchMock,
+  createInternalAuthorization: mock(async () => "Bearer internal"),
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter", () => ({
+  continueSession: mock(async () => ({ ok: true })),
+  createSession: mock(async () => ({ ok: true, sessionId: "session-1", agentRunId: "run-1" })),
+  ensureAgentRunForSession: mock(() => "run-1"),
+  extractAssistantResultFromMessages: mock(() => ({
+    completed: false,
+    failed: false,
+    error: undefined,
+    tokenUsed: 0,
+  })),
+  forkSession: mock(async () => ({ ok: true, sessionId: "session-2" })),
+  getAgentRun: mock(() => undefined),
+  getSessionMessages: mock(async () => ({ ok: true, data: [] })),
+  listSessions: mock(async () => ({ ok: true, data: [] })),
+  recoverAgentRun: mock(() => undefined),
+  terminateAgent: mock(async () => ({ ok: true })),
   runDetachedPrompt: runDetachedPromptMock,
 }));
 

@@ -7,7 +7,7 @@
     "dev": "bun run --watch src/index.ts",
     "build": "bun build src/index.ts --outdir dist --target bun",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "bun test ../../tests/web-ui-bff --timeout 120000",
+    "test": "bash ../../scripts/run-bff-tests.sh",
     "test:realtime:unit": "bun test ../../tests/web-ui-bff/realtime-routes.test.ts --timeout 30000 && bun test ../../tests/web-ui-bff/realtime-pipeline-events.test.ts --timeout 30000 && bun test ../../tests/web-ui-bff/pipeline-events.test.ts --timeout 30000 && bun test ../../tests/web-ui-bff/runtime-pipeline.test.ts --timeout 30000",
     "test:paid-execution:unit": "bun test ../../tests/web-ui-bff/lifecycle-hooks-behavior.test.ts --timeout 30000 && bun test ../../tests/web-ui-bff/realtime-pipeline-events.test.ts --timeout 30000 && bun test ../../tests/web-ui-bff/project-paid-execution-preflight-route.test.ts --timeout 30000 && bun test ../../tests/web-ui-bff/execution-integration-guard.test.ts --timeout 30000 && bun test ../../tests/web-ui-bff/judge-usage-accounting.test.ts --timeout 30000",
     "test:integration:completion-sync": "OPENCODE_MIN_ACTIVE_BEFORE_PAUSE_MS=500 bun test ../../tests/web-ui-bff/opencode-completion-sync.test.ts --timeout 120000",
