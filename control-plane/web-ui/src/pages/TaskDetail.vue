@@ -6,7 +6,7 @@
           {{ task?.title || "任务工作台" }}
         </a-typography-title>
         <a-space size="small" :style="taskDetailThemeStyles.statusTags">
-          <a-tag :color="taskStatusColor(task?.status)">{{ taskStatusLabel(task?.status) }}</a-tag>
+          <a-tag :color="taskDisplayStatus.tagColor">{{ taskDisplayStatus.label }}</a-tag>
           <a-tag v-if="taskId" color="default">任务 {{ taskId.slice(0, 8) }}</a-tag>
           <a-tag v-if="selectedBranch" color="blue">当前分支 {{ selectedBranchLabel(selectedBranch) }}</a-tag>
           <a-tag v-if="selectedBranchBurstState" :color="selectedBranchBurstState.badgeColor">{{ selectedBranchBurstState.badgeLabel }}</a-tag>
@@ -15,8 +15,8 @@
         </a-space>
       </div>
 
-      <router-link v-if="taskId" :to="`/tasks/${taskId}/v2`">
-        <a-button>精简视图</a-button>
+      <router-link v-if="taskId" :to="`/tasks/${taskId}/v3`">
+        <a-button>任务视图</a-button>
       </router-link>
 
     </a-flex>
@@ -1045,6 +1045,7 @@ import { renderMarkdown } from "../lib/markdown";
 import { showRuntimeRecoveryNotice } from "../lib/runtime-recovery";
 import { RUNTIME_RECOVERY_CONTEXTS } from "../lib/runtime-recovery-notice";
 import { SETTINGS_SECTIONS, SETTINGS_TAB_MODELS } from "../lib/settings-deep-link";
+import { resolveTaskDisplayStatus } from "../lib/task-display-status";
 import { normalizeWorkspaceFilePath } from "../lib/workspace-file-path";
 import { type RealtimeEvent, useRealtimeStore } from "../stores/realtime";
 import {
@@ -1111,6 +1112,7 @@ const ASSISTANT_WAIT_SLOW_MS = 15_000;
 
 const taskId = computed(() => route.params.taskId as string | undefined);
 const task = ref<Task | null>(null);
+const taskDisplayStatus = computed(() => resolveTaskDisplayStatus(task.value));
 const executionFeedbackNotice = ref<ExecutionFeedbackNotice | null>(null);
 const lastMissingTaskNoticeTaskId = ref<string | null>(null);
 const taskDetailPrimaryTab = ref("messages");
@@ -2325,7 +2327,7 @@ async function refreshParallelCandidateMessages(currentTaskId: string, silent = 
   const entries = await Promise.all(
     candidateSessionIds.map(async (sessionId) => {
       try {
-        const response = await getTaskConversationMessages(currentTaskId, sessionId);
+        const response = await getTaskConversationMessages(currentTaskId, sessionId, { includeLineage: false });
         return [sessionId, Array.isArray(response.data) ? response.data : []] as const;
       } catch {
         return [sessionId, silent ? parallelCandidateMessages.value[sessionId] ?? [] : []] as const;
@@ -2731,7 +2733,12 @@ async function handleContinue() {
       }
     : null;
   try {
-    const result = await continueTask(taskId.value, prompt, sessionId);
+    const result = await continueTask(
+      taskId.value,
+      prompt,
+      sessionId,
+      editableExecutionMode.value,
+    );
     if (result.sessionId) {
       selectedBranchSessionId.value = result.sessionId;
       pendingAssistantState.value = {
@@ -2841,7 +2848,7 @@ async function handleForkAndRun() {
         prompt,
         sentAt,
       };
-      await continueTask(taskId.value, prompt, result.sessionId);
+      await continueTask(taskId.value, prompt, result.sessionId, editableExecutionMode.value);
       message.success("已分叉并发送续跑指令");
       continuePrompt.value = "";
       const t = await getTask(taskId.value);

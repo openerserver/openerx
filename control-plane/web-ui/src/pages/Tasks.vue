@@ -94,7 +94,9 @@
         </template>
 
         <template v-if="column.key === 'status'">
-          <a-tag :color="statusColor(record.status)">{{ statusLabel(record.status) }}</a-tag>
+          <a-tag :color="resolveTaskDisplayStatus(record).tagColor">
+            {{ resolveTaskDisplayStatus(record).label }}
+          </a-tag>
         </template>
 
         <template v-if="column.key === 'repoName'">
@@ -142,11 +144,8 @@
             <router-link :to="`/multi-task-monitor?task=${record.id}`">
               <a-button type="link" size="small">监控台</a-button>
             </router-link>
-            <router-link :to="`/tasks/${record.id}/v2`">
-              <a-button type="link" size="small">精简视图</a-button>
-            </router-link>
             <router-link :to="`/tasks/${record.id}/v3`">
-              <a-button type="link" size="small">V3 视图</a-button>
+              <a-button type="link" size="small">任务视图</a-button>
             </router-link>
           </a-space>
         </template>
@@ -467,6 +466,7 @@ import {
   updateTask,
   updateTaskStatus,
 } from "../lib/api";
+import { resolveTaskDisplayStatus } from "../lib/task-display-status";
 import { showRuntimeRecoveryNotice } from "../lib/runtime-recovery";
 import { RUNTIME_RECOVERY_ERROR_PREFIX } from "../lib/runtime-recovery-contract";
 import { RUNTIME_RECOVERY_CONTEXTS } from "../lib/runtime-recovery-notice";
@@ -1309,30 +1309,6 @@ function formatDuration(task: { startedAt?: string; finishedAt?: string }) {
   const h = Math.floor(min / 60);
   const m = min % 60;
   return `${h}时${m}分`;
-}
-
-function statusColor(status: string) {
-  const map: Record<string, string> = {
-    pending: "default",
-    running: "blue",
-    completed: "green",
-    failed: "red",
-    paused: "orange",
-    cancelled: "default",
-  };
-  return map[status] || "default";
-}
-
-function statusLabel(status: string) {
-  const map: Record<string, string> = {
-    pending: "待执行",
-    running: "运行中",
-    completed: "已完成",
-    failed: "失败",
-    paused: "已暂停",
-    cancelled: "已取消",
-  };
-  return map[status] || status;
 }
 
 function formatTime(ts: string) {

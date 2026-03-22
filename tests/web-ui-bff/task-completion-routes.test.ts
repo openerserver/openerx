@@ -46,7 +46,9 @@ mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-a
   forkSession: mock(async () => ({ ok: true, sessionId: "session-2" })),
   getAgentRun: mock(() => undefined),
   getSessionMessages: mock(async () => ({ ok: true, data: [] })),
+  listRuntimePermissions: mock(async () => ({ ok: true, data: [] })),
   listSessions: mock(async () => ({ ok: true, data: [] })),
+  replyRuntimePermission: mock(async () => ({ ok: true })),
   recoverAgentRun: mock(() => undefined),
   runDetachedPrompt: mock(async () => ({ ok: true, sessionId: "session-detached", text: "{}" })),
   terminateAgent: terminateAgentMock,
@@ -85,17 +87,6 @@ mock.module("../../control-plane/web-ui-bff/src/modules/realtime/ws-broadcaster"
   wsBroadcaster: {
     broadcast: wsBroadcastMock,
   },
-}));
-
-mock.module("../../control-plane/web-ui-bff/src/modules/tasks/reconcile", () => ({
-  reconcileRunningTasksOnStartup: mock(async () => ({
-    scanned: 0,
-    repaired: 0,
-    completed: 0,
-    failed: 0,
-    skipped: 0,
-    runtimeAvailable: true,
-  })),
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/modules/tasks/workflow-stage-execution", () => ({
@@ -535,6 +526,7 @@ describe("task completion routes", () => {
             prompt: "Clarify scope",
             status: "running",
             executionPlan: JSON.stringify({
+              parallelRunId: "prun-1",
               templateId: "tmpl-1",
               mode: "parallel",
               steps: [],
@@ -578,34 +570,78 @@ describe("task completion routes", () => {
       resultText: "候选结果 A\n[STAGE_COMPLETE]",
       source: "manual-adopt",
     });
-    expect(cpFetchMock).toHaveBeenCalledWith("/api/tasks/task-adopt-1", {
-      method: "PATCH",
-      authorization: "Bearer test",
-      body: {
-        status: "completed",
-        executionPlan: JSON.stringify({
-          templateId: "tmpl-1",
-          mode: "parallel",
-          steps: [],
-          candidates: [
-            {
-              label: "Claude",
-              agent: "executor",
-              status: "completed",
-              result: "候选结果 A\n[STAGE_COMPLETE]",
-            },
-            {
-              label: "GPT",
-              agent: "executor",
-              status: "completed",
-              result: "候选结果 B",
-            },
-          ],
-          winnerCandidateIndex: 0,
-        }),
-        result: "候选结果 A\n[STAGE_COMPLETE]",
-      },
+    const patchCall = (cpFetchMock.mock.calls as unknown as Array<[string, RouteFetchOptions]>).find(
+      ([url, options]) => url === "/api/tasks/task-adopt-1" && options?.method === "PATCH",
+    );
+    expect(patchCall).toBeDefined();
+    expect(patchCall?.[1]?.authorization).toBe("Bearer test");
+    const patchBody = patchCall?.[1]?.body as {
+      status?: string;
+      executionPlan?: string;
+      parallelRunHistory?: string;
+      result?: string;
+    };
+    expect(patchBody.status).toBe("completed");
+    expect(patchBody.result).toBe("候选结果 A\n[STAGE_COMPLETE]");
+    expect(JSON.parse(String(patchBody.executionPlan))).toEqual({
+      parallelRunId: "prun-1",
+      templateId: "tmpl-1",
+      mode: "parallel",
+      steps: [],
+      candidates: [
+        {
+          label: "Claude",
+          agent: "executor",
+          status: "completed",
+          result: "候选结果 A\n[STAGE_COMPLETE]",
+        },
+        {
+          label: "GPT",
+          agent: "executor",
+          status: "completed",
+          result: "候选结果 B",
+        },
+      ],
+      winnerCandidateIndex: 0,
     });
+    expect(JSON.parse(String(patchBody.parallelRunHistory))).toEqual([
+      {
+        parallelRunId: "prun-1",
+        templateId: "tmpl-1",
+        startedAt: expect.any(String),
+        finishedAt: undefined,
+        parentSessionId: null,
+        executionSessionId: null,
+        winnerCandidateIndex: 0,
+        judgeResult: undefined,
+        candidateSessions: [
+          {
+            label: "Claude",
+            agent: "executor",
+            model: undefined,
+            role: undefined,
+            status: "completed",
+            sessionId: undefined,
+            agentRunId: undefined,
+            result: "候选结果 A\n[STAGE_COMPLETE]",
+            startedAt: undefined,
+            finishedAt: undefined,
+          },
+          {
+            label: "GPT",
+            agent: "executor",
+            model: undefined,
+            role: undefined,
+            status: "completed",
+            sessionId: undefined,
+            agentRunId: undefined,
+            result: "候选结果 B",
+            startedAt: undefined,
+            finishedAt: undefined,
+          },
+        ],
+      },
+    ]);
     expect(wsBroadcastMock).toHaveBeenCalledTimes(1);
     const broadcastCalls = wsBroadcastMock.mock.calls as unknown as Array<[Record<string, unknown>]>;
     expect(broadcastCalls[0]?.[0]).toMatchObject({
@@ -635,6 +671,7 @@ describe("task completion routes", () => {
             prompt: "Clarify scope",
             status: "running",
             executionPlan: JSON.stringify({
+              parallelRunId: "prun-2",
               templateId: "tmpl-1",
               mode: "parallel",
               steps: [],
@@ -664,20 +701,51 @@ describe("task completion routes", () => {
       resultText: undefined,
       source: "manual-adopt",
     });
-    expect(cpFetchMock).toHaveBeenCalledWith("/api/tasks/task-adopt-2", {
-      method: "PATCH",
-      authorization: "Bearer test",
-      body: {
-        status: "completed",
-        executionPlan: JSON.stringify({
-          templateId: "tmpl-1",
-          mode: "parallel",
-          steps: [],
-          candidates: [{ label: "Claude", agent: "executor", status: "completed" }],
-          winnerCandidateIndex: 0,
-        }),
-      },
+    const patchCall = (cpFetchMock.mock.calls as unknown as Array<[string, RouteFetchOptions]>).find(
+      ([url, options]) => url === "/api/tasks/task-adopt-2" && options?.method === "PATCH",
+    );
+    expect(patchCall).toBeDefined();
+    expect(patchCall?.[1]?.authorization).toBe("Bearer test");
+    const patchBody = patchCall?.[1]?.body as {
+      status?: string;
+      executionPlan?: string;
+      parallelRunHistory?: string;
+    };
+    expect(patchBody.status).toBe("completed");
+    expect(JSON.parse(String(patchBody.executionPlan))).toEqual({
+      parallelRunId: "prun-2",
+      templateId: "tmpl-1",
+      mode: "parallel",
+      steps: [],
+      candidates: [{ label: "Claude", agent: "executor", status: "completed" }],
+      winnerCandidateIndex: 0,
     });
+    expect(JSON.parse(String(patchBody.parallelRunHistory))).toEqual([
+      {
+        parallelRunId: "prun-2",
+        templateId: "tmpl-1",
+        startedAt: expect.any(String),
+        finishedAt: undefined,
+        parentSessionId: null,
+        executionSessionId: null,
+        winnerCandidateIndex: 0,
+        judgeResult: undefined,
+        candidateSessions: [
+          {
+            label: "Claude",
+            agent: "executor",
+            model: undefined,
+            role: undefined,
+            status: "completed",
+            sessionId: undefined,
+            agentRunId: undefined,
+            result: undefined,
+            startedAt: undefined,
+            finishedAt: undefined,
+          },
+        ],
+      },
+    ]);
   });
 
   test("POST /:taskId/candidates/:index/adopt stops unfinished losing candidates", async () => {
@@ -693,6 +761,7 @@ describe("task completion routes", () => {
             prompt: "Clarify scope",
             status: "running",
             executionPlan: JSON.stringify({
+              parallelRunId: "prun-1",
               templateId: "tmpl-1",
               mode: "parallel",
               steps: [],
@@ -714,6 +783,31 @@ describe("task completion routes", () => {
                 },
               ],
             }),
+            parallelRunHistory: JSON.stringify([
+              {
+                parallelRunId: "prun-1",
+                startedAt: "2026-03-22T05:25:22.000Z",
+                parentSessionId: "ses-root",
+                executionSessionId: "ses-root",
+                candidateSessions: [
+                  {
+                    label: "Claude",
+                    agent: "executor",
+                    status: "completed",
+                    result: "候选结果 A",
+                    sessionId: "ses-a",
+                    agentRunId: "run-a",
+                  },
+                  {
+                    label: "GPT",
+                    agent: "executor",
+                    status: "running",
+                    sessionId: "ses-b",
+                    agentRunId: "run-b",
+                  },
+                ],
+              },
+            ]),
           },
         };
       }
@@ -783,10 +877,16 @@ describe("task completion routes", () => {
       ([url, options]) => url === "/api/tasks/task-adopt-running" && options?.method === "PATCH",
     );
     expect(patchCall).toBeDefined();
-    const patchBody = patchCall?.[1]?.body as { executionPlan?: string; result?: string; status?: string };
+    const patchBody = patchCall?.[1]?.body as {
+      executionPlan?: string;
+      parallelRunHistory?: string;
+      result?: string;
+      status?: string;
+    };
     expect(patchBody.status).toBe("completed");
     expect(patchBody.result).toBe("候选结果 A");
     expect(JSON.parse(String(patchBody.executionPlan))).toEqual({
+      parallelRunId: "prun-1",
       templateId: "tmpl-1",
       mode: "parallel",
       steps: [],
@@ -812,6 +912,37 @@ describe("task completion routes", () => {
       ],
       winnerCandidateIndex: 0,
     });
+    expect(JSON.parse(String(patchBody.parallelRunHistory))).toEqual([
+      {
+        parallelRunId: "prun-1",
+        templateId: "tmpl-1",
+        startedAt: expect.any(String),
+        finishedAt: expect.any(String),
+        parentSessionId: null,
+        executionSessionId: null,
+        winnerCandidateIndex: 0,
+        candidateSessions: [
+          {
+            label: "Claude",
+            agent: "executor",
+            status: "completed",
+            result: "候选结果 A",
+            sessionId: "ses-a",
+            agentRunId: "run-a",
+          },
+          {
+            label: "GPT",
+            agent: "executor",
+            status: "stopped",
+            sessionId: "ses-b",
+            agentRunId: "run-b",
+            result:
+              "[STOPPED] Manual candidate adoption ended this parallel run before the candidate completed.",
+            finishedAt: expect.any(String),
+          },
+        ],
+      },
+    ]);
 
     const broadcasts = wsBroadcastMock.mock.calls as unknown as Array<[Record<string, unknown>]>;
     expect(broadcasts[0]?.[0]).toMatchObject({

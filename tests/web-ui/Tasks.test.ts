@@ -404,6 +404,27 @@ describe("Tasks page", () => {
     });
   });
 
+  it("renders awaiting adoption label for completed parallel tasks without a winner", async () => {
+    const wrapper = await mountPage([
+      makeTask({
+        id: "task-awaiting-adoption",
+        status: "completed",
+        executionMode: "parallel",
+        executionPlan: JSON.stringify({
+          mode: "parallel",
+          candidates: [
+            { index: 0, label: "候选 1", model: "github-copilot:gpt-5-mini", status: "completed" },
+            { index: 1, label: "候选 2", model: "github-copilot:gpt-4o", status: "completed" },
+          ],
+        }),
+      }),
+    ]);
+
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("待采纳");
+  });
+
   it("downgrades model and retries when preflight asks for allow-with-downgrade", async () => {
     vi.spyOn(window, "confirm").mockReturnValueOnce(true);
     apiMocks.getTaskExecutionPreflight

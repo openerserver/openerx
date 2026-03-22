@@ -37,6 +37,7 @@ export interface TaskTreeSnapshot {
   selectedModel: string | null;
   executionMode: TaskExecutionMode | null;
   executionPlan: string | null;
+  parallelRunHistory: string | null;
   autoAdvanceStages: boolean;
   credentialId: string | null;
   gitAuthorName: string | null;

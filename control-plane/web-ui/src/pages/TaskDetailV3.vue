@@ -10,8 +10,20 @@
             <a-typography-title :level="3" style="margin: 0">
               {{ task.title || "任务详情" }}
             </a-typography-title>
-            <a-space v-if="currentStageLabel" size="small" style="margin-top: 8px">
+            <a-space size="small" wrap style="margin-top: 8px">
+              <a-tag :color="taskDisplayStatus.tagColor">{{ taskDisplayStatus.label }}</a-tag>
               <a-tag color="blue">当前阶段 {{ currentStageLabel }}</a-tag>
+              <a-select
+                v-if="sessionOptions.length > 1"
+                size="small"
+                style="min-width: 220px"
+                :value="selectedBranchSessionId"
+                :options="sessionOptions"
+                placeholder="选择会话"
+                show-search
+                :filter-option="filterModelOption"
+                @update:value="handleSelectSession(String($event ?? ''))"
+              />
             </a-space>
           </div>
 
@@ -21,9 +33,6 @@
               :current-task-id="task.id"
               @select="handleTaskSwitch"
             />
-            <router-link :to="`/tasks/${task.id}/v2`">
-              <a-button size="small">V2 视图</a-button>
-            </router-link>
             <router-link :to="`/tasks/${task.id}`">
               <a-button size="small">经典视图</a-button>
             </router-link>
@@ -122,12 +131,12 @@
             />
 
             <ChatComposer
-              :input-disabled="continuing || forking"
-              :action-disabled="continuing || forking"
+              :input-disabled="continuing || forking || terminating"
+              :action-disabled="continuing || forking || terminating"
               :model-selection-disabled="continuing || forking || isExecuting"
-              :fork-disabled="continuing || forking || isExecuting"
+              :fork-disabled="continuing || forking || isExecuting || !canForkFromCurrentSession"
               :is-executing="isExecuting"
-              :can-terminate="Boolean(task.agentRunId)"
+              :can-terminate="canTerminateExecution"
               :model-options="modelOptions"
               :models-loading="modelsLoading"
               :selected-model="task.selectedModel ?? undefined"
@@ -166,36 +175,6 @@
                 :content="previewFile.content"
                 @close="previewFile = null"
               />
-              <TaskLinksPanel
-                v-if="projectId && task.nodeId"
-                :project-id="projectId"
-                :node-id="task.nodeId"
-              />
-              <div v-if="executionPlanSteps.length > 0" class="chain-step-progress">
-                <a-flex justify="space-between" align="center">
-                  <a-typography-text strong>执行步骤</a-typography-text>
-                  <a-tag v-if="chainStepProgressLabel" color="processing">{{ chainStepProgressLabel }}</a-tag>
-                </a-flex>
-                <div
-                  v-for="(step, index) in executionPlanSteps"
-                  :key="step.id"
-                  class="chain-step-progress__card"
-                >
-                  <a-space size="small" wrap>
-                    <a-tag color="default">步骤 {{ index + 1 }}</a-tag>
-                    <a-tag :color="executionStepStatusColor(step.status)">
-                      {{ executionStepStatusLabel(step.status) }}
-                    </a-tag>
-                    <a-tag color="purple">{{ executionStepTitle(step, index) }}</a-tag>
-                    <a-tag v-if="step.model" color="cyan">{{ step.model }}</a-tag>
-                  </a-space>
-                  <div v-if="step.dependsOn?.length" class="chain-step-progress__meta">
-                    依赖：{{ step.dependsOn.join(" -> ") }}
-                  </div>
-                  <pre v-if="step.instruction" class="chain-step-progress__pre">{{ step.instruction }}</pre>
-                  <pre v-if="step.result" class="chain-step-progress__pre">{{ step.result }}</pre>
-                </div>
-              </div>
               <TaskExecutionTracePanel
                 :task-id="task.id"
                 :session-id="selectedBranchSessionId"
@@ -221,14 +200,15 @@ import {
   type ExecutionCandidate,
   type ExecutionPlan,
   type ExecutionMode,
-  type ExecutionStep,
   forkTaskBranch,
   getModelsList,
-  getTaskConversationMessages,
+  getTaskExecutionTraceView,
   listTaskRuntimePermissions,
   replyTaskRuntimePermission,
   type TaskRuntimePermission,
   getTaskWorkflowView,
+  type ParallelRunHistoryCandidate,
+  type ParallelRunHistoryRecord,
   terminateAgent,
   type TaskWorkflowViewModel,
   updateTask,
@@ -242,6 +222,7 @@ import {
   resolveEditableSequentialSteps,
   type ExecutionOverrides,
 } from "../lib/taskExecutionMode";
+import { resolveTaskDisplayStatus } from "../lib/task-display-status";
 import { useProjectTreeTask, type TreeTask } from "../composables/useProjectTreeTask";
 import { useTreeBranches } from "../composables/useTreeBranches";
 import {
@@ -249,10 +230,11 @@ import {
   type TaskConversationListItem,
 } from "../composables/useTreeMessages";
 import {
-  normalizeSessionConversationItems,
+  type TaskConversationMessageItem,
   type TaskConversationParallelItem,
   type TaskParallelComparisonCard,
 } from "../lib/message-normalize";
+import { normalizeTraceConversationItems } from "../lib/task-trace-conversation";
 import { useRealtimeStore } from "../stores/realtime";
 
 const TaskDetailQuickOverview = defineAsyncComponent(
@@ -262,22 +244,19 @@ const ExecutionModeModal = defineAsyncComponent(
   () => import("../components/ExecutionModeModal.vue"),
 );
 const ChatComposer = defineAsyncComponent(
-  () => import("../components/task-detail-v2/ChatComposer.vue"),
+  () => import("../components/task-detail-shared/ChatComposer.vue"),
 );
 const ChatMessageList = defineAsyncComponent(
-  () => import("../components/task-detail-v2/ChatMessageList.vue"),
+  () => import("../components/task-detail-shared/ChatMessageList.vue"),
 );
 const TaskExecutionTracePanel = defineAsyncComponent(
-  () => import("../components/task-detail-v2/TaskExecutionTracePanel.vue"),
+  () => import("../components/task-detail-shared/TaskExecutionTracePanel.vue"),
 );
 const TaskFilePreviewPanel = defineAsyncComponent(
-  () => import("../components/task-detail-v2/TaskFilePreviewPanel.vue"),
+  () => import("../components/task-detail-shared/TaskFilePreviewPanel.vue"),
 );
 const TaskSwitcher = defineAsyncComponent(
-  () => import("../components/task-detail-v2/TaskSwitcher.vue"),
-);
-const TaskLinksPanel = defineAsyncComponent(
-  () => import("../components/task-detail-v3/TaskLinksPanel.vue"),
+  () => import("../components/task-detail-shared/TaskSwitcher.vue"),
 );
 
 const route = useRoute();
@@ -331,12 +310,14 @@ const modelsData = ref<Array<Record<string, unknown>>>([]);
 const modelsLoading = ref(false);
 const continuing = ref(false);
 const forking = ref(false);
+const terminating = ref(false);
 const composerResetToken = ref(0);
 const showExecutionModeModal = ref(false);
 const executionModeSaving = ref(false);
 const queuedContinuations = ref<Array<{ id: string; prompt: string; sessionId?: string; queuedAt: string }>>([]);
 const previewFile = ref<{ filePath: string; content?: string } | null>(null);
-const parallelCandidateMessages = ref<Record<string, unknown[]>>({});
+const parallelCandidateItems = ref<Record<string, TaskConversationMessageItem[]>>({});
+const parallelCandidateSettledReply = ref<Record<string, boolean>>({});
 const runtimePermissions = ref<TaskRuntimePermission[]>([]);
 const runtimePermissionActionId = ref<string | null>(null);
 
@@ -355,8 +336,10 @@ const currentStageLabel = computed(() => {
   const matched = workflowStages.value.find((s) => s.stageKey === currentStage);
   return matched?.stageLabel || currentStage;
 });
+const taskDisplayStatus = computed(() => resolveTaskDisplayStatus(task.value));
 
-const isExecuting = computed(() => task.value?.status === "running");
+const isExecuting = computed(() => task.value?.status === "running" && !task.value?.finishedAt);
+const canTerminateExecution = computed(() => isExecuting.value && Boolean(task.value?.agentRunId));
 
 const taskFailureReason = computed(() => {
   const s = task.value?.status;
@@ -404,45 +387,113 @@ const executionPlanJudgeSummary = computed(() => {
   }
   return winnerLabel ? `Judge 推荐 ${winnerLabel}` : "Judge 已返回评估结果";
 });
-const isParallelComparisonMode = computed(
-  () => task.value?.executionMode === "parallel" || executionPlan.value?.mode === "parallel",
-);
-const executionPlanSteps = computed<ExecutionStep[]>(() => executionPlan.value?.steps ?? []);
-const chainStepProgressLabel = computed(() => {
-  const plan = executionPlan.value;
-  if (!plan?.steps?.length || plan.mode !== "sequential-chain") return "";
-  const total = plan.steps.length;
-  const completed = plan.steps.filter((s) => s.status === "completed").length;
-  const running = plan.steps.find((s) => s.status === "running");
-  if (running) return `步骤 ${completed + 1} / ${total} 执行中`;
-  if (completed === total) return `全部 ${total} 步已完成`;
-  return `${completed} / ${total} 已完成`;
+
+function parseParallelRunHistory(raw?: string | null) {
+  if (!raw) return [] as ParallelRunHistoryRecord[];
+  try {
+    const parsed = JSON.parse(raw) as ParallelRunHistoryRecord[];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [] as ParallelRunHistoryRecord[];
+  }
+}
+
+function currentParallelRunIdFromPlan(plan: ExecutionPlan | null) {
+  if (!plan || plan.mode !== "parallel") return undefined;
+  const record = plan as ExecutionPlan & { parallelRunId?: string };
+  return typeof record.parallelRunId === "string" && record.parallelRunId.length > 0
+    ? record.parallelRunId
+    : undefined;
+}
+
+function buildFallbackParallelRunFromPlan(plan: ExecutionPlan | null) {
+  if (!plan || plan.mode !== "parallel" || plan.candidates.length < 2) {
+    return null;
+  }
+
+  const parallelRunId = currentParallelRunIdFromPlan(plan) || `legacy-${task.value?.id || taskId.value}`;
+  const startedAt =
+    plan.candidates
+      .map((candidate) => candidate.startedAt)
+      .find((value): value is string => typeof value === "string" && value.length > 0) ||
+    (plan.steps ?? []).find((step) => step.type === "execution" && typeof step.finishedAt === "string")?.finishedAt ||
+    task.value?.startedAt ||
+    task.value?.createdAt ||
+    new Date().toISOString();
+  const finishedAt =
+    (plan.steps ?? []).find((step) => step.type === "execution" && typeof step.finishedAt === "string" && step.finishedAt.length > 0)
+      ?.finishedAt ||
+    plan.candidates
+      .map((candidate) => candidate.finishedAt)
+      .find((value): value is string => typeof value === "string" && value.length > 0);
+
+  return {
+    parallelRunId,
+    templateId: plan.templateId,
+    startedAt,
+    finishedAt,
+    parentSessionId: task.value?.sessionId ?? null,
+    executionSessionId: task.value?.sessionId ?? null,
+    winnerCandidateIndex:
+      typeof plan.winnerCandidateIndex === "number" ? plan.winnerCandidateIndex : undefined,
+    judgeResult: plan.judgeResult,
+    candidateSessions: plan.candidates.map((candidate) => ({
+      label: candidate.label,
+      agent: candidate.agent,
+      model: candidate.model,
+      status: candidate.status,
+      sessionId: candidate.sessionId,
+      agentRunId: candidate.agentRunId,
+      result: candidate.result,
+      startedAt: candidate.startedAt,
+      finishedAt: candidate.finishedAt,
+    })),
+  } satisfies ParallelRunHistoryRecord;
+}
+
+const parallelRunHistory = computed<ParallelRunHistoryRecord[]>(() => {
+  const stored = parseParallelRunHistory(task.value?.parallelRunHistory);
+  const fallback = buildFallbackParallelRunFromPlan(executionPlan.value);
+  if (!fallback) {
+    return stored.slice().sort((left, right) => (toTimestampMs(left.startedAt) || 0) - (toTimestampMs(right.startedAt) || 0));
+  }
+
+  if (stored.some((entry) => entry.parallelRunId === fallback.parallelRunId)) {
+    return stored.slice().sort((left, right) => (toTimestampMs(left.startedAt) || 0) - (toTimestampMs(right.startedAt) || 0));
+  }
+
+  return [...stored, fallback].sort((left, right) => (toTimestampMs(left.startedAt) || 0) - (toTimestampMs(right.startedAt) || 0));
 });
 
-function executionStepStatusLabel(status: string | undefined) {
-  switch (status) {
-    case "completed": return "已完成";
-    case "running": return "执行中";
-    case "failed": return "失败";
-    default: return "待执行";
-  }
-}
-function executionStepStatusColor(status: string | undefined) {
-  switch (status) {
-    case "completed": return "green";
-    case "running": return "processing";
-    case "failed": return "red";
-    default: return "default";
-  }
-}
-function executionStepTitle(step: ExecutionStep, index: number) {
-  return step.title || step.id || `步骤 ${index + 1}`;
-}
-const allCandidatesSettled = computed(
+const isParallelComparisonMode = computed(
   () =>
-    executionPlanCandidates.value.length >= 2 &&
-    executionPlanCandidates.value.every((c) => c.status === "completed" || c.status === "failed"),
+    parallelRunHistory.value.length > 0 ||
+    task.value?.executionMode === "parallel" ||
+    (executionPlan.value?.mode === "parallel" && task.value?.status !== "running"),
 );
+
+function resolveParallelCandidateDisplayStatus(
+  candidate: Pick<ExecutionCandidate, "status"> | Pick<ParallelRunHistoryCandidate, "status">,
+  items: TaskConversationMessageItem[],
+  hasSettledReply = false,
+) {
+  if (candidate.status !== "running") {
+    return candidate.status || "pending";
+  }
+
+  if (task.value?.status !== "running") {
+    return "completed";
+  }
+
+  const hasCompletedReply = items.some(
+    (item) =>
+      item.role === "assistant" &&
+      !item.isStreaming &&
+      ((typeof item.text === "string" && item.text.trim().length > 0) || item.toolCalls.length > 0),
+  );
+
+  return hasCompletedReply || hasSettledReply ? "completed" : "running";
+}
 
 /* ------------------------------------------------------------------ */
 /*  Queue & dispatch                                                    */
@@ -457,6 +508,8 @@ const canDispatchQueuedContinuation = computed(
     !forking.value,
 );
 
+const canForkFromCurrentSession = computed(() => Boolean(selectedBranchSessionId.value || task.value?.sessionId));
+
 const selectedSessionLabel = computed(
   () =>
     selectedBranchNode.value?.contentText ||
@@ -470,6 +523,22 @@ const selectedSessionRuntimePermissions = computed(() => {
   if (!sessionId) return [];
   return runtimePermissions.value.filter((item) => item.sessionId === sessionId);
 });
+
+const sessionOptions = computed(() =>
+  flatNodes.value
+    .filter((node) => typeof node.runtimeSessionId === "string" && node.runtimeSessionId.length > 0)
+    .map((node) => {
+      const sessionId = node.runtimeSessionId as string;
+      const primaryLabel = node.contentText?.trim() || node.branchName?.trim() || `会话 ${sessionId.slice(0, 8)}`;
+      const meta = [node.isActive ? "当前" : null, node.branchName?.trim(), sessionId.slice(0, 8)]
+        .filter((item, index, list): item is string => Boolean(item) && list.indexOf(item) === index)
+        .join(" · ");
+      return {
+        value: sessionId,
+        label: meta ? `${primaryLabel} · ${meta}` : primaryLabel,
+      };
+    }),
+);
 
 /* ------------------------------------------------------------------ */
 /*  Models                                                              */
@@ -498,88 +567,171 @@ const modelOptions = computed(() => {
 /*  Parallel comparison                                                */
 /* ------------------------------------------------------------------ */
 
-const parallelComparisonCards = computed<TaskParallelComparisonCard[]>(() => {
-  if (!isParallelComparisonMode.value || executionPlanCandidates.value.length < 2) return [];
-  return executionPlanCandidates.value.map((candidate, index) => {
+const currentParallelRunId = computed(() => currentParallelRunIdFromPlan(executionPlan.value));
+const visibleParallelRuns = computed(() => {
+  if (task.value?.status === "running" && task.value?.executionMode === "single") {
+    return [] as ParallelRunHistoryRecord[];
+  }
+  return parallelRunHistory.value;
+});
+
+function buildParallelComparisonCardsForRun(run: ParallelRunHistoryRecord): TaskParallelComparisonCard[] {
+  const parallelExecutionFinishedAtMs = toTimestampMs(run.finishedAt);
+  const cards = run.candidateSessions.map((candidate, index) => {
     const sessionId = candidate.sessionId;
-    const messages = sessionId ? parallelCandidateMessages.value[sessionId] ?? [] : [];
-    const items = normalizeSessionConversationItems(messages).filter((item) => item.role !== "user");
+    const items = sessionId ? parallelCandidateItems.value[sessionId] ?? [] : [];
+    const visibleItems = items.filter((item) => {
+      if (item.role === "user") {
+        return false;
+      }
+      if (parallelExecutionFinishedAtMs == null) {
+        return true;
+      }
+      const itemCreatedAtMs = toTimestampMs(item.createdAt);
+      return itemCreatedAtMs == null || itemCreatedAtMs <= parallelExecutionFinishedAtMs;
+    });
     const metaParts = [candidate.agent, sessionId ? `Branch ${sessionId.slice(0, 8)}` : undefined].filter(
       (v): v is string => Boolean(v),
     );
+    const status = resolveParallelCandidateDisplayStatus(
+      candidate,
+      visibleItems,
+      sessionId ? parallelCandidateSettledReply.value[sessionId] === true : false,
+    );
     return {
-      key: sessionId || `candidate-${index}`,
+      key: `${run.parallelRunId}:${sessionId || `candidate-${index}`}`,
       index,
       label: candidate.label || `候选 ${index + 1}`,
       model: candidate.model,
-      status: candidate.status || "pending",
+      status,
       meta: metaParts.join(" · ") || undefined,
-      loading: items.length === 0 && candidate.status === "running",
-      items,
-      canAdopt: allCandidatesSettled.value && candidate.status === "completed" && executionPlanAdoptedIndex.value < 0,
-      isAdopted: executionPlanAdoptedIndex.value === index,
-      isRecommended: executionPlanAdoptedIndex.value < 0 && executionPlanRecommendedIndex.value === index,
-    };
+      loading: visibleItems.length === 0 && status === "running",
+      items: visibleItems,
+      canAdopt: false,
+      isAdopted: typeof run.winnerCandidateIndex === "number" && run.winnerCandidateIndex === index,
+      isRecommended:
+        typeof run.winnerCandidateIndex !== "number" && run.judgeResult?.winnerIndex === index,
+    } satisfies TaskParallelComparisonCard;
   });
+
+  const allCandidatesSettled =
+    cards.length >= 2 && cards.every((candidate) => candidate.status === "completed" || candidate.status === "failed");
+
+  return cards.map((candidate) => ({
+    ...candidate,
+    canAdopt:
+      run.parallelRunId === currentParallelRunId.value &&
+      allCandidatesSettled &&
+      candidate.status === "completed" &&
+      typeof run.winnerCandidateIndex !== "number",
+  }));
+}
+
+const parallelConversationItems = computed<TaskConversationParallelItem[]>(() => {
+  const items: TaskConversationParallelItem[] = [];
+
+  for (const run of visibleParallelRuns.value) {
+      const cards = buildParallelComparisonCardsForRun(run);
+      if (cards.length < 2) {
+        continue;
+      }
+
+      const winnerLabel =
+        typeof run.judgeResult?.winnerIndex === "number"
+          ? run.candidateSessions[run.judgeResult.winnerIndex]?.label || `候选 ${run.judgeResult.winnerIndex + 1}`
+          : undefined;
+      const judgeSummary = winnerLabel
+        ? Array.isArray(run.judgeResult?.scores) && run.judgeResult.scores.length > 0
+          ? `Judge 推荐 ${winnerLabel}，得分 ${run.judgeResult.scores.map((score) => Number(score).toFixed(1)).join(" / ")}`
+          : `Judge 推荐 ${winnerLabel}`
+        : undefined;
+
+      items.push({
+        key: `parallel-${run.parallelRunId}`,
+        role: "parallel",
+        createdAt: run.finishedAt || run.startedAt,
+        candidates: cards,
+        judgeSummary,
+        judgeReasoning: run.judgeResult?.reasoning,
+        raw: run,
+        toolCalls: [],
+      });
+    }
+
+  return items;
 });
 
-const parallelConversationItem = computed<TaskConversationParallelItem | null>(() => {
-  if (parallelComparisonCards.value.length === 0) return null;
-  const createdAt = executionPlanCandidates.value
-    .map((c) => c.finishedAt || c.startedAt)
-    .find((v): v is string => typeof v === "string" && v.length > 0);
-  return {
-    key: `parallel-${task.value?.id || taskId.value}`,
-    role: "parallel",
-    createdAt,
-    candidates: parallelComparisonCards.value,
-    judgeSummary: executionPlanJudgeSummary.value || undefined,
-    judgeReasoning: executionPlanJudgeReasoning.value || undefined,
-    raw: executionPlan.value,
-    toolCalls: [],
-  };
-});
+function shouldHideUnadoptedParallelMessagesForRun(parallelItem: TaskConversationParallelItem) {
+  const raw = parallelItem.raw as ParallelRunHistoryRecord | null;
+  return raw != null && typeof raw.winnerCandidateIndex !== "number";
+}
 
-const shouldHideUnadoptedParallelMessages = computed(
-  () => isParallelComparisonMode.value && parallelComparisonCards.value.length > 0 && executionPlanAdoptedIndex.value < 0,
-);
+function toTimestampMs(value?: string) {
+  if (typeof value !== "string" || value.trim().length === 0) return null;
+  const timestamp = Date.parse(value);
+  return Number.isNaN(timestamp) ? null : timestamp;
+}
 
-const conversationItems = computed<TaskConversationListItem[]>(() => {
-  const inlineParallelItem = parallelConversationItem.value;
-  const base = [...baseConversationItems.value];
-
-  if (shouldHideUnadoptedParallelMessages.value) {
-    // Find the last user message (the one that triggered parallel execution).
-    // Keep everything up to and including it; drop assistant/tool messages after
-    // it — those are the parallel candidate responses shown in comparison cards.
-    let lastUserIndex = -1;
-    for (let i = base.length - 1; i >= 0; i--) {
-      if (base[i]?.role === "user") {
-        lastUserIndex = i;
-        break;
+function findParallelConversationAnchorIndex(
+  items: TaskConversationListItem[],
+  parallelItem: TaskConversationParallelItem,
+) {
+  const createdAtMs = toTimestampMs(parallelItem.createdAt);
+  if (createdAtMs != null) {
+    for (let index = items.length - 1; index >= 0; index -= 1) {
+      const item = items[index];
+      if (item?.role !== "user") continue;
+      const itemCreatedAtMs = toTimestampMs(item.createdAt);
+      if (itemCreatedAtMs == null || itemCreatedAtMs <= createdAtMs) {
+        return index;
       }
     }
-    const items = lastUserIndex >= 0
-      ? base.slice(0, lastUserIndex + 1)
-      : base.filter((item) => item.role === "user");
-    if (inlineParallelItem) items.push(inlineParallelItem);
-    return items;
   }
 
-  if (!inlineParallelItem) return base;
-
-  let insertAfterIndex = -1;
-  for (let i = base.length - 1; i >= 0; i--) {
-    if (base[i]?.role === "user") {
-      insertAfterIndex = i;
-      break;
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    if (items[index]?.role === "user") {
+      return index;
     }
   }
-  if (insertAfterIndex >= 0) {
-    base.splice(insertAfterIndex + 1, 0, inlineParallelItem);
-    return base;
+
+  return -1;
+}
+
+const conversationItems = computed<TaskConversationListItem[]>(() => {
+  const base = [...baseConversationItems.value];
+  const inlineParallelItems = parallelConversationItems.value;
+
+  if (inlineParallelItems.length === 0) return base;
+
+  for (const inlineParallelItem of inlineParallelItems) {
+    const anchorIndex = findParallelConversationAnchorIndex(base, inlineParallelItem);
+    if (shouldHideUnadoptedParallelMessagesForRun(inlineParallelItem)) {
+      if (anchorIndex < 0) {
+        base.unshift(inlineParallelItem);
+        continue;
+      }
+
+      let nextUserIndex = base.length;
+      for (let index = anchorIndex + 1; index < base.length; index += 1) {
+        if (base[index]?.role === "user") {
+          nextUserIndex = index;
+          break;
+        }
+      }
+
+      base.splice(anchorIndex + 1, nextUserIndex - (anchorIndex + 1), inlineParallelItem);
+      continue;
+    }
+
+    if (anchorIndex >= 0) {
+      base.splice(anchorIndex + 1, 0, inlineParallelItem);
+      continue;
+    }
+
+    base.unshift(inlineParallelItem);
   }
-  return [...base, inlineParallelItem];
+
+  return base;
 });
 
 /* ------------------------------------------------------------------ */
@@ -630,7 +782,7 @@ async function refreshTaskSnapshot(options?: { workflow?: boolean; flow?: boolea
     if (isParallelComparisonMode.value) {
       await refreshParallelCandidateMessages(taskId.value, true);
     } else {
-      parallelCandidateMessages.value = {};
+      parallelCandidateItems.value = {};
     }
     ensureSelectedBranch();
   } catch {
@@ -676,7 +828,7 @@ async function loadInitial() {
     if (projectId.value) {
       realtimeStore.subscribeProject(projectId.value);
     }
-    if (task.value?.executionMode === "parallel") {
+    if (isParallelComparisonMode.value) {
       await refreshParallelCandidateMessages(taskId.value, true);
     }
     await refreshRuntimePermissions(true);
@@ -700,25 +852,47 @@ async function loadModels() {
   }
 }
 
+function traceHasSettledCandidateReply(trace: Awaited<ReturnType<typeof getTaskExecutionTraceView>>) {
+  if (typeof trace?.latestResponse === "string" && trace.latestResponse.trim().length > 0) {
+    return true;
+  }
+
+  const messages = Array.isArray(trace?.messages) ? trace.messages : [];
+  if (messages.some((message) => message.role === "assistant" && typeof message.text === "string" && message.text.trim().length > 0)) {
+    return true;
+  }
+
+  const timeline = Array.isArray(trace?.timeline) ? trace.timeline : [];
+  return timeline.some((item) => item.role === "assistant" && typeof item.text === "string" && item.text.trim().length > 0);
+}
+
 async function refreshParallelCandidateMessages(currentTaskId: string, silent = false) {
-  const candidateSessionIds = executionPlanCandidates.value
-    .map((c) => c.sessionId)
-    .filter((s): s is string => Boolean(s));
+  const candidateSessionIds = Array.from(new Set(visibleParallelRuns.value
+    .flatMap((run) => run.candidateSessions.map((candidate) => candidate.sessionId))
+    .filter((s): s is string => Boolean(s))));
   if (candidateSessionIds.length === 0) {
-    parallelCandidateMessages.value = {};
+    parallelCandidateItems.value = {};
+    parallelCandidateSettledReply.value = {};
     return;
   }
   const entries = await Promise.all(
     candidateSessionIds.map(async (sessionId) => {
       try {
-        const response = await getTaskConversationMessages(currentTaskId, sessionId);
-        return [sessionId, Array.isArray(response.data) ? response.data : []] as const;
+        const trace = await getTaskExecutionTraceView(currentTaskId, sessionId, { includeLineage: false });
+        return [sessionId, {
+          items: normalizeTraceConversationItems(trace),
+          hasSettledReply: traceHasSettledCandidateReply(trace),
+        }] as const;
       } catch {
-        return [sessionId, silent ? parallelCandidateMessages.value[sessionId] ?? [] : []] as const;
+        return [sessionId, {
+          items: silent ? parallelCandidateItems.value[sessionId] ?? [] : [],
+          hasSettledReply: silent ? parallelCandidateSettledReply.value[sessionId] === true : false,
+        }] as const;
       }
     }),
   );
-  parallelCandidateMessages.value = Object.fromEntries(entries);
+  parallelCandidateItems.value = Object.fromEntries(entries.map(([sessionId, value]) => [sessionId, value.items]));
+  parallelCandidateSettledReply.value = Object.fromEntries(entries.map(([sessionId, value]) => [sessionId, value.hasSettledReply]));
 }
 
 async function refreshRuntimePermissions(silent = false) {
@@ -844,7 +1018,12 @@ async function dispatchContinuePrompt(
   if (!taskId.value) return false;
   continuing.value = true;
   try {
-    const result = await continueTask(taskId.value, prompt, sessionId || task.value?.sessionId);
+    const result = await continueTask(
+      taskId.value,
+      prompt,
+      sessionId || task.value?.sessionId,
+      editableExecutionMode.value,
+    );
     if (task.value) {
       task.value = { ...task.value, status: "running" };
     }
@@ -890,7 +1069,7 @@ async function handleFork(prompt: string) {
     const forkResult = await forkTaskBranch(taskId.value, baseSessionId, nextTitle);
     if (forkResult.sessionId) {
       selectedBranchSessionId.value = forkResult.sessionId;
-      await continueTask(taskId.value, prompt, forkResult.sessionId);
+      await continueTask(taskId.value, prompt, forkResult.sessionId, editableExecutionMode.value);
     }
     if (task.value) {
       task.value = { ...task.value, status: "running" };
@@ -908,7 +1087,8 @@ async function handleFork(prompt: string) {
 }
 
 async function handleTerminate() {
-  if (!task.value?.agentRunId) return;
+  if (!canTerminateExecution.value || !task.value?.agentRunId) return;
+  terminating.value = true;
   try {
     await terminateAgent(task.value.agentRunId);
     message.success("已发送终止指令");
@@ -916,6 +1096,8 @@ async function handleTerminate() {
     await refreshMessages(true);
   } catch (err) {
     message.error(err instanceof Error ? err.message : "终止执行失败");
+  } finally {
+    terminating.value = false;
   }
 }
 
@@ -1121,36 +1303,6 @@ onBeforeUnmount(() => {
   min-width: 280px;
   max-width: 400px;
   min-height: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  overflow-y: auto;
-}
-
-.task-detail-v3-sidebar--collapsed {
-  width: 40px;
-  min-width: 40px;
-  max-width: 40px;
-}
-
-.chain-step-progress {
-  background: var(--color-bg-container, #fff);
-  border: 1px solid var(--color-border-secondary, #f0f0f0);
-  border-radius: 8px;
-  padding: 12px;
-}
-
-.chain-step-progress__card {
-  margin-top: 8px;
-  padding: 8px;
-  background: var(--color-fill-quaternary, #fafafa);
-  border-radius: 6px;
-}
-
-.chain-step-progress__meta {
-  margin-top: 4px;
-  font-size: 12px;
-  color: var(--color-text-secondary, #999);
 }
 
 .chain-step-progress__pre {

@@ -72,7 +72,22 @@ describe("buildExecutionPlan — parallel mode", () => {
     expect(plan.candidates).toHaveLength(2);
     expect(plan.candidates[0]!.model).toBe("openai:gpt-4o");
     expect(plan.candidates[0]!.label).toBe("GPT-4o");
+    expect(plan.candidates[0]!.agent).toBe("coder");
     expect(plan.candidates[1]!.model).toBe("anthropic:claude-sonnet-4");
+    expect(plan.candidates[1]!.agent).toBe("reviewer");
+  });
+
+  test("user-provided candidates prefer category agents over unrelated template agents", () => {
+    const template = makeTemplate({ mode: "parallel", agents: ["ops-agent-a", "ops-agent-b"] });
+    const plan = buildExecutionPlan(template, makeStrategy(), "general", {
+      candidates: [
+        { model: "github-copilot:gpt-5-mini", label: "候选 A" },
+        { model: "github-copilot:gpt-4o", label: "候选 B" },
+      ],
+    });
+
+    expect(plan.candidates[0]!.agent).toBe("coder");
+    expect(plan.candidates[1]!.agent).toBe("reviewer");
   });
 
   test("mode override from single to parallel", () => {

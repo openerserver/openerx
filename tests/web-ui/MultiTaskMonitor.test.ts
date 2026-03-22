@@ -2213,6 +2213,61 @@ describe("MultiTaskMonitor", () => {
     expect(wrapper.find(".monitor-node__stream-state").text()).toBe("已完成");
   });
 
+  it("renders awaiting adoption for completed parallel tasks without a selected winner", async () => {
+    apiMocks.getTask.mockImplementation(async (taskId: string) => ({
+      id: taskId,
+      projectId: "proj-1",
+      userId: "user-1",
+      title: "并行候选对比",
+      prompt: "比较两种实现",
+      status: "completed",
+      executionMode: "parallel",
+      executionPlan: JSON.stringify({
+        mode: "parallel",
+        candidates: [
+          {
+            index: 0,
+            label: "方案 A",
+            model: "github-copilot:gpt-5-mini",
+            status: "completed",
+          },
+          {
+            index: 1,
+            label: "方案 B",
+            model: "github-copilot:gpt-4o",
+            status: "completed",
+          },
+        ],
+      }),
+      createdAt: "2026-03-14T08:00:00.000Z",
+      startedAt: "2026-03-14T08:02:00.000Z",
+      finishedAt: "2026-03-14T08:05:00.000Z",
+    }));
+
+    apiMocks.getTaskSessions.mockResolvedValue({
+      data: [
+        {
+          id: "session-1",
+          title: "主分支",
+          isActive: false,
+          summary: null,
+          createdAt: "2026-03-14T08:01:00.000Z",
+          updatedAt: "2026-03-14T08:12:00.000Z",
+        },
+      ],
+    });
+
+    apiMocks.getTaskPipeline.mockResolvedValue(null);
+
+    const { wrapper } = await mountPage();
+
+    await flushPromises();
+
+    expect(wrapper.findAll(".monitor-node--completed").length).toBeGreaterThan(0);
+    expect(wrapper.find(".monitor-node__status-pill").text()).toBe("待采纳");
+    expect(wrapper.find(".monitor-node__stream-state").text()).toBe("待采纳");
+  });
+
   it("switches the window to running as soon as the user input is visible", async () => {
     apiMocks.getTask.mockImplementation(async (taskId: string) => ({
       id: taskId,

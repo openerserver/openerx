@@ -64,10 +64,10 @@
               <a-dropdown :trigger="['contextmenu']">
                 <div :style="workbenchThemeStyles.tabLabel">
                   <a-space size="small" class="task-workbench-tabs__tab-content">
-                    <a-badge :status="tabStatusBadge(tab.status)" />
+                    <a-badge :status="tabStatusBadge(tab.taskId, tab.status)" />
                     <span v-if="tab.pinned" class="task-workbench-tabs__pin">📌</span>
                     <span class="task-workbench-tabs__title">{{ tabLabel(tab) }}</span>
-                    <a-tag v-if="tabNeedsAttention(tab.status)" color="orange" :style="workbenchThemeStyles.attentionTag">未完成</a-tag>
+                    <a-tag v-if="tabNeedsAttention(tab.taskId, tab.status)" color="orange" :style="workbenchThemeStyles.attentionTag">{{ tabAttentionLabel(tab.taskId, tab.status) }}</a-tag>
                   </a-space>
                 </div>
                 <template #overlay>
@@ -92,6 +92,7 @@
               <a-space size="small" wrap>
                 <a-tag color="blue">主视图</a-tag>
                 <span :style="workbenchThemeStyles.paneTitle">{{ activeTab?.title || workbench.activeTaskId }}</span>
+                <a-tag :color="activeTaskDisplayStatus.tagColor">{{ activeTaskDisplayStatus.label }}</a-tag>
               </a-space>
             </div>
             <iframe
@@ -140,6 +141,7 @@
                           {{ tab.title || tab.taskId }}
                         </a-select-option>
                       </a-select>
+                      <a-tag v-if="workbench.secondaryPane?.taskId" :color="secondaryTaskDisplayStatus.tagColor">{{ secondaryTaskDisplayStatus.label }}</a-tag>
                     </a-space>
                     <a-button size="small" :disabled="!workbench.secondaryPane?.taskId" @click="promoteSecondaryToPrimary">
                       设为主窗
@@ -170,6 +172,7 @@ import type { DefaultOptionType } from "ant-design-vue/es/select";
 import { computed, h, onUnmounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { type Task, getTask, listTasks, toApiError } from "../lib/api";
+import { resolveTaskDisplayStatus } from "../lib/task-display-status";
 import { useProjectStore } from "../stores/project";
 import { useWorkbenchStore } from "../stores/workbench";
 import { workbenchThemeStyles } from "../theme/ui-theme";
@@ -182,6 +185,7 @@ const taskPickerValue = ref<string | undefined>(undefined);
 const taskPickerTarget = ref<"primary" | "secondary">("primary");
 const taskPickerLoading = ref(false);
 const taskPickerTasks = ref<Task[]>([]);
+const taskMetaMap = ref<Record<string, Task>>({});
 const clearUndoNotificationKey = "workbench-clear-undo";
 let tabRefreshTimer: ReturnType<typeof setInterval> | null = null;
 const missingTaskNoticeShown = ref(false);
@@ -205,12 +209,32 @@ const secondaryOptions = computed(() =>
   workbench.tabs.filter((tab) => tab.taskId !== workbench.activeTaskId),
 );
 
+const activeTaskMeta = computed(() => {
+  const taskId = workbench.activeTaskId;
+  return taskId ? taskMetaMap.value[taskId] : undefined;
+});
+
+const activeTaskDisplayStatus = computed(() =>
+  resolveTaskDisplayStatus(activeTaskMeta.value || { status: activeTab.value?.status }),
+);
+
+const secondaryTaskMeta = computed(() => {
+  const taskId = workbench.secondaryPane?.taskId;
+  return taskId ? taskMetaMap.value[taskId] : undefined;
+});
+
+const secondaryTaskDisplayStatus = computed(() =>
+  resolveTaskDisplayStatus(
+    secondaryTaskMeta.value || { status: secondaryOptions.value[0]?.status },
+  ),
+);
+
 const taskPickerOptions = computed(() =>
   taskPickerTasks.value
     .filter((task) => !workbench.tabs.some((tab) => tab.taskId === task.id))
     .map((task) => ({
       value: task.id,
-      label: `${formatTaskPickerTitle(task.title || task.id, 28)} · ${taskStatusLabel(task.status)} · ${task.id.slice(0, 8)}`,
+      label: `${formatTaskPickerTitle(task.title || task.id, 28)} · ${resolveTaskDisplayStatus(task).label} · ${task.id.slice(0, 8)}`,
       displayLabel: formatTaskPickerTitle(task.title || task.id, 20),
     })),
 );
@@ -265,12 +289,13 @@ onUnmounted(() => {
 
 async function ensureTaskMeta(taskId: string) {
   const existing = workbench.tabs.find((tab) => tab.taskId === taskId);
-  if (existing?.title && existing?.status) {
+  if (existing?.title && existing?.status && taskMetaMap.value[taskId]) {
     return;
   }
 
   try {
     const task = await getTask(taskId);
+    taskMetaMap.value = { ...taskMetaMap.value, [taskId]: task };
     workbench.updateTaskMeta(taskId, { title: task.title, status: task.status });
   } catch (error) {
     if (toApiError(error)?.status === 404) {
@@ -286,6 +311,7 @@ async function refreshOpenTabMeta() {
     taskIds.map(async (taskId) => {
       try {
         const task = await getTask(taskId);
+        taskMetaMap.value = { ...taskMetaMap.value, [taskId]: task };
         workbench.updateTaskMeta(taskId, { title: task.title, status: task.status });
       } catch (error) {
         if (toApiError(error)?.status === 404) {
@@ -317,6 +343,10 @@ async function reloadTaskPicker() {
   try {
     const response = await listTasks(projectStore.currentProjectId);
     taskPickerTasks.value = response.data || [];
+    taskMetaMap.value = {
+      ...taskMetaMap.value,
+      ...Object.fromEntries((response.data || []).map((task) => [task.id, task])),
+    };
   } catch {
     taskPickerTasks.value = [];
   } finally {
@@ -338,6 +368,9 @@ function handleTaskPickerChange(value: unknown) {
 
   const taskId = String(value);
   const task = taskPickerTasks.value.find((item) => item.id === taskId);
+  if (task) {
+    taskMetaMap.value = { ...taskMetaMap.value, [taskId]: task };
+  }
 
   if (
     taskPickerTarget.value === "secondary" &&
@@ -364,18 +397,6 @@ function filterTaskOption(input: string, option?: DefaultOptionType) {
   return optionValue.includes(keyword) || optionLabel.includes(keyword);
 }
 
-function taskStatusLabel(status?: string) {
-  const map: Record<string, string> = {
-    pending: "待执行",
-    running: "运行中",
-    paused: "已暂停",
-    completed: "已完成",
-    failed: "失败",
-    cancelled: "已取消",
-  };
-  return map[status || ""] || status || "未知";
-}
-
 function formatTaskPickerTitle(title: string, maxLength: number) {
   if (title.length <= maxLength) {
     return title;
@@ -385,17 +406,19 @@ function formatTaskPickerTitle(title: string, maxLength: number) {
 }
 
 function tabStatusBadge(
+  taskId?: string,
   status?: string,
 ): "success" | "processing" | "warning" | "error" | "default" {
-  if (status === "completed") return "success";
-  if (status === "running") return "processing";
-  if (status === "pending" || status === "paused") return "warning";
-  if (status === "failed") return "error";
-  return "default";
+  return resolveTaskDisplayStatus(taskId ? taskMetaMap.value[taskId] || { status } : { status }).badgeStatus;
 }
 
-function tabNeedsAttention(status?: string) {
-  return status === "running" || status === "pending" || status === "paused";
+function tabNeedsAttention(taskId?: string, status?: string) {
+  return resolveTaskDisplayStatus(taskId ? taskMetaMap.value[taskId] || { status } : { status }).needsAttention;
+}
+
+function tabAttentionLabel(taskId?: string, status?: string) {
+  const displayStatus = resolveTaskDisplayStatus(taskId ? taskMetaMap.value[taskId] || { status } : { status });
+  return displayStatus.status === "awaiting-adoption" ? displayStatus.label : "未完成";
 }
 
 const workbenchViewMode = ref<"v1" | "v3">("v1");

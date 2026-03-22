@@ -48,6 +48,12 @@ describe("paid execution guard baseline estimation", () => {
     expect(preflight.estimate.requestCount.max).toBe(5);
     expect(preflight.estimate.totalTokens.max).toBe(6000);
     expect(preflight.estimate.costUsd.max).toBe(0.12);
+    expect(preflight.estimate.guardDecision).toBe("allow");
+    expect(preflight.estimate.budgetHeadroom).toEqual({
+      remainingUsd: null,
+      enoughForSingleRun: true,
+      enoughForSuiteRun: true,
+    });
   });
 
   test("uses project-level paid execution permission before falling back to deny", () => {

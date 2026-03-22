@@ -481,4 +481,176 @@ describe("reconcileRunningTasksOnStartup", () => {
       source: "assistant-output",
     });
   });
+
+  test("marks stale parallel tasks completed after all candidate sessions already finished", async () => {
+    extractAssistantResultFromMessagesMock
+      .mockReturnValueOnce({
+        completed: true,
+        failed: false,
+        error: undefined,
+        tokenUsed: 8,
+        text: "候选 A 已完成",
+      })
+      .mockReturnValueOnce({
+        completed: true,
+        failed: false,
+        error: undefined,
+        tokenUsed: 9,
+        text: "候选 B 已完成",
+      });
+
+    getSessionMessagesMock
+      .mockResolvedValueOnce({ ok: true, data: [{ id: "msg-a" }] })
+      .mockResolvedValueOnce({ ok: true, data: [{ id: "msg-b" }] });
+
+    cpFetchMock.mockImplementation(async (...args: unknown[]) => {
+      const [url, options] = args as [string, { method?: string; body?: unknown }?];
+      if (!options?.method) {
+        if (url.includes("/api/project-tree/tasks?status=running")) {
+          return {
+            ok: true,
+            data: {
+              data: [
+                {
+                  id: "task-parallel-stale",
+                  projectId: "proj-1",
+                  title: "Parallel stale task",
+                  status: "running",
+                  createdAt: "2026-03-13T12:56:03.000Z",
+                  startedAt: "2026-03-13T12:56:03.000Z",
+                  executionPlan: JSON.stringify({
+                    templateId: "parallel-default",
+                    mode: "parallel",
+                    steps: [{ id: "exec-parallel", type: "execution", status: "running" }],
+                    candidates: [
+                      {
+                        label: "候选 A",
+                        agent: "executor",
+                        sessionId: "session-a",
+                        agentRunId: "run-a",
+                        status: "running",
+                      },
+                      {
+                        label: "候选 B",
+                        agent: "executor",
+                        sessionId: "session-b",
+                        agentRunId: "run-b",
+                        status: "running",
+                      },
+                    ],
+                  }),
+                },
+              ],
+            },
+          };
+        }
+
+        if (url === "/api/project-tree/tasks?limit=200") {
+          return { ok: true, data: { data: [] } };
+        }
+
+        if (url === "/api/tasks/task-parallel-stale/branches") {
+          return {
+            ok: true,
+            data: {
+              data: [
+                {
+                  runtimeSessionId: "session-a",
+                  isActive: true,
+                  archivedAt: null,
+                },
+                {
+                  runtimeSessionId: "session-b",
+                  isActive: true,
+                  archivedAt: null,
+                },
+              ],
+            },
+          };
+        }
+      }
+
+      return { ok: true, data: { body: options?.body } };
+    });
+
+    const { reconcileRunningTasksOnStartup } = await import(
+      "../../control-plane/web-ui-bff/src/modules/tasks/reconcile"
+    );
+
+    const summary = await reconcileRunningTasksOnStartup();
+
+    expect(summary.completed).toBe(1);
+    expect(cpFetchMock).toHaveBeenCalledWith(
+      "/api/tasks/task-parallel-stale",
+      expect.objectContaining({
+        method: "PATCH",
+        body: expect.objectContaining({
+          status: "completed",
+          executionPlan: expect.any(String),
+          parallelRunHistory: expect.any(String),
+        }),
+      }),
+    );
+    const patchCall = (cpFetchMock.mock.calls as unknown as Array<[string, { method?: string; body?: unknown }]>)
+      .find(([url, options]) => url === "/api/tasks/task-parallel-stale" && options?.method === "PATCH");
+    const patchBody = patchCall?.[1]?.body as {
+      executionPlan?: string;
+      parallelRunHistory?: string;
+      status?: string;
+    };
+    const patchedPlan = JSON.parse(String(patchBody.executionPlan)) as {
+      winnerCandidateIndex?: number;
+      steps: Array<{ type?: string; status?: string }>;
+      candidates: Array<{ status?: string; result?: string; finishedAt?: string }>;
+    };
+    const patchedHistory = JSON.parse(String(patchBody.parallelRunHistory)) as Array<{
+      parallelRunId?: string;
+      startedAt?: string;
+      finishedAt?: string;
+      candidateSessions: Array<{ status?: string; result?: string; finishedAt?: string }>;
+    }>;
+    expect(patchBody.status).toBe("completed");
+    expect(patchedPlan.winnerCandidateIndex).toBeUndefined();
+    expect(patchedPlan.steps).toEqual([
+      expect.objectContaining({ type: "execution", status: "completed" }),
+    ]);
+    expect(patchedPlan.candidates).toEqual([
+      expect.objectContaining({ status: "completed", result: "候选 A 已完成", finishedAt: expect.any(String) }),
+      expect.objectContaining({ status: "completed", result: "候选 B 已完成", finishedAt: expect.any(String) }),
+    ]);
+    expect(patchedHistory).toEqual([
+      expect.objectContaining({
+        parallelRunId: expect.any(String),
+        startedAt: expect.any(String),
+        finishedAt: expect.any(String),
+        candidateSessions: [
+          expect.objectContaining({
+            status: "completed",
+            result: "候选 A 已完成",
+            finishedAt: expect.any(String),
+          }),
+          expect.objectContaining({
+            status: "completed",
+            result: "候选 B 已完成",
+            finishedAt: expect.any(String),
+          }),
+        ],
+      }),
+    ]);
+    expect(cpFetchMock).toHaveBeenCalledWith(
+      "/api/tasks/task-parallel-stale/branches",
+      expect.objectContaining({
+        method: "POST",
+        body: expect.objectContaining({ runtimeSessionId: "session-a", isActive: false }),
+      }),
+    );
+    expect(cpFetchMock).toHaveBeenCalledWith(
+      "/api/tasks/task-parallel-stale/branches",
+      expect.objectContaining({
+        method: "POST",
+        body: expect.objectContaining({ runtimeSessionId: "session-b", isActive: false }),
+      }),
+    );
+    expect(persistWorkflowStageExecutionOutcomeMock).not.toHaveBeenCalled();
+  });
 });

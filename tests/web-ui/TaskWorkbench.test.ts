@@ -147,6 +147,32 @@ beforeEach(() => {
 });
 
 describe("TaskWorkbench regression", () => {
+  it("shows 待采纳 for completed parallel tasks without an adopted winner", async () => {
+    apiMocks.getTask.mockResolvedValue({
+      id: "task-awaiting-adoption",
+      title: "并行待采纳任务",
+      status: "completed",
+      executionMode: "parallel",
+      executionPlan: JSON.stringify({
+        templateId: "parallel-default",
+        mode: "parallel",
+        steps: [{ id: "exec-parallel", type: "execution", status: "completed" }],
+        candidates: [
+          { label: "候选 A", agent: "executor", status: "completed", result: "A" },
+          { label: "候选 B", agent: "executor", status: "completed", result: "B" },
+        ],
+      }),
+    });
+
+    const { wrapper, workbench } = await mountWorkbench();
+
+    workbench.openTask("task-awaiting-adoption", "并行待采纳任务", "completed");
+    await nextTick();
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("待采纳");
+  });
+
   it("renders the reverted single-pane layout and does not show multi-pane composer UI", async () => {
     const { wrapper, workbench } = await mountWorkbench();
 

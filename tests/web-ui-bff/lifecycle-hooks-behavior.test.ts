@@ -138,6 +138,8 @@ mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-a
   pauseAgent: mock(async () => ({ ok: true })),
   recoverAgentRun: mock(() => undefined),
   resumeAgent: resumeAgentMock,
+  listRuntimePermissions: mock(async () => ({ ok: true, data: [] })),
+  replyRuntimePermission: mock(async () => ({ ok: true })),
   terminateAgent: mock(async () => ({ ok: true })),
   updateAgentRunStatus: mock(() => undefined),
 }));
@@ -504,6 +506,7 @@ describe("executeLifecycleHooks behavior", () => {
           mode: "parallel",
           agents: ["agent-a", "agent-b"],
           enabled: true,
+          categoryDefaults: ["quick"],
         },
       ],
     });
@@ -888,6 +891,100 @@ describe("executeLifecycleHooks behavior", () => {
     });
   });
 
+  test("continue route keeps quick parallel prompts free of stage-summary workflow instructions", async () => {
+    currentStrategy = buildStrategy({ hooks: [] });
+    process.env.ALLOW_PAID_MODEL_EXECUTION = "1";
+    cpFetchMock.mockImplementation(async (url: string, options?: { method?: string; body?: unknown }) => {
+      if (!options?.method) {
+        if (url.includes("/paid-execution-lease")) {
+          return {
+            ok: true,
+            data: {
+              projectId: "proj-1",
+              activeLease: { id: "lease-test" },
+              now: "2026-03-10T00:00:00.000Z",
+            },
+          };
+        }
+
+        if (url.includes("/api/projects/")) {
+          return { ok: true, data: { settings: {} } };
+        }
+
+        return {
+          ok: true,
+          data: currentTask,
+        };
+      }
+
+      return { ok: true, data: { body: options.body } };
+    });
+
+    currentTask = {
+      ...currentTask,
+      title: "Quick parallel continuation task",
+      prompt: "Briefly confirm this request is ready.",
+      category: "quick",
+      sessionId: undefined,
+      executionMode: "parallel",
+      strategy: JSON.stringify({
+        executionMode: "parallel",
+        parallelCandidates: [
+          { model: "local:test-model-a", label: "候选 A" },
+          { model: "local:test-model-b", label: "候选 B" },
+        ],
+      }),
+      executionPlan: JSON.stringify({
+        templateId: "tpl-ops-parallel",
+        mode: "parallel",
+        steps: [{ id: "exec-parallel", type: "execution", status: "completed" }],
+        candidates: [
+          {
+            label: "候选 1",
+            agent: "oracle-enterprise",
+            role: "executor",
+            status: "completed",
+            sessionId: "session-existing",
+          },
+        ],
+      }),
+    };
+
+    createSessionMock
+      .mockResolvedValueOnce({ ok: true, sessionId: "session-quick-a", agentRunId: "run-quick-a" })
+      .mockResolvedValueOnce({ ok: true, sessionId: "session-quick-b", agentRunId: "run-quick-b" });
+
+    const { taskRoutes } = await loadTaskRoutesModule();
+    const response = await taskRoutes.request("http://localhost/task-1/continue", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer test",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ prompt: "Please continue" }),
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({
+      ok: true,
+      executionMode: "parallel",
+      candidates: [
+        { sessionId: "session-quick-a", status: "running" },
+        { sessionId: "session-quick-b", status: "running" },
+      ],
+    });
+    expect(createSessionMock).toHaveBeenCalledTimes(2);
+    expect(continueSessionMock).not.toHaveBeenCalled();
+
+    for (const call of createSessionMock.mock.calls) {
+      expect(call[2]).toContain("请只完成当前阶段的目标。");
+      expect(call[2]).not.toContain("完成后请输出本阶段产出摘要。");
+      expect(call[2]).not.toContain("[STAGE_COMPLETE]");
+      expect(call[2]).toContain("Please continue");
+    }
+  });
+
   test("continue route resets stale parallel candidate state after manual adoption before starting a new round", async () => {
     currentStrategy = buildStrategy({ hooks: [] });
     process.env.ALLOW_PAID_MODEL_EXECUTION = "1";
@@ -1071,6 +1168,73 @@ describe("executeLifecycleHooks behavior", () => {
     });
   });
 
+  test("continue route respects explicit single execution mode when stale parallel strategy remains", async () => {
+    currentStrategy = buildStrategy({ hooks: [] });
+    process.env.ALLOW_PAID_MODEL_EXECUTION = "1";
+    currentTask = {
+      ...currentTask,
+      title: "Single continuation task",
+      prompt: "Continue with a single executor",
+      sessionId: "session-existing",
+      status: "paused",
+      executionMode: "single",
+      strategy: JSON.stringify({
+        executionMode: "parallel",
+        parallelCandidates: [
+          { model: "github-copilot:gpt-5-mini", label: "候选 A" },
+          { model: "github-copilot:gpt-4o", label: "候选 B" },
+        ],
+      }),
+      executionPlan: JSON.stringify({
+        templateId: "tpl-ops-parallel",
+        mode: "parallel",
+        steps: [{ id: "exec-parallel", type: "execution", status: "completed" }],
+        candidates: [
+          {
+            label: "候选 A",
+            agent: "default-executor",
+            role: "executor",
+            model: "github-copilot:gpt-5-mini",
+            status: "completed",
+            sessionId: "session-existing-a",
+          },
+          {
+            label: "候选 B",
+            agent: "default-executor",
+            role: "executor",
+            model: "github-copilot:gpt-4o",
+            status: "completed",
+            sessionId: "session-existing-b",
+          },
+        ],
+      }),
+    };
+
+    const { taskRoutes } = await loadTaskRoutesModule();
+    const response = await taskRoutes.request("http://localhost/task-1/continue", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer test",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ prompt: "Please continue", executionMode: "single" }),
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({
+      ok: true,
+      sessionId: "session-existing",
+    });
+    expect(continueSessionMock).toHaveBeenCalledWith(
+      "session-existing",
+      expect.stringContaining("Please continue"),
+      expect.any(Object),
+    );
+    expect(createSessionMock).not.toHaveBeenCalled();
+    expect(registerParallelTaskMock).not.toHaveBeenCalled();
+  });
+
   test("execute route registers parallel candidates under the current task session lineage", async () => {
     currentTask = {
       ...currentTask,
@@ -1133,6 +1297,104 @@ describe("executeLifecycleHooks behavior", () => {
       branchName: "候选 B",
       sourceType: "fork",
     });
+  });
+
+  test("execute route keeps quick explicit parallel candidates on the quick agent without stage-summary prompt noise", async () => {
+    currentStrategy = buildStrategy({
+      hooks: [],
+      categoryAgentMap: {
+        quick: ["explore-enterprise"],
+        deep: ["hephaestus-enterprise"],
+        ops: ["oracle-enterprise"],
+        security: ["oracle-enterprise", "hephaestus-enterprise"],
+        architecture: ["prometheus-enterprise", "oracle-enterprise"],
+      },
+      templates: [
+        {
+          id: "tpl-ops-parallel",
+          name: "Ops Parallel",
+          mode: "parallel",
+          agents: ["oracle-enterprise", "oracle-enterprise"],
+          enabled: true,
+        },
+      ],
+    });
+    currentTask = {
+      ...currentTask,
+      title: "Quick confirm task",
+      prompt: "Briefly confirm this request is ready.",
+      sessionId: undefined,
+      strategy: "{}",
+      status: "pending",
+    };
+
+    createSessionMock
+      .mockResolvedValueOnce({ ok: true, sessionId: "session-quick-a", agentRunId: "run-quick-a" })
+      .mockResolvedValueOnce({ ok: true, sessionId: "session-quick-b", agentRunId: "run-quick-b" });
+
+    const { taskRoutes } = await loadTaskRoutesModule();
+    const response = await taskRoutes.request("http://localhost/task-1/execute", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer test",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        mode: "parallel",
+        candidates: [
+          { model: "local:test-model-a", label: "候选 A" },
+          { model: "local:test-model-b", label: "候选 B" },
+        ],
+      }),
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({
+      executionMode: "parallel",
+      candidates: [
+        { sessionId: "session-quick-a", status: "running" },
+        { sessionId: "session-quick-b", status: "running" },
+      ],
+    });
+    expect(createSessionMock).toHaveBeenCalledTimes(2);
+
+    for (const call of createSessionMock.mock.calls) {
+      expect(call[2]).not.toContain("完成后请输出本阶段产出摘要。");
+      expect(call[2]).not.toContain("[STAGE_COMPLETE]");
+      expect(call[3]).toMatchObject({
+        agent: "explore-enterprise",
+      });
+    }
+
+    const patchCalls = getPatchCalls();
+    const runningPatch = patchCalls.find(
+      (call) =>
+        (call[0] as string) === "/api/tasks/task-1" &&
+        (call[1] as { body?: { status?: string } })?.body?.status === "running",
+    );
+    expect(runningPatch).toBeDefined();
+
+    const patchedBody = (runningPatch?.[1] as {
+      body?: { executionPlan?: string; category?: string };
+    })?.body;
+    const patchedPlan = JSON.parse(patchedBody?.executionPlan || "null") as {
+      templateId?: string;
+      candidates?: Array<{ agent?: string; model?: string }>;
+    } | null;
+
+    expect(patchedBody?.category).toBe("quick");
+    expect(patchedPlan?.templateId).toBe("fallback-single");
+    expect(patchedPlan?.candidates).toEqual([
+      expect.objectContaining({
+        agent: "explore-enterprise",
+        model: "local:test-model-a",
+      }),
+      expect.objectContaining({
+        agent: "explore-enterprise",
+        model: "local:test-model-b",
+      }),
+    ]);
   });
 
   test("execute route registers single execution under the current task session lineage", async () => {

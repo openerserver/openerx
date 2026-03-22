@@ -1,9 +1,8 @@
 /**
- * Shared message normalization helpers used by both useTaskMessages (V2) and
- * useTreeMessages (V3).
+ * Shared message normalization helpers for task conversation rendering.
  *
- * Extracted to avoid code duplication while keeping both composables
- * functionally identical in how they normalise persisted + live messages.
+ * V3 consumes execution-trace directly and uses these helpers to normalise
+ * reconstructed conversation items and apply live text overlays.
  */
 import { normalizeWorkspaceFilePath } from "./workspace-file-path";
 import type { RealtimeEvent } from "../stores/realtime";
@@ -477,6 +476,7 @@ export function collectLiveAssistantState(events: RealtimeEvent[], sessionId: st
   const metaById = new Map<string, LiveAssistantMeta>();
   const textById = new Map<string, string>();
   const incompleteIds = new Set<string>();
+  const sessionEvents = events.filter((item) => item.sessionId === sessionId).slice().reverse();
 
   const rememberMessageId = (messageId: string) => {
     if (!knownAssistantIds.has(messageId)) {
@@ -485,10 +485,9 @@ export function collectLiveAssistantState(events: RealtimeEvent[], sessionId: st
     }
   };
 
-  for (const event of events.filter((item) => item.sessionId === sessionId).slice().reverse()) {
+  for (const event of sessionEvents) {
     const rawType = getRealtimeRawType(event);
     const info = getRealtimeInfo(event);
-    const part = getRealtimePart(event);
 
     if (rawType === "message.updated" && info) {
       const messageId = asString(info.id);
@@ -508,21 +507,28 @@ export function collectLiveAssistantState(events: RealtimeEvent[], sessionId: st
         }
       }
     }
+  }
+
+  for (const event of sessionEvents) {
+    const rawType = getRealtimeRawType(event);
+    const part = getRealtimePart(event);
 
     if (rawType !== "message.updated" && rawType !== "message.part.updated") {
       continue;
     }
 
     const messageId = asString(part?.messageID);
+    if (!messageId || !knownAssistantIds.has(messageId)) {
+      continue;
+    }
     const incomingText =
       typeof event.data.delta === "string"
         ? event.data.delta
         : asString(part?.text);
-    if (!messageId || asString(part?.type) !== "text" || typeof incomingText !== "string") {
+    if (asString(part?.type) !== "text" || typeof incomingText !== "string") {
       continue;
     }
 
-    rememberMessageId(messageId);
     textById.set(messageId, mergeStreamingText(textById.get(messageId), incomingText));
   }
 

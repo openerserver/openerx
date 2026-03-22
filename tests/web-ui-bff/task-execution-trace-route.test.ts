@@ -84,11 +84,13 @@ mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-a
   getAgentRun: mock(() => undefined),
   getSessionMessages: getSessionMessagesMock,
   injectGuidance: mock(async () => ({ ok: true })),
+  listRuntimePermissions: mock(async () => ({ ok: true, data: [] })),
   listAgentRuns: mock(() => []),
   listSessions: mock(async () => ({ ok: true, data: [] })),
   pauseAgent: mock(async () => ({ ok: true })),
   recoverAgentRun: mock(() => undefined),
   registerAgentRun: mock(() => undefined),
+  replyRuntimePermission: mock(async () => ({ ok: true })),
   resumeAgent: mock(async () => ({ ok: true })),
   runDetachedPrompt: mock(async () => ({ ok: true, sessionId: "detached", text: "{}" })),
   terminateAgent: mock(async () => ({ ok: true })),
@@ -364,6 +366,124 @@ describe("task execution trace route", () => {
     expect(getSessionMessagesMock).not.toHaveBeenCalled();
   });
 
+  test("reassembles anonymous user prompt parts from complete timeline items", async () => {
+    cpFetchMock.mockImplementation(async (url: string) => {
+      if (url === "/api/project-tree/tasks/task-1") {
+        return {
+          ok: true,
+          data: {
+            id: "task-1",
+            projectId: "proj-1",
+            title: "trace task",
+            prompt: "第一轮用户输入",
+            status: "running",
+            sessionId: "ses-1",
+            selectedModel: "github-copilot:gpt-5.4",
+            strategy: JSON.stringify({
+              selectedAgent: "oracle-enterprise",
+              hookExecutions: [],
+            }),
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/branches/ses-1/timeline?includeLineage=true") {
+        return {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "msg-1",
+                role: "user",
+                text: "",
+                createdAt: "2026-03-19T10:00:00.000Z",
+              },
+              {
+                id: "anonymous-msg-1",
+                role: "unknown",
+                text: "",
+                raw: {
+                  part: {
+                    id: "prt-msg-1",
+                    type: "text",
+                    messageID: "msg-1",
+                    text: [
+                      "Execution context:",
+                      "",
+                      "Opener-X task ID: task-1",
+                      "Project ID: proj-1",
+                      "当前执行上下文",
+                      "任务：trace task",
+                      "请只完成当前阶段的目标。",
+                      "完成后请输出本阶段产出摘要。",
+                      "如果你认为当前阶段已经完成，请在输出末尾单独追加 [STAGE_COMPLETE]。",
+                      "",
+                      "第二轮用户输入",
+                    ].join("\n"),
+                  },
+                },
+              },
+              {
+                id: "msg-2",
+                role: "assistant",
+                text: "",
+                createdAt: "2026-03-19T10:00:05.000Z",
+                raw: {
+                  parts: [
+                    {
+                      id: "prt-msg-2",
+                      type: "text",
+                      text: "第二轮模型回复",
+                    },
+                  ],
+                },
+              },
+            ],
+            meta: {
+              cacheState: "complete",
+              complete: true,
+              itemCount: 3,
+            },
+          },
+        };
+      }
+
+      return { ok: true, data: {} };
+    });
+
+    const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
+
+    const response = await taskRoutes.request("http://localhost/task-1/execution-trace", {
+      headers: {
+        Authorization: "Bearer test",
+      },
+    });
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload.messages).toEqual([
+      expect.objectContaining({
+        id: "msg-1",
+        role: "user",
+        text: expect.stringContaining("第二轮用户输入"),
+      }),
+      expect.objectContaining({
+        id: "msg-2",
+        role: "assistant",
+        text: "第二轮模型回复",
+      }),
+    ]);
+    expect(payload.finalPrompt).toContain("第二轮用户输入");
+    expect(payload.segments).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "user-input",
+          content: "第二轮用户输入",
+        }),
+      ]),
+    );
+  });
+
   test("converts every user and assistant turn into trace segments in chronological order", async () => {
     const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
 
@@ -444,5 +564,26 @@ describe("task execution trace route", () => {
         timestamp: "2026-03-19T10:01:08.000Z",
       },
     ]);
+  });
+
+  test("respects includeLineage=false when timeline cache is partial", async () => {
+    const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
+
+    const response = await taskRoutes.request("http://localhost/task-1/execution-trace?sessionId=ses-1&includeLineage=false", {
+      headers: {
+        Authorization: "Bearer test",
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(cpFetchMock).toHaveBeenCalledWith(
+      "/api/tasks/task-1/branches/ses-1/timeline",
+      expect.objectContaining({ authorization: "Bearer test" }),
+    );
+    expect(getSessionMessagesMock).toHaveBeenCalledWith("ses-1", {
+      taskId: "task-1",
+      authorization: "Bearer test",
+      includeLineage: false,
+    });
   });
 });

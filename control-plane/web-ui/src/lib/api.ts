@@ -844,6 +844,7 @@ export interface Task {
   strategy?: string;
   executionMode?: ExecutionMode;
   executionPlan?: string;
+  parallelRunHistory?: string;
   autoAdvanceStages?: boolean;
   repoId?: string | null;
   workspaceRoot?: string | null;
@@ -872,6 +873,31 @@ export interface Task {
   createdAt: string;
   startedAt?: string;
   finishedAt?: string;
+}
+
+export interface ParallelRunHistoryCandidate {
+  label: string;
+  agent?: string;
+  model?: string;
+  role?: string;
+  status: string;
+  sessionId?: string;
+  agentRunId?: string;
+  result?: string;
+  startedAt?: string;
+  finishedAt?: string;
+}
+
+export interface ParallelRunHistoryRecord {
+  parallelRunId: string;
+  templateId?: string;
+  startedAt: string;
+  finishedAt?: string;
+  parentSessionId?: string | null;
+  executionSessionId?: string | null;
+  winnerCandidateIndex?: number;
+  judgeResult?: ExecutionPlan["judgeResult"];
+  candidateSessions: ParallelRunHistoryCandidate[];
 }
 
 export interface RunningTaskReconcileSummary {
@@ -1273,6 +1299,7 @@ export async function updateTask(
     strategy?: string;
     executionMode?: ExecutionMode;
     executionPlan?: string;
+    parallelRunHistory?: string;
   },
 ) {
   return request<Partial<Task>>(`/tasks/${taskId}`, {
@@ -1443,10 +1470,15 @@ export async function getTaskConversationMessages(
   };
 }
 
-export async function continueTask(taskId: string, prompt: string, sessionId?: string) {
+export async function continueTask(
+  taskId: string,
+  prompt: string,
+  sessionId?: string,
+  executionMode?: ExecutionMode,
+) {
   return request<{ ok: boolean; sessionId: string }>(`/tasks/${taskId}/continue`, {
     method: "POST",
-    body: JSON.stringify({ prompt, sessionId }),
+    body: JSON.stringify({ prompt, sessionId, executionMode }),
   });
 }
 

@@ -1262,6 +1262,27 @@ describe("TaskDetail", () => {
     );
   });
 
+  it("shows 待采纳 for completed parallel tasks without an adopted candidate", async () => {
+    apiMocks.getTask.mockResolvedValueOnce(
+      makeTaskWithOverrides({
+        executionMode: "parallel",
+        executionPlan: JSON.stringify({
+          templateId: "parallel-default",
+          mode: "parallel",
+          steps: [{ id: "exec-parallel", type: "execution", status: "completed" }],
+          candidates: [
+            { label: "候选 A", agent: "executor", status: "completed", result: "A" },
+            { label: "候选 B", agent: "executor", status: "completed", result: "B" },
+          ],
+        }),
+      }),
+    );
+
+    const wrapper = await mountPage();
+
+    expect(wrapper.text()).toContain("待采纳");
+  });
+
   it("subscribes to the task and refreshes when hooks event arrives", async () => {
     const updatedTask = makeTask({
       selectedAgent: "default-executor",

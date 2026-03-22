@@ -17,7 +17,7 @@
 当前速览区域（`TaskDetailQuickOverview` → `TaskWorkflowStageOverviewCard` / `TaskExecutionControlCard` / `TaskCompletionActionsCard`）已建立了一套紧凑卡片视觉语言，新页面中的 **VueFlow 分支节点** 和 **执行追踪面板** 必须复用此风格，保持一致性：
 
 | 属性 | 速览规范 | 说明 |
-|------|---------|------|
+| ------ | --------- | ------ |
 | 外层容器 | `border: 1px solid #e8e8e8; border-radius: 8px; padding: 8px; background: #fafafa` | 分支图画布外框、执行追踪面板外框 |
 | 标题栏 | `a-flex justify="space-between"` + `a-typography-text strong style="font-size: 13px"` + 右侧折叠/操作按钮 | 面板 header |
 | 内容卡片 | `a-card size="small" :bordered="false" :body-style="{ padding: '8px 12px' }"` | 分支节点、trace segment 卡片 |
@@ -60,16 +60,18 @@
 
 ## 2. 与旧页面的关系
 
+> 说明：本文档中的 `/tasks/:taskId/v2` 与 `useTaskMessages.ts` 设计已退役。当前实现统一以 `/tasks/:taskId/v3` 为任务视图入口，并使用基于 execution-trace 的 V3 对话构建链路。
+
 | 旧页面 | 新页面 | 说明 |
-|--------|--------|------|
+| -------- | -------- | ------ |
 | `/tasks/:taskId` (TaskDetail.vue) | 保留不动 | 旧页面继续作为全功能详情页 |
 | `/workbench` (TaskWorkbench.vue) | 保留不动 | 旧 Workbench 不改 |
-| `/tasks/:taskId/v2` (TaskDetailV2.vue) | **新增** | 精简版任务详情页 |
+| `/tasks/:taskId/v3` (TaskDetailV3.vue) | 当前任务视图 | tree-first 任务详情页 |
 
 导航入口：
 
-1. 任务列表页新增"精简视图"入口链接。
-2. 旧详情页头部新增"切换到精简视图"按钮。
+1. 任务列表页提供“任务视图”入口链接。
+2. 旧详情页头部提供“任务视图”跳转按钮。
 
 ## 3. 信息架构
 
@@ -233,8 +235,8 @@ getSessionMessages(sessionId: string) => message[]
 ```text
 control-plane/web-ui/src/
   pages/
-    TaskDetailV2.vue                        # 新页面入口，<800 行
-  components/task-detail-v2/
+    TaskDetailV3.vue                        # 当前任务视图入口
+  components/task-detail-shared/
     SessionFlowGraph.vue                    # VueFlow 分支拓扑图
     SessionFlowNode.vue                     # 自定义 VueFlow 节点
     ChatMessageList.vue                     # 聊天消息列表
@@ -243,18 +245,16 @@ control-plane/web-ui/src/
     TaskSwitcher.vue                        # 任务切换下拉
   composables/
     useSessionFlow.ts                       # session tree → VueFlow nodes/edges 转换
-    useTaskMessages.ts                      # 消息加载、streaming 状态
+    useTreeMessages.ts                      # V3 消息加载、streaming 状态
     useTaskExecutionTrace.ts                # 执行追踪数据获取与过滤
     useTaskSwitcher.ts                      # 任务列表拉取与切换
-  router/
-    index.ts                                # 新增 /tasks/:taskId/v2 路由
 ```
 
 预估行数（不含样式）：
 
 | 文件 | 预估行数 | 职责 |
-|------|---------|------|
-| TaskDetailV2.vue | 500-650 | 页面框架、左右分栏布局、Sidebar 折叠管理 |
+| ------ | --------- | ------ |
+| TaskDetailV3.vue | 500-650 | 页面框架、左右分栏布局、Sidebar 折叠管理 |
 | SessionFlowGraph.vue | 200-280 | 速览容器壳 + VueFlow 画布 + 折叠 |
 | SessionFlowNode.vue | 80-120 | 自定义节点模板 |
 | ChatMessageList.vue | 250-350 | 消息渲染、auto-scroll |
@@ -262,7 +262,7 @@ control-plane/web-ui/src/
 | TaskExecutionTracePanel.vue | 350-450 | 速览容器壳 + 来源拆解 + 原始消息 |
 | TaskSwitcher.vue | 60-80 | Select 包装 |
 | useSessionFlow.ts | 100-150 | tree → flow 转换 |
-| useTaskMessages.ts | 120-160 | 消息获取 + streaming |
+| useTreeMessages.ts | 120-160 | 基于 execution-trace 的消息获取 + streaming |
 | useTaskExecutionTrace.ts | 100-140 | trace 获取 + 过滤 |
 | useTaskSwitcher.ts | 60-80 | 任务列表 |
 
@@ -270,17 +270,7 @@ control-plane/web-ui/src/
 
 ## 5. 路由配置
 
-在 [control-plane/web-ui/src/router/index.ts](control-plane/web-ui/src/router/index.ts) 新增：
-
-```ts
-{
-  path: "tasks/:taskId/v2",
-  name: "TaskDetailV2",
-  component: () => import("../pages/TaskDetailV2.vue"),
-},
-```
-
-位置：放在现有 `tasks/:taskId` 路由之后。
+当前任务视图使用 `/tasks/:taskId/v3`，V2 路由已删除。
 
 ## 6. VueFlow 分支图详细设计
 
@@ -445,7 +435,7 @@ export function useTaskExecutionTrace(taskId: Ref<string>, sessionId: Ref<string
 需要搬迁的代码区域（均来自旧 TaskDetail.vue）：
 
 | 来源行号区间 | 描述 | 迁移目标 |
-|-------------|------|---------|
+| ------------- | ------ | --------- |
 | L407-L640 | 模板中 `<a-tab-pane key="trace">` 完整块 | TaskExecutionTracePanel.vue 模板 |
 | L1088-L1095 | `taskExecutionTrace` / `loading` / `error` 状态 | useTaskExecutionTrace.ts |
 | L1091-L1094 | `traceSegmentFilter` / `traceMessageRoleFilter` / `traceSegmentExpanded` / `traceMessageRawExpanded` | useTaskExecutionTrace.ts |
@@ -497,7 +487,7 @@ export function useTaskExecutionTrace(taskId: Ref<string>, sessionId: Ref<string
 segment 类型 → `a-tag` 色值映射：
 
 | segment type | a-tag color | 标签文本 |
-|-------------|-------------|----------|
+| ------------- | ------------- | ---------- |
 | `user-input` | `blue` | 用户输入 |
 | `workflow-context` | `cyan` | 工作流上下文 |
 | `hook-injection` | `orange` | Hook 注入 |
@@ -557,7 +547,7 @@ defineEmits<{
 下列功能**不出现在新页面**中，由此大幅降低代码量：
 
 | 旧功能 | 原因 |
-|--------|------|
+| -------- | ------ |
 | Workbench iframe 嵌入模式 | 新页面不需要被 iframe 嵌入 |
 | `isWorkbenchEmbedded` 及全部条件分支 | 不再有两种布局模式 |
 | 双栏分屏 / 副窗 | 单窗口设计 |
@@ -572,14 +562,14 @@ defineEmits<{
 ## 10. 保留的核心功能
 
 | 功能 | 来源 | 新组件 |
-|------|------|--------|
+| ------ | ------ | -------- |
 | 分支树可视化 | SessionTree → VueFlow | SessionFlowGraph.vue |
 | 会话消息流 | TaskDetail 中栏 | ChatMessageList.vue |
 | 续跑 / 分叉 | TaskDetail composer | ChatComposer.vue |
 | 执行追踪 | TaskDetail trace tab | TaskExecutionTracePanel.vue |
 | 模型选择 | TaskDetail composer | ChatComposer.vue |
 | 终止执行 | TaskDetail terminate | ChatComposer.vue |
-| 任务状态/标题 | TaskDetail header | TaskDetailV2.vue header |
+| 任务状态/标题 | TaskDetail header | TaskDetailV3.vue header |
 | 工作流阶段概览 | TaskDetailQuickOverview | 直接复用，async import |
 | 实时事件 | useRealtimeStore | 复用 |
 
@@ -587,10 +577,10 @@ defineEmits<{
 
 ### 阶段 1：骨架搭建
 
-1. 新建 `TaskDetailV2.vue`，只有 Header + 左侧主内容区空壳（Workflow 概览 + 聊天区 + 底部输入框）+ 右侧 Sidebar 占位区。
-2. 新建路由 `/tasks/:taskId/v2`。
-3. 在旧 TaskDetail header 加一个"切换到精简视图"的 router-link。
-4. 在任务列表 Tasks.vue 的操作栏加一个"精简视图"入口。
+1. 新建 `TaskDetailV3.vue`，只有 Header + 左侧主内容区空壳（Workflow 概览 + 聊天区 + 底部输入框）+ 右侧 Sidebar 占位区。
+2. 使用 `/tasks/:taskId/v3` 作为任务视图路由。
+3. 在旧 TaskDetail header 加一个“任务视图”的 router-link。
+4. 在任务列表 Tasks.vue 的操作栏加一个“任务视图”入口。
 
 验收：新路由可访问，显示任务标题和左右分栏空壳。
 
@@ -606,7 +596,7 @@ defineEmits<{
 
 ### 阶段 3：聊天消息
 
-1. 新建 `useTaskMessages.ts`，消息拉取 + streaming 状态。
+1. 新建 `useTreeMessages.ts`，消息拉取 + streaming 状态。
 2. 新建 `ChatMessageList.vue`，主内容区消息渲染 + auto-scroll。
 3. 新建 `ChatComposer.vue`，输入框 + 按钮。
 4. 选中 session 后显示消息、可续跑和分叉。
@@ -640,7 +630,7 @@ defineEmits<{
 以下模块直接 import，不需要重写：
 
 | 模块 | 路径 | 用途 |
-|------|------|------|
+| ------ | ------ | ------ |
 | API 函数 | `lib/api.ts` | getTask, getSessionTree, getSessionMessages, getTaskExecutionTraceView, continueTask, forkTaskSession, activateSession, archiveTaskSession, listTasks, getModelsList, terminateAgent 等 |
 | Markdown 渲染 | `lib/markdown.ts` | renderMarkdown |
 | Realtime store | `stores/realtime.ts` | useRealtimeStore |
@@ -651,7 +641,7 @@ defineEmits<{
 ## 13. 不需要的现有模块
 
 | 模块 | 原因 |
-|------|------|
+| ------ | ------ |
 | `stores/workbench.ts` | 新页面无多窗口 |
 | `SessionTree.vue` / `SessionTreeBranch.vue` | 被 VueFlow 替代 |
 | `workbenchThemeStyles` | 无 workbench 壳 |
@@ -659,7 +649,7 @@ defineEmits<{
 
 ## 14. 测试计划
 
-新增测试文件：`tests/web-ui/TaskDetailV2.test.ts`
+新增测试文件：`tests/web-ui/TaskConversationTrace.test.ts`
 
 核心测试用例：
 
@@ -676,7 +666,7 @@ composable 单元测试：
 
 1. `useSessionFlow.ts`：tree → nodes/edges 转换正确性、布局坐标。
 2. `useTaskExecutionTrace.ts`：过滤逻辑、summary 计算。
-3. `useTaskMessages.ts`：消息加载、streaming 判断。
+3. `useTreeMessages.ts`：消息加载、streaming 判断。
 
 ## 15. 风险与注意事项
 
@@ -694,22 +684,7 @@ composable 单元测试：
 
 ### 15.3 不要影响旧路由
 
-新路由使用 `/tasks/:taskId/v2` 路径，不能让 Vue Router 把 `v2` 误匹配为 `taskId`。在路由定义中要把新路由放在 `tasks/:taskId` **之前**或使用更精确的路径匹配。
-
-推荐方案：将新路由放在 `tasks/:taskId` 之前：
-
-```ts
-{
-  path: "tasks/:taskId/v2",
-  name: "TaskDetailV2",
-  component: () => import("../pages/TaskDetailV2.vue"),
-},
-{
-  path: "tasks/:taskId",
-  name: "TaskDetail",
-  component: () => import("../pages/TaskDetail.vue"),
-},
-```
+当前任务视图使用 `/tasks/:taskId/v3`，并与 `/tasks/:taskId` 经典视图并存；文档中的旧 `/tasks/:taskId/v2` 方案已退役。
 
 ### 15.4 CSS 隔离
 
@@ -717,8 +692,8 @@ composable 单元测试：
 
 ## 16. 总结
 
-| 维度 | 旧 TaskDetail | 新 TaskDetailV2 |
-|------|--------------|-----------------|
+| 维度 | 旧 TaskDetail | 新 TaskDetailV3 |
+| ------ | -------------- | ----------------- |
 | 单文件行数 | 6633 行 | ~500-650 行 |
 | 总代码量 | ~6633 行 + 434 行 store | ~2100-2850 行（含子组件和 composable） |
 | 页面布局 | 两栏（左 sidebar + 右内容）× 3 种模式 | **左主内容 + 右侧 Sidebar** ×1 种模式 |
@@ -728,4 +703,4 @@ composable 单元测试：
 | 嵌入模式 | 支持（大量条件分支） | 不支持 |
 | 布局模式 | 3 种（standalone / embedded / reply-focus） | 1 种（左右分栏 + Sidebar 可折叠） |
 | 状态管理 | workbench store + local persist + server sync | 页面内状态 + URL 参数 |
-| 视觉风格 | 自定义 CSS class | 速览卡片规范（§0.1）|
+| 视觉风格 | 自定义 CSS class | 速览卡片规范（§0.1） |

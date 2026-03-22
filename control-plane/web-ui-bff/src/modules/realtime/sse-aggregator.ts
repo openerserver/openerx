@@ -117,6 +117,36 @@ function formatChangeSummary(task: CompletedTaskContext): string {
     .join("\n");
 }
 
+function markParallelPlanTerminal(
+  plan: ExecutionPlan | undefined,
+  judgeResult: JudgeResult | undefined,
+): void {
+  if (!plan) {
+    return;
+  }
+
+  for (const step of plan.steps) {
+    if (step.type === "execution") {
+      step.status = "completed";
+      step.finishedAt = new Date().toISOString();
+      continue;
+    }
+
+    if (step.type !== "judge") {
+      continue;
+    }
+
+    step.status = judgeResult?.status === "failed" ? "failed" : "completed";
+    step.finishedAt = judgeResult?.completedAt || new Date().toISOString();
+    if (!judgeResult && !step.result) {
+      step.result = "Judge skipped; final candidate adoption remains a user action.";
+    }
+    if (judgeResult?.reasoning) {
+      step.result = judgeResult.reasoning;
+    }
+  }
+}
+
 class SSEAggregator {
   private connections = new Map<string, SSEConnection>();
   private handlers = new Set<EventHandler>();
@@ -2529,11 +2559,13 @@ class SSEAggregator {
         }
       }
 
-      // Persist comparison results and optional judge recommendation, but leave final adoption to the user.
-      await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
+      markParallelPlanTerminal(plan, judgeResult);
+
+      const patchResult = await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
         method: "PATCH",
         authorization,
         body: {
+          status: "completed",
           executionPlan: plan ? JSON.stringify(plan) : undefined,
           strategy: mergeTaskStrategy(task.strategy, {
             hookExecutions: judgeResult
@@ -2554,6 +2586,31 @@ class SSEAggregator {
               : undefined,
           }),
         },
+      });
+
+      if (!patchResult.ok) {
+        return;
+      }
+
+      this.emit({
+        id: crypto.randomUUID(),
+        type: "task.completed",
+        ts: new Date().toISOString(),
+        taskId,
+        projectId,
+        data: {
+          status: "completed",
+          executionMode: "parallel",
+          awaitingUserAdoption: typeof plan?.winnerCandidateIndex !== "number",
+          judgeRan: Boolean(judgeResult),
+        },
+      });
+
+      await this.emitPipelineStageUpdates({
+        taskId,
+        projectId,
+        authorization,
+        reason: "task.completed",
       });
     } catch (error) {
       console.error(`Failed to finalize parallel task ${taskId}:`, error);

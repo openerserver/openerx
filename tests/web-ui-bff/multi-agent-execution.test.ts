@@ -142,7 +142,7 @@ describe("resolveWorkflowTemplate", () => {
     expect(result.id).toBe("ops-template");
   });
 
-  test("falls back to first enabled template", () => {
+  test("falls back to synthetic single template when category has no matching default", () => {
     const strategy = buildStrategy({
       templates: [
         { id: "disabled", name: "Off", mode: "single", agents: ["x"], enabled: false },
@@ -157,7 +157,8 @@ describe("resolveWorkflowTemplate", () => {
     });
 
     const result = resolveWorkflowTemplate(strategy, "deep");
-    expect(result.id).toBe("fallback");
+    expect(result.id).toBe("fallback-single");
+    expect(result.mode).toBe("single");
   });
 
   test("returns synthetic fallback when no templates available", () => {
@@ -198,7 +199,7 @@ describe("buildExecutionPlan", () => {
       ],
     });
 
-    const template = resolveWorkflowTemplate(strategy, "deep");
+    const template = resolveWorkflowTemplate(strategy, "deep", "parallel-t");
     const plan = buildExecutionPlan(template, strategy, "deep");
 
     expect(plan.mode).toBe("parallel");
@@ -221,7 +222,7 @@ describe("buildExecutionPlan", () => {
       ],
     });
 
-    const template = resolveWorkflowTemplate(strategy, "deep");
+    const template = resolveWorkflowTemplate(strategy, "deep", "limited");
     const plan = buildExecutionPlan(template, strategy, "deep");
 
     expect(plan.candidates).toHaveLength(2);

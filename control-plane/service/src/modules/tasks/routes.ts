@@ -731,6 +731,7 @@ function buildTaskTreeSnapshotFromCreateInput(
     selectedModel: body.selectedModel ?? null,
     executionMode: null,
     executionPlan: null,
+    parallelRunHistory: null,
     autoAdvanceStages: false,
     credentialId: body.credentialId ?? null,
     gitAuthorName: body.gitAuthorName ?? null,
@@ -775,6 +776,8 @@ function buildTaskTreeSnapshotFromRecord(
     executionMode:
       (updates.executionMode as TaskTreeSnapshot["executionMode"] | undefined) ?? task.executionMode,
     executionPlan: (updates.executionPlan as string | undefined) ?? task.executionPlan,
+    parallelRunHistory:
+      (updates.parallelRunHistory as string | undefined) ?? task.parallelRunHistory,
     autoAdvanceStages:
       (updates.autoAdvanceStages as boolean | undefined) ?? task.autoAdvanceStages,
     credentialId: (updates.credentialId as string | undefined) ?? task.credentialId,
@@ -791,7 +794,9 @@ function buildTaskTreeSnapshotFromRecord(
       task.changesSummary,
     createdAt: task.createdAt,
     startedAt: (updates.startedAt as string | undefined) ?? task.startedAt,
-    finishedAt: (updates.finishedAt as string | undefined) ?? task.finishedAt,
+    finishedAt: Object.prototype.hasOwnProperty.call(updates, "finishedAt")
+      ? (updates.finishedAt as string | null)
+      : task.finishedAt,
   };
 }
 
@@ -1242,6 +1247,7 @@ const updateStatusSchema = z.object({
   strategy: z.string().optional(),
   executionMode: z.enum(["single", "parallel", "sequential-chain"]).optional(),
   executionPlan: z.string().optional(),
+  parallelRunHistory: z.string().optional(),
   autoAdvanceStages: z.boolean().optional(),
   workspaceRoot: z.string().optional(),
   baseRevision: z.string().optional(),
@@ -1277,6 +1283,7 @@ const directTaskUpdateKeys = [
   "strategy",
   "executionMode",
   "executionPlan",
+  "parallelRunHistory",
   "autoAdvanceStages",
   "workspaceRoot",
   "baseRevision",
@@ -1311,6 +1318,10 @@ function buildTaskUpdates(body: TaskStatusUpdate, existing: { startedAt: string 
 
   if (body.status === "running" && !existing.startedAt) {
     updates.startedAt = new Date().toISOString();
+  }
+
+  if (body.status === "running") {
+    updates.finishedAt = null;
   }
 
   if (shouldSetFinishedAt(body.status)) {

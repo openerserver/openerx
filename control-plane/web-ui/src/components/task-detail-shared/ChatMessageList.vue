@@ -102,22 +102,22 @@
                               v-if="toolDetailText(tool)"
                               type="button"
                               class="chat-tool-call__toggle"
-                              @click="toggleCandidateTool(tool.key)"
+                              @click="toggleTool(tool.key)"
                             >
-                              {{ isCandidateToolExpanded(tool.key) ? '收起详情' : '展开详情' }}
+                              {{ isToolExpanded(tool.key) ? '收起详情' : '展开详情' }}
                             </button>
                           </a-space>
                         </a-flex>
-                        <div v-if="toolCallText(tool)" class="chat-tool-call__line">
+                        <div v-if="isToolExpanded(tool.key) && toolCallText(tool)" class="chat-tool-call__line">
                           <span class="chat-tool-call__field">调用</span>
                           <span class="chat-tool-call__value">{{ toolCallText(tool) }}</span>
                         </div>
-                        <div v-if="toolInputText(tool)" class="chat-tool-call__line chat-tool-call__line--stacked">
+                        <div v-if="isToolExpanded(tool.key) && toolInputText(tool)" class="chat-tool-call__line chat-tool-call__line--stacked">
                           <span class="chat-tool-call__field">参数</span>
                           <pre class="chat-tool-call__detail chat-tool-call__detail--compact">{{ toolInputText(tool) }}</pre>
                         </div>
                         <div
-                          v-if="toolOutputText(tool) && isCandidateToolExpanded(tool.key)"
+                          v-if="toolOutputText(tool) && isToolExpanded(tool.key)"
                           class="chat-tool-call__line chat-tool-call__line--stacked"
                         >
                           <span class="chat-tool-call__field">输出</span>
@@ -186,6 +186,14 @@
                   <a-tag :color="tool.stateColor">{{ tool.stateLabel }}</a-tag>
                 </a-space>
                 <button
+                  v-if="toolDetailText(tool)"
+                  type="button"
+                  class="chat-tool-call__toggle"
+                  @click="toggleTool(tool.key)"
+                >
+                  {{ isToolExpanded(tool.key) ? '收起详情' : '展开详情' }}
+                </button>
+                <button
                   v-if="tool.filePath"
                   type="button"
                   class="chat-tool-call__path-button"
@@ -194,15 +202,15 @@
                   {{ tool.filePath }}
                 </button>
               </a-flex>
-              <div v-if="toolCallText(tool)" class="chat-tool-call__line">
+              <div v-if="isToolExpanded(tool.key) && toolCallText(tool)" class="chat-tool-call__line">
                 <span class="chat-tool-call__field">调用</span>
                 <span class="chat-tool-call__value">{{ toolCallText(tool) }}</span>
               </div>
-              <div v-if="toolInputText(tool)" class="chat-tool-call__line chat-tool-call__line--stacked">
+              <div v-if="isToolExpanded(tool.key) && toolInputText(tool)" class="chat-tool-call__line chat-tool-call__line--stacked">
                 <span class="chat-tool-call__field">参数</span>
                 <pre class="chat-tool-call__detail chat-tool-call__detail--compact">{{ toolInputText(tool) }}</pre>
               </div>
-              <div v-if="toolOutputText(tool)" class="chat-tool-call__line chat-tool-call__line--stacked">
+              <div v-if="isToolExpanded(tool.key) && toolOutputText(tool)" class="chat-tool-call__line chat-tool-call__line--stacked">
                 <span class="chat-tool-call__field">输出</span>
                 <pre class="chat-tool-call__detail chat-tool-call__detail--compact">{{ toolOutputText(tool) }}</pre>
               </div>
@@ -239,7 +247,7 @@ import type {
   TaskConversationMessageItem,
   TaskConversationParallelItem,
   TaskConversationToolCallItem,
-} from "../../composables/useTaskMessages";
+} from "../../lib/message-normalize";
 
 const props = defineProps<{
   items: TaskConversationListItem[];
@@ -255,7 +263,7 @@ const emit = defineEmits<{
 const scrollContainer = ref<HTMLElement | null>(null);
 const shouldAutoScroll = ref(true);
 const revealText = ref<Record<string, string>>({});
-const expandedCandidateTools = ref<Record<string, boolean>>({});
+const expandedTools = ref<Record<string, boolean>>({});
 const STREAMING_PLACEHOLDER_TEXT = "正在生成...";
 const AUTO_SCROLL_THRESHOLD_PX = 120;
 const REVEAL_INTERVAL_MS = 22;
@@ -585,14 +593,14 @@ function toolDetailText(tool: TaskConversationToolCallItem) {
   return [toolCallText(tool), toolInputText(tool), toolOutputText(tool)].filter(Boolean).join("\n\n");
 }
 
-function isCandidateToolExpanded(key: string) {
-  return expandedCandidateTools.value[key] === true;
+function isToolExpanded(key: string) {
+  return expandedTools.value[key] === true;
 }
 
-function toggleCandidateTool(key: string) {
-  expandedCandidateTools.value = {
-    ...expandedCandidateTools.value,
-    [key]: !expandedCandidateTools.value[key],
+function toggleTool(key: string) {
+  expandedTools.value = {
+    ...expandedTools.value,
+    [key]: !expandedTools.value[key],
   };
 }
 

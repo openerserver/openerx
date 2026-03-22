@@ -645,7 +645,7 @@ describe("SSEAggregator pipeline emitters", () => {
 
   test("parallel finalization keeps winner selection manual", async () => {
     cpFetchMock.mockImplementation(async (url: string, options?: { method?: string; body?: unknown }) => {
-      if ((options?.method || "GET") === "GET" && url === "/api/tasks/task-1") {
+      if ((options?.method || "GET") === "GET" && url === "/api/project-tree/tasks/task-1") {
         return {
           ok: true,
           status: 200,
@@ -717,15 +717,21 @@ describe("SSEAggregator pipeline emitters", () => {
         >
       ).find(([url, options]) => url === "/api/tasks/task-1" && options?.method === "PATCH");
       expect(taskPatchCall).toBeDefined();
-      expect(taskPatchCall?.[1]?.body?.status).toBeUndefined();
+      expect(taskPatchCall?.[1]?.body?.status).toBe("completed");
       expect(taskPatchCall?.[1]?.body?.result).toBeUndefined();
       const patchedPlan = JSON.parse(String(taskPatchCall?.[1]?.body?.executionPlan)) as {
         winnerCandidateIndex?: number;
         judgeResult?: { winnerIndex?: number };
+        steps?: Array<{ type?: string; status?: string; result?: string }>;
         candidates: Array<{ result?: string; status?: string; finishedAt?: string }>;
       };
       expect(patchedPlan.winnerCandidateIndex).toBeUndefined();
       expect(patchedPlan.judgeResult?.winnerIndex).toBe(0);
+      expect(patchedPlan.steps).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ type: "execution", status: "completed" }),
+        ]),
+      );
       expect(patchedPlan.candidates).toEqual([
         expect.objectContaining({
           status: "completed",
@@ -738,8 +744,19 @@ describe("SSEAggregator pipeline emitters", () => {
           finishedAt: expect.any(String),
         }),
       ]);
-      expect(emitted.some((event) => event.type === "task.completed")).toBe(false);
-      expect(buildPipelineStageUpdatedEventsMock).not.toHaveBeenCalledWith(
+      expect(emitted).toContainEqual(
+        expect.objectContaining({
+          type: "task.completed",
+          taskId: "task-1",
+          projectId: "proj-1",
+          data: expect.objectContaining({
+            status: "completed",
+            executionMode: "parallel",
+            awaitingUserAdoption: true,
+          }),
+        }),
+      );
+      expect(buildPipelineStageUpdatedEventsMock).toHaveBeenCalledWith(
         expect.objectContaining({ reason: "task.completed" }),
       );
     } finally {
@@ -895,7 +912,7 @@ describe("SSEAggregator pipeline emitters", () => {
 
   test("parallel question tools are failed instead of staying running forever", async () => {
     cpFetchMock.mockImplementation(async (url: string, options?: { method?: string; body?: unknown }) => {
-      if ((options?.method || "GET") === "GET" && url === "/api/tasks/task-1") {
+      if ((options?.method || "GET") === "GET" && url === "/api/project-tree/tasks/task-1") {
         return {
           ok: true,
           status: 200,

@@ -1,4 +1,5 @@
 import { cpFetch, createInternalAuthorization } from "../../lib/control-plane-client";
+import type { ExecutionPlan } from "../../lib/orchestration-strategy";
 import {
   extractAssistantResultFromMessages,
   getAgentRun,
@@ -7,7 +8,11 @@ import {
   recoverAgentRun,
 } from "../agent-control/opencode-adapter";
 import { finalizeTaskState } from "./finalize";
-import { fetchTaskSessionLineageRecords } from "./task-session-compat";
+import {
+  type ParallelExecutionPlanRecord,
+  upsertParallelRunHistory,
+} from "./parallel-run-history";
+import { fetchTaskSessionLineageRecords, upsertTaskSessionLineageRecord } from "./task-session-compat";
 import { persistWorkflowStageExecutionOutcome } from "./workflow-stage-execution";
 
 interface RunningTaskRecord {
@@ -22,6 +27,7 @@ interface RunningTaskRecord {
   startedAt?: string | null;
   finishedAt?: string | null;
   executionPlan?: string | null;
+  parallelRunHistory?: string | null;
 }
 
 interface SessionListEntry {
@@ -216,7 +222,11 @@ interface ReconcileTaskContext {
 type ReconcileTaskOutcome = "completed" | "failed" | "recovered" | "skipped";
 
 interface ParsedExecutionPlanCandidate {
+  sessionId?: string;
+  agentRunId?: string;
   status?: string;
+  result?: string;
+  startedAt?: string;
   finishedAt?: string;
 }
 
@@ -226,6 +236,10 @@ interface ParsedExecutionPlanStep {
 }
 
 interface ParsedExecutionPlan {
+  mode?: string;
+  parallelRunId?: string;
+  templateId?: string;
+  winnerCandidateIndex?: number;
   candidates?: ParsedExecutionPlanCandidate[];
   steps?: ParsedExecutionPlanStep[];
 }
@@ -284,6 +298,177 @@ function planNeedsTerminalRepair(task: RunningTaskRecord): boolean {
   });
 
   return candidateNeedsRepair || stepNeedsRepair;
+}
+
+function isParallelExecutionPlan(plan: ParsedExecutionPlan | null): boolean {
+  return plan?.mode === "parallel" && Array.isArray(plan.candidates) && plan.candidates.length > 1;
+}
+
+function summarizeParallelCompletion(plan: ParsedExecutionPlan) {
+  const candidates = plan.candidates || [];
+  const allTerminal = candidates.length > 0 && candidates.every((candidate) =>
+    candidate.status === "completed" || candidate.status === "failed",
+  );
+  const hasCompleted = candidates.some((candidate) => candidate.status === "completed");
+  return { allTerminal, hasCompleted };
+}
+
+function updateParallelPlanTerminal(plan: ExecutionPlan, finishedAt: string): {
+  status: "completed" | "failed";
+  changed: boolean;
+} {
+  let changed = false;
+  const hasCompletedCandidate = plan.candidates.some((candidate) => candidate.status === "completed");
+  const terminalStatus = hasCompletedCandidate ? "completed" : "failed";
+
+  for (const candidate of plan.candidates) {
+    if ((candidate.status === "completed" || candidate.status === "failed") && !candidate.finishedAt) {
+      candidate.finishedAt = finishedAt;
+      changed = true;
+    }
+  }
+
+  for (const step of plan.steps) {
+    if (step.type === "execution") {
+      if (step.status !== terminalStatus) {
+        step.status = terminalStatus;
+        changed = true;
+      }
+      if (!step.finishedAt) {
+        step.finishedAt = finishedAt;
+        changed = true;
+      }
+      continue;
+    }
+
+    if (step.type !== "judge") {
+      continue;
+    }
+
+    if (step.status === "pending" || step.status === "running") {
+      step.status = "completed";
+      step.result = step.result || "Judge skipped; final candidate adoption remains a user action.";
+      changed = true;
+    }
+    if (!step.finishedAt) {
+      step.finishedAt = finishedAt;
+      changed = true;
+    }
+  }
+
+  return { status: terminalStatus, changed };
+}
+
+async function deactivateActiveTaskSessions(
+  authorization: string,
+  taskId: string,
+): Promise<void> {
+  const lineageResult = await fetchTaskSessionLineageRecords(taskId, authorization);
+  if (!lineageResult.ok) {
+    return;
+  }
+
+  await Promise.all(
+    lineageResult.records
+      .filter((record) => !record.archivedAt && record.isActive)
+      .map((record) =>
+        upsertTaskSessionLineageRecord(taskId, authorization, {
+          runtimeSessionId: record.runtimeSessionId,
+          isActive: false,
+        }),
+      ),
+  );
+}
+
+async function markParallelTaskTerminal(
+  authorization: string,
+  task: RunningTaskRecord,
+  plan: ExecutionPlan,
+): Promise<ReconcileTaskOutcome> {
+  const finishedAt = new Date().toISOString();
+  const terminal = updateParallelPlanTerminal(plan, finishedAt);
+  const patchResult = await cpFetch(`/api/tasks/${encodeURIComponent(task.id)}`, {
+    method: "PATCH",
+    authorization,
+    body: {
+      status: terminal.status,
+      executionPlan: JSON.stringify(plan),
+      parallelRunHistory: upsertParallelRunHistory(task, plan as ParallelExecutionPlanRecord),
+    },
+  });
+
+  if (!patchResult.ok) {
+    return "skipped";
+  }
+
+  await deactivateActiveTaskSessions(authorization, task.id);
+  return terminal.status === "completed" ? "completed" : "failed";
+}
+
+async function reconcileParallelRunningTask(
+  task: RunningTaskRecord,
+  context: ReconcileTaskContext,
+): Promise<ReconcileTaskOutcome> {
+  const parsedPlan = parseExecutionPlan(task.executionPlan);
+  if (!isParallelExecutionPlan(parsedPlan)) {
+    return failTaskWithReason(
+      task,
+      context,
+      "Recovered from stale running state: missing parallel candidate execution plan.",
+    );
+  }
+
+  const plan = JSON.parse(task.executionPlan || "null") as ExecutionPlan | null;
+  if (!plan) {
+    return failTaskWithReason(
+      task,
+      context,
+      "Recovered from stale running state: invalid parallel execution plan.",
+    );
+  }
+
+  for (const candidate of plan.candidates) {
+    if (!candidate.sessionId || (candidate.status !== "running" && candidate.status !== "pending")) {
+      continue;
+    }
+
+    const messagesResult = await getSessionMessages(candidate.sessionId, {
+      taskId: task.id,
+      authorization: context.authorization,
+      includeLineage: false,
+    });
+
+    if (!messagesResult.ok) {
+      continue;
+    }
+
+    const assistantResult = extractAssistantResultFromMessages(messagesResult.data);
+    if (assistantResult.failed) {
+      candidate.status = "failed";
+      candidate.result =
+        assistantResult.text ||
+        `[FAILED] ${assistantResult.error || "Assistant message ended with an error."}`;
+      candidate.finishedAt = new Date().toISOString();
+      continue;
+    }
+
+    if (assistantResult.completed) {
+      candidate.status = "completed";
+      candidate.result = assistantResult.text;
+      candidate.finishedAt = new Date().toISOString();
+    }
+  }
+
+  const completion = summarizeParallelCompletion(plan);
+  if (completion.allTerminal) {
+    return markParallelTaskTerminal(context.authorization, task, plan);
+  }
+
+  if (!context.runtimeAvailable) {
+    return reconcileTaskWithoutRuntime(task, context);
+  }
+
+  return "skipped";
 }
 
 function taskLooksHistoricallyInconsistent(task: RunningTaskRecord) {
@@ -429,6 +614,10 @@ async function reconcileSingleRunningTask(
   task: RunningTaskRecord,
   context: ReconcileTaskContext,
 ): Promise<ReconcileTaskOutcome> {
+  if (isParallelExecutionPlan(parseExecutionPlan(task.executionPlan))) {
+    return reconcileParallelRunningTask(task, context);
+  }
+
   if (!task.sessionId || !task.agentRunId) {
     return failTaskWithReason(
       task,

@@ -1,11 +1,12 @@
 /**
  * useTreeMessages — tree-native message composable for TaskDetailV3.
  *
- * Imports shared normalization from lib/message-normalize so that persisted
- * messages get the live-state text overlay during streaming (same as V2).
+ * Uses execution-trace directly and derives V3-only conversation items from
+ * timeline/message snapshots while preserving live text overlays.
  */
 import { computed, ref, watch, type Ref } from "vue";
-import { getTaskConversationMessages } from "../lib/api";
+import { getTaskExecutionTraceView, type TaskExecutionTrace } from "../lib/api";
+import { normalizeTraceConversationItems } from "../lib/task-trace-conversation";
 import { useRealtimeStore } from "../stores/realtime";
 import {
   type TaskConversationListItem,
@@ -34,13 +35,13 @@ export function useTreeMessages(
   options?: { includeLineage?: boolean },
 ) {
   const realtimeStore = useRealtimeStore();
-  const rawMessages = ref<unknown[]>([]);
+  const trace = ref<TaskExecutionTrace | null>(null);
   const loading = ref(false);
   const error = ref<string | null>(null);
 
   async function refresh(silent = false) {
     if (!taskId.value || !sessionId.value) {
-      rawMessages.value = [];
+      trace.value = null;
       error.value = null;
       return;
     }
@@ -49,12 +50,11 @@ export function useTreeMessages(
     error.value = null;
 
     try {
-      const response = options?.includeLineage === true
-        ? await getTaskConversationMessages(taskId.value, sessionId.value, { includeLineage: true })
-        : await getTaskConversationMessages(taskId.value, sessionId.value);
-      rawMessages.value = Array.isArray(response.data) ? response.data : [];
+      trace.value = options?.includeLineage === true
+        ? await getTaskExecutionTraceView(taskId.value, sessionId.value, { includeLineage: true })
+        : await getTaskExecutionTraceView(taskId.value, sessionId.value);
     } catch (nextError) {
-      rawMessages.value = [];
+      trace.value = null;
       error.value = nextError instanceof Error ? nextError.message : "加载消息失败";
     } finally {
       if (!silent) loading.value = false;
@@ -65,8 +65,8 @@ export function useTreeMessages(
 
   const persistedMessageIds = computed(() => {
     const ids = new Set<string>();
-    for (const message of rawMessages.value) {
-      const id = asString(messageInfo(message)?.id) ?? asString(asRecord(message)?.id);
+    for (const message of normalizeTraceConversationItems(trace.value, createEmptyLiveAssistantState(), options)) {
+      const id = message.key;
       if (id) ids.add(id);
     }
     return ids;
@@ -78,10 +78,7 @@ export function useTreeMessages(
   });
 
   const items = computed(() =>
-    rawMessages.value
-      .map((message, index) => normalizeMessage(message, index, liveAssistantState.value))
-      .filter((item): item is TaskConversationMessageItem => item != null)
-      .filter((item) => item.role !== "system"),
+    normalizeTraceConversationItems(trace.value, liveAssistantState.value, options),
   );
 
   const streamingAssistantDraft = computed<TaskConversationMessageItem | null>(() => {
@@ -122,7 +119,7 @@ export function useTreeMessages(
   }, { immediate: true });
 
   return {
-    rawMessages,
+    trace,
     items,
     conversationItems,
     hasStreamingAssistant,

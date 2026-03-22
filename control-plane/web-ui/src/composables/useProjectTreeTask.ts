@@ -25,6 +25,7 @@ export interface TreeTask {
   strategy?: string;
   executionMode?: ExecutionMode;
   executionPlan?: string;
+  parallelRunHistory?: string;
   autoAdvanceStages?: boolean;
   repoId?: string | null;
   workspaceRoot?: string | null;
@@ -75,6 +76,12 @@ export function flattenTreeNodeToTask(node: ProjectTreeNodeRecord): TreeTask {
     strategy: typeof json.strategy === "string" ? json.strategy : json.strategy ? JSON.stringify(json.strategy) : undefined,
     executionMode: asString(json.executionMode) as ExecutionMode | undefined,
     executionPlan: typeof json.executionPlan === "string" ? json.executionPlan : json.executionPlan ? JSON.stringify(json.executionPlan) : undefined,
+    parallelRunHistory:
+      typeof json.parallelRunHistory === "string"
+        ? json.parallelRunHistory
+        : json.parallelRunHistory
+          ? JSON.stringify(json.parallelRunHistory)
+          : undefined,
     autoAdvanceStages: typeof json.autoAdvanceStages === "boolean" ? json.autoAdvanceStages : undefined,
     repoId: asString(json.repoId) ?? null,
     workspaceRoot: asString(json.workspaceRoot) ?? null,

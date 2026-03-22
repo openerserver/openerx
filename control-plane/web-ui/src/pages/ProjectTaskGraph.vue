@@ -86,6 +86,49 @@
             </div>
           </div>
 
+          <section class="project-tree-search-panel">
+            <div class="project-tree-search-panel__header">
+              <div>
+                <h4>跨分支历史检索</h4>
+                <p>直接搜索当前项目树里的 message/context 节点，查看跨分支命中记录。</p>
+              </div>
+              <a-tag v-if="treeSearchMeta" color="blue">{{ treeSearchMeta.resultCount }} 条命中</a-tag>
+            </div>
+
+            <a-input-search
+              :value="treeSearchQuery"
+              :loading="treeSearchLoading"
+              allow-clear
+              placeholder="搜索当前项目跨分支历史"
+              @update:value="treeSearchQuery = String($event ?? '')"
+              @search="() => void runTreeSearch()"
+            />
+
+            <a-alert
+              v-if="treeSearchError"
+              type="error"
+              show-icon
+              :message="treeSearchError"
+              style="margin-top: 12px"
+            />
+
+            <div v-else-if="treeSearchResults.length > 0" class="project-tree-search-results">
+              <button
+                v-for="result in treeSearchResults"
+                :key="result.eventId || result.nodeId"
+                type="button"
+                class="project-tree-search-result"
+                @click="handleSelectSearchResult(result)"
+              >
+                <div class="project-tree-search-result__header">
+                  <strong>{{ result.branchName || result.taskTitle || treeNodeTitleById(result.nodeId) }}</strong>
+                  <span>{{ treeSearchResultMeta(result) }}</span>
+                </div>
+                <p>{{ result.excerpt || result.contentText }}</p>
+              </button>
+            </div>
+          </section>
+
           <a-alert
             v-if="treeError"
             type="error"
@@ -439,6 +482,8 @@ import {
   type ProjectTreeBranchRecord,
   type ProjectTreeLinkRecord,
   type ProjectTreeNodeRecord,
+  type ProjectTreeSearchResponseRecord,
+  type ProjectTreeSearchResultRecord,
   type ProjectTaskGraphEdgeView,
   type ProjectTaskGraphTaskView,
   type TaskExecutionTrace,
@@ -451,6 +496,7 @@ import {
   getProjectTreeNodeLinks,
   getProjectTaskGraphView,
   getTaskExecutionTrace,
+  searchProjectTree,
   updateProjectTreeBranch,
 } from "../lib/api";
 import { type RealtimeEvent, useRealtimeStore } from "../stores/realtime";
@@ -483,6 +529,12 @@ interface FlowLayoutResult {
   displayNodeByTaskId: Map<string, string>;
 }
 
+interface TreeDataNode {
+  key: string;
+  title: string;
+  children: TreeDataNode[];
+}
+
 const route = useRoute();
 const router = useRouter();
 const realtimeStore = useRealtimeStore();
@@ -506,6 +558,11 @@ const selectedTreeNodeAncestors = ref<ProjectTreeNodeRecord[]>([]);
 const selectedTreeNodeChildren = ref<ProjectTreeNodeRecord[]>([]);
 const selectedTreeNodeLinks = ref<ProjectTreeLinkRecord[]>([]);
 const branchUpdateTargetId = ref<string | null>(null);
+const treeSearchQuery = ref("");
+const treeSearchLoading = ref(false);
+const treeSearchError = ref("");
+const treeSearchResults = ref<ProjectTreeSearchResultRecord[]>([]);
+const treeSearchMeta = ref<ProjectTreeSearchResponseRecord["meta"] | null>(null);
 
 const layoutMode = ref<LayoutMode>("stage");
 const searchText = ref("");
@@ -771,11 +828,64 @@ async function moveBranchHead(branch: ProjectTreeBranchRecord, setDefault: boole
   }
 }
 
+async function runTreeSearch() {
+  if (!projectId.value) {
+    treeSearchResults.value = [];
+    treeSearchMeta.value = null;
+    treeSearchError.value = "";
+    return;
+  }
+
+  const query = treeSearchQuery.value.trim();
+  if (!query) {
+    treeSearchResults.value = [];
+    treeSearchMeta.value = null;
+    treeSearchError.value = "";
+    return;
+  }
+
+  treeSearchLoading.value = true;
+  treeSearchError.value = "";
+
+  try {
+    const response = await searchProjectTree(projectId.value, query, {
+      nodeType: "all",
+      limit: 12,
+    });
+    treeSearchResults.value = Array.isArray(response.data) ? response.data : [];
+    treeSearchMeta.value = response.meta ?? null;
+  } catch (error) {
+    treeSearchResults.value = [];
+    treeSearchMeta.value = null;
+    treeSearchError.value = error instanceof Error ? error.message : "项目树搜索失败";
+  } finally {
+    treeSearchLoading.value = false;
+  }
+}
+
+function handleSelectSearchResult(result: ProjectTreeSearchResultRecord) {
+  void selectTreeNode(result.nodeId);
+}
+
 function subscribeToCurrentProject() {
   if (!projectId.value || !realtimeStore.connected) {
     return;
   }
   realtimeStore.subscribeProject(projectId.value);
+}
+
+function treeSearchResultMeta(result: ProjectTreeSearchResultRecord) {
+  const parts = [
+    result.source === "message" ? "消息" : "上下文",
+    result.runtimeSessionId ? `Session ${result.runtimeSessionId.slice(0, 8)}` : undefined,
+    result.createdAt ? formatNodeTimestamp(result.createdAt) : undefined,
+  ].filter((value): value is string => Boolean(value));
+  return parts.join(" · ");
+}
+
+function treeNodeTitleById(nodeId: string) {
+  const node = treeNodeMap.value.get(nodeId);
+  return node ? treeNodeTitle(node) : nodeId;
 }
 
 function processProjectRealtimeEvents() {
@@ -1318,7 +1428,7 @@ function readString(value: unknown) {
   return typeof value === "string" && value.trim() ? value : null;
 }
 
-function buildTreeData(parentId: string | null): Array<Record<string, unknown>> {
+function buildTreeData(parentId: string | null): TreeDataNode[] {
   const children = treeNodes.value
     .filter((node) => (parentId ? node.parentId === parentId : !node.parentId))
     .sort(compareTreeNodes);
@@ -1509,6 +1619,11 @@ function openFollowUpTask(task: GraphTask | null) {
     },
   });
 }
+
+defineExpose({
+  treeSearchQuery,
+  runTreeSearch,
+});
 </script>
 
 <style scoped>
@@ -1620,6 +1735,70 @@ function openFollowUpTask(task: GraphTask | null) {
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 10px;
   margin-bottom: 14px;
+}
+
+.project-tree-search-panel {
+  margin-bottom: 12px;
+  padding: 12px;
+  border: 1px solid #e8e8e8;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.project-tree-search-panel__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.project-tree-search-panel__header h4 {
+  margin: 0 0 4px;
+}
+
+.project-tree-search-panel__header p {
+  margin: 0;
+  color: rgba(0, 0, 0, 0.55);
+}
+
+.project-tree-search-results {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.project-tree-search-result {
+  padding: 10px 12px;
+  border: 1px solid #e8e8e8;
+  border-radius: 10px;
+  background: #fafafa;
+  text-align: left;
+  cursor: pointer;
+}
+
+.project-tree-search-result:hover {
+  border-color: #91caff;
+  background: #f0f7ff;
+}
+
+.project-tree-search-result__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.project-tree-search-result__header span {
+  color: rgba(0, 0, 0, 0.45);
+  font-size: 12px;
+}
+
+.project-tree-search-result p {
+  margin: 0;
+  color: rgba(0, 0, 0, 0.72);
 }
 
 .project-tree-workbench__stat {

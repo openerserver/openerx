@@ -619,10 +619,12 @@ function exceedsShapePolicy(
 }
 
 function exceedsBudgetPolicy(policy: ModelExecutionPolicy, metrics: ShapeMetrics) {
-  return (
-    metrics.estimatedRequestsUpper > policy.maxRequestsPerRun ||
-    metrics.estimatedCostUpper > policy.maxEstimatedCostUsdPerRun
-  );
+  const exceedsRequestLimit = metrics.estimatedRequestsUpper > policy.maxRequestsPerRun;
+  const exceedsCostLimit =
+    policy.maxEstimatedCostUsdPerRun > 0 &&
+    metrics.estimatedCostUpper > policy.maxEstimatedCostUsdPerRun;
+
+  return exceedsRequestLimit || exceedsCostLimit;
 }
 
 function resolveShapeViolationReasons(
@@ -787,8 +789,12 @@ export function evaluatePaidExecutionPreflight(
                 Math.max(0, policy.maxEstimatedCostUsdPerRun - metrics.estimatedCostUpper),
               )
             : null,
-        enoughForSingleRun: metrics.estimatedCostUpper <= policy.maxEstimatedCostUsdPerRun,
-        enoughForSuiteRun: metrics.estimatedCostUpper * 4 <= policy.maxEstimatedCostUsdPerRun,
+        enoughForSingleRun:
+          policy.maxEstimatedCostUsdPerRun <= 0 ||
+          metrics.estimatedCostUpper <= policy.maxEstimatedCostUsdPerRun,
+        enoughForSuiteRun:
+          policy.maxEstimatedCostUsdPerRun <= 0 ||
+          metrics.estimatedCostUpper * 4 <= policy.maxEstimatedCostUsdPerRun,
       },
       baselineSource: metrics.baselineSource,
       guardDecision,

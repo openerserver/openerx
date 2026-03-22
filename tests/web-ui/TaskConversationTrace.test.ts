@@ -10,15 +10,15 @@ import {
   resolveEditableSequentialSteps,
   serializeTaskStrategy,
 } from "../../control-plane/web-ui/src/lib/taskExecutionMode";
-import { branchLineageToFlow } from "../../control-plane/web-ui/src/composables/useBranchLineageFlow";
 import {
   type TaskConversationMessageItem,
   normalizeSessionConversationItems,
-  useTaskMessages,
-} from "../../control-plane/web-ui/src/composables/useTaskMessages";
+} from "../../control-plane/web-ui/src/lib/message-normalize";
+import { useTreeMessages } from "../../control-plane/web-ui/src/composables/useTreeMessages";
+import { normalizeTraceConversationItems } from "../../control-plane/web-ui/src/lib/task-trace-conversation";
 
 const apiMocks = vi.hoisted(() => ({
-  getTaskConversationMessages: vi.fn(),
+  getTaskExecutionTraceView: vi.fn(),
 }));
 
 const realtimeStoreMock = vi.hoisted(() => ({
@@ -35,7 +35,7 @@ vi.mock("../../control-plane/web-ui/src/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../control-plane/web-ui/src/lib/api")>();
   return {
     ...actual,
-    getTaskConversationMessages: apiMocks.getTaskConversationMessages,
+    getTaskExecutionTraceView: apiMocks.getTaskExecutionTraceView,
   };
 });
 
@@ -43,65 +43,49 @@ vi.mock("../../control-plane/web-ui/src/stores/realtime", () => ({
   useRealtimeStore: () => realtimeStoreMock,
 }));
 
-describe("TaskDetailV2 composables", () => {
+function createTraceFromMessages(messages: unknown[]) {
+  const traceMessages = messages.map((message, index) => {
+    const record = message as {
+      id?: string;
+      role?: string;
+      text?: string;
+      createdAt?: string;
+      info?: { id?: string; role?: string; time?: { created?: string | number } };
+      parts?: Array<{ text?: string; content?: string }>;
+    };
+    const parts = Array.isArray(record.parts) ? record.parts : [];
+    const text = parts
+      .map((part) => (typeof part.text === "string" ? part.text : typeof part.content === "string" ? part.content : ""))
+      .filter(Boolean)
+      .join("\n");
+    const created = record.createdAt ?? (typeof record.info?.time?.created === "string" ? record.info.time.created : undefined);
+
+    return {
+      id: record.info?.id ?? record.id ?? `message-${index}`,
+      role: record.info?.role ?? record.role ?? "assistant",
+      text,
+      createdAt: created,
+      raw: message,
+    };
+  });
+
+  return {
+    taskId: "task-1",
+    sessionId: "session-1",
+    segments: [],
+    hookExecutions: [],
+    messages: traceMessages,
+  };
+}
+
+describe("Task conversation composables", () => {
   beforeEach(() => {
-    apiMocks.getTaskConversationMessages.mockReset();
+    apiMocks.getTaskExecutionTraceView.mockReset();
     realtimeStoreMock.events = [];
   });
 
-  it("converts a session tree into top-down VueFlow nodes and edges", () => {
-    const tree = [
-      {
-        id: "node-root",
-        runtimeSessionId: "session-root",
-        parentRuntimeSessionId: null,
-        forkedFromMessageId: null,
-        forkedFromMessageRole: null,
-        forkedFromMessagePreview: null,
-        firstPromptAfterFork: null,
-        branchName: "主线",
-        sourceType: "root",
-        isActive: true,
-        title: "主线",
-        summary: null,
-        createdAt: null,
-        updatedAt: null,
-        children: [
-          {
-            id: "node-child",
-            runtimeSessionId: "session-child",
-            parentRuntimeSessionId: "session-root",
-            forkedFromMessageId: null,
-            forkedFromMessageRole: null,
-            forkedFromMessagePreview: null,
-            firstPromptAfterFork: null,
-            branchName: "分叉 A",
-            sourceType: "fork",
-            isActive: false,
-            title: "分叉 A",
-            summary: { additions: 1, deletions: 0, files: 1 },
-            createdAt: null,
-            updatedAt: null,
-            children: [],
-          },
-        ],
-      },
-    ];
-
-    const result = branchLineageToFlow(tree, "session-child");
-    const rootNode = result.nodes.find((node) => node.id === "session-root");
-    const childNode = result.nodes.find((node) => node.id === "session-child");
-
-    expect(result.nodes).toHaveLength(2);
-    expect(result.edges).toHaveLength(1);
-    expect(rootNode?.position.y).toBe(0);
-    expect((childNode?.position.y ?? 0) > (rootNode?.position.y ?? 0)).toBe(true);
-    expect((childNode?.data as { selected: boolean }).selected).toBe(true);
-  });
-
   it("normalizes session messages into conversation items", async () => {
-    apiMocks.getTaskConversationMessages.mockResolvedValue({
-      data: [
+    apiMocks.getTaskExecutionTraceView.mockResolvedValue(createTraceFromMessages([
         {
           info: {
             id: "message-1",
@@ -119,16 +103,15 @@ describe("TaskDetailV2 composables", () => {
           },
           parts: [{ text: "第二条消息" }],
         },
-      ],
-    });
+      ]));
 
     const taskId = ref("task-1");
     const sessionId = ref<string | undefined>("session-1");
-    const state = useTaskMessages(taskId, sessionId);
+    const state = useTreeMessages(taskId, sessionId);
 
     await flushPromises();
 
-    expect(apiMocks.getTaskConversationMessages).toHaveBeenCalledWith("task-1", "session-1");
+    expect(apiMocks.getTaskExecutionTraceView).toHaveBeenCalledWith("task-1", "session-1");
     expect(state.conversationItems.value).toHaveLength(2);
     const firstItem = state.conversationItems.value[0] as TaskConversationMessageItem | undefined;
     const secondItem = state.conversationItems.value[1] as TaskConversationMessageItem | undefined;
@@ -138,8 +121,7 @@ describe("TaskDetailV2 composables", () => {
   });
 
   it("merges realtime assistant chunks into a streaming draft", async () => {
-    apiMocks.getTaskConversationMessages.mockResolvedValue({
-      data: [
+    apiMocks.getTaskExecutionTraceView.mockResolvedValue(createTraceFromMessages([
         {
           info: {
             id: "message-1",
@@ -148,8 +130,7 @@ describe("TaskDetailV2 composables", () => {
           },
           parts: [{ text: "继续实现" }],
         },
-      ],
-    });
+      ]));
     realtimeStoreMock.events = [
       {
         id: "event-2",
@@ -184,7 +165,7 @@ describe("TaskDetailV2 composables", () => {
 
     const taskId = ref("task-1");
     const sessionId = ref<string | undefined>("session-1");
-    const state = useTaskMessages(taskId, sessionId);
+    const state = useTreeMessages(taskId, sessionId);
 
     await flushPromises();
 
@@ -199,9 +180,65 @@ describe("TaskDetailV2 composables", () => {
     expect(state.hasStreamingAssistant.value).toBe(true);
   });
 
+  it("does not treat user workflow-context parts as assistant streaming replies", async () => {
+    apiMocks.getTaskExecutionTraceView.mockResolvedValue(createTraceFromMessages([
+      {
+        info: {
+          id: "message-1",
+          role: "user",
+          time: { created: "2026-03-20T00:00:01.000Z" },
+        },
+        parts: [{ text: "继续执行" }],
+      },
+    ]));
+    realtimeStoreMock.events = [
+      {
+        id: "event-user-part",
+        type: "message.part.updated",
+        taskId: "task-1",
+        sessionId: "session-1",
+        data: {
+          rawType: "message.part.updated",
+          part: {
+            type: "text",
+            messageID: "message-user-2",
+            text: "## 当前执行上下文\n任务：测试\n\n回复我的输入：继续执行",
+          },
+        },
+      },
+      {
+        id: "event-user-meta",
+        type: "message.updated",
+        taskId: "task-1",
+        sessionId: "session-1",
+        data: {
+          rawType: "message.updated",
+          info: {
+            id: "message-user-2",
+            role: "user",
+            time: { created: "2026-03-20T00:00:02.000Z" },
+          },
+        },
+      },
+    ];
+
+    const taskId = ref("task-1");
+    const sessionId = ref<string | undefined>("session-1");
+    const state = useTreeMessages(taskId, sessionId);
+
+    await flushPromises();
+
+    expect(state.conversationItems.value).toHaveLength(1);
+    expect(state.conversationItems.value[0]).toMatchObject({
+      key: "message-1",
+      role: "user",
+      text: "继续执行",
+    });
+    expect(state.hasStreamingAssistant.value).toBe(false);
+  });
+
   it("keeps tool-only assistant messages and extracts tool summaries", async () => {
-    apiMocks.getTaskConversationMessages.mockResolvedValue({
-      data: [
+    apiMocks.getTaskExecutionTraceView.mockResolvedValue(createTraceFromMessages([
         {
           info: {
             id: "message-tool-1",
@@ -227,12 +264,11 @@ describe("TaskDetailV2 composables", () => {
             },
           ],
         },
-      ],
-    });
+      ]));
 
     const taskId = ref("task-1");
     const sessionId = ref<string | undefined>("session-1");
-    const state = useTaskMessages(taskId, sessionId);
+    const state = useTreeMessages(taskId, sessionId);
 
     await flushPromises();
 
@@ -255,8 +291,7 @@ describe("TaskDetailV2 composables", () => {
   });
 
   it("drops empty pending tool snapshots that only expose a tool name and status", async () => {
-    apiMocks.getTaskConversationMessages.mockResolvedValue({
-      data: [
+    apiMocks.getTaskExecutionTraceView.mockResolvedValue(createTraceFromMessages([
         {
           info: {
             id: "message-tool-empty",
@@ -296,12 +331,11 @@ describe("TaskDetailV2 composables", () => {
             },
           ],
         },
-      ],
-    });
+      ]));
 
     const taskId = ref("task-1");
     const sessionId = ref<string | undefined>("session-1");
-    const state = useTaskMessages(taskId, sessionId);
+    const state = useTreeMessages(taskId, sessionId);
 
     await flushPromises();
 
@@ -376,9 +410,59 @@ describe("TaskDetailV2 composables", () => {
     });
   });
 
+  it("prefers richer tool snapshots when the same call is observed multiple times in one trace item", () => {
+    const items = normalizeTraceConversationItems({
+      taskId: "task-1",
+      sessionId: "session-1",
+      segments: [],
+      hookExecutions: [],
+      timeline: [
+        {
+          id: "message-trace-1",
+          role: "assistant",
+          text: "",
+          createdAt: "2026-03-22T00:00:01.000Z",
+          raw: {
+            info: {
+              id: "message-trace-1",
+              role: "assistant",
+              time: { created: "2026-03-22T00:00:01.000Z" },
+            },
+            parts: [
+              {
+                id: "tool-call-1-pending",
+                type: "tool",
+                toolName: "bash",
+                callID: "call-1",
+                state: { status: "pending" },
+              },
+              {
+                id: "tool-call-1-running",
+                type: "tool",
+                toolName: "bash",
+                callID: "call-1",
+                state: { status: "running" },
+                input: { command: "ls -F" },
+              },
+            ],
+          },
+        },
+      ],
+      timelineMeta: { cacheState: "complete" },
+    }, undefined, { includeLineage: true });
+
+    expect(items).toHaveLength(1);
+    expect(items[0]?.toolCalls).toEqual([
+      expect.objectContaining({
+        kind: "bash",
+        command: "ls -F",
+        stateLabel: "执行中",
+      }),
+    ]);
+  });
+
   it("extracts file path from apply_patch payloads", async () => {
-    apiMocks.getTaskConversationMessages.mockResolvedValue({
-      data: [
+    apiMocks.getTaskExecutionTraceView.mockResolvedValue(createTraceFromMessages([
         {
           info: {
             id: "message-tool-2",
@@ -401,12 +485,11 @@ describe("TaskDetailV2 composables", () => {
             },
           ],
         },
-      ],
-    });
+      ]));
 
     const taskId = ref("task-1");
     const sessionId = ref<string | undefined>("session-1");
-    const state = useTaskMessages(taskId, sessionId);
+    const state = useTreeMessages(taskId, sessionId);
 
     await flushPromises();
 
@@ -420,8 +503,7 @@ describe("TaskDetailV2 composables", () => {
   });
 
   it("extracts file path from apply_patch output when patch input is unavailable", async () => {
-    apiMocks.getTaskConversationMessages.mockResolvedValue({
-      data: [
+    apiMocks.getTaskExecutionTraceView.mockResolvedValue(createTraceFromMessages([
         {
           info: {
             id: "message-tool-3",
@@ -444,12 +526,11 @@ describe("TaskDetailV2 composables", () => {
             },
           ],
         },
-      ],
-    });
+      ]));
 
     const taskId = ref("task-1");
     const sessionId = ref<string | undefined>("session-1");
-    const state = useTaskMessages(taskId, sessionId);
+    const state = useTreeMessages(taskId, sessionId);
 
     await flushPromises();
 
@@ -463,8 +544,7 @@ describe("TaskDetailV2 composables", () => {
   });
 
   it("does not expose descriptive metadata as tool parameters when command is already present", async () => {
-    apiMocks.getTaskConversationMessages.mockResolvedValue({
-      data: [
+    apiMocks.getTaskExecutionTraceView.mockResolvedValue(createTraceFromMessages([
         {
           info: {
             id: "message-tool-bash-1",
@@ -489,12 +569,11 @@ describe("TaskDetailV2 composables", () => {
             },
           ],
         },
-      ],
-    });
+      ]));
 
     const taskId = ref("task-1");
     const sessionId = ref<string | undefined>("session-1");
-    const state = useTaskMessages(taskId, sessionId);
+    const state = useTreeMessages(taskId, sessionId);
 
     await flushPromises();
 

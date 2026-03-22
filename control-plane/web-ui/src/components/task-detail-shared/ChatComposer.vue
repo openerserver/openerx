@@ -56,7 +56,7 @@
             终止执行
           </a-button>
           <a-button type="primary" :disabled="actionDisabled || !prompt.trim()" @click="emitContinue">
-            {{ isExecuting ? "加入队列" : "继续当前分支" }}
+            {{ isExecuting ? "加入队列" : "发送" }}
           </a-button>
         </a-space>
       </a-flex>
@@ -130,14 +130,11 @@ function handleKeydown(event: KeyboardEvent) {
 
 <style scoped>
 .chat-composer {
-  position: sticky;
-  bottom: 0;
-  z-index: 2;
+  flex: 0 0 auto;
   border-top: 1px solid #f0f0f0;
   padding-top: 12px;
   padding-bottom: 8px;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), #fff 24px);
-  backdrop-filter: blur(6px);
 }
 
 .chat-composer__queue-hint {

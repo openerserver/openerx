@@ -624,15 +624,13 @@ export function resolveWorkflowTemplate(
   );
   if (byCategory) return byCategory;
 
-  return (
-    strategy.templates.find((t) => t.enabled) ?? {
-      id: "fallback-single",
-      name: "Fallback Single",
-      mode: "single",
-      agents: [],
-      enabled: true,
-    }
-  );
+  return {
+    id: "fallback-single",
+    name: "Fallback Single",
+    mode: "single",
+    agents: [],
+    enabled: true,
+  };
 }
 
 export function buildExecutionPlan(
@@ -647,6 +645,7 @@ export function buildExecutionPlan(
 ): ExecutionPlan {
   const configuredAgents = strategy.categoryAgentMap[category] || [];
   const effectiveMode = overrides?.mode ?? template.mode;
+  const preferredCategoryAgents = configuredAgents.filter((agent) => typeof agent === "string" && agent.trim());
 
   if (effectiveMode === "sequential-chain") {
     return buildSequentialChainPlan(
@@ -657,7 +656,7 @@ export function buildExecutionPlan(
   }
 
   if (effectiveMode === "single") {
-    const agent = template.agents[0] || configuredAgents[0] || DEFAULT_EXECUTION_AGENT;
+    const agent = template.agents[0] || preferredCategoryAgents[0] || DEFAULT_EXECUTION_AGENT;
     return {
       templateId: template.id,
       mode: "single",
@@ -668,7 +667,11 @@ export function buildExecutionPlan(
 
   // parallel mode
   const maxCandidates = template.maxParallelCandidates ?? 3;
-  const agents = template.agents.length > 0 ? template.agents : configuredAgents;
+  const agents = overrides?.candidates && preferredCategoryAgents.length > 0
+    ? preferredCategoryAgents
+    : template.agents.length > 0
+      ? template.agents
+      : preferredCategoryAgents;
 
   // If user provided explicit candidates with model overrides, use those
   const candidates: ExecutionCandidate[] = overrides?.candidates
@@ -705,7 +708,8 @@ function buildSequentialChainPlan(
   configuredAgents: string[],
   chainSteps: ChainStepInput[],
 ): ExecutionPlan {
-  const agent = template.agents[0] || configuredAgents[0] || DEFAULT_EXECUTION_AGENT;
+  const preferredCategoryAgents = configuredAgents.filter((entry) => typeof entry === "string" && entry.trim());
+  const agent = template.agents[0] || preferredCategoryAgents[0] || DEFAULT_EXECUTION_AGENT;
 
   const steps: ExecutionStep[] = chainSteps.map((s, idx) => ({
     id: s.id || `chain-step-${idx}`,

@@ -4,6 +4,10 @@ import {
   fetchTaskSessionLineageRecords,
   upsertTaskSessionLineageRecord,
 } from "./task-session-compat";
+import {
+  type ParallelExecutionPlanRecord,
+  upsertParallelRunHistory,
+} from "./parallel-run-history";
 import { syncTaskWorkflowTerminalState } from "./workflow-sync";
 
 type FinalizedTaskStatus = "completed" | "failed" | "cancelled";
@@ -14,6 +18,7 @@ interface FinalizableTaskRecord {
   sessionId?: string | null;
   agentRunId?: string | null;
   executionPlan?: string | null;
+  parallelRunHistory?: string | null;
   startedAt?: string | null;
 }
 
@@ -224,6 +229,14 @@ export async function finalizeTaskState(input: FinalizeTaskStateInput): Promise<
       agentRunId: resolvedAgentRunId,
       ...(input.result !== undefined ? { result: input.result } : {}),
       ...(serializedPlan ? { executionPlan: serializedPlan } : {}),
+      ...(executionPlan?.mode === "parallel"
+        ? {
+            parallelRunHistory: upsertParallelRunHistory(
+              task,
+              executionPlan as ParallelExecutionPlanRecord,
+            ),
+          }
+        : {}),
     },
   });
 

@@ -31,6 +31,7 @@ export interface TaskTreeRecord {
   selectedModel: string | null;
   executionMode: TaskExecutionMode | null;
   executionPlan: string | null;
+  parallelRunHistory: string | null;
   autoAdvanceStages: boolean;
   credentialId: string | null;
   gitAuthorName: string | null;
@@ -87,6 +88,8 @@ function parseTaskTreeContent(content: unknown) {
         ? record.executionMode
         : null) as TaskExecutionMode | null,
     executionPlan: typeof record.executionPlan === "string" ? record.executionPlan : null,
+    parallelRunHistory:
+      typeof record.parallelRunHistory === "string" ? record.parallelRunHistory : null,
     autoAdvanceStages:
       typeof record.autoAdvanceStages === "boolean" ? record.autoAdvanceStages : false,
     credentialId: typeof record.credentialId === "string" ? record.credentialId : null,
@@ -160,6 +163,7 @@ function mapTaskTreeNodeToTaskRecord(args: {
     selectedModel: content.selectedModel,
     executionMode: content.executionMode,
     executionPlan: content.executionPlan,
+    parallelRunHistory: content.parallelRunHistory,
     autoAdvanceStages: content.autoAdvanceStages,
     credentialId: content.credentialId,
     gitAuthorName: content.gitAuthorName,

@@ -63,6 +63,10 @@ import { sseAggregator } from "../realtime/sse-aggregator";
 import { wsBroadcaster } from "../realtime/ws-broadcaster";
 import { reconcileRunningTasksOnStartup } from "./reconcile";
 import {
+  type ParallelExecutionPlanRecord,
+  upsertParallelRunHistory,
+} from "./parallel-run-history";
+import {
   buildStageArtifactSummary,
   buildWorkflowExecutionPromptSnapshot,
   fetchCurrentStageHooks,
@@ -112,10 +116,12 @@ interface ExecutableTask {
   id: string;
   prompt: string;
   status: string;
+  category?: string | null;
   projectId: string;
   sessionId?: string | null;
   executionMode?: ExecutionMode | null;
   executionPlan?: string | null;
+  parallelRunHistory?: string | null;
   title: string;
   strategy?: string | null;
   selectedModel?: string | null;
@@ -378,8 +384,10 @@ interface WorkflowPromptContextRecord {
   [key: string]: string | string[] | null | undefined;
   taskId: string;
   projectId: string;
+  taskCategory?: string;
   taskTitle: string;
   taskPrompt: string;
+  executionMode?: ExecutionMode;
   repoName?: string | null;
   remoteUrl?: string | null;
   workingBranch?: string | null;
@@ -516,6 +524,7 @@ interface ContinueTaskInput {
   taskId: string;
   prompt: string;
   overrideSessionId?: string;
+  executionMode?: ExecutionMode;
   authorization: string;
 }
 
@@ -637,7 +646,7 @@ function parseStoredExecutionPlan(task: Pick<ExecutableTask, "executionPlan">): 
   }
 
   try {
-    const parsed = JSON.parse(task.executionPlan) as ExecutionPlan;
+    const parsed = JSON.parse(task.executionPlan) as ParallelExecutionPlanRecord;
     if (parsed?.mode !== "parallel" || !Array.isArray(parsed.candidates)) {
       return null;
     }
@@ -645,6 +654,14 @@ function parseStoredExecutionPlan(task: Pick<ExecutableTask, "executionPlan">): 
   } catch {
     return null;
   }
+}
+
+function parseStoredTaskClassification(
+  task: Pick<ExecutableTask, "category">,
+): Pick<IntentClassification, "category"> | null {
+  return typeof task.category === "string" && task.category.trim()
+    ? { category: task.category.trim() as IntentClassification["category"] }
+    : null;
 }
 
 function buildStoredParallelPlan(task: Pick<ExecutableTask, "strategy">): ExecutionPlan | null {
@@ -699,6 +716,7 @@ function resetParallelContinuationPlan(plan: ExecutionPlan): ExecutionPlan {
     })),
     judgeResult: undefined,
     winnerCandidateIndex: undefined,
+    parallelRunId: undefined,
   };
 }
 
@@ -763,7 +781,6 @@ function resolvePreflightModelForParallelPlan(
         isFree: isFreeExecutionModelRoute(model, resolved.providerId),
       };
     });
-
   if (parsedCandidates.length === 0) {
     return fallbackModel;
   }
@@ -902,6 +919,7 @@ function broadcastParallelContinuationStarted(
 
 async function continueParallelTaskExecution(input: ContinueTaskInput & {
   task: ExecutableTask;
+  classification?: Pick<IntentClassification, "category"> | null;
   resolvedModel?: ResolvedModel;
   guard?: PaidExecutionGuardState;
 }) {
@@ -912,6 +930,8 @@ async function continueParallelTaskExecution(input: ContinueTaskInput & {
 
   const repoContext = buildRepoContext(input.task, {});
   const workflowContext = await buildWorkflowPromptContext(input.task, input.authorization, {
+    taskCategory: input.classification?.category,
+    executionMode: "parallel",
     selectedModel: input.resolvedModel ? formatModelRoute(input.resolvedModel) : undefined,
     taskResult: "",
     changesSummary: "",
@@ -1027,6 +1047,9 @@ async function continueParallelTaskExecution(input: ContinueTaskInput & {
       agentRunId: primaryCandidate?.agentRunId,
       executionMode: "parallel",
       executionPlan: JSON.stringify(plan),
+      parallelRunHistory: upsertParallelRunHistory(input.task, plan as ParallelExecutionPlanRecord, {
+        parentSessionId: input.parentSessionId,
+      }),
       strategy: mergeTaskStrategy(input.task.strategy, {
         executionMode: "parallel",
         effectiveModel: input.resolvedModel ? formatModelRoute(input.resolvedModel) : undefined,
@@ -1067,7 +1090,10 @@ async function continueTaskExecution(input: ContinueTaskInput) {
   }
 
   const task = taskResult.data;
-  const parallelPlan = resolveParallelContinuationPlan(task);
+  const parallelPlan =
+    input.executionMode === "single" || input.executionMode === "sequential-chain"
+      ? null
+      : resolveParallelContinuationPlan(task);
   const sessionId = input.overrideSessionId || task.sessionId || undefined;
   if (!sessionId && !parallelPlan) {
     return { status: 400 as const, body: { error: "No session associated with this task" } };
@@ -1136,6 +1162,7 @@ async function continueTaskExecution(input: ContinueTaskInput) {
     const parallelResult = await continueParallelTaskExecution({
       ...input,
       task,
+      classification: parseStoredTaskClassification(task),
       parentSessionId: sessionId,
       resolvedModel,
       guard: preflightResult.guard,
@@ -1199,6 +1226,8 @@ async function continueTaskExecution(input: ContinueTaskInput) {
 
   const agentRunId = ensureAgentRunForSession(sessionId, input.taskId, task.projectId, resolvedModel);
   const workflowContext = await buildWorkflowPromptContext(task, input.authorization, {
+    taskCategory: parseStoredTaskClassification(task)?.category,
+    executionMode: task.executionMode ?? "single",
     selectedModel: resolvedModel ? formatModelRoute(resolvedModel) : undefined,
     taskResult: "",
     changesSummary: "",
@@ -1683,15 +1712,21 @@ function buildTaskPatchBody(
     paidExecutionGuard?: PaidExecutionGuardState;
   },
 ) {
+  const plan = executionMeta.plan as ParallelExecutionPlanRecord | undefined;
+
   return {
     status: "running",
     sessionId: execResult.sessionId,
     agentRunId: execResult.agentRunId,
     category: classification.category,
-    executionMode: executionMeta.plan?.mode ?? "single",
-    executionPlan: executionMeta.plan ? JSON.stringify(executionMeta.plan) : undefined,
+    executionMode: plan?.mode ?? "single",
+    executionPlan: plan ? JSON.stringify(plan) : undefined,
+    parallelRunHistory:
+      plan?.mode === "parallel"
+        ? upsertParallelRunHistory(task, plan, { parentSessionId: task.sessionId ?? null })
+        : undefined,
     strategy: mergeTaskStrategy(task.strategy, {
-      selectedTemplateId: executionMeta.plan?.templateId,
+      selectedTemplateId: plan?.templateId,
       workflowTemplateId: executionMeta.workflowTemplateId,
       complexity: classification.complexity,
       suggestedAgents: classification.suggestedAgents,
@@ -1699,7 +1734,7 @@ function buildTaskPatchBody(
       confidence: classification.confidence,
       selectedAgent: executionMeta.selectedAgent,
       effectiveModel: executionMeta.effectiveModel,
-      executionMode: executionMeta.plan?.mode,
+      executionMode: plan?.mode,
       hookExecutions: executionMeta.hookExecutions,
       paidExecutionGuard: executionMeta.paidExecutionGuard,
     }),
@@ -1767,8 +1802,10 @@ async function buildWorkflowPromptContext(
   return {
     taskId: task.id,
     projectId: task.projectId,
+    taskCategory: typeof task.category === "string" ? task.category : undefined,
     taskTitle: task.title,
     taskPrompt: task.prompt,
+    executionMode: task.executionMode ?? undefined,
     repoName: task.repoName,
     remoteUrl: task.remoteUrl,
     workingBranch: task.workingBranch,
@@ -1789,6 +1826,8 @@ function prependWorkflowContextToPrompt(
   prompt: string,
   context: WorkflowPromptContextRecord,
 ) {
+  const isQuickParallelExecution =
+    context.taskCategory === "quick" && context.executionMode === "parallel";
   const lines = [
     "## 当前执行上下文",
     `任务：${context.taskTitle}`,
@@ -1810,8 +1849,12 @@ function prependWorkflowContextToPrompt(
     `待完成阶段：${context.pendingStageLabels && context.pendingStageLabels.length > 0 ? context.pendingStageLabels.join(" → ") : "无（当前可能已是最后阶段）"}`,
     "",
     "请只完成当前阶段的目标。",
-    "完成后请输出本阶段产出摘要。",
-    "如果你认为当前阶段已经完成，请在输出末尾单独追加 [STAGE_COMPLETE]。",
+    ...(isQuickParallelExecution
+      ? []
+      : [
+          "完成后请输出本阶段产出摘要。",
+          "如果你认为当前阶段已经完成，请在输出末尾单独追加 [STAGE_COMPLETE]。",
+        ]),
   ].filter(Boolean);
 
   return `${lines.join("\n")}\n\n${prompt}`;
@@ -1945,21 +1988,21 @@ function buildSyntheticExecutionTraceRawMessage(item: TaskSessionTimelineItemRec
 }
 
 /**
- * Reassemble anonymous part timeline items back into their parent assistant
- * messages. The service layer stores each message part as a separate event
- * group with an `anonymous-*` id. We collapse repeated snapshots for the same
- * part and only keep visible part types that the frontend can render.
+ * Reassemble anonymous part timeline items back into their parent messages.
+ * The service layer stores each message part as a separate event group with an
+ * `anonymous-*` id. We collapse repeated snapshots for the same part and only
+ * keep visible part types that the frontend can render.
  */
 function reassembleTimelineMessageParts(
   items: TaskSessionTimelineItemRecord[],
 ): TaskSessionTimelineItemRecord[] {
-  const assistantIds = new Set<string>();
+  const parentMessageIds = new Set<string>();
   for (const item of items) {
-    if (item.role === "assistant") {
-      assistantIds.add(item.id);
+    if (item.role !== "unknown") {
+      parentMessageIds.add(item.id);
     }
   }
-  if (assistantIds.size === 0) {
+  if (parentMessageIds.size === 0) {
     return items;
   }
 
@@ -1976,7 +2019,7 @@ function reassembleTimelineMessageParts(
       continue;
     }
     const parentMessageId = (part as Record<string, unknown>).messageID;
-    if (typeof parentMessageId !== "string" || !assistantIds.has(parentMessageId)) {
+    if (typeof parentMessageId !== "string" || !parentMessageIds.has(parentMessageId)) {
       continue;
     }
     if (!partsByParent.has(parentMessageId)) {
@@ -2022,7 +2065,7 @@ function reassembleTimelineMessageParts(
   return items
     .filter((item) => !mergedItemIds.has(item.id))
     .map((item) => {
-      if (item.role !== "assistant" || !partsByParent.has(item.id)) {
+      if (!partsByParent.has(item.id)) {
         return item;
       }
       const existingParts =
@@ -2030,7 +2073,12 @@ function reassembleTimelineMessageParts(
           ? (((item.raw as { parts?: unknown[] }).parts ?? []) as Array<Record<string, unknown>>)
           : [];
       const parts = dedupeParts([...existingParts, ...partsByParent.get(item.id)!]);
-      return { ...item, raw: { ...(item.raw ?? {}), parts } };
+      const nextRaw = { ...(item.raw ?? {}), parts };
+      return {
+        ...item,
+        text: item.text || extractSessionMessageText(nextRaw),
+        raw: nextRaw,
+      };
     });
 }
 
@@ -2040,7 +2088,7 @@ function mapTimelineItemsToExecutionTraceMessages(
   return items.map((item, index) => ({
     id: item.id || `${index}`,
     role: item.role || "unknown",
-    text: item.text || "",
+    text: item.text || extractSessionMessageText(item.raw) || "",
     createdAt: item.createdAt,
     raw: item.raw ?? buildSyntheticExecutionTraceRawMessage(item),
   }));
@@ -2316,6 +2364,7 @@ async function buildTaskExecutionTrace(
       const messagesResult = await getSessionMessages(sessionId, {
         taskId: task.id,
         authorization,
+        includeLineage,
       });
       if (messagesResult.ok && Array.isArray(messagesResult.data)) {
         const rawMessages = messagesResult.data as unknown[];
@@ -2434,12 +2483,16 @@ async function runPreExecutionHooks(
   task: ExecutableTask,
   repoContext: ReturnType<typeof buildRepoContext>,
   executionAgent: string,
+  classification: IntentClassification,
+  executionMode: ExecutionMode,
   effectiveModel: string | undefined,
   authorization: string,
 ) {
   const strategy = readOrchestrationStrategy();
   let breakerReason: string | undefined;
   const workflowContext = await buildWorkflowPromptContext(task, authorization, {
+    taskCategory: classification.category,
+    executionMode,
     selectedAgent: executionAgent,
     selectedModel: effectiveModel,
     taskResult: "",
@@ -2807,6 +2860,8 @@ async function finalizePreExecutionContext(
     context.task,
     context.repoContext,
     context.executionAgent,
+    context.classification,
+    context.plan.mode,
     context.effectiveModel,
     context.authorization,
   );
@@ -3545,8 +3600,9 @@ const updateTaskSchema = z.object({
   result: z.string().optional(),
   category: z.enum(["quick", "deep", "ops", "security", "architecture"]).optional(),
   strategy: z.string().optional(),
-  executionMode: z.enum(["single", "parallel"]).optional(),
+  executionMode: z.enum(["single", "parallel", "sequential-chain"]).optional(),
   executionPlan: z.string().optional(),
+  parallelRunHistory: z.string().optional(),
   workspaceRoot: z.string().optional(),
   baseRevision: z.string().optional(),
   workingBranch: z.string().optional(),
@@ -3950,6 +4006,7 @@ taskRoutes.post("/:taskId/candidates/:index/adopt", async (c) => {
     body: {
       status: "completed",
       executionPlan: JSON.stringify(plan),
+      parallelRunHistory: upsertParallelRunHistory(task, plan as ParallelExecutionPlanRecord),
       ...(winnerResult ? { result: winnerResult } : {}),
     },
   });
@@ -4261,16 +4318,18 @@ taskRoutes.post(
 const continueSchema = z.object({
   prompt: z.string().min(1).max(50000),
   sessionId: z.string().optional(),
+  executionMode: z.enum(["single", "parallel", "sequential-chain"]).optional(),
 });
 
 taskRoutes.post("/:taskId/continue", zValidator("json", continueSchema), async (c) => {
   const taskId = c.req.param("taskId");
-  const { prompt, sessionId: overrideSessionId } = c.req.valid("json");
+  const { prompt, sessionId: overrideSessionId, executionMode } = c.req.valid("json");
   const authorization = authHeader(c);
   const result = await continueTaskExecution({
     taskId,
     prompt,
     overrideSessionId,
+    executionMode,
     authorization,
   });
   return c.json(result.body, result.status);

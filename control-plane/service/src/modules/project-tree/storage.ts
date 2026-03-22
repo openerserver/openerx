@@ -54,6 +54,7 @@ function buildTaskTreeContentJson(task: TaskTreeSnapshot) {
     selectedModel: task.selectedModel,
     executionMode: task.executionMode,
     executionPlan: task.executionPlan,
+    parallelRunHistory: task.parallelRunHistory,
     autoAdvanceStages: task.autoAdvanceStages,
     credentialId: task.credentialId,
     gitAuthorName: task.gitAuthorName,

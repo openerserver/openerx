@@ -200,7 +200,7 @@
               <div>
                 <div class="monitor-node__title-row">
                   <strong class="monitor-node__title">{{ summaryForTask(slotProps.data.layout.taskId).title }}</strong>
-                  <span class="monitor-node__status-pill">{{ statusLabel(summaryForTask(slotProps.data.layout.taskId).status) }}</span>
+                  <span class="monitor-node__status-pill">{{ summaryForTask(slotProps.data.layout.taskId).displayStatusLabel }}</span>
                   <span
                     v-if="activityStateForSummary(slotProps.data.layout.taskId, summaryForTask(slotProps.data.layout.taskId))"
                     class="monitor-node__activity-pill"
@@ -306,6 +306,7 @@ import {
   listTasks,
 } from "../lib/api";
 import { renderMarkdown } from "../lib/markdown";
+import { resolveTaskDisplayStatus } from "../lib/task-display-status";
 import { normalizeWorkspaceFilePath } from "../lib/workspace-file-path";
 import { useProjectStore } from "../stores/project";
 import { type RealtimeEvent, useRealtimeStore } from "../stores/realtime";
@@ -330,6 +331,7 @@ interface MonitorEventItem {
 interface MonitorNodeSummary {
   title: string;
   status: string;
+  displayStatusLabel: string;
   branchLabel: string;
   activeSessionId?: string;
   latestActivityLabel: string;
@@ -478,6 +480,7 @@ async function ensureYogaLayout() {
 const FALLBACK_SUMMARY: MonitorNodeSummary = {
   title: "加载中任务摘要",
   status: "pending",
+  displayStatusLabel: "待执行",
   branchLabel: "分支信息准备中",
   activeSessionId: undefined,
   latestActivityLabel: "等待同步",
@@ -556,6 +559,24 @@ const freeLayoutDragPreview = ref<FreeLayoutDragPreviewState>({
   previewOffsets: {},
   dragCoordinateSpace: "canvas",
 });
+
+function clearReactiveRecord(record: Record<string, unknown>) {
+  for (const key of Object.keys(record)) {
+    delete record[key];
+  }
+}
+
+function resetMonitorTransientState() {
+  clearReactiveRecord(summaries);
+  clearReactiveRecord(refreshState);
+  clearReactiveRecord(persistedMessages);
+  clearReactiveRecord(streamContainers);
+  clearReactiveRecord(renderedNodeHeights);
+  clearReactiveRecord(taskContexts);
+  clearReactiveRecord(lastRealtimeEventIds);
+  clearReactiveRecord(liveMessageStates);
+  monitorStreamingRevealText.value = {};
+}
 
 function unprojectViewportPosition(position: { x: number; y: number }) {
   const zoom = Math.max(monitorStore.viewport.zoom || 1, 0.4);
@@ -638,7 +659,7 @@ const taskPickerOptions = computed(() =>
     .filter((task) => !monitorStore.getNode(task.id))
     .map((task) => ({
       value: task.id,
-      label: `${task.title || task.id} · ${statusLabel(task.status)} · ${task.id.slice(0, 8)}`,
+      label: `${task.title || task.id} · ${displayStatusLabel(task, task.status)} · ${task.id.slice(0, 8)}`,
     })),
 );
 
@@ -1459,6 +1480,7 @@ onUnmounted(() => {
   }
   monitorNodeResizeObservers.clear();
   stopMonitorStreamingReveal();
+  resetMonitorTransientState();
 });
 
 function handlePaneReady(instance: {
@@ -2463,6 +2485,7 @@ async function refreshNodeSummary(taskId: string, skipIfBusy = false) {
     summaries[taskId] = {
       title: `任务 ${taskId.slice(0, 8)}`,
       status: "failed",
+      displayStatusLabel: "异常",
       branchLabel: "同步失败",
       activeSessionId: undefined,
       latestActivityLabel: "稍后重试",
@@ -3001,7 +3024,7 @@ function buildSummaryEvents(
     buildEvent(
       "task-status",
       "任务状态",
-      statusLabel(resolvedStatus),
+      displayStatusLabel(task, resolvedStatus),
       task.finishedAt || task.startedAt || task.createdAt,
     ),
     activeSession
@@ -3083,6 +3106,7 @@ function buildSummary(
     realtimeEvents,
   );
   const resolvedStatus = resolveMonitorTaskStatus(task, pipeline, sessions, messages);
+  const resolvedDisplayStatusLabel = displayStatusLabel(task, resolvedStatus);
   const currentStage = resolveCurrentPipelineStage(pipeline, resolvedStatus, pipelineStages);
 
   const events = buildSummaryEvents(
@@ -3099,6 +3123,7 @@ function buildSummary(
   return {
     title: task.title || `任务 ${task.id.slice(0, 8)}`,
     status: resolvedStatus,
+    displayStatusLabel: resolvedDisplayStatusLabel,
     branchLabel: activeSession ? activeSession.title || activeSession.id : "暂无会话",
     activeSessionId: activeSession?.id,
     latestActivityLabel: `最近 ${formatTime(latestActivity)}`,
@@ -3106,7 +3131,7 @@ function buildSummary(
     sessionCount: sessions.length,
     pipelineLabel: buildPipelineSummaryLabel(pipeline, currentStage),
     issueLabel: String(issueCountValue),
-    streamStateLabel: buildStreamStateLabel(resolvedStatus, messages),
+    streamStateLabel: buildStreamStateLabel(task, resolvedStatus, messages),
     messages,
     events,
     completedStages: pipeline?.summary.completedStages ?? 0,
@@ -3316,12 +3341,27 @@ function mergeStreamingText(existing: string | undefined, incoming: string): str
   return `${existing}${next}`;
 }
 
-function buildStreamStateLabel(taskStatus: string, messages: MonitorMessageItem[]): string {
+function displayStatusLabel(task: Task, status?: string) {
+  if (status === "completed") {
+    return resolveTaskDisplayStatus({
+      ...task,
+      status,
+    }).label;
+  }
+
+  return statusLabel(status);
+}
+
+function buildStreamStateLabel(
+  task: Task,
+  taskStatus: string,
+  messages: MonitorMessageItem[],
+): string {
   if (taskStatus === "failed" || taskStatus === "stopped" || taskStatus === "cancelled") {
     return statusLabel(taskStatus);
   }
   if (taskStatus === "completed") {
-    return "已完成";
+    return displayStatusLabel(task, taskStatus);
   }
   if (taskStatus === "running" && messages.some((message) => message.role === "user")) {
     return "运行中";
