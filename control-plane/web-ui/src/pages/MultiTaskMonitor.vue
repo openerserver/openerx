@@ -3204,6 +3204,10 @@ function inferCompletedTaskStatus(
     return taskStatus;
   }
 
+  if (taskStatus === "pending" && !task.startedAt) {
+    return taskStatus;
+  }
+
   const hasStreamingAssistantReply = messages.some(
     (message) => message.role === "assistant" && message.isStreaming,
   );

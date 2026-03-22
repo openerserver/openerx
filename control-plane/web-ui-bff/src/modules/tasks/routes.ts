@@ -49,7 +49,11 @@ import {
   ensureAgentRunForSession,
   forkSession,
   getSessionMessages,
+  listRuntimePermissions,
   listSessions,
+  replyRuntimePermission,
+  type RuntimePermissionReply,
+  type RuntimePermissionRequest,
   terminateAgent,
 } from "../agent-control/opencode-adapter";
 import { createAgentRunRecord, recordAgentAudit } from "../agent-control/run-persistence";
@@ -89,6 +93,19 @@ interface SessionSummaryRecord {
   summary: { additions: number; deletions: number; files: number } | null;
   createdAt: string | null;
   updatedAt: string | null;
+}
+
+interface TaskRuntimePermissionRecord {
+  id: string;
+  sessionId: string;
+  permission: string;
+  patterns: string[];
+  metadata: Record<string, unknown> | null;
+  always: string[];
+  tool: {
+    messageId: string;
+    callId: string;
+  } | null;
 }
 
 interface ExecutableTask {
@@ -165,6 +182,109 @@ async function fetchTaskSessionLineageRecords(taskId: string, authorization: str
     records,
     activeRecords: records.filter((record) => !record.archivedAt),
   };
+}
+
+async function resolveTaskRuntimeSessionIds(taskId: string, authorization: string) {
+  const lineageResult = await fetchTaskSessionLineageRecords(taskId, authorization);
+  const sessionIds = new Set<string>();
+
+  for (const record of lineageResult.activeRecords) {
+    if (record.runtimeSessionId) {
+      sessionIds.add(record.runtimeSessionId);
+    }
+  }
+
+  const taskResult = await cpFetch<{ sessionId?: string | null }>(
+    `/api/project-tree/tasks/${encodeURIComponent(taskId)}`,
+    { authorization },
+  );
+  if (taskResult.ok && typeof taskResult.data?.sessionId === "string" && taskResult.data.sessionId.trim()) {
+    sessionIds.add(taskResult.data.sessionId.trim());
+  }
+
+  return sessionIds;
+}
+
+function normalizeRuntimePermissionRecord(
+  permission: RuntimePermissionRequest,
+): TaskRuntimePermissionRecord {
+  return {
+    id: permission.id,
+    sessionId: permission.sessionID,
+    permission: permission.permission,
+    patterns: Array.isArray(permission.patterns) ? permission.patterns : [],
+    metadata:
+      permission.metadata && typeof permission.metadata === "object"
+        ? permission.metadata
+        : null,
+    always: Array.isArray(permission.always) ? permission.always : [],
+    tool:
+      permission.tool && typeof permission.tool === "object"
+        ? {
+            messageId: permission.tool.messageID,
+            callId: permission.tool.callID,
+          }
+        : null,
+  };
+}
+
+async function fetchTaskRuntimePermissions(args: {
+  taskId: string;
+  authorization: string;
+  sessionId?: string;
+}) {
+  const sessionIds = await resolveTaskRuntimeSessionIds(args.taskId, args.authorization);
+  if (args.sessionId && !sessionIds.has(args.sessionId)) {
+    return {
+      ok: false as const,
+      status: 404 as const,
+      data: { error: "Session does not belong to this task" },
+    };
+  }
+
+  const permissionResult = await listRuntimePermissions();
+  if (!permissionResult.ok) {
+    return {
+      ok: false as const,
+      status: 502 as const,
+      data: { error: permissionResult.error || "Failed to list runtime permissions" },
+    };
+  }
+
+  const rawPermissions = Array.isArray(permissionResult.data)
+    ? (permissionResult.data as RuntimePermissionRequest[])
+    : [];
+  const filtered = rawPermissions
+    .filter((permission) => sessionIds.has(permission.sessionID))
+    .filter((permission) => !args.sessionId || permission.sessionID === args.sessionId)
+    .map(normalizeRuntimePermissionRecord);
+
+  return { ok: true as const, status: 200 as const, data: { data: filtered } };
+}
+
+async function resolveTaskRuntimePermission(args: {
+  taskId: string;
+  authorization: string;
+  requestId: string;
+}) {
+  const permissionResult = await fetchTaskRuntimePermissions({
+    taskId: args.taskId,
+    authorization: args.authorization,
+  });
+  if (!permissionResult.ok) {
+    return permissionResult;
+  }
+
+  const permission = permissionResult.data.data.find((item) => item.id === args.requestId);
+  if (!permission) {
+    return {
+      ok: false as const,
+      status: 404 as const,
+      data: { error: "Runtime permission request not found for this task" },
+    };
+  }
+
+  return { ok: true as const, status: 200 as const, data: permission };
 }
 
 async function upsertTaskSessionLineageRecord(
@@ -1824,6 +1944,96 @@ function buildSyntheticExecutionTraceRawMessage(item: TaskSessionTimelineItemRec
   };
 }
 
+/**
+ * Reassemble anonymous part timeline items back into their parent assistant
+ * messages. The service layer stores each message part as a separate event
+ * group with an `anonymous-*` id. We collapse repeated snapshots for the same
+ * part and only keep visible part types that the frontend can render.
+ */
+function reassembleTimelineMessageParts(
+  items: TaskSessionTimelineItemRecord[],
+): TaskSessionTimelineItemRecord[] {
+  const assistantIds = new Set<string>();
+  for (const item of items) {
+    if (item.role === "assistant") {
+      assistantIds.add(item.id);
+    }
+  }
+  if (assistantIds.size === 0) {
+    return items;
+  }
+
+  const partsByParent = new Map<string, Array<Record<string, unknown>>>();
+  const mergedItemIds = new Set<string>();
+
+  for (const item of items) {
+    if (item.role !== "unknown" || !item.raw) {
+      continue;
+    }
+    const raw = item.raw as Record<string, unknown>;
+    const part = raw.part;
+    if (!part || typeof part !== "object") {
+      continue;
+    }
+    const parentMessageId = (part as Record<string, unknown>).messageID;
+    if (typeof parentMessageId !== "string" || !assistantIds.has(parentMessageId)) {
+      continue;
+    }
+    if (!partsByParent.has(parentMessageId)) {
+      partsByParent.set(parentMessageId, []);
+    }
+    partsByParent.get(parentMessageId)!.push(part as Record<string, unknown>);
+    mergedItemIds.add(item.id);
+  }
+
+  if (partsByParent.size === 0) {
+    return items;
+  }
+
+  const isVisibleConversationPart = (part: Record<string, unknown>) => {
+    const type = typeof part.type === "string" ? part.type : "";
+    return type === "tool" || type === "text";
+  };
+
+  const dedupeParts = (parts: Array<Record<string, unknown>>) => {
+    const order: string[] = [];
+    const latestByKey = new Map<string, Record<string, unknown>>();
+
+    for (let index = 0; index < parts.length; index += 1) {
+      const part = parts[index];
+      const key =
+        typeof part.id === "string" && part.id.trim()
+          ? part.id
+          : typeof part.callID === "string" && part.callID.trim()
+            ? `${part.type ?? "part"}:${part.callID}`
+            : `${part.type ?? "part"}:${index}`;
+      if (!latestByKey.has(key)) {
+        order.push(key);
+      }
+      latestByKey.set(key, part);
+    }
+
+    return order
+      .map((key) => latestByKey.get(key))
+      .filter((part): part is Record<string, unknown> => Boolean(part))
+      .filter((part) => isVisibleConversationPart(part));
+  };
+
+  return items
+    .filter((item) => !mergedItemIds.has(item.id))
+    .map((item) => {
+      if (item.role !== "assistant" || !partsByParent.has(item.id)) {
+        return item;
+      }
+      const existingParts =
+        item.raw && typeof item.raw === "object" && Array.isArray((item.raw as { parts?: unknown[] }).parts)
+          ? (((item.raw as { parts?: unknown[] }).parts ?? []) as Array<Record<string, unknown>>)
+          : [];
+      const parts = dedupeParts([...existingParts, ...partsByParent.get(item.id)!]);
+      return { ...item, raw: { ...(item.raw ?? {}), parts } };
+    });
+}
+
 function mapTimelineItemsToExecutionTraceMessages(
   items: TaskSessionTimelineItemRecord[],
 ): ExecutionTraceMessageRecord[] {
@@ -1850,12 +2060,14 @@ async function loadExecutionTraceMessagesFromTimeline(
     return null;
   }
 
+  const reassembled = reassembleTimelineMessageParts(timelineResult.data.data);
+
   return {
-    items: timelineResult.data.data,
-    messages: mapTimelineItemsToExecutionTraceMessages(timelineResult.data.data),
+    items: reassembled,
+    messages: mapTimelineItemsToExecutionTraceMessages(reassembled),
     meta: timelineResult.data.meta,
     complete: timelineResult.data.meta?.cacheState === "complete",
-    messageLimit: timelineResult.data.meta?.itemCount ?? timelineResult.data.data.length,
+    messageLimit: timelineResult.data.meta?.itemCount ?? reassembled.length,
   };
 }
 
@@ -2122,6 +2334,19 @@ async function buildTaskExecutionTrace(
             raw: rawMessage,
           });
         }
+      }
+    }
+
+    // Backfill first user message text from task.prompt when runtime
+    // didn't persist the prompt content into session messages.
+    if (task.prompt) {
+      const firstUser = messages.find((item) => item.role === "user");
+      if (firstUser && !firstUser.text) {
+        firstUser.text = task.prompt;
+      }
+      const firstUserTimeline = timeline.find((item) => item.role === "user");
+      if (firstUserTimeline && !firstUserTimeline.text) {
+        firstUserTimeline.text = task.prompt;
       }
     }
 
@@ -3984,6 +4209,53 @@ taskRoutes.get(":taskId/execution-trace", async (c) => {
 
   return c.json(result.data, 200);
 });
+
+const runtimePermissionReplySchema = z.object({
+  reply: z.enum(["once", "always", "reject"]),
+  message: z.string().max(500).optional(),
+});
+
+taskRoutes.get("/:taskId/runtime-permissions", async (c) => {
+  const result = await fetchTaskRuntimePermissions({
+    taskId: c.req.param("taskId"),
+    authorization: authHeader(c),
+    sessionId: c.req.query("sessionId") || undefined,
+  });
+
+  return c.json(result.data, result.ok ? 200 : result.status);
+});
+
+taskRoutes.post(
+  "/:taskId/runtime-permissions/:requestId/reply",
+  zValidator("json", runtimePermissionReplySchema),
+  async (c) => {
+    const taskId = c.req.param("taskId");
+    const requestId = c.req.param("requestId");
+    const authorization = authHeader(c);
+    const body = c.req.valid("json") as { reply: RuntimePermissionReply; message?: string };
+
+    const permissionResult = await resolveTaskRuntimePermission({
+      taskId,
+      authorization,
+      requestId,
+    });
+    if (!permissionResult.ok) {
+      return c.json(permissionResult.data, permissionResult.status);
+    }
+
+    const replyResult = await replyRuntimePermission(requestId, body);
+    if (!replyResult.ok) {
+      return c.json({ error: replyResult.error || "Failed to reply runtime permission" }, 502);
+    }
+
+    return c.json({
+      ok: true,
+      requestId,
+      sessionId: permissionResult.data.sessionId,
+      reply: body.reply,
+    });
+  },
+);
 
 // POST /api/tasks/:taskId/continue — Continue a task (send follow-up prompt to its session)
 const continueSchema = z.object({

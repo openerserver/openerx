@@ -643,6 +643,29 @@ class SSEAggregator {
       return;
     }
 
+    const rawType = typeof event.data.rawType === "string" ? event.data.rawType : undefined;
+    const part =
+      typeof event.data.part === "object" && event.data.part
+        ? (event.data.part as Record<string, unknown>)
+        : undefined;
+    const partType = typeof part?.type === "string" ? part.type : undefined;
+    const partState =
+      part && typeof part.state === "object" && part.state
+        ? (part.state as Record<string, unknown>)
+        : undefined;
+    const partStatus = typeof partState?.status === "string" ? partState.status : undefined;
+
+    if (rawType === "message.part.updated") {
+      if (partType === "tool") {
+        const terminal = partStatus === "completed" || partStatus === "failed" || partStatus === "error" || partStatus === "cancelled";
+        if (!terminal) {
+          return;
+        }
+      } else if (partType !== "text") {
+        return;
+      }
+    }
+
     const authorization = await createInternalAuthorization();
     await persistTaskSessionMessageSnapshot(event.taskId, authorization, {
       runtimeSessionId: event.sessionId,

@@ -20,6 +20,7 @@ const routerState = vi.hoisted(() => ({
 
 const apiMocks = vi.hoisted(() => ({
   getProjectTaskGraphView: vi.fn(),
+  searchProjectTree: vi.fn(),
 }));
 
 const realtimeStoreMock = vi.hoisted(() => ({
@@ -149,6 +150,31 @@ vi.mock("ant-design-vue", () => {
     },
   });
 
+  const InputSearch = defineComponent({
+    name: "InputSearch",
+    props: ["value", "loading"],
+    emits: ["update:value", "search"],
+    setup(props, { emit, attrs }) {
+      return () =>
+        h("div", { class: "input-search-stub" }, [
+          h("input", {
+            ...attrs,
+            value: String(props.value ?? ""),
+            onInput: (event: Event) => emit("update:value", (event.target as HTMLInputElement).value),
+          }),
+          h(
+            "button",
+            {
+              type: "button",
+              disabled: Boolean(props.loading),
+              onClick: () => emit("search", props.value),
+            },
+            "search",
+          ),
+        ]);
+    },
+  });
+
   const Select = defineComponent({
     name: "Select",
     props: ["value"],
@@ -196,6 +222,8 @@ vi.mock("ant-design-vue", () => {
     Alert: createPassThroughComponent("Alert"),
     Button,
     Input,
+    AInputSearch: InputSearch,
+    InputSearch,
     Select,
     SelectOption,
     RadioGroup,
@@ -247,6 +275,7 @@ describe("ProjectTaskGraph", () => {
     routeState.params = { projectId: "proj-default" };
     realtimeStoreMock.connected = true;
     realtimeStoreMock.events = [];
+    apiMocks.searchProjectTree.mockResolvedValue({ data: [], meta: { resultCount: 0 } });
   });
 
   afterEach(() => {
@@ -345,5 +374,64 @@ describe("ProjectTaskGraph", () => {
     await detailButton?.trigger("click");
 
     expect(routerState.push).toHaveBeenCalledWith("/tasks/task-7");
+  });
+
+  it("searches project tree history and renders cross-branch hits", async () => {
+    apiMocks.getProjectTaskGraphView.mockResolvedValue({
+      project: {
+        id: "proj-default",
+        name: "Default Project",
+        slug: "default-project",
+        description: "项目级任务总图测试",
+      },
+      tasks: [buildTask("task-1")],
+      edges: [],
+      capabilities: {
+        supportsDependsOn: false,
+        supportsBlocks: false,
+        supportsSpawnedFrom: false,
+      },
+      refreshedAt: "2026-03-16T08:30:00.000Z",
+    });
+    apiMocks.searchProjectTree.mockResolvedValue({
+      data: [
+        {
+          source: "message",
+          eventId: "evt-1",
+          nodeId: "node-session-1",
+          path: "project.task.session",
+          taskId: "task-1",
+          taskTitle: "任务 task-1",
+          runtimeSessionId: "session-branch-1",
+          branchName: "branch-A",
+          contentText: "rollback validation instructions",
+          excerpt: "rollback validation instructions",
+          score: 0.9,
+          directHit: true,
+          createdAt: "2026-03-20T00:00:00.000Z",
+        },
+      ],
+      meta: {
+        query: "rollback",
+        nodeType: "all",
+        limit: 12,
+        resultCount: 1,
+        messageCount: 1,
+        contextCount: 0,
+      },
+    });
+
+    const wrapper = await mountPage();
+    (wrapper.vm as unknown as { treeSearchQuery: string }).treeSearchQuery = "rollback";
+    await (wrapper.vm as unknown as { runTreeSearch: () => Promise<void> }).runTreeSearch();
+    await flushPromises();
+
+    expect(apiMocks.searchProjectTree).toHaveBeenCalledWith("proj-default", "rollback", {
+      nodeType: "all",
+      limit: 12,
+    });
+    expect(wrapper.text()).toContain("跨分支历史检索");
+    expect(wrapper.text()).toContain("branch-A");
+    expect(wrapper.text()).toContain("rollback validation instructions");
   });
 });

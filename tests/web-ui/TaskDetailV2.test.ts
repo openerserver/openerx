@@ -254,6 +254,67 @@ describe("TaskDetailV2 composables", () => {
     ]);
   });
 
+  it("drops empty pending tool snapshots that only expose a tool name and status", async () => {
+    apiMocks.getTaskConversationMessages.mockResolvedValue({
+      data: [
+        {
+          info: {
+            id: "message-tool-empty",
+            role: "assistant",
+            agent: "builder",
+            time: { completed: "2026-03-20T00:00:03.000Z" },
+          },
+          parts: [
+            {
+              type: "tool",
+              id: "tool-empty",
+              toolName: "glob",
+              state: {
+                status: "pending",
+              },
+            },
+          ],
+        },
+        {
+          info: {
+            id: "message-tool-bash-running",
+            role: "assistant",
+            agent: "builder",
+            time: { completed: "2026-03-20T00:00:04.000Z" },
+          },
+          parts: [
+            {
+              type: "tool",
+              id: "tool-bash-running",
+              toolName: "bash",
+              input: {
+                command: "ls -F",
+              },
+              state: {
+                status: "running",
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    const taskId = ref("task-1");
+    const sessionId = ref<string | undefined>("session-1");
+    const state = useTaskMessages(taskId, sessionId);
+
+    await flushPromises();
+
+    expect(state.conversationItems.value).toHaveLength(1);
+    expect(state.conversationItems.value[0]?.toolCalls).toEqual([
+      expect.objectContaining({
+        kind: "bash",
+        stateLabel: "执行中",
+        command: "ls -F",
+      }),
+    ]);
+  });
+
   it("normalizes a candidate session into multiple adoption-ready conversation items", () => {
     const items = normalizeSessionConversationItems([
       {
@@ -397,6 +458,52 @@ describe("TaskDetailV2 composables", () => {
         kind: "apply_patch",
         filePath: "design/paid-parallel-compare/diagrams.mmd",
         headline: "design/paid-parallel-compare/diagrams.mmd",
+      }),
+    ]);
+  });
+
+  it("does not expose descriptive metadata as tool parameters when command is already present", async () => {
+    apiMocks.getTaskConversationMessages.mockResolvedValue({
+      data: [
+        {
+          info: {
+            id: "message-tool-bash-1",
+            role: "assistant",
+            agent: "builder",
+            time: { completed: "2026-03-22T00:00:05.000Z" },
+          },
+          parts: [
+            {
+              type: "tool",
+              id: "tool-bash-1",
+              toolName: "bash",
+              input: {
+                command: 'rg -n "authMiddleware" control-plane/service/src',
+                explanation: "scan auth middleware entrypoint",
+                goal: "定位 auth 中间件入口",
+              },
+              state: {
+                status: "completed",
+                output: "control-plane/service/src/middleware/auth.ts:12:export function authMiddleware() {}",
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    const taskId = ref("task-1");
+    const sessionId = ref<string | undefined>("session-1");
+    const state = useTaskMessages(taskId, sessionId);
+
+    await flushPromises();
+
+    expect(state.conversationItems.value[0]?.toolCalls).toEqual([
+      expect.objectContaining({
+        kind: "bash",
+        command: 'rg -n "authMiddleware" control-plane/service/src',
+        inputPreview: undefined,
+        description: "scan auth middleware entrypoint",
       }),
     ]);
   });

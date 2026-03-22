@@ -64,10 +64,10 @@
                     <a-flex justify="space-between" align="center" class="chat-message-card__parallel-entry-header">
                       <div class="chat-message-card__parallel-entry-header-main">
                         <span class="chat-message-card__parallel-entry-kicker">
-                          {{ entry.role === 'assistant' ? '模型回复' : entry.role === 'tool' ? '工具输出' : roleLabel(entry.role) }}
+                          {{ messageKicker(entry) }}
                         </span>
                         <a-space size="small" wrap>
-                          <a-tag :color="roleColor(entry.role)">{{ roleLabel(entry.role) }}</a-tag>
+                          <a-tag :color="roleColor(entry.role)">{{ messageRoleLabel(entry) }}</a-tag>
                           <a-tag v-if="entry.agent" color="geekblue">{{ entry.agent }}</a-tag>
                           <a-tag v-if="entry.isStreaming" color="processing">生成中</a-tag>
                         </a-space>
@@ -78,11 +78,16 @@
                     </a-flex>
 
                     <div v-if="entry.toolCalls.length > 0" class="chat-message-card__tools">
-                      <div v-for="tool in entry.toolCalls" :key="tool.key" class="chat-tool-call">
+                      <div class="chat-message-card__tools-header">
+                        <span class="chat-message-card__tools-title">工具调用</span>
+                        <span class="chat-message-card__tools-count">{{ entry.toolCalls.length }} 次</span>
+                      </div>
+                      <div v-for="(tool, toolIndex) in entry.toolCalls" :key="tool.key" class="chat-tool-call">
                         <a-flex justify="space-between" align="start" gap="small" wrap="wrap">
                           <a-space size="small" wrap>
-                            <a-tag :color="tool.stateColor">{{ tool.stateLabel }}</a-tag>
+                            <span class="chat-tool-call__index">{{ toolIndex + 1 }}.</span>
                             <span class="chat-tool-call__label">{{ tool.label }}</span>
+                            <a-tag :color="tool.stateColor">{{ tool.stateLabel }}</a-tag>
                           </a-space>
                           <a-space size="small" wrap>
                             <button
@@ -103,13 +108,21 @@
                             </button>
                           </a-space>
                         </a-flex>
-                        <div v-if="toolHeadlineText(tool)" class="chat-tool-call__headline">
-                          {{ toolHeadlineText(tool) }}
+                        <div v-if="toolCallText(tool)" class="chat-tool-call__line">
+                          <span class="chat-tool-call__field">调用</span>
+                          <span class="chat-tool-call__value">{{ toolCallText(tool) }}</span>
                         </div>
-                        <div v-if="toolSummaryText(tool)" class="chat-tool-call__summary">
-                          {{ toolSummaryText(tool) }}
+                        <div v-if="toolInputText(tool)" class="chat-tool-call__line chat-tool-call__line--stacked">
+                          <span class="chat-tool-call__field">参数</span>
+                          <pre class="chat-tool-call__detail chat-tool-call__detail--compact">{{ toolInputText(tool) }}</pre>
                         </div>
-                        <pre v-if="toolDetailText(tool) && isCandidateToolExpanded(tool.key)" class="chat-tool-call__detail">{{ toolDetailText(tool) }}</pre>
+                        <div
+                          v-if="toolOutputText(tool) && isCandidateToolExpanded(tool.key)"
+                          class="chat-tool-call__line chat-tool-call__line--stacked"
+                        >
+                          <span class="chat-tool-call__field">输出</span>
+                          <pre class="chat-tool-call__detail chat-tool-call__detail--compact">{{ toolOutputText(tool) }}</pre>
+                        </div>
                       </div>
                     </div>
 
@@ -150,7 +163,7 @@
         <template v-else>
           <a-flex justify="space-between" align="center" class="chat-message-card__header">
             <a-space size="small" wrap>
-              <a-tag :color="roleColor(item.role)">{{ roleLabel(item.role) }}</a-tag>
+              <a-tag :color="roleColor(item.role)">{{ messageRoleLabel(item) }}</a-tag>
               <a-tag v-if="item.agent" color="geekblue">{{ item.agent }}</a-tag>
               <a-tag v-if="item.isStreaming" color="processing" class="chat-message-card__streaming-tag">生成中</a-tag>
               <a-typography-text v-if="item.createdAt" type="secondary" class="chat-message-card__time">
@@ -161,11 +174,16 @@
           </a-flex>
 
           <div v-if="item.toolCalls.length > 0" class="chat-message-card__tools">
-            <div v-for="tool in item.toolCalls" :key="tool.key" class="chat-tool-call">
+            <div class="chat-message-card__tools-header">
+              <span class="chat-message-card__tools-title">工具调用</span>
+              <span class="chat-message-card__tools-count">{{ item.toolCalls.length }} 次</span>
+            </div>
+            <div v-for="(tool, toolIndex) in item.toolCalls" :key="tool.key" class="chat-tool-call">
               <a-flex justify="space-between" align="start" gap="small" wrap="wrap">
                 <a-space size="small" wrap>
-                  <a-tag :color="tool.stateColor">{{ tool.stateLabel }}</a-tag>
+                  <span class="chat-tool-call__index">{{ toolIndex + 1 }}.</span>
                   <span class="chat-tool-call__label">{{ tool.label }}</span>
+                  <a-tag :color="tool.stateColor">{{ tool.stateLabel }}</a-tag>
                 </a-space>
                 <button
                   v-if="tool.filePath"
@@ -176,10 +194,18 @@
                   {{ tool.filePath }}
                 </button>
               </a-flex>
-              <div v-if="toolHeadlineText(tool)" class="chat-tool-call__headline">
-                {{ toolHeadlineText(tool) }}
+              <div v-if="toolCallText(tool)" class="chat-tool-call__line">
+                <span class="chat-tool-call__field">调用</span>
+                <span class="chat-tool-call__value">{{ toolCallText(tool) }}</span>
               </div>
-              <pre v-if="toolDetailText(tool)" class="chat-tool-call__detail">{{ toolDetailText(tool) }}</pre>
+              <div v-if="toolInputText(tool)" class="chat-tool-call__line chat-tool-call__line--stacked">
+                <span class="chat-tool-call__field">参数</span>
+                <pre class="chat-tool-call__detail chat-tool-call__detail--compact">{{ toolInputText(tool) }}</pre>
+              </div>
+              <div v-if="toolOutputText(tool)" class="chat-tool-call__line chat-tool-call__line--stacked">
+                <span class="chat-tool-call__field">输出</span>
+                <pre class="chat-tool-call__detail chat-tool-call__detail--compact">{{ toolOutputText(tool) }}</pre>
+              </div>
             </div>
           </div>
 
@@ -261,6 +287,24 @@ function roleLabel(role: string) {
   if (role === "tool") return "工具输出";
   if (role === "parallel") return "并行回复";
   return role || "系统";
+}
+
+function isToolOnlyAssistantMessage(item: TaskConversationMessageItem) {
+  return item.role === "assistant" && item.toolCalls.length > 0 && !sanitizedItemText(item);
+}
+
+function messageRoleLabel(item: TaskConversationMessageItem) {
+  return isToolOnlyAssistantMessage(item) ? "工具调用" : roleLabel(item.role);
+}
+
+function messageKicker(item: TaskConversationMessageItem) {
+  return isToolOnlyAssistantMessage(item)
+    ? "工具调用"
+    : item.role === "assistant"
+      ? "模型回复"
+      : item.role === "tool"
+        ? "工具输出"
+        : roleLabel(item.role);
 }
 
 function isParallelComparisonItem(item: TaskConversationListItem): item is TaskConversationParallelItem {
@@ -514,22 +558,31 @@ function toolHeadlineText(tool: TaskConversationToolCallItem) {
   return text;
 }
 
-function toolDetailText(tool: TaskConversationToolCallItem) {
-  return tool.command || tool.outputPreview || tool.inputPreview;
+function toolCallText(tool: TaskConversationToolCallItem) {
+  return tool.command || toolHeadlineText(tool) || tool.description;
 }
 
-function toolSummaryText(tool: TaskConversationToolCallItem) {
-  const detail = toolDetailText(tool)?.trim();
-  if (!detail) {
-    return tool.description;
+function toolInputText(tool: TaskConversationToolCallItem) {
+  const input = tool.inputPreview?.trim();
+  if (!input) {
+    return undefined;
   }
 
-  const summary = detail.split(/\r?\n/u).find((line) => line.trim().length > 0)?.trim();
-  if (!summary) {
-    return tool.description;
+  const callText = toolCallText(tool)?.trim();
+  if (callText && input === callText) {
+    return undefined;
   }
 
-  return summary.length > 140 ? `${summary.slice(0, 140).trimEnd()}...` : summary;
+  return input;
+}
+
+function toolOutputText(tool: TaskConversationToolCallItem) {
+  const output = tool.outputPreview?.trim();
+  return output || undefined;
+}
+
+function toolDetailText(tool: TaskConversationToolCallItem) {
+  return [toolCallText(tool), toolInputText(tool), toolOutputText(tool)].filter(Boolean).join("\n\n");
 }
 
 function isCandidateToolExpanded(key: string) {
@@ -548,8 +601,9 @@ function buildToolCopyText(tool: TaskConversationToolCallItem) {
     `工具: ${tool.label}`,
     `状态: ${tool.stateLabel}`,
     tool.filePath ? `路径: ${tool.filePath}` : null,
-    tool.headline || tool.description ? `摘要: ${tool.headline || tool.description}` : null,
-    toolDetailText(tool) ? `详情:\n${toolDetailText(tool)}` : null,
+    toolCallText(tool) ? `调用: ${toolCallText(tool)}` : null,
+    toolInputText(tool) ? `参数:\n${toolInputText(tool)}` : null,
+    toolOutputText(tool) ? `输出:\n${toolOutputText(tool)}` : null,
   ]
     .filter((item): item is string => Boolean(item))
     .join("\n");
@@ -666,6 +720,24 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 8px;
   margin-bottom: 10px;
+}
+
+.chat-message-card__tools-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.chat-message-card__tools-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(0, 0, 0, 0.88);
+}
+
+.chat-message-card__tools-count {
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.45);
 }
 
 .chat-message-card__parallel-group {
@@ -846,8 +918,42 @@ onBeforeUnmount(() => {
   border: 1px solid #f0f0f0;
 }
 
+.chat-tool-call + .chat-tool-call {
+  margin-top: 0;
+}
+
+.chat-tool-call__index {
+  color: rgba(0, 0, 0, 0.45);
+  font-size: 12px;
+}
+
 .chat-tool-call__label {
   font-weight: 600;
+}
+
+.chat-tool-call__line {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin-top: 8px;
+}
+
+.chat-tool-call__line--stacked {
+  flex-direction: column;
+  gap: 6px;
+}
+
+.chat-tool-call__field {
+  min-width: 32px;
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.45);
+  line-height: 1.6;
+}
+
+.chat-tool-call__value {
+  flex: 1;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .chat-tool-call__path {
@@ -886,6 +992,11 @@ onBeforeUnmount(() => {
   background: #fff;
   border-radius: 8px;
   padding: 8px 10px;
+}
+
+.chat-tool-call__detail--compact {
+  margin-top: 0;
+  width: 100%;
 }
 
 .streaming-skeleton {

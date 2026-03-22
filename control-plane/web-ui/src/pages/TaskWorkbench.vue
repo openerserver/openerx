@@ -31,6 +31,10 @@
         <a-button :disabled="workbench.tabs.length < 2" @click="toggleSplitMode">
           {{ workbench.splitMode ? "退出分屏" : "双栏分屏" }}
         </a-button>
+        <a-radio-group v-model:value="workbenchViewMode" size="small" button-style="solid">
+          <a-radio-button value="v1">经典</a-radio-button>
+          <a-radio-button value="v3">V3</a-radio-button>
+        </a-radio-group>
         <a-button danger :disabled="workbench.tabs.length === 0" @click="confirmClearWorkbench">
           清空工作台
         </a-button>
@@ -394,12 +398,15 @@ function tabNeedsAttention(status?: string) {
   return status === "running" || status === "pending" || status === "paused";
 }
 
+const workbenchViewMode = ref<"v1" | "v3">("v1");
+
 function taskFrameSrc(taskId: string, sessionId?: string) {
   const query = new URLSearchParams({ embedded: "1", workbench: "1" });
   if (sessionId) {
     query.set("session", sessionId);
   }
-  return `/tasks/${taskId}?${query.toString()}`;
+  const suffix = workbenchViewMode.value === "v3" ? "/v3" : "";
+  return `/tasks/${taskId}${suffix}?${query.toString()}`;
 }
 
 function tabLabel(tab: { taskId: string; title?: string }) {

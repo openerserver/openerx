@@ -1,33 +1,34 @@
+/**
+ * useTreeMessages — tree-native message composable for TaskDetailV3.
+ *
+ * Imports shared normalization from lib/message-normalize so that persisted
+ * messages get the live-state text overlay during streaming (same as V2).
+ */
 import { computed, ref, watch, type Ref } from "vue";
 import { getTaskConversationMessages } from "../lib/api";
 import { useRealtimeStore } from "../stores/realtime";
 import {
-  type TaskConversationMessageItem,
   type TaskConversationListItem,
-  type TaskConversationToolCallItem,
-  type TaskConversationParallelItem,
-  type TaskParallelComparisonCard,
-  type LiveAssistantState,
+  type TaskConversationMessageItem,
   asRecord,
   asString,
   messageInfo,
   normalizeMessage,
   collectLiveAssistantState,
   createEmptyLiveAssistantState,
-  normalizeSessionConversationItems,
 } from "../lib/message-normalize";
 
+export type { TaskConversationListItem, TaskConversationMessageItem };
 export type {
-  TaskConversationMessageItem,
-  TaskConversationListItem,
   TaskConversationToolCallItem,
   TaskConversationParallelItem,
-  TaskParallelComparisonCard,
-};
+} from "../lib/message-normalize";
 
-export { normalizeSessionConversationItems };
+/* ------------------------------------------------------------------ */
+/*  Primary composable                                                 */
+/* ------------------------------------------------------------------ */
 
-export function useTaskMessages(
+export function useTreeMessages(
   taskId: Ref<string>,
   sessionId: Ref<string | undefined>,
   options?: { includeLineage?: boolean },
@@ -44,25 +45,19 @@ export function useTaskMessages(
       return;
     }
 
-    if (!silent) {
-      loading.value = true;
-    }
+    if (!silent) loading.value = true;
     error.value = null;
 
     try {
       const response = options?.includeLineage === true
-        ? await getTaskConversationMessages(taskId.value, sessionId.value, {
-            includeLineage: true,
-          })
+        ? await getTaskConversationMessages(taskId.value, sessionId.value, { includeLineage: true })
         : await getTaskConversationMessages(taskId.value, sessionId.value);
       rawMessages.value = Array.isArray(response.data) ? response.data : [];
     } catch (nextError) {
       rawMessages.value = [];
       error.value = nextError instanceof Error ? nextError.message : "加载消息失败";
     } finally {
-      if (!silent) {
-        loading.value = false;
-      }
+      if (!silent) loading.value = false;
     }
   }
 
@@ -72,18 +67,13 @@ export function useTaskMessages(
     const ids = new Set<string>();
     for (const message of rawMessages.value) {
       const id = asString(messageInfo(message)?.id) ?? asString(asRecord(message)?.id);
-      if (id) {
-        ids.add(id);
-      }
+      if (id) ids.add(id);
     }
     return ids;
   });
 
   const liveAssistantState = computed(() => {
-    if (!sessionId.value) {
-      return createEmptyLiveAssistantState();
-    }
-
+    if (!sessionId.value) return createEmptyLiveAssistantState();
     return collectLiveAssistantState(taskEvents.value, sessionId.value);
   });
 
@@ -95,17 +85,13 @@ export function useTaskMessages(
   );
 
   const streamingAssistantDraft = computed<TaskConversationMessageItem | null>(() => {
-    for (let index = liveAssistantState.value.orderedAssistantMessageIds.length - 1; index >= 0; index -= 1) {
-      const messageId = liveAssistantState.value.orderedAssistantMessageIds[index];
-      if (persistedMessageIds.value.has(messageId)) {
-        continue;
-      }
+    for (let i = liveAssistantState.value.orderedAssistantMessageIds.length - 1; i >= 0; i--) {
+      const messageId = liveAssistantState.value.orderedAssistantMessageIds[i];
+      if (persistedMessageIds.value.has(messageId)) continue;
 
       const meta = liveAssistantState.value.metaById.get(messageId);
       const text = liveAssistantState.value.textById.get(messageId)?.trim();
-      if (!meta && !text) {
-        continue;
-      }
+      if (!meta && !text) continue;
 
       return {
         key: messageId,
@@ -118,7 +104,6 @@ export function useTaskMessages(
         isStreaming: liveAssistantState.value.incompleteIds.has(messageId),
       };
     }
-
     return null;
   });
 
@@ -129,7 +114,7 @@ export function useTaskMessages(
   );
 
   const hasStreamingAssistant = computed(() =>
-    conversationItems.value.some((item) => item.role === "assistant" && item.isStreaming),
+    conversationItems.value.some((item) => item.role === "assistant" && "isStreaming" in item && item.isStreaming),
   );
 
   watch([taskId, sessionId], () => {

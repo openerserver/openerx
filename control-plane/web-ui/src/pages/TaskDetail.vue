@@ -186,6 +186,15 @@
             @advance="handleAdvanceStage"
           />
 
+          <a-alert
+            v-if="taskFailureReason"
+            type="error"
+            show-icon
+            message="任务执行失败"
+            :description="taskFailureReason"
+            style="margin-bottom: 12px"
+          />
+
           <ExecutionModeModal
             :open="showExecutionModeModal"
             :loading="false"
@@ -3219,6 +3228,12 @@ const assistantWaitNotice = computed<ExecutionFeedbackNotice | null>(() => {
     message: "消息已发送，正在等待模型回复",
     description: `当前已等待 ${seconds} 秒，系统仍在处理本轮请求。`,
   };
+});
+
+const taskFailureReason = computed(() => {
+  const s = task.value?.status;
+  if (s !== "failed" && s !== "error") return "";
+  return task.value?.result || "";
 });
 
 const isAwaitingAssistantResponse = computed(() => {

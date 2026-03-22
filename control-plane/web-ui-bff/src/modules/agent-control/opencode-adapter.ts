@@ -71,6 +71,21 @@ interface OpencodeResponse {
   error?: string;
 }
 
+export interface RuntimePermissionRequest {
+  id: string;
+  sessionID: string;
+  permission: string;
+  patterns: string[];
+  metadata?: Record<string, unknown>;
+  always?: string[];
+  tool?: {
+    messageID: string;
+    callID: string;
+  };
+}
+
+export type RuntimePermissionReply = "once" | "always" | "reject";
+
 interface GetSessionMessagesOptions {
   bypassCircuitBreaker?: boolean;
   taskId?: string;
@@ -1253,6 +1268,17 @@ export async function listSessions(limit = 20): Promise<OpencodeResponse> {
     });
   listSessionsInflight.set(cacheKey, promise);
   return promise;
+}
+
+export async function listRuntimePermissions(): Promise<OpencodeResponse> {
+  return opcall("GET", "/permission");
+}
+
+export async function replyRuntimePermission(
+  requestId: string,
+  input: { reply: RuntimePermissionReply; message?: string },
+): Promise<OpencodeResponse> {
+  return opcall("POST", `/permission/${encodeURIComponent(requestId)}/reply`, input);
 }
 
 export async function forkSession(

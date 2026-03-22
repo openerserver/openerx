@@ -153,9 +153,119 @@ function extractPersistedMessageText(message: unknown) {
   return text || undefined;
 }
 
+function extractPersistedStandalonePart(message: unknown) {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+
+  const part = (message as { part?: unknown }).part;
+  return part && typeof part === "object" ? (part as Record<string, unknown>) : undefined;
+}
+
+function extractPersistedStandalonePartType(message: unknown) {
+  const part = extractPersistedStandalonePart(message);
+  return typeof part?.type === "string" ? part.type : undefined;
+}
+
+function extractPersistedStandalonePartStatus(message: unknown) {
+  const part = extractPersistedStandalonePart(message);
+  const state =
+    part && typeof part.state === "object" && part.state
+      ? (part.state as Record<string, unknown>)
+      : undefined;
+  return typeof state?.status === "string" ? state.status : undefined;
+}
+
+function shouldPersistStandalonePartEvent(message: unknown) {
+  const partType = extractPersistedStandalonePartType(message);
+  if (!partType) {
+    return true;
+  }
+
+  if (partType === "text") {
+    return true;
+  }
+
+  if (partType !== "tool") {
+    return false;
+  }
+
+  const status = extractPersistedStandalonePartStatus(message);
+  return status === "completed" || status === "failed" || status === "error" || status === "cancelled";
+}
+
+function extractPersistedEventRole(message: unknown) {
+  const role = extractPersistedMessageRole(message);
+  if (role) {
+    return role;
+  }
+
+  const partType = extractPersistedStandalonePartType(message);
+  if (partType === "tool") {
+    return "tool";
+  }
+
+  return undefined;
+}
+
+function extractPersistedToolResultText(message: unknown) {
+  const part = extractPersistedStandalonePart(message);
+  if (!part || part.type !== "tool") {
+    return undefined;
+  }
+
+  const state =
+    typeof part.state === "object" && part.state ? (part.state as Record<string, unknown>) : undefined;
+  if (!state) {
+    return undefined;
+  }
+
+  const candidates = [
+    state.output,
+    state.error,
+    typeof state.metadata === "object" && state.metadata
+      ? (state.metadata as Record<string, unknown>).output
+      : undefined,
+    typeof state.metadata === "object" && state.metadata
+      ? (state.metadata as Record<string, unknown>).error
+      : undefined,
+    state.raw,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === "string") {
+      const normalized = candidate.trim();
+      if (normalized) {
+        return normalized;
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function extractPersistedSearchText(message: unknown, options?: { userPromptFallback?: string }) {
+  const explicitText = extractPersistedMessageText(message)?.trim();
+  if (explicitText) {
+    return explicitText;
+  }
+
+  const fallback = options?.userPromptFallback?.trim();
+  if (fallback) {
+    return fallback;
+  }
+
+  return undefined;
+}
+
 function extractPersistedMessagePartTypes(message: unknown) {
   if (!message || typeof message !== "object") {
     return [] as string[];
+  }
+
+  const standalonePartType = extractPersistedStandalonePartType(message);
+  if (standalonePartType) {
+    return [standalonePartType];
   }
 
   const parts = Array.isArray((message as { parts?: unknown }).parts)
@@ -1426,6 +1536,10 @@ taskRoutes.post(
       archivedAt: null,
     });
 
+    if (!shouldPersistStandalonePartEvent(body.message)) {
+      return c.json({ ok: true, skipped: true }, 202);
+    }
+
     const nodeId = getTaskSessionNodeId(taskId, body.runtimeSessionId);
     const latestEvent = await db.query.projectTreeEvents.findFirst({
       where: and(
@@ -1442,11 +1556,21 @@ taskRoutes.post(
     );
     const existingSnapshots = existingMessageEvents.filter((event) => isSnapshotEventType(event.eventType));
     const completedAt = extractPersistedMessageCompletedAt(body.message);
+    const role = extractPersistedEventRole(body.message) ?? null;
+    const existingUserEventCount = existingSessionEvents.filter((event) => event.payload.role === "user").length;
+    const userPromptFallback =
+      role === "user" && existingUserEventCount === 0 && typeof task.prompt === "string" && task.prompt.trim()
+        ? task.prompt
+        : undefined;
+    const searchText = extractPersistedSearchText(body.message, { userPromptFallback }) ?? null;
+    const resultText = extractPersistedToolResultText(body.message) ?? null;
     const eventSummary = {
       runtimeSessionId: body.runtimeSessionId,
       messageId,
-      role: extractPersistedMessageRole(body.message) ?? null,
-      text: extractPersistedMessageText(body.message) ?? null,
+      role,
+      text: searchText ?? resultText,
+      searchText,
+      resultText,
       partTypes: extractPersistedMessagePartTypes(body.message),
       tokenUsed: extractPersistedMessageTokenUsage(body.message),
       completedAt: completedAt ?? null,

@@ -145,6 +145,9 @@
             <router-link :to="`/tasks/${record.id}/v2`">
               <a-button type="link" size="small">精简视图</a-button>
             </router-link>
+            <router-link :to="`/tasks/${record.id}/v3`">
+              <a-button type="link" size="small">V3 视图</a-button>
+            </router-link>
           </a-space>
         </template>
       </template>

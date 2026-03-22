@@ -185,6 +185,169 @@ describe("project tree routes", () => {
     expect(linksAfterDelete.data.data.some((link) => link.id === createdLink.data.id)).toBe(false);
   });
 
+  test("supports project-level tree search across context nodes and persisted message snapshots", async () => {
+    const task = await createTask(`tree-search-${Date.now()}`);
+    const runtimeSessionId = `ses_search_${Date.now()}`;
+    const sessionNodeId = taskSessionNodeId(task.id, runtimeSessionId);
+
+    createdNodeIds.add(sessionNodeId);
+
+    const contextNode = await authedRequest<{ id: string }>(
+      `/api/projects/${PROJECT_ID}/tree/${PROJECT_ROOT_NODE_ID}/children`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          nodeType: "context",
+          contentText: "Rollback checklist for production migration verification",
+          contentJson: { source: "tree-search-test" },
+        }),
+      },
+    );
+
+    expect(contextNode.status).toBe(201);
+    createdNodeIds.add(contextNode.data.id);
+
+    const createdSession = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/branches`, {
+      method: "POST",
+      body: JSON.stringify({
+        runtimeSessionId,
+        branchName: "search-main",
+        sourceType: "root",
+        isActive: true,
+      }),
+    });
+
+    expect(createdSession.status).toBe(201);
+
+    const persisted = await authedRequest<{ ok: boolean }>(`/api/tasks/${task.id}/branches/messages`, {
+      method: "POST",
+      body: JSON.stringify({
+        runtimeSessionId,
+        message: {
+          info: { id: "msg-search-1", role: "assistant" },
+          parts: [{ type: "text", text: "Rollback migration now and verify the final state." }],
+        },
+      }),
+    });
+
+    expect(persisted.status).toBe(201);
+    expect(persisted.data.ok).toBe(true);
+
+    const searchResult = await authedRequest<{
+      data: Array<{
+        source: "message" | "context";
+        taskId?: string | null;
+        runtimeSessionId?: string | null;
+        runtimeMessageId?: string | null;
+        contentText: string;
+      }>;
+      meta: {
+        query: string;
+        nodeType: "all" | "message" | "context";
+        resultCount: number;
+      };
+    }>(`/api/projects/${PROJECT_ID}/search?q=rollback&nodeType=all&limit=10`);
+
+    expect(searchResult.status).toBe(200);
+    expect(searchResult.data.meta).toEqual(
+      expect.objectContaining({
+        query: "rollback",
+        nodeType: "all",
+        resultCount: 2,
+      }),
+    );
+    expect(searchResult.data.data).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          source: "context",
+          contentText: "Rollback checklist for production migration verification",
+        }),
+        expect.objectContaining({
+          source: "message",
+          taskId: task.id,
+          runtimeSessionId,
+          runtimeMessageId: "msg-search-1",
+          contentText: "Rollback migration now and verify the final state.",
+        }),
+      ]),
+    );
+  });
+
+  test("supports project-level incremental event feed with stable timestamp cursor", async () => {
+    const task = await createTask(`tree-events-feed-${Date.now()}`);
+    const runtimeSessionId = `ses_events_feed_${Date.now()}`;
+    const sessionNodeId = taskSessionNodeId(task.id, runtimeSessionId);
+
+    createdNodeIds.add(sessionNodeId);
+
+    const createdSession = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/branches`, {
+      method: "POST",
+      body: JSON.stringify({
+        runtimeSessionId,
+        branchName: "events-feed-main",
+        sourceType: "root",
+        isActive: true,
+      }),
+    });
+
+    expect(createdSession.status).toBe(201);
+
+    for (const [messageId, text] of [
+      ["msg-feed-1", "first incremental event payload"],
+      ["msg-feed-2", "second incremental event payload"],
+    ] as const) {
+      const persisted = await authedRequest<{ ok: boolean }>(`/api/tasks/${task.id}/branches/messages`, {
+        method: "POST",
+        body: JSON.stringify({
+          runtimeSessionId,
+          message: {
+            info: { id: messageId, role: "assistant" },
+            parts: [{ type: "text", text }],
+          },
+        }),
+      });
+
+      expect(persisted.status).toBe(201);
+      expect(persisted.data.ok).toBe(true);
+    }
+
+    const firstPage = await authedRequest<{
+      items: Array<{
+        id: string;
+        nodeId?: string | null;
+        taskId?: string | null;
+        runtimeSessionId?: string | null;
+        eventType: string;
+        createdAt: string;
+      }>;
+      nextCursor: { after: string; afterId: string } | null;
+      hasMore: boolean;
+    }>(`/api/projects/${PROJECT_ID}/events?nodeId=${encodeURIComponent(sessionNodeId)}&limit=3`);
+
+    expect(firstPage.status).toBe(200);
+    expect(firstPage.data.items).toHaveLength(3);
+    expect(firstPage.data.items.every((item) => item.nodeId === sessionNodeId)).toBe(true);
+    expect(firstPage.data.items.every((item) => item.taskId === task.id)).toBe(true);
+    expect(firstPage.data.items.every((item) => item.runtimeSessionId === runtimeSessionId)).toBe(true);
+    expect(firstPage.data.hasMore).toBe(true);
+    expect(firstPage.data.nextCursor).toBeTruthy();
+
+    const secondPage = await authedRequest<{
+      items: Array<{ id: string; createdAt: string }>;
+      nextCursor: { after: string; afterId: string } | null;
+      hasMore: boolean;
+    }>(
+      `/api/projects/${PROJECT_ID}/events?nodeId=${encodeURIComponent(sessionNodeId)}&limit=3&after=${encodeURIComponent(firstPage.data.nextCursor!.after)}&afterId=${encodeURIComponent(firstPage.data.nextCursor!.afterId)}`,
+    );
+
+    expect(secondPage.status).toBe(200);
+    expect(secondPage.data.items.length).toBeGreaterThan(0);
+    expect(secondPage.data.items.some((item) => item.id === firstPage.data.nextCursor!.afterId)).toBe(false);
+    expect(Date.parse(secondPage.data.items[0]!.createdAt)).toBeGreaterThanOrEqual(
+      Date.parse(firstPage.data.nextCursor!.after),
+    );
+  });
+
   test("syncs task patch updates into the task tree node", async () => {
     const task = await createTask(`tree-task-sync-${Date.now()}`);
 

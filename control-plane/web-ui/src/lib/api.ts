@@ -1390,8 +1390,45 @@ export interface SessionInfo {
 
 export type TaskBranchRecord = SessionInfo;
 
+export interface TaskRuntimePermission {
+  id: string;
+  sessionId: string;
+  permission: string;
+  patterns: string[];
+  metadata: Record<string, unknown> | null;
+  always: string[];
+  tool: {
+    messageId: string;
+    callId: string;
+  } | null;
+}
+
+export type TaskRuntimePermissionReply = "once" | "always" | "reject";
+
 export async function getTaskBranches(taskId: string) {
   return request<{ data: TaskBranchRecord[] }>(`/tasks/${taskId}/branches`);
+}
+
+export async function listTaskRuntimePermissions(taskId: string, sessionId?: string) {
+  const query = new URLSearchParams();
+  if (sessionId) query.set("sessionId", sessionId);
+  return request<{ data: TaskRuntimePermission[] }>(
+    `/tasks/${taskId}/runtime-permissions${query.toString() ? `?${query.toString()}` : ""}`,
+  );
+}
+
+export async function replyTaskRuntimePermission(
+  taskId: string,
+  requestId: string,
+  data: { reply: TaskRuntimePermissionReply; message?: string },
+) {
+  return request<{ ok: boolean; requestId: string; sessionId: string; reply: TaskRuntimePermissionReply }>(
+    `/tasks/${taskId}/runtime-permissions/${requestId}/reply`,
+    {
+      method: "POST",
+      body: JSON.stringify(data),
+    },
+  );
 }
 
 export async function getTaskConversationMessages(
@@ -1606,6 +1643,66 @@ export interface ProjectTreeLinkRecord {
   direction?: "incoming" | "outgoing" | "self";
 }
 
+export type ProjectTreeSearchNodeType = "all" | "message" | "context";
+
+export interface ProjectTreeSearchResultRecord {
+  source: "message" | "context";
+  eventId?: string | null;
+  nodeId: string;
+  path: string;
+  taskId?: string | null;
+  taskTitle?: string | null;
+  runtimeSessionId?: string | null;
+  runtimeMessageId?: string | null;
+  branchName?: string | null;
+  parentNodeId?: string | null;
+  parentNodeType?: string | null;
+  parentTitle?: string | null;
+  contentText: string;
+  excerpt: string;
+  score: number;
+  directHit: boolean;
+  createdAt: string;
+  eventType?: string | null;
+}
+
+export interface ProjectTreeSearchResponseRecord {
+  data: ProjectTreeSearchResultRecord[];
+  meta?: {
+    query: string;
+    nodeType: ProjectTreeSearchNodeType;
+    limit: number;
+    resultCount: number;
+    messageCount: number;
+    contextCount: number;
+  };
+}
+
+export interface ProjectTreeEventFeedItemRecord {
+  id: string;
+  projectId: string;
+  nodeId?: string | null;
+  nodeType?: string | null;
+  path?: string | null;
+  taskId?: string | null;
+  taskTitle?: string | null;
+  runtimeSessionId?: string | null;
+  branchName?: string | null;
+  eventType: string;
+  seq: number;
+  createdAt: string;
+  payload?: Record<string, unknown>;
+}
+
+export interface ProjectTreeEventFeedResponseRecord {
+  items: ProjectTreeEventFeedItemRecord[];
+  nextCursor?: {
+    after: string;
+    afterId: string;
+  } | null;
+  hasMore: boolean;
+}
+
 export interface CreateProjectTreeChildInput {
   id?: string;
   nodeType: ProjectTreeNodeType;
@@ -1711,6 +1808,67 @@ export async function getProjectTreeNodeLinks(projectId: string, nodeId: string)
     `/projects/${encodeURIComponent(projectId)}/tree/${encodeURIComponent(nodeId)}/links`,
   );
   return response.data;
+}
+
+export async function searchProjectTree(
+  projectId: string,
+  query: string,
+  options: {
+    nodeType?: ProjectTreeSearchNodeType;
+    limit?: number;
+    taskId?: string;
+    runtimeSessionId?: string;
+  } = {},
+) {
+  const params = new URLSearchParams();
+  params.set("q", query);
+  if (options.nodeType) {
+    params.set("nodeType", options.nodeType);
+  }
+  if (typeof options.limit === "number") {
+    params.set("limit", String(options.limit));
+  }
+  if (options.taskId) {
+    params.set("taskId", options.taskId);
+  }
+  if (options.runtimeSessionId) {
+    params.set("runtimeSessionId", options.runtimeSessionId);
+  }
+  return request<ProjectTreeSearchResponseRecord>(
+    `/projects/${encodeURIComponent(projectId)}/search?${params.toString()}`,
+  );
+}
+
+export async function getProjectTreeEvents(
+  projectId: string,
+  options: {
+    after?: string;
+    afterId?: string;
+    nodeId?: string;
+    eventType?: string;
+    limit?: number;
+  } = {},
+) {
+  const params = new URLSearchParams();
+  if (options.after) {
+    params.set("after", options.after);
+  }
+  if (options.afterId) {
+    params.set("afterId", options.afterId);
+  }
+  if (options.nodeId) {
+    params.set("nodeId", options.nodeId);
+  }
+  if (options.eventType) {
+    params.set("eventType", options.eventType);
+  }
+  if (typeof options.limit === "number") {
+    params.set("limit", String(options.limit));
+  }
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  return request<ProjectTreeEventFeedResponseRecord>(
+    `/projects/${encodeURIComponent(projectId)}/events${suffix}`,
+  );
 }
 
 export async function createProjectTreeLink(

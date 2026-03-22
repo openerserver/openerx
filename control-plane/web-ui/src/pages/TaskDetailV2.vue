@@ -48,6 +48,15 @@
               @advance="handleUnavailableAction('推进阶段')"
             />
 
+            <a-alert
+              v-if="taskFailureReason"
+              type="error"
+              show-icon
+              message="任务执行失败"
+              :description="taskFailureReason"
+              style="margin-bottom: 12px"
+            />
+
             <ChatMessageList
               :items="conversationItems"
               :loading="messagesLoading"
@@ -101,7 +110,12 @@
                 :content="previewFile.content"
                 @close="previewFile = null"
               />
-              <TaskExecutionTracePanel :task-id="task.id" :session-id="selectedBranchSessionId" />
+              <TaskExecutionTracePanel
+                :task-id="task.id"
+                :session-id="selectedBranchSessionId"
+                :project-id="task.projectId || undefined"
+                @select-session="handleSelectSession"
+              />
             </template>
           </aside>
         </div>
@@ -223,6 +237,12 @@ const currentStageLabel = computed(() => {
   return matchedStage?.stageLabel || currentStage;
 });
 const isExecuting = computed(() => task.value?.status === "running");
+
+const taskFailureReason = computed(() => {
+  const s = task.value?.status;
+  if (s !== "failed" && s !== "error") return "";
+  return task.value?.result || "";
+});
 const editableExecutionMode = computed<ExecutionMode>(() => resolveEditableExecutionMode(task.value));
 const editableJudgeConfig = computed(() => resolveEditableJudgeConfig(task.value));
 const editableParallelCandidates = computed(() => resolveEditableParallelCandidates(task.value));
@@ -581,6 +601,9 @@ async function loadTaskDetail() {
     ]);
     task.value = nextTask;
     workflowView.value = nextWorkflow;
+    if (nextTask.projectId) {
+      realtimeStore.subscribeProject(nextTask.projectId);
+    }
     if (resolveEditableExecutionMode(nextTask) === "parallel") {
       await refreshParallelCandidateMessages(taskId.value, true);
     } else {
@@ -897,6 +920,9 @@ watch(
   (connected) => {
     if (connected && taskId.value) {
       realtimeStore.subscribeTask(taskId.value);
+      if (task.value?.projectId) {
+        realtimeStore.subscribeProject(task.value.projectId);
+      }
     }
   },
   { immediate: true },

@@ -33,6 +33,11 @@ const routes: RouteRecordRaw[] = [
         component: () => import("../pages/MultiTaskMonitor.vue"),
       },
       {
+        path: "tasks/:taskId/v3",
+        name: "TaskDetailV3",
+        component: () => import("../pages/TaskDetailV3.vue"),
+      },
+      {
         path: "tasks/:taskId/v2",
         name: "TaskDetailV2",
         component: () => import("../pages/TaskDetailV2.vue"),
