@@ -1,5 +1,11 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import postgres from "../../control-plane/service/node_modules/postgres";
+import {
+  runDeleteByIds,
+  runDeleteByTaskIds,
+  runTaskNodeDefensiveCleanup,
+  runTaskProjectionCleanup,
+} from "./service-teardown-helpers";
 
 const CP_URL = process.env.TEST_CP_URL || "http://127.0.0.1:4097";
 const PROJECT_ID = process.env.TEST_PROJECT_ID || "proj-default";
@@ -149,27 +155,22 @@ afterAll(async () => {
         "DELETE FROM task_stage_runs WHERE workflow_run_id IN (SELECT id FROM task_workflow_runs WHERE task_id = ?1)",
         [taskId],
       );
-      await safeWriteDb("DELETE FROM task_timeline_views WHERE task_id = ?1", [taskId]);
-      await safeWriteDb("DELETE FROM task_snapshots WHERE task_id = ?1", [taskId]);
-      await safeWriteDb("DELETE FROM task_domain_events WHERE task_id = ?1", [taskId]);
-      await safeWriteDb("DELETE FROM task_run_nodes WHERE task_id = ?1", [taskId]);
-      await safeWriteDb("DELETE FROM task_runs WHERE task_id = ?1", [taskId]);
-      await safeWriteDb("DELETE FROM task_workflow_runs WHERE task_id = ?1", [taskId]);
-      await safeWriteDb("DELETE FROM developer_change_requests WHERE task_id = ?1", [taskId]);
-      await safeWriteDb("DELETE FROM role_aggregate_conclusions WHERE task_id = ?1", [taskId]);
-      await safeWriteDb("DELETE FROM agent_runs WHERE task_id = ?1", [taskId]);
-      await safeWriteDb("DELETE FROM audit_events WHERE task_id = ?1", [taskId]);
       await safeWriteDb(
         "DELETE FROM project_tree_links WHERE source_node_id = ?1 OR target_node_id = ?1",
         [taskId],
       );
-      await safeWriteDb(
-        "DELETE FROM project_tree_branches WHERE task_node_id = ?1 OR head_node_id = ?1",
-        [taskId],
-      );
-      await safeWriteDb("DELETE FROM tasks WHERE id = ?1", [taskId]);
-      await safeWriteDb("DELETE FROM project_tree_nodes WHERE id = ?1", [taskId]);
     }
+
+    await runTaskProjectionCleanup(safeWriteDb, createdTaskIds);
+    await runDeleteByTaskIds(safeWriteDb, "task_run_nodes", createdTaskIds);
+    await runDeleteByTaskIds(safeWriteDb, "task_runs", createdTaskIds);
+    await runDeleteByTaskIds(safeWriteDb, "task_workflow_runs", createdTaskIds);
+    await runDeleteByTaskIds(safeWriteDb, "developer_change_requests", createdTaskIds);
+    await runDeleteByTaskIds(safeWriteDb, "role_aggregate_conclusions", createdTaskIds);
+    await runDeleteByTaskIds(safeWriteDb, "agent_runs", createdTaskIds);
+    await runDeleteByTaskIds(safeWriteDb, "audit_events", createdTaskIds);
+    await runDeleteByIds(safeWriteDb, "tasks", createdTaskIds);
+    await runTaskNodeDefensiveCleanup(safeWriteDb, createdTaskIds);
 
     for (const template of createdWorkflowTemplates) {
       for (const stageId of template.stageIds) {
@@ -178,8 +179,8 @@ afterAll(async () => {
         }).catch(() => undefined);
       }
 
-      await safeWriteDb("DELETE FROM workflow_template_stages WHERE template_id = ?1", [template.templateId]);
-      await safeWriteDb("DELETE FROM workflow_templates WHERE id = ?1", [template.templateId]);
+      await runDeleteByIds(safeWriteDb, "workflow_template_stages", [template.templateId], "template_id");
+      await runDeleteByIds(safeWriteDb, "workflow_templates", [template.templateId]);
     }
   } finally {
     await sql.end();
@@ -233,7 +234,6 @@ describe("Role workflow storage (service)", () => {
     expect(getConclusions.data.data).toHaveLength(1);
     expect(getConclusions.data.data[0]).toMatchObject({
       roleAgentId: "role.security",
-      stage: "verify",
       winningRationale: "发现高风险依赖，需要开发者修复。",
     });
 
@@ -255,6 +255,7 @@ describe("Role workflow storage (service)", () => {
       },
     );
     expect(postChangeRequest.status).toBe(201);
+    expect(postChangeRequest.data.ok).toBe(true);
 
     const patchChangeRequest = await authedRequest<{ ok: boolean }>(
       token,
@@ -269,6 +270,7 @@ describe("Role workflow storage (service)", () => {
       },
     );
     expect(patchChangeRequest.status).toBe(200);
+    expect(patchChangeRequest.data.ok).toBe(true);
 
     const getChangeRequests = await authedRequest<{
       data: Array<{

@@ -34,7 +34,7 @@ import {
   parseStageHooks,
 } from "../hooks/lifecycle-hooks";
 import { finalizeTaskState } from "../tasks/finalize";
-import { persistTaskSessionMessageSnapshot } from "../tasks/task-session-compat";
+import { persistBranchCompatMessageSnapshot } from "../tasks/task-session-compat";
 import {
   fetchCurrentStageHooks,
   persistWorkflowStageExecutionOutcome,
@@ -686,7 +686,7 @@ class SSEAggregator {
     }
 
     const authorization = await createInternalAuthorization();
-    await persistTaskSessionMessageSnapshot(event.taskId, authorization, {
+    await persistBranchCompatMessageSnapshot(event.taskId, authorization, {
       runtimeSessionId: event.sessionId,
       message: event.data,
     });

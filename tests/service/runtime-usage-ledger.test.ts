@@ -1,6 +1,11 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  buildDeleteByIdsStatements,
+  buildTaskNodeDefensiveCleanupStatements,
+  buildTaskProjectionCleanupStatements,
+} from "./service-teardown-helpers";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -104,20 +109,15 @@ beforeAll(async () => {
 
 afterAll(async () => {
   const taskCleanupStatements = [
-    ...createdTaskIds.map((id) => `DELETE FROM tasks WHERE id='${id}';`),
+    ...buildTaskProjectionCleanupStatements(createdTaskIds),
+    ...buildDeleteByIdsStatements("tasks", createdTaskIds),
     ...(DATABASE_DIALECT === "postgres"
-      ? [
-          ...createdTaskIds.map(
-            (id) =>
-              `DELETE FROM project_tree_branches WHERE task_node_id='${id}' OR head_node_id='${id}';`,
-          ),
-          ...createdTaskIds.map((id) => `DELETE FROM project_tree_nodes WHERE id='${id}';`),
-        ]
+      ? buildTaskNodeDefensiveCleanupStatements(createdTaskIds)
       : []),
   ];
   const statements = [
-    ...createdStepIds.map((id) => `DELETE FROM runtime_usage_ledger_steps WHERE id='${id}';`),
-    ...createdLedgerIds.map((id) => `DELETE FROM runtime_usage_ledgers WHERE id='${id}';`),
+    ...buildDeleteByIdsStatements("runtime_usage_ledger_steps", createdStepIds),
+    ...buildDeleteByIdsStatements("runtime_usage_ledgers", createdLedgerIds),
     ...taskCleanupStatements,
   ];
 

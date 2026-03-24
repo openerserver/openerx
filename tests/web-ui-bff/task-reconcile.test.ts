@@ -1,6 +1,10 @@
 /// <reference types="bun-types" />
 
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import {
+  expectNoPublicTraceRequests,
+  expectSessionMessageReaderCalls,
+} from "./session-message-compatibility-test-helpers";
 
 const cpFetchMock = mock((async (..._args: unknown[]) => ({ ok: true, data: {} })) as (
   ...args: unknown[]
@@ -461,6 +465,8 @@ describe("reconcileRunningTasksOnStartup", () => {
       resultText: "Verify stage complete\n[STAGE_COMPLETE]",
       source: "assistant-output",
     });
+    expectSessionMessageReaderCalls(getSessionMessagesMock, ["session-completed-active"]);
+    expectNoPublicTraceRequests(cpFetchMock.mock.calls.map(([url]) => String(url)));
   });
 
   test("marks stale parallel tasks completed after all candidate sessions already finished", async () => {
@@ -604,6 +610,8 @@ describe("reconcileRunningTasksOnStartup", () => {
       }),
     );
     expect(persistWorkflowStageExecutionOutcomeMock).not.toHaveBeenCalled();
+    expectSessionMessageReaderCalls(getSessionMessagesMock, ["session-a", "session-b"]);
+    expectNoPublicTraceRequests(cpFetchMock.mock.calls.map(([url]) => String(url)));
   });
 
   test("does not rewrite legacy runtime plan for projection-backed stale parallel tasks", async () => {
@@ -725,5 +733,7 @@ describe("reconcileRunningTasksOnStartup", () => {
         }),
       }),
     );
+    expectSessionMessageReaderCalls(getSessionMessagesMock, ["session-a", "session-b"]);
+    expectNoPublicTraceRequests(cpFetchMock.mock.calls.map(([url]) => String(url)));
   });
 });

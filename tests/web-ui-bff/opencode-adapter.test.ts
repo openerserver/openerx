@@ -2,6 +2,12 @@
 
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { setControlPlaneFetchHandler } from "../../control-plane/web-ui-bff/src/lib/control-plane-client";
+import {
+  expectLineageMessagesRequest,
+  expectNoPublicTraceRequests,
+  expectNoRuntimeMessageReads,
+  expectRuntimeMessageReads,
+} from "./session-message-compatibility-test-helpers";
 
 mock.restore();
 
@@ -403,6 +409,7 @@ describe("opencode adapter resilience", () => {
   });
 
   test("prefers complete lineage aggregation from service tree source before runtime reads", async () => {
+    const controlPlanePaths: string[] = [];
     const runtimeFetchMock = mock(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes("/session/session-leaf/message?limit=200")) {
@@ -417,6 +424,7 @@ describe("opencode adapter resilience", () => {
 
     setControlPlaneFetchHandler(async (request: Request) => {
       const url = new URL(request.url);
+      controlPlanePaths.push(`${url.pathname}${url.search}`);
 
       if (url.pathname === "/api/tasks/task-1/branches") {
         return new Response(
@@ -512,10 +520,13 @@ describe("opencode adapter resilience", () => {
         parts: [{ type: "text", text: "当前回答" }],
       },
     ]);
-    expect(runtimeFetchMock).not.toHaveBeenCalled();
+    expectNoPublicTraceRequests(controlPlanePaths);
+    expectLineageMessagesRequest(controlPlanePaths, "task-1", "session-leaf");
+    expectNoRuntimeMessageReads(runtimeFetchMock);
   });
 
   test("falls back to runtime reads when service lineage cache state is partial", async () => {
+    const controlPlanePaths: string[] = [];
     const runtimeFetchMock = mock(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith("/session/session-root/message?limit=200")) {
@@ -556,6 +567,7 @@ describe("opencode adapter resilience", () => {
 
     setControlPlaneFetchHandler(async (request: Request) => {
       const url = new URL(request.url);
+      controlPlanePaths.push(`${url.pathname}${url.search}`);
 
       if (url.pathname === "/api/tasks/task-1/branches") {
         return new Response(
@@ -654,6 +666,8 @@ describe("opencode adapter resilience", () => {
         parts: [{ type: "text", text: "当前回答" }],
       },
     ]);
-    expect(runtimeFetchMock).toHaveBeenCalledTimes(2);
+    expectNoPublicTraceRequests(controlPlanePaths);
+    expectLineageMessagesRequest(controlPlanePaths, "task-1", "session-leaf");
+    expectRuntimeMessageReads(runtimeFetchMock, ["session-root", "session-leaf"]);
   });
 });

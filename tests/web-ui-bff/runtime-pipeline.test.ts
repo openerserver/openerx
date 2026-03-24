@@ -3,6 +3,10 @@ import type {
   PersistedTaskStrategy,
   RuntimePlan,
 } from "../../control-plane/web-ui-bff/src/lib/orchestration-strategy";
+import {
+  expectNoPublicTraceRequests,
+  expectSessionMessageReaderCalls,
+} from "./session-message-compatibility-test-helpers";
 
 const cpFetchMock = mock(async (_url: string, _options?: { authorization?: string }) => ({
   ok: false,
@@ -508,10 +512,8 @@ describe("buildRuntimePipeline", () => {
       authorization: "Bearer test",
     });
 
-    expect(getSessionMessagesMock).toHaveBeenCalledWith("ses-branch-1", {
-      taskId: "task-1",
-      authorization: "Bearer test",
-    });
+    expectSessionMessageReaderCalls(getSessionMessagesMock, ["ses-branch-1"]);
+    expectNoPublicTraceRequests(cpFetchMock.mock.calls.map(([url]) => String(url)));
     expect(pipeline.taskId).toBe("task-1");
     expect(pipeline.sessionId).toBe("ses-branch-1");
     expect(pipeline.branchName).toBe("feature/runtime");
@@ -618,10 +620,8 @@ describe("buildRuntimePipeline", () => {
         replanCount: 0,
       },
     });
-    expect(getSessionMessagesMock).toHaveBeenCalledWith("ses-not-owned", {
-      taskId: "task-2",
-      authorization: "Bearer test",
-    });
+    expectSessionMessageReaderCalls(getSessionMessagesMock, ["ses-not-owned"]);
+    expectNoPublicTraceRequests(cpFetchMock.mock.calls.map(([url]) => String(url)));
   });
 
   test("ignores legacy runtime plan and falls back to planning stages for non-parallel tasks", async () => {
@@ -893,6 +893,8 @@ describe("buildRuntimePipeline", () => {
 
     const firstCandidate = pipeline.stages.find((stage) => stage.id === "candidate:0:ses-shared");
     const secondCandidate = pipeline.stages.find((stage) => stage.id === "candidate:1:ses-shared");
+    expectSessionMessageReaderCalls(getSessionMessagesMock, ["ses-shared"]);
+    expectNoPublicTraceRequests(cpFetchMock.mock.calls.map(([url]) => String(url)));
     expect(firstCandidate).toMatchObject({
       graphNodeId: "shared-node-1",
       sessionId: "ses-shared",

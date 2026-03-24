@@ -17,7 +17,7 @@ afterEach(() => {
 });
 
 describe("useProjectTreeTask", () => {
-  test("keeps task business fields from the BFF read model even when tree payload contains legacy values", async () => {
+  test("keeps task business fields from the BFF read model even when tree payload contains legacy compat values", async () => {
     const getTask = vi.fn(async () => ({
       id: "task-1",
       projectId: "proj-1",

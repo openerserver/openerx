@@ -106,6 +106,12 @@ afterAll(async () => {
 
   const nodeIds = Array.from(createdNodeIds);
   if (nodeIds.length > 0) {
+    const nodePlaceholders = nodeIds.map((_, index) => `$${index + 1}`).join(", ");
+    await sql.unsafe(
+      `DELETE FROM conversation_sessions WHERE tree_node_id IN (${nodePlaceholders})`,
+      nodeIds,
+    );
+    await sql.unsafe(`DELETE FROM tasks WHERE tree_node_id IN (${nodePlaceholders})`, nodeIds);
     for (const nodeId of nodeIds) {
       await sql.unsafe(
         `WITH RECURSIVE descendants AS (

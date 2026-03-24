@@ -15,7 +15,7 @@
 - [x] `POST /api/tasks` 主写已切到 `project_tree_nodes(node_type=task)`，运行时不再依赖 `tasks` 镜像写入。
 - [x] 任务关系主写已切到 `project_tree_links`，旧 `project_task_relations` 已退出运行时路径与 schema 主线。
 - [x] 第一批项目树 API 已落地：`GET /api/projects/:projectId/tree`、`GET /api/projects/:projectId/tree/:nodeId`、`GET /api/projects/:projectId/tree/:nodeId/children`、`GET /api/projects/:projectId/tree/:nodeId/ancestors`、`POST /api/projects/:projectId/tree/:nodeId/children`、`GET /api/projects/:projectId/branches`、`PUT /api/projects/:projectId/branches/:branchId`、`GET /api/projects/:projectId/tree/:nodeId/links`、`POST /api/projects/:projectId/tree/:nodeId/links`、`GET /api/projects/:projectId/links`、`DELETE /api/projects/:projectId/links/:linkId`。
-- [x] 旧 `task_sessions` 写入口已同步投影树模型：创建 / activate / archive 会同步维护 `node_type=session` 节点。
+- [x] 旧 branch/session 写入口（历史上由 `task_sessions` 兼容链路承接）已同步投影树模型：创建 / activate / archive 会同步维护 `node_type=session` 节点。
 - [x] 旧衍生表的 `task_id` FK 已切到 `project_tree_nodes(id)`，覆盖 `task_sessions`、`agent_runs`、`code_changes`、`task_workflow_runs`、`role_aggregate_conclusions`、`developer_change_requests`、`task_operating_modes`、`boss_decisions`、`human_escalations`、`runtime_usage_ledgers`、`runtime_usage_ledger_steps`。
 - [x] Web UI BFF 已代理 `tree` / `branches` / `links` 路由，前端无需直连 control-plane service。
 - [x] 项目“任务总图”页已接入项目树工作台，可浏览节点树、祖先链、子节点、links 与分支头状态。
@@ -80,7 +80,7 @@
 #### A. 显式触发 legacy `tasks` 镜像的入口
 
 | 位置 | 当前行为 | 性质 | 是否可继续删除 |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | 无 | runtime 已不再从 `tasks` 回填或修复 task node | 已收口 | 可继续推进到 drop legacy 表 |
 
 #### B. 已完成的收口结果
@@ -106,8 +106,8 @@
 #### E. 当前还不能直接删除的点
 
 1. `task_sessions` 已完成独立 drop，不再是兼容 branch lineage 接口的真实存储。
-2. service / tests / docs 中与 `tasks`、`sessions`、`task_sessions` 相关的主要 schema 定义、历史清理语句与 migration 文案已完成一轮收口，但仍有个别历史文档待继续同步。
-3. 当前旧表删除的 repo 侧收尾已完成；剩余事项主要是后续环境发布时继续执行既有 migration，以及个别与已下线 `/api/tasks/:taskId` detail GET 绑定的历史文档/测试口径持续同步。
+2. service / tests / docs 中与 `tasks`、`sessions`、`task_sessions` 相关的主要 schema 定义、历史清理语句与 migration 文案已完成本轮同步收口；后续仅保留历史维护与防回退校对。
+3. 当前旧表删除的 repo 侧收尾已完成；剩余事项主要是后续环境发布时继续执行既有 migration，以及树侧搜索 / 增量推送这类独立可选优化。
 
 结论：runtime 已不再依赖 `tasks` / `sessions` / `task_sessions` / `project_task_relations` 作为事实表；离线迁移链也已切换到以 `project_tree_nodes` / `project_tree_branches` 作为目标，且在干净目标库上完成了一轮真实 SQLite 快照迁移与校验。当前旧任务域删表工作已完成 repo 侧收口，环境发布只需继续执行既有 migration。
 
@@ -128,13 +128,13 @@
 
 下图保留的是改造前的问题背景，用来解释为什么当时需要从旧 `tasks` / `task_sessions` / `project_task_relations` 组合切到树模型；它不是当前实现结构。
 
-```
+```text
 Organization
   └─ Project                          (projects 表)
       ├─ Task A                      (tasks 表, projectId FK)
-      │    ├─ TaskSession root       (历史/兼容 lineage 存储：task_sessions, sourceType=root)
-      │    ├─ TaskSession fork-1     (历史/兼容 lineage 存储：task_sessions, parentRuntimeSessionId → root)
-       │    └─ TaskSession fork-2
+      │    ├─ Legacy TaskSession root       (历史/兼容 lineage 存储：task_sessions, sourceType=root)
+      │    ├─ Legacy TaskSession fork-1     (历史/兼容 lineage 存储：task_sessions, parentRuntimeSessionId → root)
+  │    └─ Legacy TaskSession fork-2
        ├─ Task B
        │    └─ ...
        └─ ProjectTaskRelation A→B     (project_task_relations 表, 任务间依赖图)
@@ -149,7 +149,7 @@ Organization
 **问题**：
 
 | # | 问题 | 影响 |
-|---|------|------|
+| --- | --- | --- |
 | 1 | 项目与任务之间只有「扁平 FK」，无统一树根 | 无法将「项目级上下文」（如 README、架构决策）作为节点参与到执行树中 |
 | 2 | `task_sessions` 只记录 session 级分支，消息级分叉靠 runtime 保存 | 历史消息在 runtime 重启后丢失；无法做跨 session 的消息搜索 |
 | 3 | 任务间关系 (`project_task_relations`) 是独立图，与 session tree 割裂 | 查询「一条从项目根到当前消息的完整路径」需要跨 3 张表 join |
@@ -166,7 +166,7 @@ Organization
 ### 3.1 设计原则
 
 | 原则 | 说明 |
-|------|------|
+| --- | --- |
 | **单根树** | 每个 Project 有且仅有一个 root 节点；所有结构挂在它之下 |
 | **路径可查** | 使用 `ltree` 类型存储 materialized path，支持祖先/后代/距离查询 |
 | **节点类型多态** | 同一张表存储 project_root / task / session / message / context 等不同类型 |
@@ -260,9 +260,11 @@ CREATE UNIQUE INDEX idx_ptb_task_branch_unique
   WHERE task_node_id IS NOT NULL;
 ```
 
-### 3.5 辅助表：`project_tree_events`（追加式事件日志）
+### 3.5 历史辅助表：`project_tree_events`（追加式事件日志）
 
-用于 streaming 场景，SSE 事件落盘后再合并到 `project_tree_nodes`。
+历史语境说明：本节保留的是 tree foundation 设计期与早期 migration 中的事件日志表定义，用于解释当时为什么会有 `0006_project_tree_foundation.sql` 与后续索引 migration。它不是当前运行时能力；当前 runtime schema 已通过 drop migration 移除该表。
+
+在当时的设计里，它用于 streaming 场景，SSE 事件落盘后再合并到 `project_tree_nodes`。
 
 ```sql
 CREATE TABLE project_tree_events (
@@ -290,7 +292,7 @@ CREATE INDEX idx_pte_project  ON project_tree_events (project_id, created_at);
 #### 3.6.1 为什么链接不能放在树里
 
 | 约束 | 原因 |
-|------|------|
+| --- | --- |
 | **ltree 不支持多父** | 一个节点只能有一条 `path`，不可能同时属于两棵树 |
 | **项目隔离是安全边界** | 树内查询必带 `project_id`；跨项目链接需要显式权限检查，放在独立表里逻辑更清晰 |
 | **链接可删除，节点不可变** | 「A 依赖 B」可以解除，但消息节点是不可变的；生命周期不同，必须分离 |
@@ -298,7 +300,7 @@ CREATE INDEX idx_pte_project  ON project_tree_events (project_id, created_at);
 #### 3.6.2 跨树场景
 
 | 场景 | 示例 | link_type |
-|------|------|----------|
+| --- | --- | --- |
 | **项目间依赖** | 项目 A 的任务依赖项目 B 的任务完成 | `depends-on` |
 | **上下文引用** | 项目 A 的消息引用了项目 B 的设计文档节点 | `cites` |
 | **共享衍生** | 从项目 A 的某个消息 fork 出项目 B 的新任务 | `forked-from` |
@@ -351,7 +353,7 @@ CREATE INDEX idx_ptl_target_project  ON project_tree_links (target_project_id, l
 
 现有的 `project_task_relations` 是任务级别的链接表，`project_tree_links` 是其泛化：
 
-```
+```text
 project_task_relations           →  project_tree_links
   source_task_id / target_task_id     source_node_id / target_node_id
   relation_type                       link_type
@@ -408,7 +410,7 @@ export const projectTreeLinks = pgTable(
 
 一个典型的项目树：
 
-```
+```text
 project_root (P-001)                          path: "P001"
 ├── context: README.md                        path: "P001.ctx_readme"
 ├── context: Architecture Decision            path: "P001.ctx_arch"
@@ -434,7 +436,7 @@ project_root (P-001)                          path: "P001"
 
 ### 4.2 跨树链接示例
 
-```
+```text
 Project A tree (ltree)               Link Layer (project_tree_links)           Project B tree (ltree)
 ─────────────────────               ─────────────────────────────             ─────────────────────
 A_root                               A.T001 ──depends-on──▶ B.T003            B_root
@@ -757,11 +759,11 @@ await db.insert(projectTreeNodes).values({
 ### 8.1 当前映射与目标收尾
 
 | 旧表 | 处理 | 替代方案 |
-|------|------|---------|
+| --- | --- | --- |
 | `tasks` | **已执行 DROP** | 任务事实已由 `node_type=task` 节点承载，元数据存 `content_json` |
 | `task_sessions` | **已执行 DROP（独立 migration `0011_drop_task_sessions.sql`）** | 运行时事实已切到 `node_type=session` 节点；离线输入链也不再将其作为导入目标 |
 | `project_task_relations` | **运行时已退出主线；drop migration 已落地** | 跨树关系已进入 `project_tree_links` |
-| `sessions` | **已执行 DROP** | token / cost 聚合后续从 `project_tree_nodes` + `project_tree_events` 或新统计表计算 |
+| `sessions` | **已执行 DROP** | token / cost 聚合需由现行 task-domain / tree 读模型或后续新统计表承担；这里提到 `project_tree_events` 仅属于历史设计语境 |
 
 ### 8.2 清理原则
 
@@ -793,7 +795,7 @@ await db.insert(projectTreeNodes).values({
 以下表属于最终仍应删除的旧核心表，或尚待产品决策的兼容衍生表：
 
 | 表名 | 类型 | 删除原因 |
-|------|------|----------|
+| --- | --- | --- |
 | `tasks` | 核心旧表 | 旧任务实体被 `project_tree_nodes(node_type=task)` 取代 |
 | `task_sessions` | 已删除旧表 | 旧会话分支模型已被 `project_tree_nodes(node_type=session)` 取代；兼容 lineage API 与离线导入目标均已移除 |
 | `sessions` | 核心旧表 | 旧 session 汇总模型不再作为事实来源 |
@@ -856,7 +858,7 @@ await db.insert(projectTreeNodes).values({
 以下表不必删表，但若其记录引用旧 `task_id` / `session_id` / `agent_run_id`，切换时应清空历史数据，避免新旧语义混杂：
 
 | 表名 | 处理 | 原因 |
-|------|------|------|
+| --- | --- | --- |
 | `audit_events` | **DELETE 历史记录** | 含 `taskId` / `sessionId` / `agentRunId` 文本字段，旧追踪链失效 |
 | `cost_records` | **DELETE 历史记录** | 含 `taskId` / `sessionId` / `agentRunId` 文本字段，旧成本归因失效 |
 | `approval_tickets` | **DELETE 历史记录** | `taskId` 仍绑定旧任务模型，旧审批单不可继续使用 |
@@ -868,7 +870,7 @@ await db.insert(projectTreeNodes).values({
 以下表属于平台基础实体、配置实体或与任务树解耦的能力表，应继续保留：
 
 | 表名 | 保留原因 |
-|------|----------|
+| --- | --- |
 | `organizations` | 组织主体 |
 | `projects` | 项目主体，新树以 `project_id` 关联 |
 | `environments` | 环境配置 |
@@ -953,6 +955,9 @@ CREATE UNIQUE INDEX idx_ptb_project_branch_unique
 CREATE UNIQUE INDEX idx_ptb_task_branch_unique
   ON project_tree_branches (project_id, task_node_id, branch_name)
   WHERE task_node_id IS NOT NULL;
+
+-- 历史 DDL 快照：以下 `project_tree_events` 语句对应早期 migration 基线，
+-- 用于解释历史 schema 演进，不代表当前 runtime schema 仍保留该表。
 
 CREATE TABLE IF NOT EXISTS project_tree_events (
   id           TEXT PRIMARY KEY,
@@ -1044,7 +1049,7 @@ DROP TABLE IF EXISTS tasks;
 ### 10.1 新增端点
 
 | 方法 | 路径 | 说明 | 当前状态 |
-|------|------|------|---------|
+| --- | --- | --- | --- |
 | GET | `/api/projects/:projectId/tree` | 返回项目树（可选 `?depth=N`、`?nodeType=task` 过滤） | **已完成** |
 | GET | `/api/projects/:projectId/tree/:nodeId` | 返回单个节点详情 | **已完成** |
 | GET | `/api/projects/:projectId/tree/:nodeId/ancestors` | 返回从 root 到该节点的完整路径 | **已完成** |
@@ -1060,7 +1065,7 @@ DROP TABLE IF EXISTS tasks;
 ### 10.2 现有端点切换
 
 | 现有端点 | 变更 |
-|---------|------|
+| --- | --- |
 | `POST /api/projects` | 内部自动创建 root 节点，响应新增 `rootNodeId` 字段。**当前状态：已完成** |
 | `POST /api/tasks` | 当前兼容保留，但已同步写 `node_type=task` 节点；现阶段视为兼容写入口，而不是主设计继续演进的中心。 |
 | `POST /api/tasks/:taskId/branches` | 当前作为 branch lineage 写入口，直接同步 `node_type=session` 节点。 |
@@ -1075,18 +1080,18 @@ DROP TABLE IF EXISTS tasks;
 ## 11. 性能考量
 
 | 场景 | 策略 |
-|------|------|
+| --- | --- |
 | 深层消息查询（depth > 20） | ltree GiST 索引，`path <@` 操作符 O(log N) |
 | 项目级全消息搜索 | `project_id + node_type='message'` 索引 + `pg_trgm` 全文搜索 |
-| 高频 streaming 写入 | 先写 `project_tree_events`（追加），定期合并到 `project_tree_nodes` |
+| 高频 streaming 写入 | 历史设计里曾采用“先写 `project_tree_events`（追加），再定期合并到 `project_tree_nodes`”的方案；当前运行时已不再保留这张表 |
 | 跨项目查询（树内） | 不支持（by design：项目间数据隔离） |
 | 跨项目查询（链接） | 通过 `project_tree_links` 支持；每次跨项目读取需验证用户对目标项目有权限 |
-| path 更新（子树移动） | 批量 `UPDATE path = new_prefix || subpath(path, old_depth)` |
+| path 更新（子树移动） | 批量 `UPDATE path = new_prefix \|\| subpath(path, old_depth)` |
 
 ### 11.1 ltree vs 递归 CTE 性能对比
 
 | 查询类型 | 递归 CTE | ltree |
-|---------|---------|-------|
+| --- | --- | --- |
 | 找所有后代 | O(N) 每层递归 | O(log N) GiST 索引 |
 | 找所有祖先 | O(depth) 递归 | O(1) `@>` 操作 |
 | 判断祖先关系 | 需要遍历 | `path @> path2` 常数时间 |
@@ -1108,10 +1113,10 @@ DROP TABLE IF EXISTS tasks;
 ## 13. 与 Git 对象模型的对照
 
 | Git 概念 | 本方案对应 | 说明 |
-|---------|-----------|------|
+| --- | --- | --- |
 | Tree object | `project_tree_nodes` (node_type = project_root / task / session) | 目录/容器节点 |
 | Blob object | `project_tree_nodes` (node_type = message / context) | 叶子内容节点 |
-| Commit | `project_tree_events` 的 message_complete 事件 | 状态快照点 |
+| Commit | 历史设计里对应 `project_tree_events` 的 `message_complete` 事件 | 当前仅用于说明早期建模映射，不代表现行 runtime 能力 |
 | Branch ref | `project_tree_branches` | 指向 head 节点的可移动指针 |
 | HEAD | `project_tree_branches.is_default = true` | 当前活跃分支 |
 | Object hash (SHA) | `id` (UUID v7) | 唯一标识，时间有序 |
@@ -1123,7 +1128,7 @@ DROP TABLE IF EXISTS tasks;
 ## 14. 批次计划
 
 | Phase | 内容 | 预估工作 | 当前状态 |
-|-------|------|---------|---------|
+| --- | --- | --- | --- |
 | **Phase 0** | 树表、扩展、root 初始化、tree-first 主写切换 | 切换脚本 + 类型定义 | **已完成** |
 | **Phase 1** | tree / branches / links API、BFF tree 数据面接入、`task_sessions` 兼容调用收口 | 路由改造 + BFF 适配 | **已完成** |
 | **Phase 2** | 前端通用消息源切树模型；删除 `/api/tasks*` 兼容读取入口；完成 `tasks` / `sessions` / `task_sessions` 删表收口 | 前端 composable 改造 + 旧路由清理 + migration 收口 | **已完成** |
@@ -1134,7 +1139,7 @@ DROP TABLE IF EXISTS tasks;
 ## 15. 开放问题
 
 | # | 问题 | 待决策 |
-|---|------|--------|
+| --- | --- | --- |
 | 1 | ltree path label 最大长度限制（PostgreSQL 默认 256 字符/label） | 评估 UUID→短 hash 映射方案 |
 | 2 | 消息内容是否存全文还是仅存摘要？全文 = 存储膨胀，摘要 = 需要回 runtime 取原文 | 如未来继续推进树侧搜索/快照优化，再单独决策 |
 | 3 | `project_tree_events` 合并频率？实时 vs 批量？ | 已转入 [pg-event-sourcing-optimization-plan.md](pg-event-sourcing-optimization-plan.md) 统一评估 |

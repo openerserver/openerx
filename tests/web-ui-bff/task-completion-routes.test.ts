@@ -1385,7 +1385,7 @@ describe("task completion routes", () => {
     expect(legacyPatchCall).toBeUndefined();
   });
 
-  test("POST /:taskId/candidates/:index/adopt returns 404 when no parallel domain run exists even if legacy fields are present", async () => {
+  test("POST /:taskId/candidates/:index/adopt returns 404 when only legacy compat payload remains and no parallel domain run exists", async () => {
     cpFetchMock.mockImplementation(async (...args: unknown[]) => {
       const [url, options] = args as [string, RouteFetchOptions | undefined];
       if (!options?.method && url === "/api/project-tree/tasks/task-adopt-backfill") {

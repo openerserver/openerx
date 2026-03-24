@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { createControlPlaneClientModuleMock } from "./control-plane-client-mock";
 import { createOpencodeAdapterModuleMock } from "./opencode-adapter-mock";
+import {
+  expectNoPublicTraceRequests,
+  expectSessionMessageReaderCalls,
+} from "./session-message-compatibility-test-helpers";
 
 function isTaskDetailGet(url: string, options?: { method?: string }) {
   return (
@@ -628,6 +632,8 @@ describe("SSEAggregator pipeline emitters", () => {
           }),
         }),
       );
+      expectSessionMessageReaderCalls(getSessionMessagesMock, ["ses-1"]);
+      expectNoPublicTraceRequests(cpFetchMock.mock.calls.map(([url]) => String(url)));
     } finally {
       unsubscribe();
     }

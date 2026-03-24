@@ -3,6 +3,7 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { createOpencodeAdapterModuleMock } from "./opencode-adapter-mock";
 import { createSseAggregatorModuleMock } from "./sse-aggregator-mock";
+import { expectSessionMessageReaderCalls } from "./session-message-compatibility-test-helpers";
 
 const cpFetchMock = mock(async (..._args: unknown[]) => ({ ok: true, data: {} }));
 const authHeaderMock = mock(() => "Bearer test");
@@ -356,5 +357,134 @@ describe("task sessions route", () => {
       parentSessionId: "session-root",
       forkedFromMessageId: "msg-1",
     });
+  });
+
+  test("builds branch-lineage previews from session messages instead of public trace reads", async () => {
+    listSessionsMock.mockResolvedValue({
+      ok: true,
+      data: [
+        {
+          id: "session-root",
+          title: "main",
+          time: {
+            created: Date.parse("2026-03-14T10:00:00.000Z"),
+            updated: Date.parse("2026-03-14T10:05:00.000Z"),
+          },
+        },
+        {
+          id: "session-leaf",
+          title: "branch-a",
+          time: {
+            created: Date.parse("2026-03-14T10:06:00.000Z"),
+            updated: Date.parse("2026-03-14T10:07:00.000Z"),
+          },
+        },
+      ],
+    });
+    cpFetchMock.mockImplementation(async (url: string, options?: { method?: string }) => {
+      if (url === "/api/project-tree/tasks/task-1") {
+        return {
+          ok: true,
+          data: {
+            id: "task-1",
+            title: "finished task",
+            status: "completed",
+            sessionId: "session-root",
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/branches" && !options?.method) {
+        return {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "ts-root",
+                runtimeSessionId: "session-root",
+                branchName: "main",
+                sourceType: "root",
+                isActive: true,
+                archivedAt: null,
+                parentRuntimeSessionId: null,
+                forkedFromMessageId: null,
+                createdAt: "2026-03-14T10:00:00.000Z",
+                updatedAt: "2026-03-14T10:05:00.000Z",
+              },
+              {
+                id: "ts-leaf",
+                runtimeSessionId: "session-leaf",
+                branchName: "branch-a",
+                sourceType: "fork",
+                isActive: false,
+                archivedAt: null,
+                parentRuntimeSessionId: "session-root",
+                forkedFromMessageId: "msg-1",
+                createdAt: "2026-03-14T10:06:00.000Z",
+                updatedAt: "2026-03-14T10:07:00.000Z",
+              },
+            ],
+          },
+        };
+      }
+
+      return { ok: true, data: {} };
+    });
+    getSessionMessagesMock.mockImplementation(async (sessionId: string) => {
+      if (sessionId === "session-root") {
+        return {
+          ok: true,
+          data: [
+            {
+              info: { id: "msg-1", role: "assistant" },
+              parts: [{ type: "text", text: "父分支里的回答摘要" }],
+            },
+          ],
+        };
+      }
+
+      if (sessionId === "session-leaf") {
+        return {
+          ok: true,
+          data: [
+            {
+              info: {
+                id: "leaf-user-1",
+                role: "user",
+                time: { created: Date.parse("2026-03-14T10:06:30.000Z") },
+              },
+              parts: [{ type: "text", text: "分叉后的第一条用户问题" }],
+            },
+          ],
+        };
+      }
+
+      return { ok: true, data: [] };
+    });
+
+    const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
+
+    const response = await taskRoutes.request("http://localhost/task-1/branch-lineage", {
+      headers: {
+        Authorization: "Bearer test",
+      },
+    });
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload.data).toEqual([
+      expect.objectContaining({
+        runtimeSessionId: "session-root",
+        children: [
+          expect.objectContaining({
+            runtimeSessionId: "session-leaf",
+            forkedFromMessageId: "msg-1",
+            forkedFromMessagePreview: "父分支里的回答摘要",
+            firstPromptAfterFork: "分叉后的第一条用户问题",
+          }),
+        ],
+      }),
+    ]);
+    expectSessionMessageReaderCalls(getSessionMessagesMock, ["session-root", "session-leaf"]);
   });
 });

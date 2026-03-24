@@ -769,7 +769,7 @@ describe("executeLifecycleHooks behavior", () => {
     expect(continueSessionMock).not.toHaveBeenCalled();
   });
 
-  test("continue route falls back to strategy candidates when stored legacy parallel runtime plan is incomplete", async () => {
+  test("continue route prefers strategy candidates when only an incomplete legacy parallel compat payload remains", async () => {
     currentStrategy = buildStrategy({ hooks: [] });
     process.env.ALLOW_PAID_MODEL_EXECUTION = "1";
     cpFetchMock.mockImplementation(
@@ -1124,7 +1124,7 @@ describe("executeLifecycleHooks behavior", () => {
     expect(registerParallelTaskMock).not.toHaveBeenCalled();
   });
 
-  test("continue route skips legacy parallel patch fields for projection-backed tasks", async () => {
+  test("continue route does not rewrite legacy parallel compat patch fields for projection-backed tasks", async () => {
     currentStrategy = buildStrategy({ hooks: [] });
     process.env.ALLOW_PAID_MODEL_EXECUTION = "1";
     cpFetchMock.mockImplementation(

@@ -82,7 +82,14 @@ afterAll(async () => {
     await sql.unsafe("DELETE FROM task_snapshots WHERE task_id = $1", [taskId]);
     await sql.unsafe("DELETE FROM tasks WHERE id = $1", [taskId]);
   }
-  for (const nodeId of Array.from(createdNodeIds)) {
+  const nodeIds = Array.from(createdNodeIds);
+  if (nodeIds.length > 0) {
+    await sql.unsafe(
+      `DELETE FROM tasks WHERE tree_node_id IN (${nodeIds.map((_, index) => `$${index + 1}`).join(", ")})`,
+      nodeIds,
+    );
+  }
+  for (const nodeId of nodeIds) {
     await sql.unsafe(
       "DELETE FROM project_tree_links WHERE source_node_id = $1 OR target_node_id = $1",
       [nodeId],

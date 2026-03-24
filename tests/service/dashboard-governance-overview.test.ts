@@ -3,6 +3,11 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import postgres from "../../control-plane/service/node_modules/postgres";
+import {
+  runDeleteByIds,
+  runTaskNodeDefensiveCleanup,
+  runTaskProjectionCleanup,
+} from "./service-teardown-helpers";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -259,31 +264,20 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  const deleteByIds = async (table: string, ids: string[]) => {
-    for (const id of ids) {
-      await writeDb(`DELETE FROM ${table} WHERE id = ?`, [id]);
-    }
-  };
-
-  await deleteByIds("audit_events", createdAuditIds);
-  await deleteByIds("paid_execution_leases", createdLeaseIds);
-  await deleteByIds("runtime_usage_ledgers", createdLedgerIds);
+  await runDeleteByIds(writeDb, "audit_events", createdAuditIds);
+  await runDeleteByIds(writeDb, "paid_execution_leases", createdLeaseIds);
+  await runDeleteByIds(writeDb, "runtime_usage_ledgers", createdLedgerIds);
 
   for (const taskId of createdTaskIds) {
-    await writeDb("DELETE FROM task_timeline_views WHERE task_id = ?", [taskId]);
-    await writeDb("DELETE FROM task_snapshots WHERE task_id = ?", [taskId]);
-    await writeDb("DELETE FROM task_domain_events WHERE task_id = ?", [taskId]);
-    await writeDb("DELETE FROM tasks WHERE id = ?", [taskId]);
     await writeDb("DELETE FROM project_tree_links WHERE source_node_id = ? OR target_node_id = ?", [
       taskId,
       taskId,
     ]);
-    await writeDb("DELETE FROM project_tree_branches WHERE task_node_id = ? OR head_node_id = ?", [
-      taskId,
-      taskId,
-    ]);
-    await writeDb("DELETE FROM project_tree_nodes WHERE id = ?", [taskId]);
   }
+
+  await runTaskProjectionCleanup(writeDb, createdTaskIds);
+  await runDeleteByIds(writeDb, "tasks", createdTaskIds);
+  await runTaskNodeDefensiveCleanup(writeDb, createdTaskIds);
 
   sqlite?.close();
   if (sql) {

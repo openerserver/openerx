@@ -4,6 +4,11 @@ import { beforeEach, describe, expect, mock, test } from "bun:test";
 import * as strategyModule from "../../control-plane/web-ui-bff/src/lib/orchestration-strategy";
 import { createOpencodeAdapterModuleMock } from "./opencode-adapter-mock";
 import { createSseAggregatorModuleMock } from "./sse-aggregator-mock";
+import {
+  expectNoLegacyTimelineReadSource,
+  expectNoPromptBackfillSegment,
+  expectServiceTimelineNotRequested,
+} from "./execution-trace-contract-test-helpers";
 
 const cpFetchMock = mock(async (..._args: unknown[]) => ({ ok: true, data: {} }));
 const authHeaderMock = mock(() => "Bearer test");
@@ -138,13 +143,6 @@ mock.module("../../control-plane/web-ui-bff/src/modules/tasks/workflow-stage-exe
   fetchCurrentStageHooks: mock(async () => []),
   persistWorkflowStageExecutionOutcome: mock(async () => undefined),
 }));
-
-function expectNoLegacyTimelineReadSource(payload: {
-  timelineMeta?: { readSource?: string | null } | null;
-}) {
-  expect(payload.timelineMeta?.readSource).not.toBe("legacy-project-tree-events");
-  expect(payload.timelineMeta?.readSource).not.toBe("conversation-table+legacy-fallback");
-}
 
 beforeEach(() => {
   cpFetchMock.mockReset();
@@ -746,11 +744,102 @@ describe("task execution trace route", () => {
     expect(payload.finalPrompt).toBe("projection partial prompt");
     expect(payload.latestResponse).toBeNull();
     expectNoLegacyTimelineReadSource(payload);
-    expect(
-      cpFetchMock.mock.calls.some(
-        ([path]) => path === "/api/tasks/task-1/branches/ses-1/timeline?includeLineage=true",
-      ),
-    ).toBe(false);
+    expectServiceTimelineNotRequested(cpFetchMock, "task-1", "ses-1");
+    expect(getSessionMessagesMock).not.toHaveBeenCalled();
+  });
+
+  test("does not load service timeline when projection is empty but snapshot latestResult exists", async () => {
+    cpFetchMock.mockImplementation(async (url: string) => {
+      if (url === "/api/project-tree/tasks/task-1") {
+        return {
+          ok: true,
+          data: {
+            id: "task-1",
+            projectId: "proj-1",
+            title: "trace task",
+            prompt: "第一轮用户输入",
+            status: "running",
+            sessionId: "ses-1",
+            selectedModel: "github-copilot:gpt-5.4",
+            strategy: JSON.stringify({
+              selectedAgent: "oracle-enterprise",
+              hookExecutions: [],
+            }),
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/snapshot") {
+        return {
+          ok: true,
+          data: {
+            data: {
+              taskId: "task-1",
+              projectId: "proj-1",
+              currentStatus: "running",
+              currentRunId: "task_run:task-1:ses-1",
+              currentSessionId: "ses-1",
+              latestResult: "snapshot only response",
+              latestResultSummary: "snapshot only response",
+              activeCandidateCount: 0,
+              completedCandidateCount: 0,
+              failedCandidateCount: 0,
+              totalChainSteps: 0,
+              completedChainSteps: 0,
+              updatedAt: "2026-03-22T10:00:03.000Z",
+            },
+            meta: {
+              readSource: "task-domain-projection",
+              complete: false,
+            },
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/timeline-view?runtimeSessionId=ses-1") {
+        return {
+          ok: true,
+          data: {
+            data: [],
+            meta: {
+              readSource: "task-domain-projection",
+              complete: false,
+              itemCount: 0,
+            },
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/branches/ses-1/timeline?includeLineage=true") {
+        throw new Error("should not load service timeline when snapshot latestResult already exists");
+      }
+
+      return { ok: true, data: {} };
+    });
+
+    getSessionMessagesMock.mockRejectedValue(new Error("should not hit runtime messages"));
+
+    const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
+
+    const response = await taskRoutes.request("http://localhost/task-1/execution-trace", {
+      headers: {
+        Authorization: "Bearer test",
+      },
+    });
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload.timelineMeta).toMatchObject({
+      readSource: "task-domain-projection",
+      complete: false,
+      itemCount: 0,
+    });
+    expectNoLegacyTimelineReadSource(payload);
+    expect(payload.snapshot).toMatchObject({ latestResult: "snapshot only response" });
+    expect(payload.timeline).toEqual([]);
+    expect(payload.finalPrompt).toBeNull();
+    expect(payload.latestResponse).toBe("snapshot only response");
+    expectServiceTimelineNotRequested(cpFetchMock, "task-1", "ses-1");
     expect(getSessionMessagesMock).not.toHaveBeenCalled();
   });
 
@@ -833,6 +922,7 @@ describe("task execution trace route", () => {
     expectNoLegacyTimelineReadSource(payload);
     expect(payload.latestResponse).toBeNull();
     expect(payload.finalPrompt).toBeNull();
+    expectNoPromptBackfillSegment(payload, "第一轮用户输入");
     expect(getSessionMessagesMock).not.toHaveBeenCalled();
   });
 
@@ -955,7 +1045,7 @@ describe("task execution trace route", () => {
     );
   });
 
-  test("keeps workflow context and user input segments from the persisted trace path", async () => {
+  test("keeps workflow context without synthesizing task prompt when persisted trace is unavailable", async () => {
     const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
 
     const response = await taskRoutes.request("http://localhost/task-1/execution-trace", {
@@ -976,12 +1066,9 @@ describe("task execution trace route", () => {
           type: "workflow-context",
           label: "工作流注入上下文",
         }),
-        expect.objectContaining({
-          type: "user-input",
-          content: "第一轮用户输入",
-        }),
       ]),
     );
+    expectNoPromptBackfillSegment(payload, "第一轮用户输入");
     expect(getSessionMessagesMock).not.toHaveBeenCalled();
   });
 

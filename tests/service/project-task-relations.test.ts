@@ -1,6 +1,11 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  buildDeleteByIdsStatements,
+  buildTaskNodeDefensiveCleanupStatements,
+  buildTaskProjectionCleanupStatements,
+} from "./service-teardown-helpers";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -104,23 +109,22 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  const taskDependencyCleanupStatements =
+    DATABASE_DIALECT === "postgres" ? buildTaskProjectionCleanupStatements(createdTaskIds) : [];
   const relationCleanupStatements =
     DATABASE_DIALECT === "postgres"
       ? [
-          ...relationIds.map((id) => `DELETE FROM project_tree_links WHERE id='${id}';`),
+          ...buildDeleteByIdsStatements("project_tree_links", relationIds),
           ...createdTaskIds.map(
             (id) =>
               `DELETE FROM project_tree_links WHERE source_node_id='${id}' OR target_node_id='${id}';`,
           ),
-          ...createdTaskIds.map(
-            (id) =>
-              `DELETE FROM project_tree_branches WHERE task_node_id='${id}' OR head_node_id='${id}';`,
-          ),
-          ...createdTaskIds.map((id) => `DELETE FROM project_tree_nodes WHERE id='${id}';`),
+          ...buildTaskNodeDefensiveCleanupStatements(createdTaskIds),
         ]
       : [];
   const statements = [
-    ...createdTaskIds.map((id) => `DELETE FROM tasks WHERE id='${id}';`),
+    ...taskDependencyCleanupStatements,
+    ...buildDeleteByIdsStatements("tasks", createdTaskIds),
     ...relationCleanupStatements,
   ];
 

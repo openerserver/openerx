@@ -756,7 +756,7 @@ export interface OrchestrationStrategy {
 | 多 Session 聚合视图 | Runtime 当前以全局 SSE 为主，会话级观测粒度不足 | BFF 聚合、TaskDetail 多 candidate 视图、执行态解释 |
 | 控制面审计与治理 | Runtime 状态偏执行期本地状态，不承担企业审计职责 | 审批记录、策略变更记录、任务治理摘要 |
 
-### 7.3 建议的责任分层
+### 7.3 历史责任分层草案
 
 > 历史注记：这一小节仍然有参考价值，因为它解释了哪些语义应留在 Control Plane，哪些应继续依赖 Runtime 原语。
 
@@ -798,11 +798,11 @@ OpenCode Runtime
 - 但评判策略、结果解析、winner/merge/manual 的统一模型必须由 OpenerX 定义。
 - 如果 Judge 失败，OpenerX 需要明确 fallback 策略，例如退回人工选择，而不是把失败语义泄漏给 Runtime。
 
-### 7.5 不建议下沉到 Runtime 的内容
+### 7.5 不下沉到 Runtime 的内容
 
-- 不建议把管理员模板权限直接塞进 OpenCode 插件层；Runtime 不应该感知控制面租户和角色模型。
-- 不建议把任务级审计、审批流、模板版本治理下沉到 command / plugin 文件，否则会形成“脚本即策略”的隐性耦合。
-- 不建议在 Runtime 里单独再造一套 Judge / Merge 持久化格式；控制面应保持最终解释权。
+- 不把管理员模板权限直接塞进 OpenCode 插件层；Runtime 不应该感知控制面租户和角色模型。
+- 不把任务级审计、审批流、模板版本治理下沉到 command / plugin 文件，否则会形成“脚本即策略”的隐性耦合。
+- 不在 Runtime 里单独再造一套 Judge / Merge 持久化格式；控制面应保持最终解释权。
 
 ### 7.6 实施原则
 
@@ -812,7 +812,7 @@ OpenCode Runtime
 
 ## 8. MVP 落地边界（历史范围裁剪）
 
-历史范围裁剪建议是：将当时的方案限制在“管理员模板制 + 单执行 / 并行赛马 + 基础 Hook + 基础 Judge”，避免一期范围膨胀。
+历史范围裁剪口径是：将当时的方案限制在“管理员模板制 + 单执行 / 并行赛马 + 基础 Hook + 基础 Judge”，避免一期范围膨胀。
 
 ### 8.1 MVP 必做范围
 
@@ -863,11 +863,14 @@ TaskDetail 展示执行记录、候选结果和最终裁决
 
 ### 9.2 控制面服务与存储层
 
+> 历史语境补充：下表反映的是最初 MVP 讨论时对控制面 service/schema 的观察与改造意图。
+> 当前阅读时，应优先以现有 task-domain migrations、task runs / snapshots / conversation 表结构为准，而不是把这里的 `tasks.executionPlan`、`executionMode` 一类描述当作现行 schema 事实。
+
 | 文件 | 当前状态 | MVP 改动 |
 | ---- | ---- | -------- |
 | `control-plane/service/src/db/schema.ts` | `tasks` 只有 `sessionId`、`agentRunId`、`strategy` | 历史阶段曾新增 `executionMode`、`executionPlan`；当前主路径应以 task domain runs / snapshots 为准，不再扩展 `executionPlan` 语义 |
 | `control-plane/service/src/modules/tasks/routes.ts` | PATCH schema 可更新 `strategy`，但没有 execution fields | 历史阶段曾放宽控制面持久化 `executionMode`、`executionPlan`；当前不应再把 `executionPlan` 作为正式 GET/PATCH 字段 |
-| `control-plane/service/drizzle/*` | 尚无多执行 migration | 历史阶段曾计划新增 `tasks.execution_mode`、`tasks.execution_plan`、`agent_runs.candidate_index`；当前阅读时应结合现有 migration 实际状态，不再把这行视为待办 |
+| `control-plane/service/drizzle/*` | 历史阶段当时尚无多执行 migration | 历史阶段曾计划新增 `tasks.execution_mode`、`tasks.execution_plan`、`agent_runs.candidate_index`；当前阅读时应结合现有 migration 实际状态，不再把这行视为待办 |
 
 ### 9.3 Web UI
 
@@ -885,7 +888,7 @@ TaskDetail 展示执行记录、候选结果和最终裁决
 | `tests/web-ui-bff/user-management.test.ts` | 已覆盖 orchestration strategy 管理员权限 | 保持并补模板制 schema 的管理员权限回归 |
 | `tests/web-ui/*` | TaskDetail 与 Settings 仍基于旧编排 UI | 增加模板页渲染、candidate 展示、judge 展示、旧数据兼容测试 |
 
-### 9.5 推荐实施顺序
+### 9.5 历史实施顺序
 
 1. 先改 BFF 类型与兼容读写。
 2. 再补控制面字段和 migration。

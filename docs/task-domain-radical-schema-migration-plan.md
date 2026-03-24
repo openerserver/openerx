@@ -1,12 +1,12 @@
 # 任务域激进重构 Schema/Migration 计划
 
-> 状态：主体已实现，schema/migration 已进入 cleanup 收口阶段  
+> 状态：主线已完成（2026-03-25；schema/migration 主体已落地，当前仅保留防回退维护、发布验证与可选优化）  
 > 日期：2026-03-22  
 > 作者：GitHub Copilot
 
 ## 1. 文档定位
 
-本文档是 [task-domain-radical-storage-redesign-plan.md](task-domain-radical-storage-redesign-plan.md) 的执行层补充，目标是把激进方案落成可拆分、可排序、可双写、可回滚的 schema/migration 计划。
+本文档是 [task-domain-radical-storage-redesign-plan.md](task-domain-radical-storage-redesign-plan.md) 的执行层补充，当前主要作为 schema/migration 设计来源说明、历史迁移背景与维护基线。
 
 配套草稿文档：
 
@@ -18,6 +18,8 @@
 2. 哪些字段先保守，哪些字段一步到位
 3. 如何双写和对账
 4. 哪一批迁移完成后，哪些旧字段可以降级或停止依赖
+
+历史注记：本文第 2-11 节里涉及 `TaskDetailV3`、tree payload、branch compat 的“准备 / 切换 / 收缩”表述，保留的是当时的迁移设计基线，不应再解读为当前主线待办。当前仓库状态以第 12 节以及 [task-domain-cleanup-executable-backlog.md](task-domain-cleanup-executable-backlog.md)、[task-domain-cleanup-closure-plan.md](task-domain-cleanup-closure-plan.md) 的收尾口径为准。
 
 ## 2. 总体迁移策略
 
@@ -75,7 +77,7 @@
 
 ## 3. 迁移批次设计
 
-建议拆成 6 个 migration 批次。
+历史设计拆分为 6 个 migration 批次。
 
 ### 批次 A：任务与执行事实表
 
@@ -155,7 +157,7 @@
 
 **迁移阶段**：批次 A
 
-首版字段建议：
+首版字段草案：
 
 必须一步到位：
 
@@ -198,7 +200,7 @@
 
 **迁移阶段**：批次 A
 
-首版字段建议：
+首版字段草案：
 
 必须一步到位：
 
@@ -224,6 +226,8 @@
 
 初始回填策略：
 
+历史语境说明：这里描述的是迁移设计早期“如何从旧 task blob 和 executionPlan 粗略生成第一批 run 数据”的方案起点。当前运行时已经不再依赖 `executionPlan` 作为主模型，因此本段应理解为历史回填策略，而不是现行主路径仍在执行的逻辑。
+
 第一阶段不追求完整历史回填，只做：
 
 1. 对活跃 task 生成一条 synthetic current run
@@ -238,7 +242,7 @@
 
 **迁移阶段**：批次 A
 
-首版字段建议：
+首版字段草案：
 
 必须一步到位：
 
@@ -250,7 +254,7 @@
 6. `node_key`
 7. `status`
 
-建议首版就加：
+历史草案同步纳入：
 
 1. `candidate_index`
 2. `chain_step_index`
@@ -262,6 +266,8 @@
 8. `finished_at`
 
 初始回填策略：
+
+历史语境说明：以下 `task_run_nodes` 生成规则对应的是早期从 `executionPlan` 回填 node graph 的迁移思路。当前 node graph 的正式来源已经转向 task-domain writes / projections，本段只保留为迁移期背景。
 
 从 `executionPlan` 解析生成：
 
@@ -275,7 +281,9 @@
 
 首版策略：
 
-首版只支持 `depends_on`，后续再补 `judges` / `spawned_from`。
+历史语境说明：这里的 `depends_on` / `executionPlan.dependsOn` 对照关系只用于解释当时如何从旧 runtime plan 过渡到 `task_run_edges`。当前实现不应再把 `executionPlan` 视为现行边关系来源。
+
+历史草案先只支持 `depends_on`，其余边类型留在后续扩展语境。
 
 理由：
 
@@ -286,7 +294,7 @@
 
 **迁移阶段**：批次 B
 
-首版字段建议：
+首版字段草案：
 
 必须一步到位：
 
@@ -299,7 +307,7 @@
 7. `source_type`
 8. `runtime_session_id`
 
-建议首版就加：
+历史草案同步纳入：
 
 1. `run_node_id`
 2. `root_session_id`
@@ -319,7 +327,7 @@
 
 **迁移阶段**：批次 B
 
-首版字段建议：
+首版字段草案：
 
 必须一步到位：
 
@@ -332,7 +340,7 @@
 7. `raw_payload`
 8. `created_at`
 
-建议首版就加：
+历史草案同步纳入：
 
 1. `task_id`
 2. `run_id`
@@ -432,7 +440,7 @@
 
 ### 5.1 `project_tree_nodes`
 
-建议新增：
+历史草案新增：
 
 1. `ref_type TEXT`
 2. `ref_id TEXT`
@@ -444,7 +452,7 @@
 
 ### 5.2 `agent_runs`
 
-建议新增：
+历史草案新增：
 
 1. `run_id TEXT REFERENCES task_runs(id)`
 2. `run_node_id TEXT REFERENCES task_run_nodes(id)`
@@ -453,14 +461,14 @@
 
 ### 5.3 `runtime_usage_ledgers`
 
-建议新增：
+历史草案新增：
 
 1. `run_id TEXT REFERENCES task_runs(id)`
 2. `run_node_id TEXT REFERENCES task_run_nodes(id)`
 
 ### 5.4 `runtime_usage_ledger_steps`
 
-建议新增：
+历史草案新增：
 
 1. `run_id TEXT REFERENCES task_runs(id)`
 2. `run_node_id TEXT REFERENCES task_run_nodes(id)`
@@ -600,9 +608,9 @@
 
 对当前仓库来说，这一轮 schema/migration 主体建设已经完成；剩余重点不再是继续建表，而是持续压缩旧字段、历史事件与 tree payload 的兼容暴露面。
 
-## 12. 当前进度 / 剩余 migration 收口项
+## 12. 当前基线 / migration 维护要点
 
-这一节用于补充当前仓库实际推进状态，说明哪些 migration 批次已经完成，哪些仍停留在兼容期，哪些属于旧模型退出前仍需持续维护的收口动作。
+这一节用于补充当前仓库实际推进状态，说明哪些 migration 批次已经完成，以及后续哪些内容只属于兼容边界维护、发布验证或可选优化。
 
 ### 12.1 当前进度
 
@@ -624,44 +632,46 @@
 
 这意味着本文档最初设定的“预埋事实表、预埋 projection 表、补齐桥接字段、补齐索引”已经完成，当前主要矛盾不再是建表本身，而是旧模型退场和 migration 闭环收口。
 
-### 12.2 已进入但未闭环的迁移阶段
+### 12.2 当前兼容边界与维护状态
 
-虽然上述 migration 批次都已落地，但 cleanup 仍未完全闭环，原因如下。
+虽然上述 migration 批次都已落地，但仍需保留少量兼容边界说明，原因如下。
 
 1. service / BFF 主路径已经不再把 `executionPlan`、`parallelRunHistory` 当作正式读写字段；当前剩余内容主要落在显式兼容测试、历史文档和少量 repair-only 语义。
 2. `project_tree_events` 已停止继续主写消息 snapshot 兼容事件，但历史事件、索引和少量读取链路仍然保留；它们当前应被视为历史回放、审计窗口与测试清理副产物，而不再承担消息主路径职责。
-3. `project_tree_nodes.content_json` 已开始从 task 主事实镜像退回到“结构导航 + 少量 cache”，但仍残留少数兼容字段，尚未完全收口。
-4. `project_tree_nodes.content_json` 仍保留少量历史兼容字段，相关白名单边界还需要继续收紧并文档化。
+3. `project_tree_nodes.content_json` 已从 task 主事实镜像退回到“结构导航 + 少量 cache”，当前白名单边界已经形成，并转入防回退维护。
+4. `project_tree_nodes.content_json` 仍保留少量历史兼容字段，但相关白名单边界已文档化；后续重点是不允许新增实现绕开该边界。
+5. branch compat 主实现已迁入 `task-branch-compat-read.ts`，`task-session-read.ts` 已收缩为 conversation/session utility façade；剩余主要是 compat 测试命名与文档语义同步，而不是继续做主路径拆分。
 
 因此当前状态更准确地说是：
 
 1. schema/migration 预埋阶段完成。
 2. 双写与 projection 阶段已完成主要接线。
-3. 旧模型退出阶段已进入收尾，重点从代码主路径切换到文档、测试与历史遗留清点。
+3. 旧模型退出阶段已完成主线收口，后续重点转向文档维护、测试防回退与历史遗留清点。
 
-### 12.3 剩余 migration 收口项
+### 12.3 migration 后续维护重点
 
-从 migration 和 schema 收口角度看，当前剩余工作主要集中在以下几项。
+从 migration 和 schema 维护角度看，后续重点主要集中在以下几项。
 
 1. `executionPlan`、`parallelRunHistory` 相关工作已经从“主路径切换”降级为“历史兼容清点”：保持停写/退役状态，继续清理文档、测试与 repair-only 语义。
-2. 明确 `project_tree_events` 消息 snapshot 作为历史回放、审计窗口与测试清理副产物的保留边界与最终停读条件，避免旧链路无限期共存。
-3. 为 `project_tree_nodes.content_json` 设计瘦身白名单，区分“保留的导航/展示字段”和“必须迁出的业务事实字段”。
-4. cleanup 文档、task checklist 与独立 backlog 已建立；后续只需要围绕白名单与少量历史名词继续保持同步。
-5. 一致性对账基线与 gating artifact 已建立；后续只需要持续用于发布验证，而不是再次证明 schema 是否可切主读。
+2. 继续把 `project_tree_events` 约束在历史回放、审计窗口与测试清理副产物语境内，避免旧链路被重新解释成运行时主路径。
+3. 保持 `project_tree_nodes.content_json` 的瘦身白名单边界，区分“保留的导航/展示字段”和“必须迁出的业务事实字段”，并阻断回退。
+4. branch compat 代码结构收口已完成；后续只需要围绕 compat 测试、历史命名与文档解释继续压缩误导性暴露面。
+5. cleanup 文档、task checklist 与独立 backlog 已建立；主读模型唯一化验证也已完成一轮显式收口，后续只需要围绕白名单、少量历史名词与防回退维护继续保持同步。
+6. 一致性对账基线与 gating artifact 已建立；后续只需要持续用于发布验证，而不是再次证明 schema 是否可切主读。
 
-### 12.4 收尾任务视图
+### 12.4 维护任务视图
 
-本节保留为收尾范围归纳；按当前仓库状态，应把它理解为历史 migration 计划遗留的 cleanup 分类，而不是新的核心建设清单。
+本节保留为维护范围归纳；按当前仓库状态，应把它理解为历史 migration 计划遗留的 cleanup 分类，而不是新的核心建设清单。
 
 1. Cleanup task A：维持 `executionPlan`、`parallelRunHistory` 的退役状态，并继续压缩显式兼容测试、历史文档和 repair-only 语义。
 2. Cleanup task B：继续收窄 `project_tree_events` 消息 snapshot 的保留边界，直至只保留受控历史回放、审计窗口与测试清理副产物模式。
 3. Cleanup task C：继续缩减 `project_tree_nodes.content_json` 中的 task 业务字段，直到只剩树导航 cache 与少量未规范化元数据。
-4. Cleanup task D：完成 `TaskDetailV3`、trace、task list、monitor 对旧字段的主读切换验证。
+4. Cleanup task D：`TaskDetailV3`、trace、task list、monitor、project overview、Dashboard 已完成一轮显式主读切换验证；后续进入防回退维护。
 5. Cleanup task E：已输出对账结果和退役准入门槛，并落地为可持久化 JSON artifact 的 gating artifact。
 
 ### 12.5 Migration 完成标准
 
-可以将本 migration 计划视为“完成”的最低标准定义为：
+以下条件当前已作为本 migration 计划“主线已完成”的判据与后续维护基线：
 
 1. 新表不只是存在，而且已经成为 task/run/message/timeline 的主写与主读来源。
 2. `executionPlan`、`parallelRunHistory` 不再作为主路径写入和主路径读取依据。
@@ -669,9 +679,9 @@
 4. `project_tree_nodes.content_json` 不再承担 task 业务事实主存储。
 5. 新旧模型已完成一轮可重复的对账，并具备明确的停写、降级、回滚边界。
 
-按当前仓库状态，前四项已经进入稳定收口阶段，第 5 项也已具备 audit artifact 形态；剩余差距主要集中在 `content_json` 白名单与少量兼容文案的继续压缩。
+按当前仓库状态，上述条件已经具备；后续重点只剩 `content_json` 白名单、防回退文案与发布验证的持续维护。
 
-继续推进时，优先参考以下收尾文档，而不是回到这份历史 schema 计划重新排主线：
+后续维护时，优先参考以下收尾文档，而不是回到这份历史 schema 计划重新排主线：
 
 1. [docs/task-domain-cleanup-executable-backlog.md](task-domain-cleanup-executable-backlog.md)
 2. [docs/task-domain-cleanup-closure-plan.md](task-domain-cleanup-closure-plan.md)

@@ -1,7 +1,7 @@
 import { cpFetch } from "../../lib/control-plane-client";
 import {
-  fetchTaskSessionLineageRecords,
-  upsertTaskSessionLineageRecord,
+  fetchBranchCompatLineageRecords,
+  upsertBranchCompatLineageRecord,
 } from "./task-session-compat";
 import { syncTaskWorkflowTerminalState } from "./workflow-sync";
 
@@ -28,12 +28,12 @@ interface FinalizeTaskStateInput {
   syncWorkflowTerminalState?: boolean;
 }
 
-async function deactivateTaskSession(
+async function deactivateActiveBranchCompatSession(
   authorization: string,
   taskId: string,
   sessionId: string | undefined,
 ): Promise<void> {
-  const lineageResult = await fetchTaskSessionLineageRecords(taskId, authorization);
+  const lineageResult = await fetchBranchCompatLineageRecords(taskId, authorization);
   if (!lineageResult.ok) {
     return;
   }
@@ -48,7 +48,7 @@ async function deactivateTaskSession(
     return;
   }
 
-  await upsertTaskSessionLineageRecord(taskId, authorization, {
+  await upsertBranchCompatLineageRecord(taskId, authorization, {
     runtimeSessionId: record.runtimeSessionId,
     isActive: false,
   });
@@ -96,7 +96,11 @@ export async function finalizeTaskState(input: FinalizeTaskStateInput): Promise<
     return false;
   }
 
-  await deactivateTaskSession(input.authorization, input.taskId, resolvedSessionId);
+  await deactivateActiveBranchCompatSession(
+    input.authorization,
+    input.taskId,
+    resolvedSessionId,
+  );
 
   if (input.syncWorkflowTerminalState !== false) {
     await syncTaskWorkflowTerminalState({

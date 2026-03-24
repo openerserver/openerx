@@ -1,12 +1,12 @@
 # 任务域收尾清理计划
 
-> 状态：执行中，A/B/C/D/E1/F1 已完成主要收口
+> 状态：主线已完成（2026-03-25；A/B/C/D/E/F 已完成，后续仅保留防回退维护、发布验证与可选优化）
 > 日期：2026-03-24
 > 作者：GitHub Copilot
 
 ## 1. 文档目的
 
-本文档把任务域三份激进重构文档里已经反复出现的收尾事项压缩成一份 cleanup 总览，用于记录已完成项、剩余项和验收口径，避免后续继续在历史文档里来回翻找。
+本文档把任务域三份激进重构文档里已经反复出现的收尾事项压缩成一份 cleanup 总览，用于记录已完成项、当前基线和验收口径，避免后续继续在历史文档里来回翻找。
 
 如果需要按文件直接执行代码收尾，优先使用 [task-domain-cleanup-executable-backlog.md](task-domain-cleanup-executable-backlog.md)；本文保留的是任务包划分、边界说明和验收口径。
 
@@ -22,7 +22,7 @@
 
 1. 核心 schema、bridge 字段、projection 表已经落地。
 2. 主问题已经不是“缺新模型”，而是“旧模型如何有边界地退出”。
-3. 后续工作应以 cleanup 为中心，而不是继续扩写 radical 方案主体。
+3. 后续维护应以防回退、发布验证和可选优化为中心，而不是继续扩写 radical 方案主体。
 
 ## 2. 收尾目标
 
@@ -31,7 +31,7 @@
 1. `executionPlan`、`parallelRunHistory` 不再参与主业务判断。
 2. `project_tree_events` 不再承担消息 canonical storage 或消息主投影输入职责。
 3. `project_tree_nodes.content_json` 不再承担 task 业务事实主存储职责。
-4. `TaskDetailV3`、trace、task list、monitor 的主读链路对旧模型依赖可被验证地清零或压缩到受控兼容面。
+4. `TaskDetailV3`、trace、task list、monitor、project overview、Dashboard 的主读链路对旧模型依赖可被验证地清零或压缩到受控兼容面。
 5. 对账结果、cleanup migration 和文档清单形成可重复执行的闭环，而不是停留在口头计划。
 
 ## 3. 非目标
@@ -47,14 +47,14 @@
 
 | 优先级 | 工作项 | 影响面 | 验收标准 |
 | --- | --- | --- | --- |
-| P0 | 清理 `executionPlan` 与 `parallelRunHistory` 剩余兼容引用 | service, web-ui-bff, tests, docs | 主路径代码不再读写这两个字段；仅允许保留在显式兼容测试、历史文档或受控 repair-only 分支中；剩余保留点可枚举 |
-| P0 | 收窄 `project_tree_events` 的消息兼容层 | service, web-ui-bff, trace 读取链路 | `conversation_messages` 与 `task_timeline_views` 成为消息主读来源；`project_tree_events` 只保留历史回放或显式 fallback 语义 |
-| P0 | 完成主读切换验证 | TaskDetailV3, trace, task list, monitor | 主页面不再依赖 tree task snapshot、旧 message fallback 或 runtime fallback 才能成立；有一轮可追溯验证结果 |
-| P1 | 继续瘦身 `project_tree_nodes.content_json` | service, project tree, BFF 聚合 | task 业务事实字段继续迁出；`content_json` 仅保留树导航、少量 cache 和必要兼容元数据；形成白名单 |
-| P1 | 形成对账报告与 gating artifact | db audit, CI/check scripts | 至少覆盖 `status`、`currentSession`、`runGraph`、`messageCount`、`timelineItemCount` 五个口径；结果可重复执行 |
-| P1 | 补 cleanup migration 计划或 checklist | docs, migration backlog | 收尾动作形成明确 migration backlog、执行顺序和验收标准 |
-| P2 | 压缩显式兼容测试与 repair-only 语义 | tests, maintenance code | 兼容测试范围可枚举；repair-only 分支有边界说明；不存在无文档旧模型依赖 |
-| P2 | 清理历史文档中的未来时表述 | docs | 三份 radical 文档不再把已完成 schema 建设写成待做事项；未完成项统一指向本计划 |
+| P0 | `executionPlan` / `parallelRunHistory` 兼容引用边界 | service, web-ui-bff, tests, docs | 主路径代码已不再读写这两个字段；剩余保留点仅限显式兼容测试、历史文档或迁移语境 |
+| P0 | `project_tree_events` 消息兼容层收口 | service, web-ui-bff, trace 读取链路 | `conversation_messages` 与 `task_timeline_views` 已成为消息主读来源；`project_tree_events` 仅保留历史回放或演进说明语义 |
+| P0 | 主读切换验证基线 | TaskDetailV3, trace, task list, monitor, project overview, Dashboard | 主页面不再依赖 tree task snapshot、旧 message fallback 或 runtime fallback 才能成立；已形成一轮可追溯验证结果 |
+| P1 | `project_tree_nodes.content_json` 白名单基线 | service, project tree, BFF 聚合 | task 业务事实字段已迁出；`content_json` 仅保留树导航、有限 cache 和必要 compat 元数据，并已形成白名单 |
+| P1 | 对账报告与 gating artifact | db audit, CI/check scripts | 已覆盖 `status`、`currentSession`、`runGraph`、`messageCount`、`timelineItemCount` 五个口径，结果可重复执行 |
+| P1 | cleanup migration backlog / checklist | docs, migration backlog | 已形成明确 backlog、执行顺序和验收标准，后续仅作维护 |
+| P2 | 显式兼容测试与 repair-only 语义维护 | tests, maintenance code | 兼容测试范围可枚举；repair-only 分支有边界说明；不存在无文档旧模型依赖 |
+| P2 | 历史文档状态维护 | docs | radical 文档已不再把已完成 schema 建设写成待做事项；后续仅同步外围历史文档 |
 
 ## 5. 任务包拆分
 
@@ -66,14 +66,14 @@
 2. 区分哪些属于显式兼容、哪些属于 repair-only、哪些已经可以删除。
 3. 输出一份保留点清单，作为后续 cleanup 任务输入。
 
-建议范围：
+历史盘点范围：
 
 1. service task routes / projector / reconcile / finalize 相关代码。
 2. web-ui-bff task routes / trace / branches / workflow 相关代码。
 3. 测试中显式构造旧字段的 case。
 4. 文档中仍把旧字段当主语义描述的段落。
 
-建议产出：
+历史盘点产出：
 
 1. 一份 inventory 文档或 checklist。
 2. 每个保留点标注为：
@@ -122,10 +122,10 @@
 
 #### 5.1.3 任务包 A 的当前判断
 
-第一轮盘点后，可以把任务包 A 拆成两个后续动作：
+第一轮盘点后的落地结论：
 
-1. 保留显式兼容测试，但继续评估是否能把同类 legacy-input case 合并到更少的专门测试中。
-2. 不再把 source 主路径视为 cleanup 重点，后续清理重点转向历史 migration 注记和文档语义收口。
+1. 保留显式兼容测试，但继续评估是否能把同类 legacy-input case 合并到更少、命名更直白的 compat-only 测试中。
+2. source 主路径已不再是 cleanup 重点；由于当前未发现需要保留旧字段读写的 repair-only 分支，后续仅需维护显式兼容测试、历史 migration 注记和文档语义。
 
 ### 5.2 任务包 B：消息兼容层收窄
 
@@ -137,13 +137,13 @@
 2. 将其压缩到“历史回放”或“受控 fallback”模式。
 3. 禁止新主路径继续从 tree snapshot message 构建 canonical timeline。
 
-建议范围：
+历史盘点范围：
 
 1. service `task-branch-compat-read`、`task-session-read` façade、timeline/projection 相关路径。
 2. web-ui-bff branches/messages、trace、session tree 相关聚合逻辑。
 3. 已退出的 runtime fallback 与 tree fallback 的历史调用边界，以及仍保留的兼容窗口。
 
-建议产出：
+历史盘点产出：
 
 1. 一份边界说明：哪些 API 允许 fallback，哪些 API 不允许。
 2. 一组测试，证明主路径不再依赖 tree snapshot message。
@@ -202,11 +202,11 @@
 
 #### 5.2.4 任务包 B 的当前判断
 
-第一轮盘点后，任务包 B 可以拆成三个后续动作：
+第一轮盘点后的落地结论：
 
 1. 收窄 BFF outward contract：已完成，trace 接口不再对前端暴露 `legacy-project-tree-events` 与 `conversation-table+legacy-fallback`。
 2. 清理测试与命名：已完成，service 侧残留的 “legacy tree event history / tree cache” 测试命名已改为当前实现语义。
-3. 文档收口：统一声明 `project_tree_events` 在消息链路中的剩余职责只限历史回放、审计窗口或测试环境清理。
+3. 文档收口已完成当前主线同步：`project_tree_events` 在消息链路中的剩余职责只限历史回放、审计窗口或测试环境清理。
 
 #### 5.2.5 BFF outward contract 清单
 
@@ -258,11 +258,12 @@ execution trace 对前端暴露的 `timelineMeta.readSource` 只保留当前真�
 ##### 当前结论（2026-03-24）
 
 1. task/project 两条 trace 路由都已移除 runtime message fallback，公开 contract 不再包含 `runtime-fallback`。
-2. `service timeline` 不再被定义为“旧 fallback 层”，而是正式但受限的 secondary source。
-3. 这条 secondary source 的启用边界已经收窄为：
+2. cached messages 的 runtime fallback 仍只允许存在于 session message compatibility contract，用于 lineage message 拼接、branch 预览与其他非公开 session consumer；它不属于公开 execution trace contract。
+3. `service timeline` 不再被定义为“旧 fallback 层”，而是正式但受限的 secondary source。
+4. 这条 secondary source 的启用边界已经收窄为：
    1. projection timeline 为空
    2. projection timeline 不可用
-4. 只要 projection 已返回非空 timeline，即使 `complete=false`，路由也保留显式 incomplete，不再切到 service timeline 覆盖。
+5. 只要 projection 已返回非空 timeline，即使 `complete=false`，路由也保留显式 incomplete，不再切到 service timeline 覆盖。
 
 ##### `timelineMeta.readSource` 语义
 
@@ -308,32 +309,63 @@ execution trace 对前端暴露的 `timelineMeta.readSource` 只保留当前真�
 2. 明确哪些字段属于结构导航、cache、兼容元数据。
 3. 明确哪些 task 业务事实字段必须继续迁出或停止使用。
 
-建议范围：
+历史盘点范围：
 
 1. task node 的 `content_json`。
 2. session node 的 `content_json`。
 3. 当前 BFF / service 对这些字段的读取点。
 
-建议产出：
+历史盘点产出：
 
-1. 一份字段白名单表。
-2. 一组后续 cleanup migration 说明。
+- 一份与总方案/backlog 同步的字段白名单表：
+
+| 字段组 | task node | session node | 仅历史 migration | 说明 |
+| --- | --- | --- | --- | --- |
+| task business facts：`prompt`、`status`、`sessionId`、`result`、`category`、`strategy`、`repoId`、`workspaceRoot`、`baseRevision`、`workingBranch`、`selectedModel`、`credentialId`、`agentRunId`、`userId` | 禁止 | 禁止 | 保留 | 这些字段现已由 `tasks`、`task_snapshots`、`task_runs` 等聚合/投影承担；若仍出现在树里，只能视为历史迁移产物，不得重新成为运行时读写面。 |
+| execution/flow 字段：`executionMode`、`autoAdvanceStages`、`executionPlan`、`parallelRunHistory`、`startedAt`、`finishedAt` | 禁止 | 禁止 | 保留 | 这些字段已经退出 task node 运行时语义；主链应以 orchestration kind、domain run、snapshot 和显式 strategy/repair-only 语义为准。 |
+| git/change 摘要：`changesSummary`、`gitAuthorName`、`gitAuthorEmail`、`gitCommitterName`、`gitCommitterEmail`、`finalCommitSha`、`finalBranchName` | 禁止 | 禁止 | 保留 | 当前结构化变更摘要与 git 元数据应走 task aggregate / projection；树节点不再承担这些业务事实镜像。 |
+| branch compat lineage 元数据：`sourceType`、`parentRuntimeSessionId`、`forkedFromMessageId` | 禁止 | 允许 | 禁止 | 这是当前唯一仍允许保留在 `session` node `content_json` 中的运行时 payload，用于 branch/session lineage 兼容语义；它们不是 task 主状态字段。 |
+| 其他候选字段 | 禁止，默认拒绝 | 禁止，默认拒绝 | 按历史语境单独说明 | 除非能证明该字段只承担树结构/lineage 元数据且无法由现有列或聚合替代，否则不应进入新的 whitelist。 |
+
+补充边界：
+
+- `runtimeSessionId`、`branchName`、`contentText`、`refType`、`refId`、`isActive` 等应优先使用树节点独立列表达；它们不是 `content_json` whitelist 的一部分。
+- session node 当前允许保留的仅是 `sourceType`、`parentRuntimeSessionId`、`forkedFromMessageId` 这一组 branch compat lineage 元数据；不得顺手回填 task 执行状态、摘要、strategy 或 message snapshot。
+- 历史 migration 中曾写入 task node `content_json` 的旧字段，应继续只保留为演进说明、回填来源或防回退测试语境，不得被重新解释为现行 runtime contract。
+
+当前测试矩阵：
+
+| 字段组 | 已有护栏测试 | 还缺的 session node lineage-only whitelist 测试 |
+| --- | --- | --- |
+| task business facts：`prompt`、`status`、`sessionId`、`result`、`category`、`strategy`、`repoId`、`workspaceRoot`、`baseRevision`、`workingBranch`、`selectedModel`、`credentialId`、`agentRunId`、`userId` | [tests/service/project-tree-routes.test.ts](../tests/service/project-tree-routes.test.ts) 已覆盖 task patch 后 task node `content_json = {}`、且不回写 `status`、`sessionId`、`selectedModel`、`workingBranch`、`result`；同文件现已补充 session node lineage-only whitelist 精确键集合护栏测试，覆盖 create / activate / archive 后不回写 `status`、`result`、`strategy`、`selectedModel`、`workingBranch` 等 task 字段；[tests/service/task-operating-runtime-tree.test.ts](../tests/service/task-operating-runtime-tree.test.ts) 已覆盖运行态 strategy 不再镜像进 tree payload；[tests/web-ui/project-tree-task-composable.test.ts](../tests/web-ui/project-tree-task-composable.test.ts) 已覆盖即使 tree payload 带旧值，BFF 主读链仍以 task read model 为准。 | 当前未再缺少专门的 session node task-business-field 负向护栏；后续只需在新增 branch 写路径时复用同一精确键集合断言。 |
+| execution/flow 字段：`executionMode`、`autoAdvanceStages`、`executionPlan`、`parallelRunHistory`、`startedAt`、`finishedAt` | [tests/service/project-tree-routes.test.ts](../tests/service/project-tree-routes.test.ts) 已覆盖 task node 不回写 `executionMode`、`executionPlan`、`parallelRunHistory`，并覆盖 detail/list 在 tree payload stale 时仍以 aggregate 为准；同文件还覆盖旧 `strategy_json` 不会恢复 execution 字段，并新增 session node lineage-only whitelist 精确键集合护栏测试，锁定 branch create / activate / archive 后不会写回 execution/flow 字段；[tests/service/transform-export.test.ts](../tests/service/transform-export.test.ts) 已覆盖历史导出合成 task node 时不再镜像 `executionPlan`、`executionMode`、`autoAdvanceStages`。 | 当前未再缺少专门的 session node execution/flow 负向护栏；后续只需在新增 branch mutation 时保持同一断言。 |
+| git/change 摘要：`changesSummary`、`gitAuthorName`、`gitAuthorEmail`、`gitCommitterName`、`gitCommitterEmail`、`finalCommitSha`、`finalBranchName` | [tests/service/project-tree-routes.test.ts](../tests/service/project-tree-routes.test.ts) 已覆盖 task node 不回写 `gitCommitterName`、`gitCommitterEmail`，并新增 session node lineage-only whitelist 精确键集合护栏测试，锁定 branch compat 不会写回 `changesSummary`、git author / committer 或最终提交摘要；[tests/web-ui/project-tree-task-composable.test.ts](../tests/web-ui/project-tree-task-composable.test.ts) 已覆盖 tree payload 中旧 `changesSummary` 不会覆盖 BFF 读模型。 | 当前未再缺少专门的 session node git/change 负向护栏；后续只需保持精确键集合断言不被放宽。 |
+| branch compat lineage 元数据：`sourceType`、`parentRuntimeSessionId`、`forkedFromMessageId` | [tests/service/task-conversation-session-sync.test.ts](../tests/service/task-conversation-session-sync.test.ts) 已覆盖 root / fork session 同步到 `conversation_sessions` 时保留 lineage 元数据；[tests/service/project-tree-routes.test.ts](../tests/service/project-tree-routes.test.ts) 已覆盖 branch 创建、激活、归档与列表读取，并新增 session node lineage-only whitelist 精确键集合护栏测试，直接断言运行时 session node `content_json` 只允许 `sourceType`、`parentRuntimeSessionId`、`forkedFromMessageId` 这一组键；[tests/service/tree-task-aggregations.test.ts](../tests/service/tree-task-aggregations.test.ts) 已覆盖 fork branch timeline / lineage 聚合使用 `parentRuntimeSessionId` 与 `forkedFromMessageId`。 | 当前未再缺少核心 session node lineage-only whitelist 护栏；后续仅需在出现新的 branch compat 字段诉求时先更新白名单表再补测试。 |
+| 其他候选字段 | 当前已有护栏以 task node 的显式空 payload、主读不回退旧 payload、导出不再镜像旧字段，以及 session node 的精确键集合断言四类测试为主，足以阻断已知历史字段回流。 | 当前未再缺少默认拒绝型 session 测试；现有精确键集合断言已可作为未来新增字段的统一闸门。 |
+
+- 一组后续 cleanup migration 说明。
 
 验收标准：
 
 1. `content_json` 中的 task 业务事实字段有明确去留边界。
-2. 树节点回归到结构导航和有限 cache 职责。
+2. 上述测试矩阵已补齐一轮 session node lineage-only whitelist 精确键集合护栏；后续 branch mutation / compat 写路径必须复用同一精确键集合断言。
+3. 树节点回归到结构导航和有限 cache 职责。
+4. 继续保留一轮 session node lineage-only whitelist 三层闸门回归测试，且测试命名需直接暴露这一语义：
+   1. storage 层：以 [tests/service/project-tree-storage.test.ts](../tests/service/project-tree-storage.test.ts) 锁定 session node create / update / archive 写面不会扩张 session node lineage-only whitelist payload。
+   2. branch-write 层：以 [tests/service/task-branch-write.test.ts](../tests/service/task-branch-write.test.ts) 锁定 `upsertTaskBranch()`、`activateTaskBranch()`、`archiveTaskBranch()` 三条写路径对 storage / session sync 的参数集合不扩张，且 archive 路径不会回落到额外 payload 同步，从而保持 session node lineage-only whitelist 不被放宽。
+   3. route 层：以 [tests/service/project-tree-routes.test.ts](../tests/service/project-tree-routes.test.ts) 锁定 create / activate / archive / legacy-lineage 场景下，实际落库后的 session node payload 仍然保持在 session node lineage-only whitelist 内。
+5. 若未来新增 branch compat 字段，必须先同步更新白名单表、测试矩阵与 [tests/service/task-route-test-helpers.ts](../tests/service/task-route-test-helpers.ts) 中的 `assertSessionNodeLineageOnlyContentJson(...)` 共享 helper，再允许修改运行时写路径。
 
 ### 5.4 任务包 D：主读切换闭环验证
 
-状态：已建立基础验证矩阵，但任务仍未完成。
+状态：已完成一轮显式验证，后续进入防回退维护。
 
 目标：
 
 1. 证明主要页面和接口已真正站在新模型上。
 2. 把“看起来已经切了”变成“有证据地确认切了”。
 
-建议范围：
+历史盘点范围：
 
 1. TaskDetailV3。
 2. task execution trace。
@@ -342,13 +374,15 @@ execution trace 对前端暴露的 `timelineMeta.readSource` 只保留当前真�
 
 当前产出：
 
-1. 已补 TaskDetailV3、task list、monitor、project overview 的主读模型验证矩阵。
+1. 已补 TaskDetailV3、task list、monitor、project overview、Dashboard 的主读模型验证矩阵。
 2. 已补 task/project execution trace 路由的 projection-first、secondary-source、explicit-incomplete 回归用例。
+3. 已补 task snapshot list/detail 两条 BFF 聚合入口的显式验证，确认 snapshot 合并结果会覆盖旧 task 行语义。
 
 当前结论：
 
 1. 主路径对旧模型依赖已经可枚举，且已压缩到受控兼容面。
-2. 新模型已经可以单独支撑主要页面和公开 trace 接口读取，但主读模型唯一化验证仍未覆盖所有剩余页面与兼容边界。
+2. 新模型已经可以单独支撑主要页面和公开 trace 接口读取，当前已完成一轮可追溯的主读模型唯一化验证。
+3. 后续重点不再是补新的总验证草案，而是保持这些测试持续阻断 tree payload、runtime fallback 与旧混合读链回流。
 
 ### 5.5 任务包 E：对账与 Cleanup Gating
 
@@ -407,7 +441,7 @@ execution trace 对前端暴露的 `timelineMeta.readSource` 只保留当前真�
 1. radical 三份文档已经不再承担主 backlog 职责。
 2. cleanup backlog 已具备独立入口、执行顺序和完成标准。
 
-## 6. 当前执行顺序与剩余重点
+## 6. 当前基线与后续维护重点
 
 已完成顺序：
 
@@ -418,15 +452,15 @@ execution trace 对前端暴露的 `timelineMeta.readSource` 只保留当前真�
 5. 任务包 E：对账与 Cleanup Gating
 6. 任务包 F：Cleanup Migration 与文档收口
 
-当前剩余重点：
+后续维护重点：
 
-1. 继续收窄 `project_tree_nodes.content_json` 白名单，明确仍保留的导航/cache/兼容字段边界。
-2. 继续压缩显式兼容测试与少量历史文档中的旧名词暴露。
-3. 将 audit artifact 持续纳入发布前验证，而不是只停留在一次性收尾动作。
+1. 保持 `project_tree_nodes.content_json` 白名单边界不被放宽，新增 branch compat 字段时必须先补文档和护栏测试。
+2. 继续压缩显式兼容测试与少量外围历史文档中的旧名词暴露。
+3. 将 audit artifact 持续纳入发布前验证，而不是把它视为一次性收尾动作。
 
 ## 7. 完成标准
 
-只有当以下条件同时满足时，任务域 radical 重构才算从“主体已实现，待收尾清理”升级为“迁移已收口”：
+以下条件当前已作为“迁移已收口”的完成判据与后续维护基线：
 
 1. task 主状态不再依赖 tree task snapshot 中的 `executionPlan` 和 `parallelRunHistory`。
 2. `TaskDetailV3`、trace、project overview 主路径已经与历史 tree 消息回放语义解耦，不再依赖它来解释当前运行时来源。
@@ -440,8 +474,8 @@ execution trace 对前端暴露的 `timelineMeta.readSource` 只保留当前真�
 本文档的定位是：
 
 1. 不替代 radical 方案主体。
-2. 优先接管仍未彻底收口的 cleanup 事项。
-3. 作为后续 cleanup 工作的唯一总览入口。
+2. 优先承接防回退维护、发布验证与少量可选优化说明。
+3. 作为后续 cleanup / maintenance 工作的唯一总览入口。
 
 后续更新原则：
 

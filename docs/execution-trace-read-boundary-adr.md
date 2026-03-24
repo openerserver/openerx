@@ -73,6 +73,12 @@ runtime 原始 message 相关接口仍可保留在 runtime 协议和诊断语境
 
 换句话说，runtime 提供的是协议事实、控制面交互和诊断能力，不是 task-domain trace read model。
 
+当前实现补充说明：BFF `GET /api/tasks/:taskId/execution-trace` 与 `GET /api/projects/:projectId/task-execution-trace/:taskId` 都已移除基于 `task.prompt` 的用户输入补写；当 projection timeline 与 service timeline 都不可用时，返回值会保留显式 incomplete 元信息，而不是再合成 prompt segment。
+
+补充边界说明：branch/session compat 读取 cached messages 时仍可保留 runtime fallback，但这只属于 session message compatibility contract，用于 lineage message 拼接、branch 预览或其他非公开 session consumer；它不属于公开 execution trace contract，也不得被重新包装成 task/project trace 的数据源。
+
+为避免测试说明与设计文档再次漂移，仓库内测试命名与 helper 术语也应遵守同一边界：`execution-trace-contract` 只指 task/project 两条公开 trace route 的 contract；`session-message-compatibility` 只指 branch lineage、session preview、runtime pipeline、reconcile、adapter finalization 等非公开 session consumer 的兼容读面 contract；具体命名约定以 [tests/README.md](../tests/README.md) 为测试层同步来源。
+
 ### 3.4 Incomplete 必须显式可见
 
 当 projection 返回非空但不完整的 timeline 时，系统必须保留显式 incomplete 语义。
@@ -106,7 +112,7 @@ runtime 原始 message 相关接口仍可保留在 runtime 协议和诊断语境
 
 本 ADR 直接约束以下范围：
 
-1. service task session timeline 聚合语义
+1. service timeline secondary source 聚合语义
 2. web-ui-bff task/project execution trace routes
 3. TaskDetailV3 主聊天区、并行候选区、trace panel 的状态表达
 4. 与 execution trace 相关的测试命名、断言和文档表述

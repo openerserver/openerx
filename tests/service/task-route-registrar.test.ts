@@ -156,8 +156,8 @@ describe("task domain-run registrar", () => {
   });
 });
 
-describe("task branch compat registrar", () => {
-  test("messages, events, and timeline routes delegate to branch compat readers", async () => {
+describe("task branch compat route registrar", () => {
+  test("branch compat messages, events, and timeline routes delegate to compat readers", async () => {
     const loadTaskTreeBackedRecord = mock(async () => ({ projectId: "proj-1" }));
     const buildTaskBranchCompatMessagesResponse = mock(async (args: unknown) => ({
       routeScope: "branch-compat-messages",
@@ -265,7 +265,7 @@ describe("task branch compat registrar", () => {
     });
   });
 
-  test("activate and archive routes are mounted and delegate to the matching branch dependencies", async () => {
+  test("branch compat activate and archive routes stay mounted on compat-specific dependencies", async () => {
     const activateTaskBranch = mock(async (taskId: string, branchId: string) => ({
       ok: true as const,
       status: 200 as const,

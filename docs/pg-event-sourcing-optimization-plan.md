@@ -473,6 +473,8 @@ LIMIT $3;
 
 ## 6. 措施 4：基于 `project_tree_events` 的增量推送
 
+历史/可选语境说明：以下内容描述的是“如果未来要重新引入 project-level event log，再如何设计增量读面”的草案。它不是当前运行时能力；当前 runtime schema 已删掉 `project_tree_events`，`/api/projects/:projectId/events` 也不是现行客户端接口。
+
 ### 6.1 问题
 
 当前前端虽然能通过 SSE 与持久化接口拿到消息变化，但缺少明确的“增量消费边界”：
@@ -483,13 +485,13 @@ LIMIT $3;
 
 ### 6.2 方案
 
-把 `project_tree_events` 明确提升为**增量同步日志**，同时保留 `project_tree_nodes` 作为稳定读模型：
+如果未来要通过新的 migration 重新引入事件日志表，可以把 `project_tree_events` 设计为**增量同步日志**，同时保留 `project_tree_nodes` 作为稳定读模型：
 
 1. **events**：表示过程变化，按 `project_id + created_at` 与 `node_id + seq` 递增读取。
 2. **nodes**：表示稳定快照，适合详情读取、搜索命中、断线重建最终状态。
 3. **客户端**：优先消费增量事件，必要时回落到节点快照读面修正状态。
 
-#### 6.2.1 建议的对外能力
+#### 6.2.1 历史草案中的对外能力
 
 ```text
 GET /api/projects/:projectId/events?afterSeq=123&limit=200
@@ -521,7 +523,7 @@ GET /api/projects/:projectId/events?after=2026-03-21T10:00:00.000Z&limit=200
 
 #### 6.2.2 使用语义
 
-1. **实时页面**：先订阅 SSE，若连接断开或页面重开，则从最近 cursor 补拉 `/events`。
+1. **实时页面**：历史草案里建议先订阅 SSE，若连接断开或页面重开，则从最近 cursor 补拉 `/events`。
 2. **项目级监控页**：按 `projectId` 消费增量事件，驱动 task / branch / stage 状态刷新。
 3. **任务详情页**：增量事件只驱动草稿态与局部 patch，最终完整消息仍以 `message_snapshot` 或 message node 为准。
 

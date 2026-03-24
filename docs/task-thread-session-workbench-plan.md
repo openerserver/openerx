@@ -309,9 +309,9 @@ URL 建议支持：
 
 补充说明：
 
-1. `continue` 不创建新 session，不必新增 `task_sessions` 记录。
-2. `fork` 才会新增一条 `task_sessions`。
-3. `tasks.sessionId` 可保留，作为当前活跃分支的快捷引用。
+1. 历史设想里，`continue` 不创建新 session，不必新增 `task_sessions` 记录。
+2. 历史设想里，`fork` 才会新增一条 `task_sessions`。
+3. 历史设想里，`tasks.sessionId` 可保留，作为当前活跃分支的快捷引用；当前实现已改由 task-domain / branch lineage 主读链承担这部分语义。
 
 ## 11. 后端接口建议
 
@@ -476,7 +476,7 @@ URL 建议支持：
 优先级建议：
 
 1. 第一优先：把 `TaskDetail` 改为 `回复主视图 + 固定续跑输入框 + session 列表`
-2. 第二优先：当时曾建议引入 `task_sessions` 与 `session-tree`，接入 session 级 fork；当前已由 branch lineage + tree/session 节点模型替代
+2. 第二优先：当时曾建议引入 `task_sessions` 与 `session-tree`（历史称呼），接入 session 级 fork；当前已由 branch lineage + tree/session 节点模型替代
 3. 第三优先：实现应用内 `Task Workbench` tabs + 双栏分屏
 4. 第四优先：消息级 fork、分支对比、归档
 

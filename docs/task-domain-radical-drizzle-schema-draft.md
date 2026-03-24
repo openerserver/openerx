@@ -1,6 +1,6 @@
 # 任务域激进重构 Drizzle Schema 草稿
 
-> 状态：主体已实现，待收尾清理  
+> 状态：主线已完成（2026-03-25；schema 草稿主体已兑现，当前仅保留历史说明、维护基线与可选 cleanup DDL 占位）  
 > 日期：2026-03-22  
 > 作者：GitHub Copilot
 
@@ -11,13 +11,13 @@
 1. [task-domain-radical-storage-redesign-plan.md](task-domain-radical-storage-redesign-plan.md)
 2. [task-domain-radical-schema-migration-plan.md](task-domain-radical-schema-migration-plan.md)
 
-目标是把激进方案进一步压缩成接近可直接写进 [control-plane/service/src/db/schema.pg.ts](control-plane/service/src/db/schema.pg.ts) 的 Drizzle schema 草稿，并给出与当前 `control-plane/service/drizzle-pg` 迁移链兼容的 migration 编号建议。
+目标是把激进方案进一步压缩成接近可直接写进 [control-plane/service/src/db/schema.pg.ts](control-plane/service/src/db/schema.pg.ts) 的 Drizzle schema 草稿，并保留与当前 `control-plane/service/drizzle-pg` 迁移链兼容的 migration 编号历史说明。
 
-本文档仍然不是最终代码，但它应当足够接近：
+本文档仍然不是最终代码，但它保留的价值主要在于：
 
-1. schema 任务可以按此直接编码
-2. migration 任务可以按此拆 SQL
-3. BFF/service 双写点可以按此绑定外键
+1. 解释当前正式 schema 的设计来源
+2. 作为历史 migration 编号与折中策略的参考
+3. 为 cleanup DDL、兼容字段退役与少量约束补齐提供背景
 
 ## 2. 当前迁移链约束
 
@@ -27,9 +27,9 @@
 2. `...`
 3. `control-plane/service/drizzle-pg/0012_project_tree_events_search.sql`
 
-因此新链建议从 `0013` 开始。
+历史草案中，新链从 `0013` 开始。
 
-推荐编号：
+历史编号草案：
 
 1. `0013_task_domain_core.sql`
 2. `0014_task_domain_conversations.sql`
@@ -53,7 +53,7 @@
 4. 复杂结构先用 `jsonb()`，不在第一轮过度建枚举表
 5. `task_domain_events.seq` 使用 `bigint`，需额外从 `drizzle-orm/pg-core` 导入 `bigint`
 
-新增 TypeScript 类型建议：
+历史 TypeScript 类型草案：
 
 ```ts
 export type TaskDomainStatus =
@@ -205,7 +205,7 @@ export const taskRuns = pgTable(
 );
 ```
 
-建议：
+历史草案注记：
 
 1. `winnerNodeId`、`judgeNodeId` 第一轮也先不做 FK。
 2. 等 `taskRunNodes` 数据稳定后再补 FK。
@@ -540,7 +540,7 @@ export const taskTimelineViews = pgTable(
 
 ### 14.1 `project_tree_nodes`
 
-建议新增：
+历史草案新增：
 
 ```ts
 refType: text("ref_type"),
@@ -549,7 +549,7 @@ refId: text("ref_id"),
 
 首轮仅加字段和索引，不加 FK。
 
-建议索引：
+历史索引草案：
 
 ```ts
 index("idx_ptn_ref_type_ref_id").on(table.refType, table.refId)
@@ -557,14 +557,14 @@ index("idx_ptn_ref_type_ref_id").on(table.refType, table.refId)
 
 ### 14.2 `agent_runs`
 
-建议新增：
+历史草案新增：
 
 ```ts
 runId: text("run_id").references(() => taskRuns.id),
 runNodeId: text("run_node_id").references(() => taskRunNodes.id),
 ```
 
-建议索引：
+历史索引草案：
 
 ```ts
 index("idx_agent_runs_run_id").on(table.runId),
@@ -573,7 +573,7 @@ index("idx_agent_runs_run_node_id").on(table.runNodeId),
 
 ### 14.3 `runtime_usage_ledgers`
 
-建议新增：
+历史草案新增：
 
 ```ts
 runId: text("run_id").references(() => taskRuns.id),
@@ -582,14 +582,14 @@ runNodeId: text("run_node_id").references(() => taskRunNodes.id),
 
 ### 14.4 `runtime_usage_ledger_steps`
 
-建议新增：
+历史草案新增：
 
 ```ts
 runId: text("run_id").references(() => taskRuns.id),
 runNodeId: text("run_node_id").references(() => taskRunNodes.id),
 ```
 
-## 15. Migration 编号建议
+## 15. Migration 历史编号草案
 
 ### `0013_task_domain_core.sql`
 
@@ -633,9 +633,9 @@ runNodeId: text("run_node_id").references(() => taskRunNodes.id),
 2. projection 表补充排序索引
 3. 高频过滤索引补齐
 
-## 16. 推荐的第一轮实际编码范围
+## 16. 历史第一轮编码范围
 
-如果现在就开始落第一轮 schema，建议不要一次写完全部文档里的表，优先只做：
+在当时的实施起点里，文档按分批落地思路，只优先覆盖以下范围：
 
 1. `tasks`
 2. `task_runs`
@@ -650,9 +650,9 @@ runNodeId: text("run_node_id").references(() => taskRunNodes.id),
 2. 能先统一 single / parallel / sequential-chain 的执行建模
 3. 对现有 BFF/service 改动面最可控
 
-## 17. 下一步建议
+## 17. 历史实施起点说明
 
-状态注记：本节属于历史实施起点，现已兑现。`0013+` migration 与对应 schema 已落地，因此这里不再保留“先写 schema 还是先写 SQL 草案”的未来式建议。
+状态注记：本节属于历史实施起点，现已兑现。`0013+` migration 与对应 schema 已落地，因此这里不再保留“先写 schema 还是先写 SQL 草案”的未来式表述。
 
 ## 18. 当前 schema 已实现项 / 可删除的草稿假设 / 下一轮 cleanup DDL
 
@@ -672,17 +672,17 @@ runNodeId: text("run_node_id").references(() => taskRunNodes.id),
 8. `runtime_usage_ledger_steps.run_id/run_node_id` 已进入 bridge migration。
 9. `conversation_messages` 的搜索与排序相关索引、projection 表的补充索引已经进入 `0017_task_domain_indexes.sql`。
 
-因此本文档第 4 节到第 15 节中，大部分核心表与 migration 编号建议已经完成落地，不再是“待编码草图”。
+因此本文档第 4 节到第 15 节中，大部分核心表与 migration 编号草案已经完成落地，不再是“待编码草图”。
 
 ### 18.2 可删除的草稿假设
 
 以下假设在文档撰写时是为了降低首轮落地复杂度，但按当前实现状态，已经可以从“核心假设”降为“历史说明”，后续可逐步删除或改写。
 
-1. “推荐编号从 `0013` 开始”这一假设已经兑现，当前应改为“已落地编号事实”，而不是未来建议。
+1. “推荐编号从 `0013` 开始”这一假设已经兑现，当前应改为“已落地编号事实”，而不是未来语气。
 2. “第一轮只做新增、不修改旧逻辑依赖”这一假设已不完全成立，因为当前仓库已经进入 projection-first、dual-write、replay、bridge 引用等实际接线阶段。
 3. “`currentRunId`、`winnerNodeId`、`judgeNodeId` 等 FK 先不做，第二轮再补”这一类假设需要重新核对正式 schema 与 migration 是否仍然保留该策略；若正式实现已确定，应从本文档中删除模糊表述，改成现状说明。
-4. “建议第一轮只做 core schema”这一假设已经过时，因为 conversations、projections、bridges、indexes 都已经一并落地。
-5. “下一步二选一：先写 schema.pg.ts 或先写 0013 SQL 草案”这一段已经过时，当前文档应理解为历史实施起点，而不是现阶段建议。
+4. “第一轮只做 core schema”这一假设已经过时，因为 conversations、projections、bridges、indexes 都已经一并落地。
+5. “当时的二选一实施起点：先写 schema.pg.ts 或先写 0013 SQL 草案”这一段已经过时，当前文档应理解为历史实施起点，而不是现阶段动作说明。
 
 换句话说，本文档后半部分仍保留了不少“尚未开始实现时的时间语气”，这些内容现在可以逐步清理，避免误导后续阅读者以为 schema 还停留在前期设计阶段。
 
@@ -691,33 +691,33 @@ runNodeId: text("run_node_id").references(() => taskRunNodes.id),
 虽然核心 schema 已经实现，但下列状态说明 schema 层仍处于“新旧模型并存”的过渡期。
 
 1. `executionPlan`、`parallelRunHistory` 仍然作为历史兼容字段存在于旧 schema 语境中，但已经从 service / BFF 主路径和运行时 tree 数据中退出。
-2. `project_tree_nodes.content_json` 仍承载大量 task 业务事实，树节点还没有完成职责瘦身。
-3. `project_tree_events` 仍保留消息 snapshot 的历史回放读取链路与相关索引；`conversation_*` 已成为主写来源，因此这里应只被视为审计窗口与测试清理副产物，不再代表消息主路径。
+2. `project_tree_nodes.content_json` 仍保留少量 task 兼容字段，树节点职责瘦身尚未完全结束，但已经不再承担“大量 task 业务事实主存储”的角色。
+3. `project_tree_events` 当前只存在于历史 migration、历史索引和历史设计草稿语境中；现行 runtime schema 已删表，因此这里不应再被理解为可直接使用的运行时读取链路。
 4. 新表已经是正式 schema，但旧字段还未经历一轮明确的 cleanup migration。
 
-这意味着当前问题已经不是“缺表”，而是“缺历史 schema 收尾说明、cleanup DDL 和旧模型退役文档动作”。
+这意味着当前问题已经不是“缺表”，而是“需要继续维护历史 schema 收尾说明、cleanup DDL 占位和旧模型退役文档动作”。
 
 ### 18.4 Cleanup DDL 状态注记
 
-按当前仓库状态，schema/migration 的后续动作已经不再是新增核心表，而是围绕旧模型退役补 cleanup DDL 或 cleanup migration 文档。
+按当前仓库状态，schema/migration 的后续动作已经不再是新增核心表，而是围绕旧模型退役维护 cleanup DDL 占位或 cleanup migration 文档。
 
 当前更适合优先按以下几类 cleanup 变更理解收尾范围：
 
 1. 关于旧字段退役的 migration 说明，本文统一结论是：`executionPlan`、`parallelRunHistory` 应继续停留在历史兼容字段定位，不再回到主写/主读语义。
-2. 为 `project_tree_events` 的消息 snapshot 保留链路准备最终停读/归档策略，明确它只保留树级结构事件，以及受控的历史回放、审计窗口与测试清理副产物职责。
+2. 对 `project_tree_events` 相关历史 migration 与历史索引保留停读/归档说明，明确它只属于历史建模与演进解释语境，而不是当前运行时数据面。
 3. 为 `project_tree_nodes.content_json` 制定瘦身白名单，把 task 业务事实字段与导航/缓存字段明确拆分。
 4. 视正式 schema 现状，补充或确认仍缺失的 FK、唯一约束、索引命名统一项，避免“首轮先不加、后续也没补”的悬空状态。
 5. 若确认旧字段长期保留但不再主用，可补 comment/文档约束，明确这些列只服务历史兼容与清理语境，防止新代码继续把它们当主模型写入。
 
-### 18.5 建议新增的 cleanup migration 文档项
+### 18.5 cleanup migration 文档占位项
 
-如果继续维护本文档，建议后续增加一组 cleanup migration 占位章节，而不是继续扩写 core schema。
+如果继续维护本文档，更合适的方向是保留一组 cleanup migration 占位章节，而不是继续扩写 core schema。
 
 1. `0018_task_domain_legacy_write_deprecation.sql` 的设计说明。
 2. `0019_task_domain_tree_payload_shrink.sql` 的设计说明。
 3. `0020_task_domain_legacy_message_snapshot_retirement.sql` 的设计说明。
 
-这些编号不要求立刻落地，但它们可以作为下一阶段文档化收尾任务，把“旧模型退出”从口头计划变成可执行 migration backlog。
+这些编号不要求立刻落地，但它们可以继续作为文档化收尾任务的占位，把“旧模型退出”维持在可追踪的 migration backlog 中。
 
 ### 18.6 本文档的现阶段角色
 
@@ -727,7 +727,7 @@ runNodeId: text("run_node_id").references(() => taskRunNodes.id),
 2. 对首轮 schema 折中策略的历史记录。
 3. 为下一轮 cleanup DDL 和旧字段退役提供边界约束的参考文档。
 
-也就是说，本文档后续最有价值的更新方向，不是再补更多核心表定义，而是持续收敛：
+也就是说，本文档后续最有价值的更新方向，不是再补更多核心表定义，而是持续维护：
 
 1. 哪些草稿假设已经兑现并可删。
 2. 哪些兼容字段仍存在并需退役。

@@ -304,6 +304,18 @@ beforeEach(() => {
 });
 
 describe("ProjectDetail", () => {
+  it("reads overview from project-level readers without hydrating ledger detail on initial load", async () => {
+    await mountPage();
+
+    expect(apiMocks.getProject).toHaveBeenCalledWith("proj-default");
+    expect(apiMocks.getProjectPaidExecutionPreflight).toHaveBeenCalledWith("proj-default");
+    expect(apiMocks.getProjectPaidExecutionLease).toHaveBeenCalledWith("proj-default");
+    expect(apiMocks.getProjectRuntimeUsageLedgers).toHaveBeenCalledWith("proj-default", {
+      limit: 8,
+    });
+    expect(apiMocks.getProjectRuntimeUsageLedgerDetail).not.toHaveBeenCalled();
+  });
+
   it("keeps base project overview visible when secondary overview cards fail", async () => {
     apiMocks.getProjectPaidExecutionLease.mockRejectedValueOnce(new Error("lease down"));
     apiMocks.getProjectPaidExecutionPreflight.mockRejectedValueOnce(new Error("preflight down"));

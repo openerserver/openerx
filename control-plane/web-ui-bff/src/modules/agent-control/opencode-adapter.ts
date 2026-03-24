@@ -5,9 +5,9 @@ import { createInternalAuthorization } from "../../lib/control-plane-client";
 import { DEFAULT_EXECUTION_AGENT, isDefaultExecutionAgent } from "../../lib/orchestration-strategy";
 import type { AgentRunStatus } from "../../types/events";
 import {
-  type TaskSessionLineageRecord,
-  fetchTaskSessionCachedMessages,
-  fetchTaskSessionLineageRecords,
+  type BranchCompatLineageRecord,
+  fetchBranchCompatCachedMessages,
+  fetchBranchCompatLineageRecords,
 } from "../tasks/task-session-compat";
 
 // ── OpenCode Adapter ───────────────────────────────────────────────
@@ -757,7 +757,7 @@ function extractSessionMessageId(message: unknown) {
 
 function sliceMessagesForLineageBoundary(
   messages: unknown[],
-  childRecord?: TaskSessionLineageRecord,
+  childRecord?: BranchCompatLineageRecord,
 ) {
   if (!childRecord?.forkedFromMessageId) {
     return messages;
@@ -795,8 +795,8 @@ function compareLineageTime(left?: string | null, right?: string | null) {
   return leftTime - rightTime;
 }
 
-function dedupeTaskLineageRecords(records: TaskSessionLineageRecord[]) {
-  const byRuntimeSessionId = new Map<string, TaskSessionLineageRecord>();
+function dedupeTaskLineageRecords(records: BranchCompatLineageRecord[]) {
+  const byRuntimeSessionId = new Map<string, BranchCompatLineageRecord>();
 
   for (const record of records) {
     const existing = byRuntimeSessionId.get(record.runtimeSessionId);
@@ -823,14 +823,14 @@ function dedupeTaskLineageRecords(records: TaskSessionLineageRecord[]) {
   );
 }
 
-function findLineageRootRecord(records: TaskSessionLineageRecord[]) {
+function findLineageRootRecord(records: BranchCompatLineageRecord[]) {
   return (
     records.find((record) => record.sourceType === "root") ??
     records.slice().sort((left, right) => compareLineageTime(left.createdAt, right.createdAt))[0]
   );
 }
 
-function repairLineageRecord(record: TaskSessionLineageRecord, rootRuntimeSessionId: string) {
+function repairLineageRecord(record: BranchCompatLineageRecord, rootRuntimeSessionId: string) {
   const previousParent = record.parentRuntimeSessionId;
   const previousSourceType = record.sourceType;
 
@@ -851,7 +851,7 @@ function repairLineageRecord(record: TaskSessionLineageRecord, rootRuntimeSessio
   );
 }
 
-function normalizeLineageRecords(records: TaskSessionLineageRecord[]) {
+function normalizeLineageRecords(records: BranchCompatLineageRecord[]) {
   const normalized = dedupeTaskLineageRecords(records).map((record) => ({ ...record }));
   if (normalized.length <= 1) {
     return normalized;
@@ -917,7 +917,7 @@ async function loadTaskLineageMessages(
     ? options.authorization
     : await createInternalAuthorization();
 
-  const lineageResult = await fetchTaskSessionLineageRecords(taskId, authorization);
+  const lineageResult = await fetchBranchCompatLineageRecords(taskId, authorization);
   const lineageRecords = lineageResult.activeRecords;
 
   if (lineageRecords.length === 0) {
@@ -929,7 +929,7 @@ async function loadTaskLineageMessages(
     return null;
   }
 
-  const aggregatedCachedMessagesResult = await fetchTaskSessionCachedMessages(
+  const aggregatedCachedMessagesResult = await fetchBranchCompatCachedMessages(
     taskId,
     sessionId,
     authorization,
@@ -959,7 +959,7 @@ async function loadTaskLineageMessages(
 
   const messageResults = await Promise.all(
     lineagePath.map(async (record) => {
-      const cachedFetchResult = await fetchTaskSessionCachedMessages(
+      const cachedFetchResult = await fetchBranchCompatCachedMessages(
         taskId,
         record.runtimeSessionId,
         authorization,

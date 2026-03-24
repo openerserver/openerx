@@ -475,7 +475,7 @@ if (plan.winnerCandidateIndex >= 0 && plan.judgeResult?.status !== 'failed') {
 | 候选全部失败 | 无可评审结果，跳过裁判，任务标记为失败 |
 | 模板变量安全 | `renderPromptTemplate()` 已对模板变量做转义，无注入风险 |
 | 并发安全 | `finalizeParallelTask()` 已用 `judgingTasks` Set 做幂等保护 |
-| 后续扩展 | 未来可支持「多轮评审」（裁判对候选提出修改建议后再打分）；本方案不涉及 |
+| 历史扩展设想 | 可支持「多轮评审」（裁判对候选提出修改意见后再打分）；本方案不涉及 |
 
 ---
 

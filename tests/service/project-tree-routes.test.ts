@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import postgres from "../../control-plane/service/node_modules/postgres";
+import { assertSessionNodeLineageOnlyContentJson } from "./task-route-test-helpers";
 
 const CP_URL = process.env.TEST_CP_URL || "http://127.0.0.1:4097";
 const PROJECT_ID = process.env.TEST_PROJECT_ID || "proj-default";
@@ -27,7 +28,7 @@ function escapeLiteral(value: string) {
   return `'${value.replace(/'/g, "''")}'`;
 }
 
-function taskSessionNodeId(taskId: string, runtimeSessionId: string) {
+function taskBranchCompatNodeId(taskId: string, runtimeSessionId: string) {
   return `task_session:${taskId}:${runtimeSessionId}`;
 }
 
@@ -145,6 +146,8 @@ afterAll(async () => {
 
   if (nodeIds.length > 0) {
     const nodeList = nodeIds.map(escapeLiteral).join(", ");
+    await sql.unsafe(`DELETE FROM conversation_sessions WHERE tree_node_id IN (${nodeList})`);
+    await sql.unsafe(`DELETE FROM tasks WHERE tree_node_id IN (${nodeList})`);
     await sql.unsafe(
       `UPDATE project_tree_nodes
           SET parent_id = NULL,
@@ -241,7 +244,7 @@ describe("project tree routes", () => {
   test("supports project-level tree search across context nodes and persisted message snapshots", async () => {
     const task = await createTask(`tree-search-${Date.now()}`);
     const runtimeSessionId = `ses_search_${Date.now()}`;
-    const sessionNodeId = taskSessionNodeId(task.id, runtimeSessionId);
+    const sessionNodeId = taskBranchCompatNodeId(task.id, runtimeSessionId);
 
     createdNodeIds.add(sessionNodeId);
 
@@ -346,7 +349,7 @@ describe("project tree routes", () => {
   test("supports branch-level persisted event feed in chronological order", async () => {
     const task = await createTask(`tree-events-feed-${Date.now()}`);
     const runtimeSessionId = `ses_events_feed_${Date.now()}`;
-    const sessionNodeId = taskSessionNodeId(task.id, runtimeSessionId);
+    const sessionNodeId = taskBranchCompatNodeId(task.id, runtimeSessionId);
 
     createdNodeIds.add(sessionNodeId);
 
@@ -691,8 +694,8 @@ describe("project tree routes", () => {
     const task = await createTask(`tree-sessions-${Date.now()}`);
     const rootRuntimeSessionId = `ses_root_${Date.now()}`;
     const forkRuntimeSessionId = `ses_fork_${Date.now()}`;
-    const rootSessionNodeId = taskSessionNodeId(task.id, rootRuntimeSessionId);
-    const forkSessionNodeId = taskSessionNodeId(task.id, forkRuntimeSessionId);
+    const rootSessionNodeId = taskBranchCompatNodeId(task.id, rootRuntimeSessionId);
+    const forkSessionNodeId = taskBranchCompatNodeId(task.id, forkRuntimeSessionId);
 
     createdNodeIds.add(rootSessionNodeId);
     createdNodeIds.add(forkSessionNodeId);
@@ -786,24 +789,36 @@ describe("project tree routes", () => {
       isActive: boolean;
       archivedAt: string | null;
       parentId: string | null;
+      contentJson?: Record<string, unknown> | null;
     }>(`/api/projects/${PROJECT_ID}/tree/${rootSessionNodeId}`);
 
     expect(rootNode.status).toBe(200);
     expect(rootNode.data.parentId).toBe(task.id);
     expect(rootNode.data.isActive).toBe(false);
     expect(rootNode.data.archivedAt).toEqual(expect.any(String));
+    assertSessionNodeLineageOnlyContentJson(rootNode.data.contentJson, {
+      sourceType: "root",
+      parentRuntimeSessionId: null,
+      forkedFromMessageId: null,
+    });
 
     const forkNode = await authedRequest<{
       id: string;
       isActive: boolean;
       archivedAt: string | null;
       parentId: string | null;
+      contentJson?: Record<string, unknown> | null;
     }>(`/api/projects/${PROJECT_ID}/tree/${forkSessionNodeId}`);
 
     expect(forkNode.status).toBe(200);
     expect(forkNode.data.parentId).toBe(rootSessionNodeId);
     expect(forkNode.data.isActive).toBe(true);
     expect(forkNode.data.archivedAt).toBeNull();
+    assertSessionNodeLineageOnlyContentJson(forkNode.data.contentJson, {
+      sourceType: "fork",
+      parentRuntimeSessionId: rootRuntimeSessionId,
+      forkedFromMessageId: null,
+    });
 
     const forkAncestors = await authedRequest<{ data: Array<{ id: string }> }>(
       `/api/projects/${PROJECT_ID}/tree/${forkSessionNodeId}/ancestors`,
@@ -818,12 +833,113 @@ describe("project tree routes", () => {
     ]);
   });
 
+  test("keeps session node content_json on the lineage-only whitelist across create activate and archive", async () => {
+    const task = await createTask(`tree-session-whitelist-${Date.now()}`);
+    const rootRuntimeSessionId = `ses_whitelist_root_${Date.now()}`;
+    const forkRuntimeSessionId = `ses_whitelist_fork_${Date.now()}`;
+    const rootSessionNodeId = taskBranchCompatNodeId(task.id, rootRuntimeSessionId);
+    const forkSessionNodeId = taskBranchCompatNodeId(task.id, forkRuntimeSessionId);
+
+    createdNodeIds.add(rootSessionNodeId);
+    createdNodeIds.add(forkSessionNodeId);
+
+    const rootSession = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/branches`, {
+      method: "POST",
+      body: JSON.stringify({
+        runtimeSessionId: rootRuntimeSessionId,
+        branchName: "main-root",
+        sourceType: "root",
+        isActive: true,
+      }),
+    });
+
+    expect(rootSession.status).toBe(201);
+
+    const forkSession = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/branches`, {
+      method: "POST",
+      body: JSON.stringify({
+        runtimeSessionId: forkRuntimeSessionId,
+        parentRuntimeSessionId: rootRuntimeSessionId,
+        forkedFromMessageId: "root-user-1",
+        branchName: "branch-fork",
+        sourceType: "fork",
+        isActive: false,
+      }),
+    });
+
+    expect(forkSession.status).toBe(201);
+
+    const rootNodeAfterCreate = await authedRequest<{
+      id: string;
+      contentJson?: Record<string, unknown> | null;
+    }>(`/api/projects/${PROJECT_ID}/tree/${rootSessionNodeId}`);
+
+    expect(rootNodeAfterCreate.status).toBe(200);
+    assertSessionNodeLineageOnlyContentJson(rootNodeAfterCreate.data.contentJson, {
+      sourceType: "root",
+      parentRuntimeSessionId: null,
+      forkedFromMessageId: null,
+    });
+
+    const forkNodeAfterCreate = await authedRequest<{
+      id: string;
+      contentJson?: Record<string, unknown> | null;
+    }>(`/api/projects/${PROJECT_ID}/tree/${forkSessionNodeId}`);
+
+    expect(forkNodeAfterCreate.status).toBe(200);
+    assertSessionNodeLineageOnlyContentJson(forkNodeAfterCreate.data.contentJson, {
+      sourceType: "fork",
+      parentRuntimeSessionId: rootRuntimeSessionId,
+      forkedFromMessageId: "root-user-1",
+    });
+
+    const activateFork = await authedRequest<{ ok: boolean; activatedSessionId: string }>(
+      `/api/tasks/${task.id}/branches/${forkSessionNodeId}/activate`,
+      { method: "POST" },
+    );
+
+    expect(activateFork.status).toBe(200);
+    expect(activateFork.data.activatedSessionId).toBe(forkRuntimeSessionId);
+
+    const archiveRoot = await authedRequest<{ ok: boolean }>(
+      `/api/tasks/${task.id}/branches/${rootSessionNodeId}/archive`,
+      { method: "POST" },
+    );
+
+    expect(archiveRoot.status).toBe(200);
+    expect(archiveRoot.data.ok).toBe(true);
+
+    const rootNodeAfterArchive = await authedRequest<{
+      id: string;
+      contentJson?: Record<string, unknown> | null;
+    }>(`/api/projects/${PROJECT_ID}/tree/${rootSessionNodeId}`);
+
+    expect(rootNodeAfterArchive.status).toBe(200);
+    assertSessionNodeLineageOnlyContentJson(rootNodeAfterArchive.data.contentJson, {
+      sourceType: "root",
+      parentRuntimeSessionId: null,
+      forkedFromMessageId: null,
+    });
+
+    const forkNodeAfterActivate = await authedRequest<{
+      id: string;
+      contentJson?: Record<string, unknown> | null;
+    }>(`/api/projects/${PROJECT_ID}/tree/${forkSessionNodeId}`);
+
+    expect(forkNodeAfterActivate.status).toBe(200);
+    assertSessionNodeLineageOnlyContentJson(forkNodeAfterActivate.data.contentJson, {
+      sourceType: "fork",
+      parentRuntimeSessionId: rootRuntimeSessionId,
+      forkedFromMessageId: "root-user-1",
+    });
+  });
+
   test("reactivating an archived session clears legacy and tree archived state", async () => {
     const task = await createTask(`tree-reactivate-${Date.now()}`);
     const rootRuntimeSessionId = `ses_reactivate_root_${Date.now()}`;
     const forkRuntimeSessionId = `ses_reactivate_fork_${Date.now()}`;
-    const rootSessionNodeId = taskSessionNodeId(task.id, rootRuntimeSessionId);
-    const forkSessionNodeId = taskSessionNodeId(task.id, forkRuntimeSessionId);
+    const rootSessionNodeId = taskBranchCompatNodeId(task.id, rootRuntimeSessionId);
+    const forkSessionNodeId = taskBranchCompatNodeId(task.id, forkRuntimeSessionId);
 
     createdNodeIds.add(rootSessionNodeId);
     createdNodeIds.add(forkSessionNodeId);
@@ -896,20 +1012,26 @@ describe("project tree routes", () => {
       isActive: boolean;
       archivedAt: string | null;
       parentId: string | null;
+      contentJson?: Record<string, unknown> | null;
     }>(`/api/projects/${PROJECT_ID}/tree/${rootSessionNodeId}`);
 
     expect(rootNode.status).toBe(200);
     expect(rootNode.data.parentId).toBe(task.id);
     expect(rootNode.data.isActive).toBe(true);
     expect(rootNode.data.archivedAt).toBeNull();
+    assertSessionNodeLineageOnlyContentJson(rootNode.data.contentJson, {
+      sourceType: "root",
+      parentRuntimeSessionId: null,
+      forkedFromMessageId: null,
+    });
   });
 
   test("keeps session reads and writes alive from legacy tree lineage records only", async () => {
     const task = await createTask(`tree-primary-session-${Date.now()}`);
     const rootRuntimeSessionId = `ses_primary_root_${Date.now()}`;
     const forkRuntimeSessionId = `ses_primary_fork_${Date.now()}`;
-    const rootSessionNodeId = taskSessionNodeId(task.id, rootRuntimeSessionId);
-    const forkSessionNodeId = taskSessionNodeId(task.id, forkRuntimeSessionId);
+    const rootSessionNodeId = taskBranchCompatNodeId(task.id, rootRuntimeSessionId);
+    const forkSessionNodeId = taskBranchCompatNodeId(task.id, forkRuntimeSessionId);
 
     createdNodeIds.add(rootSessionNodeId);
     createdNodeIds.add(forkSessionNodeId);
@@ -985,18 +1107,38 @@ describe("project tree routes", () => {
       { type: "text", text: "tree-first session payload" },
     ]);
 
-    const branchNodes = await sql.unsafe<Array<{ id: string; runtime_session_id: string | null }>>(
-      `SELECT id, runtime_session_id FROM project_tree_nodes WHERE node_type = 'session' AND id LIKE $1 ORDER BY runtime_session_id`,
+    const branchNodes = await sql.unsafe<
+      Array<{
+        id: string;
+        runtime_session_id: string | null;
+        content_json: Record<string, unknown> | null;
+      }>
+    >(
+      `SELECT id, runtime_session_id, content_json FROM project_tree_nodes WHERE node_type = 'session' AND id LIKE $1 ORDER BY runtime_session_id`,
       [`task_session:${task.id}:%`],
     );
 
     expect(branchNodes.some((row) => row.runtime_session_id === forkRuntimeSessionId)).toBe(true);
+    const rootBranchNode = branchNodes.find((row) => row.runtime_session_id === rootRuntimeSessionId);
+    const forkBranchNode = branchNodes.find((row) => row.runtime_session_id === forkRuntimeSessionId);
+    expect(rootBranchNode).toBeDefined();
+    expect(forkBranchNode).toBeDefined();
+    assertSessionNodeLineageOnlyContentJson(rootBranchNode?.content_json, {
+      sourceType: "root",
+      parentRuntimeSessionId: null,
+      forkedFromMessageId: null,
+    });
+    assertSessionNodeLineageOnlyContentJson(forkBranchNode?.content_json, {
+      sourceType: "fork",
+      parentRuntimeSessionId: rootRuntimeSessionId,
+      forkedFromMessageId: "root-user-1",
+    });
   });
 
   test("reads single-session messages from conversation tables when legacy tree message events are absent", async () => {
     const task = await createTask(`conversation-primary-${Date.now()}`);
     const runtimeSessionId = `ses_conversation_${Date.now()}`;
-    const sessionNodeId = taskSessionNodeId(task.id, runtimeSessionId);
+    const sessionNodeId = taskBranchCompatNodeId(task.id, runtimeSessionId);
 
     createdNodeIds.add(sessionNodeId);
 
@@ -1049,7 +1191,7 @@ describe("project tree routes", () => {
   test("persists task session messages in conversation storage and replays latest state", async () => {
     const task = await createTask(`tree-message-cache-${Date.now()}`);
     const runtimeSessionId = `ses_cached_${Date.now()}`;
-    const sessionNodeId = taskSessionNodeId(task.id, runtimeSessionId);
+    const sessionNodeId = taskBranchCompatNodeId(task.id, runtimeSessionId);
 
     createdNodeIds.add(sessionNodeId);
 
@@ -1124,8 +1266,8 @@ describe("project tree routes", () => {
     const task = await createTask(`tree-lineage-cache-${Date.now()}`);
     const rootRuntimeSessionId = `ses_lineage_root_${Date.now()}`;
     const forkRuntimeSessionId = `ses_lineage_fork_${Date.now()}`;
-    const rootSessionNodeId = taskSessionNodeId(task.id, rootRuntimeSessionId);
-    const forkSessionNodeId = taskSessionNodeId(task.id, forkRuntimeSessionId);
+    const rootSessionNodeId = taskBranchCompatNodeId(task.id, rootRuntimeSessionId);
+    const forkSessionNodeId = taskBranchCompatNodeId(task.id, forkRuntimeSessionId);
 
     createdNodeIds.add(rootSessionNodeId);
     createdNodeIds.add(forkSessionNodeId);
@@ -1271,8 +1413,8 @@ describe("project tree routes", () => {
     const task = await createTask(`conversation-lineage-${Date.now()}`);
     const rootRuntimeSessionId = `ses_conversation_root_${Date.now()}`;
     const forkRuntimeSessionId = `ses_conversation_fork_${Date.now()}`;
-    const rootSessionNodeId = taskSessionNodeId(task.id, rootRuntimeSessionId);
-    const forkSessionNodeId = taskSessionNodeId(task.id, forkRuntimeSessionId);
+    const rootSessionNodeId = taskBranchCompatNodeId(task.id, rootRuntimeSessionId);
+    const forkSessionNodeId = taskBranchCompatNodeId(task.id, forkRuntimeSessionId);
 
     createdNodeIds.add(rootSessionNodeId);
     createdNodeIds.add(forkSessionNodeId);
@@ -1489,8 +1631,8 @@ describe("project tree routes", () => {
     const rootRuntimeSessionId = `ses_cache_root_${Date.now()}`;
     const forkRuntimeSessionId = `ses_cache_fork_${Date.now()}`;
 
-    createdNodeIds.add(taskSessionNodeId(task.id, rootRuntimeSessionId));
-    createdNodeIds.add(taskSessionNodeId(task.id, forkRuntimeSessionId));
+    createdNodeIds.add(taskBranchCompatNodeId(task.id, rootRuntimeSessionId));
+    createdNodeIds.add(taskBranchCompatNodeId(task.id, forkRuntimeSessionId));
 
     const rootSession = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/branches`, {
       method: "POST",
@@ -1601,7 +1743,7 @@ describe("project tree routes", () => {
   test("records synthetic session message events from conversation domain history", async () => {
     const task = await createTask(`tree-events-${Date.now()}`);
     const runtimeSessionId = `ses_events_${Date.now()}`;
-    const sessionNodeId = taskSessionNodeId(task.id, runtimeSessionId);
+    const sessionNodeId = taskBranchCompatNodeId(task.id, runtimeSessionId);
 
     createdNodeIds.add(sessionNodeId);
 
@@ -1683,8 +1825,8 @@ describe("project tree routes", () => {
     const task = await createTask(`tree-timeline-${Date.now()}`);
     const rootRuntimeSessionId = `ses_timeline_root_${Date.now()}`;
     const forkRuntimeSessionId = `ses_timeline_fork_${Date.now()}`;
-    const rootSessionNodeId = taskSessionNodeId(task.id, rootRuntimeSessionId);
-    const forkSessionNodeId = taskSessionNodeId(task.id, forkRuntimeSessionId);
+    const rootSessionNodeId = taskBranchCompatNodeId(task.id, rootRuntimeSessionId);
+    const forkSessionNodeId = taskBranchCompatNodeId(task.id, forkRuntimeSessionId);
 
     createdNodeIds.add(rootSessionNodeId);
     createdNodeIds.add(forkSessionNodeId);

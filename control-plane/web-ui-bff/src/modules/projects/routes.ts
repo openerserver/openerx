@@ -16,10 +16,10 @@ import { fetchProjectRuntimeUsageBaseline } from "../../lib/runtime-usage-ledger
 import type { JWTPayload } from "../../middleware/auth";
 import {
   createProjectionTraceTimelineMeta,
-  fetchTaskSessionTimeline,
-  normalizeTaskSessionTimelineMeta,
+  fetchBranchCompatTimeline,
+  normalizeBranchCompatTimelineMeta,
   shouldReplaceTraceTimeline,
-  type TaskSessionTimelineMeta,
+  type BranchCompatTimelineMeta,
 } from "../tasks/task-session-compat";
 import {
   type ProjectStageRuntimeSummaryViewModel,
@@ -2295,7 +2295,7 @@ interface TaskSessionTimelineItem {
 interface TaskSessionTimelineResponse {
   data: TaskSessionTimelineItem[];
   meta?: {
-    readSource?: TaskSessionTimelineMeta["readSource"];
+    readSource?: BranchCompatTimelineMeta["readSource"];
     cacheState?: "none" | "partial" | "complete";
     complete?: boolean;
     includeLineage?: boolean;
@@ -2407,7 +2407,7 @@ async function loadExecutionTraceTimeline(
   sessionId: string,
   authorization: string,
 ) {
-  const timelineResult = await fetchTaskSessionTimeline(taskId, sessionId, authorization, {
+  const timelineResult = await fetchBranchCompatTimeline(taskId, sessionId, authorization, {
     includeLineage: true,
   });
 
@@ -2418,7 +2418,7 @@ async function loadExecutionTraceTimeline(
   return {
     items: timelineResult.data.data,
     meta: {
-      ...normalizeTaskSessionTimelineMeta(timelineResult.data.meta),
+      ...normalizeBranchCompatTimelineMeta(timelineResult.data.meta),
     },
     complete: timelineResult.data.meta?.cacheState === "complete",
   };
@@ -2634,10 +2634,14 @@ async function buildTaskExecutionTrace(
   const segments: ExecutionTraceSegment[] = [];
   const effectiveSessionId = task.sessionId || snapshot?.currentSessionId || null;
 
-  segments.push(buildExecutionTraceUserInputSegment(task));
   segments.push(...buildExecutionTraceHookSegments(hookExecutions));
 
-  const traceContext = await loadTaskExecutionTraceContext(task, effectiveSessionId, authorization);
+  const traceContext = await loadTaskExecutionTraceContext(
+    task,
+    effectiveSessionId,
+    authorization,
+    snapshot,
+  );
 
   appendTaskExecutionTraceTimelineSegments(
     segments,
@@ -2658,14 +2662,6 @@ async function buildTaskExecutionTrace(
       hookExecutions: hookExecutions.map(mapExecutionTraceHookExecution),
     },
   };
-}
-
-function buildExecutionTraceUserInputSegment(task: FullTaskRecord) {
-  return {
-    type: "user-input",
-    label: "用户原始输入",
-    content: task.prompt || "",
-  } satisfies ExecutionTraceSegment;
 }
 
 function buildExecutionTraceHookSegments(
@@ -2710,6 +2706,7 @@ async function loadTaskExecutionTraceContext(
   task: FullTaskRecord,
   effectiveSessionId: string | null,
   authorization: string,
+  snapshot: TaskProjectionSnapshotRecord | null,
 ) {
   let timeline: TaskSessionTimelineItem[] = [];
   let timelineMeta: TaskSessionTimelineResponse["meta"] | undefined;
@@ -2728,10 +2725,13 @@ async function loadTaskExecutionTraceContext(
       projectionSegments = buildProjectionTimelineSegments(projectionItems.rawItems);
     }
 
-    const timelineItems =
-      projectionItems?.complete || timeline.length > 0
-        ? null
-        : await loadExecutionTraceTimeline(task.id, effectiveSessionId, authorization);
+    const timelineItems = shouldLoadProjectExecutionTraceTimelineFallback(
+      projectionItems,
+      timeline,
+      snapshot,
+    )
+      ? await loadExecutionTraceTimeline(task.id, effectiveSessionId, authorization)
+      : null;
 
     if (
       timelineItems &&
@@ -2751,6 +2751,22 @@ async function loadTaskExecutionTraceContext(
     timelineMeta,
     projectionSegments,
   };
+}
+
+function shouldLoadProjectExecutionTraceTimelineFallback(
+  projectionItems: Awaited<ReturnType<typeof loadExecutionTraceProjectionTimeline>>,
+  timeline: TaskSessionTimelineItem[],
+  snapshot: TaskProjectionSnapshotRecord | null,
+) {
+  return (
+    shouldReplaceTraceTimeline({
+      currentItemCount: timeline.length,
+      fallbackItemCount: 0,
+      projectionComplete: projectionItems?.complete,
+    }) &&
+    timeline.length === 0 &&
+    !snapshot?.latestResult
+  );
 }
 
 function appendTaskExecutionTraceTimelineSegments(

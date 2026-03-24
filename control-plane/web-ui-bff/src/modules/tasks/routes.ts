@@ -3045,8 +3045,6 @@ async function buildTaskExecutionTrace(
     snapshot?.latestResult ??
     null;
 
-  appendTaskExecutionTraceFallbackUserInput(segments, traceMessages.messages, task.prompt);
-
   return {
     ok: true,
     status: 200,
@@ -3361,20 +3359,6 @@ function resolveTaskExecutionTraceLatestResponse(messages: ExecutionTraceMessage
   return assistantMessages.length > 0
     ? (assistantMessages[assistantMessages.length - 1]?.text ?? null)
     : null;
-}
-
-function appendTaskExecutionTraceFallbackUserInput(
-  segments: ExecutionTraceSegmentRecord[],
-  messages: ExecutionTraceMessageRecord[],
-  prompt: string | null | undefined,
-) {
-  if (messages.length === 0 && prompt) {
-    segments.push({
-      type: "user-input",
-      label: "用户输入",
-      content: prompt,
-    });
-  }
 }
 
 function mapTaskExecutionTraceHookExecution(

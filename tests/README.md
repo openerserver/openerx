@@ -30,3 +30,23 @@
 - 如需一次跑完整的 Chat Settings CI 过滤组，使用 bun run test:chat-settings:ci。
 - 根目录可用 bun run typecheck 做三端类型检查，bun run check:all 做 lint、类型检查和默认测试全量校验。
 - 如需共享测试工具，优先在 tests 下新增公共辅助文件，而不是放进业务模块。
+
+命名约定：
+
+- `execution-trace-contract` 只用于 task/project 两条公开 execution trace route 的 contract 测试与 helper；它关注 projection-first、restricted secondary source、显式 incomplete，以及“不触碰 prompt backfill / public trace fallback”这类公开读面语义。
+- `session-message-compatibility` 只用于非公开 session consumer 的 contract 测试与 helper；它关注 lineage messages、cached messages、runtime session message fallback，以及“不得误触公开 execution trace route”这类兼容读面语义。
+- 若某个测试主体是 branch lineage、session preview、runtime pipeline、reconcile、adapter finalization 这类内部/非公开读面，应优先复用 `tests/web-ui-bff/session-message-compatibility-test-helpers.ts`，而不是引用 `execution-trace-contract` 术语。
+- 若某个测试主体是 task/project 的 `/execution-trace` 或其公开聚合响应，应优先复用 `tests/web-ui-bff/execution-trace-contract-test-helpers.ts`，不要把它命名成 session compatibility。
+- `realtime-pipeline-events.test.ts` 这类 realtime 测试可以局部包含非公开 session consumer 断言，例如 completion/finalization 读取 session messages；这类场景可以接入 `session-message-compatibility` helper，但文件整体仍应以 realtime/event emitter 语义命名。
+- `realtime-routes.test.ts` 这类 dev 注入、订阅、SSE 路由测试，如果只验证事件注入、鉴权、订阅注册，不读取 session messages 或公开 trace，就不应为了“统一术语”强行接入上述两套 contract helper。
+
+Service 集成测试 teardown checklist：
+
+- 只要测试会写入 tasks、project_tree_nodes 或 branch/session 兼容节点，就不要只写最短 cleanup；新增测试前先对照已有高覆盖样例：[tests/service/project-tree-routes.test.ts](tests/service/project-tree-routes.test.ts)、[tests/service/tree-task-aggregations.test.ts](tests/service/tree-task-aggregations.test.ts)、[tests/service/task-route-registration-smoke.test.ts](tests/service/task-route-registration-smoke.test.ts)。
+- 删除顺序先清 task 从属表，再删 tasks，再删 tree nodes。最低限度先确认是否需要先删 task_domain_events、task_snapshots、task_timeline_views；如果任务还会写 conversation、task runs、workflow、ledger、audit、code_changes，也要先删这些下游表，再删 tasks。
+- 若测试维护的是 task id 列表，并且 project_tree_nodes.id 与 task id 一致，仍然建议在删 project_tree_nodes 之前补一条按 tree_node_id 删除 tasks 的兜底语句，避免残留引用让 node 删除触发 FK。
+- 若测试维护的是 createdNodeIds 一类独立 node 集合，或会额外创建 root/context/session/branch 节点，必须在删 project_tree_nodes 之前按整组 node ids 再扫一遍引用表；当前至少要覆盖 tasks.tree_node_id，若这组节点包含 session/branch 节点，还要覆盖 conversation_sessions.tree_node_id。
+- 若 teardown 里会删 repository_credentials、workflow templates、project roots 或其他上游实体，必须放在 tasks 与 project_tree_nodes 清理之后；不要先删 credential 再删 tasks，也不要先删 project 再删它下面的 tree nodes。
+- 若 tree cleanup 会改 parent_id、superseded_by、project_tree_links、project_tree_branches 或 descendants 递归删除，按现有测试风格保留这些结构清理，但不要把它们当成 task 引用清理的替代；它们解决的是树结构约束，不是 tasks 或 conversation_sessions 的 FK。
+- 新增 service 集成测试时，优先复用 [tests/service/service-teardown-helpers.ts](tests/service/service-teardown-helpers.ts) 里的 building blocks，例如 `buildTaskProjectionCleanupStatements(...)`、`buildTaskNodeDefensiveCleanupStatements(...)` 和 `buildDeleteByIdsStatements(...)`；如果测试里新增了新的 task 下游表，也要同步把那张表加入 teardown 顺序，而不是等 FK 报错后再补。
+- 如果 teardown 本身是 statement array、writeDb 或 safeWriteDb 风格，优先复用 [tests/service/service-teardown-helpers.ts](tests/service/service-teardown-helpers.ts) 里的共享 helper，而不是在每个文件里重复拼 task/task-tree cleanup SQL。

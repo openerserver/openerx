@@ -8,8 +8,8 @@ import {
 } from "../agent-control/opencode-adapter";
 import { finalizeTaskState } from "./finalize";
 import {
-  fetchTaskSessionLineageRecords,
-  upsertTaskSessionLineageRecord,
+  fetchBranchCompatLineageRecords,
+  upsertBranchCompatLineageRecord,
 } from "./task-session-compat";
 import { persistWorkflowStageExecutionOutcome } from "./workflow-stage-execution";
 
@@ -341,8 +341,11 @@ function inferTerminalStatus(task: RunningTaskRecord): "completed" | "failed" | 
   return null;
 }
 
-async function deactivateActiveTaskSessions(authorization: string, taskId: string): Promise<void> {
-  const lineageResult = await fetchTaskSessionLineageRecords(taskId, authorization);
+async function deactivateActiveBranchCompatSessions(
+  authorization: string,
+  taskId: string,
+): Promise<void> {
+  const lineageResult = await fetchBranchCompatLineageRecords(taskId, authorization);
   if (!lineageResult.ok) {
     return;
   }
@@ -351,7 +354,7 @@ async function deactivateActiveTaskSessions(authorization: string, taskId: strin
     lineageResult.records
       .filter((record) => !record.archivedAt && record.isActive)
       .map((record) =>
-        upsertTaskSessionLineageRecord(taskId, authorization, {
+        upsertBranchCompatLineageRecord(taskId, authorization, {
           runtimeSessionId: record.runtimeSessionId,
           isActive: false,
         }),
@@ -377,7 +380,7 @@ async function markParallelTaskTerminal(
     return "skipped";
   }
 
-  await deactivateActiveTaskSessions(authorization, task.id);
+  await deactivateActiveBranchCompatSessions(authorization, task.id);
   return terminalStatus === "completed" ? "completed" : "failed";
 }
 
@@ -485,8 +488,8 @@ function taskNeedsRecentTerminalSessionRepair(task: RunningTaskRecord) {
   return getTaskTerminalAgeMs(task) <= getRecentTerminalSessionRepairThresholdMs();
 }
 
-async function loadTaskSessions(authorization: string, taskId: string) {
-  const lineageResult = await fetchTaskSessionLineageRecords(taskId, authorization);
+async function loadBranchCompatLineageRecords(authorization: string, taskId: string) {
+  const lineageResult = await fetchBranchCompatLineageRecords(taskId, authorization);
   return lineageResult.records;
 }
 
@@ -499,7 +502,7 @@ async function reconcileHistoricallyInconsistentTask(
     return "skipped";
   }
 
-  const lineageRecords = await loadTaskSessions(context.authorization, task.id);
+  const lineageRecords = await loadBranchCompatLineageRecords(context.authorization, task.id);
   const hasActiveSession = lineageRecords.some((record) => !record.archivedAt && record.isActive);
 
   if (hasActiveSession && task.sessionId && context.runtimeAvailable) {

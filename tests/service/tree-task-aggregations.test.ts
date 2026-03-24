@@ -48,9 +48,11 @@ interface AgentRunSummaryResponse {
   taskTitle: string;
   result: string | null;
   codeChanges: {
+    changeCount: number;
     files: number;
     insertions: number;
     deletions: number;
+    latestSummary: string | null;
   };
 }
 
@@ -163,7 +165,7 @@ async function createProject(orgId: string, unique: string) {
   return data;
 }
 
-function taskSessionNodeId(taskId: string, runtimeSessionId: string) {
+function taskBranchCompatNodeId(taskId: string, runtimeSessionId: string) {
   return `task_session:${taskId}:${runtimeSessionId}`;
 }
 
@@ -349,6 +351,14 @@ afterAll(async () => {
     if (leftIsRoot === rightIsRoot) return 0;
     return leftIsRoot ? 1 : -1;
   });
+  if (nodeIds.length > 0) {
+    const nodePlaceholders = nodeIds.map((_, index) => `$${index + 1}`).join(", ");
+    await sql.unsafe(
+      `DELETE FROM conversation_sessions WHERE tree_node_id IN (${nodePlaceholders})`,
+      nodeIds,
+    );
+    await sql.unsafe(`DELETE FROM tasks WHERE tree_node_id IN (${nodePlaceholders})`, nodeIds);
+  }
   for (const nodeId of nodeIds) {
     await sql.unsafe(
       "DELETE FROM project_tree_links WHERE source_node_id = $1 OR target_node_id = $1",
@@ -389,7 +399,7 @@ describe("tree-backed task aggregations", () => {
 
     const task = await createTaskForProject(projectRecord.id, `overview-tree-${unique}`);
     const runtimeSessionId = `overview-tree-session-${unique}`;
-    createdNodeIds.add(taskSessionNodeId(task.id, runtimeSessionId));
+    createdNodeIds.add(taskBranchCompatNodeId(task.id, runtimeSessionId));
 
     const patchResponse = await authedRequest<{ id: string; status: string }>(
       `/api/tasks/${task.id}`,
@@ -461,7 +471,7 @@ describe("tree-backed task aggregations", () => {
     );
   });
 
-  test("agent run summary reads task title from task aggregate and code changes from tree content", async () => {
+  test("agent run summary reads task title from task aggregate and does not recover code changes from stale tree content", async () => {
     const unique = Date.now();
     const task = await createTask(`agent-run-tree-${unique}`);
     const treeTitle = `agent-run-tree-title-${unique}`;
@@ -495,9 +505,11 @@ describe("tree-backed task aggregations", () => {
     expect(response.status).toBe(200);
     expect(response.data.taskTitle).toBe(`agent-run-tree-${unique}`);
     expect(response.data.codeChanges).toMatchObject({
-      files: 3,
-      insertions: 24,
-      deletions: 6,
+      changeCount: 0,
+      files: 0,
+      insertions: 0,
+      deletions: 0,
+      latestSummary: null,
     });
   });
 
@@ -514,7 +526,7 @@ describe("tree-backed task aggregations", () => {
     const createdAt = new Date(Date.now() - 5 * 60_000).toISOString();
     const updatedAt = new Date(Date.now() - 3 * 60_000).toISOString();
     const blockedAt = new Date(Date.now() - 60_000).toISOString();
-    createdNodeIds.add(taskSessionNodeId(task.id, runtimeSessionId));
+    createdNodeIds.add(taskBranchCompatNodeId(task.id, runtimeSessionId));
 
     const patchResponse = await authedRequest<{ id: string; status: string }>(
       `/api/tasks/${task.id}`,
@@ -736,8 +748,8 @@ describe("tree-backed task aggregations", () => {
     const rootMessageId = `projection-timeline-root-msg-${unique}`;
     const forkMessageId = `projection-timeline-fork-msg-${unique}`;
 
-    createdNodeIds.add(taskSessionNodeId(task.id, rootSessionId));
-    createdNodeIds.add(taskSessionNodeId(task.id, forkSessionId));
+    createdNodeIds.add(taskBranchCompatNodeId(task.id, rootSessionId));
+    createdNodeIds.add(taskBranchCompatNodeId(task.id, forkSessionId));
 
     const rootBranch = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/branches`, {
       method: "POST",
@@ -821,7 +833,7 @@ describe("tree-backed task aggregations", () => {
     expect(leafOnlyResponse.data.data).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          sessionId: taskSessionNodeId(task.id, forkSessionId),
+          sessionId: taskBranchCompatNodeId(task.id, forkSessionId),
           itemKind: "assistant-output",
           displayText: `timeline fork text ${unique}`,
         }),

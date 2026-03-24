@@ -1,5 +1,10 @@
 import { cpFetch } from "../../lib/control-plane-client";
 
+// This module is the BFF shim for branch compat / session-message-compatibility reads.
+// The payloads still key off runtime session ids, so the legacy TaskSession* names remain
+// for compatibility. New call sites should prefer the explicit BranchCompat* aliases below
+// when they are operating on /branches* compat routes rather than public trace routes.
+
 export interface TaskSessionLineageRecord {
   id?: string;
   taskId?: string;
@@ -14,6 +19,8 @@ export interface TaskSessionLineageRecord {
   archivedAt?: string | null;
 }
 
+export type BranchCompatLineageRecord = TaskSessionLineageRecord;
+
 export interface UpsertTaskSessionLineageInput {
   runtimeSessionId: string;
   parentRuntimeSessionId?: string;
@@ -22,6 +29,8 @@ export interface UpsertTaskSessionLineageInput {
   sourceType?: "root" | "fork" | "sub_session";
   isActive: boolean;
 }
+
+export type UpsertBranchCompatLineageInput = UpsertTaskSessionLineageInput;
 
 export interface TaskSessionTimelineItem {
   id: string;
@@ -33,11 +42,15 @@ export interface TaskSessionTimelineItem {
   sourceEventTypes?: string[];
 }
 
+export type BranchCompatTimelineItem = TaskSessionTimelineItem;
+
 export type TaskSessionTimelineReadSource =
   | "conversation-table"
   | "task-domain-events"
   | "conversation-table+task-domain-events"
   | "task-domain-projection";
+
+export type BranchCompatTimelineReadSource = TaskSessionTimelineReadSource;
 
 export interface TaskSessionTimelineMeta {
   readSource?: TaskSessionTimelineReadSource;
@@ -49,15 +62,21 @@ export interface TaskSessionTimelineMeta {
   itemCount?: number;
 }
 
+export type BranchCompatTimelineMeta = TaskSessionTimelineMeta;
+
 export interface TaskSessionTimelineResponse {
   data: TaskSessionTimelineItem[];
   meta?: TaskSessionTimelineMeta;
 }
 
+export type BranchCompatTimelineResponse = TaskSessionTimelineResponse;
+
 export interface TaskSessionCachedMessagesResponse {
   data?: unknown[];
   meta?: TaskSessionTimelineMeta;
 }
+
+export type BranchCompatCachedMessagesResponse = TaskSessionCachedMessagesResponse;
 
 export function normalizeTaskSessionTimelineMeta(
   meta?: TaskSessionTimelineMeta,
@@ -65,6 +84,8 @@ export function normalizeTaskSessionTimelineMeta(
   if (!meta) return undefined;
   return meta;
 }
+
+export const normalizeBranchCompatTimelineMeta = normalizeTaskSessionTimelineMeta;
 
 export function createProjectionTraceTimelineMeta(args: {
   meta?: TaskSessionTimelineMeta;
@@ -103,6 +124,8 @@ export async function persistTaskSessionMessageSnapshot(
   });
 }
 
+export const persistBranchCompatMessageSnapshot = persistTaskSessionMessageSnapshot;
+
 export async function fetchTaskSessionLineageRecords(taskId: string, authorization: string) {
   const lineageResult = await cpFetch<{ data?: TaskSessionLineageRecord[] }>(
     `/api/tasks/${encodeURIComponent(taskId)}/branches`,
@@ -119,6 +142,8 @@ export async function fetchTaskSessionLineageRecords(taskId: string, authorizati
     activeRecords: records.filter((record) => !record.archivedAt),
   };
 }
+
+export const fetchBranchCompatLineageRecords = fetchTaskSessionLineageRecords;
 
 export async function upsertTaskSessionLineageRecord(
   taskId: string,
@@ -138,6 +163,8 @@ export async function upsertTaskSessionLineageRecord(
     authorization,
   });
 }
+
+export const upsertBranchCompatLineageRecord = upsertTaskSessionLineageRecord;
 
 export async function fetchTaskSessionTimeline(
   taskId: string,
@@ -161,6 +188,8 @@ export async function fetchTaskSessionTimeline(
   };
 }
 
+export const fetchBranchCompatTimeline = fetchTaskSessionTimeline;
+
 export async function fetchTaskSessionCachedMessages(
   taskId: string,
   sessionId: string,
@@ -183,6 +212,8 @@ export async function fetchTaskSessionCachedMessages(
   };
 }
 
+export const fetchBranchCompatCachedMessages = fetchTaskSessionCachedMessages;
+
 export async function activateTaskSessionLineageByRecordId(
   taskId: string,
   recordId: string,
@@ -194,6 +225,8 @@ export async function activateTaskSessionLineageByRecordId(
   );
 }
 
+export const activateBranchCompatLineageByRecordId = activateTaskSessionLineageByRecordId;
+
 export async function archiveTaskSessionLineageByRecordId(
   taskId: string,
   recordId: string,
@@ -204,3 +237,5 @@ export async function archiveTaskSessionLineageByRecordId(
     { method: "POST", authorization },
   );
 }
+
+export const archiveBranchCompatLineageByRecordId = archiveTaskSessionLineageByRecordId;

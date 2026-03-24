@@ -10,6 +10,11 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  buildDeleteByIdsStatements,
+  buildTaskNodeDefensiveCleanupStatements,
+  buildTaskProjectionCleanupStatements,
+} from "./service-teardown-helpers";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -76,24 +81,19 @@ const createdChangeIds: string[] = [];
 
 afterAll(async () => {
   const taskCleanupStatements = [
-    ...createdTaskIds.map((id) => `DELETE FROM tasks WHERE id='${id}';`),
+    ...buildTaskProjectionCleanupStatements(createdTaskIds),
+    ...buildDeleteByIdsStatements("tasks", createdTaskIds),
     ...(DATABASE_DIALECT === "postgres"
-      ? [
-          ...createdTaskIds.map(
-            (id) =>
-              `DELETE FROM project_tree_branches WHERE task_node_id='${id}' OR head_node_id='${id}';`,
-          ),
-          ...createdTaskIds.map((id) => `DELETE FROM project_tree_nodes WHERE id='${id}';`),
-        ]
+      ? buildTaskNodeDefensiveCleanupStatements(createdTaskIds)
       : []),
   ];
   const ids = [
-    ...createdCredentialIds.map((id) => `DELETE FROM repository_credentials WHERE id='${id}';`),
-    ...createdChangeIds.map(
-      (id) =>
-        `DELETE FROM file_changes WHERE change_id='${id}'; DELETE FROM code_changes WHERE id='${id}';`,
-    ),
+    ...createdChangeIds.map((id) => {
+      const changeStatements = buildDeleteByIdsStatements("file_changes", [id], "change_id");
+      return `${changeStatements[0]} ${buildDeleteByIdsStatements("code_changes", [id])[0]}`;
+    }),
     ...taskCleanupStatements,
+    ...buildDeleteByIdsStatements("repository_credentials", createdCredentialIds),
   ];
   if (ids.length > 0) {
     const { execSync } = await import("node:child_process");

@@ -1,8 +1,9 @@
-# 新任务详情页方案
+# 新任务详情页方案（历史设计稿）
 
 > 目标：在保留旧页面的前提下，新建一个精简版任务详情页，聚焦三件事：用 VueFlow 可视化分支拓扑、独立执行追踪视图、单窗口聊天切换。
 >
 > 适用范围：新路由页面 + 新组件，不修改现有 TaskDetail.vue / TaskWorkbench.vue。
+> 历史注记：本文保留的是 TaskDetailV3 初版设计语境。`TaskDetailV3` 已经落地，且现行实现已从早期 tree-native / tree-first 草案演进为以 task-domain / projection-first 为主的任务视图。下文凡是“新建”“迁移”“拆出”等表述，都应按历史实施步骤理解，而不是当前待建设项。
 
 ## 0. 核心设计原则
 
@@ -66,7 +67,7 @@
 | -------- | -------- | ------ |
 | `/tasks/:taskId` (TaskDetail.vue) | 保留不动 | 旧页面继续作为全功能详情页 |
 | `/workbench` (TaskWorkbench.vue) | 保留不动 | 旧 Workbench 不改 |
-| `/tasks/:taskId/v3` (TaskDetailV3.vue) | 当前任务视图 | tree-first 任务详情页 |
+| `/tasks/:taskId/v3` (TaskDetailV3.vue) | 当前任务视图 | 现行任务视图；早期草案曾按 tree-native / tree-first 起稿，当前实现已演进为 task-domain / projection-first 主读链 |
 
 导航入口：
 
@@ -133,10 +134,10 @@ Sidebar 内两个面板自上而下排列，使用 §0.1 速览容器样式：
 
 ```ts
 // 现有通用 API
-getSessionTree(taskId: string) => Promise<{ data: SessionTreeNode[] }>
+getTaskBranchLineage(taskId: string) => Promise<{ data: BranchLineageNode[] }>
 ```
 
-`SessionTreeNode` 结构：
+`BranchLineageNode` 结构：
 
 ```ts
 interface SessionTreeNode {
@@ -201,7 +202,7 @@ function sessionTreeToFlow(
 复用现有 API：
 
 ```ts
-getSessionMessages(sessionId: string) => message[]
+getTaskConversationMessages(taskId: string, sessionId: string) => { data: message[] }
 ```
 
 展示规则：
@@ -218,7 +219,7 @@ getSessionMessages(sessionId: string) => message[]
 1. 多行 textarea，最大 50000 字。
 2. 模型选择器（复用 `getModelsList`）。
 3. "继续当前分支"主按钮。
-4. "分叉"次按钮（调用 `forkTaskSession` 后在分支图新增节点）。
+4. "分叉"次按钮（调用 `forkTaskBranch` 后在分支图新增节点）。
 5. 任务 running 时禁用输入，显示"执行中"提示。
 6. 终止执行按钮（如果有可控 agentRunId）。
 
@@ -382,8 +383,8 @@ function layoutTree(
 
 ### 6.5 刷新策略
 
-1. 页面 mount 时调用 `getSessionTree(taskId)` 获取初始数据。
-2. 分叉成功后立即重新拉取 session tree，VueFlow 响应式更新。
+1. 页面 mount 时调用 `getTaskBranchLineage(taskId)` 获取初始数据。
+2. 分叉成功后立即重新拉取 branch lineage，VueFlow 响应式更新。
 3. Realtime event `session.created` / `session.updated` 触发增量刷新。
 4. 不使用定时轮询。
 
@@ -575,9 +576,11 @@ defineEmits<{
 
 ## 11. 实施步骤
 
+以下阶段为历史实施步骤回放；对应能力已落地，现阶段只适合作为设计演进记录，不再代表当前 backlog。
+
 ### 阶段 1：骨架搭建
 
-1. 新建 `TaskDetailV3.vue`，只有 Header + 左侧主内容区空壳（Workflow 概览 + 聊天区 + 底部输入框）+ 右侧 Sidebar 占位区。
+1. 历史 Phase 1 已创建 `TaskDetailV3.vue`，当时先落了 Header + 左侧主内容区空壳（Workflow 概览 + 聊天区 + 底部输入框）+ 右侧 Sidebar 占位区。
 2. 使用 `/tasks/:taskId/v3` 作为任务视图路由。
 3. 在旧 TaskDetail header 加一个“任务视图”的 router-link。
 4. 在任务列表 Tasks.vue 的操作栏加一个“任务视图”入口。
@@ -589,7 +592,7 @@ defineEmits<{
 1. 新建 `useSessionFlow.ts`，实现 `sessionTreeToFlow` 转换 + top-down 垂直布局。
 2. 新建 `SessionFlowNode.vue`，自定义节点（速览卡片风格）。
 3. 新建 `SessionFlowGraph.vue`，速览容器壳 + VueFlow + Background + Controls + 折叠功能。
-4. 接入 `getSessionTree` API。
+4. 接入 `getTaskBranchLineage` API。
 5. 点击节点 → 选中 session。
 
 验收：打开新页面能看到右侧 Sidebar 中的分支拓扑图，可折叠/展开，点击节点可选中。
@@ -631,7 +634,7 @@ defineEmits<{
 
 | 模块 | 路径 | 用途 |
 | ------ | ------ | ------ |
-| API 函数 | `lib/api.ts` | getTask, getSessionTree, getSessionMessages, getTaskExecutionTraceView, continueTask, forkTaskSession, activateSession, archiveTaskSession, listTasks, getModelsList, terminateAgent 等 |
+| API 函数 | `lib/api.ts` | getTask, getTaskBranchLineage, getTaskConversationMessages, getTaskExecutionTraceView, continueTask, forkTaskBranch, activateTaskBranch, archiveTaskBranch, listTasks, getModelsList, terminateAgent 等 |
 | Markdown 渲染 | `lib/markdown.ts` | renderMarkdown |
 | Realtime store | `stores/realtime.ts` | useRealtimeStore |
 | 主题样式 | `theme/ui-theme.ts` | taskDetailThemeStyles（部分复用） |
@@ -654,11 +657,11 @@ defineEmits<{
 核心测试用例：
 
 1. **路由挂载**：页面能正确加载，显示任务标题。
-2. **分支图渲染**：mock `getSessionTree` 返回多分支数据，验证 VueFlow nodes/edges 数量正确。
+2. **分支图渲染**：mock `getTaskBranchLineage` 返回多分支数据，验证 VueFlow nodes/edges 数量正确。
 3. **节点点击切换**：点击分支节点后 `selectedSessionId` 更新，消息列表重新加载。
-4. **消息加载**：mock `getSessionMessages` 返回消息，验证渲染。
+4. **消息加载**：mock `getTaskConversationMessages` 返回消息，验证渲染。
 5. **续跑**：输入文本后点击续跑按钮，验证调用 `continueTask`。
-6. **分叉**：点击分叉按钮，验证调用 `forkTaskSession`，分支图新增节点。
+6. **分叉**：点击分叉按钮，验证调用 `forkTaskBranch`，分支图新增节点。
 7. **执行追踪**：展开右侧 Sidebar 执行追踪面板，验证加载并渲染来源拆解。
 8. **任务切换**：选择新任务，验证 router.replace 和数据刷新。
 

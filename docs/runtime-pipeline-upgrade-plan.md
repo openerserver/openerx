@@ -185,8 +185,8 @@ async function buildRuntimePipeline(taskId: string, sessionId?: string): Promise
 
   // 2. 确定目标 session
   const targetSessionId = sessionId || task.sessionId
-  const lineage = await getTaskSessionLineage(taskId)
-  const sessionRecord = lineage.find(r => r.runtimeSessionId === targetSessionId)
+  const branchLineage = await getTaskBranchLineage(taskId)
+  const branchRecord = findBranchLineageNode(branchLineage.data, targetSessionId)
 
   // 3. 读取策略与并行运行明细
   const strategy: PersistedTaskStrategy | null = task.strategy ? JSON.parse(task.strategy) : null
@@ -195,7 +195,7 @@ async function buildRuntimePipeline(taskId: string, sessionId?: string): Promise
     : null
 
   // 4. 获取 session 消息用于 planning stages
-  const messages = await getSessionMessages(targetSessionId)
+  const messages = await getTaskConversationMessages(taskId, targetSessionId)
 
   // 6. 组装 stages
   const stages: RuntimePipelineStage[] = []
@@ -549,7 +549,7 @@ Phase 1 中 planning stage 仍然保留，原因是当前 UI 上用户已经看�
 
 ### 10.1 BFF 新增聚合模块
 
-历史方案建议新建 `web-ui-bff/src/lib/runtime-pipeline.ts`，集中承载运行流水线的纯计算逻辑；当前该聚合模块已经存在，本段保留为设计来源说明。
+历史方案中曾新建 `web-ui-bff/src/lib/runtime-pipeline.ts`，集中承载运行流水线的纯计算逻辑；当前该聚合模块已经存在，本段保留为设计来源说明。
 
 历史草案中的导出函数如下：
 
@@ -674,7 +674,7 @@ Phase 1-2 不新增 service 端点，但后端实现时要遵守以下边界：
 2. `getTaskPipeline()` 升级为支持 `sessionId` 参数，或新增 `getTaskRuntimePipeline()`。
 3. 统一前端只认新结构，不再在组件里拼旧式 `PipelineStage`。
 
-建议不要把类型直接塞进 `TaskDetail.vue`，而是抽到单独文件：
+历史实现口径是不把类型直接塞进 `TaskDetail.vue`，而是抽到单独文件：
 
 - `web-ui/src/types/pipeline.ts`
 
@@ -701,14 +701,14 @@ const selectedPipelineGraphNodeId = ref<string | null>(null)
 
 保留当前垂直 steps 的整体方向，但结构应从“单层阶段”升级为“可展开阶段列表”。
 
-建议 UI 最小改造：
+历史 UI 最小改造草案：
 
 - 顶部摘要栏：分支名、总进度、总耗时、token 汇总
 - 中部阶段列表：按 `order` 纵向排列
 - 单个阶段卡片：状态点、标签、agent/model、耗时、token
 - 展开区：output / error / graph 关联信息
 
-建议新增的派生状态：
+历史新增的派生状态草案：
 
 ```typescript
 const pipelineStages = computed(() => runtimePipeline.value?.stages ?? [])
@@ -728,7 +728,7 @@ const pipelineCompletionPercent = computed(() => {
 
 ### 11.4 前端测试清单
 
-建议补充以下测试：
+历史测试补强草案：
 
 | 场景 | 断言 |
 | ---- | ---- |
@@ -808,7 +808,7 @@ function shouldApplyPipelinePatch(event: PipelineStageUpdatedEventData) {
 
 ### 12.5 Phase 4 预留事件
 
-状态注记：本节仅保留历史事件设计草案。若未来单独推进高级扩展，不建议复用 `pipeline.stage.updated` 塞入过多语义，而应另起事件类型：
+状态注记：本节仅保留历史事件设计草案。若未来单独推进高级扩展，更合适的做法是不复用 `pipeline.stage.updated` 塞入过多语义，而是另起事件类型：
 
 ```typescript
 type FutureRuntimePipelineEvent =
@@ -818,9 +818,9 @@ type FutureRuntimePipelineEvent =
 
 这样可以避免在 Phase 2 就把事件载荷设计得过重。
 
-## 13. 推荐开工顺序
+## 13. 历史开工顺序
 
-如果按最小风险推进，建议顺序如下：
+如果按当时的最小风险推进思路，顺序如下：
 
 1. 后端先落 `runtime-pipeline.ts`，把聚合逻辑独立出来
 2. 重写 `GET /:taskId/pipeline`，先让接口返回新结构

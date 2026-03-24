@@ -4,6 +4,11 @@ import { beforeEach, describe, expect, mock, test } from "bun:test";
 import * as orchestrationStrategyModule from "../../control-plane/web-ui-bff/src/lib/orchestration-strategy";
 import { createControlPlaneClientModuleMock } from "./control-plane-client-mock";
 import { createOpencodeAdapterModuleMock } from "./opencode-adapter-mock";
+import {
+  expectNoLegacyTimelineReadSource,
+  expectNoPromptBackfillSegment,
+  expectServiceTimelineNotRequested,
+} from "./execution-trace-contract-test-helpers";
 
 const cpFetchMock = mock(async (..._args: unknown[]) => ({ ok: true, status: 200, data: {} }));
 const authHeaderMock = mock(() => "Bearer test-token");
@@ -68,13 +73,6 @@ mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-a
     updateAgentRunStatus: mock(() => undefined),
   }),
 );
-
-function expectNoLegacyTimelineReadSource(payload: {
-  timelineMeta?: { readSource?: string | null } | null;
-}) {
-  expect(payload.timelineMeta?.readSource).not.toBe("legacy-project-tree-events");
-  expect(payload.timelineMeta?.readSource).not.toBe("conversation-table+legacy-fallback");
-}
 
 beforeEach(() => {
   cpFetchMock.mockReset();
@@ -322,7 +320,6 @@ describe("project execution trace route", () => {
       ]),
     );
     expect(payload.segments).toEqual([
-      expect.objectContaining({ type: "user-input", content: "项目级任务输入" }),
       expect.objectContaining({ type: "final-prompt", content: "project projection prompt" }),
       expect.objectContaining({ type: "model-response", content: "project projection response" }),
       expect.objectContaining({ type: "chain-step-result", content: "first chain step completed" }),
@@ -438,7 +435,6 @@ describe("project execution trace route", () => {
     const payload = await response.json();
     expect(payload.snapshot).toMatchObject({ latestResult: "snapshot only response" });
     expect(payload.segments).toEqual([
-      expect.objectContaining({ type: "user-input", content: "项目级任务输入" }),
       expect.objectContaining({ type: "final-prompt", content: "projection prompt only" }),
     ]);
     expect(payload.segments).not.toEqual(
@@ -447,6 +443,101 @@ describe("project execution trace route", () => {
       ]),
     );
     expect(getSessionMessagesMock).not.toHaveBeenCalled();
+  });
+
+  test("does not load service timeline when projection is empty but snapshot latestResult exists", async () => {
+    cpFetchMock.mockImplementation(async (path: string) => {
+      if (path === "/api/project-tree/tasks/task-1") {
+        return {
+          ok: true,
+          status: 200,
+          data: {
+            id: "task-1",
+            projectId: "proj-1",
+            sessionId: "ses-1",
+            strategy: JSON.stringify({ hookExecutions: [] }),
+            prompt: "项目级任务输入",
+            title: "project trace task",
+            status: "running",
+          },
+        };
+      }
+
+      if (path === "/api/tasks/task-1/snapshot") {
+        return {
+          ok: true,
+          status: 200,
+          data: {
+            data: {
+              taskId: "task-1",
+              projectId: "proj-1",
+              currentStatus: "running",
+              currentRunId: "task_run:task-1:ses-1",
+              currentSessionId: "ses-1",
+              latestResult: "snapshot only response",
+              latestResultSummary: "snapshot only response",
+              activeCandidateCount: 0,
+              completedCandidateCount: 0,
+              failedCandidateCount: 0,
+              totalChainSteps: 0,
+              completedChainSteps: 0,
+              updatedAt: "2026-03-22T10:00:03.000Z",
+            },
+            meta: {
+              readSource: "task-domain-projection",
+              complete: false,
+            },
+          },
+        };
+      }
+
+      if (path === "/api/tasks/task-1/timeline-view?runtimeSessionId=ses-1") {
+        return {
+          ok: true,
+          status: 200,
+          data: {
+            data: [],
+            meta: {
+              readSource: "task-domain-projection",
+              complete: false,
+              itemCount: 0,
+            },
+          },
+        };
+      }
+
+      if (path === "/api/tasks/task-1/branches/ses-1/timeline?includeLineage=true") {
+        throw new Error("should not load service timeline when snapshot latestResult already exists");
+      }
+
+      return { ok: true, status: 200, data: {} };
+    });
+
+    const { projectRoutes } = await import(
+      "../../control-plane/web-ui-bff/src/modules/projects/routes"
+    );
+
+    const response = await projectRoutes.request(
+      "http://localhost/proj-1/task-execution-trace/task-1",
+      {
+        headers: {
+          Authorization: "Bearer test-token",
+        },
+      },
+    );
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload.timelineMeta).toMatchObject({
+      readSource: "task-domain-projection",
+      complete: false,
+      itemCount: 0,
+    });
+    expectNoLegacyTimelineReadSource(payload);
+    expect(payload.snapshot).toMatchObject({ latestResult: "snapshot only response" });
+    expect(payload.timeline).toEqual([]);
+    expect(payload.segments).toEqual([]);
+    expectServiceTimelineNotRequested(cpFetchMock, "task-1", "ses-1");
   });
 
   test("keeps non-empty partial projection timeline without loading service timeline", async () => {
@@ -544,14 +635,9 @@ describe("project execution trace route", () => {
       }),
     ]);
     expect(payload.segments).toEqual([
-      expect.objectContaining({ type: "user-input", content: "项目级任务输入" }),
       expect.objectContaining({ type: "final-prompt", content: "projection partial prompt" }),
     ]);
-    expect(
-      cpFetchMock.mock.calls.some(
-        ([path]) => path === "/api/tasks/task-1/branches/ses-1/timeline?includeLineage=true",
-      ),
-    ).toBe(false);
+    expectServiceTimelineNotRequested(cpFetchMock, "task-1", "ses-1");
   });
 
   test("uses complete service timeline without falling back to session messages", async () => {
@@ -662,7 +748,6 @@ describe("project execution trace route", () => {
       }),
     ]);
     expect(payload.segments).toEqual([
-      expect.objectContaining({ type: "user-input", content: "项目级任务输入" }),
       expect.objectContaining({ type: "final-prompt", content: "timeline 最终 prompt" }),
       expect.objectContaining({ type: "model-response", content: "timeline 模型回复" }),
     ]);
@@ -749,7 +834,6 @@ describe("project execution trace route", () => {
       expect.objectContaining({ id: "msg-user", role: "user", text: "partial timeline prompt" }),
     ]);
     expect(payload.segments).toEqual([
-      expect.objectContaining({ type: "user-input", content: "项目级任务输入" }),
       expect.objectContaining({ type: "final-prompt", content: "partial timeline prompt" }),
     ]);
     expect(getSessionMessagesMock).toHaveBeenCalledTimes(0);
@@ -836,9 +920,8 @@ describe("project execution trace route", () => {
       itemCount: 0,
     });
     expectNoLegacyTimelineReadSource(payload);
-    expect(payload.segments).toEqual([
-      expect.objectContaining({ type: "user-input", content: "项目级任务输入" }),
-    ]);
+    expect(payload.segments).toEqual([]);
+    expectNoPromptBackfillSegment(payload, "项目级任务输入");
     expect(getSessionMessagesMock).not.toHaveBeenCalled();
   });
 });
