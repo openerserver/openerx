@@ -531,7 +531,7 @@ Phase 1 中 planning stage 仍然保留，原因是当前 UI 上用户已经看�
 | 任务详情 | `web-ui/src/pages/TaskDetail.vue` | pipeline 面板渲染 | Phase 1-3 为主；更重交互仅留作历史扩展 |
 | 类型定义 | `web-ui/src/types/pipeline.ts`（新建） | — | Phase 1 |
 | Service 任务 | `service/src/modules/tasks/routes.ts` | task CRUD | 不变 |
-| Service Schema | `service/src/db/schema.ts` | tasks + 兼容 lineage 表 / tree schema | 当前不新增；历史扩展也不应回到 `task_sessions` 叠加语义 |
+| Service Schema | `service/src/db/schema.ts` | task-domain / tree / conversation 相关 schema | 当前不新增；历史扩展也不应回到旧 `tasks` / `task_sessions` 结构叠加语义 |
 
 ## 9. 风险与缓解
 
@@ -643,8 +643,8 @@ Phase 2 的现实做法不是精确计算最小 diff，而是：
 Phase 1-2 不新增 service 端点，但后端实现时要遵守以下边界：
 
 - 不把 `RuntimePipeline` 持久化回 service
-- 不向 `tasks` 表新增字段
-- 兼容 `task_sessions` 视图/存储仍只作为 session 血统来源，不承载 pipeline 运行态，也不应继续承接新业务字段
+- 不向当前 task-domain 主模型新增 pipeline 专用持久化字段
+- 历史上的 `task_sessions` 兼容语义不应被重新引回 schema 或存储层；pipeline 运行态也不应叠加到 branch lineage 持久化链路上
 
 ### 10.5 后端测试清单
 

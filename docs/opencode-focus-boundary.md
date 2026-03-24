@@ -34,6 +34,7 @@ OpenerX 将 OpenCode 视为运行时与插件生态底座，而不是桌面产�
 | 关注项 | 插件 API 与运行机制稳定性 | 持续关注 | 重点关注插件接口、事件机制、权限模型和运行时约束是否稳定。 |
 | 关注项 | 升级过程中的插件兼容验证 | 持续关注 | 每次升级 OpenCode 时，需要把插件兼容性作为核心验收项，而不只是验证基础 API。 |
 | 关注项 | 运行时协议兼容性 | 持续关注 | 持续关注 REST API、SSE 事件、SDK 行为是否稳定，确保控制平面对接不被破坏。 |
+| 关注项 | execution trace 与 runtime 协议的边界稳定性 | 持续关注 | 需要持续保持“runtime 原始消息接口”与“task-domain execution trace 公开 contract”两层语义分离，避免在设计讨论中重新把 runtime message fallback 带回主链。 |
 | 不关注项 | 桌面版开发 | 不关注 | 不以 OpenCode 桌面客户端产品形态作为建设目标。 |
 | 不关注项 | Windows 系统适配与更新 | 不关注 | 不投入 Windows 平台兼容、安装、更新与问题修复。 |
 | 不关注项 | 桌面端打包与分发体系 | 不关注 | 包括安装包生成、签名、公证、自动升级、渠道分发等。 |
@@ -49,8 +50,21 @@ OpenerX 将 OpenCode 视为运行时与插件生态底座，而不是桌面产�
 
 1. 是否直接影响 OpenerX 与 OpenCode Runtime 的协议兼容性。
 2. 是否影响社区插件市场接入和主流插件兼容性。
-3. 是否影响内部选定插件的安装、运行、升级和治理。
-4. 如果仅影响桌面客户端形态、跨平台分发或终端用户体验，则默认不纳入当前阶段重点。
+3. 是否会误导 execution trace 的实现边界，例如把 `GET /session/:id/message` 重新当作 trace 主读链或公开 fallback。
+4. 是否影响内部选定插件的安装、运行、升级和治理。
+5. 如果仅影响桌面客户端形态、跨平台分发或终端用户体验，则默认不纳入当前阶段重点。
+
+### 5.1 Execution Trace 边界补充
+
+对于实现者，当前需要记住的不是“runtime 有没有消息读取接口”，而是“哪些来源允许进入 task-domain trace contract”。
+
+当前边界如下：
+
+1. execution trace 主读链以 task-domain projection 为首选。
+2. service timeline 作为正式但受限的 secondary source，只在 projection timeline 为空或不可用时补位。
+3. service timeline 的本质是 `conversation_messages` 与 conversation domain events 的持久化聚合，不是 runtime fallback 的别名。
+4. 只要 projection 已经返回非空 timeline，即使不完整，也必须显式暴露 incomplete，而不是用 runtime messages 或 service timeline 覆盖掉 partial projection。
+5. 因此，OpenCode runtime 的消息接口应被视为底层协议与诊断能力，而不是未来设计讨论里可以随时重新接回来的 trace fallback 层。
 
 ## 6. 一页式结论
 

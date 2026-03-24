@@ -304,6 +304,19 @@ beforeEach(() => {
 });
 
 describe("ProjectDetail", () => {
+  it("keeps base project overview visible when secondary overview cards fail", async () => {
+    apiMocks.getProjectPaidExecutionLease.mockRejectedValueOnce(new Error("lease down"));
+    apiMocks.getProjectPaidExecutionPreflight.mockRejectedValueOnce(new Error("preflight down"));
+    apiMocks.getProjectRuntimeUsageLedgers.mockRejectedValueOnce(new Error("ledger down"));
+
+    const wrapper = await mountPage();
+
+    expect(apiMocks.getProject).toHaveBeenCalledWith("proj-default");
+    expect(wrapper.text()).toContain("Default Project");
+    expect(wrapper.text()).toContain("A sample project");
+    expect(wrapper.text()).toContain("项目设置");
+  });
+
   it("does not render project section nav on the detail page", async () => {
     const wrapper = await mountPage();
 

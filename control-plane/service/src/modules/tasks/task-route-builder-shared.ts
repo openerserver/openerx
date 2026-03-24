@@ -1,6 +1,6 @@
 import {
-  archiveTaskSessionTreeNode,
-  upsertTaskSessionTreeNode,
+  archiveTaskBranchCompatTreeNode,
+  upsertTaskBranchCompatTreeNode,
   upsertTaskTreeNode,
 } from "../project-tree/storage";
 import { loadTaskTreeRecord } from "../project-tree/task-view";
@@ -14,13 +14,13 @@ import {
 } from "./task-domain-projector";
 import { createTaskRunWriteSyncApi } from "./task-run-write-sync";
 import {
-  buildTaskSessionEventsResponse,
-  buildTaskSessionMessagesResponse,
-  buildTaskSessionTimelineResponse,
-  listTaskSessionTreeRecords,
-  resolveTaskSessionRecord,
-  resolveTaskSessionRecordByRuntimeSessionId,
-} from "./task-session-read";
+  buildTaskBranchCompatEventsResponse,
+  buildTaskBranchCompatMessagesResponse,
+  buildTaskBranchCompatTimelineResponse,
+  listTaskBranchCompatTreeRecords,
+  resolveTaskBranchCompatRecord,
+  resolveTaskBranchCompatRecordByRuntimeSessionId,
+} from "./task-branch-compat-read";
 import { createTaskSnapshotReadApi } from "./task-snapshot-read";
 
 async function loadTaskTreeBackedRecord(taskId: string) {
@@ -33,14 +33,14 @@ export function buildTaskRouteBuilderShared() {
     appendTaskDomainEvent,
     buildTaskTreeSnapshotFromRecord,
     upsertTaskTreeNode,
-    syncTaskSessionTreeNode: upsertTaskSessionTreeNode,
-    archiveTaskSessionTreeNode,
-    resolveTaskSessionRecord,
-    resolveTaskSessionRecordByRuntimeSessionId,
-    buildTaskSessionMessagesResponse,
-    buildTaskSessionEventsResponse,
-    buildTaskSessionTimelineResponse,
-    listTaskSessionTreeRecords,
+    syncTaskBranchCompatTreeNode: upsertTaskBranchCompatTreeNode,
+    archiveTaskBranchCompatTreeNode,
+    resolveTaskBranchCompatRecord,
+    resolveTaskBranchCompatRecordByRuntimeSessionId,
+    buildTaskBranchCompatMessagesResponse,
+    buildTaskBranchCompatEventsResponse,
+    buildTaskBranchCompatTimelineResponse,
+    listTaskBranchCompatTreeRecords,
     replayTaskDomainProjections,
     replayTaskDomainProjectionsByProject,
   };

@@ -344,6 +344,20 @@ beforeEach(() => {
 });
 
 describe("Tasks page", () => {
+  it("renders task rows directly from listTasks without hydrating per-task detail on first load", async () => {
+    apiMocks.getTask.mockResolvedValue(
+      makeTask({ id: "task-list-row", title: "Detail title should not appear" }),
+    );
+
+    const wrapper = await mountPage([
+      makeTask({ id: "task-list-row", title: "List row title", status: "running" }),
+    ]);
+
+    expect(wrapper.text()).toContain("List row title");
+    expect(wrapper.text()).not.toContain("Detail title should not appear");
+    expect(apiMocks.getTask).not.toHaveBeenCalled();
+  });
+
   it("shows truncation warning when task count hits backend limit", async () => {
     const tasks = Array.from({ length: TASK_LIST_LIMIT }, (_, index) =>
       makeTask({ id: `task-${index}`, title: `Task ${index}` }),

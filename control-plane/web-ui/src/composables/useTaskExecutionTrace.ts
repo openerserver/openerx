@@ -35,8 +35,6 @@ function buildTraceReadSourceLabel(
       return { value: "领域事件", tone: "default" };
     case "conversation-table+task-domain-events":
       return { value: "会话表+领域事件", tone: "default" };
-    case "runtime-fallback":
-      return { value: "运行时回退", tone: "default" };
     default:
       return { value: "未知", tone: "default" };
   }

@@ -10,6 +10,8 @@
 
 OpenCode 的整体关注边界另见 [OpenCode 关注边界说明](./opencode-focus-boundary.md)。本文档只描述当前接口收敛方式，不覆盖 OpenCode 产品能力取舍。
 
+execution trace 的最终公开读取边界以 [execution-trace-read-boundary-adr.md](execution-trace-read-boundary-adr.md) 为准。本文只保留接口层落点，不再单独演绎一套 trace contract 结论。
+
 ## 2. BFF 对前端暴露的接口
 
 ### 2.1 认证（公开，无需 token）
@@ -26,6 +28,10 @@ OpenCode 的整体关注边界另见 [OpenCode 关注边界说明](./opencode-fo
 | --- | --- | --- | --- |
 | GET | `/api/tasks` | 任务列表 | CP `/api/audit` 聚合 |
 | GET | `/api/tasks/:taskId` | 任务详情 | CP `/api/audit` 聚合 |
+
+补充边界：task / project execution trace 相关公开视图，应继续收敛在 task-domain 持久化读链上，而不是重新回到 OpenCode Runtime 原始消息接口。也就是说，trace 的正式来源应以 `task_timeline_views` 为首选，并只在 projection timeline 为空或不可用时，允许使用由 `conversation_messages` 与 conversation domain events 聚合得到的 service timeline 补位。
+
+如需评审或变更这条边界，直接引用 [execution-trace-read-boundary-adr.md](execution-trace-read-boundary-adr.md)。
 
 ### 2.3 审批（需要 token）
 
@@ -50,6 +56,14 @@ OpenCode Runtime 的真实协议差异见：
 | POST | `/api/agents/:agentRunId/terminate` | 终止 Agent | OpenCode Runtime |
 | GET | `/api/agents/:agentRunId/status` | Agent 状态 | BFF 内存 |
 | GET | `/api/agents/:agentRunId/messages` | Agent 消息 | OpenCode Runtime |
+
+边界说明：
+
+1. `/api/agents/:agentRunId/messages` 表示 runtime 原始 Agent 会话消息读取接口，主要用于控制台查看、联调与低层协议排障。
+2. 它不应被重新定义为 task-domain execution trace 的公开 fallback。
+3. 对前端暴露的 task / project trace contract，应继续由 task-domain projection 与 conversation 持久化聚合结果提供，而不是直接透传 runtime message 结果。
+
+相关最终决策见 [execution-trace-read-boundary-adr.md](execution-trace-read-boundary-adr.md)。
 
 ### 2.5 实时（需要 token）
 

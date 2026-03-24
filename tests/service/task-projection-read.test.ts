@@ -26,9 +26,9 @@ async function loadTaskProjectionReadModule(args: {
 }) {
   importCounter += 1;
 
-  const listTaskSessionTreeRecords = mock(async () => args.lineageRecords ?? []);
-  const normalizeTaskSessionLineageRecords = mock(() => args.normalizedLineageRecords ?? []);
-  const buildTaskSessionLineagePath = mock(() => args.lineagePathRecords ?? []);
+  const listTaskBranchCompatTreeRecords = mock(async () => args.lineageRecords ?? []);
+  const normalizeTaskBranchLineageRecords = mock(() => args.normalizedLineageRecords ?? []);
+  const buildTaskBranchLineagePath = mock(() => args.lineagePathRecords ?? []);
 
   mock.module("../../control-plane/service/src/db", () => ({
     db: {
@@ -36,12 +36,12 @@ async function loadTaskProjectionReadModule(args: {
     },
   }));
 
-  mock.module("../../control-plane/service/src/modules/tasks/task-session-read", () => ({
+  mock.module("../../control-plane/service/src/modules/tasks/task-branch-compat-read", () => ({
     buildConversationSessionId: (taskId: string, runtimeSessionId: string) =>
       `task_session:${taskId}:${runtimeSessionId}`,
-    buildTaskSessionLineagePath,
-    listTaskSessionTreeRecords,
-    normalizeTaskSessionLineageRecords,
+    buildTaskBranchLineagePath,
+    listTaskBranchCompatTreeRecords,
+    normalizeTaskBranchLineageRecords,
   }));
 
   const module = await import(
@@ -50,9 +50,9 @@ async function loadTaskProjectionReadModule(args: {
 
   return {
     ...module,
-    listTaskSessionTreeRecords,
-    normalizeTaskSessionLineageRecords,
-    buildTaskSessionLineagePath,
+    listTaskBranchCompatTreeRecords,
+    normalizeTaskBranchLineageRecords,
+    buildTaskBranchLineagePath,
   };
 }
 
@@ -81,7 +81,7 @@ describe("task projection read", () => {
       },
     ];
 
-    const { buildTaskProjectionTimelineViewResponse, listTaskSessionTreeRecords } =
+    const { buildTaskProjectionTimelineViewResponse, listTaskBranchCompatTreeRecords } =
       await loadTaskProjectionReadModule({ resultRows: timelineRows });
 
     const response = await buildTaskProjectionTimelineViewResponse({
@@ -91,7 +91,7 @@ describe("task projection read", () => {
       includeLineage: false,
     });
 
-    expect(listTaskSessionTreeRecords).not.toHaveBeenCalled();
+    expect(listTaskBranchCompatTreeRecords).not.toHaveBeenCalled();
     expect(response).toEqual({
       data: timelineRows,
       meta: {
@@ -109,9 +109,9 @@ describe("task projection read", () => {
   test("expands lineage path through task session records when requested", async () => {
     const {
       buildTaskProjectionTimelineViewResponse,
-      listTaskSessionTreeRecords,
-      normalizeTaskSessionLineageRecords,
-      buildTaskSessionLineagePath,
+      listTaskBranchCompatTreeRecords,
+      normalizeTaskBranchLineageRecords,
+      buildTaskBranchLineagePath,
     } = await loadTaskProjectionReadModule({
       resultRows: [],
       lineageRecords: [{ id: "raw-session-record" }],
@@ -132,9 +132,9 @@ describe("task projection read", () => {
       includeLineage: true,
     });
 
-    expect(listTaskSessionTreeRecords).toHaveBeenCalledWith("task-1", "project-1");
-    expect(normalizeTaskSessionLineageRecords).toHaveBeenCalledWith([{ id: "raw-session-record" }]);
-    expect(buildTaskSessionLineagePath).toHaveBeenCalledWith(
+    expect(listTaskBranchCompatTreeRecords).toHaveBeenCalledWith("task-1", "project-1");
+    expect(normalizeTaskBranchLineageRecords).toHaveBeenCalledWith([{ id: "raw-session-record" }]);
+    expect(buildTaskBranchLineagePath).toHaveBeenCalledWith(
       [{ runtimeSessionId: "root-session" }, { runtimeSessionId: "fork-session" }],
       "fork-session",
     );

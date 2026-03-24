@@ -32,6 +32,7 @@
     "test:ui": "cd control-plane/web-ui && bun run test",
     "test:ui:chat-settings": "cd control-plane/web-ui && bun run test -- ../../tests/web-ui/ChatSettings.test.ts",
     "test:ui:file": "bash scripts/run-ui-test.sh",
+    "test:ui:single": "bash scripts/run-ui-test.sh",
     "test:chat-settings:regression": "bun run test:bff:chat-settings && bun run test:ui:chat-settings",
     "test:e2e:chat-settings": "playwright test tests/e2e/chat-settings-admin.spec.ts",
     "test:e2e:live-controlled": "PLAYWRIGHT_LIVE_BACKEND=1 playwright test tests/e2e/runtime-burst-status.spec.ts",

@@ -62,6 +62,8 @@ BFF 是面向前端的后端聚合层，承担统一鉴权校验、接口转发�
 
 这层的角色是“前端统一入口 + 运行时适配器”，不承载业务主数据存储。
 
+对于 execution trace，需要额外明确一条当前实现边界：BFF 虽然仍对接 OpenCode Runtime 的控制与消息协议，但 task / project trace 的公开 contract 已经收敛到 task-domain 持久化读链。当前主读链以 `task_timeline_views` 为首选；当 projection timeline 为空或不可用时，才允许退到由 `conversation_messages` 与 conversation domain events 聚合得到的 service timeline。OpenCode Runtime 的原始消息接口不再作为 execution trace 的公开 fallback 层。
+
 ### 3.3 控制平面服务
 
 控制平面服务是系统的业务核心与数据主服务，负责主数据管理和治理能力落库。
@@ -79,7 +81,7 @@ BFF 是面向前端的后端聚合层，承担统一鉴权校验、接口转发�
 
 ### 3.4 OpenCode Runtime
 
-OpenCode Runtime 是外部运行时，不属于当前仓库的控制平面核心代码，但从当前实现看，它是 Agent 会话执行、消息处理和部分任务状态来源。
+OpenCode Runtime 是外部运行时，不属于当前仓库的控制平面核心代码。它承担 Agent 会话执行、消息协议和实时事件输出，但不再被定义为 task-domain execution trace 的公开读模型来源。
 
 - 默认地址：4096
 - 主要职责：
@@ -88,6 +90,12 @@ OpenCode Runtime 是外部运行时，不属于当前仓库的控制平面核心
   - 输出 SSE 事件流
 
 当前系统与 OpenCode Runtime 的关系是“控制平面治理 + 运行时执行”分离。
+
+在 execution trace 这一条链路上，这种分离需要落到更具体的实现约束：
+
+1. OpenCode Runtime 提供会话控制、原始消息和 SSE 事件。
+2. 控制平面服务与 BFF 对外提供的 trace 视图，应以 task-domain projection 和 conversation 持久化聚合结果为准。
+3. 只要 projection 已返回非空 timeline，即使 `complete=false`，也必须保留显式 incomplete，而不是重新切回 runtime messages 覆盖结果。
 
 ## 4. 运行时组件关系
 
@@ -205,7 +213,7 @@ PostgreSQL 中当前的核心表包括：
 3. BFF 把返回结果整理为前端使用的数据结构。
 4. 前端再结合实时事件流展示任务状态。
 
-这说明当前“任务视图”相当大程度上是从审计事件反推出来的，而不是由独立任务域模型直接提供。
+历史上“任务视图”曾较多依赖审计事件反推，但当前 task-domain 改造已经把 execution trace 主读链收敛到 projection-first；剩余收尾重点是继续压缩 tree / branch 兼容面，而不是恢复 runtime fallback。
 
 ### 7.3 实时事件链路
 

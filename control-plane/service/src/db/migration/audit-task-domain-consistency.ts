@@ -1,9 +1,12 @@
 #!/usr/bin/env bun
 
 import { and, desc, eq } from "drizzle-orm";
-import { closeDatabase, db, postgresSql } from "../index";
+import { mkdir } from "node:fs/promises";
+import { dirname } from "node:path";
 import { taskRuns, taskSnapshots, tasks } from "../schema";
 import { getBooleanArg, parseCliArgs } from "./metadata";
+
+type DbModule = typeof import("../index");
 
 type AuditDimensionKey =
   | "status"
@@ -28,6 +31,24 @@ type TaskAuditRecord = {
   dimensions: Record<AuditDimensionKey, AuditDimension>;
 };
 
+type AuditReport = {
+  schemaVersion: 1;
+  generatedAt: string;
+  scope: {
+    taskId: string | null;
+    projectId: string | null;
+    limit: number;
+    includeHealthy: boolean;
+  };
+  totals: {
+    auditedTaskCount: number;
+    healthyTaskCount: number;
+    mismatchedTaskCount: number;
+    mismatchedDimensionCount: number;
+  };
+  tasks: TaskAuditRecord[];
+};
+
 type AuditTaskRow = {
   taskId: string;
   projectId: string;
@@ -47,7 +68,7 @@ type AuditTaskRow = {
   snapshotWinnerNodeId: string | null;
 };
 
-type TaskRunRecord = Exclude<Awaited<ReturnType<typeof db.query.taskRuns.findFirst>>, undefined>;
+type TaskRunRecord = Awaited<ReturnType<typeof loadCurrentRun>>;
 
 type AuditRunGraphStats = {
   actualExecutionNodes: number;
@@ -84,6 +105,16 @@ type TaskAuditContext = {
 };
 
 type CountRow = Record<string, number | string | null>;
+
+let dbModulePromise: Promise<DbModule> | null = null;
+
+async function loadDbModule() {
+  if (!dbModulePromise) {
+    dbModulePromise = import("../index");
+  }
+
+  return dbModulePromise;
+}
 
 function parseOptionalString(value: string | boolean | undefined) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
@@ -127,7 +158,12 @@ function formatTaskLabel(task: { taskId: string; title: string }) {
   return `${task.taskId} ${task.title}`;
 }
 
-async function querySingleRow<T extends CountRow>(query: ReturnType<typeof postgresSql<T[]>>) {
+async function writeJsonReport(report: AuditReport, outputPath: string) {
+  await mkdir(dirname(outputPath), { recursive: true });
+  await Bun.write(outputPath, `${JSON.stringify(report, null, 2)}\n`);
+}
+
+async function querySingleRow<T extends CountRow>(query: Promise<T[]>) {
   const rows = await query;
   return rows[0] ?? ({} as T);
 }
@@ -167,6 +203,7 @@ function buildTimelineStats(timelineCounts: CountRow): AuditTimelineStats {
 }
 
 async function loadCurrentRun(task: AuditTaskRow, effectiveCurrentRunId: string | null) {
+  const { db } = await loadDbModule();
   return effectiveCurrentRunId
     ? ((await db.query.taskRuns.findFirst({
         where: and(eq(taskRuns.id, effectiveCurrentRunId), eq(taskRuns.taskId, task.taskId)),
@@ -179,6 +216,7 @@ async function loadRunGraphCounts(args: {
   effectiveCurrentRunId: string | null;
   winnerNodeId: string | null;
 }) {
+  const { postgresSql } = await loadDbModule();
   return args.effectiveCurrentRunId
     ? querySingleRow<CountRow>(postgresSql`
         select
@@ -205,6 +243,7 @@ async function loadRunGraphCounts(args: {
 }
 
 async function loadCurrentSession(task: AuditTaskRow, effectiveCurrentSessionId: string | null) {
+  const { postgresSql } = await loadDbModule();
   return effectiveCurrentSessionId
     ? querySingleRow<CountRow>(postgresSql`
         select
@@ -335,6 +374,7 @@ function buildRunGraphReasonList(task: AuditTaskRow, context: TaskAuditContext) 
 }
 
 async function loadCurrentSessionMessageCounts(taskId: string, currentSessionDbId: string | null) {
+  const { postgresSql } = await loadDbModule();
   return currentSessionDbId
     ? querySingleRow<CountRow>(postgresSql`
         select
@@ -355,6 +395,7 @@ async function loadCurrentSessionMessageCounts(taskId: string, currentSessionDbI
 }
 
 async function loadTimelineCounts(taskId: string) {
+  const { postgresSql } = await loadDbModule();
   return querySingleRow<CountRow>(postgresSql`
     select
       (
@@ -640,6 +681,7 @@ async function main() {
   const projectId = parseOptionalString(args["project-id"]);
   const limit = parseLimit(args.limit);
   const json = getBooleanArg(args, "json", false);
+  const jsonOutput = parseOptionalString(args["json-output"]);
   const includeHealthy = getBooleanArg(args, "include-healthy", false);
   const failOnMismatch = getBooleanArg(args, "fail-on-mismatch", false);
   const help = getBooleanArg(args, "help", false);
@@ -653,11 +695,14 @@ Options:
   --limit <n>              Max tasks to inspect when not using --task-id. Default: 50.
   --include-healthy        Include healthy tasks in the default text output.
   --json                   Emit JSON instead of text.
+  --json-output <path>     Persist the JSON report to a file.
   --fail-on-mismatch       Exit with code 2 when any mismatch is found.
   --help                   Show this message.
 `);
     return;
   }
+
+  const { db } = await loadDbModule();
 
   const baseQuery = db
     .select({
@@ -698,7 +743,9 @@ Options:
     mismatchedDimensionCount: mismatchedTasks.reduce((sum, task) => sum + task.mismatchCount, 0),
   };
 
-  const report = {
+  const report: AuditReport = {
+    schemaVersion: 1,
+    generatedAt: new Date().toISOString(),
     scope: {
       taskId: taskId ?? null,
       projectId: projectId ?? null,
@@ -709,10 +756,17 @@ Options:
     tasks: visibleTasks,
   };
 
+  if (jsonOutput) {
+    await writeJsonReport(report, jsonOutput);
+  }
+
   if (json) {
     console.log(JSON.stringify(report, null, 2));
   } else {
     printHumanReport(report);
+    if (jsonOutput) {
+      console.log(`JSON report written to ${jsonOutput}`);
+    }
   }
 
   if (failOnMismatch && mismatchedTasks.length > 0) {
@@ -726,5 +780,8 @@ main()
     process.exitCode = 1;
   })
   .finally(async () => {
-    await closeDatabase();
+    if (dbModulePromise) {
+      const { closeDatabase } = await loadDbModule();
+      await closeDatabase();
+    }
   });

@@ -2,6 +2,8 @@
 
 本文档描述当前仓库在开发态的实际运行架构，重点标出各个进程、监听端口、依赖关系，以及关键共享文件。当前默认拓扑仍是 `5173 -> 4098 -> 4097 -> PostgreSQL`，并继续保留外部 Runtime `:4096`；不再继续推进单进程合并作为默认路线。
 
+execution trace 的最终公开读取边界以 [execution-trace-read-boundary-adr.md](execution-trace-read-boundary-adr.md) 为准。本文只说明这一边界在运行拓扑中的位置，不重复定义完整 contract。
+
 ## 1. 总览图
 
 ```mermaid
@@ -36,9 +38,9 @@ flowchart LR
 | 进程 | 代码位置 | 默认端口 | 启动方式 | 主要职责 |
 | --- | --- | --- | --- | --- |
 | Web UI Dev Server | `control-plane/web-ui` | 5173 | `bun run dev --host 0.0.0.0 --port 5173` | 提供前端页面静态资源，并在开发态代理 `/api` 和 `/ws` |
-| Web UI BFF | `control-plane/web-ui-bff` | 4098 | `bun run src/index.ts` | 前端统一入口，JWT 校验，代理 Control Plane，适配 OpenCode Runtime |
+| Web UI BFF | `control-plane/web-ui-bff` | 4098 | `bun run src/index.ts` | 前端统一入口，JWT 校验，代理 Control Plane，适配 OpenCode Runtime，并对外维持 task-domain trace contract |
 | Control Plane Service | `control-plane/service` | 4097 | `bun run src/index.ts` | 认证、项目、用户、任务、审批、审计、配置主数据 |
-| OpenCode Runtime | `opencode-fork` / 本机 `opencode` 可执行文件 | 4096 | `opencode serve --hostname 127.0.0.1 --port 4096 --print-logs` | Agent 会话执行、消息流、SSE 输出、模型调用、插件/MCP 调用 |
+| OpenCode Runtime | `opencode-fork` / 本机 `opencode` 可执行文件 | 4096 | `opencode serve --hostname 127.0.0.1 --port 4096 --print-logs` | Agent 会话执行、原始消息流、SSE 输出、模型调用、插件/MCP 调用 |
 | PostgreSQL | 外部数据库实例 | 无 | 由 Control Plane 通过连接串访问 | Control Plane 主数据存储 |
 | Qwen 推理服务 | 外部机器 | 192.168.31.103:8000 | 外部独立服务 | 为 `qwen-local` provider 提供 OpenAI 兼容推理接口 |
 | GitHub Copilot / 其他外部模型服务 | 外部服务 | 外部 | 外部服务 | 为 Runtime 提供云端模型能力 |
@@ -69,6 +71,10 @@ flowchart LR
 - 典型动作包括：暂停任务、恢复任务、注入指导、读取 Session 消息、订阅 SSE 事件。
 - BFF 同时负责把 Runtime 的实时事件转换后再推送给前端。
 
+这里需要锁定一条运行边界：`4096` 负责运行时控制、原始消息协议和实时事件输出，但不再承担 task-domain execution trace 的公开读模型职责。对前端暴露的 task / project trace 视图，应以 `task_timeline_views` 为首选，并只在 projection timeline 为空或不可用时，使用由 `conversation_messages` 与 conversation domain events 聚合得到的 service timeline 补位。
+
+如需评审或修改这条边界，直接引用 [execution-trace-read-boundary-adr.md](execution-trace-read-boundary-adr.md)。
+
 ### 3.5 Runtime 到模型服务
 
 - Runtime 根据 `opencode-fork/opencode.json` 中的 provider 配置选择模型后端。
@@ -93,6 +99,13 @@ flowchart LR
   -> 4096 OpenCode Runtime
   -> opencode-fork/opencode.json
   -> opencode-fork/.opencode/state/*
+
+task / project execution trace 对外 contract
+  -> 首选 task-domain projection (`task_timeline_views`)
+  -> 仅在 projection 为空或不可用时补位到 service timeline
+  -> 不回退到 4096 runtime 原始消息作为公开 fallback
+
+以上 contract 的正式定义见 [execution-trace-read-boundary-adr.md](execution-trace-read-boundary-adr.md)
 
 4097 Control Plane Service
   -> PostgreSQL
@@ -119,6 +132,8 @@ flowchart LR
 - BFF 自身健康不代表系统完整可用；如果 Control Plane 没启动，任务列表与登录转发会失败。
 - Runtime 模型配置来源于 `opencode-fork/opencode.json`，而不是前端内存状态本身。
 - `qwen-local` 当前可用地址是 `http://192.168.31.103:8000/v1`；旧地址 `192.168.1.103:8000` 不可达。
+- execution trace 的公开读链已收敛到 task-domain 持久化来源；OpenCode Runtime 原始消息接口当前只保留为控制台、联调和协议排障能力。
+- 上述 execution trace 边界若需评审引用，统一以 [execution-trace-read-boundary-adr.md](execution-trace-read-boundary-adr.md) 为单一结论来源。
 
 ## 7. 建议用途
 

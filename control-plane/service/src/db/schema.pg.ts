@@ -201,25 +201,6 @@ export const projectTreeBranches = pgTable("project_tree_branches", {
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
-export const projectTreeEvents = pgTable(
-  "project_tree_events",
-  {
-    id: text("id").primaryKey(),
-    nodeId: text("node_id").references(() => projectTreeNodes.id),
-    projectId: text("project_id")
-      .notNull()
-      .references(() => projects.id),
-    eventType: text("event_type").notNull(),
-    payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
-    seq: integer("seq").notNull(),
-    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-  },
-  (table) => [
-    index("idx_pte_node_seq").on(table.nodeId, table.seq),
-    index("idx_pte_project_time").on(table.projectId, table.createdAt),
-  ],
-);
-
 export const projectTreeLinks = pgTable(
   "project_tree_links",
   {

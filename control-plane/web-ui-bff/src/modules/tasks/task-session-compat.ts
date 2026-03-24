@@ -33,13 +33,14 @@ export interface TaskSessionTimelineItem {
   sourceEventTypes?: string[];
 }
 
+export type TaskSessionTimelineReadSource =
+  | "conversation-table"
+  | "task-domain-events"
+  | "conversation-table+task-domain-events"
+  | "task-domain-projection";
+
 export interface TaskSessionTimelineMeta {
-  readSource?:
-    | "conversation-table"
-    | "task-domain-events"
-    | "conversation-table+task-domain-events"
-    | "task-domain-projection"
-    | "runtime-fallback";
+  readSource?: TaskSessionTimelineReadSource;
   cacheState?: "none" | "partial" | "complete";
   complete?: boolean;
   includeLineage?: boolean;
@@ -63,6 +64,25 @@ export function normalizeTaskSessionTimelineMeta(
 ): TaskSessionTimelineMeta | undefined {
   if (!meta) return undefined;
   return meta;
+}
+
+export function createProjectionTraceTimelineMeta(args: {
+  meta?: TaskSessionTimelineMeta;
+  itemCount: number;
+}): TaskSessionTimelineMeta {
+  return {
+    ...args.meta,
+    readSource: "task-domain-projection",
+    complete: args.meta?.complete === true && args.itemCount > 0,
+  };
+}
+
+export function shouldReplaceTraceTimeline(args: {
+  currentItemCount: number;
+  fallbackItemCount: number;
+  projectionComplete?: boolean;
+}): boolean {
+  return !args.projectionComplete && args.fallbackItemCount >= args.currentItemCount;
 }
 
 export async function persistTaskSessionMessageSnapshot(

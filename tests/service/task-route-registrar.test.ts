@@ -71,10 +71,10 @@ async function setupTaskDomainRunRegistrar(args: {
 function createTaskBranchRegistrarDeps(overrides: Record<string, unknown> = {}) {
   return {
     loadTaskTreeBackedRecord: mock(async () => null),
-    listTaskSessionTreeRecords: mock(async () => []),
-    buildTaskSessionMessagesResponse: mock(async () => ({})),
-    buildTaskSessionEventsResponse: mock(async () => ({})),
-    buildTaskSessionTimelineResponse: mock(async () => ({})),
+    listTaskBranchCompatTreeRecords: mock(async () => []),
+    buildTaskBranchCompatMessagesResponse: mock(async () => ({})),
+    buildTaskBranchCompatEventsResponse: mock(async () => ({})),
+    buildTaskBranchCompatTimelineResponse: mock(async () => ({})),
     upsertTaskBranch: mock(async () => ({ ok: true, status: 201, data: {} })),
     persistTaskBranchMessage: mock(async () => ({ ok: true, status: 201, data: {} })),
     activateTaskBranch: mock(async () => ({ ok: true, status: 200, data: {} })),
@@ -91,9 +91,9 @@ async function setupTaskBranchRegistrar(args: {
   depsOverrides?: Record<string, unknown>;
 }) {
   const app = createRouteCollector();
-  const { registerTaskBranchRoutes } = await loadTaskBranchRegistrarModule();
+  const { registerTaskBranchCompatRoutes } = await loadTaskBranchRegistrarModule();
 
-  registerTaskBranchRoutes(
+  registerTaskBranchCompatRoutes(
     app as never,
     createTaskBranchRegistrarDeps(args.depsOverrides) as never,
   );
@@ -156,24 +156,132 @@ describe("task domain-run registrar", () => {
   });
 });
 
-describe("task branch registrar", () => {
-  test("activate and archive routes are mounted and delegate to the matching branch dependencies", async () => {
-    const activateTaskBranch = mock(async (taskId: string, tsId: string) => ({
-      ok: true as const,
-      status: 200 as const,
-      data: { action: "activate", taskId, tsId },
+describe("task branch compat registrar", () => {
+  test("messages, events, and timeline routes delegate to branch compat readers", async () => {
+    const loadTaskTreeBackedRecord = mock(async () => ({ projectId: "proj-1" }));
+    const buildTaskBranchCompatMessagesResponse = mock(async (args: unknown) => ({
+      routeScope: "branch-compat-messages",
+      args,
     }));
-    const archiveTaskBranch = mock(async (taskId: string, tsId: string) => ({
+    const buildTaskBranchCompatEventsResponse = mock(async (args: unknown) => ({
+      routeScope: "branch-compat-events",
+      args,
+    }));
+    const buildTaskBranchCompatTimelineResponse = mock(async (args: unknown) => ({
+      routeScope: "branch-compat-timeline",
+      args,
+    }));
+
+    const { app } = await setupTaskBranchRegistrar({
+      routeKeys: {
+        primary: "GET /:taskId/branches/:runtimeSessionId/messages",
+      },
+      depsOverrides: {
+        loadTaskTreeBackedRecord,
+        buildTaskBranchCompatMessagesResponse,
+        buildTaskBranchCompatEventsResponse,
+        buildTaskBranchCompatTimelineResponse,
+      },
+    });
+
+    const messagesHandler = getRequiredRouteHandler(
+      app,
+      "GET /:taskId/branches/:runtimeSessionId/messages",
+    );
+    const eventsHandler = getRequiredRouteHandler(
+      app,
+      "GET /:taskId/branches/:runtimeSessionId/events",
+    );
+    const timelineHandler = getRequiredRouteHandler(
+      app,
+      "GET /:taskId/branches/:runtimeSessionId/timeline",
+    );
+
+    const messagesResponse = await invokeRouteHandler(
+      messagesHandler,
+      createRouteContext({
+        params: { taskId: "task-1", runtimeSessionId: "runtime-1" },
+        query: { includeLineage: "true" },
+      }),
+    );
+    const eventsResponse = await invokeRouteHandler(
+      eventsHandler,
+      createRouteContext({
+        params: { taskId: "task-1", runtimeSessionId: "runtime-1" },
+      }),
+    );
+    const timelineResponse = await invokeRouteHandler(
+      timelineHandler,
+      createRouteContext({
+        params: { taskId: "task-1", runtimeSessionId: "runtime-1" },
+      }),
+    );
+
+    expect(loadTaskTreeBackedRecord).toHaveBeenCalledTimes(3);
+    expect(buildTaskBranchCompatMessagesResponse).toHaveBeenCalledWith({
+      taskId: "task-1",
+      projectId: "proj-1",
+      runtimeSessionId: "runtime-1",
+      includeLineage: true,
+    });
+    expect(buildTaskBranchCompatEventsResponse).toHaveBeenCalledWith({
+      taskId: "task-1",
+      projectId: "proj-1",
+      runtimeSessionId: "runtime-1",
+      includeLineage: false,
+    });
+    expect(buildTaskBranchCompatTimelineResponse).toHaveBeenCalledWith({
+      taskId: "task-1",
+      projectId: "proj-1",
+      runtimeSessionId: "runtime-1",
+      includeLineage: false,
+    });
+    expect(await messagesResponse.json()).toEqual({
+      routeScope: "branch-compat-messages",
+      args: {
+        taskId: "task-1",
+        projectId: "proj-1",
+        runtimeSessionId: "runtime-1",
+        includeLineage: true,
+      },
+    });
+    expect(await eventsResponse.json()).toEqual({
+      routeScope: "branch-compat-events",
+      args: {
+        taskId: "task-1",
+        projectId: "proj-1",
+        runtimeSessionId: "runtime-1",
+        includeLineage: false,
+      },
+    });
+    expect(await timelineResponse.json()).toEqual({
+      routeScope: "branch-compat-timeline",
+      args: {
+        taskId: "task-1",
+        projectId: "proj-1",
+        runtimeSessionId: "runtime-1",
+        includeLineage: false,
+      },
+    });
+  });
+
+  test("activate and archive routes are mounted and delegate to the matching branch dependencies", async () => {
+    const activateTaskBranch = mock(async (taskId: string, branchId: string) => ({
       ok: true as const,
       status: 200 as const,
-      data: { action: "archive", taskId, tsId },
+      data: { action: "activate", taskId, branchId },
+    }));
+    const archiveTaskBranch = mock(async (taskId: string, branchId: string) => ({
+      ok: true as const,
+      status: 200 as const,
+      data: { action: "archive", taskId, branchId },
     }));
 
     const { primaryHandler: activateHandler, secondaryHandler: archiveHandler } =
       await setupTaskBranchRegistrar({
         routeKeys: {
-          primary: "POST /:taskId/branches/:tsId/activate",
-          secondary: "POST /:taskId/branches/:tsId/archive",
+          primary: "POST /:taskId/branches/:branchId/activate",
+          secondary: "POST /:taskId/branches/:branchId/archive",
         },
         depsOverrides: {
           activateTaskBranch,
@@ -186,13 +294,13 @@ describe("task branch registrar", () => {
     const activateResponse = await invokeRouteHandler(
       activateHandler,
       createRouteContext({
-        params: { taskId: "task-1", tsId: "ts-1" },
+        params: { taskId: "task-1", branchId: "branch-1" },
       }),
     );
     const archiveResponse = await invokeRouteHandler(
       archiveHandler,
       createRouteContext({
-        params: { taskId: "task-1", tsId: "ts-1" },
+        params: { taskId: "task-1", branchId: "branch-1" },
       }),
     );
 
@@ -200,16 +308,16 @@ describe("task branch registrar", () => {
     expect(await activateResponse.json()).toEqual({
       action: "activate",
       taskId: "task-1",
-      tsId: "ts-1",
+      branchId: "branch-1",
     });
-    expect(activateTaskBranch).toHaveBeenCalledWith("task-1", "ts-1");
+    expect(activateTaskBranch).toHaveBeenCalledWith("task-1", "branch-1");
 
     expect(archiveResponse.status).toBe(200);
     expect(await archiveResponse.json()).toEqual({
       action: "archive",
       taskId: "task-1",
-      tsId: "ts-1",
+      branchId: "branch-1",
     });
-    expect(archiveTaskBranch).toHaveBeenCalledWith("task-1", "ts-1");
+    expect(archiveTaskBranch).toHaveBeenCalledWith("task-1", "branch-1");
   });
 });

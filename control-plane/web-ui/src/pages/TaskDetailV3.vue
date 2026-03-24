@@ -122,6 +122,15 @@
               </a-space>
             </a-card>
 
+            <a-alert
+              v-if="chatTraceWarning"
+              type="warning"
+              show-icon
+              :message="chatTraceWarning.message"
+              :description="chatTraceWarning.description"
+              style="margin-bottom: 12px"
+            />
+
             <ChatMessageList
               :items="conversationItems"
               :loading="messagesLoading"
@@ -294,6 +303,7 @@ const {
 } = useTreeBranches(projectIdRef, taskNodeId, selectedBranchSessionId);
 
 const {
+  trace: messageTrace,
   conversationItems: baseConversationItems,
   hasStreamingAssistant,
   loading: messagesLoading,
@@ -323,11 +333,35 @@ const queuedContinuations = ref<
 const previewFile = ref<{ filePath: string; content?: string } | null>(null);
 const parallelCandidateItems = ref<Record<string, TaskConversationMessageItem[]>>({});
 const parallelCandidateSettledReply = ref<Record<string, boolean>>({});
+const parallelCandidateTraceStates = ref<
+  Record<string, { state?: "incomplete" | "stale"; note?: string }>
+>({});
 const taskAgentRuns = ref<TaskAgentRunRecord[]>([]);
 const taskDomainRuns = ref<TaskDomainRunRecord[]>([]);
 const taskDomainRunDetails = ref<Record<string, TaskDomainRunDetailRecord>>({});
 const runtimePermissions = ref<TaskRuntimePermission[]>([]);
 const runtimePermissionActionId = ref<string | null>(null);
+
+const chatTraceWarning = computed(() => {
+  const cacheState = messageTrace.value?.timelineMeta?.cacheState;
+  if (!cacheState || cacheState === "complete") {
+    return null;
+  }
+
+  if (cacheState === "partial") {
+    return {
+      message: "当前对话时间线仅部分可用",
+      description:
+        "主聊天区当前展示的是部分执行追踪结果；如需定位缺口，请查看右侧执行追踪面板中的时间线状态。",
+    };
+  }
+
+  return {
+    message: "当前对话时间线暂不可用",
+    description:
+      "主聊天区当前没有可用的完整执行追踪时间线；如需确认状态，请查看右侧执行追踪面板中的时间线状态。",
+  };
+});
 
 let taskRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 let runningStatusPollTimer: ReturnType<typeof setInterval> | null = null;
@@ -696,6 +730,25 @@ function resolveParallelCandidateDisplayStatus(
   return hasCompletedReply || hasSettledReply ? "completed" : "running";
 }
 
+function resolveParallelCandidateTraceState(
+  trace: Awaited<ReturnType<typeof getTaskExecutionTraceView>>,
+) {
+  const cacheState = trace.timelineMeta?.cacheState;
+  if (cacheState === "partial") {
+    return {
+      state: "incomplete" as const,
+      note: "当前候选只拿到了部分执行追踪，展示内容可能不完整。",
+    };
+  }
+  if (cacheState === "none") {
+    return {
+      state: "incomplete" as const,
+      note: "当前候选暂时没有可用的执行追踪时间线。",
+    };
+  }
+  return {};
+}
+
 /* ------------------------------------------------------------------ */
 /*  Queue & dispatch                                                    */
 /* ------------------------------------------------------------------ */
@@ -843,12 +896,15 @@ function buildParallelComparisonCardsForRun(
       visibleItems,
       sessionId ? parallelCandidateSettledReply.value[sessionId] === true : false,
     );
+    const traceState = sessionId ? parallelCandidateTraceStates.value[sessionId] : undefined;
     return {
       key: `${run.parallelRunId}:${sessionId || `candidate-${index}`}`,
       index,
       label: candidate.label || `候选 ${index + 1}`,
       model: candidate.model,
       status,
+      traceState: traceState?.state,
+      traceNote: traceState?.note,
       meta: metaParts.join(" · ") || undefined,
       loading: visibleItems.length === 0 && status === "running",
       items: visibleItems,
@@ -1059,6 +1115,7 @@ async function refreshTaskSnapshot(options?: {
       await refreshParallelCandidateMessages(taskId.value, true);
     } else {
       parallelCandidateItems.value = {};
+      parallelCandidateTraceStates.value = {};
     }
     ensureSelectedBranch();
   } catch {
@@ -1176,6 +1233,7 @@ async function refreshParallelCandidateMessages(currentTaskId: string, silent = 
   if (candidateSessionIds.length === 0) {
     parallelCandidateItems.value = {};
     parallelCandidateSettledReply.value = {};
+    parallelCandidateTraceStates.value = {};
     return;
   }
   const entries = await Promise.all(
@@ -1189,9 +1247,15 @@ async function refreshParallelCandidateMessages(currentTaskId: string, silent = 
           {
             items: normalizeTraceConversationItems(trace),
             hasSettledReply: traceHasSettledCandidateReply(trace),
+            traceState: resolveParallelCandidateTraceState(trace),
           },
         ] as const;
       } catch {
+        const hasCachedTrace =
+          silent &&
+          ((parallelCandidateItems.value[sessionId]?.length ?? 0) > 0 ||
+            parallelCandidateSettledReply.value[sessionId] === true ||
+            Boolean(parallelCandidateTraceStates.value[sessionId]));
         return [
           sessionId,
           {
@@ -1199,6 +1263,12 @@ async function refreshParallelCandidateMessages(currentTaskId: string, silent = 
             hasSettledReply: silent
               ? parallelCandidateSettledReply.value[sessionId] === true
               : false,
+            traceState: hasCachedTrace
+              ? {
+                  state: "stale" as const,
+                  note: "静默刷新失败，当前展示的是上一次成功加载的执行追踪。",
+                }
+              : {},
           },
         ] as const;
       }
@@ -1209,6 +1279,9 @@ async function refreshParallelCandidateMessages(currentTaskId: string, silent = 
   );
   parallelCandidateSettledReply.value = Object.fromEntries(
     entries.map(([sessionId, value]) => [sessionId, value.hasSettledReply]),
+  );
+  parallelCandidateTraceStates.value = Object.fromEntries(
+    entries.map(([sessionId, value]) => [sessionId, value.traceState]),
   );
 }
 

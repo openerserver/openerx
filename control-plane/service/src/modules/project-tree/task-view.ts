@@ -65,10 +65,6 @@ function normalizeTaskChangesSummary(value: unknown): TaskChangesSummary | null 
   return value && typeof value === "object" ? (value as TaskChangesSummary) : null;
 }
 
-function readNodeChangesSummary(node: typeof projectTreeNodes.$inferSelect): TaskChangesSummary | null {
-  return normalizeTaskChangesSummary(node.contentJson?.changesSummary);
-}
-
 function normalizeTaskCategory(value: unknown): TaskCategory | null {
   return value === "quick" ||
     value === "deep" ||
@@ -77,42 +73,6 @@ function normalizeTaskCategory(value: unknown): TaskCategory | null {
     value === "architecture"
     ? (value as TaskCategory)
     : null;
-}
-
-function asStrategyRecord(value: unknown): Record<string, unknown> | null {
-  if (!value) {
-    return null;
-  }
-
-  if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value) as unknown;
-      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-        ? (parsed as Record<string, unknown>)
-        : null;
-    } catch {
-      return null;
-    }
-  }
-
-  return typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function normalizeTaskExecutionModeFromStrategy(value: unknown): TaskExecutionMode | null {
-  const strategy = asStrategyRecord(value);
-  const executionMode = strategy?.executionMode;
-  return executionMode === "single" ||
-    executionMode === "parallel" ||
-    executionMode === "sequential-chain"
-    ? (executionMode as TaskExecutionMode)
-    : null;
-}
-
-function resolveAutoAdvanceStagesFromStrategy(value: unknown): boolean | null {
-  const strategy = asStrategyRecord(value);
-  return typeof strategy?.autoAdvanceStages === "boolean" ? strategy.autoAdvanceStages : null;
 }
 
 type TaskAggregateRow = typeof tasks.$inferSelect;
@@ -151,13 +111,12 @@ function resolveTaskStrategyFields(args: MapTaskTreeNodeArgs) {
   const strategy = args.aggregate?.strategyJson ?? null;
   const executionMode =
     mapOrchestrationKindToExecutionMode(args.snapshot?.orchestrationKind) ??
-    mapOrchestrationKindToExecutionMode(args.run?.orchestrationKind) ??
-    normalizeTaskExecutionModeFromStrategy(strategy);
+    mapOrchestrationKindToExecutionMode(args.run?.orchestrationKind);
 
   return {
     strategy,
     executionMode,
-    autoAdvanceStages: resolveAutoAdvanceStagesFromStrategy(strategy) ?? false,
+    autoAdvanceStages: false,
   };
 }
 
@@ -193,9 +152,8 @@ function resolveTaskRepositoryFields(
     gitCommitterEmail: args.aggregate?.gitCommitterEmail ?? null,
     finalCommitSha: args.aggregate?.finalCommitSha ?? null,
     finalBranchName: args.aggregate?.finalBranchName ?? null,
-    changesSummary:
-      normalizeTaskChangesSummary(args.aggregate?.changesSummaryJson) ??
-      readNodeChangesSummary(args.node),
+    // Tree payload no longer serves as a task business-fact fallback.
+    changesSummary: normalizeTaskChangesSummary(args.aggregate?.changesSummaryJson),
     repoName: repo?.name ?? null,
     remoteUrl: repo?.remoteUrl ?? null,
     credentialLabel: credential?.label ?? null,

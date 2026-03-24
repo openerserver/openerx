@@ -184,9 +184,6 @@ async function deleteTaskFixture(task: CleanupCandidate) {
              OR target_node_id = ANY($1::text[])`,
         [nodeIds] as never[],
       );
-      await transaction.unsafe("DELETE FROM project_tree_events WHERE node_id = ANY($1::text[])", [
-        nodeIds,
-      ] as never[]);
       await transaction.unsafe(
         `DELETE FROM project_tree_branches
           WHERE task_node_id = ANY($1::text[])

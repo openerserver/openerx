@@ -288,7 +288,10 @@ URL 建议支持：
 
 ## 10. 数据模型建议
 
-当前 `tasks` 表只有单个 `sessionId`，不足以表达 branch tree。建议新增 `task_sessions` 表：
+> 历史方案注记：本节保留的是早期 workbench 设计阶段的建模设想，不代表当前实现。
+> 当前 branch lineage 已由 `conversation_sessions.parent_session_id` 与 `project_tree_nodes(node_type=session)` 协同表达，`task_sessions` 旧表也已下线。
+
+在当时的方案阶段，曾判断旧 `tasks` 表只有单个 `sessionId`，不足以表达 branch tree，因此提出过新增 `task_sessions` 表的设想：
 
 | 字段 | 说明 |
 |------|------|
@@ -468,10 +471,12 @@ URL 建议支持：
 
 ## 16. 建议结论
 
+> 历史优先级说明：以下排序反映的是该方案形成时的产品/实现建议，不代表当前仓库仍计划引入 `task_sessions` 作为主线结构。
+
 优先级建议：
 
 1. 第一优先：把 `TaskDetail` 改为 `回复主视图 + 固定续跑输入框 + session 列表`
-2. 第二优先：引入 `task_sessions` 与 `session-tree`，接入 session 级 fork
+2. 第二优先：当时曾建议引入 `task_sessions` 与 `session-tree`，接入 session 级 fork；当前已由 branch lineage + tree/session 节点模型替代
 3. 第三优先：实现应用内 `Task Workbench` tabs + 双栏分屏
 4. 第四优先：消息级 fork、分支对比、归档
 

@@ -1,0 +1,1 @@
+DROP TABLE IF EXISTS "project_tree_events";

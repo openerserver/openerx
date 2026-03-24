@@ -112,7 +112,6 @@ afterAll(async () => {
             (id) =>
               `DELETE FROM project_tree_links WHERE source_node_id='${id}' OR target_node_id='${id}';`,
           ),
-          ...createdTaskIds.map((id) => `DELETE FROM project_tree_events WHERE node_id='${id}';`),
           ...createdTaskIds.map(
             (id) =>
               `DELETE FROM project_tree_branches WHERE task_node_id='${id}' OR head_node_id='${id}';`,

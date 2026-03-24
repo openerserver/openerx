@@ -3,10 +3,10 @@ import { db } from "../../db";
 import { taskTimelineViews } from "../../db/schema";
 import {
   buildConversationSessionId,
-  buildTaskSessionLineagePath,
-  listTaskSessionTreeRecords,
-  normalizeTaskSessionLineageRecords,
-} from "./task-session-read";
+  buildTaskBranchLineagePath,
+  listTaskBranchCompatTreeRecords,
+  normalizeTaskBranchLineageRecords,
+} from "./task-branch-compat-read";
 
 export async function buildTaskProjectionTimelineViewResponse(args: {
   taskId: string;
@@ -19,9 +19,9 @@ export async function buildTaskProjectionTimelineViewResponse(args: {
     if (!args.includeLineage) {
       lineagePath = [args.runtimeSessionId];
     } else {
-      const rows = await listTaskSessionTreeRecords(args.taskId, args.projectId);
-      lineagePath = buildTaskSessionLineagePath(
-        normalizeTaskSessionLineageRecords(rows),
+      const rows = await listTaskBranchCompatTreeRecords(args.taskId, args.projectId);
+      lineagePath = buildTaskBranchLineagePath(
+        normalizeTaskBranchLineageRecords(rows),
         args.runtimeSessionId,
       ).map((record) => record.runtimeSessionId);
     }

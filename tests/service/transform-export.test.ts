@@ -30,7 +30,7 @@ afterEach(async () => {
 });
 
 describe("transform export snapshot", () => {
-  test("omits legacy executionPlan from synthesized task node content", async () => {
+  test("synthesized task nodes no longer mirror business fields into content_json", async () => {
     const inputDir = await createTempDir("transform-export-input-");
     const outputDir = await createTempDir("transform-export-output-");
 
@@ -94,7 +94,9 @@ describe("transform export snapshot", () => {
       .find((row) => row.id === "task-1");
 
     expect(synthesizedTaskNode).toBeDefined();
-    expect(synthesizedTaskNode?.content_json?.executionMode).toBe("parallel");
+    expect(synthesizedTaskNode?.content_json).toEqual({});
     expect(synthesizedTaskNode?.content_json).not.toHaveProperty("executionPlan");
+    expect(synthesizedTaskNode?.content_json).not.toHaveProperty("executionMode");
+    expect(synthesizedTaskNode?.content_json).not.toHaveProperty("autoAdvanceStages");
   });
 });

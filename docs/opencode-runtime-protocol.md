@@ -169,6 +169,16 @@ data: {"directory":"/Users/.../openerx","payload":{"type":"session.created","pro
 
 ## 3. BFF 集成架构
 
+### 3.0 Execution Trace 边界
+
+OpenCode runtime 当前仍提供 `GET /session/:id/message?limit=200`，但这条接口在 OpenerX 中的定位需要明确区分：
+
+1. 它是 runtime 原始会话消息读取接口，不等于 task-domain execution trace 的公开 contract。
+2. task / project execution trace 的主读链应以 `task_timeline_views` 为首选来源。
+3. 当 projection timeline 为空或暂不可用时，BFF 允许退到 service timeline 这一条持久化 secondary source；该 secondary source 由 `conversation_messages` 与 conversation domain events 聚合得到，不是 runtime message fallback。
+4. 只要 projection 已返回非空 timeline，即使 `complete=false` 或 `cacheState=partial`，也必须保留显式 incomplete，而不是重新切回 runtime messages 覆盖结果。
+5. 因此，后续协议接入或 trace 设计讨论中，不应再把 `GET /session/:id/message` 重新定义为 execution trace 的对外 fallback 层。
+
 ### 3.1 Adapter 层
 
 文件: `control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter.ts`
@@ -180,6 +190,11 @@ data: {"directory":"/Users/.../openerx","payload":{"type":"session.created","pro
 - `abortSession(sessionId)` → `POST /session/:id/abort`
 - `getMessages(sessionId)` → `GET /session/:id/message?limit=200`
 - 维护 `agentRunRegistry: Map<agentRunId, {subSessionId, status, taskId, projectId}>`
+
+约束补充:
+- `getMessages(sessionId)` 主要用于 runtime 诊断、实时联调与低层协议排障。
+- task / project execution trace 的前端 contract 不应再直接以该接口结果构造 `runtime-fallback` 语义。
+- 若 trace 页面出现 projection 缺口，应优先修正 projection 物化或 service timeline 聚合，而不是恢复 runtime message fallback。
 
 ### 3.2 SSE 聚合层
 

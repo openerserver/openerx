@@ -22,10 +22,13 @@
 - 控制平面成为唯一治理与主数据记录源
 - BFF 成为唯一前端聚合与运行时适配层
 - 任务域从审计日志中独立出来
+- execution trace 从 runtime 原始消息读取中独立出来，收敛到 task-domain projection 与 conversation 持久化聚合
 - 审批、预算、策略从事后记录升级为事前约束
 - 实时链路按用户、项目、任务范围做严格隔离
 
 其中，OpenCode 相关能力边界采用单独文档管理：OpenerX 关注 OpenCode 作为运行时与插件生态底座的能力，不以桌面产品形态建设为目标，详见 [OpenCode 关注边界说明](./opencode-focus-boundary.md)。
+
+对实现边界还需要额外补充一条总原则：目标架构不允许把 OpenCode Runtime 的原始消息接口重新定义为 task-domain trace 的公开 fallback。trace 的正式来源应继续保持 projection-first，并只在 projection timeline 为空或不可用时，使用持久化 secondary source 补位。
 
 ## 3. 当前架构图
 
@@ -133,12 +136,14 @@ flowchart TB
 - 将任务状态、节点状态、Agent Run 状态定义为显式状态机
 - 审计事件仅承担追踪和合规职责
 - 前端任务页优先从任务域接口读取，不再主要依赖日志拼装
+- execution trace 优先从 `task_timeline_views` 与 conversation 持久化聚合读取，不再把 runtime messages 当作公开 fallback
 
 阶段结果：
 
 - 任务查询语义清晰
 - 页面状态展示更稳定
 - 审计与业务主模型职责分离
+- trace 页面与 task detail 的 incomplete 语义可以显式表达，而不是靠 runtime 回填隐藏缺口
 
 ## 8. 阶段三：治理前置化
 
@@ -166,12 +171,14 @@ flowchart TB
 - 明确运行时事件到领域事件的映射规范
 - 把 BFF 的 WebSocket 推送建立在统一事件流之上
 - 对实时订阅增加基于用户、项目、任务的权限隔离
+- 保持 runtime adapter 只负责控制、协议和事件标准化，不重新承担 execution trace 的公开读模型职责
 
 阶段结果：
 
 - 运行时替换和扩展成本下降
 - 实时链路更稳定
 - 多租户或多项目隔离更可靠
+- runtime 接入升级不会反向冲击 task-domain trace contract
 
 ## 10. 推荐的目标能力分布
 

@@ -79,6 +79,7 @@ const branchState = vi.hoisted(() => ({
 }));
 
 const messagesState = vi.hoisted(() => ({
+  trace: null as Record<string, unknown> | null,
   conversationItems: [] as Array<unknown>,
   hasStreamingAssistant: false,
   refresh: vi.fn(async () => undefined),
@@ -125,6 +126,7 @@ vi.mock("../../control-plane/web-ui/src/composables/useTreeBranches", () => ({
 
 vi.mock("../../control-plane/web-ui/src/composables/useTreeMessages", () => ({
   useTreeMessages: () => ({
+    trace: ref(messagesState.trace),
     conversationItems: ref(messagesState.conversationItems),
     hasStreamingAssistant: ref(messagesState.hasStreamingAssistant),
     loading: ref(false),
@@ -133,9 +135,15 @@ vi.mock("../../control-plane/web-ui/src/composables/useTreeMessages", () => ({
   }),
 }));
 
-vi.mock("../../control-plane/web-ui/src/lib/message-normalize", () => ({
-  normalizeSessionConversationItems: () => [],
-}));
+vi.mock("../../control-plane/web-ui/src/lib/message-normalize", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("../../control-plane/web-ui/src/lib/message-normalize")
+  >();
+  return {
+    ...actual,
+    normalizeSessionConversationItems: () => [],
+  };
+});
 
 const successMessageMock = vi.fn();
 const errorMessageMock = vi.fn();
@@ -238,6 +246,14 @@ const ChatMessageListStub = defineComponent({
         .map((candidate) => String(candidate?.status ?? ""))
         .join("|");
     },
+    candidateTraceStates(item: unknown) {
+      const record = item as {
+        candidates?: Array<{ traceState?: string }>;
+      };
+      return (record?.candidates ?? [])
+        .map((candidate) => String(candidate?.traceState ?? ""))
+        .join("|");
+    },
   },
   template: `
     <div data-testid="chat-message-list">
@@ -248,6 +264,7 @@ const ChatMessageListStub = defineComponent({
         :data-role="item.role"
         :data-text="itemText(item)"
         :data-candidate-statuses="item.role === 'parallel' ? candidateStatuses(item) : ''"
+        :data-candidate-trace-states="item.role === 'parallel' ? candidateTraceStates(item) : ''"
       >
         {{ item.role }}:{{ itemText(item) }}
         <div v-if="item.role === 'parallel'" class="parallel-candidate-texts">{{ candidateTexts(item) }}</div>
@@ -329,6 +346,11 @@ describe("TaskDetailV3 runtime permissions", () => {
     vi.clearAllMocks();
     routeState.params = { taskId: "task-1" };
     routeState.query = {};
+    taskState.task.id = "task-1";
+    taskState.task.nodeId = "task-1";
+    taskState.task.projectId = "proj-1";
+    taskState.task.title = "任务详情 V3";
+    taskState.task.prompt = "执行任务详情页测试";
     taskState.task.sessionId = "ses-1";
     taskState.task.status = "running";
     taskState.task.agentRunId = "run-1";
@@ -336,6 +358,11 @@ describe("TaskDetailV3 runtime permissions", () => {
     taskState.task.executionMode = undefined;
     taskState.task.orchestrationKind = undefined;
     taskState.task.currentRunId = undefined;
+    taskState.task.autoAdvanceStages = false;
+    taskState.task.changesSummary = null;
+    taskState.node = { id: "node-task-1" };
+    taskState.ancestors = [];
+    taskState.projectId = "proj-1";
     branchState.flatNodes = [
       {
         id: "node-session-1",
@@ -348,6 +375,7 @@ describe("TaskDetailV3 runtime permissions", () => {
     branchState.selectedNode = branchState.flatNodes[0];
     realtimeStoreMock.connected = true;
     realtimeStoreMock.events = [];
+    messagesState.trace = null;
     messagesState.conversationItems = [];
     messagesState.hasStreamingAssistant = false;
     apiMocks.getTaskWorkflowView.mockResolvedValue(null);
@@ -401,6 +429,19 @@ describe("TaskDetailV3 runtime permissions", () => {
     });
   });
 
+  it("keeps rendering core task state when tree navigation data is unavailable", async () => {
+    taskState.node = null as unknown as typeof taskState.node;
+    taskState.ancestors = [];
+
+    const wrapper = await mountPage();
+
+    expect(wrapper.text()).toContain("任务详情 V3");
+    expect(wrapper.find('[data-testid="chat-composer"]').attributes("data-can-terminate")).toBe(
+      "true",
+    );
+    expect(wrapper.find('[data-testid="breadcrumb"]').exists()).toBe(true);
+  });
+
   it("renders and approves a pending external_directory request", async () => {
     const wrapper = await mountPage();
 
@@ -418,6 +459,27 @@ describe("TaskDetailV3 runtime permissions", () => {
     });
     expect(taskState.refresh).toHaveBeenCalled();
     expect(messagesState.refresh).toHaveBeenCalled();
+  });
+
+  it("shows an incomplete trace warning in the main chat area when timeline cache is partial", async () => {
+    messagesState.trace = {
+      taskId: "task-1",
+      sessionId: "ses-1",
+      segments: [],
+      hookExecutions: [],
+      messages: [],
+      timeline: [],
+      timelineMeta: {
+        readSource: "task-domain-projection",
+        cacheState: "partial",
+        complete: false,
+      },
+    };
+
+    const wrapper = await mountPage();
+
+    expect(wrapper.text()).toContain("当前对话时间线仅部分可用");
+    expect(wrapper.text()).toContain("主聊天区当前展示的是部分执行追踪结果");
   });
 
   it("only enables terminate capability for running tasks with an agent run", async () => {
@@ -735,6 +797,232 @@ describe("TaskDetailV3 runtime permissions", () => {
     expect(apiMocks.getTaskExecutionTraceView).toHaveBeenCalledWith("task-1", "ses-b", {
       includeLineage: false,
     });
+  });
+
+  it("marks parallel candidates as incomplete when fetched trace timeline is partial", async () => {
+    taskState.task.status = "completed";
+    taskState.task.agentRunId = undefined;
+    taskState.task.executionMode = "parallel";
+    taskState.task.orchestrationKind = "parallel";
+    taskState.task.currentRunId = "run-trace-partial";
+    apiMocks.getTaskDomainRuns.mockResolvedValue({
+      data: [
+        {
+          id: "run-trace-partial",
+          taskId: "task-1",
+          projectId: "proj-1",
+          orchestrationKind: "parallel",
+          triggerType: "user_execute",
+          status: "completed",
+          rootSessionId: "ses-root",
+          createdAt: "2026-03-22T05:00:00.000Z",
+          updatedAt: "2026-03-22T05:00:10.000Z",
+        },
+      ],
+    });
+    apiMocks.getTaskDomainRunDetail.mockResolvedValue({
+      data: {
+        run: {
+          id: "run-trace-partial",
+          taskId: "task-1",
+          projectId: "proj-1",
+          orchestrationKind: "parallel",
+          triggerType: "user_execute",
+          status: "completed",
+          rootSessionId: "ses-root",
+          createdAt: "2026-03-22T05:00:00.000Z",
+          updatedAt: "2026-03-22T05:00:10.000Z",
+        },
+        nodes: [],
+        candidateNodes: [
+          {
+            id: "trace-partial-node-a",
+            runId: "run-trace-partial",
+            taskId: "task-1",
+            projectId: "proj-1",
+            nodeKind: "candidate",
+            nodeKey: "candidate:0",
+            title: "候选 A",
+            candidateIndex: 0,
+            agentType: "explore-enterprise",
+            modelUsed: "gpt-5-mini",
+            sessionId: "ses-a",
+            status: "completed",
+            createdAt: "2026-03-22T05:00:01.000Z",
+            updatedAt: "2026-03-22T05:00:02.000Z",
+          },
+          {
+            id: "trace-partial-node-b",
+            runId: "run-trace-partial",
+            taskId: "task-1",
+            projectId: "proj-1",
+            nodeKind: "candidate",
+            nodeKey: "candidate:1",
+            title: "候选 B",
+            candidateIndex: 1,
+            agentType: "explore-enterprise",
+            modelUsed: "gpt-4o",
+            sessionId: "ses-b",
+            status: "completed",
+            createdAt: "2026-03-22T05:00:01.000Z",
+            updatedAt: "2026-03-22T05:00:02.000Z",
+          },
+        ],
+        judgeNode: null,
+        winnerCandidateIndex: 0,
+      },
+    });
+    apiMocks.getTaskExecutionTraceView.mockImplementation(
+      async (_taskId: string, sessionId: string) => ({
+        taskId: "task-1",
+        sessionId,
+        segments: [],
+        hookExecutions: [],
+        messages: [],
+        timeline: [],
+        timelineMeta:
+          sessionId === "ses-a"
+            ? {
+                readSource: "task-domain-projection",
+                cacheState: "partial",
+                complete: false,
+              }
+            : {
+                readSource: "task-domain-projection",
+                cacheState: "complete",
+                complete: true,
+              },
+      }),
+    );
+    apiMocks.listTaskRuntimePermissions.mockResolvedValue({ data: [] });
+
+    const wrapper = await mountPage();
+    const parallelItem = wrapper
+      .findAll(".chat-item")
+      .find((node) => node.attributes("data-role") === "parallel");
+
+    expect(parallelItem?.attributes("data-candidate-trace-states")).toBe("incomplete|");
+  });
+
+  it("marks reused parallel candidate trace as stale when silent refresh fails", async () => {
+    vi.useFakeTimers();
+    try {
+      taskState.task.status = "running";
+      taskState.task.agentRunId = "run-1";
+      taskState.task.executionMode = "parallel";
+      taskState.task.orchestrationKind = "parallel";
+      taskState.task.currentRunId = "run-trace-stale";
+      apiMocks.getTaskDomainRuns.mockResolvedValue({
+        data: [
+          {
+            id: "run-trace-stale",
+            taskId: "task-1",
+            projectId: "proj-1",
+            orchestrationKind: "parallel",
+            triggerType: "user_execute",
+            status: "running",
+            rootSessionId: "ses-root",
+            createdAt: "2026-03-22T05:00:00.000Z",
+            updatedAt: "2026-03-22T05:00:10.000Z",
+          },
+        ],
+      });
+      apiMocks.getTaskDomainRunDetail.mockResolvedValue({
+        data: {
+          run: {
+            id: "run-trace-stale",
+            taskId: "task-1",
+            projectId: "proj-1",
+            orchestrationKind: "parallel",
+            triggerType: "user_execute",
+            status: "running",
+            rootSessionId: "ses-root",
+            createdAt: "2026-03-22T05:00:00.000Z",
+            updatedAt: "2026-03-22T05:00:10.000Z",
+          },
+          nodes: [],
+          candidateNodes: [
+            {
+              id: "trace-stale-node-a",
+              runId: "run-trace-stale",
+              taskId: "task-1",
+              projectId: "proj-1",
+              nodeKind: "candidate",
+              nodeKey: "candidate:0",
+              title: "候选 A",
+              candidateIndex: 0,
+              agentType: "explore-enterprise",
+              modelUsed: "gpt-5-mini",
+              sessionId: "ses-a",
+              status: "running",
+              createdAt: "2026-03-22T05:00:01.000Z",
+              updatedAt: "2026-03-22T05:00:02.000Z",
+            },
+            {
+              id: "trace-stale-node-b",
+              runId: "run-trace-stale",
+              taskId: "task-1",
+              projectId: "proj-1",
+              nodeKind: "candidate",
+              nodeKey: "candidate:1",
+              title: "候选 B",
+              candidateIndex: 1,
+              agentType: "explore-enterprise",
+              modelUsed: "gpt-4o",
+              sessionId: "ses-b",
+              status: "running",
+              createdAt: "2026-03-22T05:00:01.000Z",
+              updatedAt: "2026-03-22T05:00:02.000Z",
+            },
+          ],
+          judgeNode: null,
+          winnerCandidateIndex: null,
+        },
+      });
+      let silentRefreshPhase = false;
+      apiMocks.getTaskExecutionTraceView.mockImplementation(async (_taskId: string, sessionId: string) => {
+        if (silentRefreshPhase && sessionId === "ses-a") {
+          throw new Error("trace refresh failed");
+        }
+        return {
+          taskId: "task-1",
+          sessionId,
+          segments: [],
+          hookExecutions: [],
+          messages: [
+            {
+              id: `${sessionId}-assistant`,
+              role: "assistant",
+              text: `${sessionId} reply`,
+              createdAt: "2026-03-22T05:00:02.000Z",
+            },
+          ],
+          timeline: [],
+          timelineMeta: {
+            readSource: "task-domain-projection",
+            cacheState: "complete",
+            complete: true,
+          },
+        };
+      });
+      apiMocks.listTaskRuntimePermissions.mockResolvedValue({ data: [] });
+
+      const wrapper = await mountPage();
+      silentRefreshPhase = true;
+
+      await vi.advanceTimersByTimeAsync(2100);
+      await flushPromises();
+      await nextTick();
+
+      const parallelItem = wrapper
+        .findAll(".chat-item")
+        .find((node) => node.attributes("data-role") === "parallel");
+
+      expect(parallelItem?.attributes("data-candidate-trace-states")).toBe("stale|");
+      wrapper.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("loads projection-backed parallel candidates even after the task switches back to single mode", async () => {

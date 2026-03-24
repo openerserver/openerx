@@ -127,7 +127,6 @@ export function buildTaskCleanupStatements(taskIds: string[]) {
       `DELETE FROM boss_decisions WHERE task_id='${id}';`,
       `DELETE FROM human_escalations WHERE task_id='${id}';`,
       `DELETE FROM agent_runs WHERE task_id='${id}';`,
-      `DELETE FROM project_tree_events WHERE node_id='${id}';`,
       `DELETE FROM project_tree_branches WHERE task_node_id='${id}' OR head_node_id='${id}';`,
       `DELETE FROM project_tree_nodes WHERE id='${id}';`,
     ];

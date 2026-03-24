@@ -14,10 +14,12 @@ import {
 } from "../../lib/paid-execution-guard";
 import { fetchProjectRuntimeUsageBaseline } from "../../lib/runtime-usage-ledger";
 import type { JWTPayload } from "../../middleware/auth";
-import { getSessionMessages } from "../agent-control/opencode-adapter";
 import {
+  createProjectionTraceTimelineMeta,
   fetchTaskSessionTimeline,
   normalizeTaskSessionTimelineMeta,
+  shouldReplaceTraceTimeline,
+  type TaskSessionTimelineMeta,
 } from "../tasks/task-session-compat";
 import {
   type ProjectStageRuntimeSummaryViewModel,
@@ -2293,12 +2295,7 @@ interface TaskSessionTimelineItem {
 interface TaskSessionTimelineResponse {
   data: TaskSessionTimelineItem[];
   meta?: {
-    readSource?:
-      | "conversation-table"
-      | "task-domain-events"
-      | "conversation-table+task-domain-events"
-      | "task-domain-projection"
-      | "runtime-fallback";
+    readSource?: TaskSessionTimelineMeta["readSource"];
     cacheState?: "none" | "partial" | "complete";
     complete?: boolean;
     includeLineage?: boolean;
@@ -2610,10 +2607,10 @@ async function loadExecutionTraceProjectionTimeline(
   return {
     rawItems: result.data.data,
     items,
-    meta: {
-      ...result.data.meta,
-      readSource: "task-domain-projection" as const,
-    },
+    meta: createProjectionTraceTimelineMeta({
+      meta: result.data.meta,
+      itemCount: items.length,
+    }),
     complete: result.data.meta?.complete === true && items.length > 0,
   };
 }
@@ -2647,17 +2644,6 @@ async function buildTaskExecutionTrace(
     traceContext.timeline,
     traceContext.projectionSegments,
   );
-  const fallbackTimelineMeta = await loadTaskExecutionTraceRuntimeFallbackSegments(
-    segments,
-    traceContext.timeline,
-    traceContext.timelineMeta,
-    snapshot,
-    effectiveSessionId,
-    task,
-    authorization,
-  );
-
-  appendTaskExecutionTraceSnapshotFallback(segments, snapshot);
 
   return {
     ok: true,
@@ -2667,7 +2653,7 @@ async function buildTaskExecutionTrace(
       sessionId: effectiveSessionId,
       segments,
       timeline: traceContext.timeline,
-      timelineMeta: fallbackTimelineMeta,
+      timelineMeta: traceContext.timelineMeta,
       snapshot,
       hookExecutions: hookExecutions.map(mapExecutionTraceHookExecution),
     },
@@ -2748,9 +2734,12 @@ async function loadTaskExecutionTraceContext(
         : await loadExecutionTraceTimeline(task.id, effectiveSessionId, authorization);
 
     if (
-      !projectionItems?.complete &&
       timelineItems &&
-      timelineItems.items.length >= timeline.length
+      shouldReplaceTraceTimeline({
+        currentItemCount: timeline.length,
+        fallbackItemCount: timelineItems.items.length,
+        projectionComplete: projectionItems?.complete,
+      })
     ) {
       timeline = timelineItems.items;
       timelineMeta = timelineItems.meta;
@@ -2804,84 +2793,6 @@ function appendTaskExecutionTraceLastAssistantSegment(
       type: "model-response",
       label: "模型回复",
       content: assistantMessages[assistantMessages.length - 1]?.text || "",
-    });
-  }
-}
-
-async function loadTaskExecutionTraceRuntimeFallbackSegments(
-  segments: ExecutionTraceSegment[],
-  timeline: TaskSessionTimelineItem[],
-  timelineMeta: TaskSessionTimelineResponse["meta"] | undefined,
-  snapshot: Awaited<ReturnType<typeof loadTaskProjectionSnapshot>>,
-  effectiveSessionId: string | null,
-  task: FullTaskRecord,
-  authorization: string,
-) {
-  if (!effectiveSessionId || timeline.length > 0 || snapshot?.latestResult) {
-    return timelineMeta;
-  }
-
-  const messagesResult = await getSessionMessages(effectiveSessionId, {
-    taskId: task.id,
-    authorization,
-  });
-  const nextTimelineMeta = timelineMeta ?? {
-    readSource: "runtime-fallback" as const,
-    cacheState: "none" as const,
-    complete: false,
-    includeLineage: true,
-  };
-
-  if (!messagesResult.ok || !Array.isArray(messagesResult.data)) {
-    return nextTimelineMeta;
-  }
-
-  appendTaskExecutionTraceRuntimeMessages(segments, messagesResult.data as unknown[]);
-  return {
-    ...nextTimelineMeta,
-    readSource: "runtime-fallback" as const,
-    cacheState: nextTimelineMeta.cacheState ?? "none",
-    complete: false,
-    includeLineage: true,
-  };
-}
-
-function appendTaskExecutionTraceRuntimeMessages(
-  segments: ExecutionTraceSegment[],
-  messages: unknown[],
-) {
-  const userMessages = messages.filter((message) => extractSessionMessageRole(message) === "user");
-  if (userMessages.length > 0) {
-    const lastUserMsg = userMessages[userMessages.length - 1];
-    segments.push({
-      type: "final-prompt",
-      label: "最终发送给模型的 Prompt",
-      content: extractSessionMessageText(lastUserMsg),
-    });
-  }
-
-  const assistantMessages = messages.filter(
-    (message) => extractSessionMessageRole(message) === "assistant",
-  );
-  if (assistantMessages.length > 0) {
-    const lastAssistantMsg = assistantMessages[assistantMessages.length - 1];
-    segments.push({
-      type: "model-response",
-      label: "模型回复",
-      content: extractSessionMessageText(lastAssistantMsg),
-    });
-  }
-}
-
-function appendTaskExecutionTraceSnapshotFallback(
-  segments: ExecutionTraceSegment[],
-  snapshot: Awaited<ReturnType<typeof loadTaskProjectionSnapshot>>,
-) {
-  if (!segments.some((item) => item.type === "model-response") && snapshot?.latestResult) {
-    segments.push({
-      type: "model-response",
-      label: "模型回复",
-      content: snapshot.latestResult,
     });
   }
 }

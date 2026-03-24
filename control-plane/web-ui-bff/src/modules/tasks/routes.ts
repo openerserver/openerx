@@ -67,7 +67,12 @@ import { buildPipelineStageUpdatedEvents } from "../realtime/pipeline-events";
 import { sseAggregator } from "../realtime/sse-aggregator";
 import { wsBroadcaster } from "../realtime/ws-broadcaster";
 import { reconcileRunningTasksOnStartup } from "./reconcile";
-import { normalizeTaskSessionTimelineMeta } from "./task-session-compat";
+import {
+  createProjectionTraceTimelineMeta,
+  normalizeTaskSessionTimelineMeta,
+  shouldReplaceTraceTimeline,
+  type TaskSessionTimelineMeta,
+} from "./task-session-compat";
 import {
   buildStageArtifactSummary,
   buildWorkflowExecutionPromptSnapshot,
@@ -548,20 +553,7 @@ interface TaskSessionTimelineItemRecord {
   sourceEventTypes?: string[];
 }
 
-interface TaskSessionTimelineMetaRecord {
-  readSource?:
-    | "conversation-table"
-    | "task-domain-events"
-    | "conversation-table+task-domain-events"
-    | "task-domain-projection"
-    | "runtime-fallback";
-  cacheState?: "none" | "partial" | "complete";
-  complete?: boolean;
-  includeLineage?: boolean;
-  lineagePath?: string[];
-  cachedSessionCount?: number;
-  itemCount?: number;
-}
+type TaskSessionTimelineMetaRecord = TaskSessionTimelineMeta;
 
 interface TaskProjectionSnapshotRecord {
   taskId: string;
@@ -2785,10 +2777,10 @@ async function loadExecutionTraceMessagesFromProjection(
     rawItems: projectionResult.data.data,
     items,
     messages: mapProjectionTimelineItemsToTraceMessages(items),
-    meta: {
-      ...projectionResult.data.meta,
-      readSource: "task-domain-projection" as const,
-    },
+    meta: createProjectionTraceTimelineMeta({
+      meta: projectionResult.data.meta,
+      itemCount: items.length,
+    }),
     complete: projectionResult.data.meta?.complete === true && items.length > 0,
     messageLimit: projectionResult.data.meta?.itemCount ?? items.length,
   };
@@ -3142,6 +3134,7 @@ async function loadTaskExecutionTraceMessages(args: {
         sessionId: args.sessionId,
         authorization: args.authorization,
         includeLineage: args.includeLineage,
+        timelineMeta,
       });
       timeline = timelineFallback.timeline;
       timelineMeta = timelineFallback.timelineMeta;
@@ -3149,8 +3142,6 @@ async function loadTaskExecutionTraceMessages(args: {
       messageLimit = timelineFallback.messageLimit;
       messages.splice(0, messages.length, ...timelineFallback.messages);
     }
-
-    backfillTaskExecutionTracePrompt(args.task.prompt, messages, timeline);
   }
 
   return {
@@ -3170,7 +3161,11 @@ function shouldLoadTaskExecutionTraceTimelineFallback(
   snapshot: Awaited<ReturnType<typeof loadTaskProjectionSnapshot>>,
 ) {
   return (
-    !projectionTimeline?.complete &&
+    shouldReplaceTraceTimeline({
+      currentItemCount: timeline.length,
+      fallbackItemCount: 0,
+      projectionComplete: projectionTimeline?.complete,
+    }) &&
     timeline.length === 0 &&
     messages.length === 0 &&
     !snapshot?.latestResult
@@ -3182,12 +3177,13 @@ async function loadTaskExecutionTraceTimelineFallback(args: {
   sessionId: string;
   authorization: string;
   includeLineage: boolean;
+  timelineMeta: TaskSessionTimelineMetaRecord | undefined;
 }) {
   let messages: ExecutionTraceMessageRecord[] = [];
   let timeline: TaskSessionTimelineItemRecord[] = [];
   let truncated = false;
   let messageLimit = 200;
-  let timelineMeta: TaskSessionTimelineMetaRecord | undefined;
+  let timelineMeta: TaskSessionTimelineMetaRecord | undefined = args.timelineMeta;
 
   const timelineMessages = await loadExecutionTraceMessagesFromTimeline(
     args.task.id,
@@ -3203,77 +3199,7 @@ async function loadTaskExecutionTraceTimelineFallback(args: {
     messageLimit = timelineMessages.messageLimit;
   }
 
-  if (timeline.length === 0 && messages.length === 0) {
-    const runtimeFallback = await loadTaskExecutionTraceRuntimeMessages(args);
-    messages = runtimeFallback.messages;
-    truncated = runtimeFallback.truncated;
-    messageLimit = runtimeFallback.messageLimit;
-    timelineMeta = timelineMeta ?? {
-      readSource: "runtime-fallback",
-      cacheState: "none",
-      complete: false,
-      includeLineage: args.includeLineage,
-    };
-  }
-
   return { messages, timeline, truncated, messageLimit, timelineMeta };
-}
-
-async function loadTaskExecutionTraceRuntimeMessages(args: {
-  task: ExecutableTask;
-  sessionId: string;
-  authorization: string;
-  includeLineage: boolean;
-}) {
-  const messages: ExecutionTraceMessageRecord[] = [];
-  let truncated = false;
-  let messageLimit = 200;
-
-  const messagesResult = await getSessionMessages(args.sessionId, {
-    taskId: args.task.id,
-    authorization: args.authorization,
-    includeLineage: args.includeLineage,
-  });
-  if (messagesResult.ok && Array.isArray(messagesResult.data)) {
-    const rawMessages = messagesResult.data as unknown[];
-    truncated = rawMessages.length >= 200;
-    messageLimit = 200;
-    for (let index = 0; index < rawMessages.length; index += 1) {
-      messages.push(mapRuntimeTraceMessage(rawMessages[index], index));
-    }
-  }
-
-  return { messages, truncated, messageLimit };
-}
-
-function mapRuntimeTraceMessage(rawMessage: unknown, index: number): ExecutionTraceMessageRecord {
-  return {
-    id: extractExecutionTraceMessageId(rawMessage, `${index}`),
-    role: extractSessionMessageRole(rawMessage),
-    text: extractSessionMessageText(rawMessage),
-    createdAt: extractSessionMessageCreatedAt(rawMessage),
-    raw: rawMessage,
-  };
-}
-
-function backfillTaskExecutionTracePrompt(
-  prompt: string | null | undefined,
-  messages: ExecutionTraceMessageRecord[],
-  timeline: TaskSessionTimelineItemRecord[],
-) {
-  if (!prompt) {
-    return;
-  }
-
-  const firstUser = messages.find((item) => item.role === "user");
-  if (firstUser && !firstUser.text) {
-    firstUser.text = prompt;
-  }
-
-  const firstUserTimeline = timeline.find((item) => item.role === "user");
-  if (firstUserTimeline && !firstUserTimeline.text) {
-    firstUserTimeline.text = prompt;
-  }
 }
 
 function buildTaskExecutionTraceSegments(args: {

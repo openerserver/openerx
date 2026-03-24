@@ -278,7 +278,6 @@ afterAll(async () => {
       taskId,
       taskId,
     ]);
-    await writeDb("DELETE FROM project_tree_events WHERE node_id = ?", [taskId]);
     await writeDb("DELETE FROM project_tree_branches WHERE task_node_id = ? OR head_node_id = ?", [
       taskId,
       taskId,

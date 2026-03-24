@@ -141,6 +141,20 @@
       "when": 1774265400000,
       "tag": "0019_task_author_columns",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1774356000000,
+      "tag": "0020_clear_task_node_content_json",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1774359600000,
+      "tag": "0021_drop_project_tree_events",
+      "breakpoints": true
     }
   ]
 }

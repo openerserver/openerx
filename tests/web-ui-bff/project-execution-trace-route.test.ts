@@ -342,6 +342,218 @@ describe("project execution trace route", () => {
     expect(getSessionMessagesMock).not.toHaveBeenCalled();
   });
 
+  test("does not synthesize model response from snapshot latestResult when timeline lacks assistant output", async () => {
+    cpFetchMock.mockImplementation(async (path: string) => {
+      if (path === "/api/project-tree/tasks/task-1") {
+        return {
+          ok: true,
+          status: 200,
+          data: {
+            id: "task-1",
+            projectId: "proj-1",
+            sessionId: "ses-1",
+            strategy: JSON.stringify({ hookExecutions: [] }),
+            prompt: "项目级任务输入",
+            title: "project trace task",
+            status: "running",
+          },
+        };
+      }
+
+      if (path === "/api/tasks/task-1/snapshot") {
+        return {
+          ok: true,
+          status: 200,
+          data: {
+            data: {
+              taskId: "task-1",
+              projectId: "proj-1",
+              currentStatus: "running",
+              currentRunId: "task_run:task-1:ses-1",
+              currentSessionId: "ses-1",
+              latestResult: "snapshot only response",
+              latestResultSummary: "snapshot only response",
+              activeCandidateCount: 0,
+              completedCandidateCount: 0,
+              failedCandidateCount: 0,
+              totalChainSteps: 0,
+              completedChainSteps: 0,
+              updatedAt: "2026-03-22T10:00:03.000Z",
+            },
+            meta: {
+              readSource: "task-domain-projection",
+              complete: true,
+            },
+          },
+        };
+      }
+
+      if (path === "/api/tasks/task-1/timeline-view?runtimeSessionId=ses-1") {
+        return {
+          ok: true,
+          status: 200,
+          data: {
+            data: [
+              {
+                id: "projection-user-1",
+                taskId: "task-1",
+                projectId: "proj-1",
+                messageId: "message-user-1",
+                sessionId: "task_session:task-1:ses-1",
+                itemKind: "user-input",
+                itemRole: "user",
+                displayText: "projection prompt only",
+                sortAt: "2026-03-22T10:00:01.000Z",
+                createdAt: "2026-03-22T10:00:01.000Z",
+              },
+            ],
+            meta: {
+              readSource: "task-domain-projection",
+              complete: true,
+              itemCount: 1,
+            },
+          },
+        };
+      }
+
+      return { ok: true, status: 200, data: {} };
+    });
+
+    getSessionMessagesMock.mockRejectedValue(new Error("should not hit fallback"));
+
+    const { projectRoutes } = await import(
+      "../../control-plane/web-ui-bff/src/modules/projects/routes"
+    );
+
+    const response = await projectRoutes.request(
+      "http://localhost/proj-1/task-execution-trace/task-1",
+      {
+        headers: {
+          Authorization: "Bearer test-token",
+        },
+      },
+    );
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload.snapshot).toMatchObject({ latestResult: "snapshot only response" });
+    expect(payload.segments).toEqual([
+      expect.objectContaining({ type: "user-input", content: "项目级任务输入" }),
+      expect.objectContaining({ type: "final-prompt", content: "projection prompt only" }),
+    ]);
+    expect(payload.segments).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "model-response", content: "snapshot only response" }),
+      ]),
+    );
+    expect(getSessionMessagesMock).not.toHaveBeenCalled();
+  });
+
+  test("keeps non-empty partial projection timeline without loading service timeline", async () => {
+    cpFetchMock.mockImplementation(async (path: string) => {
+      if (path === "/api/project-tree/tasks/task-1") {
+        return {
+          ok: true,
+          status: 200,
+          data: {
+            id: "task-1",
+            projectId: "proj-1",
+            sessionId: "ses-1",
+            strategy: JSON.stringify({ hookExecutions: [] }),
+            prompt: "项目级任务输入",
+            title: "project trace task",
+            status: "running",
+          },
+        };
+      }
+
+      if (path === "/api/tasks/task-1/snapshot") {
+        return {
+          ok: true,
+          status: 200,
+          data: {
+            data: null,
+            meta: {
+              readSource: "task-domain-projection",
+              complete: false,
+            },
+          },
+        };
+      }
+
+      if (path === "/api/tasks/task-1/timeline-view?runtimeSessionId=ses-1") {
+        return {
+          ok: true,
+          status: 200,
+          data: {
+            data: [
+              {
+                id: "projection-user-partial-1",
+                taskId: "task-1",
+                projectId: "proj-1",
+                messageId: "message-user-partial-1",
+                sessionId: "task_session:task-1:ses-1",
+                itemKind: "user-input",
+                itemRole: "user",
+                displayText: "projection partial prompt",
+                sortAt: "2026-03-22T10:00:01.000Z",
+                createdAt: "2026-03-22T10:00:01.000Z",
+              },
+            ],
+            meta: {
+              readSource: "task-domain-projection",
+              complete: false,
+              itemCount: 1,
+            },
+          },
+        };
+      }
+
+      if (path === "/api/tasks/task-1/branches/ses-1/timeline?includeLineage=true") {
+        throw new Error("should not load service timeline when projection timeline already has items");
+      }
+
+      return { ok: true, status: 200, data: {} };
+    });
+
+    const { projectRoutes } = await import(
+      "../../control-plane/web-ui-bff/src/modules/projects/routes"
+    );
+
+    const response = await projectRoutes.request(
+      "http://localhost/proj-1/task-execution-trace/task-1",
+      {
+        headers: {
+          Authorization: "Bearer test-token",
+        },
+      },
+    );
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload.timelineMeta).toMatchObject({
+      readSource: "task-domain-projection",
+      complete: false,
+      itemCount: 1,
+    });
+    expect(payload.timeline).toEqual([
+      expect.objectContaining({
+        id: "message-user-partial-1",
+        role: "user",
+        text: "projection partial prompt",
+      }),
+    ]);
+    expect(payload.segments).toEqual([
+      expect.objectContaining({ type: "user-input", content: "项目级任务输入" }),
+      expect.objectContaining({ type: "final-prompt", content: "projection partial prompt" }),
+    ]);
+    expect(
+      cpFetchMock.mock.calls.some(
+        ([path]) => path === "/api/tasks/task-1/branches/ses-1/timeline?includeLineage=true",
+      ),
+    ).toBe(false);
+  });
+
   test("uses complete service timeline without falling back to session messages", async () => {
     cpFetchMock.mockImplementation(async (path: string) => {
       if (path === "/api/project-tree/tasks/task-1") {
@@ -457,7 +669,7 @@ describe("project execution trace route", () => {
     expect(getSessionMessagesMock).not.toHaveBeenCalled();
   });
 
-  test("keeps partial timeline payload but falls back to session messages for trace segments", async () => {
+  test("keeps partial timeline payload without falling back to session messages", async () => {
     cpFetchMock.mockImplementation(async (path: string) => {
       if (path === "/api/project-tree/tasks/task-1") {
         return {
@@ -543,7 +755,7 @@ describe("project execution trace route", () => {
     expect(getSessionMessagesMock).toHaveBeenCalledTimes(0);
   });
 
-  test("uses runtime fallback readSource when projection and service timeline are both unavailable", async () => {
+  test("keeps projection incomplete meta when projection and service timeline are both unavailable", async () => {
     cpFetchMock.mockImplementation(async (path: string) => {
       if (path === "/api/project-tree/tasks/task-1") {
         return {
@@ -601,19 +813,7 @@ describe("project execution trace route", () => {
       return { ok: true, status: 200, data: {} };
     });
 
-    getSessionMessagesMock.mockResolvedValue({
-      ok: true,
-      data: [
-        {
-          role: "user",
-          parts: [{ type: "text", text: "project runtime fallback prompt" }],
-        },
-        {
-          role: "assistant",
-          parts: [{ type: "text", text: "project runtime fallback response" }],
-        },
-      ],
-    });
+    getSessionMessagesMock.mockRejectedValue(new Error("should not hit runtime messages"));
 
     const { projectRoutes } = await import(
       "../../control-plane/web-ui-bff/src/modules/projects/routes"
@@ -631,19 +831,14 @@ describe("project execution trace route", () => {
     expect(response.status).toBe(200);
     const payload = await response.json();
     expect(payload.timelineMeta).toMatchObject({
-      readSource: "runtime-fallback",
-      cacheState: "none",
+      readSource: "task-domain-projection",
       complete: false,
+      itemCount: 0,
     });
     expectNoLegacyTimelineReadSource(payload);
     expect(payload.segments).toEqual([
       expect.objectContaining({ type: "user-input", content: "项目级任务输入" }),
-      expect.objectContaining({ type: "final-prompt", content: "project runtime fallback prompt" }),
-      expect.objectContaining({ type: "model-response", content: "project runtime fallback response" }),
     ]);
-    expect(getSessionMessagesMock).toHaveBeenCalledWith("ses-1", {
-      taskId: "task-1",
-      authorization: "Bearer test-token",
-    });
+    expect(getSessionMessagesMock).not.toHaveBeenCalled();
   });
 });

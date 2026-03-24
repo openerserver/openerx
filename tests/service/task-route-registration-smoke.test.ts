@@ -115,17 +115,6 @@ afterAll(async () => {
           FROM project_tree_nodes child
           INNER JOIN descendants parent ON child.parent_id = parent.id
         )
-        DELETE FROM project_tree_events WHERE node_id IN (SELECT id FROM descendants)`,
-        [nodeId],
-      );
-      await sql.unsafe(
-        `WITH RECURSIVE descendants AS (
-          SELECT id FROM project_tree_nodes WHERE id = $1
-          UNION ALL
-          SELECT child.id
-          FROM project_tree_nodes child
-          INNER JOIN descendants parent ON child.parent_id = parent.id
-        )
         DELETE FROM project_tree_links
         WHERE source_node_id IN (SELECT id FROM descendants)
            OR target_node_id IN (SELECT id FROM descendants)`,
@@ -201,6 +190,41 @@ describe("task route registration smoke", () => {
       },
     );
     expect([201, 202]).toContain(branchMessage.status);
+
+    const branchCompatMessages = await authedRequest<{
+      data: Array<{ id?: string; role?: string; parts?: Array<{ type?: string; text?: string }> }>;
+      meta: { includeLineage: boolean; readSource?: string };
+    }>(`/api/tasks/${task.id}/branches/${runtimeSessionId}/messages`);
+    expect(branchCompatMessages.status).toBe(200);
+    expect(branchCompatMessages.data.meta.includeLineage).toBe(false);
+    expect(branchCompatMessages.data.data).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: `msg-${unique}`,
+          role: "assistant",
+          parts: expect.arrayContaining([
+            expect.objectContaining({ type: "text", text: `smoke text ${unique}` }),
+          ]),
+        }),
+      ]),
+    );
+
+    const branchCompatEvents = await authedRequest<{
+      data: Array<{ eventType: string }>;
+      meta: { includeLineage: boolean; eventCount: number };
+    }>(`/api/tasks/${task.id}/branches/${runtimeSessionId}/events`);
+    expect(branchCompatEvents.status).toBe(200);
+    expect(branchCompatEvents.data.meta.includeLineage).toBe(false);
+    expect(branchCompatEvents.data.meta.eventCount).toBeGreaterThan(0);
+
+    const branchCompatTimeline = await authedRequest<{
+      data: Array<{ id: string; sourceEventTypes: string[] }>;
+      meta: { includeLineage: boolean; itemCount: number };
+    }>(`/api/tasks/${task.id}/branches/${runtimeSessionId}/timeline`);
+    expect(branchCompatTimeline.status).toBe(200);
+    expect(branchCompatTimeline.data.meta.includeLineage).toBe(false);
+    expect(branchCompatTimeline.data.meta.itemCount).toBeGreaterThan(0);
+    expect(branchCompatTimeline.data.data[0]?.sourceEventTypes.length ?? 0).toBeGreaterThan(0);
 
     const createRun = await authedRequest<{ id: string; status: string }>(
       `/api/tasks/${task.id}/runs`,

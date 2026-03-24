@@ -3,7 +3,7 @@ import type { TaskTreeSnapshot } from "../project-tree/storage";
 import type { TaskTreeRecord } from "../project-tree/task-view";
 import { shouldPersistStandalonePartEvent } from "./task-session-read";
 
-export const createTaskSessionSchema = z.object({
+export const createTaskBranchSchema = z.object({
   runtimeSessionId: z.string().min(1),
   parentRuntimeSessionId: z.string().optional(),
   forkedFromMessageId: z.string().optional(),
@@ -12,15 +12,15 @@ export const createTaskSessionSchema = z.object({
   isActive: z.boolean().optional(),
 });
 
-export const persistTaskSessionMessageSchema = z.object({
+export const persistTaskBranchMessageSchema = z.object({
   runtimeSessionId: z.string().min(1),
   message: z.record(z.unknown()),
 });
 
-export type CreateTaskSessionInput = z.infer<typeof createTaskSessionSchema>;
-export type PersistTaskSessionMessageInput = z.infer<typeof persistTaskSessionMessageSchema>;
+export type CreateTaskBranchInput = z.infer<typeof createTaskBranchSchema>;
+export type PersistTaskBranchMessageInput = z.infer<typeof persistTaskBranchMessageSchema>;
 
-type TaskSessionRecord = {
+type TaskBranchCompatRecord = {
   runtimeSessionId: string;
   parentRuntimeSessionId: string | null;
   forkedFromMessageId: string | null;
@@ -39,8 +39,8 @@ type ResolvedTaskBranchState = {
 };
 
 function resolveTaskBranchState(
-  body: CreateTaskSessionInput,
-  existingRecord: TaskSessionRecord | null,
+  body: CreateTaskBranchInput,
+  existingRecord: TaskBranchCompatRecord | null,
 ): ResolvedTaskBranchState {
   return {
     runtimeSessionId: body.runtimeSessionId,
@@ -75,17 +75,17 @@ function buildTaskBranchResponse(args: {
 
 export function createTaskBranchWriteApi(deps: {
   loadTaskTreeBackedRecord: (taskId: string) => Promise<TaskTreeRecord | null>;
-  resolveTaskSessionRecord: (
+  resolveTaskBranchCompatRecord: (
     taskId: string,
     projectId: string,
-    taskSessionId: string,
-  ) => Promise<TaskSessionRecord | null>;
-  resolveTaskSessionRecordByRuntimeSessionId: (
+    branchId: string,
+  ) => Promise<TaskBranchCompatRecord | null>;
+  resolveTaskBranchCompatRecordByRuntimeSessionId: (
     taskId: string,
     projectId: string,
     runtimeSessionId: string,
-  ) => Promise<TaskSessionRecord | null>;
-  upsertTaskSessionTreeNode: (args: {
+  ) => Promise<TaskBranchCompatRecord | null>;
+  syncTaskBranchCompatTreeNode: (args: {
     taskId: string;
     runtimeSessionId: string;
     parentRuntimeSessionId?: string | null;
@@ -95,7 +95,7 @@ export function createTaskBranchWriteApi(deps: {
     isActive?: boolean;
     archivedAt?: string | null;
   }) => Promise<string>;
-  archiveTaskSessionTreeNode: (taskId: string, runtimeSessionId: string) => Promise<unknown>;
+  archiveTaskBranchCompatTreeNode: (taskId: string, runtimeSessionId: string) => Promise<unknown>;
   upsertConversationSessionRecord: (args: {
     task: { id: string; projectId: string };
     runtimeSessionId: string;
@@ -118,20 +118,20 @@ export function createTaskBranchWriteApi(deps: {
   upsertTaskTreeNode: (snapshot: TaskTreeSnapshot) => Promise<unknown>;
   syncTaskAggregateFromSnapshot: (snapshot: TaskTreeSnapshot) => Promise<unknown>;
 }) {
-  async function upsertTaskBranch(taskId: string, body: CreateTaskSessionInput) {
+  async function upsertTaskBranch(taskId: string, body: CreateTaskBranchInput) {
     const task = await deps.loadTaskTreeBackedRecord(taskId);
     if (!task) {
       return { ok: false as const, status: 404 as const, error: "Task not found" };
     }
 
-    const existingRecord = await deps.resolveTaskSessionRecordByRuntimeSessionId(
+    const existingRecord = await deps.resolveTaskBranchCompatRecordByRuntimeSessionId(
       taskId,
       task.projectId,
       body.runtimeSessionId,
     );
     const branchState = resolveTaskBranchState(body, existingRecord);
 
-    const nodeId = await deps.upsertTaskSessionTreeNode({
+    const nodeId = await deps.syncTaskBranchCompatTreeNode({
       taskId,
       runtimeSessionId: branchState.runtimeSessionId,
       parentRuntimeSessionId: branchState.parentRuntimeSessionId,
@@ -173,20 +173,20 @@ export function createTaskBranchWriteApi(deps: {
     };
   }
 
-  async function persistTaskBranchMessage(taskId: string, body: PersistTaskSessionMessageInput) {
+  async function persistTaskBranchMessage(taskId: string, body: PersistTaskBranchMessageInput) {
     const task = await deps.loadTaskTreeBackedRecord(taskId);
     if (!task) {
       return { ok: false as const, status: 404 as const, error: "Task not found" };
     }
 
-    const existingRecord = await deps.resolveTaskSessionRecordByRuntimeSessionId(
+    const existingRecord = await deps.resolveTaskBranchCompatRecordByRuntimeSessionId(
       taskId,
       task.projectId,
       body.runtimeSessionId,
     );
     const isActive = task.sessionId === body.runtimeSessionId;
 
-    await deps.upsertTaskSessionTreeNode({
+    await deps.syncTaskBranchCompatTreeNode({
       taskId,
       runtimeSessionId: body.runtimeSessionId,
       parentRuntimeSessionId: existingRecord?.parentRuntimeSessionId ?? null,
@@ -227,18 +227,18 @@ export function createTaskBranchWriteApi(deps: {
     };
   }
 
-  async function activateTaskBranch(taskId: string, tsId: string) {
+  async function activateTaskBranch(taskId: string, branchId: string) {
     const task = await deps.loadTaskTreeBackedRecord(taskId);
     if (!task) {
       return { ok: false as const, status: 404 as const, error: "Task not found" };
     }
 
-    const record = await deps.resolveTaskSessionRecord(taskId, task.projectId, tsId);
+    const record = await deps.resolveTaskBranchCompatRecord(taskId, task.projectId, branchId);
     if (!record) {
-      return { ok: false as const, status: 404 as const, error: "Task session not found" };
+      return { ok: false as const, status: 404 as const, error: "Task branch not found" };
     }
 
-    await deps.upsertTaskSessionTreeNode({
+    await deps.syncTaskBranchCompatTreeNode({
       taskId,
       runtimeSessionId: record.runtimeSessionId,
       parentRuntimeSessionId: record.parentRuntimeSessionId ?? null,
@@ -273,18 +273,18 @@ export function createTaskBranchWriteApi(deps: {
     };
   }
 
-  async function archiveTaskBranch(taskId: string, tsId: string) {
+  async function archiveTaskBranch(taskId: string, branchId: string) {
     const task = await deps.loadTaskTreeBackedRecord(taskId);
     if (!task) {
       return { ok: false as const, status: 404 as const, error: "Task not found" };
     }
 
-    const record = await deps.resolveTaskSessionRecord(taskId, task.projectId, tsId);
+    const record = await deps.resolveTaskBranchCompatRecord(taskId, task.projectId, branchId);
     if (!record) {
-      return { ok: false as const, status: 404 as const, error: "Task session not found" };
+      return { ok: false as const, status: 404 as const, error: "Task branch not found" };
     }
 
-    await deps.archiveTaskSessionTreeNode(taskId, record.runtimeSessionId);
+    await deps.archiveTaskBranchCompatTreeNode(taskId, record.runtimeSessionId);
     await deps.upsertConversationSessionRecord({
       task,
       runtimeSessionId: record.runtimeSessionId,

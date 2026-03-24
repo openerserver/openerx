@@ -27,7 +27,7 @@ function buildChildPath(parentPath: string, nodeType: ProjectTreeNodeType, nodeI
   return `${parentPath}.${sanitizeLtreeLabelSegment(nodeType)}_${sanitizeLtreeLabelSegment(nodeId)}`;
 }
 
-export function getTaskSessionNodeId(taskId: string, runtimeSessionId: string) {
+export function getTaskBranchCompatNodeId(taskId: string, runtimeSessionId: string) {
   return `task_session:${taskId}:${runtimeSessionId}`;
 }
 
@@ -37,7 +37,11 @@ export function getProjectRootNodeId(projectId: string) {
 
 export type { TaskTreeSnapshot } from "./task-types";
 
-type UpsertTaskSessionTreeNodeArgs = {
+// Task nodes remain structural anchors only. Task business facts should not be
+// mirrored back into content_json.
+export const TASK_TREE_NODE_CONTENT_JSON_WHITELIST = [] as const;
+
+type UpsertTaskBranchCompatTreeNodeArgs = {
   taskId: string;
   runtimeSessionId: string;
   parentRuntimeSessionId?: string | null;
@@ -313,7 +317,7 @@ export async function syncTaskRelationLinks(
   }
 }
 
-function buildTaskSessionContentJson(args: UpsertTaskSessionTreeNodeArgs) {
+function buildTaskBranchCompatContentJson(args: UpsertTaskBranchCompatTreeNodeArgs) {
   return {
     sourceType: args.sourceType ?? "root",
     parentRuntimeSessionId: args.parentRuntimeSessionId ?? null,
@@ -321,12 +325,12 @@ function buildTaskSessionContentJson(args: UpsertTaskSessionTreeNodeArgs) {
   } satisfies Record<string, unknown>;
 }
 
-async function loadEffectiveTaskSessionParentNode(args: {
+async function loadEffectiveTaskBranchCompatParentNode(args: {
   taskNode: Awaited<ReturnType<typeof requireTaskTreeNode>>;
   parentRuntimeSessionId?: string | null;
 }) {
   const parentSessionNodeId = args.parentRuntimeSessionId
-    ? getTaskSessionNodeId(args.taskNode.id, args.parentRuntimeSessionId)
+    ? getTaskBranchCompatNodeId(args.taskNode.id, args.parentRuntimeSessionId)
     : null;
 
   const parentNode = parentSessionNodeId
@@ -341,7 +345,7 @@ async function loadEffectiveTaskSessionParentNode(args: {
   return parentNode ?? args.taskNode;
 }
 
-async function deactivateSiblingTaskSessionNodes(args: {
+async function deactivateSiblingTaskBranchCompatNodes(args: {
   projectId: string;
   taskPath: string;
   now: string;
@@ -361,13 +365,13 @@ async function deactivateSiblingTaskSessionNodes(args: {
   `);
 }
 
-function buildTaskSessionNodeUpsertValues(args: {
+function buildTaskBranchCompatNodeUpsertValues(args: {
   nodeId: string;
   taskNode: Awaited<ReturnType<typeof requireTaskTreeNode>>;
   effectiveParentNode: typeof projectTreeNodes.$inferSelect;
   now: string;
   contentJson: Record<string, unknown>;
-  input: UpsertTaskSessionTreeNodeArgs;
+  input: UpsertTaskBranchCompatTreeNodeArgs;
   existing?: typeof projectTreeNodes.$inferSelect;
 }) {
   return {
@@ -390,9 +394,9 @@ function buildTaskSessionNodeUpsertValues(args: {
   };
 }
 
-async function updateExistingTaskSessionNode(args: {
+async function updateExistingTaskBranchCompatNode(args: {
   nodeId: string;
-  values: ReturnType<typeof buildTaskSessionNodeUpsertValues>;
+  values: ReturnType<typeof buildTaskBranchCompatNodeUpsertValues>;
 }) {
   await db
     .update(projectTreeNodes)
@@ -413,9 +417,9 @@ async function updateExistingTaskSessionNode(args: {
     .where(eq(projectTreeNodes.id, args.nodeId));
 }
 
-async function syncTaskSessionBranchHead(args: {
+async function syncTaskBranchCompatBranchHead(args: {
   taskNode: Awaited<ReturnType<typeof requireTaskTreeNode>>;
-  input: UpsertTaskSessionTreeNodeArgs;
+  input: UpsertTaskBranchCompatTreeNodeArgs;
   nodeId: string;
   now: string;
 }) {
@@ -451,28 +455,28 @@ async function syncTaskSessionBranchHead(args: {
   });
 }
 
-export async function upsertTaskSessionTreeNode(args: UpsertTaskSessionTreeNodeArgs) {
+export async function upsertTaskBranchCompatTreeNode(args: UpsertTaskBranchCompatTreeNodeArgs) {
   const taskNode = await requireTaskTreeNode(args.taskId);
-  const nodeId = getTaskSessionNodeId(args.taskId, args.runtimeSessionId);
+  const nodeId = getTaskBranchCompatNodeId(args.taskId, args.runtimeSessionId);
   const now = new Date().toISOString();
-  const effectiveParentNode = await loadEffectiveTaskSessionParentNode({
+  const effectiveParentNode = await loadEffectiveTaskBranchCompatParentNode({
     taskNode,
     parentRuntimeSessionId: args.parentRuntimeSessionId,
   });
-  const contentJson = buildTaskSessionContentJson(args);
+  const contentJson = buildTaskBranchCompatContentJson(args);
 
   const existing = await db.query.projectTreeNodes.findFirst({
     where: eq(projectTreeNodes.id, nodeId),
   });
 
-  await deactivateSiblingTaskSessionNodes({
+  await deactivateSiblingTaskBranchCompatNodes({
     projectId: taskNode.projectId,
     taskPath: taskNode.path,
     now,
     isActive: args.isActive,
   });
 
-  const values = buildTaskSessionNodeUpsertValues({
+  const values = buildTaskBranchCompatNodeUpsertValues({
     nodeId,
     taskNode,
     effectiveParentNode,
@@ -483,12 +487,12 @@ export async function upsertTaskSessionTreeNode(args: UpsertTaskSessionTreeNodeA
   });
 
   if (existing) {
-    await updateExistingTaskSessionNode({ nodeId, values });
+    await updateExistingTaskBranchCompatNode({ nodeId, values });
     return nodeId;
   }
 
   await db.insert(projectTreeNodes).values(values);
-  await syncTaskSessionBranchHead({
+  await syncTaskBranchCompatBranchHead({
     taskNode,
     input: args,
     nodeId,
@@ -498,8 +502,8 @@ export async function upsertTaskSessionTreeNode(args: UpsertTaskSessionTreeNodeA
   return nodeId;
 }
 
-export async function archiveTaskSessionTreeNode(taskId: string, runtimeSessionId: string) {
-  const nodeId = getTaskSessionNodeId(taskId, runtimeSessionId);
+export async function archiveTaskBranchCompatTreeNode(taskId: string, runtimeSessionId: string) {
+  const nodeId = getTaskBranchCompatNodeId(taskId, runtimeSessionId);
   await db
     .update(projectTreeNodes)
     .set({

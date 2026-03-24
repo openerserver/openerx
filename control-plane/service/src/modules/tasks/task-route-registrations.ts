@@ -1,4 +1,4 @@
-import { buildTaskBranchRegistrations } from "./task-route-branch-registrations";
+import { buildTaskBranchCompatRegistrations } from "./task-route-branch-registrations";
 import { buildTaskRouteBuilderShared } from "./task-route-builder-shared";
 import {
   buildTaskAgentRunWriteRegistrations,
@@ -14,7 +14,7 @@ export function buildTaskRouteRegistrations() {
     core: buildTaskCoreRegistrations(shared),
     domainRuns: buildTaskDomainRegistrations(shared),
     agentRunWrites: buildTaskAgentRunWriteRegistrations(shared),
-    branches: buildTaskBranchRegistrations(shared),
+    branchCompat: buildTaskBranchCompatRegistrations(shared),
     projections: buildTaskProjectionRegistrations(shared),
   };
 }

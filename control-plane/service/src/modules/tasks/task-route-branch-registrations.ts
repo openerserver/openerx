@@ -1,16 +1,16 @@
 import { createTaskBranchWriteApi } from "./task-branch-write";
 import type { buildTaskRouteBuilderShared } from "./task-route-builder-shared";
 
-export function buildTaskBranchRegistrations(
+export function buildTaskBranchCompatRegistrations(
   shared: ReturnType<typeof buildTaskRouteBuilderShared>,
 ) {
   const branchWriteApi = createTaskBranchWriteApi({
     loadTaskTreeBackedRecord: shared.sharedDeps.loadTaskTreeBackedRecord,
-    resolveTaskSessionRecord: shared.sharedDeps.resolveTaskSessionRecord,
-    resolveTaskSessionRecordByRuntimeSessionId:
-      shared.sharedDeps.resolveTaskSessionRecordByRuntimeSessionId,
-    upsertTaskSessionTreeNode: shared.sharedDeps.syncTaskSessionTreeNode,
-    archiveTaskSessionTreeNode: shared.sharedDeps.archiveTaskSessionTreeNode,
+    resolveTaskBranchCompatRecord: shared.sharedDeps.resolveTaskBranchCompatRecord,
+    resolveTaskBranchCompatRecordByRuntimeSessionId:
+      shared.sharedDeps.resolveTaskBranchCompatRecordByRuntimeSessionId,
+    syncTaskBranchCompatTreeNode: shared.sharedDeps.syncTaskBranchCompatTreeNode,
+    archiveTaskBranchCompatTreeNode: shared.sharedDeps.archiveTaskBranchCompatTreeNode,
     upsertConversationSessionRecord:
       shared.conversationSessionSyncApi.upsertConversationSessionRecord,
     upsertConversationMessageRecord:
@@ -22,10 +22,12 @@ export function buildTaskBranchRegistrations(
 
   return {
     loadTaskTreeBackedRecord: shared.sharedDeps.loadTaskTreeBackedRecord,
-    listTaskSessionTreeRecords: shared.sharedDeps.listTaskSessionTreeRecords,
-    buildTaskSessionMessagesResponse: shared.sharedDeps.buildTaskSessionMessagesResponse,
-    buildTaskSessionEventsResponse: shared.sharedDeps.buildTaskSessionEventsResponse,
-    buildTaskSessionTimelineResponse: shared.sharedDeps.buildTaskSessionTimelineResponse,
+    listTaskBranchCompatTreeRecords: shared.sharedDeps.listTaskBranchCompatTreeRecords,
+    buildTaskBranchCompatMessagesResponse:
+      shared.sharedDeps.buildTaskBranchCompatMessagesResponse,
+    buildTaskBranchCompatEventsResponse: shared.sharedDeps.buildTaskBranchCompatEventsResponse,
+    buildTaskBranchCompatTimelineResponse:
+      shared.sharedDeps.buildTaskBranchCompatTimelineResponse,
     upsertTaskBranch: branchWriteApi.upsertTaskBranch,
     persistTaskBranchMessage: branchWriteApi.persistTaskBranchMessage,
     activateTaskBranch: branchWriteApi.activateTaskBranch,

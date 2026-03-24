@@ -1,28 +1,28 @@
 # PG 事件溯源、搜索与增量推送优化方案
 
-> 状态：Draft  
+> 状态：可选优化草案，非任务域主链路收尾阻塞项  
 > 日期：2026-03-21  
 > 关联文档：[project-tree-storage-design.md](project-tree-storage-design.md)
 
-> 说明：本文讨论的是 `project_tree_events` 这一历史兼容链路的优化与收敛，不再代表 task/session/timeline 当前主读写架构。当前主路径已经切到 `conversation_*`、`task_domain_events` 与 `task_timeline_views`。
+> 说明：本文讨论的是 `project_tree_events` 这一历史兼容链路的可选优化与收敛，不再代表 task/session/timeline 当前主读写架构，也不再构成任务域主读收尾的必做项。当前主路径已经切到 `conversation_*`、`task_domain_events` 与 `task_timeline_views`。
 
 ## 0. 背景与动机
 
-本文档用于承接 [project-tree-storage-design.md](project-tree-storage-design.md) 中 Phase 3 的未完成项，将 `pg_trgm` 搜索能力与基于 `project_tree_events` 的增量推送能力，统一收敛到一份“树模型后续优化方案”中。
+本文档用于承接 [project-tree-storage-design.md](project-tree-storage-design.md) 中已单列出来的可选优化项，将 `pg_trgm` 搜索能力与基于 `project_tree_events` 的增量推送能力，统一收敛到一份“树模型后续优化方案”中。
 
 历史实现里的 `project_tree_events` 曾采用纯追加（append-only）事件溯源模式存储所有对话消息。
 在旧写路径里，每次 OpenCode Runtime 发出 `message.updated` SSE 事件，BFF 的 `persistSessionMessageSnapshot()` 都会向 CP Service 发送完整消息快照，Service 端写入 **2~3 行事件**（created/updated + snapshot + 可选 completed）。
 
-与此同时，历史项目树兼容层仍缺少两项直接面向产品能力的后续补强：
+如果后续仍选择继续维护项目树侧搜索与增量读面，历史项目树兼容层主要还有两项可补强能力：
 
 1. 基于 `pg_trgm` 的项目内消息 / 上下文模糊搜索。
 2. 基于 `project_tree_events` 的增量推送 / 增量拉取能力，用于替代高频全量回放与整段消息重载。
 
-因此，本方案不再只讨论事件表存储膨胀问题，而是统一覆盖三类目标：
+因此，本方案不再只讨论事件表存储膨胀问题，而是统一覆盖三类可选优化目标：
 
 1. **写入更轻**：减少 `project_tree_events` 的写放大。
 2. **读取更快**：消息列表、增量时间线、搜索结果都不再依赖大范围事件回放。
-3. **能力补齐**：把 Phase 3 所需的项目级搜索与实时 / 增量同步能力一并落地。
+3. **能力补齐**：在确有产品需求时，再把树侧项目级搜索与实时 / 增量同步能力一并落地。
 
 ### 0.1 写放大分析
 
@@ -59,6 +59,8 @@ session 生命周期越长，需要读取的冗余事件越多。1 个 session �
 ---
 
 ## 1. 优化目标
+
+这些目标适用于“继续保留并增强 `project_tree_events` 侧搜索/增量读面”的前提，不应再解读为当前任务域主链路的必达 gate。
 
 | 目标 | 量化指标 |
 |---|---|
@@ -800,9 +802,9 @@ CREATE TABLE event_archive_index (
 
 ---
 
-## 10. 实施计划
+## 10. 可选实施计划
 
-### Phase 1A：BFF 节流（低风险，立即可做）
+### Phase 1A：BFF 节流（低风险，可单独启用）
 
 **范围**：仅修改 BFF `sse-aggregator.ts`，不涉及 DB 变更。
 
@@ -823,7 +825,7 @@ CREATE TABLE event_archive_index (
 
 ---
 
-### Phase 1B：物化快照（中风险，Phase 1A 后执行）
+### Phase 1B：物化快照（中风险，在确认仍需树侧快照读面后再执行）
 
 **范围**：DB schema 变更 + Service 路由修改 + 读取路径优化。
 
@@ -846,7 +848,7 @@ CREATE TABLE event_archive_index (
 
 ---
 
-### Phase 1C：`pg_trgm` 搜索（中风险，Phase 1B 后执行）
+### Phase 1C：`pg_trgm` 搜索（中风险，确有项目级树侧搜索需求时再执行）
 
 | 步骤 | 内容 |
 |---|---|
@@ -862,7 +864,7 @@ CREATE TABLE event_archive_index (
 
 ---
 
-### Phase 1D：增量推送读面（中风险，Phase 1C 后执行）
+### Phase 1D：增量推送读面（中风险，确有前端共享 cursor 需求时再执行）
 
 | 步骤 | 内容 |
 |---|---|
@@ -889,7 +891,7 @@ CREATE TABLE event_archive_index (
 
 ---
 
-### Phase 2：分区 + TTL（Phase 1 全部落地后）
+### Phase 2：分区 + TTL（仅在 Phase 1 相关能力实际落地后再考虑）
 
 | 步骤 | 内容 |
 |---|---|

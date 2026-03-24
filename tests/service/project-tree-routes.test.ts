@@ -155,7 +155,6 @@ afterAll(async () => {
     await sql.unsafe(
       `DELETE FROM project_tree_links WHERE source_node_id IN (${nodeList}) OR target_node_id IN (${nodeList})`,
     );
-    await sql.unsafe(`DELETE FROM project_tree_events WHERE node_id IN (${nodeList})`);
     await sql.unsafe(
       `DELETE FROM project_tree_branches WHERE task_node_id IN (${nodeList}) OR head_node_id IN (${nodeList})`,
     );
@@ -478,6 +477,7 @@ describe("project tree routes", () => {
     expect(taskNode.data.contentText).toContain("tree-task-sync-");
     expect(taskNode.data.runtimeSessionId).toBe("ses_task_sync_runtime");
     expect(taskNode.data.branchName).toBe("feature/tree-sync");
+    expect(taskNode.data.contentJson).toEqual({});
     expect(taskNode.data.contentJson).not.toHaveProperty("executionMode");
     expect(taskNode.data.contentJson).not.toHaveProperty("autoAdvanceStages");
     expect(taskNode.data.contentJson).not.toHaveProperty("gitCommitterName");
@@ -537,6 +537,7 @@ describe("project tree routes", () => {
     expect(taskNode.status).toBe(200);
     expect(taskNode.data.runtimeSessionId).toBe("ses_primary_tree_task");
     expect(taskNode.data.branchName).toBe("feature/tree-primary-task");
+    expect(taskNode.data.contentJson).toEqual({});
     expect(taskNode.data.contentJson).not.toHaveProperty("status");
     expect(taskNode.data.contentJson).not.toHaveProperty("sessionId");
     expect(taskNode.data.contentJson).not.toHaveProperty("workingBranch");
@@ -632,6 +633,58 @@ describe("project tree routes", () => {
     expect(filteredTask).toBeDefined();
     expect(filteredTask).not.toHaveProperty("executionPlan");
     expect(filteredTask).not.toHaveProperty("parallelRunHistory");
+  });
+
+  test("does not recover execution fields from legacy aggregate strategy json", async () => {
+    const task = await createTask(`tree-strategy-compat-${Date.now()}`);
+
+    await sql.unsafe(
+      `UPDATE tasks
+       SET strategy_json = '{"executionMode":"parallel","autoAdvanceStages":true}'::jsonb
+       WHERE id = $1`,
+      [task.id],
+    );
+
+    const detail = await authedRequest<{
+      id: string;
+      status: string;
+      executionMode: string | null;
+      autoAdvanceStages: boolean;
+      orchestrationKind: string | null;
+      strategy: Record<string, unknown> | null;
+    }>(`/api/project-tree/tasks/${task.id}`);
+
+    expect(detail.status).toBe(200);
+    expect(detail.data).toMatchObject({
+      id: task.id,
+      status: "pending",
+      executionMode: null,
+      autoAdvanceStages: false,
+      orchestrationKind: null,
+      strategy: {
+        executionMode: "parallel",
+        autoAdvanceStages: true,
+      },
+    });
+
+    const filtered = await authedRequest<{
+      data: Array<{
+        id: string;
+        executionMode: string | null;
+        autoAdvanceStages: boolean;
+        orchestrationKind: string | null;
+      }>;
+    }>(`/api/project-tree/tasks?projectId=${PROJECT_ID}&status=pending`);
+
+    expect(filtered.status).toBe(200);
+    expect(filtered.data.data).toContainEqual(
+      expect.objectContaining({
+        id: task.id,
+        executionMode: null,
+        autoAdvanceStages: false,
+        orchestrationKind: null,
+      }),
+    );
   });
 
   test("syncs session activate and archive to project tree nodes", async () => {
@@ -978,12 +1031,6 @@ describe("project tree routes", () => {
     );
 
     expect(persisted.status).toBe(201);
-
-    await sql.unsafe(
-      `DELETE FROM project_tree_events WHERE node_id = $1 AND event_type LIKE 'session.message.%'`,
-      [sessionNodeId],
-    );
-
     const messages = await authedRequest<{
       data: Array<Record<string, unknown>>;
       meta: { cacheState: string; complete: boolean; readSource?: string };
@@ -1292,12 +1339,6 @@ describe("project tree routes", () => {
       );
       expect(persisted.status).toBe(201);
     }
-
-    await sql.unsafe(
-      `DELETE FROM project_tree_events WHERE node_id IN ($1, $2) AND event_type LIKE 'session.message.%'`,
-      [rootSessionNodeId, forkSessionNodeId],
-    );
-
     const replayed = await authedRequest<{
       data: Array<{ info: { id: string } }>;
       meta: {
@@ -1611,12 +1652,6 @@ describe("project tree routes", () => {
       },
     );
     expect(completedPersist.status).toBe(201);
-
-    await sql.unsafe(
-      `DELETE FROM project_tree_events WHERE node_id = $1 AND event_type LIKE 'session.message.%'`,
-      [taskSessionNodeId(task.id, runtimeSessionId)],
-    );
-
     const events = await authedRequest<{
       data: Array<{
         eventType: string;
@@ -1750,12 +1785,6 @@ describe("project tree routes", () => {
       );
       expect(persisted.status).toBe(201);
     }
-
-    await sql.unsafe(
-      `DELETE FROM project_tree_events WHERE node_id IN ($1, $2) AND event_type LIKE 'session.message.%'`,
-      [rootSessionNodeId, forkSessionNodeId],
-    );
-
     const timeline = await authedRequest<{
       data: Array<{
         id: string;

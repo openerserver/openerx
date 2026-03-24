@@ -22,6 +22,7 @@ export type TaskRouteCollector = ReturnType<typeof createRouteCollector>;
 
 export function createRouteContext(options: {
   params?: Record<string, string>;
+  query?: Record<string, string>;
   validJson?: unknown;
   userRole?: string;
 }) {
@@ -38,7 +39,7 @@ export function createRouteContext(options: {
     req: {
       param: (name: string) => options.params?.[name] ?? "",
       valid: (_target: string) => options.validJson,
-      query: () => undefined,
+      query: (name: string) => options.query?.[name],
     },
     get: () => ({ role: options.userRole ?? "developer" }),
   };

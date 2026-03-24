@@ -28,6 +28,8 @@ export interface TaskParallelComparisonCard {
   label: string;
   model?: string;
   status: string;
+  traceState?: "incomplete" | "stale";
+  traceNote?: string;
   meta?: string;
   loading: boolean;
   items: TaskConversationMessageItem[];

@@ -3,34 +3,34 @@ import type { Hono } from "hono";
 import type { AppEnv } from "../../middleware/auth";
 import type { TaskTreeRecord } from "../project-tree/task-view";
 import {
-  type CreateTaskSessionInput,
-  type PersistTaskSessionMessageInput,
-  createTaskSessionSchema,
-  persistTaskSessionMessageSchema,
+  type CreateTaskBranchInput,
+  type PersistTaskBranchMessageInput,
+  createTaskBranchSchema,
+  persistTaskBranchMessageSchema,
 } from "./task-branch-write";
 
-export function registerTaskBranchRoutes(
+export function registerTaskBranchCompatRoutes(
   taskRoutes: Hono<AppEnv>,
   deps: {
     loadTaskTreeBackedRecord: (taskId: string) => Promise<TaskTreeRecord | null>;
-    listTaskSessionTreeRecords: (
+    listTaskBranchCompatTreeRecords: (
       taskId: string,
       projectId: string,
       options?: { includeArchived?: boolean },
     ) => Promise<unknown[]>;
-    buildTaskSessionMessagesResponse: (args: {
+    buildTaskBranchCompatMessagesResponse: (args: {
       taskId: string;
       projectId: string;
       runtimeSessionId: string;
       includeLineage: boolean;
     }) => Promise<unknown>;
-    buildTaskSessionEventsResponse: (args: {
+    buildTaskBranchCompatEventsResponse: (args: {
       taskId: string;
       projectId: string;
       runtimeSessionId: string;
       includeLineage: boolean;
     }) => Promise<unknown>;
-    buildTaskSessionTimelineResponse: (args: {
+    buildTaskBranchCompatTimelineResponse: (args: {
       taskId: string;
       projectId: string;
       runtimeSessionId: string;
@@ -38,7 +38,7 @@ export function registerTaskBranchRoutes(
     }) => Promise<unknown>;
     upsertTaskBranch: (
       taskId: string,
-      body: CreateTaskSessionInput,
+      body: CreateTaskBranchInput,
     ) => Promise<{
       ok: boolean;
       status: number;
@@ -47,7 +47,7 @@ export function registerTaskBranchRoutes(
     }>;
     persistTaskBranchMessage: (
       taskId: string,
-      body: PersistTaskSessionMessageInput,
+      body: PersistTaskBranchMessageInput,
     ) => Promise<{
       ok: boolean;
       status: number;
@@ -56,7 +56,7 @@ export function registerTaskBranchRoutes(
     }>;
     activateTaskBranch: (
       taskId: string,
-      tsId: string,
+      branchId: string,
     ) => Promise<{
       ok: boolean;
       status: number;
@@ -65,7 +65,7 @@ export function registerTaskBranchRoutes(
     }>;
     archiveTaskBranch: (
       taskId: string,
-      tsId: string,
+      branchId: string,
     ) => Promise<{
       ok: boolean;
       status: number;
@@ -74,19 +74,21 @@ export function registerTaskBranchRoutes(
     }>;
   },
 ) {
+  // These routes preserve runtime-session lineage/history access for compat and
+  // diagnostics. Public execution trace reads use the projection routes instead.
   taskRoutes.get("/:taskId/branches", async (c) => {
     const taskId = c.req.param("taskId");
     const task = await deps.loadTaskTreeBackedRecord(taskId);
     if (!task) return c.json({ error: "Task not found" }, 404);
 
-    const rows = await deps.listTaskSessionTreeRecords(taskId, task.projectId, {
+    const rows = await deps.listTaskBranchCompatTreeRecords(taskId, task.projectId, {
       includeArchived: true,
     });
 
     return c.json({ data: rows });
   });
 
-  taskRoutes.post("/:taskId/branches", zValidator("json", createTaskSessionSchema), async (c) => {
+  taskRoutes.post("/:taskId/branches", zValidator("json", createTaskBranchSchema), async (c) => {
     const taskId = c.req.param("taskId");
     const body = c.req.valid("json");
     const result = await deps.upsertTaskBranch(taskId, body);
@@ -99,7 +101,7 @@ export function registerTaskBranchRoutes(
 
   taskRoutes.post(
     "/:taskId/branches/messages",
-    zValidator("json", persistTaskSessionMessageSchema),
+    zValidator("json", persistTaskBranchMessageSchema),
     async (c) => {
       const taskId = c.req.param("taskId");
       const body = c.req.valid("json");
@@ -120,7 +122,7 @@ export function registerTaskBranchRoutes(
     const task = await deps.loadTaskTreeBackedRecord(taskId);
     if (!task) return c.json({ error: "Task not found" }, 404);
 
-    const response = await deps.buildTaskSessionMessagesResponse({
+    const response = await deps.buildTaskBranchCompatMessagesResponse({
       taskId,
       projectId: task.projectId,
       runtimeSessionId,
@@ -138,7 +140,7 @@ export function registerTaskBranchRoutes(
     const task = await deps.loadTaskTreeBackedRecord(taskId);
     if (!task) return c.json({ error: "Task not found" }, 404);
 
-    const response = await deps.buildTaskSessionEventsResponse({
+    const response = await deps.buildTaskBranchCompatEventsResponse({
       taskId,
       projectId: task.projectId,
       runtimeSessionId,
@@ -156,7 +158,7 @@ export function registerTaskBranchRoutes(
     const task = await deps.loadTaskTreeBackedRecord(taskId);
     if (!task) return c.json({ error: "Task not found" }, 404);
 
-    const response = await deps.buildTaskSessionTimelineResponse({
+    const response = await deps.buildTaskBranchCompatTimelineResponse({
       taskId,
       projectId: task.projectId,
       runtimeSessionId,
@@ -166,10 +168,10 @@ export function registerTaskBranchRoutes(
     return c.json(response);
   });
 
-  taskRoutes.post("/:taskId/branches/:tsId/activate", async (c) => {
+  taskRoutes.post("/:taskId/branches/:branchId/activate", async (c) => {
     const taskId = c.req.param("taskId");
-    const tsId = c.req.param("tsId");
-    const result = await deps.activateTaskBranch(taskId, tsId);
+    const branchId = c.req.param("branchId");
+    const result = await deps.activateTaskBranch(taskId, branchId);
     if (!result.ok) {
       return c.json({ error: result.error }, result.status as 404 | 500);
     }
@@ -177,10 +179,10 @@ export function registerTaskBranchRoutes(
     return c.json(result.data, result.status as 200);
   });
 
-  taskRoutes.post("/:taskId/branches/:tsId/archive", async (c) => {
+  taskRoutes.post("/:taskId/branches/:branchId/archive", async (c) => {
     const taskId = c.req.param("taskId");
-    const tsId = c.req.param("tsId");
-    const result = await deps.archiveTaskBranch(taskId, tsId);
+    const branchId = c.req.param("branchId");
+    const result = await deps.archiveTaskBranch(taskId, branchId);
     if (!result.ok) {
       return c.json({ error: result.error }, result.status as 404 | 500);
     }

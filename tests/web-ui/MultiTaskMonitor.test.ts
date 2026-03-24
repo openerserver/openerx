@@ -607,6 +607,22 @@ afterEach(() => {
 });
 
 describe("MultiTaskMonitor", () => {
+  it("keeps the core monitor card readable when branch and session reads are unavailable", async () => {
+    apiMocks.getTaskBranches.mockResolvedValueOnce({ data: [] });
+    apiMocks.getTaskPipeline.mockResolvedValueOnce(null);
+
+    const { wrapper } = await mountPage();
+
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("修复登录流程");
+    expect(wrapper.text()).toContain("运行中");
+    expect(apiMocks.listTasks).toHaveBeenCalled();
+    expect(apiMocks.getTask).toHaveBeenCalledWith("task-1");
+    expect(apiMocks.getTaskBranches).toHaveBeenCalledWith("task-1");
+    expect(apiMocks.getTaskConversationMessages).not.toHaveBeenCalled();
+  });
+
   it("automatically opens running tasks when the page loads", async () => {
     const { wrapper, taskMonitorStore } = await mountPage();
 

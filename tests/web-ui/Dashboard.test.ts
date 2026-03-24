@@ -14,6 +14,10 @@ const apiMocks = vi.hoisted(() => ({
   getProjectRuntimeUsageLedgers: vi.fn(),
   listOrgs: vi.fn(),
   listProjects: vi.fn(),
+  listTasks: vi.fn(),
+  getTask: vi.fn(),
+  searchProjectTree: vi.fn(),
+  getTaskExecutionTraceView: vi.fn(),
 }));
 
 vi.mock("../../control-plane/web-ui/src/lib/api", () => apiMocks);
@@ -591,6 +595,10 @@ beforeEach(() => {
     { id: "proj-default", orgId: "org-default", name: "Default Project", slug: "alpha-default" },
     { id: "proj-beta", orgId: "org-beta", name: "Beta Project", slug: "beta-platform" },
   ]);
+  apiMocks.listTasks.mockReset();
+  apiMocks.getTask.mockReset();
+  apiMocks.searchProjectTree.mockReset();
+  apiMocks.getTaskExecutionTraceView.mockReset();
   apiMocks.getDashboardGovernanceOverview.mockResolvedValue(createGovernanceOverviewResponse());
   apiMocks.getDashboardProviderTokens.mockResolvedValue(createProviderResponse());
   apiMocks.getProjectRuntimeUsageLedgers.mockImplementation(async (projectId: string) =>
@@ -808,6 +816,26 @@ describe("Dashboard provider navigation", () => {
     expect(runtimeSection.text()).toContain("跨项目运行治理总览");
     expect(runtimeSection.text()).toContain("最近高消耗执行");
     expect(runtimeSection.text()).not.toContain("Top 风险任务");
+  });
+
+  it("reads dashboard solely from aggregate endpoints instead of task or tree detail readers", async () => {
+    await mountDashboard();
+
+    expect(apiMocks.listProjects).toHaveBeenCalledTimes(1);
+    expect(apiMocks.listOrgs).toHaveBeenCalledTimes(1);
+    expect(apiMocks.listApprovals).toHaveBeenCalledTimes(1);
+    expect(apiMocks.getDashboardProviderTokens).toHaveBeenCalledWith("proj-default", "24h");
+    expect(apiMocks.getDashboardGovernanceOverview).toHaveBeenCalledWith("24h");
+    expect(apiMocks.getProjectRuntimeUsageLedgers).toHaveBeenCalledWith("proj-default", {
+      limit: 20,
+    });
+    expect(apiMocks.getProjectRuntimeUsageLedgers).toHaveBeenCalledWith("proj-beta", {
+      limit: 20,
+    });
+    expect(apiMocks.listTasks).not.toHaveBeenCalled();
+    expect(apiMocks.getTask).not.toHaveBeenCalled();
+    expect(apiMocks.searchProjectTree).not.toHaveBeenCalled();
+    expect(apiMocks.getTaskExecutionTraceView).not.toHaveBeenCalled();
   });
 
   it("uses shared family group only when sibling projects actually share it", async () => {

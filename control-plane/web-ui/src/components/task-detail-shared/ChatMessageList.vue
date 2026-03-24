@@ -31,6 +31,12 @@
                     <a-tag :color="candidateStatusColor(candidate.status)">
                       {{ candidateStatusLabel(candidate.status) }}
                     </a-tag>
+                    <a-tag
+                      v-if="candidate.traceState"
+                      :color="candidateTraceStateColor(candidate.traceState)"
+                    >
+                      {{ candidateTraceStateLabel(candidate.traceState) }}
+                    </a-tag>
                     <a-tag v-if="candidate.isAdopted" color="gold">已采纳</a-tag>
                     <a-tag v-else-if="candidate.isRecommended" color="geekblue">Judge 推荐</a-tag>
                   </a-space>
@@ -46,6 +52,13 @@
 
                 <a-typography-text v-if="candidate.meta" type="secondary" class="chat-message-card__parallel-meta">
                   {{ candidate.meta }}
+                </a-typography-text>
+                <a-typography-text
+                  v-if="candidate.traceNote"
+                  type="warning"
+                  class="chat-message-card__parallel-meta"
+                >
+                  {{ candidate.traceNote }}
                 </a-typography-text>
 
                 <a-typography-text v-if="candidate.loading" type="secondary">
@@ -334,6 +347,16 @@ function candidateStatusColor(status: string | undefined) {
   if (status === "running") return "processing";
   if (status === "failed") return "error";
   return "default";
+}
+
+function candidateTraceStateLabel(state: "incomplete" | "stale") {
+  if (state === "stale") return "追踪已过期";
+  return "追踪不完整";
+}
+
+function candidateTraceStateColor(state: "incomplete" | "stale") {
+  if (state === "stale") return "warning";
+  return "gold";
 }
 
 function formatTime(value: string) {

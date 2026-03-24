@@ -1,6 +1,6 @@
 # 项目树形存储方案设计
 
-> 状态：Draft  
+> 状态：主体已落地，剩余内容以历史记录与可选优化为主  
 > 日期：2026-03-20  
 > 作者：AI Architecture Assistant
 
@@ -19,8 +19,8 @@
 - [x] 旧衍生表的 `task_id` FK 已切到 `project_tree_nodes(id)`，覆盖 `task_sessions`、`agent_runs`、`code_changes`、`task_workflow_runs`、`role_aggregate_conclusions`、`developer_change_requests`、`task_operating_modes`、`boss_decisions`、`human_escalations`、`runtime_usage_ledgers`、`runtime_usage_ledger_steps`。
 - [x] Web UI BFF 已代理 `tree` / `branches` / `links` 路由，前端无需直连 control-plane service。
 - [x] 项目“任务总图”页已接入项目树工作台，可浏览节点树、祖先链、子节点、links 与分支头状态。
-- [x] BFF `getSessionMessages` 与相关 runtime/BFF 模块已优先消费 `project_tree_events` 聚合出的 timeline / lineage 数据，`routes.ts` 之外的直接 `task_sessions` 兼容调用已集中收口到共享 helper。
-- [x] 前端通用消息读取已改走 execution-trace/tree 消息源，Web UI BFF 的 `/api/tasks/:taskId/sessions/:sessionId/messages` 兼容读取入口已下线。
+- [x] BFF `getSessionMessages` 与相关 runtime/BFF 模块已退出对 `project_tree_events` 的主读依赖；当前消息与 trace 主路径以 `conversation_*`、`task_domain_events` 与 `task_timeline_views` 为主，`project_tree_events` 只保留历史回放/审计窗口/测试清理语义。
+- [x] 前端通用消息读取已改走 execution-trace 主读链，Web UI BFF 的 `/api/tasks/:taskId/sessions/:sessionId/messages` 兼容读取入口已下线。
 - [x] 前端任务分支读取已切到 `/api/tasks/:taskId/branches` 与 `/api/tasks/:taskId/branch-lineage`，Web UI BFF 的旧 `/api/tasks/:taskId/sessions` 与 `/api/tasks/:taskId/session-tree` 兼容读取入口已下线。
 - [x] Web UI 侧最后残留的 `SessionTree*` 文件名与 `SessionTreeNode` 类型别名已统一改成 branch lineage 语义；BFF `/api/tasks/:taskId/branches` 也不再从旧 task payload 合成 cp-only fallback branch。
 - [x] 前端任务分支写入已切到 `/api/tasks/:taskId/branches/:sessionId/(fork|activate|archive)`，Web UI BFF 旧 `/api/tasks/:taskId/sessions/:sessionId/*` 写入口已下线。
@@ -28,7 +28,7 @@
 - [x] 旧项目级 `task-relations` 兼容路由已下线，任务关系只通过 `project_tree_links` 系列接口暴露。
 - [x] SQLite 快照迁移链已调整为 tree-first：`tasks` / `sessions` 仅作为输入快照源，不再作为 PostgreSQL 导入目标前提。
 
-#### 未实现
+#### 剩余可选项
 
 - [x] 删除 service 侧旧 `/api/tasks` list/detail 兼容读取接口。
 - [x] 删除旧 `/api/tasks/:taskId/task-sessions*` 兼容接口族，service/BFF 统一改走 `/api/tasks/:taskId/branches*`。
@@ -36,15 +36,15 @@
 - [x] 完成 `tasks` / `sessions` 的物理删表发布，并同步清理 schema、teardown、断言、历史注释。
 - [x] `project_task_relations` 已完成代码侧收尾：独立 drop migration 已存在，活引用/teardown 已清理；环境发布仅需按既有 migration 正常执行。
 - [x] 下线 `task_sessions` 兼容 lineage 存储，并完成离线输入链、测试 teardown、历史断言、migration 文案与独立删表迁移 `0011_drop_task_sessions.sql` 的收口。
-- [ ] 落地 `pg_trgm` 与基于 `project_tree_events` 的搜索 / 增量推送能力。
+- [ ] 若后续仍需要项目树侧搜索 / 增量推送，再单独推进 `pg_trgm` 与基于 `project_tree_events` 的可选优化方案；该项不再阻塞任务域主读收尾。
 - [x] 完成“无旧任务域表”前提下的完整回归验证：`db:migrate:pg`、干净目标库 SQLite 快照迁移链、`role-workflow-storage`、`bun run test:ui:file -- tests/web-ui/TaskDetail.test.ts`、`bun run test:ui:file -- tests/web-ui/TaskConversationTrace.test.ts`、`bun run test:ui:file -- tests/web-ui/MultiTaskMonitor.test.ts`、全量 `test:ui` 与 Playwright `test:e2e:chat-settings` 已全部通过。
 
-#### 下一批次
+#### 剩余可选批次
 
 - [x] 批次 1：改造前端消息源，切换到基于 execution-trace 的 V3 对话构建链路。
 - [x] 批次 2：迁移并删除 `/api/tasks*` 兼容读取接口，旧 list/detail GET 已下线；`task_sessions` 也已完成独立删表。
 - [x] 批次 3：执行并验证 `0010_drop_tasks_and_sessions.sql` 与 `0011_drop_task_sessions.sql`，完成 schema、测试清理语句、断言与 migration 文案收口。
-- [ ] 批次 4：补 `pg_trgm` 搜索与 `project_tree_events` 增量能力，再做一轮端到端验证。
+- [ ] 批次 4：如产品仍需要树侧搜索与增量推送，再独立推进 `pg_trgm` 搜索与 `project_tree_events` 增量能力；该批次不再作为树模型主路径切换的阻塞项。
 
 ### 0.2 现阶段结论
 
@@ -118,13 +118,15 @@
 1. **允许使用 PostgreSQL 扩展**（`ltree`, `pg_trgm` 等），充分利用 PostgreSQL 原生层级查询能力。
 2. **项目创建即建立 root 节点**；所有任务、会话、消息均挂载在该 root 节点之下，形成统一的树。
 3. **跨树链接**：不同项目的树之间允许建立引用关系（依赖、引用、衍生等），树保持纯净的包含结构，链接作为独立层存储。
-4. **直接切换目标**：目标态是新树表从空状态启用、旧表数据不做迁移、无法继续使用的历史数据直接清除；当前代码已完成主路径切树，仍处于兼容接口与删表收尾阶段。
+4. **直接切换目标**：目标态是新树表从空状态启用、旧表数据不做迁移、无法继续使用的历史数据直接清除；当前代码已完成主路径切树与旧任务域删表收尾，剩余事项主要是历史文档同步与树侧可选优化。
 
 ---
 
 ## 2. 现状分析
 
-### 2.1 当前层级关系
+### 2.1 历史层级关系（改造前问题背景）
+
+下图保留的是改造前的问题背景，用来解释为什么当时需要从旧 `tasks` / `task_sessions` / `project_task_relations` 组合切到树模型；它不是当前实现结构。
 
 ```
 Organization
@@ -137,6 +139,12 @@ Organization
        │    └─ ...
        └─ ProjectTaskRelation A→B     (project_task_relations 表, 任务间依赖图)
 ```
+
+  当前实现口径已经变为：
+
+  1. task 主体挂在 `project_tree_nodes(node_type=task)`，而不是旧 `tasks` 事实表。
+  2. branch lineage 主存储使用 `conversation_sessions.parent_session_id` 与 `project_tree_nodes(node_type=session)` 协同表达，不再依赖 `task_sessions`。
+  3. 任务关系通过 `project_tree_links` 暴露，不再把 `project_task_relations` 视为运行时主线结构。
 
 **问题**：
 
@@ -164,7 +172,7 @@ Organization
 | **节点类型多态** | 同一张表存储 project_root / task / session / message / context 等不同类型 |
 | **不可变节点** | 写入后只追加、不修改（消息编辑 = 新节点 + 标记旧节点为 superseded） |
 | **树纯净 + 链接分离** | 树只表达「包含关系」（containment）；跨树的「引用关系」（reference）用独立边表存储 |
-| **直接切换目标** | 目标态是不迁移旧表历史数据、清空旧表并启用新树表；当前仍保留少量兼容接口与收尾迁移 |
+| **直接切换目标** | 目标态是不迁移旧表历史数据、清空旧表并启用新树表；当前主路径切换与删表收尾已完成，剩余兼容面主要限于少量写入口与历史文档 |
 
 ### 3.2 PostgreSQL 扩展需求
 
@@ -1054,13 +1062,13 @@ DROP TABLE IF EXISTS tasks;
 | 现有端点 | 变更 |
 |---------|------|
 | `POST /api/projects` | 内部自动创建 root 节点，响应新增 `rootNodeId` 字段。**当前状态：已完成** |
-| `POST /api/tasks` | 当前兼容保留，但已同步写 `node_type=task` 节点；后续由新的树节点创建端点替代并删除该入口。 |
+| `POST /api/tasks` | 当前兼容保留，但已同步写 `node_type=task` 节点；现阶段视为兼容写入口，而不是主设计继续演进的中心。 |
 | `POST /api/tasks/:taskId/branches` | 当前作为 branch lineage 写入口，直接同步 `node_type=session` 节点。 |
 | `GET /api/tasks/:taskId/branches` | 当前作为 branch lineage 读取入口，直接返回树侧分支记录；不再从旧 task payload 合成 fallback branch。 |
-| `GET /api/tasks` | 当前仍保留兼容读取；后续改为项目树查询接口并删除该入口。 |
+| `GET /api/tasks` | service 侧旧兼容读取已删除；主读取已切到 `/api/project-tree/tasks` 与 `/api/project-tree/tasks/:taskId`。 |
 | `GET /api/audit` / `GET /api/cost/*` / `GET /api/approvals/*` | 端点保留；待数据收口后只展示新周期数据。 |
 
-说明：后续完成接口收口后，不会提供旧任务 ID 到新节点 ID 的兼容映射；任何继续依赖旧 `task_id` / `runtime_session_id` 的历史调用都需要同步迁移。
+说明：当前已经不提供旧任务 ID 到新节点 ID 的额外兼容映射；任何继续依赖旧 `task_id` / `runtime_session_id` 的历史调用都需要同步迁移。
 
 ---
 
@@ -1119,7 +1127,7 @@ DROP TABLE IF EXISTS tasks;
 | **Phase 0** | 树表、扩展、root 初始化、tree-first 主写切换 | 切换脚本 + 类型定义 | **已完成** |
 | **Phase 1** | tree / branches / links API、BFF tree 数据面接入、`task_sessions` 兼容调用收口 | 路由改造 + BFF 适配 | **已完成** |
 | **Phase 2** | 前端通用消息源切树模型；删除 `/api/tasks*` 兼容读取入口；完成 `tasks` / `sessions` / `task_sessions` 删表收口 | 前端 composable 改造 + 旧路由清理 + migration 收口 | **已完成** |
-| **Phase 3** | `pg_trgm` 搜索、`project_tree_events` 增量能力、完整端到端验证 | 统一收敛到 [pg-event-sourcing-optimization-plan.md](pg-event-sourcing-optimization-plan.md) 执行 | **未开始** |
+| **Phase 3** | `pg_trgm` 搜索、`project_tree_events` 增量能力、完整端到端验证 | 统一收敛到 [pg-event-sourcing-optimization-plan.md](pg-event-sourcing-optimization-plan.md) 作为可选优化独立推进 | **可选 / 未纳入当前主线收尾** |
 
 ---
 
@@ -1128,7 +1136,7 @@ DROP TABLE IF EXISTS tasks;
 | # | 问题 | 待决策 |
 |---|------|--------|
 | 1 | ltree path label 最大长度限制（PostgreSQL 默认 256 字符/label） | 评估 UUID→短 hash 映射方案 |
-| 2 | 消息内容是否存全文还是仅存摘要？全文 = 存储膨胀，摘要 = 需要回 runtime 取原文 | Phase 2 前决策 |
+| 2 | 消息内容是否存全文还是仅存摘要？全文 = 存储膨胀，摘要 = 需要回 runtime 取原文 | 如未来继续推进树侧搜索/快照优化，再单独决策 |
 | 3 | `project_tree_events` 合并频率？实时 vs 批量？ | 已转入 [pg-event-sourcing-optimization-plan.md](pg-event-sourcing-optimization-plan.md) 统一评估 |
 | 4 | 是否需要支持「子树移动」（如将任务从一个项目迁移到另一个） | 当前设计不支持，需确认 |
 | 5 | `pg_trgm` 全文搜索如何与 message snapshot / 项目级搜索接口协同落地？ | 已转入 [pg-event-sourcing-optimization-plan.md](pg-event-sourcing-optimization-plan.md) 统一评估 |

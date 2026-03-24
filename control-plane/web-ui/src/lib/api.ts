@@ -1809,31 +1809,6 @@ export interface ProjectTreeSearchResponseRecord {
   };
 }
 
-export interface ProjectTreeEventFeedItemRecord {
-  id: string;
-  projectId: string;
-  nodeId?: string | null;
-  nodeType?: string | null;
-  path?: string | null;
-  taskId?: string | null;
-  taskTitle?: string | null;
-  runtimeSessionId?: string | null;
-  branchName?: string | null;
-  eventType: string;
-  seq: number;
-  createdAt: string;
-  payload?: Record<string, unknown>;
-}
-
-export interface ProjectTreeEventFeedResponseRecord {
-  items: ProjectTreeEventFeedItemRecord[];
-  nextCursor?: {
-    after: string;
-    afterId: string;
-  } | null;
-  hasMore: boolean;
-}
-
 export interface CreateProjectTreeChildInput {
   id?: string;
   nodeType: ProjectTreeNodeType;
@@ -1967,38 +1942,6 @@ export async function searchProjectTree(
   }
   return request<ProjectTreeSearchResponseRecord>(
     `/projects/${encodeURIComponent(projectId)}/search?${params.toString()}`,
-  );
-}
-
-export async function getProjectTreeEvents(
-  projectId: string,
-  options: {
-    after?: string;
-    afterId?: string;
-    nodeId?: string;
-    eventType?: string;
-    limit?: number;
-  } = {},
-) {
-  const params = new URLSearchParams();
-  if (options.after) {
-    params.set("after", options.after);
-  }
-  if (options.afterId) {
-    params.set("afterId", options.afterId);
-  }
-  if (options.nodeId) {
-    params.set("nodeId", options.nodeId);
-  }
-  if (options.eventType) {
-    params.set("eventType", options.eventType);
-  }
-  if (typeof options.limit === "number") {
-    params.set("limit", String(options.limit));
-  }
-  const suffix = params.toString() ? `?${params.toString()}` : "";
-  return request<ProjectTreeEventFeedResponseRecord>(
-    `/projects/${encodeURIComponent(projectId)}/events${suffix}`,
   );
 }
 
@@ -4055,8 +3998,7 @@ export type ExecutionTraceReadSource =
   | "conversation-table"
   | "task-domain-events"
   | "conversation-table+task-domain-events"
-  | "task-domain-projection"
-  | "runtime-fallback";
+  | "task-domain-projection";
 
 export interface ExecutionTraceTimelineMeta {
   readSource?: ExecutionTraceReadSource;

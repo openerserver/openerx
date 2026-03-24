@@ -87,7 +87,6 @@ afterAll(async () => {
       "DELETE FROM project_tree_links WHERE source_node_id = $1 OR target_node_id = $1",
       [nodeId],
     );
-    await sql.unsafe("DELETE FROM project_tree_events WHERE node_id = $1", [nodeId]);
     await sql.unsafe(
       "DELETE FROM project_tree_branches WHERE task_node_id = $1 OR head_node_id = $1",
       [nodeId],
