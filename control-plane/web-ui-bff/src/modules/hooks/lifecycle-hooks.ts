@@ -190,26 +190,39 @@ export async function executeLifecycleHooks(
  * Parse raw stage hooksJson (persisted as `Array<Record<string, unknown>>`)
  * into validated `LifecycleHook[]`.
  */
-export function parseStageHooks(raw: Array<Record<string, unknown>> | null | undefined): LifecycleHook[] {
+export function parseStageHooks(
+  raw: Array<Record<string, unknown>> | null | undefined,
+): LifecycleHook[] {
   if (!Array.isArray(raw)) return [];
   return raw.reduce<LifecycleHook[]>((hooks, item, index) => {
-      const trigger = typeof item.trigger === "string" ? item.trigger : "";
-      if (!VALID_TRIGGERS.has(trigger as HookTrigger)) return hooks;
-      const id = typeof item.id === "string" && item.id ? item.id : `stage-hook-${index}`;
-      const agent = typeof item.agent === "string" && item.agent ? item.agent : "";
-      if (!agent) return hooks;
-      hooks.push({
-        id,
-        trigger: trigger as HookTrigger,
-        enabled: item.enabled !== false,
-        agent,
-        model: typeof item.model === "string" && item.model ? item.model : undefined,
-        promptTemplate: typeof item.promptTemplate === "string" ? item.promptTemplate : "",
-        timeoutMs: typeof item.timeoutMs === "number" && item.timeoutMs > 0 ? item.timeoutMs : 60_000,
-        order: typeof item.order === "number" ? item.order : 0,
-      } satisfies LifecycleHook);
-      return hooks;
-    }, []);
+    const parsed = parseStageHookRecord(item, index);
+    if (!parsed) return hooks;
+    hooks.push(parsed);
+    return hooks;
+  }, []);
+}
+
+function parseStageHookRecord(item: Record<string, unknown>, index: number) {
+  const trigger = typeof item.trigger === "string" ? item.trigger : "";
+  if (!VALID_TRIGGERS.has(trigger as HookTrigger)) {
+    return null;
+  }
+
+  const agent = typeof item.agent === "string" && item.agent ? item.agent : "";
+  if (!agent) {
+    return null;
+  }
+
+  return {
+    id: typeof item.id === "string" && item.id ? item.id : `stage-hook-${index}`,
+    trigger: trigger as HookTrigger,
+    enabled: item.enabled !== false,
+    agent,
+    model: typeof item.model === "string" && item.model ? item.model : undefined,
+    promptTemplate: typeof item.promptTemplate === "string" ? item.promptTemplate : "",
+    timeoutMs: typeof item.timeoutMs === "number" && item.timeoutMs > 0 ? item.timeoutMs : 60_000,
+    order: typeof item.order === "number" ? item.order : 0,
+  } satisfies LifecycleHook;
 }
 
 /**

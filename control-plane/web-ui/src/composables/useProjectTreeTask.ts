@@ -1,66 +1,34 @@
-import { computed, ref, watch, type Ref } from "vue";
+import { type Ref, computed, ref, watch } from "vue";
 import {
-  getProjectTreeNode,
-  getProjectTreeAncestors,
-  type ProjectTreeNodeRecord,
   type ExecutionMode,
+  type ProjectTreeNodeRecord,
+  type Task,
+  getProjectTreeAncestors,
+  getProjectTreeNode,
+  getTask,
 } from "../lib/api";
 
 /**
  * Task facade extracted from a project_tree_nodes record (nodeType='task').
  * Fields are flattened from contentJson to match the shape the UI expects.
  */
-export interface TreeTask {
-  id: string;
+export interface TreeTask extends Task {
   nodeId: string;
-  projectId: string;
-  title: string;
-  prompt: string;
-  status: string;
-  sessionId?: string;
-  agentRunId?: string;
-  userId?: string;
-  result?: string;
-  category?: string;
-  strategy?: string;
-  executionMode?: ExecutionMode;
-  executionPlan?: string;
-  parallelRunHistory?: string;
-  autoAdvanceStages?: boolean;
-  repoId?: string | null;
-  workspaceRoot?: string | null;
-  baseRevision?: string | null;
-  workingBranch?: string | null;
-  repoName?: string | null;
-  remoteUrl?: string | null;
-  selectedModel?: string | null;
-  credentialId?: string | null;
-  credentialLabel?: string | null;
-  gitAuthorName?: string | null;
-  gitAuthorEmail?: string | null;
-  gitCommitterName?: string | null;
-  gitCommitterEmail?: string | null;
-  finalCommitSha?: string | null;
-  finalBranchName?: string | null;
-  changesSummary?: {
-    filesAdded?: number;
-    filesModified?: number;
-    filesDeleted?: number;
-    totalInsertions?: number;
-    totalDeletions?: number;
-  } | null;
-  createdAt: string;
-  startedAt?: string;
-  finishedAt?: string;
 }
 
 function asString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
-/** Flatten a tree node into the Task shape expected by UI components. */
-export function flattenTreeNodeToTask(node: ProjectTreeNodeRecord): TreeTask {
-  const json = (node.contentJson ?? {}) as Record<string, unknown>;
+function asNullableNumber(value: unknown) {
+  return typeof value === "number" ? value : null;
+}
+
+function asDefaultNumber(value: unknown, fallback = 0) {
+  return typeof value === "number" ? value : fallback;
+}
+
+function resolveTreeTaskIdentity(node: ProjectTreeNodeRecord, json: Record<string, unknown>) {
   return {
     id: node.id,
     nodeId: node.id,
@@ -70,19 +38,32 @@ export function flattenTreeNodeToTask(node: ProjectTreeNodeRecord): TreeTask {
     status: asString(json.status) ?? "unknown",
     sessionId: asString(json.sessionId) ?? node.runtimeSessionId ?? undefined,
     agentRunId: asString(json.agentRunId) ?? undefined,
-    userId: asString(json.userId) ?? undefined,
+    userId: asString(json.userId) ?? null,
     result: asString(json.result) ?? undefined,
     category: asString(json.category) ?? undefined,
-    strategy: typeof json.strategy === "string" ? json.strategy : json.strategy ? JSON.stringify(json.strategy) : undefined,
-    executionMode: asString(json.executionMode) as ExecutionMode | undefined,
-    executionPlan: typeof json.executionPlan === "string" ? json.executionPlan : json.executionPlan ? JSON.stringify(json.executionPlan) : undefined,
-    parallelRunHistory:
-      typeof json.parallelRunHistory === "string"
-        ? json.parallelRunHistory
-        : json.parallelRunHistory
-          ? JSON.stringify(json.parallelRunHistory)
+    strategy:
+      typeof json.strategy === "string"
+        ? json.strategy
+        : json.strategy
+          ? JSON.stringify(json.strategy)
           : undefined,
-    autoAdvanceStages: typeof json.autoAdvanceStages === "boolean" ? json.autoAdvanceStages : undefined,
+    createdAt: node.createdAt ?? new Date().toISOString(),
+    startedAt: asString(json.startedAt) ?? undefined,
+    finishedAt: asString(json.finishedAt) ?? undefined,
+  };
+}
+
+function resolveTreeTaskRepositoryFields(json: Record<string, unknown>) {
+  const resolveGitIdentityFields = () => ({
+    gitAuthorName: asString(json.gitAuthorName) ?? null,
+    gitAuthorEmail: asString(json.gitAuthorEmail) ?? null,
+    gitCommitterName: asString(json.gitCommitterName) ?? null,
+    gitCommitterEmail: asString(json.gitCommitterEmail) ?? null,
+    finalCommitSha: asString(json.finalCommitSha) ?? null,
+    finalBranchName: asString(json.finalBranchName) ?? null,
+  });
+
+  return {
     repoId: asString(json.repoId) ?? null,
     workspaceRoot: asString(json.workspaceRoot) ?? null,
     baseRevision: asString(json.baseRevision) ?? null,
@@ -92,16 +73,52 @@ export function flattenTreeNodeToTask(node: ProjectTreeNodeRecord): TreeTask {
     selectedModel: asString(json.selectedModel) ?? null,
     credentialId: asString(json.credentialId) ?? null,
     credentialLabel: asString(json.credentialLabel) ?? null,
-    gitAuthorName: asString(json.gitAuthorName) ?? null,
-    gitAuthorEmail: asString(json.gitAuthorEmail) ?? null,
-    gitCommitterName: asString(json.gitCommitterName) ?? null,
-    gitCommitterEmail: asString(json.gitCommitterEmail) ?? null,
-    finalCommitSha: asString(json.finalCommitSha) ?? null,
-    finalBranchName: asString(json.finalBranchName) ?? null,
-    changesSummary: json.changesSummary && typeof json.changesSummary === "object" ? json.changesSummary as TreeTask["changesSummary"] : null,
-    createdAt: node.createdAt ?? new Date().toISOString(),
-    startedAt: asString(json.startedAt) ?? undefined,
-    finishedAt: asString(json.finishedAt) ?? undefined,
+    ...resolveGitIdentityFields(),
+    changesSummary:
+      json.changesSummary && typeof json.changesSummary === "object"
+        ? (json.changesSummary as TreeTask["changesSummary"])
+        : null,
+  };
+}
+
+function resolveTreeTaskRunFields(json: Record<string, unknown>) {
+  return {
+    executionMode: asString(json.executionMode) as ExecutionMode | undefined,
+    autoAdvanceStages:
+      typeof json.autoAdvanceStages === "boolean" ? json.autoAdvanceStages : undefined,
+    orchestrationKind: asString(json.orchestrationKind) ?? null,
+    currentRunId: asString(json.currentRunId) ?? null,
+    currentRunStatus: asString(json.currentRunStatus) ?? null,
+    currentRunStartedAt: asString(json.currentRunStartedAt) ?? null,
+    currentRunFinishedAt: asString(json.currentRunFinishedAt) ?? null,
+    currentRunCandidateCount: asNullableNumber(json.currentRunCandidateCount),
+    currentRunPipelineStepCount: asNullableNumber(json.currentRunPipelineStepCount),
+    latestResultSummary: asString(json.latestResultSummary) ?? null,
+    latestErrorText: asString(json.latestErrorText) ?? null,
+    activeCandidateCount: asDefaultNumber(json.activeCandidateCount),
+    completedCandidateCount: asDefaultNumber(json.completedCandidateCount),
+    failedCandidateCount: asDefaultNumber(json.failedCandidateCount),
+    totalChainSteps: asDefaultNumber(json.totalChainSteps),
+    completedChainSteps: asDefaultNumber(json.completedChainSteps),
+    winnerNodeId: asString(json.winnerNodeId) ?? null,
+    lastActivityAt: asString(json.lastActivityAt) ?? null,
+  };
+}
+
+/** Flatten a tree node into the Task shape expected by UI components. */
+export function flattenTreeNodeToTask(node: ProjectTreeNodeRecord): TreeTask {
+  const json = (node.contentJson ?? {}) as Record<string, unknown>;
+  return {
+    ...resolveTreeTaskIdentity(node, json),
+    ...resolveTreeTaskRepositoryFields(json),
+    ...resolveTreeTaskRunFields(json),
+  };
+}
+
+function normalizeTaskRecord(task: Task): TreeTask {
+  return {
+    ...task,
+    nodeId: task.id,
   };
 }
 
@@ -133,41 +150,26 @@ export function useProjectTreeTask(taskId: Ref<string>) {
     error.value = null;
 
     try {
-      // First, get the task node to obtain projectId.
-      // We use getTask (old BFF) the very first time, but we resolve
-      // projectId from the returned node and then fetch ancestors.
-      // Since taskId IS the tree node id, we need projectId to call the tree API.
-      // We'll attempt a two-step:
-      // 1) Use getTask (still available in BFF) to resolve projectId
-      // 2) Then use tree APIs for ancestors.
-      //
-      // However, for a pure tree approach we need projectId upfront.
-      // Workaround: the route can pass projectId, or we use getTask once.
-      // For now, we use the getTask BFF route which internally already reads from tree.
-      const { getTask } = await import("../lib/api");
       const bffTask = await getTask(taskId.value);
       const pid = bffTask.projectId;
+      const normalizedTask = normalizeTaskRecord(bffTask);
 
-      // Now fetch the tree node and ancestors in parallel
       const [treeNode, ancestorNodes] = await Promise.all([
         getProjectTreeNode(pid, taskId.value).catch(() => null),
         getProjectTreeAncestors(pid, taskId.value).catch(() => []),
       ]);
 
+      task.value = normalizedTask;
+
       if (treeNode) {
         node.value = treeNode;
-        task.value = flattenTreeNodeToTask(treeNode);
-        // Overlay BFF-resolved fields the tree node might not have
-        // (repo joins, credential joins resolved server-side)
-        task.value.repoName = bffTask.repoName ?? task.value.repoName;
-        task.value.remoteUrl = bffTask.remoteUrl ?? task.value.remoteUrl;
-        task.value.credentialLabel = bffTask.credentialLabel ?? task.value.credentialLabel;
-      } else {
-        // Fallback: use BFF task directly
         task.value = {
-          ...bffTask,
-          nodeId: bffTask.id,
-        } as TreeTask;
+          ...flattenTreeNodeToTask(treeNode),
+          ...normalizedTask,
+          nodeId: treeNode.id,
+        };
+      } else {
+        task.value = normalizedTask;
         node.value = null;
       }
 
@@ -191,9 +193,13 @@ export function useProjectTreeTask(taskId: Ref<string>) {
     }
   }
 
-  watch(taskId, () => {
-    void refresh();
-  }, { immediate: true });
+  watch(
+    taskId,
+    () => {
+      void refresh();
+    },
+    { immediate: true },
+  );
 
   return {
     task,

@@ -75,17 +75,26 @@ const createdTaskIds: string[] = [];
 const createdChangeIds: string[] = [];
 
 afterAll(async () => {
+  const taskCleanupStatements = [
+    ...createdTaskIds.map((id) => `DELETE FROM tasks WHERE id='${id}';`),
+    ...(DATABASE_DIALECT === "postgres"
+      ? [
+          ...createdTaskIds.map((id) => `DELETE FROM project_tree_events WHERE node_id='${id}';`),
+          ...createdTaskIds.map(
+            (id) =>
+              `DELETE FROM project_tree_branches WHERE task_node_id='${id}' OR head_node_id='${id}';`,
+          ),
+          ...createdTaskIds.map((id) => `DELETE FROM project_tree_nodes WHERE id='${id}';`),
+        ]
+      : []),
+  ];
   const ids = [
     ...createdCredentialIds.map((id) => `DELETE FROM repository_credentials WHERE id='${id}';`),
     ...createdChangeIds.map(
       (id) =>
         `DELETE FROM file_changes WHERE change_id='${id}'; DELETE FROM code_changes WHERE id='${id}';`,
     ),
-    ...createdTaskIds.map((id) => `DELETE FROM project_tree_events WHERE node_id='${id}';`),
-    ...createdTaskIds.map(
-      (id) => `DELETE FROM project_tree_branches WHERE task_node_id='${id}' OR head_node_id='${id}';`,
-    ),
-    ...createdTaskIds.map((id) => `DELETE FROM project_tree_nodes WHERE id='${id}';`),
+    ...taskCleanupStatements,
   ];
   if (ids.length > 0) {
     const { execSync } = await import("node:child_process");

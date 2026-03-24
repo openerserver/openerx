@@ -44,7 +44,7 @@
 现行替代方案：
 
 1. Workflow Stage 作为唯一执行骨架
-2. ExecutionPlan 承载 single / parallel / sequential-chain 模式
+2. RuntimePlan 承载 single / parallel / sequential-chain 模式
 3. Hook 与 runtime pipeline 承担阶段执行治理与可观测性
 
 详细现行方案见 [docs/dag-node-execution-plan-v2.md](docs/dag-node-execution-plan-v2.md)。
@@ -346,7 +346,7 @@ TaskDetail 新增"会话历史"卡片：
 这些内容已整体失效，原因如下：
 
 1. 相关 runtime 插件、BFF 同步链路、前端图视图和 service schema 已在当前仓库中删除。
-2. 当前系统不再通过图镜像表达执行主路径，而是以 Workflow Stage、ExecutionPlan、Hook、agent_runs 和 runtime pipeline 为中心。
+2. 当前系统不再通过图镜像表达执行主路径，而是以 Workflow Stage、RuntimePlan、Hook、agent_runs 和 runtime pipeline 为中心。
 3. 若继续保留旧文件清单和旧数据流图，会把已经移除的能力误写成现状。
 
 因此本附录不再展开旧版文件级设计。当前有效实现与后续迭代方向，请以 [docs/dag-node-execution-plan-v2.md](docs/dag-node-execution-plan-v2.md) 为准。

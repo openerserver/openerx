@@ -106,7 +106,7 @@ export function parseHookDecision(text: string | undefined): HookDecision | unde
   }
 }
 
-// ── Phase 2: Workflow Templates & Execution Plan ───────────────────
+// ── Phase 2: Workflow Templates & Runtime Plan ─────────────────────
 
 export type ExecutionMode = "single" | "parallel" | "sequential-chain";
 
@@ -153,7 +153,7 @@ export interface ChainStepInput {
   model?: string;
 }
 
-export interface ExecutionPlan {
+export interface RuntimePlan {
   templateId: string;
   mode: ExecutionMode;
   steps: ExecutionStep[];
@@ -633,7 +633,7 @@ export function resolveWorkflowTemplate(
   };
 }
 
-export function buildExecutionPlan(
+export function buildRuntimePlan(
   template: WorkflowTemplate,
   strategy: OrchestrationStrategy,
   category: string,
@@ -642,17 +642,15 @@ export function buildExecutionPlan(
     candidates?: Array<{ model: string; label?: string }>;
     steps?: ChainStepInput[];
   },
-): ExecutionPlan {
+): RuntimePlan {
   const configuredAgents = strategy.categoryAgentMap[category] || [];
   const effectiveMode = overrides?.mode ?? template.mode;
-  const preferredCategoryAgents = configuredAgents.filter((agent) => typeof agent === "string" && agent.trim());
+  const preferredCategoryAgents = configuredAgents.filter(
+    (agent) => typeof agent === "string" && agent.trim(),
+  );
 
   if (effectiveMode === "sequential-chain") {
-    return buildSequentialChainPlan(
-      template,
-      configuredAgents,
-      overrides?.steps ?? [],
-    );
+    return buildSequentialChainPlan(template, configuredAgents, overrides?.steps ?? []);
   }
 
   if (effectiveMode === "single") {
@@ -667,11 +665,12 @@ export function buildExecutionPlan(
 
   // parallel mode
   const maxCandidates = template.maxParallelCandidates ?? 3;
-  const agents = overrides?.candidates && preferredCategoryAgents.length > 0
-    ? preferredCategoryAgents
-    : template.agents.length > 0
-      ? template.agents
-      : preferredCategoryAgents;
+  const agents =
+    overrides?.candidates && preferredCategoryAgents.length > 0
+      ? preferredCategoryAgents
+      : template.agents.length > 0
+        ? template.agents
+        : preferredCategoryAgents;
 
   // If user provided explicit candidates with model overrides, use those
   const candidates: ExecutionCandidate[] = overrides?.candidates
@@ -707,8 +706,10 @@ function buildSequentialChainPlan(
   template: WorkflowTemplate,
   configuredAgents: string[],
   chainSteps: ChainStepInput[],
-): ExecutionPlan {
-  const preferredCategoryAgents = configuredAgents.filter((entry) => typeof entry === "string" && entry.trim());
+): RuntimePlan {
+  const preferredCategoryAgents = configuredAgents.filter(
+    (entry) => typeof entry === "string" && entry.trim(),
+  );
   const agent = template.agents[0] || preferredCategoryAgents[0] || DEFAULT_EXECUTION_AGENT;
 
   const steps: ExecutionStep[] = chainSteps.map((s, idx) => ({

@@ -90,6 +90,52 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  for (const taskId of createdTaskIds) {
+    await sql.unsafe("DELETE FROM task_timeline_views WHERE task_id = $1", [taskId]);
+    await sql.unsafe("DELETE FROM task_domain_events WHERE task_id = $1", [taskId]);
+    await sql.unsafe(
+      `DELETE FROM conversation_message_parts WHERE message_id IN (
+        SELECT id FROM conversation_messages WHERE task_id = $1
+      )`,
+      [taskId],
+    );
+    await sql.unsafe("DELETE FROM conversation_messages WHERE task_id = $1", [taskId]);
+    await sql.unsafe("DELETE FROM conversation_sessions WHERE task_id = $1", [taskId]);
+    await sql.unsafe("DELETE FROM task_snapshots WHERE task_id = $1", [taskId]);
+    await sql.unsafe("DELETE FROM task_run_edges WHERE task_id = $1", [taskId]);
+    await sql.unsafe(
+      `DELETE FROM task_stage_runs
+        WHERE workflow_run_id IN (
+          SELECT id FROM task_workflow_runs WHERE task_id = $1
+        )`,
+      [taskId],
+    );
+    await sql.unsafe("DELETE FROM task_workflow_runs WHERE task_id = $1", [taskId]);
+    await sql.unsafe("DELETE FROM task_operating_modes WHERE task_id = $1", [taskId]);
+    await sql.unsafe("DELETE FROM boss_decisions WHERE task_id = $1", [taskId]);
+    await sql.unsafe("DELETE FROM human_escalations WHERE task_id = $1", [taskId]);
+    await sql.unsafe("DELETE FROM developer_change_requests WHERE task_id = $1", [taskId]);
+    await sql.unsafe("DELETE FROM role_aggregate_conclusions WHERE task_id = $1", [taskId]);
+    await sql.unsafe("DELETE FROM runtime_usage_ledger_steps WHERE task_id = $1", [taskId]);
+    await sql.unsafe("DELETE FROM runtime_usage_ledgers WHERE task_id = $1", [taskId]);
+    await sql.unsafe(
+      `DELETE FROM file_changes
+        WHERE change_id IN (
+          SELECT id FROM code_changes WHERE task_id = $1
+        )`,
+      [taskId],
+    );
+    await sql.unsafe("DELETE FROM code_changes WHERE task_id = $1", [taskId]);
+    await sql.unsafe("UPDATE agent_runs SET run_node_id = NULL, run_id = NULL WHERE task_id = $1", [
+      taskId,
+    ]);
+    await sql.unsafe("UPDATE task_run_nodes SET agent_run_id = NULL WHERE task_id = $1", [taskId]);
+    await sql.unsafe("DELETE FROM task_run_nodes WHERE task_id = $1", [taskId]);
+    await sql.unsafe("DELETE FROM agent_runs WHERE task_id = $1", [taskId]);
+    await sql.unsafe("DELETE FROM task_runs WHERE task_id = $1", [taskId]);
+    await sql.unsafe("DELETE FROM tasks WHERE id = $1", [taskId]);
+  }
+
   const nodeIds = Array.from(createdNodeIds);
   if (createdLinkIds.length > 0) {
     await sql.unsafe(
@@ -99,6 +145,13 @@ afterAll(async () => {
 
   if (nodeIds.length > 0) {
     const nodeList = nodeIds.map(escapeLiteral).join(", ");
+    await sql.unsafe(
+      `UPDATE project_tree_nodes
+          SET parent_id = NULL,
+              superseded_by = NULL
+        WHERE parent_id IN (${nodeList})
+           OR superseded_by IN (${nodeList})`,
+    );
     await sql.unsafe(
       `DELETE FROM project_tree_links WHERE source_node_id IN (${nodeList}) OR target_node_id IN (${nodeList})`,
     );
@@ -141,17 +194,18 @@ describe("project tree routes", () => {
       contextNode.data.id,
     ]);
 
-    const createdLink = await authedRequest<{ id: string; sourceNodeId: string; targetNodeId: string }>(
-      `/api/projects/${PROJECT_ID}/tree/${task.nodeId}/links`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          targetNodeId: contextNode.data.id,
-          linkType: "cites",
-          metadata: { source: "project-tree-routes-test" },
-        }),
-      },
-    );
+    const createdLink = await authedRequest<{
+      id: string;
+      sourceNodeId: string;
+      targetNodeId: string;
+    }>(`/api/projects/${PROJECT_ID}/tree/${task.nodeId}/links`, {
+      method: "POST",
+      body: JSON.stringify({
+        targetNodeId: contextNode.data.id,
+        linkType: "cites",
+        metadata: { source: "project-tree-routes-test" },
+      }),
+    });
 
     expect(createdLink.status).toBe(201);
     createdLinkIds.push(createdLink.data.id);
@@ -219,61 +273,78 @@ describe("project tree routes", () => {
 
     expect(createdSession.status).toBe(201);
 
-    const persisted = await authedRequest<{ ok: boolean }>(`/api/tasks/${task.id}/branches/messages`, {
-      method: "POST",
-      body: JSON.stringify({
-        runtimeSessionId,
-        message: {
-          info: { id: "msg-search-1", role: "assistant" },
-          parts: [{ type: "text", text: "Rollback migration now and verify the final state." }],
-        },
-      }),
-    });
+    const persisted = await authedRequest<{ ok: boolean }>(
+      `/api/tasks/${task.id}/branches/messages`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          runtimeSessionId,
+          message: {
+            info: { id: "msg-search-1", role: "assistant" },
+            parts: [{ type: "text", text: "Rollback migration now and verify the final state." }],
+          },
+        }),
+      },
+    );
 
     expect(persisted.status).toBe(201);
     expect(persisted.data.ok).toBe(true);
 
-    const searchResult = await authedRequest<{
+    const childNodes = await authedRequest<{
       data: Array<{
-        source: "message" | "context";
-        taskId?: string | null;
-        runtimeSessionId?: string | null;
-        runtimeMessageId?: string | null;
-        contentText: string;
+        id: string;
+        nodeType: string;
+        contentText: string | null;
       }>;
-      meta: {
-        query: string;
-        nodeType: "all" | "message" | "context";
-        resultCount: number;
-      };
-    }>(`/api/projects/${PROJECT_ID}/search?q=rollback&nodeType=all&limit=10`);
+    }>(`/api/projects/${PROJECT_ID}/tree/${PROJECT_ROOT_NODE_ID}/children`);
 
-    expect(searchResult.status).toBe(200);
-    expect(searchResult.data.meta).toEqual(
-      expect.objectContaining({
-        query: "rollback",
-        nodeType: "all",
-        resultCount: 2,
-      }),
-    );
-    expect(searchResult.data.data).toEqual(
+    expect(childNodes.status).toBe(200);
+    expect(childNodes.data.data).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          source: "context",
+          id: contextNode.data.id,
+          nodeType: "context",
           contentText: "Rollback checklist for production migration verification",
         }),
+      ]),
+    );
+
+    const sessionMessages = await authedRequest<{
+      data: Array<{
+        info?: { id?: string; role?: string };
+        parts?: Array<{ type?: string; text?: string }>;
+      }>;
+      meta: {
+        includeLineage: boolean;
+        cacheState: "none" | "partial" | "complete";
+        cachedSessionCount: number;
+      };
+    }>(`/api/tasks/${task.id}/branches/${runtimeSessionId}/messages`);
+
+    expect(sessionMessages.status).toBe(200);
+    expect(sessionMessages.data.meta).toEqual(
+      expect.objectContaining({
+        includeLineage: false,
+        cacheState: "complete",
+        cachedSessionCount: 1,
+      }),
+    );
+    expect(sessionMessages.data.data).toEqual(
+      expect.arrayContaining([
         expect.objectContaining({
-          source: "message",
-          taskId: task.id,
-          runtimeSessionId,
-          runtimeMessageId: "msg-search-1",
-          contentText: "Rollback migration now and verify the final state.",
+          info: expect.objectContaining({ id: "msg-search-1", role: "assistant" }),
+          parts: expect.arrayContaining([
+            expect.objectContaining({
+              type: "text",
+              text: "Rollback migration now and verify the final state.",
+            }),
+          ]),
         }),
       ]),
     );
   });
 
-  test("supports project-level incremental event feed with stable timestamp cursor", async () => {
+  test("supports branch-level persisted event feed in chronological order", async () => {
     const task = await createTask(`tree-events-feed-${Date.now()}`);
     const runtimeSessionId = `ses_events_feed_${Date.now()}`;
     const sessionNodeId = taskSessionNodeId(task.id, runtimeSessionId);
@@ -296,56 +367,66 @@ describe("project tree routes", () => {
       ["msg-feed-1", "first incremental event payload"],
       ["msg-feed-2", "second incremental event payload"],
     ] as const) {
-      const persisted = await authedRequest<{ ok: boolean }>(`/api/tasks/${task.id}/branches/messages`, {
-        method: "POST",
-        body: JSON.stringify({
-          runtimeSessionId,
-          message: {
-            info: { id: messageId, role: "assistant" },
-            parts: [{ type: "text", text }],
-          },
-        }),
-      });
+      const persisted = await authedRequest<{ ok: boolean }>(
+        `/api/tasks/${task.id}/branches/messages`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            runtimeSessionId,
+            message: {
+              info: { id: messageId, role: "assistant" },
+              parts: [{ type: "text", text }],
+            },
+          }),
+        },
+      );
 
       expect(persisted.status).toBe(201);
       expect(persisted.data.ok).toBe(true);
     }
 
-    const firstPage = await authedRequest<{
-      items: Array<{
-        id: string;
-        nodeId?: string | null;
-        taskId?: string | null;
-        runtimeSessionId?: string | null;
+    const events = await authedRequest<{
+      data: Array<{
+        seq: number;
         eventType: string;
+        payload: {
+          runtimeSessionId?: string;
+          messageId?: string;
+          role?: string | null;
+          text?: string | null;
+        };
         createdAt: string;
       }>;
-      nextCursor: { after: string; afterId: string } | null;
-      hasMore: boolean;
-    }>(`/api/projects/${PROJECT_ID}/events?nodeId=${encodeURIComponent(sessionNodeId)}&limit=3`);
+      meta: {
+        includeLineage: boolean;
+        cacheState: "none" | "partial" | "complete";
+        cachedSessionCount: number;
+        eventCount: number;
+      };
+    }>(`/api/tasks/${task.id}/branches/${runtimeSessionId}/events`);
 
-    expect(firstPage.status).toBe(200);
-    expect(firstPage.data.items).toHaveLength(3);
-    expect(firstPage.data.items.every((item) => item.nodeId === sessionNodeId)).toBe(true);
-    expect(firstPage.data.items.every((item) => item.taskId === task.id)).toBe(true);
-    expect(firstPage.data.items.every((item) => item.runtimeSessionId === runtimeSessionId)).toBe(true);
-    expect(firstPage.data.hasMore).toBe(true);
-    expect(firstPage.data.nextCursor).toBeTruthy();
-
-    const secondPage = await authedRequest<{
-      items: Array<{ id: string; createdAt: string }>;
-      nextCursor: { after: string; afterId: string } | null;
-      hasMore: boolean;
-    }>(
-      `/api/projects/${PROJECT_ID}/events?nodeId=${encodeURIComponent(sessionNodeId)}&limit=3&after=${encodeURIComponent(firstPage.data.nextCursor!.after)}&afterId=${encodeURIComponent(firstPage.data.nextCursor!.afterId)}`,
+    expect(events.status).toBe(200);
+    expect(events.data.meta).toEqual(
+      expect.objectContaining({
+        includeLineage: false,
+        cacheState: "complete",
+        cachedSessionCount: 1,
+        eventCount: 4,
+      }),
     );
-
-    expect(secondPage.status).toBe(200);
-    expect(secondPage.data.items.length).toBeGreaterThan(0);
-    expect(secondPage.data.items.some((item) => item.id === firstPage.data.nextCursor!.afterId)).toBe(false);
-    expect(Date.parse(secondPage.data.items[0]!.createdAt)).toBeGreaterThanOrEqual(
-      Date.parse(firstPage.data.nextCursor!.after),
-    );
+    expect(events.data.data).toHaveLength(4);
+    expect(events.data.data.map((item) => item.eventType)).toEqual([
+      "session.message.created",
+      "session.message.snapshot",
+      "session.message.created",
+      "session.message.snapshot",
+    ]);
+    expect(
+      events.data.data.every((item) => item.payload.runtimeSessionId === runtimeSessionId),
+    ).toBe(true);
+    expect(events.data.data[0]?.payload.messageId).toBe("msg-feed-1");
+    expect(events.data.data[0]?.payload.text).toBe("first incremental event payload");
+    expect(events.data.data[0]?.seq).toBeLessThan(events.data.data[3]?.seq ?? 0);
   });
 
   test("syncs task patch updates into the task tree node", async () => {
@@ -366,6 +447,8 @@ describe("project tree routes", () => {
         sessionId: "ses_task_sync_runtime",
         selectedModel: "github-copilot:gpt-5.4",
         executionMode: "parallel",
+        executionPlan: JSON.stringify({ mode: "parallel", candidates: [] }),
+        parallelRunHistory: JSON.stringify([{ parallelRunId: "legacy-run" }]),
         workingBranch: "feature/tree-sync",
         result: "task node should mirror latest task state",
       }),
@@ -395,14 +478,17 @@ describe("project tree routes", () => {
     expect(taskNode.data.contentText).toContain("tree-task-sync-");
     expect(taskNode.data.runtimeSessionId).toBe("ses_task_sync_runtime");
     expect(taskNode.data.branchName).toBe("feature/tree-sync");
-    expect(taskNode.data.contentJson).toMatchObject({
-      status: "running",
-      sessionId: "ses_task_sync_runtime",
-      selectedModel: "github-copilot:gpt-5.4",
-      executionMode: "parallel",
-      workingBranch: "feature/tree-sync",
-      result: "task node should mirror latest task state",
-    });
+    expect(taskNode.data.contentJson).not.toHaveProperty("executionMode");
+    expect(taskNode.data.contentJson).not.toHaveProperty("autoAdvanceStages");
+    expect(taskNode.data.contentJson).not.toHaveProperty("gitCommitterName");
+    expect(taskNode.data.contentJson).not.toHaveProperty("gitCommitterEmail");
+    expect(taskNode.data.contentJson).not.toHaveProperty("status");
+    expect(taskNode.data.contentJson).not.toHaveProperty("sessionId");
+    expect(taskNode.data.contentJson).not.toHaveProperty("selectedModel");
+    expect(taskNode.data.contentJson).not.toHaveProperty("workingBranch");
+    expect(taskNode.data.contentJson).not.toHaveProperty("result");
+    expect(taskNode.data.contentJson).not.toHaveProperty("executionPlan");
+    expect(taskNode.data.contentJson).not.toHaveProperty("parallelRunHistory");
   });
 
   test("keeps task reads and writes alive without any legacy task mirror", async () => {
@@ -451,11 +537,101 @@ describe("project tree routes", () => {
     expect(taskNode.status).toBe(200);
     expect(taskNode.data.runtimeSessionId).toBe("ses_primary_tree_task");
     expect(taskNode.data.branchName).toBe("feature/tree-primary-task");
-    expect(taskNode.data.contentJson).toMatchObject({
-      status: "running",
-      sessionId: "ses_primary_tree_task",
-      workingBranch: "feature/tree-primary-task",
+    expect(taskNode.data.contentJson).not.toHaveProperty("status");
+    expect(taskNode.data.contentJson).not.toHaveProperty("sessionId");
+    expect(taskNode.data.contentJson).not.toHaveProperty("workingBranch");
+  });
+
+  test("reads task detail and filtered lists from task aggregates when tree payload is stale", async () => {
+    const task = await createTask(`tree-aggregate-read-${Date.now()}`);
+
+    const patched = await authedRequest<{
+      id: string;
+      status: string;
+      sessionId: string;
+      executionMode: string;
+      workingBranch: string;
+      result: string;
+    }>(`/api/tasks/${task.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        status: "running",
+        sessionId: "ses_tree_aggregate_read",
+        executionMode: "parallel",
+        workingBranch: "feature/tree-aggregate-read",
+        result: "aggregate-backed result",
+        executionPlan: JSON.stringify({ mode: "parallel", candidates: [] }),
+        parallelRunHistory: JSON.stringify([{ parallelRunId: "legacy-run-aggregate" }]),
+      }),
     });
+
+    expect(patched.status).toBe(200);
+
+    await sql.unsafe(
+      `UPDATE project_tree_nodes
+       SET content_json = jsonb_set(
+         jsonb_set(
+           jsonb_set(
+             jsonb_set(coalesce(content_json, '{}'::jsonb), '{status}', '"pending"'::jsonb, true),
+             '{workingBranch}', '"feature/tree-stale"'::jsonb, true
+           ),
+           '{executionMode}', '"single"'::jsonb, true
+         ),
+         '{result}', '"stale tree result"'::jsonb, true
+       )
+       WHERE id = $1`,
+      [task.id],
+    );
+
+    const detail = await authedRequest<{
+      id: string;
+      status: string;
+      sessionId: string | null;
+      executionMode: string | null;
+      orchestrationKind: string | null;
+      workingBranch: string | null;
+      result: string | null;
+    }>(`/api/project-tree/tasks/${task.id}`);
+
+    expect(detail.status).toBe(200);
+    expect(detail.data).toMatchObject({
+      id: task.id,
+      status: "running",
+      sessionId: "ses_tree_aggregate_read",
+      executionMode: "parallel",
+      orchestrationKind: "parallel",
+      workingBranch: "feature/tree-aggregate-read",
+      result: "aggregate-backed result",
+    });
+    expect(detail.data).not.toHaveProperty("executionPlan");
+    expect(detail.data).not.toHaveProperty("parallelRunHistory");
+
+    const filtered = await authedRequest<{
+      data: Array<{
+        id: string;
+        status: string;
+        executionMode: string | null;
+        orchestrationKind: string | null;
+        workingBranch: string | null;
+        result: string | null;
+      }>;
+    }>(`/api/project-tree/tasks?projectId=${PROJECT_ID}&status=running`);
+
+    expect(filtered.status).toBe(200);
+    expect(filtered.data.data).toContainEqual(
+      expect.objectContaining({
+        id: task.id,
+        status: "running",
+        executionMode: "parallel",
+        orchestrationKind: "parallel",
+        workingBranch: "feature/tree-aggregate-read",
+        result: "aggregate-backed result",
+      }),
+    );
+    const filteredTask = filtered.data.data.find((entry) => entry.id === task.id);
+    expect(filteredTask).toBeDefined();
+    expect(filteredTask).not.toHaveProperty("executionPlan");
+    expect(filteredTask).not.toHaveProperty("parallelRunHistory");
   });
 
   test("syncs session activate and archive to project tree nodes", async () => {
@@ -675,7 +851,7 @@ describe("project tree routes", () => {
     expect(rootNode.data.archivedAt).toBeNull();
   });
 
-  test("keeps session reads and writes alive from tree-backed lineage only", async () => {
+  test("keeps session reads and writes alive from legacy tree lineage records only", async () => {
     const task = await createTask(`tree-primary-session-${Date.now()}`);
     const rootRuntimeSessionId = `ses_primary_root_${Date.now()}`;
     const forkRuntimeSessionId = `ses_primary_fork_${Date.now()}`;
@@ -764,7 +940,66 @@ describe("project tree routes", () => {
     expect(branchNodes.some((row) => row.runtime_session_id === forkRuntimeSessionId)).toBe(true);
   });
 
-  test("persists task session message snapshots in tree events and replays latest state", async () => {
+  test("reads single-session messages from conversation tables when legacy tree message events are absent", async () => {
+    const task = await createTask(`conversation-primary-${Date.now()}`);
+    const runtimeSessionId = `ses_conversation_${Date.now()}`;
+    const sessionNodeId = taskSessionNodeId(task.id, runtimeSessionId);
+
+    createdNodeIds.add(sessionNodeId);
+
+    const session = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/branches`, {
+      method: "POST",
+      body: JSON.stringify({
+        runtimeSessionId,
+        branchName: "conversation-main",
+        sourceType: "root",
+        isActive: true,
+      }),
+    });
+
+    expect(session.status).toBe(201);
+
+    const persisted = await authedRequest<{ ok: boolean }>(
+      `/api/tasks/${task.id}/branches/messages`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          runtimeSessionId,
+          message: {
+            info: {
+              id: "msg-conversation-1",
+              role: "assistant",
+              time: { created: Date.parse("2026-03-22T09:00:00.000Z") },
+            },
+            parts: [{ type: "text", text: "conversation table answer" }],
+          },
+        }),
+      },
+    );
+
+    expect(persisted.status).toBe(201);
+
+    await sql.unsafe(
+      `DELETE FROM project_tree_events WHERE node_id = $1 AND event_type LIKE 'session.message.%'`,
+      [sessionNodeId],
+    );
+
+    const messages = await authedRequest<{
+      data: Array<Record<string, unknown>>;
+      meta: { cacheState: string; complete: boolean; readSource?: string };
+    }>(`/api/tasks/${task.id}/branches/${runtimeSessionId}/messages`);
+
+    expect(messages.status).toBe(200);
+    expect(messages.data.meta.cacheState).toBe("complete");
+    expect(messages.data.meta.complete).toBe(true);
+    expect(messages.data.meta.readSource).toBe("conversation-table");
+    expect(messages.data.data).toHaveLength(1);
+    expect(messages.data.data[0]).toMatchObject({
+      info: expect.objectContaining({ id: "msg-conversation-1", role: "assistant" }),
+    });
+  });
+
+  test("persists task session messages in conversation storage and replays latest state", async () => {
     const task = await createTask(`tree-message-cache-${Date.now()}`);
     const runtimeSessionId = `ses_cached_${Date.now()}`;
     const sessionNodeId = taskSessionNodeId(task.id, runtimeSessionId);
@@ -838,7 +1073,7 @@ describe("project tree routes", () => {
     expect(replayed.data.data[0]?.parts).toEqual([{ type: "text", text: "final result" }]);
   });
 
-  test("aggregates lineage-aware session messages from tree events", async () => {
+  test("aggregates lineage-aware session messages from persisted conversation state", async () => {
     const task = await createTask(`tree-lineage-cache-${Date.now()}`);
     const rootRuntimeSessionId = `ses_lineage_root_${Date.now()}`;
     const forkRuntimeSessionId = `ses_lineage_fork_${Date.now()}`;
@@ -967,19 +1202,245 @@ describe("project tree routes", () => {
     }>(`/api/tasks/${task.id}/branches/${forkRuntimeSessionId}/messages?includeLineage=true`);
 
     expect(replayed.status).toBe(200);
-    expect(replayed.data.meta).toEqual({
-      includeLineage: true,
-      cacheState: "complete",
-      complete: true,
-      lineagePath: [rootRuntimeSessionId, forkRuntimeSessionId],
-      cachedSessionCount: 2,
-    });
+    expect(replayed.data.meta).toEqual(
+      expect.objectContaining({
+        includeLineage: true,
+        cacheState: "complete",
+        complete: true,
+        lineagePath: [rootRuntimeSessionId, forkRuntimeSessionId],
+        cachedSessionCount: 2,
+        readSource: "conversation-table",
+      }),
+    );
     expect(replayed.data.data.map((message) => message.info.id)).toEqual([
       "root-user",
       "root-assistant",
       "leaf-user",
       "leaf-assistant",
     ]);
+  });
+
+  test("aggregates lineage-aware session messages from conversation tables across lineage", async () => {
+    const task = await createTask(`conversation-lineage-${Date.now()}`);
+    const rootRuntimeSessionId = `ses_conversation_root_${Date.now()}`;
+    const forkRuntimeSessionId = `ses_conversation_fork_${Date.now()}`;
+    const rootSessionNodeId = taskSessionNodeId(task.id, rootRuntimeSessionId);
+    const forkSessionNodeId = taskSessionNodeId(task.id, forkRuntimeSessionId);
+
+    createdNodeIds.add(rootSessionNodeId);
+    createdNodeIds.add(forkSessionNodeId);
+
+    await authedRequest(`/api/tasks/${task.id}/branches`, {
+      method: "POST",
+      body: JSON.stringify({
+        runtimeSessionId: rootRuntimeSessionId,
+        branchName: "conversation-root",
+        sourceType: "root",
+        isActive: false,
+      }),
+    });
+
+    await authedRequest(`/api/tasks/${task.id}/branches`, {
+      method: "POST",
+      body: JSON.stringify({
+        runtimeSessionId: forkRuntimeSessionId,
+        parentRuntimeSessionId: rootRuntimeSessionId,
+        forkedFromMessageId: "root-assistant",
+        branchName: "conversation-fork",
+        sourceType: "fork",
+        isActive: true,
+      }),
+    });
+
+    for (const [runtimeSessionId, message] of [
+      [
+        rootRuntimeSessionId,
+        { info: { id: "root-user", role: "user" }, parts: [{ type: "text", text: "历史提问" }] },
+      ],
+      [
+        rootRuntimeSessionId,
+        {
+          info: { id: "root-assistant", role: "assistant" },
+          parts: [{ type: "text", text: "历史回答" }],
+        },
+      ],
+      [
+        rootRuntimeSessionId,
+        {
+          info: { id: "root-after-fork", role: "assistant" },
+          parts: [{ type: "text", text: "不应再进入分叉上下文" }],
+        },
+      ],
+      [
+        forkRuntimeSessionId,
+        { info: { id: "leaf-user", role: "user" }, parts: [{ type: "text", text: "当前提问" }] },
+      ],
+      [
+        forkRuntimeSessionId,
+        {
+          info: { id: "leaf-assistant", role: "assistant" },
+          parts: [{ type: "text", text: "当前回答" }],
+        },
+      ],
+    ] as const) {
+      const persisted = await authedRequest<{ ok: boolean }>(
+        `/api/tasks/${task.id}/branches/messages`,
+        {
+          method: "POST",
+          body: JSON.stringify({ runtimeSessionId, message }),
+        },
+      );
+      expect(persisted.status).toBe(201);
+    }
+
+    await sql.unsafe(
+      `DELETE FROM project_tree_events WHERE node_id IN ($1, $2) AND event_type LIKE 'session.message.%'`,
+      [rootSessionNodeId, forkSessionNodeId],
+    );
+
+    const replayed = await authedRequest<{
+      data: Array<{ info: { id: string } }>;
+      meta: {
+        includeLineage: boolean;
+        cacheState: "none" | "partial" | "complete";
+        complete: boolean;
+        lineagePath: string[];
+        cachedSessionCount: number;
+        readSource: string;
+      };
+    }>(`/api/tasks/${task.id}/branches/${forkRuntimeSessionId}/messages?includeLineage=true`);
+
+    expect(replayed.status).toBe(200);
+    expect(replayed.data.meta).toEqual(
+      expect.objectContaining({
+        includeLineage: true,
+        cacheState: "complete",
+        complete: true,
+        lineagePath: [rootRuntimeSessionId, forkRuntimeSessionId],
+        cachedSessionCount: 2,
+        readSource: "conversation-table",
+      }),
+    );
+    expect(replayed.data.data.map((message) => message.info.id)).toEqual([
+      "root-user",
+      "root-assistant",
+      "leaf-user",
+      "leaf-assistant",
+    ]);
+  });
+
+  test("returns task domain run detail with candidate and judge nodes", async () => {
+    const task = await createTask(`domain-run-detail-${Date.now()}`);
+    const rootRuntimeSessionId = `ses_domain_run_${Date.now()}`;
+
+    const patchedTask = await authedRequest(`/api/tasks/${task.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        status: "running",
+        sessionId: rootRuntimeSessionId,
+        executionMode: "parallel",
+      }),
+    });
+    expect(patchedTask.status).toBe(200);
+
+    const candidateA = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/runs`, {
+      method: "POST",
+      body: JSON.stringify({
+        sessionId: rootRuntimeSessionId,
+        agentType: "executor",
+        candidateIndex: 0,
+        status: "completed",
+        modelUsed: "model-a",
+        result: "answer-a",
+      }),
+    });
+    expect(candidateA.status).toBe(201);
+
+    const candidateB = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/runs`, {
+      method: "POST",
+      body: JSON.stringify({
+        sessionId: rootRuntimeSessionId,
+        agentType: "executor",
+        candidateIndex: 1,
+        status: "completed",
+        modelUsed: "model-b",
+        result: "answer-b",
+      }),
+    });
+    expect(candidateB.status).toBe(201);
+
+    const judge = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/runs`, {
+      method: "POST",
+      body: JSON.stringify({
+        sessionId: rootRuntimeSessionId,
+        agentType: "judge",
+        status: "completed",
+        modelUsed: "judge-model",
+        result: "candidate 2 is stronger",
+      }),
+    });
+    expect(judge.status).toBe(201);
+
+    const domainRuns = await authedRequest<{ data: Array<{ id: string }> }>(
+      `/api/tasks/${task.id}/domain-runs`,
+    );
+    expect(domainRuns.status).toBe(200);
+    const runId = domainRuns.data.data[0]?.id;
+    expect(runId).toBeTruthy();
+
+    await sql.unsafe(
+      `UPDATE task_runs
+       SET winner_node_id = (
+         SELECT id FROM task_run_nodes WHERE run_id = $1 AND candidate_index = 1 LIMIT 1
+       ),
+           judge_node_id = (
+         SELECT id FROM task_run_nodes WHERE run_id = $1 AND node_kind = 'judge' LIMIT 1
+       )
+       WHERE id = $1`,
+      [runId],
+    );
+
+    const detail = await authedRequest<{
+      data: {
+        run: {
+          id: string;
+          orchestrationKind: string;
+          winnerNodeId?: string | null;
+          judgeNodeId?: string | null;
+        };
+        nodes: Array<{ id: string; nodeKind: string }>;
+        candidateNodes: Array<{
+          candidateIndex?: number | null;
+          modelUsed?: string | null;
+          resultSummary?: string | null;
+        }>;
+        judgeNode: { nodeKind: string; resultSummary?: string | null } | null;
+        winnerCandidateIndex: number | null;
+      };
+    }>(`/api/tasks/${task.id}/domain-runs/${runId}`);
+
+    expect(detail.status).toBe(200);
+    expect(detail.data.data.run.id).toBe(runId);
+    expect(detail.data.data.run.orchestrationKind).toBe("parallel");
+    expect(detail.data.data.nodes.some((node) => node.nodeKind === "judge")).toBe(true);
+    expect(detail.data.data.candidateNodes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          candidateIndex: 0,
+          modelUsed: "model-a",
+          resultSummary: "answer-a",
+        }),
+        expect.objectContaining({
+          candidateIndex: 1,
+          modelUsed: "model-b",
+          resultSummary: "answer-b",
+        }),
+      ]),
+    );
+    expect(detail.data.data.judgeNode).toEqual(
+      expect.objectContaining({ nodeKind: "judge", resultSummary: "candidate 2 is stronger" }),
+    );
+    expect(detail.data.data.winnerCandidateIndex).toBe(1);
   });
 
   test("reports none partial and complete cache states for lineage aggregation", async () => {
@@ -1016,7 +1477,11 @@ describe("project tree routes", () => {
 
     const noneState = await authedRequest<{
       data: Array<unknown>;
-      meta: { cacheState: "none" | "partial" | "complete"; complete: boolean; cachedSessionCount: number };
+      meta: {
+        cacheState: "none" | "partial" | "complete";
+        complete: boolean;
+        cachedSessionCount: number;
+      };
     }>(`/api/tasks/${task.id}/branches/${forkRuntimeSessionId}/messages?includeLineage=true`);
     expect(noneState.status).toBe(200);
     expect(noneState.data.meta).toEqual(
@@ -1044,7 +1509,11 @@ describe("project tree routes", () => {
 
     const partialState = await authedRequest<{
       data: Array<unknown>;
-      meta: { cacheState: "none" | "partial" | "complete"; complete: boolean; cachedSessionCount: number };
+      meta: {
+        cacheState: "none" | "partial" | "complete";
+        complete: boolean;
+        cachedSessionCount: number;
+      };
     }>(`/api/tasks/${task.id}/branches/${forkRuntimeSessionId}/messages?includeLineage=true`);
     expect(partialState.status).toBe(200);
     expect(partialState.data.meta).toEqual(
@@ -1072,7 +1541,11 @@ describe("project tree routes", () => {
 
     const completeState = await authedRequest<{
       data: Array<unknown>;
-      meta: { cacheState: "none" | "partial" | "complete"; complete: boolean; cachedSessionCount: number };
+      meta: {
+        cacheState: "none" | "partial" | "complete";
+        complete: boolean;
+        cachedSessionCount: number;
+      };
     }>(`/api/tasks/${task.id}/branches/${forkRuntimeSessionId}/messages?includeLineage=true`);
     expect(completeState.status).toBe(200);
     expect(completeState.data.meta).toEqual(
@@ -1084,7 +1557,7 @@ describe("project tree routes", () => {
     );
   });
 
-  test("records fine grained session message events for future trace and timeline reads", async () => {
+  test("records synthetic session message events from conversation domain history", async () => {
     const task = await createTask(`tree-events-${Date.now()}`);
     const runtimeSessionId = `ses_events_${Date.now()}`;
     const sessionNodeId = taskSessionNodeId(task.id, runtimeSessionId);
@@ -1139,20 +1612,27 @@ describe("project tree routes", () => {
     );
     expect(completedPersist.status).toBe(201);
 
+    await sql.unsafe(
+      `DELETE FROM project_tree_events WHERE node_id = $1 AND event_type LIKE 'session.message.%'`,
+      [taskSessionNodeId(task.id, runtimeSessionId)],
+    );
+
     const events = await authedRequest<{
-      data: Array<{ eventType: string; payload: { messageId?: string; text?: string | null; completedAt?: number | null } }>;
+      data: Array<{
+        eventType: string;
+        payload: { messageId?: string; text?: string | null; completedAt?: number | null };
+      }>;
       meta: { cacheState: "none" | "partial" | "complete"; eventCount: number };
     }>(`/api/tasks/${task.id}/branches/${runtimeSessionId}/events`);
 
     expect(events.status).toBe(200);
     expect(events.data.meta.cacheState).toBe("complete");
-    expect(events.data.meta.eventCount).toBe(5);
+    expect(events.data.meta.eventCount).toBe(4);
     expect(events.data.data.map((event) => event.eventType)).toEqual([
       "session.message.created",
       "session.message.snapshot",
       "session.message.updated",
       "session.message.completed",
-      "session.message.snapshot",
     ]);
     expect(events.data.data[0]?.payload).toMatchObject({
       messageId: "msg-evt-1",
@@ -1164,13 +1644,15 @@ describe("project tree routes", () => {
     });
   });
 
-  test("builds lineage aware timeline items directly from persisted tree events", async () => {
+  test("builds lineage aware timeline items from conversation state with historical replay metadata", async () => {
     const task = await createTask(`tree-timeline-${Date.now()}`);
     const rootRuntimeSessionId = `ses_timeline_root_${Date.now()}`;
     const forkRuntimeSessionId = `ses_timeline_fork_${Date.now()}`;
+    const rootSessionNodeId = taskSessionNodeId(task.id, rootRuntimeSessionId);
+    const forkSessionNodeId = taskSessionNodeId(task.id, forkRuntimeSessionId);
 
-    createdNodeIds.add(taskSessionNodeId(task.id, rootRuntimeSessionId));
-    createdNodeIds.add(taskSessionNodeId(task.id, forkRuntimeSessionId));
+    createdNodeIds.add(rootSessionNodeId);
+    createdNodeIds.add(forkSessionNodeId);
 
     const rootSession = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/branches`, {
       method: "POST",
@@ -1268,6 +1750,11 @@ describe("project tree routes", () => {
       );
       expect(persisted.status).toBe(201);
     }
+
+    await sql.unsafe(
+      `DELETE FROM project_tree_events WHERE node_id IN ($1, $2) AND event_type LIKE 'session.message.%'`,
+      [rootSessionNodeId, forkSessionNodeId],
+    );
 
     const timeline = await authedRequest<{
       data: Array<{

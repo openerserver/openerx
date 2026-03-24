@@ -3032,7 +3032,8 @@ const HOOK_SECTIONS = [
     trigger: "pre-resume",
     title: "续跑前 Hook",
     emptyText: "暂无续跑前 Hook",
-    description: "仅在恢复已暂停的 agent run 前触发，用于恢复前检查和补充指导，不覆盖普通 continue。",
+    description:
+      "仅在恢复已暂停的 agent run 前触发，用于恢复前检查和补充指导，不覆盖普通 continue。",
   },
 ] as const;
 

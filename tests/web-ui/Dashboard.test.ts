@@ -469,6 +469,17 @@ function createGovernanceOverviewResponse() {
       breakerCount: 2,
       activeLeaseCount: 1,
       topRiskTaskCount: 2,
+      runningTaskCount: 4,
+      activeSessionCount: 3,
+      parallelTaskCount: 2,
+      sequentialChainTaskCount: 1,
+      recentTimelineItemCount: 7,
+      pausedTaskCount: 1,
+      failedTaskCount: 2,
+      activeCandidateCount: 5,
+      pendingChainStepCount: 3,
+      toolTimelineItemCount: 4,
+      decisionTimelineItemCount: 6,
     },
     topRiskTasks: [
       {
@@ -749,8 +760,15 @@ describe("Dashboard provider navigation", () => {
     expect(governanceText).toContain("Breaker 触发");
     expect(governanceText).toContain("Active Lease");
     expect(governanceText).toContain("Top 风险任务");
+    expect(governanceText).toContain("运行中任务");
+    expect(governanceText).toContain("活动会话");
+    expect(governanceText).toContain("并行 / 链式任务");
+    expect(governanceText).toContain("暂停 / 失败任务");
+    expect(governanceText).toContain("候选活跃 / 链路积压");
     expect(governanceText).toContain("Beta paid execution");
     expect(governanceText).toContain("Default paid execution");
+    expect(governanceText).toContain("最近窗口写入 7 条 timeline 明细");
+    expect(governanceText).toContain("工具明细 4 / 决策明细 6");
     expect(governanceText).toContain("block 2");
     expect(governanceText).toContain("breaker 1");
     expect(governanceText).toContain("熔断触发");

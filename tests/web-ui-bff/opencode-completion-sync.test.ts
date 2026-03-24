@@ -22,20 +22,34 @@ interface ConfigModelRecord {
   provider?: string;
 }
 
-interface ExecutionPlanCandidate {
-  agentRunId?: string;
-}
-
-interface ExecutionPlanRecord {
-  winnerCandidateIndex?: number;
-  candidates?: ExecutionPlanCandidate[];
-}
+const SLOWER_EXECUTION_TEST_MODELS = ["github-copilot:gpt-4o"] as const;
 
 interface TaskStatusRecord {
   status: string;
   result: string | null;
   finishedAt: string | null;
-  executionPlan?: string | null;
+  currentRunId?: string | null;
+  orchestrationKind?: string | null;
+}
+
+interface TaskDomainRunNodeRecord {
+  id: string;
+  candidateIndex?: number | null;
+  agentRunId?: string | null;
+}
+
+interface TaskDomainRunDetailRecord {
+  run: {
+    id: string;
+    winnerNodeId?: string | null;
+  };
+  candidateNodes: TaskDomainRunNodeRecord[];
+  winnerCandidateIndex: number | null;
+}
+
+interface AgentStatusRecord {
+  status: string;
+  finishedAt?: string | null;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -76,9 +90,12 @@ function cloneStrategy(strategy: OrchestrationStrategy): OrchestrationStrategy {
 }
 
 async function getOrchestrationStrategy(token: string): Promise<OrchestrationStrategy> {
-  const response = await request<{ data: OrchestrationStrategy }>("/api/config/orchestration-strategy", {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+  const response = await request<{ data: OrchestrationStrategy }>(
+    "/api/config/orchestration-strategy",
+    {
+      headers: { Authorization: `Bearer ${token}` },
+    },
+  );
   return response.data;
 }
 
@@ -129,6 +146,53 @@ async function getAvailableCopilotModel(token: string): Promise<string> {
   return resolveExecutionIntegrationModel(modelList.data || [], testPolicy.data?.effectiveModel);
 }
 
+function selectPreferredExecutionModel(
+  configuredModels: ConfigModelRecord[],
+  preferredModels: readonly string[],
+): string | null {
+  for (const route of preferredModels) {
+    const [provider, ...modelParts] = route.split(":");
+    const modelId = modelParts.join(":");
+    const configured = configuredModels.find(
+      (model) => model.provider === provider && model.id === modelId,
+    );
+    if (configured?.provider && configured.id) {
+      return `${configured.provider}:${configured.id}`;
+    }
+  }
+
+  return null;
+}
+
+async function getCompletionSyncExecutionModel(
+  token: string,
+  options?: { preferSlowerModel?: boolean },
+): Promise<string> {
+  const authHeaders = {
+    Authorization: `Bearer ${token}`,
+    "Content-Type": "application/json",
+  };
+
+  const [modelList, testPolicy] = await Promise.all([
+    request<{ data?: ConfigModelRecord[] }>("/api/config/models/list", {
+      headers: authHeaders,
+    }),
+    request<{ data?: { effectiveModel?: string | null } }>("/api/config/models/test-policy", {
+      headers: authHeaders,
+    }),
+  ]);
+
+  const configuredModels = modelList.data || [];
+  if (options?.preferSlowerModel) {
+    const preferred = selectPreferredExecutionModel(configuredModels, SLOWER_EXECUTION_TEST_MODELS);
+    if (preferred) {
+      return preferred;
+    }
+  }
+
+  return resolveExecutionIntegrationModel(configuredModels, testPolicy.data?.effectiveModel);
+}
+
 function createDeferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
   let reject!: (reason?: unknown) => void;
@@ -141,11 +205,81 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
+function summarizeEvents(events: Array<Record<string, unknown>>): Record<string, unknown> {
+  const counts = new Map<string, number>();
+
+  for (const event of events) {
+    const type = typeof event.type === "string" ? event.type : "unknown";
+    counts.set(type, (counts.get(type) || 0) + 1);
+  }
+
+  const countsByType = Array.from(counts.entries())
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .map(([type, count]) => ({ type, count }));
+
+  const recentEvents = events.slice(-10).map((event) => {
+    const data =
+      typeof event.data === "object" && event.data ? (event.data as Record<string, unknown>) : null;
+
+    return {
+      type: event.type,
+      taskId: event.taskId,
+      agentRunId: event.agentRunId,
+      receivedAt: event._receivedAt,
+      reason: data?.reason,
+      status: data?.status,
+    };
+  });
+
+  return {
+    totalEvents: events.length,
+    countsByType,
+    recentEvents,
+  };
+}
+
+async function buildWaitForEventDiagnostics(options: {
+  events: Array<Record<string, unknown>>;
+  token: string;
+  taskId?: string;
+  agentRunId?: string;
+}): Promise<string> {
+  const diagnostics: Record<string, unknown> = {
+    eventSummary: summarizeEvents(options.events),
+  };
+
+  if (options.taskId) {
+    try {
+      diagnostics.taskStatus = await request<TaskStatusRecord>(`/api/tasks/${options.taskId}`, {
+        headers: { Authorization: `Bearer ${options.token}` },
+      });
+    } catch (error) {
+      diagnostics.taskStatusError = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  if (options.agentRunId) {
+    try {
+      diagnostics.agentStatus = await request<AgentStatusRecord>(
+        `/api/agents/${options.agentRunId}/status`,
+        {
+          headers: { Authorization: `Bearer ${options.token}` },
+        },
+      );
+    } catch (error) {
+      diagnostics.agentStatusError = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  return JSON.stringify(diagnostics);
+}
+
 async function waitForEvent(
   events: Array<Record<string, unknown>>,
   type: string,
   predicate: (event: Record<string, unknown>) => boolean = () => true,
   timeoutMs = 120000,
+  describeTimeout?: () => Promise<string>,
 ): Promise<Record<string, unknown>> {
   const startedAt = Date.now();
 
@@ -157,7 +291,12 @@ async function waitForEvent(
     await sleep(250);
   }
 
-  throw new Error(`Timed out waiting for event ${type}`);
+  const diagnostics = describeTimeout ? await describeTimeout() : undefined;
+  throw new Error(
+    diagnostics
+      ? `Timed out waiting for event ${type}; diagnostics=${diagnostics}`
+      : `Timed out waiting for event ${type}`,
+  );
 }
 
 function extractAssistantText(messages: unknown): string {
@@ -192,63 +331,87 @@ function extractAssistantText(messages: unknown): string {
   return "";
 }
 
-function parseExecutionPlan(raw: string | null | undefined): ExecutionPlanRecord | null {
-  if (!raw) {
-    return null;
-  }
-
+async function fetchTaskDomainRunDetail(
+  token: string,
+  taskId: string,
+  runId: string,
+): Promise<TaskDomainRunDetailRecord | null> {
   try {
-    const parsed = JSON.parse(raw) as ExecutionPlanRecord;
-    return parsed && typeof parsed === "object" ? parsed : null;
+    const response = await request<{ data?: TaskDomainRunDetailRecord }>(
+      `/api/tasks/${taskId}/domain-runs/${runId}`,
+      {
+        headers: { Authorization: `Bearer ${token}` },
+      },
+    );
+    return response.data ?? null;
   } catch {
     return null;
   }
 }
 
-function resolveWinnerAgentRunId(taskStatus: TaskStatusRecord, fallbackAgentRunId: string): string {
-  const plan = parseExecutionPlan(taskStatus.executionPlan);
-  if (!plan || !Array.isArray(plan.candidates) || plan.candidates.length === 0) {
-    return fallbackAgentRunId;
-  }
-
-  const winnerIndex =
-    typeof plan.winnerCandidateIndex === "number"
-      ? plan.winnerCandidateIndex
-      : plan.candidates.length === 1
-        ? 0
-        : undefined;
-
-  if (typeof winnerIndex !== "number") {
-    return fallbackAgentRunId;
-  }
-
-  const winner = plan.candidates[winnerIndex];
-  return typeof winner?.agentRunId === "string" && winner.agentRunId.trim().length > 0
-    ? winner.agentRunId
-    : fallbackAgentRunId;
-}
-
-function listExecutionPlanAgentRunIds(
+async function resolveCandidateAgentRunIds(
+  token: string,
+  taskId: string,
   taskStatus: TaskStatusRecord,
-  preferredAgentRunId: string,
-): string[] {
-  const plan = parseExecutionPlan(taskStatus.executionPlan);
-  const ordered = [preferredAgentRunId];
-
-  if (!plan || !Array.isArray(plan.candidates)) {
-    return ordered;
+  fallbackAgentRunId: string,
+): Promise<{
+  resolvedAgentRunId: string;
+  candidateAgentRunIds: string[];
+}> {
+  const ordered = [fallbackAgentRunId];
+  if (typeof taskStatus.currentRunId !== "string" || taskStatus.currentRunId.length === 0) {
+    return {
+      resolvedAgentRunId: fallbackAgentRunId,
+      candidateAgentRunIds: ordered,
+    };
   }
 
-  for (const candidate of plan.candidates) {
-    if (typeof candidate?.agentRunId !== "string" || candidate.agentRunId.trim().length === 0) {
-      continue;
-    }
+  const detail = await fetchTaskDomainRunDetail(token, taskId, taskStatus.currentRunId);
+  if (!detail || !Array.isArray(detail.candidateNodes) || detail.candidateNodes.length === 0) {
+    return {
+      resolvedAgentRunId: fallbackAgentRunId,
+      candidateAgentRunIds: ordered,
+    };
+  }
+
+  const sortedCandidates = detail.candidateNodes
+    .filter(
+      (candidate): candidate is TaskDomainRunNodeRecord & { agentRunId: string } =>
+        typeof candidate.agentRunId === "string" && candidate.agentRunId.trim().length > 0,
+    )
+    .sort(
+      (left, right) =>
+        (left.candidateIndex ?? Number.MAX_SAFE_INTEGER) -
+        (right.candidateIndex ?? Number.MAX_SAFE_INTEGER),
+    );
+
+  for (const candidate of sortedCandidates) {
     if (!ordered.includes(candidate.agentRunId)) {
       ordered.push(candidate.agentRunId);
     }
   }
 
-  return ordered;
+  const winnerByNodeId =
+    typeof detail.run.winnerNodeId === "string" && detail.run.winnerNodeId.length > 0
+      ? sortedCandidates.find((candidate) => candidate.id === detail.run.winnerNodeId)
+      : undefined;
+  const winnerByIndex =
+    typeof detail.winnerCandidateIndex === "number"
+      ? sortedCandidates.find(
+          (candidate) => candidate.candidateIndex === detail.winnerCandidateIndex,
+        )
+      : undefined;
+  const soleCandidate = sortedCandidates.length === 1 ? sortedCandidates[0] : undefined;
+  const resolvedAgentRunId =
+    winnerByNodeId?.agentRunId ??
+    winnerByIndex?.agentRunId ??
+    soleCandidate?.agentRunId ??
+    fallbackAgentRunId;
+
+  return {
+    resolvedAgentRunId,
+    candidateAgentRunIds: ordered,
+  };
 }
 
 async function waitForCompletedStatus(
@@ -284,6 +447,61 @@ async function waitForCompletedStatus(
   throw new Error(`Timed out waiting for completed status of task ${taskId}`);
 }
 
+async function readExecutionStatusSnapshot(
+  token: string,
+  taskId: string,
+  agentRunId: string,
+): Promise<{
+  taskStatus: TaskStatusRecord;
+  agentStatus: AgentStatusRecord;
+}> {
+  const [taskStatus, agentStatus] = await Promise.all([
+    request<TaskStatusRecord>(`/api/tasks/${taskId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    }),
+    request<AgentStatusRecord>(`/api/agents/${agentRunId}/status`, {
+      headers: { Authorization: `Bearer ${token}` },
+    }),
+  ]);
+
+  return { taskStatus, agentStatus };
+}
+
+async function ensureInteractionWindow(options: {
+  token: string;
+  taskId: string;
+  agentRunId: string;
+  execution: Record<string, unknown>;
+  actionLabel: string;
+}): Promise<{
+  taskStatus: TaskStatusRecord;
+  agentStatus: AgentStatusRecord;
+  hasInteractionWindow: boolean;
+}> {
+  const { taskStatus, agentStatus } = await readExecutionStatusSnapshot(
+    options.token,
+    options.taskId,
+    options.agentRunId,
+  );
+
+  if (taskStatus.status === "completed") {
+    console.warn(
+      `[opencode-completion-sync] 当前环境无可${options.actionLabel}窗口: execute 返回后任务已 completed; taskId=${options.taskId}; agentRunId=${options.agentRunId}; executionStatus=${JSON.stringify(options.execution)}; taskStatus=${JSON.stringify(taskStatus)}; agentStatus=${JSON.stringify(agentStatus)}`,
+    );
+    return {
+      taskStatus,
+      agentStatus,
+      hasInteractionWindow: false,
+    };
+  }
+
+  return {
+    taskStatus,
+    agentStatus,
+    hasInteractionWindow: true,
+  };
+}
+
 async function waitForStoppedStatus(
   token: string,
   agentRunId: string,
@@ -306,6 +524,39 @@ async function waitForStoppedStatus(
   }
 
   throw new Error(`Timed out waiting for stopped status of agent ${agentRunId}`);
+}
+
+async function pauseAgentWithRetry(
+  token: string,
+  agentRunId: string,
+  timeoutMs = 5000,
+): Promise<void> {
+  const startedAt = Date.now();
+  let lastError = "Unknown pause failure";
+
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      const pauseResult = await request<{ ok: boolean }>(`/api/agents/${agentRunId}/pause`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+      });
+      expect(pauseResult.ok).toBe(true);
+      return;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      lastError = message;
+      if (message.includes("status is completed") || message.includes("status is stopped")) {
+        throw error;
+      }
+    }
+
+    await sleep(150);
+  }
+
+  throw new Error(`Timed out trying to pause agent ${agentRunId}; lastError=${lastError}`);
 }
 
 async function waitForAgentSummary(
@@ -395,14 +646,16 @@ async function waitForAssistantResult(
     const taskStatus = await request<TaskStatusRecord>(`/api/tasks/${taskId}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
-    const resolvedAgentRunId = resolveWinnerAgentRunId(taskStatus, agentRunId);
+    const { resolvedAgentRunId, candidateAgentRunIds } = await resolveCandidateAgentRunIds(
+      token,
+      taskId,
+      taskStatus,
+      agentRunId,
+    );
     lastTaskResult = String(taskStatus.result ?? "");
     lastResolvedAgentRunId = resolvedAgentRunId;
 
-    for (const candidateAgentRunId of listExecutionPlanAgentRunIds(
-      taskStatus,
-      resolvedAgentRunId,
-    )) {
+    for (const candidateAgentRunId of candidateAgentRunIds) {
       const messages = await request(`/api/agents/${candidateAgentRunId}/messages`, {
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -442,7 +695,9 @@ async function runCompletionSyncScenario(options: {
     Authorization: `Bearer ${token}`,
     "Content-Type": "application/json",
   };
-  const selectedModel = await getAvailableCopilotModel(token);
+  const selectedModel = await getCompletionSyncExecutionModel(token, {
+    preferSlowerModel: options.intervene,
+  });
 
   const task = await request<{ id: string }>("/api/tasks", {
     method: "POST",
@@ -454,6 +709,19 @@ async function runCompletionSyncScenario(options: {
       selectedModel,
     }),
   });
+
+  if (options.intervene) {
+    await request<{ ok: boolean }>(`/api/tasks/${task.id}`, {
+      method: "PATCH",
+      headers: authHeaders,
+      body: JSON.stringify({
+        strategy: JSON.stringify({
+          workflowTemplateId: null,
+          selectedTemplateId: null,
+        }),
+      }),
+    });
+  }
 
   const events: Array<Record<string, unknown>> = [];
   const wsReady = createDeferred<void>();
@@ -484,6 +752,14 @@ async function runCompletionSyncScenario(options: {
   try {
     await wsReady.promise;
 
+    const describeTimeout = () =>
+      buildWaitForEventDiagnostics({
+        events,
+        token,
+        taskId: task.id,
+        agentRunId: agentRunId || undefined,
+      });
+
     const execution = await request<{ agentRunId: string; sessionId: string }>(
       `/api/tasks/${task.id}/execute`,
       {
@@ -494,16 +770,38 @@ async function runCompletionSyncScenario(options: {
 
     agentRunId = execution.agentRunId;
 
-    await waitForEvent(events, "agent.started", (event) => event.agentRunId === agentRunId, 15000);
+    if (options.intervene) {
+      const { hasInteractionWindow } = await ensureInteractionWindow({
+        token,
+        taskId: task.id,
+        agentRunId,
+        execution,
+        actionLabel: "暂停",
+      });
+
+      if (!hasInteractionWindow) {
+        completed = true;
+        return;
+      }
+
+      await pauseAgentWithRetry(token, agentRunId);
+      await waitForEvent(
+        events,
+        "agent.started",
+        (event) => event.agentRunId === agentRunId,
+        15000,
+      );
+      await waitForEvent(events, "agent.paused", (event) => event.agentRunId === agentRunId, 15000);
+    } else {
+      await waitForEvent(
+        events,
+        "agent.started",
+        (event) => event.agentRunId === agentRunId,
+        15000,
+      );
+    }
 
     if (options.intervene) {
-      const pauseResult = await request<{ ok: boolean }>(`/api/agents/${agentRunId}/pause`, {
-        method: "POST",
-        headers: authHeaders,
-      });
-      expect(pauseResult.ok).toBe(true);
-      await waitForEvent(events, "agent.paused", (event) => event.agentRunId === agentRunId, 15000);
-
       const guidanceResult = await request<{ ok: boolean }>(`/api/agents/${agentRunId}/guidance`, {
         method: "POST",
         headers: authHeaders,
@@ -540,8 +838,15 @@ async function runCompletionSyncScenario(options: {
       "agent.completed",
       (event) => event.agentRunId === agentRunId,
       120000,
+      describeTimeout,
     );
-    await waitForEvent(events, "task.completed", (event) => event.taskId === task.id, 120000);
+    await waitForEvent(
+      events,
+      "task.completed",
+      (event) => event.taskId === task.id,
+      120000,
+      describeTimeout,
+    );
     await waitForEvent(
       events,
       "pipeline.stage.updated",
@@ -551,6 +856,7 @@ async function runCompletionSyncScenario(options: {
         event.data &&
         (event.data as Record<string, unknown>).reason === "task.completed",
       120000,
+      describeTimeout,
     );
 
     const { agentStatus, taskStatus } = await waitForCompletedStatus(token, task.id, agentRunId);
@@ -649,6 +955,14 @@ executionIntegrationTest(
     try {
       await wsReady.promise;
 
+      const describeTimeout = () =>
+        buildWaitForEventDiagnostics({
+          events,
+          token,
+          taskId: task.id,
+          agentRunId: agentRunId || undefined,
+        });
+
       const execution = await request<{ agentRunId: string; sessionId: string }>(
         `/api/tasks/${task.id}/execute`,
         {
@@ -695,6 +1009,7 @@ executionIntegrationTest(
           event.data &&
           (event.data as Record<string, unknown>).reason === "task.node.updated",
         30000,
+        describeTimeout,
       );
     } finally {
       ws.close();
@@ -719,7 +1034,7 @@ executionIntegrationTest("OpenCode completion sync closes pause/guidance/resume 
   await runCompletionSyncScenario({
     titlePrefix: "completion-sync-test",
     prompt:
-      "Quick brief reply only. Do not inspect the repository or call tools. First print the word HOLD on 40 separate lines. If the run is later resumed after a pause, discard any unfinished HOLD output and reply with exactly these 3 bullets and nothing else: - Resumed flow acknowledged. - Final result stored. - Runtime delay observed.",
+      "Quick brief reply only. Do not inspect the repository or call tools. First print the word HOLD on 400 separate lines, one HOLD per line, and do not summarize before finishing all 400 lines. If the run is later resumed after a pause, discard any unfinished HOLD output and reply with exactly these 3 bullets and nothing else: - Resumed flow acknowledged. - Final result stored. - Runtime delay observed.",
     intervene: true,
     expectResultSync: true,
   });
@@ -795,6 +1110,18 @@ executionIntegrationTest(
         headers: authHeaders,
       });
       agentRunId = execution.agentRunId;
+
+      const { hasInteractionWindow } = await ensureInteractionWindow({
+        token,
+        taskId: task.id,
+        agentRunId,
+        execution,
+        actionLabel: "终止",
+      });
+
+      if (!hasInteractionWindow) {
+        return;
+      }
 
       await waitForEvent(
         events,

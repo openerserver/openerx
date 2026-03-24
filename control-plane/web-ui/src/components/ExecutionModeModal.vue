@@ -221,7 +221,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import type { ExecutionMode, ChainStepInput, JudgeConfig } from "../lib/api";
+import type { ChainStepInput, ExecutionMode, JudgeConfig } from "../lib/api";
 import { DEFAULT_JUDGE_CONFIG } from "../lib/taskExecutionMode";
 
 const props = defineProps<{
@@ -274,9 +274,7 @@ watch(
   },
 );
 
-function buildCandidateDefaults(
-  initialCandidates?: Array<{ model: string; label?: string }>,
-) {
+function buildCandidateDefaults(initialCandidates?: Array<{ model: string; label?: string }>) {
   if (Array.isArray(initialCandidates) && initialCandidates.length > 0) {
     return initialCandidates.slice(0, 5).map((candidate, index) => ({
       model: candidate.model,

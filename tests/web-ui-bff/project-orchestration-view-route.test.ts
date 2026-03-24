@@ -12,7 +12,10 @@ mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () =>
   createInternalAuthorization: createInternalAuthorizationMock,
 }));
 
-const projectOrchestrationResponseMap: Record<string, { ok: boolean; status: number; data: unknown }> = {
+const projectOrchestrationResponseMap: Record<
+  string,
+  { ok: boolean; status: number; data: unknown }
+> = {
   "/api/projects/proj-default": {
     ok: true,
     status: 200,

@@ -1,7 +1,7 @@
 import type {
-  ExecutionPlan,
   LifecycleHook,
   OrchestrationStrategy,
+  RuntimePlan,
   WorkflowTemplate,
 } from "./orchestration-strategy";
 
@@ -125,15 +125,15 @@ export function strategyToSequenceDiagram(
   const preHooks = strategy.hooks
     .filter((hook) => hook.enabled && hook.trigger === "pre-execution")
     .sort((left, right) => left.order - right.order);
-    appendHookParticipants(
-      sequenceLines,
-      seenParticipants,
-      preHooks,
-      "hook",
-      "预执行Hook",
-      "执行预检查",
-      "返回决策",
-    );
+  appendHookParticipants(
+    sequenceLines,
+    seenParticipants,
+    preHooks,
+    "hook",
+    "预执行Hook",
+    "执行预检查",
+    "返回决策",
+  );
 
   const configuredAgents = template?.agents?.length
     ? template.agents
@@ -175,8 +175,8 @@ export function buildStrategyMermaidMap(strategy: OrchestrationStrategy): Record
   }, {});
 }
 
-export function executionPlanToSequenceDiagram(
-  plan: ExecutionPlan,
+export function runtimePlanToSequenceDiagram(
+  plan: RuntimePlan,
   hooks: LifecycleHook[] = [],
 ): string {
   const lines = ["sequenceDiagram", "participant Engine as 编排引擎"];

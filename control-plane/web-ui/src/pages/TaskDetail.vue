@@ -448,8 +448,8 @@
                   show-icon
                   :message="taskExecutionTrace.timelineMeta.cacheState === 'partial' ? '时间线缓存部分命中' : '时间线缓存暂不可用'"
                   :description="taskExecutionTrace.timelineMeta.cacheState === 'partial'
-                    ? '当前时间线直接来自 service tree events，但只覆盖了部分 lineage。'
-                    : '当前时间线数据面还没有可展示的 tree events 缓存。'"
+                    ? '当前时间线来自历史兼容缓存，但只覆盖了部分 lineage。'
+                    : '当前时间线数据面还没有可展示的历史兼容缓存。'"
                   style="margin-bottom: 12px"
                 />
 
@@ -483,16 +483,16 @@
                       </a-space>
                     </div>
 
-                    <div v-if="executionPlanSteps.length > 0 || executionPlanJudgeSummary" class="task-trace-execution-plan">
-                      <div v-if="executionPlanSteps.length > 0" class="task-trace-execution-plan__section">
+                    <div v-if="runtimePlanSteps.length > 0 || runtimeJudgeSummary" class="task-trace-runtime-plan">
+                      <div v-if="runtimePlanSteps.length > 0" class="task-trace-runtime-plan__section">
                         <a-flex justify="space-between" align="center">
                           <a-typography-text strong>执行步骤</a-typography-text>
                           <a-tag v-if="chainStepProgressLabel" color="processing">{{ chainStepProgressLabel }}</a-tag>
                         </a-flex>
                         <div
-                          v-for="(step, index) in executionPlanSteps"
+                          v-for="(step, index) in runtimePlanSteps"
                           :key="step.id"
-                          class="task-trace-execution-plan__card"
+                          class="task-trace-runtime-plan__card"
                         >
                           <a-space size="small" wrap>
                             <a-tag color="default">步骤 {{ index + 1 }}</a-tag>
@@ -502,25 +502,25 @@
                             <a-tag color="purple">{{ executionStepTitle(step, index) }}</a-tag>
                             <a-tag v-if="step.model" color="cyan">{{ step.model }}</a-tag>
                           </a-space>
-                          <div v-if="step.dependsOn?.length" class="task-trace-execution-plan__meta">
+                          <div v-if="step.dependsOn?.length" class="task-trace-runtime-plan__meta">
                             依赖：{{ step.dependsOn.join(" -> ") }}
                           </div>
-                          <pre v-if="step.instruction" class="task-trace-execution-plan__pre">{{ step.instruction }}</pre>
-                          <pre v-if="step.result" class="task-trace-execution-plan__pre">{{ step.result }}</pre>
+                          <pre v-if="step.instruction" class="task-trace-runtime-plan__pre">{{ step.instruction }}</pre>
+                          <pre v-if="step.result" class="task-trace-runtime-plan__pre">{{ step.result }}</pre>
                         </div>
                       </div>
 
                       <a-alert
-                        v-if="executionPlanJudgeSummary"
+                        v-if="runtimeJudgeSummary"
                         type="info"
                         show-icon
-                        :message="executionPlanJudgeSummary"
-                        :description="executionPlanJudgeReasoning"
+                        :message="runtimeJudgeSummary"
+                        :description="runtimeJudgeReasoning"
                         style="margin-top: 10px"
                       />
                     </div>
 
-                    <a-space v-if="executionPlanCandidates.length > 0" size="small" wrap style="margin-bottom: 12px">
+                    <a-space v-if="runtimePlanCandidates.length > 0" size="small" wrap style="margin-bottom: 12px">
                       <a-tag color="blue">并行候选结果</a-tag>
                     </a-space>
 
@@ -593,7 +593,7 @@
                     <div class="task-trace-panel__header">
                       <div>
                         <strong>事件时间线</strong>
-                        <div class="task-trace-panel__sub">直接展示 service tree events 聚合出的 timeline 项，并可展开查看原始快照</div>
+                        <div class="task-trace-panel__sub">展示 service 聚合出的 timeline 项；若主投影未命中，则仅回退到历史兼容缓存</div>
                       </div>
                       <a-flex align="center" style="margin-top: 6px; gap: 8px; flex-wrap: wrap">
                         <a-radio-group :value="traceMessageRoleFilter" size="small" button-style="solid" @update:value="traceMessageRoleFilter = $event">
@@ -852,14 +852,14 @@
             </span>
           </div>
         </div>
-        <template v-if="executionPlanSteps.length > 0">
-          <div v-if="executionPlanSteps.length > 0" :style="taskDetailThemeStyles.toolSummaryList">
+        <template v-if="runtimePlanSteps.length > 0">
+          <div v-if="runtimePlanSteps.length > 0" :style="taskDetailThemeStyles.toolSummaryList">
             <a-flex justify="space-between" align="center">
               <a-typography-text strong>执行步骤</a-typography-text>
               <a-tag v-if="chainStepProgressLabel" color="processing">{{ chainStepProgressLabel }}</a-tag>
             </a-flex>
             <div
-              v-for="(step, index) in executionPlanSteps"
+              v-for="(step, index) in runtimePlanSteps"
               :key="step.id"
               :style="taskDetailThemeStyles.toolCallCard"
             >
@@ -995,32 +995,30 @@ import { message } from "ant-design-vue";
 import { computed, defineAsyncComponent, nextTick, onUnmounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
-  toApiError,
   type ChainStepInput,
-  type ExecutionTraceTimelineItem,
-  type ExecutionTraceSegment,
   type ExecutionCandidate,
   type ExecutionMode,
-  type ExecutionPlan as TaskExecutionPlan,
   type ExecutionStep,
-  type GuardDecision,
+  type ExecutionTraceSegment,
+  type ExecutionTraceTimelineItem,
   type GovernanceSummary,
+  type GuardDecision,
   type ModelExecutionPolicy,
-  type PipelineSummary,
   type PaidExecutionEstimate,
   type PaidExecutionRequirements,
+  type PipelineSummary,
   type ProjectRoleExecutionView,
   type ProjectRuntimeUsageLedgerListResponse,
   type RuntimePipeline,
   type RuntimePipelineStage,
+  type Task,
   type TaskBranchLineageNode,
   type TaskBranchRecord,
-  type Task,
   type TaskExecutionTrace,
   type TaskWorkflowViewModel,
   activateTaskBranch,
-  advanceWorkflowStage,
   adoptParallelCandidate,
+  advanceWorkflowStage,
   archiveTaskBranch,
   completeTask,
   continueTask,
@@ -1028,15 +1026,16 @@ import {
   getModelsList,
   getProjectRoleExecutionView,
   getProjectRuntimeUsageLedgers,
+  getTask,
+  getTaskBranchLineage,
+  getTaskBranches,
   getTaskConversationMessages,
   getTaskExecutionTraceView,
-  getTaskBranchLineage,
-  getTask,
   getTaskGovernance,
   getTaskPipeline,
-  getTaskBranches,
   getTaskWorkflowView,
   terminateAgent,
+  toApiError,
   updateDeveloperChangeRequest,
   updateTask,
 } from "../lib/api";
@@ -1093,10 +1092,7 @@ type ExecutionFeedbackNotice = {
   actionKeys?: ExecutionFeedbackActionKey[];
 };
 
-type ExecutionFeedbackActionKey =
-  | "model-settings"
-  | "project-lease"
-  | "project-execution-gate";
+type ExecutionFeedbackActionKey = "model-settings" | "project-lease" | "project-execution-gate";
 
 type ExecutionFeedbackAction = {
   key: ExecutionFeedbackActionKey;
@@ -1121,8 +1117,8 @@ const taskExecutionTraceLoading = ref(false);
 const taskExecutionTraceError = ref<string | null>(null);
 const traceSegmentExpanded = ref<Record<string, boolean>>({});
 const traceMessageRawExpanded = ref<Record<string, boolean>>({});
-const traceSegmentFilter = ref<'all' | 'user-input' | 'hook' | 'model-response'>('all');
-const traceMessageRoleFilter = ref<'all' | 'user' | 'assistant' | 'tool'>('all');
+const traceSegmentFilter = ref<"all" | "user-input" | "hook" | "model-response">("all");
+const traceMessageRoleFilter = ref<"all" | "user" | "assistant" | "tool">("all");
 
 const hasCodeContext = computed(() => Boolean(task.value?.repoId));
 
@@ -1155,7 +1151,9 @@ const hasOrchestrationData = computed(() =>
     task.value?.category ||
       strategy.value ||
       task.value?.selectedModel ||
-      executionPlan.value ||
+      runtimePlanCandidates.value.length > 0 ||
+      runtimePlanSteps.value.length > 0 ||
+      runtimeJudgeSummary.value ||
       (task.value?.executionMode && task.value.executionMode !== "single"),
   ),
 );
@@ -1192,7 +1190,19 @@ const showRoleWorkflowPanel = computed(
 );
 const showEventsPanel = computed(() => !isWorkbenchEmbedded.value || hasTaskEventsData.value);
 const useCompactInspector = computed(() => isWorkbenchEmbedded.value);
-const orchestrationSummaryItems = computed(() => {
+function resolveExecutionModeSummary(mode: string | undefined) {
+  if (!mode) {
+    return null;
+  }
+
+  return {
+    label: "模式",
+    value: mode === "parallel" ? "并行竞争" : mode === "sequential-chain" ? "顺序编排" : "单一执行",
+    tone: mode === "parallel" ? "volcano" : mode === "sequential-chain" ? "purple" : "blue",
+  } as const;
+}
+
+function buildOrchestrationSummaryItems() {
   const items: Array<{ label: string; value: string; tone?: string }> = [];
 
   const model = task.value?.selectedModel;
@@ -1215,28 +1225,20 @@ const orchestrationSummaryItems = computed(() => {
   }
 
   const mode = resolvedExecutionMode.value;
-  if (mode) {
-    items.push({
-      label: "模式",
-      value:
-        mode === "parallel"
-          ? "并行竞争"
-          : mode === "sequential-chain"
-            ? "顺序编排"
-            : "单一执行",
-      tone: mode === "parallel" ? "volcano" : mode === "sequential-chain" ? "purple" : "blue",
-    });
+  const modeItem = resolveExecutionModeSummary(mode);
+  if (modeItem) {
+    items.push(modeItem);
   }
 
   return items.slice(0, 4);
+}
+
+const orchestrationSummaryItems = computed(() => {
+  return buildOrchestrationSummaryItems();
 });
 
 const embeddedSidebarPanelCount = computed(
-  () =>
-    [
-      showChangesPanel.value,
-      showHooksPanel.value,
-    ].filter(Boolean).length,
+  () => [showChangesPanel.value, showHooksPanel.value].filter(Boolean).length,
 );
 
 const showSidebar = computed(() => embeddedSidebarPanelCount.value > 0);
@@ -1275,9 +1277,13 @@ const currentControllableAgentRunId = computed(() => {
     return null;
   }
 
-  return agentRuns.value.find((run) => run.status === "running" || run.status === "paused")?.id ?? null;
+  return (
+    agentRuns.value.find((run) => run.status === "running" || run.status === "paused")?.id ?? null
+  );
 });
-const isCompactMainEmpty = computed(() => isWorkbenchEmbedded.value && !selectedBranchSessionId.value);
+const isCompactMainEmpty = computed(
+  () => isWorkbenchEmbedded.value && !selectedBranchSessionId.value,
+);
 const messagesPaneStyle = computed(() => {
   if (isCompactMainEmpty.value) {
     return taskDetailThemeStyles.compactMessagesPane;
@@ -1466,8 +1472,11 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-const suppressAssistantWaitingForSelectedBranch = computed(
-  () => Boolean(selectedBranchSessionId.value && terminatedAwaitingSessionId.value === selectedBranchSessionId.value),
+const suppressAssistantWaitingForSelectedBranch = computed(() =>
+  Boolean(
+    selectedBranchSessionId.value &&
+      terminatedAwaitingSessionId.value === selectedBranchSessionId.value,
+  ),
 );
 
 async function loadModels() {
@@ -1584,10 +1593,18 @@ function handleRoleWorkflowRequestStatusChange(payload: {
 
 function filterModelOption(input: string, option?: unknown) {
   const keyword = input.toLowerCase();
-  const normalized = option as { value?: string | number | null; label?: string | number | null } | undefined;
+  const normalized = option as
+    | { value?: string | number | null; label?: string | number | null }
+    | undefined;
   return (
-    (String(normalized?.value ?? "").toLowerCase().includes(keyword) ?? false) ||
-    (String(normalized?.label ?? "").toLowerCase().includes(keyword) ?? false)
+    (String(normalized?.value ?? "")
+      .toLowerCase()
+      .includes(keyword) ??
+      false) ||
+    (String(normalized?.label ?? "")
+      .toLowerCase()
+      .includes(keyword) ??
+      false)
   );
 }
 
@@ -1897,60 +1914,12 @@ async function refreshTaskData(
   const jobs: Promise<unknown>[] = [];
   let refreshedTaskProjectId: string | null = null;
 
-  if (options.task !== false) {
-    jobs.push(
-      getTask(id)
-        .then((t) => {
-          task.value = t;
-          refreshedTaskProjectId = t.projectId || null;
-          if (executionFeedbackNotice.value?.message === MISSING_TASK_NOTICE_MESSAGE) {
-            executionFeedbackNotice.value = null;
-          }
-        })
-        .catch((error) => {
-          if (toApiError(error)?.status === 404) {
-            handleMissingTask(id);
-          }
-        }),
-    );
-  }
-
-  if (options.pipeline) {
-    jobs.push(refreshPipelineData(id).catch(() => {}));
-  }
-
-  if (options.sessions) {
-    jobs.push(
-      getTaskBranches(id)
-        .then((r) => {
-          branches.value = r.data;
-          ensureSelectedBranch();
-        })
-        .catch(() => {}),
-    );
-    jobs.push(
-      getTaskBranchLineage(id)
-        .then((r) => {
-          branchLineage.value = r.data;
-          ensureSelectedBranchFromTree();
-        })
-        .catch(() => {}),
-    );
-  }
-
-  if (options.governance) {
-    governanceLoading.value = true;
-    jobs.push(
-      getTaskGovernance(id)
-        .then((r) => {
-          governance.value = r;
-        })
-        .catch(() => {})
-        .finally(() => {
-          governanceLoading.value = false;
-        }),
-    );
-  }
+  enqueuePrimaryTaskRefresh(jobs, id, options, (projectId) => {
+    refreshedTaskProjectId = projectId;
+  });
+  enqueuePipelineRefresh(jobs, id, options);
+  enqueueSessionRefreshes(jobs, id, options);
+  enqueueGovernanceRefresh(jobs, id, options);
 
   if (options.workflow) {
     jobs.push(refreshWorkflowView(id));
@@ -1979,17 +1948,115 @@ async function refreshTaskData(
   }
 
   if (options.trace !== false) {
-    await refreshTaskExecutionTrace(id, selectedBranchSessionId.value || task.value?.sessionId || undefined);
+    await refreshTaskExecutionTrace(
+      id,
+      selectedBranchSessionId.value || task.value?.sessionId || undefined,
+    );
   }
 
-  if (resolvedExecutionMode.value === "parallel") {
-    await refreshParallelCandidateMessages(id, true);
-  } else {
-    parallelCandidateMessages.value = {};
+  await refreshParallelCandidateMessagesForTask(id);
+}
+
+function enqueuePrimaryTaskRefresh(
+  jobs: Promise<unknown>[],
+  id: string,
+  options: { task?: boolean },
+  setProjectId: (projectId: string | null) => void,
+) {
+  if (options.task === false) {
+    return;
+  }
+
+  jobs.push(
+    getTask(id)
+      .then((t) => {
+        task.value = t;
+        setProjectId(t.projectId || null);
+        if (executionFeedbackNotice.value?.message === MISSING_TASK_NOTICE_MESSAGE) {
+          executionFeedbackNotice.value = null;
+        }
+      })
+      .catch((error) => {
+        if (toApiError(error)?.status === 404) {
+          handleMissingTask(id);
+        }
+      }),
+  );
+}
+
+function enqueuePipelineRefresh(
+  jobs: Promise<unknown>[],
+  id: string,
+  options: { pipeline?: boolean },
+) {
+  if (options.pipeline) {
+    jobs.push(refreshPipelineData(id).catch(() => {}));
   }
 }
 
-async function refreshTaskExecutionTrace(currentTaskId: string, sessionId?: string, silent = false) {
+function enqueueSessionRefreshes(
+  jobs: Promise<unknown>[],
+  id: string,
+  options: { sessions?: boolean },
+) {
+  if (!options.sessions) {
+    return;
+  }
+
+  jobs.push(
+    getTaskBranches(id)
+      .then((r) => {
+        branches.value = r.data;
+        ensureSelectedBranch();
+      })
+      .catch(() => {}),
+  );
+  jobs.push(
+    getTaskBranchLineage(id)
+      .then((r) => {
+        branchLineage.value = r.data;
+        ensureSelectedBranchFromTree();
+      })
+      .catch(() => {}),
+  );
+}
+
+function enqueueGovernanceRefresh(
+  jobs: Promise<unknown>[],
+  id: string,
+  options: { governance?: boolean },
+) {
+  if (!options.governance) {
+    return;
+  }
+
+  governanceLoading.value = true;
+  jobs.push(
+    getTaskGovernance(id)
+      .then((r) => {
+        governance.value = r;
+      })
+      .catch(() => {})
+      .finally(() => {
+        governanceLoading.value = false;
+      }),
+  );
+}
+
+async function refreshParallelCandidateMessagesForTask(id: string) {
+  if (resolvedExecutionMode.value === "parallel") {
+    await refreshParallelCandidateMessages(id, true);
+    return;
+  }
+
+  parallelCandidateMessages.value = {};
+}
+
+async function refreshTaskExecutionTrace(
+  currentTaskId: string,
+  sessionId?: string,
+  silent = false,
+) {
   if (!silent) {
     taskExecutionTraceLoading.value = true;
   }
@@ -2295,7 +2362,11 @@ async function handleActivateBranch(sessionId: string) {
   }
 }
 
-async function refreshConversationMessages(currentTaskId: string, sessionId: string, silent = false) {
+async function refreshConversationMessages(
+  currentTaskId: string,
+  sessionId: string,
+  silent = false,
+) {
   if (!silent) {
     messagesLoading.value = true;
   }
@@ -2315,7 +2386,7 @@ async function refreshConversationMessages(currentTaskId: string, sessionId: str
 }
 
 async function refreshParallelCandidateMessages(currentTaskId: string, silent = false) {
-  const candidateSessionIds = executionPlanCandidates.value
+  const candidateSessionIds = runtimePlanCandidates.value
     .map((candidate) => candidate.sessionId)
     .filter((sessionId): sessionId is string => Boolean(sessionId));
 
@@ -2327,10 +2398,15 @@ async function refreshParallelCandidateMessages(currentTaskId: string, silent = 
   const entries = await Promise.all(
     candidateSessionIds.map(async (sessionId) => {
       try {
-        const response = await getTaskConversationMessages(currentTaskId, sessionId, { includeLineage: false });
+        const response = await getTaskConversationMessages(currentTaskId, sessionId, {
+          includeLineage: false,
+        });
         return [sessionId, Array.isArray(response.data) ? response.data : []] as const;
       } catch {
-        return [sessionId, silent ? parallelCandidateMessages.value[sessionId] ?? [] : []] as const;
+        return [
+          sessionId,
+          silent ? (parallelCandidateMessages.value[sessionId] ?? []) : [],
+        ] as const;
       }
     }),
   );
@@ -2349,7 +2425,11 @@ function scheduleConversationRefresh() {
 
   messageRefreshTimer = setTimeout(() => {
     messageRefreshTimer = null;
-    void refreshConversationMessages(taskId.value as string, selectedBranchSessionId.value as string, true);
+    void refreshConversationMessages(
+      taskId.value as string,
+      selectedBranchSessionId.value as string,
+      true,
+    );
   }, 250);
 }
 
@@ -2456,7 +2536,11 @@ function scheduleTaskRefresh(reason: string) {
         selectedBranchSessionId.value &&
         ["message.updated", "session.updated", "task.continued", "task.completed"].includes(reason)
       ) {
-        await refreshConversationMessages(taskId.value as string, selectedBranchSessionId.value, true);
+        await refreshConversationMessages(
+          taskId.value as string,
+          selectedBranchSessionId.value,
+          true,
+        );
       }
 
       if (
@@ -2623,8 +2707,14 @@ watch(selectedBranchSessionId, (sessionId) => {
   }
 
   void refreshConversationMessages(taskId.value, sessionId);
-  void refreshPipelineData(taskId.value, sessionId);
-  void refreshTaskExecutionTrace(taskId.value, sessionId);
+
+  if (runtimePipeline.value?.sessionId !== sessionId) {
+    void refreshPipelineData(taskId.value, sessionId);
+  }
+
+  if (taskExecutionTrace.value?.sessionId !== sessionId) {
+    void refreshTaskExecutionTrace(taskId.value, sessionId);
+  }
 });
 
 watch([streamingAssistantDraft, pendingAssistantMessage], ([streamingDraft, pendingMessage]) => {
@@ -2638,15 +2728,22 @@ watch([streamingAssistantDraft, pendingAssistantMessage], ([streamingDraft, pend
 });
 
 watch(
-  [selectedBranchSessionId, () => getLatestInteractiveMessageInfo(conversationMessages.value)?.role ?? null],
+  [
+    selectedBranchSessionId,
+    () => getLatestInteractiveMessageInfo(conversationMessages.value)?.role ?? null,
+  ],
   ([sessionId, latestRole]) => {
-  if (!terminatedAwaitingSessionId.value) {
-    return;
-  }
+    if (!terminatedAwaitingSessionId.value) {
+      return;
+    }
 
-  if (!sessionId || terminatedAwaitingSessionId.value !== sessionId || latestRole === "assistant") {
-    terminatedAwaitingSessionId.value = null;
-  }
+    if (
+      !sessionId ||
+      terminatedAwaitingSessionId.value !== sessionId ||
+      latestRole === "assistant"
+    ) {
+      terminatedAwaitingSessionId.value = null;
+    }
   },
 );
 
@@ -2718,38 +2815,31 @@ onUnmounted(() => {
 });
 
 async function handleContinue() {
-  if (!taskId.value || !continuePrompt.value.trim()) return;
+  const request = resolveContinueRequest();
+  if (!request) return;
+
   continuing.value = true;
   executionFeedbackNotice.value = null;
-  const sessionId = selectedBranchSessionId.value || task.value?.sessionId;
-  const prompt = continuePrompt.value.trim();
-  const sentAt = new Date().toISOString();
   terminatedAwaitingSessionId.value = null;
-  pendingAssistantState.value = sessionId
-    ? {
-        sessionId,
-        prompt,
-        sentAt,
-      }
-    : null;
+  updatePendingContinueState(request.sessionId, request.prompt, request.sentAt);
   try {
     const result = await continueTask(
-      taskId.value,
-      prompt,
-      sessionId,
+      request.taskId,
+      request.prompt,
+      request.sessionId,
       editableExecutionMode.value,
     );
     if (result.sessionId) {
       selectedBranchSessionId.value = result.sessionId;
       pendingAssistantState.value = {
         sessionId: result.sessionId,
-        prompt,
-        sentAt,
+        prompt: request.prompt,
+        sentAt: request.sentAt,
       };
     }
     message.success("续跑指令已发送");
     continuePrompt.value = "";
-    const t = await getTask(taskId.value);
+    const t = await getTask(request.taskId);
     task.value = t;
     scheduleConversationRefresh();
   } catch (e) {
@@ -2777,6 +2867,35 @@ async function handleContinue() {
   } finally {
     continuing.value = false;
   }
+}
+
+function resolveContinueRequest() {
+  const taskIdValue = taskId.value;
+  const prompt = continuePrompt.value.trim();
+  if (!taskIdValue || !prompt) {
+    return null;
+  }
+
+  return {
+    taskId: taskIdValue,
+    prompt,
+    sessionId: selectedBranchSessionId.value || task.value?.sessionId,
+    sentAt: new Date().toISOString(),
+  };
+}
+
+function updatePendingContinueState(
+  sessionId: string | undefined | null,
+  prompt: string,
+  sentAt: string,
+) {
+  pendingAssistantState.value = sessionId
+    ? {
+        sessionId,
+        prompt,
+        sentAt,
+      }
+    : null;
 }
 
 function handleComposerKeydown(event: KeyboardEvent) {
@@ -2936,7 +3055,7 @@ function handleCopyMessage(text?: string) {
 }
 
 function handleCopyAllMessagesJson() {
-  const json = stringifyTraceRaw(filteredTraceMessages.value.map(m => m.raw ?? m));
+  const json = stringifyTraceRaw(filteredTraceMessages.value.map((m) => m.raw ?? m));
   navigator.clipboard.writeText(json).then(
     () => message.success(`已复制 ${filteredTraceMessages.value.length} 条时间线 JSON`),
     () => message.error("复制失败"),
@@ -3065,11 +3184,8 @@ const selectedBranch = computed(() =>
 );
 
 const isParallelComparisonMode = computed(() => {
-  if (task.value?.executionMode === "parallel") {
-    return true;
-  }
-
-  return typeof task.value?.executionPlan === "string" && task.value.executionPlan.includes('"mode":"parallel"');
+  const explicitMode = task.value?.orchestrationKind || task.value?.executionMode;
+  return explicitMode === "parallel" || (task.value?.currentRunCandidateCount ?? 0) > 1;
 });
 
 const visibleSessions = computed(() => {
@@ -3111,7 +3227,9 @@ const runtimeSessionStateMap = computed<Record<string, RuntimeBurstSessionState>
 });
 
 const selectedBranchBurstState = computed(() =>
-  selectedBranchSessionId.value ? runtimeSessionStateMap.value[selectedBranchSessionId.value] : undefined,
+  selectedBranchSessionId.value
+    ? runtimeSessionStateMap.value[selectedBranchSessionId.value]
+    : undefined,
 );
 
 const selectedBranchBurstBanner = computed(() => {
@@ -3216,7 +3334,10 @@ const assistantWaitElapsedMs = computed(() => {
 });
 
 const assistantWaitNotice = computed<ExecutionFeedbackNotice | null>(() => {
-  if (!isAwaitingAssistantResponse.value || assistantWaitElapsedMs.value < ASSISTANT_WAIT_NOTICE_MS) {
+  if (
+    !isAwaitingAssistantResponse.value ||
+    assistantWaitElapsedMs.value < ASSISTANT_WAIT_NOTICE_MS
+  ) {
     return null;
   }
 
@@ -3268,9 +3389,7 @@ const isAwaitingAssistantResponse = computed(() => {
 });
 
 const canContinueCurrentSession = computed(
-  () =>
-    Boolean(taskId.value && continuePrompt.value.trim()) &&
-    !isAwaitingAssistantResponse.value,
+  () => Boolean(taskId.value && continuePrompt.value.trim()) && !isAwaitingAssistantResponse.value,
 );
 
 function stopLiveMessageRefresh() {
@@ -4127,7 +4246,8 @@ function buildToolCallView(part: SessionPart, index: number): ToolCallView | nul
       summarizeUnknownValue(input.description) ?? summarizeUnknownValue(input.explanation),
     goal: summarizeUnknownValue(input.goal),
     command: toolKind === "bash" ? summarizeUnknownValue(input.command) : undefined,
-    filePath: normalizeWorkspaceFilePath(summarizeUnknownValue(input.filePath)) ?? readDetails.filePath,
+    filePath:
+      normalizeWorkspaceFilePath(summarizeUnknownValue(input.filePath)) ?? readDetails.filePath,
     readPreview: readDetails.readPreview,
     inputPreview: buildToolInputPreview(input),
     fullOutput,
@@ -4153,7 +4273,9 @@ const sessionMessageItems = computed<SessionMessageView[]>(() => {
   }
 
   if (pendingAssistantMessage.value) {
-    return [...persistedItems, pendingAssistantMessage.value].filter((item) => item.role !== "system");
+    return [...persistedItems, pendingAssistantMessage.value].filter(
+      (item) => item.role !== "system",
+    );
   }
 
   return persistedItems.filter((item) => item.role !== "system");
@@ -4191,9 +4313,11 @@ function latestAssistantReplyText(messages: unknown[], sessionId: string): strin
   }
 
   const liveState = collectLiveAssistantState(taskEvents.value, sessionId);
-  const latestLiveId = liveState.orderedAssistantMessageIds[liveState.orderedAssistantMessageIds.length - 1];
+  const latestLiveId =
+    liveState.orderedAssistantMessageIds[liveState.orderedAssistantMessageIds.length - 1];
   const liveText = latestLiveId ? liveState.textById.get(latestLiveId) : undefined;
-  const merged = liveText && liveText.length > (persistedText?.length ?? 0) ? liveText : persistedText;
+  const merged =
+    liveText && liveText.length > (persistedText?.length ?? 0) ? liveText : persistedText;
   return merged ? stripStageCompleteMarker(merged) : undefined;
 }
 
@@ -4210,18 +4334,21 @@ function renderParallelComparisonHtml(key: string, text: string): string {
 }
 
 const parallelComparisonCards = computed<ParallelComparisonCard[]>(() => {
-  if (!isParallelComparisonMode.value || executionPlanCandidates.value.length < 2) {
+  if (!isParallelComparisonMode.value || runtimePlanCandidates.value.length < 2) {
     return [];
   }
 
-  return executionPlanCandidates.value.map((candidate, index) => {
+  return runtimePlanCandidates.value.map((candidate, index) => {
     const sessionId = candidate.sessionId;
-    const messages = sessionId ? parallelCandidateMessages.value[sessionId] ?? [] : [];
+    const messages = sessionId ? (parallelCandidateMessages.value[sessionId] ?? []) : [];
     const reply = sessionId ? latestAssistantReplyText(messages, sessionId) : undefined;
-    const replyHtml = reply ? renderParallelComparisonHtml(`${sessionId || index}`, reply) : undefined;
-    const metaParts = [candidate.agent, sessionId ? `Session ${sessionId.slice(0, 8)}` : undefined].filter(
-      (value): value is string => Boolean(value),
-    );
+    const replyHtml = reply
+      ? renderParallelComparisonHtml(`${sessionId || index}`, reply)
+      : undefined;
+    const metaParts = [
+      candidate.agent,
+      sessionId ? `Session ${sessionId.slice(0, 8)}` : undefined,
+    ].filter((value): value is string => Boolean(value));
 
     return {
       key: sessionId || `candidate-${index}`,
@@ -4278,7 +4405,11 @@ function collapseRepeatedStreamingTail(text: string): string {
     Math.floor(normalized.length / STREAMING_REPEAT_MIN_COUNT),
   );
 
-  for (let patternLength = maxPatternLength; patternLength >= STREAMING_REPEAT_MIN_PATTERN_LENGTH; patternLength -= 1) {
+  for (
+    let patternLength = maxPatternLength;
+    patternLength >= STREAMING_REPEAT_MIN_PATTERN_LENGTH;
+    patternLength -= 1
+  ) {
     const pattern = normalized.slice(-patternLength);
     if (!pattern.trim()) {
       continue;
@@ -4286,7 +4417,10 @@ function collapseRepeatedStreamingTail(text: string): string {
 
     let repeatCount = 0;
     let cursor = normalized.length;
-    while (cursor >= patternLength && normalized.slice(cursor - patternLength, cursor) === pattern) {
+    while (
+      cursor >= patternLength &&
+      normalized.slice(cursor - patternLength, cursor) === pattern
+    ) {
       repeatCount += 1;
       cursor -= patternLength;
     }
@@ -4706,17 +4840,19 @@ const taskExecutionTraceMessages = computed<ExecutionTraceTimelineItem[]>(
 
 const filteredTraceSegments = computed(() => {
   const segments = taskExecutionTraceSegments.value;
-  if (traceSegmentFilter.value === 'all') return segments;
-  if (traceSegmentFilter.value === 'hook') {
-    return segments.filter(s => ['hook-injection', 'hook-result', 'hook-rewrite'].includes(s.type));
+  if (traceSegmentFilter.value === "all") return segments;
+  if (traceSegmentFilter.value === "hook") {
+    return segments.filter((s) =>
+      ["hook-injection", "hook-result", "hook-rewrite"].includes(s.type),
+    );
   }
-  return segments.filter(s => s.type === traceSegmentFilter.value);
+  return segments.filter((s) => s.type === traceSegmentFilter.value);
 });
 
 const filteredTraceMessages = computed(() => {
   const msgs = taskExecutionTraceMessages.value;
-  if (traceMessageRoleFilter.value === 'all') return msgs;
-  return msgs.filter(m => m.role === traceMessageRoleFilter.value);
+  if (traceMessageRoleFilter.value === "all") return msgs;
+  return msgs.filter((m) => m.role === traceMessageRoleFilter.value);
 });
 
 const taskExecutionTraceSummaryItems = computed(() => {
@@ -4740,7 +4876,10 @@ const taskExecutionTraceSummaryItems = computed(() => {
     value: String(taskExecutionTraceMessages.value.length),
     tone: "purple",
   });
-  if (taskExecutionTrace.value.timelineMeta?.cacheState && taskExecutionTrace.value.timelineMeta.cacheState !== "complete") {
+  if (
+    taskExecutionTrace.value.timelineMeta?.cacheState &&
+    taskExecutionTrace.value.timelineMeta.cacheState !== "complete"
+  ) {
     items.push({
       label: "时间线缓存",
       value: taskExecutionTrace.value.timelineMeta.cacheState === "partial" ? "部分" : "无",
@@ -4795,6 +4934,30 @@ function traceSegmentLabel(type: ExecutionTraceSegment["type"]) {
       return "最终 Prompt";
     case "model-response":
       return "模型回复";
+    case "tool-call":
+      return "工具调用";
+    case "tool-output":
+      return "工具输出";
+    case "thinking":
+      return "思考过程";
+    case "file-reference":
+      return "文件引用";
+    case "diff":
+      return "Diff";
+    case "candidate-result":
+      return "候选结果";
+    case "judge-decision":
+      return "Judge 决策";
+    case "chain-step-result":
+      return "链式步骤";
+    case "status-transition":
+      return "状态变更";
+    case "session-activate":
+      return "会话激活";
+    case "session-branch":
+      return "会话分支";
+    case "session-archive":
+      return "会话归档";
     default:
       return "数据段";
   }
@@ -4814,6 +4977,21 @@ function traceSegmentTone(type: ExecutionTraceSegment["type"]) {
       return "prompt";
     case "model-response":
       return "response";
+    case "tool-call":
+    case "tool-output":
+    case "file-reference":
+    case "diff":
+      return "prompt";
+    case "candidate-result":
+    case "judge-decision":
+    case "chain-step-result":
+      return "context";
+    case "status-transition":
+    case "session-activate":
+    case "session-branch":
+    case "session-archive":
+    case "thinking":
+      return "default";
     default:
       return "default";
   }
@@ -4841,57 +5019,188 @@ function stringifyTraceRaw(value: unknown) {
   }
 }
 
-const executionPlan = computed(() => {
-  if (!task.value?.executionPlan) return null;
-  try {
-    const parsed = JSON.parse(task.value.executionPlan) as TaskExecutionPlan;
-    const candidates = Array.isArray(parsed.candidates) ? parsed.candidates : [];
-    const steps = Array.isArray(parsed.steps) ? parsed.steps : [];
-    return {
-      ...parsed,
-      candidates: candidates.map((candidate, index) => ({
-        ...candidate,
-        label: candidate.label || `候选 ${index + 1}`,
-      })),
-      steps: steps.map((step, index) => ({
-        ...step,
-        id: step.id || `step-${index + 1}`,
-        title: step.title || undefined,
-      })),
-    };
-  } catch {
-    return null;
+function normalizePipelineExecutionStageStatus(
+  status: RuntimePipelineStage["status"],
+): ExecutionStep["status"] {
+  if (
+    status === "pending" ||
+    status === "running" ||
+    status === "completed" ||
+    status === "failed"
+  ) {
+    return status;
   }
+
+  return "pending";
+}
+
+const runtimeExecutionStages = computed(() =>
+  pipelineStages.value.filter((stage) => stage.type === "execution"),
+);
+
+const runtimeParallelCandidates = computed<ExecutionCandidate[]>(() => {
+  const explicitMode =
+    task.value?.orchestrationKind || task.value?.executionMode || strategy.value?.executionMode;
+  if (explicitMode !== "parallel" || runtimeExecutionStages.value.length < 2) {
+    return [];
+  }
+
+  return runtimeExecutionStages.value.map((stage, index) => ({
+    label: stage.label || `候选 ${index + 1}`,
+    agent: stage.agent || "default-executor",
+    ...(stage.model ? { model: stage.model } : {}),
+    ...(stage.sessionId ? { sessionId: stage.sessionId } : {}),
+    status: normalizePipelineExecutionStageStatus(stage.status) as ExecutionCandidate["status"],
+    ...(stage.output
+      ? { result: stage.output }
+      : stage.error
+        ? { result: `[FAILED] ${stage.error}` }
+        : {}),
+    ...(stage.startedAt ? { startedAt: stage.startedAt } : {}),
+    ...(stage.finishedAt ? { finishedAt: stage.finishedAt } : {}),
+  }));
 });
 
-const resolvedExecutionMode = computed<"single" | "parallel" | "sequential-chain" | undefined>(() => {
-  if (executionPlan.value?.pipelineMetadata?.requestedMode === "sequential-chain") {
-    return "sequential-chain";
+const runtimeSequentialChainSteps = computed<ExecutionStep[]>(() => {
+  const explicitMode =
+    task.value?.orchestrationKind || task.value?.executionMode || strategy.value?.executionMode;
+  if (explicitMode !== "sequential-chain" || runtimeExecutionStages.value.length === 0) {
+    return [];
   }
 
-  if (executionPlan.value?.pipelineMetadata?.requestedMode === "pipeline") {
-    return "sequential-chain";
+  const strategySteps = Array.isArray(strategy.value?.sequentialSteps)
+    ? strategy.value.sequentialSteps
+    : [];
+
+  if (strategySteps.length > 0) {
+    return strategySteps.map((step, index) =>
+      buildStrategyBackedRuntimeSequentialStep(step, index, strategySteps),
+    );
   }
 
-  if ((executionPlan.value?.steps?.length || 0) > 1 && task.value?.executionMode === "single") {
-    return "sequential-chain";
-  }
-
-  const mode = task.value?.executionMode || strategy.value?.executionMode;
-  if (mode === "pipeline") {
-    return "sequential-chain";
-  }
-  return mode === "parallel" || mode === "single" || mode === "sequential-chain"
-    ? mode
-    : undefined;
+  return runtimeExecutionStages.value.map((stage, index) =>
+    buildRuntimeSequentialStep(stage, index),
+  );
 });
+
+function buildRuntimeSequentialStepResult(
+  stage: (typeof runtimeExecutionStages.value)[number] | undefined,
+) {
+  if (stage?.output) {
+    return { result: stage.output };
+  }
+
+  return stage?.error ? { result: `[FAILED] ${stage.error}` } : {};
+}
+
+function buildRuntimeSequentialStepTiming(
+  stage: (typeof runtimeExecutionStages.value)[number] | undefined,
+) {
+  return {
+    ...(stage?.startedAt ? { startedAt: stage.startedAt } : {}),
+    ...(stage?.finishedAt ? { finishedAt: stage.finishedAt } : {}),
+  };
+}
+
+function buildRuntimeSequentialStepDependsOn(dependencyId: string | undefined, index: number) {
+  return index > 0 ? { dependsOn: [dependencyId || `step-${index}`] } : {};
+}
+
+function buildStrategyBackedRuntimeSequentialStep(
+  step: ChainStepInput,
+  index: number,
+  strategySteps: ChainStepInput[],
+) {
+  const stage = runtimeExecutionStages.value[index];
+  return {
+    id: step.id || stage?.id || `step-${index + 1}`,
+    type: "chain-step",
+    status: normalizePipelineExecutionStageStatus(stage?.status || "pending"),
+    title: step.title || stage?.label || `步骤 ${index + 1}`,
+    instruction: step.instruction || "",
+    ...(stage?.model || step.model ? { model: stage?.model || step.model } : {}),
+    ...buildRuntimeSequentialStepResult(stage),
+    ...buildRuntimeSequentialStepTiming(stage),
+    ...buildRuntimeSequentialStepDependsOn(
+      strategySteps[index - 1]?.id || runtimeExecutionStages.value[index - 1]?.id,
+      index,
+    ),
+  } satisfies ExecutionStep;
+}
+
+function buildRuntimeSequentialStep(
+  stage: (typeof runtimeExecutionStages.value)[number],
+  index: number,
+) {
+  return {
+    id: stage.id || `step-${index + 1}`,
+    type: "chain-step",
+    status: normalizePipelineExecutionStageStatus(stage.status),
+    title: stage.label || `步骤 ${index + 1}`,
+    instruction: "",
+    ...(stage.model ? { model: stage.model } : {}),
+    ...buildRuntimeSequentialStepResult(stage),
+    ...buildRuntimeSequentialStepTiming(stage),
+    ...buildRuntimeSequentialStepDependsOn(runtimeExecutionStages.value[index - 1]?.id, index),
+  } satisfies ExecutionStep;
+}
+
+const runtimeJudgeStage = computed(() =>
+  pipelineStages.value.find((stage) => stage.type === "judge"),
+);
+
+function resolveRuntimeWinnerCandidateIndex() {
+  const winnerNodeId =
+    typeof task.value?.winnerNodeId === "string" ? task.value.winnerNodeId : null;
+  if (!winnerNodeId) {
+    return -1;
+  }
+
+  return runtimeExecutionStages.value.findIndex(
+    (stage) => stage.sourceId === winnerNodeId || stage.graphNodeId === winnerNodeId,
+  );
+}
+
+const resolvedExecutionMode = computed<"single" | "parallel" | "sequential-chain" | undefined>(
+  () => {
+    const explicitMode =
+      task.value?.orchestrationKind || task.value?.executionMode || strategy.value?.executionMode;
+    if (explicitMode === "pipeline") {
+      return "sequential-chain";
+    }
+
+    if (
+      explicitMode === "parallel" ||
+      explicitMode === "sequential-chain" ||
+      explicitMode === "single"
+    ) {
+      return explicitMode;
+    }
+
+    if ((task.value?.currentRunCandidateCount ?? 0) > 1) {
+      return "parallel";
+    }
+
+    if (
+      (task.value?.totalChainSteps ?? 0) > 1 ||
+      (task.value?.currentRunPipelineStepCount ?? 0) > 1
+    ) {
+      return "sequential-chain";
+    }
+
+    return undefined;
+  },
+);
 
 const editableExecutionMode = computed<ExecutionMode>(() => {
   return resolvedExecutionMode.value ?? "single";
 });
 
 const editableParallelCandidates = computed(() => {
-  if (Array.isArray(strategy.value?.parallelCandidates) && strategy.value.parallelCandidates.length > 0) {
+  if (
+    Array.isArray(strategy.value?.parallelCandidates) &&
+    strategy.value.parallelCandidates.length > 0
+  ) {
     return strategy.value.parallelCandidates
       .filter((candidate) => typeof candidate?.model === "string" && candidate.model.trim())
       .map((candidate, index) => ({
@@ -4900,11 +5209,14 @@ const editableParallelCandidates = computed(() => {
       }));
   }
 
-  if (executionPlanCandidates.value.length > 0) {
-    return executionPlanCandidates.value
-      .filter((candidate) => typeof candidate.model === "string" && candidate.model.trim())
+  if (runtimePlanCandidates.value.length > 0) {
+    return runtimePlanCandidates.value
+      .filter(
+        (candidate): candidate is typeof candidate & { model: string } =>
+          typeof candidate.model === "string" && candidate.model.trim().length > 0,
+      )
       .map((candidate, index) => ({
-        model: candidate.model!,
+        model: candidate.model,
         label: candidate.label || `候选 ${String.fromCharCode(65 + index)}`,
       }));
   }
@@ -4917,8 +5229,8 @@ const editableSequentialSteps = computed<ChainStepInput[]>(() => {
     return strategy.value.sequentialSteps;
   }
 
-  if (executionPlanSteps.value.length > 0) {
-    return executionPlanSteps.value
+  if (runtimePlanSteps.value.length > 0) {
+    return runtimePlanSteps.value
       .filter((step) => step.type === "chain-step" && step.title && step.instruction)
       .map((step, index) => ({
         id: step.id || `step-${index + 1}`,
@@ -4931,52 +5243,38 @@ const editableSequentialSteps = computed<ChainStepInput[]>(() => {
   return [];
 });
 
-const executionPlanCandidates = computed(() => executionPlan.value?.candidates ?? []);
-const executionPlanSteps = computed(() => executionPlan.value?.steps ?? []);
-const executionPlanWinnerIndex = computed(() => {
-  if (typeof executionPlan.value?.winnerCandidateIndex === "number") {
-    return executionPlan.value.winnerCandidateIndex;
+const runtimePlanCandidates = computed(() => runtimeParallelCandidates.value);
+const runtimePlanSteps = computed(() => runtimeSequentialChainSteps.value);
+const runtimeWinnerIndex = computed(() => resolveRuntimeWinnerCandidateIndex());
+const runtimeJudgeReasoning = computed(
+  () => runtimeJudgeStage.value?.output || runtimeJudgeStage.value?.error || "",
+);
+const runtimeJudgeSummary = computed(() => {
+  const winnerIndex = runtimeWinnerIndex.value;
+  if (winnerIndex >= 0) {
+    const winnerLabel =
+      runtimePlanCandidates.value[winnerIndex]?.label || `候选 ${winnerIndex + 1}`;
+    return `Judge 已选出 ${winnerLabel}`;
   }
 
-  if (typeof executionPlan.value?.judgeResult?.winnerIndex === "number") {
-    return executionPlan.value.judgeResult.winnerIndex;
-  }
-
-  return -1;
-});
-const executionPlanJudgeReasoning = computed(() => executionPlan.value?.judgeResult?.reasoning || "");
-const executionPlanJudgeSummary = computed(() => {
-  const judgeResult = executionPlan.value?.judgeResult;
-  if (!judgeResult) {
+  if (!runtimeJudgeStage.value) {
     return "";
   }
 
-  const winnerLabel =
-    typeof judgeResult.winnerIndex === "number"
-      ? executionPlanCandidates.value[judgeResult.winnerIndex]?.label || `候选 ${judgeResult.winnerIndex + 1}`
-      : undefined;
-
-  if (winnerLabel && Array.isArray(judgeResult.scores) && judgeResult.scores.length > 0) {
-    return `Judge 已选出 ${winnerLabel}，得分 ${judgeResult.scores
-      .map((score) => Number(score).toFixed(1))
-      .join(" / ")}`;
-  }
-
-  return winnerLabel ? `Judge 已选出 ${winnerLabel}` : "Judge 已返回评估结果";
+  return runtimeJudgeStage.value.error ? "Judge 评估失败" : "Judge 已返回评估结果";
 });
 
 const adoptingCandidateIndex = ref<number | null>(null);
 
-const allCandidatesSettled = computed(() =>
-  executionPlanCandidates.value.length >= 2 &&
-  executionPlanCandidates.value.every((c) => c.status === "completed" || c.status === "failed"),
+const allCandidatesSettled = computed(
+  () =>
+    runtimePlanCandidates.value.length >= 2 &&
+    runtimePlanCandidates.value.every((c) => c.status === "completed" || c.status === "failed"),
 );
 
 function canAdoptCandidate(candidate: ExecutionCandidate, index: number) {
   return (
-    allCandidatesSettled.value &&
-    candidate.status === "completed" &&
-    executionPlanWinnerIndex.value < 0
+    allCandidatesSettled.value && candidate.status === "completed" && runtimeWinnerIndex.value < 0
   );
 }
 
@@ -5016,68 +5314,10 @@ type ExecutionOverrides = {
   steps?: ChainStepInput[];
 } | null;
 
-function buildSavedExecutionPlan(overrides: ExecutionOverrides): string {
-  if (overrides?.mode === "parallel") {
-    const candidates = (overrides.candidates ?? []).map((candidate, index) => ({
-      label: candidate.label || `候选 ${index + 1}`,
-      agent: "default-executor",
-      model: candidate.model,
-      role: "executor",
-      status: "pending",
-    }));
-
-    return JSON.stringify({
-      mode: "parallel",
-      steps: [{ id: "exec-parallel", type: "execution", status: "pending" }],
-      candidates,
-    });
-  }
-
-  if (overrides?.mode === "sequential-chain") {
-    const steps = (overrides.steps ?? []).map((step, index) => ({
-      id: step.id || `step-${index + 1}`,
-      type: "chain-step",
-      status: "pending",
-      title: step.title,
-      instruction: step.instruction,
-      ...(step.model ? { model: step.model } : {}),
-      ...(index > 0 ? { dependsOn: [overrides.steps?.[index - 1]?.id || `step-${index}`] } : {}),
-    }));
-
-    return JSON.stringify({
-      mode: "sequential-chain",
-      steps,
-      candidates: [
-        {
-          label: "主执行",
-          agent: "default-executor",
-          ...(task.value?.selectedModel ? { model: task.value.selectedModel } : {}),
-          status: "pending",
-        },
-      ],
-      currentChainStepIndex: 0,
-    });
-  }
-
-  return JSON.stringify({
-    mode: "single",
-    steps: [{ id: "exec-0", type: "execution", status: "pending" }],
-    candidates: [
-      {
-        label: "主执行",
-        agent: "default-executor",
-        ...(task.value?.selectedModel ? { model: task.value.selectedModel } : {}),
-        status: "pending",
-      },
-    ],
-  });
-}
-
 function serializeTaskStrategy(overrides: ExecutionOverrides) {
-  const current =
-    task.value?.strategy && task.value.strategy.trim()
-      ? JSON.parse(task.value.strategy) as Record<string, unknown>
-      : {};
+  const current = task.value?.strategy?.trim()
+    ? (JSON.parse(task.value.strategy) as Record<string, unknown>)
+    : {};
 
   const next: Record<string, unknown> = {
     ...current,
@@ -5086,13 +5326,13 @@ function serializeTaskStrategy(overrides: ExecutionOverrides) {
 
   if (overrides?.mode === "parallel") {
     next.parallelCandidates = overrides.candidates ?? [];
-    delete next.sequentialSteps;
+    next.sequentialSteps = undefined;
   } else if (overrides?.mode === "sequential-chain") {
     next.sequentialSteps = overrides.steps ?? [];
-    delete next.parallelCandidates;
+    next.parallelCandidates = undefined;
   } else {
-    delete next.parallelCandidates;
-    delete next.sequentialSteps;
+    next.parallelCandidates = undefined;
+    next.sequentialSteps = undefined;
   }
 
   return JSON.stringify(next);
@@ -5165,11 +5405,28 @@ async function handleAdvanceStage() {
 }
 
 const chainStepProgressLabel = computed(() => {
-  const plan = executionPlan.value;
-  if (!plan?.steps?.length || plan.mode !== "sequential-chain") return "";
-  const total = plan.steps.length;
-  const completed = plan.steps.filter((s) => s.status === "completed").length;
-  const running = plan.steps.find((s) => s.status === "running");
+  if (resolvedExecutionMode.value !== "sequential-chain") {
+    return "";
+  }
+
+  if (runtimePlanSteps.value.length === 0) {
+    const total = task.value?.totalChainSteps ?? 0;
+    const completed = task.value?.completedChainSteps ?? 0;
+    if (total <= 0) {
+      return "";
+    }
+    if (completed >= total) {
+      return `全部 ${total} 步已完成`;
+    }
+    if (task.value?.status === "running") {
+      return `步骤 ${completed + 1} / ${total} 执行中`;
+    }
+    return `${completed} / ${total} 已完成`;
+  }
+
+  const total = runtimePlanSteps.value.length;
+  const completed = runtimePlanSteps.value.filter((s) => s.status === "completed").length;
+  const running = runtimePlanSteps.value.find((s) => s.status === "running");
   if (running) return `步骤 ${completed + 1} / ${total} 执行中`;
   if (completed === total) return `全部 ${total} 步已完成`;
   return `${completed} / ${total} 已完成`;

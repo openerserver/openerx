@@ -120,7 +120,14 @@ function emitFork() {
 }
 
 function handleKeydown(event: KeyboardEvent) {
-  if (event.key !== "Enter" || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey || event.isComposing) {
+  if (
+    event.key !== "Enter" ||
+    event.shiftKey ||
+    event.ctrlKey ||
+    event.metaKey ||
+    event.altKey ||
+    event.isComposing
+  ) {
     return;
   }
   event.preventDefault();

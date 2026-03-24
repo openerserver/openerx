@@ -1,37 +1,36 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { createControlPlaneClientModuleMock } from "./control-plane-client-mock";
+import { createOpencodeAdapterModuleMock } from "./opencode-adapter-mock";
+
+function isTaskDetailGet(url: string, options?: { method?: string }) {
+  return (
+    (options?.method || "GET") === "GET" &&
+    (url === "/api/tasks/task-1" || url === "/api/project-tree/tasks/task-1")
+  );
+}
+
+function createTaskDetailRecord(overrides?: Record<string, unknown>) {
+  return {
+    id: "task-1",
+    title: "Runtime pipeline task",
+    prompt: "Summarize progress",
+    projectId: "proj-1",
+    sessionId: "ses-task-main",
+    agentRunId: "run-1",
+    result: "Done",
+    strategy: null,
+    selectedModel: "gpt-5.4",
+    startedAt: "2026-03-12T10:00:00.000Z",
+    ...overrides,
+  };
+}
 
 const cpFetchMock = mock(async (url: string, options?: { method?: string }) => {
-  if ((options?.method || "GET") === "GET" && url === "/api/tasks/task-1") {
+  if (isTaskDetailGet(url, options)) {
     return {
       ok: true,
       status: 200,
-      data: {
-        id: "task-1",
-        title: "Runtime pipeline task",
-        prompt: "Summarize progress",
-        projectId: "proj-1",
-        sessionId: "ses-task-main",
-        agentRunId: "run-1",
-        result: "Done",
-        strategy: null,
-        selectedModel: "gpt-5.4",
-        startedAt: "2026-03-12T10:00:00.000Z",
-        executionPlan: JSON.stringify({
-          templateId: "single-default",
-          mode: "single",
-          steps: [{ id: "exec-1", type: "execution", status: "running" }],
-          candidates: [
-            {
-              label: "Default executor",
-              agent: "default-executor",
-              sessionId: "ses-1",
-              agentRunId: "run-1",
-              status: "running",
-              startedAt: "2026-03-12T10:00:00.000Z",
-            },
-          ],
-        }),
-      },
+      data: createTaskDetailRecord(),
     };
   }
 
@@ -84,27 +83,31 @@ const executeLifecycleHooksMock = mock(async () => ({
 const onGraphToolExecutedMock = mock(async () => undefined);
 const buildPipelineStageUpdatedEventsMock = mock(async () => [] as Array<Record<string, unknown>>);
 
-mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () => ({
-  authHeader: () => "Bearer test",
-  cpFetch: cpFetchMock,
-  createInternalAuthorization: createInternalAuthorizationMock,
-}));
+mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () =>
+  createControlPlaneClientModuleMock({
+    authHeader: () => "Bearer test",
+    cpFetch: cpFetchMock,
+    createInternalAuthorization: createInternalAuthorizationMock,
+  }),
+);
 
-mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter", () => ({
-  continueSession: mock(async () => ({ ok: true })),
-  createSession: mock(async () => ({ ok: true, sessionId: "ses-1", agentRunId: "run-1" })),
-  ensureAgentRunForSession: mock(() => "run-1"),
-  extractAssistantResultFromMessages: extractAssistantResultFromMessagesMock,
-  findAgentRunBySessionId: findAgentRunBySessionIdMock,
-  forkSession: mock(async () => ({ ok: true, sessionId: "ses-fork-1" })),
-  getAgentRun: getAgentRunMock,
-  getSessionMessages: getSessionMessagesMock,
-  listSessions: listSessionsMock,
-  recoverAgentRun: recoverAgentRunMock,
-  runDetachedPrompt: runDetachedPromptMock,
-  terminateAgent: terminateAgentMock,
-  updateAgentRunStatus: updateAgentRunStatusMock,
-}));
+mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter", () =>
+  createOpencodeAdapterModuleMock({
+    continueSession: mock(async () => ({ ok: true })),
+    createSession: mock(async () => ({ ok: true, sessionId: "ses-1", agentRunId: "run-1" })),
+    ensureAgentRunForSession: mock(() => "run-1"),
+    extractAssistantResultFromMessages: extractAssistantResultFromMessagesMock,
+    findAgentRunBySessionId: findAgentRunBySessionIdMock,
+    forkSession: mock(async () => ({ ok: true, sessionId: "ses-fork-1" })),
+    getAgentRun: getAgentRunMock,
+    getSessionMessages: getSessionMessagesMock,
+    listSessions: listSessionsMock,
+    recoverAgentRun: recoverAgentRunMock,
+    runDetachedPrompt: runDetachedPromptMock,
+    terminateAgent: terminateAgentMock,
+    updateAgentRunStatus: updateAgentRunStatusMock,
+  }),
+);
 
 mock.module("../../control-plane/web-ui-bff/src/modules/code-changes/change-collector", () => ({
   collectChangesFromSession: collectChangesFromSessionMock,
@@ -125,8 +128,32 @@ mock.module("../../control-plane/web-ui-bff/src/modules/realtime/pipeline-events
   buildPipelineStageUpdatedEvents: buildPipelineStageUpdatedEventsMock,
 }));
 
+mock.module(
+  "../../control-plane/web-ui-bff/src/lib/orchestration-strategy",
+  async () =>
+    import(
+      "../../control-plane/web-ui-bff/src/lib/orchestration-strategy?realtime-pipeline-events-test"
+    ),
+);
+
+mock.module(
+  "../../control-plane/web-ui-bff/src/modules/agent-control/run-persistence",
+  async () =>
+    import(
+      "../../control-plane/web-ui-bff/src/modules/agent-control/run-persistence?realtime-pipeline-events-test"
+    ),
+);
+
+mock.module(
+  "../../control-plane/web-ui-bff/src/modules/tasks/finalize",
+  async () =>
+    import(
+      "../../control-plane/web-ui-bff/src/modules/tasks/finalize?realtime-pipeline-events-test"
+    ),
+);
+
 const { sseAggregator } = await import(
-  "../../control-plane/web-ui-bff/src/modules/realtime/sse-aggregator"
+  "../../control-plane/web-ui-bff/src/modules/realtime/sse-aggregator?realtime-pipeline-events-test"
 );
 
 function resetAggregatorState() {
@@ -136,6 +163,8 @@ function resetAggregatorState() {
     parallelTaskSessions: Map<string, Set<string>>;
     parallelCandidateResults: Map<string, Map<number, { sessionId: string; result?: string }>>;
     sessionToCandidateMap: Map<string, { taskId: string; candidateIndex: number }>;
+    sequentialChainTasks: Map<string, unknown>;
+    sessionToChainStepMap: Map<string, unknown>;
     judgingTasks: Set<string>;
     paidExecutionRuntime: Map<string, { tripped: boolean; reason?: string }>;
   };
@@ -145,6 +174,8 @@ function resetAggregatorState() {
   aggregator.parallelTaskSessions.clear();
   aggregator.parallelCandidateResults.clear();
   aggregator.sessionToCandidateMap.clear();
+  aggregator.sequentialChainTasks.clear();
+  aggregator.sessionToChainStepMap.clear();
   aggregator.judgingTasks.clear();
   aggregator.paidExecutionRuntime.clear();
 }
@@ -167,37 +198,11 @@ beforeEach(() => {
   buildPipelineStageUpdatedEventsMock.mockReset();
 
   cpFetchMock.mockImplementation(async (url: string, options?: { method?: string }) => {
-    if ((options?.method || "GET") === "GET" && url === "/api/tasks/task-1") {
+    if (isTaskDetailGet(url, options)) {
       return {
         ok: true,
         status: 200,
-        data: {
-          id: "task-1",
-          title: "Runtime pipeline task",
-          prompt: "Summarize progress",
-          projectId: "proj-1",
-          sessionId: "ses-task-main",
-          agentRunId: "run-1",
-          result: "Done",
-          strategy: null,
-          selectedModel: "gpt-5.4",
-          startedAt: "2026-03-12T10:00:00.000Z",
-          executionPlan: JSON.stringify({
-            templateId: "single-default",
-            mode: "single",
-            steps: [{ id: "exec-1", type: "execution", status: "running" }],
-            candidates: [
-              {
-                label: "Default executor",
-                agent: "default-executor",
-                sessionId: "ses-1",
-                agentRunId: "run-1",
-                status: "running",
-                startedAt: "2026-03-12T10:00:00.000Z",
-              },
-            ],
-          }),
-        },
+        data: createTaskDetailRecord(),
       };
     }
 
@@ -376,18 +381,11 @@ describe("SSEAggregator pipeline emitters", () => {
 
   test("post-execution hooks are skipped when paid execution guard disables them", async () => {
     cpFetchMock.mockImplementation(async (url: string, options?: { method?: string }) => {
-      if ((options?.method || "GET") === "GET" && url === "/api/tasks/task-1") {
+      if (isTaskDetailGet(url, options)) {
         return {
           ok: true,
           status: 200,
-          data: {
-            id: "task-1",
-            title: "Runtime pipeline task",
-            prompt: "Summarize progress",
-            projectId: "proj-1",
-            sessionId: "ses-task-main",
-            agentRunId: "run-1",
-            result: "Done",
+          data: createTaskDetailRecord({
             strategy: JSON.stringify({
               paidExecutionGuard: {
                 enabled: true,
@@ -408,8 +406,7 @@ describe("SSEAggregator pipeline emitters", () => {
                 postHooksDisabled: true,
               },
             }),
-            selectedModel: "gpt-5.4",
-          },
+          }),
         };
       }
 
@@ -432,18 +429,11 @@ describe("SSEAggregator pipeline emitters", () => {
   test("post-execution hook usage is recorded once and remaining hooks stop after breaker trips", async () => {
     cpFetchMock.mockImplementation(
       async (url: string, options?: { method?: string; body?: unknown }) => {
-        if ((options?.method || "GET") === "GET" && url === "/api/tasks/task-1") {
+        if (isTaskDetailGet(url, options)) {
           return {
             ok: true,
             status: 200,
-            data: {
-              id: "task-1",
-              title: "Runtime pipeline task",
-              prompt: "Summarize progress",
-              projectId: "proj-1",
-              sessionId: "ses-task-main",
-              agentRunId: "run-1",
-              result: "Done",
+            data: createTaskDetailRecord({
               strategy: JSON.stringify({
                 effectiveModel: "github-copilot:gpt-5.4",
                 paidExecutionGuard: {
@@ -466,7 +456,7 @@ describe("SSEAggregator pipeline emitters", () => {
                 },
               }),
               selectedModel: "github-copilot:gpt-5.4",
-            },
+            }),
           };
         }
 
@@ -624,7 +614,7 @@ describe("SSEAggregator pipeline emitters", () => {
           method: "PATCH",
           body: expect.objectContaining({
             status: "completed",
-            executionPlan: expect.stringContaining('"status":"completed"'),
+            result: "Final answer",
           }),
         }),
       );
@@ -644,55 +634,38 @@ describe("SSEAggregator pipeline emitters", () => {
   });
 
   test("parallel finalization keeps winner selection manual", async () => {
-    cpFetchMock.mockImplementation(async (url: string, options?: { method?: string; body?: unknown }) => {
-      if ((options?.method || "GET") === "GET" && url === "/api/project-tree/tasks/task-1") {
-        return {
-          ok: true,
-          status: 200,
-          data: {
-            id: "task-1",
-            title: "Runtime pipeline task",
-            prompt: "Summarize progress",
-            projectId: "proj-1",
-            sessionId: "ses-main",
-            agentRunId: "run-main",
-            result: null,
-            strategy: null,
-            selectedModel: "gpt-5.4",
-            executionPlan: JSON.stringify({
-              templateId: "parallel-default",
-              mode: "parallel",
-              steps: [{ id: "exec-parallel", type: "execution", status: "completed" }],
-              candidates: [
-                {
-                  label: "Candidate A",
-                  agent: "executor",
-                  sessionId: "ses-1",
-                  agentRunId: "run-1",
-                  status: "completed",
-                  result: "Answer A",
-                },
-                {
-                  label: "Candidate B",
-                  agent: "executor",
-                  sessionId: "ses-2",
-                  agentRunId: "run-2",
-                  status: "completed",
-                  result: "Answer B",
-                },
-              ],
-            }),
-          },
-        };
-      }
+    cpFetchMock.mockImplementation(
+      async (url: string, options?: { method?: string; body?: unknown }) => {
+        if ((options?.method || "GET") === "GET" && url === "/api/project-tree/tasks/task-1") {
+          return {
+            ok: true,
+            status: 200,
+            data: {
+              id: "task-1",
+              title: "Runtime pipeline task",
+              prompt: "Summarize progress",
+              projectId: "proj-1",
+              sessionId: "ses-main",
+              agentRunId: "run-main",
+              result: null,
+              strategy: null,
+              selectedModel: "gpt-5.4",
+            },
+          };
+        }
 
-      return { ok: true, status: 200, data: { ok: true, body: options?.body } };
-    });
+        return { ok: true, status: 200, data: { ok: true, body: options?.body } };
+      },
+    );
 
     const aggregator = sseAggregator as unknown as {
       parallelCandidateResults: Map<string, Map<number, { sessionId: string; result?: string }>>;
       parallelTaskSessions: Map<string, Set<string>>;
-      finalizeParallelTask: (taskId: string, projectId: string, authorization: string) => Promise<void>;
+      finalizeParallelTask: (
+        taskId: string,
+        projectId: string,
+        authorization: string,
+      ) => Promise<void>;
     };
     aggregator.parallelCandidateResults.set(
       "task-1",
@@ -719,31 +692,7 @@ describe("SSEAggregator pipeline emitters", () => {
       expect(taskPatchCall).toBeDefined();
       expect(taskPatchCall?.[1]?.body?.status).toBe("completed");
       expect(taskPatchCall?.[1]?.body?.result).toBeUndefined();
-      const patchedPlan = JSON.parse(String(taskPatchCall?.[1]?.body?.executionPlan)) as {
-        winnerCandidateIndex?: number;
-        judgeResult?: { winnerIndex?: number };
-        steps?: Array<{ type?: string; status?: string; result?: string }>;
-        candidates: Array<{ result?: string; status?: string; finishedAt?: string }>;
-      };
-      expect(patchedPlan.winnerCandidateIndex).toBeUndefined();
-      expect(patchedPlan.judgeResult?.winnerIndex).toBe(0);
-      expect(patchedPlan.steps).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ type: "execution", status: "completed" }),
-        ]),
-      );
-      expect(patchedPlan.candidates).toEqual([
-        expect.objectContaining({
-          status: "completed",
-          result: "Answer A",
-          finishedAt: expect.any(String),
-        }),
-        expect.objectContaining({
-          status: "completed",
-          result: "Answer B",
-          finishedAt: expect.any(String),
-        }),
-      ]);
+      expect(taskPatchCall?.[1]?.body).not.toHaveProperty("executionPlan");
       expect(emitted).toContainEqual(
         expect.objectContaining({
           type: "task.completed",
@@ -911,48 +860,29 @@ describe("SSEAggregator pipeline emitters", () => {
   });
 
   test("parallel question tools are failed instead of staying running forever", async () => {
-    cpFetchMock.mockImplementation(async (url: string, options?: { method?: string; body?: unknown }) => {
-      if ((options?.method || "GET") === "GET" && url === "/api/project-tree/tasks/task-1") {
-        return {
-          ok: true,
-          status: 200,
-          data: {
-            id: "task-1",
-            title: "Runtime pipeline task",
-            prompt: "Summarize progress",
-            projectId: "proj-1",
-            sessionId: "ses-task-main",
-            agentRunId: "run-1",
-            result: "Done",
-            strategy: null,
-            selectedModel: "gpt-5.4",
-            executionPlan: JSON.stringify({
-              templateId: "parallel-default",
-              mode: "parallel",
-              steps: [],
-              candidates: [
-                {
-                  label: "Candidate A",
-                  agent: "executor",
-                  sessionId: "ses-1",
-                  agentRunId: "run-1",
-                  status: "running",
-                },
-                {
-                  label: "Candidate B",
-                  agent: "executor",
-                  sessionId: "ses-2",
-                  agentRunId: "run-2",
-                  status: "running",
-                },
-              ],
-            }),
-          },
-        };
-      }
+    cpFetchMock.mockImplementation(
+      async (url: string, options?: { method?: string; body?: unknown }) => {
+        if ((options?.method || "GET") === "GET" && url === "/api/project-tree/tasks/task-1") {
+          return {
+            ok: true,
+            status: 200,
+            data: {
+              id: "task-1",
+              title: "Runtime pipeline task",
+              prompt: "Summarize progress",
+              projectId: "proj-1",
+              sessionId: "ses-task-main",
+              agentRunId: "run-1",
+              result: "Done",
+              strategy: null,
+              selectedModel: "gpt-5.4",
+            },
+          };
+        }
 
-      return { ok: true, status: 200, data: { ok: true, body: options?.body } };
-    });
+        return { ok: true, status: 200, data: { ok: true, body: options?.body } };
+      },
+    );
 
     findAgentRunBySessionIdMock.mockImplementation((sessionId?: string) => {
       if (sessionId === "ses-1") {
@@ -1009,40 +939,289 @@ describe("SSEAggregator pipeline emitters", () => {
       expect(updateAgentRunStatusMock).toHaveBeenCalledWith("run-1", "failed");
       const taskPatchCall = (
         cpFetchMock.mock.calls as unknown as Array<
-          [string, { method?: string; authorization?: string; body?: { executionPlan?: string } }]
+          [string, { method?: string; authorization?: string; body?: Record<string, unknown> }]
         >
-      ).find(
-        ([url, options]) => url === "/api/tasks/task-1" && options?.method === "PATCH",
-      );
-      expect(taskPatchCall).toBeDefined();
-      expect(taskPatchCall?.[1]?.authorization).toBe("Bearer internal");
-      expect(JSON.parse(String(taskPatchCall?.[1]?.body?.executionPlan))).toEqual({
-        templateId: "parallel-default",
-        mode: "parallel",
-        steps: [],
-        candidates: [
-          {
-            label: "Candidate A",
-            agent: "executor",
-            sessionId: "ses-1",
-            agentRunId: "run-1",
-            status: "failed",
-            result:
-              "[FAILED] Parallel candidate requested interactive clarification via question tool, which is not supported in unattended parallel execution.",
-            finishedAt: expect.any(String),
-          },
-          {
-            label: "Candidate B",
-            agent: "executor",
-            sessionId: "ses-2",
-            agentRunId: "run-2",
-            status: "running",
-          },
-        ],
-      });
+      ).find(([url, options]) => url === "/api/tasks/task-1" && options?.method === "PATCH");
+      expect(taskPatchCall).toBeUndefined();
       expect(emitted.map((event) => event.type)).toContain("agent.completed");
     } finally {
       unsubscribe();
     }
+  });
+
+  test("parallel candidate question failures stop patching legacy runtime plan once run projection is available", async () => {
+    cpFetchMock.mockImplementation(
+      async (url: string, options?: { method?: string; body?: unknown }) => {
+        if ((options?.method || "GET") === "GET" && url === "/api/project-tree/tasks/task-1") {
+          return {
+            ok: true,
+            status: 200,
+            data: {
+              id: "task-1",
+              title: "Projection-backed parallel task",
+              prompt: "Summarize progress",
+              projectId: "proj-1",
+              sessionId: "ses-task-main",
+              currentRunId: "task_run:task-1:ses-task-main",
+              orchestrationKind: "parallel",
+            },
+          };
+        }
+
+        return { ok: true, status: 200, data: { ok: true, body: options?.body } };
+      },
+    );
+
+    findAgentRunBySessionIdMock.mockImplementation((sessionId?: string) => {
+      if (sessionId === "ses-1") {
+        return {
+          subSessionId: "ses-1",
+          taskId: "task-1",
+          projectId: "proj-1",
+          agentRunId: "run-1",
+          status: "running",
+        };
+      }
+
+      return undefined;
+    });
+    extractAssistantResultFromMessagesMock.mockReturnValue({
+      completed: true,
+      failed: false,
+      error: undefined,
+      tokenUsed: 42,
+      text: "Need clarification",
+    });
+
+    const aggregator = sseAggregator as unknown as {
+      parallelTaskSessions: Map<string, Set<string>>;
+      parallelCandidateResults: Map<string, Map<number, { sessionId: string; result?: string }>>;
+      sessionToCandidateMap: Map<string, { taskId: string; candidateIndex: number }>;
+    };
+    aggregator.parallelTaskSessions.set("task-1", new Set(["ses-1", "ses-2"]));
+    aggregator.parallelCandidateResults.set("task-1", new Map());
+    aggregator.sessionToCandidateMap.set("ses-1", { taskId: "task-1", candidateIndex: 0 });
+
+    await (
+      sseAggregator as unknown as {
+        maybeFailParallelQuestionTool: (event: Record<string, unknown>) => Promise<void>;
+      }
+    ).maybeFailParallelQuestionTool({
+      type: "tool.execute.before",
+      sessionId: "ses-1",
+      taskId: "task-1",
+      projectId: "proj-1",
+      agentRunId: "run-1",
+      data: {
+        tool: "question",
+      },
+    });
+
+    const taskPatchCall = (
+      cpFetchMock.mock.calls as unknown as Array<
+        [string, { method?: string; authorization?: string; body?: Record<string, unknown> }]
+      >
+    ).find(([url, options]) => url === "/api/tasks/task-1" && options?.method === "PATCH");
+    expect(taskPatchCall).toBeUndefined();
+  });
+
+  test("projection-backed parallel finalization stops patching legacy runtime plan", async () => {
+    cpFetchMock.mockImplementation(
+      async (url: string, options?: { method?: string; body?: unknown }) => {
+        if ((options?.method || "GET") === "GET" && url === "/api/project-tree/tasks/task-1") {
+          return {
+            ok: true,
+            status: 200,
+            data: {
+              id: "task-1",
+              title: "Projection-backed parallel task",
+              prompt: "Summarize progress",
+              projectId: "proj-1",
+              sessionId: "ses-task-main",
+              currentRunId: "task_run:task-1:ses-task-main",
+              orchestrationKind: "parallel",
+              strategy: null,
+              selectedModel: "gpt-5.4",
+            },
+          };
+        }
+
+        return { ok: true, status: 200, data: { ok: true, body: options?.body } };
+      },
+    );
+
+    const aggregator = sseAggregator as unknown as {
+      parallelCandidateResults: Map<string, Map<number, { sessionId: string; result?: string }>>;
+      parallelTaskSessions: Map<string, Set<string>>;
+      finalizeParallelTask: (
+        taskId: string,
+        projectId: string,
+        authorization: string,
+      ) => Promise<void>;
+    };
+    aggregator.parallelCandidateResults.set(
+      "task-1",
+      new Map([
+        [0, { sessionId: "ses-1", result: "Answer A" }],
+        [1, { sessionId: "ses-2", result: "Answer B" }],
+      ]),
+    );
+    aggregator.parallelTaskSessions.set("task-1", new Set(["ses-1", "ses-2"]));
+
+    await aggregator.finalizeParallelTask("task-1", "proj-1", "Bearer internal");
+
+    const taskPatchCall = (
+      cpFetchMock.mock.calls as unknown as Array<
+        [string, { method?: string; authorization?: string; body?: Record<string, unknown> }]
+      >
+    ).find(([url, options]) => url === "/api/tasks/task-1" && options?.method === "PATCH");
+    expect(taskPatchCall).toBeDefined();
+    expect(taskPatchCall?.[1]?.body?.status).toBe("completed");
+    expect(taskPatchCall?.[1]?.body).not.toHaveProperty("executionPlan");
+  });
+
+  test("projection-backed sequential chain advancement stops patching legacy runtime plan", async () => {
+    cpFetchMock.mockImplementation(
+      async (url: string, options?: { method?: string; body?: unknown }) => {
+        if ((options?.method || "GET") === "GET" && url === "/api/project-tree/tasks/task-1") {
+          return {
+            ok: true,
+            status: 200,
+            data: {
+              id: "task-1",
+              title: "Projection-backed sequential task",
+              prompt: "Implement the fix",
+              projectId: "proj-1",
+              sessionId: "ses-root",
+              currentRunId: "task_run:task-1:root",
+              orchestrationKind: "sequential-chain",
+              strategy: null,
+              selectedModel: "github-copilot:gpt-5.4",
+            },
+          };
+        }
+
+        return { ok: true, status: 200, data: { ok: true, body: options?.body } };
+      },
+    );
+
+    const aggregator = sseAggregator as unknown as {
+      sequentialChainTasks: Map<
+        string,
+        {
+          plan: {
+            mode: string;
+            currentChainStepIndex: number;
+            steps: Array<Record<string, unknown>>;
+            candidates: Array<Record<string, unknown>>;
+          };
+          authorization: string;
+          projectionBacked: boolean;
+        }
+      >;
+      sessionToChainStepMap: Map<string, { taskId: string; stepIndex: number }>;
+      advanceSequentialChainStep: (
+        taskId: string,
+        completedStepIndex: number,
+        stepResult: string | undefined,
+        projectId: string,
+        authorization: string,
+      ) => Promise<void>;
+    };
+
+    aggregator.sequentialChainTasks.set("task-1", {
+      authorization: "Bearer internal",
+      projectionBacked: true,
+      plan: {
+        mode: "sequential-chain",
+        currentChainStepIndex: 0,
+        steps: [
+          { id: "step-1", type: "chain-step", title: "分析", status: "running" },
+          { id: "step-2", type: "chain-step", title: "实施", status: "pending" },
+        ],
+        candidates: [{ label: "主执行", status: "running" }],
+      },
+    });
+    aggregator.sessionToChainStepMap.set("ses-step-1", { taskId: "task-1", stepIndex: 0 });
+
+    await aggregator.advanceSequentialChainStep(
+      "task-1",
+      0,
+      "第一步完成",
+      "proj-1",
+      "Bearer internal",
+    );
+
+    const taskPatchCalls = (
+      cpFetchMock.mock.calls as unknown as Array<
+        [string, { method?: string; body?: Record<string, unknown> }]
+      >
+    ).filter(([url, options]) => url === "/api/tasks/task-1" && options?.method === "PATCH");
+
+    expect(taskPatchCalls.length).toBe(0);
+  });
+
+  test("projection-backed sequential chain finalization stops patching legacy runtime plan", async () => {
+    const aggregator = sseAggregator as unknown as {
+      sequentialChainTasks: Map<
+        string,
+        {
+          plan: {
+            mode: string;
+            currentChainStepIndex: number;
+            steps: Array<Record<string, unknown>>;
+            candidates: Array<Record<string, unknown>>;
+          };
+          authorization: string;
+          projectionBacked: boolean;
+        }
+      >;
+      finalizeSequentialChainTask: (
+        taskId: string,
+        projectId: string,
+        authorization: string,
+        failureError?: string,
+      ) => Promise<void>;
+    };
+
+    aggregator.sequentialChainTasks.set("task-1", {
+      authorization: "Bearer internal",
+      projectionBacked: true,
+      plan: {
+        mode: "sequential-chain",
+        currentChainStepIndex: 2,
+        steps: [
+          {
+            id: "step-1",
+            type: "chain-step",
+            title: "分析",
+            status: "completed",
+            result: "分析完成",
+          },
+          {
+            id: "step-2",
+            type: "chain-step",
+            title: "实施",
+            status: "completed",
+            result: "实施完成",
+          },
+        ],
+        candidates: [{ label: "主执行", status: "completed" }],
+      },
+    });
+
+    await aggregator.finalizeSequentialChainTask("task-1", "proj-1", "Bearer internal");
+
+    const taskPatchCall = (
+      cpFetchMock.mock.calls as unknown as Array<
+        [string, { method?: string; body?: Record<string, unknown> }]
+      >
+    ).find(([url, options]) => url === "/api/tasks/task-1" && options?.method === "PATCH");
+
+    expect(taskPatchCall?.[1]?.body).toMatchObject({
+      status: "completed",
+      result: expect.stringContaining("分析完成"),
+    });
+    expect(taskPatchCall?.[1]?.body).not.toHaveProperty("executionPlan");
   });
 });

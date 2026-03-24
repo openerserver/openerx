@@ -1,6 +1,8 @@
 /// <reference types="bun-types" />
 
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import * as orchestrationStrategyModule from "../../control-plane/web-ui-bff/src/lib/orchestration-strategy";
+import { createControlPlaneClientModuleMock } from "./control-plane-client-mock";
 
 const cpFetchMock = mock(async () => ({ ok: true, data: {} }));
 const dispatchStageInterventionMock = mock(async () => ({
@@ -8,20 +10,26 @@ const dispatchStageInterventionMock = mock(async () => ({
   decision: "allow",
 }));
 const readOrchestrationStrategyMock = mock(() => ({
+  hooks: [],
+  templates: [],
+  judge: { enabled: false },
   organizationSettings: {
     recommendedProfiles: [],
   },
 }));
 
-mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () => ({
-  cpFetch: cpFetchMock,
-}));
+mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () =>
+  createControlPlaneClientModuleMock({
+    cpFetch: cpFetchMock,
+  }),
+);
 
 mock.module("../../control-plane/web-ui-bff/src/modules/tasks/stage-intervention", () => ({
   dispatchStageIntervention: dispatchStageInterventionMock,
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/lib/orchestration-strategy", () => ({
+  ...orchestrationStrategyModule,
   readOrchestrationStrategy: readOrchestrationStrategyMock,
 }));
 
@@ -31,6 +39,9 @@ beforeEach(() => {
   readOrchestrationStrategyMock.mockReset();
   dispatchStageInterventionMock.mockResolvedValue({ disposition: "continue", decision: "allow" });
   readOrchestrationStrategyMock.mockReturnValue({
+    hooks: [],
+    templates: [],
+    judge: { enabled: false },
     organizationSettings: {
       recommendedProfiles: [],
     },

@@ -270,6 +270,47 @@ export const useWorkbenchStore = defineStore(
       splitMode.value = false;
     }
 
+    function removeTabsByTaskIds(missingTaskIds: Set<string>) {
+      tabs.value = tabs.value.filter((tab) => !missingTaskIds.has(tab.taskId));
+    }
+
+    function normalizeActiveTaskAfterPrune(missingTaskIds: Set<string>) {
+      if (missingTaskIds.has(activeTaskId.value)) {
+        activeTaskId.value = tabs.value[0]?.taskId || "";
+      }
+
+      if (!tabs.value.some((tab) => tab.taskId === activeTaskId.value)) {
+        activeTaskId.value = tabs.value[0]?.taskId || "";
+      }
+    }
+
+    function normalizeSecondaryPaneAfterPrune(missingTaskIds: Set<string>) {
+      if (secondaryPane.value?.taskId && missingTaskIds.has(secondaryPane.value.taskId)) {
+        secondaryPane.value = null;
+        return;
+      }
+
+      if (
+        secondaryPane.value?.taskId &&
+        !tabs.value.some((tab) => tab.taskId === secondaryPane.value?.taskId)
+      ) {
+        secondaryPane.value = null;
+      }
+    }
+
+    function normalizeSplitModeAfterPrune() {
+      if (tabs.value.length < 2) {
+        splitMode.value = false;
+        secondaryPane.value = null;
+        return;
+      }
+
+      if (secondaryPane.value?.taskId === activeTaskId.value && !secondaryPane.value.sessionId) {
+        const fallback = tabs.value.find((tab) => tab.taskId !== activeTaskId.value);
+        secondaryPane.value = fallback ? { taskId: fallback.taskId } : null;
+      }
+    }
+
     function pruneMissingTasks(taskIds: string[]) {
       if (taskIds.length === 0) {
         return;
@@ -280,42 +321,16 @@ export const useWorkbenchStore = defineStore(
         return;
       }
 
-      tabs.value = tabs.value.filter((tab) => !missingTaskIds.has(tab.taskId));
-
-      if (missingTaskIds.has(activeTaskId.value)) {
-        activeTaskId.value = tabs.value[0]?.taskId || "";
-      }
-
-      if (secondaryPane.value?.taskId && missingTaskIds.has(secondaryPane.value.taskId)) {
-        secondaryPane.value = null;
-      }
+      removeTabsByTaskIds(missingTaskIds);
 
       if (tabs.value.length === 0) {
         clearWorkbench();
         return;
       }
 
-      if (!tabs.value.some((tab) => tab.taskId === activeTaskId.value)) {
-        activeTaskId.value = tabs.value[0]?.taskId || "";
-      }
-
-      if (
-        secondaryPane.value?.taskId &&
-        !tabs.value.some((tab) => tab.taskId === secondaryPane.value?.taskId)
-      ) {
-        secondaryPane.value = null;
-      }
-
-      if (tabs.value.length < 2) {
-        splitMode.value = false;
-        secondaryPane.value = null;
-      } else if (
-        secondaryPane.value?.taskId === activeTaskId.value &&
-        !secondaryPane.value.sessionId
-      ) {
-        const fallback = tabs.value.find((tab) => tab.taskId !== activeTaskId.value);
-        secondaryPane.value = fallback ? { taskId: fallback.taskId } : null;
-      }
+      normalizeActiveTaskAfterPrune(missingTaskIds);
+      normalizeSecondaryPaneAfterPrune(missingTaskIds);
+      normalizeSplitModeAfterPrune();
     }
 
     function pinTask(taskId: string) {

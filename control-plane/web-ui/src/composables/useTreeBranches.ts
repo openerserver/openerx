@@ -1,10 +1,10 @@
 import type { Edge, Node } from "@vue-flow/core";
-import { computed, ref, watch, type Ref } from "vue";
+import { type Ref, computed, ref, watch } from "vue";
 import {
-  getProjectTreeBranches,
-  getProjectTreeChildren,
   type ProjectTreeBranchRecord,
   type ProjectTreeNodeRecord,
+  getProjectTreeBranches,
+  getProjectTreeChildren,
 } from "../lib/api";
 
 const NODE_WIDTH = 200;
@@ -37,11 +37,12 @@ function buildSessionTree(
   const childrenMap = new Map<string, SessionTreeNode[]>();
 
   for (const session of sessions) {
-    const parentKey = session.parentId === taskNodeId ? "__root__" : (session.parentId ?? "__root__");
+    const parentKey =
+      session.parentId === taskNodeId ? "__root__" : (session.parentId ?? "__root__");
     if (!childrenMap.has(parentKey)) {
       childrenMap.set(parentKey, []);
     }
-    childrenMap.get(parentKey)!.push({
+    childrenMap.get(parentKey)?.push({
       node: session,
       children: [],
     });
@@ -161,7 +162,10 @@ export function useTreeBranches(
         data: {
           nodeId: node.id,
           sessionId: node.runtimeSessionId ?? node.id,
-          title: node.contentText ?? node.branchName ?? (node.runtimeSessionId?.slice(0, 8) || node.id.slice(0, 8)),
+          title:
+            node.contentText ??
+            node.branchName ??
+            (node.runtimeSessionId?.slice(0, 8) || node.id.slice(0, 8)),
           branchName: node.branchName ?? branch?.branchName,
           shortId: (node.runtimeSessionId ?? node.id).slice(0, 8),
           isActive: node.isActive,
@@ -178,9 +182,10 @@ export function useTreeBranches(
       .filter((n) => n.parentId && n.parentId !== taskNodeId.value)
       .map((n) => {
         const parent = flatNodes.value.find((p) => p.id === n.parentId);
+        const parentKey = n.parentId ?? n.id;
         return {
-          id: `e-${parent?.runtimeSessionId ?? n.parentId}-${n.runtimeSessionId ?? n.id}`,
-          source: parent?.runtimeSessionId ?? n.parentId!,
+          id: `e-${parent?.runtimeSessionId ?? parentKey}-${n.runtimeSessionId ?? n.id}`,
+          source: parent?.runtimeSessionId ?? parentKey,
           target: n.runtimeSessionId ?? n.id,
           type: "smoothstep",
           animated: n.isActive,
@@ -216,9 +221,13 @@ export function useTreeBranches(
     }
   }
 
-  watch([projectId, taskNodeId], () => {
-    void refresh();
-  }, { immediate: true });
+  watch(
+    [projectId, taskNodeId],
+    () => {
+      void refresh();
+    },
+    { immediate: true },
+  );
 
   return {
     branches,

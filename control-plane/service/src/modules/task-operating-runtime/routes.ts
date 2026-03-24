@@ -1,19 +1,20 @@
 import { zValidator } from "@hono/zod-validator";
-import { and, count, desc, eq } from "drizzle-orm";
+import { count, desc, eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 import { db } from "../../db";
 import {
   bossDecisions,
   humanEscalations,
-  projectTreeNodes,
   projects,
+  tasks as taskAggregates,
   taskOperatingModes,
   taskWorkflowRuns,
   workflowTemplates,
 } from "../../db/schema";
 import { type AppEnv, authMiddleware } from "../../middleware/auth";
 import { requireRole } from "../../middleware/rbac";
+import { loadTaskTreeRecord } from "../project-tree/task-view";
 
 export const taskOperatingRuntimeRoutes = new Hono<AppEnv>();
 
@@ -114,23 +115,15 @@ function parseTaskStrategy(strategy: unknown) {
 }
 
 async function getTaskOrNull(taskId: string) {
-  const node = await db.query.projectTreeNodes.findFirst({
-    where: and(eq(projectTreeNodes.id, taskId), eq(projectTreeNodes.nodeType, "task")),
-  });
-
-  if (!node) {
+  const task = await loadTaskTreeRecord(taskId);
+  if (!task) {
     return null;
   }
 
-  const content =
-    node.contentJson && typeof node.contentJson === "object"
-      ? (node.contentJson as Record<string, unknown>)
-      : {};
-
   return {
-    id: node.id,
-    projectId: node.projectId,
-    strategy: content.strategy ?? null,
+    id: task.id,
+    projectId: task.projectId,
+    strategy: task.strategy ?? null,
   };
 }
 
@@ -381,6 +374,48 @@ function extractLegacyOperatingMode(
   return null;
 }
 
+function stripLegacyRuntimeStrategyFields(strategy: Record<string, unknown>) {
+  const nextStrategy = { ...strategy } as Record<string, unknown>;
+  let changed = false;
+
+  for (const key of [
+    "collaborationMode",
+    "autopilotLevel",
+    "bossParticipationMode",
+    "operatingModeSource",
+    "selectedTemplateId",
+    "workflowTemplateId",
+    "scenarioKey",
+    "bossDecisions",
+    "escalationRequests",
+  ]) {
+    if (key in nextStrategy) {
+      delete nextStrategy[key];
+      changed = true;
+    }
+  }
+
+  return {
+    changed,
+    strategyJson: Object.keys(nextStrategy).length > 0 ? nextStrategy : null,
+  };
+}
+
+async function persistCleanedTaskStrategy(
+  taskId: string,
+  nextStrategy: Record<string, unknown> | null,
+) {
+  const now = new Date().toISOString();
+
+  await db
+    .update(taskAggregates)
+    .set({
+      strategyJson: nextStrategy,
+      updatedAt: now,
+    })
+    .where(eq(taskAggregates.id, taskId));
+}
+
 async function insertOperatingMode(taskId: string, value: OperatingModeSelection) {
   const now = new Date().toISOString();
   await db
@@ -528,6 +563,11 @@ async function migrateLegacyRuntime(taskId: string, strategy: Record<string, unk
       await insertEscalation(taskId, escalation);
     }
   }
+
+  const cleaned = stripLegacyRuntimeStrategyFields(strategy);
+  if (cleaned.changed) {
+    await persistCleanedTaskStrategy(taskId, cleaned.strategyJson);
+  }
 }
 
 async function listBossDecisions(taskId: string) {
@@ -570,7 +610,7 @@ async function requireTask(taskId: string) {
     return null;
   }
   await migrateLegacyRuntime(taskId, parseTaskStrategy(task.strategy));
-  return task;
+  return (await getTaskOrNull(taskId)) ?? task;
 }
 
 taskOperatingRuntimeRoutes.get("/state", async (c) => {

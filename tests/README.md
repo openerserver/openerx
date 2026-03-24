@@ -12,7 +12,9 @@
 
 - 新增测试时，优先放到对应子目录下。
 - 运行测试仍通过各子包脚本或根目录聚合脚本触发，不直接把测试源码放回业务源码目录。
-- 前端单文件测试从根目录触发时，使用 bun run test:ui:file -- ../../tests/web-ui/Settings.test.ts 这类入口，让测试在 control-plane/web-ui 的 Vitest 上下文中执行。
+- 前端单文件测试从根目录触发时，使用 bun run test:ui:file -- tests/web-ui/Settings.test.ts 这类入口，让测试在 control-plane/web-ui 的 Vitest 上下文中执行。
+- 不要直接运行 bun test tests/web-ui/...；那会调用 Bun 原生测试器，而不是 web-ui 的 Vitest，上下文和模块解析都可能不一致。
+- test:ui:file 兼容旧写法 ../../tests/web-ui/...，但新命令统一使用根目录相对路径 tests/web-ui/....
 - Phase 2 实时链路回归可直接运行 bun run test:bff:realtime-regression；它会顺序执行 BFF 侧 realtime 单测、completion-sync 集成和 hooks 集成，避免 Bun 跨文件 mock 串扰。
 - 付费执行治理相关的强 mock BFF 回归可直接运行 bun run test:bff:paid-execution-regression；它会按单文件顺序执行 lifecycle hooks、realtime pipeline、project preflight、integration guard 与 judge usage 几组用例，避免 Bun 在同一进程里复用模块 mock 导致串扰。
 - BFF 默认全量测试 bun run test:bff 或 bun run test:all 会按单文件顺序执行 tests/web-ui-bff 下的 Bun 测试，避免跨文件 mock 串扰和 Bun 并发导致的 137 假性卡死；它仍不包含 RUN_EXECUTION_INTEGRATION 门控的真实执行集成用例。

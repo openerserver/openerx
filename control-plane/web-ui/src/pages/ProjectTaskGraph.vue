@@ -479,14 +479,15 @@ import "@vue-flow/core/dist/theme-default.css";
 import "@vue-flow/controls/dist/style.css";
 import {
   type ExecutionTraceSegment,
+  type ProjectTaskGraphEdgeView,
+  type ProjectTaskGraphTaskView,
   type ProjectTreeBranchRecord,
   type ProjectTreeLinkRecord,
   type ProjectTreeNodeRecord,
   type ProjectTreeSearchResponseRecord,
   type ProjectTreeSearchResultRecord,
-  type ProjectTaskGraphEdgeView,
-  type ProjectTaskGraphTaskView,
   type TaskExecutionTrace,
+  getProjectTaskGraphView,
   getProjectTree,
   getProjectTreeAncestors,
   getProjectTreeBranches,
@@ -494,7 +495,6 @@ import {
   getProjectTreeLinks,
   getProjectTreeNode,
   getProjectTreeNodeLinks,
-  getProjectTaskGraphView,
   getTaskExecutionTrace,
   searchProjectTree,
   updateProjectTreeBranch,
@@ -1482,11 +1482,7 @@ function treeNodeTypeLabel(type: ProjectTreeNodeRecord["nodeType"]) {
 
 function treeNodeTitle(node: ProjectTreeNodeRecord) {
   return (
-    node.contentText ||
-    node.branchName ||
-    node.runtimeMessageId ||
-    node.runtimeSessionId ||
-    node.id
+    node.contentText || node.branchName || node.runtimeMessageId || node.runtimeSessionId || node.id
   );
 }
 
@@ -1576,25 +1572,76 @@ function toggleSegment(index: number) {
 
 function segmentTypeLabel(type: ExecutionTraceSegment["type"]) {
   switch (type) {
-    case "user-input": return "用户输入";
-    case "workflow-context": return "工作流上下文";
-    case "hook-injection": return "Hook 注入";
-    case "hook-rewrite": return "Hook 重写";
-    case "final-prompt": return "最终 Prompt";
-    case "model-response": return "模型回复";
-    default: return type;
+    case "user-input":
+      return "用户输入";
+    case "workflow-context":
+      return "工作流上下文";
+    case "hook-injection":
+      return "Hook 注入";
+    case "hook-result":
+      return "Hook 结果";
+    case "hook-rewrite":
+      return "Hook 重写";
+    case "final-prompt":
+      return "最终 Prompt";
+    case "model-response":
+      return "模型回复";
+    case "tool-call":
+      return "工具调用";
+    case "tool-output":
+      return "工具输出";
+    case "thinking":
+      return "思考过程";
+    case "file-reference":
+      return "文件引用";
+    case "diff":
+      return "Diff";
+    case "candidate-result":
+      return "候选结果";
+    case "judge-decision":
+      return "Judge 决策";
+    case "chain-step-result":
+      return "链式步骤";
+    case "status-transition":
+      return "状态变更";
+    case "session-activate":
+      return "会话激活";
+    case "session-branch":
+      return "会话分支";
+    case "session-archive":
+      return "会话归档";
+    default:
+      return type;
   }
 }
 
 function segmentTypeTone(type: ExecutionTraceSegment["type"]) {
   switch (type) {
-    case "user-input": return "user";
-    case "workflow-context": return "context";
-    case "hook-injection": return "hook";
-    case "hook-rewrite": return "hook";
-    case "final-prompt": return "prompt";
-    case "model-response": return "response";
-    default: return "default";
+    case "user-input":
+      return "user";
+    case "workflow-context":
+      return "context";
+    case "hook-injection":
+      return "hook";
+    case "hook-result":
+      return "hook";
+    case "hook-rewrite":
+      return "hook";
+    case "final-prompt":
+      return "prompt";
+    case "model-response":
+      return "response";
+    case "tool-call":
+    case "tool-output":
+    case "file-reference":
+    case "diff":
+      return "prompt";
+    case "candidate-result":
+    case "judge-decision":
+    case "chain-step-result":
+      return "context";
+    default:
+      return "default";
   }
 }
 

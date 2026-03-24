@@ -1,6 +1,8 @@
 /// <reference types="bun-types" />
 
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { createOpencodeAdapterModuleMock } from "./opencode-adapter-mock";
+import { createSseAggregatorModuleMock } from "./sse-aggregator-mock";
 
 const cpFetchMock = mock(async (..._args: unknown[]) => ({ ok: true, data: {} }));
 const authHeaderMock = mock(() => "Bearer test");
@@ -12,32 +14,36 @@ mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () =>
   createInternalAuthorization: createInternalAuthorizationMock,
 }));
 
-mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter", () => ({
-  continueSession: mock(async () => ({ ok: true })),
-  createSession: mock(async () => ({ ok: true, sessionId: "session-1", agentRunId: "run-1" })),
-  ensureAgentRunForSession: mock(() => "run-1"),
-  extractAssistantResultFromMessages: mock(() => ({
-    completed: false,
-    failed: false,
-    error: undefined,
-    tokenUsed: 0,
-  })),
-  forkSession: mock(async () => ({ ok: true, sessionId: "session-2" })),
-  findAgentRunBySessionId: mock(() => undefined),
-  getAgentRun: mock(() => undefined),
-  getAgentMessages: mock(async () => ({ ok: true, data: [] })),
-  getSessionMessages: mock(async () => ({ ok: true, data: [] })),
-  injectGuidance: mock(async () => ({ ok: true })),
-  listAgentRuns: mock(() => []),
-  listSessions: mock(async () => ({ ok: true, data: [] })),
-  pauseAgent: mock(async () => ({ ok: true })),
-  registerAgentRun: mock(() => undefined),
-  recoverAgentRun: mock(() => undefined),
-  resumeAgent: mock(async () => ({ ok: true })),
-  runDetachedPrompt: mock(async () => ({ ok: true, sessionId: "session-detached", text: "{}" })),
-  terminateAgent: mock(async () => ({ ok: true })),
-  updateAgentRunStatus: mock(() => undefined),
-}));
+mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter", () =>
+  createOpencodeAdapterModuleMock({
+    continueSession: mock(async () => ({ ok: true })),
+    createSession: mock(async () => ({ ok: true, sessionId: "session-1", agentRunId: "run-1" })),
+    ensureAgentRunForSession: mock(() => "run-1"),
+    extractAssistantResultFromMessages: mock(() => ({
+      completed: false,
+      failed: false,
+      error: undefined,
+      tokenUsed: 0,
+    })),
+    forkSession: mock(async () => ({ ok: true, sessionId: "session-2" })),
+    findAgentRunBySessionId: mock(() => undefined),
+    getAgentRun: mock(() => undefined),
+    getAgentMessages: mock(async () => ({ ok: true, data: [] })),
+    getSessionMessages: mock(async () => ({ ok: true, data: [] })),
+    injectGuidance: mock(async () => ({ ok: true })),
+    listAgentRuns: mock(() => []),
+    listRuntimePermissions: mock(async () => ({ ok: true, data: [] })),
+    listSessions: mock(async () => ({ ok: true, data: [] })),
+    pauseAgent: mock(async () => ({ ok: true })),
+    registerAgentRun: mock(() => undefined),
+    recoverAgentRun: mock(() => undefined),
+    replyRuntimePermission: mock(async () => ({ ok: true })),
+    resumeAgent: mock(async () => ({ ok: true })),
+    runDetachedPrompt: mock(async () => ({ ok: true, sessionId: "session-detached", text: "{}" })),
+    terminateAgent: mock(async () => ({ ok: true })),
+    updateAgentRunStatus: mock(() => undefined),
+  }),
+);
 
 mock.module("../../control-plane/web-ui-bff/src/modules/hooks/lifecycle-hooks", () => ({
   executeLifecycleHooks: mock(async () => ({
@@ -45,7 +51,9 @@ mock.module("../../control-plane/web-ui-bff/src/modules/hooks/lifecycle-hooks", 
     combinedResultText: undefined,
     rewrittenPrompt: undefined,
   })),
-  mergeStageAndStrategyHooks: mock((_stageHooks: unknown, strategyHooks: unknown) => strategyHooks ?? []),
+  mergeStageAndStrategyHooks: mock(
+    (_stageHooks: unknown, strategyHooks: unknown) => strategyHooks ?? [],
+  ),
   parseStageHooks: mock(() => []),
 }));
 
@@ -64,11 +72,11 @@ mock.module("../../control-plane/web-ui-bff/src/modules/realtime/pipeline-events
   buildPipelineStageUpdatedEvents: mock(() => []),
 }));
 
-mock.module("../../control-plane/web-ui-bff/src/modules/realtime/sse-aggregator", () => ({
-  sseAggregator: {
+mock.module("../../control-plane/web-ui-bff/src/modules/realtime/sse-aggregator", () =>
+  createSseAggregatorModuleMock({
     registerParallelTask: mock(() => undefined),
-  },
-}));
+  }),
+);
 
 mock.module("../../control-plane/web-ui-bff/src/modules/realtime/ws-broadcaster", () => ({
   wsBroadcaster: {

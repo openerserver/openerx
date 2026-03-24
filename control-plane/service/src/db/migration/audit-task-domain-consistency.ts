@@ -1,0 +1,730 @@
+#!/usr/bin/env bun
+
+import { and, desc, eq } from "drizzle-orm";
+import { closeDatabase, db, postgresSql } from "../index";
+import { taskRuns, taskSnapshots, tasks } from "../schema";
+import { getBooleanArg, parseCliArgs } from "./metadata";
+
+type AuditDimensionKey =
+  | "status"
+  | "currentSession"
+  | "runGraph"
+  | "messageCount"
+  | "timelineItemCount";
+
+type AuditDimension = {
+  ok: boolean;
+  reasons: string[];
+  details: Record<string, unknown>;
+};
+
+type TaskAuditRecord = {
+  taskId: string;
+  projectId: string;
+  title: string;
+  createdAt: string;
+  healthy: boolean;
+  mismatchCount: number;
+  dimensions: Record<AuditDimensionKey, AuditDimension>;
+};
+
+type AuditTaskRow = {
+  taskId: string;
+  projectId: string;
+  title: string;
+  createdAt: string;
+  taskStatus: string;
+  taskCurrentRunId: string | null;
+  taskCurrentSessionId: string | null;
+  snapshotStatus: string | null;
+  snapshotCurrentRunId: string | null;
+  snapshotCurrentSessionId: string | null;
+  snapshotActiveCandidateCount: number | null;
+  snapshotCompletedCandidateCount: number | null;
+  snapshotFailedCandidateCount: number | null;
+  snapshotTotalChainSteps: number | null;
+  snapshotCompletedChainSteps: number | null;
+  snapshotWinnerNodeId: string | null;
+};
+
+type TaskRunRecord = Exclude<Awaited<ReturnType<typeof db.query.taskRuns.findFirst>>, undefined>;
+
+type AuditRunGraphStats = {
+  actualExecutionNodes: number;
+  actualCandidateNodes: number;
+  actualActiveCandidateNodes: number;
+  actualCompletedCandidateNodes: number;
+  actualFailedCandidateNodes: number;
+  actualChainNodes: number;
+  actualCompletedChainNodes: number;
+  winnerExists: boolean;
+};
+
+type AuditTimelineStats = {
+  statusEventCount: number;
+  sessionCount: number;
+  runNodeCount: number;
+  taskMessageCount: number;
+  eligibleMessagePartCount: number;
+  actualTimelineItemCount: number;
+  expectedTimelineItemCount: number;
+};
+
+type TaskAuditContext = {
+  effectiveCurrentRunId: string | null;
+  effectiveCurrentSessionId: string | null;
+  currentRun: TaskRunRecord | null;
+  runGraphCounts: CountRow;
+  runGraphStats: AuditRunGraphStats;
+  currentSession: CountRow;
+  currentSessionDbId: string | null;
+  currentSessionMessageCounts: CountRow;
+  timelineCounts: CountRow;
+  timelineStats: AuditTimelineStats;
+};
+
+type CountRow = Record<string, number | string | null>;
+
+function parseOptionalString(value: string | boolean | undefined) {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function parseLimit(value: string | boolean | undefined) {
+  if (typeof value !== "string") {
+    return 50;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return 50;
+  }
+
+  return Math.max(1, Math.min(500, Math.trunc(parsed)));
+}
+
+function parseCount(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  return 0;
+}
+
+function createDimension(details: Record<string, unknown>, reasons: string[]): AuditDimension {
+  return {
+    ok: reasons.length === 0,
+    reasons,
+    details,
+  };
+}
+
+function formatTaskLabel(task: { taskId: string; title: string }) {
+  return `${task.taskId} ${task.title}`;
+}
+
+async function querySingleRow<T extends CountRow>(query: ReturnType<typeof postgresSql<T[]>>) {
+  const rows = await query;
+  return rows[0] ?? ({} as T);
+}
+
+function buildRunGraphStats(runGraphCounts: CountRow): AuditRunGraphStats {
+  return {
+    actualExecutionNodes: parseCount(runGraphCounts.execution_nodes),
+    actualCandidateNodes: parseCount(runGraphCounts.candidate_nodes),
+    actualActiveCandidateNodes: parseCount(runGraphCounts.active_candidate_nodes),
+    actualCompletedCandidateNodes: parseCount(runGraphCounts.completed_candidate_nodes),
+    actualFailedCandidateNodes: parseCount(runGraphCounts.failed_candidate_nodes),
+    actualChainNodes: parseCount(runGraphCounts.chain_nodes),
+    actualCompletedChainNodes: parseCount(runGraphCounts.completed_chain_nodes),
+    winnerExists: parseCount(runGraphCounts.winner_exists) > 0,
+  };
+}
+
+function buildTimelineStats(timelineCounts: CountRow): AuditTimelineStats {
+  const statusEventCount = parseCount(timelineCounts.status_event_count);
+  const sessionCount = parseCount(timelineCounts.session_count);
+  const runNodeCount = parseCount(timelineCounts.run_node_count);
+  const taskMessageCount = parseCount(timelineCounts.message_count);
+  const eligibleMessagePartCount = parseCount(timelineCounts.eligible_message_part_count);
+  const actualTimelineItemCount = parseCount(timelineCounts.actual_timeline_item_count);
+  const expectedTimelineItemCount =
+    statusEventCount + sessionCount + runNodeCount + taskMessageCount + eligibleMessagePartCount;
+
+  return {
+    statusEventCount,
+    sessionCount,
+    runNodeCount,
+    taskMessageCount,
+    eligibleMessagePartCount,
+    actualTimelineItemCount,
+    expectedTimelineItemCount,
+  };
+}
+
+async function loadCurrentRun(task: AuditTaskRow, effectiveCurrentRunId: string | null) {
+  return effectiveCurrentRunId
+    ? ((await db.query.taskRuns.findFirst({
+        where: and(eq(taskRuns.id, effectiveCurrentRunId), eq(taskRuns.taskId, task.taskId)),
+      })) ?? null)
+    : null;
+}
+
+async function loadRunGraphCounts(args: {
+  task: AuditTaskRow;
+  effectiveCurrentRunId: string | null;
+  winnerNodeId: string | null;
+}) {
+  return args.effectiveCurrentRunId
+    ? querySingleRow<CountRow>(postgresSql`
+        select
+          count(*)::int as total_nodes,
+          count(*) filter (where node_kind = 'execution')::int as execution_nodes,
+          count(*) filter (where node_kind = 'candidate')::int as candidate_nodes,
+          count(*) filter (
+            where node_kind = 'candidate' and status in ('pending', 'running', 'paused')
+          )::int as active_candidate_nodes,
+          count(*) filter (where node_kind = 'candidate' and status = 'completed')::int as completed_candidate_nodes,
+          count(*) filter (
+            where node_kind = 'candidate' and status in ('failed', 'cancelled')
+          )::int as failed_candidate_nodes,
+          count(*) filter (where node_kind = 'chain-step')::int as chain_nodes,
+          count(*) filter (
+            where node_kind = 'chain-step' and status = 'completed'
+          )::int as completed_chain_nodes,
+          count(*) filter (where id = ${args.winnerNodeId ?? ""})::int as winner_exists
+        from task_run_nodes
+        where run_id = ${args.effectiveCurrentRunId}
+          and task_id = ${args.task.taskId}
+      `)
+    : {};
+}
+
+async function loadCurrentSession(task: AuditTaskRow, effectiveCurrentSessionId: string | null) {
+  return effectiveCurrentSessionId
+    ? querySingleRow<CountRow>(postgresSql`
+        select
+          id,
+          runtime_session_id,
+          is_active,
+          archived_at
+        from conversation_sessions
+        where task_id = ${task.taskId}
+          and runtime_session_id = ${effectiveCurrentSessionId}
+        order by created_at desc
+        limit 1
+      `)
+    : {};
+}
+
+function resolveCurrentSessionDbId(currentSession: CountRow) {
+  return typeof currentSession.id === "string" && currentSession.id.trim()
+    ? currentSession.id
+    : null;
+}
+
+function pushNumericMismatchReason(args: {
+  reasons: string[];
+  expected: number | null;
+  actual: number;
+  label: string;
+  actualLabel: string;
+}) {
+  if (args.expected != null && args.expected !== args.actual) {
+    args.reasons.push(`${args.label}=${args.expected} but ${args.actualLabel}=${args.actual}`);
+  }
+}
+
+function buildRunGraphCountMismatchReasons(task: AuditTaskRow, context: TaskAuditContext) {
+  if (!context.currentRun) {
+    return [] as string[];
+  }
+
+  const reasons: string[] = [];
+  const stats = context.runGraphStats;
+  const comparableCandidateNodes =
+    context.currentRun.orchestrationKind === "single"
+      ? Math.max(stats.actualExecutionNodes, stats.actualCandidateNodes)
+      : stats.actualCandidateNodes;
+
+  pushNumericMismatchReason({
+    reasons,
+    expected: context.currentRun.candidateCount,
+    actual: comparableCandidateNodes,
+    label: "task_runs.candidate_count",
+    actualLabel: "comparable nodes",
+  });
+  pushNumericMismatchReason({
+    reasons,
+    expected: context.currentRun.pipelineStepCount,
+    actual: stats.actualChainNodes,
+    label: "task_runs.pipeline_step_count",
+    actualLabel: "chain-step nodes",
+  });
+  pushNumericMismatchReason({
+    reasons,
+    expected: task.snapshotActiveCandidateCount,
+    actual: stats.actualActiveCandidateNodes,
+    label: "task_snapshots.active_candidate_count",
+    actualLabel: "active candidate nodes",
+  });
+  pushNumericMismatchReason({
+    reasons,
+    expected: task.snapshotCompletedCandidateCount,
+    actual: stats.actualCompletedCandidateNodes,
+    label: "task_snapshots.completed_candidate_count",
+    actualLabel: "completed candidate nodes",
+  });
+  pushNumericMismatchReason({
+    reasons,
+    expected: task.snapshotFailedCandidateCount,
+    actual: stats.actualFailedCandidateNodes,
+    label: "task_snapshots.failed_candidate_count",
+    actualLabel: "failed/cancelled candidate nodes",
+  });
+  pushNumericMismatchReason({
+    reasons,
+    expected: task.snapshotTotalChainSteps,
+    actual: stats.actualChainNodes,
+    label: "task_snapshots.total_chain_steps",
+    actualLabel: "chain-step nodes",
+  });
+  pushNumericMismatchReason({
+    reasons,
+    expected: task.snapshotCompletedChainSteps,
+    actual: stats.actualCompletedChainNodes,
+    label: "task_snapshots.completed_chain_steps",
+    actualLabel: "completed chain-step nodes",
+  });
+
+  return reasons;
+}
+
+function buildRunGraphStructuralReasons(task: AuditTaskRow, context: TaskAuditContext) {
+  const reasons: string[] = [];
+
+  if ((task.taskCurrentRunId ?? null) !== (task.snapshotCurrentRunId ?? null)) {
+    reasons.push(
+      `tasks.current_run_id=${task.taskCurrentRunId ?? "null"} but task_snapshots.current_run_id=${task.snapshotCurrentRunId ?? "null"}`,
+    );
+  }
+  if (context.effectiveCurrentRunId && !context.currentRun) {
+    reasons.push(`task_runs missing id=${context.effectiveCurrentRunId}`);
+  }
+  if (
+    (context.currentRun?.winnerNodeId ?? task.snapshotWinnerNodeId) &&
+    !context.runGraphStats.winnerExists
+  ) {
+    reasons.push(
+      `winner node ${(context.currentRun?.winnerNodeId ?? task.snapshotWinnerNodeId) as string} is missing from task_run_nodes`,
+    );
+  }
+
+  return reasons;
+}
+
+function buildRunGraphReasonList(task: AuditTaskRow, context: TaskAuditContext) {
+  return [
+    ...buildRunGraphStructuralReasons(task, context),
+    ...buildRunGraphCountMismatchReasons(task, context),
+  ];
+}
+
+async function loadCurrentSessionMessageCounts(taskId: string, currentSessionDbId: string | null) {
+  return currentSessionDbId
+    ? querySingleRow<CountRow>(postgresSql`
+        select
+          (
+            select count(*)::int
+            from conversation_messages
+            where session_id = ${currentSessionDbId}
+          ) as message_count,
+          (
+            select count(distinct message_id)::int
+            from task_timeline_views
+            where task_id = ${taskId}
+              and session_id = ${currentSessionDbId}
+              and message_id is not null
+          ) as projected_distinct_message_count
+      `)
+    : {};
+}
+
+async function loadTimelineCounts(taskId: string) {
+  return querySingleRow<CountRow>(postgresSql`
+    select
+      (
+        select count(*)::int
+        from task_domain_events
+        where task_id = ${taskId}
+          and event_type = 'task.aggregate.upserted'
+      ) as status_event_count,
+      (
+        select count(*)::int
+        from conversation_sessions
+        where task_id = ${taskId}
+      ) as session_count,
+      (
+        select count(*)::int
+        from task_run_nodes
+        where task_id = ${taskId}
+      ) as run_node_count,
+      (
+        select count(*)::int
+        from conversation_messages
+        where task_id = ${taskId}
+      ) as message_count,
+      (
+        select count(*)::int
+        from conversation_message_parts parts
+        join conversation_messages messages on messages.id = parts.message_id
+        where messages.task_id = ${taskId}
+          and (
+            parts.part_type in ('tool_call', 'thinking', 'file_reference', 'diff')
+            or (parts.part_type = 'tool_result' and coalesce(messages.role, '') <> 'tool')
+          )
+      ) as eligible_message_part_count,
+      (
+        select count(*)::int
+        from task_timeline_views
+        where task_id = ${taskId}
+      ) as actual_timeline_item_count
+  `);
+}
+
+async function loadTaskAuditContext(task: AuditTaskRow): Promise<TaskAuditContext> {
+  const effectiveCurrentRunId = task.snapshotCurrentRunId ?? task.taskCurrentRunId;
+  const effectiveCurrentSessionId = task.snapshotCurrentSessionId ?? task.taskCurrentSessionId;
+  const currentRun = await loadCurrentRun(task, effectiveCurrentRunId);
+  const runGraphCounts = await loadRunGraphCounts({
+    task,
+    effectiveCurrentRunId,
+    winnerNodeId: currentRun?.winnerNodeId ?? task.snapshotWinnerNodeId,
+  });
+  const currentSession = await loadCurrentSession(task, effectiveCurrentSessionId);
+  const currentSessionDbId = resolveCurrentSessionDbId(currentSession);
+  const currentSessionMessageCounts = await loadCurrentSessionMessageCounts(
+    task.taskId,
+    currentSessionDbId,
+  );
+  const timelineCounts = await loadTimelineCounts(task.taskId);
+
+  return {
+    effectiveCurrentRunId,
+    effectiveCurrentSessionId,
+    currentRun,
+    runGraphCounts,
+    runGraphStats: buildRunGraphStats(runGraphCounts),
+    currentSession,
+    currentSessionDbId,
+    currentSessionMessageCounts,
+    timelineCounts,
+    timelineStats: buildTimelineStats(timelineCounts),
+  };
+}
+
+function buildStatusDimension(task: AuditTaskRow, context: TaskAuditContext) {
+  const reasons: string[] = [];
+
+  if (!task.snapshotStatus) {
+    reasons.push("missing task_snapshots row");
+  }
+  if (task.snapshotStatus && task.taskStatus !== task.snapshotStatus) {
+    reasons.push(
+      `tasks.status=${task.taskStatus} but task_snapshots.current_status=${task.snapshotStatus}`,
+    );
+  }
+  if (
+    task.snapshotStatus &&
+    context.currentRun?.status &&
+    context.currentRun.status !== task.snapshotStatus
+  ) {
+    reasons.push(
+      `current run status=${context.currentRun.status} but snapshot status=${task.snapshotStatus}`,
+    );
+  }
+
+  return createDimension(
+    {
+      taskStatus: task.taskStatus,
+      snapshotStatus: task.snapshotStatus,
+      currentRunStatus: context.currentRun?.status ?? null,
+    },
+    reasons,
+  );
+}
+
+function buildCurrentSessionDimension(task: AuditTaskRow, context: TaskAuditContext) {
+  const reasons: string[] = [];
+
+  if ((task.taskCurrentSessionId ?? null) !== (task.snapshotCurrentSessionId ?? null)) {
+    reasons.push(
+      `tasks.current_session_id=${task.taskCurrentSessionId ?? "null"} but task_snapshots.current_session_id=${task.snapshotCurrentSessionId ?? "null"}`,
+    );
+  }
+  if (context.effectiveCurrentSessionId && !context.currentSessionDbId) {
+    reasons.push(
+      `conversation_sessions missing runtime_session_id=${context.effectiveCurrentSessionId}`,
+    );
+  }
+
+  return createDimension(
+    {
+      taskCurrentSessionId: task.taskCurrentSessionId,
+      snapshotCurrentSessionId: task.snapshotCurrentSessionId,
+      effectiveCurrentSessionId: context.effectiveCurrentSessionId,
+      conversationSessionId: context.currentSessionDbId,
+      sessionIsActive:
+        typeof context.currentSession.is_active === "boolean"
+          ? context.currentSession.is_active
+          : null,
+      sessionArchivedAt:
+        typeof context.currentSession.archived_at === "string"
+          ? context.currentSession.archived_at
+          : null,
+    },
+    reasons,
+  );
+}
+
+function buildRunGraphDimension(task: AuditTaskRow, context: TaskAuditContext) {
+  const stats = context.runGraphStats;
+
+  return createDimension(
+    {
+      taskCurrentRunId: task.taskCurrentRunId,
+      snapshotCurrentRunId: task.snapshotCurrentRunId,
+      effectiveCurrentRunId: context.effectiveCurrentRunId,
+      runStatus: context.currentRun?.status ?? null,
+      orchestrationKind: context.currentRun?.orchestrationKind ?? null,
+      candidateCount: context.currentRun?.candidateCount ?? null,
+      pipelineStepCount: context.currentRun?.pipelineStepCount ?? null,
+      actualExecutionNodes: stats.actualExecutionNodes,
+      actualCandidateNodes: stats.actualCandidateNodes,
+      actualActiveCandidateNodes: stats.actualActiveCandidateNodes,
+      actualCompletedCandidateNodes: stats.actualCompletedCandidateNodes,
+      actualFailedCandidateNodes: stats.actualFailedCandidateNodes,
+      actualChainNodes: stats.actualChainNodes,
+      actualCompletedChainNodes: stats.actualCompletedChainNodes,
+      winnerNodeId: context.currentRun?.winnerNodeId ?? task.snapshotWinnerNodeId,
+    },
+    buildRunGraphReasonList(task, context),
+  );
+}
+
+function buildMessageCountDimension(context: TaskAuditContext) {
+  const reasons: string[] = [];
+  const currentMessageCount = parseCount(context.currentSessionMessageCounts.message_count);
+  const projectedDistinctMessageCount = parseCount(
+    context.currentSessionMessageCounts.projected_distinct_message_count,
+  );
+
+  if (context.effectiveCurrentSessionId && !context.currentSessionDbId) {
+    reasons.push("cannot compare messages because current session record is missing");
+  } else if (currentMessageCount !== projectedDistinctMessageCount) {
+    reasons.push(
+      `conversation_messages=${currentMessageCount} but task_timeline_views distinct message_id=${projectedDistinctMessageCount}`,
+    );
+  }
+
+  return createDimension(
+    {
+      effectiveCurrentSessionId: context.effectiveCurrentSessionId,
+      conversationSessionId: context.currentSessionDbId,
+      conversationMessageCount: currentMessageCount,
+      projectedDistinctMessageCount,
+    },
+    reasons,
+  );
+}
+
+function buildTimelineItemCountDimension(context: TaskAuditContext) {
+  const reasons: string[] = [];
+
+  if (
+    context.timelineStats.actualTimelineItemCount !==
+    context.timelineStats.expectedTimelineItemCount
+  ) {
+    reasons.push(
+      `task_timeline_views=${context.timelineStats.actualTimelineItemCount} but expected=${context.timelineStats.expectedTimelineItemCount}`,
+    );
+  }
+
+  return createDimension(
+    {
+      expectedTimelineItemCount: context.timelineStats.expectedTimelineItemCount,
+      actualTimelineItemCount: context.timelineStats.actualTimelineItemCount,
+      breakdown: {
+        statusEventCount: context.timelineStats.statusEventCount,
+        sessionCount: context.timelineStats.sessionCount,
+        runNodeCount: context.timelineStats.runNodeCount,
+        taskMessageCount: context.timelineStats.taskMessageCount,
+        eligibleMessagePartCount: context.timelineStats.eligibleMessagePartCount,
+      },
+    },
+    reasons,
+  );
+}
+
+function buildTaskAuditDimensions(task: AuditTaskRow, context: TaskAuditContext) {
+  return {
+    status: buildStatusDimension(task, context),
+    currentSession: buildCurrentSessionDimension(task, context),
+    runGraph: buildRunGraphDimension(task, context),
+    messageCount: buildMessageCountDimension(context),
+    timelineItemCount: buildTimelineItemCountDimension(context),
+  } satisfies Record<AuditDimensionKey, AuditDimension>;
+}
+
+async function auditTaskRecord(task: AuditTaskRow) {
+  const context = await loadTaskAuditContext(task);
+  const dimensions = buildTaskAuditDimensions(task, context);
+
+  const mismatchCount = Object.values(dimensions).filter((dimension) => !dimension.ok).length;
+
+  return {
+    taskId: task.taskId,
+    projectId: task.projectId,
+    title: task.title,
+    createdAt: task.createdAt,
+    healthy: mismatchCount === 0,
+    mismatchCount,
+    dimensions,
+  } satisfies TaskAuditRecord;
+}
+
+function printHumanReport(report: {
+  scope: Record<string, unknown>;
+  totals: {
+    auditedTaskCount: number;
+    healthyTaskCount: number;
+    mismatchedTaskCount: number;
+    mismatchedDimensionCount: number;
+  };
+  tasks: TaskAuditRecord[];
+}) {
+  console.log("Task-domain consistency audit");
+  console.log(`Scope: ${JSON.stringify(report.scope)}`);
+  console.log(`Totals: ${JSON.stringify(report.totals)}`);
+
+  if (report.tasks.length === 0) {
+    if (report.totals.auditedTaskCount === 0) {
+      console.log("No tasks matched the requested scope.");
+    } else {
+      console.log("No mismatches found in the requested scope.");
+    }
+    return;
+  }
+
+  for (const task of report.tasks) {
+    console.log(`\n- ${formatTaskLabel(task)}${task.healthy ? " [healthy]" : " [mismatch]"}`);
+    for (const [dimensionKey, dimension] of Object.entries(task.dimensions) as Array<
+      [AuditDimensionKey, AuditDimension]
+    >) {
+      if (dimension.ok) {
+        console.log(`  ${dimensionKey}: ok`);
+        continue;
+      }
+      console.log(`  ${dimensionKey}: ${dimension.reasons.join("; ")}`);
+    }
+  }
+}
+
+async function main() {
+  const args = parseCliArgs();
+  const taskId = parseOptionalString(args["task-id"]);
+  const projectId = parseOptionalString(args["project-id"]);
+  const limit = parseLimit(args.limit);
+  const json = getBooleanArg(args, "json", false);
+  const includeHealthy = getBooleanArg(args, "include-healthy", false);
+  const failOnMismatch = getBooleanArg(args, "fail-on-mismatch", false);
+  const help = getBooleanArg(args, "help", false);
+
+  if (help) {
+    console.log(`Usage: bun run src/db/migration/audit-task-domain-consistency.ts [options]
+
+Options:
+  --task-id <id>           Audit a single task.
+  --project-id <id>        Audit tasks for a project.
+  --limit <n>              Max tasks to inspect when not using --task-id. Default: 50.
+  --include-healthy        Include healthy tasks in the default text output.
+  --json                   Emit JSON instead of text.
+  --fail-on-mismatch       Exit with code 2 when any mismatch is found.
+  --help                   Show this message.
+`);
+    return;
+  }
+
+  const baseQuery = db
+    .select({
+      taskId: tasks.id,
+      projectId: tasks.projectId,
+      title: tasks.title,
+      createdAt: tasks.createdAt,
+      taskStatus: tasks.status,
+      taskCurrentRunId: tasks.currentRunId,
+      taskCurrentSessionId: tasks.currentSessionId,
+      snapshotStatus: taskSnapshots.currentStatus,
+      snapshotCurrentRunId: taskSnapshots.currentRunId,
+      snapshotCurrentSessionId: taskSnapshots.currentSessionId,
+      snapshotActiveCandidateCount: taskSnapshots.activeCandidateCount,
+      snapshotCompletedCandidateCount: taskSnapshots.completedCandidateCount,
+      snapshotFailedCandidateCount: taskSnapshots.failedCandidateCount,
+      snapshotTotalChainSteps: taskSnapshots.totalChainSteps,
+      snapshotCompletedChainSteps: taskSnapshots.completedChainSteps,
+      snapshotWinnerNodeId: taskSnapshots.winnerNodeId,
+    })
+    .from(tasks)
+    .leftJoin(taskSnapshots, eq(taskSnapshots.taskId, tasks.id))
+    .orderBy(desc(tasks.createdAt));
+
+  const baseTasks = taskId
+    ? await baseQuery.where(eq(tasks.id, taskId))
+    : projectId
+      ? await baseQuery.where(eq(tasks.projectId, projectId)).limit(limit)
+      : await baseQuery.limit(limit);
+  const auditedTasks = await Promise.all(baseTasks.map((task) => auditTaskRecord(task)));
+  const visibleTasks = includeHealthy ? auditedTasks : auditedTasks.filter((task) => !task.healthy);
+  const mismatchedTasks = auditedTasks.filter((task) => !task.healthy);
+
+  const totals = {
+    auditedTaskCount: auditedTasks.length,
+    healthyTaskCount: auditedTasks.filter((task) => task.healthy).length,
+    mismatchedTaskCount: mismatchedTasks.length,
+    mismatchedDimensionCount: mismatchedTasks.reduce((sum, task) => sum + task.mismatchCount, 0),
+  };
+
+  const report = {
+    scope: {
+      taskId: taskId ?? null,
+      projectId: projectId ?? null,
+      limit: taskId ? 1 : limit,
+      includeHealthy,
+    },
+    totals,
+    tasks: visibleTasks,
+  };
+
+  if (json) {
+    console.log(JSON.stringify(report, null, 2));
+  } else {
+    printHumanReport(report);
+  }
+
+  if (failOnMismatch && mismatchedTasks.length > 0) {
+    process.exitCode = 2;
+  }
+}
+
+main()
+  .catch((error) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  })
+  .finally(async () => {
+    await closeDatabase();
+  });

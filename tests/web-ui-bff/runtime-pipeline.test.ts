@@ -1,33 +1,77 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import type {
-  ExecutionPlan,
   PersistedTaskStrategy,
+  RuntimePlan,
 } from "../../control-plane/web-ui-bff/src/lib/orchestration-strategy";
 
 const cpFetchMock = mock(async (_url: string, _options?: { authorization?: string }) => ({
   ok: false,
   data: undefined,
 }));
+mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () => ({
+  authHeader: mock(() => "Bearer test"),
+  cpFetch: cpFetchMock,
+  createInternalAuthorization: mock(async () => "Bearer internal"),
+  setControlPlaneFetchHandler: mock(() => undefined),
+}));
 
 const getSessionMessagesMock = mock(async (_sessionId: string) => ({
   ok: true,
   data: [] as Array<Record<string, unknown>>,
 }));
-
-mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () => ({
-  cpFetch: cpFetchMock,
-  createInternalAuthorization: mock(async () => "Bearer internal"),
+const extractAssistantResultFromMessagesMock = mock(() => ({
+  completed: false,
+  failed: false,
+  error: undefined as string | undefined,
+  tokenUsed: 0,
 }));
-
-mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter", () => ({
-  getSessionMessages: getSessionMessagesMock,
+const getAgentRunMock = mock(() => undefined);
+const listSessionsMock = mock(async () => ({
+  ok: true,
+  data: [] as Array<Record<string, unknown>>,
 }));
+const recoverAgentRunMock = mock(() => undefined);
+
+function buildOpencodeAdapterMock() {
+  return {
+    continueSession: mock(async () => ({ ok: true })),
+    createSession: mock(async () => ({ ok: true, sessionId: "session-1", agentRunId: "run-1" })),
+    ensureAgentRunForSession: mock(() => "run-1"),
+    extractAssistantResultFromMessages: extractAssistantResultFromMessagesMock,
+    findAgentRunBySessionId: mock(() => undefined),
+    forkSession: mock(async () => ({ ok: true, sessionId: "session-2" })),
+    getAgentMessages: mock(async () => ({ ok: true, data: [] })),
+    getAgentRun: getAgentRunMock,
+    getSessionMessages: getSessionMessagesMock,
+    injectGuidance: mock(async () => ({ ok: true })),
+    listAgentRuns: mock(() => []),
+    listRuntimePermissions: mock(async () => ({ ok: true, data: [] })),
+    listSessions: listSessionsMock,
+    pauseAgent: mock(async () => ({ ok: true })),
+    recoverAgentRun: recoverAgentRunMock,
+    registerAgentRun: mock(() => undefined),
+    replyRuntimePermission: mock(async () => ({ ok: true })),
+    resumeAgent: mock(async () => ({ ok: true })),
+    runDetachedPrompt: mock(async () => ({
+      ok: true,
+      text: "judge result",
+      sessionId: "judge-ses",
+    })),
+    terminateAgent: mock(async () => ({ ok: true })),
+    updateAgentRunStatus: mock(() => undefined),
+  };
+}
+
+mock.module(
+  "../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter",
+  buildOpencodeAdapterMock,
+);
 
 async function loadRuntimePipelineModule() {
   return import("../../control-plane/web-ui-bff/src/lib/runtime-pipeline?runtime-pipeline-test");
 }
 
-function createExecutionPlan(overrides: Partial<ExecutionPlan> = {}): ExecutionPlan {
+function createRuntimePlan(overrides: Partial<RuntimePlan> = {}): RuntimePlan {
   return {
     templateId: "parallel-template",
     mode: "parallel",
@@ -96,14 +140,114 @@ function createStrategy(overrides: Partial<PersistedTaskStrategy> = {}): Persist
   };
 }
 
+function createParallelDomainRuns(overrides: Partial<Array<Record<string, unknown>>> = []) {
+  const defaultRun = {
+    id: "run-parallel-1",
+    taskId: "task-1",
+    projectId: "proj-1",
+    orchestrationKind: "parallel",
+    status: "running",
+    rootSessionId: "ses-root",
+    createdAt: "2026-03-12T09:59:00.000Z",
+    updatedAt: "2026-03-12T10:02:00.000Z",
+    startedAt: "2026-03-12T09:59:00.000Z",
+    finishedAt: null,
+  };
+
+  return (overrides.length ? overrides : [defaultRun]) as Array<Record<string, unknown>>;
+}
+
+function createParallelDomainRunDetail(overrides?: Partial<Record<string, unknown>>) {
+  return {
+    run: {
+      id: "run-parallel-1",
+      taskId: "task-1",
+      projectId: "proj-1",
+      orchestrationKind: "parallel",
+      status: "running",
+      rootSessionId: "ses-root",
+      createdAt: "2026-03-12T09:59:00.000Z",
+      updatedAt: "2026-03-12T10:02:00.000Z",
+    },
+    nodes: [],
+    candidateNodes: [
+      {
+        id: "candidate-node-1",
+        runId: "run-parallel-1",
+        taskId: "task-1",
+        projectId: "proj-1",
+        nodeKind: "candidate",
+        nodeKey: "candidate:0",
+        title: "候选 A",
+        candidateIndex: 0,
+        agentType: "default-executor",
+        modelUsed: "gpt-5.4",
+        sessionId: "ses-branch-1",
+        status: "running",
+        resultText: "正在生成实现",
+        startedAt: "2026-03-12T10:00:00.000Z",
+        finishedAt: null,
+      },
+      {
+        id: "candidate-node-2",
+        runId: "run-parallel-1",
+        taskId: "task-1",
+        projectId: "proj-1",
+        nodeKind: "candidate",
+        nodeKey: "candidate:1",
+        title: "候选 B",
+        candidateIndex: 1,
+        agentType: "reviewer",
+        modelUsed: "gpt-5.4",
+        sessionId: "ses-branch-2",
+        status: "completed",
+        resultText: "已给出替代方案",
+        startedAt: "2026-03-12T09:59:00.000Z",
+        finishedAt: "2026-03-12T10:01:00.000Z",
+      },
+    ],
+    judgeNode: {
+      id: "judge-node-1",
+      runId: "run-parallel-1",
+      taskId: "task-1",
+      projectId: "proj-1",
+      nodeKind: "judge",
+      nodeKey: "judge",
+      title: "评判 / 聚合",
+      agentType: null,
+      modelUsed: null,
+      sessionId: "ses-judge",
+      status: "pending",
+      resultText: "等待所有候选完成后再裁决",
+      startedAt: null,
+      finishedAt: "2026-03-12T10:02:00.000Z",
+    },
+    winnerCandidateIndex: null,
+    ...overrides,
+  };
+}
+
 beforeEach(() => {
   cpFetchMock.mockReset();
   getSessionMessagesMock.mockReset();
+  extractAssistantResultFromMessagesMock.mockReset();
+  getAgentRunMock.mockReset();
+  listSessionsMock.mockReset();
+  recoverAgentRunMock.mockReset();
+  extractAssistantResultFromMessagesMock.mockReturnValue({
+    completed: false,
+    failed: false,
+    error: undefined,
+    tokenUsed: 0,
+  });
+  getAgentRunMock.mockReturnValue(undefined);
+  listSessionsMock.mockResolvedValue({ ok: true, data: [] });
+  recoverAgentRunMock.mockReturnValue(undefined);
 });
 
 describe("buildRuntimePipeline", () => {
   test("finalizes unfinished stages when the task has already failed", async () => {
-    const plan = createExecutionPlan();
+    const plan = createRuntimePlan();
     const strategy = createStrategy();
 
     cpFetchMock.mockImplementation(async (url: string) => {
@@ -113,11 +257,12 @@ describe("buildRuntimePipeline", () => {
           data: {
             id: "task-failed",
             status: "failed",
+            orchestrationKind: "parallel",
+            currentRunId: "run-parallel-failed",
             result: "Recovered from failed assistant session: The operation was aborted.",
             sessionId: "ses-root",
             createdAt: "2026-03-12T09:50:00.000Z",
             finishedAt: "2026-03-12T10:06:00.000Z",
-            executionPlan: JSON.stringify(plan),
             strategy: JSON.stringify(strategy),
           },
         };
@@ -146,6 +291,46 @@ describe("buildRuntimePipeline", () => {
         };
       }
 
+      if (url === "/api/tasks/task-failed/domain-runs") {
+        return {
+          ok: true,
+          data: {
+            data: createParallelDomainRuns([
+              {
+                id: "run-parallel-failed",
+                taskId: "task-failed",
+                projectId: "proj-1",
+                orchestrationKind: "parallel",
+                status: "running",
+                rootSessionId: "ses-root",
+                createdAt: "2026-03-12T09:59:00.000Z",
+                updatedAt: "2026-03-12T10:02:00.000Z",
+              },
+            ]),
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-failed/domain-runs/run-parallel-failed") {
+        return {
+          ok: true,
+          data: {
+            data: createParallelDomainRunDetail({
+              run: {
+                id: "run-parallel-failed",
+                taskId: "task-failed",
+                projectId: "proj-1",
+                orchestrationKind: "parallel",
+                status: "running",
+                rootSessionId: "ses-root",
+                createdAt: "2026-03-12T09:59:00.000Z",
+                updatedAt: "2026-03-12T10:02:00.000Z",
+              },
+            }),
+          },
+        };
+      }
+
       if (url === "/api/tasks/task-failed/graph") {
         return {
           ok: true,
@@ -170,7 +355,7 @@ describe("buildRuntimePipeline", () => {
       error: "Recovered from failed assistant session: The operation was aborted.",
       finishedAt: "2026-03-12T10:06:00.000Z",
     });
-    expect(pipeline.stages.find((stage) => stage.id === "judge:judge-1")).toMatchObject({
+    expect(pipeline.stages.find((stage) => stage.id === "judge:judge-node-1")).toMatchObject({
       status: "skipped",
       finishedAt: "2026-03-12T10:02:00.000Z",
     });
@@ -180,8 +365,8 @@ describe("buildRuntimePipeline", () => {
     });
   });
 
-  test("aggregates hooks, planning and execution plan stages for the selected branch", async () => {
-    const plan = createExecutionPlan();
+  test("aggregates hooks, planning and runtime plan stages for the selected branch", async () => {
+    const plan = createRuntimePlan();
     const strategy = createStrategy();
 
     cpFetchMock.mockImplementation(async (url: string) => {
@@ -191,9 +376,10 @@ describe("buildRuntimePipeline", () => {
           data: {
             id: "task-1",
             status: "running",
+            orchestrationKind: "parallel",
+            currentRunId: "run-parallel-1",
             sessionId: "ses-root",
             createdAt: "2026-03-12T09:50:00.000Z",
-            executionPlan: JSON.stringify(plan),
             strategy: JSON.stringify(strategy),
           },
         };
@@ -212,6 +398,24 @@ describe("buildRuntimePipeline", () => {
                 isActive: true,
               },
             ],
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/domain-runs") {
+        return {
+          ok: true,
+          data: {
+            data: createParallelDomainRuns(),
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/domain-runs/run-parallel-1") {
+        return {
+          ok: true,
+          data: {
+            data: createParallelDomainRunDetail(),
           },
         };
       }
@@ -338,9 +542,10 @@ describe("buildRuntimePipeline", () => {
     );
     expect(runningCandidate).toMatchObject({
       status: "running",
-      graphNodeId: null,
+      graphNodeId: "candidate-node-1",
       sessionId: "ses-branch-1",
       output: "正在生成实现",
+      sourceType: "taskRun.node",
     });
 
     expect(pipeline.stages.find((stage) => stage.id === "graph:node-other")).toBeUndefined();
@@ -364,7 +569,6 @@ describe("buildRuntimePipeline", () => {
             status: "running",
             sessionId: "ses-root",
             createdAt: "2026-03-12T11:00:00.000Z",
-            executionPlan: JSON.stringify(createExecutionPlan()),
             strategy: JSON.stringify(createStrategy()),
           },
         };
@@ -420,7 +624,7 @@ describe("buildRuntimePipeline", () => {
     });
   });
 
-  test("falls back to planning stages when the task has no execution plan", async () => {
+  test("ignores legacy runtime plan and falls back to planning stages for non-parallel tasks", async () => {
     cpFetchMock.mockImplementation(async (url: string) => {
       if (url === "/api/project-tree/tasks/task-3") {
         return {
@@ -428,9 +632,10 @@ describe("buildRuntimePipeline", () => {
           data: {
             id: "task-3",
             status: "completed",
+            orchestrationKind: "single",
             sessionId: "ses-root",
             createdAt: "2026-03-12T12:00:00.000Z",
-            executionPlan: null,
+            executionPlan: JSON.stringify(createRuntimePlan()),
             strategy: JSON.stringify({
               selectedAgent: "default-executor",
             } satisfies PersistedTaskStrategy),
@@ -504,7 +709,7 @@ describe("buildRuntimePipeline", () => {
   });
 
   test("keeps duplicate-session candidates distinct without graph-node enrichment", async () => {
-    const plan = createExecutionPlan({
+    const plan = createRuntimePlan({
       candidates: [
         {
           label: "候选 A1",
@@ -529,9 +734,10 @@ describe("buildRuntimePipeline", () => {
           data: {
             id: "task-4",
             status: "running",
+            orchestrationKind: "parallel",
+            currentRunId: "run-shared-1",
             sessionId: "ses-root",
             createdAt: "2026-03-12T13:00:00.000Z",
-            executionPlan: JSON.stringify(plan),
             strategy: JSON.stringify(createStrategy({ hookExecutions: [] })),
           },
         };
@@ -549,6 +755,78 @@ describe("buildRuntimePipeline", () => {
                 isActive: true,
               },
             ],
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-4/domain-runs") {
+        return {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "run-shared-1",
+                taskId: "task-4",
+                projectId: "proj-1",
+                orchestrationKind: "parallel",
+                status: "running",
+                rootSessionId: "ses-root",
+                createdAt: "2026-03-12T13:00:00.000Z",
+                updatedAt: "2026-03-12T13:00:10.000Z",
+              },
+            ],
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-4/domain-runs/run-shared-1") {
+        return {
+          ok: true,
+          data: {
+            data: {
+              run: {
+                id: "run-shared-1",
+                taskId: "task-4",
+                projectId: "proj-1",
+                orchestrationKind: "parallel",
+                status: "running",
+                rootSessionId: "ses-root",
+                createdAt: "2026-03-12T13:00:00.000Z",
+                updatedAt: "2026-03-12T13:00:10.000Z",
+              },
+              nodes: [],
+              candidateNodes: [
+                {
+                  id: "shared-node-1",
+                  runId: "run-shared-1",
+                  taskId: "task-4",
+                  projectId: "proj-1",
+                  nodeKind: "candidate",
+                  nodeKey: "candidate:0",
+                  title: "候选 A1",
+                  candidateIndex: 0,
+                  agentType: "default-executor",
+                  sessionId: "ses-shared",
+                  status: "running",
+                  startedAt: "2026-03-12T13:00:00.000Z",
+                },
+                {
+                  id: "shared-node-2",
+                  runId: "run-shared-1",
+                  taskId: "task-4",
+                  projectId: "proj-1",
+                  nodeKind: "candidate",
+                  nodeKey: "candidate:1",
+                  title: "候选 A2",
+                  candidateIndex: 1,
+                  agentType: "reviewer",
+                  sessionId: "ses-shared",
+                  status: "pending",
+                },
+              ],
+              judgeNode: null,
+              winnerCandidateIndex: null,
+            },
           },
         };
       }
@@ -616,11 +894,11 @@ describe("buildRuntimePipeline", () => {
     const firstCandidate = pipeline.stages.find((stage) => stage.id === "candidate:0:ses-shared");
     const secondCandidate = pipeline.stages.find((stage) => stage.id === "candidate:1:ses-shared");
     expect(firstCandidate).toMatchObject({
-      graphNodeId: null,
+      graphNodeId: "shared-node-1",
       sessionId: "ses-shared",
     });
     expect(secondCandidate).toMatchObject({
-      graphNodeId: null,
+      graphNodeId: "shared-node-2",
       sessionId: "ses-shared",
     });
     expect(pipeline.stages.find((stage) => stage.id === "graph:node-no-session")).toBeUndefined();

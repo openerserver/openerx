@@ -153,15 +153,8 @@ describe("TaskWorkbench regression", () => {
       title: "并行待采纳任务",
       status: "completed",
       executionMode: "parallel",
-      executionPlan: JSON.stringify({
-        templateId: "parallel-default",
-        mode: "parallel",
-        steps: [{ id: "exec-parallel", type: "execution", status: "completed" }],
-        candidates: [
-          { label: "候选 A", agent: "executor", status: "completed", result: "A" },
-          { label: "候选 B", agent: "executor", status: "completed", result: "B" },
-        ],
-      }),
+      orchestrationKind: "parallel",
+      currentRunCandidateCount: 2,
     });
 
     const { wrapper, workbench } = await mountWorkbench();

@@ -385,10 +385,7 @@ function normalizeTemplateControls(templateStage?: WorkflowTemplateStagePayload 
   };
 }
 
-function resolveRoleLabel(
-  roleAgentId: string | null | undefined,
-  roleLabels: Map<string, string>,
-) {
+function resolveRoleLabel(roleAgentId: string | null | undefined, roleLabels: Map<string, string>) {
   return roleLabels.get(roleAgentId || "") || fallbackRoleLabelFromId(roleAgentId);
 }
 
@@ -550,7 +547,8 @@ function applyProjectStageRuntimeCounts(
   summary: ProjectStageRuntimeSummaryViewModel,
   runtimeSummary: TaskStageRuntimeSummaryViewModel,
 ) {
-  summary.blockDecisionCount += runtimeSummary.blockDecisionCount + runtimeSummary.manualReviewCount;
+  summary.blockDecisionCount +=
+    runtimeSummary.blockDecisionCount + runtimeSummary.manualReviewCount;
   summary.approvalDecisionCount += runtimeSummary.approvalDecisionCount;
   summary.openChangeRequestCount += runtimeSummary.openChangeRequestCount;
   summary.blockingChangeRequestCount += runtimeSummary.blockingChangeRequestCount;
@@ -785,7 +783,9 @@ export async function buildTaskWorkflowViewModel(
         };
       }),
     },
-    roleConclusions: conclusions.map((item, index) => mapRoleConclusionItem(item, index, roleLabels)),
+    roleConclusions: conclusions.map((item, index) =>
+      mapRoleConclusionItem(item, index, roleLabels),
+    ),
     developerChangeRequests: mappedRequests.map((item, index) => ({
       id: item.id || `${item.sourceRoleAgentId || "role"}-request-${index}`,
       sourceRoleAgentId: item.sourceRoleAgentId || "unknown",

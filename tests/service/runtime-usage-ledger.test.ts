@@ -103,14 +103,23 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  const taskCleanupStatements = [
+    ...createdTaskIds.map((id) => `DELETE FROM tasks WHERE id='${id}';`),
+    ...(DATABASE_DIALECT === "postgres"
+      ? [
+          ...createdTaskIds.map((id) => `DELETE FROM project_tree_events WHERE node_id='${id}';`),
+          ...createdTaskIds.map(
+            (id) =>
+              `DELETE FROM project_tree_branches WHERE task_node_id='${id}' OR head_node_id='${id}';`,
+          ),
+          ...createdTaskIds.map((id) => `DELETE FROM project_tree_nodes WHERE id='${id}';`),
+        ]
+      : []),
+  ];
   const statements = [
     ...createdStepIds.map((id) => `DELETE FROM runtime_usage_ledger_steps WHERE id='${id}';`),
     ...createdLedgerIds.map((id) => `DELETE FROM runtime_usage_ledgers WHERE id='${id}';`),
-    ...createdTaskIds.map((id) => `DELETE FROM project_tree_events WHERE node_id='${id}';`),
-    ...createdTaskIds.map(
-      (id) => `DELETE FROM project_tree_branches WHERE task_node_id='${id}' OR head_node_id='${id}';`,
-    ),
-    ...createdTaskIds.map((id) => `DELETE FROM project_tree_nodes WHERE id='${id}';`),
+    ...taskCleanupStatements,
   ];
 
   if (statements.length === 0) {

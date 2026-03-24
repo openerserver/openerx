@@ -323,19 +323,16 @@ async function installMonitorMocks(page: Page) {
     await fulfillJson(route, buildExecutionTrace("2026-03-14T08:09:00.000Z", "认证修复仍在推进。"));
   });
 
-  await page.route(
-    "**/api/tasks/task-fallback-1/execution-trace**",
-    async (route) => {
-      await fulfillJson(route, buildExecutionTrace("2026-03-14T07:09:00.000Z", "构建修复记录已结束。"));
-    },
-  );
+  await page.route("**/api/tasks/task-fallback-1/execution-trace**", async (route) => {
+    await fulfillJson(
+      route,
+      buildExecutionTrace("2026-03-14T07:09:00.000Z", "构建修复记录已结束。"),
+    );
+  });
 
-  await page.route(
-    "**/api/tasks/task-fallback-2/execution-trace**",
-    async (route) => {
-      await fulfillJson(route, buildExecutionTrace("2026-03-14T08:16:00.000Z", "巡检任务仍在执行。"));
-    },
-  );
+  await page.route("**/api/tasks/task-fallback-2/execution-trace**", async (route) => {
+    await fulfillJson(route, buildExecutionTrace("2026-03-14T08:16:00.000Z", "巡检任务仍在执行。"));
+  });
 
   await page.route("**/api/tasks/task-stage-1/pipeline**", async (route) => {
     await fulfillJson(route, buildStagePipeline());
@@ -396,27 +393,24 @@ async function installDenseStatusMonitorMocks(page: Page) {
     });
   });
 
-  await page.route(
-    "**/api/tasks/task-failed-2/execution-trace**",
-    async (route) => {
-      await fulfillJson(
-        route,
-        buildExecutionTrace("2026-03-14T06:55:00.000Z", "审批回退已终止，等待人工介入。"),
-      );
-    },
-  );
-  await page.route(
-    "**/api/tasks/task-completed-1/execution-trace**",
-    async (route) => {
-      await fulfillJson(route, buildExecutionTrace("2026-03-14T05:48:00.000Z", "发布巡检已完成归档。"));
-    },
-  );
-  await page.route(
-    "**/api/tasks/task-completed-2/execution-trace**",
-    async (route) => {
-      await fulfillJson(route, buildExecutionTrace("2026-03-14T04:52:00.000Z", "日志清理任务已结束。"));
-    },
-  );
+  await page.route("**/api/tasks/task-failed-2/execution-trace**", async (route) => {
+    await fulfillJson(
+      route,
+      buildExecutionTrace("2026-03-14T06:55:00.000Z", "审批回退已终止，等待人工介入。"),
+    );
+  });
+  await page.route("**/api/tasks/task-completed-1/execution-trace**", async (route) => {
+    await fulfillJson(
+      route,
+      buildExecutionTrace("2026-03-14T05:48:00.000Z", "发布巡检已完成归档。"),
+    );
+  });
+  await page.route("**/api/tasks/task-completed-2/execution-trace**", async (route) => {
+    await fulfillJson(
+      route,
+      buildExecutionTrace("2026-03-14T04:52:00.000Z", "日志清理任务已结束。"),
+    );
+  });
 
   await page.route("**/api/tasks/task-failed-2/pipeline**", async (route) => {
     await route.fulfill({

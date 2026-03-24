@@ -1,6 +1,7 @@
 /// <reference types="bun-types" />
 
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { createSseAggregatorModuleMock } from "./sse-aggregator-mock";
 
 const cpFetchMock = mock(async (..._args: unknown[]) => ({ ok: true, data: {} }));
 const authHeaderMock = mock(() => "Bearer test");
@@ -21,7 +22,65 @@ const persistWorkflowStageExecutionOutcomeMock = mock(async () => ({
 }));
 const wsBroadcastMock = mock(() => undefined);
 
+function buildOpencodeAdapterMock() {
+  return {
+    continueSession: mock(async () => ({ ok: true })),
+    createSession: mock(async () => ({ ok: true, sessionId: "session-1", agentRunId: "run-1" })),
+    ensureAgentRunForSession: mock(() => "run-1"),
+    extractAssistantResultFromMessages: mock(() => ({
+      completed: false,
+      failed: false,
+      error: undefined,
+      tokenUsed: 0,
+    })),
+    findAgentRunBySessionId: mock(() => undefined),
+    forkSession: mock(async () => ({ ok: true, sessionId: "session-2" })),
+    getAgentMessages: mock(async () => ({ ok: true, data: [] })),
+    getAgentRun: mock(() => undefined),
+    getSessionMessages: mock(async () => ({ ok: true, data: [] })),
+    injectGuidance: mock(async () => ({ ok: true })),
+    listAgentRuns: mock(() => []),
+    listRuntimePermissions: mock(async () => ({ ok: true, data: [] })),
+    listSessions: mock(async () => ({ ok: true, data: [] })),
+    pauseAgent: mock(async () => ({ ok: true })),
+    recoverAgentRun: mock(() => undefined),
+    registerAgentRun: mock(() => undefined),
+    replyRuntimePermission: mock(async () => ({ ok: true })),
+    resumeAgent: mock(async () => ({ ok: true })),
+    runDetachedPrompt: mock(async () => ({ ok: true, sessionId: "session-detached", text: "{}" })),
+    terminateAgent: terminateAgentMock,
+    updateAgentRunStatus: mock(() => undefined),
+  };
+}
+
 type RouteFetchOptions = { method?: string; body?: unknown; authorization?: string };
+
+type MockRouteResponse = { ok: boolean; data: unknown };
+type MockRouteHandler = {
+  url: string;
+  method?: string;
+  response:
+    | MockRouteResponse
+    | ((options: RouteFetchOptions | undefined) => MockRouteResponse | Promise<MockRouteResponse>);
+};
+
+function mockCpFetchRoutes(handlers: MockRouteHandler[]) {
+  cpFetchMock.mockImplementation(async (...args: unknown[]) => {
+    const [url, options] = args as [string, RouteFetchOptions | undefined];
+    const matchedHandler = handlers.find(
+      (handler) =>
+        handler.url === url && (handler.method ?? undefined) === (options?.method ?? undefined),
+    );
+
+    if (!matchedHandler) {
+      return { ok: true, data: {} };
+    }
+
+    return typeof matchedHandler.response === "function"
+      ? await matchedHandler.response(options)
+      : matchedHandler.response;
+  });
+}
 
 async function loadTaskRoutes() {
   return import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
@@ -33,27 +92,10 @@ mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () =>
   createInternalAuthorization: createInternalAuthorizationMock,
 }));
 
-mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter", () => ({
-  continueSession: mock(async () => ({ ok: true })),
-  createSession: mock(async () => ({ ok: true, sessionId: "session-1", agentRunId: "run-1" })),
-  ensureAgentRunForSession: mock(() => "run-1"),
-  extractAssistantResultFromMessages: mock(() => ({
-    completed: false,
-    failed: false,
-    error: undefined,
-    tokenUsed: 0,
-  })),
-  forkSession: mock(async () => ({ ok: true, sessionId: "session-2" })),
-  getAgentRun: mock(() => undefined),
-  getSessionMessages: mock(async () => ({ ok: true, data: [] })),
-  listRuntimePermissions: mock(async () => ({ ok: true, data: [] })),
-  listSessions: mock(async () => ({ ok: true, data: [] })),
-  replyRuntimePermission: mock(async () => ({ ok: true })),
-  recoverAgentRun: mock(() => undefined),
-  runDetachedPrompt: mock(async () => ({ ok: true, sessionId: "session-detached", text: "{}" })),
-  terminateAgent: terminateAgentMock,
-  updateAgentRunStatus: mock(() => undefined),
-}));
+mock.module(
+  "../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter",
+  buildOpencodeAdapterMock,
+);
 
 mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/run-persistence", () => ({
   createAgentRunRecord: mock(async () => undefined),
@@ -76,12 +118,12 @@ mock.module("../../control-plane/web-ui-bff/src/modules/realtime/pipeline-events
   buildPipelineStageUpdatedEvents: mock(() => []),
 }));
 
-mock.module("../../control-plane/web-ui-bff/src/modules/realtime/sse-aggregator", () => ({
-  sseAggregator: {
+mock.module("../../control-plane/web-ui-bff/src/modules/realtime/sse-aggregator", () =>
+  createSseAggregatorModuleMock({
     registerParallelTask: mock(() => undefined),
     registerSequentialChainTask: mock(() => undefined),
-  },
-}));
+  }),
+);
 
 mock.module("../../control-plane/web-ui-bff/src/modules/realtime/ws-broadcaster", () => ({
   wsBroadcaster: {
@@ -118,10 +160,10 @@ describe("task completion routes", () => {
   });
 
   test("POST /:taskId/complete marks the task completed and persists current stage summary", async () => {
-    cpFetchMock.mockImplementation(async (...args: unknown[]) => {
-      const [url, options] = args as [string, RouteFetchOptions | undefined];
-      if (!options?.method && url === "/api/project-tree/tasks/task-1") {
-        return {
+    mockCpFetchRoutes([
+      {
+        url: "/api/project-tree/tasks/task-1",
+        response: {
           ok: true,
           data: {
             id: "task-1",
@@ -131,11 +173,11 @@ describe("task completion routes", () => {
             status: "running",
             result: "范围已确认。\n[STAGE_COMPLETE]",
           },
-        };
-      }
-
-      if (!options?.method && url === "/api/tasks/task-1/workflow") {
-        return {
+        },
+      },
+      {
+        url: "/api/tasks/task-1/workflow",
+        response: {
           ok: true,
           data: {
             data: {
@@ -154,19 +196,19 @@ describe("task completion routes", () => {
               ],
             },
           },
-        };
-      }
-
-      if (options?.method === "PATCH" && url === "/api/tasks/task-1") {
-        return { ok: true, data: { ok: true, body: options.body } };
-      }
-
-      if (options?.method === "POST" && url === "/api/tasks/task-1/workflow/advance") {
-        return { ok: true, data: { ok: true, body: options.body } };
-      }
-
-      return { ok: true, data: {} };
-    });
+        },
+      },
+      {
+        url: "/api/tasks/task-1",
+        method: "PATCH",
+        response: (options) => ({ ok: true, data: { ok: true, body: options?.body } }),
+      },
+      {
+        url: "/api/tasks/task-1/workflow/advance",
+        method: "POST",
+        response: (options) => ({ ok: true, data: { ok: true, body: options?.body } }),
+      },
+    ]);
 
     const { taskRoutes } = await loadTaskRoutes();
 
@@ -199,7 +241,9 @@ describe("task completion routes", () => {
       },
     });
     expect(wsBroadcastMock).toHaveBeenCalledTimes(1);
-    const broadcastCalls = wsBroadcastMock.mock.calls as unknown as Array<[Record<string, unknown>]>;
+    const broadcastCalls = wsBroadcastMock.mock.calls as unknown as Array<
+      [Record<string, unknown>]
+    >;
     const broadcastEvent = broadcastCalls[0]?.[0];
     expect(broadcastEvent).toMatchObject({
       type: "task.completed",
@@ -214,10 +258,10 @@ describe("task completion routes", () => {
   });
 
   test("POST /:taskId/complete falls back to generated stage summary when no persisted summary exists", async () => {
-    cpFetchMock.mockImplementation(async (...args: unknown[]) => {
-      const [url, options] = args as [string, RouteFetchOptions | undefined];
-      if (!options?.method && url === "/api/project-tree/tasks/task-1b") {
-        return {
+    mockCpFetchRoutes([
+      {
+        url: "/api/project-tree/tasks/task-1b",
+        response: {
           ok: true,
           data: {
             id: "task-1b",
@@ -227,11 +271,11 @@ describe("task completion routes", () => {
             status: "running",
             result: "系统生成摘要。\n[STAGE_COMPLETE]",
           },
-        };
-      }
-
-      if (!options?.method && url === "/api/tasks/task-1b/workflow") {
-        return {
+        },
+      },
+      {
+        url: "/api/tasks/task-1b/workflow",
+        response: {
           ok: true,
           data: {
             data: {
@@ -239,19 +283,19 @@ describe("task completion routes", () => {
               stages: [{ stageKey: "clarify" }],
             },
           },
-        };
-      }
-
-      if (options?.method === "PATCH" && url === "/api/tasks/task-1b") {
-        return { ok: true, data: { ok: true } };
-      }
-
-      if (options?.method === "POST" && url === "/api/tasks/task-1b/workflow/advance") {
-        return { ok: true, data: { ok: true, body: options.body } };
-      }
-
-      return { ok: true, data: {} };
-    });
+        },
+      },
+      {
+        url: "/api/tasks/task-1b",
+        method: "PATCH",
+        response: { ok: true, data: { ok: true } },
+      },
+      {
+        url: "/api/tasks/task-1b/workflow/advance",
+        method: "POST",
+        response: (options) => ({ ok: true, data: { ok: true, body: options?.body } }),
+      },
+    ]);
 
     const generatedSummary = {
       summary: "系统生成摘要。",
@@ -323,10 +367,13 @@ describe("task completion routes", () => {
     });
 
     expect(response.status).toBe(200);
-    const cpFetchCalls = cpFetchMock.mock.calls as unknown as Array<[string, RouteFetchOptions | undefined]>;
+    const cpFetchCalls = cpFetchMock.mock.calls as unknown as Array<
+      [string, RouteFetchOptions | undefined]
+    >;
     expect(
       cpFetchCalls.some(
-        ([path, options]) => path === "/api/tasks/task-1c/workflow/advance" && options?.method === "POST",
+        ([path, options]) =>
+          path === "/api/tasks/task-1c/workflow/advance" && options?.method === "POST",
       ),
     ).toBe(false);
   });
@@ -514,10 +561,10 @@ describe("task completion routes", () => {
   });
 
   test("POST /:taskId/candidates/:index/adopt marks the winner, persists summary, and broadcasts completion", async () => {
-    cpFetchMock.mockImplementation(async (...args: unknown[]) => {
-      const [url, options] = args as [string, RouteFetchOptions | undefined];
-      if (!options?.method && url === "/api/project-tree/tasks/task-adopt-1") {
-        return {
+    mockCpFetchRoutes([
+      {
+        url: "/api/project-tree/tasks/task-adopt-1",
+        response: {
           ok: true,
           data: {
             id: "task-adopt-1",
@@ -525,36 +572,64 @@ describe("task completion routes", () => {
             projectId: "proj-adopt",
             prompt: "Clarify scope",
             status: "running",
-            executionPlan: JSON.stringify({
-              parallelRunId: "prun-1",
-              templateId: "tmpl-1",
-              mode: "parallel",
-              steps: [],
-              candidates: [
+            orchestrationKind: "parallel",
+          },
+        },
+      },
+      {
+        url: "/api/tasks/task-adopt-1/domain-runs",
+        response: {
+          ok: true,
+          data: { data: [{ id: "run-adopt-1", orchestrationKind: "parallel" }] },
+        },
+      },
+      {
+        url: "/api/tasks/task-adopt-1/domain-runs/run-adopt-1",
+        response: {
+          ok: true,
+          data: {
+            data: {
+              run: { id: "run-adopt-1", orchestrationKind: "parallel", winnerNodeId: null },
+              nodes: [],
+              candidateNodes: [
                 {
-                  label: "Claude",
-                  agent: "executor",
+                  id: "node-a",
+                  nodeKind: "candidate",
+                  title: "Claude",
+                  candidateIndex: 0,
+                  agentType: "executor",
+                  sessionId: null,
+                  agentRunId: null,
                   status: "completed",
-                  result: "候选结果 A\n[STAGE_COMPLETE]",
+                  resultText: "候选结果 A\n[STAGE_COMPLETE]",
                 },
                 {
-                  label: "GPT",
-                  agent: "executor",
+                  id: "node-b",
+                  nodeKind: "candidate",
+                  title: "GPT",
+                  candidateIndex: 1,
+                  agentType: "executor",
+                  sessionId: null,
+                  agentRunId: null,
                   status: "completed",
-                  result: "候选结果 B",
+                  resultText: "候选结果 B",
                 },
               ],
-            }),
+              judgeNode: null,
+              winnerCandidateIndex: null,
+            },
           },
-        };
-      }
-
-      if (options?.method === "PATCH" && url === "/api/tasks/task-adopt-1") {
-        return { ok: true, data: { ok: true, body: options.body } };
-      }
-
-      return { ok: true, data: {} };
-    });
+        },
+      },
+      {
+        url: "/api/tasks/task-adopt-1/domain-runs/run-adopt-1/candidates/0/adopt",
+        method: "POST",
+        response: {
+          ok: true,
+          data: { data: { winnerCandidateIndex: 0, result: "候选结果 A\n[STAGE_COMPLETE]" } },
+        },
+      },
+    ]);
 
     const { taskRoutes } = await loadTaskRoutes();
     const response = await taskRoutes.request("http://localhost/task-adopt-1/candidates/0/adopt", {
@@ -570,80 +645,18 @@ describe("task completion routes", () => {
       resultText: "候选结果 A\n[STAGE_COMPLETE]",
       source: "manual-adopt",
     });
-    const patchCall = (cpFetchMock.mock.calls as unknown as Array<[string, RouteFetchOptions]>).find(
-      ([url, options]) => url === "/api/tasks/task-adopt-1" && options?.method === "PATCH",
-    );
-    expect(patchCall).toBeDefined();
-    expect(patchCall?.[1]?.authorization).toBe("Bearer test");
-    const patchBody = patchCall?.[1]?.body as {
-      status?: string;
-      executionPlan?: string;
-      parallelRunHistory?: string;
-      result?: string;
-    };
-    expect(patchBody.status).toBe("completed");
-    expect(patchBody.result).toBe("候选结果 A\n[STAGE_COMPLETE]");
-    expect(JSON.parse(String(patchBody.executionPlan))).toEqual({
-      parallelRunId: "prun-1",
-      templateId: "tmpl-1",
-      mode: "parallel",
-      steps: [],
-      candidates: [
-        {
-          label: "Claude",
-          agent: "executor",
-          status: "completed",
-          result: "候选结果 A\n[STAGE_COMPLETE]",
-        },
-        {
-          label: "GPT",
-          agent: "executor",
-          status: "completed",
-          result: "候选结果 B",
-        },
-      ],
-      winnerCandidateIndex: 0,
-    });
-    expect(JSON.parse(String(patchBody.parallelRunHistory))).toEqual([
+    expect(cpFetchMock).toHaveBeenCalledWith(
+      "/api/tasks/task-adopt-1/domain-runs/run-adopt-1/candidates/0/adopt",
       {
-        parallelRunId: "prun-1",
-        templateId: "tmpl-1",
-        startedAt: expect.any(String),
-        finishedAt: undefined,
-        parentSessionId: null,
-        executionSessionId: null,
-        winnerCandidateIndex: 0,
-        judgeResult: undefined,
-        candidateSessions: [
-          {
-            label: "Claude",
-            agent: "executor",
-            model: undefined,
-            role: undefined,
-            status: "completed",
-            sessionId: undefined,
-            agentRunId: undefined,
-            result: "候选结果 A\n[STAGE_COMPLETE]",
-            startedAt: undefined,
-            finishedAt: undefined,
-          },
-          {
-            label: "GPT",
-            agent: "executor",
-            model: undefined,
-            role: undefined,
-            status: "completed",
-            sessionId: undefined,
-            agentRunId: undefined,
-            result: "候选结果 B",
-            startedAt: undefined,
-            finishedAt: undefined,
-          },
-        ],
+        method: "POST",
+        authorization: "Bearer test",
+        body: { stoppedCandidates: [] },
       },
-    ]);
+    );
     expect(wsBroadcastMock).toHaveBeenCalledTimes(1);
-    const broadcastCalls = wsBroadcastMock.mock.calls as unknown as Array<[Record<string, unknown>]>;
+    const broadcastCalls = wsBroadcastMock.mock.calls as unknown as Array<
+      [Record<string, unknown>]
+    >;
     expect(broadcastCalls[0]?.[0]).toMatchObject({
       type: "task.completed",
       taskId: "task-adopt-1",
@@ -659,10 +672,10 @@ describe("task completion routes", () => {
   });
 
   test("POST /:taskId/candidates/:index/adopt allows adopting a completed candidate without result text", async () => {
-    cpFetchMock.mockImplementation(async (...args: unknown[]) => {
-      const [url, options] = args as [string, RouteFetchOptions | undefined];
-      if (!options?.method && url === "/api/project-tree/tasks/task-adopt-2") {
-        return {
+    mockCpFetchRoutes([
+      {
+        url: "/api/project-tree/tasks/task-adopt-2",
+        response: {
           ok: true,
           data: {
             id: "task-adopt-2",
@@ -670,23 +683,50 @@ describe("task completion routes", () => {
             projectId: "proj-adopt",
             prompt: "Clarify scope",
             status: "running",
-            executionPlan: JSON.stringify({
-              parallelRunId: "prun-2",
-              templateId: "tmpl-1",
-              mode: "parallel",
-              steps: [],
-              candidates: [{ label: "Claude", agent: "executor", status: "completed" }],
-            }),
+            orchestrationKind: "parallel",
           },
-        };
-      }
-
-      if (options?.method === "PATCH" && url === "/api/tasks/task-adopt-2") {
-        return { ok: true, data: { ok: true, body: options.body } };
-      }
-
-      return { ok: true, data: {} };
-    });
+        },
+      },
+      {
+        url: "/api/tasks/task-adopt-2/domain-runs",
+        response: {
+          ok: true,
+          data: { data: [{ id: "run-adopt-2", orchestrationKind: "parallel" }] },
+        },
+      },
+      {
+        url: "/api/tasks/task-adopt-2/domain-runs/run-adopt-2",
+        response: {
+          ok: true,
+          data: {
+            data: {
+              run: { id: "run-adopt-2", orchestrationKind: "parallel", winnerNodeId: null },
+              nodes: [],
+              candidateNodes: [
+                {
+                  id: "node-a",
+                  nodeKind: "candidate",
+                  title: "Claude",
+                  candidateIndex: 0,
+                  agentType: "executor",
+                  sessionId: null,
+                  agentRunId: null,
+                  status: "completed",
+                  resultText: null,
+                },
+              ],
+              judgeNode: null,
+              winnerCandidateIndex: null,
+            },
+          },
+        },
+      },
+      {
+        url: "/api/tasks/task-adopt-2/domain-runs/run-adopt-2/candidates/0/adopt",
+        method: "POST",
+        response: { ok: true, data: { data: { winnerCandidateIndex: 0, result: null } } },
+      },
+    ]);
 
     const { taskRoutes } = await loadTaskRoutes();
     const response = await taskRoutes.request("http://localhost/task-adopt-2/candidates/0/adopt", {
@@ -701,58 +741,21 @@ describe("task completion routes", () => {
       resultText: undefined,
       source: "manual-adopt",
     });
-    const patchCall = (cpFetchMock.mock.calls as unknown as Array<[string, RouteFetchOptions]>).find(
-      ([url, options]) => url === "/api/tasks/task-adopt-2" && options?.method === "PATCH",
-    );
-    expect(patchCall).toBeDefined();
-    expect(patchCall?.[1]?.authorization).toBe("Bearer test");
-    const patchBody = patchCall?.[1]?.body as {
-      status?: string;
-      executionPlan?: string;
-      parallelRunHistory?: string;
-    };
-    expect(patchBody.status).toBe("completed");
-    expect(JSON.parse(String(patchBody.executionPlan))).toEqual({
-      parallelRunId: "prun-2",
-      templateId: "tmpl-1",
-      mode: "parallel",
-      steps: [],
-      candidates: [{ label: "Claude", agent: "executor", status: "completed" }],
-      winnerCandidateIndex: 0,
-    });
-    expect(JSON.parse(String(patchBody.parallelRunHistory))).toEqual([
+    expect(cpFetchMock).toHaveBeenCalledWith(
+      "/api/tasks/task-adopt-2/domain-runs/run-adopt-2/candidates/0/adopt",
       {
-        parallelRunId: "prun-2",
-        templateId: "tmpl-1",
-        startedAt: expect.any(String),
-        finishedAt: undefined,
-        parentSessionId: null,
-        executionSessionId: null,
-        winnerCandidateIndex: 0,
-        judgeResult: undefined,
-        candidateSessions: [
-          {
-            label: "Claude",
-            agent: "executor",
-            model: undefined,
-            role: undefined,
-            status: "completed",
-            sessionId: undefined,
-            agentRunId: undefined,
-            result: undefined,
-            startedAt: undefined,
-            finishedAt: undefined,
-          },
-        ],
+        method: "POST",
+        authorization: "Bearer test",
+        body: { stoppedCandidates: [] },
       },
-    ]);
+    );
   });
 
   test("POST /:taskId/candidates/:index/adopt stops unfinished losing candidates", async () => {
-    cpFetchMock.mockImplementation(async (...args: unknown[]) => {
-      const [url, options] = args as [string, RouteFetchOptions | undefined];
-      if (!options?.method && url === "/api/project-tree/tasks/task-adopt-running") {
-        return {
+    mockCpFetchRoutes([
+      {
+        url: "/api/project-tree/tasks/task-adopt-running",
+        response: {
           ok: true,
           data: {
             id: "task-adopt-running",
@@ -760,60 +763,58 @@ describe("task completion routes", () => {
             projectId: "proj-adopt",
             prompt: "Clarify scope",
             status: "running",
-            executionPlan: JSON.stringify({
-              parallelRunId: "prun-1",
-              templateId: "tmpl-1",
-              mode: "parallel",
-              steps: [],
-              candidates: [
+            orchestrationKind: "parallel",
+          },
+        },
+      },
+      {
+        url: "/api/tasks/task-adopt-running/domain-runs",
+        response: {
+          ok: true,
+          data: { data: [{ id: "run-adopt-running", orchestrationKind: "parallel" }] },
+        },
+      },
+      {
+        url: "/api/tasks/task-adopt-running/domain-runs/run-adopt-running",
+        response: {
+          ok: true,
+          data: {
+            data: {
+              run: { id: "run-adopt-running", orchestrationKind: "parallel", winnerNodeId: null },
+              nodes: [],
+              candidateNodes: [
                 {
-                  label: "Claude",
-                  agent: "executor",
-                  status: "completed",
-                  result: "候选结果 A",
+                  id: "node-a",
+                  nodeKind: "candidate",
+                  title: "Claude",
+                  candidateIndex: 0,
+                  agentType: "executor",
                   sessionId: "ses-a",
                   agentRunId: "run-a",
+                  status: "completed",
+                  resultText: "候选结果 A",
                 },
                 {
-                  label: "GPT",
-                  agent: "executor",
-                  status: "running",
+                  id: "node-b",
+                  nodeKind: "candidate",
+                  title: "GPT",
+                  candidateIndex: 1,
+                  agentType: "executor",
                   sessionId: "ses-b",
                   agentRunId: "run-b",
+                  status: "running",
+                  resultText: null,
                 },
               ],
-            }),
-            parallelRunHistory: JSON.stringify([
-              {
-                parallelRunId: "prun-1",
-                startedAt: "2026-03-22T05:25:22.000Z",
-                parentSessionId: "ses-root",
-                executionSessionId: "ses-root",
-                candidateSessions: [
-                  {
-                    label: "Claude",
-                    agent: "executor",
-                    status: "completed",
-                    result: "候选结果 A",
-                    sessionId: "ses-a",
-                    agentRunId: "run-a",
-                  },
-                  {
-                    label: "GPT",
-                    agent: "executor",
-                    status: "running",
-                    sessionId: "ses-b",
-                    agentRunId: "run-b",
-                  },
-                ],
-              },
-            ]),
+              judgeNode: null,
+              winnerCandidateIndex: null,
+            },
           },
-        };
-      }
-
-      if (!options?.method && url === "/api/tasks/task-adopt-running/branches") {
-        return {
+        },
+      },
+      {
+        url: "/api/tasks/task-adopt-running/branches",
+        response: {
           ok: true,
           data: {
             data: [
@@ -837,22 +838,19 @@ describe("task completion routes", () => {
               },
             ],
           },
-        };
-      }
-
-      if (
-        options?.method === "POST" &&
-        url === "/api/tasks/task-adopt-running/branches/ts-a/activate"
-      ) {
-        return { ok: true, data: { ok: true } };
-      }
-
-      if (options?.method === "PATCH" && url === "/api/tasks/task-adopt-running") {
-        return { ok: true, data: { ok: true, body: options.body } };
-      }
-
-      return { ok: true, data: {} };
-    });
+        },
+      },
+      {
+        url: "/api/tasks/task-adopt-running/branches/ts-a/activate",
+        method: "POST",
+        response: { ok: true, data: { ok: true } },
+      },
+      {
+        url: "/api/tasks/task-adopt-running/domain-runs/run-adopt-running/candidates/0/adopt",
+        method: "POST",
+        response: { ok: true, data: { data: { winnerCandidateIndex: 0, result: "候选结果 A" } } },
+      },
+    ]);
 
     const { taskRoutes } = await loadTaskRoutes();
     const response = await taskRoutes.request(
@@ -872,77 +870,23 @@ describe("task completion routes", () => {
         authorization: "Bearer test",
       },
     );
-
-    const patchCall = (cpFetchMock.mock.calls as unknown as Array<[string, RouteFetchOptions]>).find(
-      ([url, options]) => url === "/api/tasks/task-adopt-running" && options?.method === "PATCH",
-    );
-    expect(patchCall).toBeDefined();
-    const patchBody = patchCall?.[1]?.body as {
-      executionPlan?: string;
-      parallelRunHistory?: string;
-      result?: string;
-      status?: string;
-    };
-    expect(patchBody.status).toBe("completed");
-    expect(patchBody.result).toBe("候选结果 A");
-    expect(JSON.parse(String(patchBody.executionPlan))).toEqual({
-      parallelRunId: "prun-1",
-      templateId: "tmpl-1",
-      mode: "parallel",
-      steps: [],
-      candidates: [
-        {
-          label: "Claude",
-          agent: "executor",
-          status: "completed",
-          result: "候选结果 A",
-          sessionId: "ses-a",
-          agentRunId: "run-a",
-        },
-        {
-          label: "GPT",
-          agent: "executor",
-          status: "stopped",
-          sessionId: "ses-b",
-          agentRunId: "run-b",
-          result:
-            "[STOPPED] Manual candidate adoption ended this parallel run before the candidate completed.",
-          finishedAt: expect.any(String),
-        },
-      ],
-      winnerCandidateIndex: 0,
-    });
-    expect(JSON.parse(String(patchBody.parallelRunHistory))).toEqual([
+    expect(cpFetchMock).toHaveBeenCalledWith(
+      "/api/tasks/task-adopt-running/domain-runs/run-adopt-running/candidates/0/adopt",
       {
-        parallelRunId: "prun-1",
-        templateId: "tmpl-1",
-        startedAt: expect.any(String),
-        finishedAt: expect.any(String),
-        parentSessionId: null,
-        executionSessionId: null,
-        winnerCandidateIndex: 0,
-        candidateSessions: [
-          {
-            label: "Claude",
-            agent: "executor",
-            status: "completed",
-            result: "候选结果 A",
-            sessionId: "ses-a",
-            agentRunId: "run-a",
-          },
-          {
-            label: "GPT",
-            agent: "executor",
-            status: "stopped",
-            sessionId: "ses-b",
-            agentRunId: "run-b",
-            result:
-              "[STOPPED] Manual candidate adoption ended this parallel run before the candidate completed.",
-            finishedAt: expect.any(String),
-          },
-        ],
+        method: "POST",
+        authorization: "Bearer test",
+        body: {
+          stoppedCandidates: [
+            {
+              candidateIndex: 1,
+              status: "cancelled",
+              resultText:
+                "[STOPPED] Manual candidate adoption ended this parallel run before the candidate completed.",
+            },
+          ],
+        },
       },
-    ]);
+    );
 
     const broadcasts = wsBroadcastMock.mock.calls as unknown as Array<[Record<string, unknown>]>;
     expect(broadcasts[0]?.[0]).toMatchObject({
@@ -969,10 +913,10 @@ describe("task completion routes", () => {
   });
 
   test("POST /:taskId/candidates/:index/adopt activates the winner task session lineage", async () => {
-    cpFetchMock.mockImplementation(async (...args: unknown[]) => {
-      const [url, options] = args as [string, RouteFetchOptions | undefined];
-      if (!options?.method && url === "/api/project-tree/tasks/task-adopt-activate") {
-        return {
+    mockCpFetchRoutes([
+      {
+        url: "/api/project-tree/tasks/task-adopt-activate",
+        response: {
           ok: true,
           data: {
             id: "task-adopt-activate",
@@ -980,27 +924,59 @@ describe("task completion routes", () => {
             projectId: "proj-adopt",
             prompt: "Clarify scope",
             status: "running",
-            executionPlan: JSON.stringify({
-              templateId: "tmpl-1",
-              mode: "parallel",
-              steps: [],
-              candidates: [
+            sessionId: "ses-root",
+            orchestrationKind: "parallel",
+          },
+        },
+      },
+      {
+        url: "/api/tasks/task-adopt-activate/domain-runs",
+        response: {
+          ok: true,
+          data: { data: [{ id: "run-adopt-activate", orchestrationKind: "parallel" }] },
+        },
+      },
+      {
+        url: "/api/tasks/task-adopt-activate/domain-runs/run-adopt-activate",
+        response: {
+          ok: true,
+          data: {
+            data: {
+              run: { id: "run-adopt-activate", orchestrationKind: "parallel", winnerNodeId: null },
+              nodes: [],
+              candidateNodes: [
                 {
-                  label: "Claude",
-                  agent: "executor",
-                  status: "completed",
-                  result: "候选结果 A",
+                  id: "node-a",
+                  nodeKind: "candidate",
+                  title: "Claude",
+                  candidateIndex: 0,
+                  agentType: "executor",
                   sessionId: "ses-winner",
                   agentRunId: "run-a",
+                  status: "completed",
+                  resultText: "候选结果 A",
+                },
+                {
+                  id: "node-b",
+                  nodeKind: "candidate",
+                  title: "GPT",
+                  candidateIndex: 1,
+                  agentType: "executor",
+                  sessionId: "ses-other",
+                  agentRunId: "run-b",
+                  status: "completed",
+                  resultText: "候选结果 B",
                 },
               ],
-            }),
+              judgeNode: null,
+              winnerCandidateIndex: null,
+            },
           },
-        };
-      }
-
-      if (!options?.method && url === "/api/tasks/task-adopt-activate/branches") {
-        return {
+        },
+      },
+      {
+        url: "/api/tasks/task-adopt-activate/branches",
+        response: {
           ok: true,
           data: {
             data: [
@@ -1018,22 +994,14 @@ describe("task completion routes", () => {
               },
             ],
           },
-        };
-      }
-
-      if (
-        options?.method === "POST" &&
-        url === "/api/tasks/task-adopt-activate/branches/ts-winner/activate"
-      ) {
-        return { ok: true, data: { ok: true } };
-      }
-
-      if (options?.method === "PATCH" && url === "/api/tasks/task-adopt-activate") {
-        return { ok: true, data: { ok: true, body: options.body } };
-      }
-
-      return { ok: true, data: {} };
-    });
+        },
+      },
+      {
+        url: "/api/tasks/task-adopt-activate/domain-runs/run-adopt-activate/candidates/0/adopt",
+        method: "POST",
+        response: { ok: true, data: { data: { winnerCandidateIndex: 0, result: "候选结果 A" } } },
+      },
+    ]);
 
     const { taskRoutes } = await loadTaskRoutes();
     const response = await taskRoutes.request(
@@ -1081,10 +1049,10 @@ describe("task completion routes", () => {
   test("POST /:taskId/candidates/:index/adopt repairs missing candidate lineage before activation", async () => {
     let lineageReadCount = 0;
 
-    cpFetchMock.mockImplementation(async (...args: unknown[]) => {
-      const [url, options] = args as [string, RouteFetchOptions | undefined];
-      if (!options?.method && url === "/api/project-tree/tasks/task-adopt-repair") {
-        return {
+    mockCpFetchRoutes([
+      {
+        url: "/api/project-tree/tasks/task-adopt-repair",
+        response: {
           ok: true,
           data: {
             id: "task-adopt-repair",
@@ -1093,97 +1061,125 @@ describe("task completion routes", () => {
             prompt: "Clarify scope",
             status: "running",
             sessionId: "ses-root",
-            executionPlan: JSON.stringify({
-              templateId: "tmpl-1",
-              mode: "parallel",
-              steps: [],
-              candidates: [
-                {
-                  label: "Claude",
-                  agent: "executor",
-                  status: "completed",
-                  result: "候选结果 A",
-                  sessionId: "ses-winner",
-                  agentRunId: "run-a",
-                },
-                {
-                  label: "GPT",
-                  agent: "executor",
-                  status: "completed",
-                  result: "候选结果 B",
-                  sessionId: "ses-other",
-                  agentRunId: "run-b",
-                },
-              ],
-            }),
+            orchestrationKind: "parallel",
           },
-        };
-      }
-
-      if (!options?.method && url === "/api/tasks/task-adopt-repair/branches") {
-        lineageReadCount += 1;
-        return {
+        },
+      },
+      {
+        url: "/api/tasks/task-adopt-repair/domain-runs",
+        response: {
+          ok: true,
+          data: { data: [{ id: "run-adopt-repair", orchestrationKind: "parallel" }] },
+        },
+      },
+      {
+        url: "/api/tasks/task-adopt-repair/domain-runs/run-adopt-repair",
+        response: {
           ok: true,
           data: {
-            data:
-              lineageReadCount === 1
-                ? [
-                    {
-                      id: "ts-root",
-                      runtimeSessionId: "ses-root",
-                      branchName: "main",
-                      sourceType: "root",
-                      isActive: true,
-                      archivedAt: null,
-                    },
-                  ]
-                : [
-                    {
-                      id: "ts-root",
-                      runtimeSessionId: "ses-root",
-                      branchName: "main",
-                      sourceType: "root",
-                      isActive: true,
-                      archivedAt: null,
-                    },
-                    {
-                      id: "ts-winner",
-                      runtimeSessionId: "ses-winner",
-                      branchName: "Claude",
-                      sourceType: "fork",
-                      isActive: false,
-                      archivedAt: null,
-                    },
-                    {
-                      id: "ts-other",
-                      runtimeSessionId: "ses-other",
-                      branchName: "GPT",
-                      sourceType: "fork",
-                      isActive: false,
-                      archivedAt: null,
-                    },
-                  ],
+            data: {
+              run: { id: "run-adopt-repair", orchestrationKind: "parallel", winnerNodeId: null },
+              nodes: [],
+              candidateNodes: [
+                {
+                  id: "node-a",
+                  nodeKind: "candidate",
+                  title: "Claude",
+                  candidateIndex: 0,
+                  agentType: "executor",
+                  sessionId: "ses-winner",
+                  agentRunId: "run-a",
+                  status: "completed",
+                  resultText: "候选结果 A",
+                },
+                {
+                  id: "node-b",
+                  nodeKind: "candidate",
+                  title: "GPT",
+                  candidateIndex: 1,
+                  agentType: "executor",
+                  sessionId: "ses-other",
+                  agentRunId: "run-b",
+                  status: "completed",
+                  resultText: "候选结果 B",
+                },
+              ],
+              judgeNode: null,
+              winnerCandidateIndex: null,
+            },
           },
-        };
-      }
-
-      if (options?.method === "POST" && url === "/api/tasks/task-adopt-repair/branches") {
-        return { ok: true, data: { ok: true } };
-      }
-
-      if (
-        options?.method === "POST" &&
-        url === "/api/tasks/task-adopt-repair/branches/ts-winner/activate"
-      ) {
-        return { ok: true, data: { ok: true } };
-      }
-
-      if (options?.method === "PATCH" && url === "/api/tasks/task-adopt-repair") {
-        return { ok: true, data: { ok: true, body: options.body } };
-      }
-
-      return { ok: true, data: {} };
-    });
+        },
+      },
+      {
+        url: "/api/tasks/task-adopt-repair/branches",
+        response: () => {
+          lineageReadCount += 1;
+          return {
+            ok: true,
+            data: {
+              data:
+                lineageReadCount === 1
+                  ? [
+                      {
+                        id: "ts-root",
+                        runtimeSessionId: "ses-root",
+                        branchName: "main",
+                        sourceType: "root",
+                        isActive: true,
+                        archivedAt: null,
+                      },
+                    ]
+                  : [
+                      {
+                        id: "ts-root",
+                        runtimeSessionId: "ses-root",
+                        branchName: "main",
+                        sourceType: "root",
+                        isActive: true,
+                        archivedAt: null,
+                      },
+                      {
+                        id: "ts-winner",
+                        runtimeSessionId: "ses-winner",
+                        branchName: "Claude",
+                        sourceType: "fork",
+                        isActive: false,
+                        archivedAt: null,
+                      },
+                      {
+                        id: "ts-other",
+                        runtimeSessionId: "ses-other",
+                        branchName: "GPT",
+                        sourceType: "fork",
+                        isActive: false,
+                        archivedAt: null,
+                      },
+                    ],
+            },
+          };
+        },
+      },
+      {
+        url: "/api/tasks/task-adopt-repair/branches",
+        method: "POST",
+        response: { ok: true, data: { ok: true } },
+      },
+      {
+        url: "/api/tasks/task-adopt-repair/branches/ts-winner/activate",
+        method: "POST",
+        response: { ok: true, data: { ok: true } },
+      },
+      {
+        url: "/api/tasks/task-adopt-repair",
+        method: "PATCH",
+        response: (options) => ({ ok: true, data: { ok: true, body: options?.body } }),
+      },
+      {
+        url: "/api/tasks/task-adopt-repair/domain-runs/run-adopt-repair/candidates/0/adopt",
+        method: "POST",
+        response: { ok: true, data: { data: { winnerCandidateIndex: 0, result: "候选结果 A" } } },
+      },
+    ]);
 
     const { taskRoutes } = await loadTaskRoutes();
     const response = await taskRoutes.request(
@@ -1227,18 +1223,255 @@ describe("task completion routes", () => {
     );
   });
 
+  test("POST /:taskId/candidates/:index/adopt prefers domain runs and skips legacy task patch for projection-backed tasks", async () => {
+    mockCpFetchRoutes([
+      {
+        url: "/api/project-tree/tasks/task-adopt-domain",
+        response: {
+          ok: true,
+          data: {
+            id: "task-adopt-domain",
+            title: "Parallel clarify",
+            projectId: "proj-adopt",
+            prompt: "Clarify scope",
+            status: "running",
+            sessionId: "ses-root",
+          },
+        },
+      },
+      {
+        url: "/api/tasks/task-adopt-domain/domain-runs",
+        response: {
+          ok: true,
+          data: {
+            data: [{ id: "run-domain-1", orchestrationKind: "parallel" }],
+          },
+        },
+      },
+      {
+        url: "/api/tasks/task-adopt-domain/domain-runs/run-domain-1",
+        response: {
+          ok: true,
+          data: {
+            data: {
+              run: { id: "run-domain-1", orchestrationKind: "parallel", winnerNodeId: null },
+              nodes: [],
+              candidateNodes: [
+                {
+                  id: "node-a",
+                  nodeKind: "candidate",
+                  title: "Claude",
+                  candidateIndex: 0,
+                  agentType: "executor",
+                  modelUsed: "claude-3-7-sonnet",
+                  sessionId: "ses-a",
+                  agentRunId: "run-a",
+                  status: "completed",
+                  resultText: "候选结果 A",
+                },
+                {
+                  id: "node-b",
+                  nodeKind: "candidate",
+                  title: "GPT",
+                  candidateIndex: 1,
+                  agentType: "executor",
+                  modelUsed: "gpt-4.1",
+                  sessionId: "ses-b",
+                  agentRunId: "run-b",
+                  status: "running",
+                },
+              ],
+              judgeNode: null,
+              winnerCandidateIndex: null,
+            },
+          },
+        },
+      },
+      {
+        url: "/api/tasks/task-adopt-domain/branches",
+        response: {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "ts-root",
+                runtimeSessionId: "ses-root",
+                branchName: "main",
+                sourceType: "root",
+                isActive: true,
+                archivedAt: null,
+              },
+              {
+                id: "ts-a",
+                runtimeSessionId: "ses-a",
+                branchName: "Claude",
+                sourceType: "fork",
+                isActive: false,
+                archivedAt: null,
+              },
+              {
+                id: "ts-b",
+                runtimeSessionId: "ses-b",
+                branchName: "GPT",
+                sourceType: "fork",
+                isActive: false,
+                archivedAt: null,
+              },
+            ],
+          },
+        },
+      },
+      {
+        url: "/api/tasks/task-adopt-domain/branches/ts-a/activate",
+        method: "POST",
+        response: { ok: true, data: { ok: true } },
+      },
+      {
+        url: "/api/tasks/task-adopt-domain/domain-runs/run-domain-1/candidates/0/adopt",
+        method: "POST",
+        response: {
+          ok: true,
+          data: {
+            data: {
+              winnerCandidateIndex: 0,
+              result: "候选结果 A",
+            },
+          },
+        },
+      },
+    ]);
+
+    const { taskRoutes } = await loadTaskRoutes();
+    const response = await taskRoutes.request(
+      "http://localhost/task-adopt-domain/candidates/0/adopt",
+      {
+        method: "POST",
+        headers: { Authorization: "Bearer test" },
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expect(terminateAgentMock).toHaveBeenCalledWith("run-b");
+    expect(persistWorkflowStageExecutionOutcomeMock).toHaveBeenCalledWith({
+      taskId: "task-adopt-domain",
+      authorization: "Bearer test",
+      resultText: "候选结果 A",
+      source: "manual-adopt",
+    });
+
+    expect(cpFetchMock).toHaveBeenCalledWith(
+      "/api/tasks/task-adopt-domain/domain-runs/run-domain-1/candidates/0/adopt",
+      {
+        method: "POST",
+        authorization: "Bearer test",
+        body: {
+          stoppedCandidates: [
+            {
+              candidateIndex: 1,
+              status: "cancelled",
+              resultText:
+                "[STOPPED] Manual candidate adoption ended this parallel run before the candidate completed.",
+            },
+          ],
+        },
+      },
+    );
+
+    const legacyPatchCall = (
+      cpFetchMock.mock.calls as unknown as Array<[string, RouteFetchOptions]>
+    ).find(
+      ([url, options]) => url === "/api/tasks/task-adopt-domain" && options?.method === "PATCH",
+    );
+    expect(legacyPatchCall).toBeUndefined();
+  });
+
+  test("POST /:taskId/candidates/:index/adopt returns 404 when no parallel domain run exists even if legacy fields are present", async () => {
+    cpFetchMock.mockImplementation(async (...args: unknown[]) => {
+      const [url, options] = args as [string, RouteFetchOptions | undefined];
+      if (!options?.method && url === "/api/project-tree/tasks/task-adopt-backfill") {
+        return {
+          ok: true,
+          data: {
+            id: "task-adopt-backfill",
+            title: "Parallel clarify",
+            projectId: "proj-adopt",
+            prompt: "Clarify scope",
+            status: "completed",
+            sessionId: "ses-root",
+            executionPlan: JSON.stringify({
+              parallelRunId: "legacy-prun-current",
+              templateId: "tmpl-1",
+              mode: "parallel",
+              steps: [],
+              candidates: [
+                {
+                  label: "Claude",
+                  agent: "executor",
+                  status: "completed",
+                  result: "候选结果 A",
+                  sessionId: "ses-a",
+                  agentRunId: "run-a",
+                },
+                {
+                  label: "GPT",
+                  agent: "executor",
+                  status: "completed",
+                  result: "候选结果 B",
+                  sessionId: "ses-b",
+                  agentRunId: "run-b",
+                },
+              ],
+            }),
+            parallelRunHistory: JSON.stringify([
+              {
+                parallelRunId: "legacy-prun-history",
+                startedAt: "2026-03-20T00:00:00.000Z",
+                finishedAt: "2026-03-20T00:10:00.000Z",
+                candidateSessions: [
+                  { label: "Claude", agent: "executor", status: "completed", result: "旧结果 A" },
+                  { label: "GPT", agent: "executor", status: "failed", result: "旧结果 B" },
+                ],
+              },
+            ]),
+          },
+        };
+      }
+
+      if (!options?.method && url === "/api/tasks/task-adopt-backfill/domain-runs") {
+        return { ok: true, data: { data: [] } };
+      }
+
+      return { ok: true, data: {} };
+    });
+
+    const { taskRoutes } = await loadTaskRoutes();
+    const response = await taskRoutes.request(
+      "http://localhost/task-adopt-backfill/candidates/0/adopt",
+      {
+        method: "POST",
+        headers: { Authorization: "Bearer test" },
+      },
+    );
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({ error: "Task domain run not found" });
+  });
+
   test("POST /:taskId/candidates/:index/adopt returns 400 for invalid candidate index", async () => {
     const { taskRoutes } = await loadTaskRoutes();
-    const response = await taskRoutes.request("http://localhost/task-adopt-invalid/candidates/not-a-number/adopt", {
-      method: "POST",
-      headers: { Authorization: "Bearer test" },
-    });
+    const response = await taskRoutes.request(
+      "http://localhost/task-adopt-invalid/candidates/not-a-number/adopt",
+      {
+        method: "POST",
+        headers: { Authorization: "Bearer test" },
+      },
+    );
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({ error: "Invalid candidate index" });
   });
 
-  test("POST /:taskId/candidates/:index/adopt returns 400 when task has no execution plan", async () => {
+  test("POST /:taskId/candidates/:index/adopt returns 404 when task has no parallel domain run", async () => {
     cpFetchMock.mockImplementation(async (...args: unknown[]) => {
       const [url, options] = args as [string, RouteFetchOptions | undefined];
       if (!options?.method && url === "/api/project-tree/tasks/task-adopt-no-plan") {
@@ -1254,20 +1487,27 @@ describe("task completion routes", () => {
         };
       }
 
+      if (!options?.method && url === "/api/tasks/task-adopt-no-plan/domain-runs") {
+        return { ok: true, data: { data: [] } };
+      }
+
       return { ok: true, data: {} };
     });
 
     const { taskRoutes } = await loadTaskRoutes();
-    const response = await taskRoutes.request("http://localhost/task-adopt-no-plan/candidates/0/adopt", {
-      method: "POST",
-      headers: { Authorization: "Bearer test" },
-    });
+    const response = await taskRoutes.request(
+      "http://localhost/task-adopt-no-plan/candidates/0/adopt",
+      {
+        method: "POST",
+        headers: { Authorization: "Bearer test" },
+      },
+    );
 
-    expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({ error: "Task has no execution plan" });
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({ error: "Task domain run not found" });
   });
 
-  test("POST /:taskId/candidates/:index/adopt returns 400 when execution plan is not parallel", async () => {
+  test("POST /:taskId/candidates/:index/adopt returns 400 when task orchestration is not parallel", async () => {
     cpFetchMock.mockImplementation(async (...args: unknown[]) => {
       const [url, options] = args as [string, RouteFetchOptions | undefined];
       if (!options?.method && url === "/api/project-tree/tasks/task-adopt-single") {
@@ -1279,12 +1519,7 @@ describe("task completion routes", () => {
             projectId: "proj-adopt",
             prompt: "Clarify scope",
             status: "running",
-            executionPlan: JSON.stringify({
-              templateId: "tmpl-1",
-              mode: "single",
-              steps: [],
-              candidates: [{ label: "Claude", agent: "executor", status: "completed" }],
-            }),
+            orchestrationKind: "single",
           },
         };
       }
@@ -1293,10 +1528,13 @@ describe("task completion routes", () => {
     });
 
     const { taskRoutes } = await loadTaskRoutes();
-    const response = await taskRoutes.request("http://localhost/task-adopt-single/candidates/0/adopt", {
-      method: "POST",
-      headers: { Authorization: "Bearer test" },
-    });
+    const response = await taskRoutes.request(
+      "http://localhost/task-adopt-single/candidates/0/adopt",
+      {
+        method: "POST",
+        headers: { Authorization: "Bearer test" },
+      },
+    );
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({
@@ -1316,12 +1554,44 @@ describe("task completion routes", () => {
             projectId: "proj-adopt",
             prompt: "Clarify scope",
             status: "running",
-            executionPlan: JSON.stringify({
-              templateId: "tmpl-1",
-              mode: "parallel",
-              steps: [],
-              candidates: [{ label: "Claude", agent: "executor", status: "completed" }],
-            }),
+            orchestrationKind: "parallel",
+          },
+        };
+      }
+
+      if (!options?.method && url === "/api/tasks/task-adopt-missing-candidate/domain-runs") {
+        return {
+          ok: true,
+          data: { data: [{ id: "run-missing-candidate", orchestrationKind: "parallel" }] },
+        };
+      }
+
+      if (
+        !options?.method &&
+        url === "/api/tasks/task-adopt-missing-candidate/domain-runs/run-missing-candidate"
+      ) {
+        return {
+          ok: true,
+          data: {
+            data: {
+              run: { id: "run-missing-candidate", orchestrationKind: "parallel" },
+              nodes: [],
+              candidateNodes: [
+                {
+                  id: "node-a",
+                  nodeKind: "candidate",
+                  title: "Claude",
+                  candidateIndex: 0,
+                  agentType: "executor",
+                  sessionId: "ses-a",
+                  agentRunId: null,
+                  status: "completed",
+                  resultText: "候选结果 A",
+                },
+              ],
+              judgeNode: null,
+              winnerCandidateIndex: null,
+            },
           },
         };
       }
@@ -1354,12 +1624,41 @@ describe("task completion routes", () => {
             projectId: "proj-adopt",
             prompt: "Clarify scope",
             status: "running",
-            executionPlan: JSON.stringify({
-              templateId: "tmpl-1",
-              mode: "parallel",
-              steps: [],
-              candidates: [{ label: "Claude", agent: "executor", status: "running" }],
-            }),
+            orchestrationKind: "parallel",
+          },
+        };
+      }
+
+      if (!options?.method && url === "/api/tasks/task-adopt-pending/domain-runs") {
+        return {
+          ok: true,
+          data: { data: [{ id: "run-pending", orchestrationKind: "parallel" }] },
+        };
+      }
+
+      if (!options?.method && url === "/api/tasks/task-adopt-pending/domain-runs/run-pending") {
+        return {
+          ok: true,
+          data: {
+            data: {
+              run: { id: "run-pending", orchestrationKind: "parallel" },
+              nodes: [],
+              candidateNodes: [
+                {
+                  id: "node-a",
+                  nodeKind: "candidate",
+                  title: "Claude",
+                  candidateIndex: 0,
+                  agentType: "executor",
+                  sessionId: "ses-a",
+                  agentRunId: null,
+                  status: "running",
+                  resultText: null,
+                },
+              ],
+              judgeNode: null,
+              winnerCandidateIndex: null,
+            },
           },
         };
       }
@@ -1368,10 +1667,13 @@ describe("task completion routes", () => {
     });
 
     const { taskRoutes } = await loadTaskRoutes();
-    const response = await taskRoutes.request("http://localhost/task-adopt-pending/candidates/0/adopt", {
-      method: "POST",
-      headers: { Authorization: "Bearer test" },
-    });
+    const response = await taskRoutes.request(
+      "http://localhost/task-adopt-pending/candidates/0/adopt",
+      {
+        method: "POST",
+        headers: { Authorization: "Bearer test" },
+      },
+    );
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({

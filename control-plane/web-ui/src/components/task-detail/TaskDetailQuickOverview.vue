@@ -29,10 +29,7 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
-import type {
-  ExecutionMode,
-  TaskStageViewModel,
-} from "../../lib/api";
+import type { ExecutionMode, TaskStageViewModel } from "../../lib/api";
 
 const props = defineProps<{
   // Workflow 阶段
@@ -66,7 +63,7 @@ const canComplete = computed(() => {
 const canAdvance = computed(() => {
   if (!props.workflowSummary) return false;
   const currentStage = props.workflowStages.find(
-    (s) => s.stageKey === props.workflowSummary!.currentStage,
+    (s) => s.stageKey === props.workflowSummary?.currentStage,
   );
   if (!currentStage) return false;
   // 如果当前阶段已完成，且不是最后一个阶段
@@ -74,7 +71,5 @@ const canAdvance = computed(() => {
   return currentStage.status === "completed" && idx < props.workflowStages.length - 1;
 });
 
-const showCompletionActions = computed(
-  () => canComplete.value || canAdvance.value,
-);
+const showCompletionActions = computed(() => canComplete.value || canAdvance.value);
 </script>

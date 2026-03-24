@@ -1,16 +1,14 @@
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "../../db";
 import {
   projectTreeNodes,
   repositories,
   repositoryCredentials,
+  taskRuns,
+  taskSnapshots,
+  tasks,
 } from "../../db/schema";
-import type {
-  TaskCategory,
-  TaskChangesSummary,
-  TaskExecutionMode,
-  TaskStatus,
-} from "./task-types";
+import type { TaskCategory, TaskChangesSummary, TaskExecutionMode, TaskStatus } from "./task-types";
 
 export interface TaskTreeRecord {
   id: string;
@@ -30,8 +28,6 @@ export interface TaskTreeRecord {
   workingBranch: string | null;
   selectedModel: string | null;
   executionMode: TaskExecutionMode | null;
-  executionPlan: string | null;
-  parallelRunHistory: string | null;
   autoAdvanceStages: boolean;
   credentialId: string | null;
   gitAuthorName: string | null;
@@ -44,75 +40,260 @@ export interface TaskTreeRecord {
   createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;
+  orchestrationKind: string | null;
+  currentRunId: string | null;
+  currentRunStatus: string | null;
+  currentRunStartedAt: string | null;
+  currentRunFinishedAt: string | null;
+  currentRunCandidateCount: number | null;
+  currentRunPipelineStepCount: number | null;
+  latestResultSummary: string | null;
+  latestErrorText: string | null;
+  activeCandidateCount: number;
+  completedCandidateCount: number;
+  failedCandidateCount: number;
+  totalChainSteps: number;
+  completedChainSteps: number;
+  winnerNodeId: string | null;
+  lastActivityAt: string | null;
   repoName: string | null;
   remoteUrl: string | null;
   credentialLabel: string | null;
 }
 
-function parseTaskTreeContent(content: unknown) {
-  const record = content && typeof content === "object" ? (content as Record<string, unknown>) : {};
+function normalizeTaskChangesSummary(value: unknown): TaskChangesSummary | null {
+  return value && typeof value === "object" ? (value as TaskChangesSummary) : null;
+}
 
+function readNodeChangesSummary(node: typeof projectTreeNodes.$inferSelect): TaskChangesSummary | null {
+  return normalizeTaskChangesSummary(node.contentJson?.changesSummary);
+}
+
+function normalizeTaskCategory(value: unknown): TaskCategory | null {
+  return value === "quick" ||
+    value === "deep" ||
+    value === "ops" ||
+    value === "security" ||
+    value === "architecture"
+    ? (value as TaskCategory)
+    : null;
+}
+
+function asStrategyRecord(value: unknown): Record<string, unknown> | null {
+  if (!value) {
+    return null;
+  }
+
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : null;
+    } catch {
+      return null;
+    }
+  }
+
+  return typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function normalizeTaskExecutionModeFromStrategy(value: unknown): TaskExecutionMode | null {
+  const strategy = asStrategyRecord(value);
+  const executionMode = strategy?.executionMode;
+  return executionMode === "single" ||
+    executionMode === "parallel" ||
+    executionMode === "sequential-chain"
+    ? (executionMode as TaskExecutionMode)
+    : null;
+}
+
+function resolveAutoAdvanceStagesFromStrategy(value: unknown): boolean | null {
+  const strategy = asStrategyRecord(value);
+  return typeof strategy?.autoAdvanceStages === "boolean" ? strategy.autoAdvanceStages : null;
+}
+
+type TaskAggregateRow = typeof tasks.$inferSelect;
+type TaskSnapshotRow = typeof taskSnapshots.$inferSelect;
+type TaskRunRow = typeof taskRuns.$inferSelect;
+type TaskRepoRow = typeof repositories.$inferSelect;
+type TaskCredentialRow = typeof repositoryCredentials.$inferSelect;
+type MapTaskTreeNodeArgs = {
+  node: typeof projectTreeNodes.$inferSelect;
+  aggregate?: TaskAggregateRow;
+  snapshot?: TaskSnapshotRow;
+  run?: TaskRunRow;
+  repos: Map<string, TaskRepoRow>;
+  credentials: Map<string, TaskCredentialRow>;
+};
+
+function mapOrchestrationKindToExecutionMode(
+  orchestrationKind: string | null | undefined,
+): TaskExecutionMode | null {
+  return orchestrationKind === "single" ||
+    orchestrationKind === "parallel" ||
+    orchestrationKind === "sequential-chain"
+    ? orchestrationKind
+    : null;
+}
+
+function resolveTaskReferenceIds(args: MapTaskTreeNodeArgs) {
   return {
-    userId: typeof record.userId === "string" ? record.userId : null,
-    prompt: typeof record.prompt === "string" ? record.prompt : "",
-    status: (
-      record.status === "pending" ||
-      record.status === "running" ||
-      record.status === "paused" ||
-      record.status === "completed" ||
-      record.status === "failed" ||
-      record.status === "cancelled"
-        ? record.status
-        : "pending") as TaskStatus,
-    sessionId: typeof record.sessionId === "string" ? record.sessionId : null,
-    agentRunId: typeof record.agentRunId === "string" ? record.agentRunId : null,
-    result: typeof record.result === "string" ? record.result : null,
-    category: (
-      record.category === "quick" ||
-      record.category === "deep" ||
-      record.category === "ops" ||
-      record.category === "security" ||
-      record.category === "architecture"
-        ? record.category
-        : null) as TaskCategory | null,
-    strategy: record.strategy ?? null,
-    repoId: typeof record.repoId === "string" ? record.repoId : null,
-    workspaceRoot: typeof record.workspaceRoot === "string" ? record.workspaceRoot : null,
-    baseRevision: typeof record.baseRevision === "string" ? record.baseRevision : null,
-    workingBranch: typeof record.workingBranch === "string" ? record.workingBranch : null,
-    selectedModel: typeof record.selectedModel === "string" ? record.selectedModel : null,
-    executionMode: (
-      record.executionMode === "single" ||
-      record.executionMode === "parallel" ||
-      record.executionMode === "sequential-chain"
-        ? record.executionMode
-        : null) as TaskExecutionMode | null,
-    executionPlan: typeof record.executionPlan === "string" ? record.executionPlan : null,
-    parallelRunHistory:
-      typeof record.parallelRunHistory === "string" ? record.parallelRunHistory : null,
-    autoAdvanceStages:
-      typeof record.autoAdvanceStages === "boolean" ? record.autoAdvanceStages : false,
-    credentialId: typeof record.credentialId === "string" ? record.credentialId : null,
-    gitAuthorName: typeof record.gitAuthorName === "string" ? record.gitAuthorName : null,
-    gitAuthorEmail: typeof record.gitAuthorEmail === "string" ? record.gitAuthorEmail : null,
-    gitCommitterName:
-      typeof record.gitCommitterName === "string" ? record.gitCommitterName : null,
-    gitCommitterEmail:
-      typeof record.gitCommitterEmail === "string" ? record.gitCommitterEmail : null,
-    finalCommitSha: typeof record.finalCommitSha === "string" ? record.finalCommitSha : null,
-    finalBranchName: typeof record.finalBranchName === "string" ? record.finalBranchName : null,
-    changesSummary:
-      record.changesSummary && typeof record.changesSummary === "object"
-        ? (record.changesSummary as TaskChangesSummary)
-        : null,
-    createdAt: typeof record.createdAt === "string" ? record.createdAt : null,
-    startedAt: typeof record.startedAt === "string" ? record.startedAt : null,
-    finishedAt: typeof record.finishedAt === "string" ? record.finishedAt : null,
+    repoId: args.aggregate?.repoId ?? null,
+    credentialId: args.aggregate?.credentialId ?? null,
+    currentRunId: args.snapshot?.currentRunId ?? args.aggregate?.currentRunId ?? null,
   };
 }
 
-async function loadTaskReferenceMaps(taskRecords: Array<ReturnType<typeof parseTaskTreeContent>>) {
-  const repoIds = Array.from(new Set(taskRecords.map((record) => record.repoId).filter(Boolean))) as string[];
+function resolveTaskStrategyFields(args: MapTaskTreeNodeArgs) {
+  const strategy = args.aggregate?.strategyJson ?? null;
+  const executionMode =
+    mapOrchestrationKindToExecutionMode(args.snapshot?.orchestrationKind) ??
+    mapOrchestrationKindToExecutionMode(args.run?.orchestrationKind) ??
+    normalizeTaskExecutionModeFromStrategy(strategy);
+
+  return {
+    strategy,
+    executionMode,
+    autoAdvanceStages: resolveAutoAdvanceStagesFromStrategy(strategy) ?? false,
+  };
+}
+
+function resolveTaskIdentityFields(args: MapTaskTreeNodeArgs) {
+  return {
+    id: args.node.id,
+    projectId: args.aggregate?.projectId ?? args.snapshot?.projectId ?? args.node.projectId,
+    userId: args.aggregate?.createdByUserId ?? null,
+    title: args.aggregate?.title ?? args.node.contentText ?? args.node.id,
+    prompt: args.aggregate?.prompt ?? "",
+    category: normalizeTaskCategory(args.aggregate?.category),
+    createdAt: args.aggregate?.createdAt ?? args.node.createdAt,
+  };
+}
+
+function resolveTaskRepositoryFields(
+  args: MapTaskTreeNodeArgs,
+  refs: ReturnType<typeof resolveTaskReferenceIds>,
+) {
+  const repo = refs.repoId ? args.repos.get(refs.repoId) : undefined;
+  const credential = refs.credentialId ? args.credentials.get(refs.credentialId) : undefined;
+
+  return {
+    repoId: refs.repoId,
+    workspaceRoot: args.aggregate?.workspaceRoot ?? null,
+    baseRevision: args.aggregate?.baseRevision ?? null,
+    workingBranch: args.aggregate?.workingBranch ?? null,
+    selectedModel: args.aggregate?.selectedModel ?? null,
+    credentialId: refs.credentialId,
+    gitAuthorName: args.aggregate?.gitAuthorName ?? credential?.gitAuthorName ?? null,
+    gitAuthorEmail: args.aggregate?.gitAuthorEmail ?? credential?.gitAuthorEmail ?? null,
+    gitCommitterName: args.aggregate?.gitCommitterName ?? null,
+    gitCommitterEmail: args.aggregate?.gitCommitterEmail ?? null,
+    finalCommitSha: args.aggregate?.finalCommitSha ?? null,
+    finalBranchName: args.aggregate?.finalBranchName ?? null,
+    changesSummary:
+      normalizeTaskChangesSummary(args.aggregate?.changesSummaryJson) ??
+      readNodeChangesSummary(args.node),
+    repoName: repo?.name ?? null,
+    remoteUrl: repo?.remoteUrl ?? null,
+    credentialLabel: credential?.label ?? null,
+  };
+}
+
+function resolveTaskRunFields(
+  args: MapTaskTreeNodeArgs,
+  refs: ReturnType<typeof resolveTaskReferenceIds>,
+  strategyFields: ReturnType<typeof resolveTaskStrategyFields>,
+) {
+  return {
+    status: (args.snapshot?.currentStatus ?? args.aggregate?.status ?? "pending") as TaskStatus,
+    sessionId: args.snapshot?.currentSessionId ?? args.aggregate?.currentSessionId ?? null,
+    agentRunId: args.aggregate?.currentAgentRunId ?? null,
+    result: args.snapshot?.latestResult ?? args.aggregate?.latestResult ?? null,
+    strategy: strategyFields.strategy,
+    executionMode: strategyFields.executionMode,
+    autoAdvanceStages: strategyFields.autoAdvanceStages,
+    startedAt: args.aggregate?.startedAt ?? null,
+    finishedAt: args.aggregate?.finishedAt ?? null,
+    orchestrationKind: args.snapshot?.orchestrationKind ?? args.run?.orchestrationKind ?? null,
+    currentRunId: refs.currentRunId,
+    currentRunStatus: args.run?.status ?? null,
+    currentRunStartedAt: args.run?.startedAt ?? null,
+    currentRunFinishedAt: args.run?.finishedAt ?? null,
+    currentRunCandidateCount: args.run?.candidateCount ?? null,
+    currentRunPipelineStepCount: args.run?.pipelineStepCount ?? null,
+    latestResultSummary:
+      args.snapshot?.latestResultSummary ?? args.aggregate?.latestResultSummary ?? null,
+    latestErrorText: args.snapshot?.latestErrorText ?? null,
+    lastActivityAt: args.snapshot?.lastActivityAt ?? args.run?.updatedAt ?? null,
+  };
+}
+
+function resolveTaskSnapshotCountFields(args: MapTaskTreeNodeArgs) {
+  return {
+    activeCandidateCount: args.snapshot?.activeCandidateCount ?? 0,
+    completedCandidateCount: args.snapshot?.completedCandidateCount ?? 0,
+    failedCandidateCount: args.snapshot?.failedCandidateCount ?? 0,
+    totalChainSteps: args.snapshot?.totalChainSteps ?? 0,
+    completedChainSteps: args.snapshot?.completedChainSteps ?? 0,
+    winnerNodeId: args.snapshot?.winnerNodeId ?? args.run?.winnerNodeId ?? null,
+  };
+}
+
+function resolveTaskExecutionFields(
+  args: MapTaskTreeNodeArgs,
+  refs: ReturnType<typeof resolveTaskReferenceIds>,
+  strategyFields: ReturnType<typeof resolveTaskStrategyFields>,
+) {
+  return {
+    ...resolveTaskRunFields(args, refs, strategyFields),
+    ...resolveTaskSnapshotCountFields(args),
+  };
+}
+
+async function loadTaskDomainMaps(taskIds: string[]) {
+  if (taskIds.length === 0) {
+    return {
+      aggregates: new Map<string, TaskAggregateRow>(),
+      snapshots: new Map<string, TaskSnapshotRow>(),
+      runs: new Map<string, TaskRunRow>(),
+    };
+  }
+
+  const [aggregateRows, snapshotRows] = await Promise.all([
+    db.select().from(tasks).where(inArray(tasks.id, taskIds)),
+    db.select().from(taskSnapshots).where(inArray(taskSnapshots.taskId, taskIds)),
+  ]);
+
+  const currentRunIds = Array.from(
+    new Set(
+      [
+        ...aggregateRows.map((row) => row.currentRunId),
+        ...snapshotRows.map((row) => row.currentRunId),
+      ].filter((value): value is string => typeof value === "string" && value.length > 0),
+    ),
+  );
+
+  const runRows =
+    currentRunIds.length > 0
+      ? await db.select().from(taskRuns).where(inArray(taskRuns.id, currentRunIds))
+      : [];
+
+  return {
+    aggregates: new Map(aggregateRows.map((row) => [row.id, row] as const)),
+    snapshots: new Map(snapshotRows.map((row) => [row.taskId, row] as const)),
+    runs: new Map(runRows.map((row) => [row.id, row] as const)),
+  };
+}
+
+async function loadTaskReferenceMaps(
+  taskRecords: Array<{ repoId: string | null; credentialId: string | null }>,
+) {
+  const repoIds = Array.from(
+    new Set(taskRecords.map((record) => record.repoId).filter(Boolean)),
+  ) as string[];
   const credentialIds = Array.from(
     new Set(taskRecords.map((record) => record.credentialId).filter(Boolean)),
   ) as string[];
@@ -135,50 +316,14 @@ async function loadTaskReferenceMaps(taskRecords: Array<ReturnType<typeof parseT
   };
 }
 
-function mapTaskTreeNodeToTaskRecord(args: {
-  node: typeof projectTreeNodes.$inferSelect;
-  repos: Map<string, typeof repositories.$inferSelect>;
-  credentials: Map<string, typeof repositoryCredentials.$inferSelect>;
-}): TaskTreeRecord {
-  const content = parseTaskTreeContent(args.node.contentJson);
-  const repo = content.repoId ? args.repos.get(content.repoId) : undefined;
-  const credential = content.credentialId ? args.credentials.get(content.credentialId) : undefined;
+function mapTaskTreeNodeToTaskRecord(args: MapTaskTreeNodeArgs): TaskTreeRecord {
+  const refs = resolveTaskReferenceIds(args);
+  const strategyFields = resolveTaskStrategyFields(args);
 
   return {
-    id: args.node.id,
-    projectId: args.node.projectId,
-    userId: content.userId,
-    title: args.node.contentText ?? args.node.id,
-    prompt: content.prompt,
-    status: content.status,
-    sessionId: content.sessionId,
-    agentRunId: content.agentRunId,
-    result: content.result,
-    category: content.category,
-    strategy: content.strategy,
-    repoId: content.repoId,
-    workspaceRoot: content.workspaceRoot,
-    baseRevision: content.baseRevision,
-    workingBranch: content.workingBranch,
-    selectedModel: content.selectedModel,
-    executionMode: content.executionMode,
-    executionPlan: content.executionPlan,
-    parallelRunHistory: content.parallelRunHistory,
-    autoAdvanceStages: content.autoAdvanceStages,
-    credentialId: content.credentialId,
-    gitAuthorName: content.gitAuthorName,
-    gitAuthorEmail: content.gitAuthorEmail,
-    gitCommitterName: content.gitCommitterName,
-    gitCommitterEmail: content.gitCommitterEmail,
-    finalCommitSha: content.finalCommitSha,
-    finalBranchName: content.finalBranchName,
-    changesSummary: content.changesSummary,
-    createdAt: content.createdAt ?? args.node.createdAt,
-    startedAt: content.startedAt,
-    finishedAt: content.finishedAt,
-    repoName: repo?.name ?? null,
-    remoteUrl: repo?.remoteUrl ?? null,
-    credentialLabel: credential?.label ?? null,
+    ...resolveTaskIdentityFields(args),
+    ...resolveTaskExecutionFields(args, refs, strategyFields),
+    ...resolveTaskRepositoryFields(args, refs),
   };
 }
 
@@ -207,10 +352,7 @@ export async function loadExistingTaskTreeNodeIdsByProjectIds(projectIds: string
     .select({ id: projectTreeNodes.id })
     .from(projectTreeNodes)
     .where(
-      and(
-        eq(projectTreeNodes.nodeType, "task"),
-        inArray(projectTreeNodes.projectId, projectIds),
-      ),
+      and(eq(projectTreeNodes.nodeType, "task"), inArray(projectTreeNodes.projectId, projectIds)),
     )
     .orderBy(desc(projectTreeNodes.createdAt));
 
@@ -223,29 +365,62 @@ export async function listTaskTreeRecords(args: {
   repoId?: string;
   limit: number;
 }): Promise<TaskTreeRecord[]> {
+  let taskIds: string[] | undefined;
+
+  if (args.projectId || args.status || args.repoId) {
+    const aggregateRows = await db
+      .select({ id: tasks.id })
+      .from(tasks)
+      .where(
+        and(
+          ...(args.projectId ? [eq(tasks.projectId, args.projectId)] : []),
+          ...(args.status ? [eq(tasks.status, args.status as typeof tasks.status._.data)] : []),
+          ...(args.repoId ? [eq(tasks.repoId, args.repoId)] : []),
+        ),
+      )
+      .orderBy(desc(tasks.createdAt))
+      .limit(args.limit);
+
+    taskIds = aggregateRows.map((row) => row.id);
+
+    if (taskIds.length === 0) {
+      return [];
+    }
+  }
+
   const treeRows = await db
     .select()
     .from(projectTreeNodes)
     .where(
       and(
         eq(projectTreeNodes.nodeType, "task"),
-        ...(args.projectId ? [eq(projectTreeNodes.projectId, args.projectId)] : []),
-        ...(args.status
-          ? [sql<boolean>`${projectTreeNodes.contentJson} ->> 'status' = ${args.status}`]
-          : []),
-        ...(args.repoId
-          ? [sql<boolean>`${projectTreeNodes.contentJson} ->> 'repoId' = ${args.repoId}`]
-          : []),
+        ...(args.projectId && !taskIds ? [eq(projectTreeNodes.projectId, args.projectId)] : []),
+        ...(taskIds ? [inArray(projectTreeNodes.id, taskIds)] : []),
       ),
     )
     .orderBy(desc(projectTreeNodes.createdAt))
     .limit(args.limit);
 
-  const parsedRecords = treeRows.map((row) => parseTaskTreeContent(row.contentJson));
-  const maps = await loadTaskReferenceMaps(parsedRecords);
+  const domainMaps = await loadTaskDomainMaps(treeRows.map((row) => row.id));
+  const mergedRecords = treeRows.map((row) => ({
+    repoId: domainMaps.aggregates.get(row.id)?.repoId ?? null,
+    credentialId: domainMaps.aggregates.get(row.id)?.credentialId ?? null,
+  }));
+  const maps = await loadTaskReferenceMaps(mergedRecords);
 
   return treeRows.map((row) =>
-    mapTaskTreeNodeToTaskRecord({ node: row, repos: maps.repos, credentials: maps.credentials }),
+    mapTaskTreeNodeToTaskRecord({
+      node: row,
+      aggregate: domainMaps.aggregates.get(row.id),
+      snapshot: domainMaps.snapshots.get(row.id),
+      run: domainMaps.runs.get(
+        domainMaps.snapshots.get(row.id)?.currentRunId ??
+          domainMaps.aggregates.get(row.id)?.currentRunId ??
+          "",
+      ),
+      repos: maps.repos,
+      credentials: maps.credentials,
+    }),
   );
 }
 
@@ -253,16 +428,35 @@ export async function loadTaskTreeRecords(args: {
   taskIds?: string[];
   projectIds?: string[];
 }): Promise<TaskTreeRecord[]> {
-  if ((!args.taskIds || args.taskIds.length === 0) && (!args.projectIds || args.projectIds.length === 0)) {
+  if (
+    (!args.taskIds || args.taskIds.length === 0) &&
+    (!args.projectIds || args.projectIds.length === 0)
+  ) {
     return [];
   }
 
   const treeRows = await queryTaskTreeNodes(args);
-  const parsedRecords = treeRows.map((row) => parseTaskTreeContent(row.contentJson));
-  const maps = await loadTaskReferenceMaps(parsedRecords);
+  const domainMaps = await loadTaskDomainMaps(treeRows.map((row) => row.id));
+  const maps = await loadTaskReferenceMaps(
+    treeRows.map((row) => ({
+      repoId: domainMaps.aggregates.get(row.id)?.repoId ?? null,
+      credentialId: domainMaps.aggregates.get(row.id)?.credentialId ?? null,
+    })),
+  );
 
   return treeRows.map((row) =>
-    mapTaskTreeNodeToTaskRecord({ node: row, repos: maps.repos, credentials: maps.credentials }),
+    mapTaskTreeNodeToTaskRecord({
+      node: row,
+      aggregate: domainMaps.aggregates.get(row.id),
+      snapshot: domainMaps.snapshots.get(row.id),
+      run: domainMaps.runs.get(
+        domainMaps.snapshots.get(row.id)?.currentRunId ??
+          domainMaps.aggregates.get(row.id)?.currentRunId ??
+          "",
+      ),
+      repos: maps.repos,
+      credentials: maps.credentials,
+    }),
   );
 }
 

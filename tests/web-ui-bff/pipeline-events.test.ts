@@ -90,7 +90,7 @@ describe("buildPipelineStageUpdatedEvents", () => {
           label: "执行",
           status: "completed",
           order: 2,
-          sourceType: "executionPlan.step",
+          sourceType: "runtimePlan.step",
           sourceId: "exec-1",
           agent: "default-executor",
           model: "gpt-5.4",

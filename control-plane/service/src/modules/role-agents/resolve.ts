@@ -65,9 +65,7 @@ function toRoleScope(value: string | null | undefined): "system" | "project" {
   return value === "project" ? "project" : "system";
 }
 
-function toRoleStatus(
-  value: string | null | undefined,
-): "active" | "disabled" | "deprecated" {
+function toRoleStatus(value: string | null | undefined): "active" | "disabled" | "deprecated" {
   if (value === "disabled" || value === "deprecated") {
     return value;
   }
@@ -75,9 +73,7 @@ function toRoleStatus(
   return "active";
 }
 
-function toRiskLevel(
-  value: string | null | undefined,
-): "low" | "medium" | "high" | "critical" {
+function toRiskLevel(value: string | null | undefined): "low" | "medium" | "high" | "critical" {
   if (value === "medium" || value === "high" || value === "critical") {
     return value;
   }

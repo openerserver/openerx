@@ -277,6 +277,11 @@ beforeEach(() => {
         totalRequiredCount: 5,
         risks: [],
         runningTasks: 0,
+        activeSessionCount: 0,
+        parallelTaskCount: 0,
+        sequentialChainTaskCount: 0,
+        recentTimelineItemCount: 0,
+        failedTaskCount: 1,
         pendingApprovals: 0,
         failedTasksToday: 0,
         lastActivityAt: "2026-03-17T10:00:00.000Z",
@@ -299,6 +304,11 @@ beforeEach(() => {
         totalRequiredCount: 5,
         risks: [],
         runningTasks: 0,
+        activeSessionCount: 0,
+        parallelTaskCount: 0,
+        sequentialChainTaskCount: 0,
+        recentTimelineItemCount: 0,
+        failedTaskCount: 0,
         pendingApprovals: 0,
         failedTasksToday: 0,
         lastActivityAt: "2026-03-17T09:00:00.000Z",
@@ -318,6 +328,11 @@ beforeEach(() => {
         totalRequiredCount: 5,
         risks: [],
         runningTasks: 0,
+        activeSessionCount: 0,
+        parallelTaskCount: 0,
+        sequentialChainTaskCount: 0,
+        recentTimelineItemCount: 0,
+        failedTaskCount: 0,
         pendingApprovals: 0,
         failedTasksToday: 0,
         lastActivityAt: "2026-03-17T08:00:00.000Z",
@@ -329,6 +344,13 @@ beforeEach(() => {
       totalProjects: 3,
       pendingConfigCount: 0,
       riskCount: 0,
+      activeProjectCount: 0,
+      runningTaskCount: 0,
+      activeSessionCount: 0,
+      parallelTaskCount: 0,
+      sequentialChainTaskCount: 0,
+      failedTaskCount: 1,
+      recentTimelineItemCount: 0,
     },
     total: 3,
     page: 1,
@@ -355,6 +377,10 @@ describe("Projects page", () => {
     expect(wrapper.text()).toContain("显式");
     expect(wrapper.text()).toContain("alpha");
     expect(wrapper.text()).toContain("派生");
+    expect(wrapper.text()).toContain("活跃项目");
+    expect(wrapper.text()).toContain("并行 / 链式任务");
+    expect(wrapper.text()).toContain("失败任务 / 24h 明细");
+    expect(wrapper.text()).toContain("并行 0 / 链式 0 / 明细 0");
   });
 
   it("includes explicit project group settings when creating a project", async () => {

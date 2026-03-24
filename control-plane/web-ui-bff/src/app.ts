@@ -23,8 +23,8 @@ import { reconcileRunningTasksOnStartup, startPeriodicReconcile } from "./module
 import { taskRoutes } from "./modules/tasks/routes";
 import { userRoutes } from "./modules/users/routes";
 import { workbenchRoutes } from "./modules/workbench/routes";
-import { workspaceFileRoutes } from "./modules/workspace-files/routes";
 import { workflowTemplateRoutes } from "./modules/workflow-templates/routes";
+import { workspaceFileRoutes } from "./modules/workspace-files/routes";
 
 type ServerUpgrade = { upgrade: (req: Request, opts?: unknown) => boolean };
 

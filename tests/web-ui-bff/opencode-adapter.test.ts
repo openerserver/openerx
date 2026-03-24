@@ -7,6 +7,51 @@ mock.restore();
 
 let adapterImportCounter = 0;
 
+type RuntimeRouteMatcher = string | RegExp | ((url: string) => boolean);
+type RuntimeRouteHandler = {
+  matcher: RuntimeRouteMatcher;
+  method?: string;
+  response: Response | ((url: string, init?: RequestInit) => Response | Promise<Response>);
+};
+
+function jsonResponse(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+function matchesRuntimeRoute(matcher: RuntimeRouteMatcher, url: string) {
+  if (typeof matcher === "string") {
+    return matcher === url;
+  }
+
+  if (matcher instanceof RegExp) {
+    return matcher.test(url);
+  }
+
+  return matcher(url);
+}
+
+function createRuntimeFetchMock(handlers: RuntimeRouteHandler[]) {
+  return mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const matchedHandler = handlers.find(
+      (handler) =>
+        matchesRuntimeRoute(handler.matcher, url) &&
+        (handler.method ?? undefined) === (init?.method ?? undefined),
+    );
+
+    if (!matchedHandler) {
+      return new Response("not found", { status: 404 });
+    }
+
+    return typeof matchedHandler.response === "function"
+      ? await matchedHandler.response(url, init)
+      : matchedHandler.response;
+  });
+}
+
 async function loadOpencodeAdapter() {
   adapterImportCounter += 1;
   return import(
@@ -157,34 +202,29 @@ describe("opencode adapter resilience", () => {
 
   test("retries createSession prompt when runtime accepts but does not persist messages", async () => {
     let promptAttempts = 0;
-    const fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.endsWith("/session") && init?.method === "POST") {
-        return new Response(JSON.stringify({ id: "session-1" }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-      if (url.endsWith("/session/session-1/prompt_async") && init?.method === "POST") {
-        promptAttempts += 1;
-        return new Response(null, { status: 204 });
-      }
-      if (url.endsWith("/session/session-1/message?limit=200") && init?.method === "GET") {
-        if (promptAttempts < 2) {
-          return new Response(JSON.stringify([]), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          });
-        }
-
-        return new Response(JSON.stringify([{ info: { role: "user" }, parts: [] }]), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-
-      return new Response("not found", { status: 404 });
-    });
+    const fetchMock = createRuntimeFetchMock([
+      {
+        matcher: (url) => url.endsWith("/session"),
+        method: "POST",
+        response: jsonResponse({ id: "session-1" }),
+      },
+      {
+        matcher: (url) => url.endsWith("/session/session-1/prompt_async"),
+        method: "POST",
+        response: () => {
+          promptAttempts += 1;
+          return new Response(null, { status: 204 });
+        },
+      },
+      {
+        matcher: (url) => url.endsWith("/session/session-1/message?limit=200"),
+        method: "GET",
+        response: () =>
+          promptAttempts < 2
+            ? jsonResponse([])
+            : jsonResponse([{ info: { role: "user" }, parts: [] }]),
+      },
+    ]);
     globalThis.fetch = fetchMock as typeof fetch;
 
     const { createSession } = await loadOpencodeAdapter();
@@ -366,7 +406,9 @@ describe("opencode adapter resilience", () => {
     const runtimeFetchMock = mock(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes("/session/session-leaf/message?limit=200")) {
-        throw new Error("runtime leaf read should not be reached when service lineage cache is complete");
+        throw new Error(
+          "runtime leaf read should not be reached when service lineage cache is complete",
+        );
       }
 
       return new Response("not found", { status: 404 });

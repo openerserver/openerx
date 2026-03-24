@@ -6,7 +6,7 @@ import {
   JSONB_COLUMN_NAMES,
   KEY_FOREIGN_KEYS,
   LEGACY_OFFLINE_SOURCE_TABLES,
-  SnapshotManifest,
+  type SnapshotManifest,
   ensureDir,
   getOrderedTables,
   getPrimaryKeyColumn,
@@ -114,144 +114,177 @@ function mergeRowsById(
   return [...merged.values()];
 }
 
-function synthesizeTreeTables(
-  rowsByTable: Map<string, Array<Record<string, unknown>>>,
-  tableMetaByName: Map<string, SnapshotManifest["tables"][number]>,
-  warnings: Record<string, string[]>,
-) {
-  const projects = rowsByTable.get("projects") ?? [];
-  const legacyTasks = rowsByTable.get("tasks") ?? [];
+function pushTableWarning(warnings: Record<string, string[]>, tableName: string, message: string) {
+  warnings[tableName] = warnings[tableName] ?? [];
+  warnings[tableName].push(message);
+}
 
-  if (projects.length === 0 && legacyTasks.length === 0) {
-    return;
+function buildProjectRootNode(project: Record<string, unknown>) {
+  const projectId = asString(project.id);
+  if (!projectId) {
+    return null;
   }
 
+  const createdAt = asString(project.created_at) ?? nowIso();
+  const updatedAt = asString(project.updated_at) ?? createdAt;
+
+  return {
+    id: buildProjectRootNodeId(projectId),
+    project_id: projectId,
+    parent_id: null,
+    path: buildProjectRootPath(projectId),
+    depth: 0,
+    node_type: "project_root",
+    role: null,
+    content_text: asString(project.name),
+    content_json: null,
+    token_count: null,
+    runtime_session_id: null,
+    runtime_message_id: null,
+    branch_name: null,
+    is_active: true,
+    superseded_by: null,
+    created_at: createdAt,
+    updated_at: updatedAt,
+    archived_at: null,
+  } satisfies Record<string, unknown>;
+}
+
+function buildProjectMainBranch(rootNode: Record<string, unknown>) {
+  return {
+    id: buildProjectMainBranchId(String(rootNode.project_id)),
+    project_id: rootNode.project_id,
+    task_node_id: null,
+    branch_name: "main",
+    head_node_id: rootNode.id,
+    is_default: true,
+    created_at: rootNode.created_at,
+    updated_at: rootNode.updated_at,
+  } satisfies Record<string, unknown>;
+}
+
+function synthesizeProjectRoots(projects: Array<Record<string, unknown>>) {
   const projectRootNodes: Array<Record<string, unknown>> = [];
-  const taskNodes: Array<Record<string, unknown>> = [];
   const projectBranches: Array<Record<string, unknown>> = [];
   const nodeRowsById = new Map<string, Record<string, unknown>>();
 
   for (const project of projects) {
-    const projectId = asString(project.id);
-    if (!projectId) {
+    const rootNode = buildProjectRootNode(project);
+    if (!rootNode) {
       continue;
     }
-    const createdAt = asString(project.created_at) ?? nowIso();
-    const updatedAt = asString(project.updated_at) ?? createdAt;
-    const rootNode = {
-      id: buildProjectRootNodeId(projectId),
-      project_id: projectId,
-      parent_id: null,
-      path: buildProjectRootPath(projectId),
-      depth: 0,
-      node_type: "project_root",
-      role: null,
-      content_text: asString(project.name),
-      content_json: null,
-      token_count: null,
-      runtime_session_id: null,
-      runtime_message_id: null,
-      branch_name: null,
-      is_active: true,
-      superseded_by: null,
-      created_at: createdAt,
-      updated_at: updatedAt,
-      archived_at: null,
-    } satisfies Record<string, unknown>;
-    projectRootNodes.push(rootNode);
-    nodeRowsById.set(String(rootNode.id), rootNode);
 
-    projectBranches.push({
-      id: buildProjectMainBranchId(projectId),
-      project_id: projectId,
-      task_node_id: null,
-      branch_name: "main",
-      head_node_id: rootNode.id,
-      is_default: true,
-      created_at: createdAt,
-      updated_at: updatedAt,
-    });
+    projectRootNodes.push(rootNode);
+    projectBranches.push(buildProjectMainBranch(rootNode));
+    nodeRowsById.set(String(rootNode.id), rootNode);
   }
 
-  for (const task of legacyTasks) {
+  return { projectRootNodes, projectBranches, nodeRowsById };
+}
+
+function buildLegacyTaskNode(task: Record<string, unknown>, rootNodeId: string) {
+  const taskId = asString(task.id);
+  const projectId = asString(task.project_id);
+  if (!taskId || !projectId) {
+    return null;
+  }
+
+  const createdAt = asString(task.created_at) ?? nowIso();
+  const updatedAt = asString(task.finished_at) ?? asString(task.started_at) ?? createdAt;
+
+  return {
+    id: taskId,
+    project_id: projectId,
+    parent_id: rootNodeId,
+    path: buildTaskPath(projectId, taskId),
+    depth: 1,
+    node_type: "task",
+    role: null,
+    content_text: asString(task.title),
+    content_json: {
+      userId: asString(task.user_id),
+      prompt: asString(task.prompt),
+      status: asString(task.status),
+      sessionId: asString(task.session_id),
+      agentRunId: asString(task.agent_run_id),
+      result: asString(task.result),
+      category: asString(task.category),
+      strategy: task.strategy ?? null,
+      repoId: asString(task.repo_id),
+      workspaceRoot: asString(task.workspace_root),
+      baseRevision: asString(task.base_revision),
+      workingBranch: asString(task.working_branch),
+      selectedModel: asString(task.selected_model),
+      executionMode: asString(task.execution_mode),
+      autoAdvanceStages: asBoolean(task.auto_advance_stages, false),
+      credentialId: asString(task.credential_id),
+      gitAuthorName: asString(task.git_author_name),
+      gitAuthorEmail: asString(task.git_author_email),
+      gitCommitterName: asString(task.git_committer_name),
+      gitCommitterEmail: asString(task.git_committer_email),
+      finalCommitSha: asString(task.final_commit_sha),
+      finalBranchName: asString(task.final_branch_name),
+      changesSummary: task.changes_summary ?? null,
+      createdAt,
+      startedAt: asString(task.started_at),
+      finishedAt: asString(task.finished_at),
+    },
+    token_count: null,
+    runtime_session_id: asString(task.session_id),
+    runtime_message_id: null,
+    branch_name: asString(task.working_branch),
+    is_active: true,
+    superseded_by: null,
+    created_at: createdAt,
+    updated_at: updatedAt,
+    archived_at: null,
+  } satisfies Record<string, unknown>;
+}
+
+function synthesizeLegacyTaskNodes(args: {
+  legacyTasks: Array<Record<string, unknown>>;
+  nodeRowsById: Map<string, Record<string, unknown>>;
+  warnings: Record<string, string[]>;
+}) {
+  const taskNodes: Array<Record<string, unknown>> = [];
+
+  for (const task of args.legacyTasks) {
     const taskId = asString(task.id);
     const projectId = asString(task.project_id);
     if (!taskId || !projectId) {
-      warnings.project_tree_nodes = warnings.project_tree_nodes ?? [];
-      warnings.project_tree_nodes.push("Skipped legacy task row without id/project_id while synthesizing project_tree_nodes.");
+      pushTableWarning(
+        args.warnings,
+        "project_tree_nodes",
+        "Skipped legacy task row without id/project_id while synthesizing project_tree_nodes.",
+      );
       continue;
     }
 
     const rootNodeId = buildProjectRootNodeId(projectId);
-    if (!nodeRowsById.has(rootNodeId)) {
-      warnings.project_tree_nodes = warnings.project_tree_nodes ?? [];
-      warnings.project_tree_nodes.push(`Skipped legacy task ${taskId} because project root ${rootNodeId} was missing.`);
+    if (!args.nodeRowsById.has(rootNodeId)) {
+      pushTableWarning(
+        args.warnings,
+        "project_tree_nodes",
+        `Skipped legacy task ${taskId} because project root ${rootNodeId} was missing.`,
+      );
       continue;
     }
 
-    const createdAt = asString(task.created_at) ?? nowIso();
-    const updatedAt = asString(task.finished_at) ?? asString(task.started_at) ?? createdAt;
-    const taskNode = {
-      id: taskId,
-      project_id: projectId,
-      parent_id: rootNodeId,
-      path: buildTaskPath(projectId, taskId),
-      depth: 1,
-      node_type: "task",
-      role: null,
-      content_text: asString(task.title),
-      content_json: {
-        userId: asString(task.user_id),
-        prompt: asString(task.prompt),
-        status: asString(task.status),
-        sessionId: asString(task.session_id),
-        agentRunId: asString(task.agent_run_id),
-        result: asString(task.result),
-        category: asString(task.category),
-        strategy: task.strategy ?? null,
-        repoId: asString(task.repo_id),
-        workspaceRoot: asString(task.workspace_root),
-        baseRevision: asString(task.base_revision),
-        workingBranch: asString(task.working_branch),
-        selectedModel: asString(task.selected_model),
-        executionMode: asString(task.execution_mode),
-        executionPlan: task.execution_plan ?? null,
-        autoAdvanceStages: asBoolean(task.auto_advance_stages, false),
-        credentialId: asString(task.credential_id),
-        gitAuthorName: asString(task.git_author_name),
-        gitAuthorEmail: asString(task.git_author_email),
-        gitCommitterName: asString(task.git_committer_name),
-        gitCommitterEmail: asString(task.git_committer_email),
-        finalCommitSha: asString(task.final_commit_sha),
-        finalBranchName: asString(task.final_branch_name),
-        changesSummary: task.changes_summary ?? null,
-        createdAt,
-        startedAt: asString(task.started_at),
-        finishedAt: asString(task.finished_at),
-      },
-      token_count: null,
-      runtime_session_id: asString(task.session_id),
-      runtime_message_id: null,
-      branch_name: asString(task.working_branch),
-      is_active: true,
-      superseded_by: null,
-      created_at: createdAt,
-      updated_at: updatedAt,
-      archived_at: null,
-    } satisfies Record<string, unknown>;
+    const taskNode = buildLegacyTaskNode(task, rootNodeId);
+    if (!taskNode) {
+      continue;
+    }
 
     taskNodes.push(taskNode);
-    nodeRowsById.set(taskId, taskNode);
+    args.nodeRowsById.set(taskId, taskNode);
   }
 
-  const existingNodeRows = rowsByTable.get("project_tree_nodes") ?? [];
-  const existingBranchRows = rowsByTable.get("project_tree_branches") ?? [];
-  rowsByTable.set(
-    "project_tree_nodes",
-    mergeRowsById(existingNodeRows, [...projectRootNodes, ...taskNodes]),
-  );
-  rowsByTable.set("project_tree_branches", mergeRowsById(existingBranchRows, projectBranches));
+  return taskNodes;
+}
 
+function ensureSynthesizedTreeTableMetadata(
+  tableMetaByName: Map<string, SnapshotManifest["tables"][number]>,
+) {
   if (!tableMetaByName.has("project_tree_nodes")) {
     tableMetaByName.set("project_tree_nodes", {
       name: "project_tree_nodes",
@@ -270,11 +303,26 @@ function synthesizeTreeTables(
       fileName: "project_tree_branches.jsonl",
     });
   }
+}
+
+function pruneLegacySourceTables(
+  rowsByTable: Map<string, Array<Record<string, unknown>>>,
+  warnings: Record<string, string[]>,
+  consumedLegacyTasks: boolean,
+) {
+  if (consumedLegacyTasks && rowsByTable.delete("tasks")) {
+    pushTableWarning(
+      warnings,
+      "tasks",
+      "Omitted legacy tasks from normalized PostgreSQL import; equivalent task facts are synthesized into project_tree_nodes/project_tree_branches during tree-first import.",
+    );
+  }
 
   for (const tableName of LEGACY_OFFLINE_SOURCE_TABLES) {
     if (rowsByTable.delete(tableName)) {
-      warnings[tableName] = warnings[tableName] ?? [];
-      warnings[tableName].push(
+      pushTableWarning(
+        warnings,
+        tableName,
         tableName === "task_sessions"
           ? "Omitted task_sessions from normalized PostgreSQL import; legacy branch-lineage input is no longer transformed during tree-first import."
           : `Omitted ${tableName} from normalized PostgreSQL import; equivalent task/session facts are synthesized into project_tree_nodes/project_tree_branches instead.`,
@@ -283,35 +331,132 @@ function synthesizeTreeTables(
   }
 }
 
-function normalizeValue(columnName: string, value: unknown, warnings: string[]) {
-  if (typeof value === "string" && isTimestampColumn(columnName) && value === BAD_TIMESTAMP_LITERAL) {
+function synthesizeTreeTables(
+  rowsByTable: Map<string, Array<Record<string, unknown>>>,
+  tableMetaByName: Map<string, SnapshotManifest["tables"][number]>,
+  warnings: Record<string, string[]>,
+) {
+  const projects = rowsByTable.get("projects") ?? [];
+  const existingNodeRows = rowsByTable.get("project_tree_nodes") ?? [];
+  const consumedLegacyTasks = existingNodeRows.length === 0;
+  const legacyTasks = consumedLegacyTasks ? (rowsByTable.get("tasks") ?? []) : [];
+
+  if (projects.length === 0 && legacyTasks.length === 0) {
+    return;
+  }
+
+  const { projectRootNodes, projectBranches, nodeRowsById } = synthesizeProjectRoots(projects);
+  const taskNodes = synthesizeLegacyTaskNodes({
+    legacyTasks,
+    nodeRowsById,
+    warnings,
+  });
+
+  const existingBranchRows = rowsByTable.get("project_tree_branches") ?? [];
+  rowsByTable.set(
+    "project_tree_nodes",
+    mergeRowsById(existingNodeRows, [...projectRootNodes, ...taskNodes]),
+  );
+  rowsByTable.set("project_tree_branches", mergeRowsById(existingBranchRows, projectBranches));
+
+  ensureSynthesizedTreeTableMetadata(tableMetaByName);
+  pruneLegacySourceTables(rowsByTable, warnings, consumedLegacyTasks);
+}
+
+function normalizeTimestampValue(columnName: string, value: unknown) {
+  if (
+    typeof value === "string" &&
+    isTimestampColumn(columnName) &&
+    value === BAD_TIMESTAMP_LITERAL
+  ) {
     return nowIso();
   }
 
-  if (JSONB_COLUMN_NAMES.has(columnName)) {
-    if (value === null || value === undefined || value === "") {
-      return null;
-    }
+  return value;
+}
 
-    if (typeof value === "string") {
-      try {
-        return JSON.parse(value);
-      } catch (error) {
-        warnings.push(
-          `Failed to parse JSON column ${columnName}: ${error instanceof Error ? error.message : String(error)}`,
-        );
-        return value;
-      }
-    }
-
+function normalizeJsonValue(columnName: string, value: unknown, warnings: string[]) {
+  if (!JSONB_COLUMN_NAMES.has(columnName)) {
     return value;
   }
 
-  if (BOOLEAN_COLUMN_NAMES.has(columnName)) {
-    return normalizeBooleanValue(value);
+  if (value === null || value === undefined || value === "") {
+    return null;
   }
 
-  return value;
+  if (typeof value !== "string") {
+    return value;
+  }
+
+  try {
+    return JSON.parse(value);
+  } catch (error) {
+    warnings.push(
+      `Failed to parse JSON column ${columnName}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return value;
+  }
+}
+
+function normalizeValue(columnName: string, value: unknown, warnings: string[]) {
+  const normalizedTimestamp = normalizeTimestampValue(columnName, value);
+  const normalizedJson = normalizeJsonValue(columnName, normalizedTimestamp, warnings);
+
+  if (BOOLEAN_COLUMN_NAMES.has(columnName)) {
+    return normalizeBooleanValue(normalizedJson);
+  }
+
+  return normalizedJson;
+}
+
+function getParentValuesForRule(args: {
+  rowsByTable: Map<string, Array<Record<string, unknown>>>;
+  parentValueCache: Map<string, Set<string>>;
+  targetTable: string;
+  targetColumn: string;
+}) {
+  const cacheKey = `${args.targetTable}:${args.targetColumn}`;
+  let parentValues = args.parentValueCache.get(cacheKey);
+  if (!parentValues) {
+    parentValues = new Set(
+      (args.rowsByTable.get(args.targetTable) ?? [])
+        .map((targetRow) => targetRow[args.targetColumn])
+        .filter(
+          (value): value is string | number =>
+            typeof value === "string" || typeof value === "number",
+        )
+        .map((value) => String(value)),
+    );
+    args.parentValueCache.set(cacheKey, parentValues);
+  }
+  return parentValues;
+}
+
+function rowHasRequiredParents(args: {
+  row: Record<string, unknown>;
+  tableRules: typeof KEY_FOREIGN_KEYS;
+  rowsByTable: Map<string, Array<Record<string, unknown>>>;
+  parentValueCache: Map<string, Set<string>>;
+}) {
+  for (const rule of args.tableRules) {
+    const childValue = args.row[rule.column];
+    if (childValue === null || childValue === undefined || childValue === "") {
+      continue;
+    }
+
+    const targetColumn = rule.targetColumn ?? "id";
+    const parentValues = getParentValuesForRule({
+      rowsByTable: args.rowsByTable,
+      parentValueCache: args.parentValueCache,
+      targetTable: rule.targetTable,
+      targetColumn,
+    });
+    if (!parentValues.has(String(childValue))) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 function pruneRowsWithMissingParents(
@@ -327,40 +472,15 @@ function pruneRowsWithMissingParents(
     }
 
     const rows = rowsByTable.get(tableName) ?? [];
-    const filteredRows = rows.filter((row) => {
-      for (const rule of tableRules) {
-        const childValue = row[rule.column];
-        if (childValue === null || childValue === undefined || childValue === "") {
-          continue;
-        }
-
-        const targetColumn = rule.targetColumn ?? "id";
-        const cacheKey = `${rule.targetTable}:${targetColumn}`;
-        let parentValues = parentValueCache.get(cacheKey);
-        if (!parentValues) {
-          parentValues = new Set(
-            (rowsByTable.get(rule.targetTable) ?? [])
-              .map((targetRow) => targetRow[targetColumn])
-              .filter((value): value is string | number =>
-                typeof value === "string" || typeof value === "number",
-              )
-              .map((value) => String(value)),
-          );
-          parentValueCache.set(cacheKey, parentValues);
-        }
-
-        if (!parentValues.has(String(childValue))) {
-          return false;
-        }
-      }
-
-      return true;
-    });
+    const filteredRows = rows.filter((row) =>
+      rowHasRequiredParents({ row, tableRules, rowsByTable, parentValueCache }),
+    );
 
     const droppedCount = rows.length - filteredRows.length;
     if (droppedCount > 0) {
-      warnings[tableName] = warnings[tableName] ?? [];
-      warnings[tableName].push(
+      pushTableWarning(
+        warnings,
+        tableName,
         `Dropped ${droppedCount} rows during FK normalization because required parent rows were missing in the SQLite snapshot.`,
       );
       rowsByTable.set(tableName, filteredRows);
@@ -417,7 +537,9 @@ export async function transformExportSnapshot(options: TransformExportOptions) {
   for (const table of normalizedTables) {
     const normalizedRows = rowsByTable.get(table.name) ?? [];
     await writeJsonLines(join(outputDir, table.fileName), normalizedRows);
-    console.log(`Normalized ${table.name} (${normalizedRows.length} rows, pk=${table.primaryKeyColumn})`);
+    console.log(
+      `Normalized ${table.name} (${normalizedRows.length} rows, pk=${table.primaryKeyColumn})`,
+    );
   }
 
   const normalizedManifest: SnapshotManifest = {

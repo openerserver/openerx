@@ -29,6 +29,51 @@ const persistWorkflowStageExecutionOutcomeMock = mock(async () => ({
   advanced: false,
 }));
 
+type FetchOptions = { method?: string; body?: unknown };
+type MockFetchResponse = { ok: boolean; data: unknown; status?: number };
+type MockRouteMatcher = string | RegExp | ((url: string) => boolean);
+type MockRouteHandler = {
+  matcher: MockRouteMatcher;
+  method?: string;
+  response:
+    | MockFetchResponse
+    | ((
+        options: FetchOptions | undefined,
+        url: string,
+      ) => MockFetchResponse | Promise<MockFetchResponse>);
+};
+
+function matchesMockRoute(matcher: MockRouteMatcher, url: string) {
+  if (typeof matcher === "string") {
+    return matcher === url;
+  }
+
+  if (matcher instanceof RegExp) {
+    return matcher.test(url);
+  }
+
+  return matcher(url);
+}
+
+function mockCpFetchRoutes(handlers: MockRouteHandler[]) {
+  cpFetchMock.mockImplementation(async (...args: unknown[]) => {
+    const [url, options] = args as [string, FetchOptions | undefined];
+    const matchedHandler = handlers.find(
+      (handler) =>
+        matchesMockRoute(handler.matcher, url) &&
+        (handler.method ?? undefined) === (options?.method ?? undefined),
+    );
+
+    if (!matchedHandler) {
+      return { ok: true, data: { body: options?.body } };
+    }
+
+    return typeof matchedHandler.response === "function"
+      ? await matchedHandler.response(options, url)
+      : matchedHandler.response;
+  });
+}
+
 mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () => ({
   authHeader: authHeaderMock,
   cpFetch: cpFetchMock,
@@ -91,62 +136,39 @@ beforeEach(() => {
   cpFetchMock.mockImplementation(async (...args: unknown[]) => {
     const [url, options] = args as [string, { method?: string; body?: unknown }?];
     if (!options?.method) {
-      if (url.includes("/api/project-tree/tasks?status=running")) {
+      if (url.includes("/api/tasks/snapshots?status=running")) {
         return {
           ok: true,
           data: {
             data: [
               {
-                id: "task-1",
-                projectId: "proj-1",
-                title: "Stuck task",
-                status: "running",
-                sessionId: "session-1",
-                agentRunId: "run-1",
-                createdAt: "2026-03-13T12:56:03.000Z",
-                startedAt: "2026-03-13T12:56:03.000Z",
+                taskId: "task-1",
+                currentStatus: "running",
+                currentSessionId: "session-1",
+                lastActivityAt: "2026-03-13T12:56:03.000Z",
               },
             ],
           },
         };
       }
 
-      if (url === "/api/project-tree/tasks?limit=200") {
+      if (url === "/api/tasks/snapshots?limit=200") {
         return {
           ok: true,
           data: {
             data: [
               {
-                id: "task-1",
-                projectId: "proj-1",
-                title: "Stuck task",
-                status: "running",
-                sessionId: "session-1",
-                agentRunId: "run-1",
-                createdAt: "2026-03-13T12:56:03.000Z",
-                startedAt: "2026-03-13T12:56:03.000Z",
-                executionPlan: JSON.stringify({
-                  templateId: "single-default",
-                  mode: "single",
-                  steps: [{ id: "exec-1", type: "execution", status: "running" }],
-                  candidates: [
-                    {
-                      label: "Default executor",
-                      agent: "default-executor",
-                      sessionId: "session-1",
-                      agentRunId: "run-1",
-                      status: "running",
-                      startedAt: "2026-03-13T12:56:03.000Z",
-                    },
-                  ],
-                }),
+                taskId: "task-1",
+                currentStatus: "running",
+                currentSessionId: "session-1",
+                lastActivityAt: "2026-03-13T12:56:03.000Z",
               },
             ],
           },
         };
       }
 
-      if (url === "/api/tasks/task-1") {
+      if (url === "/api/project-tree/tasks/task-1") {
         return {
           ok: true,
           data: {
@@ -157,21 +179,6 @@ beforeEach(() => {
             sessionId: "session-1",
             agentRunId: "run-1",
             startedAt: "2026-03-13T12:56:03.000Z",
-            executionPlan: JSON.stringify({
-              templateId: "single-default",
-              mode: "single",
-              steps: [{ id: "exec-1", type: "execution", status: "running" }],
-              candidates: [
-                {
-                  label: "Default executor",
-                  agent: "default-executor",
-                  sessionId: "session-1",
-                  agentRunId: "run-1",
-                  status: "running",
-                  startedAt: "2026-03-13T12:56:03.000Z",
-                },
-              ],
-            }),
           },
         };
       }
@@ -213,7 +220,6 @@ describe("reconcileRunningTasksOnStartup", () => {
         body: expect.objectContaining({
           status: "failed",
           result: "Recovered from failed assistant session: The operation was aborted.",
-          executionPlan: expect.stringContaining('"status":"failed"'),
         }),
       }),
     );
@@ -252,7 +258,6 @@ describe("reconcileRunningTasksOnStartup", () => {
         body: expect.objectContaining({
           status: "completed",
           result: "Final answer",
-          executionPlan: expect.stringContaining('"status":"completed"'),
         }),
       }),
     );
@@ -268,79 +273,83 @@ describe("reconcileRunningTasksOnStartup", () => {
     );
   });
 
-  test("repairs historical terminal tasks whose candidate/session state never converged", async () => {
+  test("does not rewrite legacy runtime plan for projection-backed completed single tasks", async () => {
     extractAssistantResultFromMessagesMock.mockReturnValue({
-      completed: false,
+      completed: true,
       failed: false,
       error: undefined,
-      tokenUsed: 0,
+      tokenUsed: 42,
+      text: "Final answer",
     });
 
-    cpFetchMock.mockImplementation(async (...args: unknown[]) => {
-      const [url, options] = args as [string, { method?: string; body?: unknown }?];
-      if (!options?.method) {
-        if (url.includes("/api/project-tree/tasks?status=running")) {
-          return {
-            ok: true,
-            data: {
-              data: [],
-            },
-          };
-        }
-
-        if (url === "/api/project-tree/tasks?limit=200") {
-          return {
-            ok: true,
-            data: {
-              data: [
-                {
-                  id: "task-historical",
-                  projectId: "proj-1",
-                  title: "Historical task",
-                  status: "completed",
-                  sessionId: "session-historical",
-                  agentRunId: "run-historical",
-                  result: "Already done",
-                  finishedAt: "2026-03-13T13:10:00.000Z",
-                  executionPlan: JSON.stringify({
-                    templateId: "single-default",
-                    mode: "single",
-                    steps: [{ id: "exec-1", type: "execution", status: "running" }],
-                    candidates: [
-                      {
-                        label: "Default executor",
-                        agent: "default-executor",
-                        sessionId: "session-historical",
-                        agentRunId: "run-historical",
-                        status: "running",
-                        startedAt: "2026-03-13T12:56:03.000Z",
-                      },
-                    ],
-                  }),
-                },
-              ],
-            },
-          };
-        }
-
-        if (url === "/api/tasks/task-historical/branches") {
-          return {
-            ok: true,
-            data: {
-              data: [
-                {
-                  runtimeSessionId: "session-historical",
-                  isActive: true,
-                  archivedAt: null,
-                },
-              ],
-            },
-          };
-        }
-      }
-
-      return { ok: true, data: { body: options?.body } };
-    });
+    mockCpFetchRoutes([
+      {
+        matcher: (url) => url.includes("/api/tasks/snapshots?status=running"),
+        response: {
+          ok: true,
+          data: {
+            data: [
+              {
+                taskId: "task-1",
+                currentStatus: "running",
+                orchestrationKind: "single",
+                currentRunId: "task_run:task-1:session-1",
+                currentSessionId: "session-1",
+                lastActivityAt: "2026-03-13T12:56:03.000Z",
+              },
+            ],
+          },
+        },
+      },
+      {
+        matcher: "/api/tasks/snapshots?limit=200",
+        response: {
+          ok: true,
+          data: {
+            data: [
+              {
+                taskId: "task-1",
+                currentStatus: "running",
+                orchestrationKind: "single",
+                currentRunId: "task_run:task-1:session-1",
+                currentSessionId: "session-1",
+                lastActivityAt: "2026-03-13T12:56:03.000Z",
+              },
+            ],
+          },
+        },
+      },
+      {
+        matcher: "/api/project-tree/tasks/task-1",
+        response: {
+          ok: true,
+          data: {
+            id: "task-1",
+            projectId: "proj-1",
+            title: "Projection-backed task",
+            status: "running",
+            sessionId: "session-1",
+            agentRunId: "run-1",
+            startedAt: "2026-03-13T12:56:03.000Z",
+          },
+        },
+      },
+      {
+        matcher: "/api/tasks/task-1/branches",
+        response: {
+          ok: true,
+          data: {
+            data: [
+              {
+                runtimeSessionId: "session-1",
+                isActive: true,
+                archivedAt: null,
+              },
+            ],
+          },
+        },
+      },
+    ]);
 
     const { reconcileRunningTasksOnStartup } = await import(
       "../../control-plane/web-ui-bff/src/modules/tasks/reconcile"
@@ -349,33 +358,13 @@ describe("reconcileRunningTasksOnStartup", () => {
     const summary = await reconcileRunningTasksOnStartup();
 
     expect(summary.completed).toBe(1);
-    expect(cpFetchMock).toHaveBeenCalledWith(
-      "/api/tasks/task-historical",
-      expect.objectContaining({
-        method: "PATCH",
-        body: expect.objectContaining({
-          status: "completed",
-          result: "Already done",
-          executionPlan: expect.stringContaining('"status":"completed"'),
-        }),
-      }),
-    );
-    expect(cpFetchMock).toHaveBeenCalledWith(
-      "/api/tasks/task-historical/branches",
-      expect.objectContaining({
-        method: "POST",
-        body: expect.objectContaining({
-          runtimeSessionId: "session-historical",
-          isActive: false,
-        }),
-      }),
-    );
-    expect(persistWorkflowStageExecutionOutcomeMock).toHaveBeenCalledWith({
-      taskId: "task-historical",
-      authorization: "Bearer internal",
-      resultText: "Already done",
-      source: "assistant-output",
-    });
+    const patchCall = (
+      cpFetchMock.mock.calls as unknown as Array<[string, { method?: string; body?: unknown }]>
+    ).find(([url, options]) => url === "/api/tasks/task-1" && options?.method === "PATCH");
+    const patchBody = patchCall?.[1]?.body as Record<string, unknown> | undefined;
+    expect(patchBody.status).toBe("completed");
+    expect(patchBody.result).toBe("Final answer");
+    expect(patchBody).not.toHaveProperty("executionPlan");
   });
 
   test("repairs recently completed tasks with active sessions using the latest assistant output", async () => {
@@ -389,67 +378,60 @@ describe("reconcileRunningTasksOnStartup", () => {
 
     const recentFinishedAt = new Date().toISOString();
 
-    cpFetchMock.mockImplementation(async (...args: unknown[]) => {
-      const [url, options] = args as [string, { method?: string; body?: unknown }?];
-      if (!options?.method) {
-        if (url.includes("/api/project-tree/tasks?status=running")) {
-          return { ok: true, data: { data: [] } };
-        }
-
-        if (url === "/api/project-tree/tasks?limit=200") {
-          return {
-            ok: true,
-            data: {
-              data: [
-                {
-                  id: "task-completed-active",
-                  projectId: "proj-1",
-                  title: "Completed but active session",
-                  status: "completed",
-                  sessionId: "session-completed-active",
-                  agentRunId: "run-completed-active",
-                  result: "Old result",
-                  finishedAt: recentFinishedAt,
-                  executionPlan: JSON.stringify({
-                    templateId: "single-default",
-                    mode: "single",
-                    steps: [{ id: "exec-1", type: "execution", status: "completed" }],
-                    candidates: [
-                      {
-                        label: "Default executor",
-                        agent: "default-executor",
-                        sessionId: "session-completed-active",
-                        agentRunId: "run-completed-active",
-                        status: "completed",
-                        startedAt: recentFinishedAt,
-                        finishedAt: recentFinishedAt,
-                      },
-                    ],
-                  }),
-                },
-              ],
-            },
-          };
-        }
-
-        if (url === "/api/tasks/task-completed-active/branches") {
-          return {
-            ok: true,
-            data: {
-              data: [
-                {
-                  runtimeSessionId: "session-completed-active",
-                  isActive: true,
-                  archivedAt: null,
-                },
-              ],
-            },
-          };
-        }
-      }
-
-      return { ok: true, data: { body: options?.body } };
-    });
+    mockCpFetchRoutes([
+      {
+        matcher: (url) => url.includes("/api/tasks/snapshots?status=running"),
+        response: { ok: true, data: { data: [] } },
+      },
+      {
+        matcher: "/api/tasks/snapshots?limit=200",
+        response: {
+          ok: true,
+          data: {
+            data: [
+              {
+                taskId: "task-completed-active",
+                currentStatus: "completed",
+                currentSessionId: "session-completed-active",
+                latestResult: "Old result",
+                lastActivityAt: recentFinishedAt,
+              },
+            ],
+          },
+        },
+      },
+      {
+        matcher: "/api/project-tree/tasks/task-completed-active",
+        response: {
+          ok: true,
+          data: {
+            id: "task-completed-active",
+            projectId: "proj-1",
+            title: "Completed but active session",
+            status: "completed",
+            sessionId: "session-completed-active",
+            agentRunId: "run-completed-active",
+            result: "Old result",
+            finishedAt: recentFinishedAt,
+          },
+        },
+      },
+      {
+        matcher: "/api/tasks/task-completed-active/branches",
+        response: {
+          ok: true,
+          data: {
+            data: [
+              {
+                runtimeSessionId: "session-completed-active",
+                isActive: true,
+                archivedAt: null,
+              },
+            ],
+          },
+        },
+      },
+    ]);
 
     getSessionMessagesMock.mockResolvedValue({
       ok: true,
@@ -470,7 +452,6 @@ describe("reconcileRunningTasksOnStartup", () => {
         body: expect.objectContaining({
           status: "completed",
           result: "Verify stage complete\n[STAGE_COMPLETE]",
-          executionPlan: expect.stringContaining('"status":"completed"'),
         }),
       }),
     );
@@ -503,75 +484,85 @@ describe("reconcileRunningTasksOnStartup", () => {
       .mockResolvedValueOnce({ ok: true, data: [{ id: "msg-a" }] })
       .mockResolvedValueOnce({ ok: true, data: [{ id: "msg-b" }] });
 
-    cpFetchMock.mockImplementation(async (...args: unknown[]) => {
-      const [url, options] = args as [string, { method?: string; body?: unknown }?];
-      if (!options?.method) {
-        if (url.includes("/api/project-tree/tasks?status=running")) {
-          return {
-            ok: true,
+    mockCpFetchRoutes([
+      {
+        matcher: (url) => url.includes("/api/tasks/snapshots?status=running"),
+        response: {
+          ok: true,
+          data: {
+            data: [
+              {
+                taskId: "task-parallel-stale",
+                currentStatus: "running",
+                lastActivityAt: "2026-03-13T12:56:03.000Z",
+              },
+            ],
+          },
+        },
+      },
+      {
+        matcher: "/api/tasks/snapshots?limit=200",
+        response: { ok: true, data: { data: [] } },
+      },
+      {
+        matcher: "/api/project-tree/tasks/task-parallel-stale",
+        response: {
+          ok: true,
+          data: {
+            id: "task-parallel-stale",
+            projectId: "proj-1",
+            title: "Parallel stale task",
+            status: "running",
+            orchestrationKind: "parallel",
+            currentRunId: "task_run:task-parallel-stale:root",
+            createdAt: "2026-03-13T12:56:03.000Z",
+            startedAt: "2026-03-13T12:56:03.000Z",
+          },
+        },
+      },
+      {
+        matcher: "/api/tasks/task-parallel-stale/branches",
+        response: {
+          ok: true,
+          data: {
+            data: [
+              {
+                runtimeSessionId: "session-a",
+                isActive: true,
+                archivedAt: null,
+              },
+              {
+                runtimeSessionId: "session-b",
+                isActive: true,
+                archivedAt: null,
+              },
+            ],
+          },
+        },
+      },
+      {
+        matcher: (url) => url.startsWith("/api/tasks/task-parallel-stale/domain-runs/"),
+        response: {
+          ok: true,
+          data: {
             data: {
-              data: [
+              candidateNodes: [
                 {
-                  id: "task-parallel-stale",
-                  projectId: "proj-1",
-                  title: "Parallel stale task",
+                  candidateIndex: 0,
+                  sessionId: "session-a",
                   status: "running",
-                  createdAt: "2026-03-13T12:56:03.000Z",
-                  startedAt: "2026-03-13T12:56:03.000Z",
-                  executionPlan: JSON.stringify({
-                    templateId: "parallel-default",
-                    mode: "parallel",
-                    steps: [{ id: "exec-parallel", type: "execution", status: "running" }],
-                    candidates: [
-                      {
-                        label: "候选 A",
-                        agent: "executor",
-                        sessionId: "session-a",
-                        agentRunId: "run-a",
-                        status: "running",
-                      },
-                      {
-                        label: "候选 B",
-                        agent: "executor",
-                        sessionId: "session-b",
-                        agentRunId: "run-b",
-                        status: "running",
-                      },
-                    ],
-                  }),
+                },
+                {
+                  candidateIndex: 1,
+                  sessionId: "session-b",
+                  status: "running",
                 },
               ],
             },
-          };
-        }
-
-        if (url === "/api/project-tree/tasks?limit=200") {
-          return { ok: true, data: { data: [] } };
-        }
-
-        if (url === "/api/tasks/task-parallel-stale/branches") {
-          return {
-            ok: true,
-            data: {
-              data: [
-                {
-                  runtimeSessionId: "session-a",
-                  isActive: true,
-                  archivedAt: null,
-                },
-                {
-                  runtimeSessionId: "session-b",
-                  isActive: true,
-                  archivedAt: null,
-                },
-              ],
-            },
-          };
-        }
-      }
-
-      return { ok: true, data: { body: options?.body } };
-    });
+          },
+        },
+      },
+    ]);
 
     const { reconcileRunningTasksOnStartup } = await import(
       "../../control-plane/web-ui-bff/src/modules/tasks/reconcile"
@@ -586,57 +577,18 @@ describe("reconcileRunningTasksOnStartup", () => {
         method: "PATCH",
         body: expect.objectContaining({
           status: "completed",
-          executionPlan: expect.any(String),
-          parallelRunHistory: expect.any(String),
         }),
       }),
     );
-    const patchCall = (cpFetchMock.mock.calls as unknown as Array<[string, { method?: string; body?: unknown }]>)
-      .find(([url, options]) => url === "/api/tasks/task-parallel-stale" && options?.method === "PATCH");
+    const patchCall = (
+      cpFetchMock.mock.calls as unknown as Array<[string, { method?: string; body?: unknown }]>
+    ).find(
+      ([url, options]) => url === "/api/tasks/task-parallel-stale" && options?.method === "PATCH",
+    );
     const patchBody = patchCall?.[1]?.body as {
-      executionPlan?: string;
-      parallelRunHistory?: string;
       status?: string;
     };
-    const patchedPlan = JSON.parse(String(patchBody.executionPlan)) as {
-      winnerCandidateIndex?: number;
-      steps: Array<{ type?: string; status?: string }>;
-      candidates: Array<{ status?: string; result?: string; finishedAt?: string }>;
-    };
-    const patchedHistory = JSON.parse(String(patchBody.parallelRunHistory)) as Array<{
-      parallelRunId?: string;
-      startedAt?: string;
-      finishedAt?: string;
-      candidateSessions: Array<{ status?: string; result?: string; finishedAt?: string }>;
-    }>;
     expect(patchBody.status).toBe("completed");
-    expect(patchedPlan.winnerCandidateIndex).toBeUndefined();
-    expect(patchedPlan.steps).toEqual([
-      expect.objectContaining({ type: "execution", status: "completed" }),
-    ]);
-    expect(patchedPlan.candidates).toEqual([
-      expect.objectContaining({ status: "completed", result: "候选 A 已完成", finishedAt: expect.any(String) }),
-      expect.objectContaining({ status: "completed", result: "候选 B 已完成", finishedAt: expect.any(String) }),
-    ]);
-    expect(patchedHistory).toEqual([
-      expect.objectContaining({
-        parallelRunId: expect.any(String),
-        startedAt: expect.any(String),
-        finishedAt: expect.any(String),
-        candidateSessions: [
-          expect.objectContaining({
-            status: "completed",
-            result: "候选 A 已完成",
-            finishedAt: expect.any(String),
-          }),
-          expect.objectContaining({
-            status: "completed",
-            result: "候选 B 已完成",
-            finishedAt: expect.any(String),
-          }),
-        ],
-      }),
-    ]);
     expect(cpFetchMock).toHaveBeenCalledWith(
       "/api/tasks/task-parallel-stale/branches",
       expect.objectContaining({
@@ -652,5 +604,126 @@ describe("reconcileRunningTasksOnStartup", () => {
       }),
     );
     expect(persistWorkflowStageExecutionOutcomeMock).not.toHaveBeenCalled();
+  });
+
+  test("does not rewrite legacy runtime plan for projection-backed stale parallel tasks", async () => {
+    extractAssistantResultFromMessagesMock
+      .mockReturnValueOnce({
+        completed: true,
+        failed: false,
+        error: undefined,
+        tokenUsed: 8,
+        text: "候选 A 已完成",
+      })
+      .mockReturnValueOnce({
+        completed: true,
+        failed: false,
+        error: undefined,
+        tokenUsed: 9,
+        text: "候选 B 已完成",
+      });
+
+    getSessionMessagesMock
+      .mockResolvedValueOnce({ ok: true, data: [{ id: "msg-a" }] })
+      .mockResolvedValueOnce({ ok: true, data: [{ id: "msg-b" }] });
+
+    mockCpFetchRoutes([
+      {
+        matcher: (url) => url.includes("/api/tasks/snapshots?status=running"),
+        response: {
+          ok: true,
+          data: {
+            data: [
+              {
+                taskId: "task-parallel-projection",
+                currentStatus: "running",
+                orchestrationKind: "parallel",
+                currentRunId: "task_run:task-parallel-projection:root",
+                lastActivityAt: "2026-03-13T12:56:03.000Z",
+              },
+            ],
+          },
+        },
+      },
+      {
+        matcher: "/api/tasks/snapshots?limit=200",
+        response: { ok: true, data: { data: [] } },
+      },
+      {
+        matcher: "/api/project-tree/tasks/task-parallel-projection",
+        response: {
+          ok: true,
+          data: {
+            id: "task-parallel-projection",
+            projectId: "proj-1",
+            title: "Projection parallel task",
+            status: "running",
+            orchestrationKind: "parallel",
+            currentRunId: "task_run:task-parallel-projection:root",
+            createdAt: "2026-03-13T12:56:03.000Z",
+            startedAt: "2026-03-13T12:56:03.000Z",
+          },
+        },
+      },
+      {
+        matcher: "/api/tasks/task-parallel-projection/branches",
+        response: {
+          ok: true,
+          data: {
+            data: [
+              {
+                runtimeSessionId: "session-a",
+                isActive: true,
+                archivedAt: null,
+              },
+              {
+                runtimeSessionId: "session-b",
+                isActive: true,
+                archivedAt: null,
+              },
+            ],
+          },
+        },
+      },
+      {
+        matcher: (url) => url.startsWith("/api/tasks/task-parallel-projection/domain-runs/"),
+        response: {
+          ok: true,
+          data: {
+            data: {
+              candidateNodes: [
+                {
+                  candidateIndex: 0,
+                  sessionId: "session-a",
+                  status: "running",
+                },
+                {
+                  candidateIndex: 1,
+                  sessionId: "session-b",
+                  status: "running",
+                },
+              ],
+            },
+          },
+        },
+      },
+    ]);
+
+    const { reconcileRunningTasksOnStartup } = await import(
+      "../../control-plane/web-ui-bff/src/modules/tasks/reconcile"
+    );
+
+    const summary = await reconcileRunningTasksOnStartup();
+
+    expect(summary.completed).toBe(1);
+    expect(cpFetchMock).toHaveBeenCalledWith(
+      "/api/tasks/task-parallel-projection",
+      expect.objectContaining({
+        method: "PATCH",
+        body: expect.objectContaining({
+          status: "completed",
+        }),
+      }),
+    );
   });
 });

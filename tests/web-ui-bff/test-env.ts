@@ -52,6 +52,55 @@ function escapeSqlValue(value: string) {
   return value.replace(/'/g, "''");
 }
 
+function extractDeleteTableName(statement: string) {
+  const match = statement.match(/^\s*DELETE\s+FROM\s+([a-zA-Z0-9_]+)/i);
+  return match?.[1] ?? null;
+}
+
+async function loadExistingTableNames(): Promise<Set<string> | null> {
+  try {
+    if (resolveDatabaseDialect() === "postgres") {
+      const result = Bun.spawnSync(
+        [
+          "psql",
+          resolveDatabaseUrl(),
+          "-At",
+          "-c",
+          "SELECT tablename FROM pg_tables WHERE schemaname='public'",
+        ],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      if (result.exitCode !== 0) {
+        return null;
+      }
+      const stdout = Buffer.from(result.stdout).toString();
+      return new Set(
+        stdout
+          .split(/\r?\n/)
+          .map((value) => value.trim())
+          .filter(Boolean),
+      );
+    }
+
+    const result = Bun.spawnSync(
+      ["sqlite3", resolveSqliteDbPath(), "SELECT name FROM sqlite_master WHERE type='table'"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    if (result.exitCode !== 0) {
+      return null;
+    }
+    const stdout = Buffer.from(result.stdout).toString();
+    return new Set(
+      stdout
+        .split(/\r?\n/)
+        .map((value) => value.trim())
+        .filter(Boolean),
+    );
+  } catch {
+    return null;
+  }
+}
+
 export function buildDeleteStatements(tableName: string, ids: string[]) {
   return ids
     .filter(isNonEmptyId)
@@ -91,12 +140,25 @@ export async function runCleanupStatements(statements: string[], label: string) 
   }
 
   try {
-    if (resolveDatabaseDialect() === "postgres") {
-      await Bun.$`psql ${resolveDatabaseUrl()} -v ON_ERROR_STOP=1 -c ${statements.join(" ")}`;
+    const existingTables = await loadExistingTableNames();
+    const filteredStatements =
+      existingTables === null
+        ? statements
+        : statements.filter((statement) => {
+            const tableName = extractDeleteTableName(statement);
+            return !tableName || existingTables.has(tableName);
+          });
+
+    if (filteredStatements.length === 0) {
       return;
     }
 
-    await Bun.$`sqlite3 ${resolveSqliteDbPath()} ${statements.join(" ")}`;
+    if (resolveDatabaseDialect() === "postgres") {
+      await Bun.$`psql ${resolveDatabaseUrl()} -v ON_ERROR_STOP=1 -c ${filteredStatements.join(" ")}`;
+      return;
+    }
+
+    await Bun.$`sqlite3 ${resolveSqliteDbPath()} ${filteredStatements.join(" ")}`;
   } catch {
     console.warn(`Cleanup failed for ${label}`);
   }

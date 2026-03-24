@@ -72,16 +72,10 @@ const props = defineProps<{
   judgeReasoning?: string;
 }>();
 
-defineEmits<{
-  (e: "adopt", index: number): void;
-}>();
+defineEmits<(e: "adopt", index: number) => void>();
 
 function canAdopt(candidate: ExecutionCandidate, index: number): boolean {
-  return (
-    props.allSettled &&
-    candidate.status === "completed" &&
-    props.winnerIndex < 0
-  );
+  return props.allSettled && candidate.status === "completed" && props.winnerIndex < 0;
 }
 
 function candidateStatusColor(status: string): string {

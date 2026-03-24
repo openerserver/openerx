@@ -2,13 +2,49 @@
 
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import * as orchestrationStrategyModule from "../../control-plane/web-ui-bff/src/lib/orchestration-strategy";
+import { createOpencodeAdapterModuleMock } from "./opencode-adapter-mock";
+import { createSseAggregatorModuleMock } from "./sse-aggregator-mock";
 
-async function loadRealControlPlaneClient() {
-  return import("../../control-plane/web-ui-bff/src/lib/control-plane-client?task-operating-routes");
+type ControlPlaneFetchHandler = ((request: Request) => Promise<Response> | Response) | null;
+
+let controlPlaneFetchHandler: ControlPlaneFetchHandler = null;
+
+function setMockControlPlaneFetchHandler(fetchHandler: ControlPlaneFetchHandler) {
+  controlPlaneFetchHandler = fetchHandler;
 }
 
-mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", async () => ({
-  ...(await loadRealControlPlaneClient()),
+mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () => ({
+  authHeader: (c: { req: { header: (name: string) => string | undefined } }) =>
+    c.req.header("Authorization") || "",
+  cpFetch: async <T = unknown>(
+    path: string,
+    opts: {
+      method?: string;
+      headers?: Record<string, string>;
+      body?: unknown;
+      authorization?: string;
+    } = {},
+  ) => {
+    if (!controlPlaneFetchHandler) {
+      return { ok: false, status: 502, data: { error: "Control plane unreachable" } as T };
+    }
+
+    const request = new Request(`http://internal-control-plane${path}`, {
+      method: opts.method ?? "GET",
+      headers: {
+        "Content-Type": "application/json",
+        ...(opts.authorization ? { Authorization: opts.authorization } : {}),
+        ...(opts.headers ?? {}),
+      },
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+    });
+    const response = await controlPlaneFetchHandler(request);
+    const text = await response.text();
+    const data = text ? (JSON.parse(text) as T) : ({} as T);
+    return { ok: response.ok, status: response.status, data };
+  },
+  createInternalAuthorization: mock(async () => "Bearer internal"),
+  setControlPlaneFetchHandler: setMockControlPlaneFetchHandler,
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/lib/orchestration-strategy", () => ({
@@ -16,31 +52,35 @@ mock.module("../../control-plane/web-ui-bff/src/lib/orchestration-strategy", () 
   readOrchestrationStrategy: mock(() => ({ hooks: [], templates: [], judge: { enabled: false } })),
 }));
 
-mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter", () => ({
-  continueSession: mock(async () => ({ ok: true })),
-  createSession: mock(async () => ({ ok: true, sessionId: "session-1", agentRunId: "run-1" })),
-  ensureAgentRunForSession: mock(() => "run-1"),
-  extractAssistantResultFromMessages: mock(() => ({
-    completed: false,
-    failed: false,
-    error: undefined,
-    tokenUsed: 0,
-  })),
-  forkSession: mock(async () => ({ ok: true, sessionId: "session-2" })),
-  getAgentMessages: mock(async () => ({ ok: true, data: [] })),
-  getAgentRun: mock(() => undefined),
-  getSessionMessages: mock(async () => ({ ok: true, data: [] })),
-  injectGuidance: mock(async () => ({ ok: true })),
-  listAgentRuns: mock(() => []),
-  listSessions: mock(async () => ({ ok: true, data: [] })),
-  pauseAgent: mock(async () => ({ ok: true })),
-  registerAgentRun: mock(() => undefined),
-  recoverAgentRun: mock(() => undefined),
-  resumeAgent: mock(async () => ({ ok: true })),
-  runDetachedPrompt: mock(async () => ({ ok: true, sessionId: "session-detached", text: "{}" })),
-  terminateAgent: mock(async () => ({ ok: true })),
-  updateAgentRunStatus: mock(() => undefined),
-}));
+mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter", () =>
+  createOpencodeAdapterModuleMock({
+    continueSession: mock(async () => ({ ok: true })),
+    createSession: mock(async () => ({ ok: true, sessionId: "session-1", agentRunId: "run-1" })),
+    ensureAgentRunForSession: mock(() => "run-1"),
+    extractAssistantResultFromMessages: mock(() => ({
+      completed: false,
+      failed: false,
+      error: undefined,
+      tokenUsed: 0,
+    })),
+    forkSession: mock(async () => ({ ok: true, sessionId: "session-2" })),
+    getAgentMessages: mock(async () => ({ ok: true, data: [] })),
+    getAgentRun: mock(() => undefined),
+    getSessionMessages: mock(async () => ({ ok: true, data: [] })),
+    injectGuidance: mock(async () => ({ ok: true })),
+    listAgentRuns: mock(() => []),
+    listRuntimePermissions: mock(async () => ({ ok: true, data: [] })),
+    listSessions: mock(async () => ({ ok: true, data: [] })),
+    pauseAgent: mock(async () => ({ ok: true })),
+    registerAgentRun: mock(() => undefined),
+    recoverAgentRun: mock(() => undefined),
+    replyRuntimePermission: mock(async () => ({ ok: true })),
+    resumeAgent: mock(async () => ({ ok: true })),
+    runDetachedPrompt: mock(async () => ({ ok: true, sessionId: "session-detached", text: "{}" })),
+    terminateAgent: mock(async () => ({ ok: true })),
+    updateAgentRunStatus: mock(() => undefined),
+  }),
+);
 
 mock.module("../../control-plane/web-ui-bff/src/modules/hooks/lifecycle-hooks", () => ({
   executeLifecycleHooks: mock(async () => ({
@@ -48,7 +88,9 @@ mock.module("../../control-plane/web-ui-bff/src/modules/hooks/lifecycle-hooks", 
     combinedResultText: undefined,
     rewrittenPrompt: undefined,
   })),
-  mergeStageAndStrategyHooks: mock((_stageHooks: unknown, strategyHooks: unknown) => strategyHooks ?? []),
+  mergeStageAndStrategyHooks: mock(
+    (_stageHooks: unknown, strategyHooks: unknown) => strategyHooks ?? [],
+  ),
   parseStageHooks: mock(() => []),
 }));
 
@@ -67,11 +109,11 @@ mock.module("../../control-plane/web-ui-bff/src/modules/realtime/pipeline-events
   buildPipelineStageUpdatedEvents: mock(() => []),
 }));
 
-mock.module("../../control-plane/web-ui-bff/src/modules/realtime/sse-aggregator", () => ({
-  sseAggregator: {
+mock.module("../../control-plane/web-ui-bff/src/modules/realtime/sse-aggregator", () =>
+  createSseAggregatorModuleMock({
     registerParallelTask: mock(() => undefined),
-  },
-}));
+  }),
+);
 
 mock.module("../../control-plane/web-ui-bff/src/modules/realtime/ws-broadcaster", () => ({
   wsBroadcaster: {
@@ -80,19 +122,16 @@ mock.module("../../control-plane/web-ui-bff/src/modules/realtime/ws-broadcaster"
 }));
 
 describe("task operating routes", () => {
-  afterEach(async () => {
-    const controlPlaneClientModule = await loadRealControlPlaneClient();
-    controlPlaneClientModule.setControlPlaneFetchHandler(null);
+  afterEach(() => {
+    setMockControlPlaneFetchHandler(null);
   });
 
-  beforeEach(async () => {
-    const controlPlaneClientModule = await loadRealControlPlaneClient();
-    controlPlaneClientModule.setControlPlaneFetchHandler(null);
+  beforeEach(() => {
+    setMockControlPlaneFetchHandler(null);
   });
 
   test("returns operating state, operating mode, boss decisions and escalations from runtime storage", async () => {
-    const controlPlaneClientModule = await loadRealControlPlaneClient();
-    controlPlaneClientModule.setControlPlaneFetchHandler((request) => {
+    setMockControlPlaneFetchHandler((request) => {
       const url = new URL(request.url);
 
       if (url.pathname === "/api/tasks/task-1/operating-runtime/state") {
@@ -221,8 +260,7 @@ describe("task operating routes", () => {
   });
 
   test("returns runtime storage errors directly when operating-state is unavailable", async () => {
-    const controlPlaneClientModule = await loadRealControlPlaneClient();
-    controlPlaneClientModule.setControlPlaneFetchHandler((request) => {
+    setMockControlPlaneFetchHandler((request) => {
       const url = new URL(request.url);
 
       if (url.pathname === "/api/tasks/task-legacy/operating-runtime/state") {

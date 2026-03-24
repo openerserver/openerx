@@ -34,6 +34,12 @@ export interface TaskSessionTimelineItem {
 }
 
 export interface TaskSessionTimelineMeta {
+  readSource?:
+    | "conversation-table"
+    | "task-domain-events"
+    | "conversation-table+task-domain-events"
+    | "task-domain-projection"
+    | "runtime-fallback";
   cacheState?: "none" | "partial" | "complete";
   complete?: boolean;
   includeLineage?: boolean;
@@ -47,9 +53,16 @@ export interface TaskSessionTimelineResponse {
   meta?: TaskSessionTimelineMeta;
 }
 
-export interface TaskSessionTreeMessagesResponse {
+export interface TaskSessionCachedMessagesResponse {
   data?: unknown[];
   meta?: TaskSessionTimelineMeta;
+}
+
+export function normalizeTaskSessionTimelineMeta(
+  meta?: TaskSessionTimelineMeta,
+): TaskSessionTimelineMeta | undefined {
+  if (!meta) return undefined;
+  return meta;
 }
 
 export async function persistTaskSessionMessageSnapshot(
@@ -77,9 +90,7 @@ export async function fetchTaskSessionLineageRecords(taskId: string, authorizati
   );
 
   const records =
-    lineageResult.ok && Array.isArray(lineageResult.data?.data)
-      ? lineageResult.data.data
-      : [];
+    lineageResult.ok && Array.isArray(lineageResult.data?.data) ? lineageResult.data.data : [];
 
   return {
     ok: lineageResult.ok,
@@ -115,23 +126,41 @@ export async function fetchTaskSessionTimeline(
   options?: { includeLineage?: boolean },
 ) {
   const suffix = options?.includeLineage ? "?includeLineage=true" : "";
-  return cpFetch<TaskSessionTimelineResponse>(
+  const result = await cpFetch<TaskSessionTimelineResponse>(
     `/api/tasks/${encodeURIComponent(taskId)}/branches/${encodeURIComponent(sessionId)}/timeline${suffix}`,
     { authorization },
   );
+  return {
+    ...result,
+    data: result.data
+      ? {
+          ...result.data,
+          meta: normalizeTaskSessionTimelineMeta(result.data.meta),
+        }
+      : result.data,
+  };
 }
 
-export async function fetchTaskSessionMessagesFromTreeSource(
+export async function fetchTaskSessionCachedMessages(
   taskId: string,
   sessionId: string,
   authorization: string,
   options?: { includeLineage?: boolean },
 ) {
   const suffix = options?.includeLineage ? "?includeLineage=true" : "";
-  return cpFetch<TaskSessionTreeMessagesResponse>(
+  const result = await cpFetch<TaskSessionCachedMessagesResponse>(
     `/api/tasks/${encodeURIComponent(taskId)}/branches/${encodeURIComponent(sessionId)}/messages${suffix}`,
     { authorization },
   );
+  return {
+    ...result,
+    data: result.data
+      ? {
+          ...result.data,
+          meta: normalizeTaskSessionTimelineMeta(result.data.meta),
+        }
+      : result.data,
+  };
 }
 
 export async function activateTaskSessionLineageByRecordId(

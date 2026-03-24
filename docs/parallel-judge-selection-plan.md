@@ -1,6 +1,7 @@
 # 并行执行 + 裁判自动评选方案
 
 > 状态：草案 · 2026-03-20
+> 注：本文中把裁判结果写回 `executionPlan` 的描述已过时。当前并行裁判结果以 task domain run / judge 节点和 winner 结果为准，不应再把 `executionPlan` 当成现行落点。
 
 ---
 
@@ -13,7 +14,7 @@
 **本次目标**：
 
 | # | 目标 | 说明 |
-|---|------|------|
+| --- | --- | --- |
 | G1 | 裁判配置前端化 | 在执行模式弹窗中加入裁判开关、模型选择、评选策略 |
 | G2 | 自动评分选优 | 裁判启用后，所有候选完成时自动评分并选出最优方案 |
 | G3 | 无裁判手动选择 | 裁判未启用时保持现有行为：用户手动采纳 |
@@ -23,7 +24,7 @@
 
 ## 2. 现有架构快照
 
-```
+```text
 ┌────────────────────┐       ┌─────────────────────┐       ┌──────────────────┐
 │  ExecutionModeModal │──────►│  BFF /tasks/:id      │──────►│  opencode runtime │
 │  (配置并行候选)      │       │  /execute            │       │  (各候选 session)  │
@@ -42,7 +43,7 @@
 ### 关键文件
 
 | 文件 | 职责 |
-|------|------|
+| --- | --- |
 | [control-plane/web-ui/src/components/ExecutionModeModal.vue](control-plane/web-ui/src/components/ExecutionModeModal.vue) | 执行模式选择弹窗（**需改造**） |
 | [control-plane/web-ui/src/components/task-detail/TaskParallelCandidatesCard.vue](control-plane/web-ui/src/components/task-detail/TaskParallelCandidatesCard.vue) | 并行候选结果卡片（**需增强**） |
 | [control-plane/web-ui/src/pages/TaskDetail.vue](control-plane/web-ui/src/pages/TaskDetail.vue) | 工作台主页面 |
@@ -79,7 +80,7 @@ interface JudgeResult {
 
 ## 3. 整体流程设计
 
-```
+```text
 用户打开 ExecutionModeModal
   │
   ├─ 选择「并行比较」模式
@@ -107,7 +108,7 @@ interface JudgeResult {
   │   → runJudgeEvaluation()                            │
   │   → 裁判模型收到所有候选结果 + 评审提示               │
   │   → 返回 JSON: {winnerIndex, scores[], reasoning}   │
-  │   → 自动写入 executionPlan.judgeResult               │
+  │   → 自动写入 task domain run judge 节点结果          │
   │   → winnerCandidateIndex 设为胜出候选                │
   │   → 胜出候选的 result 成为任务主线回复                │
   │   → 前端展示评分详情 + 裁判推理                      │
@@ -134,7 +135,7 @@ interface JudgeResult {
 
 在「并行比较」模式下，候选模型列表下方新增可折叠的裁判配置面板：
 
-```
+```text
 ┌─────────────────────────────────────────────────────┐
 │ 选择执行模式                                         │
 │                                                     │
@@ -168,7 +169,7 @@ interface JudgeResult {
 #### 交互规则
 
 | 字段 | 规则 |
-|------|------|
+| --- | --- |
 | 裁判开关 | 默认关闭；打开后展开配置区 |
 | 裁判模型 | 复用现有 `modelOptions` 列表；默认选第一个可用模型；**不能与候选模型完全重复**（提示但不阻拦） |
 | 评选策略 | `judge-pick`（裁判直接指定胜者）或 `highest-score`（按评分数值取最高）；默认 `judge-pick` |
@@ -198,7 +199,7 @@ interface ExecutionOverrides {
 #### 场景矩阵
 
 | 裁判启用 | 裁判结果 | UI 行为 |
-|----------|----------|---------|
+| --- | --- | --- |
 | ✅ 是 | `completed` + winnerIndex 有效 | 自动高亮胜出候选，显示评分卡片，胜出候选的回复作为主线 |
 | ✅ 是 | `failed` | 显示警告「裁判评估失败」，降级为手动采纳模式 |
 | ✅ 是 | 正在运行 | 候选结果区域显示「裁判评估中…」loading 状态 |
@@ -208,7 +209,7 @@ interface ExecutionOverrides {
 
 ```typescript
 // 伪代码
-if (executionPlan.winnerCandidateIndex >= 0) {
+if (winnerCandidateIndex >= 0) {
   // 已有胜者（裁判选出 或 用户手动采纳）
   mainReply = candidates[winnerCandidateIndex].result;
 } else if (judgeResult?.status === 'failed') {
@@ -227,7 +228,7 @@ if (executionPlan.winnerCandidateIndex >= 0) {
 
 在现有候选卡片基础上增强：
 
-```
+```text
 ┌─────────────────────────────────────────────────────────┐
 │ 并行候选结果                                             │
 │                                                         │
@@ -271,7 +272,7 @@ interface Props {
 **新增显示元素：**
 
 | 元素 | 条件 | 说明 |
-|------|------|------|
+| --- | --- | --- |
 | 候选评分标签 | `judgeScores[i]` 存在 | 在候选模型标签旁显示评分 |
 | 裁判运行中 spinner | `judgeStatus === 'running'` | 候选全部完成后、裁判结果出之前 |
 | 裁判失败警告 | `judgeStatus === 'failed'` | 提示裁判评估失败，请手动采纳 |
@@ -288,11 +289,11 @@ interface Props {
 当前 `serializeTaskStrategy()` 已支持将 `judge` 字段写入 `task.strategy` JSON。需要确保：
 
 1. `ExecutionOverrides.judge` 从前端传入后正确合并到 `OrchestrationStrategy.judge`
-2. `buildExecutionPlan()` 使用**任务级** judge 配置（来自 overrides），而非全局 `readOrchestrationStrategy()`
+2. `buildRuntimePlan()` 使用**任务级** judge 配置（来自 overrides），而非全局 `readOrchestrationStrategy()`
 
 ```typescript
-// 改造 buildExecutionPlan 签名，接收 task-level judgeConfig
-export function buildExecutionPlan(
+// 改造 buildRuntimePlan 签名，接收 task-level judgeConfig
+export function buildRuntimePlan(
   template: WorkflowTemplate,
   strategy: OrchestrationStrategy,
   category: string,
@@ -302,7 +303,7 @@ export function buildExecutionPlan(
     judge?: Partial<JudgeConfig>;  // ← 新增
     steps?: ChainStepInput[];
   },
-): ExecutionPlan {
+): RuntimePlan {
   // ...
   // Judge step 判定优先使用 overrides.judge.enabled
   const effectiveJudge = overrides?.judge
@@ -372,7 +373,7 @@ if (plan.winnerCandidateIndex >= 0 && plan.judgeResult?.status !== 'failed') {
 
 ## 6. 数据流总览
 
-```
+```text
 ┌──────────────┐     confirm({mode,candidates,judge})    ┌──────────────┐
 │ Execution    │ ──────────────────────────────────────► │ TaskDetail   │
 │ ModeModal    │                                         │ .vue         │
@@ -383,7 +384,7 @@ if (plan.winnerCandidateIndex >= 0 && plan.judgeResult?.status !== 'failed') {
                                                                 ▼
                        ┌───────────────────────────────────────────────┐
                        │ BFF  POST /tasks/:id/execute                  │
-                       │ → buildExecutionPlan(overrides w/ judge)      │
+                       │ → buildRuntimePlan(overrides w/ judge)        │
                        │ → 启动 N 个候选 session                       │
                        └────────────────────┬──────────────────────────┘
                                             │
@@ -431,7 +432,7 @@ if (plan.winnerCandidateIndex >= 0 && plan.judgeResult?.status !== 'failed') {
 ### Phase 1：前端裁判配置入口（约 1 天）
 
 | 步骤 | 说明 |
-|------|------|
+| --- | --- |
 | 1.1 | `ExecutionModeModal.vue` 并行模式下新增裁判配置折叠面板 |
 | 1.2 | 新增 `judge` 字段到 `ExecutionOverrides` 类型 |
 | 1.3 | `handleExecutionModeConfirm()` → `serializeTaskStrategy()` 正确透传 judge 配置 |
@@ -440,8 +441,8 @@ if (plan.winnerCandidateIndex >= 0 && plan.judgeResult?.status !== 'failed') {
 ### Phase 2：后端任务级裁判配置（约 0.5 天）
 
 | 步骤 | 说明 |
-|------|------|
-| 2.1 | `buildExecutionPlan()` 支持 `overrides.judge` |
+| --- | --- |
+| 2.1 | `buildRuntimePlan()` 支持 `overrides.judge` |
 | 2.2 | `finalizeParallelTask()` 从 `task.strategy` 读取任务级 judge 配置 |
 | 2.3 | `POST /execute` 请求体增加 judge 字段校验 |
 | 2.4 | `POST /candidates/:index/adopt` 支持裁判失败时手动覆盖 |
@@ -449,7 +450,7 @@ if (plan.winnerCandidateIndex >= 0 && plan.judgeResult?.status !== 'failed') {
 ### Phase 3：前端结果展示增强（约 0.5 天）
 
 | 步骤 | 说明 |
-|------|------|
+| --- | --- |
 | 3.1 | `TaskParallelCandidatesCard` 展示评分、裁判运行状态、失败降级提示 |
 | 3.2 | `TaskDetail.vue` 主线回复根据 judgeResult 自动切换 |
 | 3.3 | 裁判正在运行时显示 loading 状态 |
@@ -457,7 +458,7 @@ if (plan.winnerCandidateIndex >= 0 && plan.judgeResult?.status !== 'failed') {
 ### Phase 4：测试与验证（约 0.5 天）
 
 | 步骤 | 说明 |
-|------|------|
+| --- | --- |
 | 4.1 | 集成测试：启用裁判的并行执行全流程 |
 | 4.2 | 集成测试：裁判评估失败降级为手动 |
 | 4.3 | 集成测试：无裁判手动采纳（回归） |
@@ -468,7 +469,7 @@ if (plan.winnerCandidateIndex >= 0 && plan.judgeResult?.status !== 'failed') {
 ## 8. 边界与约束
 
 | 项 | 说明 |
-|----|------|
+| --- | --- |
 | 付费模型保护 | 裁判模型的 token 消耗纳入 `paidExecutionGuard` 预算控制；如果预算已熔断，跳过裁判评估（降级为手动） |
 | 裁判超时 | 超时后 `judgeResult.status = 'failed'`，降级为手动采纳 |
 | 候选全部失败 | 无可评审结果，跳过裁判，任务标记为失败 |
@@ -481,10 +482,10 @@ if (plan.winnerCandidateIndex >= 0 && plan.judgeResult?.status !== 'failed') {
 ## 9. 改动范围清单
 
 | 文件 | 改动类型 | 说明 |
-|------|----------|------|
+| --- | --- | --- |
 | `control-plane/web-ui/src/components/ExecutionModeModal.vue` | **改造** | 新增裁判配置面板 |
 | `control-plane/web-ui/src/components/task-detail/TaskParallelCandidatesCard.vue` | **增强** | 评分展示、裁判状态、降级提示 |
 | `control-plane/web-ui/src/pages/TaskDetail.vue` | **增强** | judgeResult 驱动主线回复、透传 judge 到 overrides |
-| `control-plane/web-ui-bff/src/lib/orchestration-strategy.ts` | **增强** | `buildExecutionPlan` 支持 task-level judge override |
+| `control-plane/web-ui-bff/src/lib/orchestration-strategy.ts` | **增强** | `buildRuntimePlan` 支持 task-level judge override |
 | `control-plane/web-ui-bff/src/modules/realtime/sse-aggregator.ts` | **增强** | `finalizeParallelTask` 从 task.strategy 读 judge |
 | `control-plane/web-ui-bff/src/modules/tasks/routes.ts` | **增强** | execute 接口 judge 校验、adopt 支持裁判失败覆盖 |

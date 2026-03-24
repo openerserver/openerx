@@ -21,9 +21,7 @@ const props = defineProps<{
   currentTaskId: string;
 }>();
 
-const emit = defineEmits<{
-  (e: "select", taskId: string): void;
-}>();
+const emit = defineEmits<(e: "select", taskId: string) => void>();
 
 const { options, loading, refresh } = useTaskSwitcher(
   computed(() => toRef(props, "projectId").value),

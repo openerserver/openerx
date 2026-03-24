@@ -262,7 +262,8 @@ function detectProviderConfigMismatch(providerCandidates: ProviderConfig[]) {
   if (
     !activeProvider ||
     !alternateProvider ||
-    (activeProvider.baseURL === alternateProvider.baseURL && activeProvider.api === alternateProvider.api)
+    (activeProvider.baseURL === alternateProvider.baseURL &&
+      activeProvider.api === alternateProvider.api)
   ) {
     return undefined;
   }
@@ -414,8 +415,7 @@ function buildCopilotCredentialError(args: {
               kind: RUNTIME_RECOVERY_SUGGESTION_KINDS.command,
               title: "从备份恢复 Copilot 凭据文件。",
               detail: "检测到 auth.json.bak 中仍有有效凭据，可能是凭据文件被意外清空。",
-              command:
-                "cp ~/.local/share/opencode/auth.json.bak ~/.local/share/opencode/auth.json",
+              command: "cp ~/.local/share/opencode/auth.json.bak ~/.local/share/opencode/auth.json",
             } as const,
           ]
         : []),

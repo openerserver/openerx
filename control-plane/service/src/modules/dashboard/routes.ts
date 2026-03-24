@@ -7,13 +7,12 @@ import {
   paidExecutionLeases,
   projects,
   runtimeUsageLedgers,
+  taskSnapshots,
+  taskTimelineViews,
+  tasks,
 } from "../../db/schema";
 import { type AppEnv, type JWTPayload, authMiddleware } from "../../middleware/auth";
 import { requireRole } from "../../middleware/rbac";
-import {
-  loadExistingTaskTreeNodeIdsByProjectIds,
-  loadTaskTreeRecords,
-} from "../project-tree/task-view";
 
 export const dashboardRoutes = new Hono<AppEnv>();
 
@@ -212,6 +211,17 @@ interface GovernanceOverviewResponse {
     breakerCount: number;
     activeLeaseCount: number;
     topRiskTaskCount: number;
+    runningTaskCount: number;
+    activeSessionCount: number;
+    parallelTaskCount: number;
+    sequentialChainTaskCount: number;
+    recentTimelineItemCount: number;
+    pausedTaskCount: number;
+    failedTaskCount: number;
+    activeCandidateCount: number;
+    pendingChainStepCount: number;
+    toolTimelineItemCount: number;
+    decisionTimelineItemCount: number;
   };
   topRiskTasks: GovernanceTopRiskTaskItem[];
   recentEvents: GovernanceRecentEventItem[];
@@ -226,6 +236,8 @@ interface GovernanceTaskRecord {
   id: string;
   projectId: string;
   title: string;
+  currentSessionId: string | null;
+  lastActivityAt: string | null;
 }
 
 interface GovernanceLedgerRecord {
@@ -279,6 +291,36 @@ function hasProjectAccess(user: JWTPayload, projectId: string): boolean {
 
 function parseRange(value?: string): DashboardRange {
   return DASHBOARD_RANGES.includes(value as DashboardRange) ? (value as DashboardRange) : "24h";
+}
+
+async function loadGovernanceTaskRecords(taskIds: string[]) {
+  if (taskIds.length === 0) {
+    return [] as GovernanceTaskRecord[];
+  }
+
+  const [taskRows, snapshotRows] = await Promise.all([
+    db.query.tasks.findMany({ where: inArray(tasks.id, taskIds) }),
+    db.query.taskSnapshots.findMany({ where: inArray(taskSnapshots.taskId, taskIds) }),
+  ]);
+
+  const snapshotByTaskId = new Map(snapshotRows.map((row) => [row.taskId, row] as const));
+
+  return taskRows.map((task) => {
+    const snapshot = snapshotByTaskId.get(task.id);
+    return {
+      id: task.id,
+      projectId: task.projectId,
+      title: task.title,
+      currentSessionId: snapshot?.currentSessionId ?? task.currentSessionId ?? null,
+      lastActivityAt:
+        snapshot?.lastActivityAt ??
+        task.finishedAt ??
+        task.startedAt ??
+        task.updatedAt ??
+        task.createdAt ??
+        null,
+    } satisfies GovernanceTaskRecord;
+  });
 }
 
 function startOfUtcMonth(date: Date) {
@@ -778,6 +820,17 @@ function createEmptyGovernanceOverview(
       breakerCount: 0,
       activeLeaseCount: 0,
       topRiskTaskCount: 0,
+      runningTaskCount: 0,
+      activeSessionCount: 0,
+      parallelTaskCount: 0,
+      sequentialChainTaskCount: 0,
+      recentTimelineItemCount: 0,
+      pausedTaskCount: 0,
+      failedTaskCount: 0,
+      activeCandidateCount: 0,
+      pendingChainStepCount: 0,
+      toolTimelineItemCount: 0,
+      decisionTimelineItemCount: 0,
     },
     topRiskTasks: [],
     recentEvents: [],
@@ -902,9 +955,10 @@ function getOrCreateRiskTaskFromLedger(
     taskId: ledger.taskId,
     projectId: ledger.projectId,
     title: task?.title || ledger.taskId,
-    runtimeSessionId: ledger.runtimeSessionId || null,
+    runtimeSessionId: task?.currentSessionId || ledger.runtimeSessionId || null,
     dominantDriver: "cost",
-    lastActivityAt: ledger.finishedAt || ledger.updatedAt || ledger.createdAt || null,
+    lastActivityAt:
+      task?.lastActivityAt || ledger.finishedAt || ledger.updatedAt || ledger.createdAt || null,
   });
   taskMap.set(ledger.taskId, created);
   return created;
@@ -947,9 +1001,10 @@ function getOrCreateRiskTaskFromAudit(
     taskId: audit.taskId,
     projectId: audit.projectId || task?.projectId || "",
     title: task?.title || audit.taskId,
-    runtimeSessionId: typeof audit.sessionId === "string" ? audit.sessionId : null,
+    runtimeSessionId:
+      task?.currentSessionId || (typeof audit.sessionId === "string" ? audit.sessionId : null),
     dominantDriver: "blocked",
-    lastActivityAt: audit.ts,
+    lastActivityAt: task?.lastActivityAt || audit.ts,
   });
   taskMap.set(audit.taskId, created);
   return created;
@@ -1197,7 +1252,11 @@ dashboardRoutes.get("/provider-tokens", async (c) => {
   const range = parseRange(c.req.query("range"));
   const nowMs = Date.now();
   const bounds = getRangeBounds(range, nowMs);
-  const taskIds = await loadExistingTaskTreeNodeIdsByProjectIds([projectId]);
+  const taskRows = await db.query.tasks.findMany({
+    where: eq(tasks.projectId, projectId),
+    columns: { id: true },
+  });
+  const taskIds = taskRows.map((task) => task.id);
 
   const runRows =
     taskIds.length > 0
@@ -1300,7 +1359,7 @@ dashboardRoutes.get("/governance-overview", async (c) => {
   const endIso = new Date(bounds.currentEndMs).toISOString();
   const nowIso = new Date(nowMs).toISOString();
 
-  const [ledgers, audits, activeLeases] = await Promise.all([
+  const [ledgers, audits, activeLeases, snapshotRows, recentTimelineRows] = await Promise.all([
     db.query.runtimeUsageLedgers.findMany({
       where: and(
         inArray(runtimeUsageLedgers.projectId, projectIds),
@@ -1325,6 +1384,23 @@ dashboardRoutes.get("/governance-overview", async (c) => {
         gte(paidExecutionLeases.expiresAt, nowIso),
       ),
     }),
+    db.query.taskSnapshots.findMany({
+      where: inArray(taskSnapshots.projectId, projectIds),
+    }),
+    db
+      .select({
+        id: taskTimelineViews.id,
+        sessionId: taskTimelineViews.sessionId,
+        itemKind: taskTimelineViews.itemKind,
+      })
+      .from(taskTimelineViews)
+      .where(
+        and(
+          inArray(taskTimelineViews.projectId, projectIds),
+          gte(taskTimelineViews.sortAt, startIso),
+          lt(taskTimelineViews.sortAt, endIso),
+        ),
+      ),
   ]);
 
   const relevantTaskIds = Array.from(
@@ -1335,7 +1411,7 @@ dashboardRoutes.get("/governance-overview", async (c) => {
       ...audits.map((audit) => audit.taskId).filter((taskId): taskId is string => Boolean(taskId)),
     ]),
   );
-  const taskRows = await loadTaskTreeRecords({ taskIds: relevantTaskIds });
+  const taskRows = await loadGovernanceTaskRecords(relevantTaskIds);
   const taskById = new Map(taskRows.map((task) => [task.id, task]));
   const recentEvents = buildGovernanceRecentEvents(audits, taskById);
   const summaryCounts = summarizeGovernanceAudits(audits);
@@ -1344,6 +1420,43 @@ dashboardRoutes.get("/governance-overview", async (c) => {
     audits,
     taskById,
   });
+  const activeSessionIds = new Set(
+    snapshotRows
+      .map((snapshot) => snapshot.currentSessionId)
+      .filter((sessionId): sessionId is string => Boolean(sessionId)),
+  );
+  const runningTaskCount = snapshotRows.filter(
+    (snapshot) => snapshot.currentStatus === "running" || snapshot.currentStatus === "paused",
+  ).length;
+  const parallelTaskCount = snapshotRows.filter(
+    (snapshot) => snapshot.orchestrationKind === "parallel",
+  ).length;
+  const sequentialChainTaskCount = snapshotRows.filter(
+    (snapshot) => snapshot.orchestrationKind === "sequential-chain",
+  ).length;
+  const pausedTaskCount = snapshotRows.filter(
+    (snapshot) => snapshot.currentStatus === "paused",
+  ).length;
+  const failedTaskCount = snapshotRows.filter(
+    (snapshot) => snapshot.currentStatus === "failed" || snapshot.currentStatus === "cancelled",
+  ).length;
+  const activeCandidateCount = snapshotRows.reduce(
+    (sum, snapshot) => sum + (snapshot.activeCandidateCount ?? 0),
+    0,
+  );
+  const pendingChainStepCount = snapshotRows.reduce(
+    (sum, snapshot) =>
+      sum + Math.max((snapshot.totalChainSteps ?? 0) - (snapshot.completedChainSteps ?? 0), 0),
+    0,
+  );
+  const toolTimelineItemCount = recentTimelineRows.filter(
+    (row) => row.itemKind === "tool-call" || row.itemKind === "tool-output",
+  ).length;
+  const decisionTimelineItemCount = recentTimelineRows.filter((row) =>
+    ["candidate-result", "judge-decision", "chain-step-result", "status-transition"].includes(
+      row.itemKind,
+    ),
+  ).length;
 
   const response: GovernanceOverviewResponse = {
     range,
@@ -1353,6 +1466,17 @@ dashboardRoutes.get("/governance-overview", async (c) => {
       breakerCount: summaryCounts.breakerCount,
       activeLeaseCount: activeLeases.length,
       topRiskTaskCount: rankedTopRiskTasks.length,
+      runningTaskCount,
+      activeSessionCount: activeSessionIds.size,
+      parallelTaskCount,
+      sequentialChainTaskCount,
+      recentTimelineItemCount: recentTimelineRows.length,
+      pausedTaskCount,
+      failedTaskCount,
+      activeCandidateCount,
+      pendingChainStepCount,
+      toolTimelineItemCount,
+      decisionTimelineItemCount,
     },
     topRiskTasks: rankedTopRiskTasks,
     recentEvents,

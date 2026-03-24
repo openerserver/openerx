@@ -1,14 +1,14 @@
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { cpFetch, createInternalAuthorization } from "../../lib/control-plane-client";
+import { createInternalAuthorization } from "../../lib/control-plane-client";
 import { DEFAULT_EXECUTION_AGENT, isDefaultExecutionAgent } from "../../lib/orchestration-strategy";
-import {
-  fetchTaskSessionLineageRecords,
-  fetchTaskSessionMessagesFromTreeSource as fetchTaskSessionMessagesFromCompatSource,
-  type TaskSessionLineageRecord,
-} from "../tasks/task-session-compat";
 import type { AgentRunStatus } from "../../types/events";
+import {
+  type TaskSessionLineageRecord,
+  fetchTaskSessionCachedMessages,
+  fetchTaskSessionLineageRecords,
+} from "../tasks/task-session-compat";
 
 // ── OpenCode Adapter ───────────────────────────────────────────────
 // Maps agent control operations to OpenCode SDK calls.
@@ -806,7 +806,8 @@ function dedupeTaskLineageRecords(records: TaskSessionLineageRecord[]) {
     }
 
     const existingScore =
-      Number(Boolean(existing.parentRuntimeSessionId)) + Number(Boolean(existing.forkedFromMessageId));
+      Number(Boolean(existing.parentRuntimeSessionId)) +
+      Number(Boolean(existing.forkedFromMessageId));
     const nextScore =
       Number(Boolean(record.parentRuntimeSessionId)) + Number(Boolean(record.forkedFromMessageId));
     const existingUpdated = existing.updatedAt ? Date.parse(existing.updatedAt) : 0;
@@ -928,35 +929,37 @@ async function loadTaskLineageMessages(
     return null;
   }
 
-  const aggregatedTreeFetchResult = await fetchTaskSessionMessagesFromCompatSource(
+  const aggregatedCachedMessagesResult = await fetchTaskSessionCachedMessages(
     taskId,
     sessionId,
     authorization,
     { includeLineage: true },
   );
-  const aggregatedTreeResult =
-    aggregatedTreeFetchResult.ok && Array.isArray(aggregatedTreeFetchResult.data?.data)
+  const aggregatedCachedMessages =
+    aggregatedCachedMessagesResult.ok && Array.isArray(aggregatedCachedMessagesResult.data?.data)
       ? {
           ok: true,
-          data: aggregatedTreeFetchResult.data.data,
-          meta: aggregatedTreeFetchResult.data.meta,
+          data: aggregatedCachedMessagesResult.data.data,
+          meta: aggregatedCachedMessagesResult.data.meta,
         }
       : null;
   const aggregatedMeta =
-    aggregatedTreeResult && typeof aggregatedTreeResult === "object" && "meta" in aggregatedTreeResult
-      ? ((aggregatedTreeResult as { meta?: { cacheState?: string; complete?: boolean } }).meta ??
-        undefined)
+    aggregatedCachedMessages &&
+    typeof aggregatedCachedMessages === "object" &&
+    "meta" in aggregatedCachedMessages
+      ? ((aggregatedCachedMessages as { meta?: { cacheState?: string; complete?: boolean } })
+          .meta ?? undefined)
       : undefined;
   if (
-    aggregatedTreeResult?.ok &&
+    aggregatedCachedMessages?.ok &&
     (aggregatedMeta?.cacheState === "complete" || aggregatedMeta?.complete === true)
   ) {
-    return aggregatedTreeResult;
+    return aggregatedCachedMessages;
   }
 
   const messageResults = await Promise.all(
     lineagePath.map(async (record) => {
-      const cachedFetchResult = await fetchTaskSessionMessagesFromCompatSource(
+      const cachedFetchResult = await fetchTaskSessionCachedMessages(
         taskId,
         record.runtimeSessionId,
         authorization,
@@ -968,11 +971,9 @@ async function loadTaskLineageMessages(
       if (
         cachedFetchResult.ok &&
         cachedMessages &&
-        (
-          cachedMeta?.cacheState === "complete" ||
+        (cachedMeta?.cacheState === "complete" ||
           cachedMeta?.complete === true ||
-          cachedMessages.length > 0
-        )
+          cachedMessages.length > 0)
       ) {
         return {
           ok: true,
@@ -1144,7 +1145,18 @@ export function extractAssistantResultFromMessages(
     return { completed: false, failed: false, tokenUsed: 0 };
   }
 
-  let fallbackText: string | undefined;
+  const tokenUsed = collectAssistantTokenUsage(messages);
+  const resolved = resolveAssistantResultState(messages, options);
+  return {
+    text: resolved.text,
+    completed: resolved.completed,
+    failed: resolved.failed,
+    error: resolved.error,
+    tokenUsed,
+  };
+}
+
+function collectAssistantTokenUsage(messages: unknown[]) {
   let tokenUsed = 0;
 
   for (const message of messages) {
@@ -1152,23 +1164,35 @@ export function extractAssistantResultFromMessages(
     if (info?.role !== "assistant") {
       continue;
     }
-
     tokenUsed += extractAssistantTokenUsage(info);
   }
+
+  return tokenUsed;
+}
+
+function shouldSkipAssistantMessage(
+  info: Record<string, unknown> | undefined,
+  options?: { minCompletedAt?: number },
+) {
+  if (info?.role !== "assistant") {
+    return true;
+  }
+
+  const completedAt = readAssistantCompletedAt(info);
+  return (
+    options?.minCompletedAt !== undefined &&
+    completedAt !== undefined &&
+    completedAt < options.minCompletedAt
+  );
+}
+
+function resolveAssistantResultState(messages: unknown[], options?: { minCompletedAt?: number }) {
+  let fallbackText: string | undefined;
 
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index];
     const info = getAssistantMessageInfo(message);
-    if (info?.role !== "assistant") {
-      continue;
-    }
-
-    const completedAt = readAssistantCompletedAt(info);
-    if (
-      options?.minCompletedAt !== undefined &&
-      completedAt !== undefined &&
-      completedAt < options.minCompletedAt
-    ) {
+    if (shouldSkipAssistantMessage(info, options)) {
       continue;
     }
 
@@ -1184,18 +1208,17 @@ export function extractAssistantResultFromMessages(
         completed: false,
         failed: true,
         error: errorMessage,
-        tokenUsed,
       };
     }
 
     if (text && isCompletedAssistantMessage(info)) {
-      return { text, completed: true, failed: false, tokenUsed };
+      return { text, completed: true, failed: false, error: undefined };
     }
 
     break;
   }
 
-  return { text: fallbackText, completed: false, failed: false, tokenUsed };
+  return { text: fallbackText, completed: false, failed: false, error: undefined };
 }
 
 async function waitForSessionText(

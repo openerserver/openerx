@@ -342,6 +342,49 @@
               <div class="provider-card-hint">按风险评分排序的高风险任务 Top 5</div>
             </a-card>
           </a-col>
+          <a-col :xs="24" :sm="12" :xl="6">
+            <a-card size="small" :loading="governanceLoading">
+              <div class="provider-card-label">运行中任务</div>
+              <div class="provider-card-value">{{ formatCount(governanceSummary?.runningTaskCount) }}</div>
+              <div class="provider-card-hint">当前仍处于 running 或 paused 的任务快照数</div>
+            </a-card>
+          </a-col>
+          <a-col :xs="24" :sm="12" :xl="6">
+            <a-card size="small" :loading="governanceLoading">
+              <div class="provider-card-label">活动会话</div>
+              <div class="provider-card-value">{{ formatCount(governanceSummary?.activeSessionCount) }}</div>
+              <div class="provider-card-hint">snapshot 当前仍挂载 runtime session 的任务会话数</div>
+            </a-card>
+          </a-col>
+          <a-col :xs="24" :sm="12" :xl="6">
+            <a-card size="small" :loading="governanceLoading">
+              <div class="provider-card-label">并行 / 链式任务</div>
+              <div class="provider-card-value">
+                {{ formatCount(governanceSummary?.parallelTaskCount) }} / {{ formatCount(governanceSummary?.sequentialChainTaskCount) }}
+              </div>
+              <div class="provider-card-hint">最近窗口写入 {{ formatCount(governanceSummary?.recentTimelineItemCount) }} 条 timeline 明细</div>
+            </a-card>
+          </a-col>
+          <a-col :xs="24" :sm="12" :xl="6">
+            <a-card size="small" :loading="governanceLoading">
+              <div class="provider-card-label">暂停 / 失败任务</div>
+              <div class="provider-card-value">
+                {{ formatCount(governanceSummary?.pausedTaskCount) }} / {{ formatCount(governanceSummary?.failedTaskCount) }}
+              </div>
+              <div class="provider-card-hint">当前 paused 与 failed 或 cancelled 的任务快照总量</div>
+            </a-card>
+          </a-col>
+          <a-col :xs="24" :sm="12" :xl="6">
+            <a-card size="small" :loading="governanceLoading">
+              <div class="provider-card-label">候选活跃 / 链路积压</div>
+              <div class="provider-card-value">
+                {{ formatCount(governanceSummary?.activeCandidateCount) }} / {{ formatCount(governanceSummary?.pendingChainStepCount) }}
+              </div>
+              <div class="provider-card-hint">
+                工具明细 {{ formatCount(governanceSummary?.toolTimelineItemCount) }} / 决策明细 {{ formatCount(governanceSummary?.decisionTimelineItemCount) }}
+              </div>
+            </a-card>
+          </a-col>
         </a-row>
 
         <a-row :gutter="[16, 16]">
@@ -1079,7 +1122,9 @@ const governanceInsightDescription = computed(() => {
   }
   const top = governanceTopRiskRows.value[0];
   const leaseText = `${formatCount(governanceSummary.value?.activeLeaseCount)} 个 active lease 正在生效。`;
-  return `${top.projectName} / ${top.title} 当前风险最高，累计 ${formatCount(top.requestCount)} 次调用、${formatUsd(top.costUsd)}。${leaseText}`;
+  const runtimeText = `当前有 ${formatCount(governanceSummary.value?.runningTaskCount)} 个运行中任务、${formatCount(governanceSummary.value?.activeSessionCount)} 个活动会话，另有 ${formatCount(governanceSummary.value?.pausedTaskCount)} 个暂停任务与 ${formatCount(governanceSummary.value?.failedTaskCount)} 个失败任务。`;
+  const detailText = `活跃候选 ${formatCount(governanceSummary.value?.activeCandidateCount)} 个，链式待完成步骤 ${formatCount(governanceSummary.value?.pendingChainStepCount)} 个。`;
+  return `${top.projectName} / ${top.title} 当前风险最高，累计 ${formatCount(top.requestCount)} 次调用、${formatUsd(top.costUsd)}。${leaseText}${runtimeText}${detailText}`;
 });
 
 const governanceInsightTone = computed(() => {

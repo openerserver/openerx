@@ -329,7 +329,9 @@ function handleMissingTask(taskId: string) {
 
   if (!missingTaskNoticeShown.value) {
     missingTaskNoticeShown.value = true;
-    message.warning("已自动清理当前数据库中不存在的历史任务标签。若需查看旧历史，请让 UI 指向对应的 app 数据库实例。");
+    message.warning(
+      "已自动清理当前数据库中不存在的历史任务标签。若需查看旧历史，请让 UI 指向对应的 app 数据库实例。",
+    );
   }
 }
 
@@ -409,15 +411,19 @@ function tabStatusBadge(
   taskId?: string,
   status?: string,
 ): "success" | "processing" | "warning" | "error" | "default" {
-  return resolveTaskDisplayStatus(taskId ? taskMetaMap.value[taskId] || { status } : { status }).badgeStatus;
+  return resolveTaskDisplayStatus(taskId ? taskMetaMap.value[taskId] || { status } : { status })
+    .badgeStatus;
 }
 
 function tabNeedsAttention(taskId?: string, status?: string) {
-  return resolveTaskDisplayStatus(taskId ? taskMetaMap.value[taskId] || { status } : { status }).needsAttention;
+  return resolveTaskDisplayStatus(taskId ? taskMetaMap.value[taskId] || { status } : { status })
+    .needsAttention;
 }
 
 function tabAttentionLabel(taskId?: string, status?: string) {
-  const displayStatus = resolveTaskDisplayStatus(taskId ? taskMetaMap.value[taskId] || { status } : { status });
+  const displayStatus = resolveTaskDisplayStatus(
+    taskId ? taskMetaMap.value[taskId] || { status } : { status },
+  );
   return displayStatus.status === "awaiting-adoption" ? displayStatus.label : "未完成";
 }
 

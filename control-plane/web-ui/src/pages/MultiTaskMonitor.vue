@@ -297,12 +297,12 @@ import { loadYoga } from "yoga-layout/load";
 import type { Yoga as YogaLayoutApi } from "yoga-layout/load";
 import {
   type RuntimePipeline,
-  type TaskBranchRecord,
   type Task,
-  getTaskConversationMessages,
+  type TaskBranchRecord,
   getTask,
-  getTaskPipeline,
   getTaskBranches,
+  getTaskConversationMessages,
+  getTaskPipeline,
   listTasks,
 } from "../lib/api";
 import { renderMarkdown } from "../lib/markdown";
@@ -2894,7 +2894,8 @@ function buildMonitorToolCallView(
       summarizeUnknownValue(input.description) ?? summarizeUnknownValue(input.explanation),
     goal: summarizeUnknownValue(input.goal),
     command: toolKind === "bash" ? summarizeUnknownValue(input.command) : undefined,
-    filePath: normalizeWorkspaceFilePath(summarizeUnknownValue(input.filePath)) ?? readDetails.filePath,
+    filePath:
+      normalizeWorkspaceFilePath(summarizeUnknownValue(input.filePath)) ?? readDetails.filePath,
     readPreview: readDetails.readPreview,
     inputPreview: buildToolInputPreview(input),
     outputPreview: output.text,
@@ -4059,8 +4060,7 @@ function activityStateForSummary(taskId: string, summary: MonitorNodeSummary) {
 function activityStateClass(taskId: string, summary: MonitorNodeSummary) {
   return {
     "monitor-node__activity-pill--live": activityStateForSummary(taskId, summary) === "运行中",
-    "monitor-node__activity-pill--stalled":
-      activityStateForSummary(taskId, summary) === "疑似停滞",
+    "monitor-node__activity-pill--stalled": activityStateForSummary(taskId, summary) === "疑似停滞",
   };
 }
 

@@ -1,7 +1,8 @@
 let observedWorkspaceDir: string | null = null;
 
 export function observeGraphWorkspaceDir(directory?: string | null): void {
-  observedWorkspaceDir = typeof directory === "string" && directory.trim() ? directory.trim() : null;
+  observedWorkspaceDir =
+    typeof directory === "string" && directory.trim() ? directory.trim() : null;
 }
 
 export function resolveGraphStorageDirs(directory?: string | null): string[] {

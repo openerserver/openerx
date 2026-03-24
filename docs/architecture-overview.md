@@ -177,7 +177,7 @@ PostgreSQL 中当前的核心表包括：
 
 **任务执行模型**：
 
-- tasks：任务主记录，承载状态、executionPlan、strategy 等信息
+- tasks：任务主记录，承载状态、strategy 与少量执行元数据；legacy runtime plan（`executionPlan`）/`parallelRunHistory` 已从主路径退役
 - task_workflow_runs / task_stage_runs：Workflow 阶段执行状态与阶段产出摘要
 - agent_runs：Agent 执行记录
 - approval_tickets：审批阻断与人工介入
@@ -295,7 +295,7 @@ WebSocket 连接建立时已验证 JWT，绑定 userId 和项目范围。无效 
 
 ### 10.5 ✅ Workflow 执行主路径已完成收口
 
-当前执行主路径已经统一到 Workflow 阶段、executionPlan、hook 执行与 agent_runs 记录，不再依赖旧图模型镜像层。
+当前执行主路径已经统一到 Workflow 阶段、task domain runs / snapshots、hook 执行与 agent_runs 记录，不再依赖 `executionPlan`、`parallelRunHistory` 或旧图模型镜像层。
 
 仍需注意：不同环境需要持续确保 migration 与代码版本同步，避免旧 schema 残留导致环境漂移。
 

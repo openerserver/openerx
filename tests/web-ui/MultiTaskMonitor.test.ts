@@ -1,4 +1,4 @@
-import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
+import { type VueWrapper, flushPromises, mount } from "@vue/test-utils";
 import { createPinia, defineStore, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defineComponent, h } from "vue";
@@ -483,7 +483,9 @@ beforeEach(() => {
       },
     ],
   });
-  apiMocks.getTaskBranches.mockImplementation((...args: unknown[]) => apiMocks.getTaskSessions(...args));
+  apiMocks.getTaskBranches.mockImplementation((...args: unknown[]) =>
+    apiMocks.getTaskSessions(...args),
+  );
   apiMocks.getSessionMessages.mockResolvedValue({
     data: [
       {
@@ -525,7 +527,7 @@ beforeEach(() => {
     ],
   });
   apiMocks.getTaskConversationMessages.mockImplementation((...args: unknown[]) =>
-    apiMocks.getSessionMessages(...args)
+    apiMocks.getSessionMessages(...args),
   );
   apiMocks.getTaskPipeline.mockImplementation(async (taskId: string) => {
     if (taskId !== "task-1") {
@@ -730,7 +732,9 @@ describe("MultiTaskMonitor", () => {
     taskMonitorStore.addTaskNode("task-1");
     await flushPromises();
 
-    expect(wrapper.text()).toContain('工具调用 · bash · rg -n "authMiddleware" control-plane/service/src');
+    expect(wrapper.text()).toContain(
+      '工具调用 · bash · rg -n "authMiddleware" control-plane/service/src',
+    );
     expect(wrapper.text()).toContain('rg -n "authMiddleware" control-plane/service/src');
     expect(wrapper.text()).not.toContain("exit 0");
     expect(wrapper.text()).not.toContain("输出");
@@ -758,9 +762,7 @@ describe("MultiTaskMonitor", () => {
     await flushPromises();
 
     const bringToFrontSpy = vi.spyOn(taskMonitorStore, "bringToFront");
-    const removeButtons = wrapper
-      .findAll("button")
-      .filter((item) => item.text().trim() === "移除");
+    const removeButtons = wrapper.findAll("button").filter((item) => item.text().trim() === "移除");
 
     expect(removeButtons.length).toBeGreaterThan(0);
 
@@ -2222,23 +2224,8 @@ describe("MultiTaskMonitor", () => {
       prompt: "比较两种实现",
       status: "completed",
       executionMode: "parallel",
-      executionPlan: JSON.stringify({
-        mode: "parallel",
-        candidates: [
-          {
-            index: 0,
-            label: "方案 A",
-            model: "github-copilot:gpt-5-mini",
-            status: "completed",
-          },
-          {
-            index: 1,
-            label: "方案 B",
-            model: "github-copilot:gpt-4o",
-            status: "completed",
-          },
-        ],
-      }),
+      orchestrationKind: "parallel",
+      currentRunCandidateCount: 2,
       createdAt: "2026-03-14T08:00:00.000Z",
       startedAt: "2026-03-14T08:02:00.000Z",
       finishedAt: "2026-03-14T08:05:00.000Z",

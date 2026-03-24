@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
-import * as paidExecutionGuardModule from "../../control-plane/web-ui-bff/src/lib/paid-execution-guard";
 import * as strategyModule from "../../control-plane/web-ui-bff/src/lib/orchestration-strategy";
+import * as paidExecutionGuardModule from "../../control-plane/web-ui-bff/src/lib/paid-execution-guard";
+import { createControlPlaneClientModuleMock } from "./control-plane-client-mock";
 
 type LedgerRecord = {
   id: string;
@@ -92,11 +93,13 @@ const readOrchestrationStrategyMock = mock(() => ({
 const ledgers = new Map<string, LedgerRecord>();
 const stepsByLedger = new Map<string, StepRecord[]>();
 
-mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () => ({
-  authHeader: authHeaderMock,
-  cpFetch: cpFetchMock,
-  createInternalAuthorization: createInternalAuthorizationMock,
-}));
+mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () =>
+  createControlPlaneClientModuleMock({
+    authHeader: authHeaderMock,
+    cpFetch: cpFetchMock,
+    createInternalAuthorization: createInternalAuthorizationMock,
+  }),
+);
 
 mock.module("../../control-plane/web-ui-bff/src/lib/paid-execution-guard", () => ({
   ...paidExecutionGuardModule,
@@ -105,10 +108,12 @@ mock.module("../../control-plane/web-ui-bff/src/lib/paid-execution-guard", () =>
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/lib/opencode-config", () => ({
+  diagnoseModelReadiness: mock(async () => undefined),
   formatModelRoute: (resolved: { providerId: string; modelId: string }) =>
     `${resolved.providerId}:${resolved.modelId}`,
   readDefaultExecutionModel: readDefaultExecutionModelMock,
   resolveModelRoute: resolveModelRouteMock,
+  validateModelProvider: mock(() => ({ valid: true })),
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/lib/orchestration-strategy", () => ({
@@ -140,7 +145,11 @@ function computeTotals(items: LedgerRecord[]) {
   );
 }
 
-function buildBaseLedger(body: Record<string, unknown>, existing: LedgerRecord | undefined, now: string) {
+function buildBaseLedger(
+  body: Record<string, unknown>,
+  existing: LedgerRecord | undefined,
+  now: string,
+) {
   return (
     existing || {
       id: existing?.id || `ledger-${ledgers.size + 1}`,
@@ -151,7 +160,9 @@ function buildBaseLedger(body: Record<string, unknown>, existing: LedgerRecord |
       executionSource: String(body.executionSource || ""),
       entrypointType: String(body.entrypointType || ""),
       orchestrationFingerprint:
-        typeof body.orchestrationFingerprint === "string" ? body.orchestrationFingerprint : undefined,
+        typeof body.orchestrationFingerprint === "string"
+          ? body.orchestrationFingerprint
+          : undefined,
       defaultProviderId:
         typeof body.defaultProviderId === "string" ? body.defaultProviderId : undefined,
       defaultModelId: typeof body.defaultModelId === "string" ? body.defaultModelId : undefined,
@@ -276,7 +287,9 @@ function handleLedgerSync(options?: { body?: Record<string, unknown> }) {
   const now = "2026-03-17T10:00:00.000Z";
   const ledgerId = existing?.id || `ledger-${ledgers.size + 1}`;
   const step = body.step as Record<string, unknown> | undefined;
-  const { existingStep } = step ? appendLedgerStep(ledgerId, body, step, now) : { existingStep: undefined };
+  const { existingStep } = step
+    ? appendLedgerStep(ledgerId, body, step, now)
+    : { existingStep: undefined };
   const applyDelta = !step || !existingStep;
   const base = buildBaseLedger(body, existing, now);
   const updated = applyLedgerUpdate(base, body, applyDelta, now);

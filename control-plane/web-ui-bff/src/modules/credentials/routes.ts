@@ -5,7 +5,9 @@ import { authHeader, cpFetch } from "../../lib/control-plane-client";
 
 export const credentialRoutes = new Hono();
 
-function readProjectId(c: { req: { query: (name: string) => string | undefined; param: (name: string) => string | undefined } }) {
+function readProjectId(c: {
+  req: { query: (name: string) => string | undefined; param: (name: string) => string | undefined };
+}) {
   return c.req.query("projectId") || c.req.param("projectId");
 }
 
@@ -141,10 +143,7 @@ credentialRoutes.get("/projects/:projectId/credentials", async (c) => {
 
 credentialRoutes.post(
   "/projects/:projectId/credentials",
-  zValidator(
-    "json",
-    createCredSchema.omit({ projectId: true }),
-  ),
+  zValidator("json", createCredSchema.omit({ projectId: true })),
   async (c) => {
     const result = await cpFetch<Record<string, unknown>>(
       `/api/projects/${encodeURIComponent(c.req.param("projectId"))}/credentials`,

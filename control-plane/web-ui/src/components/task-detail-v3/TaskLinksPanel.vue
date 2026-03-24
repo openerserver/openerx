@@ -26,11 +26,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch, type Ref } from "vue";
+import { type Ref, computed, ref, watch } from "vue";
 import {
-  getProjectTreeNodeLinks,
   type ProjectTreeLinkRecord,
   type ProjectTreeLinkType,
+  getProjectTreeNodeLinks,
 } from "../../lib/api";
 
 const props = defineProps<{
@@ -101,9 +101,13 @@ async function refresh() {
   }
 }
 
-watch(() => [props.projectId, props.nodeId], () => {
-  void refresh();
-}, { immediate: true });
+watch(
+  () => [props.projectId, props.nodeId],
+  () => {
+    void refresh();
+  },
+  { immediate: true },
+);
 
 defineExpose({ refresh });
 </script>

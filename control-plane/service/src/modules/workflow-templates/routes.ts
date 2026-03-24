@@ -214,7 +214,7 @@ workflowTemplateRoutes.post(
   },
 );
 
-function buildWorkflowStageUpdates(body: z.infer<typeof workflowStagePatchSchema>) {
+function buildWorkflowStageScalarUpdates(body: z.infer<typeof workflowStagePatchSchema>) {
   return {
     ...(body.stageKey !== undefined ? { stageKey: body.stageKey } : {}),
     ...(body.name !== undefined ? { name: body.name } : {}),
@@ -223,6 +223,12 @@ function buildWorkflowStageUpdates(body: z.infer<typeof workflowStagePatchSchema
     ...(body.primaryRoleAgentId !== undefined
       ? { primaryRoleAgentId: body.primaryRoleAgentId }
       : {}),
+    ...(body.orderIndex !== undefined ? { orderIndex: body.orderIndex } : {}),
+  };
+}
+
+function buildWorkflowStageJsonUpdates(body: z.infer<typeof workflowStagePatchSchema>) {
+  return {
     ...(body.participantRoleAgentIds !== undefined
       ? { participantRoleAgentIdsJson: body.participantRoleAgentIds }
       : {}),
@@ -241,7 +247,13 @@ function buildWorkflowStageUpdates(body: z.infer<typeof workflowStagePatchSchema
       ? { stageTemplateStrategyJson: body.stageTemplateStrategy }
       : {}),
     ...(body.failurePolicy !== undefined ? { failurePolicyJson: body.failurePolicy } : {}),
-    ...(body.orderIndex !== undefined ? { orderIndex: body.orderIndex } : {}),
+  };
+}
+
+function buildWorkflowStageUpdates(body: z.infer<typeof workflowStagePatchSchema>) {
+  return {
+    ...buildWorkflowStageScalarUpdates(body),
+    ...buildWorkflowStageJsonUpdates(body),
   } satisfies Record<string, unknown>;
 }
 

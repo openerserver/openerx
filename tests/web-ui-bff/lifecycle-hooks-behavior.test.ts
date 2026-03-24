@@ -4,6 +4,7 @@ import {
   type OrchestrationStrategy,
   normalizeOrchestrationStrategy,
 } from "../../control-plane/web-ui-bff/src/lib/orchestration-strategy";
+import { createSseAggregatorModuleMock } from "./sse-aggregator-mock";
 
 mock.restore();
 
@@ -165,6 +166,7 @@ mock.module("../../control-plane/web-ui-bff/src/lib/orchestration-strategy", () 
 
 mock.module("../../control-plane/web-ui-bff/src/modules/hooks/lifecycle-hooks", () => ({
   executeLifecycleHooks: executeLifecycleHooksMock,
+  getLifecycleHooksForTrigger: (_strategy: OrchestrationStrategy, _trigger: string) => [],
   parseStageHooks: (raw: unknown) => (Array.isArray(raw) ? raw : []),
   mergeStageAndStrategyHooks: (_stage: unknown[], strategy: unknown[]) => strategy ?? [],
 }));
@@ -173,9 +175,11 @@ mock.module("../../control-plane/web-ui-bff/src/modules/realtime/ws-broadcaster"
   wsBroadcaster: { broadcast: broadcastMock },
 }));
 
-mock.module("../../control-plane/web-ui-bff/src/modules/realtime/sse-aggregator", () => ({
-  sseAggregator: { registerParallelTask: registerParallelTaskMock },
-}));
+mock.module("../../control-plane/web-ui-bff/src/modules/realtime/sse-aggregator", () =>
+  createSseAggregatorModuleMock({
+    registerParallelTask: registerParallelTaskMock,
+  }),
+);
 
 mock.module("../../control-plane/web-ui-bff/src/modules/realtime/dag-sync", () => ({
   syncGraphsForSessionTask: mock(async () => undefined),
@@ -765,34 +769,36 @@ describe("executeLifecycleHooks behavior", () => {
     expect(continueSessionMock).not.toHaveBeenCalled();
   });
 
-  test("continue route falls back to strategy candidates when stored parallel executionPlan is incomplete", async () => {
+  test("continue route falls back to strategy candidates when stored legacy parallel runtime plan is incomplete", async () => {
     currentStrategy = buildStrategy({ hooks: [] });
     process.env.ALLOW_PAID_MODEL_EXECUTION = "1";
-    cpFetchMock.mockImplementation(async (url: string, options?: { method?: string; body?: unknown }) => {
-      if (!options?.method) {
-        if (url.includes("/paid-execution-lease")) {
+    cpFetchMock.mockImplementation(
+      async (url: string, options?: { method?: string; body?: unknown }) => {
+        if (!options?.method) {
+          if (url.includes("/paid-execution-lease")) {
+            return {
+              ok: true,
+              data: {
+                projectId: "proj-1",
+                activeLease: { id: "lease-test" },
+                now: "2026-03-10T00:00:00.000Z",
+              },
+            };
+          }
+
+          if (url.includes("/api/projects/")) {
+            return { ok: true, data: { settings: {} } };
+          }
+
           return {
             ok: true,
-            data: {
-              projectId: "proj-1",
-              activeLease: { id: "lease-test" },
-              now: "2026-03-10T00:00:00.000Z",
-            },
+            data: currentTask,
           };
         }
 
-        if (url.includes("/api/projects/")) {
-          return { ok: true, data: { settings: {} } };
-        }
-
-        return {
-          ok: true,
-          data: currentTask,
-        };
-      }
-
-      return { ok: true, data: { body: options.body } };
-    });
+        return { ok: true, data: { body: options.body } };
+      },
+    );
 
     currentTask = {
       ...currentTask,
@@ -805,20 +811,6 @@ describe("executeLifecycleHooks behavior", () => {
         parallelCandidates: [
           { model: "github-copilot:gpt-5-mini", label: "候选 A" },
           { model: "github-copilot:gpt-4o", label: "候选 B" },
-        ],
-      }),
-      executionPlan: JSON.stringify({
-        templateId: "tpl-ops-parallel",
-        mode: "parallel",
-        steps: [{ id: "exec-parallel", type: "execution", status: "completed" }],
-        candidates: [
-          {
-            label: "候选 1",
-            agent: "oracle-enterprise",
-            role: "executor",
-            status: "completed",
-            sessionId: "session-existing",
-          },
         ],
       }),
     };
@@ -858,17 +850,16 @@ describe("executeLifecycleHooks behavior", () => {
     );
     expect(runningPatch).toBeDefined();
 
-    const patchedBody = (runningPatch?.[1] as {
-      body?: { executionPlan?: string; strategy?: string };
-    })?.body;
-    const patchedPlan = JSON.parse(patchedBody?.executionPlan || "null") as {
-      candidates?: Array<{ sessionId?: string }>;
-    } | null;
+    const patchedBody = (
+      runningPatch?.[1] as {
+        body?: Record<string, unknown>;
+      }
+    )?.body;
     const patchedStrategy = JSON.parse(patchedBody?.strategy || "{}") as {
       parallelCandidates?: Array<{ model: string }>;
     };
 
-    expect(patchedPlan?.candidates).toHaveLength(2);
+    expect(patchedBody).not.toHaveProperty("executionPlan");
     expect(patchedStrategy.parallelCandidates).toHaveLength(2);
     expect(registerParallelTaskMock).toHaveBeenCalledTimes(1);
 
@@ -894,31 +885,33 @@ describe("executeLifecycleHooks behavior", () => {
   test("continue route keeps quick parallel prompts free of stage-summary workflow instructions", async () => {
     currentStrategy = buildStrategy({ hooks: [] });
     process.env.ALLOW_PAID_MODEL_EXECUTION = "1";
-    cpFetchMock.mockImplementation(async (url: string, options?: { method?: string; body?: unknown }) => {
-      if (!options?.method) {
-        if (url.includes("/paid-execution-lease")) {
+    cpFetchMock.mockImplementation(
+      async (url: string, options?: { method?: string; body?: unknown }) => {
+        if (!options?.method) {
+          if (url.includes("/paid-execution-lease")) {
+            return {
+              ok: true,
+              data: {
+                projectId: "proj-1",
+                activeLease: { id: "lease-test" },
+                now: "2026-03-10T00:00:00.000Z",
+              },
+            };
+          }
+
+          if (url.includes("/api/projects/")) {
+            return { ok: true, data: { settings: {} } };
+          }
+
           return {
             ok: true,
-            data: {
-              projectId: "proj-1",
-              activeLease: { id: "lease-test" },
-              now: "2026-03-10T00:00:00.000Z",
-            },
+            data: currentTask,
           };
         }
 
-        if (url.includes("/api/projects/")) {
-          return { ok: true, data: { settings: {} } };
-        }
-
-        return {
-          ok: true,
-          data: currentTask,
-        };
-      }
-
-      return { ok: true, data: { body: options.body } };
-    });
+        return { ok: true, data: { body: options.body } };
+      },
+    );
 
     currentTask = {
       ...currentTask,
@@ -932,20 +925,6 @@ describe("executeLifecycleHooks behavior", () => {
         parallelCandidates: [
           { model: "local:test-model-a", label: "候选 A" },
           { model: "local:test-model-b", label: "候选 B" },
-        ],
-      }),
-      executionPlan: JSON.stringify({
-        templateId: "tpl-ops-parallel",
-        mode: "parallel",
-        steps: [{ id: "exec-parallel", type: "execution", status: "completed" }],
-        candidates: [
-          {
-            label: "候选 1",
-            agent: "oracle-enterprise",
-            role: "executor",
-            status: "completed",
-            sessionId: "session-existing",
-          },
         ],
       }),
     };
@@ -988,31 +967,33 @@ describe("executeLifecycleHooks behavior", () => {
   test("continue route resets stale parallel candidate state after manual adoption before starting a new round", async () => {
     currentStrategy = buildStrategy({ hooks: [] });
     process.env.ALLOW_PAID_MODEL_EXECUTION = "1";
-    cpFetchMock.mockImplementation(async (url: string, options?: { method?: string; body?: unknown }) => {
-      if (!options?.method) {
-        if (url.includes("/paid-execution-lease")) {
+    cpFetchMock.mockImplementation(
+      async (url: string, options?: { method?: string; body?: unknown }) => {
+        if (!options?.method) {
+          if (url.includes("/paid-execution-lease")) {
+            return {
+              ok: true,
+              data: {
+                projectId: "proj-1",
+                activeLease: { id: "lease-test" },
+                now: "2026-03-10T00:00:00.000Z",
+              },
+            };
+          }
+
+          if (url.includes("/api/projects/")) {
+            return { ok: true, data: { settings: {} } };
+          }
+
           return {
             ok: true,
-            data: {
-              projectId: "proj-1",
-              activeLease: { id: "lease-test" },
-              now: "2026-03-10T00:00:00.000Z",
-            },
+            data: currentTask,
           };
         }
 
-        if (url.includes("/api/projects/")) {
-          return { ok: true, data: { settings: {} } };
-        }
-
-        return {
-          ok: true,
-          data: currentTask,
-        };
-      }
-
-      return { ok: true, data: { body: options.body } };
-    });
+        return { ok: true, data: { body: options.body } };
+      },
+    );
 
     currentTask = {
       ...currentTask,
@@ -1027,40 +1008,6 @@ describe("executeLifecycleHooks behavior", () => {
           { model: "github-copilot:gpt-5-mini", label: "候选 A" },
           { model: "github-copilot:gpt-4o", label: "候选 B" },
         ],
-      }),
-      executionPlan: JSON.stringify({
-        templateId: "tpl-ops-parallel",
-        mode: "parallel",
-        steps: [{ id: "exec-parallel", type: "execution", status: "completed" }],
-        candidates: [
-          {
-            label: "候选 A",
-            agent: "default-executor",
-            role: "executor",
-            model: "github-copilot:gpt-5-mini",
-            status: "completed",
-            sessionId: "session-existing-a",
-            agentRunId: "run-existing-a",
-            result: "old result a",
-          },
-          {
-            label: "候选 B",
-            agent: "default-executor",
-            role: "executor",
-            model: "github-copilot:gpt-4o",
-            status: "stopped",
-            sessionId: "session-existing-b",
-            agentRunId: "run-existing-b",
-            result: "old result b",
-          },
-        ],
-        judgeResult: {
-          status: "completed",
-          winnerIndex: 0,
-          reasoning: "old judge decision",
-          completedAt: "2026-03-20T00:00:00.000Z",
-        },
-        winnerCandidateIndex: 0,
       }),
     };
 
@@ -1099,48 +1046,13 @@ describe("executeLifecycleHooks behavior", () => {
     );
     expect(runningPatch).toBeDefined();
 
-    const patchedBody = (runningPatch?.[1] as {
-      body?: { executionPlan?: string };
-    })?.body;
-    const patchedPlan = JSON.parse(patchedBody?.executionPlan || "null") as {
-      candidates?: Array<{
-        agent?: string;
-        label?: string;
-        model?: string;
-        role?: string;
-        status?: string;
-        sessionId?: string;
-        agentRunId?: string;
-        result?: string;
-        startedAt?: string;
-      }>;
-      judgeResult?: unknown;
-      winnerCandidateIndex?: number;
-    } | null;
+    const patchedBody = (
+      runningPatch?.[1] as {
+        body?: Record<string, unknown>;
+      }
+    )?.body;
 
-    expect(patchedPlan?.winnerCandidateIndex).toBeUndefined();
-    expect(patchedPlan?.judgeResult).toBeUndefined();
-    expect(patchedPlan?.candidates).toHaveLength(2);
-    expect(patchedPlan?.candidates?.[0]).toMatchObject({
-      label: "候选 A",
-      agent: "default-executor",
-      model: "github-copilot:gpt-5-mini",
-      role: "executor",
-      status: "running",
-      sessionId: "session-new-a",
-      agentRunId: "run-new-a",
-    });
-    expect(patchedPlan?.candidates?.[1]).toMatchObject({
-      label: "候选 B",
-      agent: "default-executor",
-      model: "github-copilot:gpt-4o",
-      role: "executor",
-      status: "running",
-      sessionId: "session-new-b",
-      agentRunId: "run-new-b",
-    });
-    expect(patchedPlan?.candidates?.every((candidate) => !candidate.result)).toBe(true);
-    expect(patchedPlan?.candidates?.every((candidate) => Boolean(candidate.startedAt))).toBe(true);
+    expect(patchedBody).not.toHaveProperty("executionPlan");
     expect(registerParallelTaskMock).toHaveBeenCalledTimes(1);
 
     const lineageWrites = cpFetchMock.mock.calls.filter(
@@ -1185,29 +1097,6 @@ describe("executeLifecycleHooks behavior", () => {
           { model: "github-copilot:gpt-4o", label: "候选 B" },
         ],
       }),
-      executionPlan: JSON.stringify({
-        templateId: "tpl-ops-parallel",
-        mode: "parallel",
-        steps: [{ id: "exec-parallel", type: "execution", status: "completed" }],
-        candidates: [
-          {
-            label: "候选 A",
-            agent: "default-executor",
-            role: "executor",
-            model: "github-copilot:gpt-5-mini",
-            status: "completed",
-            sessionId: "session-existing-a",
-          },
-          {
-            label: "候选 B",
-            agent: "default-executor",
-            role: "executor",
-            model: "github-copilot:gpt-4o",
-            status: "completed",
-            sessionId: "session-existing-b",
-          },
-        ],
-      }),
     };
 
     const { taskRoutes } = await loadTaskRoutesModule();
@@ -1233,6 +1122,89 @@ describe("executeLifecycleHooks behavior", () => {
     );
     expect(createSessionMock).not.toHaveBeenCalled();
     expect(registerParallelTaskMock).not.toHaveBeenCalled();
+  });
+
+  test("continue route skips legacy parallel patch fields for projection-backed tasks", async () => {
+    currentStrategy = buildStrategy({ hooks: [] });
+    process.env.ALLOW_PAID_MODEL_EXECUTION = "1";
+    cpFetchMock.mockImplementation(
+      async (url: string, options?: { method?: string; body?: unknown }) => {
+        if (!options?.method) {
+          if (url.includes("/paid-execution-lease")) {
+            return {
+              ok: true,
+              data: {
+                projectId: "proj-1",
+                activeLease: { id: "lease-test" },
+                now: "2026-03-10T00:00:00.000Z",
+              },
+            };
+          }
+
+          if (url.includes("/api/projects/")) {
+            return { ok: true, data: { settings: {} } };
+          }
+
+          return {
+            ok: true,
+            data: currentTask,
+          };
+        }
+
+        return { ok: true, data: { body: options.body } };
+      },
+    );
+
+    currentTask = {
+      ...currentTask,
+      title: "Projection-backed parallel continuation task",
+      prompt: "Continue the projection-backed comparison",
+      sessionId: undefined,
+      executionMode: "parallel",
+      orchestrationKind: "parallel",
+      currentRunId: "task_run:task-1:root",
+      strategy: JSON.stringify({
+        executionMode: "parallel",
+        parallelCandidates: [
+          { model: "github-copilot:gpt-5-mini", label: "候选 A" },
+          { model: "github-copilot:gpt-4o", label: "候选 B" },
+        ],
+      }),
+    };
+
+    createSessionMock
+      .mockResolvedValueOnce({ ok: true, sessionId: "session-a", agentRunId: "run-a" })
+      .mockResolvedValueOnce({ ok: true, sessionId: "session-b", agentRunId: "run-b" });
+
+    const { taskRoutes } = await loadTaskRoutesModule();
+    const response = await taskRoutes.request("http://localhost/task-1/continue", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer test",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ prompt: "Please continue" }),
+    });
+
+    expect(response.status).toBe(200);
+
+    const patchCalls = getPatchCalls();
+    const runningPatch = patchCalls.find(
+      (call) =>
+        (call[0] as string) === "/api/tasks/task-1" &&
+        (call[1] as { body?: { status?: string } })?.body?.status === "running",
+    );
+    expect(runningPatch).toBeDefined();
+
+    const patchedBody = (
+      runningPatch?.[1] as {
+        body?: Record<string, unknown>;
+      }
+    )?.body;
+
+    expect(patchedBody).not.toHaveProperty("executionPlan");
+    expect(patchedBody).not.toHaveProperty("parallelRunHistory");
+    expect(patchedBody?.strategy).toBeTruthy();
   });
 
   test("execute route registers parallel candidates under the current task session lineage", async () => {
@@ -1375,26 +1347,14 @@ describe("executeLifecycleHooks behavior", () => {
     );
     expect(runningPatch).toBeDefined();
 
-    const patchedBody = (runningPatch?.[1] as {
-      body?: { executionPlan?: string; category?: string };
-    })?.body;
-    const patchedPlan = JSON.parse(patchedBody?.executionPlan || "null") as {
-      templateId?: string;
-      candidates?: Array<{ agent?: string; model?: string }>;
-    } | null;
+    const patchedBody = (
+      runningPatch?.[1] as {
+        body?: Record<string, unknown>;
+      }
+    )?.body;
 
     expect(patchedBody?.category).toBe("quick");
-    expect(patchedPlan?.templateId).toBe("fallback-single");
-    expect(patchedPlan?.candidates).toEqual([
-      expect.objectContaining({
-        agent: "explore-enterprise",
-        model: "local:test-model-a",
-      }),
-      expect.objectContaining({
-        agent: "explore-enterprise",
-        model: "local:test-model-b",
-      }),
-    ]);
+    expect(patchedBody).not.toHaveProperty("executionPlan");
   });
 
   test("execute route registers single execution under the current task session lineage", async () => {

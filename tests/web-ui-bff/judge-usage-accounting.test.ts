@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import * as strategyModule from "../../control-plane/web-ui-bff/src/lib/orchestration-strategy";
+import { createOpencodeAdapterModuleMock } from "./opencode-adapter-mock";
 
 const cpFetchMock = mock(async (..._args: unknown[]) => ({ ok: true, status: 200, data: {} }));
+const authHeaderMock = mock(() => "Bearer test");
 const createInternalAuthorizationMock = mock(async () => "Bearer internal");
 const runDetachedPromptMock = mock(async () => ({
   ok: true,
@@ -12,17 +14,21 @@ const runDetachedPromptMock = mock(async () => ({
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () => ({
+  authHeader: authHeaderMock,
   cpFetch: cpFetchMock,
   createInternalAuthorization: createInternalAuthorizationMock,
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/lib/opencode-config", () => ({
+  diagnoseModelReadiness: mock(() => ({ ready: true })),
   formatModelRoute: (resolved: { providerId: string; modelId: string }) =>
     `${resolved.providerId}:${resolved.modelId}`,
+  readDefaultExecutionModel: mock(() => "github-copilot:gpt-5.4"),
   resolveModelRoute: (value: string) => ({
     providerId: value.split(":")[0] || "github-copilot",
     modelId: value.split(":").slice(1).join(":") || value,
   }),
+  validateModelProvider: mock(() => true),
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/lib/orchestration-strategy", () => ({
@@ -41,24 +47,26 @@ mock.module("../../control-plane/web-ui-bff/src/lib/orchestration-strategy", () 
   }),
 }));
 
-mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter", () => ({
-  createSession: mock(async () => ({
-    ok: true,
-    sessionId: "exec-ses",
-    agentRunId: "run-judge",
-  })),
-  extractAssistantResultFromMessages: mock(() => ({
-    completed: true,
-    failed: false,
-    tokenUsed: 0,
-    text: "",
-  })),
-  findAgentRunBySessionId: mock(() => undefined),
-  getSessionMessages: mock(async () => ({ ok: true, data: [] })),
-  runDetachedPrompt: runDetachedPromptMock,
-  terminateAgent: mock(async () => ({ ok: true })),
-  updateAgentRunStatus: mock(() => undefined),
-}));
+mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter", () =>
+  createOpencodeAdapterModuleMock({
+    createSession: mock(async () => ({
+      ok: true,
+      sessionId: "exec-ses",
+      agentRunId: "run-judge",
+    })),
+    extractAssistantResultFromMessages: mock(() => ({
+      completed: true,
+      failed: false,
+      tokenUsed: 0,
+      text: "",
+    })),
+    findAgentRunBySessionId: mock(() => undefined),
+    getSessionMessages: mock(async () => ({ ok: true, data: [] })),
+    runDetachedPrompt: runDetachedPromptMock,
+    terminateAgent: mock(async () => ({ ok: true })),
+    updateAgentRunStatus: mock(() => undefined),
+  }),
+);
 
 mock.module("../../control-plane/web-ui-bff/src/modules/code-changes/change-collector", () => ({
   collectChangesFromSession: mock(async () => undefined),
@@ -79,11 +87,21 @@ mock.module("../../control-plane/web-ui-bff/src/modules/realtime/pipeline-events
   buildPipelineStageUpdatedEvents: mock(async () => []),
 }));
 
+mock.module(
+  "../../control-plane/web-ui-bff/src/modules/agent-control/run-persistence",
+  async () =>
+    import(
+      "../../control-plane/web-ui-bff/src/modules/agent-control/run-persistence?judge-usage-accounting-test"
+    ),
+);
+
 beforeEach(() => {
   cpFetchMock.mockReset();
+  authHeaderMock.mockReset();
   createInternalAuthorizationMock.mockReset();
   runDetachedPromptMock.mockReset();
 
+  authHeaderMock.mockReturnValue("Bearer test");
   createInternalAuthorizationMock.mockResolvedValue("Bearer internal");
   runDetachedPromptMock.mockResolvedValue({
     ok: true,
@@ -95,7 +113,7 @@ beforeEach(() => {
 
   cpFetchMock.mockImplementation(
     async (url: string, options?: { method?: string; body?: unknown }) => {
-      if ((options?.method || "GET") === "GET" && url === "/api/tasks/task-judge") {
+      if ((options?.method || "GET") === "GET" && url === "/api/project-tree/tasks/task-judge") {
         return {
           ok: true,
           status: 200,
@@ -127,18 +145,6 @@ beforeEach(() => {
               },
             }),
             selectedModel: "github-copilot:gpt-5.4",
-            executionPlan: JSON.stringify({
-              templateId: "parallel-template",
-              mode: "parallel",
-              steps: [
-                { id: "exec-0", type: "execution", status: "completed" },
-                { id: "judge-0", type: "judge", status: "pending", dependsOn: ["exec-0"] },
-              ],
-              candidates: [
-                { label: "A", agent: "agent-a", status: "running" },
-                { label: "B", agent: "agent-b", status: "running" },
-              ],
-            }),
           },
         };
       }

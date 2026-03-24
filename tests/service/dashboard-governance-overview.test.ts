@@ -10,7 +10,10 @@ const CP_URL = process.env.TEST_CP_URL || "http://127.0.0.1:4097";
 const PROJECT_ID = process.env.TEST_PROJECT_ID || "proj-default";
 const USERNAME = process.env.TEST_USERNAME || "admin";
 const PASSWORD = process.env.TEST_PASSWORD || "admin123!";
-const DATABASE_URL = process.env.TEST_DATABASE_URL || process.env.DATABASE_URL || "";
+const rawDatabaseUrl = process.env.TEST_DATABASE_URL || process.env.DATABASE_URL || "";
+const DATABASE_URL = /^(postgres|postgresql):\/\//i.test(rawDatabaseUrl)
+  ? rawDatabaseUrl
+  : "postgres://127.0.0.1:5432/openerx";
 const DB_PATH =
   process.env.TEST_DB_PATH || resolve(__dirname, "../../control-plane/service/data/openerx.db");
 const USE_POSTGRES = /^(postgres|postgresql):\/\//i.test(DATABASE_URL);
@@ -46,6 +49,17 @@ interface GovernanceOverviewResponse {
     breakerCount: number;
     activeLeaseCount: number;
     topRiskTaskCount: number;
+    runningTaskCount: number;
+    activeSessionCount: number;
+    parallelTaskCount: number;
+    sequentialChainTaskCount: number;
+    recentTimelineItemCount: number;
+    pausedTaskCount: number;
+    failedTaskCount: number;
+    activeCandidateCount: number;
+    pendingChainStepCount: number;
+    toolTimelineItemCount: number;
+    decisionTimelineItemCount: number;
   };
   topRiskTasks: Array<{
     taskId: string;
@@ -256,15 +270,19 @@ afterAll(async () => {
   await deleteByIds("runtime_usage_ledgers", createdLedgerIds);
 
   for (const taskId of createdTaskIds) {
+    await writeDb("DELETE FROM task_timeline_views WHERE task_id = ?", [taskId]);
+    await writeDb("DELETE FROM task_snapshots WHERE task_id = ?", [taskId]);
+    await writeDb("DELETE FROM task_domain_events WHERE task_id = ?", [taskId]);
+    await writeDb("DELETE FROM tasks WHERE id = ?", [taskId]);
     await writeDb("DELETE FROM project_tree_links WHERE source_node_id = ? OR target_node_id = ?", [
       taskId,
       taskId,
     ]);
     await writeDb("DELETE FROM project_tree_events WHERE node_id = ?", [taskId]);
-    await writeDb(
-      "DELETE FROM project_tree_branches WHERE task_node_id = ? OR head_node_id = ?",
-      [taskId, taskId],
-    );
+    await writeDb("DELETE FROM project_tree_branches WHERE task_node_id = ? OR head_node_id = ?", [
+      taskId,
+      taskId,
+    ]);
     await writeDb("DELETE FROM project_tree_nodes WHERE id = ?", [taskId]);
   }
 
@@ -367,6 +385,17 @@ describe("dashboard governance overview route", () => {
       breakerCount: baseline.data.summary.breakerCount + 1,
       activeLeaseCount: baseline.data.summary.activeLeaseCount + 1,
       topRiskTaskCount: Math.min(5, baseline.data.summary.topRiskTaskCount + 1),
+      runningTaskCount: baseline.data.summary.runningTaskCount,
+      activeSessionCount: baseline.data.summary.activeSessionCount,
+      parallelTaskCount: baseline.data.summary.parallelTaskCount,
+      sequentialChainTaskCount: baseline.data.summary.sequentialChainTaskCount,
+      recentTimelineItemCount: baseline.data.summary.recentTimelineItemCount + 1,
+      pausedTaskCount: baseline.data.summary.pausedTaskCount,
+      failedTaskCount: baseline.data.summary.failedTaskCount,
+      activeCandidateCount: baseline.data.summary.activeCandidateCount,
+      pendingChainStepCount: baseline.data.summary.pendingChainStepCount,
+      toolTimelineItemCount: baseline.data.summary.toolTimelineItemCount,
+      decisionTimelineItemCount: baseline.data.summary.decisionTimelineItemCount + 1,
     });
 
     const primaryRiskTask = response.data.topRiskTasks.find(

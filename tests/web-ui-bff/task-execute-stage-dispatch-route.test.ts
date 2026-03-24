@@ -3,6 +3,7 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import * as strategyModule from "../../control-plane/web-ui-bff/src/lib/orchestration-strategy";
 import { normalizeOrchestrationStrategy } from "../../control-plane/web-ui-bff/src/lib/orchestration-strategy";
+import { createSseAggregatorModuleMock } from "./sse-aggregator-mock";
 
 const createSessionMock = mock(async () => ({
   ok: true,
@@ -59,10 +60,12 @@ mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-a
   getSessionMessages: mock(async () => ({ ok: true, data: [] })),
   injectGuidance: mock(async () => ({ ok: true })),
   listAgentRuns: mock(() => []),
+  listRuntimePermissions: mock(async () => ({ ok: true, data: [] })),
   listSessions: mock(async () => ({ ok: true, data: [] })),
   pauseAgent: mock(async () => ({ ok: true })),
   registerAgentRun: mock(() => undefined),
   recoverAgentRun: mock(() => undefined),
+  replyRuntimePermission: mock(async () => ({ ok: true })),
   resumeAgent: mock(async () => ({ ok: true })),
   runDetachedPrompt: mock(async () => ({ ok: true, sessionId: "detached", text: "{}" })),
   terminateAgent: mock(async () => ({ ok: true })),
@@ -104,7 +107,9 @@ mock.module("../../control-plane/web-ui-bff/src/lib/orchestration-strategy", () 
 
 mock.module("../../control-plane/web-ui-bff/src/modules/hooks/lifecycle-hooks", () => ({
   executeLifecycleHooks: executeLifecycleHooksMock,
-  mergeStageAndStrategyHooks: mock((_stageHooks: unknown, strategyHooks: unknown) => strategyHooks ?? []),
+  mergeStageAndStrategyHooks: mock(
+    (_stageHooks: unknown, strategyHooks: unknown) => strategyHooks ?? [],
+  ),
   parseStageHooks: mock(() => []),
 }));
 
@@ -123,9 +128,11 @@ mock.module("../../control-plane/web-ui-bff/src/modules/realtime/pipeline-events
   buildPipelineStageUpdatedEvents: mock(() => []),
 }));
 
-mock.module("../../control-plane/web-ui-bff/src/modules/realtime/sse-aggregator", () => ({
-  sseAggregator: { registerParallelTask: mock(() => undefined) },
-}));
+mock.module("../../control-plane/web-ui-bff/src/modules/realtime/sse-aggregator", () =>
+  createSseAggregatorModuleMock({
+    registerParallelTask: mock(() => undefined),
+  }),
+);
 
 mock.module("../../control-plane/web-ui-bff/src/modules/realtime/ws-broadcaster", () => ({
   wsBroadcaster: { broadcast: mock(() => undefined) },
@@ -184,7 +191,7 @@ function getTaskExecuteWorkflowResponse() {
 }
 
 function getTaskExecuteReadResponse(url: string) {
-  if (url === "/api/tasks/task-1") {
+  if (url === "/api/project-tree/tasks/task-1") {
     return { ok: true, data: currentTask };
   }
 
@@ -278,17 +285,21 @@ beforeEach(() => {
     rewrittenPrompt: undefined,
   });
 
-  cpFetchMock.mockImplementation(async (url: string, options?: { method?: string; body?: unknown }) => {
-    const method = options?.method;
-    if (!method) {
-      return getTaskExecuteReadResponse(url) || { ok: true, data: { ok: true } };
-    }
+  cpFetchMock.mockImplementation(
+    async (url: string, options?: { method?: string; body?: unknown }) => {
+      const method = options?.method;
+      if (!method) {
+        return getTaskExecuteReadResponse(url) || { ok: true, data: { ok: true } };
+      }
 
-    return getTaskExecuteWriteResponse(url, method, options?.body) || {
-      ok: true,
-      data: { ok: true },
-    };
-  });
+      return (
+        getTaskExecuteWriteResponse(url, method, options?.body) || {
+          ok: true,
+          data: { ok: true },
+        }
+      );
+    },
+  );
 });
 
 describe("task execute route stage dispatch", () => {

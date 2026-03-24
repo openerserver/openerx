@@ -76,6 +76,43 @@
       </a-flex>
     </a-card>
 
+    <div
+      v-if="summary && summary.totalProjects > 0"
+      style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 16px"
+      data-testid="projects-summary-cards"
+    >
+      <a-card size="small">
+        <div style="font-size: 12px; color: #8c8c8c">项目总览</div>
+        <div style="font-size: 24px; font-weight: 600">{{ summary.totalProjects }}</div>
+        <div style="font-size: 12px; color: #8c8c8c">当前过滤结果中的项目总数</div>
+      </a-card>
+      <a-card size="small">
+        <div style="font-size: 12px; color: #8c8c8c">待配置 / 风险</div>
+        <div style="font-size: 24px; font-weight: 600">{{ summary.pendingConfigCount }} / {{ summary.riskCount }}</div>
+        <div style="font-size: 12px; color: #8c8c8c">待补配置项目与存在治理风险项目</div>
+      </a-card>
+      <a-card size="small">
+        <div style="font-size: 12px; color: #8c8c8c">活跃项目</div>
+        <div style="font-size: 24px; font-weight: 600">{{ summary.activeProjectCount }}</div>
+        <div style="font-size: 12px; color: #8c8c8c">有运行中任务、活动会话或最近 timeline 明细的项目数</div>
+      </a-card>
+      <a-card size="small">
+        <div style="font-size: 12px; color: #8c8c8c">运行中 / 会话</div>
+        <div style="font-size: 24px; font-weight: 600">{{ summary.runningTaskCount }} / {{ summary.activeSessionCount }}</div>
+        <div style="font-size: 12px; color: #8c8c8c">运行中的任务总量与活动会话总量</div>
+      </a-card>
+      <a-card size="small">
+        <div style="font-size: 12px; color: #8c8c8c">并行 / 链式任务</div>
+        <div style="font-size: 24px; font-weight: 600">{{ summary.parallelTaskCount }} / {{ summary.sequentialChainTaskCount }}</div>
+        <div style="font-size: 12px; color: #8c8c8c">当前 overview 中的 orchestration mix</div>
+      </a-card>
+      <a-card size="small">
+        <div style="font-size: 12px; color: #8c8c8c">失败任务 / 24h 明细</div>
+        <div style="font-size: 24px; font-weight: 600">{{ summary.failedTaskCount }} / {{ summary.recentTimelineItemCount }}</div>
+        <div style="font-size: 12px; color: #8c8c8c">当前失败任务总量与最近 24h 执行明细写入数</div>
+      </a-card>
+    </div>
+
     <!-- 摘要提示区 -->
     <a-alert
       v-if="summary && summary.totalProjects > 0"
@@ -86,6 +123,11 @@
       <template #message>
         <span>
           共 {{ summary.totalProjects }} 个项目<template v-if="summary.pendingConfigCount > 0">，其中 {{ summary.pendingConfigCount }} 个待配置</template><template v-if="summary.riskCount > 0">，{{ summary.riskCount }} 个存在治理风险</template>
+          <template v-if="summary.activeProjectCount > 0">，{{ summary.activeProjectCount }} 个处于活跃窗口</template>
+          <template v-if="summary.runningTaskCount > 0">，{{ summary.runningTaskCount }} 个运行中任务</template>
+          <template v-if="summary.activeSessionCount > 0">，{{ summary.activeSessionCount }} 个活动会话</template>
+          <template v-if="summary.failedTaskCount > 0">，{{ summary.failedTaskCount }} 个当前失败任务</template>
+          <template v-if="summary.recentTimelineItemCount > 0">，最近 24h 写入 {{ summary.recentTimelineItemCount }} 条执行明细</template>
         </span>
         <a-button
           v-if="summary.pendingConfigCount > 0"
@@ -182,11 +224,18 @@
             <span v-else style="color: #8c8c8c">运行中 0</span>
           </div>
           <div style="font-size: 12px">
+            <span v-if="(record.activeSessionCount ?? 0) > 0" style="color: #13c2c2">活动会话 {{ record.activeSessionCount ?? 0 }}</span>
+            <span v-else style="color: #8c8c8c">活动会话 0</span>
+          </div>
+          <div style="font-size: 12px">
             <span v-if="record.pendingApprovals > 0" style="color: #fa8c16">待审批 {{ record.pendingApprovals }}</span>
             <span v-else style="color: #8c8c8c">待审批 0</span>
           </div>
           <div v-if="record.failedTasksToday > 0" style="font-size: 12px; color: #ff4d4f">
             今日失败 {{ record.failedTasksToday }}
+          </div>
+          <div style="font-size: 12px; color: #8c8c8c">
+            并行 {{ record.parallelTaskCount ?? 0 }} / 链式 {{ record.sequentialChainTaskCount ?? 0 }} / 明细 {{ record.recentTimelineItemCount ?? 0 }}
           </div>
         </template>
 
@@ -401,6 +450,13 @@ const summary = ref<{
   totalProjects: number;
   pendingConfigCount: number;
   riskCount: number;
+  activeProjectCount: number;
+  runningTaskCount: number;
+  activeSessionCount: number;
+  parallelTaskCount: number;
+  sequentialChainTaskCount: number;
+  failedTaskCount: number;
+  recentTimelineItemCount: number;
 } | null>(null);
 const pagination = ref({ page: 1, pageSize: 20, total: 0 });
 
@@ -442,7 +498,7 @@ const columns = [
   { title: "状态", key: "projectStatus", dataIndex: "projectStatus", width: 90 },
   { title: "配置完成度", key: "completion", width: 180 },
   { title: "风险提示", key: "risks", width: 200 },
-  { title: "任务/审批", key: "activity", width: 120 },
+  { title: "任务/审批", key: "activity", width: 180 },
   { title: "最近活跃", key: "lastActivityAt", dataIndex: "lastActivityAt", width: 130 },
   { title: "操作", key: "actions", width: 200 },
 ];

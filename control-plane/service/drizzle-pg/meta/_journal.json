@@ -85,6 +85,62 @@
       "when": 1774101600000,
       "tag": "0011_drop_task_sessions",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1774183200000,
+      "tag": "0012_project_tree_events_search",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1774183260000,
+      "tag": "0013_task_domain_core",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1774183320000,
+      "tag": "0014_task_domain_conversations",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1774183380000,
+      "tag": "0015_task_domain_projections",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1774183440000,
+      "tag": "0016_task_domain_bridges",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1774183500000,
+      "tag": "0017_task_domain_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1774264500000,
+      "tag": "0018_task_metadata_columns",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1774265400000,
+      "tag": "0019_task_author_columns",
+      "breakpoints": true
     }
   ]
 }

@@ -3,6 +3,8 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "../../control-plane/web-ui-bff/node_modules/hono";
+import { createOpencodeAdapterModuleMock } from "./opencode-adapter-mock";
+import { createSseAggregatorModuleMock } from "./sse-aggregator-mock";
 
 const ensureAgentRunForSessionMock = mock(() => "run-test-1");
 const findAgentRunBySessionIdMock = mock(() => undefined);
@@ -16,21 +18,23 @@ const ingestParsedEventMock = mock(async () => undefined);
 const onEventMock = mock(() => () => undefined);
 const updateAgentRunStatusMock = mock(() => undefined);
 
-mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter", () => ({
-  ensureAgentRunForSession: ensureAgentRunForSessionMock,
-  findAgentRunBySessionId: findAgentRunBySessionIdMock,
-  getSessionMessages: getSessionMessagesMock,
-  runDetachedPrompt: runDetachedPromptMock,
-  updateAgentRunStatus: updateAgentRunStatusMock,
-}));
+mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter", () =>
+  createOpencodeAdapterModuleMock({
+    ensureAgentRunForSession: ensureAgentRunForSessionMock,
+    findAgentRunBySessionId: findAgentRunBySessionIdMock,
+    getSessionMessages: getSessionMessagesMock,
+    runDetachedPrompt: runDetachedPromptMock,
+    updateAgentRunStatus: updateAgentRunStatusMock,
+  }),
+);
 
-mock.module("../../control-plane/web-ui-bff/src/modules/realtime/sse-aggregator", () => ({
-  sseAggregator: {
+mock.module("../../control-plane/web-ui-bff/src/modules/realtime/sse-aggregator", () =>
+  createSseAggregatorModuleMock({
     onEvent: onEventMock,
     subscribeSession: subscribeSessionMock,
     ingestParsedEvent: ingestParsedEventMock,
-  },
-}));
+  }),
+);
 
 mock.module("../../control-plane/web-ui-bff/src/modules/realtime/ws-broadcaster", () => ({
   wsBroadcaster: {

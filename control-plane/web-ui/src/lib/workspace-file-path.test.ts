@@ -18,8 +18,12 @@ describe("normalizeWorkspaceFilePath", () => {
   });
 
   it("rejects plain text and bullet lines", () => {
-    expect(normalizeWorkspaceFilePath("是要评估付费版本的并行处理能力与 GitHub Copilot 的对比？")).toBeUndefined();
-    expect(normalizeWorkspaceFilePath("- 是要评估付费版本的并行处理能力与 GitHub Copilot 的对比？")).toBeUndefined();
+    expect(
+      normalizeWorkspaceFilePath("是要评估付费版本的并行处理能力与 GitHub Copilot 的对比？"),
+    ).toBeUndefined();
+    expect(
+      normalizeWorkspaceFilePath("- 是要评估付费版本的并行处理能力与 GitHub Copilot 的对比？"),
+    ).toBeUndefined();
   });
 
   it("rejects invalid or non-workspace locations", () => {

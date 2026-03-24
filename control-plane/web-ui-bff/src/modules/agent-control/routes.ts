@@ -5,7 +5,11 @@ import { authHeader, cpFetch, createInternalAuthorization } from "../../lib/cont
 import { formatModelRoute } from "../../lib/opencode-config";
 import { mergeTaskStrategy, readOrchestrationStrategy } from "../../lib/orchestration-strategy";
 import { recordPaidExecutionRuntimeUsage } from "../../lib/paid-execution-runtime";
-import { executeLifecycleHooks, mergeStageAndStrategyHooks, parseStageHooks } from "../hooks/lifecycle-hooks";
+import {
+  executeLifecycleHooks,
+  mergeStageAndStrategyHooks,
+  parseStageHooks,
+} from "../hooks/lifecycle-hooks";
 import { wsBroadcaster } from "../realtime/ws-broadcaster";
 import { finalizeTaskState } from "../tasks/finalize";
 import { fetchCurrentStageHooks } from "../tasks/workflow-stage-execution";
@@ -361,7 +365,11 @@ async function ensureRuntimeRunFromSummaryDetailed(
     };
   }
 
-  if (!summaryResult.data.sessionId || !summaryResult.data.taskId || !summaryResult.data.projectId) {
+  if (
+    !summaryResult.data.sessionId ||
+    !summaryResult.data.taskId ||
+    !summaryResult.data.projectId
+  ) {
     return {
       failure: {
         status: 409,
@@ -420,11 +428,7 @@ async function maybeBackfillTokenUsage(input: {
     return input.tokenUsed;
   }
 
-  const tokenUsed = await loadSessionTokenUsage(
-    input.sessionId,
-    input.taskId,
-    input.authorization,
-  );
+  const tokenUsed = await loadSessionTokenUsage(input.sessionId, input.taskId, input.authorization);
   if (tokenUsed <= 0) {
     return input.tokenUsed;
   }
@@ -582,10 +586,7 @@ agentControlRoutes.get("/:agentRunId/summary", async (c) => {
     return c.json(result.data, result.status as 401 | 403 | 404 | 502);
   }
 
-  const summary = mergeSummaryWithRuntime(
-    result.data,
-    runtimeRun,
-  );
+  const summary = mergeSummaryWithRuntime(result.data, runtimeRun);
   const tokenUsed = await maybeBackfillTokenUsage({
     agentRunId: summary.agentRunId,
     taskId: summary.taskId,
@@ -726,7 +727,7 @@ agentControlRoutes.post("/:agentRunId/pause", async (c) => {
 // POST /api/agents/:agentRunId/resume
 agentControlRoutes.post("/:agentRunId/resume", async (c) => {
   const agentRunId = c.req.param("agentRunId");
-  let run = await ensureRuntimeRunFromSummary(c, agentRunId);
+  const run = await ensureRuntimeRunFromSummary(c, agentRunId);
 
   // Run pre-resume hooks before the actual resume
   if (run?.taskId) {
@@ -845,11 +846,7 @@ agentControlRoutes.post("/:agentRunId/terminate", async (c) => {
 
   if (result.ok) {
     run = getAgentRun(agentRunId) ?? run;
-    const tokenUsed = await loadSessionTokenUsage(
-      run?.subSessionId,
-      run?.taskId,
-      authorization,
-    );
+    const tokenUsed = await loadSessionTokenUsage(run?.subSessionId, run?.taskId, authorization);
     const finishedAt = new Date().toISOString();
     if (run?.taskId) {
       await Promise.all([

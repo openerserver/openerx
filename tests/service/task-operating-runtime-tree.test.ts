@@ -15,7 +15,10 @@ const createdTaskIds: string[] = [];
 const createdNodeIds = new Set<string>();
 let token = "";
 
-async function request<T>(path: string, opts: RequestInit = {}): Promise<{ data: T; status: number }> {
+async function request<T>(
+  path: string,
+  opts: RequestInit = {},
+): Promise<{ data: T; status: number }> {
   const response = await fetch(`${CP_URL}${path}`, opts);
   const text = await response.text();
   let data: unknown;
@@ -65,25 +68,31 @@ async function createTask(title: string) {
   return data;
 }
 
-function escapeSqlLiteral(value: string) {
-  return value.replace(/'/g, "''");
-}
-
 beforeAll(async () => {
   token = await login();
 });
 
 afterAll(async () => {
   for (const taskId of createdTaskIds) {
-    await sql.unsafe(`DELETE FROM task_operating_modes WHERE task_id = $1`, [taskId]);
-    await sql.unsafe(`DELETE FROM boss_decisions WHERE task_id = $1`, [taskId]);
-    await sql.unsafe(`DELETE FROM human_escalations WHERE task_id = $1`, [taskId]);
+    await sql.unsafe("DELETE FROM task_operating_modes WHERE task_id = $1", [taskId]);
+    await sql.unsafe("DELETE FROM boss_decisions WHERE task_id = $1", [taskId]);
+    await sql.unsafe("DELETE FROM human_escalations WHERE task_id = $1", [taskId]);
+    await sql.unsafe("DELETE FROM task_timeline_views WHERE task_id = $1", [taskId]);
+    await sql.unsafe("DELETE FROM task_domain_events WHERE task_id = $1", [taskId]);
+    await sql.unsafe("DELETE FROM task_snapshots WHERE task_id = $1", [taskId]);
+    await sql.unsafe("DELETE FROM tasks WHERE id = $1", [taskId]);
   }
   for (const nodeId of Array.from(createdNodeIds)) {
-    await sql.unsafe(`DELETE FROM project_tree_links WHERE source_node_id = $1 OR target_node_id = $1`, [nodeId]);
-    await sql.unsafe(`DELETE FROM project_tree_events WHERE node_id = $1`, [nodeId]);
-    await sql.unsafe(`DELETE FROM project_tree_branches WHERE task_node_id = $1 OR head_node_id = $1`, [nodeId]);
-    await sql.unsafe(`DELETE FROM project_tree_nodes WHERE id = $1`, [nodeId]);
+    await sql.unsafe(
+      "DELETE FROM project_tree_links WHERE source_node_id = $1 OR target_node_id = $1",
+      [nodeId],
+    );
+    await sql.unsafe("DELETE FROM project_tree_events WHERE node_id = $1", [nodeId]);
+    await sql.unsafe(
+      "DELETE FROM project_tree_branches WHERE task_node_id = $1 OR head_node_id = $1",
+      [nodeId],
+    );
+    await sql.unsafe("DELETE FROM project_tree_nodes WHERE id = $1", [nodeId]);
   }
   await sql.end();
 });
@@ -92,26 +101,21 @@ describe("task operating runtime tree-backed reads", () => {
   test("reads legacy operating mode hints from task tree strategy", async () => {
     const unique = Date.now();
     const task = await createTask(`operating-runtime-tree-${unique}`);
-    const strategy = JSON.stringify({
+    const strategy = {
       collaborationMode: "team",
       autopilotLevel: "L2",
       bossParticipationMode: "full-manager",
       currentStageKey: "implementation",
       currentStageStatus: "running",
-    });
+    };
 
     await sql.unsafe(
-      `UPDATE project_tree_nodes
-          SET content_json = COALESCE(content_json, '{}'::jsonb) || '${escapeSqlLiteral(JSON.stringify({ strategy }))}'::jsonb,
+      `UPDATE tasks
+          SET strategy_json = $1::jsonb,
               updated_at = CURRENT_TIMESTAMP
-        WHERE id = '${escapeSqlLiteral(task.nodeId)}'`,
+        WHERE id = $2`,
+      [JSON.stringify(strategy), task.id],
     );
-
-    const treeNode = await authedRequest<{ contentJson?: Record<string, unknown> }>(
-      `/api/projects/${PROJECT_ID}/tree/${task.nodeId}`,
-    );
-    expect(treeNode.status).toBe(200);
-    expect(treeNode.data.contentJson?.strategy).toBe(strategy);
 
     const response = await authedRequest<{
       collaborationMode?: string;
@@ -129,5 +133,38 @@ describe("task operating runtime tree-backed reads", () => {
       currentStageKey: "implementation",
       currentStageStatus: "running",
     });
+
+    const operatingModeRows = await sql.unsafe<
+      Array<{
+        collaboration_mode: string;
+        autopilot_level: string;
+        boss_participation_mode: string;
+      }>
+    >(
+      `SELECT collaboration_mode, autopilot_level, boss_participation_mode
+         FROM task_operating_modes
+        WHERE task_id = $1`,
+      [task.id],
+    );
+    expect(operatingModeRows[0]).toMatchObject({
+      collaboration_mode: "team",
+      autopilot_level: "L2",
+      boss_participation_mode: "full-manager",
+    });
+
+    const aggregateRows = await sql.unsafe<
+      Array<{ strategy_json: Record<string, unknown> | null }>
+    >("SELECT strategy_json FROM tasks WHERE id = $1", [task.id]);
+    expect(aggregateRows[0]?.strategy_json).toEqual({
+      currentStageKey: "implementation",
+      currentStageStatus: "running",
+    });
+
+    const treeNodeRows = await sql.unsafe<Array<{ content_json: Record<string, unknown> | null }>>(
+      "SELECT content_json FROM project_tree_nodes WHERE id = $1",
+      [task.id],
+    );
+    expect(treeNodeRows[0]?.content_json).not.toBeNull();
+    expect(treeNodeRows[0]?.content_json).not.toHaveProperty("strategy");
   });
 });

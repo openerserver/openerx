@@ -5,7 +5,7 @@
 > 目标：从当前"单 Agent 执行 + 固定执行前/执行后 Hook"模式，演进为"多 Agent 并行执行 + 通用生命周期 Hook + 聚合评判"模式
 > 状态说明：本文档中把 `task-graph-plugin`、`taskNodes`、`taskEdges` 作为执行落地层的部分已经过时。
 >
-> 当前主方案已收口到 Workflow Stage、ExecutionPlan、Hook 与 parallel/sequential execution，不再依赖独立 DAG 兼容层。请与 [docs/dag-node-execution-plan-v2.md](docs/dag-node-execution-plan-v2.md) 对照阅读。
+> 当前主方案已收口到 Workflow Stage、RuntimePlan、Hook 与 parallel/sequential execution，不再依赖独立 DAG 兼容层。请与 [docs/dag-node-execution-plan-v2.md](docs/dag-node-execution-plan-v2.md) 对照阅读。
 
 ## 1. 文档目标
 
@@ -82,11 +82,14 @@
              → 选择最优结果作为任务输出
 ```
 
-## 4. Phase 1：通用生命周期 Hook
+## 4. Phase 1：通用生命周期 Hook（历史设计阶段）
+
+> 历史注记：本节记录最初把固定前后 Hook 泛化为通用生命周期 Hook 的设计思路。
+> 当前阅读时，应将其视为设计来源与能力边界说明，而不是待执行排期。
 
 ### 4.1 目标
 
-将固定的执行前 / 执行后治理入口，泛化为可配置的 Hook 数组，支持任意生命周期触发点。
+历史目标是将固定的执行前 / 执行后治理入口泛化为可配置的 Hook 数组，支持任意生命周期触发点。
 
 ### 4.1.1 权限边界
 
@@ -96,7 +99,7 @@
 
 ### 4.1.2 设计校正：管理员模板制，而不是全局开关堆叠
 
-为了避免方案退化成“多几个系统开关”，Phase 1 开始就应将编排能力抽象为“管理员发布工作流模板，普通使用者只能选择模板、不能编辑模板”。
+历史设计校正是：避免方案退化成“多几个系统开关”，并将编排能力抽象为“管理员发布工作流模板，普通使用者只能选择模板、不能编辑模板”。
 
 - 系统管理员负责维护模板库、Hook、安全边界、并行上限、Judge 策略。
 - 项目管理员和普通成员不能修改模板内容，但可以在被授权的范围内为任务选择模板。
@@ -260,7 +263,7 @@ function migrateToHooks(raw: any): LifecycleHook[] {
 | ---- | ---- |
 | `PUT /orchestration-strategy` | Schema 使用 `hooks` / `templates` / `judge`；仅系统管理员可调用 |
 | `GET /orchestration-strategy` | 返回迁移后的 hooks 结构；仅系统管理员可调用 |
-| `GET /api/tasks/:id` | `strategy` JSON 中使用 `hookExecutions`，任务顶层可带 `executionPlan` |
+| `GET /api/tasks/:id` | `strategy` JSON 中使用 `hookExecutions`；历史设计里任务顶层可带 `executionPlan`，但当前主路径已不再依赖或对外暴露该字段 |
 
 ### 4.6 BFF 触发逻辑变更
 
@@ -301,7 +304,7 @@ private async triggerLifecycleHooks(trigger: HookTrigger, taskId: string) {
 
 ### 4.7 前端变更 (Settings.vue)
 
-将固定的"执行前 / 执行后"治理表单改为动态 Hook 列表：
+历史前端草案是将固定的"执行前 / 执行后"治理表单改为动态 Hook 列表：
 
 该入口继续保留在系统设置页，仅系统管理员可见、可编辑；非管理员不展示策略配置入口。
 
@@ -331,13 +334,16 @@ private async triggerLifecycleHooks(trigger: HookTrigger, taskId: string) {
 
 ### 4.8 TaskDetail.vue 变更
 
-将"治理与 Hook 执行"区域改为展示 `hookExecutions` 数组，每条记录显示：trigger、agent、status、result 摘要。
+历史 TaskDetail 草案是展示 `hookExecutions` 数组，每条记录显示：trigger、agent、status、result 摘要。
 
-## 5. Phase 2：多 Agent 并行执行
+## 5. Phase 2：多 Agent 并行执行（历史设计阶段）
+
+> 历史注记：本节记录最初把“单 Agent 执行”提升为模板驱动的 single / parallel / pipeline 三种执行形态的设计。
+> 其中一部分语义后来被 task domain runs / snapshots 吸收，因此这里更适合作为历史方案背景阅读。
 
 ### 5.1 目标
 
-一个任务不再只对应“选一个 Agent 去执行”，而是对应一个工作流模板。模板至少应支持三种执行形态：
+历史目标是让一个任务不再只对应“选一个 Agent 去执行”，而是对应一个工作流模板。模板至少支持三种执行形态：
 
 - 单执行：一个主执行 Agent，适合稳态生产任务。
 - 并行赛马：多个 candidate 独立执行，适合探索最优解。
@@ -346,8 +352,8 @@ private async triggerLifecycleHooks(trigger: HookTrigger, taskId: string) {
 ### 5.2 执行计划模型
 
 ```typescript
-// 新增：执行计划（附加在任务上）
-export interface ExecutionPlan {
+// 历史方案中的 RuntimePlan（曾附加在任务上，兼容字段名为 executionPlan）
+export interface RuntimePlan {
   templateId: string;
   mode: "single" | "parallel" | "pipeline";
   steps: ExecutionStep[];
@@ -385,7 +391,7 @@ ALTER TABLE tasks ADD COLUMN execution_mode TEXT DEFAULT 'single';
 -- 'single' | 'parallel'
 
 ALTER TABLE tasks ADD COLUMN execution_plan TEXT;
--- JSON: ExecutionPlan
+-- JSON: RuntimePlan
 ```
 
 `tasks.agentRunId` 在 `parallel` 模式下不再使用（保留向后兼容），改读 `execution_plan` 中各 candidate 的 `agentRunId`。
@@ -404,11 +410,11 @@ ALTER TABLE agent_runs ADD COLUMN candidate_index INTEGER;
 
 ```typescript
 // 替代原 selectExecutionAgent() 只取第一个
-function buildExecutionPlan(
+function buildRuntimePlan(
   classification: IntentClassification,
   strategy: OrchestrationStrategy,
   selectedTemplateId?: string,
-): ExecutionPlan {
+): RuntimePlan {
   const template = resolveWorkflowTemplate(strategy, classification.category, selectedTemplateId);
 
   if (template.mode === "single") {
@@ -455,8 +461,8 @@ function buildExecutionPlan(
 ```typescript
 // Fan-out: 为每个 candidate 创建独立 Session
 async function executeParallel(
-  taskId: string, plan: ExecutionPlan, prompt: string, options: ExecOptions,
-): Promise<ExecutionPlan> {
+  taskId: string, plan: RuntimePlan, prompt: string, options: ExecOptions,
+): Promise<RuntimePlan> {
   const results = await Promise.allSettled(
     plan.candidates.map(async (candidate, index) => {
       const sessionResult = await createSession(taskId, options.projectId, prompt, {
@@ -485,10 +491,10 @@ async function executeParallel(
 ```typescript
 async function executePipeline(
   taskId: string,
-  plan: ExecutionPlan,
+  plan: RuntimePlan,
   prompt: string,
   options: ExecOptions,
-): Promise<ExecutionPlan> {
+): Promise<RuntimePlan> {
   for (const step of plan.steps) {
     if (step.type !== "execution") continue;
     const candidate = plan.candidates.find((item) => item.agent === resolveStepAgent(step));
@@ -534,7 +540,7 @@ export interface OrchestrationStrategy {
 
 #### Settings.vue（Phase 2）
 
-将原来的“按分类配置 Agent”升级为“模板库 + 分类默认模板映射”：
+历史 Settings 草案是将原来的“按分类配置 Agent”升级为“模板库 + 分类默认模板映射”：
 
 ```text
 编排策略 → 工作流模板
@@ -555,7 +561,7 @@ export interface OrchestrationStrategy {
 
 #### TaskDetail.vue（Phase 2）
 
-当 `execution_mode === 'parallel'` 时，切换为多 candidate 视图：
+历史 TaskDetail 草案是在 `execution_mode === 'parallel'` 时切换为多 candidate 视图：
 
 ```text
 任务详情 → 执行候选
@@ -577,11 +583,14 @@ export interface OrchestrationStrategy {
 └──────────────────────────────────────────┘
 ```
 
-## 6. Phase 3：聚合评判（Judge）
+## 6. Phase 3：聚合评判（Judge，历史设计阶段）
+
+> 历史注记：本节记录最初把并行/接力执行结果交给 Judge 或 Merge 步骤处理的设计。
+> 当前代码路径已经不再沿用其中部分 `executionPlan` 持久化语义，因此本节应视为历史评审方案说明。
 
 ### 6.1 目标
 
-在并行赛马或顺序接力结束后，引入 Judge 或 Merge 步骤，对多个结果做“选优、合成或人工建议”，而不是只选一个赢家。
+历史目标是在并行赛马或顺序接力结束后，引入 Judge 或 Merge 步骤，对多个结果做“选优、合成或人工建议”，而不是只选一个赢家。
 
 ### 6.2 Judge 模型
 
@@ -632,8 +641,8 @@ export interface JudgeResult {
   completedAt: string;
 }
 
-// ExecutionPlan 扩展
-export interface ExecutionPlan {
+// RuntimePlan 扩展
+export interface RuntimePlan {
   mode: "single" | "parallel";
   candidates: ExecutionCandidate[];
   judge?: JudgeConfig;
@@ -684,7 +693,7 @@ export interface OrchestrationStrategy {
 
 #### Settings.vue（Phase 3）
 
-新增"聚合评判"配置区：
+历史 Settings 草案新增了"聚合评判"配置区：
 
 ```text
 编排策略 → 聚合评判
@@ -702,7 +711,7 @@ export interface OrchestrationStrategy {
 
 #### TaskDetail.vue（Phase 3）
 
-在 candidate 列表下方新增 Judge 评判结果区：
+历史 TaskDetail 草案是在 candidate 列表下方增加 Judge 评判结果区：
 
 ```text
 任务详情 → 评判结果
@@ -731,7 +740,7 @@ export interface OrchestrationStrategy {
 | ---- | ---- | -------- |
 | Session / Sub-session | Runtime 已支持创建会话、子会话、向指定 agent dispatch prompt | 作为单执行、并行赛马、顺序接力的最小执行单元 |
 | Agent 专长分工 | 现有 enterprise agents、commands、skills 已具备多角色协作基础 | 作为工作流模板中的步骤参与者 |
-| DAG / 依赖图 | task-graph-plugin 已支持节点、依赖、blocked / waiting_approval / retry 状态机 | 作为 ExecutionPlan / pipeline step 的运行时落地结构 |
+| DAG / 依赖图 | task-graph-plugin 已支持节点、依赖、blocked / waiting_approval / retry 状态机 | 作为 RuntimePlan / pipeline step 的运行时落地结构 |
 | 生命周期事件 | 已有 `session.idle`、`session.error`、`tool.execute.before`、`tool.execute.after` 等事件 | 作为 Hook 触发与状态同步的底层信号 |
 | Guidance / Resume | 已支持 pause、inject guidance、resume | 作为 `pre-resume`、失败补救、人工介入的恢复原语 |
 | Prompt/System 变换 | 插件钩子支持 `chat.system.transform`、工具执行前后拦截 | 作为 Hook 执行和上下文注入的底层入口 |
@@ -748,6 +757,8 @@ export interface OrchestrationStrategy {
 | 控制面审计与治理 | Runtime 状态偏执行期本地状态，不承担企业审计职责 | 审批记录、策略变更记录、任务治理摘要 |
 
 ### 7.3 建议的责任分层
+
+> 历史注记：这一小节仍然有参考价值，因为它解释了哪些语义应留在 Control Plane，哪些应继续依赖 Runtime 原语。
 
 ```text
 OpenerX Control Plane / BFF
@@ -799,9 +810,9 @@ OpenCode Runtime
 2. 控制面收口：模板、权限、结构化决策、审计、聚合结果全部由 OpenerX 统一建模。
 3. 避免双重状态机：Runtime 管执行态，Control Plane 管业务态，不做两套并列编排引擎。
 
-## 8. MVP 落地边界
+## 8. MVP 落地边界（历史范围裁剪）
 
-为了避免一期范围膨胀，建议将当前方案裁剪为可闭环的 MVP，只交付“管理员模板制 + 单执行 / 并行赛马 + 基础 Hook + 基础 Judge”。
+历史范围裁剪建议是：将当时的方案限制在“管理员模板制 + 单执行 / 并行赛马 + 基础 Hook + 基础 Judge”，避免一期范围膨胀。
 
 ### 8.1 MVP 必做范围
 
@@ -836,37 +847,41 @@ TaskDetail 展示执行记录、候选结果和最终裁决
 
 ## 9. 按文件实施清单
 
+> 历史注记：本节是最初的 MVP 实施矩阵。
+> 当前更适合把它理解为“设计来源 + 已落地项对照”，而不是仍待逐项执行的当前开发清单。
+
 ### 9.1 BFF 与运行时适配层
 
 | 文件 | 当前状态 | MVP 改动 |
 | ---- | ---- | -------- |
-| `control-plane/web-ui-bff/src/lib/orchestration-strategy.ts` | 仅支持 `categoryAgentMap`、固定前后评审 | 增加 `WorkflowTemplate`、`HookExecutionRecord`、`JudgeResult`、`ExecutionPlan`；保留旧格式双读兼容 |
-| `control-plane/web-ui-bff/src/modules/config/routes.ts` | `GET/PUT /orchestration-strategy` 仍是旧 schema | 改为模板库 schema；兼容旧字段输入；保持管理员权限不变 |
-| `control-plane/web-ui-bff/src/modules/tasks/routes.ts` | 仍是分类后选一个 agent 执行 | 增加模板解析、single/parallel 执行分支、executionPlan 持久化、基础 pre-hook 记录 |
-| `control-plane/web-ui-bff/src/modules/realtime/sse-aggregator.ts` | 只围绕单 session 完成检测和执行后治理 | 增加多 session 聚合、parallel 终态判定、post-hook 持久化、基础 judge 触发 |
-| `control-plane/web-ui/src/pages/TaskDetail.vue` | 展示 `selectedAgent`、`suggestedAgents`、固定治理结果 | 增加模板信息、candidate 列表、judge 结果、hook 执行记录 |
-| `tests/web-ui-bff/hooks-integration.test.ts` | 只覆盖固定执行前/执行后治理 | 扩展为模板兼容迁移、single 模式、parallel 模式基础 judge |
+| `control-plane/web-ui-bff/src/lib/orchestration-strategy.ts` | 仅支持 `categoryAgentMap`、固定前后评审 | 历史 MVP 目标是补齐 `WorkflowTemplate`、`HookExecutionRecord`、`JudgeResult`、`RuntimePlan`；当前更应把这行视为设计来源说明 |
+| `control-plane/web-ui-bff/src/modules/config/routes.ts` | `GET/PUT /orchestration-strategy` 仍是旧 schema | 历史 MVP 目标是改为模板库 schema；当前是否继续推进应以现有编排配置面为准 |
+| `control-plane/web-ui-bff/src/modules/tasks/routes.ts` | 仍是分类后选一个 agent 执行 | 历史 MVP 目标是补齐模板解析、single/parallel 执行分支与基础 pre-hook 记录；其中 `executionPlan` 持久化语义现已退役 |
+| `control-plane/web-ui-bff/src/modules/realtime/sse-aggregator.ts` | 只围绕单 session 完成检测和执行后治理 | 历史 MVP 目标是增加多 session 聚合、parallel 终态判定、post-hook 持久化和基础 judge 触发 |
+| `control-plane/web-ui/src/pages/TaskDetail.vue` | 展示 `selectedAgent`、`suggestedAgents`、固定治理结果 | 历史 MVP 目标是展示模板信息、candidate 列表、judge 结果和 hook 执行记录 |
+| `tests/web-ui-bff/hooks-integration.test.ts` | 只覆盖固定执行前/执行后治理 | 历史 MVP 目标是扩展到模板兼容迁移、single 模式、parallel 模式基础 judge |
+
 ### 9.2 控制面服务与存储层
 
 | 文件 | 当前状态 | MVP 改动 |
 | ---- | ---- | -------- |
-| `control-plane/service/src/db/schema.ts` | `tasks` 只有 `sessionId`、`agentRunId`、`strategy` | 新增 `executionMode`、`executionPlan`；`agent_runs` 新增 `candidateIndex` |
-| `control-plane/service/src/modules/tasks/routes.ts` | PATCH schema 可更新 `strategy`，但没有 execution fields | 扩展 GET/PATCH schema，允许控制面持久化 `executionMode`、`executionPlan` |
-| `control-plane/service/drizzle/*` | 尚无多执行 migration | 新增 migration：`tasks.execution_mode`、`tasks.execution_plan`、`agent_runs.candidate_index` |
+| `control-plane/service/src/db/schema.ts` | `tasks` 只有 `sessionId`、`agentRunId`、`strategy` | 历史阶段曾新增 `executionMode`、`executionPlan`；当前主路径应以 task domain runs / snapshots 为准，不再扩展 `executionPlan` 语义 |
+| `control-plane/service/src/modules/tasks/routes.ts` | PATCH schema 可更新 `strategy`，但没有 execution fields | 历史阶段曾放宽控制面持久化 `executionMode`、`executionPlan`；当前不应再把 `executionPlan` 作为正式 GET/PATCH 字段 |
+| `control-plane/service/drizzle/*` | 尚无多执行 migration | 历史阶段曾计划新增 `tasks.execution_mode`、`tasks.execution_plan`、`agent_runs.candidate_index`；当前阅读时应结合现有 migration 实际状态，不再把这行视为待办 |
 
 ### 9.3 Web UI
 
 | 文件 | 当前状态 | MVP 改动 |
 | ---- | ---- | -------- |
 | `control-plane/web-ui/src/pages/Settings.vue` | 仍是分类到 agent + 固定治理表单 | 改成模板库管理视图，但一期只支持 single/parallel 两种模板与生命周期 hook 配置 |
-| `control-plane/web-ui/src/lib/api.ts` | orchestration strategy 类型仍是旧结构 | 更新前端类型与 API payload；增加 execution plan / judge result 类型 |
+| `control-plane/web-ui/src/lib/api.ts` | orchestration strategy 类型仍是旧结构 | 更新前端类型与 API payload；增加 runtime plan / judge result 类型 |
 | `control-plane/web-ui/src/pages/TaskDetail.vue` | 展示 `selectedAgent`、`suggestedAgents`、基础治理信息 | 增加模板信息、candidate 列表、judge 结果、hook 执行记录 |
 
 ### 9.4 测试与回归
 
 | 文件 | 当前状态 | MVP 改动 |
 | ---- | ---- | -------- |
-| `tests/web-ui-bff/hooks-integration.test.ts` | 只覆盖固定执行前/执行后治理 | 扩展为模板兼容迁移、single 模式、parallel 模式基础 judge |
+| `tests/web-ui-bff/hooks-integration.test.ts` | 只覆盖固定执行前/执行后治理 | 历史 MVP 目标是扩展到模板兼容迁移、single 模式、parallel 模式基础 judge |
 | `tests/web-ui-bff/user-management.test.ts` | 已覆盖 orchestration strategy 管理员权限 | 保持并补模板制 schema 的管理员权限回归 |
 | `tests/web-ui/*` | TaskDetail 与 Settings 仍基于旧编排 UI | 增加模板页渲染、candidate 展示、judge 展示、旧数据兼容测试 |
 
@@ -878,7 +893,10 @@ TaskDetail 展示执行记录、候选结果和最终裁决
 4. 最后更新 Settings 与 TaskDetail。
 5. 全程保持 single 模式可回退且不回归。
 
-## 10. DB Migration 汇总
+## 10. DB Migration 汇总（历史草案）
+
+> 历史注记：本节保留最初的 migration 草案作为设计来源。
+> 其中涉及 `tasks.execution_plan` 的部分已不应再视为当前主路径事实，应结合现有 task domain schema 与 migration 实际状态阅读。
 
 ### Phase 1
 
@@ -897,7 +915,7 @@ ALTER TABLE agent_runs ADD COLUMN candidate_index INTEGER;
 
 无表结构变更。Judge 结果存储在 `tasks.execution_plan` JSON 中（`judgeResult` 字段）。
 
-## 11. 实施顺序与依赖
+## 11. 实施顺序与依赖（历史排期草案）
 
 ```mermaid
 gantt
@@ -912,7 +930,7 @@ gantt
     集成测试                    :p1f, after p1e, 1d
 
     section Phase 2
-    ExecutionPlan 模型          :p2a, after p1f, 1d
+    RuntimePlan 模型            :p2a, after p1f, 1d
     DB Migration               :p2b, after p2a, 1d
     并行 Session 创建           :p2c, after p2b, 2d
     SSE 多 Session 聚合         :p2d, after p2c, 2d
@@ -930,6 +948,8 @@ gantt
 
 ## 12. 风险与缓解
 
+> 历史注记：这里列的是方案提出当时的风险清单，仍可作为背景参考，但不等于当前剩余风险全集。
+
 | 风险 | 影响 | 缓解措施 |
 | ---- | ---- | -------- |
 | 并行执行成本翻倍 | Token 消耗随 candidate 数线性增长 | 策略配置 `maxParallelCandidates` 上限；默认关闭 |
@@ -940,7 +960,7 @@ gantt
 | 模板库膨胀失控 | 系统管理员堆叠过多近似模板，用户难选 | 模板分级治理：标准模板、实验模板、废弃模板 |
 | Hook 决策不可解释 | 自动拒绝或改写 prompt 引发不透明感 | 持久化结构化 `decision`，在 TaskDetail 展示决策原因 |
 
-## 13. 验收标准
+## 13. 验收标准（历史阶段验收）
 
 ### Phase 1 验收
 

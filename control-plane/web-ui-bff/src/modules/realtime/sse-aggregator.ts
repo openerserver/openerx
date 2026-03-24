@@ -2,9 +2,9 @@ import { cpFetch, createInternalAuthorization } from "../../lib/control-plane-cl
 import { formatModelRoute, resolveModelRoute } from "../../lib/opencode-config";
 import {
   type ExecutionCandidate,
-  type ExecutionPlan,
   type ExecutionStep,
   type JudgeResult,
+  type RuntimePlan,
   mergeTaskStrategy,
   parseTaskStrategy,
   readOrchestrationStrategy,
@@ -28,10 +28,17 @@ import {
   recordModelUsage,
 } from "../agent-control/run-persistence";
 import { collectChangesFromSession } from "../code-changes/change-collector";
-import { executeLifecycleHooks, mergeStageAndStrategyHooks, parseStageHooks } from "../hooks/lifecycle-hooks";
+import {
+  executeLifecycleHooks,
+  mergeStageAndStrategyHooks,
+  parseStageHooks,
+} from "../hooks/lifecycle-hooks";
 import { finalizeTaskState } from "../tasks/finalize";
 import { persistTaskSessionMessageSnapshot } from "../tasks/task-session-compat";
-import { fetchCurrentStageHooks, persistWorkflowStageExecutionOutcome } from "../tasks/workflow-stage-execution";
+import {
+  fetchCurrentStageHooks,
+  persistWorkflowStageExecutionOutcome,
+} from "../tasks/workflow-stage-execution";
 import { observeGraphWorkspaceDir, onGraphToolExecuted } from "./dag-sync";
 import { buildPipelineStageUpdatedEvents } from "./pipeline-events";
 
@@ -55,6 +62,8 @@ interface CompletedTaskContext {
   prompt: string;
   projectId: string;
   sessionId?: string | null;
+  currentRunId?: string | null;
+  orchestrationKind?: string | null;
   repoName?: string | null;
   remoteUrl?: string | null;
   workingBranch?: string | null;
@@ -117,36 +126,6 @@ function formatChangeSummary(task: CompletedTaskContext): string {
     .join("\n");
 }
 
-function markParallelPlanTerminal(
-  plan: ExecutionPlan | undefined,
-  judgeResult: JudgeResult | undefined,
-): void {
-  if (!plan) {
-    return;
-  }
-
-  for (const step of plan.steps) {
-    if (step.type === "execution") {
-      step.status = "completed";
-      step.finishedAt = new Date().toISOString();
-      continue;
-    }
-
-    if (step.type !== "judge") {
-      continue;
-    }
-
-    step.status = judgeResult?.status === "failed" ? "failed" : "completed";
-    step.finishedAt = judgeResult?.completedAt || new Date().toISOString();
-    if (!judgeResult && !step.result) {
-      step.result = "Judge skipped; final candidate adoption remains a user action.";
-    }
-    if (judgeResult?.reasoning) {
-      step.result = judgeResult.reasoning;
-    }
-  }
-}
-
 class SSEAggregator {
   private connections = new Map<string, SSEConnection>();
   private handlers = new Set<EventHandler>();
@@ -172,9 +151,10 @@ class SSEAggregator {
   private sequentialChainTasks = new Map<
     string,
     {
-      plan: ExecutionPlan;
+      plan: RuntimePlan;
       authorization: string;
       projectId?: string;
+      projectionBacked?: boolean;
     }
   >();
   // Maps sessionId → { taskId, stepIndex } for chain step sessions
@@ -431,10 +411,15 @@ class SSEAggregator {
   registerSequentialChainTask(
     taskId: string,
     sessionId: string,
-    plan: ExecutionPlan,
+    plan: RuntimePlan,
     authorization: string,
+    options?: { projectionBacked?: boolean },
   ): void {
-    this.sequentialChainTasks.set(taskId, { plan, authorization });
+    this.sequentialChainTasks.set(taskId, {
+      plan,
+      authorization,
+      projectionBacked: options?.projectionBacked === true,
+    });
     const stepIndex = plan.currentChainStepIndex ?? 0;
     this.sessionToChainStepMap.set(sessionId, { taskId, stepIndex });
   }
@@ -687,7 +672,11 @@ class SSEAggregator {
 
     if (rawType === "message.part.updated") {
       if (partType === "tool") {
-        const terminal = partStatus === "completed" || partStatus === "failed" || partStatus === "error" || partStatus === "cancelled";
+        const terminal =
+          partStatus === "completed" ||
+          partStatus === "failed" ||
+          partStatus === "error" ||
+          partStatus === "cancelled";
         if (!terminal) {
           return;
         }
@@ -719,8 +708,7 @@ class SSEAggregator {
       return;
     }
 
-    const effectiveWorkspaceDirectory =
-      workspaceDirectory || this.readWorkspaceDirectory(parsed);
+    const effectiveWorkspaceDirectory = workspaceDirectory || this.readWorkspaceDirectory(parsed);
     if (effectiveWorkspaceDirectory) {
       observeGraphWorkspaceDir(effectiveWorkspaceDirectory);
     }
@@ -1103,6 +1091,7 @@ class SSEAggregator {
         event.taskId,
         authorization,
         run.lastPromptAt,
+        { includeLineage: false, bypassCircuitBreaker: true },
       );
 
       if (!assistantResult.completed) {
@@ -1921,43 +1910,7 @@ class SSEAggregator {
     result?: string;
     finishedAt?: string;
   }): Promise<void> {
-    const taskResult = await cpFetch<CompletedTaskContext & { executionPlan?: string }>(
-      `/api/project-tree/tasks/${encodeURIComponent(args.taskId)}`,
-      { authorization: args.authorization },
-    );
-    if (!taskResult.ok || !taskResult.data.executionPlan) {
-      return;
-    }
-
-    let plan: ExecutionPlan;
-    try {
-      plan = JSON.parse(taskResult.data.executionPlan) as ExecutionPlan;
-    } catch {
-      return;
-    }
-
-    if (plan.mode !== "parallel") {
-      return;
-    }
-
-    const candidate = plan.candidates[args.candidateIndex];
-    if (!candidate) {
-      return;
-    }
-
-    candidate.status = args.status;
-    if (args.result !== undefined) {
-      candidate.result = args.result;
-    }
-    candidate.finishedAt = args.finishedAt || new Date().toISOString();
-
-    await cpFetch(`/api/tasks/${encodeURIComponent(args.taskId)}`, {
-      method: "PATCH",
-      authorization: args.authorization,
-      body: {
-        executionPlan: JSON.stringify(plan),
-      },
-    });
+    void args;
   }
 
   /**
@@ -2116,6 +2069,7 @@ class SSEAggregator {
     taskId?: string,
     authorization?: string,
     minCompletedAt?: number,
+    options?: { includeLineage?: boolean; bypassCircuitBreaker?: boolean },
   ): Promise<{ text?: string; completed: boolean; tokenUsed: number }> {
     const deadline = Date.now() + timeoutMs;
     let fallbackText: string | undefined;
@@ -2124,7 +2078,16 @@ class SSEAggregator {
     while (Date.now() < deadline) {
       const messagesResult = await getSessionMessages(
         sessionId,
-        taskId ? { taskId, authorization } : undefined,
+        taskId
+          ? {
+              taskId,
+              authorization,
+              includeLineage: options?.includeLineage,
+              bypassCircuitBreaker: options?.bypassCircuitBreaker,
+            }
+          : options?.bypassCircuitBreaker
+            ? { bypassCircuitBreaker: true }
+            : undefined,
       );
       if (!messagesResult.ok || !Array.isArray(messagesResult.data)) {
         return { text: fallbackText, completed: false, tokenUsed: fallbackTokenUsed };
@@ -2212,12 +2175,6 @@ class SSEAggregator {
     plan.currentChainStepIndex = nextIndex;
 
     // Persist intermediate plan progress
-    await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
-      method: "PATCH",
-      authorization,
-      body: { executionPlan: JSON.stringify(plan) },
-    });
-
     // All steps done?
     if (nextIndex >= chainSteps.length) {
       void this.finalizeSequentialChainTask(taskId, projectId, authorization);
@@ -2239,14 +2196,24 @@ class SSEAggregator {
       { authorization },
     );
     if (!taskResult.ok) {
-      void this.finalizeSequentialChainTask(taskId, projectId, authorization, "Failed to fetch task for next chain step");
+      void this.finalizeSequentialChainTask(
+        taskId,
+        projectId,
+        authorization,
+        "Failed to fetch task for next chain step",
+      );
       return;
     }
 
     const task = taskResult.data;
 
     // Build prompt with completed step results injected
-    const stepPrompt = this.buildChainStepPrompt(task.prompt || "", nextStep, nextIndex, plan.steps);
+    const stepPrompt = this.buildChainStepPrompt(
+      task.prompt || "",
+      nextStep,
+      nextIndex,
+      plan.steps,
+    );
 
     // Resolve model override
     let resolvedModel: { providerId: string; modelId: string } | undefined;
@@ -2256,15 +2223,10 @@ class SSEAggregator {
       resolvedModel = parseModelString(task.selectedModel);
     }
 
-    const execResult = await createSession(
-      taskId,
-      task.projectId,
-      stepPrompt,
-      {
-        agent: undefined,
-        model: resolvedModel,
-      },
-    );
+    const execResult = await createSession(taskId, task.projectId, stepPrompt, {
+      agent: undefined,
+      model: resolvedModel,
+    });
 
     if (execResult.agentRunId) {
       await createAgentRunRecord({
@@ -2283,7 +2245,12 @@ class SSEAggregator {
 
     if (!execResult.ok || !execResult.sessionId) {
       nextStep.status = "failed";
-      void this.finalizeSequentialChainTask(taskId, projectId, authorization, execResult.error || "Failed to start next chain step");
+      void this.finalizeSequentialChainTask(
+        taskId,
+        projectId,
+        authorization,
+        execResult.error || "Failed to start next chain step",
+      );
       return;
     }
 
@@ -2299,12 +2266,6 @@ class SSEAggregator {
       status: "running",
       startedAt: new Date().toISOString(),
     };
-
-    await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
-      method: "PATCH",
-      authorization,
-      body: { executionPlan: JSON.stringify(plan) },
-    });
 
     this.emit({
       id: crypto.randomUUID(),
@@ -2366,7 +2327,6 @@ class SSEAggregator {
         authorization,
         body: {
           status,
-          executionPlan: JSON.stringify(plan),
           ...(chainResult ? { result: chainResult } : {}),
         },
       });
@@ -2399,7 +2359,11 @@ class SSEAggregator {
           console.error(`Post-execution hooks failed for chain task ${taskId}:`, err);
         });
       } else {
-        void this.triggerOnFailureHooks(taskId, failureError || "Chain execution failed", authorization);
+        void this.triggerOnFailureHooks(
+          taskId,
+          failureError || "Chain execution failed",
+          authorization,
+        );
       }
     } catch (error) {
       console.error(`Failed to finalize sequential chain task ${taskId}:`, error);
@@ -2458,8 +2422,7 @@ class SSEAggregator {
         ? Array.from(results.entries()).sort(([a], [b]) => a - b)
         : [];
 
-      // Fetch the task to get its execution plan
-      const taskResult = await cpFetch<CompletedTaskContext & { executionPlan?: string }>(
+      const taskResult = await cpFetch<CompletedTaskContext>(
         `/api/project-tree/tasks/${encodeURIComponent(taskId)}`,
         { authorization },
       );
@@ -2470,25 +2433,6 @@ class SSEAggregator {
       const paidExecutionGuard = taskStrategy.paidExecutionGuard as
         | PaidExecutionGuardState
         | undefined;
-      let plan: ExecutionPlan | undefined;
-      if (task.executionPlan) {
-        try {
-          plan = JSON.parse(task.executionPlan as string) as ExecutionPlan;
-        } catch {
-          /* ignore */
-        }
-      }
-
-      // Update each candidate's status in the execution plan
-      if (plan) {
-        for (const [idx, cr] of candidateResults) {
-          if (plan.candidates[idx]) {
-            plan.candidates[idx].status = "completed";
-            plan.candidates[idx].result = cr.result;
-            plan.candidates[idx].finishedAt = new Date().toISOString();
-          }
-        }
-      }
 
       // Try to run judge if configured
       const strategyConfig = readOrchestrationStrategy();
@@ -2554,19 +2498,13 @@ class SSEAggregator {
             });
           }
         }
-        if (plan && judgeResult) {
-          plan.judgeResult = judgeResult;
-        }
       }
-
-      markParallelPlanTerminal(plan, judgeResult);
 
       const patchResult = await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
         method: "PATCH",
         authorization,
         body: {
           status: "completed",
-          executionPlan: plan ? JSON.stringify(plan) : undefined,
           strategy: mergeTaskStrategy(task.strategy, {
             hookExecutions: judgeResult
               ? [
@@ -2601,7 +2539,7 @@ class SSEAggregator {
         data: {
           status: "completed",
           executionMode: "parallel",
-          awaitingUserAdoption: typeof plan?.winnerCandidateIndex !== "number",
+          awaitingUserAdoption: true,
           judgeRan: Boolean(judgeResult),
         },
       });

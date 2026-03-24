@@ -1,6 +1,8 @@
 /// <reference types="bun-types" />
 
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import * as orchestrationStrategyModule from "../../control-plane/web-ui-bff/src/lib/orchestration-strategy";
+import { createControlPlaneClientModuleMock } from "./control-plane-client-mock";
 
 const cpFetchMock = mock(async (..._args: unknown[]) => ({ ok: true, status: 200, data: {} }));
 const authHeaderMock = mock(() => "Bearer test-token");
@@ -20,23 +22,43 @@ const readOrchestrationStrategyMock = mock(() => ({
   hooks: [],
   templates: [],
   judge: { enabled: false },
+  organizationSettings: {
+    recommendedProfiles: [],
+  },
 }));
 const DEFAULT_EXECUTION_AGENT = "coder";
-const isDefaultExecutionAgentMock = mock((agentName?: string | null) => !agentName || agentName === "coder");
+const isDefaultExecutionAgentMock = mock(
+  (agentName?: string | null) => !agentName || agentName === "coder",
+);
 
-mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () => ({
-  authHeader: authHeaderMock,
-  cpFetch: cpFetchMock,
-  createInternalAuthorization: createInternalAuthorizationMock,
-}));
+async function parseJsonResponse(response: Response) {
+  const raw = await response.text();
+
+  try {
+    return JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    throw new Error(`Invalid JSON response body: ${raw || "<empty>"}`);
+  }
+}
+
+mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () =>
+  createControlPlaneClientModuleMock({
+    authHeader: authHeaderMock,
+    cpFetch: cpFetchMock,
+    createInternalAuthorization: createInternalAuthorizationMock,
+  }),
+);
 
 mock.module("../../control-plane/web-ui-bff/src/lib/opencode-config", () => ({
+  diagnoseModelReadiness: mock(async () => undefined),
   formatModelRoute: formatModelRouteMock,
   readDefaultExecutionModel: readDefaultExecutionModelMock,
   resolveModelRoute: resolveModelRouteMock,
+  validateModelProvider: mock(() => ({ valid: true })),
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/lib/orchestration-strategy", () => ({
+  ...orchestrationStrategyModule,
   DEFAULT_EXECUTION_AGENT,
   isDefaultExecutionAgent: isDefaultExecutionAgentMock,
   readOrchestrationStrategy: readOrchestrationStrategyMock,
@@ -72,6 +94,9 @@ beforeEach(() => {
     hooks: [],
     templates: [],
     judge: { enabled: false },
+    organizationSettings: {
+      recommendedProfiles: [],
+    },
   });
 
   cpFetchMock.mockImplementation(async (...args: unknown[]) => {
@@ -118,7 +143,7 @@ describe("project paid execution preflight route", () => {
     process.env.ALLOW_PAID_MODEL_EXECUTION = undefined;
 
     const { projectRoutes } = await import(
-      "../../control-plane/web-ui-bff/src/modules/projects/routes"
+      "../../control-plane/web-ui-bff/src/modules/projects/routes?project-paid-execution-preflight-default"
     );
 
     const response = await projectRoutes.request(
@@ -131,7 +156,8 @@ describe("project paid execution preflight route", () => {
     );
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({
+    const payload = await parseJsonResponse(response);
+    expect(payload).toMatchObject({
       projectId: "proj-default",
       defaultModel: "github-copilot:gpt-5.4",
       effectiveModel: "github-copilot:gpt-5.4",
@@ -193,7 +219,7 @@ describe("project paid execution preflight route", () => {
     });
 
     const { projectRoutes } = await import(
-      "../../control-plane/web-ui-bff/src/modules/projects/routes"
+      "../../control-plane/web-ui-bff/src/modules/projects/routes?project-paid-execution-preflight-override"
     );
 
     const response = await projectRoutes.request(
@@ -206,7 +232,8 @@ describe("project paid execution preflight route", () => {
     );
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({
+    const payload = await parseJsonResponse(response);
+    expect(payload).toMatchObject({
       requirements: {
         allowPaidExecution: true,
         hasAllowPaidExecution: true,
@@ -264,7 +291,7 @@ describe("project paid execution preflight route", () => {
     }));
 
     const { projectRoutes } = await import(
-      "../../control-plane/web-ui-bff/src/modules/projects/routes"
+      "../../control-plane/web-ui-bff/src/modules/projects/routes?project-paid-execution-preflight-direct-provider"
     );
 
     const response = await projectRoutes.request(
@@ -277,7 +304,8 @@ describe("project paid execution preflight route", () => {
     );
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({
+    const payload = await parseJsonResponse(response);
+    expect(payload).toMatchObject({
       defaultModel: "anthropic/claude-sonnet-4-20250514",
       effectiveModel: "anthropic/claude-sonnet-4-20250514",
       preflight: {

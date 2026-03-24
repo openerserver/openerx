@@ -1,5 +1,7 @@
 import { sql } from "drizzle-orm";
 import {
+  type AnyPgColumn,
+  bigint,
   boolean,
   doublePrecision,
   index,
@@ -67,6 +69,60 @@ export type RuntimeUsageBaselineMatchScope =
   | "project+provider+model"
   | "project+entrypoint"
   | "project";
+export type TaskDomainStatus =
+  | "pending"
+  | "running"
+  | "paused"
+  | "completed"
+  | "failed"
+  | "cancelled";
+export type TaskOrchestrationKind = "single" | "parallel" | "sequential-chain";
+export type TaskRunTriggerType =
+  | "user_execute"
+  | "resume"
+  | "reconcile"
+  | "workflow_spawn"
+  | "system_retry";
+export type TaskRunNodeKind =
+  | "execution"
+  | "candidate"
+  | "judge"
+  | "chain-step"
+  | "hook"
+  | "resume";
+export type TaskRunEdgeKind = "depends_on" | "spawned_from" | "judges" | "resumes_from";
+export type ConversationSessionKind =
+  | "task-root"
+  | "parallel-candidate"
+  | "parallel-judge"
+  | "sequential-step"
+  | "resume"
+  | "manual-branch";
+export type ConversationMessageRole = "user" | "assistant" | "system" | "tool";
+export type ConversationMessagePartType =
+  | "text"
+  | "tool_call"
+  | "tool_result"
+  | "thinking"
+  | "file_reference"
+  | "diff";
+export type TaskTimelineItemKind =
+  | "user-input"
+  | "assistant-output"
+  | "tool-call"
+  | "tool-output"
+  | "thinking"
+  | "file-reference"
+  | "diff"
+  | "system-event"
+  | "session-activate"
+  | "session-branch"
+  | "session-archive"
+  | "candidate-result"
+  | "judge-decision"
+  | "chain-step-result"
+  | "run-node"
+  | "status-transition";
 
 // ── Organizations ──────────────────────────────────────────────────
 
@@ -109,6 +165,8 @@ export const projectTreeNodes = pgTable(
     role: text("role"),
     contentText: text("content_text"),
     contentJson: jsonb("content_json").$type<Record<string, unknown>>(),
+    refType: text("ref_type"),
+    refId: text("ref_id"),
     tokenCount: integer("token_count"),
     runtimeSessionId: text("runtime_session_id"),
     runtimeMessageId: text("runtime_message_id"),
@@ -124,6 +182,7 @@ export const projectTreeNodes = pgTable(
     index("idx_ptn_project_id").on(table.projectId),
     index("idx_ptn_parent_id").on(table.parentId),
     index("idx_ptn_node_type").on(table.projectId, table.nodeType),
+    index("idx_ptn_ref_type_ref_id").on(table.refType, table.refId),
   ],
 );
 
@@ -184,11 +243,7 @@ export const projectTreeLinks = pgTable(
     createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   },
   (table) => [
-    uniqueIndex("idx_ptl_unique_edge").on(
-      table.sourceNodeId,
-      table.targetNodeId,
-      table.linkType,
-    ),
+    uniqueIndex("idx_ptl_unique_edge").on(table.sourceNodeId, table.targetNodeId, table.linkType),
     index("idx_ptl_source").on(table.sourceNodeId),
     index("idx_ptl_target").on(table.targetNodeId),
     index("idx_ptl_source_project").on(table.sourceProjectId, table.linkType),
@@ -280,6 +335,8 @@ export const runtimeUsageLedgers = pgTable(
       .references(() => projects.id),
     taskId: text("task_id").references(() => projectTreeNodes.id),
     agentRunId: text("agent_run_id").references(() => agentRuns.id),
+    runId: text("run_id").references(() => taskRuns.id),
+    runNodeId: text("run_node_id").references(() => taskRunNodes.id),
     runtimeSessionId: text("runtime_session_id").notNull(),
     executionSource: text("execution_source").notNull(),
     entrypointType: text("entrypoint_type").notNull(),
@@ -306,6 +363,8 @@ export const runtimeUsageLedgers = pgTable(
     uniqueIndex("idx_runtime_usage_ledgers_runtime_session").on(table.runtimeSessionId),
     index("idx_runtime_usage_ledgers_project_time").on(table.projectId, table.createdAt),
     index("idx_runtime_usage_ledgers_agent_run").on(table.agentRunId),
+    index("idx_runtime_usage_ledgers_run_id").on(table.runId),
+    index("idx_runtime_usage_ledgers_run_node_id").on(table.runNodeId),
   ],
 );
 
@@ -321,6 +380,8 @@ export const runtimeUsageLedgerSteps = pgTable(
       .references(() => projects.id),
     taskId: text("task_id").references(() => projectTreeNodes.id),
     agentRunId: text("agent_run_id").references(() => agentRuns.id),
+    runId: text("run_id").references(() => taskRuns.id),
+    runNodeId: text("run_node_id").references(() => taskRunNodes.id),
     runtimeSessionId: text("runtime_session_id"),
     stepType: text("step_type").notNull(),
     triggerType: text("trigger_type"),
@@ -343,6 +404,8 @@ export const runtimeUsageLedgerSteps = pgTable(
   (table) => [
     index("idx_runtime_usage_ledger_steps_ledger_request").on(table.ledgerId, table.requestIndex),
     index("idx_runtime_usage_ledger_steps_project_time").on(table.projectId, table.createdAt),
+    index("idx_runtime_usage_ledger_steps_run_id").on(table.runId),
+    index("idx_runtime_usage_ledger_steps_run_node_id").on(table.runNodeId),
     index("idx_runtime_usage_ledger_steps_task_type").on(
       table.taskId,
       table.stepType,
@@ -453,6 +516,90 @@ export const repositoryCredentials = pgTable("repository_credentials", {
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
+// ── Task Domain Core ───────────────────────────────────────────────
+
+export const tasks = pgTable(
+  "tasks",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    treeNodeId: text("tree_node_id").references(() => projectTreeNodes.id),
+    createdByUserId: text("created_by_user_id").references(() => users.id),
+    title: text("title").notNull(),
+    prompt: text("prompt").notNull(),
+    status: text("status").$type<TaskDomainStatus>().notNull().default("pending"),
+    category: text("category"),
+    currentRunId: text("current_run_id"),
+    currentSessionId: text("current_session_id"),
+    currentAgentRunId: text("current_agent_run_id"),
+    latestResult: text("latest_result"),
+    latestResultSummary: text("latest_result_summary"),
+    selectedModel: text("selected_model"),
+    repoId: text("repo_id").references(() => repositories.id),
+    workspaceRoot: text("workspace_root"),
+    baseRevision: text("base_revision"),
+    workingBranch: text("working_branch"),
+    credentialId: text("credential_id").references(() => repositoryCredentials.id),
+    gitAuthorName: text("git_author_name"),
+    gitAuthorEmail: text("git_author_email"),
+    gitCommitterName: text("git_committer_name"),
+    gitCommitterEmail: text("git_committer_email"),
+    strategyJson: jsonb("strategy_json").$type<Record<string, unknown>>(),
+    finalCommitSha: text("final_commit_sha"),
+    finalBranchName: text("final_branch_name"),
+    changesSummaryJson: jsonb("changes_summary_json").$type<Record<string, unknown>>(),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    startedAt: text("started_at"),
+    finishedAt: text("finished_at"),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex("idx_tasks_tree_node_id").on(table.treeNodeId),
+    index("idx_tasks_project_created_at").on(table.projectId, table.createdAt),
+    index("idx_tasks_project_status_created_at").on(table.projectId, table.status, table.createdAt),
+    index("idx_tasks_current_run_id").on(table.currentRunId),
+    index("idx_tasks_current_session_id").on(table.currentSessionId),
+  ],
+);
+
+export const taskRuns = pgTable(
+  "task_runs",
+  {
+    id: text("id").primaryKey(),
+    taskId: text("task_id")
+      .notNull()
+      .references(() => tasks.id),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    orchestrationKind: text("orchestration_kind").$type<TaskOrchestrationKind>().notNull(),
+    triggerType: text("trigger_type").$type<TaskRunTriggerType>().notNull(),
+    sourceType: text("source_type"),
+    status: text("status").$type<TaskDomainStatus>().notNull().default("pending"),
+    rootSessionId: text("root_session_id"),
+    winnerNodeId: text("winner_node_id"),
+    judgeNodeId: text("judge_node_id"),
+    requestedModel: text("requested_model"),
+    effectiveModel: text("effective_model"),
+    pipelineStepCount: integer("pipeline_step_count"),
+    candidateCount: integer("candidate_count"),
+    resultText: text("result_text"),
+    resultSummary: text("result_summary"),
+    errorText: text("error_text"),
+    startedAt: text("started_at"),
+    finishedAt: text("finished_at"),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    index("idx_task_runs_task_created_at").on(table.taskId, table.createdAt),
+    index("idx_task_runs_project_created_at").on(table.projectId, table.createdAt),
+    index("idx_task_runs_status_created_at").on(table.status, table.createdAt),
+  ],
+);
+
 // ── Policy Templates ───────────────────────────────────────────────
 
 export const policyTemplates = pgTable("policy_templates", {
@@ -531,27 +678,297 @@ export const approvalTickets = pgTable("approval_tickets", {
 
 // ── Agent Runs (individual agent execution records) ────────────────
 
-export const agentRuns = pgTable("agent_runs", {
-  id: text("id").primaryKey(),
-  taskId: text("task_id")
-    .notNull()
-    .references(() => projectTreeNodes.id),
-  sessionId: text("session_id"),
-  agentType: text("agent_type").notNull(),
-  status: text("status", {
-    enum: ["pending", "running", "paused", "completed", "failed", "stopped", "terminated"],
-  })
-    .notNull()
-    .default("pending"),
-  modelUsed: text("model_used"),
-  tokenUsed: integer("token_used").notNull().default(0),
-  result: text("result"),
-  error: text("error"),
-  candidateIndex: integer("candidate_index"),
-  startedAt: text("started_at"),
-  finishedAt: text("finished_at"),
-  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-});
+export const agentRuns = pgTable(
+  "agent_runs",
+  {
+    id: text("id").primaryKey(),
+    taskId: text("task_id")
+      .notNull()
+      .references(() => projectTreeNodes.id),
+    sessionId: text("session_id"),
+    runId: text("run_id").references(() => taskRuns.id),
+    runNodeId: text("run_node_id").references((): AnyPgColumn => taskRunNodes.id),
+    agentType: text("agent_type").notNull(),
+    status: text("status", {
+      enum: ["pending", "running", "paused", "completed", "failed", "stopped", "terminated"],
+    })
+      .notNull()
+      .default("pending"),
+    modelUsed: text("model_used"),
+    tokenUsed: integer("token_used").notNull().default(0),
+    result: text("result"),
+    error: text("error"),
+    candidateIndex: integer("candidate_index"),
+    startedAt: text("started_at"),
+    finishedAt: text("finished_at"),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    index("idx_agent_runs_run_id").on(table.runId),
+    index("idx_agent_runs_run_node_id").on(table.runNodeId),
+  ],
+);
+
+export const taskRunNodes = pgTable(
+  "task_run_nodes",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id")
+      .notNull()
+      .references(() => taskRuns.id),
+    taskId: text("task_id")
+      .notNull()
+      .references(() => tasks.id),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    nodeKind: text("node_kind").$type<TaskRunNodeKind>().notNull(),
+    nodeKey: text("node_key").notNull(),
+    title: text("title"),
+    instruction: text("instruction"),
+    candidateIndex: integer("candidate_index"),
+    chainStepIndex: integer("chain_step_index"),
+    hookTrigger: text("hook_trigger"),
+    agentType: text("agent_type"),
+    modelUsed: text("model_used"),
+    sessionId: text("session_id"),
+    agentRunId: text("agent_run_id").references((): AnyPgColumn => agentRuns.id),
+    status: text("status").$type<TaskDomainStatus>().notNull().default("pending"),
+    resultText: text("result_text"),
+    resultSummary: text("result_summary"),
+    errorText: text("error_text"),
+    tokenUsed: integer("token_used"),
+    startedAt: text("started_at"),
+    finishedAt: text("finished_at"),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex("idx_task_run_nodes_run_node_key").on(table.runId, table.nodeKey),
+    index("idx_task_run_nodes_run_created_at").on(table.runId, table.createdAt),
+    index("idx_task_run_nodes_task_created_at").on(table.taskId, table.createdAt),
+    index("idx_task_run_nodes_session_id").on(table.sessionId),
+    index("idx_task_run_nodes_agent_run_id").on(table.agentRunId),
+    index("idx_task_run_nodes_run_candidate_index").on(table.runId, table.candidateIndex),
+    index("idx_task_run_nodes_run_chain_step_index").on(table.runId, table.chainStepIndex),
+  ],
+);
+
+export const taskRunEdges = pgTable(
+  "task_run_edges",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id")
+      .notNull()
+      .references(() => taskRuns.id),
+    taskId: text("task_id")
+      .notNull()
+      .references(() => tasks.id),
+    fromNodeId: text("from_node_id")
+      .notNull()
+      .references(() => taskRunNodes.id),
+    toNodeId: text("to_node_id")
+      .notNull()
+      .references(() => taskRunNodes.id),
+    edgeKind: text("edge_kind").$type<TaskRunEdgeKind>().notNull(),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex("idx_task_run_edges_unique").on(
+      table.runId,
+      table.fromNodeId,
+      table.toNodeId,
+      table.edgeKind,
+    ),
+    index("idx_task_run_edges_run_id").on(table.runId),
+  ],
+);
+
+export const conversationSessions = pgTable(
+  "conversation_sessions",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    taskId: text("task_id").references(() => tasks.id),
+    runId: text("run_id").references(() => taskRuns.id),
+    runNodeId: text("run_node_id").references(() => taskRunNodes.id),
+    parentSessionId: text("parent_session_id"),
+    rootSessionId: text("root_session_id"),
+    forkedFromMessageId: text("forked_from_message_id"),
+    sessionKind: text("session_kind").$type<ConversationSessionKind>().notNull(),
+    sourceType: text("source_type").notNull(),
+    branchName: text("branch_name"),
+    isActive: boolean("is_active").notNull().default(true),
+    runtimeSessionId: text("runtime_session_id"),
+    treeNodeId: text("tree_node_id").references(() => projectTreeNodes.id),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    archivedAt: text("archived_at"),
+  },
+  (table) => [
+    uniqueIndex("idx_conversation_sessions_runtime_session_id").on(table.runtimeSessionId),
+    uniqueIndex("idx_conversation_sessions_tree_node_id").on(table.treeNodeId),
+    index("idx_conversation_sessions_task_created_at").on(table.taskId, table.createdAt),
+    index("idx_conversation_sessions_run_created_at").on(table.runId, table.createdAt),
+    index("idx_conversation_sessions_parent_session_id").on(table.parentSessionId),
+    index("idx_conversation_sessions_root_session_id").on(table.rootSessionId),
+  ],
+);
+
+export const conversationMessages = pgTable(
+  "conversation_messages",
+  {
+    id: text("id").primaryKey(),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => conversationSessions.id),
+    taskId: text("task_id").references(() => tasks.id),
+    runId: text("run_id").references(() => taskRuns.id),
+    runNodeId: text("run_node_id").references(() => taskRunNodes.id),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    runtimeMessageId: text("runtime_message_id"),
+    role: text("role").$type<ConversationMessageRole>().notNull(),
+    messageIndex: integer("message_index").notNull(),
+    textContent: text("text_content"),
+    summaryText: text("summary_text"),
+    rawPayload: jsonb("raw_payload").$type<Record<string, unknown>>(),
+    tokenUsed: integer("token_used"),
+    startedAt: text("started_at"),
+    completedAt: text("completed_at"),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex("idx_conversation_messages_session_message_index").on(
+      table.sessionId,
+      table.messageIndex,
+    ),
+    uniqueIndex("idx_conversation_messages_session_runtime_message_id").on(
+      table.sessionId,
+      table.runtimeMessageId,
+    ),
+    index("idx_conversation_messages_task_created_at").on(table.taskId, table.createdAt),
+    index("idx_conversation_messages_run_created_at").on(table.runId, table.createdAt),
+    index("idx_conversation_messages_session_created_at").on(table.sessionId, table.createdAt),
+  ],
+);
+
+export const conversationMessageParts = pgTable(
+  "conversation_message_parts",
+  {
+    id: text("id").primaryKey(),
+    messageId: text("message_id")
+      .notNull()
+      .references(() => conversationMessages.id),
+    partIndex: integer("part_index").notNull(),
+    partType: text("part_type").$type<ConversationMessagePartType>().notNull(),
+    textContent: text("text_content"),
+    jsonPayload: jsonb("json_payload").$type<Record<string, unknown>>(),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex("idx_conversation_message_parts_message_part_index").on(
+      table.messageId,
+      table.partIndex,
+    ),
+    index("idx_conversation_message_parts_message_id").on(table.messageId),
+  ],
+);
+
+export const taskDomainEvents = pgTable(
+  "task_domain_events",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    taskId: text("task_id").references(() => tasks.id),
+    runId: text("run_id").references(() => taskRuns.id),
+    runNodeId: text("run_node_id").references(() => taskRunNodes.id),
+    sessionId: text("session_id").references(() => conversationSessions.id),
+    eventType: text("event_type").notNull(),
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+    seq: bigint("seq", { mode: "number" }).notNull(),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex("idx_task_domain_events_task_seq").on(table.taskId, table.seq),
+    index("idx_task_domain_events_run_created_at").on(table.runId, table.createdAt),
+    index("idx_task_domain_events_session_created_at").on(table.sessionId, table.createdAt),
+  ],
+);
+
+export const taskSnapshots = pgTable(
+  "task_snapshots",
+  {
+    taskId: text("task_id")
+      .primaryKey()
+      .references(() => tasks.id),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    currentStatus: text("current_status").$type<TaskDomainStatus>().notNull(),
+    orchestrationKind: text("orchestration_kind").$type<TaskOrchestrationKind>(),
+    currentRunId: text("current_run_id"),
+    currentSessionId: text("current_session_id"),
+    latestResult: text("latest_result"),
+    latestResultSummary: text("latest_result_summary"),
+    latestErrorText: text("latest_error_text"),
+    activeCandidateCount: integer("active_candidate_count").notNull().default(0),
+    completedCandidateCount: integer("completed_candidate_count").notNull().default(0),
+    failedCandidateCount: integer("failed_candidate_count").notNull().default(0),
+    totalChainSteps: integer("total_chain_steps").notNull().default(0),
+    completedChainSteps: integer("completed_chain_steps").notNull().default(0),
+    winnerNodeId: text("winner_node_id"),
+    lastActivityAt: text("last_activity_at"),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    index("idx_task_snapshots_project_status_last_activity").on(
+      table.projectId,
+      table.currentStatus,
+      table.lastActivityAt,
+    ),
+    index("idx_task_snapshots_project_updated_at").on(table.projectId, table.updatedAt),
+  ],
+);
+
+export const taskTimelineViews = pgTable(
+  "task_timeline_views",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    taskId: text("task_id")
+      .notNull()
+      .references(() => tasks.id),
+    runId: text("run_id").references(() => taskRuns.id),
+    runNodeId: text("run_node_id").references(() => taskRunNodes.id),
+    sessionId: text("session_id").references(() => conversationSessions.id),
+    messageId: text("message_id").references(() => conversationMessages.id),
+    itemKind: text("item_kind").$type<TaskTimelineItemKind>().notNull(),
+    itemRole: text("item_role"),
+    title: text("title"),
+    displayText: text("display_text"),
+    metadataJson: jsonb("metadata_json").$type<Record<string, unknown>>(),
+    sortAt: text("sort_at").notNull(),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    index("idx_task_timeline_views_task_sort_at").on(table.taskId, table.sortAt, table.createdAt),
+    index("idx_task_timeline_views_run_sort_at").on(table.runId, table.sortAt, table.createdAt),
+    index("idx_task_timeline_views_session_sort_at").on(
+      table.sessionId,
+      table.sortAt,
+      table.createdAt,
+    ),
+  ],
+);
 
 // ── Code Changes ───────────────────────────────────────────────────
 

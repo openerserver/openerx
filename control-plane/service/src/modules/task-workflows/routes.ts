@@ -37,6 +37,57 @@ function getTaskId(c: { req: { param: (name: string) => string } }) {
   return c.req.param("taskId") ?? "";
 }
 
+function buildAdvancedStageRunUpdates(args: {
+  body: z.infer<typeof advanceWorkflowSchema>;
+  currentStageRun: typeof taskStageRuns.$inferSelect;
+  now: string;
+}) {
+  return {
+    status: args.body.status,
+    blockingReason: args.body.blockingReason ?? null,
+    approvalState: args.body.approvalState ?? args.currentStageRun.approvalState,
+    artifactsSummaryJson:
+      args.body.artifactsSummaryJson !== undefined
+        ? args.body.artifactsSummaryJson
+        : args.currentStageRun.artifactsSummaryJson,
+    finishedAt: args.body.status === "completed" ? args.now : args.currentStageRun.finishedAt,
+    updatedAt: args.now,
+  };
+}
+
+async function advanceNextStageRun(args: {
+  workflowRunId: string;
+  toStage?: string;
+  now: string;
+}) {
+  if (!args.toStage) {
+    return;
+  }
+
+  const nextStageRun = await db.query.taskStageRuns.findFirst({
+    where: and(
+      eq(taskStageRuns.workflowRunId, args.workflowRunId),
+      eq(taskStageRuns.stageKey, args.toStage),
+    ),
+  });
+  if (!nextStageRun) {
+    return;
+  }
+
+  await db
+    .update(taskStageRuns)
+    .set({ status: "running", startedAt: nextStageRun.startedAt ?? args.now, updatedAt: args.now })
+    .where(eq(taskStageRuns.id, nextStageRun.id));
+}
+
+function resolveNextWorkflowStatus(body: z.infer<typeof advanceWorkflowSchema>) {
+  if (!body.toStage) {
+    return body.status;
+  }
+
+  return body.status === "completed" ? "running" : body.status;
+}
+
 taskWorkflowRoutes.get("/", async (c) => {
   const taskId = getTaskId(c);
   const task = await ensureLegacyRoleWorkflowMigrated(taskId);
@@ -129,46 +180,17 @@ taskWorkflowRoutes.post("/advance", zValidator("json", advanceWorkflowSchema), a
   if (currentStageRun) {
     await db
       .update(taskStageRuns)
-      .set({
-        status: body.status,
-        blockingReason: body.blockingReason ?? null,
-        approvalState: body.approvalState ?? currentStageRun.approvalState,
-        artifactsSummaryJson:
-          body.artifactsSummaryJson !== undefined
-            ? body.artifactsSummaryJson
-            : currentStageRun.artifactsSummaryJson,
-        finishedAt: body.status === "completed" ? now : currentStageRun.finishedAt,
-        updatedAt: now,
-      })
+      .set(buildAdvancedStageRunUpdates({ body, currentStageRun, now }))
       .where(eq(taskStageRuns.id, currentStageRun.id));
   }
 
-  if (body.toStage) {
-    const nextStageRun = await db.query.taskStageRuns.findFirst({
-      where: and(
-        eq(taskStageRuns.workflowRunId, workflowRun.id),
-        eq(taskStageRuns.stageKey, body.toStage),
-      ),
-    });
-    if (nextStageRun) {
-      await db
-        .update(taskStageRuns)
-        .set({ status: "running", startedAt: nextStageRun.startedAt ?? now, updatedAt: now })
-        .where(eq(taskStageRuns.id, nextStageRun.id));
-    }
-  }
-
-  const nextWorkflowStatus = body.toStage
-    ? body.status === "completed"
-      ? "running"
-      : body.status
-    : body.status;
+  await advanceNextStageRun({ workflowRunId: workflowRun.id, toStage: body.toStage, now });
 
   await db
     .update(taskWorkflowRuns)
     .set({
       currentStage: body.toStage ?? body.fromStage,
-      status: nextWorkflowStatus,
+      status: resolveNextWorkflowStatus(body),
       updatedAt: now,
     })
     .where(eq(taskWorkflowRuns.id, workflowRun.id));

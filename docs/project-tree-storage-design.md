@@ -37,7 +37,7 @@
 - [x] `project_task_relations` 已完成代码侧收尾：独立 drop migration 已存在，活引用/teardown 已清理；环境发布仅需按既有 migration 正常执行。
 - [x] 下线 `task_sessions` 兼容 lineage 存储，并完成离线输入链、测试 teardown、历史断言、migration 文案与独立删表迁移 `0011_drop_task_sessions.sql` 的收口。
 - [ ] 落地 `pg_trgm` 与基于 `project_tree_events` 的搜索 / 增量推送能力。
-- [x] 完成“无旧任务域表”前提下的完整回归验证：`db:migrate:pg`、干净目标库 SQLite 快照迁移链、`role-workflow-storage`、`TaskDetail.test.ts`、`TaskConversationTrace.test.ts`、`MultiTaskMonitor.test.ts`、全量 `test:ui` 与 Playwright `test:e2e:chat-settings` 已全部通过。
+- [x] 完成“无旧任务域表”前提下的完整回归验证：`db:migrate:pg`、干净目标库 SQLite 快照迁移链、`role-workflow-storage`、`bun run test:ui:file -- tests/web-ui/TaskDetail.test.ts`、`bun run test:ui:file -- tests/web-ui/TaskConversationTrace.test.ts`、`bun run test:ui:file -- tests/web-ui/MultiTaskMonitor.test.ts`、全量 `test:ui` 与 Playwright `test:e2e:chat-settings` 已全部通过。
 
 #### 下一批次
 
@@ -51,7 +51,7 @@
 1. 运行时主路径已经切到项目树模型，`/api/tasks` 兼容面已收敛到写入与子资源路由，list/detail GET 已删除。
 2. `tasks`、`sessions`、`task_sessions` 已全部退出运行时事实面，并已分别通过 `0010_drop_tasks_and_sessions.sql` 与 `0011_drop_task_sessions.sql` 完成物理删表落地。
 3. `db:migrate:pg` 已在真实本地 PostgreSQL 环境执行通过；更宽的 service regression 未发现对 `task_sessions` 旧表的隐藏依赖。
-4. 旧任务域删表的 repo 侧代码收尾已完成；此前独立阻塞的 `TaskConversationTrace.test.ts`、`MultiTaskMonitor.test.ts`、全量 `test:ui` 与 Playwright Chat Settings 导航问题均已修复并验证通过。环境发布阶段只需继续执行既有 `db:migrate:pg`。
+4. 旧任务域删表的 repo 侧代码收尾已完成；此前独立阻塞的 `bun run test:ui:file -- tests/web-ui/TaskConversationTrace.test.ts`、`bun run test:ui:file -- tests/web-ui/MultiTaskMonitor.test.ts`、全量 `test:ui` 与 Playwright Chat Settings 导航问题均已修复并验证通过。环境发布阶段只需继续执行既有 `db:migrate:pg`。
 
 ### 0.4 `task_sessions` 物理删表结果（2026-03-21）
 
@@ -841,7 +841,7 @@ await db.insert(projectTreeNodes).values({
 1. 已运行 `db:migrate:pg`，确认 `0011_drop_task_sessions.sql` 在真实本地 PostgreSQL 环境可落地。
 2. 已在干净目标库 `openerx_sqlite_recheck_20260321` 上执行 `db:migrate:sqlite-snapshot` 并完成校验；产物位于 `tmp/sqlite-pg-migration/run-2026-03-21T08-51-09.715Z/`。
 3. 更宽 service regression 已覆盖 task tree、workflow lazy migration、runtime usage ledger、session lineage/tree 相关主路径，未发现 `task_sessions` 隐藏依赖；`role-workflow-storage.test.ts` 已切到 tree-first detail 读面后恢复通过。
-4. targeted 前端/UI regression 已补齐 `TaskDetail.test.ts`、`TaskConversationTrace.test.ts`、`MultiTaskMonitor.test.ts` 与现有 Chat Settings Vitest 用例；Playwright `test:e2e:chat-settings` 已修复登录后侧边栏菜单重挂载导致的点击超时并重新通过；随后补跑的全量 `test:ui` 也已全部通过，确认当前 tree-first / legacy task table 退场没有残留独立 UI 回归。
+4. targeted 前端/UI regression 已补齐 `bun run test:ui:file -- tests/web-ui/TaskDetail.test.ts`、`bun run test:ui:file -- tests/web-ui/TaskConversationTrace.test.ts`、`bun run test:ui:file -- tests/web-ui/MultiTaskMonitor.test.ts` 与现有 Chat Settings Vitest 用例；Playwright `test:e2e:chat-settings` 已修复登录后侧边栏菜单重挂载导致的点击超时并重新通过；随后补跑的全量 `test:ui` 也已全部通过，确认当前 tree-first / legacy task table 退场没有残留独立 UI 回归。
 
 ### 8.5 保留表结构但清空历史记录
 

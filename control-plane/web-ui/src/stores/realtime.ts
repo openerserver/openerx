@@ -1,8 +1,5 @@
 import { defineStore } from "pinia";
-import {
-  getProjectTreeEvents,
-  type ProjectTreeEventFeedItemRecord,
-} from "../lib/api";
+import { type ProjectTreeEventFeedItemRecord, getProjectTreeEvents } from "../lib/api";
 
 export interface RealtimeEvent {
   id: string;
@@ -72,14 +69,9 @@ function buildRealtimeDataFromProjectFeed(
 ) {
   const message = asRecord(payload.message);
   const info = asRecord(message?.info);
-  const text =
-    asString(payload.text) ??
-    asString(payload.contentText) ??
-    readMessageText(message);
+  const text = asString(payload.text) ?? asString(payload.contentText) ?? readMessageText(message);
   const messageId =
-    asString(payload.messageId) ??
-    asString(payload.runtimeMessageId) ??
-    asString(info?.id);
+    asString(payload.messageId) ?? asString(payload.runtimeMessageId) ?? asString(info?.id);
   const role = asString(payload.role) ?? asString(info?.role);
   const agent = asString(payload.agent) ?? asString(info?.agent);
   const completedAt = asString(payload.completedAt) ?? asString(asRecord(info?.time)?.completed);
@@ -124,7 +116,8 @@ function normalizeProjectFeedEvent(item: ProjectTreeEventFeedItemRecord): Realti
     ts: item.createdAt,
     projectId: item.projectId,
     taskId: item.taskId ?? asString(payload.taskId),
-    sessionId: item.runtimeSessionId ?? asString(payload.runtimeSessionId) ?? asString(payload.sessionId),
+    sessionId:
+      item.runtimeSessionId ?? asString(payload.runtimeSessionId) ?? asString(payload.sessionId),
     agentRunId: asString(payload.agentRunId),
     data: buildRealtimeDataFromProjectFeed(item.eventType, payload, item.createdAt),
   };
@@ -376,11 +369,7 @@ export const useRealtimeStore = defineStore("realtime", {
     },
 
     async backfillProject(projectId: string) {
-      if (
-        !projectId ||
-        !this.authToken ||
-        this.backfillingProjectIds.includes(projectId)
-      ) {
+      if (!projectId || !this.authToken || this.backfillingProjectIds.includes(projectId)) {
         return;
       }
 

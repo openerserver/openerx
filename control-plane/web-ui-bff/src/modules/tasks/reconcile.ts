@@ -1,5 +1,4 @@
 import { cpFetch, createInternalAuthorization } from "../../lib/control-plane-client";
-import type { ExecutionPlan } from "../../lib/orchestration-strategy";
 import {
   extractAssistantResultFromMessages,
   getAgentRun,
@@ -9,10 +8,9 @@ import {
 } from "../agent-control/opencode-adapter";
 import { finalizeTaskState } from "./finalize";
 import {
-  type ParallelExecutionPlanRecord,
-  upsertParallelRunHistory,
-} from "./parallel-run-history";
-import { fetchTaskSessionLineageRecords, upsertTaskSessionLineageRecord } from "./task-session-compat";
+  fetchTaskSessionLineageRecords,
+  upsertTaskSessionLineageRecord,
+} from "./task-session-compat";
 import { persistWorkflowStageExecutionOutcome } from "./workflow-stage-execution";
 
 interface RunningTaskRecord {
@@ -20,14 +18,36 @@ interface RunningTaskRecord {
   projectId: string;
   title: string;
   status: string;
+  orchestrationKind?: string | null;
+  currentRunId?: string | null;
   sessionId?: string | null;
   agentRunId?: string | null;
   result?: string | null;
   createdAt?: string | null;
   startedAt?: string | null;
   finishedAt?: string | null;
-  executionPlan?: string | null;
-  parallelRunHistory?: string | null;
+}
+
+interface TaskDomainRunNodeRecord {
+  candidateIndex?: number | null;
+  sessionId?: string | null;
+  status: string;
+  resultText?: string | null;
+  errorText?: string | null;
+}
+
+interface TaskDomainRunDetailRecord {
+  candidateNodes: TaskDomainRunNodeRecord[];
+}
+
+interface TaskProjectionSnapshotRecord {
+  taskId: string;
+  currentStatus: string;
+  orchestrationKind?: string | null;
+  currentRunId?: string | null;
+  currentSessionId?: string | null;
+  latestResult?: string | null;
+  lastActivityAt?: string | null;
 }
 
 interface SessionListEntry {
@@ -131,7 +151,10 @@ async function markTaskCompleted(
     resultText,
     source: "assistant-output",
   }).catch((error) => {
-    console.error(`Failed to persist workflow stage outcome during reconcile for task ${task.id}:`, error);
+    console.error(
+      `Failed to persist workflow stage outcome during reconcile for task ${task.id}:`,
+      error,
+    );
   });
 
   return true;
@@ -149,29 +172,75 @@ function emptyReconcileSummary(runtimeAvailable = false): RunningTaskReconcileSu
 }
 
 async function loadRunningTasks(authorization: string) {
-  const runningTasksResult = await cpFetch<{ data?: RunningTaskRecord[] }>(
-    `/api/project-tree/tasks?status=running&limit=${DEFAULT_RUNNING_TASK_LIMIT}`,
-    { authorization },
-  );
-
-  if (!runningTasksResult.ok || !Array.isArray(runningTasksResult.data?.data)) {
-    return null;
-  }
-
-  return runningTasksResult.data.data;
+  return loadTasksFromSnapshots(authorization, {
+    status: "running",
+    limit: DEFAULT_RUNNING_TASK_LIMIT,
+  });
 }
 
 async function loadRecentTasks(authorization: string) {
-  const tasksResult = await cpFetch<{ data?: RunningTaskRecord[] }>(
-    `/api/project-tree/tasks?limit=${DEFAULT_RUNNING_TASK_LIMIT}`,
+  return loadTasksFromSnapshots(authorization, { limit: DEFAULT_RUNNING_TASK_LIMIT });
+}
+
+function mergeTaskWithProjectionSnapshot(
+  task: RunningTaskRecord,
+  snapshot?: TaskProjectionSnapshotRecord,
+): RunningTaskRecord {
+  if (!snapshot) {
+    return task;
+  }
+
+  return {
+    ...task,
+    status: snapshot.currentStatus || task.status,
+    orchestrationKind: snapshot.orchestrationKind ?? task.orchestrationKind,
+    currentRunId: snapshot.currentRunId ?? task.currentRunId,
+    sessionId: snapshot.currentSessionId || task.sessionId,
+    result: snapshot.latestResult ?? task.result,
+    finishedAt:
+      snapshot.currentStatus === "completed" ||
+      snapshot.currentStatus === "failed" ||
+      snapshot.currentStatus === "cancelled"
+        ? snapshot.lastActivityAt || task.finishedAt
+        : task.finishedAt,
+  };
+}
+
+async function loadTasksFromSnapshots(
+  authorization: string,
+  options: { status?: string; limit: number },
+) {
+  const params = new URLSearchParams();
+  if (options.status) {
+    params.set("status", options.status);
+  }
+  params.set("limit", String(options.limit));
+
+  const snapshotResult = await cpFetch<{ data?: TaskProjectionSnapshotRecord[] }>(
+    `/api/tasks/snapshots?${params.toString()}`,
     { authorization },
   );
 
-  if (!tasksResult.ok || !Array.isArray(tasksResult.data?.data)) {
+  if (!snapshotResult.ok || !Array.isArray(snapshotResult.data?.data)) {
     return null;
   }
 
-  return tasksResult.data.data;
+  const snapshots = snapshotResult.data.data;
+  const taskResults = await Promise.all(
+    snapshots.map(async (snapshot) => {
+      const taskResult = await cpFetch<RunningTaskRecord>(
+        `/api/project-tree/tasks/${encodeURIComponent(snapshot.taskId)}`,
+        { authorization },
+      );
+      if (!taskResult.ok) {
+        return null;
+      }
+
+      return mergeTaskWithProjectionSnapshot(taskResult.data, snapshot);
+    }),
+  );
+
+  return taskResults.filter((task): task is RunningTaskRecord => Boolean(task));
 }
 
 function mergeUniqueTasks(...taskLists: Array<RunningTaskRecord[] | null>) {
@@ -189,13 +258,44 @@ function mergeUniqueTasks(...taskLists: Array<RunningTaskRecord[] | null>) {
         [keyof RunningTaskRecord, RunningTaskRecord[keyof RunningTaskRecord]]
       >) {
         if (value !== undefined) {
-          next[key] = value;
+          (next as unknown as Record<string, unknown>)[key] = value;
         }
       }
       merged.set(task.id, next);
     }
   }
   return Array.from(merged.values());
+}
+
+function isProjectionBackedParallelTask(
+  task: Pick<RunningTaskRecord, "orchestrationKind" | "currentRunId">,
+) {
+  return (
+    task.orchestrationKind === "parallel" &&
+    typeof task.currentRunId === "string" &&
+    task.currentRunId.length > 0
+  );
+}
+
+async function loadProjectionBackedParallelRunDetail(
+  authorization: string,
+  task: Pick<RunningTaskRecord, "id" | "currentRunId" | "orchestrationKind">,
+) {
+  if (!isProjectionBackedParallelTask(task)) {
+    return null;
+  }
+
+  const currentRunId = task.currentRunId;
+  if (!currentRunId) {
+    return null;
+  }
+
+  const detailResult = await cpFetch<{ data: TaskDomainRunDetailRecord }>(
+    `/api/tasks/${encodeURIComponent(task.id)}/domain-runs/${encodeURIComponent(currentRunId)}`,
+    { authorization },
+  );
+
+  return detailResult.ok ? (detailResult.data?.data ?? null) : null;
 }
 
 async function getRuntimeSessionIds(limit: number) {
@@ -221,42 +321,6 @@ interface ReconcileTaskContext {
 
 type ReconcileTaskOutcome = "completed" | "failed" | "recovered" | "skipped";
 
-interface ParsedExecutionPlanCandidate {
-  sessionId?: string;
-  agentRunId?: string;
-  status?: string;
-  result?: string;
-  startedAt?: string;
-  finishedAt?: string;
-}
-
-interface ParsedExecutionPlanStep {
-  type?: string;
-  status?: string;
-}
-
-interface ParsedExecutionPlan {
-  mode?: string;
-  parallelRunId?: string;
-  templateId?: string;
-  winnerCandidateIndex?: number;
-  candidates?: ParsedExecutionPlanCandidate[];
-  steps?: ParsedExecutionPlanStep[];
-}
-
-function parseExecutionPlan(raw: string | null | undefined): ParsedExecutionPlan | null {
-  if (!raw) {
-    return null;
-  }
-
-  try {
-    const parsed = JSON.parse(raw) as ParsedExecutionPlan;
-    return parsed && typeof parsed === "object" ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
 function isTerminalStatus(status: string | null | undefined) {
   return status === "completed" || status === "failed" || status === "cancelled";
 }
@@ -277,92 +341,7 @@ function inferTerminalStatus(task: RunningTaskRecord): "completed" | "failed" | 
   return null;
 }
 
-function planNeedsTerminalRepair(task: RunningTaskRecord): boolean {
-  const plan = parseExecutionPlan(task.executionPlan);
-  if (!plan) {
-    return false;
-  }
-
-  const candidateNeedsRepair = (plan.candidates || []).some((candidate) => {
-    if (candidate.status === "running" || candidate.status === "pending") {
-      return true;
-    }
-    return Boolean(task.finishedAt && !candidate.finishedAt);
-  });
-
-  const stepNeedsRepair = (plan.steps || []).some((step) => {
-    if (step.type !== "execution") {
-      return false;
-    }
-    return step.status === "running" || step.status === "pending";
-  });
-
-  return candidateNeedsRepair || stepNeedsRepair;
-}
-
-function isParallelExecutionPlan(plan: ParsedExecutionPlan | null): boolean {
-  return plan?.mode === "parallel" && Array.isArray(plan.candidates) && plan.candidates.length > 1;
-}
-
-function summarizeParallelCompletion(plan: ParsedExecutionPlan) {
-  const candidates = plan.candidates || [];
-  const allTerminal = candidates.length > 0 && candidates.every((candidate) =>
-    candidate.status === "completed" || candidate.status === "failed",
-  );
-  const hasCompleted = candidates.some((candidate) => candidate.status === "completed");
-  return { allTerminal, hasCompleted };
-}
-
-function updateParallelPlanTerminal(plan: ExecutionPlan, finishedAt: string): {
-  status: "completed" | "failed";
-  changed: boolean;
-} {
-  let changed = false;
-  const hasCompletedCandidate = plan.candidates.some((candidate) => candidate.status === "completed");
-  const terminalStatus = hasCompletedCandidate ? "completed" : "failed";
-
-  for (const candidate of plan.candidates) {
-    if ((candidate.status === "completed" || candidate.status === "failed") && !candidate.finishedAt) {
-      candidate.finishedAt = finishedAt;
-      changed = true;
-    }
-  }
-
-  for (const step of plan.steps) {
-    if (step.type === "execution") {
-      if (step.status !== terminalStatus) {
-        step.status = terminalStatus;
-        changed = true;
-      }
-      if (!step.finishedAt) {
-        step.finishedAt = finishedAt;
-        changed = true;
-      }
-      continue;
-    }
-
-    if (step.type !== "judge") {
-      continue;
-    }
-
-    if (step.status === "pending" || step.status === "running") {
-      step.status = "completed";
-      step.result = step.result || "Judge skipped; final candidate adoption remains a user action.";
-      changed = true;
-    }
-    if (!step.finishedAt) {
-      step.finishedAt = finishedAt;
-      changed = true;
-    }
-  }
-
-  return { status: terminalStatus, changed };
-}
-
-async function deactivateActiveTaskSessions(
-  authorization: string,
-  taskId: string,
-): Promise<void> {
+async function deactivateActiveTaskSessions(authorization: string, taskId: string): Promise<void> {
   const lineageResult = await fetchTaskSessionLineageRecords(taskId, authorization);
   if (!lineageResult.ok) {
     return;
@@ -383,17 +362,14 @@ async function deactivateActiveTaskSessions(
 async function markParallelTaskTerminal(
   authorization: string,
   task: RunningTaskRecord,
-  plan: ExecutionPlan,
+  hasCompletedCandidate: boolean,
 ): Promise<ReconcileTaskOutcome> {
-  const finishedAt = new Date().toISOString();
-  const terminal = updateParallelPlanTerminal(plan, finishedAt);
+  const terminalStatus = hasCompletedCandidate ? "completed" : "failed";
   const patchResult = await cpFetch(`/api/tasks/${encodeURIComponent(task.id)}`, {
     method: "PATCH",
     authorization,
     body: {
-      status: terminal.status,
-      executionPlan: JSON.stringify(plan),
-      parallelRunHistory: upsertParallelRunHistory(task, plan as ParallelExecutionPlanRecord),
+      status: terminalStatus,
     },
   });
 
@@ -402,66 +378,36 @@ async function markParallelTaskTerminal(
   }
 
   await deactivateActiveTaskSessions(authorization, task.id);
-  return terminal.status === "completed" ? "completed" : "failed";
+  return terminalStatus === "completed" ? "completed" : "failed";
 }
 
 async function reconcileParallelRunningTask(
   task: RunningTaskRecord,
   context: ReconcileTaskContext,
 ): Promise<ReconcileTaskOutcome> {
-  const parsedPlan = parseExecutionPlan(task.executionPlan);
-  if (!isParallelExecutionPlan(parsedPlan)) {
+  const detail = await loadProjectionBackedParallelRunDetail(context.authorization, task);
+  if (!detail || detail.candidateNodes.length === 0) {
     return failTaskWithReason(
       task,
       context,
-      "Recovered from stale running state: missing parallel candidate execution plan.",
+      "Recovered from stale running state: missing projection-backed parallel run detail.",
     );
   }
 
-  const plan = JSON.parse(task.executionPlan || "null") as ExecutionPlan | null;
-  if (!plan) {
-    return failTaskWithReason(
-      task,
-      context,
-      "Recovered from stale running state: invalid parallel execution plan.",
+  const candidateStates = await reconcileParallelCandidateStates(task, context, detail);
+
+  const allTerminal =
+    candidateStates.length > 0 &&
+    candidateStates.every(
+      (candidate) =>
+        candidate.status === "completed" ||
+        candidate.status === "failed" ||
+        candidate.status === "cancelled",
     );
-  }
+  const hasCompleted = candidateStates.some((candidate) => candidate.status === "completed");
 
-  for (const candidate of plan.candidates) {
-    if (!candidate.sessionId || (candidate.status !== "running" && candidate.status !== "pending")) {
-      continue;
-    }
-
-    const messagesResult = await getSessionMessages(candidate.sessionId, {
-      taskId: task.id,
-      authorization: context.authorization,
-      includeLineage: false,
-    });
-
-    if (!messagesResult.ok) {
-      continue;
-    }
-
-    const assistantResult = extractAssistantResultFromMessages(messagesResult.data);
-    if (assistantResult.failed) {
-      candidate.status = "failed";
-      candidate.result =
-        assistantResult.text ||
-        `[FAILED] ${assistantResult.error || "Assistant message ended with an error."}`;
-      candidate.finishedAt = new Date().toISOString();
-      continue;
-    }
-
-    if (assistantResult.completed) {
-      candidate.status = "completed";
-      candidate.result = assistantResult.text;
-      candidate.finishedAt = new Date().toISOString();
-    }
-  }
-
-  const completion = summarizeParallelCompletion(plan);
-  if (completion.allTerminal) {
-    return markParallelTaskTerminal(context.authorization, task, plan);
+  if (allTerminal) {
+    return markParallelTaskTerminal(context.authorization, task, hasCompleted);
   }
 
   if (!context.runtimeAvailable) {
@@ -471,10 +417,63 @@ async function reconcileParallelRunningTask(
   return "skipped";
 }
 
-function taskLooksHistoricallyInconsistent(task: RunningTaskRecord) {
-  return Boolean(
-    inferTerminalStatus(task) && (planNeedsTerminalRepair(task) || task.status === "running"),
-  );
+async function reconcileParallelCandidateStates(
+  task: RunningTaskRecord,
+  context: ReconcileTaskContext,
+  detail: NonNullable<Awaited<ReturnType<typeof loadProjectionBackedParallelRunDetail>>>,
+) {
+  const candidateStates = detail.candidateNodes.map((candidate) => ({
+    status: candidate.status,
+    sessionId: candidate.sessionId ?? undefined,
+  }));
+
+  for (const [index, candidate] of detail.candidateNodes.entries()) {
+    const nextState = await resolveParallelCandidateState(task, context, candidate);
+    if (nextState) {
+      candidateStates[index] = nextState;
+    }
+  }
+
+  return candidateStates;
+}
+
+async function resolveParallelCandidateState(
+  task: RunningTaskRecord,
+  context: ReconcileTaskContext,
+  candidate: {
+    sessionId?: string | null;
+    status?: string | null;
+  },
+) {
+  if (!candidate.sessionId || (candidate.status !== "running" && candidate.status !== "pending")) {
+    return null;
+  }
+
+  const messagesResult = await getSessionMessages(candidate.sessionId, {
+    taskId: task.id,
+    authorization: context.authorization,
+    includeLineage: false,
+  });
+  if (!messagesResult.ok) {
+    return null;
+  }
+
+  const assistantResult = extractAssistantResultFromMessages(messagesResult.data);
+  if (assistantResult.failed) {
+    return {
+      sessionId: candidate.sessionId,
+      status: "failed",
+    };
+  }
+
+  if (assistantResult.completed) {
+    return {
+      sessionId: candidate.sessionId,
+      status: "completed",
+    };
+  }
+
+  return null;
 }
 
 function taskNeedsRecentTerminalSessionRepair(task: RunningTaskRecord) {
@@ -496,71 +495,56 @@ async function reconcileHistoricallyInconsistentTask(
   context: ReconcileTaskContext,
 ): Promise<ReconcileTaskOutcome> {
   const terminalStatus = inferTerminalStatus(task);
-  if (!terminalStatus) {
+  if (terminalStatus !== "completed") {
     return "skipped";
   }
 
   const lineageRecords = await loadTaskSessions(context.authorization, task.id);
   const hasActiveSession = lineageRecords.some((record) => !record.archivedAt && record.isActive);
-  const needsPlanRepair = planNeedsTerminalRepair(task);
 
-  if (terminalStatus === "completed" && hasActiveSession && task.sessionId && context.runtimeAvailable) {
-    const messagesResult = await getSessionMessages(task.sessionId, {
-      taskId: task.id,
-      authorization: context.authorization,
-    });
-    if (messagesResult.ok) {
-      const assistantResult = extractAssistantResultFromMessages(messagesResult.data);
-      if (assistantResult.failed) {
-        return failTaskWithReason(
-          task,
-          context,
-          `Recovered from failed assistant session: ${assistantResult.error || "Assistant message ended with an error."}`,
-        );
-      }
-
-      if (assistantResult.completed) {
-        const updated = await markTaskCompleted(
-          context.authorization,
-          task,
-          assistantResult.text ?? task.result ?? undefined,
-        );
-        return updated ? "completed" : "skipped";
-      }
-    } else if (!needsPlanRepair) {
-      return "skipped";
-    }
+  if (hasActiveSession && task.sessionId && context.runtimeAvailable) {
+    return reconcileCompletedTaskWithActiveSession(task, context);
   }
 
-  if (!hasActiveSession && !needsPlanRepair && isTerminalStatus(task.status)) {
+  if (!hasActiveSession) {
     return "skipped";
   }
 
-  if (terminalStatus === "completed") {
-    const updated = await markTaskCompleted(
-      context.authorization,
-      task,
-      task.result ?? undefined,
-    );
+  return "skipped";
+}
 
-    return updated ? "completed" : "skipped";
-  }
-
-  const updated = await finalizeTaskState({
-    authorization: context.authorization,
+async function reconcileCompletedTaskWithActiveSession(
+  task: RunningTaskRecord,
+  context: ReconcileTaskContext,
+): Promise<ReconcileTaskOutcome> {
+  const messagesResult = await getSessionMessages(task.sessionId as string, {
     taskId: task.id,
-    status: terminalStatus,
-    sessionId: task.sessionId ?? undefined,
-    agentRunId: task.agentRunId ?? undefined,
-    result: task.result ?? undefined,
-    task,
+    authorization: context.authorization,
   });
-
-  if (!updated) {
+  if (!messagesResult.ok) {
     return "skipped";
   }
 
-  return terminalStatus === "failed" ? "failed" : "completed";
+  const assistantResult = extractAssistantResultFromMessages(messagesResult.data);
+  if (assistantResult.failed) {
+    return failTaskWithReason(
+      task,
+      context,
+      `Recovered from failed assistant session: ${assistantResult.error || "Assistant message ended with an error."}`,
+    );
+  }
+
+  if (!assistantResult.completed) {
+    return "skipped";
+  }
+
+  const updated = await markTaskCompleted(
+    context.authorization,
+    task,
+    assistantResult.text ?? task.result ?? undefined,
+  );
+
+  return updated ? "completed" : "skipped";
 }
 
 function summarizeOutcome(summary: RunningTaskReconcileSummary, outcome: ReconcileTaskOutcome) {
@@ -614,7 +598,7 @@ async function reconcileSingleRunningTask(
   task: RunningTaskRecord,
   context: ReconcileTaskContext,
 ): Promise<ReconcileTaskOutcome> {
-  if (isParallelExecutionPlan(parseExecutionPlan(task.executionPlan))) {
+  if (isProjectionBackedParallelTask(task)) {
     return reconcileParallelRunningTask(task, context);
   }
 
@@ -707,9 +691,7 @@ export async function reconcileRunningTasksOnStartup(): Promise<RunningTaskRecon
   }
 
   const reconcileCandidates = mergeUniqueTasks(runningTasks, recentTasks);
-  const historicalTasks = reconcileCandidates.filter((task) =>
-    taskLooksHistoricallyInconsistent(task) || taskNeedsRecentTerminalSessionRepair(task),
-  );
+  const historicalTasks = reconcileCandidates.filter(taskNeedsRecentTerminalSessionRepair);
   const runningOnlyTasks = reconcileCandidates.filter(
     (task) =>
       task.status === "running" && !historicalTasks.some((candidate) => candidate.id === task.id),

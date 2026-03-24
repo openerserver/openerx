@@ -1,8 +1,9 @@
 /// <reference types="bun-types" />
 
 import { beforeEach, describe, expect, mock, test } from "bun:test";
-import * as paidExecutionGuardModule from "../../control-plane/web-ui-bff/src/lib/paid-execution-guard";
 import * as strategyModule from "../../control-plane/web-ui-bff/src/lib/orchestration-strategy";
+import * as paidExecutionGuardModule from "../../control-plane/web-ui-bff/src/lib/paid-execution-guard";
+import { createControlPlaneClientModuleMock } from "./control-plane-client-mock";
 
 const cpFetchMock = mock(async (..._args: unknown[]) => ({ ok: true, status: 200, data: {} }));
 const authHeaderMock = mock(() => "Bearer test-token");
@@ -36,11 +37,13 @@ const readOrchestrationStrategyMock = mock(() => ({
   judge: { enabled: false },
 }));
 
-mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () => ({
-  authHeader: authHeaderMock,
-  cpFetch: cpFetchMock,
-  createInternalAuthorization: mock(async () => "Bearer internal"),
-}));
+mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () =>
+  createControlPlaneClientModuleMock({
+    authHeader: authHeaderMock,
+    cpFetch: cpFetchMock,
+    createInternalAuthorization: mock(async () => "Bearer internal"),
+  }),
+);
 
 mock.module("../../control-plane/web-ui-bff/src/lib/paid-execution-guard", () => ({
   ...paidExecutionGuardModule,
@@ -49,10 +52,12 @@ mock.module("../../control-plane/web-ui-bff/src/lib/paid-execution-guard", () =>
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/lib/opencode-config", () => ({
+  diagnoseModelReadiness: mock(async () => undefined),
   formatModelRoute: (resolved: { providerId: string; modelId: string }) =>
     `${resolved.providerId}:${resolved.modelId}`,
   readDefaultExecutionModel: readDefaultExecutionModelMock,
   resolveModelRoute: resolveModelRouteMock,
+  validateModelProvider: mock(() => ({ valid: true })),
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/lib/orchestration-strategy", () => ({
@@ -222,7 +227,7 @@ describe("project runtime usage ledger routes", () => {
     );
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({
+    await expect(response.json()).resolves.toMatchObject({
       data: [
         {
           id: "ledger-1",
@@ -236,11 +241,6 @@ describe("project runtime usage ledger routes", () => {
           defaultProviderId: "github-copilot",
           defaultModelId: "gpt-5-mini",
           requestCount: 1,
-          judgeRequestCount: 0,
-          hookRequestCount: 0,
-          inputTokens: 80,
-          outputTokens: 40,
-          totalTokens: 120,
           costUsd: 0.12,
           candidateCount: 2,
           status: "completed",

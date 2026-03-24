@@ -26,8 +26,8 @@
           show-icon
           :message="trace.timelineMeta.cacheState === 'partial' ? '时间线缓存仅部分可用' : '时间线缓存暂不可用'"
           :description="trace.timelineMeta.cacheState === 'partial'
-            ? '当前时间线直接来自 service tree events，但只覆盖了部分 lineage session。'
-            : '当前时间线数据面还没有可用的 tree events 缓存。'"
+            ? '当前时间线来自历史兼容缓存，但只覆盖了部分 lineage session。'
+            : '当前时间线数据面还没有可用的历史兼容缓存。'"
         />
 
         <a-space direction="vertical" style="width: 100%" size="small">
@@ -52,6 +52,21 @@
                   {{ segment.label }}
                 </a-typography-text>
               </a-space>
+              <a-space v-if="segment.filePath || segment.fileRange || segment.toolStatus" size="small" wrap style="margin-bottom: 6px">
+                <a-tag v-if="segment.filePath" color="default">{{ segment.filePath }}</a-tag>
+                <a-tag v-if="segment.fileRange" color="default">L{{ segment.fileRange }}</a-tag>
+                <a-tag v-if="segment.toolStatus" color="default">{{ segment.toolStatus }}</a-tag>
+              </a-space>
+              <div v-if="segment.toolArgumentsSummary || segment.diffSummary" class="trace-panel__meta-lines">
+                <div v-if="segment.toolArgumentsSummary" class="trace-panel__meta-line">
+                  <span class="trace-panel__meta-label">参数</span>
+                  <span class="trace-panel__meta-value">{{ segment.toolArgumentsSummary }}</span>
+                </div>
+                <div v-if="segment.diffSummary" class="trace-panel__meta-line">
+                  <span class="trace-panel__meta-label">变更</span>
+                  <span class="trace-panel__meta-value">{{ segment.diffSummary }}</span>
+                </div>
+              </div>
               <pre class="trace-panel__content">{{ segment.content }}</pre>
             </a-card>
           </div>
@@ -126,13 +141,20 @@ const {
   filteredSegments,
   filteredMessages,
   summaryItems,
-} = useTaskExecutionTrace(computed(() => taskIdRef.value), computed(() => sessionIdRef.value));
+} = useTaskExecutionTrace(
+  computed(() => taskIdRef.value),
+  computed(() => sessionIdRef.value),
+);
 
 function segmentColor(type: string) {
   if (type === "user-input") return "blue";
   if (type === "workflow-context") return "cyan";
   if (type === "model-response") return "green";
   if (type === "final-prompt") return "purple";
+  if (["tool-call", "tool-output", "file-reference", "diff"].includes(type)) return "geekblue";
+  if (["candidate-result", "judge-decision", "chain-step-result"].includes(type)) return "gold";
+  if (["status-transition", "session-activate", "session-branch", "session-archive"].includes(type))
+    return "default";
   return "orange";
 }
 
@@ -145,6 +167,18 @@ function segmentLabel(type: string) {
     "hook-rewrite": "Hook 重写",
     "final-prompt": "最终 Prompt",
     "model-response": "模型回复",
+    "tool-call": "工具调用",
+    "tool-output": "工具输出",
+    thinking: "思考过程",
+    "file-reference": "文件引用",
+    diff: "Diff",
+    "candidate-result": "候选结果",
+    "judge-decision": "Judge 决策",
+    "chain-step-result": "链式步骤",
+    "status-transition": "状态变更",
+    "session-activate": "会话激活",
+    "session-branch": "会话分支",
+    "session-archive": "会话归档",
   };
   return labels[type] ?? type;
 }
@@ -222,6 +256,30 @@ function toggleMessageRaw(messageId: string) {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+.trace-panel__meta-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.trace-panel__meta-line {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.trace-panel__meta-label {
+  color: #8c8c8c;
+  min-width: 28px;
+}
+
+.trace-panel__meta-value {
+  color: #262626;
+  word-break: break-word;
 }
 
 .trace-panel__content,

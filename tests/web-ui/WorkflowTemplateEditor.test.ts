@@ -106,7 +106,7 @@ const SelectStub = {
 
 const ButtonStub = {
   emits: ["click"],
-  template: '<button @click="$emit(\'click\', $event)"><slot /></button>',
+  template: "<button @click=\"$emit('click', $event)\"><slot /></button>",
 };
 
 const CheckboxStub = {
@@ -140,7 +140,7 @@ const TypographyParagraphStub = {
 
 const PageHeaderStub = {
   props: ["title", "subTitle"],
-  template: '<div><h1>{{ title }}</h1><div>{{ subTitle }}</div><slot /></div>',
+  template: "<div><h1>{{ title }}</h1><div>{{ subTitle }}</div><slot /></div>",
 };
 
 function buildEditorView(stages: Array<Record<string, unknown>>) {
@@ -262,7 +262,8 @@ describe("WorkflowTemplateEditor", () => {
     apiMocks.updateWorkflowTemplateStage.mockResolvedValue({});
 
     const wrapper = await createWrapper();
-    const setupState = (wrapper.vm as unknown as { $: { setupState: Record<string, unknown> } }).$.setupState as {
+    const setupState = (wrapper.vm as unknown as { $: { setupState: Record<string, unknown> } }).$
+      .setupState as {
       saveStage: (stage: Record<string, unknown>, index: number) => Promise<void>;
       stageDrafts: { value?: Array<Record<string, unknown>> } | Array<Record<string, unknown>>;
     };
@@ -271,7 +272,12 @@ describe("WorkflowTemplateEditor", () => {
       : (setupState.stageDrafts.value ?? []);
 
     expect(stageDrafts).toHaveLength(1);
-    void setupState.saveStage(stageDrafts[0]!, 0);
+    const [firstStageDraft] = stageDrafts;
+    expect(firstStageDraft).toBeDefined();
+    if (!firstStageDraft) {
+      throw new Error("Expected first stage draft to exist");
+    }
+    void setupState.saveStage(firstStageDraft, 0);
     await flushPromises();
 
     expect(apiMocks.updateWorkflowTemplateStage).toHaveBeenCalledWith(
@@ -295,20 +301,23 @@ describe("WorkflowTemplateEditor", () => {
   }, 10_000);
 
   it("creates new stage with generated initialTaskDefinition", async () => {
-    apiMocks.getWorkflowTemplateEditorView.mockImplementation(async () => clone(buildEditorView([])));
+    apiMocks.getWorkflowTemplateEditorView.mockImplementation(async () =>
+      clone(buildEditorView([])),
+    );
     apiMocks.createWorkflowTemplateStage.mockResolvedValue({});
 
     const wrapper = await createWrapper();
     const stageSelect = wrapper
       .findAll("select")
-      .find((item) => item.text().includes("需求澄清 (clarify)") && item.text().includes("方案设计 (design)"));
+      .find(
+        (item) =>
+          item.text().includes("需求澄清 (clarify)") && item.text().includes("方案设计 (design)"),
+      );
     expect(stageSelect).toBeTruthy();
-    await stageSelect!.setValue("design");
+    await stageSelect?.setValue("design");
     await flushPromises();
 
-    const addButton = wrapper
-      .findAll("button")
-      .find((item) => item.text().includes("新增阶段"));
+    const addButton = wrapper.findAll("button").find((item) => item.text().includes("新增阶段"));
     expect(addButton).toBeTruthy();
     await addButton?.trigger("click");
     await flushPromises();
@@ -323,7 +332,8 @@ describe("WorkflowTemplateEditor", () => {
           version: 1,
           titleTemplate: "方案设计：初始任务",
           goalTemplate: "完成 方案设计 阶段的首个任务目标，并输出可用于后续推进的阶段摘要。",
-          instructionTemplate: "请聚焦 方案设计 阶段目标，结合当前任务和已有上下文，输出结构化结果，并在完成时给出阶段摘要。",
+          instructionTemplate:
+            "请聚焦 方案设计 阶段目标，结合当前任务和已有上下文，输出结构化结果，并在完成时给出阶段摘要。",
         }),
       }),
     );
@@ -361,12 +371,10 @@ describe("WorkflowTemplateEditor", () => {
       .findAll("input")
       .find((item) => (item.element as HTMLInputElement).value === "需求澄清：初始任务");
     expect(titleInput).toBeTruthy();
-    await titleInput!.setValue("");
+    await titleInput?.setValue("");
     await flushPromises();
 
-    const saveButton = wrapper
-      .findAll("button")
-      .find((item) => item.text().includes("保存阶段"));
+    const saveButton = wrapper.findAll("button").find((item) => item.text().includes("保存阶段"));
     expect(saveButton).toBeTruthy();
     await saveButton?.trigger("click");
     await flushPromises();

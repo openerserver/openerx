@@ -32,12 +32,6 @@ interface TaskWorkflowStageRecord {
   status: string;
 }
 
-interface TaskWorkflowPayload {
-  data?: {
-    stages?: TaskWorkflowStageRecord[];
-  };
-}
-
 interface RoleConclusionPayload {
   id?: string;
   roleAgentId?: string | null;
@@ -220,10 +214,7 @@ function buildFallbackRoleDecision(
   };
 }
 
-function parseJsonRoleDecision(
-  payload: Record<string, unknown>,
-  text: string,
-): ParsedRoleDecision {
+function parseJsonRoleDecision(payload: Record<string, unknown>, text: string): ParsedRoleDecision {
   const winningRationale =
     (typeof payload.winningRationale === "string" && payload.winningRationale.trim()) ||
     (typeof payload.summary === "string" && payload.summary.trim()) ||
@@ -263,12 +254,9 @@ function matchFallbackRoleDecision(text: string) {
     return buildFallbackRoleDecision(text, "needs-approval", "medium", [], true);
   }
   if (lowered.includes("change") || lowered.includes("修改") || lowered.includes("fix")) {
-    return buildFallbackRoleDecision(
-      text,
-      "notify-developer",
-      "medium",
-      [text.trim() || "请根据角色建议调整当前阶段产出。"],
-    );
+    return buildFallbackRoleDecision(text, "notify-developer", "medium", [
+      text.trim() || "请根据角色建议调整当前阶段产出。",
+    ]);
   }
 
   return buildFallbackRoleDecision(text, "allow", "low");

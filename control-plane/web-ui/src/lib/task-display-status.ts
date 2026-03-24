@@ -1,11 +1,18 @@
-import type { ExecutionMode, ExecutionPlan, Task } from "./api";
+import type { ExecutionMode, Task } from "./api";
+import {
+  resolveEditableExecutionMode,
+  resolveEditableParallelCandidates,
+} from "./taskExecutionMode";
 
 type DisplayTone = "success" | "processing" | "warning" | "error" | "default";
 
 interface TaskStatusSource {
   status?: string | null;
-  executionMode?: ExecutionMode | null;
-  executionPlan?: string | null;
+  executionMode?: ExecutionMode;
+  orchestrationKind?: string | null;
+  currentRunCandidateCount?: number | null;
+  winnerNodeId?: string | null;
+  strategy?: string;
 }
 
 export interface TaskDisplayStatus {
@@ -16,17 +23,31 @@ export interface TaskDisplayStatus {
   needsAttention: boolean;
 }
 
-function parseExecutionPlan(raw: string | null | undefined): ExecutionPlan | null {
-  if (!raw) {
-    return null;
+function resolveParallelCandidateCount(task?: TaskStatusSource | Task | null): number {
+  if (!task) {
+    return 0;
   }
 
-  try {
-    const parsed = JSON.parse(raw) as ExecutionPlan;
-    return parsed && typeof parsed === "object" ? parsed : null;
-  } catch {
-    return null;
+  if (
+    typeof task.currentRunCandidateCount === "number" &&
+    Number.isFinite(task.currentRunCandidateCount)
+  ) {
+    return task.currentRunCandidateCount;
   }
+
+  return resolveEditableParallelCandidates(task).length;
+}
+
+function isParallelTask(task?: TaskStatusSource | Task | null): boolean {
+  if (!task) {
+    return false;
+  }
+
+  return (
+    task.orchestrationKind === "parallel" ||
+    resolveEditableExecutionMode(task) === "parallel" ||
+    resolveParallelCandidateCount(task) > 1
+  );
 }
 
 export function isTaskAwaitingParallelAdoption(task?: TaskStatusSource | null): boolean {
@@ -34,24 +55,20 @@ export function isTaskAwaitingParallelAdoption(task?: TaskStatusSource | null): 
     return false;
   }
 
-  const plan = parseExecutionPlan(task.executionPlan);
-  if (!plan || (plan.mode !== "parallel" && task.executionMode !== "parallel")) {
+  if (!isParallelTask(task)) {
     return false;
   }
 
-  if (!Array.isArray(plan.candidates) || plan.candidates.length < 2) {
+  const candidateCount = resolveParallelCandidateCount(task);
+  if (candidateCount < 2) {
     return false;
   }
 
-  if (typeof plan.winnerCandidateIndex === "number") {
+  if (typeof task.winnerNodeId === "string" && task.winnerNodeId.trim()) {
     return false;
   }
 
-  const allTerminal = plan.candidates.every(
-    (candidate) => candidate.status === "completed" || candidate.status === "failed",
-  );
-  const hasCompleted = plan.candidates.some((candidate) => candidate.status === "completed");
-  return allTerminal && hasCompleted;
+  return true;
 }
 
 export function resolveTaskDisplayStatus(task?: TaskStatusSource | Task | null): TaskDisplayStatus {

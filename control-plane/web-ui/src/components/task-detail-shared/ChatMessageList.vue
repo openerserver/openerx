@@ -315,7 +315,9 @@ function messageKicker(item: TaskConversationMessageItem) {
         : roleLabel(item.role);
 }
 
-function isParallelComparisonItem(item: TaskConversationListItem): item is TaskConversationParallelItem {
+function isParallelComparisonItem(
+  item: TaskConversationListItem,
+): item is TaskConversationParallelItem {
   return item.role === "parallel";
 }
 
@@ -478,6 +480,44 @@ function stopReveal() {
   }
 }
 
+function resolveCurrentRevealText(item: TaskConversationMessageItem, fullText: string) {
+  return revealText.value[item.key] ?? (item.isStreaming ? "" : fullText);
+}
+
+function shouldKeepExistingReveal(
+  item: TaskConversationMessageItem,
+  currentText: string,
+  fullText: string,
+) {
+  return (
+    (!item.isStreaming && currentText.length >= fullText.length) ||
+    (!item.isStreaming && currentText.length === 0)
+  );
+}
+
+function applyRevealProgress(
+  item: TaskConversationMessageItem,
+  nextReveal: Record<string, string>,
+  fullText: string,
+  currentText: string,
+) {
+  if (shouldKeepExistingReveal(item, currentText, fullText)) {
+    nextReveal[item.key] = fullText;
+    return null;
+  }
+
+  const progress = nextRevealProgress(fullText, currentText.length);
+  nextReveal[item.key] = fullText.slice(0, progress.nextLength);
+  return progress;
+}
+
+function scheduleNextReveal(delay: number) {
+  revealTimer = setTimeout(() => {
+    revealTimer = null;
+    syncReveal();
+  }, delay);
+}
+
 function syncReveal() {
   const nextReveal: Record<string, string> = {};
   let hasPendingReveal = false;
@@ -493,19 +533,12 @@ function syncReveal() {
       continue;
     }
 
-    const current = revealText.value[item.key] ?? (item.isStreaming ? "" : fullText);
-    if (!item.isStreaming && current.length >= fullText.length) {
-      nextReveal[item.key] = fullText;
+    const current = resolveCurrentRevealText(item, fullText);
+    const progress = applyRevealProgress(item, nextReveal, fullText, current);
+    if (!progress) {
       continue;
     }
 
-    if (!item.isStreaming && current.length === 0) {
-      nextReveal[item.key] = fullText;
-      continue;
-    }
-
-    const progress = nextRevealProgress(fullText, current.length);
-    nextReveal[item.key] = fullText.slice(0, progress.nextLength);
     if (progress.nextLength < fullText.length) {
       hasPendingReveal = true;
       nextDelay = Math.max(nextDelay, progress.delay);
@@ -517,10 +550,7 @@ function syncReveal() {
   void nextTick().then(scrollToBottom);
 
   if (hasPendingReveal) {
-    revealTimer = setTimeout(() => {
-      revealTimer = null;
-      syncReveal();
-    }, nextDelay);
+    scheduleNextReveal(nextDelay);
   }
 }
 
@@ -590,7 +620,9 @@ function toolOutputText(tool: TaskConversationToolCallItem) {
 }
 
 function toolDetailText(tool: TaskConversationToolCallItem) {
-  return [toolCallText(tool), toolInputText(tool), toolOutputText(tool)].filter(Boolean).join("\n\n");
+  return [toolCallText(tool), toolInputText(tool), toolOutputText(tool)]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 function isToolExpanded(key: string) {
@@ -630,7 +662,10 @@ async function handleCopy(text: string) {
 
 function copyText(item: TaskConversationMessageItem) {
   const text = displayText(item) || sanitizedItemText(item) || item.text || "";
-  const toolText = item.toolCalls.map((tool) => buildToolCopyText(tool)).filter(Boolean).join("\n\n");
+  const toolText = item.toolCalls
+    .map((tool) => buildToolCopyText(tool))
+    .filter(Boolean)
+    .join("\n\n");
   return [text, toolText].filter(Boolean).join("\n\n");
 }
 

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   type OrchestrationStrategy,
-  buildExecutionPlan,
+  buildRuntimePlan,
   mergeTaskStrategy,
   normalizeOrchestrationStrategy,
   parseHookDecision,
@@ -172,13 +172,13 @@ describe("resolveWorkflowTemplate", () => {
   });
 });
 
-// ── Execution Plan Building ─────────────────────────────────────────
+// ── Runtime Plan Building ───────────────────────────────────────────
 
-describe("buildExecutionPlan", () => {
+describe("buildRuntimePlan", () => {
   test("single mode produces one candidate", () => {
     const strategy = buildStrategy();
     const template = resolveWorkflowTemplate(strategy, "deep");
-    const plan = buildExecutionPlan(template, strategy, "deep");
+    const plan = buildRuntimePlan(template, strategy, "deep");
 
     expect(plan.mode).toBe("single");
     expect(plan.candidates).toHaveLength(1);
@@ -200,7 +200,7 @@ describe("buildExecutionPlan", () => {
     });
 
     const template = resolveWorkflowTemplate(strategy, "deep", "parallel-t");
-    const plan = buildExecutionPlan(template, strategy, "deep");
+    const plan = buildRuntimePlan(template, strategy, "deep");
 
     expect(plan.mode).toBe("parallel");
     expect(plan.candidates.length).toBeGreaterThanOrEqual(2);
@@ -223,7 +223,7 @@ describe("buildExecutionPlan", () => {
     });
 
     const template = resolveWorkflowTemplate(strategy, "deep", "limited");
-    const plan = buildExecutionPlan(template, strategy, "deep");
+    const plan = buildRuntimePlan(template, strategy, "deep");
 
     expect(plan.candidates).toHaveLength(2);
   });
@@ -231,7 +231,7 @@ describe("buildExecutionPlan", () => {
   test("plan includes templateId", () => {
     const strategy = buildStrategy();
     const template = resolveWorkflowTemplate(strategy, "quick");
-    const plan = buildExecutionPlan(template, strategy, "quick");
+    const plan = buildRuntimePlan(template, strategy, "quick");
 
     expect(plan.templateId).toBe(template.id);
   });

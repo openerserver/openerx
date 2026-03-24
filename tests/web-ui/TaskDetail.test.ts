@@ -50,6 +50,8 @@ const routerState = vi.hoisted(() => ({
   replace: vi.fn(),
 }));
 
+const mountedWrappers: Array<{ unmount: () => void }> = [];
+
 const realtimeBase = vi.hoisted(() => ({
   events: [] as Array<{
     id: string;
@@ -352,6 +354,48 @@ function makeTaskWithOverrides(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function makeParallelPipeline(stages?: Array<Record<string, unknown>>) {
+  return {
+    taskId: "task-1",
+    sessionId: "ses-1",
+    branchName: "main",
+    status: "completed",
+    createdAt: "2026-03-10T12:00:00.000Z",
+    updatedAt: "2026-03-10T12:00:10.000Z",
+    summary: {
+      totalStages: stages?.length ?? 2,
+      completedStages: stages?.filter((stage) => stage.status === "completed").length ?? 0,
+      failedStages: stages?.filter((stage) => stage.status === "failed").length ?? 0,
+      currentStageId: null,
+      totalTokens: { input: 0, output: 0 },
+      totalDurationMs: 0,
+      replanCount: 0,
+    },
+    stages: stages ?? [],
+  };
+}
+
+function makeSequentialPipeline(stages?: Array<Record<string, unknown>>) {
+  return {
+    taskId: "task-1",
+    sessionId: "ses-1",
+    branchName: "main",
+    status: "running",
+    createdAt: "2026-03-10T12:00:00.000Z",
+    updatedAt: "2026-03-10T12:00:10.000Z",
+    summary: {
+      totalStages: stages?.length ?? 0,
+      completedStages: stages?.filter((stage) => stage.status === "completed").length ?? 0,
+      failedStages: stages?.filter((stage) => stage.status === "failed").length ?? 0,
+      currentStageId: null,
+      totalTokens: { input: 0, output: 0 },
+      totalDurationMs: 0,
+      replanCount: 0,
+    },
+    stages: stages ?? [],
+  };
+}
+
 async function mountPage() {
   const wrapper = mount(TaskDetail, {
     global: {
@@ -364,6 +408,7 @@ async function mountPage() {
       },
     },
   });
+  mountedWrappers.push(wrapper);
   await flushPromises();
   return wrapper;
 }
@@ -382,7 +427,7 @@ function readSetupValue<T>(setupState: Record<string, unknown>, key: string) {
 
 beforeEach(() => {
   vi.useFakeTimers();
-  vi.clearAllMocks();
+  vi.resetAllMocks();
   realtimeState.events.splice(0, realtimeState.events.length);
   realtimeState.subscribeTask.mockReset();
   routeState.params.taskId = "task-1";
@@ -395,6 +440,7 @@ beforeEach(() => {
     };
   });
   window.scrollTo = vi.fn();
+  apiMocks.getTask.mockResolvedValue(makeTask());
   apiMocks.getSessionMessages.mockResolvedValue({ data: [] });
   apiMocks.getSessionTree.mockResolvedValue({
     data: [
@@ -412,12 +458,14 @@ beforeEach(() => {
   apiMocks.getTaskPipeline.mockResolvedValue({ stages: [] });
   apiMocks.getTaskSessions.mockResolvedValue({ data: [] });
   apiMocks.getTaskConversationMessages.mockImplementation((...args: unknown[]) =>
-    apiMocks.getSessionMessages(...args)
+    apiMocks.getSessionMessages(...args),
   );
   apiMocks.getTaskBranchLineage.mockImplementation((...args: unknown[]) =>
-    apiMocks.getSessionTree(...args)
+    apiMocks.getSessionTree(...args),
   );
-  apiMocks.getTaskBranches.mockImplementation((...args: unknown[]) => apiMocks.getTaskSessions(...args));
+  apiMocks.getTaskBranches.mockImplementation((...args: unknown[]) =>
+    apiMocks.getTaskSessions(...args),
+  );
   apiMocks.getTaskExecutionTraceView.mockResolvedValue({
     taskId: "task-1",
     sessionId: "ses-1",
@@ -505,6 +553,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  while (mountedWrappers.length > 0) {
+    mountedWrappers.pop()?.unmount();
+  }
   vi.useRealTimers();
 });
 
@@ -567,9 +618,9 @@ describe("TaskDetail", () => {
     );
 
     const wrapper = await mountPage();
-  await wrapper.find("textarea").setValue("继续执行");
+    await wrapper.find("textarea").setValue("继续执行");
 
-  const setupState = getSetupState(wrapper);
+    const setupState = getSetupState(wrapper);
 
     await (setupState.handleContinue as () => Promise<void>)();
     await flushPromises();
@@ -596,7 +647,7 @@ describe("TaskDetail", () => {
     expect(leaseButton).toBeDefined();
     expect(gateButton).toBeDefined();
 
-    await modelButton!.trigger("click");
+    await modelButton?.trigger("click");
     expect(routerState.push).toHaveBeenLastCalledWith({
       path: "/settings",
       query: {
@@ -605,10 +656,10 @@ describe("TaskDetail", () => {
       },
     });
 
-    await leaseButton!.trigger("click");
+    await leaseButton?.trigger("click");
     expect(routerState.push).toHaveBeenLastCalledWith("/projects/proj-1");
 
-    await gateButton!.trigger("click");
+    await gateButton?.trigger("click");
     expect(routerState.push).toHaveBeenLastCalledWith("/projects/proj-1/operating-mode");
   });
 
@@ -631,9 +682,9 @@ describe("TaskDetail", () => {
     apiMocks.continueTask.mockResolvedValueOnce({ ok: true, sessionId: "ses-1" });
 
     const wrapper = await mountPage();
-  await wrapper.find("textarea").setValue("继续执行");
+    await wrapper.find("textarea").setValue("继续执行");
 
-  const setupState = getSetupState(wrapper);
+    const setupState = getSetupState(wrapper);
 
     await (setupState.handleContinue as () => Promise<void>)();
     await flushPromises();
@@ -671,9 +722,9 @@ describe("TaskDetail", () => {
     apiMocks.continueTask.mockResolvedValueOnce({ ok: true, sessionId: "ses-1" });
 
     const wrapper = await mountPage();
-  await wrapper.find("textarea").setValue("继续执行");
+    await wrapper.find("textarea").setValue("继续执行");
 
-  const setupState = getSetupState(wrapper);
+    const setupState = getSetupState(wrapper);
 
     await (setupState.handleContinue as () => Promise<void>)();
     await flushPromises();
@@ -727,40 +778,45 @@ describe("TaskDetail", () => {
     await wrapper.find('[data-testid="terminate-current-execution"]').trigger("click");
     await flushPromises();
 
-    realtimeState.events.splice(0, realtimeState.events.length, {
-      id: "evt-message-updated-incomplete",
-      type: "message.updated",
-      ts: "2026-03-10T12:00:10.000Z",
-      taskId: "task-1",
-      sessionId: "ses-1",
-      agentRunId: "run-1",
-      data: {
-        rawType: "message.updated",
-        info: {
-          id: "msg-stream-1",
-          role: "assistant",
-          agent: "default-executor",
-          time: {
-            created: Date.parse("2026-03-10T12:00:10.000Z"),
+    realtimeState.events.splice(
+      0,
+      realtimeState.events.length,
+      {
+        id: "evt-message-updated-incomplete",
+        type: "message.updated",
+        ts: "2026-03-10T12:00:10.000Z",
+        taskId: "task-1",
+        sessionId: "ses-1",
+        agentRunId: "run-1",
+        data: {
+          rawType: "message.updated",
+          info: {
+            id: "msg-stream-1",
+            role: "assistant",
+            agent: "default-executor",
+            time: {
+              created: Date.parse("2026-03-10T12:00:10.000Z"),
+            },
           },
         },
       },
-    }, {
-      id: "evt-message-part-updated-incomplete",
-      type: "message.part.updated",
-      ts: "2026-03-10T12:00:10.100Z",
-      taskId: "task-1",
-      sessionId: "ses-1",
-      agentRunId: "run-1",
-      data: {
-        rawType: "message.part.updated",
-        part: {
-          type: "text",
-          text: "正在生成...",
-          messageID: "msg-stream-1",
+      {
+        id: "evt-message-part-updated-incomplete",
+        type: "message.part.updated",
+        ts: "2026-03-10T12:00:10.100Z",
+        taskId: "task-1",
+        sessionId: "ses-1",
+        agentRunId: "run-1",
+        data: {
+          rawType: "message.part.updated",
+          part: {
+            type: "text",
+            text: "正在生成...",
+            messageID: "msg-stream-1",
+          },
         },
       },
-    });
+    );
     await nextTick();
     await flushPromises();
 
@@ -1190,24 +1246,28 @@ describe("TaskDetail", () => {
       currentStage: "review",
       status: "waiting-approval",
     });
-    expect(readSetupValue<Array<{ stageKey: string; stageLabel: string }>>(setupState, "workflowStages")).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ stageKey: "review", stageLabel: "评审" }),
-      ]),
+    expect(
+      readSetupValue<Array<{ stageKey: string; stageLabel: string }>>(setupState, "workflowStages"),
+    ).toEqual(
+      expect.arrayContaining([expect.objectContaining({ stageKey: "review", stageLabel: "评审" })]),
     );
     expect(
-      readSetupValue<Array<{ roleLabel: string; finalDecision: string }>>(setupState, "roleConclusions"),
+      readSetupValue<Array<{ roleLabel: string; finalDecision: string }>>(
+        setupState,
+        "roleConclusions",
+      ),
     ).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ roleLabel: "安全 Agent", finalDecision: "human-review" }),
       ]),
     );
     expect(
-      readSetupValue<Array<{ title: string; status: string }>>(setupState, "developerChangeRequests"),
+      readSetupValue<Array<{ title: string; status: string }>>(
+        setupState,
+        "developerChangeRequests",
+      ),
     ).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ title: "补充输入校验", status: "open" }),
-      ]),
+      expect.arrayContaining([expect.objectContaining({ title: "补充输入校验", status: "open" })]),
     );
   });
 
@@ -1255,7 +1315,9 @@ describe("TaskDetail", () => {
       currentStage: "verify",
       status: "completed",
     });
-    expect(readSetupValue<Array<{ stageKey: string; stageLabel: string }>>(setupState, "workflowStages")).toEqual(
+    expect(
+      readSetupValue<Array<{ stageKey: string; stageLabel: string }>>(setupState, "workflowStages"),
+    ).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ stageKey: "verify", stageLabel: "集成验证" }),
       ]),
@@ -1266,16 +1328,53 @@ describe("TaskDetail", () => {
     apiMocks.getTask.mockResolvedValueOnce(
       makeTaskWithOverrides({
         executionMode: "parallel",
-        executionPlan: JSON.stringify({
-          templateId: "parallel-default",
-          mode: "parallel",
-          steps: [{ id: "exec-parallel", type: "execution", status: "completed" }],
-          candidates: [
-            { label: "候选 A", agent: "executor", status: "completed", result: "A" },
-            { label: "候选 B", agent: "executor", status: "completed", result: "B" },
-          ],
-        }),
+        orchestrationKind: "parallel",
+        currentRunCandidateCount: 2,
       }),
+    );
+    apiMocks.getTaskPipeline.mockResolvedValueOnce(
+      makeParallelPipeline([
+        {
+          id: "candidate-a",
+          type: "execution",
+          label: "候选 A",
+          status: "completed",
+          order: 0,
+          sourceType: "taskRun.node",
+          sourceId: "node-a",
+          agent: "executor",
+          model: null,
+          sessionId: null,
+          startedAt: null,
+          finishedAt: null,
+          durationMs: null,
+          output: "A",
+          error: null,
+          tokens: null,
+          graphNodeId: "node-a",
+          dependsOn: [],
+        },
+        {
+          id: "candidate-b",
+          type: "execution",
+          label: "候选 B",
+          status: "completed",
+          order: 1,
+          sourceType: "taskRun.node",
+          sourceId: "node-b",
+          agent: "executor",
+          model: null,
+          sessionId: null,
+          startedAt: null,
+          finishedAt: null,
+          durationMs: null,
+          output: "B",
+          error: null,
+          tokens: null,
+          graphNodeId: "node-b",
+          dependsOn: [],
+        },
+      ]),
     );
 
     const wrapper = await mountPage();
@@ -1387,29 +1486,9 @@ describe("TaskDetail", () => {
     apiMocks.getTask.mockResolvedValueOnce(
       makeTaskWithOverrides({
         executionMode: "parallel",
-        executionPlan: JSON.stringify({
-          mode: "parallel",
-          candidates: [
-            {
-              label: "候选 1",
-              agent: "default-executor",
-              model: "github-copilot:claude-sonnet-4",
-              status: "completed",
-              result: "Candidate one result",
-            },
-            {
-              label: "候选 2",
-              agent: "oracle-enterprise",
-              status: "completed",
-              result: "Candidate two result",
-            },
-          ],
-          judgeResult: {
-            winnerIndex: 1,
-            scores: [82.5, 91.2],
-            reasoning: "候选 2 更完整，风险更低。",
-          },
-        }),
+        orchestrationKind: "parallel",
+        currentRunCandidateCount: 2,
+        winnerNodeId: "node-2",
         strategy: JSON.stringify({
           selectedAgent: "default-executor",
           executionMode: "parallel",
@@ -1417,11 +1496,75 @@ describe("TaskDetail", () => {
         }),
       }),
     );
+    apiMocks.getTaskPipeline.mockResolvedValueOnce(
+      makeParallelPipeline([
+        {
+          id: "candidate:0",
+          type: "execution",
+          label: "候选 1",
+          status: "completed",
+          order: 0,
+          sourceType: "taskRun.node",
+          sourceId: "node-1",
+          agent: "default-executor",
+          model: "github-copilot:claude-sonnet-4",
+          sessionId: null,
+          startedAt: null,
+          finishedAt: null,
+          durationMs: null,
+          output: "Candidate one result",
+          error: null,
+          tokens: null,
+          graphNodeId: "node-1",
+          dependsOn: [],
+        },
+        {
+          id: "candidate:1",
+          type: "execution",
+          label: "候选 2",
+          status: "completed",
+          order: 1,
+          sourceType: "taskRun.node",
+          sourceId: "node-2",
+          agent: "oracle-enterprise",
+          model: null,
+          sessionId: null,
+          startedAt: null,
+          finishedAt: null,
+          durationMs: null,
+          output: "Candidate two result",
+          error: null,
+          tokens: null,
+          graphNodeId: "node-2",
+          dependsOn: [],
+        },
+        {
+          id: "judge:1",
+          type: "judge",
+          label: "Judge",
+          status: "completed",
+          order: 2,
+          sourceType: "taskRun.node",
+          sourceId: "judge-node",
+          agent: null,
+          model: null,
+          sessionId: null,
+          startedAt: null,
+          finishedAt: null,
+          durationMs: null,
+          output: "候选 2 更完整，风险更低。",
+          error: null,
+          tokens: null,
+          graphNodeId: null,
+          dependsOn: ["candidate:0", "candidate:1"],
+        },
+      ]),
+    );
 
     const wrapper = await mountPage();
-  const setupState = getSetupState(wrapper);
-  setupState.taskDetailPrimaryTab = "trace";
-  await nextTick();
+    const setupState = getSetupState(wrapper);
+    setupState.taskDetailPrimaryTab = "trace";
+    await nextTick();
     const candidateSectionMatches = wrapper.text().match(/并行候选结果/g) ?? [];
 
     expect(candidateSectionMatches).toHaveLength(1);
@@ -1430,25 +1573,58 @@ describe("TaskDetail", () => {
     expect(wrapper.text()).toContain("Judge 已选出 候选 2");
   });
 
-  it("falls back to generated candidate labels for legacy parallel execution plans", async () => {
+  it("generates candidate labels from runtime pipeline when stage labels are absent", async () => {
     apiMocks.getTask.mockResolvedValueOnce(
       makeTaskWithOverrides({
         executionMode: "parallel",
-        executionPlan: JSON.stringify({
-          mode: "parallel",
-          candidates: [
-            {
-              agent: "default-executor",
-              status: "completed",
-            },
-            {
-              agent: "oracle-enterprise",
-              status: "failed",
-            },
-          ],
-        }),
+        orchestrationKind: "parallel",
+        currentRunCandidateCount: 2,
         strategy: JSON.stringify({ executionMode: "parallel" }),
       }),
+    );
+    apiMocks.getTaskPipeline.mockResolvedValueOnce(
+      makeParallelPipeline([
+        {
+          id: "candidate:0",
+          type: "execution",
+          label: "",
+          status: "completed",
+          order: 0,
+          sourceType: "taskRun.node",
+          sourceId: "node-1",
+          agent: "default-executor",
+          model: null,
+          sessionId: null,
+          startedAt: null,
+          finishedAt: null,
+          durationMs: null,
+          output: null,
+          error: null,
+          tokens: null,
+          graphNodeId: "node-1",
+          dependsOn: [],
+        },
+        {
+          id: "candidate:1",
+          type: "execution",
+          label: "",
+          status: "failed",
+          order: 1,
+          sourceType: "taskRun.node",
+          sourceId: "node-2",
+          agent: "oracle-enterprise",
+          model: null,
+          sessionId: null,
+          startedAt: null,
+          finishedAt: null,
+          durationMs: null,
+          output: null,
+          error: "failed",
+          tokens: null,
+          graphNodeId: "node-2",
+          dependsOn: [],
+        },
+      ]),
     );
 
     const wrapper = await mountPage();
@@ -1467,28 +1643,70 @@ describe("TaskDetail", () => {
       makeTaskWithOverrides({
         sessionId: "ses-main",
         executionMode: "parallel",
-        executionPlan: JSON.stringify({
-          mode: "parallel",
-          candidates: [
-            {
-              label: "Claude",
-              agent: "default-executor",
-              model: "github-copilot:claude-sonnet-4",
-              sessionId: "ses-claude",
-              status: "completed",
-            },
-            {
-              label: "GPT",
-              agent: "default-executor",
-              model: "github-copilot:gpt-5.4",
-              sessionId: "ses-gpt",
-              status: "completed",
-            },
-          ],
-        }),
+        orchestrationKind: "parallel",
+        currentRunCandidateCount: 2,
         strategy: JSON.stringify({ executionMode: "parallel" }),
       }),
     );
+    apiMocks.getTaskPipeline.mockResolvedValueOnce({
+      taskId: "task-1",
+      sessionId: "ses-main",
+      branchName: "main",
+      status: "completed",
+      createdAt: "2026-03-10T12:00:00.000Z",
+      updatedAt: "2026-03-10T12:00:10.000Z",
+      summary: {
+        totalStages: 2,
+        completedStages: 2,
+        failedStages: 0,
+        currentStageId: null,
+        totalTokens: { input: 0, output: 0 },
+        totalDurationMs: 0,
+        replanCount: 0,
+      },
+      stages: [
+        {
+          id: "candidate:0:ses-claude",
+          type: "execution",
+          label: "Claude",
+          status: "completed",
+          order: 0,
+          sourceType: "taskRun.node",
+          sourceId: "node-1",
+          agent: "default-executor",
+          model: "github-copilot:claude-sonnet-4",
+          sessionId: "ses-claude",
+          startedAt: null,
+          finishedAt: null,
+          durationMs: null,
+          output: null,
+          error: null,
+          tokens: null,
+          graphNodeId: "node-1",
+          dependsOn: [],
+        },
+        {
+          id: "candidate:1:ses-gpt",
+          type: "execution",
+          label: "GPT",
+          status: "completed",
+          order: 1,
+          sourceType: "taskRun.node",
+          sourceId: "node-2",
+          agent: "default-executor",
+          model: "github-copilot:gpt-5.4",
+          sessionId: "ses-gpt",
+          startedAt: null,
+          finishedAt: null,
+          durationMs: null,
+          output: null,
+          error: null,
+          tokens: null,
+          graphNodeId: "node-2",
+          dependsOn: [],
+        },
+      ],
+    });
     apiMocks.getSessionMessages.mockImplementation(async (_taskId: string, sessionId: string) => {
       if (sessionId === "ses-claude") {
         return {
@@ -1534,48 +1752,179 @@ describe("TaskDetail", () => {
     expect(wrapper.text()).not.toContain("从这里分叉");
   });
 
-  it("renders sequential-chain steps directly from task executionPlan", async () => {
+  it("renders parallel comparison replies from runtime pipeline when the legacy runtime plan is absent", async () => {
     apiMocks.getTask.mockResolvedValueOnce(
       makeTaskWithOverrides({
-        executionMode: "single",
-        executionPlan: JSON.stringify({
-          mode: "single",
-          candidates: [
-            {
-              label: "主执行",
-              agent: "default-executor",
-              model: "github-copilot:gpt-5.4",
-              status: "pending",
-            },
-          ],
-          steps: [
-            {
-              id: "step-analysis",
-              type: "execution",
-              status: "completed",
-              title: "分析现状",
-              instruction: "先总结约束和已有实现。",
-              model: "github-copilot:gpt-5.4",
-              sourceType: "initialTask.sequentialChain.step",
-            },
-            {
-              id: "step-design",
-              type: "execution",
-              status: "pending",
-              dependsOn: ["step-analysis"],
-              title: "给出方案",
-              instruction: "输出模块划分和接口设计。",
-              model: "github-copilot:claude-sonnet-4",
-              sourceType: "initialTask.sequentialChain.step",
-            },
-          ],
-          pipelineMetadata: {
-            requestedMode: "sequential-chain",
-            stepCount: 2,
-          },
-        }),
-        strategy: JSON.stringify({ executionMode: "single" }),
+        sessionId: "ses-main",
+        executionMode: "parallel",
+        currentRunId: "task_run:task-1:root",
+        orchestrationKind: "parallel",
+        currentRunCandidateCount: 2,
+        strategy: JSON.stringify({ executionMode: "parallel" }),
       }),
+    );
+    apiMocks.getTaskPipeline.mockResolvedValue({
+      taskId: "task-1",
+      sessionId: "ses-main",
+      branchName: "main",
+      status: "running",
+      createdAt: "2026-03-10T12:00:00.000Z",
+      updatedAt: "2026-03-10T12:00:10.000Z",
+      summary: {
+        totalStages: 2,
+        completedStages: 2,
+        failedStages: 0,
+        currentStageId: null,
+        totalTokens: { input: 0, output: 0 },
+        totalDurationMs: 0,
+        replanCount: 0,
+      },
+      stages: [
+        {
+          id: "candidate:0:ses-claude",
+          type: "execution",
+          label: "Claude",
+          status: "completed",
+          order: 0,
+          sourceType: "taskRun.node",
+          sourceId: "node-1",
+          agent: "default-executor",
+          model: "github-copilot:claude-sonnet-4",
+          sessionId: "ses-claude",
+          startedAt: "2026-03-10T12:00:00.000Z",
+          finishedAt: "2026-03-10T12:00:05.000Z",
+          durationMs: 5000,
+          output: "Claude candidate output",
+          error: null,
+          tokens: null,
+          graphNodeId: "graph-1",
+          dependsOn: [],
+        },
+        {
+          id: "candidate:1:ses-gpt",
+          type: "execution",
+          label: "GPT",
+          status: "completed",
+          order: 1,
+          sourceType: "taskRun.node",
+          sourceId: "node-2",
+          agent: "default-executor",
+          model: "github-copilot:gpt-5.4",
+          sessionId: "ses-gpt",
+          startedAt: "2026-03-10T12:00:00.000Z",
+          finishedAt: "2026-03-10T12:00:06.000Z",
+          durationMs: 6000,
+          output: "GPT candidate output",
+          error: null,
+          tokens: null,
+          graphNodeId: "graph-2",
+          dependsOn: [],
+        },
+      ],
+    });
+    apiMocks.getSessionMessages.mockImplementation(async (_taskId: string, sessionId: string) => {
+      if (sessionId === "ses-claude") {
+        return {
+          data: [
+            {
+              info: {
+                id: "msg-claude-1",
+                role: "assistant",
+                time: { created: Date.parse("2026-03-10T12:00:00.000Z") },
+              },
+              parts: [{ type: "text", text: "Claude reply" }],
+            },
+          ],
+        };
+      }
+
+      if (sessionId === "ses-gpt") {
+        return {
+          data: [
+            {
+              info: {
+                id: "msg-gpt-1",
+                role: "assistant",
+                time: { created: Date.parse("2026-03-10T12:00:01.000Z") },
+              },
+              parts: [{ type: "text", text: "GPT reply" }],
+            },
+          ],
+        };
+      }
+
+      return { data: [] };
+    });
+
+    const wrapper = await mountPage();
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("并行模型回复比较");
+    expect(wrapper.text()).toContain("Claude");
+    expect(wrapper.text()).toContain("GPT");
+    expect(wrapper.text()).toContain("Claude reply");
+    expect(wrapper.text()).toContain("GPT reply");
+  });
+
+  it("renders sequential-chain steps directly from runtime pipeline and strategy", async () => {
+    apiMocks.getTask.mockResolvedValueOnce(
+      makeTaskWithOverrides({
+        executionMode: "sequential-chain",
+        orchestrationKind: "sequential-chain",
+        currentRunPipelineStepCount: 2,
+        totalChainSteps: 2,
+        strategy: JSON.stringify({
+          executionMode: "sequential-chain",
+          sequentialSteps: [
+            { id: "step-analysis", title: "分析现状", instruction: "先总结约束和已有实现。" },
+            { id: "step-design", title: "给出方案", instruction: "输出模块划分和接口设计。" },
+          ],
+        }),
+      }),
+    );
+    apiMocks.getTaskPipeline.mockResolvedValueOnce(
+      makeSequentialPipeline([
+        {
+          id: "step-analysis",
+          type: "execution",
+          label: "分析现状",
+          status: "completed",
+          order: 0,
+          sourceType: "taskRun.node",
+          sourceId: "node-analysis",
+          agent: "default-executor",
+          model: "github-copilot:gpt-5.4",
+          sessionId: null,
+          startedAt: null,
+          finishedAt: null,
+          durationMs: null,
+          output: null,
+          error: null,
+          tokens: null,
+          graphNodeId: "node-analysis",
+          dependsOn: [],
+        },
+        {
+          id: "step-design",
+          type: "execution",
+          label: "给出方案",
+          status: "pending",
+          order: 1,
+          sourceType: "taskRun.node",
+          sourceId: "node-design",
+          agent: "default-executor",
+          model: "github-copilot:claude-sonnet-4",
+          sessionId: null,
+          startedAt: null,
+          finishedAt: null,
+          durationMs: null,
+          output: null,
+          error: null,
+          tokens: null,
+          graphNodeId: "node-design",
+          dependsOn: ["step-analysis"],
+        },
+      ]),
     );
 
     const wrapper = await mountPage();
@@ -1635,7 +1984,7 @@ describe("TaskDetail", () => {
     );
 
     const wrapper = await mountPage();
-  await flushPromises();
+    await flushPromises();
 
     const completeButton = wrapper.get('[data-testid="complete-task-btn"]');
     expect((completeButton.element as HTMLButtonElement).disabled).toBe(false);
@@ -1644,7 +1993,9 @@ describe("TaskDetail", () => {
     await nextTick();
 
     expect(apiMocks.completeTask).toHaveBeenCalledTimes(1);
-    expect((wrapper.get('[data-testid="complete-task-btn"]').element as HTMLButtonElement).disabled).toBe(true);
+    expect(
+      (wrapper.get('[data-testid="complete-task-btn"]').element as HTMLButtonElement).disabled,
+    ).toBe(true);
 
     if (typeof resolveCompleteTask === "function") {
       resolveCompleteTask();
@@ -1665,7 +2016,12 @@ describe("TaskDetail", () => {
     await textarea.trigger("keydown", { key: "Enter" });
     await flushPromises();
 
-    expect(apiMocks.continueTask).toHaveBeenCalledWith("task-1", "继续处理剩余问题", "ses-1");
+    expect(apiMocks.continueTask).toHaveBeenCalledWith(
+      "task-1",
+      "继续处理剩余问题",
+      "ses-1",
+      "single",
+    );
   });
 
   it("saves parallel execution mode without starting execution", async () => {
@@ -1735,19 +2091,24 @@ describe("TaskDetail", () => {
     );
 
     const wrapper = await mountPage();
-    expect(readSetupValue<string | undefined>(getSetupState(wrapper), "selectedBranchSessionId")).toBe(
-      undefined,
-    );
+    expect(
+      readSetupValue<string | undefined>(getSetupState(wrapper), "selectedBranchSessionId"),
+    ).toBe(undefined);
 
     const textarea = wrapper.find("textarea");
     await textarea.setValue("并行比较这个方案");
     await textarea.trigger("keydown", { key: "Enter" });
     await flushPromises();
 
-    expect(apiMocks.continueTask).toHaveBeenCalledWith("task-1", "并行比较这个方案", undefined);
-    expect(readSetupValue<string | undefined>(getSetupState(wrapper), "selectedBranchSessionId")).toBe(
-      "ses-parallel-a",
+    expect(apiMocks.continueTask).toHaveBeenCalledWith(
+      "task-1",
+      "并行比较这个方案",
+      undefined,
+      "single",
     );
+    expect(
+      readSetupValue<string | undefined>(getSetupState(wrapper), "selectedBranchSessionId"),
+    ).toBe("ses-parallel-a");
   });
 
   it("keeps Shift+Enter available for multiline input", async () => {
@@ -2352,15 +2713,54 @@ describe("TaskDetail", () => {
     apiMocks.getTask.mockResolvedValueOnce(
       makeTaskWithOverrides({
         executionMode: "parallel",
-        executionPlan: JSON.stringify({
-          mode: "parallel",
-          candidates: [
-            { label: "候选 A", agent: "default-executor", model: "github-copilot:gpt-5-mini", status: "completed", result: "Result A" },
-            { label: "候选 B", agent: "oracle-enterprise", model: "github-copilot:claude-sonnet-4", status: "completed", result: "Result B" },
-          ],
-        }),
+        orchestrationKind: "parallel",
+        currentRunCandidateCount: 2,
         strategy: JSON.stringify({ executionMode: "parallel" }),
       }),
+    );
+    apiMocks.getTaskPipeline.mockResolvedValueOnce(
+      makeParallelPipeline([
+        {
+          id: "candidate-a",
+          type: "execution",
+          label: "候选 A",
+          status: "completed",
+          order: 0,
+          sourceType: "taskRun.node",
+          sourceId: "node-a",
+          agent: "default-executor",
+          model: "github-copilot:gpt-5-mini",
+          sessionId: null,
+          startedAt: null,
+          finishedAt: null,
+          durationMs: null,
+          output: "Result A",
+          error: null,
+          tokens: null,
+          graphNodeId: "node-a",
+          dependsOn: [],
+        },
+        {
+          id: "candidate-b",
+          type: "execution",
+          label: "候选 B",
+          status: "completed",
+          order: 1,
+          sourceType: "taskRun.node",
+          sourceId: "node-b",
+          agent: "oracle-enterprise",
+          model: "github-copilot:claude-sonnet-4",
+          sessionId: null,
+          startedAt: null,
+          finishedAt: null,
+          durationMs: null,
+          output: "Result B",
+          error: null,
+          tokens: null,
+          graphNodeId: "node-b",
+          dependsOn: [],
+        },
+      ]),
     );
 
     const wrapper = await mountPage();
@@ -2368,7 +2768,10 @@ describe("TaskDetail", () => {
     const allSettled = readSetupValue<boolean>(setupState, "allCandidatesSettled");
     expect(allSettled).toBe(true);
 
-    const canAdopt = setupState.canAdoptCandidate as (candidate: { status: string }, index: number) => boolean;
+    const canAdopt = setupState.canAdoptCandidate as (
+      candidate: { status: string },
+      index: number,
+    ) => boolean;
     expect(canAdopt({ status: "completed" }, 0)).toBe(true);
     expect(canAdopt({ status: "completed" }, 1)).toBe(true);
     expect(canAdopt({ status: "failed" }, 0)).toBe(false);
@@ -2378,21 +2781,63 @@ describe("TaskDetail", () => {
     apiMocks.getTask.mockResolvedValueOnce(
       makeTaskWithOverrides({
         executionMode: "parallel",
-        executionPlan: JSON.stringify({
-          mode: "parallel",
-          candidates: [
-            { label: "候选 A", status: "completed", result: "Result A" },
-            { label: "候选 B", status: "completed", result: "Result B" },
-          ],
-          judgeResult: { winnerIndex: 0, reasoning: "A更好", scores: [95, 80] },
-        }),
+        orchestrationKind: "parallel",
+        currentRunCandidateCount: 2,
+        winnerNodeId: "node-a",
         strategy: JSON.stringify({ executionMode: "parallel" }),
       }),
+    );
+    apiMocks.getTaskPipeline.mockResolvedValueOnce(
+      makeParallelPipeline([
+        {
+          id: "candidate-a",
+          type: "execution",
+          label: "候选 A",
+          status: "completed",
+          order: 0,
+          sourceType: "taskRun.node",
+          sourceId: "node-a",
+          agent: null,
+          model: null,
+          sessionId: null,
+          startedAt: null,
+          finishedAt: null,
+          durationMs: null,
+          output: "Result A",
+          error: null,
+          tokens: null,
+          graphNodeId: "node-a",
+          dependsOn: [],
+        },
+        {
+          id: "candidate-b",
+          type: "execution",
+          label: "候选 B",
+          status: "completed",
+          order: 1,
+          sourceType: "taskRun.node",
+          sourceId: "node-b",
+          agent: null,
+          model: null,
+          sessionId: null,
+          startedAt: null,
+          finishedAt: null,
+          durationMs: null,
+          output: "Result B",
+          error: null,
+          tokens: null,
+          graphNodeId: "node-b",
+          dependsOn: [],
+        },
+      ]),
     );
 
     const wrapper = await mountPage();
     const setupState = getSetupState(wrapper);
-    const canAdopt = setupState.canAdoptCandidate as (candidate: { status: string }, index: number) => boolean;
+    const canAdopt = setupState.canAdoptCandidate as (
+      candidate: { status: string },
+      index: number,
+    ) => boolean;
     expect(canAdopt({ status: "completed" }, 0)).toBe(false);
   });
 
@@ -2400,13 +2845,8 @@ describe("TaskDetail", () => {
     apiMocks.getTask.mockResolvedValueOnce(
       makeTaskWithOverrides({
         executionMode: "parallel",
-        executionPlan: JSON.stringify({
-          mode: "parallel",
-          candidates: [
-            { label: "候选 A", status: "completed", result: "Result A" },
-            { label: "候选 B", status: "completed", result: "Result B" },
-          ],
-        }),
+        orchestrationKind: "parallel",
+        currentRunCandidateCount: 2,
         strategy: JSON.stringify({ executionMode: "parallel" }),
       }),
     );
@@ -2414,17 +2854,101 @@ describe("TaskDetail", () => {
     apiMocks.getTask.mockResolvedValueOnce(
       makeTaskWithOverrides({
         executionMode: "parallel",
-        executionPlan: JSON.stringify({
-          mode: "parallel",
-          candidates: [
-            { label: "候选 A", status: "completed", result: "Result A" },
-            { label: "候选 B", status: "completed", result: "Result B" },
-          ],
-          judgeResult: { winnerIndex: 1, reasoning: "手动采纳", scores: [] },
-        }),
+        orchestrationKind: "parallel",
+        currentRunCandidateCount: 2,
+        winnerNodeId: "node-b",
         strategy: JSON.stringify({ executionMode: "parallel" }),
       }),
     );
+    apiMocks.getTaskPipeline
+      .mockResolvedValueOnce(
+        makeParallelPipeline([
+          {
+            id: "candidate-a",
+            type: "execution",
+            label: "候选 A",
+            status: "completed",
+            order: 0,
+            sourceType: "taskRun.node",
+            sourceId: "node-a",
+            agent: null,
+            model: null,
+            sessionId: null,
+            startedAt: null,
+            finishedAt: null,
+            durationMs: null,
+            output: "Result A",
+            error: null,
+            tokens: null,
+            graphNodeId: "node-a",
+            dependsOn: [],
+          },
+          {
+            id: "candidate-b",
+            type: "execution",
+            label: "候选 B",
+            status: "completed",
+            order: 1,
+            sourceType: "taskRun.node",
+            sourceId: "node-b",
+            agent: null,
+            model: null,
+            sessionId: null,
+            startedAt: null,
+            finishedAt: null,
+            durationMs: null,
+            output: "Result B",
+            error: null,
+            tokens: null,
+            graphNodeId: "node-b",
+            dependsOn: [],
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        makeParallelPipeline([
+          {
+            id: "candidate-a",
+            type: "execution",
+            label: "候选 A",
+            status: "completed",
+            order: 0,
+            sourceType: "taskRun.node",
+            sourceId: "node-a",
+            agent: null,
+            model: null,
+            sessionId: null,
+            startedAt: null,
+            finishedAt: null,
+            durationMs: null,
+            output: "Result A",
+            error: null,
+            tokens: null,
+            graphNodeId: "node-a",
+            dependsOn: [],
+          },
+          {
+            id: "candidate-b",
+            type: "execution",
+            label: "候选 B",
+            status: "completed",
+            order: 1,
+            sourceType: "taskRun.node",
+            sourceId: "node-b",
+            agent: null,
+            model: null,
+            sessionId: null,
+            startedAt: null,
+            finishedAt: null,
+            durationMs: null,
+            output: "Result B",
+            error: null,
+            tokens: null,
+            graphNodeId: "node-b",
+            dependsOn: [],
+          },
+        ]),
+      );
 
     const wrapper = await mountPage();
     const setupState = getSetupState(wrapper);
@@ -2441,17 +2965,75 @@ describe("TaskDetail", () => {
     apiMocks.getTask.mockResolvedValueOnce(
       makeTaskWithOverrides({
         executionMode: "sequential-chain",
-        executionPlan: JSON.stringify({
-          mode: "sequential-chain",
-          candidates: [{ label: "主执行", status: "running" }],
-          steps: [
-            { id: "step-1", title: "分析", instruction: "分析现状", status: "completed", result: "分析完成" },
-            { id: "step-2", title: "实施", instruction: "动手改", status: "running" },
-            { id: "step-3", title: "验证", instruction: "跑测试", status: "pending" },
-          ],
-        }),
+        orchestrationKind: "sequential-chain",
+        currentRunPipelineStepCount: 3,
+        totalChainSteps: 3,
         strategy: JSON.stringify({ executionMode: "sequential-chain" }),
       }),
+    );
+    apiMocks.getTaskPipeline.mockResolvedValueOnce(
+      makeSequentialPipeline([
+        {
+          id: "step-1",
+          type: "execution",
+          label: "分析",
+          status: "completed",
+          order: 0,
+          sourceType: "taskRun.node",
+          sourceId: "step-1",
+          agent: null,
+          model: null,
+          sessionId: null,
+          startedAt: null,
+          finishedAt: null,
+          durationMs: null,
+          output: "分析完成",
+          error: null,
+          tokens: null,
+          graphNodeId: "step-1",
+          dependsOn: [],
+        },
+        {
+          id: "step-2",
+          type: "execution",
+          label: "实施",
+          status: "running",
+          order: 1,
+          sourceType: "taskRun.node",
+          sourceId: "step-2",
+          agent: null,
+          model: null,
+          sessionId: null,
+          startedAt: null,
+          finishedAt: null,
+          durationMs: null,
+          output: null,
+          error: null,
+          tokens: null,
+          graphNodeId: "step-2",
+          dependsOn: ["step-1"],
+        },
+        {
+          id: "step-3",
+          type: "execution",
+          label: "验证",
+          status: "pending",
+          order: 2,
+          sourceType: "taskRun.node",
+          sourceId: "step-3",
+          agent: null,
+          model: null,
+          sessionId: null,
+          startedAt: null,
+          finishedAt: null,
+          durationMs: null,
+          output: null,
+          error: null,
+          tokens: null,
+          graphNodeId: "step-3",
+          dependsOn: ["step-2"],
+        },
+      ]),
     );
 
     const wrapper = await mountPage();
@@ -2467,16 +3049,55 @@ describe("TaskDetail", () => {
     apiMocks.getTask.mockResolvedValueOnce(
       makeTaskWithOverrides({
         executionMode: "sequential-chain",
-        executionPlan: JSON.stringify({
-          mode: "sequential-chain",
-          candidates: [{ label: "主执行", status: "completed" }],
-          steps: [
-            { id: "step-1", title: "分析", instruction: "分析现状", status: "completed", result: "Done 1" },
-            { id: "step-2", title: "实施", instruction: "动手改", status: "completed", result: "Done 2" },
-          ],
-        }),
+        orchestrationKind: "sequential-chain",
+        totalChainSteps: 2,
+        completedChainSteps: 2,
         strategy: JSON.stringify({ executionMode: "sequential-chain" }),
       }),
+    );
+    apiMocks.getTaskPipeline.mockResolvedValueOnce(
+      makeSequentialPipeline([
+        {
+          id: "step-1",
+          type: "execution",
+          label: "分析",
+          status: "completed",
+          order: 0,
+          sourceType: "taskRun.node",
+          sourceId: "step-1",
+          agent: null,
+          model: null,
+          sessionId: null,
+          startedAt: null,
+          finishedAt: null,
+          durationMs: null,
+          output: "Done 1",
+          error: null,
+          tokens: null,
+          graphNodeId: "step-1",
+          dependsOn: [],
+        },
+        {
+          id: "step-2",
+          type: "execution",
+          label: "实施",
+          status: "completed",
+          order: 1,
+          sourceType: "taskRun.node",
+          sourceId: "step-2",
+          agent: null,
+          model: null,
+          sessionId: null,
+          startedAt: null,
+          finishedAt: null,
+          durationMs: null,
+          output: "Done 2",
+          error: null,
+          tokens: null,
+          graphNodeId: "step-2",
+          dependsOn: ["step-1"],
+        },
+      ]),
     );
 
     const wrapper = await mountPage();
@@ -2489,16 +3110,55 @@ describe("TaskDetail", () => {
     apiMocks.getTask.mockResolvedValueOnce(
       makeTaskWithOverrides({
         executionMode: "sequential-chain",
-        executionPlan: JSON.stringify({
-          mode: "sequential-chain",
-          candidates: [{ label: "主执行", status: "running" }],
-          steps: [
-            { id: "step-1", title: "分析", instruction: "分析现状", status: "completed", result: "现状分析完毕，发现3个关键问题。" },
-            { id: "step-2", title: "实施", instruction: "动手改", status: "pending" },
-          ],
-        }),
+        orchestrationKind: "sequential-chain",
+        currentRunPipelineStepCount: 2,
+        totalChainSteps: 2,
         strategy: JSON.stringify({ executionMode: "sequential-chain" }),
       }),
+    );
+    apiMocks.getTaskPipeline.mockResolvedValueOnce(
+      makeSequentialPipeline([
+        {
+          id: "step-1",
+          type: "execution",
+          label: "分析",
+          status: "completed",
+          order: 0,
+          sourceType: "taskRun.node",
+          sourceId: "step-1",
+          agent: null,
+          model: null,
+          sessionId: null,
+          startedAt: null,
+          finishedAt: null,
+          durationMs: null,
+          output: "现状分析完毕，发现3个关键问题。",
+          error: null,
+          tokens: null,
+          graphNodeId: "step-1",
+          dependsOn: [],
+        },
+        {
+          id: "step-2",
+          type: "execution",
+          label: "实施",
+          status: "pending",
+          order: 1,
+          sourceType: "taskRun.node",
+          sourceId: "step-2",
+          agent: null,
+          model: null,
+          sessionId: null,
+          startedAt: null,
+          finishedAt: null,
+          durationMs: null,
+          output: null,
+          error: null,
+          tokens: null,
+          graphNodeId: "step-2",
+          dependsOn: ["step-1"],
+        },
+      ]),
     );
 
     const wrapper = await mountPage();
@@ -2508,14 +3168,104 @@ describe("TaskDetail", () => {
     expect(wrapper.text()).toContain("现状分析完毕，发现3个关键问题。");
   });
 
+  it("renders sequential-chain steps from strategy and runtime pipeline when the legacy runtime plan is absent", async () => {
+    apiMocks.getTask.mockResolvedValueOnce(
+      makeTaskWithOverrides({
+        executionMode: "sequential-chain",
+        orchestrationKind: "sequential-chain",
+        currentRunId: "task_run:task-1:root",
+        currentRunPipelineStepCount: 2,
+        totalChainSteps: 2,
+        completedChainSteps: 1,
+        strategy: JSON.stringify({
+          executionMode: "sequential-chain",
+          sequentialSteps: [
+            { id: "step-analysis", title: "分析现状", instruction: "先梳理已有约束。" },
+            { id: "step-design", title: "设计方案", instruction: "给出收口方案。" },
+          ],
+        }),
+      }),
+    );
+    apiMocks.getTaskPipeline.mockResolvedValue({
+      taskId: "task-1",
+      sessionId: "ses-1",
+      branchName: "main",
+      status: "running",
+      createdAt: "2026-03-10T12:00:00.000Z",
+      updatedAt: "2026-03-10T12:00:10.000Z",
+      summary: {
+        totalStages: 2,
+        completedStages: 1,
+        failedStages: 0,
+        currentStageId: "step-design",
+        totalTokens: { input: 0, output: 0 },
+        totalDurationMs: 0,
+        replanCount: 0,
+      },
+      stages: [
+        {
+          id: "step-analysis",
+          type: "execution",
+          label: "分析现状",
+          status: "completed",
+          order: 0,
+          sourceType: "taskRun.node",
+          sourceId: "node-analysis",
+          agent: "default-executor",
+          model: "github-copilot:gpt-5.4",
+          sessionId: "ses-step-1",
+          startedAt: "2026-03-10T12:00:00.000Z",
+          finishedAt: "2026-03-10T12:00:05.000Z",
+          durationMs: 5000,
+          output: "现状分析完毕，发现3个关键问题。",
+          error: null,
+          tokens: null,
+          graphNodeId: "graph-step-1",
+          dependsOn: [],
+        },
+        {
+          id: "step-design",
+          type: "execution",
+          label: "设计方案",
+          status: "running",
+          order: 1,
+          sourceType: "taskRun.node",
+          sourceId: "node-design",
+          agent: "default-executor",
+          model: "github-copilot:claude-sonnet-4",
+          sessionId: "ses-step-2",
+          startedAt: "2026-03-10T12:00:06.000Z",
+          finishedAt: null,
+          durationMs: null,
+          output: null,
+          error: null,
+          tokens: null,
+          graphNodeId: "graph-step-2",
+          dependsOn: ["step-analysis"],
+        },
+      ],
+    });
+
+    const wrapper = await mountPage();
+    const setupState = getSetupState(wrapper);
+    expect(readSetupValue<string>(setupState, "chainStepProgressLabel")).toBe("步骤 2 / 2 执行中");
+
+    setupState.taskDetailPrimaryTab = "trace";
+    await nextTick();
+
+    expect(wrapper.text()).toContain("顺序编排");
+    expect(wrapper.text()).toContain("分析现状");
+    expect(wrapper.text()).toContain("设计方案");
+    expect(wrapper.text()).toContain("先梳理已有约束。");
+    expect(wrapper.text()).toContain("给出收口方案。");
+    expect(wrapper.text()).toContain("现状分析完毕，发现3个关键问题。");
+  });
+
   it("does not show adopt button for single-mode execution", async () => {
     apiMocks.getTask.mockResolvedValueOnce(
       makeTaskWithOverrides({
         executionMode: "single",
-        executionPlan: JSON.stringify({
-          mode: "single",
-          candidates: [{ label: "主执行", agent: "default-executor", status: "completed" }],
-        }),
+        orchestrationKind: "single",
         strategy: JSON.stringify({ executionMode: "single" }),
       }),
     );

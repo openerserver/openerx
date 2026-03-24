@@ -1,3 +1,4 @@
+import type { RealtimeEvent } from "../stores/realtime";
 /**
  * Shared message normalization helpers for task conversation rendering.
  *
@@ -5,7 +6,6 @@
  * reconstructed conversation items and apply live text overlays.
  */
 import { normalizeWorkspaceFilePath } from "./workspace-file-path";
-import type { RealtimeEvent } from "../stores/realtime";
 
 /* ------------------------------------------------------------------ */
 /*  Type exports                                                       */
@@ -105,7 +105,9 @@ function summarizeValue(value: unknown): string | undefined {
   }
 
   if (Array.isArray(value)) {
-    const entries = value.map((item) => summarizeValue(item)).filter((item): item is string => Boolean(item));
+    const entries = value
+      .map((item) => summarizeValue(item))
+      .filter((item): item is string => Boolean(item));
     return entries.length ? entries.join(", ") : undefined;
   }
 
@@ -178,7 +180,9 @@ export function messageInfo(message: unknown) {
 function messageParts(message: unknown): Array<Record<string, unknown>> {
   const parts = asRecord(message)?.parts;
   return Array.isArray(parts)
-    ? parts.map((part) => asRecord(part)).filter((part): part is Record<string, unknown> => Boolean(part))
+    ? parts
+        .map((part) => asRecord(part))
+        .filter((part): part is Record<string, unknown> => Boolean(part))
     : [];
 }
 
@@ -254,7 +258,8 @@ function buildReadPreview(output: unknown) {
   const outputText = summarizeValue(output);
   return {
     filePath: normalizeWorkspaceFilePath(extractTaggedContent(outputText, "path")),
-    rawContent: extractTaggedContent(outputText, "content") ?? extractTaggedContent(outputText, "entries"),
+    rawContent:
+      extractTaggedContent(outputText, "content") ?? extractTaggedContent(outputText, "entries"),
     content: normalizePreviewText(
       extractTaggedContent(outputText, "content") ?? extractTaggedContent(outputText, "entries"),
       220,
@@ -297,11 +302,12 @@ function extractToolOutputFilePaths(output: unknown): string[] {
 }
 
 function firstPatchFilePath(input: Record<string, unknown>): string | undefined {
-  const patchText = typeof input.input === "string"
-    ? input.input
-    : typeof input.patch === "string"
-      ? input.patch
-      : undefined;
+  const patchText =
+    typeof input.input === "string"
+      ? input.input
+      : typeof input.patch === "string"
+        ? input.patch
+        : undefined;
 
   return extractPatchFilePaths(patchText)[0];
 }
@@ -310,7 +316,11 @@ function firstToolOutputFilePath(state: Record<string, unknown>): string | undef
   return extractToolOutputFilePaths(state.output ?? state.error)[0];
 }
 
-function buildToolFileContent(kind: string, input: Record<string, unknown>, state: Record<string, unknown>): string | undefined {
+function buildToolFileContent(
+  kind: string,
+  input: Record<string, unknown>,
+  state: Record<string, unknown>,
+): string | undefined {
   if (kind === "create_file") {
     return typeof input.content === "string" && input.content.length > 0
       ? input.content
@@ -350,7 +360,9 @@ function buildToolInputPreview(input: Record<string, unknown>): string | undefin
   }
 
   if (Array.isArray(input.args) && input.args.length) {
-    const args = input.args.map((item) => summarizeValue(item)).filter((item): item is string => Boolean(item));
+    const args = input.args
+      .map((item) => summarizeValue(item))
+      .filter((item): item is string => Boolean(item));
     if (args.length) {
       lines.push(`args: ${args.join(" ")}`);
     }
@@ -416,7 +428,10 @@ function hasVisibleToolSignal(args: {
   );
 }
 
-function buildToolCall(part: Record<string, unknown>, index: number): TaskConversationToolCallItem | null {
+function buildToolCall(
+  part: Record<string, unknown>,
+  index: number,
+): TaskConversationToolCallItem | null {
   if (asString(part.type) !== "tool") {
     return null;
   }
@@ -438,9 +453,19 @@ function buildToolCall(part: Record<string, unknown>, index: number): TaskConver
   const description = summarizeValue(input.description) ?? summarizeValue(input.explanation);
   const command = kind === "bash" ? summarizeValue(input.command) : undefined;
   const inputPreview = buildToolInputPreview(input);
-  const outputPreview = normalizePreviewText(state.output ?? state.error, 220) ?? readPreview?.content;
+  const outputPreview =
+    normalizePreviewText(state.output ?? state.error, 220) ?? readPreview?.content;
 
-  if (!hasVisibleToolSignal({ headline, description, command, filePath: derivedFilePath, inputPreview, outputPreview })) {
+  if (
+    !hasVisibleToolSignal({
+      headline,
+      description,
+      command,
+      filePath: derivedFilePath,
+      inputPreview,
+      outputPreview,
+    })
+  ) {
     return null;
   }
 
@@ -470,13 +495,19 @@ function normalizeToolCalls(parts: Array<Record<string, unknown>>): TaskConversa
 /*  Live assistant state collection                                    */
 /* ------------------------------------------------------------------ */
 
-export function collectLiveAssistantState(events: RealtimeEvent[], sessionId: string): LiveAssistantState {
+export function collectLiveAssistantState(
+  events: RealtimeEvent[],
+  sessionId: string,
+): LiveAssistantState {
   const orderedAssistantMessageIds: string[] = [];
   const knownAssistantIds = new Set<string>();
   const metaById = new Map<string, LiveAssistantMeta>();
   const textById = new Map<string, string>();
   const incompleteIds = new Set<string>();
-  const sessionEvents = events.filter((item) => item.sessionId === sessionId).slice().reverse();
+  const sessionEvents = events
+    .filter((item) => item.sessionId === sessionId)
+    .slice()
+    .reverse();
 
   const rememberMessageId = (messageId: string) => {
     if (!knownAssistantIds.has(messageId)) {
@@ -485,51 +516,59 @@ export function collectLiveAssistantState(events: RealtimeEvent[], sessionId: st
     }
   };
 
-  for (const event of sessionEvents) {
-    const rawType = getRealtimeRawType(event);
+  const rememberAssistantMeta = (event: RealtimeEvent) => {
     const info = getRealtimeInfo(event);
-
-    if (rawType === "message.updated" && info) {
-      const messageId = asString(info.id);
-      const role = asString(info.role);
-      if (messageId && role === "assistant") {
-        metaById.set(messageId, {
-          agent: asString(info.agent),
-          createdAt:
-            parseTimestamp(asRecord(info.time)?.created) ??
-            parseTimestamp(asRecord(info.time)?.completed),
-        });
-        rememberMessageId(messageId);
-        if (hasCompletedTimestamp(asRecord(info.time)?.completed)) {
-          incompleteIds.delete(messageId);
-        } else {
-          incompleteIds.add(messageId);
-        }
-      }
+    if (getRealtimeRawType(event) !== "message.updated" || !info) {
+      return;
     }
-  }
 
-  for (const event of sessionEvents) {
+    const messageId = asString(info.id);
+    const role = asString(info.role);
+    if (!messageId || role !== "assistant") {
+      return;
+    }
+
+    metaById.set(messageId, {
+      agent: asString(info.agent),
+      createdAt:
+        parseTimestamp(asRecord(info.time)?.created) ??
+        parseTimestamp(asRecord(info.time)?.completed),
+    });
+    rememberMessageId(messageId);
+    if (hasCompletedTimestamp(asRecord(info.time)?.completed)) {
+      incompleteIds.delete(messageId);
+      return;
+    }
+    incompleteIds.add(messageId);
+  };
+
+  const rememberAssistantText = (event: RealtimeEvent) => {
     const rawType = getRealtimeRawType(event);
     const part = getRealtimePart(event);
 
     if (rawType !== "message.updated" && rawType !== "message.part.updated") {
-      continue;
+      return;
     }
 
     const messageId = asString(part?.messageID);
     if (!messageId || !knownAssistantIds.has(messageId)) {
-      continue;
+      return;
     }
     const incomingText =
-      typeof event.data.delta === "string"
-        ? event.data.delta
-        : asString(part?.text);
+      typeof event.data.delta === "string" ? event.data.delta : asString(part?.text);
     if (asString(part?.type) !== "text" || typeof incomingText !== "string") {
-      continue;
+      return;
     }
 
     textById.set(messageId, mergeStreamingText(textById.get(messageId), incomingText));
+  };
+
+  for (const event of sessionEvents) {
+    rememberAssistantMeta(event);
+  }
+
+  for (const event of sessionEvents) {
+    rememberAssistantText(event);
   }
 
   return {
@@ -571,11 +610,13 @@ export function normalizeMessage(
     asString(info?.preview);
   const liveText = liveState.textById.get(key);
   const text =
-    liveText && liveText.length > (persistedText?.length ?? 0)
-      ? liveText
-      : persistedText;
+    liveText && liveText.length > (persistedText?.length ?? 0) ? liveText : persistedText;
 
-  if (!text && toolCalls.length === 0 && !(role === "assistant" && liveState.incompleteIds.has(key))) {
+  if (
+    !text &&
+    toolCalls.length === 0 &&
+    !(role === "assistant" && liveState.incompleteIds.has(key))
+  ) {
     return null;
   }
 
@@ -597,7 +638,9 @@ export function normalizeMessage(
 /**
  * Normalize messages without live-state overlay (for static display, e.g. parallel candidates).
  */
-export function normalizeSessionConversationItems(messages: unknown[]): TaskConversationMessageItem[] {
+export function normalizeSessionConversationItems(
+  messages: unknown[],
+): TaskConversationMessageItem[] {
   const liveState = createEmptyLiveAssistantState();
 
   return messages

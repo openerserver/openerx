@@ -42,23 +42,17 @@ describe("parseStageHooks", () => {
   });
 
   test("skips hooks with invalid trigger", () => {
-    const raw = [
-      { id: "bad", trigger: "unknown-trigger", agent: "a", enabled: true },
-    ];
+    const raw = [{ id: "bad", trigger: "unknown-trigger", agent: "a", enabled: true }];
     expect(parseStageHooks(raw)).toEqual([]);
   });
 
   test("skips hooks without agent", () => {
-    const raw = [
-      { id: "no-agent", trigger: "pre-execution", enabled: true },
-    ];
+    const raw = [{ id: "no-agent", trigger: "pre-execution", enabled: true }];
     expect(parseStageHooks(raw)).toEqual([]);
   });
 
   test("assigns defaults for missing optional fields", () => {
-    const raw = [
-      { trigger: "post-execution", agent: "checker" },
-    ];
+    const raw = [{ trigger: "post-execution", agent: "checker" }];
     const result = parseStageHooks(raw);
     expect(result).toHaveLength(1);
     expect(result[0].id).toBe("stage-hook-0");
@@ -70,9 +64,7 @@ describe("parseStageHooks", () => {
   });
 
   test("disabled hooks are still parsed (enabled=false)", () => {
-    const raw = [
-      { trigger: "on-failure", agent: "alert", enabled: false },
-    ];
+    const raw = [{ trigger: "on-failure", agent: "alert", enabled: false }];
     const result = parseStageHooks(raw);
     expect(result).toHaveLength(1);
     expect(result[0].enabled).toBe(false);
@@ -144,10 +136,7 @@ describe("mergeStageAndStrategyHooks", () => {
       timeoutMs: 30000,
       order: 20,
     };
-    const result = mergeStageAndStrategyHooks(
-      [stageHook, stagePost],
-      [strategyHook],
-    );
+    const result = mergeStageAndStrategyHooks([stageHook, stagePost], [strategyHook]);
     expect(result).toHaveLength(3);
     // order: 5, 10, 20
     expect(result.map((h) => h.id)).toEqual(["stage-pre", "strategy-pre", "stage-post"]);

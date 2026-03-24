@@ -1,22 +1,15 @@
-import { Database } from "bun:sqlite";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import postgres from "../../control-plane/service/node_modules/postgres";
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const CP_URL = process.env.TEST_CP_URL || "http://127.0.0.1:4097";
 const PROJECT_ID = process.env.TEST_PROJECT_ID || "proj-default";
 const USERNAME = process.env.TEST_USERNAME || "admin";
 const PASSWORD = process.env.TEST_PASSWORD || "admin123!";
-const DATABASE_URL = process.env.TEST_DATABASE_URL || process.env.DATABASE_URL || "";
-const DB_PATH =
-  process.env.TEST_DB_PATH || resolve(__dirname, "../../control-plane/service/data/openerx.db");
-const USE_POSTGRES = /^(postgres|postgresql):\/\//i.test(DATABASE_URL);
-const testDatabase = USE_POSTGRES ? null : new Database(DB_PATH, { create: true });
-const sql = USE_POSTGRES ? postgres(DATABASE_URL, { max: 1, prepare: false }) : null;
-let ensureLegacyRoleWorkflowMigrated: typeof import("../../control-plane/service/src/modules/task-workflows/legacy-role-workflow-storage").ensureLegacyRoleWorkflowMigrated;
+const rawDatabaseUrl = process.env.TEST_DATABASE_URL || process.env.DATABASE_URL || "";
+const DATABASE_URL = /^(postgres|postgresql):\/\//i.test(rawDatabaseUrl)
+  ? rawDatabaseUrl
+  : "postgres://127.0.0.1:5432/openerx";
+const sql = postgres(DATABASE_URL, { max: 1, prepare: false });
 
 function toPostgresPlaceholders(query: string) {
   let index = 0;
@@ -31,24 +24,15 @@ function toPostgresPlaceholders(query: string) {
 }
 
 async function writeDb(query: string, params: unknown[]) {
-  if (sql) {
-    await sql.unsafe(toPostgresPlaceholders(query), params as never[]);
-    return;
-  }
-
-  testDatabase?.query(query).run(...params);
+  await sql.unsafe(toPostgresPlaceholders(query), params as never[]);
 }
 
-async function readCount(query: string, params: unknown[]) {
-  if (sql) {
-    const rows = (await sql.unsafe(toPostgresPlaceholders(query), params as never[])) as Array<{
-      count: string | number;
-    }>;
-    return Number(rows[0]?.count ?? 0);
+async function safeWriteDb(query: string, params: unknown[]) {
+  try {
+    await writeDb(query, params);
+  } catch {
+    // Best-effort cleanup only.
   }
-
-  const row = testDatabase?.query(query).get(...params) as { count: number | bigint } | undefined;
-  return Number(row?.count ?? 0);
 }
 
 async function request<T>(
@@ -92,100 +76,120 @@ async function login(): Promise<string> {
 }
 
 const createdTaskIds: string[] = [];
-const createdWorkflowTemplateIds: string[] = [];
+const createdWorkflowTemplates: Array<{ templateId: string; stageIds: string[] }> = [];
 
 async function createTask(token: string, title: string) {
-  const { data, status } = await authedRequest<{ id: string; nodeId: string }>(token, "/api/tasks", {
-    method: "POST",
-    body: JSON.stringify({
-      title,
-      prompt: `${title} prompt`,
-      projectId: PROJECT_ID,
-    }),
-  });
+  const { data, status } = await authedRequest<{ id: string; nodeId: string }>(
+    token,
+    "/api/tasks",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        title,
+        prompt: `${title} prompt`,
+        projectId: PROJECT_ID,
+      }),
+    },
+  );
   expect(status).toBe(201);
   createdTaskIds.push(data.id);
   return data;
 }
 
-async function createWorkflowTemplateFixture(templateId: string, stageKeys: string[]) {
-  const now = new Date().toISOString();
-  createdWorkflowTemplateIds.push(templateId);
+async function createWorkflowTemplateFixture(
+  token: string,
+  templateId: string,
+  stageKeys: string[],
+) {
+  createdWorkflowTemplates.push({
+    templateId,
+    stageIds: stageKeys.map((stageKey) => `${templateId}-${stageKey}`),
+  });
 
-  await writeDb(
-    `INSERT INTO workflow_templates (
-        id, name, enabled, selectable_by_projects, stage_order_json, version, created_at, updated_at
-      ) VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6, ?7)`,
-    [templateId, `Test Template ${templateId}`, true, true, JSON.stringify(stageKeys), now, now],
-  );
+  const createTemplate = await authedRequest<Record<string, unknown>>(token, "/api/workflow-templates", {
+    method: "POST",
+    body: JSON.stringify({
+      id: templateId,
+      name: `Test Template ${templateId}`,
+      enabled: true,
+      selectableByProjects: true,
+      stageOrder: stageKeys,
+    }),
+  });
+  expect(createTemplate.status).toBe(201);
+}
 
-  const insertStageQuery = `INSERT INTO workflow_template_stages (
-      id, template_id, stage_key, name, enabled, mode, primary_role_agent_id, participant_role_agent_ids_json, order_index
-    ) VALUES (?1, ?2, ?3, ?4, ?5, 'single', ?6, ?7, ?8)`;
-
+async function createWorkflowTemplateStages(token: string, templateId: string, stageKeys: string[]) {
   for (const [index, stageKey] of stageKeys.entries()) {
-    await writeDb(insertStageQuery, [
-      `${templateId}-${stageKey}`,
-      templateId,
-      stageKey,
-      stageKey,
-      true,
-      `role.${stageKey}`,
-      JSON.stringify([]),
-      index,
-    ]);
+    const createStage = await authedRequest<Record<string, unknown>>(
+      token,
+      `/api/workflow-templates/${templateId}/stages`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          id: `${templateId}-${stageKey}`,
+          stageKey,
+          name: stageKey,
+          enabled: true,
+          mode: "single",
+          primaryRoleAgentId: `role.${stageKey}`,
+          participantRoleAgentIds: [],
+          orderIndex: index,
+        }),
+      },
+    );
+    expect(createStage.status).toBe(201);
   }
-}
-
-async function countWorkflowRuns(taskId: string) {
-  return readCount("SELECT COUNT(*) AS count FROM task_workflow_runs WHERE task_id = ?1", [taskId]);
-}
-
-async function countStageRunsForTask(taskId: string) {
-  return readCount(
-    `SELECT COUNT(*) AS count
-       FROM task_stage_runs
-       WHERE workflow_run_id IN (SELECT id FROM task_workflow_runs WHERE task_id = ?1)`,
-    [taskId],
-  );
 }
 
 afterAll(async () => {
   try {
     for (const taskId of createdTaskIds) {
-      await writeDb(
+      await safeWriteDb(
         "DELETE FROM task_stage_runs WHERE workflow_run_id IN (SELECT id FROM task_workflow_runs WHERE task_id = ?1)",
         [taskId],
       );
-      await writeDb("DELETE FROM task_workflow_runs WHERE task_id = ?1", [taskId]);
-      await writeDb("DELETE FROM developer_change_requests WHERE task_id = ?1", [taskId]);
-      await writeDb("DELETE FROM role_aggregate_conclusions WHERE task_id = ?1", [taskId]);
-      await writeDb("DELETE FROM agent_runs WHERE task_id = ?1", [taskId]);
-      await writeDb("DELETE FROM audit_events WHERE task_id = ?1", [taskId]);
-      await writeDb("DELETE FROM project_tree_links WHERE source_node_id = ?1 OR target_node_id = ?1", [taskId]);
-      await writeDb("DELETE FROM project_tree_events WHERE node_id = ?1", [taskId]);
-      await writeDb("DELETE FROM project_tree_branches WHERE task_node_id = ?1 OR head_node_id = ?1", [taskId]);
-      await writeDb("DELETE FROM project_tree_nodes WHERE id = ?1", [taskId]);
+      await safeWriteDb("DELETE FROM task_timeline_views WHERE task_id = ?1", [taskId]);
+      await safeWriteDb("DELETE FROM task_snapshots WHERE task_id = ?1", [taskId]);
+      await safeWriteDb("DELETE FROM task_domain_events WHERE task_id = ?1", [taskId]);
+      await safeWriteDb("DELETE FROM task_run_nodes WHERE task_id = ?1", [taskId]);
+      await safeWriteDb("DELETE FROM task_runs WHERE task_id = ?1", [taskId]);
+      await safeWriteDb("DELETE FROM task_workflow_runs WHERE task_id = ?1", [taskId]);
+      await safeWriteDb("DELETE FROM developer_change_requests WHERE task_id = ?1", [taskId]);
+      await safeWriteDb("DELETE FROM role_aggregate_conclusions WHERE task_id = ?1", [taskId]);
+      await safeWriteDb("DELETE FROM agent_runs WHERE task_id = ?1", [taskId]);
+      await safeWriteDb("DELETE FROM audit_events WHERE task_id = ?1", [taskId]);
+      await safeWriteDb(
+        "DELETE FROM project_tree_links WHERE source_node_id = ?1 OR target_node_id = ?1",
+        [taskId],
+      );
+      await safeWriteDb("DELETE FROM project_tree_events WHERE node_id = ?1", [taskId]);
+      await safeWriteDb(
+        "DELETE FROM project_tree_branches WHERE task_node_id = ?1 OR head_node_id = ?1",
+        [taskId],
+      );
+      await safeWriteDb("DELETE FROM tasks WHERE id = ?1", [taskId]);
+      await safeWriteDb("DELETE FROM project_tree_nodes WHERE id = ?1", [taskId]);
     }
 
-    for (const templateId of createdWorkflowTemplateIds) {
-      await writeDb("DELETE FROM workflow_template_stages WHERE template_id = ?1", [templateId]);
-      await writeDb("DELETE FROM workflow_templates WHERE id = ?1", [templateId]);
+    for (const template of createdWorkflowTemplates) {
+      for (const stageId of template.stageIds) {
+        await authedRequest<{ ok: boolean }>(token, `/api/workflow-templates/${template.templateId}/stages/${stageId}`, {
+          method: "DELETE",
+        }).catch(() => undefined);
+      }
+
+      await safeWriteDb("DELETE FROM workflow_template_stages WHERE template_id = ?1", [template.templateId]);
+      await safeWriteDb("DELETE FROM workflow_templates WHERE id = ?1", [template.templateId]);
     }
   } finally {
-    testDatabase?.close();
-    if (sql) {
-      await sql.end();
-    }
+    await sql.end();
   }
 });
 
 let token = "";
 
 beforeAll(async () => {
-  ({ ensureLegacyRoleWorkflowMigrated } = await import(
-    "../../control-plane/service/src/modules/task-workflows/legacy-role-workflow-storage"
-  ));
   token = await login();
 });
 
@@ -353,10 +357,7 @@ describe("Role workflow storage (service)", () => {
         roleAggregateConclusions?: unknown;
         developerChangeRequests?: unknown;
       } | null;
-    }>(
-      token,
-      `/api/project-tree/tasks/${taskId}`,
-    );
+    }>(token, `/api/project-tree/tasks/${taskId}`);
     expect(taskAfterMigration.status).toBe(200);
     const parsedStrategy = taskAfterMigration.data.strategy ?? {};
     expect(parsedStrategy.roleAggregateConclusions).toBeUndefined();
@@ -436,19 +437,41 @@ describe("Role workflow storage (service)", () => {
     });
     expect(patchTask.status).toBe(200);
 
-    await Promise.all([
-      ensureLegacyRoleWorkflowMigrated(taskId),
-      ensureLegacyRoleWorkflowMigrated(taskId),
+    const [firstWorkflow, secondWorkflow] = await Promise.all([
+      authedRequest<{
+        data: {
+          workflowRun: { templateId: string; currentStage: string; status: string } | null;
+          stages: Array<Record<string, unknown>>;
+        };
+      }>(token, `/api/tasks/${taskId}/workflow`),
+      authedRequest<{
+        data: {
+          workflowRun: { templateId: string; currentStage: string; status: string } | null;
+          stages: Array<Record<string, unknown>>;
+        };
+      }>(token, `/api/tasks/${taskId}/workflow`),
     ]);
 
-    expect(await countWorkflowRuns(taskId)).toBe(1);
+    expect(firstWorkflow.status).toBe(200);
+    expect(secondWorkflow.status).toBe(200);
+    expect(firstWorkflow.data.data.workflowRun).toMatchObject({
+      templateId: "legacy-template-concurrent",
+      currentStage: "verify",
+      status: "running",
+    });
+    expect(secondWorkflow.data.data.workflowRun).toMatchObject({
+      templateId: "legacy-template-concurrent",
+      currentStage: "verify",
+      status: "running",
+    });
+    expect(firstWorkflow.data.data.workflowRun?.id).toBe(secondWorkflow.data.data.workflowRun?.id);
   });
 
   test("backfills missing stage runs when a historical task already has workflow run", async () => {
     const { id: taskId } = await createTask(token, `legacy-task-stage-backfill-${Date.now()}`);
     const templateId = `legacy-template-backfill-${Date.now()}`;
     const legacyConclusionId = `legacy-conclusion-stage-backfill-${taskId}`;
-    await createWorkflowTemplateFixture(templateId, ["design", "verify"]);
+    await createWorkflowTemplateFixture(token, templateId, ["design", "verify"]);
 
     const patchTask = await authedRequest<Record<string, unknown>>(token, `/api/tasks/${taskId}`, {
       method: "PATCH",
@@ -476,13 +499,21 @@ describe("Role workflow storage (service)", () => {
     });
     expect(patchTask.status).toBe(200);
 
-    const now = new Date().toISOString();
-    await writeDb(
-      `INSERT INTO task_workflow_runs (
-          id, task_id, template_id, current_stage, status, started_at, created_at, updated_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`,
-      [`workflow-run-${taskId}`, taskId, templateId, "verify", "running", now, now, now],
-    );
+    const initialWorkflow = await authedRequest<{
+      data: {
+        workflowRun: { templateId: string; currentStage: string; status: string } | null;
+        stages: Array<Record<string, unknown>>;
+      };
+    }>(token, `/api/tasks/${taskId}/workflow`);
+    expect(initialWorkflow.status).toBe(200);
+    expect(initialWorkflow.data.data.workflowRun).toMatchObject({
+      templateId,
+      currentStage: "verify",
+      status: "running",
+    });
+    expect(initialWorkflow.data.data.stages).toHaveLength(0);
+
+    await createWorkflowTemplateStages(token, templateId, ["design", "verify"]);
 
     const workflow = await authedRequest<{
       data: {
@@ -498,7 +529,12 @@ describe("Role workflow storage (service)", () => {
       status: "running",
     });
     expect(workflow.data.data.stages).toHaveLength(2);
-    expect(await countStageRunsForTask(taskId)).toBe(2);
+    expect(workflow.data.data.stages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ stageKey: "design", status: "completed" }),
+        expect.objectContaining({ stageKey: "verify", status: "running" }),
+      ]),
+    );
 
     const retryStage = await authedRequest<{ ok: boolean }>(
       token,

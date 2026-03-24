@@ -1,15 +1,11 @@
-import type {
-  ExecutionTraceMessage,
-  ExecutionTraceTimelineItem,
-  TaskExecutionTrace,
-} from "./api";
+import type { ExecutionTraceMessage, ExecutionTraceTimelineItem, TaskExecutionTrace } from "./api";
 import {
+  type LiveAssistantState,
+  type TaskConversationMessageItem,
   asRecord,
   asString,
   createEmptyLiveAssistantState,
   normalizeMessage,
-  type LiveAssistantState,
-  type TaskConversationMessageItem,
 } from "./message-normalize";
 
 type TraceSourceItem = ExecutionTraceTimelineItem | ExecutionTraceMessage;
@@ -88,7 +84,10 @@ function buildToolSnapshot(part: Record<string, unknown>, index: number): ToolSn
   };
 }
 
-function shouldReplaceToolSnapshot(current: ToolSnapshot | undefined, candidate: ToolSnapshot): boolean {
+function shouldReplaceToolSnapshot(
+  current: ToolSnapshot | undefined,
+  candidate: ToolSnapshot,
+): boolean {
   if (!current) {
     return true;
   }
@@ -101,7 +100,9 @@ function shouldReplaceToolSnapshot(current: ToolSnapshot | undefined, candidate:
   return candidate.index > current.index;
 }
 
-function normalizeTraceParts(parts: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+function normalizeTraceParts(
+  parts: Array<Record<string, unknown>>,
+): Array<Record<string, unknown>> {
   const visibleTextParts: Array<{ index: number; part: Record<string, unknown> }> = [];
   const toolSnapshots = new Map<string, ToolSnapshot>();
 
@@ -184,7 +185,7 @@ function buildTraceLegacyMessage(item: TraceSourceItem) {
       time: {
         ...(rawTime ?? {}),
         created: item.createdAt,
-        completed: "completedAt" in item ? item.completedAt ?? undefined : rawTime?.completed,
+        completed: "completedAt" in item ? (item.completedAt ?? undefined) : rawTime?.completed,
       },
       preview: item.text,
     },

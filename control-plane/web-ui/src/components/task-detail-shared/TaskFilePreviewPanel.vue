@@ -64,9 +64,7 @@ const props = defineProps<{
   content?: string;
 }>();
 
-const emit = defineEmits<{
-  (e: "close"): void;
-}>();
+const emit = defineEmits<(e: "close") => void>();
 
 const activeFilePath = ref(props.filePath);
 const providedContent = ref<string | undefined>(props.content);
@@ -147,14 +145,19 @@ function findAnchorTarget(anchor: string) {
     return null;
   }
 
-  const escaped = typeof CSS !== "undefined" && typeof CSS.escape === "function" ? CSS.escape(anchor) : anchor;
+  const escaped =
+    typeof CSS !== "undefined" && typeof CSS.escape === "function" ? CSS.escape(anchor) : anchor;
   const directTarget = container.querySelector(`#${escaped}, a[name="${escaped}"]`);
   if (directTarget instanceof HTMLElement) {
     return directTarget;
   }
 
   const headings = Array.from(container.querySelectorAll("h1, h2, h3, h4, h5, h6"));
-  return headings.find((heading) => slugifyHeading(heading.textContent || "") === slugifyHeading(anchor)) ?? null;
+  return (
+    headings.find(
+      (heading) => slugifyHeading(heading.textContent || "") === slugifyHeading(anchor),
+    ) ?? null
+  );
 }
 
 function scheduleAnchorScroll(attempt = 0) {
@@ -163,18 +166,21 @@ function scheduleAnchorScroll(attempt = 0) {
     return;
   }
 
-  anchorScrollTimer = setTimeout(() => {
-    anchorScrollTimer = null;
-    const target = findAnchorTarget(activeAnchor.value || "");
-    if (target instanceof HTMLElement) {
-      target.scrollIntoView({ block: "start", behavior: "smooth" });
-      return;
-    }
+  anchorScrollTimer = setTimeout(
+    () => {
+      anchorScrollTimer = null;
+      const target = findAnchorTarget(activeAnchor.value || "");
+      if (target instanceof HTMLElement) {
+        target.scrollIntoView({ block: "start", behavior: "smooth" });
+        return;
+      }
 
-    if (attempt < 8) {
-      scheduleAnchorScroll(attempt + 1);
-    }
-  }, attempt === 0 ? 0 : 80);
+      if (attempt < 8) {
+        scheduleAnchorScroll(attempt + 1);
+      }
+    },
+    attempt === 0 ? 0 : 80,
+  );
 }
 
 async function loadFileContent() {
@@ -233,7 +239,10 @@ async function handleCopy() {
 async function openPreviewFile(path: string, anchor?: string, pushHistory = true) {
   const normalizedPath = normalizeWorkspacePath(path);
   if (pushHistory && normalizedPath !== activeFilePath.value) {
-    historyStack.value = [...historyStack.value, { path: activeFilePath.value, anchor: activeAnchor.value || undefined }];
+    historyStack.value = [
+      ...historyStack.value,
+      { path: activeFilePath.value, anchor: activeAnchor.value || undefined },
+    ];
   }
 
   activeFilePath.value = normalizedPath;

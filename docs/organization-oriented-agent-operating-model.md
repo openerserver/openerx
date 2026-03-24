@@ -103,7 +103,7 @@ OpenerX 是一个由老板 Agent 带领虚拟研发团队完成任务的 AI 组�
 而不是：
 
 - 哪个 prompt 被调用了
-- 哪个 execution plan 被触发了
+- 哪个 runtime plan 被触发了
 - 哪个 runtime candidate 获胜了
 
 ### 5.3 工作流是团队作业流程，不是脚本流水线

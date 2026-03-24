@@ -1,4 +1,4 @@
-import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
+import { type VueWrapper, flushPromises, mount } from "@vue/test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defineComponent, h } from "vue";
 
@@ -160,7 +160,8 @@ vi.mock("ant-design-vue", () => {
           h("input", {
             ...attrs,
             value: String(props.value ?? ""),
-            onInput: (event: Event) => emit("update:value", (event.target as HTMLInputElement).value),
+            onInput: (event: Event) =>
+              emit("update:value", (event.target as HTMLInputElement).value),
           }),
           h(
             "button",

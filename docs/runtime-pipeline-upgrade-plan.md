@@ -3,7 +3,7 @@
 > 适用范围：OpenerX 控制平面 — 任务运行可观测性与流水线引擎升级
 > 目标：将当前"消息回溯式规划摘要"升级为"分支感知、事件驱动的运行流水线"，在 UI 上呈现"计划步骤 → 运行节点 → 输出结果"的完整映射
 > 状态说明：本文档中涉及旧版图模型兼容层的设计已经过时。
-> 当前实现已移除独立 DAG 兼容层，运行流水线只围绕 Workflow 阶段、ExecutionPlan、Hook 执行记录和实时事件展开。阅读本文件时，请以 [docs/dag-node-execution-plan-v2.md](docs/dag-node-execution-plan-v2.md) 的清理结论为准。
+> 当前实现已移除独立 DAG 兼容层；并且 runtime pipeline 主路径已经不再读取 `tasks.executionPlan` / `parallelRunHistory`。并行任务以 task domain runs 为主数据源，规划阶段仅作为补充展示层。阅读本文件时，请以 [docs/dag-node-execution-plan-v2.md](docs/dag-node-execution-plan-v2.md) 的清理结论为准。
 
 ## 1. 文档目标
 
@@ -13,7 +13,7 @@
 - 运行流水线的目标模型是什么
 - 数据模型、API、BFF、前端分别需要做哪些变更
 - 分哪几个阶段推进，每阶段交付什么
-- 与现有 executionPlan / session 机制怎样复用与对齐
+- 与现有 RuntimePlan / session 机制怎样复用与对齐
 
 ## 2. 现状分析
 
@@ -26,20 +26,20 @@
 | 状态推断 | 有消息 → completed/running，无消息 → pending | 同上 |
 | 刷新时机 | 前端收到 `task.continued` 事件时全量重新拉取 | `TaskDetail.vue` `scheduleTaskRefresh` |
 | 分支感知 | 无 — 始终读 task 创建时的 sessionId，不跟随用户切换的活跃分支 | 同上 |
-| 与 executionPlan 关系 | 无 — 完全独立；executionPlan 有自己的 steps/candidates 但 pipeline 不消费 | — |
+| 与 RuntimePlan 关系 | 历史版本曾与 RuntimePlan 独立；当前实现优先消费 task domain runs、hook 执行记录与 planning messages，不再依赖 `tasks.executionPlan` | — |
 
 ### 2.2 核心问题
 
 1. **静态快照而非运行态**：只反映任务首次规划阶段的 3 个 agent 输出，后续追问不更新也不新增步骤。
 2. **不感知分支**：用户 fork 到新分支后，pipeline 仍然读 root session 的消息。
-3. **不消费已有编排数据**：executionPlan（steps + candidates + judgeResult）和 task strategy（hookExecutions）已落库，但 pipeline 端点完全绕过了这些数据。
+3. **历史痛点：不消费已有编排数据**：早期 pipeline 端点曾完全绕过编排与运行数据，只能回看 planning messages；当前实现已经改为优先聚合 task domain runs、hookExecutions 与 lineage。
 4. **无增量更新**：前端只在 `task.continued` 时做全量 HTTP 拉取，没有事件驱动增量推送。
 
 ### 2.3 可复用的基础设施
 
 | 基础设施 | 当前状态 | 复用方式 |
 | -------- | -------- | -------- |
-| `ExecutionPlan` 数据模型 | steps + candidates + dependsOn + judgeResult，已持久化到 `tasks.executionPlan` JSON 字段 | 作为运行流水线的核心数据源 |
+| `RuntimePlan` 数据模型 | 历史设计中包含 steps + candidates + dependsOn + judgeResult，并曾通过 `tasks.executionPlan` 承载 | 保留为方案语境；当前 runtime pipeline 主路径不再把它当核心数据源 |
 | `PersistedTaskStrategy` | hookExecutions 追加记录，已持久化到 `tasks.strategy` JSON 字段 | 作为 hook 阶段数据源 |
 | SSE 事件体系 | `agent.started`, `task.completed`, `task.continued`, `task.hooks.updated` 等 | 作为增量推送通道 |
 | session lineage | 通过 `/api/tasks/:taskId/branches*` 路由暴露的 root/fork/sub_session 血统，底层由 project-tree/session 节点承载 | 作为分支感知的数据依据 |
@@ -49,13 +49,13 @@
 
 ### 3.1 概念定义
 
-**运行流水线（Runtime Pipeline）** 是一个分支感知、事件驱动的执行进度视图。它将任务的 executionPlan、hook 执行记录和实时 SSE 事件统一投射到一条有序的阶段序列上，让用户在 UI 上看到"当前分支正在执行到哪一步"。
+**运行流水线（Runtime Pipeline）** 是一个分支感知、事件驱动的执行进度视图。它将任务的 RuntimePlan、hook 执行记录和实时 SSE 事件统一投射到一条有序的阶段序列上，让用户在 UI 上看到"当前分支正在执行到哪一步"。
 
 它不是独立的 DAG 执行引擎（这部分由 OpenCode Runtime + SSE Aggregator 承担），而是一个**聚合视图层**，从多个已有数据源计算出统一的流水线状态。
 
 ### 3.2 数据模型
 
-```
+```text
 RuntimePipeline {
   taskId: string
   sessionId: string          // 当前分支的 session
@@ -76,7 +76,7 @@ RuntimePipelineStage {
   order: number              // 排序序号
 
   // 关联引用
-  sourceType: "executionPlan.step" | "strategy.hookExecution" | "session.message"
+  sourceType: "runtimePlan.step" | "strategy.hookExecution" | "session.message"
   sourceId: string | null    // 对应 step.id / hookExecution.hookId / messageId
 
   // 执行详情
@@ -109,27 +109,25 @@ PipelineSummary {
 
 ### 3.3 与现有模型的映射关系
 
-```
-ExecutionPlan.steps → RuntimePipelineStage（type = step.type）
-ExecutionPlan.candidates → RuntimePipelineStage（type = "execution"，一个 candidate 一个 stage）
+```text
+RuntimePlan.steps → RuntimePipelineStage（type = step.type）
+RuntimePlan.candidates → RuntimePipelineStage（type = "execution"，一个 candidate 一个 stage）
 PersistedTaskStrategy.hookExecutions → RuntimePipelineStage（type = "hook" 或 "post-hook"）
 Session messages（规划 agent） → RuntimePipelineStage（type = "planning"，保留向后兼容）
 ```
 
-映射优先级：executionPlan > hookExecutions > session messages。当多个来源指向同一逻辑步骤时，以 executionPlan 的步骤为锚点，其余合并到同一 stage。
+映射优先级：RuntimePlan > hookExecutions > session messages。当多个来源指向同一逻辑步骤时，以 RuntimePlan 的步骤为锚点，其余合并到同一 stage。
 
 ### 3.4 分支感知逻辑
 
-```
+```text
 1. 前端传入 sessionId（当前活跃分支的 session）
 2. BFF 根据 sessionId 从 `/api/tasks/:taskId/branches*` lineage 视图确认属于该 task
-3. 读该 session 对应的 executionPlan —— 分阶段处理：
-  a. Phase 1-3：统一读取 tasks.executionPlan，分支之间共享同一份 plan
-  b. Phase 4：如引入 `task_sessions.executionPlanSnapshot`，则 fork 分支优先读快照，否则回退到 tasks.executionPlan
+3. 若 task 为并行运行，读取 task domain runs / domain run detail，按候选与 judge 节点构造 execution/judge stages
 4. 读该 session 的消息历史用于填充 planning stage
 5. 汇总 hook 执行记录
   a. Phase 1-3：hookExecutions 仍按 task 级记录展示，不承诺严格 session 隔离
-  b. Phase 4：如 hookExecution 增加 session 关联字段，再做严格分支过滤
+  b. 更严格的 session 级 hook 过滤仅保留为历史高级扩展设想，不属于当前主路径范围
 6. 计算 stages 排序和状态
 ```
 
@@ -168,11 +166,12 @@ Session messages（规划 agent） → RuntimePipelineStage（type = "planning"�
 
 ### 4.1 BFF — 升级现有 pipeline 端点
 
-```
+```http
 GET /tasks/:taskId/pipeline?sessionId=<optional>
 ```
 
 **变更要点**：
+
 - 新增可选 `sessionId` 查询参数。不传时使用 task 当前活跃 sessionId。
 - 响应在保留 `stages` 语义的基础上扩展为 `RuntimePipeline` 完整结构。
 - 向后兼容：旧客户端如果只读取 `stages` 字段，不会因新增元数据字段而中断。
@@ -189,9 +188,11 @@ async function buildRuntimePipeline(taskId: string, sessionId?: string): Promise
   const lineage = await getTaskSessionLineage(taskId)
   const sessionRecord = lineage.find(r => r.runtimeSessionId === targetSessionId)
 
-  // 3. 解析 executionPlan
-  const plan: ExecutionPlan | null = task.executionPlan ? JSON.parse(task.executionPlan) : null
+  // 3. 读取策略与并行运行明细
   const strategy: PersistedTaskStrategy | null = task.strategy ? JSON.parse(task.strategy) : null
+  const parallelRunDetail = task.orchestrationKind === "parallel"
+    ? await loadParallelDomainRunDetail(task.id)
+    : null
 
   // 4. 获取 session 消息用于 planning stages
   const messages = await getSessionMessages(targetSessionId)
@@ -215,9 +216,9 @@ async function buildRuntimePipeline(taskId: string, sessionId?: string): Promise
     }
   }
 
-  // 6c. Execution steps（从 executionPlan）
-  if (plan) {
-    for (const step of plan.steps) {
+  // 6c. Execution steps（优先从 task domain runs / judge detail）
+  if (parallelRunDetail) {
+    for (const stage of domainRunDetailToStages(parallelRunDetail)) {
       if (step.type === "hook") {
         stages.push(planHookStepToStage(step, order++))
       } else if (step.type === "execution") {
@@ -230,7 +231,7 @@ async function buildRuntimePipeline(taskId: string, sessionId?: string): Promise
     }
   }
 
-  // 6d. Graph nodes（补充不在 executionPlan 中的独立 DAG 节点）
+  // 6d. Graph nodes（补充不在 RuntimePlan 中的独立 DAG 节点）
   for (const node of sessionNodes) {
     if (!stages.some(s => s.graphNodeId === node.id)) {
       stages.push(graphNodeToStage(node, order++))
@@ -285,7 +286,7 @@ async function emitPipelineStagePatch(taskId: string, sessionId: string, changed
 
 ### 4.3 Service 层 — Phase 1-3 无新增端点
 
-运行流水线在 Phase 1-3 保持为 BFF 聚合视图，不在 service 层新建表或端点。现有数据源包括 `tasks.executionPlan`、兼容 lineage 路由以及任务图数据。只有在 Phase 4 仍明确需要分支级 plan 快照时，才评估把快照写入树侧结构或专用新表；不默认继续扩展 `task_sessions`。
+运行流水线在 Phase 1-3 保持为 BFF 聚合视图，不在 service 层新建表或端点。当前现有数据源以 task domain runs、兼容 lineage 路由、hook 执行记录和任务图数据为主；`tasks.executionPlan` 已不再是正式输入。历史上关于“分支级 plan 快照”或额外专用表的设想，当前统一视为高级扩展背景，不作为默认落地方向。
 
 ### 4.4 前端 — 新增 API 调用
 
@@ -367,7 +368,7 @@ watch(activeSessionId, (newSid) => {
 
 当前 `<a-steps>` 垂直展示保留，但扩展为：
 
-```
+```text
 ┌────────────────────────────────────────────┐
 │ 运行流水线                    分支: main ▼  │
 │ 进度: 3/5 (60%)         耗时: 2m 34s       │
@@ -397,9 +398,12 @@ watch(activeSessionId, (newSid) => {
 
 ## 6. 分阶段交付计划
 
-### Phase 1：数据源统一 + 分支感知（基础层）
+> 历史注记：本节保留最初的 phase 切分，用于解释设计推进顺序。
+> 其中 Phase 1-2 的核心能力已经进入当前实现；Phase 3-4 更适合作为历史扩展方向参考，而不是当前默认排期。
 
-**目标**：pipeline 端点从 executionPlan + strategy + graph 读取真实数据，支持 sessionId 参数，先实现“同一 executionPlan 在不同分支下的运行视图”。
+### Phase 1：数据源统一 + 分支感知（历史基础层）
+
+**目标**：pipeline 端点从 RuntimePlan + strategy + graph 读取真实数据，支持 sessionId 参数，先实现“同一 RuntimePlan 在不同分支下的运行视图”。
 
 **变更清单**：
 
@@ -412,12 +416,13 @@ watch(activeSessionId, (newSid) => {
 | 前端 | `types/pipeline.ts`（新建） | `RuntimePipeline`、`RuntimePipelineStage`、`PipelineSummary` 类型定义 |
 
 **验收标准**：
-- Pipeline 面板显示 executionPlan 的实际步骤（hook / execution / judge）而非硬编码 3 agent
+
+- Pipeline 面板显示 RuntimePlan 的实际步骤（hook / execution / judge）而非硬编码 3 agent
 - 切换分支后 pipeline 至少切换到对应分支的消息、graph 节点和当前 session 视角
-- Phase 1 不要求不同分支拥有独立 executionPlan
+- Phase 1 不要求不同分支拥有独立 RuntimePlan
 - 向后兼容：旧客户端继续读取 `stages` 字段不受影响
 
-### Phase 2：增量事件推送 + 实时状态（实时层）
+### Phase 2：增量事件推送 + 实时状态（历史实时层）
 
 **目标**：pipeline stage 状态通过 SSE 事件增量更新，降低对全量 HTTP 拉取的依赖。
 
@@ -431,12 +436,13 @@ watch(activeSessionId, (newSid) => {
 | 前端 | `stores/realtime.ts` | 注册 `pipeline.stage.updated` 事件类型 |
 
 **验收标准**：
+
 - 任务执行中，pipeline 面板 stage 状态实时推进（pending → running → completed）
 - 不再出现"pipeline 从不更新"的感觉
 - Hook 执行结果实时追加到 pipeline
 - `task.continued` 在 Phase 2 只要求触发刷新，不要求自动生成新的 plan/stage
 
-### Phase 3：续问重规划 + 差异对比（推演层）
+### Phase 3：续问重规划 + 差异对比（历史扩展方向）
 
 **目标**：用户续问后，pipeline 能展示新增/跳过/失效的步骤，并可对比初始计划。
 
@@ -451,37 +457,33 @@ watch(activeSessionId, (newSid) => {
 | 前端 | 新组件 `PipelineDiff.vue` | 初始计划 vs 当前执行路径的并排对比视图 |
 
 **验收标准**：
+
 - 续问后 pipeline 中新增步骤标记可见
 - Diff 视图可展示"原计划步骤 A→B→C" vs "实际路径 A→B→D→E"
 
-### Phase 4：人工干预 + 成本分析 + 异常诊断（高级能力层）
+### Phase 4：人工干预 + 成本分析 + 异常诊断（历史高级扩展）
 
-**目标**：支持对单个 stage 的操控和诊断。此阶段可根据产品优先级拆分为独立子项。
+状态注记：本阶段保留为历史高级扩展草案，不再展开为当前待实施清单。其原始范围主要包括三类方向：
 
-**子项清单**：
+1. 让 pipeline 从“观测面”继续向“控制面”延伸，例如单 stage 的暂停、重跑、跳过或 agent 替换。
+2. 补充 stage 级成本与失败诊断视图，例如 token、耗时、成功率、hook/agent/依赖失败点。
+3. 支持分支间 pipeline 对比或更细粒度的重规划差异展示。
 
-| 子项 | 描述 | 核心变更 |
-| ---- | ---- | -------- |
-| 5a. 暂停/重跑单步 | 对 running stage 发 pause，对 failed stage 发 retry | BFF 新端点 `POST /:taskId/pipeline/stages/:stageId/action` |
-| 5b. 替换执行 agent | 修改 candidate 的 agent 后重新执行 | 修改 executionPlan candidate + 重建 session |
-| 5c. 跳过步骤 | 标记 stage 为 skipped，推进到下一步 | 修改 executionPlan step status |
-| 5d. 成本分析 | 按 stage 统计 token/耗时/成功率 | pipeline summary 扩展 + 前端图表组件 |
-| 5e. 异常诊断 | stage failed 时显示卡在哪个 hook/agent/依赖 | 读取 session.error + hookExecution 失败详情 |
-| 5f. 分支比较 | 两个分支的 pipeline 并排对比 | 复用 Phase 4 diff 逻辑，传入不同 sessionId |
+按当前仓库状态，这些内容都应视为历史扩展背景，而不是 runtime pipeline 收尾阶段的默认工作项。
 
 ## 7. 技术约束与决策
 
-### 7.0 需要先拍板的两个实现决策
+### 7.0 历史决策记录
 
 #### 决策 A：planning stage 是保留层，不是主锚点
 
-Phase 1 中 planning stage 仍然保留，原因是当前 UI 上用户已经看过“规划阶段”信息，完全移除会让体验突然倒退；但它只作为补充层，不作为运行流水线的主锚点。真正的主锚点始终是 `executionPlan.steps`、`executionPlan.candidates` 和 task graph nodes。
+Phase 1 中 planning stage 仍然保留，原因是当前 UI 上用户已经看过“规划阶段”信息，完全移除会让体验突然倒退；但它只作为补充层，不作为运行流水线的主锚点。真正的主锚点始终是 `RuntimePlan.steps`、`RuntimePlan.candidates` 和 task graph nodes。
 
 这意味着：
 
-- 有 executionPlan 时，planning stage 只做前置说明，不参与当前步骤判定
-- 没有 executionPlan 的旧任务，才退化为 planning stage 驱动的展示
-- Phase 4 如果做真正重规划，再决定是否把 planning stage 提升为可 diff 的一级对象
+- 有 RuntimePlan 时，planning stage 只做前置说明，不参与当前步骤判定
+- 没有可用 domain run / execution detail 的旧任务，才退化为 planning stage 驱动的展示
+- 是否把 planning stage 提升为可 diff 的一级对象，当前保留为历史高级扩展背景，不属于现行收尾范围
 
 #### 决策 B：Phase 1-2 不引入 stage 可写能力
 
@@ -491,15 +493,15 @@ Phase 1 中 planning stage 仍然保留，原因是当前 UI 上用户已经看�
 
 - Phase 1-2 只做只读观测，不开放 stage action API
 - Phase 3 只做重规划与差异展示，不写执行状态
-- 只有在 Phase 4 才评估把 pipeline 从观测面升级为控制面
+- “把 pipeline 从观测面升级为控制面”保留为历史高级扩展设想，当前不纳入默认范围
 
 ### 7.1 不新增 DB 表
 
 运行流水线是 BFF 聚合视图，stage 数据从多个已有数据源计算得出，不在 service 层新增 `pipeline_stages` 表。原因：
 
-- executionPlan/strategy/graph 已落库，再存一份 stage 会导致数据一致性问题
+- RuntimePlan/strategy/graph 已落库，再存一份 stage 会导致数据一致性问题
 - BFF 聚合计算量很小（单个 task 的 stages 通常 < 20 条），无性能瓶颈
-- 以后如果需要持久化 pipeline 快照（用于历史对比），可以作为 Phase 4 扩展
+- 历史上关于持久化 pipeline 快照用于对比的设想，当前统一视为可选扩展背景
 
 ### 7.2 向后兼容
 
@@ -512,9 +514,9 @@ Phase 1 中 planning stage 仍然保留，原因是当前 UI 上用户已经看�
 - `buildRuntimePipeline()` 需要 2-3 次 IO（getTask、getSessionMessages，以及按需读取其他聚合数据），可并行
 - 增量推送后，前端正常场景下只在分支切换和任务完成时做全量 HTTP 拉取
 
-### 7.4 executionPlan 冻结与分支快照
+### 7.4 RuntimePlan 冻结与分支快照
 
-当前 executionPlan 存在 task 级别（`tasks.executionPlan`），fork 时不会复制一份到分支。Phase 1-3 暂不改变这一点，因此“分支感知”准确含义是“分支视角下的运行状态和图节点不同”，而不是“分支拥有独立 plan”。Phase 4 如果要支持真正的重规划和分支对比，应优先考虑写入 session tree node 的 `content_json` 或独立快照表，而不是继续把新语义叠加到 `task_sessions` 兼容表。
+历史方案里 RuntimePlan 曾被视作 task 级共享对象；但当前 runtime pipeline 已不再依赖该字段。Phase 1-3 的“分支感知”准确含义是“分支视角下的运行状态、lineage 与图节点不同”，而不是“分支拥有独立 executionPlan”。至于更细粒度的重规划或分支对比，本文只保留一条历史结论：不应继续把新语义叠加到 `task_sessions` 兼容表。
 
 ## 8. 相关代码位置索引
 
@@ -524,31 +526,32 @@ Phase 1 中 planning stage 仍然保留，原因是当前 UI 上用户已经看�
 | 聚合逻辑 | `web-ui-bff/src/lib/runtime-pipeline.ts`（新建） | — | Phase 1 |
 | 编排策略 | `web-ui-bff/src/lib/orchestration-strategy.ts` | 策略读写、plan 构建 | 只读复用 |
 | SSE 聚合器 | `web-ui-bff/src/modules/realtime/sse-aggregator.ts` | 事件转换、完成检测 | Phase 2 |
-| 任务执行 | `web-ui-bff/src/modules/tasks/routes.ts` | 任务创建/执行/续问 | Phase 4 |
+| 任务执行 | `web-ui-bff/src/modules/tasks/routes.ts` | 任务创建/执行/续问 | 历史高级扩展若继续推进时再评估 |
 | 前端 API | `web-ui/src/lib/api.ts` | pipeline API 调用 | Phase 1 |
-| 任务详情 | `web-ui/src/pages/TaskDetail.vue` | pipeline 面板渲染 | Phase 1-4 |
+| 任务详情 | `web-ui/src/pages/TaskDetail.vue` | pipeline 面板渲染 | Phase 1-3 为主；更重交互仅留作历史扩展 |
 | 类型定义 | `web-ui/src/types/pipeline.ts`（新建） | — | Phase 1 |
 | Service 任务 | `service/src/modules/tasks/routes.ts` | task CRUD | 不变 |
-| Service Schema | `service/src/db/schema.ts` | tasks + 兼容 lineage 表 / tree schema | Phase 4（若仍需快照则新增 tree-adjacent 结构） |
+| Service Schema | `service/src/db/schema.ts` | tasks + 兼容 lineage 表 / tree schema | 当前不新增；历史扩展也不应回到 `task_sessions` 叠加语义 |
 
 ## 9. 风险与缓解
 
 | 风险 | 影响 | 缓解措施 |
 | ---- | ---- | -------- |
-| executionPlan 为空（旧任务没有 plan） | pipeline 退化为只有 planning agent stages | 当 plan 为空时 fallback 到现有消息回溯逻辑 |
-| fork session 无独立 plan 快照 | 多分支共享同一 plan，差异对比无意义 | Phase 1-3 不做分支 plan diff；Phase 4 引入快照 |
+| 无可用 domain run / execution detail | pipeline 退化为只有 planning agent stages | 当缺少更丰富运行明细时 fallback 到现有消息回溯逻辑 |
+| fork session 无独立 plan 快照 | 多分支共享同一 plan，细粒度分支对比价值有限 | 当前不做分支 plan diff；若未来另立高级扩展，再单独定义快照模型 |
 | 增量推送导致前端 stage 列表与服务端不一致 | 极端情况下 stage 丢失或重复 | 每次 task.completed 时做全量刷新兜底 |
 | hook 异步完成导致 stage 顺序错乱 | UI 显示跳跃 | stage 始终按 order 排序，hook 完成时更新 finishedAt 但不改 order |
 
 ## 10. 后端改造清单
 
-本节只覆盖 Phase 1-2 的可落地改造，按模块拆成可直接认领的任务。
+> 历史注记：本节主要是最初的后端实施 checklist。
+> 其中 `buildRuntimePipeline()`、pipeline 端点重写、execution detail fallback 和核心测试覆盖已经进入当前实现；仍未兑现的条目应视为历史扩展 backlog。
 
 ### 10.1 BFF 新增聚合模块
 
-建议新建 `web-ui-bff/src/lib/runtime-pipeline.ts`，集中承载运行流水线的纯计算逻辑，避免把聚合细节继续堆进 `tasks/routes.ts`。
+历史方案建议新建 `web-ui-bff/src/lib/runtime-pipeline.ts`，集中承载运行流水线的纯计算逻辑；当前该聚合模块已经存在，本段保留为设计来源说明。
 
-建议导出函数：
+历史草案中的导出函数如下：
 
 ```typescript
 export async function buildRuntimePipeline(args: {
@@ -581,15 +584,15 @@ export function stageFromGraphNode(...): RuntimePipelineStage
 
 目标文件：`web-ui-bff/src/modules/tasks/routes.ts`
 
-实施项：
+历史实施项：
 
 1. 保留原有 `GET /:taskId/pipeline` 路由，不改路径。
 2. 增加 `sessionId` query 参数校验。
 3. route handler 改为调用 `buildRuntimePipeline({ taskId, sessionId })`。
-4. 如果 task 无 `executionPlan`，fallback 到现有 planning message 提取逻辑。
+4. 如果 task 缺少可用 execution detail，fallback 到现有 planning message 提取逻辑。
 5. 对非法 `sessionId` 返回 404 或 400，避免跨 task 读取。
 
-建议伪代码：
+历史伪代码：
 
 ```typescript
 taskRoutes.get("/:taskId/pipeline", async (c) => {
@@ -614,7 +617,7 @@ Phase 2 只做“已知事件触发后的 pipeline patch 推送”，不做独�
 4. `maybeFinalizeFailure()` 后：把当前 stage 置为 `failed`
 5. `session.activated` 不直接发 patch，只让前端全量刷新
 
-建议新增辅助函数：
+历史辅助函数草案：
 
 ```typescript
 async function emitPipelinePatchForTask(args: {
@@ -645,20 +648,21 @@ Phase 1-2 不新增 service 端点，但后端实现时要遵守以下边界：
 
 ### 10.5 后端测试清单
 
-建议新增或扩展 BFF 测试覆盖以下场景：
+历史测试 checklist 如下；其中核心读取/fallback 场景已进入现有 BFF 测试，剩余条目更适合视为补强方向：
 
 | 场景 | 断言 |
 | ---- | ---- |
 | 单执行任务读取 pipeline | 返回 hook / execution / judge 的正确顺序 |
-| 并行任务读取 pipeline | candidate stages 数量与 executionPlan 一致 |
+| 并行任务读取 pipeline | candidate stages 数量与 RuntimePlan 一致 |
 | 传入 fork sessionId | 返回 session 对应的 planning message 与 graph node 视角 |
-| executionPlan 为空 | 自动退化为 planning stage 展示 |
+| 缺少可用 execution detail | 自动退化为 planning stage 展示 |
 | 非法 sessionId | 返回错误而不是越权读数据 |
 | task 完成后 patch | summary.completedStages 正确更新 |
 
 ## 11. 前端改造清单
 
-本节只覆盖 Phase 1-3，目标是让 TaskDetail 上的 pipeline 面板先真正可用，再做高级能力。
+> 历史注记：本节保留前端改造草案作为来源说明。
+> 其中 pipeline 类型与 API 升级已经完成，后续未兑现条目应视为可选增强而非当前必做项。
 
 ### 11.1 类型与 API
 
@@ -804,7 +808,7 @@ function shouldApplyPipelinePatch(event: PipelineStageUpdatedEventData) {
 
 ### 12.5 Phase 4 预留事件
 
-Phase 4 如做重规划，建议不要复用 `pipeline.stage.updated` 塞入过多语义，而是新增：
+状态注记：本节仅保留历史事件设计草案。若未来单独推进高级扩展，不建议复用 `pipeline.stage.updated` 塞入过多语义，而应另起事件类型：
 
 ```typescript
 type FutureRuntimePipelineEvent =

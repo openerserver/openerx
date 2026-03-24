@@ -124,9 +124,12 @@ async function fetchTaskWorkflow(context: TaskWorkflowContext) {
 }
 
 async function fetchTaskRecord(authorization: string, taskId: string) {
-  const result = await cpFetch<TaskRecord>(`/api/project-tree/tasks/${encodeURIComponent(taskId)}`, {
-    authorization,
-  });
+  const result = await cpFetch<TaskRecord>(
+    `/api/project-tree/tasks/${encodeURIComponent(taskId)}`,
+    {
+      authorization,
+    },
+  );
 
   return result.ok ? result.data : null;
 }
@@ -364,7 +367,9 @@ function buildTemplateSwitchMetadata(args: {
     ...(args.scenarioKey ? { scenarioKey: args.scenarioKey } : {}),
     ...(args.scenarioReason ? { scenarioReason: args.scenarioReason } : {}),
     ...(args.preferredTemplateId ? { preferredTemplateId: args.preferredTemplateId } : {}),
-    ...(args.stageStrategyTemplateId ? { stagePolicyTemplateId: args.stageStrategyTemplateId } : {}),
+    ...(args.stageStrategyTemplateId
+      ? { stagePolicyTemplateId: args.stageStrategyTemplateId }
+      : {}),
     ...(args.stagePolicyNote ? { stagePolicyNote: args.stagePolicyNote } : {}),
     ...(args.triggerStageKey ? { triggerStageKey: args.triggerStageKey } : {}),
     ...(args.governanceReason ? { governanceReason: args.governanceReason } : {}),

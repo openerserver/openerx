@@ -28,7 +28,7 @@ describe("buildSessionMessagesFromExecutionTrace", () => {
 
     expect(messages).toHaveLength(1);
     expect((messages[0] as { text?: string }).text).toBe("来自 timeline");
-    expect(((messages[0] as { info?: { time?: { created?: number } } }).info?.time?.created)).toBe(
+    expect((messages[0] as { info?: { time?: { created?: number } } }).info?.time?.created).toBe(
       Date.parse("2026-03-21T10:00:00.000Z"),
     );
   });
@@ -74,7 +74,7 @@ describe("buildSessionMessagesFromExecutionTrace", () => {
 
     expect(messages).toHaveLength(1);
     expect((messages[0] as { text?: string }).text).toBe("当前 session 消息");
-    expect(((messages[0] as { parts?: Array<{ text?: string }> }).parts?.[0]?.text)).toBe(
+    expect((messages[0] as { parts?: Array<{ text?: string }> }).parts?.[0]?.text).toBe(
       "当前 session 消息",
     );
   });

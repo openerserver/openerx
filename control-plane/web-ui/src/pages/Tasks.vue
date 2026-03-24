@@ -437,8 +437,8 @@
 import { PlusOutlined, SyncOutlined } from "@ant-design/icons-vue";
 import { message } from "ant-design-vue";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
-import ExecutionModeModal from "../components/ExecutionModeModal.vue";
 import { useRoute, useRouter } from "vue-router";
+import ExecutionModeModal from "../components/ExecutionModeModal.vue";
 import {
   ApiError,
   type AutopilotLevel,
@@ -466,10 +466,10 @@ import {
   updateTask,
   updateTaskStatus,
 } from "../lib/api";
-import { resolveTaskDisplayStatus } from "../lib/task-display-status";
 import { showRuntimeRecoveryNotice } from "../lib/runtime-recovery";
 import { RUNTIME_RECOVERY_ERROR_PREFIX } from "../lib/runtime-recovery-contract";
 import { RUNTIME_RECOVERY_CONTEXTS } from "../lib/runtime-recovery-notice";
+import { resolveTaskDisplayStatus } from "../lib/task-display-status";
 import { useProjectStore } from "../stores/project";
 import { tasksThemeStyles } from "../theme/ui-theme";
 
@@ -630,10 +630,16 @@ const modelOptions = computed(() => {
 
 function filterModelOption(input: string, option?: unknown) {
   const keyword = input.toLowerCase();
-  const normalized = option as { value?: string | number | null; label?: string | number | null } | undefined;
+  const normalized = option as
+    | { value?: string | number | null; label?: string | number | null }
+    | undefined;
   return (
-    String(normalized?.value ?? "").toLowerCase().includes(keyword) ||
-    String(normalized?.label ?? "").toLowerCase().includes(keyword)
+    String(normalized?.value ?? "")
+      .toLowerCase()
+      .includes(keyword) ||
+    String(normalized?.label ?? "")
+      .toLowerCase()
+      .includes(keyword)
   );
 }
 

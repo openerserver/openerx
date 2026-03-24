@@ -44,7 +44,7 @@
 
 1. 代码、schema、migration 与数据库已经完成旧兼容层删除
 2. 产品与前端不再暴露 Task Graph 独立能力
-3. 当前执行模型以 Workflow Stage、ExecutionPlan、Hook、runtime pipeline 为主
+3. 当前执行模型以 Workflow Stage、RuntimePlan、Hook、runtime pipeline 为主
 
 后续若需要追溯历史设计，请参考仓库历史；当前执行方向以 [docs/dag-node-execution-plan-v2.md](docs/dag-node-execution-plan-v2.md) 为准。
 
@@ -454,7 +454,7 @@
 
 建议按以下顺序推进：
 
-1. **先统一 Workflow Stage 主模型**：把执行阶段、Hook、ExecutionPlan、agent_runs 的主链路收敛到同一模型。
+1. **先统一 Workflow Stage 主模型**：把执行阶段、Hook、RuntimePlan、agent_runs 的主链路收敛到同一模型。
 2. **再补运行时编排与可视化读取**：优先补全 pipeline、并行执行、顺序执行与当前 session 视角。
 3. **在执行主路径稳定后推进插件治理**：Epic 3。
 4. **最后补恢复与暴露能力**：Epic 4。

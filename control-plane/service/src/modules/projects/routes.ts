@@ -4,9 +4,10 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { db } from "../../db";
 import {
+  type ProjectSettings,
   type ProjectTreeLinkType,
   type ProjectTreeNodeType,
-  type ProjectSettings,
+  agentRuns,
   approvalTickets,
   auditEvents,
   budgetConfigs,
@@ -24,6 +25,9 @@ import {
   runtimeUsageBaselines,
   runtimeUsageLedgerSteps,
   runtimeUsageLedgers,
+  tasks as taskAggregates,
+  taskSnapshots,
+  taskTimelineViews,
   users,
   workflowTemplates,
 } from "../../db/schema";
@@ -34,7 +38,7 @@ import {
   ensureProjectRootNode,
   getProjectRootNodeId,
 } from "../project-tree/storage";
-import { type TaskTreeRecord, loadTaskTreeRecords } from "../project-tree/task-view";
+import { loadTaskTreeRecords } from "../project-tree/task-view";
 
 export const projectRoutes = new Hono<AppEnv>();
 
@@ -195,6 +199,8 @@ const runtimeUsageLedgerStepSyncSchema = z.object({
 const syncRuntimeUsageLedgerSchema = z.object({
   taskId: z.string().min(1).optional(),
   agentRunId: z.string().min(1).optional(),
+  runId: z.string().min(1).optional(),
+  runNodeId: z.string().min(1).optional(),
   runtimeSessionId: z.string().min(1),
   executionSource: z.string().trim().min(1),
   entrypointType: z.string().trim().min(1),
@@ -224,7 +230,6 @@ const runtimeUsageBaselineMatchScopeSchema = z.enum([
   "project+entrypoint",
   "project",
 ]);
-
 
 function normalizeProjectSettings(settings: unknown): ProjectSettings | null | undefined {
   if (settings == null) {
@@ -366,6 +371,8 @@ function normalizeRuntimeUsageLedgerRecord(ledger: typeof runtimeUsageLedgers.$i
     projectId: ledger.projectId,
     taskId: ledger.taskId,
     agentRunId: ledger.agentRunId,
+    runId: ledger.runId,
+    runNodeId: ledger.runNodeId,
     runtimeSessionId: ledger.runtimeSessionId,
     executionSource: ledger.executionSource,
     entrypointType: ledger.entrypointType,
@@ -397,6 +404,8 @@ function normalizeRuntimeUsageLedgerStepRecord(step: typeof runtimeUsageLedgerSt
     projectId: step.projectId,
     taskId: step.taskId,
     agentRunId: step.agentRunId,
+    runId: step.runId,
+    runNodeId: step.runNodeId,
     runtimeSessionId: step.runtimeSessionId,
     stepType: step.stepType,
     triggerType: step.triggerType,
@@ -437,6 +446,31 @@ function roundBaselineValue(value: number | null) {
 type RuntimeUsageBaselineMatchScope = z.infer<typeof runtimeUsageBaselineMatchScopeSchema>;
 type SyncRuntimeUsageLedgerPayload = z.infer<typeof syncRuntimeUsageLedgerSchema>;
 type RuntimeUsageLedgerRow = typeof runtimeUsageLedgers.$inferSelect;
+
+async function resolveRuntimeUsageRunBridge(body: SyncRuntimeUsageLedgerPayload) {
+  if (body.runId || body.runNodeId) {
+    return {
+      runId: body.runId ?? null,
+      runNodeId: body.runNodeId ?? null,
+    };
+  }
+
+  if (!body.agentRunId) {
+    return {
+      runId: null,
+      runNodeId: null,
+    };
+  }
+
+  const agentRun = await db.query.agentRuns.findFirst({
+    where: eq(agentRuns.id, body.agentRunId),
+  });
+
+  return {
+    runId: agentRun?.runId ?? null,
+    runNodeId: agentRun?.runNodeId ?? null,
+  };
+}
 
 type RuntimeUsageBaselineView = {
   id: string;
@@ -792,6 +826,11 @@ interface OverviewItem {
   completionPercent: number;
   risks: string[];
   runningTasks: number;
+  activeSessionCount: number;
+  parallelTaskCount: number;
+  sequentialChainTaskCount: number;
+  recentTimelineItemCount: number;
+  failedTaskCount: number;
   pendingApprovals: number;
   failedTasksToday: number;
   lastActivityAt: string | null;
@@ -801,6 +840,19 @@ interface OverviewItem {
   currentUserRole: string | null;
   isCurrentUserManager: boolean;
   createdAt: string;
+}
+
+interface OverviewTaskSummary {
+  id: string;
+  projectId: string;
+  status: string;
+  currentSessionId: string | null;
+  orchestrationKind: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  updatedAt: string;
+  lastActivityAt: string | null;
 }
 
 function parseOverviewParams(c: {
@@ -882,7 +934,18 @@ function emptyOverviewResponse(page: number, pageSize: number) {
     page,
     pageSize,
     total: 0,
-    summary: { totalProjects: 0, pendingConfigCount: 0, riskCount: 0 },
+    summary: {
+      totalProjects: 0,
+      pendingConfigCount: 0,
+      riskCount: 0,
+      activeProjectCount: 0,
+      runningTaskCount: 0,
+      activeSessionCount: 0,
+      parallelTaskCount: 0,
+      sequentialChainTaskCount: 0,
+      failedTaskCount: 0,
+      recentTimelineItemCount: 0,
+    },
   };
 }
 
@@ -898,8 +961,58 @@ function groupByProjectId<T extends { projectId: string }>(items: T[]) {
   return map;
 }
 
+function mergeOverviewTaskSummaries(args: {
+  tasks: Array<{
+    id: string;
+    projectId: string;
+    status: string;
+    createdAt: string;
+    startedAt: string | null;
+    finishedAt: string | null;
+    updatedAt: string;
+  }>;
+  snapshots: Array<{
+    taskId: string;
+    currentStatus: string;
+    currentSessionId: string | null;
+    orchestrationKind: string | null;
+    lastActivityAt: string | null;
+  }>;
+}) {
+  const snapshotByTaskId = new Map(
+    args.snapshots.map((snapshot) => [snapshot.taskId, snapshot] as const),
+  );
+
+  return args.tasks.map((task) => {
+    const snapshot = snapshotByTaskId.get(task.id);
+    const status = snapshot?.currentStatus ?? task.status;
+    const lastActivityAt =
+      snapshot?.lastActivityAt ??
+      task.finishedAt ??
+      task.startedAt ??
+      task.updatedAt ??
+      task.createdAt;
+
+    return {
+      id: task.id,
+      projectId: task.projectId,
+      status,
+      currentSessionId: snapshot?.currentSessionId ?? null,
+      orchestrationKind: snapshot?.orchestrationKind ?? null,
+      createdAt: task.createdAt,
+      startedAt: task.startedAt,
+      finishedAt:
+        status === "completed" || status === "failed" || status === "cancelled"
+          ? (snapshot?.lastActivityAt ?? task.finishedAt)
+          : task.finishedAt,
+      updatedAt: task.updatedAt,
+      lastActivityAt,
+    } satisfies OverviewTaskSummary;
+  });
+}
+
 function mapApprovalsByProject(
-  allTasks: Array<Pick<TaskTreeRecord, "id" | "projectId">>,
+  allTasks: Array<Pick<OverviewTaskSummary, "id" | "projectId">>,
   allPendingApprovals: (typeof approvalTickets.$inferSelect)[],
   projectIds: string[],
 ) {
@@ -932,6 +1045,8 @@ async function loadOverviewDependencies(projectIds: string[]) {
     allRepositories,
     allCredentials,
     allTasks,
+    allTaskSnapshots,
+    allTaskTimelineViews,
     allPendingApprovals,
     allBudgetConfigs,
     allCostRecords,
@@ -943,11 +1058,34 @@ async function loadOverviewDependencies(projectIds: string[]) {
     db.query.repositoryCredentials.findMany({
       where: inArray(repositoryCredentials.projectId, projectIds),
     }),
-    loadTaskTreeRecords({ projectIds }),
+    db.query.tasks.findMany({ where: inArray(taskAggregates.projectId, projectIds) }),
+    db.query.taskSnapshots.findMany({ where: inArray(taskSnapshots.projectId, projectIds) }),
+    db.query.taskTimelineViews.findMany({
+      where: inArray(taskTimelineViews.projectId, projectIds),
+    }),
     db.query.approvalTickets.findMany({ where: eq(approvalTickets.status, "pending") }),
     db.query.budgetConfigs.findMany({ where: inArray(budgetConfigs.projectId, projectIds) }),
     db.query.costRecords.findMany({ where: inArray(costRecords.projectId, projectIds) }),
   ]);
+
+  const overviewTasks = mergeOverviewTaskSummaries({
+    tasks: allTasks.map((task) => ({
+      id: task.id,
+      projectId: task.projectId,
+      status: task.status,
+      createdAt: task.createdAt,
+      startedAt: task.startedAt ?? null,
+      finishedAt: task.finishedAt ?? null,
+      updatedAt: task.updatedAt,
+    })),
+    snapshots: allTaskSnapshots.map((snapshot) => ({
+      taskId: snapshot.taskId,
+      currentStatus: snapshot.currentStatus,
+      currentSessionId: snapshot.currentSessionId ?? null,
+      orchestrationKind: snapshot.orchestrationKind ?? null,
+      lastActivityAt: snapshot.lastActivityAt ?? null,
+    })),
+  });
 
   return {
     orgMap: new Map(allOrgs.map((org) => [org.id, org])),
@@ -955,10 +1093,11 @@ async function loadOverviewDependencies(projectIds: string[]) {
     envsByProject: groupByProjectId(allEnvironments),
     reposByProject: groupByProjectId(allRepositories),
     credsByProject: groupByProjectId(allCredentials),
-    tasksByProject: groupByProjectId(allTasks),
+    tasksByProject: groupByProjectId(overviewTasks),
+    timelineViewsByProject: groupByProjectId(allTaskTimelineViews),
     budgetsByProject: groupByProjectId(allBudgetConfigs),
     costsByProject: groupByProjectId(allCostRecords),
-    approvalsByProject: mapApprovalsByProject(allTasks, allPendingApprovals, projectIds),
+    approvalsByProject: mapApprovalsByProject(overviewTasks, allPendingApprovals, projectIds),
     allMembers,
   };
 }
@@ -1091,14 +1230,21 @@ function deriveOverviewStatus(
 
 function getProjectLastActivity(
   project: typeof projects.$inferSelect,
-  projectTasks: TaskTreeRecord[],
+  projectTasks: OverviewTaskSummary[],
+  timelineViewsForProject: Array<Pick<typeof taskTimelineViews.$inferSelect, "sortAt">>,
 ) {
   let lastActivityAt: string | null = null;
 
   for (const task of projectTasks) {
-    const timestamp = task.finishedAt || task.startedAt || task.createdAt;
+    const timestamp = task.lastActivityAt || task.finishedAt || task.startedAt || task.createdAt;
     if (timestamp && (!lastActivityAt || timestamp > lastActivityAt)) {
       lastActivityAt = timestamp;
+    }
+  }
+
+  for (const item of timelineViewsForProject) {
+    if (item.sortAt && (!lastActivityAt || item.sortAt > lastActivityAt)) {
+      lastActivityAt = item.sortAt;
     }
   }
 
@@ -1117,7 +1263,8 @@ function getProjectOverviewResources(
     envsByProject: Map<string, (typeof environments.$inferSelect)[]>;
     reposByProject: Map<string, (typeof repositories.$inferSelect)[]>;
     credsByProject: Map<string, (typeof repositoryCredentials.$inferSelect)[]>;
-    tasksByProject: Map<string, TaskTreeRecord[]>;
+    tasksByProject: Map<string, OverviewTaskSummary[]>;
+    timelineViewsByProject: Map<string, (typeof taskTimelineViews.$inferSelect)[]>;
     budgetsByProject: Map<string, (typeof budgetConfigs.$inferSelect)[]>;
     costsByProject: Map<string, (typeof costRecords.$inferSelect)[]>;
     approvalsByProject: Map<string, (typeof approvalTickets.$inferSelect)[]>;
@@ -1129,6 +1276,7 @@ function getProjectOverviewResources(
     repositoriesForProject: dependencies.reposByProject.get(projectId) || [],
     credentialsForProject: dependencies.credsByProject.get(projectId) || [],
     tasksForProject: dependencies.tasksByProject.get(projectId) || [],
+    timelineViewsForProject: dependencies.timelineViewsByProject.get(projectId) || [],
     budgetsForProject: dependencies.budgetsByProject.get(projectId) || [],
     costsForProject: dependencies.costsByProject.get(projectId) || [],
     approvalsForProject: dependencies.approvalsByProject.get(projectId) || [],
@@ -1189,7 +1337,8 @@ function buildOverviewItem(
     envsByProject: Map<string, (typeof environments.$inferSelect)[]>;
     reposByProject: Map<string, (typeof repositories.$inferSelect)[]>;
     credsByProject: Map<string, (typeof repositoryCredentials.$inferSelect)[]>;
-    tasksByProject: Map<string, TaskTreeRecord[]>;
+    tasksByProject: Map<string, OverviewTaskSummary[]>;
+    timelineViewsByProject: Map<string, (typeof taskTimelineViews.$inferSelect)[]>;
     budgetsByProject: Map<string, (typeof budgetConfigs.$inferSelect)[]>;
     costsByProject: Map<string, (typeof costRecords.$inferSelect)[]>;
     approvalsByProject: Map<string, (typeof approvalTickets.$inferSelect)[]>;
@@ -1250,11 +1399,36 @@ function buildOverviewItem(
     ),
     risks,
     runningTasks: resources.tasksForProject.filter((task) => task.status === "running").length,
+    activeSessionCount: new Set(
+      resources.tasksForProject
+        .filter(
+          (task) =>
+            task.status === "running" || task.status === "paused" || task.status === "pending",
+        )
+        .map((task) => task.currentSessionId)
+        .filter((sessionId): sessionId is string => Boolean(sessionId)),
+    ).size,
+    parallelTaskCount: resources.tasksForProject.filter(
+      (task) => task.orchestrationKind === "parallel",
+    ).length,
+    sequentialChainTaskCount: resources.tasksForProject.filter(
+      (task) => task.orchestrationKind === "sequential-chain",
+    ).length,
+    recentTimelineItemCount: resources.timelineViewsForProject.filter(
+      (item) => item.sortAt >= todayIso,
+    ).length,
+    failedTaskCount: resources.tasksForProject.filter(
+      (task) => task.status === "failed" || task.status === "cancelled",
+    ).length,
     pendingApprovals: resources.approvalsForProject.length,
     failedTasksToday: resources.tasksForProject.filter(
-      (task) => task.status === "failed" && task.finishedAt && task.finishedAt >= todayIso,
+      (task) => task.status === "failed" && task.lastActivityAt && task.lastActivityAt >= todayIso,
     ).length,
-    lastActivityAt: getProjectLastActivity(project, resources.tasksForProject),
+    lastActivityAt: getProjectLastActivity(
+      project,
+      resources.tasksForProject,
+      resources.timelineViewsForProject,
+    ),
     memberCount: resources.members.length,
     repositoryCount: resources.repositoriesForProject.filter(
       (repository) => repository.status === "active",
@@ -1272,6 +1446,7 @@ async function ensureRuntimeUsageLedger(
   body: SyncRuntimeUsageLedgerPayload,
   now: string,
 ) {
+  const bridge = await resolveRuntimeUsageRunBridge(body);
   const existingLedger = await db.query.runtimeUsageLedgers.findFirst({
     where: and(
       eq(runtimeUsageLedgers.projectId, projectId),
@@ -1286,6 +1461,8 @@ async function ensureRuntimeUsageLedger(
       projectId,
       taskId: body.taskId,
       agentRunId: body.agentRunId,
+      runId: bridge.runId,
+      runNodeId: bridge.runNodeId,
       runtimeSessionId: body.runtimeSessionId,
       executionSource: body.executionSource,
       entrypointType: body.entrypointType,
@@ -1319,6 +1496,7 @@ async function insertRuntimeUsageLedgerStepIfNeeded(args: {
   body: SyncRuntimeUsageLedgerPayload;
   now: string;
 }) {
+  const bridge = await resolveRuntimeUsageRunBridge(args.body);
   const existingStep = args.body.step?.id
     ? await db.query.runtimeUsageLedgerSteps.findFirst({
         where: eq(runtimeUsageLedgerSteps.id, args.body.step.id),
@@ -1332,6 +1510,8 @@ async function insertRuntimeUsageLedgerStepIfNeeded(args: {
       projectId: args.projectId,
       taskId: args.body.taskId,
       agentRunId: args.body.agentRunId,
+      runId: bridge.runId,
+      runNodeId: bridge.runNodeId,
       runtimeSessionId: args.body.runtimeSessionId,
       stepType: args.body.step.stepType,
       triggerType: args.body.step.triggerType,
@@ -1360,10 +1540,13 @@ function buildRuntimeUsageLedgerDeltaSet(
   body: SyncRuntimeUsageLedgerPayload,
   ledger: RuntimeUsageLedgerRow,
   now: string,
+  bridge: { runId: string | null; runNodeId: string | null },
 ) {
   return {
     taskId: body.taskId ?? ledger.taskId,
     agentRunId: body.agentRunId ?? ledger.agentRunId,
+    runId: bridge.runId ?? ledger.runId,
+    runNodeId: bridge.runNodeId ?? ledger.runNodeId,
     executionSource: body.executionSource || ledger.executionSource,
     entrypointType: body.entrypointType || ledger.entrypointType,
     orchestrationFingerprint: body.orchestrationFingerprint ?? ledger.orchestrationFingerprint,
@@ -1390,8 +1573,11 @@ function buildRuntimeUsageLedgerTouchSet(
   body: SyncRuntimeUsageLedgerPayload,
   ledger: RuntimeUsageLedgerRow,
   now: string,
+  bridge: { runId: string | null; runNodeId: string | null },
 ) {
   return {
+    runId: bridge.runId ?? ledger.runId,
+    runNodeId: bridge.runNodeId ?? ledger.runNodeId,
     syncedAt: body.syncedAt || now,
     updatedAt: now,
     status: body.status,
@@ -1406,12 +1592,13 @@ async function applyRuntimeUsageLedgerSync(args: {
   shouldApplyDelta: boolean;
   now: string;
 }) {
+  const bridge = await resolveRuntimeUsageRunBridge(args.body);
   await db
     .update(runtimeUsageLedgers)
     .set(
       args.shouldApplyDelta
-        ? buildRuntimeUsageLedgerDeltaSet(args.body, args.ledgerAfterInsert, args.now)
-        : buildRuntimeUsageLedgerTouchSet(args.body, args.ledgerAfterInsert, args.now),
+        ? buildRuntimeUsageLedgerDeltaSet(args.body, args.ledgerAfterInsert, args.now, bridge)
+        : buildRuntimeUsageLedgerTouchSet(args.body, args.ledgerAfterInsert, args.now, bridge),
     )
     .where(eq(runtimeUsageLedgers.id, args.ledgerId));
 }
@@ -1482,6 +1669,7 @@ projectRoutes.get("/overview", async (c) => {
         reposByProject: dependencies.reposByProject,
         credsByProject: dependencies.credsByProject,
         tasksByProject: dependencies.tasksByProject,
+        timelineViewsByProject: dependencies.timelineViewsByProject,
         budgetsByProject: dependencies.budgetsByProject,
         costsByProject: dependencies.costsByProject,
         approvalsByProject: dependencies.approvalsByProject,
@@ -1495,6 +1683,19 @@ projectRoutes.get("/overview", async (c) => {
     totalProjects: filtered.length,
     pendingConfigCount: filtered.filter((i) => i.projectStatus === "pending_config").length,
     riskCount: filtered.filter((i) => i.risks.length > 0).length,
+    activeProjectCount: filtered.filter(
+      (item) =>
+        item.runningTasks > 0 || item.activeSessionCount > 0 || item.recentTimelineItemCount > 0,
+    ).length,
+    runningTaskCount: filtered.reduce((sum, item) => sum + item.runningTasks, 0),
+    activeSessionCount: filtered.reduce((sum, item) => sum + item.activeSessionCount, 0),
+    parallelTaskCount: filtered.reduce((sum, item) => sum + item.parallelTaskCount, 0),
+    sequentialChainTaskCount: filtered.reduce(
+      (sum, item) => sum + item.sequentialChainTaskCount,
+      0,
+    ),
+    failedTaskCount: filtered.reduce((sum, item) => sum + item.failedTaskCount, 0),
+    recentTimelineItemCount: filtered.reduce((sum, item) => sum + item.recentTimelineItemCount, 0),
   };
   const total = filtered.length;
   const data = paginateOverviewItems(filtered, params.page, params.pageSize);
@@ -1560,7 +1761,12 @@ projectRoutes.get("/:projectId/tree", requireProjectRole("projectId", "viewer"),
 
   const conditions = [eq(projectTreeNodes.projectId, projectId)];
   if (requestedNodeType) {
-    conditions.push(eq(projectTreeNodes.nodeType, requestedNodeType as typeof projectTreeNodes.$inferSelect.nodeType));
+    conditions.push(
+      eq(
+        projectTreeNodes.nodeType,
+        requestedNodeType as typeof projectTreeNodes.$inferSelect.nodeType,
+      ),
+    );
   }
   if (parsedDepth != null && Number.isFinite(parsedDepth) && parsedDepth >= 0) {
     conditions.push(lte(projectTreeNodes.depth, parsedDepth));
@@ -1678,21 +1884,17 @@ projectRoutes.get(
   },
 );
 
-projectRoutes.get(
-  "/:projectId/branches",
-  requireProjectRole("projectId", "viewer"),
-  async (c) => {
-    const projectId = c.req.param("projectId");
+projectRoutes.get("/:projectId/branches", requireProjectRole("projectId", "viewer"), async (c) => {
+  const projectId = c.req.param("projectId");
 
-    const branches = await db
-      .select()
-      .from(projectTreeBranches)
-      .where(eq(projectTreeBranches.projectId, projectId))
-      .orderBy(desc(projectTreeBranches.isDefault), asc(projectTreeBranches.branchName));
+  const branches = await db
+    .select()
+    .from(projectTreeBranches)
+    .where(eq(projectTreeBranches.projectId, projectId))
+    .orderBy(desc(projectTreeBranches.isDefault), asc(projectTreeBranches.branchName));
 
-    return c.json({ data: branches });
-  },
-);
+  return c.json({ data: branches });
+});
 
 projectRoutes.put(
   "/:projectId/branches/:branchId",
@@ -1705,7 +1907,10 @@ projectRoutes.put(
     const now = new Date().toISOString();
 
     const existing = await db.query.projectTreeBranches.findFirst({
-      where: and(eq(projectTreeBranches.id, branchId), eq(projectTreeBranches.projectId, projectId)),
+      where: and(
+        eq(projectTreeBranches.id, branchId),
+        eq(projectTreeBranches.projectId, projectId),
+      ),
     });
     if (!existing) {
       return c.json({ error: "Branch not found" }, 404);
@@ -1762,7 +1967,9 @@ projectRoutes.get(
     const links = await db
       .select()
       .from(projectTreeLinks)
-      .where(or(eq(projectTreeLinks.sourceNodeId, nodeId), eq(projectTreeLinks.targetNodeId, nodeId)))
+      .where(
+        or(eq(projectTreeLinks.sourceNodeId, nodeId), eq(projectTreeLinks.targetNodeId, nodeId)),
+      )
       .orderBy(desc(projectTreeLinks.createdAt));
 
     return c.json({

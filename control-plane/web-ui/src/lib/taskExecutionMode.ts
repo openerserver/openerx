@@ -10,7 +10,7 @@ export const DEFAULT_JUDGE_PROMPT = [
   "",
   "{{candidateResults}}",
   "",
-  '请按以下 JSON 格式输出:',
+  "请按以下 JSON 格式输出:",
   '{"winnerIndex": 0, "scores": [85, 72], "reasoning": "..."}',
 ].join("\n");
 
@@ -29,18 +29,6 @@ export type ExecutionOverrides = {
   steps?: ChainStepInput[];
   judge?: JudgeConfig;
 } | null;
-
-type ExecutionPlanLike = {
-  mode?: ExecutionMode;
-  candidates?: Array<{ model?: string; label?: string }>;
-  steps?: Array<{
-    id?: string;
-    type?: string;
-    title?: string;
-    instruction?: string;
-    model?: string | null;
-  }>;
-};
 
 type StrategyLike = {
   executionMode?: unknown;
@@ -66,10 +54,6 @@ function parseJsonObject(raw?: string | null): Record<string, unknown> | null {
   }
 }
 
-function parseExecutionPlan(task: Pick<Task, "executionPlan"> | null | undefined): ExecutionPlanLike | null {
-  return parseJsonObject(task?.executionPlan) as ExecutionPlanLike | null;
-}
-
 function parseTaskStrategy(task: Pick<Task, "strategy"> | null | undefined): StrategyLike | null {
   return parseJsonObject(task?.strategy) as StrategyLike | null;
 }
@@ -81,7 +65,8 @@ function isExecutionMode(value: unknown): value is ExecutionMode {
 function normalizeJudge(raw: JudgeLike): JudgeConfig {
   return {
     enabled: raw?.enabled ?? DEFAULT_JUDGE_CONFIG.enabled,
-    agent: typeof raw?.agent === "string" && raw.agent.trim() ? raw.agent : DEFAULT_JUDGE_CONFIG.agent,
+    agent:
+      typeof raw?.agent === "string" && raw.agent.trim() ? raw.agent : DEFAULT_JUDGE_CONFIG.agent,
     model: typeof raw?.model === "string" ? raw.model : DEFAULT_JUDGE_CONFIG.model,
     promptTemplate:
       typeof raw?.promptTemplate === "string" && raw.promptTemplate.trim()
@@ -99,15 +84,10 @@ function normalizeJudge(raw: JudgeLike): JudgeConfig {
 }
 
 export function resolveEditableExecutionMode(
-  task: Pick<Task, "executionMode" | "executionPlan" | "strategy"> | null | undefined,
+  task: Pick<Task, "executionMode" | "strategy"> | null | undefined,
 ): ExecutionMode {
   if (isExecutionMode(task?.executionMode)) {
     return task.executionMode;
-  }
-
-  const executionPlan = parseExecutionPlan(task);
-  if (isExecutionMode(executionPlan?.mode)) {
-    return executionPlan.mode;
   }
 
   const strategy = parseTaskStrategy(task);
@@ -118,9 +98,7 @@ export function resolveEditableExecutionMode(
   return "single";
 }
 
-export function resolveEditableParallelCandidates(
-  task: Pick<Task, "strategy" | "executionPlan"> | null | undefined,
-) {
+export function resolveEditableParallelCandidates(task: Pick<Task, "strategy"> | null | undefined) {
   const strategy = parseTaskStrategy(task);
   if (Array.isArray(strategy?.parallelCandidates) && strategy.parallelCandidates.length > 0) {
     return strategy.parallelCandidates
@@ -137,24 +115,11 @@ export function resolveEditableParallelCandidates(
       }));
   }
 
-  const executionPlan = parseExecutionPlan(task);
-  if (Array.isArray(executionPlan?.candidates) && executionPlan.candidates.length > 0) {
-    return executionPlan.candidates
-      .filter(
-        (candidate): candidate is { model: string; label?: string } =>
-          Boolean(candidate?.model) && typeof candidate.model === "string" && candidate.model.trim().length > 0,
-      )
-      .map((candidate, index) => ({
-        model: candidate.model,
-        label: candidate.label || `候选 ${String.fromCharCode(65 + index)}`,
-      }));
-  }
-
   return [] as Array<{ model: string; label?: string }>;
 }
 
 export function resolveEditableSequentialSteps(
-  task: Pick<Task, "strategy" | "executionPlan"> | null | undefined,
+  task: Pick<Task, "strategy"> | null | undefined,
 ): ChainStepInput[] {
   const strategy = parseTaskStrategy(task);
   if (Array.isArray(strategy?.sequentialSteps) && strategy.sequentialSteps.length > 0) {
@@ -175,29 +140,6 @@ export function resolveEditableSequentialSteps(
       }));
   }
 
-  const executionPlan = parseExecutionPlan(task);
-  if (Array.isArray(executionPlan?.steps) && executionPlan.steps.length > 0) {
-    return executionPlan.steps
-      .filter(
-        (step): step is Required<Pick<ChainStepInput, "title" | "instruction">> & {
-          id?: string;
-          model?: string | null;
-          type?: string;
-        } =>
-          step?.type === "chain-step" &&
-          typeof step.title === "string" &&
-          step.title.trim().length > 0 &&
-          typeof step.instruction === "string" &&
-          step.instruction.trim().length > 0,
-      )
-      .map((step, index) => ({
-        id: step.id || `step-${index + 1}`,
-        title: step.title,
-        instruction: step.instruction,
-        ...(typeof step.model === "string" && step.model.trim() ? { model: step.model } : {}),
-      }));
-  }
-
   return [];
 }
 
@@ -205,13 +147,14 @@ export function resolveEditableJudgeConfig(
   task: Pick<Task, "strategy"> | null | undefined,
 ): JudgeConfig {
   const strategy = parseTaskStrategy(task);
-  const rawJudge = strategy?.judge && typeof strategy.judge === "object"
-    ? (strategy.judge as Partial<JudgeConfig>)
-    : null;
+  const rawJudge =
+    strategy?.judge && typeof strategy.judge === "object"
+      ? (strategy.judge as Partial<JudgeConfig>)
+      : null;
   return normalizeJudge(rawJudge);
 }
 
-export function buildSavedExecutionPlan(
+export function buildSavedRuntimePlan(
   task: Pick<Task, "selectedModel"> | null | undefined,
   overrides: ExecutionOverrides,
 ): string {
@@ -297,15 +240,15 @@ export function serializeTaskStrategy(
   if (overrides?.mode === "parallel") {
     next.parallelCandidates = overrides.candidates ?? [];
     next.judge = normalizeJudge(overrides.judge ?? null);
-    delete next.sequentialSteps;
+    next.sequentialSteps = undefined;
   } else if (overrides?.mode === "sequential-chain") {
     next.sequentialSteps = overrides.steps ?? [];
-    delete next.judge;
-    delete next.parallelCandidates;
+    next.judge = undefined;
+    next.parallelCandidates = undefined;
   } else {
-    delete next.judge;
-    delete next.parallelCandidates;
-    delete next.sequentialSteps;
+    next.judge = undefined;
+    next.parallelCandidates = undefined;
+    next.sequentialSteps = undefined;
   }
 
   return JSON.stringify(next);

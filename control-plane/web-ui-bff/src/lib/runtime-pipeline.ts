@@ -2,10 +2,10 @@ import { getSessionMessages } from "../modules/agent-control/opencode-adapter";
 import { cpFetch } from "./control-plane-client";
 import type {
   ExecutionCandidate,
-  ExecutionPlan,
   ExecutionStep,
   HookExecutionRecord,
   PersistedTaskStrategy,
+  RuntimePlan,
 } from "./orchestration-strategy";
 
 const PIPELINE_AGENTS = ["prometheus-enterprise", "metis-enterprise", "momus-enterprise"] as const;
@@ -19,10 +19,7 @@ export interface RuntimePipelineStage {
   label: string;
   status: RuntimePipelineStageStatus;
   order: number;
-  sourceType:
-    | "executionPlan.step"
-    | "strategy.hookExecution"
-    | "session.message";
+  sourceType: "runtimePlan.step" | "taskRun.node" | "strategy.hookExecution" | "session.message";
   sourceId: string | null;
   agent: string | null;
   model: string | null;
@@ -64,10 +61,49 @@ interface TaskRecord {
   status?: string;
   sessionId?: string | null;
   strategy?: string | null;
-  executionPlan?: string | null;
+  orchestrationKind?: string | null;
+  currentRunId?: string | null;
   createdAt?: string | null;
   finishedAt?: string | null;
   result?: string | null;
+}
+
+interface TaskDomainRunSummaryRecord {
+  id: string;
+  orchestrationKind: "single" | "parallel" | "sequential-chain";
+  status?: string;
+  rootSessionId?: string | null;
+  judgeNodeId?: string | null;
+  winnerNodeId?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+}
+
+interface TaskDomainRunNodeRecord {
+  id: string;
+  nodeKind: string;
+  title?: string | null;
+  candidateIndex?: number | null;
+  agentType?: string | null;
+  modelUsed?: string | null;
+  sessionId?: string | null;
+  agentRunId?: string | null;
+  status: string;
+  resultText?: string | null;
+  resultSummary?: string | null;
+  errorText?: string | null;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+}
+
+interface TaskDomainRunDetailRecord {
+  run: TaskDomainRunSummaryRecord;
+  nodes: TaskDomainRunNodeRecord[];
+  candidateNodes: TaskDomainRunNodeRecord[];
+  judgeNode: TaskDomainRunNodeRecord | null;
+  winnerCandidateIndex: number | null;
 }
 
 interface TaskSessionRecord {
@@ -268,7 +304,7 @@ function stageFromPlanHookStep(step: ExecutionStep, order: number): RuntimePipel
     label: stepTypeLabel(step.type),
     status: step.status,
     order,
-    sourceType: "executionPlan.step",
+    sourceType: "runtimePlan.step",
     sourceId: step.id,
     agent: null,
     model: null,
@@ -296,7 +332,7 @@ function stageFromExecutionCandidate(
     label: candidate.label || `执行 · ${candidate.agent}`,
     status: candidate.status,
     order,
-    sourceType: "executionPlan.step",
+    sourceType: "runtimePlan.step",
     sourceId: step.id,
     agent: candidate.agent,
     model: candidate.model ?? null,
@@ -313,7 +349,7 @@ function stageFromExecutionCandidate(
 }
 
 function stageFromJudgeStep(
-  plan: ExecutionPlan,
+  plan: RuntimePlan,
   step: ExecutionStep,
   order: number,
 ): RuntimePipelineStage {
@@ -325,7 +361,7 @@ function stageFromJudgeStep(
     label: "评判 / 聚合",
     status: result?.status === "skipped" ? "skipped" : (result?.status ?? step.status),
     order,
-    sourceType: "executionPlan.step",
+    sourceType: "runtimePlan.step",
     sourceId: step.id,
     agent: null,
     model: result?.model ?? null,
@@ -342,6 +378,76 @@ function stageFromJudgeStep(
   };
 }
 
+function stageFromParallelRunCandidate(
+  candidate: TaskDomainRunNodeRecord,
+  order: number,
+): RuntimePipelineStage {
+  const candidateIndex =
+    typeof candidate.candidateIndex === "number" ? candidate.candidateIndex : order;
+  const label =
+    candidate.title ||
+    (typeof candidate.candidateIndex === "number"
+      ? `候选 ${candidate.candidateIndex + 1}`
+      : `候选 ${order + 1}`);
+  const output = truncateOutput(candidate.resultSummary ?? candidate.resultText);
+  const finishedAt = candidate.finishedAt ?? null;
+  const error =
+    candidate.status === "failed"
+      ? (candidate.errorText ?? candidate.resultSummary ?? candidate.resultText ?? null)
+      : null;
+
+  return {
+    id: `candidate:${candidateIndex}:${candidate.sessionId ?? candidate.id}`,
+    type: "execution",
+    label,
+    status: candidate.status as RuntimePipelineStageStatus,
+    order,
+    sourceType: "taskRun.node",
+    sourceId: candidate.id,
+    agent: candidate.agentType ?? null,
+    model: candidate.modelUsed ?? null,
+    sessionId: candidate.sessionId ?? null,
+    startedAt: candidate.startedAt ?? null,
+    finishedAt,
+    durationMs: computeDurationMs(candidate.startedAt ?? null, finishedAt),
+    output,
+    error,
+    tokens: null,
+    graphNodeId: candidate.id,
+    dependsOn: [],
+  };
+}
+
+function stageFromParallelRunJudge(
+  detail: TaskDomainRunDetailRecord,
+  order: number,
+): RuntimePipelineStage | null {
+  const judgeNode = detail.judgeNode;
+  if (!judgeNode) {
+    return null;
+  }
+
+  return {
+    id: `judge:${judgeNode.id}`,
+    type: "judge",
+    label: judgeNode.title || "评判 / 聚合",
+    status: judgeNode.status as RuntimePipelineStageStatus,
+    order,
+    sourceType: "taskRun.node",
+    sourceId: judgeNode.id,
+    agent: judgeNode.agentType ?? null,
+    model: judgeNode.modelUsed ?? null,
+    sessionId: judgeNode.sessionId ?? null,
+    startedAt: judgeNode.startedAt ?? null,
+    finishedAt: judgeNode.finishedAt ?? null,
+    durationMs: computeDurationMs(judgeNode.startedAt ?? null, judgeNode.finishedAt ?? null),
+    output: truncateOutput(judgeNode.resultSummary ?? judgeNode.resultText),
+    error: judgeNode.status === "failed" ? (judgeNode.errorText ?? null) : null,
+    tokens: null,
+    graphNodeId: judgeNode.id,
+    dependsOn: [],
+  };
+}
 
 function computePipelineSummary(stages: RuntimePipelineStage[]): PipelineSummary {
   const completedStages = stages.filter((stage) => stage.status === "completed").length;
@@ -400,7 +506,11 @@ function finalizeStagesForTask(
   });
 }
 
-function buildEmptyRuntimePipeline(taskId: string, sessionId?: string, createdAt: string | null = null) {
+function buildEmptyRuntimePipeline(
+  taskId: string,
+  sessionId?: string,
+  createdAt: string | null = null,
+) {
   return {
     taskId,
     sessionId: sessionId ?? null,
@@ -420,9 +530,12 @@ async function loadRuntimePipelineResources(args: {
   prefetchedMessages?: unknown[];
 }) {
   const [lineageResult, messagesResult] = await Promise.all([
-    cpFetch<{ data: TaskSessionRecord[] }>(`/api/tasks/${encodeURIComponent(args.taskId)}/branches`, {
-      authorization: args.authorization,
-    }),
+    cpFetch<{ data: TaskSessionRecord[] }>(
+      `/api/tasks/${encodeURIComponent(args.taskId)}/branches`,
+      {
+        authorization: args.authorization,
+      },
+    ),
     args.prefetchedMessages
       ? Promise.resolve({ ok: true, data: args.prefetchedMessages } as const)
       : args.requestedSessionId
@@ -455,9 +568,10 @@ function resolveRuntimePipelineResources(args: {
     lineage.length === 0 ||
     lineage.some((record) => record.runtimeSessionId === args.requestedSessionId);
   const branchName =
-    lineage.find((record) => record.runtimeSessionId === args.requestedSessionId)?.branchName ?? null;
+    lineage.find((record) => record.runtimeSessionId === args.requestedSessionId)?.branchName ??
+    null;
   const messages =
-      args.messagesResult?.ok && Array.isArray(args.messagesResult.data)
+    args.messagesResult?.ok && Array.isArray(args.messagesResult.data)
       ? (args.messagesResult.data as SessionMessageRecord[])
       : [];
 
@@ -495,34 +609,210 @@ function appendPlanningStages(
   return nextOrder;
 }
 
-function appendPlanStages(stages: RuntimePipelineStage[], plan: ExecutionPlan | null, order: number) {
+function appendSingleExecutionFallbackStage(
+  stages: RuntimePipelineStage[],
+  task: TaskRecord,
+  sessionId: string | undefined,
+  messages: SessionMessageRecord[],
+  order: number,
+) {
+  if (!sessionId || stages.length > 0) {
+    return order;
+  }
+
+  const assistantMessages = messages.filter((message) => message.info?.role === "assistant");
+  const lastMessage = assistantMessages[assistantMessages.length - 1];
+  const output = buildFallbackExecutionOutput(lastMessage);
+  const startedAt = resolveFallbackExecutionStartedAt(lastMessage, task);
+  const finishedAt = lastMessage ? toIso(lastMessage.info?.time?.completed) : null;
+  const agent = resolveFallbackExecutionAgent(lastMessage);
+  const model = resolveFallbackExecutionModel(lastMessage);
+
+  stages.push({
+    id: `single:${sessionId}`,
+    type: "execution",
+    label: agent ? `执行 · ${agent}` : "执行",
+    status: finishedAt ? "completed" : task.status === "failed" ? "failed" : "running",
+    order,
+    sourceType: "session.message",
+    sourceId: lastMessage?.info?.id ?? sessionId,
+    agent,
+    model,
+    sessionId,
+    startedAt,
+    finishedAt,
+    durationMs: computeDurationMs(startedAt, finishedAt),
+    output,
+    error: task.status === "failed" ? (task.result ?? null) : null,
+    tokens: lastMessage?.info?.tokens ?? null,
+    graphNodeId: null,
+    dependsOn: [],
+    messageCount: assistantMessages.length,
+  });
+
+  return order + 1;
+}
+
+function buildFallbackExecutionOutput(lastMessage: SessionMessageRecord | undefined) {
+  if (!lastMessage) {
+    return null;
+  }
+
+  return truncateOutput(
+    (lastMessage.parts || [])
+      .filter((part) => part.type === "text" && typeof part.text === "string")
+      .map((part) => part.text)
+      .join("\n"),
+  );
+}
+
+function resolveFallbackExecutionStartedAt(
+  lastMessage: SessionMessageRecord | undefined,
+  task: TaskRecord,
+) {
+  return (lastMessage ? toIso(lastMessage.info?.time?.created) : null) ?? task.createdAt ?? null;
+}
+
+function resolveFallbackExecutionAgent(lastMessage: SessionMessageRecord | undefined) {
+  return typeof lastMessage?.info?.agent === "string" ? lastMessage.info.agent : null;
+}
+
+function resolveFallbackExecutionModel(lastMessage: SessionMessageRecord | undefined) {
+  if (typeof lastMessage?.info?.modelID === "string") {
+    return lastMessage.info.modelID;
+  }
+
+  return typeof lastMessage?.info?.model === "string" ? lastMessage.info.model : null;
+}
+
+function appendPlanStages(stages: RuntimePipelineStage[], plan: RuntimePlan | null, order: number) {
   if (!plan) {
     return order;
   }
 
   let nextOrder = order;
+
+  const appendPlanStage = (stage: RuntimePipelineStage) => {
+    stages.push(stage);
+    nextOrder += 1;
+  };
+
+  const appendExecutionPlanStep = (step: ExecutionStep) => {
+    if (plan.candidates.length === 0) {
+      appendPlanStage(stageFromPlanHookStep(step, nextOrder));
+      return;
+    }
+    for (const [index, candidate] of plan.candidates.entries()) {
+      appendPlanStage(stageFromExecutionCandidate(step, candidate, index, nextOrder));
+    }
+  };
+
   for (const step of plan.steps) {
     if (step.type === "hook") {
-      stages.push(stageFromPlanHookStep(step, nextOrder));
-      nextOrder += 1;
+      appendPlanStage(stageFromPlanHookStep(step, nextOrder));
       continue;
     }
     if (step.type === "execution") {
-      if (plan.candidates.length === 0) {
-        stages.push(stageFromPlanHookStep(step, nextOrder));
-        nextOrder += 1;
-        continue;
-      }
-      for (const [index, candidate] of plan.candidates.entries()) {
-        stages.push(stageFromExecutionCandidate(step, candidate, index, nextOrder));
-        nextOrder += 1;
-      }
+      appendExecutionPlanStep(step);
       continue;
     }
     if (step.type === "judge") {
-      stages.push(stageFromJudgeStep(plan, step, nextOrder));
-      nextOrder += 1;
+      appendPlanStage(stageFromJudgeStep(plan, step, nextOrder));
     }
+  }
+
+  return nextOrder;
+}
+
+function taskMayNeedParallelDomainRuns(task: TaskRecord) {
+  return task.orchestrationKind === "parallel";
+}
+
+function pickParallelRun(
+  runs: TaskDomainRunSummaryRecord[],
+  currentRunId?: string | null,
+): TaskDomainRunSummaryRecord | null {
+  const parallelRuns = runs.filter((run) => run.orchestrationKind === "parallel");
+  if (parallelRuns.length === 0) {
+    return null;
+  }
+
+  if (currentRunId) {
+    const current = parallelRuns.find((run) => run.id === currentRunId);
+    if (current) {
+      return current;
+    }
+  }
+
+  return (
+    parallelRuns.slice().sort((left, right) => {
+      const leftPriority = left.status === "running" ? 1 : 0;
+      const rightPriority = right.status === "running" ? 1 : 0;
+      if (leftPriority !== rightPriority) {
+        return rightPriority - leftPriority;
+      }
+      return (
+        Date.parse(right.updatedAt ?? right.createdAt ?? "") -
+        Date.parse(left.updatedAt ?? left.createdAt ?? "")
+      );
+    })[0] ?? null
+  );
+}
+
+async function loadParallelDomainRunDetail(args: {
+  task: TaskRecord;
+  authorization: string;
+}): Promise<TaskDomainRunDetailRecord | null> {
+  if (!taskMayNeedParallelDomainRuns(args.task)) {
+    return null;
+  }
+
+  const runsResult = await cpFetch<{ data: TaskDomainRunSummaryRecord[] }>(
+    `/api/tasks/${encodeURIComponent(args.task.id)}/domain-runs`,
+    { authorization: args.authorization },
+  );
+  const runs = runsResult.ok && Array.isArray(runsResult.data?.data) ? runsResult.data.data : [];
+
+  const parallelRun = pickParallelRun(runs, args.task.currentRunId);
+  if (!parallelRun) {
+    return null;
+  }
+
+  const detailResult = await cpFetch<{ data: TaskDomainRunDetailRecord }>(
+    `/api/tasks/${encodeURIComponent(args.task.id)}/domain-runs/${encodeURIComponent(parallelRun.id)}`,
+    { authorization: args.authorization },
+  );
+
+  return detailResult.ok ? (detailResult.data?.data ?? null) : null;
+}
+
+function appendParallelDomainRunStages(
+  stages: RuntimePipelineStage[],
+  detail: TaskDomainRunDetailRecord | null,
+  order: number,
+) {
+  if (!detail) {
+    return order;
+  }
+
+  let nextOrder = order;
+  const candidates = detail.candidateNodes
+    .slice()
+    .sort(
+      (left, right) =>
+        (left.candidateIndex ?? Number.MAX_SAFE_INTEGER) -
+        (right.candidateIndex ?? Number.MAX_SAFE_INTEGER),
+    );
+
+  for (const candidate of candidates) {
+    stages.push(stageFromParallelRunCandidate(candidate, nextOrder));
+    nextOrder += 1;
+  }
+
+  const judgeStage = stageFromParallelRunJudge(detail, nextOrder);
+  if (judgeStage) {
+    stages.push(judgeStage);
+    nextOrder += 1;
   }
 
   return nextOrder;
@@ -562,8 +852,11 @@ export async function buildRuntimePipeline(args: {
   if (!sessionIsAllowed) {
     return buildEmptyRuntimePipeline(args.taskId, requestedSessionId, task.createdAt ?? null);
   }
-  const plan = parseJson<ExecutionPlan>(task.executionPlan);
   const strategy = parseJson<PersistedTaskStrategy>(task.strategy);
+  const parallelRunDetail =
+    task.orchestrationKind === "parallel"
+      ? await loadParallelDomainRunDetail({ task, authorization: args.authorization })
+      : null;
 
   const stages: RuntimePipelineStage[] = [];
   let order = 0;
@@ -571,7 +864,11 @@ export async function buildRuntimePipeline(args: {
   const hookExecutions = Array.isArray(strategy?.hookExecutions) ? strategy.hookExecutions : [];
   order = appendHookExecutionStages(stages, hookExecutions, order, ["pre-execution", "pre-resume"]);
   order = appendPlanningStages(stages, messages, order);
-  order = appendPlanStages(stages, plan, order);
+  order =
+    task.orchestrationKind === "parallel"
+      ? appendParallelDomainRunStages(stages, parallelRunDetail, order)
+      : appendPlanStages(stages, null, order);
+  order = appendSingleExecutionFallbackStage(stages, task, requestedSessionId, messages, order);
   appendHookExecutionStages(stages, hookExecutions, order, ["post-execution", "on-failure"]);
 
   const finalizedStages = finalizeStagesForTask(

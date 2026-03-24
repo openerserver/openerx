@@ -190,51 +190,54 @@
 </template>
 
 <script setup lang="ts">
-import { defineAsyncComponent, computed, onBeforeUnmount, ref, watch } from "vue";
-import { useRoute, useRouter } from "vue-router";
 import { message } from "ant-design-vue";
+import { computed, defineAsyncComponent, onBeforeUnmount, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
+import { type TreeTask, useProjectTreeTask } from "../composables/useProjectTreeTask";
+import { useTreeBranches } from "../composables/useTreeBranches";
+import { type TaskConversationListItem, useTreeMessages } from "../composables/useTreeMessages";
 import {
-  adoptParallelCandidate,
   type ChainStepInput,
-  continueTask,
   type ExecutionCandidate,
-  type ExecutionPlan,
   type ExecutionMode,
+  type JudgeResult,
+  type ProjectionRunCandidate,
+  type ProjectionRunRecord,
+  type TaskAgentRunRecord,
+  type TaskDomainRunDetailRecord,
+  type TaskDomainRunRecord,
+  type TaskRuntimePermission,
+  type TaskWorkflowViewModel,
+  adoptParallelCandidate,
+  continueTask,
   forkTaskBranch,
   getModelsList,
+  getTaskAgentRuns,
+  getTaskDomainRunDetail,
+  getTaskDomainRuns,
   getTaskExecutionTraceView,
+  getTaskWorkflowView,
   listTaskRuntimePermissions,
   replyTaskRuntimePermission,
-  type TaskRuntimePermission,
-  getTaskWorkflowView,
-  type ParallelRunHistoryCandidate,
-  type ParallelRunHistoryRecord,
   terminateAgent,
-  type TaskWorkflowViewModel,
   updateTask,
 } from "../lib/api";
+import type {
+  TaskConversationMessageItem,
+  TaskConversationParallelItem,
+  TaskParallelComparisonCard,
+} from "../lib/message-normalize";
+import { resolveTaskDisplayStatus } from "../lib/task-display-status";
+import { normalizeTraceConversationItems } from "../lib/task-trace-conversation";
 import {
-  buildExecutionModeTaskUpdate,
   DEFAULT_JUDGE_CONFIG,
+  type ExecutionOverrides,
+  buildExecutionModeTaskUpdate,
   resolveEditableExecutionMode,
   resolveEditableJudgeConfig,
   resolveEditableParallelCandidates,
   resolveEditableSequentialSteps,
-  type ExecutionOverrides,
 } from "../lib/taskExecutionMode";
-import { resolveTaskDisplayStatus } from "../lib/task-display-status";
-import { useProjectTreeTask, type TreeTask } from "../composables/useProjectTreeTask";
-import { useTreeBranches } from "../composables/useTreeBranches";
-import {
-  useTreeMessages,
-  type TaskConversationListItem,
-} from "../composables/useTreeMessages";
-import {
-  type TaskConversationMessageItem,
-  type TaskConversationParallelItem,
-  type TaskParallelComparisonCard,
-} from "../lib/message-normalize";
-import { normalizeTraceConversationItems } from "../lib/task-trace-conversation";
 import { useRealtimeStore } from "../stores/realtime";
 
 const TaskDetailQuickOverview = defineAsyncComponent(
@@ -314,10 +317,15 @@ const terminating = ref(false);
 const composerResetToken = ref(0);
 const showExecutionModeModal = ref(false);
 const executionModeSaving = ref(false);
-const queuedContinuations = ref<Array<{ id: string; prompt: string; sessionId?: string; queuedAt: string }>>([]);
+const queuedContinuations = ref<
+  Array<{ id: string; prompt: string; sessionId?: string; queuedAt: string }>
+>([]);
 const previewFile = ref<{ filePath: string; content?: string } | null>(null);
 const parallelCandidateItems = ref<Record<string, TaskConversationMessageItem[]>>({});
 const parallelCandidateSettledReply = ref<Record<string, boolean>>({});
+const taskAgentRuns = ref<TaskAgentRunRecord[]>([]);
+const taskDomainRuns = ref<TaskDomainRunRecord[]>([]);
+const taskDomainRunDetails = ref<Record<string, TaskDomainRunDetailRecord>>({});
 const runtimePermissions = ref<TaskRuntimePermission[]>([]);
 const runtimePermissionActionId = ref<string | null>(null);
 
@@ -347,133 +355,326 @@ const taskFailureReason = computed(() => {
   return task.value?.result || "";
 });
 
-const editableExecutionMode = computed<ExecutionMode>(() => resolveEditableExecutionMode(task.value));
+const editableExecutionMode = computed<ExecutionMode>(() =>
+  resolveEditableExecutionMode(task.value),
+);
 const editableJudgeConfig = computed(() => resolveEditableJudgeConfig(task.value));
 const editableParallelCandidates = computed(() => resolveEditableParallelCandidates(task.value));
-const editableSequentialSteps = computed<ChainStepInput[]>(() => resolveEditableSequentialSteps(task.value));
 
-const executionPlan = computed<ExecutionPlan | null>(() => {
-  const raw = task.value?.executionPlan;
-  if (!raw) return null;
+function parseTaskStrategy(raw?: string | null) {
+  if (!raw || !raw.trim()) {
+    return null as { sequentialSteps?: unknown } | null;
+  }
+
   try {
-    const parsed = JSON.parse(raw) as ExecutionPlan;
+    const parsed = JSON.parse(raw) as { sequentialSteps?: unknown };
     return parsed && typeof parsed === "object" ? parsed : null;
   } catch {
     return null;
   }
-});
-const executionPlanCandidates = computed<ExecutionCandidate[]>(() => executionPlan.value?.candidates ?? []);
-const executionPlanAdoptedIndex = computed(() =>
-  typeof executionPlan.value?.winnerCandidateIndex === "number" ? executionPlan.value.winnerCandidateIndex : -1,
-);
-const adoptedCandidateSessionId = computed(() => {
-  if (executionPlanAdoptedIndex.value < 0) return undefined;
-  const sessionId = executionPlanCandidates.value[executionPlanAdoptedIndex.value]?.sessionId;
-  return typeof sessionId === "string" && sessionId.length > 0 ? sessionId : undefined;
-});
-const executionPlanRecommendedIndex = computed(() =>
-  typeof executionPlan.value?.judgeResult?.winnerIndex === "number" ? executionPlan.value.judgeResult.winnerIndex : -1,
-);
-const executionPlanJudgeReasoning = computed(() => executionPlan.value?.judgeResult?.reasoning || "");
-const executionPlanJudgeSummary = computed(() => {
-  const judgeResult = executionPlan.value?.judgeResult;
-  if (!judgeResult) return "";
-  const winnerLabel =
-    typeof judgeResult.winnerIndex === "number"
-      ? executionPlanCandidates.value[judgeResult.winnerIndex]?.label || `候选 ${judgeResult.winnerIndex + 1}`
-      : undefined;
-  if (winnerLabel && Array.isArray(judgeResult.scores) && judgeResult.scores.length > 0) {
-    return `Judge 推荐 ${winnerLabel}，得分 ${judgeResult.scores.map((s) => Number(s).toFixed(1)).join(" / ")}`;
-  }
-  return winnerLabel ? `Judge 推荐 ${winnerLabel}` : "Judge 已返回评估结果";
-});
-
-function parseParallelRunHistory(raw?: string | null) {
-  if (!raw) return [] as ParallelRunHistoryRecord[];
-  try {
-    const parsed = JSON.parse(raw) as ParallelRunHistoryRecord[];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [] as ParallelRunHistoryRecord[];
-  }
 }
 
-function currentParallelRunIdFromPlan(plan: ExecutionPlan | null) {
-  if (!plan || plan.mode !== "parallel") return undefined;
-  const record = plan as ExecutionPlan & { parallelRunId?: string };
-  return typeof record.parallelRunId === "string" && record.parallelRunId.length > 0
-    ? record.parallelRunId
-    : undefined;
-}
-
-function buildFallbackParallelRunFromPlan(plan: ExecutionPlan | null) {
-  if (!plan || plan.mode !== "parallel" || plan.candidates.length < 2) {
-    return null;
+function resolveSequentialStepsFromStrategy(
+  taskRecord: TreeTask | null | undefined,
+): ChainStepInput[] {
+  const strategy = parseTaskStrategy(taskRecord?.strategy);
+  if (!Array.isArray(strategy?.sequentialSteps) || strategy.sequentialSteps.length === 0) {
+    return [];
   }
 
-  const parallelRunId = currentParallelRunIdFromPlan(plan) || `legacy-${task.value?.id || taskId.value}`;
-  const startedAt =
-    plan.candidates
-      .map((candidate) => candidate.startedAt)
-      .find((value): value is string => typeof value === "string" && value.length > 0) ||
-    (plan.steps ?? []).find((step) => step.type === "execution" && typeof step.finishedAt === "string")?.finishedAt ||
-    task.value?.startedAt ||
-    task.value?.createdAt ||
-    new Date().toISOString();
-  const finishedAt =
-    (plan.steps ?? []).find((step) => step.type === "execution" && typeof step.finishedAt === "string" && step.finishedAt.length > 0)
-      ?.finishedAt ||
-    plan.candidates
-      .map((candidate) => candidate.finishedAt)
-      .find((value): value is string => typeof value === "string" && value.length > 0);
+  return strategy.sequentialSteps
+    .filter(
+      (step): step is ChainStepInput =>
+        Boolean(step) &&
+        typeof step === "object" &&
+        typeof (step as { id?: unknown }).id === "string" &&
+        typeof (step as { title?: unknown }).title === "string" &&
+        typeof (step as { instruction?: unknown }).instruction === "string",
+    )
+    .map((step) => ({
+      id: step.id,
+      title: step.title,
+      instruction: step.instruction,
+      ...(step.model ? { model: step.model } : {}),
+    }));
+}
+
+function taskRunStatusPriority(status?: string | null) {
+  if (status === "running") return 4;
+  if (status === "failed") return 3;
+  if (status === "completed") return 2;
+  if (status === "pending") return 1;
+  return 0;
+}
+
+function mergeTaskAgentRunRecords(records: TaskAgentRunRecord[]) {
+  const first = records[0];
+  const status = records.reduce((current, record) => {
+    return taskRunStatusPriority(record.status) > taskRunStatusPriority(current)
+      ? record.status
+      : current;
+  }, first?.status ?? "pending");
+  const result = records
+    .map((record) => record.result)
+    .find((value): value is string => typeof value === "string" && value.trim().length > 0);
+  const startedAt = records
+    .map((record) => record.startedAt ?? record.createdAt)
+    .find((value): value is string => typeof value === "string" && value.length > 0);
+  const finishedAt = records
+    .map((record) => record.finishedAt)
+    .filter((value): value is string => typeof value === "string" && value.length > 0)
+    .sort((left, right) => (toTimestampMs(right) ?? 0) - (toTimestampMs(left) ?? 0))[0];
 
   return {
-    parallelRunId,
-    templateId: plan.templateId,
+    label: `候选 ${(first?.candidateIndex ?? 0) + 1}`,
+    agent: first?.agentType,
+    model: first?.modelUsed ?? undefined,
+    status,
+    sessionId: first?.sessionId ?? undefined,
+    agentRunId: first?.id,
+    result,
     startedAt,
     finishedAt,
-    parentSessionId: task.value?.sessionId ?? null,
-    executionSessionId: task.value?.sessionId ?? null,
-    winnerCandidateIndex:
-      typeof plan.winnerCandidateIndex === "number" ? plan.winnerCandidateIndex : undefined,
-    judgeResult: plan.judgeResult,
-    candidateSessions: plan.candidates.map((candidate) => ({
-      label: candidate.label,
-      agent: candidate.agent,
-      model: candidate.model,
-      status: candidate.status,
-      sessionId: candidate.sessionId,
-      agentRunId: candidate.agentRunId,
-      result: candidate.result,
-      startedAt: candidate.startedAt,
-      finishedAt: candidate.finishedAt,
-    })),
-  } satisfies ParallelRunHistoryRecord;
+  } satisfies ProjectionRunCandidate;
 }
 
-const parallelRunHistory = computed<ParallelRunHistoryRecord[]>(() => {
-  const stored = parseParallelRunHistory(task.value?.parallelRunHistory);
-  const fallback = buildFallbackParallelRunFromPlan(executionPlan.value);
-  if (!fallback) {
-    return stored.slice().sort((left, right) => (toTimestampMs(left.startedAt) || 0) - (toTimestampMs(right.startedAt) || 0));
+function buildProjectionBackedParallelRuns() {
+  const parallelDomainRuns = taskDomainRuns.value.filter(
+    (run) => run.orchestrationKind === "parallel",
+  );
+
+  return parallelDomainRuns.map((run) => {
+    const detail = taskDomainRunDetails.value[run.id];
+    const candidateSessions = buildProjectionCandidateSessions(run.id, detail);
+    const judgeResult = resolveProjectionJudgeResult(run, detail);
+
+    return {
+      parallelRunId: run.id,
+      templateId: undefined,
+      startedAt: run.startedAt || run.createdAt,
+      finishedAt: run.finishedAt || undefined,
+      parentSessionId: run.rootSessionId ?? task.value?.sessionId ?? null,
+      executionSessionId: run.rootSessionId ?? task.value?.sessionId ?? null,
+      winnerCandidateIndex:
+        typeof detail?.winnerCandidateIndex === "number" ? detail.winnerCandidateIndex : undefined,
+      ...(judgeResult ? { judgeResult } : {}),
+      candidateSessions,
+    } satisfies ProjectionRunRecord;
+  });
+}
+
+function buildProjectionRunCandidatesByIndex(runId: string) {
+  const candidatesByIndex = new Map<number, TaskAgentRunRecord[]>();
+
+  for (const agentRun of taskAgentRuns.value) {
+    if (agentRun.runId !== runId || typeof agentRun.candidateIndex !== "number") {
+      continue;
+    }
+    const existing = candidatesByIndex.get(agentRun.candidateIndex) ?? [];
+    existing.push(agentRun);
+    candidatesByIndex.set(agentRun.candidateIndex, existing);
   }
 
-  if (stored.some((entry) => entry.parallelRunId === fallback.parallelRunId)) {
-    return stored.slice().sort((left, right) => (toTimestampMs(left.startedAt) || 0) - (toTimestampMs(right.startedAt) || 0));
+  return candidatesByIndex;
+}
+
+function buildProjectionCandidateFromNode(
+  node: TaskDomainRunDetailRecord["candidateNodes"][number],
+  candidateIndex: number,
+  candidatesByIndex: Map<number, TaskAgentRunRecord[]>,
+) {
+  const fallbackAgentRuns =
+    typeof node.candidateIndex === "number"
+      ? (candidatesByIndex.get(node.candidateIndex) ?? [])
+      : [];
+  const merged = fallbackAgentRuns.length > 0 ? mergeTaskAgentRunRecords(fallbackAgentRuns) : null;
+  return {
+    label: node.title || `候选 ${(node.candidateIndex ?? candidateIndex) + 1}`,
+    agent: node.agentType ?? merged?.agent,
+    model: node.modelUsed ?? merged?.model,
+    status: node.status || merged?.status || "pending",
+    sessionId: node.sessionId ?? merged?.sessionId,
+    agentRunId: node.agentRunId ?? merged?.agentRunId,
+    result: node.resultSummary ?? node.resultText ?? merged?.result,
+    startedAt: node.startedAt ?? merged?.startedAt,
+    finishedAt: node.finishedAt ?? merged?.finishedAt,
+  } satisfies ProjectionRunCandidate;
+}
+
+function buildProjectionCandidatesFromDetail(
+  detail: TaskDomainRunDetailRecord,
+  candidatesByIndex: Map<number, TaskAgentRunRecord[]>,
+) {
+  return detail.candidateNodes
+    .slice()
+    .sort((left, right) => (left.candidateIndex ?? 0) - (right.candidateIndex ?? 0))
+    .map((node, candidateIndex) =>
+      buildProjectionCandidateFromNode(node, candidateIndex, candidatesByIndex),
+    );
+}
+
+function buildProjectionCandidatesFromAgentRuns(
+  candidatesByIndex: Map<number, TaskAgentRunRecord[]>,
+) {
+  return Array.from(candidatesByIndex.entries())
+    .sort((left, right) => left[0] - right[0])
+    .map(([, records]) => {
+      const merged = mergeTaskAgentRunRecords(records);
+      return merged satisfies ProjectionRunCandidate;
+    });
+}
+
+function buildProjectionCandidateSessions(
+  runId: string,
+  detail: TaskDomainRunDetailRecord | null | undefined,
+) {
+  const candidatesByIndex = buildProjectionRunCandidatesByIndex(runId);
+  if (detail?.candidateNodes?.length) {
+    return buildProjectionCandidatesFromDetail(detail, candidatesByIndex);
+  }
+  return buildProjectionCandidatesFromAgentRuns(candidatesByIndex);
+}
+
+function resolveProjectionJudgeResult(
+  run: TaskDomainRunRecord,
+  detail: TaskDomainRunDetailRecord | null | undefined,
+) {
+  if (detail?.judgeNode?.status === "completed" || detail?.judgeNode?.status === "failed") {
+    return {
+      status: detail.judgeNode.status,
+      reasoning:
+        detail.judgeNode.resultSummary ??
+        detail.judgeNode.resultText ??
+        detail.judgeNode.errorText ??
+        "Judge 已完成评估。",
+      completedAt: detail.judgeNode.finishedAt ?? run.finishedAt ?? run.updatedAt,
+      winnerIndex:
+        typeof detail.winnerCandidateIndex === "number" ? detail.winnerCandidateIndex : undefined,
+    } satisfies JudgeResult;
   }
 
-  return [...stored, fallback].sort((left, right) => (toTimestampMs(left.startedAt) || 0) - (toTimestampMs(right.startedAt) || 0));
+  if (run.judgeNodeId || run.winnerNodeId) {
+    return {
+      status: "completed",
+      reasoning: run.winnerNodeId ? "当前运行已完成候选选择。" : "Judge 已完成评估。",
+      completedAt: run.finishedAt || run.updatedAt,
+    } satisfies JudgeResult;
+  }
+
+  return undefined;
+}
+
+function buildSequentialStepsFromRunDetail(
+  detail: TaskDomainRunDetailRecord | null | undefined,
+): ChainStepInput[] {
+  if (!detail) {
+    return [];
+  }
+
+  return detail.nodes
+    .filter(
+      (
+        node,
+      ): node is TaskDomainRunDetailRecord["nodes"][number] & {
+        title: string;
+        instruction: string;
+      } =>
+        node.nodeKind === "chain-step" &&
+        typeof node.title === "string" &&
+        node.title.trim().length > 0 &&
+        typeof node.instruction === "string" &&
+        node.instruction.trim().length > 0,
+    )
+    .slice()
+    .sort((left, right) => {
+      const leftIndex =
+        typeof left.chainStepIndex === "number" ? left.chainStepIndex : Number.MAX_SAFE_INTEGER;
+      const rightIndex =
+        typeof right.chainStepIndex === "number" ? right.chainStepIndex : Number.MAX_SAFE_INTEGER;
+      if (leftIndex !== rightIndex) {
+        return leftIndex - rightIndex;
+      }
+      return (toTimestampMs(left.createdAt) || 0) - (toTimestampMs(right.createdAt) || 0);
+    })
+    .map((node, index) => ({
+      id: node.nodeKey || `step-${index + 1}`,
+      title: node.title,
+      instruction: node.instruction,
+      ...(typeof node.modelUsed === "string" && node.modelUsed.trim()
+        ? { model: node.modelUsed }
+        : {}),
+    }));
+}
+
+function pickLatestRun<T extends TaskDomainRunRecord>(runs: T[]) {
+  return runs.slice().sort((left, right) => {
+    const leftPriority = left.status === "running" ? 1 : 0;
+    const rightPriority = right.status === "running" ? 1 : 0;
+    if (leftPriority !== rightPriority) {
+      return rightPriority - leftPriority;
+    }
+    return (toTimestampMs(right.updatedAt) || 0) - (toTimestampMs(left.updatedAt) || 0);
+  })[0];
+}
+
+const currentSequentialRunId = computed(() => {
+  if (
+    task.value?.orchestrationKind === "sequential-chain" &&
+    typeof task.value.currentRunId === "string"
+  ) {
+    return task.value.currentRunId;
+  }
+
+  return pickLatestRun(
+    taskDomainRuns.value.filter((run) => run.orchestrationKind === "sequential-chain"),
+  )?.id;
+});
+
+const currentSequentialRunDetail = computed(() => {
+  if (currentSequentialRunId.value) {
+    return taskDomainRunDetails.value[currentSequentialRunId.value] ?? null;
+  }
+
+  const latestSequentialRun = pickLatestRun(
+    taskDomainRuns.value.filter((run) => run.orchestrationKind === "sequential-chain"),
+  );
+  return latestSequentialRun ? (taskDomainRunDetails.value[latestSequentialRun.id] ?? null) : null;
+});
+
+const projectionBackedSequentialSteps = computed<ChainStepInput[]>(() =>
+  buildSequentialStepsFromRunDetail(currentSequentialRunDetail.value),
+);
+
+const editableSequentialSteps = computed<ChainStepInput[]>(() => {
+  const strategySteps = resolveSequentialStepsFromStrategy(task.value);
+  if (strategySteps.length > 0) {
+    return strategySteps;
+  }
+
+  if (projectionBackedSequentialSteps.value.length > 0) {
+    return projectionBackedSequentialSteps.value;
+  }
+
+  return resolveEditableSequentialSteps(task.value);
+});
+
+const projectionParallelRuns = computed<ProjectionRunRecord[]>(() => {
+  return buildProjectionBackedParallelRuns()
+    .slice()
+    .sort(
+      (left, right) => (toTimestampMs(left.startedAt) || 0) - (toTimestampMs(right.startedAt) || 0),
+    );
 });
 
 const isParallelComparisonMode = computed(
   () =>
-    parallelRunHistory.value.length > 0 ||
-    task.value?.executionMode === "parallel" ||
-    (executionPlan.value?.mode === "parallel" && task.value?.status !== "running"),
+    projectionParallelRuns.value.length > 0 ||
+    task.value?.orchestrationKind === "parallel" ||
+    task.value?.executionMode === "parallel",
 );
 
 function resolveParallelCandidateDisplayStatus(
-  candidate: Pick<ExecutionCandidate, "status"> | Pick<ParallelRunHistoryCandidate, "status">,
+  candidate: Pick<ExecutionCandidate, "status"> | Pick<ProjectionRunCandidate, "status">,
   items: TaskConversationMessageItem[],
   hasSettledReply = false,
 ) {
@@ -508,7 +709,9 @@ const canDispatchQueuedContinuation = computed(
     !forking.value,
 );
 
-const canForkFromCurrentSession = computed(() => Boolean(selectedBranchSessionId.value || task.value?.sessionId));
+const canForkFromCurrentSession = computed(() =>
+  Boolean(selectedBranchSessionId.value || task.value?.sessionId),
+);
 
 const selectedSessionLabel = computed(
   () =>
@@ -529,9 +732,12 @@ const sessionOptions = computed(() =>
     .filter((node) => typeof node.runtimeSessionId === "string" && node.runtimeSessionId.length > 0)
     .map((node) => {
       const sessionId = node.runtimeSessionId as string;
-      const primaryLabel = node.contentText?.trim() || node.branchName?.trim() || `会话 ${sessionId.slice(0, 8)}`;
+      const primaryLabel =
+        node.contentText?.trim() || node.branchName?.trim() || `会话 ${sessionId.slice(0, 8)}`;
       const meta = [node.isActive ? "当前" : null, node.branchName?.trim(), sessionId.slice(0, 8)]
-        .filter((item, index, list): item is string => Boolean(item) && list.indexOf(item) === index)
+        .filter(
+          (item, index, list): item is string => Boolean(item) && list.indexOf(item) === index,
+        )
         .join(" · ");
       return {
         value: sessionId,
@@ -567,19 +773,57 @@ const modelOptions = computed(() => {
 /*  Parallel comparison                                                */
 /* ------------------------------------------------------------------ */
 
-const currentParallelRunId = computed(() => currentParallelRunIdFromPlan(executionPlan.value));
-const visibleParallelRuns = computed(() => {
-  if (task.value?.status === "running" && task.value?.executionMode === "single") {
-    return [] as ParallelRunHistoryRecord[];
+const currentParallelRunId = computed(() => {
+  if (
+    task.value?.orchestrationKind === "parallel" &&
+    typeof task.value?.currentRunId === "string"
+  ) {
+    return task.value.currentRunId;
   }
-  return parallelRunHistory.value;
+
+  const projectionRun = pickLatestRun(
+    taskDomainRuns.value.filter((run) => run.orchestrationKind === "parallel"),
+  );
+  if (projectionRun?.id) {
+    return projectionRun.id;
+  }
+
+  return projectionParallelRuns.value[projectionParallelRuns.value.length - 1]?.parallelRunId;
 });
 
-function buildParallelComparisonCardsForRun(run: ParallelRunHistoryRecord): TaskParallelComparisonCard[] {
+const currentParallelRunRecord = computed(() => {
+  if (currentParallelRunId.value) {
+    return (
+      projectionParallelRuns.value.find(
+        (run) => run.parallelRunId === currentParallelRunId.value,
+      ) ?? null
+    );
+  }
+  return projectionParallelRuns.value[projectionParallelRuns.value.length - 1] ?? null;
+});
+
+const adoptedCandidateSessionId = computed(() => {
+  const currentRun = currentParallelRunRecord.value;
+  if (!currentRun || typeof currentRun.winnerCandidateIndex !== "number") {
+    return undefined;
+  }
+  const sessionId = currentRun.candidateSessions[currentRun.winnerCandidateIndex]?.sessionId;
+  return typeof sessionId === "string" && sessionId.length > 0 ? sessionId : undefined;
+});
+const visibleParallelRuns = computed(() => {
+  if (task.value?.status === "running" && task.value?.executionMode === "single") {
+    return [] as ProjectionRunRecord[];
+  }
+  return projectionParallelRuns.value;
+});
+
+function buildParallelComparisonCardsForRun(
+  run: ProjectionRunRecord,
+): TaskParallelComparisonCard[] {
   const parallelExecutionFinishedAtMs = toTimestampMs(run.finishedAt);
   const cards = run.candidateSessions.map((candidate, index) => {
     const sessionId = candidate.sessionId;
-    const items = sessionId ? parallelCandidateItems.value[sessionId] ?? [] : [];
+    const items = sessionId ? (parallelCandidateItems.value[sessionId] ?? []) : [];
     const visibleItems = items.filter((item) => {
       if (item.role === "user") {
         return false;
@@ -590,9 +834,10 @@ function buildParallelComparisonCardsForRun(run: ParallelRunHistoryRecord): Task
       const itemCreatedAtMs = toTimestampMs(item.createdAt);
       return itemCreatedAtMs == null || itemCreatedAtMs <= parallelExecutionFinishedAtMs;
     });
-    const metaParts = [candidate.agent, sessionId ? `Branch ${sessionId.slice(0, 8)}` : undefined].filter(
-      (v): v is string => Boolean(v),
-    );
+    const metaParts = [
+      candidate.agent,
+      sessionId ? `Branch ${sessionId.slice(0, 8)}` : undefined,
+    ].filter((v): v is string => Boolean(v));
     const status = resolveParallelCandidateDisplayStatus(
       candidate,
       visibleItems,
@@ -615,7 +860,8 @@ function buildParallelComparisonCardsForRun(run: ParallelRunHistoryRecord): Task
   });
 
   const allCandidatesSettled =
-    cards.length >= 2 && cards.every((candidate) => candidate.status === "completed" || candidate.status === "failed");
+    cards.length >= 2 &&
+    cards.every((candidate) => candidate.status === "completed" || candidate.status === "failed");
 
   return cards.map((candidate) => ({
     ...candidate,
@@ -631,38 +877,39 @@ const parallelConversationItems = computed<TaskConversationParallelItem[]>(() =>
   const items: TaskConversationParallelItem[] = [];
 
   for (const run of visibleParallelRuns.value) {
-      const cards = buildParallelComparisonCardsForRun(run);
-      if (cards.length < 2) {
-        continue;
-      }
-
-      const winnerLabel =
-        typeof run.judgeResult?.winnerIndex === "number"
-          ? run.candidateSessions[run.judgeResult.winnerIndex]?.label || `候选 ${run.judgeResult.winnerIndex + 1}`
-          : undefined;
-      const judgeSummary = winnerLabel
-        ? Array.isArray(run.judgeResult?.scores) && run.judgeResult.scores.length > 0
-          ? `Judge 推荐 ${winnerLabel}，得分 ${run.judgeResult.scores.map((score) => Number(score).toFixed(1)).join(" / ")}`
-          : `Judge 推荐 ${winnerLabel}`
-        : undefined;
-
-      items.push({
-        key: `parallel-${run.parallelRunId}`,
-        role: "parallel",
-        createdAt: run.finishedAt || run.startedAt,
-        candidates: cards,
-        judgeSummary,
-        judgeReasoning: run.judgeResult?.reasoning,
-        raw: run,
-        toolCalls: [],
-      });
+    const cards = buildParallelComparisonCardsForRun(run);
+    if (cards.length < 2) {
+      continue;
     }
+
+    const winnerLabel =
+      typeof run.judgeResult?.winnerIndex === "number"
+        ? run.candidateSessions[run.judgeResult.winnerIndex]?.label ||
+          `候选 ${run.judgeResult.winnerIndex + 1}`
+        : undefined;
+    const judgeSummary = winnerLabel
+      ? Array.isArray(run.judgeResult?.scores) && run.judgeResult.scores.length > 0
+        ? `Judge 推荐 ${winnerLabel}，得分 ${run.judgeResult.scores.map((score) => Number(score).toFixed(1)).join(" / ")}`
+        : `Judge 推荐 ${winnerLabel}`
+      : undefined;
+
+    items.push({
+      key: `parallel-${run.parallelRunId}`,
+      role: "parallel",
+      createdAt: run.finishedAt || run.startedAt,
+      candidates: cards,
+      judgeSummary,
+      judgeReasoning: run.judgeResult?.reasoning,
+      raw: run,
+      toolCalls: [],
+    });
+  }
 
   return items;
 });
 
 function shouldHideUnadoptedParallelMessagesForRun(parallelItem: TaskConversationParallelItem) {
-  const raw = parallelItem.raw as ParallelRunHistoryRecord | null;
+  const raw = parallelItem.raw as ProjectionRunRecord | null;
   return raw != null && typeof raw.winnerCandidateIndex !== "number";
 }
 
@@ -697,6 +944,40 @@ function findParallelConversationAnchorIndex(
   return -1;
 }
 
+function findNextUserConversationIndex(items: TaskConversationListItem[], anchorIndex: number) {
+  for (let index = anchorIndex + 1; index < items.length; index += 1) {
+    if (items[index]?.role === "user") {
+      return index;
+    }
+  }
+
+  return items.length;
+}
+
+function insertParallelConversationItem(
+  items: TaskConversationListItem[],
+  parallelItem: TaskConversationParallelItem,
+) {
+  const anchorIndex = findParallelConversationAnchorIndex(items, parallelItem);
+  if (shouldHideUnadoptedParallelMessagesForRun(parallelItem)) {
+    if (anchorIndex < 0) {
+      items.unshift(parallelItem);
+      return;
+    }
+
+    const nextUserIndex = findNextUserConversationIndex(items, anchorIndex);
+    items.splice(anchorIndex + 1, nextUserIndex - (anchorIndex + 1), parallelItem);
+    return;
+  }
+
+  if (anchorIndex >= 0) {
+    items.splice(anchorIndex + 1, 0, parallelItem);
+    return;
+  }
+
+  items.unshift(parallelItem);
+}
+
 const conversationItems = computed<TaskConversationListItem[]>(() => {
   const base = [...baseConversationItems.value];
   const inlineParallelItems = parallelConversationItems.value;
@@ -704,31 +985,7 @@ const conversationItems = computed<TaskConversationListItem[]>(() => {
   if (inlineParallelItems.length === 0) return base;
 
   for (const inlineParallelItem of inlineParallelItems) {
-    const anchorIndex = findParallelConversationAnchorIndex(base, inlineParallelItem);
-    if (shouldHideUnadoptedParallelMessagesForRun(inlineParallelItem)) {
-      if (anchorIndex < 0) {
-        base.unshift(inlineParallelItem);
-        continue;
-      }
-
-      let nextUserIndex = base.length;
-      for (let index = anchorIndex + 1; index < base.length; index += 1) {
-        if (base[index]?.role === "user") {
-          nextUserIndex = index;
-          break;
-        }
-      }
-
-      base.splice(anchorIndex + 1, nextUserIndex - (anchorIndex + 1), inlineParallelItem);
-      continue;
-    }
-
-    if (anchorIndex >= 0) {
-      base.splice(anchorIndex + 1, 0, inlineParallelItem);
-      continue;
-    }
-
-    base.unshift(inlineParallelItem);
+    insertParallelConversationItem(base, inlineParallelItem);
   }
 
   return base;
@@ -743,18 +1000,32 @@ function resolveRequestedSessionId() {
 }
 
 function ensureSelectedBranch() {
-  if (adoptedCandidateSessionId.value && flatNodes.value.some((n) => n.runtimeSessionId === adoptedCandidateSessionId.value)) {
+  if (
+    adoptedCandidateSessionId.value &&
+    flatNodes.value.some((n) => n.runtimeSessionId === adoptedCandidateSessionId.value)
+  ) {
     selectedBranchSessionId.value = adoptedCandidateSessionId.value;
     return;
   }
   const requestedSessionId = resolveRequestedSessionId();
-  if (requestedSessionId && flatNodes.value.some((n) => n.runtimeSessionId === requestedSessionId)) {
+  if (
+    requestedSessionId &&
+    flatNodes.value.some((n) => n.runtimeSessionId === requestedSessionId)
+  ) {
     selectedBranchSessionId.value = requestedSessionId;
     return;
   }
-  if (selectedBranchSessionId.value && flatNodes.value.some((n) => n.runtimeSessionId === selectedBranchSessionId.value)) return;
+  if (
+    selectedBranchSessionId.value &&
+    flatNodes.value.some((n) => n.runtimeSessionId === selectedBranchSessionId.value)
+  )
+    return;
   const active = flatNodes.value.find((n) => n.isActive);
-  selectedBranchSessionId.value = active?.runtimeSessionId ?? task.value?.sessionId ?? flatNodes.value[0]?.runtimeSessionId ?? undefined;
+  selectedBranchSessionId.value =
+    active?.runtimeSessionId ??
+    task.value?.sessionId ??
+    flatNodes.value[0]?.runtimeSessionId ??
+    undefined;
 }
 
 function clearScheduledTaskRefresh() {
@@ -764,11 +1035,16 @@ function clearScheduledTaskRefresh() {
   }
 }
 
-async function refreshTaskSnapshot(options?: { workflow?: boolean; flow?: boolean; messages?: boolean }) {
+async function refreshTaskSnapshot(options?: {
+  workflow?: boolean;
+  flow?: boolean;
+  messages?: boolean;
+}) {
   if (!taskId.value) return;
   const previousStatus = task.value?.status;
   try {
     await refreshTask(true);
+    await refreshTaskRunSummaries(taskId.value, true);
     if (options?.workflow || !workflowView.value || task.value?.status !== previousStatus) {
       workflowView.value = await getTaskWorkflowView(taskId.value).catch(() => workflowView.value);
     }
@@ -797,9 +1073,19 @@ function scheduleTaskRefresh(reason: string) {
   taskRefreshTimer = setTimeout(() => {
     taskRefreshTimer = null;
     void refreshTaskSnapshot({
-      workflow: ["message.updated", "session.updated", "task.updated", "task.completed", "task.continued", "task.node.updated", "agent.started"].includes(reason),
+      workflow: [
+        "message.updated",
+        "session.updated",
+        "task.updated",
+        "task.completed",
+        "task.continued",
+        "task.node.updated",
+        "agent.started",
+      ].includes(reason),
       flow: reason === "session.updated" || reason === "session.created",
-      messages: ["message.updated", "session.updated", "task.completed", "task.continued"].includes(reason),
+      messages: ["message.updated", "session.updated", "task.completed", "task.continued"].includes(
+        reason,
+      ),
     });
   }, delay);
 }
@@ -825,6 +1111,7 @@ async function loadInitial() {
   }
   try {
     workflowView.value = await getTaskWorkflowView(taskId.value).catch(() => null);
+    await refreshTaskRunSummaries(taskId.value, true);
     if (projectId.value) {
       realtimeStore.subscribeProject(projectId.value);
     }
@@ -852,24 +1139,40 @@ async function loadModels() {
   }
 }
 
-function traceHasSettledCandidateReply(trace: Awaited<ReturnType<typeof getTaskExecutionTraceView>>) {
+function traceHasSettledCandidateReply(
+  trace: Awaited<ReturnType<typeof getTaskExecutionTraceView>>,
+) {
   if (typeof trace?.latestResponse === "string" && trace.latestResponse.trim().length > 0) {
     return true;
   }
 
   const messages = Array.isArray(trace?.messages) ? trace.messages : [];
-  if (messages.some((message) => message.role === "assistant" && typeof message.text === "string" && message.text.trim().length > 0)) {
+  if (
+    messages.some(
+      (message) =>
+        message.role === "assistant" &&
+        typeof message.text === "string" &&
+        message.text.trim().length > 0,
+    )
+  ) {
     return true;
   }
 
   const timeline = Array.isArray(trace?.timeline) ? trace.timeline : [];
-  return timeline.some((item) => item.role === "assistant" && typeof item.text === "string" && item.text.trim().length > 0);
+  return timeline.some(
+    (item) =>
+      item.role === "assistant" && typeof item.text === "string" && item.text.trim().length > 0,
+  );
 }
 
 async function refreshParallelCandidateMessages(currentTaskId: string, silent = false) {
-  const candidateSessionIds = Array.from(new Set(visibleParallelRuns.value
-    .flatMap((run) => run.candidateSessions.map((candidate) => candidate.sessionId))
-    .filter((s): s is string => Boolean(s))));
+  const candidateSessionIds = Array.from(
+    new Set(
+      visibleParallelRuns.value
+        .flatMap((run) => run.candidateSessions.map((candidate) => candidate.sessionId))
+        .filter((s): s is string => Boolean(s)),
+    ),
+  );
   if (candidateSessionIds.length === 0) {
     parallelCandidateItems.value = {};
     parallelCandidateSettledReply.value = {};
@@ -878,21 +1181,70 @@ async function refreshParallelCandidateMessages(currentTaskId: string, silent = 
   const entries = await Promise.all(
     candidateSessionIds.map(async (sessionId) => {
       try {
-        const trace = await getTaskExecutionTraceView(currentTaskId, sessionId, { includeLineage: false });
-        return [sessionId, {
-          items: normalizeTraceConversationItems(trace),
-          hasSettledReply: traceHasSettledCandidateReply(trace),
-        }] as const;
+        const trace = await getTaskExecutionTraceView(currentTaskId, sessionId, {
+          includeLineage: false,
+        });
+        return [
+          sessionId,
+          {
+            items: normalizeTraceConversationItems(trace),
+            hasSettledReply: traceHasSettledCandidateReply(trace),
+          },
+        ] as const;
       } catch {
-        return [sessionId, {
-          items: silent ? parallelCandidateItems.value[sessionId] ?? [] : [],
-          hasSettledReply: silent ? parallelCandidateSettledReply.value[sessionId] === true : false,
-        }] as const;
+        return [
+          sessionId,
+          {
+            items: silent ? (parallelCandidateItems.value[sessionId] ?? []) : [],
+            hasSettledReply: silent
+              ? parallelCandidateSettledReply.value[sessionId] === true
+              : false,
+          },
+        ] as const;
       }
     }),
   );
-  parallelCandidateItems.value = Object.fromEntries(entries.map(([sessionId, value]) => [sessionId, value.items]));
-  parallelCandidateSettledReply.value = Object.fromEntries(entries.map(([sessionId, value]) => [sessionId, value.hasSettledReply]));
+  parallelCandidateItems.value = Object.fromEntries(
+    entries.map(([sessionId, value]) => [sessionId, value.items]),
+  );
+  parallelCandidateSettledReply.value = Object.fromEntries(
+    entries.map(([sessionId, value]) => [sessionId, value.hasSettledReply]),
+  );
+}
+
+async function refreshTaskRunSummaries(currentTaskId: string, silent = false) {
+  try {
+    const agentRunsResponse = await getTaskAgentRuns(currentTaskId);
+    taskAgentRuns.value = Array.isArray(agentRunsResponse.data) ? agentRunsResponse.data : [];
+
+    const domainRunsResponse = await getTaskDomainRuns(currentTaskId);
+    taskDomainRuns.value = Array.isArray(domainRunsResponse.data) ? domainRunsResponse.data : [];
+
+    const projectedRuns = taskDomainRuns.value.filter(
+      (run) => run.orchestrationKind === "parallel" || run.orchestrationKind === "sequential-chain",
+    );
+    const detailEntries = await Promise.all(
+      projectedRuns.map(async (run) => {
+        try {
+          const response = await getTaskDomainRunDetail(currentTaskId, run.id);
+          return [run.id, response.data] as const;
+        } catch {
+          return [run.id, null] as const;
+        }
+      }),
+    );
+    taskDomainRunDetails.value = Object.fromEntries(
+      detailEntries.filter((entry): entry is readonly [string, TaskDomainRunDetailRecord] =>
+        Boolean(entry[1]),
+      ),
+    );
+  } catch {
+    if (!silent) {
+      taskDomainRuns.value = [];
+      taskAgentRuns.value = [];
+      taskDomainRunDetails.value = {};
+    }
+  }
 }
 
 async function refreshRuntimePermissions(silent = false) {
@@ -914,10 +1266,16 @@ async function refreshRuntimePermissions(silent = false) {
 
 function filterModelOption(input: string, option?: unknown) {
   const keyword = input.toLowerCase();
-  const normalized = option as { value?: string | number | null; label?: string | number | null } | undefined;
+  const normalized = option as
+    | { value?: string | number | null; label?: string | number | null }
+    | undefined;
   return (
-    String(normalized?.value ?? "").toLowerCase().includes(keyword) ||
-    String(normalized?.label ?? "").toLowerCase().includes(keyword)
+    String(normalized?.value ?? "")
+      .toLowerCase()
+      .includes(keyword) ||
+    String(normalized?.label ?? "")
+      .toLowerCase()
+      .includes(keyword)
   );
 }
 
@@ -991,7 +1349,12 @@ async function handleSelectedModelChange(model: string) {
 function queueContinuation(prompt: string, sessionId?: string) {
   queuedContinuations.value = [
     ...queuedContinuations.value,
-    { id: `${Date.now()}-${queuedContinuations.value.length}`, prompt, sessionId, queuedAt: new Date().toISOString() },
+    {
+      id: `${Date.now()}-${queuedContinuations.value.length}`,
+      prompt,
+      sessionId,
+      queuedAt: new Date().toISOString(),
+    },
   ];
   composerResetToken.value += 1;
   message.success(`已加入队列，前方还有 ${queuedContinuations.value.length - 1} 条待发送`);
@@ -1040,7 +1403,9 @@ async function dispatchContinuePrompt(
     await refreshMessages(true);
     return true;
   } catch (err) {
-    message.error(err instanceof Error ? err.message : source === "queue" ? "发送排队输入失败" : "续跑失败");
+    message.error(
+      err instanceof Error ? err.message : source === "queue" ? "发送排队输入失败" : "续跑失败",
+    );
     return false;
   } finally {
     continuing.value = false;
@@ -1113,8 +1478,11 @@ async function handleExecutionModeConfirm(overrides: ExecutionOverrides) {
     await updateTask(taskId.value, buildExecutionModeTaskUpdate(task.value, overrides));
     showExecutionModeModal.value = false;
     const executionMode = overrides?.mode ?? "single";
-    const judgeEnabled = executionMode === "parallel" && (overrides?.judge ?? DEFAULT_JUDGE_CONFIG).enabled;
-    message.success(judgeEnabled ? "执行模式与并行 Judge 配置已保存" : "执行模式已保存，下一次发送消息时生效");
+    const judgeEnabled =
+      executionMode === "parallel" && (overrides?.judge ?? DEFAULT_JUDGE_CONFIG).enabled;
+    message.success(
+      judgeEnabled ? "执行模式与并行 Judge 配置已保存" : "执行模式已保存，下一次发送消息时生效",
+    );
     await refreshTask(false);
   } catch (err) {
     message.error(err instanceof Error ? err.message : "保存执行模式失败");
@@ -1153,12 +1521,10 @@ function handleUnavailableAction(label: string) {
 function syncSelectedSessionToRoute(sessionId: string | undefined) {
   const currentSession = resolveRequestedSessionId();
   if (currentSession === sessionId) return;
-  const nextQuery = { ...route.query };
-  if (sessionId) {
-    nextQuery.session = sessionId;
-  } else {
-    delete nextQuery.session;
-  }
+  const { session: _session, ...queryWithoutSession } = route.query;
+  const nextQuery = sessionId
+    ? { ...queryWithoutSession, session: sessionId }
+    : queryWithoutSession;
   router.replace({ name: "TaskDetailV3", params: { taskId: taskId.value }, query: nextQuery });
 }
 
@@ -1166,10 +1532,14 @@ function syncSelectedSessionToRoute(sessionId: string | undefined) {
 /*  Watchers                                                            */
 /* ------------------------------------------------------------------ */
 
-watch(taskId, () => {
-  selectedBranchSessionId.value = undefined;
-  previewFile.value = null;
-}, { immediate: false });
+watch(
+  taskId,
+  () => {
+    selectedBranchSessionId.value = undefined;
+    previewFile.value = null;
+  },
+  { immediate: false },
+);
 
 // When task data is loaded, run initial setup
 watch(
@@ -1210,7 +1580,16 @@ watch(
     const rawType = typeof event.data.rawType === "string" ? event.data.rawType : event.type;
     if (rawType === "message.part.updated") return;
     if (
-      ["message.updated", "session.updated", "session.created", "task.updated", "task.completed", "task.continued", "task.node.updated", "agent.started"].includes(rawType)
+      [
+        "message.updated",
+        "session.updated",
+        "session.created",
+        "task.updated",
+        "task.completed",
+        "task.continued",
+        "task.node.updated",
+        "agent.started",
+      ].includes(rawType)
     ) {
       scheduleTaskRefresh(rawType);
     }

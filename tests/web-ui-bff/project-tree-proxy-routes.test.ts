@@ -2,6 +2,7 @@
 
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import * as orchestrationStrategyModule from "../../control-plane/web-ui-bff/src/lib/orchestration-strategy";
+import { createOpencodeAdapterModuleMock } from "./opencode-adapter-mock";
 
 const cpFetchMock = mock(async (..._args: unknown[]) => ({ ok: true, status: 200, data: {} }));
 const authHeaderMock = mock(() => "Bearer tree-token");
@@ -31,31 +32,33 @@ mock.module("../../control-plane/web-ui-bff/src/lib/orchestration-strategy", () 
   readOrchestrationStrategy: mock(() => ({ hooks: [], templates: [], judge: { enabled: false } })),
 }));
 
-mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter", () => ({
-  continueSession: mock(async () => ({ ok: true })),
-  createSession: mock(async () => ({ ok: true, sessionId: "session-1", agentRunId: "run-1" })),
-  ensureAgentRunForSession: mock(() => "run-1"),
-  extractAssistantResultFromMessages: mock(() => ({
-    completed: false,
-    failed: false,
-    error: undefined,
-    tokenUsed: 0,
-  })),
-  forkSession: mock(async () => ({ ok: true, sessionId: "session-2" })),
-  getAgentRun: mock(() => undefined),
-  getAgentMessages: mock(async () => ({ ok: true, data: [] })),
-  getSessionMessages: mock(async () => ({ ok: true, data: [] })),
-  injectGuidance: mock(async () => ({ ok: true })),
-  listAgentRuns: mock(() => []),
-  listSessions: mock(async () => ({ ok: true, data: [] })),
-  pauseAgent: mock(async () => ({ ok: true })),
-  registerAgentRun: mock(() => undefined),
-  recoverAgentRun: mock(() => undefined),
-  resumeAgent: mock(async () => ({ ok: true })),
-  runDetachedPrompt: mock(async () => ({ ok: true, sessionId: "detached", text: "{}" })),
-  terminateAgent: mock(async () => ({ ok: true })),
-  updateAgentRunStatus: mock(() => undefined),
-}));
+mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter", () =>
+  createOpencodeAdapterModuleMock({
+    continueSession: mock(async () => ({ ok: true })),
+    createSession: mock(async () => ({ ok: true, sessionId: "session-1", agentRunId: "run-1" })),
+    ensureAgentRunForSession: mock(() => "run-1"),
+    extractAssistantResultFromMessages: mock(() => ({
+      completed: false,
+      failed: false,
+      error: undefined,
+      tokenUsed: 0,
+    })),
+    forkSession: mock(async () => ({ ok: true, sessionId: "session-2" })),
+    getAgentRun: mock(() => undefined),
+    getAgentMessages: mock(async () => ({ ok: true, data: [] })),
+    getSessionMessages: mock(async () => ({ ok: true, data: [] })),
+    injectGuidance: mock(async () => ({ ok: true })),
+    listAgentRuns: mock(() => []),
+    listSessions: mock(async () => ({ ok: true, data: [] })),
+    pauseAgent: mock(async () => ({ ok: true })),
+    registerAgentRun: mock(() => undefined),
+    recoverAgentRun: mock(() => undefined),
+    resumeAgent: mock(async () => ({ ok: true })),
+    runDetachedPrompt: mock(async () => ({ ok: true, sessionId: "detached", text: "{}" })),
+    terminateAgent: mock(async () => ({ ok: true })),
+    updateAgentRunStatus: mock(() => undefined),
+  }),
+);
 
 beforeEach(() => {
   cpFetchMock.mockReset();
@@ -76,10 +79,15 @@ describe("project tree proxy routes", () => {
       },
     });
 
-    const { projectRoutes } = await import("../../control-plane/web-ui-bff/src/modules/projects/routes");
-    const response = await projectRoutes.request("http://localhost/proj-1/tree?depth=2&nodeType=task", {
-      headers: { Authorization: "Bearer tree-token" },
-    });
+    const { projectRoutes } = await import(
+      "../../control-plane/web-ui-bff/src/modules/projects/routes"
+    );
+    const response = await projectRoutes.request(
+      "http://localhost/proj-1/tree?depth=2&nodeType=task",
+      {
+        headers: { Authorization: "Bearer tree-token" },
+      },
+    );
 
     expect(response.status).toBe(200);
     expect(cpFetchMock).toHaveBeenCalledWith("/api/projects/proj-1/tree?depth=2&nodeType=task", {
@@ -103,7 +111,9 @@ describe("project tree proxy routes", () => {
       },
     });
 
-    const { projectRoutes } = await import("../../control-plane/web-ui-bff/src/modules/projects/routes");
+    const { projectRoutes } = await import(
+      "../../control-plane/web-ui-bff/src/modules/projects/routes"
+    );
     const response = await projectRoutes.request("http://localhost/proj-1/branches/branch-1", {
       method: "PUT",
       headers: {
@@ -141,7 +151,9 @@ describe("project tree proxy routes", () => {
       },
     });
 
-    const { projectRoutes } = await import("../../control-plane/web-ui-bff/src/modules/projects/routes");
+    const { projectRoutes } = await import(
+      "../../control-plane/web-ui-bff/src/modules/projects/routes"
+    );
     const response = await projectRoutes.request("http://localhost/proj-1/tree/node-1/links", {
       headers: { Authorization: "Bearer tree-token" },
     });

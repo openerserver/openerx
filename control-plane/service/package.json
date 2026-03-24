@@ -19,6 +19,8 @@
     "db:transform:sqlite-export": "bun run src/db/migration/transform-export.ts",
     "db:import:pg": "bun run src/db/migration/import-postgres.ts",
     "db:validate:pg": "bun run src/db/migration/validate-postgres.ts",
+    "db:audit:task-domain": "bun run src/db/migration/audit-task-domain-consistency.ts",
+    "db:cleanup:task-domain-audit-fixtures": "bun run src/db/migration/cleanup-task-domain-audit-fixtures.ts",
     "db:migrate:sqlite-snapshot": "bun run src/db/migration/sqlite-to-postgres.ts",
     "cli:task": "bun run src/cli/create-task.ts",
     "test": "bun test ../../tests/service --timeout 30000",

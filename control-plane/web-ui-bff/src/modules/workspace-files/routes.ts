@@ -49,7 +49,10 @@ workspaceFileRoutes.get("/content", zValidator("query", querySchema), async (c) 
     }
 
     if (full && metadata.size > MAX_FULL_PREVIEW_BYTES) {
-      return c.json({ error: "File is too large to expand", maxBytes: MAX_FULL_PREVIEW_BYTES }, 413);
+      return c.json(
+        { error: "File is too large to expand", maxBytes: MAX_FULL_PREVIEW_BYTES },
+        413,
+      );
     }
 
     let content: string;

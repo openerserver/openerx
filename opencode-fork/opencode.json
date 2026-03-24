@@ -56,38 +56,22 @@
   "mcp": {
     "exa": {
       "type": "local",
-      "command": [
-        "npx",
-        "-y",
-        "@anthropic-ai/exa-mcp-server"
-      ],
+      "command": ["npx", "-y", "@anthropic-ai/exa-mcp-server"],
       "environment": {
         "EXA_API_KEY": "${EXA_API_KEY}"
       }
     },
     "context7": {
       "type": "local",
-      "command": [
-        "npx",
-        "-y",
-        "@anthropic-ai/context7-mcp-server"
-      ]
+      "command": ["npx", "-y", "@anthropic-ai/context7-mcp-server"]
     },
     "grep-app": {
       "type": "local",
-      "command": [
-        "npx",
-        "-y",
-        "@anthropic-ai/grep-app-mcp-server"
-      ]
+      "command": ["npx", "-y", "@anthropic-ai/grep-app-mcp-server"]
     },
     "demo-memory": {
       "type": "local",
-      "command": [
-        "npx",
-        "-y",
-        "@modelcontextprotocol/server-memory"
-      ],
+      "command": ["npx", "-y", "@modelcontextprotocol/server-memory"],
       "description": "Demo memory MCP for validation"
     }
   },

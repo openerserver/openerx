@@ -1,10 +1,4 @@
-export type TaskStatus =
-  | "pending"
-  | "running"
-  | "paused"
-  | "completed"
-  | "failed"
-  | "cancelled";
+export type TaskStatus = "pending" | "running" | "paused" | "completed" | "failed" | "cancelled";
 
 export type TaskCategory = "quick" | "deep" | "ops" | "security" | "architecture";
 
@@ -36,8 +30,6 @@ export interface TaskTreeSnapshot {
   workingBranch: string | null;
   selectedModel: string | null;
   executionMode: TaskExecutionMode | null;
-  executionPlan: string | null;
-  parallelRunHistory: string | null;
   autoAdvanceStages: boolean;
   credentialId: string | null;
   gitAuthorName: string | null;

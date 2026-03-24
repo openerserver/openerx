@@ -124,7 +124,7 @@
 
 **已有基础设施**：
 
-- `ExecutionMode`（`single` | `parallel`）、`ExecutionCandidate`、`ExecutionPlan` 类型已定义
+- `ExecutionMode`（`single` | `parallel`）、`ExecutionCandidate`、`RuntimePlan` 类型已定义
 - `agentRuns.candidateIndex` 已支持多候选追踪
 - SSE aggregator 已有 `parallelCandidateResults` 收集和 `runJudgeEvaluation` 逻辑
 - 需补充：顺序编排模式（`sequential-chain`）和前端步骤设计 UI

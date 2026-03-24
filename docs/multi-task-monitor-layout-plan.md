@@ -539,8 +539,13 @@
 
 建议执行命令：
 
-- `bun run test:ui:file tests/web-ui/MultiTaskMonitor.test.ts`
-- `bun run test:ui:file tests/web-ui/router.test.ts`
+- `bun run test:ui:file -- tests/web-ui/MultiTaskMonitor.test.ts`
+- `bun run test:ui:file -- tests/web-ui/router.test.ts`
+
+说明：
+
+- 前端单文件回归统一走 `bun run test:ui:file -- tests/web-ui/<file>.test.ts`，让用例始终运行在 `control-plane/web-ui` 的 Vitest 上下文里。
+- 不要直接运行 `bun test tests/web-ui/...`；那会调用 Bun 原生测试器，容易出现模块解析和运行环境不一致的假失败。
 
 ## 10. 实施顺序建议
 

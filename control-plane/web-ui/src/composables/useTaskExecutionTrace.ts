@@ -1,5 +1,81 @@
-import { computed, ref, watch, type Ref } from "vue";
-import { getTaskExecutionTraceView, type TaskExecutionTrace } from "../lib/api";
+import { type Ref, computed, ref, watch } from "vue";
+import { type TaskExecutionTrace, getTaskExecutionTraceView } from "../lib/api";
+
+type TraceSummaryItem = { label: string; value: string; tone?: string };
+
+function buildBaseTraceSummaryItems(trace: TaskExecutionTrace): TraceSummaryItem[] {
+  return [
+    {
+      label: "追踪会话",
+      value: trace.sessionId?.slice(0, 18) || "无",
+      tone: "blue",
+    },
+    {
+      label: "来源段",
+      value: String(trace.segments.length),
+      tone: "processing",
+    },
+    {
+      label: "时间线项",
+      value: String(trace.timeline?.length ?? 0),
+      tone: "purple",
+    },
+  ];
+}
+
+function buildTraceReadSourceLabel(
+  readSource: NonNullable<TaskExecutionTrace["timelineMeta"]>["readSource"],
+) {
+  switch (readSource) {
+    case "task-domain-projection":
+      return { value: "投影", tone: "cyan" };
+    case "conversation-table":
+      return { value: "会话表", tone: "default" };
+    case "task-domain-events":
+      return { value: "领域事件", tone: "default" };
+    case "conversation-table+task-domain-events":
+      return { value: "会话表+领域事件", tone: "default" };
+    case "runtime-fallback":
+      return { value: "运行时回退", tone: "default" };
+    default:
+      return { value: "未知", tone: "default" };
+  }
+}
+
+function buildTraceSummaryItems(trace: TaskExecutionTrace): TraceSummaryItem[] {
+  const items = buildBaseTraceSummaryItems(trace);
+
+  if (trace.timelineMeta?.cacheState && trace.timelineMeta.cacheState !== "complete") {
+    items.push({
+      label: "时间线缓存",
+      value: trace.timelineMeta.cacheState === "partial" ? "部分" : "未命中",
+      tone: "warning",
+    });
+  }
+
+  if (trace.timelineMeta?.readSource) {
+    const readSource = buildTraceReadSourceLabel(trace.timelineMeta.readSource);
+    items.push({
+      label: "时间线来源",
+      value: readSource.value,
+      tone: readSource.tone,
+    });
+  }
+
+  if (trace.snapshot?.currentStatus) {
+    items.push({
+      label: "快照状态",
+      value: trace.snapshot.currentStatus,
+      tone: "geekblue",
+    });
+  }
+
+  if (trace.truncated) {
+    items.push({ label: "会话截断", value: "是", tone: "warning" });
+  }
+
+  return items;
+}
 
 export function useTaskExecutionTrace(taskId: Ref<string>, sessionId: Ref<string | undefined>) {
   const trace = ref<TaskExecutionTrace | null>(null);
@@ -61,45 +137,19 @@ export function useTaskExecutionTrace(taskId: Ref<string>, sessionId: Ref<string
 
   const summaryItems = computed(() => {
     if (!trace.value) {
-      return [] as Array<{ label: string; value: string; tone?: string }>;
+      return [] as TraceSummaryItem[];
     }
 
-    const items: Array<{ label: string; value: string; tone?: string }> = [
-      {
-        label: "追踪会话",
-        value: trace.value.sessionId?.slice(0, 18) || "无",
-        tone: "blue",
-      },
-      {
-        label: "来源段",
-        value: String(trace.value.segments.length),
-        tone: "processing",
-      },
-      {
-        label: "时间线项",
-        value: String(trace.value.timeline?.length ?? 0),
-        tone: "purple",
-      },
-    ];
-
-    if (trace.value.timelineMeta?.cacheState && trace.value.timelineMeta.cacheState !== "complete") {
-      items.push({
-        label: "时间线缓存",
-        value: trace.value.timelineMeta.cacheState === "partial" ? "部分" : "未命中",
-        tone: "warning",
-      });
-    }
-
-    if (trace.value.truncated) {
-      items.push({ label: "会话截断", value: "是", tone: "warning" });
-    }
-
-    return items;
+    return buildTraceSummaryItems(trace.value);
   });
 
-  watch([taskId, sessionId], () => {
-    void refresh();
-  }, { immediate: true });
+  watch(
+    [taskId, sessionId],
+    () => {
+      void refresh();
+    },
+    { immediate: true },
+  );
 
   return {
     trace,

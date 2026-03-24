@@ -104,16 +104,25 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  const relationCleanupStatements =
+    DATABASE_DIALECT === "postgres"
+      ? [
+          ...relationIds.map((id) => `DELETE FROM project_tree_links WHERE id='${id}';`),
+          ...createdTaskIds.map(
+            (id) =>
+              `DELETE FROM project_tree_links WHERE source_node_id='${id}' OR target_node_id='${id}';`,
+          ),
+          ...createdTaskIds.map((id) => `DELETE FROM project_tree_events WHERE node_id='${id}';`),
+          ...createdTaskIds.map(
+            (id) =>
+              `DELETE FROM project_tree_branches WHERE task_node_id='${id}' OR head_node_id='${id}';`,
+          ),
+          ...createdTaskIds.map((id) => `DELETE FROM project_tree_nodes WHERE id='${id}';`),
+        ]
+      : [];
   const statements = [
-    ...relationIds.map((id) => `DELETE FROM project_tree_links WHERE id='${id}';`),
-    ...createdTaskIds.map(
-      (id) => `DELETE FROM project_tree_links WHERE source_node_id='${id}' OR target_node_id='${id}';`,
-    ),
-    ...createdTaskIds.map((id) => `DELETE FROM project_tree_events WHERE node_id='${id}';`),
-    ...createdTaskIds.map(
-      (id) => `DELETE FROM project_tree_branches WHERE task_node_id='${id}' OR head_node_id='${id}';`,
-    ),
-    ...createdTaskIds.map((id) => `DELETE FROM project_tree_nodes WHERE id='${id}';`),
+    ...createdTaskIds.map((id) => `DELETE FROM tasks WHERE id='${id}';`),
+    ...relationCleanupStatements,
   ];
 
   if (statements.length === 0) {
@@ -199,13 +208,14 @@ describe("project tree task links", () => {
     const { data, status } = await authedRequest<ProjectTreeLinkRecord>(
       `/api/projects/${PROJECT_ID}/tree/${sourceTaskId}/links`,
       {
-      method: "POST",
-      body: JSON.stringify({
-        targetNodeId: targetTaskId,
-        linkType: "depends-on",
-        metadata: { source: "test", relationSource: "manual" },
-      }),
-    });
+        method: "POST",
+        body: JSON.stringify({
+          targetNodeId: targetTaskId,
+          linkType: "depends-on",
+          metadata: { source: "test", relationSource: "manual" },
+        }),
+      },
+    );
 
     expect(status).toBe(201);
     expect(data.linkType).toBe("depends-on");

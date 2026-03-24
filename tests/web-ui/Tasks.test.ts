@@ -410,13 +410,8 @@ describe("Tasks page", () => {
         id: "task-awaiting-adoption",
         status: "completed",
         executionMode: "parallel",
-        executionPlan: JSON.stringify({
-          mode: "parallel",
-          candidates: [
-            { index: 0, label: "候选 1", model: "github-copilot:gpt-5-mini", status: "completed" },
-            { index: 1, label: "候选 2", model: "github-copilot:gpt-4o", status: "completed" },
-          ],
-        }),
+        orchestrationKind: "parallel",
+        currentRunCandidateCount: 2,
       }),
     ]);
 

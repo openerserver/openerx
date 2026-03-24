@@ -1,4 +1,6 @@
 import { join } from "node:path";
+import { exportSqliteSnapshot } from "./export-sqlite";
+import { importPostgresSnapshot } from "./import-postgres";
 import {
   DEFAULT_SQLITE_SNAPSHOT_PATH,
   DEFAULT_WORK_DIR,
@@ -10,8 +12,6 @@ import {
   resolveInputPath,
   writeJsonFile,
 } from "./metadata";
-import { exportSqliteSnapshot } from "./export-sqlite";
-import { importPostgresSnapshot } from "./import-postgres";
 import { transformExportSnapshot } from "./transform-export";
 import { validatePostgresSnapshot } from "./validate-postgres";
 

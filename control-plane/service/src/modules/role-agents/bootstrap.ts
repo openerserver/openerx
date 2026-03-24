@@ -158,7 +158,10 @@ function buildBindingPatch(
   return patch;
 }
 
-function buildDesiredRole(definition: (typeof DEFAULT_ROLE_AGENT_DEFINITIONS)[number], now: string) {
+function buildDesiredRole(
+  definition: (typeof DEFAULT_ROLE_AGENT_DEFINITIONS)[number],
+  now: string,
+) {
   return {
     id: definition.role.id,
     projectId: null,

@@ -39,7 +39,12 @@ export function normalizeWorkspaceFilePath(value: string | undefined): string | 
     ? normalized.slice(WORKSPACE_ROOT_PREFIX.length)
     : normalized;
 
-  if (!relative || relative.startsWith("/") || relative.includes("://") || /[\\:*?"<>|]/u.test(relative)) {
+  if (
+    !relative ||
+    relative.startsWith("/") ||
+    relative.includes("://") ||
+    /[\\:*?"<>|]/u.test(relative)
+  ) {
     return undefined;
   }
 
@@ -48,7 +53,9 @@ export function normalizeWorkspaceFilePath(value: string | undefined): string | 
     return undefined;
   }
 
-  if (segments.some((segment) => segment === "." || segment === ".." || /[\\:*?"<>|]/u.test(segment))) {
+  if (
+    segments.some((segment) => segment === "." || segment === ".." || /[\\:*?"<>|]/u.test(segment))
+  ) {
     return undefined;
   }
 

@@ -330,6 +330,83 @@ export interface AgentRunSummary {
   candidateIndex?: number;
 }
 
+export interface TaskAgentRunRecord {
+  id: string;
+  taskId: string;
+  sessionId?: string | null;
+  runId?: string | null;
+  runNodeId?: string | null;
+  agentType: string;
+  status: string;
+  modelUsed?: string | null;
+  tokenUsed: number;
+  result?: string | null;
+  error?: string | null;
+  candidateIndex?: number | null;
+  createdAt: string;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+}
+
+export interface TaskDomainRunRecord {
+  id: string;
+  taskId: string;
+  projectId: string;
+  orchestrationKind: string;
+  triggerType: string;
+  sourceType?: string | null;
+  status: string;
+  rootSessionId?: string | null;
+  winnerNodeId?: string | null;
+  judgeNodeId?: string | null;
+  requestedModel?: string | null;
+  effectiveModel?: string | null;
+  pipelineStepCount?: number | null;
+  candidateCount?: number | null;
+  resultText?: string | null;
+  resultSummary?: string | null;
+  errorText?: string | null;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TaskDomainRunNodeRecord {
+  id: string;
+  runId: string;
+  taskId: string;
+  projectId: string;
+  nodeKind: string;
+  nodeKey: string;
+  title?: string | null;
+  instruction?: string | null;
+  candidateIndex?: number | null;
+  chainStepIndex?: number | null;
+  hookTrigger?: string | null;
+  agentType?: string | null;
+  modelUsed?: string | null;
+  sessionId?: string | null;
+  agentRunId?: string | null;
+  status: string;
+  resultText?: string | null;
+  resultSummary?: string | null;
+  errorText?: string | null;
+  tokenUsed?: number | null;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TaskDomainRunDetailRecord {
+  run: TaskDomainRunRecord;
+  nodes: TaskDomainRunNodeRecord[];
+  candidateNodes: TaskDomainRunNodeRecord[];
+  judgeNode: TaskDomainRunNodeRecord | null;
+  winnerCandidateIndex: number | null;
+}
+
 export async function listAgentRuns() {
   return request<AgentRunSummary[]>("/agents");
 }
@@ -672,6 +749,17 @@ export interface DashboardGovernanceOverviewResponse {
     breakerCount: number;
     activeLeaseCount: number;
     topRiskTaskCount: number;
+    runningTaskCount: number;
+    activeSessionCount: number;
+    parallelTaskCount: number;
+    sequentialChainTaskCount: number;
+    recentTimelineItemCount: number;
+    pausedTaskCount: number;
+    failedTaskCount: number;
+    activeCandidateCount: number;
+    pendingChainStepCount: number;
+    toolTimelineItemCount: number;
+    decisionTimelineItemCount: number;
   };
   topRiskTasks: DashboardGovernanceTopRiskTaskItem[];
   recentEvents: DashboardGovernanceRecentEventItem[];
@@ -702,29 +790,20 @@ export async function getAgentOpsOverview(query: AgentOpsPageQuery = {}) {
   );
 }
 
-function appendAgentOpsQueueQueryParams(
-  params: URLSearchParams,
-  query: AgentOpsQueueQuery,
-) {
+function appendAgentOpsQueueQueryParams(params: URLSearchParams, query: AgentOpsQueueQuery) {
   appendAgentOpsQueueIdentityParams(params, query);
   appendAgentOpsQueueFilterParams(params, query);
   appendAgentOpsQueuePaginationParams(params, query);
 }
 
-function appendAgentOpsQueueIdentityParams(
-  params: URLSearchParams,
-  query: AgentOpsQueueQuery,
-) {
+function appendAgentOpsQueueIdentityParams(params: URLSearchParams, query: AgentOpsQueueQuery) {
   if (query.ownerScope) params.set("ownerScope", query.ownerScope);
   if (query.projectId) params.set("projectId", query.projectId);
   if (query.taskId) params.set("taskId", query.taskId);
   if (query.agentRunId) params.set("agentRunId", query.agentRunId);
 }
 
-function appendAgentOpsQueueFilterParams(
-  params: URLSearchParams,
-  query: AgentOpsQueueQuery,
-) {
+function appendAgentOpsQueueFilterParams(params: URLSearchParams, query: AgentOpsQueueQuery) {
   if (query.status) params.set("status", query.status);
   if (query.search) params.set("search", query.search);
   if (query.riskLevel) params.set("riskLevel", query.riskLevel);
@@ -741,10 +820,7 @@ function appendAgentOpsQueueFilterParams(
   if (query.entryContext) params.set("entryContext", query.entryContext);
 }
 
-function appendAgentOpsQueuePaginationParams(
-  params: URLSearchParams,
-  query: AgentOpsQueueQuery,
-) {
+function appendAgentOpsQueuePaginationParams(params: URLSearchParams, query: AgentOpsQueueQuery) {
   if (query.page) params.set("page", String(query.page));
   if (query.pageSize) params.set("pageSize", String(query.pageSize));
 }
@@ -833,7 +909,7 @@ export async function getAgentMessages(agentRunId: string) {
 export interface Task {
   id: string;
   projectId: string;
-  userId: string;
+  userId: string | null;
   title: string;
   prompt: string;
   status: string;
@@ -843,8 +919,6 @@ export interface Task {
   category?: string;
   strategy?: string;
   executionMode?: ExecutionMode;
-  executionPlan?: string;
-  parallelRunHistory?: string;
   autoAdvanceStages?: boolean;
   repoId?: string | null;
   workspaceRoot?: string | null;
@@ -873,9 +947,25 @@ export interface Task {
   createdAt: string;
   startedAt?: string;
   finishedAt?: string;
+  orchestrationKind?: string | null;
+  currentRunId?: string | null;
+  currentRunStatus?: string | null;
+  currentRunStartedAt?: string | null;
+  currentRunFinishedAt?: string | null;
+  currentRunCandidateCount?: number | null;
+  currentRunPipelineStepCount?: number | null;
+  latestResultSummary?: string | null;
+  latestErrorText?: string | null;
+  activeCandidateCount?: number;
+  completedCandidateCount?: number;
+  failedCandidateCount?: number;
+  totalChainSteps?: number;
+  completedChainSteps?: number;
+  winnerNodeId?: string | null;
+  lastActivityAt?: string | null;
 }
 
-export interface ParallelRunHistoryCandidate {
+export interface ProjectionRunCandidate {
   label: string;
   agent?: string;
   model?: string;
@@ -888,7 +978,7 @@ export interface ParallelRunHistoryCandidate {
   finishedAt?: string;
 }
 
-export interface ParallelRunHistoryRecord {
+export interface ProjectionRunRecord {
   parallelRunId: string;
   templateId?: string;
   startedAt: string;
@@ -896,8 +986,8 @@ export interface ParallelRunHistoryRecord {
   parentSessionId?: string | null;
   executionSessionId?: string | null;
   winnerCandidateIndex?: number;
-  judgeResult?: ExecutionPlan["judgeResult"];
-  candidateSessions: ParallelRunHistoryCandidate[];
+  judgeResult?: RuntimePlan["judgeResult"];
+  candidateSessions: ProjectionRunCandidate[];
 }
 
 export interface RunningTaskReconcileSummary {
@@ -1298,8 +1388,6 @@ export async function updateTask(
     autoAdvanceStages?: boolean;
     strategy?: string;
     executionMode?: ExecutionMode;
-    executionPlan?: string;
-    parallelRunHistory?: string;
   },
 ) {
   return request<Partial<Task>>(`/tasks/${taskId}`, {
@@ -1356,10 +1444,7 @@ export interface RuntimePipelineStage {
   label: string;
   status: RuntimePipelineStageStatus;
   order: number;
-  sourceType:
-    | "executionPlan.step"
-    | "strategy.hookExecution"
-    | "session.message";
+  sourceType: "runtimePlan.step" | "taskRun.node" | "strategy.hookExecution" | "session.message";
   sourceId: string | null;
   agent: string | null;
   model: string | null;
@@ -1436,6 +1521,18 @@ export async function getTaskBranches(taskId: string) {
   return request<{ data: TaskBranchRecord[] }>(`/tasks/${taskId}/branches`);
 }
 
+export async function getTaskAgentRuns(taskId: string) {
+  return request<{ data: TaskAgentRunRecord[] }>(`/tasks/${taskId}/runs`);
+}
+
+export async function getTaskDomainRuns(taskId: string) {
+  return request<{ data: TaskDomainRunRecord[] }>(`/tasks/${taskId}/domain-runs`);
+}
+
+export async function getTaskDomainRunDetail(taskId: string, runId: string) {
+  return request<{ data: TaskDomainRunDetailRecord }>(`/tasks/${taskId}/domain-runs/${runId}`);
+}
+
 export async function listTaskRuntimePermissions(taskId: string, sessionId?: string) {
   const query = new URLSearchParams();
   if (sessionId) query.set("sessionId", sessionId);
@@ -1449,13 +1546,15 @@ export async function replyTaskRuntimePermission(
   requestId: string,
   data: { reply: TaskRuntimePermissionReply; message?: string },
 ) {
-  return request<{ ok: boolean; requestId: string; sessionId: string; reply: TaskRuntimePermissionReply }>(
-    `/tasks/${taskId}/runtime-permissions/${requestId}/reply`,
-    {
-      method: "POST",
-      body: JSON.stringify(data),
-    },
-  );
+  return request<{
+    ok: boolean;
+    requestId: string;
+    sessionId: string;
+    reply: TaskRuntimePermissionReply;
+  }>(`/tasks/${taskId}/runtime-permissions/${requestId}/reply`, {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
 }
 
 export async function getTaskConversationMessages(
@@ -2323,6 +2422,11 @@ export interface ProjectOverviewItem {
   completionPercent: number;
   risks: string[];
   runningTasks: number;
+  activeSessionCount: number;
+  parallelTaskCount: number;
+  sequentialChainTaskCount: number;
+  recentTimelineItemCount: number;
+  failedTaskCount: number;
   pendingApprovals: number;
   failedTasksToday: number;
   lastActivityAt?: string | null;
@@ -2343,6 +2447,13 @@ export interface ProjectOverviewResponse {
     totalProjects: number;
     pendingConfigCount: number;
     riskCount: number;
+    activeProjectCount: number;
+    runningTaskCount: number;
+    activeSessionCount: number;
+    parallelTaskCount: number;
+    sequentialChainTaskCount: number;
+    failedTaskCount: number;
+    recentTimelineItemCount: number;
   };
 }
 
@@ -2415,10 +2526,9 @@ export async function completeTask(taskId: string) {
 }
 
 export async function advanceWorkflowStage(taskId: string) {
-  return request<{ ok: boolean; nextStageKey?: string }>(
-    `/tasks/${taskId}/workflow/advance`,
-    { method: "POST" },
-  );
+  return request<{ ok: boolean; nextStageKey?: string }>(`/tasks/${taskId}/workflow/advance`, {
+    method: "POST",
+  });
 }
 
 export async function reconcileRunningTasks() {
@@ -2727,7 +2837,7 @@ export interface ChainStepInput {
   model?: string;
 }
 
-export interface ExecutionPlan {
+export interface RuntimePlan {
   templateId: string;
   mode: ExecutionMode;
   steps?: ExecutionStep[];
@@ -3895,7 +4005,19 @@ export interface ExecutionTraceSegment {
     | "hook-result"
     | "hook-rewrite"
     | "final-prompt"
-    | "model-response";
+    | "model-response"
+    | "tool-call"
+    | "tool-output"
+    | "thinking"
+    | "file-reference"
+    | "diff"
+    | "candidate-result"
+    | "judge-decision"
+    | "chain-step-result"
+    | "status-transition"
+    | "session-activate"
+    | "session-branch"
+    | "session-archive";
   label: string;
   content: string;
   hookId?: string;
@@ -3903,6 +4025,12 @@ export interface ExecutionTraceSegment {
   hookAgent?: string;
   hookDecisionAction?: string;
   timestamp?: string;
+  toolName?: string;
+  toolArgumentsSummary?: string;
+  toolStatus?: string;
+  filePath?: string;
+  fileRange?: string;
+  diffSummary?: string;
 }
 
 export interface ExecutionTraceMessage {
@@ -3923,13 +4051,41 @@ export interface ExecutionTraceTimelineItem {
   sourceEventTypes?: string[];
 }
 
+export type ExecutionTraceReadSource =
+  | "conversation-table"
+  | "task-domain-events"
+  | "conversation-table+task-domain-events"
+  | "task-domain-projection"
+  | "runtime-fallback";
+
 export interface ExecutionTraceTimelineMeta {
+  readSource?: ExecutionTraceReadSource;
   cacheState?: "none" | "partial" | "complete";
   complete?: boolean;
   includeLineage?: boolean;
   lineagePath?: string[];
   cachedSessionCount?: number;
   itemCount?: number;
+}
+
+export interface ExecutionTraceProjectionSnapshot {
+  taskId: string;
+  projectId: string;
+  currentStatus: string;
+  orchestrationKind?: string | null;
+  currentRunId?: string | null;
+  currentSessionId?: string | null;
+  latestResult?: string | null;
+  latestResultSummary?: string | null;
+  latestErrorText?: string | null;
+  activeCandidateCount: number;
+  completedCandidateCount: number;
+  failedCandidateCount: number;
+  totalChainSteps: number;
+  completedChainSteps: number;
+  winnerNodeId?: string | null;
+  lastActivityAt?: string | null;
+  updatedAt: string;
 }
 
 export interface TaskExecutionTrace {
@@ -3944,6 +4100,7 @@ export interface TaskExecutionTrace {
   messages?: ExecutionTraceMessage[];
   timeline?: ExecutionTraceTimelineItem[];
   timelineMeta?: ExecutionTraceTimelineMeta;
+  snapshot?: ExecutionTraceProjectionSnapshot | null;
   hookExecutions: Array<{
     hookId: string;
     trigger: string;

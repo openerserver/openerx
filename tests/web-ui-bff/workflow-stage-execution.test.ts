@@ -1,17 +1,62 @@
 /// <reference types="bun-types" />
 
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { createControlPlaneClientModuleMock } from "./control-plane-client-mock";
 
 const cpFetchMock = mock(async () => ({ ok: true, data: {} }));
 
-mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () => ({
-  cpFetch: cpFetchMock,
-}));
+mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () =>
+  createControlPlaneClientModuleMock({
+    cpFetch: cpFetchMock,
+  }),
+);
 
 type FetchOptions = { method?: string; body?: unknown; authorization?: string };
+type MockRouteMatcher = string | RegExp | ((path: string) => boolean);
+type MockRouteResponse = ReturnType<typeof ok>;
+type MockRouteHandler = {
+  matcher: MockRouteMatcher;
+  method?: string;
+  response:
+    | MockRouteResponse
+    | ((
+        options: FetchOptions | undefined,
+        path: string,
+      ) => MockRouteResponse | Promise<MockRouteResponse>);
+};
 
 function ok(data: unknown = {}) {
   return { ok: true as const, data };
+}
+
+function matchesMockRoute(matcher: MockRouteMatcher, path: string) {
+  if (typeof matcher === "string") {
+    return matcher === path;
+  }
+
+  if (matcher instanceof RegExp) {
+    return matcher.test(path);
+  }
+
+  return matcher(path);
+}
+
+function mockCpFetchRoutes(handlers: MockRouteHandler[]) {
+  cpFetchMock.mockImplementation(async (path: string, options?: FetchOptions) => {
+    const matchedHandler = handlers.find(
+      (handler) =>
+        matchesMockRoute(handler.matcher, path) &&
+        (handler.method ?? undefined) === (options?.method ?? undefined),
+    );
+
+    if (!matchedHandler) {
+      return ok({});
+    }
+
+    return typeof matchedHandler.response === "function"
+      ? await matchedHandler.response(options, path)
+      : matchedHandler.response;
+  });
 }
 
 async function loadWorkflowStageExecutionModule() {
@@ -123,19 +168,20 @@ describe("workflow-stage-execution", () => {
   });
 
   test("persistWorkflowStageExecutionOutcome advances to next stage when completion marker exists", async () => {
-    cpFetchMock.mockImplementation(async (path: string, options?: FetchOptions) => {
-      if (path === "/api/project-tree/tasks/task-2" && !options?.method) {
-        return ok({
+    mockCpFetchRoutes([
+      {
+        matcher: "/api/project-tree/tasks/task-2",
+        response: ok({
           id: "task-2",
           title: "Clarify Task",
           prompt: "确认需求边界",
           projectId: "proj-1",
           autoAdvanceStages: true,
-        });
-      }
-
-      if (!options?.method && path === "/api/tasks/task-2/workflow") {
-        return ok({
+        }),
+      },
+      {
+        matcher: "/api/tasks/task-2/workflow",
+        response: ok({
           data: {
             workflowRun: {
               id: "wf-2",
@@ -156,24 +202,35 @@ describe("workflow-stage-execution", () => {
               },
             ],
           },
-        });
-      }
-
-      if (!options?.method && path === "/api/workflow-templates/tpl-2/stages") {
-        return ok({
+        }),
+      },
+      {
+        matcher: "/api/workflow-templates/tpl-2/stages",
+        response: ok({
           data: [
-            { id: "tpl-clarify", stageKey: "clarify", name: "需求澄清", orderIndex: 0, enabled: true },
-            { id: "tpl-design", stageKey: "design", name: "方案设计", orderIndex: 1, enabled: true },
+            {
+              id: "tpl-clarify",
+              stageKey: "clarify",
+              name: "需求澄清",
+              orderIndex: 0,
+              enabled: true,
+            },
+            {
+              id: "tpl-design",
+              stageKey: "design",
+              name: "方案设计",
+              orderIndex: 1,
+              enabled: true,
+            },
           ],
-        });
-      }
-
-      if (options?.method === "POST" && path === "/api/tasks/task-2/workflow/advance") {
-        return ok({ ok: true, body: options.body });
-      }
-
-      return ok({});
-    });
+        }),
+      },
+      {
+        matcher: "/api/tasks/task-2/workflow/advance",
+        method: "POST",
+        response: (options) => ok({ ok: true, body: options?.body }),
+      },
+    ]);
 
     const { persistWorkflowStageExecutionOutcome } = await loadWorkflowStageExecutionModule();
     const result = await persistWorkflowStageExecutionOutcome({
@@ -200,9 +257,10 @@ describe("workflow-stage-execution", () => {
   });
 
   test("persistWorkflowStageExecutionOutcome creates next stage task from initialTaskDefinition", async () => {
-    cpFetchMock.mockImplementation(async (path: string, options?: FetchOptions) => {
-      if (!options?.method && path === "/api/tasks/task-3/workflow") {
-        return ok({
+    mockCpFetchRoutes([
+      {
+        matcher: "/api/tasks/task-3/workflow",
+        response: ok({
           data: {
             workflowRun: {
               id: "wf-3",
@@ -223,13 +281,20 @@ describe("workflow-stage-execution", () => {
               },
             ],
           },
-        });
-      }
-
-      if (!options?.method && path === "/api/workflow-templates/tpl-3/stages") {
-        return ok({
+        }),
+      },
+      {
+        matcher: "/api/workflow-templates/tpl-3/stages",
+        response: ok({
           data: [
-            { id: "tpl-clarify", stageKey: "clarify", name: "需求澄清", mode: "single", orderIndex: 0, enabled: true },
+            {
+              id: "tpl-clarify",
+              stageKey: "clarify",
+              name: "需求澄清",
+              mode: "single",
+              orderIndex: 0,
+              enabled: true,
+            },
             {
               id: "tpl-design",
               stageKey: "design",
@@ -262,11 +327,11 @@ describe("workflow-stage-execution", () => {
               },
             },
           ],
-        });
-      }
-
-      if (path === "/api/project-tree/tasks/task-3" && !options?.method) {
-        return ok({
+        }),
+      },
+      {
+        matcher: "/api/project-tree/tasks/task-3",
+        response: ok({
           id: "task-3",
           title: "Clarify Task",
           prompt: "请先澄清需求，再进入设计。",
@@ -282,11 +347,11 @@ describe("workflow-stage-execution", () => {
           gitCommitterName: "Bot",
           gitCommitterEmail: "bot@example.com",
           result: "上一阶段已经把范围和约束整理完毕。",
-        });
-      }
-
-      if (path === "/api/tasks/task-3/operating-runtime/mode" && !options?.method) {
-        return ok({
+        }),
+      },
+      {
+        matcher: "/api/tasks/task-3/operating-runtime/mode",
+        response: ok({
           data: {
             collaborationMode: "team",
             autopilotLevel: "L1",
@@ -295,31 +360,34 @@ describe("workflow-stage-execution", () => {
             scenarioKey: "delivery",
             source: "project-default",
           },
-        });
-      }
-
-      if (options?.method === "POST" && path === "/api/tasks/task-3/workflow/advance") {
-        return ok({ ok: true, body: options.body });
-      }
-
-      if (options?.method === "POST" && path === "/api/tasks") {
-        return ok({ id: "task-4" });
-      }
-
-      if (options?.method === "PATCH" && path === "/api/tasks/task-4") {
-        return ok({ ok: true });
-      }
-
-      if (options?.method === "PUT" && path === "/api/tasks/task-4/operating-runtime/mode") {
-        return ok({ ok: true });
-      }
-
-      if (options?.method === "POST" && path === "/api/tasks/task-4/workflow/initialize") {
-        return ok({ ok: true });
-      }
-
-      return ok({});
-    });
+        }),
+      },
+      {
+        matcher: "/api/tasks/task-3/workflow/advance",
+        method: "POST",
+        response: (options) => ok({ ok: true, body: options?.body }),
+      },
+      {
+        matcher: "/api/tasks",
+        method: "POST",
+        response: ok({ id: "task-4" }),
+      },
+      {
+        matcher: "/api/tasks/task-4",
+        method: "PATCH",
+        response: ok({ ok: true }),
+      },
+      {
+        matcher: "/api/tasks/task-4/operating-runtime/mode",
+        method: "PUT",
+        response: ok({ ok: true }),
+      },
+      {
+        matcher: "/api/tasks/task-4/workflow/initialize",
+        method: "POST",
+        response: ok({ ok: true }),
+      },
+    ]);
 
     const { persistWorkflowStageExecutionOutcome } = await loadWorkflowStageExecutionModule();
     const result = await persistWorkflowStageExecutionOutcome({
@@ -364,7 +432,6 @@ describe("workflow-stage-execution", () => {
       authorization: "Bearer test",
       body: expect.objectContaining({
         executionMode: "parallel",
-        executionPlan: expect.stringContaining('"mode":"parallel"'),
         strategy: expect.stringContaining('"executionMode":"parallel"'),
       }),
     });
@@ -380,10 +447,11 @@ describe("workflow-stage-execution", () => {
     });
   });
 
-  test("persistWorkflowStageExecutionOutcome serializes sequential-chain defaultSteps into executionPlan", async () => {
-    cpFetchMock.mockImplementation(async (path: string, options?: FetchOptions) => {
-      if (!options?.method && path === "/api/tasks/task-5/workflow") {
-        return ok({
+  test("persistWorkflowStageExecutionOutcome preserves sequential-chain execution mode in strategy", async () => {
+    mockCpFetchRoutes([
+      {
+        matcher: "/api/tasks/task-5/workflow",
+        response: ok({
           data: {
             workflowRun: {
               id: "wf-5",
@@ -396,13 +464,20 @@ describe("workflow-stage-execution", () => {
               { id: "run-design", stageKey: "design", status: "pending" },
             ],
           },
-        });
-      }
-
-      if (!options?.method && path === "/api/workflow-templates/tpl-5/stages") {
-        return ok({
+        }),
+      },
+      {
+        matcher: "/api/workflow-templates/tpl-5/stages",
+        response: ok({
           data: [
-            { id: "tpl-clarify", stageKey: "clarify", name: "需求澄清", mode: "single", orderIndex: 0, enabled: true },
+            {
+              id: "tpl-clarify",
+              stageKey: "clarify",
+              name: "需求澄清",
+              mode: "single",
+              orderIndex: 0,
+              enabled: true,
+            },
             {
               id: "tpl-design",
               stageKey: "design",
@@ -433,11 +508,11 @@ describe("workflow-stage-execution", () => {
               },
             },
           ],
-        });
-      }
-
-      if (path === "/api/project-tree/tasks/task-5" && !options?.method) {
-        return ok({
+        }),
+      },
+      {
+        matcher: "/api/project-tree/tasks/task-5",
+        response: ok({
           id: "task-5",
           title: "Clarify Task",
           prompt: "请先澄清需求，再进入设计。",
@@ -445,11 +520,11 @@ describe("workflow-stage-execution", () => {
           autoAdvanceStages: true,
           strategy: JSON.stringify({ workflowTemplateId: "tpl-5" }),
           selectedModel: "gpt-4.1",
-        });
-      }
-
-      if (path === "/api/tasks/task-5/operating-runtime/mode" && !options?.method) {
-        return ok({
+        }),
+      },
+      {
+        matcher: "/api/tasks/task-5/operating-runtime/mode",
+        response: ok({
           data: {
             collaborationMode: "team",
             autopilotLevel: "L1",
@@ -457,31 +532,34 @@ describe("workflow-stage-execution", () => {
             selectedTemplateId: "tpl-5",
             source: "project-default",
           },
-        });
-      }
-
-      if (options?.method === "POST" && path === "/api/tasks/task-5/workflow/advance") {
-        return ok({ ok: true });
-      }
-
-      if (options?.method === "POST" && path === "/api/tasks") {
-        return ok({ id: "task-6" });
-      }
-
-      if (options?.method === "PATCH" && path === "/api/tasks/task-6") {
-        return ok({ ok: true });
-      }
-
-      if (options?.method === "PUT" && path === "/api/tasks/task-6/operating-runtime/mode") {
-        return ok({ ok: true });
-      }
-
-      if (options?.method === "POST" && path === "/api/tasks/task-6/workflow/initialize") {
-        return ok({ ok: true });
-      }
-
-      return ok({});
-    });
+        }),
+      },
+      {
+        matcher: "/api/tasks/task-5/workflow/advance",
+        method: "POST",
+        response: ok({ ok: true }),
+      },
+      {
+        matcher: "/api/tasks",
+        method: "POST",
+        response: ok({ id: "task-6" }),
+      },
+      {
+        matcher: "/api/tasks/task-6",
+        method: "PATCH",
+        response: ok({ ok: true }),
+      },
+      {
+        matcher: "/api/tasks/task-6/operating-runtime/mode",
+        method: "PUT",
+        response: ok({ ok: true }),
+      },
+      {
+        matcher: "/api/tasks/task-6/workflow/initialize",
+        method: "POST",
+        response: ok({ ok: true }),
+      },
+    ]);
 
     const { persistWorkflowStageExecutionOutcome } = await loadWorkflowStageExecutionModule();
     const result = await persistWorkflowStageExecutionOutcome({
@@ -496,7 +574,6 @@ describe("workflow-stage-execution", () => {
       authorization: "Bearer test",
       body: expect.objectContaining({
         executionMode: "single",
-        executionPlan: expect.stringContaining('"pipelineMetadata":{"requestedMode":"sequential-chain"'),
         strategy: expect.stringContaining('"executionMode":"single"'),
       }),
     });
@@ -504,8 +581,12 @@ describe("workflow-stage-execution", () => {
       ([path, options]) => path === "/api/tasks/task-6" && options?.method === "PATCH",
     );
     expect(patchCall).toBeTruthy();
-    expect(String((patchCall?.[1] as FetchOptions & { body?: Record<string, unknown> })?.body?.executionPlan)).toContain('"title":"分析现状"');
-    expect(String((patchCall?.[1] as FetchOptions & { body?: Record<string, unknown> })?.body?.executionPlan)).toContain('"instruction":"输出模块划分和接口设计。"');
+    expect(
+      String((patchCall?.[1] as FetchOptions & { body?: Record<string, unknown> })?.body?.strategy),
+    ).toContain('"executionMode":"single"');
+    expect(
+      String((patchCall?.[1] as FetchOptions & { body?: Record<string, unknown> })?.body?.strategy),
+    ).toContain('"currentStageKey":"design"');
   });
 
   test("persistWorkflowStageExecutionOutcome does not advance when autoAdvanceStages is disabled", async () => {
@@ -540,8 +621,20 @@ describe("workflow-stage-execution", () => {
       if (!options?.method && path === "/api/workflow-templates/tpl-6/stages") {
         return ok({
           data: [
-            { id: "tpl-clarify", stageKey: "clarify", name: "需求澄清", orderIndex: 0, enabled: true },
-            { id: "tpl-design", stageKey: "design", name: "方案设计", orderIndex: 1, enabled: true },
+            {
+              id: "tpl-clarify",
+              stageKey: "clarify",
+              name: "需求澄清",
+              orderIndex: 0,
+              enabled: true,
+            },
+            {
+              id: "tpl-design",
+              stageKey: "design",
+              name: "方案设计",
+              orderIndex: 1,
+              enabled: true,
+            },
           ],
         });
       }

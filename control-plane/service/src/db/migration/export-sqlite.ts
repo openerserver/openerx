@@ -1,9 +1,9 @@
-import { basename, join } from "node:path";
 import { Database } from "bun:sqlite";
+import { basename, join } from "node:path";
 import {
   DEFAULT_SQLITE_SNAPSHOT_PATH,
-  SnapshotManifest,
-  TableManifest,
+  type SnapshotManifest,
+  type TableManifest,
   ensureDir,
   getPrimaryKeyColumn,
   getStringArg,
@@ -45,7 +45,9 @@ export async function exportSqliteSnapshot(options: ExportSqliteSnapshotOptions)
 
     for (const { name } of tables) {
       const fileName = `${name}.jsonl`;
-      const rows = sqlite.query(`SELECT * FROM \"${name}\"`).all() as Array<Record<string, unknown>>;
+      const rows = sqlite.query(`SELECT * FROM \"${name}\"`).all() as Array<
+        Record<string, unknown>
+      >;
       const columns = getTableColumns(sqlite, name).map((column) => column.name);
       await writeJsonLines(join(outputDir, fileName), rows);
       manifestTables.push({

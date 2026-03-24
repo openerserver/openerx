@@ -930,8 +930,8 @@ import { message } from "ant-design-vue";
 import { computed, defineAsyncComponent, onMounted, reactive, ref } from "vue";
 import { useRoute } from "vue-router";
 import {
-  type WorkflowTemplateStageInitialTaskDefinition,
   type WorkflowTemplateEditorView,
+  type WorkflowTemplateStageInitialTaskDefinition,
   createWorkflowTemplateStage,
   deleteWorkflowTemplateStage,
   getWorkflowTemplateEditorView,
@@ -1205,7 +1205,12 @@ const stageFlowMermaid = computed(() => {
   return lines.join("\n");
 });
 
-function appendRoleMapPrimary(lines: string[], stageNodeId: string, stage: StageDraft, index: number) {
+function appendRoleMapPrimary(
+  lines: string[],
+  stageNodeId: string,
+  stage: StageDraft,
+  index: number,
+) {
   if (!stage.primaryRoleAgentId.trim()) {
     return;
   }
@@ -1234,7 +1239,12 @@ function appendRoleMapParticipants(
   }
 }
 
-function appendRoleMapControls(lines: string[], stageNodeId: string, stage: StageDraft, index: number) {
+function appendRoleMapControls(
+  lines: string[],
+  stageNodeId: string,
+  stage: StageDraft,
+  index: number,
+) {
   for (const [gateIndex, gate] of stage.gates.entries()) {
     const gateId = `gate_${index + 1}_${gateIndex + 1}`;
     const gateRole = gate.evaluatorRole.trim() ? ` / ${resolveRoleLabel(gate.evaluatorRole)}` : "";
@@ -1397,9 +1407,7 @@ function normalizeInitialTaskExecutionMode(value: unknown): InitialTaskExecution
   if (value === "pipeline") {
     return "sequential-chain";
   }
-  return value === "single" || value === "parallel" || value === "sequential-chain"
-    ? value
-    : "";
+  return value === "single" || value === "parallel" || value === "sequential-chain" ? value : "";
 }
 
 function asTemplateCollaborationMode(value: string) {
@@ -1605,8 +1613,7 @@ function serializeInitialTaskDefinition(
       artifactKeys: initialTaskDefinition.outputContract.artifactKeys
         .map((item) => item.trim())
         .filter(Boolean),
-      requireStageCompleteMarker:
-        initialTaskDefinition.outputContract.requireStageCompleteMarker,
+      requireStageCompleteMarker: initialTaskDefinition.outputContract.requireStageCompleteMarker,
     },
   };
 }
@@ -1619,7 +1626,10 @@ function addInitialTaskCandidate(initialTaskDefinition: InitialTaskDefinitionDra
   });
 }
 
-function removeInitialTaskCandidate(initialTaskDefinition: InitialTaskDefinitionDraft, index: number) {
+function removeInitialTaskCandidate(
+  initialTaskDefinition: InitialTaskDefinitionDraft,
+  index: number,
+) {
   initialTaskDefinition.defaultCandidates.splice(index, 1);
 }
 
@@ -1652,7 +1662,9 @@ function validateInitialTaskDefinition(initialTaskDefinition: InitialTaskDefinit
   }
 
   if (initialTaskDefinition.defaultExecutionMode === "parallel") {
-    const validCandidates = initialTaskDefinition.defaultCandidates.filter((item) => item.model.trim());
+    const validCandidates = initialTaskDefinition.defaultCandidates.filter((item) =>
+      item.model.trim(),
+    );
     if (validCandidates.length < 2) {
       return "并行模式至少需要配置 2 个默认候选模型";
     }
@@ -1955,7 +1967,11 @@ function handleStageKeyChange(stage: StageDraft) {
     stage.name = stageCatalogLabel(stage.stageKey);
   }
   if (!stage.initialTaskDefinition.titleTemplate.trim()) {
-    stage.initialTaskDefinition = normalizeInitialTaskDefinition(undefined, stage.stageKey, stage.name);
+    stage.initialTaskDefinition = normalizeInitialTaskDefinition(
+      undefined,
+      stage.stageKey,
+      stage.name,
+    );
   }
 }
 

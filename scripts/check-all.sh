@@ -126,6 +126,9 @@ bun run lint
 echo "Running type checks..."
 bun run typecheck
 
+echo "Running task-domain audit gate..."
+bash scripts/run-task-domain-audit-gate.sh
+
 if [[ "$USE_SINGLE_PROCESS_APP" == "1" ]]; then
   ensure_unified_app
 

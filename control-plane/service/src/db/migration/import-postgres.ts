@@ -1,6 +1,7 @@
 import { join } from "node:path";
+import { openPostgresDatabase } from "../postgres-client";
 import {
-  SnapshotManifest,
+  type SnapshotManifest,
   getBooleanArg,
   getOrderedTables,
   getStringArg,
@@ -10,7 +11,6 @@ import {
   readJsonLines,
   resolveInputPath,
 } from "./metadata";
-import { openPostgresDatabase } from "../postgres-client";
 
 export interface ImportPostgresSnapshotOptions {
   inputDir: string;
@@ -118,7 +118,9 @@ export async function importPostgresSnapshot(options: ImportPostgresSnapshotOpti
     }
 
     if (filteredColumns.length === 0) {
-      console.warn(`[db:import:pg:${table.name}] Skipped import because no manifest columns matched current PostgreSQL schema.`);
+      console.warn(
+        `[db:import:pg:${table.name}] Skipped import because no manifest columns matched current PostgreSQL schema.`,
+      );
       continue;
     }
 
@@ -137,7 +139,11 @@ export async function importPostgresSnapshot(options: ImportPostgresSnapshotOpti
 
 if (import.meta.main) {
   const args = parseCliArgs();
-  const inputDir = getStringArg(args, "in", join(process.cwd(), "tmp/sqlite-pg-migration/normalized"));
+  const inputDir = getStringArg(
+    args,
+    "in",
+    join(process.cwd(), "tmp/sqlite-pg-migration/normalized"),
+  );
   const truncateFirst = getBooleanArg(args, "truncate", false);
 
   importPostgresSnapshot({ inputDir, truncateFirst }).catch((error) => {

@@ -1,8 +1,9 @@
 import { join } from "node:path";
+import { openPostgresDatabase } from "../postgres-client";
 import {
   KEY_FOREIGN_KEYS,
   SAMPLE_TABLES,
-  SnapshotManifest,
+  type SnapshotManifest,
   ensureDir,
   getPrimaryKeyColumn,
   getStringArg,
@@ -14,7 +15,6 @@ import {
   resolveInputPath,
   writeJsonFile,
 } from "./metadata";
-import { openPostgresDatabase } from "../postgres-client";
 
 interface TableValidationReport {
   table: string;
@@ -124,15 +124,14 @@ async function validateForeignKeys() {
     }
 
     const targetColumn = rule.targetColumn ?? "id";
-    const row =
-      (await queryOne<{ count: string }>(
-        `SELECT COUNT(*)::text AS count
+    const row = (await queryOne<{ count: string }>(
+      `SELECT COUNT(*)::text AS count
          FROM ${quoteIdentifier(rule.table)} child
          LEFT JOIN ${quoteIdentifier(rule.targetTable)} parent
            ON child.${quoteIdentifier(rule.column)} = parent.${quoteIdentifier(targetColumn)}
          WHERE child.${quoteIdentifier(rule.column)} IS NOT NULL
            AND parent.${quoteIdentifier(targetColumn)} IS NULL`,
-      )) ?? { count: "0" };
+    )) ?? { count: "0" };
     results.push({
       table: rule.table,
       column: rule.column,
@@ -185,7 +184,9 @@ export async function validatePostgresSnapshot(options: ValidatePostgresSnapshot
     stats: summary,
   });
 
-  const failedRowCounts = tableReports.filter((report) => report.expectedRows !== report.actualRows);
+  const failedRowCounts = tableReports.filter(
+    (report) => report.expectedRows !== report.actualRows,
+  );
   const failedPrimaryKeys = tableReports.filter(
     (report) =>
       report.expectedPrimaryKeyCoverage !== report.actualPrimaryKeyCoverage ||
@@ -200,13 +201,19 @@ export async function validatePostgresSnapshot(options: ValidatePostgresSnapshot
     );
   }
 
-  console.log(`Validated ${tableReports.length} tables and ${foreignKeyReports.length} key foreign keys.`);
+  console.log(
+    `Validated ${tableReports.length} tables and ${foreignKeyReports.length} key foreign keys.`,
+  );
   return summary;
 }
 
 if (import.meta.main) {
   const args = parseCliArgs();
-  const inputDir = getStringArg(args, "in", join(process.cwd(), "tmp/sqlite-pg-migration/normalized"));
+  const inputDir = getStringArg(
+    args,
+    "in",
+    join(process.cwd(), "tmp/sqlite-pg-migration/normalized"),
+  );
   const outputDir = getStringArg(args, "out", inputDir);
 
   validatePostgresSnapshot({ inputDir, outputDir }).catch((error) => {

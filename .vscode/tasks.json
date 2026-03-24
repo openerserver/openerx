@@ -378,6 +378,116 @@
 			"command": "cd control-plane/web-ui-bff && bun run test:integration:identity-execute",
 			"isBackground": false,
 			"group": "test"
+		},
+		{
+			"label": "run-tree-task-aggregations-test",
+			"type": "shell",
+			"command": "bun",
+			"args": [
+				"test",
+				"../../tests/service/tree-task-aggregations.test.ts"
+			],
+			"isBackground": false,
+			"group": "test"
+		},
+		{
+			"label": "run-tree-task-aggregations-test-service",
+			"type": "shell",
+			"command": "zsh",
+			"args": [
+				"-lc",
+				"cd control-plane/service && bun test ../../tests/service/tree-task-aggregations.test.ts"
+			],
+			"isBackground": false,
+			"group": "test"
+		},
+		{
+			"label": "run-tree-task-aggregations-test-service-2",
+			"type": "shell",
+			"command": "zsh",
+			"args": [
+				"-lc",
+				"cd control-plane/service && bun test ../../tests/service/tree-task-aggregations.test.ts"
+			],
+			"isBackground": false,
+			"group": "test"
+		},
+		{
+			"label": "run-tree-task-aggregations-test-service-3",
+			"type": "shell",
+			"command": "zsh",
+			"args": [
+				"-lc",
+				"cd control-plane/service && bun test ../../tests/service/tree-task-aggregations.test.ts"
+			],
+			"isBackground": false,
+			"group": "test"
+		},
+		{
+			"label": "run-tree-task-aggregations-test-service-4",
+			"type": "shell",
+			"command": "zsh",
+			"args": [
+				"-lc",
+				"cd control-plane/service && bun test ../../tests/service/tree-task-aggregations.test.ts"
+			],
+			"isBackground": false,
+			"group": "test"
+		},
+		{
+			"label": "run-tree-task-aggregations-test-service-5",
+			"type": "shell",
+			"command": "zsh",
+			"args": [
+				"-lc",
+				"cd control-plane/service && bun test ../../tests/service/tree-task-aggregations.test.ts"
+			],
+			"isBackground": false,
+			"group": "test"
+		},
+		{
+			"label": "run-bff-stable-mock-batch-8",
+			"type": "shell",
+			"command": "zsh",
+			"args": [
+				"-lc",
+				"cd control-plane/web-ui-bff && bun test ../../tests/web-ui-bff/task-finalize.test.ts ../../tests/web-ui-bff/workflow-stage-execution.test.ts ../../tests/web-ui-bff/workflow-sync.test.ts ../../tests/web-ui-bff/project-paid-execution-preflight-route.test.ts ../../tests/web-ui-bff/project-runtime-usage-ledger-routes.test.ts ../../tests/web-ui-bff/runtime-usage-ledger-project-e2e.test.ts ../../tests/web-ui-bff/realtime-pipeline-events.test.ts ../../tests/web-ui-bff/project-execution-trace-route.test.ts"
+			],
+			"isBackground": false,
+			"group": "test"
+		},
+		{
+			"label": "run-bff-stable-mock-batch-8-filelog",
+			"type": "shell",
+			"command": "zsh",
+			"args": [
+				"-lc",
+				"rm -f tmp/run-bff-stable-mock-batch-8.filelog.log tmp/run-bff-stable-mock-batch-8.filelog.code && bash scripts/run-bff-stable-mock-batch-8.sh > tmp/run-bff-stable-mock-batch-8.filelog.log 2>&1; printf '%s' $? > tmp/run-bff-stable-mock-batch-8.filelog.code"
+			],
+			"isBackground": false,
+			"group": "test"
+		},
+		{
+			"label": "run-bff-mock-batch-22",
+			"type": "shell",
+			"command": "zsh",
+			"args": [
+				"-lc",
+				"cd control-plane/web-ui-bff && bun test ../../tests/web-ui-bff/runtime-pipeline.test.ts ../../tests/web-ui-bff/task-completion-routes.test.ts ../../tests/web-ui-bff/task-operating-routes.test.ts ../../tests/web-ui-bff/task-sessions-route.test.ts ../../tests/web-ui-bff/task-workflow-view-route.test.ts ../../tests/web-ui-bff/task-execution-trace-route.test.ts ../../tests/web-ui-bff/realtime-routes.test.ts ../../tests/web-ui-bff/judge-usage-accounting.test.ts ../../tests/web-ui-bff/task-runtime-permissions-route.test.ts ../../tests/web-ui-bff/task-legacy-parallel-backfill-routes.test.ts ../../tests/web-ui-bff/agent-control-terminate-route.test.ts ../../tests/web-ui-bff/project-tree-proxy-routes.test.ts ../../tests/web-ui-bff/chat-settings-assistant-engine.test.ts ../../tests/web-ui-bff/stage-intervention.test.ts ../../tests/web-ui-bff/task-finalize.test.ts ../../tests/web-ui-bff/workflow-stage-execution.test.ts ../../tests/web-ui-bff/workflow-sync.test.ts ../../tests/web-ui-bff/project-paid-execution-preflight-route.test.ts ../../tests/web-ui-bff/project-runtime-usage-ledger-routes.test.ts ../../tests/web-ui-bff/runtime-usage-ledger-project-e2e.test.ts ../../tests/web-ui-bff/realtime-pipeline-events.test.ts ../../tests/web-ui-bff/project-execution-trace-route.test.ts"
+			],
+			"isBackground": false,
+			"group": "test"
+		},
+		{
+			"label": "run-bff-mock-batch-22-filelog",
+			"type": "shell",
+			"command": "zsh",
+			"args": [
+				"-lc",
+				"rm -f tmp/run-bff-mock-batch-22.filelog.log tmp/run-bff-mock-batch-22.filelog.code && bash scripts/run-bff-mock-batch-22.sh > tmp/run-bff-mock-batch-22.filelog.log 2>&1; printf '%s' $? > tmp/run-bff-mock-batch-22.filelog.code"
+			],
+			"isBackground": false,
+			"group": "test"
 		}
 	]
 }

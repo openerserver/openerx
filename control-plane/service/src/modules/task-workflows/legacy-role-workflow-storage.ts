@@ -2,23 +2,131 @@ import { eq } from "drizzle-orm";
 import { db } from "../../db";
 import {
   developerChangeRequests,
-  projectTreeNodes,
   roleAggregateConclusions,
+  tasks as taskAggregates,
   taskStageRuns,
   taskWorkflowRuns,
   workflowTemplateStages,
 } from "../../db/schema";
-import { loadTaskTreeRecord, type TaskTreeRecord } from "../project-tree/task-view";
+import { type TaskTreeRecord, loadTaskTreeRecord } from "../project-tree/task-view";
 
 type JsonRecord = Record<string, unknown>;
-type WorkflowStatus =
-  | typeof taskWorkflowRuns.$inferSelect.status
-  | TaskTreeRecord["status"];
+type WorkflowStatus = typeof taskWorkflowRuns.$inferSelect.status | TaskTreeRecord["status"];
 
-const legacyWorkflowMigrationInflight = new Map<
-  string,
-  Promise<TaskTreeRecord | null>
->();
+const legacyWorkflowMigrationInflight = new Map<string, Promise<TaskTreeRecord | null>>();
+
+function resolveLegacyTaskExecutionMode(strategy: JsonRecord) {
+  return strategy.executionMode === "single" ||
+    strategy.executionMode === "parallel" ||
+    strategy.executionMode === "sequential-chain"
+    ? (strategy.executionMode as TaskTreeRecord["executionMode"])
+    : null;
+}
+
+function resolveLegacyTaskCategory(row: typeof taskAggregates.$inferSelect) {
+  return row.category === "quick" ||
+    row.category === "deep" ||
+    row.category === "ops" ||
+    row.category === "security" ||
+    row.category === "architecture"
+    ? (row.category as TaskTreeRecord["category"])
+    : null;
+}
+
+function resolveLegacyTaskIdentityFields(row: typeof taskAggregates.$inferSelect) {
+  return {
+    id: row.id,
+    projectId: row.projectId,
+    userId: row.createdByUserId ?? null,
+    title: row.title,
+    prompt: row.prompt,
+    status: row.status as TaskTreeRecord["status"],
+    sessionId: row.currentSessionId ?? null,
+    agentRunId: row.currentAgentRunId ?? null,
+    result: row.latestResult ?? null,
+    category: resolveLegacyTaskCategory(row),
+    createdAt: row.createdAt,
+    startedAt: row.startedAt ?? null,
+    finishedAt: row.finishedAt ?? null,
+  };
+}
+
+function resolveLegacyTaskRepositoryFields(row: typeof taskAggregates.$inferSelect) {
+  return {
+    repoId: row.repoId ?? null,
+    workspaceRoot: row.workspaceRoot ?? null,
+    baseRevision: row.baseRevision ?? null,
+    workingBranch: row.workingBranch ?? null,
+    selectedModel: row.selectedModel ?? null,
+    credentialId: row.credentialId ?? null,
+    gitAuthorName: row.gitAuthorName ?? null,
+    gitAuthorEmail: row.gitAuthorEmail ?? null,
+    gitCommitterName: row.gitCommitterName ?? null,
+    gitCommitterEmail: row.gitCommitterEmail ?? null,
+    finalCommitSha: row.finalCommitSha ?? null,
+    finalBranchName: row.finalBranchName ?? null,
+    changesSummary:
+      row.changesSummaryJson && typeof row.changesSummaryJson === "object"
+        ? row.changesSummaryJson
+        : null,
+  };
+}
+
+function resolveLegacyTaskRunFields(row: typeof taskAggregates.$inferSelect, strategy: JsonRecord) {
+  return {
+    strategy: row.strategyJson ?? null,
+    executionMode: resolveLegacyTaskExecutionMode(strategy),
+    autoAdvanceStages:
+      typeof strategy.autoAdvanceStages === "boolean" ? strategy.autoAdvanceStages : false,
+    orchestrationKind: null,
+    currentRunId: row.currentRunId ?? null,
+    currentRunStatus: null,
+    currentRunStartedAt: null,
+    currentRunFinishedAt: null,
+    currentRunCandidateCount: null,
+    currentRunPipelineStepCount: null,
+    latestResultSummary: row.latestResultSummary ?? null,
+    latestErrorText: null,
+    activeCandidateCount: 0,
+    completedCandidateCount: 0,
+    failedCandidateCount: 0,
+    totalChainSteps: 0,
+    completedChainSteps: 0,
+    winnerNodeId: null,
+    lastActivityAt: null,
+    repoName: null,
+    remoteUrl: null,
+    credentialLabel: null,
+  };
+}
+
+function mapAggregateRowToWorkflowMigrationTask(
+  row: typeof taskAggregates.$inferSelect,
+): TaskTreeRecord {
+  const strategy = parseTaskStrategy(row.strategyJson);
+
+  return {
+    ...resolveLegacyTaskIdentityFields(row),
+    ...resolveLegacyTaskRepositoryFields(row),
+    ...resolveLegacyTaskRunFields(row, strategy),
+  };
+}
+
+async function loadWorkflowMigrationTask(taskId: string) {
+  const treeTask = await loadTaskTreeRecord(taskId);
+  if (treeTask) {
+    return treeTask;
+  }
+
+  const aggregateRows = await db
+    .select()
+    .from(taskAggregates)
+    .where(eq(taskAggregates.id, taskId))
+    .limit(1);
+
+  const aggregate = aggregateRows[0];
+  return aggregate ? mapAggregateRowToWorkflowMigrationTask(aggregate) : null;
+}
 
 function parseTaskStrategy(raw: unknown) {
   if (!raw) {
@@ -27,10 +135,14 @@ function parseTaskStrategy(raw: unknown) {
 
   if (typeof raw === "string") {
     try {
-      return JSON.parse(raw) as JsonRecord;
+      return parseTaskStrategy(JSON.parse(raw));
     } catch {
       return {} as JsonRecord;
     }
+  }
+
+  if (isNonEmptyObject(raw) && typeof raw.value === "string") {
+    return parseTaskStrategy(raw.value);
   }
 
   return isNonEmptyObject(raw) ? raw : ({} as JsonRecord);
@@ -42,26 +154,6 @@ function normalizeArray(value: unknown) {
 
 function isNonEmptyObject(value: unknown): value is JsonRecord {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function serializeTaskStrategy(strategy: JsonRecord) {
-  return Object.keys(strategy).length > 0 ? JSON.stringify(strategy) : null;
-}
-
-function parseExecutionPlan(raw: unknown) {
-  if (!raw) {
-    return {} as JsonRecord;
-  }
-
-  if (typeof raw === "string") {
-    try {
-      return JSON.parse(raw) as JsonRecord;
-    } catch {
-      return {} as JsonRecord;
-    }
-  }
-
-  return isNonEmptyObject(raw) ? raw : ({} as JsonRecord);
 }
 
 function readString(value: unknown) {
@@ -189,11 +281,10 @@ function normalizeLegacyChangeRequest(
   };
 }
 
-function inferWorkflowTemplateId(strategy: JsonRecord, executionPlan: JsonRecord) {
+function inferWorkflowTemplateId(strategy: JsonRecord) {
   return (
     readString(strategy.workflowTemplateId) ||
     readString(strategy.selectedTemplateId) ||
-    readString(executionPlan.templateId) ||
     "legacy-unspecified"
   );
 }
@@ -232,10 +323,7 @@ function inferWorkflowStatus(taskStatus: TaskTreeRecord["status"]) {
   }
 }
 
-function inferCurrentStage(
-  taskStatus: TaskTreeRecord["status"],
-  legacyStage: string | null,
-) {
+function inferCurrentStage(taskStatus: TaskTreeRecord["status"], legacyStage: string | null) {
   switch (taskStatus) {
     case "completed":
       return "done";
@@ -380,8 +468,7 @@ async function ensureLegacyTaskWorkflowRunMigrated(
     return existingWorkflowRun;
   }
 
-  const executionPlan = parseExecutionPlan(task.executionPlan);
-  const templateId = inferWorkflowTemplateId(strategy, executionPlan);
+  const templateId = inferWorkflowTemplateId(strategy);
   const legacyStage = inferLegacyStage(strategy, legacyRoleConclusions);
   const workflowStatus = inferWorkflowStatus(task.status);
   const currentStage = inferCurrentStage(task.status, legacyStage);
@@ -417,7 +504,7 @@ async function ensureLegacyTaskWorkflowRunMigrated(
 }
 
 async function ensureLegacyRoleWorkflowMigratedInternal(taskId: string) {
-  const task = await loadTaskTreeRecord(taskId);
+  const task = await loadWorkflowMigrationTask(taskId);
   if (!task) {
     return null;
   }
@@ -455,24 +542,16 @@ async function ensureLegacyRoleWorkflowMigratedInternal(taskId: string) {
   if ("roleAggregateConclusions" in strategy || "developerChangeRequests" in strategy) {
     strategy.roleAggregateConclusions = undefined;
     strategy.developerChangeRequests = undefined;
-    const serializedStrategy = serializeTaskStrategy(strategy);
+    const normalizedStrategyJson =
+      Object.keys(strategy).length > 0 ? ({ ...strategy } as Record<string, unknown>) : null;
 
-    const treeNode = await db.query.projectTreeNodes.findFirst({
-      where: eq(projectTreeNodes.id, taskId),
-    });
-    const nextContentJson = {
-      ...((treeNode?.contentJson && typeof treeNode.contentJson === "object"
-        ? treeNode.contentJson
-        : {}) as Record<string, unknown>),
-      strategy: serializedStrategy,
-    };
     await db
-      .update(projectTreeNodes)
+      .update(taskAggregates)
       .set({
-        contentJson: nextContentJson,
+        strategyJson: normalizedStrategyJson,
         updatedAt: new Date().toISOString(),
       })
-      .where(eq(projectTreeNodes.id, taskId));
+      .where(eq(taskAggregates.id, taskId));
   }
 
   return task;

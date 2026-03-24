@@ -48,23 +48,17 @@ const currentStageIndex = computed(() => {
   return idx >= 0 ? idx : 0;
 });
 
-const completedCount = computed(
-  () => props.stages.filter((s) => s.status === "completed").length,
-);
+const completedCount = computed(() => props.stages.filter((s) => s.status === "completed").length);
 
 const hasArtifacts = computed(() => completedCount.value > 0);
 
 const blocked = computed(() =>
-  props.stages.some(
-    (s) => s.stageKey === props.currentStage && s.blockingReason,
-  ),
+  props.stages.some((s) => s.stageKey === props.currentStage && s.blockingReason),
 );
 
 const approvalPending = computed(() =>
   props.stages.some(
-    (s) =>
-      s.stageKey === props.currentStage &&
-      s.runtimeSummary?.approvalResult === "pending",
+    (s) => s.stageKey === props.currentStage && s.runtimeSummary?.approvalResult === "pending",
   ),
 );
 

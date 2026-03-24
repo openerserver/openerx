@@ -4,14 +4,16 @@
 > 日期：2026-03-21  
 > 关联文档：[project-tree-storage-design.md](project-tree-storage-design.md)
 
+> 说明：本文讨论的是 `project_tree_events` 这一历史兼容链路的优化与收敛，不再代表 task/session/timeline 当前主读写架构。当前主路径已经切到 `conversation_*`、`task_domain_events` 与 `task_timeline_views`。
+
 ## 0. 背景与动机
 
 本文档用于承接 [project-tree-storage-design.md](project-tree-storage-design.md) 中 Phase 3 的未完成项，将 `pg_trgm` 搜索能力与基于 `project_tree_events` 的增量推送能力，统一收敛到一份“树模型后续优化方案”中。
 
-当前 `project_tree_events` 采用纯追加（append-only）事件溯源模式存储所有对话消息。
-每次 OpenCode Runtime 发出 `message.updated` SSE 事件，BFF 的 `persistSessionMessageSnapshot()` 都会向 CP Service 发送完整消息快照，Service 端写入 **2~3 行事件**（created/updated + snapshot + 可选 completed）。
+历史实现里的 `project_tree_events` 曾采用纯追加（append-only）事件溯源模式存储所有对话消息。
+在旧写路径里，每次 OpenCode Runtime 发出 `message.updated` SSE 事件，BFF 的 `persistSessionMessageSnapshot()` 都会向 CP Service 发送完整消息快照，Service 端写入 **2~3 行事件**（created/updated + snapshot + 可选 completed）。
 
-与此同时，项目树主路径虽然已经切换完成，但仍缺少两项直接面向产品能力的后续补强：
+与此同时，历史项目树兼容层仍缺少两项直接面向产品能力的后续补强：
 
 1. 基于 `pg_trgm` 的项目内消息 / 上下文模糊搜索。
 2. 基于 `project_tree_events` 的增量推送 / 增量拉取能力，用于替代高频全量回放与整段消息重载。

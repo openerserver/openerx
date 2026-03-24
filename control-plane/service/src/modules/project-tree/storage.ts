@@ -37,37 +37,21 @@ export function getProjectRootNodeId(projectId: string) {
 
 export type { TaskTreeSnapshot } from "./task-types";
 
-function buildTaskTreeContentJson(task: TaskTreeSnapshot) {
-  return {
-    userId: task.userId,
-    prompt: task.prompt,
-    status: task.status,
-    sessionId: task.sessionId,
-    agentRunId: task.agentRunId,
-    result: task.result,
-    category: task.category,
-    strategy: task.strategy,
-    repoId: task.repoId,
-    workspaceRoot: task.workspaceRoot,
-    baseRevision: task.baseRevision,
-    workingBranch: task.workingBranch,
-    selectedModel: task.selectedModel,
-    executionMode: task.executionMode,
-    executionPlan: task.executionPlan,
-    parallelRunHistory: task.parallelRunHistory,
-    autoAdvanceStages: task.autoAdvanceStages,
-    credentialId: task.credentialId,
-    gitAuthorName: task.gitAuthorName,
-    gitAuthorEmail: task.gitAuthorEmail,
-    gitCommitterName: task.gitCommitterName,
-    gitCommitterEmail: task.gitCommitterEmail,
-    finalCommitSha: task.finalCommitSha,
-    finalBranchName: task.finalBranchName,
-    changesSummary: task.changesSummary,
-    createdAt: task.createdAt,
-    startedAt: task.startedAt,
-    finishedAt: task.finishedAt,
-  } satisfies Record<string, unknown>;
+type UpsertTaskSessionTreeNodeArgs = {
+  taskId: string;
+  runtimeSessionId: string;
+  parentRuntimeSessionId?: string | null;
+  forkedFromMessageId?: string | null;
+  branchName?: string | null;
+  sourceType?: "root" | "fork" | "sub_session" | null;
+  isActive?: boolean;
+  archivedAt?: string | null;
+};
+
+function buildTaskTreeContentJson(_task: TaskTreeSnapshot) {
+  const contentJson: Record<string, unknown> = {};
+
+  return contentJson;
 }
 
 function getProjectMainBranchId(projectId: string) {
@@ -88,6 +72,8 @@ export async function upsertTaskTreeNode(task: TaskTreeSnapshot) {
       .set({
         contentText: task.title,
         contentJson: buildTaskTreeContentJson(task),
+        refType: "task",
+        refId: task.id,
         runtimeSessionId: task.sessionId,
         branchName: task.workingBranch,
         updatedAt,
@@ -115,6 +101,8 @@ export async function upsertTaskTreeNode(task: TaskTreeSnapshot) {
     nodeType: "task",
     contentText: task.title,
     contentJson: buildTaskTreeContentJson(task),
+    refType: "task",
+    refId: task.id,
     runtimeSessionId: task.sessionId,
     branchName: task.workingBranch,
     isActive: true,
@@ -325,95 +313,117 @@ export async function syncTaskRelationLinks(
   }
 }
 
-export async function upsertTaskSessionTreeNode(args: {
-  taskId: string;
-  runtimeSessionId: string;
+function buildTaskSessionContentJson(args: UpsertTaskSessionTreeNodeArgs) {
+  return {
+    sourceType: args.sourceType ?? "root",
+    parentRuntimeSessionId: args.parentRuntimeSessionId ?? null,
+    forkedFromMessageId: args.forkedFromMessageId ?? null,
+  } satisfies Record<string, unknown>;
+}
+
+async function loadEffectiveTaskSessionParentNode(args: {
+  taskNode: Awaited<ReturnType<typeof requireTaskTreeNode>>;
   parentRuntimeSessionId?: string | null;
-  forkedFromMessageId?: string | null;
-  branchName?: string | null;
-  sourceType?: "root" | "fork" | "sub_session" | null;
-  isActive?: boolean;
-  archivedAt?: string | null;
 }) {
-  const taskNode = await requireTaskTreeNode(args.taskId);
-  const nodeId = getTaskSessionNodeId(args.taskId, args.runtimeSessionId);
-  const now = new Date().toISOString();
   const parentSessionNodeId = args.parentRuntimeSessionId
-    ? getTaskSessionNodeId(args.taskId, args.parentRuntimeSessionId)
+    ? getTaskSessionNodeId(args.taskNode.id, args.parentRuntimeSessionId)
     : null;
 
   const parentNode = parentSessionNodeId
     ? await db.query.projectTreeNodes.findFirst({
         where: and(
-          eq(projectTreeNodes.projectId, taskNode.projectId),
+          eq(projectTreeNodes.projectId, args.taskNode.projectId),
           eq(projectTreeNodes.id, parentSessionNodeId),
         ),
       })
     : null;
 
-  const effectiveParentNode = parentNode ?? taskNode;
-  const contentJson = {
-    sourceType: args.sourceType ?? "root",
-    parentRuntimeSessionId: args.parentRuntimeSessionId ?? null,
-    forkedFromMessageId: args.forkedFromMessageId ?? null,
-  } satisfies Record<string, unknown>;
+  return parentNode ?? args.taskNode;
+}
 
-  const existing = await db.query.projectTreeNodes.findFirst({
-    where: eq(projectTreeNodes.id, nodeId),
-  });
-
-  if (args.isActive) {
-    await db.execute(sql`
-      UPDATE project_tree_nodes
-      SET is_active = false,
-          updated_at = ${now}
-      WHERE project_id = ${taskNode.projectId}
-        AND node_type = 'session'
-        AND path <@ CAST(${taskNode.path} AS ltree)
-    `);
+async function deactivateSiblingTaskSessionNodes(args: {
+  projectId: string;
+  taskPath: string;
+  now: string;
+  isActive?: boolean;
+}) {
+  if (!args.isActive) {
+    return;
   }
 
-  if (existing) {
-    await db
-      .update(projectTreeNodes)
-      .set({
-        parentId: effectiveParentNode.id,
-        path: buildChildPath(effectiveParentNode.path, "session", nodeId),
-        depth: effectiveParentNode.depth + 1,
-        contentText: args.branchName ?? existing.contentText ?? args.runtimeSessionId,
-        contentJson,
-        runtimeSessionId: args.runtimeSessionId,
-        branchName: args.branchName ?? existing.branchName,
-        isActive: args.isActive ?? existing.isActive,
-        archivedAt: args.archivedAt ?? null,
-        updatedAt: now,
-      })
-      .where(eq(projectTreeNodes.id, nodeId));
-    return nodeId;
-  }
+  await db.execute(sql`
+    UPDATE project_tree_nodes
+    SET is_active = false,
+        updated_at = ${args.now}
+    WHERE project_id = ${args.projectId}
+      AND node_type = 'session'
+      AND path <@ CAST(${args.taskPath} AS ltree)
+  `);
+}
 
-  await db.insert(projectTreeNodes).values({
-    id: nodeId,
-    projectId: taskNode.projectId,
-    parentId: effectiveParentNode.id,
-    path: buildChildPath(effectiveParentNode.path, "session", nodeId),
-    depth: effectiveParentNode.depth + 1,
-    nodeType: "session",
-    contentText: args.branchName ?? args.runtimeSessionId,
-    contentJson,
-    runtimeSessionId: args.runtimeSessionId,
-    branchName: args.branchName ?? null,
-    isActive: args.isActive ?? false,
-    createdAt: now,
-    updatedAt: now,
-    archivedAt: args.archivedAt ?? null,
-  });
+function buildTaskSessionNodeUpsertValues(args: {
+  nodeId: string;
+  taskNode: Awaited<ReturnType<typeof requireTaskTreeNode>>;
+  effectiveParentNode: typeof projectTreeNodes.$inferSelect;
+  now: string;
+  contentJson: Record<string, unknown>;
+  input: UpsertTaskSessionTreeNodeArgs;
+  existing?: typeof projectTreeNodes.$inferSelect;
+}) {
+  return {
+    id: args.nodeId,
+    projectId: args.taskNode.projectId,
+    parentId: args.effectiveParentNode.id,
+    path: buildChildPath(args.effectiveParentNode.path, "session", args.nodeId),
+    depth: args.effectiveParentNode.depth + 1,
+    nodeType: "session" as const,
+    contentText: args.input.branchName ?? args.existing?.contentText ?? args.input.runtimeSessionId,
+    contentJson: args.contentJson,
+    refType: "conversation_session" as const,
+    refId: args.nodeId,
+    runtimeSessionId: args.input.runtimeSessionId,
+    branchName: args.input.branchName ?? args.existing?.branchName ?? null,
+    isActive: args.input.isActive ?? args.existing?.isActive ?? false,
+    createdAt: args.existing?.createdAt ?? args.now,
+    updatedAt: args.now,
+    archivedAt: args.input.archivedAt ?? null,
+  };
+}
 
-  const branchName = args.branchName ?? args.runtimeSessionId;
+async function updateExistingTaskSessionNode(args: {
+  nodeId: string;
+  values: ReturnType<typeof buildTaskSessionNodeUpsertValues>;
+}) {
+  await db
+    .update(projectTreeNodes)
+    .set({
+      parentId: args.values.parentId,
+      path: args.values.path,
+      depth: args.values.depth,
+      contentText: args.values.contentText,
+      contentJson: args.values.contentJson,
+      refType: args.values.refType,
+      refId: args.values.refId,
+      runtimeSessionId: args.values.runtimeSessionId,
+      branchName: args.values.branchName,
+      isActive: args.values.isActive,
+      archivedAt: args.values.archivedAt,
+      updatedAt: args.values.updatedAt,
+    })
+    .where(eq(projectTreeNodes.id, args.nodeId));
+}
+
+async function syncTaskSessionBranchHead(args: {
+  taskNode: Awaited<ReturnType<typeof requireTaskTreeNode>>;
+  input: UpsertTaskSessionTreeNodeArgs;
+  nodeId: string;
+  now: string;
+}) {
+  const branchName = args.input.branchName ?? args.input.runtimeSessionId;
   const existingBranch = await db.query.projectTreeBranches.findFirst({
     where: and(
-      eq(projectTreeBranches.projectId, taskNode.projectId),
-      eq(projectTreeBranches.taskNodeId, taskNode.id),
+      eq(projectTreeBranches.projectId, args.taskNode.projectId),
+      eq(projectTreeBranches.taskNodeId, args.taskNode.id),
       eq(projectTreeBranches.branchName, branchName),
     ),
   });
@@ -422,22 +432,68 @@ export async function upsertTaskSessionTreeNode(args: {
     await db
       .update(projectTreeBranches)
       .set({
-        headNodeId: nodeId,
-        updatedAt: now,
+        headNodeId: args.nodeId,
+        updatedAt: args.now,
       })
       .where(eq(projectTreeBranches.id, existingBranch.id));
-  } else {
-    await db.insert(projectTreeBranches).values({
-      id: crypto.randomUUID(),
-      projectId: taskNode.projectId,
-      taskNodeId: taskNode.id,
-      branchName,
-      headNodeId: nodeId,
-      isDefault: (args.sourceType ?? "root") === "root",
-      createdAt: now,
-      updatedAt: now,
-    });
+    return;
   }
+
+  await db.insert(projectTreeBranches).values({
+    id: crypto.randomUUID(),
+    projectId: args.taskNode.projectId,
+    taskNodeId: args.taskNode.id,
+    branchName,
+    headNodeId: args.nodeId,
+    isDefault: (args.input.sourceType ?? "root") === "root",
+    createdAt: args.now,
+    updatedAt: args.now,
+  });
+}
+
+export async function upsertTaskSessionTreeNode(args: UpsertTaskSessionTreeNodeArgs) {
+  const taskNode = await requireTaskTreeNode(args.taskId);
+  const nodeId = getTaskSessionNodeId(args.taskId, args.runtimeSessionId);
+  const now = new Date().toISOString();
+  const effectiveParentNode = await loadEffectiveTaskSessionParentNode({
+    taskNode,
+    parentRuntimeSessionId: args.parentRuntimeSessionId,
+  });
+  const contentJson = buildTaskSessionContentJson(args);
+
+  const existing = await db.query.projectTreeNodes.findFirst({
+    where: eq(projectTreeNodes.id, nodeId),
+  });
+
+  await deactivateSiblingTaskSessionNodes({
+    projectId: taskNode.projectId,
+    taskPath: taskNode.path,
+    now,
+    isActive: args.isActive,
+  });
+
+  const values = buildTaskSessionNodeUpsertValues({
+    nodeId,
+    taskNode,
+    effectiveParentNode,
+    now,
+    contentJson,
+    input: args,
+    existing,
+  });
+
+  if (existing) {
+    await updateExistingTaskSessionNode({ nodeId, values });
+    return nodeId;
+  }
+
+  await db.insert(projectTreeNodes).values(values);
+  await syncTaskSessionBranchHead({
+    taskNode,
+    input: args,
+    nodeId,
+    now,
+  });
 
   return nodeId;
 }

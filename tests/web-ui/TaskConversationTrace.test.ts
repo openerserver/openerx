@@ -1,21 +1,21 @@
 import { flushPromises } from "@vue/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ref } from "vue";
+import { useTreeMessages } from "../../control-plane/web-ui/src/composables/useTreeMessages";
 import {
-  buildSavedExecutionPlan,
+  type TaskConversationMessageItem,
+  normalizeSessionConversationItems,
+} from "../../control-plane/web-ui/src/lib/message-normalize";
+import { normalizeTraceConversationItems } from "../../control-plane/web-ui/src/lib/task-trace-conversation";
+import {
   DEFAULT_JUDGE_CONFIG,
+  buildSavedRuntimePlan,
   resolveEditableExecutionMode,
   resolveEditableJudgeConfig,
   resolveEditableParallelCandidates,
   resolveEditableSequentialSteps,
   serializeTaskStrategy,
 } from "../../control-plane/web-ui/src/lib/taskExecutionMode";
-import {
-  type TaskConversationMessageItem,
-  normalizeSessionConversationItems,
-} from "../../control-plane/web-ui/src/lib/message-normalize";
-import { useTreeMessages } from "../../control-plane/web-ui/src/composables/useTreeMessages";
-import { normalizeTraceConversationItems } from "../../control-plane/web-ui/src/lib/task-trace-conversation";
 
 const apiMocks = vi.hoisted(() => ({
   getTaskExecutionTraceView: vi.fn(),
@@ -55,10 +55,18 @@ function createTraceFromMessages(messages: unknown[]) {
     };
     const parts = Array.isArray(record.parts) ? record.parts : [];
     const text = parts
-      .map((part) => (typeof part.text === "string" ? part.text : typeof part.content === "string" ? part.content : ""))
+      .map((part) =>
+        typeof part.text === "string"
+          ? part.text
+          : typeof part.content === "string"
+            ? part.content
+            : "",
+      )
       .filter(Boolean)
       .join("\n");
-    const created = record.createdAt ?? (typeof record.info?.time?.created === "string" ? record.info.time.created : undefined);
+    const created =
+      record.createdAt ??
+      (typeof record.info?.time?.created === "string" ? record.info.time.created : undefined);
 
     return {
       id: record.info?.id ?? record.id ?? `message-${index}`,
@@ -85,7 +93,8 @@ describe("Task conversation composables", () => {
   });
 
   it("normalizes session messages into conversation items", async () => {
-    apiMocks.getTaskExecutionTraceView.mockResolvedValue(createTraceFromMessages([
+    apiMocks.getTaskExecutionTraceView.mockResolvedValue(
+      createTraceFromMessages([
         {
           info: {
             id: "message-1",
@@ -103,7 +112,8 @@ describe("Task conversation composables", () => {
           },
           parts: [{ text: "第二条消息" }],
         },
-      ]));
+      ]),
+    );
 
     const taskId = ref("task-1");
     const sessionId = ref<string | undefined>("session-1");
@@ -121,7 +131,8 @@ describe("Task conversation composables", () => {
   });
 
   it("merges realtime assistant chunks into a streaming draft", async () => {
-    apiMocks.getTaskExecutionTraceView.mockResolvedValue(createTraceFromMessages([
+    apiMocks.getTaskExecutionTraceView.mockResolvedValue(
+      createTraceFromMessages([
         {
           info: {
             id: "message-1",
@@ -130,7 +141,8 @@ describe("Task conversation composables", () => {
           },
           parts: [{ text: "继续实现" }],
         },
-      ]));
+      ]),
+    );
     realtimeStoreMock.events = [
       {
         id: "event-2",
@@ -181,16 +193,18 @@ describe("Task conversation composables", () => {
   });
 
   it("does not treat user workflow-context parts as assistant streaming replies", async () => {
-    apiMocks.getTaskExecutionTraceView.mockResolvedValue(createTraceFromMessages([
-      {
-        info: {
-          id: "message-1",
-          role: "user",
-          time: { created: "2026-03-20T00:00:01.000Z" },
+    apiMocks.getTaskExecutionTraceView.mockResolvedValue(
+      createTraceFromMessages([
+        {
+          info: {
+            id: "message-1",
+            role: "user",
+            time: { created: "2026-03-20T00:00:01.000Z" },
+          },
+          parts: [{ text: "继续执行" }],
         },
-        parts: [{ text: "继续执行" }],
-      },
-    ]));
+      ]),
+    );
     realtimeStoreMock.events = [
       {
         id: "event-user-part",
@@ -238,7 +252,8 @@ describe("Task conversation composables", () => {
   });
 
   it("keeps tool-only assistant messages and extracts tool summaries", async () => {
-    apiMocks.getTaskExecutionTraceView.mockResolvedValue(createTraceFromMessages([
+    apiMocks.getTaskExecutionTraceView.mockResolvedValue(
+      createTraceFromMessages([
         {
           info: {
             id: "message-tool-1",
@@ -264,7 +279,8 @@ describe("Task conversation composables", () => {
             },
           ],
         },
-      ]));
+      ]),
+    );
 
     const taskId = ref("task-1");
     const sessionId = ref<string | undefined>("session-1");
@@ -291,7 +307,8 @@ describe("Task conversation composables", () => {
   });
 
   it("drops empty pending tool snapshots that only expose a tool name and status", async () => {
-    apiMocks.getTaskExecutionTraceView.mockResolvedValue(createTraceFromMessages([
+    apiMocks.getTaskExecutionTraceView.mockResolvedValue(
+      createTraceFromMessages([
         {
           info: {
             id: "message-tool-empty",
@@ -331,7 +348,8 @@ describe("Task conversation composables", () => {
             },
           ],
         },
-      ]));
+      ]),
+    );
 
     const taskId = ref("task-1");
     const sessionId = ref<string | undefined>("session-1");
@@ -411,45 +429,49 @@ describe("Task conversation composables", () => {
   });
 
   it("prefers richer tool snapshots when the same call is observed multiple times in one trace item", () => {
-    const items = normalizeTraceConversationItems({
-      taskId: "task-1",
-      sessionId: "session-1",
-      segments: [],
-      hookExecutions: [],
-      timeline: [
-        {
-          id: "message-trace-1",
-          role: "assistant",
-          text: "",
-          createdAt: "2026-03-22T00:00:01.000Z",
-          raw: {
-            info: {
-              id: "message-trace-1",
-              role: "assistant",
-              time: { created: "2026-03-22T00:00:01.000Z" },
+    const items = normalizeTraceConversationItems(
+      {
+        taskId: "task-1",
+        sessionId: "session-1",
+        segments: [],
+        hookExecutions: [],
+        timeline: [
+          {
+            id: "message-trace-1",
+            role: "assistant",
+            text: "",
+            createdAt: "2026-03-22T00:00:01.000Z",
+            raw: {
+              info: {
+                id: "message-trace-1",
+                role: "assistant",
+                time: { created: "2026-03-22T00:00:01.000Z" },
+              },
+              parts: [
+                {
+                  id: "tool-call-1-pending",
+                  type: "tool",
+                  toolName: "bash",
+                  callID: "call-1",
+                  state: { status: "pending" },
+                },
+                {
+                  id: "tool-call-1-running",
+                  type: "tool",
+                  toolName: "bash",
+                  callID: "call-1",
+                  state: { status: "running" },
+                  input: { command: "ls -F" },
+                },
+              ],
             },
-            parts: [
-              {
-                id: "tool-call-1-pending",
-                type: "tool",
-                toolName: "bash",
-                callID: "call-1",
-                state: { status: "pending" },
-              },
-              {
-                id: "tool-call-1-running",
-                type: "tool",
-                toolName: "bash",
-                callID: "call-1",
-                state: { status: "running" },
-                input: { command: "ls -F" },
-              },
-            ],
           },
-        },
-      ],
-      timelineMeta: { cacheState: "complete" },
-    }, undefined, { includeLineage: true });
+        ],
+        timelineMeta: { cacheState: "complete" },
+      },
+      undefined,
+      { includeLineage: true },
+    );
 
     expect(items).toHaveLength(1);
     expect(items[0]?.toolCalls).toEqual([
@@ -462,7 +484,8 @@ describe("Task conversation composables", () => {
   });
 
   it("extracts file path from apply_patch payloads", async () => {
-    apiMocks.getTaskExecutionTraceView.mockResolvedValue(createTraceFromMessages([
+    apiMocks.getTaskExecutionTraceView.mockResolvedValue(
+      createTraceFromMessages([
         {
           info: {
             id: "message-tool-2",
@@ -476,7 +499,8 @@ describe("Task conversation composables", () => {
               id: "tool-2",
               toolName: "apply_patch",
               input: {
-                input: "*** Begin Patch\n*** Update File: design/paid-parallel-compare/verification.md\n@@\n-old\n+new\n*** End Patch",
+                input:
+                  "*** Begin Patch\n*** Update File: design/paid-parallel-compare/verification.md\n@@\n-old\n+new\n*** End Patch",
               },
               state: {
                 status: "completed",
@@ -485,7 +509,8 @@ describe("Task conversation composables", () => {
             },
           ],
         },
-      ]));
+      ]),
+    );
 
     const taskId = ref("task-1");
     const sessionId = ref<string | undefined>("session-1");
@@ -503,7 +528,8 @@ describe("Task conversation composables", () => {
   });
 
   it("extracts file path from apply_patch output when patch input is unavailable", async () => {
-    apiMocks.getTaskExecutionTraceView.mockResolvedValue(createTraceFromMessages([
+    apiMocks.getTaskExecutionTraceView.mockResolvedValue(
+      createTraceFromMessages([
         {
           info: {
             id: "message-tool-3",
@@ -521,12 +547,14 @@ describe("Task conversation composables", () => {
               },
               state: {
                 status: "completed",
-                output: "Success. Updated the following files:\nA design/paid-parallel-compare/diagrams.mmd",
+                output:
+                  "Success. Updated the following files:\nA design/paid-parallel-compare/diagrams.mmd",
               },
             },
           ],
         },
-      ]));
+      ]),
+    );
 
     const taskId = ref("task-1");
     const sessionId = ref<string | undefined>("session-1");
@@ -544,7 +572,8 @@ describe("Task conversation composables", () => {
   });
 
   it("does not expose descriptive metadata as tool parameters when command is already present", async () => {
-    apiMocks.getTaskExecutionTraceView.mockResolvedValue(createTraceFromMessages([
+    apiMocks.getTaskExecutionTraceView.mockResolvedValue(
+      createTraceFromMessages([
         {
           info: {
             id: "message-tool-bash-1",
@@ -564,12 +593,14 @@ describe("Task conversation composables", () => {
               },
               state: {
                 status: "completed",
-                output: "control-plane/service/src/middleware/auth.ts:12:export function authMiddleware() {}",
+                output:
+                  "control-plane/service/src/middleware/auth.ts:12:export function authMiddleware() {}",
               },
             },
           ],
         },
-      ]));
+      ]),
+    );
 
     const taskId = ref("task-1");
     const sessionId = ref<string | undefined>("session-1");
@@ -587,7 +618,7 @@ describe("Task conversation composables", () => {
     ]);
   });
 
-  it("derives editable execution mode state from task strategy and execution plan", () => {
+  it("derives editable execution mode state from task strategy only", () => {
     const task = {
       executionMode: undefined,
       strategy: JSON.stringify({
@@ -597,37 +628,18 @@ describe("Task conversation composables", () => {
           { model: "github-copilot:gpt-5.4", label: "候选 B" },
         ],
       }),
-      executionPlan: JSON.stringify({
-        mode: "sequential-chain",
-        steps: [
-          {
-            id: "step-1",
-            type: "chain-step",
-            title: "分析问题",
-            instruction: "先整理现状",
-            model: "github-copilot:gpt-5-mini",
-          },
-        ],
-      }),
     };
 
-    expect(resolveEditableExecutionMode(task as never)).toBe("sequential-chain");
+    expect(resolveEditableExecutionMode(task as never)).toBe("parallel");
     expect(resolveEditableParallelCandidates(task as never)).toEqual([
       { model: "github-copilot:gpt-5-mini", label: "候选 A" },
       { model: "github-copilot:gpt-5.4", label: "候选 B" },
     ]);
-    expect(resolveEditableSequentialSteps(task as never)).toEqual([
-      {
-        id: "step-1",
-        title: "分析问题",
-        instruction: "先整理现状",
-        model: "github-copilot:gpt-5-mini",
-      },
-    ]);
+    expect(resolveEditableSequentialSteps(task as never)).toEqual([]);
     expect(resolveEditableJudgeConfig(task as never)).toEqual(DEFAULT_JUDGE_CONFIG);
   });
 
-  it("serializes saved execution mode back into task strategy and execution plan", () => {
+  it("serializes saved execution mode back into task strategy and runtime plan", () => {
     const task = {
       selectedModel: "github-copilot:gpt-5.4",
       strategy: JSON.stringify({
@@ -649,7 +661,7 @@ describe("Task conversation composables", () => {
         selectionStrategy: "highest-score",
       },
     });
-    const executionPlan = buildSavedExecutionPlan(task as never, {
+    const runtimePlan = buildSavedRuntimePlan(task as never, {
       mode: "parallel",
       candidates: [
         { model: "github-copilot:gpt-5-mini", label: "候选 A" },
@@ -676,7 +688,7 @@ describe("Task conversation composables", () => {
         selectionStrategy: "highest-score",
       },
     });
-    expect(JSON.parse(executionPlan)).toEqual({
+    expect(JSON.parse(runtimePlan)).toEqual({
       mode: "parallel",
       steps: [
         { id: "exec-parallel", type: "execution", status: "pending" },

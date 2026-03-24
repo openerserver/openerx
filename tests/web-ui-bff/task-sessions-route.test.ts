@@ -1,6 +1,8 @@
 /// <reference types="bun-types" />
 
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { createOpencodeAdapterModuleMock } from "./opencode-adapter-mock";
+import { createSseAggregatorModuleMock } from "./sse-aggregator-mock";
 
 const cpFetchMock = mock(async (..._args: unknown[]) => ({ ok: true, data: {} }));
 const authHeaderMock = mock(() => "Bearer test");
@@ -22,36 +24,42 @@ mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () =>
   setControlPlaneFetchHandler: setControlPlaneFetchHandlerMock,
 }));
 
-mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter", () => ({
-  continueSession: mock(async () => ({ ok: true })),
-  createSession: mock(async () => ({ ok: true, sessionId: "session-1", agentRunId: "run-1" })),
-  ensureAgentRunForSession: mock(() => "run-1"),
-  extractAssistantResultFromMessages: mock(() => ({
-    completed: false,
-    failed: false,
-    error: undefined,
-    tokenUsed: 0,
-  })),
-  forkSession: mock(async () => ({ ok: true, sessionId: "session-2" })),
-  getAgentRun: mock(() => undefined),
-  getSessionMessages: getSessionMessagesMock,
-  listSessions: listSessionsMock,
-  recoverAgentRun: mock(() => undefined),
-  getAgentMessages: mock(async () => ({ ok: true, data: [] })),
-  injectGuidance: mock(async () => ({ ok: true })),
-  findAgentRunBySessionId: mock(() => undefined),
-  listAgentRuns: mock(() => []),
-  pauseAgent: mock(async () => ({ ok: true })),
-  registerAgentRun: mock(() => undefined),
-  resumeAgent: mock(async () => ({ ok: true })),
-  runDetachedPrompt: mock(async () => ({ ok: true, data: {} })),
-  terminateAgent: mock(async () => ({ ok: true })),
-  updateAgentRunStatus: mock(() => undefined),
-}));
+mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter", () =>
+  createOpencodeAdapterModuleMock({
+    continueSession: mock(async () => ({ ok: true })),
+    createSession: mock(async () => ({ ok: true, sessionId: "session-1", agentRunId: "run-1" })),
+    ensureAgentRunForSession: mock(() => "run-1"),
+    extractAssistantResultFromMessages: mock(() => ({
+      completed: false,
+      failed: false,
+      error: undefined,
+      tokenUsed: 0,
+    })),
+    forkSession: mock(async () => ({ ok: true, sessionId: "session-2" })),
+    getAgentRun: mock(() => undefined),
+    getSessionMessages: getSessionMessagesMock,
+    listSessions: listSessionsMock,
+    recoverAgentRun: mock(() => undefined),
+    getAgentMessages: mock(async () => ({ ok: true, data: [] })),
+    injectGuidance: mock(async () => ({ ok: true })),
+    findAgentRunBySessionId: mock(() => undefined),
+    listAgentRuns: mock(() => []),
+    listRuntimePermissions: mock(async () => ({ ok: true, data: [] })),
+    pauseAgent: mock(async () => ({ ok: true })),
+    registerAgentRun: mock(() => undefined),
+    replyRuntimePermission: mock(async () => ({ ok: true })),
+    resumeAgent: mock(async () => ({ ok: true })),
+    runDetachedPrompt: mock(async () => ({ ok: true, data: {} })),
+    terminateAgent: mock(async () => ({ ok: true })),
+    updateAgentRunStatus: mock(() => undefined),
+  }),
+);
 
 mock.module("../../control-plane/web-ui-bff/src/modules/hooks/lifecycle-hooks", () => ({
   executeLifecycleHooks: mock(async () => []),
-  mergeStageAndStrategyHooks: mock((_stageHooks: unknown, strategyHooks: unknown) => strategyHooks ?? []),
+  mergeStageAndStrategyHooks: mock(
+    (_stageHooks: unknown, strategyHooks: unknown) => strategyHooks ?? [],
+  ),
   parseStageHooks: mock(() => []),
 }));
 
@@ -70,11 +78,11 @@ mock.module("../../control-plane/web-ui-bff/src/modules/realtime/pipeline-events
   buildPipelineStageUpdatedEvents: mock(() => []),
 }));
 
-mock.module("../../control-plane/web-ui-bff/src/modules/realtime/sse-aggregator", () => ({
-  sseAggregator: {
+mock.module("../../control-plane/web-ui-bff/src/modules/realtime/sse-aggregator", () =>
+  createSseAggregatorModuleMock({
     registerParallelTask: mock(() => undefined),
-  },
-}));
+  }),
+);
 
 mock.module("../../control-plane/web-ui-bff/src/modules/realtime/ws-broadcaster", () => ({
   wsBroadcaster: {
@@ -108,7 +116,7 @@ beforeEach(() => {
   getSessionMessagesMock.mockResolvedValue({ ok: true, data: [] });
 
   cpFetchMock.mockImplementation(async (url: string) => {
-    if (url === "/api/tasks/task-1") {
+    if (url === "/api/project-tree/tasks/task-1") {
       return {
         ok: true,
         data: {
@@ -178,7 +186,7 @@ describe("task sessions route", () => {
         return { ok: true, data: { ok: true } };
       }
 
-      if (url === "/api/tasks/task-1") {
+      if (url === "/api/project-tree/tasks/task-1") {
         return {
           ok: true,
           data: {
@@ -195,12 +203,15 @@ describe("task sessions route", () => {
 
     const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
 
-    const response = await taskRoutes.request("http://localhost/task-1/branches/session-leaf/activate", {
-      method: "POST",
-      headers: {
-        Authorization: "Bearer test",
+    const response = await taskRoutes.request(
+      "http://localhost/task-1/branches/session-leaf/activate",
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer test",
+        },
       },
-    });
+    );
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ ok: true, sessionId: "session-leaf" });
@@ -240,7 +251,7 @@ describe("task sessions route", () => {
         return { ok: true, data: { ok: true } };
       }
 
-      if (url === "/api/tasks/task-1") {
+      if (url === "/api/project-tree/tasks/task-1") {
         return {
           ok: true,
           data: {
@@ -257,12 +268,15 @@ describe("task sessions route", () => {
 
     const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
 
-    const response = await taskRoutes.request("http://localhost/task-1/branches/session-leaf/archive", {
-      method: "POST",
-      headers: {
-        Authorization: "Bearer test",
+    const response = await taskRoutes.request(
+      "http://localhost/task-1/branches/session-leaf/archive",
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer test",
+        },
       },
-    });
+    );
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ ok: true });
@@ -322,14 +336,17 @@ describe("task sessions route", () => {
 
     const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
 
-    const response = await taskRoutes.request("http://localhost/task-1/branches/session-root/fork", {
-      method: "POST",
-      headers: {
-        Authorization: "Bearer test",
-        "Content-Type": "application/json",
+    const response = await taskRoutes.request(
+      "http://localhost/task-1/branches/session-root/fork",
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer test",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ title: "新分支", messageId: "msg-1" }),
       },
-      body: JSON.stringify({ title: "新分支", messageId: "msg-1" }),
-    });
+    );
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({

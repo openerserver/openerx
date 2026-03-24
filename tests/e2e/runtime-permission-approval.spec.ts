@@ -130,7 +130,10 @@ async function getAvailableExecutionModel(
   }
 
   const preferred = (modelList.data || []).find(
-    (item) => item.provider === "github-copilot" && typeof item.id === "string" && item.id.trim().length > 0,
+    (item) =>
+      item.provider === "github-copilot" &&
+      typeof item.id === "string" &&
+      item.id.trim().length > 0,
   );
   if (preferred?.id) {
     return `${preferred.provider}:${preferred.id}`;
@@ -198,7 +201,8 @@ async function sendRuntimePrompt(
   selectedModel: string,
 ): Promise<void> {
   const delimiterIndex = selectedModel.indexOf(":");
-  const providerID = delimiterIndex >= 0 ? selectedModel.slice(0, delimiterIndex) : "github-copilot";
+  const providerID =
+    delimiterIndex >= 0 ? selectedModel.slice(0, delimiterIndex) : "github-copilot";
   const rawModelID = delimiterIndex >= 0 ? selectedModel.slice(delimiterIndex + 1) : selectedModel;
   const modelID = rawModelID.startsWith(`${providerID}/`)
     ? rawModelID.slice(providerID.length + 1)
@@ -306,20 +310,20 @@ liveBackendTest(
       token,
       data: {
         title: `runtime-permission-e2e-${unique}`,
-        prompt:
-          `Use the read tool immediately on the exact absolute path ${filepath}. ` +
-          "Do not ask for confirmation. After the tool returns, answer with exactly the first line from that file and nothing else.",
+        prompt: `Use the read tool immediately on the exact absolute path ${filepath}. Do not ask for confirmation. After the tool returns, answer with exactly the first line from that file and nothing else.`,
         projectId: PROJECT_ID,
         selectedModel,
       },
     });
 
-    const runtimeSession = await createRuntimeSession(request, `[Task ${createdTask.id}] runtime-permission-e2e`);
+    const runtimeSession = await createRuntimeSession(
+      request,
+      `[Task ${createdTask.id}] runtime-permission-e2e`,
+    );
     await sendRuntimePrompt(
       request,
       runtimeSession.id,
-      `Use the read tool immediately on the exact absolute path ${filepath}. ` +
-        "Do not ask for confirmation. After the tool returns, answer with exactly the first line from that file and nothing else.",
+      `Use the read tool immediately on the exact absolute path ${filepath}. Do not ask for confirmation. After the tool returns, answer with exactly the first line from that file and nothing else.`,
       selectedModel,
     );
 

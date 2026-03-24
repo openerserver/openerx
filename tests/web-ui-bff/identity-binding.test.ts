@@ -14,8 +14,8 @@ import {
   resolveExecutionIntegrationModel,
 } from "./execution-integration-guard";
 import {
-  buildTaskCleanupStatements,
   buildDeleteStatements,
+  buildTaskCleanupStatements,
   resolveBffUrl,
   resolveControlPlaneUrl,
   runCleanupStatements,
@@ -361,10 +361,11 @@ describe("BFF Task with Identity", () => {
     createdTaskIds.push(data.id);
 
     // Verify identity fields persisted via CP
-    const { data: detail } = await cpRequest<Record<string, unknown>>(
+    const { data: detail, status: detailStatus } = await cpRequest<Record<string, unknown>>(
       token,
-      `/api/tasks/${data.id}`,
+      `/api/project-tree/tasks/${data.id}`,
     );
+    expect(detailStatus).toBe(200);
     expect(detail.credentialId).toBe(credId);
     expect(detail.gitAuthorName).toBe("BFF Author");
     expect(detail.gitAuthorEmail).toBe("bff-author@test.openerx.dev");
@@ -383,10 +384,11 @@ describe("BFF Task with Identity", () => {
     expect(status).toBe(201);
     createdTaskIds.push(data.id);
 
-    const { data: detail } = await cpRequest<Record<string, unknown>>(
+    const { data: detail, status: detailStatus } = await cpRequest<Record<string, unknown>>(
       token,
-      `/api/tasks/${data.id}`,
+      `/api/project-tree/tasks/${data.id}`,
     );
+    expect(detailStatus).toBe(200);
     expect(detail.credentialId).toBeNull();
     expect(detail.gitAuthorName).toBeNull();
   });
@@ -457,10 +459,10 @@ describe("Cross-Layer Consistency", () => {
     createdTaskIds.push(task.id);
 
     // Fetch task list
-    const { data: list } = await cpRequest<{ data: Array<Record<string, unknown>> }>(
-      token,
-      `/api/tasks?projectId=${PROJECT_ID}`,
-    );
+    const { data: list, status: listStatus } = await cpRequest<{
+      data: Array<Record<string, unknown>>;
+    }>(token, `/api/project-tree/tasks?projectId=${PROJECT_ID}`);
+    expect(listStatus).toBe(200);
 
     const found = list.data.find((t) => t.id === task.id);
     expect(found).toBeTruthy();

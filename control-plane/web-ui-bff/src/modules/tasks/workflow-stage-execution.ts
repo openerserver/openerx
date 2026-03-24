@@ -1,5 +1,5 @@
 import { cpFetch } from "../../lib/control-plane-client";
-import { DEFAULT_EXECUTION_AGENT, mergeTaskStrategy } from "../../lib/orchestration-strategy";
+import { mergeTaskStrategy } from "../../lib/orchestration-strategy";
 import { stageLabelFromKey } from "./workflow-view";
 
 interface WorkflowRunPayload {
@@ -95,7 +95,6 @@ interface SpawnedTaskDraft {
 
 interface SpawnedTaskExecutionConfig {
   taskExecutionMode: "single" | "parallel";
-  executionPlan: string;
 }
 
 interface WorkflowPayload {
@@ -183,7 +182,8 @@ function normalizeInitialTaskDefinition(
 
   return {
     titleTemplate:
-      asNonEmptyString(record?.titleTemplate) || `${resolvedStageName || stageKey || "下一阶段"}：初始任务`,
+      asNonEmptyString(record?.titleTemplate) ||
+      `${resolvedStageName || stageKey || "下一阶段"}：初始任务`,
     goalTemplate:
       asNonEmptyString(record?.goalTemplate) ||
       `完成 ${resolvedStageName || stageKey || "下一阶段"} 阶段的首个任务目标，并输出阶段摘要。`,
@@ -264,105 +264,26 @@ function resolveInitialTaskExecutionMode(
   return definition.defaultExecutionMode || nextStage.mode || "single";
 }
 
-function buildPendingCandidate(args: { label: string; model?: string; agent?: string }) {
-  return {
-    label: args.label,
-    agent: args.agent || DEFAULT_EXECUTION_AGENT,
-    ...(args.model ? { model: args.model } : {}),
-    role: "executor" as const,
-    status: "pending" as const,
-  };
-}
-
 function buildSpawnedTaskExecutionConfig(args: {
   definition: ReturnType<typeof normalizeInitialTaskDefinition>;
   nextStage: WorkflowTemplateStagePayload;
-  selectedModel?: string;
 }) {
   const requestedMode = resolveInitialTaskExecutionMode(args.definition, args.nextStage);
 
   if (requestedMode === "parallel") {
-    const candidates = args.definition.defaultCandidates.length > 0
-      ? args.definition.defaultCandidates.map((candidate, index) =>
-          buildPendingCandidate({
-            label: candidate.label || `候选 ${index + 1}`,
-            model: candidate.model,
-          }),
-        )
-      : [
-          buildPendingCandidate({ label: "候选 1", model: args.selectedModel }),
-          buildPendingCandidate({ label: "候选 2", model: args.selectedModel }),
-        ];
-
     return {
       taskExecutionMode: "parallel" as const,
-      executionPlan: JSON.stringify({
-        templateId: asNonEmptyString(args.nextStage.id) || asNonEmptyString(args.nextStage.stageKey) || "spawned-stage",
-        mode: "parallel",
-        steps: [
-          { id: "exec-parallel", type: "execution", status: "pending" },
-          ...(candidates.length > 1
-            ? [{ id: "judge-0", type: "judge", status: "pending", dependsOn: ["exec-parallel"] }]
-            : []),
-        ],
-        candidates,
-        source: "initialTaskDefinition",
-      }),
     } satisfies SpawnedTaskExecutionConfig;
   }
 
   if (requestedMode === "sequential-chain") {
-    const pipelineSteps =
-      args.definition.defaultSteps.length > 0
-        ? args.definition.defaultSteps.map((step, index) => ({
-            id: step.id || `pipeline-step-${index + 1}`,
-            type: "execution",
-            status: "pending",
-            ...(index > 0
-              ? { dependsOn: [args.definition.defaultSteps[index - 1]?.id || `pipeline-step-${index}`] }
-              : {}),
-            title: step.title || `步骤 ${index + 1}`,
-            instruction: step.instruction || "",
-            model: step.model || args.selectedModel || null,
-            sourceType: "initialTask.sequentialChain.step",
-          }))
-        : [
-            {
-              id: "pipeline-step-1",
-              type: "execution",
-              status: "pending",
-              title: asNonEmptyString(args.nextStage.name) || stageLabelFromKey(args.nextStage.stageKey),
-              instruction: "",
-              model: args.selectedModel || null,
-              sourceType: "initialTask.sequentialChain.step",
-            },
-          ];
-
     return {
       taskExecutionMode: "single" as const,
-      executionPlan: JSON.stringify({
-        templateId: asNonEmptyString(args.nextStage.id) || asNonEmptyString(args.nextStage.stageKey) || "spawned-stage",
-        mode: "single",
-        steps: pipelineSteps,
-        candidates: [buildPendingCandidate({ label: "主执行", model: args.selectedModel })],
-        pipelineMetadata: {
-          requestedMode: "sequential-chain",
-          stepCount: pipelineSteps.length,
-        },
-        source: "initialTaskDefinition",
-      }),
     } satisfies SpawnedTaskExecutionConfig;
   }
 
   return {
     taskExecutionMode: "single" as const,
-    executionPlan: JSON.stringify({
-      templateId: asNonEmptyString(args.nextStage.id) || asNonEmptyString(args.nextStage.stageKey) || "spawned-stage",
-      mode: "single",
-      steps: [{ id: "exec-0", type: "execution", status: "pending" }],
-      candidates: [buildPendingCandidate({ label: "主执行", model: args.selectedModel })],
-      source: "initialTaskDefinition",
-    }),
   } satisfies SpawnedTaskExecutionConfig;
 }
 
@@ -388,7 +309,9 @@ function buildSpawnedTaskPrompt(args: {
   ];
 
   if (definition.doneWhen.length > 0) {
-    sections.push(`完成条件：\n${definition.doneWhen.map((item) => `- ${renderTemplateString(item, variables)}`).join("\n")}`);
+    sections.push(
+      `完成条件：\n${definition.doneWhen.map((item) => `- ${renderTemplateString(item, variables)}`).join("\n")}`,
+    );
   }
 
   const contextLines: string[] = [];
@@ -465,7 +388,6 @@ async function syncSpawnedTaskContext(args: {
     authorization: args.authorization,
     body: {
       executionMode: args.executionConfig.taskExecutionMode,
-      executionPlan: args.executionConfig.executionPlan,
       strategy: mergeTaskStrategy(args.currentTask.strategy, {
         workflowTemplateId: args.templateId,
         selectedTemplateId: args.templateId,
@@ -525,7 +447,6 @@ async function spawnNextStageTask(args: {
   const executionConfig = buildSpawnedTaskExecutionConfig({
     definition: draft.definition,
     nextStage: args.nextStage,
-    selectedModel: draft.selectedModel,
   });
   const createResult = await cpFetch<TaskPayload>("/api/tasks", {
     method: "POST",
@@ -584,7 +505,10 @@ async function spawnNextStageTask(args: {
 }
 
 function summarizeText(rawText: string, maxLength = 220) {
-  const normalized = rawText.replace(/\[STAGE_COMPLETE\]/g, " ").replace(/\s+/g, " ").trim();
+  const normalized = rawText
+    .replace(/\[STAGE_COMPLETE\]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
   if (!normalized) {
     return "";
   }
@@ -849,62 +773,106 @@ export async function persistWorkflowStageExecutionOutcome(args: {
   }
 
   const nextStage = nextTemplateStage(state.templateStages, currentStageKey);
-  const currentStatus =
-    currentStageRun.status === "blocked" ||
-    currentStageRun.status === "waiting-approval" ||
-    currentStageRun.status === "failed" ||
-    currentStageRun.status === "completed"
-      ? currentStageRun.status
-      : "running";
-
-  const shouldAdvance =
-    currentStatus === "running" &&
-    (args.forceAdvance === true ||
-      (summary.completionMarked && currentTask?.autoAdvanceStages === true));
-  const advanceResult = await cpFetch(`/api/tasks/${encodeURIComponent(args.taskId)}/workflow/advance`, {
-    method: "POST",
-    authorization: args.authorization,
-    body: {
-      fromStage: currentStageKey,
-      ...(shouldAdvance && nextStage?.stageKey ? { toStage: nextStage.stageKey } : {}),
-      status: shouldAdvance ? "completed" : currentStatus,
-      artifactsSummaryJson: summary,
+  const currentStatus = resolveWorkflowStageAdvanceStatus(currentStageRun.status);
+  const shouldAdvance = shouldAdvanceWorkflowStage(currentStatus, summary, currentTask, args);
+  const advanceResult = await cpFetch(
+    `/api/tasks/${encodeURIComponent(args.taskId)}/workflow/advance`,
+    {
+      method: "POST",
+      authorization: args.authorization,
+      body: {
+        fromStage: currentStageKey,
+        ...(shouldAdvance && nextStage?.stageKey ? { toStage: nextStage.stageKey } : {}),
+        status: shouldAdvance ? "completed" : currentStatus,
+        artifactsSummaryJson: summary,
+      },
     },
-  });
+  );
 
-  let spawnedTaskId: string | undefined;
-  let spawnedTaskError: string | undefined;
-  if (
-    advanceResult.ok &&
-    shouldAdvance &&
-    !args.disableSpawnNextTask &&
-    nextStage?.stageKey &&
-    state.workflowRun.templateId
-  ) {
-    try {
-      spawnedTaskId = await spawnNextStageTask({
-        currentTaskId: args.taskId,
-        authorization: args.authorization,
-        templateId: state.workflowRun.templateId,
-        currentStageKey,
-        nextStage,
-        summary,
-      });
-    } catch (error) {
-      spawnedTaskError = error instanceof Error ? error.message : "spawn-next-stage-task-failed";
-      console.warn(
-        `[workflow-stage-execution] failed to spawn next stage task for ${args.taskId}: ${spawnedTaskError}`,
-      );
-    }
-  }
+  const spawnResult = await maybeSpawnNextWorkflowStageTask({
+    args,
+    advanceResultOk: advanceResult.ok,
+    shouldAdvance,
+    nextStage,
+    templateId: state.workflowRun.templateId,
+    currentStageKey,
+    summary,
+  });
 
   return {
     updated: advanceResult.ok,
     advanced: advanceResult.ok && shouldAdvance,
     currentStageKey,
     nextStageKey: shouldAdvance ? asNonEmptyString(nextStage?.stageKey) : undefined,
-    spawnedTaskId,
-    spawnedTaskError,
+    spawnedTaskId: spawnResult.spawnedTaskId,
+    spawnedTaskError: spawnResult.spawnedTaskError,
     summary,
   } as const;
+}
+
+function resolveWorkflowStageAdvanceStatus(status: string | null | undefined) {
+  return status === "blocked" ||
+    status === "waiting-approval" ||
+    status === "failed" ||
+    status === "completed"
+    ? status
+    : "running";
+}
+
+function shouldAdvanceWorkflowStage(
+  currentStatus: string,
+  summary: WorkflowStageArtifactSummary,
+  currentTask: Awaited<ReturnType<typeof fetchTask>>,
+  args: {
+    forceAdvance?: boolean;
+  },
+) {
+  return (
+    currentStatus === "running" &&
+    (args.forceAdvance === true ||
+      (summary.completionMarked && currentTask?.autoAdvanceStages === true))
+  );
+}
+
+async function maybeSpawnNextWorkflowStageTask(input: {
+  args: {
+    taskId: string;
+    authorization: string;
+    disableSpawnNextTask?: boolean;
+  };
+  advanceResultOk: boolean;
+  shouldAdvance: boolean;
+  nextStage: { stageKey?: string | null } | null | undefined;
+  templateId: string | null | undefined;
+  currentStageKey: string;
+  summary: WorkflowStageArtifactSummary;
+}) {
+  if (
+    !input.advanceResultOk ||
+    !input.shouldAdvance ||
+    input.args.disableSpawnNextTask ||
+    !input.nextStage?.stageKey ||
+    !input.templateId
+  ) {
+    return { spawnedTaskId: undefined, spawnedTaskError: undefined };
+  }
+
+  try {
+    const spawnedTaskId = await spawnNextStageTask({
+      currentTaskId: input.args.taskId,
+      authorization: input.args.authorization,
+      templateId: input.templateId,
+      currentStageKey: input.currentStageKey,
+      nextStage: input.nextStage,
+      summary: input.summary,
+    });
+    return { spawnedTaskId, spawnedTaskError: undefined };
+  } catch (error) {
+    const spawnedTaskError =
+      error instanceof Error ? error.message : "spawn-next-stage-task-failed";
+    console.warn(
+      `[workflow-stage-execution] failed to spawn next stage task for ${input.args.taskId}: ${spawnedTaskError}`,
+    );
+    return { spawnedTaskId: undefined, spawnedTaskError };
+  }
 }

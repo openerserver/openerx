@@ -1,5 +1,5 @@
-import { computed, ref, watch, type Ref } from "vue";
-import { listTasks, type Task } from "../lib/api";
+import { type Ref, computed, ref, watch } from "vue";
+import { type Task, listTasks } from "../lib/api";
 
 export interface TaskSwitcherOption {
   value: string;
@@ -43,9 +43,13 @@ export function useTaskSwitcher(projectId: Ref<string | undefined>, currentTaskI
     return mapped;
   });
 
-  watch(projectId, () => {
-    void refresh();
-  }, { immediate: true });
+  watch(
+    projectId,
+    () => {
+      void refresh();
+    },
+    { immediate: true },
+  );
 
   return {
     tasks,

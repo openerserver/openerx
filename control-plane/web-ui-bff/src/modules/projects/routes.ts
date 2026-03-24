@@ -15,10 +15,13 @@ import {
 import { fetchProjectRuntimeUsageBaseline } from "../../lib/runtime-usage-ledger";
 import type { JWTPayload } from "../../middleware/auth";
 import { getSessionMessages } from "../agent-control/opencode-adapter";
-import { fetchTaskSessionTimeline } from "../tasks/task-session-compat";
 import {
-  type ProjectTaskListItemPayload,
+  fetchTaskSessionTimeline,
+  normalizeTaskSessionTimelineMeta,
+} from "../tasks/task-session-compat";
+import {
   type ProjectStageRuntimeSummaryViewModel,
+  type ProjectTaskListItemPayload,
   buildProjectWorkflowStageRuntimeSummaries,
   buildTaskWorkflowViewModel,
   fetchProjectTaskList,
@@ -1096,7 +1099,9 @@ async function buildProjectBossOperationsView(projectId: string, authorization: 
   };
 }
 
-function inferTaskStageLabel(task: ProjectTaskGraphTaskRecord): string | null {
+function inferTaskStageLabel(
+  task: Pick<ProjectTaskGraphTaskViewModel, "category" | "strategy">,
+): string | null {
   if (typeof task.category === "string" && task.category.trim()) {
     return task.category.trim();
   }
@@ -1110,9 +1115,12 @@ async function buildProjectTaskGraphView(projectId: string, authorization: strin
   const [projectResult, taskResult, linkResult, bindingResult] = await Promise.all([
     cpFetch<ProjectRecord>(`/api/projects/${encodeURIComponent(projectId)}`, { authorization }),
     fetchProjectTaskList({ projectId, authorization, limit: 200 }),
-    cpFetch<{ data?: ProjectTreeLinkRecord[] }>(`/api/projects/${encodeURIComponent(projectId)}/links`, {
-      authorization,
-    }),
+    cpFetch<{ data?: ProjectTreeLinkRecord[] }>(
+      `/api/projects/${encodeURIComponent(projectId)}/links`,
+      {
+        authorization,
+      },
+    ),
     fetchProjectWorkflowBinding(projectId, authorization),
   ]);
 
@@ -1129,70 +1137,21 @@ async function buildProjectTaskGraphView(projectId: string, authorization: strin
   }
 
   const rawTasks = taskResult.data || [];
+  const stageKeyToName = await loadWorkflowStageNameMap(bindingResult, authorization);
+  const taskStageMap = await loadTaskWorkflowStageMap(rawTasks, authorization);
 
-  // Build stageKey → human-readable name map from workflow template
-  const stageKeyToName = new Map<string, string>();
-  const templateId = bindingResult.ok ? bindingResult.data?.workflowTemplateId : null;
-  if (templateId) {
-    const stagesResult = await fetchWorkflowTemplateStages(templateId, authorization);
-    if (stagesResult.ok && stagesResult.data?.data) {
-      for (const stage of stagesResult.data.data) {
-        if (stage.stageKey && stage.name) {
-          stageKeyToName.set(stage.stageKey, stage.name);
-        }
-      }
-    }
-  }
-
-  // Fetch workflow runs in parallel to get currentStage for each task
-  const taskStageMap = new Map<string, string>();
-  await Promise.all(
-    rawTasks.map((task) =>
-      cpFetch<{ data?: { workflowRun?: { currentStage?: string } | null } }>(
-        `/api/tasks/${encodeURIComponent(task.id)}/workflow`,
-        { authorization },
-      ).then((result) => {
-        const stageKey = result.ok ? result.data?.data?.workflowRun?.currentStage : undefined;
-        if (stageKey) {
-          taskStageMap.set(task.id, stageKey);
-        }
-      }),
-    ),
-  );
-
-  const tasks = rawTasks.map(
-    (task) => {
-      const stageKey = taskStageMap.get(task.id);
-      const stageName = stageKey ? (stageKeyToName.get(stageKey) || stageKey) : null;
-      return {
-        ...task,
-        currentStageLabel: stageName || inferTaskStageLabel(task),
-        latestActivityAt: task.finishedAt || task.startedAt || task.createdAt || null,
-      } satisfies ProjectTaskGraphTaskViewModel;
-    },
-  );
+  const tasks = rawTasks.map((task) => {
+    const stageKey = taskStageMap.get(task.id);
+    const stageName = stageKey ? stageKeyToName.get(stageKey) || stageKey : null;
+    return {
+      ...task,
+      currentStageLabel: stageName || inferTaskStageLabel(task),
+      latestActivityAt: task.finishedAt || task.startedAt || task.createdAt || null,
+    } satisfies ProjectTaskGraphTaskViewModel;
+  });
 
   const taskIds = new Set(tasks.map((task) => task.id));
-  const edges = (linkResult.data?.data || [])
-    .filter(
-      (link) =>
-        taskIds.has(link.sourceNodeId) &&
-        taskIds.has(link.targetNodeId) &&
-        (link.linkType === "depends-on" || link.linkType === "blocks" || link.linkType === "spawned"),
-    )
-    .map((link) => {
-      const relationSource = link.metadata?.relationSource;
-      return {
-        id: link.id,
-        sourceTaskId: link.sourceNodeId,
-        targetTaskId: link.targetNodeId,
-        type: link.linkType === "spawned" ? "spawned-from" : link.linkType,
-        source:
-          relationSource === "system" || relationSource === "task-create"
-            ? relationSource
-            : "manual",
-      } satisfies ProjectTaskGraphEdgeViewModel;
-    });
+  const edges = buildProjectTaskGraphEdges(linkResult.data?.data || [], taskIds);
 
   const relationTypes = new Set(edges.map((edge) => edge.type));
 
@@ -1216,6 +1175,89 @@ async function buildProjectTaskGraphView(projectId: string, authorization: strin
       refreshedAt: new Date().toISOString(),
     } satisfies ProjectTaskGraphViewModel,
   };
+}
+
+async function loadWorkflowStageNameMap(
+  bindingResult: Awaited<ReturnType<typeof fetchProjectWorkflowBinding>>,
+  authorization: string,
+) {
+  const stageKeyToName = new Map<string, string>();
+  const templateId = bindingResult.ok ? bindingResult.data?.workflowTemplateId : null;
+  if (!templateId) {
+    return stageKeyToName;
+  }
+
+  const stagesResult = await fetchWorkflowTemplateStages(templateId, authorization);
+  if (!stagesResult.ok || !stagesResult.data?.data) {
+    return stageKeyToName;
+  }
+
+  for (const stage of stagesResult.data.data) {
+    if (stage.stageKey && stage.name) {
+      stageKeyToName.set(stage.stageKey, stage.name);
+    }
+  }
+
+  return stageKeyToName;
+}
+
+async function loadTaskWorkflowStageMap(rawTasks: Array<{ id: string }>, authorization: string) {
+  const taskStageMap = new Map<string, string>();
+
+  await Promise.all(
+    rawTasks.map((task) =>
+      cpFetch<{ data?: { workflowRun?: { currentStage?: string } | null } }>(
+        `/api/tasks/${encodeURIComponent(task.id)}/workflow`,
+        { authorization },
+      ).then((result) => {
+        const stageKey = result.ok ? result.data?.data?.workflowRun?.currentStage : undefined;
+        if (stageKey) {
+          taskStageMap.set(task.id, stageKey);
+        }
+      }),
+    ),
+  );
+
+  return taskStageMap;
+}
+
+function mapProjectTaskGraphEdgeType(linkType: string) {
+  if (linkType === "spawned") {
+    return "spawned-from" as const;
+  }
+
+  return linkType === "depends-on" || linkType === "blocks" ? linkType : null;
+}
+
+function buildProjectTaskGraphEdges(links: ProjectTreeLinkRecord[], taskIds: Set<string>) {
+  return links
+    .filter(
+      (link) =>
+        taskIds.has(link.sourceNodeId) &&
+        taskIds.has(link.targetNodeId) &&
+        (link.linkType === "depends-on" ||
+          link.linkType === "blocks" ||
+          link.linkType === "spawned"),
+    )
+    .map((link) => {
+      const edgeType = mapProjectTaskGraphEdgeType(link.linkType);
+      if (!edgeType) {
+        return null;
+      }
+
+      const relationSource = link.metadata?.relationSource;
+      return {
+        id: link.id,
+        sourceTaskId: link.sourceNodeId,
+        targetTaskId: link.targetNodeId,
+        type: edgeType,
+        source:
+          relationSource === "system" || relationSource === "task-create"
+            ? relationSource
+            : "manual",
+      } satisfies ProjectTaskGraphEdgeViewModel;
+    })
+    .filter((edge): edge is ProjectTaskGraphEdgeViewModel => Boolean(edge));
 }
 
 async function fetchWorkflowTemplates(authorization: string) {
@@ -1445,10 +1487,7 @@ function findProjectOrchestrationErrorResponse(resources: {
   return null;
 }
 
-function selectProjectWorkflowTemplates(
-  templates: WorkflowTemplateRecord[],
-  projectId: string,
-) {
+function selectProjectWorkflowTemplates(templates: WorkflowTemplateRecord[], projectId: string) {
   return templates.filter(
     (item) => item.enabled && (item.selectableByProjects || item.projectId === projectId),
   );
@@ -1644,11 +1683,7 @@ async function buildProjectOrchestrationView(args: {
 
   const currentStages = currentStagesResult.data.data || [];
   const roleRows = roleExecutionView.rows;
-  const bindingsByRoleId = await loadBindingsByRoleId(
-    roleRows,
-    args.projectId,
-    args.authorization,
-  );
+  const bindingsByRoleId = await loadBindingsByRoleId(roleRows, args.projectId, args.authorization);
   const candidateScenarioResult = await buildCandidateScenario({
     candidateTemplateId: args.candidateTemplateId,
     currentTemplateId: workflowBinding.workflowTemplateId,
@@ -2064,10 +2099,7 @@ projectRoutes.get("/:projectId/tree", async (c) => {
     `/api/projects/${encodeURIComponent(projectId)}/tree${suffix}`,
     { authorization },
   );
-  return c.json(
-    result.data,
-    result.status as 200 | 400 | 401 | 403 | 404 | 502,
-  );
+  return c.json(result.data, result.status as 200 | 400 | 401 | 403 | 404 | 502);
 });
 
 projectRoutes.get("/:projectId/tree/:nodeId", async (c) => {
@@ -2189,7 +2221,25 @@ projectRoutes.delete("/:projectId/links/:linkId", async (c) => {
 // ── Execution Trace Types ─────────────────────────────────────────
 
 interface ExecutionTraceSegment {
-  type: "user-input" | "workflow-context" | "hook-injection" | "hook-rewrite" | "final-prompt" | "model-response";
+  type:
+    | "user-input"
+    | "workflow-context"
+    | "hook-injection"
+    | "hook-rewrite"
+    | "final-prompt"
+    | "model-response"
+    | "tool-call"
+    | "tool-output"
+    | "thinking"
+    | "file-reference"
+    | "diff"
+    | "candidate-result"
+    | "judge-decision"
+    | "chain-step-result"
+    | "status-transition"
+    | "session-activate"
+    | "session-branch"
+    | "session-archive";
   label: string;
   content: string;
   hookId?: string;
@@ -2197,6 +2247,12 @@ interface ExecutionTraceSegment {
   hookAgent?: string;
   hookDecisionAction?: string;
   timestamp?: string;
+  toolName?: string;
+  toolArgumentsSummary?: string;
+  toolStatus?: string;
+  filePath?: string;
+  fileRange?: string;
+  diffSummary?: string;
 }
 
 interface TaskExecutionTrace {
@@ -2205,6 +2261,7 @@ interface TaskExecutionTrace {
   segments: ExecutionTraceSegment[];
   timeline?: TaskSessionTimelineItem[];
   timelineMeta?: TaskSessionTimelineResponse["meta"];
+  snapshot?: TaskProjectionSnapshotRecord | null;
   hookExecutions: Array<{
     hookId: string;
     trigger: string;
@@ -2236,6 +2293,12 @@ interface TaskSessionTimelineItem {
 interface TaskSessionTimelineResponse {
   data: TaskSessionTimelineItem[];
   meta?: {
+    readSource?:
+      | "conversation-table"
+      | "task-domain-events"
+      | "conversation-table+task-domain-events"
+      | "task-domain-projection"
+      | "runtime-fallback";
     cacheState?: "none" | "partial" | "complete";
     complete?: boolean;
     includeLineage?: boolean;
@@ -2243,6 +2306,56 @@ interface TaskSessionTimelineResponse {
     cachedSessionCount?: number;
     itemCount?: number;
   };
+}
+
+interface TaskProjectionSnapshotRecord {
+  taskId: string;
+  projectId: string;
+  currentStatus: string;
+  orchestrationKind?: string | null;
+  currentRunId?: string | null;
+  currentSessionId?: string | null;
+  latestResult?: string | null;
+  latestResultSummary?: string | null;
+  latestErrorText?: string | null;
+  activeCandidateCount: number;
+  completedCandidateCount: number;
+  failedCandidateCount: number;
+  totalChainSteps: number;
+  completedChainSteps: number;
+  winnerNodeId?: string | null;
+  lastActivityAt?: string | null;
+  updatedAt: string;
+}
+
+interface TaskProjectionSnapshotResponseRecord {
+  data: TaskProjectionSnapshotRecord | null;
+  meta?: {
+    readSource?: "task-domain-projection";
+    complete?: boolean;
+  };
+}
+
+interface TaskProjectionTimelineViewItemRecord {
+  id: string;
+  taskId: string;
+  projectId: string;
+  runId?: string | null;
+  runNodeId?: string | null;
+  sessionId?: string | null;
+  messageId?: string | null;
+  itemKind: string;
+  itemRole?: string | null;
+  title?: string | null;
+  displayText?: string | null;
+  metadataJson?: Record<string, unknown> | null;
+  sortAt: string;
+  createdAt: string;
+}
+
+interface TaskProjectionTimelineViewResponseRecord {
+  data: TaskProjectionTimelineViewItemRecord[];
+  meta?: TaskSessionTimelineResponse["meta"];
 }
 
 interface FullTaskRecord {
@@ -2257,7 +2370,9 @@ interface FullTaskRecord {
   workingBranch?: string | null;
 }
 
-function parseStrategyHookExecutions(strategyJson: string | null | undefined): HookExecutionRecord[] {
+function parseStrategyHookExecutions(
+  strategyJson: string | null | undefined,
+): HookExecutionRecord[] {
   if (!strategyJson) return [];
   try {
     const strategy = JSON.parse(strategyJson);
@@ -2305,149 +2420,492 @@ async function loadExecutionTraceTimeline(
 
   return {
     items: timelineResult.data.data,
-    meta: timelineResult.data.meta,
+    meta: {
+      ...normalizeTaskSessionTimelineMeta(timelineResult.data.meta),
+    },
     complete: timelineResult.data.meta?.cacheState === "complete",
+  };
+}
+
+async function loadTaskProjectionSnapshot(taskId: string, authorization: string) {
+  const result = await cpFetch<TaskProjectionSnapshotResponseRecord>(
+    `/api/tasks/${encodeURIComponent(taskId)}/snapshot`,
+    { authorization },
+  );
+  return result.ok ? (result.data?.data ?? null) : null;
+}
+
+function mapProjectionTimelineRole(item: TaskProjectionTimelineViewItemRecord) {
+  if (item.itemKind === "user-input") return "user";
+  if (item.itemKind === "assistant-output") return "assistant";
+  if (item.itemKind === "tool-output" || item.itemKind === "tool-call") return "tool";
+  return "system";
+}
+
+function mapProjectionItemKindToSegmentType(
+  itemKind: TaskProjectionTimelineViewItemRecord["itemKind"],
+): ExecutionTraceSegment["type"] | null {
+  switch (itemKind) {
+    case "tool-call":
+    case "tool-output":
+    case "thinking":
+    case "file-reference":
+    case "diff":
+    case "candidate-result":
+    case "judge-decision":
+    case "chain-step-result":
+    case "status-transition":
+    case "session-activate":
+    case "session-branch":
+    case "session-archive":
+      return itemKind;
+    default:
+      return null;
+  }
+}
+
+function asProjectionRecord(value: unknown) {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function asProjectionString(value: unknown) {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function buildProjectionFileRange(metadata: Record<string, unknown> | null) {
+  if (!metadata) {
+    return undefined;
+  }
+
+  const startLine = typeof metadata.startLine === "number" ? metadata.startLine : null;
+  const endLine = typeof metadata.endLine === "number" ? metadata.endLine : null;
+  if (startLine === null) {
+    return undefined;
+  }
+  if (endLine !== null && endLine > startLine) {
+    return `${startLine}-${endLine}`;
+  }
+  return String(startLine);
+}
+
+function buildProjectionTimelineSegment(
+  item: TaskProjectionTimelineViewItemRecord,
+): ExecutionTraceSegment | null {
+  const type = mapProjectionItemKindToSegmentType(item.itemKind);
+  if (!type) {
+    return null;
+  }
+
+  const metadata = asProjectionRecord(item.metadataJson);
+  const toolName = asProjectionString(metadata?.toolName);
+  const toolArgumentsSummary = asProjectionString(metadata?.argumentsSummary);
+  const toolStatus = asProjectionString(metadata?.status);
+  const filePath = asProjectionString(metadata?.filePath);
+  const diffSummary = asProjectionString(metadata?.diffSummary);
+  const fileRange = buildProjectionFileRange(metadata);
+  const segmentContent = resolveProjectionTimelineSegmentContent(item, type, metadata);
+  const label = segmentContent.label;
+  const content = segmentContent.content;
+
+  if (!content) {
+    return null;
+  }
+
+  return {
+    type,
+    label,
+    content,
+    timestamp: item.sortAt,
+    toolName,
+    toolArgumentsSummary,
+    toolStatus,
+    filePath,
+    fileRange,
+    diffSummary,
+  } satisfies ExecutionTraceSegment;
+}
+
+function resolveProjectionTimelineSegmentContent(
+  item: TaskProjectionTimelineViewItemRecord,
+  type: ExecutionTraceSegment["type"],
+  metadata: Record<string, unknown> | null,
+) {
+  const toolName = asProjectionString(metadata?.toolName);
+  const toolArgumentsSummary = asProjectionString(metadata?.argumentsSummary);
+  const filePath = asProjectionString(metadata?.filePath);
+  const diffSummary = asProjectionString(metadata?.diffSummary);
+  const baseLabel = item.title || item.itemKind;
+  const baseContent = item.displayText || item.title || "";
+
+  if (type === "tool-call") {
+    return {
+      label: toolName ? `工具调用 ${toolName}` : baseLabel,
+      content: toolArgumentsSummary || baseContent,
+    };
+  }
+
+  if (type === "tool-output") {
+    return {
+      label: toolName ? `工具输出 ${toolName}` : baseLabel,
+      content: asProjectionString(metadata?.outputSummary) || baseContent,
+    };
+  }
+
+  if (type === "file-reference") {
+    return {
+      label: baseLabel,
+      content: asProjectionString(metadata?.locationSummary) || filePath || baseContent,
+    };
+  }
+
+  if (type === "diff") {
+    return { label: baseLabel, content: diffSummary || baseContent };
+  }
+
+  return { label: baseLabel, content: baseContent };
+}
+
+function buildProjectionTimelineSegments(items: TaskProjectionTimelineViewItemRecord[]) {
+  return items
+    .map((item) => buildProjectionTimelineSegment(item))
+    .filter((segment): segment is ExecutionTraceSegment => Boolean(segment));
+}
+
+async function loadExecutionTraceProjectionTimeline(
+  taskId: string,
+  sessionId: string,
+  authorization: string,
+) {
+  const result = await cpFetch<TaskProjectionTimelineViewResponseRecord>(
+    `/api/tasks/${encodeURIComponent(taskId)}/timeline-view?runtimeSessionId=${encodeURIComponent(sessionId)}`,
+    { authorization },
+  );
+  if (!result.ok || !Array.isArray(result.data?.data)) {
+    return null;
+  }
+
+  const items = result.data.data.map((item) => ({
+    id: item.messageId || item.runNodeId || item.id,
+    role: mapProjectionTimelineRole(item),
+    text: item.displayText || item.title || "",
+    createdAt: item.createdAt,
+    completedAt: item.sortAt,
+    raw: {
+      projection: true,
+      itemKind: item.itemKind,
+      itemRole: item.itemRole,
+      title: item.title,
+      displayText: item.displayText,
+      messageId: item.messageId,
+      runId: item.runId,
+      runNodeId: item.runNodeId,
+      sessionId: item.sessionId,
+      metadata: item.metadataJson ?? null,
+    },
+    sourceEventTypes: [`projection:${item.itemKind}`],
+  }));
+
+  return {
+    rawItems: result.data.data,
+    items,
+    meta: {
+      ...result.data.meta,
+      readSource: "task-domain-projection" as const,
+    },
+    complete: result.data.meta?.complete === true && items.length > 0,
   };
 }
 
 async function buildTaskExecutionTrace(
   taskId: string,
   authorization: string,
-): Promise<{ ok: true; status: 200; data: TaskExecutionTrace } | { ok: false; status: number; data: unknown }> {
+): Promise<
+  { ok: true; status: 200; data: TaskExecutionTrace } | { ok: false; status: number; data: unknown }
+> {
   const taskResult = await cpFetch<FullTaskRecord>(
     `/api/project-tree/tasks/${encodeURIComponent(taskId)}`,
     { authorization },
   );
-  if (!taskResult.ok) return { ok: false as const, status: taskResult.status, data: taskResult.data };
+  if (!taskResult.ok)
+    return { ok: false as const, status: taskResult.status, data: taskResult.data };
 
   const task = taskResult.data;
+  const snapshot = await loadTaskProjectionSnapshot(task.id, authorization);
   const hookExecutions = parseStrategyHookExecutions(task.strategy);
   const segments: ExecutionTraceSegment[] = [];
-  let timeline: TaskSessionTimelineItem[] = [];
-  let timelineMeta: TaskSessionTimelineResponse["meta"] | undefined;
+  const effectiveSessionId = task.sessionId || snapshot?.currentSessionId || null;
 
-  // 1. User input segment
-  segments.push({
-    type: "user-input",
-    label: "用户原始输入",
-    content: task.prompt || "",
-  });
+  segments.push(buildExecutionTraceUserInputSegment(task));
+  segments.push(...buildExecutionTraceHookSegments(hookExecutions));
 
-  // 2. Hook injection segments
-  for (const hook of hookExecutions) {
-    if (hook.trigger === "pre-execution") {
-      segments.push({
-        type: "hook-injection",
-        label: `Hook: ${hook.hookId} (${hook.trigger})`,
-        content: hook.prompt || "",
-        hookId: hook.hookId,
-        hookTrigger: hook.trigger,
-        hookAgent: hook.agent,
-        hookDecisionAction: hook.decision?.action,
-        timestamp: hook.completedAt,
-      });
+  const traceContext = await loadTaskExecutionTraceContext(task, effectiveSessionId, authorization);
 
-      if (hook.decision?.action === "rewrite-prompt" && hook.decision.rewrittenPrompt) {
-        segments.push({
-          type: "hook-rewrite",
-          label: `Hook 重写结果: ${hook.hookId}`,
-          content: hook.decision.rewrittenPrompt,
-          hookId: hook.hookId,
-          hookTrigger: hook.trigger,
-          hookAgent: hook.agent,
-          hookDecisionAction: hook.decision.action,
-          timestamp: hook.completedAt,
-        });
-      }
-    }
-  }
+  appendTaskExecutionTraceTimelineSegments(
+    segments,
+    traceContext.timeline,
+    traceContext.projectionSegments,
+  );
+  const fallbackTimelineMeta = await loadTaskExecutionTraceRuntimeFallbackSegments(
+    segments,
+    traceContext.timeline,
+    traceContext.timelineMeta,
+    snapshot,
+    effectiveSessionId,
+    task,
+    authorization,
+  );
 
-  // 3. Session messages (final prompt + model response)
-  if (task.sessionId) {
-    const timelineItems = await loadExecutionTraceTimeline(task.id, task.sessionId, authorization);
-
-    if (timelineItems) {
-      timeline = timelineItems.items;
-      timelineMeta = timelineItems.meta;
-    }
-
-    if (timelineItems?.complete) {
-      const userMessages = timelineItems.items.filter((item) => item.role === "user" && item.text);
-      if (userMessages.length > 0) {
-        segments.push({
-          type: "final-prompt",
-          label: "最终发送给模型的 Prompt",
-          content: userMessages[userMessages.length - 1]?.text || "",
-        });
-      }
-
-      const assistantMessages = timelineItems.items.filter((item) => item.role === "assistant" && item.text);
-      if (assistantMessages.length > 0) {
-        segments.push({
-          type: "model-response",
-          label: "模型回复",
-          content: assistantMessages[assistantMessages.length - 1]?.text || "",
-        });
-      }
-    } else {
-      const messagesResult = await getSessionMessages(task.sessionId, {
-        taskId: task.id,
-        authorization,
-      });
-      if (messagesResult.ok && Array.isArray(messagesResult.data)) {
-        const messages = messagesResult.data as unknown[];
-
-        // Find the last user message (final prompt sent to model)
-        const userMessages = messages.filter((m) => extractSessionMessageRole(m) === "user");
-        if (userMessages.length > 0) {
-          const lastUserMsg = userMessages[userMessages.length - 1];
-          segments.push({
-            type: "final-prompt",
-            label: "最终发送给模型的 Prompt",
-            content: extractSessionMessageText(lastUserMsg),
-          });
-        }
-
-        // Find the last assistant message (model response)
-        const assistantMessages = messages.filter((m) => extractSessionMessageRole(m) === "assistant");
-        if (assistantMessages.length > 0) {
-          const lastAssistantMsg = assistantMessages[assistantMessages.length - 1];
-          segments.push({
-            type: "model-response",
-            label: "模型回复",
-            content: extractSessionMessageText(lastAssistantMsg),
-          });
-        }
-      }
-    }
-  }
+  appendTaskExecutionTraceSnapshotFallback(segments, snapshot);
 
   return {
     ok: true,
     status: 200,
     data: {
       taskId: task.id,
-      sessionId: task.sessionId || null,
+      sessionId: effectiveSessionId,
       segments,
-      timeline,
-      timelineMeta,
-      hookExecutions: hookExecutions.map((h) => ({
-        hookId: h.hookId,
-        trigger: h.trigger,
-        status: h.status,
-        agent: h.agent,
-        model: h.model,
-        prompt: h.prompt,
-        result: h.result,
-        decision: h.decision ? {
-          action: h.decision.action,
-          reason: h.decision.reason,
-          rewrittenPrompt: h.decision.rewrittenPrompt,
-          targetModel: h.decision.targetModel,
-        } : undefined,
-        completedAt: h.completedAt,
-      })),
+      timeline: traceContext.timeline,
+      timelineMeta: fallbackTimelineMeta,
+      snapshot,
+      hookExecutions: hookExecutions.map(mapExecutionTraceHookExecution),
     },
+  };
+}
+
+function buildExecutionTraceUserInputSegment(task: FullTaskRecord) {
+  return {
+    type: "user-input",
+    label: "用户原始输入",
+    content: task.prompt || "",
+  } satisfies ExecutionTraceSegment;
+}
+
+function buildExecutionTraceHookSegments(
+  hookExecutions: ReturnType<typeof parseStrategyHookExecutions>,
+) {
+  const segments: ExecutionTraceSegment[] = [];
+
+  for (const hook of hookExecutions) {
+    if (hook.trigger !== "pre-execution") {
+      continue;
+    }
+
+    segments.push({
+      type: "hook-injection",
+      label: `Hook: ${hook.hookId} (${hook.trigger})`,
+      content: hook.prompt || "",
+      hookId: hook.hookId,
+      hookTrigger: hook.trigger,
+      hookAgent: hook.agent,
+      hookDecisionAction: hook.decision?.action,
+      timestamp: hook.completedAt,
+    });
+
+    if (hook.decision?.action === "rewrite-prompt" && hook.decision.rewrittenPrompt) {
+      segments.push({
+        type: "hook-rewrite",
+        label: `Hook 重写结果: ${hook.hookId}`,
+        content: hook.decision.rewrittenPrompt,
+        hookId: hook.hookId,
+        hookTrigger: hook.trigger,
+        hookAgent: hook.agent,
+        hookDecisionAction: hook.decision.action,
+        timestamp: hook.completedAt,
+      });
+    }
+  }
+
+  return segments;
+}
+
+async function loadTaskExecutionTraceContext(
+  task: FullTaskRecord,
+  effectiveSessionId: string | null,
+  authorization: string,
+) {
+  let timeline: TaskSessionTimelineItem[] = [];
+  let timelineMeta: TaskSessionTimelineResponse["meta"] | undefined;
+  let projectionSegments: ExecutionTraceSegment[] = [];
+
+  if (effectiveSessionId) {
+    const projectionItems = await loadExecutionTraceProjectionTimeline(
+      task.id,
+      effectiveSessionId,
+      authorization,
+    );
+
+    if (projectionItems) {
+      timeline = projectionItems.items;
+      timelineMeta = projectionItems.meta;
+      projectionSegments = buildProjectionTimelineSegments(projectionItems.rawItems);
+    }
+
+    const timelineItems =
+      projectionItems?.complete || timeline.length > 0
+        ? null
+        : await loadExecutionTraceTimeline(task.id, effectiveSessionId, authorization);
+
+    if (
+      !projectionItems?.complete &&
+      timelineItems &&
+      timelineItems.items.length >= timeline.length
+    ) {
+      timeline = timelineItems.items;
+      timelineMeta = timelineItems.meta;
+    }
+  }
+
+  return {
+    timeline,
+    timelineMeta,
+    projectionSegments,
+  };
+}
+
+function appendTaskExecutionTraceTimelineSegments(
+  segments: ExecutionTraceSegment[],
+  timeline: TaskSessionTimelineItem[],
+  projectionSegments: ExecutionTraceSegment[],
+) {
+  if (timeline.length === 0) {
+    return;
+  }
+
+  appendTaskExecutionTraceLastUserSegment(segments, timeline);
+  appendTaskExecutionTraceLastAssistantSegment(segments, timeline);
+  if (projectionSegments.length > 0) {
+    segments.push(...projectionSegments);
+  }
+}
+
+function appendTaskExecutionTraceLastUserSegment(
+  segments: ExecutionTraceSegment[],
+  timeline: TaskSessionTimelineItem[],
+) {
+  const userMessages = timeline.filter((item) => item.role === "user" && item.text);
+  if (userMessages.length > 0) {
+    segments.push({
+      type: "final-prompt",
+      label: "最终发送给模型的 Prompt",
+      content: userMessages[userMessages.length - 1]?.text || "",
+    });
+  }
+}
+
+function appendTaskExecutionTraceLastAssistantSegment(
+  segments: ExecutionTraceSegment[],
+  timeline: TaskSessionTimelineItem[],
+) {
+  const assistantMessages = timeline.filter((item) => item.role === "assistant" && item.text);
+  if (assistantMessages.length > 0) {
+    segments.push({
+      type: "model-response",
+      label: "模型回复",
+      content: assistantMessages[assistantMessages.length - 1]?.text || "",
+    });
+  }
+}
+
+async function loadTaskExecutionTraceRuntimeFallbackSegments(
+  segments: ExecutionTraceSegment[],
+  timeline: TaskSessionTimelineItem[],
+  timelineMeta: TaskSessionTimelineResponse["meta"] | undefined,
+  snapshot: Awaited<ReturnType<typeof loadTaskProjectionSnapshot>>,
+  effectiveSessionId: string | null,
+  task: FullTaskRecord,
+  authorization: string,
+) {
+  if (!effectiveSessionId || timeline.length > 0 || snapshot?.latestResult) {
+    return timelineMeta;
+  }
+
+  const messagesResult = await getSessionMessages(effectiveSessionId, {
+    taskId: task.id,
+    authorization,
+  });
+  const nextTimelineMeta = timelineMeta ?? {
+    readSource: "runtime-fallback" as const,
+    cacheState: "none" as const,
+    complete: false,
+    includeLineage: true,
+  };
+
+  if (!messagesResult.ok || !Array.isArray(messagesResult.data)) {
+    return nextTimelineMeta;
+  }
+
+  appendTaskExecutionTraceRuntimeMessages(segments, messagesResult.data as unknown[]);
+  return {
+    ...nextTimelineMeta,
+    readSource: "runtime-fallback" as const,
+    cacheState: nextTimelineMeta.cacheState ?? "none",
+    complete: false,
+    includeLineage: true,
+  };
+}
+
+function appendTaskExecutionTraceRuntimeMessages(
+  segments: ExecutionTraceSegment[],
+  messages: unknown[],
+) {
+  const userMessages = messages.filter((message) => extractSessionMessageRole(message) === "user");
+  if (userMessages.length > 0) {
+    const lastUserMsg = userMessages[userMessages.length - 1];
+    segments.push({
+      type: "final-prompt",
+      label: "最终发送给模型的 Prompt",
+      content: extractSessionMessageText(lastUserMsg),
+    });
+  }
+
+  const assistantMessages = messages.filter(
+    (message) => extractSessionMessageRole(message) === "assistant",
+  );
+  if (assistantMessages.length > 0) {
+    const lastAssistantMsg = assistantMessages[assistantMessages.length - 1];
+    segments.push({
+      type: "model-response",
+      label: "模型回复",
+      content: extractSessionMessageText(lastAssistantMsg),
+    });
+  }
+}
+
+function appendTaskExecutionTraceSnapshotFallback(
+  segments: ExecutionTraceSegment[],
+  snapshot: Awaited<ReturnType<typeof loadTaskProjectionSnapshot>>,
+) {
+  if (!segments.some((item) => item.type === "model-response") && snapshot?.latestResult) {
+    segments.push({
+      type: "model-response",
+      label: "模型回复",
+      content: snapshot.latestResult,
+    });
+  }
+}
+
+function mapExecutionTraceHookExecution(
+  hook: ReturnType<typeof parseStrategyHookExecutions>[number],
+) {
+  return {
+    hookId: hook.hookId,
+    trigger: hook.trigger,
+    status: hook.status,
+    agent: hook.agent,
+    model: hook.model,
+    prompt: hook.prompt,
+    result: hook.result,
+    decision: hook.decision
+      ? {
+          action: hook.decision.action,
+          reason: hook.decision.reason,
+          rewrittenPrompt: hook.decision.rewrittenPrompt,
+          targetModel: hook.decision.targetModel,
+        }
+      : undefined,
+    completedAt: hook.completedAt,
   };
 }
 
