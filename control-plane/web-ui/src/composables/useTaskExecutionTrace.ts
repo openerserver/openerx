@@ -2,6 +2,123 @@ import { type Ref, computed, ref, watch } from "vue";
 import { type TaskExecutionTrace, getTaskExecutionTraceView } from "../lib/api";
 
 type TraceSummaryItem = { label: string; value: string; tone?: string };
+type TraceSegmentFilter = "narrative" | "all" | "user-input" | "system-added" | "model-response" | "debug";
+type TraceMessageRoleFilter = "narrative" | "all" | "user" | "system-added" | "assistant" | "debug";
+
+const DEBUG_SEGMENT_TYPES = new Set([
+  "status-transition",
+  "session-activate",
+  "session-branch",
+  "session-archive",
+]);
+
+const SYSTEM_ADDED_SEGMENT_TYPES = new Set([
+  "workflow-context",
+  "hook-injection",
+  "hook-result",
+  "hook-rewrite",
+  "final-prompt",
+  "tool-call",
+  "tool-output",
+  "thinking",
+  "file-reference",
+  "diff",
+  "candidate-result",
+  "judge-decision",
+  "chain-step-result",
+]);
+
+const NARRATIVE_MESSAGE_ROLES = new Set(["user", "assistant", "tool"]);
+
+function resolveSyntheticUserTimestamp(trace: TaskExecutionTrace | null) {
+  const timeline = Array.isArray(trace?.timeline) ? trace.timeline : [];
+  for (let index = 0; index < timeline.length; index += 1) {
+    const item = timeline[index];
+    if (item?.createdAt || item?.completedAt) {
+      return item.createdAt ?? item.completedAt;
+    }
+  }
+
+  return undefined;
+}
+
+function resolveSyntheticAssistantTimestamp(trace: TaskExecutionTrace | null) {
+  const timeline = Array.isArray(trace?.timeline) ? trace.timeline : [];
+  for (let index = timeline.length - 1; index >= 0; index -= 1) {
+    const item = timeline[index];
+    if (item?.completedAt || item?.createdAt) {
+      return item.completedAt ?? item.createdAt;
+    }
+  }
+
+  return trace?.snapshot?.lastActivityAt ?? trace?.snapshot?.updatedAt ?? undefined;
+}
+
+function buildTraceSegmentsWithFallback(trace: TaskExecutionTrace | null) {
+  const segments = Array.isArray(trace?.segments) ? [...trace.segments] : [];
+  const hasUserInput = segments.some((segment) => segment.type === "user-input");
+  const hasModelResponse = segments.some((segment) => segment.type === "model-response");
+  const finalPrompt = typeof trace?.finalPrompt === "string" ? trace.finalPrompt.trim() : "";
+  const latestResponse = typeof trace?.latestResponse === "string" ? trace.latestResponse.trim() : "";
+
+  if (!hasUserInput && finalPrompt) {
+    segments.unshift({
+      type: "user-input",
+      label: "用户输入",
+      content: finalPrompt,
+      timestamp: resolveSyntheticUserTimestamp(trace),
+    });
+  }
+
+  if (!hasModelResponse && latestResponse) {
+    segments.push({
+      type: "model-response",
+      label: "模型回复",
+      content: latestResponse,
+      timestamp: resolveSyntheticAssistantTimestamp(trace),
+    });
+  }
+
+  return segments;
+}
+
+function buildTraceTimelineWithFallback(trace: TaskExecutionTrace | null) {
+  const timeline = Array.isArray(trace?.timeline) ? [...trace.timeline] : [];
+  const hasUser = timeline.some((item) => item.role === "user" && item.text?.trim());
+  const hasAssistant = timeline.some((item) => item.role === "assistant" && item.text?.trim());
+  const finalPrompt = typeof trace?.finalPrompt === "string" ? trace.finalPrompt.trim() : "";
+  const latestResponse = typeof trace?.latestResponse === "string" ? trace.latestResponse.trim() : "";
+
+  if (!hasUser && finalPrompt) {
+    timeline.unshift({
+      id: "synthetic-trace-user-input",
+      role: "user",
+      text: finalPrompt,
+      createdAt: resolveSyntheticUserTimestamp(trace),
+      raw: {
+        synthetic: true,
+        source: "finalPrompt",
+      },
+      sourceEventTypes: ["synthetic:finalPrompt"],
+    });
+  }
+
+  if (!hasAssistant && latestResponse) {
+    timeline.push({
+      id: "synthetic-trace-model-response",
+      role: "assistant",
+      text: latestResponse,
+      completedAt: resolveSyntheticAssistantTimestamp(trace),
+      raw: {
+        synthetic: true,
+        source: "latestResponse",
+      },
+      sourceEventTypes: ["synthetic:latestResponse"],
+    });
+  }
+
+  return timeline;
+}
 
 function buildBaseTraceSummaryItems(trace: TaskExecutionTrace): TraceSummaryItem[] {
   return [
@@ -60,14 +177,6 @@ function buildTraceSummaryItems(trace: TaskExecutionTrace): TraceSummaryItem[] {
     });
   }
 
-  if (trace.snapshot?.currentStatus) {
-    items.push({
-      label: "快照状态",
-      value: trace.snapshot.currentStatus,
-      tone: "geekblue",
-    });
-  }
-
   if (trace.truncated) {
     items.push({ label: "会话截断", value: "是", tone: "warning" });
   }
@@ -79,8 +188,8 @@ export function useTaskExecutionTrace(taskId: Ref<string>, sessionId: Ref<string
   const trace = ref<TaskExecutionTrace | null>(null);
   const loading = ref(false);
   const error = ref<string | null>(null);
-  const segmentFilter = ref<"all" | "user-input" | "hook" | "model-response">("all");
-  const messageRoleFilter = ref<"all" | "user" | "assistant" | "tool">("all");
+  const segmentFilter = ref<TraceSegmentFilter>("narrative");
+  const messageRoleFilter = ref<TraceMessageRoleFilter>("narrative");
   const expandedSegments = ref<Record<string, boolean>>({});
   const expandedMessageRaw = ref<Record<string, boolean>>({});
 
@@ -113,22 +222,35 @@ export function useTaskExecutionTrace(taskId: Ref<string>, sessionId: Ref<string
   }
 
   const filteredSegments = computed(() => {
-    const segments = trace.value?.segments ?? [];
+    const segments = buildTraceSegmentsWithFallback(trace.value);
     if (segmentFilter.value === "all") {
       return segments;
     }
-    if (segmentFilter.value === "hook") {
-      return segments.filter((segment) =>
-        ["hook-injection", "hook-result", "hook-rewrite"].includes(segment.type),
-      );
+    if (segmentFilter.value === "narrative") {
+      return segments.filter((segment) => !DEBUG_SEGMENT_TYPES.has(segment.type));
+    }
+    if (segmentFilter.value === "system-added") {
+      return segments.filter((segment) => SYSTEM_ADDED_SEGMENT_TYPES.has(segment.type));
+    }
+    if (segmentFilter.value === "debug") {
+      return segments.filter((segment) => DEBUG_SEGMENT_TYPES.has(segment.type));
     }
     return segments.filter((segment) => segment.type === segmentFilter.value);
   });
 
   const filteredMessages = computed(() => {
-    const messages = trace.value?.timeline ?? [];
+    const messages = buildTraceTimelineWithFallback(trace.value);
     if (messageRoleFilter.value === "all") {
       return messages;
+    }
+    if (messageRoleFilter.value === "narrative") {
+      return messages.filter((message) => NARRATIVE_MESSAGE_ROLES.has(message.role));
+    }
+    if (messageRoleFilter.value === "system-added") {
+      return messages.filter((message) => message.role === "tool");
+    }
+    if (messageRoleFilter.value === "debug") {
+      return messages.filter((message) => !NARRATIVE_MESSAGE_ROLES.has(message.role));
     }
     return messages.filter((message) => message.role === messageRoleFilter.value);
   });

@@ -1,8 +1,16 @@
 # Boss Agent 专项设计文档
 
+> 历史状态：本文件保留为历史讨论记录。
+>
+> 当前结论：OpenerX 不再单独存在“老板层”，原先归于“老板 Agent”的经营与治理职责已并回管理员成员体系。后续产品与系统设计不应再把老板 Agent 当作正式一等对象继续扩展。
+>
+> 命名映射：本文中的 `Boss Agent`、`BossParticipationMode`、`BossDecisionRecord`、`bossDecisions` 等术语，在当前方案中统一应理解为“管理介入 / 管理决策”的历史命名；新增设计应优先采用 `ManagementIntervention`、`ManagementParticipationMode`、`ManagementDecisionRecord`、`managementDecisions` 等命名。
+>
+> 阅读方式：本文件可用于追溯“管理介入能力”早期为何被抽象成 `boss-agent`，但不应再被视为当前主方案的命名规范来源。涉及现行产品语义、前后台边界和对象定义时，应以 [docs/organization-oriented-agent-operating-model.md](docs/organization-oriented-agent-operating-model.md)、[docs/organization-oriented-agent-frontend-information-architecture.md](docs/organization-oriented-agent-frontend-information-architecture.md) 与 [docs/organization-oriented-agent-technical-checklist.md](docs/organization-oriented-agent-technical-checklist.md) 为准。
+
 > 适用范围：OpenerX 项目经营自动化、组织化研发协作、模板调度与阶段裁决能力演进
 >
-> 目标：定义老板 Agent 的职责边界、输入输出、升级规则和自动托管等级，使其成为项目级管理员的模型替身
+> 历史目标：定义老板 Agent 的职责边界、输入输出、升级规则和自动托管等级，使其成为项目级管理员的模型替身
 
 ## 1. 文档目标
 

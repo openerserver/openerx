@@ -32,10 +32,12 @@
 
         <a-space direction="vertical" style="width: 100%" size="small">
           <a-radio-group :value="segmentFilter" size="small" button-style="solid" @update:value="segmentFilter = $event">
+            <a-radio-button value="narrative">关键内容</a-radio-button>
             <a-radio-button value="all">全部</a-radio-button>
             <a-radio-button value="user-input">用户输入</a-radio-button>
-            <a-radio-button value="hook">Hook</a-radio-button>
+            <a-radio-button value="system-added">系统补充</a-radio-button>
             <a-radio-button value="model-response">模型回复</a-radio-button>
+            <a-radio-button value="debug">调试事件</a-radio-button>
           </a-radio-group>
 
           <div class="trace-panel__segments">
@@ -74,10 +76,12 @@
           <a-divider style="margin: 4px 0" />
 
           <a-radio-group :value="messageRoleFilter" size="small" button-style="solid" @update:value="messageRoleFilter = $event">
+            <a-radio-button value="narrative">关键时间线</a-radio-button>
             <a-radio-button value="all">全部时间线</a-radio-button>
-            <a-radio-button value="user">用户</a-radio-button>
+            <a-radio-button value="user">用户输入</a-radio-button>
+            <a-radio-button value="system-added">系统补充</a-radio-button>
             <a-radio-button value="assistant">模型</a-radio-button>
-            <a-radio-button value="tool">工具</a-radio-button>
+            <a-radio-button value="debug">调试事件</a-radio-button>
           </a-radio-group>
 
           <div class="trace-panel__messages">

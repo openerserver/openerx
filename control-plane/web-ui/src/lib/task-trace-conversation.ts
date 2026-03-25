@@ -10,6 +10,88 @@ import {
 
 type TraceSourceItem = ExecutionTraceTimelineItem | ExecutionTraceMessage;
 
+function resolveSyntheticAssistantCreatedAt(trace: TaskExecutionTrace | null | undefined) {
+  const timeline = Array.isArray(trace?.timeline) ? trace.timeline : [];
+  for (let index = timeline.length - 1; index >= 0; index -= 1) {
+    const item = timeline[index];
+    if (item?.completedAt || item?.createdAt) {
+      return item.completedAt ?? item.createdAt;
+    }
+  }
+
+  return trace?.snapshot?.lastActivityAt ?? undefined;
+}
+
+function resolveSyntheticUserCreatedAt(trace: TaskExecutionTrace | null | undefined) {
+  const timeline = Array.isArray(trace?.timeline) ? trace.timeline : [];
+  for (let index = 0; index < timeline.length; index += 1) {
+    const item = timeline[index];
+    if (item?.createdAt || item?.completedAt) {
+      return item.createdAt ?? item.completedAt;
+    }
+  }
+
+  return undefined;
+}
+
+function buildSyntheticUserPromptItems(
+  trace: TaskExecutionTrace | null | undefined,
+): TraceSourceItem[] {
+  const finalPrompt = typeof trace?.finalPrompt === "string" ? trace.finalPrompt.trim() : "";
+  if (!finalPrompt) {
+    return [];
+  }
+
+  return [
+    {
+      id: "synthetic-final-prompt",
+      role: "user",
+      text: finalPrompt,
+      createdAt: resolveSyntheticUserCreatedAt(trace),
+      raw: {
+        synthetic: true,
+        info: {
+          id: "synthetic-final-prompt",
+          role: "user",
+          time: {
+            created: resolveSyntheticUserCreatedAt(trace),
+          },
+        },
+        parts: [{ type: "text", text: finalPrompt }],
+      },
+    },
+  ];
+}
+
+function buildSyntheticAssistantResponseItems(
+  trace: TaskExecutionTrace | null | undefined,
+): TraceSourceItem[] {
+  const latestResponse = typeof trace?.latestResponse === "string" ? trace.latestResponse.trim() : "";
+  if (!latestResponse) {
+    return [];
+  }
+
+  return [
+    {
+      id: "synthetic-latest-response",
+      role: "assistant",
+      text: latestResponse,
+      createdAt: resolveSyntheticAssistantCreatedAt(trace),
+      raw: {
+        synthetic: true,
+        info: {
+          id: "synthetic-latest-response",
+          role: "assistant",
+          time: {
+            completed: resolveSyntheticAssistantCreatedAt(trace),
+          },
+        },
+        parts: [{ type: "text", text: latestResponse }],
+      },
+    },
+  ];
+}
+
 type ToolSnapshot = {
   key: string;
   part: Record<string, unknown>;
@@ -198,8 +280,33 @@ export function normalizeTraceConversationItems(
   liveState: LiveAssistantState = createEmptyLiveAssistantState(),
   options?: { includeLineage?: boolean },
 ): TaskConversationMessageItem[] {
-  return resolveTraceSourceItems(trace, options)
+  const normalizedItems = resolveTraceSourceItems(trace, options)
     .map((item, index) => normalizeMessage(buildTraceLegacyMessage(item), index, liveState))
     .filter((item): item is TaskConversationMessageItem => item != null)
     .filter((item) => item.role !== "system");
+
+  const syntheticUserItems = buildSyntheticUserPromptItems(trace)
+    .map((item, index) => normalizeMessage(buildTraceLegacyMessage(item), index, liveState))
+    .filter((item): item is TaskConversationMessageItem => item != null)
+    .filter((item) => item.role === "user");
+
+  const hasUser = normalizedItems.some((item) => item.role === "user");
+  const hasAssistant = normalizedItems.some((item) => item.role === "assistant");
+
+  if (hasUser && hasAssistant) {
+    return normalizedItems;
+  }
+
+  const syntheticAssistantItems = hasAssistant
+    ? []
+    : buildSyntheticAssistantResponseItems(trace)
+        .map((item, index) => normalizeMessage(buildTraceLegacyMessage(item), index, liveState))
+        .filter((item): item is TaskConversationMessageItem => item != null)
+        .filter((item) => item.role === "assistant");
+
+  return [
+    ...(hasUser ? [] : syntheticUserItems),
+    ...normalizedItems,
+    ...syntheticAssistantItems,
+  ];
 }

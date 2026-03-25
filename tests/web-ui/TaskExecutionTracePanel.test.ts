@@ -66,8 +66,8 @@ describe("TaskExecutionTracePanel", () => {
       },
       loading: false,
       error: null,
-      segmentFilter: "all",
-      messageRoleFilter: "all",
+      segmentFilter: "narrative",
+      messageRoleFilter: "narrative",
       expandedMessageRaw: {},
       refresh: vi.fn(),
       filteredSegments: [
@@ -122,5 +122,27 @@ describe("TaskExecutionTracePanel", () => {
     expect(wrapper.text()).toContain("includePattern");
     expect(wrapper.text()).toContain("变更");
     expect(wrapper.text()).toContain("+14 -3");
+  });
+
+  it("shows user-facing filters so the trace centers on user input, system-added context, and model replies", async () => {
+    const { default: Panel } = await import(
+      "../../control-plane/web-ui/src/components/task-detail-shared/TaskExecutionTracePanel.vue"
+    );
+
+    const wrapper = mount(Panel, {
+      props: {
+        taskId: "task-1",
+        sessionId: "ses-1",
+      },
+    });
+
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("关键内容");
+    expect(wrapper.text()).toContain("用户输入");
+    expect(wrapper.text()).toContain("系统补充");
+    expect(wrapper.text()).toContain("模型回复");
+    expect(wrapper.text()).toContain("调试事件");
+    expect(wrapper.text()).toContain("关键时间线");
   });
 });

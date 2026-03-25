@@ -4011,12 +4011,7 @@ export interface ExecutionTraceTimelineMeta {
 }
 
 export interface ExecutionTraceProjectionSnapshot {
-  taskId: string;
-  projectId: string;
-  currentStatus: string;
-  orchestrationKind?: string | null;
-  currentRunId?: string | null;
-  currentSessionId?: string | null;
+  status: string;
   latestResult?: string | null;
   latestResultSummary?: string | null;
   latestErrorText?: string | null;
@@ -4025,9 +4020,15 @@ export interface ExecutionTraceProjectionSnapshot {
   failedCandidateCount: number;
   totalChainSteps: number;
   completedChainSteps: number;
-  winnerNodeId?: string | null;
   lastActivityAt?: string | null;
   updatedAt: string;
+  debugSnapshot?: {
+    orchestrationKind?: string | null;
+    currentStatus: string;
+    currentRunId?: string | null;
+    currentSessionId?: string | null;
+    winnerNodeId?: string | null;
+  };
 }
 
 export interface TaskExecutionTrace {
@@ -4070,7 +4071,7 @@ export async function getTaskExecutionTrace(projectId: string, taskId: string) {
 export async function getTaskExecutionTraceView(
   taskId: string,
   sessionId?: string,
-  options?: { includeLineage?: boolean },
+  options?: { includeLineage?: boolean; includeDebug?: boolean },
 ) {
   const params = new URLSearchParams();
   if (sessionId) {
@@ -4078,6 +4079,9 @@ export async function getTaskExecutionTraceView(
   }
   if (options?.includeLineage === false) {
     params.set("includeLineage", "false");
+  }
+  if (options?.includeDebug === true) {
+    params.set("includeDebug", "true");
   }
   const query = params.toString();
   return request<TaskExecutionTrace>(

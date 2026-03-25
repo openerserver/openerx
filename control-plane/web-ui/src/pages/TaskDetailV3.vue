@@ -395,8 +395,16 @@ const editableExecutionMode = computed<ExecutionMode>(() =>
 const editableJudgeConfig = computed(() => resolveEditableJudgeConfig(task.value));
 const editableParallelCandidates = computed(() => resolveEditableParallelCandidates(task.value));
 
-function parseTaskStrategy(raw?: string | null) {
-  if (!raw || !raw.trim()) {
+function parseTaskStrategy(raw?: string | Record<string, unknown> | null) {
+  if (!raw) {
+    return null as { sequentialSteps?: unknown } | null;
+  }
+
+  if (typeof raw === "object" && !Array.isArray(raw)) {
+    return raw as { sequentialSteps?: unknown } | null;
+  }
+
+  if (typeof raw !== "string" || !raw.trim()) {
     return null as { sequentialSteps?: unknown } | null;
   }
 

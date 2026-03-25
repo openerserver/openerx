@@ -39,8 +39,16 @@ type StrategyLike = {
 
 type JudgeLike = Partial<JudgeConfig> | null;
 
-function parseJsonObject(raw?: string | null): Record<string, unknown> | null {
-  if (!raw || !raw.trim()) {
+function parseJsonObject(raw?: string | Record<string, unknown> | null): Record<string, unknown> | null {
+  if (!raw) {
+    return null;
+  }
+
+  if (typeof raw === "object" && !Array.isArray(raw)) {
+    return raw;
+  }
+
+  if (typeof raw !== "string" || !raw.trim()) {
     return null;
   }
 

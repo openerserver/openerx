@@ -1,0 +1,1 @@
+../agent-console-redesign-plan.md

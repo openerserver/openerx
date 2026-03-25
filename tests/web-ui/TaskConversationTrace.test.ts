@@ -483,6 +483,70 @@ describe("Task conversation composables", () => {
     ]);
   });
 
+  it("falls back to latestResponse when projection timeline only contains system items", () => {
+    const items = normalizeTraceConversationItems(
+      {
+        taskId: "task-1",
+        sessionId: "session-1",
+        finalPrompt: "原始用户输入",
+        latestResponse: "投影任务的最终回复",
+        segments: [],
+        hookExecutions: [],
+        timeline: [
+          {
+            id: "timeline-system-1",
+            role: "system",
+            text: "任务进入 running 状态",
+            createdAt: "2026-03-25T09:44:23.156Z",
+            completedAt: "2026-03-25T09:44:23.156Z",
+            raw: {
+              projection: true,
+              itemKind: "status-transition",
+            },
+          },
+          {
+            id: "timeline-system-2",
+            role: "system",
+            text: "投影任务的最终回复",
+            createdAt: "2026-03-25T09:47:35.022Z",
+            completedAt: "2026-03-25T09:47:35.022Z",
+            raw: {
+              projection: true,
+              itemKind: "status-transition",
+            },
+          },
+        ],
+        timelineMeta: { cacheState: "complete", readSource: "task-domain-projection" },
+        snapshot: {
+          taskId: "task-1",
+          projectId: "proj-1",
+          currentStatus: "completed",
+          activeCandidateCount: 0,
+          completedCandidateCount: 0,
+          failedCandidateCount: 0,
+          totalChainSteps: 0,
+          completedChainSteps: 0,
+          lastActivityAt: "2026-03-25T09:47:35.022Z",
+          updatedAt: "2026-03-25T09:47:35.029Z",
+        },
+      },
+      undefined,
+      { includeLineage: true },
+    );
+
+    expect(items).toHaveLength(2);
+    expect(items[0]).toMatchObject({
+      role: "user",
+      text: "原始用户输入",
+      isStreaming: false,
+    });
+    expect(items[1]).toMatchObject({
+      role: "assistant",
+      text: "投影任务的最终回复",
+      isStreaming: false,
+    });
+  });
+
   it("extracts file path from apply_patch payloads", async () => {
     apiMocks.getTaskExecutionTraceView.mockResolvedValue(
       createTraceFromMessages([
@@ -734,6 +798,32 @@ describe("Task conversation composables", () => {
       model: "github-copilot:gpt-5.4",
       timeoutMs: 45000,
       selectionStrategy: "highest-score",
+    });
+  });
+
+  it("accepts object-form task strategy payloads from the API", () => {
+    const task = {
+      executionMode: undefined,
+      strategy: {
+        executionMode: "parallel",
+        parallelCandidates: [{ model: "github-copilot:gpt-5.4", label: "候选 A" }],
+        judge: {
+          enabled: true,
+          agent: "prometheus-enterprise",
+          model: "github-copilot:gpt-5.4",
+        },
+      },
+    };
+
+    expect(resolveEditableExecutionMode(task as never)).toBe("parallel");
+    expect(resolveEditableParallelCandidates(task as never)).toEqual([
+      { model: "github-copilot:gpt-5.4", label: "候选 A" },
+    ]);
+    expect(resolveEditableJudgeConfig(task as never)).toEqual({
+      ...DEFAULT_JUDGE_CONFIG,
+      enabled: true,
+      agent: "prometheus-enterprise",
+      model: "github-copilot:gpt-5.4",
     });
   });
 });

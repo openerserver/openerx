@@ -2,7 +2,7 @@
 
 > 适用范围：OpenerX 组织架构化 Agent 方案的工程落地
 >
-> 目标：将协作模式、自动托管等级、老板 Agent、模板中心、阶段推进器、角色聚合器等概念，收敛为可执行的技术实施清单
+> 目标：将协作模式、自动托管等级、管理介入、模板中心、阶段推进器、角色聚合器等概念，收敛为可执行的技术实施清单
 
 ## 1. 文档目标
 
@@ -31,7 +31,7 @@
 
 1. 协作模式可配置
 2. 自动托管等级可配置
-3. 老板 Agent 可配置启用
+3. 管理介入能力可配置启用
 4. 模板可表达单兵模式、组织化协作模式和混合模式
 5. 阶段推进与角色聚合可逐步接入，而不是一次性替换现有任务主链
 
@@ -42,6 +42,29 @@
 - 第一阶段避免引入过多新表，优先落在现有 JSON 和模板结构中
 - 前端默认采用“新增页面 / 新路由承载”策略，尽量不直接重构现有主页面
 - 现有页面只承担最小入口挂接职责，例如跳转入口、摘要入口、详情入口
+
+补充一条语义约束：
+
+- Role 在工程实现中一律视为后台治理约束对象，用于表达责任边界、阶段准入、动作权限与责任归属
+- Role 不应用于定义成员身份本体，也不应用于替代 Skill 的能力表达
+- 前台页面默认展示“成员分工”“职责说明”“可执行动作”，不要求用户直接操作原始 Role 对象
+- 文中仍保留的 `boss*`、`Boss*` 等命名，当前均按历史兼容字段理解，其实际产品语义应并入管理员治理能力，而不是独立老板层
+
+### 2.1 历史命名映射
+
+为避免技术清单继续放大旧心智，后续方案文档统一采用“管理介入 / 管理决策”命名；现有实现中的 `boss*`、`Boss*` 仅作为历史兼容名称保留。
+
+建议映射如下：
+
+- `BossParticipationMode` -> `ManagementParticipationMode`
+- `bossParticipationMode` -> `managementParticipationMode`
+- `defaultBossParticipationMode` -> `defaultManagementParticipationMode`
+- `allowBossAutoTemplateSwitch` -> `allowManagementAutoTemplateSwitch`
+- `BossDecisionRecord` -> `ManagementDecisionRecord`
+- `bossDecisions` -> `managementDecisions`
+- `boss-decision` -> `management-decision`
+
+如果短期内代码尚未完成重命名，应至少在接口文档、页面文案和设计文档中统一解释为“管理介入历史兼容字段”。
 
 ## 3. 核心技术对象
 
@@ -73,12 +96,12 @@ type AutopilotLevel = "L0" | "L1" | "L2";
 - `L1`：半自动经营
 - `L2`：全自动托管
 
-### 3.3 老板参与模式
+### 3.3 管理介入模式
 
-建议在运行态中显式表达老板参与强度，而不是仅靠协作模式推导：
+建议在运行态中显式表达管理介入强度，而不是仅靠协作模式推导：
 
 ```ts
-type BossParticipationMode =
+type ManagementParticipationMode =
   | "disabled"
   | "advisory"
   | "exception-only"
@@ -87,10 +110,12 @@ type BossParticipationMode =
 
 语义：
 
-- `disabled`：老板不参与
-- `advisory`：老板只给建议
-- `exception-only`：老板只在异常、高风险和审批场景介入
-- `full-manager`：老板负责项目经营与阶段推进
+- `disabled`：管理者不介入
+- `advisory`：管理者只给建议
+- `exception-only`：管理者只在异常、高风险和审批场景介入
+- `full-manager`：管理者负责经营决策、审批把关与阶段推进
+
+兼容说明：若现有代码仍使用 `BossParticipationMode`，应视为 `ManagementParticipationMode` 的历史别名。
 
 ### 3.4 推荐策略对象
 
@@ -101,7 +126,7 @@ interface RecommendedOperatingProfile {
   scenarioKey: string;
   collaborationMode: CollaborationMode;
   autopilotLevel: AutopilotLevel;
-  bossParticipationMode: BossParticipationMode;
+  managementParticipationMode: ManagementParticipationMode;
   templateHints?: string[];
   requiredRoleHints?: string[];
   reason: string;
@@ -116,9 +141,9 @@ interface RecommendedOperatingProfile {
 interface OperatingModeSelection {
   collaborationMode: CollaborationMode;
   autopilotLevel: AutopilotLevel;
-  bossParticipationMode: BossParticipationMode;
+  managementParticipationMode: ManagementParticipationMode;
   selectedTemplateId?: string | null;
-  source: "system-default" | "project-default" | "task-override" | "boss-decision";
+  source: "system-default" | "project-default" | "task-override" | "management-decision";
 }
 ```
 
@@ -132,7 +157,7 @@ interface OperatingModeSelection {
 interface PlatformOrganizationSettings {
   defaultCollaborationMode: CollaborationMode;
   defaultAutopilotLevel: AutopilotLevel;
-  defaultBossParticipationMode: BossParticipationMode;
+  defaultManagementParticipationMode: ManagementParticipationMode;
   allowProjectModeOverride: boolean;
   allowTaskModeOverride: boolean;
   requireHumanApprovalForL2: boolean;
@@ -154,9 +179,9 @@ interface PlatformOrganizationSettings {
 interface ProjectOrganizationSettings {
   collaborationMode?: CollaborationMode;
   autopilotLevel?: AutopilotLevel;
-  bossParticipationMode?: BossParticipationMode;
+  managementParticipationMode?: ManagementParticipationMode;
   preferredTemplateId?: string | null;
-  allowBossAutoTemplateSwitch?: boolean;
+  allowManagementAutoTemplateSwitch?: boolean;
   allowHybridEscalation?: boolean;
 }
 ```
@@ -174,7 +199,7 @@ interface ProjectOrganizationSettings {
 interface TaskOperatingModeOverride {
   collaborationMode?: CollaborationMode;
   autopilotLevel?: AutopilotLevel;
-  bossParticipationMode?: BossParticipationMode;
+  managementParticipationMode?: ManagementParticipationMode;
   preferredTemplateId?: string;
 }
 ```
@@ -223,12 +248,12 @@ interface PersistedTaskStrategy {
 
   collaborationMode?: CollaborationMode;
   autopilotLevel?: AutopilotLevel;
-  bossParticipationMode?: BossParticipationMode;
+  managementParticipationMode?: ManagementParticipationMode;
   operatingModeSource?: OperatingModeSelection["source"];
 
   currentStageKey?: string;
   currentStageStatus?: string;
-  bossDecisions?: BossDecisionRecord[];
+  managementDecisions?: ManagementDecisionRecord[];
   escalationRequests?: HumanEscalationRequest[];
 
   roleBindingResults?: BindingResult[];
@@ -237,12 +262,12 @@ interface PersistedTaskStrategy {
 }
 ```
 
-### 5.3 老板决策对象
+### 5.3 管理决策对象
 
 建议定义：
 
 ```ts
-interface BossDecisionRecord {
+interface ManagementDecisionRecord {
   id: string;
   ts: string;
   decisionType:
@@ -302,6 +327,8 @@ interface HumanEscalationRequest {
 - `control-plane/web-ui-bff/src/modules/workflow-runtime/stage-status-store.ts`
 - `control-plane/web-ui-bff/src/modules/workflow-runtime/stage-gate-evaluator.ts`
 
+说明：以上 `boss-agent/*` 路径是基于现有实现结构列出的历史目录名；若后续进行目录重构，建议统一迁移到 `management-intervention/*` 或等价语义目录下。
+
 ### 6.2 角色聚合层
 
 延续现有建议，保持独立模块：
@@ -322,9 +349,9 @@ interface HumanEscalationRequest {
 建议接入顺序：
 
 1. 创建任务后先解析 `OperatingModeSelection`
-2. 根据 `collaborationMode` 决定是否启用老板 Agent 和阶段推进器
-3. 根据 `bossParticipationMode` 决定老板是全程参与、异常参与还是禁用
-4. 根据 `autopilotLevel` 决定是否自动应用老板决策或等待人工确认
+2. 根据 `collaborationMode` 决定是否启用管理介入决策器和阶段推进器
+3. 根据 `managementParticipationMode` 决定管理者是全程介入、异常介入还是禁用
+4. 根据 `autopilotLevel` 决定是否自动应用管理决策或等待人工确认
 
 ## 7. 前端页面改造清单
 
@@ -334,7 +361,7 @@ interface HumanEscalationRequest {
 
 - 默认协作模式
 - 默认自动托管等级
-- 默认老板参与模式
+- 默认管理介入模式
 - 是否允许项目覆盖
 - 是否允许任务覆盖
 - 混合模式触发条件配置
@@ -346,8 +373,8 @@ interface HumanEscalationRequest {
 
 - 当前协作模式
 - 当前自动托管等级
-- 当前老板参与方式
-- 当前模板来源：平台默认 / 项目绑定 / 老板切换 / 任务覆盖
+- 当前管理介入方式
+- 当前模板来源：平台默认 / 项目绑定 / 管理介入切换 / 任务覆盖
 - 推荐组合说明
 
 ### 7.3 任务详情页
@@ -355,7 +382,7 @@ interface HumanEscalationRequest {
 建议增加：
 
 - 当前运行档位卡片
-- 老板最近决策卡片
+- 管理最近决策卡片
 - 当前阶段卡片
 - 是否触发人类升级
 - 当前是否处于单兵 / 团队 / 混合切换状态
@@ -382,28 +409,28 @@ const DEFAULT_RECOMMENDED_PROFILES: RecommendedOperatingProfile[] = [
     scenarioKey: "small-task",
     collaborationMode: "solo",
     autopilotLevel: "L1",
-    bossParticipationMode: "exception-only",
-    reason: "小任务优先效率，默认只在异常和高风险时引入老板建议。",
+    managementParticipationMode: "exception-only",
+    reason: "小任务优先效率，默认只在异常和高风险时引入管理建议。",
   },
   {
     scenarioKey: "cross-system-refactor",
     collaborationMode: "team",
     autopilotLevel: "L1",
-    bossParticipationMode: "full-manager",
+    managementParticipationMode: "full-manager",
     reason: "跨系统改造需要架构、开发、测试和运维共同参与。",
   },
   {
     scenarioKey: "production-release",
     collaborationMode: "hybrid",
     autopilotLevel: "L0",
-    bossParticipationMode: "exception-only",
+    managementParticipationMode: "exception-only",
     reason: "生产发布前期追求效率，进入发布阶段后加强治理与人工确认。",
   },
   {
     scenarioKey: "security-fix",
     collaborationMode: "team",
     autopilotLevel: "L0",
-    bossParticipationMode: "full-manager",
+    managementParticipationMode: "full-manager",
     reason: "安全修复需要安全、架构、开发和测试共同参与，并保留人工把关。",
   },
 ];
@@ -426,7 +453,7 @@ interface HybridEscalationRule {
   operator: "eq" | "in" | "gte";
   value: string | string[] | number;
   escalateToMode: CollaborationMode;
-  escalateBossParticipationMode: BossParticipationMode;
+  escalateManagementParticipationMode: ManagementParticipationMode;
 }
 ```
 
@@ -453,8 +480,8 @@ interface HybridEscalationRule {
 建议增加或扩展：
 
 - 创建任务时允许传 `operatingModeOverride`
-- `GET /api/tasks/:taskId` 返回 `collaborationMode`、`autopilotLevel`、`bossParticipationMode`
-- `GET /api/tasks/:taskId/boss-decisions`
+- `GET /api/tasks/:taskId` 返回 `collaborationMode`、`autopilotLevel`、`managementParticipationMode`
+- `GET /api/tasks/:taskId/management-decisions`
 - `GET /api/tasks/:taskId/escalations`
 
 ## 10. 实施顺序建议
@@ -472,12 +499,12 @@ interface HybridEscalationRule {
 
 ### Phase 2
 
-目标：把老板 Agent 真正接入执行主链。
+目标：把管理介入决策真正接入执行主链。
 
 建议完成：
 
 - `OperatingModeSelection` 解析器
-- 老板决策引擎 MVP
+- 管理决策引擎 MVP
 - `PersistedTaskStrategy` 扩展
 - 人类升级请求对象
 
@@ -497,7 +524,7 @@ interface HybridEscalationRule {
 1. 系统中可以显式配置协作模式和自动托管等级，而不是靠隐式规则推导。
 2. 项目和任务都能看出当前运行档位及其来源。
 3. 推荐使用场景表已被编码为系统策略对象，而不是只存在于文档中。
-4. 老板 Agent 是否参与、以什么强度参与、何时升级给人类，都有结构化表达。
+4. 管理介入是否参与、以什么强度参与、何时升级给人类，都有结构化表达。
 5. 单兵模式、组织化协作模式和混合模式都能在任务主链中被正确解释和执行。
 
 ## 12. 总结
@@ -506,8 +533,8 @@ interface HybridEscalationRule {
 
 - 协作模式
 - 自动托管等级
-- 老板参与方式
+- 管理介入方式
 - 推荐使用场景
 - 运行态来源与升级规则
 
-只要这五类对象被稳定表达出来，后续老板 Agent、阶段推进器、角色聚合器和前端治理视图就都有一致的工程落点。
+只要这五类对象被稳定表达出来，后续管理介入决策器、阶段推进器、角色聚合器和前端治理视图就都有一致的工程落点。
