@@ -48,6 +48,7 @@ export type TaskSessionTimelineReadSource =
   | "conversation-table"
   | "task-domain-events"
   | "conversation-table+task-domain-events"
+  | "opencode-runtime"
   | "task-domain-projection";
 
 export type BranchCompatTimelineReadSource = TaskSessionTimelineReadSource;

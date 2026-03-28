@@ -343,7 +343,7 @@ describe("ProjectDetail", () => {
     expect(headerActions.exists()).toBe(true);
     expect(wrapper.text()).toContain("default · 默认从运行档位进入，更多观察入口在右上角");
     expect(wrapper.text()).toContain("更多操作");
-    expect(wrapper.text()).not.toContain("任务总图老板经营视图");
+    expect(wrapper.text()).not.toContain("任务总图管理介入总览");
   });
 
   it("renders expanded paid execution preflight details", async () => {

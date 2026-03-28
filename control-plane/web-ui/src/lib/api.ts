@@ -1,6 +1,7 @@
 import { useAuthStore } from "../stores/auth";
 import { type RecoverySuggestion, normalizeRecoverySuggestions } from "./recovery-suggestions";
 import { buildSessionMessagesFromExecutionTrace } from "./task-message-source";
+import { buildMergedTraceTimelineItems } from "./task-trace-conversation";
 
 const BASE_URL = "/api";
 
@@ -2814,7 +2815,20 @@ export interface HookDecision {
     | "spawn-followup";
   reason?: string;
   rewrittenPrompt?: string;
+  followupTemplateId?: string;
+  followupGoal?: string;
+  targetAgent?: string;
   targetModel?: string;
+}
+
+export interface FollowupTemplate {
+  id: string;
+  enabled: boolean;
+  agent: string;
+  model?: string;
+  promptTemplate: string;
+  timeoutMs: number;
+  resultMode?: "append" | "replace" | "advisory";
 }
 
 export interface HookExecutionRecord {
@@ -2836,6 +2850,7 @@ export interface OrchestrationStrategy {
   enablePipeline: boolean;
   hooks: LifecycleHook[];
   templates: WorkflowTemplate[];
+  followups: FollowupTemplate[];
   judge: JudgeConfig;
   organizationSettings?: PlatformOrganizationSettings;
 }
@@ -2884,6 +2899,9 @@ export interface OrchestrationCategorySummary {
   judgeModel: string;
   primaryAgents: string[];
   primaryModel: string;
+  followupEnabledCount?: number;
+  followupTemplateIds?: string[];
+  followupSummary?: string;
   notes: string[];
 }
 
@@ -3352,6 +3370,38 @@ export interface TaskWorkflowViewModel {
   developerChangeRequests: DeveloperChangeRequestViewModel[];
 }
 
+export interface TaskMemberViewMember {
+  id: string;
+  kind: "manager" | "user" | "agent";
+  displayName: string;
+  handle: string | null;
+  identitySource: "human" | "agent";
+  intentSource: "original" | "derived";
+  responsibilityLabels: string[];
+  stageLabels: string[];
+  statusLabel: string;
+  statusTone: "default" | "processing" | "success" | "warning";
+  summary: string;
+  capabilityBadges: string[];
+  runCount: number;
+  latestActivityAt: string | null;
+}
+
+export interface TaskMemberViewModel {
+  taskId: string;
+  projectId: string | null;
+  workflowStatus: string;
+  currentStageKey: string;
+  currentStageLabel: string;
+  summary: {
+    managerCount: number;
+    userCount: number;
+    agentCount: number;
+    activeAgentCount: number;
+  };
+  members: TaskMemberViewMember[];
+}
+
 export interface WorkflowTemplateRecord {
   id: string;
   projectId?: string | null;
@@ -3622,6 +3672,10 @@ export interface ProjectBossAttentionTaskItem {
   latestDecisionTs?: string | null;
 }
 
+export interface ProjectManagementAttentionTaskItem extends ProjectBossAttentionTaskItem {
+  managementDecisionCount: number;
+}
+
 export interface ProjectBossOverrideHistoryItem extends BossDecisionRecord {
   taskId: string;
   taskTitle: string;
@@ -3654,6 +3708,30 @@ export interface ProjectBossOperationsView {
   overrideHistory: ProjectBossOverrideHistoryItem[];
   escalations: ProjectBossEscalationItem[];
   attentionTasks: ProjectBossAttentionTaskItem[];
+}
+
+export interface ProjectManagementOperationsView {
+  project: {
+    id: string;
+    name: string;
+    slug: string;
+  };
+  summary: {
+    totalTasks: number;
+    tasksWithManagementDecisions: number;
+    totalManagementDecisions: number;
+    openEscalations: number;
+    blockedTasks: number;
+    waitingApprovalTasks: number;
+    tasksNeedingAttention: number;
+    manualOverrides: number;
+    tasksWithBossDecisions?: number;
+    totalBossDecisions?: number;
+  };
+  timeline: ProjectBossOperationTimelineItem[];
+  overrideHistory: ProjectBossOverrideHistoryItem[];
+  escalations: ProjectBossEscalationItem[];
+  attentionTasks: ProjectManagementAttentionTaskItem[];
 }
 
 export async function listRoleAgents(projectId?: string) {
@@ -3881,6 +3959,12 @@ export async function getProjectBossOperationsView(projectId: string) {
   );
 }
 
+export async function getProjectManagementOperationsView(projectId: string) {
+  return request<ProjectManagementOperationsView>(
+    `/projects/${encodeURIComponent(projectId)}/management-operations-view`,
+  );
+}
+
 export interface ProjectTaskGraphTaskView {
   id: string;
   projectId: string;
@@ -3998,6 +4082,7 @@ export type ExecutionTraceReadSource =
   | "conversation-table"
   | "task-domain-events"
   | "conversation-table+task-domain-events"
+  | "opencode-runtime"
   | "task-domain-projection";
 
 export interface ExecutionTraceTimelineMeta {
@@ -4056,8 +4141,23 @@ export interface TaskExecutionTrace {
       action: string;
       reason?: string;
       rewrittenPrompt?: string;
+      followupTemplateId?: string;
+      followupGoal?: string;
+      targetAgent?: string;
       targetModel?: string;
     };
+    completedAt: string;
+  }>;
+  followupExecutions: Array<{
+    templateId: string;
+    triggerHookId: string;
+    status: string;
+    failureType?: "template-missing" | "runtime-error";
+    agent: string;
+    model?: string;
+    prompt: string;
+    result?: string;
+    error?: string;
     completedAt: string;
   }>;
 }
@@ -4084,9 +4184,20 @@ export async function getTaskExecutionTraceView(
     params.set("includeDebug", "true");
   }
   const query = params.toString();
-  return request<TaskExecutionTrace>(
+  const trace = await request<TaskExecutionTrace>(
     `/tasks/${encodeURIComponent(taskId)}/execution-trace${query ? `?${query}` : ""}`,
   );
+
+  const includeLineage = options?.includeLineage ?? trace.timelineMeta?.includeLineage ?? true;
+  const mergedTimeline = buildMergedTraceTimelineItems(trace, { includeLineage });
+  if (mergedTimeline.length === 0) {
+    return trace;
+  }
+
+  return {
+    ...trace,
+    timeline: mergedTimeline,
+  };
 }
 
 export async function getRoleAgentProjectOverride(roleAgentId: string, projectId: string) {
@@ -4182,4 +4293,8 @@ export async function updateDeveloperChangeRequest(
 
 export async function getTaskWorkflowView(taskId: string) {
   return request<TaskWorkflowViewModel>(`/tasks/${encodeURIComponent(taskId)}/workflow-view`);
+}
+
+export async function getTaskMemberView(taskId: string) {
+  return request<TaskMemberViewModel>(`/tasks/${encodeURIComponent(taskId)}/member-view`);
 }

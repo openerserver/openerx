@@ -23,7 +23,7 @@ export interface TaskTreeSnapshot {
   agentRunId: string | null;
   result: string | null;
   category: TaskCategory | null;
-  strategy: string | null;
+  strategy: string | Record<string, unknown> | null;
   repoId: string | null;
   workspaceRoot: string | null;
   baseRevision: string | null;

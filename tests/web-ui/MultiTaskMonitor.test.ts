@@ -25,6 +25,7 @@ const apiMocks = vi.hoisted(() => ({
   getTask: vi.fn(),
   getTaskBranches: vi.fn(),
   getTaskConversationMessages: vi.fn(),
+  getTaskMemberView: vi.fn(),
   getTaskSessions: vi.fn(),
   getSessionMessages: vi.fn(),
   getTaskPipeline: vi.fn(),
@@ -529,6 +530,88 @@ beforeEach(() => {
   apiMocks.getTaskConversationMessages.mockImplementation((...args: unknown[]) =>
     apiMocks.getSessionMessages(...args),
   );
+  apiMocks.getTaskMemberView.mockImplementation(async (taskId: string) => {
+    if (taskId !== "task-1") {
+      return {
+        taskId,
+        projectId: "proj-1",
+        workflowStatus: "running",
+        currentStageKey: "observe",
+        currentStageLabel: "观察",
+        summary: {
+          managerCount: 1,
+          userCount: 0,
+          agentCount: 1,
+          activeAgentCount: 0,
+        },
+        members: [],
+      };
+    }
+
+    return {
+      taskId,
+      projectId: "proj-1",
+      workflowStatus: "running",
+      currentStageKey: "implement",
+      currentStageLabel: "实现开发",
+      summary: {
+        managerCount: 1,
+        userCount: 1,
+        agentCount: 1,
+        activeAgentCount: 1,
+      },
+      members: [
+        {
+          id: "human:manager-1",
+          kind: "manager",
+          displayName: "项目管理员",
+          handle: "manager",
+          identitySource: "human",
+          intentSource: "original",
+          responsibilityLabels: ["治理 / 授权 / 审批"],
+          stageLabels: [],
+          statusLabel: "已加入任务",
+          statusTone: "default",
+          summary: "负责管理介入、授权边界和最终责任兜底。",
+          capabilityBadges: ["管理者成员"],
+          runCount: 0,
+          latestActivityAt: null,
+        },
+        {
+          id: "human:user-1",
+          kind: "user",
+          displayName: "需求发起人",
+          handle: "requester",
+          identitySource: "human",
+          intentSource: "original",
+          responsibilityLabels: ["原始意图 / 协作 / 上下文"],
+          stageLabels: [],
+          statusLabel: "已加入任务",
+          statusTone: "default",
+          summary: "负责补充业务上下文、参与协作并提供原始意图。",
+          capabilityBadges: ["普通用户成员"],
+          runCount: 0,
+          latestActivityAt: null,
+        },
+        {
+          id: "agent:binding-dev",
+          kind: "agent",
+          displayName: "开发 Agent Alpha",
+          handle: "oracle-enterprise",
+          identitySource: "agent",
+          intentSource: "derived",
+          responsibilityLabels: ["开发 Agent"],
+          stageLabels: ["实现开发"],
+          statusLabel: "执行中",
+          statusTone: "processing",
+          summary: "负责 开发 Agent，关联 实现开发。",
+          capabilityBadges: ["code"],
+          runCount: 1,
+          latestActivityAt: null,
+        },
+      ],
+    };
+  });
   apiMocks.getTaskPipeline.mockImplementation(async (taskId: string) => {
     if (taskId !== "task-1") {
       return null;
@@ -649,6 +732,9 @@ describe("MultiTaskMonitor", () => {
     expect(wrapper.text()).toContain("修复生产登录故障");
     expect(wrapper.text()).toContain("已定位到登录态丢失的根因");
     expect(wrapper.text()).toContain("github-copilot:gemini-3-flash-preview");
+    expect(wrapper.text()).toContain("实现开发");
+    expect(wrapper.text()).toContain("1 管理者 · 1 用户 · 1 Agent");
+    expect(wrapper.text()).toContain("1 活跃 Agent");
   });
 
   it("renders monitor messages using the same cleaned conversation text as task detail", async () => {

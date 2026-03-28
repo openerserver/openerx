@@ -67,10 +67,10 @@ vi.mock("../../control-plane/web-ui/src/pages/RecommendedScenarios.vue", () => (
   }),
 }));
 
-vi.mock("../../control-plane/web-ui/src/pages/BossOperationsCenter.vue", () => ({
+vi.mock("../../control-plane/web-ui/src/pages/ManagementOperationsCenter.vue", () => ({
   default: defineComponent({
-    name: "MockBossOperationsCenterPage",
-    template: '<div data-testid="boss-operations-center-page">老板经营视图页</div>',
+    name: "MockManagementOperationsCenterPage",
+    template: '<div data-testid="management-operations-center-page">管理介入总览页</div>',
   }),
 }));
 
@@ -298,7 +298,24 @@ describe("users route auth", () => {
     expect(wrapper.text()).toContain("推荐场景页");
   });
 
-  it("renders the boss operations center page when authenticated", async () => {
+  it("renders the management operations center page when authenticated", async () => {
+    authState.token = "test-token";
+
+    const wrapper = mount(RouterHost, {
+      global: {
+        plugins: [router],
+      },
+    });
+
+    await router.push("/projects/proj-default/management-operations");
+    await router.isReady();
+    await flushPromises();
+
+    expect(router.currentRoute.value.name).toBe("ManagementOperationsCenter");
+    expect(wrapper.text()).toContain("管理介入总览页");
+  });
+
+  it("redirects the legacy boss operations path to the management operations route", async () => {
     authState.token = "test-token";
 
     const wrapper = mount(RouterHost, {
@@ -311,7 +328,8 @@ describe("users route auth", () => {
     await router.isReady();
     await flushPromises();
 
-    expect(router.currentRoute.value.name).toBe("BossOperationsCenter");
-    expect(wrapper.text()).toContain("老板经营视图页");
+    expect(router.currentRoute.value.name).toBe("ManagementOperationsCenter");
+    expect(router.currentRoute.value.fullPath).toBe("/projects/proj-default/management-operations");
+    expect(wrapper.text()).toContain("管理介入总览页");
   });
 });

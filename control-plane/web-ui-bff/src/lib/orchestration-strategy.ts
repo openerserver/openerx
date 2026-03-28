@@ -51,7 +51,35 @@ export interface HookDecision {
     | "spawn-followup";
   reason?: string;
   rewrittenPrompt?: string;
+  followupTemplateId?: string;
+  followupGoal?: string;
+  targetAgent?: string;
   targetModel?: string;
+}
+
+export interface FollowupTemplate {
+  id: string;
+  enabled: boolean;
+  agent: string;
+  model?: string;
+  promptTemplate: string;
+  timeoutMs: number;
+  resultMode?: "append" | "replace" | "advisory";
+}
+
+export interface FollowupExecutionRecord {
+  templateId: string;
+  triggerHookId: string;
+  status: "completed" | "failed" | "skipped";
+  failureType?: "template-missing" | "runtime-error";
+  agent: string;
+  model?: string;
+  prompt: string;
+  result?: string;
+  error?: string;
+  sessionId?: string;
+  tokenUsed?: number;
+  completedAt: string;
 }
 
 export interface HookExecutionRecord {
@@ -99,6 +127,10 @@ export function parseHookDecision(text: string | undefined): HookDecision | unde
       reason: typeof parsed.reason === "string" ? parsed.reason : undefined,
       rewrittenPrompt:
         typeof parsed.rewrittenPrompt === "string" ? parsed.rewrittenPrompt : undefined,
+      followupTemplateId:
+        typeof parsed.followupTemplateId === "string" ? parsed.followupTemplateId : undefined,
+      followupGoal: typeof parsed.followupGoal === "string" ? parsed.followupGoal : undefined,
+      targetAgent: typeof parsed.targetAgent === "string" ? parsed.targetAgent : undefined,
       targetModel: typeof parsed.targetModel === "string" ? parsed.targetModel : undefined,
     };
   } catch {
@@ -203,6 +235,7 @@ export interface PersistedTaskStrategy {
   parallelCandidates?: Array<{ model: string; label?: string }>;
   sequentialSteps?: ChainStepInput[];
   hookExecutions?: HookExecutionRecord[];
+  followupExecutions?: FollowupExecutionRecord[];
   collaborationMode?: "solo" | "team" | "hybrid";
   autopilotLevel?: "L0" | "L1" | "L2";
   bossParticipationMode?: "disabled" | "advisory" | "exception-only" | "full-manager";
@@ -263,6 +296,7 @@ export interface OrchestrationStrategy {
   categoryModelMap: Record<string, string>;
   enablePipeline: boolean;
   hooks: LifecycleHook[];
+  followups: FollowupTemplate[];
   templates: WorkflowTemplate[];
   judge: JudgeConfig;
   organizationSettings?: PlatformOrganizationSettings;
@@ -332,6 +366,7 @@ export const DEFAULT_ORCHESTRATION_STRATEGY: OrchestrationStrategy = {
   },
   enablePipeline: true,
   hooks: [],
+  followups: [],
   templates: [
     {
       id: "default-single",
@@ -364,6 +399,36 @@ export const DEFAULT_ORCHESTRATION_STRATEGY: OrchestrationStrategy = {
 
 function cloneDefaultStrategy(): OrchestrationStrategy {
   return JSON.parse(JSON.stringify(DEFAULT_ORCHESTRATION_STRATEGY)) as OrchestrationStrategy;
+}
+
+function normalizeFollowupTemplate(
+  raw: Partial<FollowupTemplate> | undefined,
+): FollowupTemplate | null {
+  if (!raw || typeof raw.id !== "string" || !raw.id.trim()) {
+    return null;
+  }
+  if (typeof raw.agent !== "string" || !raw.agent.trim()) {
+    return null;
+  }
+  if (typeof raw.promptTemplate !== "string" || !raw.promptTemplate.trim()) {
+    return null;
+  }
+
+  return {
+    id: raw.id,
+    enabled: raw.enabled ?? true,
+    agent: raw.agent,
+    model: typeof raw.model === "string" && raw.model.trim() ? raw.model : undefined,
+    promptTemplate: raw.promptTemplate,
+    timeoutMs:
+      typeof raw.timeoutMs === "number" && Number.isFinite(raw.timeoutMs) && raw.timeoutMs > 0
+        ? raw.timeoutMs
+        : 15000,
+    resultMode:
+      raw.resultMode === "append" || raw.resultMode === "replace" || raw.resultMode === "advisory"
+        ? raw.resultMode
+        : "advisory",
+  };
 }
 
 const LEGACY_PRE_HOOK_DEFAULTS: LegacyWorkflowEvaluationHook = {
@@ -523,6 +588,11 @@ export function normalizeOrchestrationStrategy(
     },
     enablePipeline: raw?.enablePipeline ?? defaults.enablePipeline,
     hooks: migrateToHooks(rawRecord),
+    followups: Array.isArray(raw?.followups)
+      ? raw.followups
+          .map((item) => normalizeFollowupTemplate(item))
+          .filter((item): item is FollowupTemplate => Boolean(item))
+      : defaults.followups,
     templates:
       Array.isArray(raw?.templates) && raw.templates.length > 0
         ? raw.templates
@@ -579,9 +649,15 @@ export function renderPromptTemplate(
   });
 }
 
-export function parseTaskStrategy(raw: string | undefined | null): PersistedTaskStrategy {
+export function parseTaskStrategy(
+  raw: string | PersistedTaskStrategy | undefined | null,
+): PersistedTaskStrategy {
   if (!raw) {
     return {};
+  }
+
+  if (typeof raw === "object" && !Array.isArray(raw)) {
+    return { ...raw };
   }
 
   try {
@@ -593,7 +669,7 @@ export function parseTaskStrategy(raw: string | undefined | null): PersistedTask
 }
 
 export function mergeTaskStrategy(
-  existingRaw: string | undefined | null,
+  existingRaw: string | PersistedTaskStrategy | undefined | null,
   patch: Partial<PersistedTaskStrategy>,
 ): string {
   const existing = parseTaskStrategy(existingRaw);
@@ -603,6 +679,9 @@ export function mergeTaskStrategy(
     hookExecutions: patch.hookExecutions
       ? [...(existing.hookExecutions || []), ...patch.hookExecutions]
       : existing.hookExecutions,
+    followupExecutions: patch.followupExecutions
+      ? [...(existing.followupExecutions || []), ...patch.followupExecutions]
+      : existing.followupExecutions,
   };
   return JSON.stringify(merged);
 }

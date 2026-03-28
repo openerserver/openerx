@@ -92,7 +92,7 @@ function buildPrompt(args: {
       },
     }),
     "支持的 configType: orchestration-strategy | models | agents | mcp | skills | commands | security | plugins。",
-    "当 configType=orchestration-strategy 时，patch 只允许包含以下顶级字段中的任意子集: categoryAgentMap, categoryModelMap, enablePipeline, hooks, templates, judge。",
+    "当 configType=orchestration-strategy 时，patch 只允许包含以下顶级字段中的任意子集: categoryAgentMap, categoryModelMap, enablePipeline, hooks, templates, followups, judge。",
     "WorkflowTemplate.mode 只能是 single 或 parallel，绝不能返回 pipeline。若要开关 pipeline，请使用顶级字段 enablePipeline。",
     "当 configType=models 时，patch 必须是完整 models 配置对象: { defaults, providers, list }。",
     "当 configType=mcp 时，patch 必须是完整 MCP server map。",

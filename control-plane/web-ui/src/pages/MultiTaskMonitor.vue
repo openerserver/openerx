@@ -225,6 +225,32 @@
               </div>
             </header>
 
+            <div
+              v-if="summaryForTask(slotProps.data.layout.taskId).currentStageLabel || summaryForTask(slotProps.data.layout.taskId).memberSummaryLabel || summaryForTask(slotProps.data.layout.taskId).agentActivityLabel"
+              class="monitor-node__compact-info"
+            >
+              <div class="monitor-node__info-row">
+                <span
+                  v-if="summaryForTask(slotProps.data.layout.taskId).currentStageLabel"
+                  class="monitor-node__info-chip"
+                >
+                  {{ summaryForTask(slotProps.data.layout.taskId).currentStageLabel }}
+                </span>
+                <span
+                  v-if="summaryForTask(slotProps.data.layout.taskId).memberSummaryLabel"
+                  class="monitor-node__info-chip"
+                >
+                  {{ summaryForTask(slotProps.data.layout.taskId).memberSummaryLabel }}
+                </span>
+                <span
+                  v-if="summaryForTask(slotProps.data.layout.taskId).agentActivityLabel"
+                  class="monitor-node__info-chip monitor-node__info-chip--active"
+                >
+                  {{ summaryForTask(slotProps.data.layout.taskId).agentActivityLabel }}
+                </span>
+              </div>
+            </div>
+
             <div class="monitor-node__stream-shell">
               <div class="monitor-node__stream-header">
                 <span class="monitor-node__stream-title">实时回复</span>
@@ -299,9 +325,11 @@ import {
   type RuntimePipeline,
   type Task,
   type TaskBranchRecord,
+  type TaskMemberViewModel,
   getTask,
   getTaskBranches,
   getTaskConversationMessages,
+  getTaskMemberView,
   getTaskPipeline,
   listTasks,
 } from "../lib/api";
@@ -350,6 +378,9 @@ interface MonitorNodeSummary {
   modelLabel: string;
   branchName: string;
   changeLabel: string;
+  currentStageLabel: string;
+  memberSummaryLabel: string;
+  agentActivityLabel: string;
 }
 
 interface MonitorLayoutSection {
@@ -432,6 +463,7 @@ interface MonitorTaskContext {
   task: Task;
   sessions: TaskBranchRecord[];
   pipeline: RuntimePipeline | null;
+  memberView: TaskMemberViewModel | null;
 }
 
 interface LiveMessageState {
@@ -498,6 +530,9 @@ const FALLBACK_SUMMARY: MonitorNodeSummary = {
   modelLabel: "",
   branchName: "",
   changeLabel: "",
+  currentStageLabel: "",
+  memberSummaryLabel: "",
+  agentActivityLabel: "",
 };
 
 const LAYOUT_MODE_OPTIONS: LayoutModeOption[] = [
@@ -1274,6 +1309,7 @@ function summaryForTask(taskId: string) {
     context.task,
     context.sessions,
     context.pipeline,
+    context.memberView,
     persistedMessages[taskId] || [],
     taskRealtimeEvents.value,
   );
@@ -2465,10 +2501,11 @@ async function refreshNodeSummary(taskId: string, skipIfBusy = false) {
   if (skipIfBusy && refreshState[taskId]) return;
   refreshState[taskId] = true;
   try {
-    const [task, sessionsResult, pipelineResult] = await Promise.all([
+    const [task, sessionsResult, pipelineResult, memberView] = await Promise.all([
       getTask(taskId),
       getTaskBranches(taskId).catch(() => ({ data: [] as TaskBranchRecord[] })),
       getTaskPipeline(taskId).catch(() => null as RuntimePipeline | null),
+      getTaskMemberView(taskId).catch(() => null as TaskMemberViewModel | null),
     ]);
     const sessions = sessionsResult.data || [];
     const activeSession = sessions.find((session) => session.isActive) || sessions[0] || null;
@@ -2476,6 +2513,7 @@ async function refreshNodeSummary(taskId: string, skipIfBusy = false) {
       task,
       sessions,
       pipeline: pipelineResult,
+      memberView,
     };
     if (activeSession?.id) {
       await refreshSessionMessagesForMonitor(taskId, activeSession.id, true);
@@ -2502,6 +2540,9 @@ async function refreshNodeSummary(taskId: string, skipIfBusy = false) {
       modelLabel: "",
       branchName: "",
       changeLabel: "",
+      currentStageLabel: "",
+      memberSummaryLabel: "",
+      agentActivityLabel: "",
     };
   } finally {
     refreshState[taskId] = false;
@@ -2533,6 +2574,7 @@ function rebuildSummaryFromCache(taskId: string) {
     context.task,
     context.sessions,
     context.pipeline,
+    context.memberView,
     persistedMessages[taskId] || [],
     taskRealtimeEvents.value,
   );
@@ -3087,6 +3129,7 @@ function buildSummary(
   task: Task,
   sessions: TaskBranchRecord[],
   pipeline: RuntimePipeline | null,
+  memberView: TaskMemberViewModel | null,
   sessionMessages: unknown[],
   realtimeEvents: RealtimeEvent[],
 ): MonitorNodeSummary {
@@ -3142,7 +3185,36 @@ function buildSummary(
     modelLabel: task.selectedModel || "",
     branchName: task.workingBranch || pipeline?.branchName || "",
     changeLabel: buildChangeLabel(task),
+    currentStageLabel: memberView?.currentStageLabel || currentStage?.label || "",
+    memberSummaryLabel: buildMemberSummaryLabel(memberView),
+    agentActivityLabel: buildAgentActivityLabel(memberView),
   };
+}
+
+function buildMemberSummaryLabel(memberView: TaskMemberViewModel | null): string {
+  if (!memberView) {
+    return "";
+  }
+
+  const parts: string[] = [];
+  if (memberView.summary.managerCount > 0) {
+    parts.push(`${memberView.summary.managerCount} 管理者`);
+  }
+  if (memberView.summary.userCount > 0) {
+    parts.push(`${memberView.summary.userCount} 用户`);
+  }
+  if (memberView.summary.agentCount > 0) {
+    parts.push(`${memberView.summary.agentCount} Agent`);
+  }
+  return parts.join(" · ");
+}
+
+function buildAgentActivityLabel(memberView: TaskMemberViewModel | null): string {
+  if (!memberView || memberView.summary.activeAgentCount <= 0) {
+    return "";
+  }
+
+  return `${memberView.summary.activeAgentCount} 活跃 Agent`;
 }
 
 function buildDurationLabel(task: Task, pipeline: RuntimePipeline | null): string {
@@ -4746,6 +4818,12 @@ function freeLayoutPreviewSlotStyle(slot: { x: number; y: number; width: number;
 .monitor-node__info-chip--change {
   color: #a8e6cf;
   border-color: rgba(0, 214, 160, 0.2);
+}
+
+.monitor-node__info-chip--active {
+  color: #a8e6cf;
+  border-color: rgba(0, 214, 160, 0.24);
+  background: rgba(0, 214, 160, 0.12);
 }
 
 .monitor-node__stream-shell {

@@ -242,14 +242,14 @@ beforeEach(() => {
   cpFetchMock.mockImplementation(async (path: string) => getProjectBossResponse(path));
 });
 
-describe("project boss operations route", () => {
+describe("project management operations route", () => {
   test("aggregates project decisions, escalations and attention tasks", async () => {
     const { projectRoutes } = await import(
       "../../control-plane/web-ui-bff/src/modules/projects/routes?project-boss-operations-route"
     );
 
     const response = await projectRoutes.request(
-      "http://localhost/proj-default/boss-operations-view",
+      "http://localhost/proj-default/management-operations-view",
       {
         headers: { Authorization: "Bearer inbound-token" },
       },
@@ -265,6 +265,8 @@ describe("project boss operations route", () => {
     });
     expect(payload.summary).toMatchObject({
       totalTasks: 2,
+      tasksWithManagementDecisions: 2,
+      totalManagementDecisions: 4,
       tasksWithBossDecisions: 2,
       totalBossDecisions: 4,
       openEscalations: 1,
@@ -327,5 +329,26 @@ describe("project boss operations route", () => {
         }),
       ]),
     );
+  });
+
+  test("keeps legacy boss operations route as an alias", async () => {
+    const { projectRoutes } = await import(
+      "../../control-plane/web-ui-bff/src/modules/projects/routes?project-boss-operations-route-legacy"
+    );
+
+    const response = await projectRoutes.request(
+      "http://localhost/proj-default/boss-operations-view",
+      {
+        headers: { Authorization: "Bearer inbound-token" },
+      },
+    );
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload.project).toMatchObject({
+      id: "proj-default",
+      name: "Default Project",
+      slug: "default",
+    });
   });
 });

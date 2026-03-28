@@ -737,4 +737,76 @@ describe("Settings – strategy operational linkages", () => {
     const switchEl = judgeCard?.find(".ant-switch");
     expect(switchEl?.classes()).toContain("ant-switch-disabled");
   });
+
+  it("renders follow-up templates and persists them on save", async () => {
+    apiMocks.getOrchestrationStrategy.mockResolvedValueOnce({
+      data: {
+        categoryAgentMap: {},
+        categoryModelMap: {},
+        enablePipeline: true,
+        hooks: [],
+        templates: [],
+        followups: [
+          {
+            id: "post-review",
+            enabled: true,
+            agent: "reviewer",
+            model: "github-copilot/gpt-4.1",
+            promptTemplate: "Review {{taskResult}}",
+            timeoutMs: 20000,
+            resultMode: "advisory",
+          },
+        ],
+        judge: {
+          enabled: false,
+          agent: "judge",
+          model: "",
+          promptTemplate: "",
+          timeoutMs: 30000,
+          selectionStrategy: "judge-pick",
+        },
+      },
+    });
+    apiMocks.getContinuationPolicy.mockResolvedValueOnce({
+      data: {
+        autoRetryOnFailure: false,
+        maxRetries: 2,
+        retryableErrors: [],
+        requireApprovalOnRetry: false,
+        fallbackModel: "",
+        enableFallback: false,
+      },
+    });
+    apiMocks.updateOrchestrationStrategy.mockResolvedValueOnce({ ok: true });
+
+    const { wrapper } = await mountSettings({ role: "platform_admin" });
+
+    const strategyTab = wrapper
+      .findAll(".ant-tabs-tab")
+      .find((tab) => tab.text().includes("编排策略"));
+    await strategyTab?.trigger("click");
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("Follow-up 模板");
+    expect(wrapper.text()).toContain("post-review");
+
+    const setupState = (wrapper.vm as { $?: { setupState?: Record<string, unknown> } }).$
+      ?.setupState;
+    expect(typeof setupState?.saveStrategy).toBe("function");
+
+    await (setupState?.saveStrategy as () => Promise<void>)();
+    await flushPromises();
+
+    expect(apiMocks.updateOrchestrationStrategy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        followups: [
+          expect.objectContaining({
+            id: "post-review",
+            agent: "reviewer",
+            resultMode: "advisory",
+          }),
+        ],
+      }),
+    );
+  });
 });

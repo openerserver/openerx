@@ -10,6 +10,9 @@ export type PipelineStagePatchReason =
   | "task.completed"
   | "task.failed"
   | "task.hooks.updated"
+  | "task.followup.started"
+  | "task.followup.completed"
+  | "task.followup.failed"
   | "task.node.updated"
   | "agent.completed";
 

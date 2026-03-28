@@ -180,7 +180,7 @@
             :task-status="task?.status ?? ''"
             :completing="completingTask"
             :advancing="advancingWorkflowStage"
-            @choose-mode="showExecutionModeModal = true"
+            @choose-mode="handleChooseMode"
             @update:auto-advance="handleAutoAdvanceToggle"
             @complete="handleCompleteTask"
             @advance="handleAdvanceStage"
@@ -204,6 +204,7 @@
             :initial-mode="editableExecutionMode"
             :initial-candidates="editableParallelCandidates"
             :initial-steps="editableSequentialSteps"
+            :initial-judge="editableJudgeConfig"
             @update:open="showExecutionModeModal = $event"
             @confirm="handleExecutionModeConfirm"
           />
@@ -228,19 +229,33 @@
                       同一条用户消息会同时发给多个模型，这里直接对比它们各自的最新回复。
                     </a-typography-text>
                   </a-space>
-                  <div style="display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr))">
+                  <div class="task-detail-parallel-grid">
                     <div
                       v-for="candidate in parallelComparisonCards"
                       :key="candidate.key"
-                      style="border: 1px solid #e8e8e8; border-radius: 12px; padding: 12px; background: #fff"
+                      class="task-detail-parallel-card"
+                      :class="{
+                        'task-detail-parallel-card--winner': candidate.isAdopted,
+                      }"
                     >
-                      <a-space size="small" wrap style="margin-bottom: 8px">
-                        <a-tag color="blue">{{ candidate.label }}</a-tag>
-                        <a-tag v-if="candidate.model" color="cyan">{{ candidate.model }}</a-tag>
-                        <a-tag :color="executionCandidateStatusColor(candidate.status)">
-                          {{ executionCandidateStatusLabel(candidate.status) }}
-                        </a-tag>
-                      </a-space>
+                      <a-flex justify="space-between" align="start" gap="small" style="margin-bottom: 8px">
+                        <a-space size="small" wrap>
+                          <a-tag color="blue">{{ candidate.label }}</a-tag>
+                          <a-tag v-if="candidate.model" color="cyan">{{ candidate.model }}</a-tag>
+                          <a-tag :color="executionCandidateStatusColor(candidate.status)">
+                            {{ executionCandidateStatusLabel(candidate.status) }}
+                          </a-tag>
+                          <a-tag v-if="candidate.isAdopted" color="gold">已采纳</a-tag>
+                        </a-space>
+                        <a-button
+                          v-if="candidate.canAdopt"
+                          type="primary"
+                          size="small"
+                          @click="handleAdoptCandidate(candidate.index)"
+                        >
+                          采纳为回复
+                        </a-button>
+                      </a-flex>
                       <a-typography-text v-if="candidate.meta" type="secondary" style="display:block; margin-bottom: 8px; font-size: 12px">
                         {{ candidate.meta }}
                       </a-typography-text>
@@ -467,129 +482,7 @@
                   description="当前任务还没有可展示的执行追踪"
                 />
                 <div v-else class="task-trace-view__grid">
-                  <section class="task-trace-panel">
-                    <div class="task-trace-panel__header">
-                      <div>
-                        <strong>来源拆解</strong>
-                        <div class="task-trace-panel__sub">按用户输入、工作流上下文、Hook、最终 Prompt 和模型回复拆开</div>
-                      </div>
-                      <a-space size="small" wrap style="margin-top: 6px">
-                        <a-radio-group :value="traceSegmentFilter" size="small" button-style="solid" @update:value="traceSegmentFilter = $event">
-                          <a-radio-button value="all">全部</a-radio-button>
-                          <a-radio-button value="user-input">用户输入</a-radio-button>
-                          <a-radio-button value="hook">Hook</a-radio-button>
-                          <a-radio-button value="model-response">模型回复</a-radio-button>
-                        </a-radio-group>
-                      </a-space>
-                    </div>
-
-                    <div v-if="runtimePlanSteps.length > 0 || runtimeJudgeSummary" class="task-trace-runtime-plan">
-                      <div v-if="runtimePlanSteps.length > 0" class="task-trace-runtime-plan__section">
-                        <a-flex justify="space-between" align="center">
-                          <a-typography-text strong>执行步骤</a-typography-text>
-                          <a-tag v-if="chainStepProgressLabel" color="processing">{{ chainStepProgressLabel }}</a-tag>
-                        </a-flex>
-                        <div
-                          v-for="(step, index) in runtimePlanSteps"
-                          :key="step.id"
-                          class="task-trace-runtime-plan__card"
-                        >
-                          <a-space size="small" wrap>
-                            <a-tag color="default">步骤 {{ index + 1 }}</a-tag>
-                            <a-tag :color="executionStepStatusColor(step.status)">
-                              {{ executionStepStatusLabel(step.status) }}
-                            </a-tag>
-                            <a-tag color="purple">{{ executionStepTitle(step, index) }}</a-tag>
-                            <a-tag v-if="step.model" color="cyan">{{ step.model }}</a-tag>
-                          </a-space>
-                          <div v-if="step.dependsOn?.length" class="task-trace-runtime-plan__meta">
-                            依赖：{{ step.dependsOn.join(" -> ") }}
-                          </div>
-                          <pre v-if="step.instruction" class="task-trace-runtime-plan__pre">{{ step.instruction }}</pre>
-                          <pre v-if="step.result" class="task-trace-runtime-plan__pre">{{ step.result }}</pre>
-                        </div>
-                      </div>
-
-                      <a-alert
-                        v-if="runtimeJudgeSummary"
-                        type="info"
-                        show-icon
-                        :message="runtimeJudgeSummary"
-                        :description="runtimeJudgeReasoning"
-                        style="margin-top: 10px"
-                      />
-                    </div>
-
-                    <a-space v-if="runtimePlanCandidates.length > 0" size="small" wrap style="margin-bottom: 12px">
-                      <a-tag color="blue">并行候选结果</a-tag>
-                    </a-space>
-
-                    <div
-                      v-for="(segment, index) in filteredTraceSegments"
-                      :key="traceSegmentKey(segment, index)"
-                      class="task-trace-segment"
-                      :class="`task-trace-segment--${traceSegmentTone(segment.type)}`"
-                    >
-                      <button
-                        type="button"
-                        class="task-trace-segment__header"
-                        @click="toggleTraceSegment(traceSegmentKey(segment, index))"
-                      >
-                        <span class="task-trace-segment__left">
-                          <span class="task-trace-segment__badge">{{ traceSegmentLabel(segment.type) }}</span>
-                          <span class="task-trace-segment__title">{{ segment.label }}</span>
-                        </span>
-                        <span class="task-trace-segment__right">
-                          <span v-if="segment.timestamp" class="task-trace-segment__time">{{ formatTime(segment.timestamp) }}</span>
-                          <span>{{ isTraceSegmentExpanded(traceSegmentKey(segment, index)) ? '收起' : '展开' }}</span>
-                        </span>
-                      </button>
-                      <div v-if="segment.hookAgent || segment.hookDecisionAction" class="task-trace-segment__meta">
-                        <span v-if="segment.hookAgent">Agent: {{ formatAgentLabel(segment.hookAgent) }}</span>
-                        <span v-if="segment.hookDecisionAction">决策: {{ segment.hookDecisionAction }}</span>
-                        <span v-if="segment.hookTrigger">触发: {{ segment.hookTrigger }}</span>
-                      </div>
-                      <div v-if="isTraceSegmentExpanded(traceSegmentKey(segment, index))" class="task-trace-segment__body">
-                        <a-space size="small" style="margin-bottom: 8px">
-                          <a-button size="small" @click="handleCopyMessage(segment.content || '(空)')">
-                            <template #icon><CopyOutlined /></template>
-                            复制原文
-                          </a-button>
-                        </a-space>
-                        <pre class="task-trace-segment__content">{{ segment.content || '(空)' }}</pre>
-                      </div>
-                    </div>
-
-                    <div v-if="taskExecutionTrace.hookExecutions.length > 0" class="task-trace-hooks">
-                      <div class="task-trace-panel__header task-trace-panel__header--nested">
-                        <div>
-                          <strong>Hook 原始记录</strong>
-                          <div class="task-trace-panel__sub">保留 prompt、result 和 decision 原文</div>
-                        </div>
-                      </div>
-                      <div
-                        v-for="(hook, index) in taskExecutionTrace.hookExecutions"
-                        :key="`${hook.hookId}-${hook.completedAt}-${index}`"
-                        class="task-trace-hook"
-                      >
-                        <div class="task-trace-hook__header">
-                          <a-space size="small" wrap>
-                            <a-tag color="blue">{{ hook.hookId }}</a-tag>
-                            <a-tag>{{ hook.trigger }}</a-tag>
-                            <a-tag :color="evaluationStatusColor(hook.status)">{{ evaluationStatusLabel(hook.status) }}</a-tag>
-                            <a-tag v-if="hook.model" color="cyan">{{ hook.model }}</a-tag>
-                          </a-space>
-                          <span class="task-trace-hook__time">{{ formatTime(hook.completedAt) }}</span>
-                        </div>
-                        <div class="task-trace-hook__meta">{{ formatAgentLabel(hook.agent) }}</div>
-                        <pre v-if="hook.prompt" class="task-trace-hook__block">{{ hook.prompt }}</pre>
-                        <pre v-if="hook.result" class="task-trace-hook__block">{{ hook.result }}</pre>
-                        <pre v-if="hook.decision" class="task-trace-hook__block">{{ stringifyTraceRaw(hook.decision) }}</pre>
-                      </div>
-                    </div>
-                  </section>
-
-                  <section class="task-trace-panel">
+                  <section class="task-trace-panel task-trace-panel--primary">
                     <div class="task-trace-panel__header">
                       <div>
                         <strong>事件时间线</strong>
@@ -601,6 +494,8 @@
                           <a-radio-button value="user">用户消息</a-radio-button>
                           <a-radio-button value="assistant">模型消息</a-radio-button>
                           <a-radio-button value="tool">工具消息</a-radio-button>
+                          <a-radio-button value="tool-request">工具发起</a-radio-button>
+                          <a-radio-button value="tool-result">工具结果</a-radio-button>
                         </a-radio-group>
                         <a-button size="small" @click="handleCopyAllMessagesJson">
                           <template #icon><CopyOutlined /></template>
@@ -645,6 +540,84 @@
                         </a-button>
                       </a-space>
                       <pre v-if="isTraceMessageRawExpanded(rawMessage.id) && rawMessage.raw" class="task-trace-message__raw">{{ stringifyTraceRaw(rawMessage.raw) }}</pre>
+                    </div>
+                  </section>
+
+                  <section v-if="hasTraceSupportingContent" class="task-trace-panel">
+                    <div v-if="runtimePlanSteps.length > 0 || runtimeJudgeSummary" class="task-trace-runtime-plan">
+                      <div class="task-trace-panel__header">
+                        <div>
+                          <strong>附加原始记录</strong>
+                          <div class="task-trace-panel__sub">保留执行步骤、Judge 结论和 Hook 原文，供排查时展开查看</div>
+                        </div>
+                      </div>
+
+                      <div v-if="runtimePlanSteps.length > 0" class="task-trace-runtime-plan__section">
+                        <a-flex justify="space-between" align="center">
+                          <a-typography-text strong>执行步骤</a-typography-text>
+                          <a-tag v-if="chainStepProgressLabel" color="processing">{{ chainStepProgressLabel }}</a-tag>
+                        </a-flex>
+                        <div
+                          v-for="(step, index) in runtimePlanSteps"
+                          :key="step.id"
+                          class="task-trace-runtime-plan__card"
+                        >
+                          <a-space size="small" wrap>
+                            <a-tag color="default">步骤 {{ index + 1 }}</a-tag>
+                            <a-tag :color="executionStepStatusColor(step.status)">
+                              {{ executionStepStatusLabel(step.status) }}
+                            </a-tag>
+                            <a-tag color="purple">{{ executionStepTitle(step, index) }}</a-tag>
+                            <a-tag v-if="step.model" color="cyan">{{ step.model }}</a-tag>
+                          </a-space>
+                          <div v-if="step.dependsOn?.length" class="task-trace-runtime-plan__meta">
+                            依赖：{{ step.dependsOn.join(" -> ") }}
+                          </div>
+                          <pre v-if="step.instruction" class="task-trace-runtime-plan__pre">{{ step.instruction }}</pre>
+                          <pre v-if="step.result" class="task-trace-runtime-plan__pre">{{ step.result }}</pre>
+                        </div>
+                      </div>
+
+                      <a-alert
+                        v-if="runtimeJudgeSummary"
+                        type="info"
+                        show-icon
+                        :message="runtimeJudgeSummary"
+                        :description="runtimeJudgeReasoning"
+                        style="margin-top: 10px"
+                      />
+                    </div>
+
+                    <a-space v-if="runtimePlanCandidates.length > 0" size="small" wrap style="margin-bottom: 12px">
+                      <a-tag color="blue">并行候选结果</a-tag>
+                    </a-space>
+
+                    <div v-if="taskExecutionTrace.hookExecutions.length > 0" class="task-trace-hooks">
+                      <div class="task-trace-panel__header task-trace-panel__header--nested">
+                        <div>
+                          <strong>Hook 原始记录</strong>
+                          <div class="task-trace-panel__sub">保留 prompt、result 和 decision 原文</div>
+                        </div>
+                      </div>
+                      <div
+                        v-for="(hook, index) in taskExecutionTrace.hookExecutions"
+                        :key="`${hook.hookId}-${hook.completedAt}-${index}`"
+                        class="task-trace-hook"
+                      >
+                        <div class="task-trace-hook__header">
+                          <a-space size="small" wrap>
+                            <a-tag color="blue">{{ hook.hookId }}</a-tag>
+                            <a-tag>{{ hook.trigger }}</a-tag>
+                            <a-tag :color="evaluationStatusColor(hook.status)">{{ evaluationStatusLabel(hook.status) }}</a-tag>
+                            <a-tag v-if="hook.model" color="cyan">{{ hook.model }}</a-tag>
+                          </a-space>
+                          <span class="task-trace-hook__time">{{ formatTime(hook.completedAt) }}</span>
+                        </div>
+                        <div class="task-trace-hook__meta">{{ formatAgentLabel(hook.agent) }}</div>
+                        <pre v-if="hook.prompt" class="task-trace-hook__block">{{ hook.prompt }}</pre>
+                        <pre v-if="hook.result" class="task-trace-hook__block">{{ hook.result }}</pre>
+                        <pre v-if="hook.decision" class="task-trace-hook__block">{{ stringifyTraceRaw(hook.decision) }}</pre>
+                      </div>
                     </div>
                   </section>
                 </div>
@@ -999,7 +972,6 @@ import {
   type ExecutionCandidate,
   type ExecutionMode,
   type ExecutionStep,
-  type ExecutionTraceSegment,
   type ExecutionTraceTimelineItem,
   type GovernanceSummary,
   type GuardDecision,
@@ -1014,6 +986,9 @@ import {
   type Task,
   type TaskBranchLineageNode,
   type TaskBranchRecord,
+  type TaskAgentRunRecord,
+  type TaskDomainRunDetailRecord,
+  type TaskDomainRunRecord,
   type TaskExecutionTrace,
   type TaskWorkflowViewModel,
   activateTaskBranch,
@@ -1030,6 +1005,9 @@ import {
   getTaskBranchLineage,
   getTaskBranches,
   getTaskConversationMessages,
+  getTaskAgentRuns,
+  getTaskDomainRunDetail,
+  getTaskDomainRuns,
   getTaskExecutionTraceView,
   getTaskGovernance,
   getTaskPipeline,
@@ -1044,6 +1022,7 @@ import { renderMarkdown } from "../lib/markdown";
 import { showRuntimeRecoveryNotice } from "../lib/runtime-recovery";
 import { RUNTIME_RECOVERY_CONTEXTS } from "../lib/runtime-recovery-notice";
 import { SETTINGS_SECTIONS, SETTINGS_TAB_MODELS } from "../lib/settings-deep-link";
+import { type ExecutionOverrides, resolveEditableJudgeConfig } from "../lib/taskExecutionMode";
 import { resolveTaskDisplayStatus } from "../lib/task-display-status";
 import { normalizeWorkspaceFilePath } from "../lib/workspace-file-path";
 import { type RealtimeEvent, useRealtimeStore } from "../stores/realtime";
@@ -1115,10 +1094,12 @@ const taskDetailPrimaryTab = ref("messages");
 const taskExecutionTrace = ref<TaskExecutionTrace | null>(null);
 const taskExecutionTraceLoading = ref(false);
 const taskExecutionTraceError = ref<string | null>(null);
-const traceSegmentExpanded = ref<Record<string, boolean>>({});
 const traceMessageRawExpanded = ref<Record<string, boolean>>({});
-const traceSegmentFilter = ref<"all" | "user-input" | "hook" | "model-response">("all");
-const traceMessageRoleFilter = ref<"all" | "user" | "assistant" | "tool">("all");
+const TRACE_TOOL_MESSAGE_ROLES = new Set(["tool", "tool-request", "tool-result"]);
+
+const traceMessageRoleFilter = ref<
+  "all" | "user" | "assistant" | "tool" | "tool-request" | "tool-result"
+>("all");
 
 const hasCodeContext = computed(() => Boolean(task.value?.repoId));
 
@@ -1371,6 +1352,11 @@ const parallelCandidateMessages = ref<Record<string, unknown[]>>({});
 const messagesLoading = ref(false);
 const activating = ref(false);
 
+// Domain runs (for historical projection-based parallel comparison)
+const taskDomainRuns = ref<TaskDomainRunRecord[]>([]);
+const taskDomainRunDetails = ref<Record<string, TaskDomainRunDetailRecord>>({});
+const taskAgentRuns = ref<TaskAgentRunRecord[]>([]);
+
 // Governance
 const governance = ref<GovernanceSummary | null>(null);
 const governanceLoading = ref(false);
@@ -1506,13 +1492,27 @@ const modelOptions = computed(() => {
     })
     .filter((option): option is { value: string; label: string } => Boolean(option));
 
-  const currentModel = task.value?.selectedModel?.trim();
-  if (currentModel && !options.some((option) => option.value === currentModel)) {
-    options.unshift({ value: currentModel, label: `${currentModel} (当前值)` });
+  const fallbackModels = [
+    task.value?.selectedModel?.trim(),
+    ...editableParallelCandidates.value.map((candidate) => candidate.model?.trim()),
+    editableJudgeConfig.value.model?.trim(),
+  ].filter((model): model is string => Boolean(model));
+
+  for (const model of fallbackModels) {
+    if (!options.some((option) => option.value === model)) {
+      options.unshift({ value: model, label: `${model} (当前值)` });
+    }
   }
 
   return options;
 });
+
+function handleChooseMode() {
+  if ((modelsData.value?.length || 0) === 0 && !modelsLoading.value) {
+    void loadModels();
+  }
+  showExecutionModeModal.value = true;
+}
 
 const workflowSummary = computed(() => workflowView.value?.workflow ?? null);
 const workflowStages = computed(() => workflowView.value?.workflow.stages ?? []);
@@ -1954,6 +1954,7 @@ async function refreshTaskData(
     );
   }
 
+  await refreshTaskDomainRuns(id, true);
   await refreshParallelCandidateMessagesForTask(id);
 }
 
@@ -2064,7 +2065,6 @@ async function refreshTaskExecutionTrace(
 
   try {
     taskExecutionTrace.value = await getTaskExecutionTraceView(currentTaskId, sessionId);
-    traceSegmentExpanded.value = {};
     traceMessageRawExpanded.value = {};
   } catch (error) {
     if (!silent) {
@@ -2381,6 +2381,38 @@ async function refreshConversationMessages(
   } finally {
     if (!silent) {
       messagesLoading.value = false;
+    }
+  }
+}
+
+async function refreshTaskDomainRuns(currentTaskId: string, silent = false) {
+  try {
+    const runsResponse = await getTaskDomainRuns(currentTaskId);
+    taskDomainRuns.value = Array.isArray(runsResponse.data) ? runsResponse.data : [];
+
+    const parallelRuns = taskDomainRuns.value.filter((run) => run.orchestrationKind === "parallel");
+    const detailEntries = await Promise.all(
+      parallelRuns.map(async (run) => {
+        try {
+          const response = await getTaskDomainRunDetail(currentTaskId, run.id);
+          return [run.id, response.data] as const;
+        } catch {
+          return [run.id, null] as const;
+        }
+      }),
+    );
+    taskDomainRunDetails.value = Object.fromEntries(
+      detailEntries.filter((entry): entry is readonly [string, TaskDomainRunDetailRecord] =>
+        Boolean(entry[1]),
+      ),
+    );
+    const agentRunsResponse = await getTaskAgentRuns(currentTaskId);
+    taskAgentRuns.value = Array.isArray(agentRunsResponse.data) ? agentRunsResponse.data : [];
+  } catch {
+    if (!silent) {
+      taskDomainRuns.value = [];
+      taskDomainRunDetails.value = {};
+      taskAgentRuns.value = [];
     }
   }
 }
@@ -4287,6 +4319,7 @@ const conversationSessionMessageItems = computed<SessionMessageView[]>(() =>
 
 type ParallelComparisonCard = {
   key: string;
+  index: number;
   label: string;
   model?: string;
   status: string;
@@ -4294,6 +4327,8 @@ type ParallelComparisonCard = {
   loading: boolean;
   reply?: string;
   replyHtml?: string;
+  isAdopted: boolean;
+  canAdopt: boolean;
 };
 
 function latestAssistantReplyText(messages: unknown[], sessionId: string): string | undefined {
@@ -4338,6 +4373,11 @@ const parallelComparisonCards = computed<ParallelComparisonCard[]>(() => {
     return [];
   }
 
+  const winnerIndex = typeof runtimeWinnerIndex.value === 'number' && runtimeWinnerIndex.value >= 0
+    ? runtimeWinnerIndex.value
+    : projectionWinnerCandidateIndex.value;
+  const isWaiting = task.value?.status === "waiting-approval" || task.value?.status === "paused";
+
   return runtimePlanCandidates.value.map((candidate, index) => {
     const sessionId = candidate.sessionId;
     const messages = sessionId ? (parallelCandidateMessages.value[sessionId] ?? []) : [];
@@ -4349,9 +4389,12 @@ const parallelComparisonCards = computed<ParallelComparisonCard[]>(() => {
       candidate.agent,
       sessionId ? `Session ${sessionId.slice(0, 8)}` : undefined,
     ].filter((value): value is string => Boolean(value));
+    const isAdopted = typeof winnerIndex === "number" && winnerIndex === index;
+    const canAdopt = isWaiting && typeof winnerIndex !== "number" && Boolean(sessionId);
 
     return {
       key: sessionId || `candidate-${index}`,
+      index,
       label: candidate.label || `候选 ${index + 1}`,
       model: candidate.model,
       status: candidate.status || "pending",
@@ -4359,6 +4402,8 @@ const parallelComparisonCards = computed<ParallelComparisonCard[]>(() => {
       loading: !reply && candidate.status === "running",
       reply,
       replyHtml,
+      isAdopted,
+      canAdopt,
     };
   });
 });
@@ -4794,64 +4839,71 @@ watch(selectedBranchSessionId, () => {
 });
 
 const strategy = computed(() => {
-  if (!task.value?.strategy) return null;
-  try {
-    return JSON.parse(task.value.strategy) as {
-      complexity?: string;
-      suggestedAgents?: string[];
-      requiresPlan?: boolean;
-      confidence?: number;
-      selectedAgent?: string;
-      selectedTemplateId?: string;
-      executionMode?: string;
-      parallelCandidates?: Array<{
-        model: string;
-        label?: string;
-      }>;
-      sequentialSteps?: ChainStepInput[];
-      hookExecutions?: Array<{
-        hookId: string;
-        trigger: string;
-        status: string;
-        agent: string;
-        prompt?: string;
-        model?: string;
-        result?: string;
-        error?: string;
-        startedAt?: string;
-        completedAt?: string;
-        decision?: {
-          action: string;
-          reason?: string;
-          rewrittenPrompt?: string;
-          targetModel?: string;
-        };
-      }>;
-    };
-  } catch {
+  const resolved = resolveTaskStrategyRecord();
+  if (Object.keys(resolved).length === 0) {
     return null;
   }
+
+  return resolved as {
+    complexity?: string;
+    suggestedAgents?: string[];
+    requiresPlan?: boolean;
+    confidence?: number;
+    selectedAgent?: string;
+    selectedTemplateId?: string;
+    executionMode?: string;
+    parallelCandidates?: Array<{
+      model: string;
+      label?: string;
+    }>;
+    sequentialSteps?: ChainStepInput[];
+    judge?: {
+      enabled?: boolean;
+      agent?: string;
+      model?: string;
+      promptTemplate?: string;
+      timeoutMs?: number;
+      selectionStrategy?: string;
+    };
+    hookExecutions?: Array<{
+      hookId: string;
+      trigger: string;
+      status: string;
+      agent: string;
+      prompt?: string;
+      model?: string;
+      result?: string;
+      error?: string;
+      startedAt?: string;
+      completedAt?: string;
+      decision?: {
+        action: string;
+        reason?: string;
+        rewrittenPrompt?: string;
+        targetModel?: string;
+      };
+    }>;
+  };
 });
 
-const taskExecutionTraceSegments = computed(() => taskExecutionTrace.value?.segments ?? []);
 const taskExecutionTraceMessages = computed<ExecutionTraceTimelineItem[]>(
   () => taskExecutionTrace.value?.timeline ?? [],
 );
 
-const filteredTraceSegments = computed(() => {
-  const segments = taskExecutionTraceSegments.value;
-  if (traceSegmentFilter.value === "all") return segments;
-  if (traceSegmentFilter.value === "hook") {
-    return segments.filter((s) =>
-      ["hook-injection", "hook-result", "hook-rewrite"].includes(s.type),
-    );
-  }
-  return segments.filter((s) => s.type === traceSegmentFilter.value);
-});
+const hasTraceSupportingContent = computed(
+  () =>
+    runtimePlanSteps.value.length > 0 ||
+    Boolean(runtimeJudgeSummary.value) ||
+    runtimePlanCandidates.value.length > 0 ||
+    (taskExecutionTrace.value?.hookExecutions.length ?? 0) > 0,
+);
 
 const filteredTraceMessages = computed(() => {
   const msgs = taskExecutionTraceMessages.value;
   if (traceMessageRoleFilter.value === "all") return msgs;
+  if (traceMessageRoleFilter.value === "tool") {
+    return msgs.filter((m) => TRACE_TOOL_MESSAGE_ROLES.has(m.role));
+  }
   return msgs.filter((m) => m.role === traceMessageRoleFilter.value);
 });
 
@@ -4865,11 +4917,6 @@ const taskExecutionTraceSummaryItems = computed(() => {
     label: "追踪会话",
     value: taskExecutionTrace.value.sessionId?.slice(0, 18) || "无",
     tone: "blue",
-  });
-  items.push({
-    label: "来源段",
-    value: String(taskExecutionTrace.value.segments.length),
-    tone: "processing",
   });
   items.push({
     label: "时间线项",
@@ -4892,21 +4939,6 @@ const taskExecutionTraceSummaryItems = computed(() => {
   return items;
 });
 
-function traceSegmentKey(segment: ExecutionTraceSegment, index: number) {
-  return `${segment.type}:${segment.hookId || segment.label}:${index}`;
-}
-
-function toggleTraceSegment(key: string) {
-  traceSegmentExpanded.value = {
-    ...traceSegmentExpanded.value,
-    [key]: !traceSegmentExpanded.value[key],
-  };
-}
-
-function isTraceSegmentExpanded(key: string) {
-  return Boolean(traceSegmentExpanded.value[key]);
-}
-
 function toggleTraceMessageRaw(messageId: string) {
   traceMessageRawExpanded.value = {
     ...traceMessageRawExpanded.value,
@@ -4918,89 +4950,12 @@ function isTraceMessageRawExpanded(messageId: string) {
   return Boolean(traceMessageRawExpanded.value[messageId]);
 }
 
-function traceSegmentLabel(type: ExecutionTraceSegment["type"]) {
-  switch (type) {
-    case "user-input":
-      return "用户输入";
-    case "workflow-context":
-      return "工作流上下文";
-    case "hook-injection":
-      return "Hook 输入";
-    case "hook-result":
-      return "Hook 输出";
-    case "hook-rewrite":
-      return "Hook 重写";
-    case "final-prompt":
-      return "最终 Prompt";
-    case "model-response":
-      return "模型回复";
-    case "tool-call":
-      return "工具调用";
-    case "tool-output":
-      return "工具输出";
-    case "thinking":
-      return "思考过程";
-    case "file-reference":
-      return "文件引用";
-    case "diff":
-      return "Diff";
-    case "candidate-result":
-      return "候选结果";
-    case "judge-decision":
-      return "Judge 决策";
-    case "chain-step-result":
-      return "链式步骤";
-    case "status-transition":
-      return "状态变更";
-    case "session-activate":
-      return "会话激活";
-    case "session-branch":
-      return "会话分支";
-    case "session-archive":
-      return "会话归档";
-    default:
-      return "数据段";
-  }
-}
-
-function traceSegmentTone(type: ExecutionTraceSegment["type"]) {
-  switch (type) {
-    case "user-input":
-      return "user";
-    case "workflow-context":
-      return "context";
-    case "hook-injection":
-    case "hook-result":
-    case "hook-rewrite":
-      return "hook";
-    case "final-prompt":
-      return "prompt";
-    case "model-response":
-      return "response";
-    case "tool-call":
-    case "tool-output":
-    case "file-reference":
-    case "diff":
-      return "prompt";
-    case "candidate-result":
-    case "judge-decision":
-    case "chain-step-result":
-      return "context";
-    case "status-transition":
-    case "session-activate":
-    case "session-branch":
-    case "session-archive":
-    case "thinking":
-      return "default";
-    default:
-      return "default";
-  }
-}
-
 function traceMessageRoleColor(role: string) {
   if (role === "user") return "blue";
   if (role === "assistant") return "purple";
   if (role === "tool") return "cyan";
+  if (role === "tool-request") return "geekblue";
+  if (role === "tool-result") return "green";
   return "default";
 }
 
@@ -5008,6 +4963,8 @@ function traceMessageRoleLabel(role: string) {
   if (role === "user") return "用户消息";
   if (role === "assistant") return "模型消息";
   if (role === "tool") return "工具消息";
+  if (role === "tool-request") return "工具发起";
+  if (role === "tool-result") return "工具结果";
   return role || "未知";
 }
 
@@ -5243,7 +5200,102 @@ const editableSequentialSteps = computed<ChainStepInput[]>(() => {
   return [];
 });
 
-const runtimePlanCandidates = computed(() => runtimeParallelCandidates.value);
+const editableJudgeConfig = computed(() => resolveEditableJudgeConfig(task.value ?? undefined));
+
+// Projection-backed parallel candidates (from historical domain-run data)
+const projectionParallelRunDetail = computed<TaskDomainRunDetailRecord | null>(() => {
+  const sessionId = selectedBranchSessionId.value || task.value?.sessionId;
+  const parallelRuns = taskDomainRuns.value.filter((run) => run.orchestrationKind === "parallel");
+  for (const run of parallelRuns) {
+    const detail = taskDomainRunDetails.value[run.id];
+    if (!detail) continue;
+    if (run.rootSessionId === sessionId) return detail;
+    if (detail.candidateNodes.some((node) => node.sessionId === sessionId)) return detail;
+  }
+  // Fall back to most recent parallel run detail
+  const latestRun = parallelRuns[parallelRuns.length - 1];
+  return latestRun ? (taskDomainRunDetails.value[latestRun.id] ?? null) : null;
+});
+
+const projectionParallelCandidates = computed<ExecutionCandidate[]>(() => {
+  const sessionId = selectedBranchSessionId.value || task.value?.sessionId;
+  if (!sessionId) return [];
+
+  const parallelRuns = taskDomainRuns.value.filter((r) => r.orchestrationKind === "parallel");
+  if (parallelRuns.length === 0) return [];
+
+  // Case 1: Domain run detail already has multiple candidate nodes
+  const currentRun = parallelRuns.find((r) => r.rootSessionId === sessionId);
+  if (currentRun) {
+    const detail = taskDomainRunDetails.value[currentRun.id];
+    if (detail && detail.candidateNodes.length >= 2) {
+      return detail.candidateNodes
+        .slice()
+        .sort((a, b) => (a.candidateIndex ?? 0) - (b.candidateIndex ?? 0))
+        .map((node, index) => ({
+          label: `候选 ${String.fromCharCode(65 + (node.candidateIndex ?? index))}`,
+          agent: node.agentType || "default-executor",
+          ...(node.modelUsed ? { model: node.modelUsed } : {}),
+          ...(node.sessionId ? { sessionId: node.sessionId } : {}),
+          status: (node.status === "completed"
+            ? "completed"
+            : node.status === "failed"
+              ? "failed"
+              : "pending") as ExecutionCandidate["status"],
+        }));
+    }
+  }
+
+  // Case 2: Use branchLineage sibling detection (each candidate has its own domain run)
+  const flat = flattenTree(branchLineage.value);
+  const currentNode = flat.find((n) => n.runtimeSessionId === sessionId);
+  if (!currentNode?.parentRuntimeSessionId) return [];
+
+  const parallelBySession = new Map(parallelRuns.map((r) => [r.rootSessionId, r]));
+
+  // All sibling sessions (same parent) that have a parallel domain run
+  const candidateSessions = flat
+    .filter(
+      (n) =>
+        n.parentRuntimeSessionId === currentNode.parentRuntimeSessionId &&
+        parallelBySession.has(n.runtimeSessionId),
+    )
+    .sort((a, b) => {
+      const aIdx = taskDomainRunDetails.value[parallelBySession.get(a.runtimeSessionId)!.id]?.candidateNodes[0]?.candidateIndex ?? 0;
+      const bIdx = taskDomainRunDetails.value[parallelBySession.get(b.runtimeSessionId)!.id]?.candidateNodes[0]?.candidateIndex ?? 0;
+      return aIdx - bIdx;
+    });
+
+  if (candidateSessions.length < 2) return [];
+
+  return candidateSessions.map((node, fallbackIndex) => {
+    const run = parallelBySession.get(node.runtimeSessionId)!;
+    const detail = taskDomainRunDetails.value[run.id];
+    const candidateNode = detail?.candidateNodes[0];
+    const candidateIdx = candidateNode?.candidateIndex ?? fallbackIndex;
+    const agentRun = taskAgentRuns.value.find((ar) => ar.runId === run.id);
+    const model = candidateNode?.modelUsed ?? agentRun?.modelUsed ?? undefined;
+    const rawStatus = candidateNode?.status ?? agentRun?.status ?? "pending";
+    const status = (rawStatus === "completed" ? "completed" : rawStatus === "failed" ? "failed" : "pending") as ExecutionCandidate["status"];
+    return {
+      label: `候选 ${String.fromCharCode(65 + candidateIdx)}`,
+      agent: candidateNode?.agentType ?? agentRun?.agentType ?? "default-executor",
+      ...(model ? { model } : {}),
+      sessionId: node.runtimeSessionId,
+      status,
+    };
+  });
+});
+
+const projectionWinnerCandidateIndex = computed<number | undefined>(() => {
+  const index = projectionParallelRunDetail.value?.winnerCandidateIndex;
+  return typeof index === "number" ? index : undefined;
+});
+
+const runtimePlanCandidates = computed(() => {
+  if (runtimeParallelCandidates.value.length >= 2) return runtimeParallelCandidates.value;
+  return projectionParallelCandidates.value;
+});
 const runtimePlanSteps = computed(() => runtimeSequentialChainSteps.value);
 const runtimeWinnerIndex = computed(() => resolveRuntimeWinnerCandidateIndex());
 const runtimeJudgeReasoning = computed(
@@ -5308,16 +5360,28 @@ watch(
   { immediate: true },
 );
 
-type ExecutionOverrides = {
-  mode: ExecutionMode;
-  candidates?: Array<{ model: string; label?: string }>;
-  steps?: ChainStepInput[];
-} | null;
+function resolveTaskStrategyRecord() {
+  const strategy = task.value?.strategy as unknown;
+  if (strategy && typeof strategy === "object" && !Array.isArray(strategy)) {
+    return strategy as Record<string, unknown>;
+  }
+
+  if (typeof strategy !== "string" || !strategy.trim()) {
+    return {} as Record<string, unknown>;
+  }
+
+  try {
+    const parsed = JSON.parse(strategy);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {} as Record<string, unknown>;
+  }
+}
 
 function serializeTaskStrategy(overrides: ExecutionOverrides) {
-  const current = task.value?.strategy?.trim()
-    ? (JSON.parse(task.value.strategy) as Record<string, unknown>)
-    : {};
+  const current = resolveTaskStrategyRecord();
 
   const next: Record<string, unknown> = {
     ...current,
@@ -5326,11 +5390,14 @@ function serializeTaskStrategy(overrides: ExecutionOverrides) {
 
   if (overrides?.mode === "parallel") {
     next.parallelCandidates = overrides.candidates ?? [];
+    next.judge = overrides.judge ?? undefined;
     next.sequentialSteps = undefined;
   } else if (overrides?.mode === "sequential-chain") {
     next.sequentialSteps = overrides.steps ?? [];
+    next.judge = undefined;
     next.parallelCandidates = undefined;
   } else {
+    next.judge = undefined;
     next.parallelCandidates = undefined;
     next.sequentialSteps = undefined;
   }
@@ -5372,6 +5439,12 @@ async function handleExecutionModeConfirm(overrides: ExecutionOverrides) {
     message.error(`保存执行模式失败: ${e instanceof Error ? e.message : e}`);
   }
 }
+
+watch(showExecutionModeModal, (open) => {
+  if (open && (modelsData.value?.length || 0) === 0 && !modelsLoading.value) {
+    void loadModels();
+  }
+});
 
 async function handleCompleteTask() {
   if (!taskId.value || completingTask.value || task.value?.status === "completed") return;
@@ -6081,6 +6154,29 @@ const eventColumns = [
 </script>
 
 <style scoped>
+.task-detail-parallel-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.task-detail-parallel-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid #e8e8e8;
+  background: #ffffff;
+  min-height: 180px;
+}
+
+.task-detail-parallel-card--winner {
+  border-color: #f0b429;
+  box-shadow: inset 0 0 0 1px rgba(240, 180, 41, 0.25);
+  background: #fffbe8;
+}
+
 .message-markdown {
   line-height: 1.42;
   word-break: break-word;
@@ -6660,8 +6756,8 @@ const eventColumns = [
 }
 
 .task-trace-view__grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
   gap: 16px;
 }
 
@@ -6671,6 +6767,10 @@ const eventColumns = [
   background: #fff;
   padding: 14px;
   min-width: 0;
+}
+
+.task-trace-panel--primary {
+  min-height: 360px;
 }
 
 .task-trace-panel__header {
@@ -6698,94 +6798,6 @@ const eventColumns = [
   line-height: 1.5;
   color: rgba(15, 23, 42, 0.8);
 }
-
-.task-trace-segment {
-  border: 1px solid rgba(15, 23, 42, 0.08);
-  border-radius: 12px;
-  overflow: hidden;
-  background: #fcfcfd;
-}
-
-.task-trace-segment + .task-trace-segment {
-  margin-top: 10px;
-}
-
-.task-trace-segment--user {
-  border-color: rgba(37, 99, 235, 0.18);
-}
-
-.task-trace-segment--context {
-  border-color: rgba(8, 145, 178, 0.18);
-}
-
-.task-trace-segment--hook {
-  border-color: rgba(234, 88, 12, 0.2);
-}
-
-.task-trace-segment--prompt {
-  border-color: rgba(22, 163, 74, 0.2);
-}
-
-.task-trace-segment--response {
-  border-color: rgba(126, 34, 206, 0.18);
-}
-
-.task-trace-segment__header {
-  width: 100%;
-  border: 0;
-  background: transparent;
-  padding: 12px 14px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
-  cursor: pointer;
-  text-align: left;
-}
-
-.task-trace-segment__left,
-.task-trace-segment__right {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.task-trace-segment__right {
-  flex-shrink: 0;
-  color: rgba(15, 23, 42, 0.55);
-  font-size: 12px;
-}
-
-.task-trace-segment__badge {
-  display: inline-flex;
-  align-items: center;
-  border-radius: 999px;
-  padding: 2px 8px;
-  font-size: 12px;
-  font-weight: 600;
-  background: rgba(15, 23, 42, 0.08);
-  color: rgba(15, 23, 42, 0.76);
-}
-
-.task-trace-segment__title {
-  font-weight: 600;
-  color: rgba(15, 23, 42, 0.92);
-}
-
-.task-trace-segment__meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  padding: 0 14px 10px;
-  font-size: 12px;
-  color: rgba(15, 23, 42, 0.6);
-}
-
-.task-trace-segment__body {
-  padding: 0 14px 14px;
-}
-
-.task-trace-segment__content,
 .task-trace-hook__block,
 .task-trace-message__content,
 .task-trace-message__raw {

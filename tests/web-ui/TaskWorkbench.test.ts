@@ -9,6 +9,7 @@ const pushMock = vi.hoisted(() => vi.fn());
 
 const apiMocks = vi.hoisted(() => ({
   getTask: vi.fn(),
+  getTaskMemberView: vi.fn(),
   listTasks: vi.fn(),
   getWorkbenchLayout: vi.fn(),
   saveWorkbenchLayout: vi.fn(),
@@ -126,6 +127,28 @@ async function mountWorkbench() {
   const wrapper = mount(TaskWorkbench, {
     global: {
       plugins: [pinia],
+      stubs: {
+        TaskWorkbenchMemberStrip: defineComponent({
+          name: "TaskWorkbenchMemberStrip",
+          props: {
+            paneLabel: { type: String, default: "" },
+            taskTitle: { type: String, default: "" },
+            view: { type: Object, default: null },
+          },
+          methods: {
+            memberNames() {
+              const members = (this.view as { members?: Array<{ displayName?: string }> } | null)
+                ?.members;
+              return (members ?? [])
+                .map((member) => String(member?.displayName ?? ""))
+                .filter(Boolean)
+                .join("|");
+            },
+          },
+          template:
+            '<div data-testid="workbench-member-strip">{{ paneLabel }}{{ taskTitle }}{{ memberNames() }}</div>',
+        }),
+      },
     },
   });
 
@@ -140,6 +163,53 @@ beforeEach(() => {
   vi.clearAllMocks();
   pushMock.mockReset();
   apiMocks.getTask.mockResolvedValue({ id: "", title: "", status: "pending" });
+  apiMocks.getTaskMemberView.mockResolvedValue({
+    taskId: "",
+    projectId: "project-1",
+    workflowStatus: "running",
+    currentStageKey: "delivery",
+    currentStageLabel: "交付",
+    summary: {
+      managerCount: 1,
+      userCount: 1,
+      agentCount: 1,
+      activeAgentCount: 1,
+    },
+    members: [
+      {
+        id: "member-manager",
+        kind: "manager",
+        displayName: "项目管理员",
+        handle: "admin",
+        identitySource: "human",
+        intentSource: "original",
+        responsibilityLabels: ["审批协调"],
+        stageLabels: ["交付"],
+        statusLabel: "在线",
+        statusTone: "default",
+        summary: "负责审批和人工介入",
+        capabilityBadges: [],
+        runCount: 0,
+        latestActivityAt: null,
+      },
+      {
+        id: "member-agent",
+        kind: "agent",
+        displayName: "Coder Agent",
+        handle: null,
+        identitySource: "agent",
+        intentSource: "derived",
+        responsibilityLabels: ["实现变更"],
+        stageLabels: ["交付"],
+        statusLabel: "运行中",
+        statusTone: "processing",
+        summary: "正在生成补丁",
+        capabilityBadges: ["代码"],
+        runCount: 2,
+        latestActivityAt: null,
+      },
+    ],
+  });
   apiMocks.listTasks.mockResolvedValue({ data: [] });
   apiMocks.getWorkbenchLayout.mockResolvedValue({ data: null });
   apiMocks.saveWorkbenchLayout.mockResolvedValue({ ok: true });
@@ -173,6 +243,9 @@ describe("TaskWorkbench regression", () => {
     await nextTick();
     await flushPromises();
 
+    expect(wrapper.text()).toContain("主视图协作");
+    expect(wrapper.text()).toContain("项目管理员");
+    expect(wrapper.text()).toContain("Coder Agent");
     expect(wrapper.text()).toContain("主视图");
     expect(wrapper.text()).toContain("主任务");
     expect(wrapper.text()).toContain("加入主窗");
@@ -195,6 +268,7 @@ describe("TaskWorkbench regression", () => {
     await nextTick();
     await flushPromises();
 
+    expect(wrapper.text()).toContain("副窗协作");
     expect(wrapper.text()).toContain("主窗");
     expect(wrapper.text()).toContain("副窗");
     expect(wrapper.text()).toContain("设为主窗");

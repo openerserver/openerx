@@ -2,33 +2,19 @@ import { type Ref, computed, ref, watch } from "vue";
 import { type TaskExecutionTrace, getTaskExecutionTraceView } from "../lib/api";
 
 type TraceSummaryItem = { label: string; value: string; tone?: string };
-type TraceSegmentFilter = "narrative" | "all" | "user-input" | "system-added" | "model-response" | "debug";
-type TraceMessageRoleFilter = "narrative" | "all" | "user" | "system-added" | "assistant" | "debug";
+type TraceMessageRoleFilter =
+  | "narrative"
+  | "all"
+  | "user"
+  | "system-added"
+  | "assistant"
+  | "tool"
+  | "tool-request"
+  | "tool-result"
+  | "debug";
 
-const DEBUG_SEGMENT_TYPES = new Set([
-  "status-transition",
-  "session-activate",
-  "session-branch",
-  "session-archive",
-]);
-
-const SYSTEM_ADDED_SEGMENT_TYPES = new Set([
-  "workflow-context",
-  "hook-injection",
-  "hook-result",
-  "hook-rewrite",
-  "final-prompt",
-  "tool-call",
-  "tool-output",
-  "thinking",
-  "file-reference",
-  "diff",
-  "candidate-result",
-  "judge-decision",
-  "chain-step-result",
-]);
-
-const NARRATIVE_MESSAGE_ROLES = new Set(["user", "assistant", "tool"]);
+const TOOL_MESSAGE_ROLES = new Set(["tool", "tool-request", "tool-result"]);
+const NARRATIVE_MESSAGE_ROLES = new Set(["user", "assistant", ...TOOL_MESSAGE_ROLES]);
 
 function resolveSyntheticUserTimestamp(trace: TaskExecutionTrace | null) {
   const timeline = Array.isArray(trace?.timeline) ? trace.timeline : [];
@@ -52,34 +38,6 @@ function resolveSyntheticAssistantTimestamp(trace: TaskExecutionTrace | null) {
   }
 
   return trace?.snapshot?.lastActivityAt ?? trace?.snapshot?.updatedAt ?? undefined;
-}
-
-function buildTraceSegmentsWithFallback(trace: TaskExecutionTrace | null) {
-  const segments = Array.isArray(trace?.segments) ? [...trace.segments] : [];
-  const hasUserInput = segments.some((segment) => segment.type === "user-input");
-  const hasModelResponse = segments.some((segment) => segment.type === "model-response");
-  const finalPrompt = typeof trace?.finalPrompt === "string" ? trace.finalPrompt.trim() : "";
-  const latestResponse = typeof trace?.latestResponse === "string" ? trace.latestResponse.trim() : "";
-
-  if (!hasUserInput && finalPrompt) {
-    segments.unshift({
-      type: "user-input",
-      label: "用户输入",
-      content: finalPrompt,
-      timestamp: resolveSyntheticUserTimestamp(trace),
-    });
-  }
-
-  if (!hasModelResponse && latestResponse) {
-    segments.push({
-      type: "model-response",
-      label: "模型回复",
-      content: latestResponse,
-      timestamp: resolveSyntheticAssistantTimestamp(trace),
-    });
-  }
-
-  return segments;
 }
 
 function buildTraceTimelineWithFallback(trace: TaskExecutionTrace | null) {
@@ -128,11 +86,6 @@ function buildBaseTraceSummaryItems(trace: TaskExecutionTrace): TraceSummaryItem
       tone: "blue",
     },
     {
-      label: "来源段",
-      value: String(trace.segments.length),
-      tone: "processing",
-    },
-    {
       label: "时间线项",
       value: String(trace.timeline?.length ?? 0),
       tone: "purple",
@@ -152,6 +105,8 @@ function buildTraceReadSourceLabel(
       return { value: "领域事件", tone: "default" };
     case "conversation-table+task-domain-events":
       return { value: "会话表+领域事件", tone: "default" };
+    case "opencode-runtime":
+      return { value: "运行时", tone: "warning" };
     default:
       return { value: "未知", tone: "default" };
   }
@@ -188,9 +143,7 @@ export function useTaskExecutionTrace(taskId: Ref<string>, sessionId: Ref<string
   const trace = ref<TaskExecutionTrace | null>(null);
   const loading = ref(false);
   const error = ref<string | null>(null);
-  const segmentFilter = ref<TraceSegmentFilter>("narrative");
   const messageRoleFilter = ref<TraceMessageRoleFilter>("narrative");
-  const expandedSegments = ref<Record<string, boolean>>({});
   const expandedMessageRaw = ref<Record<string, boolean>>({});
 
   async function refresh(silent = false) {
@@ -207,7 +160,6 @@ export function useTaskExecutionTrace(taskId: Ref<string>, sessionId: Ref<string
 
     try {
       trace.value = await getTaskExecutionTraceView(taskId.value, sessionId.value);
-      expandedSegments.value = {};
       expandedMessageRaw.value = {};
     } catch (nextError) {
       if (!silent) {
@@ -221,23 +173,6 @@ export function useTaskExecutionTrace(taskId: Ref<string>, sessionId: Ref<string
     }
   }
 
-  const filteredSegments = computed(() => {
-    const segments = buildTraceSegmentsWithFallback(trace.value);
-    if (segmentFilter.value === "all") {
-      return segments;
-    }
-    if (segmentFilter.value === "narrative") {
-      return segments.filter((segment) => !DEBUG_SEGMENT_TYPES.has(segment.type));
-    }
-    if (segmentFilter.value === "system-added") {
-      return segments.filter((segment) => SYSTEM_ADDED_SEGMENT_TYPES.has(segment.type));
-    }
-    if (segmentFilter.value === "debug") {
-      return segments.filter((segment) => DEBUG_SEGMENT_TYPES.has(segment.type));
-    }
-    return segments.filter((segment) => segment.type === segmentFilter.value);
-  });
-
   const filteredMessages = computed(() => {
     const messages = buildTraceTimelineWithFallback(trace.value);
     if (messageRoleFilter.value === "all") {
@@ -247,10 +182,13 @@ export function useTaskExecutionTrace(taskId: Ref<string>, sessionId: Ref<string
       return messages.filter((message) => NARRATIVE_MESSAGE_ROLES.has(message.role));
     }
     if (messageRoleFilter.value === "system-added") {
-      return messages.filter((message) => message.role === "tool");
+      return messages.filter((message) => TOOL_MESSAGE_ROLES.has(message.role));
     }
     if (messageRoleFilter.value === "debug") {
       return messages.filter((message) => !NARRATIVE_MESSAGE_ROLES.has(message.role));
+    }
+    if (messageRoleFilter.value === "tool") {
+      return messages.filter((message) => TOOL_MESSAGE_ROLES.has(message.role));
     }
     return messages.filter((message) => message.role === messageRoleFilter.value);
   });
@@ -275,12 +213,9 @@ export function useTaskExecutionTrace(taskId: Ref<string>, sessionId: Ref<string
     trace,
     loading,
     error,
-    segmentFilter,
     messageRoleFilter,
-    expandedSegments,
     expandedMessageRaw,
     refresh,
-    filteredSegments,
     filteredMessages,
     summaryItems,
   };

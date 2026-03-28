@@ -748,7 +748,7 @@ describe("task execution trace route", () => {
     expect(getSessionMessagesMock).not.toHaveBeenCalled();
   });
 
-  test("does not load service timeline when projection is empty but snapshot latestResult exists", async () => {
+  test("loads service timeline when projection is empty even if snapshot latestResult exists", async () => {
     cpFetchMock.mockImplementation(async (url: string) => {
       if (url === "/api/project-tree/tasks/task-1") {
         return {
@@ -811,7 +811,31 @@ describe("task execution trace route", () => {
       }
 
       if (url === "/api/tasks/task-1/branches/ses-1/timeline?includeLineage=true") {
-        throw new Error("should not load service timeline when snapshot latestResult already exists");
+        return {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "fallback-user-1",
+                role: "user",
+                text: "fallback prompt",
+                createdAt: "2026-03-22T10:00:01.000Z",
+              },
+              {
+                id: "fallback-assistant-1",
+                role: "assistant",
+                text: "fallback response",
+                createdAt: "2026-03-22T10:00:03.000Z",
+              },
+            ],
+            meta: {
+              readSource: "conversation-table",
+              cacheState: "complete",
+              complete: true,
+              itemCount: 2,
+            },
+          },
+        };
       }
 
       return { ok: true, data: {} };
@@ -830,17 +854,666 @@ describe("task execution trace route", () => {
     expect(response.status).toBe(200);
     const payload = await response.json();
     expect(payload.timelineMeta).toMatchObject({
-      readSource: "task-domain-projection",
-      complete: false,
-      itemCount: 0,
+      readSource: "conversation-table",
+      complete: true,
+      itemCount: 2,
     });
     expectNoLegacyTimelineReadSource(payload);
     expect(payload.snapshot).toMatchObject({ latestResult: "snapshot only response" });
-    expect(payload.timeline).toEqual([]);
-    expect(payload.finalPrompt).toBeNull();
-    expect(payload.latestResponse).toBe("snapshot only response");
-    expectServiceTimelineNotRequested(cpFetchMock, "task-1", "ses-1");
+    expect(payload.timeline).toEqual([
+      expect.objectContaining({ role: "user", text: "fallback prompt" }),
+      expect.objectContaining({ role: "assistant", text: "fallback response" }),
+    ]);
+    expect(payload.finalPrompt).toBe("fallback prompt");
+    expect(payload.latestResponse).toBe("fallback response");
+    expect(cpFetchMock).toHaveBeenCalledWith(
+      "/api/tasks/task-1/branches/ses-1/timeline?includeLineage=true",
+      expect.anything(),
+    );
     expect(getSessionMessagesMock).not.toHaveBeenCalled();
+  });
+
+  test("loads service timeline when projection only has status items and no conversation messages", async () => {
+    cpFetchMock.mockImplementation(async (url: string) => {
+      if (url === "/api/project-tree/tasks/task-1") {
+        return {
+          ok: true,
+          data: {
+            id: "task-1",
+            projectId: "proj-1",
+            title: "trace task",
+            prompt: "第一轮用户输入",
+            status: "completed",
+            sessionId: "ses-1",
+            selectedModel: "github-copilot:gpt-5.4",
+            strategy: JSON.stringify({
+              selectedAgent: "oracle-enterprise",
+              hookExecutions: [],
+            }),
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/snapshot") {
+        return {
+          ok: true,
+          data: {
+            data: {
+              taskId: "task-1",
+              projectId: "proj-1",
+              currentStatus: "completed",
+              currentRunId: "task_run:task-1:ses-1",
+              currentSessionId: "ses-1",
+              latestResult: "snapshot only response",
+              latestResultSummary: "snapshot only response",
+              activeCandidateCount: 0,
+              completedCandidateCount: 1,
+              failedCandidateCount: 0,
+              totalChainSteps: 0,
+              completedChainSteps: 0,
+              updatedAt: "2026-03-22T10:00:03.000Z",
+            },
+            meta: {
+              readSource: "task-domain-projection",
+              complete: false,
+            },
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/timeline-view?runtimeSessionId=ses-1") {
+        return {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "projection-status-1",
+                taskId: "task-1",
+                projectId: "proj-1",
+                sessionId: "task_session:task-1:ses-1",
+                itemKind: "status-transition",
+                itemRole: "completed",
+                title: "任务状态",
+                displayText: "任务进入 completed 状态",
+                sortAt: "2026-03-22T10:00:05.000Z",
+                createdAt: "2026-03-22T10:00:05.000Z",
+              },
+            ],
+            meta: {
+              readSource: "task-domain-projection",
+              complete: false,
+              itemCount: 1,
+            },
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/branches/ses-1/timeline?includeLineage=true") {
+        return {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "fallback-user-1",
+                role: "user",
+                text: "fallback prompt",
+                createdAt: "2026-03-22T10:00:01.000Z",
+              },
+              {
+                id: "fallback-assistant-1",
+                role: "assistant",
+                text: "fallback response",
+                createdAt: "2026-03-22T10:00:03.000Z",
+              },
+            ],
+            meta: {
+              readSource: "conversation-table",
+              cacheState: "complete",
+              complete: true,
+              itemCount: 2,
+            },
+          },
+        };
+      }
+
+      return { ok: true, data: {} };
+    });
+
+    getSessionMessagesMock.mockRejectedValue(new Error("should not hit runtime messages"));
+
+    const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
+
+    const response = await taskRoutes.request("http://localhost/task-1/execution-trace", {
+      headers: {
+        Authorization: "Bearer test",
+      },
+    });
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload.timelineMeta).toMatchObject({
+      readSource: "conversation-table",
+      complete: true,
+      itemCount: 2,
+    });
+    expect(payload.timeline).toEqual([
+      expect.objectContaining({ role: "user", text: "fallback prompt" }),
+      expect.objectContaining({ role: "assistant", text: "fallback response" }),
+    ]);
+    expect(payload.segments).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "user-input", content: "fallback prompt" }),
+        expect.objectContaining({ type: "model-response", content: "fallback response" }),
+        expect.objectContaining({ type: "status-transition", content: "任务进入 completed 状态" }),
+      ]),
+    );
+    expect(cpFetchMock).toHaveBeenCalledWith(
+      "/api/tasks/task-1/branches/ses-1/timeline?includeLineage=true",
+      expect.anything(),
+    );
+    expect(getSessionMessagesMock).not.toHaveBeenCalled();
+  });
+
+  test("loads service timeline when projection conversation rows only contain role placeholders", async () => {
+    cpFetchMock.mockImplementation(async (url: string) => {
+      if (url === "/api/project-tree/tasks/task-1") {
+        return {
+          ok: true,
+          data: {
+            id: "task-1",
+            projectId: "proj-1",
+            title: "trace task",
+            prompt: "第一轮用户输入",
+            status: "running",
+            sessionId: "ses-1",
+            selectedModel: "github-copilot:gpt-5.4",
+            strategy: JSON.stringify({
+              selectedAgent: "oracle-enterprise",
+              hookExecutions: [],
+            }),
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/snapshot") {
+        return {
+          ok: true,
+          data: {
+            data: {
+              taskId: "task-1",
+              projectId: "proj-1",
+              currentStatus: "running",
+              currentRunId: "task_run:task-1:ses-1",
+              currentSessionId: "ses-1",
+              latestResult: "placeholder result",
+              latestResultSummary: "placeholder result",
+              activeCandidateCount: 0,
+              completedCandidateCount: 0,
+              failedCandidateCount: 0,
+              totalChainSteps: 0,
+              completedChainSteps: 0,
+              updatedAt: "2026-03-22T10:00:03.000Z",
+            },
+            meta: {
+              readSource: "task-domain-projection",
+              complete: false,
+            },
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/timeline-view?runtimeSessionId=ses-1") {
+        return {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "projection-user-1",
+                taskId: "task-1",
+                projectId: "proj-1",
+                sessionId: "task_session:task-1:ses-1",
+                itemKind: "user-input",
+                itemRole: "user",
+                title: "user",
+                displayText: null,
+                sortAt: "2026-03-22T10:00:01.000Z",
+                createdAt: "2026-03-22T10:00:01.000Z",
+                metadataJson: { partTypes: [] },
+              },
+              {
+                id: "projection-assistant-1",
+                taskId: "task-1",
+                projectId: "proj-1",
+                sessionId: "task_session:task-1:ses-1",
+                itemKind: "assistant-output",
+                itemRole: "assistant",
+                title: "assistant",
+                displayText: null,
+                sortAt: "2026-03-22T10:00:03.000Z",
+                createdAt: "2026-03-22T10:00:03.000Z",
+                metadataJson: { partTypes: [] },
+              },
+            ],
+            meta: {
+              readSource: "task-domain-projection",
+              complete: false,
+              itemCount: 2,
+            },
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/branches/ses-1/timeline?includeLineage=true") {
+        return {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "fallback-user-1",
+                role: "user",
+                text: "fallback prompt",
+                createdAt: "2026-03-22T10:00:01.000Z",
+              },
+              {
+                id: "fallback-assistant-1",
+                role: "assistant",
+                text: "fallback response",
+                createdAt: "2026-03-22T10:00:03.000Z",
+              },
+            ],
+            meta: {
+              readSource: "conversation-table",
+              cacheState: "complete",
+              complete: true,
+              itemCount: 2,
+            },
+          },
+        };
+      }
+
+      return { ok: true, data: {} };
+    });
+
+    getSessionMessagesMock.mockRejectedValue(new Error("should not hit runtime messages"));
+
+    const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
+
+    const response = await taskRoutes.request("http://localhost/task-1/execution-trace", {
+      headers: {
+        Authorization: "Bearer test",
+      },
+    });
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload.timelineMeta).toMatchObject({
+      readSource: "conversation-table",
+      complete: true,
+      itemCount: 2,
+    });
+    expect(payload.timeline).toEqual([
+      expect.objectContaining({ role: "user", text: "fallback prompt" }),
+      expect.objectContaining({ role: "assistant", text: "fallback response" }),
+    ]);
+    expect(payload.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ role: "user", text: "fallback prompt" }),
+        expect.objectContaining({ role: "assistant", text: "fallback response" }),
+      ]),
+    );
+    expect(payload.finalPrompt).toBe("fallback prompt");
+    expect(payload.latestResponse).toBe("fallback response");
+    expect(getSessionMessagesMock).not.toHaveBeenCalled();
+  });
+
+  test("merges runtime messages into status timeline when service timeline only contains empty conversation shells", async () => {
+    cpFetchMock.mockImplementation(async (url: string) => {
+      if (url === "/api/project-tree/tasks/task-1") {
+        return {
+          ok: true,
+          data: {
+            id: "task-1",
+            projectId: "proj-1",
+            title: "trace task",
+            prompt: "第一轮用户输入",
+            status: "running",
+            sessionId: "ses-1",
+            selectedModel: "github-copilot:gpt-5.4",
+            strategy: JSON.stringify({
+              selectedAgent: "oracle-enterprise",
+              hookExecutions: [],
+            }),
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/snapshot") {
+        return {
+          ok: true,
+          data: {
+            data: {
+              taskId: "task-1",
+              projectId: "proj-1",
+              currentStatus: "running",
+              currentRunId: "task_run:task-1:ses-1",
+              currentSessionId: "ses-1",
+              latestResult: "placeholder result",
+              latestResultSummary: "placeholder result",
+              activeCandidateCount: 0,
+              completedCandidateCount: 0,
+              failedCandidateCount: 0,
+              totalChainSteps: 0,
+              completedChainSteps: 0,
+              updatedAt: "2026-03-22T10:00:03.000Z",
+            },
+            meta: {
+              readSource: "task-domain-projection",
+              complete: false,
+            },
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/timeline-view?runtimeSessionId=ses-1") {
+        return {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "projection-user-1",
+                taskId: "task-1",
+                projectId: "proj-1",
+                sessionId: "task_session:task-1:ses-1",
+                itemKind: "user-input",
+                itemRole: "user",
+                title: "user",
+                displayText: null,
+                sortAt: "2026-03-22T10:00:01.000Z",
+                createdAt: "2026-03-22T10:00:01.000Z",
+                metadataJson: { partTypes: [] },
+              },
+              {
+                id: "projection-assistant-1",
+                taskId: "task-1",
+                projectId: "proj-1",
+                sessionId: "task_session:task-1:ses-1",
+                itemKind: "assistant-output",
+                itemRole: "assistant",
+                title: "assistant",
+                displayText: null,
+                sortAt: "2026-03-22T10:00:03.000Z",
+                createdAt: "2026-03-22T10:00:03.000Z",
+                metadataJson: { partTypes: [] },
+              },
+            ],
+            meta: {
+              readSource: "task-domain-projection",
+              complete: false,
+              itemCount: 2,
+            },
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/branches/ses-1/timeline?includeLineage=true") {
+        return {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "status-1",
+                role: "system",
+                text: "任务进入 running 状态",
+                createdAt: "2026-03-22T09:59:59.000Z",
+              },
+              {
+                id: "empty-user-1",
+                role: "user",
+                text: "",
+                createdAt: "2026-03-22T10:00:01.000Z",
+              },
+              {
+                id: "empty-assistant-1",
+                role: "assistant",
+                text: "",
+                createdAt: "2026-03-22T10:00:03.000Z",
+              },
+            ],
+            meta: {
+              readSource: "conversation-table",
+              cacheState: "complete",
+              complete: true,
+              itemCount: 2,
+            },
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/branches") {
+        return {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "task_session:task-1:ses-1",
+                taskId: "task-1",
+                runtimeSessionId: "ses-1",
+                parentRuntimeSessionId: null,
+                forkedFromMessageId: null,
+                branchName: "main",
+                sourceType: "root",
+                isActive: true,
+                createdAt: "2026-03-22T10:00:00.000Z",
+                updatedAt: "2026-03-22T10:00:00.000Z",
+                archivedAt: null,
+              },
+            ],
+          },
+        };
+      }
+
+      return { ok: true, data: {} };
+    });
+
+    const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
+
+    const response = await taskRoutes.request("http://localhost/task-1/execution-trace", {
+      headers: {
+        Authorization: "Bearer test",
+      },
+    });
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload.timelineMeta).toMatchObject({
+      readSource: "opencode-runtime",
+      cacheState: "complete",
+    });
+    expect(payload.timeline).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "status-1",
+          role: "system",
+          text: "任务进入 running 状态",
+        }),
+        expect.objectContaining({
+          id: "msg-3",
+          role: "user",
+          text: expect.stringContaining("第二轮用户输入"),
+        }),
+        expect.objectContaining({
+          id: "msg-4",
+          role: "assistant",
+          text: "第二轮模型回复",
+        }),
+      ]),
+    );
+    expect(payload.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "msg-3",
+          role: "user",
+          text: expect.stringContaining("第二轮用户输入"),
+        }),
+        expect.objectContaining({
+          id: "msg-4",
+          role: "assistant",
+          text: "第二轮模型回复",
+        }),
+      ]),
+    );
+    expect(payload.finalPrompt == null || payload.finalPrompt.includes("第二轮用户输入")).toBe(true);
+    expect(payload.latestResponse).toBe("第二轮模型回复");
+    expect(getSessionMessagesMock).toHaveBeenCalledWith("ses-1");
+  });
+
+  test("loads runtime messages when projection and compat timeline are both empty", async () => {
+    cpFetchMock.mockImplementation(async (url: string) => {
+      if (url === "/api/project-tree/tasks/task-1") {
+        return {
+          ok: true,
+          data: {
+            id: "task-1",
+            projectId: "proj-1",
+            title: "trace task",
+            prompt: "第一轮用户输入",
+            status: "completed",
+            sessionId: "ses-1",
+            selectedModel: "github-copilot:gpt-5.4",
+            strategy: JSON.stringify({
+              selectedAgent: "oracle-enterprise",
+              hookExecutions: [],
+            }),
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/snapshot") {
+        return {
+          ok: true,
+          data: {
+            data: {
+              taskId: "task-1",
+              projectId: "proj-1",
+              currentStatus: "completed",
+              currentRunId: "task_run:task-1:ses-1",
+              currentSessionId: "ses-1",
+              latestResult: "snapshot only response",
+              latestResultSummary: "snapshot only response",
+              activeCandidateCount: 0,
+              completedCandidateCount: 1,
+              failedCandidateCount: 0,
+              totalChainSteps: 0,
+              completedChainSteps: 0,
+              updatedAt: "2026-03-22T10:00:03.000Z",
+            },
+            meta: {
+              readSource: "task-domain-projection",
+              complete: false,
+            },
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/timeline-view?runtimeSessionId=ses-1") {
+        return {
+          ok: true,
+          data: {
+            data: [],
+            meta: {
+              readSource: "task-domain-projection",
+              complete: false,
+              itemCount: 0,
+            },
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/branches/ses-1/timeline?includeLineage=true") {
+        return {
+          ok: true,
+          data: {
+            data: [],
+            meta: {
+              cacheState: "none",
+              complete: false,
+              itemCount: 0,
+            },
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/branches") {
+        return {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "task_session:task-1:ses-1",
+                taskId: "task-1",
+                runtimeSessionId: "ses-1",
+                parentRuntimeSessionId: null,
+                forkedFromMessageId: null,
+                branchName: "main",
+                sourceType: "root",
+                isActive: true,
+                createdAt: "2026-03-22T10:00:00.000Z",
+                updatedAt: "2026-03-22T10:00:00.000Z",
+                archivedAt: null,
+              },
+            ],
+          },
+        };
+      }
+
+      return { ok: true, data: {} };
+    });
+
+    const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
+
+    const response = await taskRoutes.request("http://localhost/task-1/execution-trace", {
+      headers: {
+        Authorization: "Bearer test",
+      },
+    });
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload.timelineMeta).toMatchObject({
+      readSource: "opencode-runtime",
+      cacheState: "complete",
+    });
+    expect(payload.timeline).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "msg-3",
+          role: "user",
+          text: expect.stringContaining("第二轮用户输入"),
+        }),
+        expect.objectContaining({
+          id: "msg-4",
+          role: "assistant",
+          text: "第二轮模型回复",
+        }),
+      ]),
+    );
+    expect(payload.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "msg-3",
+          role: "user",
+          text: expect.stringContaining("第二轮用户输入"),
+        }),
+        expect.objectContaining({
+          id: "msg-4",
+          role: "assistant",
+          text: "第二轮模型回复",
+        }),
+      ]),
+    );
+    expect(payload.finalPrompt == null || payload.finalPrompt.includes("第二轮用户输入")).toBe(true);
+    expect(payload.latestResponse).toBe("第二轮模型回复");
+    expect(getSessionMessagesMock).toHaveBeenCalledWith("ses-1");
   });
 
   test("keeps projection incomplete meta when projection and service timeline are both unavailable", async () => {
@@ -1069,6 +1742,214 @@ describe("task execution trace route", () => {
       ]),
     );
     expectNoPromptBackfillSegment(payload, "第一轮用户输入");
+    expect(getSessionMessagesMock).not.toHaveBeenCalled();
+  });
+
+  test("does not reuse task snapshot latestResult for an explicitly requested candidate session", async () => {
+    cpFetchMock.mockImplementation(async (url: string) => {
+      if (url === "/api/project-tree/tasks/task-1") {
+        return {
+          ok: true,
+          data: {
+            id: "task-1",
+            projectId: "proj-1",
+            title: "trace task",
+            prompt: "第一轮用户输入",
+            status: "completed",
+            sessionId: "ses-main",
+            selectedModel: "github-copilot:gpt-5.4",
+            strategy: JSON.stringify({
+              selectedAgent: "oracle-enterprise",
+              hookExecutions: [],
+            }),
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/snapshot") {
+        return {
+          ok: true,
+          data: {
+            data: {
+              taskId: "task-1",
+              projectId: "proj-1",
+              currentStatus: "completed",
+              currentRunId: "task_run:task-1:ses-main",
+              currentSessionId: "ses-main",
+              latestResult: "主线最新结果",
+              latestResultSummary: "主线最新结果",
+              activeCandidateCount: 0,
+              completedCandidateCount: 2,
+              failedCandidateCount: 0,
+              totalChainSteps: 0,
+              completedChainSteps: 0,
+              updatedAt: "2026-03-22T10:00:03.000Z",
+            },
+            meta: {
+              readSource: "task-domain-projection",
+              complete: false,
+            },
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/timeline-view?runtimeSessionId=ses-candidate&includeLineage=false") {
+        return {
+          ok: true,
+          data: {
+            data: [],
+            meta: {
+              readSource: "task-domain-projection",
+              complete: false,
+              itemCount: 0,
+            },
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/branches/ses-candidate/timeline") {
+        return {
+          ok: true,
+          data: {
+            data: [],
+            meta: {
+              cacheState: "partial",
+              complete: false,
+              itemCount: 0,
+            },
+          },
+        };
+      }
+
+      return { ok: true, data: {} };
+    });
+
+    getSessionMessagesMock.mockRejectedValue(new Error("should not hit runtime messages"));
+
+    const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
+
+    const response = await taskRoutes.request(
+      "http://localhost/task-1/execution-trace?sessionId=ses-candidate&includeLineage=false",
+      {
+        headers: {
+          Authorization: "Bearer test",
+        },
+      },
+    );
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload.snapshot).toMatchObject({ latestResult: "主线最新结果" });
+    expect(payload.latestResponse).toBeNull();
+    expect(payload.messages).toEqual([]);
+    expect(cpFetchMock).toHaveBeenCalledWith(
+      "/api/tasks/task-1/branches/ses-candidate/timeline",
+      expect.anything(),
+    );
+    expect(getSessionMessagesMock).not.toHaveBeenCalled();
+  });
+
+  test("does not reuse task snapshot latestResult even when the explicitly requested session matches task.sessionId", async () => {
+    cpFetchMock.mockImplementation(async (url: string) => {
+      if (url === "/api/project-tree/tasks/task-1") {
+        return {
+          ok: true,
+          data: {
+            id: "task-1",
+            projectId: "proj-1",
+            title: "trace task",
+            prompt: "第一轮用户输入",
+            status: "completed",
+            sessionId: "ses-main",
+            selectedModel: "github-copilot:gpt-5.4",
+            strategy: JSON.stringify({
+              selectedAgent: "oracle-enterprise",
+              hookExecutions: [],
+            }),
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/snapshot") {
+        return {
+          ok: true,
+          data: {
+            data: {
+              taskId: "task-1",
+              projectId: "proj-1",
+              currentStatus: "completed",
+              currentRunId: "task_run:task-1:ses-main",
+              currentSessionId: "ses-main",
+              latestResult: "主线最新结果",
+              latestResultSummary: "主线最新结果",
+              activeCandidateCount: 0,
+              completedCandidateCount: 2,
+              failedCandidateCount: 0,
+              totalChainSteps: 0,
+              completedChainSteps: 0,
+              updatedAt: "2026-03-22T10:00:03.000Z",
+            },
+            meta: {
+              readSource: "task-domain-projection",
+              complete: false,
+            },
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/timeline-view?runtimeSessionId=ses-main&includeLineage=false") {
+        return {
+          ok: true,
+          data: {
+            data: [],
+            meta: {
+              readSource: "task-domain-projection",
+              complete: false,
+              itemCount: 0,
+            },
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/branches/ses-main/timeline") {
+        return {
+          ok: true,
+          data: {
+            data: [],
+            meta: {
+              cacheState: "partial",
+              complete: false,
+              itemCount: 0,
+            },
+          },
+        };
+      }
+
+      return { ok: true, data: {} };
+    });
+
+    getSessionMessagesMock.mockRejectedValue(new Error("should not hit runtime messages"));
+
+    const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
+
+    const response = await taskRoutes.request(
+      "http://localhost/task-1/execution-trace?sessionId=ses-main&includeLineage=false",
+      {
+        headers: {
+          Authorization: "Bearer test",
+        },
+      },
+    );
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload.snapshot).toMatchObject({ latestResult: "主线最新结果" });
+    expect(payload.latestResponse).toBeNull();
+    expect(payload.messages).toEqual([]);
+    expect(cpFetchMock).toHaveBeenCalledWith(
+      "/api/tasks/task-1/branches/ses-main/timeline",
+      expect.anything(),
+    );
     expect(getSessionMessagesMock).not.toHaveBeenCalled();
   });
 

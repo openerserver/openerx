@@ -2,7 +2,7 @@
   <div style="padding: 24px">
     <a-page-header
       title="组织运行策略"
-      sub-title="配置平台默认协作模式、自动托管等级和老板参与方式"
+      sub-title="配置平台默认协作模式、自动托管等级和管理介入方式"
       @back="router.push('/settings')"
     />
 
@@ -27,7 +27,7 @@
                 <a-form-item label="默认自动托管等级">
                   <a-select :value="form.defaultAutopilotLevel" :options="autopilotOptions" @update:value="form.defaultAutopilotLevel = asAutopilotLevel($event)" />
                 </a-form-item>
-                <a-form-item label="默认老板参与方式">
+                <a-form-item label="默认管理介入方式">
                   <a-select :value="form.defaultBossParticipationMode" :options="bossModeOptions" @update:value="form.defaultBossParticipationMode = asBossParticipationMode($event)" />
                 </a-form-item>
                 <a-space wrap>
@@ -115,7 +115,7 @@ const scenarioColumns = [
   { title: "场景", dataIndex: "scenarioKey", key: "scenarioKey" },
   { title: "协作", dataIndex: "collaborationMode", key: "collaborationMode" },
   { title: "托管", dataIndex: "autopilotLevel", key: "autopilotLevel" },
-  { title: "老板", dataIndex: "bossParticipationMode", key: "bossParticipationMode" },
+  { title: "管理介入", dataIndex: "bossParticipationMode", key: "bossParticipationMode" },
 ];
 
 const scenarioRows = computed(() => form.recommendedProfiles || []);

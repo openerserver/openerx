@@ -35,7 +35,7 @@
                 <a-descriptions-item label="可选模板数">
                   {{ viewModel.selectableTemplates.length }}
                 </a-descriptions-item>
-                <a-descriptions-item label="老板自动切模板">
+                <a-descriptions-item label="管理介入自动切模板">
                   {{ viewModel.projectSettings.allowBossAutoTemplateSwitch ? '已开启' : '未开启' }}
                 </a-descriptions-item>
                 <a-descriptions-item label="项目偏好模板">
@@ -80,13 +80,13 @@
                     </a-form-item>
                   </a-col>
                 </a-row>
-                <a-form-item label="老板自动切模板">
+                <a-form-item label="管理介入自动切模板">
                   <a-checkbox
                     :checked="allowBossAutoTemplateSwitch"
                     :disabled="!viewModel.access.canManage"
                     @update:checked="allowBossAutoTemplateSwitch = Boolean($event)"
                   >
-                    允许老板在治理授权范围内自动写入 select-template 决策并切换任务模板
+                    允许管理介入在治理授权范围内自动写入 select-template 决策并切换任务模板
                   </a-checkbox>
                 </a-form-item>
                 <a-space>
@@ -115,15 +115,15 @@
             <a-descriptions-item label="默认自动托管等级">
               {{ viewModel.currentTemplatePolicy?.defaultAutopilotLevel || '未配置' }}
             </a-descriptions-item>
-            <a-descriptions-item label="默认老板参与方式">
+            <a-descriptions-item label="默认管理介入方式">
               {{ viewModel.currentTemplatePolicy?.defaultBossParticipationMode || '未配置' }}
             </a-descriptions-item>
-            <a-descriptions-item label="是否强制老板参与">
+            <a-descriptions-item label="是否强制管理介入">
               {{ viewModel.currentTemplatePolicy?.forceBossParticipation ? '是' : '否' }}
             </a-descriptions-item>
           </a-descriptions>
           <a-typography-paragraph type="secondary" style="margin: 12px 0 0">
-            当老板自动切模板开启后，select-template 决策会优先采用这里定义的默认档位，并在强制老板参与时提升为 full-manager。
+            当管理介入自动切模板开启后，select-template 决策会优先采用这里定义的默认档位，并在强制管理介入时提升为 full-manager。
           </a-typography-paragraph>
         </a-card>
 

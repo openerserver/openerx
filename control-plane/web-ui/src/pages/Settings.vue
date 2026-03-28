@@ -4,7 +4,7 @@
 
     <a-card size="small" title="组织运行策略" style="margin-bottom: 16px">
       <div style="display: flex; justify-content: space-between; gap: 12px; align-items: center; flex-wrap: wrap">
-        <a-typography-text type="secondary">组织架构化 Agent 的平台默认协作模式、托管等级和老板参与方式在独立页面维护。</a-typography-text>
+        <a-typography-text type="secondary">组织架构化 Agent 的平台默认协作模式、托管等级和管理介入方式在独立页面维护。</a-typography-text>
         <a-button type="primary" data-testid="open-organization-operating-settings" @click="router.push('/settings/organization-operating')">打开组织运行策略</a-button>
       </div>
     </a-card>
@@ -960,6 +960,97 @@
             </a-collapse>
           </a-card>
 
+          <a-card title="Follow-up 模板" size="small" style="margin-top: 16px">
+            <template #extra>
+              <a-button size="small" type="dashed" @click="addFollowup">+ 新增 Follow-up</a-button>
+            </template>
+            <a-typography-text type="secondary" style="display: block; margin-bottom: 12px; font-size: 12px">
+              执行后 Hook 返回 spawn-followup 时，会从这里解析模板并启动独立 follow-up 执行。模板缺失时，任务详情页会明确提示用户修复配置。
+            </a-typography-text>
+            <a-empty v-if="strategyData.followups.length === 0" description="暂无 follow-up 模板，请添加" />
+            <a-collapse v-else accordion size="small">
+              <a-collapse-panel
+                v-for="(followup, idx) in strategyData.followups"
+                :key="followup.id"
+                :header="followup.id || `Follow-up ${idx + 1}`"
+              >
+                <template #extra>
+                  <a-space @click.stop>
+                    <a-switch
+                      :checked="followup.enabled"
+                      checked-children="启用"
+                      un-checked-children="停用"
+                      size="small"
+                      @update:checked="followup.enabled = Boolean($event)"
+                    />
+                    <a-button size="small" danger @click.stop="removeFollowup(idx)">删除</a-button>
+                  </a-space>
+                </template>
+                <a-form layout="vertical" size="small">
+                  <a-row :gutter="12">
+                    <a-col :span="8">
+                      <a-form-item label="模板 ID">
+                        <a-input :value="followup.id" @update:value="followup.id = String($event ?? '')" />
+                      </a-form-item>
+                    </a-col>
+                    <a-col :span="8">
+                      <a-form-item label="执行 Agent">
+                        <a-select
+                          :value="followup.agent || undefined"
+                          show-search
+                          style="width: 100%"
+                          placeholder="选择 Agent"
+                          :options="getStrategySingleAgentSelectOptions(followup.agent)"
+                          option-filter-prop="label"
+                          allow-clear
+                          @update:value="followup.agent = String($event ?? '')"
+                        />
+                      </a-form-item>
+                    </a-col>
+                    <a-col :span="8">
+                      <a-form-item label="结果写回模式">
+                        <a-select :value="followup.resultMode || 'advisory'" @update:value="followup.resultMode = normalizeFollowupResultMode($event)">
+                          <a-select-option value="advisory">仅建议</a-select-option>
+                          <a-select-option value="append">追加结果</a-select-option>
+                          <a-select-option value="replace">替换结果</a-select-option>
+                        </a-select>
+                      </a-form-item>
+                    </a-col>
+                  </a-row>
+                  <a-row :gutter="12">
+                    <a-col :span="12">
+                      <a-form-item label="指定模型">
+                        <a-select
+                          :value="followup.model || undefined"
+                          show-search
+                          style="width: 100%"
+                          placeholder="留空使用系统默认"
+                          :options="getStrategyModelSelectOptions(followup.model)"
+                          option-filter-prop="label"
+                          allow-clear
+                          @update:value="followup.model = String($event ?? '')"
+                        />
+                      </a-form-item>
+                    </a-col>
+                    <a-col :span="12">
+                      <a-form-item label="超时 (ms)">
+                        <a-input-number :value="followup.timeoutMs" :min="1000" :step="1000" style="width: 100%" @update:value="followup.timeoutMs = Number($event ?? 15000)" />
+                      </a-form-item>
+                    </a-col>
+                  </a-row>
+                  <a-form-item label="提示词模板">
+                    <a-textarea
+                      :value="followup.promptTemplate"
+                      :rows="6"
+                      placeholder="可使用 {{taskPrompt}} {{taskResult}} {{hookResult}} {{followupGoal}} 等变量"
+                      @update:value="followup.promptTemplate = String($event ?? '')"
+                    />
+                  </a-form-item>
+                </a-form>
+              </a-collapse-panel>
+            </a-collapse>
+          </a-card>
+
           <!-- ── Judge Configuration ── -->
           <a-card title="裁判配置" size="small" style="margin-top: 16px">
             <a-typography-text type="secondary" style="display: block; margin-bottom: 12px; font-size: 12px">
@@ -1166,6 +1257,7 @@ import {
   type ContinuationPolicy,
   type CopilotModelInfo,
   type DiscoveredProviderModel,
+  type FollowupTemplate,
   type JudgeConfig,
   type LifecycleHook,
   type McpServer,
@@ -1240,6 +1332,13 @@ function normalizeTemplateMode(value: unknown): WorkflowTemplate["mode"] {
 
 function normalizeJudgeSelectionStrategy(value: unknown): JudgeConfig["selectionStrategy"] {
   return value === "highest-score" ? "highest-score" : "judge-pick";
+}
+
+function normalizeFollowupResultMode(value: unknown): FollowupTemplate["resultMode"] {
+  if (value === "append" || value === "replace") {
+    return value;
+  }
+  return "advisory";
 }
 
 function prefillProviderDraft(draft: { key: string; api?: string } | undefined) {
@@ -2924,6 +3023,7 @@ const strategyData = reactive<OrchestrationStrategy>({
       categoryDefaults: ["quick", "deep", "ops", "security", "architecture"],
     },
   ],
+  followups: [],
   judge: {
     enabled: false,
     agent: "prometheus-enterprise",
@@ -3079,6 +3179,23 @@ function removeTemplate(index: number) {
   strategyData.templates.splice(index, 1);
 }
 
+function addFollowup() {
+  const id = `followup-${Date.now()}`;
+  strategyData.followups.push({
+    id,
+    enabled: true,
+    agent: "",
+    model: "",
+    promptTemplate: "",
+    timeoutMs: 15000,
+    resultMode: "advisory",
+  });
+}
+
+function removeFollowup(index: number) {
+  strategyData.followups.splice(index, 1);
+}
+
 async function saveStrategy() {
   strategySaving.value = true;
   try {
@@ -3088,6 +3205,7 @@ async function saveStrategy() {
       enablePipeline: strategyData.enablePipeline,
       hooks: strategyData.hooks,
       templates: strategyData.templates,
+      followups: strategyData.followups,
       judge: strategyData.judge,
     });
     message.success("编排策略已保存");

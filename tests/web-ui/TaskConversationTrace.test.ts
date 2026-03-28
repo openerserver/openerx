@@ -130,6 +130,115 @@ describe("Task conversation composables", () => {
     expect(secondItem?.role).toBe("assistant");
   });
 
+  it("keeps user prompts visible when execution trace falls back to opencode runtime messages", async () => {
+    apiMocks.getTaskExecutionTraceView.mockResolvedValue({
+      taskId: "task-1",
+      sessionId: "session-1",
+      segments: [],
+      hookExecutions: [],
+      messages: [
+        {
+          id: "msg-1",
+          role: "user",
+          text: "给输入法设计一个操作页面",
+          createdAt: "2026-03-25T09:44:01.000Z",
+          raw: {
+            id: "msg-1",
+            role: "user",
+            info: {
+              id: "msg-1",
+              role: "user",
+              time: { created: "2026-03-25T09:44:01.000Z" },
+            },
+            parts: [{ type: "text", text: "给输入法设计一个操作页面" }],
+          },
+        },
+        {
+          id: "msg-2",
+          role: "assistant",
+          text: "先做需求澄清。",
+          createdAt: "2026-03-25T09:44:10.000Z",
+          raw: {
+            id: "msg-2",
+            role: "assistant",
+            info: {
+              id: "msg-2",
+              role: "assistant",
+              agent: "explore-enterprise",
+              time: { completed: "2026-03-25T09:44:10.000Z" },
+            },
+            parts: [{ type: "text", text: "先做需求澄清。" }],
+          },
+        },
+        {
+          id: "msg-3",
+          role: "user",
+          text: "第二轮用户输入",
+          createdAt: "2026-03-25T09:45:01.000Z",
+          raw: {
+            id: "msg-3",
+            role: "user",
+            info: {
+              id: "msg-3",
+              role: "user",
+              time: { created: "2026-03-25T09:45:01.000Z" },
+            },
+            parts: [{ type: "text", text: "第二轮用户输入" }],
+          },
+        },
+        {
+          id: "msg-4",
+          role: "assistant",
+          text: "第二轮模型回复",
+          createdAt: "2026-03-25T09:45:10.000Z",
+          raw: {
+            id: "msg-4",
+            role: "assistant",
+            info: {
+              id: "msg-4",
+              role: "assistant",
+              agent: "explore-enterprise",
+              time: { completed: "2026-03-25T09:45:10.000Z" },
+            },
+            parts: [{ type: "text", text: "第二轮模型回复" }],
+          },
+        },
+      ],
+      timeline: [],
+      timelineMeta: {
+        readSource: "opencode-runtime",
+        cacheState: "complete",
+        complete: true,
+        includeLineage: true,
+        lineagePath: ["session-1"],
+        cachedSessionCount: 1,
+        itemCount: 4,
+      },
+    });
+
+    const taskId = ref("task-1");
+    const sessionId = ref<string | undefined>("session-1");
+    const state = useTreeMessages(taskId, sessionId, { includeLineage: true });
+
+    await flushPromises();
+
+    expect(apiMocks.getTaskExecutionTraceView).toHaveBeenCalledWith("task-1", "session-1", {
+      includeLineage: true,
+    });
+    expect(state.conversationItems.value.map((item) => item.role)).toEqual([
+      "user",
+      "assistant",
+      "user",
+      "assistant",
+    ]);
+    expect(state.conversationItems.value.map((item) => item.text)).toEqual([
+      "给输入法设计一个操作页面",
+      "先做需求澄清。",
+      "第二轮用户输入",
+      "第二轮模型回复",
+    ]);
+  });
+
   it("merges realtime assistant chunks into a streaming draft", async () => {
     apiMocks.getTaskExecutionTraceView.mockResolvedValue(
       createTraceFromMessages([

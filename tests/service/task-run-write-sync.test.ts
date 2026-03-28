@@ -149,7 +149,7 @@ afterEach(() => {
 });
 
 describe("task run write sync", () => {
-  test("maps parallel candidate agent runs into task run, node, aggregate, and domain event updates", async () => {
+  test("keeps mainline aggregate session and result unchanged for parallel candidate updates before adoption", async () => {
     const { createTaskRunWriteSyncApi, insertedRuns, insertedRunNodes, updatedAggregates } =
       await loadTaskRunWriteSyncModule({
         conversationSessionRecord: { id: "task_session:task-1:runtime-session-1" },
@@ -204,12 +204,12 @@ describe("task run write sync", () => {
     });
     expect(updatedAggregates[0]).toMatchObject({
       currentRunId: "task_run:task-1:runtime-session-1",
-      currentSessionId: "runtime-session-1",
-      currentAgentRunId: "agent-run-1",
-      status: "cancelled",
-      latestResult: "candidate stopped",
-      latestResultSummary: "candidate stopped",
-      finishedAt: "2025-01-01T00:01:30.000Z",
+      currentSessionId: "task-session-root",
+      currentAgentRunId: null,
+      status: "running",
+      latestResult: "existing result",
+      latestResultSummary: "existing result",
+      finishedAt: null,
     });
     expect(appendTaskDomainEvent).toHaveBeenCalledWith(
       expect.objectContaining({

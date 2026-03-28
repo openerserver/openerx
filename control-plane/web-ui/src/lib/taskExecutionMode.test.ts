@@ -32,6 +32,27 @@ describe("buildExecutionModeTaskUpdate", () => {
     });
   });
 
+  it("accepts strategy objects in addition to serialized strings", () => {
+    const patch = buildExecutionModeTaskUpdate(
+      {
+        strategy: {
+          executionMode: "single",
+          sequentialSteps: [{ id: "step-1", title: "分析", instruction: "先分析" }],
+        } as unknown as string,
+      },
+      {
+        mode: "parallel",
+        candidates: [{ model: "github-copilot:gpt-5-mini", label: "候选 A" }],
+      },
+    );
+
+    expect(patch.executionMode).toBe("parallel");
+    expect(JSON.parse(patch.strategy ?? "{}")).toMatchObject({
+      executionMode: "parallel",
+      parallelCandidates: [{ model: "github-copilot:gpt-5-mini", label: "候选 A" }],
+    });
+  });
+
   it("resolves editable execution state from strategy only", () => {
     expect(
       resolveEditableExecutionMode({

@@ -14,7 +14,7 @@
             <template #overlay>
               <a-menu>
                 <a-menu-item @click="router.push(`/projects/${project.id}/orchestration`)">查看介入编排</a-menu-item>
-                <a-menu-item data-testid="open-boss-operations-center" @click="router.push(`/projects/${project.id}/boss-operations`)">老板经营视图</a-menu-item>
+                <a-menu-item data-testid="open-management-operations-center" @click="router.push(`/projects/${project.id}/management-operations`)">管理介入总览</a-menu-item>
               </a-menu>
             </template>
           </a-dropdown>

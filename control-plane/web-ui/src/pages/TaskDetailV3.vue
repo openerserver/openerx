@@ -135,6 +135,8 @@
               :items="conversationItems"
               :loading="messagesLoading"
               :error="messagesError"
+              :active-session-id="selectedBranchSessionId"
+              :force-scroll-token="conversationFocusToken"
               @open-file-preview="handleOpenFilePreview"
               @adopt-candidate="handleAdoptCandidate"
             />
@@ -184,11 +186,16 @@
                 :content="previewFile.content"
                 @close="previewFile = null"
               />
+              <TaskMemberPanel :view="taskMemberView" :loading="taskMemberViewLoading" />
+              <TaskFollowupPanel
+                :task-id="task.id"
+                :session-id="selectedBranchSessionId"
+                :refresh-key="traceRefreshKey"
+              />
               <TaskExecutionTracePanel
                 :task-id="task.id"
                 :session-id="selectedBranchSessionId"
-                :project-id="projectId || undefined"
-                @select-session="handleSelectSession"
+                :refresh-key="traceRefreshKey"
               />
             </template>
           </aside>
@@ -200,7 +207,7 @@
 
 <script setup lang="ts">
 import { message } from "ant-design-vue";
-import { computed, defineAsyncComponent, onBeforeUnmount, ref, watch } from "vue";
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { type TreeTask, useProjectTreeTask } from "../composables/useProjectTreeTask";
 import { useTreeBranches } from "../composables/useTreeBranches";
@@ -212,9 +219,11 @@ import {
   type JudgeResult,
   type ProjectionRunCandidate,
   type ProjectionRunRecord,
+  type ProjectTreeNodeRecord,
   type TaskAgentRunRecord,
   type TaskDomainRunDetailRecord,
   type TaskDomainRunRecord,
+  type TaskMemberViewModel,
   type TaskRuntimePermission,
   type TaskWorkflowViewModel,
   adoptParallelCandidate,
@@ -225,6 +234,7 @@ import {
   getTaskDomainRunDetail,
   getTaskDomainRuns,
   getTaskExecutionTraceView,
+  getTaskMemberView,
   getTaskWorkflowView,
   listTaskRuntimePermissions,
   replyTaskRuntimePermission,
@@ -251,6 +261,12 @@ import { useRealtimeStore } from "../stores/realtime";
 
 const TaskDetailQuickOverview = defineAsyncComponent(
   () => import("../components/task-detail/TaskDetailQuickOverview.vue"),
+);
+const TaskMemberPanel = defineAsyncComponent(
+  () => import("../components/task-detail/TaskMemberPanel.vue"),
+);
+const TaskFollowupPanel = defineAsyncComponent(
+  () => import("../components/task-detail/TaskFollowupPanel.vue"),
 );
 const ExecutionModeModal = defineAsyncComponent(
   () => import("../components/ExecutionModeModal.vue"),
@@ -316,6 +332,8 @@ const {
 /* ------------------------------------------------------------------ */
 
 const workflowView = ref<TaskWorkflowViewModel | null>(null);
+const taskMemberView = ref<TaskMemberViewModel | null>(null);
+const taskMemberViewLoading = ref(false);
 const pageLoading = computed(() => taskLoading.value && !task.value);
 const loadError = computed(() => taskLoadError.value || "");
 const sidebarCollapsed = ref(false);
@@ -324,6 +342,7 @@ const modelsLoading = ref(false);
 const continuing = ref(false);
 const forking = ref(false);
 const terminating = ref(false);
+const conversationFocusToken = ref(0);
 const composerResetToken = ref(0);
 const showExecutionModeModal = ref(false);
 const executionModeSaving = ref(false);
@@ -341,6 +360,7 @@ const taskDomainRuns = ref<TaskDomainRunRecord[]>([]);
 const taskDomainRunDetails = ref<Record<string, TaskDomainRunDetailRecord>>({});
 const runtimePermissions = ref<TaskRuntimePermission[]>([]);
 const runtimePermissionActionId = ref<string | null>(null);
+const traceRefreshKey = ref(0);
 
 const chatTraceWarning = computed(() => {
   const cacheState = messageTrace.value?.timelineMeta?.cacheState;
@@ -487,7 +507,18 @@ function buildProjectionBackedParallelRuns() {
 
   return parallelDomainRuns.map((run) => {
     const detail = taskDomainRunDetails.value[run.id];
-    const candidateSessions = buildProjectionCandidateSessions(run.id, detail);
+    const candidateSessions = buildProjectionCandidateSessions(
+      run.id,
+      detail,
+      run.startedAt || run.createdAt,
+      typeof run.candidateCount === "number" ? run.candidateCount : undefined,
+    ).map(
+      (candidate, index) => ({
+        ...candidate,
+        label: editableParallelCandidates.value[index]?.label || candidate.label,
+        model: editableParallelCandidates.value[index]?.model || candidate.model,
+      }),
+    );
     const judgeResult = resolveProjectionJudgeResult(run, detail);
 
     return {
@@ -505,6 +536,285 @@ function buildProjectionBackedParallelRuns() {
   });
 }
 
+function sortFallbackCandidateNodes(nodes: ProjectTreeNodeRecord[]) {
+  return nodes.slice().sort((left, right) => {
+    const leftCreatedAt = toTimestampMs(left.createdAt) ?? Number.MAX_SAFE_INTEGER;
+    const rightCreatedAt = toTimestampMs(right.createdAt) ?? Number.MAX_SAFE_INTEGER;
+    if (leftCreatedAt !== rightCreatedAt) {
+      return leftCreatedAt - rightCreatedAt;
+    }
+
+    return String(left.runtimeSessionId ?? left.id).localeCompare(
+      String(right.runtimeSessionId ?? right.id),
+      "zh-CN",
+    );
+  });
+}
+
+function pickLatestFallbackCandidateNodes(
+  nodes: ProjectTreeNodeRecord[],
+  expectedCandidateCount: number,
+) {
+  const sortedNodes = sortFallbackCandidateNodes(nodes);
+  if (expectedCandidateCount <= 0 || sortedNodes.length <= expectedCandidateCount) {
+    return sortedNodes;
+  }
+
+  for (let index = sortedNodes.length - 1; index >= 0; index -= 1) {
+    const pivotTimestampMs =
+      toTimestampMs(sortedNodes[index]?.createdAt) ?? toTimestampMs(sortedNodes[index]?.updatedAt);
+    if (pivotTimestampMs == null) {
+      continue;
+    }
+
+    const cohort = sortedNodes.filter((node) => {
+      const nodeTimestampMs = toTimestampMs(node.createdAt) ?? toTimestampMs(node.updatedAt);
+      return nodeTimestampMs != null && Math.abs(nodeTimestampMs - pivotTimestampMs) <= 1000;
+    });
+
+    if (cohort.length >= expectedCandidateCount) {
+      return sortFallbackCandidateNodes(cohort).slice(0, expectedCandidateCount);
+    }
+  }
+
+  return sortedNodes.slice(Math.max(0, sortedNodes.length - expectedCandidateCount));
+}
+
+function resolveSessionTreeFallbackCandidateNodes() {
+  const configuredCandidates = editableParallelCandidates.value;
+  if (configuredCandidates.length < 2) {
+    return {
+      rootSessionId: null,
+      candidateNodes: [] as ProjectTreeNodeRecord[],
+    };
+  }
+
+  const sessionNodes = flatNodes.value.filter(
+    (node): node is ProjectTreeNodeRecord =>
+      typeof node.runtimeSessionId === "string" && node.runtimeSessionId.trim().length > 0,
+  );
+
+  if (sessionNodes.length < 2) {
+    return {
+      rootSessionId: null,
+      candidateNodes: [] as ProjectTreeNodeRecord[],
+    };
+  }
+
+  let rootSessionId =
+    selectedBranchSessionId.value ?? resolveRequestedSessionId() ?? task.value?.sessionId ?? undefined;
+  let rootNode = rootSessionId
+    ? sessionNodes.find((node) => node.runtimeSessionId === rootSessionId)
+    : undefined;
+
+  let candidates =
+    rootNode?.id != null
+      ? sessionNodes.filter(
+          (node) =>
+            node.parentId === rootNode.id &&
+            node.runtimeSessionId !== rootSessionId &&
+            !node.archivedAt,
+        )
+      : [];
+
+  if (candidates.length >= configuredCandidates.length) {
+    candidates = pickLatestFallbackCandidateNodes(candidates, configuredCandidates.length);
+  }
+
+  if (candidates.length < 2) {
+    candidates = sessionNodes.filter(
+      (node) =>
+        node.parentId === taskNodeId.value &&
+        node.runtimeSessionId !== rootSessionId &&
+        !node.archivedAt,
+    );
+
+    if (candidates.length >= configuredCandidates.length) {
+      candidates = pickLatestFallbackCandidateNodes(candidates, configuredCandidates.length);
+    }
+  }
+
+  if (candidates.length < 2) {
+    const groupedByParent = new Map<string, ProjectTreeNodeRecord[]>();
+    for (const node of sessionNodes) {
+      if (!node.parentId || node.archivedAt) {
+        continue;
+      }
+      const siblings = groupedByParent.get(node.parentId) ?? [];
+      siblings.push(node);
+      groupedByParent.set(node.parentId, siblings);
+    }
+
+    const scopedSessionId =
+      selectedBranchSessionId.value ?? resolveRequestedSessionId() ?? task.value?.sessionId ?? null;
+    const latestGroup = Array.from(groupedByParent.entries())
+      .map(([parentId, nodes]) => ({
+        parentId,
+        nodes: sortFallbackCandidateNodes(nodes),
+        parentNode: sessionNodes.find((node) => node.id === parentId),
+        latestCandidateAt:
+          sortFallbackCandidateNodes(nodes)
+            .map((node) => toTimestampMs(node.createdAt) ?? toTimestampMs(node.updatedAt) ?? 0)
+            .sort((left, right) => right - left)[0] ?? 0,
+      }))
+      .filter((group) => {
+        if (group.nodes.length < configuredCandidates.length) {
+          return false;
+        }
+
+        if (!scopedSessionId) {
+          return true;
+        }
+
+        return (
+          group.parentNode?.runtimeSessionId === scopedSessionId ||
+          group.nodes.some((node) => node.runtimeSessionId === scopedSessionId) ||
+          (rootNode != null && group.parentId === rootNode.parentId)
+        );
+      })
+      .sort((left, right) => right.latestCandidateAt - left.latestCandidateAt)[0];
+
+    if (latestGroup) {
+      candidates = pickLatestFallbackCandidateNodes(latestGroup.nodes, configuredCandidates.length);
+      rootNode = latestGroup.parentNode;
+      rootSessionId = latestGroup.parentNode?.runtimeSessionId ?? rootSessionId;
+    }
+  }
+
+  return {
+    rootSessionId: rootNode?.runtimeSessionId ?? rootSessionId ?? null,
+    candidateNodes: pickLatestFallbackCandidateNodes(candidates, configuredCandidates.length),
+  };
+}
+
+function projectionRunMatchesFallbackCandidates(
+  run: ProjectionRunRecord,
+  candidateSessionIds: string[],
+) {
+  if (candidateSessionIds.length < 2) {
+    return false;
+  }
+
+  const runSessionIds = run.candidateSessions
+    .map((candidate) => candidate.sessionId)
+    .filter((value): value is string => typeof value === "string" && value.length > 0);
+
+  if (runSessionIds.length !== candidateSessionIds.length) {
+    return false;
+  }
+
+  return candidateSessionIds.every((sessionId) => runSessionIds.includes(sessionId));
+}
+
+function hasProjectionRunBoundToRootSession(
+  projectionRuns: ProjectionRunRecord[],
+  rootSessionId: string | null,
+) {
+  if (!rootSessionId) {
+    return false;
+  }
+
+  return projectionRuns.some(
+    (run) =>
+      run.candidateSessions.length >= 2 &&
+      (run.executionSessionId === rootSessionId || run.parentSessionId === rootSessionId),
+  );
+}
+
+function buildSessionTreeFallbackParallelRun(projectionRuns: ProjectionRunRecord[]) {
+  const configuredCandidates = editableParallelCandidates.value;
+  const fallbackGroup = resolveSessionTreeFallbackCandidateNodes();
+  const candidateNodes = fallbackGroup.candidateNodes;
+  if (configuredCandidates.length < 2 || candidateNodes.length < 2) {
+    return null;
+  }
+
+  const candidateSessionIds = candidateNodes
+    .map((node) => node.runtimeSessionId)
+    .filter((value): value is string => typeof value === "string" && value.length > 0);
+
+  if (
+    projectionRuns.some((run) =>
+      projectionRunMatchesFallbackCandidates(run, candidateSessionIds),
+    )
+  ) {
+    return null;
+  }
+
+  const rootSessionId = fallbackGroup.rootSessionId;
+  if (hasProjectionRunBoundToRootSession(projectionRuns, rootSessionId)) {
+    return null;
+  }
+
+  const rootNode = rootSessionId
+    ? flatNodes.value.find((node) => node.runtimeSessionId === rootSessionId)
+    : undefined;
+  const startedAt =
+    rootNode?.createdAt ??
+    candidateNodes[0]?.createdAt ??
+    task.value?.startedAt ??
+    task.value?.createdAt;
+  const finishedAt =
+    task.value?.status === "running"
+      ? undefined
+      : task.value?.finishedAt ??
+        candidateNodes
+          .map((node) => node.updatedAt ?? node.createdAt)
+          .filter((value): value is string => typeof value === "string" && value.length > 0)
+          .sort((left, right) => (toTimestampMs(right) ?? 0) - (toTimestampMs(left) ?? 0))[0];
+
+  const fallbackStatus =
+    task.value?.status === "failed" || task.value?.status === "cancelled"
+      ? "failed"
+      : task.value?.status === "running"
+        ? "running"
+        : "completed";
+
+  return {
+    parallelRunId: `tree-fallback:${rootSessionId || task.value?.id || "current"}`,
+    startedAt,
+    finishedAt,
+    parentSessionId: rootSessionId,
+    executionSessionId: rootSessionId,
+    candidateSessions: candidateNodes.map((node, index) => ({
+      label: configuredCandidates[index]?.label || `候选 ${index + 1}`,
+      model: configuredCandidates[index]?.model,
+      status: fallbackStatus,
+      sessionId: node.runtimeSessionId ?? undefined,
+      startedAt: node.createdAt ?? undefined,
+      finishedAt: node.updatedAt ?? undefined,
+    } satisfies ProjectionRunCandidate)),
+  } satisfies ProjectionRunRecord;
+}
+
+function isSessionTreeFallbackParallelRun(run: ProjectionRunRecord | null | undefined) {
+  return Boolean(run?.parallelRunId?.startsWith("tree-fallback:"));
+}
+
+function hasLaterSingleConversationAfterFallback(run: ProjectionRunRecord) {
+  if (!isSessionTreeFallbackParallelRun(run)) {
+    return false;
+  }
+
+  const latestCandidateStartedAt = run.candidateSessions
+    .map((candidate) => candidate.startedAt)
+    .filter((value): value is string => typeof value === "string" && value.length > 0)
+    .sort((left, right) => (toTimestampMs(right) ?? 0) - (toTimestampMs(left) ?? 0))[0];
+
+  const latestCandidateStartedAtMs = toTimestampMs(latestCandidateStartedAt);
+  if (latestCandidateStartedAtMs == null) {
+    return false;
+  }
+
+  return baseConversationItems.value.some((item) => {
+    if (item.role !== "user") {
+      return false;
+    }
+    const itemCreatedAtMs = toTimestampMs(item.createdAt);
+    return itemCreatedAtMs != null && itemCreatedAtMs > latestCandidateStartedAtMs;
+  });
+}
+
 function buildProjectionRunCandidatesByIndex(runId: string) {
   const candidatesByIndex = new Map<number, TaskAgentRunRecord[]>();
 
@@ -518,6 +828,64 @@ function buildProjectionRunCandidatesByIndex(runId: string) {
   }
 
   return candidatesByIndex;
+}
+
+function mergeProjectionRunCandidatesByIndex(
+  target: Map<number, TaskAgentRunRecord[]>,
+  source: Map<number, TaskAgentRunRecord[]>,
+) {
+  for (const [candidateIndex, records] of source.entries()) {
+    if (target.has(candidateIndex) || records.length === 0) {
+      continue;
+    }
+    target.set(candidateIndex, records);
+  }
+}
+
+function augmentProjectionCandidatesFromCompanionRuns(
+  runId: string,
+  candidatesByIndex: Map<number, TaskAgentRunRecord[]>,
+  runStartedAt?: string,
+  expectedCandidateCount?: number,
+) {
+  if (
+    typeof expectedCandidateCount !== "number" ||
+    expectedCandidateCount <= 0 ||
+    candidatesByIndex.size >= expectedCandidateCount
+  ) {
+    return candidatesByIndex;
+  }
+
+  const startedAtMs = toTimestampMs(runStartedAt);
+  if (startedAtMs == null) {
+    return candidatesByIndex;
+  }
+
+  const mergedCandidates = new Map(candidatesByIndex);
+  const companionRuns = taskDomainRuns.value
+    .filter((run) => run.id !== runId && run.orchestrationKind === "parallel" && run.candidateCount === 1)
+    .map((run) => ({
+      run,
+      startedAtMs: toTimestampMs(run.startedAt || run.createdAt),
+    }))
+    .filter(
+      (
+        entry,
+      ): entry is {
+        run: TaskDomainRunRecord;
+        startedAtMs: number;
+      } => entry.startedAtMs != null && Math.abs(entry.startedAtMs - startedAtMs) <= 1000,
+    )
+    .sort((left, right) => left.startedAtMs - right.startedAtMs);
+
+  for (const { run } of companionRuns) {
+    mergeProjectionRunCandidatesByIndex(mergedCandidates, buildProjectionRunCandidatesByIndex(run.id));
+    if (mergedCandidates.size >= expectedCandidateCount) {
+      break;
+    }
+  }
+
+  return mergedCandidates;
 }
 
 function buildProjectionCandidateFromNode(
@@ -546,13 +914,43 @@ function buildProjectionCandidateFromNode(
 function buildProjectionCandidatesFromDetail(
   detail: TaskDomainRunDetailRecord,
   candidatesByIndex: Map<number, TaskAgentRunRecord[]>,
+  expectedCandidateCount?: number,
 ) {
-  return detail.candidateNodes
-    .slice()
-    .sort((left, right) => (left.candidateIndex ?? 0) - (right.candidateIndex ?? 0))
-    .map((node, candidateIndex) =>
-      buildProjectionCandidateFromNode(node, candidateIndex, candidatesByIndex),
-    );
+  const detailNodesByIndex = new Map<number, TaskDomainRunDetailRecord["candidateNodes"][number]>();
+  for (const node of detail.candidateNodes) {
+    if (typeof node.candidateIndex === "number") {
+      detailNodesByIndex.set(node.candidateIndex, node);
+    }
+  }
+
+  const candidateIndexes = new Set<number>([
+    ...detailNodesByIndex.keys(),
+    ...candidatesByIndex.keys(),
+  ]);
+
+  if (typeof expectedCandidateCount === "number" && expectedCandidateCount > 0) {
+    for (let index = 0; index < expectedCandidateCount; index += 1) {
+      if (detailNodesByIndex.has(index) || candidatesByIndex.has(index)) {
+        candidateIndexes.add(index);
+      }
+    }
+  }
+
+  return Array.from(candidateIndexes)
+    .sort((left, right) => left - right)
+    .flatMap((candidateIndex) => {
+      const detailNode = detailNodesByIndex.get(candidateIndex);
+      if (detailNode) {
+        return [buildProjectionCandidateFromNode(detailNode, candidateIndex, candidatesByIndex)];
+      }
+
+      const agentRunRecords = candidatesByIndex.get(candidateIndex) ?? [];
+      if (agentRunRecords.length === 0) {
+        return [];
+      }
+
+      return [mergeTaskAgentRunRecords(agentRunRecords)];
+    });
 }
 
 function buildProjectionCandidatesFromAgentRuns(
@@ -569,10 +967,17 @@ function buildProjectionCandidatesFromAgentRuns(
 function buildProjectionCandidateSessions(
   runId: string,
   detail: TaskDomainRunDetailRecord | null | undefined,
+  runStartedAt?: string,
+  expectedCandidateCount?: number,
 ) {
-  const candidatesByIndex = buildProjectionRunCandidatesByIndex(runId);
+  const candidatesByIndex = augmentProjectionCandidatesFromCompanionRuns(
+    runId,
+    buildProjectionRunCandidatesByIndex(runId),
+    runStartedAt,
+    expectedCandidateCount,
+  );
   if (detail?.candidateNodes?.length) {
-    return buildProjectionCandidatesFromDetail(detail, candidatesByIndex);
+    return buildProjectionCandidatesFromDetail(detail, candidatesByIndex, expectedCandidateCount);
   }
   return buildProjectionCandidatesFromAgentRuns(candidatesByIndex);
 }
@@ -701,7 +1106,11 @@ const editableSequentialSteps = computed<ChainStepInput[]>(() => {
 });
 
 const projectionParallelRuns = computed<ProjectionRunRecord[]>(() => {
-  return buildProjectionBackedParallelRuns()
+  const projectionRuns = buildProjectionBackedParallelRuns();
+  const fallbackRun = buildSessionTreeFallbackParallelRun(projectionRuns);
+  const runs = fallbackRun ? [...projectionRuns, fallbackRun] : projectionRuns;
+
+  return runs
     .slice()
     .sort(
       (left, right) => (toTimestampMs(left.startedAt) || 0) - (toTimestampMs(right.startedAt) || 0),
@@ -714,6 +1123,67 @@ const isParallelComparisonMode = computed(
     task.value?.orchestrationKind === "parallel" ||
     task.value?.executionMode === "parallel",
 );
+
+function runReferencesSession(run: ProjectionRunRecord, sessionId: string) {
+  if (!sessionId) {
+    return false;
+  }
+
+  if (run.executionSessionId === sessionId || run.parentSessionId === sessionId) {
+    return true;
+  }
+
+  return run.candidateSessions.some((candidate) => candidate.sessionId === sessionId);
+}
+
+function resolveRunSessionReferenceKind(
+  run: ProjectionRunRecord,
+  sessionId: string,
+): "direct" | "candidate" | null {
+  if (!sessionId) {
+    return null;
+  }
+
+  if (run.executionSessionId === sessionId || run.parentSessionId === sessionId) {
+    return "direct";
+  }
+
+  if (run.candidateSessions.some((candidate) => candidate.sessionId === sessionId)) {
+    return "candidate";
+  }
+
+  return null;
+}
+
+const sessionScopedParallelRuns = computed(() => {
+  const scopedSessionId =
+    selectedBranchSessionId.value ?? resolveRequestedSessionId() ?? task.value?.sessionId;
+  if (!scopedSessionId) {
+    return [] as ProjectionRunRecord[];
+  }
+
+  const matchedRuns = projectionParallelRuns.value
+    .map((run) => ({
+      run,
+      referenceKind: resolveRunSessionReferenceKind(run, scopedSessionId),
+    }))
+    .filter(
+      (
+        entry,
+      ): entry is {
+        run: ProjectionRunRecord;
+        referenceKind: "direct" | "candidate";
+      } => entry.referenceKind != null,
+    );
+
+  const hasDirectComparableRun = matchedRuns.some(
+    ({ run, referenceKind }) => referenceKind === "direct" && run.candidateSessions.length >= 2,
+  );
+
+  return matchedRuns
+    .filter(({ referenceKind }) => !hasDirectComparableRun || referenceKind === "direct")
+    .map(({ run }) => run);
+});
 
 function resolveParallelCandidateDisplayStatus(
   candidate: Pick<ExecutionCandidate, "status"> | Pick<ProjectionRunCandidate, "status">,
@@ -755,6 +1225,34 @@ function resolveParallelCandidateTraceState(
     };
   }
   return {};
+}
+
+function buildParallelCandidateFallbackItem(
+  run: ProjectionRunRecord,
+  candidate: ProjectionRunCandidate,
+  index: number,
+): TaskConversationMessageItem | null {
+  const fallbackText = typeof candidate.result === "string" ? candidate.result.trim() : "";
+  if (!fallbackText) {
+    return null;
+  }
+
+  return {
+    key: `${run.parallelRunId}:${candidate.sessionId || `candidate-${index}`}:fallback-result`,
+    role: "assistant",
+    agent: candidate.agent,
+    text: fallbackText,
+    toolCalls: [],
+    createdAt: candidate.finishedAt ?? candidate.startedAt ?? run.finishedAt ?? run.startedAt,
+    raw: {
+      synthetic: true,
+      source: "parallel-candidate-result-fallback",
+      runId: run.parallelRunId,
+      candidateIndex: index,
+      sessionId: candidate.sessionId,
+    },
+    isStreaming: false,
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -835,6 +1333,44 @@ const modelOptions = computed(() => {
 /* ------------------------------------------------------------------ */
 
 const currentParallelRunId = computed(() => {
+  const sessionScopedComparableRun = sessionScopedParallelRuns.value
+    .slice()
+    .reverse()
+    .find((run) => run.candidateSessions.length >= 2);
+  if (sessionScopedComparableRun) {
+    return sessionScopedComparableRun.parallelRunId;
+  }
+
+  if (typeof task.value?.currentRunId === "string") {
+    const activeRun = projectionParallelRuns.value.find(
+      (run) => run.parallelRunId === task.value?.currentRunId,
+    );
+    if (activeRun?.candidateSessions.length && activeRun.candidateSessions.length >= 2) {
+      return activeRun.parallelRunId;
+    }
+
+    const latestComparableRun = projectionParallelRuns.value
+      .slice()
+      .reverse()
+      .find((run) => run.candidateSessions.length >= 2);
+    if (latestComparableRun) {
+      return latestComparableRun.parallelRunId;
+    }
+  }
+
+  if (task.value?.orchestrationKind === "parallel") {
+    const projectionRun = pickLatestRun(
+      taskDomainRuns.value.filter((run) => run.orchestrationKind === "parallel"),
+    );
+    if (projectionRun?.id) {
+      return projectionRun.id;
+    }
+  }
+
+  if (projectionParallelRuns.value.length > 0) {
+    return projectionParallelRuns.value[projectionParallelRuns.value.length - 1]?.parallelRunId;
+  }
+
   if (
     task.value?.orchestrationKind === "parallel" &&
     typeof task.value?.currentRunId === "string"
@@ -842,14 +1378,7 @@ const currentParallelRunId = computed(() => {
     return task.value.currentRunId;
   }
 
-  const projectionRun = pickLatestRun(
-    taskDomainRuns.value.filter((run) => run.orchestrationKind === "parallel"),
-  );
-  if (projectionRun?.id) {
-    return projectionRun.id;
-  }
-
-  return projectionParallelRuns.value[projectionParallelRuns.value.length - 1]?.parallelRunId;
+  return undefined;
 });
 
 const currentParallelRunRecord = computed(() => {
@@ -863,6 +1392,27 @@ const currentParallelRunRecord = computed(() => {
   return projectionParallelRuns.value[projectionParallelRuns.value.length - 1] ?? null;
 });
 
+const isCurrentParallelRunPendingAdoption = computed(() => {
+  const currentRun = currentParallelRunRecord.value;
+  if (!currentRun) {
+    return false;
+  }
+
+  if (currentRun.parallelRunId !== currentParallelRunId.value) {
+    return false;
+  }
+
+  if (typeof currentRun.winnerCandidateIndex === "number") {
+    return false;
+  }
+
+  const cards = buildParallelComparisonCardsForRun(currentRun);
+  return (
+    cards.length >= 2 &&
+    cards.every((candidate) => candidate.status === "completed" || candidate.status === "failed")
+  );
+});
+
 const adoptedCandidateSessionId = computed(() => {
   const currentRun = currentParallelRunRecord.value;
   if (!currentRun || typeof currentRun.winnerCandidateIndex !== "number") {
@@ -872,8 +1422,21 @@ const adoptedCandidateSessionId = computed(() => {
   return typeof sessionId === "string" && sessionId.length > 0 ? sessionId : undefined;
 });
 const visibleParallelRuns = computed(() => {
+  if (sessionScopedParallelRuns.value.length > 0) {
+    if (task.value?.status === "running" && task.value?.executionMode === "single") {
+      return sessionScopedParallelRuns.value.filter(
+        (run) =>
+          !isSessionTreeFallbackParallelRun(run) || !hasLaterSingleConversationAfterFallback(run),
+      );
+    }
+    return sessionScopedParallelRuns.value;
+  }
+
   if (task.value?.status === "running" && task.value?.executionMode === "single") {
-    return [] as ProjectionRunRecord[];
+    return projectionParallelRuns.value.filter(
+      (run) =>
+        isSessionTreeFallbackParallelRun(run) && !hasLaterSingleConversationAfterFallback(run),
+    );
   }
   return projectionParallelRuns.value;
 });
@@ -884,24 +1447,31 @@ function buildParallelComparisonCardsForRun(
   const parallelExecutionFinishedAtMs = toTimestampMs(run.finishedAt);
   const cards = run.candidateSessions.map((candidate, index) => {
     const sessionId = candidate.sessionId;
+    const candidateStartedAtMs = toTimestampMs(candidate.startedAt ?? run.startedAt);
     const items = sessionId ? (parallelCandidateItems.value[sessionId] ?? []) : [];
     const visibleItems = items.filter((item) => {
       if (item.role === "user") {
         return false;
       }
+      const itemCreatedAtMs = toTimestampMs(item.createdAt);
+      if (candidateStartedAtMs != null && itemCreatedAtMs != null && itemCreatedAtMs < candidateStartedAtMs) {
+        return false;
+      }
       if (parallelExecutionFinishedAtMs == null) {
         return true;
       }
-      const itemCreatedAtMs = toTimestampMs(item.createdAt);
       return itemCreatedAtMs == null || itemCreatedAtMs <= parallelExecutionFinishedAtMs;
     });
+    const fallbackItem = buildParallelCandidateFallbackItem(run, candidate, index);
+    const displayItems =
+      visibleItems.length > 0 || !fallbackItem ? visibleItems : [fallbackItem];
     const metaParts = [
       candidate.agent,
       sessionId ? `Branch ${sessionId.slice(0, 8)}` : undefined,
     ].filter((v): v is string => Boolean(v));
     const status = resolveParallelCandidateDisplayStatus(
       candidate,
-      visibleItems,
+      displayItems,
       sessionId ? parallelCandidateSettledReply.value[sessionId] === true : false,
     );
     const traceState = sessionId ? parallelCandidateTraceStates.value[sessionId] : undefined;
@@ -914,8 +1484,8 @@ function buildParallelComparisonCardsForRun(
       traceState: traceState?.state,
       traceNote: traceState?.note,
       meta: metaParts.join(" · ") || undefined,
-      loading: visibleItems.length === 0 && status === "running",
-      items: visibleItems,
+      loading: displayItems.length === 0 && status === "running",
+      items: displayItems,
       canAdopt: false,
       isAdopted: typeof run.winnerCandidateIndex === "number" && run.winnerCandidateIndex === index,
       isRecommended:
@@ -960,7 +1530,7 @@ const parallelConversationItems = computed<TaskConversationParallelItem[]>(() =>
     items.push({
       key: `parallel-${run.parallelRunId}`,
       role: "parallel",
-      createdAt: run.finishedAt || run.startedAt,
+      createdAt: run.startedAt || run.finishedAt,
       candidates: cards,
       judgeSummary,
       judgeReasoning: run.judgeResult?.reasoning,
@@ -1063,20 +1633,55 @@ function resolveRequestedSessionId() {
   return typeof route.query.session === "string" ? route.query.session : undefined;
 }
 
+function resolvePreferredConversationSessionId() {
+  if (isCurrentParallelRunPendingAdoption.value) {
+    const requestedSessionId = resolveRequestedSessionId();
+    const currentRun = currentParallelRunRecord.value;
+    const mainlineSessionId =
+      currentRun?.executionSessionId ??
+      currentRun?.parentSessionId ??
+      task.value?.sessionId;
+
+    if (
+      requestedSessionId &&
+      requestedSessionId !== mainlineSessionId &&
+      (!currentRun || !runReferencesSession(currentRun, requestedSessionId))
+    ) {
+      return undefined;
+    }
+
+    if (
+      typeof mainlineSessionId === "string" &&
+      flatNodes.value.some((node) => node.runtimeSessionId === mainlineSessionId)
+    ) {
+      return mainlineSessionId;
+    }
+  }
+
+  return undefined;
+}
+
 function ensureSelectedBranch() {
-  if (
-    adoptedCandidateSessionId.value &&
-    flatNodes.value.some((n) => n.runtimeSessionId === adoptedCandidateSessionId.value)
-  ) {
-    selectedBranchSessionId.value = adoptedCandidateSessionId.value;
+  const preferredSessionId = resolvePreferredConversationSessionId();
+  if (preferredSessionId) {
+    selectedBranchSessionId.value = preferredSessionId;
     return;
   }
+
   const requestedSessionId = resolveRequestedSessionId();
   if (
     requestedSessionId &&
     flatNodes.value.some((n) => n.runtimeSessionId === requestedSessionId)
   ) {
     selectedBranchSessionId.value = requestedSessionId;
+    return;
+  }
+
+  if (
+    adoptedCandidateSessionId.value &&
+    flatNodes.value.some((n) => n.runtimeSessionId === adoptedCandidateSessionId.value)
+  ) {
+    selectedBranchSessionId.value = adoptedCandidateSessionId.value;
     return;
   }
   if (
@@ -1111,6 +1716,7 @@ async function refreshTaskSnapshot(options?: {
     await refreshTaskRunSummaries(taskId.value, true);
     if (options?.workflow || !workflowView.value || task.value?.status !== previousStatus) {
       workflowView.value = await getTaskWorkflowView(taskId.value).catch(() => workflowView.value);
+      await refreshTaskMemberView(taskId.value, true);
     }
     if (options?.flow) {
       await refreshBranches();
@@ -1172,10 +1778,12 @@ function ensureRunningStatusPoll() {
 async function loadInitial() {
   if (!taskId.value) {
     workflowView.value = null;
+    taskMemberView.value = null;
     return;
   }
   try {
     workflowView.value = await getTaskWorkflowView(taskId.value).catch(() => null);
+    await refreshTaskMemberView(taskId.value, true);
     await refreshTaskRunSummaries(taskId.value, true);
     if (projectId.value) {
       realtimeStore.subscribeProject(projectId.value);
@@ -1328,6 +1936,23 @@ async function refreshTaskRunSummaries(currentTaskId: string, silent = false) {
   }
 }
 
+async function refreshTaskMemberView(currentTaskId: string, silent = false) {
+  if (!currentTaskId) {
+    taskMemberView.value = null;
+    return;
+  }
+  taskMemberViewLoading.value = true;
+  try {
+    taskMemberView.value = await getTaskMemberView(currentTaskId);
+  } catch {
+    if (!silent) {
+      taskMemberView.value = null;
+    }
+  } finally {
+    taskMemberViewLoading.value = false;
+  }
+}
+
 async function refreshRuntimePermissions(silent = false) {
   if (!taskId.value || !selectedBranchSessionId.value) {
     runtimePermissions.value = [];
@@ -1370,7 +1995,7 @@ function handleOpenFilePreview(payload: { filePath: string; content?: string }) 
 }
 
 function handleSelectSession(sessionId: string) {
-  selectedBranchSessionId.value = sessionId;
+  selectedBranchSessionId.value = resolvePreferredConversationSessionId() ?? sessionId;
 }
 
 async function handleReplyRuntimePermission(
@@ -1441,6 +2066,74 @@ function queueContinuation(prompt: string, sessionId?: string) {
   message.success(`已加入队列，前方还有 ${queuedContinuations.value.length - 1} 条待发送`);
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function bumpConversationFocus(sessionId?: string) {
+  if (!sessionId) return;
+  selectedBranchSessionId.value = sessionId;
+  conversationFocusToken.value += 1;
+}
+
+function conversationContainsPrompt(prompt: string) {
+  const normalizedPrompt = prompt.trim();
+  if (!normalizedPrompt) {
+    return false;
+  }
+  return baseConversationItems.value.some(
+    (item) =>
+      item.role === "user" &&
+      typeof item.text === "string" &&
+      item.text.trim().includes(normalizedPrompt),
+  );
+}
+
+function conversationHasAssistantAfterPrompt(prompt: string) {
+  const normalizedPrompt = prompt.trim();
+  if (!normalizedPrompt) {
+    return false;
+  }
+  const items = baseConversationItems.value;
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (
+      item.role === "user" &&
+      typeof item.text === "string" &&
+      item.text.trim().includes(normalizedPrompt)
+    ) {
+      return items.slice(index + 1).some((entry) => entry.role === "assistant" || entry.role === "parallel");
+    }
+  }
+  return false;
+}
+
+async function settleConversationFocus(sessionId: string | undefined, prompt: string) {
+  if (!sessionId) {
+    return;
+  }
+
+  bumpConversationFocus(sessionId);
+  await nextTick();
+
+  const retryDelaysMs = [0, 120, 240, 400];
+  for (const delayMs of retryDelaysMs) {
+    if (delayMs > 0) {
+      await sleep(delayMs);
+    }
+    await refreshMessages(true);
+    const traceMatchesSession = messageTrace.value?.sessionId === sessionId;
+    if (
+      traceMatchesSession &&
+      (conversationHasAssistantAfterPrompt(prompt) || conversationContainsPrompt(prompt))
+    ) {
+      break;
+    }
+  }
+
+  conversationFocusToken.value += 1;
+}
+
 function handleRemoveQueuedContinuation(id: string) {
   const next = queuedContinuations.value.filter((item) => item.id !== id);
   if (next.length !== queuedContinuations.value.length) {
@@ -1471,8 +2164,9 @@ async function dispatchContinuePrompt(
     if (task.value) {
       task.value = { ...task.value, status: "running" };
     }
-    if (result.sessionId) {
-      selectedBranchSessionId.value = result.sessionId;
+    const nextSessionId = result.sessionId || sessionId || task.value?.sessionId;
+    if (nextSessionId) {
+      bumpConversationFocus(nextSessionId);
     }
     if (source === "direct") {
       composerResetToken.value += 1;
@@ -1481,7 +2175,7 @@ async function dispatchContinuePrompt(
       message.success("已自动发送排队中的输入");
     }
     await refreshTask(true);
-    await refreshMessages(true);
+    await settleConversationFocus(nextSessionId, prompt);
     return true;
   } catch (err) {
     message.error(
@@ -1670,8 +2364,22 @@ watch(
         "task.continued",
         "task.node.updated",
         "agent.started",
+        "task.hooks.updated",
+        "task.followup.started",
+        "task.followup.completed",
+        "task.followup.failed",
       ].includes(rawType)
     ) {
+      if (
+        [
+          "task.hooks.updated",
+          "task.followup.started",
+          "task.followup.completed",
+          "task.followup.failed",
+        ].includes(rawType)
+      ) {
+        traceRefreshKey.value += 1;
+      }
       scheduleTaskRefresh(rawType);
     }
   },

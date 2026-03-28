@@ -86,6 +86,22 @@
           </a-tab-pane>
         </a-tabs>
 
+        <div v-if="workbench.activeTaskId" class="task-workbench-member-grid">
+          <TaskWorkbenchMemberStrip
+            pane-label="主视图协作"
+            :task-title="activeTab?.title || workbench.activeTaskId"
+            :view="activeTaskMemberView"
+            :loading="activeTaskMemberLoading"
+          />
+          <TaskWorkbenchMemberStrip
+            v-if="workbench.splitMode && workbench.secondaryPane?.taskId"
+            pane-label="副窗协作"
+            :task-title="secondaryTaskTab?.title || workbench.secondaryPane.taskId"
+            :view="secondaryTaskMemberView"
+            :loading="secondaryTaskMemberLoading"
+          />
+        </div>
+
         <template v-if="!workbench.splitMode">
           <div :style="workbenchThemeStyles.pane">
             <div :style="workbenchThemeStyles.paneHeader">
@@ -169,13 +185,17 @@
 <script setup lang="ts">
 import { Button, Modal, message, notification } from "ant-design-vue";
 import type { DefaultOptionType } from "ant-design-vue/es/select";
-import { computed, h, onUnmounted, ref, watch } from "vue";
+import { computed, defineAsyncComponent, h, onUnmounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { type Task, getTask, listTasks, toApiError } from "../lib/api";
+import { type Task, type TaskMemberViewModel, getTask, getTaskMemberView, listTasks, toApiError } from "../lib/api";
 import { resolveTaskDisplayStatus } from "../lib/task-display-status";
 import { useProjectStore } from "../stores/project";
 import { useWorkbenchStore } from "../stores/workbench";
 import { workbenchThemeStyles } from "../theme/ui-theme";
+
+const TaskWorkbenchMemberStrip = defineAsyncComponent(
+  () => import("../components/task-detail/TaskWorkbenchMemberStrip.vue"),
+);
 
 const route = useRoute();
 const router = useRouter();
@@ -186,6 +206,8 @@ const taskPickerTarget = ref<"primary" | "secondary">("primary");
 const taskPickerLoading = ref(false);
 const taskPickerTasks = ref<Task[]>([]);
 const taskMetaMap = ref<Record<string, Task>>({});
+const taskMemberViewMap = ref<Record<string, TaskMemberViewModel | null>>({});
+const taskMemberLoadingMap = ref<Record<string, boolean>>({});
 const clearUndoNotificationKey = "workbench-clear-undo";
 let tabRefreshTimer: ReturnType<typeof setInterval> | null = null;
 const missingTaskNoticeShown = ref(false);
@@ -214,6 +236,16 @@ const activeTaskMeta = computed(() => {
   return taskId ? taskMetaMap.value[taskId] : undefined;
 });
 
+const activeTaskMemberView = computed(() => {
+  const taskId = workbench.activeTaskId;
+  return taskId ? taskMemberViewMap.value[taskId] || null : null;
+});
+
+const activeTaskMemberLoading = computed(() => {
+  const taskId = workbench.activeTaskId;
+  return taskId ? taskMemberLoadingMap.value[taskId] === true : false;
+});
+
 const activeTaskDisplayStatus = computed(() =>
   resolveTaskDisplayStatus(activeTaskMeta.value || { status: activeTab.value?.status }),
 );
@@ -221,6 +253,21 @@ const activeTaskDisplayStatus = computed(() =>
 const secondaryTaskMeta = computed(() => {
   const taskId = workbench.secondaryPane?.taskId;
   return taskId ? taskMetaMap.value[taskId] : undefined;
+});
+
+const secondaryTaskTab = computed(() => {
+  const taskId = workbench.secondaryPane?.taskId;
+  return taskId ? workbench.tabs.find((tab) => tab.taskId === taskId) : undefined;
+});
+
+const secondaryTaskMemberView = computed(() => {
+  const taskId = workbench.secondaryPane?.taskId;
+  return taskId ? taskMemberViewMap.value[taskId] || null : null;
+});
+
+const secondaryTaskMemberLoading = computed(() => {
+  const taskId = workbench.secondaryPane?.taskId;
+  return taskId ? taskMemberLoadingMap.value[taskId] === true : false;
 });
 
 const secondaryTaskDisplayStatus = computed(() =>
@@ -269,6 +316,7 @@ watch(
     if (taskIds.length > 0 && !tabRefreshTimer) {
       tabRefreshTimer = setInterval(() => {
         void refreshOpenTabMeta();
+        void refreshFocusedTaskMemberViews(true);
       }, 10000);
     }
 
@@ -276,6 +324,14 @@ watch(
       clearInterval(tabRefreshTimer);
       tabRefreshTimer = null;
     }
+  },
+  { immediate: true },
+);
+
+watch(
+  () => [workbench.activeTaskId, workbench.secondaryPane?.taskId],
+  () => {
+    void refreshFocusedTaskMemberViews();
   },
   { immediate: true },
 );
@@ -322,6 +378,35 @@ async function refreshOpenTabMeta() {
       }
     }),
   );
+}
+
+async function ensureTaskMemberView(taskId: string, force = false) {
+  if (!taskId) {
+    return;
+  }
+  if (!force && (taskMemberLoadingMap.value[taskId] || taskMemberViewMap.value[taskId])) {
+    return;
+  }
+
+  taskMemberLoadingMap.value = { ...taskMemberLoadingMap.value, [taskId]: true };
+  try {
+    const view = await getTaskMemberView(taskId);
+    taskMemberViewMap.value = { ...taskMemberViewMap.value, [taskId]: view };
+  } catch (error) {
+    if (toApiError(error)?.status === 404) {
+      handleMissingTask(taskId);
+    }
+    taskMemberViewMap.value = { ...taskMemberViewMap.value, [taskId]: null };
+  } finally {
+    taskMemberLoadingMap.value = { ...taskMemberLoadingMap.value, [taskId]: false };
+  }
+}
+
+async function refreshFocusedTaskMemberViews(force = false) {
+  const taskIds = Array.from(
+    new Set([workbench.activeTaskId, workbench.secondaryPane?.taskId].filter(Boolean) as string[]),
+  );
+  await Promise.all(taskIds.map((taskId) => ensureTaskMemberView(taskId, force)));
 }
 
 function handleMissingTask(taskId: string) {
@@ -615,6 +700,13 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+.task-workbench-member-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
 .task-workbench-tabs {
   min-width: 0;
 }
@@ -663,6 +755,10 @@ onUnmounted(() => {
 }
 
 @media (max-width: 960px) {
+  .task-workbench-member-grid {
+    grid-template-columns: 1fr;
+  }
+
   .task-workbench-tabs :deep(.ant-tabs-tab) {
     max-width: min(220px, calc(100vw - 120px));
   }

@@ -295,6 +295,59 @@ describe("mergeTaskStrategy with hookExecutions", () => {
     const parsed = JSON.parse(merged);
     expect(parsed.hookExecutions).toHaveLength(1);
   });
+
+  test("parses persisted object strategy without forcing JSON string input", () => {
+    const parsed = parseTaskStrategy({
+      executionMode: "parallel",
+      parallelCandidates: [
+        { model: "gpt-5.4", label: "候选 A" },
+        { model: "claude-opus-4.6", label: "候选 B" },
+      ],
+    });
+
+    expect(parsed.parallelCandidates).toEqual([
+      { model: "gpt-5.4", label: "候选 A" },
+      { model: "claude-opus-4.6", label: "候选 B" },
+    ]);
+  });
+
+  test("merges paid guard patches into object strategy while preserving parallel candidates", () => {
+    const merged = mergeTaskStrategy(
+      {
+        executionMode: "parallel",
+        parallelCandidates: [
+          { model: "gpt-5.4", label: "候选 A" },
+          { model: "claude-opus-4.6", label: "候选 B" },
+        ],
+      },
+      {
+        paidExecutionGuard: {
+          enabled: true,
+          modelRoute: "github-copilot:gpt-5.4",
+          modelId: "gpt-5.4",
+          providerId: "github-copilot",
+          guardDecision: "allow",
+          guardReason: "within limit",
+          actualRequests: 1,
+          actualTokenUsage: 123,
+          actualCost: 0.01,
+          overridesApplied: [],
+          maxRequestsPerRun: 6,
+          estimatedRequestUpperBound: 2,
+          estimatedTokenUpperBound: 5000,
+          estimatedCostUpperBound: 0.2,
+          maxEstimatedCostUsdPerRun: 0.75,
+          postHooksDisabled: false,
+          leaseId: null,
+        },
+      },
+    );
+
+    expect(parseTaskStrategy(merged).parallelCandidates).toEqual([
+      { model: "gpt-5.4", label: "候选 A" },
+      { model: "claude-opus-4.6", label: "候选 B" },
+    ]);
+  });
 });
 
 // ── Hook Decision Parsing ───────────────────────────────────────────
@@ -308,6 +361,28 @@ describe("parseHookDecision", () => {
     expect(decision?.action).toBe("rewrite-prompt");
     expect(decision?.reason).toBe("Need safer scope");
     expect(decision?.rewrittenPrompt).toBe("Only update the API client.");
+  });
+
+  test("parses structured spawn-followup decision", () => {
+    const decision = parseHookDecision(
+      [
+        "Result",
+        JSON.stringify({
+          action: "spawn-followup",
+          reason: "Need final verification",
+          followupTemplateId: "post-review-followup",
+          followupGoal: "Summarize remaining risks",
+          targetAgent: "oracle-enterprise",
+          targetModel: "github-copilot:gpt-5.4",
+        }),
+      ].join("\n"),
+    );
+
+    expect(decision?.action).toBe("spawn-followup");
+    expect(decision?.followupTemplateId).toBe("post-review-followup");
+    expect(decision?.followupGoal).toBe("Summarize remaining risks");
+    expect(decision?.targetAgent).toBe("oracle-enterprise");
+    expect(decision?.targetModel).toBe("github-copilot:gpt-5.4");
   });
 
   test("returns undefined for unstructured text", () => {

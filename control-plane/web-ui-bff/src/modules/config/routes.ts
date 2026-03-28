@@ -919,6 +919,16 @@ const judgeConfigSchema = z.object({
   selectionStrategy: z.enum(["judge-pick", "highest-score"]),
 });
 
+const followupTemplateSchema = z.object({
+  id: z.string().min(1),
+  enabled: z.boolean(),
+  agent: z.string().min(1),
+  model: z.string().optional(),
+  promptTemplate: z.string().min(1),
+  timeoutMs: z.number().int().positive(),
+  resultMode: z.enum(["append", "replace", "advisory"]).optional(),
+});
+
 const recommendedOperatingProfileSchema = z.object({
   scenarioKey: z.string().min(1),
   collaborationMode: z.enum(["solo", "team", "hybrid"]),
@@ -946,6 +956,7 @@ const strategySchema = z.object({
   enablePipeline: z.boolean(),
   hooks: z.array(lifecycleHookSchema).optional(),
   templates: z.array(workflowTemplateSchema).optional(),
+  followups: z.array(followupTemplateSchema).optional(),
   judge: judgeConfigSchema.optional(),
   organizationSettings: organizationSettingsSchema.optional(),
 });

@@ -2,7 +2,7 @@
   <div style="padding: 24px">
     <a-page-header
       :title="task ? `${task.title} / 组织运行详情` : '组织运行详情'"
-      sub-title="查看任务运行档位、老板决策和当前阶段摘要"
+      sub-title="查看任务运行档位、管理介入记录和当前阶段摘要"
       @back="router.push(`/tasks/${taskId}`)"
     />
 
@@ -16,7 +16,7 @@
               <a-descriptions :column="1" size="small" bordered>
                 <a-descriptions-item label="协作模式">{{ formatCollaboration(operatingState?.collaborationMode) }}</a-descriptions-item>
                 <a-descriptions-item label="自动托管">{{ operatingState?.autopilotLevel || '未记录' }}</a-descriptions-item>
-                <a-descriptions-item label="老板参与">{{ formatBossMode(operatingState?.bossParticipationMode) }}</a-descriptions-item>
+                <a-descriptions-item label="管理介入">{{ formatBossMode(operatingState?.bossParticipationMode) }}</a-descriptions-item>
                 <a-descriptions-item label="来源">{{ operatingState?.operatingModeSource || '未记录' }}</a-descriptions-item>
               </a-descriptions>
             </a-card>
@@ -38,6 +38,7 @@
                 <a-button block type="primary" @click="router.push(`/tasks/${taskId}/operating-override`)">调整任务级覆盖</a-button>
                 <a-button block @click="router.push(`/tasks/${taskId}`)">返回任务详情</a-button>
                 <a-button v-if="task.projectId" block @click="router.push(`/projects/${task.projectId}/operating-mode`)">查看项目运行档位</a-button>
+                <a-button v-if="task.projectId" block @click="router.push(`/projects/${task.projectId}/management-operations`)">查看项目管理介入总览</a-button>
               </a-space>
             </a-card>
           </a-col>
@@ -45,8 +46,8 @@
 
         <a-row :gutter="[16, 16]">
           <a-col :xs="24" :xl="12">
-            <a-card title="老板最近决策" size="small">
-              <a-empty v-if="bossDecisions.length === 0" description="当前任务还没有记录老板决策" />
+            <a-card title="最近管理决策" size="small">
+              <a-empty v-if="bossDecisions.length === 0" description="当前任务还没有记录管理决策" />
               <a-timeline v-else>
                 <a-timeline-item v-for="item in bossDecisions" :key="item.id || item.ts">
                   <strong>{{ item.decisionType || 'unknown' }}</strong>

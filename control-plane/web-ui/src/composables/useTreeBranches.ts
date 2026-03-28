@@ -3,8 +3,9 @@ import { type Ref, computed, ref, watch } from "vue";
 import {
   type ProjectTreeBranchRecord,
   type ProjectTreeNodeRecord,
+  getProjectTree,
   getProjectTreeBranches,
-  getProjectTreeChildren,
+  getProjectTreeNode,
 } from "../lib/api";
 
 const NODE_WIDTH = 200;
@@ -72,6 +73,10 @@ function flattenTree(roots: SessionTreeNode[]): ProjectTreeNodeRecord[] {
   }
   walk(roots);
   return result;
+}
+
+function isNodeInSubtree(nodePath: string, ancestorPath: string): boolean {
+  return nodePath === ancestorPath || nodePath.startsWith(`${ancestorPath}.`);
 }
 
 function measureWidth(treeNode: SessionTreeNode, widthMap: Map<string, number>): number {
@@ -206,12 +211,15 @@ export function useTreeBranches(
     error.value = null;
 
     try {
-      const [branchList, children] = await Promise.all([
+      const [branchList, taskNode, projectSessions] = await Promise.all([
         getProjectTreeBranches(projectId.value),
-        getProjectTreeChildren(projectId.value, taskNodeId.value),
+        getProjectTreeNode(projectId.value, taskNodeId.value),
+        getProjectTree(projectId.value, { nodeType: "session" }),
       ]);
       branches.value = branchList;
-      sessionNodes.value = children.filter((n) => n.nodeType === "session");
+      sessionNodes.value = projectSessions.filter((node) =>
+        isNodeInSubtree(node.path, taskNode.path),
+      );
     } catch (nextError) {
       branches.value = [];
       sessionNodes.value = [];

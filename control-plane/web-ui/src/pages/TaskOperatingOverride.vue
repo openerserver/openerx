@@ -16,7 +16,7 @@
               <a-descriptions :column="1" bordered size="small">
                 <a-descriptions-item label="协作模式">{{ currentState.collaborationMode || '未记录' }}</a-descriptions-item>
                 <a-descriptions-item label="自动托管">{{ currentState.autopilotLevel || '未记录' }}</a-descriptions-item>
-                <a-descriptions-item label="老板参与">{{ currentState.bossParticipationMode || '未记录' }}</a-descriptions-item>
+                <a-descriptions-item label="管理介入">{{ currentState.bossParticipationMode || '未记录' }}</a-descriptions-item>
                 <a-descriptions-item label="来源">{{ currentState.operatingModeSource || '未记录' }}</a-descriptions-item>
               </a-descriptions>
             </a-card>
@@ -37,7 +37,7 @@
                     </a-form-item>
                   </a-col>
                   <a-col :xs="24" :md="8">
-                    <a-form-item label="老板参与方式">
+                    <a-form-item label="管理介入方式">
                       <a-select :value="form.bossParticipationMode" :options="bossModeOptions" @update:value="form.bossParticipationMode = asBossMode($event)" />
                     </a-form-item>
                   </a-col>

@@ -92,12 +92,34 @@ function buildSummaryNotes(
   return notes;
 }
 
+function resolveEnabledFollowups(strategy: OrchestrationStrategy) {
+  return (strategy.followups || []).filter((item) => item.enabled !== false);
+}
+
+function buildFollowupSummary(strategy: OrchestrationStrategy) {
+  const enabledFollowups = resolveEnabledFollowups(strategy);
+  if (enabledFollowups.length === 0) {
+    return {
+      followupEnabledCount: 0,
+      followupTemplateIds: [] as string[],
+      followupSummary: "未配置 follow-up 模板",
+    };
+  }
+
+  return {
+    followupEnabledCount: enabledFollowups.length,
+    followupTemplateIds: enabledFollowups.map((item) => item.id),
+    followupSummary: enabledFollowups.map((item) => item.id).join("、"),
+  };
+}
+
 export function buildCategorySummariesFromStrategy(
   strategy: OrchestrationStrategy,
   categories: string[] = [...ORCHESTRATION_CATEGORIES],
 ): OrchestrationCategorySummary[] {
   return categories.map((category) => {
     const template = resolveTemplateForCategory(strategy, category);
+    const followupSummary = buildFollowupSummary(strategy);
     return {
       category,
       templateName: template?.name || template?.id || "未命中模板",
@@ -108,6 +130,9 @@ export function buildCategorySummariesFromStrategy(
       judgeModel: strategy.judge.model || "未指定",
       primaryAgents: resolvePrimaryAgents(strategy, category, template),
       primaryModel: resolvePrimaryModel(strategy, category),
+      followupEnabledCount: followupSummary.followupEnabledCount,
+      followupTemplateIds: followupSummary.followupTemplateIds,
+      followupSummary: followupSummary.followupSummary,
       notes: buildSummaryNotes(strategy, category, template),
     };
   });
@@ -129,6 +154,7 @@ function mergeStrategyPatch(
       : strategy.categoryModelMap,
     hooks: typedPatch.hooks ?? strategy.hooks,
     templates: typedPatch.templates ?? strategy.templates,
+    followups: typedPatch.followups ?? strategy.followups,
     judge: typedPatch.judge ? { ...strategy.judge, ...typedPatch.judge } : strategy.judge,
   };
 }
@@ -269,6 +295,11 @@ function prependPipelineChangeCard(
   });
 }
 
+function formatFollowupTemplateList(strategy: OrchestrationStrategy) {
+  const enabledFollowups = resolveEnabledFollowups(strategy).map((item) => item.id);
+  return enabledFollowups.length > 0 ? enabledFollowups.join("、") : "未配置 follow-up 模板";
+}
+
 export function buildChangeCards(
   strategy: OrchestrationStrategy,
   patch: ChatSettingsPendingPatch,
@@ -277,6 +308,23 @@ export function buildChangeCards(
   const nextStrategy = mergeStrategyPatch(strategy, patch.patch);
   const cards = buildCategoryChangeCards(strategy, nextStrategy, patch, affectedCategories);
   const judgeChange = buildJudgeChange(strategy, patch);
+  const typedPatch = patch.patch as Partial<OrchestrationStrategy>;
+
+  if (Array.isArray(typedPatch.followups)) {
+    cards.unshift({
+      id: "followup-change",
+      category: affectedCategories[0] || "global",
+      changeType: "pipeline",
+      title: "Follow-up 模板变化",
+      summary: `${formatFollowupTemplateList(strategy)} -> ${formatFollowupTemplateList(nextStrategy)}`,
+      beforeLabel: formatFollowupTemplateList(strategy),
+      afterLabel: formatFollowupTemplateList(nextStrategy),
+      riskLevel: typedPatch.followups.length > 0 ? "medium" : "low",
+      affectsJudge: false,
+      affectsTemplate: false,
+    });
+  }
+
   prependJudgeChangeCard(cards, judgeChange, affectedCategories);
   prependPipelineChangeCard(cards, strategy, patch, affectedCategories);
 
@@ -306,6 +354,12 @@ export function buildPreviewFromPatch(
       judgeChange.changed && judgeChange.afterEnabled
         ? { level: "high", summary: "本次变更会启用 judge，最终候选选择逻辑会发生变化。" }
         : null,
+      Array.isArray((patch.patch as Partial<OrchestrationStrategy>).followups)
+        ? {
+            level: "medium",
+            summary: "本次变更会调整 post-hook follow-up 模板，任务结束后的二次编排链路会发生变化。",
+          }
+        : null,
       templateChanges.some((item) => item.beforeMode !== item.afterMode)
         ? {
             level: "medium",
@@ -325,12 +379,21 @@ export function buildOrchestrationContext(
   categorySummaries: OrchestrationCategorySummary[];
   supportedCategories: string[];
 } {
+  const derivedCategorySummaries = buildCategorySummariesFromStrategy(context.strategy);
   return {
     ...context,
     orchestrationVersion:
       context.orchestrationVersion || context.configVersions["orchestration-strategy"],
-    categorySummaries:
-      context.categorySummaries || buildCategorySummariesFromStrategy(context.strategy),
+    categorySummaries: (context.categorySummaries || derivedCategorySummaries).map((item) => {
+      const derived = derivedCategorySummaries.find((summary) => summary.category === item.category);
+      return {
+        ...derived,
+        ...item,
+        followupEnabledCount: item.followupEnabledCount ?? derived?.followupEnabledCount ?? 0,
+        followupTemplateIds: item.followupTemplateIds ?? derived?.followupTemplateIds ?? [],
+        followupSummary: item.followupSummary ?? derived?.followupSummary ?? "未配置 follow-up 模板",
+      };
+    }),
     supportedCategories: context.supportedCategories || [...ORCHESTRATION_CATEGORIES],
   };
 }

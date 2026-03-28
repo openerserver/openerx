@@ -20,6 +20,46 @@ describe("useTaskExecutionTrace", () => {
     apiMocks.getTaskExecutionTraceView.mockReset();
   });
 
+  it("surfaces runtime read source in summary items", async () => {
+    apiMocks.getTaskExecutionTraceView.mockResolvedValue({
+      taskId: "task-1",
+      sessionId: "session-1",
+      segments: [],
+      timeline: [
+        {
+          id: "msg-1",
+          role: "user",
+          text: "给输入法设计一个操作页面",
+          createdAt: "2026-03-25T09:44:01.000Z",
+        },
+        {
+          id: "msg-2",
+          role: "assistant",
+          text: "先做需求澄清。",
+          completedAt: "2026-03-25T09:44:10.000Z",
+        },
+      ],
+      hookExecutions: [],
+      timelineMeta: {
+        readSource: "opencode-runtime",
+        cacheState: "complete",
+        complete: true,
+      },
+    });
+
+    const taskId = ref("task-1");
+    const sessionId = ref<string | undefined>("session-1");
+    const state = useTaskExecutionTrace(taskId, sessionId);
+
+    await flushPromises();
+
+    expect(state.summaryItems.value).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ label: "时间线来源", value: "运行时" }),
+      ]),
+    );
+  });
+
   it("synthesizes user input and model response when trace only exposes finalPrompt/latestResponse", async () => {
     apiMocks.getTaskExecutionTraceView.mockResolvedValue({
       taskId: "task-1",

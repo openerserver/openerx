@@ -79,6 +79,7 @@ import {
   fetchCurrentStageHooks,
   persistWorkflowStageExecutionOutcome,
 } from "./workflow-stage-execution";
+import { buildTaskMemberViewModel } from "./member-view";
 import { ensureTaskWorkflowStarted } from "./workflow-sync";
 import { buildTaskWorkflowViewModel, fetchTaskWorkflowState } from "./workflow-view";
 
@@ -638,6 +639,17 @@ interface TaskExecutionTraceRecord {
       rewrittenPrompt?: string;
       targetModel?: string;
     };
+    completedAt: string;
+  }>;
+  followupExecutions: Array<{
+    templateId: string;
+    triggerHookId: string;
+    status: string;
+    agent: string;
+    model?: string;
+    prompt: string;
+    result?: string;
+    error?: string;
     completedAt: string;
   }>;
 }
@@ -2271,23 +2283,52 @@ function renderWorkflowContextBlock(context: WorkflowPromptContextRecord): strin
 function parseExecutionTraceStrategy(strategyJson: string | null | undefined): {
   selectedAgent?: string;
   hookExecutions: HookExecutionRecord[];
+  followupExecutions: Array<{
+    templateId: string;
+    triggerHookId: string;
+    status: "completed" | "failed" | "skipped";
+    agent: string;
+    model?: string;
+    prompt: string;
+    result?: string;
+    error?: string;
+    sessionId?: string;
+    tokenUsed?: number;
+    completedAt: string;
+  }>;
 } {
   if (!strategyJson) {
-    return { hookExecutions: [] };
+    return { hookExecutions: [], followupExecutions: [] };
   }
 
   try {
     const strategy = JSON.parse(strategyJson) as {
       selectedAgent?: string;
       hookExecutions?: HookExecutionRecord[];
+      followupExecutions?: Array<{
+        templateId: string;
+        triggerHookId: string;
+        status: "completed" | "failed" | "skipped";
+        agent: string;
+        model?: string;
+        prompt: string;
+        result?: string;
+        error?: string;
+        sessionId?: string;
+        tokenUsed?: number;
+        completedAt: string;
+      }>;
     };
     return {
       selectedAgent:
         typeof strategy?.selectedAgent === "string" ? strategy.selectedAgent : undefined,
       hookExecutions: Array.isArray(strategy?.hookExecutions) ? strategy.hookExecutions : [],
+      followupExecutions: Array.isArray(strategy?.followupExecutions)
+        ? strategy.followupExecutions
+        : [],
     };
   } catch {
-    return { hookExecutions: [] };
+    return { hookExecutions: [], followupExecutions: [] };
   }
 }
 
@@ -2379,6 +2420,35 @@ function extractSessionMessageCreatedAt(message: unknown): string | undefined {
   return undefined;
 }
 
+function extractSessionMessageCompletedAt(message: unknown): string | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+
+  const info = (message as Record<string, unknown>).info;
+  if (!info || typeof info !== "object") {
+    return undefined;
+  }
+
+  const time = (info as Record<string, unknown>).time;
+  if (!time || typeof time !== "object") {
+    return undefined;
+  }
+
+  const completed = (time as Record<string, unknown>).completed;
+  if (typeof completed === "number" && Number.isFinite(completed)) {
+    return new Date(completed).toISOString();
+  }
+  if (typeof completed === "string") {
+    const parsed = Date.parse(completed);
+    if (!Number.isNaN(parsed)) {
+      return new Date(parsed).toISOString();
+    }
+  }
+
+  return undefined;
+}
+
 function buildSyntheticExecutionTraceRawMessage(item: TaskSessionTimelineItemRecord) {
   return {
     info: {
@@ -2398,6 +2468,83 @@ function buildSyntheticExecutionTraceRawMessage(item: TaskSessionTimelineItemRec
         ]
       : [],
   };
+}
+
+function isDisplayableTraceTimelineItem(item: TaskSessionTimelineItemRecord) {
+  return typeof item.text === "string" && item.text.trim().length > 0;
+}
+
+function mapExecutionTraceMessagesToTimelineItems(
+  messages: ExecutionTraceMessageRecord[],
+  sourceEventPrefix: string,
+) {
+  return messages
+    .filter(isDisplayableExecutionTraceMessage)
+    .map((message) => ({
+      id: message.id,
+      role: message.role,
+      text: message.text,
+      createdAt: message.createdAt,
+      completedAt: extractSessionMessageCompletedAt(message.raw),
+      raw: message.raw,
+      sourceEventTypes: [`${sourceEventPrefix}:message:${message.role}`],
+    } satisfies TaskSessionTimelineItemRecord));
+}
+
+function mergeTaskSessionTimelineItem(
+  current: TaskSessionTimelineItemRecord,
+  candidate: TaskSessionTimelineItemRecord,
+) {
+  const currentText = typeof current.text === "string" ? current.text.trim() : "";
+  const candidateText = typeof candidate.text === "string" ? candidate.text.trim() : "";
+
+  return {
+    id: candidate.id || current.id,
+    role: candidate.role || current.role,
+    text: candidateText || currentText,
+    createdAt: current.createdAt ?? candidate.createdAt,
+    completedAt: candidate.completedAt ?? current.completedAt,
+    raw: candidate.raw ?? current.raw,
+    sourceEventTypes: [...new Set([...(current.sourceEventTypes ?? []), ...(candidate.sourceEventTypes ?? [])])],
+  } satisfies TaskSessionTimelineItemRecord;
+}
+
+function resolveTraceTimelineItemSortTime(item: TaskSessionTimelineItemRecord) {
+  return parseTraceSegmentTimestamp(item.completedAt ?? item.createdAt) ?? Number.MAX_SAFE_INTEGER;
+}
+
+function mergeTaskExecutionTraceTimelineItems(
+  baseItems: TaskSessionTimelineItemRecord[],
+  supplementalItems: TaskSessionTimelineItemRecord[],
+) {
+  const merged = new Map<string, { item: TaskSessionTimelineItemRecord; order: number }>();
+  let order = 0;
+
+  for (const item of [...baseItems, ...supplementalItems]) {
+    if (!isDisplayableTraceTimelineItem(item)) {
+      continue;
+    }
+
+    const existing = merged.get(item.id);
+    if (!existing) {
+      merged.set(item.id, { item, order });
+      order += 1;
+      continue;
+    }
+
+    existing.item = mergeTaskSessionTimelineItem(existing.item, item);
+  }
+
+  return [...merged.values()]
+    .sort((left, right) => {
+      const leftTime = resolveTraceTimelineItemSortTime(left.item);
+      const rightTime = resolveTraceTimelineItemSortTime(right.item);
+      if (leftTime !== rightTime) {
+        return leftTime - rightTime;
+      }
+      return left.order - right.order;
+    })
+    .map((entry) => entry.item);
 }
 
 function mapProjectionTimelineRole(item: TaskProjectionTimelineViewItemRecord) {
@@ -2532,6 +2679,19 @@ function resolveProjectionTimelineSegmentContent(
   return { label: baseLabel, content: baseContent };
 }
 
+function resolveProjectionConversationText(item: TaskProjectionTimelineViewItemRecord) {
+  const displayText = asNonEmptyString(item.displayText);
+  if (displayText) {
+    return displayText;
+  }
+
+  if (item.itemKind === "user-input" || item.itemKind === "assistant-output") {
+    return "";
+  }
+
+  return item.title || "";
+}
+
 function buildProjectionTimelineSegments(
   items: TaskProjectionTimelineViewItemRecord[],
 ): ExecutionTraceSegmentRecord[] {
@@ -2546,7 +2706,7 @@ function mapProjectionTimelineItemsToTraceItems(
   return items.map((item) => ({
     id: item.messageId || item.runNodeId || item.id,
     role: mapProjectionTimelineRole(item),
-    text: item.displayText || item.title || "",
+    text: resolveProjectionConversationText(item),
     createdAt: item.createdAt,
     completedAt: item.sortAt,
     raw: {
@@ -2569,14 +2729,22 @@ function mapProjectionTimelineItemsToTraceMessages(
   items: TaskSessionTimelineItemRecord[],
 ): ExecutionTraceMessageRecord[] {
   return items
-    .filter((item) => ["user", "assistant", "tool"].includes(item.role))
     .map((item) => ({
       id: item.id,
       role: item.role,
       text: item.text,
       createdAt: item.createdAt,
       raw: item.raw ?? buildSyntheticExecutionTraceRawMessage(item),
-    }));
+    }))
+    .filter(isDisplayableExecutionTraceMessage);
+}
+
+function isDisplayableExecutionTraceMessage(message: ExecutionTraceMessageRecord) {
+  return (
+    ["user", "assistant", "tool"].includes(message.role) &&
+    typeof message.text === "string" &&
+    message.text.trim().length > 0
+  );
 }
 
 /**
@@ -2721,13 +2889,15 @@ function dedupeTimelineConversationParts(parts: Array<Record<string, unknown>>) 
 function mapTimelineItemsToExecutionTraceMessages(
   items: TaskSessionTimelineItemRecord[],
 ): ExecutionTraceMessageRecord[] {
-  return items.map((item, index) => ({
-    id: item.id || `${index}`,
-    role: item.role || "unknown",
-    text: item.text || extractSessionMessageText(item.raw) || "",
-    createdAt: item.createdAt,
-    raw: item.raw ?? buildSyntheticExecutionTraceRawMessage(item),
-  }));
+  return items
+    .map((item, index) => ({
+      id: item.id || `${index}`,
+      role: item.role || "unknown",
+      text: item.text || extractSessionMessageText(item.raw) || "",
+      createdAt: item.createdAt,
+      raw: item.raw ?? buildSyntheticExecutionTraceRawMessage(item),
+    }))
+    .filter(isDisplayableExecutionTraceMessage);
 }
 
 async function loadExecutionTraceMessagesFromTimeline(
@@ -2755,6 +2925,154 @@ async function loadExecutionTraceMessagesFromTimeline(
     complete: timelineResult.data.meta?.cacheState === "complete",
     messageLimit: timelineResult.data.meta?.itemCount ?? reassembled.length,
   };
+}
+
+function deriveExecutionTraceCacheState(totalSessionCount: number, cachedSessionCount: number) {
+  if (cachedSessionCount <= 0 || totalSessionCount <= 0) {
+    return "none" as const;
+  }
+  if (cachedSessionCount >= totalSessionCount) {
+    return "complete" as const;
+  }
+  return "partial" as const;
+}
+
+function buildTaskSessionLineagePath(records: TaskSessionRecord[], runtimeSessionId: string) {
+  const byRuntimeSessionId = new Map(
+    records.map((record) => [record.runtimeSessionId, record] as const),
+  );
+  const path: TaskSessionRecord[] = [];
+  const visited = new Set<string>();
+  let current = byRuntimeSessionId.get(runtimeSessionId);
+
+  while (current && !visited.has(current.runtimeSessionId)) {
+    path.unshift(current);
+    visited.add(current.runtimeSessionId);
+    current = current.parentRuntimeSessionId
+      ? byRuntimeSessionId.get(current.parentRuntimeSessionId)
+      : undefined;
+  }
+
+  return path;
+}
+
+function sliceRuntimeMessagesForLineageBoundary(
+  messages: unknown[],
+  childRecord: TaskSessionRecord | undefined,
+) {
+  if (!childRecord?.forkedFromMessageId) {
+    return messages;
+  }
+
+  const boundaryIndex = messages.findIndex(
+    (message) => extractSessionMessageId(message) === childRecord.forkedFromMessageId,
+  );
+  if (boundaryIndex < 0) {
+    return messages;
+  }
+
+  return messages.slice(0, boundaryIndex + 1);
+}
+
+function dedupeRuntimeTraceMessages(messages: ExecutionTraceMessageRecord[]) {
+  const seen = new Set<string>();
+  return messages.filter((message) => {
+    if (seen.has(message.id)) {
+      return false;
+    }
+    seen.add(message.id);
+    return true;
+  });
+}
+
+async function loadExecutionTraceMessagesFromRuntime(args: {
+  task: ExecutableTask;
+  sessionId: string;
+  authorization: string;
+  includeLineage: boolean;
+}) {
+  let lineageRecords: TaskSessionRecord[] = [];
+  if (args.includeLineage) {
+    const lineageResult = await fetchTaskSessionLineageRecords(args.task.id, args.authorization);
+    lineageRecords = lineageResult.activeRecords;
+
+    if (!lineageRecords.some((record) => record.runtimeSessionId === args.sessionId)) {
+      const runtimeMap = await fetchRuntimeSessionMap(100);
+      lineageRecords = synthesizeLineageRecordsFromRuntime(
+        args.task.id,
+        args.task.sessionId ?? args.sessionId,
+        runtimeMap,
+      );
+    }
+  }
+
+  const normalizedLineage = lineageRecords.length > 0 ? normalizeLineageRecords(lineageRecords).records : [];
+  const lineagePath = args.includeLineage
+    ? buildTaskSessionLineagePath(normalizedLineage, args.sessionId)
+    : [];
+  const runtimeSessionIds =
+    lineagePath.length > 0 ? lineagePath.map((record) => record.runtimeSessionId) : [args.sessionId];
+
+  const messageSets = await Promise.all(
+    runtimeSessionIds.map(async (runtimeSessionId) => {
+      const result = await getSessionMessages(runtimeSessionId);
+      return {
+        runtimeSessionId,
+        data: result.ok && Array.isArray(result.data) ? result.data : [],
+      };
+    }),
+  );
+
+  const cachedSessionCount = messageSets.filter(({ data }) => data.length > 0).length;
+  if (cachedSessionCount === 0) {
+    return null;
+  }
+
+  const mergedRawMessages = messageSets.flatMap(({ data }, index) =>
+    sliceRuntimeMessagesForLineageBoundary(data, lineagePath[index + 1]),
+  );
+  const messages = dedupeRuntimeTraceMessages(
+    mergedRawMessages.map((message, index) => ({
+      id: extractExecutionTraceMessageId(message, `runtime-${index}`),
+      role: extractSessionMessageRole(message),
+      text: extractSessionMessageText(message),
+      createdAt: extractSessionMessageCreatedAt(message),
+      raw: message,
+    })),
+  );
+  const cacheState = deriveExecutionTraceCacheState(runtimeSessionIds.length, cachedSessionCount);
+  const timeline = mapExecutionTraceMessagesToTimelineItems(messages, "runtime");
+
+  return {
+    messages,
+    timeline,
+    meta: {
+      readSource: "opencode-runtime" as const,
+      cacheState,
+      complete: cacheState === "complete" && messages.length > 0,
+      includeLineage: args.includeLineage,
+      lineagePath: runtimeSessionIds,
+      cachedSessionCount,
+      itemCount: timeline.length,
+    },
+    messageLimit: messages.length,
+  };
+}
+
+function shouldLoadTaskExecutionTraceRuntimeFallback(
+  messages: ExecutionTraceMessageRecord[],
+  timelineMeta: TaskSessionTimelineMetaRecord | undefined,
+) {
+  const hasServiceTimelineCache = typeof timelineMeta?.cacheState === "string";
+  const hasCachedButUndisplayableTimelineItems =
+    hasServiceTimelineCache && typeof timelineMeta?.itemCount === "number" && timelineMeta.itemCount > 0;
+
+  return (
+    messages.length === 0 &&
+    (!timelineMeta ||
+      timelineMeta.cacheState === "none" ||
+      hasCachedButUndisplayableTimelineItems)
+  );
 }
 
 async function loadExecutionTraceMessagesFromProjection(
@@ -3042,7 +3360,13 @@ async function buildTaskExecutionTrace(
   const finalPrompt = resolveTaskExecutionTraceFinalPrompt(traceMessages.messages);
   const latestResponse =
     resolveTaskExecutionTraceLatestResponse(traceMessages.messages) ??
-    snapshot?.latestResult ??
+    (shouldUseTaskSnapshotLatestResultForTrace({
+      requestedSessionId,
+      task,
+      snapshot,
+    })
+      ? snapshot?.latestResult
+      : null) ??
     null;
 
   return {
@@ -3062,8 +3386,26 @@ async function buildTaskExecutionTrace(
       timelineMeta: traceMessages.timelineMeta,
       snapshot,
       hookExecutions: parsedStrategy.hookExecutions.map(mapTaskExecutionTraceHookExecution),
+      followupExecutions: parsedStrategy.followupExecutions.map(mapTaskExecutionTraceFollowup),
     },
   };
+}
+
+function shouldUseTaskSnapshotLatestResultForTrace(args: {
+  requestedSessionId?: string;
+  task: ExecutableTask;
+  snapshot: Awaited<ReturnType<typeof loadTaskProjectionSnapshot>>;
+}) {
+  if (!args.requestedSessionId) {
+    return true;
+  }
+
+  const requestedSessionId = args.requestedSessionId.trim();
+  if (!requestedSessionId) {
+    return true;
+  }
+
+  return false;
 }
 
 async function buildTaskExecutionTraceWorkflowContext(
@@ -3140,6 +3482,25 @@ async function loadTaskExecutionTraceMessages(args: {
       messageLimit = timelineFallback.messageLimit;
       messages.splice(0, messages.length, ...timelineFallback.messages);
     }
+
+    if (shouldLoadTaskExecutionTraceRuntimeFallback(messages, timelineMeta)) {
+      const runtimeFallback = await loadExecutionTraceMessagesFromRuntime({
+        task: args.task,
+        sessionId: args.sessionId,
+        authorization: args.authorization,
+        includeLineage: args.includeLineage,
+      });
+      if (runtimeFallback) {
+        timeline = mergeTaskExecutionTraceTimelineItems(timeline, runtimeFallback.timeline);
+        timelineMeta = {
+          ...runtimeFallback.meta,
+          itemCount: timeline.length,
+          complete: runtimeFallback.meta.complete && timeline.length > 0,
+        };
+        messageLimit = runtimeFallback.messageLimit;
+        messages.splice(0, messages.length, ...runtimeFallback.messages);
+      }
+    }
   }
 
   return {
@@ -3158,16 +3519,14 @@ function shouldLoadTaskExecutionTraceTimelineFallback(
   timeline: TaskSessionTimelineItemRecord[],
   snapshot: Awaited<ReturnType<typeof loadTaskProjectionSnapshot>>,
 ) {
-  return (
-    shouldReplaceTraceTimeline({
-      currentItemCount: timeline.length,
-      fallbackItemCount: 0,
-      projectionComplete: projectionTimeline?.complete,
-    }) &&
-    timeline.length === 0 &&
-    messages.length === 0 &&
-    !snapshot?.latestResult
-  );
+  void projectionTimeline;
+  void timeline;
+  void snapshot;
+
+  // Main chat requires actual conversation items. Older projections can contain
+  // only status/judge/tool timeline rows or snapshot latestResult without any
+  // user/assistant messages; in that case we must fall back to branch timeline.
+  return messages.length === 0;
 }
 
 async function loadTaskExecutionTraceTimelineFallback(args: {
@@ -3382,6 +3741,23 @@ function mapTaskExecutionTraceHookExecution(
         }
       : undefined,
     completedAt: hook.completedAt,
+  };
+}
+
+function mapTaskExecutionTraceFollowup(
+  followup: ReturnType<typeof parseExecutionTraceStrategy>["followupExecutions"][number],
+) {
+  return {
+    templateId: followup.templateId,
+    triggerHookId: followup.triggerHookId,
+    status: followup.status,
+    failureType: followup.failureType,
+    agent: followup.agent,
+    model: followup.model,
+    prompt: followup.prompt,
+    result: followup.result,
+    error: followup.error,
+    completedAt: followup.completedAt,
   };
 }
 
@@ -4983,6 +5359,28 @@ taskRoutes.get(":taskId/workflow-view", async (c) => {
   }
 
   const view = await buildTaskWorkflowViewModel(taskId, authorization, {
+    projectId: taskResult.data?.projectId,
+    taskStatus: taskResult.data?.status,
+  });
+  return c.json(view);
+});
+
+taskRoutes.get(":taskId/member-view", async (c) => {
+  const taskId = c.req.param("taskId");
+  const authorization = authHeader(c);
+  const taskResult = await cpFetch<{ projectId?: string | null; status?: string | null }>(
+    `/api/project-tree/tasks/${encodeURIComponent(taskId)}`,
+    {
+      authorization,
+    },
+  );
+  if (!taskResult.ok) {
+    return c.json(taskResult.data, taskResult.status as 401 | 404 | 502);
+  }
+
+  const view = await buildTaskMemberViewModel({
+    taskId,
+    authorization,
     projectId: taskResult.data?.projectId,
     taskStatus: taskResult.data?.status,
   });

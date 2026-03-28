@@ -34,8 +34,8 @@ type TaskSnapshotCreateInput = {
   gitCommitterEmail?: string | null;
 };
 
-function buildTaskAggregateStrategyJson(
-  strategy: string | null,
+export function buildTaskAggregateStrategyJson(
+  strategy: TaskTreeSnapshot["strategy"],
   options?: {
     executionMode?: TaskTreeSnapshot["executionMode"];
     autoAdvanceStages?: boolean;
@@ -43,7 +43,9 @@ function buildTaskAggregateStrategyJson(
 ) {
   let next: Record<string, unknown> | null = null;
 
-  if (typeof strategy === "string" && strategy.trim()) {
+  if (strategy && typeof strategy === "object" && !Array.isArray(strategy)) {
+    next = { ...strategy };
+  } else if (typeof strategy === "string" && strategy.trim()) {
     try {
       const parsed = JSON.parse(strategy) as unknown;
       next =
@@ -76,8 +78,16 @@ function resolveSnapshotStrategy(
   task: TaskTreeRecord,
   updates: Record<string, unknown>,
 ): TaskTreeSnapshot["strategy"] {
-  if (typeof updates.strategy === "string" || updates.strategy === null) {
+  if (
+    typeof updates.strategy === "string" ||
+    updates.strategy === null ||
+    (updates.strategy && typeof updates.strategy === "object" && !Array.isArray(updates.strategy))
+  ) {
     return updates.strategy;
+  }
+
+  if (task.strategy && typeof task.strategy === "object" && !Array.isArray(task.strategy)) {
+    return { ...(task.strategy as Record<string, unknown>) };
   }
 
   return typeof task.strategy === "string" || task.strategy === null ? task.strategy : null;

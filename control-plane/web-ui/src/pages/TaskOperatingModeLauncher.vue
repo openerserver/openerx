@@ -23,7 +23,7 @@
               <a-descriptions :column="1" bordered size="small">
                 <a-descriptions-item label="协作模式">{{ project?.settings?.collaborationMode || '未配置' }}</a-descriptions-item>
                 <a-descriptions-item label="自动托管">{{ project?.settings?.autopilotLevel || '未配置' }}</a-descriptions-item>
-                <a-descriptions-item label="老板参与">{{ project?.settings?.bossParticipationMode || '未配置' }}</a-descriptions-item>
+                <a-descriptions-item label="管理介入">{{ project?.settings?.bossParticipationMode || '未配置' }}</a-descriptions-item>
               </a-descriptions>
             </a-card>
           </a-col>

@@ -48,6 +48,14 @@
                   >
                     采纳为回复
                   </a-button>
+                  <a-button
+                    v-if="canCopyParallelCandidate(candidate)"
+                    type="text"
+                    size="small"
+                    @click="handleCopy(copyParallelCandidateText(candidate))"
+                  >
+                    复制候选
+                  </a-button>
                 </a-flex>
 
                 <a-typography-text v-if="candidate.meta" type="secondary" class="chat-message-card__parallel-meta">
@@ -258,6 +266,7 @@ import { renderMarkdown } from "../../lib/markdown";
 import type {
   TaskConversationListItem,
   TaskConversationMessageItem,
+  TaskParallelComparisonCard,
   TaskConversationParallelItem,
   TaskConversationToolCallItem,
 } from "../../lib/message-normalize";
@@ -266,6 +275,8 @@ const props = defineProps<{
   items: TaskConversationListItem[];
   loading: boolean;
   error: string | null;
+  activeSessionId?: string;
+  forceScrollToken?: number;
 }>();
 
 const emit = defineEmits<{
@@ -679,8 +690,41 @@ function canCopy(item: TaskConversationListItem) {
   return Boolean(displayText(item) || sanitizedItemText(item) || item.toolCalls.length);
 }
 
+function canCopyParallelCandidate(candidate: TaskParallelComparisonCard) {
+  return candidate.items.some(
+    (entry) => Boolean(displayText(entry) || sanitizedItemText(entry) || entry.toolCalls.length),
+  );
+}
+
 async function handleCopy(text: string) {
-  await navigator.clipboard.writeText(text);
+  if (!text.trim()) {
+    return;
+  }
+
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+  } catch {
+    // Fall through to the legacy copy path below.
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "true");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  textarea.style.pointerEvents = "none";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+
+  try {
+    document.execCommand?.("copy");
+  } finally {
+    document.body.removeChild(textarea);
+  }
 }
 
 function copyText(item: TaskConversationMessageItem) {
@@ -692,10 +736,43 @@ function copyText(item: TaskConversationMessageItem) {
   return [text, toolText].filter(Boolean).join("\n\n");
 }
 
+function copyParallelCandidateText(candidate: TaskParallelComparisonCard) {
+  const header = [
+    `候选: ${candidate.label}`,
+    candidate.model ? `模型: ${candidate.model}` : null,
+    candidate.status ? `状态: ${candidateStatusLabel(candidate.status)}` : null,
+    candidate.meta ? `说明: ${candidate.meta}` : null,
+    candidate.traceNote ? `追踪: ${candidate.traceNote}` : null,
+  ]
+    .filter((item): item is string => Boolean(item))
+    .join("\n");
+
+  const body = candidate.items
+    .map((entry) => {
+      const label = messageRoleLabel(entry);
+      const content = copyText(entry);
+      return content ? `${label}:\n${content}` : undefined;
+    })
+    .filter((item): item is string => Boolean(item))
+    .join("\n\n");
+
+  return [header, body].filter(Boolean).join("\n\n");
+}
+
 watch(
   itemsSignature,
   async () => {
     syncReveal();
+  },
+  { immediate: true },
+);
+
+watch(
+  () => [props.activeSessionId ?? "", props.forceScrollToken ?? 0].join("|"),
+  async () => {
+    shouldAutoScroll.value = true;
+    await nextTick();
+    scrollToBottom();
   },
   { immediate: true },
 );
@@ -759,6 +836,13 @@ onBeforeUnmount(() => {
   margin: 0;
   white-space: pre-wrap;
   font-family: inherit;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.chat-message-card__markdown {
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .chat-message-card__plain--streaming {
@@ -1030,6 +1114,8 @@ onBeforeUnmount(() => {
 }
 
 .chat-tool-call__path-button {
+  display: inline-block;
+  max-width: 100%;
   padding: 0;
   border: 0;
   background: transparent;
@@ -1037,7 +1123,9 @@ onBeforeUnmount(() => {
   font-size: 12px;
   text-align: left;
   cursor: pointer;
-  word-break: break-all;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .chat-tool-call__path-button:hover {
@@ -1053,6 +1141,8 @@ onBeforeUnmount(() => {
 .chat-tool-call__detail {
   margin: 8px 0 0;
   white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
   font-family: ui-monospace, SFMono-Regular, SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
   font-size: 12px;
   background: #fff;

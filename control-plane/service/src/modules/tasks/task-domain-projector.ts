@@ -410,8 +410,13 @@ function countRunNodesByKindAndStatus(
 
 function resolveProjectionWinnerNodeId(
   runNodes: Array<{ id: string; nodeKind: string; status: string }>,
+  orchestrationKind?: string | null,
   winnerNodeId?: string | null,
 ) {
+  if (orchestrationKind === "parallel") {
+    return winnerNodeId ?? null;
+  }
+
   return (
     winnerNodeId ??
     runNodes.find((node) => node.nodeKind === "candidate" && node.status === "completed")?.id ??
@@ -498,7 +503,11 @@ async function syncTaskSnapshotProjection(args: {
   ]);
   const totalChainSteps = countRunNodesByKindAndStatus(runNodes, "chain-step");
   const completedChainSteps = countRunNodesByKindAndStatus(runNodes, "chain-step", ["completed"]);
-  const winnerNodeId = resolveProjectionWinnerNodeId(runNodes, args.winnerNodeId);
+  const winnerNodeId = resolveProjectionWinnerNodeId(
+    runNodes,
+    args.orchestrationKind,
+    args.winnerNodeId,
+  );
   const now = new Date().toISOString();
   const projectionValues = buildTaskSnapshotProjectionValues({
     ...args,
@@ -722,18 +731,26 @@ async function handleTaskRunNodeUpsertedEvent(
   payload: Record<string, unknown>,
 ) {
   const runNodeTimeline = describeRunNodeTimelineEvent(payload);
+  const orchestrationKind = normalizeProjectionOrchestrationKind(payload.orchestrationKind);
+  const explicitWinnerNodeId = asNullableString(payload.winnerNodeId);
+  const shouldPreserveMainline =
+    orchestrationKind === "parallel" && explicitWinnerNodeId == null;
 
   await syncTaskSnapshotProjection({
     taskId: eventRecord.taskId,
     projectId: eventRecord.projectId,
     currentStatus: normalizeProjectionStatus(payload.status),
-    orchestrationKind: normalizeProjectionOrchestrationKind(payload.orchestrationKind),
+    orchestrationKind,
     currentRunId: asNullableString(payload.taskRunId),
-    currentSessionId: asNullableString(payload.runtimeSessionId),
-    latestResult: asNullableString(payload.result),
-    latestResultSummary: asNullableString(payload.result),
+    currentSessionId: shouldPreserveMainline
+      ? undefined
+      : asNullableString(payload.runtimeSessionId),
+    latestResult: shouldPreserveMainline ? undefined : asNullableString(payload.result),
+    latestResultSummary: shouldPreserveMainline
+      ? undefined
+      : asNullableString(payload.result),
     latestErrorText: asNullableString(payload.error),
-    winnerNodeId: asNullableString(payload.winnerNodeId),
+    winnerNodeId: explicitWinnerNodeId,
     lastActivityAt: asNullableString(payload.lastActivityAt) ?? eventRecord.createdAt,
   });
 

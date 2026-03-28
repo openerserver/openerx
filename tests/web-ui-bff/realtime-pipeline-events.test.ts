@@ -383,6 +383,213 @@ describe("SSEAggregator pipeline emitters", () => {
     }
   });
 
+  test("post-execution hooks can spawn follow-up execution and emit follow-up events", async () => {
+    const orchestrationStrategyModule = await import(
+      "../../control-plane/web-ui-bff/src/lib/orchestration-strategy?realtime-pipeline-events-test"
+    );
+    const originalStrategy = orchestrationStrategyModule.readOrchestrationStrategy();
+    orchestrationStrategyModule.writeOrchestrationStrategy({
+      ...originalStrategy,
+      followups: [
+        {
+          id: "post-review-followup",
+          enabled: true,
+          agent: "oracle-enterprise",
+          model: "github-copilot:gpt-5.4",
+          promptTemplate: [
+            "Follow-up summary for Opener-X task.",
+            "Task title: {{taskTitle}}",
+            "Follow-up goal: {{followupGoal}}",
+            "Task result:",
+            "{{taskResult}}",
+            "Hook result:",
+            "{{hookResult}}",
+          ].join("\n"),
+          timeoutMs: 15000,
+          resultMode: "advisory",
+        },
+      ],
+    });
+
+    executeLifecycleHooksMock.mockResolvedValue({
+      hookExecutions: [
+        {
+          hookId: "post-review",
+          trigger: "post-execution",
+          status: "completed",
+          agent: "reviewer",
+          sessionId: "ses-hook",
+          completedAt: "2026-03-12T10:05:00.000Z",
+          result: "Need a final verification summary.",
+          decision: {
+            action: "spawn-followup",
+            reason: "Need final verification",
+            followupTemplateId: "post-review-followup",
+            followupGoal: "Summarize remaining risks",
+            targetAgent: "oracle-enterprise",
+            targetModel: "github-copilot:gpt-5.4",
+          },
+        },
+      ],
+    });
+    runDetachedPromptMock.mockResolvedValue({
+      ok: true,
+      completed: true,
+      text: "Follow-up summary",
+      sessionId: "ses-followup",
+      tokenUsed: 321,
+      model: {
+        providerId: "github-copilot",
+        modelId: "gpt-5.4",
+      },
+    });
+    cpFetchMock.mockImplementation(async (url: string, options?: { method?: string; body?: unknown }) => {
+      if (isTaskDetailGet(url, options)) {
+        return {
+          ok: true,
+          status: 200,
+          data: createTaskDetailRecord({
+            strategy: JSON.stringify({
+              effectiveModel: "github-copilot:gpt-5.4",
+            }),
+          }),
+        };
+      }
+
+      if ((options?.method || "GET") === "GET" && url === "/api/tasks/task-1/branches") {
+        return {
+          ok: true,
+          status: 200,
+          data: {
+            data: [
+              {
+                runtimeSessionId: "ses-task-main",
+                isActive: true,
+                archivedAt: null,
+              },
+            ],
+          },
+        };
+      }
+
+      return { ok: true, status: 200, data: { body: options?.body } };
+    });
+    buildPipelineStageUpdatedEventsMock
+      .mockResolvedValueOnce([
+        {
+          id: "evt-pipeline-hook",
+          type: "pipeline.stage.updated",
+          ts: "2026-03-12T10:05:01.000Z",
+          taskId: "task-1",
+          sessionId: "ses-task-main",
+          projectId: "proj-1",
+          data: {
+            patch: { type: "upsert", stage: { id: "post-hook-1" } },
+            summary: { totalStages: 1, completedStages: 1 },
+            reason: "task.hooks.updated",
+            status: "completed",
+            branchName: "main",
+          },
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          id: "evt-pipeline-followup-started",
+          type: "pipeline.stage.updated",
+          ts: "2026-03-12T10:05:02.000Z",
+          taskId: "task-1",
+          sessionId: "ses-task-main",
+          projectId: "proj-1",
+          data: {
+            patch: { type: "upsert", stage: { id: "follow-up-start" } },
+            summary: { totalStages: 2, completedStages: 1 },
+            reason: "task.followup.started",
+            status: "completed",
+            branchName: "main",
+          },
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          id: "evt-pipeline-followup-completed",
+          type: "pipeline.stage.updated",
+          ts: "2026-03-12T10:05:03.000Z",
+          taskId: "task-1",
+          sessionId: "ses-task-main",
+          projectId: "proj-1",
+          data: {
+            patch: { type: "upsert", stage: { id: "follow-up-1" } },
+            summary: { totalStages: 3, completedStages: 2 },
+            reason: "task.followup.completed",
+            status: "completed",
+            branchName: "main",
+          },
+        },
+      ]);
+
+    const emitted: Array<Record<string, unknown>> = [];
+    const unsubscribe = sseAggregator.onEvent((event) => {
+      emitted.push(event as unknown as Record<string, unknown>);
+    });
+
+    try {
+      await (
+        sseAggregator as unknown as {
+          triggerPostExecutionHooks: (
+            taskId: string,
+            resultText: string | undefined,
+            authorization: string,
+          ) => Promise<void>;
+        }
+      ).triggerPostExecutionHooks("task-1", "Done", "Bearer internal");
+
+      expect(emitted.map((event) => event.type)).toEqual([
+        "task.hooks.updated",
+        "pipeline.stage.updated",
+        "task.followup.started",
+        "pipeline.stage.updated",
+        "task.followup.completed",
+        "pipeline.stage.updated",
+      ]);
+      expect(runDetachedPromptMock).toHaveBeenCalledWith(
+        expect.stringContaining("[Follow-up task-1]"),
+        expect.stringContaining("Summarize remaining risks"),
+        expect.objectContaining({
+          agent: "oracle-enterprise",
+          model: {
+            providerId: "github-copilot",
+            modelId: "gpt-5.4",
+          },
+        }),
+      );
+
+      const taskPatchCalls = cpFetchMock.mock.calls.filter(
+        (call) => call[0] === "/api/tasks/task-1" && (call[1] as { method?: string })?.method === "PATCH",
+      );
+      expect(taskPatchCalls).toHaveLength(2);
+      expect(
+        taskPatchCalls.some((call) => {
+          const body = (call[1] as { body?: { strategy?: string } }).body;
+          if (!body?.strategy || typeof body.strategy !== "string") {
+            return false;
+          }
+          const parsed = JSON.parse(body.strategy) as {
+            followupExecutions?: Array<{ templateId?: string; triggerHookId?: string; result?: string }>;
+          };
+          return parsed.followupExecutions?.some(
+            (execution) =>
+              execution.templateId === "post-review-followup" &&
+              execution.triggerHookId === "post-review" &&
+              execution.result === "Follow-up summary",
+          ) === true;
+        }),
+      ).toBe(true);
+    } finally {
+      unsubscribe();
+      orchestrationStrategyModule.writeOrchestrationStrategy(originalStrategy);
+    }
+  });
+
   test("post-execution hooks are skipped when paid execution guard disables them", async () => {
     cpFetchMock.mockImplementation(async (url: string, options?: { method?: string }) => {
       if (isTaskDetailGet(url, options)) {

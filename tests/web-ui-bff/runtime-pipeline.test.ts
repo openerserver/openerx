@@ -140,6 +140,19 @@ function createStrategy(overrides: Partial<PersistedTaskStrategy> = {}): Persist
         completedAt: "2026-03-12T10:05:00.000Z",
       },
     ],
+    followupExecutions: [
+      {
+        templateId: "post-review-followup",
+        triggerHookId: "post-review",
+        status: "completed",
+        agent: "oracle-enterprise",
+        model: "github-copilot:gpt-5.4",
+        prompt: "Summarize remaining risks",
+        result: "建议补一轮回归验证。",
+        sessionId: "ses-followup",
+        completedAt: "2026-03-12T10:06:00.000Z",
+      },
+    ],
     ...overrides,
   };
 }
@@ -250,6 +263,54 @@ beforeEach(() => {
 });
 
 describe("buildRuntimePipeline", () => {
+  test("appends follow-up executions as dedicated stages", async () => {
+    const strategy = createStrategy();
+
+    cpFetchMock.mockImplementation(async (url: string) => {
+      if (url === "/api/project-tree/tasks/task-followup") {
+        return {
+          ok: true,
+          data: {
+            id: "task-followup",
+            status: "completed",
+            orchestrationKind: "single",
+            currentRunId: null,
+            result: "主任务已完成",
+            sessionId: "ses-root",
+            createdAt: "2026-03-12T09:50:00.000Z",
+            finishedAt: "2026-03-12T10:06:00.000Z",
+            strategy: JSON.stringify(strategy),
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-followup/branches") {
+        return {
+          ok: true,
+          data: {
+            data: [{ id: "ts-root", runtimeSessionId: "ses-root", branchName: "main", isActive: true }],
+          },
+        };
+      }
+
+      return { ok: false, data: undefined };
+    });
+    getSessionMessagesMock.mockResolvedValue({ ok: true, data: [] });
+
+    const { buildRuntimePipeline } = await loadRuntimePipelineModule();
+    const pipeline = await buildRuntimePipeline({
+      taskId: "task-followup",
+      sessionId: "ses-root",
+      authorization: "Bearer test",
+    });
+
+    const followupStage = pipeline.stages.find((stage) => stage.type === "follow-up");
+    expect(followupStage).toBeTruthy();
+    expect(followupStage?.label).toContain("Follow-up");
+    expect(followupStage?.sessionId).toBe("ses-followup");
+    expect(followupStage?.output).toContain("回归验证");
+  });
+
   test("finalizes unfinished stages when the task has already failed", async () => {
     const plan = createRuntimePlan();
     const strategy = createStrategy();
@@ -527,6 +588,7 @@ describe("buildRuntimePipeline", () => {
       "execution",
       "judge",
       "post-hook",
+      "follow-up",
     ]);
 
     expect(pipeline.stages.map((stage) => stage.label)).toEqual([
@@ -537,6 +599,7 @@ describe("buildRuntimePipeline", () => {
       "候选 B",
       "评判 / 聚合",
       "执行后 Hook · reviewer",
+      "Follow-up · oracle-enterprise",
     ]);
 
     const runningCandidate = pipeline.stages.find(
@@ -552,12 +615,168 @@ describe("buildRuntimePipeline", () => {
 
     expect(pipeline.stages.find((stage) => stage.id === "graph:node-other")).toBeUndefined();
     expect(pipeline.summary).toMatchObject({
-      totalStages: 7,
-      completedStages: 4,
+      totalStages: 8,
+      completedStages: 5,
       failedStages: 0,
       currentStageId: "candidate:0:ses-branch-1",
       totalTokens: { input: 210, output: 140 },
       replanCount: 0,
+    });
+  });
+
+  test("prefers configured parallel candidate labels and models over stale domain-run metadata", async () => {
+    const strategy = createStrategy({
+      parallelCandidates: [
+        { label: "候选 A", model: "gpt-5.4" },
+        { label: "候选 B", model: "claude-opus-4.6" },
+      ],
+    });
+
+    cpFetchMock.mockImplementation(async (url: string) => {
+      if (url === "/api/project-tree/tasks/task-configured") {
+        return {
+          ok: true,
+          data: {
+            id: "task-configured",
+            status: "completed",
+            orchestrationKind: "parallel",
+            currentRunId: "run-parallel-configured",
+            sessionId: "ses-root",
+            createdAt: "2026-03-12T09:50:00.000Z",
+            finishedAt: "2026-03-12T10:06:00.000Z",
+            strategy,
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-configured/branches") {
+        return {
+          ok: true,
+          data: {
+            data: [
+              { id: "ts-root", runtimeSessionId: "ses-root", branchName: "main", isActive: true },
+              {
+                id: "ts-branch-1",
+                runtimeSessionId: "ses-branch-1",
+                branchName: "旧候选 A",
+                isActive: false,
+              },
+              {
+                id: "ts-branch-2",
+                runtimeSessionId: "ses-branch-2",
+                branchName: "旧候选 B",
+                isActive: false,
+              },
+            ],
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-configured/domain-runs") {
+        return {
+          ok: true,
+          data: {
+            data: createParallelDomainRuns([
+              {
+                id: "run-parallel-configured",
+                taskId: "task-configured",
+                projectId: "proj-1",
+                orchestrationKind: "parallel",
+                status: "completed",
+                rootSessionId: "ses-root",
+                createdAt: "2026-03-12T09:59:00.000Z",
+                updatedAt: "2026-03-12T10:02:00.000Z",
+              },
+            ]),
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-configured/domain-runs/run-parallel-configured") {
+        return {
+          ok: true,
+          data: {
+            data: createParallelDomainRunDetail({
+              run: {
+                id: "run-parallel-configured",
+                taskId: "task-configured",
+                projectId: "proj-1",
+                orchestrationKind: "parallel",
+                status: "completed",
+                rootSessionId: "ses-root",
+                createdAt: "2026-03-12T09:59:00.000Z",
+                updatedAt: "2026-03-12T10:02:00.000Z",
+              },
+              candidateNodes: [
+                {
+                  id: "candidate-node-stale-1",
+                  runId: "run-parallel-configured",
+                  taskId: "task-configured",
+                  projectId: "proj-1",
+                  nodeKind: "candidate",
+                  nodeKey: "candidate:0",
+                  title: "旧候选 A",
+                  candidateIndex: 0,
+                  agentType: "default-executor",
+                  modelUsed: "github-copilot:gemini-3-flash-preview",
+                  sessionId: "ses-branch-1",
+                  status: "completed",
+                  resultText: "候选一结果",
+                  startedAt: "2026-03-12T10:00:00.000Z",
+                  finishedAt: "2026-03-12T10:01:00.000Z",
+                },
+                {
+                  id: "candidate-node-stale-2",
+                  runId: "run-parallel-configured",
+                  taskId: "task-configured",
+                  projectId: "proj-1",
+                  nodeKind: "candidate",
+                  nodeKey: "candidate:1",
+                  title: "旧候选 B",
+                  candidateIndex: 1,
+                  agentType: "reviewer",
+                  modelUsed: "gpt-4o",
+                  sessionId: "ses-branch-2",
+                  status: "completed",
+                  resultText: "候选二结果",
+                  startedAt: "2026-03-12T10:00:00.000Z",
+                  finishedAt: "2026-03-12T10:01:00.000Z",
+                },
+              ],
+              judgeNode: null,
+              winnerCandidateIndex: null,
+            }),
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-configured/graph") {
+        return {
+          ok: true,
+          data: { taskId: "task-configured", nodes: [], edges: [] },
+        };
+      }
+
+      throw new Error(`Unexpected cpFetch url: ${url}`);
+    });
+
+    getSessionMessagesMock.mockResolvedValue({ ok: true, data: [] });
+
+    const { buildRuntimePipeline } = await loadRuntimePipelineModule();
+    const pipeline = await buildRuntimePipeline({
+      taskId: "task-configured",
+      authorization: "Bearer test",
+    });
+
+    expect(pipeline.stages.find((stage) => stage.id === "candidate:0:ses-branch-1")).toMatchObject({
+      label: "候选 A",
+      model: "gpt-5.4",
+      sessionId: "ses-branch-1",
+    });
+    expect(pipeline.stages.find((stage) => stage.id === "candidate:1:ses-branch-2")).toMatchObject({
+      label: "候选 B",
+      model: "claude-opus-4.6",
+      sessionId: "ses-branch-2",
     });
   });
 

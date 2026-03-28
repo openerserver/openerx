@@ -102,9 +102,18 @@ const routes: RouteRecordRaw[] = [
         component: () => import("../pages/ProjectOperatingMode.vue"),
       },
       {
+        path: "projects/:projectId/management-operations",
+        name: "ManagementOperationsCenter",
+        component: () => import("../pages/ManagementOperationsCenter.vue"),
+      },
+      {
         path: "projects/:projectId/boss-operations",
         name: "BossOperationsCenter",
-        component: () => import("../pages/BossOperationsCenter.vue"),
+        redirect: (to) => ({
+          name: "ManagementOperationsCenter",
+          params: to.params,
+          query: to.query,
+        }),
       },
       {
         path: "projects/:projectId/recommended-scenarios",

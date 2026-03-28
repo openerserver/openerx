@@ -46,35 +46,107 @@
             <a-descriptions-item label="分类">
               {{ currentSummary.category }}
             </a-descriptions-item>
-            <a-descriptions-item label="命中模板">
+            <a-descriptions-item label="协作模板">
               {{ currentSummary.templateName }}
             </a-descriptions-item>
-            <a-descriptions-item label="执行模式">
+            <a-descriptions-item label="Agent 成员协作模式">
               {{ currentSummary.executionMode }}
             </a-descriptions-item>
-            <a-descriptions-item label="Pipeline">
+            <a-descriptions-item label="任务推进 Pipeline">
               {{ currentSummary.pipelineEnabled ? "已启用" : "已关闭" }}
             </a-descriptions-item>
-            <a-descriptions-item label="Judge">
+            <a-descriptions-item label="管理者校验 Judge">
               {{ currentSummary.judgeEnabled ? "已启用" : "已关闭" }}
             </a-descriptions-item>
-            <a-descriptions-item label="Judge Agent">
+            <a-descriptions-item label="Judge Agent 成员">
               {{ currentSummary.judgeAgent }}
             </a-descriptions-item>
             <a-descriptions-item label="Judge 模型">
               {{ currentSummary.judgeModel }}
             </a-descriptions-item>
-            <a-descriptions-item label="主执行 Agent">
+            <a-descriptions-item label="当前分类 Agent 成员">
               {{ currentSummary.primaryAgents.join(", ") || "未指定" }}
             </a-descriptions-item>
             <a-descriptions-item label="主执行模型">
               {{ currentSummary.primaryModel }}
+            </a-descriptions-item>
+            <a-descriptions-item label="执行后 Follow-up">
+              {{ currentSummary.followupSummary || "未配置 follow-up 模板" }}
+            </a-descriptions-item>
+            <a-descriptions-item label="成员协作摘要">
+              {{ memberCollaborationSummary }}
+            </a-descriptions-item>
+            <a-descriptions-item label="Skill 能力摘要">
+              {{ skillCoverageSummary }}
+            </a-descriptions-item>
+            <a-descriptions-item label="管理介入边界">
+              {{ governanceBoundarySummary }}
             </a-descriptions-item>
           </a-descriptions>
 
           <div v-if="currentSummary?.notes?.length" class="chat-settings-page__summary-notes">
             <a-tag v-for="note in currentSummary.notes" :key="note" color="cyan">{{ note }}</a-tag>
           </div>
+          <a-space
+            v-if="(currentSummary?.followupTemplateIds || []).length > 0"
+            wrap
+            size="small"
+            class="chat-settings-page__summary-notes"
+          >
+            <a-tag
+              v-for="followupId in currentSummary?.followupTemplateIds || []"
+              :key="followupId"
+              color="purple"
+            >
+              Follow-up {{ followupId }}
+            </a-tag>
+          </a-space>
+        </a-card>
+
+        <a-card title="当前分类成员与能力" class="chat-settings-page__card">
+          <a-row :gutter="12">
+            <a-col :xs="24" :lg="12">
+              <div class="chat-settings-page__member-panel">
+                <div class="chat-settings-page__member-panel-title">Agent 成员</div>
+                <a-empty v-if="currentCategoryAgents.length === 0" description="当前分类还没有可识别的 Agent 摘要" />
+                <div v-else class="chat-settings-page__capability-list">
+                  <article
+                    v-for="agent in currentCategoryAgents"
+                    :key="agent.fileName"
+                    class="chat-settings-page__capability-card"
+                  >
+                    <div class="chat-settings-page__capability-title">{{ agent.name }}</div>
+                    <div class="chat-settings-page__capability-description">{{ agent.description || "暂无说明" }}</div>
+                    <div class="chat-settings-page__capability-meta">模型：{{ agent.model || "未指定" }}</div>
+                    <a-space v-if="agent.tags?.length" wrap size="small" class="chat-settings-page__capability-tags">
+                      <a-tag v-for="tag in agent.tags" :key="`${agent.fileName}-${tag}`" color="blue">{{ tag }}</a-tag>
+                    </a-space>
+                  </article>
+                </div>
+              </div>
+            </a-col>
+
+            <a-col :xs="24" :lg="12">
+              <div class="chat-settings-page__member-panel">
+                <div class="chat-settings-page__member-panel-title">Skill 能力</div>
+                <a-empty v-if="currentCategorySkills.length === 0" description="当前分类还没有匹配到 Skill 摘要" />
+                <div v-else class="chat-settings-page__capability-list">
+                  <article
+                    v-for="skill in currentCategorySkills"
+                    :key="skill.dirName"
+                    class="chat-settings-page__capability-card"
+                  >
+                    <div class="chat-settings-page__capability-title">{{ skill.name }}</div>
+                    <div class="chat-settings-page__capability-description">{{ skill.description || "暂无说明" }}</div>
+                    <div class="chat-settings-page__capability-meta">适用范围：{{ formatApplyTo(skill.applyTo) }}</div>
+                    <a-space v-if="skill.tags?.length" wrap size="small" class="chat-settings-page__capability-tags">
+                      <a-tag v-for="tag in skill.tags" :key="`${skill.dirName}-${tag}`" color="cyan">{{ tag }}</a-tag>
+                    </a-space>
+                  </article>
+                </div>
+              </div>
+            </a-col>
+          </a-row>
         </a-card>
       </a-col>
 
@@ -157,6 +229,10 @@
                 <a-descriptions-item label="主执行模型">
                   {{ previewCurrentDiff.before.primaryModel }} -> {{ previewCurrentDiff.after.primaryModel }}
                 </a-descriptions-item>
+                <a-descriptions-item label="执行后 Follow-up">
+                  {{ previewCurrentDiff.before.followupSummary || "未配置 follow-up 模板" }} ->
+                  {{ previewCurrentDiff.after.followupSummary || "未配置 follow-up 模板" }}
+                </a-descriptions-item>
               </a-descriptions>
             </a-card>
 
@@ -222,6 +298,7 @@ import { message } from "ant-design-vue";
 import type { Key } from "ant-design-vue/es/_util/type";
 import { storeToRefs } from "pinia";
 import { computed, defineAsyncComponent, onMounted, ref } from "vue";
+import type { AgentSummary, SkillSummary } from "../lib/api";
 import { useChatSettingsOrchestrationStore } from "../stores/chat-settings-orchestration";
 
 const MermaidRenderer = defineAsyncComponent(() => import("../components/MermaidRenderer.vue"));
@@ -277,6 +354,64 @@ const previewCurrentDiff = computed(() => {
   return { category, before, after };
 });
 
+const currentCategoryAgents = computed(() => {
+  const summaries = orchestrationStore.context?.agentSummaries || [];
+  const primaryAgents = new Set(currentSummary.value?.primaryAgents || []);
+  const active = activeCategory.value;
+  return summaries.filter((agent) => {
+    if (primaryAgents.has(agent.name) || primaryAgents.has(agent.fileName)) {
+      return true;
+    }
+    if (agent.category === active) {
+      return true;
+    }
+    return (agent.tags || []).some((tag) => tag.toLowerCase() === active.toLowerCase());
+  });
+});
+
+const currentCategorySkills = computed(() => {
+  const summaries = orchestrationStore.context?.skillSummaries || [];
+  const active = activeCategory.value.toLowerCase();
+  return summaries.filter((skill) => {
+    if (skill.category?.toLowerCase() === active) {
+      return true;
+    }
+    if ((skill.tags || []).some((tag) => tag.toLowerCase() === active)) {
+      return true;
+    }
+    return (skill.applyTo || []).some((item) => item.toLowerCase().includes(active));
+  });
+});
+
+const memberCollaborationSummary = computed(() => {
+  if (!currentSummary.value) {
+    return "暂无成员协作信息";
+  }
+
+  const agentCount = currentSummary.value.primaryAgents.length;
+  const judgeText = currentSummary.value.judgeEnabled
+    ? `管理者通过 ${currentSummary.value.judgeAgent} 进行校验`
+    : "管理者当前不启用 judge 校验";
+  return `管理者成员负责策略校验与应用，普通用户成员通过自然语言提出改动意图，${agentCount || 0} 个 Agent 成员承担 ${currentSummary.value.category} 分类执行。${judgeText}。`;
+});
+
+const skillCoverageSummary = computed(() => {
+  if (currentCategorySkills.value.length === 0) {
+    return "当前分类尚未显式暴露 Skill 摘要";
+  }
+  return currentCategorySkills.value.map((skill) => skill.name).join("、");
+});
+
+const governanceBoundarySummary = computed(() => {
+  if (!currentSummary.value) {
+    return "暂无治理边界信息";
+  }
+
+  return currentSummary.value.judgeEnabled
+    ? "Role 继续留在系统内部控制职责与权限；前台只暴露管理者可调整的 Judge、模板与 Agent 成员选择。"
+    : "前台只暴露成员、能力与编排结果，不直接暴露 Role；Role 仍作为系统内部治理边界存在。";
+});
+
 function messageClass(role: "user" | "assistant") {
   return [
     "chat-settings-page__message",
@@ -321,6 +456,10 @@ async function applyCurrentPreview() {
 
 function handleDismissChange(changeId: string) {
   orchestrationStore.dismissChangeCard(changeId);
+}
+
+function formatApplyTo(applyTo?: string[]) {
+  return applyTo && applyTo.length > 0 ? applyTo.join(", ") : "未限定";
 }
 
 function handleComposerKeydown(event: KeyboardEvent) {
@@ -389,6 +528,57 @@ defineExpose({
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 12px;
+}
+
+.chat-settings-page__member-panel {
+  height: 100%;
+  border: 1px solid rgba(15, 118, 110, 0.12);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.72);
+  padding: 14px;
+}
+
+.chat-settings-page__member-panel-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #0f172a;
+  margin-bottom: 12px;
+}
+
+.chat-settings-page__capability-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.chat-settings-page__capability-card {
+  border: 1px solid rgba(15, 118, 110, 0.12);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(248, 250, 252, 0.95) 0%, rgba(241, 245, 249, 0.9) 100%);
+  padding: 12px;
+}
+
+.chat-settings-page__capability-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.chat-settings-page__capability-description {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #475569;
+}
+
+.chat-settings-page__capability-meta {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #0f766e;
+}
+
+.chat-settings-page__capability-tags {
+  margin-top: 8px;
 }
 
 .chat-settings-page__quick-actions {

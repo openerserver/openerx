@@ -55,6 +55,16 @@ const workflowTemplateSchema = z.object({
   categoryDefaults: z.array(z.string()).optional(),
 });
 
+const followupTemplateSchema = z.object({
+  id: z.string().min(1),
+  enabled: z.boolean(),
+  agent: z.string().min(1),
+  model: z.string().optional(),
+  promptTemplate: z.string().min(1),
+  timeoutMs: z.number().int().positive(),
+  resultMode: z.enum(["append", "replace", "advisory"]).optional(),
+});
+
 const judgeConfigSchema = z.object({
   enabled: z.boolean(),
   agent: z.string(),
@@ -70,6 +80,7 @@ const patchSchema = z
     categoryModelMap: z.record(z.string(), z.string()).optional(),
     enablePipeline: z.boolean().optional(),
     hooks: z.array(lifecycleHookSchema).optional(),
+    followups: z.array(followupTemplateSchema).optional(),
     templates: z.array(workflowTemplateSchema).optional(),
     judge: judgeConfigSchema.partial().optional(),
   })

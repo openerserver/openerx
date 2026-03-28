@@ -1,11 +1,13 @@
 import { getSessionMessages } from "../modules/agent-control/opencode-adapter";
 import { cpFetch } from "./control-plane-client";
-import type {
+import {
   ExecutionCandidate,
   ExecutionStep,
+  FollowupExecutionRecord,
   HookExecutionRecord,
   PersistedTaskStrategy,
   RuntimePlan,
+  parseTaskStrategy,
 } from "./orchestration-strategy";
 
 const PIPELINE_AGENTS = ["prometheus-enterprise", "metis-enterprise", "momus-enterprise"] as const;
@@ -15,7 +17,7 @@ export type RuntimePipelineStageStatus = "pending" | "running" | "completed" | "
 
 export interface RuntimePipelineStage {
   id: string;
-  type: "hook" | "planning" | "execution" | "judge" | "post-hook";
+  type: "hook" | "planning" | "execution" | "judge" | "post-hook" | "follow-up";
   label: string;
   status: RuntimePipelineStageStatus;
   order: number;
@@ -60,7 +62,7 @@ interface TaskRecord {
   id: string;
   status?: string;
   sessionId?: string | null;
-  strategy?: string | null;
+  strategy?: string | PersistedTaskStrategy | null;
   orchestrationKind?: string | null;
   currentRunId?: string | null;
   createdAt?: string | null;
@@ -125,18 +127,6 @@ interface SessionMessageRecord {
     time?: { created?: number; completed?: number };
   };
   parts?: Array<{ type?: string; text?: string }>;
-}
-
-function parseJson<T>(value: string | null | undefined): T | null {
-  if (!value) {
-    return null;
-  }
-
-  try {
-    return JSON.parse(value) as T;
-  } catch {
-    return null;
-  }
 }
 
 function toIso(value: number | string | null | undefined) {
@@ -234,6 +224,34 @@ function stageFromHookExecution(record: HookExecutionRecord, order: number): Run
     order,
     sourceType: "strategy.hookExecution",
     sourceId: record.hookId,
+    agent: record.agent,
+    model: record.model ?? null,
+    sessionId: record.sessionId ?? null,
+    startedAt: null,
+    finishedAt,
+    durationMs: null,
+    output: truncateOutput(record.result),
+    error: record.error ?? null,
+    tokens:
+      record.tokenUsed && record.tokenUsed > 0 ? { input: 0, output: record.tokenUsed } : null,
+    graphNodeId: null,
+    dependsOn: [],
+  };
+}
+
+function stageFromFollowupExecution(
+  record: FollowupExecutionRecord,
+  order: number,
+): RuntimePipelineStage {
+  const finishedAt = toIso(record.completedAt);
+  return {
+    id: `followup:${record.templateId}:${record.triggerHookId}:${order}`,
+    type: "follow-up",
+    label: `Follow-up · ${record.agent}`,
+    status: record.status === "skipped" ? "skipped" : record.status,
+    order,
+    sourceType: "strategy.hookExecution",
+    sourceId: record.templateId,
     agent: record.agent,
     model: record.model ?? null,
     sessionId: record.sessionId ?? null,
@@ -381,10 +399,12 @@ function stageFromJudgeStep(
 function stageFromParallelRunCandidate(
   candidate: TaskDomainRunNodeRecord,
   order: number,
+  configuredCandidate?: { model: string; label?: string },
 ): RuntimePipelineStage {
   const candidateIndex =
     typeof candidate.candidateIndex === "number" ? candidate.candidateIndex : order;
   const label =
+    configuredCandidate?.label ||
     candidate.title ||
     (typeof candidate.candidateIndex === "number"
       ? `候选 ${candidate.candidateIndex + 1}`
@@ -405,7 +425,7 @@ function stageFromParallelRunCandidate(
     sourceType: "taskRun.node",
     sourceId: candidate.id,
     agent: candidate.agentType ?? null,
-    model: candidate.modelUsed ?? null,
+    model: configuredCandidate?.model ?? candidate.modelUsed ?? null,
     sessionId: candidate.sessionId ?? null,
     startedAt: candidate.startedAt ?? null,
     finishedAt,
@@ -609,6 +629,19 @@ function appendPlanningStages(
   return nextOrder;
 }
 
+function appendFollowupExecutionStages(
+  stages: RuntimePipelineStage[],
+  followupExecutions: FollowupExecutionRecord[],
+  order: number,
+) {
+  let nextOrder = order;
+  for (const record of followupExecutions) {
+    stages.push(stageFromFollowupExecution(record, nextOrder));
+    nextOrder += 1;
+  }
+  return nextOrder;
+}
+
 function appendSingleExecutionFallbackStage(
   stages: RuntimePipelineStage[],
   task: TaskRecord,
@@ -786,10 +819,23 @@ async function loadParallelDomainRunDetail(args: {
   return detailResult.ok ? (detailResult.data?.data ?? null) : null;
 }
 
+function resolveConfiguredParallelCandidates(
+  strategy: TaskRecord["strategy"],
+): Array<{ model: string; label?: string }> {
+  const parsed = parseTaskStrategy(strategy);
+  return Array.isArray(parsed.parallelCandidates)
+    ? parsed.parallelCandidates.filter(
+        (candidate): candidate is { model: string; label?: string } =>
+          Boolean(candidate && typeof candidate.model === "string" && candidate.model.trim()),
+      )
+    : [];
+}
+
 function appendParallelDomainRunStages(
   stages: RuntimePipelineStage[],
   detail: TaskDomainRunDetailRecord | null,
   order: number,
+  configuredCandidates: Array<{ model: string; label?: string }>,
 ) {
   if (!detail) {
     return order;
@@ -805,7 +851,10 @@ function appendParallelDomainRunStages(
     );
 
   for (const candidate of candidates) {
-    stages.push(stageFromParallelRunCandidate(candidate, nextOrder));
+    const candidateIndex = typeof candidate.candidateIndex === "number" ? candidate.candidateIndex : nextOrder;
+    stages.push(
+      stageFromParallelRunCandidate(candidate, nextOrder, configuredCandidates[candidateIndex]),
+    );
     nextOrder += 1;
   }
 
@@ -852,7 +901,8 @@ export async function buildRuntimePipeline(args: {
   if (!sessionIsAllowed) {
     return buildEmptyRuntimePipeline(args.taskId, requestedSessionId, task.createdAt ?? null);
   }
-  const strategy = parseJson<PersistedTaskStrategy>(task.strategy);
+  const strategy = parseTaskStrategy(task.strategy);
+  const configuredParallelCandidates = resolveConfiguredParallelCandidates(task.strategy);
   const parallelRunDetail =
     task.orchestrationKind === "parallel"
       ? await loadParallelDomainRunDetail({ task, authorization: args.authorization })
@@ -862,14 +912,18 @@ export async function buildRuntimePipeline(args: {
   let order = 0;
 
   const hookExecutions = Array.isArray(strategy?.hookExecutions) ? strategy.hookExecutions : [];
+  const followupExecutions = Array.isArray(strategy?.followupExecutions)
+    ? strategy.followupExecutions
+    : [];
   order = appendHookExecutionStages(stages, hookExecutions, order, ["pre-execution", "pre-resume"]);
   order = appendPlanningStages(stages, messages, order);
   order =
     task.orchestrationKind === "parallel"
-      ? appendParallelDomainRunStages(stages, parallelRunDetail, order)
+      ? appendParallelDomainRunStages(stages, parallelRunDetail, order, configuredParallelCandidates)
       : appendPlanStages(stages, null, order);
   order = appendSingleExecutionFallbackStage(stages, task, requestedSessionId, messages, order);
-  appendHookExecutionStages(stages, hookExecutions, order, ["post-execution", "on-failure"]);
+  order = appendHookExecutionStages(stages, hookExecutions, order, ["post-execution", "on-failure"]);
+  appendFollowupExecutionStages(stages, followupExecutions, order);
 
   const finalizedStages = finalizeStagesForTask(
     task,

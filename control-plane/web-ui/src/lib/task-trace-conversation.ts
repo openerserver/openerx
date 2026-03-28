@@ -2,6 +2,7 @@ import type { ExecutionTraceMessage, ExecutionTraceTimelineItem, TaskExecutionTr
 import {
   type LiveAssistantState,
   type TaskConversationMessageItem,
+  type TaskConversationToolCallItem,
   asRecord,
   asString,
   createEmptyLiveAssistantState,
@@ -241,6 +242,289 @@ function resolveTraceSourceItems(
     return timeline;
   }
   return [];
+}
+
+function buildToolTimelineText(tool: TaskConversationToolCallItem) {
+  const lines = [tool.label];
+
+  if (tool.headline) {
+    lines.push(`调用: ${tool.headline}`);
+  } else if (tool.command) {
+    lines.push(`调用: ${tool.command}`);
+  }
+
+  if (tool.inputPreview) {
+    lines.push(`参数: ${tool.inputPreview}`);
+  }
+
+  if (tool.outputPreview) {
+    lines.push(`输出: ${tool.outputPreview}`);
+  }
+
+  return lines.join("\n");
+}
+
+function buildToolRequestTimelineText(tool: TaskConversationToolCallItem) {
+  const lines = [tool.label];
+
+  if (tool.headline) {
+    lines.push(`调用: ${tool.headline}`);
+  } else if (tool.command) {
+    lines.push(`调用: ${tool.command}`);
+  }
+
+  if (tool.inputPreview) {
+    lines.push(`参数: ${tool.inputPreview}`);
+  }
+
+  return lines.join("\n");
+}
+
+function buildToolResultTimelineText(tool: TaskConversationToolCallItem) {
+  const lines = [`${tool.label} 结果`, `状态: ${tool.stateLabel}`];
+
+  if (tool.outputPreview) {
+    lines.push(`输出: ${tool.outputPreview}`);
+  } else if (tool.description) {
+    lines.push(`说明: ${tool.description}`);
+  }
+
+  return lines.join("\n");
+}
+
+function resolveTraceToolParts(item: TraceSourceItem) {
+  const raw = asRecord(item.raw);
+  const rawParts = Array.isArray(raw?.parts)
+    ? raw.parts
+        .map((part) => asRecord(part))
+        .filter((part): part is Record<string, unknown> => Boolean(part))
+    : [];
+
+  return normalizeTraceParts(rawParts).filter((part) => asString(part.type) === "tool");
+}
+
+function buildToolRequestRaw(
+  item: TraceSourceItem,
+  tool: TaskConversationToolCallItem,
+  part: Record<string, unknown> | undefined,
+) {
+  const state = asRecord(part?.state) ?? {};
+  const input = asRecord(part?.input) ?? asRecord(state.input) ?? {};
+  const toolCallId = asString(part?.callID) ?? tool.key;
+  const toolName = asString(part?.toolName) ?? asString(part?.tool) ?? tool.kind;
+
+  return {
+    source: "trace-message-tool-request",
+    parentMessageId: item.id,
+    toolCallId,
+    toolName,
+    request: {
+      status: asString(state.status),
+      input,
+      headline: tool.headline,
+      command: tool.command,
+      description: tool.description,
+      filePath: tool.filePath,
+    },
+    rawPart: {
+      type: "tool",
+      callID: toolCallId,
+      tool: asString(part?.tool),
+      toolName: asString(part?.toolName),
+      state: {
+        status: asString(state.status),
+        input,
+      },
+    },
+  };
+}
+
+function buildToolResultRaw(
+  item: TraceSourceItem,
+  tool: TaskConversationToolCallItem,
+  part: Record<string, unknown> | undefined,
+) {
+  const state = asRecord(part?.state) ?? {};
+  const toolCallId = asString(part?.callID) ?? tool.key;
+  const toolName = asString(part?.toolName) ?? asString(part?.tool) ?? tool.kind;
+
+  return {
+    source: "trace-message-tool-result",
+    parentMessageId: item.id,
+    toolCallId,
+    toolName,
+    result: {
+      status: asString(state.status),
+      output: state.output,
+      error: state.error,
+      headline: tool.headline,
+      outputPreview: tool.outputPreview,
+      filePath: tool.filePath,
+    },
+    rawPart: {
+      type: "tool",
+      callID: toolCallId,
+      tool: asString(part?.tool),
+      toolName: asString(part?.toolName),
+      state: {
+        status: asString(state.status),
+        output: state.output,
+        error: state.error,
+      },
+    },
+  };
+}
+
+function buildToolTimelineItems(
+  item: TraceSourceItem,
+  index: number,
+): ExecutionTraceTimelineItem[] {
+  const normalized = normalizeMessage(buildTraceLegacyMessage(item), index, createEmptyLiveAssistantState());
+  if (!normalized || normalized.toolCalls.length === 0) {
+    return [];
+  }
+
+  const toolParts = resolveTraceToolParts(item);
+
+  return normalized.toolCalls.flatMap((tool, toolIndex) => {
+    const baseId = `${item.id}:tool:${tool.key || toolIndex}`;
+    const part = toolParts[toolIndex];
+
+    return [
+      {
+        id: `${baseId}:request`,
+        role: "tool-request",
+        text: buildToolRequestTimelineText(tool),
+        createdAt: item.createdAt,
+        raw: buildToolRequestRaw(item, tool, part),
+        sourceEventTypes: [`runtime:tool-request:${tool.kind}`],
+      },
+      {
+        id: `${baseId}:result`,
+        role: "tool-result",
+        text: buildToolResultTimelineText(tool),
+        createdAt: item.createdAt,
+        raw: buildToolResultRaw(item, tool, part),
+        sourceEventTypes: [`runtime:tool-result:${tool.kind}`],
+      },
+    ] satisfies ExecutionTraceTimelineItem[];
+  });
+}
+
+function shouldKeepTraceMessageItem(item: TraceSourceItem, toolItems: ExecutionTraceTimelineItem[]) {
+  if (item.role !== "assistant") {
+    return true;
+  }
+
+  const text = typeof item.text === "string" ? item.text.trim() : "";
+  return text.length > 0 || toolItems.length === 0;
+}
+
+function isDisplayableTraceTimelineItem(item: ExecutionTraceTimelineItem) {
+  return typeof item.text === "string" && item.text.trim().length > 0;
+}
+
+function resolveTraceTimelineItemSortTime(item: ExecutionTraceTimelineItem) {
+  const timestamp = item.completedAt ?? item.createdAt;
+  if (!timestamp) {
+    return Number.MAX_SAFE_INTEGER;
+  }
+
+  const parsed = Date.parse(timestamp);
+  return Number.isNaN(parsed) ? Number.MAX_SAFE_INTEGER : parsed;
+}
+
+function mergeTraceTimelineItem(
+  current: ExecutionTraceTimelineItem,
+  candidate: ExecutionTraceTimelineItem,
+): ExecutionTraceTimelineItem {
+  const currentText = typeof current.text === "string" ? current.text.trim() : "";
+  const candidateText = typeof candidate.text === "string" ? candidate.text.trim() : "";
+
+  return {
+    id: candidate.id || current.id,
+    role: candidate.role || current.role,
+    text: candidateText || currentText,
+    createdAt: current.createdAt ?? candidate.createdAt,
+    completedAt: candidate.completedAt ?? current.completedAt,
+    raw: candidate.raw ?? current.raw,
+    sourceEventTypes: [...new Set([...(current.sourceEventTypes ?? []), ...(candidate.sourceEventTypes ?? [])])],
+  };
+}
+
+export function mergeTraceTimelineItems(
+  baseTimeline: ExecutionTraceTimelineItem[],
+  supplementalTimeline: ExecutionTraceTimelineItem[],
+): ExecutionTraceTimelineItem[] {
+  const merged = new Map<string, { item: ExecutionTraceTimelineItem; order: number }>();
+  let order = 0;
+
+  for (const item of [...baseTimeline, ...supplementalTimeline]) {
+    if (!isDisplayableTraceTimelineItem(item)) {
+      continue;
+    }
+
+    const existing = merged.get(item.id);
+    if (!existing) {
+      merged.set(item.id, { item, order });
+      order += 1;
+      continue;
+    }
+
+    existing.item = mergeTraceTimelineItem(existing.item, item);
+  }
+
+  return [...merged.values()]
+    .sort((left, right) => {
+      const leftTime = resolveTraceTimelineItemSortTime(left.item);
+      const rightTime = resolveTraceTimelineItemSortTime(right.item);
+      if (leftTime !== rightTime) {
+        return leftTime - rightTime;
+      }
+      return left.order - right.order;
+    })
+    .map((entry) => entry.item);
+}
+
+export function buildMergedTraceTimelineItems(
+  trace: TaskExecutionTrace | null | undefined,
+  options?: { includeLineage?: boolean },
+): ExecutionTraceTimelineItem[] {
+  const baseTimeline = Array.isArray(trace?.timeline) ? trace.timeline : [];
+  const supplementalTimeline = resolveTraceTimelineItems(
+    trace ? { ...trace, timeline: [] } : trace,
+    options,
+  );
+
+  return mergeTraceTimelineItems(baseTimeline, supplementalTimeline);
+}
+
+export function resolveTraceTimelineItems(
+  trace: TaskExecutionTrace | null | undefined,
+  options?: { includeLineage?: boolean },
+): ExecutionTraceTimelineItem[] {
+  return resolveTraceSourceItems(trace, options).flatMap((item, index) => {
+    const toolItems = buildToolTimelineItems(item, index);
+    const timelineItems: ExecutionTraceTimelineItem[] = [];
+
+    if (shouldKeepTraceMessageItem(item, toolItems)) {
+      timelineItems.push({
+        id: item.id,
+        role: item.role,
+        text: item.text,
+        createdAt: item.createdAt,
+        completedAt: "completedAt" in item ? (item.completedAt ?? undefined) : undefined,
+        raw: item.raw,
+        sourceEventTypes:
+          "sourceEventTypes" in item && Array.isArray(item.sourceEventTypes)
+            ? item.sourceEventTypes
+            : undefined,
+      });
+    }
+
+    timelineItems.push(...toolItems);
+    return timelineItems;
+  });
 }
 
 function buildTraceLegacyMessage(item: TraceSourceItem) {

@@ -3,6 +3,8 @@ import { formatModelRoute, resolveModelRoute } from "../../lib/opencode-config";
 import {
   type ExecutionCandidate,
   type ExecutionStep,
+  type FollowupExecutionRecord,
+  type FollowupTemplate,
   type JudgeResult,
   type RuntimePlan,
   mergeTaskStrategy,
@@ -79,6 +81,25 @@ interface CompletedTaskContext {
     totalInsertions?: number;
     totalDeletions?: number;
   } | null;
+}
+
+interface FollowupDecisionSelection {
+  execution: {
+    hookId: string;
+    agent: string;
+    model?: string;
+    result?: string;
+    decision?: {
+      action: string;
+      reason?: string;
+      followupTemplateId?: string;
+      followupGoal?: string;
+      targetAgent?: string;
+      targetModel?: string;
+    };
+    completedAt: string;
+  };
+  templateId: string;
 }
 
 function buildPaidExecutionGuardDetail(
@@ -384,6 +405,9 @@ class SSEAggregator {
       | "task.completed"
       | "task.failed"
       | "task.hooks.updated"
+      | "task.followup.started"
+      | "task.followup.completed"
+      | "task.followup.failed"
       | "task.node.updated"
       | "agent.completed";
   }): Promise<void> {
@@ -616,6 +640,316 @@ class SSEAggregator {
       authorization,
       reason: "task.hooks.updated",
     });
+
+    const followupDecision = this.pickFollowupDecision(hookResult.hookExecutions);
+    if (!followupDecision) {
+      return;
+    }
+
+    const followupTemplate = this.resolveFollowupTemplate(strategyConfig.followups, followupDecision);
+    if (!followupTemplate) {
+      const missingFollowupExecution: FollowupExecutionRecord = {
+        templateId: followupDecision.templateId,
+        triggerHookId: followupDecision.execution.hookId,
+        status: "skipped",
+        failureType: "template-missing",
+        agent: followupDecision.execution.decision?.targetAgent || "未配置模板",
+        model: followupDecision.execution.decision?.targetModel,
+        prompt: "",
+        error: `找不到已启用的 follow-up 模板: ${followupDecision.templateId}`,
+        completedAt: new Date().toISOString(),
+      };
+
+      await cpFetch(`/api/tasks/${encodeURIComponent(task.id)}`, {
+        method: "PATCH",
+        authorization,
+        body: {
+          strategy: mergeTaskStrategy(task.strategy, {
+            followupExecutions: [missingFollowupExecution],
+          }),
+        },
+      });
+
+      await recordAgentAudit({
+        projectId: task.projectId,
+        taskId: task.id,
+        sessionId: task.sessionId ?? undefined,
+        eventType: "followup",
+        action: "followup_template_missing",
+        detail: {
+          triggerHookId: followupDecision.execution.hookId,
+          templateId: followupDecision.templateId,
+        },
+        riskLevel: "medium",
+      });
+
+      this.emit({
+        id: crypto.randomUUID(),
+        type: "task.followup.failed",
+        ts: missingFollowupExecution.completedAt,
+        taskId: task.id,
+        projectId: task.projectId,
+        data: {
+          triggerHookId: missingFollowupExecution.triggerHookId,
+          templateId: missingFollowupExecution.templateId,
+          status: missingFollowupExecution.status,
+          failureType: missingFollowupExecution.failureType,
+          error: missingFollowupExecution.error,
+          agent: missingFollowupExecution.agent,
+        },
+      });
+
+      await this.emitPipelineStageUpdates({
+        taskId: task.id,
+        sessionId: task.sessionId ?? undefined,
+        projectId: task.projectId,
+        authorization,
+        reason: "task.followup.failed",
+      });
+      return;
+    }
+
+    this.emit({
+      id: crypto.randomUUID(),
+      type: "task.followup.started",
+      ts: new Date().toISOString(),
+      taskId: task.id,
+      projectId: task.projectId,
+      data: {
+        triggerHookId: followupDecision.execution.hookId,
+        templateId: followupTemplate.id,
+        agent: followupTemplate.agent,
+      },
+    });
+
+    await this.emitPipelineStageUpdates({
+      taskId: task.id,
+      sessionId: task.sessionId ?? undefined,
+      projectId: task.projectId,
+      authorization,
+      reason: "task.followup.started",
+    });
+
+    const followupExecution = await this.runPostExecutionFollowup({
+      task,
+      resultText,
+      strategy: taskStrategy,
+      decisionSelection: followupDecision,
+      template: followupTemplate,
+    });
+
+    const followupPatchResult = await cpFetch(`/api/tasks/${encodeURIComponent(task.id)}`, {
+      method: "PATCH",
+      authorization,
+      body: {
+        strategy: mergeTaskStrategy(task.strategy, {
+          followupExecutions: [followupExecution],
+        }),
+      },
+    });
+
+    if (!followupPatchResult.ok) {
+      return;
+    }
+
+    const followupModelRoute =
+      followupExecution.model ||
+      followupDecision.execution.decision?.targetModel ||
+      paidExecutionGuard?.modelRoute;
+    if (
+      followupExecution.sessionId &&
+      followupModelRoute &&
+      followupExecution.tokenUsed &&
+      followupExecution.tokenUsed > 0
+    ) {
+      const resolvedModel = parseModelString(followupModelRoute);
+      const guardOutcome = await this.recordPaidExecutionUsageEvent({
+        taskId: task.id,
+        projectId: task.projectId,
+        sessionId: followupExecution.sessionId,
+        authorization,
+        providerId: resolvedModel.providerId,
+        modelId: resolvedModel.modelId,
+        tokenUsed: followupExecution.tokenUsed,
+        requestDelta: 1,
+        action: "followup_usage_recorded",
+        runtimeLedger: {
+          executionSource: "post-hook-followup",
+          entrypointType: "followup-only",
+          status: followupExecution.status === "failed" ? "failed" : "completed",
+          finishedAt: followupExecution.completedAt,
+          step: {
+            stepType: "other",
+            amplificationSource: "hook",
+            hookId: followupExecution.triggerHookId,
+            status: followupExecution.status === "failed" ? "failed" : "completed",
+            finishedAt: followupExecution.completedAt,
+          },
+        },
+        detail: buildPaidExecutionGuardDetail(paidExecutionGuard, {
+          templateId: followupExecution.templateId,
+          triggerHookId: followupExecution.triggerHookId,
+          followupStatus: followupExecution.status,
+          agent: followupExecution.agent,
+        }),
+        riskLevel: "medium",
+      });
+
+      if (guardOutcome.tripped) {
+        await this.tripPaidExecutionBreaker({
+          taskId: task.id,
+          projectId: task.projectId,
+          completedSessionId: followupExecution.sessionId,
+          authorization,
+          guardState: guardOutcome.guardState,
+          reason: guardOutcome.breakerReason || "paid execution breaker tripped",
+        });
+      }
+    }
+
+    await recordAgentAudit({
+      projectId: task.projectId,
+      taskId: task.id,
+      sessionId: followupExecution.sessionId,
+      eventType: "followup",
+      action: followupExecution.status === "failed" ? "followup_failed" : "followup_completed",
+      detail: {
+        triggerHookId: followupExecution.triggerHookId,
+        templateId: followupExecution.templateId,
+        agent: followupExecution.agent,
+      },
+      riskLevel: followupExecution.status === "failed" ? "medium" : "low",
+    });
+
+    this.emit({
+      id: crypto.randomUUID(),
+      type: followupExecution.status === "failed" ? "task.followup.failed" : "task.followup.completed",
+      ts: new Date().toISOString(),
+      taskId: task.id,
+      projectId: task.projectId,
+      sessionId: followupExecution.sessionId,
+      data: {
+        triggerHookId: followupExecution.triggerHookId,
+        templateId: followupExecution.templateId,
+        status: followupExecution.status,
+        failureType: followupExecution.failureType,
+        error: followupExecution.error,
+        agent: followupExecution.agent,
+      },
+    });
+
+    await this.emitPipelineStageUpdates({
+      taskId: task.id,
+      sessionId: task.sessionId ?? undefined,
+      projectId: task.projectId,
+      authorization,
+      reason:
+        followupExecution.status === "failed"
+          ? "task.followup.failed"
+          : "task.followup.completed",
+    });
+  }
+
+  private pickFollowupDecision(
+    hookExecutions: Array<{
+      hookId: string;
+      agent: string;
+      model?: string;
+      result?: string;
+      decision?: {
+        action: string;
+        reason?: string;
+        followupTemplateId?: string;
+        followupGoal?: string;
+        targetAgent?: string;
+        targetModel?: string;
+      };
+      completedAt: string;
+    }>,
+  ): FollowupDecisionSelection | undefined {
+    const execution = [...hookExecutions]
+      .reverse()
+      .find(
+        (item) =>
+          item.decision?.action === "spawn-followup" &&
+          typeof item.decision.followupTemplateId === "string" &&
+          item.decision.followupTemplateId.length > 0,
+      );
+    if (!execution?.decision?.followupTemplateId) {
+      return undefined;
+    }
+
+    return {
+      execution,
+      templateId: execution.decision.followupTemplateId,
+    };
+  }
+
+  private resolveFollowupTemplate(
+    templates: FollowupTemplate[] | undefined,
+    decision: FollowupDecisionSelection,
+  ): FollowupTemplate | undefined {
+    return templates?.find((item) => item.enabled && item.id === decision.templateId);
+  }
+
+  private async runPostExecutionFollowup(args: {
+    task: CompletedTaskContext;
+    resultText: string | undefined;
+    strategy: ReturnType<typeof parseTaskStrategy>;
+    decisionSelection: FollowupDecisionSelection;
+    template: FollowupTemplate;
+  }): Promise<FollowupExecutionRecord> {
+    const prompt = renderPromptTemplate(args.template.promptTemplate, {
+      taskId: args.task.id,
+      projectId: args.task.projectId,
+      taskTitle: args.task.title,
+      taskPrompt: args.task.prompt,
+      taskResult: args.task.result || args.resultText || "",
+      hookResult: args.decisionSelection.execution.result || "",
+      hookReason: args.decisionSelection.execution.decision?.reason || "",
+      hookAgent: args.decisionSelection.execution.agent,
+      followupGoal: args.decisionSelection.execution.decision?.followupGoal || "",
+      repoName: args.task.repoName,
+      remoteUrl: args.task.remoteUrl,
+      workingBranch: args.task.workingBranch,
+      changesSummary: formatChangeSummary(args.task),
+      selectedAgent:
+        typeof args.strategy.selectedAgent === "string" ? args.strategy.selectedAgent : "",
+      selectedModel:
+        typeof args.strategy.effectiveModel === "string"
+          ? args.strategy.effectiveModel
+          : args.task.selectedModel || "",
+    });
+
+    const followupModel =
+      args.decisionSelection.execution.decision?.targetModel || args.template.model;
+    const result = await runDetachedPrompt(
+      `[Follow-up ${args.task.id.slice(0, 8)}] ${args.task.title}`,
+      prompt,
+      {
+        agent:
+          args.decisionSelection.execution.decision?.targetAgent || args.template.agent,
+        model: followupModel ? parseModelString(followupModel) : undefined,
+        taskId: args.task.id,
+        projectId: args.task.projectId,
+        timeoutMs: args.template.timeoutMs,
+      },
+    );
+
+    return {
+      templateId: args.template.id,
+      triggerHookId: args.decisionSelection.execution.hookId,
+      status: result.ok && result.completed ? "completed" : "failed",
+      failureType: result.ok && result.completed ? undefined : "runtime-error",
+      agent: args.decisionSelection.execution.decision?.targetAgent || args.template.agent,
+      model: result.model ? formatModelRoute(result.model) : followupModel,
+      prompt,
+      result: result.text,
+      error: result.ok ? (result.completed ? undefined : "Follow-up timed out") : result.error,
+      sessionId: result.sessionId,
+      tokenUsed: result.tokenUsed,
+      completedAt: new Date().toISOString(),
+    };
   }
 
   private readWorkspaceDirectory(parsed: Record<string, unknown>): string | undefined {

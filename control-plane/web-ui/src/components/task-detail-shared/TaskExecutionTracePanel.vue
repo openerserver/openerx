@@ -31,56 +31,14 @@
         />
 
         <a-space direction="vertical" style="width: 100%" size="small">
-          <a-radio-group :value="segmentFilter" size="small" button-style="solid" @update:value="segmentFilter = $event">
-            <a-radio-button value="narrative">关键内容</a-radio-button>
-            <a-radio-button value="all">全部</a-radio-button>
-            <a-radio-button value="user-input">用户输入</a-radio-button>
-            <a-radio-button value="system-added">系统补充</a-radio-button>
-            <a-radio-button value="model-response">模型回复</a-radio-button>
-            <a-radio-button value="debug">调试事件</a-radio-button>
-          </a-radio-group>
-
-          <div class="trace-panel__segments">
-            <a-card
-              v-for="(segment, index) in filteredSegments"
-              :key="`${segment.type}-${segment.hookId || segment.label}-${index}`"
-              size="small"
-              :bordered="false"
-              :body-style="{ padding: '8px 12px' }"
-            >
-              <a-space size="small" style="margin-bottom: 4px" wrap>
-                <a-tag :color="segmentColor(segment.type)">{{ segmentLabel(segment.type) }}</a-tag>
-                <a-typography-text type="secondary" style="font-size: 12px">
-                  {{ segment.label }}
-                </a-typography-text>
-              </a-space>
-              <a-space v-if="segment.filePath || segment.fileRange || segment.toolStatus" size="small" wrap style="margin-bottom: 6px">
-                <a-tag v-if="segment.filePath" color="default">{{ segment.filePath }}</a-tag>
-                <a-tag v-if="segment.fileRange" color="default">L{{ segment.fileRange }}</a-tag>
-                <a-tag v-if="segment.toolStatus" color="default">{{ segment.toolStatus }}</a-tag>
-              </a-space>
-              <div v-if="segment.toolArgumentsSummary || segment.diffSummary" class="trace-panel__meta-lines">
-                <div v-if="segment.toolArgumentsSummary" class="trace-panel__meta-line">
-                  <span class="trace-panel__meta-label">参数</span>
-                  <span class="trace-panel__meta-value">{{ segment.toolArgumentsSummary }}</span>
-                </div>
-                <div v-if="segment.diffSummary" class="trace-panel__meta-line">
-                  <span class="trace-panel__meta-label">变更</span>
-                  <span class="trace-panel__meta-value">{{ segment.diffSummary }}</span>
-                </div>
-              </div>
-              <pre class="trace-panel__content">{{ segment.content }}</pre>
-            </a-card>
-          </div>
-
-          <a-divider style="margin: 4px 0" />
-
           <a-radio-group :value="messageRoleFilter" size="small" button-style="solid" @update:value="messageRoleFilter = $event">
             <a-radio-button value="narrative">关键时间线</a-radio-button>
             <a-radio-button value="all">全部时间线</a-radio-button>
             <a-radio-button value="user">用户输入</a-radio-button>
-            <a-radio-button value="system-added">系统补充</a-radio-button>
             <a-radio-button value="assistant">模型</a-radio-button>
+            <a-radio-button value="tool">工具</a-radio-button>
+            <a-radio-button value="tool-request">工具发起</a-radio-button>
+            <a-radio-button value="tool-result">工具结果</a-radio-button>
             <a-radio-button value="debug">调试事件</a-radio-button>
           </a-radio-group>
 
@@ -122,12 +80,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, toRef } from "vue";
+import { computed, ref, toRef, watch } from "vue";
 import { useTaskExecutionTrace } from "../../composables/useTaskExecutionTrace";
 
 const props = defineProps<{
   taskId: string;
   sessionId?: string;
+  refreshKey?: number;
 }>();
 
 const collapsed = ref(false);
@@ -138,54 +97,15 @@ const {
   trace,
   loading,
   error,
-  segmentFilter,
   messageRoleFilter,
   expandedMessageRaw,
   refresh,
-  filteredSegments,
   filteredMessages,
   summaryItems,
 } = useTaskExecutionTrace(
   computed(() => taskIdRef.value),
   computed(() => sessionIdRef.value),
 );
-
-function segmentColor(type: string) {
-  if (type === "user-input") return "blue";
-  if (type === "workflow-context") return "cyan";
-  if (type === "model-response") return "green";
-  if (type === "final-prompt") return "purple";
-  if (["tool-call", "tool-output", "file-reference", "diff"].includes(type)) return "geekblue";
-  if (["candidate-result", "judge-decision", "chain-step-result"].includes(type)) return "gold";
-  if (["status-transition", "session-activate", "session-branch", "session-archive"].includes(type))
-    return "default";
-  return "orange";
-}
-
-function segmentLabel(type: string) {
-  const labels: Record<string, string> = {
-    "user-input": "用户输入",
-    "workflow-context": "工作流上下文",
-    "hook-injection": "Hook 注入",
-    "hook-result": "Hook 结果",
-    "hook-rewrite": "Hook 重写",
-    "final-prompt": "最终 Prompt",
-    "model-response": "模型回复",
-    "tool-call": "工具调用",
-    "tool-output": "工具输出",
-    thinking: "思考过程",
-    "file-reference": "文件引用",
-    diff: "Diff",
-    "candidate-result": "候选结果",
-    "judge-decision": "Judge 决策",
-    "chain-step-result": "链式步骤",
-    "status-transition": "状态变更",
-    "session-activate": "会话激活",
-    "session-branch": "会话分支",
-    "session-archive": "会话归档",
-  };
-  return labels[type] ?? type;
-}
 
 function tagTone(value?: string) {
   if (value === "warning") return "orange";
@@ -197,6 +117,8 @@ function traceRoleColor(role: string) {
   if (role === "assistant") return "cyan";
   if (role === "user") return "gold";
   if (role === "tool") return "purple";
+  if (role === "tool-request") return "geekblue";
+  if (role === "tool-result") return "green";
   return "default";
 }
 
@@ -204,6 +126,8 @@ function traceRoleLabel(role: string) {
   if (role === "assistant") return "模型";
   if (role === "user") return "用户";
   if (role === "tool") return "工具";
+  if (role === "tool-request") return "工具发起";
+  if (role === "tool-result") return "工具结果";
   return role || "系统";
 }
 
@@ -224,6 +148,13 @@ function toggleMessageRaw(messageId: string) {
     [messageId]: !expandedMessageRaw.value[messageId],
   };
 }
+
+watch(
+  () => props.refreshKey,
+  () => {
+    void refresh(true);
+  },
+);
 </script>
 
 <style scoped>
@@ -255,7 +186,6 @@ function toggleMessageRaw(messageId: string) {
   margin-bottom: 4px;
 }
 
-.trace-panel__segments,
 .trace-panel__messages {
   display: flex;
   flex-direction: column;

@@ -141,7 +141,7 @@
                             :value="templateForm.defaultBossParticipationMode || undefined"
                             allow-clear
                             :options="bossModeOptions"
-                            placeholder="默认老板参与方式"
+                            placeholder="默认管理介入方式"
                             @update:value="templateForm.defaultBossParticipationMode = toOptionalOperatingValue($event)"
                           />
                         </a-col>
@@ -150,7 +150,7 @@
                             :checked="templateForm.forceBossParticipation"
                             @update:checked="templateForm.forceBossParticipation = Boolean($event)"
                           >
-                            强制老板参与
+                            强制管理介入
                           </a-checkbox>
                         </a-col>
                       </a-row>

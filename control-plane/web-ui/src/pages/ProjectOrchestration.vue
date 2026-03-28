@@ -11,7 +11,7 @@
     <a-card size="small" title="组织运行入口" style="margin-bottom: 16px">
       <a-space wrap>
         <a-button type="primary" data-testid="open-project-operating-mode-from-orchestration" @click="router.push(`/projects/${projectId}/operating-mode`)">打开运行档位</a-button>
-        <a-button data-testid="open-boss-operations-from-orchestration" @click="router.push(`/projects/${projectId}/boss-operations`)">老板经营视图</a-button>
+        <a-button data-testid="open-management-operations-from-orchestration" @click="router.push(`/projects/${projectId}/management-operations`)">管理介入总览</a-button>
       </a-space>
     </a-card>
 

@@ -71,6 +71,17 @@ const baseContext = {
           categoryDefaults: ["ops"],
         },
       ],
+      followups: [
+        {
+          id: "post-review",
+          enabled: true,
+          agent: "oracle-enterprise",
+          model: "github-copilot:claude-opus-4.6",
+          promptTemplate: "Review {{taskResult}}",
+          timeoutMs: 15000,
+          resultMode: "advisory",
+        },
+      ],
       judge: {
         enabled: false,
         agent: "oracle-enterprise",
@@ -91,6 +102,9 @@ const baseContext = {
         judgeModel: "github-copilot:claude-opus-4.6",
         primaryAgents: ["oracle-enterprise"],
         primaryModel: "未指定",
+        followupEnabledCount: 1,
+        followupTemplateIds: ["post-review"],
+        followupSummary: "post-review",
         notes: ["pipeline 已启用"],
       },
       {
@@ -103,6 +117,9 @@ const baseContext = {
         judgeModel: "github-copilot:claude-opus-4.6",
         primaryAgents: ["oracle-enterprise"],
         primaryModel: "github-copilot:claude-opus-4.6",
+        followupEnabledCount: 1,
+        followupTemplateIds: ["post-review"],
+        followupSummary: "post-review",
         notes: ["pipeline 已启用", "judge 未启用"],
       },
       {
@@ -115,6 +132,9 @@ const baseContext = {
         judgeModel: "github-copilot:claude-opus-4.6",
         primaryAgents: ["explore-enterprise"],
         primaryModel: "github-copilot:gpt-4o",
+        followupEnabledCount: 1,
+        followupTemplateIds: ["post-review"],
+        followupSummary: "post-review",
         notes: ["pipeline 已启用", "judge 未启用"],
       },
       {
@@ -127,6 +147,9 @@ const baseContext = {
         judgeModel: "github-copilot:claude-opus-4.6",
         primaryAgents: ["oracle-enterprise"],
         primaryModel: "未指定",
+        followupEnabledCount: 1,
+        followupTemplateIds: ["post-review"],
+        followupSummary: "post-review",
         notes: ["pipeline 已启用"],
       },
       {
@@ -139,6 +162,9 @@ const baseContext = {
         judgeModel: "github-copilot:claude-opus-4.6",
         primaryAgents: ["oracle-enterprise"],
         primaryModel: "未指定",
+        followupEnabledCount: 1,
+        followupTemplateIds: ["post-review"],
+        followupSummary: "post-review",
         notes: ["pipeline 已启用"],
       },
     ],
@@ -159,8 +185,46 @@ const baseContext = {
     modelsVisualizations: [],
     agents: ["oracle-enterprise", "explore-enterprise"],
     models: ["github-copilot:claude-opus-4.6", "github-copilot:gpt-4o"],
-    agentSummaries: [],
-    skillSummaries: [],
+    agentSummaries: [
+      {
+        fileName: "oracle-enterprise.agent.md",
+        name: "oracle-enterprise",
+        description: "负责深度实现、审阅与复杂编排执行。",
+        model: "github-copilot:claude-opus-4.6",
+        category: "deep",
+        tags: ["deep", "code", "review"],
+        applyTo: ["**/*.ts"],
+      },
+      {
+        fileName: "explore-enterprise.agent.md",
+        name: "explore-enterprise",
+        description: "负责探索、检索与运维路径分析。",
+        model: "github-copilot:gpt-4o",
+        category: "ops",
+        tags: ["ops", "search"],
+        applyTo: ["docs/**"],
+      },
+    ],
+    skillSummaries: [
+      {
+        dirName: "deep-delivery",
+        name: "深度交付",
+        description: "支持复杂实现、补丁生成与代码审阅。",
+        category: "deep",
+        tags: ["deep", "delivery"],
+        applyTo: ["src/**"],
+        permissions: {},
+      },
+      {
+        dirName: "ops-observe",
+        name: "运维观察",
+        description: "支持运行态排查、日志检索与故障定位。",
+        category: "ops",
+        tags: ["ops", "observe"],
+        applyTo: ["runbooks/**"],
+        permissions: {},
+      },
+    ],
     commandSummaries: [],
     securityBaseline: { raw: "# Security Baseline\n" },
     pluginsConfig: { plugins: [] },
@@ -179,6 +243,26 @@ const orchestrationPreviewPatch = {
     judge: {
       enabled: true,
     },
+    followups: [
+      {
+        id: "post-review",
+        enabled: true,
+        agent: "oracle-enterprise",
+        model: "github-copilot:claude-opus-4.6",
+        promptTemplate: "Review {{taskResult}}",
+        timeoutMs: 15000,
+        resultMode: "advisory",
+      },
+      {
+        id: "post-audit",
+        enabled: true,
+        agent: "explore-enterprise",
+        model: "github-copilot:gpt-4o",
+        promptTemplate: "Audit {{taskResult}}",
+        timeoutMs: 20000,
+        resultMode: "append",
+      },
+    ],
     templates: [
       {
         id: "tpl-deep-parallel",
@@ -273,15 +357,22 @@ describe("ChatSettings", () => {
     expect(wrapper.text()).toContain("编排策略控制台");
     expect(wrapper.text()).toContain("当前编排总览");
     expect(wrapper.text()).toContain("当前分类策略摘要");
+    expect(wrapper.text()).toContain("当前分类成员与能力");
     expect(wrapper.text()).not.toContain("当前模型路由");
     expect(wrapper.text()).toContain("tpl-deep-single");
     expect(wrapper.text()).toContain("github-copilot:claude-opus-4.6");
+    expect(wrapper.text()).toContain("oracle-enterprise");
+    expect(wrapper.text()).toContain("深度交付");
+    expect(wrapper.text()).toContain("成员协作摘要");
+    expect(wrapper.text()).toContain("执行后 Follow-up");
+    expect(wrapper.text()).toContain("post-review");
 
     vm.handleCategoryChange("ops");
     await flushPromises();
 
     expect(wrapper.text()).toContain("tpl-ops-single");
     expect(wrapper.text()).toContain("explore-enterprise");
+    expect(wrapper.text()).toContain("运维观察");
     expect(wrapper.findAll(".mermaid-renderer-stub")[0]?.text()).toContain("提交任务(ops)");
   });
 
@@ -316,8 +407,12 @@ describe("ChatSettings", () => {
     });
     expect(wrapper.text()).toContain("编排变更预览");
     expect(wrapper.text()).toContain("Judge 策略变化");
+    expect(wrapper.text()).toContain("Follow-up 模板变化");
     expect(wrapper.text()).toContain("deep 编排策略预览");
     expect(wrapper.text()).toContain("影响 deep");
+    expect(wrapper.text()).toContain("post-review -> post-review、post-audit");
+    expect(wrapper.text()).toContain("post-review");
+    expect(wrapper.text()).toContain("post-review、post-audit");
   });
 
   it("applies orchestration preview and refreshes the summary", async () => {

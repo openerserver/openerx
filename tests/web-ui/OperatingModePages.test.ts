@@ -16,7 +16,7 @@ const apiMocks = vi.hoisted(() => ({
   updateOrchestrationStrategy: vi.fn(),
   getProject: vi.fn(),
   getProjectOrchestrationView: vi.fn(),
-  getProjectBossOperationsView: vi.fn(),
+  getProjectManagementOperationsView: vi.fn(),
   getProjectWorkflowTemplateView: vi.fn(),
   listWorkflowTemplateStages: vi.fn(),
   updateProjectWorkflowTemplateBinding: vi.fn(),
@@ -250,6 +250,7 @@ describe("Operating mode pages", () => {
     await flushPromises();
 
     expect(wrapper.text()).toContain("Task 1 / 组织运行详情");
+    expect(wrapper.text()).toContain("查看项目管理介入总览");
     expect(wrapper.text()).toContain(
       "老板在阶段 verify 升级后根据阶段策略，自动切换到模板 tpl-approval。",
     );
@@ -393,10 +394,12 @@ describe("Operating mode pages", () => {
 
   it("loads boss operations center and shows timeline plus attention tasks", async () => {
     routeState.params = { projectId: "proj-default" };
-    apiMocks.getProjectBossOperationsView.mockResolvedValueOnce({
+    apiMocks.getProjectManagementOperationsView.mockResolvedValueOnce({
       project: { id: "proj-default", name: "Default Project", slug: "default-project" },
       summary: {
         totalTasks: 2,
+        tasksWithManagementDecisions: 2,
+        totalManagementDecisions: 2,
         tasksWithBossDecisions: 2,
         totalBossDecisions: 2,
         openEscalations: 1,
@@ -491,6 +494,7 @@ describe("Operating mode pages", () => {
           currentStageLabel: "发布执行",
           currentStageStatus: "waiting-approval",
           openEscalationCount: 1,
+          managementDecisionCount: 1,
           bossDecisionCount: 1,
           latestDecisionType: "request-approval",
           latestDecisionReason: "Need release approval",
@@ -500,12 +504,12 @@ describe("Operating mode pages", () => {
     });
 
     const { default: Page } = await import(
-      "../../control-plane/web-ui/src/pages/BossOperationsCenter.vue"
+      "../../control-plane/web-ui/src/pages/ManagementOperationsCenter.vue"
     );
     const wrapper = mount(Page);
     await flushPromises();
 
-    expect(wrapper.text()).toContain("Default Project / 老板经营视图");
+    expect(wrapper.text()).toContain("Default Project / 管理介入总览");
     expect(wrapper.text()).toContain("Need release approval");
     expect(wrapper.text()).toContain("Release candidate");
     expect(wrapper.text()).toContain("人工覆盖历史");
@@ -603,7 +607,7 @@ describe("Operating mode pages", () => {
     });
     await flushPromises();
 
-    expect(wrapper.text()).toContain("老板自动切模板");
+    expect(wrapper.text()).toContain("管理介入自动切模板");
     expect(wrapper.text()).toContain("模板级组织策略");
     expect(wrapper.text()).toContain("team");
   });

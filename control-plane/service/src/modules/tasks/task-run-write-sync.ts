@@ -200,6 +200,23 @@ function buildTaskRunNodeUpsertValues(prepared: PreparedSyncExecutionFacts) {
 function buildTaskAggregateSyncValues(prepared: PreparedSyncExecutionFacts) {
   const { args, now, taskRunId, taskRunStatus, startedAt, finishedAt } = prepared;
 
+  const isParallelCandidateUpdate =
+    prepared.orchestrationKind === "parallel" && prepared.nodeKind === "candidate";
+
+  if (isParallelCandidateUpdate) {
+    return {
+      currentRunId: taskRunId,
+      currentSessionId: args.task.sessionId,
+      currentAgentRunId: args.task.agentRunId,
+      status: args.task.status,
+      latestResult: args.task.result,
+      latestResultSummary: args.task.latestResultSummary ?? args.task.result,
+      startedAt: startedAt ?? args.task.startedAt,
+      finishedAt: args.task.finishedAt,
+      updatedAt: now,
+    };
+  }
+
   return {
     currentRunId: taskRunId,
     currentSessionId: args.sessionId ?? args.task.sessionId,

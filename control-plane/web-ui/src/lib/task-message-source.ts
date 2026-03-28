@@ -25,6 +25,14 @@ interface MinimalExecutionTracePayload {
   timelineMeta?: MinimalExecutionTraceTimelineMeta;
 }
 
+const NARRATIVE_TIMELINE_ROLES = new Set([
+  "user",
+  "assistant",
+  "tool",
+  "tool-request",
+  "tool-result",
+]);
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -111,24 +119,29 @@ function buildLegacyMessageFromExecutionTraceMessage(item: MinimalExecutionTrace
   });
 }
 
+function isNarrativeTimelineItem(item: MinimalExecutionTraceTimelineItem) {
+  return NARRATIVE_TIMELINE_ROLES.has(item.role) && typeof item.text === "string" && item.text.trim().length > 0;
+}
+
 export function buildSessionMessagesFromExecutionTrace(
   trace: MinimalExecutionTracePayload,
   options?: { includeLineage?: boolean },
 ) {
   const includeLineage = options?.includeLineage === true;
   const timeline = Array.isArray(trace.timeline) ? trace.timeline : [];
+  const narrativeTimeline = timeline.filter(isNarrativeTimelineItem);
   const messages = Array.isArray(trace.messages) ? trace.messages : [];
 
-  if (includeLineage && timeline.length > 0) {
-    return timeline.map((item) => buildLegacyMessageFromTimelineItem(item));
+  if (includeLineage && narrativeTimeline.length > 0) {
+    return narrativeTimeline.map((item) => buildLegacyMessageFromTimelineItem(item));
   }
 
   if (messages.length > 0) {
     return messages.map((item) => buildLegacyMessageFromExecutionTraceMessage(item));
   }
 
-  if (timeline.length > 0 && trace.timelineMeta?.cacheState === "complete") {
-    return timeline.map((item) => buildLegacyMessageFromTimelineItem(item));
+  if (narrativeTimeline.length > 0 && trace.timelineMeta?.cacheState === "complete") {
+    return narrativeTimeline.map((item) => buildLegacyMessageFromTimelineItem(item));
   }
 
   return [];

@@ -18,7 +18,7 @@
               <a-descriptions :column="1" size="small" bordered>
                 <a-descriptions-item label="协作模式">{{ formatCollaboration(form.collaborationMode) }}</a-descriptions-item>
                 <a-descriptions-item label="自动托管">{{ form.autopilotLevel || '未配置' }}</a-descriptions-item>
-                <a-descriptions-item label="老板参与">{{ formatBossMode(form.bossParticipationMode) }}</a-descriptions-item>
+                <a-descriptions-item label="管理介入">{{ formatBossMode(form.bossParticipationMode) }}</a-descriptions-item>
               </a-descriptions>
             </a-card>
           </a-col>
@@ -55,7 +55,7 @@
                 </a-form-item>
               </a-col>
               <a-col :xs="24" :lg="8">
-                <a-form-item label="老板参与方式">
+                <a-form-item label="管理介入方式">
                   <a-select :value="form.bossParticipationMode" :options="bossModeOptions" allow-clear @update:value="form.bossParticipationMode = asBossMode($event)" />
                 </a-form-item>
               </a-col>
@@ -77,7 +77,7 @@
 
             <a-space wrap>
               <a-switch :checked="form.allowBossAutoTemplateSwitch" @update:checked="form.allowBossAutoTemplateSwitch = Boolean($event)" />
-              <span>允许老板自动切模板</span>
+              <span>允许管理介入自动切模板</span>
             </a-space>
 
             <div style="margin-top: 16px">

@@ -928,7 +928,7 @@ async function fetchTaskEscalations(taskId: string, authorization: string) {
   return result.ok ? result.data?.data || [] : [];
 }
 
-async function buildProjectBossOperationsView(projectId: string, authorization: string) {
+async function buildProjectManagementOperationsView(projectId: string, authorization: string) {
   const [projectResult, tasksResult] = await Promise.all([
     cpFetch<ProjectRecord>(`/api/projects/${encodeURIComponent(projectId)}`, { authorization }),
     fetchProjectTaskList({ projectId, authorization, limit: 50 }),
@@ -1046,6 +1046,7 @@ async function buildProjectBossOperationsView(projectId: string, authorization: 
         currentStageStatus: currentStage?.status || "unknown",
         blockingReason: currentStage?.blockingReason,
         openEscalationCount: openEscalations.length,
+        managementDecisionCount: bossDecisions.length,
         bossDecisionCount: bossDecisions.length,
         latestDecisionType: latestBossDecision?.decisionType,
         latestDecisionReason: latestBossDecision?.reason,
@@ -1071,6 +1072,8 @@ async function buildProjectBossOperationsView(projectId: string, authorization: 
 
   const summary = {
     totalTasks: tasks.length,
+    tasksWithManagementDecisions: taskViews.filter((item) => item.bossDecisions.length > 0).length,
+    totalManagementDecisions: timeline.length,
     tasksWithBossDecisions: taskViews.filter((item) => item.bossDecisions.length > 0).length,
     totalBossDecisions: timeline.length,
     openEscalations: escalations.length,
@@ -1099,6 +1102,10 @@ async function buildProjectBossOperationsView(projectId: string, authorization: 
       attentionTasks,
     },
   };
+}
+
+async function buildProjectBossOperationsView(projectId: string, authorization: string) {
+  return buildProjectManagementOperationsView(projectId, authorization);
 }
 
 function inferTaskStageLabel(
@@ -2043,6 +2050,27 @@ projectRoutes.get("/:projectId/orchestration-view", async (c) => {
   } catch (error) {
     return c.json(
       { message: error instanceof Error ? error.message : "Failed to build orchestration view" },
+      502,
+    );
+  }
+});
+
+projectRoutes.get(":projectId/management-operations-view", async (c) => {
+  const projectId = c.req.param("projectId");
+  const authorization = authHeader(c);
+
+  try {
+    const result = await buildProjectManagementOperationsView(projectId, authorization);
+    if (!result.ok) {
+      return c.json(result.data, result.status as 401 | 403 | 404 | 502);
+    }
+    return c.json(result.data, 200);
+  } catch (error) {
+    return c.json(
+      {
+        message:
+          error instanceof Error ? error.message : "Failed to build management operations view",
+      },
       502,
     );
   }

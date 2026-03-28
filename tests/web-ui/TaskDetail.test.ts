@@ -572,6 +572,66 @@ describe("TaskDetail", () => {
     expect(wrapper.text()).toContain("当前 UI 指向的 app 数据库实例中找不到这个任务");
   });
 
+  it("keeps runtime-backed execution trace messages available in the legacy detail page", async () => {
+    apiMocks.getTaskExecutionTraceView.mockResolvedValue({
+      taskId: "task-1",
+      sessionId: "ses-1",
+      workflowContext: null,
+      finalPrompt: null,
+      latestResponse: null,
+      truncated: false,
+      messageLimit: 200,
+      segments: [],
+      messages: [
+        {
+          id: "msg-1",
+          role: "user",
+          text: "给输入法设计一个操作页面",
+          createdAt: "2026-03-25T09:44:01.000Z",
+        },
+        {
+          id: "msg-2",
+          role: "assistant",
+          text: "先做需求澄清。",
+          completedAt: "2026-03-25T09:44:10.000Z",
+        },
+      ],
+      timeline: [
+        {
+          id: "msg-1",
+          role: "user",
+          text: "给输入法设计一个操作页面",
+          createdAt: "2026-03-25T09:44:01.000Z",
+        },
+        {
+          id: "msg-2",
+          role: "assistant",
+          text: "先做需求澄清。",
+          completedAt: "2026-03-25T09:44:10.000Z",
+        },
+      ],
+      timelineMeta: {
+        readSource: "opencode-runtime",
+        cacheState: "complete",
+        complete: true,
+      },
+      hookExecutions: [],
+    });
+
+    const wrapper = await mountPage();
+    const setupState = getSetupState(wrapper);
+
+    expect(apiMocks.getTaskExecutionTraceView).toHaveBeenCalledWith("task-1", "ses-1");
+    expect(
+      readSetupValue<Array<{ role: string; text?: string }>>(setupState, "filteredTraceMessages"),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ role: "user", text: "给输入法设计一个操作页面" }),
+        expect.objectContaining({ role: "assistant", text: "先做需求澄清。" }),
+      ]),
+    );
+  });
+
   it("shows a guard notice when continue is blocked with 403", async () => {
     apiMocks.getTask.mockResolvedValueOnce(makeTaskWithOverrides({ status: "completed" }));
     apiMocks.getTaskSessions.mockResolvedValueOnce({
@@ -2072,6 +2132,126 @@ describe("TaskDetail", () => {
       executionMode: "parallel",
     });
     expect(apiMocks.executeTask).not.toHaveBeenCalled();
+  });
+
+  it("loads models when opening execution mode chooser from classic task detail", async () => {
+    apiMocks.getTask.mockResolvedValueOnce(makeTaskWithOverrides({ status: "pending" }));
+
+    const wrapper = await mountPage();
+    const setupState = getSetupState(wrapper) as {
+      handleChooseMode: () => void;
+      showExecutionModeModal: boolean;
+    };
+
+    setupState.handleChooseMode();
+    await flushPromises();
+
+    expect(apiMocks.getModelsList).toHaveBeenCalled();
+    expect(setupState.showExecutionModeModal).toBe(true);
+  });
+
+  it("keeps saved parallel candidates when refreshed task strategy is returned as an object and continues in parallel", async () => {
+    apiMocks.getTask.mockResolvedValueOnce(
+      makeTaskWithOverrides({
+        status: "pending",
+        executionMode: undefined,
+      }),
+    );
+    apiMocks.updateTask.mockResolvedValueOnce({});
+    apiMocks.getTask.mockResolvedValueOnce(
+      makeTaskWithOverrides({
+        status: "pending",
+        executionMode: undefined,
+        strategy: {
+          executionMode: "parallel",
+          parallelCandidates: [
+            { model: "github-copilot:model-a", label: "候选 A" },
+            { model: "github-copilot:model-b", label: "候选 B" },
+          ],
+          judge: {
+            enabled: true,
+            agent: "prometheus-enterprise",
+            model: "judge:model",
+            promptTemplate: "judge prompt",
+            timeoutMs: 30000,
+            selectionStrategy: "judge-pick",
+          },
+        } as unknown as string,
+      }),
+    );
+    apiMocks.getTask.mockResolvedValue(
+      makeTaskWithOverrides({
+        status: "running",
+        executionMode: undefined,
+        strategy: {
+          executionMode: "parallel",
+          parallelCandidates: [
+            { model: "github-copilot:model-a", label: "候选 A" },
+            { model: "github-copilot:model-b", label: "候选 B" },
+          ],
+          judge: {
+            enabled: true,
+            agent: "prometheus-enterprise",
+            model: "judge:model",
+            promptTemplate: "judge prompt",
+            timeoutMs: 30000,
+            selectionStrategy: "judge-pick",
+          },
+        } as unknown as string,
+      }),
+    );
+    apiMocks.continueTask.mockResolvedValueOnce({ ok: true, sessionId: "ses-1" });
+
+    const wrapper = await mountPage();
+    const setupState = getSetupState(wrapper) as {
+      handleExecutionModeConfirm: (payload: {
+        mode: "parallel";
+        candidates: Array<{ model: string; label?: string }>;
+        judge?: Record<string, unknown>;
+      }) => Promise<void>;
+    };
+
+    await setupState.handleExecutionModeConfirm({
+      mode: "parallel",
+      candidates: [
+        { model: "github-copilot:model-a", label: "候选 A" },
+        { model: "github-copilot:model-b", label: "候选 B" },
+      ],
+      judge: {
+        enabled: true,
+        agent: "prometheus-enterprise",
+        model: "judge:model",
+        promptTemplate: "judge prompt",
+        timeoutMs: 30000,
+        selectionStrategy: "judge-pick",
+      },
+    });
+    await flushPromises();
+
+    expect(readSetupValue<Array<{ model: string; label?: string }>>(setupState, "editableParallelCandidates")).toEqual([
+      { model: "github-copilot:model-a", label: "候选 A" },
+      { model: "github-copilot:model-b", label: "候选 B" },
+    ]);
+    expect(
+      readSetupValue<Array<{ value: string; label: string }>>(setupState, "modelOptions"),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ value: "github-copilot:model-b" }),
+        expect.objectContaining({ value: "judge:model" }),
+      ]),
+    );
+
+    const textarea = wrapper.find("textarea");
+    await textarea.setValue("并行比较这个方案");
+    await textarea.trigger("keydown", { key: "Enter" });
+    await flushPromises();
+
+    expect(apiMocks.continueTask).toHaveBeenCalledWith(
+      "task-1",
+      "并行比较这个方案",
+      "ses-1",
+      "parallel",
+    );
   });
 
   it("submits the reply composer without a selected session and adopts returned primary session", async () => {

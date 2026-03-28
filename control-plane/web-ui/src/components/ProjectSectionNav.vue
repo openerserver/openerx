@@ -24,7 +24,7 @@ type ProjectSectionKey =
   | "orchestration"
   | "task-graph"
   | "operating-mode"
-  | "boss-operations"
+  | "management-operations"
   | "cost";
 
 const props = defineProps<{
@@ -69,9 +69,9 @@ const items = computed(() => [
     to: { name: "ProjectOperatingMode", params: { projectId: props.projectId } },
   },
   {
-    key: "boss-operations" as const,
-    label: "老板经营",
-    to: { name: "BossOperationsCenter", params: { projectId: props.projectId } },
+    key: "management-operations" as const,
+    label: "管理介入",
+    to: { name: "ManagementOperationsCenter", params: { projectId: props.projectId } },
   },
   {
     key: "cost" as const,
