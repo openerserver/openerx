@@ -117,6 +117,87 @@
 			"group": "none"
 		},
 		{
+			"label": "start-opencode-global-events-capture",
+			"type": "shell",
+			"command": "zsh",
+			"args": [
+				"-lc",
+				"exec bun run opencode:events:capture"
+			],
+			"isBackground": true,
+			"problemMatcher": {
+				"owner": "custom",
+				"pattern": {
+					"regexp": "^(.*)$",
+					"message": 1
+				},
+				"background": {
+					"activeOnStart": true,
+					"beginsPattern": ".",
+					"endsPattern": "\\[meta\\] connect Connecting to SSE endpoint"
+				}
+			},
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated"
+			},
+			"group": "none"
+		},
+		{
+			"label": "start-opencode-global-events-capture-fixed-output",
+			"type": "shell",
+			"command": "zsh",
+			"args": [
+				"-lc",
+				"rm -f tmp/opencode-global-events-debug.jsonl && exec bun run opencode:events:capture -- --output tmp/opencode-global-events-debug.jsonl"
+			],
+			"isBackground": true,
+			"problemMatcher": {
+				"owner": "custom",
+				"pattern": {
+					"regexp": "^(.*)$",
+					"message": 1
+				},
+				"background": {
+					"activeOnStart": true,
+					"beginsPattern": ".",
+					"endsPattern": "\\[meta\\] connect Connecting to SSE endpoint"
+				}
+			},
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated"
+			},
+			"group": "none"
+		},
+		{
+			"label": "start-opencode-global-events-capture-fixed-output-and-organize-taskdetail",
+			"type": "shell",
+			"command": "zsh",
+			"args": [
+				"-lc",
+				"finalized=0; finalize() { local exit_code=$?; if (( finalized )); then return; fi; finalized=1; if [[ -f tmp/opencode-global-events-debug.jsonl ]]; then bun run opencode:events:organize-taskdetail -- --input tmp/opencode-global-events-debug.jsonl || true; fi; exit $exit_code; }; trap finalize INT TERM EXIT; rm -f tmp/opencode-global-events-debug.jsonl tmp/opencode-global-events-debug.taskdetail.json; bun run opencode:events:capture -- --output tmp/opencode-global-events-debug.jsonl"
+			],
+			"isBackground": true,
+			"problemMatcher": {
+				"owner": "custom",
+				"pattern": {
+					"regexp": "^(.*)$",
+					"message": 1
+				},
+				"background": {
+					"activeOnStart": true,
+					"beginsPattern": ".",
+					"endsPattern": "\\[meta\\] connect Connecting to SSE endpoint"
+				}
+			},
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated"
+			},
+			"group": "none"
+		},
+		{
 			"label": "start-web-ui-bff",
 			"type": "shell",
 			"command": "zsh",
@@ -485,6 +566,28 @@
 			"args": [
 				"-lc",
 				"rm -f tmp/run-bff-mock-batch-22.filelog.log tmp/run-bff-mock-batch-22.filelog.code && bash scripts/run-bff-mock-batch-22.sh > tmp/run-bff-mock-batch-22.filelog.log 2>&1; printf '%s' $? > tmp/run-bff-mock-batch-22.filelog.code"
+			],
+			"isBackground": false,
+			"group": "test"
+		},
+		{
+			"label": "debug-session-message-500",
+			"type": "shell",
+			"command": "zsh",
+			"args": [
+				"-lc",
+				"cd /Users/wanglei/Downloads/phones-cloud/openerx && bun -e \"const CP_URL=process.env.TEST_CP_URL||'http://127.0.0.1:4097'; const USERNAME=process.env.TEST_USERNAME||'admin'; const PASSWORD=process.env.TEST_PASSWORD||'admin123!'; const loginRes=await fetch(`${CP_URL}/api/auth/login`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:USERNAME,password:PASSWORD})}); const login=await loginRes.json(); const token=login.token; const taskRes=await fetch(`${CP_URL}/api/tasks`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify({projectId:process.env.TEST_PROJECT_ID||'proj-default',title:`debug-${Date.now()}`,prompt:'debug prompt'})}); const task=await taskRes.json(); console.log('task',taskRes.status,JSON.stringify(task)); const runtimeSessionId=`debug-session-${Date.now()}`; const sessionRes=await fetch(`${CP_URL}/api/tasks/${task.id}/sessions`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify({runtimeSessionId,branchName:'debug-branch',sourceType:'root',isActive:true})}); console.log('session',sessionRes.status,await sessionRes.text()); const msgRes=await fetch(`${CP_URL}/api/tasks/${task.id}/sessions/messages`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify({runtimeSessionId,message:{info:{id:`msg-${Date.now()}`,role:'assistant'},parts:[{type:'text',text:'hello'}]}})}); console.log('message',msgRes.status,await msgRes.text());\""
+			],
+			"isBackground": false,
+			"group": "test"
+		},
+		{
+			"label": "verify-task-sessions-route",
+			"type": "shell",
+			"command": "bun",
+			"args": [
+				"test",
+				"tests/web-ui-bff/task-sessions-route.test.ts"
 			],
 			"isBackground": false,
 			"group": "test"

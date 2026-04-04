@@ -78,4 +78,74 @@ describe("buildSessionMessagesFromExecutionTrace", () => {
       "当前 session 消息",
     );
   });
+
+  it("synthesizes prompt and response when trace only exposes status items", () => {
+    const messages = buildSessionMessagesFromExecutionTrace(
+      {
+        finalPrompt: "原始用户输入",
+        latestResponse: "投影任务的最终回复",
+        timeline: [
+          {
+            id: "status-1",
+            role: "system",
+            text: "任务进入 running 状态",
+            createdAt: "2026-03-25T09:44:23.156Z",
+            completedAt: "2026-03-25T09:44:23.156Z",
+          },
+        ],
+        timelineMeta: { cacheState: "complete" },
+        snapshot: {
+          lastActivityAt: "2026-03-25T09:47:35.022Z",
+        },
+      },
+      { includeLineage: true },
+    );
+
+    expect(messages).toHaveLength(2);
+    expect(messages[0]).toMatchObject({
+      role: "user",
+      text: "原始用户输入",
+      info: {
+        id: "synthetic-final-prompt",
+        role: "user",
+      },
+    });
+    expect(messages[1]).toMatchObject({
+      role: "assistant",
+      text: "投影任务的最终回复",
+      info: {
+        id: "synthetic-latest-response",
+        role: "assistant",
+      },
+    });
+  });
+
+  it("appends a synthetic assistant reply when source items only contain the user prompt", () => {
+    const messages = buildSessionMessagesFromExecutionTrace({
+      finalPrompt: "继续这个任务",
+      latestResponse: "这是补齐出来的最终回复",
+      messages: [
+        {
+          id: "msg-user-1",
+          role: "user",
+          text: "继续这个任务",
+          createdAt: "2026-03-26T10:00:00.000Z",
+        },
+      ],
+      snapshot: {
+        lastActivityAt: "2026-03-26T10:00:05.000Z",
+      },
+    });
+
+    expect(messages).toHaveLength(2);
+    expect(messages[0]).toMatchObject({ role: "user", text: "继续这个任务" });
+    expect(messages[1]).toMatchObject({
+      role: "assistant",
+      text: "这是补齐出来的最终回复",
+      info: {
+        id: "synthetic-latest-response",
+        role: "assistant",
+      },
+    });
+  });
 });

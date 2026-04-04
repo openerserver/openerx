@@ -1,9 +1,9 @@
 #!/usr/bin/env bun
 
-import { and, desc, eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
-import { taskRuns, taskSnapshots, tasks } from "../schema";
+import { taskSnapshots, tasks } from "../schema";
 import { getBooleanArg, parseCliArgs } from "./metadata";
 
 type DbModule = typeof import("../index");
@@ -54,21 +54,26 @@ type AuditTaskRow = {
   projectId: string;
   title: string;
   createdAt: string;
-  taskStatus: string;
+  taskStatus: string | null;
+  taskLifecycleStatus: string;
   taskCurrentRunId: string | null;
   taskCurrentSessionId: string | null;
-  snapshotStatus: string | null;
-  snapshotCurrentRunId: string | null;
+  snapshotLifecycleStatus: string | null;
   snapshotCurrentSessionId: string | null;
   snapshotActiveCandidateCount: number | null;
-  snapshotCompletedCandidateCount: number | null;
-  snapshotFailedCandidateCount: number | null;
   snapshotTotalChainSteps: number | null;
   snapshotCompletedChainSteps: number | null;
-  snapshotWinnerNodeId: string | null;
 };
 
-type TaskRunRecord = Awaited<ReturnType<typeof loadCurrentRun>>;
+type TaskRunRecord = {
+  id: string;
+  taskId: string;
+  status: string | null;
+  orchestrationKind: string | null;
+  candidateCount: number | null;
+  pipelineStepCount: number | null;
+  winnerNodeId: string | null;
+};
 
 type AuditRunGraphStats = {
   actualExecutionNodes: number;
@@ -146,6 +151,21 @@ function parseCount(value: unknown) {
   return 0;
 }
 
+function parseNullableString(value: unknown) {
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+function mapLegacyStatusToLifecycleStatus(value: string | null | undefined) {
+  if (!value) {
+    return "draft";
+  }
+  if (value === "completed") {
+    return "done";
+  }
+
+  return "active";
+}
+
 function createDimension(details: Record<string, unknown>, reasons: string[]): AuditDimension {
   return {
     ok: reasons.length === 0,
@@ -203,12 +223,40 @@ function buildTimelineStats(timelineCounts: CountRow): AuditTimelineStats {
 }
 
 async function loadCurrentRun(task: AuditTaskRow, effectiveCurrentRunId: string | null) {
-  const { db } = await loadDbModule();
-  return effectiveCurrentRunId
-    ? ((await db.query.taskRuns.findFirst({
-        where: and(eq(taskRuns.id, effectiveCurrentRunId), eq(taskRuns.taskId, task.taskId)),
-      })) ?? null)
-    : null;
+  if (!effectiveCurrentRunId) {
+    return null;
+  }
+
+  const { postgresSql } = await loadDbModule();
+  const rows = await postgresSql`
+    select
+      id,
+      task_id as "taskId",
+      status,
+      orchestration_kind as "orchestrationKind",
+      candidate_count as "candidateCount",
+      pipeline_step_count as "pipelineStepCount",
+      winner_node_id as "winnerNodeId"
+    from task_runs
+    where id = ${effectiveCurrentRunId}
+      and task_id = ${task.taskId}
+    limit 1
+  `;
+  const row = rows[0] as Record<string, unknown> | undefined;
+  if (!row) {
+    return null;
+  }
+
+  return {
+    id: parseNullableString(row.id) ?? effectiveCurrentRunId,
+    taskId: parseNullableString(row.taskId) ?? task.taskId,
+    status: parseNullableString(row.status),
+    orchestrationKind: parseNullableString(row.orchestrationKind),
+    candidateCount: row.candidateCount == null ? null : parseCount(row.candidateCount),
+    pipelineStepCount:
+      row.pipelineStepCount == null ? null : parseCount(row.pipelineStepCount),
+    winnerNodeId: parseNullableString(row.winnerNodeId),
+  };
 }
 
 async function loadRunGraphCounts(args: {
@@ -313,20 +361,6 @@ function buildRunGraphCountMismatchReasons(task: AuditTaskRow, context: TaskAudi
   });
   pushNumericMismatchReason({
     reasons,
-    expected: task.snapshotCompletedCandidateCount,
-    actual: stats.actualCompletedCandidateNodes,
-    label: "task_snapshots.completed_candidate_count",
-    actualLabel: "completed candidate nodes",
-  });
-  pushNumericMismatchReason({
-    reasons,
-    expected: task.snapshotFailedCandidateCount,
-    actual: stats.actualFailedCandidateNodes,
-    label: "task_snapshots.failed_candidate_count",
-    actualLabel: "failed/cancelled candidate nodes",
-  });
-  pushNumericMismatchReason({
-    reasons,
     expected: task.snapshotTotalChainSteps,
     actual: stats.actualChainNodes,
     label: "task_snapshots.total_chain_steps",
@@ -343,23 +377,18 @@ function buildRunGraphCountMismatchReasons(task: AuditTaskRow, context: TaskAudi
   return reasons;
 }
 
-function buildRunGraphStructuralReasons(task: AuditTaskRow, context: TaskAuditContext) {
+function buildRunGraphStructuralReasons(context: TaskAuditContext) {
   const reasons: string[] = [];
 
-  if ((task.taskCurrentRunId ?? null) !== (task.snapshotCurrentRunId ?? null)) {
-    reasons.push(
-      `tasks.current_run_id=${task.taskCurrentRunId ?? "null"} but task_snapshots.current_run_id=${task.snapshotCurrentRunId ?? "null"}`,
-    );
-  }
   if (context.effectiveCurrentRunId && !context.currentRun) {
     reasons.push(`task_runs missing id=${context.effectiveCurrentRunId}`);
   }
   if (
-    (context.currentRun?.winnerNodeId ?? task.snapshotWinnerNodeId) &&
+    context.currentRun?.winnerNodeId &&
     !context.runGraphStats.winnerExists
   ) {
     reasons.push(
-      `winner node ${(context.currentRun?.winnerNodeId ?? task.snapshotWinnerNodeId) as string} is missing from task_run_nodes`,
+      `winner node ${context.currentRun.winnerNodeId} is missing from task_run_nodes`,
     );
   }
 
@@ -368,7 +397,7 @@ function buildRunGraphStructuralReasons(task: AuditTaskRow, context: TaskAuditCo
 
 function buildRunGraphReasonList(task: AuditTaskRow, context: TaskAuditContext) {
   return [
-    ...buildRunGraphStructuralReasons(task, context),
+    ...buildRunGraphStructuralReasons(context),
     ...buildRunGraphCountMismatchReasons(task, context),
   ];
 }
@@ -438,13 +467,13 @@ async function loadTimelineCounts(taskId: string) {
 }
 
 async function loadTaskAuditContext(task: AuditTaskRow): Promise<TaskAuditContext> {
-  const effectiveCurrentRunId = task.snapshotCurrentRunId ?? task.taskCurrentRunId;
+  const effectiveCurrentRunId = task.taskCurrentRunId;
   const effectiveCurrentSessionId = task.snapshotCurrentSessionId ?? task.taskCurrentSessionId;
   const currentRun = await loadCurrentRun(task, effectiveCurrentRunId);
   const runGraphCounts = await loadRunGraphCounts({
     task,
     effectiveCurrentRunId,
-    winnerNodeId: currentRun?.winnerNodeId ?? task.snapshotWinnerNodeId,
+    winnerNodeId: currentRun?.winnerNodeId ?? null,
   });
   const currentSession = await loadCurrentSession(task, effectiveCurrentSessionId);
   const currentSessionDbId = resolveCurrentSessionDbId(currentSession);
@@ -470,30 +499,36 @@ async function loadTaskAuditContext(task: AuditTaskRow): Promise<TaskAuditContex
 
 function buildStatusDimension(task: AuditTaskRow, context: TaskAuditContext) {
   const reasons: string[] = [];
+  const currentRunLifecycleStatus = mapLegacyStatusToLifecycleStatus(context.currentRun?.status);
 
-  if (!task.snapshotStatus) {
+  if (!task.snapshotLifecycleStatus) {
     reasons.push("missing task_snapshots row");
   }
-  if (task.snapshotStatus && task.taskStatus !== task.snapshotStatus) {
+  if (
+    task.snapshotLifecycleStatus &&
+    task.taskLifecycleStatus !== task.snapshotLifecycleStatus
+  ) {
     reasons.push(
-      `tasks.status=${task.taskStatus} but task_snapshots.current_status=${task.snapshotStatus}`,
+      `tasks.lifecycle_status=${task.taskLifecycleStatus} but task_snapshots.lifecycle_status=${task.snapshotLifecycleStatus}`,
     );
   }
   if (
-    task.snapshotStatus &&
+    task.snapshotLifecycleStatus &&
     context.currentRun?.status &&
-    context.currentRun.status !== task.snapshotStatus
+    currentRunLifecycleStatus !== task.snapshotLifecycleStatus
   ) {
     reasons.push(
-      `current run status=${context.currentRun.status} but snapshot status=${task.snapshotStatus}`,
+      `current run status=${context.currentRun.status} maps to lifecycle_status=${currentRunLifecycleStatus} but snapshot lifecycle_status=${task.snapshotLifecycleStatus}`,
     );
   }
 
   return createDimension(
     {
       taskStatus: task.taskStatus,
-      snapshotStatus: task.snapshotStatus,
+        taskLifecycleStatus: task.taskLifecycleStatus,
+      snapshotLifecycleStatus: task.snapshotLifecycleStatus,
       currentRunStatus: context.currentRun?.status ?? null,
+        currentRunLifecycleStatus,
     },
     reasons,
   );
@@ -538,7 +573,6 @@ function buildRunGraphDimension(task: AuditTaskRow, context: TaskAuditContext) {
   return createDimension(
     {
       taskCurrentRunId: task.taskCurrentRunId,
-      snapshotCurrentRunId: task.snapshotCurrentRunId,
       effectiveCurrentRunId: context.effectiveCurrentRunId,
       runStatus: context.currentRun?.status ?? null,
       orchestrationKind: context.currentRun?.orchestrationKind ?? null,
@@ -551,7 +585,7 @@ function buildRunGraphDimension(task: AuditTaskRow, context: TaskAuditContext) {
       actualFailedCandidateNodes: stats.actualFailedCandidateNodes,
       actualChainNodes: stats.actualChainNodes,
       actualCompletedChainNodes: stats.actualCompletedChainNodes,
-      winnerNodeId: context.currentRun?.winnerNodeId ?? task.snapshotWinnerNodeId,
+      winnerNodeId: context.currentRun?.winnerNodeId ?? null,
     },
     buildRunGraphReasonList(task, context),
   );
@@ -711,17 +745,14 @@ Options:
       title: tasks.title,
       createdAt: tasks.createdAt,
       taskStatus: tasks.status,
+      taskLifecycleStatus: tasks.lifecycleStatus,
       taskCurrentRunId: tasks.currentRunId,
       taskCurrentSessionId: tasks.currentSessionId,
-      snapshotStatus: taskSnapshots.currentStatus,
-      snapshotCurrentRunId: taskSnapshots.currentRunId,
+      snapshotLifecycleStatus: taskSnapshots.lifecycleStatus,
       snapshotCurrentSessionId: taskSnapshots.currentSessionId,
       snapshotActiveCandidateCount: taskSnapshots.activeCandidateCount,
-      snapshotCompletedCandidateCount: taskSnapshots.completedCandidateCount,
-      snapshotFailedCandidateCount: taskSnapshots.failedCandidateCount,
       snapshotTotalChainSteps: taskSnapshots.totalChainSteps,
       snapshotCompletedChainSteps: taskSnapshots.completedChainSteps,
-      snapshotWinnerNodeId: taskSnapshots.winnerNodeId,
     })
     .from(tasks)
     .leftJoin(taskSnapshots, eq(taskSnapshots.taskId, tasks.id))

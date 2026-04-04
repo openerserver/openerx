@@ -38,18 +38,22 @@ const cpFetchMock = mock(async (url: string, options?: { method?: string }) => {
     };
   }
 
-  if ((options?.method || "GET") === "GET" && url === "/api/tasks/task-1/branches") {
+  if ((options?.method || "GET") === "GET" && url === "/api/tasks/task-1/sessions") {
     return {
       ok: true,
       status: 200,
       data: {
         data: [
           {
+            id: "task-session:task-1:ses-1",
             runtimeSessionId: "ses-1",
             isActive: true,
             archivedAt: null,
           },
         ],
+        meta: {
+          currentSessionId: "task-session:task-1:ses-1",
+        },
       },
     };
   }
@@ -210,18 +214,22 @@ beforeEach(() => {
       };
     }
 
-    if ((options?.method || "GET") === "GET" && url === "/api/tasks/task-1/branches") {
+    if ((options?.method || "GET") === "GET" && url === "/api/tasks/task-1/sessions") {
       return {
         ok: true,
         status: 200,
         data: {
           data: [
             {
+              id: "task-session:task-1:ses-1",
               runtimeSessionId: "ses-1",
               isActive: true,
               archivedAt: null,
             },
           ],
+          meta: {
+            currentSessionId: "task-session:task-1:ses-1",
+          },
         },
       };
     }
@@ -316,6 +324,332 @@ describe("SSEAggregator pipeline emitters", () => {
     } finally {
       unsubscribe();
     }
+  });
+
+  test("message.updated emits a task-domain message patch before the legacy event", async () => {
+    findAgentRunBySessionIdMock.mockReturnValue({
+      subSessionId: "ses-1",
+      taskId: "task-1",
+      projectId: "proj-1",
+      agentRunId: "run-1",
+      status: "running",
+    });
+
+    const emitted: Array<Record<string, unknown>> = [];
+    const unsubscribe = sseAggregator.onEvent((event) => {
+      emitted.push(event as unknown as Record<string, unknown>);
+    });
+
+    try {
+      await sseAggregator.ingestParsedEvent("message.updated", {
+        sessionId: "ses-1",
+        info: {
+          id: "msg-1",
+          role: "assistant",
+          agent: "planner",
+          time: {
+            created: "2026-03-12T10:05:00.000Z",
+          },
+        },
+      });
+
+      expect(emitted.map((event) => event.type)).toEqual([
+        "task.message.updated",
+        "message.updated",
+      ]);
+      expect(emitted[0]).toMatchObject({
+        sessionId: "ses-1",
+        taskId: "task-1",
+        projectId: "proj-1",
+        agentRunId: "run-1",
+        data: {
+          message: {
+            id: "msg-1",
+            role: "assistant",
+            agent: "planner",
+          },
+          reason: "message.updated",
+        },
+      });
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  test("message.part.updated and session.updated emit task-domain delta and snapshot patches", async () => {
+    findAgentRunBySessionIdMock.mockReturnValue({
+      subSessionId: "ses-1",
+      taskId: "task-1",
+      projectId: "proj-1",
+      agentRunId: "run-1",
+      status: "running",
+    });
+
+    const emitted: Array<Record<string, unknown>> = [];
+    const unsubscribe = sseAggregator.onEvent((event) => {
+      emitted.push(event as unknown as Record<string, unknown>);
+    });
+
+    try {
+      await sseAggregator.ingestParsedEvent("message.part.updated", {
+        sessionId: "ses-1",
+        part: {
+          messageID: "msg-1",
+          type: "text",
+          text: "正在输出",
+        },
+      });
+
+      await sseAggregator.ingestParsedEvent("session.updated", {
+        sessionId: "ses-1",
+      });
+
+      expect(emitted.map((event) => event.type)).toEqual([
+        "task.message.delta",
+        "message.updated",
+        "task.snapshot.updated",
+        "session.updated",
+      ]);
+      expect(emitted[0]).toMatchObject({
+        taskId: "task-1",
+        sessionId: "ses-1",
+        data: {
+          messageId: "msg-1",
+          partType: "text",
+          delta: "正在输出",
+          reason: "message.part.updated",
+        },
+      });
+      expect(emitted[2]).toMatchObject({
+        taskId: "task-1",
+        sessionId: "ses-1",
+        data: {
+          reason: "session.updated",
+          scope: "session",
+        },
+      });
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  test("metadata-only user message.updated persists the full runtime message payload", async () => {
+    findAgentRunBySessionIdMock.mockReturnValue({
+      subSessionId: "ses-1",
+      taskId: "task-1",
+      projectId: "proj-1",
+      agentRunId: "run-1",
+      status: "running",
+    });
+    getSessionMessagesMock.mockResolvedValue({
+      ok: true,
+      data: [
+        {
+          info: {
+            id: "msg-1",
+            role: "user",
+            time: {
+              created: 1774794038540,
+            },
+          },
+          parts: [
+            {
+              type: "text",
+              text: "真实用户输入",
+            },
+          ],
+        },
+      ],
+    });
+
+    await sseAggregator.ingestParsedEvent("message.updated", {
+      sessionId: "ses-1",
+      info: {
+        id: "msg-1",
+        role: "user",
+        time: {
+          created: 1774794038540,
+        },
+      },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(getSessionMessagesMock).toHaveBeenCalledWith("ses-1", {
+      includeLineage: false,
+      bypassCircuitBreaker: true,
+    });
+    expect(cpFetchMock).toHaveBeenCalledWith(
+      "/api/tasks/task-1/sessions/messages",
+      expect.objectContaining({
+        method: "POST",
+        authorization: "Bearer internal",
+        body: expect.objectContaining({
+          runtimeSessionId: "ses-1",
+          message: expect.objectContaining({
+            info: expect.objectContaining({ id: "msg-1", role: "user" }),
+            parts: [expect.objectContaining({ type: "text", text: "真实用户输入" })],
+          }),
+        }),
+      }),
+    );
+  });
+
+  test("parallel candidate user message snapshots are persisted for each runtime session", async () => {
+    findAgentRunBySessionIdMock.mockImplementation((sessionId: string) => ({
+      subSessionId: sessionId,
+      taskId: "task-1",
+      projectId: "proj-1",
+      agentRunId: `run-${sessionId}`,
+      status: "running",
+    }));
+    getSessionMessagesMock.mockImplementation(async (sessionId: string) => ({
+      ok: true,
+      data: [
+        {
+          info: {
+            id: `msg-${sessionId}`,
+            role: "user",
+            time: {
+              created: 1774794038540,
+            },
+          },
+          parts: [
+            {
+              type: "text",
+              text: "给两个初步定义",
+            },
+          ],
+        },
+      ] as Array<Record<string, unknown>>,
+    }));
+
+    sseAggregator.registerParallelTask("task-1", [
+      { sessionId: "ses-a" } as { sessionId: string },
+      { sessionId: "ses-b" } as { sessionId: string },
+    ]);
+
+    await sseAggregator.ingestParsedEvent("message.updated", {
+      sessionId: "ses-a",
+      info: {
+        id: "msg-ses-a",
+        role: "user",
+        time: {
+          created: 1774794038540,
+        },
+      },
+    });
+
+    await sseAggregator.ingestParsedEvent("message.updated", {
+      sessionId: "ses-b",
+      info: {
+        id: "msg-ses-b",
+        role: "user",
+        time: {
+          created: 1774794039040,
+        },
+      },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expectSessionMessageReaderCalls(getSessionMessagesMock, ["ses-a", "ses-b"]);
+
+    const persistCalls = cpFetchMock.mock.calls.filter(
+      ([url, options]) =>
+        url === "/api/tasks/task-1/sessions/messages" &&
+        (options as { method?: string } | undefined)?.method === "POST",
+    );
+
+    expect(persistCalls).toHaveLength(2);
+    expect(persistCalls).toEqual([
+      [
+        "/api/tasks/task-1/sessions/messages",
+        expect.objectContaining({
+          method: "POST",
+          authorization: "Bearer internal",
+          body: expect.objectContaining({
+            runtimeSessionId: "ses-a",
+            message: expect.objectContaining({
+              info: expect.objectContaining({ id: "msg-ses-a", role: "user" }),
+              parts: [expect.objectContaining({ type: "text", text: "给两个初步定义" })],
+            }),
+          }),
+        }),
+      ],
+      [
+        "/api/tasks/task-1/sessions/messages",
+        expect.objectContaining({
+          method: "POST",
+          authorization: "Bearer internal",
+          body: expect.objectContaining({
+            runtimeSessionId: "ses-b",
+            message: expect.objectContaining({
+              info: expect.objectContaining({ id: "msg-ses-b", role: "user" }),
+              parts: [expect.objectContaining({ type: "text", text: "给两个初步定义" })],
+            }),
+          }),
+        }),
+      ],
+    ]);
+    expectNoPublicTraceRequests(cpFetchMock.mock.calls.map(([url]) => String(url)));
+  });
+
+  test("message.part.updated persists the matching full runtime message instead of the standalone part payload", async () => {
+    findAgentRunBySessionIdMock.mockReturnValue({
+      subSessionId: "ses-1",
+      taskId: "task-1",
+      projectId: "proj-1",
+      agentRunId: "run-1",
+      status: "running",
+    });
+    getSessionMessagesMock.mockResolvedValue({
+      ok: true,
+      data: [
+        {
+          info: {
+            id: "msg-2",
+            role: "assistant",
+            time: {
+              created: 1774794038542,
+              completed: 1774794043128,
+            },
+          },
+          parts: [
+            {
+              type: "text",
+              text: "完整 assistant 回复",
+            },
+          ],
+        },
+      ],
+    });
+
+    await sseAggregator.ingestParsedEvent("message.part.updated", {
+      sessionId: "ses-1",
+      part: {
+        messageID: "msg-2",
+        type: "text",
+        text: "片段",
+      },
+      delta: "片段",
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(cpFetchMock).toHaveBeenCalledWith(
+      "/api/tasks/task-1/sessions/messages",
+      expect.objectContaining({
+        method: "POST",
+        body: expect.objectContaining({
+          runtimeSessionId: "ses-1",
+          message: expect.objectContaining({
+            info: expect.objectContaining({ id: "msg-2", role: "assistant" }),
+            parts: [expect.objectContaining({ type: "text", text: "完整 assistant 回复" })],
+          }),
+        }),
+      }),
+    );
   });
 
   test("post-execution hooks emit task.hooks.updated followed by pipeline.stage.updated", async () => {
@@ -456,7 +790,7 @@ describe("SSEAggregator pipeline emitters", () => {
         };
       }
 
-      if ((options?.method || "GET") === "GET" && url === "/api/tasks/task-1/branches") {
+      if ((options?.method || "GET") === "GET" && url === "/api/tasks/task-1/sessions") {
         return {
           ok: true,
           status: 200,
@@ -830,7 +1164,7 @@ describe("SSEAggregator pipeline emitters", () => {
         }),
       );
       expect(cpFetchMock).toHaveBeenCalledWith(
-        "/api/tasks/task-1/branches",
+        "/api/tasks/task-1/sessions",
         expect.objectContaining({
           method: "POST",
           body: expect.objectContaining({
@@ -1070,6 +1404,95 @@ describe("SSEAggregator pipeline emitters", () => {
     } finally {
       unsubscribe();
     }
+  });
+
+  test("tool execute events are persisted to control-plane as standalone tool parts", async () => {
+    findAgentRunBySessionIdMock.mockReturnValue({
+      subSessionId: "ses-1",
+      status: "running",
+      taskId: "task-1",
+      projectId: "proj-1",
+      agentRunId: "run-1",
+    });
+
+    await (
+      sseAggregator as unknown as {
+        ingestParsedEvent: (type: string, parsed: Record<string, unknown>) => Promise<void>;
+      }
+    ).ingestParsedEvent("tool.execute.before", {
+      payload: {
+        type: "tool.execute.before",
+        sessionId: "ses-1",
+        toolName: "search_code",
+        callID: "call-1",
+        input: { query: "task tree" },
+      },
+    });
+
+    await (
+      sseAggregator as unknown as {
+        ingestParsedEvent: (type: string, parsed: Record<string, unknown>) => Promise<void>;
+      }
+    ).ingestParsedEvent("tool.execute.after", {
+      payload: {
+        type: "tool.execute.after",
+        sessionId: "ses-1",
+        toolName: "search_code",
+        callID: "call-1",
+        properties: {
+          toolName: "search_code",
+          result: "match found",
+        },
+      },
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const persistCalls = (
+      cpFetchMock.mock.calls as unknown as Array<
+        [string, { method?: string; authorization?: string; body?: Record<string, unknown> }]
+      >
+    ).filter(
+      ([url, options]) =>
+        url === "/api/tasks/task-1/sessions/messages" && (options?.method || "GET") === "POST",
+    );
+
+    expect(persistCalls).toHaveLength(2);
+    expect(persistCalls[0]?.[1]?.body).toEqual(
+      expect.objectContaining({
+        runtimeSessionId: "ses-1",
+        message: expect.objectContaining({
+          role: "tool",
+          part: expect.objectContaining({
+            type: "tool",
+            tool: "search_code",
+            callID: "call-1",
+            state: expect.objectContaining({
+              status: "running",
+            }),
+          }),
+        }),
+      }),
+    );
+    expect(persistCalls[1]?.[1]?.body).toEqual(
+      expect.objectContaining({
+        runtimeSessionId: "ses-1",
+        message: expect.objectContaining({
+          role: "tool",
+          id: "tool:call-1",
+          part: expect.objectContaining({
+            type: "tool",
+            tool: "search_code",
+            callID: "call-1",
+            state: expect.objectContaining({
+              status: "completed",
+              output: "match found",
+            }),
+          }),
+        }),
+      }),
+    );
   });
 
   test("parallel question tools are failed instead of staying running forever", async () => {
@@ -1336,6 +1759,7 @@ describe("SSEAggregator pipeline emitters", () => {
       advanceSequentialChainStep: (
         taskId: string,
         completedStepIndex: number,
+        completedSessionId: string,
         stepResult: string | undefined,
         projectId: string,
         authorization: string,
@@ -1360,9 +1784,29 @@ describe("SSEAggregator pipeline emitters", () => {
     await aggregator.advanceSequentialChainStep(
       "task-1",
       0,
+      "ses-step-1",
       "第一步完成",
       "proj-1",
       "Bearer internal",
+    );
+
+    expect(cpFetchMock).toHaveBeenCalledWith(
+      "/api/tasks/task-1/sessions",
+      expect.objectContaining({
+        method: "POST",
+        authorization: "Bearer internal",
+        body: expect.objectContaining({
+          runtimeSessionId: "ses-1",
+          parentRuntimeSessionId: "ses-step-1",
+          branchName: "Projection-backed sequential task — 实施",
+          sourceType: "fork",
+          sessionKind: "sequential_step",
+          executionModeSnapshot: "sequential_chain",
+          isActive: true,
+          stepIndex: 1,
+          selectedModel: "github-copilot:gpt-5.4",
+        }),
+      }),
     );
 
     const taskPatchCalls = (

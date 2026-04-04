@@ -4,14 +4,10 @@
       <a-typography-text strong style="font-size: 13px">执行配置</a-typography-text>
       <a-space size="small">
         <a-tag style="cursor:pointer" @click="$emit('choose-mode')">{{ modeLabel }}</a-tag>
-        <a-tooltip title="阶段自动推进：开启后，当前阶段完成时自动启动下一阶段初始任务">
-          <a-switch
-            :checked="autoAdvance"
-            checked-children="自动推进"
-            un-checked-children="手动推进"
-            size="small"
-            @change="handleAutoAdvanceChange"
-          />
+        <a-tooltip title="workflow 执行推进已从主执行链移除，当前仅展示历史配置状态">
+          <a-tag :color="autoAdvance ? 'green' : 'default'">
+            {{ autoAdvance ? '历史配置：自动推进' : '历史配置：手动推进' }}
+          </a-tag>
         </a-tooltip>
       </a-space>
     </a-flex>
@@ -36,7 +32,6 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: "choose-mode"): void;
-  (e: "update:auto-advance", value: boolean): void;
 }>();
 
 const modeLabel = computed(() => {
@@ -55,8 +50,4 @@ const executionHint = computed(() => {
   if (props.executionMode === "sequential-chain") return "步骤串行中…";
   return "模型生成中…";
 });
-
-function handleAutoAdvanceChange(checked: boolean | string | number) {
-  emit("update:auto-advance", Boolean(checked));
-}
 </script>

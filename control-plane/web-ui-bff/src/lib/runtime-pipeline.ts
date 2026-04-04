@@ -116,6 +116,21 @@ interface TaskSessionRecord {
   archivedAt?: string | null;
 }
 
+interface ServiceTaskSessionRecord {
+  id: string;
+  runtimeSessionId?: string | null;
+  branchName?: string | null;
+  executionStatus?: string | null;
+  archivedAt?: string | null;
+}
+
+interface ServiceTaskSessionListResponse {
+  data?: ServiceTaskSessionRecord[];
+  meta?: {
+    currentSessionId?: string | null;
+  };
+}
+
 interface SessionMessageRecord {
   info?: {
     id?: string;
@@ -127,6 +142,21 @@ interface SessionMessageRecord {
     time?: { created?: number; completed?: number };
   };
   parts?: Array<{ type?: string; text?: string }>;
+}
+
+function mapServiceTaskSessionsToRuntimePipelineRecords(
+  sessions: ServiceTaskSessionRecord[],
+  currentSessionId?: string | null,
+) {
+  return sessions.map((session) => ({
+    id: session.id,
+    runtimeSessionId: session.runtimeSessionId ?? session.id,
+    branchName: session.branchName ?? null,
+    isActive: currentSessionId
+      ? session.id === currentSessionId
+      : session.executionStatus === "running" && !session.archivedAt,
+    archivedAt: session.archivedAt ?? null,
+  } satisfies TaskSessionRecord));
 }
 
 function toIso(value: number | string | null | undefined) {
@@ -550,8 +580,8 @@ async function loadRuntimePipelineResources(args: {
   prefetchedMessages?: unknown[];
 }) {
   const [lineageResult, messagesResult] = await Promise.all([
-    cpFetch<{ data: TaskSessionRecord[] }>(
-      `/api/tasks/${encodeURIComponent(args.taskId)}/branches`,
+    cpFetch<ServiceTaskSessionListResponse>(
+      `/api/tasks/${encodeURIComponent(args.taskId)}/sessions`,
       {
         authorization: args.authorization,
       },
@@ -570,7 +600,7 @@ async function loadRuntimePipelineResources(args: {
 }
 
 function resolveRuntimePipelineResources(args: {
-  lineageResult: Awaited<ReturnType<typeof cpFetch<{ data: TaskSessionRecord[] }>>>;
+  lineageResult: Awaited<ReturnType<typeof cpFetch<ServiceTaskSessionListResponse>>>;
   messagesResult:
     | { ok: true; data: unknown[] }
     | { ok: false }
@@ -580,7 +610,10 @@ function resolveRuntimePipelineResources(args: {
 }) {
   const lineage =
     args.lineageResult.ok && Array.isArray(args.lineageResult.data?.data)
-      ? args.lineageResult.data.data.filter((record) => !record.archivedAt)
+      ? mapServiceTaskSessionsToRuntimePipelineRecords(
+          args.lineageResult.data.data,
+          args.lineageResult.data.meta?.currentSessionId,
+        ).filter((record) => !record.archivedAt)
       : [];
   const sessionIsAllowed =
     !args.requestedSessionId ||
@@ -757,66 +790,12 @@ function appendPlanStages(stages: RuntimePipelineStage[], plan: RuntimePlan | nu
   return nextOrder;
 }
 
-function taskMayNeedParallelDomainRuns(task: TaskRecord) {
-  return task.orchestrationKind === "parallel";
-}
-
-function pickParallelRun(
-  runs: TaskDomainRunSummaryRecord[],
-  currentRunId?: string | null,
-): TaskDomainRunSummaryRecord | null {
-  const parallelRuns = runs.filter((run) => run.orchestrationKind === "parallel");
-  if (parallelRuns.length === 0) {
-    return null;
-  }
-
-  if (currentRunId) {
-    const current = parallelRuns.find((run) => run.id === currentRunId);
-    if (current) {
-      return current;
-    }
-  }
-
-  return (
-    parallelRuns.slice().sort((left, right) => {
-      const leftPriority = left.status === "running" ? 1 : 0;
-      const rightPriority = right.status === "running" ? 1 : 0;
-      if (leftPriority !== rightPriority) {
-        return rightPriority - leftPriority;
-      }
-      return (
-        Date.parse(right.updatedAt ?? right.createdAt ?? "") -
-        Date.parse(left.updatedAt ?? left.createdAt ?? "")
-      );
-    })[0] ?? null
-  );
-}
-
 async function loadParallelDomainRunDetail(args: {
   task: TaskRecord;
   authorization: string;
 }): Promise<TaskDomainRunDetailRecord | null> {
-  if (!taskMayNeedParallelDomainRuns(args.task)) {
-    return null;
-  }
-
-  const runsResult = await cpFetch<{ data: TaskDomainRunSummaryRecord[] }>(
-    `/api/tasks/${encodeURIComponent(args.task.id)}/domain-runs`,
-    { authorization: args.authorization },
-  );
-  const runs = runsResult.ok && Array.isArray(runsResult.data?.data) ? runsResult.data.data : [];
-
-  const parallelRun = pickParallelRun(runs, args.task.currentRunId);
-  if (!parallelRun) {
-    return null;
-  }
-
-  const detailResult = await cpFetch<{ data: TaskDomainRunDetailRecord }>(
-    `/api/tasks/${encodeURIComponent(args.task.id)}/domain-runs/${encodeURIComponent(parallelRun.id)}`,
-    { authorization: args.authorization },
-  );
-
-  return detailResult.ok ? (detailResult.data?.data ?? null) : null;
+  void args;
+  return null;
 }
 
 function resolveConfiguredParallelCandidates(

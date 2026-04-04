@@ -3,15 +3,27 @@ import { drizzle as drizzlePostgres } from "drizzle-orm/postgres-js";
 import { db as importedDb } from "../../db/index";
 import { openPostgresDatabase } from "../../db/postgres-client";
 import {
+  type TaskSessionMessageRole,
   type TaskTimelineItemKind,
-  conversationMessages,
   tasks as taskAggregates,
-  taskDomainEvents,
-  taskRunNodes,
   taskSnapshots,
   taskTimelineViews,
 } from "../../db/schema";
 import * as schema from "../../db/schema";
+
+/**
+ * Maps old task status values to the DB enum `task_lifecycle_status`.
+ * Matches migration 0022: completed → done, NULL → draft, else → active.
+ */
+function toLifecycleStatus(
+  status: string | null | undefined,
+): "draft" | "active" | "done" | "archived" {
+  if (!status) return "draft";
+  if (status === "completed") return "done";
+  return "active";
+}
+
+const taskDomainEvents = (schema as Record<string, unknown>).taskDomainEvents as any | undefined;
 
 type TaskDomainProjectionEventRecord = {
   id: string;
@@ -82,57 +94,37 @@ function nextTaskDomainEventSeq() {
   return base + taskDomainEventSeqOffset;
 }
 
-function buildTimelineItemKindFromMessageRole(role: string) {
-  if (role === "user") {
-    return "user-input";
-  }
-  if (role === "assistant") {
-    return "assistant-output";
-  }
-  if (role === "tool") {
-    return "tool-output";
-  }
-
-  return "system-event";
+function buildTimelineItemKindFromMessageRole(_role: string) {
+  return "message" as const;
 }
 
 function buildTimelineItemKindFromMessagePartType(partType: string) {
   if (partType === "tool_call") {
-    return "tool-call" as const;
+    return "operation" as const;
   }
   if (partType === "tool_result") {
-    return "tool-output" as const;
+    return "operation" as const;
   }
   if (partType === "thinking") {
-    return "thinking" as const;
+    return "message" as const;
   }
   if (partType === "file_reference") {
-    return "file-reference" as const;
+    return "artifact" as const;
   }
   if (partType === "diff") {
-    return "diff" as const;
+    return "artifact" as const;
   }
 
   return null;
 }
 
-function buildTimelineItemKindFromRunNodeKind(nodeKind: string) {
-  if (nodeKind === "candidate") {
-    return "candidate-result" as const;
-  }
-  if (nodeKind === "judge") {
-    return "judge-decision" as const;
-  }
-  if (nodeKind === "chain-step") {
-    return "chain-step-result" as const;
-  }
-
-  return "run-node" as const;
+function buildTimelineItemKindFromRunNodeKind(_nodeKind: string) {
+  return "operation" as const;
 }
 
 function buildTimelineItemKindFromRunNodeEvent(nodeKind: string, status: string) {
   if (status === "pending" || status === "running" || status === "paused") {
-    return "status-transition" as const;
+    return "task_lifecycle" as const;
   }
 
   return buildTimelineItemKindFromRunNodeKind(nodeKind);
@@ -151,7 +143,7 @@ function describeSessionTimelineEvent(payload: Record<string, unknown>) {
 
   if (asNullableString(payload.archivedAt)) {
     return {
-      itemKind: "session-archive" as const,
+      itemKind: "session" as const,
       title: branchName ?? "归档会话",
       displayText: branchName
         ? `归档会话 ${branchName}`
@@ -161,7 +153,7 @@ function describeSessionTimelineEvent(payload: Record<string, unknown>) {
 
   if (sourceType === "fork" || sourceType === "sub_session") {
     return {
-      itemKind: "session-branch" as const,
+      itemKind: "session" as const,
       title: branchName ?? "派生会话",
       displayText: branchName
         ? `切换到分支 ${branchName}`
@@ -170,7 +162,7 @@ function describeSessionTimelineEvent(payload: Record<string, unknown>) {
   }
 
   return {
-    itemKind: "session-activate" as const,
+    itemKind: "session" as const,
     title: branchName ?? "激活会话",
     displayText: branchName
       ? `激活会话 ${branchName}`
@@ -279,18 +271,20 @@ function describeRunNodeTimelineEvent(payload: Record<string, unknown>) {
   const status = asNullableString(payload.status) ?? "pending";
   const title = asNullableString(payload.title);
   const candidateIndex = typeof payload.candidateIndex === "number" ? payload.candidateIndex : null;
+  const chainStepIndex =
+    typeof payload.chainStepIndex === "number" ? payload.chainStepIndex : null;
   const agentType = asNullableString(payload.agentType);
   const itemKind = buildTimelineItemKindFromRunNodeEvent(nodeKind, status);
 
   let defaultTitle = title;
-  if (!defaultTitle && itemKind === "candidate-result" && candidateIndex !== null) {
+  if (!defaultTitle && nodeKind === "candidate" && candidateIndex !== null) {
     defaultTitle = `候选 ${candidateIndex + 1}`;
   }
-  if (!defaultTitle && itemKind === "judge-decision") {
+  if (!defaultTitle && nodeKind === "judge") {
     defaultTitle = "Judge 决策";
   }
-  if (!defaultTitle && itemKind === "chain-step-result" && candidateIndex !== null) {
-    defaultTitle = `链式步骤 ${candidateIndex + 1}`;
+  if (!defaultTitle && nodeKind === "chain-step") {
+    defaultTitle = `链式步骤 ${(chainStepIndex ?? candidateIndex ?? 0) + 1}`;
   }
   if (!defaultTitle && agentType) {
     defaultTitle = agentType;
@@ -299,7 +293,7 @@ function describeRunNodeTimelineEvent(payload: Record<string, unknown>) {
   const displayText =
     asNullableString(payload.result) ??
     asNullableString(payload.error) ??
-    (itemKind === "status-transition"
+    (itemKind === "task_lifecycle"
       ? `${defaultTitle ?? "执行节点"} 进入 ${status} 状态`
       : `${defaultTitle ?? "执行节点"} 已${status}`);
 
@@ -337,6 +331,12 @@ function asNullableString(value: unknown) {
   return typeof value === "string" && value.trim() ? value : null;
 }
 
+function normalizeMessageRole(value: unknown): TaskSessionMessageRole | null {
+  return value === "user" || value === "assistant" || value === "system" || value === "tool"
+    ? value
+    : null;
+}
+
 async function loadTaskProjectionBase(taskId: string) {
   const [snapshotRecord, aggregateRecord] = await Promise.all([
     db.query.taskSnapshots.findFirst({ where: eq(taskSnapshots.taskId, taskId) }),
@@ -355,7 +355,7 @@ async function upsertTaskTimelineViewRecord(args: {
   sessionId?: string | null;
   messageId?: string | null;
   itemKind: TaskTimelineItemKind;
-  itemRole?: string | null;
+  itemRole?: TaskSessionMessageRole | null;
   title?: string | null;
   displayText?: string | null;
   metadataJson?: Record<string, unknown> | null;
@@ -374,55 +374,31 @@ async function upsertTaskTimelineViewRecord(args: {
     itemRole: args.itemRole ?? null,
     title: args.title ?? null,
     displayText: args.displayText ?? null,
-    metadataJson: args.metadataJson ?? null,
+    metadataJson: args.metadataJson ?? {},
     sortAt: args.sortAt,
     createdAt: args.createdAt,
+    updatedAt: args.createdAt,
+  };
+  const updateSet = {
+    projectId: values.projectId,
+    taskId: values.taskId,
+    runId: values.runId,
+    runNodeId: values.runNodeId,
+    sessionId: values.sessionId,
+    messageId: values.messageId,
+    itemKind: values.itemKind,
+    itemRole: values.itemRole,
+    title: values.title,
+    displayText: values.displayText,
+    metadataJson: values.metadataJson,
+    sortAt: values.sortAt,
+    updatedAt: values.updatedAt,
   };
 
   await db.insert(taskTimelineViews).values(values).onConflictDoUpdate({
     target: taskTimelineViews.id,
-    set: values,
+    set: updateSet,
   });
-}
-
-async function resolveProjectionConversationMessageId(messageId: string | null) {
-  if (!messageId) {
-    return null;
-  }
-
-  const existingMessage = await db.query.conversationMessages.findFirst({
-    where: eq(conversationMessages.id, messageId),
-    columns: { id: true },
-  });
-
-  return existingMessage?.id ?? null;
-}
-
-function countRunNodesByKindAndStatus(
-  runNodes: Array<{ nodeKind: string; status: string }>,
-  nodeKind: string,
-  statuses?: string[],
-) {
-  return runNodes.filter(
-    (node) => node.nodeKind === nodeKind && (!statuses || statuses.includes(node.status)),
-  ).length;
-}
-
-function resolveProjectionWinnerNodeId(
-  runNodes: Array<{ id: string; nodeKind: string; status: string }>,
-  orchestrationKind?: string | null,
-  winnerNodeId?: string | null,
-) {
-  if (orchestrationKind === "parallel") {
-    return winnerNodeId ?? null;
-  }
-
-  return (
-    winnerNodeId ??
-    runNodes.find((node) => node.nodeKind === "candidate" && node.status === "completed")?.id ??
-    runNodes.find((node) => node.nodeKind === "execution" && node.status === "completed")?.id ??
-    null
-  );
 }
 
 function buildTaskSnapshotProjectionValues(args: {
@@ -430,36 +406,28 @@ function buildTaskSnapshotProjectionValues(args: {
   projectId: string;
   currentStatus: "pending" | "running" | "paused" | "completed" | "failed" | "cancelled";
   orchestrationKind?: "single" | "parallel" | "sequential-chain" | null;
-  currentRunId?: string | null;
   currentSessionId?: string | null;
-  latestResult?: string | null;
   latestResultSummary?: string | null;
   latestErrorText?: string | null;
-  winnerNodeId?: string | null;
   lastActivityAt?: string | null;
   now: string;
   activeCandidateCount: number;
-  completedCandidateCount: number;
-  failedCandidateCount: number;
   totalChainSteps: number;
   completedChainSteps: number;
 }) {
   return {
     taskId: args.taskId,
     projectId: args.projectId,
-    currentStatus: args.currentStatus,
-    orchestrationKind: args.orchestrationKind ?? null,
-    currentRunId: args.currentRunId ?? null,
+    lifecycleStatus: toLifecycleStatus(args.currentStatus),
+    currentExecutionMode: args.orchestrationKind ?? null,
+    currentExecutionStatus: null as string | null,
     currentSessionId: args.currentSessionId ?? null,
-    latestResult: args.latestResult ?? null,
+    latestSessionId: args.currentSessionId ?? null,
     latestResultSummary: args.latestResultSummary ?? null,
     latestErrorText: args.latestErrorText ?? null,
     activeCandidateCount: args.activeCandidateCount,
-    completedCandidateCount: args.completedCandidateCount,
-    failedCandidateCount: args.failedCandidateCount,
     totalChainSteps: args.totalChainSteps,
     completedChainSteps: args.completedChainSteps,
-    winnerNodeId: args.winnerNodeId ?? null,
     lastActivityAt: args.lastActivityAt ?? args.now,
     updatedAt: args.now,
   };
@@ -470,54 +438,18 @@ async function syncTaskSnapshotProjection(args: {
   projectId: string;
   currentStatus: "pending" | "running" | "paused" | "completed" | "failed" | "cancelled";
   orchestrationKind?: "single" | "parallel" | "sequential-chain" | null;
-  currentRunId?: string | null;
   currentSessionId?: string | null;
-  latestResult?: string | null;
   latestResultSummary?: string | null;
   latestErrorText?: string | null;
-  winnerNodeId?: string | null;
   lastActivityAt?: string | null;
 }) {
-  const runNodes = args.currentRunId
-    ? await db
-        .select({
-          id: taskRunNodes.id,
-          nodeKind: taskRunNodes.nodeKind,
-          status: taskRunNodes.status,
-        })
-        .from(taskRunNodes)
-        .where(eq(taskRunNodes.runId, args.currentRunId))
-    : [];
-
-  const activeCandidateCount = countRunNodesByKindAndStatus(runNodes, "candidate", [
-    "pending",
-    "running",
-    "paused",
-  ]);
-  const completedCandidateCount = countRunNodesByKindAndStatus(runNodes, "candidate", [
-    "completed",
-  ]);
-  const failedCandidateCount = countRunNodesByKindAndStatus(runNodes, "candidate", [
-    "failed",
-    "cancelled",
-  ]);
-  const totalChainSteps = countRunNodesByKindAndStatus(runNodes, "chain-step");
-  const completedChainSteps = countRunNodesByKindAndStatus(runNodes, "chain-step", ["completed"]);
-  const winnerNodeId = resolveProjectionWinnerNodeId(
-    runNodes,
-    args.orchestrationKind,
-    args.winnerNodeId,
-  );
   const now = new Date().toISOString();
   const projectionValues = buildTaskSnapshotProjectionValues({
     ...args,
     now,
-    activeCandidateCount,
-    completedCandidateCount,
-    failedCandidateCount,
-    totalChainSteps,
-    completedChainSteps,
-    winnerNodeId,
+    activeCandidateCount: 0,
+    totalChainSteps: 0,
+    completedChainSteps: 0,
   });
 
   await db.insert(taskSnapshots).values(projectionValues).onConflictDoUpdate({
@@ -536,11 +468,8 @@ function getProjectionBaseStatus(
 async function syncSnapshotFromProjectionBase(args: {
   eventRecord: ProjectableTaskDomainEventRecord;
   currentSessionId?: string | null;
-  currentRunId?: string | null;
-  latestResult?: string | null;
   latestResultSummary?: string | null;
   latestErrorText?: string | null;
-  winnerNodeId?: string | null;
   lastActivityAt: string;
 }) {
   const { snapshotRecord, aggregateRecord } = await loadTaskProjectionBase(args.eventRecord.taskId);
@@ -548,20 +477,15 @@ async function syncSnapshotFromProjectionBase(args: {
   await syncTaskSnapshotProjection({
     taskId: args.eventRecord.taskId,
     projectId: args.eventRecord.projectId,
-    currentStatus: getProjectionBaseStatus(snapshotRecord?.currentStatus, aggregateRecord?.status),
-    orchestrationKind: snapshotRecord?.orchestrationKind ?? null,
-    currentRunId:
-      args.currentRunId ?? snapshotRecord?.currentRunId ?? aggregateRecord?.currentRunId ?? null,
+    currentStatus: getProjectionBaseStatus(snapshotRecord?.lifecycleStatus, aggregateRecord?.status),
+    orchestrationKind: (snapshotRecord?.currentExecutionMode as "single" | "parallel" | "sequential-chain" | null) ?? null,
     currentSessionId: args.currentSessionId ?? snapshotRecord?.currentSessionId ?? null,
-    latestResult:
-      args.latestResult ?? snapshotRecord?.latestResult ?? aggregateRecord?.latestResult ?? null,
     latestResultSummary:
       args.latestResultSummary ??
       snapshotRecord?.latestResultSummary ??
       aggregateRecord?.latestResultSummary ??
       null,
     latestErrorText: args.latestErrorText ?? snapshotRecord?.latestErrorText ?? null,
-    winnerNodeId: args.winnerNodeId ?? snapshotRecord?.winnerNodeId ?? null,
     lastActivityAt: args.lastActivityAt,
   });
 }
@@ -575,9 +499,7 @@ async function handleTaskAggregateUpsertedEvent(
     projectId: eventRecord.projectId,
     currentStatus: normalizeProjectionStatus(payload.status),
     orchestrationKind: normalizeProjectionOrchestrationKind(payload.executionMode),
-    currentRunId: asNullableString(payload.currentRunId),
     currentSessionId: asNullableString(payload.currentSessionId),
-    latestResult: asNullableString(payload.result),
     latestResultSummary:
       asNullableString(payload.resultSummary) ?? asNullableString(payload.result),
     latestErrorText: asNullableString(payload.latestErrorText),
@@ -589,8 +511,8 @@ async function handleTaskAggregateUpsertedEvent(
     projectId: eventRecord.projectId,
     taskId: eventRecord.taskId,
     sessionId: eventRecord.sessionId,
-    itemKind: "status-transition",
-    itemRole: asNullableString(payload.status),
+    itemKind: "task_lifecycle",
+    itemRole: null,
     title: "任务状态",
     displayText:
       asNullableString(payload.resultSummary) ??
@@ -617,7 +539,7 @@ async function handleConversationSessionUpsertedEvent(
     taskId: eventRecord.taskId,
     sessionId: eventRecord.sessionId,
     itemKind: sessionEvent.itemKind,
-    itemRole: asNullableString(payload.sourceType),
+    itemRole: null,
     title: sessionEvent.title,
     displayText: sessionEvent.displayText,
     metadataJson: {
@@ -664,7 +586,7 @@ async function upsertConversationMessagePartTimelineRecords(args: {
       sessionId: args.eventRecord.sessionId,
       messageId: args.timelineMessageId,
       itemKind,
-      itemRole: asNullableString(args.payload.role),
+      itemRole: normalizeMessageRole(args.payload.role),
       title: partTimeline.title,
       displayText: partTimeline.displayText,
       metadataJson: {
@@ -686,9 +608,7 @@ async function handleConversationMessageUpsertedEvent(
   const primaryItemKind = buildTimelineItemKindFromMessageRole(
     asNullableString(payload.role) ?? "assistant",
   );
-  const timelineMessageId = await resolveProjectionConversationMessageId(
-    asNullableString(payload.messageId),
-  );
+  const timelineMessageId = asNullableString(payload.messageId);
   const partSummaries = normalizeMessagePartSummaries(payload.partSummaries);
 
   await upsertTaskTimelineViewRecord({
@@ -698,7 +618,7 @@ async function handleConversationMessageUpsertedEvent(
     sessionId: eventRecord.sessionId,
     messageId: timelineMessageId,
     itemKind: primaryItemKind,
-    itemRole: asNullableString(payload.role),
+    itemRole: normalizeMessageRole(payload.role),
     title: asNullableString(payload.role),
     displayText: asNullableString(payload.textContent),
     metadataJson: {
@@ -741,16 +661,13 @@ async function handleTaskRunNodeUpsertedEvent(
     projectId: eventRecord.projectId,
     currentStatus: normalizeProjectionStatus(payload.status),
     orchestrationKind,
-    currentRunId: asNullableString(payload.taskRunId),
     currentSessionId: shouldPreserveMainline
       ? undefined
       : asNullableString(payload.runtimeSessionId),
-    latestResult: shouldPreserveMainline ? undefined : asNullableString(payload.result),
     latestResultSummary: shouldPreserveMainline
       ? undefined
       : asNullableString(payload.result),
     latestErrorText: asNullableString(payload.error),
-    winnerNodeId: explicitWinnerNodeId,
     lastActivityAt: asNullableString(payload.lastActivityAt) ?? eventRecord.createdAt,
   });
 
@@ -762,7 +679,7 @@ async function handleTaskRunNodeUpsertedEvent(
     runNodeId: asNullableString(payload.taskRunNodeId),
     sessionId: eventRecord.sessionId,
     itemKind: runNodeTimeline.itemKind,
-    itemRole: asNullableString(payload.status),
+    itemRole: null,
     title: runNodeTimeline.title,
     displayText: runNodeTimeline.displayText,
     metadataJson: {
@@ -823,6 +740,13 @@ export async function replayTaskDomainProjections(taskId: string) {
   await db.delete(taskTimelineViews).where(eq(taskTimelineViews.taskId, taskId));
   await db.delete(taskSnapshots).where(eq(taskSnapshots.taskId, taskId));
 
+  if (!taskDomainEvents) {
+    return {
+      taskId,
+      replayedEventCount: 0,
+    };
+  }
+
   const events = await db
     .select({
       id: taskDomainEvents.id,
@@ -868,6 +792,14 @@ export async function replayTaskDomainProjectionsByProject(projectId: string) {
 
   await db.delete(taskTimelineViews).where(inArray(taskTimelineViews.taskId, taskIds));
   await db.delete(taskSnapshots).where(inArray(taskSnapshots.taskId, taskIds));
+
+  if (!taskDomainEvents) {
+    return {
+      projectId,
+      replayedTaskCount: taskIds.length,
+      replayedEventCount: 0,
+    };
+  }
 
   const events = await db
     .select({

@@ -84,8 +84,6 @@ declare module 'vue' {
     ATypographyParagraph: typeof import('ant-design-vue/es')['TypographyParagraph']
     ATypographyText: typeof import('ant-design-vue/es')['TypographyText']
     ATypographyTitle: typeof import('ant-design-vue/es')['TypographyTitle']
-    BranchTree: typeof import('./components/BranchTree.vue')['default']
-    BranchTreeItem: typeof import('./components/BranchTreeItem.vue')['default']
     ChatComposer: typeof import('./components/task-detail-shared/ChatComposer.vue')['default']
     ChatMessageList: typeof import('./components/task-detail-shared/ChatMessageList.vue')['default']
     ConfirmationForm: typeof import('./components/ConfirmationForm.vue')['default']

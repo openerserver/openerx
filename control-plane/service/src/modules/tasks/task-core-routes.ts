@@ -1,9 +1,8 @@
 import { zValidator } from "@hono/zod-validator";
-import { desc, eq } from "drizzle-orm";
 import type { Hono } from "hono";
-import { db } from "../../db";
-import { agentRuns } from "../../db/schema";
+import { postgresSql } from "../../db";
 import type { AppEnv, JWTPayload } from "../../middleware/auth";
+import { requireRole } from "../../middleware/rbac";
 import type { TaskTreeSnapshot } from "../project-tree/storage";
 import type { TaskTreeRecord } from "../project-tree/task-view";
 import { type CreateTaskInput, createTaskSchema } from "./task-create";
@@ -59,15 +58,74 @@ export function registerTaskCoreRoutes(
     return c.json({ id: taskId, ...updates });
   });
 
-  taskRoutes.get("/:taskId/runs", async (c) => {
+  taskRoutes.delete("/:taskId", requireRole("org_admin"), async (c) => {
     const taskId = c.req.param("taskId");
 
-    const runs = await db
-      .select()
-      .from(agentRuns)
-      .where(eq(agentRuns.taskId, taskId))
-      .orderBy(desc(agentRuns.createdAt));
+    const [task] = await postgresSql<
+      Array<{ id: string; treeNodeId: string | null }>
+    >`select id, tree_node_id as "treeNodeId" from tasks where id = ${taskId}`;
+    if (!task) return c.json({ error: "Task not found" }, 404);
 
-    return c.json({ data: runs });
+    const sessionRows = await postgresSql<
+      Array<{ id: string; treeNodeId: string | null }>
+    >`select id, tree_node_id as "treeNodeId" from task_sessions where task_id = ${taskId}`;
+
+    const nodeIds = new Set<string>();
+    nodeIds.add(task.id);
+    if (task.treeNodeId) nodeIds.add(task.treeNodeId);
+    for (const s of sessionRows) {
+      nodeIds.add(s.id);
+      if (s.treeNodeId) nodeIds.add(s.treeNodeId);
+    }
+    const nodeIdList = Array.from(nodeIds);
+
+    await postgresSql.begin(async (transaction) => {
+      const tx = transaction as unknown as typeof postgresSql;
+
+      // leaf tables first
+      await tx`DELETE FROM task_message_parts WHERE message_id IN (SELECT id FROM task_messages WHERE task_id = ${taskId})`;
+      await tx`DELETE FROM task_timeline_views WHERE task_id = ${taskId}`;
+      await tx`DELETE FROM task_usage_ledger_entries WHERE task_id = ${taskId}`;
+      await tx`DELETE FROM task_artifacts WHERE task_id = ${taskId}`;
+      await tx`DELETE FROM task_operations WHERE task_id = ${taskId}`;
+      await tx`DELETE FROM session_operations WHERE task_id = ${taskId}`;
+      await tx`DELETE FROM task_message_events WHERE task_id = ${taskId}`;
+
+      // session messages / runs, then sessions (after clearing self-referencing FKs)
+      await tx`DELETE FROM task_messages WHERE task_id = ${taskId}`;
+      await tx`DELETE FROM task_session_runs WHERE task_id = ${taskId}`;
+      await tx`UPDATE task_sessions SET parent_session_id = NULL, root_session_id = NULL, judge_session_id = NULL, winner_session_id = NULL, forked_from_message_id = NULL WHERE task_id = ${taskId}`;
+      await tx`DELETE FROM task_snapshots WHERE task_id = ${taskId}`;
+      await tx`DELETE FROM task_sessions WHERE task_id = ${taskId}`;
+
+      // workflow / stage runs
+      await tx`DELETE FROM task_stage_runs WHERE workflow_run_id IN (SELECT id FROM task_workflow_runs WHERE task_id = ${taskId})`;
+      await tx`DELETE FROM task_workflow_runs WHERE task_id = ${taskId}`;
+
+      // domain tables referencing project_tree_nodes
+      await tx`DELETE FROM task_operating_modes WHERE task_id = ${taskId}`;
+      await tx`DELETE FROM boss_decisions WHERE task_id = ${taskId}`;
+      await tx`DELETE FROM human_escalations WHERE task_id = ${taskId}`;
+      await tx`DELETE FROM developer_change_requests WHERE task_id = ${taskId}`;
+      await tx`DELETE FROM role_aggregate_conclusions WHERE task_id = ${taskId}`;
+      await tx`DELETE FROM runtime_usage_ledger_steps WHERE task_id = ${taskId}`;
+      await tx`DELETE FROM runtime_usage_ledgers WHERE task_id = ${taskId}`;
+      await tx`DELETE FROM file_changes WHERE change_id IN (SELECT id FROM code_changes WHERE task_id = ${taskId})`;
+      await tx`DELETE FROM code_changes WHERE task_id = ${taskId}`;
+
+      // self-referencing FK on tasks
+      await tx`UPDATE tasks SET spawned_from_task_id = NULL WHERE spawned_from_task_id = ${taskId}`;
+      await tx`DELETE FROM tasks WHERE id = ${taskId}`;
+
+      // tree cleanup
+      if (nodeIdList.length > 0) {
+        await tx`UPDATE project_tree_nodes SET parent_id = NULL, superseded_by = NULL WHERE parent_id = ANY(${nodeIdList}::text[]) OR superseded_by = ANY(${nodeIdList}::text[])`;
+        await tx`DELETE FROM project_tree_links WHERE source_node_id = ANY(${nodeIdList}::text[]) OR target_node_id = ANY(${nodeIdList}::text[])`;
+        await tx`DELETE FROM project_tree_branches WHERE task_node_id = ANY(${nodeIdList}::text[]) OR head_node_id = ANY(${nodeIdList}::text[])`;
+        await tx`DELETE FROM project_tree_nodes WHERE id = ANY(${nodeIdList}::text[])`;
+      }
+    });
+
+    return c.json({ ok: true, id: taskId });
   });
 }

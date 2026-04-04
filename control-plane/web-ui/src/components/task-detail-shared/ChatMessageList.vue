@@ -5,7 +5,117 @@
     <a-empty v-else-if="items.length === 0" description="当前分支还没有可展示的消息" />
     <div v-else class="chat-message-list__items">
       <article v-for="item in items" :key="item.key" class="chat-message-card" :class="`chat-message-card--${item.role}`">
-        <template v-if="isParallelComparisonItem(item)">
+        <template v-if="isWorkflowItem(item)">
+          <div class="chat-message-card__workflow-group">
+            <div class="chat-message-card__workflow-header" @click="toggleWorkflowCollapse(item.key)">
+              <a-space size="small" wrap>
+                <a-tag :color="workflowTagColor(item)">{{ workflowTagLabel(item) }}</a-tag>
+                <a-typography-text type="secondary" class="chat-message-card__workflow-hint">
+                  {{ workflowHint(item) }}
+                </a-typography-text>
+              </a-space>
+              <a-button type="text" size="small">
+                {{ isWorkflowCollapsed(item.key) ? '展开详情' : '收起' }}
+              </a-button>
+            </div>
+
+            <div v-if="!isWorkflowCollapsed(item.key)" class="chat-message-card__workflow-steps">
+              <div
+                v-for="step in item.steps"
+                :key="step.sessionId"
+                class="chat-message-card__workflow-step"
+              >
+                <div class="chat-message-card__workflow-step-header" @click="toggleWorkflowStep(step.sessionId)">
+                  <a-space size="small" wrap>
+                    <a-tag color="geekblue">{{ step.agentName }}</a-tag>
+                    <a-typography-text type="secondary" style="font-size: 12px;">
+                      {{ step.items.length }} 条消息
+                    </a-typography-text>
+                  </a-space>
+                  <a-button type="text" size="small">
+                    {{ isWorkflowStepCollapsed(step.sessionId) ? '展开' : '收起' }}
+                  </a-button>
+                </div>
+
+                <div v-if="!isWorkflowStepCollapsed(step.sessionId)" class="chat-message-card__workflow-step-messages">
+                  <div
+                    v-for="entry in step.items"
+                    :key="entry.key"
+                    class="chat-message-card__workflow-entry"
+                    :class="`chat-message-card__workflow-entry--${entry.role}`"
+                  >
+                    <a-flex justify="space-between" align="center" style="margin-bottom: 6px;">
+                      <a-space size="small" wrap>
+                        <a-tag :color="roleColor(entry.role)" size="small">{{ messageRoleLabel(entry) }}</a-tag>
+                        <a-tag v-if="entry.model && entry.role === 'assistant'" color="geekblue" size="small">{{ entry.model }}</a-tag>
+                      </a-space>
+                      <a-typography-text v-if="entry.createdAt" type="secondary" class="chat-message-card__time">
+                        {{ formatTime(entry.createdAt) }}
+                      </a-typography-text>
+                    </a-flex>
+
+                    <div v-if="entry.toolCalls.length > 0" class="chat-message-card__tools">
+                      <div class="chat-message-card__tools-header">
+                        <span class="chat-message-card__tools-title">工具调用</span>
+                        <span class="chat-message-card__tools-count">{{ entry.toolCalls.length }} 次</span>
+                      </div>
+                      <div v-for="(tool, toolIndex) in entry.toolCalls" :key="tool.key" class="chat-tool-call">
+                        <a-flex justify="space-between" align="start" gap="small" wrap="wrap">
+                          <a-space size="small" wrap>
+                            <span class="chat-tool-call__index">{{ toolIndex + 1 }}.</span>
+                            <span class="chat-tool-call__label">{{ tool.label }}</span>
+                            <a-tag :color="tool.stateColor">{{ tool.stateLabel }}</a-tag>
+                          </a-space>
+                          <a-space size="small" wrap>
+                            <button
+                              v-if="tool.filePath"
+                              type="button"
+                              class="chat-tool-call__path-button"
+                              @click="emit('openFilePreview', { filePath: tool.filePath, content: tool.fileContent })"
+                            >
+                              {{ tool.filePath }}
+                            </button>
+                            <button
+                              v-if="toolDetailText(tool)"
+                              type="button"
+                              class="chat-tool-call__toggle"
+                              @click="toggleTool(tool.key)"
+                            >
+                              {{ isToolExpanded(tool.key) ? '收起详情' : '展开详情' }}
+                            </button>
+                          </a-space>
+                        </a-flex>
+                        <div v-if="isToolExpanded(tool.key) && toolCallText(tool)" class="chat-tool-call__line">
+                          <span class="chat-tool-call__field">调用</span>
+                          <span class="chat-tool-call__value">{{ toolCallText(tool) }}</span>
+                        </div>
+                        <div v-if="isToolExpanded(tool.key) && toolInputText(tool)" class="chat-tool-call__line chat-tool-call__line--stacked">
+                          <span class="chat-tool-call__field">参数</span>
+                          <pre class="chat-tool-call__detail chat-tool-call__detail--compact">{{ toolInputText(tool) }}</pre>
+                        </div>
+                        <div v-if="isToolExpanded(tool.key) && toolOutputText(tool)" class="chat-tool-call__line chat-tool-call__line--stacked">
+                          <span class="chat-tool-call__field">输出</span>
+                          <pre class="chat-tool-call__detail chat-tool-call__detail--compact">{{ toolOutputText(tool) }}</pre>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div
+                      v-if="entry.role === 'assistant' && entry.text && shouldRenderMarkdown(entry)"
+                      class="chat-message-card__markdown"
+                      v-html="render(sanitizeTextForDisplay(entry.role, entry.text))"
+                    ></div>
+                    <pre
+                      v-else-if="sanitizedItemText(entry)"
+                      class="chat-message-card__plain"
+                    >{{ sanitizedItemText(entry) }}</pre>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </template>
+        <template v-else-if="isParallelComparisonItem(item)">
           <div class="chat-message-card__parallel-group">
             <a-space size="small" wrap>
               <a-tag color="volcano">并行模型结果</a-tag>
@@ -185,7 +295,7 @@
           <a-flex justify="space-between" align="center" class="chat-message-card__header">
             <a-space size="small" wrap>
               <a-tag :color="roleColor(item.role)">{{ messageRoleLabel(item) }}</a-tag>
-              <a-tag v-if="item.agent" color="geekblue">{{ item.agent }}</a-tag>
+              <a-tag v-if="item.model && item.role === 'assistant'" color="geekblue">{{ item.model }}</a-tag>
               <a-tag v-if="item.isStreaming" color="processing" class="chat-message-card__streaming-tag">生成中</a-tag>
               <a-typography-text v-if="item.createdAt" type="secondary" class="chat-message-card__time">
                 {{ formatTime(item.createdAt) }}
@@ -249,6 +359,22 @@
             <span class="streaming-skeleton__dot">.</span>
             <span class="streaming-skeleton__dot">.</span>
           </div>
+          <template v-else-if="hasPromptDecomposition(item)">
+            <pre class="chat-message-card__plain">{{ userDisplayText(item) }}</pre>
+            <div v-if="item.finalSentText" class="chat-message-card__final-sent">
+              <button
+                type="button"
+                class="chat-message-card__final-sent-toggle"
+                @click="toggleFinalSent(item.key)"
+              >
+                {{ isFinalSentExpanded(item.key) ? '收起完整发送内容' : '查看完整发送内容' }}
+              </button>
+              <pre
+                v-if="isFinalSentExpanded(item.key)"
+                class="chat-message-card__plain chat-message-card__final-sent-content"
+              >{{ item.finalSentText }}</pre>
+            </div>
+          </template>
           <pre
             v-else-if="displayText(item) || sanitizedItemText(item) || (!item.toolCalls.length && !item.isStreaming)"
             class="chat-message-card__plain"
@@ -269,6 +395,7 @@ import type {
   TaskParallelComparisonCard,
   TaskConversationParallelItem,
   TaskConversationToolCallItem,
+  TaskConversationWorkflowItem,
 } from "../../lib/message-normalize";
 
 const props = defineProps<{
@@ -288,6 +415,9 @@ const scrollContainer = ref<HTMLElement | null>(null);
 const shouldAutoScroll = ref(true);
 const revealText = ref<Record<string, string>>({});
 const expandedTools = ref<Record<string, boolean>>({});
+const expandedFinalSent = ref<Record<string, boolean>>({});
+const collapsedWorkflows = ref<Record<string, boolean>>({});
+const collapsedWorkflowSteps = ref<Record<string, boolean>>({});
 const STREAMING_PLACEHOLDER_TEXT = "正在生成...";
 const AUTO_SCROLL_THRESHOLD_PX = 120;
 const REVEAL_INTERVAL_MS = 22;
@@ -300,7 +430,9 @@ const itemsSignature = computed(() =>
     .map((item) =>
       isParallelComparisonItem(item)
         ? `${item.key}:${item.candidates.map((candidate) => `${candidate.key}:${candidate.status}:${candidate.items.map((entry) => `${entry.key}:${entry.text || ""}:${entry.toolCalls.length}`).join("!")}`).join("~")}`
-        : `${item.key}:${item.text || ""}:${item.isStreaming ? 1 : 0}`,
+        : isWorkflowItem(item)
+          ? `${item.key}:workflow:${item.steps.length}`
+          : `${item.key}:${item.text || ""}:${item.isStreaming ? 1 : 0}`,
     )
     .join("|"),
 );
@@ -309,6 +441,7 @@ function roleColor(role: string) {
   if (role === "assistant") return "cyan";
   if (role === "user") return "gold";
   if (role === "tool") return "purple";
+  if (role === "workflow") return "blue";
   if (role === "parallel") return "volcano";
   return "default";
 }
@@ -317,6 +450,7 @@ function roleLabel(role: string) {
   if (role === "assistant") return "模型回复";
   if (role === "user") return "用户输入";
   if (role === "tool") return "工具输出";
+  if (role === "workflow") return "工作流消息";
   if (role === "parallel") return "并行回复";
   return role || "系统";
 }
@@ -343,6 +477,48 @@ function isParallelComparisonItem(
   item: TaskConversationListItem,
 ): item is TaskConversationParallelItem {
   return item.role === "parallel";
+}
+
+function isWorkflowItem(
+  item: TaskConversationListItem,
+): item is TaskConversationWorkflowItem {
+  return item.role === "workflow";
+}
+
+function isWorkflowCollapsed(key: string) {
+  return collapsedWorkflows.value[key] === true;
+}
+
+function workflowTagLabel(item: TaskConversationWorkflowItem) {
+  return item.label || (item.variant === "context" ? "工作流消息" : "工作流调度");
+}
+
+function workflowTagColor(item: TaskConversationWorkflowItem) {
+  return item.variant === "context" ? "blue" : "purple";
+}
+
+function workflowHint(item: TaskConversationWorkflowItem) {
+  if (item.hint) {
+    return item.hint;
+  }
+
+  if (item.variant === "context") {
+    return "当前阶段与执行上下文";
+  }
+
+  return `${item.steps.length} 个子 Agent 执行`;
+}
+
+function toggleWorkflowCollapse(key: string) {
+  collapsedWorkflows.value = { ...collapsedWorkflows.value, [key]: !collapsedWorkflows.value[key] };
+}
+
+function isWorkflowStepCollapsed(sessionId: string) {
+  return collapsedWorkflowSteps.value[sessionId] === true;
+}
+
+function toggleWorkflowStep(sessionId: string) {
+  collapsedWorkflowSteps.value = { ...collapsedWorkflowSteps.value, [sessionId]: !collapsedWorkflowSteps.value[sessionId] };
 }
 
 function candidateStatusLabel(status: string | undefined) {
@@ -558,7 +734,7 @@ function syncReveal() {
   let nextDelay = REVEAL_INTERVAL_MS;
 
   for (const item of props.items) {
-    if (isParallelComparisonItem(item)) {
+    if (isParallelComparisonItem(item) || isWorkflowItem(item)) {
       continue;
     }
 
@@ -670,6 +846,28 @@ function toggleTool(key: string) {
   };
 }
 
+function isFinalSentExpanded(key: string) {
+  return expandedFinalSent.value[key] === true;
+}
+
+function toggleFinalSent(key: string) {
+  expandedFinalSent.value = {
+    ...expandedFinalSent.value,
+    [key]: !expandedFinalSent.value[key],
+  };
+}
+
+function hasPromptDecomposition(item: TaskConversationMessageItem) {
+  return item.role === "user" && Boolean(item.userInputText);
+}
+
+function userDisplayText(item: TaskConversationMessageItem) {
+  if (hasPromptDecomposition(item)) {
+    return item.userInputText!;
+  }
+  return sanitizedItemText(item) || item.text || "";
+}
+
 function buildToolCopyText(tool: TaskConversationToolCallItem) {
   return [
     `工具: ${tool.label}`,
@@ -684,7 +882,7 @@ function buildToolCopyText(tool: TaskConversationToolCallItem) {
 }
 
 function canCopy(item: TaskConversationListItem) {
-  if (isParallelComparisonItem(item)) {
+  if (isParallelComparisonItem(item) || isWorkflowItem(item)) {
     return false;
   }
   return Boolean(displayText(item) || sanitizedItemText(item) || item.toolCalls.length);
@@ -843,6 +1041,41 @@ onBeforeUnmount(() => {
 .chat-message-card__markdown {
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+.chat-message-card__final-sent {
+  margin-top: 8px;
+  border-top: 1px dashed #e8e8e8;
+  padding-top: 6px;
+}
+
+.chat-message-card__final-sent-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 0;
+  border: none;
+  background: none;
+  color: rgba(0, 0, 0, 0.45);
+  font-size: 12px;
+  cursor: pointer;
+  transition: color 0.2s;
+}
+
+.chat-message-card__final-sent-toggle:hover {
+  color: #1677ff;
+}
+
+.chat-message-card__final-sent-content {
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.02);
+  border: 1px solid #f0f0f0;
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.55);
+  max-height: 300px;
+  overflow-y: auto;
 }
 
 .chat-message-card__plain--streaming {
@@ -1209,5 +1442,119 @@ onBeforeUnmount(() => {
   100% {
     transform: translateX(100%);
   }
+}
+
+/* ---- Workflow group ---- */
+.chat-message-card--workflow {
+  background: linear-gradient(180deg, #f9f5ff 0%, #ffffff 100%);
+  border-color: #d3adf7;
+}
+
+.chat-message-card__workflow-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.chat-message-card__workflow-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  user-select: none;
+}
+
+.chat-message-card__workflow-hint {
+  font-size: 12px;
+}
+
+.chat-message-card__workflow-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-left: 12px;
+  border-left: 2px solid #d3adf7;
+}
+
+.chat-message-card__workflow-step {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.chat-message-card__workflow-step-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  user-select: none;
+  padding: 4px 0;
+}
+
+.chat-message-card__workflow-step-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-left: 14px;
+  position: relative;
+}
+
+.chat-message-card__workflow-step-messages::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 2px;
+  bottom: 2px;
+  width: 1px;
+  background: linear-gradient(180deg, rgba(140, 140, 140, 0.1) 0%, rgba(140, 140, 140, 0.35) 18%, rgba(140, 140, 140, 0.35) 82%, rgba(140, 140, 140, 0.1) 100%);
+}
+
+.chat-message-card__workflow-entry {
+  position: relative;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid #ececec;
+  background: #ffffff;
+  box-shadow: 0 1px 0 rgba(15, 23, 42, 0.03);
+}
+
+.chat-message-card__workflow-entry::before {
+  content: "";
+  position: absolute;
+  left: -13px;
+  top: 14px;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: #ffffff;
+  border: 2px solid #d9d9d9;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.9);
+}
+
+.chat-message-card__workflow-entry--assistant {
+  background: linear-gradient(180deg, #f8fcff 0%, #ffffff 100%);
+  border-left: 3px solid #91caff;
+}
+
+.chat-message-card__workflow-entry--assistant::before {
+  border-color: #91caff;
+}
+
+.chat-message-card__workflow-entry--tool {
+  background: linear-gradient(180deg, #fcf8ff 0%, #ffffff 100%);
+  border-left: 3px solid #c8a6ff;
+}
+
+.chat-message-card__workflow-entry--tool::before {
+  border-color: #c8a6ff;
+}
+
+.chat-message-card__workflow-entry--user {
+  background: linear-gradient(180deg, #fffaf0 0%, #ffffff 100%);
+  border-left: 3px solid #f7c97f;
+}
+
+.chat-message-card__workflow-entry--user::before {
+  border-color: #f7c97f;
 }
 </style>

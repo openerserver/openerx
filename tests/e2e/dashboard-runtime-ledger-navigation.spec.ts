@@ -279,7 +279,7 @@ async function installDashboardToTaskDetailMocks(page: Page) {
     await fulfillJson(route, buildTask("task-alpha-1"));
   });
 
-  await page.route("**/api/tasks/task-alpha-1/branches", async (route) => {
+  await page.route("**/api/tasks/task-alpha-1/sessions", async (route) => {
     await fulfillJson(route, {
       data: [
         {
@@ -294,7 +294,7 @@ async function installDashboardToTaskDetailMocks(page: Page) {
     });
   });
 
-  await page.route("**/api/tasks/task-alpha-1/branch-lineage", async (route) => {
+  await page.route("**/api/tasks/task-alpha-1/session-lineage", async (route) => {
     await fulfillJson(route, {
       data: [
         {

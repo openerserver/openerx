@@ -1,39 +1,46 @@
 import { and, asc, eq, inArray } from "drizzle-orm";
 import { db } from "../../db";
-import { taskTimelineViews } from "../../db/schema";
+import { taskSessions, taskTimelineViews } from "../../db/schema";
 import {
-  buildConversationSessionId,
-  buildTaskBranchLineagePath,
-  listTaskBranchCompatTreeRecords,
-  normalizeTaskBranchLineageRecords,
-} from "./task-branch-compat-read";
+  buildTaskSessionIdAliases,
+  buildTaskSessionLineagePath,
+  resolveTaskSessionRecordId,
+} from "./task-session-read";
 
 export async function buildTaskProjectionTimelineViewResponse(args: {
   taskId: string;
   projectId: string;
-  runtimeSessionId?: string | null;
+  sessionId?: string | null;
   includeLineage: boolean;
 }) {
   let lineagePath: string[] = [];
-  if (args.runtimeSessionId) {
+  if (args.sessionId) {
+    const rows = await db
+      .select({
+        id: taskSessions.id,
+        parentSessionId: taskSessions.parentSessionId,
+        runtimeSessionId: taskSessions.runtimeSessionId,
+      })
+      .from(taskSessions)
+      .where(eq(taskSessions.taskId, args.taskId))
+      .orderBy(asc(taskSessions.createdAt));
+    const selectedSessionId = resolveTaskSessionRecordId(rows, args.sessionId) ?? args.sessionId;
+
     if (!args.includeLineage) {
-      lineagePath = [args.runtimeSessionId];
+      lineagePath = [selectedSessionId];
     } else {
-      const rows = await listTaskBranchCompatTreeRecords(args.taskId, args.projectId);
-      lineagePath = buildTaskBranchLineagePath(
-        normalizeTaskBranchLineageRecords(rows),
-        args.runtimeSessionId,
-      ).map((record) => record.runtimeSessionId);
+      lineagePath = buildTaskSessionLineagePath(rows, selectedSessionId);
     }
   }
 
-  const sessionIds = lineagePath.map((runtimeSessionId) =>
-    buildConversationSessionId(args.taskId, runtimeSessionId),
-  );
-
   const filters = [eq(taskTimelineViews.taskId, args.taskId)];
-  if (sessionIds.length > 0) {
-    filters.push(inArray(taskTimelineViews.sessionId, sessionIds));
+  if (lineagePath.length > 0) {
+    filters.push(
+      inArray(
+        taskTimelineViews.sessionId,
+        Array.from(new Set(lineagePath.flatMap((sessionId) => buildTaskSessionIdAliases(sessionId)))),
+      ),
+    );
   }
 
   const data = await db
@@ -41,10 +48,10 @@ export async function buildTaskProjectionTimelineViewResponse(args: {
       id: taskTimelineViews.id,
       taskId: taskTimelineViews.taskId,
       projectId: taskTimelineViews.projectId,
-      runId: taskTimelineViews.runId,
-      runNodeId: taskTimelineViews.runNodeId,
       sessionId: taskTimelineViews.sessionId,
       messageId: taskTimelineViews.messageId,
+      operationId: taskTimelineViews.operationId,
+      artifactId: taskTimelineViews.artifactId,
       itemKind: taskTimelineViews.itemKind,
       itemRole: taskTimelineViews.itemRole,
       title: taskTimelineViews.title,
@@ -52,6 +59,7 @@ export async function buildTaskProjectionTimelineViewResponse(args: {
       metadataJson: taskTimelineViews.metadataJson,
       sortAt: taskTimelineViews.sortAt,
       createdAt: taskTimelineViews.createdAt,
+      updatedAt: taskTimelineViews.updatedAt,
     })
     .from(taskTimelineViews)
     .where(and(...filters))
@@ -60,11 +68,11 @@ export async function buildTaskProjectionTimelineViewResponse(args: {
   return {
     data,
     meta: {
-      readSource: "task-domain-projection" as const,
+      readSource: "task-session-projection" as const,
       includeLineage: args.includeLineage,
       lineagePath,
       itemCount: data.length,
-      cachedSessionCount: sessionIds.length,
+      cachedSessionCount: lineagePath.length,
       complete: data.length > 0,
       cacheState: data.length > 0 ? ("complete" as const) : ("none" as const),
     },

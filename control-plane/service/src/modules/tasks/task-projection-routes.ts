@@ -73,7 +73,7 @@ export function registerTaskProjectionRoutes(
     buildTaskProjectionTimelineViewResponse: (args: {
       taskId: string;
       projectId: string;
-      runtimeSessionId?: string | null;
+      sessionId?: string | null;
       includeLineage: boolean;
     }) => Promise<unknown>;
     replayTaskDomainProjections: (taskId: string) => Promise<Record<string, unknown>>;
@@ -101,7 +101,12 @@ export function registerTaskProjectionRoutes(
 
   taskRoutes.get("/:taskId/timeline-view", async (c) => {
     const taskId = c.req.param("taskId");
-    const runtimeSessionId = c.req.query("runtimeSessionId") || null;
+    const runtimeSessionId = c.req.query("runtimeSessionId");
+    if (runtimeSessionId) {
+      return c.json({ error: "runtimeSessionId query has been removed; use sessionId." }, 410);
+    }
+
+    const sessionId = c.req.query("sessionId") || null;
     const includeLineage = c.req.query("includeLineage") !== "false";
 
     const task = await deps.loadTaskTreeBackedRecord(taskId);
@@ -110,7 +115,7 @@ export function registerTaskProjectionRoutes(
     const response = await deps.buildTaskProjectionTimelineViewResponse({
       taskId,
       projectId: task.projectId,
-      runtimeSessionId,
+      sessionId,
       includeLineage,
     });
 

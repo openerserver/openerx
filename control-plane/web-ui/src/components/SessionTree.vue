@@ -6,7 +6,7 @@
         v-for="node in treeNodes"
         :key="node.runtimeSessionId"
         :node="node"
-        :selected-branch-session-id="selectedBranchSessionId"
+        :selected-session-id="selectedSessionId"
         :task-status="taskStatus"
         :session-state-map="sessionStateMap"
         :depth="0"
@@ -22,15 +22,15 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
-import type { TaskBranchLineageNode } from "../lib/api";
+import type { TaskSessionLineageNode } from "../lib/api";
 
 defineOptions({
-  name: "BranchTree",
+  name: "SessionTree",
 });
 
 const props = defineProps<{
-  tree: TaskBranchLineageNode[];
-  selectedBranchSessionId?: string;
+  tree: TaskSessionLineageNode[];
+  selectedSessionId?: string;
   taskStatus?: string;
   sessionStateMap?: Record<
     string,
@@ -51,12 +51,12 @@ const emit = defineEmits<{
   (e: "archive", sessionId: string): void;
 }>();
 
-type DisplayNode = TaskBranchLineageNode & { children: DisplayNode[]; _originalIndex: number };
+type DisplayNode = TaskSessionLineageNode & { children: DisplayNode[]; _originalIndex: number };
 
 const treeNodes = computed(() => buildDisplayTree(props.tree));
 
-function buildDisplayTree(nodes: TaskBranchLineageNode[]): TaskBranchLineageNode[] {
-  const flatNodes = flattenBranchNodes(nodes);
+function buildDisplayTree(nodes: TaskSessionLineageNode[]): TaskSessionLineageNode[] {
+  const flatNodes = flattenSessionNodes(nodes);
   if (flatNodes.length <= 1) {
     return nodes;
   }
@@ -105,12 +105,12 @@ function buildDisplayTree(nodes: TaskBranchLineageNode[]): TaskBranchLineageNode
   return roots;
 }
 
-function flattenBranchNodes(nodes: TaskBranchLineageNode[]): TaskBranchLineageNode[] {
-  const result: TaskBranchLineageNode[] = [];
+function flattenSessionNodes(nodes: TaskSessionLineageNode[]): TaskSessionLineageNode[] {
+  const result: TaskSessionLineageNode[] = [];
   for (const node of nodes) {
     result.push(node);
     if (node.children.length > 0) {
-      result.push(...flattenBranchNodes(node.children));
+      result.push(...flattenSessionNodes(node.children));
     }
   }
   return result;

@@ -30,17 +30,12 @@ import {
   recordModelUsage,
 } from "../agent-control/run-persistence";
 import { collectChangesFromSession } from "../code-changes/change-collector";
-import {
-  executeLifecycleHooks,
-  mergeStageAndStrategyHooks,
-  parseStageHooks,
-} from "../hooks/lifecycle-hooks";
+import { executeLifecycleHooks } from "../hooks/lifecycle-hooks";
 import { finalizeTaskState } from "../tasks/finalize";
-import { persistBranchCompatMessageSnapshot } from "../tasks/task-session-compat";
 import {
-  fetchCurrentStageHooks,
-  persistWorkflowStageExecutionOutcome,
-} from "../tasks/workflow-stage-execution";
+  persistTaskSessionMessageSnapshot,
+  upsertTaskSessionLineageRecord,
+} from "../tasks/task-session-compat";
 import { observeGraphWorkspaceDir, onGraphToolExecuted } from "./dag-sync";
 import { buildPipelineStageUpdatedEvents } from "./pipeline-events";
 
@@ -176,10 +171,18 @@ class SSEAggregator {
       authorization: string;
       projectId?: string;
       projectionBacked?: boolean;
+      operationId?: string;
     }
   >();
   // Maps sessionId → { taskId, stepIndex } for chain step sessions
   private sessionToChainStepMap = new Map<string, { taskId: string; stepIndex: number }>();
+
+  // ── Persistent session → task cache ─────────────────────────────
+  // Survives across SSE reconnections. Populated from agent runs,
+  // candidate/chain maps, and DB lookups. Used as fallback when the
+  // in-memory agentRunRegistry has no mapping (e.g. after BFF restart).
+  private sessionToTaskCache = new Map<string, { taskId: string; projectId?: string }>();
+  private pendingSessionLookups = new Map<string, Promise<{ taskId: string; projectId?: string } | null>>();
 
   private isPaidExecutionBreakerTripped(taskId: string): boolean {
     return this.paidExecutionRuntime.get(taskId)?.tripped === true;
@@ -437,12 +440,13 @@ class SSEAggregator {
     sessionId: string,
     plan: RuntimePlan,
     authorization: string,
-    options?: { projectionBacked?: boolean },
+    options?: { projectionBacked?: boolean; operationId?: string },
   ): void {
     this.sequentialChainTasks.set(taskId, {
       plan,
       authorization,
       projectionBacked: options?.projectionBacked === true,
+      operationId: options?.operationId,
     });
     const stepIndex = plan.currentChainStepIndex ?? 0;
     this.sessionToChainStepMap.set(sessionId, { taskId, stepIndex });
@@ -454,12 +458,6 @@ class SSEAggregator {
     authorization: string,
   ): Promise<void> {
     const strategyConfig = readOrchestrationStrategy();
-
-    // Merge stage-level hooks with strategy-level hooks
-    const rawStageHooks = await fetchCurrentStageHooks(taskId, authorization);
-    const stageHooks = parseStageHooks(rawStageHooks);
-    const mergedHooks = mergeStageAndStrategyHooks(stageHooks, strategyConfig.hooks);
-    const mergedStrategy: typeof strategyConfig = { ...strategyConfig, hooks: mergedHooks };
 
     const taskResult = await cpFetch<CompletedTaskContext>(
       `/api/project-tree/tasks/${encodeURIComponent(taskId)}`,
@@ -494,7 +492,7 @@ class SSEAggregator {
     }
 
     const hookResult = await executeLifecycleHooks({
-      strategy: mergedStrategy,
+      strategy: strategyConfig,
       trigger: "post-execution",
       taskId: task.id,
       projectId: task.projectId,
@@ -988,8 +986,16 @@ class SSEAggregator {
   }
 
   private async persistSessionMessageSnapshot(event: RealtimeEvent): Promise<void> {
-    if (event.type !== "message.updated" || !event.taskId || !event.sessionId) {
+    if (event.type !== "message.updated" || !event.sessionId) {
       return;
+    }
+
+    // Resolve taskId: prefer event-level, then try DB-backed fallback
+    let taskId = event.taskId;
+    if (!taskId) {
+      const resolved = await this.resolveTaskForSession(event.sessionId);
+      if (!resolved) return;
+      taskId = resolved.taskId;
     }
 
     const rawType = typeof event.data.rawType === "string" ? event.data.rawType : undefined;
@@ -1019,11 +1025,315 @@ class SSEAggregator {
       }
     }
 
+    const message = await this.resolvePersistableMessageSnapshot(event);
+    if (!message) {
+      return;
+    }
+
+    // For user messages: rewrite ID to match the explicit write's deterministic
+    // ID so the DB upsert merges into the same row. Also inject the runtime's
+    // full text as promptDecomposition.finalSentText so the tree API can expose
+    // user-input vs system-context vs final-sent separately.
+    const messageRole = this.extractMessageRole(message);
+    if (messageRole === "user" && event.sessionId) {
+      const runtimeText = this.extractMessageText(message);
+      const info =
+        typeof message.info === "object" && message.info
+          ? (message.info as Record<string, unknown>)
+          : null;
+      if (info) {
+        info.id = `${event.sessionId}:user-prompt`;
+      }
+      if (runtimeText) {
+        const existing =
+          typeof message.promptDecomposition === "object" && message.promptDecomposition
+            ? (message.promptDecomposition as Record<string, unknown>)
+            : {};
+        message.promptDecomposition = {
+          ...existing,
+          finalSentText: runtimeText,
+        };
+      }
+    }
+
     const authorization = await createInternalAuthorization();
-    await persistBranchCompatMessageSnapshot(event.taskId, authorization, {
+    await persistTaskSessionMessageSnapshot(taskId, authorization, {
       runtimeSessionId: event.sessionId,
-      message: event.data,
+      message,
     });
+  }
+
+  private extractMessageRole(message: Record<string, unknown>): string | null {
+    const info =
+      typeof message.info === "object" && message.info
+        ? (message.info as Record<string, unknown>)
+        : null;
+    const role = typeof message.role === "string"
+      ? message.role
+      : typeof info?.role === "string"
+        ? info.role
+        : null;
+    return role;
+  }
+
+  private extractMessageText(message: Record<string, unknown>): string | null {
+    if (typeof message.textContent === "string" && message.textContent) {
+      return message.textContent;
+    }
+    if (typeof message.text === "string" && message.text) {
+      return message.text;
+    }
+    if (typeof message.content === "string" && message.content) {
+      return message.content;
+    }
+    if (Array.isArray(message.parts)) {
+      for (const part of message.parts) {
+        if (part && typeof part === "object" && typeof (part as Record<string, unknown>).text === "string") {
+          return (part as Record<string, unknown>).text as string;
+        }
+      }
+    }
+    return null;
+  }
+
+  private extractToolIdentity(data: Record<string, unknown>): string | undefined {
+    const properties =
+      typeof data.properties === "object" && data.properties
+        ? (data.properties as Record<string, unknown>)
+        : undefined;
+    const candidates = [
+      data.callID,
+      data.callId,
+      data.toolCallId,
+      data.id,
+      properties?.callID,
+      properties?.callId,
+      properties?.toolCallId,
+      properties?.id,
+    ];
+    for (const candidate of candidates) {
+      if (typeof candidate === "string" && candidate.trim().length > 0) {
+        return candidate.trim();
+      }
+    }
+
+    return undefined;
+  }
+
+  private buildPersistableToolMessageSnapshot(event: RealtimeEvent): Record<string, unknown> | null {
+    if (
+      (event.type !== "tool.execute.before" && event.type !== "tool.execute.after") ||
+      !event.sessionId
+    ) {
+      return null;
+    }
+
+    const properties =
+      typeof event.data.properties === "object" && event.data.properties
+        ? (event.data.properties as Record<string, unknown>)
+        : undefined;
+    const toolName =
+      this.readToolName(event.data) ||
+      (typeof properties?.toolName === "string" ? properties.toolName : undefined);
+    if (!toolName) {
+      return null;
+    }
+
+    const toolIdentity =
+      this.extractToolIdentity(event.data) ||
+      `${event.sessionId}:${toolName}`;
+    const resultText =
+      typeof properties?.result === "string"
+        ? properties.result
+        : typeof event.data.result === "string"
+          ? event.data.result
+          : undefined;
+    const errorText =
+      typeof properties?.error === "string"
+        ? properties.error
+        : typeof event.data.error === "string"
+          ? event.data.error
+          : undefined;
+    const inputValue = properties?.input ?? event.data.input ?? properties?.arguments ?? event.data.arguments;
+    const status =
+      event.type === "tool.execute.before"
+        ? "running"
+        : errorText
+          ? "error"
+          : "completed";
+
+    return {
+      id: `tool:${toolIdentity}`,
+      role: "tool",
+      info: {
+        id: `tool:${toolIdentity}`,
+        role: "tool",
+        sessionID: event.sessionId,
+        time: {
+          created: event.ts,
+          ...(event.type === "tool.execute.after" ? { completed: event.ts } : {}),
+        },
+      },
+      part: {
+        id: `tool-part:${toolIdentity}`,
+        type: "tool",
+        tool: toolName,
+        toolName,
+        callID: toolIdentity,
+        sessionID: event.sessionId,
+        messageID: `tool:${toolIdentity}`,
+        ...(inputValue !== undefined ? { input: inputValue } : {}),
+        state: {
+          status,
+          ...(resultText !== undefined ? { output: resultText } : {}),
+          ...(errorText !== undefined ? { error: errorText } : {}),
+        },
+      },
+    };
+  }
+
+  private async persistToolExecutionSnapshot(event: RealtimeEvent): Promise<void> {
+    if (
+      (event.type !== "tool.execute.before" && event.type !== "tool.execute.after") ||
+      !event.sessionId
+    ) {
+      return;
+    }
+
+    let taskId = event.taskId;
+    if (!taskId) {
+      const resolved = await this.resolveTaskForSession(event.sessionId);
+      if (!resolved) {
+        return;
+      }
+      taskId = resolved.taskId;
+    }
+
+    const message = this.buildPersistableToolMessageSnapshot(event);
+    if (!message) {
+      return;
+    }
+
+    const authorization = await createInternalAuthorization();
+    await persistTaskSessionMessageSnapshot(taskId, authorization, {
+      runtimeSessionId: event.sessionId,
+      message,
+    });
+  }
+
+  private hasInlineMessageContent(message: Record<string, unknown>) {
+    const textCandidates = [message.textContent, message.text, message.summaryText, message.content];
+    if (textCandidates.some((value) => typeof value === "string" && value.trim().length > 0)) {
+      return true;
+    }
+
+    return Array.isArray(message.parts) && message.parts.length > 0;
+  }
+
+  private extractRealtimeMessageId(message: Record<string, unknown>) {
+    const info =
+      typeof message.info === "object" && message.info
+        ? (message.info as Record<string, unknown>)
+        : null;
+    const part =
+      typeof message.part === "object" && message.part
+        ? (message.part as Record<string, unknown>)
+        : null;
+
+    const candidates = [message.id, message.messageID, info?.id, part?.messageID, part?.messageId];
+    for (const candidate of candidates) {
+      if (typeof candidate === "string" && candidate.trim().length > 0) {
+        return candidate.trim();
+      }
+    }
+
+    return null;
+  }
+
+  private async loadRuntimeMessageSnapshot(
+    sessionId: string,
+    messageId: string,
+  ): Promise<Record<string, unknown> | null> {
+    const messagesResult = await getSessionMessages(sessionId, {
+      includeLineage: false,
+      bypassCircuitBreaker: true,
+    });
+    if (!messagesResult.ok || !Array.isArray(messagesResult.data)) {
+      return null;
+    }
+
+    for (const entry of messagesResult.data) {
+      if (!entry || typeof entry !== "object") {
+        continue;
+      }
+
+      const record = entry as Record<string, unknown>;
+      const info =
+        typeof record.info === "object" && record.info
+          ? (record.info as Record<string, unknown>)
+          : null;
+      if (info?.id === messageId || record.id === messageId) {
+        return record;
+      }
+    }
+
+    return null;
+  }
+
+  private async resolvePersistableMessageSnapshot(
+    event: RealtimeEvent,
+  ): Promise<Record<string, unknown> | null> {
+    if (!event.sessionId) {
+      return null;
+    }
+
+    const rawType = typeof event.data.rawType === "string" ? event.data.rawType : undefined;
+    const messageId = this.extractRealtimeMessageId(event.data);
+    const shouldHydrateFromRuntime =
+      rawType === "message.part.updated" || !this.hasInlineMessageContent(event.data);
+
+    if (shouldHydrateFromRuntime && messageId) {
+      const runtimeMessage = await this.loadRuntimeMessageSnapshot(event.sessionId, messageId);
+      if (runtimeMessage) {
+        return runtimeMessage;
+      }
+
+      if (rawType === "message.part.updated") {
+        return null;
+      }
+    }
+
+    return event.data;
+  }
+
+  /**
+   * Resolve taskId for a session via local cache or service DB lookup.
+   */
+  private async resolveTaskForSession(
+    sessionId: string,
+  ): Promise<{ taskId: string; projectId?: string } | null> {
+    const cached = this.sessionToTaskCache.get(sessionId);
+    if (cached) return cached;
+
+    // DB lookup via service (deduplicate concurrent requests)
+    let pending = this.pendingSessionLookups.get(sessionId);
+    if (!pending) {
+      pending = cpFetch<{ taskId: string; projectId: string }>(
+        `/api/tasks/lookup/session-task/${encodeURIComponent(sessionId)}`,
+        { authorization: await createInternalAuthorization() },
+      ).then((result) => {
+        this.pendingSessionLookups.delete(sessionId);
+        if (result.ok && result.data?.taskId) {
+          const entry = { taskId: result.data.taskId, projectId: result.data.projectId };
+          this.sessionToTaskCache.set(sessionId, entry);
+          return entry;
+        }
+        return null;
+      });
+      this.pendingSessionLookups.set(sessionId, pending);
+    }
+
+    return pending;
   }
 
   private async maybeSyncDag(
@@ -1198,6 +1508,7 @@ class SSEAggregator {
     const event = payload
       ? this.transformEvent(String(payload.type || type), {
           ...parsed,
+          ...payload,
           ...(typeof payload.sessionId === "string" ? { sessionId: payload.sessionId } : {}),
           ...(typeof payload.sessionID === "string" ? { sessionID: payload.sessionID } : {}),
           ...(typeof payload.properties === "object" && payload.properties
@@ -1208,10 +1519,18 @@ class SSEAggregator {
       : this.transformEvent(type, parsed);
 
     if (event) {
+      for (const derivedEvent of this.buildTaskDomainEvents(event)) {
+        this.emit(derivedEvent);
+      }
       this.emit(event);
       if (event.type === "message.updated") {
         void this.persistSessionMessageSnapshot(event).catch((error) => {
           console.error(`Failed to persist message snapshot for task ${event.taskId}:`, error);
+        });
+      }
+      if (event.type === "tool.execute.before" || event.type === "tool.execute.after") {
+        void this.persistToolExecutionSnapshot(event).catch((error) => {
+          console.error(`Failed to persist tool snapshot for task ${event.taskId}:`, error);
         });
       }
       if (event.type === "tool.execute.after") {
@@ -1231,6 +1550,94 @@ class SSEAggregator {
       }
       void this.maybeFinalizeRun(event);
     }
+  }
+
+  private buildTaskDomainEvents(event: RealtimeEvent): RealtimeEvent[] {
+    const asRecord = (value: unknown): Record<string, unknown> | null =>
+      value && typeof value === "object" && !Array.isArray(value)
+        ? (value as Record<string, unknown>)
+        : null;
+    const asString = (value: unknown): string | undefined =>
+      typeof value === "string" && value.length > 0 ? value : undefined;
+
+    if (event.type === "message.updated") {
+      const rawType = asString(event.data.rawType) ?? event.type;
+
+      if (rawType === "message.updated") {
+        const message = asRecord(event.data.info);
+        const messageId = asString(message?.id);
+        if (!message || !messageId) {
+          return [];
+        }
+
+        return [
+          {
+            id: crypto.randomUUID(),
+            type: "task.message.updated",
+            ts: event.ts,
+            projectId: event.projectId,
+            taskId: event.taskId,
+            sessionId: event.sessionId,
+            agentRunId: event.agentRunId,
+            data: {
+              message,
+              reason: rawType,
+            },
+          },
+        ];
+      }
+
+      if (rawType === "message.part.updated") {
+        const part = asRecord(event.data.part);
+        const messageId = asString(part?.messageID);
+        const partType = asString(part?.type);
+        const delta = asString(event.data.delta) ?? asString(part?.text);
+
+        if (!messageId || partType !== "text" || !delta) {
+          return [];
+        }
+
+        return [
+          {
+            id: crypto.randomUUID(),
+            type: "task.message.delta",
+            ts: event.ts,
+            projectId: event.projectId,
+            taskId: event.taskId,
+            sessionId: event.sessionId,
+            agentRunId: event.agentRunId,
+            data: {
+              messageId,
+              partType,
+              delta,
+              reason: rawType,
+            },
+          },
+        ];
+      }
+
+      return [];
+    }
+
+    if (event.type === "session.created" || event.type === "session.updated") {
+      return [
+        {
+          id: crypto.randomUUID(),
+          type: "task.snapshot.updated",
+          ts: event.ts,
+          projectId: event.projectId,
+          taskId: event.taskId,
+          sessionId: event.sessionId,
+          agentRunId: event.agentRunId,
+          data: {
+            reason: event.type,
+            scope: "session",
+          },
+        },
+      ];
+    }
+
+    return [];
   }
 
   /**
@@ -1255,6 +1662,14 @@ class SSEAggregator {
     const sessionId = this.extractSessionId(type, data);
     const run = sessionId ? findAgentRunBySessionId(sessionId) : undefined;
 
+    // Populate session→task cache when agent run provides the mapping
+    if (run?.taskId && sessionId) {
+      this.sessionToTaskCache.set(sessionId, {
+        taskId: run.taskId,
+        projectId: run.projectId,
+      });
+    }
+
     return {
       id: crypto.randomUUID(),
       type: mappedType,
@@ -1263,7 +1678,13 @@ class SSEAggregator {
       taskId: run?.taskId,
       projectId: run?.projectId,
       agentRunId: run?.agentRunId,
-      data,
+      data:
+        typeof data.rawType === "string" || type === mappedType
+          ? data
+          : {
+              ...data,
+              rawType: type,
+            },
     };
   }
 
@@ -1488,6 +1909,7 @@ class SSEAggregator {
           void this.advanceSequentialChainStep(
             chainStepInfo.taskId,
             chainStepInfo.stepIndex,
+            event.sessionId,
             resultText,
             event.projectId ?? "",
             authorization,
@@ -1653,14 +2075,6 @@ class SSEAggregator {
       if (!taskUpdate) {
         throw new Error(`Task completion sync failed for ${event.taskId}`);
       }
-
-      await persistWorkflowStageExecutionOutcome({
-        taskId: event.taskId,
-        authorization,
-        resultText,
-      }).catch((error) => {
-        console.error(`Failed to persist workflow stage outcome for task ${event.taskId}:`, error);
-      });
 
       updateAgentRunStatus(event.agentRunId, "completed");
       await Promise.all([
@@ -2257,12 +2671,6 @@ class SSEAggregator {
   ): Promise<void> {
     const strategyConfig = readOrchestrationStrategy();
 
-    // Merge stage-level hooks with strategy-level hooks
-    const rawStageHooks = await fetchCurrentStageHooks(taskId, authorization);
-    const stageHooks = parseStageHooks(rawStageHooks);
-    const mergedHooks = mergeStageAndStrategyHooks(stageHooks, strategyConfig.hooks);
-    const mergedStrategy: typeof strategyConfig = { ...strategyConfig, hooks: mergedHooks };
-
     const taskResult = await cpFetch<CompletedTaskContext>(
       `/api/project-tree/tasks/${encodeURIComponent(taskId)}`,
       { authorization },
@@ -2290,7 +2698,7 @@ class SSEAggregator {
     }
 
     const hookResult = await executeLifecycleHooks({
-      strategy: mergedStrategy,
+      strategy: strategyConfig,
       trigger: "on-failure",
       taskId: task.id,
       projectId: task.projectId,
@@ -2487,6 +2895,7 @@ class SSEAggregator {
   private async advanceSequentialChainStep(
     taskId: string,
     completedStepIndex: number,
+    completedSessionId: string,
     stepResult: string | undefined,
     projectId: string,
     authorization: string,
@@ -2591,6 +3000,23 @@ class SSEAggregator {
     // Register the new session for tracking
     this.sessionToChainStepMap.set(execResult.sessionId, { taskId, stepIndex: nextIndex });
 
+    await upsertTaskSessionLineageRecord(taskId, authorization, {
+      runtimeSessionId: execResult.sessionId,
+      parentRuntimeSessionId:
+        completedSessionId && completedSessionId !== execResult.sessionId
+          ? completedSessionId
+          : undefined,
+      branchName: `${task.title} — ${nextStep.title}`,
+      sourceType:
+        completedSessionId && completedSessionId !== execResult.sessionId ? "fork" : "root",
+      sessionKind: "sequential_step",
+      executionModeSnapshot: "sequential_chain",
+      isActive: true,
+      stepIndex: nextIndex,
+      selectedModel: resolvedModel ? formatModelRoute(resolvedModel) : task.selectedModel ?? undefined,
+      operationId: chainCtx.operationId,
+    }).catch(() => null);
+
     // Update plan with new session info
     plan.candidates[0] = {
       ...plan.candidates[0],
@@ -2646,15 +3072,6 @@ class SSEAggregator {
       }
       const chainResult = aggregatedParts.join("\n\n") || failureError || undefined;
       plan.chainResult = chainResult;
-
-      await persistWorkflowStageExecutionOutcome({
-        taskId,
-        authorization,
-        resultText: chainResult,
-        source: "sequential-chain",
-      }).catch((error) => {
-        console.error(`Failed to persist workflow stage outcome for chain task ${taskId}:`, error);
-      });
 
       await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
         method: "PATCH",

@@ -28,10 +28,6 @@ const runDetachedPromptMock = mock(async () => ({
   sessionId: "judge-ses",
 }));
 const updateAgentRunStatusMock = mock(() => undefined);
-const persistWorkflowStageExecutionOutcomeMock = mock(async () => ({
-  updated: true,
-  advanced: false,
-}));
 
 type FetchOptions = { method?: string; body?: unknown };
 type MockFetchResponse = { ok: boolean; data: unknown; status?: number };
@@ -85,6 +81,7 @@ mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () =>
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter", () => ({
+  buildExecutionContext: mock(() => ""),
   extractAssistantResultFromMessages: extractAssistantResultFromMessagesMock,
   findAgentRunBySessionId: findAgentRunBySessionIdMock,
   getAgentRun: getAgentRunMock,
@@ -93,10 +90,6 @@ mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-a
   recoverAgentRun: recoverAgentRunMock,
   runDetachedPrompt: runDetachedPromptMock,
   updateAgentRunStatus: updateAgentRunStatusMock,
-}));
-
-mock.module("../../control-plane/web-ui-bff/src/modules/tasks/workflow-stage-execution", () => ({
-  persistWorkflowStageExecutionOutcome: persistWorkflowStageExecutionOutcomeMock,
 }));
 
 beforeEach(() => {
@@ -111,7 +104,6 @@ beforeEach(() => {
   recoverAgentRunMock.mockReset();
   runDetachedPromptMock.mockReset();
   updateAgentRunStatusMock.mockReset();
-  persistWorkflowStageExecutionOutcomeMock.mockReset();
 
   createInternalAuthorizationMock.mockResolvedValue("Bearer internal");
   authHeaderMock.mockReturnValue("Bearer test");
@@ -126,10 +118,6 @@ beforeEach(() => {
     sessionId: "judge-ses",
   });
   updateAgentRunStatusMock.mockImplementation(() => undefined);
-  persistWorkflowStageExecutionOutcomeMock.mockResolvedValue({
-    updated: true,
-    advanced: false,
-  });
   extractAssistantResultFromMessagesMock.mockReturnValue({
     completed: false,
     failed: true,
@@ -187,14 +175,15 @@ beforeEach(() => {
         };
       }
 
-      if (url === "/api/tasks/task-1/branches") {
+      if (url === "/api/tasks/task-1/sessions") {
         return {
           ok: true,
           data: {
             data: [
               {
+                id: "session-1",
                 runtimeSessionId: "session-1",
-                isActive: true,
+                executionStatus: "running",
                 archivedAt: null,
               },
             ],
@@ -228,7 +217,7 @@ describe("reconcileRunningTasksOnStartup", () => {
       }),
     );
     expect(cpFetchMock).toHaveBeenCalledWith(
-      "/api/tasks/task-1/branches",
+      "/api/tasks/task-1/sessions",
       expect.objectContaining({
         method: "POST",
         body: expect.objectContaining({
@@ -266,7 +255,7 @@ describe("reconcileRunningTasksOnStartup", () => {
       }),
     );
     expect(cpFetchMock).toHaveBeenCalledWith(
-      "/api/tasks/task-1/branches",
+      "/api/tasks/task-1/sessions",
       expect.objectContaining({
         method: "POST",
         body: expect.objectContaining({
@@ -339,14 +328,15 @@ describe("reconcileRunningTasksOnStartup", () => {
         },
       },
       {
-        matcher: "/api/tasks/task-1/branches",
+        matcher: "/api/tasks/task-1/sessions",
         response: {
           ok: true,
           data: {
             data: [
               {
+                id: "session-1",
                 runtimeSessionId: "session-1",
-                isActive: true,
+                executionStatus: "running",
                 archivedAt: null,
               },
             ],
@@ -421,14 +411,15 @@ describe("reconcileRunningTasksOnStartup", () => {
         },
       },
       {
-        matcher: "/api/tasks/task-completed-active/branches",
+        matcher: "/api/tasks/task-completed-active/sessions",
         response: {
           ok: true,
           data: {
             data: [
               {
+                id: "session-completed-active",
                 runtimeSessionId: "session-completed-active",
-                isActive: true,
+                executionStatus: "running",
                 archivedAt: null,
               },
             ],
@@ -459,17 +450,11 @@ describe("reconcileRunningTasksOnStartup", () => {
         }),
       }),
     );
-    expect(persistWorkflowStageExecutionOutcomeMock).toHaveBeenCalledWith({
-      taskId: "task-completed-active",
-      authorization: "Bearer internal",
-      resultText: "Verify stage complete\n[STAGE_COMPLETE]",
-      source: "assistant-output",
-    });
     expectSessionMessageReaderCalls(getSessionMessagesMock, ["session-completed-active"]);
     expectNoPublicTraceRequests(cpFetchMock.mock.calls.map(([url]) => String(url)));
   });
 
-  test("marks stale parallel tasks completed after all candidate sessions already finished", async () => {
+  test("marks stale parallel tasks failed when projection-backed run detail is unavailable", async () => {
     extractAssistantResultFromMessagesMock
       .mockReturnValueOnce({
         completed: true,
@@ -527,44 +512,24 @@ describe("reconcileRunningTasksOnStartup", () => {
         },
       },
       {
-        matcher: "/api/tasks/task-parallel-stale/branches",
+        matcher: "/api/tasks/task-parallel-stale/sessions",
         response: {
           ok: true,
           data: {
             data: [
               {
+                id: "session-a",
                 runtimeSessionId: "session-a",
-                isActive: true,
+                executionStatus: "running",
                 archivedAt: null,
               },
               {
+                id: "session-b",
                 runtimeSessionId: "session-b",
-                isActive: true,
+                executionStatus: "running",
                 archivedAt: null,
               },
             ],
-          },
-        },
-      },
-      {
-        matcher: (url) => url.startsWith("/api/tasks/task-parallel-stale/domain-runs/"),
-        response: {
-          ok: true,
-          data: {
-            data: {
-              candidateNodes: [
-                {
-                  candidateIndex: 0,
-                  sessionId: "session-a",
-                  status: "running",
-                },
-                {
-                  candidateIndex: 1,
-                  sessionId: "session-b",
-                  status: "running",
-                },
-              ],
-            },
           },
         },
       },
@@ -576,13 +541,14 @@ describe("reconcileRunningTasksOnStartup", () => {
 
     const summary = await reconcileRunningTasksOnStartup();
 
-    expect(summary.completed).toBe(1);
+    expect(summary.failed).toBe(1);
     expect(cpFetchMock).toHaveBeenCalledWith(
       "/api/tasks/task-parallel-stale",
       expect.objectContaining({
         method: "PATCH",
         body: expect.objectContaining({
-          status: "completed",
+          status: "failed",
+          result: "Recovered from stale running state: missing projection-backed parallel run detail.",
         }),
       }),
     );
@@ -593,28 +559,24 @@ describe("reconcileRunningTasksOnStartup", () => {
     );
     const patchBody = patchCall?.[1]?.body as {
       status?: string;
+      result?: string;
     };
-    expect(patchBody.status).toBe("completed");
+    expect(patchBody.status).toBe("failed");
+    expect(patchBody.result).toBe(
+      "Recovered from stale running state: missing projection-backed parallel run detail.",
+    );
     expect(cpFetchMock).toHaveBeenCalledWith(
-      "/api/tasks/task-parallel-stale/branches",
+      "/api/tasks/task-parallel-stale/sessions",
       expect.objectContaining({
         method: "POST",
         body: expect.objectContaining({ runtimeSessionId: "session-a", isActive: false }),
       }),
     );
-    expect(cpFetchMock).toHaveBeenCalledWith(
-      "/api/tasks/task-parallel-stale/branches",
-      expect.objectContaining({
-        method: "POST",
-        body: expect.objectContaining({ runtimeSessionId: "session-b", isActive: false }),
-      }),
-    );
-    expect(persistWorkflowStageExecutionOutcomeMock).not.toHaveBeenCalled();
-    expectSessionMessageReaderCalls(getSessionMessagesMock, ["session-a", "session-b"]);
+    expect(getSessionMessagesMock).not.toHaveBeenCalled();
     expectNoPublicTraceRequests(cpFetchMock.mock.calls.map(([url]) => String(url)));
   });
 
-  test("does not rewrite legacy runtime plan for projection-backed stale parallel tasks", async () => {
+  test("keeps runtime plan untouched when stale parallel tasks fail before projection detail loads", async () => {
     extractAssistantResultFromMessagesMock
       .mockReturnValueOnce({
         completed: true,
@@ -674,44 +636,24 @@ describe("reconcileRunningTasksOnStartup", () => {
         },
       },
       {
-        matcher: "/api/tasks/task-parallel-projection/branches",
+        matcher: "/api/tasks/task-parallel-projection/sessions",
         response: {
           ok: true,
           data: {
             data: [
               {
+                id: "session-a",
                 runtimeSessionId: "session-a",
-                isActive: true,
+                executionStatus: "running",
                 archivedAt: null,
               },
               {
+                id: "session-b",
                 runtimeSessionId: "session-b",
-                isActive: true,
+                executionStatus: "running",
                 archivedAt: null,
               },
             ],
-          },
-        },
-      },
-      {
-        matcher: (url) => url.startsWith("/api/tasks/task-parallel-projection/domain-runs/"),
-        response: {
-          ok: true,
-          data: {
-            data: {
-              candidateNodes: [
-                {
-                  candidateIndex: 0,
-                  sessionId: "session-a",
-                  status: "running",
-                },
-                {
-                  candidateIndex: 1,
-                  sessionId: "session-b",
-                  status: "running",
-                },
-              ],
-            },
           },
         },
       },
@@ -723,17 +665,18 @@ describe("reconcileRunningTasksOnStartup", () => {
 
     const summary = await reconcileRunningTasksOnStartup();
 
-    expect(summary.completed).toBe(1);
+    expect(summary.failed).toBe(1);
     expect(cpFetchMock).toHaveBeenCalledWith(
       "/api/tasks/task-parallel-projection",
       expect.objectContaining({
         method: "PATCH",
         body: expect.objectContaining({
-          status: "completed",
+          status: "failed",
+          result: "Recovered from stale running state: missing projection-backed parallel run detail.",
         }),
       }),
     );
-    expectSessionMessageReaderCalls(getSessionMessagesMock, ["session-a", "session-b"]);
+    expect(getSessionMessagesMock).not.toHaveBeenCalled();
     expectNoPublicTraceRequests(cpFetchMock.mock.calls.map(([url]) => String(url)));
   });
 });

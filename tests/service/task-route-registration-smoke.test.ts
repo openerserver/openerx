@@ -22,6 +22,16 @@ interface ApiResult<T> {
   status: number;
 }
 
+async function safeSql(query: string, params: unknown[] = []) {
+  try {
+    await sql.unsafe(query, params);
+  } catch (error) {
+    if ((error as { code?: string }).code !== "42P01") {
+      throw error;
+    }
+  }
+}
+
 async function request<T>(path: string, opts: RequestInit = {}): Promise<ApiResult<T>> {
   const response = await fetch(`${CP_URL}${path}`, opts);
   const text = await response.text();
@@ -82,38 +92,57 @@ beforeAll(async () => {
 
 afterAll(async () => {
   for (const taskId of createdTaskIds) {
-    await sql.unsafe("DELETE FROM task_timeline_views WHERE task_id = $1", [taskId]);
-    await sql.unsafe("DELETE FROM task_domain_events WHERE task_id = $1", [taskId]);
-    await sql.unsafe(
+    await safeSql(
+      `DELETE FROM task_session_message_parts WHERE message_id IN (
+        SELECT id FROM task_session_messages WHERE task_id = $1
+      )`,
+      [taskId],
+    );
+    await safeSql("DELETE FROM task_session_messages WHERE task_id = $1", [taskId]);
+    await safeSql("DELETE FROM session_operations WHERE task_id = $1", [taskId]);
+    await safeSql("DELETE FROM task_artifacts WHERE task_id = $1", [taskId]);
+    await safeSql("DELETE FROM task_usage_ledger_entries WHERE task_id = $1", [taskId]);
+    await safeSql("DELETE FROM task_sessions WHERE task_id = $1", [taskId]);
+    await safeSql("DELETE FROM task_timeline_views WHERE task_id = $1", [taskId]);
+    await safeSql("DELETE FROM task_message_events WHERE task_id = $1", [taskId]);
+    await safeSql("DELETE FROM task_domain_events WHERE task_id = $1", [taskId]);
+    await safeSql(
+      `DELETE FROM task_stage_runs WHERE workflow_run_id IN (
+        SELECT id FROM task_workflow_runs WHERE task_id = $1
+      )`,
+      [taskId],
+    );
+    await safeSql("DELETE FROM task_workflow_runs WHERE task_id = $1", [taskId]);
+    await safeSql(
       `DELETE FROM conversation_message_parts WHERE message_id IN (
         SELECT id FROM conversation_messages WHERE task_id = $1
       )`,
       [taskId],
     );
-    await sql.unsafe("DELETE FROM conversation_messages WHERE task_id = $1", [taskId]);
-    await sql.unsafe("DELETE FROM conversation_sessions WHERE task_id = $1", [taskId]);
-    await sql.unsafe("DELETE FROM task_snapshots WHERE task_id = $1", [taskId]);
-    await sql.unsafe("DELETE FROM task_run_edges WHERE task_id = $1", [taskId]);
-    await sql.unsafe("UPDATE agent_runs SET run_node_id = NULL, run_id = NULL WHERE task_id = $1", [
+    await safeSql("DELETE FROM conversation_messages WHERE task_id = $1", [taskId]);
+    await safeSql("DELETE FROM conversation_sessions WHERE task_id = $1", [taskId]);
+    await safeSql("DELETE FROM task_snapshots WHERE task_id = $1", [taskId]);
+    await safeSql("DELETE FROM task_run_edges WHERE task_id = $1", [taskId]);
+    await safeSql("UPDATE agent_runs SET run_node_id = NULL, run_id = NULL WHERE task_id = $1", [
       taskId,
     ]);
-    await sql.unsafe("UPDATE task_run_nodes SET agent_run_id = NULL WHERE task_id = $1", [taskId]);
-    await sql.unsafe("DELETE FROM task_run_nodes WHERE task_id = $1", [taskId]);
-    await sql.unsafe("DELETE FROM agent_runs WHERE task_id = $1", [taskId]);
-    await sql.unsafe("DELETE FROM task_runs WHERE task_id = $1", [taskId]);
-    await sql.unsafe("DELETE FROM tasks WHERE id = $1", [taskId]);
+    await safeSql("UPDATE task_run_nodes SET agent_run_id = NULL WHERE task_id = $1", [taskId]);
+    await safeSql("DELETE FROM task_run_nodes WHERE task_id = $1", [taskId]);
+    await safeSql("DELETE FROM agent_runs WHERE task_id = $1", [taskId]);
+    await safeSql("DELETE FROM task_runs WHERE task_id = $1", [taskId]);
+    await safeSql("DELETE FROM tasks WHERE id = $1", [taskId]);
   }
 
   const nodeIds = Array.from(createdNodeIds);
   if (nodeIds.length > 0) {
     const nodePlaceholders = nodeIds.map((_, index) => `$${index + 1}`).join(", ");
-    await sql.unsafe(
+    await safeSql(
       `DELETE FROM conversation_sessions WHERE tree_node_id IN (${nodePlaceholders})`,
       nodeIds,
     );
-    await sql.unsafe(`DELETE FROM tasks WHERE tree_node_id IN (${nodePlaceholders})`, nodeIds);
+    await safeSql(`DELETE FROM tasks WHERE tree_node_id IN (${nodePlaceholders})`, nodeIds);
     for (const nodeId of nodeIds) {
-      await sql.unsafe(
+      await safeSql(
         `WITH RECURSIVE descendants AS (
           SELECT id FROM project_tree_nodes WHERE id = $1
           UNION ALL
@@ -126,7 +155,7 @@ afterAll(async () => {
            OR target_node_id IN (SELECT id FROM descendants)`,
         [nodeId],
       );
-      await sql.unsafe(
+      await safeSql(
         `WITH RECURSIVE descendants AS (
           SELECT id FROM project_tree_nodes WHERE id = $1
           UNION ALL
@@ -139,7 +168,7 @@ afterAll(async () => {
            OR head_node_id IN (SELECT id FROM descendants)`,
         [nodeId],
       );
-      await sql.unsafe(
+      await safeSql(
         `WITH RECURSIVE descendants AS (
           SELECT id FROM project_tree_nodes WHERE id = $1
           UNION ALL
@@ -162,6 +191,7 @@ describe("task route registration smoke", () => {
     const task = await createTask(`task-route-smoke-${unique}`);
     const runtimeSessionId = `task-route-smoke-session-${unique}`;
     const agentRunId = `task-route-smoke-run-${unique}`;
+    const runtimeMessageId = `msg-${unique}`;
 
     const patchTask = await authedRequest<{ id: string; status: string }>(`/api/tasks/${task.id}`, {
       method: "PATCH",
@@ -170,67 +200,301 @@ describe("task route registration smoke", () => {
     expect(patchTask.status).toBe(200);
     expect(patchTask.data.status).toBe("running");
 
-    const branchResponse = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/branches`, {
+    const sessionResponse = await authedRequest<{
+      id: string;
+      taskId: string;
+      runtimeSessionId: string;
+    }>(`/api/tasks/${task.id}/sessions`, {
       method: "POST",
       body: JSON.stringify({
         runtimeSessionId,
-        branchName: `branch-${unique}`,
+        branchName: `session-${unique}`,
         sourceType: "root",
+        sessionKind: "sequential_step",
+        executionModeSnapshot: "sequential_chain",
         isActive: true,
+        stepIndex: 0,
+        selectedModel: "gpt-5-mini",
       }),
     });
-    expect(branchResponse.status).toBe(201);
+    expect(sessionResponse.status).toBe(201);
+    expect(sessionResponse.data).toMatchObject({
+      taskId: task.id,
+      runtimeSessionId,
+    });
+    const sessionId = sessionResponse.data.id;
+    const clientMessageId = `cli-${unique}`;
 
-    const branchMessage = await authedRequest<{ ok: boolean }>(
-      `/api/tasks/${task.id}/branches/messages`,
+    const sessionMessage = await authedRequest<{
+      ok: boolean;
+      messageId: string;
+      sessionId: string;
+      seq: number;
+    }>(
+      `/api/tasks/${task.id}/sessions/messages`,
       {
         method: "POST",
         body: JSON.stringify({
           runtimeSessionId,
           message: {
-            id: `msg-${unique}`,
+            id: runtimeMessageId,
             role: "assistant",
             parts: [{ type: "text", text: `smoke text ${unique}` }],
           },
         }),
       },
     );
-    expect([201, 202]).toContain(branchMessage.status);
+    expect(sessionMessage.status).toBe(201);
+    expect(sessionMessage.data).toMatchObject({
+      ok: true,
+      sessionId,
+      seq: 0,
+    });
 
-    const branchCompatMessages = await authedRequest<{
-      data: Array<{ id?: string; role?: string; parts?: Array<{ type?: string; text?: string }> }>;
-      meta: { includeLineage: boolean; readSource?: string };
-    }>(`/api/tasks/${task.id}/branches/${runtimeSessionId}/messages`);
-    expect(branchCompatMessages.status).toBe(200);
-    expect(branchCompatMessages.data.meta.includeLineage).toBe(false);
-    expect(branchCompatMessages.data.data).toEqual(
+    const canonicalMessage = await authedRequest<{
+      task_id: string;
+      session_id: string;
+      user_message: {
+        id: string;
+        client_message_id?: string;
+        role: string;
+        status: string;
+        text: string | null;
+      };
+      assistant_message: {
+        id: string;
+        role: string;
+        status: string;
+        text?: string | null;
+      };
+      operation: {
+        id: string;
+        kind: string;
+        status: string;
+      };
+    }>(`/api/tasks/${task.id}/sessions/${encodeURIComponent(sessionId)}/messages`, {
+      method: "POST",
+      body: JSON.stringify({
+        client_message_id: clientMessageId,
+        text: `user prompt ${unique}`,
+        attachments: [],
+      }),
+    });
+    expect(canonicalMessage.status).toBe(201);
+    expect(canonicalMessage.data).toMatchObject({
+      task_id: task.id,
+      session_id: sessionId,
+      user_message: {
+        client_message_id: clientMessageId,
+        role: "user",
+        status: "completed",
+        text: `user prompt ${unique}`,
+      },
+      assistant_message: {
+        role: "assistant",
+        status: "pending",
+        text: null,
+      },
+      operation: {
+        kind: "model_request",
+        status: "queued",
+      },
+    });
+
+    const canonicalMessageReplay = await authedRequest<{
+      task_id: string;
+      session_id: string;
+      user_message: { id: string };
+      assistant_message: { id: string };
+      operation: { id: string };
+    }>(`/api/tasks/${task.id}/sessions/${encodeURIComponent(sessionId)}/messages`, {
+      method: "POST",
+      body: JSON.stringify({
+        client_message_id: clientMessageId,
+        text: `user prompt ${unique}`,
+        attachments: [],
+      }),
+    });
+    expect(canonicalMessageReplay.status).toBe(200);
+    expect(canonicalMessageReplay.data).toMatchObject({
+      task_id: task.id,
+      session_id: sessionId,
+      user_message: {
+        id: canonicalMessage.data.user_message.id,
+      },
+      assistant_message: {
+        id: canonicalMessage.data.assistant_message.id,
+      },
+      operation: {
+        id: canonicalMessage.data.operation.id,
+      },
+    });
+
+    const sessionsList = await authedRequest<{
+      data: Array<{ id: string; runtimeSessionId: string | null; branchName: string | null }>;
+      meta: { readSource: string; sessionCount: number };
+    }>(`/api/tasks/${task.id}/sessions`);
+    expect(sessionsList.status).toBe(200);
+    expect(sessionsList.data.meta).toMatchObject({
+      readSource: "task-session-first",
+      sessionCount: 1,
+    });
+    expect(sessionsList.data.data).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          id: `msg-${unique}`,
-          role: "assistant",
-          parts: expect.arrayContaining([
-            expect.objectContaining({ type: "text", text: `smoke text ${unique}` }),
-          ]),
+          id: sessionId,
+          runtimeSessionId,
+          branchName: `session-${unique}`,
+          sessionKind: "sequential_step",
+          executionModeSnapshot: "sequential_chain",
+          stepIndex: 0,
+          selectedModel: "gpt-5-mini",
         }),
       ]),
     );
 
-    const branchCompatEvents = await authedRequest<{
-      data: Array<{ eventType: string }>;
-      meta: { includeLineage: boolean; eventCount: number };
-    }>(`/api/tasks/${task.id}/branches/${runtimeSessionId}/events`);
-    expect(branchCompatEvents.status).toBe(200);
-    expect(branchCompatEvents.data.meta.includeLineage).toBe(false);
-    expect(branchCompatEvents.data.meta.eventCount).toBeGreaterThan(0);
+    const sessionDetail = await authedRequest<{
+      data: { id: string; runtimeSessionId: string | null; branchName: string | null };
+      meta: { readSource: string; lineagePath: string[]; isCurrent: boolean; isLatest: boolean };
+    }>(`/api/tasks/${task.id}/sessions/${encodeURIComponent(sessionId)}`);
+    expect(sessionDetail.status).toBe(200);
+    expect(sessionDetail.data.data).toMatchObject({
+      id: sessionId,
+      runtimeSessionId,
+      branchName: `session-${unique}`,
+      sessionKind: "sequential_step",
+      executionModeSnapshot: "sequential_chain",
+      stepIndex: 0,
+      selectedModel: "gpt-5-mini",
+    });
+    expect(sessionDetail.data.meta).toMatchObject({
+      readSource: "task-session-first",
+      lineagePath: [sessionId],
+      isLatest: true,
+    });
 
-    const branchCompatTimeline = await authedRequest<{
-      data: Array<{ id: string; sourceEventTypes: string[] }>;
-      meta: { includeLineage: boolean; itemCount: number };
-    }>(`/api/tasks/${task.id}/branches/${runtimeSessionId}/timeline`);
-    expect(branchCompatTimeline.status).toBe(200);
-    expect(branchCompatTimeline.data.meta.includeLineage).toBe(false);
-    expect(branchCompatTimeline.data.meta.itemCount).toBeGreaterThan(0);
-    expect(branchCompatTimeline.data.data[0]?.sourceEventTypes.length ?? 0).toBeGreaterThan(0);
+    const storedMessages = await authedRequest<{
+      error: string;
+    }>(`/api/tasks/${task.id}/sessions/${encodeURIComponent(sessionId)}/messages`);
+    expect(storedMessages.status).toBe(410);
+    expect(storedMessages.data).toEqual(
+      expect.objectContaining({
+        error: expect.stringContaining("Deprecated route"),
+      }),
+    );
+
+    const taskConversationMessages = await authedRequest<{
+      error: string;
+    }>(`/api/tasks/${task.id}/messages`);
+    expect(taskConversationMessages.status).toBe(410);
+    expect(taskConversationMessages.data).toEqual(
+      expect.objectContaining({
+        error: expect.stringContaining("Deprecated route"),
+      }),
+    );
+
+    const taskTree = await authedRequest<{
+      meta: { taskId: string; currentSessionId: string | null };
+      sessions: Array<{ id: string }>;
+      messages: Array<{
+        runtimeMessageId: string;
+        role: string;
+        textContent?: string | null;
+        clientMessageId?: string | null;
+        status?: string | null;
+      }>;
+      messageParts: Array<{ partType: string; textContent: string | null }>;
+    }>(`/api/tasks/${task.id}/tree?sessionId=${encodeURIComponent(sessionId)}&includeLineage=false`);
+    expect(taskTree.status).toBe(200);
+    expect(taskTree.data.meta).toMatchObject({
+      taskId: task.id,
+      currentSessionId: sessionId,
+    });
+    expect(taskTree.data.sessions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: sessionId,
+        }),
+      ]),
+    );
+    expect(taskTree.data.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          runtimeMessageId,
+          role: "assistant",
+          textContent: `smoke text ${unique}`,
+        }),
+        expect.objectContaining({
+          runtimeMessageId: `user:${clientMessageId}`,
+          role: "user",
+          clientMessageId,
+          textContent: `user prompt ${unique}`,
+        }),
+        expect.objectContaining({
+          runtimeMessageId: `assistant:${clientMessageId}`,
+          role: "assistant",
+          status: "pending",
+        }),
+      ]),
+    );
+    expect(taskTree.data.messageParts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ partType: "text", textContent: `smoke text ${unique}` }),
+      ]),
+    );
+
+    const operations = await authedRequest<{
+      data: unknown[];
+      meta: { readSource: string; sessionId: string; operationCount: number };
+    }>(`/api/tasks/${task.id}/sessions/${encodeURIComponent(sessionId)}/operations`);
+    expect(operations.status).toBe(200);
+    expect(operations.data.meta).toMatchObject({
+      readSource: "task-session-first",
+      sessionId,
+      operationCount: 1,
+    });
+    expect(operations.data.data).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: canonicalMessage.data.operation.id,
+          executionStatus: "queued",
+          operationKind: "executor",
+        }),
+      ]),
+    );
+
+    const artifacts = await authedRequest<{
+      data: unknown[];
+      meta: { readSource: string; sessionId: string; artifactCount: number };
+    }>(`/api/tasks/${task.id}/sessions/${encodeURIComponent(sessionId)}/artifacts`);
+    expect(artifacts.status).toBe(200);
+    expect(artifacts.data.meta).toMatchObject({
+      readSource: "task-session-first",
+      sessionId,
+      artifactCount: 0,
+    });
+
+    const usageLedger = await authedRequest<{
+      data: unknown[];
+      meta: { readSource: string; sessionId: string | null; entryCount: number };
+    }>(`/api/tasks/${task.id}/sessions/${encodeURIComponent(sessionId)}/usage-ledger`);
+    expect(usageLedger.status).toBe(200);
+    expect(usageLedger.data.meta).toMatchObject({
+      readSource: "task-session-first",
+      sessionId,
+      entryCount: 0,
+    });
+
+    const sessionTimeline = await authedRequest<{
+      data: unknown[];
+      meta: { readSource: string; sessionId: string | null; includeLineage: boolean; itemCount: number };
+    }>(`/api/tasks/${task.id}/sessions/${encodeURIComponent(sessionId)}/timeline?includeLineage=false`);
+    expect(sessionTimeline.status).toBe(200);
+    expect(sessionTimeline.data.meta).toMatchObject({
+      readSource: "task-session-projection",
+      sessionId,
+      includeLineage: false,
+    });
 
     const createRun = await authedRequest<{ id: string; status: string }>(
       `/api/tasks/${task.id}/runs`,
@@ -238,7 +502,7 @@ describe("task route registration smoke", () => {
         method: "POST",
         body: JSON.stringify({
           id: agentRunId,
-          sessionId: runtimeSessionId,
+          sessionId,
           agentType: "builder",
           status: "running",
         }),
@@ -268,12 +532,6 @@ describe("task route registration smoke", () => {
       expect.arrayContaining([expect.objectContaining({ id: agentRunId })]),
     );
 
-    const listDomainRuns = await authedRequest<{ data: Array<{ taskId: string }> }>(
-      `/api/tasks/${task.id}/domain-runs`,
-    );
-    expect(listDomainRuns.status).toBe(200);
-    expect(listDomainRuns.data.data.length).toBeGreaterThanOrEqual(1);
-
     const taskSnapshot = await authedRequest<{ data: { data: unknown } }>(
       `/api/tasks/${task.id}/snapshot`,
     );
@@ -281,21 +539,37 @@ describe("task route registration smoke", () => {
 
     const timelineView = await authedRequest<{
       data: unknown[];
-      meta: { includeLineage: boolean };
-    }>(`/api/tasks/${task.id}/timeline-view?runtimeSessionId=${runtimeSessionId}`);
+      meta: { readSource: string; includeLineage: boolean; lineagePath: string[] };
+    }>(`/api/tasks/${task.id}/timeline-view?sessionId=${encodeURIComponent(sessionId)}`);
     expect(timelineView.status).toBe(200);
-    expect(timelineView.data.meta.includeLineage).toBe(true);
-
-    const replayTask = await authedRequest<{ scope: string }>("/api/tasks/projections/replay", {
-      method: "POST",
-      body: JSON.stringify({
-        scope: "task",
-        taskId: task.id,
-        reason: "verify task route registration smoke after modular split",
-      }),
+    expect(timelineView.data.meta).toMatchObject({
+      readSource: "task-session-projection",
+      includeLineage: true,
+      lineagePath: [sessionId],
     });
-    expect(replayTask.status).toBe(200);
-    expect(replayTask.data.scope).toBe("task");
+
+    const executionTrace = await authedRequest<{
+      data: {
+        selectedSessionId: string | null;
+        sessions: Array<{ id: string }>;
+        messages: Array<{ runtimeMessageId?: string }>;
+      };
+      meta: { readSource: string; timelineReadSource: string; includeLineage: boolean; sessionCount: number };
+    }>(`/api/tasks/${task.id}/execution-trace?sessionId=${encodeURIComponent(sessionId)}`);
+    expect(executionTrace.status).toBe(200);
+    expect(executionTrace.data.meta).toMatchObject({
+      readSource: "task-session-first",
+      timelineReadSource: "task-session-projection",
+      includeLineage: true,
+      sessionCount: 1,
+    });
+    expect(executionTrace.data.data.selectedSessionId).toBe(sessionId);
+    expect(executionTrace.data.data.sessions).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: sessionId })]),
+    );
+    expect(executionTrace.data.data.messages).toEqual(
+      expect.arrayContaining([expect.objectContaining({ runtimeMessageId })]),
+    );
 
     const listSnapshots = await authedRequest<{ data: Array<{ taskId: string }> }>(
       `/api/tasks/snapshots?projectId=${PROJECT_ID}&limit=5`,

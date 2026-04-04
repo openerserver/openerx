@@ -410,7 +410,7 @@ async function persistCleanedTaskStrategy(
   await db
     .update(taskAggregates)
     .set({
-      strategyJson: nextStrategy,
+      strategyJson: nextStrategy ?? {},
       updatedAt: now,
     })
     .where(eq(taskAggregates.id, taskId));

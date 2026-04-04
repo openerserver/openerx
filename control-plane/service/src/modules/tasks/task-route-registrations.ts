@@ -1,20 +1,14 @@
-import { buildTaskBranchCompatRegistrations } from "./task-route-branch-registrations";
 import { buildTaskRouteBuilderShared } from "./task-route-builder-shared";
-import {
-  buildTaskAgentRunWriteRegistrations,
-  buildTaskCoreRegistrations,
-} from "./task-route-core-registrations";
-import { buildTaskDomainRegistrations } from "./task-route-domain-registrations";
+import { buildTaskCoreRegistrations } from "./task-route-core-registrations";
 import { buildTaskProjectionRegistrations } from "./task-route-projection-registrations";
+import { buildTaskSessionRegistrations } from "./task-route-session-registrations";
 
 export function buildTaskRouteRegistrations() {
   const shared = buildTaskRouteBuilderShared();
 
   return {
     core: buildTaskCoreRegistrations(shared),
-    domainRuns: buildTaskDomainRegistrations(shared),
-    agentRunWrites: buildTaskAgentRunWriteRegistrations(shared),
-    branchCompat: buildTaskBranchCompatRegistrations(shared),
+    sessions: buildTaskSessionRegistrations(shared),
     projections: buildTaskProjectionRegistrations(shared),
   };
 }

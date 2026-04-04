@@ -32,21 +32,6 @@ interface TaskStatusRecord {
   orchestrationKind?: string | null;
 }
 
-interface TaskDomainRunNodeRecord {
-  id: string;
-  candidateIndex?: number | null;
-  agentRunId?: string | null;
-}
-
-interface TaskDomainRunDetailRecord {
-  run: {
-    id: string;
-    winnerNodeId?: string | null;
-  };
-  candidateNodes: TaskDomainRunNodeRecord[];
-  winnerCandidateIndex: number | null;
-}
-
 interface AgentStatusRecord {
   status: string;
   finishedAt?: string | null;
@@ -331,86 +316,18 @@ function extractAssistantText(messages: unknown): string {
   return "";
 }
 
-async function fetchTaskDomainRunDetail(
-  token: string,
-  taskId: string,
-  runId: string,
-): Promise<TaskDomainRunDetailRecord | null> {
-  try {
-    const response = await request<{ data?: TaskDomainRunDetailRecord }>(
-      `/api/tasks/${taskId}/domain-runs/${runId}`,
-      {
-        headers: { Authorization: `Bearer ${token}` },
-      },
-    );
-    return response.data ?? null;
-  } catch {
-    return null;
-  }
-}
-
 async function resolveCandidateAgentRunIds(
-  token: string,
-  taskId: string,
-  taskStatus: TaskStatusRecord,
+  _token: string,
+  _taskId: string,
+  _taskStatus: TaskStatusRecord,
   fallbackAgentRunId: string,
 ): Promise<{
   resolvedAgentRunId: string;
   candidateAgentRunIds: string[];
 }> {
-  const ordered = [fallbackAgentRunId];
-  if (typeof taskStatus.currentRunId !== "string" || taskStatus.currentRunId.length === 0) {
-    return {
-      resolvedAgentRunId: fallbackAgentRunId,
-      candidateAgentRunIds: ordered,
-    };
-  }
-
-  const detail = await fetchTaskDomainRunDetail(token, taskId, taskStatus.currentRunId);
-  if (!detail || !Array.isArray(detail.candidateNodes) || detail.candidateNodes.length === 0) {
-    return {
-      resolvedAgentRunId: fallbackAgentRunId,
-      candidateAgentRunIds: ordered,
-    };
-  }
-
-  const sortedCandidates = detail.candidateNodes
-    .filter(
-      (candidate): candidate is TaskDomainRunNodeRecord & { agentRunId: string } =>
-        typeof candidate.agentRunId === "string" && candidate.agentRunId.trim().length > 0,
-    )
-    .sort(
-      (left, right) =>
-        (left.candidateIndex ?? Number.MAX_SAFE_INTEGER) -
-        (right.candidateIndex ?? Number.MAX_SAFE_INTEGER),
-    );
-
-  for (const candidate of sortedCandidates) {
-    if (!ordered.includes(candidate.agentRunId)) {
-      ordered.push(candidate.agentRunId);
-    }
-  }
-
-  const winnerByNodeId =
-    typeof detail.run.winnerNodeId === "string" && detail.run.winnerNodeId.length > 0
-      ? sortedCandidates.find((candidate) => candidate.id === detail.run.winnerNodeId)
-      : undefined;
-  const winnerByIndex =
-    typeof detail.winnerCandidateIndex === "number"
-      ? sortedCandidates.find(
-          (candidate) => candidate.candidateIndex === detail.winnerCandidateIndex,
-        )
-      : undefined;
-  const soleCandidate = sortedCandidates.length === 1 ? sortedCandidates[0] : undefined;
-  const resolvedAgentRunId =
-    winnerByNodeId?.agentRunId ??
-    winnerByIndex?.agentRunId ??
-    soleCandidate?.agentRunId ??
-    fallbackAgentRunId;
-
   return {
-    resolvedAgentRunId,
-    candidateAgentRunIds: ordered,
+    resolvedAgentRunId: fallbackAgentRunId,
+    candidateAgentRunIds: [fallbackAgentRunId],
   };
 }
 

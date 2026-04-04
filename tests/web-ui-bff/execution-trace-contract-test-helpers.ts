@@ -25,10 +25,10 @@ export function expectServiceTimelineNotRequested(
   includeLineage = true,
 ) {
   const suffix = includeLineage ? "?includeLineage=true" : "";
+  const encodedSessionId = encodeURIComponent(sessionId);
   expect(
     cpFetchMock.mock.calls.some(
-      ([path]) =>
-        path === `/api/tasks/${taskId}/branches/${sessionId}/timeline${suffix}`,
+      ([path]) => path === `/api/tasks/${taskId}/sessions/${encodedSessionId}/timeline${suffix}`,
     ),
   ).toBe(false);
 }

@@ -1,7 +1,7 @@
 ---
 name: librarian-enterprise
 description: Code and documentation retrieval agent — finds and summarizes relevant context
-model: openai/gpt-4.1-mini
+model: github-copilot:gpt-5-mini
 ---
 
 # Librarian — Code & Documentation Retrieval Agent

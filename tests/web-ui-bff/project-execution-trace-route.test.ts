@@ -106,21 +106,21 @@ beforeEach(() => {
         data: {
           data: null,
           meta: {
-            readSource: "task-domain-projection",
+            readSource: "task-session-projection",
             complete: false,
           },
         },
       };
     }
 
-    if (path === "/api/tasks/task-1/timeline-view?runtimeSessionId=ses-1") {
+    if (path === "/api/tasks/task-1/timeline-view?sessionId=task-session%3Atask-1%3Ases-1") {
       return {
         ok: true,
         status: 200,
         data: {
           data: [],
           meta: {
-            readSource: "task-domain-projection",
+            readSource: "task-session-projection",
             complete: false,
             itemCount: 0,
           },
@@ -128,7 +128,7 @@ beforeEach(() => {
       };
     }
 
-    if (path === "/api/tasks/task-1/branches/ses-1/timeline?includeLineage=true") {
+    if (path === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true") {
       return {
         ok: true,
         status: 200,
@@ -187,14 +187,14 @@ describe("project execution trace route", () => {
               updatedAt: "2026-03-22T10:00:03.000Z",
             },
             meta: {
-              readSource: "task-domain-projection",
+              readSource: "task-session-projection",
               complete: true,
             },
           },
         };
       }
 
-      if (path === "/api/tasks/task-1/timeline-view?runtimeSessionId=ses-1") {
+      if (path === "/api/tasks/task-1/timeline-view?sessionId=task-session%3Atask-1%3Ases-1") {
         return {
           ok: true,
           status: 200,
@@ -205,7 +205,7 @@ describe("project execution trace route", () => {
                 taskId: "task-1",
                 projectId: "proj-1",
                 messageId: "message-user-1",
-                sessionId: "task_session:task-1:ses-1",
+                sessionId: "task-session:task-1:ses-1",
                 itemKind: "user-input",
                 itemRole: "user",
                 displayText: "project projection prompt",
@@ -217,7 +217,7 @@ describe("project execution trace route", () => {
                 taskId: "task-1",
                 projectId: "proj-1",
                 messageId: "message-assistant-1",
-                sessionId: "task_session:task-1:ses-1",
+                sessionId: "task-session:task-1:ses-1",
                 itemKind: "assistant-output",
                 itemRole: "assistant",
                 displayText: "project projection response",
@@ -229,7 +229,7 @@ describe("project execution trace route", () => {
                 taskId: "task-1",
                 projectId: "proj-1",
                 runNodeId: "run-node-chain-1",
-                sessionId: "task_session:task-1:ses-1",
+                sessionId: "task-session:task-1:ses-1",
                 itemKind: "chain-step-result",
                 itemRole: "completed",
                 title: "链式步骤 1",
@@ -242,7 +242,7 @@ describe("project execution trace route", () => {
                 taskId: "task-1",
                 projectId: "proj-1",
                 runNodeId: "run-node-tool-1",
-                sessionId: "task_session:task-1:ses-1",
+                sessionId: "task-session:task-1:ses-1",
                 itemKind: "tool-call",
                 itemRole: "tool",
                 title: "工具调用 fetch_specs",
@@ -259,7 +259,7 @@ describe("project execution trace route", () => {
                 id: "projection-file-1",
                 taskId: "task-1",
                 projectId: "proj-1",
-                sessionId: "task_session:task-1:ses-1",
+                sessionId: "task-session:task-1:ses-1",
                 itemKind: "file-reference",
                 itemRole: "assistant",
                 title: "文件引用 docs/spec.md",
@@ -275,7 +275,7 @@ describe("project execution trace route", () => {
               },
             ],
             meta: {
-              readSource: "task-domain-projection",
+              readSource: "task-session-projection",
               complete: true,
               itemCount: 5,
             },
@@ -303,7 +303,7 @@ describe("project execution trace route", () => {
     expect(response.status).toBe(200);
     const payload = await response.json();
     expect(payload.timelineMeta).toMatchObject({
-      readSource: "task-domain-projection",
+      readSource: "task-session-projection",
       complete: true,
     });
     expectNoLegacyTimelineReadSource(payload);
@@ -378,14 +378,14 @@ describe("project execution trace route", () => {
               updatedAt: "2026-03-22T10:00:03.000Z",
             },
             meta: {
-              readSource: "task-domain-projection",
+              readSource: "task-session-projection",
               complete: true,
             },
           },
         };
       }
 
-      if (path === "/api/tasks/task-1/timeline-view?runtimeSessionId=ses-1") {
+      if (path === "/api/tasks/task-1/timeline-view?sessionId=task-session%3Atask-1%3Ases-1") {
         return {
           ok: true,
           status: 200,
@@ -396,7 +396,7 @@ describe("project execution trace route", () => {
                 taskId: "task-1",
                 projectId: "proj-1",
                 messageId: "message-user-1",
-                sessionId: "task_session:task-1:ses-1",
+                sessionId: "task-session:task-1:ses-1",
                 itemKind: "user-input",
                 itemRole: "user",
                 displayText: "projection prompt only",
@@ -405,7 +405,7 @@ describe("project execution trace route", () => {
               },
             ],
             meta: {
-              readSource: "task-domain-projection",
+              readSource: "task-session-projection",
               complete: true,
               itemCount: 1,
             },
@@ -484,21 +484,21 @@ describe("project execution trace route", () => {
               updatedAt: "2026-03-22T10:00:03.000Z",
             },
             meta: {
-              readSource: "task-domain-projection",
+              readSource: "task-session-projection",
               complete: false,
             },
           },
         };
       }
 
-      if (path === "/api/tasks/task-1/timeline-view?runtimeSessionId=ses-1") {
+      if (path === "/api/tasks/task-1/timeline-view?sessionId=task-session%3Atask-1%3Ases-1") {
         return {
           ok: true,
           status: 200,
           data: {
             data: [],
             meta: {
-              readSource: "task-domain-projection",
+              readSource: "task-session-projection",
               complete: false,
               itemCount: 0,
             },
@@ -506,7 +506,7 @@ describe("project execution trace route", () => {
         };
       }
 
-      if (path === "/api/tasks/task-1/branches/ses-1/timeline?includeLineage=true") {
+      if (path === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true") {
         throw new Error("should not load service timeline when snapshot latestResult already exists");
       }
 
@@ -529,7 +529,7 @@ describe("project execution trace route", () => {
     expect(response.status).toBe(200);
     const payload = await response.json();
     expect(payload.timelineMeta).toMatchObject({
-      readSource: "task-domain-projection",
+      readSource: "task-session-projection",
       complete: false,
       itemCount: 0,
     });
@@ -537,7 +537,7 @@ describe("project execution trace route", () => {
     expect(payload.snapshot).toMatchObject({ latestResult: "snapshot only response" });
     expect(payload.timeline).toEqual([]);
     expect(payload.segments).toEqual([]);
-    expectServiceTimelineNotRequested(cpFetchMock, "task-1", "ses-1");
+    expectServiceTimelineNotRequested(cpFetchMock, "task-1", "task-session:task-1:ses-1");
   });
 
   test("keeps non-empty partial projection timeline without loading service timeline", async () => {
@@ -565,14 +565,14 @@ describe("project execution trace route", () => {
           data: {
             data: null,
             meta: {
-              readSource: "task-domain-projection",
+              readSource: "task-session-projection",
               complete: false,
             },
           },
         };
       }
 
-      if (path === "/api/tasks/task-1/timeline-view?runtimeSessionId=ses-1") {
+      if (path === "/api/tasks/task-1/timeline-view?sessionId=task-session%3Atask-1%3Ases-1") {
         return {
           ok: true,
           status: 200,
@@ -583,7 +583,7 @@ describe("project execution trace route", () => {
                 taskId: "task-1",
                 projectId: "proj-1",
                 messageId: "message-user-partial-1",
-                sessionId: "task_session:task-1:ses-1",
+                sessionId: "task-session:task-1:ses-1",
                 itemKind: "user-input",
                 itemRole: "user",
                 displayText: "projection partial prompt",
@@ -592,7 +592,7 @@ describe("project execution trace route", () => {
               },
             ],
             meta: {
-              readSource: "task-domain-projection",
+              readSource: "task-session-projection",
               complete: false,
               itemCount: 1,
             },
@@ -600,7 +600,7 @@ describe("project execution trace route", () => {
         };
       }
 
-      if (path === "/api/tasks/task-1/branches/ses-1/timeline?includeLineage=true") {
+      if (path === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true") {
         throw new Error("should not load service timeline when projection timeline already has items");
       }
 
@@ -623,7 +623,7 @@ describe("project execution trace route", () => {
     expect(response.status).toBe(200);
     const payload = await response.json();
     expect(payload.timelineMeta).toMatchObject({
-      readSource: "task-domain-projection",
+      readSource: "task-session-projection",
       complete: false,
       itemCount: 1,
     });
@@ -637,7 +637,7 @@ describe("project execution trace route", () => {
     expect(payload.segments).toEqual([
       expect.objectContaining({ type: "final-prompt", content: "projection partial prompt" }),
     ]);
-    expectServiceTimelineNotRequested(cpFetchMock, "task-1", "ses-1");
+    expectServiceTimelineNotRequested(cpFetchMock, "task-1", "task-session:task-1:ses-1");
   });
 
   test("uses complete service timeline without falling back to session messages", async () => {
@@ -665,21 +665,21 @@ describe("project execution trace route", () => {
           data: {
             data: null,
             meta: {
-              readSource: "task-domain-projection",
+              readSource: "task-session-projection",
               complete: false,
             },
           },
         };
       }
 
-      if (path === "/api/tasks/task-1/timeline-view?runtimeSessionId=ses-1") {
+      if (path === "/api/tasks/task-1/timeline-view?sessionId=task-session%3Atask-1%3Ases-1") {
         return {
           ok: true,
           status: 200,
           data: {
             data: [],
             meta: {
-              readSource: "task-domain-projection",
+              readSource: "task-session-projection",
               complete: false,
               itemCount: 0,
             },
@@ -687,7 +687,7 @@ describe("project execution trace route", () => {
         };
       }
 
-      if (path === "/api/tasks/task-1/branches/ses-1/timeline?includeLineage=true") {
+      if (path === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true") {
         return {
           ok: true,
           status: 200,
@@ -772,7 +772,7 @@ describe("project execution trace route", () => {
         };
       }
 
-      if (path === "/api/tasks/task-1/branches/ses-1/timeline?includeLineage=true") {
+      if (path === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true") {
         return {
           ok: true,
           status: 200,
@@ -864,21 +864,21 @@ describe("project execution trace route", () => {
           data: {
             data: null,
             meta: {
-              readSource: "task-domain-projection",
+              readSource: "task-session-projection",
               complete: false,
             },
           },
         };
       }
 
-      if (path === "/api/tasks/task-1/timeline-view?runtimeSessionId=ses-1") {
+      if (path === "/api/tasks/task-1/timeline-view?sessionId=task-session%3Atask-1%3Ases-1") {
         return {
           ok: true,
           status: 200,
           data: {
             data: [],
             meta: {
-              readSource: "task-domain-projection",
+              readSource: "task-session-projection",
               complete: false,
               itemCount: 0,
             },
@@ -886,7 +886,7 @@ describe("project execution trace route", () => {
         };
       }
 
-      if (path === "/api/tasks/task-1/branches/ses-1/timeline?includeLineage=true") {
+      if (path === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true") {
         return {
           ok: false,
           status: 404,
@@ -915,7 +915,7 @@ describe("project execution trace route", () => {
     expect(response.status).toBe(200);
     const payload = await response.json();
     expect(payload.timelineMeta).toMatchObject({
-      readSource: "task-domain-projection",
+      readSource: "task-session-projection",
       complete: false,
       itemCount: 0,
     });

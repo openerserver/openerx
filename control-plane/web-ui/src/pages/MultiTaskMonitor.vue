@@ -324,16 +324,21 @@ import type { Yoga as YogaLayoutApi } from "yoga-layout/load";
 import {
   type RuntimePipeline,
   type Task,
-  type TaskBranchRecord,
+  type TaskSessionRecord,
   type TaskMemberViewModel,
   getTask,
-  getTaskBranches,
+  getTaskSessions,
   getTaskConversationMessages,
   getTaskMemberView,
   getTaskPipeline,
   listTasks,
 } from "../lib/api";
 import { renderMarkdown } from "../lib/markdown";
+import {
+  getRealtimeEventKind,
+  getRealtimeInfo,
+  getRealtimePart,
+} from "../lib/message-normalize";
 import { resolveTaskDisplayStatus } from "../lib/task-display-status";
 import { normalizeWorkspaceFilePath } from "../lib/workspace-file-path";
 import { useProjectStore } from "../stores/project";
@@ -461,7 +466,7 @@ interface LiveAssistantSnapshot {
 
 interface MonitorTaskContext {
   task: Task;
-  sessions: TaskBranchRecord[];
+  sessions: TaskSessionRecord[];
   pipeline: RuntimePipeline | null;
   memberView: TaskMemberViewModel | null;
 }
@@ -2503,7 +2508,7 @@ async function refreshNodeSummary(taskId: string, skipIfBusy = false) {
   try {
     const [task, sessionsResult, pipelineResult, memberView] = await Promise.all([
       getTask(taskId),
-      getTaskBranches(taskId).catch(() => ({ data: [] as TaskBranchRecord[] })),
+      getTaskSessions(taskId).catch(() => ({ data: [] as TaskSessionRecord[] })),
       getTaskPipeline(taskId).catch(() => null as RuntimePipeline | null),
       getTaskMemberView(taskId).catch(() => null as TaskMemberViewModel | null),
     ]);
@@ -3059,7 +3064,7 @@ function ensurePromptMessage(items: MonitorMessageItem[], taskId: string, taskPr
 function buildSummaryEvents(
   task: Task,
   resolvedStatus: string,
-  activeSession: TaskBranchRecord | null,
+  activeSession: TaskSessionRecord | null,
   currentStage: RuntimePipeline["stages"][number] | null,
   pipelineStages: RuntimePipeline["stages"],
 ) {
@@ -3127,7 +3132,7 @@ function buildPipelineSummaryLabel(
 
 function buildSummary(
   task: Task,
-  sessions: TaskBranchRecord[],
+  sessions: TaskSessionRecord[],
   pipeline: RuntimePipeline | null,
   memberView: TaskMemberViewModel | null,
   sessionMessages: unknown[],
@@ -3264,7 +3269,7 @@ function buildChangeLabel(task: Task): string {
 function resolveMonitorTaskStatus(
   task: Task,
   pipeline: RuntimePipeline | null,
-  sessions: TaskBranchRecord[],
+  sessions: TaskSessionRecord[],
   messages: MonitorMessageItem[],
 ) {
   if (!pipeline) {
@@ -3295,7 +3300,7 @@ function inferCompletedTaskStatus(
   taskStatus: string,
   task: Task,
   pipeline: RuntimePipeline | null,
-  sessions: TaskBranchRecord[],
+  sessions: TaskSessionRecord[],
   messages: MonitorMessageItem[],
 ) {
   if (taskStatus === "failed" || taskStatus === "stopped" || taskStatus === "cancelled") {
@@ -3384,12 +3389,12 @@ function buildLiveAssistantState(
   const relevantEvents = listRelevantRealtimeEvents(taskId, sessionId, realtimeEvents);
 
   for (const event of relevantEvents) {
-    const rawType = getRealtimeRawType(event);
-    if (rawType === "message.updated") {
+    const eventKind = getRealtimeEventKind(event);
+    if (eventKind === "task.message.updated") {
       applyRealtimeMessageUpdatedToSnapshot(snapshot, event);
     }
 
-    if (rawType === "message.part.updated") {
+    if (eventKind === "task.message.delta") {
       applyRealtimeTextPartToSnapshot(snapshot, event);
     }
   }
@@ -3778,24 +3783,6 @@ function parseMessageTimestamp(value: unknown): string | undefined {
   return undefined;
 }
 
-function getRealtimeRawType(event: RealtimeEvent): string {
-  return typeof event.data.rawType === "string" ? event.data.rawType : event.type;
-}
-
-function getRealtimeInfo(event: RealtimeEvent): Record<string, unknown> | null {
-  if (event.data.info && typeof event.data.info === "object" && !Array.isArray(event.data.info)) {
-    return event.data.info as Record<string, unknown>;
-  }
-  return null;
-}
-
-function getRealtimePart(event: RealtimeEvent): Record<string, unknown> | null {
-  if (event.data.part && typeof event.data.part === "object" && !Array.isArray(event.data.part)) {
-    return event.data.part as Record<string, unknown>;
-  }
-  return null;
-}
-
 function buildLiveMessageStateKey(taskId: string, sessionId: string | undefined) {
   return `${taskId}:${sessionId || "none"}`;
 }
@@ -3831,7 +3818,7 @@ function setIncompleteState(state: LiveMessageState, messageId: string, incomple
 }
 
 function shouldRefreshPersistedMessagesFromEvent(event: RealtimeEvent) {
-  if (getRealtimeRawType(event) !== "message.updated") {
+  if (getRealtimeEventKind(event) !== "task.message.updated") {
     return false;
   }
 
@@ -3848,8 +3835,8 @@ function processPendingRealtimeEvents(
   let shouldRefreshPersistedMessages = false;
 
   for (const event of pendingEvents) {
-    const rawType = getRealtimeRawType(event);
-    if (rawType === "message.part.updated" || rawType === "message.updated") {
+    const eventKind = getRealtimeEventKind(event);
+    if (eventKind === "task.message.delta" || eventKind === "task.message.updated") {
       applyRealtimeEventToLiveState(taskId, activeSessionId, event);
       shouldRefreshPersistedMessages ||=
         Boolean(activeSessionId) && shouldRefreshPersistedMessagesFromEvent(event);
@@ -3964,16 +3951,16 @@ function applyRealtimeEventToLiveState(
   }
 
   const state = ensureLiveMessageState(taskId, sessionId);
-  const rawType = getRealtimeRawType(event);
+  const eventKind = getRealtimeEventKind(event);
 
-  if (rawType === "message.updated") {
+  if (eventKind === "task.message.updated") {
     const info = getRealtimeInfo(event);
     if (info) {
       applyRealtimeAssistantUpdateToLiveState(state, info);
     }
   }
 
-  if (rawType !== "message.part.updated") {
+  if (eventKind !== "task.message.delta") {
     return;
   }
 

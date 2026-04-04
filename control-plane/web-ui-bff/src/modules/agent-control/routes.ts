@@ -5,14 +5,9 @@ import { authHeader, cpFetch, createInternalAuthorization } from "../../lib/cont
 import { formatModelRoute } from "../../lib/opencode-config";
 import { mergeTaskStrategy, readOrchestrationStrategy } from "../../lib/orchestration-strategy";
 import { recordPaidExecutionRuntimeUsage } from "../../lib/paid-execution-runtime";
-import {
-  executeLifecycleHooks,
-  mergeStageAndStrategyHooks,
-  parseStageHooks,
-} from "../hooks/lifecycle-hooks";
+import { executeLifecycleHooks } from "../hooks/lifecycle-hooks";
 import { wsBroadcaster } from "../realtime/ws-broadcaster";
 import { finalizeTaskState } from "../tasks/finalize";
-import { fetchCurrentStageHooks } from "../tasks/workflow-stage-execution";
 import {
   extractAssistantResultFromMessages,
   getAgentMessages,
@@ -339,7 +334,7 @@ async function ensureRuntimeRunFromSummary(
 }
 
 async function ensureRuntimeRunFromSummaryDetailed(
-  c: Parameters<typeof authHeader>[0],
+  _c: Parameters<typeof authHeader>[0],
   agentRunId: string,
 ): Promise<RuntimeRunRecoveryResult> {
   const existing = getAgentRun(agentRunId);
@@ -347,53 +342,16 @@ async function ensureRuntimeRunFromSummaryDetailed(
     return { run: existing };
   }
 
-  const summaryResult = await cpFetch<AgentRunSummaryResponse>(
-    `/api/agent-runs/${encodeURIComponent(agentRunId)}/summary`,
-    {
-      authorization: authHeader(c),
+  // Agent runs persisted data is no longer available after agent_runs table removal
+  // Only runtime-registered runs are accessible
+  return {
+    failure: {
+      status: 404,
+      code: "AGENT_RUN_SUMMARY_NOT_FOUND",
+      error:
+        "This agent run is not currently active in the runtime. Historical agent run data is no longer available.",
     },
-  );
-
-  if (!summaryResult.ok || !summaryResult.data) {
-    return {
-      failure: {
-        status: 404,
-        code: "AGENT_RUN_SUMMARY_NOT_FOUND",
-        error:
-          "Persisted summary for this historical agent run is unavailable, so the runtime instance cannot be recovered.",
-      },
-    };
-  }
-
-  if (
-    !summaryResult.data.sessionId ||
-    !summaryResult.data.taskId ||
-    !summaryResult.data.projectId
-  ) {
-    return {
-      failure: {
-        status: 409,
-        code: "AGENT_RUN_SUMMARY_INCOMPLETE",
-        error:
-          "Persisted summary for this agent run is incomplete, so the runtime instance cannot be recovered safely.",
-      },
-    };
-  }
-
-  recoverAgentRun(
-    agentRunId,
-    summaryResult.data.sessionId,
-    summaryResult.data.taskId,
-    summaryResult.data.projectId,
-    summaryResult.data.startedAt,
-    parsePersistedModel(summaryResult.data.modelUsed),
-  );
-
-  if (summaryResult.data.status && summaryResult.data.status !== "running") {
-    updateAgentRunStatus(agentRunId, summaryResult.data.status as RuntimeRun["status"]);
-  }
-
-  return { run: getAgentRun(agentRunId) };
+  };
 }
 
 async function loadSessionTokenUsage(
@@ -491,190 +449,6 @@ async function buildRuntimeOnlySummary(
     subSessionId: runtimeRun.subSessionId,
   } satisfies AgentRunSummaryResponse;
 }
-
-// GET /api/agents/overview — aggregated overview for agent ops dashboard
-agentControlRoutes.get("/overview", async (c) => {
-  const query = buildForwardedQuery(c, [
-    "projectId",
-    "taskId",
-    "agentRunId",
-    "from",
-    "to",
-    "ownerScope",
-    "status",
-    "search",
-    "riskLevel",
-    "approvalBlocked",
-    "requiresIntervention",
-    "agentType",
-    "model",
-    "entryContext",
-  ]);
-  const result = await cpFetch<AgentOverviewResponse>(`/api/agent-runs/overview${query}`, {
-    authorization: authHeader(c),
-  });
-  return c.json(result.data, result.ok ? 200 : (result.status as 401 | 403 | 502));
-});
-
-// GET /api/agents/queues — aggregated queues for attention/running/recent
-agentControlRoutes.get("/queues", async (c) => {
-  const query = buildForwardedQuery(c, [
-    "queue",
-    "projectId",
-    "taskId",
-    "agentRunId",
-    "from",
-    "to",
-    "ownerScope",
-    "page",
-    "pageSize",
-    "status",
-    "search",
-    "riskLevel",
-    "approvalBlocked",
-    "requiresIntervention",
-    "agentType",
-    "model",
-    "entryContext",
-  ]);
-  const result = await cpFetch<AgentQueueResponse>(`/api/agent-runs/queues${query}`, {
-    authorization: authHeader(c),
-  });
-  if (!result.ok) {
-    return c.json(result.data, result.status as 401 | 403 | 502);
-  }
-
-  const runtimeMap = new Map(listAgentRuns().map((run) => [run.agentRunId, run]));
-  const data = await Promise.all(
-    result.data.data.map(async (item) => {
-      const tokenUsed = await maybeBackfillTokenUsage({
-        agentRunId: item.agentRunId,
-        taskId: item.taskId,
-        sessionId: item.sessionId,
-        status: item.status,
-        tokenUsed: item.tokenUsed,
-        authorization: authHeader(c),
-      });
-      return mergeQueueItemWithRuntime({ ...item, tokenUsed }, runtimeMap.get(item.agentRunId));
-    }),
-  );
-  return c.json({ ...result.data, data });
-});
-
-// GET /api/agents/:agentRunId/summary — aggregated drawer summary for single agent run
-agentControlRoutes.get("/:agentRunId/summary", async (c) => {
-  const agentRunId = c.req.param("agentRunId");
-  const query = buildForwardedQuery(c, ["entryContext", "ownerScope"]);
-  const result = await cpFetch<AgentRunSummaryResponse>(
-    `/api/agent-runs/${encodeURIComponent(agentRunId)}/summary${query}`,
-    {
-      authorization: authHeader(c),
-    },
-  );
-  const runtimeRun = getAgentRun(agentRunId);
-
-  if (!result.ok) {
-    if (result.status === 404 && runtimeRun) {
-      const fallback = await buildRuntimeOnlySummary(c, runtimeRun);
-      const tokenUsed = await loadSessionTokenUsage(
-        fallback.sessionId,
-        runtimeRun.taskId,
-        authHeader(c),
-      );
-      return c.json({ ...fallback, tokenUsed: tokenUsed || fallback.tokenUsed }, 200);
-    }
-    return c.json(result.data, result.status as 401 | 403 | 404 | 502);
-  }
-
-  const summary = mergeSummaryWithRuntime(result.data, runtimeRun);
-  const tokenUsed = await maybeBackfillTokenUsage({
-    agentRunId: summary.agentRunId,
-    taskId: summary.taskId,
-    sessionId: summary.sessionId,
-    status: summary.status,
-    tokenUsed: summary.tokenUsed,
-    authorization: authHeader(c),
-  });
-  return c.json({ ...summary, tokenUsed });
-});
-
-agentControlRoutes.get("/analytics/health", async (c) => {
-  const query = buildForwardedQuery(c, [
-    "projectId",
-    "taskId",
-    "agentRunId",
-    "from",
-    "to",
-    "ownerScope",
-    "status",
-    "search",
-    "riskLevel",
-    "approvalBlocked",
-    "requiresIntervention",
-    "agentType",
-    "model",
-    "entryContext",
-  ]);
-  const result = await cpFetch<AgentAnalyticsHealthResponse>(
-    `/api/agent-runs/analytics/health${query}`,
-    {
-      authorization: authHeader(c),
-    },
-  );
-  return c.json(result.data, result.ok ? 200 : (result.status as 401 | 403 | 502));
-});
-
-agentControlRoutes.get("/analytics/failures", async (c) => {
-  const query = buildForwardedQuery(c, [
-    "projectId",
-    "taskId",
-    "agentRunId",
-    "from",
-    "to",
-    "ownerScope",
-    "status",
-    "search",
-    "riskLevel",
-    "approvalBlocked",
-    "requiresIntervention",
-    "agentType",
-    "model",
-    "entryContext",
-  ]);
-  const result = await cpFetch<AgentAnalyticsFailuresResponse>(
-    `/api/agent-runs/analytics/failures${query}`,
-    {
-      authorization: authHeader(c),
-    },
-  );
-  return c.json(result.data, result.ok ? 200 : (result.status as 401 | 403 | 502));
-});
-
-agentControlRoutes.get("/analytics/timeline", async (c) => {
-  const query = buildForwardedQuery(c, [
-    "projectId",
-    "taskId",
-    "agentRunId",
-    "from",
-    "to",
-    "ownerScope",
-    "status",
-    "search",
-    "riskLevel",
-    "approvalBlocked",
-    "requiresIntervention",
-    "agentType",
-    "model",
-    "entryContext",
-  ]);
-  const result = await cpFetch<AgentAnalyticsTimelineResponse>(
-    `/api/agent-runs/analytics/timeline${query}`,
-    {
-      authorization: authHeader(c),
-    },
-  );
-  return c.json(result.data, result.ok ? 200 : (result.status as 401 | 403 | 502));
-});
 
 // GET /api/agents — list all registered agent runs
 agentControlRoutes.get("/", (c) => {
@@ -935,15 +709,9 @@ async function runPreResumeHooks(
     return { ok: false, error: `Failed to load task ${taskId} before resume` };
   }
 
-  // Merge stage-level hooks with strategy-level hooks
-  const rawStageHooks = await fetchCurrentStageHooks(taskId, authorization);
-  const stageHooks = parseStageHooks(rawStageHooks);
-  const mergedHooks = mergeStageAndStrategyHooks(stageHooks, strategyConfig.hooks);
-  const mergedStrategy: typeof strategyConfig = { ...strategyConfig, hooks: mergedHooks };
-
   const task = taskResult.data;
   const hookResult = await executeLifecycleHooks({
-    strategy: mergedStrategy,
+    strategy: strategyConfig,
     trigger: "pre-resume",
     taskId: task.id,
     projectId: task.projectId,

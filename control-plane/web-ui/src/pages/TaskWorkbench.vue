@@ -31,7 +31,12 @@
         <a-button :disabled="workbench.tabs.length < 2" @click="toggleSplitMode">
           {{ workbench.splitMode ? "退出分屏" : "双栏分屏" }}
         </a-button>
-        <a-radio-group v-model:value="workbenchViewMode" size="small" button-style="solid">
+        <a-radio-group
+          :value="workbenchViewMode"
+          size="small"
+          button-style="solid"
+          @update:value="handleWorkbenchViewModeChange"
+        >
           <a-radio-button value="v1">经典</a-radio-button>
           <a-radio-button value="v3">V3</a-radio-button>
         </a-radio-group>
@@ -86,15 +91,11 @@
           </a-tab-pane>
         </a-tabs>
 
-        <div v-if="workbench.activeTaskId" class="task-workbench-member-grid">
+        <div
+          v-if="workbench.splitMode && workbench.secondaryPane?.taskId"
+          class="task-workbench-member-grid"
+        >
           <TaskWorkbenchMemberStrip
-            pane-label="主视图协作"
-            :task-title="activeTab?.title || workbench.activeTaskId"
-            :view="activeTaskMemberView"
-            :loading="activeTaskMemberLoading"
-          />
-          <TaskWorkbenchMemberStrip
-            v-if="workbench.splitMode && workbench.secondaryPane?.taskId"
             pane-label="副窗协作"
             :task-title="secondaryTaskTab?.title || workbench.secondaryPane.taskId"
             :view="secondaryTaskMemberView"
@@ -187,7 +188,15 @@ import { Button, Modal, message, notification } from "ant-design-vue";
 import type { DefaultOptionType } from "ant-design-vue/es/select";
 import { computed, defineAsyncComponent, h, onUnmounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { type Task, type TaskMemberViewModel, getTask, getTaskMemberView, listTasks, toApiError } from "../lib/api";
+import {
+  type Task,
+  type TaskMemberViewModel,
+  type TaskTreeTaskMeta,
+  getTaskMemberView,
+  getTaskTreeMeta,
+  listTasks,
+  toApiError,
+} from "../lib/api";
 import { resolveTaskDisplayStatus } from "../lib/task-display-status";
 import { useProjectStore } from "../stores/project";
 import { useWorkbenchStore } from "../stores/workbench";
@@ -205,7 +214,7 @@ const taskPickerValue = ref<string | undefined>(undefined);
 const taskPickerTarget = ref<"primary" | "secondary">("primary");
 const taskPickerLoading = ref(false);
 const taskPickerTasks = ref<Task[]>([]);
-const taskMetaMap = ref<Record<string, Task>>({});
+const taskMetaMap = ref<Record<string, TaskTreeTaskMeta>>({});
 const taskMemberViewMap = ref<Record<string, TaskMemberViewModel | null>>({});
 const taskMemberLoadingMap = ref<Record<string, boolean>>({});
 const clearUndoNotificationKey = "workbench-clear-undo";
@@ -234,16 +243,6 @@ const secondaryOptions = computed(() =>
 const activeTaskMeta = computed(() => {
   const taskId = workbench.activeTaskId;
   return taskId ? taskMetaMap.value[taskId] : undefined;
-});
-
-const activeTaskMemberView = computed(() => {
-  const taskId = workbench.activeTaskId;
-  return taskId ? taskMemberViewMap.value[taskId] || null : null;
-});
-
-const activeTaskMemberLoading = computed(() => {
-  const taskId = workbench.activeTaskId;
-  return taskId ? taskMemberLoadingMap.value[taskId] === true : false;
 });
 
 const activeTaskDisplayStatus = computed(() =>
@@ -350,9 +349,12 @@ async function ensureTaskMeta(taskId: string) {
   }
 
   try {
-    const task = await getTask(taskId);
+    const task = await getTaskTreeMeta(taskId);
     taskMetaMap.value = { ...taskMetaMap.value, [taskId]: task };
-    workbench.updateTaskMeta(taskId, { title: task.title, status: task.status });
+    workbench.updateTaskMeta(taskId, {
+      title: task.title ?? undefined,
+      status: task.status ?? undefined,
+    });
   } catch (error) {
     if (toApiError(error)?.status === 404) {
       handleMissingTask(taskId);
@@ -366,9 +368,12 @@ async function refreshOpenTabMeta() {
   await Promise.all(
     taskIds.map(async (taskId) => {
       try {
-        const task = await getTask(taskId);
+        const task = await getTaskTreeMeta(taskId);
         taskMetaMap.value = { ...taskMetaMap.value, [taskId]: task };
-        workbench.updateTaskMeta(taskId, { title: task.title, status: task.status });
+        workbench.updateTaskMeta(taskId, {
+          title: task.title ?? undefined,
+          status: task.status ?? undefined,
+        });
       } catch (error) {
         if (toApiError(error)?.status === 404) {
           handleMissingTask(taskId);
@@ -403,9 +408,9 @@ async function ensureTaskMemberView(taskId: string, force = false) {
 }
 
 async function refreshFocusedTaskMemberViews(force = false) {
-  const taskIds = Array.from(
-    new Set([workbench.activeTaskId, workbench.secondaryPane?.taskId].filter(Boolean) as string[]),
-  );
+  const taskIds = workbench.splitMode && workbench.secondaryPane?.taskId
+    ? [workbench.secondaryPane.taskId]
+    : [];
   await Promise.all(taskIds.map((taskId) => ensureTaskMemberView(taskId, force)));
 }
 
@@ -513,6 +518,10 @@ function tabAttentionLabel(taskId?: string, status?: string) {
 }
 
 const workbenchViewMode = ref<"v1" | "v3">("v1");
+
+function handleWorkbenchViewModeChange(value: string | number | boolean) {
+  workbenchViewMode.value = value === "v3" ? "v3" : "v1";
+}
 
 function taskFrameSrc(taskId: string, sessionId?: string) {
   const query = new URLSearchParams({ embedded: "1", workbench: "1" });

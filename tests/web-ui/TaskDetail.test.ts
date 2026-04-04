@@ -68,18 +68,21 @@ const realtimeBase = vi.hoisted(() => ({
 const realtimeState = reactive(realtimeBase);
 
 const apiMocks = vi.hoisted(() => ({
-  activateTaskBranch: vi.fn(),
+  activateTaskSession: vi.fn(),
   adoptParallelCandidate: vi.fn(),
   advanceWorkflowStage: vi.fn(),
-  archiveTaskBranch: vi.fn(),
+  archiveTaskSession: vi.fn(),
   completeTask: vi.fn(),
   continueTask: vi.fn(),
   executeTask: vi.fn(),
-  forkTaskBranch: vi.fn(),
+  forkTaskSession: vi.fn(),
   getProjectRuntimeUsageLedgers: vi.fn(),
   getProjectRoleExecutionView: vi.fn(),
-  getTaskBranchLineage: vi.fn(),
-  getTaskBranches: vi.fn(),
+  getTaskAgentRuns: vi.fn(),
+  getTaskDomainRunDetail: vi.fn(),
+  getTaskDomainRuns: vi.fn(),
+  getTaskMessages: vi.fn(),
+  getTaskSessionLineage: vi.fn(),
   getTaskConversationMessages: vi.fn(),
   getSessionMessages: vi.fn(),
   getTaskExecutionTraceView: vi.fn(),
@@ -457,14 +460,21 @@ beforeEach(() => {
   });
   apiMocks.getTaskPipeline.mockResolvedValue({ stages: [] });
   apiMocks.getTaskSessions.mockResolvedValue({ data: [] });
+  apiMocks.getTaskAgentRuns.mockResolvedValue({ data: [] });
+  apiMocks.getTaskDomainRuns.mockResolvedValue({ data: [] });
+  apiMocks.getTaskDomainRunDetail.mockResolvedValue({ data: null });
+  apiMocks.getTaskMessages.mockImplementation((taskId: string) => {
+    const sessionQuery = (routeState.query as Record<string, unknown>).session;
+    return apiMocks.getSessionMessages(
+      taskId,
+      typeof sessionQuery === "string" ? sessionQuery : "ses-1",
+    );
+  });
   apiMocks.getTaskConversationMessages.mockImplementation((...args: unknown[]) =>
     apiMocks.getSessionMessages(...args),
   );
-  apiMocks.getTaskBranchLineage.mockImplementation((...args: unknown[]) =>
+  apiMocks.getTaskSessionLineage.mockImplementation((...args: unknown[]) =>
     apiMocks.getSessionTree(...args),
-  );
-  apiMocks.getTaskBranches.mockImplementation((...args: unknown[]) =>
-    apiMocks.getTaskSessions(...args),
   );
   apiMocks.getTaskExecutionTraceView.mockResolvedValue({
     taskId: "task-1",
@@ -501,9 +511,9 @@ beforeEach(() => {
     ],
   });
   apiMocks.terminateAgent.mockResolvedValue({ ok: true });
-  apiMocks.activateTaskBranch.mockResolvedValue({ ok: true, sessionId: "ses-1" });
-  apiMocks.archiveTaskBranch.mockResolvedValue({ ok: true });
-  apiMocks.forkTaskBranch.mockResolvedValue({ ok: true, sessionId: "ses-2" });
+  apiMocks.activateTaskSession.mockResolvedValue({ ok: true, sessionId: "ses-1" });
+  apiMocks.archiveTaskSession.mockResolvedValue({ ok: true });
+  apiMocks.forkTaskSession.mockResolvedValue({ ok: true, sessionId: "ses-2" });
   apiMocks.getTaskGovernance.mockResolvedValue({
     overallRisk: "low",
     approvalRequired: false,
@@ -762,6 +772,127 @@ describe("TaskDetail", () => {
     expect(wrapper.text()).toContain("模型响应较慢");
   });
 
+  it("stops waiting when persisted assistant replies carry ISO completion timestamps", async () => {
+    const wrapper = await mountPage();
+    const setupState = getSetupState(wrapper) as {
+      selectedSessionId: string | undefined;
+      conversationMessages: unknown[];
+      pendingAssistantState:
+        | {
+            sessionId: string;
+            prompt: string;
+            sentAt: string;
+          }
+        | null;
+    };
+
+    setupState.selectedSessionId = "ses-1";
+    setupState.pendingAssistantState = {
+      sessionId: "ses-1",
+      prompt: "继续执行",
+      sentAt: "2026-03-10T12:00:00.000Z",
+    };
+    setupState.conversationMessages = [
+      {
+        info: {
+          id: "msg-user-1",
+          role: "user",
+          time: {
+            created: "2026-03-10T12:00:00.000Z",
+          },
+        },
+        parts: [{ type: "text", text: "继续执行" }],
+      },
+      {
+        info: {
+          id: "msg-assistant-1",
+          role: "assistant",
+          time: {
+            created: "2026-03-10T12:00:10.000Z",
+            completed: "2026-03-10T12:00:20.000Z",
+          },
+        },
+        parts: [{ type: "text", text: "已完成" }],
+      },
+    ];
+
+    await nextTick();
+    await flushPromises();
+
+    expect(readSetupValue<boolean>(setupState, "isAwaitingAssistantResponse")).toBe(false);
+    expect(readSetupValue<unknown | null>(setupState, "pendingAssistantMessage")).toBeNull();
+
+    apiMocks.getTaskMessages.mockClear();
+
+    await vi.advanceTimersByTimeAsync(500);
+    await flushPromises();
+
+    expect(apiMocks.getTaskMessages).not.toHaveBeenCalled();
+  });
+
+  it("ignores trailing empty user shells when persisted assistant replies are already complete", async () => {
+    const wrapper = await mountPage();
+    const setupState = getSetupState(wrapper) as {
+      selectedSessionId: string | undefined;
+      conversationMessages: unknown[];
+      pendingAssistantState:
+        | {
+            sessionId: string;
+            prompt: string;
+            sentAt: string;
+          }
+        | null;
+    };
+
+    setupState.selectedSessionId = "ses-1";
+    setupState.pendingAssistantState = null;
+    setupState.conversationMessages = [
+      {
+        info: {
+          id: "msg-user-1",
+          role: "user",
+          time: {
+            created: "2026-03-10T12:00:00.000Z",
+          },
+        },
+        parts: [{ type: "text", text: "继续执行" }],
+      },
+      {
+        info: {
+          id: "msg-assistant-1",
+          role: "assistant",
+          time: {
+            created: "2026-03-10T12:00:10.000Z",
+            completed: "2026-03-10T12:00:20.000Z",
+          },
+        },
+        parts: [{ type: "text", text: "已完成" }],
+      },
+      {
+        info: {
+          id: "msg-user-shell",
+          role: "user",
+          time: {
+            created: "2026-03-10T12:00:20.000Z",
+          },
+        },
+        parts: [],
+      },
+    ];
+
+    await nextTick();
+    await flushPromises();
+
+    expect(readSetupValue<boolean>(setupState, "isAwaitingAssistantResponse")).toBe(false);
+
+    apiMocks.getTaskMessages.mockClear();
+
+    await vi.advanceTimersByTimeAsync(500);
+    await flushPromises();
+
+    expect(apiMocks.getTaskMessages).not.toHaveBeenCalled();
+  });
+
   it("allows terminating the current execution while waiting for the model", async () => {
     vi.setSystemTime(new Date("2026-03-10T12:00:00.000Z"));
     apiMocks.getTask.mockResolvedValueOnce(makeTaskWithOverrides({ status: "completed" }));
@@ -1006,7 +1137,7 @@ describe("TaskDetail", () => {
     await flushPromises();
 
     expect(wrapper.text()).toContain("待审批");
-    expect(wrapper.text()).toContain("当前分支已暂停，等待批准继续");
+    expect(wrapper.text()).toContain("当前任务执行已暂停，等待批准继续");
     expect(wrapper.text()).toContain("审批项：model_burst_resume");
     expect(wrapper.text()).toContain("28 次请求 / 120000 tokens / 成本 6.10 / 阈值占用 142%");
   });
@@ -1094,7 +1225,7 @@ describe("TaskDetail", () => {
       expect.arrayContaining([
         expect.objectContaining({ label: "账本批次", value: "1" }),
         expect.objectContaining({ label: "总成本", value: "$0.4800" }),
-        expect.objectContaining({ label: "当前分支账本", value: "ses-1 · $0.4800" }),
+        expect.objectContaining({ label: "当前任务账本", value: "ses-1 · $0.4800" }),
       ]),
     );
     expect(
@@ -1926,6 +2057,1585 @@ describe("TaskDetail", () => {
     expect(wrapper.text()).toContain("GPT reply");
   });
 
+  it("reconstructs parallel comparison from session summaries without fetching domain runs", async () => {
+    apiMocks.getTask.mockResolvedValueOnce(
+      makeTaskWithOverrides({
+        sessionId: "ses-root",
+        executionMode: "parallel",
+        orchestrationKind: "parallel",
+        currentRunCandidateCount: 2,
+        strategy: JSON.stringify({
+          executionMode: "parallel",
+          parallelCandidates: [
+            { label: "Claude", model: "github-copilot:claude-sonnet-4" },
+            { label: "GPT", model: "github-copilot:gpt-5.4" },
+          ],
+        }),
+      }),
+    );
+    apiMocks.getTaskPipeline.mockResolvedValueOnce({
+      taskId: "task-1",
+      sessionId: "ses-root",
+      branchName: "main",
+      status: "running",
+      createdAt: "2026-03-10T12:00:00.000Z",
+      updatedAt: "2026-03-10T12:00:10.000Z",
+      summary: {
+        totalStages: 0,
+        completedStages: 0,
+        failedStages: 0,
+        currentStageId: null,
+        totalTokens: { input: 0, output: 0 },
+        totalDurationMs: 0,
+        replanCount: 0,
+      },
+      stages: [],
+    });
+    apiMocks.getTaskSessions.mockResolvedValueOnce({
+      data: [
+        {
+          id: "ses-claude",
+          title: "Claude",
+          isActive: false,
+          summary: null,
+          coordinationKey: "group-1",
+          winnerSessionId: "ses-gpt",
+          candidateIndex: 0,
+          executionStatus: "completed",
+          createdAt: "2026-03-10T12:00:01.000Z",
+          updatedAt: "2026-03-10T12:00:06.000Z",
+        },
+        {
+          id: "ses-gpt",
+          title: "GPT",
+          isActive: true,
+          summary: null,
+          coordinationKey: "group-1",
+          winnerSessionId: "ses-gpt",
+          candidateIndex: 1,
+          executionStatus: "completed",
+          createdAt: "2026-03-10T12:00:02.000Z",
+          updatedAt: "2026-03-10T12:00:07.000Z",
+        },
+      ],
+    });
+    apiMocks.getSessionTree.mockResolvedValueOnce({
+      data: [
+        {
+          runtimeSessionId: "ses-root",
+          parentRuntimeSessionId: null,
+          sourceType: "root",
+          status: "completed",
+          title: "主分支",
+          branchLabel: "main",
+          children: [
+            {
+              runtimeSessionId: "ses-claude",
+              parentRuntimeSessionId: "ses-root",
+              sourceType: "fork",
+              status: "completed",
+              title: "Claude",
+              branchLabel: "candidate-a",
+              children: [],
+            },
+            {
+              runtimeSessionId: "ses-gpt",
+              parentRuntimeSessionId: "ses-root",
+              sourceType: "fork",
+              status: "completed",
+              title: "GPT",
+              branchLabel: "candidate-b",
+              children: [],
+            },
+          ],
+        },
+      ],
+    });
+    apiMocks.getTaskAgentRuns.mockResolvedValueOnce({
+      data: [
+        {
+          id: "agent-run-claude",
+          taskId: "task-1",
+          sessionId: "ses-claude",
+          agentType: "default-executor",
+          status: "completed",
+          modelUsed: "github-copilot:claude-sonnet-4",
+          tokenUsed: 0,
+          candidateIndex: 0,
+          createdAt: "2026-03-10T12:00:01.000Z",
+          startedAt: "2026-03-10T12:00:01.000Z",
+          finishedAt: "2026-03-10T12:00:05.000Z",
+        },
+        {
+          id: "agent-run-gpt",
+          taskId: "task-1",
+          sessionId: "ses-gpt",
+          agentType: "default-executor",
+          status: "completed",
+          modelUsed: "github-copilot:gpt-5.4",
+          tokenUsed: 0,
+          candidateIndex: 1,
+          createdAt: "2026-03-10T12:00:02.000Z",
+          startedAt: "2026-03-10T12:00:02.000Z",
+          finishedAt: "2026-03-10T12:00:06.000Z",
+        },
+      ],
+    });
+    apiMocks.getSessionMessages.mockImplementation(async (_taskId: string, sessionId: string) => {
+      if (sessionId === "ses-claude") {
+        return {
+          data: [
+            {
+              info: {
+                id: "msg-claude-1",
+                role: "assistant",
+                time: { created: Date.parse("2026-03-10T12:00:03.000Z") },
+              },
+              parts: [{ type: "text", text: "Claude summary reply" }],
+            },
+          ],
+        };
+      }
+
+      if (sessionId === "ses-gpt") {
+        return {
+          data: [
+            {
+              info: {
+                id: "msg-gpt-1",
+                role: "assistant",
+                time: { created: Date.parse("2026-03-10T12:00:04.000Z") },
+              },
+              parts: [{ type: "text", text: "GPT summary reply" }],
+            },
+          ],
+        };
+      }
+
+      return { data: [] };
+    });
+
+    const wrapper = await mountPage();
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("并行模型回复比较");
+    expect(wrapper.text()).toContain("Claude");
+    expect(wrapper.text()).toContain("GPT");
+    expect(wrapper.text()).toContain("Claude summary reply");
+    expect(wrapper.text()).toContain("GPT summary reply");
+    expect(apiMocks.getTaskAgentRuns).toHaveBeenCalledWith("task-1");
+    expect(apiMocks.getTaskDomainRuns).not.toHaveBeenCalled();
+    expect(apiMocks.getTaskDomainRunDetail).not.toHaveBeenCalled();
+  });
+
+  it("inlines parallel comparison after the triggering user message", async () => {
+    apiMocks.getTask.mockResolvedValueOnce(
+      makeTaskWithOverrides({
+        sessionId: "ses-root",
+        executionMode: "parallel",
+        orchestrationKind: "parallel",
+        currentRunCandidateCount: 2,
+        strategy: JSON.stringify({
+          executionMode: "parallel",
+          parallelCandidates: [
+            { label: "Claude", model: "github-copilot:claude-sonnet-4" },
+            { label: "GPT", model: "github-copilot:gpt-5.4" },
+          ],
+        }),
+      }),
+    );
+    apiMocks.getTaskMessages.mockResolvedValueOnce({
+      data: [
+        {
+          info: {
+            id: "msg-user-history",
+            role: "user",
+            time: { created: Date.parse("2026-03-10T11:59:00.000Z") },
+          },
+          parts: [{ type: "text", text: "历史问题" }],
+        },
+        {
+          info: {
+            id: "msg-assistant-history",
+            role: "assistant",
+            time: {
+              created: Date.parse("2026-03-10T11:59:20.000Z"),
+              completed: Date.parse("2026-03-10T11:59:40.000Z"),
+            },
+          },
+          parts: [{ type: "text", text: "历史回答" }],
+        },
+      ],
+    });
+    apiMocks.getTaskPipeline.mockResolvedValueOnce({
+      taskId: "task-1",
+      sessionId: "ses-root",
+      branchName: "main",
+      status: "running",
+      createdAt: "2026-03-10T12:00:00.000Z",
+      updatedAt: "2026-03-10T12:00:10.000Z",
+      summary: {
+        totalStages: 0,
+        completedStages: 0,
+        failedStages: 0,
+        currentStageId: null,
+        totalTokens: { input: 0, output: 0 },
+        totalDurationMs: 0,
+        replanCount: 0,
+      },
+      stages: [],
+    });
+    apiMocks.getTaskSessions.mockResolvedValueOnce({
+      data: [
+        {
+          id: "ses-claude",
+          title: "Claude",
+          isActive: false,
+          summary: null,
+          coordinationKey: "group-1",
+          winnerSessionId: "ses-gpt",
+          candidateIndex: 0,
+          executionStatus: "completed",
+          createdAt: "2026-03-10T12:00:01.000Z",
+          updatedAt: "2026-03-10T12:00:06.000Z",
+        },
+        {
+          id: "ses-gpt",
+          title: "GPT",
+          isActive: true,
+          summary: null,
+          coordinationKey: "group-1",
+          winnerSessionId: "ses-gpt",
+          candidateIndex: 1,
+          executionStatus: "completed",
+          createdAt: "2026-03-10T12:00:02.000Z",
+          updatedAt: "2026-03-10T12:00:07.000Z",
+        },
+      ],
+    });
+    apiMocks.getSessionTree.mockResolvedValueOnce({
+      data: [
+        {
+          runtimeSessionId: "ses-root",
+          parentRuntimeSessionId: null,
+          sourceType: "root",
+          status: "completed",
+          title: "主分支",
+          branchLabel: "main",
+          children: [
+            {
+              runtimeSessionId: "ses-claude",
+              parentRuntimeSessionId: "ses-root",
+              sourceType: "fork",
+              status: "completed",
+              title: "Claude",
+              branchLabel: "candidate-a",
+              children: [],
+            },
+            {
+              runtimeSessionId: "ses-gpt",
+              parentRuntimeSessionId: "ses-root",
+              sourceType: "fork",
+              status: "completed",
+              title: "GPT",
+              branchLabel: "candidate-b",
+              children: [],
+            },
+          ],
+        },
+      ],
+    });
+    apiMocks.getTaskAgentRuns.mockResolvedValueOnce({
+      data: [
+        {
+          id: "agent-run-claude",
+          taskId: "task-1",
+          sessionId: "ses-claude",
+          agentType: "default-executor",
+          status: "completed",
+          modelUsed: "github-copilot:claude-sonnet-4",
+          tokenUsed: 0,
+          candidateIndex: 0,
+          createdAt: "2026-03-10T12:00:01.000Z",
+          startedAt: "2026-03-10T12:00:01.000Z",
+          finishedAt: "2026-03-10T12:00:05.000Z",
+        },
+        {
+          id: "agent-run-gpt",
+          taskId: "task-1",
+          sessionId: "ses-gpt",
+          agentType: "default-executor",
+          status: "completed",
+          modelUsed: "github-copilot:gpt-5.4",
+          tokenUsed: 0,
+          candidateIndex: 1,
+          createdAt: "2026-03-10T12:00:02.000Z",
+          startedAt: "2026-03-10T12:00:02.000Z",
+          finishedAt: "2026-03-10T12:00:06.000Z",
+        },
+      ],
+    });
+    apiMocks.getSessionMessages.mockImplementation(async (_taskId: string, sessionId: string) => {
+      if (sessionId === "ses-claude") {
+        return {
+          data: [
+            {
+              info: {
+                id: "msg-claude-1",
+                role: "assistant",
+                time: { created: Date.parse("2026-03-10T12:00:03.000Z") },
+              },
+              parts: [{ type: "text", text: "Claude summary reply" }],
+            },
+          ],
+        };
+      }
+
+      if (sessionId === "ses-gpt") {
+        return {
+          data: [
+            {
+              info: {
+                id: "msg-gpt-1",
+                role: "assistant",
+                time: { created: Date.parse("2026-03-10T12:00:04.000Z") },
+              },
+              parts: [{ type: "text", text: "GPT summary reply" }],
+            },
+          ],
+        };
+      }
+
+      return { data: [] };
+    });
+
+    const wrapper = await mountPage();
+    await flushPromises();
+
+    const setupState = getSetupState(wrapper);
+    const sections = readSetupValue<
+      Array<
+        | { kind: "parallel"; key: string }
+        | { kind: "message"; key: string; item: { text?: string; role: string } }
+      >
+    >(setupState, "conversationRenderSections");
+
+    expect(sections).toHaveLength(2);
+    expect(sections[0]).toMatchObject({
+      kind: "message",
+      item: { role: "user", text: "历史问题" },
+    });
+    expect(sections[1]).toMatchObject({ kind: "parallel" });
+    expect(wrapper.text()).toContain("并行模型回复比较");
+    expect(wrapper.text()).toContain("历史问题");
+    expect(wrapper.text()).not.toContain("历史回答");
+    expect(wrapper.text()).toContain("Claude summary reply");
+    expect(wrapper.text()).toContain("GPT summary reply");
+  });
+
+  it("keeps prior assistant history and the parallel trigger user message before the inline comparison", async () => {
+    apiMocks.getTask.mockResolvedValueOnce(
+      makeTaskWithOverrides({
+        sessionId: "ses-root",
+        executionMode: "parallel",
+        orchestrationKind: "parallel",
+        currentRunCandidateCount: 2,
+        strategy: JSON.stringify({
+          executionMode: "parallel",
+          parallelCandidates: [
+            { label: "Claude", model: "github-copilot:claude-sonnet-4" },
+            { label: "GPT", model: "github-copilot:gpt-5.4" },
+          ],
+        }),
+      }),
+    );
+    apiMocks.getTaskMessages.mockResolvedValueOnce({
+      data: [
+        {
+          info: {
+            id: "msg-user-history",
+            role: "user",
+            time: { created: Date.parse("2026-03-10T11:59:00.000Z") },
+          },
+          parts: [{ type: "text", text: "历史问题" }],
+        },
+        {
+          info: {
+            id: "msg-assistant-history",
+            role: "assistant",
+            time: {
+              created: Date.parse("2026-03-10T11:59:20.000Z"),
+              completed: Date.parse("2026-03-10T11:59:40.000Z"),
+            },
+          },
+          parts: [{ type: "text", text: "上一轮单次执行回复" }],
+        },
+        {
+          info: {
+            id: "msg-user-parallel",
+            role: "user",
+            time: { created: Date.parse("2026-03-10T12:00:00.000Z") },
+          },
+          parts: [{ type: "text", text: "并行执行触发问题" }],
+        },
+        {
+          info: {
+            id: "msg-assistant-final",
+            role: "assistant",
+            time: {
+              created: Date.parse("2026-03-10T12:00:03.000Z"),
+              completed: Date.parse("2026-03-10T12:00:06.000Z"),
+            },
+          },
+          parts: [{ type: "text", text: "并行执行最终回复" }],
+        },
+      ],
+    });
+    apiMocks.getTaskPipeline.mockResolvedValueOnce({
+      taskId: "task-1",
+      sessionId: "ses-root",
+      branchName: "main",
+      status: "completed",
+      createdAt: "2026-03-10T12:00:00.000Z",
+      updatedAt: "2026-03-10T12:00:10.000Z",
+      summary: {
+        totalStages: 0,
+        completedStages: 0,
+        failedStages: 0,
+        currentStageId: null,
+        totalTokens: { input: 0, output: 0 },
+        totalDurationMs: 0,
+        replanCount: 0,
+      },
+      stages: [],
+    });
+    apiMocks.getTaskSessions.mockResolvedValueOnce({
+      data: [
+        {
+          id: "ses-claude",
+          title: "Claude",
+          isActive: false,
+          summary: null,
+          coordinationKey: "group-1",
+          winnerSessionId: null,
+          candidateIndex: 0,
+          executionStatus: "completed",
+          createdAt: "2026-03-10T12:00:01.000Z",
+          updatedAt: "2026-03-10T12:00:06.000Z",
+        },
+        {
+          id: "ses-gpt",
+          title: "GPT",
+          isActive: true,
+          summary: null,
+          coordinationKey: "group-1",
+          winnerSessionId: null,
+          candidateIndex: 1,
+          executionStatus: "completed",
+          createdAt: "2026-03-10T12:00:02.000Z",
+          updatedAt: "2026-03-10T12:00:07.000Z",
+        },
+      ],
+    });
+    apiMocks.getSessionTree.mockResolvedValueOnce({
+      data: [
+        {
+          runtimeSessionId: "ses-root",
+          parentRuntimeSessionId: null,
+          sourceType: "root",
+          status: "completed",
+          title: "主分支",
+          branchLabel: "main",
+          children: [
+            {
+              runtimeSessionId: "ses-claude",
+              parentRuntimeSessionId: "ses-root",
+              sourceType: "fork",
+              status: "completed",
+              title: "Claude",
+              branchLabel: "candidate-a",
+              children: [],
+            },
+            {
+              runtimeSessionId: "ses-gpt",
+              parentRuntimeSessionId: "ses-root",
+              sourceType: "fork",
+              status: "completed",
+              title: "GPT",
+              branchLabel: "candidate-b",
+              children: [],
+            },
+          ],
+        },
+      ],
+    });
+    apiMocks.getTaskAgentRuns.mockResolvedValueOnce({
+      data: [
+        {
+          id: "agent-run-claude",
+          taskId: "task-1",
+          sessionId: "ses-claude",
+          agentType: "default-executor",
+          status: "completed",
+          modelUsed: "github-copilot:claude-sonnet-4",
+          tokenUsed: 0,
+          candidateIndex: 0,
+          createdAt: "2026-03-10T12:00:01.000Z",
+          startedAt: "2026-03-10T12:00:01.000Z",
+          finishedAt: "2026-03-10T12:00:05.000Z",
+        },
+        {
+          id: "agent-run-gpt",
+          taskId: "task-1",
+          sessionId: "ses-gpt",
+          agentType: "default-executor",
+          status: "completed",
+          modelUsed: "github-copilot:gpt-5.4",
+          tokenUsed: 0,
+          candidateIndex: 1,
+          createdAt: "2026-03-10T12:00:02.000Z",
+          startedAt: "2026-03-10T12:00:02.000Z",
+          finishedAt: "2026-03-10T12:00:06.000Z",
+        },
+      ],
+    });
+    apiMocks.getSessionMessages.mockImplementation(async (_taskId: string, sessionId: string) => {
+      if (sessionId === "ses-claude") {
+        return {
+          data: [
+            {
+              info: {
+                id: "msg-claude-1",
+                role: "assistant",
+                time: { created: Date.parse("2026-03-10T12:00:03.000Z") },
+              },
+              parts: [{ type: "text", text: "Claude summary reply" }],
+            },
+          ],
+        };
+      }
+
+      if (sessionId === "ses-gpt") {
+        return {
+          data: [
+            {
+              info: {
+                id: "msg-gpt-1",
+                role: "assistant",
+                time: { created: Date.parse("2026-03-10T12:00:04.000Z") },
+              },
+              parts: [{ type: "text", text: "GPT summary reply" }],
+            },
+          ],
+        };
+      }
+
+      return { data: [] };
+    });
+
+    const wrapper = await mountPage();
+    await flushPromises();
+
+    const setupState = getSetupState(wrapper);
+    const sections = readSetupValue<
+      Array<
+        | { kind: "parallel"; key: string }
+        | { kind: "message"; key: string; item: { text?: string; role: string } }
+      >
+    >(setupState, "conversationRenderSections");
+
+    expect(sections).toHaveLength(4);
+    expect(sections[0]).toMatchObject({
+      kind: "message",
+      item: { role: "user", text: "历史问题" },
+    });
+    expect(sections[1]).toMatchObject({
+      kind: "message",
+      item: { role: "assistant", text: "上一轮单次执行回复" },
+    });
+    expect(sections[2]).toMatchObject({
+      kind: "message",
+      item: { role: "user", text: "并行执行触发问题" },
+    });
+    expect(sections[3]).toMatchObject({ kind: "parallel" });
+    expect(wrapper.text()).toContain("上一轮单次执行回复");
+    expect(wrapper.text()).toContain("并行执行触发问题");
+    expect(wrapper.text()).not.toContain("并行执行最终回复");
+  });
+
+  it("prefers persisted agent run results over duplicated shell replies in parallel comparison cards", async () => {
+    apiMocks.getTask.mockResolvedValueOnce(
+      makeTaskWithOverrides({
+        sessionId: "ses-root",
+        executionMode: "parallel",
+        orchestrationKind: "parallel",
+        currentRunCandidateCount: 2,
+        strategy: JSON.stringify({
+          executionMode: "parallel",
+          parallelCandidates: [
+            { label: "候选 A", model: "github-copilot:gemini-3-flash-preview" },
+            { label: "候选 B", model: "gpt-4o" },
+          ],
+        }),
+      }),
+    );
+    apiMocks.getTaskPipeline.mockResolvedValueOnce({
+      taskId: "task-1",
+      sessionId: "ses-root",
+      branchName: "main",
+      status: "completed",
+      createdAt: "2026-03-10T12:00:00.000Z",
+      updatedAt: "2026-03-10T12:00:10.000Z",
+      summary: {
+        totalStages: 0,
+        completedStages: 0,
+        failedStages: 0,
+        currentStageId: null,
+        totalTokens: { input: 0, output: 0 },
+        totalDurationMs: 0,
+        replanCount: 0,
+      },
+      stages: [],
+    });
+    apiMocks.getTaskSessions.mockResolvedValueOnce({
+      data: [
+        {
+          id: "ses-a",
+          title: "候选 A",
+          isActive: false,
+          summary: null,
+          coordinationKey: "group-1",
+          winnerSessionId: null,
+          candidateIndex: 0,
+          executionStatus: "completed",
+          createdAt: "2026-03-10T12:00:01.000Z",
+          updatedAt: "2026-03-10T12:00:06.000Z",
+        },
+        {
+          id: "ses-b",
+          title: "候选 B",
+          isActive: true,
+          summary: null,
+          coordinationKey: "group-1",
+          winnerSessionId: null,
+          candidateIndex: 1,
+          executionStatus: "completed",
+          createdAt: "2026-03-10T12:00:02.000Z",
+          updatedAt: "2026-03-10T12:00:07.000Z",
+        },
+      ],
+    });
+    apiMocks.getSessionTree.mockResolvedValueOnce({
+      data: [
+        {
+          runtimeSessionId: "ses-root",
+          parentRuntimeSessionId: null,
+          sourceType: "root",
+          status: "completed",
+          title: "主分支",
+          branchLabel: "main",
+          children: [
+            {
+              runtimeSessionId: "ses-a",
+              parentRuntimeSessionId: "ses-root",
+              sourceType: "fork",
+              status: "completed",
+              title: "候选 A",
+              branchLabel: "candidate-a",
+              children: [],
+            },
+            {
+              runtimeSessionId: "ses-b",
+              parentRuntimeSessionId: "ses-root",
+              sourceType: "fork",
+              status: "completed",
+              title: "候选 B",
+              branchLabel: "candidate-b",
+              children: [],
+            },
+          ],
+        },
+      ],
+    });
+    apiMocks.getTaskAgentRuns.mockResolvedValueOnce({
+      data: [
+        {
+          id: "agent-run-a",
+          taskId: "task-1",
+          sessionId: "ses-a",
+          agentType: "default-executor",
+          status: "completed",
+          modelUsed: "github-copilot:gemini-3-flash-preview",
+          tokenUsed: 0,
+          result: "候选 A 的真实回复",
+          candidateIndex: 0,
+          createdAt: "2026-03-10T12:00:01.000Z",
+          startedAt: "2026-03-10T12:00:01.000Z",
+          finishedAt: "2026-03-10T12:00:05.000Z",
+        },
+        {
+          id: "agent-run-b",
+          taskId: "task-1",
+          sessionId: "ses-b",
+          agentType: "default-executor",
+          status: "completed",
+          modelUsed: "gpt-4o",
+          tokenUsed: 0,
+          result: "候选 B 的真实回复",
+          candidateIndex: 1,
+          createdAt: "2026-03-10T12:00:02.000Z",
+          startedAt: "2026-03-10T12:00:02.000Z",
+          finishedAt: "2026-03-10T12:00:06.000Z",
+        },
+      ],
+    });
+    apiMocks.getSessionMessages.mockImplementation(async (_taskId: string, sessionId: string) => {
+      if (sessionId === "ses-a" || sessionId === "ses-b") {
+        return {
+          data: [
+            {
+              info: {
+                id: `msg-${sessionId}-assistant`,
+                role: "assistant",
+                time: { created: Date.parse("2026-03-10T12:00:03.000Z") },
+              },
+              parts: [{ type: "text", text: "被错误补成同一份全局结果" }],
+            },
+          ],
+        };
+      }
+
+      return { data: [] };
+    });
+
+    const wrapper = await mountPage();
+    await flushPromises();
+
+    const setupState = getSetupState(wrapper);
+    const cards = readSetupValue<Array<{ reply?: string }>>(setupState, "parallelComparisonCards");
+
+    expect(cards).toHaveLength(2);
+    expect(cards[0]?.reply).toBe("候选 A 的真实回复");
+    expect(cards[1]?.reply).toBe("候选 B 的真实回复");
+    expect(wrapper.text()).toContain("候选 A 的真实回复");
+    expect(wrapper.text()).toContain("候选 B 的真实回复");
+    expect(wrapper.text()).not.toContain("被错误补成同一份全局结果");
+  });
+
+  it("shows backend task prompt messages before the inline parallel comparison without filtering", async () => {
+    apiMocks.getTask.mockResolvedValueOnce(
+      makeTaskWithOverrides({
+        prompt: "/start-work 一个语音输入软件",
+        sessionId: "ses-b",
+        executionMode: "parallel",
+        orchestrationKind: "parallel",
+        currentRunCandidateCount: 2,
+        strategy: JSON.stringify({
+          executionMode: "parallel",
+          parallelCandidates: [
+            { label: "候选 A", model: "github-copilot:gemini-3-flash-preview" },
+            { label: "候选 B", model: "gpt-4o" },
+          ],
+        }),
+      }),
+    );
+    apiMocks.getTaskMessages.mockResolvedValueOnce({
+      data: [
+        {
+          sessionId: "ses-root",
+          info: {
+            id: "msg-user-history",
+            role: "user",
+            time: { created: Date.parse("2026-03-10T11:59:00.000Z") },
+          },
+          parts: [{ type: "text", text: "历史问题" }],
+        },
+        {
+          sessionId: "ses-root",
+          info: {
+            id: "msg-assistant-history",
+            role: "assistant",
+            time: {
+              created: Date.parse("2026-03-10T11:59:20.000Z"),
+              completed: Date.parse("2026-03-10T11:59:40.000Z"),
+            },
+          },
+          parts: [{ type: "text", text: "上一轮单次执行回复" }],
+        },
+        {
+          sessionId: "ses-a",
+          info: {
+            id: "msg-user-synthetic",
+            role: "user",
+            time: { created: Date.parse("2026-03-10T12:00:00.000Z") },
+          },
+          parts: [{ type: "text", text: "/start-work 一个语音输入软件" }],
+        },
+        {
+          sessionId: "ses-b",
+          info: {
+            id: "msg-assistant-final",
+            role: "assistant",
+            time: {
+              created: Date.parse("2026-03-10T12:00:04.000Z"),
+              completed: Date.parse("2026-03-10T12:00:06.000Z"),
+            },
+          },
+          parts: [{ type: "text", text: "被错误补成的最终回复" }],
+        },
+      ],
+    });
+    apiMocks.getTaskPipeline.mockResolvedValueOnce({
+      taskId: "task-1",
+      sessionId: "ses-b",
+      branchName: "main",
+      status: "completed",
+      createdAt: "2026-03-10T12:00:00.000Z",
+      updatedAt: "2026-03-10T12:00:10.000Z",
+      summary: {
+        totalStages: 0,
+        completedStages: 0,
+        failedStages: 0,
+        currentStageId: null,
+        totalTokens: { input: 0, output: 0 },
+        totalDurationMs: 0,
+        replanCount: 0,
+      },
+      stages: [],
+    });
+    apiMocks.getTaskSessions.mockResolvedValueOnce({
+      data: [
+        {
+          id: "ses-a",
+          title: "候选 A",
+          isActive: false,
+          summary: null,
+          coordinationKey: "group-1",
+          winnerSessionId: null,
+          candidateIndex: 0,
+          executionStatus: "completed",
+          createdAt: "2026-03-10T12:00:01.000Z",
+          updatedAt: "2026-03-10T12:00:06.000Z",
+        },
+        {
+          id: "ses-b",
+          title: "候选 B",
+          isActive: true,
+          summary: null,
+          coordinationKey: "group-1",
+          winnerSessionId: null,
+          candidateIndex: 1,
+          executionStatus: "completed",
+          createdAt: "2026-03-10T12:00:02.000Z",
+          updatedAt: "2026-03-10T12:00:07.000Z",
+        },
+      ],
+    });
+    apiMocks.getSessionTree.mockResolvedValueOnce({
+      data: [
+        {
+          runtimeSessionId: "ses-root",
+          parentRuntimeSessionId: null,
+          sourceType: "root",
+          status: "completed",
+          title: "主分支",
+          branchLabel: "main",
+          children: [
+            {
+              runtimeSessionId: "ses-a",
+              parentRuntimeSessionId: "ses-root",
+              sourceType: "fork",
+              status: "completed",
+              title: "候选 A",
+              branchLabel: "candidate-a",
+              children: [],
+            },
+            {
+              runtimeSessionId: "ses-b",
+              parentRuntimeSessionId: "ses-root",
+              sourceType: "fork",
+              status: "completed",
+              title: "候选 B",
+              branchLabel: "candidate-b",
+              children: [],
+            },
+          ],
+        },
+      ],
+    });
+    apiMocks.getTaskAgentRuns.mockResolvedValueOnce({
+      data: [
+        {
+          id: "agent-run-a",
+          taskId: "task-1",
+          sessionId: "ses-a",
+          agentType: "default-executor",
+          status: "completed",
+          modelUsed: "github-copilot:gemini-3-flash-preview",
+          tokenUsed: 0,
+          result: "候选 A 的真实回复",
+          candidateIndex: 0,
+          createdAt: "2026-03-10T12:00:01.000Z",
+          startedAt: "2026-03-10T12:00:01.000Z",
+          finishedAt: "2026-03-10T12:00:05.000Z",
+        },
+        {
+          id: "agent-run-b",
+          taskId: "task-1",
+          sessionId: "ses-b",
+          agentType: "default-executor",
+          status: "completed",
+          modelUsed: "gpt-4o",
+          tokenUsed: 0,
+          result: "候选 B 的真实回复",
+          candidateIndex: 1,
+          createdAt: "2026-03-10T12:00:02.000Z",
+          startedAt: "2026-03-10T12:00:02.000Z",
+          finishedAt: "2026-03-10T12:00:06.000Z",
+        },
+      ],
+    });
+    apiMocks.getSessionMessages.mockImplementation(async (_taskId: string, sessionId: string) => {
+      if (sessionId === "ses-a" || sessionId === "ses-b") {
+        return {
+          data: [
+            {
+              info: {
+                id: `msg-${sessionId}-assistant`,
+                role: "assistant",
+                time: { created: Date.parse("2026-03-10T12:00:03.000Z") },
+              },
+              parts: [],
+            },
+          ],
+        };
+      }
+
+      return { data: [] };
+    });
+
+    const wrapper = await mountPage();
+    await flushPromises();
+
+    const setupState = getSetupState(wrapper);
+    const sections = readSetupValue<
+      Array<
+        | { kind: "parallel"; key: string }
+        | { kind: "message"; key: string; item: { text?: string; role: string } }
+      >
+    >(setupState, "conversationRenderSections");
+
+    expect(sections).toHaveLength(4);
+    expect(sections[0]).toMatchObject({
+      kind: "message",
+      item: { role: "user", text: "历史问题" },
+    });
+    expect(sections[1]).toMatchObject({
+      kind: "message",
+      item: { role: "assistant", text: "上一轮单次执行回复" },
+    });
+    expect(sections[2]).toMatchObject({
+      kind: "message",
+      item: { role: "user", text: "/start-work 一个语音输入软件" },
+    });
+    expect(sections[3]).toMatchObject({ kind: "parallel" });
+    expect(wrapper.text()).toContain("候选 A 的真实回复");
+    expect(wrapper.text()).toContain("候选 B 的真实回复");
+    expect(wrapper.text()).toContain("/start-work 一个语音输入软件");
+    expect(wrapper.text()).not.toContain("被错误补成的最终回复");
+  });
+
+  it("shows all backend parallel trigger prompt messages when multiple candidate sessions persist them", async () => {
+    apiMocks.getTask.mockResolvedValueOnce(
+      makeTaskWithOverrides({
+        prompt: "/start-work 一个语音输入软件",
+        sessionId: "ses-b",
+        executionMode: "parallel",
+        orchestrationKind: "parallel",
+        currentRunCandidateCount: 2,
+        strategy: JSON.stringify({
+          executionMode: "parallel",
+          parallelCandidates: [
+            { label: "候选 A", model: "github-copilot:gemini-3-flash-preview" },
+            { label: "候选 B", model: "gpt-4o" },
+          ],
+        }),
+      }),
+    );
+    apiMocks.getTaskMessages.mockResolvedValueOnce({
+      data: [
+        {
+          sessionId: "ses-root",
+          info: {
+            id: "msg-user-history",
+            role: "user",
+            time: { created: Date.parse("2026-03-10T11:59:00.000Z") },
+          },
+          parts: [{ type: "text", text: "历史问题" }],
+        },
+        {
+          sessionId: "ses-root",
+          info: {
+            id: "msg-assistant-history",
+            role: "assistant",
+            time: {
+              created: Date.parse("2026-03-10T11:59:20.000Z"),
+              completed: Date.parse("2026-03-10T11:59:40.000Z"),
+            },
+          },
+          parts: [{ type: "text", text: "上一轮单次执行回复" }],
+        },
+        {
+          sessionId: "ses-a",
+          info: {
+            id: "msg-user-parallel-a",
+            role: "user",
+            time: { created: Date.parse("2026-03-10T12:00:00.000Z") },
+          },
+          parts: [{ type: "text", text: "/start-work 一个语音输入软件" }],
+        },
+        {
+          sessionId: "ses-b",
+          info: {
+            id: "msg-assistant-final",
+            role: "assistant",
+            time: {
+              created: Date.parse("2026-03-10T12:00:04.000Z"),
+              completed: Date.parse("2026-03-10T12:00:06.000Z"),
+            },
+          },
+          parts: [{ type: "text", text: "被错误补成的最终回复" }],
+        },
+        {
+          sessionId: "ses-b",
+          info: {
+            id: "msg-user-parallel-b",
+            role: "user",
+            time: { created: Date.parse("2026-03-10T12:00:00.100Z") },
+          },
+          parts: [{ type: "text", text: "/start-work 一个语音输入软件" }],
+        },
+      ],
+    });
+    apiMocks.getTaskPipeline.mockResolvedValueOnce({
+      taskId: "task-1",
+      sessionId: "ses-b",
+      branchName: "main",
+      status: "completed",
+      createdAt: "2026-03-10T12:00:00.000Z",
+      updatedAt: "2026-03-10T12:00:10.000Z",
+      summary: {
+        totalStages: 0,
+        completedStages: 0,
+        failedStages: 0,
+        currentStageId: null,
+        totalTokens: { input: 0, output: 0 },
+        totalDurationMs: 0,
+        replanCount: 0,
+      },
+      stages: [],
+    });
+    apiMocks.getTaskSessions.mockResolvedValueOnce({
+      data: [
+        {
+          id: "ses-a",
+          title: "候选 A",
+          isActive: false,
+          summary: null,
+          coordinationKey: "group-1",
+          winnerSessionId: null,
+          candidateIndex: 0,
+          executionStatus: "completed",
+          createdAt: "2026-03-10T12:00:01.000Z",
+          updatedAt: "2026-03-10T12:00:06.000Z",
+        },
+        {
+          id: "ses-b",
+          title: "候选 B",
+          isActive: true,
+          summary: null,
+          coordinationKey: "group-1",
+          winnerSessionId: null,
+          candidateIndex: 1,
+          executionStatus: "completed",
+          createdAt: "2026-03-10T12:00:02.000Z",
+          updatedAt: "2026-03-10T12:00:07.000Z",
+        },
+      ],
+    });
+    apiMocks.getSessionTree.mockResolvedValueOnce({
+      data: [
+        {
+          runtimeSessionId: "ses-root",
+          parentRuntimeSessionId: null,
+          sourceType: "root",
+          status: "completed",
+          title: "主分支",
+          branchLabel: "main",
+          children: [
+            {
+              runtimeSessionId: "ses-a",
+              parentRuntimeSessionId: "ses-root",
+              sourceType: "fork",
+              status: "completed",
+              title: "候选 A",
+              branchLabel: "candidate-a",
+              children: [],
+            },
+            {
+              runtimeSessionId: "ses-b",
+              parentRuntimeSessionId: "ses-root",
+              sourceType: "fork",
+              status: "completed",
+              title: "候选 B",
+              branchLabel: "candidate-b",
+              children: [],
+            },
+          ],
+        },
+      ],
+    });
+    apiMocks.getTaskAgentRuns.mockResolvedValueOnce({
+      data: [
+        {
+          id: "agent-run-a",
+          taskId: "task-1",
+          sessionId: "ses-a",
+          agentType: "default-executor",
+          status: "completed",
+          modelUsed: "github-copilot:gemini-3-flash-preview",
+          tokenUsed: 0,
+          result: "候选 A 的真实回复",
+          candidateIndex: 0,
+          createdAt: "2026-03-10T12:00:01.000Z",
+          startedAt: "2026-03-10T12:00:01.000Z",
+          finishedAt: "2026-03-10T12:00:05.000Z",
+        },
+        {
+          id: "agent-run-b",
+          taskId: "task-1",
+          sessionId: "ses-b",
+          agentType: "default-executor",
+          status: "completed",
+          modelUsed: "gpt-4o",
+          tokenUsed: 0,
+          result: "候选 B 的真实回复",
+          candidateIndex: 1,
+          createdAt: "2026-03-10T12:00:02.000Z",
+          startedAt: "2026-03-10T12:00:02.000Z",
+          finishedAt: "2026-03-10T12:00:06.000Z",
+        },
+      ],
+    });
+    apiMocks.getSessionMessages.mockImplementation(async (_taskId: string, sessionId: string) => {
+      if (sessionId === "ses-a" || sessionId === "ses-b") {
+        return {
+          data: [
+            {
+              info: {
+                id: `msg-${sessionId}-user`,
+                role: "user",
+                time: { created: Date.parse("2026-03-10T12:00:00.000Z") },
+              },
+              parts: [{ type: "text", text: "/start-work 一个语音输入软件" }],
+            },
+            {
+              info: {
+                id: `msg-${sessionId}-assistant`,
+                role: "assistant",
+                time: { created: Date.parse("2026-03-10T12:00:03.000Z") },
+              },
+              parts: [],
+            },
+          ],
+        };
+      }
+
+      return { data: [] };
+    });
+
+    const wrapper = await mountPage();
+    await flushPromises();
+
+    const setupState = getSetupState(wrapper);
+    const sections = readSetupValue<
+      Array<
+        | { kind: "parallel"; key: string }
+        | { kind: "message"; key: string; item: { text?: string; role: string } }
+      >
+    >(setupState, "conversationRenderSections");
+
+    expect(sections).toHaveLength(5);
+    expect(sections[0]).toMatchObject({
+      kind: "message",
+      item: { role: "user", text: "历史问题" },
+    });
+    expect(sections[1]).toMatchObject({
+      kind: "message",
+      item: { role: "assistant", text: "上一轮单次执行回复" },
+    });
+    expect(sections[2]).toMatchObject({
+      kind: "message",
+      item: { role: "user", text: "/start-work 一个语音输入软件" },
+    });
+    expect(sections[3]).toMatchObject({ kind: "parallel" });
+    expect(sections[4]).toMatchObject({
+      kind: "message",
+      item: { role: "user", text: "/start-work 一个语音输入软件" },
+    });
+    expect(
+      sections.filter(
+        (section) => section.kind === "message" && section.item.text === "/start-work 一个语音输入软件",
+      ),
+    ).toHaveLength(2);
+    expect(wrapper.text()).toContain("候选 A 的真实回复");
+    expect(wrapper.text()).toContain("候选 B 的真实回复");
+    expect(wrapper.text()).not.toContain("被错误补成的最终回复");
+  });
+
+  it("shows adopt buttons on completed parallel comparison cards when no winner exists", async () => {
+    apiMocks.getTask.mockResolvedValueOnce(
+      makeTaskWithOverrides({
+        sessionId: "ses-root",
+        executionMode: "parallel",
+        orchestrationKind: "parallel",
+        currentRunCandidateCount: 2,
+        strategy: JSON.stringify({
+          executionMode: "parallel",
+          parallelCandidates: [
+            { label: "候选 A", model: "github-copilot:gemini-3-flash-preview" },
+            { label: "候选 B", model: "gpt-4o" },
+          ],
+        }),
+      }),
+    );
+    apiMocks.getTaskPipeline.mockResolvedValueOnce({
+      taskId: "task-1",
+      sessionId: "ses-root",
+      branchName: "main",
+      status: "completed",
+      createdAt: "2026-03-10T12:00:00.000Z",
+      updatedAt: "2026-03-10T12:00:10.000Z",
+      summary: {
+        totalStages: 0,
+        completedStages: 0,
+        failedStages: 0,
+        currentStageId: null,
+        totalTokens: { input: 0, output: 0 },
+        totalDurationMs: 0,
+        replanCount: 0,
+      },
+      stages: [],
+    });
+    apiMocks.getTaskSessions.mockResolvedValueOnce({
+      data: [
+        {
+          id: "ses-a",
+          title: "候选 A",
+          isActive: false,
+          summary: null,
+          coordinationKey: "group-1",
+          winnerSessionId: null,
+          candidateIndex: 0,
+          executionStatus: "completed",
+          createdAt: "2026-03-10T12:00:01.000Z",
+          updatedAt: "2026-03-10T12:00:06.000Z",
+        },
+        {
+          id: "ses-b",
+          title: "候选 B",
+          isActive: true,
+          summary: null,
+          coordinationKey: "group-1",
+          winnerSessionId: null,
+          candidateIndex: 1,
+          executionStatus: "completed",
+          createdAt: "2026-03-10T12:00:02.000Z",
+          updatedAt: "2026-03-10T12:00:07.000Z",
+        },
+      ],
+    });
+    apiMocks.getSessionTree.mockResolvedValueOnce({
+      data: [
+        {
+          runtimeSessionId: "ses-root",
+          parentRuntimeSessionId: null,
+          sourceType: "root",
+          status: "completed",
+          title: "主分支",
+          branchLabel: "main",
+          children: [
+            {
+              runtimeSessionId: "ses-a",
+              parentRuntimeSessionId: "ses-root",
+              sourceType: "fork",
+              status: "completed",
+              title: "候选 A",
+              branchLabel: "candidate-a",
+              children: [],
+            },
+            {
+              runtimeSessionId: "ses-b",
+              parentRuntimeSessionId: "ses-root",
+              sourceType: "fork",
+              status: "completed",
+              title: "候选 B",
+              branchLabel: "candidate-b",
+              children: [],
+            },
+          ],
+        },
+      ],
+    });
+    apiMocks.getTaskAgentRuns.mockResolvedValueOnce({
+      data: [
+        {
+          id: "agent-run-a",
+          taskId: "task-1",
+          sessionId: "ses-a",
+          agentType: "default-executor",
+          status: "completed",
+          modelUsed: "github-copilot:gemini-3-flash-preview",
+          tokenUsed: 0,
+          candidateIndex: 0,
+          createdAt: "2026-03-10T12:00:01.000Z",
+          startedAt: "2026-03-10T12:00:01.000Z",
+          finishedAt: "2026-03-10T12:00:05.000Z",
+        },
+        {
+          id: "agent-run-b",
+          taskId: "task-1",
+          sessionId: "ses-b",
+          agentType: "default-executor",
+          status: "completed",
+          modelUsed: "gpt-4o",
+          tokenUsed: 0,
+          candidateIndex: 1,
+          createdAt: "2026-03-10T12:00:02.000Z",
+          startedAt: "2026-03-10T12:00:02.000Z",
+          finishedAt: "2026-03-10T12:00:06.000Z",
+        },
+      ],
+    });
+    apiMocks.getSessionMessages.mockImplementation(async (_taskId: string, sessionId: string) => {
+      if (sessionId === "ses-a") {
+        return {
+          data: [
+            {
+              info: {
+                id: "msg-a-1",
+                role: "assistant",
+                time: { created: Date.parse("2026-03-10T12:00:03.000Z") },
+              },
+              parts: [{ type: "text", text: "候选 A 回复" }],
+            },
+          ],
+        };
+      }
+
+      if (sessionId === "ses-b") {
+        return {
+          data: [
+            {
+              info: {
+                id: "msg-b-1",
+                role: "assistant",
+                time: { created: Date.parse("2026-03-10T12:00:04.000Z") },
+              },
+              parts: [{ type: "text", text: "候选 B 回复" }],
+            },
+          ],
+        };
+      }
+
+      return { data: [] };
+    });
+
+    const wrapper = await mountPage();
+    await flushPromises();
+
+    const setupState = getSetupState(wrapper);
+    const cards = readSetupValue<Array<{ canAdopt: boolean }>>(setupState, "parallelComparisonCards");
+    expect(cards).toHaveLength(2);
+    expect(cards.every((card) => card.canAdopt)).toBe(true);
+    expect((wrapper.text().match(/采纳为回复/g) ?? []).length).toBe(2);
+  });
+
+  it("ignores the parent session when reconstructing parallel comparison from session summaries", async () => {
+    apiMocks.getTask.mockResolvedValueOnce(
+      makeTaskWithOverrides({
+        sessionId: "ses-b",
+        executionMode: "parallel",
+        orchestrationKind: "parallel",
+        currentRunCandidateCount: 2,
+        strategy: JSON.stringify({
+          executionMode: "parallel",
+          parallelCandidates: [
+            { label: "候选 A", model: "github-copilot:gemini-3-flash-preview" },
+            { label: "候选 B", model: "gpt-4o" },
+          ],
+        }),
+      }),
+    );
+    apiMocks.getTaskPipeline.mockResolvedValueOnce({
+      taskId: "task-1",
+      sessionId: "ses-b",
+      branchName: "main",
+      status: "completed",
+      createdAt: "2026-03-10T12:00:00.000Z",
+      updatedAt: "2026-03-10T12:00:10.000Z",
+      summary: {
+        totalStages: 0,
+        completedStages: 0,
+        failedStages: 0,
+        currentStageId: null,
+        totalTokens: { input: 0, output: 0 },
+        totalDurationMs: 0,
+        replanCount: 0,
+      },
+      stages: [],
+    });
+    apiMocks.getTaskSessions.mockResolvedValueOnce({
+      data: [
+        {
+          id: "ses-root",
+          title: "ROOT CARD SHOULD NOT RENDER",
+          isActive: false,
+          summary: null,
+          coordinationKey: "ses-root",
+          winnerSessionId: null,
+          candidateIndex: null,
+          executionStatus: "completed",
+          createdAt: "2026-03-10T12:00:00.000Z",
+          updatedAt: "2026-03-10T12:00:05.000Z",
+        },
+        {
+          id: "ses-a",
+          title: "Leaf A",
+          isActive: false,
+          summary: null,
+          coordinationKey: "ses-root",
+          winnerSessionId: null,
+          candidateIndex: null,
+          executionStatus: "completed",
+          createdAt: "2026-03-10T12:00:01.000Z",
+          updatedAt: "2026-03-10T12:00:06.000Z",
+        },
+        {
+          id: "ses-b",
+          title: "Leaf B",
+          isActive: true,
+          summary: null,
+          coordinationKey: "ses-root",
+          winnerSessionId: null,
+          candidateIndex: null,
+          executionStatus: "completed",
+          createdAt: "2026-03-10T12:00:02.000Z",
+          updatedAt: "2026-03-10T12:00:07.000Z",
+        },
+      ],
+    });
+    apiMocks.getSessionTree.mockResolvedValueOnce({
+      data: [
+        {
+          runtimeSessionId: "ses-root",
+          parentRuntimeSessionId: null,
+          sourceType: "root",
+          status: "completed",
+          title: "主分支",
+          branchLabel: "main",
+          children: [
+            {
+              runtimeSessionId: "ses-a",
+              parentRuntimeSessionId: "ses-root",
+              sourceType: "fork",
+              status: "completed",
+              title: "Leaf A",
+              branchLabel: "candidate-a",
+              children: [],
+            },
+            {
+              runtimeSessionId: "ses-b",
+              parentRuntimeSessionId: "ses-root",
+              sourceType: "fork",
+              status: "completed",
+              title: "Leaf B",
+              branchLabel: "candidate-b",
+              children: [],
+            },
+          ],
+        },
+      ],
+    });
+    apiMocks.getTaskAgentRuns.mockResolvedValueOnce({ data: [] });
+    apiMocks.getSessionMessages.mockImplementation(async (_taskId: string, sessionId: string) => {
+      if (sessionId === "ses-root") {
+        return {
+          data: [
+            {
+              info: {
+                id: "msg-root-1",
+                role: "assistant",
+                time: { created: Date.parse("2026-03-10T12:00:01.000Z") },
+              },
+              parts: [{ type: "text", text: "Root candidate leak" }],
+            },
+          ],
+        };
+      }
+
+      if (sessionId === "ses-a") {
+        return {
+          data: [
+            {
+              info: {
+                id: "msg-a-1",
+                role: "assistant",
+                time: { created: Date.parse("2026-03-10T12:00:02.000Z") },
+              },
+              parts: [{ type: "text", text: "Candidate A reply" }],
+            },
+          ],
+        };
+      }
+
+      if (sessionId === "ses-b") {
+        return {
+          data: [
+            {
+              info: {
+                id: "msg-b-1",
+                role: "assistant",
+                time: { created: Date.parse("2026-03-10T12:00:03.000Z") },
+              },
+              parts: [{ type: "text", text: "Candidate B reply" }],
+            },
+          ],
+        };
+      }
+
+      return { data: [] };
+    });
+
+    const wrapper = await mountPage();
+    await flushPromises();
+
+    const setupState = getSetupState(wrapper);
+    const cards = readSetupValue<Array<{ label: string; reply?: string }>>(
+      setupState,
+      "parallelComparisonCards",
+    );
+
+    expect(cards).toHaveLength(2);
+    expect(cards.map((card) => card.label)).toEqual(["候选 A", "候选 B"]);
+    expect(wrapper.text()).toContain("Candidate A reply");
+    expect(wrapper.text()).toContain("Candidate B reply");
+    expect(wrapper.text()).not.toContain("Root candidate leak");
+    expect(
+      apiMocks.getTaskConversationMessages.mock.calls.some(([, sessionId]) => sessionId === "ses-root"),
+    ).toBe(false);
+  });
+
   it("renders sequential-chain steps directly from runtime pipeline and strategy", async () => {
     apiMocks.getTask.mockResolvedValueOnce(
       makeTaskWithOverrides({
@@ -2272,7 +3982,7 @@ describe("TaskDetail", () => {
 
     const wrapper = await mountPage();
     expect(
-      readSetupValue<string | undefined>(getSetupState(wrapper), "selectedBranchSessionId"),
+      readSetupValue<string | undefined>(getSetupState(wrapper), "selectedSessionId"),
     ).toBe(undefined);
 
     const textarea = wrapper.find("textarea");
@@ -2287,7 +3997,7 @@ describe("TaskDetail", () => {
       "single",
     );
     expect(
-      readSetupValue<string | undefined>(getSetupState(wrapper), "selectedBranchSessionId"),
+      readSetupValue<string | undefined>(getSetupState(wrapper), "selectedSessionId"),
     ).toBe("ses-parallel-a");
   });
 
@@ -2371,6 +4081,98 @@ describe("TaskDetail", () => {
     expect(wrapper.text()).not.toContain("请只完成当前阶段的目标。");
   });
 
+  it("keeps top-level tool messages visible in the legacy detail conversation", async () => {
+    apiMocks.getTaskSessions.mockResolvedValueOnce({
+      data: [
+        {
+          id: "ses-1",
+          title: "主分支",
+          isActive: true,
+          summary: null,
+          createdAt: "2026-03-10T12:00:00.000Z",
+          updatedAt: "2026-03-10T12:02:00.000Z",
+        },
+      ],
+    });
+    apiMocks.getSessionMessages.mockResolvedValueOnce({
+      data: [
+        {
+          info: {
+            id: "msg-tool-1",
+            role: "tool",
+            time: {
+              created: Date.parse("2026-03-10T12:00:05.000Z"),
+            },
+          },
+          parts: [
+            {
+              type: "text",
+              text: "bash output",
+            },
+          ],
+        },
+      ],
+    });
+
+    const wrapper = await mountPage();
+
+    expect(wrapper.text()).toContain("工具输出");
+    expect(wrapper.text()).toContain("bash output");
+  });
+
+  it("does not expose session or branch concepts in the legacy task conversation view", async () => {
+    apiMocks.getTaskSessions.mockResolvedValueOnce({
+      data: [
+        {
+          id: "ses-1",
+          title: "主分支",
+          isActive: true,
+          summary: null,
+          createdAt: "2026-03-10T12:00:00.000Z",
+          updatedAt: "2026-03-10T12:02:00.000Z",
+        },
+        {
+          id: "ses-2",
+          title: "历史分支",
+          isActive: false,
+          summary: null,
+          createdAt: "2026-03-10T12:03:00.000Z",
+          updatedAt: "2026-03-10T12:04:00.000Z",
+        },
+      ],
+    });
+    apiMocks.getSessionTree.mockResolvedValueOnce({
+      data: [
+        {
+          runtimeSessionId: "ses-1",
+          parentRuntimeSessionId: null,
+          sourceType: "root",
+          status: "completed",
+          title: "主分支",
+          branchLabel: "main",
+          children: [
+            {
+              runtimeSessionId: "ses-2",
+              parentRuntimeSessionId: "ses-1",
+              sourceType: "fork",
+              status: "completed",
+              title: "历史分支",
+              branchLabel: "history",
+              children: [],
+            },
+          ],
+        },
+      ],
+    });
+
+    const wrapper = await mountPage();
+
+    expect(wrapper.text()).toContain("任务对话");
+    expect(wrapper.text()).not.toContain("会话分支");
+    expect(wrapper.text()).not.toContain("当前分支");
+    expect(wrapper.text()).not.toContain("活跃分支");
+  });
+
   it("loads runtime pipeline for the currently selected session branch", async () => {
     routeState.query = { session: "ses-branch" };
     apiMocks.getTask.mockResolvedValueOnce(
@@ -2445,7 +4247,7 @@ describe("TaskDetail", () => {
     await mountPage();
 
     expect(apiMocks.getTaskPipeline).toHaveBeenCalledWith("task-1", "ses-branch");
-    expect(apiMocks.getSessionMessages).toHaveBeenCalledWith("task-1", "ses-branch");
+    expect(apiMocks.getTaskMessages).toHaveBeenCalledWith("task-1");
   });
 
   it("re-fetches runtime pipeline after switching to another session branch", async () => {
@@ -2549,8 +4351,8 @@ describe("TaskDetail", () => {
 
     expect(apiMocks.getTaskPipeline.mock.calls.length).toBeGreaterThan(1);
     expect(apiMocks.getTaskPipeline).toHaveBeenLastCalledWith("task-1", "ses-branch-2");
-    expect(apiMocks.getSessionMessages.mock.calls.length).toBeGreaterThan(1);
-    expect(apiMocks.getSessionMessages).toHaveBeenLastCalledWith("task-1", "ses-branch-2");
+    expect(apiMocks.getTaskMessages.mock.calls.length).toBeGreaterThan(1);
+    expect(apiMocks.getTaskMessages).toHaveBeenLastCalledWith("task-1");
   });
 
   it("re-fetches runtime pipeline when a session.updated event arrives", async () => {
@@ -2602,7 +4404,7 @@ describe("TaskDetail", () => {
 
     await mountPage();
     apiMocks.getTaskPipeline.mockClear();
-    apiMocks.getSessionMessages.mockClear();
+  apiMocks.getTaskMessages.mockClear();
 
     realtimeState.events.unshift({
       id: "evt-session-updated",
@@ -2619,8 +4421,8 @@ describe("TaskDetail", () => {
 
     expect(apiMocks.getTaskPipeline).toHaveBeenCalled();
     expect(apiMocks.getTaskPipeline).toHaveBeenLastCalledWith("task-1", "ses-1");
-    expect(apiMocks.getSessionMessages).toHaveBeenCalled();
-    expect(apiMocks.getSessionMessages).toHaveBeenLastCalledWith("task-1", "ses-1");
+    expect(apiMocks.getTaskMessages).toHaveBeenCalled();
+    expect(apiMocks.getTaskMessages).toHaveBeenLastCalledWith("task-1");
   });
 
   it("re-fetches runtime pipeline when a task.node.updated event arrives", async () => {
@@ -2672,7 +4474,7 @@ describe("TaskDetail", () => {
 
     await mountPage();
     apiMocks.getTaskPipeline.mockClear();
-    apiMocks.getSessionMessages.mockClear();
+  apiMocks.getTaskMessages.mockClear();
 
     realtimeState.events.unshift({
       id: "evt-node-updated",
@@ -2689,7 +4491,7 @@ describe("TaskDetail", () => {
 
     expect(apiMocks.getTaskPipeline).toHaveBeenCalled();
     expect(apiMocks.getTaskPipeline).toHaveBeenLastCalledWith("task-1", "ses-1");
-    expect(apiMocks.getSessionMessages).not.toHaveBeenCalled();
+    expect(apiMocks.getTaskMessages).not.toHaveBeenCalled();
   });
 
   it("re-fetches both runtime pipeline and session messages when a task.continued event arrives", async () => {
@@ -2741,7 +4543,7 @@ describe("TaskDetail", () => {
 
     await mountPage();
     apiMocks.getTaskPipeline.mockClear();
-    apiMocks.getSessionMessages.mockClear();
+  apiMocks.getTaskMessages.mockClear();
 
     realtimeState.events.unshift({
       id: "evt-task-continued",
@@ -2758,8 +4560,8 @@ describe("TaskDetail", () => {
 
     expect(apiMocks.getTaskPipeline).toHaveBeenCalled();
     expect(apiMocks.getTaskPipeline).toHaveBeenLastCalledWith("task-1", "ses-1");
-    expect(apiMocks.getSessionMessages).toHaveBeenCalled();
-    expect(apiMocks.getSessionMessages).toHaveBeenLastCalledWith("task-1", "ses-1");
+    expect(apiMocks.getTaskMessages).toHaveBeenCalled();
+    expect(apiMocks.getTaskMessages).toHaveBeenLastCalledWith("task-1");
   });
 
   it("applies pipeline.stage.updated locally without re-fetching the pipeline", async () => {
@@ -2823,7 +4625,7 @@ describe("TaskDetail", () => {
     const setupState = getSetupState(wrapper);
 
     apiMocks.getTaskPipeline.mockClear();
-    apiMocks.getSessionMessages.mockClear();
+  apiMocks.getTaskMessages.mockClear();
 
     realtimeState.events.unshift({
       id: "evt-pipeline-stage-updated",
@@ -2871,7 +4673,7 @@ describe("TaskDetail", () => {
     } | null>(setupState, "runtimePipeline");
 
     expect(apiMocks.getTaskPipeline).not.toHaveBeenCalled();
-    expect(apiMocks.getSessionMessages).not.toHaveBeenCalled();
+  expect(apiMocks.getTaskMessages).not.toHaveBeenCalled();
     expect(runtimePipeline?.status).toBe("completed");
     expect(runtimePipeline?.updatedAt).toBe("2026-03-10T12:02:00.000Z");
     expect(runtimePipeline?.summary.completedStages).toBe(1);

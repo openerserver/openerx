@@ -2,7 +2,6 @@ import { and, asc, desc, eq, gte, inArray, lt } from "drizzle-orm";
 import { Hono } from "hono";
 import { db } from "../../db";
 import {
-  agentRuns,
   auditEvents,
   paidExecutionLeases,
   projects,
@@ -238,6 +237,41 @@ interface GovernanceTaskRecord {
   title: string;
   currentSessionId: string | null;
   lastActivityAt: string | null;
+}
+
+type DashboardTaskSnapshotRow = typeof taskSnapshots.$inferSelect;
+
+function normalizeDashboardTaskStatus(snapshot: DashboardTaskSnapshotRow) {
+  if (
+    snapshot.currentExecutionStatus === "pending" ||
+    snapshot.currentExecutionStatus === "running" ||
+    snapshot.currentExecutionStatus === "paused" ||
+    snapshot.currentExecutionStatus === "completed" ||
+    snapshot.currentExecutionStatus === "failed" ||
+    snapshot.currentExecutionStatus === "cancelled"
+  ) {
+    return snapshot.currentExecutionStatus;
+  }
+
+  if (snapshot.lifecycleStatus === "done") {
+    return "completed";
+  }
+  if (snapshot.lifecycleStatus === "active") {
+    return "running";
+  }
+  if (snapshot.lifecycleStatus === "archived") {
+    return "cancelled";
+  }
+
+  return "pending";
+}
+
+function normalizeDashboardExecutionMode(snapshot: DashboardTaskSnapshotRow) {
+  return snapshot.currentExecutionMode === "single" ||
+    snapshot.currentExecutionMode === "parallel" ||
+    snapshot.currentExecutionMode === "sequential-chain"
+    ? snapshot.currentExecutionMode
+    : null;
 }
 
 interface GovernanceLedgerRecord {
@@ -1262,19 +1296,41 @@ dashboardRoutes.get("/provider-tokens", async (c) => {
     taskIds.length > 0
       ? await db
           .select({
-            agentRunId: agentRuns.id,
-            taskId: agentRuns.taskId,
-            status: agentRuns.status,
-            modelUsed: agentRuns.modelUsed,
-            tokenUsed: agentRuns.tokenUsed,
-            startedAt: agentRuns.startedAt,
-            finishedAt: agentRuns.finishedAt,
-            createdAt: agentRuns.createdAt,
+            agentRunId: runtimeUsageLedgers.agentRunId,
+            ledgerId: runtimeUsageLedgers.id,
+            taskId: runtimeUsageLedgers.taskId,
+            status: runtimeUsageLedgers.status,
+            defaultProviderId: runtimeUsageLedgers.defaultProviderId,
+            defaultModelId: runtimeUsageLedgers.defaultModelId,
+            tokenUsed: runtimeUsageLedgers.totalTokens,
+            startedAt: runtimeUsageLedgers.startedAt,
+            finishedAt: runtimeUsageLedgers.finishedAt,
+            createdAt: runtimeUsageLedgers.createdAt,
           })
-          .from(agentRuns)
-          .where(inArray(agentRuns.taskId, taskIds))
+          .from(runtimeUsageLedgers)
+          .where(inArray(runtimeUsageLedgers.taskId, taskIds))
       : [];
-  const scopedRunRows = runRows.map((run) => ({ ...run, projectId }));
+  const scopedRunRows = runRows.map((run) => ({
+    agentRunId: run.agentRunId || run.ledgerId,
+    taskId: run.taskId || "",
+    projectId,
+    status:
+      run.status === "cancelled"
+        ? ("stopped" as const)
+        : run.status === "failed"
+          ? ("failed" as const)
+          : run.status === "running"
+            ? ("running" as const)
+            : ("completed" as const),
+    modelUsed:
+      run.defaultProviderId && run.defaultModelId
+        ? `${run.defaultProviderId}/${run.defaultModelId}`
+        : (run.defaultModelId ?? run.defaultProviderId ?? null),
+    tokenUsed: run.tokenUsed,
+    startedAt: run.startedAt,
+    finishedAt: run.finishedAt,
+    createdAt: run.createdAt,
+  }));
 
   const candidateRuns = scopedRunRows.filter(
     (run) => resolveRunTimestampMs(run) >= bounds.previousStartMs,
@@ -1426,19 +1482,25 @@ dashboardRoutes.get("/governance-overview", async (c) => {
       .filter((sessionId): sessionId is string => Boolean(sessionId)),
   );
   const runningTaskCount = snapshotRows.filter(
-    (snapshot) => snapshot.currentStatus === "running" || snapshot.currentStatus === "paused",
+    (snapshot) => {
+      const status = normalizeDashboardTaskStatus(snapshot);
+      return status === "running" || status === "paused";
+    },
   ).length;
   const parallelTaskCount = snapshotRows.filter(
-    (snapshot) => snapshot.orchestrationKind === "parallel",
+    (snapshot) => normalizeDashboardExecutionMode(snapshot) === "parallel",
   ).length;
   const sequentialChainTaskCount = snapshotRows.filter(
-    (snapshot) => snapshot.orchestrationKind === "sequential-chain",
+    (snapshot) => normalizeDashboardExecutionMode(snapshot) === "sequential-chain",
   ).length;
   const pausedTaskCount = snapshotRows.filter(
-    (snapshot) => snapshot.currentStatus === "paused",
+    (snapshot) => normalizeDashboardTaskStatus(snapshot) === "paused",
   ).length;
   const failedTaskCount = snapshotRows.filter(
-    (snapshot) => snapshot.currentStatus === "failed" || snapshot.currentStatus === "cancelled",
+    (snapshot) => {
+      const status = normalizeDashboardTaskStatus(snapshot);
+      return status === "failed" || status === "cancelled";
+    },
   ).length;
   const activeCandidateCount = snapshotRows.reduce(
     (sum, snapshot) => sum + (snapshot.activeCandidateCount ?? 0),
@@ -1450,12 +1512,10 @@ dashboardRoutes.get("/governance-overview", async (c) => {
     0,
   );
   const toolTimelineItemCount = recentTimelineRows.filter(
-    (row) => row.itemKind === "tool-call" || row.itemKind === "tool-output",
+    (row) => row.itemKind === "operation",
   ).length;
-  const decisionTimelineItemCount = recentTimelineRows.filter((row) =>
-    ["candidate-result", "judge-decision", "chain-step-result", "status-transition"].includes(
-      row.itemKind,
-    ),
+  const decisionTimelineItemCount = recentTimelineRows.filter(
+    (row) => row.itemKind === "task_lifecycle",
   ).length;
 
   const response: GovernanceOverviewResponse = {

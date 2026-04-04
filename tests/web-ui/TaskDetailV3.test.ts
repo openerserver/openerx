@@ -23,9 +23,10 @@ const realtimeStoreMock = reactive(realtimeStoreState) as typeof realtimeStoreSt
 const apiMocks = vi.hoisted(() => ({
   adoptParallelCandidate: vi.fn(),
   continueTask: vi.fn(),
-  forkTaskBranch: vi.fn(),
+  forkTaskSession: vi.fn(),
   getModelsList: vi.fn(),
   getTaskAgentRuns: vi.fn(),
+  getTaskSessions: vi.fn(),
   getTaskDomainRunDetail: vi.fn(),
   getTaskDomainRuns: vi.fn(),
   getTaskExecutionTraceView: vi.fn(),
@@ -53,7 +54,7 @@ const taskState = vi.hoisted(() => ({
     result: undefined,
     agentRunId: "run-1",
     createdAt: "2026-03-22T00:00:00.000Z",
-  } as TreeTask,
+  } as any,
   node: { id: "node-task-1" },
   ancestors: [] as Array<unknown>,
   projectId: "proj-1",
@@ -69,14 +70,14 @@ const branchState = vi.hoisted(() => ({
       contentText: "主分支",
       branchName: "main",
     },
-  ],
+  ] as Array<any>,
   selectedNode: {
     id: "node-session-1",
     runtimeSessionId: "ses-1",
     isActive: true,
     contentText: "主分支",
     branchName: "main",
-  },
+  } as any,
   refresh: vi.fn(async () => undefined),
 }));
 
@@ -142,10 +143,7 @@ vi.mock("../../control-plane/web-ui/src/lib/message-normalize", async (importOri
   const actual = await importOriginal<
     typeof import("../../control-plane/web-ui/src/lib/message-normalize")
   >();
-  return {
-    ...actual,
-    normalizeSessionConversationItems: () => [],
-  };
+  return actual;
 });
 
 const successMessageMock = vi.fn();
@@ -208,12 +206,13 @@ const ChatComposerStub = defineComponent({
     canTerminate: { type: Boolean, default: false },
     actionDisabled: { type: Boolean, default: false },
     forkDisabled: { type: Boolean, default: false },
+    showFork: { type: Boolean, default: true },
     inputDisabled: { type: Boolean, default: false },
     isExecuting: { type: Boolean, default: false },
   },
   emits: ["continue", "fork", "terminate", "removeQueued", "clearQueued", "refreshModels", "update:selectedModel"],
   template:
-    '<div data-testid="chat-composer" :data-can-terminate="String(canTerminate)" :data-action-disabled="String(actionDisabled)" :data-fork-disabled="String(forkDisabled)" :data-input-disabled="String(inputDisabled)" :data-is-executing="String(isExecuting)"><button type="button" data-testid="composer-continue" @click="$emit(\'continue\', \'新的 follow-up\')">continue</button></div>',
+    '<div data-testid="chat-composer" :data-can-terminate="String(canTerminate)" :data-action-disabled="String(actionDisabled)" :data-fork-disabled="String(forkDisabled)" :data-show-fork="String(showFork)" :data-input-disabled="String(inputDisabled)" :data-is-executing="String(isExecuting)"><button type="button" data-testid="composer-continue" @click="$emit(\'continue\', \'新的 follow-up\')">continue</button></div>',
 });
 
 const ChatMessageListStub = defineComponent({
@@ -513,6 +512,8 @@ describe("TaskDetailV3 runtime permissions", () => {
     });
     apiMocks.getModelsList.mockResolvedValue({ data: [] });
     apiMocks.getTaskAgentRuns.mockResolvedValue({ data: [] });
+    apiMocks.getTaskConversationMessages.mockResolvedValue({ data: [] });
+    apiMocks.getTaskSessions.mockResolvedValue({ data: [] });
     apiMocks.getTaskDomainRuns.mockResolvedValue({ data: [] });
     apiMocks.getTaskDomainRunDetail.mockResolvedValue({
       data: {
@@ -559,6 +560,30 @@ describe("TaskDetailV3 runtime permissions", () => {
       sessionId: "ses-1",
       reply: "once",
     });
+  });
+
+  it("strips legacy session query params from the V3 route on load", async () => {
+    routeState.query = { session: "ses-legacy", keep: "1" };
+
+    await mountPage();
+
+    expect(routerState.replace).toHaveBeenCalledWith({
+      name: "TaskDetailV3",
+      params: { taskId: "task-1" },
+      query: { keep: "1" },
+    });
+  });
+
+  it("does not request domain runs in embedded workbench mode", async () => {
+    routeState.query = { embedded: "1", workbench: "1" };
+
+    await mountPage();
+    await flushPromises();
+    await nextTick();
+
+    expect(apiMocks.getTaskAgentRuns).toHaveBeenCalledWith("task-1");
+    expect(apiMocks.getTaskDomainRuns).not.toHaveBeenCalled();
+    expect(apiMocks.getTaskDomainRunDetail).not.toHaveBeenCalled();
   });
 
   it("keeps rendering core task state when tree navigation data is unavailable", async () => {
@@ -630,6 +655,38 @@ describe("TaskDetailV3 runtime permissions", () => {
       "1",
     );
     expect(wrapper.get('[data-testid="trace-panel"]').attributes("data-refresh-key")).toBe("1");
+  });
+
+  it("refreshes task state when a task-domain snapshot event arrives", async () => {
+    vi.useFakeTimers();
+    try {
+      const wrapper = await mountPage();
+      taskState.refresh.mockClear();
+      branchState.refresh.mockClear();
+      messagesState.refresh.mockClear();
+
+      realtimeStoreMock.events = [
+        {
+          id: "evt-snapshot-1",
+          type: "task.snapshot.updated",
+          taskId: "task-1",
+          data: {
+            reason: "session.updated",
+          },
+        },
+      ];
+
+      await nextTick();
+      await vi.advanceTimersByTimeAsync(250);
+      await flushPromises();
+
+      expect(taskState.refresh).toHaveBeenCalled();
+      expect(branchState.refresh).toHaveBeenCalled();
+      expect(messagesState.refresh).toHaveBeenCalled();
+      wrapper.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("shows an incomplete trace warning in the main chat area when timeline cache is partial", async () => {
@@ -764,8 +821,7 @@ describe("TaskDetailV3 runtime permissions", () => {
     expect(candidateTexts).toContain("B");
   });
 
-  it("forces pending-adoption current parallel batches back onto the mainline session even when the route points at a candidate session", async () => {
-    routeState.query = { session: "ses-a" };
+  it("forces pending-adoption current parallel batches back onto the mainline session when a candidate branch is focused", async () => {
     taskState.task.status = "completed";
     taskState.task.agentRunId = undefined;
     taskState.task.executionMode = "parallel";
@@ -777,7 +833,7 @@ describe("TaskDetailV3 runtime permissions", () => {
         id: "node-session-root",
         parentId: "node-task-1",
         runtimeSessionId: "ses-1",
-        isActive: true,
+        isActive: false,
         contentText: "主分支",
         branchName: "main",
       },
@@ -785,7 +841,7 @@ describe("TaskDetailV3 runtime permissions", () => {
         id: "node-session-a",
         parentId: "node-session-root",
         runtimeSessionId: "ses-a",
-        isActive: false,
+        isActive: true,
         contentText: "候选 A",
         branchName: "candidate-a",
       },
@@ -798,7 +854,7 @@ describe("TaskDetailV3 runtime permissions", () => {
         branchName: "candidate-b",
       },
     ];
-    branchState.selectedNode = branchState.flatNodes[0];
+    branchState.selectedNode = branchState.flatNodes[1];
     messagesState.conversationItems = [
       {
         key: "user-mainline",
@@ -891,15 +947,13 @@ describe("TaskDetailV3 runtime permissions", () => {
       text: "候选 A",
       canAdopt: "true|true",
     });
-    expect(routerState.replace).toHaveBeenCalledWith({
-      name: "TaskDetailV3",
-      params: { taskId: "task-1" },
-      query: { session: "ses-1" },
-    });
+    expect(wrapper.get('[data-testid="chat-message-list-meta"]').attributes("data-session-id")).toBe(
+      "ses-1",
+    );
+    expect(routerState.replace).not.toHaveBeenCalled();
   });
 
-  it("prefers the current parallel run root session over task.sessionId when forcing pending-adoption batches back to mainline", async () => {
-    routeState.query = { session: "ses-a" };
+  it("prefers the current parallel run root session over task.sessionId when a candidate branch is focused", async () => {
     taskState.task.status = "completed";
     taskState.task.agentRunId = undefined;
     taskState.task.executionMode = "parallel";
@@ -911,7 +965,7 @@ describe("TaskDetailV3 runtime permissions", () => {
         id: "node-session-root",
         parentId: "node-task-1",
         runtimeSessionId: "ses-run-root",
-        isActive: true,
+        isActive: false,
         contentText: "主分支",
         branchName: "main",
       },
@@ -919,7 +973,7 @@ describe("TaskDetailV3 runtime permissions", () => {
         id: "node-session-a",
         parentId: "node-session-root",
         runtimeSessionId: "ses-a",
-        isActive: false,
+        isActive: true,
         contentText: "候选 A",
         branchName: "candidate-a",
       },
@@ -932,7 +986,7 @@ describe("TaskDetailV3 runtime permissions", () => {
         branchName: "candidate-b",
       },
     ];
-    branchState.selectedNode = branchState.flatNodes[0];
+    branchState.selectedNode = branchState.flatNodes[1];
     messagesState.conversationItems = [
       {
         key: "user-mainline-root",
@@ -1025,15 +1079,13 @@ describe("TaskDetailV3 runtime permissions", () => {
       text: "候选 A",
       canAdopt: "true|true",
     });
-    expect(routerState.replace).toHaveBeenCalledWith({
-      name: "TaskDetailV3",
-      params: { taskId: "task-1" },
-      query: { session: "ses-run-root" },
-    });
+    expect(wrapper.get('[data-testid="chat-message-list-meta"]').attributes("data-session-id")).toBe(
+      "ses-run-root",
+    );
+    expect(routerState.replace).not.toHaveBeenCalled();
   });
 
   it("restores the current compare block from session-tree siblings when the latest parallel batch is split into two single-candidate runs", async () => {
-    routeState.query = { session: "ses-b" };
     taskState.task.status = "completed";
     taskState.task.agentRunId = undefined;
     taskState.task.executionMode = "parallel";
@@ -1190,8 +1242,7 @@ describe("TaskDetailV3 runtime permissions", () => {
     expect(parallelItem?.attributes("data-candidate-can-adopt")).toBe("true|true");
   });
 
-  it("prefers the latest child candidate cohort when a historical root session has multiple fallback batches", async () => {
-    routeState.query = { session: "ses-root" };
+  it("prefers the latest child candidate cohort when a historical root session is selected", async () => {
     taskState.task.status = "completed";
     taskState.task.agentRunId = undefined;
     taskState.task.executionMode = "parallel";
@@ -1311,8 +1362,7 @@ describe("TaskDetailV3 runtime permissions", () => {
     );
   });
 
-  it("does not synthesize a descendant fallback run when the requested historical root already has its own projection run", async () => {
-    routeState.query = { session: "ses-root" };
+  it("does not synthesize a descendant fallback run when the selected historical root already has its own projection run", async () => {
     taskState.task.status = "completed";
     taskState.task.agentRunId = undefined;
     taskState.task.executionMode = "parallel";
@@ -1521,8 +1571,7 @@ describe("TaskDetailV3 runtime permissions", () => {
     );
   });
 
-  it("merges missing candidate indexes from companion runs when projection detail only includes the summary candidate", async () => {
-    routeState.query = { session: "ses-root" };
+  it("merges missing candidate indexes from companion runs when the selected historical root only exposes the summary candidate", async () => {
     taskState.task.status = "completed";
     taskState.task.agentRunId = undefined;
     taskState.task.executionMode = "parallel";
@@ -1698,7 +1747,6 @@ describe("TaskDetailV3 runtime permissions", () => {
   });
 
   it("prefers direct mainline-scoped parallel runs over later candidate-only matches", async () => {
-    routeState.query = { session: "ses-main" };
     taskState.task.status = "completed";
     taskState.task.agentRunId = undefined;
     taskState.task.executionMode = "parallel";
@@ -1938,8 +1986,7 @@ describe("TaskDetailV3 runtime permissions", () => {
     expect(candidateTexts).not.toContain("stale-trace-b");
   });
 
-  it("keeps an unrelated historical session pinned instead of forcing the current pending-adoption batch", async () => {
-    routeState.query = { session: "ses-history-main" };
+  it("keeps a selected historical session pinned instead of forcing the current pending-adoption batch", async () => {
     taskState.task.status = "completed";
     taskState.task.agentRunId = undefined;
     taskState.task.executionMode = "parallel";
@@ -2198,8 +2245,7 @@ describe("TaskDetailV3 runtime permissions", () => {
     expect(candidateTexts).not.toContain("current-a");
   });
 
-  it("keeps an explicitly requested historical session pinned instead of auto-switching to the adopted winner branch", async () => {
-    routeState.query = { session: "ses-history-main" };
+  it("keeps a selected historical session pinned instead of auto-switching to the adopted winner branch", async () => {
     taskState.task.status = "completed";
     taskState.task.agentRunId = undefined;
     taskState.task.executionMode = "parallel";
@@ -2449,7 +2495,7 @@ describe("TaskDetailV3 runtime permissions", () => {
     );
   });
 
-  it("switches selected session from the header selector and syncs route query", async () => {
+  it("does not expose session selection or fork entry in the task conversation view", async () => {
     branchState.flatNodes = [
       {
         id: "node-session-1",
@@ -2470,17 +2516,14 @@ describe("TaskDetailV3 runtime permissions", () => {
 
     const wrapper = await mountPage();
     const selects = wrapper.findAll('[data-testid="select"]');
-    expect(selects.length).toBeGreaterThan(0);
 
-    await selects[0]?.setValue("ses-2");
-    await flushPromises();
-
-    expect(routerState.replace).toHaveBeenCalledWith({
-      name: "TaskDetailV3",
-      params: { taskId: "task-1" },
-      query: { session: "ses-2" },
-    });
-    expect(apiMocks.listTaskRuntimePermissions).toHaveBeenLastCalledWith("task-1", "ses-2");
+    expect(selects).toHaveLength(0);
+    expect(wrapper.text()).not.toContain("选择会话");
+    expect(wrapper.text()).not.toContain("Session ses-1");
+    expect(wrapper.get('[data-testid="chat-composer"]').attributes("data-show-fork")).toBe(
+      "false",
+    );
+    expect(apiMocks.listTaskRuntimePermissions).toHaveBeenLastCalledWith("task-1", "ses-1");
   });
 
   it("disables fork when the task has no active or selected session", async () => {
@@ -2505,7 +2548,7 @@ describe("TaskDetailV3 runtime permissions", () => {
     expect(metaBefore.attributes("data-session-id")).toBe("ses-1");
     expect(metaBefore.attributes("data-force-scroll-token")).toBe("0");
 
-    await (wrapper.vm as { handleContinue: (prompt: string) => Promise<void> }).handleContinue(
+    await ((wrapper.vm as unknown) as { handleContinue: (prompt: string) => Promise<void> }).handleContinue(
       "新的 follow-up",
     );
     await flushPromises();
@@ -2520,11 +2563,83 @@ describe("TaskDetailV3 runtime permissions", () => {
     );
     expect(metaAfter.attributes("data-session-id")).toBe("ses-2");
     expect(Number(metaAfter.attributes("data-force-scroll-token"))).toBeGreaterThanOrEqual(2);
-    expect(routerState.replace).toHaveBeenCalledWith({
-      name: "TaskDetailV3",
-      params: { taskId: "task-1" },
-      query: { session: "ses-2" },
+    expect(routerState.replace).not.toHaveBeenCalled();
+  });
+
+  it("prefers canonical task session ids for continue when session summaries expose them", async () => {
+    taskState.task.status = "completed";
+    taskState.task.finishedAt = "2026-03-22T10:00:00.000Z";
+    apiMocks.getTaskSessions.mockResolvedValue({
+      data: [
+        {
+          id: "ses-1",
+          taskSessionId: "task-session:task-1:ses-1",
+          title: "主分支",
+          isActive: true,
+          summary: null,
+          createdAt: "2026-03-22T00:00:00.000Z",
+          updatedAt: "2026-03-22T00:10:00.000Z",
+        },
+      ],
     });
+    apiMocks.continueTask.mockResolvedValueOnce({ ok: true, sessionId: "ses-2" });
+
+    const wrapper = await mountPage();
+
+    await ((wrapper.vm as unknown) as { handleContinue: (prompt: string) => Promise<void> }).handleContinue(
+      "新的 follow-up",
+    );
+    await flushPromises();
+
+    expect(apiMocks.continueTask).toHaveBeenCalledWith(
+      "task-1",
+      "新的 follow-up",
+      "task-session:task-1:ses-1",
+      expect.any(String),
+    );
+  });
+
+  it("continues forked sessions via canonical task session ids when available", async () => {
+    taskState.task.status = "completed";
+    taskState.task.finishedAt = "2026-03-22T10:00:00.000Z";
+    apiMocks.getTaskSessions.mockResolvedValue({
+      data: [
+        {
+          id: "ses-1",
+          taskSessionId: "task-session:task-1:ses-1",
+          title: "主分支",
+          isActive: true,
+          summary: null,
+          createdAt: "2026-03-22T00:00:00.000Z",
+          updatedAt: "2026-03-22T00:10:00.000Z",
+        },
+      ],
+    });
+    apiMocks.forkTaskSession.mockResolvedValueOnce({
+      ok: true,
+      sessionId: "ses-2",
+      taskSessionId: "task-session:task-1:ses-2",
+    });
+    apiMocks.continueTask.mockResolvedValueOnce({ ok: true, sessionId: "ses-2" });
+
+    const wrapper = await mountPage();
+
+    await ((wrapper.vm as unknown) as { handleFork: (prompt: string) => Promise<void> }).handleFork(
+      "新的 follow-up",
+    );
+    await flushPromises();
+
+    expect(apiMocks.forkTaskSession).toHaveBeenCalledWith(
+      "task-1",
+      "task-session:task-1:ses-1",
+      expect.stringContaining("分叉"),
+    );
+    expect(apiMocks.continueTask).toHaveBeenCalledWith(
+      "task-1",
+      "新的 follow-up",
+      "task-session:task-1:ses-2",
+      expect.any(String),
+    );
   });
 
   it("eventually renders the new user follow-up text in the switched session conversation", async () => {
@@ -2570,7 +2685,7 @@ describe("TaskDetailV3 runtime permissions", () => {
 
     const wrapper = await mountPage();
 
-    await (wrapper.vm as { handleContinue: (prompt: string) => Promise<void> }).handleContinue(
+    await ((wrapper.vm as unknown) as { handleContinue: (prompt: string) => Promise<void> }).handleContinue(
       "新的 follow-up",
     );
     await flushPromises();
@@ -3309,74 +3424,204 @@ describe("TaskDetailV3 runtime permissions", () => {
     );
   });
 
-  it("loads sequential chain steps from domain run detail when strategy is absent", async () => {
-    taskState.task.status = "running";
-    taskState.task.executionMode = "sequential-chain";
-    taskState.task.orchestrationKind = "sequential-chain";
-    taskState.task.currentRunId = "run-chain-1";
+  it("falls back to session selectedModel when parallel agent runs omit modelUsed", async () => {
+    taskState.task.status = "completed";
+    taskState.task.executionMode = "parallel";
+    taskState.task.orchestrationKind = "parallel";
+    taskState.task.currentRunId = undefined;
     taskState.task.strategy = undefined;
-    apiMocks.getTaskDomainRuns.mockResolvedValue({
+    branchState.flatNodes = [
+      {
+        id: "node-root",
+        runtimeSessionId: "ses-root",
+        isActive: true,
+        contentText: "主线",
+        branchName: "main",
+      },
+      {
+        id: "node-a",
+        runtimeSessionId: "ses-a",
+        parentRuntimeSessionId: "ses-root",
+        parentId: "node-root",
+        isActive: false,
+        contentText: "候选 A",
+        branchName: "candidate-a",
+      },
+      {
+        id: "node-b",
+        runtimeSessionId: "ses-b",
+        parentRuntimeSessionId: "ses-root",
+        parentId: "node-root",
+        isActive: false,
+        contentText: "候选 B",
+        branchName: "candidate-b",
+      },
+    ];
+    branchState.selectedNode = branchState.flatNodes[0];
+    apiMocks.getTaskSessions.mockResolvedValue({
       data: [
         {
-          id: "run-chain-1",
-          taskId: "task-1",
-          projectId: "proj-1",
-          orchestrationKind: "sequential-chain",
-          triggerType: "user_execute",
-          status: "running",
-          createdAt: "2026-03-22T06:00:00.000Z",
-          updatedAt: "2026-03-22T06:00:10.000Z",
+          id: "ses-a",
+          title: "候选 A",
+          isActive: false,
+          summary: null,
+          coordinationKey: "ses-root",
+          winnerSessionId: null,
+          executionStatus: "completed",
+          sessionKind: "primary",
+          candidateIndex: 0,
+          stepIndex: null,
+          selectedModel: "github-copilot:gemini-3-flash-preview",
+          createdAt: "2026-03-22T05:00:01.000Z",
+          updatedAt: "2026-03-22T05:00:02.000Z",
+        },
+        {
+          id: "ses-b",
+          title: "候选 B",
+          isActive: false,
+          summary: null,
+          coordinationKey: "ses-root",
+          winnerSessionId: null,
+          executionStatus: "completed",
+          sessionKind: "primary",
+          candidateIndex: 1,
+          stepIndex: null,
+          selectedModel: "github-copilot:gpt-4o",
+          createdAt: "2026-03-22T05:00:01.500Z",
+          updatedAt: "2026-03-22T05:00:02.500Z",
         },
       ],
     });
-    apiMocks.getTaskDomainRunDetail.mockResolvedValue({
-      data: {
-        run: {
-          id: "run-chain-1",
+    apiMocks.getTaskAgentRuns.mockResolvedValue({
+      data: [
+        {
+          id: "run-a",
+          runId: "run-parallel-fallback",
           taskId: "task-1",
           projectId: "proj-1",
-          orchestrationKind: "sequential-chain",
-          triggerType: "user_execute",
-          status: "running",
-          createdAt: "2026-03-22T06:00:00.000Z",
-          updatedAt: "2026-03-22T06:00:10.000Z",
+          candidateIndex: 0,
+          sessionId: "ses-a",
+          agentType: "executor",
+          modelUsed: null,
+          status: "completed",
+          result: "candidate-a",
+          startedAt: "2026-03-22T05:00:01.000Z",
+          finishedAt: "2026-03-22T05:00:02.000Z",
         },
-        nodes: [
+        {
+          id: "run-b",
+          runId: "run-parallel-fallback",
+          taskId: "task-1",
+          projectId: "proj-1",
+          candidateIndex: 1,
+          sessionId: "ses-b",
+          agentType: "executor",
+          modelUsed: null,
+          status: "completed",
+          result: "candidate-b",
+          startedAt: "2026-03-22T05:00:01.500Z",
+          finishedAt: "2026-03-22T05:00:02.500Z",
+        },
+      ],
+    });
+    apiMocks.getTaskDomainRuns.mockResolvedValue({ data: [] });
+    apiMocks.getTaskExecutionTraceView.mockImplementation(async (_taskId: string, sessionId: string) => ({
+      taskId: "task-1",
+      sessionId,
+      segments: [],
+      hookExecutions: [],
+      timeline: [],
+      messages: [
+        {
+          id: `msg-${sessionId}`,
+          role: "assistant",
+          text: sessionId === "ses-a" ? "candidate-a" : "candidate-b",
+          createdAt: "2026-03-22T05:00:03.000Z",
+        },
+      ],
+      latestResponse: sessionId === "ses-a" ? "candidate-a" : "candidate-b",
+    }));
+    apiMocks.listTaskRuntimePermissions.mockResolvedValue({ data: [] });
+
+    const wrapper = await mountPage();
+    const parallelItem = wrapper
+      .findAll(".chat-item")
+      .find((node) => node.attributes("data-role") === "parallel");
+
+    expect(parallelItem?.attributes("data-candidate-models")).toBe(
+      "github-copilot:gemini-3-flash-preview|github-copilot:gpt-4o",
+    );
+  });
+
+  it("loads sequential chain steps from session messages when strategy is absent", async () => {
+    taskState.task.status = "running";
+    taskState.task.executionMode = "sequential-chain";
+    taskState.task.orchestrationKind = "sequential-chain";
+    taskState.task.strategy = undefined;
+    apiMocks.getTaskAgentRuns.mockResolvedValue({ data: [] });
+    apiMocks.getTaskSessions.mockResolvedValue({
+      data: [
+        {
+          id: "ses-chain-1",
+          title: "任务详情 V3 — 分析现状",
+          isActive: false,
+          summary: null,
+          sessionKind: "sequential_step",
+          stepIndex: 0,
+          selectedModel: "gpt-5-mini",
+          createdAt: "2026-03-22T06:00:00.000Z",
+          updatedAt: "2026-03-22T06:00:02.000Z",
+        },
+        {
+          id: "ses-chain-2",
+          title: "任务详情 V3 — 设计方案",
+          isActive: true,
+          summary: null,
+          sessionKind: "sequential_step",
+          stepIndex: 1,
+          selectedModel: "gpt-5",
+          createdAt: "2026-03-22T06:00:03.000Z",
+          updatedAt: "2026-03-22T06:00:04.000Z",
+        },
+      ],
+    });
+    apiMocks.getTaskConversationMessages.mockImplementation(async (_taskId: string, sessionId: string) => {
+      const stepPrompt =
+        sessionId === "ses-chain-1"
+          ? [
+              "执行任务详情页测试",
+              "",
+              "## 当前步骤 (1/2): 分析现状",
+              "先梳理现状和约束。",
+              "请只完成当前步骤的目标。完成后输出本步骤产出摘要。",
+            ].join("\n")
+          : [
+              "执行任务详情页测试",
+              "",
+              "## 已完成步骤产出",
+              "",
+              "### 分析现状",
+              "已梳理完成。",
+              "",
+              "## 当前步骤 (2/2): 设计方案",
+              "输出模块划分和接口设计。",
+              "请只完成当前步骤的目标。完成后输出本步骤产出摘要。",
+            ].join("\n");
+
+      return {
+        data: [
           {
-            id: "chain-node-1",
-            runId: "run-chain-1",
-            taskId: "task-1",
-            projectId: "proj-1",
-            nodeKind: "chain-step",
-            nodeKey: "step-1",
-            title: "分析现状",
-            instruction: "先梳理现状和约束。",
-            chainStepIndex: 0,
-            status: "completed",
-            modelUsed: "gpt-5-mini",
-            createdAt: "2026-03-22T06:00:01.000Z",
-            updatedAt: "2026-03-22T06:00:02.000Z",
-          },
-          {
-            id: "chain-node-2",
-            runId: "run-chain-1",
-            taskId: "task-1",
-            projectId: "proj-1",
-            nodeKind: "chain-step",
-            nodeKey: "step-2",
-            title: "设计方案",
-            instruction: "输出模块划分和接口设计。",
-            chainStepIndex: 1,
-            status: "running",
-            modelUsed: "gpt-5",
-            createdAt: "2026-03-22T06:00:03.000Z",
-            updatedAt: "2026-03-22T06:00:04.000Z",
+            info: {
+              id: `msg-${sessionId}-user`,
+              role: "user",
+              time: {
+                created: "2026-03-22T06:00:00.000Z",
+              },
+            },
+            parts: [{ type: "text", text: stepPrompt }],
           },
         ],
-        candidateNodes: [],
-        judgeNode: null,
-        winnerCandidateIndex: null,
-      },
+      };
     });
     apiMocks.listTaskRuntimePermissions.mockResolvedValue({ data: [] });
 
@@ -3384,6 +3629,12 @@ describe("TaskDetailV3 runtime permissions", () => {
     const modal = wrapper.get('[data-testid="execution-mode-modal"]');
 
     expect(modal.attributes("data-step-titles")).toBe("分析现状|设计方案");
+    expect(apiMocks.getTaskConversationMessages).toHaveBeenNthCalledWith(1, "task-1", "ses-chain-1", {
+      includeLineage: false,
+    });
+    expect(apiMocks.getTaskConversationMessages).toHaveBeenNthCalledWith(2, "task-1", "ses-chain-2", {
+      includeLineage: false,
+    });
   });
 
   it("renders multiple historical parallel runs directly from domain runs", async () => {
@@ -3598,8 +3849,7 @@ describe("TaskDetailV3 runtime permissions", () => {
     });
   });
 
-  it("scopes visible parallel runs to the requested session context", async () => {
-    routeState.query = { session: "ses-old-root" };
+  it("scopes visible parallel runs to the selected session context", async () => {
     taskState.task.status = "completed";
     taskState.task.agentRunId = undefined;
     taskState.task.executionMode = "single";
@@ -4071,6 +4321,225 @@ describe("TaskDetailV3 runtime permissions", () => {
         models: "gpt-5.4|claude-opus-4.6",
       }),
     );
+  });
+
+  it("falls back to session messages when candidate execution trace has no displayable reply", async () => {
+    taskState.task.status = "running";
+    taskState.task.executionMode = "parallel";
+    taskState.task.orchestrationKind = "parallel";
+    taskState.task.strategy = {
+      executionMode: "parallel",
+      parallelCandidates: [
+        { label: "候选 A", model: "gpt-5.4" },
+        { label: "候选 B", model: "claude-opus-4.6" },
+      ],
+    } as unknown as string;
+    branchState.flatNodes = [
+      {
+        id: "node-session-root",
+        parentId: "node-task-1",
+        runtimeSessionId: "ses-1",
+        isActive: true,
+        contentText: "主分支",
+        branchName: "main",
+        createdAt: "2026-03-22T09:59:59.000Z",
+      },
+      {
+        id: "node-session-a",
+        parentId: "node-session-root",
+        runtimeSessionId: "ses-a",
+        isActive: true,
+        contentText: "候选 A",
+        branchName: "candidate-a",
+        createdAt: "2026-03-22T10:00:01.000Z",
+      },
+      {
+        id: "node-session-b",
+        parentId: "node-session-root",
+        runtimeSessionId: "ses-b",
+        isActive: true,
+        contentText: "候选 B",
+        branchName: "candidate-b",
+        createdAt: "2026-03-22T10:00:02.000Z",
+      },
+    ];
+    branchState.selectedNode = branchState.flatNodes[0];
+    apiMocks.getTaskDomainRuns.mockResolvedValue({ data: [] });
+    apiMocks.getTaskExecutionTraceView.mockImplementation(async (_taskId: string, sessionId: string) => {
+      if (sessionId === "ses-a") {
+        return {
+          taskId: "task-1",
+          sessionId,
+          segments: [],
+          hookExecutions: [],
+          timeline: [],
+          messages: [
+            {
+              id: "msg-user-a",
+              role: "user",
+              text: "并行请求",
+              createdAt: "2026-03-22T10:00:01.000Z",
+            },
+          ],
+          timelineMeta: {
+            cacheState: "partial",
+          },
+          latestResponse: null,
+        };
+      }
+
+      return {
+        taskId: "task-1",
+        sessionId,
+        segments: [],
+        hookExecutions: [],
+        timeline: [],
+        messages: [
+          {
+            id: "msg-assistant-b",
+            role: "assistant",
+            text: "候选 B 直接来自执行追踪",
+            createdAt: "2026-03-22T10:00:10.000Z",
+          },
+        ],
+        latestResponse: "候选 B 直接来自执行追踪",
+      };
+    });
+    apiMocks.getTaskConversationMessages.mockImplementation(async (_taskId: string, sessionId: string) => {
+      if (sessionId === "ses-a") {
+        return {
+          data: [
+            {
+              info: {
+                id: "msg-user-a",
+                role: "user",
+                time: { created: "2026-03-22T10:00:01.000Z" },
+              },
+              parts: [{ type: "text", text: "并行请求" }],
+            },
+            {
+              info: {
+                id: "msg-assistant-a",
+                role: "assistant",
+                time: { created: "2026-03-22T10:00:08.000Z" },
+              },
+              parts: [{ type: "text", text: "候选 A 已回退到会话消息" }],
+            },
+          ],
+        };
+      }
+
+      return { data: [] };
+    });
+    apiMocks.listTaskRuntimePermissions.mockResolvedValue({ data: [] });
+
+    const wrapper = await mountPage();
+    const parallelItem = wrapper
+      .findAll(".chat-item")
+      .find((node) => node.attributes("data-role") === "parallel");
+
+    expect(apiMocks.getTaskConversationMessages).toHaveBeenCalledWith("task-1", "ses-a", {
+      includeLineage: false,
+    });
+    expect(parallelItem?.attributes("data-candidate-statuses")).toBe("completed|completed");
+    expect(parallelItem?.attributes("data-candidate-trace-states")).toBe("incomplete|");
+    expect(parallelItem?.text()).toContain("候选 A 已回退到会话消息");
+    expect(parallelItem?.text()).toContain("候选 B 直接来自执行追踪");
+  });
+
+  it("derives the adopted fallback candidate from task session summaries", async () => {
+    taskState.task.status = "running";
+    taskState.task.executionMode = "parallel";
+    taskState.task.orchestrationKind = "parallel";
+    taskState.task.strategy = {
+      executionMode: "parallel",
+      parallelCandidates: [
+        { label: "候选 A", model: "gpt-5.4" },
+        { label: "候选 B", model: "claude-opus-4.6" },
+      ],
+    } as unknown as string;
+    branchState.flatNodes = [
+      {
+        id: "node-session-root",
+        parentId: "node-task-1",
+        runtimeSessionId: "ses-1",
+        isActive: true,
+        contentText: "主分支",
+        branchName: "main",
+        createdAt: "2026-03-22T09:59:59.000Z",
+      },
+      {
+        id: "node-session-a",
+        parentId: "node-session-root",
+        runtimeSessionId: "ses-a",
+        isActive: true,
+        contentText: "候选 A",
+        branchName: "candidate-a",
+        createdAt: "2026-03-22T10:00:01.000Z",
+      },
+      {
+        id: "node-session-b",
+        parentId: "node-session-root",
+        runtimeSessionId: "ses-b",
+        isActive: true,
+        contentText: "候选 B",
+        branchName: "candidate-b",
+        createdAt: "2026-03-22T10:00:02.000Z",
+      },
+    ];
+    branchState.selectedNode = branchState.flatNodes[0];
+    apiMocks.getTaskDomainRuns.mockResolvedValue({ data: [] });
+    apiMocks.getTaskSessions.mockResolvedValue({
+      data: [
+        {
+          id: "ses-a",
+          title: "候选 A",
+          isActive: false,
+          summary: null,
+          coordinationKey: "group-1",
+          winnerSessionId: "ses-b",
+          createdAt: "2026-03-22T10:00:01.000Z",
+          updatedAt: "2026-03-22T10:00:12.000Z",
+        },
+        {
+          id: "ses-b",
+          title: "候选 B",
+          isActive: true,
+          summary: null,
+          coordinationKey: "group-1",
+          winnerSessionId: "ses-b",
+          createdAt: "2026-03-22T10:00:02.000Z",
+          updatedAt: "2026-03-22T10:00:13.000Z",
+        },
+      ],
+    });
+    apiMocks.getTaskExecutionTraceView.mockImplementation(async (_taskId: string, sessionId: string) => ({
+      taskId: "task-1",
+      sessionId,
+      segments: [],
+      hookExecutions: [],
+      timeline: [],
+      messages: [
+        {
+          id: `assistant-${sessionId}`,
+          role: "assistant",
+          text: `reply-${sessionId}`,
+          createdAt: "2026-03-22T10:00:10.000Z",
+        },
+      ],
+      latestResponse: `reply-${sessionId}`,
+    }));
+    apiMocks.listTaskRuntimePermissions.mockResolvedValue({ data: [] });
+
+    const wrapper = await mountPage();
+    const parallelItem = wrapper
+      .findAll(".chat-item")
+      .find((node) => node.attributes("data-role") === "parallel");
+
+    expect(wrapper.get('[data-testid="chat-message-list-meta"]').attributes("data-session-id")).toBe(
+      "ses-b",
+    );
+    expect(parallelItem?.attributes("data-candidate-can-adopt")).toBe("false|false");
   });
 
   it("keeps current session-tree parallel comparison visible even when historical projection runs already exist", async () => {

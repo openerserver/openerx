@@ -15,7 +15,10 @@ export interface TaskConversationMessageItem {
   key: string;
   role: string;
   agent?: string;
+  model?: string;
   text?: string;
+  userInputText?: string;
+  finalSentText?: string;
   toolCalls: TaskConversationToolCallItem[];
   createdAt?: string;
   raw: unknown;
@@ -49,7 +52,28 @@ export interface TaskConversationParallelItem {
   toolCalls: [];
 }
 
-export type TaskConversationListItem = TaskConversationMessageItem | TaskConversationParallelItem;
+export interface TaskConversationWorkflowStep {
+  agentName: string;
+  sessionId: string;
+  items: TaskConversationMessageItem[];
+}
+
+export interface TaskConversationWorkflowItem {
+  key: string;
+  role: "workflow";
+  createdAt?: string;
+  variant?: string;
+  label?: string;
+  hint?: string;
+  steps: TaskConversationWorkflowStep[];
+  raw: unknown;
+  toolCalls: [];
+}
+
+export type TaskConversationListItem =
+  | TaskConversationMessageItem
+  | TaskConversationParallelItem
+  | TaskConversationWorkflowItem;
 
 export interface TaskConversationToolCallItem {
   key: string;
@@ -142,16 +166,88 @@ export function hasCompletedTimestamp(value: unknown): boolean {
 /*  Realtime event accessors                                           */
 /* ------------------------------------------------------------------ */
 
+export function getRealtimeEventKind(event: RealtimeEvent): string {
+  if (event.type === "task.message.updated") {
+    return "task.message.updated";
+  }
+  if (event.type === "task.message.delta") {
+    return "task.message.delta";
+  }
+  if (event.type === "task.snapshot.updated") {
+    return "task.snapshot.updated";
+  }
+
+  const rawType = asString(event.data.rawType) ?? event.type;
+  if (rawType === "message.updated") {
+    return "task.message.updated";
+  }
+  if (rawType === "message.part.updated") {
+    return "task.message.delta";
+  }
+  if (rawType === "session.updated" || rawType === "session.created") {
+    return "task.snapshot.updated";
+  }
+
+  return rawType;
+}
+
+export function getRealtimeSnapshotReason(event: RealtimeEvent): string | undefined {
+  if (event.type === "task.snapshot.updated") {
+    return asString(event.data.reason) ?? event.type;
+  }
+  if (event.type === "session.updated" || event.type === "session.created") {
+    return event.type;
+  }
+
+  const rawType = asString(event.data.rawType);
+  if (rawType === "session.updated" || rawType === "session.created") {
+    return rawType;
+  }
+
+  return undefined;
+}
+
 export function getRealtimeRawType(event: RealtimeEvent): string {
+  if (event.type === "task.message.updated") {
+    return "message.updated";
+  }
+  if (event.type === "task.message.delta") {
+    return "message.part.updated";
+  }
+  if (event.type === "task.snapshot.updated") {
+    return asString(event.data.reason) ?? event.type;
+  }
   return typeof event.data.rawType === "string" ? event.data.rawType : event.type;
 }
 
 export function getRealtimeInfo(event: RealtimeEvent): Record<string, unknown> | null {
-  return asRecord(event.data.info);
+  return asRecord(event.data.info) ??
+    (event.type === "task.message.updated" ? asRecord(event.data.message) : null);
 }
 
 export function getRealtimePart(event: RealtimeEvent): Record<string, unknown> | null {
-  return asRecord(event.data.part);
+  const part = asRecord(event.data.part);
+  if (part) {
+    return part;
+  }
+
+  if (event.type !== "task.message.delta") {
+    return null;
+  }
+
+  const message = asRecord(event.data.message);
+  const messageId = asString(event.data.messageId) ?? asString(message?.id);
+  const text = asString(event.data.delta) ?? asString(event.data.fullText);
+  const partType = asString(event.data.partType) ?? "text";
+  if (!messageId || !text) {
+    return null;
+  }
+
+  return {
+    messageID: messageId,
+    type: partType,
+    text,
+  };
 }
 
 function mergeStreamingText(existing: string | undefined, incoming: string): string {
@@ -194,7 +290,13 @@ function normalizeText(parts: Array<Record<string, unknown>>): string | undefine
       const partType = asString(part.type);
       return !partType || partType === "text";
     })
-    .map((part) => asString(part.text) ?? asString(part.content))
+    .map(
+      (part) =>
+        asString(part.text) ??
+        asString(part.content) ??
+        asString(part.textContent) ??
+        asString(part.contentText),
+    )
     .filter((value): value is string => Boolean(value));
 
   if (chunks.length > 0) {
@@ -520,7 +622,7 @@ export function collectLiveAssistantState(
 
   const rememberAssistantMeta = (event: RealtimeEvent) => {
     const info = getRealtimeInfo(event);
-    if (getRealtimeRawType(event) !== "message.updated" || !info) {
+    if (getRealtimeEventKind(event) !== "task.message.updated" || !info) {
       return;
     }
 
@@ -545,10 +647,10 @@ export function collectLiveAssistantState(
   };
 
   const rememberAssistantText = (event: RealtimeEvent) => {
-    const rawType = getRealtimeRawType(event);
+    const eventKind = getRealtimeEventKind(event);
     const part = getRealtimePart(event);
 
-    if (rawType !== "message.updated" && rawType !== "message.part.updated") {
+    if (eventKind !== "task.message.updated" && eventKind !== "task.message.delta") {
       return;
     }
 
@@ -607,6 +709,9 @@ export function normalizeMessage(
   const toolCalls = normalizeToolCalls(parts);
   const persistedText =
     normalizeText(parts) ??
+    asString(record?.textContent) ??
+    asString(record?.contentText) ??
+    asString(record?.summaryText) ??
     asString(record?.text) ??
     asString(record?.content) ??
     asString(info?.preview);
@@ -626,7 +731,10 @@ export function normalizeMessage(
     key,
     role,
     agent: asString(info?.agent),
+    model: asString(asRecord(info?.model)?.modelID) ?? asString(info?.modelID),
     text,
+    userInputText: asString(record?.userInputText),
+    finalSentText: asString(record?.finalSentText),
     toolCalls,
     createdAt:
       parseTimestamp(asRecord(info?.time)?.created) ??
@@ -649,4 +757,51 @@ export function normalizeSessionConversationItems(
     .map((message, index) => normalizeMessage(message, index, liveState))
     .filter((item): item is TaskConversationMessageItem => item != null)
     .filter((item) => item.role !== "system");
+}
+
+/**
+ * Detect and extract workflow group items from raw API messages.
+ * Workflow groups are synthetic items produced by the BFF runtime fallback
+ * with `_type: "workflow_group"` and `info.role: "workflow"`.
+ */
+export function normalizeWorkflowGroup(
+  message: unknown,
+): TaskConversationWorkflowItem | null {
+  const record = asRecord(message);
+  if (!record || record._type !== "workflow_group") return null;
+
+  const info = asRecord(record.info);
+  const key = asString(info?.id) ?? "workflow-group";
+  const steps = Array.isArray(record.steps) ? record.steps : [];
+  const liveState = createEmptyLiveAssistantState();
+
+  const normalizedSteps: TaskConversationWorkflowStep[] = [];
+  for (const step of steps) {
+    const stepRecord = asRecord(step);
+    if (!stepRecord) continue;
+    const agentName = asString(stepRecord.agentName) ?? "Agent";
+    const sessionId = asString(stepRecord.sessionId) ?? "";
+    const rawMessages = Array.isArray(stepRecord.messages) ? stepRecord.messages : [];
+    const items = rawMessages
+      .map((msg, idx) => normalizeMessage(msg, idx, liveState))
+      .filter((item): item is TaskConversationMessageItem => item != null)
+      .filter((item) => item.role !== "system");
+    if (items.length > 0) {
+      normalizedSteps.push({ agentName, sessionId, items });
+    }
+  }
+
+  if (normalizedSteps.length === 0) return null;
+
+  return {
+    key,
+    role: "workflow",
+    createdAt: normalizedSteps[0]?.items[0]?.createdAt,
+    variant: asString(info?.variant),
+    label: asString(info?.label),
+    hint: asString(info?.hint),
+    steps: normalizedSteps,
+    raw: message,
+    toolCalls: [],
+  };
 }

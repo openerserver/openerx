@@ -147,6 +147,15 @@
             <router-link :to="`/tasks/${record.id}/v3`">
               <a-button type="link" size="small">任务视图</a-button>
             </router-link>
+            <a-popconfirm
+              v-if="isAdmin"
+              title="确定删除该任务？此操作不可恢复。"
+              ok-text="确定"
+              cancel-text="取消"
+              @confirm="handleDelete(record.id)"
+            >
+              <a-button danger size="small" :loading="deletingId === record.id">删除</a-button>
+            </a-popconfirm>
           </a-space>
         </template>
       </template>
@@ -454,6 +463,7 @@ import {
   TASK_LIST_LIMIT,
   type Task,
   createTask,
+  deleteTask,
   executeTask,
   getModelsList,
   getOrchestrationStrategy,
@@ -471,15 +481,18 @@ import { RUNTIME_RECOVERY_ERROR_PREFIX } from "../lib/runtime-recovery-contract"
 import { RUNTIME_RECOVERY_CONTEXTS } from "../lib/runtime-recovery-notice";
 import { resolveTaskDisplayStatus } from "../lib/task-display-status";
 import { useProjectStore } from "../stores/project";
+import { useAuthStore } from "../stores/auth";
 import { tasksThemeStyles } from "../theme/ui-theme";
 
 const projectStore = useProjectStore();
+const authStore = useAuthStore();
 const route = useRoute();
 const router = useRouter();
 const loading = ref(false);
 const creating = ref(false);
 const executingId = ref<string | null>(null);
 const cancellingId = ref<string | null>(null);
+const deletingId = ref<string | null>(null);
 const tasks = ref<Task[]>([]);
 const statusFilter = ref<string | undefined>(undefined);
 const searchText = ref("");
@@ -491,6 +504,8 @@ const modelsData = ref<Array<Record<string, unknown>> | null>(null);
 const EXECUTION_SETTLE_TIMEOUT_MS = 3000;
 const EXECUTION_SETTLE_INTERVAL_MS = 200;
 const AUTO_REFRESH_INTERVAL_MS = 8000;
+
+const isAdmin = computed(() => ["admin", "platform_admin", "org_admin"].includes(authStore.user?.role ?? ""));
 
 const showExecutionModeModal = ref(false);
 const executionModeTargetTaskId = ref<string | null>(null);
@@ -1290,6 +1305,19 @@ async function handleCancel(taskId: string) {
     message.error(`取消失败: ${e}`);
   } finally {
     cancellingId.value = null;
+  }
+}
+
+async function handleDelete(taskId: string) {
+  deletingId.value = taskId;
+  try {
+    await deleteTask(taskId);
+    message.success("任务已删除");
+    await refresh();
+  } catch (e) {
+    message.error(`删除失败: ${e}`);
+  } finally {
+    deletingId.value = null;
   }
 }
 

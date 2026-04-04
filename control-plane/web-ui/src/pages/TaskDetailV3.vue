@@ -13,17 +13,6 @@
             <a-space size="small" wrap style="margin-top: 8px">
               <a-tag :color="taskDisplayStatus.tagColor">{{ taskDisplayStatus.label }}</a-tag>
               <a-tag color="blue">当前阶段 {{ currentStageLabel }}</a-tag>
-              <a-select
-                v-if="sessionOptions.length > 1"
-                size="small"
-                style="min-width: 220px"
-                :value="selectedBranchSessionId"
-                :options="sessionOptions"
-                placeholder="选择会话"
-                show-search
-                :filter-option="filterModelOption"
-                @update:value="handleSelectSession(String($event ?? ''))"
-              />
             </a-space>
           </div>
 
@@ -33,16 +22,16 @@
               :current-task-id="task.id"
               @select="handleTaskSwitch"
             />
-            <router-link :to="`/tasks/${task.id}`">
-              <a-button size="small">经典视图</a-button>
-            </router-link>
             <a-button @click="sidebarCollapsed = !sidebarCollapsed">
               {{ sidebarCollapsed ? "展开 Sidebar" : "收起 Sidebar" }}
             </a-button>
           </a-space>
         </header>
 
-        <div class="task-detail-v3-shell">
+        <div
+          class="task-detail-v3-shell"
+          :class="{ 'task-detail-v3-shell--sidebar-collapsed': sidebarCollapsed }"
+        >
           <main class="task-detail-v3-main">
             <TaskDetailQuickOverview
               v-if="workflowSummary"
@@ -56,9 +45,7 @@
               :completing="false"
               :advancing="false"
               @choose-mode="handleChooseMode"
-              @update:auto-advance="handleAutoAdvanceToggle"
               @complete="handleUnavailableAction('完成任务')"
-              @advance="handleUnavailableAction('推进阶段')"
             />
 
             <a-alert
@@ -85,7 +72,6 @@
                   <a-space size="small" wrap>
                     <a-tag color="processing">待审批</a-tag>
                     <a-tag color="purple">{{ runtimePermissionLabel(permission.permission) }}</a-tag>
-                    <a-tag color="default">Session {{ permission.sessionId.slice(0, 8) }}</a-tag>
                   </a-space>
                   <div class="runtime-permission-card__path">
                     {{ runtimePermissionPath(permission) || "当前请求未提供路径信息" }}
@@ -135,7 +121,7 @@
               :items="conversationItems"
               :loading="messagesLoading"
               :error="messagesError"
-              :active-session-id="selectedBranchSessionId"
+              :active-session-id="selectedSessionId"
               :force-scroll-token="conversationFocusToken"
               @open-file-preview="handleOpenFilePreview"
               @adopt-candidate="handleAdoptCandidate"
@@ -146,6 +132,7 @@
               :action-disabled="continuing || forking || terminating"
               :model-selection-disabled="continuing || forking || isExecuting"
               :fork-disabled="continuing || forking || isExecuting || !canForkFromCurrentSession"
+              :show-fork="showSessionStructure"
               :is-executing="isExecuting"
               :can-terminate="canTerminateExecution"
               :model-options="modelOptions"
@@ -186,15 +173,14 @@
                 :content="previewFile.content"
                 @close="previewFile = null"
               />
-              <TaskMemberPanel :view="taskMemberView" :loading="taskMemberViewLoading" />
               <TaskFollowupPanel
                 :task-id="task.id"
-                :session-id="selectedBranchSessionId"
+                :session-id="selectedSessionId"
                 :refresh-key="traceRefreshKey"
               />
               <TaskExecutionTracePanel
                 :task-id="task.id"
-                :session-id="selectedBranchSessionId"
+                :session-id="selectedSessionId"
                 :refresh-key="traceRefreshKey"
               />
             </template>
@@ -210,7 +196,7 @@ import { message } from "ant-design-vue";
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { type TreeTask, useProjectTreeTask } from "../composables/useProjectTreeTask";
-import { useTreeBranches } from "../composables/useTreeBranches";
+import { type TreeSessionNodeRecord, useTreeBranches } from "../composables/useTreeBranches";
 import { type TaskConversationListItem, useTreeMessages } from "../composables/useTreeMessages";
 import {
   type ChainStepInput,
@@ -219,33 +205,40 @@ import {
   type JudgeResult,
   type ProjectionRunCandidate,
   type ProjectionRunRecord,
-  type ProjectTreeNodeRecord,
   type TaskAgentRunRecord,
   type TaskDomainRunDetailRecord,
   type TaskDomainRunRecord,
-  type TaskMemberViewModel,
   type TaskRuntimePermission,
+  type TaskSessionRecord,
   type TaskWorkflowViewModel,
   adoptParallelCandidate,
   continueTask,
-  forkTaskBranch,
+  forkTaskSession,
   getModelsList,
   getTaskAgentRuns,
+  getTaskConversationMessages,
   getTaskDomainRunDetail,
   getTaskDomainRuns,
   getTaskExecutionTraceView,
-  getTaskMemberView,
+  getTaskSessions,
   getTaskWorkflowView,
   listTaskRuntimePermissions,
   replyTaskRuntimePermission,
   terminateAgent,
   updateTask,
 } from "../lib/api";
-import type {
-  TaskConversationMessageItem,
-  TaskConversationParallelItem,
-  TaskParallelComparisonCard,
+import {
+  getRealtimeEventKind,
+  getRealtimeSnapshotReason,
+  normalizeSessionConversationItems,
+  type TaskConversationMessageItem,
+  type TaskConversationParallelItem,
+  type TaskParallelComparisonCard,
 } from "../lib/message-normalize";
+import {
+  buildSessionSummaryParallelRuns,
+  hasSessionSummaryParallelGroups,
+} from "../lib/session-summary-parallel-runs";
 import { resolveTaskDisplayStatus } from "../lib/task-display-status";
 import { normalizeTraceConversationItems } from "../lib/task-trace-conversation";
 import {
@@ -259,11 +252,11 @@ import {
 } from "../lib/taskExecutionMode";
 import { useRealtimeStore } from "../stores/realtime";
 
+type ParallelRunRecord = ProjectionRunRecord;
+type ParallelRunCandidate = ProjectionRunCandidate;
+
 const TaskDetailQuickOverview = defineAsyncComponent(
   () => import("../components/task-detail/TaskDetailQuickOverview.vue"),
-);
-const TaskMemberPanel = defineAsyncComponent(
-  () => import("../components/task-detail/TaskMemberPanel.vue"),
 );
 const TaskFollowupPanel = defineAsyncComponent(
   () => import("../components/task-detail/TaskFollowupPanel.vue"),
@@ -290,13 +283,16 @@ const TaskSwitcher = defineAsyncComponent(
 const route = useRoute();
 const router = useRouter();
 const realtimeStore = useRealtimeStore();
+const isEmbeddedWorkbenchView = computed(
+  () => route.query.embedded === "1" || route.query.workbench === "1",
+);
 
 /* ------------------------------------------------------------------ */
 /*  Core tree-native composables                                       */
 /* ------------------------------------------------------------------ */
 
 const taskId = computed(() => String(route.params.taskId || ""));
-const selectedBranchSessionId = ref<string | undefined>(undefined);
+const selectedSessionId = ref<string | undefined>(undefined);
 
 const {
   task,
@@ -308,15 +304,14 @@ const {
   refresh: refreshTask,
 } = useProjectTreeTask(taskId);
 
-const projectIdRef = computed(() => projectId.value || "");
 const taskNodeId = computed(() => taskNode.value?.id ?? taskId.value);
 
 const {
   flatNodes,
-  selectedNode: selectedBranchNode,
-  loading: branchesLoading,
-  refresh: refreshBranches,
-} = useTreeBranches(projectIdRef, taskNodeId, selectedBranchSessionId);
+  selectedNode: selectedSessionNode,
+  loading: sessionsLoading,
+  refresh: refreshSessions,
+} = useTreeBranches(taskId, taskNodeId, selectedSessionId);
 
 const {
   trace: messageTrace,
@@ -325,15 +320,13 @@ const {
   loading: messagesLoading,
   error: messagesError,
   refresh: refreshMessages,
-} = useTreeMessages(taskId, selectedBranchSessionId, { includeLineage: true });
+} = useTreeMessages(taskId, selectedSessionId, { includeLineage: true });
 
 /* ------------------------------------------------------------------ */
 /*  Additional state                                                    */
 /* ------------------------------------------------------------------ */
 
 const workflowView = ref<TaskWorkflowViewModel | null>(null);
-const taskMemberView = ref<TaskMemberViewModel | null>(null);
-const taskMemberViewLoading = ref(false);
 const pageLoading = computed(() => taskLoading.value && !task.value);
 const loadError = computed(() => taskLoadError.value || "");
 const sidebarCollapsed = ref(false);
@@ -358,9 +351,25 @@ const parallelCandidateTraceStates = ref<
 const taskAgentRuns = ref<TaskAgentRunRecord[]>([]);
 const taskDomainRuns = ref<TaskDomainRunRecord[]>([]);
 const taskDomainRunDetails = ref<Record<string, TaskDomainRunDetailRecord>>({});
+const taskSessionSummaries = ref<TaskSessionRecord[]>([]);
+const sequentialSessionStepCache = ref<
+  Record<string, (ChainStepInput & { stepIndex?: number }) | null>
+>({});
 const runtimePermissions = ref<TaskRuntimePermission[]>([]);
 const runtimePermissionActionId = ref<string | null>(null);
 const traceRefreshKey = ref(0);
+let sequentialSessionStepLoadToken = 0;
+
+function resolveTaskSessionRequestId(sessionId?: string | null) {
+  if (!sessionId) {
+    return undefined;
+  }
+
+  const matchedSummary = taskSessionSummaries.value.find(
+    (summary) => summary.id === sessionId || summary.taskSessionId === sessionId,
+  );
+  return matchedSummary?.taskSessionId ?? sessionId;
+}
 
 const chatTraceWarning = computed(() => {
   const cacheState = messageTrace.value?.timelineMeta?.cacheState;
@@ -461,6 +470,140 @@ function resolveSequentialStepsFromStrategy(
     }));
 }
 
+type SequentialSessionStepCandidate = {
+  sessionId: string;
+  title?: string | null;
+  createdAt?: string | null;
+  stepIndex?: number;
+  model?: string | null;
+};
+
+const SEQUENTIAL_STEP_PROMPT_SUFFIX = "请只完成当前步骤的目标。完成后输出本步骤产出摘要。";
+
+function buildSequentialSessionStepCandidates(sessionSummaries: TaskSessionRecord[]) {
+  const taggedSummaries = sessionSummaries.filter(
+    (summary) =>
+      summary.sessionKind === "sequential_step" || typeof summary.stepIndex === "number",
+  );
+  const sourceSummaries = taggedSummaries.length > 0 ? taggedSummaries : sessionSummaries;
+
+  return sourceSummaries
+    .filter((summary) => typeof summary.id === "string" && summary.id.trim().length > 0)
+    .map(
+      (summary) =>
+        ({
+          sessionId: summary.id,
+          title: summary.title,
+          createdAt: summary.createdAt,
+          stepIndex:
+            typeof summary.stepIndex === "number" ? summary.stepIndex : undefined,
+          model: summary.selectedModel ?? null,
+        }) satisfies SequentialSessionStepCandidate,
+    )
+    .sort((left, right) => {
+    const leftIndex =
+      typeof left.stepIndex === "number" ? left.stepIndex : Number.MAX_SAFE_INTEGER;
+    const rightIndex =
+      typeof right.stepIndex === "number" ? right.stepIndex : Number.MAX_SAFE_INTEGER;
+    if (leftIndex !== rightIndex) {
+      return leftIndex - rightIndex;
+    }
+
+    return (toTimestampMs(left.createdAt) ?? 0) - (toTimestampMs(right.createdAt) ?? 0);
+  });
+}
+
+function normalizeSequentialSessionTitle(title?: string | null, taskTitle?: string | null) {
+  if (typeof title !== "string" || title.trim().length === 0) {
+    return undefined;
+  }
+
+  const normalizedTitle = title.trim();
+  if (typeof taskTitle !== "string" || taskTitle.trim().length === 0) {
+    return normalizedTitle;
+  }
+
+  const taskPrefix = `${taskTitle.trim()} — `;
+  return normalizedTitle.startsWith(taskPrefix)
+    ? normalizedTitle.slice(taskPrefix.length).trim() || normalizedTitle
+    : normalizedTitle;
+}
+
+function parseSequentialStepPrompt(text?: string) {
+  if (typeof text !== "string" || text.trim().length === 0) {
+    return null;
+  }
+
+  const normalizedText = text.trim();
+  const currentStepMarkerIndex = normalizedText.lastIndexOf("## 当前步骤 (");
+  if (currentStepMarkerIndex < 0) {
+    return null;
+  }
+
+  const stepBlock = normalizedText.slice(currentStepMarkerIndex);
+  const suffixIndex = stepBlock.lastIndexOf(SEQUENTIAL_STEP_PROMPT_SUFFIX);
+  if (suffixIndex < 0) {
+    return null;
+  }
+
+  const headerEndIndex = stepBlock.indexOf("\n");
+  if (headerEndIndex < 0) {
+    return null;
+  }
+
+  const header = stepBlock.slice(0, headerEndIndex).trim();
+  const headerMatch = /^## 当前步骤 \((\d+)\/(\d+)\): (.+)$/.exec(header);
+  if (!headerMatch) {
+    return null;
+  }
+
+  return {
+    stepIndex: Math.max(Number(headerMatch[1]) - 1, 0),
+    totalSteps: Number(headerMatch[2]),
+    title: headerMatch[3].trim(),
+    instruction: stepBlock.slice(headerEndIndex + 1, suffixIndex).trim(),
+  };
+}
+
+async function resolveSequentialSessionStep(
+  currentTaskId: string,
+  taskTitle: string | undefined,
+  candidate: SequentialSessionStepCandidate,
+): Promise<(ChainStepInput & { stepIndex?: number }) | null> {
+  try {
+    const response = await getTaskConversationMessages(currentTaskId, candidate.sessionId, {
+      includeLineage: false,
+    });
+    const normalizedMessages = normalizeSessionConversationItems(
+      Array.isArray(response.data) ? response.data : [],
+    );
+    const initialPrompt = normalizedMessages.find(
+      (item) => item.role === "user" && typeof item.text === "string" && item.text.trim().length > 0,
+    )?.text;
+    const parsedStep = parseSequentialStepPrompt(initialPrompt);
+    if (!parsedStep) {
+      return null;
+    }
+
+    const normalizedTitle =
+      parsedStep.title || normalizeSequentialSessionTitle(candidate.title, taskTitle);
+    if (!normalizedTitle) {
+      return null;
+    }
+
+    return {
+      id: candidate.sessionId,
+      title: normalizedTitle,
+      instruction: parsedStep.instruction,
+      stepIndex:
+        typeof candidate.stepIndex === "number" ? candidate.stepIndex : parsedStep.stepIndex,
+      ...(candidate.model ? { model: candidate.model } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
 function taskRunStatusPriority(status?: string | null) {
   if (status === "running") return 4;
   if (status === "failed") return 3;
@@ -497,17 +640,17 @@ function mergeTaskAgentRunRecords(records: TaskAgentRunRecord[]) {
     result,
     startedAt,
     finishedAt,
-  } satisfies ProjectionRunCandidate;
+  } satisfies ParallelRunCandidate;
 }
 
-function buildProjectionBackedParallelRuns() {
+function buildDomainFallbackParallelRuns(): ParallelRunRecord[] {
   const parallelDomainRuns = taskDomainRuns.value.filter(
     (run) => run.orchestrationKind === "parallel",
   );
 
   return parallelDomainRuns.map((run) => {
     const detail = taskDomainRunDetails.value[run.id];
-    const candidateSessions = buildProjectionCandidateSessions(
+    const candidateSessions = buildDomainFallbackCandidateSessions(
       run.id,
       detail,
       run.startedAt || run.createdAt,
@@ -519,24 +662,68 @@ function buildProjectionBackedParallelRuns() {
         model: editableParallelCandidates.value[index]?.model || candidate.model,
       }),
     );
-    const judgeResult = resolveProjectionJudgeResult(run, detail);
+    const judgeResult = resolveDomainFallbackJudgeResult(run, detail);
 
     return {
       parallelRunId: run.id,
       templateId: undefined,
       startedAt: run.startedAt || run.createdAt,
       finishedAt: run.finishedAt || undefined,
-      parentSessionId: run.rootSessionId ?? task.value?.sessionId ?? null,
-      executionSessionId: run.rootSessionId ?? task.value?.sessionId ?? null,
+      parentSessionId: run.rootSessionId ?? task.value?.sessionId ?? undefined,
+      executionSessionId: run.rootSessionId ?? task.value?.sessionId ?? undefined,
       winnerCandidateIndex:
         typeof detail?.winnerCandidateIndex === "number" ? detail.winnerCandidateIndex : undefined,
       ...(judgeResult ? { judgeResult } : {}),
       candidateSessions,
-    } satisfies ProjectionRunRecord;
+    } satisfies ParallelRunRecord;
   });
 }
 
-function sortFallbackCandidateNodes(nodes: ProjectTreeNodeRecord[]) {
+function resolveSessionSummaryWinnerCandidateIndex(run: ParallelRunRecord) {
+  const candidateSessionIds = run.candidateSessions
+    .map((candidate) => candidate.sessionId)
+    .filter((value): value is string => typeof value === "string" && value.length > 0);
+  if (candidateSessionIds.length < 2) {
+    return undefined;
+  }
+
+  const candidateSummaries = taskSessionSummaries.value.filter((summary) =>
+    candidateSessionIds.includes(summary.id),
+  );
+  if (candidateSummaries.length < 2) {
+    return undefined;
+  }
+
+  const coordinationKeys = new Set(
+    candidateSummaries
+      .map((summary) => summary.coordinationKey)
+      .filter((value): value is string => typeof value === "string" && value.length > 0),
+  );
+  if (coordinationKeys.size > 1) {
+    return undefined;
+  }
+
+  const winnerSessionIds = Array.from(
+    new Set(
+      candidateSummaries
+        .map((summary) => summary.winnerSessionId)
+        .filter(
+          (value): value is string =>
+            typeof value === "string" && candidateSessionIds.includes(value),
+        ),
+    ),
+  );
+  if (winnerSessionIds.length !== 1) {
+    return undefined;
+  }
+
+  const winnerCandidateIndex = run.candidateSessions.findIndex(
+    (candidate) => candidate.sessionId === winnerSessionIds[0],
+  );
+  return winnerCandidateIndex >= 0 ? winnerCandidateIndex : undefined;
+}
+
+function sortFallbackCandidateNodes(nodes: TreeSessionNodeRecord[]) {
   return nodes.slice().sort((left, right) => {
     const leftCreatedAt = toTimestampMs(left.createdAt) ?? Number.MAX_SAFE_INTEGER;
     const rightCreatedAt = toTimestampMs(right.createdAt) ?? Number.MAX_SAFE_INTEGER;
@@ -552,7 +739,7 @@ function sortFallbackCandidateNodes(nodes: ProjectTreeNodeRecord[]) {
 }
 
 function pickLatestFallbackCandidateNodes(
-  nodes: ProjectTreeNodeRecord[],
+  nodes: TreeSessionNodeRecord[],
   expectedCandidateCount: number,
 ) {
   const sortedNodes = sortFallbackCandidateNodes(nodes);
@@ -580,38 +767,51 @@ function pickLatestFallbackCandidateNodes(
   return sortedNodes.slice(Math.max(0, sortedNodes.length - expectedCandidateCount));
 }
 
+function resolveBaseSessionId() {
+  return (
+    selectedSessionNode.value?.runtimeSessionId ??
+    flatNodes.value.find((node) => node.isActive)?.runtimeSessionId ??
+    task.value?.sessionId ??
+    undefined
+  );
+}
+
+function resolveScopedSessionId() {
+  return selectedSessionId.value ?? resolveBaseSessionId();
+}
+
 function resolveSessionTreeFallbackCandidateNodes() {
   const configuredCandidates = editableParallelCandidates.value;
   if (configuredCandidates.length < 2) {
     return {
       rootSessionId: null,
-      candidateNodes: [] as ProjectTreeNodeRecord[],
+      candidateNodes: [] as TreeSessionNodeRecord[],
     };
   }
 
   const sessionNodes = flatNodes.value.filter(
-    (node): node is ProjectTreeNodeRecord =>
+    (node): node is TreeSessionNodeRecord =>
       typeof node.runtimeSessionId === "string" && node.runtimeSessionId.trim().length > 0,
   );
 
   if (sessionNodes.length < 2) {
     return {
       rootSessionId: null,
-      candidateNodes: [] as ProjectTreeNodeRecord[],
+      candidateNodes: [] as TreeSessionNodeRecord[],
     };
   }
 
-  let rootSessionId =
-    selectedBranchSessionId.value ?? resolveRequestedSessionId() ?? task.value?.sessionId ?? undefined;
+  let rootSessionId = resolveScopedSessionId();
   let rootNode = rootSessionId
     ? sessionNodes.find((node) => node.runtimeSessionId === rootSessionId)
     : undefined;
+  const rootNodeId = rootNode?.id;
 
   let candidates =
-    rootNode?.id != null
+    rootNodeId != null
       ? sessionNodes.filter(
           (node) =>
-            node.parentId === rootNode.id &&
+              node.parentId === rootNodeId &&
             node.runtimeSessionId !== rootSessionId &&
             !node.archivedAt,
         )
@@ -635,7 +835,7 @@ function resolveSessionTreeFallbackCandidateNodes() {
   }
 
   if (candidates.length < 2) {
-    const groupedByParent = new Map<string, ProjectTreeNodeRecord[]>();
+    const groupedByParent = new Map<string, TreeSessionNodeRecord[]>();
     for (const node of sessionNodes) {
       if (!node.parentId || node.archivedAt) {
         continue;
@@ -645,8 +845,7 @@ function resolveSessionTreeFallbackCandidateNodes() {
       groupedByParent.set(node.parentId, siblings);
     }
 
-    const scopedSessionId =
-      selectedBranchSessionId.value ?? resolveRequestedSessionId() ?? task.value?.sessionId ?? null;
+    const scopedSessionId = resolveScopedSessionId() ?? null;
     const latestGroup = Array.from(groupedByParent.entries())
       .map(([parentId, nodes]) => ({
         parentId,
@@ -687,8 +886,8 @@ function resolveSessionTreeFallbackCandidateNodes() {
   };
 }
 
-function projectionRunMatchesFallbackCandidates(
-  run: ProjectionRunRecord,
+function parallelRunMatchesFallbackCandidates(
+  run: ParallelRunRecord,
   candidateSessionIds: string[],
 ) {
   if (candidateSessionIds.length < 2) {
@@ -706,22 +905,32 @@ function projectionRunMatchesFallbackCandidates(
   return candidateSessionIds.every((sessionId) => runSessionIds.includes(sessionId));
 }
 
-function hasProjectionRunBoundToRootSession(
-  projectionRuns: ProjectionRunRecord[],
+function hasParallelRunBoundToRootSession(
+  parallelRuns: ParallelRunRecord[],
   rootSessionId: string | null,
 ) {
   if (!rootSessionId) {
     return false;
   }
 
-  return projectionRuns.some(
+  return parallelRuns.some(
     (run) =>
       run.candidateSessions.length >= 2 &&
       (run.executionSessionId === rootSessionId || run.parentSessionId === rootSessionId),
   );
 }
 
-function buildSessionTreeFallbackParallelRun(projectionRuns: ProjectionRunRecord[]) {
+function buildSessionTreeFallbackParallelRun(
+  existingRuns: ParallelRunRecord[],
+): ParallelRunRecord | null {
+  // Guard: don't fabricate parallel runs for non-running tasks when no
+  // authoritative parallel data (session summaries / domain runs) exists.
+  // This prevents phantom parallel displays when the user changes
+  // execution mode but no actual parallel execution has occurred yet.
+  if (existingRuns.length === 0 && task.value?.status !== "running") {
+    return null;
+  }
+
   const configuredCandidates = editableParallelCandidates.value;
   const fallbackGroup = resolveSessionTreeFallbackCandidateNodes();
   const candidateNodes = fallbackGroup.candidateNodes;
@@ -734,15 +943,15 @@ function buildSessionTreeFallbackParallelRun(projectionRuns: ProjectionRunRecord
     .filter((value): value is string => typeof value === "string" && value.length > 0);
 
   if (
-    projectionRuns.some((run) =>
-      projectionRunMatchesFallbackCandidates(run, candidateSessionIds),
+    existingRuns.some((run) =>
+      parallelRunMatchesFallbackCandidates(run, candidateSessionIds),
     )
   ) {
     return null;
   }
 
   const rootSessionId = fallbackGroup.rootSessionId;
-  if (hasProjectionRunBoundToRootSession(projectionRuns, rootSessionId)) {
+  if (hasParallelRunBoundToRootSession(existingRuns, rootSessionId)) {
     return null;
   }
 
@@ -772,10 +981,11 @@ function buildSessionTreeFallbackParallelRun(projectionRuns: ProjectionRunRecord
 
   return {
     parallelRunId: `tree-fallback:${rootSessionId || task.value?.id || "current"}`,
-    startedAt,
+    startedAt: startedAt ?? "",
     finishedAt,
-    parentSessionId: rootSessionId,
-    executionSessionId: rootSessionId,
+    parentSessionId: rootSessionId ?? undefined,
+    executionSessionId: rootSessionId ?? undefined,
+    winnerCandidateIndex: undefined,
     candidateSessions: candidateNodes.map((node, index) => ({
       label: configuredCandidates[index]?.label || `候选 ${index + 1}`,
       model: configuredCandidates[index]?.model,
@@ -783,15 +993,15 @@ function buildSessionTreeFallbackParallelRun(projectionRuns: ProjectionRunRecord
       sessionId: node.runtimeSessionId ?? undefined,
       startedAt: node.createdAt ?? undefined,
       finishedAt: node.updatedAt ?? undefined,
-    } satisfies ProjectionRunCandidate)),
-  } satisfies ProjectionRunRecord;
+    } satisfies ParallelRunCandidate)),
+  } satisfies ParallelRunRecord;
 }
 
-function isSessionTreeFallbackParallelRun(run: ProjectionRunRecord | null | undefined) {
+function isSessionTreeFallbackParallelRun(run: ParallelRunRecord | null | undefined) {
   return Boolean(run?.parallelRunId?.startsWith("tree-fallback:"));
 }
 
-function hasLaterSingleConversationAfterFallback(run: ProjectionRunRecord) {
+function hasLaterSingleConversationAfterFallback(run: ParallelRunRecord) {
   if (!isSessionTreeFallbackParallelRun(run)) {
     return false;
   }
@@ -815,7 +1025,7 @@ function hasLaterSingleConversationAfterFallback(run: ProjectionRunRecord) {
   });
 }
 
-function buildProjectionRunCandidatesByIndex(runId: string) {
+function buildDomainFallbackCandidateAgentRunsByIndex(runId: string) {
   const candidatesByIndex = new Map<number, TaskAgentRunRecord[]>();
 
   for (const agentRun of taskAgentRuns.value) {
@@ -830,7 +1040,7 @@ function buildProjectionRunCandidatesByIndex(runId: string) {
   return candidatesByIndex;
 }
 
-function mergeProjectionRunCandidatesByIndex(
+function mergeDomainFallbackCandidateAgentRunsByIndex(
   target: Map<number, TaskAgentRunRecord[]>,
   source: Map<number, TaskAgentRunRecord[]>,
 ) {
@@ -842,7 +1052,7 @@ function mergeProjectionRunCandidatesByIndex(
   }
 }
 
-function augmentProjectionCandidatesFromCompanionRuns(
+function augmentDomainFallbackCandidatesFromCompanionRuns(
   runId: string,
   candidatesByIndex: Map<number, TaskAgentRunRecord[]>,
   runStartedAt?: string,
@@ -879,7 +1089,10 @@ function augmentProjectionCandidatesFromCompanionRuns(
     .sort((left, right) => left.startedAtMs - right.startedAtMs);
 
   for (const { run } of companionRuns) {
-    mergeProjectionRunCandidatesByIndex(mergedCandidates, buildProjectionRunCandidatesByIndex(run.id));
+      mergeDomainFallbackCandidateAgentRunsByIndex(
+        mergedCandidates,
+        buildDomainFallbackCandidateAgentRunsByIndex(run.id),
+      );
     if (mergedCandidates.size >= expectedCandidateCount) {
       break;
     }
@@ -888,7 +1101,7 @@ function augmentProjectionCandidatesFromCompanionRuns(
   return mergedCandidates;
 }
 
-function buildProjectionCandidateFromNode(
+  function buildDomainFallbackCandidateFromNode(
   node: TaskDomainRunDetailRecord["candidateNodes"][number],
   candidateIndex: number,
   candidatesByIndex: Map<number, TaskAgentRunRecord[]>,
@@ -908,10 +1121,10 @@ function buildProjectionCandidateFromNode(
     result: node.resultSummary ?? node.resultText ?? merged?.result,
     startedAt: node.startedAt ?? merged?.startedAt,
     finishedAt: node.finishedAt ?? merged?.finishedAt,
-  } satisfies ProjectionRunCandidate;
+  } satisfies ParallelRunCandidate;
 }
 
-function buildProjectionCandidatesFromDetail(
+function buildDomainFallbackCandidatesFromDetail(
   detail: TaskDomainRunDetailRecord,
   candidatesByIndex: Map<number, TaskAgentRunRecord[]>,
   expectedCandidateCount?: number,
@@ -941,7 +1154,9 @@ function buildProjectionCandidatesFromDetail(
     .flatMap((candidateIndex) => {
       const detailNode = detailNodesByIndex.get(candidateIndex);
       if (detailNode) {
-        return [buildProjectionCandidateFromNode(detailNode, candidateIndex, candidatesByIndex)];
+        return [
+          buildDomainFallbackCandidateFromNode(detailNode, candidateIndex, candidatesByIndex),
+        ];
       }
 
       const agentRunRecords = candidatesByIndex.get(candidateIndex) ?? [];
@@ -953,36 +1168,40 @@ function buildProjectionCandidatesFromDetail(
     });
 }
 
-function buildProjectionCandidatesFromAgentRuns(
+function buildDomainFallbackCandidatesFromAgentRuns(
   candidatesByIndex: Map<number, TaskAgentRunRecord[]>,
 ) {
   return Array.from(candidatesByIndex.entries())
     .sort((left, right) => left[0] - right[0])
     .map(([, records]) => {
       const merged = mergeTaskAgentRunRecords(records);
-      return merged satisfies ProjectionRunCandidate;
+      return merged satisfies ParallelRunCandidate;
     });
 }
 
-function buildProjectionCandidateSessions(
+function buildDomainFallbackCandidateSessions(
   runId: string,
   detail: TaskDomainRunDetailRecord | null | undefined,
   runStartedAt?: string,
   expectedCandidateCount?: number,
 ) {
-  const candidatesByIndex = augmentProjectionCandidatesFromCompanionRuns(
+  const candidatesByIndex = augmentDomainFallbackCandidatesFromCompanionRuns(
     runId,
-    buildProjectionRunCandidatesByIndex(runId),
+    buildDomainFallbackCandidateAgentRunsByIndex(runId),
     runStartedAt,
     expectedCandidateCount,
   );
   if (detail?.candidateNodes?.length) {
-    return buildProjectionCandidatesFromDetail(detail, candidatesByIndex, expectedCandidateCount);
+    return buildDomainFallbackCandidatesFromDetail(
+      detail,
+      candidatesByIndex,
+      expectedCandidateCount,
+    );
   }
-  return buildProjectionCandidatesFromAgentRuns(candidatesByIndex);
+  return buildDomainFallbackCandidatesFromAgentRuns(candidatesByIndex);
 }
 
-function resolveProjectionJudgeResult(
+function resolveDomainFallbackJudgeResult(
   run: TaskDomainRunRecord,
   detail: TaskDomainRunDetailRecord | null | undefined,
 ) {
@@ -1011,48 +1230,6 @@ function resolveProjectionJudgeResult(
   return undefined;
 }
 
-function buildSequentialStepsFromRunDetail(
-  detail: TaskDomainRunDetailRecord | null | undefined,
-): ChainStepInput[] {
-  if (!detail) {
-    return [];
-  }
-
-  return detail.nodes
-    .filter(
-      (
-        node,
-      ): node is TaskDomainRunDetailRecord["nodes"][number] & {
-        title: string;
-        instruction: string;
-      } =>
-        node.nodeKind === "chain-step" &&
-        typeof node.title === "string" &&
-        node.title.trim().length > 0 &&
-        typeof node.instruction === "string" &&
-        node.instruction.trim().length > 0,
-    )
-    .slice()
-    .sort((left, right) => {
-      const leftIndex =
-        typeof left.chainStepIndex === "number" ? left.chainStepIndex : Number.MAX_SAFE_INTEGER;
-      const rightIndex =
-        typeof right.chainStepIndex === "number" ? right.chainStepIndex : Number.MAX_SAFE_INTEGER;
-      if (leftIndex !== rightIndex) {
-        return leftIndex - rightIndex;
-      }
-      return (toTimestampMs(left.createdAt) || 0) - (toTimestampMs(right.createdAt) || 0);
-    })
-    .map((node, index) => ({
-      id: node.nodeKey || `step-${index + 1}`,
-      title: node.title,
-      instruction: node.instruction,
-      ...(typeof node.modelUsed === "string" && node.modelUsed.trim()
-        ? { model: node.modelUsed }
-        : {}),
-    }));
-}
-
 function pickLatestRun<T extends TaskDomainRunRecord>(runs: T[]) {
   return runs.slice().sort((left, right) => {
     const leftPriority = left.status === "running" ? 1 : 0;
@@ -1064,33 +1241,61 @@ function pickLatestRun<T extends TaskDomainRunRecord>(runs: T[]) {
   })[0];
 }
 
-const currentSequentialRunId = computed(() => {
-  if (
-    task.value?.orchestrationKind === "sequential-chain" &&
-    typeof task.value.currentRunId === "string"
-  ) {
-    return task.value.currentRunId;
-  }
-
-  return pickLatestRun(
-    taskDomainRuns.value.filter((run) => run.orchestrationKind === "sequential-chain"),
-  )?.id;
-});
-
-const currentSequentialRunDetail = computed(() => {
-  if (currentSequentialRunId.value) {
-    return taskDomainRunDetails.value[currentSequentialRunId.value] ?? null;
-  }
-
-  const latestSequentialRun = pickLatestRun(
-    taskDomainRuns.value.filter((run) => run.orchestrationKind === "sequential-chain"),
-  );
-  return latestSequentialRun ? (taskDomainRunDetails.value[latestSequentialRun.id] ?? null) : null;
-});
-
-const projectionBackedSequentialSteps = computed<ChainStepInput[]>(() =>
-  buildSequentialStepsFromRunDetail(currentSequentialRunDetail.value),
+const sessionSummaryParallelRuns = computed<ParallelRunRecord[]>(() =>
+  buildSessionSummaryParallelRuns({
+    task: task.value,
+    sessionSummaries: taskSessionSummaries.value,
+    sessionNodes: flatNodes.value,
+    agentRuns: taskAgentRuns.value,
+    configuredCandidates: editableParallelCandidates.value,
+  }),
 );
+
+const sequentialSessionStepCandidates = computed(() =>
+  buildSequentialSessionStepCandidates(taskSessionSummaries.value),
+);
+
+const sessionBackedSequentialSteps = computed<ChainStepInput[]>(() => {
+  const taskTitle = task.value?.title;
+
+  return sequentialSessionStepCandidates.value
+    .map((candidate) => {
+      const cached = sequentialSessionStepCache.value[candidate.sessionId];
+      if (!cached) {
+        return null;
+      }
+
+      return {
+        step: {
+          ...cached,
+          title: normalizeSequentialSessionTitle(cached.title, taskTitle) ?? cached.title,
+          ...(cached.model ? {} : candidate.model ? { model: candidate.model } : {}),
+        } satisfies ChainStepInput,
+        stepIndex:
+          typeof cached.stepIndex === "number" ? cached.stepIndex : candidate.stepIndex,
+      };
+    })
+    .filter(
+      (
+        step,
+      ): step is {
+        step: ChainStepInput;
+        stepIndex: number | undefined;
+      } => step != null,
+    )
+    .sort((left, right) => {
+      const leftIndex =
+        typeof left.stepIndex === "number" ? left.stepIndex : Number.MAX_SAFE_INTEGER;
+      const rightIndex =
+        typeof right.stepIndex === "number" ? right.stepIndex : Number.MAX_SAFE_INTEGER;
+      if (leftIndex !== rightIndex) {
+        return leftIndex - rightIndex;
+      }
+
+      return 0;
+    })
+    .map((entry) => entry.step);
+});
 
 const editableSequentialSteps = computed<ChainStepInput[]>(() => {
   const strategySteps = resolveSequentialStepsFromStrategy(task.value);
@@ -1098,19 +1303,34 @@ const editableSequentialSteps = computed<ChainStepInput[]>(() => {
     return strategySteps;
   }
 
-  if (projectionBackedSequentialSteps.value.length > 0) {
-    return projectionBackedSequentialSteps.value;
+  if (sessionBackedSequentialSteps.value.length > 0) {
+    return sessionBackedSequentialSteps.value;
   }
 
   return resolveEditableSequentialSteps(task.value);
 });
 
-const projectionParallelRuns = computed<ProjectionRunRecord[]>(() => {
-  const projectionRuns = buildProjectionBackedParallelRuns();
-  const fallbackRun = buildSessionTreeFallbackParallelRun(projectionRuns);
-  const runs = fallbackRun ? [...projectionRuns, fallbackRun] : projectionRuns;
+const resolvedParallelRuns = computed<ParallelRunRecord[]>(() => {
+  const primaryParallelRuns =
+    sessionSummaryParallelRuns.value.length > 0
+      ? sessionSummaryParallelRuns.value
+      : buildDomainFallbackParallelRuns();
+  const sessionTreeFallbackRun = buildSessionTreeFallbackParallelRun(primaryParallelRuns);
+  const resolvedRuns = sessionTreeFallbackRun
+    ? [...primaryParallelRuns, sessionTreeFallbackRun]
+    : primaryParallelRuns;
 
-  return runs
+  return resolvedRuns
+    .map((run) => {
+      if (typeof run.winnerCandidateIndex === "number") {
+        return run;
+      }
+
+      const winnerCandidateIndex = resolveSessionSummaryWinnerCandidateIndex(run);
+      return typeof winnerCandidateIndex === "number"
+        ? { ...run, winnerCandidateIndex }
+        : run;
+    })
     .slice()
     .sort(
       (left, right) => (toTimestampMs(left.startedAt) || 0) - (toTimestampMs(right.startedAt) || 0),
@@ -1119,12 +1339,11 @@ const projectionParallelRuns = computed<ProjectionRunRecord[]>(() => {
 
 const isParallelComparisonMode = computed(
   () =>
-    projectionParallelRuns.value.length > 0 ||
-    task.value?.orchestrationKind === "parallel" ||
-    task.value?.executionMode === "parallel",
+    resolvedParallelRuns.value.length > 0 ||
+    task.value?.orchestrationKind === "parallel",
 );
 
-function runReferencesSession(run: ProjectionRunRecord, sessionId: string) {
+function runReferencesSession(run: ParallelRunRecord, sessionId: string) {
   if (!sessionId) {
     return false;
   }
@@ -1137,7 +1356,7 @@ function runReferencesSession(run: ProjectionRunRecord, sessionId: string) {
 }
 
 function resolveRunSessionReferenceKind(
-  run: ProjectionRunRecord,
+  run: ParallelRunRecord,
   sessionId: string,
 ): "direct" | "candidate" | null {
   if (!sessionId) {
@@ -1156,13 +1375,12 @@ function resolveRunSessionReferenceKind(
 }
 
 const sessionScopedParallelRuns = computed(() => {
-  const scopedSessionId =
-    selectedBranchSessionId.value ?? resolveRequestedSessionId() ?? task.value?.sessionId;
+  const scopedSessionId = resolveScopedSessionId();
   if (!scopedSessionId) {
-    return [] as ProjectionRunRecord[];
+    return [] as ParallelRunRecord[];
   }
 
-  const matchedRuns = projectionParallelRuns.value
+  const matchedRuns = resolvedParallelRuns.value
     .map((run) => ({
       run,
       referenceKind: resolveRunSessionReferenceKind(run, scopedSessionId),
@@ -1171,7 +1389,7 @@ const sessionScopedParallelRuns = computed(() => {
       (
         entry,
       ): entry is {
-        run: ProjectionRunRecord;
+        run: ParallelRunRecord;
         referenceKind: "direct" | "candidate";
       } => entry.referenceKind != null,
     );
@@ -1186,7 +1404,7 @@ const sessionScopedParallelRuns = computed(() => {
 });
 
 function resolveParallelCandidateDisplayStatus(
-  candidate: Pick<ExecutionCandidate, "status"> | Pick<ProjectionRunCandidate, "status">,
+  candidate: Pick<ExecutionCandidate, "status"> | Pick<ParallelRunCandidate, "status">,
   items: TaskConversationMessageItem[],
   hasSettledReply = false,
 ) {
@@ -1228,8 +1446,8 @@ function resolveParallelCandidateTraceState(
 }
 
 function buildParallelCandidateFallbackItem(
-  run: ProjectionRunRecord,
-  candidate: ProjectionRunCandidate,
+  run: ParallelRunRecord,
+  candidate: ParallelRunCandidate,
   index: number,
 ): TaskConversationMessageItem | null {
   const fallbackText = typeof candidate.result === "string" ? candidate.result.trim() : "";
@@ -1268,42 +1486,25 @@ const canDispatchQueuedContinuation = computed(
     !forking.value,
 );
 
+const showSessionStructure = false;
+
 const canForkFromCurrentSession = computed(() =>
-  Boolean(selectedBranchSessionId.value || task.value?.sessionId),
+  Boolean(selectedSessionId.value || task.value?.sessionId),
 );
 
 const selectedSessionLabel = computed(
   () =>
-    selectedBranchNode.value?.contentText ||
-    selectedBranchNode.value?.branchName ||
-    selectedBranchNode.value?.runtimeSessionId?.slice(0, 8) ||
+    selectedSessionNode.value?.contentText ||
+    selectedSessionNode.value?.branchName ||
+    selectedSessionNode.value?.runtimeSessionId?.slice(0, 8) ||
     "",
 );
 
 const selectedSessionRuntimePermissions = computed(() => {
-  const sessionId = selectedBranchSessionId.value;
+  const sessionId = selectedSessionId.value;
   if (!sessionId) return [];
   return runtimePermissions.value.filter((item) => item.sessionId === sessionId);
 });
-
-const sessionOptions = computed(() =>
-  flatNodes.value
-    .filter((node) => typeof node.runtimeSessionId === "string" && node.runtimeSessionId.length > 0)
-    .map((node) => {
-      const sessionId = node.runtimeSessionId as string;
-      const primaryLabel =
-        node.contentText?.trim() || node.branchName?.trim() || `会话 ${sessionId.slice(0, 8)}`;
-      const meta = [node.isActive ? "当前" : null, node.branchName?.trim(), sessionId.slice(0, 8)]
-        .filter(
-          (item, index, list): item is string => Boolean(item) && list.indexOf(item) === index,
-        )
-        .join(" · ");
-      return {
-        value: sessionId,
-        label: meta ? `${primaryLabel} · ${meta}` : primaryLabel,
-      };
-    }),
-);
 
 /* ------------------------------------------------------------------ */
 /*  Models                                                              */
@@ -1342,14 +1543,14 @@ const currentParallelRunId = computed(() => {
   }
 
   if (typeof task.value?.currentRunId === "string") {
-    const activeRun = projectionParallelRuns.value.find(
+    const activeRun = resolvedParallelRuns.value.find(
       (run) => run.parallelRunId === task.value?.currentRunId,
     );
     if (activeRun?.candidateSessions.length && activeRun.candidateSessions.length >= 2) {
       return activeRun.parallelRunId;
     }
 
-    const latestComparableRun = projectionParallelRuns.value
+    const latestComparableRun = resolvedParallelRuns.value
       .slice()
       .reverse()
       .find((run) => run.candidateSessions.length >= 2);
@@ -1359,16 +1560,16 @@ const currentParallelRunId = computed(() => {
   }
 
   if (task.value?.orchestrationKind === "parallel") {
-    const projectionRun = pickLatestRun(
+    const domainFallbackRun = pickLatestRun(
       taskDomainRuns.value.filter((run) => run.orchestrationKind === "parallel"),
     );
-    if (projectionRun?.id) {
-      return projectionRun.id;
+    if (domainFallbackRun?.id) {
+      return domainFallbackRun.id;
     }
   }
 
-  if (projectionParallelRuns.value.length > 0) {
-    return projectionParallelRuns.value[projectionParallelRuns.value.length - 1]?.parallelRunId;
+  if (resolvedParallelRuns.value.length > 0) {
+    return resolvedParallelRuns.value[resolvedParallelRuns.value.length - 1]?.parallelRunId;
   }
 
   if (
@@ -1384,12 +1585,12 @@ const currentParallelRunId = computed(() => {
 const currentParallelRunRecord = computed(() => {
   if (currentParallelRunId.value) {
     return (
-      projectionParallelRuns.value.find(
+      resolvedParallelRuns.value.find(
         (run) => run.parallelRunId === currentParallelRunId.value,
       ) ?? null
     );
   }
-  return projectionParallelRuns.value[projectionParallelRuns.value.length - 1] ?? null;
+  return resolvedParallelRuns.value[resolvedParallelRuns.value.length - 1] ?? null;
 });
 
 const isCurrentParallelRunPendingAdoption = computed(() => {
@@ -1433,16 +1634,16 @@ const visibleParallelRuns = computed(() => {
   }
 
   if (task.value?.status === "running" && task.value?.executionMode === "single") {
-    return projectionParallelRuns.value.filter(
+    return resolvedParallelRuns.value.filter(
       (run) =>
         isSessionTreeFallbackParallelRun(run) && !hasLaterSingleConversationAfterFallback(run),
     );
   }
-  return projectionParallelRuns.value;
+  return resolvedParallelRuns.value;
 });
 
 function buildParallelComparisonCardsForRun(
-  run: ProjectionRunRecord,
+  run: ParallelRunRecord,
 ): TaskParallelComparisonCard[] {
   const parallelExecutionFinishedAtMs = toTimestampMs(run.finishedAt);
   const cards = run.candidateSessions.map((candidate, index) => {
@@ -1465,10 +1666,7 @@ function buildParallelComparisonCardsForRun(
     const fallbackItem = buildParallelCandidateFallbackItem(run, candidate, index);
     const displayItems =
       visibleItems.length > 0 || !fallbackItem ? visibleItems : [fallbackItem];
-    const metaParts = [
-      candidate.agent,
-      sessionId ? `Branch ${sessionId.slice(0, 8)}` : undefined,
-    ].filter((v): v is string => Boolean(v));
+    const metaParts = [candidate.agent].filter((v): v is string => Boolean(v));
     const status = resolveParallelCandidateDisplayStatus(
       candidate,
       displayItems,
@@ -1542,12 +1740,13 @@ const parallelConversationItems = computed<TaskConversationParallelItem[]>(() =>
   return items;
 });
 
-function shouldHideUnadoptedParallelMessagesForRun(parallelItem: TaskConversationParallelItem) {
-  const raw = parallelItem.raw as ProjectionRunRecord | null;
-  return raw != null && typeof raw.winnerCandidateIndex !== "number";
+function shouldHideUnadoptedParallelMessagesForRun(_parallelItem: TaskConversationParallelItem) {
+  // Always keep existing messages visible; parallel comparison card is
+  // inserted below them rather than replacing them.
+  return false;
 }
 
-function toTimestampMs(value?: string) {
+function toTimestampMs(value?: string | null) {
   if (typeof value !== "string" || value.trim().length === 0) return null;
   const timestamp = Date.parse(value);
   return Number.isNaN(timestamp) ? null : timestamp;
@@ -1605,11 +1804,25 @@ function insertParallelConversationItem(
   }
 
   if (anchorIndex >= 0) {
-    items.splice(anchorIndex + 1, 0, parallelItem);
+    // When a candidate has been adopted, insert the parallel card right after
+    // the user anchor so the adopted assistant message (already in the flat list)
+    // appears BELOW the parallel card — representing adopted content merging
+    // back into the main conversation line.
+    const hasAdoptedCandidate = parallelItem.candidates?.some((c) => c.isAdopted);
+    if (hasAdoptedCandidate) {
+      items.splice(anchorIndex + 1, 0, parallelItem);
+      return;
+    }
+
+    // Insert after existing assistant messages for this turn (just before
+    // the next user message) so that previous single-execution results
+    // remain visible above the parallel comparison card.
+    const nextUserIndex = findNextUserConversationIndex(items, anchorIndex);
+    items.splice(nextUserIndex, 0, parallelItem);
     return;
   }
 
-  items.unshift(parallelItem);
+  items.push(parallelItem);
 }
 
 const conversationItems = computed<TaskConversationListItem[]>(() => {
@@ -1629,13 +1842,9 @@ const conversationItems = computed<TaskConversationListItem[]>(() => {
 /*  Data loading helpers                                                */
 /* ------------------------------------------------------------------ */
 
-function resolveRequestedSessionId() {
-  return typeof route.query.session === "string" ? route.query.session : undefined;
-}
-
 function resolvePreferredConversationSessionId() {
   if (isCurrentParallelRunPendingAdoption.value) {
-    const requestedSessionId = resolveRequestedSessionId();
+    const currentSessionId = resolveScopedSessionId();
     const currentRun = currentParallelRunRecord.value;
     const mainlineSessionId =
       currentRun?.executionSessionId ??
@@ -1643,9 +1852,9 @@ function resolvePreferredConversationSessionId() {
       task.value?.sessionId;
 
     if (
-      requestedSessionId &&
-      requestedSessionId !== mainlineSessionId &&
-      (!currentRun || !runReferencesSession(currentRun, requestedSessionId))
+      currentSessionId &&
+      currentSessionId !== mainlineSessionId &&
+      (!currentRun || !runReferencesSession(currentRun, currentSessionId))
     ) {
       return undefined;
     }
@@ -1661,19 +1870,10 @@ function resolvePreferredConversationSessionId() {
   return undefined;
 }
 
-function ensureSelectedBranch() {
+function ensureSelectedSession() {
   const preferredSessionId = resolvePreferredConversationSessionId();
   if (preferredSessionId) {
-    selectedBranchSessionId.value = preferredSessionId;
-    return;
-  }
-
-  const requestedSessionId = resolveRequestedSessionId();
-  if (
-    requestedSessionId &&
-    flatNodes.value.some((n) => n.runtimeSessionId === requestedSessionId)
-  ) {
-    selectedBranchSessionId.value = requestedSessionId;
+    selectedSessionId.value = preferredSessionId;
     return;
   }
 
@@ -1681,20 +1881,31 @@ function ensureSelectedBranch() {
     adoptedCandidateSessionId.value &&
     flatNodes.value.some((n) => n.runtimeSessionId === adoptedCandidateSessionId.value)
   ) {
-    selectedBranchSessionId.value = adoptedCandidateSessionId.value;
+    selectedSessionId.value = adoptedCandidateSessionId.value;
     return;
   }
   if (
-    selectedBranchSessionId.value &&
-    flatNodes.value.some((n) => n.runtimeSessionId === selectedBranchSessionId.value)
+    selectedSessionId.value &&
+    flatNodes.value.some((n) => n.runtimeSessionId === selectedSessionId.value)
   )
     return;
-  const active = flatNodes.value.find((n) => n.isActive);
-  selectedBranchSessionId.value =
-    active?.runtimeSessionId ??
-    task.value?.sessionId ??
+  selectedSessionId.value =
+    resolveBaseSessionId() ??
     flatNodes.value[0]?.runtimeSessionId ??
     undefined;
+}
+
+function stripLegacySessionQueryFromRoute() {
+  if (!taskId.value || !Object.prototype.hasOwnProperty.call(route.query, "session")) {
+    return;
+  }
+
+  const { session: _session, ...queryWithoutSession } = route.query;
+  void router.replace({
+    name: "TaskDetailV3",
+    params: { taskId: taskId.value },
+    query: queryWithoutSession,
+  });
 }
 
 function clearScheduledTaskRefresh() {
@@ -1713,13 +1924,13 @@ async function refreshTaskSnapshot(options?: {
   const previousStatus = task.value?.status;
   try {
     await refreshTask(true);
+    await refreshTaskSessionSummaries(taskId.value, true);
     await refreshTaskRunSummaries(taskId.value, true);
     if (options?.workflow || !workflowView.value || task.value?.status !== previousStatus) {
       workflowView.value = await getTaskWorkflowView(taskId.value).catch(() => workflowView.value);
-      await refreshTaskMemberView(taskId.value, true);
     }
     if (options?.flow) {
-      await refreshBranches();
+      await refreshSessions();
     }
     if (options?.messages) {
       await refreshMessages(true);
@@ -1731,7 +1942,7 @@ async function refreshTaskSnapshot(options?: {
       parallelCandidateItems.value = {};
       parallelCandidateTraceStates.value = {};
     }
-    ensureSelectedBranch();
+    ensureSelectedSession();
   } catch {
     // Keep current page state when a silent refresh fails.
   }
@@ -1740,23 +1951,21 @@ async function refreshTaskSnapshot(options?: {
 function scheduleTaskRefresh(reason: string) {
   if (!taskId.value) return;
   clearScheduledTaskRefresh();
-  const delay = reason === "message.updated" ? 260 : 180;
+  const delay = reason === "task.message.updated" ? 260 : 180;
   taskRefreshTimer = setTimeout(() => {
     taskRefreshTimer = null;
     void refreshTaskSnapshot({
       workflow: [
-        "message.updated",
-        "session.updated",
+        "task.message.updated",
+        "task.snapshot.updated",
         "task.updated",
         "task.completed",
         "task.continued",
         "task.node.updated",
         "agent.started",
       ].includes(reason),
-      flow: reason === "session.updated" || reason === "session.created",
-      messages: ["message.updated", "session.updated", "task.completed", "task.continued"].includes(
-        reason,
-      ),
+      flow: reason === "task.snapshot.updated",
+      messages: ["task.message.updated", "task.snapshot.updated", "task.completed", "task.continued"].includes(reason),
     });
   }, delay);
 }
@@ -1778,12 +1987,11 @@ function ensureRunningStatusPoll() {
 async function loadInitial() {
   if (!taskId.value) {
     workflowView.value = null;
-    taskMemberView.value = null;
     return;
   }
   try {
     workflowView.value = await getTaskWorkflowView(taskId.value).catch(() => null);
-    await refreshTaskMemberView(taskId.value, true);
+    await refreshTaskSessionSummaries(taskId.value, true);
     await refreshTaskRunSummaries(taskId.value, true);
     if (projectId.value) {
       realtimeStore.subscribeProject(projectId.value);
@@ -1792,7 +2000,7 @@ async function loadInitial() {
       await refreshParallelCandidateMessages(taskId.value, true);
     }
     await refreshRuntimePermissions(true);
-    ensureSelectedBranch();
+    ensureSelectedSession();
     realtimeStore.subscribeTask(taskId.value);
   } catch {
     // useProjectTreeTask handles its own error state
@@ -1838,6 +2046,55 @@ function traceHasSettledCandidateReply(
   );
 }
 
+function hasDisplayableParallelCandidateItems(items: TaskConversationMessageItem[]) {
+  return items.some(
+    (item) =>
+      item.role !== "user" &&
+      ((typeof item.text === "string" && item.text.trim().length > 0) || item.toolCalls.length > 0),
+  );
+}
+
+async function loadParallelCandidateSessionMessageFallback(
+  currentTaskId: string,
+  sessionId: string,
+) {
+  try {
+    const response = await getTaskConversationMessages(currentTaskId, sessionId, {
+      includeLineage: false,
+    });
+    const items = normalizeSessionConversationItems(
+      Array.isArray(response.data) ? response.data : [],
+    );
+
+    return {
+      items,
+      hasSettledReply: hasDisplayableParallelCandidateItems(items),
+    };
+  } catch {
+    return {
+      items: [] as TaskConversationMessageItem[],
+      hasSettledReply: false,
+    };
+  }
+}
+
+function buildParallelCandidateSessionFallbackTraceState(args: {
+  traceState?: { state?: "incomplete" | "stale"; note?: string };
+  reason: "empty-trace" | "trace-error";
+}) {
+  if (args.reason === "trace-error") {
+    return {
+      state: "stale" as const,
+      note: "执行追踪暂时不可用，当前已回退到会话消息展示候选回复。",
+    };
+  }
+
+  return {
+    state: args.traceState?.state ?? ("incomplete" as const),
+    note: "执行追踪暂未返回可展示回复，当前已回退到会话消息展示候选内容。",
+  };
+}
+
 async function refreshParallelCandidateMessages(currentTaskId: string, silent = false) {
   const candidateSessionIds = Array.from(
     new Set(
@@ -1858,15 +2115,72 @@ async function refreshParallelCandidateMessages(currentTaskId: string, silent = 
         const trace = await getTaskExecutionTraceView(currentTaskId, sessionId, {
           includeLineage: false,
         });
+        const traceItems = normalizeTraceConversationItems(trace);
+        const hasDisplayableTraceItems = hasDisplayableParallelCandidateItems(traceItems);
+        const hasSettledReply = traceHasSettledCandidateReply(trace);
+        const traceState = resolveParallelCandidateTraceState(trace);
+
+        if (hasDisplayableTraceItems || hasSettledReply) {
+          return [
+            sessionId,
+            {
+              items: traceItems,
+              hasSettledReply,
+              traceState,
+            },
+          ] as const;
+        }
+
+        const sessionMessageFallback = await loadParallelCandidateSessionMessageFallback(
+          currentTaskId,
+          sessionId,
+        );
+        if (
+          hasDisplayableParallelCandidateItems(sessionMessageFallback.items) ||
+          sessionMessageFallback.hasSettledReply
+        ) {
+          return [
+            sessionId,
+            {
+              items: sessionMessageFallback.items,
+              hasSettledReply: true,
+              traceState: buildParallelCandidateSessionFallbackTraceState({
+                traceState,
+                reason: "empty-trace",
+              }),
+            },
+          ] as const;
+        }
+
         return [
           sessionId,
           {
-            items: normalizeTraceConversationItems(trace),
-            hasSettledReply: traceHasSettledCandidateReply(trace),
-            traceState: resolveParallelCandidateTraceState(trace),
+            items: traceItems,
+            hasSettledReply,
+            traceState,
           },
         ] as const;
       } catch {
+        const sessionMessageFallback = await loadParallelCandidateSessionMessageFallback(
+          currentTaskId,
+          sessionId,
+        );
+        if (
+          hasDisplayableParallelCandidateItems(sessionMessageFallback.items) ||
+          sessionMessageFallback.hasSettledReply
+        ) {
+          return [
+            sessionId,
+            {
+              items: sessionMessageFallback.items,
+              hasSettledReply: true,
+              traceState: buildParallelCandidateSessionFallbackTraceState({
+                reason: "trace-error",
+              }),
+            },
+          ] as const;
+        }
+
         const hasCachedTrace =
           silent &&
           ((parallelCandidateItems.value[sessionId]?.length ?? 0) > 0 ||
@@ -1901,30 +2215,50 @@ async function refreshParallelCandidateMessages(currentTaskId: string, silent = 
   );
 }
 
+function shouldLoadDomainFallbackRuns() {
+  if (isEmbeddedWorkbenchView.value) {
+    return false;
+  }
+
+  const needsDomainFallbackRuns = !hasSessionSummaryParallelGroups(taskSessionSummaries.value);
+
+  return needsDomainFallbackRuns;
+}
+
 async function refreshTaskRunSummaries(currentTaskId: string, silent = false) {
   try {
     const agentRunsResponse = await getTaskAgentRuns(currentTaskId);
     taskAgentRuns.value = Array.isArray(agentRunsResponse.data) ? agentRunsResponse.data : [];
 
-    const domainRunsResponse = await getTaskDomainRuns(currentTaskId);
-    taskDomainRuns.value = Array.isArray(domainRunsResponse.data) ? domainRunsResponse.data : [];
+    if (!shouldLoadDomainFallbackRuns()) {
+      taskDomainRuns.value = [];
+      taskDomainRunDetails.value = {};
+      return;
+    }
 
-    const projectedRuns = taskDomainRuns.value.filter(
-      (run) => run.orchestrationKind === "parallel" || run.orchestrationKind === "sequential-chain",
-    );
+    const domainRunsResponse = await getTaskDomainRuns(currentTaskId);
+    const domainRuns = Array.isArray(domainRunsResponse.data) ? domainRunsResponse.data : [];
+    taskDomainRuns.value = domainRuns;
+
     const detailEntries = await Promise.all(
-      projectedRuns.map(async (run) => {
-        try {
-          const response = await getTaskDomainRunDetail(currentTaskId, run.id);
-          return [run.id, response.data] as const;
-        } catch {
-          return [run.id, null] as const;
-        }
-      }),
+      domainRuns
+        .filter(
+          (run) =>
+            run.orchestrationKind === "parallel" || run.orchestrationKind === "sequential-chain",
+        )
+        .map(async (run) => {
+          try {
+            const detailResponse = await getTaskDomainRunDetail(currentTaskId, run.id);
+            return [run.id, detailResponse.data] as const;
+          } catch {
+            return null;
+          }
+        }),
     );
+
     taskDomainRunDetails.value = Object.fromEntries(
-      detailEntries.filter((entry): entry is readonly [string, TaskDomainRunDetailRecord] =>
-        Boolean(entry[1]),
+      detailEntries.filter(
+        (entry): entry is readonly [string, TaskDomainRunDetailRecord] => entry != null,
       ),
     );
   } catch {
@@ -1936,30 +2270,24 @@ async function refreshTaskRunSummaries(currentTaskId: string, silent = false) {
   }
 }
 
-async function refreshTaskMemberView(currentTaskId: string, silent = false) {
-  if (!currentTaskId) {
-    taskMemberView.value = null;
-    return;
-  }
-  taskMemberViewLoading.value = true;
+async function refreshTaskSessionSummaries(currentTaskId: string, silent = false) {
   try {
-    taskMemberView.value = await getTaskMemberView(currentTaskId);
+    const sessionsResponse = await getTaskSessions(currentTaskId);
+    taskSessionSummaries.value = Array.isArray(sessionsResponse.data) ? sessionsResponse.data : [];
   } catch {
     if (!silent) {
-      taskMemberView.value = null;
+      taskSessionSummaries.value = [];
     }
-  } finally {
-    taskMemberViewLoading.value = false;
   }
 }
 
 async function refreshRuntimePermissions(silent = false) {
-  if (!taskId.value || !selectedBranchSessionId.value) {
+  if (!taskId.value || !selectedSessionId.value) {
     runtimePermissions.value = [];
     return;
   }
   try {
-    const response = await listTaskRuntimePermissions(taskId.value, selectedBranchSessionId.value);
+    const response = await listTaskRuntimePermissions(taskId.value, selectedSessionId.value);
     runtimePermissions.value = Array.isArray(response.data) ? response.data : [];
   } catch {
     runtimePermissions.value = [];
@@ -1992,10 +2320,6 @@ function handleTaskSwitch(nextTaskId: string) {
 function handleOpenFilePreview(payload: { filePath: string; content?: string }) {
   previewFile.value = payload;
   sidebarCollapsed.value = false;
-}
-
-function handleSelectSession(sessionId: string) {
-  selectedBranchSessionId.value = resolvePreferredConversationSessionId() ?? sessionId;
 }
 
 async function handleReplyRuntimePermission(
@@ -2072,7 +2396,7 @@ function sleep(ms: number) {
 
 function bumpConversationFocus(sessionId?: string) {
   if (!sessionId) return;
-  selectedBranchSessionId.value = sessionId;
+  selectedSessionId.value = sessionId;
   conversationFocusToken.value += 1;
 }
 
@@ -2155,10 +2479,11 @@ async function dispatchContinuePrompt(
   if (!taskId.value) return false;
   continuing.value = true;
   try {
+    const requestSessionId = resolveTaskSessionRequestId(sessionId || task.value?.sessionId);
     const result = await continueTask(
       taskId.value,
       prompt,
-      sessionId || task.value?.sessionId,
+      requestSessionId,
       editableExecutionMode.value,
     );
     if (task.value) {
@@ -2189,7 +2514,7 @@ async function dispatchContinuePrompt(
 
 async function handleContinue(prompt: string) {
   if (!taskId.value) return;
-  const targetSessionId = selectedBranchSessionId.value || task.value?.sessionId;
+  const targetSessionId = selectedSessionId.value || task.value?.sessionId;
   if (isExecuting.value || hasStreamingAssistant.value) {
     queueContinuation(prompt, targetSessionId);
     return;
@@ -2198,7 +2523,7 @@ async function handleContinue(prompt: string) {
 }
 
 async function handleFork(prompt: string) {
-  const baseSessionId = selectedBranchSessionId.value || task.value?.sessionId;
+  const baseSessionId = selectedSessionId.value || task.value?.sessionId;
   if (!taskId.value || !baseSessionId) {
     message.warning("当前没有可分叉的分支");
     return;
@@ -2206,10 +2531,19 @@ async function handleFork(prompt: string) {
   forking.value = true;
   try {
     const nextTitle = `${selectedSessionLabel.value || baseSessionId.slice(0, 8)} 分叉`;
-    const forkResult = await forkTaskBranch(taskId.value, baseSessionId, nextTitle);
+    const forkResult = await forkTaskSession(
+      taskId.value,
+      resolveTaskSessionRequestId(baseSessionId) ?? baseSessionId,
+      nextTitle,
+    );
     if (forkResult.sessionId) {
-      selectedBranchSessionId.value = forkResult.sessionId;
-      await continueTask(taskId.value, prompt, forkResult.sessionId, editableExecutionMode.value);
+      selectedSessionId.value = forkResult.sessionId;
+      await continueTask(
+        taskId.value,
+        prompt,
+        forkResult.taskSessionId ?? forkResult.sessionId,
+        editableExecutionMode.value,
+      );
     }
     if (task.value) {
       task.value = { ...task.value, status: "running" };
@@ -2217,7 +2551,7 @@ async function handleFork(prompt: string) {
     composerResetToken.value += 1;
     message.success("已创建分叉并发送续跑指令");
     await refreshTask(true);
-    await refreshBranches();
+    await refreshSessions();
     await refreshMessages(true);
   } catch (err) {
     message.error(err instanceof Error ? err.message : "分叉失败");
@@ -2266,16 +2600,6 @@ async function handleExecutionModeConfirm(overrides: ExecutionOverrides) {
   }
 }
 
-async function handleAutoAdvanceToggle(value: boolean) {
-  if (!taskId.value || !task.value) return;
-  try {
-    await updateTask(taskId.value, { autoAdvanceStages: value });
-    task.value = { ...task.value, autoAdvanceStages: value };
-  } catch (err) {
-    message.error(err instanceof Error ? err.message : "更新自动推进失败");
-  }
-}
-
 async function handleAdoptCandidate(index: number) {
   if (!taskId.value) return;
   try {
@@ -2293,16 +2617,6 @@ function handleUnavailableAction(label: string) {
   };
 }
 
-function syncSelectedSessionToRoute(sessionId: string | undefined) {
-  const currentSession = resolveRequestedSessionId();
-  if (currentSession === sessionId) return;
-  const { session: _session, ...queryWithoutSession } = route.query;
-  const nextQuery = sessionId
-    ? { ...queryWithoutSession, session: sessionId }
-    : queryWithoutSession;
-  router.replace({ name: "TaskDetailV3", params: { taskId: taskId.value }, query: nextQuery });
-}
-
 /* ------------------------------------------------------------------ */
 /*  Watchers                                                            */
 /* ------------------------------------------------------------------ */
@@ -2310,10 +2624,63 @@ function syncSelectedSessionToRoute(sessionId: string | undefined) {
 watch(
   taskId,
   () => {
-    selectedBranchSessionId.value = undefined;
+    selectedSessionId.value = undefined;
+    taskSessionSummaries.value = [];
+    sequentialSessionStepCache.value = {};
+    sequentialSessionStepLoadToken += 1;
     previewFile.value = null;
   },
   { immediate: false },
+);
+
+watch(
+  [
+    taskId,
+    () => task.value?.title,
+    () => task.value?.strategy,
+    () => task.value?.orchestrationKind,
+    editableExecutionMode,
+    sequentialSessionStepCandidates,
+  ],
+  () => {
+    const shouldLoadSessionBackedSteps =
+      (editableExecutionMode.value === "sequential-chain" ||
+        task.value?.orchestrationKind === "sequential-chain") &&
+      resolveSequentialStepsFromStrategy(task.value).length === 0;
+    if (!shouldLoadSessionBackedSteps || !taskId.value) {
+      sequentialSessionStepCache.value = {};
+      sequentialSessionStepLoadToken += 1;
+      return;
+    }
+
+    const missingCandidates = sequentialSessionStepCandidates.value.filter(
+      (candidate) =>
+        !Object.prototype.hasOwnProperty.call(sequentialSessionStepCache.value, candidate.sessionId),
+    );
+    if (missingCandidates.length === 0) {
+      return;
+    }
+
+    const currentTaskId = taskId.value;
+    const currentTaskTitle = task.value?.title;
+    const requestToken = ++sequentialSessionStepLoadToken;
+    void Promise.all(
+      missingCandidates.map(async (candidate) => [
+        candidate.sessionId,
+        await resolveSequentialSessionStep(currentTaskId, currentTaskTitle, candidate),
+      ] as const),
+    ).then((entries) => {
+      if (requestToken !== sequentialSessionStepLoadToken || currentTaskId !== taskId.value) {
+        return;
+      }
+
+      sequentialSessionStepCache.value = {
+        ...sequentialSessionStepCache.value,
+        ...Object.fromEntries(entries),
+      };
+    });
+  },
+  { immediate: true, deep: true },
 );
 
 // When task data is loaded, run initial setup
@@ -2321,6 +2688,14 @@ watch(
   () => task.value?.id,
   (newId) => {
     if (newId) void loadInitial();
+  },
+  { immediate: true },
+);
+
+watch(
+  () => route.query.session,
+  () => {
+    stripLegacySessionQueryFromRoute();
   },
   { immediate: true },
 );
@@ -2339,11 +2714,10 @@ watch(
 );
 
 watch([flatNodes, () => task.value?.sessionId], () => {
-  ensureSelectedBranch();
+  ensureSelectedSession();
 });
 
-watch(selectedBranchSessionId, (sessionId) => {
-  syncSelectedSessionToRoute(sessionId);
+watch(selectedSessionId, () => {
   void refreshRuntimePermissions(true);
 });
 
@@ -2352,13 +2726,12 @@ watch(
   () => {
     const event = realtimeStore.events[0];
     if (!event || event.taskId !== taskId.value) return;
-    const rawType = typeof event.data.rawType === "string" ? event.data.rawType : event.type;
-    if (rawType === "message.part.updated") return;
+    const eventKind = getRealtimeEventKind(event);
+    const snapshotReason = getRealtimeSnapshotReason(event);
+    if (eventKind === "task.message.delta") return;
     if (
       [
-        "message.updated",
-        "session.updated",
-        "session.created",
+        "task.message.updated",
         "task.updated",
         "task.completed",
         "task.continued",
@@ -2368,7 +2741,9 @@ watch(
         "task.followup.started",
         "task.followup.completed",
         "task.followup.failed",
-      ].includes(rawType)
+      ].includes(eventKind) ||
+      (eventKind === "task.snapshot.updated" &&
+        (snapshotReason === "session.updated" || snapshotReason === "session.created"))
     ) {
       if (
         [
@@ -2376,11 +2751,11 @@ watch(
           "task.followup.started",
           "task.followup.completed",
           "task.followup.failed",
-        ].includes(rawType)
+        ].includes(eventKind)
       ) {
         traceRefreshKey.value += 1;
       }
-      scheduleTaskRefresh(rawType);
+      scheduleTaskRefresh(eventKind);
     }
   },
 );
@@ -2471,6 +2846,14 @@ onBeforeUnmount(() => {
   min-width: 280px;
   max-width: 400px;
   min-height: 0;
+}
+
+.task-detail-v3-shell--sidebar-collapsed .task-detail-v3-main {
+  width: 100%;
+}
+
+.task-detail-v3-shell--sidebar-collapsed .task-detail-v3-sidebar {
+  display: none;
 }
 
 .chain-step-progress__pre {

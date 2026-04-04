@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { z } from "zod";
 import { db } from "../../db";
-import { agentRuns, taskRunNodes } from "../../db/schema";
+import { agentRuns } from "../../db/schema";
 import type { AppEnv } from "../../middleware/auth";
 import type { TaskTreeRecord } from "../project-tree/task-view";
 
@@ -73,7 +73,6 @@ function buildCreateAgentRunValues(args: {
   taskId: string;
   body: CreateRunInput;
   status: AgentRunStatus;
-  taskRunId: string;
 }) {
   const timing = resolveAgentRunTiming({
     status: args.status,
@@ -85,7 +84,7 @@ function buildCreateAgentRunValues(args: {
     id: args.runId,
     taskId: args.taskId,
     sessionId: args.body.sessionId ?? null,
-    runId: args.taskRunId,
+    runId: null,
     runNodeId: null,
     agentType: args.body.agentType,
     status: args.status,
@@ -102,8 +101,6 @@ function buildCreateAgentRunValues(args: {
 function buildUpdateAgentRunValues(args: {
   body: UpdateRunInput;
   existing: AgentRunRecord;
-  taskRunId: string;
-  taskRunNodeId: string;
 }) {
   const timing = resolveAgentRunTiming({
     status: args.body.status,
@@ -115,8 +112,6 @@ function buildUpdateAgentRunValues(args: {
 
   const updates: Record<string, unknown> = {
     status: args.body.status,
-    runId: args.existing.runId ?? args.taskRunId,
-    runNodeId: args.existing.runNodeId ?? args.taskRunNodeId,
     startedAt: timing.startedAt,
     finishedAt: timing.finishedAt,
   };
@@ -148,8 +143,8 @@ async function createTaskAgentRun(args: {
     startedAt?: string | null;
     finishedAt?: string | null;
   }) => Promise<{
-    taskRunId: string;
-    taskRunNodeId: string;
+      taskSessionId: string;
+      sessionOperationId: string;
   }>;
 }) {
   const task = await args.loadTaskTreeBackedRecord(args.taskId);
@@ -164,7 +159,7 @@ async function createTaskAgentRun(args: {
   }
 
   const status = args.body.status ?? "pending";
-  const executionFacts = await args.syncExecutionFactsForAgentRun({
+  await args.syncExecutionFactsForAgentRun({
     task,
     agentRunId: runId,
     linkAgentRun: false,
@@ -186,18 +181,8 @@ async function createTaskAgentRun(args: {
       taskId: args.taskId,
       body: args.body,
       status,
-      taskRunId: executionFacts.taskRunId,
     }),
   );
-
-  await db
-    .update(taskRunNodes)
-    .set({ agentRunId: runId, updatedAt: new Date().toISOString() })
-    .where(eq(taskRunNodes.id, executionFacts.taskRunNodeId));
-  await db
-    .update(agentRuns)
-    .set({ runNodeId: executionFacts.taskRunNodeId })
-    .where(eq(agentRuns.id, runId));
 
   return { ok: true as const, status: 201 as const, payload: { id: runId, status } };
 }
@@ -222,8 +207,8 @@ async function updateTaskAgentRun(args: {
     startedAt?: string | null;
     finishedAt?: string | null;
   }) => Promise<{
-    taskRunId: string;
-    taskRunNodeId: string;
+      taskSessionId: string;
+      sessionOperationId: string;
   }>;
 }) {
   const existing = await db.query.agentRuns.findFirst({ where: eq(agentRuns.id, args.runId) });
@@ -243,7 +228,7 @@ async function updateTaskAgentRun(args: {
     existingStartedAt: existing.startedAt,
     existingFinishedAt: existing.finishedAt,
   });
-  const executionFacts = await args.syncExecutionFactsForAgentRun({
+  await args.syncExecutionFactsForAgentRun({
     task,
     agentRunId: args.runId,
     sessionId: existing.sessionId,
@@ -261,8 +246,6 @@ async function updateTaskAgentRun(args: {
   const updates = buildUpdateAgentRunValues({
     body: args.body,
     existing,
-    taskRunId: executionFacts.taskRunId,
-    taskRunNodeId: executionFacts.taskRunNodeId,
   });
   await db.update(agentRuns).set(updates).where(eq(agentRuns.id, args.runId));
 
@@ -292,8 +275,8 @@ export function registerTaskAgentRunWriteRoutes(
       startedAt?: string | null;
       finishedAt?: string | null;
     }) => Promise<{
-      taskRunId: string;
-      taskRunNodeId: string;
+      taskSessionId: string;
+      sessionOperationId: string;
     }>;
   },
 ) {

@@ -1,7 +1,8 @@
 ---
 name: multimodal-enterprise
-description: Multimodal analysis agent — processes images, PDFs, screenshots, and design mockups
-model: anthropic/claude-sonnet-4-20250514
+description: Multimodal analysis agent — processes images, PDFs, screenshots,
+  and design mockups
+model: github-copilot:gpt-5-mini
 ---
 
 # Multimodal — Visual & Document Analysis Agent

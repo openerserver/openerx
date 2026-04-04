@@ -16,10 +16,11 @@ import { fetchProjectRuntimeUsageBaseline } from "../../lib/runtime-usage-ledger
 import type { JWTPayload } from "../../middleware/auth";
 import {
   createProjectionTraceTimelineMeta,
-  fetchBranchCompatTimeline,
-  normalizeBranchCompatTimelineMeta,
+  fetchTaskSessionTimeline,
+  normalizeTaskSessionTimelineMeta,
   shouldReplaceTraceTimeline,
-  type BranchCompatTimelineMeta,
+  type TaskSessionTimelineMeta,
+  toCanonicalTaskSessionId,
 } from "../tasks/task-session-compat";
 import {
   type ProjectStageRuntimeSummaryViewModel,
@@ -2323,7 +2324,7 @@ interface TaskSessionTimelineItem {
 interface TaskSessionTimelineResponse {
   data: TaskSessionTimelineItem[];
   meta?: {
-    readSource?: BranchCompatTimelineMeta["readSource"];
+    readSource?: TaskSessionTimelineMeta["readSource"];
     cacheState?: "none" | "partial" | "complete";
     complete?: boolean;
     includeLineage?: boolean;
@@ -2410,32 +2411,12 @@ function parseStrategyHookExecutions(
   }
 }
 
-function extractSessionMessageText(message: unknown): string {
-  if (!message || typeof message !== "object") return "";
-  const parts = (message as Record<string, unknown>).parts;
-  if (!Array.isArray(parts)) return "";
-  return parts
-    .map((part: unknown) => {
-      if (part && typeof part === "object" && "text" in part) {
-        return String((part as { text: unknown }).text || "");
-      }
-      return "";
-    })
-    .filter(Boolean)
-    .join("\n");
-}
-
-function extractSessionMessageRole(message: unknown): string {
-  if (!message || typeof message !== "object") return "unknown";
-  return String((message as Record<string, unknown>).role || "unknown");
-}
-
 async function loadExecutionTraceTimeline(
   taskId: string,
   sessionId: string,
   authorization: string,
 ) {
-  const timelineResult = await fetchBranchCompatTimeline(taskId, sessionId, authorization, {
+  const timelineResult = await fetchTaskSessionTimeline(taskId, sessionId, authorization, {
     includeLineage: true,
   });
 
@@ -2446,7 +2427,7 @@ async function loadExecutionTraceTimeline(
   return {
     items: timelineResult.data.data,
     meta: {
-      ...normalizeBranchCompatTimelineMeta(timelineResult.data.meta),
+      ...normalizeTaskSessionTimelineMeta(timelineResult.data.meta),
     },
     complete: timelineResult.data.meta?.cacheState === "complete",
   };
@@ -2603,8 +2584,13 @@ async function loadExecutionTraceProjectionTimeline(
   sessionId: string,
   authorization: string,
 ) {
+  const persistedSessionId = toCanonicalTaskSessionId(taskId, sessionId);
+  if (!persistedSessionId) {
+    return null;
+  }
+
   const result = await cpFetch<TaskProjectionTimelineViewResponseRecord>(
-    `/api/tasks/${encodeURIComponent(taskId)}/timeline-view?runtimeSessionId=${encodeURIComponent(sessionId)}`,
+    `/api/tasks/${encodeURIComponent(taskId)}/timeline-view?sessionId=${encodeURIComponent(persistedSessionId)}`,
     { authorization },
   );
   if (!result.ok || !Array.isArray(result.data?.data)) {

@@ -1,7 +1,7 @@
 ---
 name: explore-enterprise
 description: Quick exploration agent — fast code lookup and simple queries
-model: openai/gpt-4.1-mini
+model: github-copilot:gpt-5-mini
 ---
 
 # Explore — Quick Exploration Agent

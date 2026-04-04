@@ -34,7 +34,7 @@ describe("finalizeTaskState", () => {
         string,
         { method?: string; body?: Record<string, unknown> } | undefined,
       ];
-      if (url === "/api/tasks/task-projection-parallel/branches") {
+      if (url === "/api/tasks/task-projection-parallel/sessions") {
         if (options?.method === "POST") {
           return { ok: true, data: { ok: true } };
         }

@@ -9,7 +9,16 @@ export const createTaskBranchSchema = z.object({
   forkedFromMessageId: z.string().optional(),
   branchName: z.string().max(200).optional(),
   sourceType: z.enum(["root", "fork", "sub_session"]).optional(),
+  sessionKind: z
+    .enum(["primary", "candidate", "judge", "sequential_step", "resume", "manual_branch", "hook"])
+    .optional(),
+  executionModeSnapshot: z.enum(["single", "parallel", "sequential_chain"]).optional(),
   isActive: z.boolean().optional(),
+  candidateIndex: z.number().int().min(0).optional(),
+  stepIndex: z.number().int().min(0).optional(),
+  selectedModel: z.string().max(200).optional(),
+  coordinationKey: z.string().max(500).optional(),
+  operationId: z.string().max(200).optional(),
 });
 
 export const persistTaskBranchMessageSchema = z.object({
@@ -26,6 +35,19 @@ type TaskBranchCompatRecord = {
   forkedFromMessageId: string | null;
   branchName: string | null;
   sourceType: "root" | "fork" | "sub_session" | null;
+  sessionKind?:
+    | "primary"
+    | "candidate"
+    | "judge"
+    | "sequential_step"
+    | "resume"
+    | "manual_branch"
+    | "hook"
+    | null;
+  executionModeSnapshot?: "single" | "parallel" | "sequential_chain" | null;
+  candidateIndex?: number | null;
+  stepIndex?: number | null;
+  selectedModel?: string | null;
   isActive: boolean;
 };
 
@@ -35,7 +57,22 @@ type ResolvedTaskBranchState = {
   forkedFromMessageId: string | null;
   branchName: string | null;
   sourceType: "root" | "fork" | "sub_session" | null;
+  sessionKind?:
+    | "primary"
+    | "candidate"
+    | "judge"
+    | "sequential_step"
+    | "resume"
+    | "manual_branch"
+    | "hook"
+    | null;
+  executionModeSnapshot?: "single" | "parallel" | "sequential_chain" | null;
+  candidateIndex?: number | null;
+  stepIndex?: number | null;
+  selectedModel?: string | null;
   isActive: boolean;
+  coordinationKey?: string;
+  operationId?: string;
 };
 
 function resolveTaskBranchState(
@@ -49,25 +86,33 @@ function resolveTaskBranchState(
     forkedFromMessageId: body.forkedFromMessageId ?? existingRecord?.forkedFromMessageId ?? null,
     branchName: body.branchName ?? existingRecord?.branchName ?? null,
     sourceType: body.sourceType ?? existingRecord?.sourceType ?? null,
+    sessionKind: body.sessionKind ?? existingRecord?.sessionKind ?? null,
+    executionModeSnapshot:
+      body.executionModeSnapshot ?? existingRecord?.executionModeSnapshot ?? null,
+    candidateIndex: body.candidateIndex ?? existingRecord?.candidateIndex ?? null,
+    stepIndex: body.stepIndex ?? existingRecord?.stepIndex ?? null,
+    selectedModel: body.selectedModel ?? existingRecord?.selectedModel ?? null,
     isActive: body.isActive ?? existingRecord?.isActive ?? false,
+    coordinationKey: body.coordinationKey,
+    operationId: body.operationId,
   };
 }
 
 function buildTaskBranchResponse(args: {
-  nodeId: string;
+  sessionId: string;
   taskId: string;
   runtimeSessionId: string;
   updated: boolean;
 }) {
   return args.updated
     ? {
-        id: args.nodeId,
+        id: args.sessionId,
         taskId: args.taskId,
         runtimeSessionId: args.runtimeSessionId,
         updated: true,
       }
     : {
-        id: args.nodeId,
+        id: args.sessionId,
         taskId: args.taskId,
         runtimeSessionId: args.runtimeSessionId,
       };
@@ -103,14 +148,29 @@ export function createTaskBranchWriteApi(deps: {
     forkedFromMessageId?: string | null;
     branchName?: string | null;
     sourceType?: "root" | "fork" | "sub_session" | null;
+    sessionKind?:
+      | "primary"
+      | "candidate"
+      | "judge"
+      | "sequential_step"
+      | "resume"
+      | "manual_branch"
+      | "hook"
+      | null;
+    executionModeSnapshot?: "single" | "parallel" | "sequential_chain" | null;
     isActive?: boolean;
     archivedAt?: string | null;
-  }) => Promise<unknown>;
+    candidateIndex?: number | null;
+    stepIndex?: number | null;
+    selectedModel?: string | null;
+    coordinationKey?: string | null;
+    operationId?: string | null;
+  }) => Promise<string>;
   upsertConversationMessageRecord: (args: {
     task: { id: string; projectId: string };
     runtimeSessionId: string;
     message: Record<string, unknown>;
-  }) => Promise<{ seq: number }>;
+  }) => Promise<{ messageId: string; sessionId: string; seq: number }>;
   buildTaskTreeSnapshotFromRecord: (
     task: TaskTreeRecord,
     updates: Record<string, unknown>,
@@ -131,7 +191,7 @@ export function createTaskBranchWriteApi(deps: {
     );
     const branchState = resolveTaskBranchState(body, existingRecord);
 
-    const nodeId = await deps.syncTaskBranchCompatTreeNode({
+    await deps.syncTaskBranchCompatTreeNode({
       taskId,
       runtimeSessionId: branchState.runtimeSessionId,
       parentRuntimeSessionId: branchState.parentRuntimeSessionId,
@@ -142,15 +202,22 @@ export function createTaskBranchWriteApi(deps: {
       archivedAt: null,
     });
 
-    await deps.upsertConversationSessionRecord({
+    const sessionId = await deps.upsertConversationSessionRecord({
       task,
       runtimeSessionId: branchState.runtimeSessionId,
       parentRuntimeSessionId: branchState.parentRuntimeSessionId,
       forkedFromMessageId: branchState.forkedFromMessageId,
       branchName: branchState.branchName,
       sourceType: branchState.sourceType,
+      sessionKind: branchState.sessionKind,
+      executionModeSnapshot: branchState.executionModeSnapshot,
       isActive: branchState.isActive,
       archivedAt: null,
+      candidateIndex: branchState.candidateIndex,
+      stepIndex: branchState.stepIndex,
+      selectedModel: branchState.selectedModel,
+      coordinationKey: branchState.coordinationKey,
+      operationId: branchState.operationId,
     });
 
     if (branchState.isActive) {
@@ -165,7 +232,7 @@ export function createTaskBranchWriteApi(deps: {
       ok: true as const,
       status: existingRecord ? (200 as const) : (201 as const),
       data: buildTaskBranchResponse({
-        nodeId,
+        sessionId,
         taskId,
         runtimeSessionId: branchState.runtimeSessionId,
         updated: Boolean(existingRecord),
@@ -214,16 +281,32 @@ export function createTaskBranchWriteApi(deps: {
       return { ok: true as const, status: 202 as const, data: { ok: true, skipped: true } };
     }
 
+    // Phase 2: event-log primary — append is the authoritative write and must succeed
+    const eventId = await appendMessageEvent({
+      taskId,
+      sessionId: body.runtimeSessionId,
+      message: body.message,
+    });
+
+    // Inline projection: derive normalized tables from the event payload
     const persistedMessage = await deps.upsertConversationMessageRecord({
       task,
       runtimeSessionId: body.runtimeSessionId,
       message: body.message,
     });
 
+    // Mark event as projected (best-effort; background projector catches misses)
+    markEventProjected(eventId).catch(() => {});
+
     return {
       ok: true as const,
       status: 201 as const,
-      data: { ok: true, seq: persistedMessage.seq },
+      data: {
+        ok: true,
+        messageId: persistedMessage.messageId,
+        sessionId: persistedMessage.sessionId,
+        seq: persistedMessage.seq,
+      },
     };
   }
 
@@ -305,4 +388,58 @@ export function createTaskBranchWriteApi(deps: {
     activateTaskBranch,
     archiveTaskBranch,
   };
+}
+
+// ── Phase 0: Event Log dual-write ──────────────────────────────────
+
+function resolveEventType(
+  message: Record<string, unknown>,
+): "message.updated" | "message.part.updated" {
+  if (message && typeof message === "object" && "part" in message) {
+    return "message.part.updated";
+  }
+  return "message.updated";
+}
+
+function resolveRuntimeMessageId(message: Record<string, unknown>): string | null {
+  if (typeof message.id === "string" && message.id) return message.id;
+  if (typeof message.runtimeMessageId === "string" && message.runtimeMessageId)
+    return message.runtimeMessageId;
+  const info = message.info && typeof message.info === "object" ? (message.info as Record<string, unknown>) : null;
+  if (info && typeof info.id === "string" && info.id) return info.id;
+  return null;
+}
+
+async function appendMessageEvent(args: {
+  taskId: string;
+  sessionId: string;
+  message: Record<string, unknown>;
+}): Promise<number> {
+  const { db } = await import("../../db");
+  const { taskMessageEvents } = await import("../../db/schema");
+  const [row] = await db
+    .insert(taskMessageEvents)
+    .values({
+      taskId: args.taskId,
+      sessionId: args.sessionId,
+      eventType: resolveEventType(args.message),
+      runtimeMessageId: resolveRuntimeMessageId(args.message),
+      payload: args.message,
+      projected: false,
+    })
+    .returning({ id: taskMessageEvents.id });
+  if (!row) {
+    throw new Error("Failed to append task message event");
+  }
+  return row.id;
+}
+
+async function markEventProjected(eventId: number): Promise<void> {
+  const { db } = await import("../../db");
+  const { taskMessageEvents } = await import("../../db/schema");
+  const { eq } = await import("drizzle-orm");
+  await db
+    .update(taskMessageEvents)
+    .set({ projected: true })
+    .where(eq(taskMessageEvents.id, eventId));
 }

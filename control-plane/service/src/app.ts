@@ -1,7 +1,6 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
-import { agentRunRoutes } from "./modules/agent-runs/routes";
 import { approvalRoutes } from "./modules/approvals/routes";
 import { auditRoutes } from "./modules/audit/routes";
 import { authRoutes } from "./modules/auth/routes";
@@ -56,7 +55,6 @@ export function createControlPlaneApp() {
   app.route("/api/cost", costRoutes);
   app.route("/api/dashboard", dashboardRoutes);
   app.route("/api/approvals", approvalRoutes);
-  app.route("/api/agent-runs", agentRunRoutes);
   app.route("/api/project-tree", projectTreeRoutes);
   app.route("/api/tasks", taskRoutes);
   app.route("/api/tasks/:taskId/operating-runtime", taskOperatingRuntimeRoutes);

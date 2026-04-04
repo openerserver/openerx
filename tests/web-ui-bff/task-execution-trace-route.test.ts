@@ -140,8 +140,6 @@ mock.module("../../control-plane/web-ui-bff/src/modules/tasks/reconcile", () => 
 mock.module("../../control-plane/web-ui-bff/src/modules/tasks/workflow-stage-execution", () => ({
   buildStageArtifactSummary: mock(() => null),
   buildWorkflowExecutionPromptSnapshot: buildWorkflowExecutionPromptSnapshotMock,
-  fetchCurrentStageHooks: mock(async () => []),
-  persistWorkflowStageExecutionOutcome: mock(async () => undefined),
 }));
 
 beforeEach(() => {
@@ -188,39 +186,39 @@ beforeEach(() => {
         data: {
           data: null,
           meta: {
-            readSource: "task-domain-projection",
+            readSource: "task-session-projection",
             complete: false,
           },
         },
       };
     }
-    if (url === "/api/tasks/task-1/timeline-view?runtimeSessionId=ses-1") {
+    if (url === "/api/tasks/task-1/timeline-view?sessionId=task-session%3Atask-1%3Ases-1") {
       return {
         ok: true,
         data: {
           data: [],
           meta: {
-            readSource: "task-domain-projection",
+            readSource: "task-session-projection",
             complete: false,
             itemCount: 0,
           },
         },
       };
     }
-    if (url === "/api/tasks/task-1/timeline-view?runtimeSessionId=ses-1&includeLineage=false") {
+    if (url === "/api/tasks/task-1/timeline-view?sessionId=task-session%3Atask-1%3Ases-1&includeLineage=false") {
       return {
         ok: true,
         data: {
           data: [],
           meta: {
-            readSource: "task-domain-projection",
+            readSource: "task-session-projection",
             complete: false,
             itemCount: 0,
           },
         },
       };
     }
-    if (url === "/api/tasks/task-1/branches/ses-1/timeline?includeLineage=true") {
+    if (url === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true") {
       return {
         ok: true,
         data: {
@@ -351,14 +349,14 @@ describe("task execution trace route", () => {
               updatedAt: "2026-03-22T10:00:03.000Z",
             },
             meta: {
-              readSource: "task-domain-projection",
+              readSource: "task-session-projection",
               complete: true,
             },
           },
         };
       }
 
-      if (url === "/api/tasks/task-1/timeline-view?runtimeSessionId=ses-1") {
+      if (url === "/api/tasks/task-1/timeline-view?sessionId=task-session%3Atask-1%3Ases-1") {
         return {
           ok: true,
           data: {
@@ -368,7 +366,7 @@ describe("task execution trace route", () => {
                 taskId: "task-1",
                 projectId: "proj-1",
                 messageId: "message-user-1",
-                sessionId: "task_session:task-1:ses-1",
+                sessionId: "task-session:task-1:ses-1",
                 itemKind: "user-input",
                 itemRole: "user",
                 displayText: "投影用户输入",
@@ -380,7 +378,7 @@ describe("task execution trace route", () => {
                 taskId: "task-1",
                 projectId: "proj-1",
                 messageId: "message-assistant-1",
-                sessionId: "task_session:task-1:ses-1",
+                sessionId: "task-session:task-1:ses-1",
                 itemKind: "assistant-output",
                 itemRole: "assistant",
                 displayText: "投影回复",
@@ -392,7 +390,7 @@ describe("task execution trace route", () => {
                 taskId: "task-1",
                 projectId: "proj-1",
                 runNodeId: "run-node-tool-1",
-                sessionId: "task_session:task-1:ses-1",
+                sessionId: "task-session:task-1:ses-1",
                 itemKind: "tool-call",
                 itemRole: "tool",
                 title: "工具调用 search_code",
@@ -411,7 +409,7 @@ describe("task execution trace route", () => {
                 taskId: "task-1",
                 projectId: "proj-1",
                 runNodeId: "run-node-judge-1",
-                sessionId: "task_session:task-1:ses-1",
+                sessionId: "task-session:task-1:ses-1",
                 itemKind: "judge-decision",
                 itemRole: "completed",
                 title: "Judge 决策",
@@ -423,7 +421,7 @@ describe("task execution trace route", () => {
                 id: "projection-file-1",
                 taskId: "task-1",
                 projectId: "proj-1",
-                sessionId: "task_session:task-1:ses-1",
+                sessionId: "task-session:task-1:ses-1",
                 itemKind: "file-reference",
                 itemRole: "assistant",
                 title: "文件引用 docs/task-domain-radical-storage-redesign-plan.md",
@@ -441,7 +439,7 @@ describe("task execution trace route", () => {
                 id: "projection-diff-1",
                 taskId: "task-1",
                 projectId: "proj-1",
-                sessionId: "task_session:task-1:ses-1",
+                sessionId: "task-session:task-1:ses-1",
                 itemKind: "diff",
                 itemRole: "assistant",
                 title: "变更 Diff",
@@ -458,7 +456,7 @@ describe("task execution trace route", () => {
               },
             ],
             meta: {
-              readSource: "task-domain-projection",
+              readSource: "task-session-projection",
               complete: true,
               itemCount: 6,
             },
@@ -483,7 +481,7 @@ describe("task execution trace route", () => {
     expect(payload.finalPrompt).toBe("投影用户输入");
     expect(payload.latestResponse).toBe("投影回复");
     expect(payload.timelineMeta).toMatchObject({
-      readSource: "task-domain-projection",
+      readSource: "task-session-projection",
       complete: true,
     });
     expectNoLegacyTimelineReadSource(payload);
@@ -545,20 +543,20 @@ describe("task execution trace route", () => {
           data: {
             data: null,
             meta: {
-              readSource: "task-domain-projection",
+              readSource: "task-session-projection",
               complete: false,
             },
           },
         };
       }
 
-      if (url === "/api/tasks/task-1/timeline-view?runtimeSessionId=ses-1") {
+      if (url === "/api/tasks/task-1/timeline-view?sessionId=task-session%3Atask-1%3Ases-1") {
         return {
           ok: true,
           data: {
             data: [],
             meta: {
-              readSource: "task-domain-projection",
+              readSource: "task-session-projection",
               complete: false,
               itemCount: 0,
             },
@@ -566,7 +564,7 @@ describe("task execution trace route", () => {
         };
       }
 
-      if (url === "/api/tasks/task-1/branches/ses-1/timeline?includeLineage=true") {
+      if (url === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true") {
         return {
           ok: true,
           data: {
@@ -676,14 +674,14 @@ describe("task execution trace route", () => {
           data: {
             data: null,
             meta: {
-              readSource: "task-domain-projection",
+              readSource: "task-session-projection",
               complete: false,
             },
           },
         };
       }
 
-      if (url === "/api/tasks/task-1/timeline-view?runtimeSessionId=ses-1") {
+      if (url === "/api/tasks/task-1/timeline-view?sessionId=task-session%3Atask-1%3Ases-1") {
         return {
           ok: true,
           data: {
@@ -693,7 +691,7 @@ describe("task execution trace route", () => {
                 taskId: "task-1",
                 projectId: "proj-1",
                 messageId: "message-user-partial-1",
-                sessionId: "task_session:task-1:ses-1",
+                sessionId: "task-session:task-1:ses-1",
                 itemKind: "user-input",
                 itemRole: "user",
                 displayText: "projection partial prompt",
@@ -702,7 +700,7 @@ describe("task execution trace route", () => {
               },
             ],
             meta: {
-              readSource: "task-domain-projection",
+              readSource: "task-session-projection",
               complete: false,
               itemCount: 1,
             },
@@ -710,7 +708,7 @@ describe("task execution trace route", () => {
         };
       }
 
-      if (url === "/api/tasks/task-1/branches/ses-1/timeline?includeLineage=true") {
+      if (url === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true") {
         throw new Error("should not load service timeline when projection timeline already has items");
       }
 
@@ -730,7 +728,7 @@ describe("task execution trace route", () => {
     expect(response.status).toBe(200);
     const payload = await response.json();
     expect(payload.timelineMeta).toMatchObject({
-      readSource: "task-domain-projection",
+      readSource: "task-session-projection",
       complete: false,
       itemCount: 1,
     });
@@ -744,7 +742,7 @@ describe("task execution trace route", () => {
     expect(payload.finalPrompt).toBe("projection partial prompt");
     expect(payload.latestResponse).toBeNull();
     expectNoLegacyTimelineReadSource(payload);
-    expectServiceTimelineNotRequested(cpFetchMock, "task-1", "ses-1");
+    expectServiceTimelineNotRequested(cpFetchMock, "task-1", "task-session:task-1:ses-1");
     expect(getSessionMessagesMock).not.toHaveBeenCalled();
   });
 
@@ -789,20 +787,20 @@ describe("task execution trace route", () => {
               updatedAt: "2026-03-22T10:00:03.000Z",
             },
             meta: {
-              readSource: "task-domain-projection",
+              readSource: "task-session-projection",
               complete: false,
             },
           },
         };
       }
 
-      if (url === "/api/tasks/task-1/timeline-view?runtimeSessionId=ses-1") {
+      if (url === "/api/tasks/task-1/timeline-view?sessionId=task-session%3Atask-1%3Ases-1") {
         return {
           ok: true,
           data: {
             data: [],
             meta: {
-              readSource: "task-domain-projection",
+              readSource: "task-session-projection",
               complete: false,
               itemCount: 0,
             },
@@ -810,7 +808,7 @@ describe("task execution trace route", () => {
         };
       }
 
-      if (url === "/api/tasks/task-1/branches/ses-1/timeline?includeLineage=true") {
+      if (url === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true") {
         return {
           ok: true,
           data: {
@@ -867,7 +865,7 @@ describe("task execution trace route", () => {
     expect(payload.finalPrompt).toBe("fallback prompt");
     expect(payload.latestResponse).toBe("fallback response");
     expect(cpFetchMock).toHaveBeenCalledWith(
-      "/api/tasks/task-1/branches/ses-1/timeline?includeLineage=true",
+      "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true",
       expect.anything(),
     );
     expect(getSessionMessagesMock).not.toHaveBeenCalled();
@@ -914,14 +912,14 @@ describe("task execution trace route", () => {
               updatedAt: "2026-03-22T10:00:03.000Z",
             },
             meta: {
-              readSource: "task-domain-projection",
+              readSource: "task-session-projection",
               complete: false,
             },
           },
         };
       }
 
-      if (url === "/api/tasks/task-1/timeline-view?runtimeSessionId=ses-1") {
+      if (url === "/api/tasks/task-1/timeline-view?sessionId=task-session%3Atask-1%3Ases-1") {
         return {
           ok: true,
           data: {
@@ -930,7 +928,7 @@ describe("task execution trace route", () => {
                 id: "projection-status-1",
                 taskId: "task-1",
                 projectId: "proj-1",
-                sessionId: "task_session:task-1:ses-1",
+                sessionId: "task-session:task-1:ses-1",
                 itemKind: "status-transition",
                 itemRole: "completed",
                 title: "任务状态",
@@ -940,7 +938,7 @@ describe("task execution trace route", () => {
               },
             ],
             meta: {
-              readSource: "task-domain-projection",
+              readSource: "task-session-projection",
               complete: false,
               itemCount: 1,
             },
@@ -948,7 +946,7 @@ describe("task execution trace route", () => {
         };
       }
 
-      if (url === "/api/tasks/task-1/branches/ses-1/timeline?includeLineage=true") {
+      if (url === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true") {
         return {
           ok: true,
           data: {
@@ -1008,7 +1006,7 @@ describe("task execution trace route", () => {
       ]),
     );
     expect(cpFetchMock).toHaveBeenCalledWith(
-      "/api/tasks/task-1/branches/ses-1/timeline?includeLineage=true",
+      "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true",
       expect.anything(),
     );
     expect(getSessionMessagesMock).not.toHaveBeenCalled();
@@ -1055,14 +1053,14 @@ describe("task execution trace route", () => {
               updatedAt: "2026-03-22T10:00:03.000Z",
             },
             meta: {
-              readSource: "task-domain-projection",
+              readSource: "task-session-projection",
               complete: false,
             },
           },
         };
       }
 
-      if (url === "/api/tasks/task-1/timeline-view?runtimeSessionId=ses-1") {
+      if (url === "/api/tasks/task-1/timeline-view?sessionId=task-session%3Atask-1%3Ases-1") {
         return {
           ok: true,
           data: {
@@ -1071,7 +1069,7 @@ describe("task execution trace route", () => {
                 id: "projection-user-1",
                 taskId: "task-1",
                 projectId: "proj-1",
-                sessionId: "task_session:task-1:ses-1",
+                sessionId: "task-session:task-1:ses-1",
                 itemKind: "user-input",
                 itemRole: "user",
                 title: "user",
@@ -1084,7 +1082,7 @@ describe("task execution trace route", () => {
                 id: "projection-assistant-1",
                 taskId: "task-1",
                 projectId: "proj-1",
-                sessionId: "task_session:task-1:ses-1",
+                sessionId: "task-session:task-1:ses-1",
                 itemKind: "assistant-output",
                 itemRole: "assistant",
                 title: "assistant",
@@ -1095,7 +1093,7 @@ describe("task execution trace route", () => {
               },
             ],
             meta: {
-              readSource: "task-domain-projection",
+              readSource: "task-session-projection",
               complete: false,
               itemCount: 2,
             },
@@ -1103,7 +1101,7 @@ describe("task execution trace route", () => {
         };
       }
 
-      if (url === "/api/tasks/task-1/branches/ses-1/timeline?includeLineage=true") {
+      if (url === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true") {
         return {
           ok: true,
           data: {
@@ -1166,7 +1164,7 @@ describe("task execution trace route", () => {
     expect(getSessionMessagesMock).not.toHaveBeenCalled();
   });
 
-  test("merges runtime messages into status timeline when service timeline only contains empty conversation shells", async () => {
+  test("keeps complete service timeline even when conversation shells have no displayable text", async () => {
     cpFetchMock.mockImplementation(async (url: string) => {
       if (url === "/api/project-tree/tasks/task-1") {
         return {
@@ -1207,14 +1205,14 @@ describe("task execution trace route", () => {
               updatedAt: "2026-03-22T10:00:03.000Z",
             },
             meta: {
-              readSource: "task-domain-projection",
+              readSource: "task-session-projection",
               complete: false,
             },
           },
         };
       }
 
-      if (url === "/api/tasks/task-1/timeline-view?runtimeSessionId=ses-1") {
+      if (url === "/api/tasks/task-1/timeline-view?sessionId=task-session%3Atask-1%3Ases-1") {
         return {
           ok: true,
           data: {
@@ -1223,7 +1221,7 @@ describe("task execution trace route", () => {
                 id: "projection-user-1",
                 taskId: "task-1",
                 projectId: "proj-1",
-                sessionId: "task_session:task-1:ses-1",
+                sessionId: "task-session:task-1:ses-1",
                 itemKind: "user-input",
                 itemRole: "user",
                 title: "user",
@@ -1236,7 +1234,7 @@ describe("task execution trace route", () => {
                 id: "projection-assistant-1",
                 taskId: "task-1",
                 projectId: "proj-1",
-                sessionId: "task_session:task-1:ses-1",
+                sessionId: "task-session:task-1:ses-1",
                 itemKind: "assistant-output",
                 itemRole: "assistant",
                 title: "assistant",
@@ -1247,7 +1245,7 @@ describe("task execution trace route", () => {
               },
             ],
             meta: {
-              readSource: "task-domain-projection",
+              readSource: "task-session-projection",
               complete: false,
               itemCount: 2,
             },
@@ -1255,7 +1253,7 @@ describe("task execution trace route", () => {
         };
       }
 
-      if (url === "/api/tasks/task-1/branches/ses-1/timeline?includeLineage=true") {
+      if (url === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true") {
         return {
           ok: true,
           data: {
@@ -1289,13 +1287,13 @@ describe("task execution trace route", () => {
         };
       }
 
-      if (url === "/api/tasks/task-1/branches") {
+      if (url === "/api/tasks/task-1/sessions") {
         return {
           ok: true,
           data: {
             data: [
               {
-                id: "task_session:task-1:ses-1",
+                id: "task-session:task-1:ses-1",
                 taskId: "task-1",
                 runtimeSessionId: "ses-1",
                 parentRuntimeSessionId: null,
@@ -1326,7 +1324,7 @@ describe("task execution trace route", () => {
     expect(response.status).toBe(200);
     const payload = await response.json();
     expect(payload.timelineMeta).toMatchObject({
-      readSource: "opencode-runtime",
+      readSource: "conversation-table",
       cacheState: "complete",
     });
     expect(payload.timeline).toEqual(
@@ -1337,37 +1335,227 @@ describe("task execution trace route", () => {
           text: "任务进入 running 状态",
         }),
         expect.objectContaining({
-          id: "msg-3",
+          id: "empty-user-1",
           role: "user",
-          text: expect.stringContaining("第二轮用户输入"),
+          text: "",
         }),
         expect.objectContaining({
-          id: "msg-4",
+          id: "empty-assistant-1",
           role: "assistant",
-          text: "第二轮模型回复",
+          text: "",
         }),
       ]),
     );
-    expect(payload.messages).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "msg-3",
-          role: "user",
-          text: expect.stringContaining("第二轮用户输入"),
-        }),
-        expect.objectContaining({
-          id: "msg-4",
-          role: "assistant",
-          text: "第二轮模型回复",
-        }),
-      ]),
-    );
-    expect(payload.finalPrompt == null || payload.finalPrompt.includes("第二轮用户输入")).toBe(true);
-    expect(payload.latestResponse).toBe("第二轮模型回复");
-    expect(getSessionMessagesMock).toHaveBeenCalledWith("ses-1");
+    expect(payload.messages).toEqual([]);
+    expect(getSessionMessagesMock).not.toHaveBeenCalled();
   });
 
-  test("loads runtime messages when projection and compat timeline are both empty", async () => {
+  test("supplements placeholder service timeline conversation with task conversation messages", async () => {
+    cpFetchMock.mockImplementation(async (url: string) => {
+      if (url === "/api/project-tree/tasks/task-1") {
+        return {
+          ok: true,
+          data: {
+            id: "task-1",
+            projectId: "proj-1",
+            title: "trace task",
+            prompt: "第一轮用户输入",
+            status: "completed",
+            sessionId: "ses-1",
+            selectedModel: "github-copilot:gpt-5.4",
+            strategy: JSON.stringify({
+              selectedAgent: "oracle-enterprise",
+              hookExecutions: [],
+            }),
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/snapshot") {
+        return {
+          ok: true,
+          data: {
+            data: {
+              taskId: "task-1",
+              projectId: "proj-1",
+              currentStatus: "completed",
+              currentRunId: "task_run:task-1:ses-1",
+              currentSessionId: "ses-1",
+              latestResult: "placeholder result",
+              latestResultSummary: "placeholder result",
+              activeCandidateCount: 0,
+              completedCandidateCount: 1,
+              failedCandidateCount: 0,
+              totalChainSteps: 0,
+              completedChainSteps: 0,
+              updatedAt: "2026-03-22T10:00:05.000Z",
+            },
+            meta: {
+              readSource: "task-session-projection",
+              complete: false,
+            },
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/timeline-view?sessionId=task-session%3Atask-1%3Ases-1") {
+        return {
+          ok: true,
+          data: {
+            data: [],
+            meta: {
+              readSource: "task-session-projection",
+              complete: false,
+              itemCount: 0,
+            },
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true") {
+        return {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "fallback-user-1",
+                role: "user",
+                text: "user",
+                createdAt: "2026-03-22T10:00:01.000Z",
+              },
+              {
+                id: "fallback-assistant-1",
+                role: "assistant",
+                text: "assistant",
+                createdAt: "2026-03-22T10:00:03.000Z",
+              },
+              {
+                id: "fallback-status-1",
+                role: "system",
+                text: "任务进入 completed 状态",
+                createdAt: "2026-03-22T10:00:05.000Z",
+              },
+            ],
+            meta: {
+              readSource: "conversation-table",
+              cacheState: "complete",
+              complete: true,
+              itemCount: 3,
+            },
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/sessions") {
+        return {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "task-session:task-1:ses-1",
+                runtimeSessionId: "ses-1",
+                parentSessionId: null,
+              },
+            ],
+            meta: {
+              currentSessionId: "task-session:task-1:ses-1",
+            },
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/messages?sessionId=task-session%3Atask-1%3Ases-1") {
+        return {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "db-user-1",
+                runtimeMessageId: "runtime-user-1",
+                role: "user",
+                textContent: "补全后的用户输入",
+                createdAt: "2026-03-22T10:00:01.000Z",
+                rawPayload: {
+                  info: {
+                    id: "runtime-user-1",
+                    role: "user",
+                    time: { created: "2026-03-22T10:00:01.000Z" },
+                  },
+                  parts: [{ type: "text", text: "补全后的用户输入" }],
+                },
+              },
+              {
+                id: "db-assistant-1",
+                runtimeMessageId: "runtime-assistant-1",
+                role: "assistant",
+                textContent: "补全后的模型回复",
+                createdAt: "2026-03-22T10:00:03.000Z",
+                rawPayload: {
+                  info: {
+                    id: "runtime-assistant-1",
+                    role: "assistant",
+                    time: { created: "2026-03-22T10:00:03.000Z" },
+                  },
+                  parts: [{ type: "text", text: "补全后的模型回复" }],
+                },
+              },
+            ],
+            meta: {
+              readSource: "task-session-first",
+              cacheState: "complete",
+              complete: true,
+              itemCount: 2,
+              messageCount: 2,
+            },
+          },
+        };
+      }
+
+      return { ok: true, data: {} };
+    });
+
+    getSessionMessagesMock.mockRejectedValue(new Error("should not hit runtime messages"));
+
+    const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
+
+    const response = await taskRoutes.request("http://localhost/task-1/execution-trace", {
+      headers: {
+        Authorization: "Bearer test",
+      },
+    });
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload.timelineMeta).toMatchObject({
+      readSource: "conversation-table",
+      cacheState: "complete",
+      complete: true,
+    });
+    expect(payload.messages).toEqual([
+      expect.objectContaining({ role: "user", text: "补全后的用户输入" }),
+      expect.objectContaining({ role: "assistant", text: "补全后的模型回复" }),
+    ]);
+    expect(payload.timeline).toEqual([
+      expect.objectContaining({ role: "user", text: "补全后的用户输入" }),
+      expect.objectContaining({ role: "assistant", text: "补全后的模型回复" }),
+      expect.objectContaining({ role: "system", text: "任务进入 completed 状态" }),
+    ]);
+    expect(payload.segments).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "user-input", content: "补全后的用户输入" }),
+        expect.objectContaining({ type: "model-response", content: "补全后的模型回复" }),
+      ]),
+    );
+    expect(payload.finalPrompt).toBe("补全后的用户输入");
+    expect(payload.latestResponse).toBe("补全后的模型回复");
+    expect(cpFetchMock).toHaveBeenCalledWith(
+      "/api/tasks/task-1/messages?sessionId=task-session%3Atask-1%3Ases-1",
+      expect.anything(),
+    );
+    expect(getSessionMessagesMock).not.toHaveBeenCalled();
+  });
+
+  test("keeps an empty new-table trace when projection and session timeline are both empty", async () => {
     cpFetchMock.mockImplementation(async (url: string) => {
       if (url === "/api/project-tree/tasks/task-1") {
         return {
@@ -1408,20 +1596,20 @@ describe("task execution trace route", () => {
               updatedAt: "2026-03-22T10:00:03.000Z",
             },
             meta: {
-              readSource: "task-domain-projection",
+              readSource: "task-session-projection",
               complete: false,
             },
           },
         };
       }
 
-      if (url === "/api/tasks/task-1/timeline-view?runtimeSessionId=ses-1") {
+      if (url === "/api/tasks/task-1/timeline-view?sessionId=task-session%3Atask-1%3Ases-1") {
         return {
           ok: true,
           data: {
             data: [],
             meta: {
-              readSource: "task-domain-projection",
+              readSource: "task-session-projection",
               complete: false,
               itemCount: 0,
             },
@@ -1429,7 +1617,7 @@ describe("task execution trace route", () => {
         };
       }
 
-      if (url === "/api/tasks/task-1/branches/ses-1/timeline?includeLineage=true") {
+      if (url === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true") {
         return {
           ok: true,
           data: {
@@ -1443,13 +1631,13 @@ describe("task execution trace route", () => {
         };
       }
 
-      if (url === "/api/tasks/task-1/branches") {
+      if (url === "/api/tasks/task-1/sessions") {
         return {
           ok: true,
           data: {
             data: [
               {
-                id: "task_session:task-1:ses-1",
+                id: "task-session:task-1:ses-1",
                 taskId: "task-1",
                 runtimeSessionId: "ses-1",
                 parentRuntimeSessionId: null,
@@ -1480,43 +1668,18 @@ describe("task execution trace route", () => {
     expect(response.status).toBe(200);
     const payload = await response.json();
     expect(payload.timelineMeta).toMatchObject({
-      readSource: "opencode-runtime",
-      cacheState: "complete",
+      cacheState: "none",
+      complete: false,
+      itemCount: 0,
     });
-    expect(payload.timeline).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "msg-3",
-          role: "user",
-          text: expect.stringContaining("第二轮用户输入"),
-        }),
-        expect.objectContaining({
-          id: "msg-4",
-          role: "assistant",
-          text: "第二轮模型回复",
-        }),
-      ]),
-    );
-    expect(payload.messages).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "msg-3",
-          role: "user",
-          text: expect.stringContaining("第二轮用户输入"),
-        }),
-        expect.objectContaining({
-          id: "msg-4",
-          role: "assistant",
-          text: "第二轮模型回复",
-        }),
-      ]),
-    );
-    expect(payload.finalPrompt == null || payload.finalPrompt.includes("第二轮用户输入")).toBe(true);
-    expect(payload.latestResponse).toBe("第二轮模型回复");
-    expect(getSessionMessagesMock).toHaveBeenCalledWith("ses-1");
+    expect(payload.timeline).toEqual([]);
+    expect(payload.messages).toEqual([]);
+    expect(payload.finalPrompt).toBeNull();
+    expect(payload.latestResponse).toBe("snapshot only response");
+    expect(getSessionMessagesMock).not.toHaveBeenCalled();
   });
 
-  test("keeps projection incomplete meta when projection and service timeline are both unavailable", async () => {
+  test("keeps projection incomplete meta when service timeline is unavailable", async () => {
     cpFetchMock.mockImplementation(async (url: string) => {
       if (url === "/api/project-tree/tasks/task-1") {
         return {
@@ -1543,20 +1706,20 @@ describe("task execution trace route", () => {
           data: {
             data: null,
             meta: {
-              readSource: "task-domain-projection",
+              readSource: "task-session-projection",
               complete: false,
             },
           },
         };
       }
 
-      if (url === "/api/tasks/task-1/timeline-view?runtimeSessionId=ses-1") {
+      if (url === "/api/tasks/task-1/timeline-view?sessionId=task-session%3Atask-1%3Ases-1") {
         return {
           ok: true,
           data: {
             data: [],
             meta: {
-              readSource: "task-domain-projection",
+              readSource: "task-session-projection",
               complete: false,
               itemCount: 0,
             },
@@ -1564,7 +1727,7 @@ describe("task execution trace route", () => {
         };
       }
 
-      if (url === "/api/tasks/task-1/branches/ses-1/timeline?includeLineage=true") {
+      if (url === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true") {
         return {
           ok: false,
           status: 404,
@@ -1588,7 +1751,7 @@ describe("task execution trace route", () => {
     expect(response.status).toBe(200);
     const payload = await response.json();
     expect(payload.timelineMeta).toMatchObject({
-      readSource: "task-domain-projection",
+      readSource: "task-session-projection",
       complete: false,
       itemCount: 0,
     });
@@ -1620,7 +1783,7 @@ describe("task execution trace route", () => {
         };
       }
 
-      if (url === "/api/tasks/task-1/branches/ses-1/timeline?includeLineage=true") {
+      if (url === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true") {
         return {
           ok: true,
           data: {
@@ -1786,20 +1949,20 @@ describe("task execution trace route", () => {
               updatedAt: "2026-03-22T10:00:03.000Z",
             },
             meta: {
-              readSource: "task-domain-projection",
+              readSource: "task-session-projection",
               complete: false,
             },
           },
         };
       }
 
-      if (url === "/api/tasks/task-1/timeline-view?runtimeSessionId=ses-candidate&includeLineage=false") {
+      if (url === "/api/tasks/task-1/timeline-view?sessionId=task-session%3Atask-1%3Ases-candidate&includeLineage=false") {
         return {
           ok: true,
           data: {
             data: [],
             meta: {
-              readSource: "task-domain-projection",
+              readSource: "task-session-projection",
               complete: false,
               itemCount: 0,
             },
@@ -1807,7 +1970,7 @@ describe("task execution trace route", () => {
         };
       }
 
-      if (url === "/api/tasks/task-1/branches/ses-candidate/timeline") {
+      if (url === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-candidate/timeline") {
         return {
           ok: true,
           data: {
@@ -1843,9 +2006,117 @@ describe("task execution trace route", () => {
     expect(payload.latestResponse).toBeNull();
     expect(payload.messages).toEqual([]);
     expect(cpFetchMock).toHaveBeenCalledWith(
-      "/api/tasks/task-1/branches/ses-candidate/timeline",
+      "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-candidate/timeline",
       expect.anything(),
     );
+    expect(getSessionMessagesMock).not.toHaveBeenCalled();
+  });
+
+  test("keeps candidate trace empty when projection and session timeline are both empty", async () => {
+    cpFetchMock.mockImplementation(async (url: string) => {
+      if (url === "/api/project-tree/tasks/task-1") {
+        return {
+          ok: true,
+          data: {
+            id: "task-1",
+            projectId: "proj-1",
+            title: "trace task",
+            prompt: "第一轮用户输入",
+            status: "completed",
+            sessionId: "ses-main",
+            selectedModel: "github-copilot:gpt-5.4",
+            strategy: JSON.stringify({
+              selectedAgent: "oracle-enterprise",
+              hookExecutions: [],
+            }),
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/snapshot") {
+        return {
+          ok: true,
+          data: {
+            data: {
+              taskId: "task-1",
+              projectId: "proj-1",
+              currentStatus: "completed",
+              currentRunId: "task_run:task-1:ses-main",
+              currentSessionId: "ses-main",
+              latestResult: "主线最新结果",
+              latestResultSummary: "主线最新结果",
+              activeCandidateCount: 0,
+              completedCandidateCount: 2,
+              failedCandidateCount: 0,
+              totalChainSteps: 0,
+              completedChainSteps: 0,
+              updatedAt: "2026-03-22T10:00:03.000Z",
+            },
+            meta: {
+              readSource: "task-session-projection",
+              complete: false,
+            },
+          },
+        };
+      }
+
+      if (
+        url ===
+        "/api/tasks/task-1/timeline-view?sessionId=task-session%3Atask-1%3Ases-candidate-empty-projection&includeLineage=false"
+      ) {
+        return {
+          ok: true,
+          data: {
+            data: [],
+            meta: {
+              readSource: "task-session-projection",
+              complete: false,
+              itemCount: 0,
+            },
+          },
+        };
+      }
+
+      if (
+        url ===
+        "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-candidate-empty-projection/timeline"
+      ) {
+        return {
+          ok: true,
+          data: {
+            data: [],
+            meta: {
+              readSource: "task-session-projection",
+              complete: false,
+              itemCount: 0,
+            },
+          },
+        };
+      }
+
+      return { ok: true, data: {} };
+    });
+
+    const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
+
+    const response = await taskRoutes.request(
+      "http://localhost/task-1/execution-trace?sessionId=ses-candidate-empty-projection&includeLineage=false",
+      {
+        headers: {
+          Authorization: "Bearer test",
+        },
+      },
+    );
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload.latestResponse).toBeNull();
+    expect(payload.messages).toEqual([]);
+    expect(payload.timelineMeta).toMatchObject({
+      readSource: "task-session-projection",
+      complete: false,
+      itemCount: 0,
+    });
     expect(getSessionMessagesMock).not.toHaveBeenCalled();
   });
 
@@ -1890,20 +2161,20 @@ describe("task execution trace route", () => {
               updatedAt: "2026-03-22T10:00:03.000Z",
             },
             meta: {
-              readSource: "task-domain-projection",
+              readSource: "task-session-projection",
               complete: false,
             },
           },
         };
       }
 
-      if (url === "/api/tasks/task-1/timeline-view?runtimeSessionId=ses-main&includeLineage=false") {
+      if (url === "/api/tasks/task-1/timeline-view?sessionId=task-session%3Atask-1%3Ases-main&includeLineage=false") {
         return {
           ok: true,
           data: {
             data: [],
             meta: {
-              readSource: "task-domain-projection",
+              readSource: "task-session-projection",
               complete: false,
               itemCount: 0,
             },
@@ -1911,7 +2182,7 @@ describe("task execution trace route", () => {
         };
       }
 
-      if (url === "/api/tasks/task-1/branches/ses-main/timeline") {
+      if (url === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-main/timeline") {
         return {
           ok: true,
           data: {
@@ -1947,13 +2218,79 @@ describe("task execution trace route", () => {
     expect(payload.latestResponse).toBeNull();
     expect(payload.messages).toEqual([]);
     expect(cpFetchMock).toHaveBeenCalledWith(
-      "/api/tasks/task-1/branches/ses-main/timeline",
+      "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-main/timeline",
       expect.anything(),
     );
     expect(getSessionMessagesMock).not.toHaveBeenCalled();
   });
 
   test("respects includeLineage=false when timeline cache is partial", async () => {
+    cpFetchMock.mockImplementation(async (url: string) => {
+      if (url === "/api/project-tree/tasks/task-1") {
+        return {
+          ok: true,
+          data: {
+            id: "task-1",
+            projectId: "proj-1",
+            title: "trace task",
+            prompt: "第一轮用户输入",
+            status: "running",
+            sessionId: "ses-1",
+            selectedModel: "github-copilot:gpt-5.4",
+            strategy: JSON.stringify({
+              selectedAgent: "oracle-enterprise",
+              hookExecutions: [],
+            }),
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/snapshot") {
+        return {
+          ok: true,
+          data: {
+            data: null,
+            meta: {
+              readSource: "task-session-projection",
+              complete: false,
+            },
+          },
+        };
+      }
+
+      if (
+        url === "/api/tasks/task-1/timeline-view?sessionId=task-session%3Atask-1%3Ases-1&includeLineage=false"
+      ) {
+        return {
+          ok: true,
+          data: {
+            data: [],
+            meta: {
+              readSource: "task-session-projection",
+              complete: false,
+              itemCount: 0,
+            },
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline") {
+        return {
+          ok: true,
+          data: {
+            data: [],
+            meta: {
+              cacheState: "partial",
+              complete: false,
+              itemCount: 0,
+            },
+          },
+        };
+      }
+
+      return { ok: true, data: {} };
+    });
+
     const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
 
     const response = await taskRoutes.request(
@@ -1969,7 +2306,7 @@ describe("task execution trace route", () => {
     const payload = await response.json();
     expectNoLegacyTimelineReadSource(payload);
     expect(cpFetchMock).toHaveBeenCalledWith(
-      "/api/tasks/task-1/branches/ses-1/timeline",
+      "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline",
       expect.objectContaining({ authorization: "Bearer test" }),
     );
     expect(getSessionMessagesMock).not.toHaveBeenCalled();

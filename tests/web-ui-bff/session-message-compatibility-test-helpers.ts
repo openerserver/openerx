@@ -12,9 +12,19 @@ export function expectLineageMessagesRequest(
   includeLineage = true,
 ) {
   const suffix = includeLineage ? "?includeLineage=true" : "";
-  expect(requestPaths).toContain(
-    `/api/tasks/${taskId}/branches/${sessionId}/messages${suffix}`,
-  );
+  expect(requestPaths).toContain(`/api/tasks/${taskId}/sessions/${sessionId}/messages${suffix}`);
+}
+
+export function expectCanonicalSessionMessageRequests(
+  requestPaths: string[],
+  taskId: string,
+  sessionIds: string[],
+) {
+  for (const sessionId of sessionIds) {
+    expect(requestPaths).toContain(
+      `/api/tasks/${taskId}/sessions/${encodeURIComponent(`task-session:${taskId}:${sessionId}`)}/messages`,
+    );
+  }
 }
 
 export function expectRuntimeMessageReads(

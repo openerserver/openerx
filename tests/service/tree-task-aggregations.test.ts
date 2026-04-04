@@ -169,6 +169,14 @@ function taskBranchCompatNodeId(taskId: string, runtimeSessionId: string) {
   return `task_session:${taskId}:${runtimeSessionId}`;
 }
 
+function taskSessionId(taskId: string, runtimeSessionId: string) {
+  return `task-session:${taskId}:${runtimeSessionId}`;
+}
+
+function taskSessionMessageId(taskId: string, runtimeSessionId: string, runtimeMessageId: string) {
+  return `task-session-message:${taskSessionId(taskId, runtimeSessionId)}:${runtimeMessageId}`;
+}
+
 async function patchTaskNode(nodeId: string, contentText: string, patch: Record<string, unknown>) {
   const currentRows = await sql.unsafe<{ content_json: Record<string, unknown> | null }[]>(
     "SELECT content_json FROM project_tree_nodes WHERE id = $1",
@@ -313,6 +321,16 @@ afterAll(async () => {
 
   for (const taskId of createdTaskIds) {
     await sql.unsafe("DELETE FROM task_timeline_views WHERE task_id = $1", [taskId]);
+    await sql.unsafe("DELETE FROM task_usage_ledger_entries WHERE task_id = $1", [taskId]);
+    await sql.unsafe("DELETE FROM session_operations WHERE task_id = $1", [taskId]);
+    await sql.unsafe(
+      `DELETE FROM task_session_message_parts WHERE message_id IN (
+        SELECT id FROM task_session_messages WHERE task_id = $1
+      )`,
+      [taskId],
+    );
+    await sql.unsafe("DELETE FROM task_session_messages WHERE task_id = $1", [taskId]);
+    await sql.unsafe("DELETE FROM task_sessions WHERE task_id = $1", [taskId]);
     await sql.unsafe("DELETE FROM task_domain_events WHERE task_id = $1", [taskId]);
     await sql.unsafe(
       `DELETE FROM conversation_message_parts WHERE message_id IN (
@@ -353,6 +371,7 @@ afterAll(async () => {
   });
   if (nodeIds.length > 0) {
     const nodePlaceholders = nodeIds.map((_, index) => `$${index + 1}`).join(", ");
+    await sql.unsafe(`DELETE FROM task_sessions WHERE tree_node_id IN (${nodePlaceholders})`, nodeIds);
     await sql.unsafe(
       `DELETE FROM conversation_sessions WHERE tree_node_id IN (${nodePlaceholders})`,
       nodeIds,
@@ -414,7 +433,7 @@ describe("tree-backed task aggregations", () => {
     );
     expect(patchResponse.status).toBe(200);
 
-    const branchResponse = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/branches`, {
+    const branchResponse = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/sessions`, {
       method: "POST",
       body: JSON.stringify({
         runtimeSessionId,
@@ -426,7 +445,7 @@ describe("tree-backed task aggregations", () => {
     expect(branchResponse.status).toBe(201);
 
     const messageResponse = await authedRequest<{ ok: boolean }>(
-      `/api/tasks/${task.id}/branches/messages`,
+      `/api/tasks/${task.id}/sessions/messages`,
       {
         method: "POST",
         body: JSON.stringify({
@@ -541,7 +560,7 @@ describe("tree-backed task aggregations", () => {
     );
     expect(patchResponse.status).toBe(200);
 
-    const branchResponse = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/branches`, {
+    const branchResponse = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/sessions`, {
       method: "POST",
       body: JSON.stringify({
         runtimeSessionId,
@@ -553,7 +572,7 @@ describe("tree-backed task aggregations", () => {
     expect(branchResponse.status).toBe(201);
 
     const messageResponse = await authedRequest<{ ok: boolean }>(
-      `/api/tasks/${task.id}/branches/messages`,
+      `/api/tasks/${task.id}/sessions/messages`,
       {
         method: "POST",
         body: JSON.stringify({
@@ -624,7 +643,7 @@ describe("tree-backed task aggregations", () => {
     );
   });
 
-  test("task creation emits aggregate projection events but no legacy task.created domain event", async () => {
+  test("task creation does not emit legacy task domain events", async () => {
     const unique = Date.now();
     const task = await createTask(`projection-create-${unique}`);
 
@@ -633,15 +652,7 @@ describe("tree-backed task aggregations", () => {
       [task.id],
     );
 
-    expect(eventRows.length).toBeGreaterThan(0);
-    expect(eventRows).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          event_type: "task.aggregate.upserted",
-        }),
-      ]),
-    );
-    expect(eventRows.some((row) => row.event_type === "task.created")).toBe(false);
+    expect(eventRows).toEqual([]);
   });
 
   test("task snapshot routes expose filtered projection rows and single-task metadata", async () => {
@@ -751,7 +762,7 @@ describe("tree-backed task aggregations", () => {
     createdNodeIds.add(taskBranchCompatNodeId(task.id, rootSessionId));
     createdNodeIds.add(taskBranchCompatNodeId(task.id, forkSessionId));
 
-    const rootBranch = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/branches`, {
+    const rootBranch = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/sessions`, {
       method: "POST",
       body: JSON.stringify({
         runtimeSessionId: rootSessionId,
@@ -763,7 +774,7 @@ describe("tree-backed task aggregations", () => {
     expect(rootBranch.status).toBe(201);
 
     const rootMessage = await authedRequest<{ ok: boolean }>(
-      `/api/tasks/${task.id}/branches/messages`,
+      `/api/tasks/${task.id}/sessions/messages`,
       {
         method: "POST",
         body: JSON.stringify({
@@ -777,7 +788,7 @@ describe("tree-backed task aggregations", () => {
     );
     expect(rootMessage.status).toBe(201);
 
-    const forkBranch = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/branches`, {
+    const forkBranch = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/sessions`, {
       method: "POST",
       body: JSON.stringify({
         runtimeSessionId: forkSessionId,
@@ -791,7 +802,7 @@ describe("tree-backed task aggregations", () => {
     expect(forkBranch.status).toBe(201);
 
     const forkMessage = await authedRequest<{ ok: boolean }>(
-      `/api/tasks/${task.id}/branches/messages`,
+      `/api/tasks/${task.id}/sessions/messages`,
       {
         method: "POST",
         body: JSON.stringify({
@@ -819,22 +830,22 @@ describe("tree-backed task aggregations", () => {
         complete: boolean;
       };
     }>(
-      `/api/tasks/${task.id}/timeline-view?runtimeSessionId=${forkSessionId}&includeLineage=false`,
+      `/api/tasks/${task.id}/timeline-view?sessionId=${taskSessionId(task.id, forkSessionId)}&includeLineage=false`,
     );
 
     expect(leafOnlyResponse.status).toBe(200);
     expect(leafOnlyResponse.data.meta).toMatchObject({
-      readSource: "task-domain-projection",
+      readSource: "task-session-projection",
       includeLineage: false,
-      lineagePath: [forkSessionId],
+      lineagePath: [taskSessionId(task.id, forkSessionId)],
       cachedSessionCount: 1,
       complete: true,
     });
     expect(leafOnlyResponse.data.data).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          sessionId: taskBranchCompatNodeId(task.id, forkSessionId),
-          itemKind: "assistant-output",
+          sessionId: taskSessionId(task.id, forkSessionId),
+          itemKind: "message",
           displayText: `timeline fork text ${unique}`,
         }),
       ]),
@@ -858,29 +869,29 @@ describe("tree-backed task aggregations", () => {
         cachedSessionCount: number;
         complete: boolean;
       };
-    }>(`/api/tasks/${task.id}/timeline-view?runtimeSessionId=${forkSessionId}`);
+    }>(`/api/tasks/${task.id}/timeline-view?sessionId=${taskSessionId(task.id, forkSessionId)}`);
 
     expect(lineageResponse.status).toBe(200);
     expect(lineageResponse.data.meta).toMatchObject({
-      readSource: "task-domain-projection",
+      readSource: "task-session-projection",
       includeLineage: true,
-      lineagePath: [rootSessionId, forkSessionId],
+      lineagePath: [taskSessionId(task.id, rootSessionId), taskSessionId(task.id, forkSessionId)],
       cachedSessionCount: 2,
       complete: true,
     });
     expect(
       lineageResponse.data.data
-        .filter((item) => item.itemKind === "assistant-output")
+        .filter((item) => item.itemKind === "message")
         .map((item) => item.displayText),
     ).toEqual([`timeline root text ${unique}`, `timeline fork text ${unique}`]);
   });
 
-  test("task domain projector can rebuild projections from stored events", async () => {
+  test("legacy task projector does not rebuild session-first projections without stored domain events", async () => {
     const unique = Date.now();
     const task = await createTask(`projection-replay-${unique}`);
     const runtimeSessionId = `projection-replay-session-${unique}`;
 
-    const branchResponse = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/branches`, {
+    const branchResponse = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/sessions`, {
       method: "POST",
       body: JSON.stringify({
         runtimeSessionId,
@@ -892,7 +903,7 @@ describe("tree-backed task aggregations", () => {
     expect(branchResponse.status).toBe(201);
 
     const messageResponse = await authedRequest<{ ok: boolean }>(
-      `/api/tasks/${task.id}/branches/messages`,
+      `/api/tasks/${task.id}/sessions/messages`,
       {
         method: "POST",
         body: JSON.stringify({
@@ -936,37 +947,27 @@ describe("tree-backed task aggregations", () => {
       process.env.DATABASE_URL = previousDatabaseUrl;
       process.env.DATABASE_DIALECT = previousDatabaseDialect;
     }
-    expect(replayResult.replayedEventCount).toBeGreaterThanOrEqual(2);
+    expect(replayResult.replayedEventCount).toBe(0);
 
     const rebuiltSnapshotRows = await sql.unsafe<
       Array<{ current_status: string; current_session_id: string | null }>
     >("SELECT current_status, current_session_id FROM task_snapshots WHERE task_id = $1", [
       task.id,
     ]);
-    expect(rebuiltSnapshotRows).toEqual([
-      expect.objectContaining({
-        current_status: "pending",
-        current_session_id: runtimeSessionId,
-      }),
-    ]);
+    expect(rebuiltSnapshotRows).toEqual([]);
 
     const rebuiltTimelineRows = await sql.unsafe<
       Array<{ item_kind: string; display_text: string | null }>
     >("SELECT item_kind, display_text FROM task_timeline_views WHERE task_id = $1", [task.id]);
-    expect(rebuiltTimelineRows).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          item_kind: "assistant-output",
-          display_text: `projection replay text ${unique}`,
-        }),
-      ]),
-    );
+    expect(rebuiltTimelineRows).toEqual([]);
   });
 
-  test("task domain projector can rebuild projections for a whole project", async () => {
+  test("legacy task projector reports task scope for a project but does not rebuild session-first rows", async () => {
     const unique = Date.now();
-    const firstTask = await createTask(`projection-project-a-${unique}`);
-    const secondTask = await createTask(`projection-project-b-${unique}`);
+    const orgId = await getProjectOrgId(PROJECT_ID);
+    const projectRecord = await createProject(orgId, `${unique}`);
+    const firstTask = await createTaskForProject(projectRecord.id, `projection-project-a-${unique}`);
+    const secondTask = await createTaskForProject(projectRecord.id, `projection-project-b-${unique}`);
     const firstRuntimeSessionId = `projection-project-session-a-${unique}`;
     const secondRuntimeSessionId = `projection-project-session-b-${unique}`;
 
@@ -974,7 +975,7 @@ describe("tree-backed task aggregations", () => {
       [firstTask.id, firstRuntimeSessionId, "a"],
       [secondTask.id, secondRuntimeSessionId, "b"],
     ] as const) {
-      const branchResponse = await authedRequest<{ id: string }>(`/api/tasks/${taskId}/branches`, {
+      const branchResponse = await authedRequest<{ id: string }>(`/api/tasks/${taskId}/sessions`, {
         method: "POST",
         body: JSON.stringify({
           runtimeSessionId,
@@ -986,7 +987,7 @@ describe("tree-backed task aggregations", () => {
       expect(branchResponse.status).toBe(201);
 
       const messageResponse = await authedRequest<{ ok: boolean }>(
-        `/api/tasks/${taskId}/branches/messages`,
+        `/api/tasks/${taskId}/sessions/messages`,
         {
           method: "POST",
           body: JSON.stringify({
@@ -1014,8 +1015,8 @@ describe("tree-backed task aggregations", () => {
       expect(messageResponse.status).toBe(201);
     }
 
-    await sql.unsafe("DELETE FROM task_timeline_views WHERE project_id = $1", [PROJECT_ID]);
-    await sql.unsafe("DELETE FROM task_snapshots WHERE project_id = $1", [PROJECT_ID]);
+    await sql.unsafe("DELETE FROM task_timeline_views WHERE project_id = $1", [projectRecord.id]);
+    await sql.unsafe("DELETE FROM task_snapshots WHERE project_id = $1", [projectRecord.id]);
 
     const previousDatabaseUrl = process.env.DATABASE_URL;
     const previousDatabaseDialect = process.env.DATABASE_DIALECT;
@@ -1026,33 +1027,28 @@ describe("tree-backed task aggregations", () => {
       const { replayTaskDomainProjectionsByProject } = await import(
         "../../control-plane/service/src/modules/tasks/task-domain-projector"
       );
-      replayResult = await replayTaskDomainProjectionsByProject(PROJECT_ID);
+      replayResult = await replayTaskDomainProjectionsByProject(projectRecord.id);
     } finally {
       process.env.DATABASE_URL = previousDatabaseUrl;
       process.env.DATABASE_DIALECT = previousDatabaseDialect;
     }
 
-    expect(replayResult.replayedTaskCount).toBeGreaterThanOrEqual(2);
-    expect(replayResult.replayedEventCount).toBeGreaterThanOrEqual(4);
+    expect(replayResult.replayedTaskCount).toBe(2);
+    expect(replayResult.replayedEventCount).toBe(0);
 
     const rebuiltSnapshotRows = await sql.unsafe<Array<{ task_id: string }>>(
       "SELECT task_id FROM task_snapshots WHERE project_id = $1 ORDER BY task_id ASC",
-      [PROJECT_ID],
+      [projectRecord.id],
     );
-    expect(rebuiltSnapshotRows).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ task_id: firstTask.id }),
-        expect.objectContaining({ task_id: secondTask.id }),
-      ]),
-    );
+    expect(rebuiltSnapshotRows).toEqual([]);
   });
 
-  test("projection replay API rebuilds a task when scope and reason are provided", async () => {
+  test("projection replay API reports zero events for session-first task history", async () => {
     const unique = Date.now();
     const task = await createTask(`projection-route-task-${unique}`);
     const runtimeSessionId = `projection-route-session-${unique}`;
 
-    const branchResponse = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/branches`, {
+    const branchResponse = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/sessions`, {
       method: "POST",
       body: JSON.stringify({
         runtimeSessionId,
@@ -1064,7 +1060,7 @@ describe("tree-backed task aggregations", () => {
     expect(branchResponse.status).toBe(201);
 
     const messageResponse = await authedRequest<{ ok: boolean }>(
-      `/api/tasks/${task.id}/branches/messages`,
+      `/api/tasks/${task.id}/sessions/messages`,
       {
         method: "POST",
         body: JSON.stringify({
@@ -1125,7 +1121,7 @@ describe("tree-backed task aggregations", () => {
 
     expect(replayResponse.status).toBe(200);
     expect(replayResponse.data.scope).toBe("task");
-    expect(replayResponse.data.replayedEventCount).toBeGreaterThanOrEqual(2);
+    expect(replayResponse.data.replayedEventCount).toBe(0);
 
     const rebuiltTimelineRows = await sql.unsafe<
       Array<{
@@ -1137,32 +1133,7 @@ describe("tree-backed task aggregations", () => {
       "SELECT item_kind, display_text, metadata_json FROM task_timeline_views WHERE task_id = $1 ORDER BY created_at ASC",
       [task.id],
     );
-    expect(rebuiltTimelineRows).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          item_kind: "assistant-output",
-          display_text: `projection route text ${unique}`,
-        }),
-        expect.objectContaining({
-          item_kind: "tool-call",
-          display_text: expect.stringContaining("query: task domain projections"),
-        }),
-        expect.objectContaining({
-          item_kind: "file-reference",
-          display_text: "docs/task-domain-radical-storage-redesign-plan.md:12-26",
-        }),
-        expect.objectContaining({
-          item_kind: "diff",
-          display_text: "control-plane/service/src/modules/tasks/task-domain-projector.ts | +14 -3",
-        }),
-      ]),
-    );
-    expect(
-      rebuiltTimelineRows.find((row) => row.item_kind === "tool-call")?.metadata_json,
-    ).toMatchObject({
-      toolName: "search_code",
-      argumentsSummary: expect.stringContaining("includePattern"),
-    });
+    expect(rebuiltTimelineRows).toEqual([]);
   });
 
   test("projection replay API enforces explicit project confirmation", async () => {
@@ -1181,12 +1152,14 @@ describe("tree-backed task aggregations", () => {
     expect(rejected.status).toBe(400);
   });
 
-  test("projection replay API rebuilds a whole project with confirmation", async () => {
+  test("projection replay API accepts confirmed project scope but reports zero legacy events for session-first tasks", async () => {
     const unique = Date.now();
-    const task = await createTask(`projection-route-project-${unique}`);
+    const orgId = await getProjectOrgId(PROJECT_ID);
+    const projectRecord = await createProject(orgId, `${unique}`);
+    const task = await createTaskForProject(projectRecord.id, `projection-route-project-${unique}`);
     const runtimeSessionId = `projection-route-project-session-${unique}`;
 
-    const branchResponse = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/branches`, {
+    const branchResponse = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/sessions`, {
       method: "POST",
       body: JSON.stringify({
         runtimeSessionId,
@@ -1197,8 +1170,8 @@ describe("tree-backed task aggregations", () => {
     });
     expect(branchResponse.status).toBe(201);
 
-    await sql.unsafe("DELETE FROM task_timeline_views WHERE project_id = $1", [PROJECT_ID]);
-    await sql.unsafe("DELETE FROM task_snapshots WHERE project_id = $1", [PROJECT_ID]);
+    await sql.unsafe("DELETE FROM task_timeline_views WHERE project_id = $1", [projectRecord.id]);
+    await sql.unsafe("DELETE FROM task_snapshots WHERE project_id = $1", [projectRecord.id]);
 
     const replayResponse = await authedRequest<{
       scope: string;
@@ -1209,7 +1182,7 @@ describe("tree-backed task aggregations", () => {
       method: "POST",
       body: JSON.stringify({
         scope: "project",
-        projectId: PROJECT_ID,
+        projectId: projectRecord.id,
         confirm: true,
         reason: "rebuild project projection after projector API hardening",
       }),
@@ -1219,20 +1192,21 @@ describe("tree-backed task aggregations", () => {
     expect(replayResponse.data.scope).toBe("project");
     expect(replayResponse.data.confirmed).toBe(true);
     expect(replayResponse.data.replayedTaskCount).toBeGreaterThanOrEqual(1);
-    expect(replayResponse.data.replayedEventCount).toBeGreaterThanOrEqual(1);
+    expect(replayResponse.data.replayedEventCount).toBe(0);
   });
 
-  test("branch and message persistence dual-writes conversation domain tables", async () => {
+  test("session and message persistence writes session-first tables and projections without legacy domain events", async () => {
     const unique = Date.now();
     const task = await createTask(`conversation-dual-write-${unique}`);
     const runtimeSessionId = `conversation-session-${unique}`;
     const branchName = `branch-${unique}`;
+    const persistedSessionId = taskSessionId(task.id, runtimeSessionId);
 
     const branchResponse = await authedRequest<{
       id: string;
       taskId: string;
       runtimeSessionId: string;
-    }>(`/api/tasks/${task.id}/branches`, {
+    }>(`/api/tasks/${task.id}/sessions`, {
       method: "POST",
       body: JSON.stringify({
         runtimeSessionId,
@@ -1265,7 +1239,7 @@ describe("tree-backed task aggregations", () => {
     };
 
     const messageResponse = await authedRequest<{ ok: boolean }>(
-      `/api/tasks/${task.id}/branches/messages`,
+      `/api/tasks/${task.id}/sessions/messages`,
       {
         method: "POST",
         body: JSON.stringify({
@@ -1281,18 +1255,18 @@ describe("tree-backed task aggregations", () => {
         id: string;
         runtime_session_id: string;
         branch_name: string | null;
-        is_active: boolean;
+        execution_status: string;
       }>
     >(
-      "SELECT id, runtime_session_id, branch_name, is_active FROM conversation_sessions WHERE task_id = $1",
+      "SELECT id, runtime_session_id, branch_name, execution_status FROM task_sessions WHERE task_id = $1",
       [task.id],
     );
     expect(sessionRows).toEqual([
       expect.objectContaining({
-        id: `task_session:${task.id}:${runtimeSessionId}`,
+        id: persistedSessionId,
         runtime_session_id: runtimeSessionId,
         branch_name: branchName,
-        is_active: true,
+        execution_status: "running",
       }),
     ]);
 
@@ -1304,13 +1278,13 @@ describe("tree-backed task aggregations", () => {
         text_content: string | null;
       }>
     >(
-      "SELECT id, session_id, runtime_message_id, text_content FROM conversation_messages WHERE task_id = $1",
+      "SELECT id, session_id, runtime_message_id, text_content FROM task_session_messages WHERE task_id = $1",
       [task.id],
     );
     expect(messageRows).toEqual([
       expect.objectContaining({
-        id: `task_session:${task.id}:${runtimeSessionId}:msg-${unique}`,
-        session_id: `task_session:${task.id}:${runtimeSessionId}`,
+        id: taskSessionMessageId(task.id, runtimeSessionId, `msg-${unique}`),
+        session_id: persistedSessionId,
         runtime_message_id: `msg-${unique}`,
         text_content: `conversation text ${unique}`,
       }),
@@ -1319,12 +1293,12 @@ describe("tree-backed task aggregations", () => {
     const partRows = await sql.unsafe<
       Array<{ message_id: string; part_type: string; text_content: string | null }>
     >(
-      "SELECT message_id, part_type, text_content FROM conversation_message_parts WHERE message_id = $1",
-      [`task_session:${task.id}:${runtimeSessionId}:msg-${unique}`],
+      "SELECT message_id, part_type, text_content FROM task_session_message_parts WHERE message_id = $1",
+      [taskSessionMessageId(task.id, runtimeSessionId, `msg-${unique}`)],
     );
     expect(partRows).toEqual([
       expect.objectContaining({
-        message_id: `task_session:${task.id}:${runtimeSessionId}:msg-${unique}`,
+        message_id: taskSessionMessageId(task.id, runtimeSessionId, `msg-${unique}`),
         part_type: "text",
         text_content: `conversation text ${unique}`,
       }),
@@ -1352,12 +1326,12 @@ describe("tree-backed task aggregations", () => {
       }>
     >(
       "SELECT message_id, item_kind, item_role, display_text FROM task_timeline_views WHERE message_id = $1",
-      [`task_session:${task.id}:${runtimeSessionId}:msg-${unique}`],
+      [taskSessionMessageId(task.id, runtimeSessionId, `msg-${unique}`)],
     );
     expect(timelineRows).toEqual([
       expect.objectContaining({
-        message_id: `task_session:${task.id}:${runtimeSessionId}:msg-${unique}`,
-        item_kind: "assistant-output",
+        message_id: taskSessionMessageId(task.id, runtimeSessionId, `msg-${unique}`),
+        item_kind: "message",
         item_role: "assistant",
         display_text: `conversation text ${unique}`,
       }),
@@ -1367,25 +1341,15 @@ describe("tree-backed task aggregations", () => {
       "SELECT event_type, session_id FROM task_domain_events WHERE task_id = $1 ORDER BY created_at ASC",
       [task.id],
     );
-    expect(eventRows).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          event_type: "conversation.session.upserted",
-          session_id: `task_session:${task.id}:${runtimeSessionId}`,
-        }),
-        expect.objectContaining({
-          event_type: "conversation.message.upserted",
-          session_id: `task_session:${task.id}:${runtimeSessionId}`,
-        }),
-      ]),
-    );
+    expect(eventRows).toEqual([]);
   });
 
-  test("agent runs and runtime ledgers bridge into task run facts", async () => {
+  test("agent runs and runtime ledgers sync session operations and leave legacy run ids empty", async () => {
     const unique = Date.now();
     const task = await createTask(`task-run-dual-write-${unique}`);
     const agentRunId = `agent-run-dual-write-${unique}`;
     const runtimeSessionId = `runtime-session-dual-write-${unique}`;
+    const persistedSessionId = taskSessionId(task.id, runtimeSessionId);
     const stepId = `ledger-step-dual-write-${unique}`;
 
     const createRunResponse = await authedRequest<{ id: string; status: string }>(
@@ -1418,60 +1382,64 @@ describe("tree-backed task aggregations", () => {
     );
     expect(patchRunResponse.status).toBe(200);
 
-    const taskRunRows = await sql.unsafe<
+    const sessionOperationRows = await sql.unsafe<
       Array<{
         id: string;
-        orchestration_kind: string;
-        status: string;
-        root_session_id: string | null;
-        result_text: string | null;
+        session_id: string;
+        operation_kind: string;
+        execution_status: string;
+        output_text: string | null;
       }>
     >(
-      "SELECT id, orchestration_kind, status, root_session_id, result_text FROM task_runs WHERE task_id = $1",
+      "SELECT id, session_id, operation_kind, execution_status, output_text FROM session_operations WHERE task_id = $1",
       [task.id],
     );
-    expect(taskRunRows).toEqual([
+    expect(sessionOperationRows).toEqual([
       expect.objectContaining({
-        id: `task_run:${task.id}:${runtimeSessionId}`,
-        orchestration_kind: "single",
-        status: "completed",
-        root_session_id: runtimeSessionId,
-        result_text: `task run completed ${unique}`,
+        id: `session-operation:${task.id}:${agentRunId}`,
+        session_id: persistedSessionId,
+        operation_kind: "executor",
+        execution_status: "complete",
+        output_text: `task run completed ${unique}`,
       }),
     ]);
 
-    const taskRunNodeRows = await sql.unsafe<
+    const usageLedgerRows = await sql.unsafe<
       Array<{
         id: string;
-        run_id: string;
-        node_kind: string;
-        agent_run_id: string | null;
         session_id: string | null;
-        status: string;
+        operation_id: string | null;
+        entry_kind: string;
+        output_tokens: number;
       }>
     >(
-      "SELECT id, run_id, node_kind, agent_run_id, session_id, status FROM task_run_nodes WHERE agent_run_id = $1",
-      [agentRunId],
+      "SELECT id, session_id, operation_id, entry_kind, output_tokens FROM task_usage_ledger_entries WHERE task_id = $1 ORDER BY created_at ASC",
+      [task.id],
     );
-    expect(taskRunNodeRows).toEqual([
+    expect(usageLedgerRows).toEqual([
       expect.objectContaining({
-        id: `task_run:${task.id}:${runtimeSessionId}:node:${agentRunId}`,
-        run_id: `task_run:${task.id}:${runtimeSessionId}`,
-        node_kind: "execution",
-        agent_run_id: agentRunId,
-        session_id: runtimeSessionId,
-        status: "completed",
+        session_id: persistedSessionId,
+        operation_id: `session-operation:${task.id}:${agentRunId}`,
+        entry_kind: "model_request",
+        output_tokens: "21",
+      }),
+      expect.objectContaining({
+        session_id: persistedSessionId,
+        operation_id: `session-operation:${task.id}:${agentRunId}`,
+        entry_kind: "model_request",
+        output_tokens: "42",
       }),
     ]);
 
     const agentRunRows = await sql.unsafe<
-      Array<{ id: string; run_id: string | null; run_node_id: string | null }>
-    >("SELECT id, run_id, run_node_id FROM agent_runs WHERE id = $1", [agentRunId]);
+      Array<{ id: string; session_id: string | null; run_id: string | null; run_node_id: string | null }>
+    >("SELECT id, session_id, run_id, run_node_id FROM agent_runs WHERE id = $1", [agentRunId]);
     expect(agentRunRows).toEqual([
       expect.objectContaining({
         id: agentRunId,
-        run_id: `task_run:${task.id}:${runtimeSessionId}`,
-        run_node_id: `task_run:${task.id}:${runtimeSessionId}:node:${agentRunId}`,
+        session_id: runtimeSessionId,
+        run_id: null,
+        run_node_id: null,
       }),
     ]);
 
@@ -1491,7 +1459,7 @@ describe("tree-backed task aggregations", () => {
       expect.objectContaining({
         task_id: task.id,
         current_status: "completed",
-        current_run_id: `task_run:${task.id}:${runtimeSessionId}`,
+        current_run_id: null,
         current_session_id: runtimeSessionId,
         latest_result: `task run completed ${unique}`,
       }),
@@ -1499,23 +1467,16 @@ describe("tree-backed task aggregations", () => {
 
     const timelineRows = await sql.unsafe<
       Array<{
-        run_node_id: string | null;
+        operation_id: string | null;
         item_kind: string;
         item_role: string | null;
         display_text: string | null;
       }>
     >(
-      "SELECT run_node_id, item_kind, item_role, display_text FROM task_timeline_views WHERE run_node_id = $1",
-      [`task_run:${task.id}:${runtimeSessionId}:node:${agentRunId}`],
+      "SELECT operation_id, item_kind, item_role, display_text FROM task_timeline_views WHERE task_id = $1 ORDER BY created_at ASC",
+      [task.id],
     );
-    expect(timelineRows).toEqual([
-      expect.objectContaining({
-        run_node_id: `task_run:${task.id}:${runtimeSessionId}:node:${agentRunId}`,
-        item_kind: "run-node",
-        item_role: "completed",
-        display_text: `task run completed ${unique}`,
-      }),
-    ]);
+    expect(timelineRows).toEqual([]);
 
     const eventRows = await sql.unsafe<
       Array<{ event_type: string; run_id: string | null; run_node_id: string | null }>
@@ -1523,20 +1484,7 @@ describe("tree-backed task aggregations", () => {
       "SELECT event_type, run_id, run_node_id FROM task_domain_events WHERE task_id = $1 ORDER BY created_at ASC",
       [task.id],
     );
-    expect(eventRows).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          event_type: "task.aggregate.upserted",
-          run_id: null,
-          run_node_id: null,
-        }),
-        expect.objectContaining({
-          event_type: "task.run-node.upserted",
-          run_id: `task_run:${task.id}:${runtimeSessionId}`,
-          run_node_id: `task_run:${task.id}:${runtimeSessionId}:node:${agentRunId}`,
-        }),
-      ]),
-    );
+    expect(eventRows).toEqual([]);
 
     const ledgerSyncResponse = await authedRequest<{
       ledger: { id: string } | null;
@@ -1585,8 +1533,8 @@ describe("tree-backed task aggregations", () => {
     expect(ledgerRows).toEqual([
       expect.objectContaining({
         id: ledgerSyncResponse.data.ledger?.id,
-        run_id: `task_run:${task.id}:${runtimeSessionId}`,
-        run_node_id: `task_run:${task.id}:${runtimeSessionId}:node:${agentRunId}`,
+        run_id: null,
+        run_node_id: null,
       }),
     ]);
 
@@ -1596,8 +1544,8 @@ describe("tree-backed task aggregations", () => {
     expect(ledgerStepRows).toEqual([
       expect.objectContaining({
         id: stepId,
-        run_id: `task_run:${task.id}:${runtimeSessionId}`,
-        run_node_id: `task_run:${task.id}:${runtimeSessionId}:node:${agentRunId}`,
+        run_id: null,
+        run_node_id: null,
       }),
     ]);
   });

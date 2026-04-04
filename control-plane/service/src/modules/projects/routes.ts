@@ -7,7 +7,6 @@ import {
   type ProjectSettings,
   type ProjectTreeLinkType,
   type ProjectTreeNodeType,
-  agentRuns,
   approvalTickets,
   auditEvents,
   budgetConfigs,
@@ -455,20 +454,9 @@ async function resolveRuntimeUsageRunBridge(body: SyncRuntimeUsageLedgerPayload)
     };
   }
 
-  if (!body.agentRunId) {
-    return {
-      runId: null,
-      runNodeId: null,
-    };
-  }
-
-  const agentRun = await db.query.agentRuns.findFirst({
-    where: eq(agentRuns.id, body.agentRunId),
-  });
-
   return {
-    runId: agentRun?.runId ?? null,
-    runNodeId: agentRun?.runNodeId ?? null,
+    runId: null,
+    runNodeId: null,
   };
 }
 
@@ -855,6 +843,36 @@ interface OverviewTaskSummary {
   lastActivityAt: string | null;
 }
 
+function mapOverviewLifecycleStatusToTaskStatus(
+  lifecycleStatus: string | null | undefined,
+) {
+  if (lifecycleStatus === "done") {
+    return "completed";
+  }
+  if (lifecycleStatus === "active") {
+    return "running";
+  }
+  if (lifecycleStatus === "archived") {
+    return "cancelled";
+  }
+
+  return "pending";
+}
+
+function normalizeOverviewTaskStatus(args: {
+  currentExecutionStatus?: string | null;
+  lifecycleStatus?: string | null;
+  fallbackStatus?: string | null;
+}) {
+  return args.currentExecutionStatus ?? args.fallbackStatus ?? mapOverviewLifecycleStatusToTaskStatus(args.lifecycleStatus);
+}
+
+function normalizeOverviewExecutionMode(value: string | null | undefined) {
+  return value === "single" || value === "parallel" || value === "sequential-chain"
+    ? value
+    : null;
+}
+
 function parseOverviewParams(c: {
   req: { query: (key: string) => string | undefined };
 }): OverviewQueryParams {
@@ -965,7 +983,8 @@ function mergeOverviewTaskSummaries(args: {
   tasks: Array<{
     id: string;
     projectId: string;
-    status: string;
+    status: string | null;
+    lifecycleStatus: string | null;
     createdAt: string;
     startedAt: string | null;
     finishedAt: string | null;
@@ -973,9 +992,10 @@ function mergeOverviewTaskSummaries(args: {
   }>;
   snapshots: Array<{
     taskId: string;
-    currentStatus: string;
+    currentExecutionStatus: string | null;
+    lifecycleStatus: string | null;
     currentSessionId: string | null;
-    orchestrationKind: string | null;
+    currentExecutionMode: string | null;
     lastActivityAt: string | null;
   }>;
 }) {
@@ -985,7 +1005,11 @@ function mergeOverviewTaskSummaries(args: {
 
   return args.tasks.map((task) => {
     const snapshot = snapshotByTaskId.get(task.id);
-    const status = snapshot?.currentStatus ?? task.status;
+    const status = normalizeOverviewTaskStatus({
+      currentExecutionStatus: snapshot?.currentExecutionStatus,
+      lifecycleStatus: snapshot?.lifecycleStatus ?? task.lifecycleStatus,
+      fallbackStatus: task.status,
+    });
     const lastActivityAt =
       snapshot?.lastActivityAt ??
       task.finishedAt ??
@@ -998,7 +1022,7 @@ function mergeOverviewTaskSummaries(args: {
       projectId: task.projectId,
       status,
       currentSessionId: snapshot?.currentSessionId ?? null,
-      orchestrationKind: snapshot?.orchestrationKind ?? null,
+      orchestrationKind: normalizeOverviewExecutionMode(snapshot?.currentExecutionMode),
       createdAt: task.createdAt,
       startedAt: task.startedAt,
       finishedAt:
@@ -1072,7 +1096,8 @@ async function loadOverviewDependencies(projectIds: string[]) {
     tasks: allTasks.map((task) => ({
       id: task.id,
       projectId: task.projectId,
-      status: task.status,
+        status: task.status ?? null,
+        lifecycleStatus: task.lifecycleStatus,
       createdAt: task.createdAt,
       startedAt: task.startedAt ?? null,
       finishedAt: task.finishedAt ?? null,
@@ -1080,9 +1105,10 @@ async function loadOverviewDependencies(projectIds: string[]) {
     })),
     snapshots: allTaskSnapshots.map((snapshot) => ({
       taskId: snapshot.taskId,
-      currentStatus: snapshot.currentStatus,
+        currentExecutionStatus: snapshot.currentExecutionStatus ?? null,
+        lifecycleStatus: snapshot.lifecycleStatus,
       currentSessionId: snapshot.currentSessionId ?? null,
-      orchestrationKind: snapshot.orchestrationKind ?? null,
+        currentExecutionMode: snapshot.currentExecutionMode ?? null,
       lastActivityAt: snapshot.lastActivityAt ?? null,
     })),
   });

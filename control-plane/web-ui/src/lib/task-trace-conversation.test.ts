@@ -64,7 +64,7 @@ describe("resolveTraceTimelineItems", () => {
                 state: {
                   status: "completed",
                   input: { pattern: "src/pages/**/*.vue" },
-                  output: "src/pages/TaskDetail.vue",
+                  output: "src/pages/TaskDetailV3.vue",
                 },
               },
             ],
@@ -88,8 +88,8 @@ describe("resolveTraceTimelineItems", () => {
                 tool: "read",
                 state: {
                   status: "completed",
-                  input: { filePath: "control-plane/web-ui/src/pages/TaskDetail.vue" },
-                  output: "<path>control-plane/web-ui/src/pages/TaskDetail.vue</path>",
+                  input: { filePath: "control-plane/web-ui/src/pages/TaskDetailV3.vue" },
+                  output: "<path>control-plane/web-ui/src/pages/TaskDetailV3.vue</path>",
                 },
               },
             ],
@@ -134,14 +134,14 @@ describe("resolveTraceTimelineItems", () => {
       sourceEventTypes: ["runtime:tool-result:glob"],
     });
     expect(items[2].text).toContain("状态: 完成");
-    expect(items[2].text).toContain("src/pages/TaskDetail.vue");
+    expect(items[2].text).toContain("src/pages/TaskDetailV3.vue");
     expect(items[2].raw).toMatchObject({
       source: "trace-message-tool-result",
       toolCallId: "call-1",
       toolName: "glob",
       result: {
         status: "completed",
-        output: "src/pages/TaskDetail.vue",
+        output: "src/pages/TaskDetailV3.vue",
       },
     });
     expect(items[1].raw).not.toEqual(items[2].raw);
@@ -246,8 +246,8 @@ describe("resolveTraceTimelineItems", () => {
                   tool: "read",
                   state: {
                     status: "completed",
-                    input: { filePath: "control-plane/web-ui/src/pages/TaskDetail.vue" },
-                    output: "<path>control-plane/web-ui/src/pages/TaskDetail.vue</path>",
+                    input: { filePath: "control-plane/web-ui/src/pages/TaskDetailV3.vue" },
+                    output: "<path>control-plane/web-ui/src/pages/TaskDetailV3.vue</path>",
                   },
                 },
               ],

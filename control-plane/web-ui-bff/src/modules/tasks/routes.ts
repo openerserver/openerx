@@ -47,6 +47,7 @@ import type { JWTPayload } from "../../middleware/auth";
 import {
   type RuntimePermissionReply,
   type RuntimePermissionRequest,
+  buildExecutionContext,
   continueSession,
   createSession,
   ensureAgentRunForSession,
@@ -58,30 +59,23 @@ import {
   terminateAgent,
 } from "../agent-control/opencode-adapter";
 import { createAgentRunRecord, recordAgentAudit } from "../agent-control/run-persistence";
-import {
-  executeLifecycleHooks,
-  mergeStageAndStrategyHooks,
-  parseStageHooks,
-} from "../hooks/lifecycle-hooks";
+import { executeLifecycleHooks } from "../hooks/lifecycle-hooks";
 import { buildPipelineStageUpdatedEvents } from "../realtime/pipeline-events";
 import { sseAggregator } from "../realtime/sse-aggregator";
 import { wsBroadcaster } from "../realtime/ws-broadcaster";
 import { reconcileRunningTasksOnStartup } from "./reconcile";
 import {
   createProjectionTraceTimelineMeta,
+  fetchTaskConversationMessages,
   normalizeTaskSessionTimelineMeta,
-  shouldReplaceTraceTimeline,
+  persistTaskSessionMessageSnapshot,
   type TaskSessionTimelineMeta,
 } from "./task-session-compat";
 import {
-  buildStageArtifactSummary,
   buildWorkflowExecutionPromptSnapshot,
-  fetchCurrentStageHooks,
-  persistWorkflowStageExecutionOutcome,
 } from "./workflow-stage-execution";
 import { buildTaskMemberViewModel } from "./member-view";
-import { ensureTaskWorkflowStarted } from "./workflow-sync";
-import { buildTaskWorkflowViewModel, fetchTaskWorkflowState } from "./workflow-view";
+import { buildTaskWorkflowViewModel } from "./workflow-view";
 
 // ── Task Routes (BFF) ──────────────────────────────────────────────
 
@@ -217,6 +211,7 @@ interface UpsertTaskSessionLineageInput {
   branchName?: string;
   sourceType?: "root" | "fork" | "sub_session";
   isActive: boolean;
+  operationId?: string;
 }
 
 async function fetchTaskSessionLineageRecords(taskId: string, authorization: string) {
@@ -355,6 +350,7 @@ async function upsertTaskSessionLineageRecord(
       branchName: input.branchName,
       sourceType: input.sourceType,
       isActive: input.isActive,
+      operationId: input.operationId,
     },
     authorization,
   });
@@ -456,6 +452,7 @@ type IdentitySnapshot = Record<string, unknown>;
 interface PreparedExecutionContext {
   task: ExecutableTask;
   authorization: string;
+  operationId: string;
   identitySnapshot: IdentitySnapshot;
   classification: IntentClassification;
   executionAgent: string;
@@ -897,7 +894,7 @@ async function registerParallelTaskSessions(
   task: Pick<ExecutableTask, "id" | "title" | "sessionId">,
   plan: RuntimePlan,
   authorization: string,
-  options?: { parentSessionId?: string },
+  options?: { parentSessionId?: string; operationId?: string },
 ) {
   const candidatesWithSessions = plan.candidates
     .map((candidate, index) => ({
@@ -916,7 +913,7 @@ async function registerParallelTaskSessionCandidates(
   task: Pick<ExecutableTask, "id" | "title" | "sessionId">,
   candidatesWithSessions: Array<{ index: number; sessionId: string; branchName: string }>,
   authorization: string,
-  options?: { parentSessionId?: string },
+  options?: { parentSessionId?: string; operationId?: string },
 ) {
   if (candidatesWithSessions.length === 0) {
     return;
@@ -957,6 +954,7 @@ async function registerParallelTaskSessionCandidates(
       branchName: candidate.branchName,
       sourceType: nextSourceType,
       isActive: task.sessionId === candidate.sessionId,
+      operationId: options?.operationId,
     });
     lineageContext.existingSessionIds.add(candidate.sessionId);
     lineageContext.existingRecordMap.set(candidate.sessionId, {
@@ -1091,15 +1089,7 @@ async function continueParallelTaskExecution(
   }
 
   const repoContext = buildRepoContext(input.task, {});
-  const workflowContext = await buildWorkflowPromptContext(input.task, input.authorization, {
-    taskCategory: input.classification?.category,
-    executionMode: "parallel",
-    selectedModel: input.resolvedModel ? formatModelRoute(input.resolvedModel) : undefined,
-    taskResult: "",
-    changesSummary: "",
-  });
-  const prompt = prependWorkflowContextToPrompt(input.prompt, workflowContext);
-  const attempts = await continueParallelPlanCandidates(input, plan, prompt, repoContext);
+  const attempts = await continueParallelPlanCandidates(input, plan, input.prompt, repoContext);
 
   let hasAnySuccess = false;
   for (const attempt of attempts) {
@@ -1127,6 +1117,7 @@ async function continueParallelTaskExecution(
   const primaryCandidate = plan.candidates.find((candidate) => candidate.status === "running");
   await cpFetch(`/api/tasks/${encodeURIComponent(input.taskId)}`, {
     method: "PATCH",
+    authorization: input.authorization,
     body: {
       status: "running",
       sessionId: primaryCandidate?.sessionId,
@@ -1138,11 +1129,12 @@ async function continueParallelTaskExecution(
         paidExecutionGuard: input.guard,
       }),
     },
-    authorization: input.authorization,
   });
 
+  const continuationOperationId = crypto.randomUUID();
   await registerParallelTaskSessions(input.task, plan, input.authorization, {
     parentSessionId: input.parentSessionId,
+    operationId: continuationOperationId,
   }).catch(() => null);
   sseAggregator.registerParallelTask(input.task.id, plan.candidates);
   broadcastParallelContinuationStarted(input.task, plan.candidates);
@@ -1464,7 +1456,6 @@ async function prepareTaskContinuation(
     };
   }
 
-  await ensureTaskWorkflowStartedForContinuation(context.task, input);
   return { ok: true, guard: preflightResult.guard };
 }
 
@@ -1489,18 +1480,6 @@ async function buildBlockedTaskContinuationResponse(
   });
   const blockedResponse = buildBlockedExecutionResponse(input.taskId, preflight);
   return { status: blockedResponse.status, body: blockedResponse.body };
-}
-
-async function ensureTaskWorkflowStartedForContinuation(
-  task: ExecutableTask,
-  input: ContinueTaskInput,
-) {
-  const workflowTemplateId = await resolveTaskWorkflowTemplateId(task, input.authorization);
-  await ensureTaskWorkflowStarted({
-    authorization: input.authorization,
-    taskId: input.taskId,
-    templateId: workflowTemplateId,
-  });
 }
 
 async function continueParallelTaskExecutionFlow(
@@ -1601,18 +1580,9 @@ async function continueSingleTaskExecutionFlow(
     context.task.projectId,
     context.resolvedModel,
   );
-  const workflowContext = await buildWorkflowPromptContext(context.task, input.authorization, {
-    taskCategory: parseStoredTaskClassification(context.task)?.category,
-    executionMode: context.task.executionMode ?? "single",
-    selectedModel: context.resolvedModel ? formatModelRoute(context.resolvedModel) : undefined,
-    taskResult: "",
-    changesSummary: "",
+  const result = await continueSession(context.sessionId, input.prompt, {
+    model: context.resolvedModel,
   });
-  const result = await continueSession(
-    context.sessionId,
-    prependWorkflowContextToPrompt(input.prompt, workflowContext),
-    { model: context.resolvedModel },
-  );
   if (!result.ok) {
     return { status: 502 as const, body: { error: result.error || "Failed to continue session" } };
   }
@@ -3751,24 +3721,12 @@ function mapTaskExecutionTraceFollowup(
     templateId: followup.templateId,
     triggerHookId: followup.triggerHookId,
     status: followup.status,
-    failureType: followup.failureType,
     agent: followup.agent,
     model: followup.model,
     prompt: followup.prompt,
     result: followup.result,
     error: followup.error,
     completedAt: followup.completedAt,
-  };
-}
-
-function flattenWorkflowContextForHooks(
-  context: WorkflowPromptContextRecord,
-): Record<string, string | null | undefined> {
-  return {
-    ...context,
-    currentStageExitCriteria: context.currentStageExitCriteria?.join("；"),
-    completedStageOutputs: context.completedStageOutputs?.join("\n"),
-    pendingStageLabels: context.pendingStageLabels?.join(" → "),
   };
 }
 
@@ -3783,23 +3741,9 @@ async function runPreExecutionHooks(
 ) {
   const strategy = readOrchestrationStrategy();
   let breakerReason: string | undefined;
-  const workflowContext = await buildWorkflowPromptContext(task, authorization, {
-    taskCategory: classification.category,
-    executionMode,
-    selectedAgent: executionAgent,
-    selectedModel: effectiveModel,
-    taskResult: "",
-    changesSummary: "",
-  });
-
-  // Merge stage-level hooks with strategy-level hooks (stage takes priority)
-  const rawStageHooks = await fetchCurrentStageHooks(task.id, authorization);
-  const stageHooks = parseStageHooks(rawStageHooks);
-  const mergedHooks = mergeStageAndStrategyHooks(stageHooks, strategy.hooks);
-  const mergedStrategy: typeof strategy = { ...strategy, hooks: mergedHooks };
 
   const hookResult = await executeLifecycleHooks({
-    strategy: mergedStrategy,
+    strategy,
     trigger: "pre-execution",
     taskId: task.id,
     projectId: task.projectId,
@@ -3807,7 +3751,15 @@ async function runPreExecutionHooks(
     taskPrompt: task.prompt,
     titlePrefix: "Preflight",
     repoContext,
-    context: flattenWorkflowContextForHooks(workflowContext),
+    context: {
+      taskCategory: classification.category,
+      executionMode,
+      selectedAgent: executionAgent,
+      selectedModel: effectiveModel,
+      repoName: task.repoName ?? undefined,
+      remoteUrl: task.remoteUrl ?? undefined,
+      workingBranch: task.workingBranch ?? undefined,
+    },
     onHookExecuted: async (execution) => {
       if (
         !execution.sessionId ||
@@ -3869,7 +3821,7 @@ async function runPreExecutionHooks(
 
   if (hookResult.hookExecutions.length === 0) {
     return {
-      prompt: prependWorkflowContextToPrompt(task.prompt, workflowContext),
+      prompt: task.prompt,
       hookExecutions: [] as HookExecutionRecord[],
     };
   }
@@ -3890,7 +3842,7 @@ async function runPreExecutionHooks(
       riskLevel: "high",
     });
     return {
-      prompt: prependWorkflowContextToPrompt(task.prompt, workflowContext),
+      prompt: task.prompt,
       hookExecutions: hookResult.hookExecutions,
       breakerReason,
       denied: true,
@@ -3921,18 +3873,25 @@ async function runPreExecutionHooks(
 
   if (hookResult.rewrittenPrompt) {
     return {
-      prompt: prependWorkflowContextToPrompt(hookResult.rewrittenPrompt, workflowContext),
+      prompt: hookResult.rewrittenPrompt,
       hookExecutions: hookResult.hookExecutions,
       breakerReason,
       switchedModel,
     };
   }
 
-  // Default: prepend the review as context for the execution agent
+  if (!hookResult.combinedResultText?.trim()) {
+    return {
+      prompt: task.prompt,
+      hookExecutions: hookResult.hookExecutions,
+      breakerReason,
+      switchedModel,
+    };
+  }
+
   const promptWithReview = [
-    prependWorkflowContextToPrompt("", workflowContext).trim(),
     "Pre-execution assessment from the configured review agent:",
-    hookResult.combinedResultText || "",
+    hookResult.combinedResultText,
     "",
     "Original task:",
     task.prompt,
@@ -4015,7 +3974,7 @@ async function registerPrimaryTaskSession(
   sessionId: string | undefined,
   branchName: string,
   authorization: string,
-  options?: { parentSessionId?: string },
+  options?: { parentSessionId?: string; operationId?: string },
 ) {
   if (!sessionId) {
     return;
@@ -4039,6 +3998,7 @@ async function registerPrimaryTaskSession(
     branchName,
     sourceType: options?.parentSessionId && options.parentSessionId !== sessionId ? "fork" : "root",
     isActive: true,
+    operationId: options?.operationId,
   }).catch(() => null);
 }
 
@@ -4063,6 +4023,7 @@ async function prepareExecutionContext(
   return {
     task,
     authorization,
+    operationId: crypto.randomUUID(),
     identitySnapshot,
     classification,
     executionAgent,
@@ -4102,7 +4063,6 @@ async function finalizePreExecutionContext(
     };
   }
 
-  // Apply switch-model decision if present
   let resolvedModel = context.resolvedModel;
   let effectiveModel = context.effectiveModel;
   if (preExecutionHooks.switchedModel) {
@@ -4372,6 +4332,7 @@ async function finalizeSuccessfulSequentialChainStart(args: {
         isProjectionBackedTask(context.task) &&
         (context.task.orchestrationKind === "sequential-chain" ||
           context.task.executionMode === "sequential-chain"),
+      operationId: context.operationId,
     },
   );
 
@@ -4400,8 +4361,41 @@ async function finalizeSuccessfulSequentialChainStart(args: {
     execResult.sessionId,
     `${context.task.title} — ${currentStep.title}`,
     context.authorization,
-    { parentSessionId: context.parentSessionId },
+    { parentSessionId: context.parentSessionId, operationId: context.operationId },
   );
+
+  if (execResult.sessionId) {
+    const stepPromptText = buildChainStepPrompt(
+      context.prompt,
+      currentStep,
+      stepIndex,
+      context.plan.steps,
+    );
+    const model = args.context.resolvedModel
+      ? `${args.context.resolvedModel.providerId}:${args.context.resolvedModel.modelId}`
+      : undefined;
+    const systemContextText = buildExecutionContext({
+      taskId: context.task.id,
+      projectId: context.task.projectId,
+      repoContext: context.repoContext,
+    });
+    const userInputText = stepPromptText;
+    const finalSentText = `${systemContextText}${userInputText}`;
+    persistTaskSessionMessageSnapshot(context.task.id, context.authorization, {
+      runtimeSessionId: execResult.sessionId,
+      message: {
+        info: {
+          id: `${execResult.sessionId}:user-prompt`,
+          role: "user",
+          agent: context.executionAgent,
+          model,
+          time: { created: new Date().toISOString(), completed: new Date().toISOString() },
+        },
+        parts: [{ type: "text", text: finalSentText }],
+        promptDecomposition: { userInputText, systemContextText, finalSentText },
+      },
+    }).catch(() => null);
+  }
 
   return {
     status: 200 as const,
@@ -4671,15 +4665,6 @@ async function finalizeCandidateAdoption(args: {
     winnerResult,
   } = args;
 
-  await persistWorkflowStageExecutionOutcome({
-    taskId,
-    authorization,
-    resultText: winnerResult,
-    source: "manual-adopt",
-  }).catch((error) => {
-    console.error("Failed to persist workflow stage outcome for adopted candidate:", error);
-  });
-
   const adoptResult = await cpFetch<{
     data?: {
       winnerCandidateIndex?: number;
@@ -4836,12 +4821,6 @@ async function persistExecutionStart(
     ),
     authorization: context.authorization,
   });
-
-  await ensureTaskWorkflowStarted({
-    authorization: context.authorization,
-    taskId: context.task.id,
-    templateId: context.workflowTemplateId,
-  });
 }
 
 function broadcastParallelExecutionStarted(context: ExecutionContext) {
@@ -4914,7 +4893,36 @@ async function startParallelExecution(context: ExecutionContext): Promise<StartE
   broadcastParallelExecutionStarted(context);
   await registerParallelTaskSessions(context.task, context.plan, context.authorization, {
     parentSessionId: context.parentSessionId,
+    operationId: context.operationId,
   }).catch(() => null);
+
+  // Persist user prompt for each parallel candidate session
+  const parallelSystemContextText = buildExecutionContext({
+    taskId: context.task.id,
+    projectId: context.task.projectId,
+    repoContext: context.repoContext,
+  });
+  for (const candidate of context.plan.candidates) {
+    if (candidate.sessionId && candidate.status === "running") {
+      const candidateModel = candidate.model || context.effectiveModel;
+      const userInputText = context.prompt;
+      const finalSentText = `${parallelSystemContextText}${userInputText}`;
+      persistTaskSessionMessageSnapshot(context.task.id, context.authorization, {
+        runtimeSessionId: candidate.sessionId,
+        message: {
+          info: {
+            id: `${candidate.sessionId}:user-prompt`,
+            role: "user",
+            agent: candidate.agent || context.executionAgent,
+            model: candidateModel,
+            time: { created: new Date().toISOString(), completed: new Date().toISOString() },
+          },
+          parts: [{ type: "text", text: finalSentText }],
+          promptDecomposition: { userInputText, systemContextText: parallelSystemContextText, finalSentText },
+        },
+      }).catch(() => null);
+    }
+  }
 
   return buildParallelExecutionResponse(context.task.id, primaryCandidate, context.plan.candidates);
 }
@@ -5026,8 +5034,37 @@ async function startSingleExecution(context: ExecutionContext): Promise<StartExe
     execResult.sessionId,
     context.task.title,
     context.authorization,
-    { parentSessionId: context.parentSessionId },
+    { parentSessionId: context.parentSessionId, operationId: context.operationId },
   );
+
+  // Persist user prompt message explicitly — SSE message.updated for user
+  // messages may arrive without inline content and fail to persist.
+  if (execResult.sessionId) {
+    const model = context.resolvedModel
+      ? `${context.resolvedModel.providerId}:${context.resolvedModel.modelId}`
+      : undefined;
+    const systemContextText = buildExecutionContext({
+      taskId: context.task.id,
+      projectId: context.task.projectId,
+      repoContext: context.repoContext,
+    });
+    const userInputText = context.prompt;
+    const finalSentText = `${systemContextText}${userInputText}`;
+    persistTaskSessionMessageSnapshot(context.task.id, context.authorization, {
+      runtimeSessionId: execResult.sessionId,
+      message: {
+        info: {
+          id: `${execResult.sessionId}:user-prompt`,
+          role: "user",
+          agent: context.executionAgent,
+          model,
+          time: { created: new Date().toISOString(), completed: new Date().toISOString() },
+        },
+        parts: [{ type: "text", text: finalSentText }],
+        promptDecomposition: { userInputText, systemContextText, finalSentText },
+      },
+    }).catch(() => null);
+  }
 
   return {
     status: 200,
@@ -5144,7 +5181,8 @@ taskRoutes.get("/", async (c) => {
   return c.json({ ...(result.data as Record<string, unknown>), data }, 200);
 });
 
-// GET /api/tasks/:taskId — Get task detail
+// GET /api/tasks/:taskId — Get task detail read model only.
+// Tree, session, message, and lineage consumers should use /api/tasks/:taskId/tree.
 taskRoutes.get("/:taskId", async (c) => {
   const taskId = c.req.param("taskId");
   const authorization = authHeader(c);
@@ -5685,40 +5723,21 @@ taskRoutes.post("/:taskId/complete", async (c) => {
   const taskId = c.req.param("taskId");
   const authorization = authHeader(c);
 
-  const workflowState = await fetchTaskWorkflowState({
-    taskId,
-    authorization,
-    includeTask: true,
-  });
-  if (!workflowState.task?.id || !workflowState.task.projectId) {
+  const taskResult = await cpFetch<ExecutableTask & { result?: string }>(
+    `/api/project-tree/tasks/${encodeURIComponent(taskId)}`,
+    { authorization },
+  );
+  if (!taskResult.ok || !taskResult.data?.id || !taskResult.data?.projectId) {
     return c.json({ error: "Task not found" }, 404);
   }
 
-  const task = workflowState.task;
+  const task = taskResult.data;
 
   await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
     method: "PATCH",
     authorization,
     body: { status: "completed" },
   });
-
-  const currentStage = workflowState.workflowRun?.currentStage ?? undefined;
-  const stageSummary = buildStageArtifactSummary(task.result ?? undefined);
-  const existingSummary = workflowState.stages.find(
-    (stage) => stage.stageKey === currentStage,
-  )?.artifactsSummaryJson;
-
-  if (currentStage) {
-    await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}/workflow/advance`, {
-      method: "POST",
-      authorization,
-      body: {
-        fromStage: currentStage,
-        status: "completed",
-        artifactsSummaryJson: existingSummary ?? stageSummary,
-      },
-    });
-  }
 
   wsBroadcaster.broadcast({
     id: crypto.randomUUID(),
@@ -5734,44 +5753,6 @@ taskRoutes.post("/:taskId/complete", async (c) => {
   });
 
   return c.json({ ok: true });
-});
-
-taskRoutes.post("/:taskId/workflow/advance", async (c) => {
-  const taskId = c.req.param("taskId");
-  const authorization = authHeader(c);
-
-  const taskResult = await cpFetch<ExecutableTask & { result?: string }>(
-    `/api/project-tree/tasks/${encodeURIComponent(taskId)}`,
-    { authorization },
-  );
-  if (!taskResult.ok) {
-    return c.json({ error: "Task not found" }, 404);
-  }
-
-  const task = taskResult.data;
-  await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
-    method: "PATCH",
-    authorization,
-    body: { status: "completed" },
-  });
-
-  const outcome = await persistWorkflowStageExecutionOutcome({
-    taskId,
-    authorization,
-    resultText: task.result ?? "[STAGE_COMPLETE]",
-    source: "assistant-output",
-    forceAdvance: true,
-  });
-
-  if (!outcome.updated) {
-    return c.json({ error: "Workflow stage not found or not updated" }, 404);
-  }
-
-  return c.json({
-    ok: true,
-    nextStageKey: outcome.nextStageKey,
-    spawnedTaskId: outcome.spawnedTaskId,
-  });
 });
 
 // POST /api/tasks/reconcile-running — Manually reconcile persisted running tasks
@@ -5797,15 +5778,6 @@ taskRoutes.get("/:taskId/graph", async (c) => {
   return c.json(result.data, result.ok ? 200 : (result.status as 401 | 404 | 502));
 });
 
-// GET /api/tasks/:taskId/runs — Get agent run history
-taskRoutes.get("/:taskId/runs", async (c) => {
-  const taskId = c.req.param("taskId");
-  const result = await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}/runs`, {
-    authorization: authHeader(c),
-  });
-  return c.json(result.data, result.ok ? 200 : (result.status as 401 | 404 | 502));
-});
-
 taskRoutes.get("/:taskId/domain-runs", async (c) => {
   const taskId = c.req.param("taskId");
   const result = await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}/domain-runs`, {
@@ -5823,6 +5795,77 @@ taskRoutes.get("/:taskId/domain-runs/:runId", async (c) => {
       authorization: authHeader(c),
     },
   );
+  return c.json(result.data, result.ok ? 200 : (result.status as 401 | 404 | 502));
+});
+
+taskRoutes.get("/:taskId/query/normalized-conversation", async (c) => {
+  const taskId = c.req.param("taskId");
+  const authorization = authHeader(c);
+  const sessionId = c.req.query("sessionId");
+  const includeLineage = c.req.query("includeLineage") !== "false";
+
+  const result = await fetchTaskConversationMessages(taskId, authorization, {
+    ...(sessionId ? { sessionId } : {}),
+    includeLineage,
+  });
+
+  if (!result.ok) {
+    return c.json(
+      result.data ?? { error: result.error ?? "Failed to load normalized conversation" },
+      result.status as 401 | 404 | 502,
+    );
+  }
+
+  return c.json(result.data, 200);
+});
+
+taskRoutes.get("/:taskId/query/raw-events", async (c) => {
+  const taskId = c.req.param("taskId");
+  const result = await cpFetch(
+    `/api/tasks/${encodeURIComponent(taskId)}/query/raw-events`,
+    { authorization: authHeader(c) },
+  );
+
+  return c.json(result.data, result.ok ? 200 : (result.status as 401 | 404 | 502));
+});
+
+taskRoutes.get("/:taskId/tree", async (c) => {
+  const taskId = c.req.param("taskId");
+  const params = new URLSearchParams();
+  const sessionId = c.req.query("sessionId");
+  if (sessionId) {
+    params.set("sessionId", sessionId);
+  }
+  const includeLineage = c.req.query("includeLineage");
+  if (includeLineage) {
+    params.set("includeLineage", includeLineage);
+  }
+
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  const result = await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}/tree${suffix}`, {
+    authorization: authHeader(c),
+  });
+
+  return c.json(result.data, result.ok ? 200 : (result.status as 401 | 404 | 502));
+});
+
+taskRoutes.get("/:taskId/timeline", async (c) => {
+  const taskId = c.req.param("taskId");
+  const params = new URLSearchParams();
+  const sessionId = c.req.query("sessionId");
+  if (sessionId) {
+    params.set("sessionId", sessionId);
+  }
+  const includeLineage = c.req.query("includeLineage");
+  if (includeLineage) {
+    params.set("includeLineage", includeLineage);
+  }
+
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  const result = await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}/timeline${suffix}`, {
+    authorization: authHeader(c),
+  });
+
   return c.json(result.data, result.ok ? 200 : (result.status as 401 | 404 | 502));
 });
 
@@ -5884,6 +5927,71 @@ taskRoutes.get("/:taskId/branches", async (c) => {
     });
 
     return c.json({ data: sessions });
+  }
+
+  const synthesizedRecords = synthesizeLineageRecordsFromRuntime(
+    taskId,
+    taskResult.data?.sessionId,
+    runtimeMap,
+  );
+
+  if (synthesizedRecords.length > 0) {
+    await persistLineageRepairs(taskId, synthesizedRecords, authorization);
+    return c.json({
+      data: synthesizedRecords.map((record) => {
+        const runtime = runtimeMap.get(record.runtimeSessionId);
+        return {
+          id: record.runtimeSessionId,
+          title: runtime?.title ?? record.branchName ?? "",
+          isActive: record.isActive,
+          summary: runtime?.summary ?? null,
+          createdAt: runtime?.createdAt ?? record.createdAt ?? null,
+          updatedAt: runtime?.updatedAt ?? record.updatedAt ?? null,
+        } satisfies SessionSummaryRecord;
+      }),
+    });
+  }
+
+  return c.json({ data: [] });
+});
+
+// Legacy alias for session summary reads used by task detail pages.
+taskRoutes.get(":taskId/sessions", async (c) => {
+  const taskId = c.req.param("taskId");
+  const authorization = authHeader(c);
+
+  const taskResult = await cpFetch<{ sessionId?: string; title?: string; status?: string }>(
+    `/api/project-tree/tasks/${encodeURIComponent(taskId)}`,
+    { authorization },
+  );
+
+  if (!taskResult.ok) {
+    return c.json({ data: [] });
+  }
+
+  const lineageResult = await fetchTaskSessionLineageRecords(taskId, authorization);
+  const lineageRecords = lineageResult.activeRecords;
+  const runtimeMap = await fetchRuntimeSessionMap(100);
+
+  if (lineageRecords.length > 0) {
+    const { records: normalizedRecords, repaired } = normalizeLineageRecords(lineageRecords);
+    if (repaired.length > 0) {
+      await persistLineageRepairs(taskId, repaired, authorization);
+    }
+
+    return c.json({
+      data: normalizedRecords.map((record) => {
+        const runtime = runtimeMap.get(record.runtimeSessionId);
+        return {
+          id: record.runtimeSessionId,
+          title: runtime?.title ?? record.branchName ?? "",
+          isActive: record.isActive || record.runtimeSessionId === taskResult.data?.sessionId,
+          summary: runtime?.summary ?? null,
+          createdAt: runtime?.createdAt ?? record.createdAt ?? null,
+          updatedAt: runtime?.updatedAt ?? record.updatedAt ?? null,
+        } satisfies SessionSummaryRecord;
+      }),
+    });
   }
 
   const synthesizedRecords = synthesizeLineageRecordsFromRuntime(
@@ -6043,6 +6151,7 @@ async function executeTaskBranchFork(args: {
     branchName: defaultTitle,
     sourceType: "fork",
     isActive: true,
+    operationId: crypto.randomUUID(),
   });
 
   wsBroadcaster.broadcast({
@@ -6650,7 +6759,7 @@ async function executeTaskBranchArchive(args: {
 }
 
 // GET /api/tasks/:taskId/branch-lineage — Return branch lineage tree for a task
-taskRoutes.get("/:taskId/branch-lineage", async (c) => {
+taskRoutes.get(":taskId/branch-lineage", async (c) => {
   const taskId = c.req.param("taskId");
   const authorization = authHeader(c);
 
@@ -6659,7 +6768,6 @@ taskRoutes.get("/:taskId/branch-lineage", async (c) => {
     { authorization },
   );
 
-  // Fetch task_sessions lineage from control plane
   const lineageResult = await fetchTaskSessionLineageRecords(taskId, authorization);
   const lineageRecords = lineageResult.activeRecords;
 
@@ -6667,7 +6775,6 @@ taskRoutes.get("/:taskId/branch-lineage", async (c) => {
   const forkMessagePreviewMap = await buildForkMessagePreviewMap(lineageRecords);
   const firstPromptAfterForkMap = await buildFirstPromptAfterForkMap(lineageRecords);
 
-  // If no lineage records, fall back to the flat sessions list
   if (lineageRecords.length === 0) {
     const synthesizedRecords = synthesizeLineageRecordsFromRuntime(
       taskId,
@@ -6695,6 +6802,52 @@ taskRoutes.get("/:taskId/branch-lineage", async (c) => {
     firstPromptAfterForkMap,
   );
   return c.json({ data: tree });
+});
+
+// Legacy alias for branch lineage reads used by tree view composables.
+taskRoutes.get(":taskId/session-lineage", async (c) => {
+  const taskId = c.req.param("taskId");
+  const authorization = authHeader(c);
+
+  const taskResult = await cpFetch<{ sessionId?: string }>(
+    `/api/project-tree/tasks/${encodeURIComponent(taskId)}`,
+    { authorization },
+  );
+
+  const lineageResult = await fetchTaskSessionLineageRecords(taskId, authorization);
+  const lineageRecords = lineageResult.activeRecords;
+  const runtimeMap = await fetchRuntimeSessionMap(100);
+  const forkMessagePreviewMap = await buildForkMessagePreviewMap(lineageRecords);
+  const firstPromptAfterForkMap = await buildFirstPromptAfterForkMap(lineageRecords);
+
+  if (lineageRecords.length === 0) {
+    const synthesizedRecords = synthesizeLineageRecordsFromRuntime(
+      taskId,
+      taskResult.data?.sessionId,
+      runtimeMap,
+    );
+
+    if (synthesizedRecords.length === 0) {
+      return c.json({ data: [] });
+    }
+
+    await persistLineageRepairs(taskId, synthesizedRecords, authorization);
+    return c.json({ data: buildSessionTree(synthesizedRecords, runtimeMap, new Map(), new Map()) });
+  }
+
+  const { records: normalizedRecords, repaired } = normalizeLineageRecords(lineageRecords);
+  if (repaired.length > 0) {
+    await persistLineageRepairs(taskId, repaired, authorization);
+  }
+
+  return c.json({
+    data: buildSessionTree(
+      normalizedRecords,
+      runtimeMap,
+      forkMessagePreviewMap,
+      firstPromptAfterForkMap,
+    ),
+  });
 });
 
 // POST /api/tasks/:taskId/branches/:sessionId/activate — Activate a branch

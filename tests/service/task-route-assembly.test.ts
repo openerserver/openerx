@@ -27,16 +27,14 @@ describe("task route registration assembly", () => {
   test("buildTaskRouteRegistrations composes each subgroup from shared builder output", async () => {
     const shared = { scope: "shared" };
     const core = { scope: "core" };
-    const domainRuns = { scope: "domain-runs" };
     const agentRunWrites = { scope: "agent-run-writes" };
-    const branchCompat = { scope: "branch-compat" };
+    const sessions = { scope: "sessions" };
     const projections = { scope: "projections" };
 
     const buildShared = mock(() => shared);
     const buildCore = mock((value: unknown) => ({ ...core, shared: value }));
-    const buildDomain = mock((value: unknown) => ({ ...domainRuns, shared: value }));
     const buildAgentRunWrites = mock((value: unknown) => ({ ...agentRunWrites, shared: value }));
-    const buildBranchCompat = mock((value: unknown) => ({ ...branchCompat, shared: value }));
+    const buildSessions = mock((value: unknown) => ({ ...sessions, shared: value }));
     const buildProjections = mock((value: unknown) => ({ ...projections, shared: value }));
 
     mock.module("../../control-plane/service/src/modules/tasks/task-route-builder-shared", () => ({
@@ -50,15 +48,9 @@ describe("task route registration assembly", () => {
       }),
     );
     mock.module(
-      "../../control-plane/service/src/modules/tasks/task-route-domain-registrations",
+      "../../control-plane/service/src/modules/tasks/task-route-session-registrations",
       () => ({
-        buildTaskDomainRegistrations: buildDomain,
-      }),
-    );
-    mock.module(
-      "../../control-plane/service/src/modules/tasks/task-route-branch-registrations",
-      () => ({
-        buildTaskBranchCompatRegistrations: buildBranchCompat,
+        buildTaskSessionRegistrations: buildSessions,
       }),
     );
     mock.module(
@@ -73,15 +65,13 @@ describe("task route registration assembly", () => {
 
     expect(buildShared).toHaveBeenCalledTimes(1);
     expect(buildCore).toHaveBeenCalledWith(shared);
-    expect(buildDomain).toHaveBeenCalledWith(shared);
     expect(buildAgentRunWrites).toHaveBeenCalledWith(shared);
-    expect(buildBranchCompat).toHaveBeenCalledWith(shared);
+    expect(buildSessions).toHaveBeenCalledWith(shared);
     expect(buildProjections).toHaveBeenCalledWith(shared);
     expect(registrations).toEqual({
       core: { ...core, shared },
-      domainRuns: { ...domainRuns, shared },
       agentRunWrites: { ...agentRunWrites, shared },
-      branchCompat: { ...branchCompat, shared },
+      sessions: { ...sessions, shared },
       projections: { ...projections, shared },
     });
   });
@@ -92,9 +82,8 @@ describe("task route module assembly", () => {
     const taskRoutes = createRouteCollector();
     const registrations = {
       core: { scope: "core" },
-      domainRuns: { scope: "domain-runs" },
       agentRunWrites: { scope: "agent-run-writes" },
-      branchCompat: { scope: "branch-compat" },
+      sessions: { scope: "sessions" },
       projections: { scope: "projections" },
     };
     const callLog: Array<[string, unknown, unknown]> = [];
@@ -103,14 +92,11 @@ describe("task route module assembly", () => {
     const registerCore = mock((routes: unknown, deps: unknown) => {
       callLog.push(["core", routes, deps]);
     });
-    const registerDomainRuns = mock((routes: unknown, deps: unknown) => {
-      callLog.push(["domainRuns", routes, deps]);
-    });
     const registerAgentRunWrites = mock((routes: unknown, deps: unknown) => {
       callLog.push(["agentRunWrites", routes, deps]);
     });
-    const registerBranchCompat = mock((routes: unknown, deps: unknown) => {
-      callLog.push(["branchCompat", routes, deps]);
+    const registerSessions = mock((routes: unknown, deps: unknown) => {
+      callLog.push(["sessions", routes, deps]);
     });
     const registerProjections = mock((routes: unknown, deps: unknown) => {
       callLog.push(["projections", routes, deps]);
@@ -122,17 +108,14 @@ describe("task route module assembly", () => {
     mock.module("../../control-plane/service/src/modules/tasks/task-core-routes", () => ({
       registerTaskCoreRoutes: registerCore,
     }));
-    mock.module("../../control-plane/service/src/modules/tasks/task-domain-run-routes", () => ({
-      registerTaskDomainRunRoutes: registerDomainRuns,
-    }));
     mock.module(
       "../../control-plane/service/src/modules/tasks/task-agent-run-write-routes",
       () => ({
         registerTaskAgentRunWriteRoutes: registerAgentRunWrites,
       }),
     );
-    mock.module("../../control-plane/service/src/modules/tasks/task-branch-routes", () => ({
-      registerTaskBranchCompatRoutes: registerBranchCompat,
+    mock.module("../../control-plane/service/src/modules/tasks/task-session-routes", () => ({
+      registerTaskSessionRoutes: registerSessions,
     }));
     mock.module("../../control-plane/service/src/modules/tasks/task-projection-routes", () => ({
       registerTaskProjectionRoutes: registerProjections,
@@ -144,9 +127,8 @@ describe("task route module assembly", () => {
     expect(buildRegistrations).toHaveBeenCalledTimes(1);
     expect(callLog).toEqual([
       ["core", taskRoutes, registrations.core],
-      ["domainRuns", taskRoutes, registrations.domainRuns],
       ["agentRunWrites", taskRoutes, registrations.agentRunWrites],
-      ["branchCompat", taskRoutes, registrations.branchCompat],
+      ["sessions", taskRoutes, registrations.sessions],
       ["projections", taskRoutes, registrations.projections],
     ]);
   });

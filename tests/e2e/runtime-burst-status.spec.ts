@@ -96,7 +96,7 @@ async function ensureControlPlaneTaskSession(
   taskId: string,
   sessionId: string,
 ): Promise<void> {
-  const response = await request.fetch(`${CONTROL_PLANE_URL}/api/tasks/${taskId}/branches`, {
+  const response = await request.fetch(`${CONTROL_PLANE_URL}/api/tasks/${taskId}/sessions`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,

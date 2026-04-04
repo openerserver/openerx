@@ -48,7 +48,7 @@ function buildSyntheticUserPromptItems(
       id: "synthetic-final-prompt",
       role: "user",
       text: finalPrompt,
-      createdAt: resolveSyntheticUserCreatedAt(trace),
+      createdAt: resolveSyntheticUserCreatedAt(trace) ?? undefined,
       raw: {
         synthetic: true,
         info: {

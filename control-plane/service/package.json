@@ -21,6 +21,8 @@
     "db:validate:pg": "bun run src/db/migration/validate-postgres.ts",
     "db:audit:task-domain": "bun run src/db/migration/audit-task-domain-consistency.ts",
     "db:cleanup:task-domain-audit-fixtures": "bun run src/db/migration/cleanup-task-domain-audit-fixtures.ts",
+    "db:backfill:parallel-candidate-user-prompts": "bun run src/db/migration/backfill-parallel-candidate-user-prompts.ts",
+    "db:backfill:assistant-toolcall-stop-duplicates": "bun run src/db/migration/backfill-assistant-toolcall-stop-duplicates.ts",
     "db:migrate:sqlite-snapshot": "bun run src/db/migration/sqlite-to-postgres.ts",
     "cli:task": "bun run src/cli/create-task.ts",
     "test": "bun test ../../tests/service --timeout 30000",

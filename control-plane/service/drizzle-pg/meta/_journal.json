@@ -155,6 +155,76 @@
       "when": 1774359600000,
       "tag": "0021_drop_project_tree_events",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1774738124181,
+      "tag": "0022_task_session_first_hard_cut",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1774900000000,
+      "tag": "0023_task_message_events",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1775001000000,
+      "tag": "0024_task_tree_v2_schema",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1775001060000,
+      "tag": "0025_task_tree_v2_backfill",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1775001120000,
+      "tag": "0026_task_tree_v2_constraints",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1775001180000,
+      "tag": "0027_task_messages_runtime_fields",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1775001240000,
+      "tag": "0028_task_message_fk_cutover",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1775001300000,
+      "tag": "0029_task_messages_reconcile_legacy",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1775001360000,
+      "tag": "0030_drop_legacy_task_session_message_tables",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1775001420000,
+      "tag": "0031_add_operation_id",
+      "breakpoints": true
     }
   ]
 }

@@ -5,9 +5,9 @@ describe("normalizeWorkspaceFilePath", () => {
   it("normalizes workspace absolute paths to repo-relative paths", () => {
     expect(
       normalizeWorkspaceFilePath(
-        "/Users/wanglei/Downloads/phones-cloud/openerx/control-plane/web-ui/src/pages/TaskDetail.vue",
+        "/Users/wanglei/Downloads/phones-cloud/openerx/control-plane/web-ui/src/pages/TaskDetailV3.vue",
       ),
-    ).toBe("control-plane/web-ui/src/pages/TaskDetail.vue");
+    ).toBe("control-plane/web-ui/src/pages/TaskDetailV3.vue");
   });
 
   it("keeps valid repo-relative file paths", () => {

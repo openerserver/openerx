@@ -1876,7 +1876,7 @@ function openProjectRuntimeLedger(record: CrossProjectRuntimeUsageLedgerRecord) 
 
 function openGovernanceTask(record: GovernanceTaskRow) {
   void router.push({
-    name: "TaskDetail",
+    name: "TaskDetailV3",
     params: {
       taskId: record.taskId,
     },
@@ -1903,7 +1903,7 @@ function openRuntimeLedgerTask(record: CrossProjectRuntimeUsageLedgerRecord) {
   }
 
   void router.push({
-    name: "TaskDetail",
+    name: "TaskDetailV3",
     params: {
       taskId: record.taskId,
     },

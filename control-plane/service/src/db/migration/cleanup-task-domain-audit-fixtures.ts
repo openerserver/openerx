@@ -81,9 +81,6 @@ async function deleteTaskFixture(task: CleanupCandidate) {
   `;
 
   const nodeIds = collectNodeIds(task, sessionRows);
-  const agentRunTaskIds = Array.from(
-    new Set([task.id, task.treeNodeId].filter((value): value is string => Boolean(value))),
-  );
 
   await postgresSql.begin(async (transaction) => {
     await transaction.unsafe("DELETE FROM task_timeline_views WHERE task_id = $1", [
@@ -148,23 +145,7 @@ async function deleteTaskFixture(task: CleanupCandidate) {
     );
     await transaction.unsafe("DELETE FROM code_changes WHERE task_id = $1", [task.id] as never[]);
 
-    if (agentRunTaskIds.length > 0) {
-      await transaction.unsafe(
-        `UPDATE agent_runs
-            SET run_node_id = NULL,
-                run_id = NULL
-          WHERE task_id = ANY($1::text[])`,
-        [agentRunTaskIds] as never[],
-      );
-    }
-
     await transaction.unsafe("DELETE FROM task_run_nodes WHERE task_id = $1", [task.id] as never[]);
-
-    if (agentRunTaskIds.length > 0) {
-      await transaction.unsafe("DELETE FROM agent_runs WHERE task_id = ANY($1::text[])", [
-        agentRunTaskIds,
-      ] as never[]);
-    }
 
     await transaction.unsafe("DELETE FROM task_runs WHERE task_id = $1", [task.id] as never[]);
     await transaction.unsafe("DELETE FROM tasks WHERE id = $1", [task.id] as never[]);

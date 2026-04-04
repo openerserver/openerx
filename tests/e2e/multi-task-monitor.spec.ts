@@ -301,19 +301,19 @@ async function installMonitorMocks(page: Page) {
     await fulfillJson(route, tasks.taskFallbackLive);
   });
 
-  await page.route("**/api/tasks/task-stage-1/branches", async (route) => {
+  await page.route("**/api/tasks/task-stage-1/sessions", async (route) => {
     await fulfillJson(route, {
       data: [buildSession("session-stage", "主分支", "2026-03-14T08:09:00.000Z")],
     });
   });
 
-  await page.route("**/api/tasks/task-fallback-1/branches", async (route) => {
+  await page.route("**/api/tasks/task-fallback-1/sessions", async (route) => {
     await fulfillJson(route, {
       data: [buildSession("session-fallback-done", "回归分支", "2026-03-14T07:10:00.000Z")],
     });
   });
 
-  await page.route("**/api/tasks/task-fallback-2/branches", async (route) => {
+  await page.route("**/api/tasks/task-fallback-2/sessions", async (route) => {
     await fulfillJson(route, {
       data: [buildSession("session-fallback-live", "巡检分支", "2026-03-14T08:16:00.000Z")],
     });
@@ -377,17 +377,17 @@ async function installDenseStatusMonitorMocks(page: Page) {
     await fulfillJson(route, tasks.taskCompleted2);
   });
 
-  await page.route("**/api/tasks/task-failed-2/branches", async (route) => {
+  await page.route("**/api/tasks/task-failed-2/sessions", async (route) => {
     await fulfillJson(route, {
       data: [buildSession("session-failed-2", "审批回退分支", "2026-03-14T06:55:00.000Z")],
     });
   });
-  await page.route("**/api/tasks/task-completed-1/branches", async (route) => {
+  await page.route("**/api/tasks/task-completed-1/sessions", async (route) => {
     await fulfillJson(route, {
       data: [buildSession("session-completed-1", "发布分支", "2026-03-14T05:48:00.000Z")],
     });
   });
-  await page.route("**/api/tasks/task-completed-2/branches", async (route) => {
+  await page.route("**/api/tasks/task-completed-2/sessions", async (route) => {
     await fulfillJson(route, {
       data: [buildSession("session-completed-2", "清理分支", "2026-03-14T04:52:00.000Z")],
     });

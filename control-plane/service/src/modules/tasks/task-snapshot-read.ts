@@ -19,7 +19,7 @@ export function createTaskSnapshotReadApi(deps: {
     }
     if (args.status) {
       filters.push(
-        eq(taskSnapshots.currentStatus, args.status as typeof taskSnapshots.currentStatus._.data),
+        eq(taskSnapshots.lifecycleStatus, args.status as typeof taskSnapshots.lifecycleStatus._.data),
       );
     }
 

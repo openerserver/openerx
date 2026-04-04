@@ -170,7 +170,7 @@ async function ensureControlPlaneTaskSession(
   taskId: string,
   sessionId: string,
 ): Promise<void> {
-  await apiRequest(request, `/api/tasks/${taskId}/branches`, {
+  await apiRequest(request, `/api/tasks/${taskId}/sessions`, {
     baseUrl: CONTROL_PLANE_URL,
     method: "POST",
     token,
@@ -337,7 +337,7 @@ liveBackendTest(
       { authToken: token, user: auth.user },
     );
 
-    await page.goto(`${UI_URL}/tasks/${createdTask.id}/v3?session=${permission.sessionID}`);
+    await page.goto(`${UI_URL}/tasks/${createdTask.id}/v3`);
     await expect(page.getByText("运行时审批")).toBeVisible();
     await expect(page.locator(".runtime-permission-card__path")).toHaveText(filepath);
 

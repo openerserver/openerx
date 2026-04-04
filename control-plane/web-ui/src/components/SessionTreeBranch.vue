@@ -69,11 +69,11 @@
     </div>
 
     <div v-if="hasChildren && expanded" class="branch-node__children">
-      <BranchTreeBranch
+      <SessionTreeBranch
         v-for="(child, childIndex) in node.children"
         :key="child.runtimeSessionId"
         :node="child"
-        :selected-branch-session-id="selectedBranchSessionId"
+        :selected-session-id="selectedSessionId"
         :task-status="taskStatus"
         :session-state-map="sessionStateMap"
         :depth="depth + 1"
@@ -92,15 +92,15 @@
 
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import type { TaskBranchLineageNode } from "../lib/api";
+import type { TaskSessionLineageNode } from "../lib/api";
 
 defineOptions({
-  name: "BranchTreeBranch",
+  name: "SessionTreeBranch",
 });
 
 const props = defineProps<{
-  node: TaskBranchLineageNode;
-  selectedBranchSessionId?: string;
+  node: TaskSessionLineageNode;
+  selectedSessionId?: string;
   taskStatus?: string;
   sessionStateMap?: Record<
     string,
@@ -130,7 +130,7 @@ const expanded = ref(true);
 
 const hasChildren = computed(() => props.node.children.length > 0);
 
-const isSelected = computed(() => props.selectedBranchSessionId === props.node.runtimeSessionId);
+const isSelected = computed(() => props.selectedSessionId === props.node.runtimeSessionId);
 
 const sessionState = computed(() => props.sessionStateMap?.[props.node.runtimeSessionId]);
 

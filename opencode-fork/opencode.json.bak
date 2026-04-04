@@ -56,29 +56,46 @@
   "mcp": {
     "exa": {
       "type": "local",
-      "command": ["npx", "-y", "@anthropic-ai/exa-mcp-server"],
+      "command": [
+        "npx",
+        "-y",
+        "@anthropic-ai/exa-mcp-server"
+      ],
       "environment": {
         "EXA_API_KEY": "${EXA_API_KEY}"
       }
     },
     "context7": {
       "type": "local",
-      "command": ["npx", "-y", "@anthropic-ai/context7-mcp-server"]
+      "command": [
+        "npx",
+        "-y",
+        "@anthropic-ai/context7-mcp-server"
+      ]
     },
     "grep-app": {
       "type": "local",
-      "command": ["npx", "-y", "@anthropic-ai/grep-app-mcp-server"]
+      "command": [
+        "npx",
+        "-y",
+        "@anthropic-ai/grep-app-mcp-server"
+      ]
     },
     "demo-memory": {
       "type": "local",
-      "command": ["npx", "-y", "@modelcontextprotocol/server-memory"],
+      "command": [
+        "npx",
+        "-y",
+        "@modelcontextprotocol/server-memory"
+      ],
       "description": "Demo memory MCP for validation"
     }
   },
   "agents": {
     "defaults": {
       "model": "github-copilot:gemini-3-flash-preview",
-      "provider": "github-copilot"
+      "provider": "github-copilot",
+      "testModel": "github-copilot:gpt-5-mini"
     }
   },
   "models": {
@@ -145,6 +162,13 @@
         "provider": "github-copilot",
         "contextWindow": 200000,
         "maxTokens": 32000
+      },
+      {
+        "id": "gpt-5-mini",
+        "name": "GPT-5 mini",
+        "provider": "github-copilot",
+        "contextWindow": 264000,
+        "maxTokens": 64000
       }
     ]
   }

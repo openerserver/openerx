@@ -1,24 +1,21 @@
 import { eq } from "drizzle-orm";
 import { db } from "../../db";
-import { tasks as taskAggregates } from "../../db/schema";
+import { taskSessions, taskSnapshots, tasks as taskAggregates } from "../../db/schema";
 import type { TaskTreeSnapshot } from "../project-tree/storage";
-import type { TaskChangesSummary } from "../project-tree/task-types";
 import type { TaskTreeRecord } from "../project-tree/task-view";
 
-type TaskAggregateSyncDeps = {
-  appendTaskDomainEvent(args: {
-    projectId: string;
-    taskId: string;
-    sessionId?: string | null;
-    eventType: string;
-    payload: Record<string, unknown>;
-    createdAt?: string;
-  }): Promise<{ seq: number } | unknown>;
-  resolveConversationTimelineSessionId(
-    taskId: string,
-    runtimeSessionId?: string | null,
-  ): Promise<string | null>;
-};
+/**
+ * Maps old task status values to the DB enum `task_lifecycle_status`.
+ * Matches the migration 0022 CASE logic:
+ *   completed → done, NULL → draft, everything else → active
+ */
+function toLifecycleStatus(
+  status: string | null | undefined,
+): "draft" | "active" | "done" | "archived" {
+  if (!status) return "draft";
+  if (status === "completed") return "done";
+  return "active";
+}
 
 type TaskSnapshotCreateInput = {
   projectId: string;
@@ -67,11 +64,13 @@ export function buildTaskAggregateStrategyJson(
     next.autoAdvanceStages = undefined;
   }
 
-  return next;
+  return next ?? {};
 }
 
-function normalizeTaskChangesSummaryJson(summary: TaskChangesSummary | null) {
-  return summary ? ({ ...summary } as Record<string, unknown>) : null;
+function buildTaskAggregateChangesSummaryJson(
+  changesSummary: TaskTreeSnapshot["changesSummary"],
+) {
+  return changesSummary ? ({ ...changesSummary } as Record<string, unknown>) : null;
 }
 
 function resolveSnapshotStrategy(
@@ -83,7 +82,9 @@ function resolveSnapshotStrategy(
     updates.strategy === null ||
     (updates.strategy && typeof updates.strategy === "object" && !Array.isArray(updates.strategy))
   ) {
-    return updates.strategy;
+    return typeof updates.strategy === "object" && updates.strategy !== null
+      ? (updates.strategy as Record<string, unknown>)
+      : updates.strategy;
   }
 
   if (task.strategy && typeof task.strategy === "object" && !Array.isArray(task.strategy)) {
@@ -200,9 +201,23 @@ export function buildTaskTreeSnapshotFromRecord(
   };
 }
 
-export function createTaskAggregateSyncApi(deps: TaskAggregateSyncDeps) {
+export function createTaskAggregateSyncApi() {
   async function syncTaskAggregateFromSnapshot(snapshot: TaskTreeSnapshot) {
     const updatedAt = snapshot.finishedAt ?? snapshot.startedAt ?? new Date().toISOString();
+
+    // Validate sessionId exists in task_sessions before writing to task_snapshots (FK constraint).
+    // Legacy tasks may carry a current_session_id that was never migrated to task_sessions.
+    let validatedSessionId = snapshot.sessionId;
+    if (validatedSessionId) {
+      const [existing] = await db
+        .select({ id: taskSessions.id })
+        .from(taskSessions)
+        .where(eq(taskSessions.id, validatedSessionId))
+        .limit(1);
+      if (!existing) {
+        validatedSessionId = null;
+      }
+    }
 
     await db
       .insert(taskAggregates)
@@ -236,7 +251,7 @@ export function createTaskAggregateSyncApi(deps: TaskAggregateSyncDeps) {
         }),
         finalCommitSha: snapshot.finalCommitSha,
         finalBranchName: snapshot.finalBranchName,
-        changesSummaryJson: normalizeTaskChangesSummaryJson(snapshot.changesSummary),
+          changesSummaryJson: buildTaskAggregateChangesSummaryJson(snapshot.changesSummary),
         createdAt: snapshot.createdAt,
         startedAt: snapshot.startedAt,
         finishedAt: snapshot.finishedAt,
@@ -272,41 +287,44 @@ export function createTaskAggregateSyncApi(deps: TaskAggregateSyncDeps) {
           }),
           finalCommitSha: snapshot.finalCommitSha,
           finalBranchName: snapshot.finalBranchName,
-          changesSummaryJson: normalizeTaskChangesSummaryJson(snapshot.changesSummary),
+            changesSummaryJson: buildTaskAggregateChangesSummaryJson(snapshot.changesSummary),
           startedAt: snapshot.startedAt,
           finishedAt: snapshot.finishedAt,
           updatedAt,
         },
       });
 
-    const aggregateRecord = await db.query.tasks.findFirst({
-      where: eq(taskAggregates.id, snapshot.id),
-    });
-
-    const conversationSessionId = await deps.resolveConversationTimelineSessionId(
-      snapshot.id,
-      snapshot.sessionId,
-    );
-
-    await deps.appendTaskDomainEvent({
-      projectId: snapshot.projectId,
-      taskId: snapshot.id,
-      sessionId: conversationSessionId,
-      eventType: "task.aggregate.upserted",
-      payload: {
-        status: snapshot.status,
-        currentSessionId: snapshot.sessionId,
-        currentRunId: aggregateRecord?.currentRunId ?? null,
-        agentRunId: snapshot.agentRunId,
-        result: snapshot.result,
-        resultSummary: snapshot.result,
-        latestErrorText: snapshot.status === "failed" ? snapshot.result : null,
-        executionMode: snapshot.executionMode ?? null,
-        selectedModel: snapshot.selectedModel ?? null,
-        lastActivityAt: snapshot.finishedAt ?? snapshot.startedAt ?? snapshot.createdAt,
-      },
-      createdAt: snapshot.finishedAt ?? snapshot.startedAt ?? snapshot.createdAt,
-    });
+    await db
+      .insert(taskSnapshots)
+      .values({
+        taskId: snapshot.id,
+        projectId: snapshot.projectId,
+        lifecycleStatus: toLifecycleStatus(snapshot.status),
+        currentExecutionMode: snapshot.executionMode ?? null,
+        currentExecutionStatus: null,
+        currentSessionId: validatedSessionId,
+        latestSessionId: validatedSessionId,
+        latestResultSummary: snapshot.result,
+        latestErrorText: null,
+        activeCandidateCount: 0,
+        totalChainSteps: 0,
+        completedChainSteps: 0,
+        lastActivityAt: updatedAt,
+        updatedAt,
+      })
+      .onConflictDoUpdate({
+        target: taskSnapshots.taskId,
+        set: {
+          projectId: snapshot.projectId,
+          lifecycleStatus: toLifecycleStatus(snapshot.status),
+          currentExecutionMode: snapshot.executionMode ?? null,
+          currentSessionId: validatedSessionId,
+          latestSessionId: validatedSessionId,
+          latestResultSummary: snapshot.result,
+          lastActivityAt: updatedAt,
+          updatedAt,
+        },
+      });
   }
 
   return {

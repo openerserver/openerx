@@ -33,6 +33,53 @@ afterEach(() => {
 });
 
 describe("ChatMessageList tool cards", () => {
+  it("keeps user-visible instruction text from execution context prompts", () => {
+    const items: TaskConversationMessageItem[] = [
+      {
+        key: "message-user-execution-context",
+        role: "user",
+        text: `Execution context:
+- Opener-X task ID: task-1
+
+## 当前执行上下文
+任务：编写一个macos上的输入法
+请只完成当前阶段的目标。
+完成后请输出本阶段产出摘要。
+如果你认为当前阶段已经完成，请在输出末尾单独追加 [STAGE_COMPLETE]。
+
+/start-work 请先梳理需求和边界条件，再实现功能代码。`,
+        toolCalls: [],
+        createdAt: "2026-04-02T10:00:00.000Z",
+        raw: null,
+        isStreaming: false,
+      },
+    ];
+
+    const wrapper = mount(ChatMessageList, {
+      props: {
+        items,
+        loading: false,
+        error: null,
+      },
+      global: {
+        stubs: {
+          ASpin: createPassThroughStub("ASpin"),
+          AAlert: createPassThroughStub("AAlert"),
+          AEmpty: createPassThroughStub("AEmpty"),
+          ASpace: createPassThroughStub("ASpace"),
+          AFlex: createPassThroughStub("AFlex"),
+          ATag: createPassThroughStub("ATag"),
+          ATypographyText: createPassThroughStub("ATypographyText"),
+          AButton: ButtonStub,
+        },
+      },
+    });
+
+    expect(wrapper.text()).toContain("用户输入");
+    expect(wrapper.text()).toContain("/start-work 请先梳理需求和边界条件，再实现功能代码。");
+    expect(wrapper.text()).not.toContain("Opener-X task ID");
+  });
+
   it("keeps tool details collapsed by default and expands on demand", async () => {
     const items: TaskConversationMessageItem[] = [
       {
@@ -223,9 +270,10 @@ describe("ChatMessageList tool cards", () => {
     await copyButton?.trigger("click");
 
     expect(writeTextSpy).toHaveBeenCalledTimes(1);
-    expect(writeTextSpy.mock.calls[0]?.[0]).toContain("候选: 候选 A");
-    expect(writeTextSpy.mock.calls[0]?.[0]).toContain("模型回复:");
-    expect(writeTextSpy.mock.calls[0]?.[0]).toContain("并行候选输出");
-    expect(writeTextSpy.mock.calls[0]?.[0]).toContain("工具: bash");
+    const copiedText = (writeTextSpy.mock.calls as unknown as Array<[string]>)[0]?.[0];
+    expect(copiedText).toContain("候选: 候选 A");
+    expect(copiedText).toContain("模型回复:");
+    expect(copiedText).toContain("并行候选输出");
+    expect(copiedText).toContain("工具: bash");
   });
 });

@@ -976,6 +976,7 @@ configRoutes.put("/orchestration-strategy", zValidator("json", strategySchema), 
     ...body,
     hooks: body.hooks ?? [],
     templates: body.templates ?? [],
+    followups: body.followups ?? [],
     judge: body.judge ?? {
       enabled: false,
       agent: "",

@@ -55,8 +55,12 @@ describe("useTaskExecutionTrace", () => {
 
     expect(state.summaryItems.value).toEqual(
       expect.arrayContaining([
+        expect.objectContaining({ label: "追踪范围", value: "当前任务" }),
         expect.objectContaining({ label: "时间线来源", value: "运行时" }),
       ]),
+    );
+    expect(state.summaryItems.value).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ label: "追踪会话" })]),
     );
   });
 
@@ -98,12 +102,6 @@ describe("useTaskExecutionTrace", () => {
     await flushPromises();
 
     expect(apiMocks.getTaskExecutionTraceView).toHaveBeenCalledWith("task-1", "session-1");
-    expect(state.filteredSegments.value).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ type: "user-input", content: "/start-work 给输入法设计一个操作页面" }),
-        expect.objectContaining({ type: "model-response", content: "这里是模型回复" }),
-      ]),
-    );
     expect(state.filteredMessages.value).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ role: "user", text: "/start-work 给输入法设计一个操作页面" }),

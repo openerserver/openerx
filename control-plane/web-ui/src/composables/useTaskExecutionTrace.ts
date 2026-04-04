@@ -52,7 +52,7 @@ function buildTraceTimelineWithFallback(trace: TaskExecutionTrace | null) {
       id: "synthetic-trace-user-input",
       role: "user",
       text: finalPrompt,
-      createdAt: resolveSyntheticUserTimestamp(trace),
+      createdAt: resolveSyntheticUserTimestamp(trace) ?? undefined,
       raw: {
         synthetic: true,
         source: "finalPrompt",
@@ -81,8 +81,8 @@ function buildTraceTimelineWithFallback(trace: TaskExecutionTrace | null) {
 function buildBaseTraceSummaryItems(trace: TaskExecutionTrace): TraceSummaryItem[] {
   return [
     {
-      label: "追踪会话",
-      value: trace.sessionId?.slice(0, 18) || "无",
+      label: "追踪范围",
+      value: "当前任务",
       tone: "blue",
     },
     {

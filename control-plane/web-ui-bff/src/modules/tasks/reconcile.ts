@@ -8,10 +8,9 @@ import {
 } from "../agent-control/opencode-adapter";
 import { finalizeTaskState } from "./finalize";
 import {
-  fetchBranchCompatLineageRecords,
-  upsertBranchCompatLineageRecord,
+  fetchTaskSessionLineageRecords,
+  upsertTaskSessionLineageRecord,
 } from "./task-session-compat";
-import { persistWorkflowStageExecutionOutcome } from "./workflow-stage-execution";
 
 interface RunningTaskRecord {
   id: string;
@@ -130,7 +129,7 @@ async function markTaskCompleted(
   task: RunningTaskRecord,
   resultText?: string,
 ): Promise<boolean> {
-  const updated = await finalizeTaskState({
+  return finalizeTaskState({
     authorization,
     taskId: task.id,
     status: "completed",
@@ -140,24 +139,6 @@ async function markTaskCompleted(
     task,
     syncWorkflowTerminalState: false,
   });
-
-  if (!updated) {
-    return false;
-  }
-
-  await persistWorkflowStageExecutionOutcome({
-    taskId: task.id,
-    authorization,
-    resultText,
-    source: "assistant-output",
-  }).catch((error) => {
-    console.error(
-      `Failed to persist workflow stage outcome during reconcile for task ${task.id}:`,
-      error,
-    );
-  });
-
-  return true;
 }
 
 function emptyReconcileSummary(runtimeAvailable = false): RunningTaskReconcileSummary {
@@ -280,22 +261,10 @@ function isProjectionBackedParallelTask(
 async function loadProjectionBackedParallelRunDetail(
   authorization: string,
   task: Pick<RunningTaskRecord, "id" | "currentRunId" | "orchestrationKind">,
-) {
-  if (!isProjectionBackedParallelTask(task)) {
-    return null;
-  }
-
-  const currentRunId = task.currentRunId;
-  if (!currentRunId) {
-    return null;
-  }
-
-  const detailResult = await cpFetch<{ data: TaskDomainRunDetailRecord }>(
-    `/api/tasks/${encodeURIComponent(task.id)}/domain-runs/${encodeURIComponent(currentRunId)}`,
-    { authorization },
-  );
-
-  return detailResult.ok ? (detailResult.data?.data ?? null) : null;
+): Promise<TaskDomainRunDetailRecord | null> {
+  void authorization;
+  void task;
+  return null;
 }
 
 async function getRuntimeSessionIds(limit: number) {
@@ -341,11 +310,11 @@ function inferTerminalStatus(task: RunningTaskRecord): "completed" | "failed" | 
   return null;
 }
 
-async function deactivateActiveBranchCompatSessions(
+async function deactivateActiveTaskSessions(
   authorization: string,
   taskId: string,
 ): Promise<void> {
-  const lineageResult = await fetchBranchCompatLineageRecords(taskId, authorization);
+  const lineageResult = await fetchTaskSessionLineageRecords(taskId, authorization);
   if (!lineageResult.ok) {
     return;
   }
@@ -354,7 +323,7 @@ async function deactivateActiveBranchCompatSessions(
     lineageResult.records
       .filter((record) => !record.archivedAt && record.isActive)
       .map((record) =>
-        upsertBranchCompatLineageRecord(taskId, authorization, {
+        upsertTaskSessionLineageRecord(taskId, authorization, {
           runtimeSessionId: record.runtimeSessionId,
           isActive: false,
         }),
@@ -380,7 +349,7 @@ async function markParallelTaskTerminal(
     return "skipped";
   }
 
-  await deactivateActiveBranchCompatSessions(authorization, task.id);
+  await deactivateActiveTaskSessions(authorization, task.id);
   return terminalStatus === "completed" ? "completed" : "failed";
 }
 
@@ -488,8 +457,8 @@ function taskNeedsRecentTerminalSessionRepair(task: RunningTaskRecord) {
   return getTaskTerminalAgeMs(task) <= getRecentTerminalSessionRepairThresholdMs();
 }
 
-async function loadBranchCompatLineageRecords(authorization: string, taskId: string) {
-  const lineageResult = await fetchBranchCompatLineageRecords(taskId, authorization);
+async function loadTaskSessionLineageRecords(authorization: string, taskId: string) {
+  const lineageResult = await fetchTaskSessionLineageRecords(taskId, authorization);
   return lineageResult.records;
 }
 
@@ -502,7 +471,7 @@ async function reconcileHistoricallyInconsistentTask(
     return "skipped";
   }
 
-  const lineageRecords = await loadBranchCompatLineageRecords(context.authorization, task.id);
+  const lineageRecords = await loadTaskSessionLineageRecords(context.authorization, task.id);
   const hasActiveSession = lineageRecords.some((record) => !record.archivedAt && record.isActive);
 
   if (hasActiveSession && task.sessionId && context.runtimeAvailable) {

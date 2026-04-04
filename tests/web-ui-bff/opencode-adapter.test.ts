@@ -3,6 +3,7 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { setControlPlaneFetchHandler } from "../../control-plane/web-ui-bff/src/lib/control-plane-client";
 import {
+  expectCanonicalSessionMessageRequests,
   expectLineageMessagesRequest,
   expectNoPublicTraceRequests,
   expectNoRuntimeMessageReads,
@@ -426,7 +427,7 @@ describe("opencode adapter resilience", () => {
       const url = new URL(request.url);
       controlPlanePaths.push(`${url.pathname}${url.search}`);
 
-      if (url.pathname === "/api/tasks/task-1/branches") {
+      if (url.pathname === "/api/tasks/task-1/sessions") {
         return new Response(
           JSON.stringify({
             data: [
@@ -455,35 +456,80 @@ describe("opencode adapter resilience", () => {
       }
 
       if (
-        url.pathname === "/api/tasks/task-1/branches/session-leaf/messages" &&
-        url.searchParams.get("includeLineage") === "true"
+        url.pathname === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Asession-root/messages"
       ) {
         return new Response(
           JSON.stringify({
             data: [
               {
-                info: { id: "root-user", role: "user" },
-                parts: [{ type: "text", text: "历史提问" }],
+                id: "db-root-user",
+                runtimeMessageId: "root-user",
+                role: "user",
+                textContent: "历史提问",
+                parts: [
+                  {
+                    id: "db-root-user-part",
+                    partType: "text",
+                    textContent: "历史提问",
+                    jsonPayload: {},
+                  },
+                ],
               },
               {
-                info: { id: "root-assistant", role: "assistant" },
-                parts: [{ type: "text", text: "历史回答" }],
-              },
-              {
-                info: { id: "leaf-user", role: "user" },
-                parts: [{ type: "text", text: "当前提问" }],
-              },
-              {
-                info: { id: "leaf-assistant", role: "assistant" },
-                parts: [{ type: "text", text: "当前回答" }],
+                id: "db-root-assistant",
+                runtimeMessageId: "root-assistant",
+                role: "assistant",
+                textContent: "历史回答",
+                parts: [
+                  {
+                    id: "db-root-assistant-part",
+                    partType: "text",
+                    textContent: "历史回答",
+                    jsonPayload: {},
+                  },
+                ],
               },
             ],
-            meta: {
-              includeLineage: true,
-              complete: true,
-              lineagePath: ["session-root", "session-leaf"],
-              cachedSessionCount: 2,
-            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+
+      if (
+        url.pathname === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Asession-leaf/messages"
+      ) {
+        return new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: "db-leaf-user",
+                runtimeMessageId: "leaf-user",
+                role: "user",
+                textContent: "当前提问",
+                parts: [
+                  {
+                    id: "db-leaf-user-part",
+                    partType: "text",
+                    textContent: "当前提问",
+                    jsonPayload: {},
+                  },
+                ],
+              },
+              {
+                id: "db-leaf-assistant",
+                runtimeMessageId: "leaf-assistant",
+                role: "assistant",
+                textContent: "当前回答",
+                parts: [
+                  {
+                    id: "db-leaf-assistant-part",
+                    partType: "text",
+                    textContent: "当前回答",
+                    jsonPayload: {},
+                  },
+                ],
+              },
+            ],
           }),
           { status: 200, headers: { "Content-Type": "application/json" } },
         );
@@ -503,25 +549,36 @@ describe("opencode adapter resilience", () => {
 
     expect(result.ok).toBe(true);
     expect(result.data).toEqual([
-      {
-        info: { id: "root-user", role: "user" },
-        parts: [{ type: "text", text: "历史提问" }],
-      },
-      {
-        info: { id: "root-assistant", role: "assistant" },
-        parts: [{ type: "text", text: "历史回答" }],
-      },
-      {
-        info: { id: "leaf-user", role: "user" },
-        parts: [{ type: "text", text: "当前提问" }],
-      },
-      {
-        info: { id: "leaf-assistant", role: "assistant" },
-        parts: [{ type: "text", text: "当前回答" }],
-      },
+      expect.objectContaining({
+        info: expect.objectContaining({ id: "root-user", role: "user" }),
+        parts: expect.arrayContaining([
+          expect.objectContaining({ type: "text", text: "历史提问" }),
+        ]),
+      }),
+      expect.objectContaining({
+        info: expect.objectContaining({ id: "root-assistant", role: "assistant" }),
+        parts: expect.arrayContaining([
+          expect.objectContaining({ type: "text", text: "历史回答" }),
+        ]),
+      }),
+      expect.objectContaining({
+        info: expect.objectContaining({ id: "leaf-user", role: "user" }),
+        parts: expect.arrayContaining([
+          expect.objectContaining({ type: "text", text: "当前提问" }),
+        ]),
+      }),
+      expect.objectContaining({
+        info: expect.objectContaining({ id: "leaf-assistant", role: "assistant" }),
+        parts: expect.arrayContaining([
+          expect.objectContaining({ type: "text", text: "当前回答" }),
+        ]),
+      }),
     ]);
     expectNoPublicTraceRequests(controlPlanePaths);
-    expectLineageMessagesRequest(controlPlanePaths, "task-1", "session-leaf");
+    expectCanonicalSessionMessageRequests(controlPlanePaths, "task-1", [
+      "session-root",
+      "session-leaf",
+    ]);
     expectNoRuntimeMessageReads(runtimeFetchMock);
   });
 
@@ -569,7 +626,7 @@ describe("opencode adapter resilience", () => {
       const url = new URL(request.url);
       controlPlanePaths.push(`${url.pathname}${url.search}`);
 
-      if (url.pathname === "/api/tasks/task-1/branches") {
+      if (url.pathname === "/api/tasks/task-1/sessions") {
         return new Response(
           JSON.stringify({
             data: [
@@ -598,37 +655,17 @@ describe("opencode adapter resilience", () => {
       }
 
       if (
-        url.pathname === "/api/tasks/task-1/branches/session-leaf/messages" &&
-        url.searchParams.get("includeLineage") === "true"
+        url.pathname === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Asession-root/messages"
       ) {
-        return new Response(
-          JSON.stringify({
-            data: [
-              {
-                info: { id: "leaf-user", role: "user" },
-                parts: [{ type: "text", text: "当前提问" }],
-              },
-            ],
-            meta: {
-              includeLineage: true,
-              cacheState: "partial",
-              complete: false,
-              lineagePath: ["session-root", "session-leaf"],
-              cachedSessionCount: 1,
-            },
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        );
-      }
-
-      if (url.pathname === "/api/tasks/task-1/branches/session-root/messages") {
         return new Response(JSON.stringify({ data: [] }), {
           status: 200,
           headers: { "Content-Type": "application/json" },
         });
       }
 
-      if (url.pathname === "/api/tasks/task-1/branches/session-leaf/messages") {
+      if (
+        url.pathname === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Asession-leaf/messages"
+      ) {
         return new Response(JSON.stringify({ data: [] }), {
           status: 200,
           headers: { "Content-Type": "application/json" },
@@ -667,7 +704,10 @@ describe("opencode adapter resilience", () => {
       },
     ]);
     expectNoPublicTraceRequests(controlPlanePaths);
-    expectLineageMessagesRequest(controlPlanePaths, "task-1", "session-leaf");
+    expectCanonicalSessionMessageRequests(controlPlanePaths, "task-1", [
+      "session-root",
+      "session-leaf",
+    ]);
     expectRuntimeMessageReads(runtimeFetchMock, ["session-root", "session-leaf"]);
   });
 });

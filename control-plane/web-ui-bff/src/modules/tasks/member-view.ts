@@ -237,14 +237,11 @@ export async function buildTaskMemberViewModel(input: {
 
   const task = taskResult.ok ? taskResult.data : null;
   const projectId = input.projectId ?? task?.projectId ?? null;
-  const [workflowResources, agentRunsResult, projectMembersResult] = await Promise.all([
+  const [workflowResources, projectMembersResult] = await Promise.all([
     fetchTaskWorkflowResources({
       taskId: input.taskId,
       authorization: input.authorization,
       includeTask: false,
-    }),
-    cpFetch<{ data?: TaskAgentRunPayload[] }>(`/api/tasks/${encodeURIComponent(input.taskId)}/runs`, {
-      authorization: input.authorization,
     }),
     projectId
       ? cpFetch<ProjectMemberPayload[]>(`/api/projects/${encodeURIComponent(projectId)}/members`, {
@@ -258,7 +255,7 @@ export async function buildTaskMemberViewModel(input: {
     taskStatus: input.taskStatus ?? task?.status,
     prefetched: workflowResources,
   });
-  const agentRuns = agentRunsResult.ok ? (agentRunsResult.data?.data ?? []) : [];
+  const agentRuns: TaskAgentRunPayload[] = [];
   const projectMembers = projectMembersResult.ok ? projectMembersResult.data : [];
 
   const roleStageMap = new Map<string, Set<string>>();

@@ -1,5 +1,9 @@
 import { cpFetch } from "../../lib/control-plane-client";
-import { runDetachedPrompt } from "../agent-control/opencode-adapter";
+import { buildExecutionContext, runDetachedPrompt } from "../agent-control/opencode-adapter";
+import {
+  persistTaskSessionMessageSnapshot,
+  upsertTaskSessionLineageRecord,
+} from "./task-session-compat";
 import { fetchTaskWorkflowResources } from "./workflow-view";
 
 interface TaskRecord {
@@ -497,6 +501,7 @@ function collectStageRoleIds(stage: WorkflowTemplateStageRecord) {
 }
 
 async function executeRoleBindings(input: {
+  authorization: string;
   task: TaskRecord;
   stage: WorkflowTemplateStageRecord;
   role: ResolvedRoleAgentResult["role"];
@@ -515,22 +520,23 @@ async function executeRoleBindings(input: {
         role: input.role,
         stageStatus: input.stageStatus,
       });
+      const resolvedModel = binding.model
+        ? (() => {
+            const index = binding.model.indexOf(":");
+            return index > 0
+              ? {
+                  providerId: binding.model.slice(0, index),
+                  modelId: binding.model.slice(index + 1),
+                }
+              : undefined;
+          })()
+        : undefined;
       const result = await runDetachedPrompt(
         `[${input.stage.stageKey}] ${input.role.name} / ${input.task.title}`,
         prompt,
         {
           agent: binding.runtimeAgent,
-          model: binding.model
-            ? (() => {
-                const index = binding.model.indexOf(":");
-                return index > 0
-                  ? {
-                      providerId: binding.model.slice(0, index),
-                      modelId: binding.model.slice(index + 1),
-                    }
-                  : undefined;
-              })()
-            : undefined,
+          model: resolvedModel,
           taskId: input.task.id,
           projectId: input.task.projectId,
           timeoutMs: 10_000,
@@ -541,6 +547,27 @@ async function executeRoleBindings(input: {
         typeof result.text === "string" && result.text.trim()
           ? result.text.trim()
           : result.error || "未返回内容";
+
+      // Persist the detached session's user prompt + assistant response to the task
+      if (result.sessionId) {
+        persistDetachedBindingMessages({
+          authorization: input.authorization,
+          taskId: input.task.id,
+          runtimeSessionId: result.sessionId,
+          stageKey: input.stage.stageKey,
+          roleName: input.role.name,
+          agent: binding.runtimeAgent,
+          model: binding.model ?? undefined,
+          userPrompt: prompt,
+          assistantText: text,
+          completedAt: result.completed ? new Date().toISOString() : undefined,
+        }).catch((error) => {
+          console.error(
+            `[stage-intervention] failed to persist detached binding messages for session ${result.sessionId}:`,
+            error,
+          );
+        });
+      }
 
       return {
         bindingId: binding.bindingId,
@@ -711,6 +738,7 @@ async function processStageRoleIntervention(input: {
   }
 
   const executions = await executeRoleBindings({
+    authorization: input.authorization,
     task: input.task,
     stage: input.stage,
     role: resolved.role,
@@ -778,6 +806,8 @@ export async function dispatchStageIntervention(
   const involvedRoles = collectStageRoleIds(stage);
   const stageConclusions = existingConclusions.filter((item) => item.stage === input.stageKey);
 
+  const previousConclusionCount = stageConclusions.length;
+
   for (const roleAgentId of involvedRoles) {
     const alreadyExists = existingConclusions.some(
       (item) => item.roleAgentId === roleAgentId && item.stage === input.stageKey,
@@ -800,5 +830,182 @@ export async function dispatchStageIntervention(
     });
   }
 
+  const newConclusions = stageConclusions.slice(previousConclusionCount);
+  if (newConclusions.length > 0) {
+    await persistStageInterventionMessages({
+      authorization: input.authorization,
+      task,
+      stageKey: input.stageKey,
+      stageName: stage.name,
+      conclusions: newConclusions,
+    }).catch((error) => {
+      console.error(
+        `[stage-intervention] failed to persist workflow messages for stage ${input.stageKey}:`,
+        error,
+      );
+    });
+  }
+
   return summarizeStageIntervention(stageConclusions);
+}
+
+// ── Workflow message persistence ─────────────────────────────────────
+
+/**
+ * Persist a detached binding's user prompt + assistant response to the task.
+ * This bridges the gap where `runDetachedPrompt` creates anonymous OpenCode
+ * sessions that are not registered via `registerAgentRun`, so SSE events
+ * for those sessions never reach the persistence layer.
+ */
+async function persistDetachedBindingMessages(input: {
+  authorization: string;
+  taskId: string;
+  runtimeSessionId: string;
+  stageKey: string;
+  roleName: string;
+  agent: string;
+  model?: string;
+  userPrompt: string;
+  assistantText: string;
+  completedAt?: string;
+}) {
+  const now = new Date().toISOString();
+  const completedAt = input.completedAt ?? now;
+
+  // 1. Register the session with proper metadata (stage, parentSession, kind)
+  await upsertTaskSessionLineageRecord(input.taskId, input.authorization, {
+    runtimeSessionId: input.runtimeSessionId,
+    parentRuntimeSessionId: undefined,
+    forkedFromMessageId: undefined,
+    branchName: `${input.stageKey}-${input.roleName}-${input.agent}`,
+    sourceType: "root",
+    sessionKind: "primary",
+    isActive: false,
+    selectedModel: input.model ?? undefined,
+  });
+
+  // 2. Persist user prompt with agent/model metadata
+  const userMsgId = `${input.runtimeSessionId}:user`;
+  const systemContextText = buildExecutionContext({
+    taskId: input.taskId,
+    projectId: "proj-default",
+  });
+  const userInputText = input.userPrompt;
+  const finalSentText = `${systemContextText}${userInputText}`;
+  await persistTaskSessionMessageSnapshot(input.taskId, input.authorization, {
+    runtimeSessionId: input.runtimeSessionId,
+    message: {
+      info: {
+        id: userMsgId,
+        role: "user",
+        agent: input.agent,
+        model: input.model,
+        time: { created: now, completed: now },
+      },
+      parts: [
+        {
+          type: "text",
+          text: finalSentText,
+        },
+      ],
+      promptDecomposition: { userInputText, systemContextText, finalSentText },
+    },
+  });
+
+  // 3. Persist assistant response
+  const assistantMsgId = `${input.runtimeSessionId}:assistant`;
+  await persistTaskSessionMessageSnapshot(input.taskId, input.authorization, {
+    runtimeSessionId: input.runtimeSessionId,
+    message: {
+      info: {
+        id: assistantMsgId,
+        role: "assistant",
+        agent: input.agent,
+        model: input.model,
+        time: { created: now, completed: completedAt },
+      },
+      parts: [{ type: "text", text: input.assistantText }],
+    },
+  });
+}
+
+function buildWorkflowSessionId(taskId: string): string {
+  return `workflow-intervention-${taskId}`;
+}
+
+function buildStageExecutionContextText(input: {
+  task: TaskRecord;
+  stageKey: string;
+  stageName: string;
+}): string {
+  const stageLabel = stageLabelFromKey(input.stageKey) || input.stageName || input.stageKey;
+  return [
+    "Execution context:",
+    `- Opener-X task ID: ${input.task.id}`,
+    `- Project ID: ${input.task.projectId}`,
+    `当前阶段：${stageLabel}`,
+    "",
+    "请只完成当前阶段的目标。",
+    "",
+    `/start-work ${input.task.prompt}`,
+  ].join("\n");
+}
+
+function buildStageConclusionSummaryText(input: {
+  stageKey: string;
+  stageName: string;
+  conclusions: RoleConclusionPayload[];
+}): string {
+  const stageLabel = stageLabelFromKey(input.stageKey) || input.stageName || input.stageKey;
+  const lines: string[] = [`## ${stageLabel} 阶段审查完成`, ""];
+
+  for (const conclusion of input.conclusions) {
+    const decision = conclusion.finalDecision ?? "observe";
+    const risk = conclusion.aggregateRiskLevel ?? "low";
+    const rationale = conclusion.winningRationale?.trim() || "未提供说明。";
+    lines.push(`- **${conclusion.roleAgentId}**: ${decision} (${risk}) — ${rationale}`);
+  }
+
+  return lines.join("\n");
+}
+
+async function persistStageInterventionMessages(input: {
+  authorization: string;
+  task: TaskRecord;
+  stageKey: string;
+  stageName: string;
+  conclusions: RoleConclusionPayload[];
+}) {
+  const sessionId = buildWorkflowSessionId(input.task.id);
+  const now = new Date().toISOString();
+  const userMsgId = `wf-${input.stageKey}-${Date.now()}-user`;
+  const assistantMsgId = `wf-${input.stageKey}-${Date.now()}-assistant`;
+
+  const userText = buildStageExecutionContextText({
+    task: input.task,
+    stageKey: input.stageKey,
+    stageName: input.stageName,
+  });
+
+  const assistantText = buildStageConclusionSummaryText({
+    stageKey: input.stageKey,
+    stageName: input.stageName,
+    conclusions: input.conclusions,
+  });
+
+  await persistTaskSessionMessageSnapshot(input.task.id, input.authorization, {
+    runtimeSessionId: sessionId,
+    message: {
+      info: { id: userMsgId, role: "user", time: { created: now, completed: now } },
+      parts: [{ type: "text", text: userText }],
+    },
+  });
+
+  await persistTaskSessionMessageSnapshot(input.task.id, input.authorization, {
+    runtimeSessionId: sessionId,
+    message: {
+      info: { id: assistantMsgId, role: "assistant", time: { created: now, completed: now } },
+      parts: [{ type: "text", text: assistantText }],
+    },
+  });
 }

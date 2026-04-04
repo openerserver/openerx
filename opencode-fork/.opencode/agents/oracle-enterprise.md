@@ -2,7 +2,7 @@
 name: oracle-enterprise
 description: Responsible for operations troubleshooting, system inspection,
   deployment diagnostics, and recovery guidance.
-model: anthropic/claude-sonnet-4-20250514
+model: github-copilot:gpt-5-mini
 ---
 
 # Oracle — Architecture & Incident Analysis Agent

@@ -44,6 +44,7 @@ let currentStrategy = normalizeOrchestrationStrategy({
 let workflowInitialized = false;
 
 mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter", () => ({
+  buildExecutionContext: mock(() => ""),
   continueSession: mock(async () => ({ ok: true })),
   createSession: createSessionMock,
   ensureAgentRunForSession: mock(() => "run-test"),
@@ -303,7 +304,42 @@ beforeEach(() => {
 });
 
 describe("task execute route stage dispatch", () => {
-  test("walks from execute route into startup stage dispatch using the bound workflow template", async () => {
+  test("registers the started session with the resolved model route", async () => {
+    currentTask.selectedModel = "gpt-5-mini";
+
+    const { taskRoutes } = await import(
+      "../../control-plane/web-ui-bff/src/modules/tasks/routes?task-execute-stage-dispatch-model-route"
+    );
+
+    const response = await taskRoutes.request("http://localhost/task-1/execute", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer test",
+      },
+    });
+
+    expect(response.status).toBe(200);
+
+    const taskPatchCall = cpFetchMock.mock.calls.find(
+      ([path, options]) => path === "/api/tasks/task-1" && options?.method === "PATCH",
+    );
+    expect(taskPatchCall?.[1]).toMatchObject({
+      body: expect.objectContaining({
+        strategy: expect.stringContaining('"effectiveModel":"github-copilot:gpt-5-mini"'),
+      }),
+    });
+    expect(cpFetchMock).toHaveBeenCalledWith("/api/tasks/task-1/branches", {
+      method: "POST",
+      authorization: "Bearer test",
+      body: expect.objectContaining({
+        runtimeSessionId: "session-test",
+        branchName: "Implement workflow runtime",
+        sourceType: "root",
+      }),
+    });
+  });
+
+  test("execute route no longer triggers workflow startup stage dispatch", async () => {
     const { taskRoutes } = await import(
       "../../control-plane/web-ui-bff/src/modules/tasks/routes?task-execute-stage-dispatch-route"
     );
@@ -316,6 +352,8 @@ describe("task execute route stage dispatch", () => {
     });
     const body = await response.json();
 
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
     expect(response.status).toBe(200);
     expect(body).toMatchObject({
       taskId: "task-1",
@@ -323,11 +361,7 @@ describe("task execute route stage dispatch", () => {
       agentRunId: "run-test",
       status: "running",
     });
-    expect(dispatchStageInterventionMock.mock.calls.map((call) => call[0].stageKey)).toEqual([
-      "clarify",
-      "design",
-      "implement",
-    ]);
+    expect(dispatchStageInterventionMock).not.toHaveBeenCalled();
 
     const taskPatchCall = cpFetchMock.mock.calls.find(
       ([path, options]) => path === "/api/tasks/task-1" && options?.method === "PATCH",
@@ -337,31 +371,20 @@ describe("task execute route stage dispatch", () => {
         strategy: expect.stringContaining('"workflowTemplateId":"tpl-1"'),
       }),
     });
-    expect(cpFetchMock).toHaveBeenCalledWith("/api/tasks/task-1/workflow/initialize", {
-      method: "POST",
-      authorization: "Bearer test",
-      body: {
-        templateId: "tpl-1",
-        currentStage: "clarify",
-      },
-    });
-    expect(cpFetchMock).toHaveBeenCalledWith("/api/tasks/task-1/workflow/advance", {
-      method: "POST",
-      authorization: "Bearer test",
-      body: {
-        fromStage: "clarify",
-        toStage: "design",
-        status: "completed",
-      },
-    });
-    expect(cpFetchMock).toHaveBeenCalledWith("/api/tasks/task-1/workflow/advance", {
-      method: "POST",
-      authorization: "Bearer test",
-      body: {
-        fromStage: "design",
-        toStage: "implement",
-        status: "completed",
-      },
-    });
+    const cpFetchCalls = cpFetchMock.mock.calls as Array<
+      [string, { method?: string; body?: unknown } | undefined]
+    >;
+    expect(
+      cpFetchCalls.some(
+        ([path, options]) =>
+          path === "/api/tasks/task-1/workflow/initialize" && options?.method === "POST",
+      ),
+    ).toBe(false);
+    expect(
+      cpFetchCalls.some(
+        ([path, options]) =>
+          path === "/api/tasks/task-1/workflow/advance" && options?.method === "POST",
+      ),
+    ).toBe(false);
   });
 });

@@ -1,3 +1,6 @@
+import { and, eq } from "drizzle-orm";
+import { db } from "../../db";
+import { taskSessions, tasks } from "../../db/schema";
 import {
   archiveTaskBranchCompatTreeNode,
   upsertTaskBranchCompatTreeNode,
@@ -5,73 +8,185 @@ import {
 } from "../project-tree/storage";
 import { loadTaskTreeRecord } from "../project-tree/task-view";
 import { buildTaskTreeSnapshotFromRecord, createTaskAggregateSyncApi } from "./task-aggregate-sync";
-import { createTaskConversationMessageSyncApi } from "./task-conversation-message-sync";
-import { createTaskConversationSessionSyncApi } from "./task-conversation-session-sync";
-import {
-  appendTaskDomainEvent,
-  replayTaskDomainProjections,
-  replayTaskDomainProjectionsByProject,
-} from "./task-domain-projector";
-import { createTaskRunWriteSyncApi } from "./task-run-write-sync";
-import {
-  buildTaskBranchCompatEventsResponse,
-  buildTaskBranchCompatMessagesResponse,
-  buildTaskBranchCompatTimelineResponse,
-  listTaskBranchCompatTreeRecords,
-  resolveTaskBranchCompatRecord,
-  resolveTaskBranchCompatRecordByRuntimeSessionId,
-} from "./task-branch-compat-read";
+import { createTaskBranchWriteApi } from "./task-branch-write";
+import { createSessionOperationWriteApi } from "./session-operation-write-api";
+import { createTaskArtifactWriteApi } from "./task-artifact-write-api";
+import { createTaskSessionMessageApi } from "./task-session-message-api";
+import { createTaskSessionMessageWriteApi } from "./task-session-message-write-api";
+import { createTaskSessionReadApi } from "./task-session-read";
+import { createTaskSessionWriteApi } from "./task-session-write-api";
 import { createTaskSnapshotReadApi } from "./task-snapshot-read";
+import { createTaskUsageLedgerWriteApi } from "./task-usage-ledger-write-api";
 
 async function loadTaskTreeBackedRecord(taskId: string) {
   return loadTaskTreeRecord(taskId);
 }
 
+function mapTaskSessionSourceType(session: typeof taskSessions.$inferSelect) {
+  if (session.sessionKind === "manual_branch") {
+    return "fork" as const;
+  }
+  if (session.sessionKind === "resume") {
+    return "sub_session" as const;
+  }
+  return "root" as const;
+}
+
+function stripTaskSessionWritePrefix(taskId: string, sessionId: string | null) {
+  if (!sessionId) {
+    return null;
+  }
+
+  const prefix = `task-session:${taskId}:`;
+  return sessionId.startsWith(prefix) ? sessionId.slice(prefix.length) : sessionId;
+}
+
+function mapTaskSessionCompatRecord(session: typeof taskSessions.$inferSelect) {
+  return {
+    runtimeSessionId: session.runtimeSessionId ?? session.id,
+    parentRuntimeSessionId: stripTaskSessionWritePrefix(session.taskId, session.parentSessionId),
+    forkedFromMessageId: session.forkedFromMessageId,
+    branchName: session.branchName,
+    sourceType: mapTaskSessionSourceType(session),
+    sessionKind: session.sessionKind,
+    executionModeSnapshot: session.executionModeSnapshot,
+    candidateIndex: session.candidateIndex,
+    stepIndex: session.stepIndex,
+    selectedModel: session.selectedModel,
+    isActive: session.executionStatus === "running" && !session.archivedAt,
+  };
+}
+
+async function resolveTaskSessionRecord(taskId: string, projectId: string, sessionId: string) {
+  const session = await db.query.taskSessions.findFirst({
+    where: and(
+      eq(taskSessions.id, sessionId),
+      eq(taskSessions.taskId, taskId),
+      eq(taskSessions.projectId, projectId),
+    ),
+  });
+
+  return session ? mapTaskSessionCompatRecord(session) : null;
+}
+
+async function resolveTaskSessionRecordByRuntimeSessionId(
+  taskId: string,
+  projectId: string,
+  runtimeSessionId: string,
+) {
+  const session = await db.query.taskSessions.findFirst({
+    where: and(
+      eq(taskSessions.runtimeSessionId, runtimeSessionId),
+      eq(taskSessions.taskId, taskId),
+      eq(taskSessions.projectId, projectId),
+    ),
+  });
+
+  return session ? mapTaskSessionCompatRecord(session) : null;
+}
+
+async function replayTaskDomainProjections(taskId: string) {
+  const projector = await import("./task-domain-projector");
+  return projector.replayTaskDomainProjections(taskId);
+}
+
+async function replayTaskDomainProjectionsByProject(projectId: string) {
+  const projector = await import("./task-domain-projector");
+  return projector.replayTaskDomainProjectionsByProject(projectId);
+}
+
+/**
+ * Resolve taskId + projectId from a runtime session ID.
+ * Checks task_sessions first (unique index on runtime_session_id),
+ * then falls back to tasks.current_session_id (legacy).
+ */
+export async function resolveTaskByRuntimeSessionId(
+  runtimeSessionId: string,
+): Promise<{ taskId: string; projectId: string } | null> {
+  const session = await db.query.taskSessions.findFirst({
+    where: eq(taskSessions.runtimeSessionId, runtimeSessionId),
+    columns: { taskId: true, projectId: true },
+  });
+  if (session) {
+    return { taskId: session.taskId, projectId: session.projectId };
+  }
+
+  const task = await db.query.tasks.findFirst({
+    where: eq(tasks.currentSessionId, runtimeSessionId),
+    columns: { id: true, projectId: true },
+  });
+  if (task) {
+    return { taskId: task.id, projectId: task.projectId };
+  }
+
+  return null;
+}
+
 export function buildTaskRouteBuilderShared() {
   const sharedDeps = {
     loadTaskTreeBackedRecord,
-    appendTaskDomainEvent,
     buildTaskTreeSnapshotFromRecord,
     upsertTaskTreeNode,
     syncTaskBranchCompatTreeNode: upsertTaskBranchCompatTreeNode,
     archiveTaskBranchCompatTreeNode,
-    resolveTaskBranchCompatRecord,
-    resolveTaskBranchCompatRecordByRuntimeSessionId,
-    buildTaskBranchCompatMessagesResponse,
-    buildTaskBranchCompatEventsResponse,
-    buildTaskBranchCompatTimelineResponse,
-    listTaskBranchCompatTreeRecords,
+    resolveTaskSessionRecord,
+    resolveTaskSessionRecordByRuntimeSessionId,
     replayTaskDomainProjections,
     replayTaskDomainProjectionsByProject,
   };
 
-  const runWriteApi = createTaskRunWriteSyncApi({
-    appendTaskDomainEvent: sharedDeps.appendTaskDomainEvent,
-  });
-
-  const aggregateSyncApi = createTaskAggregateSyncApi({
-    appendTaskDomainEvent: sharedDeps.appendTaskDomainEvent,
-    resolveConversationTimelineSessionId: runWriteApi.resolveConversationTimelineSessionId,
-  });
+  const aggregateSyncApi = createTaskAggregateSyncApi();
 
   const snapshotReadApi = createTaskSnapshotReadApi({
     loadTaskTreeBackedRecord: sharedDeps.loadTaskTreeBackedRecord,
   });
 
-  const conversationMessageSyncApi = createTaskConversationMessageSyncApi({
-    appendTaskDomainEvent: sharedDeps.appendTaskDomainEvent,
+  const taskUsageLedgerWriteApi = createTaskUsageLedgerWriteApi();
+  const taskArtifactWriteApi = createTaskArtifactWriteApi();
+  const sessionWriteApi = createTaskSessionWriteApi();
+  const sessionMessageWriteApi = createTaskSessionMessageWriteApi({
+    upsertTaskSessionRecord: sessionWriteApi.upsertTaskSessionRecord,
+    resolveTaskSessionRecordByRuntimeSessionId:
+      sharedDeps.resolveTaskSessionRecordByRuntimeSessionId,
   });
-
-  const conversationSessionSyncApi = createTaskConversationSessionSyncApi({
-    appendTaskDomainEvent: sharedDeps.appendTaskDomainEvent,
+  const sessionMessageApi = createTaskSessionMessageApi({
+    loadTaskTreeBackedRecord: sharedDeps.loadTaskTreeBackedRecord,
+    upsertTaskSessionMessageRecord: sessionMessageWriteApi.upsertTaskSessionMessageRecord,
+  });
+  const sessionOperationWriteApi = createSessionOperationWriteApi({
+    upsertTaskSessionRecord: sessionWriteApi.upsertTaskSessionRecord,
+    buildTaskTreeSnapshotFromRecord: sharedDeps.buildTaskTreeSnapshotFromRecord,
+    syncTaskAggregateFromSnapshot: aggregateSyncApi.syncTaskAggregateFromSnapshot,
+    appendTaskUsageLedgerEntry: taskUsageLedgerWriteApi.appendTaskUsageLedgerEntry,
+  });
+  const sessionReadApi = createTaskSessionReadApi({
+    loadTaskTreeBackedRecord: sharedDeps.loadTaskTreeBackedRecord,
+  });
+  const branchWriteApi = createTaskBranchWriteApi({
+    loadTaskTreeBackedRecord: sharedDeps.loadTaskTreeBackedRecord,
+    resolveTaskBranchCompatRecord: sharedDeps.resolveTaskSessionRecord,
+    resolveTaskBranchCompatRecordByRuntimeSessionId:
+      sharedDeps.resolveTaskSessionRecordByRuntimeSessionId,
+    syncTaskBranchCompatTreeNode: sharedDeps.syncTaskBranchCompatTreeNode,
+    archiveTaskBranchCompatTreeNode: sharedDeps.archiveTaskBranchCompatTreeNode,
+    upsertConversationSessionRecord: sessionWriteApi.upsertTaskSessionRecord,
+    upsertConversationMessageRecord: sessionMessageWriteApi.upsertTaskSessionMessageRecord,
+    buildTaskTreeSnapshotFromRecord: sharedDeps.buildTaskTreeSnapshotFromRecord,
+    upsertTaskTreeNode: sharedDeps.upsertTaskTreeNode,
+    syncTaskAggregateFromSnapshot: aggregateSyncApi.syncTaskAggregateFromSnapshot,
   });
 
   return {
     sharedDeps,
-    runWriteApi,
     aggregateSyncApi,
     snapshotReadApi,
-    conversationMessageSyncApi,
-    conversationSessionSyncApi,
+    sessionWriteApi,
+    sessionMessageApi,
+    sessionMessageWriteApi,
+    sessionOperationWriteApi,
+    sessionReadApi,
+    branchWriteApi,
+    taskArtifactWriteApi,
+    taskUsageLedgerWriteApi,
   };
 }

@@ -56,22 +56,38 @@
   "mcp": {
     "exa": {
       "type": "local",
-      "command": ["npx", "-y", "@anthropic-ai/exa-mcp-server"],
+      "command": [
+        "npx",
+        "-y",
+        "@anthropic-ai/exa-mcp-server"
+      ],
       "environment": {
         "EXA_API_KEY": "${EXA_API_KEY}"
       }
     },
     "context7": {
       "type": "local",
-      "command": ["npx", "-y", "@anthropic-ai/context7-mcp-server"]
+      "command": [
+        "npx",
+        "-y",
+        "@anthropic-ai/context7-mcp-server"
+      ]
     },
     "grep-app": {
       "type": "local",
-      "command": ["npx", "-y", "@anthropic-ai/grep-app-mcp-server"]
+      "command": [
+        "npx",
+        "-y",
+        "@anthropic-ai/grep-app-mcp-server"
+      ]
     },
     "demo-memory": {
       "type": "local",
-      "command": ["npx", "-y", "@modelcontextprotocol/server-memory"],
+      "command": [
+        "npx",
+        "-y",
+        "@modelcontextprotocol/server-memory"
+      ],
       "description": "Demo memory MCP for validation"
     }
   },
@@ -153,6 +169,13 @@
         "provider": "github-copilot",
         "contextWindow": 264000,
         "maxTokens": 64000
+      },
+      {
+        "id": "gpt-5.4-mini",
+        "name": "GPT-5.4 mini",
+        "provider": "github-copilot-2",
+        "contextWindow": 400000,
+        "maxTokens": 128000
       }
     ]
   }

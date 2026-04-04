@@ -1,6 +1,5 @@
 import { useAuthStore } from "../stores/auth";
 import { type RecoverySuggestion, normalizeRecoverySuggestions } from "./recovery-suggestions";
-import { buildSessionMessagesFromExecutionTrace } from "./task-message-source";
 import { buildMergedTraceTimelineItems } from "./task-trace-conversation";
 
 const BASE_URL = "/api";
@@ -1346,6 +1345,7 @@ export async function listTasks(projectId?: string, status?: string) {
 
 export { TASK_LIST_LIMIT };
 
+// Task detail read model only. This endpoint is not the canonical task tree contract.
 export async function getTask(taskId: string) {
   return request<Task>(`/tasks/${taskId}`);
 }
@@ -1394,6 +1394,12 @@ export async function updateTask(
   return request<Partial<Task>>(`/tasks/${taskId}`, {
     method: "PATCH",
     body: JSON.stringify(data),
+  });
+}
+
+export async function deleteTask(taskId: string) {
+  return request<{ ok: boolean; id: string }>(`/tasks/${taskId}`, {
+    method: "DELETE",
   });
 }
 
@@ -1494,14 +1500,23 @@ export async function getTaskPipeline(taskId: string, sessionId?: string) {
 
 export interface SessionInfo {
   id: string;
+  taskSessionId?: string | null;
   title: string;
   isActive: boolean;
   summary: { additions: number; deletions: number; files: number } | null;
   createdAt: string | null;
   updatedAt: string | null;
+  coordinationKey?: string | null;
+  winnerSessionId?: string | null;
+  executionStatus?: string | null;
+  sessionKind?: string | null;
+  candidateIndex?: number | null;
+  stepIndex?: number | null;
+  selectedModel?: string | null;
+  executionModeSnapshot?: string | null;
 }
 
-export type TaskBranchRecord = SessionInfo;
+export type TaskSessionRecord = SessionInfo;
 
 export interface TaskRuntimePermission {
   id: string;
@@ -1518,12 +1533,533 @@ export interface TaskRuntimePermission {
 
 export type TaskRuntimePermissionReply = "once" | "always" | "reject";
 
-export async function getTaskBranches(taskId: string) {
-  return request<{ data: TaskBranchRecord[] }>(`/tasks/${taskId}/branches`);
+export interface TaskTreeMeta {
+  contractVersion?: string;
+  taskId: string;
+  currentSessionId?: string | null;
+  rootSessionId?: string | null;
+  generatedAt?: string;
+  incomplete?: boolean;
 }
 
-export async function getTaskAgentRuns(taskId: string) {
-  return request<{ data: TaskAgentRunRecord[] }>(`/tasks/${taskId}/runs`);
+export interface TaskTreeSessionRecord {
+  id: string;
+  taskId: string;
+  parentSessionId?: string | null;
+  runtimeSessionId?: string | null;
+  sessionKind?: string | null;
+  sessionType?: string | null;
+  sourceMessageId?: string | null;
+  userPromptSummary?: string | null;
+  headMessageId?: string | null;
+  latestRunId?: string | null;
+  status?: string | null;
+  depth?: number | null;
+  sortKey?: string | null;
+  title?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
+
+export interface TaskTreeRunRecord {
+  id: string;
+  taskId: string;
+  sessionId: string;
+  runtimeSessionId?: string | null;
+  laneRole?: string | null;
+  modelRoute?: string | null;
+  workflowStageKey?: string | null;
+  createdAt?: string | null;
+}
+
+export interface TaskTreeMessageRecord {
+  id: string;
+  taskId: string;
+  sessionId: string;
+  createdByRunId?: string | null;
+  role: string;
+  messageKind?: string | null;
+  parentMessageId?: string | null;
+  replyToMessageId?: string | null;
+  seq?: number | null;
+  textPreview?: string | null;
+  partCount?: number | null;
+  status?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  completedAt?: string | null;
+}
+
+export interface TaskTreeMessagePartRecord {
+  id: string;
+  messageId: string;
+  partIndex: number;
+  partType: string;
+  textContent?: string | null;
+  jsonPayload?: Record<string, unknown> | null;
+  createdAt?: string | null;
+}
+
+export interface TaskTreeParallelGroupRecord {
+  coordinationKey: string;
+  sessionId: string;
+  executionMode?: string | null;
+  winnerRunId?: string | null;
+  runIds: string[];
+}
+
+export interface TaskConversationTreeResponse {
+  meta: TaskTreeMeta;
+  task: {
+    id: string;
+    projectId?: string | null;
+    title?: string | null;
+    status?: string | null;
+    summary?: string | null;
+    currentSessionId?: string | null;
+    rootSessionId?: string | null;
+    createdAt?: string | null;
+    updatedAt?: string | null;
+  };
+  workflow?: Record<string, unknown> | null;
+  parallelGroups: TaskTreeParallelGroupRecord[];
+  sessions: TaskTreeSessionRecord[];
+  runs: TaskTreeRunRecord[];
+  messages: TaskTreeMessageRecord[];
+  messageParts: TaskTreeMessagePartRecord[];
+  operations: Array<Record<string, unknown>>;
+  artifacts: Array<Record<string, unknown>>;
+  edges?: Record<string, unknown>;
+}
+
+export interface TaskTreeTaskMeta {
+  id: string;
+  projectId?: string | null;
+  title?: string | null;
+  status?: string | null;
+  summary?: string | null;
+  currentSessionId?: string | null;
+  rootSessionId?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
+
+function asTaskTreeString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function buildTaskTreePartLookup(parts: TaskTreeMessagePartRecord[]) {
+  const lookup = new Map<string, TaskTreeMessagePartRecord[]>();
+  for (const part of parts) {
+    const existing = lookup.get(part.messageId) ?? [];
+    existing.push(part);
+    lookup.set(part.messageId, existing);
+  }
+  for (const [messageId, messageParts] of lookup.entries()) {
+    lookup.set(
+      messageId,
+      messageParts.slice().sort((left, right) => left.partIndex - right.partIndex),
+    );
+  }
+  return lookup;
+}
+
+function buildTaskTreeWorkflowContextDisplayText(text: string | undefined) {
+  const normalized = typeof text === "string" ? text.replace(/\r\n?/gu, "\n").trim() : "";
+  if (!normalized) {
+    return undefined;
+  }
+
+  const withoutPrefix = normalized.replace(/^Execution context:\s*/u, "").trim();
+  if (!withoutPrefix) {
+    return undefined;
+  }
+
+  const cutMarkers = [
+    "\n请只完成当前阶段的目标。",
+    "\n完成后请输出本阶段产出摘要。",
+    "\n如果你认为当前阶段已经完成，请在输出末尾单独追加 [STAGE_COMPLETE]。",
+    "\n如果你认为当前阶段已经完成，请在输出末尾单独追加 [STAGE_COMPLETE]",
+    "\n/start-work ",
+  ];
+
+  let cutIndex = withoutPrefix.length;
+  for (const marker of cutMarkers) {
+    const markerIndex = withoutPrefix.indexOf(marker);
+    if (markerIndex >= 0) {
+      cutIndex = Math.min(cutIndex, markerIndex);
+    }
+  }
+
+  const cleaned = withoutPrefix.slice(0, cutIndex).trim();
+  return cleaned.length > 0 ? cleaned : withoutPrefix;
+}
+
+function extractTaskTreeWorkflowStageLabel(text: string | undefined) {
+  if (!text) {
+    return undefined;
+  }
+
+  const stageMatch = /当前阶段：([^\n]+)/u.exec(text);
+  return stageMatch?.[1]?.trim() || undefined;
+}
+
+function buildTaskTreeLegacyPart(part: TaskTreeMessagePartRecord) {
+  const payload = part.jsonPayload ?? {};
+  const text = asTaskTreeString(part.textContent) ?? asTaskTreeString(payload.text);
+  return {
+    ...payload,
+    id: part.id,
+    type: asTaskTreeString(payload.type) ?? part.partType,
+    ...(text ? { text, content: text, textContent: text, contentText: text } : {}),
+  } satisfies Record<string, unknown>;
+}
+
+function extractTaskTreeMessageText(
+  message: TaskTreeMessageRecord,
+  parts: TaskTreeMessagePartRecord[],
+) {
+  const textChunks = parts
+    .filter((part) => {
+      const payloadType = asTaskTreeString(part.jsonPayload?.type);
+      const partType = payloadType ?? part.partType;
+      return !partType || partType === "text";
+    })
+    .map((part) => asTaskTreeString(part.textContent) ?? asTaskTreeString(part.jsonPayload?.text))
+    .filter((value): value is string => Boolean(value));
+
+  if (textChunks.length > 0) {
+    return textChunks.join("\n").trim();
+  }
+
+  return asTaskTreeString(message.textPreview);
+}
+
+function buildTaskTreeLegacyMessage(args: {
+  message: TaskTreeMessageRecord;
+  parts: TaskTreeMessagePartRecord[];
+  runsById: Map<string, TaskTreeRunRecord>;
+}) {
+  const { message, parts, runsById } = args;
+  const run = message.createdByRunId ? runsById.get(message.createdByRunId) : undefined;
+  const text = extractTaskTreeMessageText(message, parts);
+  const createdAt = message.createdAt ?? message.updatedAt ?? undefined;
+  const completedAt = message.completedAt ?? undefined;
+
+  return {
+    id: message.id,
+    role: message.role,
+    text,
+    textContent: text,
+    contentText: text,
+    summaryText: message.textPreview ?? text,
+    createdAt,
+    updatedAt: message.updatedAt ?? createdAt,
+    completedAt,
+    parts: parts.map((part) => buildTaskTreeLegacyPart(part)),
+    info: {
+      id: message.id,
+      role: message.role,
+      ...(run?.laneRole ? { agent: run.laneRole } : {}),
+      ...(run?.modelRoute
+        ? {
+            model: { modelID: run.modelRoute },
+            modelID: run.modelRoute,
+          }
+        : {}),
+      time: {
+        ...(createdAt ? { created: createdAt } : {}),
+        ...(completedAt ? { completed: completedAt } : {}),
+      },
+    },
+  } satisfies Record<string, unknown>;
+}
+
+function buildTaskTreeWorkflowGroup(args: {
+  taskId: string;
+  sessions: TaskTreeSessionRecord[];
+  messages: TaskTreeMessageRecord[];
+  partsByMessageId: Map<string, TaskTreeMessagePartRecord[]>;
+}) {
+  type WorkflowStepProjection = {
+    agentName: string;
+    sessionId: string;
+    createdAt: string | undefined;
+    messages: Record<string, unknown>[];
+  };
+
+  const sessionById = new Map(args.sessions.map((session) => [session.id, session]));
+  const workflowSteps = args.messages
+    .filter((message) => message.role === "user")
+    .map<WorkflowStepProjection | null>((message) => {
+      const session = sessionById.get(message.sessionId);
+      const text = extractTaskTreeMessageText(
+        message,
+        args.partsByMessageId.get(message.id) ?? [],
+      );
+      if (!text?.startsWith("Execution context:")) {
+        return null;
+      }
+
+      if (session?.parentSessionId) {
+        return null;
+      }
+
+      if (session?.sessionKind && session.sessionKind !== "primary") {
+        return null;
+      }
+
+      const displayText = buildTaskTreeWorkflowContextDisplayText(text);
+      if (!displayText) {
+        return null;
+      }
+
+      const createdAt = message.createdAt ?? session?.createdAt ?? undefined;
+      const workflowMessage = {
+        id: `${message.id}:workflow-context`,
+        role: "workflow",
+        text: displayText,
+        textContent: displayText,
+        contentText: displayText,
+        summaryText: displayText,
+        createdAt,
+        parts: [
+          {
+            id: `${message.id}:workflow-context:text`,
+            type: "text",
+            text: displayText,
+            content: displayText,
+            textContent: displayText,
+            contentText: displayText,
+          },
+        ],
+        info: {
+          id: `${message.id}:workflow-context`,
+          role: "workflow",
+          preview: displayText,
+          time: {
+            ...(createdAt ? { created: createdAt } : {}),
+          },
+        },
+      } satisfies Record<string, unknown>;
+
+      return {
+        agentName: extractTaskTreeWorkflowStageLabel(text) ?? "当前工作流",
+        sessionId: message.sessionId,
+        createdAt,
+        messages: [workflowMessage],
+      };
+    })
+    .filter((step): step is WorkflowStepProjection => step != null)
+    .sort((left, right) => (left.createdAt ?? "").localeCompare(right.createdAt ?? ""));
+
+  if (workflowSteps.length === 0) {
+    return null;
+  }
+
+  return {
+    _type: "workflow_group",
+    info: {
+      id: `workflow-group-${args.taskId}`,
+      role: "workflow",
+      variant: "context",
+      label: "工作流消息",
+      hint: "当前阶段与执行上下文",
+    },
+    steps: workflowSteps,
+  } satisfies Record<string, unknown>;
+}
+
+function projectTaskConversationTreeToMessages(tree: TaskConversationTreeResponse): {
+  data: unknown[];
+  meta?: ExecutionTraceTimelineMeta & {
+    sessionId?: string;
+    messageCount?: number;
+  };
+} {
+  const partsByMessageId = buildTaskTreePartLookup(Array.isArray(tree.messageParts) ? tree.messageParts : []);
+  const runsById = new Map((Array.isArray(tree.runs) ? tree.runs : []).map((run) => [run.id, run]));
+
+  const regularMessages = (Array.isArray(tree.messages) ? tree.messages : []).map((message) =>
+    buildTaskTreeLegacyMessage({
+      message,
+      parts: partsByMessageId.get(message.id) ?? [],
+      runsById,
+    }),
+  );
+
+  const workflowGroup = buildTaskTreeWorkflowGroup({
+    taskId: tree.meta.taskId,
+    sessions: Array.isArray(tree.sessions) ? tree.sessions : [],
+    messages: Array.isArray(tree.messages) ? tree.messages : [],
+    partsByMessageId,
+  });
+
+  const data = workflowGroup
+    ? (() => {
+        const insertionIndex = regularMessages.findIndex((message) => message.role !== "user");
+        if (insertionIndex < 0) {
+          return [...regularMessages, workflowGroup];
+        }
+        return [
+          ...regularMessages.slice(0, insertionIndex),
+          workflowGroup,
+          ...regularMessages.slice(insertionIndex),
+        ];
+      })()
+    : regularMessages;
+
+  return {
+    data,
+    meta: {
+      sessionId: tree.meta.currentSessionId ?? tree.task.currentSessionId ?? undefined,
+      messageCount: regularMessages.length,
+      readSource: "task-domain-projection",
+      complete: tree.meta.incomplete === true ? false : true,
+      itemCount: regularMessages.length,
+    },
+  };
+}
+
+function buildTaskTreeMessageLookup(tree: TaskConversationTreeResponse) {
+  const partsByMessageId = buildTaskTreePartLookup(Array.isArray(tree.messageParts) ? tree.messageParts : []);
+  const messages = Array.isArray(tree.messages) ? tree.messages : [];
+  return new Map(
+    messages.map((message) => [
+      message.id,
+      {
+        message,
+        text: extractTaskTreeMessageText(message, partsByMessageId.get(message.id) ?? []),
+      },
+    ]),
+  );
+}
+
+function projectTaskTreeToTaskMeta(tree: TaskConversationTreeResponse): TaskTreeTaskMeta {
+  return {
+    id: tree.task.id,
+    projectId: tree.task.projectId ?? undefined,
+    title: tree.task.title ?? undefined,
+    status: tree.task.status ?? undefined,
+    summary: tree.task.summary ?? undefined,
+    currentSessionId: tree.meta.currentSessionId ?? tree.task.currentSessionId ?? undefined,
+    rootSessionId: tree.meta.rootSessionId ?? tree.task.rootSessionId ?? undefined,
+    createdAt: tree.task.createdAt ?? undefined,
+    updatedAt: tree.task.updatedAt ?? undefined,
+  };
+}
+
+function projectTaskTreeToSessionSummaries(tree: TaskConversationTreeResponse): TaskSessionRecord[] {
+  const messageLookup = buildTaskTreeMessageLookup(tree);
+  const currentSessionId = tree.meta.currentSessionId ?? tree.task.currentSessionId ?? undefined;
+
+  return (Array.isArray(tree.sessions) ? tree.sessions : [])
+    .map((session) => {
+      const runtimeSessionId = session.runtimeSessionId ?? session.id;
+      const promptSummary =
+        asTaskTreeString(session.userPromptSummary) ??
+        asTaskTreeString(session.title) ??
+        messageLookup.get(asTaskTreeString(session.sourceMessageId) ?? "")?.text ??
+        "";
+
+      return {
+        id: runtimeSessionId,
+        taskSessionId: session.id,
+        title: promptSummary,
+        isActive: runtimeSessionId === currentSessionId,
+        summary: null,
+        createdAt: session.createdAt ?? null,
+        updatedAt: session.updatedAt ?? null,
+        executionStatus: session.status ?? null,
+        sessionKind: session.sessionType ?? session.sessionKind ?? null,
+      } satisfies TaskSessionRecord;
+    })
+    .sort((left, right) => (left.createdAt ?? "").localeCompare(right.createdAt ?? ""));
+}
+
+function projectTaskTreeToSessionLineage(tree: TaskConversationTreeResponse): TaskSessionLineageNode[] {
+  const messageLookup = buildTaskTreeMessageLookup(tree);
+  const currentSessionId = tree.meta.currentSessionId ?? tree.task.currentSessionId ?? undefined;
+  const sessions = Array.isArray(tree.sessions) ? tree.sessions : [];
+  const byParent = new Map<string | null, TaskTreeSessionRecord[]>();
+
+  for (const session of sessions) {
+    const parentId = session.parentSessionId ?? null;
+    const existing = byParent.get(parentId) ?? [];
+    existing.push(session);
+    byParent.set(parentId, existing);
+  }
+
+  const buildNodes = (parentId: string | null): TaskSessionLineageNode[] => {
+    const children = (byParent.get(parentId) ?? []).slice().sort((left, right) => {
+      const leftSort = left.sortKey ?? left.createdAt ?? "";
+      const rightSort = right.sortKey ?? right.createdAt ?? "";
+      return leftSort.localeCompare(rightSort);
+    });
+
+    return children.map((session) => {
+      const runtimeSessionId = session.runtimeSessionId ?? session.id;
+      const sourceMessageId = asTaskTreeString(session.sourceMessageId) ?? null;
+      const sourceMessage = sourceMessageId ? messageLookup.get(sourceMessageId)?.message : undefined;
+      const title =
+        asTaskTreeString(session.title) ??
+        asTaskTreeString(session.userPromptSummary) ??
+        messageLookup.get(sourceMessageId ?? "")?.text ??
+        null;
+
+      return {
+        id: session.id,
+        runtimeSessionId,
+        parentRuntimeSessionId: session.parentSessionId ?? null,
+        forkedFromMessageId: sourceMessageId,
+        forkedFromMessageRole: sourceMessage?.role ?? null,
+        forkedFromMessagePreview: sourceMessageId ? (messageLookup.get(sourceMessageId)?.text ?? null) : null,
+        firstPromptAfterFork: asTaskTreeString(session.userPromptSummary) ?? null,
+        branchName: title,
+        sourceType: session.sessionType ?? session.sessionKind ?? (session.parentSessionId ? "follow_up" : "root"),
+        isActive: runtimeSessionId === currentSessionId,
+        title,
+        summary: null,
+        createdAt: session.createdAt ?? null,
+        updatedAt: session.updatedAt ?? null,
+        children: buildNodes(session.id),
+      } satisfies TaskSessionLineageNode;
+    });
+  };
+
+  return buildNodes(null);
+}
+
+export async function getTaskConversationTree(
+  taskId: string,
+  options?: { sessionId?: string; includeLineage?: boolean },
+) {
+  const params = new URLSearchParams();
+  if (options?.sessionId) {
+    params.set("sessionId", options.sessionId);
+  }
+  if (options?.includeLineage === false) {
+    params.set("includeLineage", "false");
+  }
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+
+  return request<TaskConversationTreeResponse>(
+    `/tasks/${encodeURIComponent(taskId)}/tree${suffix}`,
+  );
+}
+
+export async function getTaskTreeMeta(taskId: string): Promise<TaskTreeTaskMeta> {
+  const tree = await getTaskConversationTree(taskId, { includeLineage: false });
+  return projectTaskTreeToTaskMeta(tree);
+}
+
+export async function getTaskSessions(taskId: string) {
+  const tree = await getTaskConversationTree(taskId, { includeLineage: false });
+  return { data: projectTaskTreeToSessionSummaries(tree) };
+}
+
+export async function getTaskAgentRuns(_taskId: string) {
+  return { data: [] as TaskAgentRunRecord[] };
 }
 
 export async function getTaskDomainRuns(taskId: string) {
@@ -1531,7 +2067,9 @@ export async function getTaskDomainRuns(taskId: string) {
 }
 
 export async function getTaskDomainRunDetail(taskId: string, runId: string) {
-  return request<{ data: TaskDomainRunDetailRecord }>(`/tasks/${taskId}/domain-runs/${runId}`);
+  return request<{ data: TaskDomainRunDetailRecord }>(
+    `/tasks/${taskId}/domain-runs/${runId}`,
+  );
 }
 
 export async function listTaskRuntimePermissions(taskId: string, sessionId?: string) {
@@ -1562,12 +2100,33 @@ export async function getTaskConversationMessages(
   taskId: string,
   sessionId: string,
   options?: { includeLineage?: boolean },
-) {
-  const trace = await getTaskExecutionTraceView(taskId, sessionId, options);
-  return {
-    data: buildSessionMessagesFromExecutionTrace(trace, options),
-    meta: trace.timelineMeta,
+): Promise<{
+  data: unknown[];
+  meta?: ExecutionTraceTimelineMeta & {
+    sessionId?: string;
+    messageCount?: number;
   };
+}> {
+  const tree = await getTaskConversationTree(taskId, {
+    sessionId,
+    includeLineage: options?.includeLineage,
+  });
+
+  return projectTaskConversationTreeToMessages(tree);
+}
+
+export async function getTaskMessages(
+  taskId: string,
+  options?: { sessionId?: string; includeLineage?: boolean },
+): Promise<{
+  data: unknown[];
+  meta?: ExecutionTraceTimelineMeta & {
+    sessionId?: string;
+    messageCount?: number;
+  };
+}> {
+  const tree = await getTaskConversationTree(taskId, options);
+  return projectTaskConversationTreeToMessages(tree);
 }
 
 export async function continueTask(
@@ -1576,13 +2135,16 @@ export async function continueTask(
   sessionId?: string,
   executionMode?: ExecutionMode,
 ) {
-  return request<{ ok: boolean; sessionId: string }>(`/tasks/${taskId}/continue`, {
-    method: "POST",
-    body: JSON.stringify({ prompt, sessionId, executionMode }),
-  });
+  return request<{ ok: boolean; sessionId: string; taskSessionId?: string | null }>(
+    `/tasks/${taskId}/continue`,
+    {
+      method: "POST",
+      body: JSON.stringify({ prompt, sessionId, executionMode }),
+    },
+  );
 }
 
-export async function forkTaskBranch(
+export async function forkTaskSession(
   taskId: string,
   sessionId: string,
   title?: string,
@@ -1591,18 +2153,20 @@ export async function forkTaskBranch(
   return request<{
     ok: boolean;
     sessionId: string;
+    taskSessionId?: string | null;
     title?: string;
     parentSessionId?: string;
+    parentTaskSessionId?: string | null;
     forkedFromMessageId?: string;
-  }>(`/tasks/${taskId}/branches/${sessionId}/fork`, {
+  }>(`/tasks/${taskId}/sessions/${sessionId}/fork`, {
     method: "POST",
     body: JSON.stringify({ title, messageId }),
   });
 }
 
-// ── Branch Lineage Tree ────────────────────────────────────────────
+// ── Session Lineage Tree ───────────────────────────────────────────
 
-export interface BranchLineageNode {
+export interface SessionLineageNode {
   id: string;
   runtimeSessionId: string;
   parentRuntimeSessionId: string | null;
@@ -1617,24 +2181,25 @@ export interface BranchLineageNode {
   summary: { additions: number; deletions: number; files: number } | null;
   createdAt: string | null;
   updatedAt: string | null;
-  children: BranchLineageNode[];
+  children: SessionLineageNode[];
 }
 
-export type TaskBranchLineageNode = BranchLineageNode;
+export type TaskSessionLineageNode = SessionLineageNode;
 
-export async function getTaskBranchLineage(taskId: string) {
-  return request<{ data: TaskBranchLineageNode[] }>(`/tasks/${taskId}/branch-lineage`);
+export async function getTaskSessionLineage(taskId: string) {
+  const tree = await getTaskConversationTree(taskId);
+  return { data: projectTaskTreeToSessionLineage(tree) };
 }
 
-export async function activateTaskBranch(taskId: string, sessionId: string) {
+export async function activateTaskSession(taskId: string, sessionId: string) {
   return request<{ ok: boolean; sessionId: string }>(
-    `/tasks/${taskId}/branches/${sessionId}/activate`,
+    `/tasks/${taskId}/sessions/${sessionId}/activate`,
     { method: "POST" },
   );
 }
 
-export async function archiveTaskBranch(taskId: string, sessionId: string) {
-  return request<{ ok: boolean }>(`/tasks/${taskId}/branches/${sessionId}/archive`, {
+export async function archiveTaskSession(taskId: string, sessionId: string) {
+  return request<{ ok: boolean }>(`/tasks/${taskId}/sessions/${sessionId}/archive`, {
     method: "POST",
   });
 }
@@ -2465,12 +3030,6 @@ export async function updateTaskStatus(taskId: string, status: string) {
 
 export async function completeTask(taskId: string) {
   return request<{ ok: boolean }>(`/tasks/${taskId}/complete`, {
-    method: "POST",
-  });
-}
-
-export async function advanceWorkflowStage(taskId: string) {
-  return request<{ ok: boolean; nextStageKey?: string }>(`/tasks/${taskId}/workflow/advance`, {
     method: "POST",
   });
 }

@@ -660,6 +660,10 @@ export function parseTaskStrategy(
     return { ...raw };
   }
 
+  if (typeof raw !== "string") {
+    return {};
+  }
+
   try {
     const parsed = JSON.parse(raw) as PersistedTaskStrategy;
     return typeof parsed === "object" && parsed ? parsed : {};

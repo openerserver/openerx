@@ -4,7 +4,6 @@ import {
   projectTreeNodes,
   repositories,
   repositoryCredentials,
-  taskRuns,
   taskSnapshots,
   tasks,
 } from "../../db/schema";
@@ -77,14 +76,12 @@ function normalizeTaskCategory(value: unknown): TaskCategory | null {
 
 type TaskAggregateRow = typeof tasks.$inferSelect;
 type TaskSnapshotRow = typeof taskSnapshots.$inferSelect;
-type TaskRunRow = typeof taskRuns.$inferSelect;
 type TaskRepoRow = typeof repositories.$inferSelect;
 type TaskCredentialRow = typeof repositoryCredentials.$inferSelect;
 type MapTaskTreeNodeArgs = {
   node: typeof projectTreeNodes.$inferSelect;
   aggregate?: TaskAggregateRow;
   snapshot?: TaskSnapshotRow;
-  run?: TaskRunRow;
   repos: Map<string, TaskRepoRow>;
   credentials: Map<string, TaskCredentialRow>;
 };
@@ -99,19 +96,60 @@ function mapOrchestrationKindToExecutionMode(
     : null;
 }
 
+function normalizeTaskStatusValue(value: string | null | undefined): TaskStatus | null {
+  return value === "pending" ||
+    value === "running" ||
+    value === "paused" ||
+    value === "completed" ||
+    value === "failed" ||
+    value === "cancelled"
+    ? value
+    : null;
+}
+
+function mapLifecycleStatusToTaskStatus(
+  lifecycleStatus: string | null | undefined,
+): TaskStatus | null {
+  if (lifecycleStatus === "done") {
+    return "completed";
+  }
+  if (lifecycleStatus === "active") {
+    return "running";
+  }
+  if (lifecycleStatus === "archived") {
+    return "cancelled";
+  }
+  if (lifecycleStatus === "draft") {
+    return "pending";
+  }
+
+  return null;
+}
+
+function resolveSnapshotTaskStatus(
+  snapshot?: TaskSnapshotRow,
+  aggregate?: TaskAggregateRow,
+): TaskStatus {
+  return (
+    normalizeTaskStatusValue(snapshot?.currentExecutionStatus) ??
+    normalizeTaskStatusValue(aggregate?.status) ??
+    mapLifecycleStatusToTaskStatus(snapshot?.lifecycleStatus) ??
+    mapLifecycleStatusToTaskStatus(aggregate?.lifecycleStatus) ??
+    "pending"
+  );
+}
+
 function resolveTaskReferenceIds(args: MapTaskTreeNodeArgs) {
   return {
     repoId: args.aggregate?.repoId ?? null,
     credentialId: args.aggregate?.credentialId ?? null,
-    currentRunId: args.snapshot?.currentRunId ?? args.aggregate?.currentRunId ?? null,
+    currentRunId: args.aggregate?.currentRunId ?? null,
   };
 }
 
 function resolveTaskStrategyFields(args: MapTaskTreeNodeArgs) {
   const strategy = args.aggregate?.strategyJson ?? null;
-  const executionMode =
-    mapOrchestrationKindToExecutionMode(args.snapshot?.orchestrationKind) ??
-    mapOrchestrationKindToExecutionMode(args.run?.orchestrationKind);
+  const executionMode = mapOrchestrationKindToExecutionMode(args.snapshot?.currentExecutionMode);
 
   return {
     strategy,
@@ -166,37 +204,41 @@ function resolveTaskRunFields(
   strategyFields: ReturnType<typeof resolveTaskStrategyFields>,
 ) {
   return {
-    status: (args.snapshot?.currentStatus ?? args.aggregate?.status ?? "pending") as TaskStatus,
+    status: resolveSnapshotTaskStatus(args.snapshot, args.aggregate),
     sessionId: args.snapshot?.currentSessionId ?? args.aggregate?.currentSessionId ?? null,
     agentRunId: args.aggregate?.currentAgentRunId ?? null,
-    result: args.snapshot?.latestResult ?? args.aggregate?.latestResult ?? null,
+    result:
+      args.aggregate?.latestResult ??
+      args.snapshot?.latestResultSummary ??
+      args.aggregate?.latestResultSummary ??
+      null,
     strategy: strategyFields.strategy,
     executionMode: strategyFields.executionMode,
     autoAdvanceStages: strategyFields.autoAdvanceStages,
     startedAt: args.aggregate?.startedAt ?? null,
     finishedAt: args.aggregate?.finishedAt ?? null,
-    orchestrationKind: args.snapshot?.orchestrationKind ?? args.run?.orchestrationKind ?? null,
+    orchestrationKind: args.snapshot?.currentExecutionMode ?? null,
     currentRunId: refs.currentRunId,
-    currentRunStatus: args.run?.status ?? null,
-    currentRunStartedAt: args.run?.startedAt ?? null,
-    currentRunFinishedAt: args.run?.finishedAt ?? null,
-    currentRunCandidateCount: args.run?.candidateCount ?? null,
-    currentRunPipelineStepCount: args.run?.pipelineStepCount ?? null,
+    currentRunStatus: normalizeTaskStatusValue(args.snapshot?.currentExecutionStatus),
+    currentRunStartedAt: null,
+    currentRunFinishedAt: null,
+    currentRunCandidateCount: null,
+    currentRunPipelineStepCount: null,
     latestResultSummary:
       args.snapshot?.latestResultSummary ?? args.aggregate?.latestResultSummary ?? null,
     latestErrorText: args.snapshot?.latestErrorText ?? null,
-    lastActivityAt: args.snapshot?.lastActivityAt ?? args.run?.updatedAt ?? null,
+    lastActivityAt: args.snapshot?.lastActivityAt ?? null,
   };
 }
 
 function resolveTaskSnapshotCountFields(args: MapTaskTreeNodeArgs) {
   return {
     activeCandidateCount: args.snapshot?.activeCandidateCount ?? 0,
-    completedCandidateCount: args.snapshot?.completedCandidateCount ?? 0,
-    failedCandidateCount: args.snapshot?.failedCandidateCount ?? 0,
+    completedCandidateCount: 0,
+    failedCandidateCount: 0,
     totalChainSteps: args.snapshot?.totalChainSteps ?? 0,
     completedChainSteps: args.snapshot?.completedChainSteps ?? 0,
-    winnerNodeId: args.snapshot?.winnerNodeId ?? args.run?.winnerNodeId ?? null,
+    winnerNodeId: null,
   };
 }
 
@@ -216,7 +258,6 @@ async function loadTaskDomainMaps(taskIds: string[]) {
     return {
       aggregates: new Map<string, TaskAggregateRow>(),
       snapshots: new Map<string, TaskSnapshotRow>(),
-      runs: new Map<string, TaskRunRow>(),
     };
   }
 
@@ -225,24 +266,9 @@ async function loadTaskDomainMaps(taskIds: string[]) {
     db.select().from(taskSnapshots).where(inArray(taskSnapshots.taskId, taskIds)),
   ]);
 
-  const currentRunIds = Array.from(
-    new Set(
-      [
-        ...aggregateRows.map((row) => row.currentRunId),
-        ...snapshotRows.map((row) => row.currentRunId),
-      ].filter((value): value is string => typeof value === "string" && value.length > 0),
-    ),
-  );
-
-  const runRows =
-    currentRunIds.length > 0
-      ? await db.select().from(taskRuns).where(inArray(taskRuns.id, currentRunIds))
-      : [];
-
   return {
     aggregates: new Map(aggregateRows.map((row) => [row.id, row] as const)),
     snapshots: new Map(snapshotRows.map((row) => [row.taskId, row] as const)),
-    runs: new Map(runRows.map((row) => [row.id, row] as const)),
   };
 }
 
@@ -371,11 +397,6 @@ export async function listTaskTreeRecords(args: {
       node: row,
       aggregate: domainMaps.aggregates.get(row.id),
       snapshot: domainMaps.snapshots.get(row.id),
-      run: domainMaps.runs.get(
-        domainMaps.snapshots.get(row.id)?.currentRunId ??
-          domainMaps.aggregates.get(row.id)?.currentRunId ??
-          "",
-      ),
       repos: maps.repos,
       credentials: maps.credentials,
     }),
@@ -407,11 +428,6 @@ export async function loadTaskTreeRecords(args: {
       node: row,
       aggregate: domainMaps.aggregates.get(row.id),
       snapshot: domainMaps.snapshots.get(row.id),
-      run: domainMaps.runs.get(
-        domainMaps.snapshots.get(row.id)?.currentRunId ??
-          domainMaps.aggregates.get(row.id)?.currentRunId ??
-          "",
-      ),
       repos: maps.repos,
       credentials: maps.credentials,
     }),

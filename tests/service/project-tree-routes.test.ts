@@ -32,6 +32,10 @@ function taskBranchCompatNodeId(taskId: string, runtimeSessionId: string) {
   return `task_session:${taskId}:${runtimeSessionId}`;
 }
 
+function taskSessionId(taskId: string, runtimeSessionId: string) {
+  return `task-session:${taskId}:${runtimeSessionId}`;
+}
+
 async function request<T>(path: string, opts: RequestInit = {}): Promise<ApiResult<T>> {
   const response = await fetch(`${CP_URL}${path}`, opts);
   const text = await response.text();
@@ -93,6 +97,17 @@ beforeAll(async () => {
 afterAll(async () => {
   for (const taskId of createdTaskIds) {
     await sql.unsafe("DELETE FROM task_timeline_views WHERE task_id = $1", [taskId]);
+    await sql.unsafe("DELETE FROM task_message_events WHERE task_id = $1", [taskId]);
+    await sql.unsafe("DELETE FROM task_usage_ledger_entries WHERE task_id = $1", [taskId]);
+    await sql.unsafe("DELETE FROM session_operations WHERE task_id = $1", [taskId]);
+    await sql.unsafe(
+      `DELETE FROM task_session_message_parts WHERE message_id IN (
+        SELECT id FROM task_session_messages WHERE task_id = $1
+      )`,
+      [taskId],
+    );
+    await sql.unsafe("DELETE FROM task_session_messages WHERE task_id = $1", [taskId]);
+    await sql.unsafe("DELETE FROM task_sessions WHERE task_id = $1", [taskId]);
     await sql.unsafe("DELETE FROM task_domain_events WHERE task_id = $1", [taskId]);
     await sql.unsafe(
       `DELETE FROM conversation_message_parts WHERE message_id IN (
@@ -146,6 +161,7 @@ afterAll(async () => {
 
   if (nodeIds.length > 0) {
     const nodeList = nodeIds.map(escapeLiteral).join(", ");
+    await sql.unsafe(`DELETE FROM task_sessions WHERE tree_node_id IN (${nodeList})`);
     await sql.unsafe(`DELETE FROM conversation_sessions WHERE tree_node_id IN (${nodeList})`);
     await sql.unsafe(`DELETE FROM tasks WHERE tree_node_id IN (${nodeList})`);
     await sql.unsafe(
@@ -263,7 +279,7 @@ describe("project tree routes", () => {
     expect(contextNode.status).toBe(201);
     createdNodeIds.add(contextNode.data.id);
 
-    const createdSession = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/branches`, {
+    const createdSession = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/sessions`, {
       method: "POST",
       body: JSON.stringify({
         runtimeSessionId,
@@ -276,7 +292,7 @@ describe("project tree routes", () => {
     expect(createdSession.status).toBe(201);
 
     const persisted = await authedRequest<{ ok: boolean }>(
-      `/api/tasks/${task.id}/branches/messages`,
+      `/api/tasks/${task.id}/sessions/messages`,
       {
         method: "POST",
         body: JSON.stringify({
@@ -313,32 +329,36 @@ describe("project tree routes", () => {
 
     const sessionMessages = await authedRequest<{
       data: Array<{
-        info?: { id?: string; role?: string };
-        parts?: Array<{ type?: string; text?: string }>;
+        runtimeMessageId?: string | null;
+        role?: string;
+        textContent?: string | null;
+        parts?: Array<{ partType?: string; textContent?: string | null }>;
       }>;
       meta: {
-        includeLineage: boolean;
-        cacheState: "none" | "partial" | "complete";
-        cachedSessionCount: number;
+        readSource: string;
+        sessionId: string;
+        messageCount: number;
       };
-    }>(`/api/tasks/${task.id}/branches/${runtimeSessionId}/messages`);
+    }>(`/api/tasks/${task.id}/sessions/${taskSessionId(task.id, runtimeSessionId)}/messages`);
 
     expect(sessionMessages.status).toBe(200);
     expect(sessionMessages.data.meta).toEqual(
       expect.objectContaining({
-        includeLineage: false,
-        cacheState: "complete",
-        cachedSessionCount: 1,
+        readSource: "task-session-first",
+        sessionId: taskSessionId(task.id, runtimeSessionId),
+        messageCount: 1,
       }),
     );
     expect(sessionMessages.data.data).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          info: expect.objectContaining({ id: "msg-search-1", role: "assistant" }),
+          runtimeMessageId: "msg-search-1",
+          role: "assistant",
+          textContent: "Rollback migration now and verify the final state.",
           parts: expect.arrayContaining([
             expect.objectContaining({
-              type: "text",
-              text: "Rollback migration now and verify the final state.",
+              partType: "text",
+              textContent: "Rollback migration now and verify the final state.",
             }),
           ]),
         }),
@@ -346,14 +366,15 @@ describe("project tree routes", () => {
     );
   });
 
-  test("supports branch-level persisted event feed in chronological order", async () => {
+  test("supports session-level timeline feed in chronological order", async () => {
     const task = await createTask(`tree-events-feed-${Date.now()}`);
     const runtimeSessionId = `ses_events_feed_${Date.now()}`;
     const sessionNodeId = taskBranchCompatNodeId(task.id, runtimeSessionId);
+    const sessionRecordId = taskSessionId(task.id, runtimeSessionId);
 
     createdNodeIds.add(sessionNodeId);
 
-    const createdSession = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/branches`, {
+    const createdSession = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/sessions`, {
       method: "POST",
       body: JSON.stringify({
         runtimeSessionId,
@@ -370,7 +391,7 @@ describe("project tree routes", () => {
       ["msg-feed-2", "second incremental event payload"],
     ] as const) {
       const persisted = await authedRequest<{ ok: boolean }>(
-        `/api/tasks/${task.id}/branches/messages`,
+        `/api/tasks/${task.id}/sessions/messages`,
         {
           method: "POST",
           body: JSON.stringify({
@@ -389,48 +410,39 @@ describe("project tree routes", () => {
 
     const events = await authedRequest<{
       data: Array<{
-        seq: number;
-        eventType: string;
-        payload: {
-          runtimeSessionId?: string;
-          messageId?: string;
-          role?: string | null;
-          text?: string | null;
-        };
-        createdAt: string;
+        sessionId: string | null;
+        messageId: string | null;
+        itemKind: string;
+        itemRole: string | null;
+        displayText: string | null;
       }>;
       meta: {
         includeLineage: boolean;
-        cacheState: "none" | "partial" | "complete";
-        cachedSessionCount: number;
-        eventCount: number;
+        readSource: string;
+        lineagePath: string[];
+        itemCount: number;
+        complete: boolean;
       };
-    }>(`/api/tasks/${task.id}/branches/${runtimeSessionId}/events`);
+    }>(`/api/tasks/${task.id}/sessions/${sessionRecordId}/timeline?includeLineage=false`);
 
     expect(events.status).toBe(200);
     expect(events.data.meta).toEqual(
       expect.objectContaining({
         includeLineage: false,
-        cacheState: "complete",
-        cachedSessionCount: 1,
-        eventCount: 4,
+        readSource: "task-session-projection",
+        lineagePath: [sessionRecordId],
+        itemCount: 2,
+        complete: true,
       }),
     );
-    expect(events.data.data).toHaveLength(4);
-    expect(events.data.data.map((item) => item.eventType)).toEqual([
-      "session.message.created",
-      "session.message.snapshot",
-      "session.message.created",
-      "session.message.snapshot",
+    expect(events.data.data).toHaveLength(2);
+    expect(events.data.data.map((item) => item.itemKind)).toEqual(["message", "message"]);
+    expect(events.data.data.map((item) => item.itemRole)).toEqual(["assistant", "assistant"]);
+    expect(events.data.data.map((item) => item.displayText)).toEqual([
+      "first incremental event payload",
+      "second incremental event payload",
     ]);
-    expect(
-      events.data.data.every((item) => item.payload.runtimeSessionId === runtimeSessionId),
-    ).toBe(true);
-    expect(events.data.data[0]?.payload.messageId).toBe("msg-feed-1");
-    expect(events.data.data[0]?.payload.text).toBe("first incremental event payload");
-    expect(events.data.data[0]?.seq).toBeLessThan(events.data.data[3]?.seq ?? 0);
   });
-
   test("syncs task patch updates into the task tree node", async () => {
     const task = await createTask(`tree-task-sync-${Date.now()}`);
 
@@ -449,8 +461,6 @@ describe("project tree routes", () => {
         sessionId: "ses_task_sync_runtime",
         selectedModel: "github-copilot:gpt-5.4",
         executionMode: "parallel",
-        executionPlan: JSON.stringify({ mode: "parallel", candidates: [] }),
-        parallelRunHistory: JSON.stringify([{ parallelRunId: "legacy-run" }]),
         workingBranch: "feature/tree-sync",
         result: "task node should mirror latest task state",
       }),
@@ -694,6 +704,8 @@ describe("project tree routes", () => {
     const task = await createTask(`tree-sessions-${Date.now()}`);
     const rootRuntimeSessionId = `ses_root_${Date.now()}`;
     const forkRuntimeSessionId = `ses_fork_${Date.now()}`;
+    const rootSessionRecordId = taskSessionId(task.id, rootRuntimeSessionId);
+    const forkSessionRecordId = taskSessionId(task.id, forkRuntimeSessionId);
     const rootSessionNodeId = taskBranchCompatNodeId(task.id, rootRuntimeSessionId);
     const forkSessionNodeId = taskBranchCompatNodeId(task.id, forkRuntimeSessionId);
 
@@ -701,7 +713,7 @@ describe("project tree routes", () => {
     createdNodeIds.add(forkSessionNodeId);
 
     const rootSession = await authedRequest<{ id: string; runtimeSessionId: string }>(
-      `/api/tasks/${task.id}/branches`,
+      `/api/tasks/${task.id}/sessions`,
       {
         method: "POST",
         body: JSON.stringify({
@@ -716,7 +728,7 @@ describe("project tree routes", () => {
     expect(rootSession.status).toBe(201);
 
     const forkSession = await authedRequest<{ id: string; runtimeSessionId: string }>(
-      `/api/tasks/${task.id}/branches`,
+      `/api/tasks/${task.id}/sessions`,
       {
         method: "POST",
         body: JSON.stringify({
@@ -732,7 +744,7 @@ describe("project tree routes", () => {
     expect(forkSession.status).toBe(201);
 
     const activateFork = await authedRequest<{ ok: boolean; activatedSessionId: string }>(
-      `/api/tasks/${task.id}/branches/${forkSessionNodeId}/activate`,
+      `/api/tasks/${task.id}/sessions/${forkSessionRecordId}/activate`,
       { method: "POST" },
     );
 
@@ -740,7 +752,7 @@ describe("project tree routes", () => {
     expect(activateFork.data.activatedSessionId).toBe(forkRuntimeSessionId);
 
     const archiveRoot = await authedRequest<{ ok: boolean }>(
-      `/api/tasks/${task.id}/branches/${rootSessionNodeId}/archive`,
+      `/api/tasks/${task.id}/sessions/${rootSessionRecordId}/archive`,
       { method: "POST" },
     );
 
@@ -751,35 +763,35 @@ describe("project tree routes", () => {
       data: Array<{
         id: string;
         runtimeSessionId: string;
-        isActive: boolean;
+        executionStatus: string;
         archivedAt: string | null;
       }>;
-    }>(`/api/tasks/${task.id}/branches`);
+    }>(`/api/tasks/${task.id}/sessions`);
 
     expect(sessions.status).toBe(200);
     expect(sessions.data.data).toContainEqual(
       expect.objectContaining({
-        id: rootSessionNodeId,
+        id: rootSessionRecordId,
         runtimeSessionId: rootRuntimeSessionId,
       }),
     );
     expect(sessions.data.data).toContainEqual(
       expect.objectContaining({
-        id: forkSessionNodeId,
+        id: forkSessionRecordId,
         runtimeSessionId: forkRuntimeSessionId,
       }),
     );
     expect(sessions.data.data).toContainEqual(
       expect.objectContaining({
         runtimeSessionId: rootRuntimeSessionId,
-        isActive: false,
+        executionStatus: "cancelled",
         archivedAt: expect.any(String),
       }),
     );
     expect(sessions.data.data).toContainEqual(
       expect.objectContaining({
         runtimeSessionId: forkRuntimeSessionId,
-        isActive: true,
+        executionStatus: "running",
         archivedAt: null,
       }),
     );
@@ -837,13 +849,15 @@ describe("project tree routes", () => {
     const task = await createTask(`tree-session-whitelist-${Date.now()}`);
     const rootRuntimeSessionId = `ses_whitelist_root_${Date.now()}`;
     const forkRuntimeSessionId = `ses_whitelist_fork_${Date.now()}`;
+    const rootSessionRecordId = taskSessionId(task.id, rootRuntimeSessionId);
+    const forkSessionRecordId = taskSessionId(task.id, forkRuntimeSessionId);
     const rootSessionNodeId = taskBranchCompatNodeId(task.id, rootRuntimeSessionId);
     const forkSessionNodeId = taskBranchCompatNodeId(task.id, forkRuntimeSessionId);
 
     createdNodeIds.add(rootSessionNodeId);
     createdNodeIds.add(forkSessionNodeId);
 
-    const rootSession = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/branches`, {
+    const rootSession = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/sessions`, {
       method: "POST",
       body: JSON.stringify({
         runtimeSessionId: rootRuntimeSessionId,
@@ -855,7 +869,7 @@ describe("project tree routes", () => {
 
     expect(rootSession.status).toBe(201);
 
-    const forkSession = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/branches`, {
+    const forkSession = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/sessions`, {
       method: "POST",
       body: JSON.stringify({
         runtimeSessionId: forkRuntimeSessionId,
@@ -894,7 +908,7 @@ describe("project tree routes", () => {
     });
 
     const activateFork = await authedRequest<{ ok: boolean; activatedSessionId: string }>(
-      `/api/tasks/${task.id}/branches/${forkSessionNodeId}/activate`,
+      `/api/tasks/${task.id}/sessions/${forkSessionRecordId}/activate`,
       { method: "POST" },
     );
 
@@ -902,7 +916,7 @@ describe("project tree routes", () => {
     expect(activateFork.data.activatedSessionId).toBe(forkRuntimeSessionId);
 
     const archiveRoot = await authedRequest<{ ok: boolean }>(
-      `/api/tasks/${task.id}/branches/${rootSessionNodeId}/archive`,
+      `/api/tasks/${task.id}/sessions/${rootSessionRecordId}/archive`,
       { method: "POST" },
     );
 
@@ -938,13 +952,15 @@ describe("project tree routes", () => {
     const task = await createTask(`tree-reactivate-${Date.now()}`);
     const rootRuntimeSessionId = `ses_reactivate_root_${Date.now()}`;
     const forkRuntimeSessionId = `ses_reactivate_fork_${Date.now()}`;
+    const rootSessionRecordId = taskSessionId(task.id, rootRuntimeSessionId);
+    const forkSessionRecordId = taskSessionId(task.id, forkRuntimeSessionId);
     const rootSessionNodeId = taskBranchCompatNodeId(task.id, rootRuntimeSessionId);
     const forkSessionNodeId = taskBranchCompatNodeId(task.id, forkRuntimeSessionId);
 
     createdNodeIds.add(rootSessionNodeId);
     createdNodeIds.add(forkSessionNodeId);
 
-    const rootSession = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/branches`, {
+    const rootSession = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/sessions`, {
       method: "POST",
       body: JSON.stringify({
         runtimeSessionId: rootRuntimeSessionId,
@@ -955,7 +971,7 @@ describe("project tree routes", () => {
     });
     expect(rootSession.status).toBe(201);
 
-    const forkSession = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/branches`, {
+    const forkSession = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/sessions`, {
       method: "POST",
       body: JSON.stringify({
         runtimeSessionId: forkRuntimeSessionId,
@@ -968,14 +984,14 @@ describe("project tree routes", () => {
     expect(forkSession.status).toBe(201);
 
     const archiveRoot = await authedRequest<{ ok: boolean }>(
-      `/api/tasks/${task.id}/branches/${rootSessionNodeId}/archive`,
+      `/api/tasks/${task.id}/sessions/${rootSessionRecordId}/archive`,
       { method: "POST" },
     );
     expect(archiveRoot.status).toBe(200);
     expect(archiveRoot.data.ok).toBe(true);
 
     const reactivateRoot = await authedRequest<{ ok: boolean; activatedSessionId: string }>(
-      `/api/tasks/${task.id}/branches/${rootSessionNodeId}/activate`,
+      `/api/tasks/${task.id}/sessions/${rootSessionRecordId}/activate`,
       { method: "POST" },
     );
     expect(reactivateRoot.status).toBe(200);
@@ -985,25 +1001,25 @@ describe("project tree routes", () => {
       data: Array<{
         id: string;
         runtimeSessionId: string;
-        isActive: boolean;
+        executionStatus: string;
         archivedAt: string | null;
       }>;
-    }>(`/api/tasks/${task.id}/branches`);
+    }>(`/api/tasks/${task.id}/sessions`);
 
     expect(sessions.status).toBe(200);
     expect(sessions.data.data).toContainEqual(
       expect.objectContaining({
-        id: rootSessionNodeId,
+        id: rootSessionRecordId,
         runtimeSessionId: rootRuntimeSessionId,
-        isActive: true,
+        executionStatus: "running",
         archivedAt: null,
       }),
     );
     expect(sessions.data.data).toContainEqual(
       expect.objectContaining({
-        id: forkSessionNodeId,
+        id: forkSessionRecordId,
         runtimeSessionId: forkRuntimeSessionId,
-        isActive: false,
+        executionStatus: "complete",
       }),
     );
 
@@ -1030,13 +1046,15 @@ describe("project tree routes", () => {
     const task = await createTask(`tree-primary-session-${Date.now()}`);
     const rootRuntimeSessionId = `ses_primary_root_${Date.now()}`;
     const forkRuntimeSessionId = `ses_primary_fork_${Date.now()}`;
+    const rootSessionRecordId = taskSessionId(task.id, rootRuntimeSessionId);
+    const forkSessionRecordId = taskSessionId(task.id, forkRuntimeSessionId);
     const rootSessionNodeId = taskBranchCompatNodeId(task.id, rootRuntimeSessionId);
     const forkSessionNodeId = taskBranchCompatNodeId(task.id, forkRuntimeSessionId);
 
     createdNodeIds.add(rootSessionNodeId);
     createdNodeIds.add(forkSessionNodeId);
 
-    const rootSession = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/branches`, {
+    const rootSession = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/sessions`, {
       method: "POST",
       body: JSON.stringify({
         runtimeSessionId: rootRuntimeSessionId,
@@ -1047,7 +1065,7 @@ describe("project tree routes", () => {
     });
     expect(rootSession.status).toBe(201);
 
-    const forkSession = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/branches`, {
+    const forkSession = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/sessions`, {
       method: "POST",
       body: JSON.stringify({
         runtimeSessionId: forkRuntimeSessionId,
@@ -1062,18 +1080,18 @@ describe("project tree routes", () => {
 
     const listed = await authedRequest<{
       data: Array<{ id: string; runtimeSessionId: string }>;
-    }>(`/api/tasks/${task.id}/branches`);
+    }>(`/api/tasks/${task.id}/sessions`);
 
     expect(listed.status).toBe(200);
     expect(listed.data.data).toContainEqual(
-      expect.objectContaining({ id: rootSessionNodeId, runtimeSessionId: rootRuntimeSessionId }),
+      expect.objectContaining({ id: rootSessionRecordId, runtimeSessionId: rootRuntimeSessionId }),
     );
     expect(listed.data.data).toContainEqual(
-      expect.objectContaining({ id: forkSessionNodeId, runtimeSessionId: forkRuntimeSessionId }),
+      expect.objectContaining({ id: forkSessionRecordId, runtimeSessionId: forkRuntimeSessionId }),
     );
 
     const activateFork = await authedRequest<{ ok: boolean; activatedSessionId: string }>(
-      `/api/tasks/${task.id}/branches/${forkSessionNodeId}/activate`,
+      `/api/tasks/${task.id}/sessions/${forkSessionRecordId}/activate`,
       { method: "POST" },
     );
 
@@ -1081,7 +1099,7 @@ describe("project tree routes", () => {
     expect(activateFork.data.activatedSessionId).toBe(forkRuntimeSessionId);
 
     const persistForkMessage = await authedRequest<{ ok: boolean; seq: number }>(
-      `/api/tasks/${task.id}/branches/messages`,
+      `/api/tasks/${task.id}/sessions/messages`,
       {
         method: "POST",
         body: JSON.stringify({
@@ -1098,13 +1116,18 @@ describe("project tree routes", () => {
     expect(persistForkMessage.data.ok).toBe(true);
 
     const replayed = await authedRequest<{
-      data: Array<{ info: { id: string }; parts: Array<{ type: string; text?: string }> }>;
-    }>(`/api/tasks/${task.id}/branches/${forkRuntimeSessionId}/messages`);
+      data: Array<{
+        runtimeMessageId: string;
+        textContent: string | null;
+        parts: Array<{ partType: string; textContent: string | null }>;
+      }>;
+    }>(`/api/tasks/${task.id}/sessions/${forkSessionRecordId}/messages`);
 
     expect(replayed.status).toBe(200);
-    expect(replayed.data.data[0]?.info.id).toBe("fork-msg-1");
+    expect(replayed.data.data[0]?.runtimeMessageId).toBe("fork-msg-1");
+    expect(replayed.data.data[0]?.textContent).toBe("tree-first session payload");
     expect(replayed.data.data[0]?.parts).toEqual([
-      { type: "text", text: "tree-first session payload" },
+      expect.objectContaining({ partType: "text", textContent: "tree-first session payload" }),
     ]);
 
     const branchNodes = await sql.unsafe<
@@ -1135,14 +1158,15 @@ describe("project tree routes", () => {
     });
   });
 
-  test("reads single-session messages from conversation tables when legacy tree message events are absent", async () => {
+  test("reads single-session messages from session-first storage when legacy tree message events are absent", async () => {
     const task = await createTask(`conversation-primary-${Date.now()}`);
     const runtimeSessionId = `ses_conversation_${Date.now()}`;
+    const sessionRecordId = taskSessionId(task.id, runtimeSessionId);
     const sessionNodeId = taskBranchCompatNodeId(task.id, runtimeSessionId);
 
     createdNodeIds.add(sessionNodeId);
 
-    const session = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/branches`, {
+    const session = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/sessions`, {
       method: "POST",
       body: JSON.stringify({
         runtimeSessionId,
@@ -1155,7 +1179,7 @@ describe("project tree routes", () => {
     expect(session.status).toBe(201);
 
     const persisted = await authedRequest<{ ok: boolean }>(
-      `/api/tasks/${task.id}/branches/messages`,
+      `/api/tasks/${task.id}/sessions/messages`,
       {
         method: "POST",
         body: JSON.stringify({
@@ -1176,27 +1200,705 @@ describe("project tree routes", () => {
     const messages = await authedRequest<{
       data: Array<Record<string, unknown>>;
       meta: { cacheState: string; complete: boolean; readSource?: string };
-    }>(`/api/tasks/${task.id}/branches/${runtimeSessionId}/messages`);
+    }>(`/api/tasks/${task.id}/sessions/${sessionRecordId}/messages`);
 
     expect(messages.status).toBe(200);
-    expect(messages.data.meta.cacheState).toBe("complete");
-    expect(messages.data.meta.complete).toBe(true);
-    expect(messages.data.meta.readSource).toBe("conversation-table");
+    expect(messages.data.meta).toEqual(
+      expect.objectContaining({
+        readSource: "task-session-first",
+        sessionId: sessionRecordId,
+        messageCount: 1,
+      }),
+    );
     expect(messages.data.data).toHaveLength(1);
     expect(messages.data.data[0]).toMatchObject({
-      info: expect.objectContaining({ id: "msg-conversation-1", role: "assistant" }),
+      runtimeMessageId: "msg-conversation-1",
+      role: "assistant",
+      textContent: "conversation table answer",
     });
   });
 
-  test("persists task session messages in conversation storage and replays latest state", async () => {
+  test("routes duplicated parallel candidate prompts to the parent session", async () => {
+    const unique = Date.now();
+    const task = await createTask(`conversation-parallel-prompt-${unique}`);
+    const promptText = `并行提示 ${unique}`;
+    const rootRuntimeSessionId = `ses_parallel_root_${unique}`;
+    const candidateARuntimeSessionId = `ses_parallel_candidate_a_${unique}`;
+    const candidateBRuntimeSessionId = `ses_parallel_candidate_b_${unique}`;
+    const rootSessionRecordId = taskSessionId(task.id, rootRuntimeSessionId);
+    const candidateASessionRecordId = taskSessionId(task.id, candidateARuntimeSessionId);
+    const candidateBSessionRecordId = taskSessionId(task.id, candidateBRuntimeSessionId);
+
+    createdNodeIds.add(taskBranchCompatNodeId(task.id, rootRuntimeSessionId));
+    createdNodeIds.add(taskBranchCompatNodeId(task.id, candidateARuntimeSessionId));
+    createdNodeIds.add(taskBranchCompatNodeId(task.id, candidateBRuntimeSessionId));
+
+    const rootSession = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/sessions`, {
+      method: "POST",
+      body: JSON.stringify({
+        runtimeSessionId: rootRuntimeSessionId,
+        branchName: "parallel-root",
+        sourceType: "root",
+        isActive: false,
+      }),
+    });
+    expect(rootSession.status).toBe(201);
+
+    for (const [runtimeSessionId, candidateIndex, selectedModel, isActive] of [
+      [candidateARuntimeSessionId, 0, "model-a", false],
+      [candidateBRuntimeSessionId, 1, "model-b", true],
+    ] as const) {
+      const created = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/sessions`, {
+        method: "POST",
+        body: JSON.stringify({
+          runtimeSessionId,
+          parentRuntimeSessionId: rootRuntimeSessionId,
+          branchName: `parallel-candidate-${candidateIndex + 1}`,
+          sourceType: "root",
+          sessionKind: "candidate",
+          executionModeSnapshot: "parallel",
+          candidateIndex,
+          selectedModel,
+          isActive,
+        }),
+      });
+      expect(created.status).toBe(201);
+    }
+
+    for (const [runtimeSessionId, messageId, createdAt] of [
+      [candidateARuntimeSessionId, "candidate-a-user", "2026-03-22T10:00:00.000Z"],
+      [candidateBRuntimeSessionId, "candidate-b-user", "2026-03-22T10:00:00.500Z"],
+    ] as const) {
+      const persisted = await authedRequest<{ ok: boolean }>(
+        `/api/tasks/${task.id}/sessions/messages`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            runtimeSessionId,
+            message: {
+              info: {
+                id: messageId,
+                role: "user",
+                time: { created: Date.parse(createdAt) },
+              },
+              parts: [{ type: "text", text: promptText }],
+            },
+          }),
+        },
+      );
+      expect(persisted.status).toBe(201);
+    }
+
+    for (const [runtimeSessionId, messageId, replyText, createdAt] of [
+      [
+        candidateARuntimeSessionId,
+        "candidate-a-assistant",
+        `候选 A 回复 ${unique}`,
+        "2026-03-22T10:00:01.000Z",
+      ],
+      [
+        candidateBRuntimeSessionId,
+        "candidate-b-assistant",
+        `候选 B 回复 ${unique}`,
+        "2026-03-22T10:00:02.000Z",
+      ],
+    ] as const) {
+      const persisted = await authedRequest<{ ok: boolean }>(
+        `/api/tasks/${task.id}/sessions/messages`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            runtimeSessionId,
+            message: {
+              info: {
+                id: messageId,
+                role: "assistant",
+                time: { created: Date.parse(createdAt), completed: Date.parse(createdAt) },
+              },
+              parts: [{ type: "text", text: replyText }],
+            },
+          }),
+        },
+      );
+      expect(persisted.status).toBe(201);
+    }
+
+    const rootMessages = await authedRequest<{
+      data: Array<{ role: string | null; textContent: string | null }>;
+      meta: { messageCount: number; readSource?: string };
+    }>(`/api/tasks/${task.id}/sessions/${rootSessionRecordId}/messages?includeLineage=false`);
+
+    expect(rootMessages.status).toBe(200);
+    expect(rootMessages.data.meta).toEqual(
+      expect.objectContaining({
+        readSource: "task-session-first",
+        messageCount: 1,
+      }),
+    );
+    expect(rootMessages.data.data).toEqual([
+      expect.objectContaining({ role: "user", textContent: promptText }),
+    ]);
+
+    const candidateAMessages = await authedRequest<{
+      data: Array<{ role: string | null; textContent: string | null }>;
+      meta: { messageCount: number };
+    }>(`/api/tasks/${task.id}/sessions/${candidateASessionRecordId}/messages?includeLineage=false`);
+
+    expect(candidateAMessages.status).toBe(200);
+    expect(candidateAMessages.data.meta).toEqual(expect.objectContaining({ messageCount: 1 }));
+    expect(candidateAMessages.data.data).toEqual([
+      expect.objectContaining({ role: "assistant", textContent: `候选 A 回复 ${unique}` }),
+    ]);
+
+    const candidateBMessages = await authedRequest<{
+      data: Array<{ role: string | null; textContent: string | null }>;
+      meta: { messageCount: number };
+    }>(`/api/tasks/${task.id}/sessions/${candidateBSessionRecordId}/messages?includeLineage=false`);
+
+    expect(candidateBMessages.status).toBe(200);
+    expect(candidateBMessages.data.meta).toEqual(expect.objectContaining({ messageCount: 1 }));
+    expect(candidateBMessages.data.data).toEqual([
+      expect.objectContaining({ role: "assistant", textContent: `候选 B 回复 ${unique}` }),
+    ]);
+
+    const taskMessages = await authedRequest<{
+      data: Array<{ sessionId: string | null; role: string | null; textContent: string | null }>;
+      meta: { messageCount: number; readSource?: string };
+    }>(`/api/tasks/${task.id}/messages`);
+
+    expect(taskMessages.status).toBe(200);
+    expect(taskMessages.data.meta).toEqual(
+      expect.objectContaining({
+        readSource: "task-session-first",
+        messageCount: 3,
+      }),
+    );
+    expect(taskMessages.data.data.filter((message) => message.textContent === promptText)).toHaveLength(1);
+    expect(taskMessages.data.data).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          sessionId: rootSessionRecordId,
+          role: "user",
+          textContent: promptText,
+        }),
+        expect.objectContaining({
+          sessionId: candidateASessionRecordId,
+          role: "assistant",
+          textContent: `候选 A 回复 ${unique}`,
+        }),
+        expect.objectContaining({
+          sessionId: candidateBSessionRecordId,
+          role: "assistant",
+          textContent: `候选 B 回复 ${unique}`,
+        }),
+      ]),
+    );
+  });
+
+  test("routes duplicated parallel candidate prompts to the round anchor session", async () => {
+    const unique = Date.now();
+    const task = await createTask(`conversation-parallel-round-anchor-${unique}`);
+    const promptText = `并行第 3 轮输入 ${unique}`;
+    const rootRuntimeSessionId = `ses_parallel_root_${unique}`;
+    const roundAnchorRuntimeSessionId = `round_anchor_${unique}`;
+    const candidateARuntimeSessionId = `ses_parallel_round_candidate_a_${unique}`;
+    const candidateBRuntimeSessionId = `ses_parallel_round_candidate_b_${unique}`;
+    const rootSessionRecordId = taskSessionId(task.id, rootRuntimeSessionId);
+    const roundAnchorSessionRecordId = taskSessionId(task.id, roundAnchorRuntimeSessionId);
+    const candidateASessionRecordId = taskSessionId(task.id, candidateARuntimeSessionId);
+    const candidateBSessionRecordId = taskSessionId(task.id, candidateBRuntimeSessionId);
+
+    createdNodeIds.add(taskBranchCompatNodeId(task.id, rootRuntimeSessionId));
+    createdNodeIds.add(taskBranchCompatNodeId(task.id, roundAnchorRuntimeSessionId));
+    createdNodeIds.add(taskBranchCompatNodeId(task.id, candidateARuntimeSessionId));
+    createdNodeIds.add(taskBranchCompatNodeId(task.id, candidateBRuntimeSessionId));
+
+    const rootSession = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/sessions`, {
+      method: "POST",
+      body: JSON.stringify({
+        runtimeSessionId: rootRuntimeSessionId,
+        branchName: "round-1-root",
+        sourceType: "root",
+        isActive: false,
+      }),
+    });
+    expect(rootSession.status).toBe(201);
+
+    const roundAnchor = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/sessions`, {
+      method: "POST",
+      body: JSON.stringify({
+        runtimeSessionId: roundAnchorRuntimeSessionId,
+        parentRuntimeSessionId: rootRuntimeSessionId,
+        branchName: promptText,
+        sourceType: "sub_session",
+        sessionKind: "resume",
+        executionModeSnapshot: "parallel",
+        isActive: false,
+      }),
+    });
+    expect(roundAnchor.status).toBe(201);
+
+    for (const [runtimeSessionId, candidateIndex, selectedModel, isActive] of [
+      [candidateARuntimeSessionId, 0, "model-a", false],
+      [candidateBRuntimeSessionId, 1, "model-b", true],
+    ] as const) {
+      const created = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/sessions`, {
+        method: "POST",
+        body: JSON.stringify({
+          runtimeSessionId,
+          parentRuntimeSessionId: roundAnchorRuntimeSessionId,
+          branchName: `parallel-candidate-${candidateIndex + 1}`,
+          sourceType: "fork",
+          sessionKind: "candidate",
+          executionModeSnapshot: "parallel",
+          candidateIndex,
+          selectedModel,
+          isActive,
+        }),
+      });
+      expect(created.status).toBe(201);
+    }
+
+    for (const [runtimeSessionId, messageId, createdAt] of [
+      [candidateARuntimeSessionId, "candidate-a-user", "2026-03-22T10:00:00.000Z"],
+      [candidateBRuntimeSessionId, "candidate-b-user", "2026-03-22T10:00:00.500Z"],
+    ] as const) {
+      const persisted = await authedRequest<{ ok: boolean }>(
+        `/api/tasks/${task.id}/sessions/messages`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            runtimeSessionId,
+            message: {
+              info: {
+                id: messageId,
+                role: "user",
+                time: { created: Date.parse(createdAt) },
+              },
+              parts: [{ type: "text", text: promptText }],
+            },
+          }),
+        },
+      );
+      expect(persisted.status).toBe(201);
+    }
+
+    for (const [runtimeSessionId, messageId, replyText, createdAt] of [
+      [
+        candidateARuntimeSessionId,
+        "candidate-a-assistant",
+        `Round anchor 候选 A 回复 ${unique}`,
+        "2026-03-22T10:00:01.000Z",
+      ],
+      [
+        candidateBRuntimeSessionId,
+        "candidate-b-assistant",
+        `Round anchor 候选 B 回复 ${unique}`,
+        "2026-03-22T10:00:02.000Z",
+      ],
+    ] as const) {
+      const persisted = await authedRequest<{ ok: boolean }>(
+        `/api/tasks/${task.id}/sessions/messages`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            runtimeSessionId,
+            message: {
+              info: {
+                id: messageId,
+                role: "assistant",
+                time: { created: Date.parse(createdAt), completed: Date.parse(createdAt) },
+              },
+              parts: [{ type: "text", text: replyText }],
+            },
+          }),
+        },
+      );
+      expect(persisted.status).toBe(201);
+    }
+
+    const rootMessages = await authedRequest<{
+      data: Array<{ role: string | null; textContent: string | null }>;
+      meta: { messageCount: number; readSource?: string };
+    }>(`/api/tasks/${task.id}/sessions/${rootSessionRecordId}/messages?includeLineage=false`);
+
+    expect(rootMessages.status).toBe(200);
+    expect(rootMessages.data.meta).toEqual(
+      expect.objectContaining({
+        readSource: "task-session-first",
+        messageCount: 0,
+      }),
+    );
+    expect(rootMessages.data.data).toEqual([]);
+
+    const roundAnchorMessages = await authedRequest<{
+      data: Array<{ role: string | null; textContent: string | null }>;
+      meta: { messageCount: number; readSource?: string };
+    }>(`/api/tasks/${task.id}/sessions/${roundAnchorSessionRecordId}/messages?includeLineage=false`);
+
+    expect(roundAnchorMessages.status).toBe(200);
+    expect(roundAnchorMessages.data.meta).toEqual(
+      expect.objectContaining({
+        readSource: "task-session-first",
+        messageCount: 1,
+      }),
+    );
+    expect(roundAnchorMessages.data.data).toEqual([
+      expect.objectContaining({ role: "user", textContent: promptText }),
+    ]);
+
+    const candidateAMessages = await authedRequest<{
+      data: Array<{ role: string | null; textContent: string | null }>;
+      meta: { messageCount: number };
+    }>(`/api/tasks/${task.id}/sessions/${candidateASessionRecordId}/messages?includeLineage=false`);
+
+    expect(candidateAMessages.status).toBe(200);
+    expect(candidateAMessages.data.meta).toEqual(expect.objectContaining({ messageCount: 1 }));
+    expect(candidateAMessages.data.data).toEqual([
+      expect.objectContaining({ role: "assistant", textContent: `Round anchor 候选 A 回复 ${unique}` }),
+    ]);
+
+    const candidateBMessages = await authedRequest<{
+      data: Array<{ role: string | null; textContent: string | null }>;
+      meta: { messageCount: number };
+    }>(`/api/tasks/${task.id}/sessions/${candidateBSessionRecordId}/messages?includeLineage=false`);
+
+    expect(candidateBMessages.status).toBe(200);
+    expect(candidateBMessages.data.meta).toEqual(expect.objectContaining({ messageCount: 1 }));
+    expect(candidateBMessages.data.data).toEqual([
+      expect.objectContaining({ role: "assistant", textContent: `Round anchor 候选 B 回复 ${unique}` }),
+    ]);
+
+    const taskMessages = await authedRequest<{
+      data: Array<{ sessionId: string | null; role: string | null; textContent: string | null }>;
+      meta: { messageCount: number; readSource?: string };
+    }>(`/api/tasks/${task.id}/messages`);
+
+    expect(taskMessages.status).toBe(200);
+    expect(taskMessages.data.meta).toEqual(
+      expect.objectContaining({
+        readSource: "task-session-first",
+        messageCount: 3,
+      }),
+    );
+    expect(taskMessages.data.data).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          sessionId: roundAnchorSessionRecordId,
+          role: "user",
+          textContent: promptText,
+        }),
+        expect.objectContaining({
+          sessionId: candidateASessionRecordId,
+          role: "assistant",
+          textContent: `Round anchor 候选 A 回复 ${unique}`,
+        }),
+        expect.objectContaining({
+          sessionId: candidateBSessionRecordId,
+          role: "assistant",
+          textContent: `Round anchor 候选 B 回复 ${unique}`,
+        }),
+      ]),
+    );
+  });
+
+  test("merges tool-call assistant turns with identical final stop replies", async () => {
+    const unique = Date.now();
+    const task = await createTask(`conversation-tool-call-merge-${unique}`);
+    const runtimeSessionId = `ses_tool_merge_${unique}`;
+    const sessionRecordId = taskSessionId(task.id, runtimeSessionId);
+
+    createdNodeIds.add(taskBranchCompatNodeId(task.id, runtimeSessionId));
+
+    const session = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/sessions`, {
+      method: "POST",
+      body: JSON.stringify({
+        runtimeSessionId,
+        branchName: "tool-call-merge",
+        sourceType: "root",
+        isActive: true,
+      }),
+    });
+    expect(session.status).toBe(201);
+
+    const replyText = `合并后的最终回复 ${unique}`;
+
+    const toolTurnPersist = await authedRequest<{ ok: boolean }>(
+      `/api/tasks/${task.id}/sessions/messages`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          runtimeSessionId,
+          message: {
+            info: {
+              id: `assistant-tool-${unique}`,
+              role: "assistant",
+              finish: "tool-calls",
+              parentID: `user-${unique}`,
+              time: {
+                created: Date.parse("2026-03-30T12:32:48.992Z"),
+                completed: Date.parse("2026-03-30T12:32:48.992Z"),
+              },
+            },
+            parts: [
+              { type: "step-start" },
+              {
+                type: "tool",
+                tool: "webfetch",
+                toolName: "webfetch",
+                state: "completed",
+                input: { url: "https://example.com/whisper" },
+              },
+              { type: "step-finish", reason: "tool-calls" },
+              { type: "text", text: replyText },
+            ],
+          },
+        }),
+      },
+    );
+
+    expect(toolTurnPersist.status).toBe(201);
+
+    const finalTurnBody = {
+      runtimeSessionId,
+      message: {
+        info: {
+          id: `assistant-final-${unique}`,
+          role: "assistant",
+          finish: "stop",
+          parentID: `user-${unique}`,
+          time: {
+            created: Date.parse("2026-03-30T12:32:52.323Z"),
+            completed: Date.parse("2026-03-30T12:32:59.600Z"),
+          },
+        },
+        parts: [
+          { type: "step-start" },
+          { type: "text", text: replyText },
+          { type: "step-finish", reason: "stop" },
+        ],
+      },
+    };
+
+    const finalTurnPersist = await authedRequest<{ ok: boolean }>(
+      `/api/tasks/${task.id}/sessions/messages`,
+      {
+        method: "POST",
+        body: JSON.stringify(finalTurnBody),
+      },
+    );
+
+    expect(finalTurnPersist.status).toBe(201);
+
+    const replayFinalTurnPersist = await authedRequest<{ ok: boolean }>(
+      `/api/tasks/${task.id}/sessions/messages`,
+      {
+        method: "POST",
+        body: JSON.stringify(finalTurnBody),
+      },
+    );
+
+    expect(replayFinalTurnPersist.status).toBe(201);
+
+    const messages = await authedRequest<{
+      data: Array<Record<string, unknown>>;
+      meta: { messageCount: number; readSource?: string };
+    }>(`/api/tasks/${task.id}/sessions/${sessionRecordId}/messages?includeLineage=false`);
+
+    expect(messages.status).toBe(200);
+    expect(messages.data.meta).toEqual(
+      expect.objectContaining({
+        readSource: "task-session-first",
+        messageCount: 1,
+      }),
+    );
+    expect(messages.data.data).toHaveLength(1);
+    expect(messages.data.data[0]).toMatchObject({
+      role: "assistant",
+      textContent: replyText,
+      rawPayload: expect.objectContaining({
+        info: expect.objectContaining({
+          finish: "stop",
+        }),
+      }),
+    });
+
+    const parts = Array.isArray(messages.data.data[0]?.parts)
+      ? (messages.data.data[0].parts as Array<Record<string, unknown>>)
+      : [];
+
+    expect(parts.map((part) => part.partType)).toEqual(["text", "tool_result", "text", "text"]);
+    expect(parts[1]).toEqual(
+      expect.objectContaining({
+        partType: "tool_result",
+        jsonPayload: expect.objectContaining({
+          type: "tool",
+          tool: "webfetch",
+        }),
+      }),
+    );
+
+    const taskMessages = await authedRequest<{
+      data: Array<Record<string, unknown>>;
+      meta: { messageCount: number; readSource?: string };
+    }>(`/api/tasks/${task.id}/messages`);
+
+    expect(taskMessages.status).toBe(200);
+    expect(taskMessages.data.meta).toEqual(
+      expect.objectContaining({
+        readSource: "task-session-first",
+        messageCount: 1,
+      }),
+    );
+    expect(taskMessages.data.data).toHaveLength(1);
+    expect(taskMessages.data.data[0]).toMatchObject({
+      role: "assistant",
+      textContent: replyText,
+    });
+  });
+
+  test("merges normalized tool_call assistant turns with identical final stop replies", async () => {
+    const unique = Date.now();
+    const task = await createTask(`conversation-tool-call-merge-normalized-${unique}`);
+    const runtimeSessionId = `ses_tool_merge_normalized_${unique}`;
+    const sessionRecordId = taskSessionId(task.id, runtimeSessionId);
+
+    createdNodeIds.add(taskBranchCompatNodeId(task.id, runtimeSessionId));
+
+    const session = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/sessions`, {
+      method: "POST",
+      body: JSON.stringify({
+        runtimeSessionId,
+        branchName: "tool-call-merge-normalized",
+        sourceType: "root",
+        isActive: true,
+      }),
+    });
+    expect(session.status).toBe(201);
+
+    const replyText = `标准化工具调用合并后的最终回复 ${unique}`;
+
+    const toolTurnPersist = await authedRequest<{ ok: boolean }>(
+      `/api/tasks/${task.id}/sessions/messages`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          runtimeSessionId,
+          message: {
+            info: {
+              id: `assistant-tool-normalized-${unique}`,
+              role: "assistant",
+              finish: "tool-calls",
+              parentID: `user-${unique}`,
+              time: {
+                created: Date.parse("2026-03-30T12:32:48.992Z"),
+                completed: Date.parse("2026-03-30T12:32:48.992Z"),
+              },
+            },
+            parts: [
+              { type: "step-start" },
+              {
+                id: `call-${unique}`,
+                type: "tool_call",
+                name: "search_code",
+                input: { query: "task tree", includePattern: "src/**" },
+              },
+              {
+                id: `result-${unique}`,
+                type: "tool_result",
+                tool: "search_code",
+                state: {
+                  status: "completed",
+                  output: "match found",
+                },
+              },
+              { type: "step-finish", reason: "tool-calls" },
+              { type: "text", text: replyText },
+            ],
+          },
+        }),
+      },
+    );
+
+    expect(toolTurnPersist.status).toBe(201);
+
+    const replayFinalTurnPersist = await authedRequest<{ ok: boolean }>(
+      `/api/tasks/${task.id}/sessions/messages`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          runtimeSessionId,
+          message: {
+            info: {
+              id: `assistant-final-normalized-${unique}`,
+              role: "assistant",
+              finish: "stop",
+              parentID: `user-${unique}`,
+              time: {
+                created: Date.parse("2026-03-30T12:32:52.323Z"),
+                completed: Date.parse("2026-03-30T12:32:59.600Z"),
+              },
+            },
+            parts: [
+              { type: "step-start" },
+              { type: "text", text: replyText },
+              { type: "step-finish", reason: "stop" },
+            ],
+          },
+        }),
+      },
+    );
+
+    expect(replayFinalTurnPersist.status).toBe(201);
+
+    const messages = await authedRequest<{
+      data: Array<Record<string, unknown>>;
+      meta: { messageCount: number; readSource?: string };
+    }>(`/api/tasks/${task.id}/sessions/${sessionRecordId}/messages?includeLineage=false`);
+
+    expect(messages.status).toBe(200);
+    expect(messages.data.data).toHaveLength(1);
+    const parts = Array.isArray(messages.data.data[0]?.parts)
+      ? (messages.data.data[0].parts as Array<Record<string, unknown>>)
+      : [];
+
+    expect(parts.map((part) => part.partType)).toEqual([
+      "step-start",
+      "tool_call",
+      "tool_result",
+      "text",
+      "step-finish",
+    ]);
+    expect(parts[1]).toEqual(
+      expect.objectContaining({
+        partType: "tool_call",
+        jsonPayload: expect.objectContaining({
+          type: "tool_call",
+          name: "search_code",
+        }),
+      }),
+    );
+    expect(parts[2]).toEqual(
+      expect.objectContaining({
+        partType: "tool_result",
+        jsonPayload: expect.objectContaining({
+          type: "tool_result",
+          tool: "search_code",
+        }),
+      }),
+    );
+  });
+
+  test("persists task session messages in session storage and replays latest state", async () => {
     const task = await createTask(`tree-message-cache-${Date.now()}`);
     const runtimeSessionId = `ses_cached_${Date.now()}`;
+    const sessionRecordId = taskSessionId(task.id, runtimeSessionId);
     const sessionNodeId = taskBranchCompatNodeId(task.id, runtimeSessionId);
 
     createdNodeIds.add(sessionNodeId);
 
     const session = await authedRequest<{ id: string; runtimeSessionId: string }>(
-      `/api/tasks/${task.id}/branches`,
+      `/api/tasks/${task.id}/sessions`,
       {
         method: "POST",
         body: JSON.stringify({
@@ -1211,7 +1913,7 @@ describe("project tree routes", () => {
     expect(session.status).toBe(201);
 
     const firstPersist = await authedRequest<{ ok: boolean; seq: number }>(
-      `/api/tasks/${task.id}/branches/messages`,
+      `/api/tasks/${task.id}/sessions/messages`,
       {
         method: "POST",
         body: JSON.stringify({
@@ -1229,10 +1931,10 @@ describe("project tree routes", () => {
     );
 
     expect(firstPersist.status).toBe(201);
-    expect(firstPersist.data.seq).toBeGreaterThan(0);
+    expect(firstPersist.data.ok).toBe(true);
 
     const secondPersist = await authedRequest<{ ok: boolean; seq: number }>(
-      `/api/tasks/${task.id}/branches/messages`,
+      `/api/tasks/${task.id}/sessions/messages`,
       {
         method: "POST",
         body: JSON.stringify({
@@ -1250,22 +1952,100 @@ describe("project tree routes", () => {
     );
 
     expect(secondPersist.status).toBe(201);
-    expect(secondPersist.data.seq).toBeGreaterThan(firstPersist.data.seq);
+    expect(secondPersist.data.ok).toBe(true);
 
     const replayed = await authedRequest<{
-      data: Array<{ info: { id: string }; parts: Array<{ type: string; text?: string }> }>;
-    }>(`/api/tasks/${task.id}/branches/${runtimeSessionId}/messages`);
+      data: Array<{
+        runtimeMessageId: string;
+        textContent: string | null;
+        parts: Array<{ partType: string; textContent: string | null }>;
+      }>;
+    }>(`/api/tasks/${task.id}/sessions/${sessionRecordId}/messages`);
 
     expect(replayed.status).toBe(200);
     expect(replayed.data.data).toHaveLength(1);
-    expect(replayed.data.data[0]?.info.id).toBe("msg-1");
-    expect(replayed.data.data[0]?.parts).toEqual([{ type: "text", text: "final result" }]);
+    expect(replayed.data.data[0]?.runtimeMessageId).toBe("msg-1");
+    expect(replayed.data.data[0]?.textContent).toBe("final result");
+    expect(replayed.data.data[0]?.parts).toEqual([
+      expect.objectContaining({ partType: "text", textContent: "final result" }),
+    ]);
   });
 
-  test("aggregates lineage-aware session messages from persisted conversation state", async () => {
+  test("dual-writes message events to the append-only event log", async () => {
+    const task = await createTask(`tree-event-log-${Date.now()}`);
+    const runtimeSessionId = `ses_elog_${Date.now()}`;
+    const sessionNodeId = taskBranchCompatNodeId(task.id, runtimeSessionId);
+    createdNodeIds.add(sessionNodeId);
+
+    await authedRequest(`/api/tasks/${task.id}/sessions`, {
+      method: "POST",
+      body: JSON.stringify({
+        runtimeSessionId,
+        branchName: "elog-root",
+        sourceType: "root",
+        isActive: true,
+      }),
+    });
+
+    await authedRequest(`/api/tasks/${task.id}/sessions/messages`, {
+      method: "POST",
+      body: JSON.stringify({
+        runtimeSessionId,
+        message: {
+          info: { id: "msg-elog-1", role: "user", time: { created: Date.now() } },
+          parts: [{ type: "text", text: "hello event log" }],
+        },
+      }),
+    });
+
+    await authedRequest(`/api/tasks/${task.id}/sessions/messages`, {
+      method: "POST",
+      body: JSON.stringify({
+        runtimeSessionId,
+        message: {
+          info: {
+            id: "msg-elog-2",
+            role: "assistant",
+            finish: "stop",
+            time: { completed: Date.now() },
+          },
+          parts: [{ type: "text", text: "hello from assistant" }],
+        },
+      }),
+    });
+
+    // Give the fire-and-forget dual-write a moment to settle
+    await new Promise((r) => setTimeout(r, 500));
+
+    const events =
+      await sql`SELECT id, task_id, session_id, event_type, runtime_message_id, projected, payload FROM task_message_events WHERE task_id = ${task.id} ORDER BY id ASC`;
+
+    expect(events.length).toBeGreaterThanOrEqual(2);
+
+    const userEvent = events.find(
+      (e: Record<string, unknown>) => e.runtime_message_id === "msg-elog-1",
+    );
+    const assistantEvent = events.find(
+      (e: Record<string, unknown>) => e.runtime_message_id === "msg-elog-2",
+    );
+
+    expect(userEvent).toBeTruthy();
+    expect(userEvent!.event_type).toBe("message.updated");
+    expect(userEvent!.session_id).toBe(runtimeSessionId);
+    expect(userEvent!.projected).toBe(false);
+    expect((userEvent!.payload as Record<string, unknown>).parts).toBeTruthy();
+
+    expect(assistantEvent).toBeTruthy();
+    expect(assistantEvent!.event_type).toBe("message.updated");
+    expect(assistantEvent!.session_id).toBe(runtimeSessionId);
+  });
+
+  test("builds lineage timeline items from persisted session state", async () => {
     const task = await createTask(`tree-lineage-cache-${Date.now()}`);
     const rootRuntimeSessionId = `ses_lineage_root_${Date.now()}`;
     const forkRuntimeSessionId = `ses_lineage_fork_${Date.now()}`;
+    const rootSessionRecordId = taskSessionId(task.id, rootRuntimeSessionId);
+    const forkSessionRecordId = taskSessionId(task.id, forkRuntimeSessionId);
     const rootSessionNodeId = taskBranchCompatNodeId(task.id, rootRuntimeSessionId);
     const forkSessionNodeId = taskBranchCompatNodeId(task.id, forkRuntimeSessionId);
 
@@ -1273,7 +2053,7 @@ describe("project tree routes", () => {
     createdNodeIds.add(forkSessionNodeId);
 
     const rootSession = await authedRequest<{ id: string; runtimeSessionId: string }>(
-      `/api/tasks/${task.id}/branches`,
+      `/api/tasks/${task.id}/sessions`,
       {
         method: "POST",
         body: JSON.stringify({
@@ -1288,7 +2068,7 @@ describe("project tree routes", () => {
     expect(rootSession.status).toBe(201);
 
     const forkSession = await authedRequest<{ id: string; runtimeSessionId: string }>(
-      `/api/tasks/${task.id}/branches`,
+      `/api/tasks/${task.id}/sessions`,
       {
         method: "POST",
         body: JSON.stringify({
@@ -1305,7 +2085,7 @@ describe("project tree routes", () => {
     expect(forkSession.status).toBe(201);
 
     const persistRootUser = await authedRequest<{ ok: boolean; seq: number }>(
-      `/api/tasks/${task.id}/branches/messages`,
+      `/api/tasks/${task.id}/sessions/messages`,
       {
         method: "POST",
         body: JSON.stringify({
@@ -1320,7 +2100,7 @@ describe("project tree routes", () => {
     expect(persistRootUser.status).toBe(201);
 
     const persistRootAssistant = await authedRequest<{ ok: boolean; seq: number }>(
-      `/api/tasks/${task.id}/branches/messages`,
+      `/api/tasks/${task.id}/sessions/messages`,
       {
         method: "POST",
         body: JSON.stringify({
@@ -1335,7 +2115,7 @@ describe("project tree routes", () => {
     expect(persistRootAssistant.status).toBe(201);
 
     const persistRootAfterFork = await authedRequest<{ ok: boolean; seq: number }>(
-      `/api/tasks/${task.id}/branches/messages`,
+      `/api/tasks/${task.id}/sessions/messages`,
       {
         method: "POST",
         body: JSON.stringify({
@@ -1350,7 +2130,7 @@ describe("project tree routes", () => {
     expect(persistRootAfterFork.status).toBe(201);
 
     const persistLeafUser = await authedRequest<{ ok: boolean; seq: number }>(
-      `/api/tasks/${task.id}/branches/messages`,
+      `/api/tasks/${task.id}/sessions/messages`,
       {
         method: "POST",
         body: JSON.stringify({
@@ -1365,7 +2145,7 @@ describe("project tree routes", () => {
     expect(persistLeafUser.status).toBe(201);
 
     const persistLeafAssistant = await authedRequest<{ ok: boolean; seq: number }>(
-      `/api/tasks/${task.id}/branches/messages`,
+      `/api/tasks/${task.id}/sessions/messages`,
       {
         method: "POST",
         body: JSON.stringify({
@@ -1380,46 +2160,48 @@ describe("project tree routes", () => {
     expect(persistLeafAssistant.status).toBe(201);
 
     const replayed = await authedRequest<{
-      data: Array<{ info: { id: string }; parts: Array<{ type: string; text?: string }> }>;
+      data: Array<{ itemKind: string; itemRole: string | null; displayText: string | null }>;
       meta: {
+        readSource: string;
         includeLineage: boolean;
-        cacheState: "none" | "partial" | "complete";
         complete: boolean;
         lineagePath: string[];
-        cachedSessionCount: number;
+        itemCount: number;
       };
-    }>(`/api/tasks/${task.id}/branches/${forkRuntimeSessionId}/messages?includeLineage=true`);
+    }>(`/api/tasks/${task.id}/sessions/${forkSessionRecordId}/timeline?includeLineage=true`);
 
     expect(replayed.status).toBe(200);
     expect(replayed.data.meta).toEqual(
       expect.objectContaining({
+        readSource: "task-session-projection",
         includeLineage: true,
-        cacheState: "complete",
         complete: true,
-        lineagePath: [rootRuntimeSessionId, forkRuntimeSessionId],
-        cachedSessionCount: 2,
-        readSource: "conversation-table",
+        lineagePath: [rootSessionRecordId, forkSessionRecordId],
+        itemCount: 5,
       }),
     );
-    expect(replayed.data.data.map((message) => message.info.id)).toEqual([
-      "root-user",
-      "root-assistant",
-      "leaf-user",
-      "leaf-assistant",
+    expect(replayed.data.data.map((item) => item.displayText)).toEqual([
+      "历史提问",
+      "历史回答",
+      "不应再进入分叉上下文",
+      "当前提问",
+      "当前回答",
     ]);
   });
 
-  test("aggregates lineage-aware session messages from conversation tables across lineage", async () => {
+  test("builds lineage execution trace from session-first stores", async () => {
     const task = await createTask(`conversation-lineage-${Date.now()}`);
     const rootRuntimeSessionId = `ses_conversation_root_${Date.now()}`;
     const forkRuntimeSessionId = `ses_conversation_fork_${Date.now()}`;
+    const rootSessionRecordId = taskSessionId(task.id, rootRuntimeSessionId);
+    const forkSessionRecordId = taskSessionId(task.id, forkRuntimeSessionId);
     const rootSessionNodeId = taskBranchCompatNodeId(task.id, rootRuntimeSessionId);
     const forkSessionNodeId = taskBranchCompatNodeId(task.id, forkRuntimeSessionId);
 
     createdNodeIds.add(rootSessionNodeId);
     createdNodeIds.add(forkSessionNodeId);
 
-    await authedRequest(`/api/tasks/${task.id}/branches`, {
+    await authedRequest(`/api/tasks/${task.id}/sessions`, {
       method: "POST",
       body: JSON.stringify({
         runtimeSessionId: rootRuntimeSessionId,
@@ -1429,7 +2211,7 @@ describe("project tree routes", () => {
       }),
     });
 
-    await authedRequest(`/api/tasks/${task.id}/branches`, {
+    await authedRequest(`/api/tasks/${task.id}/sessions`, {
       method: "POST",
       body: JSON.stringify({
         runtimeSessionId: forkRuntimeSessionId,
@@ -1473,7 +2255,7 @@ describe("project tree routes", () => {
       ],
     ] as const) {
       const persisted = await authedRequest<{ ok: boolean }>(
-        `/api/tasks/${task.id}/branches/messages`,
+        `/api/tasks/${task.id}/sessions/messages`,
         {
           method: "POST",
           body: JSON.stringify({ runtimeSessionId, message }),
@@ -1482,39 +2264,45 @@ describe("project tree routes", () => {
       expect(persisted.status).toBe(201);
     }
     const replayed = await authedRequest<{
-      data: Array<{ info: { id: string } }>;
+      data: {
+        selectedSessionId: string | null;
+        timeline: Array<{ displayText: string | null }>;
+      };
       meta: {
+        readSource: string;
+        timelineReadSource: string;
         includeLineage: boolean;
-        cacheState: "none" | "partial" | "complete";
         complete: boolean;
         lineagePath: string[];
-        cachedSessionCount: number;
-        readSource: string;
+        timelineItemCount: number;
       };
-    }>(`/api/tasks/${task.id}/branches/${forkRuntimeSessionId}/messages?includeLineage=true`);
+    }>(`/api/tasks/${task.id}/execution-trace?sessionId=${forkSessionRecordId}&includeLineage=true`);
 
     expect(replayed.status).toBe(200);
     expect(replayed.data.meta).toEqual(
       expect.objectContaining({
+        readSource: "task-session-first",
+        timelineReadSource: "task-session-projection",
         includeLineage: true,
-        cacheState: "complete",
         complete: true,
-        lineagePath: [rootRuntimeSessionId, forkRuntimeSessionId],
-        cachedSessionCount: 2,
-        readSource: "conversation-table",
+        lineagePath: [rootSessionRecordId, forkSessionRecordId],
+        timelineItemCount: 5,
       }),
     );
-    expect(replayed.data.data.map((message) => message.info.id)).toEqual([
-      "root-user",
-      "root-assistant",
-      "leaf-user",
-      "leaf-assistant",
+    expect(replayed.data.data.selectedSessionId).toBe(forkSessionRecordId);
+    expect(replayed.data.data.timeline.map((item) => item.displayText)).toEqual([
+      "历史提问",
+      "历史回答",
+      "不应再进入分叉上下文",
+      "当前提问",
+      "当前回答",
     ]);
   });
 
-  test("returns task domain run detail with candidate and judge nodes", async () => {
+  test("returns execution trace detail with executor and judge session operations", async () => {
     const task = await createTask(`domain-run-detail-${Date.now()}`);
     const rootRuntimeSessionId = `ses_domain_run_${Date.now()}`;
+    const sessionRecordId = taskSessionId(task.id, rootRuntimeSessionId);
 
     const patchedTask = await authedRequest(`/api/tasks/${task.id}`, {
       method: "PATCH",
@@ -1564,77 +2352,76 @@ describe("project tree routes", () => {
     });
     expect(judge.status).toBe(201);
 
-    const domainRuns = await authedRequest<{ data: Array<{ id: string }> }>(
-      `/api/tasks/${task.id}/domain-runs`,
-    );
-    expect(domainRuns.status).toBe(200);
-    const runId = domainRuns.data.data[0]?.id;
-    expect(runId).toBeTruthy();
-
-    await sql.unsafe(
-      `UPDATE task_runs
-       SET winner_node_id = (
-         SELECT id FROM task_run_nodes WHERE run_id = $1 AND candidate_index = 1 LIMIT 1
-       ),
-           judge_node_id = (
-         SELECT id FROM task_run_nodes WHERE run_id = $1 AND node_kind = 'judge' LIMIT 1
-       )
-       WHERE id = $1`,
-      [runId],
-    );
-
     const detail = await authedRequest<{
       data: {
-        run: {
-          id: string;
-          orchestrationKind: string;
-          winnerNodeId?: string | null;
-          judgeNodeId?: string | null;
-        };
-        nodes: Array<{ id: string; nodeKind: string }>;
-        candidateNodes: Array<{
-          candidateIndex?: number | null;
-          modelUsed?: string | null;
-          resultSummary?: string | null;
+        snapshot: {
+          currentStatus: string;
+          currentSessionId: string | null;
+          latestResult: string | null;
+        } | null;
+        selectedSessionId: string | null;
+        operations: Array<{
+          operationKind: string;
+          modelId: string | null;
+          outputText: string | null;
+          metadataJson: Record<string, unknown>;
         }>;
-        judgeNode: { nodeKind: string; resultSummary?: string | null } | null;
-        winnerCandidateIndex: number | null;
       };
-    }>(`/api/tasks/${task.id}/domain-runs/${runId}`);
+      meta: {
+        readSource: string;
+        timelineReadSource: string;
+      };
+    }>(`/api/tasks/${task.id}/execution-trace?sessionId=${sessionRecordId}&includeLineage=false`);
 
     expect(detail.status).toBe(200);
-    expect(detail.data.data.run.id).toBe(runId);
-    expect(detail.data.data.run.orchestrationKind).toBe("parallel");
-    expect(detail.data.data.nodes.some((node) => node.nodeKind === "judge")).toBe(true);
-    expect(detail.data.data.candidateNodes).toEqual(
+    expect(detail.data.meta).toEqual(
+      expect.objectContaining({
+        readSource: "task-session-first",
+        timelineReadSource: "task-session-projection",
+      }),
+    );
+    expect(detail.data.data.selectedSessionId).toBe(sessionRecordId);
+    expect(detail.data.data.snapshot).toEqual(
+      expect.objectContaining({
+        currentStatus: "completed",
+        currentSessionId: rootRuntimeSessionId,
+        latestResult: "candidate 2 is stronger",
+      }),
+    );
+    expect(detail.data.data.operations).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          candidateIndex: 0,
-          modelUsed: "model-a",
-          resultSummary: "answer-a",
+          operationKind: "executor",
+          modelId: "model-a",
+          outputText: "answer-a",
+          metadataJson: expect.objectContaining({ candidateIndex: 0 }),
         }),
         expect.objectContaining({
-          candidateIndex: 1,
-          modelUsed: "model-b",
-          resultSummary: "answer-b",
+          operationKind: "executor",
+          modelId: "model-b",
+          outputText: "answer-b",
+          metadataJson: expect.objectContaining({ candidateIndex: 1 }),
+        }),
+        expect.objectContaining({
+          operationKind: "judge",
+          modelId: "judge-model",
+          outputText: "candidate 2 is stronger",
         }),
       ]),
     );
-    expect(detail.data.data.judgeNode).toEqual(
-      expect.objectContaining({ nodeKind: "judge", resultSummary: "candidate 2 is stronger" }),
-    );
-    expect(detail.data.data.winnerCandidateIndex).toBe(1);
   });
 
-  test("reports none partial and complete cache states for lineage aggregation", async () => {
+  test("reports zero one and two lineage timeline items as session messages accumulate", async () => {
     const task = await createTask(`tree-cache-state-${Date.now()}`);
     const rootRuntimeSessionId = `ses_cache_root_${Date.now()}`;
     const forkRuntimeSessionId = `ses_cache_fork_${Date.now()}`;
+    const rootSessionRecordId = taskSessionId(task.id, rootRuntimeSessionId);
+    const forkSessionRecordId = taskSessionId(task.id, forkRuntimeSessionId);
 
     createdNodeIds.add(taskBranchCompatNodeId(task.id, rootRuntimeSessionId));
     createdNodeIds.add(taskBranchCompatNodeId(task.id, forkRuntimeSessionId));
 
-    const rootSession = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/branches`, {
+    const rootSession = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/sessions`, {
       method: "POST",
       body: JSON.stringify({
         runtimeSessionId: rootRuntimeSessionId,
@@ -1645,7 +2432,7 @@ describe("project tree routes", () => {
     });
     expect(rootSession.status).toBe(201);
 
-    const forkSession = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/branches`, {
+    const forkSession = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/sessions`, {
       method: "POST",
       body: JSON.stringify({
         runtimeSessionId: forkRuntimeSessionId,
@@ -1661,22 +2448,22 @@ describe("project tree routes", () => {
     const noneState = await authedRequest<{
       data: Array<unknown>;
       meta: {
-        cacheState: "none" | "partial" | "complete";
         complete: boolean;
-        cachedSessionCount: number;
+        lineagePath: string[];
+        itemCount: number;
       };
-    }>(`/api/tasks/${task.id}/branches/${forkRuntimeSessionId}/messages?includeLineage=true`);
+    }>(`/api/tasks/${task.id}/sessions/${forkSessionRecordId}/timeline?includeLineage=true`);
     expect(noneState.status).toBe(200);
     expect(noneState.data.meta).toEqual(
       expect.objectContaining({
-        cacheState: "none",
         complete: false,
-        cachedSessionCount: 0,
+        lineagePath: [rootSessionRecordId, forkSessionRecordId],
+        itemCount: 0,
       }),
     );
 
     const persistLeafOnly = await authedRequest<{ ok: boolean; seq: number }>(
-      `/api/tasks/${task.id}/branches/messages`,
+      `/api/tasks/${task.id}/sessions/messages`,
       {
         method: "POST",
         body: JSON.stringify({
@@ -1691,24 +2478,24 @@ describe("project tree routes", () => {
     expect(persistLeafOnly.status).toBe(201);
 
     const partialState = await authedRequest<{
-      data: Array<unknown>;
+      data: Array<{ displayText: string | null }>;
       meta: {
-        cacheState: "none" | "partial" | "complete";
         complete: boolean;
-        cachedSessionCount: number;
+        lineagePath: string[];
+        itemCount: number;
       };
-    }>(`/api/tasks/${task.id}/branches/${forkRuntimeSessionId}/messages?includeLineage=true`);
+    }>(`/api/tasks/${task.id}/sessions/${forkSessionRecordId}/timeline?includeLineage=true`);
     expect(partialState.status).toBe(200);
     expect(partialState.data.meta).toEqual(
       expect.objectContaining({
-        cacheState: "partial",
-        complete: false,
-        cachedSessionCount: 1,
+        complete: true,
+        lineagePath: [rootSessionRecordId, forkSessionRecordId],
+        itemCount: 1,
       }),
     );
 
     const persistRoot = await authedRequest<{ ok: boolean; seq: number }>(
-      `/api/tasks/${task.id}/branches/messages`,
+      `/api/tasks/${task.id}/sessions/messages`,
       {
         method: "POST",
         body: JSON.stringify({
@@ -1723,32 +2510,33 @@ describe("project tree routes", () => {
     expect(persistRoot.status).toBe(201);
 
     const completeState = await authedRequest<{
-      data: Array<unknown>;
+      data: Array<{ displayText: string | null }>;
       meta: {
-        cacheState: "none" | "partial" | "complete";
         complete: boolean;
-        cachedSessionCount: number;
+        lineagePath: string[];
+        itemCount: number;
       };
-    }>(`/api/tasks/${task.id}/branches/${forkRuntimeSessionId}/messages?includeLineage=true`);
+    }>(`/api/tasks/${task.id}/sessions/${forkSessionRecordId}/timeline?includeLineage=true`);
     expect(completeState.status).toBe(200);
     expect(completeState.data.meta).toEqual(
       expect.objectContaining({
-        cacheState: "complete",
         complete: true,
-        cachedSessionCount: 2,
+        lineagePath: [rootSessionRecordId, forkSessionRecordId],
+        itemCount: 2,
       }),
     );
   });
 
-  test("records synthetic session message events from conversation domain history", async () => {
+  test("updates session timeline latest state when a runtime message is rewritten", async () => {
     const task = await createTask(`tree-events-${Date.now()}`);
     const runtimeSessionId = `ses_events_${Date.now()}`;
+    const sessionRecordId = taskSessionId(task.id, runtimeSessionId);
     const sessionNodeId = taskBranchCompatNodeId(task.id, runtimeSessionId);
 
     createdNodeIds.add(sessionNodeId);
 
     const session = await authedRequest<{ id: string; runtimeSessionId: string }>(
-      `/api/tasks/${task.id}/branches`,
+      `/api/tasks/${task.id}/sessions`,
       {
         method: "POST",
         body: JSON.stringify({
@@ -1762,7 +2550,7 @@ describe("project tree routes", () => {
     expect(session.status).toBe(201);
 
     const createdPersist = await authedRequest<{ ok: boolean; seq: number }>(
-      `/api/tasks/${task.id}/branches/messages`,
+      `/api/tasks/${task.id}/sessions/messages`,
       {
         method: "POST",
         body: JSON.stringify({
@@ -1777,7 +2565,7 @@ describe("project tree routes", () => {
     expect(createdPersist.status).toBe(201);
 
     const completedPersist = await authedRequest<{ ok: boolean; seq: number }>(
-      `/api/tasks/${task.id}/branches/messages`,
+      `/api/tasks/${task.id}/sessions/messages`,
       {
         method: "POST",
         body: JSON.stringify({
@@ -1794,44 +2582,43 @@ describe("project tree routes", () => {
       },
     );
     expect(completedPersist.status).toBe(201);
+
     const events = await authedRequest<{
       data: Array<{
-        eventType: string;
-        payload: { messageId?: string; text?: string | null; completedAt?: number | null };
+        messageId: string | null;
+        itemKind: string;
+        itemRole: string | null;
+        displayText: string | null;
       }>;
-      meta: { cacheState: "none" | "partial" | "complete"; eventCount: number };
-    }>(`/api/tasks/${task.id}/branches/${runtimeSessionId}/events`);
+      meta: { includeLineage: boolean; itemCount: number; complete: boolean };
+    }>(`/api/tasks/${task.id}/sessions/${sessionRecordId}/timeline?includeLineage=false`);
 
     expect(events.status).toBe(200);
-    expect(events.data.meta.cacheState).toBe("complete");
-    expect(events.data.meta.eventCount).toBe(4);
-    expect(events.data.data.map((event) => event.eventType)).toEqual([
-      "session.message.created",
-      "session.message.snapshot",
-      "session.message.updated",
-      "session.message.completed",
+    expect(events.data.meta).toEqual(
+      expect.objectContaining({ includeLineage: false, itemCount: 1, complete: true }),
+    );
+    expect(events.data.data).toEqual([
+      expect.objectContaining({
+        itemKind: "message",
+        itemRole: "assistant",
+        displayText: "最终结果",
+      }),
     ]);
-    expect(events.data.data[0]?.payload).toMatchObject({
-      messageId: "msg-evt-1",
-      text: "进行中结果",
-    });
-    expect(events.data.data[3]?.payload).toMatchObject({
-      messageId: "msg-evt-1",
-      completedAt: Date.parse("2026-03-12T10:03:02.000Z"),
-    });
   });
 
-  test("builds lineage aware timeline items from conversation state with historical replay metadata", async () => {
+  test("builds lineage aware timeline items from session-first projection rows", async () => {
     const task = await createTask(`tree-timeline-${Date.now()}`);
     const rootRuntimeSessionId = `ses_timeline_root_${Date.now()}`;
     const forkRuntimeSessionId = `ses_timeline_fork_${Date.now()}`;
+    const rootSessionRecordId = taskSessionId(task.id, rootRuntimeSessionId);
+    const forkSessionRecordId = taskSessionId(task.id, forkRuntimeSessionId);
     const rootSessionNodeId = taskBranchCompatNodeId(task.id, rootRuntimeSessionId);
     const forkSessionNodeId = taskBranchCompatNodeId(task.id, forkRuntimeSessionId);
 
     createdNodeIds.add(rootSessionNodeId);
     createdNodeIds.add(forkSessionNodeId);
 
-    const rootSession = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/branches`, {
+    const rootSession = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/sessions`, {
       method: "POST",
       body: JSON.stringify({
         runtimeSessionId: rootRuntimeSessionId,
@@ -1842,7 +2629,7 @@ describe("project tree routes", () => {
     });
     expect(rootSession.status).toBe(201);
 
-    const forkSession = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/branches`, {
+    const forkSession = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/sessions`, {
       method: "POST",
       body: JSON.stringify({
         runtimeSessionId: forkRuntimeSessionId,
@@ -1916,7 +2703,7 @@ describe("project tree routes", () => {
       ],
     ] as const) {
       const persisted = await authedRequest<{ ok: boolean; seq: number }>(
-        `/api/tasks/${task.id}/branches/messages`,
+        `/api/tasks/${task.id}/sessions/messages`,
         {
           method: "POST",
           body: JSON.stringify({
@@ -1930,46 +2717,38 @@ describe("project tree routes", () => {
     const timeline = await authedRequest<{
       data: Array<{
         id: string;
-        role: string;
-        text: string;
-        createdAt?: string;
-        completedAt?: string | null;
-        sourceEventTypes: string[];
+        itemRole: string | null;
+        displayText: string | null;
       }>;
       meta: {
-        cacheState: "none" | "partial" | "complete";
+        readSource: string;
+        includeLineage: boolean;
         complete: boolean;
-        cachedSessionCount: number;
         lineagePath: string[];
         itemCount: number;
       };
-    }>(`/api/tasks/${task.id}/branches/${forkRuntimeSessionId}/timeline?includeLineage=true`);
+    }>(`/api/tasks/${task.id}/sessions/${forkSessionRecordId}/timeline?includeLineage=true`);
 
     expect(timeline.status).toBe(200);
-    expect(timeline.data.meta).toEqual({
-      includeLineage: true,
-      cacheState: "complete",
-      complete: true,
-      cachedSessionCount: 2,
-      lineagePath: [rootRuntimeSessionId, forkRuntimeSessionId],
-      itemCount: 4,
-    });
-    expect(timeline.data.data.map((item) => item.id)).toEqual([
-      "root-user",
-      "root-assistant",
-      "leaf-user",
-      "leaf-assistant",
+    expect(timeline.data.meta).toEqual(
+      expect.objectContaining({
+        readSource: "task-session-projection",
+        includeLineage: true,
+        complete: true,
+        lineagePath: [rootSessionRecordId, forkSessionRecordId],
+        itemCount: 5,
+      }),
+    );
+    expect(timeline.data.data.map((item) => item.displayText)).toEqual([
+      "历史提问",
+      "历史回答",
+      "不应出现在 timeline lineage 中",
+      "当前提问",
+      "当前回答",
     ]);
     expect(timeline.data.data[1]).toMatchObject({
-      id: "root-assistant",
-      role: "assistant",
-      text: "历史回答",
-      completedAt: "2026-03-20T09:00:04.000Z",
+      itemRole: "assistant",
+      displayText: "历史回答",
     });
-    expect(timeline.data.data[1]?.sourceEventTypes).toEqual([
-      "session.message.created",
-      "session.message.completed",
-      "session.message.snapshot",
-    ]);
   });
 });

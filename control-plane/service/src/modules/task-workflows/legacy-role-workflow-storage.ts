@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import { db } from "../../db";
 import {
   developerChangeRequests,
+  projects,
   roleAggregateConclusions,
   tasks as taskAggregates,
   taskStageRuns,
@@ -14,6 +15,8 @@ type JsonRecord = Record<string, unknown>;
 type WorkflowStatus = typeof taskWorkflowRuns.$inferSelect.status | TaskTreeRecord["status"];
 
 const legacyWorkflowMigrationInflight = new Map<string, Promise<TaskTreeRecord | null>>();
+const LEGACY_UNSPECIFIED_WORKFLOW_TEMPLATE_ID = "legacy-unspecified";
+const DEFAULT_WORKFLOW_TEMPLATE_ID = "workflow-template-default-delivery";
 
 function resolveLegacyTaskExecutionMode(strategy: JsonRecord) {
   return strategy.executionMode === "single" ||
@@ -160,6 +163,43 @@ function readString(value: unknown) {
   return typeof value === "string" && value ? value : null;
 }
 
+function normalizeWorkflowTemplateId(value: unknown) {
+  const templateId = readString(value);
+  if (!templateId || templateId === LEGACY_UNSPECIFIED_WORKFLOW_TEMPLATE_ID) {
+    return null;
+  }
+
+  return templateId;
+}
+
+async function loadProjectWorkflowTemplateId(projectId: string | null) {
+  if (!projectId) {
+    return null;
+  }
+
+  const project = await db.query.projects.findFirst({
+    where: eq(projects.id, projectId),
+  });
+  const settings = isNonEmptyObject(project?.settings) ? project.settings : null;
+  return normalizeWorkflowTemplateId(settings?.workflowTemplateId);
+}
+
+async function resolveWorkflowTemplateId(task: TaskTreeRecord, strategy: JsonRecord) {
+  return (
+    normalizeWorkflowTemplateId(strategy.workflowTemplateId) ||
+    normalizeWorkflowTemplateId(strategy.selectedTemplateId) ||
+    (await loadProjectWorkflowTemplateId(task.projectId ?? null)) ||
+    DEFAULT_WORKFLOW_TEMPLATE_ID
+  );
+}
+
+async function loadWorkflowTemplateStageRows(templateId: string) {
+  return db
+    .select()
+    .from(workflowTemplateStages)
+    .where(eq(workflowTemplateStages.templateId, templateId));
+}
+
 function isStringMember<T extends readonly string[]>(
   value: unknown,
   members: T,
@@ -281,14 +321,6 @@ function normalizeLegacyChangeRequest(
   };
 }
 
-function inferWorkflowTemplateId(strategy: JsonRecord) {
-  return (
-    readString(strategy.workflowTemplateId) ||
-    readString(strategy.selectedTemplateId) ||
-    "legacy-unspecified"
-  );
-}
-
 function inferLegacyStage(strategy: JsonRecord, legacyRoleConclusions: unknown[]) {
   const strategyStage = readString(strategy.currentStage);
   if (strategyStage) {
@@ -311,7 +343,10 @@ function inferWorkflowStatus(taskStatus: TaskTreeRecord["status"]) {
     case "running":
       return "running" as const;
     case "paused":
+    case "blocked":
       return "blocked" as const;
+    case "waiting-approval":
+      return "waiting-approval" as const;
     case "completed":
       return "completed" as const;
     case "failed":
@@ -331,6 +366,8 @@ function inferCurrentStage(taskStatus: TaskTreeRecord["status"], legacyStage: st
       return "cancelled";
     case "running":
     case "paused":
+    case "blocked":
+    case "waiting-approval":
     case "failed":
       return legacyStage ?? "unknown";
     default:
@@ -378,6 +415,7 @@ async function ensureWorkflowStageRunsMigrated(
   workflowRun: typeof taskWorkflowRuns.$inferSelect,
   task: TaskTreeRecord,
   legacyStage: string | null,
+  strategy: JsonRecord,
 ) {
   const existingStageRun = await db.query.taskStageRuns.findFirst({
     where: eq(taskStageRuns.workflowRunId, workflowRun.id),
@@ -386,10 +424,29 @@ async function ensureWorkflowStageRunsMigrated(
     return;
   }
 
-  const templateStages = await db
-    .select()
-    .from(workflowTemplateStages)
-    .where(eq(workflowTemplateStages.templateId, workflowRun.templateId));
+  let effectiveWorkflowRun = workflowRun;
+  let templateId = normalizeWorkflowTemplateId(workflowRun.templateId);
+  let templateStages = templateId ? await loadWorkflowTemplateStageRows(templateId) : [];
+
+  if (templateStages.length === 0) {
+    templateId = await resolveWorkflowTemplateId(task, strategy);
+    if (templateId !== workflowRun.templateId) {
+      const updatedAt = new Date().toISOString();
+      await db
+        .update(taskWorkflowRuns)
+        .set({
+          templateId,
+          updatedAt,
+        })
+        .where(eq(taskWorkflowRuns.id, workflowRun.id));
+      effectiveWorkflowRun = {
+        ...effectiveWorkflowRun,
+        templateId,
+        updatedAt,
+      };
+    }
+    templateStages = await loadWorkflowTemplateStageRows(templateId);
+  }
 
   if (templateStages.length === 0) {
     return;
@@ -398,10 +455,10 @@ async function ensureWorkflowStageRunsMigrated(
   const orderedStages = [...templateStages].sort(
     (left, right) => left.orderIndex - right.orderIndex,
   );
-  const fallbackStageKey = orderedStages[0]?.stageKey ?? workflowRun.currentStage;
-  const activeStageKey = orderedStages.some((stage) => stage.stageKey === workflowRun.currentStage)
-    ? workflowRun.currentStage
-    : ((workflowRun.status === "completed"
+  const fallbackStageKey = orderedStages[0]?.stageKey ?? effectiveWorkflowRun.currentStage;
+  const activeStageKey = orderedStages.some((stage) => stage.stageKey === effectiveWorkflowRun.currentStage)
+    ? effectiveWorkflowRun.currentStage
+    : ((effectiveWorkflowRun.status === "completed"
         ? orderedStages[orderedStages.length - 1]?.stageKey
         : legacyStage) ?? fallbackStageKey);
   const activeIndex = Math.max(
@@ -409,19 +466,19 @@ async function ensureWorkflowStageRunsMigrated(
     orderedStages.findIndex((stage) => stage.stageKey === activeStageKey),
   );
   const now = new Date().toISOString();
-  const startedAt = workflowRun.startedAt ?? task.startedAt ?? task.createdAt ?? now;
+  const startedAt = effectiveWorkflowRun.startedAt ?? task.startedAt ?? task.createdAt ?? now;
   const finishedAt =
-    workflowRun.finishedAt ??
-    (workflowRun.status === "completed" ||
-    workflowRun.status === "failed" ||
-    workflowRun.status === "cancelled"
+    effectiveWorkflowRun.finishedAt ??
+    (effectiveWorkflowRun.status === "completed" ||
+    effectiveWorkflowRun.status === "failed" ||
+    effectiveWorkflowRun.status === "cancelled"
       ? now
       : null);
 
   const stagePayloads: Array<typeof taskStageRuns.$inferInsert> = orderedStages.map(
     (stage, index) => {
       const status = buildStageRunStatus(
-        workflowRun.status,
+        effectiveWorkflowRun.status,
         stage.stageKey,
         activeStageKey,
         index,
@@ -429,7 +486,7 @@ async function ensureWorkflowStageRunsMigrated(
       );
       return {
         id: crypto.randomUUID(),
-        workflowRunId: workflowRun.id,
+        workflowRunId: effectiveWorkflowRun.id,
         stageKey: stage.stageKey,
         status,
         primaryRoleAgentId: stage.primaryRoleAgentId,
@@ -451,6 +508,54 @@ async function ensureWorkflowStageRunsMigrated(
   await db.insert(taskStageRuns).values(stagePayloads);
 }
 
+async function repairLegacyWorkflowRun(args: {
+  workflowRun: typeof taskWorkflowRuns.$inferSelect;
+  task: TaskTreeRecord;
+  strategy: JsonRecord;
+  legacyStage: string | null;
+}) {
+  const templateId = await resolveWorkflowTemplateId(args.task, args.strategy);
+  const status = inferWorkflowStatus(args.task.status);
+  const currentStage = inferCurrentStage(args.task.status, args.legacyStage);
+  const updates: Partial<typeof taskWorkflowRuns.$inferInsert> = {};
+
+  if (!normalizeWorkflowTemplateId(args.workflowRun.templateId)) {
+    updates.templateId = templateId;
+  }
+
+  if (args.workflowRun.status !== status) {
+    updates.status = status;
+  }
+
+  if (
+    (!readString(args.workflowRun.currentStage) ||
+      args.workflowRun.currentStage === "unknown" ||
+      args.workflowRun.currentStage === "intake") &&
+    args.workflowRun.currentStage !== currentStage
+  ) {
+    updates.currentStage = currentStage;
+  }
+
+  if (Object.keys(updates).length === 0) {
+    return args.workflowRun;
+  }
+
+  const updatedAt = new Date().toISOString();
+  await db
+    .update(taskWorkflowRuns)
+    .set({
+      ...updates,
+      updatedAt,
+    })
+    .where(eq(taskWorkflowRuns.id, args.workflowRun.id));
+
+  return {
+    ...args.workflowRun,
+    ...updates,
+    updatedAt,
+  };
+}
+
 async function ensureLegacyTaskWorkflowRunMigrated(
   task: TaskTreeRecord,
   strategy: JsonRecord,
@@ -459,17 +564,19 @@ async function ensureLegacyTaskWorkflowRunMigrated(
   const existingWorkflowRun = await db.query.taskWorkflowRuns.findFirst({
     where: eq(taskWorkflowRuns.taskId, task.id),
   });
+  const legacyStage = inferLegacyStage(strategy, legacyRoleConclusions);
   if (existingWorkflowRun) {
-    await ensureWorkflowStageRunsMigrated(
-      existingWorkflowRun,
+    const repairedWorkflowRun = await repairLegacyWorkflowRun({
+      workflowRun: existingWorkflowRun,
       task,
-      inferLegacyStage(strategy, legacyRoleConclusions),
-    );
+      strategy,
+      legacyStage,
+    });
+    await ensureWorkflowStageRunsMigrated(repairedWorkflowRun, task, legacyStage, strategy);
     return existingWorkflowRun;
   }
 
-  const templateId = inferWorkflowTemplateId(strategy);
-  const legacyStage = inferLegacyStage(strategy, legacyRoleConclusions);
+  const templateId = await resolveWorkflowTemplateId(task, strategy);
   const workflowStatus = inferWorkflowStatus(task.status);
   const currentStage = inferCurrentStage(task.status, legacyStage);
   const now = new Date().toISOString();
@@ -497,7 +604,7 @@ async function ensureLegacyTaskWorkflowRunMigrated(
     where: eq(taskWorkflowRuns.id, workflowRunId),
   });
   if (createdWorkflowRun) {
-    await ensureWorkflowStageRunsMigrated(createdWorkflowRun, task, legacyStage);
+    await ensureWorkflowStageRunsMigrated(createdWorkflowRun, task, legacyStage, strategy);
   }
 
   return createdWorkflowRun;
@@ -548,7 +655,7 @@ async function ensureLegacyRoleWorkflowMigratedInternal(taskId: string) {
     await db
       .update(taskAggregates)
       .set({
-        strategyJson: normalizedStrategyJson,
+          strategyJson: normalizedStrategyJson ?? {},
         updatedAt: new Date().toISOString(),
       })
       .where(eq(taskAggregates.id, taskId));

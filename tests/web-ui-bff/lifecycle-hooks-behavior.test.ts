@@ -118,6 +118,7 @@ const recordPaidExecutionRuntimeUsageMock = mock(async () => ({ tripped: false }
 const buildPipelineStageUpdatedEventsMock = mock(async () => [] as Array<Record<string, unknown>>);
 
 mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter", () => ({
+  buildExecutionContext: mock(() => ""),
   createSession: createSessionMock,
   continueSession: continueSessionMock,
   ensureAgentRunForSession: mock(() => "run-test"),
@@ -957,9 +958,6 @@ describe("executeLifecycleHooks behavior", () => {
     expect(continueSessionMock).not.toHaveBeenCalled();
 
     for (const call of createSessionMock.mock.calls) {
-      expect(call[2]).toContain("请只完成当前阶段的目标。");
-      expect(call[2]).not.toContain("完成后请输出本阶段产出摘要。");
-      expect(call[2]).not.toContain("[STAGE_COMPLETE]");
       expect(call[2]).toContain("Please continue");
     }
   });
@@ -1124,6 +1122,78 @@ describe("executeLifecycleHooks behavior", () => {
     expect(registerParallelTaskMock).not.toHaveBeenCalled();
   });
 
+  test("continue route preserves canonical task session ids in the continuation response", async () => {
+    currentStrategy = buildStrategy({ hooks: [] });
+    currentTask = {
+      ...currentTask,
+      title: "Canonical continuation task",
+      prompt: "Continue with canonical task session id",
+      sessionId: "session-existing",
+      status: "paused",
+      executionMode: "single",
+    };
+    cpFetchMock.mockImplementation(
+      async (url: string, options?: { method?: string; body?: unknown }) => {
+        if (!options?.method) {
+          if (url === "/api/tasks/task-1/branches") {
+            return {
+              ok: true,
+              data: {
+                data: [
+                  {
+                    id: "task-session:task-1:session-existing",
+                    runtimeSessionId: "session-existing",
+                    sourceType: "root",
+                    isActive: true,
+                    archivedAt: null,
+                  },
+                ],
+              },
+            };
+          }
+
+          if (url.includes("/api/projects/")) {
+            return { ok: true, data: { settings: {} } };
+          }
+
+          return {
+            ok: true,
+            data: currentTask,
+          };
+        }
+
+        return { ok: true, data: { body: options.body } };
+      },
+    );
+
+    const { taskRoutes } = await loadTaskRoutesModule();
+    const response = await taskRoutes.request("http://localhost/task-1/continue", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer test",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        prompt: "Please continue",
+        sessionId: "task-session:task-1:session-existing",
+        executionMode: "single",
+      }),
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({
+      ok: true,
+      sessionId: "task-session:task-1:session-existing",
+      agentRunId: "run-test",
+    });
+    expect(continueSessionMock).toHaveBeenCalledWith(
+      "task-session:task-1:session-existing",
+      expect.stringContaining("Please continue"),
+      expect.any(Object),
+    );
+  });
+
   test("continue route does not rewrite legacy parallel compat patch fields for projection-backed tasks", async () => {
     currentStrategy = buildStrategy({ hooks: [] });
     process.env.ALLOW_PAID_MODEL_EXECUTION = "1";
@@ -1254,6 +1324,7 @@ describe("executeLifecycleHooks behavior", () => {
     expect(lineageWrites).toHaveLength(3);
     expect((lineageWrites[0]?.[1] as { body?: Record<string, unknown> })?.body).toMatchObject({
       runtimeSessionId: "session-existing-parent",
+      branchName: "Parallel execute task",
       sourceType: "root",
       isActive: false,
     });
@@ -1393,6 +1464,7 @@ describe("executeLifecycleHooks behavior", () => {
     expect(lineageWrites).toHaveLength(2);
     expect((lineageWrites[0]?.[1] as { body?: Record<string, unknown> })?.body).toMatchObject({
       runtimeSessionId: "session-existing-parent",
+      branchName: "Single execute task",
       sourceType: "root",
       isActive: false,
     });

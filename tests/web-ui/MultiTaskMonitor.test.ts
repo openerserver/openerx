@@ -23,7 +23,6 @@ const apiMocks = vi.hoisted(() => ({
   listProjects: vi.fn(),
   listTasks: vi.fn(),
   getTask: vi.fn(),
-  getTaskBranches: vi.fn(),
   getTaskConversationMessages: vi.fn(),
   getTaskMemberView: vi.fn(),
   getTaskSessions: vi.fn(),
@@ -484,9 +483,6 @@ beforeEach(() => {
       },
     ],
   });
-  apiMocks.getTaskBranches.mockImplementation((...args: unknown[]) =>
-    apiMocks.getTaskSessions(...args),
-  );
   apiMocks.getSessionMessages.mockResolvedValue({
     data: [
       {
@@ -691,7 +687,7 @@ afterEach(() => {
 
 describe("MultiTaskMonitor", () => {
   it("keeps the core monitor card readable when branch and session reads are unavailable", async () => {
-    apiMocks.getTaskBranches.mockResolvedValueOnce({ data: [] });
+    apiMocks.getTaskSessions.mockResolvedValueOnce({ data: [] });
     apiMocks.getTaskPipeline.mockResolvedValueOnce(null);
 
     const { wrapper } = await mountPage();
@@ -702,7 +698,7 @@ describe("MultiTaskMonitor", () => {
     expect(wrapper.text()).toContain("运行中");
     expect(apiMocks.listTasks).toHaveBeenCalled();
     expect(apiMocks.getTask).toHaveBeenCalledWith("task-1");
-    expect(apiMocks.getTaskBranches).toHaveBeenCalledWith("task-1");
+    expect(apiMocks.getTaskSessions).toHaveBeenCalledWith("task-1");
     expect(apiMocks.getTaskConversationMessages).not.toHaveBeenCalled();
   });
 
@@ -2614,6 +2610,66 @@ describe("MultiTaskMonitor", () => {
     expect(wrapper.text()).toContain("实时回复");
     expect(wrapper.text()).toContain("已定位到登录态丢失的根因");
     expect(wrapper.text()).toContain("github-copilot:claude-sonnet-4");
+    expect(wrapper.text()).toContain("运行中");
+    expect(wrapper.text()).not.toContain("生成中");
+    expect(wrapper.find(".monitor-node__activity-pill").text()).toBe("运行中");
+  });
+
+  it("keeps the monitor card stable when task-domain assistant events arrive", async () => {
+    const { wrapper, taskMonitorStore, realtimeStore } = await mountPage();
+
+    taskMonitorStore.addTaskNode("task-1");
+    await flushPromises();
+
+    prependRealtimeEvent(realtimeStore, {
+      id: "evt-domain-message-updated",
+      type: "task.message.updated",
+      ts: "2026-03-14T08:05:00.000Z",
+      taskId: "task-1",
+      sessionId: "session-1",
+      data: {
+        message: {
+          id: "message-stream-domain-1",
+          role: "assistant",
+          agent: "oracle-enterprise",
+          model: {
+            providerID: "github-copilot",
+            modelID: "claude-sonnet-4",
+          },
+          time: {
+            created: "2026-03-14T08:05:00.000Z",
+          },
+        },
+      },
+    });
+    prependRealtimeEvent(realtimeStore, {
+      id: "evt-domain-message-delta",
+      type: "task.message.delta",
+      ts: "2026-03-14T08:05:01.000Z",
+      taskId: "task-1",
+      sessionId: "session-1",
+      data: {
+        messageId: "message-stream-domain-1",
+        partType: "text",
+        delta: "正在持续输出",
+      },
+    });
+    prependRealtimeEvent(realtimeStore, {
+      id: "evt-domain-message-delta-2",
+      type: "task.message.delta",
+      ts: "2026-03-14T08:05:02.000Z",
+      taskId: "task-1",
+      sessionId: "session-1",
+      data: {
+        messageId: "message-stream-domain-1",
+        partType: "text",
+        delta: "修复进展。",
+      },
+    });
+
+    await flushPromises();
+    await flushPromises();
+
     expect(wrapper.text()).toContain("运行中");
     expect(wrapper.text()).not.toContain("生成中");
     expect(wrapper.find(".monitor-node__activity-pill").text()).toBe("运行中");

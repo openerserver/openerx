@@ -1,45 +1,56 @@
 import { and, asc, eq } from "drizzle-orm";
 import { db } from "../../db";
-import { taskRunNodes } from "../../db/schema";
+import * as schema from "../../db/schema";
+
+const legacyTaskRunNodes = (schema as Record<string, unknown>).taskRunNodes as any | undefined;
 
 export async function listTaskRunDetailNodes(args: {
   taskId: string;
   runId: string;
   winnerNodeId?: string | null;
 }) {
+  if (!legacyTaskRunNodes) {
+    return {
+      nodes: [],
+      candidateNodes: [],
+      judgeNode: null,
+      winnerCandidateIndex: null,
+    };
+  }
+
   const rows = await db
     .select({
-      id: taskRunNodes.id,
-      runId: taskRunNodes.runId,
-      taskId: taskRunNodes.taskId,
-      projectId: taskRunNodes.projectId,
-      nodeKind: taskRunNodes.nodeKind,
-      nodeKey: taskRunNodes.nodeKey,
-      title: taskRunNodes.title,
-      instruction: taskRunNodes.instruction,
-      candidateIndex: taskRunNodes.candidateIndex,
-      chainStepIndex: taskRunNodes.chainStepIndex,
-      hookTrigger: taskRunNodes.hookTrigger,
-      agentType: taskRunNodes.agentType,
-      modelUsed: taskRunNodes.modelUsed,
-      sessionId: taskRunNodes.sessionId,
-      agentRunId: taskRunNodes.agentRunId,
-      status: taskRunNodes.status,
-      resultText: taskRunNodes.resultText,
-      resultSummary: taskRunNodes.resultSummary,
-      errorText: taskRunNodes.errorText,
-      tokenUsed: taskRunNodes.tokenUsed,
-      startedAt: taskRunNodes.startedAt,
-      finishedAt: taskRunNodes.finishedAt,
-      createdAt: taskRunNodes.createdAt,
-      updatedAt: taskRunNodes.updatedAt,
+      id: legacyTaskRunNodes.id,
+      runId: legacyTaskRunNodes.runId,
+      taskId: legacyTaskRunNodes.taskId,
+      projectId: legacyTaskRunNodes.projectId,
+      nodeKind: legacyTaskRunNodes.nodeKind,
+      nodeKey: legacyTaskRunNodes.nodeKey,
+      title: legacyTaskRunNodes.title,
+      instruction: legacyTaskRunNodes.instruction,
+      candidateIndex: legacyTaskRunNodes.candidateIndex,
+      chainStepIndex: legacyTaskRunNodes.chainStepIndex,
+      hookTrigger: legacyTaskRunNodes.hookTrigger,
+      agentType: legacyTaskRunNodes.agentType,
+      modelUsed: legacyTaskRunNodes.modelUsed,
+      sessionId: legacyTaskRunNodes.sessionId,
+      agentRunId: legacyTaskRunNodes.agentRunId,
+      status: legacyTaskRunNodes.status,
+      resultText: legacyTaskRunNodes.resultText,
+      resultSummary: legacyTaskRunNodes.resultSummary,
+      errorText: legacyTaskRunNodes.errorText,
+      tokenUsed: legacyTaskRunNodes.tokenUsed,
+      startedAt: legacyTaskRunNodes.startedAt,
+      finishedAt: legacyTaskRunNodes.finishedAt,
+      createdAt: legacyTaskRunNodes.createdAt,
+      updatedAt: legacyTaskRunNodes.updatedAt,
     })
-    .from(taskRunNodes)
-    .where(and(eq(taskRunNodes.taskId, args.taskId), eq(taskRunNodes.runId, args.runId)))
+    .from(legacyTaskRunNodes)
+    .where(and(eq(legacyTaskRunNodes.taskId, args.taskId), eq(legacyTaskRunNodes.runId, args.runId)))
     .orderBy(
-      asc(taskRunNodes.candidateIndex),
-      asc(taskRunNodes.chainStepIndex),
-      asc(taskRunNodes.createdAt),
+      asc(legacyTaskRunNodes.candidateIndex),
+      asc(legacyTaskRunNodes.chainStepIndex),
+      asc(legacyTaskRunNodes.createdAt),
     );
 
   const candidateNodes = rows.filter((node) => node.nodeKind === "candidate");

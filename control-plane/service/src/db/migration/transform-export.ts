@@ -84,11 +84,6 @@ function asString(value: unknown) {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
-function asBoolean(value: unknown, defaultValue = false) {
-  const normalized = normalizeBooleanValue(value);
-  return typeof normalized === "boolean" ? normalized : defaultValue;
-}
-
 function mergeRowsById(
   existingRows: Array<Record<string, unknown>>,
   additionalRows: Array<Record<string, unknown>>,

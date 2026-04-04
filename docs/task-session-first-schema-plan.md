@@ -3,6 +3,7 @@
 > 状态：Draft v2  
 > 日期：2026-03-28  
 > 作者：GitHub Copilot
+> 补充建议：当前仓库的目录级和文件级动作清单，以及对现有 `task_sessions` / `task_messages` / `session_operations` 等表的收敛建议，见 [task-runtime-rewrite-operation-checklist.md](task-runtime-rewrite-operation-checklist.md)。
 
 ## 1. 文档目的
 
@@ -2187,191 +2188,22 @@ flowchart TD
 
 这一步属于重建实现设计，不在本文展开。
 
-## 11. 下一步完整工作计划
+## 11. 执行计划文档
 
-### 11.1 现状核查结论
+执行计划已独立到 [task-session-first-execution-plan.md](task-session-first-execution-plan.md)。
 
-在开始实现前，需要先把当前代码面的现实状态写清楚，否则后续排期会低估切换成本。
+本文件到此为止只保留三类内容：
 
-当前仓库并不是“只差一层 DDL 映射”，而是典型的 **混合模型**：
+1. 目标模型边界
+2. DDL 草案
+3. 与现有概念的映射和实现影响
 
-1. service schema 仍以 `tasks + task_runs + task_run_nodes + conversation_sessions + task_domain_events` 作为主干
-2. `tasks` 仍保留 `current_run_id`、`current_session_id`、`started_at`、`finished_at` 这类旧执行态字段
-3. task 写链当前由 aggregate sync、conversation session/message sync、task run write sync、task domain projector 共同组成，还没有真正做到“事实层写入”和“投影层生成”解耦
-4. `task_snapshots`、`task_timeline_views` 当前也仍直接依赖 `task_domain_events`、`task_run_nodes`、`conversation_messages` 生成
-5. service `/tasks/:taskId/branches*` 与 BFF `task-session-compat` 仍是基于 `runtimeSessionId` 的兼容层，而不是目标模型里的正式 `task_sessions` contract
-6. `TaskDetailV3` 当前仍同时依赖 `execution-trace` 与 `/domain-runs*`，才能拼出并行候选、judge、采纳和顺序链展示
+所有执行层内容，包括：
 
-这意味着本轮工作不能只理解为“把旧表重命名成新表”。真正需要完成的是：
+1. 硬切重写原则
+2. 旧实现删除清单
+3. 分阶段实施批次
+4. 每个阶段的可编码任务
+5. 验证矩阵与收尾 gate
 
-1. 重建事实表
-2. 重写投影器
-3. 切 service public contract
-4. 切 BFF contract
-5. 切前端详情页主读链
-6. 最后删除 legacy 表与 compat 代码
-
-### 11.2 总体实施原则
-
-1. 不做长期双写，但允许在同一实现周期内并行落新表、新 projector、新 route，待验证完成后一次切换 public contract
-2. 实施顺序必须固定为：schema 与事实写入 → projection → service read route → BFF contract → web-ui 切换 → 删除 legacy
-3. 每一阶段都必须有明确的重建能力和验证 gate；没有 gate，不进入下一阶段
-4. `project_tree_nodes` 在本轮继续保留为导航 / 信息架构层，不再承担 task / session 业务事实 fallback
-5. workflow 静态规则层不与本轮 task / session 主模型并行大改；本轮只落 bridge 字段、触发入口和治理动作边界
-6. 旧实现中的 `branches*`、`domain-runs*`、execution-trace fallback 都应视为待退役对象，而不是新方案设计输入
-
-### 11.3 Phase 0：先拍板的实现前置决策
-
-这一步不写大量代码，但必须先把实现边界钉死。
-
-1. 明确 `project_tree_nodes` 与新 `tasks` / `task_sessions` 的关系：继续保留 `tree_node_id` 一对一桥接，还是改成纯 read projection
-2. 明确新的正式 public route contract，至少包含：`/tasks/:taskId/sessions`、`/tasks/:taskId/sessions/:sessionId/messages`、`/tasks/:taskId/sessions/:sessionId/timeline`、`/tasks/:taskId/sessions/:sessionId/operations`、`/tasks/:taskId/artifacts`
-3. 明确并行采纳 contract 是否按 `coordination_key + winner_session_id` 表达，避免再引入 `runId + candidateIndex` 的旧抽象
-4. 明确 workflow bridge 字段的唯一写入口：create-time snapshot，运行后只读；模板重绑走专用管理动作
-5. 明确 `task_artifacts` 与 `task_usage_ledger_entries` 的首批落地范围，避免第一阶段试图把所有历史产物一次性迁进去
-
-完成标准：
-
-1. 本文补齐 route contract 与 tree 关系决策
-2. service、BFF、web-ui 三侧共同确认最小新 contract
-3. 从这一阶段起，仓库不再接受新增基于 `task_runs` / `task_domain_events` 的功能需求
-
-### 11.4 Phase 1：落新 schema 与 repository 层
-
-这一阶段的目标是把数据库与类型系统立住，但不急于立刻切掉前端。
-
-1. 在 `schema.pg.ts` 与 Drizzle migration 中新增 `task_sessions`、`task_session_messages`、`task_session_message_parts`、`session_operations`、`task_artifacts`、`task_usage_ledger_entries`
-2. 同步重构 `tasks`、`task_snapshots`、`task_timeline_views` 结构，新增 workflow bridge 字段，删除明确不再保留的执行态列
-3. 建立新的 enum、id builder、row mapper、repository helper，替换当前围绕 `conversation_*` 的 runtime compat id 生成逻辑
-4. 为新表补齐唯一索引、跨表约束、重建脚本与最小 fixture 工具
-5. 旧表定义在这一阶段只保留到“旧模块尚未删除”为止，不再新增字段或新能力
-
-完成标准：
-
-1. service 编译通过
-2. PostgreSQL migration 可完整创建新表
-3. repository 层单测覆盖 session lineage、candidate / judge / sequential-step 约束、artifact / ledger 归属约束
-
-### 11.5 Phase 2：切写路径到新事实表
-
-这一阶段开始真正把运行时事实从旧表迁到新表。
-
-1. 用新的 session write API 替换当前 `task-conversation-session-sync`，让 execute、continue、fork、resume、hook、judge 全部直接写 `task_sessions`
-2. 用新的 message write API 替换 `task-conversation-message-sync`，保证正文和 parts 只写 `task_session_messages` / `task_session_message_parts`
-3. 用新的 operation write API 替换 `task-run-write-sync` 与 `agent_runs` 的任务域职责，把 executor / judge / hook / resume 落到 `session_operations`
-4. 在写路径上同步落 `task_usage_ledger_entries`，并把 session / operation totals 视为聚合快照而不是账务主源
-5. 把当前 `changesSummaryJson`、code change collector、judge scorecard 等首批正式产物提升到 `task_artifacts`
-
-完成标准：
-
-1. single、parallel、sequential-chain、manual branch 四类任务都能仅靠新事实写链复原完整执行
-2. 不再新增对 `task_runs`、`task_run_nodes`、`task_domain_events` 的写入
-3. service integration tests 至少覆盖：single、parallel + judge、fork lineage、resume / hook
-
-### 11.6 Phase 3：重写 projection 与读模型
-
-新事实表落地后，下一步是把投影器彻底改成 session-first。
-
-1. 用新事实表重写 `task_snapshots` projector，不再读取 `task_runs`、`task_run_nodes`、`task_domain_events`
-2. 用新事实表重写 `task_timeline_views` projector，timeline item 只来自 `tasks`、`task_sessions`、messages、operations、artifacts
-3. 重写 snapshot / timeline replay 能力，保留 `truncate + rebuild`，删除 event replay 语义
-4. 把 current / latest session 指针、candidate / chain 聚合、last activity 等都下沉为 projection 算法，而不是主表反向指针
-5. 新增 projection consistency audit，覆盖 task / session / message 计数、winner / judge 指针、timeline completeness
-
-完成标准：
-
-1. `task-projection-read` 不再 import 旧事实表
-2. projection rebuild 能在 fixture 上稳定重建
-3. 任务列表、任务详情头部、时间线主视图都能只靠 `tasks` + `task_snapshots` + `task_timeline_views` + session 明细返回
-
-### 11.7 Phase 4：service public contract 切换
-
-这一阶段开始把对外 contract 从旧抽象切到新抽象。
-
-1. 新增正式 `/tasks/:taskId/sessions*` routes，覆盖列表、详情、messages、timeline、operations、artifacts、usage ledger
-2. 重写 `/tasks/:taskId/execution-trace`，使其底层只读新 projection 与新 session facts
-3. 将 `/tasks/:taskId/branches*` 降级为兼容 alias，内部转读新 session routes；不再直接暴露 runtimeSessionId-only 语义
-4. 将 `/tasks/:taskId/domain-runs*` 标记废弃，采纳接口切到 session-first winner adoption contract
-5. 更新 route builder，拆掉当前以 `appendTaskDomainEvent` 为中心的共享写链
-
-完成标准：
-
-1. 新 public route 已能独立支撑 BFF
-2. `branches*` 与 `domain-runs*` 不再是页面主链依赖
-3. execution trace 的 `readSource` 不再出现 `task-domain-events`
-
-### 11.8 Phase 5：BFF 与前端切换
-
-service 切完之后，再整体切 BFF 与页面，避免中途出现“双 contract 混用”。
-
-1. BFF 去掉 `task-session-compat` 的正式 contract 角色，只保留短期 alias 或直接删除
-2. 重写 task routes 中 TaskDomainRun、TaskSessionTimeline compat 类型，统一改成 session-first payload
-3. `TaskDetailV3` 去掉 `getTaskDomainRuns` / `getTaskDomainRunDetail` 依赖，改从 session tree + session timeline + winner metadata 渲染并行块
-4. `useTreeMessages`、execution trace panel、candidate adoption、runtime permission 视图统一对齐新的 session id / `coordination_key` / winner session 指针
-5. 前端 API helper 与类型定义一并切换，删除 legacy `TaskDomainRun*` 类型
-
-完成标准：
-
-1. `TaskDetailV3` 在 single、parallel、sequential-chain、manual branch 四条路径上都不再请求 `/domain-runs*`
-2. BFF 生产代码不再依赖 `task-session-compat` 的 legacy type 名称
-3. 并行候选展示与采纳仅依赖 session-first 数据即可工作
-
-### 11.9 Phase 6：workflow bridge 与治理动作收口
-
-这一步只处理 task / session 主模型与 workflow 静态规则层之间必须明确的桥接点。
-
-1. 把 `workflow_template_id`、`workflow_template_version`、`workflow_source`、`stage_key`、`spawned_from_task_id`、`spawn_trigger_event`、`spawn_rule_key` 正式从策略 JSON 与零散 metadata 提升为 task 列
-2. 为执行前模板重绑增加专用 command-style 管理动作，并补治理审计记录
-3. 规范 `session_operations.metadata_json` 的 hook / judge schema，确保 workflow 与执行事实只通过 bridge 字段耦合
-4. 把当前 `currentStageKey`、`selectedTemplateId`、`workflowTemplateId` 的多处 fallback 逻辑收敛为单一读源
-5. 明确 replacement task relation 的落点，不复用 `spawned-from`
-
-完成标准：
-
-1. service 读链不再依赖 `strategy.workflowTemplateId` / `selectedTemplateId` 推断 task 的 workflow 归属
-2. 运行时 stage / template 读取口径只剩一套
-3. governance rebind 有明确 route、校验、审计测试
-
-### 11.10 Phase 7：删除 legacy 与收尾
-
-最后一步才是物理删除旧抽象。
-
-1. 删除 `task_runs`、`task_run_nodes`、`task_run_edges`、`task_domain_events` 相关 service 模块、routes、projector 分支与测试 fixture
-2. 删除 `conversation_sessions` / `conversation_messages` / `conversation_message_parts` 的兼容命名层，统一切到新的 session 表名
-3. 删除 `code_changes` / `file_changes`、runtime usage ledger 的任务域主链依赖
-4. 清理前端 `TaskDetail` / `TaskDetailV3` 中所有 legacy 类型、fallback 和 UI 文案
-5. 更新开发文档、排障 runbook、DB 审计脚本与 smoke checklist
-
-完成标准：
-
-1. 仓库生产代码对 `taskRuns` / `taskRunNodes` / `taskDomainEvents` / `conversationSessions` 的 TypeScript 引用归零
-2. smoke、integration、audit gate 全绿
-3. 文档与代码实现一致，不再存在“设计已切、实现仍兼容旧模型”的悬空区
-
-### 11.11 推荐的首批开发批次
-
-为了降低一次性切换风险，推荐按下面四批推进：
-
-1. 第一批：完成 Phase 0 + Phase 1，只做 schema、migration、repository 与 contract 定稿，不碰前端
-2. 第二批：完成 Phase 2 + Phase 3，先把新事实写链和新 projection 跑通，再切 service public read contract
-3. 第三批：完成 Phase 4 + Phase 5，集中切 BFF 与 `TaskDetailV3`
-4. 第四批：完成 Phase 6 + Phase 7，统一收口 workflow bridge 与 legacy 删除
-
-### 11.12 每阶段必须执行的验证
-
-无论分成多少开发批次，下列验证都必须跟随阶段提交一起落下：
-
-1. schema tests：约束、索引、外键、重建脚本
-2. service integration tests：execute / continue / fork / parallel / judge / resume / hook
-3. projection audit：snapshot、timeline、winner / judge、candidate count、lineage completeness
-4. UI smoke：`TaskDetailV3` single / parallel / sequential-chain / branch / adopt winner
-5. cleanup audit：确认 public route、类型定义、projector 已不再依赖 legacy tables
-
-一句话总结这份工作计划：
-
-1. 先把新事实面立住
-2. 再把 projection 与 public contract 切过去
-3. 然后整体切 BFF 与前端
-4. 最后删除所有 legacy 抽象
-
-如果顺序反过来，项目会在中途长期停留在“两套模型都半成品”的状态，这正是本轮需要避免的结果。
+统一移到 [task-session-first-execution-plan.md](task-session-first-execution-plan.md) 维护。

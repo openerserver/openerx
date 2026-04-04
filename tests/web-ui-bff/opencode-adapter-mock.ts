@@ -7,6 +7,7 @@ export function createOpencodeAdapterModuleMock(
   overrides: Partial<OpencodeAdapterModuleShape> = {},
 ): OpencodeAdapterModuleShape {
   return {
+    buildExecutionContext: mock(() => ""),
     continueSession: mock(async () => ({ ok: true })),
     createSession: mock(async () => ({ ok: true, sessionId: "session-1", agentRunId: "run-1" })),
     ensureAgentRunForSession: mock(() => "run-1"),

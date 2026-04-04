@@ -11,17 +11,15 @@
         :is-executing="isExecuting"
         :executing="executing"
         @choose-mode="$emit('choose-mode')"
-        @update:auto-advance="$emit('update:auto-advance', $event)"
       />
 
       <TaskCompletionActionsCard
         v-if="showCompletionActions"
         :can-complete="canComplete"
-        :can-advance="canAdvance"
+        :can-advance="false"
         :completing="completing"
         :advancing="advancing"
         @complete="$emit('complete')"
-        @advance="$emit('advance')"
       />
     </div>
   </div>
@@ -48,9 +46,7 @@ const props = defineProps<{
 
 defineEmits<{
   (e: "choose-mode"): void;
-  (e: "update:auto-advance", value: boolean): void;
   (e: "complete"): void;
-  (e: "advance"): void;
 }>();
 
 const visible = computed(() => true);
@@ -60,16 +56,5 @@ const canComplete = computed(() => {
   return s === "running" || s === "awaiting_input";
 });
 
-const canAdvance = computed(() => {
-  if (!props.workflowSummary) return false;
-  const currentStage = props.workflowStages.find(
-    (s) => s.stageKey === props.workflowSummary?.currentStage,
-  );
-  if (!currentStage) return false;
-  // 如果当前阶段已完成，且不是最后一个阶段
-  const idx = props.workflowStages.indexOf(currentStage);
-  return currentStage.status === "completed" && idx < props.workflowStages.length - 1;
-});
-
-const showCompletionActions = computed(() => canComplete.value || canAdvance.value);
+const showCompletionActions = computed(() => canComplete.value);
 </script>

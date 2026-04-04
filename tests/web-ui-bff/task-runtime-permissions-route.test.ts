@@ -89,7 +89,7 @@ beforeEach(() => {
   createInternalAuthorizationMock.mockResolvedValue("Bearer internal");
   replyRuntimePermissionMock.mockResolvedValue({ ok: true, data: true });
   cpFetchMock.mockImplementation(async (url: string) => {
-    if (url === "/api/tasks/task-1/branches") {
+    if (url === "/api/tasks/task-1/sessions") {
       return {
         ok: true,
         data: {

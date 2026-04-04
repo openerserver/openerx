@@ -1,6 +1,7 @@
 import { drizzle as drizzlePostgres } from "drizzle-orm/postgres-js";
 import type { Sql } from "postgres";
 import { openPostgresDatabase } from "./postgres-client";
+import { ensurePostgresRuntimeTables } from "./postgres-runtime-bootstrap";
 import * as schema from "./schema";
 
 const postgresRuntime = openPostgresDatabase();
@@ -9,6 +10,8 @@ await postgresRuntime.sql`
   ALTER TABLE IF EXISTS "workflow_template_stages"
   ADD COLUMN IF NOT EXISTS "initial_task_definition_json" jsonb
 `;
+
+await ensurePostgresRuntimeTables(postgresRuntime.sql);
 
 export const dbDialect = "postgres" as const;
 export const db = drizzlePostgres(postgresRuntime.sql, { schema });

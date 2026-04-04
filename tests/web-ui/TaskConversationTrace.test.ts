@@ -6,6 +6,7 @@ import {
   type TaskConversationMessageItem,
   normalizeSessionConversationItems,
 } from "../../control-plane/web-ui/src/lib/message-normalize";
+import { buildSessionMessagesFromExecutionTrace } from "../../control-plane/web-ui/src/lib/task-message-source";
 import { normalizeTraceConversationItems } from "../../control-plane/web-ui/src/lib/task-trace-conversation";
 import {
   DEFAULT_JUDGE_CONFIG,
@@ -18,6 +19,7 @@ import {
 } from "../../control-plane/web-ui/src/lib/taskExecutionMode";
 
 const apiMocks = vi.hoisted(() => ({
+  getTaskMessages: vi.fn(),
   getTaskExecutionTraceView: vi.fn(),
 }));
 
@@ -35,6 +37,7 @@ vi.mock("../../control-plane/web-ui/src/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../control-plane/web-ui/src/lib/api")>();
   return {
     ...actual,
+    getTaskMessages: apiMocks.getTaskMessages,
     getTaskExecutionTraceView: apiMocks.getTaskExecutionTraceView,
   };
 });
@@ -88,7 +91,27 @@ function createTraceFromMessages(messages: unknown[]) {
 
 describe("Task conversation composables", () => {
   beforeEach(() => {
+    apiMocks.getTaskMessages.mockReset();
     apiMocks.getTaskExecutionTraceView.mockReset();
+    apiMocks.getTaskMessages.mockImplementation(
+      async (taskId: string, options?: { sessionId?: string; includeLineage?: boolean }) => {
+        const trace = await apiMocks.getTaskExecutionTraceView(taskId, options?.sessionId ?? "session-1", {
+          includeLineage: options?.includeLineage,
+        });
+        return {
+          data: buildSessionMessagesFromExecutionTrace(trace, {
+            includeLineage: options?.includeLineage,
+          }),
+          meta:
+            trace && typeof trace === "object" && !Array.isArray(trace) && "timelineMeta" in trace
+              ? {
+                  ...((trace.timelineMeta as Record<string, unknown> | undefined) ?? {}),
+                  sessionId: options?.sessionId ?? "session-1",
+                }
+              : undefined,
+        };
+      },
+    );
     realtimeStoreMock.events = [];
   });
 
@@ -121,13 +144,91 @@ describe("Task conversation composables", () => {
 
     await flushPromises();
 
-    expect(apiMocks.getTaskExecutionTraceView).toHaveBeenCalledWith("task-1", "session-1");
+    expect(apiMocks.getTaskMessages).toHaveBeenCalledWith("task-1", {
+      includeLineage: undefined,
+    });
     expect(state.conversationItems.value).toHaveLength(2);
     const firstItem = state.conversationItems.value[0] as TaskConversationMessageItem | undefined;
     const secondItem = state.conversationItems.value[1] as TaskConversationMessageItem | undefined;
     expect(firstItem?.text).toBe("第一条消息");
     expect(secondItem?.agent).toBe("planner");
     expect(secondItem?.role).toBe("assistant");
+  });
+
+  it("preserves backend message order instead of resorting by timestamp", async () => {
+    apiMocks.getTaskExecutionTraceView.mockResolvedValue(
+      createTraceFromMessages([
+        {
+          info: {
+            id: "message-late",
+            role: "assistant",
+            time: { completed: "2026-03-20T00:00:05.000Z" },
+          },
+          parts: [{ text: "后写入但排在前面的回复" }],
+        },
+        {
+          info: {
+            id: "message-early",
+            role: "user",
+            time: { created: "2026-03-20T00:00:01.000Z" },
+          },
+          parts: [{ text: "更早的消息" }],
+        },
+      ]),
+    );
+
+    const taskId = ref("task-1");
+    const sessionId = ref<string | undefined>("session-1");
+    const state = useTreeMessages(taskId, sessionId);
+
+    await flushPromises();
+
+    expect(state.conversationItems.value).toHaveLength(2);
+    expect(state.conversationItems.value.map((item) => item.key)).toEqual([
+      "message-late",
+      "message-early",
+    ]);
+    expect(state.conversationItems.value.map((item) => item.role)).toEqual([
+      "assistant",
+      "user",
+    ]);
+  });
+
+  it("classifies messages by info role first and falls back to record role", () => {
+    const items = normalizeSessionConversationItems([
+      {
+        id: "tool-message",
+        role: "tool",
+        text: "bash output",
+      },
+      {
+        id: "assistant-message",
+        role: "user",
+        info: {
+          id: "assistant-message",
+          role: "assistant",
+          time: { completed: "2026-03-20T00:00:02.000Z" },
+        },
+        parts: [{ text: "真实角色应该是 assistant" }],
+      },
+      {
+        id: "system-message",
+        role: "system",
+        text: "internal state",
+      },
+    ]);
+
+    expect(items).toHaveLength(2);
+    expect(items[0]).toMatchObject({
+      key: "tool-message",
+      role: "tool",
+      text: "bash output",
+    });
+    expect(items[1]).toMatchObject({
+      key: "assistant-message",
+      role: "assistant",
+      text: "真实角色应该是 assistant",
+    });
   });
 
   it("keeps user prompts visible when execution trace falls back to opencode runtime messages", async () => {
@@ -222,7 +323,7 @@ describe("Task conversation composables", () => {
 
     await flushPromises();
 
-    expect(apiMocks.getTaskExecutionTraceView).toHaveBeenCalledWith("task-1", "session-1", {
+    expect(apiMocks.getTaskMessages).toHaveBeenCalledWith("task-1", {
       includeLineage: true,
     });
     expect(state.conversationItems.value.map((item) => item.role)).toEqual([
@@ -231,7 +332,11 @@ describe("Task conversation composables", () => {
       "user",
       "assistant",
     ]);
-    expect(state.conversationItems.value.map((item) => item.text)).toEqual([
+    expect(
+      state.conversationItems.value.map((item) =>
+        "text" in item && typeof item.text === "string" ? item.text : "",
+      ),
+    ).toEqual([
       "给输入法设计一个操作页面",
       "先做需求澄清。",
       "第二轮用户输入",
@@ -275,6 +380,64 @@ describe("Task conversation composables", () => {
         data: {
           rawType: "message.updated",
           info: {
+            id: "message-2",
+            role: "assistant",
+            agent: "planner",
+            time: { created: "2026-03-20T00:00:02.000Z" },
+          },
+        },
+      },
+    ];
+
+    const taskId = ref("task-1");
+    const sessionId = ref<string | undefined>("session-1");
+    const state = useTreeMessages(taskId, sessionId);
+
+    await flushPromises();
+
+    expect(state.conversationItems.value).toHaveLength(2);
+    expect(state.conversationItems.value[1]).toMatchObject({
+      key: "message-2",
+      role: "assistant",
+      agent: "planner",
+      text: "正在",
+      isStreaming: true,
+    });
+    expect(state.hasStreamingAssistant.value).toBe(true);
+  });
+
+  it("merges task-domain realtime assistant patches into a streaming draft", async () => {
+    apiMocks.getTaskExecutionTraceView.mockResolvedValue(
+      createTraceFromMessages([
+        {
+          info: {
+            id: "message-1",
+            role: "user",
+            time: { created: "2026-03-20T00:00:01.000Z" },
+          },
+          parts: [{ text: "继续实现" }],
+        },
+      ]),
+    );
+    realtimeStoreMock.events = [
+      {
+        id: "event-domain-delta",
+        type: "task.message.delta",
+        taskId: "task-1",
+        sessionId: "session-1",
+        data: {
+          messageId: "message-2",
+          partType: "text",
+          delta: "正在",
+        },
+      },
+      {
+        id: "event-domain-meta",
+        type: "task.message.updated",
+        taskId: "task-1",
+        sessionId: "session-1",
+        data: {
+          message: {
             id: "message-2",
             role: "assistant",
             agent: "planner",
@@ -544,6 +707,7 @@ describe("Task conversation composables", () => {
         sessionId: "session-1",
         segments: [],
         hookExecutions: [],
+        followupExecutions: [],
         timeline: [
           {
             id: "message-trace-1",
@@ -601,6 +765,7 @@ describe("Task conversation composables", () => {
         latestResponse: "投影任务的最终回复",
         segments: [],
         hookExecutions: [],
+        followupExecutions: [],
         timeline: [
           {
             id: "timeline-system-1",
@@ -627,9 +792,8 @@ describe("Task conversation composables", () => {
         ],
         timelineMeta: { cacheState: "complete", readSource: "task-domain-projection" },
         snapshot: {
-          taskId: "task-1",
-          projectId: "proj-1",
-          currentStatus: "completed",
+          status: "completed",
+          latestResult: "投影任务的最终回复",
           activeCandidateCount: 0,
           completedCandidateCount: 0,
           failedCandidateCount: 0,

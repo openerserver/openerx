@@ -51,7 +51,7 @@
         </a-space>
 
         <a-space size="small" wrap>
-          <a-button :disabled="forkDisabled || !prompt.trim()" @click="emitFork">分叉</a-button>
+          <a-button v-if="showFork" :disabled="forkDisabled || !prompt.trim()" @click="emitFork">分叉</a-button>
           <a-button v-if="canTerminate" danger :disabled="actionDisabled" @click="$emit('terminate')">
             终止执行
           </a-button>
@@ -76,6 +76,7 @@ const props = defineProps<{
   actionDisabled: boolean;
   modelSelectionDisabled: boolean;
   forkDisabled: boolean;
+  showFork?: boolean;
   isExecuting: boolean;
   canTerminate: boolean;
   modelOptions: Array<{ label: string; value: string }>;
