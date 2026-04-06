@@ -495,16 +495,37 @@ async function syncTaskBranchCompatBranchHead(args: {
     return;
   }
 
-  await db.insert(projectTreeBranches).values({
-    id: crypto.randomUUID(),
-    projectId: args.taskNode.projectId,
-    taskNodeId: args.taskNode.id,
-    branchName,
-    headNodeId: args.nodeId,
-    isDefault: (args.input.sourceType ?? "root") === "root",
-    createdAt: args.now,
-    updatedAt: args.now,
-  });
+  try {
+    await db.insert(projectTreeBranches).values({
+      id: crypto.randomUUID(),
+      projectId: args.taskNode.projectId,
+      taskNodeId: args.taskNode.id,
+      branchName,
+      headNodeId: args.nodeId,
+      isDefault: (args.input.sourceType ?? "root") === "root",
+      createdAt: args.now,
+      updatedAt: args.now,
+    });
+  } catch (error) {
+    if (!isTaskBranchUniqueConflict(error)) {
+      throw error;
+    }
+
+    // Concurrent writers may race on first branch insert; update existing head instead.
+    await db
+      .update(projectTreeBranches)
+      .set({
+        headNodeId: args.nodeId,
+        updatedAt: args.now,
+      })
+      .where(
+        and(
+          eq(projectTreeBranches.projectId, args.taskNode.projectId),
+          eq(projectTreeBranches.taskNodeId, args.taskNode.id),
+          eq(projectTreeBranches.branchName, branchName),
+        ),
+      );
+  }
 }
 
 export async function upsertTaskBranchCompatTreeNode(args: UpsertTaskBranchCompatTreeNodeArgs) {
@@ -545,7 +566,17 @@ export async function upsertTaskBranchCompatTreeNode(args: UpsertTaskBranchCompa
     return nodeId;
   }
 
-  await db.insert(projectTreeNodes).values(values);
+  try {
+    await db.insert(projectTreeNodes).values(values);
+  } catch (error) {
+    if (!isProjectTreeNodePrimaryKeyConflict(error, nodeId)) {
+      throw error;
+    }
+
+    // Concurrent writers may race on first insert; treat PK conflict as an upsert.
+    await updateExistingTaskBranchCompatNode({ nodeId, values });
+  }
+
   await syncTaskBranchCompatBranchHead({
     taskNode,
     input: args,
@@ -554,6 +585,72 @@ export async function upsertTaskBranchCompatTreeNode(args: UpsertTaskBranchCompa
   });
 
   return nodeId;
+}
+
+function isProjectTreeNodePrimaryKeyConflict(error: unknown, nodeId: string) {
+  if (!error) {
+    return false;
+  }
+
+  if (error instanceof Error) {
+    const message = error.message;
+    if (!message) {
+      return false;
+    }
+
+    return (
+      message.includes("project_tree_nodes_pkey") ||
+      (message.includes("duplicate key value") && message.includes(nodeId))
+    );
+  }
+
+  if (typeof error !== "object") {
+    return false;
+  }
+
+  const record = error as {
+    message?: unknown;
+    constraint?: unknown;
+  };
+  const message = typeof record.message === "string" ? record.message : "";
+  return (
+    record.constraint === "project_tree_nodes_pkey" ||
+    message.includes("project_tree_nodes_pkey") ||
+    (message.includes("duplicate key value") && message.includes(nodeId))
+  );
+}
+
+function isTaskBranchUniqueConflict(error: unknown) {
+  if (!error) {
+    return false;
+  }
+
+  if (error instanceof Error) {
+    const message = error.message;
+    if (!message) {
+      return false;
+    }
+    return (
+      message.includes("idx_ptb_task_branch_unique") ||
+      message.includes("project_tree_branches_project_id_task_node_id_branch_name_index")
+    );
+  }
+
+  if (typeof error !== "object") {
+    return false;
+  }
+
+  const record = error as {
+    message?: unknown;
+    constraint?: unknown;
+  };
+  const message = typeof record.message === "string" ? record.message : "";
+  return (
+    record.constraint === "idx_ptb_task_branch_unique" ||
+    record.constraint === "project_tree_branches_project_id_task_node_id_branch_name_index" ||
+    message.includes("idx_ptb_task_branch_unique") ||
+    message.includes("project_tree_branches_project_id_task_node_id_branch_name_index")
+  );
 }
 
 export async function archiveTaskBranchCompatTreeNode(taskId: string, runtimeSessionId: string) {

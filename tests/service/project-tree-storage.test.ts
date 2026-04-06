@@ -8,6 +8,8 @@ let importCounter = 0;
 async function loadProjectTreeStorageModule(args?: {
   existingNode?: Record<string, unknown> | null;
   findFirstResults?: Array<Record<string, unknown> | null>;
+  failNodeInsertOnce?: boolean;
+  failBranchInsertOnce?: boolean;
 }) {
   importCounter += 1;
 
@@ -27,6 +29,9 @@ async function loadProjectTreeStorageModule(args?: {
     path: "project_project_1.task_task_1.session_task_session_task_1_root_session_1",
     depth: 2,
   };
+
+  let shouldFailNodeInsertOnce = args?.failNodeInsertOnce === true;
+  let shouldFailBranchInsertOnce = args?.failBranchInsertOnce === true;
 
   let projectTreeNodeFindFirstCall = 0;
   const explicitFindFirstResults = [...(args?.findFirstResults ?? [])];
@@ -55,8 +60,20 @@ async function loadProjectTreeStorageModule(args?: {
     insert: mock((_table: unknown) => ({
       values: async (payload: Record<string, unknown>) => {
         if ("nodeType" in payload) {
+          if (shouldFailNodeInsertOnce) {
+            shouldFailNodeInsertOnce = false;
+            throw new Error(
+              'duplicate key value violates unique constraint "project_tree_nodes_pkey"',
+            );
+          }
           insertedNodeValues.push(payload);
           return;
+        }
+        if (shouldFailBranchInsertOnce) {
+          shouldFailBranchInsertOnce = false;
+          throw new Error(
+            'duplicate key value violates unique constraint "idx_ptb_task_branch_unique"',
+          );
         }
         insertedBranchValues.push(payload);
       },
@@ -211,6 +228,58 @@ describe("project tree storage", () => {
     expect(updatedNodeValues[0]).toMatchObject({
       branchName: "legacy-updated",
       runtimeSessionId: "fork-session-1",
+    });
+  });
+
+  test("falls back to update when concurrent insert hits project_tree_nodes primary key conflict", async () => {
+    const { upsertTaskBranchCompatTreeNode, insertedNodeValues, insertedBranchValues, updatedNodeValues } =
+      await loadProjectTreeStorageModule({
+        failNodeInsertOnce: true,
+      });
+
+    const nodeId = await upsertTaskBranchCompatTreeNode({
+      taskId: "task-1",
+      runtimeSessionId: "fork-session-1",
+      parentRuntimeSessionId: "root-session-1",
+      branchName: "feature/fork-race",
+      sourceType: "fork",
+      isActive: true,
+      archivedAt: null,
+    });
+
+    expect(nodeId).toBe("branch-node:task-1:fork-session-1");
+    expect(insertedNodeValues).toHaveLength(0);
+    expect(updatedNodeValues).not.toHaveLength(0);
+    expect(insertedBranchValues).toHaveLength(1);
+    expect(updatedNodeValues[0]).toMatchObject({
+      runtimeSessionId: "fork-session-1",
+      branchName: "feature/fork-race",
+      isActive: true,
+    });
+  });
+
+  test("falls back to branch head update when concurrent insert hits task branch unique index", async () => {
+    const { upsertTaskBranchCompatTreeNode, insertedNodeValues, insertedBranchValues, updatedNodeValues } =
+      await loadProjectTreeStorageModule({
+        failBranchInsertOnce: true,
+      });
+
+    const nodeId = await upsertTaskBranchCompatTreeNode({
+      taskId: "task-1",
+      runtimeSessionId: "fork-session-1",
+      parentRuntimeSessionId: "root-session-1",
+      branchName: "feature/fork-race",
+      sourceType: "fork",
+      isActive: true,
+      archivedAt: null,
+    });
+
+    expect(nodeId).toBe("branch-node:task-1:fork-session-1");
+    expect(insertedNodeValues).toHaveLength(1);
+    expect(insertedBranchValues).toHaveLength(0);
+    expect(updatedNodeValues).not.toHaveLength(0);
+    expect(updatedNodeValues.at(-1)).toMatchObject({
+      headNodeId: "branch-node:task-1:fork-session-1",
     });
   });
 });
