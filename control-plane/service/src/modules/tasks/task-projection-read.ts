@@ -5,6 +5,7 @@ import {
   buildTaskSessionIdAliases,
   buildTaskSessionLineagePath,
   resolveTaskSessionRecordId,
+  toCanonicalTaskSessionId,
 } from "./task-session-read";
 
 export async function buildTaskProjectionTimelineViewResponse(args: {
@@ -38,12 +39,14 @@ export async function buildTaskProjectionTimelineViewResponse(args: {
     filters.push(
       inArray(
         taskTimelineViews.sessionId,
-        Array.from(new Set(lineagePath.flatMap((sessionId) => buildTaskSessionIdAliases(sessionId)))),
+        Array.from(
+          new Set(lineagePath.flatMap((sessionId) => buildTaskSessionIdAliases(sessionId))),
+        ),
       ),
     );
   }
 
-  const data = await db
+  const timelineRows = await db
     .select({
       id: taskTimelineViews.id,
       taskId: taskTimelineViews.taskId,
@@ -64,6 +67,11 @@ export async function buildTaskProjectionTimelineViewResponse(args: {
     .from(taskTimelineViews)
     .where(and(...filters))
     .orderBy(asc(taskTimelineViews.sortAt), asc(taskTimelineViews.createdAt));
+
+  const data = timelineRows.map((row) => ({
+    ...row,
+    sessionId: toCanonicalTaskSessionId(args.taskId, row.sessionId) ?? row.sessionId,
+  }));
 
   return {
     data,

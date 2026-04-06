@@ -129,21 +129,23 @@
 - 主账本以 `task_usage_ledger_entries` 为准。
 - 其他表仅保留摘要字段或缓存字段。
 
-### P2-1 agent_runs 与 run 体系可能重叠
+### P2-1 已解决：agent_runs 与 run 体系重叠
 
 涉及位置：
 
-- [control-plane/service/src/db/schema.pg.ts#L734](control-plane/service/src/db/schema.pg.ts#L734) `agent_runs`
-- [control-plane/service/src/db/schema.pg.ts#L858](control-plane/service/src/db/schema.pg.ts#L858) `task_session_runs`
+- [control-plane/service/src/modules/tasks/agent-run-compat.ts](control-plane/service/src/modules/tasks/agent-run-compat.ts)
+- [control-plane/service/src/modules/tasks/task-agent-run-read-routes.ts](control-plane/service/src/modules/tasks/task-agent-run-read-routes.ts)
+- [control-plane/service/src/modules/tasks/task-agent-run-write-routes-canonical.ts](control-plane/service/src/modules/tasks/task-agent-run-write-routes-canonical.ts)
+- [control-plane/service/drizzle-pg/0033_drop_agent_runs.sql](control-plane/service/drizzle-pg/0033_drop_agent_runs.sql)
 
 问题描述：
 
-- 两者都可表达执行实例、状态、模型与 token，存在职责交叉。
+- 这项重叠已经在当前 schema 中收口：`agent_runs` 已删除，兼容 `agentRunId` 读写改由 canonical task-domain 表投影与回写。
 
 建议 canonical：
 
-- 明确 `agent_runs` 是否仅用于 agent 维运营/调试视角。
-- 业务主链路执行事实统一由 `task_session_runs` 承接。
+- 业务主链路执行事实统一由 `task_sessions`、`task_session_runs`、`task_operations` 承接。
+- 对外仍可保留 `agentRunId` 兼容接口，但不再恢复独立 `agent_runs` 表。
 
 ## 影响评估
 

@@ -137,7 +137,9 @@ function resolveSyntheticAssistantCreatedAt(trace: MinimalExecutionTracePayload)
     }
   }
 
-  return typeof trace.snapshot?.lastActivityAt === "string" ? trace.snapshot.lastActivityAt : undefined;
+  return typeof trace.snapshot?.lastActivityAt === "string"
+    ? trace.snapshot.lastActivityAt
+    : undefined;
 }
 
 function resolveSyntheticUserCreatedAt(trace: MinimalExecutionTracePayload) {
@@ -203,7 +205,8 @@ function buildSyntheticUserMessage(trace: MinimalExecutionTracePayload) {
 }
 
 function buildSyntheticAssistantMessage(trace: MinimalExecutionTracePayload) {
-  const latestResponse = typeof trace.latestResponse === "string" ? trace.latestResponse.trim() : "";
+  const latestResponse =
+    typeof trace.latestResponse === "string" ? trace.latestResponse.trim() : "";
   if (!latestResponse) {
     return null;
   }
@@ -235,7 +238,11 @@ function extractLegacyMessageRole(message: unknown) {
 }
 
 function isNarrativeTimelineItem(item: MinimalExecutionTraceTimelineItem) {
-  return NARRATIVE_TIMELINE_ROLES.has(item.role) && typeof item.text === "string" && item.text.trim().length > 0;
+  return (
+    NARRATIVE_TIMELINE_ROLES.has(item.role) &&
+    typeof item.text === "string" &&
+    item.text.trim().length > 0
+  );
 }
 
 export function buildSessionMessagesFromExecutionTrace(
@@ -246,13 +253,14 @@ export function buildSessionMessagesFromExecutionTrace(
   const timeline = Array.isArray(trace.timeline) ? trace.timeline : [];
   const narrativeTimeline = timeline.filter(isNarrativeTimelineItem);
   const messages = Array.isArray(trace.messages) ? trace.messages : [];
-  const sourceItems: TraceSourceItem[] = includeLineage && narrativeTimeline.length > 0
-    ? narrativeTimeline
-    : messages.length > 0
-      ? messages
-      : narrativeTimeline.length > 0 && trace.timelineMeta?.cacheState === "complete"
-        ? narrativeTimeline
-        : [];
+  const sourceItems: TraceSourceItem[] =
+    includeLineage && narrativeTimeline.length > 0
+      ? narrativeTimeline
+      : messages.length > 0
+        ? messages
+        : narrativeTimeline.length > 0 && trace.timelineMeta?.cacheState === "complete"
+          ? narrativeTimeline
+          : [];
 
   const legacyMessages = sourceItems.map((item) => buildLegacyMessageFromSourceItem(item));
   const hasUser = legacyMessages.some((message) => extractLegacyMessageRole(message) === "user");

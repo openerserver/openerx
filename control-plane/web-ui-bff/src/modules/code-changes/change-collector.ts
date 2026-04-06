@@ -1,5 +1,5 @@
 import { cpFetch } from "../../lib/control-plane-client";
-import { getSessionMessages } from "../agent-control/opencode-adapter";
+import { getSessionMessages } from "../agent-control/runtime-provider";
 
 // ── Change Collector ───────────────────────────────────────────────
 // Collects file-level code changes from OpenCode session messages

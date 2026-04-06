@@ -7,7 +7,7 @@ import {
   parseHookDecision,
   renderPromptTemplate,
 } from "../../lib/orchestration-strategy";
-import { runDetachedPrompt } from "../agent-control/opencode-adapter";
+import { runDetachedPrompt } from "../agent-control/runtime-provider";
 
 const VALID_TRIGGERS = new Set<HookTrigger>([
   "pre-execution",

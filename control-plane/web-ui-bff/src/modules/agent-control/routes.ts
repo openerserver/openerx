@@ -2,100 +2,32 @@ import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
 import { z } from "zod";
 import { authHeader, cpFetch, createInternalAuthorization } from "../../lib/control-plane-client";
-import { formatModelRoute } from "../../lib/opencode-config";
 import { mergeTaskStrategy, readOrchestrationStrategy } from "../../lib/orchestration-strategy";
 import { recordPaidExecutionRuntimeUsage } from "../../lib/paid-execution-runtime";
 import { executeLifecycleHooks } from "../hooks/lifecycle-hooks";
 import { wsBroadcaster } from "../realtime/ws-broadcaster";
 import { finalizeTaskState } from "../tasks/finalize";
 import {
-  extractAssistantResultFromMessages,
-  getAgentMessages,
   getAgentRun,
+  listAgentRuns,
+  recoverAgentRun,
+  updateAgentRunStatus,
+} from "./agent-run-registry";
+import { extractAssistantResultFromMessages } from "./runtime-message-utils";
+import { patchAgentRunRecord, recordAgentAudit } from "./run-persistence";
+import {
+  getAgentMessages,
   getSessionMessages,
   injectGuidance,
-  listAgentRuns,
   pauseAgent,
-  recoverAgentRun,
   resumeAgent,
   terminateAgent,
-  updateAgentRunStatus,
-} from "./opencode-adapter";
-import { patchAgentRunRecord, recordAgentAudit } from "./run-persistence";
+} from "./runtime-provider";
 
 export const agentControlRoutes = new Hono();
 
 type RuntimeRun = ReturnType<typeof listAgentRuns>[number];
-
-interface AgentOverviewResponse {
-  viewScope?: "mine" | "project" | "global";
-  summary: {
-    attentionCount: number;
-    runningCount: number;
-    completedCount: number;
-    failureRate: number;
-    avgDurationMs: number | null;
-    humanInterventionRate: number;
-  };
-  queueCounts: {
-    attention: number;
-    running: number;
-    recent: number;
-  };
-  blockerBreakdown?: {
-    failedHighRisk: number;
-    approvalBlocked: number;
-    pausedAwaitingResume: number;
-    stalled: number;
-    stoppedPendingReview: number;
-  };
-  generatedAt: string;
-}
-
-interface AgentQueueItem {
-  agentRunId: string;
-  taskId: string;
-  taskTitle: string;
-  projectId: string;
-  projectName: string | null;
-  agentType: string;
-  status: string;
-  sessionId?: string | null;
-  currentStage: string | null;
-  blockerType: string | null;
-  blockerLabel: string;
-  blockerReason: string | null;
-  riskLevel: string | null;
-  approvalStatus: string | null;
-  requiresIntervention: boolean;
-  startedAt: string | null;
-  finishedAt: string | null;
-  lastActivityAt: string | null;
-  durationMs: number | null;
-  modelUsed: string | null;
-  tokenUsed: number;
-  resultSummary: string | null;
-  guidanceCount: number;
-  primaryAttentionReason?: string | null;
-  quickActions?: string[];
-  actionPermissions?: {
-    canPause: boolean;
-    canResume: boolean;
-    canTerminate: boolean;
-    canInjectGuidance: boolean;
-    canViewApproval: boolean;
-    canViewAudit: boolean;
-    canViewCodeChanges: boolean;
-    canExport: boolean;
-  } | null;
-}
-
-interface AgentQueueResponse {
-  data: AgentQueueItem[];
-  page: number;
-  pageSize: number;
-  total: number;
-}
+type AgentOpsQueue = "attention" | "running" | "recent";
 
 interface AgentRunSummaryResponse {
   agentRunId: string;
@@ -150,69 +82,33 @@ interface AgentRunSummaryResponse {
   subSessionId?: string;
 }
 
-interface AgentAnalyticsRankingItem {
-  key: string;
-  label: string;
-  totalRuns: number;
-  completedRuns: number;
-  failedRuns: number;
-  attentionCount: number;
-  interventionCount: number;
-  successRate: number;
-  failureRate: number;
-  avgDurationMs: number | null;
-  avgTokenUsed: number | null;
+interface AgentOpsQueueItemResponse {
+  agentRunId: string;
+  taskId: string;
+  taskTitle: string;
+  projectId: string;
+  projectName: string | null;
+  agentType: string;
+  status: string;
+  currentStage: string | null;
+  blockerType: string | null;
+  blockerLabel: string;
+  blockerReason: string | null;
+  riskLevel: string | null;
+  approvalStatus: string | null;
+  requiresIntervention: boolean;
+  startedAt: string | null;
+  finishedAt: string | null;
+  lastActivityAt: string | null;
+  durationMs: number | null;
+  modelUsed: string | null;
+  tokenUsed: number;
+  resultSummary: string | null;
+  guidanceCount: number;
+  primaryAttentionReason?: string | null;
+  quickActions?: string[];
+  actionPermissions?: AgentRunSummaryResponse["actionPermissions"];
 }
-
-interface AgentAnalyticsHealthResponse {
-  viewScope?: "mine" | "project" | "global";
-  generatedAt: string;
-  totals: {
-    totalRuns: number;
-    completedRuns: number;
-    failedRuns: number;
-    stoppedRuns: number;
-    humanInterventionRuns: number;
-    attentionRuns: number;
-    approvalBlockedRuns: number;
-    avgDurationMs: number | null;
-    failureRate: number;
-    interventionRate: number;
-  };
-  agentRanking: AgentAnalyticsRankingItem[];
-  modelRanking: AgentAnalyticsRankingItem[];
-}
-
-interface AgentAnalyticsBreakdownItem {
-  key: string;
-  label: string;
-  count: number;
-  share: number;
-}
-
-interface AgentAnalyticsFailuresResponse {
-  generatedAt: string;
-  totalAttentionRuns: number;
-  blockerBreakdown: AgentAnalyticsBreakdownItem[];
-  failureReasons: AgentAnalyticsBreakdownItem[];
-  riskBreakdown: AgentAnalyticsBreakdownItem[];
-}
-
-interface AgentAnalyticsTimelineResponse {
-  generatedAt: string;
-  bucketUnit: "hour" | "day";
-  buckets: Array<{
-    bucket: string;
-    label: string;
-    totalRuns: number;
-    completedRuns: number;
-    failedRuns: number;
-    attentionRuns: number;
-    interventionRuns: number;
-  }>;
-}
-
-type PersistedRunStatus = Parameters<typeof patchAgentRunRecord>[0]["status"];
 
 type RuntimeRunRecoveryFailure = {
   status: 404 | 409;
@@ -225,38 +121,8 @@ type RuntimeRunRecoveryResult = {
   failure?: RuntimeRunRecoveryFailure;
 };
 
-function buildForwardedQuery(
-  c: { req: { query: (name: string) => string | undefined } },
-  keys: string[],
-) {
-  const params = new URLSearchParams();
-  for (const key of keys) {
-    const value = c.req.query(key);
-    if (value) params.set(key, value);
-  }
-  const query = params.toString();
-  return query ? `?${query}` : "";
-}
-
-function runtimeTimestampToIso(value?: number | string | null) {
-  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
-    return new Date(value).toISOString();
-  }
-  if (typeof value === "string" && value.trim()) {
-    const ts = Date.parse(value);
-    if (Number.isFinite(ts)) return new Date(ts).toISOString();
-  }
-  return null;
-}
-
 function shouldPreferPersistedStatus(persistedStatus: string, runtimeStatus: string) {
   return runtimeStatus === "running" && persistedStatus !== "running";
-}
-
-function resolveMergedStatus(persistedStatus: string, runtimeStatus: string) {
-  return shouldPreferPersistedStatus(persistedStatus, runtimeStatus)
-    ? persistedStatus
-    : runtimeStatus;
 }
 
 function maybeResyncRuntimeStatus(
@@ -270,43 +136,6 @@ function maybeResyncRuntimeStatus(
 
   const synced = updateAgentRunStatus(agentRunId, persistedStatus as RuntimeRun["status"]);
   return synced ?? runtimeRun;
-}
-
-function mergeQueueItemWithRuntime(item: AgentQueueItem, runtimeRun?: RuntimeRun): AgentQueueItem {
-  const effectiveRuntimeRun = maybeResyncRuntimeStatus(item.agentRunId, item.status, runtimeRun);
-  if (!effectiveRuntimeRun) return item;
-  return {
-    ...item,
-    status: resolveMergedStatus(item.status, effectiveRuntimeRun.status),
-    agentType: effectiveRuntimeRun.model ? `${item.agentType}` : item.agentType,
-    startedAt: item.startedAt || runtimeTimestampToIso(effectiveRuntimeRun.startedAt),
-    lastActivityAt:
-      runtimeTimestampToIso(effectiveRuntimeRun.pausedAt) ||
-      runtimeTimestampToIso(effectiveRuntimeRun.finishedAt) ||
-      item.lastActivityAt ||
-      runtimeTimestampToIso(effectiveRuntimeRun.startedAt),
-  };
-}
-
-function mergeSummaryWithRuntime(summary: AgentRunSummaryResponse, runtimeRun?: RuntimeRun) {
-  const effectiveRuntimeRun = maybeResyncRuntimeStatus(
-    summary.agentRunId,
-    summary.status,
-    runtimeRun,
-  );
-  if (!effectiveRuntimeRun) return summary;
-  return {
-    ...summary,
-    status: resolveMergedStatus(summary.status, effectiveRuntimeRun.status),
-    startedAt: summary.startedAt || runtimeTimestampToIso(effectiveRuntimeRun.startedAt),
-    finishedAt: summary.finishedAt || runtimeTimestampToIso(effectiveRuntimeRun.finishedAt),
-    lastActivityAt:
-      runtimeTimestampToIso(effectiveRuntimeRun.pausedAt) ||
-      runtimeTimestampToIso(effectiveRuntimeRun.finishedAt) ||
-      summary.lastActivityAt ||
-      runtimeTimestampToIso(effectiveRuntimeRun.startedAt),
-    subSessionId: effectiveRuntimeRun.subSessionId,
-  };
 }
 
 function parsePersistedModel(modelUsed?: string | null) {
@@ -334,7 +163,7 @@ async function ensureRuntimeRunFromSummary(
 }
 
 async function ensureRuntimeRunFromSummaryDetailed(
-  _c: Parameters<typeof authHeader>[0],
+  c: Parameters<typeof authHeader>[0],
   agentRunId: string,
 ): Promise<RuntimeRunRecoveryResult> {
   const existing = getAgentRun(agentRunId);
@@ -342,15 +171,59 @@ async function ensureRuntimeRunFromSummaryDetailed(
     return { run: existing };
   }
 
-  // Agent runs persisted data is no longer available after agent_runs table removal
-  // Only runtime-registered runs are accessible
+  const summaryResult = await cpFetch<Partial<AgentRunSummaryResponse>>(
+    `/api/agent-runs/${encodeURIComponent(agentRunId)}/summary`,
+    { authorization: authHeader(c) },
+  );
+  if (!summaryResult.ok) {
+    return {
+      failure: {
+        status: 404,
+        code: "AGENT_RUN_SUMMARY_NOT_FOUND",
+        error:
+          "This agent run is not currently active in the runtime. Historical agent run data is no longer available.",
+      },
+    };
+  }
+
+  const summary = summaryResult.data;
+  const sessionId = typeof summary.sessionId === "string" ? summary.sessionId : null;
+  const taskId = typeof summary.taskId === "string" ? summary.taskId : null;
+  const projectId = typeof summary.projectId === "string" ? summary.projectId : null;
+
+  if (!sessionId || !taskId || !projectId) {
+    return {
+      failure: {
+        status: 409,
+        code: "AGENT_RUN_SUMMARY_INCOMPLETE",
+        error: "Historical agent run summary is incomplete and cannot be recovered.",
+      },
+    };
+  }
+
+  recoverAgentRun(
+    agentRunId,
+    sessionId,
+    taskId,
+    projectId,
+    summary.startedAt,
+    parsePersistedModel(typeof summary.modelUsed === "string" ? summary.modelUsed : null),
+  );
+
+  const recovered = getAgentRun(agentRunId);
+  if (!recovered) {
+    return {
+      failure: {
+        status: 409,
+        code: "AGENT_RUN_SUMMARY_INCOMPLETE",
+        error: "Historical agent run summary is incomplete and cannot be recovered.",
+      },
+    };
+  }
+
+  const persistedStatus = typeof summary.status === "string" ? summary.status : "running";
   return {
-    failure: {
-      status: 404,
-      code: "AGENT_RUN_SUMMARY_NOT_FOUND",
-      error:
-        "This agent run is not currently active in the runtime. Historical agent run data is no longer available.",
-    },
+    run: maybeResyncRuntimeStatus(agentRunId, persistedStatus, recovered) ?? recovered,
   };
 }
 
@@ -374,86 +247,382 @@ async function loadSessionTokenUsage(
   return extractAssistantResultFromMessages(messagesResult.data).tokenUsed;
 }
 
-async function maybeBackfillTokenUsage(input: {
-  agentRunId: string;
-  taskId: string;
-  sessionId?: string | null;
-  status: string;
-  tokenUsed: number;
-  authorization?: string;
-}) {
-  if (input.tokenUsed > 0 || !input.sessionId) {
-    return input.tokenUsed;
+function parseIsoMs(value?: string | null) {
+  if (!value) {
+    return null;
   }
 
-  const tokenUsed = await loadSessionTokenUsage(input.sessionId, input.taskId, input.authorization);
-  if (tokenUsed <= 0) {
-    return input.tokenUsed;
-  }
-
-  await patchAgentRunRecord({
-    taskId: input.taskId,
-    agentRunId: input.agentRunId,
-    status: input.status as PersistedRunStatus,
-    tokenUsed,
-  });
-
-  return tokenUsed;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
-async function buildRuntimeOnlySummary(
-  c: { req: { header: (name: string) => string | undefined } },
-  runtimeRun: RuntimeRun,
+function resolveDurationMs(
+  startedAt?: string | null,
+  finishedAt?: string | null,
+  explicitDurationMs?: number | null,
 ) {
-  const taskResult = await cpFetch<{ id: string; title: string; projectId: string }>(
-    `/api/project-tree/tasks/${encodeURIComponent(runtimeRun.taskId)}`,
-    { authorization: authHeader(c) },
-  );
+  if (typeof explicitDurationMs === "number" && Number.isFinite(explicitDurationMs)) {
+    return explicitDurationMs;
+  }
+
+  const startedAtMs = parseIsoMs(startedAt);
+  if (startedAtMs == null) {
+    return null;
+  }
+
+  const finishedAtMs = parseIsoMs(finishedAt) ?? Date.now();
+  return finishedAtMs >= startedAtMs ? finishedAtMs - startedAtMs : null;
+}
+
+function defaultBlockerState(status: string) {
+  switch (status) {
+    case "stopped":
+      return { blockerType: "stopped", blockerLabel: "已停止待处理" };
+    case "paused":
+      return { blockerType: "paused", blockerLabel: "已暂停待处理" };
+    case "failed":
+      return { blockerType: "failed", blockerLabel: "执行失败待处理" };
+    default:
+      return { blockerType: null, blockerLabel: "" };
+  }
+}
+
+function normalizeBlockerState(
+  status: string,
+  blockerType?: string | null,
+  blockerLabel?: string | null,
+) {
+  const fallback = defaultBlockerState(status);
+  const normalizedType =
+    typeof blockerType === "string" && blockerType.trim().length > 0
+      ? blockerType.trim()
+      : fallback.blockerType;
+  const normalizedLabel =
+    typeof blockerLabel === "string" && blockerLabel.trim().length > 0
+      ? blockerLabel.trim()
+      : fallback.blockerLabel;
+
   return {
-    agentRunId: runtimeRun.agentRunId,
-    taskId: runtimeRun.taskId,
-    taskTitle: taskResult.ok ? taskResult.data.title : runtimeRun.taskId,
-    projectId: taskResult.ok ? taskResult.data.projectId : runtimeRun.projectId,
+    blockerType: normalizedType,
+    blockerLabel: normalizedLabel,
+  };
+}
+
+function readErrorMessage(data: unknown, fallback: string) {
+  if (typeof data === "object" && data && typeof (data as { error?: unknown }).error === "string") {
+    return (data as { error: string }).error;
+  }
+
+  return fallback;
+}
+
+function normalizeLatestEvents(summary: Partial<AgentRunSummaryResponse>) {
+  if (!Array.isArray(summary.latestEvents)) {
+    return [];
+  }
+
+  return summary.latestEvents
+    .filter(
+      (event): event is { ts: string; type: string; summary: string } =>
+        typeof event === "object" &&
+        event !== null &&
+        typeof event.ts === "string" &&
+        typeof event.type === "string" &&
+        typeof event.summary === "string",
+    )
+    .map((event) => ({
+      ts: event.ts,
+      type: event.type,
+      summary: event.summary,
+    }));
+}
+
+function normalizeAgentRunSummary(
+  agentRunId: string,
+  summary: Partial<AgentRunSummaryResponse>,
+): AgentRunSummaryResponse {
+  const status = typeof summary.status === "string" ? summary.status : "running";
+  const startedAt = typeof summary.startedAt === "string" ? summary.startedAt : null;
+  const finishedAt = typeof summary.finishedAt === "string" ? summary.finishedAt : null;
+  const lastActivityAt =
+    typeof summary.lastActivityAt === "string"
+      ? summary.lastActivityAt
+      : finishedAt ?? startedAt;
+  const blockerState = normalizeBlockerState(status, summary.blockerType, summary.blockerLabel);
+
+  return {
+    agentRunId,
+    entryContext: summary.entryContext,
+    viewScope: summary.viewScope,
+    taskId: typeof summary.taskId === "string" ? summary.taskId : "",
+    taskTitle: typeof summary.taskTitle === "string" ? summary.taskTitle : "",
+    projectId: typeof summary.projectId === "string" ? summary.projectId : "",
+    projectName: typeof summary.projectName === "string" ? summary.projectName : null,
+    agentType: typeof summary.agentType === "string" ? summary.agentType : "agent",
+    status,
+    sessionId: typeof summary.sessionId === "string" ? summary.sessionId : null,
+    modelUsed: typeof summary.modelUsed === "string" ? summary.modelUsed : null,
+    startedAt,
+    finishedAt,
+    lastActivityAt,
+    durationMs: resolveDurationMs(startedAt, finishedAt, summary.durationMs),
+    tokenUsed: typeof summary.tokenUsed === "number" ? summary.tokenUsed : 0,
+    blockerType: blockerState.blockerType,
+    blockerLabel: blockerState.blockerLabel,
+    riskLevel: typeof summary.riskLevel === "string" ? summary.riskLevel : null,
+    guidanceCount: typeof summary.guidanceCount === "number" ? summary.guidanceCount : 0,
+    resultSummary: typeof summary.resultSummary === "string" ? summary.resultSummary : null,
+    result: typeof summary.result === "string" ? summary.result : null,
+    error: typeof summary.error === "string" ? summary.error : null,
+    longSummary: typeof summary.longSummary === "string" ? summary.longSummary : null,
+    latestEvents: normalizeLatestEvents(summary),
+    actionPermissions: summary.actionPermissions ?? null,
+    governance: summary.governance ?? null,
+    codeChanges: summary.codeChanges ?? null,
+    subSessionId: typeof summary.subSessionId === "string" ? summary.subSessionId : undefined,
+  };
+}
+
+function buildRuntimeFallbackSummary(agentRunId: string, run: RuntimeRun): AgentRunSummaryResponse {
+  const startedAt = new Date(run.startedAt).toISOString();
+  const finishedAt = typeof run.finishedAt === "string" ? run.finishedAt : null;
+  const lastActivityAt =
+    typeof run.lastPromptAt === "number"
+      ? new Date(run.lastPromptAt).toISOString()
+      : finishedAt ?? startedAt;
+  const blockerState = normalizeBlockerState(run.status, null, null);
+
+  return {
+    agentRunId,
+    taskId: run.taskId,
+    taskTitle: run.taskId,
+    projectId: run.projectId,
     projectName: null,
-    agentType: "Agent",
-    status: runtimeRun.status,
-    sessionId: runtimeRun.subSessionId,
-    modelUsed: runtimeRun.model ? formatModelRoute(runtimeRun.model) : null,
-    startedAt: runtimeTimestampToIso(runtimeRun.startedAt),
-    finishedAt: runtimeTimestampToIso(runtimeRun.finishedAt),
-    lastActivityAt:
-      runtimeTimestampToIso(runtimeRun.pausedAt) ||
-      runtimeTimestampToIso(runtimeRun.finishedAt) ||
-      runtimeTimestampToIso(runtimeRun.startedAt),
-    durationMs: null,
+    agentType: "agent",
+    status: run.status,
+    sessionId: run.subSessionId,
+    modelUsed: run.model ? `${run.model.providerId}:${run.model.modelId}` : null,
+    startedAt,
+    finishedAt,
+    lastActivityAt,
+    durationMs: resolveDurationMs(startedAt, finishedAt, null),
     tokenUsed: 0,
-    blockerType:
-      runtimeRun.status === "paused"
-        ? "manual_resume"
-        : runtimeRun.status === "running"
-          ? null
-          : runtimeRun.status,
-    blockerLabel:
-      runtimeRun.status === "paused"
-        ? "等待人工恢复"
-        : runtimeRun.status === "running"
-          ? "推进中"
-          : runtimeRun.status,
+    blockerType: blockerState.blockerType,
+    blockerLabel: blockerState.blockerLabel,
     riskLevel: null,
     guidanceCount: 0,
     resultSummary: null,
     result: null,
     error: null,
-    longSummary: "该实例当前仅存在于 BFF 运行时注册表中，聚合视图尚未持久化完整摘要。",
+    longSummary: null,
     latestEvents: [],
-    subSessionId: runtimeRun.subSessionId,
-  } satisfies AgentRunSummaryResponse;
+    actionPermissions: {
+      canPause: run.status === "running",
+      canResume: run.status === "paused",
+      canTerminate: run.status === "running" || run.status === "paused",
+      canInjectGuidance: true,
+      canViewApproval: false,
+      canViewAudit: false,
+      canViewCodeChanges: false,
+      canExport: false,
+    },
+    governance: null,
+    codeChanges: null,
+    subSessionId: run.subSessionId,
+  };
+}
+
+function statusFreshnessRank(status: string) {
+  switch (status) {
+    case "paused":
+      return 1;
+    case "completed":
+    case "failed":
+    case "stopped":
+      return 2;
+    case "running":
+    default:
+      return 0;
+  }
+}
+
+function shouldPreferRuntimeSummary(persistedStatus: string, runtimeStatus: string) {
+  return statusFreshnessRank(runtimeStatus) > statusFreshnessRank(persistedStatus);
+}
+
+function mergeSummaryWithRuntime(
+  agentRunId: string,
+  persistedSummary: AgentRunSummaryResponse,
+  runtimeRun?: RuntimeRun,
+): AgentRunSummaryResponse {
+  if (!runtimeRun || !shouldPreferRuntimeSummary(persistedSummary.status, runtimeRun.status)) {
+    return persistedSummary;
+  }
+
+  const runtimeSummary = buildRuntimeFallbackSummary(agentRunId, runtimeRun);
+  const startedAt = persistedSummary.startedAt ?? runtimeSummary.startedAt;
+  const finishedAt = runtimeSummary.finishedAt ?? persistedSummary.finishedAt;
+  const lastActivityAt =
+    runtimeSummary.lastActivityAt ?? finishedAt ?? persistedSummary.lastActivityAt;
+
+  return {
+    ...persistedSummary,
+    status: runtimeSummary.status,
+    sessionId: persistedSummary.sessionId ?? runtimeSummary.sessionId,
+    modelUsed: persistedSummary.modelUsed ?? runtimeSummary.modelUsed,
+    startedAt,
+    finishedAt,
+    lastActivityAt,
+    durationMs: resolveDurationMs(startedAt, finishedAt, persistedSummary.durationMs),
+    blockerType: runtimeSummary.blockerType,
+    blockerLabel: runtimeSummary.blockerLabel,
+    actionPermissions: runtimeSummary.actionPermissions ?? persistedSummary.actionPermissions,
+    subSessionId: persistedSummary.subSessionId ?? runtimeSummary.subSessionId,
+  };
+}
+
+async function loadAgentRunSummaryResponse(
+  c: Parameters<typeof authHeader>[0],
+  agentRunId: string,
+): Promise<
+  | { ok: true; summary: AgentRunSummaryResponse }
+  | { ok: false; status: number; error: string }
+> {
+  const summaryResult = await cpFetch<Partial<AgentRunSummaryResponse>>(
+    `/api/agent-runs/${encodeURIComponent(agentRunId)}/summary`,
+    { authorization: authHeader(c) },
+  );
+  if (summaryResult.ok) {
+    const normalizedSummary = normalizeAgentRunSummary(agentRunId, summaryResult.data);
+    const runtimeRun = (await ensureRuntimeRunFromSummary(c, agentRunId)) ?? getAgentRun(agentRunId);
+    return {
+      ok: true,
+      summary: mergeSummaryWithRuntime(agentRunId, normalizedSummary, runtimeRun),
+    };
+  }
+
+  const runtimeRun = (await ensureRuntimeRunFromSummary(c, agentRunId)) ?? getAgentRun(agentRunId);
+  if (runtimeRun) {
+    return {
+      ok: true,
+      summary: buildRuntimeFallbackSummary(agentRunId, runtimeRun),
+    };
+  }
+
+  return {
+    ok: false,
+    status: summaryResult.status,
+    error: readErrorMessage(
+      summaryResult.data,
+      summaryResult.status === 404
+        ? "Agent run not found"
+        : "Failed to load agent run summary",
+    ),
+  };
+}
+
+function buildAgentOpsQueueItem(summary: AgentRunSummaryResponse): AgentOpsQueueItemResponse {
+  return {
+    agentRunId: summary.agentRunId,
+    taskId: summary.taskId,
+    taskTitle: summary.taskTitle,
+    projectId: summary.projectId,
+    projectName: summary.projectName,
+    agentType: summary.agentType,
+    status: summary.status,
+    currentStage: null,
+    blockerType: summary.blockerType,
+    blockerLabel: summary.blockerLabel,
+    blockerReason: summary.error,
+    riskLevel: summary.riskLevel,
+    approvalStatus: summary.governance?.latestApprovalStatus ?? null,
+    requiresIntervention: Boolean(summary.blockerType),
+    startedAt: summary.startedAt,
+    finishedAt: summary.finishedAt,
+    lastActivityAt: summary.lastActivityAt,
+    durationMs: summary.durationMs,
+    modelUsed: summary.modelUsed,
+    tokenUsed: summary.tokenUsed,
+    resultSummary: summary.resultSummary,
+    guidanceCount: summary.guidanceCount,
+    primaryAttentionReason: summary.blockerType ? summary.blockerLabel : null,
+    actionPermissions: summary.actionPermissions ?? null,
+  };
+}
+
+function parseQueueName(value?: string): AgentOpsQueue {
+  return value === "attention" || value === "running" || value === "recent"
+    ? value
+    : "recent";
+}
+
+function parsePositiveInt(value: string | undefined, fallback: number) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function shouldIncludeSummaryInQueue(summary: AgentRunSummaryResponse, queue: AgentOpsQueue) {
+  switch (queue) {
+    case "attention":
+      return Boolean(summary.blockerType);
+    case "running":
+      return summary.status === "running";
+    case "recent":
+    default:
+      return true;
+  }
+}
+
+function queueSortKey(summary: AgentRunSummaryResponse) {
+  return (
+    parseIsoMs(summary.lastActivityAt) ?? parseIsoMs(summary.finishedAt) ?? parseIsoMs(summary.startedAt) ?? 0
+  );
 }
 
 // GET /api/agents — list all registered agent runs
 agentControlRoutes.get("/", (c) => {
   const runs = listAgentRuns();
   return c.json(runs);
+});
+
+// GET /api/agents/queues
+agentControlRoutes.get("/queues", async (c) => {
+  const queue = parseQueueName(c.req.query("queue"));
+  const page = parsePositiveInt(c.req.query("page"), 1);
+  const pageSize = Math.min(parsePositiveInt(c.req.query("pageSize"), 20), 100);
+  const runs = listAgentRuns();
+
+  const summaries = await Promise.all(
+    runs.map(async (run) => {
+      const loaded = await loadAgentRunSummaryResponse(c, run.agentRunId);
+      return loaded.ok ? loaded.summary : buildRuntimeFallbackSummary(run.agentRunId, run);
+    }),
+  );
+
+  const filtered = summaries
+    .filter((summary) => shouldIncludeSummaryInQueue(summary, queue))
+    .sort((left, right) => queueSortKey(right) - queueSortKey(left));
+  const total = filtered.length;
+  const startIndex = (page - 1) * pageSize;
+
+  return c.json({
+    data: filtered.slice(startIndex, startIndex + pageSize).map(buildAgentOpsQueueItem),
+    page,
+    pageSize,
+    total,
+  });
+});
+
+// GET /api/agents/:agentRunId/summary
+agentControlRoutes.get("/:agentRunId/summary", async (c) => {
+  const agentRunId = c.req.param("agentRunId");
+  const summary = await loadAgentRunSummaryResponse(c, agentRunId);
+
+  if (!summary.ok) {
+    return c.json({ error: summary.error }, summary.status === 404 ? 404 : 502);
+  }
+
+  return c.json(summary.summary);
 });
 
 // POST /api/agents/:agentRunId/pause

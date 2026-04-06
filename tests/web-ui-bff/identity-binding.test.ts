@@ -33,8 +33,71 @@ interface ConfigModelRecord {
   provider?: string;
 }
 
+interface TaskBranchRecord {
+  id: string;
+  taskSessionId: string;
+  title?: string;
+  isActive?: boolean;
+}
+
+interface TaskExecutionTraceSegment {
+  type?: string;
+  content?: string | null;
+  toolName?: string | null;
+  toolStatus?: string | null;
+}
+
+interface TaskExecutionTracePayload {
+  finalPrompt?: string | null;
+  latestResponse?: string | null;
+  timelineMeta?: {
+    readSource?: string | null;
+  } | null;
+  snapshot?: {
+    currentStatus?: string | null;
+    latestResult?: string | null;
+  } | null;
+  segments?: TaskExecutionTraceSegment[];
+}
+
+interface AgentMessagePartRecord {
+  type?: string;
+  text?: string;
+  toolName?: string;
+  tool?: string;
+  callID?: string;
+  state?: {
+    output?: unknown;
+    error?: unknown;
+  };
+}
+
+interface AgentMessageRecord {
+  info?: {
+    role?: string;
+    id?: string;
+  };
+  parts?: AgentMessagePartRecord[];
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
+}
+
+function readAgentMessagePartToolName(part: AgentMessagePartRecord): string | undefined {
+  return typeof part.toolName === "string" && part.toolName
+    ? part.toolName
+    : typeof part.tool === "string" && part.tool
+      ? part.tool
+      : undefined;
+}
+
+function readAgentMessagePartText(part: AgentMessagePartRecord): string | undefined {
+  if (typeof part.text === "string" && part.text) {
+    return part.text;
+  }
+
+  return typeof part.state?.output === "string" && part.state.output ? part.state.output : undefined;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────
@@ -133,7 +196,7 @@ async function waitForTaskIdentity(
   while (Date.now() - startedAt < timeoutMs) {
     const { data, status } = await cpRequest<Record<string, unknown>>(
       token,
-      `/api/tasks/${taskId}`,
+      `/api/project-tree/tasks/${taskId}`,
     );
 
     if (status === 200 && predicate(data)) {
@@ -144,6 +207,52 @@ async function waitForTaskIdentity(
   }
 
   throw new Error(`Timed out waiting for identity snapshot on task ${taskId}`);
+}
+
+async function waitForTaskExecutionTrace(
+  taskId: string,
+  predicate: (trace: TaskExecutionTracePayload) => boolean,
+  timeoutMs = 120000,
+): Promise<TaskExecutionTracePayload> {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const { data, status } = await bffRequest<TaskExecutionTracePayload>(
+      token,
+      `/api/tasks/${taskId}/execution-trace`,
+    );
+
+    if (status === 200 && predicate(data)) {
+      return data;
+    }
+
+    await sleep(1000);
+  }
+
+  throw new Error(`Timed out waiting for execution trace on task ${taskId}`);
+}
+
+async function waitForAgentMessages(
+  agentRunId: string,
+  predicate: (messages: AgentMessageRecord[]) => boolean,
+  timeoutMs = 120000,
+): Promise<AgentMessageRecord[]> {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const { data, status } = await bffRequest<{
+      ok?: boolean;
+      data?: AgentMessageRecord[];
+    }>(token, `/api/agents/${encodeURIComponent(agentRunId)}/messages`);
+
+    if (status === 200 && predicate(data.data || [])) {
+      return data.data || [];
+    }
+
+    await sleep(1000);
+  }
+
+  throw new Error(`Timed out waiting for agent messages on agent run ${agentRunId}`);
 }
 
 describe("Identity selection helper", () => {
@@ -583,6 +692,180 @@ executionIntegrationDescribe("Execute route identity resolution", () => {
       expect(patchedTask.gitCommitterName).toBe(resolvedCredential.gitAuthorName);
       expect(patchedTask.gitCommitterEmail).toBe(resolvedCredential.gitAuthorEmail);
       expect(patchedTask.status === "running" || patchedTask.status === "completed").toBe(true);
+    } finally {
+      if (agentRunId) {
+        await bffRequest(token, `/api/agents/${agentRunId}/terminate`, {
+          method: "POST",
+        }).catch(() => undefined);
+      }
+    }
+  });
+});
+
+executionIntegrationDescribe("Execute route live roundtrip", () => {
+  test("persists live assistant roundtrip into execution trace latestResponse", async () => {
+    const selectedModel = await getAvailableCopilotModel(token);
+    const uniqueMarker = `assistant-roundtrip-${Date.now()}`;
+    const { data: task, status: taskStatus } = await bffRequest<{ id: string }>(token, "/api/tasks", {
+      method: "POST",
+      body: JSON.stringify({
+        title: `Assistant Roundtrip ${Date.now()}`,
+        prompt: [
+          "Reply with exactly one line.",
+          `Include the exact token ${uniqueMarker}.`,
+          "Do not use tools unless absolutely required.",
+        ].join(" "),
+        projectId: PROJECT_ID,
+        selectedModel,
+      }),
+    });
+
+    expect(taskStatus).toBe(201);
+    createdTaskIds.push(task.id);
+
+    let agentRunId: string | undefined;
+
+    try {
+      const { data: execution, status: executeStatus } = await bffRequest<{
+        agentRunId: string;
+        sessionId: string;
+        status: string;
+      }>(token, `/api/tasks/${task.id}/execute`, {
+        method: "POST",
+      });
+
+      expect(executeStatus).toBe(200);
+      expect(execution.agentRunId).toBeTruthy();
+      expect(execution.sessionId).toBeTruthy();
+      agentRunId = execution.agentRunId;
+
+      const trace = await waitForTaskExecutionTrace(
+        task.id,
+        (payload) =>
+          payload.snapshot?.currentStatus === "completed" &&
+          typeof payload.latestResponse === "string" &&
+          payload.latestResponse.trim().length > 0 &&
+          payload.latestResponse.includes("assistant-roundtrip-"),
+      );
+
+      expect(trace.latestResponse).toContain("assistant-roundtrip-");
+      expect(trace.snapshot?.currentStatus).toBe("completed");
+      expect(trace.timelineMeta?.readSource).toBe("task-session-projection");
+      expect(
+        trace.snapshot?.latestResult == null ||
+          (typeof trace.snapshot.latestResult === "string" &&
+            trace.snapshot.latestResult.includes("assistant-roundtrip-")),
+      ).toBe(true);
+    } finally {
+      if (agentRunId) {
+        await bffRequest(token, `/api/agents/${agentRunId}/terminate`, {
+          method: "POST",
+        }).catch(() => undefined);
+      }
+    }
+  });
+
+  test("persists live tool roundtrip into execution trace and task-domain tool records", async () => {
+    const selectedModel = await getAvailableCopilotModel(token);
+    const uniqueMarker = `tool-roundtrip-${Date.now()}`;
+    const { data: task, status: taskStatus } = await bffRequest<{ id: string }>(token, "/api/tasks", {
+      method: "POST",
+      body: JSON.stringify({
+        title: `Tool Roundtrip ${Date.now()}`,
+        prompt: [
+          "You must call the bash tool before answering.",
+          "Run the command pwd.",
+          `Then reply with exactly one line that starts with ${uniqueMarker}: followed by the pwd output.`,
+          "Do not answer from memory and do not skip the tool call.",
+        ].join(" "),
+        projectId: PROJECT_ID,
+        selectedModel,
+      }),
+    });
+
+    expect(taskStatus).toBe(201);
+    createdTaskIds.push(task.id);
+
+    let agentRunId: string | undefined;
+
+    try {
+      const { data: execution, status: executeStatus } = await bffRequest<{
+        agentRunId: string;
+        sessionId: string;
+        status: string;
+      }>(token, `/api/tasks/${task.id}/execute`, {
+        method: "POST",
+      });
+
+      expect(executeStatus).toBe(200);
+      expect(execution.agentRunId).toBeTruthy();
+      expect(execution.sessionId).toBeTruthy();
+      agentRunId = execution.agentRunId;
+
+      const trace = await waitForTaskExecutionTrace(task.id, (payload) => {
+        return (
+          payload.snapshot?.currentStatus === "completed" &&
+          typeof payload.latestResponse === "string" &&
+          payload.latestResponse.trim().startsWith(`${uniqueMarker}:`)
+        );
+      });
+
+      expect(trace.latestResponse).toStartWith(`${uniqueMarker}:`);
+      expect(trace.snapshot?.currentStatus).toBe("completed");
+      expect(trace.timelineMeta?.readSource).toBe("task-session-projection");
+      expect(
+        Array.isArray(trace.segments) &&
+          trace.segments.some((segment) => segment.type === "tool-call" && segment.toolName === "bash"),
+      ).toBe(true);
+      expect(
+        Array.isArray(trace.segments) &&
+          trace.segments.some((segment) => segment.type === "tool-output" && segment.toolName === "bash"),
+      ).toBe(true);
+
+      const expectedToolOutput = trace.latestResponse
+        .slice(`${uniqueMarker}:`.length)
+        .trim();
+
+      const messages = await waitForAgentMessages(agentRunId, (records) => {
+        const hasToolCall = records.some(
+          (record) =>
+            Array.isArray(record.parts) &&
+            record.parts.some(
+              (part) => part.type === "tool" && readAgentMessagePartToolName(part) === "bash",
+            ),
+        );
+        const hasToolResult = records.some(
+          (record) =>
+            Array.isArray(record.parts) &&
+            record.parts.some(
+              (part) =>
+                typeof readAgentMessagePartText(part) === "string" &&
+                readAgentMessagePartText(part)?.includes(expectedToolOutput),
+            ),
+        );
+        return hasToolCall && hasToolResult;
+      });
+
+      expect(
+        messages.some(
+          (record) =>
+            Array.isArray(record.parts) &&
+            record.parts.some(
+              (part) => part.type === "tool" && readAgentMessagePartToolName(part) === "bash",
+            ),
+        ),
+      ).toBe(true);
+      expect(
+        messages.some(
+          (record) =>
+            Array.isArray(record.parts) &&
+            record.parts.some(
+              (part) =>
+                typeof readAgentMessagePartText(part) === "string" &&
+                readAgentMessagePartText(part)?.includes(expectedToolOutput),
+            ),
+        ),
+      ).toBe(true);
     } finally {
       if (agentRunId) {
         await bffRequest(token, `/api/agents/${agentRunId}/terminate`, {

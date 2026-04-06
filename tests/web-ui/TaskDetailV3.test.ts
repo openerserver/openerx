@@ -140,9 +140,8 @@ vi.mock("../../control-plane/web-ui/src/composables/useTreeMessages", () => ({
 }));
 
 vi.mock("../../control-plane/web-ui/src/lib/message-normalize", async (importOriginal) => {
-  const actual = await importOriginal<
-    typeof import("../../control-plane/web-ui/src/lib/message-normalize")
-  >();
+  const actual =
+    await importOriginal<typeof import("../../control-plane/web-ui/src/lib/message-normalize")>();
   return actual;
 });
 
@@ -210,7 +209,15 @@ const ChatComposerStub = defineComponent({
     inputDisabled: { type: Boolean, default: false },
     isExecuting: { type: Boolean, default: false },
   },
-  emits: ["continue", "fork", "terminate", "removeQueued", "clearQueued", "refreshModels", "update:selectedModel"],
+  emits: [
+    "continue",
+    "fork",
+    "terminate",
+    "removeQueued",
+    "clearQueued",
+    "refreshModels",
+    "update:selectedModel",
+  ],
   template:
     '<div data-testid="chat-composer" :data-can-terminate="String(canTerminate)" :data-action-disabled="String(actionDisabled)" :data-fork-disabled="String(forkDisabled)" :data-show-fork="String(showFork)" :data-input-disabled="String(inputDisabled)" :data-is-executing="String(isExecuting)"><button type="button" data-testid="composer-continue" @click="$emit(\'continue\', \'新的 follow-up\')">continue</button></div>',
 });
@@ -367,9 +374,11 @@ async function mountPage() {
                 .join("|");
             },
             responsibilityText() {
-              const members = (this.view as {
-                members?: Array<{ responsibilityLabels?: string[]; stageLabels?: string[] }>;
-              } | null)?.members;
+              const members = (
+                this.view as {
+                  members?: Array<{ responsibilityLabels?: string[]; stageLabels?: string[] }>;
+                } | null
+              )?.members;
               return (members ?? [])
                 .flatMap((member) => [
                   ...(member?.responsibilityLabels ?? []),
@@ -947,9 +956,9 @@ describe("TaskDetailV3 runtime permissions", () => {
       text: "候选 A",
       canAdopt: "true|true",
     });
-    expect(wrapper.get('[data-testid="chat-message-list-meta"]').attributes("data-session-id")).toBe(
-      "ses-1",
-    );
+    expect(
+      wrapper.get('[data-testid="chat-message-list-meta"]').attributes("data-session-id"),
+    ).toBe("ses-1");
     expect(routerState.replace).not.toHaveBeenCalled();
   });
 
@@ -1079,9 +1088,9 @@ describe("TaskDetailV3 runtime permissions", () => {
       text: "候选 A",
       canAdopt: "true|true",
     });
-    expect(wrapper.get('[data-testid="chat-message-list-meta"]').attributes("data-session-id")).toBe(
-      "ses-run-root",
-    );
+    expect(
+      wrapper.get('[data-testid="chat-message-list-meta"]').attributes("data-session-id"),
+    ).toBe("ses-run-root");
     expect(routerState.replace).not.toHaveBeenCalled();
   });
 
@@ -1178,59 +1187,65 @@ describe("TaskDetailV3 runtime permissions", () => {
         },
       ],
     });
-    apiMocks.getTaskDomainRunDetail.mockImplementation(async (taskIdArg: string, runId: string) => ({
-      data: {
-        run: {
-          id: runId,
-          taskId: taskIdArg,
-          projectId: "proj-1",
-          orchestrationKind: "parallel",
-          triggerType: "user_execute",
-          status: "completed",
-          rootSessionId: runId === "run-split-a" ? "ses-a" : "ses-b",
-          createdAt: "2026-03-22T10:10:00.000Z",
-          updatedAt: runId === "run-split-a" ? "2026-03-22T10:10:08.000Z" : "2026-03-22T10:10:09.000Z",
-        },
-        nodes: [],
-        candidateNodes: [
-          {
-            id: `${runId}-candidate`,
-            runId,
+    apiMocks.getTaskDomainRunDetail.mockImplementation(
+      async (taskIdArg: string, runId: string) => ({
+        data: {
+          run: {
+            id: runId,
             taskId: taskIdArg,
             projectId: "proj-1",
-            nodeKind: "candidate",
-            nodeKey: "candidate:0",
-            title: runId === "run-split-a" ? "候选 A" : "候选 B",
-            candidateIndex: 0,
-            agentType: "executor",
-            modelUsed: runId === "run-split-a" ? "gpt-5.4" : "claude-opus-4.6",
-            sessionId: runId === "run-split-a" ? "ses-a" : "ses-b",
+            orchestrationKind: "parallel",
+            triggerType: "user_execute",
             status: "completed",
-            resultText: runId === "run-split-a" ? "A" : "B",
-            createdAt: "2026-03-22T10:10:03.000Z",
-            updatedAt: runId === "run-split-a" ? "2026-03-22T10:10:08.000Z" : "2026-03-22T10:10:09.000Z",
+            rootSessionId: runId === "run-split-a" ? "ses-a" : "ses-b",
+            createdAt: "2026-03-22T10:10:00.000Z",
+            updatedAt:
+              runId === "run-split-a" ? "2026-03-22T10:10:08.000Z" : "2026-03-22T10:10:09.000Z",
+          },
+          nodes: [],
+          candidateNodes: [
+            {
+              id: `${runId}-candidate`,
+              runId,
+              taskId: taskIdArg,
+              projectId: "proj-1",
+              nodeKind: "candidate",
+              nodeKey: "candidate:0",
+              title: runId === "run-split-a" ? "候选 A" : "候选 B",
+              candidateIndex: 0,
+              agentType: "executor",
+              modelUsed: runId === "run-split-a" ? "gpt-5.4" : "claude-opus-4.6",
+              sessionId: runId === "run-split-a" ? "ses-a" : "ses-b",
+              status: "completed",
+              resultText: runId === "run-split-a" ? "A" : "B",
+              createdAt: "2026-03-22T10:10:03.000Z",
+              updatedAt:
+                runId === "run-split-a" ? "2026-03-22T10:10:08.000Z" : "2026-03-22T10:10:09.000Z",
+            },
+          ],
+          judgeNode: null,
+          winnerCandidateIndex: null,
+        },
+      }),
+    );
+    apiMocks.getTaskExecutionTraceView.mockImplementation(
+      async (_taskId: string, sessionId: string) => ({
+        taskId: "task-1",
+        sessionId,
+        segments: [],
+        hookExecutions: [],
+        timeline: [],
+        messages: [
+          {
+            id: `assistant-${sessionId}`,
+            role: "assistant",
+            text: `reply-${sessionId}`,
+            createdAt: "2026-03-22T10:10:10.000Z",
           },
         ],
-        judgeNode: null,
-        winnerCandidateIndex: null,
-      },
-    }));
-    apiMocks.getTaskExecutionTraceView.mockImplementation(async (_taskId: string, sessionId: string) => ({
-      taskId: "task-1",
-      sessionId,
-      segments: [],
-      hookExecutions: [],
-      timeline: [],
-      messages: [
-        {
-          id: `assistant-${sessionId}`,
-          role: "assistant",
-          text: `reply-${sessionId}`,
-          createdAt: "2026-03-22T10:10:10.000Z",
-        },
-      ],
-      latestResponse: `reply-${sessionId}`,
-    }));
+        latestResponse: `reply-${sessionId}`,
+      }),
+    );
     apiMocks.listTaskRuntimePermissions.mockResolvedValue({ data: [] });
 
     const wrapper = await mountPage();
@@ -1306,35 +1321,35 @@ describe("TaskDetailV3 runtime permissions", () => {
       },
     ];
     apiMocks.getTaskDomainRuns.mockResolvedValue({ data: [] });
-    apiMocks.getTaskExecutionTraceView.mockImplementation(async (_taskId: string, sessionId: string) => ({
-      taskId: "task-1",
-      sessionId,
-      segments: [],
-      hookExecutions: [],
-      timeline: [],
-      messages: [
-        {
-          id: `assistant-${sessionId}`,
-          role: "assistant",
-          text:
-            sessionId === "ses-new-a"
-              ? "latest-batch-a"
-              : sessionId === "ses-new-b"
-                ? "latest-batch-b"
-                : "old-batch-a",
-          createdAt:
-            sessionId === "ses-old-a"
-              ? "2026-03-22T11:00:10.000Z"
-              : "2026-03-22T12:00:10.000Z",
-        },
-      ],
-      latestResponse:
-        sessionId === "ses-new-a"
-          ? "latest-batch-a"
-          : sessionId === "ses-new-b"
-            ? "latest-batch-b"
-            : "old-batch-a",
-    }));
+    apiMocks.getTaskExecutionTraceView.mockImplementation(
+      async (_taskId: string, sessionId: string) => ({
+        taskId: "task-1",
+        sessionId,
+        segments: [],
+        hookExecutions: [],
+        timeline: [],
+        messages: [
+          {
+            id: `assistant-${sessionId}`,
+            role: "assistant",
+            text:
+              sessionId === "ses-new-a"
+                ? "latest-batch-a"
+                : sessionId === "ses-new-b"
+                  ? "latest-batch-b"
+                  : "old-batch-a",
+            createdAt:
+              sessionId === "ses-old-a" ? "2026-03-22T11:00:10.000Z" : "2026-03-22T12:00:10.000Z",
+          },
+        ],
+        latestResponse:
+          sessionId === "ses-new-a"
+            ? "latest-batch-a"
+            : sessionId === "ses-new-b"
+              ? "latest-batch-b"
+              : "old-batch-a",
+      }),
+    );
     apiMocks.listTaskRuntimePermissions.mockResolvedValue({ data: [] });
 
     const wrapper = await mountPage();
@@ -1508,39 +1523,41 @@ describe("TaskDetailV3 runtime permissions", () => {
         },
       ],
     });
-    apiMocks.getTaskExecutionTraceView.mockImplementation(async (_taskId: string, sessionId: string) => ({
-      taskId: "task-1",
-      sessionId,
-      segments: [],
-      hookExecutions: [],
-      timeline: [],
-      messages: [
-        {
-          id: `assistant-${sessionId}`,
-          role: "assistant",
-          text:
-            sessionId === "ses-root"
-              ? "root-mainline-trace"
-              : sessionId === "ses-root-a"
-                ? "root-candidate-trace"
-                : sessionId === "ses-desc-a"
-                  ? "desc-a-trace"
-                  : "desc-b-trace",
-          createdAt:
-            sessionId === "ses-root" || sessionId === "ses-root-a"
-              ? "2026-03-22T13:00:10.000Z"
-              : "2026-03-22T14:00:10.000Z",
-        },
-      ],
-      latestResponse:
-        sessionId === "ses-root"
-          ? "root-mainline-trace"
-          : sessionId === "ses-root-a"
-            ? "root-candidate-trace"
-            : sessionId === "ses-desc-a"
-              ? "desc-a-trace"
-              : "desc-b-trace",
-    }));
+    apiMocks.getTaskExecutionTraceView.mockImplementation(
+      async (_taskId: string, sessionId: string) => ({
+        taskId: "task-1",
+        sessionId,
+        segments: [],
+        hookExecutions: [],
+        timeline: [],
+        messages: [
+          {
+            id: `assistant-${sessionId}`,
+            role: "assistant",
+            text:
+              sessionId === "ses-root"
+                ? "root-mainline-trace"
+                : sessionId === "ses-root-a"
+                  ? "root-candidate-trace"
+                  : sessionId === "ses-desc-a"
+                    ? "desc-a-trace"
+                    : "desc-b-trace",
+            createdAt:
+              sessionId === "ses-root" || sessionId === "ses-root-a"
+                ? "2026-03-22T13:00:10.000Z"
+                : "2026-03-22T14:00:10.000Z",
+          },
+        ],
+        latestResponse:
+          sessionId === "ses-root"
+            ? "root-mainline-trace"
+            : sessionId === "ses-root-a"
+              ? "root-candidate-trace"
+              : sessionId === "ses-desc-a"
+                ? "desc-a-trace"
+                : "desc-b-trace",
+      }),
+    );
     apiMocks.listTaskRuntimePermissions.mockResolvedValue({ data: [] });
 
     const wrapper = await mountPage();
@@ -1852,13 +1869,9 @@ describe("TaskDetailV3 runtime permissions", () => {
           status: "completed",
           rootSessionId: runId === "run-current" ? "ses-main" : "ses-stale-root",
           createdAt:
-            runId === "run-current"
-              ? "2026-03-22T11:00:00.000Z"
-              : "2026-03-22T11:05:00.000Z",
+            runId === "run-current" ? "2026-03-22T11:00:00.000Z" : "2026-03-22T11:05:00.000Z",
           updatedAt:
-            runId === "run-current"
-              ? "2026-03-22T11:00:10.000Z"
-              : "2026-03-22T11:05:10.000Z",
+            runId === "run-current" ? "2026-03-22T11:00:10.000Z" : "2026-03-22T11:05:10.000Z",
         },
         nodes: [],
         candidateNodes:
@@ -1939,39 +1952,41 @@ describe("TaskDetailV3 runtime permissions", () => {
         winnerCandidateIndex: null,
       },
     }));
-    apiMocks.getTaskExecutionTraceView.mockImplementation(async (_taskId: string, sessionId: string) => ({
-      taskId: "task-1",
-      sessionId,
-      segments: [],
-      hookExecutions: [],
-      timeline: [],
-      messages: [
-        {
-          id: `assistant-${sessionId}`,
-          role: "assistant",
-          text:
-            sessionId === "ses-current-a"
-              ? "current-trace-a"
-              : sessionId === "ses-current-b"
-                ? "current-trace-b"
-                : sessionId === "ses-main"
-                  ? "stale-trace-main"
-                  : "stale-trace-b",
-          createdAt:
-            sessionId === "ses-current-a" || sessionId === "ses-current-b"
-              ? "2026-03-22T11:00:10.000Z"
-              : "2026-03-22T11:05:10.000Z",
-        },
-      ],
-      latestResponse:
-        sessionId === "ses-current-a"
-          ? "current-trace-a"
-          : sessionId === "ses-current-b"
-            ? "current-trace-b"
-            : sessionId === "ses-main"
-              ? "stale-trace-main"
-              : "stale-trace-b",
-    }));
+    apiMocks.getTaskExecutionTraceView.mockImplementation(
+      async (_taskId: string, sessionId: string) => ({
+        taskId: "task-1",
+        sessionId,
+        segments: [],
+        hookExecutions: [],
+        timeline: [],
+        messages: [
+          {
+            id: `assistant-${sessionId}`,
+            role: "assistant",
+            text:
+              sessionId === "ses-current-a"
+                ? "current-trace-a"
+                : sessionId === "ses-current-b"
+                  ? "current-trace-b"
+                  : sessionId === "ses-main"
+                    ? "stale-trace-main"
+                    : "stale-trace-b",
+            createdAt:
+              sessionId === "ses-current-a" || sessionId === "ses-current-b"
+                ? "2026-03-22T11:00:10.000Z"
+                : "2026-03-22T11:05:10.000Z",
+          },
+        ],
+        latestResponse:
+          sessionId === "ses-current-a"
+            ? "current-trace-a"
+            : sessionId === "ses-current-b"
+              ? "current-trace-b"
+              : sessionId === "ses-main"
+                ? "stale-trace-main"
+                : "stale-trace-b",
+      }),
+    );
     apiMocks.listTaskRuntimePermissions.mockResolvedValue({ data: [] });
 
     const wrapper = await mountPage();
@@ -2198,39 +2213,41 @@ describe("TaskDetailV3 runtime permissions", () => {
         },
       ],
     });
-    apiMocks.getTaskExecutionTraceView.mockImplementation(async (_taskId: string, sessionId: string) => ({
-      taskId: "task-1",
-      sessionId,
-      segments: [],
-      hookExecutions: [],
-      timeline: [],
-      messages: [
-        {
-          id: `assistant-${sessionId}`,
-          role: "assistant",
-          text:
-            sessionId === "ses-history-main"
-              ? "history-mainline-trace"
-              : sessionId === "ses-history-a"
-                ? "history-candidate-trace"
-                : sessionId === "ses-current-main"
-                  ? "current-mainline-trace"
-                  : "current-candidate-trace",
-          createdAt:
-            sessionId === "ses-history-main" || sessionId === "ses-history-a"
-              ? "2026-03-22T12:00:10.000Z"
-              : "2026-03-22T12:05:10.000Z",
-        },
-      ],
-      latestResponse:
-        sessionId === "ses-history-main"
-          ? "history-mainline-trace"
-          : sessionId === "ses-history-a"
-            ? "history-candidate-trace"
-            : sessionId === "ses-current-main"
-              ? "current-mainline-trace"
-              : "current-candidate-trace",
-    }));
+    apiMocks.getTaskExecutionTraceView.mockImplementation(
+      async (_taskId: string, sessionId: string) => ({
+        taskId: "task-1",
+        sessionId,
+        segments: [],
+        hookExecutions: [],
+        timeline: [],
+        messages: [
+          {
+            id: `assistant-${sessionId}`,
+            role: "assistant",
+            text:
+              sessionId === "ses-history-main"
+                ? "history-mainline-trace"
+                : sessionId === "ses-history-a"
+                  ? "history-candidate-trace"
+                  : sessionId === "ses-current-main"
+                    ? "current-mainline-trace"
+                    : "current-candidate-trace",
+            createdAt:
+              sessionId === "ses-history-main" || sessionId === "ses-history-a"
+                ? "2026-03-22T12:00:10.000Z"
+                : "2026-03-22T12:05:10.000Z",
+          },
+        ],
+        latestResponse:
+          sessionId === "ses-history-main"
+            ? "history-mainline-trace"
+            : sessionId === "ses-history-a"
+              ? "history-candidate-trace"
+              : sessionId === "ses-current-main"
+                ? "current-mainline-trace"
+                : "current-candidate-trace",
+      }),
+    );
     apiMocks.listTaskRuntimePermissions.mockResolvedValue({ data: [] });
 
     const wrapper = await mountPage();
@@ -2366,8 +2383,10 @@ describe("TaskDetailV3 runtime permissions", () => {
           triggerType: "user_execute",
           status: "completed",
           rootSessionId: runId === "run-history-summary" ? "ses-history-main" : "ses-current-main",
-          executionSessionId: runId === "run-history-summary" ? "ses-history-main" : "ses-current-main",
-          parentSessionId: runId === "run-history-summary" ? "ses-history-main" : "ses-current-main",
+          executionSessionId:
+            runId === "run-history-summary" ? "ses-history-main" : "ses-current-main",
+          parentSessionId:
+            runId === "run-history-summary" ? "ses-history-main" : "ses-current-main",
           createdAt:
             runId === "run-history-summary"
               ? "2026-03-22T12:00:00.000Z"
@@ -2431,41 +2450,43 @@ describe("TaskDetailV3 runtime permissions", () => {
     apiMocks.getTaskAgentRuns.mockResolvedValue({
       data: [],
     });
-    apiMocks.getTaskExecutionTraceView.mockImplementation(async (_taskId: string, sessionId: string) => ({
-      data: {
-        taskId: "task-1",
-        sessionId,
-        segments: [],
-        hookExecutions: [],
-        timeline: [],
-        messages: [
-          {
-            id: `assistant-${sessionId}`,
-            role: "assistant",
-            text:
-              sessionId === "ses-history-a"
-                ? "history-final-a"
-                : sessionId === "ses-history-b"
-                  ? "history-final-b"
-                  : sessionId === "ses-current-winner"
-                    ? "current-winner-final"
-                    : "current-loser-final",
-            createdAt:
-              sessionId === "ses-history-a" || sessionId === "ses-history-b"
-                ? "2026-03-22T12:00:08.500Z"
-                : "2026-03-22T12:05:08.500Z",
-          },
-        ],
-        latestResponse:
-          sessionId === "ses-history-a"
-            ? "history-final-a"
-            : sessionId === "ses-history-b"
-              ? "history-final-b"
-              : sessionId === "ses-current-winner"
-                ? "current-winner-final"
-                : "current-loser-final",
-      },
-    }));
+    apiMocks.getTaskExecutionTraceView.mockImplementation(
+      async (_taskId: string, sessionId: string) => ({
+        data: {
+          taskId: "task-1",
+          sessionId,
+          segments: [],
+          hookExecutions: [],
+          timeline: [],
+          messages: [
+            {
+              id: `assistant-${sessionId}`,
+              role: "assistant",
+              text:
+                sessionId === "ses-history-a"
+                  ? "history-final-a"
+                  : sessionId === "ses-history-b"
+                    ? "history-final-b"
+                    : sessionId === "ses-current-winner"
+                      ? "current-winner-final"
+                      : "current-loser-final",
+              createdAt:
+                sessionId === "ses-history-a" || sessionId === "ses-history-b"
+                  ? "2026-03-22T12:00:08.500Z"
+                  : "2026-03-22T12:05:08.500Z",
+            },
+          ],
+          latestResponse:
+            sessionId === "ses-history-a"
+              ? "history-final-a"
+              : sessionId === "ses-history-b"
+                ? "history-final-b"
+                : sessionId === "ses-current-winner"
+                  ? "current-winner-final"
+                  : "current-loser-final",
+        },
+      }),
+    );
     apiMocks.listTaskRuntimePermissions.mockResolvedValue({ data: [] });
 
     const wrapper = await mountPage();
@@ -2520,9 +2541,7 @@ describe("TaskDetailV3 runtime permissions", () => {
     expect(selects).toHaveLength(0);
     expect(wrapper.text()).not.toContain("选择会话");
     expect(wrapper.text()).not.toContain("Session ses-1");
-    expect(wrapper.get('[data-testid="chat-composer"]').attributes("data-show-fork")).toBe(
-      "false",
-    );
+    expect(wrapper.get('[data-testid="chat-composer"]').attributes("data-show-fork")).toBe("false");
     expect(apiMocks.listTaskRuntimePermissions).toHaveBeenLastCalledWith("task-1", "ses-1");
   });
 
@@ -2548,9 +2567,9 @@ describe("TaskDetailV3 runtime permissions", () => {
     expect(metaBefore.attributes("data-session-id")).toBe("ses-1");
     expect(metaBefore.attributes("data-force-scroll-token")).toBe("0");
 
-    await ((wrapper.vm as unknown) as { handleContinue: (prompt: string) => Promise<void> }).handleContinue(
-      "新的 follow-up",
-    );
+    await (
+      wrapper.vm as unknown as { handleContinue: (prompt: string) => Promise<void> }
+    ).handleContinue("新的 follow-up");
     await flushPromises();
     await nextTick();
 
@@ -2586,9 +2605,9 @@ describe("TaskDetailV3 runtime permissions", () => {
 
     const wrapper = await mountPage();
 
-    await ((wrapper.vm as unknown) as { handleContinue: (prompt: string) => Promise<void> }).handleContinue(
-      "新的 follow-up",
-    );
+    await (
+      wrapper.vm as unknown as { handleContinue: (prompt: string) => Promise<void> }
+    ).handleContinue("新的 follow-up");
     await flushPromises();
 
     expect(apiMocks.continueTask).toHaveBeenCalledWith(
@@ -2624,7 +2643,7 @@ describe("TaskDetailV3 runtime permissions", () => {
 
     const wrapper = await mountPage();
 
-    await ((wrapper.vm as unknown) as { handleFork: (prompt: string) => Promise<void> }).handleFork(
+    await (wrapper.vm as unknown as { handleFork: (prompt: string) => Promise<void> }).handleFork(
       "新的 follow-up",
     );
     await flushPromises();
@@ -2685,9 +2704,9 @@ describe("TaskDetailV3 runtime permissions", () => {
 
     const wrapper = await mountPage();
 
-    await ((wrapper.vm as unknown) as { handleContinue: (prompt: string) => Promise<void> }).handleContinue(
-      "新的 follow-up",
-    );
+    await (
+      wrapper.vm as unknown as { handleContinue: (prompt: string) => Promise<void> }
+    ).handleContinue("新的 follow-up");
     await flushPromises();
     await nextTick();
 
@@ -2875,38 +2894,40 @@ describe("TaskDetailV3 runtime permissions", () => {
         winnerCandidateIndex: null,
       },
     });
-    apiMocks.getTaskExecutionTraceView.mockImplementation(async (_taskId: string, sessionId: string) => ({
-      taskId: "task-1",
-      sessionId,
-      segments: [],
-      hookExecutions: [],
-      timeline: [],
-      messages:
-        sessionId === "ses-a"
-          ? [
-              {
-                id: "old-a",
-                role: "assistant",
-                text: "旧候选 A 内容",
-                createdAt: "2026-03-22T05:25:20.000Z",
-              },
-              {
-                id: "new-a",
-                role: "assistant",
-                text: "新的候选 A 内容",
-                createdAt: "2026-03-22T05:25:23.000Z",
-              },
-            ]
-          : [
-              {
-                id: "new-b",
-                role: "assistant",
-                text: "新的候选 B 内容",
-                createdAt: "2026-03-22T05:25:24.000Z",
-              },
-            ],
-      latestResponse: sessionId === "ses-a" ? "新的候选 A 内容" : "新的候选 B 内容",
-    }));
+    apiMocks.getTaskExecutionTraceView.mockImplementation(
+      async (_taskId: string, sessionId: string) => ({
+        taskId: "task-1",
+        sessionId,
+        segments: [],
+        hookExecutions: [],
+        timeline: [],
+        messages:
+          sessionId === "ses-a"
+            ? [
+                {
+                  id: "old-a",
+                  role: "assistant",
+                  text: "旧候选 A 内容",
+                  createdAt: "2026-03-22T05:25:20.000Z",
+                },
+                {
+                  id: "new-a",
+                  role: "assistant",
+                  text: "新的候选 A 内容",
+                  createdAt: "2026-03-22T05:25:23.000Z",
+                },
+              ]
+            : [
+                {
+                  id: "new-b",
+                  role: "assistant",
+                  text: "新的候选 B 内容",
+                  createdAt: "2026-03-22T05:25:24.000Z",
+                },
+              ],
+        latestResponse: sessionId === "ses-a" ? "新的候选 A 内容" : "新的候选 B 内容",
+      }),
+    );
 
     const wrapper = await mountPage();
     const candidateTexts = wrapper
@@ -3184,31 +3205,33 @@ describe("TaskDetailV3 runtime permissions", () => {
         },
       });
       let silentRefreshPhase = false;
-      apiMocks.getTaskExecutionTraceView.mockImplementation(async (_taskId: string, sessionId: string) => {
-        if (silentRefreshPhase && sessionId === "ses-a") {
-          throw new Error("trace refresh failed");
-        }
-        return {
-          taskId: "task-1",
-          sessionId,
-          segments: [],
-          hookExecutions: [],
-          messages: [
-            {
-              id: `${sessionId}-assistant`,
-              role: "assistant",
-              text: `${sessionId} reply`,
-              createdAt: "2026-03-22T05:00:02.000Z",
+      apiMocks.getTaskExecutionTraceView.mockImplementation(
+        async (_taskId: string, sessionId: string) => {
+          if (silentRefreshPhase && sessionId === "ses-a") {
+            throw new Error("trace refresh failed");
+          }
+          return {
+            taskId: "task-1",
+            sessionId,
+            segments: [],
+            hookExecutions: [],
+            messages: [
+              {
+                id: `${sessionId}-assistant`,
+                role: "assistant",
+                text: `${sessionId} reply`,
+                createdAt: "2026-03-22T05:00:02.000Z",
+              },
+            ],
+            timeline: [],
+            timelineMeta: {
+              readSource: "task-domain-projection",
+              cacheState: "complete",
+              complete: true,
             },
-          ],
-          timeline: [],
-          timelineMeta: {
-            readSource: "task-domain-projection",
-            cacheState: "complete",
-            complete: true,
-          },
-        };
-      });
+          };
+        },
+      );
       apiMocks.listTaskRuntimePermissions.mockResolvedValue({ data: [] });
 
       const wrapper = await mountPage();
@@ -3396,21 +3419,23 @@ describe("TaskDetailV3 runtime permissions", () => {
         winnerCandidateIndex: null,
       },
     });
-    apiMocks.getTaskExecutionTraceView.mockImplementation(async (_taskId: string, sessionId: string) => ({
-      taskId: "task-1",
-      sessionId,
-      segments: [],
-      hookExecutions: [],
-      timeline: [],
-      messages: [
-        {
-          id: `msg-${sessionId}`,
-          role: "assistant",
-          text: `result-${sessionId}`,
-          createdAt: "2026-03-22T05:00:02.000Z",
-        },
-      ],
-    }));
+    apiMocks.getTaskExecutionTraceView.mockImplementation(
+      async (_taskId: string, sessionId: string) => ({
+        taskId: "task-1",
+        sessionId,
+        segments: [],
+        hookExecutions: [],
+        timeline: [],
+        messages: [
+          {
+            id: `msg-${sessionId}`,
+            role: "assistant",
+            text: `result-${sessionId}`,
+            createdAt: "2026-03-22T05:00:02.000Z",
+          },
+        ],
+      }),
+    );
     apiMocks.listTaskRuntimePermissions.mockResolvedValue({ data: [] });
 
     const wrapper = await mountPage();
@@ -3419,9 +3444,7 @@ describe("TaskDetailV3 runtime permissions", () => {
       .find((node) => node.attributes("data-role") === "parallel");
 
     expect(parallelItem?.attributes("data-text")).toBe("候选 A");
-    expect(parallelItem?.attributes("data-candidate-models")).toBe(
-      "gpt-5.4|claude-opus-4.6",
-    );
+    expect(parallelItem?.attributes("data-candidate-models")).toBe("gpt-5.4|claude-opus-4.6");
   });
 
   it("falls back to session selectedModel when parallel agent runs omit modelUsed", async () => {
@@ -3525,22 +3548,24 @@ describe("TaskDetailV3 runtime permissions", () => {
       ],
     });
     apiMocks.getTaskDomainRuns.mockResolvedValue({ data: [] });
-    apiMocks.getTaskExecutionTraceView.mockImplementation(async (_taskId: string, sessionId: string) => ({
-      taskId: "task-1",
-      sessionId,
-      segments: [],
-      hookExecutions: [],
-      timeline: [],
-      messages: [
-        {
-          id: `msg-${sessionId}`,
-          role: "assistant",
-          text: sessionId === "ses-a" ? "candidate-a" : "candidate-b",
-          createdAt: "2026-03-22T05:00:03.000Z",
-        },
-      ],
-      latestResponse: sessionId === "ses-a" ? "candidate-a" : "candidate-b",
-    }));
+    apiMocks.getTaskExecutionTraceView.mockImplementation(
+      async (_taskId: string, sessionId: string) => ({
+        taskId: "task-1",
+        sessionId,
+        segments: [],
+        hookExecutions: [],
+        timeline: [],
+        messages: [
+          {
+            id: `msg-${sessionId}`,
+            role: "assistant",
+            text: sessionId === "ses-a" ? "candidate-a" : "candidate-b",
+            createdAt: "2026-03-22T05:00:03.000Z",
+          },
+        ],
+        latestResponse: sessionId === "ses-a" ? "candidate-a" : "candidate-b",
+      }),
+    );
     apiMocks.listTaskRuntimePermissions.mockResolvedValue({ data: [] });
 
     const wrapper = await mountPage();
@@ -3585,56 +3610,68 @@ describe("TaskDetailV3 runtime permissions", () => {
         },
       ],
     });
-    apiMocks.getTaskConversationMessages.mockImplementation(async (_taskId: string, sessionId: string) => {
-      const stepPrompt =
-        sessionId === "ses-chain-1"
-          ? [
-              "执行任务详情页测试",
-              "",
-              "## 当前步骤 (1/2): 分析现状",
-              "先梳理现状和约束。",
-              "请只完成当前步骤的目标。完成后输出本步骤产出摘要。",
-            ].join("\n")
-          : [
-              "执行任务详情页测试",
-              "",
-              "## 已完成步骤产出",
-              "",
-              "### 分析现状",
-              "已梳理完成。",
-              "",
-              "## 当前步骤 (2/2): 设计方案",
-              "输出模块划分和接口设计。",
-              "请只完成当前步骤的目标。完成后输出本步骤产出摘要。",
-            ].join("\n");
+    apiMocks.getTaskConversationMessages.mockImplementation(
+      async (_taskId: string, sessionId: string) => {
+        const stepPrompt =
+          sessionId === "ses-chain-1"
+            ? [
+                "执行任务详情页测试",
+                "",
+                "## 当前步骤 (1/2): 分析现状",
+                "先梳理现状和约束。",
+                "请只完成当前步骤的目标。完成后输出本步骤产出摘要。",
+              ].join("\n")
+            : [
+                "执行任务详情页测试",
+                "",
+                "## 已完成步骤产出",
+                "",
+                "### 分析现状",
+                "已梳理完成。",
+                "",
+                "## 当前步骤 (2/2): 设计方案",
+                "输出模块划分和接口设计。",
+                "请只完成当前步骤的目标。完成后输出本步骤产出摘要。",
+              ].join("\n");
 
-      return {
-        data: [
-          {
-            info: {
-              id: `msg-${sessionId}-user`,
-              role: "user",
-              time: {
-                created: "2026-03-22T06:00:00.000Z",
+        return {
+          data: [
+            {
+              info: {
+                id: `msg-${sessionId}-user`,
+                role: "user",
+                time: {
+                  created: "2026-03-22T06:00:00.000Z",
+                },
               },
+              parts: [{ type: "text", text: stepPrompt }],
             },
-            parts: [{ type: "text", text: stepPrompt }],
-          },
-        ],
-      };
-    });
+          ],
+        };
+      },
+    );
     apiMocks.listTaskRuntimePermissions.mockResolvedValue({ data: [] });
 
     const wrapper = await mountPage();
     const modal = wrapper.get('[data-testid="execution-mode-modal"]');
 
     expect(modal.attributes("data-step-titles")).toBe("分析现状|设计方案");
-    expect(apiMocks.getTaskConversationMessages).toHaveBeenNthCalledWith(1, "task-1", "ses-chain-1", {
-      includeLineage: false,
-    });
-    expect(apiMocks.getTaskConversationMessages).toHaveBeenNthCalledWith(2, "task-1", "ses-chain-2", {
-      includeLineage: false,
-    });
+    expect(apiMocks.getTaskConversationMessages).toHaveBeenNthCalledWith(
+      1,
+      "task-1",
+      "ses-chain-1",
+      {
+        includeLineage: false,
+      },
+    );
+    expect(apiMocks.getTaskConversationMessages).toHaveBeenNthCalledWith(
+      2,
+      "task-1",
+      "ses-chain-2",
+      {
+        includeLineage: false,
+      },
+    );
   });
 
   it("renders multiple historical parallel runs directly from domain runs", async () => {
@@ -3870,7 +3907,7 @@ describe("TaskDetailV3 runtime permissions", () => {
         branchName: "new-main",
       },
     ];
-    branchState.selectedNode = branchState.flatNodes[0] as (typeof branchState.selectedNode);
+    branchState.selectedNode = branchState.flatNodes[0] as typeof branchState.selectedNode;
     apiMocks.getTaskDomainRuns.mockResolvedValue({
       data: [
         {
@@ -4056,9 +4093,9 @@ describe("TaskDetailV3 runtime permissions", () => {
 
     expect(parallelItems).toHaveLength(1);
     expect(parallelItems[0]?.attributes("data-text")).toBe("旧轮候选 A");
-    expect(wrapper.get('[data-testid="chat-message-list-meta"]').attributes("data-session-id")).toBe(
-      "ses-old-root",
-    );
+    expect(
+      wrapper.get('[data-testid="chat-message-list-meta"]').attributes("data-session-id"),
+    ).toBe("ses-old-root");
     expect(apiMocks.getTaskExecutionTraceView).toHaveBeenCalledWith("task-1", "ses-old-a", {
       includeLineage: false,
     });
@@ -4281,22 +4318,24 @@ describe("TaskDetailV3 runtime permissions", () => {
     ];
     branchState.selectedNode = branchState.flatNodes[0];
     apiMocks.getTaskDomainRuns.mockResolvedValue({ data: [] });
-    apiMocks.getTaskExecutionTraceView.mockImplementation(async (_taskId: string, sessionId: string) => ({
-      taskId: "task-1",
-      sessionId,
-      segments: [],
-      hookExecutions: [],
-      timeline: [],
-      messages: [
-        {
-          id: `assistant-${sessionId}`,
-          role: "assistant",
-          text: `reply-${sessionId}`,
-          createdAt: "2026-03-22T10:00:10.000Z",
-        },
-      ],
-      latestResponse: `reply-${sessionId}`,
-    }));
+    apiMocks.getTaskExecutionTraceView.mockImplementation(
+      async (_taskId: string, sessionId: string) => ({
+        taskId: "task-1",
+        sessionId,
+        segments: [],
+        hookExecutions: [],
+        timeline: [],
+        messages: [
+          {
+            id: `assistant-${sessionId}`,
+            role: "assistant",
+            text: `reply-${sessionId}`,
+            createdAt: "2026-03-22T10:00:10.000Z",
+          },
+        ],
+        latestResponse: `reply-${sessionId}`,
+      }),
+    );
     apiMocks.listTaskRuntimePermissions.mockResolvedValue({ data: [] });
 
     const wrapper = await mountPage();
@@ -4365,8 +4404,30 @@ describe("TaskDetailV3 runtime permissions", () => {
     ];
     branchState.selectedNode = branchState.flatNodes[0];
     apiMocks.getTaskDomainRuns.mockResolvedValue({ data: [] });
-    apiMocks.getTaskExecutionTraceView.mockImplementation(async (_taskId: string, sessionId: string) => {
-      if (sessionId === "ses-a") {
+    apiMocks.getTaskExecutionTraceView.mockImplementation(
+      async (_taskId: string, sessionId: string) => {
+        if (sessionId === "ses-a") {
+          return {
+            taskId: "task-1",
+            sessionId,
+            segments: [],
+            hookExecutions: [],
+            timeline: [],
+            messages: [
+              {
+                id: "msg-user-a",
+                role: "user",
+                text: "并行请求",
+                createdAt: "2026-03-22T10:00:01.000Z",
+              },
+            ],
+            timelineMeta: {
+              cacheState: "partial",
+            },
+            latestResponse: null,
+          };
+        }
+
         return {
           taskId: "task-1",
           sessionId,
@@ -4375,62 +4436,44 @@ describe("TaskDetailV3 runtime permissions", () => {
           timeline: [],
           messages: [
             {
-              id: "msg-user-a",
-              role: "user",
-              text: "并行请求",
-              createdAt: "2026-03-22T10:00:01.000Z",
+              id: "msg-assistant-b",
+              role: "assistant",
+              text: "候选 B 直接来自执行追踪",
+              createdAt: "2026-03-22T10:00:10.000Z",
             },
           ],
-          timelineMeta: {
-            cacheState: "partial",
-          },
-          latestResponse: null,
+          latestResponse: "候选 B 直接来自执行追踪",
         };
-      }
-
-      return {
-        taskId: "task-1",
-        sessionId,
-        segments: [],
-        hookExecutions: [],
-        timeline: [],
-        messages: [
-          {
-            id: "msg-assistant-b",
-            role: "assistant",
-            text: "候选 B 直接来自执行追踪",
-            createdAt: "2026-03-22T10:00:10.000Z",
-          },
-        ],
-        latestResponse: "候选 B 直接来自执行追踪",
-      };
-    });
-    apiMocks.getTaskConversationMessages.mockImplementation(async (_taskId: string, sessionId: string) => {
-      if (sessionId === "ses-a") {
-        return {
-          data: [
-            {
-              info: {
-                id: "msg-user-a",
-                role: "user",
-                time: { created: "2026-03-22T10:00:01.000Z" },
+      },
+    );
+    apiMocks.getTaskConversationMessages.mockImplementation(
+      async (_taskId: string, sessionId: string) => {
+        if (sessionId === "ses-a") {
+          return {
+            data: [
+              {
+                info: {
+                  id: "msg-user-a",
+                  role: "user",
+                  time: { created: "2026-03-22T10:00:01.000Z" },
+                },
+                parts: [{ type: "text", text: "并行请求" }],
               },
-              parts: [{ type: "text", text: "并行请求" }],
-            },
-            {
-              info: {
-                id: "msg-assistant-a",
-                role: "assistant",
-                time: { created: "2026-03-22T10:00:08.000Z" },
+              {
+                info: {
+                  id: "msg-assistant-a",
+                  role: "assistant",
+                  time: { created: "2026-03-22T10:00:08.000Z" },
+                },
+                parts: [{ type: "text", text: "候选 A 已回退到会话消息" }],
               },
-              parts: [{ type: "text", text: "候选 A 已回退到会话消息" }],
-            },
-          ],
-        };
-      }
+            ],
+          };
+        }
 
-      return { data: [] };
-    });
+        return { data: [] };
+      },
+    );
     apiMocks.listTaskRuntimePermissions.mockResolvedValue({ data: [] });
 
     const wrapper = await mountPage();
@@ -4513,22 +4556,24 @@ describe("TaskDetailV3 runtime permissions", () => {
         },
       ],
     });
-    apiMocks.getTaskExecutionTraceView.mockImplementation(async (_taskId: string, sessionId: string) => ({
-      taskId: "task-1",
-      sessionId,
-      segments: [],
-      hookExecutions: [],
-      timeline: [],
-      messages: [
-        {
-          id: `assistant-${sessionId}`,
-          role: "assistant",
-          text: `reply-${sessionId}`,
-          createdAt: "2026-03-22T10:00:10.000Z",
-        },
-      ],
-      latestResponse: `reply-${sessionId}`,
-    }));
+    apiMocks.getTaskExecutionTraceView.mockImplementation(
+      async (_taskId: string, sessionId: string) => ({
+        taskId: "task-1",
+        sessionId,
+        segments: [],
+        hookExecutions: [],
+        timeline: [],
+        messages: [
+          {
+            id: `assistant-${sessionId}`,
+            role: "assistant",
+            text: `reply-${sessionId}`,
+            createdAt: "2026-03-22T10:00:10.000Z",
+          },
+        ],
+        latestResponse: `reply-${sessionId}`,
+      }),
+    );
     apiMocks.listTaskRuntimePermissions.mockResolvedValue({ data: [] });
 
     const wrapper = await mountPage();
@@ -4536,9 +4581,9 @@ describe("TaskDetailV3 runtime permissions", () => {
       .findAll(".chat-item")
       .find((node) => node.attributes("data-role") === "parallel");
 
-    expect(wrapper.get('[data-testid="chat-message-list-meta"]').attributes("data-session-id")).toBe(
-      "ses-b",
-    );
+    expect(
+      wrapper.get('[data-testid="chat-message-list-meta"]').attributes("data-session-id"),
+    ).toBe("ses-b");
     expect(parallelItem?.attributes("data-candidate-can-adopt")).toBe("false|false");
   });
 
@@ -4653,22 +4698,24 @@ describe("TaskDetailV3 runtime permissions", () => {
         winnerCandidateIndex: null,
       },
     });
-    apiMocks.getTaskExecutionTraceView.mockImplementation(async (_taskId: string, sessionId: string) => ({
-      taskId: "task-1",
-      sessionId,
-      segments: [],
-      hookExecutions: [],
-      timeline: [],
-      messages: [
-        {
-          id: `assistant-${sessionId}`,
-          role: "assistant",
-          text: `reply-${sessionId}`,
-          createdAt: "2026-03-22T10:10:10.000Z",
-        },
-      ],
-      latestResponse: `reply-${sessionId}`,
-    }));
+    apiMocks.getTaskExecutionTraceView.mockImplementation(
+      async (_taskId: string, sessionId: string) => ({
+        taskId: "task-1",
+        sessionId,
+        segments: [],
+        hookExecutions: [],
+        timeline: [],
+        messages: [
+          {
+            id: `assistant-${sessionId}`,
+            role: "assistant",
+            text: `reply-${sessionId}`,
+            createdAt: "2026-03-22T10:10:10.000Z",
+          },
+        ],
+        latestResponse: `reply-${sessionId}`,
+      }),
+    );
     apiMocks.listTaskRuntimePermissions.mockResolvedValue({ data: [] });
 
     const wrapper = await mountPage();
@@ -4740,22 +4787,24 @@ describe("TaskDetailV3 runtime permissions", () => {
       },
     ];
     apiMocks.getTaskDomainRuns.mockResolvedValue({ data: [] });
-    apiMocks.getTaskExecutionTraceView.mockImplementation(async (_taskId: string, sessionId: string) => ({
-      taskId: "task-1",
-      sessionId,
-      segments: [],
-      hookExecutions: [],
-      timeline: [],
-      messages: [
-        {
-          id: `assistant-${sessionId}`,
-          role: "assistant",
-          text: `reply-${sessionId}`,
-          createdAt: "2026-03-22T10:00:10.000Z",
-        },
-      ],
-      latestResponse: `reply-${sessionId}`,
-    }));
+    apiMocks.getTaskExecutionTraceView.mockImplementation(
+      async (_taskId: string, sessionId: string) => ({
+        taskId: "task-1",
+        sessionId,
+        segments: [],
+        hookExecutions: [],
+        timeline: [],
+        messages: [
+          {
+            id: `assistant-${sessionId}`,
+            role: "assistant",
+            text: `reply-${sessionId}`,
+            createdAt: "2026-03-22T10:00:10.000Z",
+          },
+        ],
+        latestResponse: `reply-${sessionId}`,
+      }),
+    );
     apiMocks.listTaskRuntimePermissions.mockResolvedValue({ data: [] });
 
     const wrapper = await mountPage();
@@ -5138,12 +5187,10 @@ describe("TaskDetailV3 runtime permissions", () => {
           triggerType: "user_execute",
           status: "completed",
           rootSessionId: "ses-root",
-          createdAt: runId === "run-unadopted-old"
-            ? "2026-03-22T10:00:10.000Z"
-            : "2026-03-22T10:01:10.000Z",
-          updatedAt: runId === "run-unadopted-old"
-            ? "2026-03-22T10:02:00.000Z"
-            : "2026-03-22T10:01:20.000Z",
+          createdAt:
+            runId === "run-unadopted-old" ? "2026-03-22T10:00:10.000Z" : "2026-03-22T10:01:10.000Z",
+          updatedAt:
+            runId === "run-unadopted-old" ? "2026-03-22T10:02:00.000Z" : "2026-03-22T10:01:20.000Z",
         },
         nodes: [],
         candidateNodes: [
@@ -5161,12 +5208,14 @@ describe("TaskDetailV3 runtime permissions", () => {
             sessionId: runId === "run-unadopted-old" ? "ses-old-a" : "ses-new-a",
             status: "completed",
             resultText: runId === "run-unadopted-old" ? "旧候选结果 A" : "新候选结果 A",
-            createdAt: runId === "run-unadopted-old"
-              ? "2026-03-22T10:00:10.000Z"
-              : "2026-03-22T10:01:10.000Z",
-            updatedAt: runId === "run-unadopted-old"
-              ? "2026-03-22T10:02:00.000Z"
-              : "2026-03-22T10:01:20.000Z",
+            createdAt:
+              runId === "run-unadopted-old"
+                ? "2026-03-22T10:00:10.000Z"
+                : "2026-03-22T10:01:10.000Z",
+            updatedAt:
+              runId === "run-unadopted-old"
+                ? "2026-03-22T10:02:00.000Z"
+                : "2026-03-22T10:01:20.000Z",
           },
           {
             id: `${runId}-node-b`,
@@ -5182,26 +5231,30 @@ describe("TaskDetailV3 runtime permissions", () => {
             sessionId: runId === "run-unadopted-old" ? "ses-old-b" : "ses-new-b",
             status: "completed",
             resultText: runId === "run-unadopted-old" ? "旧候选结果 B" : "新候选结果 B",
-            createdAt: runId === "run-unadopted-old"
-              ? "2026-03-22T10:00:11.000Z"
-              : "2026-03-22T10:01:11.000Z",
-            updatedAt: runId === "run-unadopted-old"
-              ? "2026-03-22T10:02:01.000Z"
-              : "2026-03-22T10:01:21.000Z",
+            createdAt:
+              runId === "run-unadopted-old"
+                ? "2026-03-22T10:00:11.000Z"
+                : "2026-03-22T10:01:11.000Z",
+            updatedAt:
+              runId === "run-unadopted-old"
+                ? "2026-03-22T10:02:01.000Z"
+                : "2026-03-22T10:01:21.000Z",
           },
         ],
         judgeNode: null,
         winnerCandidateIndex: null,
       },
     }));
-    apiMocks.getTaskExecutionTraceView.mockImplementation(async (_taskId: string, sessionId: string) => ({
-      taskId: "task-1",
-      sessionId,
-      segments: [],
-      hookExecutions: [],
-      timeline: [],
-      messages: [],
-    }));
+    apiMocks.getTaskExecutionTraceView.mockImplementation(
+      async (_taskId: string, sessionId: string) => ({
+        taskId: "task-1",
+        sessionId,
+        segments: [],
+        hookExecutions: [],
+        timeline: [],
+        messages: [],
+      }),
+    );
     messagesState.conversationItems = [
       {
         key: "user-old-parallel",
@@ -5227,9 +5280,7 @@ describe("TaskDetailV3 runtime permissions", () => {
       role: node.attributes("data-role"),
       text: node.attributes("data-text"),
     }));
-    const candidateTexts = wrapper
-      .findAll(".parallel-candidate-texts")
-      .map((node) => node.text());
+    const candidateTexts = wrapper.findAll(".parallel-candidate-texts").map((node) => node.text());
 
     expect(renderedItems).toEqual([
       { role: "user", text: "先比较第一轮方案" },

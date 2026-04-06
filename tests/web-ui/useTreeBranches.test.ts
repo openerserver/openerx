@@ -72,8 +72,11 @@ describe("useTreeBranches", () => {
     expect(state.flatNodes.value).toEqual([
       {
         id: "task-session:task-1:ses-root",
+        branchNodeId: "task-session:task-1:ses-root",
         runtimeSessionId: "ses-root",
+        taskSessionId: null,
         parentId: "node-task-1",
+        parentTaskSessionId: null,
         contentText: "主分支",
         branchName: "main",
         sourceType: "root",
@@ -86,8 +89,11 @@ describe("useTreeBranches", () => {
       },
       {
         id: "task-session:task-1:ses-child",
+        branchNodeId: "task-session:task-1:ses-child",
         runtimeSessionId: "ses-child",
+        taskSessionId: null,
         parentId: "task-session:task-1:ses-root",
+        parentTaskSessionId: null,
         contentText: "分叉会话",
         branchName: "fork-a",
         sourceType: "fork",

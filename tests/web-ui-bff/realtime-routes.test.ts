@@ -3,7 +3,10 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "../../control-plane/web-ui-bff/node_modules/hono";
-import { createOpencodeAdapterModuleMock } from "./opencode-adapter-mock";
+import {
+  createOpencodeAdapterModuleMock,
+  createRuntimeProviderModuleMock,
+} from "./opencode-adapter-mock";
 import { createSseAggregatorModuleMock } from "./sse-aggregator-mock";
 
 const ensureAgentRunForSessionMock = mock(() => "run-test-1");
@@ -18,14 +21,31 @@ const ingestParsedEventMock = mock(async () => undefined);
 const onEventMock = mock(() => () => undefined);
 const updateAgentRunStatusMock = mock(() => undefined);
 
-mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter", () =>
-  createOpencodeAdapterModuleMock({
-    ensureAgentRunForSession: ensureAgentRunForSessionMock,
-    findAgentRunBySessionId: findAgentRunBySessionIdMock,
-    getSessionMessages: getSessionMessagesMock,
-    runDetachedPrompt: runDetachedPromptMock,
-    updateAgentRunStatus: updateAgentRunStatusMock,
-  }),
+const opencodeAdapterModule = createOpencodeAdapterModuleMock({
+  ensureAgentRunForSession: ensureAgentRunForSessionMock,
+  findAgentRunBySessionId: findAgentRunBySessionIdMock,
+  getSessionMessages: getSessionMessagesMock,
+  runDetachedPrompt: runDetachedPromptMock,
+  updateAgentRunStatus: updateAgentRunStatusMock,
+});
+
+mock.module(
+  "../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter",
+  () => opencodeAdapterModule,
+);
+
+mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/agent-run-registry", () => ({
+  ensureAgentRunForSession: ensureAgentRunForSessionMock,
+  findAgentRunBySessionId: findAgentRunBySessionIdMock,
+  getAgentRun: mock(() => undefined),
+  listAgentRuns: mock(() => []),
+  recoverAgentRun: mock(() => undefined),
+  registerAgentRun: mock(() => undefined),
+  updateAgentRunStatus: updateAgentRunStatusMock,
+}));
+
+mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/runtime-provider", () =>
+  createRuntimeProviderModuleMock(opencodeAdapterModule),
 );
 
 mock.module("../../control-plane/web-ui-bff/src/modules/realtime/sse-aggregator", () =>

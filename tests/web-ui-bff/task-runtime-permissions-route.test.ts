@@ -1,7 +1,10 @@
 /// <reference types="bun-types" />
 
 import { beforeEach, describe, expect, mock, test } from "bun:test";
-import { createOpencodeAdapterModuleMock } from "./opencode-adapter-mock";
+import {
+  createOpencodeAdapterModuleMock,
+  createRuntimeProviderModuleMock,
+} from "./opencode-adapter-mock";
 import { createSseAggregatorModuleMock } from "./sse-aggregator-mock";
 
 const cpFetchMock = mock(async (..._args: unknown[]) => ({ ok: true, data: {} }));
@@ -19,33 +22,40 @@ mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () =>
   createInternalAuthorization: createInternalAuthorizationMock,
 }));
 
-mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter", () =>
-  createOpencodeAdapterModuleMock({
-    continueSession: mock(async () => ({ ok: true })),
-    createSession: mock(async () => ({ ok: true, sessionId: "session-1", agentRunId: "run-1" })),
-    ensureAgentRunForSession: mock(() => "run-1"),
-    extractAssistantResultFromMessages: mock(() => ({
-      completed: false,
-      failed: false,
-      error: undefined,
-      tokenUsed: 0,
-    })),
-    forkSession: mock(async () => ({ ok: true, sessionId: "session-2" })),
-    getAgentMessages: mock(async () => ({ ok: true, data: [] })),
-    getAgentRun: mock(() => undefined),
-    getSessionMessages: mock(async () => ({ ok: true, data: [] })),
-    injectGuidance: mock(async () => ({ ok: true })),
-    listRuntimePermissions: listRuntimePermissionsMock,
-    listAgentRuns: mock(() => []),
-    listSessions: mock(async () => ({ ok: true, data: [] })),
-    pauseAgent: mock(async () => ({ ok: true })),
-    recoverAgentRun: mock(() => undefined),
-    resumeAgent: mock(async () => ({ ok: true })),
-    replyRuntimePermission: replyRuntimePermissionMock,
-    runDetachedPrompt: mock(async () => ({ ok: true, data: {} })),
-    terminateAgent: mock(async () => ({ ok: true })),
-    updateAgentRunStatus: mock(() => undefined),
-  }),
+const opencodeAdapterModule = createOpencodeAdapterModuleMock({
+  continueSession: mock(async () => ({ ok: true })),
+  createSession: mock(async () => ({ ok: true, sessionId: "session-1", agentRunId: "run-1" })),
+  ensureAgentRunForSession: mock(() => "run-1"),
+  extractAssistantResultFromMessages: mock(() => ({
+    completed: false,
+    failed: false,
+    error: undefined,
+    tokenUsed: 0,
+  })),
+  forkSession: mock(async () => ({ ok: true, sessionId: "session-2" })),
+  getAgentMessages: mock(async () => ({ ok: true, data: [] })),
+  getAgentRun: mock(() => undefined),
+  getSessionMessages: mock(async () => ({ ok: true, data: [] })),
+  injectGuidance: mock(async () => ({ ok: true })),
+  listRuntimePermissions: listRuntimePermissionsMock,
+  listAgentRuns: mock(() => []),
+  listSessions: mock(async () => ({ ok: true, data: [] })),
+  pauseAgent: mock(async () => ({ ok: true })),
+  recoverAgentRun: mock(() => undefined),
+  resumeAgent: mock(async () => ({ ok: true })),
+  replyRuntimePermission: replyRuntimePermissionMock,
+  runDetachedPrompt: mock(async () => ({ ok: true, data: {} })),
+  terminateAgent: mock(async () => ({ ok: true })),
+  updateAgentRunStatus: mock(() => undefined),
+});
+
+mock.module(
+  "../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter",
+  () => opencodeAdapterModule,
+);
+
+mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/runtime-provider", () =>
+  createRuntimeProviderModuleMock(opencodeAdapterModule),
 );
 
 mock.module("../../control-plane/web-ui-bff/src/modules/hooks/lifecycle-hooks", () => ({

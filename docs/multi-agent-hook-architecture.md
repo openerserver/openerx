@@ -6,6 +6,8 @@
 > 状态说明：本文档中把 `task-graph-plugin`、`taskNodes`、`taskEdges` 作为执行落地层的部分已经过时。
 >
 > 当前主方案已收口到 Workflow Stage、RuntimePlan、Hook 与 parallel/sequential execution，不再依赖独立 DAG 兼容层。请与 [docs/dag-node-execution-plan-v2.md](docs/dag-node-execution-plan-v2.md) 对照阅读。
+>
+> 历史口径说明（2026-04-05）：本文里涉及 `agent_runs` 字段扩展、DDL 和执行事实落库的段落，同样属于删除前设计上下文。当前 schema 已删除 `agent_runs` 物理表；兼容 `agentRunId` 视图已改由 canonical task-domain 表投影提供。
 
 ## 1. 文档目标
 

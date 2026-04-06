@@ -3,12 +3,15 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import * as orchestrationStrategyModule from "../../control-plane/web-ui-bff/src/lib/orchestration-strategy";
 import { createControlPlaneClientModuleMock } from "./control-plane-client-mock";
-import { createOpencodeAdapterModuleMock } from "./opencode-adapter-mock";
 import {
   expectNoLegacyTimelineReadSource,
   expectNoPromptBackfillSegment,
   expectServiceTimelineNotRequested,
 } from "./execution-trace-contract-test-helpers";
+import {
+  createOpencodeAdapterModuleMock,
+  createRuntimeProviderModuleMock,
+} from "./opencode-adapter-mock";
 
 const cpFetchMock = mock(async (..._args: unknown[]) => ({ ok: true, status: 200, data: {} }));
 const authHeaderMock = mock(() => "Bearer test-token");
@@ -44,34 +47,41 @@ mock.module("../../control-plane/web-ui-bff/src/lib/orchestration-strategy", () 
   readOrchestrationStrategy: mock(() => ({ hooks: [], templates: [], judge: { enabled: false } })),
 }));
 
-mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter", () =>
-  createOpencodeAdapterModuleMock({
-    continueSession: mock(async () => ({ ok: true })),
-    createSession: mock(async () => ({ ok: true, sessionId: "session-1", agentRunId: "run-1" })),
-    ensureAgentRunForSession: mock(() => "run-1"),
-    extractAssistantResultFromMessages: mock(() => ({
-      completed: false,
-      failed: false,
-      error: undefined,
-      tokenUsed: 0,
-    })),
-    forkSession: mock(async () => ({ ok: true, sessionId: "session-2" })),
-    getAgentRun: mock(() => undefined),
-    getSessionMessages: getSessionMessagesMock,
-    getAgentMessages: mock(async () => ({ ok: true, data: [] })),
-    injectGuidance: mock(async () => ({ ok: true })),
-    listAgentRuns: mock(() => []),
-    listRuntimePermissions: mock(async () => ({ ok: true, data: [] })),
-    listSessions: mock(async () => ({ ok: true, data: [] })),
-    pauseAgent: mock(async () => ({ ok: true })),
-    registerAgentRun: mock(() => undefined),
-    recoverAgentRun: mock(() => undefined),
-    replyRuntimePermission: mock(async () => ({ ok: true })),
-    resumeAgent: mock(async () => ({ ok: true })),
-    runDetachedPrompt: mock(async () => ({ ok: true, sessionId: "detached", text: "{}" })),
-    terminateAgent: mock(async () => ({ ok: true })),
-    updateAgentRunStatus: mock(() => undefined),
-  }),
+const opencodeAdapterModule = createOpencodeAdapterModuleMock({
+  continueSession: mock(async () => ({ ok: true })),
+  createSession: mock(async () => ({ ok: true, sessionId: "session-1", agentRunId: "run-1" })),
+  ensureAgentRunForSession: mock(() => "run-1"),
+  extractAssistantResultFromMessages: mock(() => ({
+    completed: false,
+    failed: false,
+    error: undefined,
+    tokenUsed: 0,
+  })),
+  forkSession: mock(async () => ({ ok: true, sessionId: "session-2" })),
+  getAgentRun: mock(() => undefined),
+  getSessionMessages: getSessionMessagesMock,
+  getAgentMessages: mock(async () => ({ ok: true, data: [] })),
+  injectGuidance: mock(async () => ({ ok: true })),
+  listAgentRuns: mock(() => []),
+  listRuntimePermissions: mock(async () => ({ ok: true, data: [] })),
+  listSessions: mock(async () => ({ ok: true, data: [] })),
+  pauseAgent: mock(async () => ({ ok: true })),
+  registerAgentRun: mock(() => undefined),
+  recoverAgentRun: mock(() => undefined),
+  replyRuntimePermission: mock(async () => ({ ok: true })),
+  resumeAgent: mock(async () => ({ ok: true })),
+  runDetachedPrompt: mock(async () => ({ ok: true, sessionId: "detached", text: "{}" })),
+  terminateAgent: mock(async () => ({ ok: true })),
+  updateAgentRunStatus: mock(() => undefined),
+});
+
+mock.module(
+  "../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter",
+  () => opencodeAdapterModule,
+);
+
+mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/runtime-provider", () =>
+  createRuntimeProviderModuleMock(opencodeAdapterModule),
 );
 
 beforeEach(() => {
@@ -128,7 +138,10 @@ beforeEach(() => {
       };
     }
 
-    if (path === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true") {
+    if (
+      path ===
+      "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true"
+    ) {
       return {
         ok: true,
         status: 200,
@@ -506,8 +519,13 @@ describe("project execution trace route", () => {
         };
       }
 
-      if (path === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true") {
-        throw new Error("should not load service timeline when snapshot latestResult already exists");
+      if (
+        path ===
+        "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true"
+      ) {
+        throw new Error(
+          "should not load service timeline when snapshot latestResult already exists",
+        );
       }
 
       return { ok: true, status: 200, data: {} };
@@ -600,8 +618,13 @@ describe("project execution trace route", () => {
         };
       }
 
-      if (path === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true") {
-        throw new Error("should not load service timeline when projection timeline already has items");
+      if (
+        path ===
+        "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true"
+      ) {
+        throw new Error(
+          "should not load service timeline when projection timeline already has items",
+        );
       }
 
       return { ok: true, status: 200, data: {} };
@@ -687,7 +710,10 @@ describe("project execution trace route", () => {
         };
       }
 
-      if (path === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true") {
+      if (
+        path ===
+        "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true"
+      ) {
         return {
           ok: true,
           status: 200,
@@ -772,7 +798,10 @@ describe("project execution trace route", () => {
         };
       }
 
-      if (path === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true") {
+      if (
+        path ===
+        "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true"
+      ) {
         return {
           ok: true,
           status: 200,
@@ -886,7 +915,10 @@ describe("project execution trace route", () => {
         };
       }
 
-      if (path === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true") {
+      if (
+        path ===
+        "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true"
+      ) {
         return {
           ok: false,
           status: 404,

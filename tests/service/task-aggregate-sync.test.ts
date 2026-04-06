@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { buildTaskAggregateStrategyJson, buildTaskTreeSnapshotFromRecord } from "../../control-plane/service/src/modules/tasks/task-aggregate-sync";
 import type { TaskTreeRecord } from "../../control-plane/service/src/modules/project-tree/task-view";
+import {
+  buildTaskAggregateStrategyJson,
+  buildTaskTreeSnapshotFromRecord,
+} from "../../control-plane/service/src/modules/tasks/task-aggregate-sync";
 
 function makeTaskRecord(overrides: Partial<TaskTreeRecord> = {}): TaskTreeRecord {
   return {

@@ -2,9 +2,11 @@
 
 - 来源文件: control-plane/service/src/db/schema.pg.ts
 - 生成时间: 2026-04-02T01:49:41.028Z
-- 表数量: 50
+- 表数量: 49
 
 > 说明: 本文档按源码顺序收录当前有效表结构，并已折叠会话域重复模型，优先展示 canonical 结构。
+>
+> 状态更新（2026-04-05）：当前源码已通过 `0033_drop_agent_runs.sql` 删除 `agent_runs`。本文尚未整体重新生成，因此后文如果还出现 `agentRuns` 或 `agent_run_id` 旧引用，应视为删除前快照；当前兼容 `agentRunId` 语义由 `task_operations`、`task_session_runs`、`task_sessions` 等 canonical 表投影提供。
 
 ## 冗余折叠说明
 
@@ -35,7 +37,6 @@
 - audit_events (auditEvents)
 - cost_records (costRecords)
 - approval_tickets (approvalTickets)
-- agent_runs (agentRuns)
 - task_sessions (taskSessions)
 - task_session_runs (taskSessionRuns)
 - task_messages (taskMessages)
@@ -165,9 +166,8 @@
 - 典型读写：触发风险动作时创建，审批动作更新状态与评论。
 
 ### agent_runs
-- 用途：Agent 执行记录（偏 agent 视角的运行明细）。
-- 关键关系：可关联 task/session/runNode。
-- 典型读写：agent 调度时写入，调试页按状态与时间读取。
+- 状态：已在 2026-04-05 从当前 schema 删除。
+- 兼容说明：公共 `agentRunId` 标识与 `/api/tasks/:taskId/runs`、`/api/agent-runs/:agentRunId/summary` 仍保留，但现在由 `task_operations`、`task_session_runs`、`task_sessions` 投影生成。
 
 ### task_sessions
 - 用途：Task 树节点层（回合级节点）。
@@ -544,7 +544,7 @@ export const runtimeUsageLedgers = pgTable(
       .notNull()
       .references(() => projects.id),
     taskId: text("task_id").references(() => projectTreeNodes.id),
-    agentRunId: text("agent_run_id").references(() => agentRuns.id),
+    agentRunId: text("agent_run_id"),
     runId: text("run_id"),
     runNodeId: text("run_node_id"),
     runtimeSessionId: text("runtime_session_id").notNull(),
@@ -595,7 +595,7 @@ export const runtimeUsageLedgerSteps = pgTable(
       .notNull()
       .references(() => projects.id),
     taskId: text("task_id").references(() => projectTreeNodes.id),
-    agentRunId: text("agent_run_id").references(() => agentRuns.id),
+    agentRunId: text("agent_run_id"),
     runId: text("run_id"),
     runNodeId: text("run_node_id"),
     runtimeSessionId: text("runtime_session_id"),
@@ -912,40 +912,8 @@ export const approvalTickets = pgTable("approval_tickets", {
 
 ## agent_runs
 
-- 常量名: agentRuns
-
-```ts
-export const agentRuns = pgTable(
-  "agent_runs",
-  {
-    id: text("id").primaryKey(),
-    taskId: text("task_id")
-      .notNull()
-      .references(() => projectTreeNodes.id),
-    sessionId: text("session_id"),
-    runId: text("run_id"),
-    runNodeId: text("run_node_id"),
-    agentType: text("agent_type").notNull(),
-    status: text("status", {
-      enum: ["pending", "running", "paused", "completed", "failed", "stopped", "terminated"],
-    })
-      .notNull()
-      .default("pending"),
-    modelUsed: text("model_used"),
-    tokenUsed: integer("token_used").notNull().default(0),
-    result: text("result"),
-    error: text("error"),
-    candidateIndex: integer("candidate_index"),
-    startedAt: text("started_at"),
-    finishedAt: text("finished_at"),
-    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-  },
-  (table) => [
-    index("idx_agent_runs_run_id").on(table.runId),
-    index("idx_agent_runs_run_node_id").on(table.runNodeId),
-  ],
-);
-```
+- 当前状态：已从源码 schema 删除，不再作为独立物理表存在。
+- 当前替代：`agentRunId` 兼容视图由 `task_operations`、`task_session_runs`、`task_sessions` 投影提供；如果需要当前 schema 真值，请以这些 canonical 表为准。
 
 ## task_sessions
 
@@ -1419,7 +1387,7 @@ export const codeChanges = pgTable("code_changes", {
     .notNull()
     .references(() => projectTreeNodes.id),
   repoId: text("repo_id").references(() => repositories.id),
-  agentRunId: text("agent_run_id").references(() => agentRuns.id),
+  agentRunId: text("agent_run_id"),
   changeSource: text("change_source", {
     enum: ["runtime_diff", "task_snapshot", "git_commit"],
   }).notNull(),

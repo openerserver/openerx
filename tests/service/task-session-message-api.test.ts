@@ -27,13 +27,15 @@ async function loadTaskSessionMessageApiModule(args?: {
   const fakeDb = {
     query: {
       taskSessions: {
-        findFirst: mock(async () =>
-          args?.session ?? {
-            id: "session-1",
-            taskId: "task-1",
-            projectId: "project-1",
-            archivedAt: null,
-          }),
+        findFirst: mock(
+          async () =>
+            args?.session ?? {
+              id: "session-1",
+              taskId: "task-1",
+              projectId: "project-1",
+              archivedAt: null,
+            },
+        ),
       },
       taskMessages: {
         findFirst: mock(async () => {
@@ -201,20 +203,26 @@ describe("task session message api", () => {
           completedAt: null,
         },
       ],
-      operationRowsByCall: [null, null, {
-        id: "session-operation:task-1:model-request:cli-2",
-        operationIndex: 5,
-        status: "queued",
-      }],
+      operationRowsByCall: [
+        null,
+        null,
+        {
+          id: "session-operation:task-1:model-request:cli-2",
+          operationIndex: 5,
+          status: "queued",
+        },
+      ],
     });
-    const upsertTaskSessionMessageRecord = mock(async (args: { message: Record<string, unknown> }) => {
-      const runtimeMessageId = String(args.message.runtimeMessageId ?? args.message.id);
-      return {
-        messageId: `task-session-message:session-1:${runtimeMessageId}`,
-        sessionId: "session-1",
-        seq: runtimeMessageId.startsWith("user:") ? 10 : 11,
-      };
-    });
+    const upsertTaskSessionMessageRecord = mock(
+      async (args: { message: Record<string, unknown> }) => {
+        const runtimeMessageId = String(args.message.runtimeMessageId ?? args.message.id);
+        return {
+          messageId: `task-session-message:session-1:${runtimeMessageId}`,
+          sessionId: "session-1",
+          seq: runtimeMessageId.startsWith("user:") ? 10 : 11,
+        };
+      },
+    );
     const api = createTaskSessionMessageApi({
       loadTaskTreeBackedRecord: mock(async () => ({ id: "task-1", projectId: "project-1" })),
       upsertTaskSessionMessageRecord,

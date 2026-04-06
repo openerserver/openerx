@@ -116,18 +116,23 @@ const patchAgentRunRecordMock = mock(async () => undefined);
 const recordAgentAuditMock = mock(async () => undefined);
 const recordPaidExecutionRuntimeUsageMock = mock(async () => ({ tripped: false }));
 const buildPipelineStageUpdatedEventsMock = mock(async () => [] as Array<Record<string, unknown>>);
+const buildExecutionContextMock = mock(() => "");
+const ensureAgentRunForSessionMock = mock(() => "run-test");
+const extractAssistantResultFromMessagesMock = mock(() => ({
+  completed: false,
+  failed: false,
+  error: undefined,
+  tokenUsed: 0,
+}));
+const recoverAgentRunMock = mock(() => undefined);
+const updateAgentRunStatusMock = mock(() => undefined);
 
 mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter", () => ({
-  buildExecutionContext: mock(() => ""),
+  buildExecutionContext: buildExecutionContextMock,
   createSession: createSessionMock,
   continueSession: continueSessionMock,
-  ensureAgentRunForSession: mock(() => "run-test"),
-  extractAssistantResultFromMessages: mock(() => ({
-    completed: false,
-    failed: false,
-    error: undefined,
-    tokenUsed: 0,
-  })),
+  ensureAgentRunForSession: ensureAgentRunForSessionMock,
+  extractAssistantResultFromMessages: extractAssistantResultFromMessagesMock,
   findAgentRunBySessionId: mock(() => undefined),
   forkSession: mock(async () => ({ ok: true, sessionId: "forked-session" })),
   getSessionMessages: mock(async () => ({ ok: true, data: [] })),
@@ -138,12 +143,30 @@ mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-a
   listAgentRuns: mock(() => []),
   listSessions: mock(async () => ({ ok: true, data: [] })),
   pauseAgent: mock(async () => ({ ok: true })),
-  recoverAgentRun: mock(() => undefined),
+  recoverAgentRun: recoverAgentRunMock,
   resumeAgent: resumeAgentMock,
   listRuntimePermissions: mock(async () => ({ ok: true, data: [] })),
   replyRuntimePermission: mock(async () => ({ ok: true })),
   terminateAgent: mock(async () => ({ ok: true })),
-  updateAgentRunStatus: mock(() => undefined),
+  updateAgentRunStatus: updateAgentRunStatusMock,
+}));
+
+mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/agent-run-registry", () => ({
+  ensureAgentRunForSession: ensureAgentRunForSessionMock,
+  findAgentRunBySessionId: mock(() => undefined),
+  getAgentRun: getAgentRunMock,
+  listAgentRuns: mock(() => []),
+  recoverAgentRun: recoverAgentRunMock,
+  registerAgentRun: mock(() => undefined),
+  updateAgentRunStatus: updateAgentRunStatusMock,
+}));
+
+mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/runtime-message-utils", () => ({
+  extractAssistantResultFromMessages: extractAssistantResultFromMessagesMock,
+}));
+
+mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/runtime-execution-context", () => ({
+  buildExecutionContext: buildExecutionContextMock,
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () => ({
@@ -228,6 +251,21 @@ beforeEach(() => {
   recordAgentAuditMock.mockReset();
   recordPaidExecutionRuntimeUsageMock.mockReset();
   buildPipelineStageUpdatedEventsMock.mockReset();
+  buildExecutionContextMock.mockReset();
+  ensureAgentRunForSessionMock.mockReset();
+  extractAssistantResultFromMessagesMock.mockReset();
+  recoverAgentRunMock.mockReset();
+  updateAgentRunStatusMock.mockReset();
+  buildExecutionContextMock.mockReturnValue("");
+  ensureAgentRunForSessionMock.mockReturnValue("run-test");
+  extractAssistantResultFromMessagesMock.mockReturnValue({
+    completed: false,
+    failed: false,
+    error: undefined,
+    tokenUsed: 0,
+  });
+  recoverAgentRunMock.mockReturnValue(undefined);
+  updateAgentRunStatusMock.mockReturnValue(undefined);
 
   currentStrategy = buildStrategy({
     hooks: [
@@ -343,6 +381,11 @@ afterEach(() => {
   recordAgentAuditMock.mockReset();
   recordPaidExecutionRuntimeUsageMock.mockReset();
   buildPipelineStageUpdatedEventsMock.mockReset();
+  buildExecutionContextMock.mockReset();
+  ensureAgentRunForSessionMock.mockReset();
+  extractAssistantResultFromMessagesMock.mockReset();
+  recoverAgentRunMock.mockReset();
+  updateAgentRunStatusMock.mockReset();
 
   if (originalAllowPaidExecution === undefined) {
     process.env.ALLOW_PAID_MODEL_EXECUTION = undefined;
@@ -866,7 +909,7 @@ describe("executeLifecycleHooks behavior", () => {
 
     const lineageWrites = cpFetchMock.mock.calls.filter(
       ([url, options]) =>
-        url === "/api/tasks/task-1/branches" &&
+        url === "/api/tasks/task-1/sessions" &&
         (options as { method?: string } | undefined)?.method === "POST",
     );
     expect(lineageWrites).toHaveLength(2);
@@ -1055,7 +1098,7 @@ describe("executeLifecycleHooks behavior", () => {
 
     const lineageWrites = cpFetchMock.mock.calls.filter(
       ([url, options]) =>
-        url === "/api/tasks/task-1/branches" &&
+        url === "/api/tasks/task-1/sessions" &&
         (options as { method?: string } | undefined)?.method === "POST",
     );
     expect(lineageWrites).toHaveLength(3);
@@ -1135,7 +1178,7 @@ describe("executeLifecycleHooks behavior", () => {
     cpFetchMock.mockImplementation(
       async (url: string, options?: { method?: string; body?: unknown }) => {
         if (!options?.method) {
-          if (url === "/api/tasks/task-1/branches") {
+          if (url === "/api/tasks/task-1/sessions") {
             return {
               ok: true,
               data: {
@@ -1318,7 +1361,7 @@ describe("executeLifecycleHooks behavior", () => {
 
     const lineageWrites = cpFetchMock.mock.calls.filter(
       ([url, options]) =>
-        url === "/api/tasks/task-1/branches" &&
+        url === "/api/tasks/task-1/sessions" &&
         (options as { method?: string } | undefined)?.method === "POST",
     );
     expect(lineageWrites).toHaveLength(3);
@@ -1458,7 +1501,7 @@ describe("executeLifecycleHooks behavior", () => {
 
     const lineageWrites = cpFetchMock.mock.calls.filter(
       ([url, options]) =>
-        url === "/api/tasks/task-1/branches" &&
+        url === "/api/tasks/task-1/sessions" &&
         (options as { method?: string } | undefined)?.method === "POST",
     );
     expect(lineageWrites).toHaveLength(2);

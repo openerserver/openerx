@@ -17,7 +17,8 @@ vi.mock("ant-design-vue", () => ({
   ASpin: { template: "<div>spin</div>" },
   AAlert: {
     props: ["message", "description"],
-    template: "<div class=\"alert\"><div>{{ message }}</div><div>{{ description }}</div><slot /></div>",
+    template:
+      '<div class="alert"><div>{{ message }}</div><div>{{ description }}</div><slot /></div>',
   },
   ATag: { template: "<span><slot /></span>" },
   ACard: { template: "<section><slot /></section>" },

@@ -3,6 +3,8 @@
 > 状态：主线已完成（2026-03-25；主体已落地，当前仅保留防回退维护、发布验证与可选优化）  
 > 日期：2026-03-24  
 > 作者：GitHub Copilot
+>
+> 历史口径说明（2026-04-05）：本文中若仍把 `agent_runs` 写成现行衍生表、桥接表或长期保留的执行事实表，应按历史方案理解。当前 schema 已删除 `agent_runs` 物理表；相关兼容读取已改由 canonical task-domain 表投影提供。
 
 ## 1. 文档目的
 
@@ -49,7 +51,7 @@
 1. `tasks`、`task_runs`、`task_run_nodes`、`task_run_edges` 已进入 PostgreSQL schema 与 migration 体系。
 2. `conversation_sessions`、`conversation_messages`、`conversation_message_parts` 已进入 PostgreSQL schema 与 migration 体系。
 3. `task_domain_events`、`task_snapshots`、`task_timeline_views` 已进入 PostgreSQL schema 与 migration 体系。
-4. `agent_runs`、`runtime_usage_ledgers`、`runtime_usage_ledger_steps` 与新任务域表之间的桥接字段已经补齐。
+4. 删除前阶段里，`agent_runs`、`runtime_usage_ledgers`、`runtime_usage_ledger_steps` 与新任务域表之间的桥接字段曾一度补齐；当前 `agent_runs` 物理表已删除。
 
 ### 3.2 写路径主体已切到 task domain 模型
 

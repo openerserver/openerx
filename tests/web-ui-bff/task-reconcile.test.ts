@@ -80,15 +80,42 @@ mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () =>
   createInternalAuthorization: createInternalAuthorizationMock,
 }));
 
-mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter", () => ({
-  buildExecutionContext: mock(() => ""),
-  extractAssistantResultFromMessages: extractAssistantResultFromMessagesMock,
+mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/agent-run-registry", () => ({
+  ensureAgentRunForSession: mock(() => "run-1"),
   findAgentRunBySessionId: findAgentRunBySessionIdMock,
   getAgentRun: getAgentRunMock,
-  getSessionMessages: getSessionMessagesMock,
-  listSessions: listSessionsMock,
+  listAgentRuns: mock(() => []),
   recoverAgentRun: recoverAgentRunMock,
+  registerAgentRun: mock(() => undefined),
+  updateAgentRunStatus: updateAgentRunStatusMock,
+}));
+
+mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/runtime-message-utils", () => ({
+  extractAssistantResultFromMessages: extractAssistantResultFromMessagesMock,
+}));
+
+mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter", () => ({
+  buildExecutionContext: mock(() => ""),
+  continueSession: mock(async () => ({ ok: true })),
+  createSession: mock(async () => ({ ok: true, sessionId: "session-1", agentRunId: "run-1" })),
+  ensureAgentRunForSession: mock(() => "run-1"),
+  extractAssistantResultFromMessages: extractAssistantResultFromMessagesMock,
+  findAgentRunBySessionId: findAgentRunBySessionIdMock,
+  forkSession: mock(async () => ({ ok: true, sessionId: "fork-1" })),
+  getAgentMessages: mock(async () => ({ ok: true, data: [] })),
+  getAgentRun: getAgentRunMock,
+  getSessionMessages: getSessionMessagesMock,
+  injectGuidance: mock(async () => ({ ok: true })),
+  listAgentRuns: mock(() => []),
+  listRuntimePermissions: mock(async () => ({ ok: true, data: [] })),
+  listSessions: listSessionsMock,
+  pauseAgent: mock(async () => ({ ok: true })),
+  recoverAgentRun: recoverAgentRunMock,
+  registerAgentRun: mock(() => undefined),
+  replyRuntimePermission: mock(async () => ({ ok: true })),
+  resumeAgent: mock(async () => ({ ok: true })),
   runDetachedPrompt: runDetachedPromptMock,
+  terminateAgent: mock(async () => ({ ok: true })),
   updateAgentRunStatus: updateAgentRunStatusMock,
 }));
 
@@ -548,7 +575,8 @@ describe("reconcileRunningTasksOnStartup", () => {
         method: "PATCH",
         body: expect.objectContaining({
           status: "failed",
-          result: "Recovered from stale running state: missing projection-backed parallel run detail.",
+          result:
+            "Recovered from stale running state: missing projection-backed parallel run detail.",
         }),
       }),
     );
@@ -672,7 +700,8 @@ describe("reconcileRunningTasksOnStartup", () => {
         method: "PATCH",
         body: expect.objectContaining({
           status: "failed",
-          result: "Recovered from stale running state: missing projection-backed parallel run detail.",
+          result:
+            "Recovered from stale running state: missing projection-backed parallel run detail.",
         }),
       }),
     );

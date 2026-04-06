@@ -15,11 +15,11 @@ import {
 import { fetchProjectRuntimeUsageBaseline } from "../../lib/runtime-usage-ledger";
 import type { JWTPayload } from "../../middleware/auth";
 import {
+  type TaskSessionTimelineMeta,
   createProjectionTraceTimelineMeta,
   fetchTaskSessionTimeline,
   normalizeTaskSessionTimelineMeta,
   shouldReplaceTraceTimeline,
-  type TaskSessionTimelineMeta,
   toCanonicalTaskSessionId,
 } from "../tasks/task-session-compat";
 import {

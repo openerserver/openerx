@@ -1,129 +1,274 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import postgres from "../../control-plane/service/node_modules/postgres";
 
-const DATABASE_URL = process.env.DATABASE_URL || "postgres://127.0.0.1:5432/openerx";
+const DATABASE_URL = process.env.DATABASE_URL?.startsWith("postgres://")
+  ? process.env.DATABASE_URL
+  : "postgres://127.0.0.1:5432/openerx";
+
+process.env.DATABASE_DIALECT = "postgres";
+process.env.DATABASE_URL = DATABASE_URL;
+
 const sql = postgres(DATABASE_URL, { max: 1, prepare: false });
 
 const TEST_TASK_ID = `projector-test-${Date.now()}`;
 const TEST_SESSION_ID = `projector-sess-${Date.now()}`;
 const TEST_PROJECT_ID = "proj-default";
 const TEST_MSG_ID = `msg-proj-${Date.now()}`;
+const TEST_TOOL_CALL_ID = `tc-${Date.now()}`;
+const TEST_MESSAGE_CREATED_AT = new Date(Date.now() + 1_000).toISOString();
+const TEST_MESSAGE_COMPLETED_AT = new Date(Date.now() + 5_000).toISOString();
+const TEST_SESSION_WRITE_ID = `task-session:${TEST_TASK_ID}:${TEST_SESSION_ID}`;
+const TEST_RUN_ID = `run_${TEST_SESSION_WRITE_ID}`;
+const TEST_MESSAGE_WRITE_ID = `task-session-message:${TEST_SESSION_WRITE_ID}:${TEST_MSG_ID}`;
 
 describe("task-message-projector", () => {
-  // Import the projector eagerly so the DB module is fully initialised
-  // before we insert test rows.
-  let projectPendingEvents: typeof import("../../control-plane/service/src/modules/tasks/task-message-projector")["projectPendingEvents"];
+  type TaskMessageProjectorModule = typeof import("../../control-plane/service/src/modules/tasks/task-message-projector");
+
+  let projectPendingEvents: TaskMessageProjectorModule["projectPendingEvents"];
 
   beforeAll(async () => {
-    // Eagerly import so the Drizzle bootstrap (top-level await) completes
     const mod = await import(
       "../../control-plane/service/src/modules/tasks/task-message-projector"
     );
     projectPendingEvents = mod.projectPendingEvents;
 
-    // Create a minimal test task (proj-default must already exist in the DB)
     await sql`
       INSERT INTO tasks (id, project_id, title, prompt, created_at, updated_at)
       VALUES (${TEST_TASK_ID}, ${TEST_PROJECT_ID}, 'projector test task', 'test', NOW()::text, NOW()::text)
     `;
 
-    // The session write API sets treeNodeId = sessionId, which has a FK to
-    // project_tree_nodes.  In the live path the tree node is created before
-    // message persistence; here we pre-create it for the projector test.
-    const treeNodeId = `task-session:${TEST_TASK_ID}:${TEST_SESSION_ID}`;
-    const safePath = treeNodeId.replace(/[^a-zA-Z0-9_]/g, "_");
-    await sql`
-      INSERT INTO project_tree_nodes (id, project_id, path, node_type, created_at, updated_at)
-      VALUES (${treeNodeId}, ${TEST_PROJECT_ID}, ${safePath}::ltree, 'session', NOW()::text, NOW()::text)
-    `;
-
-    // Insert unprojected events
     await sql`
       INSERT INTO task_message_events (task_id, session_id, event_type, runtime_message_id, payload, projected, created_at)
       VALUES
         (${TEST_TASK_ID}, ${TEST_SESSION_ID}, 'message.updated', ${TEST_MSG_ID}, ${sql.json({
           info: { id: TEST_MSG_ID, role: "assistant" },
+          createdAt: TEST_MESSAGE_CREATED_AT,
           parts: [{ type: "text", text: "Hello from projector test" }],
         })}, false, NOW()::text),
         (${TEST_TASK_ID}, ${TEST_SESSION_ID}, 'message.part.updated', ${TEST_MSG_ID}, ${sql.json({
-          info: { id: TEST_MSG_ID, role: "assistant" },
+          info: {
+            id: TEST_MSG_ID,
+            role: "assistant",
+            time: { created: TEST_MESSAGE_CREATED_AT, completed: TEST_MESSAGE_COMPLETED_AT },
+          },
           parts: [
-            { type: "text", text: "Hello from projector test – updated" },
-            { type: "tool-call", toolCallId: "tc-1", toolName: "readFile", args: {} },
+            { type: "text", text: "Hello from projector test - updated" },
+            {
+              type: "tool-call",
+              toolCallId: TEST_TOOL_CALL_ID,
+              toolName: "readFile",
+              args: { path: "README.md" },
+            },
+            {
+              type: "tool-result",
+              toolCallId: TEST_TOOL_CALL_ID,
+              toolName: "readFile",
+              state: { status: "completed", output: "README body" },
+            },
           ],
         })}, false, NOW()::text)
     `;
-
-    // Sanity-check: confirm events are visible to raw client
-    const check = await sql`SELECT count(*)::int AS cnt FROM task_message_events WHERE task_id = ${TEST_TASK_ID} AND projected = false`;
-    console.log("[beforeAll] unprojected events inserted:", check[0].cnt);
   });
 
   afterAll(async () => {
-    // Clean up in dependency order
     await sql`DELETE FROM task_timeline_views WHERE task_id = ${TEST_TASK_ID}`;
-    await sql`DELETE FROM task_session_message_parts WHERE message_id LIKE ${"task-session-message:task-session:" + TEST_TASK_ID + "%"}`;
-    await sql`DELETE FROM task_session_messages WHERE task_id = ${TEST_TASK_ID}`;
+    await sql`DELETE FROM task_artifacts WHERE task_id = ${TEST_TASK_ID}`;
+    await sql`DELETE FROM task_operations WHERE task_id = ${TEST_TASK_ID}`;
+    await sql`DELETE FROM task_message_parts WHERE message_id = ${TEST_MESSAGE_WRITE_ID}`;
+    await sql`
+      UPDATE task_sessions
+      SET status = 'running', head_message_id = NULL, latest_run_id = NULL
+      WHERE task_id = ${TEST_TASK_ID}
+    `;
+    await sql`DELETE FROM task_messages WHERE task_id = ${TEST_TASK_ID}`;
     await sql`DELETE FROM task_sessions WHERE task_id = ${TEST_TASK_ID}`;
+    await sql`DELETE FROM task_session_runs WHERE task_id = ${TEST_TASK_ID}`;
     await sql`DELETE FROM task_message_events WHERE task_id = ${TEST_TASK_ID}`;
-    await sql`DELETE FROM project_tree_nodes WHERE id LIKE ${"task-session:" + TEST_TASK_ID + "%"}`;
     await sql`DELETE FROM tasks WHERE id = ${TEST_TASK_ID}`;
     await sql.end();
   });
 
-  test("projects unprojected events into normalized tables", async () => {
-    const result = await projectPendingEvents(10);
-    console.log("[test-1] result:", JSON.stringify(result));
+  test("projects unprojected events into canonical task-domain tables", async () => {
+    const pendingBefore = await sql`
+      SELECT count(*)::int AS "count"
+      FROM task_message_events
+      WHERE projected = false
+    `;
 
-    // Both events should have been projected
-    expect(result.failed).toBe(0);
-    expect(result.processed).toBe(2);
+    const result = await projectPendingEvents(Number(pendingBefore[0]?.count ?? 0) + 10);
 
-    // Events should now be marked projected
+    expect(result.processed + result.failed).toBeGreaterThanOrEqual(
+      Number(pendingBefore[0]?.count ?? 0),
+    );
+
     const events = await sql`
       SELECT id, projected FROM task_message_events
       WHERE task_id = ${TEST_TASK_ID}
       ORDER BY id
     `;
+    const failedEventIds = events
+      .filter((event) => event.projected !== true)
+      .map((event) => Number(event.id));
+    expect(result.errors.filter((error) => failedEventIds.includes(error.eventId))).toEqual([]);
     expect(events.length).toBe(2);
     expect(events[0].projected).toBe(true);
     expect(events[1].projected).toBe(true);
 
-    // Normalized message should exist
-    const messages = await sql`
-      SELECT id, role, text_content, status FROM task_session_messages
+    const sessions = await sql`
+      SELECT id, runtime_session_id AS "runtimeSessionId", latest_run_id AS "latestRunId", status
+      FROM task_sessions
       WHERE task_id = ${TEST_TASK_ID}
     `;
-    expect(messages.length).toBeGreaterThanOrEqual(1);
-    const msg = messages[0];
-    expect(msg.role).toBe("assistant");
-    // The second event (message.part.updated) should have overwritten the first
-    expect(msg.text_content).toContain("updated");
+    expect(sessions).toEqual([
+      expect.objectContaining({
+        id: TEST_SESSION_WRITE_ID,
+        runtimeSessionId: TEST_SESSION_ID,
+        latestRunId: TEST_RUN_ID,
+        status: "completed",
+      }),
+    ]);
 
-    // Parts should exist (the second event has 2 parts)
-    const sessionId = `task-session:${TEST_TASK_ID}:${TEST_SESSION_ID}`;
-    const messageId = `task-session-message:${sessionId}:${TEST_MSG_ID}`;
+    const runs = await sql`
+      SELECT
+        id,
+        session_id AS "sessionId",
+        runtime_session_id AS "runtimeSessionId",
+        execution_kind AS "executionKind",
+        lane_role AS "laneRole",
+        status,
+        result_summary AS "resultSummary"
+      FROM task_session_runs
+      WHERE task_id = ${TEST_TASK_ID}
+    `;
+    expect(runs).toEqual([
+      expect.objectContaining({
+        id: TEST_RUN_ID,
+        sessionId: TEST_SESSION_WRITE_ID,
+        runtimeSessionId: TEST_SESSION_ID,
+        executionKind: "single",
+        laneRole: "primary",
+        status: "completed",
+        resultSummary: "Hello from projector test - updated",
+      }),
+    ]);
+
+    const messages = await sql`
+      SELECT
+        id,
+        session_id AS "sessionId",
+        created_by_run_id AS "createdByRunId",
+        role,
+        text_content AS "textContent",
+        part_count AS "partCount",
+        status
+      FROM task_messages
+      WHERE task_id = ${TEST_TASK_ID}
+    `;
+    expect(messages).toEqual([
+      expect.objectContaining({
+        id: TEST_MESSAGE_WRITE_ID,
+        sessionId: TEST_SESSION_WRITE_ID,
+        createdByRunId: TEST_RUN_ID,
+        role: "assistant",
+        textContent: "Hello from projector test - updated",
+        partCount: 3,
+        status: "completed",
+      }),
+    ]);
+
     const parts = await sql`
-      SELECT part_type FROM task_session_message_parts
-      WHERE message_id = ${messageId}
+      SELECT part_type AS "partType" FROM task_message_parts
+      WHERE message_id = ${TEST_MESSAGE_WRITE_ID}
       ORDER BY part_index
     `;
-    expect(parts.length).toBe(2);
-    expect(parts[0].part_type).toBe("text");
-    expect(parts[1].part_type).toBe("tool_call");
+    expect(parts.map((part) => part.partType)).toEqual(["text", "tool_call", "tool_result"]);
 
-    // Timeline view should exist
-    const timeline = await sql`
-      SELECT id FROM task_timeline_views
+    const operations = await sql`
+      SELECT
+        id,
+        session_id AS "sessionId",
+        run_id AS "runId",
+        message_id AS "messageId",
+        runtime_operation_id AS "runtimeOperationId",
+        operation_kind AS "operationKind",
+        tool_name AS "toolName",
+        status
+      FROM task_operations
       WHERE task_id = ${TEST_TASK_ID}
     `;
-    expect(timeline.length).toBeGreaterThanOrEqual(1);
+    expect(operations).toEqual([
+      expect.objectContaining({
+        sessionId: TEST_SESSION_WRITE_ID,
+        runId: TEST_RUN_ID,
+        messageId: TEST_MESSAGE_WRITE_ID,
+        runtimeOperationId: TEST_TOOL_CALL_ID,
+        operationKind: "tool_call",
+        toolName: "readFile",
+        status: "completed",
+      }),
+    ]);
+
+    const artifacts = await sql`
+      SELECT
+        message_id AS "messageId",
+        operation_id AS "operationId",
+        artifact_kind AS "artifactKind",
+        title,
+        content_text AS "contentText"
+      FROM task_artifacts
+      WHERE task_id = ${TEST_TASK_ID}
+    `;
+    expect(artifacts).toEqual([
+      expect.objectContaining({
+        messageId: TEST_MESSAGE_WRITE_ID,
+        operationId: operations[0].id,
+        artifactKind: "result",
+        title: "readFile result",
+        contentText: "README body",
+      }),
+    ]);
+
+    const timeline = await sql`
+      SELECT id, message_id AS "messageId", item_kind AS "itemKind", item_role AS "itemRole"
+      FROM task_timeline_views
+      WHERE task_id = ${TEST_TASK_ID}
+    `;
+    expect(timeline).toEqual([
+      expect.objectContaining({
+        id: `task-timeline:message:${TEST_MESSAGE_WRITE_ID}`,
+        messageId: TEST_MESSAGE_WRITE_ID,
+        itemKind: "message",
+        itemRole: "assistant",
+      }),
+    ]);
   });
 
-  test("is idempotent — re-running finds nothing to project", async () => {
-    const result = await projectPendingEvents(10);
-    console.log("[test-2] result:", JSON.stringify(result));
-    expect(result.processed).toBe(0);
-    expect(result.failed).toBe(0);
+  test("is idempotent on a second pass", async () => {
+    const countsBefore = await sql`
+      SELECT
+        (SELECT count(*)::int FROM task_messages WHERE task_id = ${TEST_TASK_ID}) AS "messageCount",
+        (SELECT count(*)::int FROM task_message_parts WHERE message_id = ${TEST_MESSAGE_WRITE_ID}) AS "partCount",
+        (SELECT count(*)::int FROM task_operations WHERE task_id = ${TEST_TASK_ID}) AS "operationCount",
+        (SELECT count(*)::int FROM task_artifacts WHERE task_id = ${TEST_TASK_ID}) AS "artifactCount",
+        (SELECT count(*)::int FROM task_timeline_views WHERE task_id = ${TEST_TASK_ID}) AS "timelineCount"
+    `;
+    const pendingBefore = await sql`
+      SELECT count(*)::int AS "count"
+      FROM task_message_events
+      WHERE projected = false
+    `;
+
+    await projectPendingEvents(Number(pendingBefore[0]?.count ?? 0) + 10);
+
+    const countsAfter = await sql`
+      SELECT
+        (SELECT count(*)::int FROM task_messages WHERE task_id = ${TEST_TASK_ID}) AS "messageCount",
+        (SELECT count(*)::int FROM task_message_parts WHERE message_id = ${TEST_MESSAGE_WRITE_ID}) AS "partCount",
+        (SELECT count(*)::int FROM task_operations WHERE task_id = ${TEST_TASK_ID}) AS "operationCount",
+        (SELECT count(*)::int FROM task_artifacts WHERE task_id = ${TEST_TASK_ID}) AS "artifactCount",
+        (SELECT count(*)::int FROM task_timeline_views WHERE task_id = ${TEST_TASK_ID}) AS "timelineCount"
+    `;
+
+    expect(countsAfter).toEqual(countsBefore);
   });
 });

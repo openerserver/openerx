@@ -456,7 +456,9 @@ describe("opencode adapter resilience", () => {
       }
 
       if (
-        url.pathname === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Asession-root/messages"
+        url.pathname === "/api/tasks/task-1/query/normalized-conversation" &&
+        url.searchParams.get("sessionId") === "task-session:task-1:session-root" &&
+        url.searchParams.get("includeLineage") === "false"
       ) {
         return new Response(
           JSON.stringify({
@@ -496,7 +498,9 @@ describe("opencode adapter resilience", () => {
       }
 
       if (
-        url.pathname === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Asession-leaf/messages"
+        url.pathname === "/api/tasks/task-1/query/normalized-conversation" &&
+        url.searchParams.get("sessionId") === "task-session:task-1:session-leaf" &&
+        url.searchParams.get("includeLineage") === "false"
       ) {
         return new Response(
           JSON.stringify({

@@ -1,6 +1,10 @@
 /// <reference types="bun-types" />
 
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import {
+  createOpencodeAdapterModuleMock,
+  createRuntimeProviderModuleMock,
+} from "./opencode-adapter-mock";
 
 const cpFetchMock = mock(async (..._args: unknown[]) => ({ ok: true, data: {} }));
 const authHeaderMock = mock(() => "Bearer test");
@@ -111,7 +115,20 @@ const recordModelUsageMock = mock(async () => ({
 }));
 const broadcastMock = mock(() => undefined);
 const finalizeTaskStateMock = mock(async () => true);
-import { createOpencodeAdapterModuleMock } from "./opencode-adapter-mock";
+
+const opencodeAdapterModule = createOpencodeAdapterModuleMock({
+  extractAssistantResultFromMessages: extractAssistantResultFromMessagesMock,
+  getAgentMessages: getAgentMessagesMock,
+  getAgentRun: getAgentRunMock,
+  getSessionMessages: getSessionMessagesMock,
+  injectGuidance: injectGuidanceMock,
+  listAgentRuns: listAgentRunsMock,
+  pauseAgent: pauseAgentMock,
+  recoverAgentRun: recoverAgentRunMock,
+  resumeAgent: resumeAgentMock,
+  terminateAgent: terminateAgentMock,
+  updateAgentRunStatus: updateAgentRunStatusMock,
+});
 
 mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () => ({
   authHeader: authHeaderMock,
@@ -119,20 +136,27 @@ mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () =>
   createInternalAuthorization: mock(async () => "Bearer internal"),
 }));
 
-mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter", () =>
-  createOpencodeAdapterModuleMock({
-    extractAssistantResultFromMessages: extractAssistantResultFromMessagesMock,
-    getAgentMessages: getAgentMessagesMock,
-    getAgentRun: getAgentRunMock,
-    getSessionMessages: getSessionMessagesMock,
-    injectGuidance: injectGuidanceMock,
-    listAgentRuns: listAgentRunsMock,
-    pauseAgent: pauseAgentMock,
-    recoverAgentRun: recoverAgentRunMock,
-    resumeAgent: resumeAgentMock,
-    terminateAgent: terminateAgentMock,
-    updateAgentRunStatus: updateAgentRunStatusMock,
-  }),
+mock.module(
+  "../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter",
+  () => opencodeAdapterModule,
+);
+
+mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/agent-run-registry", () => ({
+  ensureAgentRunForSession: mock(() => "run-missing"),
+  findAgentRunBySessionId: mock(() => undefined),
+  getAgentRun: getAgentRunMock,
+  listAgentRuns: listAgentRunsMock,
+  recoverAgentRun: recoverAgentRunMock,
+  registerAgentRun: mock(() => undefined),
+  updateAgentRunStatus: updateAgentRunStatusMock,
+}));
+
+mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/runtime-message-utils", () => ({
+  extractAssistantResultFromMessages: extractAssistantResultFromMessagesMock,
+}));
+
+mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/runtime-provider", () =>
+  createRuntimeProviderModuleMock(opencodeAdapterModule),
 );
 
 mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/run-persistence", () => ({

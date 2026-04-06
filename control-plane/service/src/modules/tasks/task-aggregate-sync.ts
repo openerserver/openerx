@@ -1,8 +1,22 @@
-import { eq } from "drizzle-orm";
-import { db } from "../../db";
-import { taskSessions, taskSnapshots, tasks as taskAggregates } from "../../db/schema";
 import type { TaskTreeSnapshot } from "../project-tree/storage";
 import type { TaskTreeRecord } from "../project-tree/task-view";
+import { toStoredTaskExecutionMode } from "./task-execution-mode";
+
+async function loadTaskAggregateSyncRuntime() {
+  const [{ eq }, { db }, schema] = await Promise.all([
+    import("drizzle-orm"),
+    import("../../db"),
+    import("../../db/schema"),
+  ]);
+
+  return {
+    eq,
+    db,
+    taskSessions: schema.taskSessions,
+    taskSnapshots: schema.taskSnapshots,
+    taskAggregates: schema.tasks,
+  };
+}
 
 /**
  * Maps old task status values to the DB enum `task_lifecycle_status`.
@@ -31,6 +45,49 @@ type TaskSnapshotCreateInput = {
   gitCommitterEmail?: string | null;
 };
 
+function parseTaskAggregateStrategyJson(strategy: TaskTreeSnapshot["strategy"]) {
+  if (strategy && typeof strategy === "object" && !Array.isArray(strategy)) {
+    return { ...strategy };
+  }
+  if (typeof strategy !== "string" || !strategy.trim()) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(strategy) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? ({ ...(parsed as Record<string, unknown>) } as Record<string, unknown>)
+      : { value: strategy };
+  } catch {
+    return { value: strategy };
+  }
+}
+
+function withTaskAggregateExecutionMode(
+  strategy: Record<string, unknown> | null,
+  executionMode?: TaskTreeSnapshot["executionMode"],
+) {
+  if (!executionMode) {
+    return strategy;
+  }
+
+  return { ...(strategy ?? {}), executionMode };
+}
+
+function withTaskAggregateAutoAdvanceStages(
+  strategy: Record<string, unknown> | null,
+  autoAdvanceStages?: boolean,
+) {
+  if (autoAdvanceStages) {
+    return { ...(strategy ?? {}), autoAdvanceStages: true };
+  }
+  if (!strategy || !Object.prototype.hasOwnProperty.call(strategy, "autoAdvanceStages")) {
+    return strategy;
+  }
+
+  return { ...strategy, autoAdvanceStages: undefined };
+}
+
 export function buildTaskAggregateStrategyJson(
   strategy: TaskTreeSnapshot["strategy"],
   options?: {
@@ -38,38 +95,14 @@ export function buildTaskAggregateStrategyJson(
     autoAdvanceStages?: boolean;
   },
 ) {
-  let next: Record<string, unknown> | null = null;
+  const withExecutionMode = withTaskAggregateExecutionMode(
+    parseTaskAggregateStrategyJson(strategy),
+    options?.executionMode,
+  );
 
-  if (strategy && typeof strategy === "object" && !Array.isArray(strategy)) {
-    next = { ...strategy };
-  } else if (typeof strategy === "string" && strategy.trim()) {
-    try {
-      const parsed = JSON.parse(strategy) as unknown;
-      next =
-        parsed && typeof parsed === "object" && !Array.isArray(parsed)
-          ? ({ ...(parsed as Record<string, unknown>) } as Record<string, unknown>)
-          : { value: strategy };
-    } catch {
-      next = { value: strategy };
-    }
-  }
-
-  if (options?.executionMode) {
-    next = { ...(next ?? {}), executionMode: options.executionMode };
-  }
-
-  if (options?.autoAdvanceStages) {
-    next = { ...(next ?? {}), autoAdvanceStages: true };
-  } else if (next && Object.prototype.hasOwnProperty.call(next, "autoAdvanceStages")) {
-    next.autoAdvanceStages = undefined;
-  }
-
-  return next ?? {};
+  return withTaskAggregateAutoAdvanceStages(withExecutionMode, options?.autoAdvanceStages) ?? {};
 }
-
-function buildTaskAggregateChangesSummaryJson(
-  changesSummary: TaskTreeSnapshot["changesSummary"],
-) {
+function buildTaskAggregateChangesSummaryJson(changesSummary: TaskTreeSnapshot["changesSummary"]) {
   return changesSummary ? ({ ...changesSummary } as Record<string, unknown>) : null;
 }
 
@@ -201,23 +234,37 @@ export function buildTaskTreeSnapshotFromRecord(
   };
 }
 
+async function resolvePersistedTaskSessionId(sessionId: string | null | undefined) {
+  if (!sessionId) {
+    return null;
+  }
+
+  const { db, eq, taskSessions } = await loadTaskAggregateSyncRuntime();
+
+  const exactSession = await db.query.taskSessions.findFirst({
+    where: eq(taskSessions.id, sessionId),
+    columns: { id: true },
+  });
+  if (exactSession) {
+    return exactSession.id;
+  }
+
+  const runtimeSession = await db.query.taskSessions.findFirst({
+    where: eq(taskSessions.runtimeSessionId, sessionId),
+    columns: { id: true },
+  });
+
+  return runtimeSession?.id ?? null;
+}
+
 export function createTaskAggregateSyncApi() {
   async function syncTaskAggregateFromSnapshot(snapshot: TaskTreeSnapshot) {
     const updatedAt = snapshot.finishedAt ?? snapshot.startedAt ?? new Date().toISOString();
+    const { db, taskAggregates, taskSnapshots } = await loadTaskAggregateSyncRuntime();
 
-    // Validate sessionId exists in task_sessions before writing to task_snapshots (FK constraint).
-    // Legacy tasks may carry a current_session_id that was never migrated to task_sessions.
-    let validatedSessionId = snapshot.sessionId;
-    if (validatedSessionId) {
-      const [existing] = await db
-        .select({ id: taskSessions.id })
-        .from(taskSessions)
-        .where(eq(taskSessions.id, validatedSessionId))
-        .limit(1);
-      if (!existing) {
-        validatedSessionId = null;
-      }
-    }
+    // Tree/task write paths still carry runtime session ids, while task_snapshots persists
+    // canonical task_session ids behind the session-first FK chain.
+    const validatedSessionId = await resolvePersistedTaskSessionId(snapshot.sessionId);
 
     await db
       .insert(taskAggregates)
@@ -251,7 +298,7 @@ export function createTaskAggregateSyncApi() {
         }),
         finalCommitSha: snapshot.finalCommitSha,
         finalBranchName: snapshot.finalBranchName,
-          changesSummaryJson: buildTaskAggregateChangesSummaryJson(snapshot.changesSummary),
+        changesSummaryJson: buildTaskAggregateChangesSummaryJson(snapshot.changesSummary),
         createdAt: snapshot.createdAt,
         startedAt: snapshot.startedAt,
         finishedAt: snapshot.finishedAt,
@@ -287,7 +334,7 @@ export function createTaskAggregateSyncApi() {
           }),
           finalCommitSha: snapshot.finalCommitSha,
           finalBranchName: snapshot.finalBranchName,
-            changesSummaryJson: buildTaskAggregateChangesSummaryJson(snapshot.changesSummary),
+          changesSummaryJson: buildTaskAggregateChangesSummaryJson(snapshot.changesSummary),
           startedAt: snapshot.startedAt,
           finishedAt: snapshot.finishedAt,
           updatedAt,
@@ -300,7 +347,7 @@ export function createTaskAggregateSyncApi() {
         taskId: snapshot.id,
         projectId: snapshot.projectId,
         lifecycleStatus: toLifecycleStatus(snapshot.status),
-        currentExecutionMode: snapshot.executionMode ?? null,
+        currentExecutionMode: toStoredTaskExecutionMode(snapshot.executionMode),
         currentExecutionStatus: null,
         currentSessionId: validatedSessionId,
         latestSessionId: validatedSessionId,
@@ -317,7 +364,7 @@ export function createTaskAggregateSyncApi() {
         set: {
           projectId: snapshot.projectId,
           lifecycleStatus: toLifecycleStatus(snapshot.status),
-          currentExecutionMode: snapshot.executionMode ?? null,
+          currentExecutionMode: toStoredTaskExecutionMode(snapshot.executionMode),
           currentSessionId: validatedSessionId,
           latestSessionId: validatedSessionId,
           latestResultSummary: snapshot.result,

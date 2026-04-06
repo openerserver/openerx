@@ -38,6 +38,7 @@ import {
   getProjectRootNodeId,
 } from "../project-tree/storage";
 import { loadTaskTreeRecords } from "../project-tree/task-view";
+import { fromStoredTaskExecutionMode } from "../tasks/task-execution-mode";
 
 export const projectRoutes = new Hono<AppEnv>();
 
@@ -843,9 +844,7 @@ interface OverviewTaskSummary {
   lastActivityAt: string | null;
 }
 
-function mapOverviewLifecycleStatusToTaskStatus(
-  lifecycleStatus: string | null | undefined,
-) {
+function mapOverviewLifecycleStatusToTaskStatus(lifecycleStatus: string | null | undefined) {
   if (lifecycleStatus === "done") {
     return "completed";
   }
@@ -864,13 +863,15 @@ function normalizeOverviewTaskStatus(args: {
   lifecycleStatus?: string | null;
   fallbackStatus?: string | null;
 }) {
-  return args.currentExecutionStatus ?? args.fallbackStatus ?? mapOverviewLifecycleStatusToTaskStatus(args.lifecycleStatus);
+  return (
+    args.currentExecutionStatus ??
+    args.fallbackStatus ??
+    mapOverviewLifecycleStatusToTaskStatus(args.lifecycleStatus)
+  );
 }
 
 function normalizeOverviewExecutionMode(value: string | null | undefined) {
-  return value === "single" || value === "parallel" || value === "sequential-chain"
-    ? value
-    : null;
+  return fromStoredTaskExecutionMode(value);
 }
 
 function parseOverviewParams(c: {
@@ -1096,8 +1097,8 @@ async function loadOverviewDependencies(projectIds: string[]) {
     tasks: allTasks.map((task) => ({
       id: task.id,
       projectId: task.projectId,
-        status: task.status ?? null,
-        lifecycleStatus: task.lifecycleStatus,
+      status: task.status ?? null,
+      lifecycleStatus: task.lifecycleStatus,
       createdAt: task.createdAt,
       startedAt: task.startedAt ?? null,
       finishedAt: task.finishedAt ?? null,
@@ -1105,10 +1106,10 @@ async function loadOverviewDependencies(projectIds: string[]) {
     })),
     snapshots: allTaskSnapshots.map((snapshot) => ({
       taskId: snapshot.taskId,
-        currentExecutionStatus: snapshot.currentExecutionStatus ?? null,
-        lifecycleStatus: snapshot.lifecycleStatus,
+      currentExecutionStatus: snapshot.currentExecutionStatus ?? null,
+      lifecycleStatus: snapshot.lifecycleStatus,
       currentSessionId: snapshot.currentSessionId ?? null,
-        currentExecutionMode: snapshot.currentExecutionMode ?? null,
+      currentExecutionMode: snapshot.currentExecutionMode ?? null,
       lastActivityAt: snapshot.lastActivityAt ?? null,
     })),
   });

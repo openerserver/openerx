@@ -36,7 +36,11 @@ function createTaskSessionRegistrarDeps(overrides: Record<string, unknown> = {})
     listTaskSessions: mock(async () => ({ ok: true, status: 200, data: {} })),
     getTaskSession: mock(async () => ({ ok: true, status: 200, data: {} })),
     buildTaskConversationMessagesResponse: mock(async () => ({ ok: true, status: 200, data: {} })),
-    buildTaskNormalizedConversationQueryResponse: mock(async () => ({ ok: true, status: 200, data: {} })),
+    buildTaskNormalizedConversationQueryResponse: mock(async () => ({
+      ok: true,
+      status: 200,
+      data: {},
+    })),
     buildTaskRawMessageEventViewResponse: mock(async () => ({ ok: true, status: 200, data: {} })),
     buildTaskTreeResponse: mock(async () => ({ ok: true, status: 200, data: {} })),
     buildTaskTimelineResponse: mock(async () => ({ ok: true, status: 200, data: {} })),
@@ -61,7 +65,10 @@ async function setupTaskSessionRegistrar(args: {
   const app = createRouteCollector();
   const { registerTaskSessionRoutes } = await loadTaskSessionRegistrarModule();
 
-  registerTaskSessionRoutes(app as never, createTaskSessionRegistrarDeps(args.depsOverrides) as never);
+  registerTaskSessionRoutes(
+    app as never,
+    createTaskSessionRegistrarDeps(args.depsOverrides) as never,
+  );
 
   return {
     app,
@@ -211,8 +218,14 @@ describe("task session route registrar", () => {
     const rawEventsHandler = getRequiredRouteHandler(app, "GET /:taskId/query/raw-events");
     const treeHandler = getRequiredRouteHandler(app, "GET /:taskId/tree");
     const taskTimelineHandler = getRequiredRouteHandler(app, "GET /:taskId/timeline");
-    const messagesHandler = getRequiredRouteHandler(app, "GET /:taskId/sessions/:sessionId/messages");
-    const timelineHandler = getRequiredRouteHandler(app, "GET /:taskId/sessions/:sessionId/timeline");
+    const messagesHandler = getRequiredRouteHandler(
+      app,
+      "GET /:taskId/sessions/:sessionId/messages",
+    );
+    const timelineHandler = getRequiredRouteHandler(
+      app,
+      "GET /:taskId/sessions/:sessionId/timeline",
+    );
     const traceHandler = getRequiredRouteHandler(app, "GET /:taskId/execution-trace");
 
     const sessionsResponse = await invokeRouteHandler(

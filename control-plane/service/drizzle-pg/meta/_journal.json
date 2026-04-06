@@ -225,6 +225,20 @@
       "when": 1775001420000,
       "tag": "0031_add_operation_id",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1775001480000,
+      "tag": "0032_task_operation_fk_cutover",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1775001540000,
+      "tag": "0033_drop_agent_runs",
+      "breakpoints": true
     }
   ]
 }

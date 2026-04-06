@@ -32,6 +32,10 @@ interface TaskAgentRunPayload {
   finishedAt?: string | null;
 }
 
+interface TaskAgentRunListResponse {
+  data?: TaskAgentRunPayload[];
+}
+
 interface RoleAgentResolutionPayload {
   role?: {
     id: string;
@@ -101,7 +105,9 @@ function normalizeAgentName(value: string | null | undefined) {
 
 function dedupeText(values: Array<string | null | undefined>) {
   return Array.from(
-    new Set(values.map((value) => value?.trim()).filter((value): value is string => Boolean(value))),
+    new Set(
+      values.map((value) => value?.trim()).filter((value): value is string => Boolean(value)),
+    ),
   );
 }
 
@@ -237,7 +243,7 @@ export async function buildTaskMemberViewModel(input: {
 
   const task = taskResult.ok ? taskResult.data : null;
   const projectId = input.projectId ?? task?.projectId ?? null;
-  const [workflowResources, projectMembersResult] = await Promise.all([
+  const [workflowResources, projectMembersResult, agentRunsResult] = await Promise.all([
     fetchTaskWorkflowResources({
       taskId: input.taskId,
       authorization: input.authorization,
@@ -248,6 +254,9 @@ export async function buildTaskMemberViewModel(input: {
           authorization: input.authorization,
         })
       : Promise.resolve({ ok: true, status: 200, data: [] as ProjectMemberPayload[] }),
+    cpFetch<TaskAgentRunListResponse>(`/api/tasks/${encodeURIComponent(input.taskId)}/runs`, {
+      authorization: input.authorization,
+    }),
   ]);
 
   const workflowView = await buildTaskWorkflowViewModel(input.taskId, input.authorization, {
@@ -255,7 +264,10 @@ export async function buildTaskMemberViewModel(input: {
     taskStatus: input.taskStatus ?? task?.status,
     prefetched: workflowResources,
   });
-  const agentRuns: TaskAgentRunPayload[] = [];
+  const agentRuns =
+    agentRunsResult.ok && Array.isArray(agentRunsResult.data?.data)
+      ? agentRunsResult.data.data
+      : [];
   const projectMembers = projectMembersResult.ok ? projectMembersResult.data : [];
 
   const roleStageMap = new Map<string, Set<string>>();
@@ -281,7 +293,9 @@ export async function buildTaskMemberViewModel(input: {
   }
   const stageIdToKey = new Map(
     workflowResources.stages
-      .filter((stage): stage is { id: string; stageKey: string } => Boolean(stage.id && stage.stageKey))
+      .filter((stage): stage is { id: string; stageKey: string } =>
+        Boolean(stage.id && stage.stageKey),
+      )
       .map((stage) => [stage.id, stage.stageKey] as const),
   );
   for (const request of workflowResources.requests) {
@@ -401,7 +415,10 @@ export async function buildTaskMemberViewModel(input: {
         intentSource: "derived",
         responsibilityLabels: [],
         stageLabels: [],
-        capabilityBadges: dedupeText([...(existing?.capabilityBadges ?? []), ...(binding.tags ?? [])]),
+        capabilityBadges: dedupeText([
+          ...(existing?.capabilityBadges ?? []),
+          ...(binding.tags ?? []),
+        ]),
         roleLabels: new Set([...(existing?.roleLabels ?? []), roleName]),
         stageLabelsSet: new Set([...(existing?.stageLabelsSet ?? []), ...stageLabels]),
         validationReasons: new Set([...(existing?.validationReasons ?? []), ...validationReasons]),
@@ -412,8 +429,9 @@ export async function buildTaskMemberViewModel(input: {
   }
 
   const currentStageLabel =
-    workflowView.workflow.stages.find((stage) => stage.stageKey === workflowView.workflow.currentStage)
-      ?.stageLabel || stageLabelFromKey(workflowView.workflow.currentStage);
+    workflowView.workflow.stages.find(
+      (stage) => stage.stageKey === workflowView.workflow.currentStage,
+    )?.stageLabel || stageLabelFromKey(workflowView.workflow.currentStage);
 
   for (const draft of agentDrafts.values()) {
     const roleLabels = Array.from(draft.roleLabels).sort((left, right) =>

@@ -357,7 +357,8 @@ export function buildPreviewFromPatch(
       Array.isArray((patch.patch as Partial<OrchestrationStrategy>).followups)
         ? {
             level: "medium",
-            summary: "本次变更会调整 post-hook follow-up 模板，任务结束后的二次编排链路会发生变化。",
+            summary:
+              "本次变更会调整 post-hook follow-up 模板，任务结束后的二次编排链路会发生变化。",
           }
         : null,
       templateChanges.some((item) => item.beforeMode !== item.afterMode)
@@ -385,13 +386,16 @@ export function buildOrchestrationContext(
     orchestrationVersion:
       context.orchestrationVersion || context.configVersions["orchestration-strategy"],
     categorySummaries: (context.categorySummaries || derivedCategorySummaries).map((item) => {
-      const derived = derivedCategorySummaries.find((summary) => summary.category === item.category);
+      const derived = derivedCategorySummaries.find(
+        (summary) => summary.category === item.category,
+      );
       return {
         ...derived,
         ...item,
         followupEnabledCount: item.followupEnabledCount ?? derived?.followupEnabledCount ?? 0,
         followupTemplateIds: item.followupTemplateIds ?? derived?.followupTemplateIds ?? [],
-        followupSummary: item.followupSummary ?? derived?.followupSummary ?? "未配置 follow-up 模板",
+        followupSummary:
+          item.followupSummary ?? derived?.followupSummary ?? "未配置 follow-up 模板",
       };
     }),
     supportedCategories: context.supportedCategories || [...ORCHESTRATION_CATEGORIES],

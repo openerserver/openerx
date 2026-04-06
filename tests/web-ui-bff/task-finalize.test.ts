@@ -53,7 +53,6 @@ describe("finalizeTaskState", () => {
       authorization: "Bearer test",
       taskId: "task-projection-parallel",
       status: "completed",
-      syncWorkflowTerminalState: false,
       sessionId: "ses-projection-a",
       agentRunId: "run-projection-a",
       result: "projection result",

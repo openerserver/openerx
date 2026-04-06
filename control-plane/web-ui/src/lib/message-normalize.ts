@@ -221,8 +221,10 @@ export function getRealtimeRawType(event: RealtimeEvent): string {
 }
 
 export function getRealtimeInfo(event: RealtimeEvent): Record<string, unknown> | null {
-  return asRecord(event.data.info) ??
-    (event.type === "task.message.updated" ? asRecord(event.data.message) : null);
+  return (
+    asRecord(event.data.info) ??
+    (event.type === "task.message.updated" ? asRecord(event.data.message) : null)
+  );
 }
 
 export function getRealtimePart(event: RealtimeEvent): Record<string, unknown> | null {
@@ -764,9 +766,7 @@ export function normalizeSessionConversationItems(
  * Workflow groups are synthetic items produced by the BFF runtime fallback
  * with `_type: "workflow_group"` and `info.role: "workflow"`.
  */
-export function normalizeWorkflowGroup(
-  message: unknown,
-): TaskConversationWorkflowItem | null {
+export function normalizeWorkflowGroup(message: unknown): TaskConversationWorkflowItem | null {
   const record = asRecord(message);
   if (!record || record._type !== "workflow_group") return null;
 

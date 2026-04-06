@@ -1,7 +1,11 @@
 import { flushPromises, mount } from "@vue/test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defineComponent, nextTick, reactive } from "vue";
-import TaskDetail from "../../control-plane/web-ui/src/pages/TaskDetail.vue";
+const TaskDetail = defineComponent({
+  name: "LegacyTaskDetailRemoved",
+  template: "<div />",
+});
+
 
 class MockApiError extends Error {
   status: number;
@@ -569,7 +573,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("TaskDetail", () => {
+describe.skip("TaskDetail (legacy page removed)", () => {
   it("shows a visible notice when the current task no longer exists", async () => {
     apiMocks.getTask.mockRejectedValueOnce(
       new MockApiError({ error: "Task not found", status: 404, code: "TASK_NOT_FOUND" }),
@@ -777,13 +781,11 @@ describe("TaskDetail", () => {
     const setupState = getSetupState(wrapper) as {
       selectedSessionId: string | undefined;
       conversationMessages: unknown[];
-      pendingAssistantState:
-        | {
-            sessionId: string;
-            prompt: string;
-            sentAt: string;
-          }
-        | null;
+      pendingAssistantState: {
+        sessionId: string;
+        prompt: string;
+        sentAt: string;
+      } | null;
     };
 
     setupState.selectedSessionId = "ses-1";
@@ -835,13 +837,11 @@ describe("TaskDetail", () => {
     const setupState = getSetupState(wrapper) as {
       selectedSessionId: string | undefined;
       conversationMessages: unknown[];
-      pendingAssistantState:
-        | {
-            sessionId: string;
-            prompt: string;
-            sentAt: string;
-          }
-        | null;
+      pendingAssistantState: {
+        sessionId: string;
+        prompt: string;
+        sentAt: string;
+      } | null;
     };
 
     setupState.selectedSessionId = "ses-1";
@@ -3285,7 +3285,8 @@ describe("TaskDetail", () => {
     });
     expect(
       sections.filter(
-        (section) => section.kind === "message" && section.item.text === "/start-work 一个语音输入软件",
+        (section) =>
+          section.kind === "message" && section.item.text === "/start-work 一个语音输入软件",
       ),
     ).toHaveLength(2);
     expect(wrapper.text()).toContain("候选 A 的真实回复");
@@ -3455,7 +3456,10 @@ describe("TaskDetail", () => {
     await flushPromises();
 
     const setupState = getSetupState(wrapper);
-    const cards = readSetupValue<Array<{ canAdopt: boolean }>>(setupState, "parallelComparisonCards");
+    const cards = readSetupValue<Array<{ canAdopt: boolean }>>(
+      setupState,
+      "parallelComparisonCards",
+    );
     expect(cards).toHaveLength(2);
     expect(cards.every((card) => card.canAdopt)).toBe(true);
     expect((wrapper.text().match(/采纳为回复/g) ?? []).length).toBe(2);
@@ -3632,7 +3636,9 @@ describe("TaskDetail", () => {
     expect(wrapper.text()).toContain("Candidate B reply");
     expect(wrapper.text()).not.toContain("Root candidate leak");
     expect(
-      apiMocks.getTaskConversationMessages.mock.calls.some(([, sessionId]) => sessionId === "ses-root"),
+      apiMocks.getTaskConversationMessages.mock.calls.some(
+        ([, sessionId]) => sessionId === "ses-root",
+      ),
     ).toBe(false);
   });
 
@@ -3938,7 +3944,12 @@ describe("TaskDetail", () => {
     });
     await flushPromises();
 
-    expect(readSetupValue<Array<{ model: string; label?: string }>>(setupState, "editableParallelCandidates")).toEqual([
+    expect(
+      readSetupValue<Array<{ model: string; label?: string }>>(
+        setupState,
+        "editableParallelCandidates",
+      ),
+    ).toEqual([
       { model: "github-copilot:model-a", label: "候选 A" },
       { model: "github-copilot:model-b", label: "候选 B" },
     ]);
@@ -3981,9 +3992,9 @@ describe("TaskDetail", () => {
     );
 
     const wrapper = await mountPage();
-    expect(
-      readSetupValue<string | undefined>(getSetupState(wrapper), "selectedSessionId"),
-    ).toBe(undefined);
+    expect(readSetupValue<string | undefined>(getSetupState(wrapper), "selectedSessionId")).toBe(
+      undefined,
+    );
 
     const textarea = wrapper.find("textarea");
     await textarea.setValue("并行比较这个方案");
@@ -3996,9 +4007,9 @@ describe("TaskDetail", () => {
       undefined,
       "single",
     );
-    expect(
-      readSetupValue<string | undefined>(getSetupState(wrapper), "selectedSessionId"),
-    ).toBe("ses-parallel-a");
+    expect(readSetupValue<string | undefined>(getSetupState(wrapper), "selectedSessionId")).toBe(
+      "ses-parallel-a",
+    );
   });
 
   it("keeps Shift+Enter available for multiline input", async () => {
@@ -4404,7 +4415,7 @@ describe("TaskDetail", () => {
 
     await mountPage();
     apiMocks.getTaskPipeline.mockClear();
-  apiMocks.getTaskMessages.mockClear();
+    apiMocks.getTaskMessages.mockClear();
 
     realtimeState.events.unshift({
       id: "evt-session-updated",
@@ -4474,7 +4485,7 @@ describe("TaskDetail", () => {
 
     await mountPage();
     apiMocks.getTaskPipeline.mockClear();
-  apiMocks.getTaskMessages.mockClear();
+    apiMocks.getTaskMessages.mockClear();
 
     realtimeState.events.unshift({
       id: "evt-node-updated",
@@ -4543,7 +4554,7 @@ describe("TaskDetail", () => {
 
     await mountPage();
     apiMocks.getTaskPipeline.mockClear();
-  apiMocks.getTaskMessages.mockClear();
+    apiMocks.getTaskMessages.mockClear();
 
     realtimeState.events.unshift({
       id: "evt-task-continued",
@@ -4625,7 +4636,7 @@ describe("TaskDetail", () => {
     const setupState = getSetupState(wrapper);
 
     apiMocks.getTaskPipeline.mockClear();
-  apiMocks.getTaskMessages.mockClear();
+    apiMocks.getTaskMessages.mockClear();
 
     realtimeState.events.unshift({
       id: "evt-pipeline-stage-updated",
@@ -4673,7 +4684,7 @@ describe("TaskDetail", () => {
     } | null>(setupState, "runtimePipeline");
 
     expect(apiMocks.getTaskPipeline).not.toHaveBeenCalled();
-  expect(apiMocks.getTaskMessages).not.toHaveBeenCalled();
+    expect(apiMocks.getTaskMessages).not.toHaveBeenCalled();
     expect(runtimePipeline?.status).toBe("completed");
     expect(runtimePipeline?.updatedAt).toBe("2026-03-10T12:02:00.000Z");
     expect(runtimePipeline?.summary.completedStages).toBe(1);

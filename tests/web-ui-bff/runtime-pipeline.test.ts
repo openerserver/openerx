@@ -38,6 +38,7 @@ const recoverAgentRunMock = mock(() => undefined);
 
 function buildOpencodeAdapterMock() {
   return {
+    buildExecutionContext: mock(() => ""),
     continueSession: mock(async () => ({ ok: true })),
     createSession: mock(async () => ({ ok: true, sessionId: "session-1", agentRunId: "run-1" })),
     ensureAgentRunForSession: mock(() => "run-1"),
@@ -288,7 +289,9 @@ describe("buildRuntimePipeline", () => {
         return {
           ok: true,
           data: {
-            data: [{ id: "ts-root", runtimeSessionId: "ses-root", branchName: "main", isActive: true }],
+            data: [
+              { id: "ts-root", runtimeSessionId: "ses-root", branchName: "main", isActive: true },
+            ],
           },
         };
       }
@@ -373,11 +376,7 @@ describe("buildRuntimePipeline", () => {
     expect(pipeline.sessionId).toBe("ses-root");
     expect(pipeline.branchName).toBe("main");
     expect(pipeline.status).toBe("running");
-    expect(pipeline.stages.map((stage) => stage.type)).toEqual([
-      "hook",
-      "post-hook",
-      "follow-up",
-    ]);
+    expect(pipeline.stages.map((stage) => stage.type)).toEqual(["hook", "post-hook", "follow-up"]);
     expect(pipeline.stages.some((stage) => stage.type === "execution")).toBe(false);
     expect(pipeline.stages.some((stage) => stage.type === "judge")).toBe(false);
     expect(pipeline.summary).toMatchObject({
@@ -534,6 +533,4 @@ describe("buildRuntimePipeline", () => {
       currentStageId: null,
     });
   });
-
-  
 });

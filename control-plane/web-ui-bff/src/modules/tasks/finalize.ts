@@ -24,7 +24,6 @@ interface FinalizeTaskStateInput {
   agentRunId?: string;
   result?: string;
   task?: FinalizableTaskRecord;
-  syncWorkflowTerminalState?: boolean;
 }
 
 async function deactivateActiveTaskSession(
@@ -95,10 +94,6 @@ export async function finalizeTaskState(input: FinalizeTaskStateInput): Promise<
     return false;
   }
 
-  await deactivateActiveTaskSession(
-    input.authorization,
-    input.taskId,
-    resolvedSessionId,
-  );
+  await deactivateActiveTaskSession(input.authorization, input.taskId, resolvedSessionId);
   return true;
 }

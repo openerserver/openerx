@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import * as strategyModule from "../../control-plane/web-ui-bff/src/lib/orchestration-strategy";
-import { createOpencodeAdapterModuleMock } from "./opencode-adapter-mock";
+import {
+  createOpencodeAdapterModuleMock,
+  createRuntimeProviderModuleMock,
+} from "./opencode-adapter-mock";
 
 const cpFetchMock = mock(async (..._args: unknown[]) => ({ ok: true, status: 200, data: {} }));
 const authHeaderMock = mock(() => "Bearer test");
@@ -47,25 +50,32 @@ mock.module("../../control-plane/web-ui-bff/src/lib/orchestration-strategy", () 
   }),
 }));
 
-mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter", () =>
-  createOpencodeAdapterModuleMock({
-    createSession: mock(async () => ({
-      ok: true,
-      sessionId: "exec-ses",
-      agentRunId: "run-judge",
-    })),
-    extractAssistantResultFromMessages: mock(() => ({
-      completed: true,
-      failed: false,
-      tokenUsed: 0,
-      text: "",
-    })),
-    findAgentRunBySessionId: mock(() => undefined),
-    getSessionMessages: mock(async () => ({ ok: true, data: [] })),
-    runDetachedPrompt: runDetachedPromptMock,
-    terminateAgent: mock(async () => ({ ok: true })),
-    updateAgentRunStatus: mock(() => undefined),
-  }),
+const opencodeAdapterModule = createOpencodeAdapterModuleMock({
+  createSession: mock(async () => ({
+    ok: true,
+    sessionId: "exec-ses",
+    agentRunId: "run-judge",
+  })),
+  extractAssistantResultFromMessages: mock(() => ({
+    completed: true,
+    failed: false,
+    tokenUsed: 0,
+    text: "",
+  })),
+  findAgentRunBySessionId: mock(() => undefined),
+  getSessionMessages: mock(async () => ({ ok: true, data: [] })),
+  runDetachedPrompt: runDetachedPromptMock,
+  terminateAgent: mock(async () => ({ ok: true })),
+  updateAgentRunStatus: mock(() => undefined),
+});
+
+mock.module(
+  "../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter",
+  () => opencodeAdapterModule,
+);
+
+mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/runtime-provider", () =>
+  createRuntimeProviderModuleMock(opencodeAdapterModule),
 );
 
 mock.module("../../control-plane/web-ui-bff/src/modules/code-changes/change-collector", () => ({

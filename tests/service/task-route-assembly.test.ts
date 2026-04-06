@@ -70,7 +70,7 @@ describe("task route registration assembly", () => {
     expect(buildProjections).toHaveBeenCalledWith(shared);
     expect(registrations).toEqual({
       core: { ...core, shared },
-      agentRunWrites: { ...agentRunWrites, shared },
+      agentRuns: { ...agentRunWrites, shared },
       sessions: { ...sessions, shared },
       projections: { ...projections, shared },
     });
@@ -82,13 +82,16 @@ describe("task route module assembly", () => {
     const taskRoutes = createRouteCollector();
     const registrations = {
       core: { scope: "core" },
-      agentRunWrites: { scope: "agent-run-writes" },
+      agentRuns: { scope: "agent-run-writes" },
       sessions: { scope: "sessions" },
       projections: { scope: "projections" },
     };
     const callLog: Array<[string, unknown, unknown]> = [];
 
     const buildRegistrations = mock(() => registrations);
+    const registerAgentRunReads = mock((routes: unknown) => {
+      callLog.push(["agentRunReads", routes, undefined]);
+    });
     const registerCore = mock((routes: unknown, deps: unknown) => {
       callLog.push(["core", routes, deps]);
     });
@@ -108,6 +111,9 @@ describe("task route module assembly", () => {
     mock.module("../../control-plane/service/src/modules/tasks/task-core-routes", () => ({
       registerTaskCoreRoutes: registerCore,
     }));
+    mock.module("../../control-plane/service/src/modules/tasks/task-agent-run-read-routes", () => ({
+      registerTaskAgentRunReadRoutes: registerAgentRunReads,
+    }));
     mock.module(
       "../../control-plane/service/src/modules/tasks/task-agent-run-write-routes",
       () => ({
@@ -126,8 +132,9 @@ describe("task route module assembly", () => {
 
     expect(buildRegistrations).toHaveBeenCalledTimes(1);
     expect(callLog).toEqual([
+      ["agentRunReads", taskRoutes, undefined],
+      ["agentRunWrites", taskRoutes, registrations.agentRuns],
       ["core", taskRoutes, registrations.core],
-      ["agentRunWrites", taskRoutes, registrations.agentRunWrites],
       ["sessions", taskRoutes, registrations.sessions],
       ["projections", taskRoutes, registrations.projections],
     ]);

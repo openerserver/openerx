@@ -3,6 +3,8 @@
 > 状态说明：本文档是历史对比/差距分析，不再代表当前实现状态。
 >
 > 其中关于 `task-graph-plugin`、graph API、`task_nodes` / `task_edges` 数据模型的差距描述已被后续清理工作覆盖。当前实现状态请以 [docs/dag-node-execution-plan-v2.md](docs/dag-node-execution-plan-v2.md) 和现行 schema / migration 为准。
+>
+> 历史口径说明（2026-04-05）：本文成稿早于 session-first cutover 与 `0033_drop_agent_runs.sql`。当前 schema 已删除 `agent_runs` 物理表；对外保留的 `agentRunId` 兼容语义由 `task_operations`、`task_session_runs`、`task_sessions` 等 canonical task-domain 表投影提供。因此，后文凡把 `agent_runs` 写成现行主表或仍在推进中的运行时事实表，均应按历史方案理解。
 
 ## 0. 审核修订说明（2026-03-09）
 

@@ -4,11 +4,7 @@ function escapeSqlLiteral(value: string) {
 
 export type DbCleanupExecutor = (query: string, params: unknown[]) => Promise<void> | void;
 
-export function buildDeleteByIdsStatements(
-  table: string,
-  ids: string[],
-  column = "id",
-) {
+export function buildDeleteByIdsStatements(table: string, ids: string[], column = "id") {
   return ids.map((id) => `DELETE FROM ${table} WHERE ${column}=${escapeSqlLiteral(id)};`);
 }
 
@@ -43,10 +39,7 @@ export function buildTaskProjectionCleanupStatements(taskIds: string[]) {
   ];
 }
 
-export async function runTaskProjectionCleanup(
-  execute: DbCleanupExecutor,
-  taskIds: string[],
-) {
+export async function runTaskProjectionCleanup(execute: DbCleanupExecutor, taskIds: string[]) {
   await runDeleteByTaskIds(execute, "task_timeline_views", taskIds);
   await runDeleteByTaskIds(execute, "task_snapshots", taskIds);
   await runDeleteByTaskIds(execute, "task_domain_events", taskIds);
@@ -63,17 +56,14 @@ export function buildTaskNodeDefensiveCleanupStatements(taskIds: string[]) {
   ];
 }
 
-export async function runTaskNodeDefensiveCleanup(
-  execute: DbCleanupExecutor,
-  taskIds: string[],
-) {
+export async function runTaskNodeDefensiveCleanup(execute: DbCleanupExecutor, taskIds: string[]) {
   await runDeleteByIds(execute, "tasks", taskIds, "tree_node_id");
 
   for (const id of taskIds) {
-    await execute(
-      "DELETE FROM project_tree_branches WHERE task_node_id = ? OR head_node_id = ?",
-      [id, id],
-    );
+    await execute("DELETE FROM project_tree_branches WHERE task_node_id = ? OR head_node_id = ?", [
+      id,
+      id,
+    ]);
   }
 
   await runDeleteByIds(execute, "project_tree_nodes", taskIds);

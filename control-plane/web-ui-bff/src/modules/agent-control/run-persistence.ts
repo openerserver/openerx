@@ -114,13 +114,58 @@ interface ModelUsageRecord {
 }
 
 export async function createAgentRunRecord(input: CreateAgentRunRecordInput): Promise<void> {
-  // Agent runs persistence to control-plane is no longer available after agent_runs table removal
-  // Run state is now only maintained in BFF runtime memory
+  const authorization = await createInternalAuthorization();
+  const response = await cpFetch(`/api/tasks/${encodeURIComponent(input.taskId)}/runs`, {
+    method: "POST",
+    authorization,
+    body: {
+      id: input.agentRunId,
+      sessionId: input.sessionId,
+      agentType: input.agentType,
+      status: input.status,
+      modelUsed: toModelUsed(input.model),
+      candidateIndex: input.candidateIndex,
+      startedAt: input.startedAt,
+      finishedAt: input.finishedAt,
+      tokenUsed: input.tokenUsed,
+      result: input.result,
+      error: input.error,
+    },
+  });
+
+  if (!response.ok) {
+    console.warn(
+      `[agent-run-persistence] failed to create agent run ${input.agentRunId} for task ${input.taskId}:`,
+      response.data,
+    );
+  }
 }
 
 export async function patchAgentRunRecord(input: PatchAgentRunRecordInput): Promise<void> {
-  // Agent runs persistence to control-plane is no longer available after agent_runs table removal
-  // Run state is now only maintained in BFF runtime memory
+  const authorization = await createInternalAuthorization();
+  const response = await cpFetch(
+    `/api/tasks/${encodeURIComponent(input.taskId)}/runs/${encodeURIComponent(input.agentRunId)}`,
+    {
+      method: "PATCH",
+      authorization,
+      body: {
+        status: input.status,
+        modelUsed: toModelUsed(input.model),
+        startedAt: input.startedAt,
+        finishedAt: input.finishedAt,
+        tokenUsed: input.tokenUsed,
+        result: input.result,
+        error: input.error,
+      },
+    },
+  );
+
+  if (!response.ok) {
+    console.warn(
+      `[agent-run-persistence] failed to patch agent run ${input.agentRunId} for task ${input.taskId}:`,
+      response.data,
+    );
+  }
 }
 
 export async function recordAgentAudit(input: RecordAgentAuditInput): Promise<void> {

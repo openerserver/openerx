@@ -3,13 +3,17 @@
 > 状态：Draft v2  
 > 日期：2026-03-28  
 > 作者：GitHub Copilot
-> 补充建议：当前仓库的目录级和文件级动作清单，以及对现有 `task_sessions` / `task_messages` / `session_operations` 等表的收敛建议，见 [task-runtime-rewrite-operation-checklist.md](task-runtime-rewrite-operation-checklist.md)。
+> 补充建议：当前仓库的目录级和文件级动作清单，以及对现有 `task_sessions` / `task_messages` / `task_operations` 等表的收敛建议，见 [task-runtime-rewrite-operation-checklist.md](task-runtime-rewrite-operation-checklist.md)。
+>
+> 口径更新：当前实现已将新模型中的低层调用事实正式收口到 `task_operations`。本文中历史性的 `session_operations` 表述，除非明确讨论 legacy backfill / 旧迁移兼容，否则都应按 `task_operations` 理解。
+>
+> 历史口径说明（2026-04-05）：本文仍以删除前的 `agent_runs` 现状作为重构出发点，但当前 schema 已删除 `agent_runs` 物理表。阅读本文时，凡涉及“替代当前 `agent_runs`”的表述，都应理解为历史迁移背景；现行兼容 `agentRunId` 语义已由 canonical task-domain 表投影承接。
 
 ## 1. 文档目的
 
 这份文档只回答一件事：
 
-在确认采用 `task → sessions` 模型之后，核心 domain 应收敛为 `tasks`、`task_sessions`、`task_session_messages`、`task_session_message_parts`、`session_operations` 这五张核心事实表，`task_artifacts`、`task_usage_ledger_entries` 这两张支撑事实表，以及 `task_snapshots`、`task_timeline_views` 这两张可重建读模型，应该如何重新设计。
+在确认采用 `task → sessions` 模型之后，核心 domain 应收敛为 `tasks`、`task_sessions`、`task_session_messages`、`task_session_message_parts`、`task_operations` 这五张核心事实表，`task_artifacts`、`task_usage_ledger_entries` 这两张支撑事实表，以及 `task_snapshots`、`task_timeline_views` 这两张可重建读模型，应该如何重新设计。
 
 本文中的 `task`、`session` 明确指向 **用户手动操作域**：
 
@@ -40,7 +44,7 @@
 2. `task_sessions`：唯一执行事实；一个 task 由多个 session 完成
 3. `task_session_messages`：session 下的消息流事实表
 4. `task_session_message_parts`：消息结构化片段事实表
-5. `session_operations`：session 下的低层执行事实表，替代当前 `agent_runs`
+5. `task_operations`：session 下的低层执行事实表，对应替代历史上的 `agent_runs` 兼容层
 6. `task_artifacts`：task / session / message / operation 产出的正式输出事实表
 7. `task_usage_ledger_entries`：成本、配额、核算使用的 append-only usage ledger
 8. `task_snapshots`：任务级可重建读模型，不属于事实主存储
@@ -88,7 +92,7 @@
 
 ### 3.2 为什么不用 `session_executions`
 
-不采用 `session_executions`，改用 `session_operations`，原因如下：
+不采用 `session_executions`，改用 `task_operations`，原因如下：
 
 1. 在新模型里，session 自身已经是最小执行单元，`session_executions` 容易被误解为“session 下面又套了一层 session 级执行”
 2. 这张表记录的是 session 内发生过哪些低层执行动作，例如 executor 调用、judge 调用、hook 调用、resume 调用，本质更接近 operation log
@@ -103,7 +107,7 @@ flowchart TD
   S[task_sessions]
   M[task_session_messages]
   MP[task_session_message_parts]
-  O[session_operations]
+  O[task_operations]
   A[task_artifacts]
   U[task_usage_ledger_entries]
   P[task_snapshots]
@@ -350,7 +354,7 @@ flowchart TD
 
 1. `tasks.stage_key`：正式字段，表示该 task 的阶段归属 / workflow 规则上下文
 2. `task_sessions`：不再保留 `stage_key` 列
-3. `session_operations.metadata_json.stage_key`：如有需要，只允许作为从 `tasks.stage_key` 派生出来的复制上下文字段，用于审计、日志、hook / judge 决策记录
+3. `task_operations.summary_json.stage_key`：如有需要，只允许作为从 `tasks.stage_key` 派生出来的复制上下文字段，用于审计、日志、hook / judge 决策记录
 
 这意味着 `stage_key` 与 task 生命周期触发模型的配合应固定为：
 
@@ -527,13 +531,13 @@ flowchart TD
 6. 关键引用优先由数据库约束，而不是只靠应用代码保持一致性
 7. 本次按替换式重建执行，不保留 `task_runs` 体系兼容读写
 8. `tasks` 只保留业务生命周期状态，不再承载执行状态
-9. 执行状态只允许出现在 `task_sessions`、`session_operations` 以及它们的 projection 中
+9. 执行状态只允许出现在 `task_sessions`、`task_operations` 以及它们的 projection 中
 10. 完整消息正文只能落在消息表，不允许回写进 `task_sessions`
 11. `tasks` 只保留生命周期时间字段，不再保留执行时间字段或 session 反向指针
 12. 系统只支持 state-derived timeline，不支持基于事件流的完整历史回放
 13. `task_timeline_views` 是可重建 timeline projection，只负责高频读取，不补回事件流语义
 14. 任何需要被引用、下载、预览、比较或二次消费的输出，都必须进入 `task_artifacts`
-15. 成本 / 配额 / 账务事实只能以 `task_usage_ledger_entries` 为准；`task_sessions`、`session_operations` 上的 token / cost 字段只保留聚合快照
+15. 成本 / 配额 / 账务事实只能以 `task_usage_ledger_entries` 为准；`task_sessions`、`task_operations` 上的 token / cost 字段只保留聚合快照
 16. `tasks` 可以保留少量任务级交付结论字段，例如最终提交 commit / branch；但结构化变更摘要应进入 `task_artifacts`
 17. `workflow` 是静态规则域，不并入 `task / session` 主模型
 18. `task / session` 上保留的 workflow 相关字段只用于桥接来源、阶段或上下文，不用于承载独立流程实例、当前节点或全局进度
@@ -1123,246 +1127,159 @@ CREATE INDEX idx_task_sessions_parent_session_id
 
 这些字段都属于 task 级业务上下文，不属于 session 级执行事实。
 
-### 7.5 `task_session_messages`
+### 7.5 `task_messages`
 
 ```sql
-CREATE TABLE task_session_messages (
-  id                  text PRIMARY KEY,
-  session_id          text NOT NULL,
-  task_id             text NOT NULL,
-  project_id          text NOT NULL,
+CREATE TABLE task_messages (
+  id                   text PRIMARY KEY,
+  task_id              text NOT NULL REFERENCES tasks(id),
+  session_id           text NOT NULL REFERENCES task_sessions(id),
+  created_by_run_id    text REFERENCES task_session_runs(id),
+  reply_to_message_id  text REFERENCES task_messages(id),
 
-  runtime_message_id  text,
-  role                task_session_message_role NOT NULL,
-  message_index       integer NOT NULL,
+  role                 text NOT NULL,
+  runtime_message_id   text,
+  client_message_id    text,
+  provider_message_id  text,
+  seq                  integer NOT NULL,
 
-  text_content        text,
-  summary_text        text,
-  raw_payload         jsonb NOT NULL DEFAULT '{}'::jsonb,
-  token_used          bigint,
+  text_content         text,
+  text_preview         text,
+  raw_payload          jsonb NOT NULL DEFAULT '{}'::jsonb,
+  part_count           integer NOT NULL DEFAULT 0,
+  token_used           bigint NOT NULL DEFAULT 0,
+  status               text NOT NULL DEFAULT 'streaming',
+  error_text           text,
 
-  started_at          timestamptz,
-  completed_at        timestamptz,
-  created_at          timestamptz NOT NULL DEFAULT now(),
-  updated_at          timestamptz NOT NULL DEFAULT now(),
-
-  CONSTRAINT fk_task_session_messages_task
-    FOREIGN KEY (task_id, project_id)
-    REFERENCES tasks(id, project_id)
-    ON DELETE CASCADE,
-
-  CONSTRAINT fk_task_session_messages_session
-    FOREIGN KEY (task_id, session_id)
-    REFERENCES task_sessions(task_id, id)
-    ON DELETE CASCADE,
-
-  CONSTRAINT uq_task_session_messages_session_index
-    UNIQUE (session_id, message_index),
-
-  CONSTRAINT chk_task_session_messages_message_index_nonnegative
-    CHECK (message_index >= 0),
-
-  CONSTRAINT chk_task_session_messages_token_used_nonnegative
-    CHECK (token_used IS NULL OR token_used >= 0),
-
-  CONSTRAINT chk_task_session_messages_time_order
-    CHECK (
-      completed_at IS NULL OR started_at IS NULL OR completed_at >= started_at
-    ),
-
-  CONSTRAINT chk_task_session_messages_payload_or_text
-    CHECK (
-      raw_payload <> '{}'::jsonb OR text_content IS NOT NULL OR summary_text IS NOT NULL
-    )
+  started_at           text,
+  created_at           text NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at           text NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  completed_at         text
 );
 
-CREATE UNIQUE INDEX uq_task_session_messages_runtime_message_id
-  ON task_session_messages (session_id, runtime_message_id)
-  WHERE runtime_message_id IS NOT NULL;
+CREATE UNIQUE INDEX idx_task_messages_session_seq
+  ON task_messages (session_id, seq);
 
-CREATE INDEX idx_task_session_messages_task_created_at
-  ON task_session_messages (task_id, created_at DESC);
+CREATE UNIQUE INDEX idx_task_messages_session_id_id
+  ON task_messages (session_id, id);
 
-CREATE INDEX idx_task_session_messages_session_created_at
-  ON task_session_messages (session_id, created_at DESC);
+CREATE UNIQUE INDEX idx_task_messages_session_runtime_message_id
+  ON task_messages (session_id, runtime_message_id);
 
-CREATE INDEX idx_task_session_messages_session_role_created_at
-  ON task_session_messages (session_id, role, created_at DESC);
+CREATE UNIQUE INDEX idx_task_messages_session_client_message_id
+  ON task_messages (session_id, client_message_id);
+
+CREATE INDEX idx_task_messages_task_created_at
+  ON task_messages (task_id, created_at);
+
+CREATE INDEX idx_task_messages_session_created_at
+  ON task_messages (session_id, created_at);
+
+CREATE INDEX idx_task_messages_session_role_created_at
+  ON task_messages (session_id, role, created_at);
+
+CREATE INDEX idx_task_messages_created_by_run_id
+  ON task_messages (created_by_run_id);
 
 ALTER TABLE task_sessions
   ADD CONSTRAINT fk_task_sessions_forked_from_message
   FOREIGN KEY (forked_from_message_id)
-  REFERENCES task_session_messages(id)
+  REFERENCES task_messages(id)
   DEFERRABLE INITIALLY DEFERRED;
 ```
 
-### 7.6 `task_session_message_parts`
+### 7.6 `task_message_parts`
 
 ```sql
-CREATE TABLE task_session_message_parts (
-  id                  text PRIMARY KEY,
-  message_id          text NOT NULL,
-  part_index          integer NOT NULL,
-  part_type           task_session_message_part_type NOT NULL,
-
-  text_content        text,
-  json_payload        jsonb NOT NULL DEFAULT '{}'::jsonb,
-  created_at          timestamptz NOT NULL DEFAULT now(),
-
-  CONSTRAINT fk_task_session_message_parts_message
-    FOREIGN KEY (message_id)
-    REFERENCES task_session_messages(id)
-    ON DELETE CASCADE,
-
-  CONSTRAINT uq_task_session_message_parts_message_index
-    UNIQUE (message_id, part_index),
-
-  CONSTRAINT chk_task_session_message_parts_index_nonnegative
-    CHECK (part_index >= 0),
-
-  CONSTRAINT chk_task_session_message_parts_payload_or_text
-    CHECK (
-      json_payload <> '{}'::jsonb OR text_content IS NOT NULL
-    )
+CREATE TABLE task_message_parts (
+  id            text PRIMARY KEY,
+  message_id    text NOT NULL REFERENCES task_messages(id),
+  part_index    integer NOT NULL,
+  part_type     text NOT NULL,
+  text_content  text,
+  json_payload  jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at    text NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_task_session_message_parts_message_id
-  ON task_session_message_parts (message_id);
+CREATE UNIQUE INDEX idx_task_message_parts_message_part_index
+  ON task_message_parts (message_id, part_index);
 
-CREATE INDEX idx_task_session_message_parts_message_part_type
-  ON task_session_message_parts (message_id, part_type, part_index);
+CREATE INDEX idx_task_message_parts_message_id
+  ON task_message_parts (message_id);
 ```
 
-### 7.7 `session_operations`
+### 7.7 `task_operations`
 
 ```sql
-CREATE TABLE session_operations (
-  id                  text PRIMARY KEY,
-  session_id          text NOT NULL,
-  task_id             text NOT NULL,
-  project_id          text NOT NULL,
+CREATE TABLE task_operations (
+  id                   text PRIMARY KEY,
+  task_id              text NOT NULL REFERENCES tasks(id),
+  session_id           text NOT NULL REFERENCES task_sessions(id),
+  run_id               text NOT NULL REFERENCES task_session_runs(id),
+  message_id           text REFERENCES task_messages(id),
+  parent_operation_id  text REFERENCES task_operations(id),
 
   runtime_operation_id text,
-  operation_index      integer NOT NULL DEFAULT 0,
-  operation_kind       session_operation_kind NOT NULL,
-  executor_key         text NOT NULL,
-  executor_label       text,
+  operation_index      integer NOT NULL,
+  operation_kind       text NOT NULL,
+  tool_name            text,
+  title                text,
+  status               text NOT NULL DEFAULT 'running',
+  summary_json         jsonb NOT NULL DEFAULT '{}'::jsonb,
 
-  provider_id          text,
-  model_id             text,
-  execution_status     execution_status NOT NULL DEFAULT 'running',
-
-  input_tokens         bigint NOT NULL DEFAULT 0,
-  output_tokens        bigint NOT NULL DEFAULT 0,
-  total_tokens         bigint GENERATED ALWAYS AS (input_tokens + output_tokens) STORED,
-  cost_usd             numeric(20, 6) NOT NULL DEFAULT 0,
-
-  output_text          text,
-  error_text           text,
-  metadata_json        jsonb NOT NULL DEFAULT '{}'::jsonb,
-
-  started_at           timestamptz,
-  finished_at          timestamptz,
-  created_at           timestamptz NOT NULL DEFAULT now(),
-  updated_at           timestamptz NOT NULL DEFAULT now(),
-
-  CONSTRAINT fk_session_operations_task
-    FOREIGN KEY (task_id, project_id)
-    REFERENCES tasks(id, project_id)
-    ON DELETE CASCADE,
-
-  CONSTRAINT fk_session_operations_session
-    FOREIGN KEY (task_id, session_id)
-    REFERENCES task_sessions(task_id, id)
-    ON DELETE CASCADE,
-
-  CONSTRAINT uq_session_operations_session_index
-    UNIQUE (session_id, operation_index),
-
-  CONSTRAINT chk_session_operations_executor_key_nonempty
-    CHECK (length(btrim(executor_key)) > 0),
-
-  CONSTRAINT chk_session_operations_cost_nonnegative
-    CHECK (cost_usd >= 0),
-
-  CONSTRAINT chk_session_operations_tokens_nonnegative
-    CHECK (input_tokens >= 0 AND output_tokens >= 0),
-
-  CONSTRAINT chk_session_operations_time_order
-    CHECK (
-      finished_at IS NULL OR started_at IS NULL OR finished_at >= started_at
-    )
+  started_at           text,
+  finished_at          text,
+  created_at           text NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at           text NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE UNIQUE INDEX uq_session_operations_runtime_operation_id
-  ON session_operations (runtime_operation_id)
-  WHERE runtime_operation_id IS NOT NULL;
+CREATE UNIQUE INDEX idx_task_operations_run_operation_index
+  ON task_operations (run_id, operation_index);
 
-CREATE INDEX idx_session_operations_task_created_at
-  ON session_operations (task_id, created_at DESC);
+CREATE UNIQUE INDEX idx_task_operations_runtime_operation_id
+  ON task_operations (runtime_operation_id);
 
-CREATE INDEX idx_session_operations_session_created_at
-  ON session_operations (session_id, created_at DESC);
+CREATE INDEX idx_task_operations_task_created_at
+  ON task_operations (task_id, created_at);
 
-CREATE INDEX idx_session_operations_session_execution_status
-  ON session_operations (session_id, execution_status, created_at DESC);
+CREATE INDEX idx_task_operations_session_created_at
+  ON task_operations (session_id, created_at);
 
-CREATE INDEX idx_session_operations_executor_key
-  ON session_operations (executor_key, created_at DESC);
+CREATE INDEX idx_task_operations_message_id
+  ON task_operations (message_id);
+
+CREATE INDEX idx_task_operations_parent_operation_id
+  ON task_operations (parent_operation_id);
 ```
 
 ### 7.8 `task_snapshots`
 
 ```sql
 CREATE TABLE task_snapshots (
-  task_id                    text PRIMARY KEY,
-  project_id                 text NOT NULL,
+  task_id                   text PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+  project_id                text NOT NULL REFERENCES projects(id),
 
-  lifecycle_status           task_lifecycle_status NOT NULL,
-  current_execution_mode     task_session_mode,
-  current_execution_status   execution_status,
-  current_session_id         text,
-  latest_session_id          text,
-  latest_result_summary      text,
-  latest_error_text          text,
+  lifecycle_status          text NOT NULL,
+  current_execution_mode    text,
+  current_execution_status  text,
+  current_session_id        text,
+  latest_session_id         text,
+  latest_result_summary     text,
+  latest_error_text         text,
 
-  active_candidate_count     integer NOT NULL DEFAULT 0,
-  total_chain_steps          integer NOT NULL DEFAULT 0,
-  completed_chain_steps      integer NOT NULL DEFAULT 0,
+  active_candidate_count    integer NOT NULL DEFAULT 0,
+  total_chain_steps         integer NOT NULL DEFAULT 0,
+  completed_chain_steps     integer NOT NULL DEFAULT 0,
 
-  last_activity_at           timestamptz NOT NULL DEFAULT now(),
-  updated_at                 timestamptz NOT NULL DEFAULT now(),
-
-  CONSTRAINT fk_task_snapshots_task
-    FOREIGN KEY (task_id, project_id)
-    REFERENCES tasks(id, project_id)
-    ON DELETE CASCADE,
-
-  CONSTRAINT fk_task_snapshots_current_session
-    FOREIGN KEY (task_id, current_session_id)
-    REFERENCES task_sessions(task_id, id)
-    DEFERRABLE INITIALLY DEFERRED,
-
-  CONSTRAINT fk_task_snapshots_latest_session
-    FOREIGN KEY (task_id, latest_session_id)
-    REFERENCES task_sessions(task_id, id)
-    DEFERRABLE INITIALLY DEFERRED,
-
-  CONSTRAINT chk_task_snapshots_candidate_count_nonnegative
-    CHECK (active_candidate_count >= 0),
-
-  CONSTRAINT chk_task_snapshots_chain_steps_nonnegative
-    CHECK (total_chain_steps >= 0 AND completed_chain_steps >= 0),
-
-  CONSTRAINT chk_task_snapshots_chain_steps_order
-    CHECK (completed_chain_steps <= total_chain_steps)
+  last_activity_at          text NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at                text NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX idx_task_snapshots_project_lifecycle_execution_activity
-  ON task_snapshots (project_id, lifecycle_status, current_execution_status, last_activity_at DESC);
+  ON task_snapshots (project_id, lifecycle_status, current_execution_status, last_activity_at);
 
 CREATE INDEX idx_task_snapshots_project_updated_at
-  ON task_snapshots (project_id, updated_at DESC);
+  ON task_snapshots (project_id, updated_at);
 
 CREATE INDEX idx_task_snapshots_current_session_id
   ON task_snapshots (current_session_id);
@@ -1376,15 +1293,15 @@ CREATE INDEX idx_task_snapshots_latest_session_id
 ```sql
 CREATE TABLE task_artifacts (
   id                  text PRIMARY KEY,
-  task_id             text NOT NULL,
-  project_id          text NOT NULL,
-  session_id          text,
-  message_id          text REFERENCES task_session_messages(id),
-  operation_id        text REFERENCES session_operations(id),
-  parent_artifact_id  text REFERENCES task_artifacts(id) ON DELETE CASCADE,
+  task_id             text NOT NULL REFERENCES tasks(id),
+  project_id          text NOT NULL REFERENCES projects(id),
+  session_id          text REFERENCES task_sessions(id),
+  message_id          text REFERENCES task_messages(id),
+  operation_id        text REFERENCES task_operations(id),
+  parent_artifact_id  text REFERENCES task_artifacts(id),
 
-  artifact_kind       task_artifact_kind NOT NULL,
-  storage_kind        task_artifact_storage_kind NOT NULL DEFAULT 'inline',
+  artifact_kind       text NOT NULL,
+  storage_kind        text NOT NULL DEFAULT 'inline',
   title               text,
   mime_type           text,
   file_path           text,
@@ -1395,45 +1312,15 @@ CREATE TABLE task_artifacts (
   byte_size           bigint,
   sha256              text,
 
-  created_at          timestamptz NOT NULL DEFAULT now(),
-  updated_at          timestamptz NOT NULL DEFAULT now(),
-
-  CONSTRAINT fk_task_artifacts_task
-    FOREIGN KEY (task_id, project_id)
-    REFERENCES tasks(id, project_id)
-    ON DELETE CASCADE,
-
-  CONSTRAINT fk_task_artifacts_session
-    FOREIGN KEY (task_id, session_id)
-    REFERENCES task_sessions(task_id, id)
-    ON DELETE CASCADE,
-
-  CONSTRAINT chk_task_artifacts_byte_size_nonnegative
-    CHECK (byte_size IS NULL OR byte_size >= 0),
-
-  CONSTRAINT chk_task_artifacts_external_url
-    CHECK (storage_kind <> 'external_url' OR external_uri IS NOT NULL),
-
-  CONSTRAINT chk_task_artifacts_session_dependency
-    CHECK (
-      (message_id IS NULL AND operation_id IS NULL)
-      OR session_id IS NOT NULL
-    ),
-
-  CONSTRAINT chk_task_artifacts_payload_presence
-    CHECK (
-      content_text IS NOT NULL
-      OR payload_json <> '{}'::jsonb
-      OR external_uri IS NOT NULL
-      OR file_path IS NOT NULL
-    )
+  created_at          text NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at          text NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX idx_task_artifacts_task_created_at
-  ON task_artifacts (task_id, created_at DESC);
+  ON task_artifacts (task_id, created_at);
 
 CREATE INDEX idx_task_artifacts_session_created_at
-  ON task_artifacts (session_id, created_at DESC);
+  ON task_artifacts (session_id, created_at);
 
 CREATE INDEX idx_task_artifacts_message_id
   ON task_artifacts (message_id);
@@ -1449,135 +1336,73 @@ CREATE INDEX idx_task_artifacts_parent_artifact_id
 
 ```sql
 CREATE TABLE task_usage_ledger_entries (
-  id                  text PRIMARY KEY,
-  task_id             text NOT NULL,
-  project_id          text NOT NULL,
-  session_id          text,
-  message_id          text REFERENCES task_session_messages(id),
-  operation_id        text REFERENCES session_operations(id),
+  id             text PRIMARY KEY,
+  task_id        text NOT NULL REFERENCES tasks(id),
+  project_id     text NOT NULL REFERENCES projects(id),
+  session_id     text REFERENCES task_sessions(id),
+  message_id     text REFERENCES task_messages(id),
+  operation_id   text REFERENCES task_operations(id),
 
-  entry_kind          task_usage_entry_kind NOT NULL,
-  provider_id         text,
-  model_id            text,
-  request_count       integer NOT NULL DEFAULT 1,
+  entry_kind     text NOT NULL,
+  provider_id    text,
+  model_id       text,
+  request_count  integer NOT NULL DEFAULT 1,
 
-  input_tokens        bigint NOT NULL DEFAULT 0,
-  output_tokens       bigint NOT NULL DEFAULT 0,
-  total_tokens        bigint GENERATED ALWAYS AS (input_tokens + output_tokens) STORED,
-  cost_usd            numeric(20, 6) NOT NULL DEFAULT 0,
-  currency_code       text NOT NULL DEFAULT 'USD',
+  input_tokens   bigint NOT NULL DEFAULT 0,
+  output_tokens  bigint NOT NULL DEFAULT 0,
+  total_tokens   bigint NOT NULL DEFAULT 0,
+  cost_usd       double precision NOT NULL DEFAULT 0,
+  currency_code  text NOT NULL DEFAULT 'USD',
 
-  recorded_at         timestamptz NOT NULL DEFAULT now(),
-  metadata_json       jsonb NOT NULL DEFAULT '{}'::jsonb,
-  created_at          timestamptz NOT NULL DEFAULT now(),
-
-  CONSTRAINT fk_task_usage_ledger_entries_task
-    FOREIGN KEY (task_id, project_id)
-    REFERENCES tasks(id, project_id),
-
-  CONSTRAINT fk_task_usage_ledger_entries_session
-    FOREIGN KEY (task_id, session_id)
-    REFERENCES task_sessions(task_id, id),
-
-  CONSTRAINT chk_task_usage_ledger_entries_request_count_positive
-    CHECK (request_count > 0),
-
-  CONSTRAINT chk_task_usage_ledger_entries_tokens_nonnegative
-    CHECK (input_tokens >= 0 AND output_tokens >= 0),
-
-  CONSTRAINT chk_task_usage_ledger_entries_cost_nonnegative
-    CHECK (cost_usd >= 0),
-
-  CONSTRAINT chk_task_usage_ledger_entries_currency_code
-    CHECK (char_length(currency_code) = 3 AND currency_code = upper(currency_code)),
-
-  CONSTRAINT chk_task_usage_ledger_entries_session_dependency
-    CHECK (
-      (message_id IS NULL AND operation_id IS NULL)
-      OR session_id IS NOT NULL
-    )
+  recorded_at    text NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  metadata_json  jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at     text NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX idx_task_usage_ledger_entries_project_recorded_at
-  ON task_usage_ledger_entries (project_id, recorded_at DESC);
+  ON task_usage_ledger_entries (project_id, recorded_at);
 
 CREATE INDEX idx_task_usage_ledger_entries_task_recorded_at
-  ON task_usage_ledger_entries (task_id, recorded_at DESC);
+  ON task_usage_ledger_entries (task_id, recorded_at);
 
 CREATE INDEX idx_task_usage_ledger_entries_session_recorded_at
-  ON task_usage_ledger_entries (session_id, recorded_at DESC);
+  ON task_usage_ledger_entries (session_id, recorded_at);
 
 CREATE INDEX idx_task_usage_ledger_entries_operation_id
   ON task_usage_ledger_entries (operation_id);
 
 CREATE INDEX idx_task_usage_ledger_entries_provider_model_recorded_at
-  ON task_usage_ledger_entries (provider_id, model_id, recorded_at DESC);
+  ON task_usage_ledger_entries (provider_id, model_id, recorded_at);
 ```
 
 ### 7.11 `task_timeline_views`
 
 ```sql
 CREATE TABLE task_timeline_views (
-  id                  text PRIMARY KEY,
-  task_id             text NOT NULL,
-  project_id          text NOT NULL,
-  session_id          text,
-  message_id          text REFERENCES task_session_messages(id) ON DELETE CASCADE,
-  operation_id        text REFERENCES session_operations(id) ON DELETE CASCADE,
-  artifact_id         text REFERENCES task_artifacts(id) ON DELETE CASCADE,
+  id           text PRIMARY KEY,
+  project_id   text NOT NULL REFERENCES projects(id),
+  task_id      text NOT NULL REFERENCES tasks(id),
+  session_id   text REFERENCES task_sessions(id),
+  message_id   text REFERENCES task_messages(id) ON DELETE CASCADE,
+  operation_id text REFERENCES task_operations(id),
+  artifact_id  text REFERENCES task_artifacts(id),
 
-  item_kind           task_timeline_item_kind NOT NULL,
-  item_role           task_session_message_role,
-  title               text,
-  display_text        text,
-  metadata_json       jsonb NOT NULL DEFAULT '{}'::jsonb,
+  item_kind    text NOT NULL,
+  item_role    text,
+  title        text,
+  display_text text,
+  metadata_json jsonb NOT NULL DEFAULT '{}'::jsonb,
 
-  sort_at             timestamptz NOT NULL,
-  created_at          timestamptz NOT NULL DEFAULT now(),
-  updated_at          timestamptz NOT NULL DEFAULT now(),
-
-  CONSTRAINT fk_task_timeline_views_task
-    FOREIGN KEY (task_id, project_id)
-    REFERENCES tasks(id, project_id)
-    ON DELETE CASCADE,
-
-  CONSTRAINT fk_task_timeline_views_session
-    FOREIGN KEY (task_id, session_id)
-    REFERENCES task_sessions(task_id, id)
-    ON DELETE CASCADE,
-
-  CONSTRAINT chk_task_timeline_views_source_presence
-    CHECK (
-      item_kind = 'task_lifecycle'
-      OR session_id IS NOT NULL
-      OR message_id IS NOT NULL
-      OR operation_id IS NOT NULL
-      OR artifact_id IS NOT NULL
-    ),
-
-  CONSTRAINT chk_task_timeline_views_item_role_scope
-    CHECK (
-      item_role IS NULL OR item_kind IN ('message', 'artifact')
-    )
+  sort_at      text NOT NULL,
+  created_at   text NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at   text NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX idx_task_timeline_views_task_sort_at
-  ON task_timeline_views (task_id, sort_at DESC, created_at DESC);
+  ON task_timeline_views (task_id, sort_at, created_at);
 
 CREATE INDEX idx_task_timeline_views_session_sort_at
-  ON task_timeline_views (session_id, sort_at DESC, created_at DESC);
-
-CREATE INDEX idx_task_timeline_views_item_kind_sort_at
-  ON task_timeline_views (task_id, item_kind, sort_at DESC);
-
-CREATE INDEX idx_task_timeline_views_message_id
-  ON task_timeline_views (message_id);
-
-CREATE INDEX idx_task_timeline_views_operation_id
-  ON task_timeline_views (operation_id);
-
-CREATE INDEX idx_task_timeline_views_artifact_id
-  ON task_timeline_views (artifact_id);
+  ON task_timeline_views (session_id, sort_at, created_at);
 ```
 
 ## 8. 关键约束说明
@@ -1599,7 +1424,7 @@ CREATE INDEX idx_task_timeline_views_artifact_id
 新模型里必须明确区分两种状态：
 
 1. `tasks.lifecycle_status`：任务业务生命周期状态，只回答任务是不是草稿、处理中、已闭环、已归档
-2. `task_sessions.execution_status`：执行状态，只回答当前 session 是运行中、完成、失败还是取消
+2. `task_sessions.status`：执行状态，只回答当前 session 是运行中、完成、失败还是取消
 
 `task_snapshots` 的职责是把这两条状态轴一起投影出来，供列表、详情页、仪表盘直接读取。
 
@@ -1607,7 +1432,7 @@ CREATE INDEX idx_task_timeline_views_artifact_id
 
 1. `tasks.created_at` / `activated_at` / `done_at` / `archived_at`：只表达任务生命周期
 2. `task_sessions.started_at` / `finished_at`：只表达 session 执行过程
-3. `session_operations.started_at` / `finished_at`：只表达更低层 operation 执行过程
+3. `task_operations.started_at` / `finished_at`：只表达更低层 operation 执行过程
 
 因此：
 
@@ -1644,7 +1469,7 @@ CREATE INDEX idx_task_timeline_views_artifact_id
 
 读写边界必须进一步固定为：
 
-1. 分叉之后的新输入、新回复、新 tool 调用，只写到子分叉自己的 `task_session_messages`、`task_session_message_parts`、`session_operations`。
+1. 分叉之后的新输入、新回复、新 tool 调用，只写到子分叉自己的 `task_messages`、`task_message_parts`、`task_operations`。
 2. 父 session 的既有消息不应整段复制到子分叉下面；分叉前上下文应通过 `parent_session_id` + `forked_from_message_id` 在读链路按需拼装。
 3. 当前活跃分支不应该直接回写到 `tasks` 主表，而应由 `task_snapshots.current_session_id` 这类读模型指针表达。
 4. `tasks.working_branch` / `tasks.final_branch_name` 表示 Git / 交付层分支，不等于任务执行分叉；执行分叉仍然由 `task_sessions` 自身表达。
@@ -1652,8 +1477,8 @@ CREATE INDEX idx_task_timeline_views_artifact_id
 这意味着任务分叉至少需要三层信息同时成立：
 
 1. `task_sessions` 负责 branch identity 与 lineage
-2. `task_session_messages` 负责分叉后的新消息流
-3. `session_operations` 负责分叉后的具体调用事实
+2. `task_messages` 负责分叉后的新消息流
+3. `task_operations` 负责分叉后的具体调用事实
 
 建议的数据库侧约束已经体现在 7.3 `task_sessions` DDL 中：
 
@@ -1665,9 +1490,9 @@ CREATE INDEX idx_task_timeline_views_artifact_id
 
 1. 如果 `forked_from_message_id` 不为空，service 必须校验这条 message 确实属于 `parent_session_id` 指向的父 session，而不是任意 session 下的一条 message。
 
-### 8.4 `session_operations` 只做低层日志
+### 8.4 `task_operations` 只做低层日志
 
-`session_operations` 不再承担任务摘要语义，它只回答：
+`task_operations` 不再承担任务摘要语义，它只回答：
 
 1. 某个 session 下面发生过哪些低层执行动作
 2. 每次动作由哪个 executor 执行
@@ -1681,8 +1506,8 @@ CREATE INDEX idx_task_timeline_views_artifact_id
 
 1. 配置层：`tasks.strategy_json` 只保存 task 局部执行策略快照，例如默认 mode、parallel candidates、judge 配置、task-local hook 定义与 timeout。它回答的是 task 自身如何执行，而不是 workflow 规则域如何定义阶段规则或 task 生命周期触发器；workflow template / stage 配置应继续保留在独立规则层。
 2. 编排事实层：`task_sessions` 保存“实际创建了哪些执行分支”。并行、judge、sequential-step、resume、manual branch、hook 等语义都属于这一层；`session_kind`、`parent_session_id`、`root_session_id`、`coordination_key`、`candidate_index`、`step_index`、`winner_session_id`、`judge_session_id` 都应在这里表达。
-3. 内容事实层：`task_session_messages` 与 `task_session_message_parts` 保存“每条分支里说过什么”。用户输入、模型回复、tool call、tool result、thinking、diff、file reference 都落这一层，但它们不负责表示“谁是 candidate”“哪轮并行属于同一批”“谁赢了”。
-4. 操作日志层：`session_operations` 保存“某条 session 实际做了哪些调用”。它承接 executor、hook、judge、resume、system 这类低层动作，并通过 `metadata_json` 挂载结构化控制语义。
+3. 内容事实层：`task_messages` 与 `task_message_parts` 保存“每条分支里说过什么”。用户输入、模型回复、tool call、tool result、thinking、diff、file reference 都落这一层，但它们不负责表示“谁是 candidate”“哪轮并行属于同一批”“谁赢了”。
+4. 操作日志层：`task_operations` 保存“某条 session 实际做了哪些调用”。当前实现下它是一个最小 operation 节点表，核心字段是 `run_id`、`message_id`、`parent_operation_id`、`operation_kind`、`tool_name`、`status` 与 `summary_json`。
 5. 正式产出层：`task_artifacts` 保存需要被稳定引用、下载、预览、比较或二次消费的结果。judge scorecard、hook 审查报告、diff、patch、report 一旦要成为页面一级对象，就不应长期只留在 message JSON 或 `metadata_json` 里。
 6. 核算层：`task_usage_ledger_entries` 保存 append-only 的 usage / cost 事实。任何需要对账、预算和阈值控制的数据，都应以 ledger 为准，而不是只看 session 或 operation 行上的聚合快照。
 7. 读模型层：`task_snapshots` 与 `task_timeline_views` 只负责高频读取与展示投影，不是事实主源，也不应被业务写入口直接修改。
@@ -1690,16 +1515,16 @@ CREATE INDEX idx_task_timeline_views_artifact_id
 这层分工的核心原则是：
 
 1. 关系和编排放在 `task_sessions`
-2. 正文和结构化消息放在 `task_session_messages` / `task_session_message_parts`
-3. 低层调用与控制决策放在 `session_operations`
+2. 正文和结构化消息放在 `task_messages` / `task_message_parts`
+3. 低层调用与控制决策放在 `task_operations`
 4. 可复用正式输出放在 `task_artifacts`
 5. 成本核算放在 `task_usage_ledger_entries`
 
 #### 典型行为如何落库
 
-1. 并行执行：创建一个 `primary` session 作为这一轮执行锚点；每个候选分支各建一个 `candidate` session；它们共享同一个 `coordination_key`，并用 `candidate_index` 区分顺序。如果启用自动判断，再创建一个 `judge` session，并由本轮锚点或 judge 自身记录 `winner_session_id` / `judge_session_id`。每个 candidate / judge 自己的 prompt、reply、tool output 继续落到各自的 messages 与 parts。
+1. 并行执行：创建一个 `primary` session 作为这一轮执行锚点；每个候选分支各建一个 `candidate` session；它们共享同一个 `coordination_key`，并用 `candidate_index` 区分顺序。如果启用自动判断，再创建一个 `judge` session，并由本轮锚点或 judge 自身记录 `winner_session_id` / `judge_session_id`。每个 candidate / judge 自己的 prompt、reply、tool output 继续落到各自的 `task_messages` 与 `task_message_parts`。
 2. hook：hook 定义本身不落消息表，而是保存在 `tasks.strategy_json` 或 workflow 规则层的 stage / trigger 配置中。实际触发时，如果 hook 形成了可见、可追踪、带独立 prompt/reply 的执行分支，就创建 `session_kind = 'hook'` 的 session，并在该 session 下写 messages 与 operations；如果只是轻量系统动作且不需要独立对话边界，可以只在被影响的 session 下追加 `operation_kind = 'hook'` 的 operation。
-3. 自动 judge：judge 配置属于策略层；judge 实际运行属于事实层。若 judge 由模型执行并产出独立评语，则创建 `judge` session，并把 judge prompt / response 写入该 session 的 messages；候选集合、评分卡、winner 选择、选择理由等结构化控制信息写入 judge 对应 operation 的 `metadata_json`。
+3. 自动 judge：judge 配置属于策略层；judge 实际运行属于事实层。若 judge 由模型执行并产出独立评语，则创建 `judge` session，并把 judge prompt / response 写入该 session 的 `task_messages`；候选集合、评分卡、winner 选择、选择理由等结构化控制信息写入 judge 对应 operation 的 `summary_json`。
 4. resume / manual branch / sequential-chain：都先创建新的 `task_sessions` 行来表达新的执行分支，再把新分支里的输入输出写入 messages，把实际调用写入 operations。不要在旧 session 上直接覆盖这些关系语义。
 
 可以接受同时存在 session 和 operation 两层事实，前提是两者回答不同问题：
@@ -1710,17 +1535,17 @@ CREATE INDEX idx_task_timeline_views_artifact_id
 也就是说，一个用户可见的 hook / judge 阶段，通常会同时产生：
 
 1. 一条 `task_sessions` 行，用于表达 branch identity 与 lineage
-2. 一条或多条 `session_operations` 行，用于表达具体调用与决策过程
-3. 若有独立 prompt / reply，再产生对应的 `task_session_messages` / `task_session_message_parts`
+2. 一条或多条 `task_operations` 行，用于表达具体调用与决策过程
+3. 若有独立 prompt / reply，再产生对应的 `task_messages` / `task_message_parts`
 
-#### `session_operations.metadata_json` 标准字段建议
+#### `task_operations.summary_json` 标准字段建议
 
-`metadata_json` 的职责是承接结构化控制语义，而不是变成第二套消息表。建议统一遵循以下约束：
+`summary_json` 的职责是承接结构化控制语义，而不是变成第二套消息表。当前实现里，operation 的主体语义已经被压缩进最小列集，因此需要遵循以下约束：
 
-1. 只放结构化控制字段，不重复存 `provider_id`、`model_id`、`input_tokens`、`output_tokens`、`cost_usd` 这类已经有独立列的事实。
-2. 不复制完整 prompt、完整 reply、大段 diff 或大段报告正文；正文应继续落在 messages、`output_text`，或提升为 `task_artifacts`。
-3. 使用稳定的 snake_case key，避免同一含义混用 camelCase 与 snake_case。
-4. 顶层保留少量公共字段，行为特有字段放在清晰命名的专用 key 下。
+1. `run_id`、`message_id`、`parent_operation_id`、`operation_kind`、`tool_name`、`status` 这类一等结构只放独立列，不在 `summary_json` 重复镜像。
+2. 大段正文、完整 diff、长日志、完整报告正文不要塞进 `summary_json`；它们应继续留在 `task_messages` / `task_message_parts`，或提升到 `task_artifacts`。
+3. `summary_json` 主要承接 agent run 事实、tool I/O 摘要、judge/hook 决策摘要等轻量结构化上下文。
+4. 使用稳定的 key；仓库当前真实写入同时存在 camelCase 与 snake_case 过渡态，后续如继续收口，应优先新增稳定字段而不是覆写老 key。
 
 建议所有 operation 共享以下公共字段：
 
@@ -1829,9 +1654,9 @@ CREATE INDEX idx_task_timeline_views_artifact_id
 可用于推导 timeline 的事实来源只有：
 
 1. `task_sessions`
-2. `task_session_messages`
-3. `task_session_message_parts`
-4. `session_operations`
+2. `task_messages`
+3. `task_message_parts`
+4. `task_operations`
 5. `task_artifacts`
 
 因此可以稳定支持的能力是：
@@ -1839,7 +1664,7 @@ CREATE INDEX idx_task_timeline_views_artifact_id
 1. 根据 `task_sessions.parent_session_id` 重建 session tree
 2. 根据 `task_session_messages.message_index` 重建某条 session 的消息时间线
 3. 根据 `task_session_message_parts.part_index` 组装单条消息内部结构
-4. 根据 `session_operations.started_at` / `finished_at` 补齐 tool / executor / judge 级别执行片段
+4. 根据 `task_operations.started_at` / `finished_at` 补齐 tool / executor / judge 级别执行片段
 5. 根据 `task_artifacts.created_at` 把 diff / file / report / patch 这类正式产出挂回 timeline
 6. 通过这些事实拼装出一条可展示的 task timeline
 
@@ -1870,7 +1695,7 @@ CREATE INDEX idx_task_timeline_views_artifact_id
 因此它的写入边界必须固定为：
 
 1. 业务写入口不得直接写 `task_timeline_views`
-2. 只能由 timeline projector 从 `tasks`、`task_sessions`、`task_session_messages`、`session_operations`、`task_artifacts` 重建
+2. 只能由 timeline projector 从 `tasks`、`task_sessions`、`task_messages`、`task_operations`、`task_artifacts` 重建
 3. 如需修复，可以直接 truncate 后全量重算
 4. 它不是审计账本，也不是 append-only 事件流
 
@@ -1950,10 +1775,10 @@ CREATE INDEX idx_task_timeline_views_artifact_id
 
 `task_usage_ledger_entries` 是成本、配额、预算阈值和对账能力的正式事实来源。
 
-它和 `task_sessions`、`session_operations` 上的 token / cost 字段不是竞争关系，而是分层关系：
+它和 `task_sessions`、`task_operations` 上的 token / cost 字段不是竞争关系，而是分层关系：
 
 1. `task_usage_ledger_entries` 记录可审计、可追责、可对账的原子核算事实
-2. `task_sessions`、`session_operations` 上的 token / cost 字段只负责聚合快照和热读性能
+2. `task_sessions`、`task_operations` 上的 token / cost 字段只负责聚合快照和热读性能
 3. 一个 session / operation 可以对应多条 ledger entry，因此不能只靠 session 行上的汇总值做账
 
 所以写入边界必须是：
@@ -2162,7 +1987,7 @@ flowchart TD
 | `conversation_sessions` | `task_sessions` | 新实现直接以 task session 作为主事实 |
 | `conversation_messages` | `task_session_messages` | 新实现改为 session 下消息流主表 |
 | `conversation_message_parts` | `task_session_message_parts` | 新实现改为消息结构化 part 表 |
-| `agent_runs` | `session_operations` | 新实现改为 session 下低层 operation log |
+| `agent_runs` | `task_operations` | 新实现改为 session 下低层 operation log |
 | `code_changes` / `file_changes` | `task_artifacts` | 正式产出统一收敛到 artifact 主表 |
 | `runtime_usage_ledgers` | `task_usage_ledger_entries` | 改为 task / session / operation 对齐的 append-only ledger |
 | `task_timeline_views` | `task_timeline_views` | 保留，但只作为 state-derived timeline projection |
@@ -2179,10 +2004,10 @@ flowchart TD
 1. `/tasks/:taskId/domain-runs*` 这组接口可以直接废弃，改成新的 `/tasks/:taskId/sessions*`
 2. `TaskDetailV3` 中基于 `task_runs` / `task_run_nodes` 的并行与顺序拼装逻辑可以整体删除，按 `task_sessions` 重写
 3. 当前 conversation message 读写链路需要直接切到 `task_session_messages` / `task_session_message_parts`
-4. `agent_runs` 相关查询和成员视图逻辑直接改读 `session_operations`
+4. `agent_runs` 相关查询和成员视图逻辑直接改读 `task_operations`
 5. 当前 `code_changes` / `file_changes` 相关写入路径需要统一改写到 `task_artifacts`
 6. 当前 usage / billing / budget 相关读写路径需要统一改写到 `task_usage_ledger_entries`
-7. `task_snapshots` 和 `task_timeline_views` 的生成逻辑需要直接从 `tasks`、`task_sessions`、消息表、`session_operations`、`task_artifacts` 聚合
+7. `task_snapshots` 和 `task_timeline_views` 的生成逻辑需要直接从 `tasks`、`task_sessions`、消息表、`task_operations`、`task_artifacts` 聚合
 8. service timeline / branch compat 读链需要明确改成直接从事实表或 `task_timeline_views` 组装，不再依赖事件流补位
 9. 新实现不再承担旧数据兼容，因此接口、BFF、前端类型可以一起重定义
 

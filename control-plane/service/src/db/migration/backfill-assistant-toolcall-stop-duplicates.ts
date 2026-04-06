@@ -104,11 +104,7 @@ function getOptionalStringArg(args: Record<string, string | boolean>, key: strin
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
-function getNumberArg(
-  args: Record<string, string | boolean>,
-  key: string,
-  defaultValue: number,
-) {
+function getNumberArg(args: Record<string, string | boolean>, key: string, defaultValue: number) {
   const value = args[key];
   if (typeof value !== "string" || value.trim().length === 0) {
     return defaultValue;
@@ -160,8 +156,8 @@ function extractMessageInfoRecord(message: { rawPayload?: Record<string, unknown
 
 function extractMessageParts(message: { rawPayload?: Record<string, unknown> | null }) {
   const parts = Array.isArray(message.rawPayload?.parts) ? message.rawPayload.parts : [];
-  return parts.filter(
-    (part): part is Record<string, unknown> => Boolean(part && typeof part === "object"),
+  return parts.filter((part): part is Record<string, unknown> =>
+    Boolean(part && typeof part === "object"),
   );
 }
 
@@ -193,7 +189,12 @@ function extractMessageText(message: {
     return null;
   }
 
-  const rawCandidates = [rawPayload.text, rawPayload.textContent, rawPayload.summaryText, rawPayload.content];
+  const rawCandidates = [
+    rawPayload.text,
+    rawPayload.textContent,
+    rawPayload.summaryText,
+    rawPayload.content,
+  ];
   for (const candidate of rawCandidates) {
     if (typeof candidate === "string" && candidate.trim().length > 0) {
       return candidate;
@@ -359,9 +360,12 @@ function buildMergedPayload(args: {
     args.duplicate.runtimeMessageId ??
     args.canonical.messageId;
   const preservedRuntimeMessageId =
-    asString(canonicalPayload.runtimeMessageId) ?? args.canonical.runtimeMessageId ?? preservedMessageId;
+    asString(canonicalPayload.runtimeMessageId) ??
+    args.canonical.runtimeMessageId ??
+    preservedMessageId;
   const mergedText = extractMessageText(args.duplicate) ?? extractMessageText(args.canonical);
-  const mergedParentId = extractMessageParentId(args.duplicate) ?? extractMessageParentId(args.canonical);
+  const mergedParentId =
+    extractMessageParentId(args.duplicate) ?? extractMessageParentId(args.canonical);
 
   return {
     ...canonicalPayload,
@@ -503,7 +507,9 @@ function shouldMergeHistoricalAssistantToolCallFollowup(args: {
     return false;
   }
 
-  const canonicalReferenceTime = parseTimestamp(args.canonical.completedAt ?? args.canonical.createdAt);
+  const canonicalReferenceTime = parseTimestamp(
+    args.canonical.completedAt ?? args.canonical.createdAt,
+  );
   const duplicateCreatedAt = parseTimestamp(args.duplicate.createdAt);
   if (canonicalReferenceTime === null || duplicateCreatedAt === null) {
     return false;
@@ -615,10 +621,7 @@ function buildRepairPlans(args: {
   return plans;
 }
 
-async function updateCanonicalMessage(
-  transaction: SqlExecutor,
-  mergedMessage: MergedMessagePlan,
-) {
+async function updateCanonicalMessage(transaction: SqlExecutor, mergedMessage: MergedMessagePlan) {
   await transaction.unsafe(
     `
       update task_messages
@@ -657,7 +660,7 @@ async function replaceCanonicalParts(args: {
   mergedParts: Record<string, unknown>[];
   createdAt: string;
 }) {
-  await args.transaction.unsafe(`delete from task_message_parts where message_id = $1`, [
+  await args.transaction.unsafe("delete from task_message_parts where message_id = $1", [
     args.canonicalMessageId,
   ] as never[]);
 
@@ -688,10 +691,7 @@ async function replaceCanonicalParts(args: {
   }
 }
 
-async function syncCanonicalMessagePartCount(
-  transaction: SqlExecutor,
-  canonicalMessageId: string,
-) {
+async function syncCanonicalMessagePartCount(transaction: SqlExecutor, canonicalMessageId: string) {
   await transaction.unsafe(
     `
       update task_messages
@@ -847,17 +847,17 @@ async function updateMessageReferences(args: {
 
 async function deleteDuplicateTimelineRows(transaction: SqlExecutor, duplicateMessageId: string) {
   const rows = await transaction.unsafe<Array<{ id: string }>>(
-    `delete from task_timeline_views where message_id = $1 returning id`,
+    "delete from task_timeline_views where message_id = $1 returning id",
     [duplicateMessageId] as never[],
   );
   return rows.length;
 }
 
 async function deleteDuplicateMessage(transaction: SqlExecutor, duplicateMessageId: string) {
-  await transaction.unsafe(`delete from task_message_parts where message_id = $1`, [
+  await transaction.unsafe("delete from task_message_parts where message_id = $1", [
     duplicateMessageId,
   ] as never[]);
-  await transaction.unsafe(`delete from task_messages where id = $1`, [
+  await transaction.unsafe("delete from task_messages where id = $1", [
     duplicateMessageId,
   ] as never[]);
 }
@@ -891,7 +891,10 @@ async function applyRepairPlan(args: {
     args.summary.artifactRefsUpdatedCount += artifactUpdatedCount;
     args.summary.usageRefsUpdatedCount += usageUpdatedCount;
 
-    args.summary.timelineRowsDeletedCount += await deleteDuplicateTimelineRows(tx, args.plan.duplicateMessageId);
+    args.summary.timelineRowsDeletedCount += await deleteDuplicateTimelineRows(
+      tx,
+      args.plan.duplicateMessageId,
+    );
     await deleteDuplicateMessage(tx, args.plan.duplicateMessageId);
   });
 

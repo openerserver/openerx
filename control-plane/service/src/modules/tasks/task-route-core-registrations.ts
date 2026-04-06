@@ -24,7 +24,6 @@ export function buildTaskAgentRunWriteRegistrations(
 ) {
   return {
     loadTaskTreeBackedRecord: shared.sharedDeps.loadTaskTreeBackedRecord,
-    syncExecutionFactsForAgentRun:
-      shared.sessionOperationWriteApi.syncExecutionFactsForAgentRun,
+    syncExecutionFactsForAgentRun: shared.taskOperationWriteApi.syncExecutionFactsForAgentRun,
   };
 }

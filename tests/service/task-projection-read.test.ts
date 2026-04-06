@@ -27,7 +27,9 @@ async function loadTaskProjectionReadModule(args: {
 }) {
   importCounter += 1;
 
-  const selectResults = args.lineageRows ? [args.lineageRows, args.resultRows ?? []] : [args.resultRows ?? []];
+  const selectResults = args.lineageRows
+    ? [args.lineageRows, args.resultRows ?? []]
+    : [args.resultRows ?? []];
   let selectCallIndex = 0;
   const buildTaskSessionLineagePath = mock(() => args.lineagePath ?? []);
   const resolveTaskSessionRecordId = mock(
@@ -36,12 +38,26 @@ async function loadTaskProjectionReadModule(args: {
   const buildTaskSessionIdAliases = mock(
     (sessionId: string) => args.aliasMap?.[sessionId] ?? [sessionId],
   );
+  const toCanonicalTaskSessionId = mock((taskId: string, sessionId?: string | null) => {
+    if (typeof sessionId !== "string" || !sessionId.trim()) {
+      return null;
+    }
+
+    if (sessionId.startsWith("task-session:")) {
+      return sessionId;
+    }
+
+    if (sessionId.startsWith("task_session:")) {
+      return sessionId.replace(/^task_session:/, "task-session:");
+    }
+
+    return `task-session:${taskId}:${sessionId}`;
+  });
 
   mock.module("../../control-plane/service/src/db", () => ({
     db: {
       select: mock(() => {
-        const result =
-          selectResults[Math.min(selectCallIndex, selectResults.length - 1)] ?? [];
+        const result = selectResults[Math.min(selectCallIndex, selectResults.length - 1)] ?? [];
         selectCallIndex += 1;
         return createSelectChain(result);
       }),
@@ -49,8 +65,13 @@ async function loadTaskProjectionReadModule(args: {
   }));
 
   mock.module("../../control-plane/service/src/db/schema", () => ({
-    sessionOperations: {},
+    roleAggregateConclusions: {},
     taskArtifacts: {},
+    taskMessageEvents: {},
+    taskMessageParts: {},
+    taskMessages: {},
+    taskOperations: {},
+    taskSessionRuns: {},
     taskSessions: {
       id: "id",
       parentSessionId: "parentSessionId",
@@ -58,6 +79,7 @@ async function loadTaskProjectionReadModule(args: {
       runtimeSessionId: "runtimeSessionId",
       createdAt: "createdAt",
     },
+    taskStageRuns: {},
     taskSnapshots: {},
     taskTimelineViews: {
       id: "id",
@@ -77,12 +99,14 @@ async function loadTaskProjectionReadModule(args: {
       updatedAt: "updatedAt",
     },
     taskUsageLedgerEntries: {},
+    taskWorkflowRuns: {},
   }));
 
   mock.module("../../control-plane/service/src/modules/tasks/task-session-read", () => ({
     buildTaskSessionLineagePath,
     buildTaskSessionIdAliases,
     resolveTaskSessionRecordId,
+    toCanonicalTaskSessionId,
   }));
 
   const module = await import(
@@ -94,6 +118,7 @@ async function loadTaskProjectionReadModule(args: {
     buildTaskSessionLineagePath,
     buildTaskSessionIdAliases,
     resolveTaskSessionRecordId,
+    toCanonicalTaskSessionId,
   };
 }
 
@@ -135,7 +160,12 @@ describe("task projection read", () => {
 
     expect(buildTaskSessionLineagePath).not.toHaveBeenCalled();
     expect(response).toEqual({
-      data: timelineRows,
+      data: [
+        {
+          ...timelineRows[0],
+          sessionId: "task-session:task-1:fork-session",
+        },
+      ],
       meta: {
         readSource: "task-session-projection",
         includeLineage: false,
@@ -149,17 +179,15 @@ describe("task projection read", () => {
   });
 
   test("expands lineage path through task session records when requested", async () => {
-    const {
-      buildTaskProjectionTimelineViewResponse,
-      buildTaskSessionLineagePath,
-    } = await loadTaskProjectionReadModule({
-      resultRows: [],
-      lineageRows: [
-        { id: "root-session", parentSessionId: null },
-        { id: "fork-session", parentSessionId: "root-session" },
-      ],
-      lineagePath: ["root-session", "fork-session"],
-    });
+    const { buildTaskProjectionTimelineViewResponse, buildTaskSessionLineagePath } =
+      await loadTaskProjectionReadModule({
+        resultRows: [],
+        lineageRows: [
+          { id: "root-session", parentSessionId: null },
+          { id: "fork-session", parentSessionId: "root-session" },
+        ],
+        lineagePath: ["root-session", "fork-session"],
+      });
 
     const response = await buildTaskProjectionTimelineViewResponse({
       taskId: "task-1",
@@ -211,10 +239,15 @@ describe("task projection read", () => {
       buildTaskProjectionTimelineViewResponse,
       buildTaskSessionIdAliases,
       resolveTaskSessionRecordId,
+      toCanonicalTaskSessionId,
     } = await loadTaskProjectionReadModule({
       resultRows: timelineRows,
       lineageRows: [
-        { id: "task-session:task-1:fork-session", parentSessionId: null, runtimeSessionId: "fork-session" },
+        {
+          id: "task-session:task-1:fork-session",
+          parentSessionId: null,
+          runtimeSessionId: "fork-session",
+        },
       ],
       resolvedSessionId: "task-session:task-1:fork-session",
       aliasMap: {
@@ -243,7 +276,16 @@ describe("task projection read", () => {
       "task_session:task-1:fork-session",
     );
     expect(buildTaskSessionIdAliases).toHaveBeenCalledWith("task-session:task-1:fork-session");
+    expect(toCanonicalTaskSessionId).toHaveBeenCalledWith(
+      "task-1",
+      "task_session:task-1:fork-session",
+    );
     expect(response.meta.lineagePath).toEqual(["task-session:task-1:fork-session"]);
-    expect(response.data).toEqual(timelineRows);
+    expect(response.data).toEqual([
+      {
+        ...timelineRows[0],
+        sessionId: "task-session:task-1:fork-session",
+      },
+    ]);
   });
 });

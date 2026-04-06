@@ -84,17 +84,17 @@ const props = defineProps<{
   refreshKey?: number;
 }>();
 
-const {
-  trace,
-  loading,
-  error,
-  refresh,
-} = useTaskExecutionTrace(toRef(props, "taskId"), toRef(props, "sessionId"));
+const { trace, loading, error, refresh } = useTaskExecutionTrace(
+  toRef(props, "taskId"),
+  toRef(props, "sessionId"),
+);
 
 const followups = computed(() => trace.value?.followupExecutions ?? []);
 
 const hasBlockingIssue = computed(() =>
-  followups.value.some((item) => item.failureType === "template-missing" || item.status === "failed"),
+  followups.value.some(
+    (item) => item.failureType === "template-missing" || item.status === "failed",
+  ),
 );
 
 const latestAlert = computed(() => {
@@ -106,7 +106,8 @@ const latestAlert = computed(() => {
     return {
       type: "warning" as const,
       message: "Follow-up 未执行",
-      description: latest.error || "缺少已启用的模板配置，请到设置页 > 编排策略 > Follow-up 模板补齐。",
+      description:
+        latest.error || "缺少已启用的模板配置，请到设置页 > 编排策略 > Follow-up 模板补齐。",
     };
   }
   if (latest.status === "failed") {

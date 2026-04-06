@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
 
-import { desc, eq } from "drizzle-orm";
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
+import { desc, eq } from "drizzle-orm";
 import { taskSnapshots, tasks } from "../schema";
 import { getBooleanArg, parseCliArgs } from "./metadata";
 
@@ -253,8 +253,7 @@ async function loadCurrentRun(task: AuditTaskRow, effectiveCurrentRunId: string 
     status: parseNullableString(row.status),
     orchestrationKind: parseNullableString(row.orchestrationKind),
     candidateCount: row.candidateCount == null ? null : parseCount(row.candidateCount),
-    pipelineStepCount:
-      row.pipelineStepCount == null ? null : parseCount(row.pipelineStepCount),
+    pipelineStepCount: row.pipelineStepCount == null ? null : parseCount(row.pipelineStepCount),
     winnerNodeId: parseNullableString(row.winnerNodeId),
   };
 }
@@ -383,13 +382,8 @@ function buildRunGraphStructuralReasons(context: TaskAuditContext) {
   if (context.effectiveCurrentRunId && !context.currentRun) {
     reasons.push(`task_runs missing id=${context.effectiveCurrentRunId}`);
   }
-  if (
-    context.currentRun?.winnerNodeId &&
-    !context.runGraphStats.winnerExists
-  ) {
-    reasons.push(
-      `winner node ${context.currentRun.winnerNodeId} is missing from task_run_nodes`,
-    );
+  if (context.currentRun?.winnerNodeId && !context.runGraphStats.winnerExists) {
+    reasons.push(`winner node ${context.currentRun.winnerNodeId} is missing from task_run_nodes`);
   }
 
   return reasons;
@@ -504,10 +498,7 @@ function buildStatusDimension(task: AuditTaskRow, context: TaskAuditContext) {
   if (!task.snapshotLifecycleStatus) {
     reasons.push("missing task_snapshots row");
   }
-  if (
-    task.snapshotLifecycleStatus &&
-    task.taskLifecycleStatus !== task.snapshotLifecycleStatus
-  ) {
+  if (task.snapshotLifecycleStatus && task.taskLifecycleStatus !== task.snapshotLifecycleStatus) {
     reasons.push(
       `tasks.lifecycle_status=${task.taskLifecycleStatus} but task_snapshots.lifecycle_status=${task.snapshotLifecycleStatus}`,
     );
@@ -525,10 +516,10 @@ function buildStatusDimension(task: AuditTaskRow, context: TaskAuditContext) {
   return createDimension(
     {
       taskStatus: task.taskStatus,
-        taskLifecycleStatus: task.taskLifecycleStatus,
+      taskLifecycleStatus: task.taskLifecycleStatus,
       snapshotLifecycleStatus: task.snapshotLifecycleStatus,
       currentRunStatus: context.currentRun?.status ?? null,
-        currentRunLifecycleStatus,
+      currentRunLifecycleStatus,
     },
     reasons,
   );

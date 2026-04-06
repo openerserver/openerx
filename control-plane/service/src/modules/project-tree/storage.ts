@@ -28,7 +28,17 @@ function buildChildPath(parentPath: string, nodeType: ProjectTreeNodeType, nodeI
 }
 
 export function getTaskBranchCompatNodeId(taskId: string, runtimeSessionId: string) {
+  return `branch-node:${taskId}:${runtimeSessionId}`;
+}
+
+export function getLegacyTaskBranchCompatNodeId(taskId: string, runtimeSessionId: string) {
   return `task_session:${taskId}:${runtimeSessionId}`;
+}
+
+export function getTaskBranchCompatNodeIdAliases(taskId: string, runtimeSessionId: string) {
+  const canonicalId = getTaskBranchCompatNodeId(taskId, runtimeSessionId);
+  const legacyId = getLegacyTaskBranchCompatNodeId(taskId, runtimeSessionId);
+  return canonicalId === legacyId ? [canonicalId] : [canonicalId, legacyId];
 }
 
 export function getProjectRootNodeId(projectId: string) {
@@ -329,20 +339,62 @@ async function loadEffectiveTaskBranchCompatParentNode(args: {
   taskNode: Awaited<ReturnType<typeof requireTaskTreeNode>>;
   parentRuntimeSessionId?: string | null;
 }) {
-  const parentSessionNodeId = args.parentRuntimeSessionId
-    ? getTaskBranchCompatNodeId(args.taskNode.id, args.parentRuntimeSessionId)
-    : null;
+  let parentNode: Awaited<ReturnType<typeof db.query.projectTreeNodes.findFirst>> = undefined;
 
-  const parentNode = parentSessionNodeId
-    ? await db.query.projectTreeNodes.findFirst({
+  if (args.parentRuntimeSessionId) {
+    for (const parentSessionNodeId of getTaskBranchCompatNodeIdAliases(
+      args.taskNode.id,
+      args.parentRuntimeSessionId,
+    )) {
+      parentNode = await db.query.projectTreeNodes.findFirst({
         where: and(
           eq(projectTreeNodes.projectId, args.taskNode.projectId),
           eq(projectTreeNodes.id, parentSessionNodeId),
         ),
-      })
-    : null;
+      });
+      if (parentNode) {
+        break;
+      }
+    }
+  }
 
   return parentNode ?? args.taskNode;
+}
+
+async function loadExistingTaskBranchCompatNode(args: {
+  taskId: string;
+  projectId: string;
+  runtimeSessionId: string;
+}) {
+  for (const nodeId of getTaskBranchCompatNodeIdAliases(args.taskId, args.runtimeSessionId)) {
+    const existing = await db.query.projectTreeNodes.findFirst({
+      where: and(eq(projectTreeNodes.projectId, args.projectId), eq(projectTreeNodes.id, nodeId)),
+    });
+    if (existing) {
+      return existing;
+    }
+  }
+
+  return null;
+}
+
+async function loadExistingTaskBranchCompatNodeIds(args: {
+  taskId: string;
+  runtimeSessionId: string;
+}) {
+  const nodeIds: string[] = [];
+
+  for (const nodeId of getTaskBranchCompatNodeIdAliases(args.taskId, args.runtimeSessionId)) {
+    const existing = await db.query.projectTreeNodes.findFirst({
+      where: eq(projectTreeNodes.id, nodeId),
+      columns: { id: true },
+    });
+    if (existing?.id) {
+      nodeIds.push(existing.id);
+    }
+  }
+
+  return nodeIds;
 }
 
 async function deactivateSiblingTaskBranchCompatNodes(args: {
@@ -457,7 +509,6 @@ async function syncTaskBranchCompatBranchHead(args: {
 
 export async function upsertTaskBranchCompatTreeNode(args: UpsertTaskBranchCompatTreeNodeArgs) {
   const taskNode = await requireTaskTreeNode(args.taskId);
-  const nodeId = getTaskBranchCompatNodeId(args.taskId, args.runtimeSessionId);
   const now = new Date().toISOString();
   const effectiveParentNode = await loadEffectiveTaskBranchCompatParentNode({
     taskNode,
@@ -465,9 +516,12 @@ export async function upsertTaskBranchCompatTreeNode(args: UpsertTaskBranchCompa
   });
   const contentJson = buildTaskBranchCompatContentJson(args);
 
-  const existing = await db.query.projectTreeNodes.findFirst({
-    where: eq(projectTreeNodes.id, nodeId),
+  const existing = await loadExistingTaskBranchCompatNode({
+    taskId: args.taskId,
+    projectId: taskNode.projectId,
+    runtimeSessionId: args.runtimeSessionId,
   });
+  const nodeId = existing?.id ?? getTaskBranchCompatNodeId(args.taskId, args.runtimeSessionId);
 
   await deactivateSiblingTaskBranchCompatNodes({
     projectId: taskNode.projectId,
@@ -483,7 +537,7 @@ export async function upsertTaskBranchCompatTreeNode(args: UpsertTaskBranchCompa
     now,
     contentJson,
     input: args,
-    existing,
+    existing: existing ?? undefined,
   });
 
   if (existing) {
@@ -503,13 +557,16 @@ export async function upsertTaskBranchCompatTreeNode(args: UpsertTaskBranchCompa
 }
 
 export async function archiveTaskBranchCompatTreeNode(taskId: string, runtimeSessionId: string) {
-  const nodeId = getTaskBranchCompatNodeId(taskId, runtimeSessionId);
-  await db
-    .update(projectTreeNodes)
-    .set({
-      isActive: false,
-      archivedAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    })
-    .where(eq(projectTreeNodes.id, nodeId));
+  const now = new Date().toISOString();
+
+  for (const nodeId of await loadExistingTaskBranchCompatNodeIds({ taskId, runtimeSessionId })) {
+    await db
+      .update(projectTreeNodes)
+      .set({
+        isActive: false,
+        archivedAt: now,
+        updatedAt: now,
+      })
+      .where(eq(projectTreeNodes.id, nodeId));
+  }
 }

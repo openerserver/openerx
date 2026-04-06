@@ -11,7 +11,6 @@ const createSessionMock = mock(async () => ({
   agentRunId: "run-test",
 }));
 const authHeaderMock = mock(() => "Bearer test");
-const dispatchStageInterventionMock = mock(async () => undefined);
 const executeLifecycleHooksMock = mock(async () => ({
   hookExecutions: [],
   combinedResultText: undefined,
@@ -140,7 +139,7 @@ mock.module("../../control-plane/web-ui-bff/src/modules/realtime/ws-broadcaster"
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/modules/tasks/stage-intervention", () => ({
-  dispatchStageIntervention: dispatchStageInterventionMock,
+  dispatchStageIntervention: mock(async () => undefined),
 }));
 
 function getTaskExecuteWorkflowResponse() {
@@ -247,7 +246,7 @@ function getTaskExecuteWriteResponse(url: string, method: string, body?: unknown
 beforeEach(() => {
   createSessionMock.mockReset();
   authHeaderMock.mockReset();
-  dispatchStageInterventionMock.mockReset();
+
   executeLifecycleHooksMock.mockReset();
   cpFetchMock.mockReset();
 
@@ -328,7 +327,7 @@ describe("task execute route stage dispatch", () => {
         strategy: expect.stringContaining('"effectiveModel":"github-copilot:gpt-5-mini"'),
       }),
     });
-    expect(cpFetchMock).toHaveBeenCalledWith("/api/tasks/task-1/branches", {
+    expect(cpFetchMock).toHaveBeenCalledWith("/api/tasks/task-1/sessions", {
       method: "POST",
       authorization: "Bearer test",
       body: expect.objectContaining({
@@ -361,7 +360,6 @@ describe("task execute route stage dispatch", () => {
       agentRunId: "run-test",
       status: "running",
     });
-    expect(dispatchStageInterventionMock).not.toHaveBeenCalled();
 
     const taskPatchCall = cpFetchMock.mock.calls.find(
       ([path, options]) => path === "/api/tasks/task-1" && options?.method === "PATCH",

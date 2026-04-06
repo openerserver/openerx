@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { buildMergedTraceTimelineItems, resolveTraceTimelineItems } from "./task-trace-conversation";
+import {
+  buildMergedTraceTimelineItems,
+  resolveTraceTimelineItems,
+} from "./task-trace-conversation";
 
 describe("resolveTraceTimelineItems", () => {
   it("falls back to execution trace messages when timeline is empty", () => {

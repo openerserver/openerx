@@ -1,9 +1,12 @@
 /// <reference types="bun-types" />
 
 import { beforeEach, describe, expect, mock, test } from "bun:test";
-import { createOpencodeAdapterModuleMock } from "./opencode-adapter-mock";
-import { createSseAggregatorModuleMock } from "./sse-aggregator-mock";
+import {
+  createOpencodeAdapterModuleMock,
+  createRuntimeProviderModuleMock,
+} from "./opencode-adapter-mock";
 import { expectSessionMessageReaderCalls } from "./session-message-compatibility-test-helpers";
+import { createSseAggregatorModuleMock } from "./sse-aggregator-mock";
 
 const cpFetchMock = mock(async (..._args: unknown[]) => ({ ok: true, data: {} }));
 const authHeaderMock = mock(() => "Bearer test");
@@ -20,6 +23,32 @@ const getSessionMessagesMock = mock(async () => ({
 const continueSessionMock = mock(async () => ({ ok: true }));
 const forkSessionMock = mock(async () => ({ ok: true, sessionId: "session-2" }));
 
+function aliasTaskSessionsMockUrl(url: string) {
+  const normalizedConversationMatch = url.match(
+    /^\/api\/tasks\/([^/]+)\/query\/normalized-conversation(?:\?(.*))?$/,
+  );
+  if (!normalizedConversationMatch) {
+    return url;
+  }
+
+  const taskId = normalizedConversationMatch[1] ?? "";
+  const params = new URLSearchParams(normalizedConversationMatch[2] ?? "");
+  const sessionId = params.get("sessionId");
+  if (sessionId) {
+    return `/api/tasks/${taskId}/sessions/${encodeURIComponent(sessionId)}/messages`;
+  }
+
+  return `/api/tasks/${taskId}/messages`;
+}
+
+function setCpFetchImplementation(
+  implementation: (url: string, options?: { method?: string }) => unknown,
+) {
+  cpFetchMock.mockImplementation((url: string, options?: { method?: string }) =>
+    implementation(aliasTaskSessionsMockUrl(url), options),
+  );
+}
+
 mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () => ({
   authHeader: authHeaderMock,
   cpFetch: cpFetchMock,
@@ -27,35 +56,42 @@ mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () =>
   setControlPlaneFetchHandler: setControlPlaneFetchHandlerMock,
 }));
 
-mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter", () =>
-  createOpencodeAdapterModuleMock({
-    continueSession: continueSessionMock,
-    createSession: mock(async () => ({ ok: true, sessionId: "session-1", agentRunId: "run-1" })),
-    ensureAgentRunForSession: mock(() => "run-1"),
-    extractAssistantResultFromMessages: mock(() => ({
-      completed: false,
-      failed: false,
-      error: undefined,
-      tokenUsed: 0,
-    })),
-    forkSession: forkSessionMock,
-    getAgentRun: mock(() => undefined),
-    getSessionMessages: getSessionMessagesMock,
-    listSessions: listSessionsMock,
-    recoverAgentRun: mock(() => undefined),
-    getAgentMessages: mock(async () => ({ ok: true, data: [] })),
-    injectGuidance: mock(async () => ({ ok: true })),
-    findAgentRunBySessionId: mock(() => undefined),
-    listAgentRuns: mock(() => []),
-    listRuntimePermissions: mock(async () => ({ ok: true, data: [] })),
-    pauseAgent: mock(async () => ({ ok: true })),
-    registerAgentRun: mock(() => undefined),
-    replyRuntimePermission: mock(async () => ({ ok: true })),
-    resumeAgent: mock(async () => ({ ok: true })),
-    runDetachedPrompt: mock(async () => ({ ok: true, data: {} })),
-    terminateAgent: mock(async () => ({ ok: true })),
-    updateAgentRunStatus: mock(() => undefined),
-  }),
+const opencodeAdapterModule = createOpencodeAdapterModuleMock({
+  continueSession: continueSessionMock,
+  createSession: mock(async () => ({ ok: true, sessionId: "session-1", agentRunId: "run-1" })),
+  ensureAgentRunForSession: mock(() => "run-1"),
+  extractAssistantResultFromMessages: mock(() => ({
+    completed: false,
+    failed: false,
+    error: undefined,
+    tokenUsed: 0,
+  })),
+  forkSession: forkSessionMock,
+  getAgentRun: mock(() => undefined),
+  getSessionMessages: getSessionMessagesMock,
+  listSessions: listSessionsMock,
+  recoverAgentRun: mock(() => undefined),
+  getAgentMessages: mock(async () => ({ ok: true, data: [] })),
+  injectGuidance: mock(async () => ({ ok: true })),
+  findAgentRunBySessionId: mock(() => undefined),
+  listAgentRuns: mock(() => []),
+  listRuntimePermissions: mock(async () => ({ ok: true, data: [] })),
+  pauseAgent: mock(async () => ({ ok: true })),
+  registerAgentRun: mock(() => undefined),
+  replyRuntimePermission: mock(async () => ({ ok: true })),
+  resumeAgent: mock(async () => ({ ok: true })),
+  runDetachedPrompt: mock(async () => ({ ok: true, data: {} })),
+  terminateAgent: mock(async () => ({ ok: true })),
+  updateAgentRunStatus: mock(() => undefined),
+});
+
+mock.module(
+  "../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter",
+  () => opencodeAdapterModule,
+);
+
+mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/runtime-provider", () =>
+  createRuntimeProviderModuleMock(opencodeAdapterModule),
 );
 
 mock.module("../../control-plane/web-ui-bff/src/modules/hooks/lifecycle-hooks", () => ({
@@ -122,7 +158,7 @@ beforeEach(() => {
   continueSessionMock.mockResolvedValue({ ok: true });
   forkSessionMock.mockResolvedValue({ ok: true, sessionId: "session-2" });
 
-  cpFetchMock.mockImplementation(async (url: string) => {
+  setCpFetchImplementation(async (url: string) => {
     if (url === "/api/project-tree/tasks/task-1") {
       return {
         ok: true,
@@ -179,7 +215,7 @@ describe("task sessions route", () => {
         },
       ],
     });
-    cpFetchMock.mockImplementation(async (url: string, options?: { method?: string }) => {
+    setCpFetchImplementation(async (url: string, options?: { method?: string }) => {
       if (url === "/api/project-tree/tasks/task-1") {
         return {
           ok: true,
@@ -251,8 +287,66 @@ describe("task sessions route", () => {
     });
   });
 
+  test("canonicalizes public taskSessionId when lineage records use internal ids", async () => {
+    setCpFetchImplementation(async (url: string, options?: { method?: string }) => {
+      if (url === "/api/project-tree/tasks/task-1") {
+        return {
+          ok: true,
+          data: {
+            id: "task-1",
+            title: "finished task",
+            status: "running",
+            sessionId: "session-root",
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/sessions" && !options?.method) {
+        return {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "ts-root",
+                runtimeSessionId: "session-root",
+                branchName: "main",
+                sourceType: "root",
+                isActive: true,
+                archivedAt: null,
+                createdAt: "2026-03-14T10:00:00.000Z",
+                updatedAt: "2026-03-14T10:05:00.000Z",
+              },
+            ],
+          },
+        };
+      }
+
+      return { ok: true, data: {} };
+    });
+
+    const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
+
+    const response = await taskRoutes.request("http://localhost/task-1/sessions", {
+      headers: {
+        Authorization: "Bearer test",
+      },
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      data: [
+        expect.objectContaining({
+          id: "session-root",
+          taskSessionId: "task-session:task-1:session-root",
+          title: "main",
+          isActive: true,
+        }),
+      ],
+    });
+  });
+
   test("reads task session messages from the session-first cache before runtime fallback", async () => {
-    cpFetchMock.mockImplementation(async (url: string) => {
+    setCpFetchImplementation(async (url: string) => {
       if (url === "/api/tasks/task-1/sessions") {
         return {
           ok: true,
@@ -322,11 +416,14 @@ describe("task sessions route", () => {
 
     const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
 
-    const response = await taskRoutes.request("http://localhost/task-1/sessions/session-1/messages", {
-      headers: {
-        Authorization: "Bearer test",
+    const response = await taskRoutes.request(
+      "http://localhost/task-1/sessions/session-1/messages",
+      {
+        headers: {
+          Authorization: "Bearer test",
+        },
       },
-    });
+    );
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
@@ -357,7 +454,7 @@ describe("task sessions route", () => {
   });
 
   test("reads task-level conversation messages from the task-first cache", async () => {
-    cpFetchMock.mockImplementation(async (url: string) => {
+    setCpFetchImplementation(async (url: string) => {
       if (url === "/api/tasks/task-1/messages") {
         return {
           ok: true,
@@ -449,7 +546,7 @@ describe("task sessions route", () => {
   });
 
   test("filters latest pending parallel candidate messages from task-level conversation tail", async () => {
-    cpFetchMock.mockImplementation(async (url: string, options?: { method?: string }) => {
+    setCpFetchImplementation(async (url: string, options?: { method?: string }) => {
       if (url === "/api/tasks/task-1/sessions" && !options?.method) {
         return {
           ok: true,
@@ -625,7 +722,7 @@ describe("task sessions route", () => {
   });
 
   test("filters adopted parallel candidate and anchor follow-up messages from task-level conversation", async () => {
-    cpFetchMock.mockImplementation(async (url: string, options?: { method?: string }) => {
+    setCpFetchImplementation(async (url: string, options?: { method?: string }) => {
       if (url === "/api/tasks/task-1/sessions" && !options?.method) {
         return {
           ok: true,
@@ -714,11 +811,41 @@ describe("task sessions route", () => {
           ok: true,
           data: {
             data: [
-              buildMessage("runtime-root-user", "user", "主线提示", "2026-03-20T10:00:00.000Z", "session-root"),
-              buildMessage("runtime-anchor-user", "user", "再给我几个边界条件", "2026-03-20T10:00:01.000Z", "session-anchor"),
-              buildMessage("runtime-anchor-context", "user", "Execution context: adopted round", "2026-03-20T10:00:01.500Z", "session-anchor"),
-              buildMessage("runtime-candidate-a", "assistant", "候选 A 输出", "2026-03-20T10:00:05.000Z", "session-a"),
-              buildMessage("runtime-candidate-b", "assistant", "候选 B 输出", "2026-03-20T10:00:06.000Z", "session-b"),
+              buildMessage(
+                "runtime-root-user",
+                "user",
+                "主线提示",
+                "2026-03-20T10:00:00.000Z",
+                "session-root",
+              ),
+              buildMessage(
+                "runtime-anchor-user",
+                "user",
+                "再给我几个边界条件",
+                "2026-03-20T10:00:01.000Z",
+                "session-anchor",
+              ),
+              buildMessage(
+                "runtime-anchor-context",
+                "user",
+                "Execution context: adopted round",
+                "2026-03-20T10:00:01.500Z",
+                "session-anchor",
+              ),
+              buildMessage(
+                "runtime-candidate-a",
+                "assistant",
+                "候选 A 输出",
+                "2026-03-20T10:00:05.000Z",
+                "session-a",
+              ),
+              buildMessage(
+                "runtime-candidate-b",
+                "assistant",
+                "候选 B 输出",
+                "2026-03-20T10:00:06.000Z",
+                "session-b",
+              ),
             ],
             meta: {
               readSource: "task-session-first",
@@ -749,8 +876,16 @@ describe("task sessions route", () => {
     await expect(response.json()).resolves.toEqual({
       data: [
         expect.objectContaining({ id: "runtime-root-user", role: "user", text: "主线提示" }),
-        expect.objectContaining({ id: "runtime-anchor-user", role: "user", text: "再给我几个边界条件" }),
-        expect.objectContaining({ id: "runtime-candidate-a", role: "assistant", text: "候选 A 输出" }),
+        expect.objectContaining({
+          id: "runtime-anchor-user",
+          role: "user",
+          text: "再给我几个边界条件",
+        }),
+        expect.objectContaining({
+          id: "runtime-candidate-a",
+          role: "assistant",
+          text: "候选 A 输出",
+        }),
       ],
       meta: expect.objectContaining({
         readSource: "task-session-first",
@@ -766,7 +901,7 @@ describe("task sessions route", () => {
   });
 
   test("keeps the root workflow execution-context as a dedicated workflow block", async () => {
-    cpFetchMock.mockImplementation(async (url: string, options?: { method?: string }) => {
+    setCpFetchImplementation(async (url: string, options?: { method?: string }) => {
       if (url === "/api/tasks/task-1/sessions" && !options?.method) {
         return {
           ok: true,
@@ -1124,7 +1259,7 @@ describe("task sessions route", () => {
       return { ok: true, data: [] };
     });
 
-    cpFetchMock.mockImplementation(async (url: string, options?: { method?: string }) => {
+    setCpFetchImplementation(async (url: string, options?: { method?: string }) => {
       if (url === "/api/project-tree/tasks/task-1") {
         return {
           ok: true,
@@ -1279,7 +1414,9 @@ describe("task sessions route", () => {
       ]),
     );
 
-    const workflowGroup = body.data.find((item: { _type?: string }) => item?._type === "workflow_group");
+    const workflowGroup = body.data.find(
+      (item: { _type?: string }) => item?._type === "workflow_group",
+    );
     expect(workflowGroup).toBeTruthy();
     expect(workflowGroup.steps).toEqual(
       expect.arrayContaining([
@@ -1340,7 +1477,7 @@ describe("task sessions route", () => {
   });
 
   test("keeps older pending parallel messages when only the newest parallel batch is still current", async () => {
-    cpFetchMock.mockImplementation(async (url: string, options?: { method?: string }) => {
+    setCpFetchImplementation(async (url: string, options?: { method?: string }) => {
       if (url === "/api/tasks/task-1/sessions" && !options?.method) {
         return {
           ok: true,
@@ -1441,12 +1578,48 @@ describe("task sessions route", () => {
           ok: true,
           data: {
             data: [
-              buildMessage("runtime-user-old", "user", "第一次并行", "2026-03-20T10:00:00.000Z", "session-root"),
-              buildMessage("runtime-old-a", "assistant", "旧候选 A", "2026-03-20T10:00:05.000Z", "session-old-a"),
-              buildMessage("runtime-old-b", "assistant", "旧候选 B", "2026-03-20T10:00:06.000Z", "session-old-b"),
-              buildMessage("runtime-user-new", "user", "第二次并行", "2026-03-20T10:01:00.000Z", "session-root"),
-              buildMessage("runtime-new-a", "assistant", "新候选 A", "2026-03-20T10:01:05.000Z", "session-new-a"),
-              buildMessage("runtime-new-b", "assistant", "新候选 B", "2026-03-20T10:01:06.000Z", "session-new-b"),
+              buildMessage(
+                "runtime-user-old",
+                "user",
+                "第一次并行",
+                "2026-03-20T10:00:00.000Z",
+                "session-root",
+              ),
+              buildMessage(
+                "runtime-old-a",
+                "assistant",
+                "旧候选 A",
+                "2026-03-20T10:00:05.000Z",
+                "session-old-a",
+              ),
+              buildMessage(
+                "runtime-old-b",
+                "assistant",
+                "旧候选 B",
+                "2026-03-20T10:00:06.000Z",
+                "session-old-b",
+              ),
+              buildMessage(
+                "runtime-user-new",
+                "user",
+                "第二次并行",
+                "2026-03-20T10:01:00.000Z",
+                "session-root",
+              ),
+              buildMessage(
+                "runtime-new-a",
+                "assistant",
+                "新候选 A",
+                "2026-03-20T10:01:05.000Z",
+                "session-new-a",
+              ),
+              buildMessage(
+                "runtime-new-b",
+                "assistant",
+                "新候选 B",
+                "2026-03-20T10:01:06.000Z",
+                "session-new-b",
+              ),
             ],
             meta: {
               readSource: "task-session-first",
@@ -1495,7 +1668,7 @@ describe("task sessions route", () => {
   });
 
   test("keeps partial session-first messages when no assistant reply is cached yet", async () => {
-    cpFetchMock.mockImplementation(async (url: string) => {
+    setCpFetchImplementation(async (url: string) => {
       if (url === "/api/tasks/task-1/sessions") {
         return {
           ok: true,
@@ -1550,11 +1723,14 @@ describe("task sessions route", () => {
     });
     const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
 
-    const response = await taskRoutes.request("http://localhost/task-1/sessions/session-1/messages", {
-      headers: {
-        Authorization: "Bearer test",
+    const response = await taskRoutes.request(
+      "http://localhost/task-1/sessions/session-1/messages",
+      {
+        headers: {
+          Authorization: "Bearer test",
+        },
       },
-    });
+    );
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
@@ -1578,7 +1754,7 @@ describe("task sessions route", () => {
   });
 
   test("activates task session by runtime session id via lineage record", async () => {
-    cpFetchMock.mockImplementation(async (url: string, options?: { method?: string }) => {
+    setCpFetchImplementation(async (url: string, options?: { method?: string }) => {
       if (url === "/api/tasks/task-1/sessions" && !options?.method) {
         return {
           ok: true,
@@ -1643,7 +1819,7 @@ describe("task sessions route", () => {
   });
 
   test("archives task session by runtime session id via lineage record", async () => {
-    cpFetchMock.mockImplementation(async (url: string, options?: { method?: string }) => {
+    setCpFetchImplementation(async (url: string, options?: { method?: string }) => {
       if (url === "/api/tasks/task-1/sessions" && !options?.method) {
         return {
           ok: true,
@@ -1708,7 +1884,7 @@ describe("task sessions route", () => {
   });
 
   test("forks task session via session route", async () => {
-    cpFetchMock.mockImplementation(async (url: string, options?: { method?: string }) => {
+    setCpFetchImplementation(async (url: string, options?: { method?: string }) => {
       if (url === "/api/project-tree/tasks/task-1") {
         return {
           ok: true,
@@ -1782,7 +1958,7 @@ describe("task sessions route", () => {
   });
 
   test("fork route resolves canonical task session ids to runtime sessions", async () => {
-    cpFetchMock.mockImplementation(async (url: string, options?: { method?: string }) => {
+    setCpFetchImplementation(async (url: string, options?: { method?: string }) => {
       if (url === "/api/project-tree/tasks/task-1") {
         return {
           ok: true,
@@ -1877,7 +2053,7 @@ describe("task sessions route", () => {
         },
       ],
     });
-    cpFetchMock.mockImplementation(async (url: string, options?: { method?: string }) => {
+    setCpFetchImplementation(async (url: string, options?: { method?: string }) => {
       if (url === "/api/project-tree/tasks/task-1") {
         return {
           ok: true,
@@ -2003,10 +2179,18 @@ describe("task sessions route", () => {
     const payload = await response.json();
     expect(payload.data).toEqual([
       expect.objectContaining({
+        id: "branch-node:task-1:session-root",
+        branchNodeId: "branch-node:task-1:session-root",
         runtimeSessionId: "session-root",
+        taskSessionId: "task-session:task-1:session-root",
+        parentTaskSessionId: null,
         children: [
           expect.objectContaining({
+            id: "branch-node:task-1:session-leaf",
+            branchNodeId: "branch-node:task-1:session-leaf",
             runtimeSessionId: "session-leaf",
+            taskSessionId: "task-session:task-1:session-leaf",
+            parentTaskSessionId: "task-session:task-1:session-root",
             forkedFromMessageId: "msg-1",
             forkedFromMessagePreview: "父分支里的回答摘要",
             firstPromptAfterFork: "分叉后的第一条用户问题",

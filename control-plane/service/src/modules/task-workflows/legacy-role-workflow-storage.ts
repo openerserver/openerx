@@ -155,6 +155,13 @@ function normalizeArray(value: unknown) {
   return Array.isArray(value) ? value : [];
 }
 
+function hasOwnStrategyField(
+  strategy: JsonRecord,
+  field: "roleAggregateConclusions" | "developerChangeRequests",
+) {
+  return Object.prototype.hasOwnProperty.call(strategy, field);
+}
+
 function isNonEmptyObject(value: unknown): value is JsonRecord {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -338,7 +345,7 @@ function inferLegacyStage(strategy: JsonRecord, legacyRoleConclusions: unknown[]
   return null;
 }
 
-function inferWorkflowStatus(taskStatus: TaskTreeRecord["status"]) {
+function inferWorkflowStatus(taskStatus?: WorkflowStatus | string | null) {
   switch (taskStatus) {
     case "running":
       return "running" as const;
@@ -366,8 +373,6 @@ function inferCurrentStage(taskStatus: TaskTreeRecord["status"], legacyStage: st
       return "cancelled";
     case "running":
     case "paused":
-    case "blocked":
-    case "waiting-approval":
     case "failed":
       return legacyStage ?? "unknown";
     default:
@@ -456,7 +461,9 @@ async function ensureWorkflowStageRunsMigrated(
     (left, right) => left.orderIndex - right.orderIndex,
   );
   const fallbackStageKey = orderedStages[0]?.stageKey ?? effectiveWorkflowRun.currentStage;
-  const activeStageKey = orderedStages.some((stage) => stage.stageKey === effectiveWorkflowRun.currentStage)
+  const activeStageKey = orderedStages.some(
+    (stage) => stage.stageKey === effectiveWorkflowRun.currentStage,
+  )
     ? effectiveWorkflowRun.currentStage
     : ((effectiveWorkflowRun.status === "completed"
         ? orderedStages[orderedStages.length - 1]?.stageKey
@@ -610,6 +617,148 @@ async function ensureLegacyTaskWorkflowRunMigrated(
   return createdWorkflowRun;
 }
 
+async function clearLegacyWorkflowStrategyFields(
+  taskId: string,
+  strategy: JsonRecord,
+  fields: Array<"roleAggregateConclusions" | "developerChangeRequests">,
+) {
+  const nextStrategy = { ...strategy };
+  let changed = false;
+
+  for (const field of fields) {
+    if (!hasOwnStrategyField(nextStrategy, field)) {
+      continue;
+    }
+
+    delete nextStrategy[field];
+    changed = true;
+  }
+
+  if (!changed) {
+    return;
+  }
+
+  await db
+    .update(taskAggregates)
+    .set({
+      strategyJson: Object.keys(nextStrategy).length > 0 ? nextStrategy : {},
+      updatedAt: new Date().toISOString(),
+    })
+    .where(eq(taskAggregates.id, taskId));
+}
+
+export async function ensureTaskWorkflowAvailable(taskId: string) {
+  const task = await loadWorkflowMigrationTask(taskId);
+  if (!task) {
+    return null;
+  }
+
+  const existingWorkflowRun = await db.query.taskWorkflowRuns.findFirst({
+    where: eq(taskWorkflowRuns.taskId, taskId),
+  });
+  if (!existingWorkflowRun) {
+    return ensureLegacyRoleWorkflowMigrated(taskId);
+  }
+
+  const currentStage = readString(existingWorkflowRun.currentStage);
+  const hasCanonicalTemplateId = Boolean(
+    normalizeWorkflowTemplateId(existingWorkflowRun.templateId),
+  );
+  const hasWorkflowStatus = existingWorkflowRun.status === inferWorkflowStatus(task.status);
+  const hasCanonicalCurrentStage = Boolean(
+    currentStage && currentStage !== "unknown" && currentStage !== "intake",
+  );
+  const existingStageRun = await db.query.taskStageRuns.findFirst({
+    where: eq(taskStageRuns.workflowRunId, existingWorkflowRun.id),
+  });
+
+  if (hasCanonicalTemplateId && hasWorkflowStatus && hasCanonicalCurrentStage && existingStageRun) {
+    return task;
+  }
+
+  return ensureLegacyRoleWorkflowMigrated(taskId);
+}
+
+export async function ensureTaskWorkflowFactsAvailable(taskId: string) {
+  const task = await loadWorkflowMigrationTask(taskId);
+  if (!task) {
+    return null;
+  }
+
+  const strategy = parseTaskStrategy(task.strategy);
+  const legacyRoleConclusions = normalizeArray(strategy.roleAggregateConclusions);
+
+  await ensureLegacyTaskWorkflowRunMigrated(task, strategy, legacyRoleConclusions);
+
+  const existingRoleConclusions = await db
+    .select({ id: roleAggregateConclusions.id })
+    .from(roleAggregateConclusions)
+    .where(eq(roleAggregateConclusions.taskId, taskId));
+  if (existingRoleConclusions.length === 0 && legacyRoleConclusions.length > 0) {
+    const now = new Date().toISOString();
+    const migratedRoleConclusions = legacyRoleConclusions.map((item) =>
+      normalizeLegacyRoleConclusion(item, taskId, now),
+    );
+    await db.insert(roleAggregateConclusions).values(migratedRoleConclusions).onConflictDoNothing();
+  }
+
+  await clearLegacyWorkflowStrategyFields(taskId, strategy, ["roleAggregateConclusions"]);
+
+  return task;
+}
+
+export async function ensureRoleConclusionsAvailable(taskId: string) {
+  const task = await loadWorkflowMigrationTask(taskId);
+  if (!task) {
+    return null;
+  }
+
+  const strategy = parseTaskStrategy(task.strategy);
+  const legacyRoleConclusions = normalizeArray(strategy.roleAggregateConclusions);
+  const existingRoleConclusions = await db
+    .select({ id: roleAggregateConclusions.id })
+    .from(roleAggregateConclusions)
+    .where(eq(roleAggregateConclusions.taskId, taskId));
+
+  if (existingRoleConclusions.length > 0) {
+    await clearLegacyWorkflowStrategyFields(taskId, strategy, ["roleAggregateConclusions"]);
+    return task;
+  }
+
+  if (legacyRoleConclusions.length === 0) {
+    await clearLegacyWorkflowStrategyFields(taskId, strategy, ["roleAggregateConclusions"]);
+    return task;
+  }
+
+  return ensureLegacyRoleWorkflowMigrated(taskId);
+}
+
+export async function ensureDeveloperChangeRequestsAvailable(taskId: string) {
+  const task = await loadWorkflowMigrationTask(taskId);
+  if (!task) {
+    return null;
+  }
+
+  const strategy = parseTaskStrategy(task.strategy);
+  const legacyChangeRequests = normalizeArray(strategy.developerChangeRequests);
+  const existingChangeRequests = await db
+    .select({ id: developerChangeRequests.id })
+    .from(developerChangeRequests)
+    .where(eq(developerChangeRequests.taskId, taskId));
+
+  if (existingChangeRequests.length > 0) {
+    await clearLegacyWorkflowStrategyFields(taskId, strategy, ["developerChangeRequests"]);
+    return task;
+  }
+
+  if (legacyChangeRequests.length === 0) {
+    await clearLegacyWorkflowStrategyFields(taskId, strategy, ["developerChangeRequests"]);
+    return task;
+  }
+
+  return ensureLegacyRoleWorkflowMigrated(taskId);
+}
+
 async function ensureLegacyRoleWorkflowMigratedInternal(taskId: string) {
   const task = await loadWorkflowMigrationTask(taskId);
   if (!task) {
@@ -646,20 +795,10 @@ async function ensureLegacyRoleWorkflowMigratedInternal(taskId: string) {
     await db.insert(developerChangeRequests).values(migratedChangeRequests).onConflictDoNothing();
   }
 
-  if ("roleAggregateConclusions" in strategy || "developerChangeRequests" in strategy) {
-    strategy.roleAggregateConclusions = undefined;
-    strategy.developerChangeRequests = undefined;
-    const normalizedStrategyJson =
-      Object.keys(strategy).length > 0 ? ({ ...strategy } as Record<string, unknown>) : null;
-
-    await db
-      .update(taskAggregates)
-      .set({
-          strategyJson: normalizedStrategyJson ?? {},
-        updatedAt: new Date().toISOString(),
-      })
-      .where(eq(taskAggregates.id, taskId));
-  }
+  await clearLegacyWorkflowStrategyFields(taskId, strategy, [
+    "roleAggregateConclusions",
+    "developerChangeRequests",
+  ]);
 
   return task;
 }

@@ -392,10 +392,10 @@ import { renderMarkdown } from "../../lib/markdown";
 import type {
   TaskConversationListItem,
   TaskConversationMessageItem,
-  TaskParallelComparisonCard,
   TaskConversationParallelItem,
   TaskConversationToolCallItem,
   TaskConversationWorkflowItem,
+  TaskParallelComparisonCard,
 } from "../../lib/message-normalize";
 
 const props = defineProps<{
@@ -479,9 +479,7 @@ function isParallelComparisonItem(
   return item.role === "parallel";
 }
 
-function isWorkflowItem(
-  item: TaskConversationListItem,
-): item is TaskConversationWorkflowItem {
+function isWorkflowItem(item: TaskConversationListItem): item is TaskConversationWorkflowItem {
   return item.role === "workflow";
 }
 
@@ -518,7 +516,10 @@ function isWorkflowStepCollapsed(sessionId: string) {
 }
 
 function toggleWorkflowStep(sessionId: string) {
-  collapsedWorkflowSteps.value = { ...collapsedWorkflowSteps.value, [sessionId]: !collapsedWorkflowSteps.value[sessionId] };
+  collapsedWorkflowSteps.value = {
+    ...collapsedWorkflowSteps.value,
+    [sessionId]: !collapsedWorkflowSteps.value[sessionId],
+  };
 }
 
 function candidateStatusLabel(status: string | undefined) {
@@ -862,8 +863,9 @@ function hasPromptDecomposition(item: TaskConversationMessageItem) {
 }
 
 function userDisplayText(item: TaskConversationMessageItem) {
-  if (hasPromptDecomposition(item)) {
-    return item.userInputText!;
+  const userInputText = item.userInputText;
+  if (hasPromptDecomposition(item) && userInputText) {
+    return userInputText;
   }
   return sanitizedItemText(item) || item.text || "";
 }
@@ -889,8 +891,8 @@ function canCopy(item: TaskConversationListItem) {
 }
 
 function canCopyParallelCandidate(candidate: TaskParallelComparisonCard) {
-  return candidate.items.some(
-    (entry) => Boolean(displayText(entry) || sanitizedItemText(entry) || entry.toolCalls.length),
+  return candidate.items.some((entry) =>
+    Boolean(displayText(entry) || sanitizedItemText(entry) || entry.toolCalls.length),
   );
 }
 

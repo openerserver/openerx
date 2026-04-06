@@ -1,11 +1,7 @@
 import { cpFetch, createInternalAuthorization } from "../../lib/control-plane-client";
-import {
-  extractAssistantResultFromMessages,
-  getAgentRun,
-  getSessionMessages,
-  listSessions,
-  recoverAgentRun,
-} from "../agent-control/opencode-adapter";
+import { getAgentRun, recoverAgentRun } from "../agent-control/agent-run-registry";
+import { extractAssistantResultFromMessages } from "../agent-control/runtime-message-utils";
+import { getSessionMessages, listSessions } from "../agent-control/runtime-provider";
 import { finalizeTaskState } from "./finalize";
 import {
   fetchTaskSessionLineageRecords,
@@ -137,7 +133,6 @@ async function markTaskCompleted(
     agentRunId: task.agentRunId ?? undefined,
     result: resultText,
     task,
-    syncWorkflowTerminalState: false,
   });
 }
 
@@ -310,10 +305,7 @@ function inferTerminalStatus(task: RunningTaskRecord): "completed" | "failed" | 
   return null;
 }
 
-async function deactivateActiveTaskSessions(
-  authorization: string,
-  taskId: string,
-): Promise<void> {
+async function deactivateActiveTaskSessions(authorization: string, taskId: string): Promise<void> {
   const lineageResult = await fetchTaskSessionLineageRecords(taskId, authorization);
   if (!lineageResult.ok) {
     return;

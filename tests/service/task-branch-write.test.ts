@@ -219,7 +219,10 @@ describe("task branch write", () => {
     expect(syncTaskBranchCompatTreeNode).not.toHaveBeenCalled();
 
     expect(upsertConversationSessionRecord).toHaveBeenCalledTimes(1);
-    const sessionSyncArg = upsertConversationSessionRecord.mock.calls[0]?.[0] as Record<string, unknown>;
+    const sessionSyncArg = upsertConversationSessionRecord.mock.calls[0]?.[0] as Record<
+      string,
+      unknown
+    >;
     expect(sessionSyncArg).toMatchObject({
       runtimeSessionId: "fork-session-1",
       parentRuntimeSessionId: "root-session-1",

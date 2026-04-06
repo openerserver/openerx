@@ -324,21 +324,17 @@ import type { Yoga as YogaLayoutApi } from "yoga-layout/load";
 import {
   type RuntimePipeline,
   type Task,
-  type TaskSessionRecord,
   type TaskMemberViewModel,
+  type TaskSessionRecord,
   getTask,
-  getTaskSessions,
   getTaskConversationMessages,
   getTaskMemberView,
   getTaskPipeline,
+  getTaskSessions,
   listTasks,
 } from "../lib/api";
 import { renderMarkdown } from "../lib/markdown";
-import {
-  getRealtimeEventKind,
-  getRealtimeInfo,
-  getRealtimePart,
-} from "../lib/message-normalize";
+import { getRealtimeEventKind, getRealtimeInfo, getRealtimePart } from "../lib/message-normalize";
 import { resolveTaskDisplayStatus } from "../lib/task-display-status";
 import { normalizeWorkspaceFilePath } from "../lib/workspace-file-path";
 import { useProjectStore } from "../stores/project";

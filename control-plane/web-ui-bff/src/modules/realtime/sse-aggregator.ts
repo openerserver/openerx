@@ -15,20 +15,22 @@ import {
 import type { PaidExecutionGuardState } from "../../lib/paid-execution-guard";
 import type { RealtimeEvent, RealtimeEventType } from "../../types/events";
 import {
-  createSession,
-  extractAssistantResultFromMessages,
   findAgentRunBySessionId,
-  getSessionMessages,
-  runDetachedPrompt,
-  terminateAgent,
   updateAgentRunStatus,
-} from "../agent-control/opencode-adapter";
+} from "../agent-control/agent-run-registry";
+import { extractAssistantResultFromMessages } from "../agent-control/runtime-message-utils";
 import {
   createAgentRunRecord,
   patchAgentRunRecord,
   recordAgentAudit,
   recordModelUsage,
 } from "../agent-control/run-persistence";
+import {
+  createSession,
+  getSessionMessages,
+  runDetachedPrompt,
+  terminateAgent,
+} from "../agent-control/runtime-provider";
 import { collectChangesFromSession } from "../code-changes/change-collector";
 import { executeLifecycleHooks } from "../hooks/lifecycle-hooks";
 import { finalizeTaskState } from "../tasks/finalize";
@@ -182,7 +184,10 @@ class SSEAggregator {
   // candidate/chain maps, and DB lookups. Used as fallback when the
   // in-memory agentRunRegistry has no mapping (e.g. after BFF restart).
   private sessionToTaskCache = new Map<string, { taskId: string; projectId?: string }>();
-  private pendingSessionLookups = new Map<string, Promise<{ taskId: string; projectId?: string } | null>>();
+  private pendingSessionLookups = new Map<
+    string,
+    Promise<{ taskId: string; projectId?: string } | null>
+  >();
 
   private isPaidExecutionBreakerTripped(taskId: string): boolean {
     return this.paidExecutionRuntime.get(taskId)?.tripped === true;
@@ -644,7 +649,10 @@ class SSEAggregator {
       return;
     }
 
-    const followupTemplate = this.resolveFollowupTemplate(strategyConfig.followups, followupDecision);
+    const followupTemplate = this.resolveFollowupTemplate(
+      strategyConfig.followups,
+      followupDecision,
+    );
     if (!followupTemplate) {
       const missingFollowupExecution: FollowupExecutionRecord = {
         templateId: followupDecision.templateId,
@@ -821,7 +829,8 @@ class SSEAggregator {
 
     this.emit({
       id: crypto.randomUUID(),
-      type: followupExecution.status === "failed" ? "task.followup.failed" : "task.followup.completed",
+      type:
+        followupExecution.status === "failed" ? "task.followup.failed" : "task.followup.completed",
       ts: new Date().toISOString(),
       taskId: task.id,
       projectId: task.projectId,
@@ -842,9 +851,7 @@ class SSEAggregator {
       projectId: task.projectId,
       authorization,
       reason:
-        followupExecution.status === "failed"
-          ? "task.followup.failed"
-          : "task.followup.completed",
+        followupExecution.status === "failed" ? "task.followup.failed" : "task.followup.completed",
     });
   }
 
@@ -925,8 +932,7 @@ class SSEAggregator {
       `[Follow-up ${args.task.id.slice(0, 8)}] ${args.task.title}`,
       prompt,
       {
-        agent:
-          args.decisionSelection.execution.decision?.targetAgent || args.template.agent,
+        agent: args.decisionSelection.execution.decision?.targetAgent || args.template.agent,
         model: followupModel ? parseModelString(followupModel) : undefined,
         taskId: args.task.id,
         projectId: args.task.projectId,
@@ -1068,11 +1074,12 @@ class SSEAggregator {
       typeof message.info === "object" && message.info
         ? (message.info as Record<string, unknown>)
         : null;
-    const role = typeof message.role === "string"
-      ? message.role
-      : typeof info?.role === "string"
-        ? info.role
-        : null;
+    const role =
+      typeof message.role === "string"
+        ? message.role
+        : typeof info?.role === "string"
+          ? info.role
+          : null;
     return role;
   }
 
@@ -1088,7 +1095,11 @@ class SSEAggregator {
     }
     if (Array.isArray(message.parts)) {
       for (const part of message.parts) {
-        if (part && typeof part === "object" && typeof (part as Record<string, unknown>).text === "string") {
+        if (
+          part &&
+          typeof part === "object" &&
+          typeof (part as Record<string, unknown>).text === "string"
+        ) {
           return (part as Record<string, unknown>).text as string;
         }
       }
@@ -1120,7 +1131,9 @@ class SSEAggregator {
     return undefined;
   }
 
-  private buildPersistableToolMessageSnapshot(event: RealtimeEvent): Record<string, unknown> | null {
+  private buildPersistableToolMessageSnapshot(
+    event: RealtimeEvent,
+  ): Record<string, unknown> | null {
     if (
       (event.type !== "tool.execute.before" && event.type !== "tool.execute.after") ||
       !event.sessionId
@@ -1139,9 +1152,7 @@ class SSEAggregator {
       return null;
     }
 
-    const toolIdentity =
-      this.extractToolIdentity(event.data) ||
-      `${event.sessionId}:${toolName}`;
+    const toolIdentity = this.extractToolIdentity(event.data) || `${event.sessionId}:${toolName}`;
     const resultText =
       typeof properties?.result === "string"
         ? properties.result
@@ -1154,13 +1165,10 @@ class SSEAggregator {
         : typeof event.data.error === "string"
           ? event.data.error
           : undefined;
-    const inputValue = properties?.input ?? event.data.input ?? properties?.arguments ?? event.data.arguments;
+    const inputValue =
+      properties?.input ?? event.data.input ?? properties?.arguments ?? event.data.arguments;
     const status =
-      event.type === "tool.execute.before"
-        ? "running"
-        : errorText
-          ? "error"
-          : "completed";
+      event.type === "tool.execute.before" ? "running" : errorText ? "error" : "completed";
 
     return {
       id: `tool:${toolIdentity}`,
@@ -1222,7 +1230,12 @@ class SSEAggregator {
   }
 
   private hasInlineMessageContent(message: Record<string, unknown>) {
-    const textCandidates = [message.textContent, message.text, message.summaryText, message.content];
+    const textCandidates = [
+      message.textContent,
+      message.text,
+      message.summaryText,
+      message.content,
+    ];
     if (textCandidates.some((value) => typeof value === "string" && value.trim().length > 0)) {
       return true;
     }
@@ -2069,7 +2082,6 @@ class SSEAggregator {
         sessionId: event.sessionId,
         agentRunId: event.agentRunId,
         result: resultText,
-        syncWorkflowTerminalState: false,
       });
 
       if (!taskUpdate) {
@@ -3013,7 +3025,9 @@ class SSEAggregator {
       executionModeSnapshot: "sequential_chain",
       isActive: true,
       stepIndex: nextIndex,
-      selectedModel: resolvedModel ? formatModelRoute(resolvedModel) : task.selectedModel ?? undefined,
+      selectedModel: resolvedModel
+        ? formatModelRoute(resolvedModel)
+        : (task.selectedModel ?? undefined),
       operationId: chainCtx.operationId,
     }).catch(() => null);
 

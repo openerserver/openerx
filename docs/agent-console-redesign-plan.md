@@ -11,6 +11,8 @@
 
 本文档面向产品、前端、BFF、Service 共同评审，不是最终代码实现说明。
 
+> 状态更新（2026-04-05）：当前 schema 已删除 `agent_runs` 物理表。公共 `agentRunId` 标识与 `/api/agent-runs/:agentRunId/summary` 兼容接口仍保留，但其数据已经由 canonical task-domain 表投影生成。因此，本文凡把 `agent_runs` 当作“现行主表”的地方，都应按“兼容读模型”理解。
+
 ## 2. 当前现状
 
 当前 Agent 控制台的主能力是：
@@ -696,7 +698,7 @@
 
 最近结束队列中的结果摘要建议优先取：
 
-1. `agent_runs.result`
+1. 兼容 agent run 视图中的 `result`
 2. 最近一次完成事件中的结构化结果
 3. 任务变更摘要
 4. 空值时显示“无结构化结果摘要”
@@ -745,14 +747,14 @@
 
 现有 Service 数据模型已具备聚合基础：
 
-- `agent_runs`
+- `task_operations` + `task_session_runs` + `task_sessions`（组成 `agentRunId` 兼容投影）
 - `approval_tickets`
 - `audit_events`
 - `cost_records`
 - `code_changes`
 - `tasks`
 
-其中 `agent_runs` 已存在，是第二阶段的核心主表。
+其中保留的是 `agentRunId` 兼容视图，而不是独立 `agent_runs` 主表；第二阶段聚合应直接建立在 canonical task-domain 表之上。
 
 ## 9. 第二阶段 API 设计
 
@@ -803,7 +805,7 @@ interface AgentRunsOverviewResponse {
 
 数据来源：
 
-- `agent_runs`
+- `agentRunId` 兼容投影（来自 `task_operations`、`task_session_runs`、`task_sessions`）
 - `approval_tickets`
 - `audit_events`
 
@@ -1115,8 +1117,8 @@ BFF 负责：
 
 当满足以下任一条件时进入 `attention`：
 
-- `agent_runs.status = failed`
-- `agent_runs.status = paused` 且存在待人工恢复判定
+- 兼容 agent run 视图 `status = failed`
+- 兼容 agent run 视图 `status = paused` 且存在待人工恢复判定
 - 关联 `approval_tickets.status = pending`
 - 运行中但超过“无进展阈值”
 - `stopped / terminated` 且未被标记为已处理

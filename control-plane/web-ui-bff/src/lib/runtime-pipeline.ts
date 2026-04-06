@@ -1,12 +1,12 @@
-import { getSessionMessages } from "../modules/agent-control/opencode-adapter";
+import { getSessionMessages } from "../modules/agent-control/runtime-provider";
 import { cpFetch } from "./control-plane-client";
 import {
-  ExecutionCandidate,
-  ExecutionStep,
-  FollowupExecutionRecord,
-  HookExecutionRecord,
-  PersistedTaskStrategy,
-  RuntimePlan,
+  type ExecutionCandidate,
+  type ExecutionStep,
+  type FollowupExecutionRecord,
+  type HookExecutionRecord,
+  type PersistedTaskStrategy,
+  type RuntimePlan,
   parseTaskStrategy,
 } from "./orchestration-strategy";
 
@@ -148,15 +148,18 @@ function mapServiceTaskSessionsToRuntimePipelineRecords(
   sessions: ServiceTaskSessionRecord[],
   currentSessionId?: string | null,
 ) {
-  return sessions.map((session) => ({
-    id: session.id,
-    runtimeSessionId: session.runtimeSessionId ?? session.id,
-    branchName: session.branchName ?? null,
-    isActive: currentSessionId
-      ? session.id === currentSessionId
-      : session.executionStatus === "running" && !session.archivedAt,
-    archivedAt: session.archivedAt ?? null,
-  } satisfies TaskSessionRecord));
+  return sessions.map(
+    (session) =>
+      ({
+        id: session.id,
+        runtimeSessionId: session.runtimeSessionId ?? session.id,
+        branchName: session.branchName ?? null,
+        isActive: currentSessionId
+          ? session.id === currentSessionId
+          : session.executionStatus === "running" && !session.archivedAt,
+        archivedAt: session.archivedAt ?? null,
+      }) satisfies TaskSessionRecord,
+  );
 }
 
 function toIso(value: number | string | null | undefined) {
@@ -830,7 +833,8 @@ function appendParallelDomainRunStages(
     );
 
   for (const candidate of candidates) {
-    const candidateIndex = typeof candidate.candidateIndex === "number" ? candidate.candidateIndex : nextOrder;
+    const candidateIndex =
+      typeof candidate.candidateIndex === "number" ? candidate.candidateIndex : nextOrder;
     stages.push(
       stageFromParallelRunCandidate(candidate, nextOrder, configuredCandidates[candidateIndex]),
     );
@@ -898,10 +902,18 @@ export async function buildRuntimePipeline(args: {
   order = appendPlanningStages(stages, messages, order);
   order =
     task.orchestrationKind === "parallel"
-      ? appendParallelDomainRunStages(stages, parallelRunDetail, order, configuredParallelCandidates)
+      ? appendParallelDomainRunStages(
+          stages,
+          parallelRunDetail,
+          order,
+          configuredParallelCandidates,
+        )
       : appendPlanStages(stages, null, order);
   order = appendSingleExecutionFallbackStage(stages, task, requestedSessionId, messages, order);
-  order = appendHookExecutionStages(stages, hookExecutions, order, ["post-execution", "on-failure"]);
+  order = appendHookExecutionStages(stages, hookExecutions, order, [
+    "post-execution",
+    "on-failure",
+  ]);
   appendFollowupExecutionStages(stages, followupExecutions, order);
 
   const finalizedStages = finalizeStagesForTask(

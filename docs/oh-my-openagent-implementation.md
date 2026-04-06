@@ -3,6 +3,8 @@
 > 状态说明：本文档记录的是一轮历史实现方案，其中涉及旧图模型兼容层的章节已不再代表当前代码。
 >
 > 当前系统已完成旧兼容层下线与数据库清理；阅读本文件时，请将相关章节视为历史背景，而不是现行架构说明。
+>
+> 历史口径说明（2026-04-05）：本文中若把 `agent_runs` 写成现行执行主表、运营主表或运行时事实表，应统一按删除前兼容层理解。当前 schema 已删除 `agent_runs` 物理表，兼容 `agentRunId` 读写已由 canonical task-domain 表投影承接。
 
 ## 1. 文档目的
 
@@ -346,7 +348,7 @@ TaskDetail 新增"会话历史"卡片：
 这些内容已整体失效，原因如下：
 
 1. 相关 runtime 插件、BFF 同步链路、前端图视图和 service schema 已在当前仓库中删除。
-2. 当前系统不再通过图镜像表达执行主路径，而是以 Workflow Stage、RuntimePlan、Hook、agent_runs 和 runtime pipeline 为中心。
+2. 当前系统不再通过图镜像表达执行主路径，而是以 Workflow Stage、RuntimePlan、Hook 与 runtime pipeline 为中心；本文原先把 `agent_runs` 纳入主链路的表述属于删除前兼容层口径。
 3. 若继续保留旧文件清单和旧数据流图，会把已经移除的能力误写成现状。
 
 因此本附录不再展开旧版文件级设计。当前有效实现与后续迭代方向，请以 [docs/dag-node-execution-plan-v2.md](docs/dag-node-execution-plan-v2.md) 为准。

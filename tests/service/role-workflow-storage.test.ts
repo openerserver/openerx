@@ -112,20 +112,28 @@ async function createWorkflowTemplateFixture(
     stageIds: stageKeys.map((stageKey) => `${templateId}-${stageKey}`),
   });
 
-  const createTemplate = await authedRequest<Record<string, unknown>>(token, "/api/workflow-templates", {
-    method: "POST",
-    body: JSON.stringify({
-      id: templateId,
-      name: `Test Template ${templateId}`,
-      enabled: true,
-      selectableByProjects: true,
-      stageOrder: stageKeys,
-    }),
-  });
+  const createTemplate = await authedRequest<Record<string, unknown>>(
+    token,
+    "/api/workflow-templates",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        id: templateId,
+        name: `Test Template ${templateId}`,
+        enabled: true,
+        selectableByProjects: true,
+        stageOrder: stageKeys,
+      }),
+    },
+  );
   expect(createTemplate.status).toBe(201);
 }
 
-async function createWorkflowTemplateStages(token: string, templateId: string, stageKeys: string[]) {
+async function createWorkflowTemplateStages(
+  token: string,
+  templateId: string,
+  stageKeys: string[],
+) {
   for (const [index, stageKey] of stageKeys.entries()) {
     const createStage = await authedRequest<Record<string, unknown>>(
       token,
@@ -167,19 +175,27 @@ afterAll(async () => {
     await runDeleteByTaskIds(safeWriteDb, "task_workflow_runs", createdTaskIds);
     await runDeleteByTaskIds(safeWriteDb, "developer_change_requests", createdTaskIds);
     await runDeleteByTaskIds(safeWriteDb, "role_aggregate_conclusions", createdTaskIds);
-    await runDeleteByTaskIds(safeWriteDb, "agent_runs", createdTaskIds);
     await runDeleteByTaskIds(safeWriteDb, "audit_events", createdTaskIds);
     await runDeleteByIds(safeWriteDb, "tasks", createdTaskIds);
     await runTaskNodeDefensiveCleanup(safeWriteDb, createdTaskIds);
 
     for (const template of createdWorkflowTemplates) {
       for (const stageId of template.stageIds) {
-        await authedRequest<{ ok: boolean }>(token, `/api/workflow-templates/${template.templateId}/stages/${stageId}`, {
-          method: "DELETE",
-        }).catch(() => undefined);
+        await authedRequest<{ ok: boolean }>(
+          token,
+          `/api/workflow-templates/${template.templateId}/stages/${stageId}`,
+          {
+            method: "DELETE",
+          },
+        ).catch(() => undefined);
       }
 
-      await runDeleteByIds(safeWriteDb, "workflow_template_stages", [template.templateId], "template_id");
+      await runDeleteByIds(
+        safeWriteDb,
+        "workflow_template_stages",
+        [template.templateId],
+        "template_id",
+      );
       await runDeleteByIds(safeWriteDb, "workflow_templates", [template.templateId]);
     }
   } finally {
@@ -194,6 +210,199 @@ beforeAll(async () => {
 });
 
 describe("Role workflow storage (service)", () => {
+  test("reuses canonical role conclusions without creating workflow runs", async () => {
+    const { id: taskId } = await createTask(token, `canonical-role-conclusion-${Date.now()}`);
+    const canonicalConclusionId = `canonical-conclusion-${taskId}`;
+
+    const patchTask = await authedRequest<Record<string, unknown>>(token, `/api/tasks/${taskId}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        status: "running",
+        strategy: JSON.stringify({
+          selectedTemplateId: "legacy-template-existing-conclusion",
+          roleAggregateConclusions: [
+            {
+              id: `legacy-conclusion-${taskId}`,
+              roleAgentId: "role.architect",
+              stage: "design",
+              aggregationStrategy: "merge-summary",
+              status: "aligned",
+              finalDecision: "allow",
+              aggregateRiskLevel: "medium",
+              confidenceScore: 0.91,
+              consensusScore: 0.88,
+              winningRationale: "历史结论仍留在 strategy 中。",
+            },
+          ],
+        }),
+      }),
+    });
+    expect(patchTask.status).toBe(200);
+
+    await writeDb(
+      `INSERT INTO role_aggregate_conclusions (
+        id,
+        task_id,
+        task_stage_run_id,
+        role_agent_id,
+        stage,
+        aggregation_strategy,
+        status,
+        final_decision,
+        aggregate_risk_level,
+        confidence_score,
+        consensus_score,
+        winning_rationale,
+        merged_findings_json,
+        minority_findings_json,
+        conflicts_json,
+        approval_recommendation_json,
+        generated_at,
+        created_at,
+        updated_at
+      ) VALUES (
+        ?1, ?2, NULL, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12::jsonb, ?13::jsonb, ?14::jsonb, ?15::jsonb, ?16, ?16, ?16
+      )`,
+      [
+        canonicalConclusionId,
+        taskId,
+        "role.security",
+        "verify",
+        "merge-summary",
+        "aligned",
+        "allow",
+        "medium",
+        0.93,
+        0.9,
+        "canonical row should win",
+        JSON.stringify([]),
+        JSON.stringify([]),
+        JSON.stringify([]),
+        JSON.stringify({ required: false }),
+        new Date().toISOString(),
+      ],
+    );
+
+    const getConclusions = await authedRequest<{
+      data: Array<{ id: string; roleAgentId: string; winningRationale: string }>;
+    }>(token, `/api/tasks/${taskId}/role-conclusions`);
+    expect(getConclusions.status).toBe(200);
+    expect(getConclusions.data.data).toEqual([
+      expect.objectContaining({
+        id: canonicalConclusionId,
+        roleAgentId: "role.security",
+        winningRationale: "canonical row should win",
+      }),
+    ]);
+
+    const workflowRunRows = await sql.unsafe<Array<{ count: number }>>(
+      "SELECT count(*)::int AS count FROM task_workflow_runs WHERE task_id = $1",
+      [taskId],
+    );
+    expect(workflowRunRows[0]?.count).toBe(0);
+
+    const taskAfterRead = await authedRequest<{
+      strategy?: { roleAggregateConclusions?: unknown } | null;
+    }>(token, `/api/project-tree/tasks/${taskId}`);
+    expect(taskAfterRead.status).toBe(200);
+    expect(taskAfterRead.data.strategy?.roleAggregateConclusions).toBeUndefined();
+  });
+
+  test("reuses canonical developer change requests without creating workflow runs", async () => {
+    const { id: taskId } = await createTask(token, `canonical-change-request-${Date.now()}`);
+    const canonicalRequestId = `canonical-request-${taskId}`;
+
+    const patchTask = await authedRequest<Record<string, unknown>>(token, `/api/tasks/${taskId}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        status: "running",
+        strategy: JSON.stringify({
+          selectedTemplateId: "legacy-template-existing-request",
+          developerChangeRequests: [
+            {
+              id: `legacy-request-${taskId}`,
+              sourceRoleAgentId: "role.qa",
+              priority: "medium",
+              title: "legacy request",
+              summary: "legacy request still lives in strategy",
+              requiredChanges: ["legacy change"],
+              blocking: false,
+              approvalRequired: false,
+              status: "open",
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            },
+          ],
+        }),
+      }),
+    });
+    expect(patchTask.status).toBe(200);
+
+    const now = new Date().toISOString();
+    await writeDb(
+      `INSERT INTO developer_change_requests (
+        id,
+        task_id,
+        task_stage_run_id,
+        source_role_agent_id,
+        assigned_role_agent_id,
+        priority,
+        title,
+        summary,
+        required_changes_json,
+        related_finding_keys_json,
+        blocking,
+        approval_required,
+        status,
+        resolution_note,
+        created_at,
+        updated_at,
+        resolved_at
+      ) VALUES (
+        ?1, ?2, NULL, ?3, ?4, ?5, ?6, ?7, ?8::jsonb, ?9::jsonb, ?10, ?11, ?12, NULL, ?13, ?13, NULL
+      )`,
+      [
+        canonicalRequestId,
+        taskId,
+        "role.security",
+        "role.developer",
+        "high",
+        "canonical request",
+        "canonical request should win",
+        JSON.stringify(["upgrade dependency"]),
+        JSON.stringify(["dep-1"]),
+        true,
+        false,
+        "open",
+        now,
+      ],
+    );
+
+    const getRequests = await authedRequest<{
+      data: Array<{ id: string; title: string; summary: string }>;
+    }>(token, `/api/tasks/${taskId}/developer-change-requests`);
+    expect(getRequests.status).toBe(200);
+    expect(getRequests.data.data).toEqual([
+      expect.objectContaining({
+        id: canonicalRequestId,
+        title: "canonical request",
+        summary: "canonical request should win",
+      }),
+    ]);
+
+    const workflowRunRows = await sql.unsafe<Array<{ count: number }>>(
+      "SELECT count(*)::int AS count FROM task_workflow_runs WHERE task_id = $1",
+      [taskId],
+    );
+    expect(workflowRunRows[0]?.count).toBe(0);
+
+    const taskAfterRead = await authedRequest<{
+      strategy?: { developerChangeRequests?: unknown } | null;
+    }>(token, `/api/project-tree/tasks/${taskId}`);
+    expect(taskAfterRead.status).toBe(200);
+    expect(taskAfterRead.data.strategy?.developerChangeRequests).toBeUndefined();
+  });
+
   test("stores role conclusions and developer change requests in formal tables", async () => {
     const { id: taskId } = await createTask(token, `role-workflow-${Date.now()}`);
 

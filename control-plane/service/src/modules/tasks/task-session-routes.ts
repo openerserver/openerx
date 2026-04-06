@@ -2,12 +2,9 @@ import { zValidator } from "@hono/zod-validator";
 import type { Hono } from "hono";
 import { z } from "zod";
 import type { AppEnv } from "../../middleware/auth";
+import { createTaskBranchSchema, persistTaskBranchMessageSchema } from "./task-branch-write";
 import { resolveTaskByRuntimeSessionId } from "./task-route-builder-shared";
 import { postTaskSessionMessageSchema } from "./task-session-message-dto";
-import {
-  createTaskBranchSchema,
-  persistTaskBranchMessageSchema,
-} from "./task-branch-write";
 
 const adoptTaskSessionWinnerSchema = z.object({
   coordinationKey: z.string().min(1),
@@ -52,13 +49,19 @@ export function registerTaskSessionRoutes(
       data?: unknown;
       details?: unknown;
     }>;
-    activateTaskSession: (taskId: string, sessionId: string) => Promise<{
+    activateTaskSession: (
+      taskId: string,
+      sessionId: string,
+    ) => Promise<{
       ok: boolean;
       status: number;
       error?: string;
       data?: unknown;
     }>;
-    archiveTaskSession: (taskId: string, sessionId: string) => Promise<{
+    archiveTaskSession: (
+      taskId: string,
+      sessionId: string,
+    ) => Promise<{
       ok: boolean;
       status: number;
       error?: string;
@@ -70,7 +73,10 @@ export function registerTaskSessionRoutes(
       error?: string;
       data?: unknown;
     }>;
-    getTaskSession: (taskId: string, sessionId: string) => Promise<{
+    getTaskSession: (
+      taskId: string,
+      sessionId: string,
+    ) => Promise<{
       ok: boolean;
       status: number;
       error?: string;
@@ -102,25 +108,37 @@ export function registerTaskSessionRoutes(
       error?: string;
       data?: unknown;
     }>;
-    listTaskSessionMessages: (taskId: string, sessionId: string) => Promise<{
+    listTaskSessionMessages: (
+      taskId: string,
+      sessionId: string,
+    ) => Promise<{
       ok: boolean;
       status: number;
       error?: string;
       data?: unknown;
     }>;
-    listTaskSessionOperations: (taskId: string, sessionId: string) => Promise<{
+    listTaskSessionOperations: (
+      taskId: string,
+      sessionId: string,
+    ) => Promise<{
       ok: boolean;
       status: number;
       error?: string;
       data?: unknown;
     }>;
-    listTaskSessionArtifacts: (taskId: string, sessionId: string) => Promise<{
+    listTaskSessionArtifacts: (
+      taskId: string,
+      sessionId: string,
+    ) => Promise<{
       ok: boolean;
       status: number;
       error?: string;
       data?: unknown;
     }>;
-    listTaskUsageLedgerEntries: (taskId: string, sessionId?: string | null) => Promise<{
+    listTaskUsageLedgerEntries: (
+      taskId: string,
+      sessionId?: string | null,
+    ) => Promise<{
       ok: boolean;
       status: number;
       error?: string;
@@ -198,7 +216,6 @@ export function registerTaskSessionRoutes(
     return c.json(result.data, result.status as 200 | 201);
   });
 
-
   taskRoutes.post(
     "/:taskId/sessions/:sessionId/messages",
     zValidator("json", postTaskSessionMessageSchema),
@@ -209,7 +226,10 @@ export function registerTaskSessionRoutes(
         ...c.req.valid("json"),
       });
       if (!result.ok) {
-        return c.json({ error: result.error, details: result.details }, result.status as 400 | 404 | 409 | 500);
+        return c.json(
+          { error: result.error, details: result.details },
+          result.status as 400 | 404 | 409 | 500,
+        );
       }
 
       return c.json(result.data, result.status as 200 | 201);
@@ -392,10 +412,7 @@ export function registerTaskSessionRoutes(
     const taskId = c.req.param("taskId");
     const runtimeSessionId = c.req.query("runtimeSessionId");
     if (runtimeSessionId) {
-      return c.json(
-        { error: "runtimeSessionId query has been removed; use sessionId." },
-        410,
-      );
+      return c.json({ error: "runtimeSessionId query has been removed; use sessionId." }, 410);
     }
 
     const result = await deps.buildTaskExecutionTraceResponse({

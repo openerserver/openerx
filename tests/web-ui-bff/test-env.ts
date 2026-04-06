@@ -111,8 +111,8 @@ export function buildTaskCleanupStatements(taskIds: string[]) {
   return taskIds.filter(isNonEmptyId).flatMap((taskId) => {
     const id = escapeSqlValue(taskId);
     return [
-      `DELETE FROM runtime_usage_ledger_steps WHERE task_id='${id}' OR agent_run_id IN (SELECT id FROM agent_runs WHERE task_id='${id}');`,
-      `DELETE FROM runtime_usage_ledgers WHERE task_id='${id}' OR agent_run_id IN (SELECT id FROM agent_runs WHERE task_id='${id}');`,
+      `DELETE FROM runtime_usage_ledger_steps WHERE task_id='${id}' OR runtime_session_id IN (SELECT runtime_session_id FROM task_sessions WHERE task_id='${id}');`,
+      `DELETE FROM runtime_usage_ledgers WHERE task_id='${id}' OR runtime_session_id IN (SELECT runtime_session_id FROM task_sessions WHERE task_id='${id}');`,
       `DELETE FROM file_changes WHERE change_id IN (SELECT id FROM code_changes WHERE task_id='${id}');`,
       `DELETE FROM code_changes WHERE task_id='${id}';`,
       `DELETE FROM task_stage_runs WHERE workflow_run_id IN (SELECT id FROM task_workflow_runs WHERE task_id='${id}');`,
@@ -126,7 +126,6 @@ export function buildTaskCleanupStatements(taskIds: string[]) {
       `DELETE FROM task_operating_modes WHERE task_id='${id}';`,
       `DELETE FROM boss_decisions WHERE task_id='${id}';`,
       `DELETE FROM human_escalations WHERE task_id='${id}';`,
-      `DELETE FROM agent_runs WHERE task_id='${id}';`,
       `DELETE FROM project_tree_branches WHERE task_node_id='${id}' OR head_node_id='${id}';`,
       `DELETE FROM project_tree_nodes WHERE id='${id}';`,
     ];

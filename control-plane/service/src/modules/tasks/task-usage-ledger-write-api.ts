@@ -1,5 +1,5 @@
 import { db } from "../../db";
-import { taskUsageLedgerEntries, type TaskUsageEntryKind } from "../../db/schema";
+import { type TaskUsageEntryKind, taskUsageLedgerEntries } from "../../db/schema";
 
 type AppendTaskUsageLedgerEntryArgs = {
   taskId: string;

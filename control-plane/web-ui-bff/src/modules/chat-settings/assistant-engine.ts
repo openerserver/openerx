@@ -11,7 +11,7 @@ import type {
   WorkflowTemplate,
 } from "../../lib/orchestration-strategy";
 import { normalizeOrchestrationStrategy } from "../../lib/orchestration-strategy";
-import { runDetachedPrompt } from "../agent-control/opencode-adapter";
+import { runDetachedPrompt } from "../agent-control/runtime-provider";
 import type { ChatSettingsMessage } from "./conversation-manager";
 import type {
   ChatSettingsConfigType,

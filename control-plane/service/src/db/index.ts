@@ -1,17 +1,47 @@
 import { drizzle as drizzlePostgres } from "drizzle-orm/postgres-js";
 import type { Sql } from "postgres";
 import { openPostgresDatabase } from "./postgres-client";
-import { ensurePostgresRuntimeTables } from "./postgres-runtime-bootstrap";
+import {
+  ensurePostgresRuntimeTables,
+  type PostgresRuntimeBootstrapSummary,
+} from "./postgres-runtime-bootstrap";
 import * as schema from "./schema";
 
-const postgresRuntime = openPostgresDatabase();
+const DEFAULT_RUNTIME_DB_MAX = 10;
 
-await postgresRuntime.sql`
-  ALTER TABLE IF EXISTS "workflow_template_stages"
-  ADD COLUMN IF NOT EXISTS "initial_task_definition_json" jsonb
-`;
+function resolveRuntimeDbMax() {
+  const rawValue = process.env.CONTROL_PLANE_DB_MAX_CONNECTIONS;
+  if (!rawValue) {
+    return DEFAULT_RUNTIME_DB_MAX;
+  }
 
-await ensurePostgresRuntimeTables(postgresRuntime.sql);
+  const parsedValue = Number(rawValue);
+  if (!Number.isFinite(parsedValue) || parsedValue < 1) {
+    return DEFAULT_RUNTIME_DB_MAX;
+  }
+
+  return Math.floor(parsedValue);
+}
+
+const postgresRuntime = openPostgresDatabase({ max: resolveRuntimeDbMax() });
+
+function logRuntimeBootstrapSummary(summary: PostgresRuntimeBootstrapSummary) {
+  console.log(
+    [
+      "[db:bootstrap:pg]",
+      `durationMs=${summary.durationMs}`,
+      `catalogReads=${summary.catalogReadCount}`,
+      `tablesCreated=${summary.tablesCreated}`,
+      `indexesCreated=${summary.indexesCreated}`,
+      `columnsAdded=${summary.columnsAdded}`,
+      `foreignKeysDropped=${summary.foreignKeysDropped}`,
+      `foreignKeysAdded=${summary.foreignKeysAdded}`,
+    ].join(" "),
+  );
+}
+
+const runtimeBootstrapSummary = await ensurePostgresRuntimeTables(postgresRuntime.sql);
+logRuntimeBootstrapSummary(runtimeBootstrapSummary);
 
 export const dbDialect = "postgres" as const;
 export const db = drizzlePostgres(postgresRuntime.sql, { schema });

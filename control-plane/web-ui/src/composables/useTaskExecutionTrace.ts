@@ -45,7 +45,8 @@ function buildTraceTimelineWithFallback(trace: TaskExecutionTrace | null) {
   const hasUser = timeline.some((item) => item.role === "user" && item.text?.trim());
   const hasAssistant = timeline.some((item) => item.role === "assistant" && item.text?.trim());
   const finalPrompt = typeof trace?.finalPrompt === "string" ? trace.finalPrompt.trim() : "";
-  const latestResponse = typeof trace?.latestResponse === "string" ? trace.latestResponse.trim() : "";
+  const latestResponse =
+    typeof trace?.latestResponse === "string" ? trace.latestResponse.trim() : "";
 
   if (!hasUser && finalPrompt) {
     timeline.unshift({

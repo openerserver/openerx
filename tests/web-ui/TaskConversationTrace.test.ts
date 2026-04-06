@@ -95,9 +95,13 @@ describe("Task conversation composables", () => {
     apiMocks.getTaskExecutionTraceView.mockReset();
     apiMocks.getTaskMessages.mockImplementation(
       async (taskId: string, options?: { sessionId?: string; includeLineage?: boolean }) => {
-        const trace = await apiMocks.getTaskExecutionTraceView(taskId, options?.sessionId ?? "session-1", {
-          includeLineage: options?.includeLineage,
-        });
+        const trace = await apiMocks.getTaskExecutionTraceView(
+          taskId,
+          options?.sessionId ?? "session-1",
+          {
+            includeLineage: options?.includeLineage,
+          },
+        );
         return {
           data: buildSessionMessagesFromExecutionTrace(trace, {
             includeLineage: options?.includeLineage,
@@ -145,6 +149,7 @@ describe("Task conversation composables", () => {
     await flushPromises();
 
     expect(apiMocks.getTaskMessages).toHaveBeenCalledWith("task-1", {
+      sessionId: "session-1",
       includeLineage: undefined,
     });
     expect(state.conversationItems.value).toHaveLength(2);
@@ -188,10 +193,7 @@ describe("Task conversation composables", () => {
       "message-late",
       "message-early",
     ]);
-    expect(state.conversationItems.value.map((item) => item.role)).toEqual([
-      "assistant",
-      "user",
-    ]);
+    expect(state.conversationItems.value.map((item) => item.role)).toEqual(["assistant", "user"]);
   });
 
   it("classifies messages by info role first and falls back to record role", () => {
@@ -324,6 +326,7 @@ describe("Task conversation composables", () => {
     await flushPromises();
 
     expect(apiMocks.getTaskMessages).toHaveBeenCalledWith("task-1", {
+      sessionId: "session-1",
       includeLineage: true,
     });
     expect(state.conversationItems.value.map((item) => item.role)).toEqual([
@@ -336,12 +339,7 @@ describe("Task conversation composables", () => {
       state.conversationItems.value.map((item) =>
         "text" in item && typeof item.text === "string" ? item.text : "",
       ),
-    ).toEqual([
-      "给输入法设计一个操作页面",
-      "先做需求澄清。",
-      "第二轮用户输入",
-      "第二轮模型回复",
-    ]);
+    ).toEqual(["给输入法设计一个操作页面", "先做需求澄清。", "第二轮用户输入", "第二轮模型回复"]);
   });
 
   it("merges realtime assistant chunks into a streaming draft", async () => {

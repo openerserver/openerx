@@ -1,8 +1,6 @@
 import { eq } from "drizzle-orm";
 import { db } from "../../db";
 import {
-  taskSessionRuns,
-  taskSessions,
   type ExecutionStatus,
   type TaskSessionKind,
   type TaskSessionMode,
@@ -11,8 +9,9 @@ import {
   type TaskSessionRunLaneRole,
   type TaskSessionRunTriggerType,
   type TaskSessionTriggerType,
+  taskSessionRuns,
+  taskSessions,
 } from "../../db/schema";
-import { getTaskBranchCompatNodeId } from "../project-tree/storage";
 
 type TaskSessionSourceType = "root" | "fork" | "sub_session" | null | undefined;
 
@@ -185,6 +184,10 @@ function sanitizeForkedFromMessageId(forkedFromMessageId?: string | null) {
   return null;
 }
 
+function buildTaskSessionMessageWriteId(sessionId: string, runtimeMessageId: string) {
+  return `task-session-message:${sessionId}:${runtimeMessageId}`;
+}
+
 async function resolveParentAndRootSessionIds(args: {
   taskId: string;
   parentRuntimeSessionId?: string | null;
@@ -223,225 +226,363 @@ export function createTaskSessionWriteApi() {
     return buildTaskSessionWriteId(taskId, runtimeSessionId);
   }
 
-  async function upsertTaskSessionRecord(args: UpsertTaskSessionRecordArgs) {
-    const sessionId = buildTaskSessionWriteId(args.task.id, args.runtimeSessionId);
-    const now = new Date().toISOString();
-    const existing = await db.query.taskSessions.findFirst({
-      where: eq(taskSessions.id, sessionId),
-    });
-
-    let parentSessionId = existing?.parentSessionId ?? null;
-    let rootSessionId = existing?.rootSessionId ?? sessionId;
+  async function resolveTaskSessionParentContext(args: {
+    taskId: string;
+    sessionId: string;
+    existing: typeof taskSessions.$inferSelect | null;
+    parentRuntimeSessionId?: string | null;
+  }) {
+    let parentSessionId = args.existing?.parentSessionId ?? null;
+    let rootSessionId = args.existing?.rootSessionId ?? args.sessionId;
     let parentDepth = 0;
     let parentSortKey = null as string | null;
 
     if (args.parentRuntimeSessionId !== undefined) {
       const resolved = await resolveParentAndRootSessionIds({
-        taskId: args.task.id,
+        taskId: args.taskId,
         parentRuntimeSessionId: args.parentRuntimeSessionId,
       });
       parentSessionId = resolved.parentSessionId;
-      rootSessionId = resolved.rootSessionId ?? sessionId;
+      rootSessionId = resolved.rootSessionId ?? args.sessionId;
       parentDepth = resolved.parentDepth;
       parentSortKey = resolved.parentSortKey;
     }
 
-    const branchName = args.branchName ?? existing?.branchName ?? null;
-    const forkedFromMessageId =
-      args.forkedFromMessageId !== undefined
-        ? sanitizeForkedFromMessageId(args.forkedFromMessageId)
-        : (existing?.forkedFromMessageId ?? null);
-    const sessionKind =
-      args.sessionKind ?? existing?.sessionKind ?? resolveTaskSessionKind(args);
-    const executionModeSnapshot =
-      args.executionModeSnapshot ??
-      existing?.executionModeSnapshot ??
-      resolveTaskSessionMode({
-        executionModeSnapshot: args.executionModeSnapshot,
-        sessionKind,
-      });
-    const candidateIndex =
-      args.candidateIndex !== undefined ? args.candidateIndex : (existing?.candidateIndex ?? null);
-    const stepIndex = args.stepIndex !== undefined ? args.stepIndex : (existing?.stepIndex ?? null);
-    const selectedModel =
-      args.selectedModel !== undefined ? args.selectedModel : (existing?.selectedModel ?? null);
-
-    const effectiveCoordinationKey =
-      args.coordinationKey ??
-      existing?.coordinationKey ??
-      rootSessionId;
-
-    const effectiveOperationId =
-      args.operationId ??
-      existing?.operationId ??
-      null;
-
-    const triggerType = mapSourceTypeToTaskSessionTriggerType(args.sourceType);
-    const latestRunId = buildTaskSessionDefaultRunId(sessionId);
-    const persistedLatestRunId = existing?.latestRunId ?? null;
-    const sessionType = mapTaskSessionNodeType({
-      sourceType: args.sourceType,
-      sessionKind,
+    return {
       parentSessionId,
-    });
-    const depth = parentSessionId ? parentDepth + 1 : 0;
-    const sortKey =
-      existing?.sortKey ?? (parentSortKey ? `${parentSortKey}.${sessionId}` : sessionId);
-    const sourceMessageId = parentSessionId ? forkedFromMessageId : null;
-    const nodeStatus = args.archivedAt
-      ? "archived"
-      : args.isActive
-        ? "running"
-        : (existing?.status ?? "running");
-    const runCreatedAt = existing?.startedAt ?? existing?.createdAt ?? now;
-    const runStartedAt = existing?.startedAt ?? (args.isActive ? now : null);
-    const runFinishedAt =
-      args.archivedAt ??
-      (nodeStatus === "completed" ? existing?.finishedAt ?? existing?.updatedAt ?? now : null);
+      rootSessionId,
+      parentDepth,
+      parentSortKey,
+    };
+  }
 
-    const treeNodeId = getTaskBranchCompatNodeId(args.task.id, args.runtimeSessionId);
+  function resolveTaskSessionForkMetadata(args: {
+    writeArgs: UpsertTaskSessionRecordArgs;
+    existing: typeof taskSessions.$inferSelect | null;
+  }) {
+    return {
+      branchName: args.writeArgs.branchName ?? args.existing?.branchName ?? null,
+      forkedFromMessageId:
+        args.writeArgs.forkedFromMessageId !== undefined
+          ? sanitizeForkedFromMessageId(args.writeArgs.forkedFromMessageId)
+          : (args.existing?.forkedFromMessageId ?? null),
+    };
+  }
+
+  function resolveTaskSessionExecutionMetadata(args: {
+    writeArgs: UpsertTaskSessionRecordArgs;
+    existing: typeof taskSessions.$inferSelect | null;
+  }) {
+    const sessionKind =
+      args.writeArgs.sessionKind ??
+      args.existing?.sessionKind ??
+      resolveTaskSessionKind(args.writeArgs);
+
+    return {
+      sessionKind,
+      executionModeSnapshot:
+        args.writeArgs.executionModeSnapshot ??
+        args.existing?.executionModeSnapshot ??
+        resolveTaskSessionMode({
+          executionModeSnapshot: args.writeArgs.executionModeSnapshot,
+          sessionKind,
+        }),
+      candidateIndex:
+        args.writeArgs.candidateIndex !== undefined
+          ? args.writeArgs.candidateIndex
+          : (args.existing?.candidateIndex ?? null),
+      stepIndex:
+        args.writeArgs.stepIndex !== undefined
+          ? args.writeArgs.stepIndex
+          : (args.existing?.stepIndex ?? null),
+      selectedModel:
+        args.writeArgs.selectedModel !== undefined
+          ? args.writeArgs.selectedModel
+          : (args.existing?.selectedModel ?? null),
+    };
+  }
+
+  function buildTaskSessionSortKey(
+    existingSortKey: string | null | undefined,
+    parentSortKey: string | null,
+    sessionId: string,
+  ) {
+    return existingSortKey ?? (parentSortKey ? [parentSortKey, sessionId].join(".") : sessionId);
+  }
+
+  function buildTaskSessionDescriptor(args: {
+    writeArgs: UpsertTaskSessionRecordArgs;
+    existing: typeof taskSessions.$inferSelect | null;
+    sessionId: string;
+    parentSessionId: string | null;
+    rootSessionId: string;
+    parentDepth: number;
+    parentSortKey: string | null;
+  }) {
+    const forkMetadata = resolveTaskSessionForkMetadata(args);
+    const executionMetadata = resolveTaskSessionExecutionMetadata(args);
+    const effectiveCoordinationKey =
+      args.writeArgs.coordinationKey ?? args.existing?.coordinationKey ?? args.rootSessionId;
+    const effectiveOperationId = args.writeArgs.operationId ?? args.existing?.operationId ?? null;
+    const triggerType = mapSourceTypeToTaskSessionTriggerType(args.writeArgs.sourceType);
+    const latestRunId = buildTaskSessionDefaultRunId(args.sessionId);
+    const persistedLatestRunId = args.existing?.latestRunId ?? null;
+    const sessionType = mapTaskSessionNodeType({
+      sourceType: args.writeArgs.sourceType,
+      sessionKind: executionMetadata.sessionKind,
+      parentSessionId: args.parentSessionId,
+    });
+    const depth = args.parentSessionId ? args.parentDepth + 1 : 0;
+    const sortKey = buildTaskSessionSortKey(
+      args.existing?.sortKey,
+      args.parentSortKey,
+      args.sessionId,
+    );
+    const sourceMessageId =
+      args.parentSessionId && forkMetadata.forkedFromMessageId
+        ? buildTaskSessionMessageWriteId(args.parentSessionId, forkMetadata.forkedFromMessageId)
+        : null;
+
+    return {
+      ...forkMetadata,
+      ...executionMetadata,
+      effectiveCoordinationKey,
+      effectiveOperationId,
+      triggerType,
+      latestRunId,
+      persistedLatestRunId,
+      sessionType,
+      depth,
+      sortKey,
+      sourceMessageId,
+      treeNodeId: args.existing?.treeNodeId ?? null,
+    };
+  }
+
+  function buildTaskSessionLifecycle(args: {
+    writeArgs: UpsertTaskSessionRecordArgs;
+    existing: typeof taskSessions.$inferSelect | null;
+    now: string;
+  }) {
+    const nodeStatus = args.writeArgs.archivedAt
+      ? "archived"
+      : args.writeArgs.isActive
+        ? "running"
+        : (args.existing?.status ?? "running");
+    const runCreatedAt = args.existing?.startedAt ?? args.existing?.createdAt ?? args.now;
+    const runStartedAt = args.existing?.startedAt ?? (args.writeArgs.isActive ? args.now : null);
+    const runFinishedAt =
+      args.writeArgs.archivedAt ??
+      (nodeStatus === "completed"
+        ? (args.existing?.finishedAt ?? args.existing?.updatedAt ?? args.now)
+        : null);
+
+    return {
+      nodeStatus,
+      runCreatedAt,
+      runStartedAt,
+      runFinishedAt,
+    };
+  }
+
+  async function buildTaskSessionWriteContext(args: UpsertTaskSessionRecordArgs) {
+    const sessionId = buildTaskSessionWriteId(args.task.id, args.runtimeSessionId);
+    const now = new Date().toISOString();
+    const existing =
+      (await db.query.taskSessions.findFirst({
+        where: eq(taskSessions.id, sessionId),
+      })) ?? null;
+    const parentContext = await resolveTaskSessionParentContext({
+      taskId: args.task.id,
+      sessionId,
+      existing,
+      parentRuntimeSessionId: args.parentRuntimeSessionId,
+    });
+    const descriptor = buildTaskSessionDescriptor({
+      writeArgs: args,
+      existing,
+      sessionId,
+      ...parentContext,
+    });
+    const lifecycle = buildTaskSessionLifecycle({
+      writeArgs: args,
+      existing,
+      now,
+    });
+
+    return {
+      args,
+      sessionId,
+      now,
+      existing,
+      ...parentContext,
+      ...descriptor,
+      ...lifecycle,
+    };
+  }
+
+  type TaskSessionWriteContext = Awaited<ReturnType<typeof buildTaskSessionWriteContext>>;
+
+  function buildTaskSessionInsertValues(context: TaskSessionWriteContext) {
+    return {
+      id: context.sessionId,
+      taskId: context.args.task.id,
+      projectId: context.args.task.projectId,
+      treeNodeId: context.treeNodeId,
+      parentSessionId: context.parentSessionId,
+      rootSessionId: context.rootSessionId,
+      sourceMessageId: context.sourceMessageId,
+      sessionType: context.sessionType,
+      workflowStageKey: context.existing?.workflowStageKey ?? null,
+      spawnTriggerType: context.triggerType,
+      spawnRuleKey: context.existing?.spawnRuleKey ?? null,
+      userPromptSummary: context.existing?.userPromptSummary ?? null,
+      status: context.nodeStatus,
+      headMessageId: context.existing?.headMessageId ?? null,
+      latestRunId: context.persistedLatestRunId,
+      depth: context.depth,
+      sortKey: context.sortKey,
+      coordinationKey: context.effectiveCoordinationKey,
+      operationId: context.effectiveOperationId,
+      sessionKind: context.sessionKind,
+      triggerType: context.triggerType,
+      executionModeSnapshot: context.executionModeSnapshot,
+      executionStatus: mapTaskSessionExecutionStatus(context.args),
+      branchName: context.branchName,
+      candidateIndex: context.candidateIndex,
+      stepIndex: context.stepIndex,
+      runtimeSessionId: context.args.runtimeSessionId,
+      forkedFromMessageId: context.forkedFromMessageId,
+      selectedModel: context.selectedModel,
+      effectiveModel: null,
+      winnerSessionId: null,
+      judgeSessionId: null,
+      resultText: null,
+      resultSummary: null,
+      errorText: null,
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      costUsd: 0,
+      lastActivityAt: context.now,
+      startedAt: context.args.isActive ? context.now : null,
+      finishedAt: context.args.archivedAt ?? null,
+      createdAt: context.now,
+      updatedAt: context.now,
+      archivedAt: context.args.archivedAt ?? null,
+    };
+  }
+
+  function buildTaskSessionUpdateValues(context: TaskSessionWriteContext) {
+    return {
+      projectId: context.args.task.projectId,
+      treeNodeId: context.treeNodeId,
+      parentSessionId: context.parentSessionId,
+      rootSessionId: context.rootSessionId,
+      sourceMessageId: context.sourceMessageId,
+      sessionType: context.sessionType,
+      spawnTriggerType: context.triggerType,
+      latestRunId: context.persistedLatestRunId,
+      depth: context.depth,
+      sortKey: context.sortKey,
+      coordinationKey: context.effectiveCoordinationKey,
+      operationId: context.effectiveOperationId,
+      sessionKind: context.sessionKind,
+      triggerType: context.triggerType,
+      executionModeSnapshot: context.executionModeSnapshot,
+      status: context.nodeStatus,
+      executionStatus: mapTaskSessionExecutionStatus(context.args),
+      branchName: context.branchName,
+      candidateIndex: context.candidateIndex,
+      stepIndex: context.stepIndex,
+      runtimeSessionId: context.args.runtimeSessionId,
+      forkedFromMessageId: context.forkedFromMessageId,
+      selectedModel: context.selectedModel,
+      lastActivityAt: context.now,
+      finishedAt: context.args.archivedAt ?? null,
+      updatedAt: context.now,
+      archivedAt: context.args.archivedAt ?? null,
+    };
+  }
+
+  function buildTaskSessionRunInsertValues(context: TaskSessionWriteContext) {
+    return {
+      id: context.latestRunId,
+      taskId: context.args.task.id,
+      sessionId: context.sessionId,
+      attemptIndex: 1,
+      runtimeSessionId: context.args.runtimeSessionId,
+      triggerType: mapTaskSessionTriggerTypeToRunTriggerType(context.triggerType),
+      executionKind: mapTaskSessionKindToRunExecutionKind(context.sessionKind),
+      coordinationKey: context.effectiveCoordinationKey,
+      operationId: context.effectiveOperationId,
+      candidateIndex: context.candidateIndex,
+      laneRole: mapTaskSessionKindToRunLaneRole(context.sessionKind),
+      executorKind: mapTaskSessionKindToExecutorKind(context.sessionKind),
+      modelRoute: context.existing?.effectiveModel ?? context.selectedModel,
+      workflowStageKey: context.existing?.workflowStageKey ?? null,
+      status: context.nodeStatus,
+      inputTokens: context.existing?.inputTokens ?? 0,
+      outputTokens: context.existing?.outputTokens ?? 0,
+      totalTokens: context.existing?.totalTokens ?? 0,
+      costUsd: context.existing?.costUsd ?? 0,
+      resultSummary: context.existing?.resultSummary ?? null,
+      errorText: context.existing?.errorText ?? null,
+      startedAt: context.runStartedAt,
+      finishedAt: context.runFinishedAt,
+      createdAt: context.runCreatedAt,
+    };
+  }
+
+  function buildTaskSessionRunUpdateValues(context: TaskSessionWriteContext) {
+    return {
+      taskId: context.args.task.id,
+      sessionId: context.sessionId,
+      runtimeSessionId: context.args.runtimeSessionId,
+      triggerType: mapTaskSessionTriggerTypeToRunTriggerType(context.triggerType),
+      executionKind: mapTaskSessionKindToRunExecutionKind(context.sessionKind),
+      coordinationKey: context.effectiveCoordinationKey,
+      operationId: context.effectiveOperationId,
+      candidateIndex: context.candidateIndex,
+      laneRole: mapTaskSessionKindToRunLaneRole(context.sessionKind),
+      executorKind: mapTaskSessionKindToExecutorKind(context.sessionKind),
+      modelRoute: context.existing?.effectiveModel ?? context.selectedModel,
+      status: context.nodeStatus,
+      resultSummary: context.existing?.resultSummary ?? null,
+      errorText: context.existing?.errorText ?? null,
+      startedAt: context.runStartedAt,
+      finishedAt: context.runFinishedAt,
+    };
+  }
+
+  async function upsertTaskSessionRecord(args: UpsertTaskSessionRecordArgs) {
+    const context = await buildTaskSessionWriteContext(args);
 
     await db
       .insert(taskSessions)
-      .values({
-        id: sessionId,
-        taskId: args.task.id,
-        projectId: args.task.projectId,
-        treeNodeId,
-        parentSessionId,
-        rootSessionId,
-        sourceMessageId,
-        sessionType,
-        workflowStageKey: existing?.workflowStageKey ?? null,
-        spawnTriggerType: triggerType,
-        spawnRuleKey: existing?.spawnRuleKey ?? null,
-        userPromptSummary: existing?.userPromptSummary ?? null,
-        status: nodeStatus,
-        headMessageId: existing?.headMessageId ?? null,
-        latestRunId: persistedLatestRunId,
-        depth,
-        sortKey,
-        coordinationKey: effectiveCoordinationKey,
-        operationId: effectiveOperationId,
-        sessionKind,
-        triggerType,
-        executionModeSnapshot,
-        executionStatus: mapTaskSessionExecutionStatus(args),
-        branchName,
-        candidateIndex,
-        stepIndex,
-        runtimeSessionId: args.runtimeSessionId,
-        forkedFromMessageId,
-        selectedModel,
-        effectiveModel: null,
-        winnerSessionId: null,
-        judgeSessionId: null,
-        resultText: null,
-        resultSummary: null,
-        errorText: null,
-        inputTokens: 0,
-        outputTokens: 0,
-        totalTokens: 0,
-        costUsd: 0,
-        lastActivityAt: now,
-        startedAt: args.isActive ? now : null,
-        finishedAt: args.archivedAt ?? null,
-        createdAt: now,
-        updatedAt: now,
-        archivedAt: args.archivedAt ?? null,
-      })
+      .values(buildTaskSessionInsertValues(context))
       .onConflictDoUpdate({
         target: taskSessions.id,
-        set: {
-          projectId: args.task.projectId,
-          treeNodeId,
-          parentSessionId,
-          rootSessionId,
-          sourceMessageId,
-          sessionType,
-          spawnTriggerType: triggerType,
-          latestRunId: persistedLatestRunId,
-          depth,
-          sortKey,
-          coordinationKey: effectiveCoordinationKey,
-          operationId: effectiveOperationId,
-          sessionKind,
-          triggerType,
-          executionModeSnapshot,
-          status: nodeStatus,
-          executionStatus: mapTaskSessionExecutionStatus(args),
-          branchName,
-          candidateIndex,
-          stepIndex,
-          runtimeSessionId: args.runtimeSessionId,
-          forkedFromMessageId,
-          selectedModel,
-          lastActivityAt: now,
-          finishedAt: args.archivedAt ?? null,
-          updatedAt: now,
-          archivedAt: args.archivedAt ?? null,
-        },
+        set: buildTaskSessionUpdateValues(context),
       });
 
     await db
       .insert(taskSessionRuns)
-      .values({
-        id: latestRunId,
-        taskId: args.task.id,
-        sessionId,
-        attemptIndex: 1,
-        runtimeSessionId: args.runtimeSessionId,
-        triggerType: mapTaskSessionTriggerTypeToRunTriggerType(triggerType),
-        executionKind: mapTaskSessionKindToRunExecutionKind(sessionKind),
-        coordinationKey: effectiveCoordinationKey,
-        operationId: effectiveOperationId,
-        candidateIndex,
-        laneRole: mapTaskSessionKindToRunLaneRole(sessionKind),
-        executorKind: mapTaskSessionKindToExecutorKind(sessionKind),
-        modelRoute: existing?.effectiveModel ?? selectedModel,
-        workflowStageKey: existing?.workflowStageKey ?? null,
-        status: nodeStatus,
-        inputTokens: existing?.inputTokens ?? 0,
-        outputTokens: existing?.outputTokens ?? 0,
-        totalTokens: existing?.totalTokens ?? 0,
-        costUsd: existing?.costUsd ?? 0,
-        resultSummary: existing?.resultSummary ?? null,
-        errorText: existing?.errorText ?? null,
-        startedAt: runStartedAt,
-        finishedAt: runFinishedAt,
-        createdAt: runCreatedAt,
-      })
+      .values(buildTaskSessionRunInsertValues(context))
       .onConflictDoUpdate({
         target: taskSessionRuns.id,
-        set: {
-          taskId: args.task.id,
-          sessionId,
-          runtimeSessionId: args.runtimeSessionId,
-          triggerType: mapTaskSessionTriggerTypeToRunTriggerType(triggerType),
-          executionKind: mapTaskSessionKindToRunExecutionKind(sessionKind),
-          coordinationKey: effectiveCoordinationKey,
-          operationId: effectiveOperationId,
-          candidateIndex,
-          laneRole: mapTaskSessionKindToRunLaneRole(sessionKind),
-          executorKind: mapTaskSessionKindToExecutorKind(sessionKind),
-          modelRoute: existing?.effectiveModel ?? selectedModel,
-          status: nodeStatus,
-          resultSummary: existing?.resultSummary ?? null,
-          errorText: existing?.errorText ?? null,
-          startedAt: runStartedAt,
-          finishedAt: runFinishedAt,
-        },
+        set: buildTaskSessionRunUpdateValues(context),
       });
 
     await db
       .update(taskSessions)
       .set({
-        latestRunId,
-        updatedAt: now,
+        latestRunId: context.latestRunId,
+        updatedAt: context.now,
       })
-      .where(eq(taskSessions.id, sessionId));
+      .where(eq(taskSessions.id, context.sessionId));
 
-    return sessionId;
+    return context.sessionId;
   }
 
   return {

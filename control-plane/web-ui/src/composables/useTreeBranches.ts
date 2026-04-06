@@ -1,10 +1,13 @@
 import { type Ref, computed, ref, watch } from "vue";
-import { getTaskSessionLineage, type TaskSessionLineageNode } from "../lib/api";
+import { type TaskSessionLineageNode, getTaskSessionLineage } from "../lib/api";
 
 export interface TreeSessionNodeRecord {
   id: string;
+  branchNodeId?: string | null;
   runtimeSessionId: string;
+  taskSessionId?: string | null;
   parentId: string | null;
+  parentTaskSessionId?: string | null;
   contentText: string | null;
   branchName: string | null;
   sourceType: string;
@@ -28,9 +31,12 @@ function mapLineageTree(
 ): SessionTreeNode[] {
   return nodes.map((node) => ({
     node: {
-      id: node.id,
+      id: node.branchNodeId ?? node.id,
+      branchNodeId: node.branchNodeId ?? node.id,
       runtimeSessionId: node.runtimeSessionId,
+      taskSessionId: node.taskSessionId ?? null,
       parentId,
+      parentTaskSessionId: node.parentTaskSessionId ?? null,
       contentText: node.title ?? node.branchName ?? null,
       branchName: node.branchName ?? null,
       sourceType: node.sourceType,
@@ -41,7 +47,7 @@ function mapLineageTree(
       summary: node.summary ?? null,
       forkedFromMessageId: node.forkedFromMessageId ?? null,
     },
-    children: mapLineageTree(node.children ?? [], rootNodeId, node.id),
+    children: mapLineageTree(node.children ?? [], rootNodeId, node.branchNodeId ?? node.id),
   }));
 }
 

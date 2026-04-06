@@ -14,7 +14,6 @@ const sql = postgres(DATABASE_URL, { max: 1, prepare: false });
 
 const createdTaskIds: string[] = [];
 const createdNodeIds = new Set<string>();
-const createdAgentRunIds: string[] = [];
 let token = "";
 
 interface ApiResult<T> {
@@ -92,18 +91,24 @@ beforeAll(async () => {
 
 afterAll(async () => {
   for (const taskId of createdTaskIds) {
+    await safeSql("DELETE FROM task_timeline_views WHERE task_id = $1", [taskId]);
+    await safeSql("DELETE FROM task_usage_ledger_entries WHERE task_id = $1", [taskId]);
+    await safeSql("DELETE FROM task_artifacts WHERE task_id = $1", [taskId]);
+    await safeSql("DELETE FROM task_operations WHERE task_id = $1", [taskId]);
+    await safeSql("DELETE FROM task_snapshots WHERE task_id = $1", [taskId]);
     await safeSql(
-      `DELETE FROM task_session_message_parts WHERE message_id IN (
-        SELECT id FROM task_session_messages WHERE task_id = $1
+      "UPDATE task_sessions SET status = 'archived', archived_at = COALESCE(archived_at, CURRENT_TIMESTAMP::text), source_message_id = NULL, head_message_id = NULL, latest_run_id = NULL, winner_session_id = NULL, judge_session_id = NULL WHERE task_id = $1",
+      [taskId],
+    );
+    await safeSql(
+      `DELETE FROM task_message_parts WHERE message_id IN (
+        SELECT id FROM task_messages WHERE task_id = $1
       )`,
       [taskId],
     );
-    await safeSql("DELETE FROM task_session_messages WHERE task_id = $1", [taskId]);
-    await safeSql("DELETE FROM session_operations WHERE task_id = $1", [taskId]);
-    await safeSql("DELETE FROM task_artifacts WHERE task_id = $1", [taskId]);
-    await safeSql("DELETE FROM task_usage_ledger_entries WHERE task_id = $1", [taskId]);
+    await safeSql("DELETE FROM task_messages WHERE task_id = $1", [taskId]);
+    await safeSql("DELETE FROM task_session_runs WHERE task_id = $1", [taskId]);
     await safeSql("DELETE FROM task_sessions WHERE task_id = $1", [taskId]);
-    await safeSql("DELETE FROM task_timeline_views WHERE task_id = $1", [taskId]);
     await safeSql("DELETE FROM task_message_events WHERE task_id = $1", [taskId]);
     await safeSql("DELETE FROM task_domain_events WHERE task_id = $1", [taskId]);
     await safeSql(
@@ -113,22 +118,9 @@ afterAll(async () => {
       [taskId],
     );
     await safeSql("DELETE FROM task_workflow_runs WHERE task_id = $1", [taskId]);
-    await safeSql(
-      `DELETE FROM conversation_message_parts WHERE message_id IN (
-        SELECT id FROM conversation_messages WHERE task_id = $1
-      )`,
-      [taskId],
-    );
-    await safeSql("DELETE FROM conversation_messages WHERE task_id = $1", [taskId]);
-    await safeSql("DELETE FROM conversation_sessions WHERE task_id = $1", [taskId]);
-    await safeSql("DELETE FROM task_snapshots WHERE task_id = $1", [taskId]);
     await safeSql("DELETE FROM task_run_edges WHERE task_id = $1", [taskId]);
-    await safeSql("UPDATE agent_runs SET run_node_id = NULL, run_id = NULL WHERE task_id = $1", [
-      taskId,
-    ]);
     await safeSql("UPDATE task_run_nodes SET agent_run_id = NULL WHERE task_id = $1", [taskId]);
     await safeSql("DELETE FROM task_run_nodes WHERE task_id = $1", [taskId]);
-    await safeSql("DELETE FROM agent_runs WHERE task_id = $1", [taskId]);
     await safeSql("DELETE FROM task_runs WHERE task_id = $1", [taskId]);
     await safeSql("DELETE FROM tasks WHERE id = $1", [taskId]);
   }
@@ -136,10 +128,6 @@ afterAll(async () => {
   const nodeIds = Array.from(createdNodeIds);
   if (nodeIds.length > 0) {
     const nodePlaceholders = nodeIds.map((_, index) => `$${index + 1}`).join(", ");
-    await safeSql(
-      `DELETE FROM conversation_sessions WHERE tree_node_id IN (${nodePlaceholders})`,
-      nodeIds,
-    );
     await safeSql(`DELETE FROM tasks WHERE tree_node_id IN (${nodePlaceholders})`, nodeIds);
     for (const nodeId of nodeIds) {
       await safeSql(
@@ -230,20 +218,17 @@ describe("task route registration smoke", () => {
       messageId: string;
       sessionId: string;
       seq: number;
-    }>(
-      `/api/tasks/${task.id}/sessions/messages`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          runtimeSessionId,
-          message: {
-            id: runtimeMessageId,
-            role: "assistant",
-            parts: [{ type: "text", text: `smoke text ${unique}` }],
-          },
-        }),
-      },
-    );
+    }>(`/api/tasks/${task.id}/sessions/messages`, {
+      method: "POST",
+      body: JSON.stringify({
+        runtimeSessionId,
+        message: {
+          id: runtimeMessageId,
+          role: "assistant",
+          parts: [{ type: "text", text: `smoke text ${unique}` }],
+        },
+      }),
+    });
     expect(sessionMessage.status).toBe(201);
     expect(sessionMessage.data).toMatchObject({
       ok: true,
@@ -404,7 +389,9 @@ describe("task route registration smoke", () => {
         status?: string | null;
       }>;
       messageParts: Array<{ partType: string; textContent: string | null }>;
-    }>(`/api/tasks/${task.id}/tree?sessionId=${encodeURIComponent(sessionId)}&includeLineage=false`);
+    }>(
+      `/api/tasks/${task.id}/tree?sessionId=${encodeURIComponent(sessionId)}&includeLineage=false`,
+    );
     expect(taskTree.status).toBe(200);
     expect(taskTree.data.meta).toMatchObject({
       taskId: task.id,
@@ -487,8 +474,15 @@ describe("task route registration smoke", () => {
 
     const sessionTimeline = await authedRequest<{
       data: unknown[];
-      meta: { readSource: string; sessionId: string | null; includeLineage: boolean; itemCount: number };
-    }>(`/api/tasks/${task.id}/sessions/${encodeURIComponent(sessionId)}/timeline?includeLineage=false`);
+      meta: {
+        readSource: string;
+        sessionId: string | null;
+        includeLineage: boolean;
+        itemCount: number;
+      };
+    }>(
+      `/api/tasks/${task.id}/sessions/${encodeURIComponent(sessionId)}/timeline?includeLineage=false`,
+    );
     expect(sessionTimeline.status).toBe(200);
     expect(sessionTimeline.data.meta).toMatchObject({
       readSource: "task-session-projection",
@@ -509,7 +503,6 @@ describe("task route registration smoke", () => {
       },
     );
     expect(createRun.status).toBe(201);
-    createdAgentRunIds.push(agentRunId);
 
     const patchRun = await authedRequest<{ id: string; status: string }>(
       `/api/tasks/${task.id}/runs/${agentRunId}`,
@@ -554,7 +547,12 @@ describe("task route registration smoke", () => {
         sessions: Array<{ id: string }>;
         messages: Array<{ runtimeMessageId?: string }>;
       };
-      meta: { readSource: string; timelineReadSource: string; includeLineage: boolean; sessionCount: number };
+      meta: {
+        readSource: string;
+        timelineReadSource: string;
+        includeLineage: boolean;
+        sessionCount: number;
+      };
     }>(`/api/tasks/${task.id}/execution-trace?sessionId=${encodeURIComponent(sessionId)}`);
     expect(executionTrace.status).toBe(200);
     expect(executionTrace.data.meta).toMatchObject({

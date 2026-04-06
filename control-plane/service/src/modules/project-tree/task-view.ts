@@ -4,9 +4,11 @@ import {
   projectTreeNodes,
   repositories,
   repositoryCredentials,
+  taskSessions,
   taskSnapshots,
   tasks,
 } from "../../db/schema";
+import { fromStoredTaskExecutionMode } from "../tasks/task-execution-mode";
 import type { TaskCategory, TaskChangesSummary, TaskExecutionMode, TaskStatus } from "./task-types";
 
 export interface TaskTreeRecord {
@@ -82,6 +84,7 @@ type MapTaskTreeNodeArgs = {
   node: typeof projectTreeNodes.$inferSelect;
   aggregate?: TaskAggregateRow;
   snapshot?: TaskSnapshotRow;
+  sessionRuntimeIds: Map<string, string>;
   repos: Map<string, TaskRepoRow>;
   credentials: Map<string, TaskCredentialRow>;
 };
@@ -89,11 +92,7 @@ type MapTaskTreeNodeArgs = {
 function mapOrchestrationKindToExecutionMode(
   orchestrationKind: string | null | undefined,
 ): TaskExecutionMode | null {
-  return orchestrationKind === "single" ||
-    orchestrationKind === "parallel" ||
-    orchestrationKind === "sequential-chain"
-    ? orchestrationKind
-    : null;
+  return fromStoredTaskExecutionMode(orchestrationKind);
 }
 
 function normalizeTaskStatusValue(value: string | null | undefined): TaskStatus | null {
@@ -203,9 +202,15 @@ function resolveTaskRunFields(
   refs: ReturnType<typeof resolveTaskReferenceIds>,
   strategyFields: ReturnType<typeof resolveTaskStrategyFields>,
 ) {
+  const snapshotSessionId = args.snapshot?.currentSessionId
+    ? (args.sessionRuntimeIds.get(args.snapshot.currentSessionId) ??
+      args.aggregate?.currentSessionId ??
+      null)
+    : (args.aggregate?.currentSessionId ?? null);
+
   return {
     status: resolveSnapshotTaskStatus(args.snapshot, args.aggregate),
-    sessionId: args.snapshot?.currentSessionId ?? args.aggregate?.currentSessionId ?? null,
+    sessionId: snapshotSessionId,
     agentRunId: args.aggregate?.currentAgentRunId ?? null,
     result:
       args.aggregate?.latestResult ??
@@ -217,7 +222,7 @@ function resolveTaskRunFields(
     autoAdvanceStages: strategyFields.autoAdvanceStages,
     startedAt: args.aggregate?.startedAt ?? null,
     finishedAt: args.aggregate?.finishedAt ?? null,
-    orchestrationKind: args.snapshot?.currentExecutionMode ?? null,
+    orchestrationKind: mapOrchestrationKindToExecutionMode(args.snapshot?.currentExecutionMode),
     currentRunId: refs.currentRunId,
     currentRunStatus: normalizeTaskStatusValue(args.snapshot?.currentExecutionStatus),
     currentRunStartedAt: null,
@@ -258,6 +263,7 @@ async function loadTaskDomainMaps(taskIds: string[]) {
     return {
       aggregates: new Map<string, TaskAggregateRow>(),
       snapshots: new Map<string, TaskSnapshotRow>(),
+      sessionRuntimeIds: new Map<string, string>(),
     };
   }
 
@@ -266,9 +272,27 @@ async function loadTaskDomainMaps(taskIds: string[]) {
     db.select().from(taskSnapshots).where(inArray(taskSnapshots.taskId, taskIds)),
   ]);
 
+  const sessionIds = Array.from(
+    new Set(
+      snapshotRows
+        .map((row) => row.currentSessionId)
+        .filter((sessionId): sessionId is string => Boolean(sessionId)),
+    ),
+  );
+  const sessionRows =
+    sessionIds.length > 0
+      ? await db
+          .select({ id: taskSessions.id, runtimeSessionId: taskSessions.runtimeSessionId })
+          .from(taskSessions)
+          .where(inArray(taskSessions.id, sessionIds))
+      : [];
+
   return {
     aggregates: new Map(aggregateRows.map((row) => [row.id, row] as const)),
     snapshots: new Map(snapshotRows.map((row) => [row.taskId, row] as const)),
+    sessionRuntimeIds: new Map(
+      sessionRows.map((row) => [row.id, row.runtimeSessionId ?? row.id] as const),
+    ),
   };
 }
 
@@ -397,6 +421,7 @@ export async function listTaskTreeRecords(args: {
       node: row,
       aggregate: domainMaps.aggregates.get(row.id),
       snapshot: domainMaps.snapshots.get(row.id),
+      sessionRuntimeIds: domainMaps.sessionRuntimeIds,
       repos: maps.repos,
       credentials: maps.credentials,
     }),
@@ -428,6 +453,7 @@ export async function loadTaskTreeRecords(args: {
       node: row,
       aggregate: domainMaps.aggregates.get(row.id),
       snapshot: domainMaps.snapshots.get(row.id),
+      sessionRuntimeIds: domainMaps.sessionRuntimeIds,
       repos: maps.repos,
       credentials: maps.credentials,
     }),

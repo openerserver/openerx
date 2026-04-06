@@ -297,7 +297,8 @@ async function main() {
 
           const separatorIndex = line.indexOf(":");
           const field = separatorIndex === -1 ? line : line.slice(0, separatorIndex);
-          const valueText = separatorIndex === -1 ? "" : line.slice(separatorIndex + 1).replace(/^ /, "");
+          const valueText =
+            separatorIndex === -1 ? "" : line.slice(separatorIndex + 1).replace(/^ /, "");
 
           switch (field) {
             case "event":

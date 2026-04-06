@@ -181,7 +181,7 @@ sequenceDiagram
   UI->>BFF: GET /api/tasks?status=running
   BFF->>BFF: 校验 Bearer Token
   BFF->>CP: GET /api/tasks?status=running
-  CP->>DB: 查询 tasks / agent_runs / 相关数据
+  CP->>DB: 查询 tasks / task_sessions / task_session_runs / task_operations 等相关数据
   DB-->>CP: 任务结果集
   CP-->>BFF: JSON data
   BFF-->>UI: JSON data

@@ -293,7 +293,7 @@ describe("task completion routes", () => {
         },
       },
       {
-        url: "/api/tasks/task-adopt-1/branches",
+        url: "/api/tasks/task-adopt-1/sessions",
         response: {
           ok: true,
           data: {
@@ -393,7 +393,7 @@ describe("task completion routes", () => {
         response: (options) => ({ ok: true, data: { ok: true, body: options?.body } }),
       },
       {
-        url: "/api/tasks/task-adopt-1/branches/task-session%3Atask-adopt-1%3Asession-a/activate",
+        url: "/api/tasks/task-adopt-1/sessions/task-session%3Atask-adopt-1%3Asession-a/activate",
         method: "POST",
         response: { ok: true, data: { ok: true } },
       },

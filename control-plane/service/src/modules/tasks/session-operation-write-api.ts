@@ -1,17 +1,17 @@
 import { desc, eq } from "drizzle-orm";
 import { db } from "../../db";
 import {
-  taskOperations,
-  taskSessionRuns,
   type TaskSessionNodeStatus,
   type TaskUsageEntryKind,
+  taskOperations,
+  taskSessionRuns,
 } from "../../db/schema";
+import type { TaskTreeSnapshot } from "../project-tree/task-types";
 import type { TaskTreeRecord } from "../project-tree/task-view";
 import {
-  buildTaskSessionDefaultRunId,
   type UpsertTaskSessionRecordArgs,
+  buildTaskSessionDefaultRunId,
 } from "./task-session-write-api";
-import type { TaskTreeSnapshot } from "../project-tree/task-types";
 
 type SyncExecutionFactsForAgentRunArgs = {
   task: TaskTreeRecord;
@@ -98,8 +98,22 @@ function mapAgentTypeToTaskOperationKind(agentType: string) {
   return "model_request" as const;
 }
 
-function buildSessionOperationWriteId(taskId: string, agentRunId: string) {
+function buildTaskOperationWriteId(taskId: string, agentRunId: string) {
   return `session-operation:${taskId}:${agentRunId}`;
+}
+
+function buildTaskOperationSummary(args: SyncExecutionFactsForAgentRunArgs) {
+  return {
+    agentRunId: args.agentRunId,
+    agentType: args.agentType,
+    candidateIndex: args.candidateIndex ?? null,
+    linkAgentRun: args.linkAgentRun ?? false,
+    modelUsed: args.modelUsed ?? null,
+    tokenUsed: args.tokenUsed ?? 0,
+    resultText: args.result ?? null,
+    errorText: args.error ?? null,
+    status: args.status,
+  } satisfies Record<string, unknown>;
 }
 
 function normalizeRuntimeSessionId(taskId: string, sessionId?: string | null) {
@@ -111,7 +125,7 @@ function normalizeRuntimeSessionId(taskId: string, sessionId?: string | null) {
   return sessionId.startsWith(prefix) ? sessionId.slice(prefix.length) : sessionId;
 }
 
-export function createSessionOperationWriteApi(deps: {
+type CreateTaskOperationWriteApiDeps = {
   upsertTaskSessionRecord: (args: UpsertTaskSessionRecordArgs) => Promise<string>;
   buildTaskTreeSnapshotFromRecord?: (
     task: TaskTreeRecord,
@@ -132,156 +146,247 @@ export function createSessionOperationWriteApi(deps: {
     costUsd?: number;
     metadataJson?: Record<string, unknown>;
   }) => Promise<{ id: string }>;
-}) {
-  async function syncExecutionFactsForAgentRun(args: SyncExecutionFactsForAgentRunArgs) {
-    const runtimeSessionId =
-      normalizeRuntimeSessionId(args.task.id, args.sessionId) ?? `agent-run:${args.agentRunId}`;
-    const taskSessionId = await deps.upsertTaskSessionRecord({
-      task: args.task,
-      runtimeSessionId,
-      sourceType: "root",
-      isActive: args.status === "running" || args.status === "pending" || args.status === "paused",
-      archivedAt:
-        args.status === "stopped" || args.status === "terminated"
-          ? args.finishedAt ?? new Date().toISOString()
-          : null,
-    });
+};
 
-    const sessionOperationId = buildSessionOperationWriteId(args.task.id, args.agentRunId);
-    const existing = await db.query.taskOperations.findFirst({
-      where: eq(taskOperations.id, sessionOperationId),
-    });
-    const latestOperation = await db.query.taskOperations.findFirst({
-      where: eq(taskOperations.sessionId, taskSessionId),
-      orderBy: [desc(taskOperations.operationIndex)],
-    });
-    const operationIndex = existing?.operationIndex ?? (latestOperation?.operationIndex ?? -1) + 1;
-    const tokenUsed = args.tokenUsed ?? 0;
-    const taskNodeStatus = mapAgentRunStatusToTaskNodeStatus(args.status);
-    const defaultRunId = buildTaskSessionDefaultRunId(taskSessionId);
-    const now = new Date().toISOString();
+type AgentRunWriteContext = {
+  runtimeSessionId: string;
+  taskOperationId: string;
+  taskSessionId: string;
+  operationIndex: number;
+  tokenUsed: number;
+  taskNodeStatus: TaskSessionNodeStatus;
+  defaultRunId: string;
+  now: string;
+  operationKind: ReturnType<typeof mapAgentTypeToTaskOperationKind>;
+  usageEntryKind: TaskUsageEntryKind;
+  isJudgeOperation: boolean;
+};
 
-    await db
-      .insert(taskSessionRuns)
-      .values({
-        id: defaultRunId,
-        taskId: args.task.id,
-        sessionId: taskSessionId,
-        attemptIndex: 1,
-        runtimeSessionId,
-        triggerType: "user_prompt",
-        executionKind: mapAgentTypeToTaskOperationKind(args.agentType) === "judge" ? "judge" : "single",
-        coordinationKey: taskSessionId,
+function isAgentRunSessionActive(status: SyncExecutionFactsForAgentRunArgs["status"]) {
+  return status === "running" || status === "pending" || status === "paused";
+}
+
+function resolveAgentRunArchivedAt(args: SyncExecutionFactsForAgentRunArgs) {
+  if (args.status !== "stopped" && args.status !== "terminated") {
+    return null;
+  }
+
+  return args.finishedAt ?? new Date().toISOString();
+}
+
+function resolveTaskSessionRunExecutionKind(isJudgeOperation: boolean) {
+  return isJudgeOperation ? "judge" : "single";
+}
+
+function resolveTaskSessionRunLaneRole(isJudgeOperation: boolean) {
+  return isJudgeOperation ? "judge" : "primary";
+}
+
+async function ensureTaskSessionForAgentRun(
+  deps: CreateTaskOperationWriteApiDeps,
+  args: SyncExecutionFactsForAgentRunArgs,
+  taskOperationId: string,
+  runtimeSessionId: string,
+) {
+  return deps.upsertTaskSessionRecord({
+    task: args.task,
+    runtimeSessionId,
+    sourceType: "root",
+    operationId: taskOperationId,
+    isActive: isAgentRunSessionActive(args.status),
+    archivedAt: resolveAgentRunArchivedAt(args),
+  });
+}
+
+async function resolveTaskOperationIndex(taskOperationId: string, taskSessionId: string) {
+  const existing = await db.query.taskOperations.findFirst({
+    where: eq(taskOperations.id, taskOperationId),
+  });
+  const latestOperation = await db.query.taskOperations.findFirst({
+    where: eq(taskOperations.sessionId, taskSessionId),
+    orderBy: [desc(taskOperations.operationIndex)],
+  });
+
+  return existing?.operationIndex ?? (latestOperation?.operationIndex ?? -1) + 1;
+}
+
+async function buildAgentRunWriteContext(
+  deps: CreateTaskOperationWriteApiDeps,
+  args: SyncExecutionFactsForAgentRunArgs,
+): Promise<AgentRunWriteContext> {
+  const runtimeSessionId =
+    normalizeRuntimeSessionId(args.task.id, args.sessionId) ?? `agent-run:${args.agentRunId}`;
+  const taskOperationId = buildTaskOperationWriteId(args.task.id, args.agentRunId);
+  const taskSessionId = await ensureTaskSessionForAgentRun(
+    deps,
+    args,
+    taskOperationId,
+    runtimeSessionId,
+  );
+  const operationKind = mapAgentTypeToTaskOperationKind(args.agentType);
+  const isJudgeOperation = operationKind === "judge";
+
+  return {
+    runtimeSessionId,
+    taskOperationId,
+    taskSessionId,
+    operationIndex: await resolveTaskOperationIndex(taskOperationId, taskSessionId),
+    tokenUsed: args.tokenUsed ?? 0,
+    taskNodeStatus: mapAgentRunStatusToTaskNodeStatus(args.status),
+    defaultRunId: buildTaskSessionDefaultRunId(taskSessionId),
+    now: new Date().toISOString(),
+    operationKind,
+    usageEntryKind: mapAgentTypeToUsageEntryKind(args.agentType),
+    isJudgeOperation,
+  };
+}
+
+async function upsertTaskSessionRunFacts(
+  args: SyncExecutionFactsForAgentRunArgs,
+  context: AgentRunWriteContext,
+) {
+  await db
+    .insert(taskSessionRuns)
+    .values({
+      id: context.defaultRunId,
+      taskId: args.task.id,
+      sessionId: context.taskSessionId,
+      attemptIndex: 1,
+      runtimeSessionId: context.runtimeSessionId,
+      triggerType: "user_prompt",
+      executionKind: resolveTaskSessionRunExecutionKind(context.isJudgeOperation),
+      coordinationKey: context.taskSessionId,
+      candidateIndex: args.candidateIndex ?? null,
+      laneRole: resolveTaskSessionRunLaneRole(context.isJudgeOperation),
+      executorKind: args.agentType,
+      modelRoute: args.modelUsed ?? null,
+      workflowStageKey: null,
+      status: context.taskNodeStatus,
+      inputTokens: 0,
+      outputTokens: context.tokenUsed,
+      totalTokens: context.tokenUsed,
+      costUsd: 0,
+      resultSummary: args.result ?? null,
+      errorText: args.error ?? null,
+      startedAt: args.startedAt ?? null,
+      finishedAt: args.finishedAt ?? null,
+      createdAt: args.startedAt ?? context.now,
+    })
+    .onConflictDoUpdate({
+      target: taskSessionRuns.id,
+      set: {
+        runtimeSessionId: context.runtimeSessionId,
         candidateIndex: args.candidateIndex ?? null,
-        laneRole: mapAgentTypeToTaskOperationKind(args.agentType) === "judge" ? "judge" : "primary",
         executorKind: args.agentType,
         modelRoute: args.modelUsed ?? null,
-        workflowStageKey: null,
-        status: taskNodeStatus,
-        inputTokens: 0,
-        outputTokens: tokenUsed,
-        totalTokens: tokenUsed,
-        costUsd: 0,
+        status: context.taskNodeStatus,
+        outputTokens: context.tokenUsed,
+        totalTokens: context.tokenUsed,
         resultSummary: args.result ?? null,
         errorText: args.error ?? null,
         startedAt: args.startedAt ?? null,
         finishedAt: args.finishedAt ?? null,
-        createdAt: args.startedAt ?? now,
-      })
-      .onConflictDoUpdate({
-        target: taskSessionRuns.id,
-        set: {
-          runtimeSessionId,
-          candidateIndex: args.candidateIndex ?? null,
-          executorKind: args.agentType,
-          modelRoute: args.modelUsed ?? null,
-          status: taskNodeStatus,
-          outputTokens: tokenUsed,
-          totalTokens: tokenUsed,
-          resultSummary: args.result ?? null,
-          errorText: args.error ?? null,
-          startedAt: args.startedAt ?? null,
-          finishedAt: args.finishedAt ?? null,
-        },
-      });
-
-    await db
-      .insert(taskOperations)
-      .values({
-        id: sessionOperationId,
-        taskId: args.task.id,
-        sessionId: taskSessionId,
-        runId: defaultRunId,
-        messageId: null,
-        parentOperationId: null,
-        runtimeOperationId: `agent-run:${args.agentRunId}`,
-        operationIndex,
-        operationKind: mapAgentTypeToTaskOperationKind(args.agentType),
-        toolName: null,
-        title: args.agentType,
-        status: taskNodeStatus,
-        summaryJson: {
-          agentRunId: args.agentRunId,
-          candidateIndex: args.candidateIndex ?? null,
-          linkAgentRun: args.linkAgentRun ?? false,
-        },
-        startedAt: args.startedAt ?? null,
-        finishedAt: args.finishedAt ?? null,
-        createdAt: args.startedAt ?? now,
-        updatedAt: now,
-      })
-      .onConflictDoUpdate({
-        target: taskOperations.id,
-        set: {
-          sessionId: taskSessionId,
-          runId: defaultRunId,
-          runtimeOperationId: `agent-run:${args.agentRunId}`,
-          operationKind: mapAgentTypeToTaskOperationKind(args.agentType),
-          title: args.agentType,
-          status: taskNodeStatus,
-          summaryJson: {
-            agentRunId: args.agentRunId,
-            candidateIndex: args.candidateIndex ?? null,
-            linkAgentRun: args.linkAgentRun ?? false,
-          },
-          startedAt: args.startedAt ?? null,
-          finishedAt: args.finishedAt ?? null,
-          updatedAt: now,
-        },
-      });
-
-    await deps.appendTaskUsageLedgerEntry({
-      taskId: args.task.id,
-      projectId: args.task.projectId,
-      sessionId: taskSessionId,
-      operationId: sessionOperationId,
-      entryKind: mapAgentTypeToUsageEntryKind(args.agentType),
-      modelId: args.modelUsed ?? null,
-      requestCount: 1,
-      outputTokens: tokenUsed,
-      costUsd: 0,
-      metadataJson: {
-        agentRunId: args.agentRunId,
-        status: args.status,
       },
     });
+}
 
-    if (deps.buildTaskTreeSnapshotFromRecord && deps.syncTaskAggregateFromSnapshot) {
-      const snapshot = deps.buildTaskTreeSnapshotFromRecord(args.task, {
-        status: mapAgentRunStatusToTaskStatus(args.status),
-        sessionId: runtimeSessionId,
-        agentRunId: args.agentRunId,
-        result: args.result ?? args.task.result,
-        selectedModel: args.modelUsed ?? args.task.selectedModel,
-        startedAt: args.startedAt ?? args.task.startedAt,
-        finishedAt: args.finishedAt ?? args.task.finishedAt,
-      });
-      await deps.syncTaskAggregateFromSnapshot(snapshot);
-    }
+async function upsertTaskOperationFacts(
+  args: SyncExecutionFactsForAgentRunArgs,
+  context: AgentRunWriteContext,
+) {
+  await db
+    .insert(taskOperations)
+    .values({
+      id: context.taskOperationId,
+      taskId: args.task.id,
+      sessionId: context.taskSessionId,
+      runId: context.defaultRunId,
+      messageId: null,
+      parentOperationId: null,
+      runtimeOperationId: `agent-run:${args.agentRunId}`,
+      operationIndex: context.operationIndex,
+      operationKind: context.operationKind,
+      toolName: null,
+      title: args.agentType,
+      status: context.taskNodeStatus,
+      summaryJson: buildTaskOperationSummary(args),
+      startedAt: args.startedAt ?? null,
+      finishedAt: args.finishedAt ?? null,
+      createdAt: args.startedAt ?? context.now,
+      updatedAt: context.now,
+    })
+    .onConflictDoUpdate({
+      target: taskOperations.id,
+      set: {
+        sessionId: context.taskSessionId,
+        runId: context.defaultRunId,
+        runtimeOperationId: `agent-run:${args.agentRunId}`,
+        operationKind: context.operationKind,
+        title: args.agentType,
+        status: context.taskNodeStatus,
+        summaryJson: buildTaskOperationSummary(args),
+        startedAt: args.startedAt ?? null,
+        finishedAt: args.finishedAt ?? null,
+        updatedAt: context.now,
+      },
+    });
+}
+
+async function appendAgentRunUsageEntry(
+  deps: CreateTaskOperationWriteApiDeps,
+  args: SyncExecutionFactsForAgentRunArgs,
+  context: AgentRunWriteContext,
+) {
+  await deps.appendTaskUsageLedgerEntry({
+    taskId: args.task.id,
+    projectId: args.task.projectId,
+    sessionId: context.taskSessionId,
+    operationId: context.taskOperationId,
+    entryKind: context.usageEntryKind,
+    modelId: args.modelUsed ?? null,
+    requestCount: 1,
+    outputTokens: context.tokenUsed,
+    costUsd: 0,
+    metadataJson: {
+      agentRunId: args.agentRunId,
+      status: args.status,
+    },
+  });
+}
+
+async function syncTaskAggregateSnapshotFromAgentRun(
+  deps: CreateTaskOperationWriteApiDeps,
+  args: SyncExecutionFactsForAgentRunArgs,
+  context: AgentRunWriteContext,
+) {
+  if (!deps.buildTaskTreeSnapshotFromRecord || !deps.syncTaskAggregateFromSnapshot) {
+    return;
+  }
+
+  const snapshot = deps.buildTaskTreeSnapshotFromRecord(args.task, {
+    status: mapAgentRunStatusToTaskStatus(args.status),
+    sessionId: context.runtimeSessionId,
+    agentRunId: args.agentRunId,
+    result: args.result ?? args.task.result,
+    selectedModel: args.modelUsed ?? args.task.selectedModel,
+    startedAt: args.startedAt ?? args.task.startedAt,
+    finishedAt: args.finishedAt ?? args.task.finishedAt,
+  });
+  await deps.syncTaskAggregateFromSnapshot(snapshot);
+}
+
+export function createTaskOperationWriteApi(deps: CreateTaskOperationWriteApiDeps) {
+  async function syncExecutionFactsForAgentRun(args: SyncExecutionFactsForAgentRunArgs) {
+    const context = await buildAgentRunWriteContext(deps, args);
+
+    await upsertTaskSessionRunFacts(args, context);
+    await upsertTaskOperationFacts(args, context);
+    await appendAgentRunUsageEntry(deps, args, context);
+    await syncTaskAggregateSnapshotFromAgentRun(deps, args, context);
 
     return {
-      taskSessionId,
-      sessionOperationId,
+      taskSessionId: context.taskSessionId,
+      taskOperationId: context.taskOperationId,
     };
   }
 

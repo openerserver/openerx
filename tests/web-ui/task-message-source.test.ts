@@ -34,7 +34,10 @@ describe("buildSessionMessagesFromExecutionTrace", () => {
 
     expect(items).toHaveLength(2);
     expect(items[0]).toMatchObject({ role: "user", text: "参考组件 是什么，用50个字以内回答" });
-    expect(items[1]).toMatchObject({ role: "assistant", text: "参考组件是复用现有页面结构的既有组件。" });
+    expect(items[1]).toMatchObject({
+      role: "assistant",
+      text: "参考组件是复用现有页面结构的既有组件。",
+    });
   });
 
   it("falls back to execution trace messages when timeline only contains status items", () => {

@@ -17,6 +17,7 @@
   },
   "files": {
     "ignore": [
+      "claude-code-main",
       "node_modules",
       "dist",
       ".opencode",

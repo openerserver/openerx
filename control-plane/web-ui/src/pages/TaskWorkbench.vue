@@ -408,9 +408,8 @@ async function ensureTaskMemberView(taskId: string, force = false) {
 }
 
 async function refreshFocusedTaskMemberViews(force = false) {
-  const taskIds = workbench.splitMode && workbench.secondaryPane?.taskId
-    ? [workbench.secondaryPane.taskId]
-    : [];
+  const taskIds =
+    workbench.splitMode && workbench.secondaryPane?.taskId ? [workbench.secondaryPane.taskId] : [];
   await Promise.all(taskIds.map((taskId) => ensureTaskMemberView(taskId, force)));
 }
 

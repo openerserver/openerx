@@ -3,6 +3,8 @@
 > 状态说明：本文档中的多个 Epic / Issue 以旧版图模型穿透控制面为前提，现已转为历史计划，不再指导当前实现。
 >
 > 相关旧兼容层工作项已被新的 Workflow Stage 主方案替代。当前执行方向请以 [docs/dag-node-execution-plan-v2.md](docs/dag-node-execution-plan-v2.md) 为准。
+>
+> 历史口径说明（2026-04-05）：本文若把 `agent_runs` 当作现行执行主表或待扩展的长期结构，应按历史计划理解。当前 schema 已删除 `agent_runs` 物理表，兼容 `agentRunId` 语义改由 canonical task-domain 表投影提供。
 
 ## 0. 审核修订说明（2026-03-09）
 
@@ -455,6 +457,7 @@
 建议按以下顺序推进：
 
 1. **先统一 Workflow Stage 主模型**：把执行阶段、Hook、RuntimePlan、agent_runs 的主链路收敛到同一模型。
+1. **先统一 Workflow Stage 主模型**：把执行阶段、Hook、RuntimePlan 与当时仍存在的 `agentRunId` 兼容链路收敛到同一模型。
 2. **再补运行时编排与可视化读取**：优先补全 pipeline、并行执行、顺序执行与当前 session 视角。
 3. **在执行主路径稳定后推进插件治理**：Epic 3。
 4. **最后补恢复与暴露能力**：Epic 4。

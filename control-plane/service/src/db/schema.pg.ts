@@ -125,7 +125,6 @@ export type TaskSessionTriggerType =
   | "hook_spawn"
   | "system_retry";
 export type TaskSessionMode = "single" | "parallel" | "sequential_chain";
-export type SessionOperationKind = "executor" | "judge" | "hook" | "resume" | "system";
 export type TaskSessionMessageRole = "user" | "assistant" | "system" | "tool";
 export type TaskSessionMessageStatus =
   | "pending"
@@ -197,12 +196,7 @@ export type TaskSessionRunLaneRole =
   | "resume"
   | "hook";
 export type TaskMessageKind = "prompt" | "reply" | "note" | "tool_echo";
-export type TaskMessageStatus =
-  | "pending"
-  | "streaming"
-  | "completed"
-  | "failed"
-  | "cancelled";
+export type TaskMessageStatus = "pending" | "streaming" | "completed" | "failed" | "cancelled";
 export type TaskOperationKind =
   | "model_request"
   | "tool_call"
@@ -957,10 +951,7 @@ export const taskMessageParts = pgTable(
     createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   },
   (table) => [
-    uniqueIndex("idx_task_message_parts_message_part_index").on(
-      table.messageId,
-      table.partIndex,
-    ),
+    uniqueIndex("idx_task_message_parts_message_part_index").on(table.messageId, table.partIndex),
     index("idx_task_message_parts_message_id").on(table.messageId),
   ],
 );
@@ -1002,56 +993,6 @@ export const taskOperations = pgTable(
     index("idx_task_operations_session_created_at").on(table.sessionId, table.createdAt),
     index("idx_task_operations_message_id").on(table.messageId),
     index("idx_task_operations_parent_operation_id").on(table.parentOperationId),
-  ],
-);
-
-export const sessionOperations = pgTable(
-  "session_operations",
-  {
-    id: text("id").primaryKey(),
-    sessionId: text("session_id")
-      .notNull()
-      .references(() => taskSessions.id),
-    taskId: text("task_id")
-      .notNull()
-      .references(() => tasks.id),
-    projectId: text("project_id")
-      .notNull()
-      .references(() => projects.id),
-    runtimeOperationId: text("runtime_operation_id"),
-    operationIndex: integer("operation_index").notNull().default(0),
-    operationKind: text("operation_kind").$type<SessionOperationKind>().notNull(),
-    executorKey: text("executor_key").notNull(),
-    executorLabel: text("executor_label"),
-    providerId: text("provider_id"),
-    modelId: text("model_id"),
-    executionStatus: text("execution_status").$type<ExecutionStatus>().notNull().default("running"),
-    inputTokens: bigint("input_tokens", { mode: "number" }).notNull().default(0),
-    outputTokens: bigint("output_tokens", { mode: "number" }).notNull().default(0),
-    totalTokens: bigint("total_tokens", { mode: "number" }).notNull().default(0),
-    costUsd: doublePrecision("cost_usd").notNull().default(0),
-    outputText: text("output_text"),
-    errorText: text("error_text"),
-    metadataJson: jsonb("metadata_json")
-      .$type<Record<string, unknown>>()
-      .notNull()
-      .default(sql`'{}'::jsonb`),
-    startedAt: text("started_at"),
-    finishedAt: text("finished_at"),
-    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-  },
-  (table) => [
-    uniqueIndex("idx_session_operations_session_index").on(table.sessionId, table.operationIndex),
-    uniqueIndex("idx_session_operations_runtime_operation_id").on(table.runtimeOperationId),
-    index("idx_session_operations_task_created_at").on(table.taskId, table.createdAt),
-    index("idx_session_operations_session_created_at").on(table.sessionId, table.createdAt),
-    index("idx_session_operations_session_execution_status").on(
-      table.sessionId,
-      table.executionStatus,
-      table.createdAt,
-    ),
-    index("idx_session_operations_executor_key").on(table.executorKey, table.createdAt),
   ],
 );
 
@@ -1102,7 +1043,7 @@ export const taskArtifacts = pgTable(
       .references(() => projects.id),
     sessionId: text("session_id").references(() => taskSessions.id),
     messageId: text("message_id").references(() => taskMessages.id),
-    operationId: text("operation_id").references(() => sessionOperations.id),
+    operationId: text("operation_id").references(() => taskOperations.id),
     parentArtifactId: text("parent_artifact_id").references((): AnyPgColumn => taskArtifacts.id),
     artifactKind: text("artifact_kind").$type<TaskArtifactKind>().notNull(),
     storageKind: text("storage_kind").$type<TaskArtifactStorageKind>().notNull().default("inline"),
@@ -1141,7 +1082,7 @@ export const taskUsageLedgerEntries = pgTable(
       .references(() => projects.id),
     sessionId: text("session_id").references(() => taskSessions.id),
     messageId: text("message_id").references(() => taskMessages.id),
-    operationId: text("operation_id").references(() => sessionOperations.id),
+    operationId: text("operation_id").references(() => taskOperations.id),
     entryKind: text("entry_kind").$type<TaskUsageEntryKind>().notNull(),
     providerId: text("provider_id"),
     modelId: text("model_id"),
@@ -1159,7 +1100,10 @@ export const taskUsageLedgerEntries = pgTable(
     createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   },
   (table) => [
-    index("idx_task_usage_ledger_entries_project_recorded_at").on(table.projectId, table.recordedAt),
+    index("idx_task_usage_ledger_entries_project_recorded_at").on(
+      table.projectId,
+      table.recordedAt,
+    ),
     index("idx_task_usage_ledger_entries_task_recorded_at").on(table.taskId, table.recordedAt),
     index("idx_task_usage_ledger_entries_session_recorded_at").on(
       table.sessionId,
@@ -1186,7 +1130,7 @@ export const taskTimelineViews = pgTable(
       .references(() => tasks.id),
     sessionId: text("session_id").references(() => taskSessions.id),
     messageId: text("message_id").references(() => taskMessages.id, { onDelete: "cascade" }),
-    operationId: text("operation_id").references(() => sessionOperations.id),
+    operationId: text("operation_id").references(() => taskOperations.id),
     artifactId: text("artifact_id").references(() => taskArtifacts.id),
     itemKind: text("item_kind").$type<TaskTimelineItemKind>().notNull(),
     itemRole: text("item_role").$type<TaskSessionMessageRole>(),
@@ -1656,9 +1600,7 @@ export const taskMessageEvents = pgTable(
     createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   },
   (table) => [
-    index("idx_task_message_events_unprojected")
-      .on(table.id)
-      .where(sql`projected = false`),
+    index("idx_task_message_events_unprojected").on(table.id).where(sql`projected = false`),
     index("idx_task_message_events_task_session").on(
       table.taskId,
       table.sessionId,

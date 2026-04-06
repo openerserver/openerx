@@ -3,6 +3,8 @@
 > 状态：主线已完成（2026-03-25；schema 草稿主体已兑现，当前仅保留历史说明、维护基线与可选 cleanup DDL 占位）  
 > 日期：2026-03-22  
 > 作者：GitHub Copilot
+>
+> 历史口径说明（2026-04-05）：本文保留的 `agent_runs` 表结构、索引和 bridge 字段草案均属于删除前迁移设计上下文。当前 schema 已通过 `0033_drop_agent_runs.sql` 删除 `agent_runs` 物理表；兼容 `agentRunId` 语义由 `task_operations`、`task_session_runs`、`task_sessions` 等 canonical task-domain 表投影提供。
 
 ## 1. 文档定位
 

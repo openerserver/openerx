@@ -7,10 +7,10 @@ import {
   upsertTaskTreeNode,
 } from "../project-tree/storage";
 import { loadTaskTreeRecord } from "../project-tree/task-view";
+import { createTaskOperationWriteApi } from "./session-operation-write-api";
 import { buildTaskTreeSnapshotFromRecord, createTaskAggregateSyncApi } from "./task-aggregate-sync";
-import { createTaskBranchWriteApi } from "./task-branch-write";
-import { createSessionOperationWriteApi } from "./session-operation-write-api";
 import { createTaskArtifactWriteApi } from "./task-artifact-write-api";
+import { createTaskBranchWriteApi } from "./task-branch-write";
 import { createTaskSessionMessageApi } from "./task-session-message-api";
 import { createTaskSessionMessageWriteApi } from "./task-session-message-write-api";
 import { createTaskSessionReadApi } from "./task-session-read";
@@ -153,7 +153,7 @@ export function buildTaskRouteBuilderShared() {
     loadTaskTreeBackedRecord: sharedDeps.loadTaskTreeBackedRecord,
     upsertTaskSessionMessageRecord: sessionMessageWriteApi.upsertTaskSessionMessageRecord,
   });
-  const sessionOperationWriteApi = createSessionOperationWriteApi({
+  const taskOperationWriteApi = createTaskOperationWriteApi({
     upsertTaskSessionRecord: sessionWriteApi.upsertTaskSessionRecord,
     buildTaskTreeSnapshotFromRecord: sharedDeps.buildTaskTreeSnapshotFromRecord,
     syncTaskAggregateFromSnapshot: aggregateSyncApi.syncTaskAggregateFromSnapshot,
@@ -183,7 +183,7 @@ export function buildTaskRouteBuilderShared() {
     sessionWriteApi,
     sessionMessageApi,
     sessionMessageWriteApi,
-    sessionOperationWriteApi,
+    taskOperationWriteApi,
     sessionReadApi,
     branchWriteApi,
     taskArtifactWriteApi,

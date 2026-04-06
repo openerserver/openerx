@@ -2,13 +2,16 @@
 
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import * as strategyModule from "../../control-plane/web-ui-bff/src/lib/orchestration-strategy";
-import { createOpencodeAdapterModuleMock } from "./opencode-adapter-mock";
-import { createSseAggregatorModuleMock } from "./sse-aggregator-mock";
 import {
   expectNoLegacyTimelineReadSource,
   expectNoPromptBackfillSegment,
   expectServiceTimelineNotRequested,
 } from "./execution-trace-contract-test-helpers";
+import {
+  createOpencodeAdapterModuleMock,
+  createRuntimeProviderModuleMock,
+} from "./opencode-adapter-mock";
+import { createSseAggregatorModuleMock } from "./sse-aggregator-mock";
 
 const cpFetchMock = mock(async (..._args: unknown[]) => ({ ok: true, data: {} }));
 const authHeaderMock = mock(() => "Bearer test");
@@ -43,6 +46,40 @@ const buildTaskWorkflowViewModelMock = mock(async () => ({
   developerChangeRequests: [],
 }));
 
+function aliasExecutionTraceMockUrl(url: string) {
+  const projectionMatch = url.match(/^\/api\/tasks\/([^/]+)\/timeline-view\?(.*)$/);
+  if (projectionMatch) {
+    const params = new URLSearchParams(projectionMatch[2] ?? "");
+    const runtimeSessionId = params.get("runtimeSessionId");
+    if (runtimeSessionId) {
+      throw new Error(
+        `Deprecated runtimeSessionId query used for projection timeline fetch: ${runtimeSessionId}`,
+      );
+    }
+  }
+
+  const branchMatch = url.match(
+    /^\/api\/tasks\/([^/]+)\/branches\/([^/]+)\/timeline(\?includeLineage=true)?$/,
+  );
+  if (branchMatch) {
+    const taskIdEncoded = branchMatch[1] ?? "";
+    const runtimeSessionId = decodeURIComponent(branchMatch[2] ?? "");
+    const taskId = decodeURIComponent(taskIdEncoded);
+    const includeLineageSuffix = branchMatch[3] ?? "";
+    return `/api/tasks/${taskIdEncoded}/sessions/${encodeURIComponent(`task-session:${taskId}:${runtimeSessionId}`)}/timeline${includeLineageSuffix}`;
+  }
+
+  return url;
+}
+
+function withTraceRouteAliases<T>(handler: (url: string) => Promise<T>) {
+  return async (url: string) => handler(aliasExecutionTraceMockUrl(url));
+}
+
+function setTraceFetchImplementation<T>(handler: (url: string) => Promise<T>) {
+  cpFetchMock.mockImplementation(withTraceRouteAliases(handler));
+}
+
 mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () => ({
   authHeader: authHeaderMock,
   cpFetch: cpFetchMock,
@@ -76,34 +113,41 @@ mock.module("../../control-plane/web-ui-bff/src/lib/runtime-pipeline", () => ({
   buildRuntimePipeline: mock(async () => ({ stages: [] })),
 }));
 
-mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter", () =>
-  createOpencodeAdapterModuleMock({
-    continueSession: mock(async () => ({ ok: true })),
-    createSession: mock(async () => ({ ok: true, sessionId: "session-1", agentRunId: "run-1" })),
-    ensureAgentRunForSession: mock(() => "run-1"),
-    extractAssistantResultFromMessages: mock(() => ({
-      completed: false,
-      failed: false,
-      error: undefined,
-      tokenUsed: 0,
-    })),
-    forkSession: mock(async () => ({ ok: true, sessionId: "session-2" })),
-    getAgentMessages: mock(async () => ({ ok: true, data: [] })),
-    getAgentRun: mock(() => undefined),
-    getSessionMessages: getSessionMessagesMock,
-    injectGuidance: mock(async () => ({ ok: true })),
-    listRuntimePermissions: mock(async () => ({ ok: true, data: [] })),
-    listAgentRuns: mock(() => []),
-    listSessions: mock(async () => ({ ok: true, data: [] })),
-    pauseAgent: mock(async () => ({ ok: true })),
-    recoverAgentRun: mock(() => undefined),
-    registerAgentRun: mock(() => undefined),
-    replyRuntimePermission: mock(async () => ({ ok: true })),
-    resumeAgent: mock(async () => ({ ok: true })),
-    runDetachedPrompt: mock(async () => ({ ok: true, sessionId: "detached", text: "{}" })),
-    terminateAgent: mock(async () => ({ ok: true })),
-    updateAgentRunStatus: mock(() => undefined),
-  }),
+const opencodeAdapterModule = createOpencodeAdapterModuleMock({
+  continueSession: mock(async () => ({ ok: true })),
+  createSession: mock(async () => ({ ok: true, sessionId: "session-1", agentRunId: "run-1" })),
+  ensureAgentRunForSession: mock(() => "run-1"),
+  extractAssistantResultFromMessages: mock(() => ({
+    completed: false,
+    failed: false,
+    error: undefined,
+    tokenUsed: 0,
+  })),
+  forkSession: mock(async () => ({ ok: true, sessionId: "session-2" })),
+  getAgentMessages: mock(async () => ({ ok: true, data: [] })),
+  getAgentRun: mock(() => undefined),
+  getSessionMessages: getSessionMessagesMock,
+  injectGuidance: mock(async () => ({ ok: true })),
+  listRuntimePermissions: mock(async () => ({ ok: true, data: [] })),
+  listAgentRuns: mock(() => []),
+  listSessions: mock(async () => ({ ok: true, data: [] })),
+  pauseAgent: mock(async () => ({ ok: true })),
+  recoverAgentRun: mock(() => undefined),
+  registerAgentRun: mock(() => undefined),
+  replyRuntimePermission: mock(async () => ({ ok: true })),
+  resumeAgent: mock(async () => ({ ok: true })),
+  runDetachedPrompt: mock(async () => ({ ok: true, sessionId: "detached", text: "{}" })),
+  terminateAgent: mock(async () => ({ ok: true })),
+  updateAgentRunStatus: mock(() => undefined),
+});
+
+mock.module(
+  "../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter",
+  () => opencodeAdapterModule,
+);
+
+mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/runtime-provider", () =>
+  createRuntimeProviderModuleMock(opencodeAdapterModule),
 );
 
 mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/run-persistence", () => ({
@@ -161,7 +205,7 @@ beforeEach(() => {
     pendingStageLabels: ["验证"],
   });
 
-  cpFetchMock.mockImplementation(async (url: string) => {
+  setTraceFetchImplementation(async (url: string) => {
     if (url === "/api/project-tree/tasks/task-1") {
       return {
         ok: true,
@@ -205,7 +249,10 @@ beforeEach(() => {
         },
       };
     }
-    if (url === "/api/tasks/task-1/timeline-view?sessionId=task-session%3Atask-1%3Ases-1&includeLineage=false") {
+    if (
+      url ===
+      "/api/tasks/task-1/timeline-view?sessionId=task-session%3Atask-1%3Ases-1&includeLineage=false"
+    ) {
       return {
         ok: true,
         data: {
@@ -218,7 +265,10 @@ beforeEach(() => {
         },
       };
     }
-    if (url === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true") {
+    if (
+      url ===
+      "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true"
+    ) {
       return {
         ok: true,
         data: {
@@ -257,39 +307,6 @@ beforeEach(() => {
               "完成后请输出本阶段产出摘要。",
               "如果你认为当前阶段已经完成，请在输出末尾单独追加 [STAGE_COMPLETE]。",
               "",
-              "第一轮用户输入",
-            ].join("\n"),
-          },
-        ],
-      },
-      {
-        info: {
-          id: "msg-2",
-          role: "assistant",
-          time: { created: Date.parse("2026-03-19T10:00:05.000Z") },
-        },
-        parts: [{ type: "text", text: "第一轮模型回复" }],
-      },
-      {
-        info: {
-          id: "msg-3",
-          role: "user",
-          time: { created: Date.parse("2026-03-19T10:01:00.000Z") },
-        },
-        parts: [
-          {
-            type: "text",
-            text: [
-              "Execution context:",
-              "",
-              "Opener-X task ID: task-1",
-              "Project ID: proj-1",
-              "当前执行上下文",
-              "任务：trace task",
-              "请只完成当前阶段的目标。",
-              "完成后请输出本阶段产出摘要。",
-              "如果你认为当前阶段已经完成，请在输出末尾单独追加 [STAGE_COMPLETE]。",
-              "",
               "第二轮用户输入",
             ].join("\n"),
           },
@@ -309,7 +326,7 @@ beforeEach(() => {
 
 describe("task execution trace route", () => {
   test("prefers task-domain projection timeline and snapshot when available", async () => {
-    cpFetchMock.mockImplementation(async (url: string) => {
+    setTraceFetchImplementation(async (url: string) => {
       if (url === "/api/project-tree/tasks/task-1") {
         return {
           ok: true,
@@ -516,8 +533,183 @@ describe("task execution trace route", () => {
     expect(getSessionMessagesMock).not.toHaveBeenCalled();
   });
 
+  test("supports generic projection message operation and artifact rows", async () => {
+    setTraceFetchImplementation(async (url: string) => {
+      if (url === "/api/project-tree/tasks/task-1") {
+        return {
+          ok: true,
+          data: {
+            id: "task-1",
+            projectId: "proj-1",
+            title: "trace task",
+            prompt: "第一轮用户输入",
+            status: "completed",
+            sessionId: "ses-1",
+            selectedModel: "github-copilot:gpt-5.4",
+            strategy: JSON.stringify({
+              selectedAgent: "oracle-enterprise",
+              hookExecutions: [],
+            }),
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/snapshot") {
+        return {
+          ok: true,
+          data: {
+            data: {
+              taskId: "task-1",
+              projectId: "proj-1",
+              currentStatus: "completed",
+              currentRunId: "task_run:task-1:ses-1",
+              currentSessionId: "ses-1",
+              latestResult: "投影回复",
+              latestResultSummary: "投影回复",
+              activeCandidateCount: 0,
+              completedCandidateCount: 1,
+              failedCandidateCount: 0,
+              totalChainSteps: 0,
+              completedChainSteps: 0,
+              updatedAt: "2026-03-22T10:00:03.000Z",
+            },
+            meta: {
+              readSource: "task-session-projection",
+              complete: true,
+            },
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/timeline-view?sessionId=task-session%3Atask-1%3Ases-1") {
+        return {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "projection-user-generic-1",
+                taskId: "task-1",
+                projectId: "proj-1",
+                messageId: "message-user-generic-1",
+                sessionId: "task-session:task-1:ses-1",
+                itemKind: "message",
+                itemRole: "user",
+                displayText: "投影用户输入",
+                sortAt: "2026-03-22T10:00:01.000Z",
+                createdAt: "2026-03-22T10:00:01.000Z",
+              },
+              {
+                id: "projection-assistant-generic-1",
+                taskId: "task-1",
+                projectId: "proj-1",
+                messageId: "message-assistant-generic-1",
+                sessionId: "task-session:task-1:ses-1",
+                itemKind: "message",
+                itemRole: "assistant",
+                displayText: "投影回复",
+                sortAt: "2026-03-22T10:00:03.000Z",
+                createdAt: "2026-03-22T10:00:03.000Z",
+              },
+              {
+                id: "projection-operation-generic-1",
+                taskId: "task-1",
+                projectId: "proj-1",
+                sessionId: "task-session:task-1:ses-1",
+                operationId: "operation-generic-1",
+                itemKind: "operation",
+                itemRole: "tool",
+                title: "bash",
+                displayText: "command: pwd",
+                metadataJson: {
+                  sourceKind: "tool-call",
+                  toolName: "bash",
+                  argumentsSummary: "command: pwd",
+                  status: "completed",
+                },
+                sortAt: "2026-03-22T10:00:03.100Z",
+                createdAt: "2026-03-22T10:00:03.100Z",
+              },
+              {
+                id: "projection-artifact-generic-1",
+                taskId: "task-1",
+                projectId: "proj-1",
+                sessionId: "task-session:task-1:ses-1",
+                operationId: "operation-generic-1",
+                artifactId: "artifact-generic-1",
+                itemKind: "artifact",
+                itemRole: "tool",
+                title: "bash result",
+                displayText: "/tmp/workspace",
+                metadataJson: {
+                  sourceKind: "tool-output",
+                  artifactKind: "result",
+                  toolName: "bash",
+                  outputSummary: "/tmp/workspace",
+                  status: "completed",
+                },
+                sortAt: "2026-03-22T10:00:03.200Z",
+                createdAt: "2026-03-22T10:00:03.200Z",
+              },
+            ],
+            meta: {
+              readSource: "task-session-projection",
+              complete: true,
+              itemCount: 4,
+            },
+          },
+        };
+      }
+
+      return { ok: true, data: {} };
+    });
+    getSessionMessagesMock.mockRejectedValue(new Error("should not hit runtime messages"));
+
+    const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
+
+    const response = await taskRoutes.request("http://localhost/task-1/execution-trace", {
+      headers: {
+        Authorization: "Bearer test",
+      },
+    });
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload.finalPrompt).toBe("投影用户输入");
+    expect(payload.latestResponse).toBe("投影回复");
+    expect(payload.timelineMeta).toMatchObject({
+      readSource: "task-session-projection",
+      complete: true,
+    });
+    expect(payload.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ role: "user", text: "投影用户输入" }),
+        expect.objectContaining({ role: "assistant", text: "投影回复" }),
+      ]),
+    );
+    expect(payload.segments).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "tool-call",
+          toolName: "bash",
+          toolArgumentsSummary: "command: pwd",
+          toolStatus: "completed",
+          content: "command: pwd",
+        }),
+        expect.objectContaining({
+          type: "tool-output",
+          toolName: "bash",
+          toolStatus: "completed",
+          content: "/tmp/workspace",
+        }),
+      ]),
+    );
+    expectNoLegacyTimelineReadSource(payload);
+    expectServiceTimelineNotRequested(cpFetchMock, "task-1", "task-session:task-1:ses-1");
+    expect(getSessionMessagesMock).not.toHaveBeenCalled();
+  });
+
   test("prefers service timeline aggregation when tree events cache is complete", async () => {
-    cpFetchMock.mockImplementation(async (url: string) => {
+    setTraceFetchImplementation(async (url: string) => {
       if (url === "/api/project-tree/tasks/task-1") {
         return {
           ok: true,
@@ -564,7 +756,10 @@ describe("task execution trace route", () => {
         };
       }
 
-      if (url === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true") {
+      if (
+        url ===
+        "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true"
+      ) {
         return {
           ok: true,
           data: {
@@ -648,7 +843,7 @@ describe("task execution trace route", () => {
   });
 
   test("keeps non-empty partial projection timeline without loading service timeline", async () => {
-    cpFetchMock.mockImplementation(async (url: string) => {
+    setTraceFetchImplementation(async (url: string) => {
       if (url === "/api/project-tree/tasks/task-1") {
         return {
           ok: true,
@@ -708,8 +903,13 @@ describe("task execution trace route", () => {
         };
       }
 
-      if (url === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true") {
-        throw new Error("should not load service timeline when projection timeline already has items");
+      if (
+        url ===
+        "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true"
+      ) {
+        throw new Error(
+          "should not load service timeline when projection timeline already has items",
+        );
       }
 
       return { ok: true, data: {} };
@@ -747,7 +947,7 @@ describe("task execution trace route", () => {
   });
 
   test("loads service timeline when projection is empty even if snapshot latestResult exists", async () => {
-    cpFetchMock.mockImplementation(async (url: string) => {
+    setTraceFetchImplementation(async (url: string) => {
       if (url === "/api/project-tree/tasks/task-1") {
         return {
           ok: true,
@@ -808,7 +1008,10 @@ describe("task execution trace route", () => {
         };
       }
 
-      if (url === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true") {
+      if (
+        url ===
+        "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true"
+      ) {
         return {
           ok: true,
           data: {
@@ -865,14 +1068,14 @@ describe("task execution trace route", () => {
     expect(payload.finalPrompt).toBe("fallback prompt");
     expect(payload.latestResponse).toBe("fallback response");
     expect(cpFetchMock).toHaveBeenCalledWith(
-      "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true",
+      "/api/tasks/task-1/branches/ses-1/timeline?includeLineage=true",
       expect.anything(),
     );
     expect(getSessionMessagesMock).not.toHaveBeenCalled();
   });
 
   test("loads service timeline when projection only has status items and no conversation messages", async () => {
-    cpFetchMock.mockImplementation(async (url: string) => {
+    setTraceFetchImplementation(async (url: string) => {
       if (url === "/api/project-tree/tasks/task-1") {
         return {
           ok: true,
@@ -946,7 +1149,10 @@ describe("task execution trace route", () => {
         };
       }
 
-      if (url === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true") {
+      if (
+        url ===
+        "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true"
+      ) {
         return {
           ok: true,
           data: {
@@ -1006,14 +1212,14 @@ describe("task execution trace route", () => {
       ]),
     );
     expect(cpFetchMock).toHaveBeenCalledWith(
-      "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true",
+      "/api/tasks/task-1/branches/ses-1/timeline?includeLineage=true",
       expect.anything(),
     );
     expect(getSessionMessagesMock).not.toHaveBeenCalled();
   });
 
   test("loads service timeline when projection conversation rows only contain role placeholders", async () => {
-    cpFetchMock.mockImplementation(async (url: string) => {
+    setTraceFetchImplementation(async (url: string) => {
       if (url === "/api/project-tree/tasks/task-1") {
         return {
           ok: true,
@@ -1101,7 +1307,10 @@ describe("task execution trace route", () => {
         };
       }
 
-      if (url === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true") {
+      if (
+        url ===
+        "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true"
+      ) {
         return {
           ok: true,
           data: {
@@ -1164,8 +1373,8 @@ describe("task execution trace route", () => {
     expect(getSessionMessagesMock).not.toHaveBeenCalled();
   });
 
-  test("keeps complete service timeline even when conversation shells have no displayable text", async () => {
-    cpFetchMock.mockImplementation(async (url: string) => {
+  test("falls back to runtime messages when service timeline only has non-displayable conversation shells", async () => {
+    setTraceFetchImplementation(async (url: string) => {
       if (url === "/api/project-tree/tasks/task-1") {
         return {
           ok: true,
@@ -1253,7 +1462,10 @@ describe("task execution trace route", () => {
         };
       }
 
-      if (url === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true") {
+      if (
+        url ===
+        "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true"
+      ) {
         return {
           ok: true,
           data: {
@@ -1324,8 +1536,9 @@ describe("task execution trace route", () => {
     expect(response.status).toBe(200);
     const payload = await response.json();
     expect(payload.timelineMeta).toMatchObject({
-      readSource: "conversation-table",
+      readSource: "opencode-runtime",
       cacheState: "complete",
+      complete: true,
     });
     expect(payload.timeline).toEqual(
       expect.arrayContaining([
@@ -1335,23 +1548,43 @@ describe("task execution trace route", () => {
           text: "任务进入 running 状态",
         }),
         expect.objectContaining({
-          id: "empty-user-1",
+          id: "msg-1",
           role: "user",
-          text: "",
+          text: expect.stringContaining("第二轮用户输入"),
         }),
         expect.objectContaining({
-          id: "empty-assistant-1",
+          id: "msg-4",
           role: "assistant",
-          text: "",
+          text: "第二轮模型回复",
         }),
       ]),
     );
-    expect(payload.messages).toEqual([]);
-    expect(getSessionMessagesMock).not.toHaveBeenCalled();
+    expect(payload.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "msg-1",
+          role: "user",
+          text: expect.stringContaining("第二轮用户输入"),
+        }),
+        expect.objectContaining({
+          id: "msg-4",
+          role: "assistant",
+          text: "第二轮模型回复",
+        }),
+      ]),
+    );
+    expect(payload.messages).toHaveLength(2);
+    expect(payload.finalPrompt == null || payload.finalPrompt.includes("第二轮用户输入")).toBe(
+      true,
+    );
+    expect(payload.latestResponse).toBe("第二轮模型回复");
+    expectNoPromptBackfillSegment(payload, "第一轮用户输入");
+    expect(getSessionMessagesMock).toHaveBeenCalledTimes(1);
+    expect(getSessionMessagesMock.mock.calls[0]?.[0]).toBe("ses-1");
   });
 
-  test("supplements placeholder service timeline conversation with task conversation messages", async () => {
-    cpFetchMock.mockImplementation(async (url: string) => {
+  test("keeps displayable service timeline placeholders without loading task conversation messages", async () => {
+    setTraceFetchImplementation(async (url: string) => {
       if (url === "/api/project-tree/tasks/task-1") {
         return {
           ok: true,
@@ -1412,7 +1645,10 @@ describe("task execution trace route", () => {
         };
       }
 
-      if (url === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true") {
+      if (
+        url ===
+        "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true"
+      ) {
         return {
           ok: true,
           data: {
@@ -1532,31 +1768,32 @@ describe("task execution trace route", () => {
       complete: true,
     });
     expect(payload.messages).toEqual([
-      expect.objectContaining({ role: "user", text: "补全后的用户输入" }),
-      expect.objectContaining({ role: "assistant", text: "补全后的模型回复" }),
+      expect.objectContaining({ role: "user", text: "user" }),
+      expect.objectContaining({ role: "assistant", text: "assistant" }),
     ]);
     expect(payload.timeline).toEqual([
-      expect.objectContaining({ role: "user", text: "补全后的用户输入" }),
-      expect.objectContaining({ role: "assistant", text: "补全后的模型回复" }),
+      expect.objectContaining({ role: "user", text: "user" }),
+      expect.objectContaining({ role: "assistant", text: "assistant" }),
       expect.objectContaining({ role: "system", text: "任务进入 completed 状态" }),
     ]);
     expect(payload.segments).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ type: "user-input", content: "补全后的用户输入" }),
-        expect.objectContaining({ type: "model-response", content: "补全后的模型回复" }),
+        expect.objectContaining({ type: "user-input", content: "user" }),
+        expect.objectContaining({ type: "model-response", content: "assistant" }),
       ]),
     );
-    expect(payload.finalPrompt).toBe("补全后的用户输入");
-    expect(payload.latestResponse).toBe("补全后的模型回复");
-    expect(cpFetchMock).toHaveBeenCalledWith(
-      "/api/tasks/task-1/messages?sessionId=task-session%3Atask-1%3Ases-1",
-      expect.anything(),
-    );
+    expect(payload.finalPrompt).toBe("user");
+    expect(payload.latestResponse).toBe("assistant");
+    expect(
+      cpFetchMock.mock.calls.some(
+        ([path]) => path === "/api/tasks/task-1/messages?sessionId=task-session%3Atask-1%3Ases-1",
+      ),
+    ).toBe(false);
     expect(getSessionMessagesMock).not.toHaveBeenCalled();
   });
 
-  test("keeps an empty new-table trace when projection and session timeline are both empty", async () => {
-    cpFetchMock.mockImplementation(async (url: string) => {
+  test("falls back to runtime messages when projection and session timeline are both empty", async () => {
+    setTraceFetchImplementation(async (url: string) => {
       if (url === "/api/project-tree/tasks/task-1") {
         return {
           ok: true,
@@ -1617,7 +1854,10 @@ describe("task execution trace route", () => {
         };
       }
 
-      if (url === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true") {
+      if (
+        url ===
+        "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true"
+      ) {
         return {
           ok: true,
           data: {
@@ -1668,19 +1908,51 @@ describe("task execution trace route", () => {
     expect(response.status).toBe(200);
     const payload = await response.json();
     expect(payload.timelineMeta).toMatchObject({
-      cacheState: "none",
-      complete: false,
-      itemCount: 0,
+      readSource: "opencode-runtime",
+      cacheState: "complete",
+      complete: true,
+      itemCount: 2,
     });
-    expect(payload.timeline).toEqual([]);
-    expect(payload.messages).toEqual([]);
-    expect(payload.finalPrompt).toBeNull();
-    expect(payload.latestResponse).toBe("snapshot only response");
-    expect(getSessionMessagesMock).not.toHaveBeenCalled();
+    expect(payload.timeline).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "msg-1",
+          role: "user",
+          text: expect.stringContaining("第二轮用户输入"),
+        }),
+        expect.objectContaining({
+          id: "msg-4",
+          role: "assistant",
+          text: "第二轮模型回复",
+        }),
+      ]),
+    );
+    expect(payload.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "msg-1",
+          role: "user",
+          text: expect.stringContaining("第二轮用户输入"),
+        }),
+        expect.objectContaining({
+          id: "msg-4",
+          role: "assistant",
+          text: "第二轮模型回复",
+        }),
+      ]),
+    );
+    expect(payload.messages).toHaveLength(2);
+    expect(payload.finalPrompt == null || payload.finalPrompt.includes("第二轮用户输入")).toBe(
+      true,
+    );
+    expect(payload.latestResponse).toBe("第二轮模型回复");
+    expectNoPromptBackfillSegment(payload, "第一轮用户输入");
+    expect(getSessionMessagesMock).toHaveBeenCalledTimes(1);
+    expect(getSessionMessagesMock.mock.calls[0]?.[0]).toBe("ses-1");
   });
 
   test("keeps projection incomplete meta when service timeline is unavailable", async () => {
-    cpFetchMock.mockImplementation(async (url: string) => {
+    setTraceFetchImplementation(async (url: string) => {
       if (url === "/api/project-tree/tasks/task-1") {
         return {
           ok: true,
@@ -1727,7 +1999,10 @@ describe("task execution trace route", () => {
         };
       }
 
-      if (url === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true") {
+      if (
+        url ===
+        "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true"
+      ) {
         return {
           ok: false,
           status: 404,
@@ -1763,7 +2038,7 @@ describe("task execution trace route", () => {
   });
 
   test("reassembles anonymous user prompt parts from complete timeline items", async () => {
-    cpFetchMock.mockImplementation(async (url: string) => {
+    setTraceFetchImplementation(async (url: string) => {
       if (url === "/api/project-tree/tasks/task-1") {
         return {
           ok: true,
@@ -1783,7 +2058,10 @@ describe("task execution trace route", () => {
         };
       }
 
-      if (url === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true") {
+      if (
+        url ===
+        "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline?includeLineage=true"
+      ) {
         return {
           ok: true,
           data: {
@@ -1869,7 +2147,9 @@ describe("task execution trace route", () => {
         text: "第二轮模型回复",
       }),
     ]);
-    expect(payload.finalPrompt == null || payload.finalPrompt.includes("第二轮用户输入")).toBe(true);
+    expect(payload.finalPrompt == null || payload.finalPrompt.includes("第二轮用户输入")).toBe(
+      true,
+    );
     expectNoLegacyTimelineReadSource(payload);
     expect(payload.segments).toEqual(
       expect.arrayContaining([
@@ -1892,9 +2172,15 @@ describe("task execution trace route", () => {
 
     expect(response.status).toBe(200);
     const payload = await response.json();
-    expect(payload.finalPrompt == null || payload.finalPrompt.includes("第二轮用户输入")).toBe(true);
-    expect(payload.finalPrompt == null || payload.finalPrompt.includes("当前执行上下文")).toBe(true);
-    expect(payload.latestResponse == null || payload.latestResponse === "第二轮模型回复").toBe(true);
+    expect(payload.finalPrompt == null || payload.finalPrompt.includes("第二轮用户输入")).toBe(
+      true,
+    );
+    expect(payload.finalPrompt == null || payload.finalPrompt.includes("当前执行上下文")).toBe(
+      true,
+    );
+    expect(payload.latestResponse == null || payload.latestResponse === "第二轮模型回复").toBe(
+      true,
+    );
     expectNoLegacyTimelineReadSource(payload);
     expect(payload.segments).toEqual(
       expect.arrayContaining([
@@ -1909,7 +2195,7 @@ describe("task execution trace route", () => {
   });
 
   test("does not reuse task snapshot latestResult for an explicitly requested candidate session", async () => {
-    cpFetchMock.mockImplementation(async (url: string) => {
+    setTraceFetchImplementation(async (url: string) => {
       if (url === "/api/project-tree/tasks/task-1") {
         return {
           ok: true,
@@ -1956,7 +2242,10 @@ describe("task execution trace route", () => {
         };
       }
 
-      if (url === "/api/tasks/task-1/timeline-view?sessionId=task-session%3Atask-1%3Ases-candidate&includeLineage=false") {
+      if (
+        url ===
+        "/api/tasks/task-1/timeline-view?sessionId=task-session%3Atask-1%3Ases-candidate&includeLineage=false"
+      ) {
         return {
           ok: true,
           data: {
@@ -2006,14 +2295,14 @@ describe("task execution trace route", () => {
     expect(payload.latestResponse).toBeNull();
     expect(payload.messages).toEqual([]);
     expect(cpFetchMock).toHaveBeenCalledWith(
-      "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-candidate/timeline",
+      "/api/tasks/task-1/branches/ses-candidate/timeline",
       expect.anything(),
     );
     expect(getSessionMessagesMock).not.toHaveBeenCalled();
   });
 
   test("keeps candidate trace empty when projection and session timeline are both empty", async () => {
-    cpFetchMock.mockImplementation(async (url: string) => {
+    setTraceFetchImplementation(async (url: string) => {
       if (url === "/api/project-tree/tasks/task-1") {
         return {
           ok: true,
@@ -2121,7 +2410,7 @@ describe("task execution trace route", () => {
   });
 
   test("does not reuse task snapshot latestResult even when the explicitly requested session matches task.sessionId", async () => {
-    cpFetchMock.mockImplementation(async (url: string) => {
+    setTraceFetchImplementation(async (url: string) => {
       if (url === "/api/project-tree/tasks/task-1") {
         return {
           ok: true,
@@ -2168,7 +2457,10 @@ describe("task execution trace route", () => {
         };
       }
 
-      if (url === "/api/tasks/task-1/timeline-view?sessionId=task-session%3Atask-1%3Ases-main&includeLineage=false") {
+      if (
+        url ===
+        "/api/tasks/task-1/timeline-view?sessionId=task-session%3Atask-1%3Ases-main&includeLineage=false"
+      ) {
         return {
           ok: true,
           data: {
@@ -2218,14 +2510,14 @@ describe("task execution trace route", () => {
     expect(payload.latestResponse).toBeNull();
     expect(payload.messages).toEqual([]);
     expect(cpFetchMock).toHaveBeenCalledWith(
-      "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-main/timeline",
+      "/api/tasks/task-1/branches/ses-main/timeline",
       expect.anything(),
     );
     expect(getSessionMessagesMock).not.toHaveBeenCalled();
   });
 
   test("respects includeLineage=false when timeline cache is partial", async () => {
-    cpFetchMock.mockImplementation(async (url: string) => {
+    setTraceFetchImplementation(async (url: string) => {
       if (url === "/api/project-tree/tasks/task-1") {
         return {
           ok: true,
@@ -2259,7 +2551,8 @@ describe("task execution trace route", () => {
       }
 
       if (
-        url === "/api/tasks/task-1/timeline-view?sessionId=task-session%3Atask-1%3Ases-1&includeLineage=false"
+        url ===
+        "/api/tasks/task-1/timeline-view?sessionId=task-session%3Atask-1%3Ases-1&includeLineage=false"
       ) {
         return {
           ok: true,
@@ -2306,7 +2599,7 @@ describe("task execution trace route", () => {
     const payload = await response.json();
     expectNoLegacyTimelineReadSource(payload);
     expect(cpFetchMock).toHaveBeenCalledWith(
-      "/api/tasks/task-1/sessions/task-session%3Atask-1%3Ases-1/timeline",
+      "/api/tasks/task-1/branches/ses-1/timeline",
       expect.objectContaining({ authorization: "Bearer test" }),
     );
     expect(getSessionMessagesMock).not.toHaveBeenCalled();

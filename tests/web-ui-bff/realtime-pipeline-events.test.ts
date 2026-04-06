@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { createControlPlaneClientModuleMock } from "./control-plane-client-mock";
-import { createOpencodeAdapterModuleMock } from "./opencode-adapter-mock";
+import {
+  createOpencodeAdapterModuleMock,
+  createRuntimeProviderModuleMock,
+} from "./opencode-adapter-mock";
 import {
   expectNoPublicTraceRequests,
   expectSessionMessageReaderCalls,
@@ -99,22 +102,43 @@ mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () =>
   }),
 );
 
-mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter", () =>
-  createOpencodeAdapterModuleMock({
-    continueSession: mock(async () => ({ ok: true })),
-    createSession: mock(async () => ({ ok: true, sessionId: "ses-1", agentRunId: "run-1" })),
-    ensureAgentRunForSession: mock(() => "run-1"),
-    extractAssistantResultFromMessages: extractAssistantResultFromMessagesMock,
-    findAgentRunBySessionId: findAgentRunBySessionIdMock,
-    forkSession: mock(async () => ({ ok: true, sessionId: "ses-fork-1" })),
-    getAgentRun: getAgentRunMock,
-    getSessionMessages: getSessionMessagesMock,
-    listSessions: listSessionsMock,
-    recoverAgentRun: recoverAgentRunMock,
-    runDetachedPrompt: runDetachedPromptMock,
-    terminateAgent: terminateAgentMock,
-    updateAgentRunStatus: updateAgentRunStatusMock,
-  }),
+const opencodeAdapterModule = createOpencodeAdapterModuleMock({
+  continueSession: mock(async () => ({ ok: true })),
+  createSession: mock(async () => ({ ok: true, sessionId: "ses-1", agentRunId: "run-1" })),
+  ensureAgentRunForSession: mock(() => "run-1"),
+  extractAssistantResultFromMessages: extractAssistantResultFromMessagesMock,
+  findAgentRunBySessionId: findAgentRunBySessionIdMock,
+  forkSession: mock(async () => ({ ok: true, sessionId: "ses-fork-1" })),
+  getAgentRun: getAgentRunMock,
+  getSessionMessages: getSessionMessagesMock,
+  listSessions: listSessionsMock,
+  recoverAgentRun: recoverAgentRunMock,
+  runDetachedPrompt: runDetachedPromptMock,
+  terminateAgent: terminateAgentMock,
+  updateAgentRunStatus: updateAgentRunStatusMock,
+});
+
+mock.module(
+  "../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter",
+  () => opencodeAdapterModule,
+);
+
+mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/agent-run-registry", () => ({
+  ensureAgentRunForSession: mock(() => "run-1"),
+  findAgentRunBySessionId: findAgentRunBySessionIdMock,
+  getAgentRun: getAgentRunMock,
+  listAgentRuns: mock(() => []),
+  recoverAgentRun: recoverAgentRunMock,
+  registerAgentRun: mock(() => undefined),
+  updateAgentRunStatus: updateAgentRunStatusMock,
+}));
+
+mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/runtime-message-utils", () => ({
+  extractAssistantResultFromMessages: extractAssistantResultFromMessagesMock,
+}));
+
+mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/runtime-provider", () =>
+  createRuntimeProviderModuleMock(opencodeAdapterModule),
 );
 
 mock.module("../../control-plane/web-ui-bff/src/modules/code-changes/change-collector", () => ({
@@ -487,8 +511,11 @@ describe("SSEAggregator pipeline emitters", () => {
         body: expect.objectContaining({
           runtimeSessionId: "ses-1",
           message: expect.objectContaining({
-            info: expect.objectContaining({ id: "msg-1", role: "user" }),
+            info: expect.objectContaining({ id: "ses-1:user-prompt", role: "user" }),
             parts: [expect.objectContaining({ type: "text", text: "真实用户输入" })],
+            promptDecomposition: expect.objectContaining({
+              finalSentText: "真实用户输入",
+            }),
           }),
         }),
       }),
@@ -571,8 +598,11 @@ describe("SSEAggregator pipeline emitters", () => {
           body: expect.objectContaining({
             runtimeSessionId: "ses-a",
             message: expect.objectContaining({
-              info: expect.objectContaining({ id: "msg-ses-a", role: "user" }),
+              info: expect.objectContaining({ id: "ses-a:user-prompt", role: "user" }),
               parts: [expect.objectContaining({ type: "text", text: "给两个初步定义" })],
+              promptDecomposition: expect.objectContaining({
+                finalSentText: "给两个初步定义",
+              }),
             }),
           }),
         }),
@@ -585,8 +615,11 @@ describe("SSEAggregator pipeline emitters", () => {
           body: expect.objectContaining({
             runtimeSessionId: "ses-b",
             message: expect.objectContaining({
-              info: expect.objectContaining({ id: "msg-ses-b", role: "user" }),
+              info: expect.objectContaining({ id: "ses-b:user-prompt", role: "user" }),
               parts: [expect.objectContaining({ type: "text", text: "给两个初步定义" })],
+              promptDecomposition: expect.objectContaining({
+                finalSentText: "给两个初步定义",
+              }),
             }),
           }),
         }),
@@ -777,37 +810,39 @@ describe("SSEAggregator pipeline emitters", () => {
         modelId: "gpt-5.4",
       },
     });
-    cpFetchMock.mockImplementation(async (url: string, options?: { method?: string; body?: unknown }) => {
-      if (isTaskDetailGet(url, options)) {
-        return {
-          ok: true,
-          status: 200,
-          data: createTaskDetailRecord({
-            strategy: JSON.stringify({
-              effectiveModel: "github-copilot:gpt-5.4",
+    cpFetchMock.mockImplementation(
+      async (url: string, options?: { method?: string; body?: unknown }) => {
+        if (isTaskDetailGet(url, options)) {
+          return {
+            ok: true,
+            status: 200,
+            data: createTaskDetailRecord({
+              strategy: JSON.stringify({
+                effectiveModel: "github-copilot:gpt-5.4",
+              }),
             }),
-          }),
-        };
-      }
+          };
+        }
 
-      if ((options?.method || "GET") === "GET" && url === "/api/tasks/task-1/sessions") {
-        return {
-          ok: true,
-          status: 200,
-          data: {
-            data: [
-              {
-                runtimeSessionId: "ses-task-main",
-                isActive: true,
-                archivedAt: null,
-              },
-            ],
-          },
-        };
-      }
+        if ((options?.method || "GET") === "GET" && url === "/api/tasks/task-1/sessions") {
+          return {
+            ok: true,
+            status: 200,
+            data: {
+              data: [
+                {
+                  runtimeSessionId: "ses-task-main",
+                  isActive: true,
+                  archivedAt: null,
+                },
+              ],
+            },
+          };
+        }
 
-      return { ok: true, status: 200, data: { body: options?.body } };
-    });
+        return { ok: true, status: 200, data: { body: options?.body } };
+      },
+    );
     buildPipelineStageUpdatedEventsMock
       .mockResolvedValueOnce([
         {
@@ -898,7 +933,8 @@ describe("SSEAggregator pipeline emitters", () => {
       );
 
       const taskPatchCalls = cpFetchMock.mock.calls.filter(
-        (call) => call[0] === "/api/tasks/task-1" && (call[1] as { method?: string })?.method === "PATCH",
+        (call) =>
+          call[0] === "/api/tasks/task-1" && (call[1] as { method?: string })?.method === "PATCH",
       );
       expect(taskPatchCalls).toHaveLength(2);
       expect(
@@ -908,14 +944,20 @@ describe("SSEAggregator pipeline emitters", () => {
             return false;
           }
           const parsed = JSON.parse(body.strategy) as {
-            followupExecutions?: Array<{ templateId?: string; triggerHookId?: string; result?: string }>;
+            followupExecutions?: Array<{
+              templateId?: string;
+              triggerHookId?: string;
+              result?: string;
+            }>;
           };
-          return parsed.followupExecutions?.some(
-            (execution) =>
-              execution.templateId === "post-review-followup" &&
-              execution.triggerHookId === "post-review" &&
-              execution.result === "Follow-up summary",
-          ) === true;
+          return (
+            parsed.followupExecutions?.some(
+              (execution) =>
+                execution.templateId === "post-review-followup" &&
+                execution.triggerHookId === "post-review" &&
+                execution.result === "Follow-up summary",
+            ) === true
+          );
         }),
       ).toBe(true);
     } finally {

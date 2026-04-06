@@ -10,6 +10,7 @@ import {
   taskTimelineViews,
 } from "../../db/schema";
 import * as schema from "../../db/schema";
+import { fromStoredTaskExecutionMode, toStoredTaskExecutionMode } from "./task-execution-mode";
 
 /**
  * Maps old task status values to the DB enum `task_lifecycle_status`.
@@ -23,7 +24,11 @@ function toLifecycleStatus(
   return "active";
 }
 
-const taskDomainEvents = (schema as Record<string, unknown>).taskDomainEvents as any | undefined;
+function getOptionalSchemaValue<T = any>(key: string) {
+  return (schema as unknown as Record<string, T | undefined>)[key];
+}
+
+const taskDomainEvents = getOptionalSchemaValue("taskDomainEvents");
 
 type TaskDomainProjectionEventRecord = {
   id: string;
@@ -266,41 +271,69 @@ function describeMessagePartTimelineEvent(partSummary: {
   };
 }
 
+function buildRunNodeTimelineTitle(args: {
+  title: string | null;
+  nodeKind: string;
+  candidateIndex: number | null;
+  chainStepIndex: number | null;
+  agentType: string | null;
+}) {
+  if (args.title) {
+    return args.title;
+  }
+  if (args.nodeKind === "candidate" && args.candidateIndex !== null) {
+    return `候选 ${args.candidateIndex + 1}`;
+  }
+  if (args.nodeKind === "judge") {
+    return "Judge 决策";
+  }
+  if (args.nodeKind === "chain-step") {
+    return `链式步骤 ${(args.chainStepIndex ?? args.candidateIndex ?? 0) + 1}`;
+  }
+
+  return args.agentType;
+}
+
+function buildRunNodeTimelineDisplayText(args: {
+  payload: Record<string, unknown>;
+  itemKind: TaskTimelineItemKind;
+  title: string | null;
+  status: string;
+}) {
+  return (
+    asNullableString(args.payload.result) ??
+    asNullableString(args.payload.error) ??
+    (args.itemKind === "task_lifecycle"
+      ? `${args.title ?? "执行节点"} 进入 ${args.status} 状态`
+      : `${args.title ?? "执行节点"} 已${args.status}`)
+  );
+}
+
 function describeRunNodeTimelineEvent(payload: Record<string, unknown>) {
   const nodeKind = asNullableString(payload.nodeKind) ?? "execution";
   const status = asNullableString(payload.status) ?? "pending";
   const title = asNullableString(payload.title);
   const candidateIndex = typeof payload.candidateIndex === "number" ? payload.candidateIndex : null;
-  const chainStepIndex =
-    typeof payload.chainStepIndex === "number" ? payload.chainStepIndex : null;
+  const chainStepIndex = typeof payload.chainStepIndex === "number" ? payload.chainStepIndex : null;
   const agentType = asNullableString(payload.agentType);
   const itemKind = buildTimelineItemKindFromRunNodeEvent(nodeKind, status);
-
-  let defaultTitle = title;
-  if (!defaultTitle && nodeKind === "candidate" && candidateIndex !== null) {
-    defaultTitle = `候选 ${candidateIndex + 1}`;
-  }
-  if (!defaultTitle && nodeKind === "judge") {
-    defaultTitle = "Judge 决策";
-  }
-  if (!defaultTitle && nodeKind === "chain-step") {
-    defaultTitle = `链式步骤 ${(chainStepIndex ?? candidateIndex ?? 0) + 1}`;
-  }
-  if (!defaultTitle && agentType) {
-    defaultTitle = agentType;
-  }
-
-  const displayText =
-    asNullableString(payload.result) ??
-    asNullableString(payload.error) ??
-    (itemKind === "task_lifecycle"
-      ? `${defaultTitle ?? "执行节点"} 进入 ${status} 状态`
-      : `${defaultTitle ?? "执行节点"} 已${status}`);
+  const defaultTitle = buildRunNodeTimelineTitle({
+    title,
+    nodeKind,
+    candidateIndex,
+    chainStepIndex,
+    agentType,
+  });
 
   return {
     itemKind,
     title: defaultTitle,
-    displayText,
+    displayText: buildRunNodeTimelineDisplayText({
+      payload,
+      itemKind,
+      title: defaultTitle,
+      status,
+    }),
   };
 }
 
@@ -320,11 +353,7 @@ function normalizeProjectionStatus(value: unknown) {
 }
 
 function normalizeProjectionOrchestrationKind(value: unknown) {
-  if (value === "single" || value === "parallel" || value === "sequential-chain") {
-    return value;
-  }
-
-  return null;
+  return fromStoredTaskExecutionMode(typeof value === "string" ? value : null);
 }
 
 function asNullableString(value: unknown) {
@@ -419,7 +448,7 @@ function buildTaskSnapshotProjectionValues(args: {
     taskId: args.taskId,
     projectId: args.projectId,
     lifecycleStatus: toLifecycleStatus(args.currentStatus),
-    currentExecutionMode: args.orchestrationKind ?? null,
+    currentExecutionMode: toStoredTaskExecutionMode(args.orchestrationKind),
     currentExecutionStatus: null as string | null,
     currentSessionId: args.currentSessionId ?? null,
     latestSessionId: args.currentSessionId ?? null,
@@ -477,8 +506,11 @@ async function syncSnapshotFromProjectionBase(args: {
   await syncTaskSnapshotProjection({
     taskId: args.eventRecord.taskId,
     projectId: args.eventRecord.projectId,
-    currentStatus: getProjectionBaseStatus(snapshotRecord?.lifecycleStatus, aggregateRecord?.status),
-    orchestrationKind: (snapshotRecord?.currentExecutionMode as "single" | "parallel" | "sequential-chain" | null) ?? null,
+    currentStatus: getProjectionBaseStatus(
+      snapshotRecord?.lifecycleStatus,
+      aggregateRecord?.status,
+    ),
+    orchestrationKind: fromStoredTaskExecutionMode(snapshotRecord?.currentExecutionMode),
     currentSessionId: args.currentSessionId ?? snapshotRecord?.currentSessionId ?? null,
     latestResultSummary:
       args.latestResultSummary ??
@@ -653,8 +685,7 @@ async function handleTaskRunNodeUpsertedEvent(
   const runNodeTimeline = describeRunNodeTimelineEvent(payload);
   const orchestrationKind = normalizeProjectionOrchestrationKind(payload.orchestrationKind);
   const explicitWinnerNodeId = asNullableString(payload.winnerNodeId);
-  const shouldPreserveMainline =
-    orchestrationKind === "parallel" && explicitWinnerNodeId == null;
+  const shouldPreserveMainline = orchestrationKind === "parallel" && explicitWinnerNodeId == null;
 
   await syncTaskSnapshotProjection({
     taskId: eventRecord.taskId,
@@ -664,9 +695,7 @@ async function handleTaskRunNodeUpsertedEvent(
     currentSessionId: shouldPreserveMainline
       ? undefined
       : asNullableString(payload.runtimeSessionId),
-    latestResultSummary: shouldPreserveMainline
-      ? undefined
-      : asNullableString(payload.result),
+    latestResultSummary: shouldPreserveMainline ? undefined : asNullableString(payload.result),
     latestErrorText: asNullableString(payload.error),
     lastActivityAt: asNullableString(payload.lastActivityAt) ?? eventRecord.createdAt,
   });

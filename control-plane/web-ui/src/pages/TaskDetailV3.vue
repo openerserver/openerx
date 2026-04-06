@@ -173,6 +173,7 @@
                 :content="previewFile.content"
                 @close="previewFile = null"
               />
+              <TaskMemberPanel v-if="memberViewLoading || memberView" :view="memberView" :loading="memberViewLoading" />
               <TaskFollowupPanel
                 :task-id="task.id"
                 :session-id="selectedSessionId"
@@ -208,6 +209,7 @@ import {
   type TaskAgentRunRecord,
   type TaskDomainRunDetailRecord,
   type TaskDomainRunRecord,
+  type TaskMemberViewModel,
   type TaskRuntimePermission,
   type TaskSessionRecord,
   type TaskWorkflowViewModel,
@@ -220,6 +222,7 @@ import {
   getTaskDomainRunDetail,
   getTaskDomainRuns,
   getTaskExecutionTraceView,
+  getTaskMemberView,
   getTaskSessions,
   getTaskWorkflowView,
   listTaskRuntimePermissions,
@@ -228,12 +231,12 @@ import {
   updateTask,
 } from "../lib/api";
 import {
-  getRealtimeEventKind,
-  getRealtimeSnapshotReason,
-  normalizeSessionConversationItems,
   type TaskConversationMessageItem,
   type TaskConversationParallelItem,
   type TaskParallelComparisonCard,
+  getRealtimeEventKind,
+  getRealtimeSnapshotReason,
+  normalizeSessionConversationItems,
 } from "../lib/message-normalize";
 import {
   buildSessionSummaryParallelRuns,
@@ -257,6 +260,9 @@ type ParallelRunCandidate = ProjectionRunCandidate;
 
 const TaskDetailQuickOverview = defineAsyncComponent(
   () => import("../components/task-detail/TaskDetailQuickOverview.vue"),
+);
+const TaskMemberPanel = defineAsyncComponent(
+  () => import("../components/task-detail/TaskMemberPanel.vue"),
 );
 const TaskFollowupPanel = defineAsyncComponent(
   () => import("../components/task-detail/TaskFollowupPanel.vue"),
@@ -327,6 +333,8 @@ const {
 /* ------------------------------------------------------------------ */
 
 const workflowView = ref<TaskWorkflowViewModel | null>(null);
+const memberView = ref<TaskMemberViewModel | null>(null);
+const memberViewLoading = ref(false);
 const pageLoading = computed(() => taskLoading.value && !task.value);
 const loadError = computed(() => taskLoadError.value || "");
 const sidebarCollapsed = ref(false);
@@ -482,8 +490,7 @@ const SEQUENTIAL_STEP_PROMPT_SUFFIX = "请只完成当前步骤的目标。完�
 
 function buildSequentialSessionStepCandidates(sessionSummaries: TaskSessionRecord[]) {
   const taggedSummaries = sessionSummaries.filter(
-    (summary) =>
-      summary.sessionKind === "sequential_step" || typeof summary.stepIndex === "number",
+    (summary) => summary.sessionKind === "sequential_step" || typeof summary.stepIndex === "number",
   );
   const sourceSummaries = taggedSummaries.length > 0 ? taggedSummaries : sessionSummaries;
 
@@ -495,22 +502,21 @@ function buildSequentialSessionStepCandidates(sessionSummaries: TaskSessionRecor
           sessionId: summary.id,
           title: summary.title,
           createdAt: summary.createdAt,
-          stepIndex:
-            typeof summary.stepIndex === "number" ? summary.stepIndex : undefined,
+          stepIndex: typeof summary.stepIndex === "number" ? summary.stepIndex : undefined,
           model: summary.selectedModel ?? null,
         }) satisfies SequentialSessionStepCandidate,
     )
     .sort((left, right) => {
-    const leftIndex =
-      typeof left.stepIndex === "number" ? left.stepIndex : Number.MAX_SAFE_INTEGER;
-    const rightIndex =
-      typeof right.stepIndex === "number" ? right.stepIndex : Number.MAX_SAFE_INTEGER;
-    if (leftIndex !== rightIndex) {
-      return leftIndex - rightIndex;
-    }
+      const leftIndex =
+        typeof left.stepIndex === "number" ? left.stepIndex : Number.MAX_SAFE_INTEGER;
+      const rightIndex =
+        typeof right.stepIndex === "number" ? right.stepIndex : Number.MAX_SAFE_INTEGER;
+      if (leftIndex !== rightIndex) {
+        return leftIndex - rightIndex;
+      }
 
-    return (toTimestampMs(left.createdAt) ?? 0) - (toTimestampMs(right.createdAt) ?? 0);
-  });
+      return (toTimestampMs(left.createdAt) ?? 0) - (toTimestampMs(right.createdAt) ?? 0);
+    });
 }
 
 function normalizeSequentialSessionTitle(title?: string | null, taskTitle?: string | null) {
@@ -578,7 +584,8 @@ async function resolveSequentialSessionStep(
       Array.isArray(response.data) ? response.data : [],
     );
     const initialPrompt = normalizedMessages.find(
-      (item) => item.role === "user" && typeof item.text === "string" && item.text.trim().length > 0,
+      (item) =>
+        item.role === "user" && typeof item.text === "string" && item.text.trim().length > 0,
     )?.text;
     const parsedStep = parseSequentialStepPrompt(initialPrompt);
     if (!parsedStep) {
@@ -655,13 +662,11 @@ function buildDomainFallbackParallelRuns(): ParallelRunRecord[] {
       detail,
       run.startedAt || run.createdAt,
       typeof run.candidateCount === "number" ? run.candidateCount : undefined,
-    ).map(
-      (candidate, index) => ({
-        ...candidate,
-        label: editableParallelCandidates.value[index]?.label || candidate.label,
-        model: editableParallelCandidates.value[index]?.model || candidate.model,
-      }),
-    );
+    ).map((candidate, index) => ({
+      ...candidate,
+      label: editableParallelCandidates.value[index]?.label || candidate.label,
+      model: editableParallelCandidates.value[index]?.model || candidate.model,
+    }));
     const judgeResult = resolveDomainFallbackJudgeResult(run, detail);
 
     return {
@@ -811,7 +816,7 @@ function resolveSessionTreeFallbackCandidateNodes() {
     rootNodeId != null
       ? sessionNodes.filter(
           (node) =>
-              node.parentId === rootNodeId &&
+            node.parentId === rootNodeId &&
             node.runtimeSessionId !== rootSessionId &&
             !node.archivedAt,
         )
@@ -923,11 +928,15 @@ function hasParallelRunBoundToRootSession(
 function buildSessionTreeFallbackParallelRun(
   existingRuns: ParallelRunRecord[],
 ): ParallelRunRecord | null {
-  // Guard: don't fabricate parallel runs for non-running tasks when no
-  // authoritative parallel data (session summaries / domain runs) exists.
-  // This prevents phantom parallel displays when the user changes
-  // execution mode but no actual parallel execution has occurred yet.
-  if (existingRuns.length === 0 && task.value?.status !== "running") {
+  // Guard: don't fabricate parallel runs when there's no authoritative
+  // parallel data and the task is no longer in a parallel-oriented state.
+  // Completed historical parallel roots still need the session-tree fallback
+  // so the latest candidate cohort remains visible after projection lag.
+  const allowsSessionTreeParallelFallback =
+    task.value?.status === "running" ||
+    task.value?.executionMode === "parallel" ||
+    task.value?.orchestrationKind === "parallel";
+  if (existingRuns.length === 0 && !allowsSessionTreeParallelFallback) {
     return null;
   }
 
@@ -942,11 +951,7 @@ function buildSessionTreeFallbackParallelRun(
     .map((node) => node.runtimeSessionId)
     .filter((value): value is string => typeof value === "string" && value.length > 0);
 
-  if (
-    existingRuns.some((run) =>
-      parallelRunMatchesFallbackCandidates(run, candidateSessionIds),
-    )
-  ) {
+  if (existingRuns.some((run) => parallelRunMatchesFallbackCandidates(run, candidateSessionIds))) {
     return null;
   }
 
@@ -966,11 +971,11 @@ function buildSessionTreeFallbackParallelRun(
   const finishedAt =
     task.value?.status === "running"
       ? undefined
-      : task.value?.finishedAt ??
+      : (task.value?.finishedAt ??
         candidateNodes
           .map((node) => node.updatedAt ?? node.createdAt)
           .filter((value): value is string => typeof value === "string" && value.length > 0)
-          .sort((left, right) => (toTimestampMs(right) ?? 0) - (toTimestampMs(left) ?? 0))[0];
+          .sort((left, right) => (toTimestampMs(right) ?? 0) - (toTimestampMs(left) ?? 0))[0]);
 
   const fallbackStatus =
     task.value?.status === "failed" || task.value?.status === "cancelled"
@@ -986,14 +991,17 @@ function buildSessionTreeFallbackParallelRun(
     parentSessionId: rootSessionId ?? undefined,
     executionSessionId: rootSessionId ?? undefined,
     winnerCandidateIndex: undefined,
-    candidateSessions: candidateNodes.map((node, index) => ({
-      label: configuredCandidates[index]?.label || `候选 ${index + 1}`,
-      model: configuredCandidates[index]?.model,
-      status: fallbackStatus,
-      sessionId: node.runtimeSessionId ?? undefined,
-      startedAt: node.createdAt ?? undefined,
-      finishedAt: node.updatedAt ?? undefined,
-    } satisfies ParallelRunCandidate)),
+    candidateSessions: candidateNodes.map(
+      (node, index) =>
+        ({
+          label: configuredCandidates[index]?.label || `候选 ${index + 1}`,
+          model: configuredCandidates[index]?.model,
+          status: fallbackStatus,
+          sessionId: node.runtimeSessionId ?? undefined,
+          startedAt: node.createdAt ?? undefined,
+          finishedAt: node.updatedAt ?? undefined,
+        }) satisfies ParallelRunCandidate,
+    ),
   } satisfies ParallelRunRecord;
 }
 
@@ -1073,7 +1081,9 @@ function augmentDomainFallbackCandidatesFromCompanionRuns(
 
   const mergedCandidates = new Map(candidatesByIndex);
   const companionRuns = taskDomainRuns.value
-    .filter((run) => run.id !== runId && run.orchestrationKind === "parallel" && run.candidateCount === 1)
+    .filter(
+      (run) => run.id !== runId && run.orchestrationKind === "parallel" && run.candidateCount === 1,
+    )
     .map((run) => ({
       run,
       startedAtMs: toTimestampMs(run.startedAt || run.createdAt),
@@ -1089,10 +1099,10 @@ function augmentDomainFallbackCandidatesFromCompanionRuns(
     .sort((left, right) => left.startedAtMs - right.startedAtMs);
 
   for (const { run } of companionRuns) {
-      mergeDomainFallbackCandidateAgentRunsByIndex(
-        mergedCandidates,
-        buildDomainFallbackCandidateAgentRunsByIndex(run.id),
-      );
+    mergeDomainFallbackCandidateAgentRunsByIndex(
+      mergedCandidates,
+      buildDomainFallbackCandidateAgentRunsByIndex(run.id),
+    );
     if (mergedCandidates.size >= expectedCandidateCount) {
       break;
     }
@@ -1101,7 +1111,7 @@ function augmentDomainFallbackCandidatesFromCompanionRuns(
   return mergedCandidates;
 }
 
-  function buildDomainFallbackCandidateFromNode(
+function buildDomainFallbackCandidateFromNode(
   node: TaskDomainRunDetailRecord["candidateNodes"][number],
   candidateIndex: number,
   candidatesByIndex: Map<number, TaskAgentRunRecord[]>,
@@ -1271,8 +1281,7 @@ const sessionBackedSequentialSteps = computed<ChainStepInput[]>(() => {
           title: normalizeSequentialSessionTitle(cached.title, taskTitle) ?? cached.title,
           ...(cached.model ? {} : candidate.model ? { model: candidate.model } : {}),
         } satisfies ChainStepInput,
-        stepIndex:
-          typeof cached.stepIndex === "number" ? cached.stepIndex : candidate.stepIndex,
+        stepIndex: typeof cached.stepIndex === "number" ? cached.stepIndex : candidate.stepIndex,
       };
     })
     .filter(
@@ -1327,9 +1336,7 @@ const resolvedParallelRuns = computed<ParallelRunRecord[]>(() => {
       }
 
       const winnerCandidateIndex = resolveSessionSummaryWinnerCandidateIndex(run);
-      return typeof winnerCandidateIndex === "number"
-        ? { ...run, winnerCandidateIndex }
-        : run;
+      return typeof winnerCandidateIndex === "number" ? { ...run, winnerCandidateIndex } : run;
     })
     .slice()
     .sort(
@@ -1338,9 +1345,7 @@ const resolvedParallelRuns = computed<ParallelRunRecord[]>(() => {
 });
 
 const isParallelComparisonMode = computed(
-  () =>
-    resolvedParallelRuns.value.length > 0 ||
-    task.value?.orchestrationKind === "parallel",
+  () => resolvedParallelRuns.value.length > 0 || task.value?.orchestrationKind === "parallel",
 );
 
 function runReferencesSession(run: ParallelRunRecord, sessionId: string) {
@@ -1585,9 +1590,8 @@ const currentParallelRunId = computed(() => {
 const currentParallelRunRecord = computed(() => {
   if (currentParallelRunId.value) {
     return (
-      resolvedParallelRuns.value.find(
-        (run) => run.parallelRunId === currentParallelRunId.value,
-      ) ?? null
+      resolvedParallelRuns.value.find((run) => run.parallelRunId === currentParallelRunId.value) ??
+      null
     );
   }
   return resolvedParallelRuns.value[resolvedParallelRuns.value.length - 1] ?? null;
@@ -1642,9 +1646,7 @@ const visibleParallelRuns = computed(() => {
   return resolvedParallelRuns.value;
 });
 
-function buildParallelComparisonCardsForRun(
-  run: ParallelRunRecord,
-): TaskParallelComparisonCard[] {
+function buildParallelComparisonCardsForRun(run: ParallelRunRecord): TaskParallelComparisonCard[] {
   const parallelExecutionFinishedAtMs = toTimestampMs(run.finishedAt);
   const cards = run.candidateSessions.map((candidate, index) => {
     const sessionId = candidate.sessionId;
@@ -1655,7 +1657,11 @@ function buildParallelComparisonCardsForRun(
         return false;
       }
       const itemCreatedAtMs = toTimestampMs(item.createdAt);
-      if (candidateStartedAtMs != null && itemCreatedAtMs != null && itemCreatedAtMs < candidateStartedAtMs) {
+      if (
+        candidateStartedAtMs != null &&
+        itemCreatedAtMs != null &&
+        itemCreatedAtMs < candidateStartedAtMs
+      ) {
         return false;
       }
       if (parallelExecutionFinishedAtMs == null) {
@@ -1664,8 +1670,7 @@ function buildParallelComparisonCardsForRun(
       return itemCreatedAtMs == null || itemCreatedAtMs <= parallelExecutionFinishedAtMs;
     });
     const fallbackItem = buildParallelCandidateFallbackItem(run, candidate, index);
-    const displayItems =
-      visibleItems.length > 0 || !fallbackItem ? visibleItems : [fallbackItem];
+    const displayItems = visibleItems.length > 0 || !fallbackItem ? visibleItems : [fallbackItem];
     const metaParts = [candidate.agent].filter((v): v is string => Boolean(v));
     const status = resolveParallelCandidateDisplayStatus(
       candidate,
@@ -1740,10 +1745,8 @@ const parallelConversationItems = computed<TaskConversationParallelItem[]>(() =>
   return items;
 });
 
-function shouldHideUnadoptedParallelMessagesForRun(_parallelItem: TaskConversationParallelItem) {
-  // Always keep existing messages visible; parallel comparison card is
-  // inserted below them rather than replacing them.
-  return false;
+function shouldHideUnadoptedParallelMessagesForRun(parallelItem: TaskConversationParallelItem) {
+  return !parallelItem.candidates?.some((candidate) => candidate.isAdopted);
 }
 
 function toTimestampMs(value?: string | null) {
@@ -1847,9 +1850,7 @@ function resolvePreferredConversationSessionId() {
     const currentSessionId = resolveScopedSessionId();
     const currentRun = currentParallelRunRecord.value;
     const mainlineSessionId =
-      currentRun?.executionSessionId ??
-      currentRun?.parentSessionId ??
-      task.value?.sessionId;
+      currentRun?.executionSessionId ?? currentRun?.parentSessionId ?? task.value?.sessionId;
 
     if (
       currentSessionId &&
@@ -1890,9 +1891,7 @@ function ensureSelectedSession() {
   )
     return;
   selectedSessionId.value =
-    resolveBaseSessionId() ??
-    flatNodes.value[0]?.runtimeSessionId ??
-    undefined;
+    resolveBaseSessionId() ?? flatNodes.value[0]?.runtimeSessionId ?? undefined;
 }
 
 function stripLegacySessionQueryFromRoute() {
@@ -1928,6 +1927,7 @@ async function refreshTaskSnapshot(options?: {
     await refreshTaskRunSummaries(taskId.value, true);
     if (options?.workflow || !workflowView.value || task.value?.status !== previousStatus) {
       workflowView.value = await getTaskWorkflowView(taskId.value).catch(() => workflowView.value);
+      memberView.value = await getTaskMemberView(taskId.value).catch(() => memberView.value);
     }
     if (options?.flow) {
       await refreshSessions();
@@ -1965,7 +1965,12 @@ function scheduleTaskRefresh(reason: string) {
         "agent.started",
       ].includes(reason),
       flow: reason === "task.snapshot.updated",
-      messages: ["task.message.updated", "task.snapshot.updated", "task.completed", "task.continued"].includes(reason),
+      messages: [
+        "task.message.updated",
+        "task.snapshot.updated",
+        "task.completed",
+        "task.continued",
+      ].includes(reason),
     });
   }, delay);
 }
@@ -1987,10 +1992,13 @@ function ensureRunningStatusPoll() {
 async function loadInitial() {
   if (!taskId.value) {
     workflowView.value = null;
+    memberView.value = null;
     return;
   }
   try {
     workflowView.value = await getTaskWorkflowView(taskId.value).catch(() => null);
+    memberViewLoading.value = true;
+    memberView.value = await getTaskMemberView(taskId.value).catch(() => null);
     await refreshTaskSessionSummaries(taskId.value, true);
     await refreshTaskRunSummaries(taskId.value, true);
     if (projectId.value) {
@@ -2004,6 +2012,8 @@ async function loadInitial() {
     realtimeStore.subscribeTask(taskId.value);
   } catch {
     // useProjectTreeTask handles its own error state
+  } finally {
+    memberViewLoading.value = false;
   }
 }
 
@@ -2426,7 +2436,9 @@ function conversationHasAssistantAfterPrompt(prompt: string) {
       typeof item.text === "string" &&
       item.text.trim().includes(normalizedPrompt)
     ) {
-      return items.slice(index + 1).some((entry) => entry.role === "assistant" || entry.role === "parallel");
+      return items
+        .slice(index + 1)
+        .some((entry) => entry.role === "assistant" || entry.role === "parallel");
     }
   }
   return false;
@@ -2625,6 +2637,7 @@ watch(
   taskId,
   () => {
     selectedSessionId.value = undefined;
+    memberView.value = null;
     taskSessionSummaries.value = [];
     sequentialSessionStepCache.value = {};
     sequentialSessionStepLoadToken += 1;
@@ -2655,7 +2668,10 @@ watch(
 
     const missingCandidates = sequentialSessionStepCandidates.value.filter(
       (candidate) =>
-        !Object.prototype.hasOwnProperty.call(sequentialSessionStepCache.value, candidate.sessionId),
+        !Object.prototype.hasOwnProperty.call(
+          sequentialSessionStepCache.value,
+          candidate.sessionId,
+        ),
     );
     if (missingCandidates.length === 0) {
       return;
@@ -2665,10 +2681,13 @@ watch(
     const currentTaskTitle = task.value?.title;
     const requestToken = ++sequentialSessionStepLoadToken;
     void Promise.all(
-      missingCandidates.map(async (candidate) => [
-        candidate.sessionId,
-        await resolveSequentialSessionStep(currentTaskId, currentTaskTitle, candidate),
-      ] as const),
+      missingCandidates.map(
+        async (candidate) =>
+          [
+            candidate.sessionId,
+            await resolveSequentialSessionStep(currentTaskId, currentTaskTitle, candidate),
+          ] as const,
+      ),
     ).then((entries) => {
       if (requestToken !== sequentialSessionStepLoadToken || currentTaskId !== taskId.value) {
         return;

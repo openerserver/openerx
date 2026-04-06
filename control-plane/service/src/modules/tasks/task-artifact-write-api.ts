@@ -1,8 +1,8 @@
 import { db } from "../../db";
 import {
-  taskArtifacts,
   type TaskArtifactKind,
   type TaskArtifactStorageKind,
+  taskArtifacts,
 } from "../../db/schema";
 
 type CreateTaskArtifactArgs = {

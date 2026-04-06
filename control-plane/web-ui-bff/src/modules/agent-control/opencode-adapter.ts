@@ -3,12 +3,35 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createInternalAuthorization } from "../../lib/control-plane-client";
 import { DEFAULT_EXECUTION_AGENT, isDefaultExecutionAgent } from "../../lib/orchestration-strategy";
-import type { AgentRunStatus } from "../../types/events";
 import {
   type TaskSessionLineageRecord,
   fetchTaskSessionCachedMessages,
   fetchTaskSessionLineageRecords,
 } from "../tasks/task-session-compat";
+import {
+  getAgentRunState,
+  markAgentRunPromptSent,
+  registerAgentRun,
+  setAgentRunPausedAt,
+  updateAgentRunStatus,
+  type AgentRunRecord,
+} from "./agent-run-registry";
+import { buildExecutionContext } from "./runtime-execution-context";
+import { extractAssistantResultFromMessages } from "./runtime-message-utils";
+import { type RuntimePermissionReply } from "./runtime-provider-types";
+
+export {
+  ensureAgentRunForSession,
+  findAgentRunBySessionId,
+  getAgentRun,
+  listAgentRuns,
+  recoverAgentRun,
+  registerAgentRun,
+  updateAgentRunStatus,
+} from "./agent-run-registry";
+export { buildExecutionContext, type ExecutionContextOptions } from "./runtime-execution-context";
+export { extractAssistantResultFromMessages } from "./runtime-message-utils";
+export type { RuntimePermissionReply, RuntimePermissionRequest } from "./runtime-provider-types";
 
 // ── OpenCode Adapter ───────────────────────────────────────────────
 // Maps agent control operations to OpenCode SDK calls.
@@ -71,39 +94,11 @@ interface OpencodeResponse {
   error?: string;
 }
 
-export interface RuntimePermissionRequest {
-  id: string;
-  sessionID: string;
-  permission: string;
-  patterns: string[];
-  metadata?: Record<string, unknown>;
-  always?: string[];
-  tool?: {
-    messageID: string;
-    callID: string;
-  };
-}
-
-export type RuntimePermissionReply = "once" | "always" | "reject";
-
 interface GetSessionMessagesOptions {
   bypassCircuitBreaker?: boolean;
   taskId?: string;
   authorization?: string;
   includeLineage?: boolean;
-}
-
-interface AgentRunRecord {
-  subSessionId: string;
-  status: AgentRunStatus;
-  taskId: string;
-  projectId: string;
-  model?: { providerId: string; modelId: string };
-  candidateIndex?: number;
-  startedAt: number;
-  finishedAt?: string;
-  pausedAt?: number;
-  lastPromptAt?: number;
 }
 
 const PROMPT_SETTLE_MS = 1200;
@@ -168,51 +163,6 @@ function resolvePromptAgent(agentName?: string): string | undefined {
     `[opencode-adapter] agent definition not found for ${agentName}; falling back to runtime default agent`,
   );
   return undefined;
-}
-
-function appendExecutionContextLines(lines: string[], options?: PromptOptions): void {
-  if (!options?.taskId || !options?.projectId) {
-    return;
-  }
-
-  lines.push(
-    "Execution context:",
-    `- Opener-X task ID: ${options.taskId}`,
-    `- Project ID: ${options.projectId}`,
-  );
-}
-
-function appendRepoContextLines(lines: string[], repoContext?: PromptOptions["repoContext"]): void {
-  if (!repoContext) {
-    return;
-  }
-
-  if (repoContext.repoName) lines.push(`- Repository: ${repoContext.repoName}`);
-  if (repoContext.remoteUrl) lines.push(`- Remote URL: ${repoContext.remoteUrl}`);
-  if (repoContext.workingBranch) lines.push(`- Working branch: ${repoContext.workingBranch}`);
-  if (repoContext.gitAuthorName || repoContext.gitAuthorEmail) {
-    lines.push(
-      `- Git author: ${repoContext.gitAuthorName ?? ""} <${repoContext.gitAuthorEmail ?? ""}>`,
-    );
-  }
-  if (repoContext.gitCommitterName || repoContext.gitCommitterEmail) {
-    lines.push(
-      `- Git committer: ${repoContext.gitCommitterName ?? ""} <${repoContext.gitCommitterEmail ?? ""}>`,
-    );
-  }
-}
-
-export type ExecutionContextOptions = {
-  taskId?: string;
-  projectId?: string;
-  repoContext?: PromptOptions["repoContext"];
-};
-
-export function buildExecutionContext(options?: ExecutionContextOptions): string {
-  const lines: string[] = [];
-  appendExecutionContextLines(lines, options as PromptOptions);
-  appendRepoContextLines(lines, options?.repoContext);
-  return lines.length > 0 ? `${lines.join("\n")}\n\n` : "";
 }
 
 function normalizeRuntimeModelId(providerId: string, modelId: string): string {
@@ -395,61 +345,9 @@ async function sendPromptWithPersistenceCheck(
 }
 
 // ── Agent Run Registry ─────────────────────────────────────────────
-// Maps agentRunId → subSessionId for OpenCode adapter operations.
-
-const agentRunRegistry = new Map<string, AgentRunRecord>();
-
-function parseStartedAt(value?: string | number | null): number {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string") {
-    const parsed = Date.parse(value);
-    if (!Number.isNaN(parsed)) {
-      return parsed;
-    }
-  }
-  return Date.now();
-}
-
-export function registerAgentRun(
-  agentRunId: string,
-  subSessionId: string,
-  taskId: string,
-  projectId: string,
-  model?: { providerId: string; modelId: string },
-  candidateIndex?: number,
-): void {
-  agentRunRegistry.set(agentRunId, {
-    subSessionId,
-    status: "running",
-    taskId,
-    projectId,
-    model,
-    candidateIndex,
-    startedAt: Date.now(),
-  });
-}
-
-export function recoverAgentRun(
-  agentRunId: string,
-  subSessionId: string,
-  taskId: string,
-  projectId: string,
-  startedAt?: string | number | null,
-  model?: { providerId: string; modelId: string },
-  candidateIndex?: number,
-): void {
-  agentRunRegistry.set(agentRunId, {
-    subSessionId,
-    status: "running",
-    taskId,
-    projectId,
-    model,
-    candidateIndex,
-    startedAt: parseStartedAt(startedAt),
-  });
-}
+// Shared registry helpers live in agent-run-registry.ts; only the timing
+// windows remain local because they are specific to the OpenCode pause/resume
+// transport semantics.
 
 async function waitForPromptWindow(run: AgentRunRecord): Promise<void> {
   const waitUntil = Math.max(run.pausedAt ?? 0, run.lastPromptAt ?? 0) + PROMPT_SETTLE_MS;
@@ -464,96 +362,6 @@ async function waitForPauseWindow(run: AgentRunRecord): Promise<void> {
   if (remaining > 0) {
     await new Promise((resolve) => setTimeout(resolve, remaining));
   }
-}
-
-function markPromptSent(run: AgentRunRecord): void {
-  run.lastPromptAt = Date.now();
-}
-
-function setFinishedAt(run: AgentRunRecord, status: AgentRunStatus): void {
-  if (status === "completed" || status === "failed" || status === "stopped") {
-    run.finishedAt = new Date().toISOString();
-    return;
-  }
-
-  run.finishedAt = undefined;
-}
-
-export function updateAgentRunStatus(agentRunId: string, status: AgentRunStatus) {
-  const run = agentRunRegistry.get(agentRunId);
-  if (!run) return undefined;
-
-  run.status = status;
-  setFinishedAt(run, status);
-
-  return {
-    agentRunId,
-    ...run,
-  };
-}
-
-export function getAgentRun(agentRunId: string) {
-  const run = agentRunRegistry.get(agentRunId);
-  return run
-    ? {
-        agentRunId,
-        ...run,
-      }
-    : undefined;
-}
-
-export function findAgentRunBySessionId(sessionId: string) {
-  for (const [agentRunId, run] of agentRunRegistry.entries()) {
-    if (run.subSessionId === sessionId) {
-      return { agentRunId, ...run };
-    }
-  }
-
-  return undefined;
-}
-
-export function listAgentRuns() {
-  return Array.from(agentRunRegistry.entries()).map(([id, run]) => ({
-    agentRunId: id,
-    ...run,
-  }));
-}
-
-export function ensureAgentRunForSession(
-  sessionId: string,
-  taskId: string,
-  projectId: string,
-  model?: { providerId: string; modelId: string },
-  agentRunId?: string,
-) {
-  const existing = findAgentRunBySessionId(sessionId);
-
-  if (existing) {
-    const run = agentRunRegistry.get(existing.agentRunId);
-    if (run) {
-      run.status = "running";
-      run.taskId = taskId;
-      run.projectId = projectId;
-      run.startedAt = Date.now();
-      run.pausedAt = undefined;
-      run.finishedAt = undefined;
-      if (model) {
-        run.model = model;
-      }
-      markPromptSent(run);
-    }
-
-    return existing.agentRunId;
-  }
-
-  const resolvedAgentRunId = agentRunId || crypto.randomUUID();
-  registerAgentRun(resolvedAgentRunId, sessionId, taskId, projectId, model);
-  const created = agentRunRegistry.get(resolvedAgentRunId);
-  if (created) {
-    markPromptSent(created);
-  }
-
-  return resolvedAgentRunId;
 }
 
 // ── Control Operations ─────────────────────────────────────────────
@@ -627,10 +435,7 @@ export async function createSession(
     };
   }
 
-  const run = agentRunRegistry.get(agentRunId);
-  if (run) {
-    markPromptSent(run);
-  }
+  markAgentRunPromptSent(agentRunId);
 
   return { ok: true, data: sessionResult.data, sessionId, agentRunId };
 }
@@ -639,7 +444,7 @@ export async function createSession(
  * Pause an agent run by aborting its OpenCode sub-session.
  */
 export async function pauseAgent(agentRunId: string): Promise<OpencodeResponse> {
-  const run = agentRunRegistry.get(agentRunId);
+  const run = getAgentRunState(agentRunId);
   if (!run) return { ok: false, error: "Agent run not found" };
   if (run.status !== "running")
     return { ok: false, error: `Cannot pause: status is ${run.status}` };
@@ -660,7 +465,7 @@ export async function pauseAgent(agentRunId: string): Promise<OpencodeResponse> 
   }
 
   updateAgentRunStatus(agentRunId, "paused");
-  run.pausedAt = Date.now();
+  setAgentRunPausedAt(agentRunId);
 
   return result;
 }
@@ -673,7 +478,7 @@ export async function injectGuidance(
   content: string,
   mode: "reply" | "noReply" = "reply",
 ): Promise<OpencodeResponse> {
-  const run = agentRunRegistry.get(agentRunId);
+  const run = getAgentRunState(agentRunId);
   if (!run) return { ok: false, error: "Agent run not found" };
   if (run.status !== "paused")
     return { ok: false, error: `Cannot inject guidance: status is ${run.status}` };
@@ -687,14 +492,14 @@ export async function injectGuidance(
   );
 
   if (result.ok) {
-    markPromptSent(run);
+    markAgentRunPromptSent(agentRunId);
   }
 
   return result;
 }
 
 export async function resumeAgent(agentRunId: string): Promise<OpencodeResponse> {
-  const run = agentRunRegistry.get(agentRunId);
+  const run = getAgentRunState(agentRunId);
   if (!run) return { ok: false, error: "Agent run not found" };
   if (run.status !== "paused")
     return { ok: false, error: `Cannot resume: status is ${run.status}` };
@@ -712,15 +517,15 @@ export async function resumeAgent(agentRunId: string): Promise<OpencodeResponse>
 
   if (result.ok) {
     updateAgentRunStatus(agentRunId, "running");
-    run.pausedAt = undefined;
-    markPromptSent(run);
+    setAgentRunPausedAt(agentRunId, undefined);
+    markAgentRunPromptSent(agentRunId);
   }
 
   return result;
 }
 
 export async function terminateAgent(agentRunId: string): Promise<OpencodeResponse> {
-  const run = agentRunRegistry.get(agentRunId);
+  const run = getAgentRunState(agentRunId);
   if (!run) return { ok: false, error: "Agent run not found" };
 
   const result = await opcall("POST", `/session/${run.subSessionId}/abort`);
@@ -733,7 +538,7 @@ export async function terminateAgent(agentRunId: string): Promise<OpencodeRespon
 }
 
 export async function getAgentMessages(agentRunId: string): Promise<OpencodeResponse> {
-  const run = agentRunRegistry.get(agentRunId);
+  const run = getAgentRunState(agentRunId);
   if (!run) return { ok: false, error: "Agent run not found" };
 
   return await opcall("GET", `/session/${run.subSessionId}/message?limit=200`);
@@ -1016,215 +821,6 @@ export async function getSessionMessages(
   }
 
   return fetchRuntimeSessionMessages(sessionId, options);
-}
-
-function getAssistantMessageInfo(message: unknown): Record<string, unknown> | undefined {
-  if (!message || typeof message !== "object") {
-    return undefined;
-  }
-
-  return "info" in message && typeof message.info === "object" && message.info
-    ? (message.info as Record<string, unknown>)
-    : undefined;
-}
-
-function getMessageParts(message: unknown): Record<string, unknown>[] {
-  if (!message || typeof message !== "object") {
-    return [];
-  }
-
-  return Array.isArray((message as { parts?: unknown }).parts)
-    ? ((message as { parts: unknown[] }).parts as Record<string, unknown>[])
-    : [];
-}
-
-function readAssistantText(parts: Record<string, unknown>[]): string | undefined {
-  const text = parts
-    .filter((part) => part.type === "text" && typeof part.text === "string")
-    .map((part) => String(part.text).trim())
-    .filter(Boolean)
-    .join("\n\n");
-
-  return text || undefined;
-}
-
-function isCompletedAssistantMessage(info: Record<string, unknown> | undefined): boolean {
-  const time =
-    typeof info?.time === "object" && info.time
-      ? (info.time as Record<string, unknown>)
-      : undefined;
-  const completed = time?.completed;
-  return typeof completed === "number" || typeof completed === "string";
-}
-
-function readAssistantCompletedAt(info: Record<string, unknown> | undefined): number | undefined {
-  const time =
-    typeof info?.time === "object" && info.time
-      ? (info.time as Record<string, unknown>)
-      : undefined;
-  const completed = time?.completed;
-
-  if (typeof completed === "number" && Number.isFinite(completed)) {
-    return completed;
-  }
-
-  if (typeof completed === "string") {
-    const numeric = Number(completed);
-    if (Number.isFinite(numeric)) {
-      return numeric;
-    }
-
-    const parsed = Date.parse(completed);
-    if (Number.isFinite(parsed)) {
-      return parsed;
-    }
-  }
-
-  return undefined;
-}
-
-function extractAssistantErrorMessage(
-  info: Record<string, unknown> | undefined,
-): string | undefined {
-  const rawError = info?.error;
-  if (typeof rawError === "string") {
-    const trimmed = rawError.trim();
-    return trimmed || undefined;
-  }
-
-  if (typeof rawError !== "object" || !rawError) {
-    return undefined;
-  }
-
-  const error = rawError as Record<string, unknown>;
-  const data =
-    typeof error.data === "object" && error.data
-      ? (error.data as Record<string, unknown>)
-      : undefined;
-  const message = data?.message ?? error.message ?? error.name;
-  return typeof message === "string" && message.trim() ? message.trim() : undefined;
-}
-
-function readTokenMetric(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
-}
-
-function extractAssistantTokenUsage(info: Record<string, unknown> | undefined): number {
-  const tokens =
-    typeof info?.tokens === "object" && info.tokens
-      ? (info.tokens as Record<string, unknown>)
-      : undefined;
-  if (!tokens) {
-    return 0;
-  }
-
-  const total = readTokenMetric(tokens.total);
-  if (total > 0) {
-    return total;
-  }
-
-  const cache =
-    typeof tokens.cache === "object" && tokens.cache
-      ? (tokens.cache as Record<string, unknown>)
-      : undefined;
-
-  return (
-    readTokenMetric(tokens.input) +
-    readTokenMetric(tokens.output) +
-    readTokenMetric(tokens.reasoning) +
-    readTokenMetric(cache?.read) +
-    readTokenMetric(cache?.write)
-  );
-}
-
-export function extractAssistantResultFromMessages(
-  messages: unknown,
-  options?: { minCompletedAt?: number },
-): {
-  text?: string;
-  completed: boolean;
-  failed: boolean;
-  error?: string;
-  tokenUsed: number;
-} {
-  if (!Array.isArray(messages)) {
-    return { completed: false, failed: false, tokenUsed: 0 };
-  }
-
-  const tokenUsed = collectAssistantTokenUsage(messages);
-  const resolved = resolveAssistantResultState(messages, options);
-  return {
-    text: resolved.text,
-    completed: resolved.completed,
-    failed: resolved.failed,
-    error: resolved.error,
-    tokenUsed,
-  };
-}
-
-function collectAssistantTokenUsage(messages: unknown[]) {
-  let tokenUsed = 0;
-
-  for (const message of messages) {
-    const info = getAssistantMessageInfo(message);
-    if (info?.role !== "assistant") {
-      continue;
-    }
-    tokenUsed += extractAssistantTokenUsage(info);
-  }
-
-  return tokenUsed;
-}
-
-function shouldSkipAssistantMessage(
-  info: Record<string, unknown> | undefined,
-  options?: { minCompletedAt?: number },
-) {
-  if (info?.role !== "assistant") {
-    return true;
-  }
-
-  const completedAt = readAssistantCompletedAt(info);
-  return (
-    options?.minCompletedAt !== undefined &&
-    completedAt !== undefined &&
-    completedAt < options.minCompletedAt
-  );
-}
-
-function resolveAssistantResultState(messages: unknown[], options?: { minCompletedAt?: number }) {
-  let fallbackText: string | undefined;
-
-  for (let index = messages.length - 1; index >= 0; index--) {
-    const message = messages[index];
-    const info = getAssistantMessageInfo(message);
-    if (shouldSkipAssistantMessage(info, options)) {
-      continue;
-    }
-
-    const text = readAssistantText(getMessageParts(message));
-    if (text) {
-      fallbackText = text;
-    }
-
-    const errorMessage = extractAssistantErrorMessage(info);
-    if (errorMessage) {
-      return {
-        text: fallbackText ?? text,
-        completed: false,
-        failed: true,
-        error: errorMessage,
-      };
-    }
-
-    if (text && isCompletedAssistantMessage(info)) {
-      return { text, completed: true, failed: false, error: undefined };
-    }
-
-    break;
-  }
-
-  return { text: fallbackText, completed: false, failed: false, error: undefined };
 }
 
 async function waitForSessionText(

@@ -6,12 +6,14 @@ import {
   paidExecutionLeases,
   projects,
   runtimeUsageLedgers,
+  taskSessions,
   taskSnapshots,
   taskTimelineViews,
   tasks,
 } from "../../db/schema";
 import { type AppEnv, type JWTPayload, authMiddleware } from "../../middleware/auth";
 import { requireRole } from "../../middleware/rbac";
+import { fromStoredTaskExecutionMode } from "../tasks/task-execution-mode";
 
 export const dashboardRoutes = new Hono<AppEnv>();
 
@@ -267,11 +269,7 @@ function normalizeDashboardTaskStatus(snapshot: DashboardTaskSnapshotRow) {
 }
 
 function normalizeDashboardExecutionMode(snapshot: DashboardTaskSnapshotRow) {
-  return snapshot.currentExecutionMode === "single" ||
-    snapshot.currentExecutionMode === "parallel" ||
-    snapshot.currentExecutionMode === "sequential-chain"
-    ? snapshot.currentExecutionMode
-    : null;
+  return fromStoredTaskExecutionMode(snapshot.currentExecutionMode);
 }
 
 interface GovernanceLedgerRecord {
@@ -337,7 +335,25 @@ async function loadGovernanceTaskRecords(taskIds: string[]) {
     db.query.taskSnapshots.findMany({ where: inArray(taskSnapshots.taskId, taskIds) }),
   ]);
 
+  const snapshotSessionIds = Array.from(
+    new Set(
+      snapshotRows
+        .map((row) => row.currentSessionId)
+        .filter((sessionId): sessionId is string => Boolean(sessionId)),
+    ),
+  );
+  const snapshotSessions =
+    snapshotSessionIds.length > 0
+      ? await db.query.taskSessions.findMany({
+          where: inArray(taskSessions.id, snapshotSessionIds),
+          columns: { id: true, runtimeSessionId: true },
+        })
+      : [];
+
   const snapshotByTaskId = new Map(snapshotRows.map((row) => [row.taskId, row] as const));
+  const runtimeSessionIdById = new Map(
+    snapshotSessions.map((row) => [row.id, row.runtimeSessionId ?? row.id] as const),
+  );
 
   return taskRows.map((task) => {
     const snapshot = snapshotByTaskId.get(task.id);
@@ -345,7 +361,9 @@ async function loadGovernanceTaskRecords(taskIds: string[]) {
       id: task.id,
       projectId: task.projectId,
       title: task.title,
-      currentSessionId: snapshot?.currentSessionId ?? task.currentSessionId ?? null,
+      currentSessionId: snapshot?.currentSessionId
+        ? (runtimeSessionIdById.get(snapshot.currentSessionId) ?? task.currentSessionId ?? null)
+        : (task.currentSessionId ?? null),
       lastActivityAt:
         snapshot?.lastActivityAt ??
         task.finishedAt ??
@@ -1481,12 +1499,10 @@ dashboardRoutes.get("/governance-overview", async (c) => {
       .map((snapshot) => snapshot.currentSessionId)
       .filter((sessionId): sessionId is string => Boolean(sessionId)),
   );
-  const runningTaskCount = snapshotRows.filter(
-    (snapshot) => {
-      const status = normalizeDashboardTaskStatus(snapshot);
-      return status === "running" || status === "paused";
-    },
-  ).length;
+  const runningTaskCount = snapshotRows.filter((snapshot) => {
+    const status = normalizeDashboardTaskStatus(snapshot);
+    return status === "running" || status === "paused";
+  }).length;
   const parallelTaskCount = snapshotRows.filter(
     (snapshot) => normalizeDashboardExecutionMode(snapshot) === "parallel",
   ).length;
@@ -1496,12 +1512,10 @@ dashboardRoutes.get("/governance-overview", async (c) => {
   const pausedTaskCount = snapshotRows.filter(
     (snapshot) => normalizeDashboardTaskStatus(snapshot) === "paused",
   ).length;
-  const failedTaskCount = snapshotRows.filter(
-    (snapshot) => {
-      const status = normalizeDashboardTaskStatus(snapshot);
-      return status === "failed" || status === "cancelled";
-    },
-  ).length;
+  const failedTaskCount = snapshotRows.filter((snapshot) => {
+    const status = normalizeDashboardTaskStatus(snapshot);
+    return status === "failed" || status === "cancelled";
+  }).length;
   const activeCandidateCount = snapshotRows.reduce(
     (sum, snapshot) => sum + (snapshot.activeCandidateCount ?? 0),
     0,

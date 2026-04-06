@@ -44,37 +44,40 @@ import {
 } from "../../lib/runtime-recovery-contract";
 import { fetchProjectRuntimeUsageBaseline } from "../../lib/runtime-usage-ledger";
 import type { JWTPayload } from "../../middleware/auth";
+import { ensureAgentRunForSession } from "../agent-control/agent-run-registry";
+import { buildExecutionContext } from "../agent-control/runtime-execution-context";
+import { createAgentRunRecord, recordAgentAudit } from "../agent-control/run-persistence";
 import {
-  type RuntimePermissionReply,
-  type RuntimePermissionRequest,
-  buildExecutionContext,
   continueSession,
   createSession,
-  ensureAgentRunForSession,
   forkSession,
   getSessionMessages,
   listRuntimePermissions,
   listSessions,
   replyRuntimePermission,
   terminateAgent,
-} from "../agent-control/opencode-adapter";
-import { createAgentRunRecord, recordAgentAudit } from "../agent-control/run-persistence";
+  type RuntimePermissionReply,
+  type RuntimePermissionRequest,
+} from "../agent-control/runtime-provider";
 import { executeLifecycleHooks } from "../hooks/lifecycle-hooks";
 import { buildPipelineStageUpdatedEvents } from "../realtime/pipeline-events";
 import { sseAggregator } from "../realtime/sse-aggregator";
 import { wsBroadcaster } from "../realtime/ws-broadcaster";
+import { buildTaskMemberViewModel } from "./member-view";
 import { reconcileRunningTasksOnStartup } from "./reconcile";
 import {
+  type TaskSessionLineageRecord,
+  type TaskSessionTimelineMeta,
   createProjectionTraceTimelineMeta,
   fetchTaskConversationMessages,
+  fetchTaskSessionCachedMessages,
+  fetchTaskSessionLineageRecords as fetchTaskSessionCompatLineageRecords,
   normalizeTaskSessionTimelineMeta,
   persistTaskSessionMessageSnapshot,
-  type TaskSessionTimelineMeta,
+  toCanonicalTaskSessionId,
+  upsertTaskSessionLineageRecord as upsertTaskSessionCompatLineageRecord,
 } from "./task-session-compat";
-import {
-  buildWorkflowExecutionPromptSnapshot,
-} from "./workflow-stage-execution";
-import { buildTaskMemberViewModel } from "./member-view";
+import { buildWorkflowExecutionPromptSnapshot } from "./workflow-stage-execution";
 import { buildTaskWorkflowViewModel } from "./workflow-view";
 
 // ── Task Routes (BFF) ──────────────────────────────────────────────
@@ -98,11 +101,18 @@ interface StartExecutionResponse {
 
 interface SessionSummaryRecord {
   id: string;
+  taskSessionId?: string;
   title: string;
   isActive: boolean;
   summary: { additions: number; deletions: number; files: number } | null;
   createdAt: string | null;
   updatedAt: string | null;
+  executionStatus?: string | null;
+  sessionKind?: string | null;
+  candidateIndex?: number | null;
+  stepIndex?: number | null;
+  selectedModel?: string | null;
+  executionModeSnapshot?: string | null;
 }
 
 interface TaskRuntimePermissionRecord {
@@ -210,22 +220,29 @@ interface UpsertTaskSessionLineageInput {
   forkedFromMessageId?: string;
   branchName?: string;
   sourceType?: "root" | "fork" | "sub_session";
+  sessionKind?:
+    | "primary"
+    | "candidate"
+    | "judge"
+    | "sequential_step"
+    | "resume"
+    | "manual_branch"
+    | "hook";
+  executionModeSnapshot?: "single" | "parallel" | "sequential_chain";
   isActive: boolean;
+  candidateIndex?: number;
+  stepIndex?: number;
+  selectedModel?: string;
+  coordinationKey?: string;
   operationId?: string;
 }
 
 async function fetchTaskSessionLineageRecords(taskId: string, authorization: string) {
-  const lineageResult = await cpFetch<{ data: TaskSessionRecord[] }>(
-    `/api/tasks/${encodeURIComponent(taskId)}/branches`,
-    { authorization },
-  );
-
-  const records =
-    lineageResult.ok && Array.isArray(lineageResult.data?.data) ? lineageResult.data.data : [];
+  const lineageResult = await fetchTaskSessionCompatLineageRecords(taskId, authorization);
+  const records = lineageResult.records.map((record) => coerceTaskSessionRecord(taskId, record));
 
   return {
-    ok: lineageResult.ok,
-    status: lineageResult.status,
+    ...lineageResult,
     records,
     activeRecords: records.filter((record) => !record.archivedAt),
   };
@@ -341,19 +358,7 @@ async function upsertTaskSessionLineageRecord(
   authorization: string,
   input: UpsertTaskSessionLineageInput,
 ) {
-  return cpFetch(`/api/tasks/${encodeURIComponent(taskId)}/branches`, {
-    method: "POST",
-    body: {
-      runtimeSessionId: input.runtimeSessionId,
-      parentRuntimeSessionId: input.parentRuntimeSessionId,
-      forkedFromMessageId: input.forkedFromMessageId,
-      branchName: input.branchName,
-      sourceType: input.sourceType,
-      isActive: input.isActive,
-      operationId: input.operationId,
-    },
-    authorization,
-  });
+  return upsertTaskSessionCompatLineageRecord(taskId, authorization, input);
 }
 
 async function fetchTaskSessionTimeline(
@@ -399,11 +404,15 @@ async function fetchTaskProjectionSnapshots(
 async function fetchTaskProjectionTimelineView(
   taskId: string,
   authorization: string,
-  options?: { runtimeSessionId?: string; includeLineage?: boolean },
+  options?: { sessionId?: string; includeLineage?: boolean },
 ) {
   const params = new URLSearchParams();
-  if (options?.runtimeSessionId) {
-    params.set("runtimeSessionId", options.runtimeSessionId);
+  const canonicalSessionId =
+    typeof options?.sessionId === "string" && options.sessionId.trim().length > 0
+      ? toCanonicalTaskSessionId(taskId, options.sessionId)
+      : null;
+  if (canonicalSessionId) {
+    params.set("sessionId", canonicalSessionId);
   }
   if (options?.includeLineage === false) {
     params.set("includeLineage", "false");
@@ -421,7 +430,7 @@ async function activateTaskSessionLineageByRecordId(
   authorization: string,
 ) {
   return cpFetch(
-    `/api/tasks/${encodeURIComponent(taskId)}/branches/${encodeURIComponent(recordId)}/activate`,
+    `/api/tasks/${encodeURIComponent(taskId)}/sessions/${encodeURIComponent(recordId)}/activate`,
     { method: "POST", authorization },
   );
 }
@@ -432,7 +441,7 @@ async function archiveTaskSessionLineageByRecordId(
   authorization: string,
 ) {
   return cpFetch(
-    `/api/tasks/${encodeURIComponent(taskId)}/branches/${encodeURIComponent(recordId)}/archive`,
+    `/api/tasks/${encodeURIComponent(taskId)}/sessions/${encodeURIComponent(recordId)}/archive`,
     { method: "POST", authorization },
   );
 }
@@ -2448,17 +2457,18 @@ function mapExecutionTraceMessagesToTimelineItems(
   messages: ExecutionTraceMessageRecord[],
   sourceEventPrefix: string,
 ) {
-  return messages
-    .filter(isDisplayableExecutionTraceMessage)
-    .map((message) => ({
-      id: message.id,
-      role: message.role,
-      text: message.text,
-      createdAt: message.createdAt,
-      completedAt: extractSessionMessageCompletedAt(message.raw),
-      raw: message.raw,
-      sourceEventTypes: [`${sourceEventPrefix}:message:${message.role}`],
-    } satisfies TaskSessionTimelineItemRecord));
+  return messages.filter(isDisplayableExecutionTraceMessage).map(
+    (message) =>
+      ({
+        id: message.id,
+        role: message.role,
+        text: message.text,
+        createdAt: message.createdAt,
+        completedAt: extractSessionMessageCompletedAt(message.raw),
+        raw: message.raw,
+        sourceEventTypes: [`${sourceEventPrefix}:message:${message.role}`],
+      }) satisfies TaskSessionTimelineItemRecord,
+  );
 }
 
 function mergeTaskSessionTimelineItem(
@@ -2475,7 +2485,9 @@ function mergeTaskSessionTimelineItem(
     createdAt: current.createdAt ?? candidate.createdAt,
     completedAt: candidate.completedAt ?? current.completedAt,
     raw: candidate.raw ?? current.raw,
-    sourceEventTypes: [...new Set([...(current.sourceEventTypes ?? []), ...(candidate.sourceEventTypes ?? [])])],
+    sourceEventTypes: [
+      ...new Set([...(current.sourceEventTypes ?? []), ...(candidate.sourceEventTypes ?? [])]),
+    ],
   } satisfies TaskSessionTimelineItemRecord;
 }
 
@@ -2518,6 +2530,17 @@ function mergeTaskExecutionTraceTimelineItems(
 }
 
 function mapProjectionTimelineRole(item: TaskProjectionTimelineViewItemRecord) {
+  const metadata = asRecord(item.metadataJson);
+  const explicitRole =
+    item.itemRole === "user" || item.itemRole === "assistant" || item.itemRole === "tool"
+      ? item.itemRole
+      : metadata?.role === "user" || metadata?.role === "assistant" || metadata?.role === "tool"
+        ? (metadata.role as "user" | "assistant" | "tool")
+        : null;
+
+  if (item.itemKind === "message" && explicitRole) {
+    return explicitRole;
+  }
   if (item.itemKind === "user-input") {
     return "user";
   }
@@ -2531,10 +2554,50 @@ function mapProjectionTimelineRole(item: TaskProjectionTimelineViewItemRecord) {
   return "system";
 }
 
-function mapProjectionItemKindToSegmentType(
-  itemKind: TaskProjectionTimelineViewItemRecord["itemKind"],
+function mapProjectionGenericItemKindToSegmentType(
+  item: TaskProjectionTimelineViewItemRecord,
+  metadata: Record<string, unknown> | null,
 ): ExecutionTraceSegmentRecord["type"] | null {
-  switch (itemKind) {
+  if (item.itemKind === "operation") {
+    const sourceKind = asNonEmptyString(metadata?.sourceKind);
+    const partType = asNonEmptyString(metadata?.partType);
+    if (sourceKind === "tool-call" || partType === "tool_call") {
+      return "tool-call";
+    }
+    if (sourceKind === "thinking") {
+      return "thinking";
+    }
+    return null;
+  }
+
+  if (item.itemKind === "artifact") {
+    const sourceKind = asNonEmptyString(metadata?.sourceKind);
+    const artifactKind = asNonEmptyString(metadata?.artifactKind);
+    if (sourceKind === "tool-output" || (artifactKind === "result" && asNonEmptyString(metadata?.toolName))) {
+      return "tool-output";
+    }
+    if (sourceKind === "file-reference" || artifactKind === "file") {
+      return "file-reference";
+    }
+    if (sourceKind === "diff" || artifactKind === "diff") {
+      return "diff";
+    }
+    return null;
+  }
+
+  return null;
+}
+
+function mapProjectionItemToSegmentType(
+  item: TaskProjectionTimelineViewItemRecord,
+  metadata: Record<string, unknown> | null,
+): ExecutionTraceSegmentRecord["type"] | null {
+  const genericType = mapProjectionGenericItemKindToSegmentType(item, metadata);
+  if (genericType) {
+    return genericType;
+  }
+
+  switch (item.itemKind) {
     case "tool-call":
     case "tool-output":
     case "thinking":
@@ -2547,7 +2610,7 @@ function mapProjectionItemKindToSegmentType(
     case "session-activate":
     case "session-branch":
     case "session-archive":
-      return itemKind;
+      return item.itemKind;
     default:
       return null;
   }
@@ -2572,12 +2635,12 @@ function buildProjectionFileRange(metadata: Record<string, unknown> | null) {
 function buildProjectionTimelineSegment(
   item: TaskProjectionTimelineViewItemRecord,
 ): ExecutionTraceSegmentRecord | null {
-  const type = mapProjectionItemKindToSegmentType(item.itemKind);
+  const metadata = asRecord(item.metadataJson);
+  const type = mapProjectionItemToSegmentType(item, metadata);
   if (!type) {
     return null;
   }
 
-  const metadata = asRecord(item.metadataJson);
   const toolName = asNonEmptyString(metadata?.toolName);
   const toolArgumentsSummary = asNonEmptyString(metadata?.argumentsSummary);
   const toolStatus = asNonEmptyString(metadata?.status);
@@ -2655,7 +2718,11 @@ function resolveProjectionConversationText(item: TaskProjectionTimelineViewItemR
     return displayText;
   }
 
-  if (item.itemKind === "user-input" || item.itemKind === "assistant-output") {
+  if (
+    item.itemKind === "user-input" ||
+    item.itemKind === "assistant-output" ||
+    item.itemKind === "message"
+  ) {
     return "";
   }
 
@@ -2699,6 +2766,7 @@ function mapProjectionTimelineItemsToTraceMessages(
   items: TaskSessionTimelineItemRecord[],
 ): ExecutionTraceMessageRecord[] {
   return items
+    .filter((item) => item.role === "user" || item.role === "assistant")
     .map((item) => ({
       id: item.id,
       role: item.role,
@@ -2976,12 +3044,15 @@ async function loadExecutionTraceMessagesFromRuntime(args: {
     }
   }
 
-  const normalizedLineage = lineageRecords.length > 0 ? normalizeLineageRecords(lineageRecords).records : [];
+  const normalizedLineage =
+    lineageRecords.length > 0 ? normalizeLineageRecords(lineageRecords).records : [];
   const lineagePath = args.includeLineage
     ? buildTaskSessionLineagePath(normalizedLineage, args.sessionId)
     : [];
   const runtimeSessionIds =
-    lineagePath.length > 0 ? lineagePath.map((record) => record.runtimeSessionId) : [args.sessionId];
+    lineagePath.length > 0
+      ? lineagePath.map((record) => record.runtimeSessionId)
+      : [args.sessionId];
 
   const messageSets = await Promise.all(
     runtimeSessionIds.map(async (runtimeSessionId) => {
@@ -3035,13 +3106,13 @@ function shouldLoadTaskExecutionTraceRuntimeFallback(
 ) {
   const hasServiceTimelineCache = typeof timelineMeta?.cacheState === "string";
   const hasCachedButUndisplayableTimelineItems =
-    hasServiceTimelineCache && typeof timelineMeta?.itemCount === "number" && timelineMeta.itemCount > 0;
+    hasServiceTimelineCache &&
+    typeof timelineMeta?.itemCount === "number" &&
+    timelineMeta.itemCount > 0;
 
   return (
     messages.length === 0 &&
-    (!timelineMeta ||
-      timelineMeta.cacheState === "none" ||
-      hasCachedButUndisplayableTimelineItems)
+    (!timelineMeta || timelineMeta.cacheState === "none" || hasCachedButUndisplayableTimelineItems)
   );
 }
 
@@ -3052,7 +3123,7 @@ async function loadExecutionTraceMessagesFromProjection(
   options?: { includeLineage?: boolean },
 ) {
   const projectionResult = await fetchTaskProjectionTimelineView(taskId, authorization, {
-    runtimeSessionId: sessionId,
+    sessionId,
     includeLineage: options?.includeLineage,
   });
 
@@ -3508,7 +3579,7 @@ async function loadTaskExecutionTraceTimelineFallback(args: {
 }) {
   let messages: ExecutionTraceMessageRecord[] = [];
   let timeline: TaskSessionTimelineItemRecord[] = [];
-  let truncated = false;
+  const truncated = false;
   let messageLimit = 200;
   let timelineMeta: TaskSessionTimelineMetaRecord | undefined = args.timelineMeta;
 
@@ -4918,7 +4989,11 @@ async function startParallelExecution(context: ExecutionContext): Promise<StartE
             time: { created: new Date().toISOString(), completed: new Date().toISOString() },
           },
           parts: [{ type: "text", text: finalSentText }],
-          promptDecomposition: { userInputText, systemContextText: parallelSystemContextText, finalSentText },
+          promptDecomposition: {
+            userInputText,
+            systemContextText: parallelSystemContextText,
+            finalSentText,
+          },
         },
       }).catch(() => null);
     }
@@ -5819,12 +5894,56 @@ taskRoutes.get("/:taskId/query/normalized-conversation", async (c) => {
   return c.json(result.data, 200);
 });
 
+taskRoutes.get("/:taskId/messages", async (c) => {
+  const taskId = c.req.param("taskId");
+  const authorization = authHeader(c);
+  const includeLineage = c.req.query("includeLineage") !== "false";
+
+  const result = await fetchTaskConversationMessages(taskId, authorization, {
+    includeLineage,
+  });
+
+  if (!result.ok) {
+    return c.json(
+      result.data ?? { error: result.error ?? "Failed to load task messages" },
+      result.status as 401 | 404 | 502,
+    );
+  }
+
+  return c.json(result.data, 200);
+});
+
+taskRoutes.get("/:taskId/sessions/:sessionId/messages", async (c) => {
+  const taskId = c.req.param("taskId");
+  const sessionId = c.req.param("sessionId");
+  const authorization = authHeader(c);
+  const includeLineage = c.req.query("includeLineage") !== "false";
+
+  const result = await fetchTaskSessionCachedMessages(taskId, sessionId, authorization, {
+    includeLineage,
+  });
+
+  if (!result.ok) {
+    return c.json(
+      result.data ?? { error: result.error ?? "Failed to load task session messages" },
+      result.status as 401 | 404 | 502,
+    );
+  }
+
+  return c.json(
+    {
+      data: result.data?.data ?? [],
+      meta: result.data?.meta ? { ...result.data.meta, sessionId } : { sessionId },
+    },
+    200,
+  );
+});
+
 taskRoutes.get("/:taskId/query/raw-events", async (c) => {
   const taskId = c.req.param("taskId");
-  const result = await cpFetch(
-    `/api/tasks/${encodeURIComponent(taskId)}/query/raw-events`,
-    { authorization: authHeader(c) },
-  );
+  const result = await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}/query/raw-events`, {
+    authorization: authHeader(c),
+  });
 
   return c.json(result.data, result.ok ? 200 : (result.status as 401 | 404 | 502));
 });
@@ -5918,6 +6037,7 @@ taskRoutes.get("/:taskId/branches", async (c) => {
       const runtime = runtimeMap.get(record.runtimeSessionId);
       return {
         id: record.runtimeSessionId,
+        taskSessionId: buildPublicTaskSessionId(taskId, record.runtimeSessionId),
         title: runtime?.title ?? record.branchName ?? "",
         isActive: record.isActive || record.runtimeSessionId === taskResult.data?.sessionId,
         summary: runtime?.summary ?? null,
@@ -5942,7 +6062,8 @@ taskRoutes.get("/:taskId/branches", async (c) => {
         const runtime = runtimeMap.get(record.runtimeSessionId);
         return {
           id: record.runtimeSessionId,
-          title: runtime?.title ?? record.branchName ?? "",
+          taskSessionId: buildPublicTaskSessionId(taskId, record.runtimeSessionId),
+          title: record.branchName ?? runtime?.title ?? "",
           isActive: record.isActive,
           summary: runtime?.summary ?? null,
           createdAt: runtime?.createdAt ?? record.createdAt ?? null,
@@ -5984,11 +6105,18 @@ taskRoutes.get(":taskId/sessions", async (c) => {
         const runtime = runtimeMap.get(record.runtimeSessionId);
         return {
           id: record.runtimeSessionId,
-          title: runtime?.title ?? record.branchName ?? "",
+          taskSessionId: buildPublicTaskSessionId(taskId, record.runtimeSessionId),
+          title: record.branchName ?? runtime?.title ?? "",
           isActive: record.isActive || record.runtimeSessionId === taskResult.data?.sessionId,
           summary: runtime?.summary ?? null,
           createdAt: runtime?.createdAt ?? record.createdAt ?? null,
           updatedAt: runtime?.updatedAt ?? record.updatedAt ?? null,
+          executionStatus: record.executionStatus ?? null,
+          sessionKind: record.sessionKind ?? null,
+          candidateIndex: record.candidateIndex ?? null,
+          stepIndex: record.stepIndex ?? null,
+          selectedModel: record.selectedModel ?? null,
+          executionModeSnapshot: record.executionModeSnapshot ?? null,
         } satisfies SessionSummaryRecord;
       }),
     });
@@ -6007,6 +6135,7 @@ taskRoutes.get(":taskId/sessions", async (c) => {
         const runtime = runtimeMap.get(record.runtimeSessionId);
         return {
           id: record.runtimeSessionId,
+          taskSessionId: buildPublicTaskSessionId(taskId, record.runtimeSessionId),
           title: runtime?.title ?? record.branchName ?? "",
           isActive: record.isActive,
           summary: runtime?.summary ?? null,
@@ -6120,6 +6249,18 @@ async function executeTaskBranchFork(args: {
   messageId?: string;
   authorization: string;
 }) {
+  const lineageResult = await fetchTaskSessionLineageRecords(args.taskId, args.authorization);
+  const parentRecord = lineageResult.ok
+    ? lineageResult.records.find(
+        (record) =>
+          record.runtimeSessionId === args.sessionId ||
+          record.id === args.sessionId ||
+          `task-session:${args.taskId}:${record.runtimeSessionId}` === args.sessionId,
+      )
+    : undefined;
+  const parentRuntimeSessionId = parentRecord?.runtimeSessionId ?? args.sessionId;
+  const parentTaskSessionId = buildPublicTaskSessionId(args.taskId, parentRuntimeSessionId);
+
   const taskResult = await cpFetch<{ projectId?: string; title?: string }>(
     `/api/project-tree/tasks/${encodeURIComponent(args.taskId)}`,
     { authorization: args.authorization },
@@ -6131,14 +6272,14 @@ async function executeTaskBranchFork(args: {
 
   await ensureParentLineageRecord(
     args.taskId,
-    args.sessionId,
+    parentRuntimeSessionId,
     args.authorization,
     taskResult.data?.title,
   );
 
   const defaultTitle =
     args.title || `[Task ${args.taskId.slice(0, 8)}] Fork ${new Date().toLocaleTimeString()}`;
-  const result = await forkSession(args.sessionId, { title: defaultTitle });
+  const result = await forkSession(parentRuntimeSessionId, { title: defaultTitle });
 
   if (!result.ok || !result.sessionId) {
     return { status: 502 as const, body: { error: result.error || "Failed to fork session" } };
@@ -6146,7 +6287,7 @@ async function executeTaskBranchFork(args: {
 
   await upsertTaskSessionLineageRecord(args.taskId, args.authorization, {
     runtimeSessionId: result.sessionId,
-    parentRuntimeSessionId: args.sessionId,
+    parentRuntimeSessionId: parentRuntimeSessionId,
     forkedFromMessageId: args.messageId,
     branchName: defaultTitle,
     sourceType: "fork",
@@ -6162,7 +6303,7 @@ async function executeTaskBranchFork(args: {
     projectId: taskResult.data?.projectId,
     sessionId: result.sessionId,
     data: {
-      parentSessionId: args.sessionId,
+      parentSessionId: parentRuntimeSessionId,
       title: defaultTitle,
       forkedFromMessageId: args.messageId,
     },
@@ -6173,8 +6314,10 @@ async function executeTaskBranchFork(args: {
     body: {
       ok: true,
       sessionId: result.sessionId,
+      taskSessionId: buildPublicTaskSessionId(args.taskId, result.sessionId),
       title: defaultTitle,
-      parentSessionId: args.sessionId,
+      parentSessionId: parentRuntimeSessionId,
+      parentTaskSessionId,
       forkedFromMessageId: args.messageId,
     },
   };
@@ -6182,6 +6325,20 @@ async function executeTaskBranchFork(args: {
 
 taskRoutes.post(
   "/:taskId/branches/:sessionId/fork",
+  zValidator("json", forkSessionSchema),
+  async (c) => {
+    const result = await executeTaskBranchFork({
+      taskId: c.req.param("taskId"),
+      sessionId: c.req.param("sessionId"),
+      ...c.req.valid("json"),
+      authorization: authHeader(c),
+    });
+    return c.json(result.body, result.status);
+  },
+);
+
+taskRoutes.post(
+  "/:taskId/sessions/:sessionId/fork",
   zValidator("json", forkSessionSchema),
   async (c) => {
     const result = await executeTaskBranchFork({
@@ -6207,9 +6364,44 @@ interface TaskSessionRecord {
   branchName: string | null;
   sourceType: string;
   isActive: boolean;
-  createdAt: string;
-  updatedAt: string;
+  coordinationKey?: string | null;
+  winnerSessionId?: string | null;
+  executionStatus?: string | null;
+  sessionKind?: string | null;
+  candidateIndex?: number | null;
+  stepIndex?: number | null;
+  selectedModel?: string | null;
+  executionModeSnapshot?: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
   archivedAt: string | null;
+}
+
+function coerceTaskSessionRecord(
+  taskId: string,
+  record: TaskSessionLineageRecord,
+): TaskSessionRecord {
+  return {
+    id: record.id ?? buildPublicTaskSessionId(taskId, record.runtimeSessionId),
+    taskId: record.taskId ?? taskId,
+    runtimeSessionId: record.runtimeSessionId,
+    parentRuntimeSessionId: record.parentRuntimeSessionId ?? null,
+    forkedFromMessageId: record.forkedFromMessageId ?? null,
+    branchName: record.branchName ?? null,
+    sourceType: record.sourceType,
+    isActive: record.isActive,
+    coordinationKey: record.coordinationKey ?? null,
+    winnerSessionId: record.winnerSessionId ?? null,
+    executionStatus: record.executionStatus ?? null,
+    sessionKind: record.sessionKind ?? null,
+    candidateIndex: typeof record.candidateIndex === "number" ? record.candidateIndex : null,
+    stepIndex: typeof record.stepIndex === "number" ? record.stepIndex : null,
+    selectedModel: record.selectedModel ?? null,
+    executionModeSnapshot: record.executionModeSnapshot ?? null,
+    createdAt: record.createdAt ?? null,
+    updatedAt: record.updatedAt ?? null,
+    archivedAt: record.archivedAt ?? null,
+  };
 }
 
 interface RuntimeSessionMeta {
@@ -6221,8 +6413,11 @@ interface RuntimeSessionMeta {
 
 interface SessionTreeNode {
   id: string;
+  branchNodeId: string;
   runtimeSessionId: string;
+  taskSessionId: string;
   parentRuntimeSessionId: string | null;
+  parentTaskSessionId: string | null;
   forkedFromMessageId: string | null;
   forkedFromMessageRole: string | null;
   forkedFromMessagePreview: string | null;
@@ -6235,6 +6430,14 @@ interface SessionTreeNode {
   createdAt: string | null;
   updatedAt: string | null;
   children: SessionTreeNode[];
+}
+
+function buildPublicTaskSessionId(taskId: string, sessionId: string) {
+  return toCanonicalTaskSessionId(taskId, sessionId) ?? `task-session:${taskId}:${sessionId}`;
+}
+
+function buildBranchLineageNodeId(taskId: string, runtimeSessionId: string) {
+  return `branch-node:${taskId}:${runtimeSessionId}`;
 }
 
 function compareIsoTime(left?: string | null, right?: string | null) {
@@ -6403,17 +6606,40 @@ function extractMessagePreview(message: unknown) {
   } as const;
 }
 
-async function appendForkMessagePreviews(
-  previewMap: Map<string, { role: string | null; preview: string | null }>,
-  parentSessionId: string,
-  messageIds: Set<string>,
+async function loadTaskSessionPreviewMessages(
+  taskId: string,
+  sessionId: string,
+  authorization: string,
 ) {
-  const result = await getSessionMessages(parentSessionId);
-  if (!result.ok || !Array.isArray(result.data)) {
-    return;
+  const cachedResult = await fetchTaskSessionCachedMessages(taskId, sessionId, authorization, {
+    includeLineage: false,
+  });
+  if (
+    cachedResult.ok &&
+    Array.isArray(cachedResult.data?.data) &&
+    cachedResult.data.data.length > 0
+  ) {
+    return cachedResult.data.data;
   }
 
-  for (const message of result.data) {
+  const runtimeResult = await getSessionMessages(sessionId);
+  if (!runtimeResult.ok || !Array.isArray(runtimeResult.data)) {
+    return [] as unknown[];
+  }
+
+  return runtimeResult.data;
+}
+
+async function appendForkMessagePreviews(
+  previewMap: Map<string, { role: string | null; preview: string | null }>,
+  taskId: string,
+  parentSessionId: string,
+  authorization: string,
+  messageIds: Set<string>,
+) {
+  const messages = await loadTaskSessionPreviewMessages(taskId, parentSessionId, authorization);
+
+  for (const message of messages) {
     const messageId = extractSessionMessageId(message);
     if (!messageId || !messageIds.has(messageId)) {
       continue;
@@ -6423,7 +6649,11 @@ async function appendForkMessagePreviews(
   }
 }
 
-async function buildForkMessagePreviewMap(records: TaskSessionRecord[]) {
+async function buildForkMessagePreviewMap(
+  taskId: string,
+  authorization: string,
+  records: TaskSessionRecord[],
+) {
   const previewMap = new Map<string, { role: string | null; preview: string | null }>();
   const parentSessionTargets = new Map<string, Set<string>>();
 
@@ -6439,26 +6669,40 @@ async function buildForkMessagePreviewMap(records: TaskSessionRecord[]) {
 
   await Promise.all(
     Array.from(parentSessionTargets.entries()).map(async ([parentSessionId, messageIds]) => {
-      await appendForkMessagePreviews(previewMap, parentSessionId, messageIds);
+      await appendForkMessagePreviews(
+        previewMap,
+        taskId,
+        parentSessionId,
+        authorization,
+        messageIds,
+      );
     }),
   );
 
   return previewMap;
 }
 
-async function buildFirstPromptAfterForkMap(records: TaskSessionRecord[]) {
+async function buildFirstPromptAfterForkMap(
+  taskId: string,
+  authorization: string,
+  records: TaskSessionRecord[],
+) {
   const promptMap = new Map<string, string | null>();
 
   await Promise.all(
     records.map(async (record) => {
-      const result = await getSessionMessages(record.runtimeSessionId);
-      if (!result.ok || !Array.isArray(result.data)) {
+      const messages = await loadTaskSessionPreviewMessages(
+        taskId,
+        record.runtimeSessionId,
+        authorization,
+      );
+      if (messages.length === 0) {
         promptMap.set(record.runtimeSessionId, null);
         return;
       }
 
       if (record.sourceType === "root") {
-        const firstUserMessage = result.data.find((message) => {
+        const firstUserMessage = messages.find((message) => {
           if (!message || typeof message !== "object") {
             return false;
           }
@@ -6480,13 +6724,18 @@ async function buildFirstPromptAfterForkMap(records: TaskSessionRecord[]) {
         return;
       }
 
+      if (!record.createdAt) {
+        promptMap.set(record.runtimeSessionId, null);
+        return;
+      }
+
       const createdAtMs = Date.parse(record.createdAt);
       if (!Number.isFinite(createdAtMs)) {
         promptMap.set(record.runtimeSessionId, null);
         return;
       }
 
-      const firstUserMessage = result.data.find((message) => {
+      const firstUserMessage = messages.find((message) => {
         if (!message || typeof message !== "object") {
           return false;
         }
@@ -6513,14 +6762,14 @@ async function buildFirstPromptAfterForkMap(records: TaskSessionRecord[]) {
 
 function synthesizeLineageRecordsFromRuntime(
   taskId: string,
-  taskSessionId: string | undefined,
+  activeRuntimeSessionId: string | undefined,
   runtimeSessions: Map<string, RuntimeSessionMeta>,
 ) {
   const taskPrefix = `[Task ${taskId.slice(0, 8)}]`;
   const records = Array.from(runtimeSessions.entries())
     .filter(
       ([runtimeSessionId, runtime]) =>
-        runtimeSessionId === taskSessionId || runtime.title?.includes(taskPrefix),
+        runtimeSessionId === activeRuntimeSessionId || runtime.title?.includes(taskPrefix),
     )
     .sort((left, right) =>
       compareIsoTime(
@@ -6531,8 +6780,9 @@ function synthesizeLineageRecordsFromRuntime(
     .map(([runtimeSessionId, runtime]) => ({ runtimeSessionId, runtime }));
 
   const rootRuntimeSessionId =
-    (taskSessionId &&
-      records.find((record) => record.runtimeSessionId === taskSessionId)?.runtimeSessionId) ||
+    (activeRuntimeSessionId &&
+      records.find((record) => record.runtimeSessionId === activeRuntimeSessionId)
+        ?.runtimeSessionId) ||
     records[0]?.runtimeSessionId;
 
   if (!rootRuntimeSessionId) {
@@ -6547,7 +6797,7 @@ function synthesizeLineageRecordsFromRuntime(
     forkedFromMessageId: null,
     branchName: runtime.title ?? null,
     sourceType: runtimeSessionId === rootRuntimeSessionId ? "root" : "fork",
-    isActive: runtimeSessionId === taskSessionId,
+    isActive: runtimeSessionId === activeRuntimeSessionId,
     createdAt: runtime.createdAt ?? runtime.updatedAt ?? new Date().toISOString(),
     updatedAt: runtime.updatedAt ?? runtime.createdAt ?? new Date().toISOString(),
     archivedAt: null,
@@ -6608,21 +6858,28 @@ async function ensureParentLineageRecord(
 }
 
 function createSessionTreeNode(
+  taskId: string,
   record: TaskSessionRecord,
   runtimeSessions: Map<string, RuntimeSessionMeta>,
   forkMessagePreviewMap: Map<string, { role: string | null; preview: string | null }>,
   firstPromptAfterForkMap: Map<string, string | null>,
 ): SessionTreeNode {
   const runtime = runtimeSessions.get(record.runtimeSessionId);
+  const branchNodeId = buildBranchLineageNodeId(taskId, record.runtimeSessionId);
   const forkSource =
     record.parentRuntimeSessionId && record.forkedFromMessageId
       ? forkMessagePreviewMap.get(`${record.parentRuntimeSessionId}:${record.forkedFromMessageId}`)
       : undefined;
 
   return {
-    id: record.id,
+    id: branchNodeId,
+    branchNodeId,
     runtimeSessionId: record.runtimeSessionId,
+    taskSessionId: buildPublicTaskSessionId(taskId, record.runtimeSessionId),
     parentRuntimeSessionId: record.parentRuntimeSessionId,
+    parentTaskSessionId: record.parentRuntimeSessionId
+      ? buildPublicTaskSessionId(taskId, record.parentRuntimeSessionId)
+      : null,
     forkedFromMessageId: record.forkedFromMessageId,
     forkedFromMessageRole: forkSource?.role ?? null,
     forkedFromMessagePreview: forkSource?.preview ?? null,
@@ -6639,6 +6896,7 @@ function createSessionTreeNode(
 }
 
 function buildSessionTree(
+  taskId: string,
   records: TaskSessionRecord[],
   runtimeSessions: Map<string, RuntimeSessionMeta>,
   forkMessagePreviewMap: Map<string, { role: string | null; preview: string | null }>,
@@ -6649,6 +6907,7 @@ function buildSessionTree(
 
   for (const rec of records) {
     const node = createSessionTreeNode(
+      taskId,
       rec,
       runtimeSessions,
       forkMessagePreviewMap,
@@ -6772,8 +7031,16 @@ taskRoutes.get(":taskId/branch-lineage", async (c) => {
   const lineageRecords = lineageResult.activeRecords;
 
   const runtimeMap = await fetchRuntimeSessionMap(100);
-  const forkMessagePreviewMap = await buildForkMessagePreviewMap(lineageRecords);
-  const firstPromptAfterForkMap = await buildFirstPromptAfterForkMap(lineageRecords);
+  const forkMessagePreviewMap = await buildForkMessagePreviewMap(
+    taskId,
+    authorization,
+    lineageRecords,
+  );
+  const firstPromptAfterForkMap = await buildFirstPromptAfterForkMap(
+    taskId,
+    authorization,
+    lineageRecords,
+  );
 
   if (lineageRecords.length === 0) {
     const synthesizedRecords = synthesizeLineageRecordsFromRuntime(
@@ -6787,7 +7054,9 @@ taskRoutes.get(":taskId/branch-lineage", async (c) => {
     }
 
     await persistLineageRepairs(taskId, synthesizedRecords, authorization);
-    return c.json({ data: buildSessionTree(synthesizedRecords, runtimeMap, new Map(), new Map()) });
+    return c.json({
+      data: buildSessionTree(taskId, synthesizedRecords, runtimeMap, new Map(), new Map()),
+    });
   }
 
   const { records: normalizedRecords, repaired } = normalizeLineageRecords(lineageRecords);
@@ -6796,6 +7065,7 @@ taskRoutes.get(":taskId/branch-lineage", async (c) => {
   }
 
   const tree = buildSessionTree(
+    taskId,
     normalizedRecords,
     runtimeMap,
     forkMessagePreviewMap,
@@ -6817,8 +7087,16 @@ taskRoutes.get(":taskId/session-lineage", async (c) => {
   const lineageResult = await fetchTaskSessionLineageRecords(taskId, authorization);
   const lineageRecords = lineageResult.activeRecords;
   const runtimeMap = await fetchRuntimeSessionMap(100);
-  const forkMessagePreviewMap = await buildForkMessagePreviewMap(lineageRecords);
-  const firstPromptAfterForkMap = await buildFirstPromptAfterForkMap(lineageRecords);
+  const forkMessagePreviewMap = await buildForkMessagePreviewMap(
+    taskId,
+    authorization,
+    lineageRecords,
+  );
+  const firstPromptAfterForkMap = await buildFirstPromptAfterForkMap(
+    taskId,
+    authorization,
+    lineageRecords,
+  );
 
   if (lineageRecords.length === 0) {
     const synthesizedRecords = synthesizeLineageRecordsFromRuntime(
@@ -6832,7 +7110,9 @@ taskRoutes.get(":taskId/session-lineage", async (c) => {
     }
 
     await persistLineageRepairs(taskId, synthesizedRecords, authorization);
-    return c.json({ data: buildSessionTree(synthesizedRecords, runtimeMap, new Map(), new Map()) });
+    return c.json({
+      data: buildSessionTree(taskId, synthesizedRecords, runtimeMap, new Map(), new Map()),
+    });
   }
 
   const { records: normalizedRecords, repaired } = normalizeLineageRecords(lineageRecords);
@@ -6842,6 +7122,7 @@ taskRoutes.get(":taskId/session-lineage", async (c) => {
 
   return c.json({
     data: buildSessionTree(
+      taskId,
       normalizedRecords,
       runtimeMap,
       forkMessagePreviewMap,
@@ -6860,8 +7141,26 @@ taskRoutes.post("/:taskId/branches/:sessionId/activate", async (c) => {
   return c.json(result.body, result.status);
 });
 
+taskRoutes.post("/:taskId/sessions/:sessionId/activate", async (c) => {
+  const result = await executeTaskBranchActivation({
+    taskId: c.req.param("taskId"),
+    sessionId: c.req.param("sessionId"),
+    authorization: authHeader(c),
+  });
+  return c.json(result.body, result.status);
+});
+
 // POST /api/tasks/:taskId/branches/:sessionId/archive — Archive a branch
 taskRoutes.post("/:taskId/branches/:sessionId/archive", async (c) => {
+  const result = await executeTaskBranchArchive({
+    taskId: c.req.param("taskId"),
+    sessionId: c.req.param("sessionId"),
+    authorization: authHeader(c),
+  });
+  return c.json(result.body, result.status);
+});
+
+taskRoutes.post("/:taskId/sessions/:sessionId/archive", async (c) => {
   const result = await executeTaskBranchArchive({
     taskId: c.req.param("taskId"),
     sessionId: c.req.param("sessionId"),

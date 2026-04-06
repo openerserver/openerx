@@ -204,10 +204,16 @@ function mergeStreamingText(
   }
 
   if (mode === "snapshot") {
-    if (next.length >= existing.length && next.includes(existing.slice(0, Math.min(80, existing.length)))) {
+    if (
+      next.length >= existing.length &&
+      next.includes(existing.slice(0, Math.min(80, existing.length)))
+    ) {
       return next;
     }
-    if (existing.length > next.length && existing.includes(next.slice(0, Math.min(80, next.length)))) {
+    if (
+      existing.length > next.length &&
+      existing.includes(next.slice(0, Math.min(80, next.length)))
+    ) {
       return existing;
     }
   }
@@ -466,7 +472,8 @@ async function main() {
       const message = ensureMessage(messageId, sessionId);
       message.role = asString(info.role) ?? message.role;
       message.agent = asString(info.agent) ?? message.agent;
-      message.model = asString(asRecord(info.model)?.modelID) ?? asString(info.modelID) ?? message.model;
+      message.model =
+        asString(asRecord(info.model)?.modelID) ?? asString(info.modelID) ?? message.model;
       message.createdAt = parseTimestamp(asRecord(info.time)?.created) ?? message.createdAt;
       message.completedAt = parseTimestamp(asRecord(info.time)?.completed) ?? message.completedAt;
       message.messageUpdatedSequences.push(record.sequence);
@@ -543,8 +550,8 @@ async function main() {
         continue;
       }
 
-        const message = ensureMessage(messageId, sessionId);
-        message.text = mergeStreamingText(message.text, delta, "delta");
+      const message = ensureMessage(messageId, sessionId);
+      message.text = mergeStreamingText(message.text, delta, "delta");
       message.deltaCount += 1;
       message.partDeltaSequences.push(record.sequence);
 
@@ -678,7 +685,9 @@ async function main() {
       messageCount: messages.size,
       sentToModelCount: sentToModel.length,
       modelReplyCount: modelReplies.length,
-      ignoredRawTypes: Object.fromEntries([...ignoredRawTypes.entries()].sort((a, b) => b[1] - a[1])),
+      ignoredRawTypes: Object.fromEntries(
+        [...ignoredRawTypes.entries()].sort((a, b) => b[1] - a[1]),
+      ),
       keptRawTypes: Object.fromEntries([...keptRawTypes.entries()].sort((a, b) => b[1] - a[1])),
     },
     notes: [

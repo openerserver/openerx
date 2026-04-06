@@ -8,12 +8,14 @@
 
 本文聚焦“当前实现如何工作”，不是重构提案。目的是把数据来源、字段语义、聚合边界、页面消费方式统一到一份文档里。
 
+> 状态更新（2026-04-05）：本文成稿早于 session-first cutover 与 `0033_drop_agent_runs.sql`。当前代码中已不存在独立 `agent_runs` 主表；`GET /api/tasks/:taskId/runs` 仍保留为兼容接口，但其返回现在由 `task_operations`、`task_session_runs`、`task_sessions` 的 canonical 数据投影而来。阅读本文时，凡涉及 `agent_runs` 的描述都应理解为“兼容视图语义”，而不是当前落库结构。
+
 ## 1. 总体链路
 
 当前任务页展示运行相关信息时，并不是只依赖一个接口，而是组合了四类数据：
 
 1. 任务本体读模型：`GET /api/tasks/:taskId` 或 `GET /api/project-tree/tasks/:taskId`
-2. 原始 agent 运行记录：`GET /api/tasks/:taskId/runs`
+2. agent run 兼容视图：`GET /api/tasks/:taskId/runs`
 3. 任务级 run 摘要：`GET /api/tasks/:taskId/domain-runs`
 4. 单个 run 的结构化详情：`GET /api/tasks/:taskId/domain-runs/:runId`
 
@@ -32,7 +34,7 @@ flowchart LR
 
   subgraph ReadModel[页面消费的读模型]
     B1[Task\n当前任务上下文]
-    B2[Agent Runs\n原始执行历史]
+    B2[Agent Runs Compatibility View\n兼容执行历史]
     B3[Domain Runs\nrun 摘要列表]
     B4[Domain Run Detail\n单个 run 结构化详情]
     B5[Projection Parallel Runs\n页面内部并行投影视图]
@@ -54,7 +56,7 @@ flowchart LR
 flowchart TD
   A[Runtime / Agent 执行事件]
   B[task-run-write-sync]
-  C[agent_runs]
+  C[task_operations + task_session_runs + task_sessions\nagent run 兼容投影来源]
   D[task_runs]
   E[task_run_nodes]
   F[tasks]
@@ -95,9 +97,9 @@ flowchart TD
 
 可以把这条链路拆成三层理解：
 
-- 存储层：`tasks`、`task_runs`、`task_run_nodes`、`agent_runs`、`task_snapshots`
+- 存储层：`tasks`、`task_sessions`、`task_session_runs`、`task_messages`、`task_operations`、`task_snapshots`；`/api/tasks/:taskId/runs` 再从 canonical 表投影兼容 agent run 视图
 - 服务层：service 暴露查询接口，BFF 基本透明代理
-- 展示层：任务页把 task、本次/历史 runs、run detail、agent runs 组合成并行比较和顺序执行视图
+- 展示层：任务页把 task、本次/历史 runs、run detail、agent run 兼容视图组合成并行比较和顺序执行视图
 
 ## 2. 数据库模型
 
@@ -108,7 +110,7 @@ flowchart TD
   T[tasks\n任务聚合事实]
   TR[task_runs\nrun 摘要]
   TRN[task_run_nodes\nrun 内部节点]
-  AR[agent_runs\n原始 agent 执行]
+  AR[Agent Run Compatibility View\n兼容 agent 执行视图]
   TS[task_snapshots\n任务快照投影]
   TTV[task_timeline_views\n时间线投影]
   TDE[task_domain_events\n领域事件流]
@@ -204,17 +206,15 @@ flowchart TD
 
 这个表是 `domain-runs/:runId` 详情接口的核心事实来源。并行候选、judge、顺序链步骤，都是从这里筛出来的。
 
-### 2.4 `agent_runs`：原始 agent 执行记录表
+### 2.4 `agent runs`：兼容接口返回模型
 
-定义位置：[`control-plane/service/src/db/schema.pg.ts`](../control-plane/service/src/db/schema.pg.ts)
+定义位置：[`control-plane/service/src/modules/tasks/agent-run-compat.ts`](../control-plane/service/src/modules/tasks/agent-run-compat.ts) 与 [`control-plane/service/src/modules/tasks/task-agent-run-read-routes.ts`](../control-plane/service/src/modules/tasks/task-agent-run-read-routes.ts)
 
 核心字段：
 
 - `id`
 - `taskId`
 - `sessionId`
-- `runId`：回链到 `task_runs.id`
-- `runNodeId`：回链到 `task_run_nodes.id`
 - `agentType`
 - `status`：`pending | running | paused | completed | failed | stopped | terminated`
 - `modelUsed`
@@ -224,7 +224,7 @@ flowchart TD
 - `candidateIndex`
 - `startedAt`、`finishedAt`、`createdAt`
 
-这个表更偏原始执行记录，直接对应某个 agent 的运行，不是页面最终展示模型。
+这个返回模型更偏原始执行记录，直接对应某个 `agentRunId` 的兼容读视图，不是页面最终展示模型。当前并没有与之同名的独立 `agent_runs` 物理表。
 
 ### 2.5 `task_snapshots`：任务投影视图表
 
@@ -375,7 +375,7 @@ flowchart TD
 ```mermaid
 flowchart LR
   subgraph DB[数据库与投影]
-    A[(agent_runs)]
+    A[(agent run compatibility projection)]
     B[(task_runs)]
     C[(task_run_nodes)]
     D[(tasks)]
@@ -488,16 +488,16 @@ flowchart TD
 
 ### 4.3 `GET /tasks/:taskId/runs`
 
-实现位置：[`control-plane/service/src/modules/tasks/task-core-routes.ts`](../control-plane/service/src/modules/tasks/task-core-routes.ts)
+实现位置：[`control-plane/service/src/modules/tasks/task-agent-run-read-routes.ts`](../control-plane/service/src/modules/tasks/task-agent-run-read-routes.ts)
 
 当前实现：
 
-- 查询 `agent_runs`
-- 条件：`agentRuns.taskId = taskId`
+- 调用 `listCanonicalTaskAgentRuns(taskId)`
+- 底层从 `task_operations`、`task_session_runs`、`task_sessions` 投影兼容 `agentRunId` 视图
 - 排序：`createdAt desc`
-- 返回：`{ data: runs }`
+- 返回：`{ data: runs, meta: { taskId, count } }`
 
-当前返回的是数据库原始记录，未做字段裁剪，也未提供 `meta`。
+当前返回的是兼容读模型，不再直接对应数据库中的独立 `agent_runs` 表。
 
 当前接口语义可理解为：
 
@@ -938,7 +938,7 @@ flowchart TD
 
 当前实现里，run 数据不是“一张表 -> 一个接口 -> 一个页面组件”这么简单，而是：
 
-- `agent_runs` 提供原始执行事实
+- agent run 兼容视图提供 `agentRunId` 级执行事实
 - `task_runs` 提供 run 摘要
 - `task_run_nodes` 提供结构化节点详情
 - `tasks` 和 `task_snapshots` 提供任务当前态投影

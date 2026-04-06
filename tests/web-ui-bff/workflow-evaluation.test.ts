@@ -63,7 +63,7 @@ interface TaskRecord {
   id: string;
   status: string;
   agentRunId?: string | null;
-  strategy?: string | null;
+  strategy?: string | Record<string, unknown> | null;
 }
 
 interface ConfigModelRecord {
@@ -115,9 +115,15 @@ function authHeaders() {
   };
 }
 
-function parseTaskStrategy(strategyRaw?: string | null): TaskStrategyPayload {
+function parseTaskStrategy(
+  strategyRaw?: string | Record<string, unknown> | null,
+): TaskStrategyPayload {
   if (!strategyRaw) {
     return {};
+  }
+
+  if (typeof strategyRaw === "object") {
+    return strategyRaw as TaskStrategyPayload;
   }
 
   try {

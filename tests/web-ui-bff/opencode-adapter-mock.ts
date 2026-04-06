@@ -1,7 +1,9 @@
 import { mock } from "bun:test";
 import type * as OpencodeAdapterModule from "../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter";
+import type * as RuntimeProviderModule from "../../control-plane/web-ui-bff/src/modules/agent-control/runtime-provider";
 
 type OpencodeAdapterModuleShape = typeof OpencodeAdapterModule;
+type RuntimeProviderModuleShape = typeof RuntimeProviderModule;
 
 export function createOpencodeAdapterModuleMock(
   overrides: Partial<OpencodeAdapterModuleShape> = {},
@@ -36,4 +38,58 @@ export function createOpencodeAdapterModuleMock(
     updateAgentRunStatus: mock(() => undefined),
     ...overrides,
   } as OpencodeAdapterModuleShape;
+}
+
+export function createRuntimeProviderModuleMock(
+  adapterModule: Pick<
+    OpencodeAdapterModuleShape,
+    | "continueSession"
+    | "createSession"
+    | "forkSession"
+    | "getAgentMessages"
+    | "getSessionMessages"
+    | "injectGuidance"
+    | "listRuntimePermissions"
+    | "listSessions"
+    | "pauseAgent"
+    | "replyRuntimePermission"
+    | "resumeAgent"
+    | "runDetachedPrompt"
+    | "terminateAgent"
+  >,
+): RuntimeProviderModuleShape {
+  const provider = {
+    continueSession: adapterModule.continueSession,
+    createSession: adapterModule.createSession,
+    forkSession: adapterModule.forkSession,
+    getAgentMessages: adapterModule.getAgentMessages,
+    getSessionMessages: adapterModule.getSessionMessages,
+    injectGuidance: adapterModule.injectGuidance,
+    listRuntimePermissions: adapterModule.listRuntimePermissions,
+    listSessions: adapterModule.listSessions,
+    pauseAgent: adapterModule.pauseAgent,
+    replyRuntimePermission: adapterModule.replyRuntimePermission,
+    resumeAgent: adapterModule.resumeAgent,
+    runDetachedPrompt: adapterModule.runDetachedPrompt,
+    terminateAgent: adapterModule.terminateAgent,
+  };
+
+  return {
+    DEFAULT_RUNTIME_BACKEND: "opencode",
+    continueSession: adapterModule.continueSession,
+    createSession: adapterModule.createSession,
+    forkSession: adapterModule.forkSession,
+    getAgentMessages: adapterModule.getAgentMessages,
+    getRuntimeBackend: mock(() => "opencode"),
+    getRuntimeProvider: mock(() => provider),
+    getSessionMessages: adapterModule.getSessionMessages,
+    injectGuidance: adapterModule.injectGuidance,
+    listRuntimePermissions: adapterModule.listRuntimePermissions,
+    listSessions: adapterModule.listSessions,
+    pauseAgent: adapterModule.pauseAgent,
+    replyRuntimePermission: adapterModule.replyRuntimePermission,
+    resumeAgent: adapterModule.resumeAgent,
+    runDetachedPrompt: adapterModule.runDetachedPrompt,
+    terminateAgent: adapterModule.terminateAgent,
+  } as RuntimeProviderModuleShape;
 }

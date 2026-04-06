@@ -405,7 +405,10 @@ function resolveRuntimeMessageId(message: Record<string, unknown>): string | nul
   if (typeof message.id === "string" && message.id) return message.id;
   if (typeof message.runtimeMessageId === "string" && message.runtimeMessageId)
     return message.runtimeMessageId;
-  const info = message.info && typeof message.info === "object" ? (message.info as Record<string, unknown>) : null;
+  const info =
+    message.info && typeof message.info === "object"
+      ? (message.info as Record<string, unknown>)
+      : null;
   if (info && typeof info.id === "string" && info.id) return info.id;
   return null;
 }

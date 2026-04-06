@@ -63,14 +63,16 @@ function isOpenCandidateStatus(status?: string | null) {
 }
 
 function compareCandidateSummaries(left: TaskSessionRecord, right: TaskSessionRecord) {
-  const leftIndex = typeof left.candidateIndex === "number" ? left.candidateIndex : Number.MAX_SAFE_INTEGER;
+  const leftIndex =
+    typeof left.candidateIndex === "number" ? left.candidateIndex : Number.MAX_SAFE_INTEGER;
   const rightIndex =
     typeof right.candidateIndex === "number" ? right.candidateIndex : Number.MAX_SAFE_INTEGER;
   if (leftIndex !== rightIndex) {
     return leftIndex - rightIndex;
   }
 
-  const leftCreatedAt = toTimestampMs(left.createdAt) ?? toTimestampMs(left.updatedAt) ?? Number.MAX_SAFE_INTEGER;
+  const leftCreatedAt =
+    toTimestampMs(left.createdAt) ?? toTimestampMs(left.updatedAt) ?? Number.MAX_SAFE_INTEGER;
   const rightCreatedAt =
     toTimestampMs(right.createdAt) ?? toTimestampMs(right.updatedAt) ?? Number.MAX_SAFE_INTEGER;
   if (leftCreatedAt !== rightCreatedAt) {
@@ -101,9 +103,15 @@ function resolveCandidateAgentRun(
     }
 
     const rightStartedAt =
-      toTimestampMs(right.startedAt) ?? toTimestampMs(right.createdAt) ?? toTimestampMs(right.finishedAt) ?? 0;
+      toTimestampMs(right.startedAt) ??
+      toTimestampMs(right.createdAt) ??
+      toTimestampMs(right.finishedAt) ??
+      0;
     const leftStartedAt =
-      toTimestampMs(left.startedAt) ?? toTimestampMs(left.createdAt) ?? toTimestampMs(left.finishedAt) ?? 0;
+      toTimestampMs(left.startedAt) ??
+      toTimestampMs(left.createdAt) ??
+      toTimestampMs(left.finishedAt) ??
+      0;
     return rightStartedAt - leftStartedAt;
   })[0];
 }
@@ -153,7 +161,11 @@ function resolveParentRuntimeSessionId(
   parentByRuntimeSessionId: Map<string, string | null>,
   task?: SessionRunTaskContext | null,
 ) {
-  return resolveSharedParentRuntimeSessionId(summaries, parentByRuntimeSessionId) ?? task?.sessionId ?? null;
+  return (
+    resolveSharedParentRuntimeSessionId(summaries, parentByRuntimeSessionId) ??
+    task?.sessionId ??
+    null
+  );
 }
 
 function resolveParallelCandidateSummaries(args: {
@@ -188,11 +200,7 @@ function buildCandidateSession(
   return {
     label: configuredCandidate?.label || summary.title || `候选 ${candidateIndex + 1}`,
     agent: agentRun?.agentType,
-    model:
-      agentRun?.modelUsed ||
-      summary.selectedModel ||
-      configuredCandidate?.model ||
-      undefined,
+    model: agentRun?.modelUsed || summary.selectedModel || configuredCandidate?.model || undefined,
     status,
     sessionId: summary.id,
     agentRunId: agentRun?.id,
@@ -200,7 +208,9 @@ function buildCandidateSession(
     startedAt: agentRun?.startedAt ?? summary.createdAt ?? undefined,
     finishedAt:
       agentRun?.finishedAt ??
-      (isOpenCandidateStatus(status) ? undefined : (summary.updatedAt ?? summary.createdAt ?? undefined)),
+      (isOpenCandidateStatus(status)
+        ? undefined
+        : (summary.updatedAt ?? summary.createdAt ?? undefined)),
   } satisfies ProjectionRunCandidate;
 }
 
@@ -222,7 +232,10 @@ export function hasSessionSummaryParallelGroups(sessionSummaries: TaskSessionRec
   const counts = new Map<string, number>();
 
   for (const summary of sessionSummaries) {
-    if (typeof summary.coordinationKey !== "string" || summary.coordinationKey.trim().length === 0) {
+    if (
+      typeof summary.coordinationKey !== "string" ||
+      summary.coordinationKey.trim().length === 0
+    ) {
       continue;
     }
 
@@ -236,7 +249,10 @@ export function buildRuntimeSessionParentMap(nodes: SessionParentNode[]) {
   const parentByRuntimeSessionId = new Map<string, string | null>();
   const nodesById = new Map(
     nodes
-      .filter((node): node is SessionParentNode & { id: string } => typeof node.id === "string" && node.id.length > 0)
+      .filter(
+        (node): node is SessionParentNode & { id: string } =>
+          typeof node.id === "string" && node.id.length > 0,
+      )
       .map((node) => [node.id, node] as const),
   );
 
@@ -263,7 +279,10 @@ export function buildSessionSummaryParallelRuns(args: SessionSummaryParallelRunA
   const groups = new Map<string, TaskSessionRecord[]>();
 
   for (const summary of args.sessionSummaries) {
-    if (typeof summary.coordinationKey !== "string" || summary.coordinationKey.trim().length === 0) {
+    if (
+      typeof summary.coordinationKey !== "string" ||
+      summary.coordinationKey.trim().length === 0
+    ) {
       continue;
     }
 

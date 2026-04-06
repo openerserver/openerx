@@ -24,16 +24,45 @@ interface ApiResult<T> {
   status: number;
 }
 
+async function safeSql(query: string, params: unknown[] = []) {
+  try {
+    await sql.unsafe(query, params);
+  } catch (error) {
+    if ((error as { code?: string }).code !== "42P01") {
+      throw error;
+    }
+  }
+}
+
 function escapeLiteral(value: string) {
   return `'${value.replace(/'/g, "''")}'`;
 }
 
 function taskBranchCompatNodeId(taskId: string, runtimeSessionId: string) {
-  return `task_session:${taskId}:${runtimeSessionId}`;
+  return `branch-node:${taskId}:${runtimeSessionId}`;
 }
 
 function taskSessionId(taskId: string, runtimeSessionId: string) {
   return `task-session:${taskId}:${runtimeSessionId}`;
+}
+
+function buildNormalizedConversationPath(
+  taskId: string,
+  options: {
+    sessionId?: string | null;
+    includeLineage?: boolean;
+  } = {},
+) {
+  const query = new URLSearchParams();
+  if (options.sessionId) {
+    query.set("sessionId", options.sessionId);
+  }
+  if (typeof options.includeLineage === "boolean") {
+    query.set("includeLineage", String(options.includeLineage));
+  }
+
+  const queryString = query.toString();
+  return `/api/tasks/${taskId}/query/normalized-conversation${queryString ? `?${queryString}` : ""}`;
 }
 
 async function request<T>(path: string, opts: RequestInit = {}): Promise<ApiResult<T>> {
@@ -58,6 +87,16 @@ async function authedRequest<T>(path: string, opts: RequestInit = {}) {
       "Content-Type": "application/json",
     },
   });
+}
+
+async function queryNormalizedConversation<T>(
+  taskId: string,
+  options: {
+    sessionId?: string | null;
+    includeLineage?: boolean;
+  } = {},
+) {
+  return authedRequest<T>(buildNormalizedConversationPath(taskId, options));
 }
 
 async function login() {
@@ -99,26 +138,15 @@ afterAll(async () => {
     await sql.unsafe("DELETE FROM task_timeline_views WHERE task_id = $1", [taskId]);
     await sql.unsafe("DELETE FROM task_message_events WHERE task_id = $1", [taskId]);
     await sql.unsafe("DELETE FROM task_usage_ledger_entries WHERE task_id = $1", [taskId]);
-    await sql.unsafe("DELETE FROM session_operations WHERE task_id = $1", [taskId]);
-    await sql.unsafe(
-      `DELETE FROM task_session_message_parts WHERE message_id IN (
-        SELECT id FROM task_session_messages WHERE task_id = $1
-      )`,
-      [taskId],
-    );
-    await sql.unsafe("DELETE FROM task_session_messages WHERE task_id = $1", [taskId]);
+    await sql.unsafe("DELETE FROM task_artifacts WHERE task_id = $1", [taskId]);
+    await sql.unsafe("DELETE FROM task_operations WHERE task_id = $1", [taskId]);
+    await safeSql("UPDATE task_snapshots SET current_session_id = NULL WHERE task_id = $1", [
+      taskId,
+    ]);
+    await sql.unsafe("DELETE FROM task_snapshots WHERE task_id = $1", [taskId]);
     await sql.unsafe("DELETE FROM task_sessions WHERE task_id = $1", [taskId]);
     await sql.unsafe("DELETE FROM task_domain_events WHERE task_id = $1", [taskId]);
-    await sql.unsafe(
-      `DELETE FROM conversation_message_parts WHERE message_id IN (
-        SELECT id FROM conversation_messages WHERE task_id = $1
-      )`,
-      [taskId],
-    );
-    await sql.unsafe("DELETE FROM conversation_messages WHERE task_id = $1", [taskId]);
-    await sql.unsafe("DELETE FROM conversation_sessions WHERE task_id = $1", [taskId]);
-    await sql.unsafe("DELETE FROM task_snapshots WHERE task_id = $1", [taskId]);
-    await sql.unsafe("DELETE FROM task_run_edges WHERE task_id = $1", [taskId]);
+    await safeSql("DELETE FROM task_run_edges WHERE task_id = $1", [taskId]);
     await sql.unsafe(
       `DELETE FROM task_stage_runs
         WHERE workflow_run_id IN (
@@ -142,13 +170,9 @@ afterAll(async () => {
       [taskId],
     );
     await sql.unsafe("DELETE FROM code_changes WHERE task_id = $1", [taskId]);
-    await sql.unsafe("UPDATE agent_runs SET run_node_id = NULL, run_id = NULL WHERE task_id = $1", [
-      taskId,
-    ]);
-    await sql.unsafe("UPDATE task_run_nodes SET agent_run_id = NULL WHERE task_id = $1", [taskId]);
-    await sql.unsafe("DELETE FROM task_run_nodes WHERE task_id = $1", [taskId]);
-    await sql.unsafe("DELETE FROM agent_runs WHERE task_id = $1", [taskId]);
-    await sql.unsafe("DELETE FROM task_runs WHERE task_id = $1", [taskId]);
+    await safeSql("UPDATE task_run_nodes SET agent_run_id = NULL WHERE task_id = $1", [taskId]);
+    await safeSql("DELETE FROM task_run_nodes WHERE task_id = $1", [taskId]);
+    await safeSql("DELETE FROM task_runs WHERE task_id = $1", [taskId]);
     await sql.unsafe("DELETE FROM tasks WHERE id = $1", [taskId]);
   }
 
@@ -162,7 +186,6 @@ afterAll(async () => {
   if (nodeIds.length > 0) {
     const nodeList = nodeIds.map(escapeLiteral).join(", ");
     await sql.unsafe(`DELETE FROM task_sessions WHERE tree_node_id IN (${nodeList})`);
-    await sql.unsafe(`DELETE FROM conversation_sessions WHERE tree_node_id IN (${nodeList})`);
     await sql.unsafe(`DELETE FROM tasks WHERE tree_node_id IN (${nodeList})`);
     await sql.unsafe(
       `UPDATE project_tree_nodes
@@ -327,7 +350,7 @@ describe("project tree routes", () => {
       ]),
     );
 
-    const sessionMessages = await authedRequest<{
+    const sessionMessages = await queryNormalizedConversation<{
       data: Array<{
         runtimeMessageId?: string | null;
         role?: string;
@@ -339,7 +362,7 @@ describe("project tree routes", () => {
         sessionId: string;
         messageCount: number;
       };
-    }>(`/api/tasks/${task.id}/sessions/${taskSessionId(task.id, runtimeSessionId)}/messages`);
+    }>(task.id, { sessionId: taskSessionId(task.id, runtimeSessionId) });
 
     expect(sessionMessages.status).toBe(200);
     expect(sessionMessages.data.meta).toEqual(
@@ -869,6 +892,28 @@ describe("project tree routes", () => {
 
     expect(rootSession.status).toBe(201);
 
+    const rootAnchorTime = Date.now();
+
+    const persistRootAnchor = await authedRequest<{ ok: boolean; seq: number }>(
+      `/api/tasks/${task.id}/sessions/messages`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          runtimeSessionId: rootRuntimeSessionId,
+          message: {
+            info: {
+              id: "root-user-1",
+              role: "user",
+              time: { created: rootAnchorTime, completed: rootAnchorTime },
+            },
+            parts: [{ type: "text", text: "fork anchor" }],
+          },
+        }),
+      },
+    );
+
+    expect(persistRootAnchor.status).toBe(201);
+
     const forkSession = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/sessions`, {
       method: "POST",
       body: JSON.stringify({
@@ -971,6 +1016,52 @@ describe("project tree routes", () => {
     });
     expect(rootSession.status).toBe(201);
 
+    const timelineBaseTime = Date.now();
+
+    const persistRootUser = await authedRequest<{ ok: boolean; seq: number }>(
+      `/api/tasks/${task.id}/sessions/messages`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          runtimeSessionId: rootRuntimeSessionId,
+          message: {
+            info: {
+              id: "root-user",
+              role: "user",
+              time: {
+                created: timelineBaseTime,
+                completed: timelineBaseTime,
+              },
+            },
+            parts: [{ type: "text", text: "历史提问" }],
+          },
+        }),
+      },
+    );
+    expect(persistRootUser.status).toBe(201);
+
+    const persistRootAssistant = await authedRequest<{ ok: boolean; seq: number }>(
+      `/api/tasks/${task.id}/sessions/messages`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          runtimeSessionId: rootRuntimeSessionId,
+          message: {
+            info: {
+              id: "root-assistant",
+              role: "assistant",
+              time: {
+                created: timelineBaseTime + 3_000,
+                completed: timelineBaseTime + 4_000,
+              },
+            },
+            parts: [{ type: "text", text: "历史回答" }],
+          },
+        }),
+      },
+    );
+    expect(persistRootAssistant.status).toBe(201);
+
     const forkSession = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/sessions`, {
       method: "POST",
       body: JSON.stringify({
@@ -1065,6 +1156,27 @@ describe("project tree routes", () => {
     });
     expect(rootSession.status).toBe(201);
 
+    const rootAnchorTime = Date.now();
+
+    const persistRootAnchor = await authedRequest<{ ok: boolean; seq: number }>(
+      `/api/tasks/${task.id}/sessions/messages`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          runtimeSessionId: rootRuntimeSessionId,
+          message: {
+            info: {
+              id: "root-user-1",
+              role: "user",
+              time: { created: rootAnchorTime, completed: rootAnchorTime },
+            },
+            parts: [{ type: "text", text: "tree-first root anchor" }],
+          },
+        }),
+      },
+    );
+    expect(persistRootAnchor.status).toBe(201);
+
     const forkSession = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/sessions`, {
       method: "POST",
       body: JSON.stringify({
@@ -1115,13 +1227,13 @@ describe("project tree routes", () => {
     expect(persistForkMessage.status).toBe(201);
     expect(persistForkMessage.data.ok).toBe(true);
 
-    const replayed = await authedRequest<{
+    const replayed = await queryNormalizedConversation<{
       data: Array<{
         runtimeMessageId: string;
         textContent: string | null;
         parts: Array<{ partType: string; textContent: string | null }>;
       }>;
-    }>(`/api/tasks/${task.id}/sessions/${forkSessionRecordId}/messages`);
+    }>(task.id, { sessionId: forkSessionRecordId, includeLineage: false });
 
     expect(replayed.status).toBe(200);
     expect(replayed.data.data[0]?.runtimeMessageId).toBe("fork-msg-1");
@@ -1138,12 +1250,16 @@ describe("project tree routes", () => {
       }>
     >(
       `SELECT id, runtime_session_id, content_json FROM project_tree_nodes WHERE node_type = 'session' AND id LIKE $1 ORDER BY runtime_session_id`,
-      [`task_session:${task.id}:%`],
+      [`branch-node:${task.id}:%`],
     );
 
     expect(branchNodes.some((row) => row.runtime_session_id === forkRuntimeSessionId)).toBe(true);
-    const rootBranchNode = branchNodes.find((row) => row.runtime_session_id === rootRuntimeSessionId);
-    const forkBranchNode = branchNodes.find((row) => row.runtime_session_id === forkRuntimeSessionId);
+    const rootBranchNode = branchNodes.find(
+      (row) => row.runtime_session_id === rootRuntimeSessionId,
+    );
+    const forkBranchNode = branchNodes.find(
+      (row) => row.runtime_session_id === forkRuntimeSessionId,
+    );
     expect(rootBranchNode).toBeDefined();
     expect(forkBranchNode).toBeDefined();
     assertSessionNodeLineageOnlyContentJson(rootBranchNode?.content_json, {
@@ -1158,7 +1274,7 @@ describe("project tree routes", () => {
     });
   });
 
-  test("reads single-session messages from session-first storage when legacy tree message events are absent", async () => {
+  test("reads single-session normalized conversation from session-first storage when legacy tree message events are absent", async () => {
     const task = await createTask(`conversation-primary-${Date.now()}`);
     const runtimeSessionId = `ses_conversation_${Date.now()}`;
     const sessionRecordId = taskSessionId(task.id, runtimeSessionId);
@@ -1178,6 +1294,8 @@ describe("project tree routes", () => {
 
     expect(session.status).toBe(201);
 
+    const conversationMessageCreatedAt = Date.now();
+
     const persisted = await authedRequest<{ ok: boolean }>(
       `/api/tasks/${task.id}/sessions/messages`,
       {
@@ -1188,7 +1306,10 @@ describe("project tree routes", () => {
             info: {
               id: "msg-conversation-1",
               role: "assistant",
-              time: { created: Date.parse("2026-03-22T09:00:00.000Z") },
+              time: {
+                created: conversationMessageCreatedAt,
+                completed: conversationMessageCreatedAt,
+              },
             },
             parts: [{ type: "text", text: "conversation table answer" }],
           },
@@ -1197,10 +1318,10 @@ describe("project tree routes", () => {
     );
 
     expect(persisted.status).toBe(201);
-    const messages = await authedRequest<{
+    const messages = await queryNormalizedConversation<{
       data: Array<Record<string, unknown>>;
       meta: { cacheState: string; complete: boolean; readSource?: string };
-    }>(`/api/tasks/${task.id}/sessions/${sessionRecordId}/messages`);
+    }>(task.id, { sessionId: sessionRecordId });
 
     expect(messages.status).toBe(200);
     expect(messages.data.meta).toEqual(
@@ -1265,9 +1386,11 @@ describe("project tree routes", () => {
       expect(created.status).toBe(201);
     }
 
+    const baseTime = Date.now();
+
     for (const [runtimeSessionId, messageId, createdAt] of [
-      [candidateARuntimeSessionId, "candidate-a-user", "2026-03-22T10:00:00.000Z"],
-      [candidateBRuntimeSessionId, "candidate-b-user", "2026-03-22T10:00:00.500Z"],
+      [candidateARuntimeSessionId, "candidate-a-user", baseTime],
+      [candidateBRuntimeSessionId, "candidate-b-user", baseTime + 500],
     ] as const) {
       const persisted = await authedRequest<{ ok: boolean }>(
         `/api/tasks/${task.id}/sessions/messages`,
@@ -1279,7 +1402,7 @@ describe("project tree routes", () => {
               info: {
                 id: messageId,
                 role: "user",
-                time: { created: Date.parse(createdAt) },
+                time: { created: createdAt, completed: createdAt },
               },
               parts: [{ type: "text", text: promptText }],
             },
@@ -1294,13 +1417,13 @@ describe("project tree routes", () => {
         candidateARuntimeSessionId,
         "candidate-a-assistant",
         `候选 A 回复 ${unique}`,
-        "2026-03-22T10:00:01.000Z",
+        baseTime + 1_000,
       ],
       [
         candidateBRuntimeSessionId,
         "candidate-b-assistant",
         `候选 B 回复 ${unique}`,
-        "2026-03-22T10:00:02.000Z",
+        baseTime + 2_000,
       ],
     ] as const) {
       const persisted = await authedRequest<{ ok: boolean }>(
@@ -1313,7 +1436,7 @@ describe("project tree routes", () => {
               info: {
                 id: messageId,
                 role: "assistant",
-                time: { created: Date.parse(createdAt), completed: Date.parse(createdAt) },
+                time: { created: createdAt, completed: createdAt },
               },
               parts: [{ type: "text", text: replyText }],
             },
@@ -1323,10 +1446,10 @@ describe("project tree routes", () => {
       expect(persisted.status).toBe(201);
     }
 
-    const rootMessages = await authedRequest<{
+    const rootMessages = await queryNormalizedConversation<{
       data: Array<{ role: string | null; textContent: string | null }>;
       meta: { messageCount: number; readSource?: string };
-    }>(`/api/tasks/${task.id}/sessions/${rootSessionRecordId}/messages?includeLineage=false`);
+    }>(task.id, { sessionId: rootSessionRecordId, includeLineage: false });
 
     expect(rootMessages.status).toBe(200);
     expect(rootMessages.data.meta).toEqual(
@@ -1339,10 +1462,10 @@ describe("project tree routes", () => {
       expect.objectContaining({ role: "user", textContent: promptText }),
     ]);
 
-    const candidateAMessages = await authedRequest<{
+    const candidateAMessages = await queryNormalizedConversation<{
       data: Array<{ role: string | null; textContent: string | null }>;
       meta: { messageCount: number };
-    }>(`/api/tasks/${task.id}/sessions/${candidateASessionRecordId}/messages?includeLineage=false`);
+    }>(task.id, { sessionId: candidateASessionRecordId, includeLineage: false });
 
     expect(candidateAMessages.status).toBe(200);
     expect(candidateAMessages.data.meta).toEqual(expect.objectContaining({ messageCount: 1 }));
@@ -1350,10 +1473,10 @@ describe("project tree routes", () => {
       expect.objectContaining({ role: "assistant", textContent: `候选 A 回复 ${unique}` }),
     ]);
 
-    const candidateBMessages = await authedRequest<{
+    const candidateBMessages = await queryNormalizedConversation<{
       data: Array<{ role: string | null; textContent: string | null }>;
       meta: { messageCount: number };
-    }>(`/api/tasks/${task.id}/sessions/${candidateBSessionRecordId}/messages?includeLineage=false`);
+    }>(task.id, { sessionId: candidateBSessionRecordId, includeLineage: false });
 
     expect(candidateBMessages.status).toBe(200);
     expect(candidateBMessages.data.meta).toEqual(expect.objectContaining({ messageCount: 1 }));
@@ -1361,10 +1484,10 @@ describe("project tree routes", () => {
       expect.objectContaining({ role: "assistant", textContent: `候选 B 回复 ${unique}` }),
     ]);
 
-    const taskMessages = await authedRequest<{
+    const taskMessages = await queryNormalizedConversation<{
       data: Array<{ sessionId: string | null; role: string | null; textContent: string | null }>;
       meta: { messageCount: number; readSource?: string };
-    }>(`/api/tasks/${task.id}/messages`);
+    }>(task.id);
 
     expect(taskMessages.status).toBe(200);
     expect(taskMessages.data.meta).toEqual(
@@ -1373,7 +1496,9 @@ describe("project tree routes", () => {
         messageCount: 3,
       }),
     );
-    expect(taskMessages.data.data.filter((message) => message.textContent === promptText)).toHaveLength(1);
+    expect(
+      taskMessages.data.data.filter((message) => message.textContent === promptText),
+    ).toHaveLength(1);
     expect(taskMessages.data.data).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -1459,9 +1584,11 @@ describe("project tree routes", () => {
       expect(created.status).toBe(201);
     }
 
+    const baseTime = Date.now();
+
     for (const [runtimeSessionId, messageId, createdAt] of [
-      [candidateARuntimeSessionId, "candidate-a-user", "2026-03-22T10:00:00.000Z"],
-      [candidateBRuntimeSessionId, "candidate-b-user", "2026-03-22T10:00:00.500Z"],
+      [candidateARuntimeSessionId, "candidate-a-user", baseTime],
+      [candidateBRuntimeSessionId, "candidate-b-user", baseTime + 500],
     ] as const) {
       const persisted = await authedRequest<{ ok: boolean }>(
         `/api/tasks/${task.id}/sessions/messages`,
@@ -1473,7 +1600,7 @@ describe("project tree routes", () => {
               info: {
                 id: messageId,
                 role: "user",
-                time: { created: Date.parse(createdAt) },
+                time: { created: createdAt, completed: createdAt },
               },
               parts: [{ type: "text", text: promptText }],
             },
@@ -1488,13 +1615,13 @@ describe("project tree routes", () => {
         candidateARuntimeSessionId,
         "candidate-a-assistant",
         `Round anchor 候选 A 回复 ${unique}`,
-        "2026-03-22T10:00:01.000Z",
+        baseTime + 1_000,
       ],
       [
         candidateBRuntimeSessionId,
         "candidate-b-assistant",
         `Round anchor 候选 B 回复 ${unique}`,
-        "2026-03-22T10:00:02.000Z",
+        baseTime + 2_000,
       ],
     ] as const) {
       const persisted = await authedRequest<{ ok: boolean }>(
@@ -1507,7 +1634,7 @@ describe("project tree routes", () => {
               info: {
                 id: messageId,
                 role: "assistant",
-                time: { created: Date.parse(createdAt), completed: Date.parse(createdAt) },
+                time: { created: createdAt, completed: createdAt },
               },
               parts: [{ type: "text", text: replyText }],
             },
@@ -1517,10 +1644,10 @@ describe("project tree routes", () => {
       expect(persisted.status).toBe(201);
     }
 
-    const rootMessages = await authedRequest<{
+    const rootMessages = await queryNormalizedConversation<{
       data: Array<{ role: string | null; textContent: string | null }>;
       meta: { messageCount: number; readSource?: string };
-    }>(`/api/tasks/${task.id}/sessions/${rootSessionRecordId}/messages?includeLineage=false`);
+    }>(task.id, { sessionId: rootSessionRecordId, includeLineage: false });
 
     expect(rootMessages.status).toBe(200);
     expect(rootMessages.data.meta).toEqual(
@@ -1531,10 +1658,10 @@ describe("project tree routes", () => {
     );
     expect(rootMessages.data.data).toEqual([]);
 
-    const roundAnchorMessages = await authedRequest<{
+    const roundAnchorMessages = await queryNormalizedConversation<{
       data: Array<{ role: string | null; textContent: string | null }>;
       meta: { messageCount: number; readSource?: string };
-    }>(`/api/tasks/${task.id}/sessions/${roundAnchorSessionRecordId}/messages?includeLineage=false`);
+    }>(task.id, { sessionId: roundAnchorSessionRecordId, includeLineage: false });
 
     expect(roundAnchorMessages.status).toBe(200);
     expect(roundAnchorMessages.data.meta).toEqual(
@@ -1547,32 +1674,38 @@ describe("project tree routes", () => {
       expect.objectContaining({ role: "user", textContent: promptText }),
     ]);
 
-    const candidateAMessages = await authedRequest<{
+    const candidateAMessages = await queryNormalizedConversation<{
       data: Array<{ role: string | null; textContent: string | null }>;
       meta: { messageCount: number };
-    }>(`/api/tasks/${task.id}/sessions/${candidateASessionRecordId}/messages?includeLineage=false`);
+    }>(task.id, { sessionId: candidateASessionRecordId, includeLineage: false });
 
     expect(candidateAMessages.status).toBe(200);
     expect(candidateAMessages.data.meta).toEqual(expect.objectContaining({ messageCount: 1 }));
     expect(candidateAMessages.data.data).toEqual([
-      expect.objectContaining({ role: "assistant", textContent: `Round anchor 候选 A 回复 ${unique}` }),
+      expect.objectContaining({
+        role: "assistant",
+        textContent: `Round anchor 候选 A 回复 ${unique}`,
+      }),
     ]);
 
-    const candidateBMessages = await authedRequest<{
+    const candidateBMessages = await queryNormalizedConversation<{
       data: Array<{ role: string | null; textContent: string | null }>;
       meta: { messageCount: number };
-    }>(`/api/tasks/${task.id}/sessions/${candidateBSessionRecordId}/messages?includeLineage=false`);
+    }>(task.id, { sessionId: candidateBSessionRecordId, includeLineage: false });
 
     expect(candidateBMessages.status).toBe(200);
     expect(candidateBMessages.data.meta).toEqual(expect.objectContaining({ messageCount: 1 }));
     expect(candidateBMessages.data.data).toEqual([
-      expect.objectContaining({ role: "assistant", textContent: `Round anchor 候选 B 回复 ${unique}` }),
+      expect.objectContaining({
+        role: "assistant",
+        textContent: `Round anchor 候选 B 回复 ${unique}`,
+      }),
     ]);
 
-    const taskMessages = await authedRequest<{
+    const taskMessages = await queryNormalizedConversation<{
       data: Array<{ sessionId: string | null; role: string | null; textContent: string | null }>;
       meta: { messageCount: number; readSource?: string };
-    }>(`/api/tasks/${task.id}/messages`);
+    }>(task.id);
 
     expect(taskMessages.status).toBe(200);
     expect(taskMessages.data.meta).toEqual(
@@ -1622,6 +1755,7 @@ describe("project tree routes", () => {
     expect(session.status).toBe(201);
 
     const replyText = `合并后的最终回复 ${unique}`;
+    const baseTime = Date.now();
 
     const toolTurnPersist = await authedRequest<{ ok: boolean }>(
       `/api/tasks/${task.id}/sessions/messages`,
@@ -1636,8 +1770,8 @@ describe("project tree routes", () => {
               finish: "tool-calls",
               parentID: `user-${unique}`,
               time: {
-                created: Date.parse("2026-03-30T12:32:48.992Z"),
-                completed: Date.parse("2026-03-30T12:32:48.992Z"),
+                created: baseTime + 1_000,
+                completed: baseTime + 1_000,
               },
             },
             parts: [
@@ -1668,8 +1802,8 @@ describe("project tree routes", () => {
           finish: "stop",
           parentID: `user-${unique}`,
           time: {
-            created: Date.parse("2026-03-30T12:32:52.323Z"),
-            completed: Date.parse("2026-03-30T12:32:59.600Z"),
+            created: baseTime + 4_000,
+            completed: baseTime + 5_000,
           },
         },
         parts: [
@@ -1700,10 +1834,10 @@ describe("project tree routes", () => {
 
     expect(replayFinalTurnPersist.status).toBe(201);
 
-    const messages = await authedRequest<{
+    const messages = await queryNormalizedConversation<{
       data: Array<Record<string, unknown>>;
       meta: { messageCount: number; readSource?: string };
-    }>(`/api/tasks/${task.id}/sessions/${sessionRecordId}/messages?includeLineage=false`);
+    }>(task.id, { sessionId: sessionRecordId, includeLineage: false });
 
     expect(messages.status).toBe(200);
     expect(messages.data.meta).toEqual(
@@ -1738,10 +1872,10 @@ describe("project tree routes", () => {
       }),
     );
 
-    const taskMessages = await authedRequest<{
+    const taskMessages = await queryNormalizedConversation<{
       data: Array<Record<string, unknown>>;
       meta: { messageCount: number; readSource?: string };
-    }>(`/api/tasks/${task.id}/messages`);
+    }>(task.id);
 
     expect(taskMessages.status).toBe(200);
     expect(taskMessages.data.meta).toEqual(
@@ -1777,6 +1911,7 @@ describe("project tree routes", () => {
     expect(session.status).toBe(201);
 
     const replyText = `标准化工具调用合并后的最终回复 ${unique}`;
+    const baseTime = Date.now();
 
     const toolTurnPersist = await authedRequest<{ ok: boolean }>(
       `/api/tasks/${task.id}/sessions/messages`,
@@ -1791,8 +1926,8 @@ describe("project tree routes", () => {
               finish: "tool-calls",
               parentID: `user-${unique}`,
               time: {
-                created: Date.parse("2026-03-30T12:32:48.992Z"),
-                completed: Date.parse("2026-03-30T12:32:48.992Z"),
+                created: baseTime + 1_000,
+                completed: baseTime + 1_000,
               },
             },
             parts: [
@@ -1835,8 +1970,8 @@ describe("project tree routes", () => {
               finish: "stop",
               parentID: `user-${unique}`,
               time: {
-                created: Date.parse("2026-03-30T12:32:52.323Z"),
-                completed: Date.parse("2026-03-30T12:32:59.600Z"),
+                created: baseTime + 4_000,
+                completed: baseTime + 5_000,
               },
             },
             parts: [
@@ -1851,25 +1986,32 @@ describe("project tree routes", () => {
 
     expect(replayFinalTurnPersist.status).toBe(201);
 
-    const messages = await authedRequest<{
+    const messages = await queryNormalizedConversation<{
       data: Array<Record<string, unknown>>;
       meta: { messageCount: number; readSource?: string };
-    }>(`/api/tasks/${task.id}/sessions/${sessionRecordId}/messages?includeLineage=false`);
+    }>(task.id, { sessionId: sessionRecordId, includeLineage: false });
 
     expect(messages.status).toBe(200);
-    expect(messages.data.data).toHaveLength(1);
-    const parts = Array.isArray(messages.data.data[0]?.parts)
+    expect(messages.data.meta).toEqual(
+      expect.objectContaining({
+        readSource: "task-session-first",
+        messageCount: 2,
+      }),
+    );
+    expect(messages.data.data).toHaveLength(2);
+
+    const toolCallParts = Array.isArray(messages.data.data[0]?.parts)
       ? (messages.data.data[0].parts as Array<Record<string, unknown>>)
       : [];
 
-    expect(parts.map((part) => part.partType)).toEqual([
-      "step-start",
+    expect(toolCallParts.map((part) => part.partType)).toEqual([
+      "text",
       "tool_call",
       "tool_result",
       "text",
-      "step-finish",
+      "text",
     ]);
-    expect(parts[1]).toEqual(
+    expect(toolCallParts[1]).toEqual(
       expect.objectContaining({
         partType: "tool_call",
         jsonPayload: expect.objectContaining({
@@ -1878,7 +2020,7 @@ describe("project tree routes", () => {
         }),
       }),
     );
-    expect(parts[2]).toEqual(
+    expect(toolCallParts[2]).toEqual(
       expect.objectContaining({
         partType: "tool_result",
         jsonPayload: expect.objectContaining({
@@ -1887,9 +2029,18 @@ describe("project tree routes", () => {
         }),
       }),
     );
+    expect(messages.data.data[1]).toMatchObject({
+      role: "assistant",
+      textContent: replyText,
+      rawPayload: expect.objectContaining({
+        info: expect.objectContaining({
+          finish: "stop",
+        }),
+      }),
+    });
   });
 
-  test("persists task session messages in session storage and replays latest state", async () => {
+  test("persists task session messages in session storage and replays latest normalized conversation state", async () => {
     const task = await createTask(`tree-message-cache-${Date.now()}`);
     const runtimeSessionId = `ses_cached_${Date.now()}`;
     const sessionRecordId = taskSessionId(task.id, runtimeSessionId);
@@ -1912,6 +2063,8 @@ describe("project tree routes", () => {
 
     expect(session.status).toBe(201);
 
+    const baseTime = Date.now();
+
     const firstPersist = await authedRequest<{ ok: boolean; seq: number }>(
       `/api/tasks/${task.id}/sessions/messages`,
       {
@@ -1922,7 +2075,7 @@ describe("project tree routes", () => {
             info: {
               id: "msg-1",
               role: "assistant",
-              time: { completed: Date.parse("2026-03-12T10:03:00.000Z") },
+              time: { created: baseTime + 1_000, completed: baseTime + 1_000 },
             },
             parts: [{ type: "text", text: "draft result" }],
           },
@@ -1943,7 +2096,7 @@ describe("project tree routes", () => {
             info: {
               id: "msg-1",
               role: "assistant",
-              time: { completed: Date.parse("2026-03-12T10:03:01.000Z") },
+              time: { created: baseTime + 2_000, completed: baseTime + 2_000 },
             },
             parts: [{ type: "text", text: "final result" }],
           },
@@ -1954,13 +2107,13 @@ describe("project tree routes", () => {
     expect(secondPersist.status).toBe(201);
     expect(secondPersist.data.ok).toBe(true);
 
-    const replayed = await authedRequest<{
+    const replayed = await queryNormalizedConversation<{
       data: Array<{
         runtimeMessageId: string;
         textContent: string | null;
         parts: Array<{ partType: string; textContent: string | null }>;
       }>;
-    }>(`/api/tasks/${task.id}/sessions/${sessionRecordId}/messages`);
+    }>(task.id, { sessionId: sessionRecordId, includeLineage: false });
 
     expect(replayed.status).toBe(200);
     expect(replayed.data.data).toHaveLength(1);
@@ -2030,14 +2183,14 @@ describe("project tree routes", () => {
     );
 
     expect(userEvent).toBeTruthy();
-    expect(userEvent!.event_type).toBe("message.updated");
-    expect(userEvent!.session_id).toBe(runtimeSessionId);
-    expect(userEvent!.projected).toBe(false);
-    expect((userEvent!.payload as Record<string, unknown>).parts).toBeTruthy();
+    expect(userEvent?.event_type).toBe("message.updated");
+    expect(userEvent?.session_id).toBe(runtimeSessionId);
+    expect(userEvent?.projected).toBe(false);
+    expect((userEvent?.payload as Record<string, unknown>).parts).toBeTruthy();
 
     expect(assistantEvent).toBeTruthy();
-    expect(assistantEvent!.event_type).toBe("message.updated");
-    expect(assistantEvent!.session_id).toBe(runtimeSessionId);
+    expect(assistantEvent?.event_type).toBe("message.updated");
+    expect(assistantEvent?.session_id).toBe(runtimeSessionId);
   });
 
   test("builds lineage timeline items from persisted session state", async () => {
@@ -2067,6 +2220,51 @@ describe("project tree routes", () => {
 
     expect(rootSession.status).toBe(201);
 
+    const lineageBaseTime = Date.now();
+
+    const persistRootUser = await authedRequest<{ ok: boolean; seq: number }>(
+      `/api/tasks/${task.id}/sessions/messages`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          runtimeSessionId: rootRuntimeSessionId,
+          message: {
+            info: {
+              id: "root-user",
+              role: "user",
+              time: { created: lineageBaseTime, completed: lineageBaseTime },
+            },
+            parts: [{ type: "text", text: "历史提问" }],
+          },
+        }),
+      },
+    );
+    expect(persistRootUser.status).toBe(201);
+
+    const persistRootAssistant = await authedRequest<{ ok: boolean; seq: number }>(
+      `/api/tasks/${task.id}/sessions/messages`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          runtimeSessionId: rootRuntimeSessionId,
+          message: {
+            info: {
+              id: "root-assistant",
+              role: "assistant",
+              time: {
+                created: lineageBaseTime + 1_000,
+                completed: lineageBaseTime + 1_000,
+              },
+            },
+            parts: [{ type: "text", text: "历史回答" }],
+          },
+        }),
+      },
+    );
+    expect(persistRootAssistant.status).toBe(201);
+
+    const lineageMessageBaseTime = Date.now();
+
     const forkSession = await authedRequest<{ id: string; runtimeSessionId: string }>(
       `/api/tasks/${task.id}/sessions`,
       {
@@ -2084,36 +2282,6 @@ describe("project tree routes", () => {
 
     expect(forkSession.status).toBe(201);
 
-    const persistRootUser = await authedRequest<{ ok: boolean; seq: number }>(
-      `/api/tasks/${task.id}/sessions/messages`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          runtimeSessionId: rootRuntimeSessionId,
-          message: {
-            info: { id: "root-user", role: "user" },
-            parts: [{ type: "text", text: "历史提问" }],
-          },
-        }),
-      },
-    );
-    expect(persistRootUser.status).toBe(201);
-
-    const persistRootAssistant = await authedRequest<{ ok: boolean; seq: number }>(
-      `/api/tasks/${task.id}/sessions/messages`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          runtimeSessionId: rootRuntimeSessionId,
-          message: {
-            info: { id: "root-assistant", role: "assistant" },
-            parts: [{ type: "text", text: "历史回答" }],
-          },
-        }),
-      },
-    );
-    expect(persistRootAssistant.status).toBe(201);
-
     const persistRootAfterFork = await authedRequest<{ ok: boolean; seq: number }>(
       `/api/tasks/${task.id}/sessions/messages`,
       {
@@ -2121,7 +2289,14 @@ describe("project tree routes", () => {
         body: JSON.stringify({
           runtimeSessionId: rootRuntimeSessionId,
           message: {
-            info: { id: "root-after-fork", role: "assistant" },
+            info: {
+              id: "root-after-fork",
+              role: "assistant",
+              time: {
+                created: lineageMessageBaseTime + 2_000,
+                completed: lineageMessageBaseTime + 2_000,
+              },
+            },
             parts: [{ type: "text", text: "不应再进入分叉上下文" }],
           },
         }),
@@ -2136,7 +2311,14 @@ describe("project tree routes", () => {
         body: JSON.stringify({
           runtimeSessionId: forkRuntimeSessionId,
           message: {
-            info: { id: "leaf-user", role: "user" },
+            info: {
+              id: "leaf-user",
+              role: "user",
+              time: {
+                created: lineageMessageBaseTime + 3_000,
+                completed: lineageMessageBaseTime + 3_000,
+              },
+            },
             parts: [{ type: "text", text: "当前提问" }],
           },
         }),
@@ -2151,7 +2333,14 @@ describe("project tree routes", () => {
         body: JSON.stringify({
           runtimeSessionId: forkRuntimeSessionId,
           message: {
-            info: { id: "leaf-assistant", role: "assistant" },
+            info: {
+              id: "leaf-assistant",
+              role: "assistant",
+              time: {
+                created: lineageMessageBaseTime + 4_000,
+                completed: lineageMessageBaseTime + 4_000,
+              },
+            },
             parts: [{ type: "text", text: "当前回答" }],
           },
         }),
@@ -2211,6 +2400,51 @@ describe("project tree routes", () => {
       }),
     });
 
+    const lineageBaseTime = Date.now();
+
+    const persistRootUser = await authedRequest<{ ok: boolean }>(
+      `/api/tasks/${task.id}/sessions/messages`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          runtimeSessionId: rootRuntimeSessionId,
+          message: {
+            info: {
+              id: "root-user",
+              role: "user",
+              time: { created: lineageBaseTime, completed: lineageBaseTime },
+            },
+            parts: [{ type: "text", text: "历史提问" }],
+          },
+        }),
+      },
+    );
+    expect(persistRootUser.status).toBe(201);
+
+    const persistRootAssistant = await authedRequest<{ ok: boolean }>(
+      `/api/tasks/${task.id}/sessions/messages`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          runtimeSessionId: rootRuntimeSessionId,
+          message: {
+            info: {
+              id: "root-assistant",
+              role: "assistant",
+              time: {
+                created: lineageBaseTime + 1_000,
+                completed: lineageBaseTime + 1_000,
+              },
+            },
+            parts: [{ type: "text", text: "历史回答" }],
+          },
+        }),
+      },
+    );
+    expect(persistRootAssistant.status).toBe(201);
+
+    const traceMessageBaseTime = Date.now();
+
     await authedRequest(`/api/tasks/${task.id}/sessions`, {
       method: "POST",
       body: JSON.stringify({
@@ -2226,30 +2460,43 @@ describe("project tree routes", () => {
     for (const [runtimeSessionId, message] of [
       [
         rootRuntimeSessionId,
-        { info: { id: "root-user", role: "user" }, parts: [{ type: "text", text: "历史提问" }] },
-      ],
-      [
-        rootRuntimeSessionId,
         {
-          info: { id: "root-assistant", role: "assistant" },
-          parts: [{ type: "text", text: "历史回答" }],
-        },
-      ],
-      [
-        rootRuntimeSessionId,
-        {
-          info: { id: "root-after-fork", role: "assistant" },
+          info: {
+            id: "root-after-fork",
+            role: "assistant",
+            time: {
+              created: traceMessageBaseTime + 2_000,
+              completed: traceMessageBaseTime + 2_000,
+            },
+          },
           parts: [{ type: "text", text: "不应再进入分叉上下文" }],
         },
       ],
       [
         forkRuntimeSessionId,
-        { info: { id: "leaf-user", role: "user" }, parts: [{ type: "text", text: "当前提问" }] },
+        {
+          info: {
+            id: "leaf-user",
+            role: "user",
+            time: {
+              created: traceMessageBaseTime + 3_000,
+              completed: traceMessageBaseTime + 3_000,
+            },
+          },
+          parts: [{ type: "text", text: "当前提问" }],
+        },
       ],
       [
         forkRuntimeSessionId,
         {
-          info: { id: "leaf-assistant", role: "assistant" },
+          info: {
+            id: "leaf-assistant",
+            role: "assistant",
+            time: {
+              created: traceMessageBaseTime + 4_000,
+              completed: traceMessageBaseTime + 4_000,
+            },
+          },
           parts: [{ type: "text", text: "当前回答" }],
         },
       ],
@@ -2276,7 +2523,9 @@ describe("project tree routes", () => {
         lineagePath: string[];
         timelineItemCount: number;
       };
-    }>(`/api/tasks/${task.id}/execution-trace?sessionId=${forkSessionRecordId}&includeLineage=true`);
+    }>(
+      `/api/tasks/${task.id}/execution-trace?sessionId=${forkSessionRecordId}&includeLineage=true`,
+    );
 
     expect(replayed.status).toBe(200);
     expect(replayed.data.meta).toEqual(
@@ -2304,6 +2553,17 @@ describe("project tree routes", () => {
     const rootRuntimeSessionId = `ses_domain_run_${Date.now()}`;
     const sessionRecordId = taskSessionId(task.id, rootRuntimeSessionId);
 
+    const createdSession = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/sessions`, {
+      method: "POST",
+      body: JSON.stringify({
+        runtimeSessionId: rootRuntimeSessionId,
+        branchName: "domain-run-root",
+        sourceType: "root",
+        isActive: true,
+      }),
+    });
+    expect(createdSession.status).toBe(201);
+
     const patchedTask = await authedRequest(`/api/tasks/${task.id}`, {
       method: "PATCH",
       body: JSON.stringify({
@@ -2314,15 +2574,19 @@ describe("project tree routes", () => {
     });
     expect(patchedTask.status).toBe(200);
 
+    const baseTime = Date.now();
+
     const candidateA = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/runs`, {
       method: "POST",
       body: JSON.stringify({
-        sessionId: rootRuntimeSessionId,
+        sessionId: sessionRecordId,
         agentType: "executor",
         candidateIndex: 0,
         status: "completed",
         modelUsed: "model-a",
         result: "answer-a",
+        startedAt: new Date(baseTime + 1_000).toISOString(),
+        finishedAt: new Date(baseTime + 2_000).toISOString(),
       }),
     });
     expect(candidateA.status).toBe(201);
@@ -2330,12 +2594,14 @@ describe("project tree routes", () => {
     const candidateB = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/runs`, {
       method: "POST",
       body: JSON.stringify({
-        sessionId: rootRuntimeSessionId,
+        sessionId: sessionRecordId,
         agentType: "executor",
         candidateIndex: 1,
         status: "completed",
         modelUsed: "model-b",
         result: "answer-b",
+        startedAt: new Date(baseTime + 3_000).toISOString(),
+        finishedAt: new Date(baseTime + 4_000).toISOString(),
       }),
     });
     expect(candidateB.status).toBe(201);
@@ -2343,11 +2609,13 @@ describe("project tree routes", () => {
     const judge = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/runs`, {
       method: "POST",
       body: JSON.stringify({
-        sessionId: rootRuntimeSessionId,
+        sessionId: sessionRecordId,
         agentType: "judge",
         status: "completed",
         modelUsed: "judge-model",
         result: "candidate 2 is stronger",
+        startedAt: new Date(baseTime + 5_000).toISOString(),
+        finishedAt: new Date(baseTime + 6_000).toISOString(),
       }),
     });
     expect(judge.status).toBe(201);
@@ -2383,29 +2651,37 @@ describe("project tree routes", () => {
     expect(detail.data.data.selectedSessionId).toBe(sessionRecordId);
     expect(detail.data.data.snapshot).toEqual(
       expect.objectContaining({
-        currentStatus: "completed",
-        currentSessionId: rootRuntimeSessionId,
-        latestResult: "candidate 2 is stronger",
+        currentExecutionMode: "parallel",
+        currentSessionId: sessionRecordId,
+        latestSessionId: sessionRecordId,
+        latestResultSummary: "candidate 2 is stronger",
+        lifecycleStatus: "done",
       }),
     );
     expect(detail.data.data.operations).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           operationKind: "executor",
-          modelId: "model-a",
-          outputText: "answer-a",
+          modelId: null,
+          outputText: null,
+          executionStatus: "complete",
+          executorLabel: "executor",
           metadataJson: expect.objectContaining({ candidateIndex: 0 }),
         }),
         expect.objectContaining({
           operationKind: "executor",
-          modelId: "model-b",
-          outputText: "answer-b",
+          modelId: null,
+          outputText: null,
+          executionStatus: "complete",
+          executorLabel: "executor",
           metadataJson: expect.objectContaining({ candidateIndex: 1 }),
         }),
         expect.objectContaining({
           operationKind: "judge",
-          modelId: "judge-model",
-          outputText: "candidate 2 is stronger",
+          modelId: null,
+          outputText: null,
+          executionStatus: "complete",
+          executorLabel: "judge",
         }),
       ]),
     );
@@ -2437,7 +2713,6 @@ describe("project tree routes", () => {
       body: JSON.stringify({
         runtimeSessionId: forkRuntimeSessionId,
         parentRuntimeSessionId: rootRuntimeSessionId,
-        forkedFromMessageId: "root-user",
         branchName: "branch-fork",
         sourceType: "fork",
         isActive: true,
@@ -2462,6 +2737,8 @@ describe("project tree routes", () => {
       }),
     );
 
+    const timelineBaseTime = Date.now();
+
     const persistLeafOnly = await authedRequest<{ ok: boolean; seq: number }>(
       `/api/tasks/${task.id}/sessions/messages`,
       {
@@ -2469,7 +2746,14 @@ describe("project tree routes", () => {
         body: JSON.stringify({
           runtimeSessionId: forkRuntimeSessionId,
           message: {
-            info: { id: "leaf-only", role: "assistant" },
+            info: {
+              id: "leaf-only",
+              role: "assistant",
+              time: {
+                created: timelineBaseTime + 1_000,
+                completed: timelineBaseTime + 1_000,
+              },
+            },
             parts: [{ type: "text", text: "只有分支缓存" }],
           },
         }),
@@ -2501,7 +2785,14 @@ describe("project tree routes", () => {
         body: JSON.stringify({
           runtimeSessionId: rootRuntimeSessionId,
           message: {
-            info: { id: "root-user", role: "user" },
+            info: {
+              id: "root-user",
+              role: "user",
+              time: {
+                created: timelineBaseTime + 2_000,
+                completed: timelineBaseTime + 2_000,
+              },
+            },
             parts: [{ type: "text", text: "根节点缓存" }],
           },
         }),
@@ -2549,6 +2840,8 @@ describe("project tree routes", () => {
     );
     expect(session.status).toBe(201);
 
+    const rewriteBaseTime = Date.now();
+
     const createdPersist = await authedRequest<{ ok: boolean; seq: number }>(
       `/api/tasks/${task.id}/sessions/messages`,
       {
@@ -2556,7 +2849,14 @@ describe("project tree routes", () => {
         body: JSON.stringify({
           runtimeSessionId,
           message: {
-            info: { id: "msg-evt-1", role: "assistant" },
+            info: {
+              id: "msg-evt-1",
+              role: "assistant",
+              time: {
+                created: rewriteBaseTime + 1_000,
+                completed: rewriteBaseTime + 1_000,
+              },
+            },
             parts: [{ type: "text", text: "进行中结果" }],
           },
         }),
@@ -2574,7 +2874,10 @@ describe("project tree routes", () => {
             info: {
               id: "msg-evt-1",
               role: "assistant",
-              time: { completed: Date.parse("2026-03-12T10:03:02.000Z") },
+              time: {
+                created: rewriteBaseTime + 2_000,
+                completed: rewriteBaseTime + 2_000,
+              },
             },
             parts: [{ type: "text", text: "最终结果" }],
           },
@@ -2629,6 +2932,52 @@ describe("project tree routes", () => {
     });
     expect(rootSession.status).toBe(201);
 
+    const timelineBaseTime = Date.now();
+
+    const persistRootUser = await authedRequest<{ ok: boolean; seq: number }>(
+      `/api/tasks/${task.id}/sessions/messages`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          runtimeSessionId: rootRuntimeSessionId,
+          message: {
+            info: {
+              id: "root-user",
+              role: "user",
+              time: {
+                created: timelineBaseTime,
+                completed: timelineBaseTime,
+              },
+            },
+            parts: [{ type: "text", text: "历史提问" }],
+          },
+        }),
+      },
+    );
+    expect(persistRootUser.status).toBe(201);
+
+    const persistRootAssistant = await authedRequest<{ ok: boolean; seq: number }>(
+      `/api/tasks/${task.id}/sessions/messages`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          runtimeSessionId: rootRuntimeSessionId,
+          message: {
+            info: {
+              id: "root-assistant",
+              role: "assistant",
+              time: {
+                created: timelineBaseTime + 3_000,
+                completed: timelineBaseTime + 4_000,
+              },
+            },
+            parts: [{ type: "text", text: "历史回答" }],
+          },
+        }),
+      },
+    );
+    expect(persistRootAssistant.status).toBe(201);
+
     const forkSession = await authedRequest<{ id: string }>(`/api/tasks/${task.id}/sessions`, {
       method: "POST",
       body: JSON.stringify({
@@ -2647,34 +2996,12 @@ describe("project tree routes", () => {
         rootRuntimeSessionId,
         {
           info: {
-            id: "root-user",
-            role: "user",
-            time: { created: Date.parse("2026-03-20T09:00:00.000Z") },
-          },
-          parts: [{ type: "text", text: "历史提问" }],
-        },
-      ],
-      [
-        rootRuntimeSessionId,
-        {
-          info: {
-            id: "root-assistant",
-            role: "assistant",
-            time: {
-              created: Date.parse("2026-03-20T09:00:03.000Z"),
-              completed: Date.parse("2026-03-20T09:00:04.000Z"),
-            },
-          },
-          parts: [{ type: "text", text: "历史回答" }],
-        },
-      ],
-      [
-        rootRuntimeSessionId,
-        {
-          info: {
             id: "root-after-fork",
             role: "assistant",
-            time: { created: Date.parse("2026-03-20T09:00:05.000Z") },
+            time: {
+              created: timelineBaseTime + 5_000,
+              completed: timelineBaseTime + 5_000,
+            },
           },
           parts: [{ type: "text", text: "不应出现在 timeline lineage 中" }],
         },
@@ -2685,7 +3012,10 @@ describe("project tree routes", () => {
           info: {
             id: "leaf-user",
             role: "user",
-            time: { created: Date.parse("2026-03-20T09:01:00.000Z") },
+            time: {
+              created: timelineBaseTime + 60_000,
+              completed: timelineBaseTime + 60_000,
+            },
           },
           parts: [{ type: "text", text: "当前提问" }],
         },
@@ -2696,7 +3026,10 @@ describe("project tree routes", () => {
           info: {
             id: "leaf-assistant",
             role: "assistant",
-            time: { created: Date.parse("2026-03-20T09:01:05.000Z") },
+            time: {
+              created: timelineBaseTime + 65_000,
+              completed: timelineBaseTime + 65_000,
+            },
           },
           parts: [{ type: "text", text: "当前回答" }],
         },

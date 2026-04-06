@@ -1,5 +1,12 @@
-import { getSessionMessages, listSessions } from "../agent-control/opencode-adapter";
 import { cpFetch } from "../../lib/control-plane-client";
+let runtimeProviderModulePromise:
+  | Promise<typeof import("../agent-control/runtime-provider")>
+  | undefined;
+
+async function loadRuntimeProviderModule() {
+  runtimeProviderModulePromise ??= import("../agent-control/runtime-provider");
+  return runtimeProviderModulePromise;
+}
 
 // Shared BFF helpers for task-session lineage, timeline, and cached message reads.
 // These helpers bridge the session-first control-plane routes while keeping
@@ -520,10 +527,7 @@ function compareRuntimeWorkflowSessionCandidates(
     return rightSummary.lastActivityAt - leftSummary.lastActivityAt;
   }
 
-  return (left.session.sessionId || "").localeCompare(
-    right.session.sessionId || "",
-    "zh-CN",
-  );
+  return (left.session.sessionId || "").localeCompare(right.session.sessionId || "", "zh-CN");
 }
 
 function compactRuntimeWorkflowSessionMessages(messages: Record<string, unknown>[]) {
@@ -552,16 +556,14 @@ function compactRuntimeWorkflowSessionMessages(messages: Record<string, unknown>
   return Array.from(new Set(selectedMessages));
 }
 
-async function fetchRuntimeWorkflowGroupSteps(
-  taskId: string,
-  authorization: string,
-) {
+async function fetchRuntimeWorkflowGroupSteps(taskId: string, authorization: string) {
   const taskResult = await cpFetch<{ title?: string }>(
     `/api/project-tree/tasks/${encodeURIComponent(taskId)}`,
     { authorization },
   );
   const taskTitle = asString(taskResult.data?.title);
 
+  const { listSessions } = await loadRuntimeProviderModule();
   const runtimeResult = await listSessions(100);
   const runtimeSessions = Array.isArray(runtimeResult.data)
     ? runtimeResult.data
@@ -575,6 +577,7 @@ async function fetchRuntimeWorkflowGroupSteps(
 
   const resolvedCandidates = await Promise.all(
     runtimeSessions.map(async (session) => {
+      const { getSessionMessages } = await loadRuntimeProviderModule();
       const result = await getSessionMessages(session.sessionId, {
         includeLineage: false,
         bypassCircuitBreaker: true,
@@ -672,39 +675,39 @@ async function synthesizeWorkflowGroupMessages(
   const workflowSteps: WorkflowGroupStepRecord[] = Array.from(
     workflowMessagesBySession.entries(),
   ).flatMap(([sourceSessionId, sessionMessages]) => {
-      for (const message of sessionMessages) {
-        workflowMessageSet.add(message);
-      }
+    for (const message of sessionMessages) {
+      workflowMessageSet.add(message);
+    }
 
-      const legacyMessages: Record<string, unknown>[] = sessionMessages.flatMap((message) => {
-        const legacyMessage = buildWorkflowContextLegacyMessage(message);
-        return legacyMessage ? [legacyMessage as Record<string, unknown>] : [];
-      });
-      if (legacyMessages.length === 0) {
-        return [];
-      }
-
-      const firstSessionMessage = sessionMessages[0];
-      if (!firstSessionMessage) {
-        return [];
-      }
-
-      const stageLabel = extractWorkflowContextStageLabel(
-        extractServiceTaskSessionMessageText(firstSessionMessage),
-      );
-
-      return [
-        {
-          agentName: stageLabel ?? "当前工作流",
-          sessionId: sourceSessionId,
-          messages: legacyMessages,
-          createdAt:
-            sessionMessages
-              .map((message) => asString(message.createdAt))
-              .find((value): value is string => Boolean(value)) ?? null,
-        } satisfies WorkflowGroupStepRecord,
-      ];
+    const legacyMessages: Record<string, unknown>[] = sessionMessages.flatMap((message) => {
+      const legacyMessage = buildWorkflowContextLegacyMessage(message);
+      return legacyMessage ? [legacyMessage as Record<string, unknown>] : [];
     });
+    if (legacyMessages.length === 0) {
+      return [];
+    }
+
+    const firstSessionMessage = sessionMessages[0];
+    if (!firstSessionMessage) {
+      return [];
+    }
+
+    const stageLabel = extractWorkflowContextStageLabel(
+      extractServiceTaskSessionMessageText(firstSessionMessage),
+    );
+
+    return [
+      {
+        agentName: stageLabel ?? "当前工作流",
+        sessionId: sourceSessionId,
+        messages: legacyMessages,
+        createdAt:
+          sessionMessages
+            .map((message) => asString(message.createdAt))
+            .find((value): value is string => Boolean(value)) ?? null,
+      } satisfies WorkflowGroupStepRecord,
+    ];
+  });
 
   const runtimeWorkflowSteps = await fetchRuntimeWorkflowGroupSteps(taskId, authorization);
   if (runtimeWorkflowSteps.length > 0) {
@@ -1000,7 +1003,8 @@ function resolveAdoptedParallelMessageSuppressionGroups(
       const runtimeSessionId = asString(record.runtimeSessionId);
       const isWinner =
         (recordId != null && isSessionIdInSuppressionSet(recordId, winnerSessionIds)) ||
-        (runtimeSessionId != null && isSessionIdInSuppressionSet(runtimeSessionId, winnerSessionIds));
+        (runtimeSessionId != null &&
+          isSessionIdInSuppressionSet(runtimeSessionId, winnerSessionIds));
       if (isWinner) {
         continue;
       }
@@ -1227,7 +1231,11 @@ function deriveTaskSessionMessageCacheState(
   meta: TaskSessionTimelineMeta | undefined,
   messageCount: number,
 ): NonNullable<TaskSessionTimelineMeta["cacheState"]> {
-  if (meta?.cacheState === "complete" || meta?.cacheState === "partial" || meta?.cacheState === "none") {
+  if (
+    meta?.cacheState === "complete" ||
+    meta?.cacheState === "partial" ||
+    meta?.cacheState === "none"
+  ) {
     return meta.cacheState;
   }
 
@@ -1371,31 +1379,34 @@ function mapServiceTaskSessionsToLineageRecords(
 ) {
   const byId = new Map(sessions.map((session) => [session.id, session] as const));
 
-  return sessions.map((session) => ({
-    id: session.id,
-    taskId: session.taskId,
-    runtimeSessionId: session.runtimeSessionId ?? session.id,
-    parentRuntimeSessionId: session.parentSessionId
-      ? (byId.get(session.parentSessionId)?.runtimeSessionId ?? session.parentSessionId)
-      : (session.parentRuntimeSessionId ?? null),
-    forkedFromMessageId: session.forkedFromMessageId ?? null,
-    branchName: session.branchName ?? null,
-    sourceType: mapSessionKindToSourceType(session),
-    isActive: currentSessionId
-      ? session.id === currentSessionId
-      : session.executionStatus === "running" && !session.archivedAt,
-    coordinationKey: session.coordinationKey ?? null,
-    winnerSessionId: session.winnerSessionId ?? null,
-    executionStatus: session.executionStatus ?? null,
-    sessionKind: session.sessionKind ?? null,
-    candidateIndex: typeof session.candidateIndex === "number" ? session.candidateIndex : null,
-    stepIndex: typeof session.stepIndex === "number" ? session.stepIndex : null,
-    selectedModel: session.selectedModel ?? null,
-    executionModeSnapshot: session.executionModeSnapshot ?? null,
-    createdAt: session.createdAt ?? null,
-    updatedAt: session.updatedAt ?? null,
-    archivedAt: session.archivedAt ?? null,
-  } satisfies TaskSessionLineageRecord));
+  return sessions.map(
+    (session) =>
+      ({
+        id: session.id,
+        taskId: session.taskId,
+        runtimeSessionId: session.runtimeSessionId ?? session.id,
+        parentRuntimeSessionId: session.parentSessionId
+          ? (byId.get(session.parentSessionId)?.runtimeSessionId ?? session.parentSessionId)
+          : (session.parentRuntimeSessionId ?? null),
+        forkedFromMessageId: session.forkedFromMessageId ?? null,
+        branchName: session.branchName ?? null,
+        sourceType: mapSessionKindToSourceType(session),
+        isActive: currentSessionId
+          ? session.id === currentSessionId
+          : session.executionStatus === "running" && !session.archivedAt,
+        coordinationKey: session.coordinationKey ?? null,
+        winnerSessionId: session.winnerSessionId ?? null,
+        executionStatus: session.executionStatus ?? null,
+        sessionKind: session.sessionKind ?? null,
+        candidateIndex: typeof session.candidateIndex === "number" ? session.candidateIndex : null,
+        stepIndex: typeof session.stepIndex === "number" ? session.stepIndex : null,
+        selectedModel: session.selectedModel ?? null,
+        executionModeSnapshot: session.executionModeSnapshot ?? null,
+        createdAt: session.createdAt ?? null,
+        updatedAt: session.updatedAt ?? null,
+        archivedAt: session.archivedAt ?? null,
+      }) satisfies TaskSessionLineageRecord,
+  );
 }
 
 function mapTimelineRole(item: ServiceTaskTimelineItem) {
@@ -1418,29 +1429,32 @@ function mapTimelineRole(item: ServiceTaskTimelineItem) {
 }
 
 function mapServiceTimelineItems(items: ServiceTaskTimelineItem[]) {
-  return items.map((item) => ({
-    id: item.messageId || item.operationId || item.artifactId || item.id,
-    role: mapTimelineRole(item),
-    text: item.displayText || item.title || item.text || "",
-    createdAt: item.createdAt,
-    completedAt: item.sortAt ?? null,
-    raw: {
-      ...(item.raw ?? {}),
-      projection: true,
-      sessionId: item.sessionId ?? null,
-      messageId: item.messageId ?? null,
-      operationId: item.operationId ?? null,
-      artifactId: item.artifactId ?? null,
-      itemKind: item.itemKind,
-      itemRole: item.itemRole ?? null,
-      legacyRole: item.role ?? null,
-      title: item.title ?? null,
-      displayText: item.displayText ?? null,
-      legacyText: item.text ?? null,
-      metadata: item.metadataJson ?? null,
-    },
-    sourceEventTypes: [`projection:${item.itemKind ?? item.role ?? "unknown"}`],
-  } satisfies TaskSessionTimelineItem));
+  return items.map(
+    (item) =>
+      ({
+        id: item.messageId || item.operationId || item.artifactId || item.id,
+        role: mapTimelineRole(item),
+        text: item.displayText || item.title || item.text || "",
+        createdAt: item.createdAt,
+        completedAt: item.sortAt ?? null,
+        raw: {
+          ...(item.raw ?? {}),
+          projection: true,
+          sessionId: item.sessionId ?? null,
+          messageId: item.messageId ?? null,
+          operationId: item.operationId ?? null,
+          artifactId: item.artifactId ?? null,
+          itemKind: item.itemKind,
+          itemRole: item.itemRole ?? null,
+          legacyRole: item.role ?? null,
+          title: item.title ?? null,
+          displayText: item.displayText ?? null,
+          legacyText: item.text ?? null,
+          metadata: item.metadataJson ?? null,
+        },
+        sourceEventTypes: [`projection:${item.itemKind ?? item.role ?? "unknown"}`],
+      }) satisfies TaskSessionTimelineItem,
+  );
 }
 
 async function resolvePersistedTaskSessionId(
@@ -1626,8 +1640,7 @@ export async function fetchTaskSessionCachedMessages(
         messageSets.length > 0 &&
         messageSets.every(
           (result) =>
-            result.ok &&
-            isTaskSessionMessageCacheComplete(result.meta, result.data.length),
+            result.ok && isTaskSessionMessageCacheComplete(result.meta, result.data.length),
         );
 
       return {

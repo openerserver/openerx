@@ -19,6 +19,8 @@
 
 本文档用于开始执行前的实现对齐，不是最终代码说明。
 
+> 状态更新（2026-04-05）：当前实现中的 `/api/dashboard/provider-tokens` 已经不再读取 `agent_runs`，而是聚合 `runtime_usage_ledgers` 的 provider/model/token 数据。本文后续凡提到 `agent_runs` 作为统计真值源的地方，都应按“已过时方案”理解。
+
 ## 2. 当前现状
 
 当前首页实现位于 [control-plane/web-ui/src/pages/Dashboard.vue](control-plane/web-ui/src/pages/Dashboard.vue)，主要由四块内容组成：
@@ -39,15 +41,15 @@
 
 - recent 队列显示 token 数
 - drawer 运行摘要显示 token 使用量
-- 数据来源已落到 `agent_runs.token_used`
+- Dashboard provider 聚合已落到 `runtime_usage_ledgers.total_tokens`
 
 相关现状代码：
 
 - [control-plane/web-ui/src/pages/Dashboard.vue](control-plane/web-ui/src/pages/Dashboard.vue)
 - [control-plane/web-ui/src/pages/AgentConsolePage.vue](control-plane/web-ui/src/pages/AgentConsolePage.vue)
 - [control-plane/web-ui-bff/src/modules/agent-control/routes.ts](control-plane/web-ui-bff/src/modules/agent-control/routes.ts)
-- [control-plane/service/src/modules/agent-runs/routes.ts](control-plane/service/src/modules/agent-runs/routes.ts)
-- [control-plane/service/src/db/schema.ts](control-plane/service/src/db/schema.ts)
+- [control-plane/service/src/modules/dashboard/routes.ts](control-plane/service/src/modules/dashboard/routes.ts)
+- [control-plane/service/src/db/schema.pg.ts](control-plane/service/src/db/schema.pg.ts)
 
 ## 3. 改造目标
 
@@ -94,11 +96,11 @@
 
 当前仓库内已经具备两类与 token 相关的数据基础：
 
-1. `agent_runs`
+1. `runtime_usage_ledgers`
 
-- 字段：`model_used`、`token_used`、`status`、`task_id`、`session_id`、`started_at`、`finished_at`
-- 优点：已经在 Agent 运行链路里验证可用，且 `token_used` 已能回填历史数据
-- 适合：首页第一阶段 provider token 统计
+- 字段：`default_provider_id`、`default_model_id`、`total_tokens`、`status`、`task_id`、`started_at`、`finished_at`、`created_at`
+- 优点：当前 `/api/dashboard/provider-tokens` 已直接使用这张表，provider 维度不需要再从旧表字段反推
+- 适合：首页当前 provider token 统计
 
 2. `cost_records`
 
@@ -110,7 +112,7 @@
 
 首页第一阶段不应直接把 `cost_records` 作为唯一真值源，原因如下：
 
-- 当前已验证稳定的是 `agent_runs.token_used`
+- 当前已验证稳定的是 `runtime_usage_ledgers.total_tokens`
 - `cost_records` 虽有更细粒度字段，但现阶段覆盖度与实时性未完成针对首页的验证
 - 如果首页直接混用两套口径，容易出现 provider 汇总与 Agent 页不一致
 
@@ -118,7 +120,7 @@
 
 首页 provider token 统计采用分层口径：
 
-- Phase 1：以 `agent_runs` 为准，统计 Agent 执行产生的 provider token 使用情况
+- Phase 1：以 `runtime_usage_ledgers` 为准，统计 Agent 执行产生的 provider token 使用情况
 - Phase 2：在确认 `cost_records` 链路完整后，升级为 provider 级总 token / input / output / cost 统一视图
 
 ## 5. 首页信息架构调整建议
@@ -232,7 +234,7 @@
 
 ### 6.2 Provider 识别规则
 
-第一阶段从 `agent_runs.model_used` 解析 provider。
+第一阶段从 `runtime_usage_ledgers.default_provider_id / default_model_id` 解析 provider。
 
 解析规则建议：
 
@@ -328,15 +330,15 @@ interface DashboardProviderTokenResponse {
 
 数据源：
 
-- 第一阶段只读 `agent_runs`
+- 第一阶段只读 `runtime_usage_ledgers`
 - 关联 `tasks` 获取 `projectId`
 - 如需人工介入次数，可复用现有 Agent summary 中已存在的 guidance / intervention 聚合逻辑
 - 月度统计按 `finished_at` 或 `started_at` 归入自然月桶，优先使用 `finished_at`
 
 聚合步骤：
 
-1. 过滤当前项目、时间窗口内的 agent runs
-2. 解析 `model_used` 得到 `providerId`
+1. 过滤当前项目、时间窗口内的 runtime usage ledger 行
+2. 读取 `default_provider_id / default_model_id` 得到 `providerId`
 3. 聚合 token、完成数、失败数、停止数、介入数
 4. 构造趋势分桶
 5. 如果窗口为 `monthly`，额外构造最近 6 个月自然月分桶
@@ -445,7 +447,7 @@ const selectedProviderId = ref<string | null>(null);
 - BFF 新增透传接口
 - Dashboard 首页增加卡片区 + 排行区
 - Dashboard 首页增加月度统计切换与最近 6 个月月度分桶展示
-- 使用 `agent_runs.token_used` + `model_used`
+- 使用 `runtime_usage_ledgers.total_tokens` + `default_provider_id/default_model_id`
 
 不包含：
 
@@ -476,7 +478,7 @@ const selectedProviderId = ref<string | null>(null);
 
 ### 10.1 数据正确性
 
-- 首页 provider token 总量应与同时间窗口内 agent runs 聚合结果一致
+- 首页 provider token 总量应与同时间窗口内 `runtime_usage_ledgers` 聚合结果一致
 - provider 排行总和应等于 summary totalTokens
 - provider 占比求和应接近 100%
 - 单 provider token 值应能通过抽样 run 在 Agent 页追溯验证
@@ -523,7 +525,7 @@ const selectedProviderId = ref<string | null>(null);
 因此建议：
 
 - 首页第一阶段只统计 Agent 执行产生的 provider token
-- 以 `agent_runs.token_used + model_used` 作为真值源
+- 以 `runtime_usage_ledgers.total_tokens + default_provider_id/default_model_id` 作为真值源
 - 同时补上最近 6 个月的自然月统计，给管理员更稳的调整依据
 - 先做总量、排行、风险识别和月度视图，再做成本与 input/output 拆分
 

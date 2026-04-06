@@ -15,7 +15,7 @@
 
 import { and, asc, eq } from "drizzle-orm";
 import { db } from "../../db";
-import { taskMessageEvents, tasks, taskSessions } from "../../db/schema";
+import { taskMessageEvents, taskSessions, tasks } from "../../db/schema";
 import { createTaskSessionMessageWriteApi } from "./task-session-message-write-api";
 import { createTaskSessionWriteApi } from "./task-session-write-api";
 
@@ -77,9 +77,7 @@ export type ProjectionResult = {
  * Returns a summary of how many events were projected and how many failed.
  * Failed events are NOT marked as projected; they will be retried next time.
  */
-export async function projectPendingEvents(
-  batchSize = 100,
-): Promise<ProjectionResult> {
+export async function projectPendingEvents(batchSize = 100): Promise<ProjectionResult> {
   const deps = buildProjectorDeps();
 
   // Fetch unprojected events in causal order

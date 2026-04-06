@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import type { OrchestrationStrategy } from "../../control-plane/web-ui-bff/src/lib/orchestration-strategy";
-import { createOpencodeAdapterModuleMock } from "./opencode-adapter-mock";
+import {
+  createOpencodeAdapterModuleMock,
+  createRuntimeProviderModuleMock,
+} from "./opencode-adapter-mock";
 
 const runDetachedPromptMock = mock(async () => ({
   ok: true,
@@ -24,10 +27,17 @@ const runDetachedPromptMock = mock(async () => ({
   sessionId: "session-1",
 }));
 
-mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter", () =>
-  createOpencodeAdapterModuleMock({
-    runDetachedPrompt: runDetachedPromptMock,
-  }),
+const opencodeAdapterModule = createOpencodeAdapterModuleMock({
+  runDetachedPrompt: runDetachedPromptMock,
+});
+
+mock.module(
+  "../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter",
+  () => opencodeAdapterModule,
+);
+
+mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/runtime-provider", () =>
+  createRuntimeProviderModuleMock(opencodeAdapterModule),
 );
 
 const { runChatSettingsAssistant } = await import(

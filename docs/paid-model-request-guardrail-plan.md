@@ -25,6 +25,8 @@
 - [docs/raw-audit-trace-plan.md](docs/raw-audit-trace-plan.md)
 - [tests/README.md](../tests/README.md)
 
+> 状态更新（2026-04-05）：本文中大量 `agent_runs` 提法属于删除前设计上下文。当前 schema 已删除 `agent_runs` 物理表；Dashboard provider token 聚合已改为读取 `runtime_usage_ledgers`，`agentRunId` 仅作为兼容标识继续存在。因此，本文凡把 `agent_runs` 写成“当前稳定真值源”或“现行运营主表”的段落，都应按历史口径理解，当前实现应以 `runtime_usage_ledgers`、`runtime_usage_ledger_steps` 与 canonical task-domain 表为准。
+
 ## 2. 背景与事故复盘
 
 本次问题不是单点故障，而是多个因素叠加后产生的请求放大：
@@ -508,7 +510,7 @@ $$
 - 项目治理页看的是另一套数字
 - runtime 底层实际消耗又是第三套数字
 
-当前仓库内至少存在三层数据口径：
+本文成稿时，仓库内至少存在三层数据口径：
 
 1. `agent_runs`
 2. `cost_records`
@@ -516,22 +518,22 @@ $$
 
 它们的职责必须明确区分。
 
-#### A. `agent_runs`：当前控制面聚合口径
+#### A. `agent_runs`：历史方案中的控制面聚合口径
 
-当前首页与 provider token 总览的已验证口径，是以 `agent_runs.token_used` 为基础。
+本文成稿时，首页与 provider token 总览的已验证口径曾以 `agent_runs.token_used` 为基础。
 
 这层的特点是：
 
 - 统计起点是 `agent run`，不是 provider 原始请求
 - 一次 agent run 内可能包含多次底层模型调用
-- 当前 provider 统计本质上是“按 run 聚合的 token 消耗”
-- 适合当前首页、Agent 运营中心、项目运行看板的稳定展示
+- 当时的 provider 统计本质上是“按 run 聚合的 token 消耗”
+- 在当时适合首页、Agent 运营中心、项目运行看板的稳定展示
 
 因此，`agent_runs` 可以回答的问题是：
 
 - 哪个项目 / 哪个 provider / 哪个模型大致更贵
 - 哪类 run 的 token 消耗异常偏高
-- 当前窗口内 run 级别的消耗趋势如何
+- 当时窗口内 run 级别的消耗趋势如何
 
 但它不能精确回答：
 
@@ -549,15 +551,15 @@ $$
 - `output_tokens`
 - `cost`
 
-但当前阶段不应直接把它当成唯一真值源，原因是：
+但在该历史方案阶段，不应直接把它当成唯一真值源，原因是：
 
-- 覆盖面是否完整，当前还未对所有真实执行路径完成验证
-- 与首页现有 `agent_runs` 聚合口径尚未完全收敛
+- 覆盖面是否完整，当时还未对所有真实执行路径完成验证
+- 与当时首页使用的 `agent_runs` 聚合口径尚未完全收敛
 - 如果直接混用，项目治理页和首页可能出现数字不一致
 
 因此本方案建议：
 
-- Phase 1：首页和现有运营视图继续以 `agent_runs` 为稳定口径
+- 历史 Phase 1：首页和当时运营视图继续以 `agent_runs` 兼容聚合作为展示口径
 - Phase 2：在验证链路覆盖后，让 `cost_records` 成为控制面成本事实层
 
 #### C. OpenCode runtime ledger：底层 usage 原始记录
@@ -577,17 +579,17 @@ OpenCode runtime 底层是有 usage / cost 相关记录的，而且粒度比 `ag
 - 单次 step 级别的 cost
 - assistant message 级别的累计 tokens / cost
 
-但目前 OpenerX 对这层数据的使用方式仍然偏“回填”，而不是“统一记账”：
+但本文成稿时，OpenerX 对这层数据的使用方式仍然偏“回填”，而不是“统一记账”：
 
-- BFF 会在 `agent_runs.tokenUsed` 缺失时，从 runtime session messages 里回读 token 使用
-- 当前没有项目治理专用的 runtime usage ledger 读取接口
-- 当前也没有把“底层请求次数”作为正式治理指标输出到项目页
+- 当时 BFF 会在 `agent_runs.tokenUsed` 缺失时，从 runtime session messages 里回读 token 使用
+- 当时没有项目治理专用的 runtime usage ledger 读取接口
+- 当时也没有把“底层请求次数”作为正式治理指标输出到项目页
 
 #### D. 本方案的目标口径
 
 为了解决“执行前预估不准”和“执行后追责不清”的问题，本方案定义三层真值分工：
 
-- `agent_runs`：运营展示层，用于 Dashboard、Agent Console、趋势分析
+- `agent_runs`：历史方案中的运营展示层；按当前实现应理解为兼容 `agentRunId` 读模型，而不是独立物理表
 - `cost_records`：控制面成本事实层，用于预算、审批、结算、审计
 - runtime usage ledger：底层执行事实层，用于回答“实际打了几次模型、每一步消耗多少 token、哪一个 hook / judge 放大了请求”
 
@@ -606,7 +608,7 @@ OpenCode runtime 底层是有 usage / cost 相关记录的，而且粒度比 `ag
 
 建议分三步落地：
 
-1. 保持现有 Dashboard 继续使用 `agent_runs`，不打断现有运营视图。
+1. 按本文历史方案的 Phase 1，保持当时 Dashboard 继续使用 `agent_runs` 兼容聚合，不打断现有运营视图。
 2. 在 BFF 增加 project-scoped execution ledger 聚合，把 runtime session/message/part usage 提炼为项目级可消费结构。
 3. 在验证完整后，将 `cost_records` 与 runtime ledger 做一一关联，形成统一的治理账本。
 
@@ -671,9 +673,9 @@ flowchart TB
 
 这张对照图表达的核心约束是：
 
-- 现状链路里，项目页看到的多数还是 `agent_runs` 聚合结果
+- 该历史现状链路里，项目页看到的多数还是 `agent_runs` 聚合结果
 - 目标链路里，项目治理与执行前预估必须先读取 `runtime_usage_ledgers` / `runtime_usage_ledger_steps` / `runtime_usage_baselines`
-- `agent_runs` 继续承担运营展示，不再承担“底层请求事实账本”的职责
+- 在该历史方案里，`agent_runs` 继续承担运营展示，不再承担“底层请求事实账本”的职责
 
 ### 10.1.3 runtime usage ledger 表结构草案
 
@@ -1031,7 +1033,7 @@ interface RuntimeUsageLedgerStepView {
 
 - 事实层：`runtime_usage_ledgers` / `runtime_usage_ledger_steps`
 - 预估层：`runtime_usage_baselines`
-- 运营展示层：`agent_runs`
+- 历史运营展示层 / 当前兼容读模型：`agent_runs`
 - 成本治理层：`cost_records`
 
 ### 10.1.5 开发拆分建议
@@ -2261,7 +2263,7 @@ interface PaidExecutionEstimate {
 
 数据来源建议：
 
-- 第一阶段：`audit_events` + `paid_execution_leases` + `agent_runs`
+- 历史第一阶段：`audit_events` + `paid_execution_leases` + `agent_runs`
 - 第二阶段：叠加 `runtime_usage_ledgers` / `cost_records`
 
 验收标准：

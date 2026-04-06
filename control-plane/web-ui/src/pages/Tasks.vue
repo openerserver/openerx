@@ -480,8 +480,8 @@ import { showRuntimeRecoveryNotice } from "../lib/runtime-recovery";
 import { RUNTIME_RECOVERY_ERROR_PREFIX } from "../lib/runtime-recovery-contract";
 import { RUNTIME_RECOVERY_CONTEXTS } from "../lib/runtime-recovery-notice";
 import { resolveTaskDisplayStatus } from "../lib/task-display-status";
-import { useProjectStore } from "../stores/project";
 import { useAuthStore } from "../stores/auth";
+import { useProjectStore } from "../stores/project";
 import { tasksThemeStyles } from "../theme/ui-theme";
 
 const projectStore = useProjectStore();
@@ -505,7 +505,9 @@ const EXECUTION_SETTLE_TIMEOUT_MS = 3000;
 const EXECUTION_SETTLE_INTERVAL_MS = 200;
 const AUTO_REFRESH_INTERVAL_MS = 8000;
 
-const isAdmin = computed(() => ["admin", "platform_admin", "org_admin"].includes(authStore.user?.role ?? ""));
+const isAdmin = computed(() =>
+  ["admin", "platform_admin", "org_admin"].includes(authStore.user?.role ?? ""),
+);
 
 const showExecutionModeModal = ref(false);
 const executionModeTargetTaskId = ref<string | null>(null);

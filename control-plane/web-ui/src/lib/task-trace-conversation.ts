@@ -67,7 +67,8 @@ function buildSyntheticUserPromptItems(
 function buildSyntheticAssistantResponseItems(
   trace: TaskExecutionTrace | null | undefined,
 ): TraceSourceItem[] {
-  const latestResponse = typeof trace?.latestResponse === "string" ? trace.latestResponse.trim() : "";
+  const latestResponse =
+    typeof trace?.latestResponse === "string" ? trace.latestResponse.trim() : "";
   if (!latestResponse) {
     return [];
   }
@@ -379,7 +380,11 @@ function buildToolTimelineItems(
   item: TraceSourceItem,
   index: number,
 ): ExecutionTraceTimelineItem[] {
-  const normalized = normalizeMessage(buildTraceLegacyMessage(item), index, createEmptyLiveAssistantState());
+  const normalized = normalizeMessage(
+    buildTraceLegacyMessage(item),
+    index,
+    createEmptyLiveAssistantState(),
+  );
   if (!normalized || normalized.toolCalls.length === 0) {
     return [];
   }
@@ -411,7 +416,10 @@ function buildToolTimelineItems(
   });
 }
 
-function shouldKeepTraceMessageItem(item: TraceSourceItem, toolItems: ExecutionTraceTimelineItem[]) {
+function shouldKeepTraceMessageItem(
+  item: TraceSourceItem,
+  toolItems: ExecutionTraceTimelineItem[],
+) {
   if (item.role !== "assistant") {
     return true;
   }
@@ -448,7 +456,9 @@ function mergeTraceTimelineItem(
     createdAt: current.createdAt ?? candidate.createdAt,
     completedAt: candidate.completedAt ?? current.completedAt,
     raw: candidate.raw ?? current.raw,
-    sourceEventTypes: [...new Set([...(current.sourceEventTypes ?? []), ...(candidate.sourceEventTypes ?? [])])],
+    sourceEventTypes: [
+      ...new Set([...(current.sourceEventTypes ?? []), ...(candidate.sourceEventTypes ?? [])]),
+    ],
   };
 }
 
@@ -588,9 +598,5 @@ export function normalizeTraceConversationItems(
         .filter((item): item is TaskConversationMessageItem => item != null)
         .filter((item) => item.role === "assistant");
 
-  return [
-    ...(hasUser ? [] : syntheticUserItems),
-    ...normalizedItems,
-    ...syntheticAssistantItems,
-  ];
+  return [...(hasUser ? [] : syntheticUserItems), ...normalizedItems, ...syntheticAssistantItems];
 }

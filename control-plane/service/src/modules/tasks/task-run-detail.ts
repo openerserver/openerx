@@ -2,7 +2,11 @@ import { and, asc, eq } from "drizzle-orm";
 import { db } from "../../db";
 import * as schema from "../../db/schema";
 
-const legacyTaskRunNodes = (schema as Record<string, unknown>).taskRunNodes as any | undefined;
+function getOptionalSchemaValue<T = any>(key: string) {
+  return (schema as unknown as Record<string, T | undefined>)[key];
+}
+
+const legacyTaskRunNodes = getOptionalSchemaValue("taskRunNodes");
 
 export async function listTaskRunDetailNodes(args: {
   taskId: string;
@@ -46,7 +50,9 @@ export async function listTaskRunDetailNodes(args: {
       updatedAt: legacyTaskRunNodes.updatedAt,
     })
     .from(legacyTaskRunNodes)
-    .where(and(eq(legacyTaskRunNodes.taskId, args.taskId), eq(legacyTaskRunNodes.runId, args.runId)))
+    .where(
+      and(eq(legacyTaskRunNodes.taskId, args.taskId), eq(legacyTaskRunNodes.runId, args.runId)),
+    )
     .orderBy(
       asc(legacyTaskRunNodes.candidateIndex),
       asc(legacyTaskRunNodes.chainStepIndex),

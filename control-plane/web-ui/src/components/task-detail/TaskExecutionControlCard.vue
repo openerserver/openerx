@@ -30,9 +30,7 @@ const props = defineProps<{
   executing: boolean;
 }>();
 
-const emit = defineEmits<{
-  (e: "choose-mode"): void;
-}>();
+const emit = defineEmits<(e: "choose-mode") => void>();
 
 const modeLabel = computed(() => {
   switch (props.executionMode) {

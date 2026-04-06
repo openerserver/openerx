@@ -42,6 +42,8 @@
 
 Service 集成测试 teardown checklist：
 
+- 当前 task-domain service 收口默认直接跑 [scripts/run-service-task-domain-current-batch.sh](scripts/run-service-task-domain-current-batch.sh)；它会按单文件顺序覆盖 route/projection、project-tree storage、session/message canonical write、message projector 与 role workflow storage，避免 `bun test fileA fileB ...` 触发 Bun 的跨文件 mock/模块污染假失败。
+- 路由或投影侧重构如果会触碰 project-tree / session-first 读链，默认把 [tests/service/project-tree-routes.test.ts](tests/service/project-tree-routes.test.ts) 当成回归门禁；当前它也已纳入 [scripts/run-service-task-domain-current-batch.sh](scripts/run-service-task-domain-current-batch.sh) 的顺序批次里。
 - 只要测试会写入 tasks、project_tree_nodes 或 branch/session 兼容节点，就不要只写最短 cleanup；新增测试前先对照已有高覆盖样例：[tests/service/project-tree-routes.test.ts](tests/service/project-tree-routes.test.ts)、[tests/service/tree-task-aggregations.test.ts](tests/service/tree-task-aggregations.test.ts)、[tests/service/task-route-registration-smoke.test.ts](tests/service/task-route-registration-smoke.test.ts)。
 - 删除顺序先清 task 从属表，再删 tasks，再删 tree nodes。最低限度先确认是否需要先删 task_domain_events、task_snapshots、task_timeline_views；如果任务还会写 conversation、task runs、workflow、ledger、audit、code_changes，也要先删这些下游表，再删 tasks。
 - 若测试维护的是 task id 列表，并且 project_tree_nodes.id 与 task id 一致，仍然建议在删 project_tree_nodes 之前补一条按 tree_node_id 删除 tasks 的兜底语句，避免残留引用让 node 删除触发 FK。

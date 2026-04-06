@@ -1,5 +1,7 @@
 # OpenerX 目标架构演进图
 
+> 历史口径说明（2026-04-05）：本文是阶段性演进快照。文中若把 `agent_runs` 写成现行任务域模型或仍需扩展的执行主表，应按历史口径理解。当前 schema 已删除 `agent_runs` 物理表；对外兼容 `agentRunId` 语义由 `task_operations`、`task_session_runs`、`task_sessions` 等 canonical task-domain 表投影提供。
+
 ## 1. 文档目的
 
 本文档用于说明 OpenerX 从当前实现演进到目标架构的方向，重点回答三个问题：
@@ -132,7 +134,7 @@ flowchart TB
 
 建议动作：
 
-- 新增任务域模型，如 tasks、task_nodes、agent_runs
+- 历史阶段曾规划新增任务域模型，如 tasks、task_nodes，以及当时仍存在的 `agent_runs` 兼容层
 - 将任务状态、节点状态、Agent Run 状态定义为显式状态机
 - 审计事件仅承担追踪和合规职责
 - 前端任务页优先从任务域接口读取，不再主要依赖日志拼装

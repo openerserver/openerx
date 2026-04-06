@@ -6,7 +6,7 @@ import { db } from "../../db";
 import { developerChangeRequests } from "../../db/schema";
 import { type AppEnv, authMiddleware } from "../../middleware/auth";
 import { requireRole } from "../../middleware/rbac";
-import { ensureLegacyRoleWorkflowMigrated } from "../task-workflows/legacy-role-workflow-storage";
+import { ensureDeveloperChangeRequestsAvailable } from "../task-workflows/legacy-role-workflow-storage";
 
 export const developerChangeRequestRoutes = new Hono<AppEnv>();
 
@@ -37,7 +37,7 @@ function requireTaskId(c: { req: { param: (name: string) => string | undefined }
 
 developerChangeRequestRoutes.get("/", async (c) => {
   const taskId = requireTaskId(c);
-  const task = await ensureLegacyRoleWorkflowMigrated(taskId);
+  const task = await ensureDeveloperChangeRequestsAvailable(taskId);
   if (!task) return c.json({ error: "Task not found" }, 404);
 
   const rows = await db
@@ -74,7 +74,7 @@ developerChangeRequestRoutes.post(
   async (c) => {
     const taskId = requireTaskId(c);
     const body = c.req.valid("json");
-    const task = await ensureLegacyRoleWorkflowMigrated(taskId);
+    const task = await ensureDeveloperChangeRequestsAvailable(taskId);
     if (!task) return c.json({ error: "Task not found" }, 404);
     const requestId = crypto.randomUUID();
     const now = new Date().toISOString();
@@ -108,7 +108,7 @@ developerChangeRequestRoutes.patch(
   async (c) => {
     const taskId = requireTaskId(c);
     const body = c.req.valid("json");
-    const task = await ensureLegacyRoleWorkflowMigrated(taskId);
+    const task = await ensureDeveloperChangeRequestsAvailable(taskId);
     if (!task) return c.json({ error: "Task not found" }, 404);
     const existing = await db.query.developerChangeRequests.findFirst({
       where: and(

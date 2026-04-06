@@ -74,7 +74,7 @@
 1. `tasks` 是唯一任务聚合根
 2. `task_sessions` 是唯一执行事实
 3. `task_session_messages` / `task_session_message_parts` 是唯一消息事实
-4. `session_operations` 是唯一低层调用事实
+4. `task_operations` 是唯一低层调用事实
 5. `task_artifacts` 是唯一正式产出主表
 6. `task_usage_ledger_entries` 是唯一任务域 usage / cost 账务主表
 
@@ -258,7 +258,7 @@ service 最终 public contract 默认收敛到：
 1. 新增 `task_sessions`
 2. 新增 `task_session_messages`
 3. 新增 `task_session_message_parts`
-4. 新增 `session_operations`
+4. 新增 `task_operations`
 5. 新增 `task_artifacts`
 6. 新增 `task_usage_ledger_entries`
 7. 重构 `tasks`
@@ -309,7 +309,7 @@ service 最终 public contract 默认收敛到：
 1. execute / continue / fork / resume 全部直接写 `task_sessions`
 2. 并行候选、judge、sequential-step 全部直接建 session 事实，不再落 run node
 3. 用户输入、模型回复、tool call、tool result 统一落新消息表
-4. executor / judge / hook / resume 的低层调用统一落 `session_operations`
+4. executor / judge / hook / resume 的低层调用统一落 `task_operations`
 5. changes summary、judge scorecard、hook report 一旦形成正式输出，直接写 `task_artifacts`
 6. usage / cost 直接写 `task_usage_ledger_entries`
 
@@ -338,7 +338,7 @@ service 最终 public contract 默认收敛到：
 
 #### Phase 3 重写目标
 
-1. `task_snapshots` 仅从 `tasks` + `task_sessions` + `session_operations` 聚合
+1. `task_snapshots` 仅从 `tasks` + `task_sessions` + `task_operations` 聚合
 2. `task_timeline_views` 仅从 `tasks` + `task_sessions` + messages + operations + artifacts 聚合
 3. execution trace 只读新 projection 和新 session facts
 4. 不保留 run / event fallback
@@ -408,7 +408,7 @@ service contract 切掉之后，BFF 和前端同步跟进，不做中间兼容�
 #### Phase 5 具体要求
 
 1. 并行候选块只从 session tree + coordination group + winner metadata 渲染
-2. judge 结果只从 `session_operations` / `task_artifacts` 读取
+2. judge 结果只从 `task_operations` / `task_artifacts` 读取
 3. candidate adoption 只接受新的 adopt winner contract
 4. runtime permission 与 trace panel 统一对齐新的 session id 体系
 5. 前端类型名可整体重命名，不保留 legacy 术语
@@ -428,7 +428,7 @@ service contract 切掉之后，BFF 和前端同步跟进，不做中间兼容�
 1. 把 workflow bridge 字段从策略 JSON 提升到 `tasks` 列
 2. 删除读取 `selectedTemplateId` / `workflowTemplateId` / `currentStageKey` fallback 的逻辑
 3. 为模板重绑增加专用治理动作
-4. 规范 `session_operations.metadata_json` 的 hook / judge 结构
+4. 规范 `task_operations.summary_json` 的 hook / judge 结构
 
 #### Phase 6 冲突处理规则
 

@@ -22,7 +22,7 @@ export function expectCanonicalSessionMessageRequests(
 ) {
   for (const sessionId of sessionIds) {
     expect(requestPaths).toContain(
-      `/api/tasks/${taskId}/sessions/${encodeURIComponent(`task-session:${taskId}:${sessionId}`)}/messages`,
+      `/api/tasks/${taskId}/query/normalized-conversation?sessionId=${encodeURIComponent(`task-session:${taskId}:${sessionId}`)}&includeLineage=false`,
     );
   }
 }
@@ -39,9 +39,9 @@ export function expectRuntimeMessageReads(
   }
 }
 
-export function expectNoRuntimeMessageReads(
-  runtimeFetchMock: { mock: { calls: Array<[RequestInfo | URL, RequestInit | undefined]> } },
-) {
+export function expectNoRuntimeMessageReads(runtimeFetchMock: {
+  mock: { calls: Array<[RequestInfo | URL, RequestInit | undefined]> };
+}) {
   expect(runtimeFetchMock.mock.calls).toHaveLength(0);
 }
 

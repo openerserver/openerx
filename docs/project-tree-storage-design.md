@@ -3,6 +3,8 @@
 > 状态：主体已落地，剩余内容以历史记录与可选优化为主  
 > 日期：2026-03-20  
 > 作者：AI Architecture Assistant
+>
+> 历史口径说明（2026-04-05）：本文中的 `agent_runs` 相关 checklist、衍生表说明和删表路径保留的是当时迁移上下文，不应再解读为当前仍存在的物理表。当前 schema 已删除 `agent_runs`；如需理解兼容 `agentRunId` 语义，应以 canonical task-domain 表投影为准。
 
 ## 0. 当前实施状态（截至 2026-03-21）
 
@@ -800,7 +802,7 @@ await db.insert(projectTreeNodes).values({
 | `task_sessions` | 已删除旧表 | 旧会话分支模型已被 `project_tree_nodes(node_type=session)` 取代；兼容 lineage API 与离线导入目标均已移除 |
 | `sessions` | 核心旧表 | 旧 session 汇总模型不再作为事实来源 |
 | `project_task_relations` | 核心旧表 | 旧任务关系图被 `project_tree_links` 取代 |
-| `agent_runs` | 衍生表 | 已迁到 tree task FK；是否删除取决于是否保留独立 execution 事实表 |
+| `agent_runs` | 已删除衍生表 | 物理表已删除；兼容 `agentRunId` 语义改由 canonical task-domain 表投影提供 |
 | `code_changes` | 衍生表 | 已迁到 tree task FK；是否删除取决于是否保留独立代码变更事实表 |
 | `file_changes` | 衍生表 | 仅依附 `code_changes` 存在 |
 | `task_workflow_runs` | 衍生表 | 已迁到 tree task FK；是否删除取决于 workflow 模型是否继续保留 |

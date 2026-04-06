@@ -7,16 +7,16 @@ import {
   taskMessageParts,
   taskMessages,
   taskOperations,
-  taskStageRuns,
   taskSessionRuns,
   taskSessions,
   taskSnapshots,
+  taskStageRuns,
   taskTimelineViews,
   taskUsageLedgerEntries,
   taskWorkflowRuns,
 } from "../../db/schema";
 import type { TaskTreeRecord } from "../project-tree/task-view";
-import { ensureLegacyRoleWorkflowMigrated } from "../task-workflows/legacy-role-workflow-storage";
+import { ensureTaskWorkflowFactsAvailable } from "../task-workflows/legacy-role-workflow-storage";
 
 type TaskSessionMessagePartRecord = {
   id: string | null;
@@ -154,6 +154,27 @@ export function buildTaskSessionIdAliases(sessionId: string) {
   return [normalizedSessionId];
 }
 
+export function toCanonicalTaskSessionId(taskId: string, sessionId?: string | null) {
+  if (typeof sessionId !== "string") {
+    return null;
+  }
+
+  const normalizedSessionId = sessionId.trim();
+  if (!normalizedSessionId) {
+    return null;
+  }
+
+  if (normalizedSessionId.startsWith("task-session:")) {
+    return normalizedSessionId;
+  }
+
+  if (normalizedSessionId.startsWith("task_session:")) {
+    return normalizedSessionId.replace(/^task_session:/, "task-session:");
+  }
+
+  return `task-session:${taskId}:${normalizedSessionId}`;
+}
+
 export function resolveTaskSessionRecordId(
   sessions: Array<{ id: string; runtimeSessionId?: string | null }>,
   sessionId?: string | null,
@@ -173,13 +194,17 @@ export function resolveTaskSessionRecordId(
 }
 
 function buildTaskSessionAliasPath(sessionIds: string[]) {
-  return Array.from(new Set(sessionIds.flatMap((sessionId) => buildTaskSessionIdAliases(sessionId))));
+  return Array.from(
+    new Set(sessionIds.flatMap((sessionId) => buildTaskSessionIdAliases(sessionId))),
+  );
 }
 
 async function loadTaskSnapshot(taskId: string) {
-  return db.query.taskSnapshots.findFirst({
+  const snapshot = await db.query.taskSnapshots.findFirst({
     where: eq(taskSnapshots.taskId, taskId),
   });
+
+  return snapshot ?? null;
 }
 
 async function loadTaskSessionRecord(taskId: string, sessionId: string) {
@@ -205,7 +230,9 @@ function collectMissingTaskSessionModelIds(
         .filter((session) => !asNonEmptyString(session.selectedModel ?? null))
         .filter((session) => !asNonEmptyString(session.effectiveModel ?? null))
         .map((session) => session.id)
-        .filter((sessionId): sessionId is string => typeof sessionId === "string" && sessionId.length > 0),
+        .filter(
+          (sessionId): sessionId is string => typeof sessionId === "string" && sessionId.length > 0,
+        ),
     ),
   );
 }
@@ -222,12 +249,7 @@ async function loadTaskSessionSelectedModelFallbacks(taskId: string, sessionIds:
       createdAt: taskSessionRuns.createdAt,
     })
     .from(taskSessionRuns)
-    .where(
-      and(
-        eq(taskSessionRuns.taskId, taskId),
-        inArray(taskSessionRuns.sessionId, sessionIds),
-      ),
-    )
+    .where(and(eq(taskSessionRuns.taskId, taskId), inArray(taskSessionRuns.sessionId, sessionIds)))
     .orderBy(asc(taskSessionRuns.createdAt));
 
   const selectedModelBySessionId = new Map<string, string>();
@@ -248,10 +270,7 @@ async function loadTaskSessionSelectedModelFallbacks(taskId: string, sessionIds:
 
 function hydrateTaskSessionSelectedModels<
   TSession extends { id: string; selectedModel?: string | null; effectiveModel?: string | null },
->(
-  sessions: TSession[],
-  selectedModelBySessionId: Map<string, string>,
-) {
+>(sessions: TSession[], selectedModelBySessionId: Map<string, string>) {
   return sessions.map((session) => ({
     ...session,
     selectedModel:
@@ -305,6 +324,115 @@ function normalizeTaskSessionMessagePart(
   };
 }
 
+function resolveTaskSessionMessageCreatedAt(
+  rawMessage: Record<string, unknown>,
+  rawTime: Record<string, unknown> | null,
+) {
+  return asNonEmptyString(rawMessage.createdAt) ?? asNonEmptyString(rawTime?.created) ?? null;
+}
+
+function resolveTaskSessionMessageCompletedAt(
+  rawMessage: Record<string, unknown>,
+  rawTime: Record<string, unknown> | null,
+) {
+  return asNonEmptyString(rawMessage.completedAt) ?? asNonEmptyString(rawTime?.completed) ?? null;
+}
+
+function resolveTaskSessionMessageTextContent(
+  rawMessage: Record<string, unknown>,
+  rawPayload: Record<string, unknown> | null,
+) {
+  return (
+    asNonEmptyString(rawMessage.textContent) ??
+    asNonEmptyString(rawMessage.textPreview) ??
+    asNonEmptyString(rawPayload?.textContent) ??
+    asNonEmptyString(rawPayload?.text) ??
+    asNonEmptyString(rawPayload?.content) ??
+    null
+  );
+}
+
+function resolveTaskSessionMessageRuntimeMessageId(args: {
+  rawMessage: Record<string, unknown>;
+  rawPayload: Record<string, unknown> | null;
+  rawInfo: Record<string, unknown> | null;
+}) {
+  return (
+    asNonEmptyString(args.rawMessage.runtimeMessageId) ??
+    asNonEmptyString(args.rawPayload?.runtimeMessageId) ??
+    asNonEmptyString(args.rawInfo?.id) ??
+    null
+  );
+}
+
+function resolveTaskSessionMessageClientMessageId(
+  rawMessage: Record<string, unknown>,
+  rawPayload: Record<string, unknown> | null,
+) {
+  return (
+    asNonEmptyString(rawMessage.clientMessageId) ??
+    asNonEmptyString(rawPayload?.clientMessageId) ??
+    asNonEmptyString(rawPayload?.client_message_id) ??
+    null
+  );
+}
+
+function resolveTaskSessionMessageProviderMessageId(args: {
+  rawMessage: Record<string, unknown>;
+  rawPayload: Record<string, unknown> | null;
+  rawInfo: Record<string, unknown> | null;
+}) {
+  return (
+    asNonEmptyString(args.rawMessage.providerMessageId) ??
+    asNonEmptyString(args.rawPayload?.providerMessageId) ??
+    asNonEmptyString(args.rawPayload?.provider_message_id) ??
+    asNonEmptyString(args.rawInfo?.id) ??
+    null
+  );
+}
+
+function resolveTaskSessionMessageIndex(rawMessage: Record<string, unknown>) {
+  if (typeof rawMessage.seq === "number") {
+    return rawMessage.seq;
+  }
+
+  return typeof rawMessage.messageIndex === "number" ? rawMessage.messageIndex : null;
+}
+
+function resolveTaskSessionMessageSummaryText(
+  rawMessage: Record<string, unknown>,
+  textContent: string | null,
+) {
+  return (
+    asNonEmptyString(rawMessage.summaryText) ??
+    asNonEmptyString(rawMessage.textPreview) ??
+    textContent
+  );
+}
+
+function resolveTaskSessionMessageErrorText(
+  rawMessage: Record<string, unknown>,
+  rawPayload: Record<string, unknown> | null,
+  rawInfo: Record<string, unknown> | null,
+) {
+  return (
+    asNonEmptyString(rawMessage.errorText) ??
+    asNonEmptyString(rawPayload?.errorText) ??
+    asNonEmptyString(rawPayload?.error_text) ??
+    asNonEmptyString(rawInfo?.error) ??
+    null
+  );
+}
+
+function resolveTaskSessionPromptDecomposition(rawPayload: Record<string, unknown> | null) {
+  const promptDecomposition = asRecord(rawPayload?.promptDecomposition);
+  return {
+    userInputText: asNonEmptyString(promptDecomposition?.userInputText) ?? null,
+    systemContextText: asNonEmptyString(promptDecomposition?.systemContextText) ?? null,
+    finalSentText: asNonEmptyString(promptDecomposition?.finalSentText) ?? null,
+  };
+}
+
 function normalizeTaskSessionMessageRecord(
   message: typeof taskMessages.$inferSelect,
 ): TaskSessionMessageRecordInput {
@@ -312,77 +440,42 @@ function normalizeTaskSessionMessageRecord(
   const rawPayload = asRecord(rawMessage.rawPayload) ?? null;
   const rawInfo = asRecord(rawPayload?.info) ?? null;
   const rawTime = asRecord(rawInfo?.time) ?? null;
-  const createdAt =
-    asNonEmptyString(rawMessage.createdAt) ??
-    asNonEmptyString(rawTime?.created) ??
-    null;
-  const completedAt =
-    asNonEmptyString(rawMessage.completedAt) ??
-    asNonEmptyString(rawTime?.completed) ??
-    null;
-  const textContent =
-    asNonEmptyString(rawMessage.textContent) ??
-    asNonEmptyString(rawMessage.textPreview) ??
-    asNonEmptyString(rawPayload?.textContent) ??
-    asNonEmptyString(rawPayload?.text) ??
-    asNonEmptyString(rawPayload?.content) ??
-    null;
+  const createdAt = resolveTaskSessionMessageCreatedAt(rawMessage, rawTime);
+  const completedAt = resolveTaskSessionMessageCompletedAt(rawMessage, rawTime);
+  const textContent = resolveTaskSessionMessageTextContent(rawMessage, rawPayload);
+  const promptDecomposition = resolveTaskSessionPromptDecomposition(rawPayload);
 
   return {
     id: message.id,
     sessionId: message.sessionId,
     taskId: asNonEmptyString(rawMessage.taskId),
     projectId: asNonEmptyString(rawMessage.projectId),
-    runtimeMessageId:
-      asNonEmptyString(rawMessage.runtimeMessageId) ??
-      asNonEmptyString(rawPayload?.runtimeMessageId) ??
-      asNonEmptyString(rawInfo?.id) ??
-      null,
+    runtimeMessageId: resolveTaskSessionMessageRuntimeMessageId({
+      rawMessage,
+      rawPayload,
+      rawInfo,
+    }),
     role: message.role,
     status: asNonEmptyString(rawMessage.status),
-    clientMessageId:
-      asNonEmptyString(rawMessage.clientMessageId) ??
-      asNonEmptyString(rawPayload?.clientMessageId) ??
-      asNonEmptyString(rawPayload?.client_message_id) ??
-      null,
-    providerMessageId:
-      asNonEmptyString(rawMessage.providerMessageId) ??
-      asNonEmptyString(rawPayload?.providerMessageId) ??
-      asNonEmptyString(rawPayload?.provider_message_id) ??
-      asNonEmptyString(rawInfo?.id) ??
-      null,
-    messageIndex:
-      typeof rawMessage.seq === "number"
-        ? rawMessage.seq
-        : typeof rawMessage.messageIndex === "number"
-          ? rawMessage.messageIndex
-          : null,
+    clientMessageId: resolveTaskSessionMessageClientMessageId(rawMessage, rawPayload),
+    providerMessageId: resolveTaskSessionMessageProviderMessageId({
+      rawMessage,
+      rawPayload,
+      rawInfo,
+    }),
+    messageIndex: resolveTaskSessionMessageIndex(rawMessage),
     textContent,
-    summaryText:
-      asNonEmptyString(rawMessage.summaryText) ??
-      asNonEmptyString(rawMessage.textPreview) ??
-      textContent,
+    summaryText: resolveTaskSessionMessageSummaryText(rawMessage, textContent),
     rawPayload,
     tokenUsed: typeof rawMessage.tokenUsed === "number" ? rawMessage.tokenUsed : null,
     startedAt: asNonEmptyString(rawMessage.startedAt) ?? createdAt,
     completedAt,
-    errorText:
-      asNonEmptyString(rawMessage.errorText) ??
-      asNonEmptyString(rawPayload?.errorText) ??
-      asNonEmptyString(rawPayload?.error_text) ??
-      asNonEmptyString(rawInfo?.error) ??
-      null,
-    agent:
-      asNonEmptyString(rawInfo?.agent) ??
-      asNonEmptyString(rawPayload?.agent) ??
-      null,
-    model:
-      asNonEmptyString(rawInfo?.model) ??
-      asNonEmptyString(rawPayload?.model) ??
-      null,
-    userInputText: asNonEmptyString(asRecord(rawPayload?.promptDecomposition)?.userInputText) ?? null,
-    systemContextText: asNonEmptyString(asRecord(rawPayload?.promptDecomposition)?.systemContextText) ?? null,
-    finalSentText: asNonEmptyString(asRecord(rawPayload?.promptDecomposition)?.finalSentText) ?? null,
+    errorText: resolveTaskSessionMessageErrorText(rawMessage, rawPayload, rawInfo),
+    agent: asNonEmptyString(rawInfo?.agent) ?? asNonEmptyString(rawPayload?.agent) ?? null,
+    model: asNonEmptyString(rawInfo?.model) ?? asNonEmptyString(rawPayload?.model) ?? null,
+    userInputText: promptDecomposition.userInputText,
+    systemContextText: promptDecomposition.systemContextText,
+    finalSentText: promptDecomposition.finalSentText,
     createdAt,
     updatedAt: asNonEmptyString(rawMessage.updatedAt) ?? createdAt,
   };
@@ -439,6 +532,14 @@ async function loadTaskMessageEventsInternal(taskId: string) {
     .orderBy(asc(taskMessageEvents.createdAt), asc(taskMessageEvents.id));
 }
 
+async function loadTaskWorkflowRuns(taskId: string) {
+  return db
+    .select()
+    .from(taskWorkflowRuns)
+    .where(eq(taskWorkflowRuns.taskId, taskId))
+    .orderBy(asc(taskWorkflowRuns.createdAt));
+}
+
 type LoadedTaskSessionMessageRecord = TaskSessionMessageRecord;
 
 function extractTaskSessionMessageRole(message: LoadedTaskSessionMessageRecord) {
@@ -481,7 +582,9 @@ function extractTaskSessionMessageText(message: LoadedTaskSessionMessageRecord) 
     ? rawPayload.parts
         .map((part) => asRecord(part))
         .filter(
-          (part): part is Record<string, unknown> & {
+          (
+            part,
+          ): part is Record<string, unknown> & {
             textContent?: string | null;
             jsonPayload?: Record<string, unknown> | null;
           } => Boolean(part),
@@ -514,7 +617,10 @@ function hasStructuredTaskSessionMessageParts(message: LoadedTaskSessionMessageR
 }
 
 function isHydratableTaskSessionMessageShell(message: LoadedTaskSessionMessageRecord) {
-  return !hasDisplayableTaskSessionMessageContent(message) && !hasStructuredTaskSessionMessageParts(message);
+  return (
+    !hasDisplayableTaskSessionMessageContent(message) &&
+    !hasStructuredTaskSessionMessageParts(message)
+  );
 }
 
 function buildSyntheticTaskSessionTextPart(
@@ -540,10 +646,7 @@ function buildSyntheticTaskSessionTextPart(
   };
 }
 
-function hydrateTaskSessionMessageShell(
-  message: LoadedTaskSessionMessageRecord,
-  text: string,
-) {
+function hydrateTaskSessionMessageShell(message: LoadedTaskSessionMessageRecord, text: string) {
   const rawPayload = asRecord(message.rawPayload) ?? {};
   const rawInfo = asRecord(rawPayload.info) ?? {};
   const rawTime = asRecord(rawInfo.time) ?? {};
@@ -602,7 +705,10 @@ function findHydratableTaskSessionMessageIndex(
         continue;
       }
 
-      if (extractTaskSessionMessageRole(message) === role && isHydratableTaskSessionMessageShell(message)) {
+      if (
+        extractTaskSessionMessageRole(message) === role &&
+        isHydratableTaskSessionMessageShell(message)
+      ) {
         return index;
       }
     }
@@ -610,7 +716,9 @@ function findHydratableTaskSessionMessageIndex(
   }
 
   return messages.findIndex(
-    (message) => extractTaskSessionMessageRole(message) === role && isHydratableTaskSessionMessageShell(message),
+    (message) =>
+      extractTaskSessionMessageRole(message) === role &&
+      isHydratableTaskSessionMessageShell(message),
   );
 }
 
@@ -636,11 +744,7 @@ function hydrateTaskConversationShellMessages(args: {
     asNonEmptyString(args.task.result) ??
     asNonEmptyString(args.task.latestResultSummary);
   if (latestResponseText) {
-    const assistantIndex = findHydratableTaskSessionMessageIndex(
-      hydrated,
-      "assistant",
-      true,
-    );
+    const assistantIndex = findHydratableTaskSessionMessageIndex(hydrated, "assistant", true);
     const assistantMessage = assistantIndex >= 0 ? hydrated[assistantIndex] : undefined;
     if (assistantMessage) {
       hydrated[assistantIndex] = hydrateTaskSessionMessageShell(
@@ -809,15 +913,25 @@ function extractWorkflowTemplateId(task: TaskTreeRecord) {
 
 function extractWorkflowStageKey(args: {
   selectedSessionId: string | null;
-  scopedSessions: Array<{ id: string; workflowStageKey?: string | null; createdAt?: string | null }>;
-  scopedRuns: Array<{ sessionId?: string | null; workflowStageKey?: string | null; createdAt?: string | null }>;
+  scopedSessions: Array<{
+    id: string;
+    workflowStageKey?: string | null;
+    createdAt?: string | null;
+  }>;
+  scopedRuns: Array<{
+    sessionId?: string | null;
+    workflowStageKey?: string | null;
+    createdAt?: string | null;
+  }>;
   task: TaskTreeRecord;
 }) {
   const selectedSession = args.selectedSessionId
-    ? args.scopedSessions.find((session) => session.id === args.selectedSessionId) ?? null
+    ? (args.scopedSessions.find((session) => session.id === args.selectedSessionId) ?? null)
     : null;
   const latestRun = [...args.scopedRuns]
-    .sort((left, right) => String(left.createdAt ?? "").localeCompare(String(right.createdAt ?? "")))
+    .sort((left, right) =>
+      String(left.createdAt ?? "").localeCompare(String(right.createdAt ?? "")),
+    )
     .at(-1);
   const strategy = asRecord(args.task.strategy);
   return (
@@ -840,7 +954,7 @@ function formatWorkflowStageLabel(stageKey: string | null) {
     .join(" ");
 }
 
-function inferWorkflowApprovalState(taskStatus: TaskTreeRecord["status"]) {
+function inferWorkflowApprovalState(taskStatus?: string | null) {
   if (taskStatus === "paused" || taskStatus === "waiting-approval") {
     return "pending";
   }
@@ -904,102 +1018,156 @@ function extractTaskTreeMessageRunId(
   return sessionRuns.at(-1)?.id ?? null;
 }
 
-function buildFallbackOperationsFromMessageParts(
-  messages: LoadedTaskSessionMessageRecord[],
+function isFallbackTaskOperationPart(
+  part: TaskSessionMessagePartRecord | undefined,
+): part is TaskSessionMessagePartRecord & {
+  id: string;
+  partType: "tool_call" | "tool_result";
+} {
+  return Boolean(part?.id) && (part?.partType === "tool_call" || part?.partType === "tool_result");
+}
+
+function resolveFallbackOperationToolName(payload: Record<string, unknown>) {
+  return (
+    asNonEmptyString(payload.name) ??
+    asNonEmptyString(payload.tool) ??
+    asNonEmptyString(asRecord(payload.toolCall)?.name) ??
+    asNonEmptyString(asRecord(payload.toolCall)?.tool) ??
+    asNonEmptyString(asRecord(payload.metadata)?.toolName) ??
+    "tool"
+  );
+}
+
+function resolveFallbackOperationExecutionStatus(
+  operationKind: "tool_call" | "tool_result",
+  payload: Record<string, unknown>,
 ) {
-  const fallbackOperations: Array<Record<string, unknown>> = [];
-
-  for (const message of messages) {
-    const parts = Array.isArray(message.parts) ? message.parts : [];
-    for (const part of parts) {
-      if (!part?.id || (part.partType !== "tool_call" && part.partType !== "tool_result")) {
-        continue;
-      }
-
-      const payload = asRecord(part.jsonPayload) ?? {};
-      const toolName =
-        asNonEmptyString(payload.name) ??
-        asNonEmptyString(payload.tool) ??
-        asNonEmptyString(asRecord(payload.toolCall)?.name) ??
-        asNonEmptyString(asRecord(payload.toolCall)?.tool) ??
-        asNonEmptyString(asRecord(payload.metadata)?.toolName) ??
-        "tool";
-      const operationKind = part.partType === "tool_call" ? "tool_call" : "tool_result";
-      const executionStatus =
-        operationKind === "tool_result"
-          ? asNonEmptyString(asRecord(payload.state)?.status) ?? "complete"
-          : "complete";
-      const outputText =
-        operationKind === "tool_result"
-          ? asNonEmptyString(asRecord(payload.state)?.output) ??
-            asNonEmptyString(payload.output) ??
-            asNonEmptyString(payload.text) ??
-            asNonEmptyString(part.textContent)
-          : null;
-      const argumentsSummary =
-        operationKind === "tool_call"
-          ? summarizeOperationPayload(payload.input ?? payload.arguments ?? payload.args)
-          : null;
-
-      fallbackOperations.push({
-        id: `fallback-operation:${part.id}`,
-        sessionId: message.sessionId,
-        taskId: message.taskId,
-        projectId: message.projectId,
-        messageId: message.id,
-        runtimeOperationId: asNonEmptyString(payload.callId) ?? asNonEmptyString(payload.id) ?? part.id,
-        operationIndex: part.partIndex,
-        operationKind,
-        executorKey: toolName,
-        executorLabel: toolName,
-        providerId: null,
-        modelId: null,
-        executionStatus,
-        inputTokens: 0,
-        outputTokens: 0,
-        totalTokens: 0,
-        costUsd: 0,
-        outputText,
-        errorText:
-          operationKind === "tool_result"
-            ? asNonEmptyString(asRecord(payload.state)?.error) ?? asNonEmptyString(payload.error)
-            : null,
-        metadataJson: {
-          source: "message-part-fallback",
-          messageId: message.id,
-          partId: part.id,
-          partType: part.partType,
-          toolName,
-          argumentsSummary,
-          rawPart: payload,
-        },
-        summaryJson: {
-          source: "message-part-fallback",
-          messageId: message.id,
-          partId: part.id,
-          partType: part.partType,
-        },
-        startedAt: message.startedAt,
-        finishedAt: message.completedAt ?? message.updatedAt,
-        createdAt: part.createdAt ?? message.createdAt,
-        updatedAt: message.updatedAt,
-      });
-    }
+  if (operationKind !== "tool_result") {
+    return "complete";
   }
 
-  return fallbackOperations;
+  return asNonEmptyString(asRecord(payload.state)?.status) ?? "complete";
+}
+
+function resolveFallbackOperationOutputText(
+  operationKind: "tool_call" | "tool_result",
+  payload: Record<string, unknown>,
+  part: TaskSessionMessagePartRecord,
+) {
+  if (operationKind !== "tool_result") {
+    return null;
+  }
+
+  return (
+    asNonEmptyString(asRecord(payload.state)?.output) ??
+    asNonEmptyString(payload.output) ??
+    asNonEmptyString(payload.text) ??
+    asNonEmptyString(part.textContent)
+  );
+}
+
+function resolveFallbackOperationErrorText(
+  operationKind: "tool_call" | "tool_result",
+  payload: Record<string, unknown>,
+) {
+  if (operationKind !== "tool_result") {
+    return null;
+  }
+
+  return asNonEmptyString(asRecord(payload.state)?.error) ?? asNonEmptyString(payload.error);
+}
+
+function resolveFallbackOperationArgumentsSummary(
+  operationKind: "tool_call" | "tool_result",
+  payload: Record<string, unknown>,
+) {
+  if (operationKind !== "tool_call") {
+    return null;
+  }
+
+  return summarizeOperationPayload(payload.input ?? payload.arguments ?? payload.args);
+}
+
+function buildFallbackOperationFromMessagePart(
+  message: LoadedTaskSessionMessageRecord,
+  part: TaskSessionMessagePartRecord | undefined,
+) {
+  if (!isFallbackTaskOperationPart(part)) {
+    return null;
+  }
+
+  const payload = asRecord(part.jsonPayload) ?? {};
+  const toolName = resolveFallbackOperationToolName(payload);
+  const operationKind = part.partType;
+
+  return {
+    id: `fallback-operation:${part.id}`,
+    sessionId: message.sessionId,
+    taskId: message.taskId,
+    projectId: message.projectId,
+    messageId: message.id,
+    runtimeOperationId: asNonEmptyString(payload.callId) ?? asNonEmptyString(payload.id) ?? part.id,
+    operationIndex: part.partIndex,
+    operationKind,
+    executorKey: toolName,
+    executorLabel: toolName,
+    providerId: null,
+    modelId: null,
+    executionStatus: resolveFallbackOperationExecutionStatus(operationKind, payload),
+    inputTokens: 0,
+    outputTokens: 0,
+    totalTokens: 0,
+    costUsd: 0,
+    outputText: resolveFallbackOperationOutputText(operationKind, payload, part),
+    errorText: resolveFallbackOperationErrorText(operationKind, payload),
+    metadataJson: {
+      source: "message-part-fallback",
+      messageId: message.id,
+      partId: part.id,
+      partType: part.partType,
+      toolName,
+      argumentsSummary: resolveFallbackOperationArgumentsSummary(operationKind, payload),
+      rawPart: payload,
+    },
+    summaryJson: {
+      source: "message-part-fallback",
+      messageId: message.id,
+      partId: part.id,
+      partType: part.partType,
+    },
+    startedAt: message.startedAt,
+    finishedAt: message.completedAt ?? message.updatedAt,
+    createdAt: part.createdAt ?? message.createdAt,
+    updatedAt: message.updatedAt,
+  };
+}
+
+type FallbackTaskSessionOperationRecord = Exclude<
+  ReturnType<typeof buildFallbackOperationFromMessagePart>,
+  null
+>;
+
+function buildFallbackOperationsFromMessageParts(
+  messages: LoadedTaskSessionMessageRecord[],
+): FallbackTaskSessionOperationRecord[] {
+  return messages.flatMap((message) => {
+    const parts = Array.isArray(message.parts) ? message.parts : [];
+    return parts
+      .map((part) => buildFallbackOperationFromMessagePart(message, part))
+      .filter((operation): operation is FallbackTaskSessionOperationRecord => Boolean(operation));
+  });
 }
 
 async function loadTaskWorkflowFacts(taskId: string) {
-  await ensureLegacyRoleWorkflowMigrated(taskId);
+  let workflowRuns = await loadTaskWorkflowRuns(taskId);
+  let latestWorkflowRun = workflowRuns.at(-1) ?? null;
 
-  const workflowRuns = await db
-    .select()
-    .from(taskWorkflowRuns)
-    .where(eq(taskWorkflowRuns.taskId, taskId))
-    .orderBy(asc(taskWorkflowRuns.createdAt));
+  if (!latestWorkflowRun) {
+    await ensureTaskWorkflowFactsAvailable(taskId);
+    workflowRuns = await loadTaskWorkflowRuns(taskId);
+    latestWorkflowRun = workflowRuns.at(-1) ?? null;
+  }
 
-  const latestWorkflowRun = workflowRuns.at(-1) ?? null;
   if (!latestWorkflowRun) {
     return { workflowRun: null, stages: [], roleConclusions: [] };
   }
@@ -1024,9 +1192,7 @@ async function loadTaskWorkflowFacts(taskId: string) {
   };
 }
 
-function extractTaskSessionMessageIdentity(
-  message: TaskSessionMessageRecord,
-) {
+function extractTaskSessionMessageIdentity(message: TaskSessionMessageRecord) {
   const rawPayload = asRecord(message.rawPayload);
   const rawInfo = asRecord(rawPayload?.info);
   return (
@@ -1036,9 +1202,7 @@ function extractTaskSessionMessageIdentity(
   );
 }
 
-function dedupeTaskSessionMessageRecords(
-  messages: TaskSessionMessageRecord[],
-) {
+function dedupeTaskSessionMessageRecords(messages: TaskSessionMessageRecord[]) {
   const seen = new Map<string, number>();
   const deduped: TaskSessionMessageRecord[] = [];
 
@@ -1070,9 +1234,7 @@ function dedupeTaskSessionMessageRecords(
   return deduped;
 }
 
-function resolveTaskSessionMessageSortTime(
-  message: TaskSessionMessageRecord,
-) {
+function resolveTaskSessionMessageSortTime(message: TaskSessionMessageRecord) {
   const rawPayload = asRecord(message.rawPayload);
   const rawInfo = asRecord(rawPayload?.info);
   const rawTime = asRecord(rawInfo?.time);
@@ -1100,9 +1262,7 @@ function resolveTaskSessionMessageSortTime(
   return null;
 }
 
-function resolveTaskSessionMessageRolePriority(
-  message: TaskSessionMessageRecord,
-) {
+function resolveTaskSessionMessageRolePriority(message: TaskSessionMessageRecord) {
   switch (extractTaskSessionMessageRole(message)) {
     case "user":
       return 0;
@@ -1115,9 +1275,7 @@ function resolveTaskSessionMessageRolePriority(
   }
 }
 
-function sortSingleTaskSessionMessageRecords(
-  messages: TaskSessionMessageRecord[],
-) {
+function sortSingleTaskSessionMessageRecords(messages: TaskSessionMessageRecord[]) {
   return messages
     .map((message, index) => ({
       message,
@@ -1288,7 +1446,8 @@ async function loadTaskSessionOperationsInternal(taskId: string, sessionId: stri
     projectId: null,
     runtimeOperationId: operation.runtimeOperationId,
     operationIndex: operation.operationIndex,
-    operationKind: operation.operationKind === "model_request" ? "executor" : operation.operationKind,
+    operationKind:
+      operation.operationKind === "model_request" ? "executor" : operation.operationKind,
     executorKey: operation.title ?? operation.operationKind,
     executorLabel: operation.title ?? operation.operationKind,
     providerId: null,
@@ -1334,9 +1493,363 @@ async function loadTaskUsageLedgerEntriesInternal(taskId: string, sessionId?: st
     .orderBy(asc(taskUsageLedgerEntries.recordedAt), asc(taskUsageLedgerEntries.createdAt));
 }
 
+type TaskSessionReadSessionRecord = typeof taskSessions.$inferSelect;
+type TaskSessionReadRunRecord = typeof taskSessionRuns.$inferSelect;
+type TaskSessionReadOperationRecord = typeof taskOperations.$inferSelect;
+type TaskWorkflowFacts = Awaited<ReturnType<typeof loadTaskWorkflowFacts>>;
+
 export function createTaskSessionReadApi(deps: {
   loadTaskTreeBackedRecord: (taskId: string) => Promise<TaskTreeRecord | null>;
 }) {
+  function resolveTaskTreeScopedSessionIds(args: {
+    requestedSessionId?: string | null;
+    includeLineage: boolean;
+    lineagePath: string[];
+    sessions: TaskSessionReadSessionRecord[];
+  }) {
+    return args.requestedSessionId || args.includeLineage === false
+      ? args.lineagePath
+      : args.sessions.map((session) => session.id);
+  }
+
+  async function loadScopedTaskSessionRuns(taskId: string, sessionIds: string[]) {
+    if (sessionIds.length === 0) {
+      return [] as TaskSessionReadRunRecord[];
+    }
+
+    return db
+      .select()
+      .from(taskSessionRuns)
+      .where(
+        and(eq(taskSessionRuns.taskId, taskId), inArray(taskSessionRuns.sessionId, sessionIds)),
+      )
+      .orderBy(asc(taskSessionRuns.createdAt));
+  }
+
+  async function loadScopedTaskSessionOperations(taskId: string, sessionIds: string[]) {
+    if (sessionIds.length === 0) {
+      return [] as TaskSessionReadOperationRecord[];
+    }
+
+    return db
+      .select()
+      .from(taskOperations)
+      .where(and(eq(taskOperations.taskId, taskId), inArray(taskOperations.sessionId, sessionIds)))
+      .orderBy(asc(taskOperations.createdAt), asc(taskOperations.operationIndex));
+  }
+
+  async function loadScopedTaskSessionArtifacts(taskId: string, sessionIds: string[]) {
+    if (sessionIds.length === 0) {
+      return [] as (typeof taskArtifacts.$inferSelect)[];
+    }
+
+    return db
+      .select()
+      .from(taskArtifacts)
+      .where(and(eq(taskArtifacts.taskId, taskId), inArray(taskArtifacts.sessionId, sessionIds)))
+      .orderBy(asc(taskArtifacts.createdAt));
+  }
+
+  async function loadScopedTaskTreeMessages(args: {
+    taskId: string;
+    sessionIds: string[];
+    sessions: TaskSessionReadSessionRecord[];
+    task: TaskTreeRecord;
+    snapshot: TaskSessionHydrationSnapshot;
+  }) {
+    if (args.sessionIds.length === 0) {
+      return [] as LoadedTaskSessionMessageRecord[];
+    }
+
+    const records = await Promise.all(
+      args.sessionIds.map(async (sessionId) => {
+        const session = args.sessions.find((record) => record.id === sessionId) ?? null;
+        const loadedMessages = await loadTaskSessionMessagesInternal(args.taskId, sessionId);
+        const promptReadyMessages = ensureRootPromptMessage({
+          messages: loadedMessages,
+          task: args.task,
+          sessionId,
+          isRootSession: session?.parentSessionId == null,
+        });
+        const hydratedMessages = hydrateTaskConversationShellMessages({
+          messages: promptReadyMessages,
+          promptText: session?.parentSessionId ? null : args.task.prompt,
+          task: args.task,
+          snapshot: args.snapshot,
+        });
+        return sortSingleTaskSessionMessageRecords(hydratedMessages);
+      }),
+    );
+
+    return records.flat();
+  }
+
+  function resolveTaskTreeMessages(args: {
+    taskId: string;
+    task: TaskTreeRecord;
+    scopedSessionMessages: LoadedTaskSessionMessageRecord[];
+  }) {
+    const messagesWithRootPrompt =
+      args.scopedSessionMessages.length === 0
+        ? ensureRootPromptMessage({
+            messages: [],
+            task: args.task,
+            sessionId: `virtual-root-${args.taskId}`,
+            isRootSession: true,
+          })
+        : args.scopedSessionMessages;
+
+    return sortSingleTaskSessionMessageRecords(messagesWithRootPrompt);
+  }
+
+  function resolveTaskTreeWorkflowContext(args: {
+    workflowFacts: TaskWorkflowFacts;
+    task: TaskTreeRecord;
+    selectedSessionId: string | null;
+    scopedSessions: TaskSessionReadSessionRecord[];
+    runs: TaskSessionReadRunRecord[];
+  }) {
+    const workflowStageKey =
+      asNonEmptyString(args.workflowFacts.workflowRun?.currentStage) ??
+      extractWorkflowStageKey({
+        selectedSessionId: args.selectedSessionId,
+        scopedSessions: args.scopedSessions,
+        scopedRuns: args.runs,
+        task: args.task,
+      });
+
+    return {
+      workflowStageKey,
+      workflowTemplateId:
+        asNonEmptyString(args.workflowFacts.workflowRun?.templateId) ??
+        extractWorkflowTemplateId(args.task),
+      currentStageRun:
+        args.workflowFacts.stages.find((stage) => stage.stageKey === workflowStageKey) ?? null,
+    };
+  }
+
+  function resolveTaskTreeRootSessionId(sessions: TaskSessionReadSessionRecord[]) {
+    return (
+      sessions.find((session) => session.parentSessionId == null)?.id ?? sessions[0]?.id ?? null
+    );
+  }
+
+  function buildTaskTreeParallelGroups(runs: TaskSessionReadRunRecord[]) {
+    const groups = runs
+      .filter((run) => typeof run.coordinationKey === "string" && run.coordinationKey.length > 0)
+      .reduce(
+        (result, run) => {
+          const key = run.coordinationKey;
+          if (!key) {
+            return result;
+          }
+
+          const existing = result.get(key) ?? {
+            coordinationKey: key,
+            sessionId: run.sessionId,
+            executionMode: run.executionKind,
+            winnerRunId: null as string | null,
+            runIds: [] as string[],
+          };
+          existing.runIds.push(run.id);
+          result.set(key, existing);
+          return result;
+        },
+        new Map<
+          string,
+          {
+            coordinationKey: string;
+            sessionId: string;
+            executionMode: string | null;
+            winnerRunId: string | null;
+            runIds: string[];
+          }
+        >(),
+      );
+
+    return Array.from(groups.values());
+  }
+
+  function buildTaskTreeEdges(args: {
+    sessions: TaskSessionReadSessionRecord[];
+    runs: TaskSessionReadRunRecord[];
+    messages: LoadedTaskSessionMessageRecord[];
+    operations: Array<Record<string, unknown>>;
+  }) {
+    return {
+      sessionParent: args.sessions
+        .filter((session) => session.parentSessionId)
+        .map((session) => ({ sessionId: session.id, parentSessionId: session.parentSessionId })),
+      sessionSource: args.sessions
+        .filter((session) => session.sourceMessageId)
+        .map((session) => ({ sessionId: session.id, sourceMessageId: session.sourceMessageId })),
+      sessionRun: args.runs.map((run) => ({ sessionId: run.sessionId, runId: run.id })),
+      sessionMessage: args.messages.map((message) => ({
+        sessionId: message.sessionId,
+        messageId: message.id,
+      })),
+      messageParent: args.messages
+        .map((message) => ({
+          messageId: message.id,
+          parentMessageId: extractTaskTreeMessageParentId(message),
+        }))
+        .filter((message) => message.parentMessageId),
+      messageReply: args.messages
+        .map((message) => ({
+          messageId: message.id,
+          replyToMessageId: extractTaskTreeMessageParentId(message),
+        }))
+        .filter((message) => message.replyToMessageId),
+      runMessage: args.messages
+        .map((message) => ({
+          runId: extractTaskTreeMessageRunId(message, args.runs),
+          messageId: message.id,
+        }))
+        .filter((message) => message.runId),
+      messageOperation: args.operations
+        .filter((operation) => operation.messageId)
+        .map((operation) => ({ messageId: operation.messageId, operationId: operation.id })),
+      operationConsumes: args.operations.flatMap((operation) => {
+        const consumed = asRecord(operation.summaryJson)?.consumedOperationIds;
+        const consumedIds = Array.isArray(consumed)
+          ? consumed.filter(
+              (value): value is string => typeof value === "string" && value.length > 0,
+            )
+          : [];
+        return consumedIds.map((consumedOperationId) => ({
+          operationId: operation.id,
+          consumedOperationId,
+        }));
+      }),
+    };
+  }
+
+  function resolveTaskConversationScope(args: {
+    requestedSessionId?: string | null;
+    includeLineage: boolean;
+    sessions: TaskSessionReadSessionRecord[];
+    selectedSessionId: string | null;
+    lineagePath: string[];
+    currentSessionId?: string | null;
+  }) {
+    const isTaskWideConversation = !args.requestedSessionId && args.includeLineage;
+    const sessionScopeIds = isTaskWideConversation
+      ? args.sessions.map((session) => session.id)
+      : args.lineagePath;
+    const sessionsById = new Map(args.sessions.map((session) => [session.id, session] as const));
+    const scopeRecords = sessionScopeIds
+      .map((sessionId) => sessionsById.get(sessionId))
+      .filter((session): session is TaskSessionReadSessionRecord => Boolean(session));
+
+    return {
+      isTaskWideConversation,
+      sessionScopeIds,
+      scopeRecords,
+      currentSessionRecordId:
+        resolveCurrentTaskSessionId(args.sessions, args.currentSessionId) ??
+        args.selectedSessionId ??
+        scopeRecords.at(-1)?.id ??
+        null,
+    };
+  }
+
+  async function loadTaskConversationMessageSets(
+    taskId: string,
+    scopeRecords: TaskSessionReadSessionRecord[],
+  ) {
+    return Promise.all(
+      scopeRecords.map((record) => loadTaskSessionMessagesInternal(taskId, record.id)),
+    );
+  }
+
+  function normalizeTaskConversationMessageSets(args: {
+    isTaskWideConversation: boolean;
+    messageSets: LoadedTaskSessionMessageRecord[][];
+    scopeRecords: TaskSessionReadSessionRecord[];
+    currentSessionRecordId: string | null;
+    task: TaskTreeRecord;
+    snapshot: TaskSessionHydrationSnapshot;
+  }) {
+    if (!args.isTaskWideConversation) {
+      return args.messageSets;
+    }
+
+    return args.messageSets.map((messages, index) =>
+      hydrateTaskConversationShellMessages({
+        messages,
+        promptText: args.scopeRecords[index]?.parentSessionId ? null : args.task.prompt,
+        task: args.task,
+        snapshot:
+          args.scopeRecords[index]?.id === args.currentSessionRecordId ? args.snapshot : null,
+      }),
+    );
+  }
+
+  function buildTaskConversationData(args: {
+    isTaskWideConversation: boolean;
+    normalizedMessageSets: LoadedTaskSessionMessageRecord[][];
+    sessionScopeIds: string[];
+    scopeRecords: TaskSessionReadSessionRecord[];
+    task: TaskTreeRecord;
+    snapshot: TaskSessionHydrationSnapshot;
+  }) {
+    const rawMessages = args.isTaskWideConversation
+      ? sortTaskSessionMessageRecordsChronologically(
+          args.normalizedMessageSets.flat(),
+          args.sessionScopeIds,
+        )
+      : args.normalizedMessageSets.flatMap((messages, index) =>
+          sliceTaskSessionMessagesForLineageBoundary(messages, args.scopeRecords[index + 1]),
+        );
+    const dedupedMessages = dedupeTaskSessionMessageRecords(rawMessages);
+
+    if (args.isTaskWideConversation) {
+      return dedupedMessages;
+    }
+
+    return hydrateTaskConversationShellMessages({
+      messages: dedupedMessages,
+      promptText: args.scopeRecords.some((record) => record.parentSessionId == null)
+        ? args.task.prompt
+        : null,
+      task: args.task,
+      snapshot: args.snapshot,
+    });
+  }
+
+  function resolveSelectedTaskSession(
+    sessions: TaskSessionReadSessionRecord[],
+    selectedSessionId: string | null,
+  ) {
+    return selectedSessionId
+      ? (sessions.find((session) => session.id === selectedSessionId) ?? null)
+      : null;
+  }
+
+  async function loadTaskExecutionTraceCollections(args: {
+    taskId: string;
+    selectedSessionId: string | null;
+    includeLineage: boolean;
+  }) {
+    return Promise.all([
+      buildTaskSessionTimelineViewResponse({
+        taskId: args.taskId,
+        sessionId: args.selectedSessionId,
+        includeLineage: args.includeLineage,
+      }),
+      args.selectedSessionId
+        ? loadTaskSessionMessagesInternal(args.taskId, args.selectedSessionId)
+        : Promise.resolve([]),
+      args.selectedSessionId
+        ? loadTaskSessionOperationsInternal(args.taskId, args.selectedSessionId)
+        : Promise.resolve([]),
+      args.selectedSessionId
+        ? loadTaskSessionArtifactsInternal(args.taskId, args.selectedSessionId)
+        : Promise.resolve([]),
+      loadTaskUsageLedgerEntriesInternal(args.taskId, args.selectedSessionId),
+    ]);
+  }
+
   async function buildTaskTreeResponse(args: {
     taskId: string;
     sessionId?: string | null;
@@ -1363,140 +1876,50 @@ export function createTaskSessionReadApi(deps: {
       return selection;
     }
 
-    const scopedSessionIds =
-      args.sessionId || args.includeLineage === false
-        ? selection.lineagePath
-        : sessions.map((session) => session.id);
+    const scopedSessionIds = resolveTaskTreeScopedSessionIds({
+      requestedSessionId: args.sessionId,
+      includeLineage: args.includeLineage,
+      lineagePath: selection.lineagePath,
+      sessions,
+    });
 
     const [runs, scopedSessionMessages, operations, artifacts] = await Promise.all([
-      scopedSessionIds.length === 0
-        ? Promise.resolve([])
-        : db
-            .select()
-            .from(taskSessionRuns)
-            .where(
-              and(
-                eq(taskSessionRuns.taskId, args.taskId),
-                inArray(taskSessionRuns.sessionId, scopedSessionIds),
-              ),
-            )
-            .orderBy(asc(taskSessionRuns.createdAt)),
-      scopedSessionIds.length === 0
-        ? Promise.resolve([])
-        : Promise.all(
-            scopedSessionIds.map(async (sessionId) => {
-              const session = sessions.find((record) => record.id === sessionId) ?? null;
-              const loadedMessages = await loadTaskSessionMessagesInternal(args.taskId, sessionId);
-              const promptReadyMessages = ensureRootPromptMessage({
-                messages: loadedMessages,
-                task,
-                sessionId,
-                isRootSession: session?.parentSessionId == null,
-              });
-              const hydratedMessages = hydrateTaskConversationShellMessages({
-                messages: promptReadyMessages,
-                promptText: session?.parentSessionId ? null : task.prompt,
-                task,
-                snapshot,
-              });
-              return sortSingleTaskSessionMessageRecords(hydratedMessages);
-            }),
-          ).then((records) => records.flat()),
-      scopedSessionIds.length === 0
-        ? Promise.resolve([])
-        : db
-            .select()
-            .from(taskOperations)
-            .where(and(eq(taskOperations.taskId, args.taskId), inArray(taskOperations.sessionId, scopedSessionIds)))
-            .orderBy(asc(taskOperations.createdAt), asc(taskOperations.operationIndex)),
-      scopedSessionIds.length === 0
-        ? Promise.resolve([])
-        : db
-            .select()
-            .from(taskArtifacts)
-            .where(and(eq(taskArtifacts.taskId, args.taskId), inArray(taskArtifacts.sessionId, scopedSessionIds)))
-            .orderBy(asc(taskArtifacts.createdAt)),
+      loadScopedTaskSessionRuns(args.taskId, scopedSessionIds),
+      loadScopedTaskTreeMessages({
+        taskId: args.taskId,
+        sessionIds: scopedSessionIds,
+        sessions,
+        task,
+        snapshot,
+      }),
+      loadScopedTaskSessionOperations(args.taskId, scopedSessionIds),
+      loadScopedTaskSessionArtifacts(args.taskId, scopedSessionIds),
     ]);
 
-    const messagesWithRootPrompt =
-      scopedSessionMessages.length === 0
-        ? ensureRootPromptMessage({
-            messages: [],
-            task,
-            sessionId: `virtual-root-${args.taskId}`,
-            isRootSession: true,
-          })
-        : scopedSessionMessages;
-    const messages = sortSingleTaskSessionMessageRecords(messagesWithRootPrompt);
+    const messages = resolveTaskTreeMessages({
+      taskId: args.taskId,
+      task,
+      scopedSessionMessages,
+    });
     const messageParts = messages.flatMap((message) => message.parts ?? []);
     const normalizedOperations =
       operations.length > 0 ? operations : buildFallbackOperationsFromMessageParts(messages);
     const scopedSessions = sessions.filter((session) => scopedSessionIds.includes(session.id));
-    const workflowStageKey =
-      asNonEmptyString(workflowFacts.workflowRun?.currentStage) ??
-      extractWorkflowStageKey({
+    const workflowContext = resolveTaskTreeWorkflowContext({
+      workflowFacts,
+      task,
       selectedSessionId: selection.selectedSessionId,
       scopedSessions,
-      scopedRuns: runs,
-      task,
+      runs,
     });
-    const workflowTemplateId =
-      asNonEmptyString(workflowFacts.workflowRun?.templateId) ?? extractWorkflowTemplateId(task);
-    const currentStageRun = workflowFacts.stages.find((stage) => stage.stageKey === workflowStageKey) ?? null;
-
-    const rootSessionId =
-      sessions.find((session) => session.parentSessionId == null)?.id ?? sessions[0]?.id ?? null;
-
-    const parallelGroups = Array.from(
-      runs
-        .filter((run) => typeof run.coordinationKey === "string" && run.coordinationKey.length > 0)
-        .reduce((groups, run) => {
-          const key = run.coordinationKey as string;
-          const existing = groups.get(key) ?? {
-            coordinationKey: key,
-            sessionId: run.sessionId,
-            executionMode: run.executionKind,
-            winnerRunId: null as string | null,
-            runIds: [] as string[],
-          };
-          existing.runIds.push(run.id);
-          groups.set(key, existing);
-          return groups;
-        }, new Map<string, { coordinationKey: string; sessionId: string; executionMode: string | null; winnerRunId: string | null; runIds: string[] }>()),
-    ).map(([, value]) => value);
-
-    const edges = {
-      sessionParent: sessions
-        .filter((session) => session.parentSessionId)
-        .map((session) => ({ sessionId: session.id, parentSessionId: session.parentSessionId })),
-      sessionSource: sessions
-        .filter((session) => session.sourceMessageId)
-        .map((session) => ({ sessionId: session.id, sourceMessageId: session.sourceMessageId })),
-      sessionRun: runs.map((run) => ({ sessionId: run.sessionId, runId: run.id })),
-      sessionMessage: messages.map((message) => ({ sessionId: message.sessionId, messageId: message.id })),
-      messageParent: messages
-        .map((message) => ({ messageId: message.id, parentMessageId: extractTaskTreeMessageParentId(message) }))
-        .filter((message) => message.parentMessageId),
-      messageReply: messages
-        .map((message) => ({ messageId: message.id, replyToMessageId: extractTaskTreeMessageParentId(message) }))
-        .filter((message) => message.replyToMessageId),
-      runMessage: messages
-        .map((message) => ({ runId: extractTaskTreeMessageRunId(message, runs), messageId: message.id }))
-        .filter((message) => message.runId),
-      messageOperation: normalizedOperations
-        .filter((operation) => operation.messageId)
-        .map((operation) => ({ messageId: operation.messageId, operationId: operation.id })),
-      operationConsumes: normalizedOperations.flatMap((operation) => {
-        const consumed = asRecord(operation.summaryJson)?.consumedOperationIds;
-        const consumedIds = Array.isArray(consumed)
-          ? consumed.filter((value): value is string => typeof value === "string" && value.length > 0)
-          : [];
-        return consumedIds.map((consumedOperationId) => ({
-          operationId: operation.id,
-          consumedOperationId,
-        }));
-      }),
-    };
+    const rootSessionId = resolveTaskTreeRootSessionId(sessions);
+    const parallelGroups = buildTaskTreeParallelGroups(runs);
+    const edges = buildTaskTreeEdges({
+      sessions,
+      runs,
+      messages,
+      operations: normalizedOperations,
+    });
 
     return {
       ok: true as const,
@@ -1522,12 +1945,13 @@ export function createTaskSessionReadApi(deps: {
           updatedAt: task.lastActivityAt ?? task.createdAt,
         },
         workflow: {
-          templateId: workflowTemplateId,
-          currentStageKey: workflowStageKey,
-          currentStageLabel: formatWorkflowStageLabel(workflowStageKey),
+          templateId: workflowContext.workflowTemplateId,
+          currentStageKey: workflowContext.workflowStageKey,
+          currentStageLabel: formatWorkflowStageLabel(workflowContext.workflowStageKey),
           status: asNonEmptyString(workflowFacts.workflowRun?.status) ?? task.status,
           approvalState:
-            asNonEmptyString(currentStageRun?.approvalState) ?? inferWorkflowApprovalState(task.status),
+            asNonEmptyString(workflowContext.currentStageRun?.approvalState) ??
+            inferWorkflowApprovalState(task.status),
           workflowRun: workflowFacts.workflowRun,
           stages: workflowFacts.stages,
           roleConclusions: workflowFacts.roleConclusions,
@@ -1694,48 +2118,34 @@ export function createTaskSessionReadApi(deps: {
       return selection;
     }
 
-    const isTaskWideConversation = !args.sessionId && args.includeLineage;
-    const sessionScopeIds = isTaskWideConversation
-      ? sessions.map((session) => session.id)
-      : selection.lineagePath;
-    const sessionsById = new Map(sessions.map((session) => [session.id, session] as const));
-    const scopeRecords = sessionScopeIds
-      .map((sessionId) => sessionsById.get(sessionId))
-      .filter((session): session is (typeof sessions)[number] => Boolean(session));
-    const currentSessionRecordId =
-      resolveCurrentTaskSessionId(sessions, snapshot?.currentSessionId) ??
-      selection.selectedSessionId ??
-      scopeRecords.at(-1)?.id ??
-      null;
-    const messageSets = await Promise.all(
-      scopeRecords.map((record) => loadTaskSessionMessagesInternal(args.taskId, record.id)),
+    const conversationScope = resolveTaskConversationScope({
+      requestedSessionId: args.sessionId,
+      includeLineage: args.includeLineage,
+      sessions,
+      selectedSessionId: selection.selectedSessionId,
+      lineagePath: selection.lineagePath,
+      currentSessionId: snapshot?.currentSessionId,
+    });
+    const messageSets = await loadTaskConversationMessageSets(
+      args.taskId,
+      conversationScope.scopeRecords,
     );
-    const normalizedMessageSets = isTaskWideConversation
-      ? messageSets.map((messages, index) =>
-          hydrateTaskConversationShellMessages({
-            messages,
-            promptText: scopeRecords[index]?.parentSessionId ? null : task.prompt,
-            task,
-            snapshot: scopeRecords[index]?.id === currentSessionRecordId ? snapshot : null,
-          }),
-        )
-      : messageSets;
-    const rawMessages = isTaskWideConversation
-      ? sortTaskSessionMessageRecordsChronologically(normalizedMessageSets.flat(), sessionScopeIds)
-      : normalizedMessageSets.flatMap((messages, index) =>
-          sliceTaskSessionMessagesForLineageBoundary(messages, scopeRecords[index + 1]),
-        );
-    const dedupedMessages = dedupeTaskSessionMessageRecords(rawMessages);
-    const data = isTaskWideConversation
-      ? dedupedMessages
-      : hydrateTaskConversationShellMessages({
-          messages: dedupedMessages,
-          promptText: scopeRecords.some((record) => record.parentSessionId == null)
-            ? task.prompt
-            : null,
-          task,
-          snapshot,
-        });
+    const normalizedMessageSets = normalizeTaskConversationMessageSets({
+      isTaskWideConversation: conversationScope.isTaskWideConversation,
+      messageSets,
+      scopeRecords: conversationScope.scopeRecords,
+      currentSessionRecordId: conversationScope.currentSessionRecordId,
+      task,
+      snapshot,
+    });
+    const data = buildTaskConversationData({
+      isTaskWideConversation: conversationScope.isTaskWideConversation,
+      normalizedMessageSets,
+      sessionScopeIds: conversationScope.sessionScopeIds,
+      scopeRecords: conversationScope.scopeRecords,
+      task,
+      snapshot,
+    });
     const hasSelectedSession = Boolean(selection.selectedSessionId);
 
     return {
@@ -1747,8 +2157,8 @@ export function createTaskSessionReadApi(deps: {
           readSource: "task-session-first" as const,
           sessionId: selection.selectedSessionId,
           includeLineage: args.includeLineage,
-          lineagePath: sessionScopeIds,
-          cachedSessionCount: scopeRecords.length,
+          lineagePath: conversationScope.sessionScopeIds,
+          cachedSessionCount: conversationScope.scopeRecords.length,
           cacheState: hasSelectedSession ? ("complete" as const) : ("none" as const),
           complete: hasSelectedSession,
           itemCount: data.length,
@@ -1941,10 +2351,12 @@ export function createTaskSessionReadApi(deps: {
 
     const filters = [eq(taskTimelineViews.taskId, args.taskId)];
     if (selection.lineagePath.length > 0) {
-      filters.push(inArray(taskTimelineViews.sessionId, buildTaskSessionAliasPath(selection.lineagePath)));
+      filters.push(
+        inArray(taskTimelineViews.sessionId, buildTaskSessionAliasPath(selection.lineagePath)),
+      );
     }
 
-    const data = await db
+    const timelineRows = await db
       .select({
         id: taskTimelineViews.id,
         taskId: taskTimelineViews.taskId,
@@ -1965,6 +2377,11 @@ export function createTaskSessionReadApi(deps: {
       .from(taskTimelineViews)
       .where(and(...filters))
       .orderBy(asc(taskTimelineViews.sortAt), asc(taskTimelineViews.createdAt));
+
+    const data = timelineRows.map((row) => ({
+      ...row,
+      sessionId: toCanonicalTaskSessionId(args.taskId, row.sessionId) ?? row.sessionId,
+    }));
 
     return {
       ok: true as const,
@@ -2008,27 +2425,13 @@ export function createTaskSessionReadApi(deps: {
     }
 
     const selectedSessionId = selection.selectedSessionId;
-
-    const selectedSession = selectedSessionId
-      ? sessions.find((session) => session.id === selectedSessionId) ?? null
-      : null;
-    const [timeline, messages, operations, artifacts, usageLedger] = await Promise.all([
-      buildTaskSessionTimelineViewResponse({
+    const selectedSession = resolveSelectedTaskSession(sessions, selectedSessionId);
+    const [timeline, messages, operations, artifacts, usageLedger] =
+      await loadTaskExecutionTraceCollections({
         taskId: args.taskId,
-        sessionId: selectedSessionId,
+        selectedSessionId,
         includeLineage: args.includeLineage,
-      }),
-      selectedSessionId
-        ? loadTaskSessionMessagesInternal(args.taskId, selectedSessionId)
-        : Promise.resolve([]),
-      selectedSessionId
-        ? loadTaskSessionOperationsInternal(args.taskId, selectedSessionId)
-        : Promise.resolve([]),
-      selectedSessionId
-        ? loadTaskSessionArtifactsInternal(args.taskId, selectedSessionId)
-        : Promise.resolve([]),
-      loadTaskUsageLedgerEntriesInternal(args.taskId, selectedSessionId),
-    ]);
+      });
 
     if (!timeline.ok) {
       return timeline;

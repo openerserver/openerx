@@ -15,7 +15,6 @@ const sql = postgres(DATABASE_URL, { max: 1, prepare: false });
 const createdProjectIds: string[] = [];
 const createdTaskIds: string[] = [];
 const createdNodeIds = new Set<string>();
-const createdAgentRunIds: string[] = [];
 const createdLedgerIds: string[] = [];
 const createdLedgerStepIds: string[] = [];
 const createdAuditIds: string[] = [];
@@ -81,6 +80,16 @@ async function request<T>(path: string, opts: RequestInit = {}): Promise<ApiResu
   }
 
   return { data: data as T, status: response.status };
+}
+
+async function safeSql(query: string, params: unknown[] = []) {
+  try {
+    await sql.unsafe(query, params);
+  } catch (error) {
+    if ((error as { code?: string }).code !== "42P01") {
+      throw error;
+    }
+  }
 }
 
 async function authedRequest<T>(path: string, opts: RequestInit = {}) {
@@ -166,7 +175,7 @@ async function createProject(orgId: string, unique: string) {
 }
 
 function taskBranchCompatNodeId(taskId: string, runtimeSessionId: string) {
-  return `task_session:${taskId}:${runtimeSessionId}`;
+  return `branch-node:${taskId}:${runtimeSessionId}`;
 }
 
 function taskSessionId(taskId: string, runtimeSessionId: string) {
@@ -204,24 +213,21 @@ async function insertAgentRun(args: {
   startedAt: string;
   finishedAt?: string | null;
 }) {
-  await sql.unsafe(
-    `INSERT INTO agent_runs (
-      id, task_id, session_id, agent_type, status, model_used, token_used, result, error, started_at, finished_at, created_at
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, NULL, NULL, $8, $9, $10)`,
-    [
-      args.id,
-      args.taskId,
-      args.sessionId,
-      "builder",
-      args.status,
-      args.modelUsed ?? "github-copilot:gpt-5-mini",
-      args.tokenUsed ?? 0,
-      args.startedAt,
-      args.finishedAt ?? null,
-      args.startedAt,
-    ],
-  );
-  createdAgentRunIds.push(args.id);
+  const response = await authedRequest<{ id: string; status: string }>(`/api/tasks/${args.taskId}/runs`, {
+    method: "POST",
+    body: JSON.stringify({
+      id: args.id,
+      sessionId: args.sessionId,
+      agentType: "builder",
+      status: args.status,
+      modelUsed: args.modelUsed ?? "github-copilot:gpt-5-mini",
+      tokenUsed: args.tokenUsed ?? 0,
+      startedAt: args.startedAt,
+      finishedAt: args.finishedAt ?? null,
+    }),
+  });
+
+  expect(response.status).toBe(201);
 }
 
 async function insertLedger(args: {
@@ -322,38 +328,29 @@ afterAll(async () => {
   for (const taskId of createdTaskIds) {
     await sql.unsafe("DELETE FROM task_timeline_views WHERE task_id = $1", [taskId]);
     await sql.unsafe("DELETE FROM task_usage_ledger_entries WHERE task_id = $1", [taskId]);
-    await sql.unsafe("DELETE FROM session_operations WHERE task_id = $1", [taskId]);
-    await sql.unsafe(
-      `DELETE FROM task_session_message_parts WHERE message_id IN (
-        SELECT id FROM task_session_messages WHERE task_id = $1
-      )`,
-      [taskId],
-    );
-    await sql.unsafe("DELETE FROM task_session_messages WHERE task_id = $1", [taskId]);
-    await sql.unsafe("DELETE FROM task_sessions WHERE task_id = $1", [taskId]);
-    await sql.unsafe("DELETE FROM task_domain_events WHERE task_id = $1", [taskId]);
-    await sql.unsafe(
-      `DELETE FROM conversation_message_parts WHERE message_id IN (
-        SELECT id FROM conversation_messages WHERE task_id = $1
-      )`,
-      [taskId],
-    );
-    await sql.unsafe("DELETE FROM conversation_messages WHERE task_id = $1", [taskId]);
-    await sql.unsafe("DELETE FROM conversation_sessions WHERE task_id = $1", [taskId]);
+    await sql.unsafe("DELETE FROM task_artifacts WHERE task_id = $1", [taskId]);
+    await sql.unsafe("DELETE FROM task_operations WHERE task_id = $1", [taskId]);
     await sql.unsafe("DELETE FROM task_snapshots WHERE task_id = $1", [taskId]);
-    await sql.unsafe("DELETE FROM task_run_edges WHERE task_id = $1", [taskId]);
-    await sql.unsafe("UPDATE agent_runs SET run_node_id = NULL, run_id = NULL WHERE task_id = $1", [
-      taskId,
-    ]);
-    await sql.unsafe("UPDATE task_run_nodes SET agent_run_id = NULL WHERE task_id = $1", [taskId]);
-    await sql.unsafe("DELETE FROM task_run_nodes WHERE task_id = $1", [taskId]);
-    await sql.unsafe("DELETE FROM agent_runs WHERE task_id = $1", [taskId]);
-    await sql.unsafe("DELETE FROM task_runs WHERE task_id = $1", [taskId]);
+    await sql.unsafe(
+      "UPDATE task_sessions SET status = 'archived', archived_at = COALESCE(archived_at, CURRENT_TIMESTAMP::text), source_message_id = NULL, head_message_id = NULL, latest_run_id = NULL, winner_session_id = NULL, judge_session_id = NULL WHERE task_id = $1",
+      [taskId],
+    );
+    await sql.unsafe(
+      `DELETE FROM task_message_parts WHERE message_id IN (
+        SELECT id FROM task_messages WHERE task_id = $1
+      )`,
+      [taskId],
+    );
+    await sql.unsafe("DELETE FROM task_messages WHERE task_id = $1", [taskId]);
+    await sql.unsafe("DELETE FROM task_session_runs WHERE task_id = $1", [taskId]);
+    await sql.unsafe("DELETE FROM task_sessions WHERE task_id = $1", [taskId]);
+    await sql.unsafe("DELETE FROM task_message_events WHERE task_id = $1", [taskId]);
+    await sql.unsafe("DELETE FROM task_domain_events WHERE task_id = $1", [taskId]);
+    await safeSql("DELETE FROM task_run_edges WHERE task_id = $1", [taskId]);
+    await safeSql("UPDATE task_run_nodes SET agent_run_id = NULL WHERE task_id = $1", [taskId]);
+    await safeSql("DELETE FROM task_run_nodes WHERE task_id = $1", [taskId]);
+    await safeSql("DELETE FROM task_runs WHERE task_id = $1", [taskId]);
     await sql.unsafe("DELETE FROM tasks WHERE id = $1", [taskId]);
-  }
-
-  for (const id of createdAgentRunIds) {
-    await sql.unsafe("DELETE FROM agent_runs WHERE id = $1", [id]);
   }
 
   const touchedProjectIds = new Set<string>([PROJECT_ID, ...createdProjectIds]);
@@ -371,9 +368,8 @@ afterAll(async () => {
   });
   if (nodeIds.length > 0) {
     const nodePlaceholders = nodeIds.map((_, index) => `$${index + 1}`).join(", ");
-    await sql.unsafe(`DELETE FROM task_sessions WHERE tree_node_id IN (${nodePlaceholders})`, nodeIds);
     await sql.unsafe(
-      `DELETE FROM conversation_sessions WHERE tree_node_id IN (${nodePlaceholders})`,
+      `DELETE FROM task_sessions WHERE tree_node_id IN (${nodePlaceholders})`,
       nodeIds,
     );
     await sql.unsafe(`DELETE FROM tasks WHERE tree_node_id IN (${nodePlaceholders})`, nodeIds);
@@ -950,8 +946,8 @@ describe("tree-backed task aggregations", () => {
     expect(replayResult.replayedEventCount).toBe(0);
 
     const rebuiltSnapshotRows = await sql.unsafe<
-      Array<{ current_status: string; current_session_id: string | null }>
-    >("SELECT current_status, current_session_id FROM task_snapshots WHERE task_id = $1", [
+      Array<{ lifecycle_status: string; current_session_id: string | null }>
+    >("SELECT lifecycle_status, current_session_id FROM task_snapshots WHERE task_id = $1", [
       task.id,
     ]);
     expect(rebuiltSnapshotRows).toEqual([]);
@@ -966,8 +962,14 @@ describe("tree-backed task aggregations", () => {
     const unique = Date.now();
     const orgId = await getProjectOrgId(PROJECT_ID);
     const projectRecord = await createProject(orgId, `${unique}`);
-    const firstTask = await createTaskForProject(projectRecord.id, `projection-project-a-${unique}`);
-    const secondTask = await createTaskForProject(projectRecord.id, `projection-project-b-${unique}`);
+    const firstTask = await createTaskForProject(
+      projectRecord.id,
+      `projection-project-a-${unique}`,
+    );
+    const secondTask = await createTaskForProject(
+      projectRecord.id,
+      `projection-project-b-${unique}`,
+    );
     const firstRuntimeSessionId = `projection-project-session-a-${unique}`;
     const secondRuntimeSessionId = `projection-project-session-b-${unique}`;
 
@@ -1278,7 +1280,7 @@ describe("tree-backed task aggregations", () => {
         text_content: string | null;
       }>
     >(
-      "SELECT id, session_id, runtime_message_id, text_content FROM task_session_messages WHERE task_id = $1",
+      "SELECT id, session_id, runtime_message_id, text_content FROM task_messages WHERE task_id = $1",
       [task.id],
     );
     expect(messageRows).toEqual([
@@ -1292,10 +1294,9 @@ describe("tree-backed task aggregations", () => {
 
     const partRows = await sql.unsafe<
       Array<{ message_id: string; part_type: string; text_content: string | null }>
-    >(
-      "SELECT message_id, part_type, text_content FROM task_session_message_parts WHERE message_id = $1",
-      [taskSessionMessageId(task.id, runtimeSessionId, `msg-${unique}`)],
-    );
+    >("SELECT message_id, part_type, text_content FROM task_message_parts WHERE message_id = $1", [
+      taskSessionMessageId(task.id, runtimeSessionId, `msg-${unique}`),
+    ]);
     expect(partRows).toEqual([
       expect.objectContaining({
         message_id: taskSessionMessageId(task.id, runtimeSessionId, `msg-${unique}`),
@@ -1305,15 +1306,20 @@ describe("tree-backed task aggregations", () => {
     ]);
 
     const snapshotRows = await sql.unsafe<
-      Array<{ task_id: string; current_status: string; current_session_id: string | null }>
-    >("SELECT task_id, current_status, current_session_id FROM task_snapshots WHERE task_id = $1", [
-      task.id,
-    ]);
+      Array<{
+        task_id: string;
+        lifecycle_status: string;
+        current_session_id: string | null;
+      }>
+    >(
+      "SELECT task_id, lifecycle_status, current_session_id FROM task_snapshots WHERE task_id = $1",
+      [task.id],
+    );
     expect(snapshotRows).toEqual([
       expect.objectContaining({
         task_id: task.id,
-        current_status: "pending",
-        current_session_id: runtimeSessionId,
+        lifecycle_status: "active",
+        current_session_id: persistedSessionId,
       }),
     ]);
 
@@ -1344,7 +1350,7 @@ describe("tree-backed task aggregations", () => {
     expect(eventRows).toEqual([]);
   });
 
-  test("agent runs and runtime ledgers sync session operations and leave legacy run ids empty", async () => {
+  test("agent runs and runtime ledgers sync through canonical session operations", async () => {
     const unique = Date.now();
     const task = await createTask(`task-run-dual-write-${unique}`);
     const agentRunId = `agent-run-dual-write-${unique}`;
@@ -1367,7 +1373,6 @@ describe("tree-backed task aggregations", () => {
       },
     );
     expect(createRunResponse.status).toBe(201);
-    createdAgentRunIds.push(agentRunId);
 
     const patchRunResponse = await authedRequest<{ id: string; status: string }>(
       `/api/tasks/${task.id}/runs/${agentRunId}`,
@@ -1387,20 +1392,20 @@ describe("tree-backed task aggregations", () => {
         id: string;
         session_id: string;
         operation_kind: string;
-        execution_status: string;
-        output_text: string | null;
+        status: string;
+        result_text: string | null;
       }>
     >(
-      "SELECT id, session_id, operation_kind, execution_status, output_text FROM session_operations WHERE task_id = $1",
+      "SELECT id, session_id, operation_kind, status, summary_json->>'resultText' AS result_text FROM task_operations WHERE task_id = $1",
       [task.id],
     );
     expect(sessionOperationRows).toEqual([
       expect.objectContaining({
         id: `session-operation:${task.id}:${agentRunId}`,
         session_id: persistedSessionId,
-        operation_kind: "executor",
-        execution_status: "complete",
-        output_text: `task run completed ${unique}`,
+        operation_kind: "model_request",
+        status: "completed",
+        result_text: `task run completed ${unique}`,
       }),
     ]);
 
@@ -1413,7 +1418,7 @@ describe("tree-backed task aggregations", () => {
         output_tokens: number;
       }>
     >(
-      "SELECT id, session_id, operation_id, entry_kind, output_tokens FROM task_usage_ledger_entries WHERE task_id = $1 ORDER BY created_at ASC",
+      "SELECT id, session_id, operation_id, entry_kind, output_tokens::int AS output_tokens FROM task_usage_ledger_entries WHERE task_id = $1 ORDER BY created_at ASC",
       [task.id],
     );
     expect(usageLedgerRows).toEqual([
@@ -1421,47 +1426,53 @@ describe("tree-backed task aggregations", () => {
         session_id: persistedSessionId,
         operation_id: `session-operation:${task.id}:${agentRunId}`,
         entry_kind: "model_request",
-        output_tokens: "21",
+        output_tokens: 21,
       }),
       expect.objectContaining({
         session_id: persistedSessionId,
         operation_id: `session-operation:${task.id}:${agentRunId}`,
         entry_kind: "model_request",
-        output_tokens: "42",
+        output_tokens: 42,
       }),
     ]);
 
-    const agentRunRows = await sql.unsafe<
-      Array<{ id: string; session_id: string | null; run_id: string | null; run_node_id: string | null }>
-    >("SELECT id, session_id, run_id, run_node_id FROM agent_runs WHERE id = $1", [agentRunId]);
-    expect(agentRunRows).toEqual([
+    const canonicalRunRows = await sql.unsafe<
+      Array<{
+        id: string;
+        session_id: string;
+        runtime_session_id: string | null;
+        candidate_index: number | null;
+      }>
+    >(
+      "SELECT id, session_id, runtime_session_id, candidate_index FROM task_session_runs WHERE task_id = $1 AND id = $2",
+      [task.id, `run_${persistedSessionId}`],
+    );
+    expect(canonicalRunRows).toEqual([
       expect.objectContaining({
-        id: agentRunId,
-        session_id: runtimeSessionId,
-        run_id: null,
-        run_node_id: null,
+        id: `run_${persistedSessionId}`,
+        session_id: persistedSessionId,
+        runtime_session_id: runtimeSessionId,
+        candidate_index: null,
       }),
     ]);
 
     const snapshotRows = await sql.unsafe<
       Array<{
         task_id: string;
-        current_status: string;
-        current_run_id: string | null;
+        lifecycle_status: string;
         current_session_id: string | null;
-        latest_result: string | null;
+        latest_result_summary: string | null;
       }>
     >(
-      "SELECT task_id, current_status, current_run_id, current_session_id, latest_result FROM task_snapshots WHERE task_id = $1",
+      "SELECT task_id, lifecycle_status, current_session_id, latest_result_summary FROM task_snapshots WHERE task_id = $1",
       [task.id],
     );
     expect(snapshotRows).toEqual([
       expect.objectContaining({
         task_id: task.id,
-        current_status: "completed",
-        current_run_id: null,
-        current_session_id: runtimeSessionId,
-        latest_result: `task run completed ${unique}`,
+        lifecycle_status: "done",
+        current_session_id: persistedSessionId,
+        latest_result_summary: `task run completed ${unique}`,
       }),
     ]);
 

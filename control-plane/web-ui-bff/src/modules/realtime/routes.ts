@@ -5,7 +5,7 @@ import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
 import { z } from "zod";
 import type { JWTPayload } from "../../middleware/auth";
-import { ensureAgentRunForSession } from "../agent-control/opencode-adapter";
+import { ensureAgentRunForSession } from "../agent-control/agent-run-registry";
 import { sseAggregator } from "./sse-aggregator";
 import { wsBroadcaster } from "./ws-broadcaster";
 

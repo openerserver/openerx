@@ -123,11 +123,7 @@ function getOptionalStringArg(args: Record<string, string | boolean>, key: strin
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
-function getNumberArg(
-  args: Record<string, string | boolean>,
-  key: string,
-  defaultValue: number,
-) {
+function getNumberArg(args: Record<string, string | boolean>, key: string, defaultValue: number) {
   const value = args[key];
   if (typeof value !== "string" || value.trim().length === 0) {
     return defaultValue;
@@ -168,7 +164,12 @@ function extractMessageText(message: {
     return null;
   }
 
-  const rawCandidates = [rawPayload.text, rawPayload.textContent, rawPayload.summaryText, rawPayload.content];
+  const rawCandidates = [
+    rawPayload.text,
+    rawPayload.textContent,
+    rawPayload.summaryText,
+    rawPayload.content,
+  ];
   for (const candidate of rawCandidates) {
     if (typeof candidate === "string" && candidate.trim().length > 0) {
       return candidate;
@@ -192,8 +193,7 @@ function extractMessageText(message: {
 
 function countMessageParts(message: {
   rawPayload?: Record<string, unknown> | null;
-},
-) {
+}) {
   const rawPayload = asRecord(message.rawPayload);
   return Array.isArray(rawPayload?.parts) ? rawPayload.parts.length : 0;
 }
@@ -246,7 +246,11 @@ function sortSessionMessages(left: MessageRow, right: MessageRow) {
   return left.messageIndex - right.messageIndex;
 }
 
-function isRecentSamePrompt(existingCreatedAt: string, incomingCreatedAt: string, windowMs: number) {
+function isRecentSamePrompt(
+  existingCreatedAt: string,
+  incomingCreatedAt: string,
+  windowMs: number,
+) {
   const existingTime = parseTimestamp(existingCreatedAt);
   const incomingTime = parseTimestamp(incomingCreatedAt);
   if (existingTime === null || incomingTime === null) {
@@ -329,11 +333,17 @@ function findCanonicalParentMessage(args: {
     .sort((left, right) => {
       const leftTime = parseTimestamp(left.createdAt) ?? 0;
       const rightTime = parseTimestamp(right.createdAt) ?? 0;
-      return Math.abs(leftTime - (parseTimestamp(args.createdAt) ?? 0)) - Math.abs(rightTime - (parseTimestamp(args.createdAt) ?? 0));
+      return (
+        Math.abs(leftTime - (parseTimestamp(args.createdAt) ?? 0)) -
+        Math.abs(rightTime - (parseTimestamp(args.createdAt) ?? 0))
+      );
     })[0];
 }
 
-function resolveInsertionMessageIndex(parentMessages: MessageRow[], candidate: CandidateUserMessageRow) {
+function resolveInsertionMessageIndex(
+  parentMessages: MessageRow[],
+  candidate: CandidateUserMessageRow,
+) {
   const candidateCreatedAt = parseTimestamp(candidate.createdAt);
   const target = parentMessages.find((message) => {
     const messageCreatedAt = parseTimestamp(message.createdAt);
@@ -365,7 +375,8 @@ function chooseCanonicalMessageId(args: {
   parentMessages: MessageRow[];
 }) {
   const takenIds = new Set(args.parentMessages.map((message) => message.messageId));
-  const runtimeMessageId = args.candidate.runtimeMessageId ?? `backfill:${args.candidate.messageId}`;
+  const runtimeMessageId =
+    args.candidate.runtimeMessageId ?? `backfill:${args.candidate.messageId}`;
   const preferredId = buildTaskSessionMessageId(args.parentSessionId, runtimeMessageId);
   if (!takenIds.has(preferredId)) {
     return preferredId;
@@ -410,7 +421,10 @@ function updateParentMessageCache(
   parentMessagesBySessionId.set(canonicalMessage.sessionId, current);
 }
 
-function hydrateParentMessageCache(parentMessagesBySessionId: Map<string, MessageRow[]>, plan: RepairPlan) {
+function hydrateParentMessageCache(
+  parentMessagesBySessionId: Map<string, MessageRow[]>,
+  plan: RepairPlan,
+) {
   const current = parentMessagesBySessionId.get(plan.parentSessionId) ?? [];
   const target = current.find((message) => message.messageId === plan.canonicalMessageId);
   if (!target) {
@@ -592,7 +606,9 @@ function buildRepairPlans(args: {
         runtimeMessageId: existingCanonical.runtimeMessageId,
         role: existingCanonical.role,
         status: hydrateCanonical ? candidate.status : existingCanonical.status,
-        clientMessageId: hydrateCanonical ? candidate.clientMessageId : existingCanonical.clientMessageId,
+        clientMessageId: hydrateCanonical
+          ? candidate.clientMessageId
+          : existingCanonical.clientMessageId,
         providerMessageId: hydrateCanonical
           ? candidate.providerMessageId
           : existingCanonical.providerMessageId,
@@ -691,10 +707,7 @@ async function shiftParentMessageIndexes(
   );
 }
 
-async function insertCanonicalMessage(
-  transaction: SqlExecutor,
-  message: CanonicalMessagePlan,
-) {
+async function insertCanonicalMessage(transaction: SqlExecutor, message: CanonicalMessagePlan) {
   await transaction.unsafe(
     `
       insert into task_messages (
@@ -752,10 +765,7 @@ async function insertCanonicalMessage(
   );
 }
 
-async function updateCanonicalMessage(
-  transaction: SqlExecutor,
-  message: CanonicalMessagePlan,
-) {
+async function updateCanonicalMessage(transaction: SqlExecutor, message: CanonicalMessagePlan) {
   await transaction.unsafe(
     `
       update task_messages
@@ -794,10 +804,9 @@ async function replaceCanonicalParts(args: {
   canonicalMessageId: string;
   childParts: MessagePartRow[];
 }) {
-  await args.transaction.unsafe(
-    `delete from task_message_parts where message_id = $1`,
-    [args.canonicalMessageId] as never[],
-  );
+  await args.transaction.unsafe("delete from task_message_parts where message_id = $1", [
+    args.canonicalMessageId,
+  ] as never[]);
 
   for (const part of args.childParts) {
     await args.transaction.unsafe(
@@ -858,10 +867,7 @@ async function insertCanonicalParts(args: {
   }
 }
 
-async function syncCanonicalMessagePartCount(
-  transaction: SqlExecutor,
-  canonicalMessageId: string,
-) {
+async function syncCanonicalMessagePartCount(transaction: SqlExecutor, canonicalMessageId: string) {
   await transaction.unsafe(
     `
       update task_messages
@@ -876,10 +882,7 @@ async function syncCanonicalMessagePartCount(
   );
 }
 
-async function ensureCanonicalTimelineRow(
-  transaction: SqlExecutor,
-  message: CanonicalMessagePlan,
-) {
+async function ensureCanonicalTimelineRow(transaction: SqlExecutor, message: CanonicalMessagePlan) {
   await transaction.unsafe(
     `
       insert into task_timeline_views (
@@ -980,20 +983,21 @@ async function updateMessageReferences(args: {
 
 async function deleteChildTimelineRows(transaction: SqlExecutor, childMessageId: string) {
   const rows = await transaction.unsafe<Array<{ id: string }>>(
-    `delete from task_timeline_views where message_id = $1 returning id`,
+    "delete from task_timeline_views where message_id = $1 returning id",
     [childMessageId] as never[],
   );
   return rows.length;
 }
 
 async function deleteChildMessage(transaction: SqlExecutor, childMessageId: string) {
-  await transaction.unsafe(`update task_sessions set head_message_id = null, updated_at = current_timestamp where head_message_id = $1`, [
+  await transaction.unsafe(
+    "update task_sessions set head_message_id = null, updated_at = current_timestamp where head_message_id = $1",
+    [childMessageId] as never[],
+  );
+  await transaction.unsafe("delete from task_message_parts where message_id = $1", [
     childMessageId,
   ] as never[]);
-  await transaction.unsafe(`delete from task_message_parts where message_id = $1`, [
-    childMessageId,
-  ] as never[]);
-  await transaction.unsafe(`delete from task_messages where id = $1`, [childMessageId] as never[]);
+  await transaction.unsafe("delete from task_messages where id = $1", [childMessageId] as never[]);
 }
 
 async function applyRepairPlan(args: {
@@ -1046,7 +1050,10 @@ async function applyRepairPlan(args: {
     args.summary.artifactRefsUpdatedCount += artifactUpdatedCount;
     args.summary.usageRefsUpdatedCount += usageUpdatedCount;
 
-    args.summary.timelineRowsDeletedCount += await deleteChildTimelineRows(tx, args.plan.childMessageId);
+    args.summary.timelineRowsDeletedCount += await deleteChildTimelineRows(
+      tx,
+      args.plan.childMessageId,
+    );
     await deleteChildMessage(tx, args.plan.childMessageId);
     args.summary.childMessageDeletedCount += 1;
   });
@@ -1098,12 +1105,16 @@ async function main() {
     projectId: projectId ?? undefined,
     all,
   });
-  const candidateMessagesWithText = candidateMessages.filter((message) => Boolean(normalizePromptText(message)));
+  const candidateMessagesWithText = candidateMessages.filter((message) =>
+    Boolean(normalizePromptText(message)),
+  );
   const parentSessionIds = Array.from(
     new Set(candidateMessagesWithText.map((message) => message.parentSessionId)),
   );
   const parentMessages = await loadParentSessionMessages(parentSessionIds);
-  const childParts = await loadMessageParts(candidateMessagesWithText.map((message) => message.messageId));
+  const childParts = await loadMessageParts(
+    candidateMessagesWithText.map((message) => message.messageId),
+  );
   const childPartsByMessageId = new Map<string, MessagePartRow[]>();
   for (const part of childParts) {
     const current = childPartsByMessageId.get(part.messageId) ?? [];

@@ -34,6 +34,7 @@ async function loadTaskSessionReadModule(args?: {
   sessionOperationRows?: unknown[];
   sessionRunRows?: unknown[];
   workflowRunRows?: unknown[];
+  workflowRunRowsByCall?: unknown[][];
   taskStageRunRows?: unknown[];
   taskMessageEventRows?: unknown[];
   messageRows?: unknown[];
@@ -50,6 +51,8 @@ async function loadTaskSessionReadModule(args?: {
   const updatedTaskSnapshots: unknown[] = [];
   let taskMessagesSelectCount = 0;
   let taskMessagePartsSelectCount = 0;
+  let taskWorkflowRunsSelectCount = 0;
+  const ensureTaskWorkflowFactsAvailable = mock(async () => null);
 
   const fakeTaskSessions = {
     id: "id",
@@ -57,13 +60,6 @@ async function loadTaskSessionReadModule(args?: {
     parentSessionId: "parentSessionId",
     runtimeSessionId: "runtimeSessionId",
     coordinationKey: "coordinationKey",
-    createdAt: "createdAt",
-  };
-  const fakeSessionOperations = {
-    sessionId: "sessionId",
-    taskId: "taskId",
-    providerId: "providerId",
-    modelId: "modelId",
     createdAt: "createdAt",
   };
   const fakeTaskSessionRuns = {
@@ -146,7 +142,6 @@ async function loadTaskSessionReadModule(args?: {
 
   function resolveTableName(table: unknown) {
     if (table === fakeTaskSessions) return "task_sessions";
-    if (table === fakeSessionOperations) return "session_operations";
     if (table === fakeTaskSessionRuns) return "task_session_runs";
     if (table === fakeTaskWorkflowRuns) return "task_workflow_runs";
     if (table === fakeTaskStageRuns) return "task_stage_runs";
@@ -164,9 +159,7 @@ async function loadTaskSessionReadModule(args?: {
     const tableNameSymbol = Object.getOwnPropertySymbols(table).find((symbol) =>
       String(symbol).includes("drizzle:Name"),
     );
-    const tableName = tableNameSymbol
-      ? Reflect.get(table as object, tableNameSymbol)
-      : undefined;
+    const tableName = tableNameSymbol ? Reflect.get(table as object, tableNameSymbol) : undefined;
 
     return typeof tableName === "string" ? tableName : "";
   }
@@ -188,13 +181,18 @@ async function loadTaskSessionReadModule(args?: {
           if (tableName === "task_sessions") {
             return args?.sessionRows ?? [];
           }
-          if (tableName === "session_operations") {
-            return args?.sessionOperationRows ?? [];
-          }
           if (tableName === "task_session_runs") {
             return args?.sessionRunRows ?? [];
           }
           if (tableName === "task_workflow_runs") {
+            if (args?.workflowRunRowsByCall) {
+              const rows =
+                args.workflowRunRowsByCall[taskWorkflowRunsSelectCount] ??
+                args.workflowRunRowsByCall.at(-1) ??
+                [];
+              taskWorkflowRunsSelectCount += 1;
+              return rows;
+            }
             return args?.workflowRunRows ?? [];
           }
           if (tableName === "task_stage_runs") {
@@ -253,7 +251,7 @@ async function loadTaskSessionReadModule(args?: {
   }));
 
   mock.module("../../control-plane/service/src/db/schema", () => ({
-    sessionOperations: fakeSessionOperations,
+    roleAggregateConclusions: {},
     taskArtifacts: {},
     taskMessageEvents: fakeTaskMessageEvents,
     taskMessageParts: fakeTaskMessageParts,
@@ -271,7 +269,7 @@ async function loadTaskSessionReadModule(args?: {
   mock.module(
     "../../control-plane/service/src/modules/task-workflows/legacy-role-workflow-storage",
     () => ({
-      ensureLegacyRoleWorkflowMigrated: mock(async () => null),
+      ensureTaskWorkflowFactsAvailable,
     }),
   );
 
@@ -281,6 +279,7 @@ async function loadTaskSessionReadModule(args?: {
 
   return {
     ...module,
+    ensureTaskWorkflowFactsAvailable,
     updatedTaskSessions,
     updatedTaskSnapshots,
   };
@@ -1528,7 +1527,7 @@ describe("task session read API", () => {
     ]);
   });
 
-  test("buildTaskExecutionTraceResponse reads legacy timeline aliases while sourcing canonical messages", async () => {
+  test("buildTaskExecutionTraceResponse canonicalizes legacy timeline aliases while sourcing canonical messages", async () => {
     const sessionId = "task-session:task-1:session-1";
     const legacySessionId = "task_session:task-1:session-1";
     const { createTaskSessionReadApi } = await loadTaskSessionReadModule({
@@ -1607,7 +1606,7 @@ describe("task session read API", () => {
     expect(response.data.data.timeline).toEqual([
       expect.objectContaining({
         id: "timeline-1",
-        sessionId: legacySessionId,
+        sessionId,
         displayText: "legacy response",
       }),
     ]);
@@ -1622,62 +1621,63 @@ describe("task session read API", () => {
 
   test("buildTaskTreeResponse hydrates root prompt messages from task prompt when no user message exists", async () => {
     const rootSessionId = "task-session:task-1:root";
-    const { createTaskSessionReadApi } = await loadTaskSessionReadModule({
-      sessionRows: [
-        {
-          id: rootSessionId,
-          taskId: "task-1",
-          parentSessionId: null,
-          runtimeSessionId: "root",
-          coordinationKey: rootSessionId,
-          createdAt: "2026-03-27T00:00:00.000Z",
-          workflowStageKey: "design_review",
-        },
-      ],
-      messageRows: [
-        {
-          id: `${rootSessionId}:msg-1`,
-          taskId: "task-1",
-          sessionId: rootSessionId,
-          runtimeMessageId: "runtime-assistant-1",
-          role: "assistant",
-          messageIndex: 0,
-          textContent: "assistant reply",
-          summaryText: "assistant reply",
-          rawPayload: {
-            info: {
-              id: "runtime-assistant-1",
-              role: "assistant",
-            },
+    const { createTaskSessionReadApi, ensureTaskWorkflowFactsAvailable } =
+      await loadTaskSessionReadModule({
+        sessionRows: [
+          {
+            id: rootSessionId,
+            taskId: "task-1",
+            parentSessionId: null,
+            runtimeSessionId: "root",
+            coordinationKey: rootSessionId,
+            createdAt: "2026-03-27T00:00:00.000Z",
+            workflowStageKey: "design_review",
           },
-          createdAt: "2026-03-27T00:00:01.000Z",
-          updatedAt: "2026-03-27T00:00:01.000Z",
-        },
-      ],
-      snapshot: {
-        taskId: "task-1",
-        currentSessionId: rootSessionId,
-      },
-      workflowRunRows: [
-        {
-          id: "workflow-run-1",
+        ],
+        messageRows: [
+          {
+            id: `${rootSessionId}:msg-1`,
+            taskId: "task-1",
+            sessionId: rootSessionId,
+            runtimeMessageId: "runtime-assistant-1",
+            role: "assistant",
+            messageIndex: 0,
+            textContent: "assistant reply",
+            summaryText: "assistant reply",
+            rawPayload: {
+              info: {
+                id: "runtime-assistant-1",
+                role: "assistant",
+              },
+            },
+            createdAt: "2026-03-27T00:00:01.000Z",
+            updatedAt: "2026-03-27T00:00:01.000Z",
+          },
+        ],
+        snapshot: {
           taskId: "task-1",
-          templateId: "template-1",
-          currentStage: "design_review",
-          status: "running",
-          createdAt: "2026-03-27T00:00:00.000Z",
+          currentSessionId: rootSessionId,
         },
-      ],
-      taskStageRunRows: [
-        {
-          id: "stage-run-1",
-          workflowRunId: "workflow-run-1",
-          stageKey: "design_review",
-          approvalState: "pending",
-          createdAt: "2026-03-27T00:00:00.000Z",
-        },
-      ],
-    });
+        workflowRunRows: [
+          {
+            id: "workflow-run-1",
+            taskId: "task-1",
+            templateId: "template-1",
+            currentStage: "design_review",
+            status: "running",
+            createdAt: "2026-03-27T00:00:00.000Z",
+          },
+        ],
+        taskStageRunRows: [
+          {
+            id: "stage-run-1",
+            workflowRunId: "workflow-run-1",
+            stageKey: "design_review",
+            approvalState: "pending",
+            createdAt: "2026-03-27T00:00:00.000Z",
+          },
+        ],
+      });
 
     const api = createTaskSessionReadApi({
       loadTaskTreeBackedRecord: mock(async () => ({
@@ -1712,12 +1712,13 @@ describe("task session read API", () => {
         textContent: "root prompt",
       }),
     );
-    expect(response.data.workflow).toEqual({
+    expect(response.data.workflow).toMatchObject({
       templateId: "template-1",
       currentStageKey: "design_review",
       currentStageLabel: "Design Review",
       status: "running",
       approvalState: "pending",
+      roleConclusions: [],
       workflowRun: expect.objectContaining({
         id: "workflow-run-1",
         currentStage: "design_review",
@@ -1730,10 +1731,95 @@ describe("task session read API", () => {
         }),
       ],
     });
+    expect(ensureTaskWorkflowFactsAvailable).toHaveBeenCalledTimes(0);
     expect(response.data.edges.sessionMessage).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ sessionId: rootSessionId }),
-      ]),
+      expect.arrayContaining([expect.objectContaining({ sessionId: rootSessionId })]),
+    );
+  });
+
+  test("buildTaskTreeResponse falls back to legacy workflow migration only when canonical workflow rows are absent", async () => {
+    const rootSessionId = "task-session:task-1:root";
+    const { createTaskSessionReadApi, ensureTaskWorkflowFactsAvailable } =
+      await loadTaskSessionReadModule({
+        sessionRows: [
+          {
+            id: rootSessionId,
+            taskId: "task-1",
+            parentSessionId: null,
+            runtimeSessionId: "root",
+            coordinationKey: rootSessionId,
+            createdAt: "2026-03-27T00:00:00.000Z",
+          },
+        ],
+        snapshot: {
+          taskId: "task-1",
+          currentSessionId: rootSessionId,
+        },
+        workflowRunRowsByCall: [
+          [],
+          [
+            {
+              id: "workflow-run-1",
+              taskId: "task-1",
+              templateId: "template-1",
+              currentStage: "design",
+              status: "running",
+              createdAt: "2026-03-27T00:00:00.000Z",
+            },
+          ],
+        ],
+        taskStageRunRows: [
+          {
+            id: "stage-run-1",
+            workflowRunId: "workflow-run-1",
+            stageKey: "design",
+            approvalState: "pending",
+            createdAt: "2026-03-27T00:00:00.000Z",
+          },
+        ],
+      });
+
+    const api = createTaskSessionReadApi({
+      loadTaskTreeBackedRecord: mock(async () => ({
+        id: "task-1",
+        projectId: "project-1",
+        title: "Task 1",
+        prompt: "root prompt",
+        status: "running",
+        latestResultSummary: null,
+        strategy: {
+          selectedTemplateId: "template-1",
+          currentStage: "design",
+        },
+        createdAt: "2026-03-27T00:00:00.000Z",
+        lastActivityAt: "2026-03-27T00:00:01.000Z",
+      })),
+    });
+
+    const response = await api.buildTaskTreeResponse({
+      taskId: "task-1",
+      includeLineage: true,
+    });
+
+    expect(response.ok).toBe(true);
+    if (!response.ok) {
+      return;
+    }
+
+    expect(ensureTaskWorkflowFactsAvailable).toHaveBeenCalledTimes(1);
+    expect(ensureTaskWorkflowFactsAvailable).toHaveBeenCalledWith("task-1");
+    expect(response.data.workflow).toEqual(
+      expect.objectContaining({
+        templateId: "template-1",
+        currentStageKey: "design",
+        status: "running",
+        stages: [
+          expect.objectContaining({
+            id: "stage-run-1",
+            stageKey: "design",
+          }),
+        ],
+      }),
     );
   });
 
@@ -1903,7 +1989,8 @@ describe("task session read API", () => {
 
   test("buildTaskTreeResponse prepends root prompt even when execution context embeds the original prompt", async () => {
     const rootSessionId = "task-session:task-1:root";
-    const embeddedPrompt = "/start-work 请先梳理需求和边界条件，再实现功能代码。\n同时补充必要测试，并说明使用方式和影响范围。";
+    const embeddedPrompt =
+      "/start-work 请先梳理需求和边界条件，再实现功能代码。\n同时补充必要测试，并说明使用方式和影响范围。";
     const { createTaskSessionReadApi } = await loadTaskSessionReadModule({
       sessionRows: [
         {
@@ -2249,9 +2336,7 @@ describe("task session read API", () => {
       ]),
     );
     expect(response.data.edges.messageOperation).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ messageId: assistantMessageId }),
-      ]),
+      expect.arrayContaining([expect.objectContaining({ messageId: assistantMessageId })]),
     );
   });
 

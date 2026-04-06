@@ -43,7 +43,7 @@ afterEach(() => {
 });
 
 describe("task projection routes", () => {
-  test("timeline-view route resolves project context and forwards lineage query params", async () => {
+  test("timeline-view route resolves project context and forwards session lineage query params", async () => {
     const app = createRouteCollector();
     const loadTaskTreeBackedRecord = mock(async () => ({ id: "task-1", projectId: "project-1" }));
     const buildTaskProjectionTimelineViewResponse = mock(async () => ({
@@ -67,8 +67,8 @@ describe("task projection routes", () => {
         ...createRouteContext({ params: { taskId: "task-1" } }).req,
         param: (name: string) => ({ taskId: "task-1" })[name] ?? "",
         query: (name: string) =>
-          ({ runtimeSessionId: "fork-session", includeLineage: "false" })[
-            name as "runtimeSessionId" | "includeLineage"
+          ({ sessionId: "fork-session", includeLineage: "false" })[
+            name as "sessionId" | "includeLineage"
           ],
       },
     });
@@ -78,7 +78,7 @@ describe("task projection routes", () => {
     expect(buildTaskProjectionTimelineViewResponse).toHaveBeenCalledWith({
       taskId: "task-1",
       projectId: "project-1",
-      runtimeSessionId: "fork-session",
+      sessionId: "fork-session",
       includeLineage: false,
     });
     expect(await response.json()).toEqual({ data: ["ok"], meta: { complete: true } });

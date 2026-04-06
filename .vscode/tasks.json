@@ -554,7 +554,7 @@
 			"command": "zsh",
 			"args": [
 				"-lc",
-				"cd control-plane/web-ui-bff && bun test ../../tests/web-ui-bff/runtime-pipeline.test.ts ../../tests/web-ui-bff/task-completion-routes.test.ts ../../tests/web-ui-bff/task-operating-routes.test.ts ../../tests/web-ui-bff/task-sessions-route.test.ts ../../tests/web-ui-bff/task-workflow-view-route.test.ts ../../tests/web-ui-bff/task-execution-trace-route.test.ts ../../tests/web-ui-bff/realtime-routes.test.ts ../../tests/web-ui-bff/judge-usage-accounting.test.ts ../../tests/web-ui-bff/task-runtime-permissions-route.test.ts ../../tests/web-ui-bff/task-legacy-parallel-backfill-routes.test.ts ../../tests/web-ui-bff/agent-control-terminate-route.test.ts ../../tests/web-ui-bff/project-tree-proxy-routes.test.ts ../../tests/web-ui-bff/chat-settings-assistant-engine.test.ts ../../tests/web-ui-bff/stage-intervention.test.ts ../../tests/web-ui-bff/task-finalize.test.ts ../../tests/web-ui-bff/workflow-stage-execution.test.ts ../../tests/web-ui-bff/workflow-sync.test.ts ../../tests/web-ui-bff/project-paid-execution-preflight-route.test.ts ../../tests/web-ui-bff/project-runtime-usage-ledger-routes.test.ts ../../tests/web-ui-bff/runtime-usage-ledger-project-e2e.test.ts ../../tests/web-ui-bff/realtime-pipeline-events.test.ts ../../tests/web-ui-bff/project-execution-trace-route.test.ts"
+				"bash scripts/run-bff-mock-batch-22-expanded.sh"
 			],
 			"isBackground": false,
 			"group": "test"
@@ -565,7 +565,29 @@
 			"command": "zsh",
 			"args": [
 				"-lc",
-				"rm -f tmp/run-bff-mock-batch-22.filelog.log tmp/run-bff-mock-batch-22.filelog.code && bash scripts/run-bff-mock-batch-22.sh > tmp/run-bff-mock-batch-22.filelog.log 2>&1; printf '%s' $? > tmp/run-bff-mock-batch-22.filelog.code"
+				"rm -f tmp/run-bff-mock-batch-22.filelog.log tmp/run-bff-mock-batch-22.filelog.code && bash scripts/run-bff-mock-batch-22-expanded.sh > tmp/run-bff-mock-batch-22.filelog.log 2>&1; printf '%s' $? > tmp/run-bff-mock-batch-22.filelog.code"
+			],
+			"isBackground": false,
+			"group": "test"
+		},
+		{
+			"label": "run-service-task-domain-current-batch",
+			"type": "shell",
+			"command": "zsh",
+			"args": [
+				"-lc",
+				"bash scripts/run-service-task-domain-current-batch.sh"
+			],
+			"isBackground": false,
+			"group": "test"
+		},
+		{
+			"label": "run-service-task-domain-current-batch-filelog",
+			"type": "shell",
+			"command": "zsh",
+			"args": [
+				"-lc",
+				"rm -f tmp/run-service-task-domain-current-batch.filelog.log tmp/run-service-task-domain-current-batch.filelog.code && bash scripts/run-service-task-domain-current-batch.sh > tmp/run-service-task-domain-current-batch.filelog.log 2>&1; printf '%s' $? > tmp/run-service-task-domain-current-batch.filelog.code"
 			],
 			"isBackground": false,
 			"group": "test"

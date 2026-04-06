@@ -7,6 +7,7 @@ let importCounter = 0;
 
 async function loadProjectTreeStorageModule(args?: {
   existingNode?: Record<string, unknown> | null;
+  findFirstResults?: Array<Record<string, unknown> | null>;
 }) {
   importCounter += 1;
 
@@ -28,11 +29,15 @@ async function loadProjectTreeStorageModule(args?: {
   };
 
   let projectTreeNodeFindFirstCall = 0;
+  const explicitFindFirstResults = [...(args?.findFirstResults ?? [])];
 
   const fakeDb = {
     query: {
       projectTreeNodes: {
         findFirst: mock(async () => {
+          if (explicitFindFirstResults.length > 0) {
+            return explicitFindFirstResults.shift() ?? null;
+          }
           projectTreeNodeFindFirstCall += 1;
           if (projectTreeNodeFindFirstCall === 1) {
             return taskNode;
@@ -102,11 +107,12 @@ describe("project tree storage", () => {
       archivedAt: null,
     });
 
-    expect(nodeId).toBe("task_session:task-1:fork-session-1");
+    expect(nodeId).toBe("branch-node:task-1:fork-session-1");
     expect(insertedNodeValues).toHaveLength(1);
     expect(insertedBranchValues).toHaveLength(1);
     expect(insertedNodeValues[0]).toMatchObject({
-      id: "task_session:task-1:fork-session-1",
+      id: "branch-node:task-1:fork-session-1",
+      parentId: "task_session:task-1:root-session-1",
       nodeType: "session",
       runtimeSessionId: "fork-session-1",
       branchName: "feature/fork",
@@ -123,8 +129,8 @@ describe("project tree storage", () => {
   });
 
   test("updates existing session nodes without expanding lineage-only whitelist content_json", async () => {
-    const { upsertTaskBranchCompatTreeNode, updatedNodeValues } = await loadProjectTreeStorageModule(
-      {
+    const { upsertTaskBranchCompatTreeNode, updatedNodeValues } =
+      await loadProjectTreeStorageModule({
         existingNode: {
           id: "task_session:task-1:fork-session-1",
           contentText: "existing-branch",
@@ -132,8 +138,7 @@ describe("project tree storage", () => {
           createdAt: "2026-03-24T00:00:00.000Z",
           isActive: false,
         },
-      },
-    );
+      });
 
     const nodeId = await upsertTaskBranchCompatTreeNode({
       taskId: "task-1",
@@ -165,7 +170,9 @@ describe("project tree storage", () => {
 
   test("archives session nodes without rewriting lineage-only whitelist content_json", async () => {
     const { archiveTaskBranchCompatTreeNode, updatedNodeValues } =
-      await loadProjectTreeStorageModule();
+      await loadProjectTreeStorageModule({
+        findFirstResults: [{ id: "branch-node:task-1:fork-session-1" }, null],
+      });
 
     await archiveTaskBranchCompatTreeNode("task-1", "fork-session-1");
 
@@ -176,5 +183,34 @@ describe("project tree storage", () => {
       updatedAt: expect.any(String),
     });
     expect(updatedNodeValues[0]).not.toHaveProperty("contentJson");
+  });
+
+  test("prefers legacy compat node ids when an existing node already uses the old prefix", async () => {
+    const { upsertTaskBranchCompatTreeNode, updatedNodeValues } =
+      await loadProjectTreeStorageModule({
+        existingNode: {
+          id: "task_session:task-1:fork-session-1",
+          contentText: "legacy-branch",
+          branchName: "legacy-branch",
+          createdAt: "2026-03-24T00:00:00.000Z",
+          isActive: false,
+        },
+      });
+
+    const nodeId = await upsertTaskBranchCompatTreeNode({
+      taskId: "task-1",
+      runtimeSessionId: "fork-session-1",
+      parentRuntimeSessionId: "root-session-1",
+      branchName: "legacy-updated",
+      sourceType: "fork",
+      isActive: true,
+      archivedAt: null,
+    });
+
+    expect(nodeId).toBe("task_session:task-1:fork-session-1");
+    expect(updatedNodeValues[0]).toMatchObject({
+      branchName: "legacy-updated",
+      runtimeSessionId: "fork-session-1",
+    });
   });
 });

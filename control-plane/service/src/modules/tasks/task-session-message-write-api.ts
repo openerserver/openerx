@@ -1,19 +1,22 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, gte } from "drizzle-orm";
 import { db } from "../../db";
 import {
-  taskMessageParts,
-  taskMessages,
-  taskSessionRuns,
-  taskSessions,
-  taskTimelineViews,
   type TaskSessionMessagePartType,
   type TaskSessionMessageRole,
   type TaskSessionMessageStatus,
+  type TaskSessionNodeStatus,
+  taskArtifacts,
+  taskMessageParts,
+  taskMessages,
+  taskOperations,
+  taskSessionRuns,
+  taskSessions,
+  taskTimelineViews,
 } from "../../db/schema";
 import {
+  type UpsertTaskSessionRecordArgs,
   buildTaskSessionDefaultRunId,
   buildTaskSessionWriteId,
-  type UpsertTaskSessionRecordArgs,
 } from "./task-session-write-api";
 
 type TaskSessionMessageRecordArgs = {
@@ -61,6 +64,11 @@ type TaskSessionMessageCompatRow = {
 
 const CANDIDATE_USER_MESSAGE_DEDUPE_WINDOW_MS = 15_000;
 const ASSISTANT_TOOL_CALL_RESULT_MERGE_WINDOW_MS = 15_000;
+const TASK_MESSAGE_TOOL_OPERATION_INDEX_STRIDE = 1_000;
+const TASK_MESSAGE_SESSION_SEQ_INSERT_RETRY_LIMIT = 12;
+const TASK_MESSAGE_SESSION_SEQ_INSERT_RETRY_DELAY_MS = 5;
+
+type TaskToolExecutionStatus = "running" | "completed" | "failed" | "cancelled";
 
 function asTaskSessionMessageRecord(value: unknown) {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -106,7 +114,9 @@ function mapTaskSessionMessageStatusToNodeStatus(status: TaskSessionMessageStatu
   return "running" as const;
 }
 
-function mapLegacySessionKindToRunExecutionKind(sessionKind?: TaskSessionMessageCompatRecord["sessionKind"]) {
+function mapLegacySessionKindToRunExecutionKind(
+  sessionKind?: TaskSessionMessageCompatRecord["sessionKind"],
+) {
   if (sessionKind === "candidate") {
     return "parallel_candidate" as const;
   }
@@ -125,7 +135,9 @@ function mapLegacySessionKindToRunExecutionKind(sessionKind?: TaskSessionMessage
   return "single" as const;
 }
 
-function mapLegacySessionKindToRunLaneRole(sessionKind?: TaskSessionMessageCompatRecord["sessionKind"]) {
+function mapLegacySessionKindToRunLaneRole(
+  sessionKind?: TaskSessionMessageCompatRecord["sessionKind"],
+) {
   if (sessionKind === "candidate") {
     return "candidate" as const;
   }
@@ -141,7 +153,9 @@ function mapLegacySessionKindToRunLaneRole(sessionKind?: TaskSessionMessageCompa
   return "primary" as const;
 }
 
-function mapLegacySessionKindToExecutorKind(sessionKind?: TaskSessionMessageCompatRecord["sessionKind"]) {
+function mapLegacySessionKindToExecutorKind(
+  sessionKind?: TaskSessionMessageCompatRecord["sessionKind"],
+) {
   if (sessionKind === "judge") {
     return "judge";
   }
@@ -261,6 +275,27 @@ function extractTaskSessionMessageText(message: Record<string, unknown>) {
 
   const parts = extractTaskSessionMessageParts(message);
   for (const part of parts) {
+    if (normalizeTaskSessionMessagePartType(part) !== "text") {
+      continue;
+    }
+    const text = extractTaskSessionMessagePartText(part);
+    if (text) {
+      return text;
+    }
+  }
+
+  for (const part of parts) {
+    const partType = normalizeTaskSessionMessagePartType(part);
+    if (partType === "thinking" || partType === "tool_call") {
+      continue;
+    }
+    const text = extractTaskSessionMessagePartText(part);
+    if (text) {
+      return text;
+    }
+  }
+
+  for (const part of parts) {
     const text = extractTaskSessionMessagePartText(part);
     if (text) {
       return text;
@@ -326,7 +361,19 @@ function extractTaskSessionMessageErrorText(message: Record<string, unknown>) {
       ? (message.info as Record<string, unknown>)
       : null;
   const raw = message.errorText ?? message.error_text ?? info?.error;
-  return typeof raw === "string" && raw.trim() ? raw : null;
+  if (typeof raw === "string" && raw.trim()) {
+    return raw;
+  }
+
+  const parts = extractTaskSessionMessageParts(message);
+  for (const part of parts) {
+    const errorText = extractTaskSessionMessagePartToolError(part);
+    if (errorText) {
+      return errorText;
+    }
+  }
+
+  return null;
 }
 
 function normalizeTaskSessionMessageTimeValue(value: unknown) {
@@ -347,9 +394,7 @@ function extractTaskSessionMessageCreatedAt(message: Record<string, unknown>) {
       ? (message.info as Record<string, unknown>)
       : null;
   const infoTime =
-    info?.time && typeof info.time === "object"
-      ? (info.time as Record<string, unknown>)
-      : null;
+    info?.time && typeof info.time === "object" ? (info.time as Record<string, unknown>) : null;
 
   return (
     normalizeTaskSessionMessageTimeValue(message.createdAt) ||
@@ -364,9 +409,7 @@ function extractTaskSessionMessageCompletedAt(message: Record<string, unknown>) 
       ? (message.info as Record<string, unknown>)
       : null;
   const infoTime =
-    info?.time && typeof info.time === "object"
-      ? (info.time as Record<string, unknown>)
-      : null;
+    info?.time && typeof info.time === "object" ? (info.time as Record<string, unknown>) : null;
 
   return (
     normalizeTaskSessionMessageTimeValue(message.completedAt) ||
@@ -377,8 +420,11 @@ function extractTaskSessionMessageCompletedAt(message: Record<string, unknown>) 
 
 function extractTaskSessionMessageParts(message: Record<string, unknown>) {
   const parts = Array.isArray(message.parts) ? message.parts : [];
-  return parts.filter(
-    (part): part is Record<string, unknown> => Boolean(part && typeof part === "object"),
+  const singlePart = message.part;
+  const candidates = singlePart && typeof singlePart === "object" ? [...parts, singlePart] : parts;
+
+  return candidates.filter((part): part is Record<string, unknown> =>
+    Boolean(part && typeof part === "object"),
   );
 }
 
@@ -440,7 +486,9 @@ function isTaskSessionMessagePartType(part: Record<string, unknown>, partType: s
 
 function isToolLikeTaskSessionMessagePart(part: Record<string, unknown>) {
   const type = asTaskSessionMessageString(part.type);
-  return type === "tool" || type === "tool_call" || type === "tool-result" || type === "tool_result";
+  return (
+    type === "tool" || type === "tool_call" || type === "tool-result" || type === "tool_result"
+  );
 }
 
 function extractTaskSessionMessagePartIdentity(part: Record<string, unknown>) {
@@ -452,7 +500,73 @@ function extractTaskSessionMessagePartIdentity(part: Record<string, unknown>) {
 }
 
 function hasTaskSessionMessageToolPart(message: Record<string, unknown>) {
-  return extractTaskSessionMessageParts(message).some((part) => isToolLikeTaskSessionMessagePart(part));
+  return extractTaskSessionMessageParts(message).some((part) =>
+    isToolLikeTaskSessionMessagePart(part),
+  );
+}
+
+function cloneTaskSessionMessageParts(parts: Record<string, unknown>[]) {
+  return parts.map((part) => ({ ...part }));
+}
+
+function collectTaskSessionMessageToolPartIds(parts: Record<string, unknown>[]) {
+  return new Set(
+    parts
+      .filter((part) => isToolLikeTaskSessionMessagePart(part))
+      .map((part) => extractTaskSessionMessagePartIdentity(part))
+      .filter((value): value is string => Boolean(value)),
+  );
+}
+
+function collectCarryoverTaskSessionToolParts(
+  existingParts: Record<string, unknown>[],
+  incomingToolIds: Set<string>,
+) {
+  return cloneTaskSessionMessageParts(
+    existingParts
+      .filter((part) => isToolLikeTaskSessionMessagePart(part))
+      .filter((part) => {
+        const identity = extractTaskSessionMessagePartIdentity(part);
+        return !identity || !incomingToolIds.has(identity);
+      }),
+  );
+}
+
+function hasTaskSessionMessagePartType(parts: Record<string, unknown>[], partType: string) {
+  return parts.some((part) => isTaskSessionMessagePartType(part, partType));
+}
+
+function insertTaskSessionMessagePartsBeforeBoundary(args: {
+  parts: Record<string, unknown>[];
+  inserts: Record<string, unknown>[];
+  boundaryTypes: string[];
+}) {
+  if (args.inserts.length === 0) {
+    return args.parts;
+  }
+
+  const insertAt = args.parts.findIndex((part) =>
+    args.boundaryTypes.some((boundaryType) => isTaskSessionMessagePartType(part, boundaryType)),
+  );
+  if (insertAt < 0) {
+    return [...args.parts, ...args.inserts];
+  }
+
+  const merged = [...args.parts];
+  merged.splice(insertAt, 0, ...args.inserts);
+  return merged;
+}
+
+function findTaskSessionMessagePart(
+  parts: Record<string, unknown>[],
+  partType: string,
+  fromEnd = false,
+) {
+  if (!fromEnd) {
+    return parts.find((part) => isTaskSessionMessagePartType(part, partType));
+  }
+
+  return [...parts].reverse().find((part) => isTaskSessionMessagePartType(part, partType));
 }
 
 function mergeAssistantToolCallFollowupParts(args: {
@@ -460,63 +574,39 @@ function mergeAssistantToolCallFollowupParts(args: {
   incomingMessage: Record<string, unknown>;
 }) {
   const existingParts = extractTaskSessionMessageParts(args.existingMessage);
-  const incomingParts = extractTaskSessionMessageParts(args.incomingMessage).map((part) => ({
-    ...part,
-  }));
-  const incomingToolIds = new Set(
-    incomingParts
-      .filter((part) => isToolLikeTaskSessionMessagePart(part))
-      .map((part) => extractTaskSessionMessagePartIdentity(part))
-      .filter((value): value is string => Boolean(value)),
+  const incomingParts = cloneTaskSessionMessageParts(
+    extractTaskSessionMessageParts(args.incomingMessage),
   );
-  const carryoverToolParts = existingParts
-    .filter((part) => isToolLikeTaskSessionMessagePart(part))
-    .filter((part) => {
-      const identity = extractTaskSessionMessagePartIdentity(part);
-      return !identity || !incomingToolIds.has(identity);
-    })
-    .map((part) => ({ ...part }));
+  const incomingToolIds = collectTaskSessionMessageToolPartIds(incomingParts);
+  const carryoverToolParts = collectCarryoverTaskSessionToolParts(existingParts, incomingToolIds);
 
-  const mergedParts = [...incomingParts];
-  if (carryoverToolParts.length > 0) {
-    const insertAt = mergedParts.findIndex(
-      (part) =>
-        isTaskSessionMessagePartType(part, "text") || isTaskSessionMessagePartType(part, "step-finish"),
-    );
-    if (insertAt < 0) {
-      mergedParts.push(...carryoverToolParts);
-    } else {
-      mergedParts.splice(insertAt, 0, ...carryoverToolParts);
-    }
+  let mergedParts = insertTaskSessionMessagePartsBeforeBoundary({
+    parts: incomingParts,
+    inserts: carryoverToolParts,
+    boundaryTypes: ["text", "step-finish"],
+  });
+
+  if (!hasTaskSessionMessagePartType(mergedParts, "text")) {
+    mergedParts = insertTaskSessionMessagePartsBeforeBoundary({
+      parts: mergedParts,
+      inserts: cloneTaskSessionMessageParts(
+        existingParts.filter((part) => isTaskSessionMessagePartType(part, "text")),
+      ),
+      boundaryTypes: ["step-finish"],
+    });
   }
 
-  if (!mergedParts.some((part) => isTaskSessionMessagePartType(part, "text"))) {
-    const fallbackTextParts = existingParts
-      .filter((part) => isTaskSessionMessagePartType(part, "text"))
-      .map((part) => ({ ...part }));
-    if (fallbackTextParts.length > 0) {
-      const insertAt = mergedParts.findIndex((part) => isTaskSessionMessagePartType(part, "step-finish"));
-      if (insertAt < 0) {
-        mergedParts.push(...fallbackTextParts);
-      } else {
-        mergedParts.splice(insertAt, 0, ...fallbackTextParts);
-      }
-    }
-  }
-
-  if (!mergedParts.some((part) => isTaskSessionMessagePartType(part, "step-start"))) {
-    const fallbackStepStart = existingParts.find((part) => isTaskSessionMessagePartType(part, "step-start"));
+  if (!hasTaskSessionMessagePartType(mergedParts, "step-start")) {
+    const fallbackStepStart = findTaskSessionMessagePart(existingParts, "step-start");
     if (fallbackStepStart) {
-      mergedParts.unshift({ ...fallbackStepStart });
+      mergedParts = [{ ...fallbackStepStart }, ...mergedParts];
     }
   }
 
-  if (!mergedParts.some((part) => isTaskSessionMessagePartType(part, "step-finish"))) {
-    const fallbackStepFinish = [...existingParts]
-      .reverse()
-      .find((part) => isTaskSessionMessagePartType(part, "step-finish"));
+  if (!hasTaskSessionMessagePartType(mergedParts, "step-finish")) {
+    const fallbackStepFinish = findTaskSessionMessagePart(existingParts, "step-finish", true);
     if (fallbackStepFinish) {
-      mergedParts.push({ ...fallbackStepFinish });
+      mergedParts = [...mergedParts, { ...fallbackStepFinish }];
     }
   }
 
@@ -648,7 +738,9 @@ function shouldMergeAssistantToolCallFollowup(args: {
     return false;
   }
 
-  return Math.abs(incomingCreatedAt - latestCreatedAt) <= ASSISTANT_TOOL_CALL_RESULT_MERGE_WINDOW_MS;
+  return (
+    Math.abs(incomingCreatedAt - latestCreatedAt) <= ASSISTANT_TOOL_CALL_RESULT_MERGE_WINDOW_MS
+  );
 }
 
 function buildTaskTimelineMessageId(messageId: string) {
@@ -658,6 +750,46 @@ function buildTaskTimelineMessageId(messageId: string) {
 function parseTaskSessionMessageTime(value: string) {
   const parsed = Date.parse(value);
   return Number.isNaN(parsed) ? null : parsed;
+}
+
+function pickEarlierTaskSessionMessageTime(
+  current: string | null | undefined,
+  candidate: string | null | undefined,
+) {
+  if (!current) {
+    return candidate ?? null;
+  }
+  if (!candidate) {
+    return current;
+  }
+
+  const currentTime = parseTaskSessionMessageTime(current);
+  const candidateTime = parseTaskSessionMessageTime(candidate);
+  if (currentTime === null || candidateTime === null) {
+    return current;
+  }
+
+  return candidateTime < currentTime ? candidate : current;
+}
+
+function pickLaterTaskSessionMessageTime(
+  current: string | null | undefined,
+  candidate: string | null | undefined,
+) {
+  if (!current) {
+    return candidate ?? null;
+  }
+  if (!candidate) {
+    return current;
+  }
+
+  const currentTime = parseTaskSessionMessageTime(current);
+  const candidateTime = parseTaskSessionMessageTime(candidate);
+  if (currentTime === null || candidateTime === null) {
+    return candidate;
+  }
+
+  return candidateTime > currentTime ? candidate : current;
 }
 
 function shouldReuseParentUserMessage(args: {
@@ -697,10 +829,10 @@ function mapCanonicalTaskSessionMessageRow(
     runtimeMessageId:
       message.runtimeMessageId ?? extractTaskSessionMessageRuntimeId(message.rawPayload) ?? null,
     status: normalizePersistedTaskSessionMessageStatus(message.status),
-    clientMessageId: message.clientMessageId ?? extractTaskSessionMessageClientId(message.rawPayload),
+    clientMessageId:
+      message.clientMessageId ?? extractTaskSessionMessageClientId(message.rawPayload),
     providerMessageId:
-      message.providerMessageId ??
-      extractTaskSessionMessageProviderMessageId(message.rawPayload),
+      message.providerMessageId ?? extractTaskSessionMessageProviderMessageId(message.rawPayload),
     messageIndex: message.seq,
     textContent:
       message.textContent ??
@@ -833,7 +965,680 @@ function extractTaskSessionMessagePartText(part: Record<string, unknown>) {
     return part.content;
   }
 
+  const outputText = extractTaskSessionMessagePartToolOutput(part);
+  if (outputText) {
+    return outputText;
+  }
+
+  const errorText = extractTaskSessionMessagePartToolError(part);
+  if (errorText) {
+    return errorText;
+  }
+
   return null;
+}
+
+function stringifyTaskSessionMessageValue(value: unknown) {
+  if (typeof value === "string" && value.trim()) {
+    return value;
+  }
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  try {
+    const serialized = JSON.stringify(value);
+    return typeof serialized === "string" && serialized.length > 0 ? serialized : String(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function extractTaskSessionStructuredContentText(value: unknown) {
+  const record = asTaskSessionMessageRecord(value);
+  if (!record) {
+    return null;
+  }
+
+  const directText = asTaskSessionMessageString(record.text);
+  if (directText) {
+    return directText;
+  }
+
+  const content = Array.isArray(record.content) ? record.content : [];
+  const text = content
+    .map((entry) => asTaskSessionMessageRecord(entry))
+    .map((entry) => asTaskSessionMessageString(entry?.text))
+    .filter((entry): entry is string => Boolean(entry))
+    .join("\n")
+    .trim();
+
+  return text || null;
+}
+
+function normalizeTaskSessionMessageToolOutputText(value: unknown) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  const structuredText = extractTaskSessionStructuredContentText(value);
+  if (structuredText) {
+    return structuredText;
+  }
+
+  if (typeof value === "string" && value.trim()) {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      const parsedText = extractTaskSessionStructuredContentText(parsed);
+      if (parsedText) {
+        return parsedText;
+      }
+    } catch {
+      // Ignore parse failures and keep the raw text.
+    }
+  }
+
+  return stringifyTaskSessionMessageValue(value);
+}
+
+function extractTaskSessionMessagePartState(part: Record<string, unknown>) {
+  return asTaskSessionMessageRecord(part.state);
+}
+
+function extractTaskSessionMessagePartToolName(part: Record<string, unknown>) {
+  const metadata = asTaskSessionMessageRecord(part.metadata);
+  const toolCall = asTaskSessionMessageRecord(part.toolCall);
+
+  return (
+    asTaskSessionMessageString(part.name) ??
+    asTaskSessionMessageString(part.tool) ??
+    asTaskSessionMessageString(part.toolName) ??
+    asTaskSessionMessageString(metadata?.toolName) ??
+    asTaskSessionMessageString(toolCall?.name) ??
+    asTaskSessionMessageString(toolCall?.tool) ??
+    null
+  );
+}
+
+function extractTaskSessionMessagePartRuntimeOperationId(part: Record<string, unknown>) {
+  const metadata = asTaskSessionMessageRecord(part.metadata);
+  const toolCall = asTaskSessionMessageRecord(part.toolCall);
+
+  return (
+    asTaskSessionMessageString(part.callID) ??
+    asTaskSessionMessageString(part.callId) ??
+    asTaskSessionMessageString(part.toolCallId) ??
+    asTaskSessionMessageString(part.id) ??
+    asTaskSessionMessageString(metadata?.callID) ??
+    asTaskSessionMessageString(metadata?.callId) ??
+    asTaskSessionMessageString(metadata?.toolCallId) ??
+    asTaskSessionMessageString(toolCall?.id) ??
+    null
+  );
+}
+
+function extractTaskSessionMessagePartToolInput(part: Record<string, unknown>) {
+  const toolCall = asTaskSessionMessageRecord(part.toolCall);
+  return (
+    part.input ??
+    part.arguments ??
+    part.args ??
+    toolCall?.input ??
+    toolCall?.arguments ??
+    toolCall?.args
+  );
+}
+
+function extractTaskSessionMessagePartToolOutput(part: Record<string, unknown>) {
+  const state = extractTaskSessionMessagePartState(part);
+  return normalizeTaskSessionMessageToolOutputText(
+    state?.output ?? state?.result ?? part.output ?? part.result,
+  );
+}
+
+function extractTaskSessionMessagePartToolError(part: Record<string, unknown>) {
+  const state = extractTaskSessionMessagePartState(part);
+  return stringifyTaskSessionMessageValue(state?.error ?? part.error);
+}
+
+function normalizeTaskSessionMessagePartToolStatus(
+  part: Record<string, unknown>,
+): TaskToolExecutionStatus {
+  const partType = normalizeTaskSessionMessagePartType(part);
+  const state = extractTaskSessionMessagePartState(part);
+  const rawStatus =
+    asTaskSessionMessageString(state?.status) ?? (partType === "tool_call" ? "running" : null);
+
+  if (rawStatus === "failed" || rawStatus === "error") {
+    return "failed";
+  }
+  if (rawStatus === "cancelled" || rawStatus === "stopped" || rawStatus === "terminated") {
+    return "cancelled";
+  }
+  if (rawStatus === "completed" || rawStatus === "complete") {
+    return "completed";
+  }
+  if (
+    rawStatus === "queued" ||
+    rawStatus === "pending" ||
+    rawStatus === "running" ||
+    rawStatus === "streaming"
+  ) {
+    return "running";
+  }
+
+  if (extractTaskSessionMessagePartToolError(part)) {
+    return "failed";
+  }
+
+  return partType === "tool_result" ? "completed" : "running";
+}
+
+function mapTaskToolExecutionStatusToNodeStatus(
+  status: TaskToolExecutionStatus,
+): TaskSessionNodeStatus {
+  if (status === "completed") {
+    return "completed";
+  }
+  if (status === "failed") {
+    return "failed";
+  }
+  if (status === "cancelled") {
+    return "cancelled";
+  }
+  return "running";
+}
+
+function buildTaskToolOperationId(
+  messageId: string,
+  runtimeOperationId: string | null,
+  fallbackIndex: number,
+) {
+  return runtimeOperationId
+    ? `task-operation:${runtimeOperationId}`
+    : `task-operation:${messageId}:tool:${fallbackIndex}`;
+}
+
+function buildTaskToolArtifactId(
+  messageId: string,
+  runtimeOperationId: string | null,
+  fallbackIndex: number,
+) {
+  return runtimeOperationId
+    ? `task-artifact:${runtimeOperationId}`
+    : `task-artifact:${messageId}:tool:${fallbackIndex}`;
+}
+
+function buildTaskToolOperationSummary(args: {
+  messageId: string;
+  runtimeOperationId: string | null;
+  toolName: string;
+  input: unknown;
+  outputText: string | null;
+  errorText: string | null;
+  partIndices: number[];
+  rawPart: Record<string, unknown>;
+}) {
+  return {
+    source: "task-session-message-write",
+    messageId: args.messageId,
+    runtimeOperationId: args.runtimeOperationId,
+    toolName: args.toolName,
+    input: args.input ?? null,
+    outputText: args.outputText,
+    errorText: args.errorText,
+    partIndices: args.partIndices,
+    rawPart: args.rawPart,
+  } satisfies Record<string, unknown>;
+}
+
+type TaskToolExecutionRecord = {
+  artifactId: string;
+  runtimeOperationId: string | null;
+  toolName: string;
+  input: unknown;
+  outputText: string | null;
+  errorText: string | null;
+  operationIndex: number;
+  status: TaskToolExecutionStatus;
+  partIndices: number[];
+  rawPart: Record<string, unknown>;
+  shouldPersistArtifact: boolean;
+};
+
+function normalizeTaskToolExecutionPartType(part: Record<string, unknown>) {
+  const partType = normalizeTaskSessionMessagePartType(part);
+  return partType === "tool_call" || partType === "tool_result" ? partType : null;
+}
+
+function buildTaskToolArtifactTitle(toolName: string) {
+  return [toolName, "result"].join(" ");
+}
+
+function buildTaskToolExecutionRecord(args: {
+  existing: TaskToolExecutionRecord | undefined;
+  messageId: string;
+  messageIndex: number;
+  part: Record<string, unknown>;
+  partIndex: number;
+  partType: "tool_call" | "tool_result";
+  nextOperationOffset: number;
+}) {
+  const runtimeOperationId = extractTaskSessionMessagePartRuntimeOperationId(args.part);
+  const toolName = extractTaskSessionMessagePartToolName(args.part) ?? "tool";
+  const input = extractTaskSessionMessagePartToolInput(args.part);
+  const outputText = extractTaskSessionMessagePartToolOutput(args.part);
+  const errorText = extractTaskSessionMessagePartToolError(args.part);
+  const status = normalizeTaskSessionMessagePartToolStatus(args.part);
+  const operationIndex =
+    args.existing?.operationIndex ??
+    args.messageIndex * TASK_MESSAGE_TOOL_OPERATION_INDEX_STRIDE + args.nextOperationOffset;
+
+  return {
+    operationId: buildTaskToolOperationId(args.messageId, runtimeOperationId, args.partIndex),
+    record: {
+      artifactId:
+        args.existing?.artifactId ??
+        buildTaskToolArtifactId(args.messageId, runtimeOperationId, args.partIndex),
+      runtimeOperationId,
+      toolName: args.existing?.toolName ?? toolName,
+      input: args.existing?.input ?? input,
+      outputText: outputText ?? args.existing?.outputText ?? null,
+      errorText: errorText ?? args.existing?.errorText ?? null,
+      operationIndex,
+      status:
+        args.partType === "tool_result"
+          ? status
+          : args.existing?.status === "completed" ||
+              args.existing?.status === "failed" ||
+              args.existing?.status === "cancelled"
+            ? args.existing.status
+            : status,
+      partIndices: [...(args.existing?.partIndices ?? []), args.partIndex],
+      rawPart: args.part,
+      shouldPersistArtifact:
+        args.existing?.shouldPersistArtifact === true || args.partType === "tool_result",
+    },
+  };
+}
+
+function collectTaskToolExecutionRecords(args: {
+  messageId: string;
+  messageIndex: number;
+  parts: Record<string, unknown>[];
+}) {
+  const toolOperationRecords = new Map<string, TaskToolExecutionRecord>();
+  let nextOperationOffset = 0;
+
+  for (const [partIndex, part] of args.parts.entries()) {
+    const partType = normalizeTaskToolExecutionPartType(part);
+    if (!partType) {
+      continue;
+    }
+
+    const operationId = buildTaskToolOperationId(
+      args.messageId,
+      extractTaskSessionMessagePartRuntimeOperationId(part),
+      partIndex,
+    );
+    const existing = toolOperationRecords.get(operationId);
+    const nextRecord = buildTaskToolExecutionRecord({
+      existing,
+      messageId: args.messageId,
+      messageIndex: args.messageIndex,
+      part,
+      partIndex,
+      partType,
+      nextOperationOffset,
+    });
+    if (!existing) {
+      nextOperationOffset += 1;
+    }
+    toolOperationRecords.set(nextRecord.operationId, nextRecord.record);
+  }
+
+  return toolOperationRecords;
+}
+
+function buildTaskToolOperationSummaryFromRecord(
+  messageId: string,
+  operation: TaskToolExecutionRecord,
+) {
+  return buildTaskToolOperationSummary({
+    messageId,
+    runtimeOperationId: operation.runtimeOperationId,
+    toolName: operation.toolName,
+    input: operation.input,
+    outputText: operation.outputText,
+    errorText: operation.errorText,
+    partIndices: operation.partIndices,
+    rawPart: operation.rawPart,
+  });
+}
+
+function resolveTaskToolOperationFinishedAt(args: {
+  status: TaskToolExecutionStatus;
+  completedAt: string | null;
+  updatedAt: string;
+}) {
+  const nodeStatus = mapTaskToolExecutionStatusToNodeStatus(args.status);
+  return nodeStatus === "completed" || nodeStatus === "failed" || nodeStatus === "cancelled"
+    ? (args.completedAt ?? args.updatedAt)
+    : null;
+}
+
+async function upsertTaskToolExecutionOperation(args: {
+  task: { id: string; projectId: string };
+  sessionId: string;
+  runId: string;
+  messageId: string;
+  operationId: string;
+  operation: TaskToolExecutionRecord;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+}) {
+  const nodeStatus = mapTaskToolExecutionStatusToNodeStatus(args.operation.status);
+  const finishedAt = resolveTaskToolOperationFinishedAt({
+    status: args.operation.status,
+    completedAt: args.completedAt,
+    updatedAt: args.updatedAt,
+  });
+  const summaryJson = buildTaskToolOperationSummaryFromRecord(args.messageId, args.operation);
+
+  await db
+    .insert(taskOperations)
+    .values({
+      id: args.operationId,
+      taskId: args.task.id,
+      sessionId: args.sessionId,
+      runId: args.runId,
+      messageId: args.messageId,
+      parentOperationId: null,
+      runtimeOperationId: args.operation.runtimeOperationId,
+      operationIndex: args.operation.operationIndex,
+      operationKind: "tool_call",
+      toolName: args.operation.toolName,
+      title: args.operation.toolName,
+      status: nodeStatus,
+      summaryJson,
+      startedAt: args.createdAt,
+      finishedAt,
+      createdAt: args.createdAt,
+      updatedAt: args.updatedAt,
+    })
+    .onConflictDoUpdate({
+      target: taskOperations.id,
+      set: {
+        runId: args.runId,
+        messageId: args.messageId,
+        runtimeOperationId: args.operation.runtimeOperationId,
+        operationIndex: args.operation.operationIndex,
+        operationKind: "tool_call",
+        toolName: args.operation.toolName,
+        title: args.operation.toolName,
+        status: nodeStatus,
+        summaryJson,
+        startedAt: args.createdAt,
+        finishedAt,
+        updatedAt: args.updatedAt,
+      },
+    });
+}
+
+async function upsertTaskToolExecutionArtifact(args: {
+  task: { id: string; projectId: string };
+  sessionId: string;
+  messageId: string;
+  operationId: string;
+  operation: TaskToolExecutionRecord;
+  createdAt: string;
+  updatedAt: string;
+}) {
+  if (!args.operation.shouldPersistArtifact) {
+    return;
+  }
+
+  const title = buildTaskToolArtifactTitle(args.operation.toolName);
+  const payloadJson = buildTaskToolOperationSummaryFromRecord(args.messageId, args.operation);
+
+  await db
+    .insert(taskArtifacts)
+    .values({
+      id: args.operation.artifactId,
+      taskId: args.task.id,
+      projectId: args.task.projectId,
+      sessionId: args.sessionId,
+      messageId: args.messageId,
+      operationId: args.operationId,
+      parentArtifactId: null,
+      artifactKind: "result",
+      storageKind: "inline",
+      title,
+      mimeType: "text/plain",
+      filePath: null,
+      externalUri: null,
+      contentText: args.operation.outputText ?? args.operation.errorText,
+      payloadJson,
+      byteSize: null,
+      sha256: null,
+      createdAt: args.createdAt,
+      updatedAt: args.updatedAt,
+    })
+    .onConflictDoUpdate({
+      target: taskArtifacts.id,
+      set: {
+        sessionId: args.sessionId,
+        messageId: args.messageId,
+        operationId: args.operationId,
+        title,
+        mimeType: "text/plain",
+        contentText: args.operation.outputText ?? args.operation.errorText,
+        payloadJson,
+        updatedAt: args.updatedAt,
+      },
+    });
+}
+
+function buildTaskToolOperationTimelineId(operationId: string) {
+  return `task-timeline:operation:${operationId}`;
+}
+
+function buildTaskToolArtifactTimelineId(artifactId: string) {
+  return `task-timeline:artifact:${artifactId}`;
+}
+
+function buildTaskToolExecutionInputSummary(input: unknown) {
+  return stringifyTaskSessionMessageValue(input);
+}
+
+function buildTaskToolExecutionOutputSummary(operation: TaskToolExecutionRecord) {
+  return operation.outputText ?? operation.errorText ?? null;
+}
+
+async function upsertTaskToolExecutionOperationTimeline(args: {
+  task: { id: string; projectId: string };
+  sessionId: string;
+  messageId: string;
+  operationId: string;
+  operation: TaskToolExecutionRecord;
+  createdAt: string;
+  updatedAt: string;
+}) {
+  const argumentsSummary = buildTaskToolExecutionInputSummary(args.operation.input);
+
+  await db
+    .insert(taskTimelineViews)
+    .values({
+      id: buildTaskToolOperationTimelineId(args.operationId),
+      projectId: args.task.projectId,
+      taskId: args.task.id,
+      sessionId: args.sessionId,
+      messageId: args.messageId,
+      operationId: args.operationId,
+      artifactId: null,
+      itemKind: "operation",
+      itemRole: "tool",
+      title: args.operation.toolName,
+      displayText: argumentsSummary ?? args.operation.toolName,
+      metadataJson: {
+        sourceKind: "tool-call",
+        toolName: args.operation.toolName,
+        argumentsSummary,
+        status: args.operation.status,
+        runtimeOperationId: args.operation.runtimeOperationId,
+      },
+      sortAt: args.createdAt,
+      createdAt: args.createdAt,
+      updatedAt: args.updatedAt,
+    })
+    .onConflictDoUpdate({
+      target: taskTimelineViews.id,
+      set: {
+        sessionId: args.sessionId,
+        messageId: args.messageId,
+        operationId: args.operationId,
+        itemKind: "operation",
+        itemRole: "tool",
+        title: args.operation.toolName,
+        displayText: argumentsSummary ?? args.operation.toolName,
+        metadataJson: {
+          sourceKind: "tool-call",
+          toolName: args.operation.toolName,
+          argumentsSummary,
+          status: args.operation.status,
+          runtimeOperationId: args.operation.runtimeOperationId,
+        },
+        sortAt: args.createdAt,
+        updatedAt: args.updatedAt,
+      },
+    });
+}
+
+async function upsertTaskToolExecutionArtifactTimeline(args: {
+  task: { id: string; projectId: string };
+  sessionId: string;
+  messageId: string;
+  operationId: string;
+  operation: TaskToolExecutionRecord;
+  createdAt: string;
+  updatedAt: string;
+}) {
+  if (!args.operation.shouldPersistArtifact) {
+    return;
+  }
+
+  const outputSummary = buildTaskToolExecutionOutputSummary(args.operation);
+
+  await db
+    .insert(taskTimelineViews)
+    .values({
+      id: buildTaskToolArtifactTimelineId(args.operation.artifactId),
+      projectId: args.task.projectId,
+      taskId: args.task.id,
+      sessionId: args.sessionId,
+      messageId: args.messageId,
+      operationId: args.operationId,
+      artifactId: args.operation.artifactId,
+      itemKind: "artifact",
+      itemRole: "tool",
+      title: buildTaskToolArtifactTitle(args.operation.toolName),
+      displayText: outputSummary,
+      metadataJson: {
+        sourceKind: "tool-output",
+        artifactKind: "result",
+        toolName: args.operation.toolName,
+        outputSummary,
+        status: args.operation.status,
+        runtimeOperationId: args.operation.runtimeOperationId,
+      },
+      sortAt: args.updatedAt,
+      createdAt: args.createdAt,
+      updatedAt: args.updatedAt,
+    })
+    .onConflictDoUpdate({
+      target: taskTimelineViews.id,
+      set: {
+        sessionId: args.sessionId,
+        messageId: args.messageId,
+        operationId: args.operationId,
+        artifactId: args.operation.artifactId,
+        itemKind: "artifact",
+        itemRole: "tool",
+        title: buildTaskToolArtifactTitle(args.operation.toolName),
+        displayText: outputSummary,
+        metadataJson: {
+          sourceKind: "tool-output",
+          artifactKind: "result",
+          toolName: args.operation.toolName,
+          outputSummary,
+          status: args.operation.status,
+          runtimeOperationId: args.operation.runtimeOperationId,
+        },
+        sortAt: args.updatedAt,
+        updatedAt: args.updatedAt,
+      },
+    });
+}
+
+async function syncTaskToolExecutionFacts(args: {
+  task: { id: string; projectId: string };
+  sessionId: string;
+  runId: string;
+  messageId: string;
+  messageIndex: number;
+  parts: Record<string, unknown>[];
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+}) {
+  const toolOperationRecords = collectTaskToolExecutionRecords({
+    messageId: args.messageId,
+    messageIndex: args.messageIndex,
+    parts: args.parts,
+  });
+
+  for (const [operationId, operation] of toolOperationRecords.entries()) {
+    await upsertTaskToolExecutionOperation({
+      task: args.task,
+      sessionId: args.sessionId,
+      runId: args.runId,
+      messageId: args.messageId,
+      operationId,
+      operation,
+      createdAt: args.createdAt,
+      updatedAt: args.updatedAt,
+      completedAt: args.completedAt,
+    });
+    await upsertTaskToolExecutionOperationTimeline({
+      task: args.task,
+      sessionId: args.sessionId,
+      messageId: args.messageId,
+      operationId,
+      operation,
+      createdAt: args.createdAt,
+      updatedAt: args.updatedAt,
+    });
+
+    await upsertTaskToolExecutionArtifact({
+      task: args.task,
+      sessionId: args.sessionId,
+      messageId: args.messageId,
+      operationId,
+      operation,
+      createdAt: args.createdAt,
+      updatedAt: args.updatedAt,
+    });
+    await upsertTaskToolExecutionArtifactTimeline({
+      task: args.task,
+      sessionId: args.sessionId,
+      messageId: args.messageId,
+      operationId,
+      operation,
+      createdAt: args.createdAt,
+      updatedAt: args.updatedAt,
+    });
+  }
 }
 
 export function createTaskSessionMessageWriteApi(deps: {
@@ -844,18 +1649,12 @@ export function createTaskSessionMessageWriteApi(deps: {
     runtimeSessionId: string,
   ) => Promise<TaskSessionMessageCompatRecord | null>;
 }) {
-  async function upsertTaskSessionMessageRecord(args: TaskSessionMessageRecordArgs) {
-    const info =
-      args.message.info && typeof args.message.info === "object"
-        ? (args.message.info as Record<string, unknown>)
-        : null;
+  async function resolveTaskSessionMessageRouting(args: TaskSessionMessageRecordArgs) {
+    const info = extractTaskSessionMessageInfoRecord(args.message);
     const role = normalizeTaskSessionMessageRole(args.message);
     const textContent = extractTaskSessionMessageText(args.message);
     const createdAt = extractTaskSessionMessageCreatedAt(args.message);
     const updatedAt = new Date().toISOString();
-
-    // Parallel candidates replay the same user prompt into each runtime branch.
-    // Persist that prompt once on the parent session so candidate sessions only retain replies.
     const routedTarget =
       !args.sessionId && args.runtimeSessionId
         ? await resolveTaskSessionMessageTarget({
@@ -869,36 +1668,64 @@ export function createTaskSessionMessageWriteApi(deps: {
           })
         : null;
 
-    if (routedTarget?.existingMessageId) {
-      return {
-        messageId: routedTarget.existingMessageId,
-        sessionId: routedTarget.sessionId,
-        seq: 0,
-      };
+    return {
+      info,
+      role,
+      textContent,
+      createdAt,
+      updatedAt,
+      routedTarget,
+    };
+  }
+
+  async function resolveTaskSessionMessageSessionId(args: {
+    task: { id: string; projectId: string };
+    sessionId?: string;
+    runtimeSessionId?: string;
+    routedTarget: Awaited<ReturnType<typeof resolveTaskSessionMessageTarget>>;
+  }) {
+    if (args.sessionId) {
+      return args.sessionId;
     }
 
-    const sessionId = args.sessionId
-      ? args.sessionId
-      : routedTarget?.sessionId
-        ? routedTarget.sessionId
-        : args.runtimeSessionId
-          ? await deps.upsertTaskSessionRecord({
-              task: args.task,
-              runtimeSessionId: args.runtimeSessionId,
-              sourceType: "root",
-              isActive: true,
-            })
-          : (() => {
-              throw new Error("Task session message write requires sessionId or runtimeSessionId");
-            })();
-    const runtimeMessageId =
+    if (args.routedTarget?.sessionId) {
+      return args.routedTarget.sessionId;
+    }
+
+    if (args.runtimeSessionId) {
+      return deps.upsertTaskSessionRecord({
+        task: args.task,
+        runtimeSessionId: args.runtimeSessionId,
+        sourceType: "root",
+        isActive: true,
+      });
+    }
+
+    throw new Error("Task session message write requires sessionId or runtimeSessionId");
+  }
+
+  function resolveTaskSessionMessageRuntimeId(args: {
+    message: Record<string, unknown>;
+    info: Record<string, unknown> | null;
+  }) {
+    return (
       (typeof args.message.id === "string" && args.message.id) ||
       (typeof args.message.runtimeMessageId === "string" && args.message.runtimeMessageId) ||
-      (typeof info?.id === "string" && info.id) ||
-      crypto.randomUUID();
-    const messageId = buildTaskSessionMessageWriteId(sessionId, runtimeMessageId);
-    const existing = await loadTaskSessionMessageById(messageId);
-    const latestMessage = await loadLatestTaskSessionMessage(sessionId);
+      (typeof args.info?.id === "string" && args.info.id) ||
+      crypto.randomUUID()
+    );
+  }
+
+  async function loadTaskSessionMessagePersistenceState(args: {
+    sessionId: string;
+    messageId: string;
+    message: Record<string, unknown>;
+    runtimeMessageId: string;
+    textContent: string | null;
+    createdAt: string;
+  }) {
+    const existing = await loadTaskSessionMessageById(args.messageId);
+    const latestMessage = await loadLatestTaskSessionMessage(args.sessionId);
     const assistantMergeTarget =
       !existing &&
       latestMessage &&
@@ -911,21 +1738,38 @@ export function createTaskSessionMessageWriteApi(deps: {
           runtimeMessageId: latestMessage.runtimeMessageId,
         },
         incomingMessage: args.message,
-        incomingRuntimeMessageId: runtimeMessageId,
-        incomingTextContent: textContent,
-        incomingCreatedAt: createdAt,
+        incomingRuntimeMessageId: args.runtimeMessageId,
+        incomingTextContent: args.textContent,
+        incomingCreatedAt: args.createdAt,
       })
         ? latestMessage
         : null;
+
+    return {
+      existing,
+      latestMessage,
+      assistantMergeTarget,
+    };
+  }
+
+  function buildPersistedTaskSessionMessageState(args: {
+    message: Record<string, unknown>;
+    messageId: string;
+    runtimeMessageId: string;
+    createdAt: string;
+    persistenceState: Awaited<ReturnType<typeof loadTaskSessionMessagePersistenceState>>;
+  }) {
+    const { existing, latestMessage, assistantMergeTarget } = args.persistenceState;
     const persistedExisting = assistantMergeTarget ?? existing;
-    const persistedMessageId = assistantMergeTarget?.id ?? messageId;
-    const persistedRuntimeMessageId = assistantMergeTarget?.runtimeMessageId ?? runtimeMessageId;
+    const persistedMessageId = assistantMergeTarget?.id ?? args.messageId;
+    const persistedRuntimeMessageId =
+      assistantMergeTarget?.runtimeMessageId ?? args.runtimeMessageId;
     const persistedPayload = assistantMergeTarget
       ? buildMergedAssistantToolCallFollowupPayload({
           existingPayload: assistantMergeTarget.rawPayload,
           existingRuntimeMessageId: assistantMergeTarget.runtimeMessageId,
           incomingMessage: args.message,
-          incomingRuntimeMessageId: runtimeMessageId,
+          incomingRuntimeMessageId: args.runtimeMessageId,
         })
       : args.message;
     const persistedTextContent = extractTaskSessionMessageText(persistedPayload);
@@ -936,210 +1780,494 @@ export function createTaskSessionMessageWriteApi(deps: {
     const persistedErrorText = extractTaskSessionMessageErrorText(persistedPayload);
     const persistedParts = extractTaskSessionMessageParts(persistedPayload);
     const persistedTokenUsage = extractTaskSessionMessageTokenUsage(persistedPayload) ?? 0;
-    const persistedCreatedAt = persistedExisting?.createdAt ?? createdAt;
-    const persistedStartedAt = persistedExisting?.startedAt ?? createdAt;
+    const persistedCreatedAt = persistedExisting?.createdAt ?? args.createdAt;
+    const persistedStartedAt = persistedExisting?.startedAt ?? args.createdAt;
     const messageIndex = persistedExisting?.messageIndex ?? (latestMessage?.messageIndex ?? -1) + 1;
+    const taskMessageParentId = persistedExisting ? null : (latestMessage?.id ?? null);
+
+    return {
+      latestMessage,
+      persistedExisting,
+      persistedMessageId,
+      persistedRuntimeMessageId,
+      persistedPayload,
+      persistedTextContent,
+      persistedCompletedAt,
+      persistedStatus,
+      persistedClientMessageId,
+      persistedProviderMessageId,
+      persistedErrorText,
+      persistedParts,
+      persistedTokenUsage,
+      persistedCreatedAt,
+      persistedStartedAt,
+      messageIndex,
+      taskMessageParentId,
+    };
+  }
+
+  async function loadTaskSessionMessageRunState(sessionId: string) {
     const sessionRecord = await db.query.taskSessions.findFirst({
       where: eq(taskSessions.id, sessionId),
     });
-    const defaultRunId = sessionRecord?.latestRunId ?? buildTaskSessionDefaultRunId(sessionId);
-    const messagePreview = buildTaskMessagePreview(persistedTextContent);
-    const taskMessageStatus = role === "assistant"
+
+    return {
+      sessionRecord,
+      defaultRunId: sessionRecord?.latestRunId ?? buildTaskSessionDefaultRunId(sessionId),
+    };
+  }
+
+  function resolveTaskSessionMessageNodeStatus(
+    role: TaskSessionMessageRole,
+    persistedStatus: TaskSessionMessageStatus,
+  ) {
+    return role === "assistant"
       ? mapTaskSessionMessageStatusToNodeStatus(persistedStatus)
       : ("running" as const);
-    const taskMessageParentId = persistedExisting ? null : (latestMessage?.id ?? null);
+  }
 
+  function resolveTaskSessionMessageRunFinishedAt(args: {
+    role: TaskSessionMessageRole;
+    persistedStatus: TaskSessionMessageStatus;
+    persistedCompletedAt: string | null;
+    updatedAt: string;
+  }) {
+    return args.role === "assistant" &&
+      args.persistedStatus !== "pending" &&
+      args.persistedStatus !== "streaming"
+      ? (args.persistedCompletedAt ?? args.updatedAt)
+      : null;
+  }
+
+  async function buildTaskSessionMessageWriteContext(args: {
+    task: { id: string; projectId: string };
+    sessionId: string;
+    runtimeSessionId?: string;
+    message: Record<string, unknown>;
+    routing: Awaited<ReturnType<typeof resolveTaskSessionMessageRouting>>;
+  }) {
+    const runtimeMessageId = resolveTaskSessionMessageRuntimeId({
+      message: args.message,
+      info: args.routing.info,
+    });
+    const messageId = buildTaskSessionMessageWriteId(args.sessionId, runtimeMessageId);
+    const persistenceState = await loadTaskSessionMessagePersistenceState({
+      sessionId: args.sessionId,
+      messageId,
+      message: args.message,
+      runtimeMessageId,
+      textContent: args.routing.textContent,
+      createdAt: args.routing.createdAt,
+    });
+    const persistedState = buildPersistedTaskSessionMessageState({
+      message: args.message,
+      messageId,
+      runtimeMessageId,
+      createdAt: args.routing.createdAt,
+      persistenceState,
+    });
+    const runState = await loadTaskSessionMessageRunState(args.sessionId);
+
+    return {
+      task: args.task,
+      sessionId: args.sessionId,
+      runtimeSessionId: args.runtimeSessionId,
+      role: args.routing.role,
+      updatedAt: args.routing.updatedAt,
+      sessionRecord: runState.sessionRecord,
+      defaultRunId: runState.defaultRunId,
+      messagePreview: buildTaskMessagePreview(persistedState.persistedTextContent),
+      taskMessageStatus: resolveTaskSessionMessageNodeStatus(
+        args.routing.role,
+        persistedState.persistedStatus,
+      ),
+      ...persistedState,
+    };
+  }
+
+  type TaskSessionMessageWriteContext = Awaited<
+    ReturnType<typeof buildTaskSessionMessageWriteContext>
+  >;
+
+  function buildTaskSessionRunContextValues(context: TaskSessionMessageWriteContext) {
+    return {
+      runtimeSessionId: context.sessionRecord?.runtimeSessionId ?? context.runtimeSessionId ?? null,
+      triggerType: mapLegacyTriggerTypeToRunTriggerType(context.sessionRecord?.triggerType ?? null),
+      executionKind: mapLegacySessionKindToRunExecutionKind(context.sessionRecord?.sessionKind),
+      coordinationKey:
+        context.sessionRecord?.coordinationKey ??
+        context.sessionRecord?.rootSessionId ??
+        context.sessionId,
+      operationId: context.sessionRecord?.operationId ?? null,
+      candidateIndex: context.sessionRecord?.candidateIndex ?? null,
+      laneRole: mapLegacySessionKindToRunLaneRole(context.sessionRecord?.sessionKind),
+      executorKind: mapLegacySessionKindToExecutorKind(context.sessionRecord?.sessionKind),
+      modelRoute:
+        context.sessionRecord?.effectiveModel ?? context.sessionRecord?.selectedModel ?? null,
+      workflowStageKey: context.sessionRecord?.workflowStageKey ?? null,
+    };
+  }
+
+  function buildTaskSessionRunResultValues(context: TaskSessionMessageWriteContext) {
+    const startedAt = pickEarlierTaskSessionMessageTime(
+      context.sessionRecord?.startedAt ?? null,
+      context.persistedCreatedAt,
+    );
+    const finishedAt = resolveTaskSessionMessageRunFinishedAt({
+      role: context.role,
+      persistedStatus: context.persistedStatus,
+      persistedCompletedAt: context.persistedCompletedAt,
+      updatedAt: context.updatedAt,
+    });
+
+    return {
+      status: context.taskMessageStatus,
+      outputTokens: context.role === "assistant" ? context.persistedTokenUsage : 0,
+      totalTokens: context.role === "assistant" ? context.persistedTokenUsage : 0,
+      resultSummary: context.role === "assistant" ? context.messagePreview : null,
+      errorText: context.persistedErrorText,
+      startedAt,
+      finishedAt: finishedAt ? pickLaterTaskSessionMessageTime(startedAt, finishedAt) : null,
+    };
+  }
+
+  function buildTaskSessionRunInsertValues(context: TaskSessionMessageWriteContext) {
+    return {
+      id: context.defaultRunId,
+      taskId: context.task.id,
+      sessionId: context.sessionId,
+      attemptIndex: 1,
+      ...buildTaskSessionRunContextValues(context),
+      ...buildTaskSessionRunResultValues(context),
+      inputTokens: 0,
+      costUsd: context.sessionRecord?.costUsd ?? 0,
+      createdAt: pickEarlierTaskSessionMessageTime(
+        context.sessionRecord?.createdAt ?? null,
+        context.persistedCreatedAt,
+      ),
+    };
+  }
+
+  function buildTaskSessionRunUpdateValues(context: TaskSessionMessageWriteContext) {
+    return {
+      taskId: context.task.id,
+      sessionId: context.sessionId,
+      ...buildTaskSessionRunContextValues(context),
+      ...buildTaskSessionRunResultValues(context),
+    };
+  }
+
+  function buildTaskMessageInsertValues(context: TaskSessionMessageWriteContext) {
+    return {
+      id: context.persistedMessageId,
+      taskId: context.task.id,
+      sessionId: context.sessionId,
+      createdByRunId: context.role === "user" ? null : context.defaultRunId,
+      role: context.role,
+      messageKind: mapTaskMessageKind(context.role),
+      parentMessageId: context.taskMessageParentId,
+      replyToMessageId: context.taskMessageParentId,
+      runtimeMessageId: context.persistedRuntimeMessageId,
+      clientMessageId: context.persistedClientMessageId,
+      providerMessageId: context.persistedProviderMessageId,
+      seq: context.messageIndex,
+      textContent: context.persistedTextContent,
+      textPreview: context.messagePreview,
+      rawPayload: context.persistedPayload,
+      partCount: context.persistedParts.length,
+      tokenUsed: context.persistedTokenUsage,
+      status: context.persistedStatus,
+      errorText: context.persistedErrorText,
+      startedAt: context.persistedStartedAt,
+      createdAt: context.persistedCreatedAt,
+      updatedAt: context.updatedAt,
+      completedAt: context.persistedCompletedAt,
+    };
+  }
+
+  function buildTaskMessageUpdateValues(context: TaskSessionMessageWriteContext) {
+    return {
+      createdByRunId: context.role === "user" ? null : context.defaultRunId,
+      role: context.role,
+      messageKind: mapTaskMessageKind(context.role),
+      runtimeMessageId: context.persistedRuntimeMessageId,
+      clientMessageId: context.persistedClientMessageId,
+      providerMessageId: context.persistedProviderMessageId,
+      seq: context.messageIndex,
+      textContent: context.persistedTextContent,
+      textPreview: context.messagePreview,
+      rawPayload: context.persistedPayload,
+      partCount: context.persistedParts.length,
+      tokenUsed: context.persistedTokenUsage,
+      status: context.persistedStatus,
+      errorText: context.persistedErrorText,
+      startedAt: context.persistedStartedAt,
+      updatedAt: context.updatedAt,
+      completedAt: context.persistedCompletedAt,
+    };
+  }
+
+  function buildTaskMessagePartValues(context: TaskSessionMessageWriteContext) {
+    return context.persistedParts.map((part, index) => ({
+      id: [context.persistedMessageId, String(index)].join(":"),
+      messageId: context.persistedMessageId,
+      partIndex: index,
+      partType: normalizeTaskSessionMessagePartType(part),
+      textContent: extractTaskSessionMessagePartText(part),
+      jsonPayload: part,
+      createdAt: context.persistedCreatedAt,
+    }));
+  }
+
+  async function replaceTaskSessionMessageParts(context: TaskSessionMessageWriteContext) {
+    if (context.persistedParts.length === 0) {
+      await db
+        .delete(taskMessageParts)
+        .where(eq(taskMessageParts.messageId, context.persistedMessageId));
+      return;
+    }
+
+    const partValues = buildTaskMessagePartValues(context);
+
+    for (const value of partValues) {
+      await db.insert(taskMessageParts).values(value).onConflictDoUpdate({
+        target: [taskMessageParts.messageId, taskMessageParts.partIndex],
+        set: {
+          partIndex: value.partIndex,
+          partType: value.partType,
+          textContent: value.textContent,
+          jsonPayload: value.jsonPayload,
+        },
+      });
+    }
+
+    await db.delete(taskMessageParts).where(
+      and(
+        eq(taskMessageParts.messageId, context.persistedMessageId),
+        gte(taskMessageParts.partIndex, context.persistedParts.length),
+      ),
+    );
+  }
+
+  function buildTaskTimelineInsertValues(
+    context: TaskSessionMessageWriteContext,
+  ): typeof taskTimelineViews.$inferInsert {
+    return {
+      id: buildTaskTimelineMessageId(context.persistedMessageId),
+      projectId: context.task.projectId,
+      taskId: context.task.id,
+      sessionId: context.sessionId,
+      messageId: context.persistedMessageId,
+      operationId: null,
+      artifactId: null,
+      itemKind: "message",
+      itemRole: context.role,
+      title: null,
+      displayText: context.persistedTextContent,
+      metadataJson: {
+        runtimeMessageId: context.persistedRuntimeMessageId,
+        role: context.role,
+      },
+      sortAt: context.persistedCompletedAt ?? context.persistedCreatedAt,
+      createdAt: context.persistedCreatedAt,
+      updatedAt: context.updatedAt,
+    };
+  }
+
+  function buildTaskTimelineUpdateValues(
+    context: TaskSessionMessageWriteContext,
+  ): Partial<typeof taskTimelineViews.$inferInsert> {
+    return {
+      sessionId: context.sessionId,
+      messageId: context.persistedMessageId,
+      itemKind: "message",
+      itemRole: context.role,
+      displayText: context.persistedTextContent,
+      metadataJson: {
+        runtimeMessageId: context.persistedRuntimeMessageId,
+        role: context.role,
+      },
+      sortAt: context.persistedCompletedAt ?? context.persistedCreatedAt,
+      updatedAt: context.updatedAt,
+    };
+  }
+
+  function buildTaskSessionUpdatesFromMessage(context: TaskSessionMessageWriteContext) {
+    const sessionUpdates: Partial<typeof taskSessions.$inferInsert> = {
+      latestRunId: context.defaultRunId,
+      lastActivityAt: context.updatedAt,
+      updatedAt: context.updatedAt,
+    };
+
+    if (context.role === "user") {
+      sessionUpdates.status = "running";
+      if (!context.sessionRecord?.userPromptSummary) {
+        sessionUpdates.userPromptSummary = context.messagePreview;
+      }
+      return sessionUpdates;
+    }
+
+    if (context.role !== "assistant") {
+      if (!context.sessionRecord?.status || context.sessionRecord.status === "pending") {
+        sessionUpdates.status = "running";
+      }
+      return sessionUpdates;
+    }
+
+    if (context.persistedStatus === "completed") {
+      sessionUpdates.status = "completed";
+      sessionUpdates.headMessageId = context.persistedMessageId;
+      return sessionUpdates;
+    }
+
+    if (context.persistedStatus === "failed") {
+      sessionUpdates.status = "failed";
+      return sessionUpdates;
+    }
+
+    if (context.persistedStatus === "cancelled") {
+      sessionUpdates.status = "cancelled";
+      return sessionUpdates;
+    }
+
+    sessionUpdates.status = "running";
+    return sessionUpdates;
+  }
+
+  function isTaskMessageSessionSeqConflict(error: unknown): boolean {
+    if (!error) {
+      return false;
+    }
+
+    if (error instanceof Error) {
+      if (error.message.includes("idx_task_messages_session_seq")) {
+        return true;
+      }
+
+      return isTaskMessageSessionSeqConflict((error as Error & { cause?: unknown }).cause);
+    }
+
+    if (typeof error !== "object") {
+      return false;
+    }
+
+    const record = error as {
+      message?: unknown;
+      cause?: unknown;
+      constraint?: unknown;
+    };
+
+    if (record.constraint === "idx_task_messages_session_seq") {
+      return true;
+    }
+    if (
+      typeof record.message === "string" &&
+      record.message.includes("idx_task_messages_session_seq")
+    ) {
+      return true;
+    }
+
+    return isTaskMessageSessionSeqConflict(record.cause);
+  }
+
+  async function persistTaskSessionMessageContext(context: TaskSessionMessageWriteContext) {
     await db
       .insert(taskSessionRuns)
-      .values({
-        id: defaultRunId,
-        taskId: args.task.id,
-        sessionId,
-        attemptIndex: 1,
-        runtimeSessionId: sessionRecord?.runtimeSessionId ?? args.runtimeSessionId ?? null,
-        triggerType: mapLegacyTriggerTypeToRunTriggerType(sessionRecord?.triggerType ?? null),
-        executionKind: mapLegacySessionKindToRunExecutionKind(sessionRecord?.sessionKind),
-        coordinationKey: sessionRecord?.coordinationKey ?? sessionRecord?.rootSessionId ?? sessionId,
-        operationId: sessionRecord?.operationId ?? null,
-        candidateIndex: sessionRecord?.candidateIndex ?? null,
-        laneRole: mapLegacySessionKindToRunLaneRole(sessionRecord?.sessionKind),
-        executorKind: mapLegacySessionKindToExecutorKind(sessionRecord?.sessionKind),
-        modelRoute: sessionRecord?.effectiveModel ?? sessionRecord?.selectedModel ?? null,
-        workflowStageKey: sessionRecord?.workflowStageKey ?? null,
-        status: taskMessageStatus,
-        inputTokens: 0,
-        outputTokens: role === "assistant" ? persistedTokenUsage : 0,
-        totalTokens: role === "assistant" ? persistedTokenUsage : 0,
-        costUsd: sessionRecord?.costUsd ?? 0,
-        resultSummary: role === "assistant" ? messagePreview : null,
-        errorText: persistedErrorText,
-        startedAt: sessionRecord?.startedAt ?? persistedCreatedAt,
-        finishedAt:
-          role === "assistant" && persistedStatus !== "pending" && persistedStatus !== "streaming"
-            ? (persistedCompletedAt ?? updatedAt)
-            : null,
-        createdAt: sessionRecord?.createdAt ?? persistedCreatedAt,
-      })
+      .values(buildTaskSessionRunInsertValues(context))
       .onConflictDoUpdate({
         target: taskSessionRuns.id,
-        set: {
-          taskId: args.task.id,
-          sessionId,
-          runtimeSessionId: sessionRecord?.runtimeSessionId ?? args.runtimeSessionId ?? null,
-          triggerType: mapLegacyTriggerTypeToRunTriggerType(sessionRecord?.triggerType ?? null),
-          executionKind: mapLegacySessionKindToRunExecutionKind(sessionRecord?.sessionKind),
-          coordinationKey: sessionRecord?.coordinationKey ?? sessionRecord?.rootSessionId ?? sessionId,
-          candidateIndex: sessionRecord?.candidateIndex ?? null,
-          laneRole: mapLegacySessionKindToRunLaneRole(sessionRecord?.sessionKind),
-          executorKind: mapLegacySessionKindToExecutorKind(sessionRecord?.sessionKind),
-          modelRoute: sessionRecord?.effectiveModel ?? sessionRecord?.selectedModel ?? null,
-          status: taskMessageStatus,
-          outputTokens: role === "assistant" ? persistedTokenUsage : 0,
-          totalTokens: role === "assistant" ? persistedTokenUsage : 0,
-          resultSummary: role === "assistant" ? messagePreview : null,
-          errorText: persistedErrorText,
-          startedAt: sessionRecord?.startedAt ?? persistedCreatedAt,
-          finishedAt:
-            role === "assistant" && persistedStatus !== "pending" && persistedStatus !== "streaming"
-              ? (persistedCompletedAt ?? updatedAt)
-              : null,
-        },
+        set: buildTaskSessionRunUpdateValues(context),
       });
 
     await db
       .insert(taskMessages)
-      .values({
-        id: persistedMessageId,
-        taskId: args.task.id,
-        sessionId,
-        createdByRunId: role === "user" ? null : defaultRunId,
-        role,
-        messageKind: mapTaskMessageKind(role),
-        parentMessageId: taskMessageParentId,
-        replyToMessageId: taskMessageParentId,
-        runtimeMessageId: persistedRuntimeMessageId,
-        clientMessageId: persistedClientMessageId,
-        providerMessageId: persistedProviderMessageId,
-        seq: messageIndex,
-        textContent: persistedTextContent,
-        textPreview: messagePreview,
-        rawPayload: persistedPayload,
-        partCount: persistedParts.length,
-        tokenUsed: persistedTokenUsage,
-        status: persistedStatus,
-        errorText: persistedErrorText,
-        startedAt: persistedStartedAt,
-        createdAt: persistedCreatedAt,
-        updatedAt,
-        completedAt: persistedCompletedAt,
-      })
+      .values(buildTaskMessageInsertValues(context))
       .onConflictDoUpdate({
         target: taskMessages.id,
-        set: {
-          createdByRunId: role === "user" ? null : defaultRunId,
-          role,
-          messageKind: mapTaskMessageKind(role),
-          runtimeMessageId: persistedRuntimeMessageId,
-          clientMessageId: persistedClientMessageId,
-          providerMessageId: persistedProviderMessageId,
-          seq: messageIndex,
-          textContent: persistedTextContent,
-          textPreview: messagePreview,
-          rawPayload: persistedPayload,
-          partCount: persistedParts.length,
-          tokenUsed: persistedTokenUsage,
-          status: persistedStatus,
-          errorText: persistedErrorText,
-          startedAt: persistedStartedAt,
-          updatedAt,
-          completedAt: persistedCompletedAt,
-        },
+        set: buildTaskMessageUpdateValues(context),
       });
 
-    await db.delete(taskMessageParts).where(eq(taskMessageParts.messageId, persistedMessageId));
+    await replaceTaskSessionMessageParts(context);
 
-    if (persistedParts.length > 0) {
-      await db.insert(taskMessageParts).values(
-        persistedParts.map((part, index) => ({
-          id: `${persistedMessageId}:${index}`,
-          messageId: persistedMessageId,
-          partIndex: index,
-          partType: normalizeTaskSessionMessagePartType(part),
-          textContent: extractTaskSessionMessagePartText(part),
-          jsonPayload: part,
-          createdAt: persistedCreatedAt,
-        })),
-      );
-    }
+    await syncTaskToolExecutionFacts({
+      task: context.task,
+      sessionId: context.sessionId,
+      runId: context.defaultRunId,
+      messageId: context.persistedMessageId,
+      messageIndex: context.messageIndex,
+      parts: context.persistedParts,
+      createdAt: context.persistedCreatedAt,
+      updatedAt: context.updatedAt,
+      completedAt: context.persistedCompletedAt,
+    });
 
     await db
       .insert(taskTimelineViews)
-      .values({
-        id: buildTaskTimelineMessageId(persistedMessageId),
-        projectId: args.task.projectId,
-        taskId: args.task.id,
-        sessionId,
-        messageId: persistedMessageId,
-        operationId: null,
-        artifactId: null,
-        itemKind: "message",
-        itemRole: role,
-        title: null,
-        displayText: persistedTextContent,
-        metadataJson: {
-          runtimeMessageId: persistedRuntimeMessageId,
-          role,
-        },
-        sortAt: persistedCompletedAt ?? persistedCreatedAt,
-        createdAt: persistedCreatedAt,
-        updatedAt,
-      })
+      .values(buildTaskTimelineInsertValues(context))
       .onConflictDoUpdate({
         target: taskTimelineViews.id,
-        set: {
-          sessionId,
-          messageId: persistedMessageId,
-          itemKind: "message",
-          itemRole: role,
-          displayText: persistedTextContent,
-          metadataJson: {
-            runtimeMessageId: persistedRuntimeMessageId,
-            role,
-          },
-          sortAt: persistedCompletedAt ?? persistedCreatedAt,
-          updatedAt,
-        },
+        set: buildTaskTimelineUpdateValues(context),
       });
 
-    const sessionUpdates: Partial<typeof taskSessions.$inferInsert> = {
-      latestRunId: defaultRunId,
-      lastActivityAt: updatedAt,
-      updatedAt,
-    };
+    await db
+      .update(taskSessions)
+      .set(buildTaskSessionUpdatesFromMessage(context))
+      .where(eq(taskSessions.id, context.sessionId));
+  }
 
-    if (role === "user") {
-      sessionUpdates.status = "running";
-      if (!sessionRecord?.userPromptSummary) {
-        sessionUpdates.userPromptSummary = messagePreview;
-      }
-    } else if (persistedStatus === "completed") {
-      sessionUpdates.status = "completed";
-      sessionUpdates.headMessageId = persistedMessageId;
-    } else if (persistedStatus === "failed") {
-      sessionUpdates.status = "failed";
-    } else if (persistedStatus === "cancelled") {
-      sessionUpdates.status = "cancelled";
-    } else {
-      sessionUpdates.status = "running";
+  async function upsertTaskSessionMessageRecord(args: TaskSessionMessageRecordArgs) {
+    const routing = await resolveTaskSessionMessageRouting(args);
+
+    if (routing.routedTarget?.existingMessageId) {
+      return {
+        messageId: routing.routedTarget.existingMessageId,
+        sessionId: routing.routedTarget.sessionId,
+        seq: 0,
+      };
     }
 
-    await db.update(taskSessions).set(sessionUpdates).where(eq(taskSessions.id, sessionId));
+    const sessionId = await resolveTaskSessionMessageSessionId({
+      task: args.task,
+      sessionId: args.sessionId,
+      runtimeSessionId: args.runtimeSessionId,
+      routedTarget: routing.routedTarget,
+    });
 
-    return {
-      messageId: persistedMessageId,
-      sessionId,
-      seq: 0,
-    };
+    for (let attempt = 0; attempt <= TASK_MESSAGE_SESSION_SEQ_INSERT_RETRY_LIMIT; attempt += 1) {
+      const context = await buildTaskSessionMessageWriteContext({
+        task: args.task,
+        sessionId,
+        runtimeSessionId: args.runtimeSessionId,
+        message: args.message,
+        routing,
+      });
+
+      try {
+        await persistTaskSessionMessageContext(context);
+
+        return {
+          messageId: context.persistedMessageId,
+          sessionId: context.sessionId,
+          seq: 0,
+        };
+      } catch (error) {
+        if (
+          attempt >= TASK_MESSAGE_SESSION_SEQ_INSERT_RETRY_LIMIT ||
+          !isTaskMessageSessionSeqConflict(error)
+        ) {
+          throw error;
+        }
+
+        await new Promise((resolve) =>
+          setTimeout(
+            resolve,
+            TASK_MESSAGE_SESSION_SEQ_INSERT_RETRY_DELAY_MS * (attempt + 1),
+          ),
+        );
+      }
+    }
+
+    throw new Error("Task session message write exhausted seq retry budget");
   }
 
   return {
