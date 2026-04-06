@@ -56,6 +56,7 @@ interface HookExecutionSnapshot {
 interface TaskStrategyPayload {
   selectedAgent?: string;
   effectiveModel?: string;
+  paidExecutionGuard?: Record<string, unknown>;
   hookExecutions?: Array<HookExecutionSnapshot & { hookId: string; trigger: string }>;
 }
 
@@ -395,12 +396,27 @@ describe("lifecycle hooks integration", () => {
 
           const authorization = await createInternalAuthorization();
           const resultText = "OK.";
+          const latestTask = await getTask(taskId);
+          const latestStrategy = parseTaskStrategy(latestTask.strategy);
+          const paidExecutionGuard =
+            latestStrategy.paidExecutionGuard &&
+            typeof latestStrategy.paidExecutionGuard === "object"
+              ? latestStrategy.paidExecutionGuard
+              : {};
+
           await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
             method: "PATCH",
             authorization,
             body: {
               status: "completed",
               result: resultText,
+              strategy: JSON.stringify({
+                ...latestStrategy,
+                paidExecutionGuard: {
+                  ...paidExecutionGuard,
+                  postHooksDisabled: false,
+                },
+              }),
             },
           });
 
