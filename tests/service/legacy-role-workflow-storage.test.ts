@@ -51,7 +51,6 @@ async function loadLegacyWorkflowStorageModule(args: {
   const fakeRoleAggregateConclusions = { id: "id", taskId: "taskId" };
   const fakeTaskAggregates = { id: "id" };
   const fakeTaskArtifacts = { id: "id" };
-  const fakeTaskMessageEvents = { id: "id" };
   const fakeTaskMessageParts = { id: "id" };
   const fakeTaskMessages = { id: "id" };
   const fakeTaskOperations = { id: "id" };
@@ -147,7 +146,6 @@ async function loadLegacyWorkflowStorageModule(args: {
     projects: fakeProjects,
     roleAggregateConclusions: fakeRoleAggregateConclusions,
     taskArtifacts: fakeTaskArtifacts,
-    taskMessageEvents: fakeTaskMessageEvents,
     taskMessageParts: fakeTaskMessageParts,
     taskMessages: fakeTaskMessages,
     taskOperations: fakeTaskOperations,

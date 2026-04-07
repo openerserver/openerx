@@ -2,10 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import * as orchestrationStrategyModule from "../../control-plane/web-ui-bff/src/lib/orchestration-strategy";
-import {
-  createOpencodeAdapterModuleMock,
-  createRuntimeProviderModuleMock,
-} from "./opencode-adapter-mock";
+import { createRuntimeProviderModuleMock } from "./runtime-provider-mock";
 import { createSseAggregatorModuleMock } from "./sse-aggregator-mock";
 
 type ControlPlaneFetchHandler = ((request: Request) => Promise<Response> | Response) | null;
@@ -55,7 +52,7 @@ mock.module("../../control-plane/web-ui-bff/src/lib/orchestration-strategy", () 
   readOrchestrationStrategy: mock(() => ({ hooks: [], templates: [], judge: { enabled: false } })),
 }));
 
-const opencodeAdapterModule = createOpencodeAdapterModuleMock({
+const runtimeProviderModule = createRuntimeProviderModuleMock({
   continueSession: mock(async () => ({ ok: true })),
   createSession: mock(async () => ({ ok: true, sessionId: "session-1", agentRunId: "run-1" })),
   ensureAgentRunForSession: mock(() => "run-1"),
@@ -83,13 +80,8 @@ const opencodeAdapterModule = createOpencodeAdapterModuleMock({
   updateAgentRunStatus: mock(() => undefined),
 });
 
-mock.module(
-  "../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter",
-  () => opencodeAdapterModule,
-);
-
 mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/runtime-provider", () =>
-  createRuntimeProviderModuleMock(opencodeAdapterModule),
+  runtimeProviderModule,
 );
 
 mock.module("../../control-plane/web-ui-bff/src/modules/hooks/lifecycle-hooks", () => ({

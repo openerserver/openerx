@@ -63,7 +63,6 @@
 - task_operating_modes (taskOperatingModes)
 - boss_decisions (bossDecisions)
 - human_escalations (humanEscalations)
-- task_message_events (taskMessageEvents)
 
 ## 表详细注释
 
@@ -300,9 +299,9 @@
 - 典型读写：触发升级时写入，运维或管理页面查询处理进度。
 
 ### task_message_events
-- 用途：消息事件流（append-only），支持投影与重放。
-- 关键关系：按 `task_id + session_id` 分区读取，`projected` 标记投影进度。
-- 典型读写：消息增量事件持续写入，投影器消费未投影事件。
+- 状态：已删除。
+- 删除依据：[control-plane/service/drizzle-pg/0036_drop_task_message_events.sql](../../control-plane/service/drizzle-pg/0036_drop_task_message_events.sql)。
+- 现状：消息主事实已完全收敛到 `task_sessions`、`task_session_runs`、`task_messages`、`task_message_parts` 与 `task_timeline_views`；不再保留独立 append-only message event log。
 
 ## organizations
 
@@ -1890,32 +1889,6 @@ export const humanEscalations = pgTable(
 
 ## task_message_events
 
-- 常量名: taskMessageEvents
-
-```ts
-export const taskMessageEvents = pgTable(
-  "task_message_events",
-  {
-    id: bigint("id", { mode: "number" }).primaryKey().generatedAlwaysAsIdentity(),
-    taskId: text("task_id")
-      .notNull()
-      .references(() => tasks.id),
-    sessionId: text("session_id").notNull(),
-    eventType: text("event_type").$type<TaskMessageEventType>().notNull(),
-    runtimeMessageId: text("runtime_message_id"),
-    payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
-    projected: boolean("projected").notNull().default(false),
-    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-  },
-  (table) => [
-    index("idx_task_message_events_unprojected")
-      .on(table.id)
-      .where(sql`projected = false`),
-    index("idx_task_message_events_task_session").on(
-      table.taskId,
-      table.sessionId,
-      table.createdAt,
-    ),
-  ],
-);
-```
+- 状态：已删除。
+- 删除方式：见 [control-plane/service/drizzle-pg/0036_drop_task_message_events.sql](../../control-plane/service/drizzle-pg/0036_drop_task_message_events.sql)。
+- 说明：这里保留章节名，仅用于说明该历史表已退出当前 schema；现行消息事实层请改看 `task_messages`、`task_message_parts`、`task_sessions`、`task_session_runs` 与 `task_timeline_views`。

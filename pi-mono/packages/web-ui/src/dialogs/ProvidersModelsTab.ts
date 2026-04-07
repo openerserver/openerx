@@ -61,7 +61,7 @@ export class ProvidersModelsTab extends SettingsTab {
 			const models = await discoverModels(
 				provider.type as AutoDiscoveryProviderType,
 				provider.baseUrl,
-				provider.apiKey,
+				provider.credentials,
 			);
 
 			this.providerStatus.set(provider.id, { modelCount: models.length, status: "connected" });
@@ -169,7 +169,7 @@ export class ProvidersModelsTab extends SettingsTab {
 			const models = await discoverModels(
 				provider.type as AutoDiscoveryProviderType,
 				provider.baseUrl,
-				provider.apiKey,
+				provider.credentials,
 			);
 
 			this.providerStatus.set(provider.id, { modelCount: models.length, status: "connected" });

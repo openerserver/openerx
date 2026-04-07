@@ -34,12 +34,38 @@ type TaskSessionMessageSummaryRecord = {
   completedAt?: string | null;
 };
 
+type CanonicalTaskMessageSummaryRow = {
+  id: string;
+  sessionId: string;
+  role: string;
+  status: string;
+  clientMessageId: string | null;
+  runtimeMessageId: string | null;
+  seq: number;
+  textContent: string | null;
+  textPreview: string | null;
+  errorText: string | null;
+  createdAt: string;
+  completedAt: string | null;
+};
+
+const CANONICAL_TASK_MESSAGE_SUMMARY_COLUMNS = {
+  id: taskMessages.id,
+  sessionId: taskMessages.sessionId,
+  role: taskMessages.role,
+  status: taskMessages.status,
+  clientMessageId: taskMessages.clientMessageId,
+  runtimeMessageId: taskMessages.runtimeMessageId,
+  seq: taskMessages.seq,
+  textContent: taskMessages.textContent,
+  textPreview: taskMessages.textPreview,
+  errorText: taskMessages.errorText,
+  createdAt: taskMessages.createdAt,
+  completedAt: taskMessages.completedAt,
+};
+
 function buildUserRuntimeMessageId(clientMessageId: string) {
   return `user:${clientMessageId}`;
-}
-
-function buildAssistantRuntimeMessageId(clientMessageId: string) {
-  return `assistant:${clientMessageId}`;
 }
 
 function buildQueuedModelRequestRuntimeOperationId(clientMessageId: string) {
@@ -116,62 +142,9 @@ function asTaskProject(task: TaskTreeRecord | null, session: typeof taskSessions
   } satisfies PersistedTask;
 }
 
-function asTaskMessagePayload(value: unknown) {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function pickFirstNonEmptyString(candidates: unknown[]) {
-  for (const candidate of candidates) {
-    if (typeof candidate === "string" && candidate.trim()) {
-      return candidate;
-    }
-  }
-
-  return null;
-}
-
-function extractTaskMessagePartText(part: unknown) {
-  if (!part || typeof part !== "object") {
-    return null;
-  }
-
-  const record = part as Record<string, unknown>;
-  return pickFirstNonEmptyString([record.text, record.content]);
-}
-
-function extractTaskMessagePayloadPartsText(payload: Record<string, unknown>) {
-  const parts = Array.isArray(payload.parts) ? payload.parts : [];
-  for (const part of parts) {
-    const text = extractTaskMessagePartText(part);
-    if (text) {
-      return text;
-    }
-  }
-
-  return null;
-}
-
-function extractTaskMessagePayloadText(payload: Record<string, unknown> | null) {
-  if (!payload) {
-    return null;
-  }
-
-  return (
-    pickFirstNonEmptyString([
-      payload.textContent,
-      payload.text,
-      payload.summaryText,
-      payload.content,
-    ]) ?? extractTaskMessagePayloadPartsText(payload)
-  );
-}
-
 function mapCanonicalTaskMessage(
-  message: typeof taskMessages.$inferSelect,
+  message: CanonicalTaskMessageSummaryRow,
 ): TaskSessionMessageSummaryRecord {
-  const rawPayload = asTaskMessagePayload(message.rawPayload);
   return {
     id: message.id,
     role: message.role,
@@ -179,16 +152,8 @@ function mapCanonicalTaskMessage(
     clientMessageId: message.clientMessageId ?? null,
     runtimeMessageId: message.runtimeMessageId ?? null,
     messageIndex: message.seq,
-    textContent:
-      message.textContent ??
-      extractTaskMessagePayloadText(rawPayload) ??
-      message.textPreview ??
-      null,
-    errorText:
-      message.errorText ??
-      (typeof rawPayload?.errorText === "string" && rawPayload.errorText.trim()
-        ? rawPayload.errorText
-        : null),
+    textContent: message.textContent ?? message.textPreview ?? null,
+    errorText: message.errorText ?? null,
     createdAt: message.createdAt,
     completedAt: message.completedAt ?? null,
   };
@@ -213,49 +178,47 @@ async function loadTaskSessionRecord(taskId: string, sessionId: string) {
   });
 }
 
-async function loadCanonicalTaskSessionMessageById(messageId: string) {
-  const message = await db.query.taskMessages.findFirst({
-    where: eq(taskMessages.id, messageId),
-  });
+async function loadTaskSessionMessageById(messageId: string) {
+  const [message] = await db
+    .select(CANONICAL_TASK_MESSAGE_SUMMARY_COLUMNS)
+    .from(taskMessages)
+    .where(eq(taskMessages.id, messageId))
+    .limit(1);
   return message ? mapCanonicalTaskMessage(message) : null;
 }
 
-async function loadTaskSessionMessageById(messageId: string) {
-  return loadCanonicalTaskSessionMessageById(messageId);
-}
-
-async function loadCanonicalTaskSessionMessageByClientMessageId(
+async function loadTaskSessionMessageByClientMessageId(
   sessionId: string,
   clientMessageId: string,
 ) {
-  const message = await db.query.taskMessages.findFirst({
-    where: and(
-      eq(taskMessages.sessionId, sessionId),
-      eq(taskMessages.clientMessageId, clientMessageId),
-    ),
-  });
+  const [message] = await db
+    .select(CANONICAL_TASK_MESSAGE_SUMMARY_COLUMNS)
+    .from(taskMessages)
+    .where(
+      and(
+        eq(taskMessages.sessionId, sessionId),
+        eq(taskMessages.clientMessageId, clientMessageId),
+      ),
+    )
+    .limit(1);
   return message ? mapCanonicalTaskMessage(message) : null;
 }
 
-async function loadTaskSessionMessageByClientMessageId(sessionId: string, clientMessageId: string) {
-  return loadCanonicalTaskSessionMessageByClientMessageId(sessionId, clientMessageId);
-}
-
-async function loadCanonicalTaskSessionMessageByRuntimeId(
+async function loadTaskSessionMessageByRuntimeId(
   sessionId: string,
   runtimeMessageId: string,
 ) {
-  const message = await db.query.taskMessages.findFirst({
-    where: and(
-      eq(taskMessages.sessionId, sessionId),
-      eq(taskMessages.runtimeMessageId, runtimeMessageId),
-    ),
-  });
+  const [message] = await db
+    .select(CANONICAL_TASK_MESSAGE_SUMMARY_COLUMNS)
+    .from(taskMessages)
+    .where(
+      and(
+        eq(taskMessages.sessionId, sessionId),
+        eq(taskMessages.runtimeMessageId, runtimeMessageId),
+      ),
+    )
+    .limit(1);
   return message ? mapCanonicalTaskMessage(message) : null;
-}
-
-async function loadTaskSessionMessageByRuntimeId(sessionId: string, runtimeMessageId: string) {
-  return loadCanonicalTaskSessionMessageByRuntimeId(sessionId, runtimeMessageId);
 }
 
 async function loadSessionOperationByRuntimeId(sessionId: string, runtimeOperationId: string) {
@@ -272,7 +235,6 @@ async function upsertQueuedModelRequestOperation(args: {
   sessionId: string;
   clientMessageId: string;
   sourceMessageId: string;
-  targetMessageId: string;
   attachments: Array<Record<string, unknown>>;
 }) {
   const existing = await loadSessionOperationByRuntimeId(
@@ -287,6 +249,11 @@ async function upsertQueuedModelRequestOperation(args: {
   const now = new Date().toISOString();
   const operationId = buildQueuedModelRequestOperationId(args.task.id, args.clientMessageId);
   const runtimeOperationId = buildQueuedModelRequestRuntimeOperationId(args.clientMessageId);
+  const existingSummary =
+    existing?.summaryJson && typeof existing.summaryJson === "object"
+      ? (existing.summaryJson as Record<string, unknown>)
+      : {};
+  const preservedMessageId = existing?.messageId ?? null;
 
   const taskOperationRunId = buildTaskSessionDefaultRunId(args.sessionId);
 
@@ -297,7 +264,7 @@ async function upsertQueuedModelRequestOperation(args: {
       taskId: args.task.id,
       sessionId: args.sessionId,
       runId: taskOperationRunId,
-      messageId: args.targetMessageId,
+      messageId: preservedMessageId,
       parentOperationId: null,
       runtimeOperationId,
       operationIndex,
@@ -306,9 +273,9 @@ async function upsertQueuedModelRequestOperation(args: {
       title: "model_request",
       status: "queued",
       summaryJson: {
+        ...existingSummary,
         clientMessageId: args.clientMessageId,
         sourceMessageId: args.sourceMessageId,
-        targetMessageId: args.targetMessageId,
         attachments: args.attachments,
       },
       startedAt: null,
@@ -321,14 +288,14 @@ async function upsertQueuedModelRequestOperation(args: {
       set: {
         sessionId: args.sessionId,
         runId: taskOperationRunId,
-        messageId: args.targetMessageId,
+        messageId: preservedMessageId,
         runtimeOperationId,
         operationKind: "model_request",
         status: "queued",
         summaryJson: {
+          ...existingSummary,
           clientMessageId: args.clientMessageId,
           sourceMessageId: args.sourceMessageId,
-          targetMessageId: args.targetMessageId,
           attachments: args.attachments,
         },
         updatedAt: now,
@@ -364,17 +331,12 @@ type TaskSessionPostContext = {
   session: typeof taskSessions.$inferSelect;
   now: string;
   userRuntimeMessageId: string;
-  assistantRuntimeMessageId: string;
 };
 
 type EnsuredTaskSessionMessage = {
   message: TaskSessionMessageSummaryRecord;
   created: boolean;
 };
-
-function buildAssistantPlaceholderCreatedAt(now: string) {
-  return new Date(Date.parse(now) + 1).toISOString();
-}
 
 async function resolvePostTaskSessionContext(
   input: PostTaskSessionMessageInput,
@@ -406,7 +368,6 @@ async function resolvePostTaskSessionContext(
       session,
       now: new Date().toISOString(),
       userRuntimeMessageId: buildUserRuntimeMessageId(input.client_message_id),
-      assistantRuntimeMessageId: buildAssistantRuntimeMessageId(input.client_message_id),
     },
   };
 }
@@ -459,53 +420,19 @@ async function ensureUserTaskSessionMessage(
   };
 }
 
-async function ensureAssistantTaskSessionMessage(
-  deps: CreateTaskSessionMessageApiDeps,
-  context: TaskSessionPostContext,
-  input: PostTaskSessionMessageInput,
-): Promise<RouteResult<EnsuredTaskSessionMessage, 200>> {
-  let assistantMessage = await loadTaskSessionMessageByRuntimeId(
-    context.session.id,
-    context.assistantRuntimeMessageId,
-  );
-  let created = false;
-
-  if (!assistantMessage) {
-    created = true;
-    const persistedAssistant = await deps.upsertTaskSessionMessageRecord({
-      task: context.task,
-      sessionId: context.session.id,
-      message: {
-        id: context.assistantRuntimeMessageId,
-        runtimeMessageId: context.assistantRuntimeMessageId,
-        role: "assistant",
-        status: "pending",
-        text: "",
-        textContent: null,
-        summaryText: null,
-        parts: [],
-        createdAt: buildAssistantPlaceholderCreatedAt(context.now),
-        completedAt: null,
-        metadata: {
-          sourceClientMessageId: input.client_message_id,
-        },
-      },
-    });
-    assistantMessage = await loadTaskSessionMessageById(persistedAssistant.messageId);
+async function resolveOperationAssistantMessage(operation: {
+  messageId?: string | null;
+}): Promise<TaskSessionMessageSummaryRecord | null> {
+  if (!operation.messageId) {
+    return null;
   }
 
-  if (!assistantMessage) {
-    return { ok: false, status: 500, error: "Failed to persist assistant placeholder" };
+  const assistantMessage = await loadTaskSessionMessageById(operation.messageId);
+  if (!assistantMessage || normalizeMessageRole(assistantMessage.role) !== "assistant") {
+    return null;
   }
 
-  return {
-    ok: true,
-    status: 200,
-    data: {
-      message: assistantMessage,
-      created,
-    },
-  };
+  return assistantMessage;
 }
 
 export function createTaskSessionMessageApi(deps: CreateTaskSessionMessageApiDeps) {
@@ -523,21 +450,15 @@ export function createTaskSessionMessageApi(deps: CreateTaskSessionMessageApiDep
       return userMessageResult;
     }
 
-    const assistantMessageResult = await ensureAssistantTaskSessionMessage(deps, context, input);
-    if (!assistantMessageResult.ok) {
-      return assistantMessageResult;
-    }
-
     const operation = await upsertQueuedModelRequestOperation({
       task: context.task,
       sessionId: context.session.id,
       clientMessageId: input.client_message_id,
       sourceMessageId: userMessageResult.data.message.id,
-      targetMessageId: assistantMessageResult.data.message.id,
       attachments: input.attachments,
     });
-    const created =
-      userMessageResult.data.created || assistantMessageResult.data.created || operation.created;
+    const assistantMessage = await resolveOperationAssistantMessage(operation.operation);
+    const created = userMessageResult.data.created || operation.created;
 
     return {
       ok: true,
@@ -546,7 +467,7 @@ export function createTaskSessionMessageApi(deps: CreateTaskSessionMessageApiDep
         task_id: input.taskId,
         session_id: context.session.id,
         user_message: mapMessageSummary(userMessageResult.data.message),
-        assistant_message: mapMessageSummary(assistantMessageResult.data.message),
+        assistant_message: assistantMessage ? mapMessageSummary(assistantMessage) : null,
         operation: {
           id: operation.operation.id,
           kind: "model_request",

@@ -1097,11 +1097,11 @@ async function loadOverviewDependencies(projectIds: string[]) {
     tasks: allTasks.map((task) => ({
       id: task.id,
       projectId: task.projectId,
-      status: task.status ?? null,
+      status: null,
       lifecycleStatus: task.lifecycleStatus,
       createdAt: task.createdAt,
-      startedAt: task.startedAt ?? null,
-      finishedAt: task.finishedAt ?? null,
+      startedAt: task.activatedAt ?? null,
+      finishedAt: task.doneAt ?? null,
       updatedAt: task.updatedAt,
     })),
     snapshots: allTaskSnapshots.map((snapshot) => ({

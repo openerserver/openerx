@@ -24,6 +24,19 @@ type RegisterTaskCoreRoutesDeps = {
   ) => TaskTreeSnapshot;
   upsertTaskTreeNode: (snapshot: TaskTreeSnapshot) => Promise<unknown>;
   syncTaskAggregateFromSnapshot: (snapshot: TaskTreeSnapshot) => Promise<unknown>;
+  upsertConversationSessionRecord: (args: {
+    task: {
+      id: string;
+      projectId: string;
+    };
+    runtimeSessionId: string;
+    parentRuntimeSessionId?: string | null;
+    forkedFromMessageId?: string | null;
+    branchName?: string | null;
+    sourceType?: "root" | "fork" | "sub_session" | null;
+    isActive?: boolean;
+    archivedAt?: string | null;
+  }) => Promise<unknown>;
 };
 
 async function loadTaskDeleteNodeIds(taskId: string) {
@@ -69,7 +82,6 @@ async function deleteTaskTreeBackedTask(taskId: string, nodeIdList: string[]) {
     await tx`DELETE FROM task_usage_ledger_entries WHERE task_id = ${taskId}`;
     await tx`DELETE FROM task_artifacts WHERE task_id = ${taskId}`;
     await tx`DELETE FROM task_operations WHERE task_id = ${taskId}`;
-    await tx`DELETE FROM task_message_events WHERE task_id = ${taskId}`;
 
     await tx`DELETE FROM task_messages WHERE task_id = ${taskId}`;
     await tx`DELETE FROM task_session_runs WHERE task_id = ${taskId}`;
@@ -128,6 +140,16 @@ export function registerTaskCoreRoutes(taskRoutes: Hono<AppEnv>, deps: RegisterT
 
     const updates = deps.buildTaskUpdates(body, existing);
     const snapshot = deps.buildTaskTreeSnapshotFromRecord(existing, updates);
+
+    if (body.sessionId) {
+      await deps.upsertConversationSessionRecord({
+        task: { id: existing.id, projectId: existing.projectId },
+        runtimeSessionId: body.sessionId,
+        sourceType: "root",
+        isActive: body.status === "running",
+        archivedAt: body.status === "cancelled" ? new Date().toISOString() : null,
+      });
+    }
 
     await deps.upsertTaskTreeNode(snapshot);
     await deps.syncTaskAggregateFromSnapshot(snapshot);

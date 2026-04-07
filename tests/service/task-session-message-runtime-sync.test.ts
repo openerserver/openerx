@@ -44,6 +44,32 @@ function createUpdateChain(recorder: (payload: unknown) => void) {
   };
 }
 
+function createSelectChain(resolveRow: () => unknown) {
+  const limit = async () => {
+    const row = resolveRow();
+    return row == null ? [] : [row];
+  };
+
+  return {
+    from() {
+      return {
+        where() {
+          return {
+            limit,
+            orderBy() {
+              return { limit };
+            },
+          };
+        },
+        orderBy() {
+          return { limit };
+        },
+        limit,
+      };
+    },
+  };
+}
+
 function resolveTableName(table: unknown) {
   if (table === taskArtifacts) return "task_artifacts";
   if (table === taskMessages) return "task_messages";
@@ -67,6 +93,7 @@ async function loadTaskSessionMessageWriteModule(args?: {
   const taskMessageFindFirstResults = [...(args?.taskMessageFindFirstResults ?? [])];
 
   const fakeDb = {
+    select: mock(() => createSelectChain(() => taskMessageFindFirstResults.shift() ?? null)),
     query: {
       taskMessages: {
         findFirst: mock(async () => taskMessageFindFirstResults.shift() ?? null),

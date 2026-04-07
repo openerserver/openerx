@@ -1,9 +1,13 @@
 #!/usr/bin/env tsx
 
+console.log("Starting generate-models.ts");
+
 import { writeFileSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { Api, KnownProvider, Model } from "../src/types.js";
+
+console.log("Imports successful");
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -61,6 +65,7 @@ async function fetchOpenRouterModels(): Promise<Model<any>[]> {
 	try {
 		console.log("Fetching models from OpenRouter API...");
 		const response = await fetch("https://openrouter.ai/api/v1/models");
+		console.log("OpenRouter fetch successful");
 		const data = await response.json();
 
 		const models: Model<any>[] = [];
@@ -119,6 +124,7 @@ async function fetchAiGatewayModels(): Promise<Model<any>[]> {
 	try {
 		console.log("Fetching models from Vercel AI Gateway API...");
 		const response = await fetch(`${AI_GATEWAY_MODELS_URL}/models`);
+		console.log("Vercel AI Gateway fetch successful");
 		const data = await response.json();
 		const models: Model<any>[] = [];
 
@@ -177,6 +183,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 	try {
 		console.log("Fetching models from models.dev API...");
 		const response = await fetch("https://models.dev/api.json");
+		console.log("models.dev fetch successful");
 		const data = await response.json();
 
 		const models: Model<any>[] = [];
@@ -1586,4 +1593,5 @@ export const MODELS = {
 }
 
 // Run the generator
+console.log("Calling generateModels()");
 generateModels().catch(console.error);

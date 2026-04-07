@@ -102,12 +102,6 @@ export function registerTaskSessionRoutes(
       error?: string;
       data?: unknown;
     }>;
-    buildTaskRawMessageEventViewResponse: (taskId: string) => Promise<{
-      ok: boolean;
-      status: number;
-      error?: string;
-      data?: unknown;
-    }>;
     listTaskSessionMessages: (
       taskId: string,
       sessionId: string,
@@ -315,16 +309,6 @@ export function registerTaskSessionRoutes(
       sessionId: c.req.query("sessionId") || null,
       includeLineage: getIncludeLineage(c.req.query("includeLineage")),
     });
-    if (!result.ok) {
-      return c.json({ error: result.error }, result.status as 404 | 500);
-    }
-
-    return c.json(result.data, result.status as 200);
-  });
-
-  taskRoutes.get("/:taskId/query/raw-events", async (c) => {
-    const taskId = c.req.param("taskId");
-    const result = await deps.buildTaskRawMessageEventViewResponse(taskId);
     if (!result.ok) {
       return c.json({ error: result.error }, result.status as 404 | 500);
     }

@@ -70,7 +70,7 @@ describe("task route registration assembly", () => {
     expect(buildProjections).toHaveBeenCalledWith(shared);
     expect(registrations).toEqual({
       core: { ...core, shared },
-      agentRuns: { ...agentRunWrites, shared },
+      agentRunCompat: { ...agentRunWrites, shared },
       sessions: { ...sessions, shared },
       projections: { ...projections, shared },
     });
@@ -82,7 +82,7 @@ describe("task route module assembly", () => {
     const taskRoutes = createRouteCollector();
     const registrations = {
       core: { scope: "core" },
-      agentRuns: { scope: "agent-run-writes" },
+      agentRunCompat: { scope: "agent-run-writes" },
       sessions: { scope: "sessions" },
       projections: { scope: "projections" },
     };
@@ -115,7 +115,7 @@ describe("task route module assembly", () => {
       registerTaskAgentRunReadRoutes: registerAgentRunReads,
     }));
     mock.module(
-      "../../control-plane/service/src/modules/tasks/task-agent-run-write-routes",
+      "../../control-plane/service/src/modules/tasks/task-agent-run-write-routes-canonical",
       () => ({
         registerTaskAgentRunWriteRoutes: registerAgentRunWrites,
       }),
@@ -133,7 +133,7 @@ describe("task route module assembly", () => {
     expect(buildRegistrations).toHaveBeenCalledTimes(1);
     expect(callLog).toEqual([
       ["agentRunReads", taskRoutes, undefined],
-      ["agentRunWrites", taskRoutes, registrations.agentRuns],
+      ["agentRunWrites", taskRoutes, registrations.agentRunCompat],
       ["core", taskRoutes, registrations.core],
       ["sessions", taskRoutes, registrations.sessions],
       ["projections", taskRoutes, registrations.projections],

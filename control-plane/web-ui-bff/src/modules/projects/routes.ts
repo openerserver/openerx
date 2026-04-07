@@ -4,7 +4,7 @@ import {
   formatModelRoute,
   readDefaultExecutionModel,
   resolveModelRoute,
-} from "../../lib/opencode-config";
+} from "../../lib/model-config";
 import { readOrchestrationStrategy } from "../../lib/orchestration-strategy";
 import type { HookExecutionRecord } from "../../lib/orchestration-strategy";
 import {
@@ -21,7 +21,7 @@ import {
   normalizeTaskSessionTimelineMeta,
   shouldReplaceTraceTimeline,
   toCanonicalTaskSessionId,
-} from "../tasks/task-session-compat";
+} from "../tasks/task-session-store";
 import {
   type ProjectStageRuntimeSummaryViewModel,
   type ProjectTaskListItemPayload,

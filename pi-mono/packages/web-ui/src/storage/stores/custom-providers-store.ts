@@ -15,7 +15,7 @@ export interface CustomProvider {
 	name: string; // Display name, also used as Model.provider
 	type: CustomProviderType;
 	baseUrl: string;
-	apiKey?: string; // Optional, applies to all models
+	credentials?: string; // Optional, applies to all models
 
 	// For manual types ONLY - models stored directly on provider
 	// Auto-discovery types: models fetched on-demand, never stored

@@ -401,6 +401,7 @@ export async function main(args: string[]) {
 		}
 	}
 	time("parseArgs");
+
 	let appMode = resolveAppMode(parsed, process.stdin.isTTY);
 	const shouldTakeOverStdout = appMode !== "interactive";
 	if (shouldTakeOverStdout) {
@@ -409,6 +410,27 @@ export async function main(args: string[]) {
 
 	if (parsed.version) {
 		console.log(VERSION);
+		process.exit(0);
+	}
+
+	// For --help, we need to load extensions to show their flags, but we don't
+	// want to run a full session.
+	if (parsed.help) {
+		const cwd = process.cwd();
+		const agentDir = getAgentDir();
+		const settingsManager = SettingsManager.create(cwd, agentDir);
+		const resourceLoader = new DefaultResourceLoader({
+			cwd,
+			agentDir,
+			settingsManager,
+			additionalExtensionPaths: resolveCliPaths(cwd, parsed.extensions),
+			noExtensions: parsed.noExtensions,
+		});
+		await resourceLoader.reload();
+		const extensionFlags = resourceLoader
+			.getExtensions()
+			.extensions.flatMap((extension) => Array.from(extension.flags.values()));
+		printHelp(extensionFlags);
 		process.exit(0);
 	}
 
@@ -558,14 +580,6 @@ export async function main(args: string[]) {
 	});
 	const { services, session, modelFallbackMessage } = runtime;
 	const { settingsManager, modelRegistry, resourceLoader } = services;
-
-	if (parsed.help) {
-		const extensionFlags = resourceLoader
-			.getExtensions()
-			.extensions.flatMap((extension) => Array.from(extension.flags.values()));
-		printHelp(extensionFlags);
-		process.exit(0);
-	}
 
 	if (parsed.listModels !== undefined) {
 		const searchPattern = typeof parsed.listModels === "string" ? parsed.listModels : undefined;

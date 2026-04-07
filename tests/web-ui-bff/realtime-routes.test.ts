@@ -3,10 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "../../control-plane/web-ui-bff/node_modules/hono";
-import {
-  createOpencodeAdapterModuleMock,
-  createRuntimeProviderModuleMock,
-} from "./opencode-adapter-mock";
+import { createRuntimeProviderModuleMock } from "./runtime-provider-mock";
 import { createSseAggregatorModuleMock } from "./sse-aggregator-mock";
 
 const ensureAgentRunForSessionMock = mock(() => "run-test-1");
@@ -21,18 +18,13 @@ const ingestParsedEventMock = mock(async () => undefined);
 const onEventMock = mock(() => () => undefined);
 const updateAgentRunStatusMock = mock(() => undefined);
 
-const opencodeAdapterModule = createOpencodeAdapterModuleMock({
+const runtimeProviderModule = createRuntimeProviderModuleMock({
   ensureAgentRunForSession: ensureAgentRunForSessionMock,
   findAgentRunBySessionId: findAgentRunBySessionIdMock,
   getSessionMessages: getSessionMessagesMock,
   runDetachedPrompt: runDetachedPromptMock,
   updateAgentRunStatus: updateAgentRunStatusMock,
 });
-
-mock.module(
-  "../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter",
-  () => opencodeAdapterModule,
-);
 
 mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/agent-run-registry", () => ({
   ensureAgentRunForSession: ensureAgentRunForSessionMock,
@@ -45,7 +37,7 @@ mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/agent-run-
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/runtime-provider", () =>
-  createRuntimeProviderModuleMock(opencodeAdapterModule),
+  runtimeProviderModule,
 );
 
 mock.module("../../control-plane/web-ui-bff/src/modules/realtime/sse-aggregator", () =>

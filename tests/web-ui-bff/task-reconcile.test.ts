@@ -94,29 +94,22 @@ mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/runtime-me
   extractAssistantResultFromMessages: extractAssistantResultFromMessagesMock,
 }));
 
-mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter", () => ({
-  buildExecutionContext: mock(() => ""),
+mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/runtime-provider", () => ({
   continueSession: mock(async () => ({ ok: true })),
   createSession: mock(async () => ({ ok: true, sessionId: "session-1", agentRunId: "run-1" })),
-  ensureAgentRunForSession: mock(() => "run-1"),
-  extractAssistantResultFromMessages: extractAssistantResultFromMessagesMock,
-  findAgentRunBySessionId: findAgentRunBySessionIdMock,
   forkSession: mock(async () => ({ ok: true, sessionId: "fork-1" })),
   getAgentMessages: mock(async () => ({ ok: true, data: [] })),
-  getAgentRun: getAgentRunMock,
+  getRuntimeBackend: mock(() => "pi-mono"),
+  getRuntimeProvider: mock(() => ({ backend: "pi-mono" })),
   getSessionMessages: getSessionMessagesMock,
   injectGuidance: mock(async () => ({ ok: true })),
-  listAgentRuns: mock(() => []),
   listRuntimePermissions: mock(async () => ({ ok: true, data: [] })),
   listSessions: listSessionsMock,
   pauseAgent: mock(async () => ({ ok: true })),
-  recoverAgentRun: recoverAgentRunMock,
-  registerAgentRun: mock(() => undefined),
   replyRuntimePermission: mock(async () => ({ ok: true })),
   resumeAgent: mock(async () => ({ ok: true })),
   runDetachedPrompt: runDetachedPromptMock,
   terminateAgent: mock(async () => ({ ok: true })),
-  updateAgentRunStatus: updateAgentRunStatusMock,
 }));
 
 beforeEach(() => {
@@ -263,6 +256,19 @@ describe("reconcileRunningTasksOnStartup", () => {
       tokenUsed: 42,
       text: "Final answer",
     });
+    getSessionMessagesMock.mockResolvedValue({
+      ok: true,
+      data: [
+        {
+          info: { id: "runtime-user-1", role: "user" },
+          parts: [{ type: "text", text: "user prompt" }],
+        },
+        {
+          info: { id: "runtime-assistant-1", role: "assistant" },
+          parts: [{ type: "text", text: "Final answer" }],
+        },
+      ],
+    });
 
     const { reconcileRunningTasksOnStartup } = await import(
       "../../control-plane/web-ui-bff/src/modules/tasks/reconcile"
@@ -288,6 +294,30 @@ describe("reconcileRunningTasksOnStartup", () => {
         body: expect.objectContaining({
           runtimeSessionId: "session-1",
           isActive: false,
+        }),
+      }),
+    );
+    expect(cpFetchMock).toHaveBeenCalledWith(
+      "/api/tasks/task-1/sessions/messages",
+      expect.objectContaining({
+        method: "POST",
+        body: expect.objectContaining({
+          runtimeSessionId: "session-1",
+          message: expect.objectContaining({
+            info: expect.objectContaining({ id: "runtime-assistant-1", role: "assistant" }),
+          }),
+        }),
+      }),
+    );
+    expect(cpFetchMock).not.toHaveBeenCalledWith(
+      "/api/tasks/task-1/sessions/messages",
+      expect.objectContaining({
+        method: "POST",
+        body: expect.objectContaining({
+          runtimeSessionId: "session-1",
+          message: expect.objectContaining({
+            info: expect.objectContaining({ id: "runtime-user-1" }),
+          }),
         }),
       }),
     );
@@ -479,6 +509,262 @@ describe("reconcileRunningTasksOnStartup", () => {
     );
     expectSessionMessageReaderCalls(getSessionMessagesMock, ["session-completed-active"]);
     expectNoPublicTraceRequests(cpFetchMock.mock.calls.map(([url]) => String(url)));
+  });
+
+  test("continues reconcile completion when runtime assistant repair write fails", async () => {
+    extractAssistantResultFromMessagesMock.mockReturnValue({
+      completed: true,
+      failed: false,
+      error: undefined,
+      tokenUsed: 7,
+      text: "Recovered answer",
+    });
+
+    getSessionMessagesMock.mockResolvedValue({
+      ok: true,
+      data: [
+        {
+          info: { id: "runtime-assistant-repair-fail", role: "assistant" },
+          parts: [{ type: "text", text: "Recovered answer" }],
+        },
+      ],
+    });
+
+    mockCpFetchRoutes([
+      {
+        matcher: (url) => url.includes("/api/tasks/snapshots?status=running"),
+        response: {
+          ok: true,
+          data: {
+            data: [
+              {
+                taskId: "task-1",
+                currentStatus: "running",
+                currentSessionId: "session-1",
+                lastActivityAt: "2026-03-13T12:56:03.000Z",
+              },
+            ],
+          },
+        },
+      },
+      {
+        matcher: "/api/tasks/snapshots?limit=200",
+        response: {
+          ok: true,
+          data: {
+            data: [
+              {
+                taskId: "task-1",
+                currentStatus: "running",
+                currentSessionId: "session-1",
+                lastActivityAt: "2026-03-13T12:56:03.000Z",
+              },
+            ],
+          },
+        },
+      },
+      {
+        matcher: "/api/project-tree/tasks/task-1",
+        response: {
+          ok: true,
+          data: {
+            id: "task-1",
+            projectId: "proj-1",
+            title: "Stuck task",
+            status: "running",
+            sessionId: "session-1",
+            agentRunId: "run-1",
+            startedAt: "2026-03-13T12:56:03.000Z",
+          },
+        },
+      },
+      {
+        matcher: "/api/tasks/task-1/sessions",
+        response: {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "session-1",
+                runtimeSessionId: "session-1",
+                executionStatus: "running",
+                archivedAt: null,
+              },
+            ],
+          },
+        },
+      },
+      {
+        matcher: "/api/tasks/task-1/sessions/messages",
+        method: "POST",
+        response: { ok: false, status: 500, data: { error: "repair failed" } },
+      },
+    ]);
+
+    const warnSpy = mock(() => undefined);
+    const originalWarn = console.warn;
+    console.warn = warnSpy as unknown as typeof console.warn;
+
+    try {
+      const { reconcileRunningTasksOnStartup } = await import(
+        "../../control-plane/web-ui-bff/src/modules/tasks/reconcile"
+      );
+
+      const summary = await reconcileRunningTasksOnStartup();
+
+      expect(summary.completed).toBe(1);
+      expect(cpFetchMock).toHaveBeenCalledWith(
+        "/api/tasks/task-1",
+        expect.objectContaining({
+          method: "PATCH",
+          body: expect.objectContaining({
+            status: "completed",
+            result: "Recovered answer",
+          }),
+        }),
+      );
+      expect(warnSpy).toHaveBeenCalled();
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
+  test("repairs assistant messages for active task sessions on demand", async () => {
+    mockCpFetchRoutes([
+      {
+        matcher: "/api/tasks/task-repair/sessions",
+        response: {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "task-session:task-repair:session-a",
+                runtimeSessionId: "session-a",
+                executionStatus: "running",
+                archivedAt: null,
+              },
+              {
+                id: "task-session:task-repair:session-b",
+                runtimeSessionId: "session-b",
+                executionStatus: "completed",
+                archivedAt: "2026-04-07T09:00:00.000Z",
+              },
+            ],
+          },
+        },
+      },
+      {
+        matcher: "/api/tasks/task-repair/sessions/messages",
+        method: "POST",
+        response: { ok: true, data: { ok: true } },
+      },
+    ]);
+
+    getSessionMessagesMock.mockImplementation(async (sessionId: string) => ({
+      ok: true,
+      data:
+        sessionId === "session-a"
+          ? [
+              {
+                info: { id: "user-a", role: "user" },
+                parts: [{ type: "text", text: "prompt" }],
+              },
+              {
+                info: { id: "assistant-a", role: "assistant" },
+                parts: [{ type: "text", text: "answer A" }],
+              },
+            ]
+          : [
+              {
+                info: { id: "assistant-b", role: "assistant" },
+                parts: [{ type: "text", text: "answer B" }],
+              },
+            ],
+    }));
+
+    const { repairTaskMessagesFromRuntime } = await import(
+      "../../control-plane/web-ui-bff/src/modules/tasks/reconcile"
+    );
+
+    const summary = await repairTaskMessagesFromRuntime({
+      taskId: "task-repair",
+      authorization: "Bearer internal",
+      onlyActive: true,
+    });
+
+    expect(summary.lineageResolved).toBe(true);
+    expect(summary.scannedSessions).toBe(1);
+    expect(summary.repairedSessions).toBe(1);
+    expect(summary.repairedMessages).toBe(1);
+    expect(summary.failedSessions).toBe(0);
+    expect(summary.skippedSessions).toBe(0);
+    expect(getSessionMessagesMock).toHaveBeenCalledTimes(1);
+    expect(getSessionMessagesMock.mock.calls[0]?.[0]).toBe("session-a");
+    expect(cpFetchMock).toHaveBeenCalledWith(
+      "/api/tasks/task-repair/sessions/messages",
+      expect.objectContaining({
+        method: "POST",
+        body: expect.objectContaining({
+          runtimeSessionId: "session-a",
+          message: expect.objectContaining({
+            info: expect.objectContaining({ id: "assistant-a", role: "assistant" }),
+          }),
+        }),
+      }),
+    );
+    expect(cpFetchMock).not.toHaveBeenCalledWith(
+      "/api/tasks/task-repair/sessions/messages",
+      expect.objectContaining({
+        method: "POST",
+        body: expect.objectContaining({
+          message: expect.objectContaining({
+            info: expect.objectContaining({ id: "user-a" }),
+          }),
+        }),
+      }),
+    );
+  });
+
+  test("repairs an explicitly targeted runtime session even when lineage is unavailable", async () => {
+    mockCpFetchRoutes([
+      {
+        matcher: "/api/tasks/task-direct/sessions/messages",
+        method: "POST",
+        response: { ok: true, data: { ok: true } },
+      },
+    ]);
+
+    getSessionMessagesMock.mockResolvedValue({
+      ok: true,
+      data: [
+        {
+          info: { id: "assistant-direct", role: "assistant" },
+          parts: [{ type: "text", text: "direct answer" }],
+        },
+      ],
+    });
+
+    const { repairTaskMessagesFromRuntime } = await import(
+      "../../control-plane/web-ui-bff/src/modules/tasks/reconcile"
+    );
+
+    const summary = await repairTaskMessagesFromRuntime({
+      taskId: "task-direct",
+      authorization: "Bearer internal",
+      sessionId: "session-direct",
+    });
+
+    expect(summary.scope).toBe("session");
+    expect(summary.scannedSessions).toBe(1);
+    expect(summary.repairedSessions).toBe(1);
+    expect(summary.repairedMessages).toBe(1);
+    expect(summary.lineageResolved).toBe(true);
+    expect(getSessionMessagesMock).toHaveBeenCalledWith("session-direct", {
+      taskId: "task-direct",
+      authorization: "Bearer internal",
+      includeLineage: false,
+      bypassCircuitBreaker: true,
+    });
   });
 
   test("marks stale parallel tasks failed when projection-backed run detail is unavailable", async () => {

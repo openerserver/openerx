@@ -1,6 +1,6 @@
 import { and, eq } from "drizzle-orm";
 import { db } from "../../db";
-import { taskSessions, tasks } from "../../db/schema";
+import { taskSessions } from "../../db/schema";
 import {
   archiveTaskBranchCompatTreeNode,
   upsertTaskBranchCompatTreeNode,
@@ -97,8 +97,7 @@ async function replayTaskDomainProjectionsByProject(projectId: string) {
 
 /**
  * Resolve taskId + projectId from a runtime session ID.
- * Checks task_sessions first (unique index on runtime_session_id),
- * then falls back to tasks.current_session_id (legacy).
+ * Checks task_sessions unique index on runtime_session_id.
  */
 export async function resolveTaskByRuntimeSessionId(
   runtimeSessionId: string,
@@ -109,14 +108,6 @@ export async function resolveTaskByRuntimeSessionId(
   });
   if (session) {
     return { taskId: session.taskId, projectId: session.projectId };
-  }
-
-  const task = await db.query.tasks.findFirst({
-    where: eq(tasks.currentSessionId, runtimeSessionId),
-    columns: { id: true, projectId: true },
-  });
-  if (task) {
-    return { taskId: task.id, projectId: task.projectId };
   }
 
   return null;

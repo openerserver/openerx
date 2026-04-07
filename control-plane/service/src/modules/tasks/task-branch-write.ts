@@ -1,6 +1,11 @@
 import { z } from "zod";
 import type { TaskTreeSnapshot } from "../project-tree/storage";
 import type { TaskTreeRecord } from "../project-tree/task-view";
+import {
+  extractTaskSessionMessageRuntimeId,
+  taskSessionRuntimeMessageSchema,
+  type TaskSessionRuntimeMessageInput,
+} from "./task-session-runtime-message-schema";
 import { shouldPersistStandalonePartEvent } from "./task-session-read";
 
 export const createTaskBranchSchema = z.object({
@@ -23,7 +28,7 @@ export const createTaskBranchSchema = z.object({
 
 export const persistTaskBranchMessageSchema = z.object({
   runtimeSessionId: z.string().min(1),
-  message: z.record(z.unknown()),
+  message: taskSessionRuntimeMessageSchema,
 });
 
 export type CreateTaskBranchInput = z.infer<typeof createTaskBranchSchema>;
@@ -74,6 +79,23 @@ type ResolvedTaskBranchState = {
   coordinationKey?: string;
   operationId?: string;
 };
+
+function hasMaterializedTaskBranchRecord(record: TaskBranchCompatRecord | null) {
+  if (!record) {
+    return false;
+  }
+
+  return Boolean(
+    record.branchName ||
+      record.parentRuntimeSessionId ||
+      record.forkedFromMessageId ||
+      record.sourceType === "fork" ||
+      record.sourceType === "sub_session" ||
+      record.candidateIndex != null ||
+      record.stepIndex != null ||
+      record.selectedModel,
+  );
+}
 
 function resolveTaskBranchState(
   body: CreateTaskBranchInput,
@@ -169,7 +191,7 @@ export function createTaskBranchWriteApi(deps: {
   upsertConversationMessageRecord: (args: {
     task: { id: string; projectId: string };
     runtimeSessionId: string;
-    message: Record<string, unknown>;
+    message: TaskSessionRuntimeMessageInput;
   }) => Promise<{ messageId: string; sessionId: string; seq: number }>;
   buildTaskTreeSnapshotFromRecord: (
     task: TaskTreeRecord,
@@ -222,6 +244,7 @@ export function createTaskBranchWriteApi(deps: {
 
     if (branchState.isActive) {
       const taskSnapshot = deps.buildTaskTreeSnapshotFromRecord(task, {
+        status: "running",
         sessionId: branchState.runtimeSessionId,
       });
       await deps.upsertTaskTreeNode(taskSnapshot);
@@ -230,7 +253,7 @@ export function createTaskBranchWriteApi(deps: {
 
     return {
       ok: true as const,
-      status: existingRecord ? (200 as const) : (201 as const),
+      status: hasMaterializedTaskBranchRecord(existingRecord) ? (200 as const) : (201 as const),
       data: buildTaskBranchResponse({
         sessionId,
         taskId,
@@ -244,6 +267,14 @@ export function createTaskBranchWriteApi(deps: {
     const task = await deps.loadTaskTreeBackedRecord(taskId);
     if (!task) {
       return { ok: false as const, status: 404 as const, error: "Task not found" };
+    }
+
+    if (!extractTaskSessionMessageRuntimeId(body.message)) {
+      return {
+        ok: false as const,
+        status: 400 as const,
+        error: "Task session message write requires stable runtimeMessageId",
+      };
     }
 
     const existingRecord = await deps.resolveTaskBranchCompatRecordByRuntimeSessionId(
@@ -281,22 +312,11 @@ export function createTaskBranchWriteApi(deps: {
       return { ok: true as const, status: 202 as const, data: { ok: true, skipped: true } };
     }
 
-    // Phase 2: event-log primary — append is the authoritative write and must succeed
-    const eventId = await appendMessageEvent({
-      taskId,
-      sessionId: body.runtimeSessionId,
-      message: body.message,
-    });
-
-    // Inline projection: derive normalized tables from the event payload
     const persistedMessage = await deps.upsertConversationMessageRecord({
       task,
       runtimeSessionId: body.runtimeSessionId,
       message: body.message,
     });
-
-    // Mark event as projected (best-effort; background projector catches misses)
-    markEventProjected(eventId).catch(() => {});
 
     return {
       ok: true as const,
@@ -344,6 +364,7 @@ export function createTaskBranchWriteApi(deps: {
     });
 
     const taskSnapshot = deps.buildTaskTreeSnapshotFromRecord(task, {
+      status: "running",
       sessionId: record.runtimeSessionId,
     });
     await deps.upsertTaskTreeNode(taskSnapshot);
@@ -388,61 +409,4 @@ export function createTaskBranchWriteApi(deps: {
     activateTaskBranch,
     archiveTaskBranch,
   };
-}
-
-// ── Phase 0: Event Log dual-write ──────────────────────────────────
-
-function resolveEventType(
-  message: Record<string, unknown>,
-): "message.updated" | "message.part.updated" {
-  if (message && typeof message === "object" && "part" in message) {
-    return "message.part.updated";
-  }
-  return "message.updated";
-}
-
-function resolveRuntimeMessageId(message: Record<string, unknown>): string | null {
-  if (typeof message.id === "string" && message.id) return message.id;
-  if (typeof message.runtimeMessageId === "string" && message.runtimeMessageId)
-    return message.runtimeMessageId;
-  const info =
-    message.info && typeof message.info === "object"
-      ? (message.info as Record<string, unknown>)
-      : null;
-  if (info && typeof info.id === "string" && info.id) return info.id;
-  return null;
-}
-
-async function appendMessageEvent(args: {
-  taskId: string;
-  sessionId: string;
-  message: Record<string, unknown>;
-}): Promise<number> {
-  const { db } = await import("../../db");
-  const { taskMessageEvents } = await import("../../db/schema");
-  const [row] = await db
-    .insert(taskMessageEvents)
-    .values({
-      taskId: args.taskId,
-      sessionId: args.sessionId,
-      eventType: resolveEventType(args.message),
-      runtimeMessageId: resolveRuntimeMessageId(args.message),
-      payload: args.message,
-      projected: false,
-    })
-    .returning({ id: taskMessageEvents.id });
-  if (!row) {
-    throw new Error("Failed to append task message event");
-  }
-  return row.id;
-}
-
-async function markEventProjected(eventId: number): Promise<void> {
-  const { db } = await import("../../db");
-  const { taskMessageEvents } = await import("../../db/schema");
-  const { eq } = await import("drizzle-orm");
-  await db
-    .update(taskMessageEvents)
-    .set({ projected: true })
-    .where(eq(taskMessageEvents.id, eventId));
 }

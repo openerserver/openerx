@@ -23,7 +23,7 @@ describe("resolveTraceTimelineItems", () => {
       ],
       timeline: [],
       timelineMeta: {
-        readSource: "opencode-runtime",
+        readSource: "runtime-fallback",
         cacheState: "complete",
         complete: true,
         includeLineage: true,
@@ -101,7 +101,7 @@ describe("resolveTraceTimelineItems", () => {
       ],
       timeline: [],
       timelineMeta: {
-        readSource: "opencode-runtime",
+        readSource: "runtime-fallback",
         cacheState: "complete",
         complete: true,
         includeLineage: true,
@@ -269,7 +269,7 @@ describe("resolveTraceTimelineItems", () => {
           },
         ],
         timelineMeta: {
-          readSource: "opencode-runtime",
+          readSource: "runtime-fallback",
           cacheState: "complete",
           complete: true,
           includeLineage: true,

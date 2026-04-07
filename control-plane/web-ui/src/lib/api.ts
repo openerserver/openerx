@@ -1739,9 +1739,14 @@ function buildTaskTreeLegacyMessage(args: {
   message: TaskTreeMessageRecord;
   parts: TaskTreeMessagePartRecord[];
   runsById: Map<string, TaskTreeRunRecord>;
+  latestRunBySessionId: Map<string, TaskTreeRunRecord>;
 }) {
-  const { message, parts, runsById } = args;
-  const run = message.createdByRunId ? runsById.get(message.createdByRunId) : undefined;
+  const { message, parts, runsById, latestRunBySessionId } = args;
+  const run = message.createdByRunId
+    ? runsById.get(message.createdByRunId)
+    : message.role === "assistant"
+      ? latestRunBySessionId.get(message.sessionId)
+      : undefined;
   const text = extractTaskTreeMessageText(message, parts);
   const createdAt = message.createdAt ?? message.updatedAt ?? undefined;
   const completedAt = message.completedAt ?? undefined;
@@ -1877,13 +1882,24 @@ function projectTaskConversationTreeToMessages(tree: TaskConversationTreeRespons
   const partsByMessageId = buildTaskTreePartLookup(
     Array.isArray(tree.messageParts) ? tree.messageParts : [],
   );
-  const runsById = new Map((Array.isArray(tree.runs) ? tree.runs : []).map((run) => [run.id, run]));
+  const runs = Array.isArray(tree.runs) ? tree.runs : [];
+  const runsById = new Map(runs.map((run) => [run.id, run]));
+  const latestRunBySessionId = new Map<string, TaskTreeRunRecord>();
+  for (const run of runs) {
+    const previous = latestRunBySessionId.get(run.sessionId);
+    const previousCreatedAt = previous?.createdAt ?? "";
+    const currentCreatedAt = run.createdAt ?? "";
+    if (!previous || currentCreatedAt >= previousCreatedAt) {
+      latestRunBySessionId.set(run.sessionId, run);
+    }
+  }
 
   const regularMessages = (Array.isArray(tree.messages) ? tree.messages : []).map((message) =>
     buildTaskTreeLegacyMessage({
       message,
       parts: partsByMessageId.get(message.id) ?? [],
       runsById,
+      latestRunBySessionId,
     }),
   );
 
@@ -4662,7 +4678,7 @@ export type ExecutionTraceReadSource =
   | "conversation-table"
   | "task-domain-events"
   | "conversation-table+task-domain-events"
-  | "opencode-runtime"
+  | "runtime-fallback"
   | "task-domain-projection";
 
 export interface ExecutionTraceTimelineMeta {
@@ -4699,6 +4715,7 @@ export interface ExecutionTraceProjectionSnapshot {
 export interface TaskExecutionTrace {
   taskId: string;
   sessionId: string | null;
+  traceId?: string | null;
   workflowContext?: string | null;
   finalPrompt?: string | null;
   latestResponse?: string | null;

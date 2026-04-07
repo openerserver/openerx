@@ -344,7 +344,6 @@ afterAll(async () => {
     await sql.unsafe("DELETE FROM task_messages WHERE task_id = $1", [taskId]);
     await sql.unsafe("DELETE FROM task_session_runs WHERE task_id = $1", [taskId]);
     await sql.unsafe("DELETE FROM task_sessions WHERE task_id = $1", [taskId]);
-    await sql.unsafe("DELETE FROM task_message_events WHERE task_id = $1", [taskId]);
     await sql.unsafe("DELETE FROM task_domain_events WHERE task_id = $1", [taskId]);
     await safeSql("DELETE FROM task_run_edges WHERE task_id = $1", [taskId]);
     await safeSql("UPDATE task_run_nodes SET agent_run_id = NULL WHERE task_id = $1", [taskId]);

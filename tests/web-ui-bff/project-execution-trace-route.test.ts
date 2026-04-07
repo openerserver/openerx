@@ -8,10 +8,7 @@ import {
   expectNoPromptBackfillSegment,
   expectServiceTimelineNotRequested,
 } from "./execution-trace-contract-test-helpers";
-import {
-  createOpencodeAdapterModuleMock,
-  createRuntimeProviderModuleMock,
-} from "./opencode-adapter-mock";
+import { createRuntimeProviderModuleMock } from "./runtime-provider-mock";
 
 const cpFetchMock = mock(async (..._args: unknown[]) => ({ ok: true, status: 200, data: {} }));
 const authHeaderMock = mock(() => "Bearer test-token");
@@ -31,7 +28,7 @@ mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () =>
   }),
 );
 
-mock.module("../../control-plane/web-ui-bff/src/lib/opencode-config", () => ({
+mock.module("../../control-plane/web-ui-bff/src/lib/model-config", () => ({
   diagnoseModelReadiness: mock(() => ({ ready: true })),
   formatModelRoute: mock((value: string) => value),
   readDefaultExecutionModel: mock(() => "github-copilot:gpt-5.4"),
@@ -47,7 +44,7 @@ mock.module("../../control-plane/web-ui-bff/src/lib/orchestration-strategy", () 
   readOrchestrationStrategy: mock(() => ({ hooks: [], templates: [], judge: { enabled: false } })),
 }));
 
-const opencodeAdapterModule = createOpencodeAdapterModuleMock({
+const runtimeProviderModule = createRuntimeProviderModuleMock({
   continueSession: mock(async () => ({ ok: true })),
   createSession: mock(async () => ({ ok: true, sessionId: "session-1", agentRunId: "run-1" })),
   ensureAgentRunForSession: mock(() => "run-1"),
@@ -75,13 +72,8 @@ const opencodeAdapterModule = createOpencodeAdapterModuleMock({
   updateAgentRunStatus: mock(() => undefined),
 });
 
-mock.module(
-  "../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter",
-  () => opencodeAdapterModule,
-);
-
 mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/runtime-provider", () =>
-  createRuntimeProviderModuleMock(opencodeAdapterModule),
+  runtimeProviderModule,
 );
 
 beforeEach(() => {

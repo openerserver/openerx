@@ -239,6 +239,27 @@
       "when": 1775001540000,
       "tag": "0033_drop_agent_runs",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1775001600000,
+      "tag": "0034_canonical_schema_finalization",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1775001660000,
+      "tag": "0035_canonicalize_task_session_ids",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1775001720000,
+      "tag": "0036_drop_task_message_events",
+      "breakpoints": true
     }
   ]
 }

@@ -109,7 +109,6 @@ afterAll(async () => {
     await safeSql("DELETE FROM task_messages WHERE task_id = $1", [taskId]);
     await safeSql("DELETE FROM task_session_runs WHERE task_id = $1", [taskId]);
     await safeSql("DELETE FROM task_sessions WHERE task_id = $1", [taskId]);
-    await safeSql("DELETE FROM task_message_events WHERE task_id = $1", [taskId]);
     await safeSql("DELETE FROM task_domain_events WHERE task_id = $1", [taskId]);
     await safeSql(
       `DELETE FROM task_stage_runs WHERE workflow_run_id IN (
@@ -251,7 +250,7 @@ describe("task route registration smoke", () => {
         role: string;
         status: string;
         text?: string | null;
-      };
+      } | null;
       operation: {
         id: string;
         kind: string;
@@ -275,11 +274,7 @@ describe("task route registration smoke", () => {
         status: "completed",
         text: `user prompt ${unique}`,
       },
-      assistant_message: {
-        role: "assistant",
-        status: "pending",
-        text: null,
-      },
+      assistant_message: null,
       operation: {
         kind: "model_request",
         status: "queued",
@@ -290,7 +285,7 @@ describe("task route registration smoke", () => {
       task_id: string;
       session_id: string;
       user_message: { id: string };
-      assistant_message: { id: string };
+      assistant_message: { id: string } | null;
       operation: { id: string };
     }>(`/api/tasks/${task.id}/sessions/${encodeURIComponent(sessionId)}/messages`, {
       method: "POST",
@@ -307,9 +302,7 @@ describe("task route registration smoke", () => {
       user_message: {
         id: canonicalMessage.data.user_message.id,
       },
-      assistant_message: {
-        id: canonicalMessage.data.assistant_message.id,
-      },
+      assistant_message: null,
       operation: {
         id: canonicalMessage.data.operation.id,
       },
@@ -417,13 +410,13 @@ describe("task route registration smoke", () => {
           clientMessageId,
           textContent: `user prompt ${unique}`,
         }),
-        expect.objectContaining({
-          runtimeMessageId: `assistant:${clientMessageId}`,
-          role: "assistant",
-          status: "pending",
-        }),
       ]),
     );
+    expect(
+      taskTree.data.messages.some(
+        (message) => message.runtimeMessageId === `assistant:${clientMessageId}`,
+      ),
+    ).toBe(false);
     expect(taskTree.data.messageParts).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ partType: "text", textContent: `smoke text ${unique}` }),

@@ -8,7 +8,7 @@ import { Ollama } from "ollama/browser";
  * @param apiKey - Optional API key (currently unused by Ollama)
  * @returns Array of discovered models
  */
-export async function discoverOllamaModels(baseUrl: string, _apiKey?: string): Promise<Model<any>[]> {
+export async function discoverOllamaModels(baseUrl: string, _credentials?: string): Promise<Model<any>[]> {
 	try {
 		// Create Ollama client
 		const ollama = new Ollama({ host: baseUrl });
@@ -82,14 +82,14 @@ export async function discoverOllamaModels(baseUrl: string, _apiKey?: string): P
  * @param apiKey - Optional API key
  * @returns Array of discovered models
  */
-export async function discoverLlamaCppModels(baseUrl: string, apiKey?: string): Promise<Model<any>[]> {
+export async function discoverLlamaCppModels(baseUrl: string, credentials?: string): Promise<Model<any>[]> {
 	try {
 		const headers: HeadersInit = {
 			"Content-Type": "application/json",
 		};
 
-		if (apiKey) {
-			headers.Authorization = `Bearer ${apiKey}`;
+		if (credentials) {
+			headers.Authorization = `Bearer ${credentials}`;
 		}
 
 		const response = await fetch(`${baseUrl}/v1/models`, {
@@ -144,14 +144,14 @@ export async function discoverLlamaCppModels(baseUrl: string, apiKey?: string): 
  * @param apiKey - Optional API key
  * @returns Array of discovered models
  */
-export async function discoverVLLMModels(baseUrl: string, apiKey?: string): Promise<Model<any>[]> {
+export async function discoverVLLMModels(baseUrl: string, credentials?: string): Promise<Model<any>[]> {
 	try {
 		const headers: HeadersInit = {
 			"Content-Type": "application/json",
 		};
 
-		if (apiKey) {
-			headers.Authorization = `Bearer ${apiKey}`;
+		if (credentials) {
+			headers.Authorization = `Bearer ${credentials}`;
 		}
 
 		const response = await fetch(`${baseUrl}/v1/models`, {
@@ -206,7 +206,7 @@ export async function discoverVLLMModels(baseUrl: string, apiKey?: string): Prom
  * @param apiKey - Optional API key (unused for LM Studio SDK)
  * @returns Array of discovered models
  */
-export async function discoverLMStudioModels(baseUrl: string, _apiKey?: string): Promise<Model<any>[]> {
+export async function discoverLMStudioModels(baseUrl: string, _credentials?: string): Promise<Model<any>[]> {
 	try {
 		// Extract host and port from baseUrl
 		const url = new URL(baseUrl);
@@ -262,16 +262,16 @@ export async function discoverLMStudioModels(baseUrl: string, _apiKey?: string):
 export async function discoverModels(
 	type: "ollama" | "llama.cpp" | "vllm" | "lmstudio",
 	baseUrl: string,
-	apiKey?: string,
+	credentials?: string,
 ): Promise<Model<any>[]> {
 	switch (type) {
 		case "ollama":
-			return discoverOllamaModels(baseUrl, apiKey);
+			return discoverOllamaModels(baseUrl, credentials);
 		case "llama.cpp":
-			return discoverLlamaCppModels(baseUrl, apiKey);
+			return discoverLlamaCppModels(baseUrl, credentials);
 		case "vllm":
-			return discoverVLLMModels(baseUrl, apiKey);
+			return discoverVLLMModels(baseUrl, credentials);
 		case "lmstudio":
-			return discoverLMStudioModels(baseUrl, apiKey);
+			return discoverLMStudioModels(baseUrl, credentials);
 	}
 }

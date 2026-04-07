@@ -1,10 +1,7 @@
 /// <reference types="bun-types" />
 
 import { beforeEach, describe, expect, mock, test } from "bun:test";
-import {
-  createOpencodeAdapterModuleMock,
-  createRuntimeProviderModuleMock,
-} from "./opencode-adapter-mock";
+import { createRuntimeProviderModuleMock } from "./runtime-provider-mock";
 
 const cpFetchMock = mock(async (..._args: unknown[]) => ({ ok: true, data: {} }));
 const authHeaderMock = mock(() => "Bearer test");
@@ -116,7 +113,7 @@ const recordModelUsageMock = mock(async () => ({
 const broadcastMock = mock(() => undefined);
 const finalizeTaskStateMock = mock(async () => true);
 
-const opencodeAdapterModule = createOpencodeAdapterModuleMock({
+const runtimeProviderModule = createRuntimeProviderModuleMock({
   extractAssistantResultFromMessages: extractAssistantResultFromMessagesMock,
   getAgentMessages: getAgentMessagesMock,
   getAgentRun: getAgentRunMock,
@@ -136,11 +133,6 @@ mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () =>
   createInternalAuthorization: mock(async () => "Bearer internal"),
 }));
 
-mock.module(
-  "../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter",
-  () => opencodeAdapterModule,
-);
-
 mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/agent-run-registry", () => ({
   ensureAgentRunForSession: mock(() => "run-missing"),
   findAgentRunBySessionId: mock(() => undefined),
@@ -156,7 +148,7 @@ mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/runtime-me
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/runtime-provider", () =>
-  createRuntimeProviderModuleMock(opencodeAdapterModule),
+  runtimeProviderModule,
 );
 
 mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/run-persistence", () => ({
@@ -456,6 +448,299 @@ describe("agent control routes", () => {
       status: "paused",
     });
     expect(recoverAgentRunMock).toHaveBeenCalled();
+  });
+
+  test("aggregates agent overview from filtered run summaries", async () => {
+    listAgentRunsMock.mockReturnValue([
+      {
+        agentRunId: "run-1",
+        subSessionId: "session-1",
+        taskId: "task-1",
+        projectId: "proj-1",
+        status: "running",
+        startedAt: Date.parse("2026-03-18T08:00:00.000Z"),
+        lastPromptAt: Date.parse("2026-03-18T08:05:00.000Z"),
+        model: { providerId: "github-copilot", modelId: "gpt-5-mini" },
+      },
+      {
+        agentRunId: "run-2",
+        subSessionId: "session-2",
+        taskId: "task-2",
+        projectId: "proj-1",
+        status: "failed",
+        startedAt: Date.parse("2026-03-18T09:00:00.000Z"),
+        finishedAt: "2026-03-18T09:10:00.000Z",
+        lastPromptAt: Date.parse("2026-03-18T09:10:00.000Z"),
+        model: { providerId: "github-copilot", modelId: "claude-opus-4.6" },
+      },
+    ]);
+    cpFetchMock.mockImplementation(async (...args: unknown[]) => {
+      const [url] = args as [string];
+
+      if (url === "/api/agent-runs/run-1/summary") {
+        return {
+          ok: true,
+          data: {
+            agentRunId: "run-1",
+            taskId: "task-1",
+            taskTitle: "Task 1",
+            projectId: "proj-1",
+            projectName: "Project 1",
+            agentType: "builder",
+            status: "running",
+            sessionId: "session-1",
+            modelUsed: "github-copilot:gpt-5-mini",
+            startedAt: "2026-03-18T08:00:00.000Z",
+            lastActivityAt: "2026-03-18T08:05:00.000Z",
+            durationMs: 300000,
+            guidanceCount: 1,
+            blockerType: null,
+            blockerLabel: "",
+            latestEvents: [],
+          },
+        };
+      }
+
+      if (url === "/api/agent-runs/run-2/summary") {
+        return {
+          ok: true,
+          data: {
+            agentRunId: "run-2",
+            taskId: "task-2",
+            taskTitle: "Task 2",
+            projectId: "proj-1",
+            projectName: "Project 1",
+            agentType: "reviewer",
+            status: "failed",
+            sessionId: "session-2",
+            modelUsed: "github-copilot:claude-opus-4.6",
+            startedAt: "2026-03-18T09:00:00.000Z",
+            finishedAt: "2026-03-18T09:10:00.000Z",
+            lastActivityAt: "2026-03-18T09:10:00.000Z",
+            durationMs: 600000,
+            blockerType: "failed",
+            blockerLabel: "执行失败待处理",
+            error: "tool crashed",
+            riskLevel: "high",
+            guidanceCount: 0,
+            latestEvents: [],
+          },
+        };
+      }
+
+      return { ok: true, data: {} };
+    });
+
+    const { agentControlRoutes } = await import(
+      "../../control-plane/web-ui-bff/src/modules/agent-control/routes"
+    );
+
+    const response = await agentControlRoutes.request("http://localhost/overview?projectId=proj-1", {
+      headers: { Authorization: "Bearer test" },
+    });
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload).toMatchObject({
+      viewScope: "project",
+      summary: {
+        attentionCount: 1,
+        runningCount: 1,
+        completedCount: 0,
+        failureRate: 50,
+        avgDurationMs: 450000,
+        humanInterventionRate: 50,
+      },
+      queueCounts: {
+        attention: 1,
+        running: 1,
+        recent: 2,
+      },
+      blockerBreakdown: {
+        failedHighRisk: 1,
+        approvalBlocked: 0,
+        pausedAwaitingResume: 0,
+        stalled: 0,
+        stoppedPendingReview: 0,
+      },
+    });
+    expect(typeof payload.generatedAt).toBe("string");
+  });
+
+  test("builds analytics payloads for agent console routes", async () => {
+    listAgentRunsMock.mockReturnValue([
+      {
+        agentRunId: "run-1",
+        subSessionId: "session-1",
+        taskId: "task-1",
+        projectId: "proj-1",
+        status: "running",
+        startedAt: Date.parse("2026-03-18T08:00:00.000Z"),
+        lastPromptAt: Date.parse("2026-03-18T08:05:00.000Z"),
+        model: { providerId: "github-copilot", modelId: "gpt-5-mini" },
+      },
+      {
+        agentRunId: "run-2",
+        subSessionId: "session-2",
+        taskId: "task-2",
+        projectId: "proj-1",
+        status: "failed",
+        startedAt: Date.parse("2026-03-18T09:00:00.000Z"),
+        finishedAt: "2026-03-18T09:10:00.000Z",
+        lastPromptAt: Date.parse("2026-03-18T09:10:00.000Z"),
+        model: { providerId: "github-copilot", modelId: "claude-opus-4.6" },
+      },
+    ]);
+    cpFetchMock.mockImplementation(async (...args: unknown[]) => {
+      const [url] = args as [string];
+
+      if (url === "/api/agent-runs/run-1/summary") {
+        return {
+          ok: true,
+          data: {
+            agentRunId: "run-1",
+            taskId: "task-1",
+            taskTitle: "Task 1",
+            projectId: "proj-1",
+            projectName: "Project 1",
+            agentType: "builder",
+            status: "running",
+            sessionId: "session-1",
+            modelUsed: "github-copilot:gpt-5-mini",
+            startedAt: "2026-03-18T08:00:00.000Z",
+            lastActivityAt: "2026-03-18T08:05:00.000Z",
+            durationMs: 300000,
+            guidanceCount: 1,
+            blockerType: null,
+            blockerLabel: "",
+            tokenUsed: 40,
+            latestEvents: [],
+          },
+        };
+      }
+
+      if (url === "/api/agent-runs/run-2/summary") {
+        return {
+          ok: true,
+          data: {
+            agentRunId: "run-2",
+            taskId: "task-2",
+            taskTitle: "Task 2",
+            projectId: "proj-1",
+            projectName: "Project 1",
+            agentType: "reviewer",
+            status: "failed",
+            sessionId: "session-2",
+            modelUsed: "github-copilot:claude-opus-4.6",
+            startedAt: "2026-03-18T09:00:00.000Z",
+            finishedAt: "2026-03-18T09:10:00.000Z",
+            lastActivityAt: "2026-03-18T09:10:00.000Z",
+            durationMs: 600000,
+            blockerType: "failed",
+            blockerLabel: "执行失败待处理",
+            error: "tool crashed",
+            riskLevel: "high",
+            guidanceCount: 0,
+            tokenUsed: 20,
+            latestEvents: [],
+          },
+        };
+      }
+
+      return { ok: true, data: {} };
+    });
+
+    const { agentControlRoutes } = await import(
+      "../../control-plane/web-ui-bff/src/modules/agent-control/routes"
+    );
+
+    const healthResponse = await agentControlRoutes.request(
+      "http://localhost/analytics/health?projectId=proj-1",
+      {
+        headers: { Authorization: "Bearer test" },
+      },
+    );
+    expect(healthResponse.status).toBe(200);
+    const healthPayload = await healthResponse.json();
+    expect(healthPayload).toMatchObject({
+      viewScope: "project",
+      totals: {
+        totalRuns: 2,
+        completedRuns: 0,
+        failedRuns: 1,
+        stoppedRuns: 0,
+        humanInterventionRuns: 1,
+        attentionRuns: 1,
+        approvalBlockedRuns: 0,
+        avgDurationMs: 450000,
+        failureRate: 50,
+        interventionRate: 50,
+      },
+    });
+    expect(healthPayload.agentRanking).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: "builder", totalRuns: 1, avgTokenUsed: 40 }),
+        expect.objectContaining({ key: "reviewer", failedRuns: 1, avgTokenUsed: 20 }),
+      ]),
+    );
+    expect(healthPayload.modelRanking).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: "github-copilot:gpt-5-mini", totalRuns: 1 }),
+        expect.objectContaining({ key: "github-copilot:claude-opus-4.6", failedRuns: 1 }),
+      ]),
+    );
+
+    const failuresResponse = await agentControlRoutes.request(
+      "http://localhost/analytics/failures?projectId=proj-1",
+      {
+        headers: { Authorization: "Bearer test" },
+      },
+    );
+    expect(failuresResponse.status).toBe(200);
+    const failuresPayload = await failuresResponse.json();
+    expect(failuresPayload).toMatchObject({
+      totalAttentionRuns: 1,
+      blockerBreakdown: [
+        {
+          key: "failed",
+          label: "执行失败待处理",
+          count: 1,
+          share: 100,
+        },
+      ],
+      failureReasons: [
+        {
+          key: "tool crashed",
+          label: "tool crashed",
+          count: 1,
+          share: 100,
+        },
+      ],
+      riskBreakdown: [
+        {
+          key: "high",
+          label: "high",
+          count: 1,
+          share: 100,
+        },
+      ],
+    });
+
+    const timelineResponse = await agentControlRoutes.request(
+      "http://localhost/analytics/timeline?projectId=proj-1",
+      {
+        headers: { Authorization: "Bearer test" },
+      },
+    );
+    expect(timelineResponse.status).toBe(200);
+    const timelinePayload = await timelineResponse.json();
+    expect(timelinePayload.bucketUnit).toBe("hour");
+    expect(timelinePayload.buckets).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ totalRuns: 1, interventionRuns: 1 }),
+        expect.objectContaining({ totalRuns: 1, failedRuns: 1, attentionRuns: 1 }),
+      ]),
+    );
   });
 
   test("returns a structured recovery error when historical run summary is unavailable", async () => {

@@ -61,11 +61,6 @@
     "db:backfill:assistant-toolcall-stop-duplicates": "cd control-plane/service && bun run db:backfill:assistant-toolcall-stop-duplicates",
     "db:migrate:sqlite-snapshot": "cd control-plane/service && bun run db:migrate:sqlite-snapshot",
     "test:service:pg-migration-smoke": "bash scripts/run-pg-task-domain-migration-smoke.sh",
-    "opencode:health": "bash scripts/opencode-health-check.sh",
-    "opencode:events:capture": "bun run scripts/opencode-capture-global-events.ts",
-    "opencode:events:organize-taskdetail": "bun run scripts/opencode-organize-taskdetail-events.ts",
-    "opencode:cleanup": "bash scripts/opencode-cleanup.sh",
-    "opencode:sync-skills": "bash scripts/sync-skillhub-skills.sh",
     "cli:task": "cd control-plane/service && bun run cli:task",
     "backfill:task-relations": "cd control-plane/service && bun run cli:backfill-task-relations",
     "db:seed:pg": "cd control-plane/service && bun run db:seed:pg"

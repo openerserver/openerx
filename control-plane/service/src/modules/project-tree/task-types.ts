@@ -38,7 +38,6 @@ export interface TaskTreeSnapshot {
   gitCommitterEmail: string | null;
   finalCommitSha: string | null;
   finalBranchName: string | null;
-  changesSummary: TaskChangesSummary | null;
   createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;

@@ -9,7 +9,7 @@ import {
   tasks,
 } from "../../db/schema";
 import { fromStoredTaskExecutionMode } from "../tasks/task-execution-mode";
-import type { TaskCategory, TaskChangesSummary, TaskExecutionMode, TaskStatus } from "./task-types";
+import type { TaskCategory, TaskExecutionMode, TaskStatus } from "./task-types";
 
 export interface TaskTreeRecord {
   id: string;
@@ -37,7 +37,6 @@ export interface TaskTreeRecord {
   gitCommitterEmail: string | null;
   finalCommitSha: string | null;
   finalBranchName: string | null;
-  changesSummary: TaskChangesSummary | null;
   createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;
@@ -60,10 +59,6 @@ export interface TaskTreeRecord {
   repoName: string | null;
   remoteUrl: string | null;
   credentialLabel: string | null;
-}
-
-function normalizeTaskChangesSummary(value: unknown): TaskChangesSummary | null {
-  return value && typeof value === "object" ? (value as TaskChangesSummary) : null;
 }
 
 function normalizeTaskCategory(value: unknown): TaskCategory | null {
@@ -127,13 +122,11 @@ function mapLifecycleStatusToTaskStatus(
 
 function resolveSnapshotTaskStatus(
   snapshot?: TaskSnapshotRow,
-  aggregate?: TaskAggregateRow,
+  _aggregate?: TaskAggregateRow,
 ): TaskStatus {
   return (
     normalizeTaskStatusValue(snapshot?.currentExecutionStatus) ??
-    normalizeTaskStatusValue(aggregate?.status) ??
     mapLifecycleStatusToTaskStatus(snapshot?.lifecycleStatus) ??
-    mapLifecycleStatusToTaskStatus(aggregate?.lifecycleStatus) ??
     "pending"
   );
 }
@@ -142,7 +135,7 @@ function resolveTaskReferenceIds(args: MapTaskTreeNodeArgs) {
   return {
     repoId: args.aggregate?.repoId ?? null,
     credentialId: args.aggregate?.credentialId ?? null,
-    currentRunId: args.aggregate?.currentRunId ?? null,
+    currentRunId: null,
   };
 }
 
@@ -181,7 +174,7 @@ function resolveTaskRepositoryFields(
     workspaceRoot: args.aggregate?.workspaceRoot ?? null,
     baseRevision: args.aggregate?.baseRevision ?? null,
     workingBranch: args.aggregate?.workingBranch ?? null,
-    selectedModel: args.aggregate?.selectedModel ?? null,
+    selectedModel: args.aggregate?.preferredModel ?? null,
     credentialId: refs.credentialId,
     gitAuthorName: args.aggregate?.gitAuthorName ?? credential?.gitAuthorName ?? null,
     gitAuthorEmail: args.aggregate?.gitAuthorEmail ?? credential?.gitAuthorEmail ?? null,
@@ -190,7 +183,6 @@ function resolveTaskRepositoryFields(
     finalCommitSha: args.aggregate?.finalCommitSha ?? null,
     finalBranchName: args.aggregate?.finalBranchName ?? null,
     // Tree payload no longer serves as a task business-fact fallback.
-    changesSummary: normalizeTaskChangesSummary(args.aggregate?.changesSummaryJson),
     repoName: repo?.name ?? null,
     remoteUrl: repo?.remoteUrl ?? null,
     credentialLabel: credential?.label ?? null,
@@ -203,25 +195,20 @@ function resolveTaskRunFields(
   strategyFields: ReturnType<typeof resolveTaskStrategyFields>,
 ) {
   const snapshotSessionId = args.snapshot?.currentSessionId
-    ? (args.sessionRuntimeIds.get(args.snapshot.currentSessionId) ??
-      args.aggregate?.currentSessionId ??
-      null)
-    : (args.aggregate?.currentSessionId ?? null);
+    ? (args.sessionRuntimeIds.get(args.snapshot.currentSessionId) ?? null)
+    : null;
 
   return {
     status: resolveSnapshotTaskStatus(args.snapshot, args.aggregate),
     sessionId: snapshotSessionId,
-    agentRunId: args.aggregate?.currentAgentRunId ?? null,
+    agentRunId: null,
     result:
-      args.aggregate?.latestResult ??
-      args.snapshot?.latestResultSummary ??
-      args.aggregate?.latestResultSummary ??
-      null,
+      args.snapshot?.latestResultSummary ?? null,
     strategy: strategyFields.strategy,
     executionMode: strategyFields.executionMode,
     autoAdvanceStages: strategyFields.autoAdvanceStages,
-    startedAt: args.aggregate?.startedAt ?? null,
-    finishedAt: args.aggregate?.finishedAt ?? null,
+    startedAt: args.aggregate?.activatedAt ?? null,
+    finishedAt: args.aggregate?.doneAt ?? null,
     orchestrationKind: mapOrchestrationKindToExecutionMode(args.snapshot?.currentExecutionMode),
     currentRunId: refs.currentRunId,
     currentRunStatus: normalizeTaskStatusValue(args.snapshot?.currentExecutionStatus),
@@ -230,7 +217,7 @@ function resolveTaskRunFields(
     currentRunCandidateCount: null,
     currentRunPipelineStepCount: null,
     latestResultSummary:
-      args.snapshot?.latestResultSummary ?? args.aggregate?.latestResultSummary ?? null,
+      args.snapshot?.latestResultSummary ?? null,
     latestErrorText: args.snapshot?.latestErrorText ?? null,
     lastActivityAt: args.snapshot?.lastActivityAt ?? null,
   };
@@ -376,20 +363,53 @@ export async function listTaskTreeRecords(args: {
   let taskIds: string[] | undefined;
 
   if (args.projectId || args.status || args.repoId) {
-    const aggregateRows = await db
-      .select({ id: tasks.id })
-      .from(tasks)
-      .where(
-        and(
-          ...(args.projectId ? [eq(tasks.projectId, args.projectId)] : []),
-          ...(args.status ? [eq(tasks.status, args.status as typeof tasks.status._.data)] : []),
-          ...(args.repoId ? [eq(tasks.repoId, args.repoId)] : []),
-        ),
-      )
-      .orderBy(desc(tasks.createdAt))
-      .limit(args.limit);
+    const statusFilter = args.status
+      ? (() => {
+          // Map old-style status to lifecycle + execution status filter
+          const lifecycleStatus =
+            args.status === "completed"
+              ? "done"
+              : args.status === "cancelled"
+                ? "archived"
+                : args.status === "pending"
+                  ? "draft"
+                  : "active";
+          return eq(taskSnapshots.lifecycleStatus, lifecycleStatus);
+        })()
+      : undefined;
 
-    taskIds = aggregateRows.map((row) => row.id);
+    if (args.status) {
+      // When filtering by status, join snapshots
+      const snapshotRows = await db
+        .select({ id: taskSnapshots.taskId })
+        .from(taskSnapshots)
+        .innerJoin(tasks, eq(tasks.id, taskSnapshots.taskId))
+        .where(
+          and(
+            statusFilter,
+            ...(args.projectId ? [eq(tasks.projectId, args.projectId)] : []),
+            ...(args.repoId ? [eq(tasks.repoId, args.repoId)] : []),
+          ),
+        )
+        .orderBy(desc(taskSnapshots.lastActivityAt))
+        .limit(args.limit);
+
+      taskIds = snapshotRows.map((row) => row.id);
+    } else {
+      const aggregateRows = await db
+        .select({ id: tasks.id })
+        .from(tasks)
+        .where(
+          and(
+            ...(args.projectId ? [eq(tasks.projectId, args.projectId)] : []),
+            ...(args.repoId ? [eq(tasks.repoId, args.repoId)] : []),
+          ),
+        )
+        .orderBy(desc(tasks.createdAt))
+        .limit(args.limit);
+
+      taskIds = aggregateRows.map((row) => row.id);
+    }
 
     if (taskIds.length === 0) {
       return [];

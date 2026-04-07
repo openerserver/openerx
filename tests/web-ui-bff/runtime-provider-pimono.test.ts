@@ -16,36 +16,6 @@ const ensureAgentRunForSessionMock = mock(
 const ingestParsedEventMock = mock(async () => undefined);
 const updateAgentRunStatusMock = mock(() => undefined);
 
-mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter", () => ({
-  buildExecutionContext: mock(() => ""),
-  continueSession: mock(async () => ({ ok: true })),
-  createSession: mock(async () => ({ ok: true, sessionId: "session-1" })),
-  ensureAgentRunForSession: ensureAgentRunForSessionMock,
-  extractAssistantResultFromMessages: mock(() => ({
-    completed: false,
-    failed: false,
-    error: undefined,
-    tokenUsed: 0,
-  })),
-  findAgentRunBySessionId: mock(() => undefined),
-  forkSession: mock(async () => ({ ok: true, sessionId: "fork-1" })),
-  getAgentMessages: mock(async () => ({ ok: true, data: [] })),
-  getAgentRun: mock(() => undefined),
-  getSessionMessages: mock(async () => ({ ok: true, data: [] })),
-  injectGuidance: mock(async () => ({ ok: true })),
-  listAgentRuns: mock(() => []),
-  listRuntimePermissions: mock(async () => ({ ok: true, data: [] })),
-  listSessions: mock(async () => ({ ok: true, data: [] })),
-  pauseAgent: mock(async () => ({ ok: true })),
-  recoverAgentRun: mock(() => undefined),
-  registerAgentRun: mock(() => undefined),
-  replyRuntimePermission: mock(async () => ({ ok: true })),
-  resumeAgent: mock(async () => ({ ok: true })),
-  runDetachedPrompt: mock(async () => ({ ok: true, text: "ok" })),
-  terminateAgent: mock(async () => ({ ok: true })),
-  updateAgentRunStatus: updateAgentRunStatusMock,
-}));
-
 mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/agent-run-registry", () => ({
   ensureAgentRunForSession: ensureAgentRunForSessionMock,
   findAgentRunBySessionId: mock(() => undefined),
@@ -73,6 +43,7 @@ function buildFakePiMonoRpcServerScript() {
     const decoder = new StringDecoder("utf8");
     let buffer = "";
     let sessionCounter = 1;
+    let permissionCounter = 0;
 
     function buildSessionFile(sessionId) {
       return path.join(os.tmpdir(), "openerx-pimono-" + namespace + "-" + sessionId + ".json");
@@ -185,18 +156,26 @@ function buildFakePiMonoRpcServerScript() {
       };
     }
 
-    function writeAssistantTurn(text, overrides) {
-      const assistant = Object.assign(buildAssistantMessage(text), overrides || {});
-      write({ type: "message_start", message: assistant });
+    function writeAssistantTurn(text, options) {
+      const assistant = Object.assign(
+        buildAssistantMessage(text),
+        (options && options.overrides) || {},
+      );
+      const startAssistant =
+        options && options.clearResponseIdAtStart
+          ? Object.assign({}, assistant, { responseId: undefined })
+          : assistant;
+
+      write({ type: "message_start", message: startAssistant });
       if (text) {
         write({
           type: "message_update",
-          message: assistant,
+          message: startAssistant,
           assistantMessageEvent: {
             type: "text_delta",
             contentIndex: 0,
             delta: text,
-            partial: assistant,
+            partial: startAssistant,
           },
         });
       }
@@ -245,10 +224,31 @@ function buildFakePiMonoRpcServerScript() {
         currentSession.isStreaming = true;
         currentSession.pendingPrompt = { commandType: command.type, message: command.message, mode: "permission" };
         currentSession.pendingUi = {
-          id: "perm-1",
+          id: "perm-" + (++permissionCounter),
           method: "confirm",
           title: "Allow external action?",
           message: "Need confirmation to continue.",
+        };
+        persistSession(currentSession);
+        write({ id: command.id, type: "response", command: command.type, success: true });
+        write({
+          type: "extension_ui_request",
+          id: currentSession.pendingUi.id,
+          method: currentSession.pendingUi.method,
+          title: currentSession.pendingUi.title,
+          message: currentSession.pendingUi.message,
+        });
+        return;
+      }
+
+      if (command.message.includes("__structured_external_permission__")) {
+        currentSession.isStreaming = true;
+        currentSession.pendingPrompt = { commandType: command.type, message: command.message, mode: "permission" };
+        currentSession.pendingUi = {
+          id: "perm-" + (++permissionCounter),
+          method: "confirm",
+          title: "external_directory",
+          message: "openerx-permission:{\"permission\":\"external_directory\",\"filepath\":\"/tmp/structured-demo.txt\",\"parentDir\":\"/tmp\",\"patterns\":[\"/tmp/*\"],\"toolName\":\"read\",\"toolCallId\":\"tool-structured-1\"}",
         };
         persistSession(currentSession);
         write({ id: command.id, type: "response", command: command.type, success: true });
@@ -286,7 +286,9 @@ function buildFakePiMonoRpcServerScript() {
         result: "ok",
         isError: false,
       });
-      writeAssistantTurn("reply:" + command.message);
+      writeAssistantTurn("reply:" + command.message, {
+        clearResponseIdAtStart: command.message.includes("__late_response_id__"),
+      });
     }
 
     function handleCommand(command) {
@@ -579,6 +581,38 @@ afterEach(async () => {
 });
 
 describe("pi-mono runtime provider", () => {
+  test("default Bun launcher targets the pi-mono workspace root", async () => {
+    process.env.PI_MONO_RPC_COMMAND = undefined;
+    process.env.PI_MONO_RPC_ARGS = undefined;
+    process.env.PI_MONO_RPC_CWD = undefined;
+
+    const module = await import(runtimeProviderPiMonoModulePath);
+    const config = module.__readPiMonoRpcConfigForTests();
+
+    expect(config.command).toBe("bun");
+    expect(config.cwd.replace(/\\/g, "/")).toEndWith("/pi-mono");
+    expect(config.args.slice(0, 5)).toEqual([
+      "run",
+      "--bun",
+      "packages/coding-agent/src/cli.ts",
+      "--mode",
+      "rpc",
+    ]);
+  });
+
+  test("default Bun launcher keeps args aligned when cwd is overridden", async () => {
+    process.env.PI_MONO_RPC_COMMAND = undefined;
+    process.env.PI_MONO_RPC_ARGS = undefined;
+    process.env.PI_MONO_RPC_CWD = "/Users/wanglei/Downloads/phones-cloud/openerx/pi-mono/packages/coding-agent";
+
+    const module = await import(runtimeProviderPiMonoModulePath);
+    const config = module.__readPiMonoRpcConfigForTests();
+
+    expect(config.command).toBe("bun");
+    expect(config.cwd.replace(/\\/g, "/")).toEndWith("/pi-mono/packages/coding-agent");
+    expect(config.args.slice(0, 5)).toEqual(["run", "--bun", "src/cli.ts", "--mode", "rpc"]);
+  });
+
   test("createSession starts an RPC process and exposes normalized session messages", async () => {
     configurePiMonoRpcEnv();
 
@@ -682,6 +716,79 @@ describe("pi-mono runtime provider", () => {
 
     const terminateResult = await piMonoRuntimeProvider.terminateAgent("rpc-session-1");
     expect(terminateResult.ok).toBe(true);
+  });
+
+  test("keeps assistant message ids stable when responseId appears after stream start", async () => {
+    configurePiMonoRpcEnv();
+
+    const { piMonoRuntimeProvider } = await import(runtimeProviderPiMonoModulePath);
+    const result = await piMonoRuntimeProvider.createSession(
+      "task-1",
+      "proj-1",
+      "hello __late_response_id__",
+      {
+        model: { providerId: "github-copilot", modelId: "gpt-5.4" },
+      },
+    );
+
+    expect(result.ok).toBe(true);
+
+    await waitForMockCalls(10);
+
+    const assistantUpdateIds = ingestParsedEventMock.mock.calls
+      .filter(
+        (call) =>
+          call[0] === "message.updated" &&
+          typeof call[1] === "object" &&
+          call[1] &&
+          typeof (call[1] as Record<string, unknown>).info === "object" &&
+          ((call[1] as Record<string, unknown>).info as Record<string, unknown>).role ===
+            "assistant",
+      )
+      .map((call) => {
+        const payload = call[1] as Record<string, unknown>;
+        const info = payload.info as Record<string, unknown> | undefined;
+        return typeof info?.id === "string" ? info.id : "";
+      })
+      .filter((value) => value.length > 0);
+
+    expect(assistantUpdateIds.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(assistantUpdateIds).size).toBe(1);
+
+    const assistantMessageId = assistantUpdateIds[0];
+    const assistantDeltaEvent = ingestParsedEventMock.mock.calls.find(
+      (call) => call[0] === "message.part.updated",
+    );
+    expect(assistantDeltaEvent?.[1]).toEqual(
+      expect.objectContaining({
+        sessionId: "rpc-session-1",
+        part: expect.objectContaining({
+          type: "text",
+          messageID: assistantMessageId,
+        }),
+      }),
+    );
+
+    const messages = await piMonoRuntimeProvider.getSessionMessages("rpc-session-1");
+    expect(messages.ok).toBe(true);
+
+    const assistantMessages = Array.isArray(messages.data)
+      ? messages.data.filter((message) => {
+          const record = message as Record<string, unknown>;
+          const info = record.info as Record<string, unknown> | undefined;
+          return info?.role === "assistant";
+        })
+      : [];
+
+    expect(assistantMessages).toHaveLength(1);
+    expect(assistantMessages[0]).toEqual(
+      expect.objectContaining({
+        info: expect.objectContaining({
+          id: assistantMessageId,
+          role: "assistant",
+        }),
+      }),
+    );
   });
 
   test("runDetachedPrompt waits for idle and returns the assistant text", async () => {
@@ -836,6 +943,67 @@ describe("pi-mono runtime provider", () => {
       texts.includes("permission:approved"),
     );
     expect(assistantTexts).toContain("permission:approved");
+  });
+
+  test("maps structured external_directory approvals and auto-approves later requests after always", async () => {
+    configurePiMonoRpcEnv();
+
+    const { piMonoRuntimeProvider } = await import(runtimeProviderPiMonoModulePath);
+    const created = await piMonoRuntimeProvider.createSession(
+      "task-structured-permission",
+      "proj-1",
+      "__structured_external_permission__",
+    );
+
+    expect(created.ok).toBe(true);
+
+    await waitForPermissionCount(1);
+
+    const permissions = await piMonoRuntimeProvider.listRuntimePermissions();
+    expect(permissions.ok).toBe(true);
+    expect(permissions.data).toEqual([
+      expect.objectContaining({
+        id: "perm-1",
+        sessionID: "rpc-session-1",
+        permission: "external_directory",
+        patterns: ["/tmp/*"],
+        metadata: expect.objectContaining({
+          filepath: "/tmp/structured-demo.txt",
+          parentDir: "/tmp",
+          toolName: "read",
+          toolCallId: "tool-structured-1",
+        }),
+      }),
+    ]);
+
+    const replyResult = await piMonoRuntimeProvider.replyRuntimePermission("perm-1", {
+      reply: "always",
+    });
+    expect(replyResult.ok).toBe(true);
+
+    await waitForPermissionCount(0);
+    const firstAssistantTexts = await waitForAssistantText(String(created.sessionId), (texts) =>
+      texts.includes("permission:approved"),
+    );
+    expect(firstAssistantTexts).toContain("permission:approved");
+
+    const continueResult = await piMonoRuntimeProvider.continueSession(
+      String(created.sessionId),
+      "__structured_external_permission__ repeat",
+    );
+    expect(continueResult.ok).toBe(true);
+
+    const secondAssistantTexts = await waitForAssistantText(String(created.sessionId), (texts) => {
+      const approvedCount = texts.filter((text) => text === "permission:approved").length;
+      return approvedCount >= 2;
+    });
+    expect(secondAssistantTexts.filter((text) => text === "permission:approved").length).toBe(
+      2,
+    );
+
+    const secondPermissions = await piMonoRuntimeProvider.listRuntimePermissions();
+    expect(secondPermissions.ok).toBe(true);
+    expect(secondPermissions.data).toEqual([]);
   });
 
   test("pauseAgent fails when abort never settles within the configured timeout", async () => {

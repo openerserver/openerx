@@ -7,10 +7,7 @@ import {
   expectNoPromptBackfillSegment,
   expectServiceTimelineNotRequested,
 } from "./execution-trace-contract-test-helpers";
-import {
-  createOpencodeAdapterModuleMock,
-  createRuntimeProviderModuleMock,
-} from "./opencode-adapter-mock";
+import { createRuntimeProviderModuleMock } from "./runtime-provider-mock";
 import { createSseAggregatorModuleMock } from "./sse-aggregator-mock";
 
 const cpFetchMock = mock(async (..._args: unknown[]) => ({ ok: true, data: {} }));
@@ -91,7 +88,7 @@ mock.module("../../control-plane/web-ui-bff/src/lib/intent-classifier", () => ({
   classifyIntent: mock(() => ({ category: "implementation" })),
 }));
 
-mock.module("../../control-plane/web-ui-bff/src/lib/opencode-config", () => ({
+mock.module("../../control-plane/web-ui-bff/src/lib/model-config", () => ({
   diagnoseModelReadiness: mock(() => ({ ready: true })),
   formatModelRoute: mock(() => "github-copilot:gpt-5.4"),
   readDefaultExecutionModel: mock(() => "github-copilot:gpt-5.4"),
@@ -101,8 +98,6 @@ mock.module("../../control-plane/web-ui-bff/src/lib/opencode-config", () => ({
 
 mock.module("../../control-plane/web-ui-bff/src/lib/orchestration-strategy", () => ({
   ...strategyModule,
-  parseTaskStrategy: mock(() => ({ selectedAgent: "oracle-enterprise" })),
-  readOrchestrationStrategy: mock(async () => ({ hooks: [], templates: [], judge: {} })),
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/lib/paid-execution-runtime", () => ({
@@ -113,7 +108,7 @@ mock.module("../../control-plane/web-ui-bff/src/lib/runtime-pipeline", () => ({
   buildRuntimePipeline: mock(async () => ({ stages: [] })),
 }));
 
-const opencodeAdapterModule = createOpencodeAdapterModuleMock({
+const runtimeProviderModule = createRuntimeProviderModuleMock({
   continueSession: mock(async () => ({ ok: true })),
   createSession: mock(async () => ({ ok: true, sessionId: "session-1", agentRunId: "run-1" })),
   ensureAgentRunForSession: mock(() => "run-1"),
@@ -141,17 +136,13 @@ const opencodeAdapterModule = createOpencodeAdapterModuleMock({
   updateAgentRunStatus: mock(() => undefined),
 });
 
-mock.module(
-  "../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter",
-  () => opencodeAdapterModule,
-);
-
 mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/runtime-provider", () =>
-  createRuntimeProviderModuleMock(opencodeAdapterModule),
+  runtimeProviderModule,
 );
 
 mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/run-persistence", () => ({
   createAgentRunRecord: mock(async () => undefined),
+  patchAgentRunRecord: mock(async () => undefined),
   recordAgentAudit: mock(async () => undefined),
 }));
 
@@ -178,6 +169,12 @@ mock.module("../../control-plane/web-ui-bff/src/modules/realtime/ws-broadcaster"
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/modules/tasks/reconcile", () => ({
+  repairTaskMessagesFromRuntime: mock(async () => ({
+    repaired: false,
+    totalMessages: 0,
+    userMessages: 0,
+    assistantMessages: 0,
+  })),
   reconcileRunningTasksOnStartup: mock(async () => undefined),
 }));
 
@@ -497,6 +494,9 @@ describe("task execution trace route", () => {
     const payload = await response.json();
     expect(payload.finalPrompt).toBe("投影用户输入");
     expect(payload.latestResponse).toBe("投影回复");
+    expect(payload.traceId).toBe(
+      payload.messages.find((item: { role?: string }) => item.role === "assistant")?.id ?? null,
+    );
     expect(payload.timelineMeta).toMatchObject({
       readSource: "task-session-projection",
       complete: true,
@@ -1536,7 +1536,7 @@ describe("task execution trace route", () => {
     expect(response.status).toBe(200);
     const payload = await response.json();
     expect(payload.timelineMeta).toMatchObject({
-      readSource: "opencode-runtime",
+      readSource: "runtime-fallback",
       cacheState: "complete",
       complete: true,
     });
@@ -1784,6 +1784,9 @@ describe("task execution trace route", () => {
     );
     expect(payload.finalPrompt).toBe("user");
     expect(payload.latestResponse).toBe("assistant");
+    expect(payload.traceId).toBe(
+      payload.messages.find((item: { role?: string }) => item.role === "assistant")?.id ?? null,
+    );
     expect(
       cpFetchMock.mock.calls.some(
         ([path]) => path === "/api/tasks/task-1/messages?sessionId=task-session%3Atask-1%3Ases-1",
@@ -1908,7 +1911,7 @@ describe("task execution trace route", () => {
     expect(response.status).toBe(200);
     const payload = await response.json();
     expect(payload.timelineMeta).toMatchObject({
-      readSource: "opencode-runtime",
+      readSource: "runtime-fallback",
       cacheState: "complete",
       complete: true,
       itemCount: 2,

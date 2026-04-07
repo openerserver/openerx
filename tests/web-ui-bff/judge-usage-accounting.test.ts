@@ -1,9 +1,6 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import * as strategyModule from "../../control-plane/web-ui-bff/src/lib/orchestration-strategy";
-import {
-  createOpencodeAdapterModuleMock,
-  createRuntimeProviderModuleMock,
-} from "./opencode-adapter-mock";
+import { createRuntimeProviderModuleMock } from "./runtime-provider-mock";
 
 const cpFetchMock = mock(async (..._args: unknown[]) => ({ ok: true, status: 200, data: {} }));
 const authHeaderMock = mock(() => "Bearer test");
@@ -22,7 +19,7 @@ mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () =>
   createInternalAuthorization: createInternalAuthorizationMock,
 }));
 
-mock.module("../../control-plane/web-ui-bff/src/lib/opencode-config", () => ({
+mock.module("../../control-plane/web-ui-bff/src/lib/model-config", () => ({
   diagnoseModelReadiness: mock(() => ({ ready: true })),
   formatModelRoute: (resolved: { providerId: string; modelId: string }) =>
     `${resolved.providerId}:${resolved.modelId}`,
@@ -50,7 +47,7 @@ mock.module("../../control-plane/web-ui-bff/src/lib/orchestration-strategy", () 
   }),
 }));
 
-const opencodeAdapterModule = createOpencodeAdapterModuleMock({
+const runtimeProviderModule = createRuntimeProviderModuleMock({
   createSession: mock(async () => ({
     ok: true,
     sessionId: "exec-ses",
@@ -69,13 +66,8 @@ const opencodeAdapterModule = createOpencodeAdapterModuleMock({
   updateAgentRunStatus: mock(() => undefined),
 });
 
-mock.module(
-  "../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter",
-  () => opencodeAdapterModule,
-);
-
 mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/runtime-provider", () =>
-  createRuntimeProviderModuleMock(opencodeAdapterModule),
+  runtimeProviderModule,
 );
 
 mock.module("../../control-plane/web-ui-bff/src/modules/code-changes/change-collector", () => ({

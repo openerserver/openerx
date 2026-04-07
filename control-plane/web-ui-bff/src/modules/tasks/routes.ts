@@ -9,7 +9,7 @@ import {
   readDefaultExecutionModel,
   resolveModelRoute,
   validateModelProvider,
-} from "../../lib/opencode-config";
+} from "../../lib/model-config";
 import {
   type ChainStepInput,
   DEFAULT_EXECUTION_AGENT,
@@ -64,19 +64,21 @@ import { buildPipelineStageUpdatedEvents } from "../realtime/pipeline-events";
 import { sseAggregator } from "../realtime/sse-aggregator";
 import { wsBroadcaster } from "../realtime/ws-broadcaster";
 import { buildTaskMemberViewModel } from "./member-view";
-import { reconcileRunningTasksOnStartup } from "./reconcile";
+import { reconcileRunningTasksOnStartup, repairTaskMessagesFromRuntime } from "./reconcile";
 import {
   type TaskSessionLineageRecord,
   type TaskSessionTimelineMeta,
   createProjectionTraceTimelineMeta,
-  fetchTaskConversationMessages,
-  fetchTaskSessionCachedMessages,
-  fetchTaskSessionLineageRecords as fetchTaskSessionCompatLineageRecords,
+  fetchTaskSessionLineageRecords as fetchTaskSessionStoreLineageRecords,
   normalizeTaskSessionTimelineMeta,
   persistTaskSessionMessageSnapshot,
   toCanonicalTaskSessionId,
-  upsertTaskSessionLineageRecord as upsertTaskSessionCompatLineageRecord,
-} from "./task-session-compat";
+  upsertTaskSessionLineageRecord as upsertTaskSessionStoreLineageRecord,
+} from "./task-session-store";
+import {
+  fetchTaskConversationCompatMessages,
+  fetchTaskSessionCachedCompatMessages,
+} from "./task-session-read-compat";
 import { buildWorkflowExecutionPromptSnapshot } from "./workflow-stage-execution";
 import { buildTaskWorkflowViewModel } from "./workflow-view";
 
@@ -238,7 +240,7 @@ interface UpsertTaskSessionLineageInput {
 }
 
 async function fetchTaskSessionLineageRecords(taskId: string, authorization: string) {
-  const lineageResult = await fetchTaskSessionCompatLineageRecords(taskId, authorization);
+  const lineageResult = await fetchTaskSessionStoreLineageRecords(taskId, authorization);
   const records = lineageResult.records.map((record) => coerceTaskSessionRecord(taskId, record));
 
   return {
@@ -358,7 +360,7 @@ async function upsertTaskSessionLineageRecord(
   authorization: string,
   input: UpsertTaskSessionLineageInput,
 ) {
-  return upsertTaskSessionCompatLineageRecord(taskId, authorization, input);
+  return upsertTaskSessionStoreLineageRecord(taskId, authorization, input);
 }
 
 async function fetchTaskSessionTimeline(
@@ -620,6 +622,7 @@ interface TaskSessionTimelineResponseRecord {
 interface TaskExecutionTraceRecord {
   taskId: string;
   sessionId: string | null;
+  traceId: string | null;
   workflowContext: string | null;
   finalPrompt: string | null;
   latestResponse: string | null;
@@ -1871,6 +1874,51 @@ async function recordManualReconcileAudit(
   }
 }
 
+async function recordManualTaskMessageRepairAudit(
+  authorization: string,
+  user: JWTPayload,
+  taskId: string,
+  summary: Awaited<ReturnType<typeof repairTaskMessagesFromRuntime>>,
+  args: { sessionId?: string; onlyActive?: boolean },
+) {
+  const result = await cpFetch("/api/audit", {
+    method: "POST",
+    authorization,
+    body: {
+      eventType: "task.message.repaired",
+      action: "manual_repair_task_messages",
+      target: taskId,
+      detail: {
+        triggeredByRole: user.role,
+        scope: summary.scope,
+        sessionId: args.sessionId,
+        onlyActive: args.onlyActive === true,
+        lineageResolved: summary.lineageResolved,
+        scannedSessions: summary.scannedSessions,
+        repairedSessions: summary.repairedSessions,
+        failedSessions: summary.failedSessions,
+        skippedSessions: summary.skippedSessions,
+        scannedMessages: summary.scannedMessages,
+        repairableMessages: summary.repairableMessages,
+        repairedMessages: summary.repairedMessages,
+        failedMessages: summary.failedMessages,
+      },
+      riskLevel: "medium",
+    },
+  });
+
+  if (!result.ok) {
+    console.warn(
+      `[reconcile] audit write failed status=${result.status} user=${user.sub} action=manual_repair_task_messages task=${taskId}`,
+    );
+  }
+}
+
+const repairTaskMessagesSchema = z.object({
+  sessionId: z.string().min(1).optional(),
+  onlyActive: z.boolean().optional(),
+});
+
 async function fetchExecutableTask(taskId: string, authorization: string) {
   return cpFetch<ExecutableTask>(`/api/project-tree/tasks/${encodeURIComponent(taskId)}`, {
     authorization,
@@ -3088,7 +3136,7 @@ async function loadExecutionTraceMessagesFromRuntime(args: {
     messages,
     timeline,
     meta: {
-      readSource: "opencode-runtime" as const,
+      readSource: "runtime-fallback" as const,
       cacheState,
       complete: cacheState === "complete" && messages.length > 0,
       includeLineage: args.includeLineage,
@@ -3409,6 +3457,7 @@ async function buildTaskExecutionTrace(
       ? snapshot?.latestResult
       : null) ??
     null;
+  const traceId = resolveTaskExecutionTraceLatestTraceId(traceMessages.messages);
 
   return {
     ok: true,
@@ -3416,6 +3465,7 @@ async function buildTaskExecutionTrace(
     data: {
       taskId: task.id,
       sessionId,
+      traceId,
       workflowContext,
       finalPrompt,
       latestResponse,
@@ -3758,6 +3808,13 @@ function resolveTaskExecutionTraceLatestResponse(messages: ExecutionTraceMessage
   const assistantMessages = messages.filter((item) => item.role === "assistant" && item.text);
   return assistantMessages.length > 0
     ? (assistantMessages[assistantMessages.length - 1]?.text ?? null)
+    : null;
+}
+
+function resolveTaskExecutionTraceLatestTraceId(messages: ExecutionTraceMessageRecord[]) {
+  const assistantMessages = messages.filter((item) => item.role === "assistant" && item.text);
+  return assistantMessages.length > 0
+    ? (assistantMessages[assistantMessages.length - 1]?.id ?? null)
     : null;
 }
 
@@ -5844,6 +5901,49 @@ taskRoutes.post("/reconcile-running", async (c) => {
   return c.json({ ok: true, data: summary });
 });
 
+taskRoutes.post("/:taskId/repair-messages", async (c) => {
+  const adminErr = requireSystemAdmin(c.get("user"));
+  if (adminErr) {
+    return c.json({ error: adminErr }, 403);
+  }
+
+  const bodyResult = repairTaskMessagesSchema.safeParse(await c.req.json().catch(() => ({})));
+  if (!bodyResult.success) {
+    return c.json({ error: bodyResult.error.flatten() }, 400);
+  }
+
+  const taskId = c.req.param("taskId");
+  const authorization = authHeader(c);
+  const user = c.get("user");
+  const taskResult = await fetchExecutableTask(taskId, authorization);
+  if (!taskResult.ok) {
+    return c.json(
+      taskResult.data,
+      (taskResult.status as 401 | 403 | 404 | 502 | 500 | 400 | 409 | 422) ?? 502,
+    );
+  }
+
+  const summary = await repairTaskMessagesFromRuntime({
+    taskId,
+    authorization,
+    sessionId: bodyResult.data.sessionId,
+    onlyActive: bodyResult.data.onlyActive,
+  });
+
+  if (!bodyResult.data.sessionId && !summary.lineageResolved) {
+    return c.json(
+      {
+        error: "Failed to load task session lineage for runtime message repair",
+        data: summary,
+      },
+      502,
+    );
+  }
+
+  await recordManualTaskMessageRepairAudit(authorization, user, taskId, summary, bodyResult.data);
+  return c.json({ ok: true, data: summary });
+});
+
 // GET /api/tasks/:taskId/graph — Get DAG visualization data
 taskRoutes.get("/:taskId/graph", async (c) => {
   const taskId = c.req.param("taskId");
@@ -5858,6 +5958,9 @@ taskRoutes.get("/:taskId/domain-runs", async (c) => {
   const result = await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}/domain-runs`, {
     authorization: authHeader(c),
   });
+  if (!result.ok && result.status === 404) {
+    return c.json({ data: [] }, 200);
+  }
   return c.json(result.data, result.ok ? 200 : (result.status as 401 | 404 | 502));
 });
 
@@ -5879,7 +5982,7 @@ taskRoutes.get("/:taskId/query/normalized-conversation", async (c) => {
   const sessionId = c.req.query("sessionId");
   const includeLineage = c.req.query("includeLineage") !== "false";
 
-  const result = await fetchTaskConversationMessages(taskId, authorization, {
+  const result = await fetchTaskConversationCompatMessages(taskId, authorization, {
     ...(sessionId ? { sessionId } : {}),
     includeLineage,
   });
@@ -5899,7 +6002,7 @@ taskRoutes.get("/:taskId/messages", async (c) => {
   const authorization = authHeader(c);
   const includeLineage = c.req.query("includeLineage") !== "false";
 
-  const result = await fetchTaskConversationMessages(taskId, authorization, {
+  const result = await fetchTaskConversationCompatMessages(taskId, authorization, {
     includeLineage,
   });
 
@@ -5919,7 +6022,7 @@ taskRoutes.get("/:taskId/sessions/:sessionId/messages", async (c) => {
   const authorization = authHeader(c);
   const includeLineage = c.req.query("includeLineage") !== "false";
 
-  const result = await fetchTaskSessionCachedMessages(taskId, sessionId, authorization, {
+  const result = await fetchTaskSessionCachedCompatMessages(taskId, sessionId, authorization, {
     includeLineage,
   });
 
@@ -6611,7 +6714,7 @@ async function loadTaskSessionPreviewMessages(
   sessionId: string,
   authorization: string,
 ) {
-  const cachedResult = await fetchTaskSessionCachedMessages(taskId, sessionId, authorization, {
+  const cachedResult = await fetchTaskSessionCachedCompatMessages(taskId, sessionId, authorization, {
     includeLineage: false,
   });
   if (

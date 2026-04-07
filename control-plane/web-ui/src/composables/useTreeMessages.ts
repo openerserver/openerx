@@ -10,6 +10,7 @@ import {
   type TaskConversationListItem,
   type TaskConversationMessageItem,
   type TaskConversationWorkflowItem,
+  asRecord,
   collectLiveAssistantState,
   createEmptyLiveAssistantState,
   normalizeMessage,
@@ -27,6 +28,71 @@ export type {
 /* ------------------------------------------------------------------ */
 /*  Primary composable                                                 */
 /* ------------------------------------------------------------------ */
+
+function countRawMessageParts(item: TaskConversationMessageItem) {
+  const raw = asRecord(item.raw);
+  return Array.isArray(raw?.parts) ? raw.parts.filter((part) => Boolean(part)).length : 0;
+}
+
+function isWorkflowExecutionContextUserMessage(item: TaskConversationMessageItem) {
+  return item.role === "user" && typeof item.text === "string" && item.text.trim().startsWith("Execution context:");
+}
+
+function areEquivalentAssistantMessages(
+  left: TaskConversationMessageItem | undefined,
+  right: TaskConversationMessageItem,
+) {
+  if (!left || left.role !== "assistant" || right.role !== "assistant") {
+    return false;
+  }
+
+  if (left.isStreaming || right.isStreaming) {
+    return false;
+  }
+
+  const leftText = left.text?.trim();
+  const rightText = right.text?.trim();
+  if (!leftText || !rightText || leftText !== rightText) {
+    return false;
+  }
+
+  return !left.createdAt || !right.createdAt || left.createdAt === right.createdAt;
+}
+
+function resolveConversationMessageRichness(item: TaskConversationMessageItem) {
+  return (
+    countRawMessageParts(item) * 1000 +
+    item.toolCalls.length * 100 +
+    (item.model ? 10 : 0) +
+    (item.agent ? 5 : 0) +
+    (item.text?.length ?? 0)
+  );
+}
+
+function collapseDisplayMessages(
+  items: TaskConversationMessageItem[],
+  options?: { hideWorkflowExecutionContextUsers?: boolean },
+) {
+  const collapsed: TaskConversationMessageItem[] = [];
+
+  for (const item of items) {
+    if (options?.hideWorkflowExecutionContextUsers && isWorkflowExecutionContextUserMessage(item)) {
+      continue;
+    }
+
+    const previous = collapsed.at(-1);
+    if (areEquivalentAssistantMessages(previous, item)) {
+      if (previous && resolveConversationMessageRichness(item) > resolveConversationMessageRichness(previous)) {
+        collapsed[collapsed.length - 1] = item;
+      }
+      continue;
+    }
+
+    collapsed.push(item);
+  }
+
+  return collapsed;
+}
 
 export function useTreeMessages(
   taskId: Ref<string>,
@@ -136,10 +202,15 @@ export function useTreeMessages(
       .map((entry) => normalizeWorkflowGroup(entry))
       .filter((item): item is TaskConversationWorkflowItem => item != null);
 
-    const regularItems = [
-      ...items.value,
-      ...(streamingAssistantDraft.value ? [streamingAssistantDraft.value] : []),
-    ].filter((item) => item.role === "user" || item.role === "assistant" || item.role === "tool");
+    const regularItems = collapseDisplayMessages(
+      [
+        ...items.value,
+        ...(streamingAssistantDraft.value ? [streamingAssistantDraft.value] : []),
+      ].filter((item) => item.role === "user" || item.role === "assistant" || item.role === "tool"),
+      {
+        hideWorkflowExecutionContextUsers: workflowItems.length > 0,
+      },
+    );
 
     if (workflowItems.length === 0) return regularItems;
 

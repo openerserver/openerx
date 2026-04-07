@@ -19,9 +19,7 @@ sqlite3 "$DATA_DIR/openerx.db" ".backup '$DATA_DIR/openerx_backup.db'"
 tar -czf "$BACKUP_FILE" \
   -C /opt/openerx \
   data/openerx_backup.db \
-  .env \
-  opencode-fork/opencode.json \
-  opencode-fork/.opencode/
+  .env
 
 # 3. Cleanup temp backup
 rm -f "$DATA_DIR/openerx_backup.db"

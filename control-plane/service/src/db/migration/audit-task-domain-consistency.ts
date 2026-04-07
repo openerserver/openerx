@@ -54,10 +54,7 @@ type AuditTaskRow = {
   projectId: string;
   title: string;
   createdAt: string;
-  taskStatus: string | null;
   taskLifecycleStatus: string;
-  taskCurrentRunId: string | null;
-  taskCurrentSessionId: string | null;
   snapshotLifecycleStatus: string | null;
   snapshotCurrentSessionId: string | null;
   snapshotActiveCandidateCount: number | null;
@@ -460,9 +457,21 @@ async function loadTimelineCounts(taskId: string) {
   `);
 }
 
+async function loadLatestActiveRunId(taskId: string): Promise<string | null> {
+  const { postgresSql } = await loadDbModule();
+  const rows = await postgresSql`
+    select id from task_runs
+    where task_id = ${taskId}
+      and status in ('running', 'pending')
+    order by created_at desc
+    limit 1
+  `;
+  return parseNullableString((rows[0] as Record<string, unknown> | undefined)?.id ?? null);
+}
+
 async function loadTaskAuditContext(task: AuditTaskRow): Promise<TaskAuditContext> {
-  const effectiveCurrentRunId = task.taskCurrentRunId;
-  const effectiveCurrentSessionId = task.snapshotCurrentSessionId ?? task.taskCurrentSessionId;
+  const effectiveCurrentRunId = await loadLatestActiveRunId(task.taskId);
+  const effectiveCurrentSessionId = task.snapshotCurrentSessionId;
   const currentRun = await loadCurrentRun(task, effectiveCurrentRunId);
   const runGraphCounts = await loadRunGraphCounts({
     task,
@@ -515,7 +524,6 @@ function buildStatusDimension(task: AuditTaskRow, context: TaskAuditContext) {
 
   return createDimension(
     {
-      taskStatus: task.taskStatus,
       taskLifecycleStatus: task.taskLifecycleStatus,
       snapshotLifecycleStatus: task.snapshotLifecycleStatus,
       currentRunStatus: context.currentRun?.status ?? null,
@@ -528,11 +536,6 @@ function buildStatusDimension(task: AuditTaskRow, context: TaskAuditContext) {
 function buildCurrentSessionDimension(task: AuditTaskRow, context: TaskAuditContext) {
   const reasons: string[] = [];
 
-  if ((task.taskCurrentSessionId ?? null) !== (task.snapshotCurrentSessionId ?? null)) {
-    reasons.push(
-      `tasks.current_session_id=${task.taskCurrentSessionId ?? "null"} but task_snapshots.current_session_id=${task.snapshotCurrentSessionId ?? "null"}`,
-    );
-  }
   if (context.effectiveCurrentSessionId && !context.currentSessionDbId) {
     reasons.push(
       `conversation_sessions missing runtime_session_id=${context.effectiveCurrentSessionId}`,
@@ -541,7 +544,6 @@ function buildCurrentSessionDimension(task: AuditTaskRow, context: TaskAuditCont
 
   return createDimension(
     {
-      taskCurrentSessionId: task.taskCurrentSessionId,
       snapshotCurrentSessionId: task.snapshotCurrentSessionId,
       effectiveCurrentSessionId: context.effectiveCurrentSessionId,
       conversationSessionId: context.currentSessionDbId,
@@ -563,7 +565,6 @@ function buildRunGraphDimension(task: AuditTaskRow, context: TaskAuditContext) {
 
   return createDimension(
     {
-      taskCurrentRunId: task.taskCurrentRunId,
       effectiveCurrentRunId: context.effectiveCurrentRunId,
       runStatus: context.currentRun?.status ?? null,
       orchestrationKind: context.currentRun?.orchestrationKind ?? null,
@@ -735,10 +736,7 @@ Options:
       projectId: tasks.projectId,
       title: tasks.title,
       createdAt: tasks.createdAt,
-      taskStatus: tasks.status,
       taskLifecycleStatus: tasks.lifecycleStatus,
-      taskCurrentRunId: tasks.currentRunId,
-      taskCurrentSessionId: tasks.currentSessionId,
       snapshotLifecycleStatus: taskSnapshots.lifecycleStatus,
       snapshotCurrentSessionId: taskSnapshots.currentSessionId,
       snapshotActiveCandidateCount: taskSnapshots.activeCandidateCount,

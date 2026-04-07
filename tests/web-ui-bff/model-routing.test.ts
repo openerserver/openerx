@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import {
   formatModelRoute,
   resolveModelRoute,
-} from "../../control-plane/web-ui-bff/src/lib/opencode-config";
+} from "../../control-plane/web-ui-bff/src/lib/model-config";
 
 describe("resolveModelRoute", () => {
   test("uses the fallback provider for plain Copilot model ids", () => {

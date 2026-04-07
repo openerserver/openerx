@@ -1,8 +1,55 @@
 /// <reference types="bun-types" />
 
-import { describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, mock, test } from "bun:test";
 import type { TaskTreeSnapshot } from "../../control-plane/service/src/modules/project-tree/storage";
-import { createTaskBranchWriteApi } from "../../control-plane/service/src/modules/tasks/task-branch-write";
+
+let importCounter = 0;
+
+async function loadTaskBranchWriteModule() {
+  importCounter += 1;
+
+  mock.module("../../control-plane/service/src/modules/tasks/task-session-read", () => ({
+    buildTaskSessionLineagePath: (
+      records: Array<{ id: string; parentSessionId: string | null }>,
+      sessionId: string,
+    ) => {
+      const byId = new Map(records.map((record) => [record.id, record]));
+      const path: string[] = [];
+      let cursor: string | null = sessionId;
+      while (cursor) {
+        path.unshift(cursor);
+        cursor = byId.get(cursor)?.parentSessionId ?? null;
+      }
+      return path.length > 0 ? path : [sessionId];
+    },
+    toCanonicalTaskSessionId: (taskId: string, sessionId?: string | null) =>
+      typeof sessionId === "string" && sessionId.trim()
+        ? sessionId.startsWith("task-session:")
+          ? sessionId
+          : `task-session:${taskId}:${sessionId.trim()}`
+        : null,
+    resolveTaskSessionRecordId: (
+      sessions: Array<{ id: string; runtimeSessionId?: string | null }>,
+      sessionId?: string | null,
+    ) => {
+      if (typeof sessionId !== "string" || !sessionId.trim()) {
+        return null;
+      }
+
+      const normalizedSessionId = sessionId.trim();
+      return (
+        sessions.find((session) => session.id === normalizedSessionId)?.id ??
+        sessions.find((session) => session.runtimeSessionId === normalizedSessionId)?.id ??
+        null
+      );
+    },
+    shouldPersistStandalonePartEvent: () => true,
+  }));
+
+  return import(
+    `../../control-plane/service/src/modules/tasks/task-branch-write.ts?task-branch-write-test=${importCounter}`
+  );
+}
 
 function createTaskRecord(overrides?: Partial<{ sessionId: string | null }>) {
   return {
@@ -18,8 +65,80 @@ function createTaskRecord(overrides?: Partial<{ sessionId: string | null }>) {
   } as never;
 }
 
+afterEach(() => {
+  mock.restore();
+});
+
 describe("task branch write", () => {
+  test("persistTaskBranchMessageSchema accepts real runtime message shapes and rejects arbitrary payloads", async () => {
+    const { persistTaskBranchMessageSchema } = await loadTaskBranchWriteModule();
+
+    expect(
+      persistTaskBranchMessageSchema.safeParse({
+        runtimeSessionId: "runtime-session-1",
+        message: {
+          info: {
+            id: "runtime-session-1:user-prompt",
+            role: "user",
+            time: {
+              created: "2026-03-24T00:00:00.000Z",
+              completed: "2026-03-24T00:00:01.000Z",
+            },
+          },
+          parts: [{ type: "text", text: "final prompt" }],
+          promptDecomposition: {
+            userInputText: "prompt",
+            systemContextText: "system",
+            finalSentText: "systemprompt",
+          },
+        },
+      }).success,
+    ).toBe(true);
+
+    expect(
+      persistTaskBranchMessageSchema.safeParse({
+        runtimeSessionId: "runtime-session-1",
+        message: {
+          info: {
+            id: "tool:call-1",
+            role: "tool",
+            sessionID: "runtime-session-1",
+            time: { created: "2026-03-24T00:00:00.000Z" },
+          },
+          part: {
+            id: "tool-part:call-1",
+            type: "tool",
+            tool: "read_file",
+            callID: "call-1",
+            messageID: "tool:call-1",
+            state: { status: "running" },
+          },
+        },
+      }).success,
+    ).toBe(true);
+
+    const invalid = persistTaskBranchMessageSchema.safeParse({
+      runtimeSessionId: "runtime-session-1",
+      message: {
+        id: "msg-1",
+        foo: "bar",
+      },
+    });
+    expect(invalid.success).toBe(false);
+
+    const emptyParts = persistTaskBranchMessageSchema.safeParse({
+      runtimeSessionId: "runtime-session-1",
+      message: {
+        id: "msg-empty-1",
+        role: "assistant",
+        parts: [],
+      },
+    });
+    expect(emptyParts.success).toBe(false);
+  });
+
   test("upsertTaskBranch forwards only the session node lineage-only whitelist to storage sync", async () => {
+    const { createTaskBranchWriteApi } = await loadTaskBranchWriteModule();
     const syncTaskBranchCompatTreeNode = mock(async () => "task_session:task-1:fork-session-1");
     const upsertConversationSessionRecord = mock(async () => undefined);
     const buildTaskTreeSnapshotFromRecord = mock(
@@ -93,13 +212,14 @@ describe("task branch write", () => {
     );
     expect(buildTaskTreeSnapshotFromRecord).toHaveBeenCalledWith(
       expect.objectContaining({ id: "task-1" }),
-      { sessionId: "fork-session-1" },
+      { status: "running", sessionId: "fork-session-1" },
     );
     expect(upsertTaskTreeNode).toHaveBeenCalledTimes(1);
     expect(syncTaskAggregateFromSnapshot).toHaveBeenCalledTimes(1);
   });
 
   test("activateTaskBranch forwards only the session node lineage-only whitelist to storage sync", async () => {
+    const { createTaskBranchWriteApi } = await loadTaskBranchWriteModule();
     const syncTaskBranchCompatTreeNode = mock(async () => "task_session:task-1:fork-session-1");
     const upsertConversationSessionRecord = mock(async () => undefined);
     const buildTaskTreeSnapshotFromRecord = mock(
@@ -173,13 +293,50 @@ describe("task branch write", () => {
     );
     expect(buildTaskTreeSnapshotFromRecord).toHaveBeenCalledWith(
       expect.objectContaining({ id: "task-1" }),
-      { sessionId: "fork-session-1" },
+      { status: "running", sessionId: "fork-session-1" },
     );
     expect(upsertTaskTreeNode).toHaveBeenCalledTimes(1);
     expect(syncTaskAggregateFromSnapshot).toHaveBeenCalledTimes(1);
   });
 
+  test("upsertTaskBranch treats implicit root session placeholders as a first explicit create", async () => {
+    const { createTaskBranchWriteApi } = await loadTaskBranchWriteModule();
+
+    const api = createTaskBranchWriteApi({
+      loadTaskTreeBackedRecord: mock(async () => createTaskRecord()),
+      resolveTaskBranchCompatRecord: mock(async () => null),
+      resolveTaskBranchCompatRecordByRuntimeSessionId: mock(async () => ({
+        runtimeSessionId: "root-session-1",
+        parentRuntimeSessionId: null,
+        forkedFromMessageId: null,
+        branchName: null,
+        sourceType: "root",
+        isActive: true,
+      })),
+      syncTaskBranchCompatTreeNode: mock(async () => undefined),
+      archiveTaskBranchCompatTreeNode: mock(async () => undefined),
+      upsertConversationSessionRecord: mock(async () => "task-session:task-1:root-session-1"),
+      upsertConversationMessageRecord: mock(async () => ({ seq: 1 })),
+      buildTaskTreeSnapshotFromRecord: mock(
+        (_task: unknown, updates: Record<string, unknown>) => updates as TaskTreeSnapshot,
+      ),
+      upsertTaskTreeNode: mock(async () => undefined),
+      syncTaskAggregateFromSnapshot: mock(async () => undefined),
+    });
+
+    const result = await api.upsertTaskBranch("task-1", {
+      runtimeSessionId: "root-session-1",
+      branchName: "explicit-root",
+      sourceType: "root",
+      isActive: true,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.status).toBe(201);
+  });
+
   test("archiveTaskBranch preserves the session node lineage-only whitelist by avoiding extra storage sync", async () => {
+    const { createTaskBranchWriteApi } = await loadTaskBranchWriteModule();
     const syncTaskBranchCompatTreeNode = mock(async () => "task_session:task-1:fork-session-1");
     const archiveTaskBranchCompatTreeNode = mock(async () => undefined);
     const upsertConversationSessionRecord = mock(async () => undefined);
@@ -256,4 +413,47 @@ describe("task branch write", () => {
     expect(upsertTaskTreeNode).not.toHaveBeenCalled();
     expect(syncTaskAggregateFromSnapshot).not.toHaveBeenCalled();
   });
+
+  test("persistTaskBranchMessage rejects ambiguous writes without a stable message id", async () => {
+    const { createTaskBranchWriteApi } = await loadTaskBranchWriteModule();
+    const syncTaskBranchCompatTreeNode = mock(async () => "task_session:task-1:runtime-session-1");
+    const upsertConversationSessionRecord = mock(async () => undefined);
+    const upsertConversationMessageRecord = mock(async () => ({ seq: 1 }));
+
+    const api = createTaskBranchWriteApi({
+      loadTaskTreeBackedRecord: mock(async () => createTaskRecord()),
+      resolveTaskBranchCompatRecord: mock(async () => null),
+      resolveTaskBranchCompatRecordByRuntimeSessionId: mock(async () => null),
+      syncTaskBranchCompatTreeNode,
+      archiveTaskBranchCompatTreeNode: mock(async () => undefined),
+      upsertConversationSessionRecord,
+      upsertConversationMessageRecord,
+      buildTaskTreeSnapshotFromRecord: mock(
+        (_task: unknown, updates: Record<string, unknown>) => updates as TaskTreeSnapshot,
+      ),
+      upsertTaskTreeNode: mock(async () => undefined),
+      syncTaskAggregateFromSnapshot: mock(async () => undefined),
+    });
+
+    const result = await api.persistTaskBranchMessage("task-1", {
+      runtimeSessionId: "runtime-session-1",
+      message: {
+        info: {
+          role: "assistant",
+          time: { created: "2026-03-24T00:00:00.000Z" },
+        },
+        parts: [{ type: "text", text: "hello" }],
+      },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 400,
+      error: "Task session message write requires stable runtimeMessageId",
+    });
+    expect(syncTaskBranchCompatTreeNode).not.toHaveBeenCalled();
+    expect(upsertConversationSessionRecord).not.toHaveBeenCalled();
+    expect(upsertConversationMessageRecord).not.toHaveBeenCalled();
+  });
+
 });

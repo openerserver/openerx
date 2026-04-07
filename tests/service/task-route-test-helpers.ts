@@ -15,6 +15,10 @@ export function createRouteCollector() {
       routes.set(`POST ${path}`, handlers);
       return this;
     },
+    patch(path: string, ...handlers: Array<unknown>) {
+      routes.set(`PATCH ${path}`, handlers);
+      return this;
+    },
   };
 }
 

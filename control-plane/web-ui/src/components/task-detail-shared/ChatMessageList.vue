@@ -47,7 +47,7 @@
                     <a-flex justify="space-between" align="center" style="margin-bottom: 6px;">
                       <a-space size="small" wrap>
                         <a-tag :color="roleColor(entry.role)" size="small">{{ messageRoleLabel(entry) }}</a-tag>
-                        <a-tag v-if="entry.model && entry.role === 'assistant'" color="geekblue" size="small">{{ entry.model }}</a-tag>
+                        <a-tag v-if="assistantModelLabel(entry)" color="geekblue" size="small">{{ assistantModelLabel(entry) }}</a-tag>
                       </a-space>
                       <a-typography-text v-if="entry.createdAt" type="secondary" class="chat-message-card__time">
                         {{ formatTime(entry.createdAt) }}
@@ -295,7 +295,7 @@
           <a-flex justify="space-between" align="center" class="chat-message-card__header">
             <a-space size="small" wrap>
               <a-tag :color="roleColor(item.role)">{{ messageRoleLabel(item) }}</a-tag>
-              <a-tag v-if="item.model && item.role === 'assistant'" color="geekblue">{{ item.model }}</a-tag>
+              <a-tag v-if="assistantModelLabel(item)" color="geekblue">{{ assistantModelLabel(item) }}</a-tag>
               <a-tag v-if="item.isStreaming" color="processing" class="chat-message-card__streaming-tag">生成中</a-tag>
               <a-typography-text v-if="item.createdAt" type="secondary" class="chat-message-card__time">
                 {{ formatTime(item.createdAt) }}
@@ -404,6 +404,7 @@ const props = defineProps<{
   error: string | null;
   activeSessionId?: string;
   forceScrollToken?: number;
+  defaultAssistantModel?: string;
 }>();
 
 const emit = defineEmits<{
@@ -471,6 +472,20 @@ function messageKicker(item: TaskConversationMessageItem) {
       : item.role === "tool"
         ? "工具输出"
         : roleLabel(item.role);
+}
+
+function assistantModelLabel(item: TaskConversationMessageItem): string | undefined {
+  if (item.role !== "assistant") {
+    return undefined;
+  }
+
+  const explicitModel = item.model?.trim();
+  if (explicitModel) {
+    return explicitModel;
+  }
+
+  const fallbackModel = props.defaultAssistantModel?.trim();
+  return fallbackModel || undefined;
 }
 
 function isParallelComparisonItem(

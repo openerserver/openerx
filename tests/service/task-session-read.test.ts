@@ -36,7 +36,6 @@ async function loadTaskSessionReadModule(args?: {
   workflowRunRows?: unknown[];
   workflowRunRowsByCall?: unknown[][];
   taskStageRunRows?: unknown[];
-  taskMessageEventRows?: unknown[];
   messageRows?: unknown[];
   messageRowsByCall?: unknown[][];
   partRows?: unknown[];
@@ -98,16 +97,6 @@ async function loadTaskSessionReadModule(args?: {
     startedAt: "startedAt",
     finishedAt: "finishedAt",
   };
-  const fakeTaskMessageEvents = {
-    id: "id",
-    taskId: "taskId",
-    sessionId: "sessionId",
-    eventType: "eventType",
-    runtimeMessageId: "runtimeMessageId",
-    payload: "payload",
-    projected: "projected",
-    createdAt: "createdAt",
-  };
   const fakeTaskMessages = {
     id: "id",
     taskId: "taskId",
@@ -146,7 +135,6 @@ async function loadTaskSessionReadModule(args?: {
     if (table === fakeTaskWorkflowRuns) return "task_workflow_runs";
     if (table === fakeTaskStageRuns) return "task_stage_runs";
     if (table === fakeTaskOperations) return "task_operations";
-    if (table === fakeTaskMessageEvents) return "task_message_events";
     if (table === fakeTaskMessages) return "task_messages";
     if (table === fakeTaskMessageParts) return "task_message_parts";
     if (table === fakeTaskSnapshots) return "task_snapshots";
@@ -201,9 +189,6 @@ async function loadTaskSessionReadModule(args?: {
           if (tableName === "task_operations") {
             return args?.sessionOperationRows ?? [];
           }
-          if (tableName === "task_message_events") {
-            return args?.taskMessageEventRows ?? [];
-          }
           if (tableName === "task_messages") {
             if (args?.messageRowsByCall) {
               const rows =
@@ -253,7 +238,6 @@ async function loadTaskSessionReadModule(args?: {
   mock.module("../../control-plane/service/src/db/schema", () => ({
     roleAggregateConclusions: {},
     taskArtifacts: {},
-    taskMessageEvents: fakeTaskMessageEvents,
     taskMessageParts: fakeTaskMessageParts,
     taskMessages: fakeTaskMessages,
     taskOperations: fakeTaskOperations,
@@ -306,39 +290,6 @@ describe("task session read API", () => {
       snapshot: {
         taskId: "task-1",
         currentSessionId: "session-1",
-      },
-    });
-
-    const api = createTaskSessionReadApi({
-      loadTaskTreeBackedRecord: mock(async () => ({ id: "task-1", projectId: "project-1" })),
-    });
-
-    const response = await api.listTaskSessions("task-1");
-
-    expect(response.ok).toBe(true);
-    if (!response.ok) {
-      return;
-    }
-
-    expect(response.data.meta.currentSessionId).toBe(sessionId);
-  });
-
-  test("maps snapshot currentSessionId legacy task_session ids back to canonical task-session ids", async () => {
-    const sessionId = "task-session:task-1:session-1";
-    const { createTaskSessionReadApi } = await loadTaskSessionReadModule({
-      sessionRows: [
-        {
-          id: sessionId,
-          taskId: "task-1",
-          parentSessionId: null,
-          runtimeSessionId: "session-1",
-          coordinationKey: sessionId,
-          createdAt: "2026-03-27T00:00:00.000Z",
-        },
-      ],
-      snapshot: {
-        taskId: "task-1",
-        currentSessionId: "task_session:task-1:session-1",
       },
     });
 
@@ -1527,9 +1478,8 @@ describe("task session read API", () => {
     ]);
   });
 
-  test("buildTaskExecutionTraceResponse canonicalizes legacy timeline aliases while sourcing canonical messages", async () => {
+  test("buildTaskExecutionTraceResponse reads canonical timeline session ids while sourcing canonical messages", async () => {
     const sessionId = "task-session:task-1:session-1";
-    const legacySessionId = "task_session:task-1:session-1";
     const { createTaskSessionReadApi } = await loadTaskSessionReadModule({
       sessionRows: [
         {
@@ -1564,7 +1514,7 @@ describe("task session read API", () => {
           id: "timeline-1",
           taskId: "task-1",
           projectId: "project-1",
-          sessionId: legacySessionId,
+          sessionId,
           messageId: `${sessionId}:msg-1`,
           operationId: null,
           artifactId: null,
@@ -1580,7 +1530,7 @@ describe("task session read API", () => {
       ],
       snapshot: {
         taskId: "task-1",
-        currentSessionId: "task_session:task-1:session-1",
+        currentSessionId: sessionId,
       },
     });
 
@@ -2219,6 +2169,136 @@ describe("task session read API", () => {
     );
   });
 
+  test("buildTaskTreeResponse prefers richer assistant rows when equivalent preview replies are duplicated", async () => {
+    const rootSessionId = "task-session:task-1:root";
+    const promptText = "请回复：页面任务执行正常。";
+    const assistantCreatedAt = "2026-03-27T00:00:01.000Z";
+    const { createTaskSessionReadApi } = await loadTaskSessionReadModule({
+      sessionRows: [
+        {
+          id: rootSessionId,
+          taskId: "task-1",
+          parentSessionId: null,
+          runtimeSessionId: "root",
+          coordinationKey: rootSessionId,
+          createdAt: "2026-03-27T00:00:00.000Z",
+        },
+      ],
+      messageRows: [
+        {
+          id: `${rootSessionId}:msg-user-1`,
+          taskId: "task-1",
+          sessionId: rootSessionId,
+          runtimeMessageId: "runtime-user-1",
+          role: "user",
+          messageIndex: 0,
+          textContent: promptText,
+          summaryText: promptText,
+          rawPayload: {
+            info: {
+              id: "runtime-user-1",
+              role: "user",
+              time: { created: "2026-03-27T00:00:00.000Z" },
+            },
+            text: promptText,
+            parts: [{ type: "text", text: promptText, content: promptText }],
+          },
+          createdAt: "2026-03-27T00:00:00.000Z",
+          updatedAt: "2026-03-27T00:00:00.000Z",
+        },
+        {
+          id: `${rootSessionId}:msg-assistant-preview`,
+          taskId: "task-1",
+          sessionId: rootSessionId,
+          runtimeMessageId: "runtime-assistant-preview",
+          role: "assistant",
+          messageIndex: 1,
+          textContent: "页面任务执行正常。",
+          summaryText: null,
+          rawPayload: {
+            info: {
+              id: "runtime-assistant-preview",
+              role: "assistant",
+              preview: "页面任务执行正常。",
+              time: {
+                created: assistantCreatedAt,
+                completed: assistantCreatedAt,
+              },
+              finish: "stop",
+            },
+            text: "页面任务执行正常。",
+            parts: [{ type: "text", text: "页面任务执行正常。", content: "页面任务执行正常。" }],
+          },
+          createdAt: assistantCreatedAt,
+          completedAt: assistantCreatedAt,
+          updatedAt: assistantCreatedAt,
+        },
+        {
+          id: `${rootSessionId}:msg-assistant-rich`,
+          taskId: "task-1",
+          sessionId: rootSessionId,
+          runtimeMessageId: "runtime-assistant-rich",
+          role: "assistant",
+          messageIndex: 2,
+          textContent: "页面任务执行正常。",
+          summaryText: "页面任务执行正常。",
+          rawPayload: {
+            info: {
+              id: "runtime-assistant-rich",
+              role: "assistant",
+              time: {
+                created: assistantCreatedAt,
+                completed: assistantCreatedAt,
+              },
+              finish: "stop",
+            },
+            parts: [
+              { type: "thinking", text: "**Confirming task execution**" },
+              { type: "text", text: "页面任务执行正常。", content: "页面任务执行正常。" },
+            ],
+          },
+          createdAt: assistantCreatedAt,
+          completedAt: assistantCreatedAt,
+          updatedAt: assistantCreatedAt,
+        },
+      ],
+    });
+
+    const api = createTaskSessionReadApi({
+      loadTaskTreeBackedRecord: mock(async () => ({
+        id: "task-1",
+        projectId: "project-1",
+        title: "Task 1",
+        prompt: promptText,
+        status: "completed",
+        latestResultSummary: null,
+        strategy: null,
+        createdAt: "2026-03-27T00:00:00.000Z",
+        lastActivityAt: assistantCreatedAt,
+      })),
+    });
+
+    const response = await api.buildTaskTreeResponse({
+      taskId: "task-1",
+      includeLineage: true,
+    });
+
+    expect(response.ok).toBe(true);
+    if (!response.ok) {
+      return;
+    }
+
+    const assistantMessages = response.data.messages.filter((message) => message.role === "assistant");
+    expect(assistantMessages).toHaveLength(1);
+    expect(assistantMessages[0]).toEqual(
+      expect.objectContaining({
+        id: `${rootSessionId}:msg-assistant-rich`,
+        textContent: "页面任务执行正常。",
+        summaryText: "页面任务执行正常。",
+      }),
+    );
+  });
+
   test("buildTaskTreeResponse falls back tool message parts into operations when task operations are absent", async () => {
     const rootSessionId = "task-session:task-1:root";
     const assistantMessageId = `${rootSessionId}:msg-1`;
@@ -2400,101 +2480,6 @@ describe("task session read API", () => {
         id: `${sessionId}:msg-1`,
         textContent: "normalized response",
       }),
-    ]);
-  });
-
-  test("buildTaskRawMessageEventViewResponse returns raw event rows enriched with canonical session ids", async () => {
-    const rootSessionId = "task-session:task-1:session-root";
-    const childSessionId = "task-session:task-1:session-child";
-    const { createTaskSessionReadApi } = await loadTaskSessionReadModule({
-      sessionRows: [
-        {
-          id: rootSessionId,
-          taskId: "task-1",
-          parentSessionId: null,
-          runtimeSessionId: "session-root",
-          coordinationKey: rootSessionId,
-          createdAt: "2026-03-27T00:00:00.000Z",
-        },
-        {
-          id: childSessionId,
-          taskId: "task-1",
-          parentSessionId: rootSessionId,
-          runtimeSessionId: "session-child",
-          coordinationKey: rootSessionId,
-          createdAt: "2026-03-27T00:00:02.000Z",
-        },
-      ],
-      taskMessageEventRows: [
-        {
-          id: 1,
-          taskId: "task-1",
-          sessionId: "session-root",
-          eventType: "message.updated",
-          runtimeMessageId: "runtime-root-1",
-          payload: { info: { id: "runtime-root-1" } },
-          projected: true,
-          createdAt: "2026-03-27T00:00:01.000Z",
-        },
-        {
-          id: 2,
-          taskId: "task-1",
-          sessionId: "session-child",
-          eventType: "message.part.updated",
-          runtimeMessageId: "runtime-child-1",
-          payload: { info: { id: "runtime-child-1" }, part: { type: "text" } },
-          projected: false,
-          createdAt: "2026-03-27T00:00:03.000Z",
-        },
-      ],
-    });
-
-    const api = createTaskSessionReadApi({
-      loadTaskTreeBackedRecord: mock(async () => ({ id: "task-1", projectId: "project-1" })),
-    });
-
-    const response = await api.buildTaskRawMessageEventViewResponse("task-1");
-
-    expect(response.ok).toBe(true);
-    if (!response.ok) {
-      return;
-    }
-
-    expect(response.data.meta).toEqual({
-      readSource: "task-event-log",
-      viewType: "raw-message-events",
-      querySurface: "service-direct",
-      debugOnly: true,
-      deprecated: true,
-      taskId: "task-1",
-      eventCount: 2,
-      projectedCount: 1,
-      unprojectedCount: 1,
-      sessionCount: 2,
-    });
-    expect(response.data.data).toEqual([
-      {
-        id: 1,
-        taskId: "task-1",
-        runtimeSessionId: "session-root",
-        canonicalSessionId: rootSessionId,
-        eventType: "message.updated",
-        runtimeMessageId: "runtime-root-1",
-        payload: { info: { id: "runtime-root-1" } },
-        projected: true,
-        createdAt: "2026-03-27T00:00:01.000Z",
-      },
-      {
-        id: 2,
-        taskId: "task-1",
-        runtimeSessionId: "session-child",
-        canonicalSessionId: childSessionId,
-        eventType: "message.part.updated",
-        runtimeMessageId: "runtime-child-1",
-        payload: { info: { id: "runtime-child-1" }, part: { type: "text" } },
-        projected: false,
-        createdAt: "2026-03-27T00:00:03.000Z",
-      },
     ]);
   });
 

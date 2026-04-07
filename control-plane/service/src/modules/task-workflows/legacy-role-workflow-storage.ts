@@ -43,14 +43,14 @@ function resolveLegacyTaskIdentityFields(row: typeof taskAggregates.$inferSelect
     userId: row.createdByUserId ?? null,
     title: row.title,
     prompt: row.prompt,
-    status: row.status as TaskTreeRecord["status"],
-    sessionId: row.currentSessionId ?? null,
-    agentRunId: row.currentAgentRunId ?? null,
-    result: row.latestResult ?? null,
+    status: (row.lifecycleStatus === "done" ? "completed" : row.lifecycleStatus === "active" ? "running" : "pending") as TaskTreeRecord["status"],
+    sessionId: null,
+    agentRunId: null,
+    result: null,
     category: resolveLegacyTaskCategory(row),
     createdAt: row.createdAt,
-    startedAt: row.startedAt ?? null,
-    finishedAt: row.finishedAt ?? null,
+    startedAt: row.activatedAt ?? null,
+    finishedAt: row.doneAt ?? null,
   };
 }
 
@@ -60,7 +60,7 @@ function resolveLegacyTaskRepositoryFields(row: typeof taskAggregates.$inferSele
     workspaceRoot: row.workspaceRoot ?? null,
     baseRevision: row.baseRevision ?? null,
     workingBranch: row.workingBranch ?? null,
-    selectedModel: row.selectedModel ?? null,
+    selectedModel: row.preferredModel ?? null,
     credentialId: row.credentialId ?? null,
     gitAuthorName: row.gitAuthorName ?? null,
     gitAuthorEmail: row.gitAuthorEmail ?? null,
@@ -68,10 +68,7 @@ function resolveLegacyTaskRepositoryFields(row: typeof taskAggregates.$inferSele
     gitCommitterEmail: row.gitCommitterEmail ?? null,
     finalCommitSha: row.finalCommitSha ?? null,
     finalBranchName: row.finalBranchName ?? null,
-    changesSummary:
-      row.changesSummaryJson && typeof row.changesSummaryJson === "object"
-        ? row.changesSummaryJson
-        : null,
+    changesSummary: null,
   };
 }
 
@@ -82,13 +79,13 @@ function resolveLegacyTaskRunFields(row: typeof taskAggregates.$inferSelect, str
     autoAdvanceStages:
       typeof strategy.autoAdvanceStages === "boolean" ? strategy.autoAdvanceStages : false,
     orchestrationKind: null,
-    currentRunId: row.currentRunId ?? null,
+    currentRunId: null,
     currentRunStatus: null,
     currentRunStartedAt: null,
     currentRunFinishedAt: null,
     currentRunCandidateCount: null,
     currentRunPipelineStepCount: null,
-    latestResultSummary: row.latestResultSummary ?? null,
+    latestResultSummary: null,
     latestErrorText: null,
     activeCandidateCount: 0,
     completedCandidateCount: 0,

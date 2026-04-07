@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ensureAgentRunForSession, updateAgentRunStatus } from "./agent-run-registry";
 import {
@@ -56,6 +56,9 @@ type PiMonoRuntimeHandle = {
   stopRequested?: boolean;
   disposed?: boolean;
   recovering?: Promise<void>;
+  assistantMessageIdAliases: Map<string, string>;
+  approvedExternalDirectories: Set<string>;
+  approvedCommands: Set<string>;
 };
 
 type PiMonoPendingPermission = RuntimePermissionRequest & {
@@ -66,6 +69,21 @@ type PiMonoPendingPermission = RuntimePermissionRequest & {
   prefill?: string;
   timeout?: number;
   title?: string;
+};
+
+type OpenerXPiMonoGovernancePermissionPayload = {
+  permission?: string;
+  filepath?: string;
+  parentDir?: string;
+  patterns?: string[];
+  command?: string;
+  toolName?: string;
+  toolCallId?: string;
+};
+
+type PiMonoRpcLocation = {
+  cwd: string;
+  cliPath: string;
 };
 
 const piMonoRuntimeHandles = new Map<string, PiMonoRuntimeHandle>();
@@ -86,23 +104,141 @@ let sseAggregatorModulePromise:
   | undefined;
 
 const DEFAULT_PI_MONO_PAUSE_SETTLEMENT_TIMEOUT_MS = 5_000;
-const DEFAULT_PI_MONO_RPC_COMMAND = "npm";
-const DEFAULT_PI_MONO_RPC_ARGS = ["exec", "tsx", "src/cli.ts", "--", "--mode", "rpc"];
-const DEFAULT_PI_MONO_RPC_CWD_CANDIDATES = Array.from(
+const DEFAULT_PI_MONO_RPC_COMMAND = "bun";
+const DEFAULT_PI_MONO_RPC_LOCATION_CANDIDATES: PiMonoRpcLocation[] = [
+  {
+    cwd: fileURLToPath(new URL("../../../../../pi-mono/", import.meta.url)),
+    cliPath: "packages/coding-agent/src/cli.ts",
+  },
+  {
+    cwd: resolve(process.cwd(), "pi-mono"),
+    cliPath: "packages/coding-agent/src/cli.ts",
+  },
+  {
+    cwd: resolve(process.cwd(), "../../pi-mono"),
+    cliPath: "packages/coding-agent/src/cli.ts",
+  },
+  {
+    cwd: fileURLToPath(new URL("../../../../../pi-mono/packages/coding-agent/", import.meta.url)),
+    cliPath: "src/cli.ts",
+  },
+  {
+    cwd: resolve(process.cwd(), "pi-mono/packages/coding-agent"),
+    cliPath: "src/cli.ts",
+  },
+  {
+    cwd: resolve(process.cwd(), "../../pi-mono/packages/coding-agent"),
+    cliPath: "src/cli.ts",
+  },
+].filter(
+  (candidate, index, candidates) =>
+    candidates.findIndex(
+      (entry) => resolve(entry.cwd) === resolve(candidate.cwd) && entry.cliPath === candidate.cliPath,
+    ) === index,
+);
+const OPENERX_PI_MONO_PERMISSION_PREFIX = "openerx-permission:";
+const DEFAULT_PI_MONO_GOVERNANCE_EXTENSION_CANDIDATES = Array.from(
   new Set([
-    fileURLToPath(
-      new URL("../../../../../pi-mono/packages/coding-agent/", import.meta.url),
-    ),
-    resolve(process.cwd(), "pi-mono/packages/coding-agent"),
-    resolve(process.cwd(), "../../pi-mono/packages/coding-agent"),
+    fileURLToPath(new URL("./pimono-governance-extension.ts", import.meta.url)),
+    fileURLToPath(new URL("./pimono-governance-extension.js", import.meta.url)),
+  ]),
+);
+const DEFAULT_PI_MONO_ALLOWED_ROOTS = Array.from(
+  new Set([
+    fileURLToPath(new URL("../../../../../", import.meta.url)),
+    process.cwd(),
   ]),
 );
 
-function readDefaultPiMonoRpcCwd() {
+function readDefaultPiMonoRpcLocation(): PiMonoRpcLocation {
   return (
-    DEFAULT_PI_MONO_RPC_CWD_CANDIDATES.find((candidate) =>
-      existsSync(resolve(candidate, "src/cli.ts")),
-    ) || DEFAULT_PI_MONO_RPC_CWD_CANDIDATES[0]
+    DEFAULT_PI_MONO_RPC_LOCATION_CANDIDATES.find((candidate) =>
+      existsSync(resolve(candidate.cwd, candidate.cliPath)),
+    ) || DEFAULT_PI_MONO_RPC_LOCATION_CANDIDATES[0]!
+  );
+}
+
+function readDefaultPiMonoCliPath(cwd: string) {
+  const normalizedCwd = resolve(cwd);
+  const matchedCandidate = DEFAULT_PI_MONO_RPC_LOCATION_CANDIDATES.find(
+    (candidate) =>
+      resolve(candidate.cwd) === normalizedCwd && existsSync(resolve(candidate.cwd, candidate.cliPath)),
+  );
+
+  if (matchedCandidate) {
+    return matchedCandidate.cliPath;
+  }
+
+  const rootRelativeCliPath = "packages/coding-agent/src/cli.ts";
+  if (existsSync(resolve(normalizedCwd, rootRelativeCliPath))) {
+    return rootRelativeCliPath;
+  }
+
+  const packageRelativeCliPath = "src/cli.ts";
+  if (existsSync(resolve(normalizedCwd, packageRelativeCliPath))) {
+    return packageRelativeCliPath;
+  }
+
+  return readDefaultPiMonoRpcLocation().cliPath;
+}
+
+function buildDefaultPiMonoRpcArgs(cwd: string) {
+  return ["run", "--bun", readDefaultPiMonoCliPath(cwd), "--mode", "rpc"];
+}
+
+function readDefaultPiMonoGovernanceExtensionPath() {
+  return DEFAULT_PI_MONO_GOVERNANCE_EXTENSION_CANDIDATES.find((candidate) =>
+    existsSync(candidate),
+  );
+}
+
+function parsePiMonoStringArray(raw: string | undefined) {
+  const value = raw?.trim();
+  if (!value) {
+    return [] as string[];
+  }
+
+  if (value.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed) && parsed.every((entry) => typeof entry === "string")) {
+        return parsed.map((entry) => entry.trim()).filter(Boolean);
+      }
+    } catch {
+      // Fall back to newline splitting below.
+    }
+  }
+
+  return value
+    .split(/\r?\n/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function normalizePiMonoCliArgs(args: string[], extensionPath: string | undefined) {
+  const normalized = [...args];
+  if (!extensionPath) {
+    return normalized;
+  }
+
+  for (let index = 0; index < normalized.length; index += 1) {
+    const value = normalized[index];
+    if ((value === "--extension" || value === "-e") && normalized[index + 1] === extensionPath) {
+      return normalized;
+    }
+  }
+
+  normalized.push("--extension", extensionPath);
+  return normalized;
+}
+
+function readPiMonoAllowedRoots(rpcCwd: string) {
+  return Array.from(
+    new Set(
+      [...DEFAULT_PI_MONO_ALLOWED_ROOTS, rpcCwd, ...parsePiMonoStringArray(process.env.OPENERX_PI_MONO_ALLOWED_ROOTS)].map(
+        (entry) => resolve(entry),
+      ),
+    ),
   );
 }
 
@@ -141,11 +277,20 @@ function parsePiMonoArgs(raw: string | undefined): string[] {
 }
 
 function readPiMonoRpcConfig(): PiMonoRpcConfig {
+  const defaultLocation = readDefaultPiMonoRpcLocation();
+  const cwd = resolve(process.env.PI_MONO_RPC_CWD?.trim() || defaultLocation.cwd || ".");
   const parsedArgs = parsePiMonoArgs(process.env.PI_MONO_RPC_ARGS);
+  const extensionPath = readDefaultPiMonoGovernanceExtensionPath();
   return {
     command: process.env.PI_MONO_RPC_COMMAND?.trim() || DEFAULT_PI_MONO_RPC_COMMAND,
-    args: parsedArgs.length > 0 ? parsedArgs : [...DEFAULT_PI_MONO_RPC_ARGS],
-    cwd: process.env.PI_MONO_RPC_CWD?.trim() || readDefaultPiMonoRpcCwd(),
+    args: normalizePiMonoCliArgs(
+      parsedArgs.length > 0 ? parsedArgs : buildDefaultPiMonoRpcArgs(cwd),
+      extensionPath,
+    ),
+    cwd,
+    env: {
+      OPENERX_PI_MONO_ALLOWED_ROOTS: JSON.stringify(readPiMonoAllowedRoots(cwd)),
+    },
   };
 }
 
@@ -255,6 +400,72 @@ function readPiMonoUiRequestTimeout(request: PiMonoRpcExtensionUiRequest) {
   }
 }
 
+function parseOpenerXPiMonoGovernancePermissionPayload(message: string | undefined) {
+  if (!message?.startsWith(OPENERX_PI_MONO_PERMISSION_PREFIX)) {
+    return null;
+  }
+
+  try {
+    const payload = JSON.parse(message.slice(OPENERX_PI_MONO_PERMISSION_PREFIX.length));
+    if (!payload || typeof payload !== "object") {
+      return null;
+    }
+
+    const record = payload as Record<string, unknown>;
+    return {
+      permission: typeof record.permission === "string" ? record.permission.trim() : undefined,
+      filepath: typeof record.filepath === "string" ? record.filepath.trim() : undefined,
+      parentDir: typeof record.parentDir === "string" ? record.parentDir.trim() : undefined,
+      patterns: Array.isArray(record.patterns)
+        ? record.patterns.filter(
+            (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
+          )
+        : undefined,
+      command: typeof record.command === "string" ? record.command.trim() : undefined,
+      toolName: typeof record.toolName === "string" ? record.toolName.trim() : undefined,
+      toolCallId: typeof record.toolCallId === "string" ? record.toolCallId.trim() : undefined,
+    } satisfies OpenerXPiMonoGovernancePermissionPayload;
+  } catch {
+    return null;
+  }
+}
+
+function normalizePiMonoApprovalDirectory(input: string | undefined) {
+  if (!input?.trim()) {
+    return undefined;
+  }
+  return resolve(input.trim());
+}
+
+function normalizePiMonoApprovedCommand(input: string | undefined) {
+  const value = input?.trim();
+  return value ? value : undefined;
+}
+
+function isWithinPiMonoApprovedDirectory(pathname: string, approvedDirectory: string) {
+  return pathname === approvedDirectory || pathname.startsWith(`${approvedDirectory}${sep}`);
+}
+
+function readPiMonoPermissionMetadata(
+  request: PiMonoRpcExtensionUiRequest,
+  payload: OpenerXPiMonoGovernancePermissionPayload | null,
+) {
+  return {
+    source: "pi-mono-extension-ui",
+    method: request.method,
+    title: "title" in request ? request.title : undefined,
+    message: payload ? undefined : readPiMonoUiRequestMessage(request),
+    options: readPiMonoUiRequestOptions(request),
+    prefill: readPiMonoUiRequestPrefill(request),
+    permission: payload?.permission,
+    filepath: payload?.filepath,
+    parentDir: payload?.parentDir,
+    command: payload?.command,
+    toolName: payload?.toolName,
+    toolCallId: payload?.toolCallId,
+  } satisfies Record<string, unknown>;
+}
+
 function isPiMonoPermissionMethod(
   method: PiMonoRpcExtensionUiRequest["method"],
 ): method is PiMonoPermissionMethod {
@@ -286,19 +497,16 @@ function registerPiMonoPermissionRequest(
     return null;
   }
 
+  const governancePayload = parseOpenerXPiMonoGovernancePermissionPayload(
+    readPiMonoUiRequestMessage(request),
+  );
+
   const pendingRequest: PiMonoPendingPermission = {
     id: request.id,
     sessionID: handle.sessionId,
-    permission: buildPiMonoPermissionName(request.method),
-    patterns: readPiMonoUiRequestOptions(request) ?? [],
-    metadata: {
-      source: "pi-mono-extension-ui",
-      method: request.method,
-      title: "title" in request ? request.title : undefined,
-      message: readPiMonoUiRequestMessage(request),
-      options: readPiMonoUiRequestOptions(request),
-      prefill: readPiMonoUiRequestPrefill(request),
-    },
+    permission: governancePayload?.permission || buildPiMonoPermissionName(request.method),
+    patterns: governancePayload?.patterns ?? readPiMonoUiRequestOptions(request) ?? [],
+    metadata: readPiMonoPermissionMetadata(request, governancePayload),
     always: [],
     createdAt: new Date().toISOString(),
     method: request.method,
@@ -315,6 +523,54 @@ function registerPiMonoPermissionRequest(
     request: pendingRequest,
   });
   return pendingRequest;
+}
+
+async function maybeAutoApprovePiMonoPermissionRequest(
+  handle: PiMonoRuntimeHandle,
+  request: PiMonoPendingPermission,
+) {
+  const metadata =
+    request.metadata && typeof request.metadata === "object"
+      ? (request.metadata as Record<string, unknown>)
+      : undefined;
+
+  if (request.permission === "external_directory") {
+    const filepath = normalizePiMonoApprovalDirectory(
+      typeof metadata?.filepath === "string" ? metadata.filepath : undefined,
+    );
+    const parentDir =
+      normalizePiMonoApprovalDirectory(
+        typeof metadata?.parentDir === "string" ? metadata.parentDir : undefined,
+      ) ?? (filepath ? dirname(filepath) : undefined);
+
+    if (
+      parentDir &&
+      Array.from(handle.approvedExternalDirectories).some((approvedDirectory) =>
+        isWithinPiMonoApprovedDirectory(parentDir, approvedDirectory),
+      )
+    ) {
+      await handle.client.respondToExtensionUiRequest(
+        buildPiMonoPermissionResponse(request, { reply: "once" }),
+      );
+      piMonoRuntimePermissions.delete(request.id);
+      return true;
+    }
+  }
+
+  if (request.permission === "command_execution") {
+    const command = normalizePiMonoApprovedCommand(
+      typeof metadata?.command === "string" ? metadata.command : undefined,
+    );
+    if (command && handle.approvedCommands.has(command)) {
+      await handle.client.respondToExtensionUiRequest(
+        buildPiMonoPermissionResponse(request, { reply: "once" }),
+      );
+      piMonoRuntimePermissions.delete(request.id);
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function buildPiMonoPermissionStatusInfo(
@@ -393,38 +649,46 @@ function handlePiMonoClientExit(handle: PiMonoRuntimeHandle, reason: string) {
     return;
   }
 
-  handle.lastError = reason;
-  clearPiMonoPermissionsForHandle(handle);
+  // Serialize through event chain so pending agent_end events process first
+  handle.eventChain = handle.eventChain.then(async () => {
+    handle.lastError = reason;
+    clearPiMonoPermissionsForHandle(handle);
 
-  if (handle.stopRequested) {
-    handle.status = "stopped";
-    return;
-  }
+    if (handle.stopRequested) {
+      handle.status = "stopped";
+      return;
+    }
 
-  if (handle.pauseRequested) {
-    handle.status = "paused";
-    return;
-  }
+    if (handle.pauseRequested) {
+      handle.status = "paused";
+      return;
+    }
 
-  if (handle.status === "running") {
-    handle.status = "paused";
-    updateAgentRunStatus(handle.agentRunId, "paused");
-    void emitPiMonoSessionStatus(handle, "paused", {
-      info: {
-        metadata: {
-          message: reason,
-          reason: "runtime-process-exit",
-          source: "pi-mono-runtime",
+    // If agent_end already moved status to idle/completed/failed, do not override
+    if (handle.status === "idle" || handle.status === "failed") {
+      return;
+    }
+
+    if (handle.status === "running") {
+      handle.status = "paused";
+      updateAgentRunStatus(handle.agentRunId, "paused");
+      await emitPiMonoSessionStatus(handle, "paused", {
+        info: {
+          metadata: {
+            message: reason,
+            reason: "runtime-process-exit",
+            source: "pi-mono-runtime",
+          },
+          type: "paused",
         },
-        type: "paused",
-      },
-    });
-    return;
-  }
+      });
+      return;
+    }
 
-  if (handle.status !== "paused") {
-    handle.status = "idle";
-  }
+    if (handle.status !== "paused") {
+      handle.status = "idle";
+    }
+  });
 }
 
 function bindPiMonoClient(handle: PiMonoRuntimeHandle, client: PiMonoRpcClient) {
@@ -576,11 +840,56 @@ function getPiMonoNormalizedMessageId(sessionId: string, message: unknown, index
   return `${sessionId}:${role}:${index}`;
 }
 
+function resolvePiMonoCanonicalAssistantMessageId(args: {
+  sessionId: string;
+  responseId?: string;
+  timestamp?: number;
+  assistantMessageIdAliases?: Map<string, string>;
+}) {
+  const timestampId =
+    typeof args.timestamp === "number"
+      ? `${args.sessionId}:assistant:${args.timestamp}`
+      : undefined;
+  const responseIdKey = args.responseId
+    ? `${args.sessionId}:assistant:${args.responseId}`
+    : undefined;
+  const aliases = args.assistantMessageIdAliases;
+
+  if (!aliases) {
+    return timestampId ?? responseIdKey;
+  }
+
+  const canonicalId =
+    (timestampId ? aliases.get(timestampId) : undefined) ??
+    (responseIdKey ? aliases.get(responseIdKey) : undefined) ??
+    timestampId ??
+    responseIdKey;
+
+  if (!canonicalId) {
+    return undefined;
+  }
+
+  if (timestampId) {
+    aliases.set(timestampId, canonicalId);
+  }
+  if (responseIdKey) {
+    aliases.set(responseIdKey, canonicalId);
+  }
+
+  return canonicalId;
+}
+
 function normalizePiMonoMessage(
   sessionId: string,
   message: unknown,
   index: number,
-  messageId = getPiMonoNormalizedMessageId(sessionId, message, index),
+  assistantMessageIdAliases?: Map<string, string>,
+  messageId = getPiMonoNormalizedMessageIdWithAliases(
+    sessionId,
+    message,
+    index,
+    assistantMessageIdAliases,
+  ),
   relatedAssistantMessageId?: string,
 ) {
   if (!message || typeof message !== "object") {
@@ -648,9 +957,54 @@ function normalizePiMonoMessage(
   };
 }
 
-function normalizePiMonoMessages(sessionId: string, messages: unknown[]) {
+function getPiMonoNormalizedMessageIdWithAliases(
+  sessionId: string,
+  message: unknown,
+  index: number,
+  assistantMessageIdAliases?: Map<string, string>,
+) {
+  if (!message || typeof message !== "object") {
+    return `${sessionId}:message:${index}`;
+  }
+
+  const record = message as Record<string, unknown>;
+  const role = typeof record.role === "string" ? record.role : "unknown";
+  const responseId =
+    typeof record.responseId === "string" && record.responseId.trim().length > 0
+      ? record.responseId.trim()
+      : undefined;
+  const timestamp =
+    typeof record.timestamp === "number" && Number.isFinite(record.timestamp)
+      ? record.timestamp
+      : undefined;
+
+  if (role === "assistant") {
+    const assistantMessageId = resolvePiMonoCanonicalAssistantMessageId({
+      sessionId,
+      responseId,
+      timestamp,
+      assistantMessageIdAliases,
+    });
+    if (assistantMessageId) {
+      return assistantMessageId;
+    }
+  }
+
+  return getPiMonoNormalizedMessageId(sessionId, message, index);
+}
+
+function normalizePiMonoMessages(
+  sessionId: string,
+  messages: unknown[],
+  assistantMessageIdAliases?: Map<string, string>,
+) {
   const messageIds = messages.map((message, index) =>
-    getPiMonoNormalizedMessageId(sessionId, message, index),
+    getPiMonoNormalizedMessageIdWithAliases(
+      sessionId,
+      message,
+      index,
+      assistantMessageIdAliases,
+    ),
   );
   let previousAssistantMessageId: string | undefined;
 
@@ -660,6 +1014,7 @@ function normalizePiMonoMessages(sessionId: string, messages: unknown[]) {
         sessionId,
         message,
         index,
+        assistantMessageIdAliases,
         messageIds[index],
         previousAssistantMessageId,
       );
@@ -792,14 +1147,24 @@ async function loadLatestPiMonoNormalizedMessage(
       continue;
     }
 
-    return normalizePiMonoMessage(handle.sessionId, message, index);
+    return normalizePiMonoMessage(
+      handle.sessionId,
+      message,
+      index,
+      handle.assistantMessageIdAliases,
+    );
   }
 
   return null;
 }
 
 function buildPiMonoRealtimeMessageSnapshot(handle: PiMonoRuntimeHandle, message: unknown) {
-  return normalizePiMonoMessage(handle.sessionId, message, -1);
+  return normalizePiMonoMessage(
+    handle.sessionId,
+    message,
+    -1,
+    handle.assistantMessageIdAliases,
+  );
 }
 
 function queuePiMonoRealtimeBridge(handle: PiMonoRuntimeHandle, event: PiMonoRpcEvent) {
@@ -832,6 +1197,10 @@ function queuePiMonoRealtimeBridge(handle: PiMonoRuntimeHandle, event: PiMonoRpc
 
           const permission = registerPiMonoPermissionRequest(handle, event);
           if (!permission) {
+            return;
+          }
+
+          if (await maybeAutoApprovePiMonoPermissionRequest(handle, permission)) {
             return;
           }
 
@@ -948,7 +1317,7 @@ function queuePiMonoRealtimeBridge(handle: PiMonoRuntimeHandle, event: PiMonoRpc
             return;
           }
 
-          if (handle.pauseRequested || handle.status === "paused") {
+          if (handle.pauseRequested) {
             handle.pauseRequested = false;
             handle.status = "paused";
             await emitPiMonoSessionStatus(handle, "paused", {
@@ -1074,6 +1443,9 @@ async function createPiMonoRuntimeHandle(args: {
       status: state.isStreaming ? "running" : "idle",
       pendingGuidance: [],
       cachedMessages: [],
+      assistantMessageIdAliases: new Map<string, string>(),
+      approvedExternalDirectories: new Set<string>(),
+      approvedCommands: new Set<string>(),
     };
     bindPiMonoClient(handle, client);
     registerPiMonoHandle(handle);
@@ -1125,6 +1497,9 @@ async function createPiMonoForkRuntimeHandle(parent: PiMonoRuntimeHandle, title?
       status: state.isStreaming ? "running" : "idle",
       pendingGuidance: [],
       cachedMessages: [],
+      assistantMessageIdAliases: new Map<string, string>(),
+      approvedExternalDirectories: new Set(parent.approvedExternalDirectories),
+      approvedCommands: new Set(parent.approvedCommands),
     };
     bindPiMonoClient(handle, client);
     registerPiMonoHandle(handle);
@@ -1238,7 +1613,7 @@ async function getPiMonoSessionMessages(
 ) {
   const handle = await ensurePiMonoHandle(sessionId, { action: "load session messages" });
   const messages = await readPiMonoMessages(handle);
-  return normalizePiMonoMessages(handle.sessionId, messages);
+  return normalizePiMonoMessages(handle.sessionId, messages, handle.assistantMessageIdAliases);
 }
 
 function queuePiMonoGuidance(
@@ -1322,6 +1697,44 @@ function buildPiMonoPermissionResponse(
         id: request.id,
         value,
       };
+    }
+  }
+}
+
+function rememberPiMonoApprovedPermission(
+  handle: PiMonoRuntimeHandle,
+  request: PiMonoPendingPermission,
+  reply: RuntimePermissionReply,
+) {
+  if (reply !== "always") {
+    return;
+  }
+
+  const metadata =
+    request.metadata && typeof request.metadata === "object"
+      ? (request.metadata as Record<string, unknown>)
+      : undefined;
+
+  if (request.permission === "external_directory") {
+    const filepath = normalizePiMonoApprovalDirectory(
+      typeof metadata?.filepath === "string" ? metadata.filepath : undefined,
+    );
+    const parentDir =
+      normalizePiMonoApprovalDirectory(
+        typeof metadata?.parentDir === "string" ? metadata.parentDir : undefined,
+      ) ?? (filepath ? dirname(filepath) : undefined);
+    if (parentDir) {
+      handle.approvedExternalDirectories.add(parentDir);
+    }
+    return;
+  }
+
+  if (request.permission === "command_execution") {
+    const command = normalizePiMonoApprovedCommand(
+      typeof metadata?.command === "string" ? metadata.command : undefined,
+    );
+    if (command) {
+      handle.approvedCommands.add(command);
     }
   }
 }
@@ -1590,6 +2003,7 @@ export const piMonoRuntimeProvider: RuntimeProvider = {
         pending.handle,
         "reply to runtime permission",
       );
+      rememberPiMonoApprovedPermission(handle, pending.request, input.reply);
       const response = buildPiMonoPermissionResponse(pending.request, input);
       await handle.client.respondToExtensionUiRequest(response);
       piMonoRuntimePermissions.delete(requestId);
@@ -1684,4 +2098,8 @@ export async function __shutdownPiMonoRuntimeForTests() {
     await disposePiMonoHandle(handle);
   }
   piMonoRuntimePermissions.clear();
+}
+
+export function __readPiMonoRpcConfigForTests() {
+  return readPiMonoRpcConfig();
 }

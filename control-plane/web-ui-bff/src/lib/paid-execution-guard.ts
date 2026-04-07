@@ -1,5 +1,5 @@
 import { type UpstreamResponse, cpFetch } from "./control-plane-client";
-import { formatModelRoute, resolveModelRoute } from "./opencode-config";
+import { formatModelRoute, resolveModelRoute } from "./model-config";
 
 export type GuardDecision = "allow" | "allow-with-downgrade" | "require-approval" | "deny";
 export type ModelCostTier = "free" | "low" | "medium" | "high" | "premium";

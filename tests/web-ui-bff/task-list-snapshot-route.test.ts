@@ -1,10 +1,7 @@
 /// <reference types="bun-types" />
 
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import {
-  createOpencodeAdapterModuleMock,
-  createRuntimeProviderModuleMock,
-} from "./opencode-adapter-mock";
+import { createRuntimeProviderModuleMock } from "./runtime-provider-mock";
 import { createSseAggregatorModuleMock } from "./sse-aggregator-mock";
 
 mock.restore();
@@ -25,7 +22,7 @@ mock.module("../../control-plane/web-ui-bff/src/lib/intent-classifier", () => ({
   classifyIntent: mock(() => ({ category: "implementation" })),
 }));
 
-mock.module("../../control-plane/web-ui-bff/src/lib/opencode-config", () => ({
+mock.module("../../control-plane/web-ui-bff/src/lib/model-config", () => ({
   diagnoseModelReadiness: mock(() => ({ ready: true })),
   formatModelRoute: mock(() => "github-copilot:gpt-5.4"),
   readDefaultExecutionModel: mock(() => "github-copilot:gpt-5.4"),
@@ -48,7 +45,7 @@ mock.module("../../control-plane/web-ui-bff/src/lib/orchestration-strategy", () 
   resolveWorkflowTemplate: mock(() => null),
 }));
 
-const opencodeAdapterModule = createOpencodeAdapterModuleMock({
+const runtimeProviderModule = createRuntimeProviderModuleMock({
   continueSession: mock(async () => ({ ok: true })),
   createSession: mock(async () => ({ ok: true, sessionId: "session-1", agentRunId: "run-1" })),
   ensureAgentRunForSession: mock(() => "run-1"),
@@ -76,13 +73,8 @@ const opencodeAdapterModule = createOpencodeAdapterModuleMock({
   updateAgentRunStatus: mock(() => undefined),
 });
 
-mock.module(
-  "../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter",
-  () => opencodeAdapterModule,
-);
-
 mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/runtime-provider", () =>
-  createRuntimeProviderModuleMock(opencodeAdapterModule),
+  runtimeProviderModule,
 );
 
 mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/run-persistence", () => ({
@@ -114,6 +106,12 @@ mock.module("../../control-plane/web-ui-bff/src/modules/realtime/ws-broadcaster"
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/modules/tasks/reconcile", () => ({
+  repairTaskMessagesFromRuntime: mock(async () => ({
+    repaired: false,
+    totalMessages: 0,
+    userMessages: 0,
+    assistantMessages: 0,
+  })),
   reconcileRunningTasksOnStartup: mock(async () => ({
     scanned: 0,
     completed: 0,

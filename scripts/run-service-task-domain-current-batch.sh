@@ -16,8 +16,8 @@ files=(
   "tests/service/project-tree-storage.test.ts"
   "tests/service/role-workflow-storage.test.ts"
   "tests/service/task-aggregate-sync.test.ts"
+  "tests/service/task-branch-write.test.ts"
   "tests/service/task-conversation-session-sync.test.ts"
-  "tests/service/task-message-projector.test.ts"
   "tests/service/task-operating-runtime-tree.test.ts"
   "tests/service/task-projection-read.test.ts"
   "tests/service/task-projection-routes.test.ts"
@@ -29,6 +29,7 @@ files=(
   "tests/service/task-session-message-runtime-sync.test.ts"
   "tests/service/task-session-message-write-api.test.ts"
   "tests/service/task-session-read.test.ts"
+  "tests/service/task-snapshot-read.test.ts"
   "tests/service/tree-task-aggregations.test.ts"
 )
 

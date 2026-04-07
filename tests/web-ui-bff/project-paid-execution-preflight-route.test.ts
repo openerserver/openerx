@@ -49,7 +49,7 @@ mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () =>
   }),
 );
 
-mock.module("../../control-plane/web-ui-bff/src/lib/opencode-config", () => ({
+mock.module("../../control-plane/web-ui-bff/src/lib/model-config", () => ({
   diagnoseModelReadiness: mock(async () => undefined),
   formatModelRoute: formatModelRouteMock,
   readDefaultExecutionModel: readDefaultExecutionModelMock,

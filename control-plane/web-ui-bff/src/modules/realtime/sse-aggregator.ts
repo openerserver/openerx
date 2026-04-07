@@ -1,5 +1,5 @@
 import { cpFetch, createInternalAuthorization } from "../../lib/control-plane-client";
-import { formatModelRoute, resolveModelRoute } from "../../lib/opencode-config";
+import { formatModelRoute, resolveModelRoute } from "../../lib/model-config";
 import {
   type ExecutionCandidate,
   type ExecutionStep,
@@ -37,23 +37,15 @@ import { finalizeTaskState } from "../tasks/finalize";
 import {
   persistTaskSessionMessageSnapshot,
   upsertTaskSessionLineageRecord,
-} from "../tasks/task-session-compat";
+} from "../tasks/task-session-store";
 import { observeGraphWorkspaceDir, onGraphToolExecuted } from "./dag-sync";
 import { buildPipelineStageUpdatedEvents } from "./pipeline-events";
 
-// Subscribes to OpenCode Runtime SSE events and transforms them into
+// Aggregates runtime events and transforms them into
 // standard RealtimeEvent format for WebSocket broadcast.
-
-interface SSEConnection {
-  url: string;
-  abortController: AbortController | null;
-  reconnectAttempts: number;
-  maxReconnectAttempts: number;
-}
+// Pi-mono feeds events directly via ingestParsedEvent().
 
 type EventHandler = (event: RealtimeEvent) => void;
-
-const OPENCODE_URL = process.env.OPENCODE_URL || "http://localhost:4096";
 
 interface CompletedTaskContext {
   id: string;
@@ -145,9 +137,7 @@ function formatChangeSummary(task: CompletedTaskContext): string {
 }
 
 class SSEAggregator {
-  private connections = new Map<string, SSEConnection>();
   private handlers = new Set<EventHandler>();
-  private reconnectDelay = 1000;
   private finalizingAgentRuns = new Set<string>();
   private finalizedAgentRuns = new Set<string>();
 
@@ -268,6 +258,7 @@ class SSEAggregator {
     projectId?: string;
     sessionId?: string;
     agentRunId?: string;
+    traceId?: string;
     authorization: string;
     providerId: string;
     modelId: string;
@@ -318,6 +309,7 @@ class SSEAggregator {
             taskId: args.taskId,
             sessionId: args.sessionId,
             agentRunId: args.agentRunId,
+          traceId: args.traceId,
             eventType: "paid_execution",
             action: args.action,
             detail: args.detail,
@@ -1398,114 +1390,17 @@ class SSEAggregator {
   }
 
   /**
-   * Subscribe to the global OpenCode SSE event stream.
+   * No-op: pi-mono feeds events directly via ingestParsedEvent().
    */
   async subscribeGlobal(): Promise<void> {
-    const url = `${OPENCODE_URL}/global/event`;
-    await this.connect("global", url);
+    // pi-mono runtime pushes events via ingestParsedEvent(); no SSE subscription needed.
   }
 
   /**
-   * Subscribe to a specific session's SSE stream.
+   * No-op: pi-mono feeds events directly via ingestParsedEvent().
    */
   async subscribeSession(_sessionId: string): Promise<void> {
-    await this.subscribeGlobal();
-  }
-
-  private async connect(key: string, url: string): Promise<void> {
-    if (this.connections.has(key)) return;
-
-    const conn: SSEConnection = {
-      url,
-      abortController: null,
-      reconnectAttempts: 0,
-      maxReconnectAttempts: 10,
-    };
-
-    this.connections.set(key, conn);
-    await this.startSSE(key, conn);
-  }
-
-  private async startSSE(key: string, conn: SSEConnection): Promise<void> {
-    try {
-      conn.abortController = new AbortController();
-      const response = await fetch(conn.url, {
-        headers: { Accept: "text/event-stream" },
-        signal: conn.abortController.signal,
-      });
-
-      if (!response.ok || !response.body) {
-        throw new Error(`SSE connection failed: ${response.status}`);
-      }
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let eventType = "message";
-      const dataLines: string[] = [];
-
-      conn.reconnectAttempts = 0;
-
-      const read = async () => {
-        try {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split("\n");
-            buffer = lines.pop() || "";
-
-            for (const rawLine of lines) {
-              const line = rawLine.replace(/\r$/, "");
-              if (line.startsWith("event:")) {
-                eventType = line.slice(6).trim();
-              } else if (line.startsWith("data:")) {
-                dataLines.push(line.slice(5).trim());
-              } else if (line === "" && dataLines.length > 0) {
-                // End of event
-                this.handleSSEEvent(eventType, dataLines.join("\n"));
-                eventType = "message";
-                dataLines.length = 0;
-              }
-            }
-          }
-        } catch {
-          // Connection lost, try reconnect
-          this.scheduleReconnect(key, conn);
-        }
-      };
-
-      read();
-    } catch {
-      this.scheduleReconnect(key, conn);
-    }
-  }
-
-  private scheduleReconnect(key: string, conn: SSEConnection): void {
-    if (conn.reconnectAttempts >= conn.maxReconnectAttempts) {
-      console.error(`SSE ${key}: max reconnect attempts reached`);
-      this.connections.delete(key);
-      return;
-    }
-
-    conn.reconnectAttempts++;
-    const delay = this.reconnectDelay * 2 ** (conn.reconnectAttempts - 1);
-    console.log(`SSE ${key}: reconnecting in ${delay}ms (attempt ${conn.reconnectAttempts})`);
-
-    setTimeout(() => this.startSSE(key, conn), delay);
-  }
-
-  private async handleSSEEvent(type: string, data: string): Promise<void> {
-    try {
-      const parsed = JSON.parse(data);
-      if (!parsed || typeof parsed !== "object") {
-        return;
-      }
-      await this.processParsedEvent(type, parsed as Record<string, unknown>);
-    } catch {
-      // Malformed event, skip
-    }
+    // pi-mono runtime pushes events via ingestParsedEvent(); no SSE subscription needed.
   }
 
   async ingestParsedEvent(type: string, parsed: Record<string, unknown>): Promise<void> {
@@ -1532,6 +1427,9 @@ class SSEAggregator {
       : this.transformEvent(type, parsed);
 
     if (event) {
+      if (event.type === "session.idle" || event.type === "session.updated" || event.type === "session.status") {
+        console.log(`[sse-debug] event=${event.type} sessionId=${event.sessionId} taskId=${event.taskId} agentRunId=${event.agentRunId} isCompletion=${this.isCompletionSignal(event)}`);
+      }
       for (const derivedEvent of this.buildTaskDomainEvents(event)) {
         this.emit(derivedEvent);
       }
@@ -1890,6 +1788,7 @@ class SSEAggregator {
               taskId: event.taskId,
               sessionId: event.sessionId,
               agentRunId: event.agentRunId,
+              traceId: assistantResult.traceId,
               eventType: "agent",
               action: "chain_step_completed",
               detail: {
@@ -1965,6 +1864,7 @@ class SSEAggregator {
               taskId: event.taskId,
               sessionId: event.sessionId,
               agentRunId: event.agentRunId,
+              traceId: assistantResult.traceId,
               eventType: "agent",
               action: "completed",
               detail: {
@@ -1990,6 +1890,7 @@ class SSEAggregator {
             projectId: event.projectId,
             sessionId: event.sessionId,
             agentRunId: event.agentRunId,
+            traceId: assistantResult.traceId,
             authorization,
             providerId: model.providerId,
             modelId: model.modelId,
@@ -2104,6 +2005,7 @@ class SSEAggregator {
           taskId: event.taskId,
           sessionId: event.sessionId,
           agentRunId: event.agentRunId,
+          traceId: assistantResult.traceId,
           eventType: "agent",
           action: "completed",
           detail: {
@@ -2119,6 +2021,7 @@ class SSEAggregator {
         projectId: event.projectId,
         sessionId: event.sessionId,
         agentRunId: event.agentRunId,
+        traceId: assistantResult.traceId,
         authorization,
         providerId: model.providerId,
         modelId: model.modelId,
@@ -2269,6 +2172,7 @@ class SSEAggregator {
           taskId: event.taskId,
           sessionId: event.sessionId,
           agentRunId: run.agentRunId,
+          traceId: assistantResult.traceId,
           eventType: "agent",
           action: "failed",
           detail: { error: errorMessage, sourceEvent: event.type },
@@ -2285,6 +2189,7 @@ class SSEAggregator {
       projectId: event.projectId,
       sessionId: event.sessionId,
       agentRunId: run.agentRunId,
+      traceId: assistantResult.traceId,
       authorization: failureAuthorization,
       providerId: model.providerId,
       modelId: model.modelId,
@@ -2518,6 +2423,7 @@ class SSEAggregator {
           taskId: event.taskId,
           sessionId: event.sessionId,
           agentRunId: run.agentRunId,
+          traceId: assistantResult.traceId,
           eventType: "agent",
           action: "failed",
           detail: {
@@ -2546,6 +2452,7 @@ class SSEAggregator {
         projectId: event.projectId,
         sessionId: event.sessionId,
         agentRunId: run.agentRunId,
+        traceId: assistantResult.traceId,
         authorization,
         providerId: model.providerId,
         modelId: model.modelId,
@@ -2824,9 +2731,10 @@ class SSEAggregator {
     authorization?: string,
     minCompletedAt?: number,
     options?: { includeLineage?: boolean; bypassCircuitBreaker?: boolean },
-  ): Promise<{ text?: string; completed: boolean; tokenUsed: number }> {
+  ): Promise<{ text?: string; traceId?: string; completed: boolean; tokenUsed: number }> {
     const deadline = Date.now() + timeoutMs;
     let fallbackText: string | undefined;
+    let fallbackTraceId: string | undefined;
     let fallbackTokenUsed = 0;
 
     while (Date.now() < deadline) {
@@ -2844,7 +2752,12 @@ class SSEAggregator {
             : undefined,
       );
       if (!messagesResult.ok || !Array.isArray(messagesResult.data)) {
-        return { text: fallbackText, completed: false, tokenUsed: fallbackTokenUsed };
+        return {
+          text: fallbackText,
+          traceId: fallbackTraceId,
+          completed: false,
+          tokenUsed: fallbackTokenUsed,
+        };
       }
 
       const assistantResult = extractAssistantResultFromMessages(messagesResult.data, {
@@ -2852,6 +2765,9 @@ class SSEAggregator {
       });
       if (assistantResult.text) {
         fallbackText = assistantResult.text;
+      }
+      if (assistantResult.traceId) {
+        fallbackTraceId = assistantResult.traceId;
       }
       if (assistantResult.tokenUsed > 0) {
         fallbackTokenUsed = assistantResult.tokenUsed;
@@ -2864,7 +2780,12 @@ class SSEAggregator {
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
 
-    return { text: fallbackText, completed: false, tokenUsed: fallbackTokenUsed };
+    return {
+      text: fallbackText,
+      traceId: fallbackTraceId,
+      completed: false,
+      tokenUsed: fallbackTokenUsed,
+    };
   }
 
   private extractSessionId(type: string, data: Record<string, unknown>): string | undefined {
@@ -3433,18 +3354,12 @@ class SSEAggregator {
     };
   }
 
-  disconnect(key: string): void {
-    const conn = this.connections.get(key);
-    if (conn) {
-      conn.abortController?.abort();
-      this.connections.delete(key);
-    }
+  disconnect(_key: string): void {
+    // no-op: pi-mono runtime does not use SSE connections
   }
 
   disconnectAll(): void {
-    for (const [key] of this.connections) {
-      this.disconnect(key);
-    }
+    // no-op: pi-mono runtime does not use SSE connections
   }
 }
 

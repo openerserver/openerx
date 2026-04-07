@@ -47,6 +47,32 @@ function createUpdateChain(recorder: (payload: unknown) => void) {
   };
 }
 
+function createSelectChain(resolveRow: () => unknown) {
+  const limit = async () => {
+    const row = resolveRow();
+    return row == null ? [] : [row];
+  };
+
+  return {
+    from() {
+      return {
+        where() {
+          return {
+            limit,
+            orderBy() {
+              return { limit };
+            },
+          };
+        },
+        orderBy() {
+          return { limit };
+        },
+        limit,
+      };
+    },
+  };
+}
+
 function resolveTableName(table: unknown) {
   if (table === taskArtifacts) return "task_artifacts";
   if (table === taskMessages) return "task_messages";
@@ -90,6 +116,7 @@ async function loadTaskSessionMessageWriteModule(args?: {
   };
 
   const fakeDb = {
+    select: mock(() => createSelectChain(() => taskMessageFindFirstResults.shift() ?? null)),
     query: {
       taskMessages: {
         findFirst: mock(async () => taskMessageFindFirstResults.shift() ?? null),
@@ -145,7 +172,7 @@ afterEach(() => {
 });
 
 describe("task session message write api", () => {
-  test("writes canonical message tables and skips legacy task_session message dual-write", async () => {
+  test("writes canonical message tables without any legacy dual-write", async () => {
     const { createTaskSessionMessageWriteApi, insertCalls, deleteCalls, updateCalls } =
       await loadTaskSessionMessageWriteModule();
 
@@ -206,6 +233,15 @@ describe("task session message write api", () => {
       status: "completed",
     });
 
+    const taskSessionRunInsert = insertCalls.find(
+      (call) => call.table === "task_session_runs",
+    )?.payload;
+    expect(taskSessionRunInsert).toMatchObject({
+      id: "run_session-1",
+      sessionId: "session-1",
+      status: "completed",
+    });
+
     expect(updateCalls).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -217,6 +253,286 @@ describe("task session message write api", () => {
         }),
       ]),
     );
+  });
+
+  test("fills completedAt for terminal user messages that only provide created time", async () => {
+    const { createTaskSessionMessageWriteApi, insertCalls } =
+      await loadTaskSessionMessageWriteModule();
+
+    const api = createTaskSessionMessageWriteApi({
+      upsertTaskSessionRecord: mock(async () => "session-1"),
+      resolveTaskSessionRecordByRuntimeSessionId: mock(async () => null),
+    });
+
+    await api.upsertTaskSessionMessageRecord({
+      task: { id: "task-1", projectId: "project-1" },
+      sessionId: "session-1",
+      message: {
+        info: {
+          id: "msg-user-1",
+          role: "user",
+          time: {
+            created: "2025-01-01T00:00:00.000Z",
+          },
+        },
+        parts: [{ type: "text", text: "hello user" }],
+      },
+    });
+
+    const canonicalMessageInsert = insertCalls.find(
+      (call) => call.table === "task_messages",
+    )?.payload;
+    expect(canonicalMessageInsert).toMatchObject({
+      runtimeMessageId: "msg-user-1",
+      status: "completed",
+      createdAt: "2025-01-01T00:00:00.000Z",
+      completedAt: "2025-01-01T00:00:00.000Z",
+    });
+  });
+
+  test("uses completed time as createdAt fallback for terminal assistant messages", async () => {
+    const { createTaskSessionMessageWriteApi, insertCalls } =
+      await loadTaskSessionMessageWriteModule();
+
+    const api = createTaskSessionMessageWriteApi({
+      upsertTaskSessionRecord: mock(async () => "session-1"),
+      resolveTaskSessionRecordByRuntimeSessionId: mock(async () => null),
+    });
+
+    await api.upsertTaskSessionMessageRecord({
+      task: { id: "task-1", projectId: "project-1" },
+      sessionId: "session-1",
+      message: {
+        info: {
+          id: "msg-assistant-1",
+          role: "assistant",
+          finish: "stop",
+          time: {
+            completed: "2025-01-01T00:00:05.000Z",
+          },
+        },
+        parts: [{ type: "text", text: "hello assistant" }],
+      },
+    });
+
+    const canonicalMessageInsert = insertCalls.find(
+      (call) => call.table === "task_messages",
+    )?.payload;
+    expect(canonicalMessageInsert).toMatchObject({
+      runtimeMessageId: "msg-assistant-1",
+      status: "completed",
+      createdAt: "2025-01-01T00:00:05.000Z",
+      completedAt: "2025-01-01T00:00:05.000Z",
+    });
+  });
+
+  test("rejects writes that do not provide a stable runtime message id", async () => {
+    const { createTaskSessionMessageWriteApi, insertCalls, deleteCalls, updateCalls } =
+      await loadTaskSessionMessageWriteModule();
+
+    const api = createTaskSessionMessageWriteApi({
+      upsertTaskSessionRecord: mock(async () => "session-1"),
+      resolveTaskSessionRecordByRuntimeSessionId: mock(async () => null),
+    });
+
+    await expect(
+      api.upsertTaskSessionMessageRecord({
+        task: { id: "task-1", projectId: "project-1" },
+        sessionId: "session-1",
+        message: {
+          info: {
+            role: "assistant",
+            time: {
+              created: "2025-01-01T00:00:00.000Z",
+              completed: "2025-01-01T00:00:01.000Z",
+            },
+          },
+          parts: [{ type: "text", text: "hello" }],
+        },
+      }),
+    ).rejects.toThrow("Task session message write requires stable runtimeMessageId");
+
+    expect(insertCalls).toHaveLength(0);
+    expect(deleteCalls).toHaveLength(0);
+    expect(updateCalls).toHaveLength(0);
+  });
+
+  test("rejects runtime messages that do not match the explicit schema", async () => {
+    const { createTaskSessionMessageWriteApi, insertCalls, deleteCalls, updateCalls } =
+      await loadTaskSessionMessageWriteModule();
+
+    const api = createTaskSessionMessageWriteApi({
+      upsertTaskSessionRecord: mock(async () => "session-1"),
+      resolveTaskSessionRecordByRuntimeSessionId: mock(async () => null),
+    });
+
+    await expect(
+      api.upsertTaskSessionMessageRecord({
+        task: { id: "task-1", projectId: "project-1" },
+        sessionId: "session-1",
+        message: {
+          id: "msg-invalid-1",
+          foo: "bar",
+        },
+      }),
+    ).rejects.toThrow("Runtime message must include an explicit role");
+
+    expect(insertCalls).toHaveLength(0);
+    expect(deleteCalls).toHaveLength(0);
+    expect(updateCalls).toHaveLength(0);
+  });
+
+  test("rejects runtime messages with empty parts arrays", async () => {
+    const { createTaskSessionMessageWriteApi, insertCalls, deleteCalls, updateCalls } =
+      await loadTaskSessionMessageWriteModule();
+
+    const api = createTaskSessionMessageWriteApi({
+      upsertTaskSessionRecord: mock(async () => "session-1"),
+      resolveTaskSessionRecordByRuntimeSessionId: mock(async () => null),
+    });
+
+    await expect(
+      api.upsertTaskSessionMessageRecord({
+        task: { id: "task-1", projectId: "project-1" },
+        sessionId: "session-1",
+        message: {
+          id: "msg-empty-1",
+          role: "assistant",
+          parts: [],
+        },
+      }),
+    ).rejects.toThrow();
+
+    expect(insertCalls).toHaveLength(0);
+    expect(deleteCalls).toHaveLength(0);
+    expect(updateCalls).toHaveLength(0);
+  });
+
+  test("re-normalizes merged assistant legacy tool followups through the shared runtime schema", async () => {
+    const latestMessage = {
+      id: "task-session-message:session-1:msg-tool-start",
+      role: "assistant",
+      runtimeMessageId: "msg-tool-start",
+      status: "streaming",
+      clientMessageId: null,
+      providerMessageId: null,
+      messageIndex: 0,
+      textContent: "hello",
+      rawPayload: {
+        id: "msg-tool-start",
+        info: {
+          id: "msg-tool-start",
+          role: "assistant",
+          finish: "tool-calls",
+          parentID: "parent-1",
+          time: {
+            created: "2025-01-01T00:00:00.000Z",
+          },
+        },
+        parts: [
+          { type: "text", text: "hello" },
+          {
+            id: "tool-call-1",
+            type: "tool",
+            tool: "search_code",
+            toolName: "search_code",
+            callID: "tool-call-1",
+            state: "completed",
+            input: { query: "hello" },
+          },
+        ],
+      },
+      tokenUsed: 7,
+      startedAt: "2025-01-01T00:00:00.000Z",
+      completedAt: null,
+      errorText: null,
+      createdAt: "2025-01-01T00:00:00.000Z",
+      updatedAt: "2025-01-01T00:00:01.000Z",
+    };
+
+    const { createTaskSessionMessageWriteApi, insertCalls } =
+      await loadTaskSessionMessageWriteModule({
+        taskMessageFindFirstResults: [null, latestMessage],
+      });
+
+    const api = createTaskSessionMessageWriteApi({
+      upsertTaskSessionRecord: mock(async () => "session-1"),
+      resolveTaskSessionRecordByRuntimeSessionId: mock(async () => null),
+    });
+
+    const result = await api.upsertTaskSessionMessageRecord({
+      task: { id: "task-1", projectId: "project-1" },
+      sessionId: "session-1",
+      message: {
+        id: "msg-tool-finish",
+        role: "assistant",
+        clientMessageId: "client-2",
+        providerMessageId: "provider-2",
+        tokens: { total: 19 },
+        info: {
+          role: "assistant",
+          parentID: "parent-1",
+          time: {
+            created: "2025-01-01T00:00:05.000Z",
+            completed: "2025-01-01T00:00:08.000Z",
+          },
+        },
+        parts: [{ type: "text", text: "hello" }],
+      },
+    });
+
+    expect(result).toEqual({
+      messageId: "task-session-message:session-1:msg-tool-start",
+      sessionId: "session-1",
+      seq: 0,
+    });
+
+    const canonicalMessageInsert = insertCalls.find(
+      (call) => call.table === "task_messages",
+    )?.payload;
+    expect(canonicalMessageInsert).toMatchObject({
+      id: "task-session-message:session-1:msg-tool-start",
+      runtimeMessageId: "msg-tool-start",
+      clientMessageId: "client-2",
+      providerMessageId: "provider-2",
+      textContent: "hello",
+      partCount: 2,
+      tokenUsed: 19,
+      status: "completed",
+      startedAt: "2025-01-01T00:00:00.000Z",
+      completedAt: "2025-01-01T00:00:08.000Z",
+      rawPayload: expect.objectContaining({
+        id: "msg-tool-start",
+        runtimeMessageId: "msg-tool-start",
+        mergedRuntimeMessageIds: ["msg-tool-start", "msg-tool-finish"],
+        info: expect.objectContaining({
+          id: "msg-tool-start",
+          finish: "tool-calls",
+          parentID: "parent-1",
+          time: expect.objectContaining({
+            created: "2025-01-01T00:00:00.000Z",
+            completed: "2025-01-01T00:00:08.000Z",
+          }),
+        }),
+      }),
+    });
+
+    const partInserts = insertCalls
+      .filter((call) => call.table === "task_message_parts")
+      .map((call) => call.payload);
+    expect(partInserts).toEqual([
+      expect.objectContaining({
+        messageId: "task-session-message:session-1:msg-tool-start",
+        partIndex: 0,
+        partType: "tool_result",
+      }),
+      expect.objectContaining({
+        messageId: "task-session-message:session-1:msg-tool-start",
+        partIndex: 1,
+        partType: "text",
+        textContent: "hello",
+      }),
+    ]);
   });
 
   test("retries task message seq allocation when a concurrent insert wins first", async () => {
@@ -405,6 +721,61 @@ describe("task session message write api", () => {
             status: "completed",
             headMessageId: "task-session-message:session-1:tool-msg-1",
           }),
+        }),
+      ]),
+    );
+  });
+
+  test("accepts legacy string tool state values on runtime message parts", async () => {
+    const { createTaskSessionMessageWriteApi, insertCalls } =
+      await loadTaskSessionMessageWriteModule();
+
+    const api = createTaskSessionMessageWriteApi({
+      upsertTaskSessionRecord: mock(async () => "session-1"),
+      resolveTaskSessionRecordByRuntimeSessionId: mock(async () => null),
+    });
+
+    await api.upsertTaskSessionMessageRecord({
+      task: { id: "task-1", projectId: "project-1" },
+      sessionId: "session-1",
+      message: {
+        info: {
+          id: "assistant-tool-legacy-1",
+          role: "assistant",
+          finish: "tool-calls",
+          time: {
+            created: "2025-01-01T00:04:00.000Z",
+            completed: "2025-01-01T00:04:00.000Z",
+          },
+        },
+        parts: [
+          {
+            id: "tool-call-legacy-1",
+            type: "tool",
+            tool: "webfetch",
+            toolName: "webfetch",
+            state: "completed",
+            input: { url: "https://example.com/legacy" },
+          },
+          { type: "text", text: "legacy tool result" },
+        ],
+      },
+    });
+
+    const operationInsert = insertCalls.find((call) => call.table === "task_operations")?.payload;
+    expect(operationInsert).toMatchObject({
+      runtimeOperationId: "tool-call-legacy-1",
+      operationKind: "tool_call",
+      status: "completed",
+    });
+
+    const messagePartInsertCalls = insertCalls
+      .filter((call) => call.table === "task_message_parts")
+      .map((call) => call.payload);
+    expect(messagePartInsertCalls).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          partType: "tool_result",
         }),
       ]),
     );

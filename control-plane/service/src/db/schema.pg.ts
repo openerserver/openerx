@@ -622,17 +622,6 @@ export const tasks = pgTable(
     activatedAt: text("activated_at"),
     doneAt: text("done_at"),
     archivedAt: text("archived_at"),
-    // ─── legacy columns (kept until DROP COLUMN migration reruns) ───
-    status: text("status"),
-    currentRunId: text("current_run_id"),
-    currentSessionId: text("current_session_id"),
-    currentAgentRunId: text("current_agent_run_id"),
-    latestResult: text("latest_result"),
-    latestResultSummary: text("latest_result_summary"),
-    selectedModel: text("selected_model"),
-    startedAt: text("started_at"),
-    finishedAt: text("finished_at"),
-    changesSummaryJson: jsonb("changes_summary_json").$type<Record<string, unknown>>(),
   },
   (table) => [
     uniqueIndex("idx_tasks_tree_node_id").on(table.treeNodeId),
@@ -907,6 +896,10 @@ export const taskMessages = pgTable(
     tokenUsed: bigint("token_used", { mode: "number" }).notNull().default(0),
     status: text("status").$type<TaskMessageStatus>().notNull().default("streaming"),
     errorText: text("error_text"),
+    // ─── prompt visibility columns (canonical since 0034) ───
+    userInputText: text("user_input_text"),
+    systemContextText: text("system_context_text"),
+    finalSentText: text("final_sent_text"),
     startedAt: text("started_at"),
     createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
     updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
@@ -1578,33 +1571,3 @@ export const humanEscalations = pgTable(
   (table) => [index("idx_human_escalations_task_ts").on(table.taskId, table.ts)],
 );
 
-// ── Message Event Log (Phase 0: append-only event sourcing) ────────
-
-export type TaskMessageEventType =
-  | "message.updated"
-  | "message.part.updated"
-  | "message.part.delta";
-
-export const taskMessageEvents = pgTable(
-  "task_message_events",
-  {
-    id: bigint("id", { mode: "number" }).primaryKey().generatedAlwaysAsIdentity(),
-    taskId: text("task_id")
-      .notNull()
-      .references(() => tasks.id),
-    sessionId: text("session_id").notNull(),
-    eventType: text("event_type").$type<TaskMessageEventType>().notNull(),
-    runtimeMessageId: text("runtime_message_id"),
-    payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
-    projected: boolean("projected").notNull().default(false),
-    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-  },
-  (table) => [
-    index("idx_task_message_events_unprojected").on(table.id).where(sql`projected = false`),
-    index("idx_task_message_events_task_session").on(
-      table.taskId,
-      table.sessionId,
-      table.createdAt,
-    ),
-  ],
-);

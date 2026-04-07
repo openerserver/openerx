@@ -362,12 +362,12 @@ async function loadGovernanceTaskRecords(taskIds: string[]) {
       projectId: task.projectId,
       title: task.title,
       currentSessionId: snapshot?.currentSessionId
-        ? (runtimeSessionIdById.get(snapshot.currentSessionId) ?? task.currentSessionId ?? null)
-        : (task.currentSessionId ?? null),
+        ? (runtimeSessionIdById.get(snapshot.currentSessionId) ?? null)
+        : null,
       lastActivityAt:
         snapshot?.lastActivityAt ??
-        task.finishedAt ??
-        task.startedAt ??
+        task.doneAt ??
+        task.activatedAt ??
         task.updatedAt ??
         task.createdAt ??
         null,

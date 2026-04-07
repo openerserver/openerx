@@ -19,7 +19,7 @@ export class CustomProviderDialog extends DialogBase {
 	@state() private name = "";
 	@state() private type: CustomProviderType = "openai-completions";
 	@state() private baseUrl = "";
-	@state() private apiKey = "";
+	@state() private credentials = "";
 	@state() private testing = false;
 	@state() private testError = "";
 	@state() private discoveredModels: Model<any>[] = [];
@@ -47,14 +47,14 @@ export class CustomProviderDialog extends DialogBase {
 			this.name = this.provider.name;
 			this.type = this.provider.type;
 			this.baseUrl = this.provider.baseUrl;
-			this.apiKey = this.provider.apiKey || "";
+			this.credentials = this.provider.credentials || "";
 			this.discoveredModels = this.provider.models || [];
 		} else {
 			this.name = "";
 			this.type = this.initialType || "openai-completions";
 			this.baseUrl = "";
 			this.updateDefaultBaseUrl();
-			this.apiKey = "";
+			this.credentials = "";
 			this.discoveredModels = [];
 		}
 		this.testError = "";
@@ -92,7 +92,7 @@ export class CustomProviderDialog extends DialogBase {
 			const models = await discoverModels(
 				this.type as "ollama" | "llama.cpp" | "vllm" | "lmstudio",
 				this.baseUrl,
-				this.apiKey || undefined,
+				this.credentials || undefined,
 			);
 
 			this.discoveredModels = models.map((model) => ({
@@ -124,7 +124,7 @@ export class CustomProviderDialog extends DialogBase {
 				name: this.name,
 				type: this.type,
 				baseUrl: this.baseUrl,
-				apiKey: this.apiKey || undefined,
+				credentials: this.credentials || undefined,
 				models: this.isAutoDiscoveryType() ? undefined : this.provider?.models || [],
 			};
 
@@ -204,13 +204,13 @@ export class CustomProviderDialog extends DialogBase {
 						</div>
 
 						<div class="flex flex-col gap-2">
-							${Label({ htmlFor: "api-key", children: i18n("API Key (Optional)") })}
+							${Label({ htmlFor: "credentials", children: i18n("Credentials (Optional)") })}
 							${Input({
 								type: "password",
-								value: this.apiKey,
+								value: this.credentials,
 								placeholder: i18n("Leave empty if not required"),
 								onInput: (e: Event) => {
-									this.apiKey = (e.target as HTMLInputElement).value;
+									this.credentials = (e.target as HTMLInputElement).value;
 									this.requestUpdate();
 								},
 							})}

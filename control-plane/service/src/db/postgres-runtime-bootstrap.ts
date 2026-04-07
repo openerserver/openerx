@@ -256,6 +256,24 @@ const POSTGRES_RUNTIME_COLUMN_PATCHES: BootstrapColumnPatch[] = [
       ADD COLUMN IF NOT EXISTS "initial_task_definition_json" jsonb`,
   },
   {
+    tableName: "task_messages",
+    columnName: "user_input_text",
+    statement: `ALTER TABLE IF EXISTS "task_messages"
+      ADD COLUMN IF NOT EXISTS "user_input_text" text`,
+  },
+  {
+    tableName: "task_messages",
+    columnName: "system_context_text",
+    statement: `ALTER TABLE IF EXISTS "task_messages"
+      ADD COLUMN IF NOT EXISTS "system_context_text" text`,
+  },
+  {
+    tableName: "task_messages",
+    columnName: "final_sent_text",
+    statement: `ALTER TABLE IF EXISTS "task_messages"
+      ADD COLUMN IF NOT EXISTS "final_sent_text" text`,
+  },
+  {
     tableName: "task_timeline_views",
     columnName: "message_id",
     statement: `ALTER TABLE IF EXISTS "task_timeline_views"

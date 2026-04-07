@@ -37,6 +37,16 @@ function isCompletedAssistantMessage(info: Record<string, unknown> | undefined):
   return typeof completed === "number" || typeof completed === "string";
 }
 
+function readAssistantTraceId(info: Record<string, unknown> | undefined): string | undefined {
+  const id = info?.id;
+  if (typeof id !== "string") {
+    return undefined;
+  }
+
+  const trimmed = id.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
 function readAssistantCompletedAt(info: Record<string, unknown> | undefined): number | undefined {
   const time =
     typeof info?.time === "object" && info.time
@@ -149,6 +159,7 @@ function shouldSkipAssistantMessage(
 
 function resolveAssistantResultState(messages: unknown[], options?: { minCompletedAt?: number }) {
   let fallbackText: string | undefined;
+  let fallbackTraceId: string | undefined;
 
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
@@ -157,9 +168,11 @@ function resolveAssistantResultState(messages: unknown[], options?: { minComplet
       continue;
     }
 
+    const traceId = readAssistantTraceId(info);
     const text = readAssistantText(getMessageParts(message));
     if (text) {
       fallbackText = text;
+      fallbackTraceId = traceId ?? fallbackTraceId;
     }
 
     const errorMessage = extractAssistantErrorMessage(info);
@@ -169,17 +182,24 @@ function resolveAssistantResultState(messages: unknown[], options?: { minComplet
         completed: false,
         failed: true,
         error: errorMessage,
+        traceId: traceId ?? fallbackTraceId,
       };
     }
 
     if (text && isCompletedAssistantMessage(info)) {
-      return { text, completed: true, failed: false, error: undefined };
+      return { text, completed: true, failed: false, error: undefined, traceId };
     }
 
     break;
   }
 
-  return { text: fallbackText, completed: false, failed: false, error: undefined };
+  return {
+    text: fallbackText,
+    completed: false,
+    failed: false,
+    error: undefined,
+    traceId: fallbackTraceId,
+  };
 }
 
 export function extractAssistantResultFromMessages(
@@ -187,6 +207,7 @@ export function extractAssistantResultFromMessages(
   options?: { minCompletedAt?: number },
 ): {
   text?: string;
+  traceId?: string;
   completed: boolean;
   failed: boolean;
   error?: string;
@@ -200,6 +221,7 @@ export function extractAssistantResultFromMessages(
   const resolved = resolveAssistantResultState(messages, options);
   return {
     text: resolved.text,
+    traceId: resolved.traceId,
     completed: resolved.completed,
     failed: resolved.failed,
     error: resolved.error,

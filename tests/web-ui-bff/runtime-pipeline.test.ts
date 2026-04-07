@@ -3,6 +3,7 @@ import type {
   PersistedTaskStrategy,
   RuntimePlan,
 } from "../../control-plane/web-ui-bff/src/lib/orchestration-strategy";
+import { createRuntimeProviderModuleMock } from "./runtime-provider-mock";
 import {
   expectNoPublicTraceRequests,
   expectSessionMessageReaderCalls,
@@ -36,8 +37,8 @@ const listSessionsMock = mock(async () => ({
 }));
 const recoverAgentRunMock = mock(() => undefined);
 
-function buildOpencodeAdapterMock() {
-  return {
+function buildRuntimeProviderMock() {
+  return createRuntimeProviderModuleMock({
     buildExecutionContext: mock(() => ""),
     continueSession: mock(async () => ({ ok: true })),
     createSession: mock(async () => ({ ok: true, sessionId: "session-1", agentRunId: "run-1" })),
@@ -64,12 +65,12 @@ function buildOpencodeAdapterMock() {
     })),
     terminateAgent: mock(async () => ({ ok: true })),
     updateAgentRunStatus: mock(() => undefined),
-  };
+  });
 }
 
 mock.module(
-  "../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter",
-  buildOpencodeAdapterMock,
+  "../../control-plane/web-ui-bff/src/modules/agent-control/runtime-provider",
+  buildRuntimeProviderMock,
 );
 
 async function loadRuntimePipelineModule() {

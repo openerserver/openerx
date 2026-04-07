@@ -1,6 +1,6 @@
 import { recordAgentAudit, recordModelUsage } from "../modules/agent-control/run-persistence";
 import { cpFetch } from "./control-plane-client";
-import { resolveModelRoute } from "./opencode-config";
+import { resolveModelRoute } from "./model-config";
 import { mergeTaskStrategy, parseTaskStrategy } from "./orchestration-strategy";
 import type { PaidExecutionGuardState } from "./paid-execution-guard";
 

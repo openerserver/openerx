@@ -10,8 +10,6 @@ type ServerUpgrade = { upgrade: (req: Request, opts?: unknown) => boolean };
 const APP_DIR = fileURLToPath(new URL(".", import.meta.url));
 const UI_DIST_DIR = resolve(APP_DIR, "../../web-ui/dist");
 const UI_DEV_SERVER_URL = process.env.UI_DEV_SERVER_URL;
-const OPENCODE_URL =
-  process.env.OPENCODE_URL || process.env.OPENCODE_BASE_URL || "http://127.0.0.1:4096";
 
 const controlPlaneApp = createControlPlaneApp();
 setControlPlaneFetchHandler((request) => controlPlaneApp.fetch(request));
@@ -30,23 +28,6 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
-async function checkRuntimeDependency() {
-  try {
-    const response = await fetch(`${OPENCODE_URL.replace(/\/+$/, "")}/session`);
-    return {
-      ok: response.ok,
-      status: response.status,
-      target: OPENCODE_URL,
-    };
-  } catch (error) {
-    return {
-      ok: false,
-      status: 502,
-      target: OPENCODE_URL,
-      error: error instanceof Error ? error.message : String(error),
-    };
-  }
-}
 
 async function serveUi(req: Request) {
   const url = new URL(req.url);
@@ -95,14 +76,7 @@ export default {
     }
 
     if (url.pathname === "/health/deps") {
-      const runtime = await checkRuntimeDependency();
-      return jsonResponse(
-        {
-          status: runtime.ok ? "ok" : "degraded",
-          runtime,
-        },
-        runtime.ok ? 200 : 503,
-      );
+      return jsonResponse({ status: "ok" });
     }
 
     if (url.pathname === "/ws" || url.pathname.startsWith("/api/")) {

@@ -41,7 +41,7 @@ describe("useTaskExecutionTrace", () => {
       ],
       hookExecutions: [],
       timelineMeta: {
-        readSource: "opencode-runtime",
+        readSource: "runtime-fallback",
         cacheState: "complete",
         complete: true,
       },
@@ -56,7 +56,7 @@ describe("useTaskExecutionTrace", () => {
     expect(state.summaryItems.value).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ label: "追踪范围", value: "当前任务" }),
-        expect.objectContaining({ label: "时间线来源", value: "运行时" }),
+        expect.objectContaining({ label: "时间线来源", value: "运行时回退" }),
       ]),
     );
     expect(state.summaryItems.value).not.toEqual(

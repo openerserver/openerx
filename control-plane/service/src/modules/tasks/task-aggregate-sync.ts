@@ -27,8 +27,27 @@ function toLifecycleStatus(
   status: string | null | undefined,
 ): "draft" | "active" | "done" | "archived" {
   if (!status) return "draft";
+  if (status === "pending") return "draft";
   if (status === "completed") return "done";
+  if (status === "cancelled") return "archived";
   return "active";
+}
+
+function toExecutionStatus(status: string | null | undefined) {
+  if (!status || status === "pending") {
+    return null;
+  }
+  if (status === "completed") {
+    return "complete" as const;
+  }
+  if (status === "failed") {
+    return "failed" as const;
+  }
+  if (status === "cancelled") {
+    return "cancelled" as const;
+  }
+
+  return "running" as const;
 }
 
 type TaskSnapshotCreateInput = {
@@ -102,10 +121,6 @@ export function buildTaskAggregateStrategyJson(
 
   return withTaskAggregateAutoAdvanceStages(withExecutionMode, options?.autoAdvanceStages) ?? {};
 }
-function buildTaskAggregateChangesSummaryJson(changesSummary: TaskTreeSnapshot["changesSummary"]) {
-  return changesSummary ? ({ ...changesSummary } as Record<string, unknown>) : null;
-}
-
 function resolveSnapshotStrategy(
   task: TaskTreeRecord,
   updates: Record<string, unknown>,
@@ -166,9 +181,6 @@ function resolveSnapshotGitFields(task: TaskTreeRecord, updates: Record<string, 
     gitCommitterEmail: (updates.gitCommitterEmail as string | undefined) ?? task.gitCommitterEmail,
     finalCommitSha: (updates.finalCommitSha as string | undefined) ?? task.finalCommitSha,
     finalBranchName: (updates.finalBranchName as string | undefined) ?? task.finalBranchName,
-    changesSummary:
-      (updates.changesSummary as TaskTreeSnapshot["changesSummary"] | undefined) ??
-      task.changesSummary,
   };
 }
 
@@ -215,7 +227,6 @@ export function buildTaskTreeSnapshotFromCreateInput(
     gitCommitterEmail: body.gitCommitterEmail ?? null,
     finalCommitSha: null,
     finalBranchName: null,
-    changesSummary: null,
     createdAt: now,
     startedAt: null,
     finishedAt: null,
@@ -234,9 +245,15 @@ export function buildTaskTreeSnapshotFromRecord(
   };
 }
 
-async function resolvePersistedTaskSessionId(sessionId: string | null | undefined) {
+async function resolvePersistedTaskSessionId(
+  sessionId: string | null | undefined,
+) {
   if (!sessionId) {
     return null;
+  }
+
+  if (sessionId.startsWith("task-session:")) {
+    return sessionId;
   }
 
   const { db, eq, taskSessions } = await loadTaskAggregateSyncRuntime();
@@ -275,18 +292,12 @@ export function createTaskAggregateSyncApi() {
         createdByUserId: snapshot.userId,
         title: snapshot.title,
         prompt: snapshot.prompt,
-        status: snapshot.status,
         category: snapshot.category,
-        currentRunId: null,
-        currentSessionId: snapshot.sessionId,
-        currentAgentRunId: snapshot.agentRunId,
-        latestResult: snapshot.result,
-        latestResultSummary: snapshot.result,
-        selectedModel: snapshot.selectedModel,
         repoId: snapshot.repoId,
         workspaceRoot: snapshot.workspaceRoot,
         baseRevision: snapshot.baseRevision,
         workingBranch: snapshot.workingBranch,
+        preferredModel: snapshot.selectedModel,
         credentialId: snapshot.credentialId,
         gitAuthorName: snapshot.gitAuthorName,
         gitAuthorEmail: snapshot.gitAuthorEmail,
@@ -298,10 +309,7 @@ export function createTaskAggregateSyncApi() {
         }),
         finalCommitSha: snapshot.finalCommitSha,
         finalBranchName: snapshot.finalBranchName,
-        changesSummaryJson: buildTaskAggregateChangesSummaryJson(snapshot.changesSummary),
         createdAt: snapshot.createdAt,
-        startedAt: snapshot.startedAt,
-        finishedAt: snapshot.finishedAt,
         updatedAt,
       })
       .onConflictDoUpdate({
@@ -312,17 +320,12 @@ export function createTaskAggregateSyncApi() {
           createdByUserId: snapshot.userId,
           title: snapshot.title,
           prompt: snapshot.prompt,
-          status: snapshot.status,
           category: snapshot.category,
-          currentSessionId: snapshot.sessionId,
-          currentAgentRunId: snapshot.agentRunId,
-          latestResult: snapshot.result,
-          latestResultSummary: snapshot.result,
-          selectedModel: snapshot.selectedModel,
           repoId: snapshot.repoId,
           workspaceRoot: snapshot.workspaceRoot,
           baseRevision: snapshot.baseRevision,
           workingBranch: snapshot.workingBranch,
+          preferredModel: snapshot.selectedModel,
           credentialId: snapshot.credentialId,
           gitAuthorName: snapshot.gitAuthorName,
           gitAuthorEmail: snapshot.gitAuthorEmail,
@@ -334,9 +337,6 @@ export function createTaskAggregateSyncApi() {
           }),
           finalCommitSha: snapshot.finalCommitSha,
           finalBranchName: snapshot.finalBranchName,
-          changesSummaryJson: buildTaskAggregateChangesSummaryJson(snapshot.changesSummary),
-          startedAt: snapshot.startedAt,
-          finishedAt: snapshot.finishedAt,
           updatedAt,
         },
       });
@@ -348,7 +348,7 @@ export function createTaskAggregateSyncApi() {
         projectId: snapshot.projectId,
         lifecycleStatus: toLifecycleStatus(snapshot.status),
         currentExecutionMode: toStoredTaskExecutionMode(snapshot.executionMode),
-        currentExecutionStatus: null,
+        currentExecutionStatus: toExecutionStatus(snapshot.status),
         currentSessionId: validatedSessionId,
         latestSessionId: validatedSessionId,
         latestResultSummary: snapshot.result,
@@ -365,6 +365,7 @@ export function createTaskAggregateSyncApi() {
           projectId: snapshot.projectId,
           lifecycleStatus: toLifecycleStatus(snapshot.status),
           currentExecutionMode: toStoredTaskExecutionMode(snapshot.executionMode),
+          currentExecutionStatus: toExecutionStatus(snapshot.status),
           currentSessionId: validatedSessionId,
           latestSessionId: validatedSessionId,
           latestResultSummary: snapshot.result,

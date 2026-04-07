@@ -62,8 +62,6 @@ export function buildTaskSessionRegistrations(
       shared.sessionReadApi.buildTaskConversationMessagesResponse,
     buildTaskNormalizedConversationQueryResponse:
       shared.sessionReadApi.buildTaskNormalizedConversationQueryResponse,
-    buildTaskRawMessageEventViewResponse:
-      shared.sessionReadApi.buildTaskRawMessageEventViewResponse,
     buildTaskTreeResponse: shared.sessionReadApi.buildTaskTreeResponse,
     buildTaskTimelineResponse: shared.sessionReadApi.buildTaskTimelineResponse,
     listTaskSessionMessages: shared.sessionReadApi.listTaskSessionMessages,

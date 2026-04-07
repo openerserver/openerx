@@ -41,7 +41,6 @@ function createTaskSessionRegistrarDeps(overrides: Record<string, unknown> = {})
       status: 200,
       data: {},
     })),
-    buildTaskRawMessageEventViewResponse: mock(async () => ({ ok: true, status: 200, data: {} })),
     buildTaskTreeResponse: mock(async () => ({ ok: true, status: 200, data: {} })),
     buildTaskTimelineResponse: mock(async () => ({ ok: true, status: 200, data: {} })),
     listTaskSessionMessages: mock(async () => ({ ok: true, status: 200, data: {} })),
@@ -146,14 +145,6 @@ describe("task session route registrar", () => {
         args,
       },
     }));
-    const buildTaskRawMessageEventViewResponse = mock(async (taskId: string) => ({
-      ok: true as const,
-      status: 200 as const,
-      data: {
-        routeScope: "raw-message-events-query",
-        taskId,
-      },
-    }));
     const buildTaskTreeResponse = mock(async (args: unknown) => ({
       ok: true as const,
       status: 200 as const,
@@ -200,7 +191,6 @@ describe("task session route registrar", () => {
         listTaskSessions,
         buildTaskConversationMessagesResponse,
         buildTaskNormalizedConversationQueryResponse,
-        buildTaskRawMessageEventViewResponse,
         buildTaskTreeResponse,
         buildTaskTimelineResponse,
         listTaskSessionMessages,
@@ -215,7 +205,6 @@ describe("task session route registrar", () => {
       app,
       "GET /:taskId/query/normalized-conversation",
     );
-    const rawEventsHandler = getRequiredRouteHandler(app, "GET /:taskId/query/raw-events");
     const treeHandler = getRequiredRouteHandler(app, "GET /:taskId/tree");
     const taskTimelineHandler = getRequiredRouteHandler(app, "GET /:taskId/timeline");
     const messagesHandler = getRequiredRouteHandler(
@@ -254,12 +243,6 @@ describe("task session route registrar", () => {
         query: { sessionId: "session-1" },
       }),
     );
-    const rawEventsResponse = await invokeRouteHandler(
-      rawEventsHandler,
-      createRouteContext({
-        params: { taskId: "task-1" },
-      }),
-    );
     const treeResponse = await invokeRouteHandler(
       treeHandler,
       createRouteContext({
@@ -296,7 +279,6 @@ describe("task session route registrar", () => {
       sessionId: "session-1",
       includeLineage: true,
     });
-    expect(buildTaskRawMessageEventViewResponse).toHaveBeenCalledWith("task-1");
     expect(buildTaskTreeResponse).toHaveBeenCalledWith({
       taskId: "task-1",
       sessionId: "session-1",
@@ -335,10 +317,6 @@ describe("task session route registrar", () => {
         sessionId: "session-1",
         includeLineage: true,
       },
-    });
-    expect(await rawEventsResponse.json()).toEqual({
-      routeScope: "raw-message-events-query",
-      taskId: "task-1",
     });
     expect(await treeResponse.json()).toEqual({
       routeScope: "task-tree",

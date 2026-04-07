@@ -397,7 +397,7 @@ function buildCopilotCredentialError(args: {
       args.backupHasCredential
         ? "检测到有效备份文件 auth.json.bak，可执行 cp ~/.local/share/opencode/auth.json.bak ~/.local/share/opencode/auth.json 恢复，或"
         : ""
-    }请在系统配置 → 模型完成 GitHub Copilot 登录，或执行 opencode auth login 后重试。`,
+    }请在系统配置 → 模型完成 GitHub Copilot 登录，并确认当前运行时账户可读取凭据后重试。`,
     diagnostics: {
       providerId: args.resolvedModel.providerId,
       modelId: args.resolvedModel.modelId,
@@ -426,10 +426,10 @@ function buildCopilotCredentialError(args: {
       },
       {
         id: RUNTIME_RECOVERY_SUGGESTION_IDS.copilotLoginRuntime,
-        kind: RUNTIME_RECOVERY_SUGGESTION_KINDS.command,
-        title: "在运行时环境重新建立 Copilot 凭据。",
-        detail: "如果当前任务实际跑在独立 runtime 环境，页面登录后仍可能需要同步运行时凭据。",
-        command: "opencode auth login",
+        kind: RUNTIME_RECOVERY_SUGGESTION_KINDS.check,
+        title: "确认当前运行时账户可读取 Copilot 凭据。",
+        detail:
+          "如果任务运行在独立 runtime 进程、容器或远端环境中，需要将有效的 ~/.local/share/opencode/auth.json 同步到对应运行账户。",
       },
     ],
   };

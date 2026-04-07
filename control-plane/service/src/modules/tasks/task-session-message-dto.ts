@@ -55,6 +55,6 @@ export interface PostTaskSessionMessageResponse {
   task_id: string;
   session_id: string;
   user_message: TaskSessionMessageApiSummary;
-  assistant_message: TaskSessionMessageApiSummary;
+  assistant_message: TaskSessionMessageApiSummary | null;
   operation: TaskSessionOperationApiSummary;
 }

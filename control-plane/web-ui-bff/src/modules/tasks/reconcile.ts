@@ -5,8 +5,9 @@ import { getSessionMessages, listSessions } from "../agent-control/runtime-provi
 import { finalizeTaskState } from "./finalize";
 import {
   fetchTaskSessionLineageRecords,
+  persistTaskSessionMessageSnapshot,
   upsertTaskSessionLineageRecord,
-} from "./task-session-compat";
+} from "./task-session-store";
 
 interface RunningTaskRecord {
   id: string;
@@ -59,6 +60,31 @@ export interface RunningTaskReconcileSummary {
   runtimeAvailable: boolean;
 }
 
+export interface TaskRuntimeMessageRepairSessionSummary {
+  runtimeSessionId: string;
+  scannedMessages: number;
+  repairableMessages: number;
+  repairedMessages: number;
+  failedMessages: number;
+  status: "repaired" | "skipped" | "failed";
+  reason?: string;
+}
+
+export interface TaskRuntimeMessageRepairSummary {
+  taskId: string;
+  scope: "task" | "session";
+  lineageResolved: boolean;
+  scannedSessions: number;
+  repairedSessions: number;
+  failedSessions: number;
+  skippedSessions: number;
+  scannedMessages: number;
+  repairableMessages: number;
+  repairedMessages: number;
+  failedMessages: number;
+  sessionResults: TaskRuntimeMessageRepairSessionSummary[];
+}
+
 const DEFAULT_RUNNING_TASK_LIMIT = 200;
 const DEFAULT_STALE_RUNNING_OFFLINE_MS = 2 * 60 * 60 * 1000;
 const DEFAULT_RECENT_TERMINAL_SESSION_REPAIR_MS = 30 * 60 * 1000;
@@ -102,6 +128,251 @@ function sessionIdFromEntry(entry: SessionListEntry): string | undefined {
   if (typeof entry.id === "string" && entry.id) return entry.id;
   if (typeof entry.sessionID === "string" && entry.sessionID) return entry.sessionID;
   return undefined;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function extractRuntimeMessageRole(message: unknown): string | null {
+  const record = asRecord(message);
+  const info = asRecord(record?.info);
+
+  if (typeof record?.role === "string" && record.role.trim()) {
+    return record.role;
+  }
+
+  if (typeof info?.role === "string" && info.role.trim()) {
+    return info.role;
+  }
+
+  return null;
+}
+
+function extractRuntimeMessageId(message: unknown): string | null {
+  const record = asRecord(message);
+  const info = asRecord(record?.info);
+
+  const candidates = [
+    record?.runtimeMessageId,
+    record?.messageID,
+    record?.messageId,
+    record?.id,
+    info?.id,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+function collectRepairableRuntimeAssistantMessages(messages: unknown[]) {
+  const repairable: Array<Record<string, unknown>> = [];
+  const seen = new Set<string>();
+
+  for (const message of messages) {
+    const record = asRecord(message);
+    if (!record) {
+      continue;
+    }
+
+    if (extractRuntimeMessageRole(record) !== "assistant") {
+      continue;
+    }
+
+    const runtimeMessageId = extractRuntimeMessageId(record);
+    if (!runtimeMessageId || seen.has(runtimeMessageId)) {
+      continue;
+    }
+
+    seen.add(runtimeMessageId);
+    repairable.push(record);
+  }
+
+  return repairable;
+}
+
+async function repairRuntimeAssistantMessages(args: {
+  taskId: string;
+  runtimeSessionId: string;
+  authorization: string;
+  messages: unknown[];
+}) {
+  const repairableMessages = collectRepairableRuntimeAssistantMessages(args.messages);
+  let repairedMessages = 0;
+  let failedMessages = 0;
+
+  if (repairableMessages.length === 0) {
+    return {
+      scannedMessages: args.messages.length,
+      repairableMessages: 0,
+      repairedMessages: 0,
+      failedMessages: 0,
+    };
+  }
+
+  for (const message of repairableMessages) {
+    try {
+      const result = await persistTaskSessionMessageSnapshot(args.taskId, args.authorization, {
+        runtimeSessionId: args.runtimeSessionId,
+        message,
+      });
+
+      if (!result.ok) {
+        failedMessages += 1;
+        console.warn(
+          `[reconcile] runtime message repair rejected task=${args.taskId} session=${args.runtimeSessionId} message=${extractRuntimeMessageId(message) ?? "unknown"}`,
+        );
+      } else {
+        repairedMessages += 1;
+      }
+    } catch (error) {
+      failedMessages += 1;
+      console.warn(
+        `[reconcile] runtime message repair failed task=${args.taskId} session=${args.runtimeSessionId} message=${extractRuntimeMessageId(message) ?? "unknown"}`,
+        error,
+      );
+    }
+  }
+
+  return {
+    scannedMessages: args.messages.length,
+    repairableMessages: repairableMessages.length,
+    repairedMessages,
+    failedMessages,
+  };
+}
+
+function dedupeRuntimeSessionIds(sessionIds: Array<string | null | undefined>) {
+  const unique = new Set<string>();
+
+  for (const sessionId of sessionIds) {
+    if (typeof sessionId === "string" && sessionId.trim()) {
+      unique.add(sessionId.trim());
+    }
+  }
+
+  return Array.from(unique);
+}
+
+export async function repairTaskMessagesFromRuntime(args: {
+  taskId: string;
+  authorization: string;
+  sessionId?: string | null;
+  onlyActive?: boolean;
+}): Promise<TaskRuntimeMessageRepairSummary> {
+  const scope = args.sessionId ? "session" : "task";
+  let lineageResolved = true;
+
+  const targetSessionIds = (() => {
+    if (args.sessionId) {
+      return dedupeRuntimeSessionIds([args.sessionId]);
+    }
+
+    return [] as string[];
+  })();
+
+  if (!args.sessionId) {
+    const lineageResult = await fetchTaskSessionLineageRecords(args.taskId, args.authorization);
+    lineageResolved = lineageResult.ok;
+    if (lineageResult.ok) {
+      const sessionIds = dedupeRuntimeSessionIds(
+        lineageResult.records
+          .filter((record) =>
+            args.onlyActive ? Boolean(record.isActive && !record.archivedAt) : true,
+          )
+          .map((record) => record.runtimeSessionId),
+      );
+      targetSessionIds.push(...sessionIds);
+    }
+  }
+
+  const summary: TaskRuntimeMessageRepairSummary = {
+    taskId: args.taskId,
+    scope,
+    lineageResolved,
+    scannedSessions: 0,
+    repairedSessions: 0,
+    failedSessions: 0,
+    skippedSessions: 0,
+    scannedMessages: 0,
+    repairableMessages: 0,
+    repairedMessages: 0,
+    failedMessages: 0,
+    sessionResults: [],
+  };
+
+  for (const runtimeSessionId of dedupeRuntimeSessionIds(targetSessionIds)) {
+    summary.scannedSessions += 1;
+
+    const messagesResult = await getSessionMessages(runtimeSessionId, {
+      taskId: args.taskId,
+      authorization: args.authorization,
+      includeLineage: false,
+      bypassCircuitBreaker: true,
+    });
+
+    if (!messagesResult.ok || !Array.isArray(messagesResult.data)) {
+      summary.failedSessions += 1;
+      summary.sessionResults.push({
+        runtimeSessionId,
+        scannedMessages: 0,
+        repairableMessages: 0,
+        repairedMessages: 0,
+        failedMessages: 0,
+        status: "failed",
+        reason: messagesResult.ok ? "Runtime returned unreadable messages." : messagesResult.error,
+      });
+      continue;
+    }
+
+    const repairResult = await repairRuntimeAssistantMessages({
+      taskId: args.taskId,
+      runtimeSessionId,
+      authorization: args.authorization,
+      messages: messagesResult.data,
+    });
+
+    summary.scannedMessages += repairResult.scannedMessages;
+    summary.repairableMessages += repairResult.repairableMessages;
+    summary.repairedMessages += repairResult.repairedMessages;
+    summary.failedMessages += repairResult.failedMessages;
+
+    const status =
+      repairResult.repairableMessages === 0
+        ? "skipped"
+        : repairResult.repairedMessages > 0
+          ? "repaired"
+          : "failed";
+
+    if (status === "repaired") {
+      summary.repairedSessions += 1;
+    } else if (status === "failed") {
+      summary.failedSessions += 1;
+    } else {
+      summary.skippedSessions += 1;
+    }
+
+    summary.sessionResults.push({
+      runtimeSessionId,
+      scannedMessages: repairResult.scannedMessages,
+      repairableMessages: repairResult.repairableMessages,
+      repairedMessages: repairResult.repairedMessages,
+      failedMessages: repairResult.failedMessages,
+      status,
+      ...(status === "failed" && repairResult.repairableMessages > 0
+        ? { reason: "All repairable assistant messages failed to persist." }
+        : {}),
+    });
+  }
+
+  return summary;
 }
 
 async function markTaskFailed(
@@ -424,6 +695,12 @@ async function resolveParallelCandidateState(
 
   const assistantResult = extractAssistantResultFromMessages(messagesResult.data);
   if (assistantResult.failed) {
+    await repairRuntimeAssistantMessages({
+      taskId: task.id,
+      runtimeSessionId: candidate.sessionId,
+      authorization: context.authorization,
+      messages: Array.isArray(messagesResult.data) ? messagesResult.data : [],
+    });
     return {
       sessionId: candidate.sessionId,
       status: "failed",
@@ -431,6 +708,12 @@ async function resolveParallelCandidateState(
   }
 
   if (assistantResult.completed) {
+    await repairRuntimeAssistantMessages({
+      taskId: task.id,
+      runtimeSessionId: candidate.sessionId,
+      authorization: context.authorization,
+      messages: Array.isArray(messagesResult.data) ? messagesResult.data : [],
+    });
     return {
       sessionId: candidate.sessionId,
       status: "completed",
@@ -491,6 +774,12 @@ async function reconcileCompletedTaskWithActiveSession(
 
   const assistantResult = extractAssistantResultFromMessages(messagesResult.data);
   if (assistantResult.failed) {
+    await repairRuntimeAssistantMessages({
+      taskId: task.id,
+      runtimeSessionId: task.sessionId as string,
+      authorization: context.authorization,
+      messages: Array.isArray(messagesResult.data) ? messagesResult.data : [],
+    });
     return failTaskWithReason(
       task,
       context,
@@ -501,6 +790,13 @@ async function reconcileCompletedTaskWithActiveSession(
   if (!assistantResult.completed) {
     return "skipped";
   }
+
+  await repairRuntimeAssistantMessages({
+    taskId: task.id,
+    runtimeSessionId: task.sessionId as string,
+    authorization: context.authorization,
+    messages: Array.isArray(messagesResult.data) ? messagesResult.data : [],
+  });
 
   const updated = await markTaskCompleted(
     context.authorization,
@@ -538,7 +834,7 @@ async function reconcileTaskWithoutRuntime(
   return failTaskWithReason(
     task,
     context,
-    "Recovered from stale running state: OpenCode runtime unavailable at startup and task exceeded stale timeout.",
+    "Recovered from stale running state: runtime unavailable at startup and task exceeded stale timeout.",
   );
 }
 
@@ -554,7 +850,7 @@ async function reconcileTaskWithUnreadableSession(
   return failTaskWithReason(
     task,
     context,
-    "Recovered from stale running state: OpenCode session missing or unreadable during startup reconcile.",
+    "Recovered from stale running state: runtime session missing or unreadable during startup reconcile.",
   );
 }
 
@@ -566,11 +862,11 @@ async function reconcileSingleRunningTask(
     return reconcileParallelRunningTask(task, context);
   }
 
-  if (!task.sessionId || !task.agentRunId) {
+  if (!task.sessionId) {
     return failTaskWithReason(
       task,
       context,
-      "Recovered from stale running state: missing sessionId or agentRunId.",
+      "Recovered from stale running state: missing sessionId.",
     );
   }
 
@@ -588,6 +884,12 @@ async function reconcileSingleRunningTask(
 
   const assistantResult = extractAssistantResultFromMessages(messagesResult.data);
   if (assistantResult.failed) {
+    await repairRuntimeAssistantMessages({
+      taskId: task.id,
+      runtimeSessionId: task.sessionId,
+      authorization: context.authorization,
+      messages: Array.isArray(messagesResult.data) ? messagesResult.data : [],
+    });
     return failTaskWithReason(
       task,
       context,
@@ -596,17 +898,24 @@ async function reconcileSingleRunningTask(
   }
 
   if (assistantResult.completed) {
+    await repairRuntimeAssistantMessages({
+      taskId: task.id,
+      runtimeSessionId: task.sessionId,
+      authorization: context.authorization,
+      messages: Array.isArray(messagesResult.data) ? messagesResult.data : [],
+    });
     const updated = await markTaskCompleted(context.authorization, task, assistantResult.text);
     return updated ? "completed" : "skipped";
   }
 
-  const existingRun = getAgentRun(task.agentRunId);
+  const effectiveAgentRunId = task.agentRunId ?? task.sessionId;
+  const existingRun = getAgentRun(effectiveAgentRunId);
   if (existingRun) {
     return "skipped";
   }
 
   recoverAgentRun(
-    task.agentRunId,
+    effectiveAgentRunId,
     task.sessionId,
     task.id,
     task.projectId,

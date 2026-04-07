@@ -1,5 +1,5 @@
 import { cpFetch, createInternalAuthorization } from "../../lib/control-plane-client";
-import { formatModelRoute } from "../../lib/opencode-config";
+import { formatModelRoute } from "../../lib/model-config";
 import { estimatePaidExecutionUsage } from "../../lib/paid-execution-guard";
 import { syncRuntimeUsageLedger } from "../../lib/runtime-usage-ledger";
 
@@ -49,6 +49,7 @@ interface RecordAgentAuditInput {
   taskId?: string;
   sessionId?: string;
   agentRunId?: string;
+  traceId?: string;
   eventType: string;
   action: string;
   detail?: Record<string, unknown>;
@@ -178,6 +179,7 @@ export async function recordAgentAudit(input: RecordAgentAuditInput): Promise<vo
       taskId: input.taskId,
       sessionId: input.sessionId,
       agentRunId: input.agentRunId,
+      traceId: input.traceId,
       eventType: input.eventType,
       action: input.action,
       detail: input.detail,

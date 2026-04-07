@@ -1,4 +1,4 @@
-import { asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import { drizzle as drizzlePostgres } from "drizzle-orm/postgres-js";
 import { db as importedDb } from "../../db/index";
 import { openPostgresDatabase } from "../../db/postgres-client";
@@ -6,6 +6,7 @@ import {
   type TaskSessionMessageRole,
   type TaskTimelineItemKind,
   tasks as taskAggregates,
+  taskSessions,
   taskSnapshots,
   taskTimelineViews,
 } from "../../db/schema";
@@ -20,7 +21,9 @@ function toLifecycleStatus(
   status: string | null | undefined,
 ): "draft" | "active" | "done" | "archived" {
   if (!status) return "draft";
+  if (status === "pending") return "draft";
   if (status === "completed") return "done";
+  if (status === "cancelled") return "archived";
   return "active";
 }
 
@@ -352,12 +355,47 @@ function normalizeProjectionStatus(value: unknown) {
   return "pending" as const;
 }
 
+function fromProjectionLifecycleStatus(value: unknown) {
+  if (value === "draft") {
+    return "pending" as const;
+  }
+  if (value === "active") {
+    return "running" as const;
+  }
+  if (value === "done") {
+    return "completed" as const;
+  }
+  if (value === "archived") {
+    return "cancelled" as const;
+  }
+
+  return normalizeProjectionStatus(value);
+}
+
 function normalizeProjectionOrchestrationKind(value: unknown) {
   return fromStoredTaskExecutionMode(typeof value === "string" ? value : null);
 }
 
 function asNullableString(value: unknown) {
   return typeof value === "string" && value.trim() ? value : null;
+}
+
+async function resolveProjectedTaskSessionId(taskId: string, sessionId?: string | null) {
+  const normalizedSessionId = asNullableString(sessionId);
+  if (!normalizedSessionId) {
+    return null;
+  }
+
+  if (normalizedSessionId.startsWith("task-session:")) {
+    return normalizedSessionId;
+  }
+
+  const [runtimeSession] = await db
+    .select({ id: taskSessions.id })
+    .from(taskSessions)
+    .where(and(eq(taskSessions.taskId, taskId), eq(taskSessions.runtimeSessionId, normalizedSessionId)));
+
+  return runtimeSession?.id ?? null;
 }
 
 function normalizeMessageRole(value: unknown): TaskSessionMessageRole | null {
@@ -491,7 +529,23 @@ function getProjectionBaseStatus(
   snapshotStatus: string | null | undefined,
   aggregateStatus: string | null | undefined,
 ) {
-  return normalizeProjectionStatus(snapshotStatus ?? aggregateStatus);
+  return fromProjectionLifecycleStatus(snapshotStatus ?? aggregateStatus);
+}
+
+function getProjectionActiveStatus(
+  snapshotStatus: string | null | undefined,
+  aggregateStatus: string | null | undefined,
+) {
+  const baseStatus = getProjectionBaseStatus(snapshotStatus, aggregateStatus);
+  if (
+    baseStatus === "completed" ||
+    baseStatus === "failed" ||
+    baseStatus === "cancelled"
+  ) {
+    return baseStatus;
+  }
+
+  return "running" as const;
 }
 
 async function syncSnapshotFromProjectionBase(args: {
@@ -506,16 +560,15 @@ async function syncSnapshotFromProjectionBase(args: {
   await syncTaskSnapshotProjection({
     taskId: args.eventRecord.taskId,
     projectId: args.eventRecord.projectId,
-    currentStatus: getProjectionBaseStatus(
+    currentStatus: getProjectionActiveStatus(
       snapshotRecord?.lifecycleStatus,
-      aggregateRecord?.status,
+      aggregateRecord?.lifecycleStatus,
     ),
     orchestrationKind: fromStoredTaskExecutionMode(snapshotRecord?.currentExecutionMode),
     currentSessionId: args.currentSessionId ?? snapshotRecord?.currentSessionId ?? null,
     latestResultSummary:
       args.latestResultSummary ??
       snapshotRecord?.latestResultSummary ??
-      aggregateRecord?.latestResultSummary ??
       null,
     latestErrorText: args.latestErrorText ?? snapshotRecord?.latestErrorText ?? null,
     lastActivityAt: args.lastActivityAt,
@@ -526,12 +579,17 @@ async function handleTaskAggregateUpsertedEvent(
   eventRecord: ProjectableTaskDomainEventRecord,
   payload: Record<string, unknown>,
 ) {
+  const currentSessionId = await resolveProjectedTaskSessionId(
+    eventRecord.taskId,
+    asNullableString(payload.currentSessionId),
+  );
+
   await syncTaskSnapshotProjection({
     taskId: eventRecord.taskId,
     projectId: eventRecord.projectId,
     currentStatus: normalizeProjectionStatus(payload.status),
     orchestrationKind: normalizeProjectionOrchestrationKind(payload.executionMode),
-    currentSessionId: asNullableString(payload.currentSessionId),
+    currentSessionId,
     latestResultSummary:
       asNullableString(payload.resultSummary) ?? asNullableString(payload.result),
     latestErrorText: asNullableString(payload.latestErrorText),
@@ -564,6 +622,12 @@ async function handleConversationSessionUpsertedEvent(
   payload: Record<string, unknown>,
 ) {
   const sessionEvent = describeSessionTimelineEvent(payload);
+  const currentSessionId =
+    eventRecord.sessionId ??
+    (await resolveProjectedTaskSessionId(
+      eventRecord.taskId,
+      asNullableString(payload.runtimeSessionId),
+    ));
 
   await upsertTaskTimelineViewRecord({
     id: `timeline:session:${eventRecord.sessionId ?? eventRecord.id}`,
@@ -591,7 +655,7 @@ async function handleConversationSessionUpsertedEvent(
 
   await syncSnapshotFromProjectionBase({
     eventRecord,
-    currentSessionId: asNullableString(payload.runtimeSessionId),
+    currentSessionId,
     lastActivityAt: eventRecord.createdAt,
   });
 }
@@ -642,6 +706,12 @@ async function handleConversationMessageUpsertedEvent(
   );
   const timelineMessageId = asNullableString(payload.messageId);
   const partSummaries = normalizeMessagePartSummaries(payload.partSummaries);
+  const currentSessionId =
+    eventRecord.sessionId ??
+    (await resolveProjectedTaskSessionId(
+      eventRecord.taskId,
+      asNullableString(payload.runtimeSessionId),
+    ));
 
   await upsertTaskTimelineViewRecord({
     id: `timeline:message:${asNullableString(payload.messageId) ?? eventRecord.id}`,
@@ -673,7 +743,7 @@ async function handleConversationMessageUpsertedEvent(
 
   await syncSnapshotFromProjectionBase({
     eventRecord,
-    currentSessionId: asNullableString(payload.runtimeSessionId),
+    currentSessionId,
     lastActivityAt: asNullableString(payload.completedAt) ?? eventRecord.createdAt,
   });
 }
@@ -686,15 +756,20 @@ async function handleTaskRunNodeUpsertedEvent(
   const orchestrationKind = normalizeProjectionOrchestrationKind(payload.orchestrationKind);
   const explicitWinnerNodeId = asNullableString(payload.winnerNodeId);
   const shouldPreserveMainline = orchestrationKind === "parallel" && explicitWinnerNodeId == null;
+  const currentSessionId = shouldPreserveMainline
+    ? undefined
+    : (eventRecord.sessionId ??
+      (await resolveProjectedTaskSessionId(
+        eventRecord.taskId,
+        asNullableString(payload.runtimeSessionId),
+      )));
 
   await syncTaskSnapshotProjection({
     taskId: eventRecord.taskId,
     projectId: eventRecord.projectId,
     currentStatus: normalizeProjectionStatus(payload.status),
     orchestrationKind,
-    currentSessionId: shouldPreserveMainline
-      ? undefined
-      : asNullableString(payload.runtimeSessionId),
+    currentSessionId,
     latestResultSummary: shouldPreserveMainline ? undefined : asNullableString(payload.result),
     latestErrorText: asNullableString(payload.error),
     lastActivityAt: asNullableString(payload.lastActivityAt) ?? eventRecord.createdAt,

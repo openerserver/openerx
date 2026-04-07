@@ -94,110 +94,6 @@
 			"group": "none"
 		},
 		{
-			"label": "start-opencode-runtime",
-			"type": "shell",
-			"command": "zsh",
-			"args": [
-				"-lc",
-				"pids=$(lsof -ti tcp:4096 -sTCP:LISTEN 2>/dev/null || true); if [[ -n \"$pids\" ]]; then kill $pids; sleep 1; fi; exec /Users/wanglei/.opencode/bin/opencode serve --hostname 127.0.0.1 --port 4096 --print-logs"
-			],
-			"isBackground": true,
-			"problemMatcher": {
-				"owner": "custom",
-				"pattern": {
-					"regexp": "^(.*)$",
-					"message": 1
-				},
-				"background": {
-					"activeOnStart": true,
-					"beginsPattern": ".",
-					"endsPattern": "opencode server listening on http://127\\.0\\.0\\.1:4096"
-				}
-			},
-			"group": "none"
-		},
-		{
-			"label": "start-opencode-global-events-capture",
-			"type": "shell",
-			"command": "zsh",
-			"args": [
-				"-lc",
-				"exec bun run opencode:events:capture"
-			],
-			"isBackground": true,
-			"problemMatcher": {
-				"owner": "custom",
-				"pattern": {
-					"regexp": "^(.*)$",
-					"message": 1
-				},
-				"background": {
-					"activeOnStart": true,
-					"beginsPattern": ".",
-					"endsPattern": "\\[meta\\] connect Connecting to SSE endpoint"
-				}
-			},
-			"presentation": {
-				"reveal": "always",
-				"panel": "dedicated"
-			},
-			"group": "none"
-		},
-		{
-			"label": "start-opencode-global-events-capture-fixed-output",
-			"type": "shell",
-			"command": "zsh",
-			"args": [
-				"-lc",
-				"rm -f tmp/opencode-global-events-debug.jsonl && exec bun run opencode:events:capture -- --output tmp/opencode-global-events-debug.jsonl"
-			],
-			"isBackground": true,
-			"problemMatcher": {
-				"owner": "custom",
-				"pattern": {
-					"regexp": "^(.*)$",
-					"message": 1
-				},
-				"background": {
-					"activeOnStart": true,
-					"beginsPattern": ".",
-					"endsPattern": "\\[meta\\] connect Connecting to SSE endpoint"
-				}
-			},
-			"presentation": {
-				"reveal": "always",
-				"panel": "dedicated"
-			},
-			"group": "none"
-		},
-		{
-			"label": "start-opencode-global-events-capture-fixed-output-and-organize-taskdetail",
-			"type": "shell",
-			"command": "zsh",
-			"args": [
-				"-lc",
-				"finalized=0; finalize() { local exit_code=$?; if (( finalized )); then return; fi; finalized=1; if [[ -f tmp/opencode-global-events-debug.jsonl ]]; then bun run opencode:events:organize-taskdetail -- --input tmp/opencode-global-events-debug.jsonl || true; fi; exit $exit_code; }; trap finalize INT TERM EXIT; rm -f tmp/opencode-global-events-debug.jsonl tmp/opencode-global-events-debug.taskdetail.json; bun run opencode:events:capture -- --output tmp/opencode-global-events-debug.jsonl"
-			],
-			"isBackground": true,
-			"problemMatcher": {
-				"owner": "custom",
-				"pattern": {
-					"regexp": "^(.*)$",
-					"message": 1
-				},
-				"background": {
-					"activeOnStart": true,
-					"beginsPattern": ".",
-					"endsPattern": "\\[meta\\] connect Connecting to SSE endpoint"
-				}
-			},
-			"presentation": {
-				"reveal": "always",
-				"panel": "dedicated"
-			},
-			"group": "none"
-		},
-		{
 			"label": "start-web-ui-bff",
 			"type": "shell",
 			"command": "zsh",
@@ -277,17 +173,6 @@
 			"group": "none"
 		},
 		{
-			"label": "stop-opencode-runtime",
-			"type": "shell",
-			"command": "zsh",
-			"args": [
-				"-lc",
-				"pids=$(lsof -ti tcp:4096 -sTCP:LISTEN 2>/dev/null || true); if [[ -n \"$pids\" ]]; then kill $pids; fi"
-			],
-			"isBackground": false,
-			"group": "none"
-		},
-		{
 			"label": "stop-web-ui-bff",
 			"type": "shell",
 			"command": "zsh",
@@ -350,16 +235,6 @@
 			"group": "none"
 		},
 		{
-			"label": "restart-opencode-runtime",
-			"dependsOrder": "sequence",
-			"dependsOn": [
-				"stop-opencode-runtime",
-				"start-opencode-runtime"
-			],
-			"problemMatcher": [],
-			"group": "none"
-		},
-		{
 			"label": "restart-web-ui-bff",
 			"dependsOrder": "sequence",
 			"dependsOn": [
@@ -383,7 +258,6 @@
 			"label": "start-single-process-dev",
 			"dependsOrder": "parallel",
 			"dependsOn": [
-				"start-opencode-runtime",
 				"start-app",
 				"start-web-ui"
 			],
@@ -395,7 +269,6 @@
 			"dependsOrder": "parallel",
 			"dependsOn": [
 				"start-app",
-				"start-opencode-runtime",
 				"start-web-ui"
 			],
 			"problemMatcher": [],
@@ -405,37 +278,15 @@
 			"label": "start-single-process-pg-4193",
 			"dependsOrder": "parallel",
 			"dependsOn": [
-				"start-opencode-runtime",
 				"start-app-pg-4193"
 			],
 			"problemMatcher": [],
 			"group": "none"
 		},
 		{
-			"label": "run-completion-sync-real",
-			"type": "shell",
-			"command": "cd control-plane/web-ui-bff && TEST_APP_URL=http://127.0.0.1:4098 RUN_EXECUTION_INTEGRATION=1 bun test ../../tests/web-ui-bff/opencode-completion-sync.test.ts --timeout 120000",
-			"isBackground": false,
-			"group": "test"
-		},
-		{
 			"label": "check-app-health",
 			"type": "shell",
 			"command": "curl -s -o /dev/null -w '%{http_code}\\n' http://127.0.0.1:4098/health/live",
-			"isBackground": false,
-			"group": "test"
-		},
-		{
-			"label": "check-opencode-health",
-			"type": "shell",
-			"command": "curl -s -o /dev/null -w '%{http_code}\\n' http://127.0.0.1:4096/session",
-			"isBackground": false,
-			"group": "test"
-		},
-		{
-			"label": "run-completion-sync-real-2",
-			"type": "shell",
-			"command": "cd control-plane/web-ui-bff && TEST_APP_URL=http://127.0.0.1:4098 RUN_EXECUTION_INTEGRATION=1 bun test ../../tests/web-ui-bff/opencode-completion-sync.test.ts --timeout 120000",
 			"isBackground": false,
 			"group": "test"
 		},
@@ -595,10 +446,10 @@
 		{
 			"label": "debug-session-message-500",
 			"type": "shell",
-			"command": "zsh",
+			"command": "bun",
 			"args": [
-				"-lc",
-				"cd /Users/wanglei/Downloads/phones-cloud/openerx && bun -e \"const CP_URL=process.env.TEST_CP_URL||'http://127.0.0.1:4097'; const USERNAME=process.env.TEST_USERNAME||'admin'; const PASSWORD=process.env.TEST_PASSWORD||'admin123!'; const loginRes=await fetch(`${CP_URL}/api/auth/login`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:USERNAME,password:PASSWORD})}); const login=await loginRes.json(); const token=login.token; const taskRes=await fetch(`${CP_URL}/api/tasks`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify({projectId:process.env.TEST_PROJECT_ID||'proj-default',title:`debug-${Date.now()}`,prompt:'debug prompt'})}); const task=await taskRes.json(); console.log('task',taskRes.status,JSON.stringify(task)); const runtimeSessionId=`debug-session-${Date.now()}`; const sessionRes=await fetch(`${CP_URL}/api/tasks/${task.id}/sessions`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify({runtimeSessionId,branchName:'debug-branch',sourceType:'root',isActive:true})}); console.log('session',sessionRes.status,await sessionRes.text()); const msgRes=await fetch(`${CP_URL}/api/tasks/${task.id}/sessions/messages`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify({runtimeSessionId,message:{info:{id:`msg-${Date.now()}`,role:'assistant'},parts:[{type:'text',text:'hello'}]}})}); console.log('message',msgRes.status,await msgRes.text());\""
+				"-e",
+				"const CP_URL=process.env.TEST_CP_URL||\"http://127.0.0.1:4097\"; const USERNAME=process.env.TEST_USERNAME||\"admin\"; const PASSWORD=process.env.TEST_PASSWORD||\"admin123!\"; const loginRes=await fetch(`${CP_URL}/api/auth/login`,{method:\"POST\",headers:{\"Content-Type\":\"application/json\"},body:JSON.stringify({username:USERNAME,password:PASSWORD})}); const login=await loginRes.json(); const token=login.token; const taskRes=await fetch(`${CP_URL}/api/tasks`,{method:\"POST\",headers:{Authorization:`Bearer ${token}`,\"Content-Type\":\"application/json\"},body:JSON.stringify({projectId:process.env.TEST_PROJECT_ID||\"proj-default\",title:`debug-${Date.now()}`,prompt:\"debug prompt\"})}); const task=await taskRes.json(); console.log(\"task\",taskRes.status,JSON.stringify(task)); const runtimeSessionId=`debug-session-${Date.now()}`; const sessionRes=await fetch(`${CP_URL}/api/tasks/${task.id}/sessions`,{method:\"POST\",headers:{Authorization:`Bearer ${token}`,\"Content-Type\":\"application/json\"},body:JSON.stringify({runtimeSessionId,branchName:\"debug-branch\",sourceType:\"root\",isActive:true})}); console.log(\"session\",sessionRes.status,await sessionRes.text()); const msgRes=await fetch(`${CP_URL}/api/tasks/${task.id}/sessions/messages`,{method:\"POST\",headers:{Authorization:`Bearer ${token}`,\"Content-Type\":\"application/json\"},body:JSON.stringify({runtimeSessionId,message:{info:{id:`msg-${Date.now()}`,role:\"assistant\"},parts:[{type:\"text\",text:\"hello\"}]}})}); console.log(\"message\",msgRes.status,await msgRes.text());"
 			],
 			"isBackground": false,
 			"group": "test"

@@ -1,9 +1,6 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { createControlPlaneClientModuleMock } from "./control-plane-client-mock";
-import {
-  createOpencodeAdapterModuleMock,
-  createRuntimeProviderModuleMock,
-} from "./opencode-adapter-mock";
+import { createRuntimeProviderModuleMock } from "./runtime-provider-mock";
 import {
   expectNoPublicTraceRequests,
   expectSessionMessageReaderCalls,
@@ -102,7 +99,7 @@ mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () =>
   }),
 );
 
-const opencodeAdapterModule = createOpencodeAdapterModuleMock({
+const runtimeProviderModule = createRuntimeProviderModuleMock({
   continueSession: mock(async () => ({ ok: true })),
   createSession: mock(async () => ({ ok: true, sessionId: "ses-1", agentRunId: "run-1" })),
   ensureAgentRunForSession: mock(() => "run-1"),
@@ -117,11 +114,6 @@ const opencodeAdapterModule = createOpencodeAdapterModuleMock({
   terminateAgent: terminateAgentMock,
   updateAgentRunStatus: updateAgentRunStatusMock,
 });
-
-mock.module(
-  "../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter",
-  () => opencodeAdapterModule,
-);
 
 mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/agent-run-registry", () => ({
   ensureAgentRunForSession: mock(() => "run-1"),
@@ -138,7 +130,7 @@ mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/runtime-me
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/runtime-provider", () =>
-  createRuntimeProviderModuleMock(opencodeAdapterModule),
+  runtimeProviderModule,
 );
 
 mock.module("../../control-plane/web-ui-bff/src/modules/code-changes/change-collector", () => ({
@@ -1126,6 +1118,14 @@ describe("SSEAggregator pipeline emitters", () => {
   });
 
   test("completion finalization emits task.completed and pipeline.stage.updated for single-mode runs", async () => {
+    extractAssistantResultFromMessagesMock.mockReturnValue({
+      completed: true,
+      failed: false,
+      error: undefined,
+      tokenUsed: 0,
+      text: "Final answer",
+      traceId: "trace-final-1",
+    });
     findAgentRunBySessionIdMock.mockReturnValue({
       subSessionId: "ses-1",
       status: "running",
@@ -1212,6 +1212,16 @@ describe("SSEAggregator pipeline emitters", () => {
           body: expect.objectContaining({
             runtimeSessionId: "ses-1",
             isActive: false,
+          }),
+        }),
+      );
+      expect(cpFetchMock).toHaveBeenCalledWith(
+        "/api/audit",
+        expect.objectContaining({
+          method: "POST",
+          body: expect.objectContaining({
+            action: "completed",
+            traceId: "trace-final-1",
           }),
         }),
       );

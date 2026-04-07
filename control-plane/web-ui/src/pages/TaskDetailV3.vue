@@ -93,7 +93,13 @@
                       :loading="runtimePermissionActionId === `${permission.id}:always`"
                       @click="handleReplyRuntimePermission(permission, 'always')"
                     >
-                      始终允许该目录
+                      {{
+                        permission.permission === 'external_directory'
+                          ? '始终允许该目录'
+                          : permission.permission === 'command_execution'
+                            ? '始终允许该命令'
+                            : '始终允许'
+                      }}
                     </a-button>
                     <a-button
                       size="small"
@@ -123,6 +129,7 @@
               :error="messagesError"
               :active-session-id="selectedSessionId"
               :force-scroll-token="conversationFocusToken"
+              :default-assistant-model="assistantMessageModelFallback"
               @open-file-preview="handleOpenFilePreview"
               @adopt-candidate="handleAdoptCandidate"
             />
@@ -1511,6 +1518,24 @@ const selectedSessionRuntimePermissions = computed(() => {
   return runtimePermissions.value.filter((item) => item.sessionId === sessionId);
 });
 
+const assistantMessageModelFallback = computed(() => {
+  const sessionId = selectedSessionId.value;
+  const selectedSessionModel = sessionId
+    ? taskSessionSummaries.value
+        .find((summary) => summary.id === sessionId || summary.taskSessionId === sessionId)
+        ?.selectedModel
+    : null;
+
+  const normalizedSessionModel =
+    typeof selectedSessionModel === "string" ? selectedSessionModel.trim() : "";
+  if (normalizedSessionModel) {
+    return normalizedSessionModel;
+  }
+
+  const normalizedTaskModel = task.value?.selectedModel?.trim();
+  return normalizedTaskModel || undefined;
+});
+
 /* ------------------------------------------------------------------ */
 /*  Models                                                              */
 /* ------------------------------------------------------------------ */
@@ -2344,7 +2369,11 @@ async function handleReplyRuntimePermission(
       reply === "reject"
         ? "已拒绝运行时审批"
         : reply === "always"
-          ? "已永久允许该目录访问"
+          ? permission.permission === "command_execution"
+            ? "已永久允许该命令执行"
+            : permission.permission === "external_directory"
+              ? "已永久允许该目录访问"
+              : "已永久允许该权限"
           : "已允许本次访问",
     );
     await refreshRuntimePermissions(true);
@@ -2358,6 +2387,7 @@ async function handleReplyRuntimePermission(
 
 function runtimePermissionLabel(permission: string) {
   if (permission === "external_directory") return "外部目录访问";
+  if (permission === "command_execution") return "命令执行";
   return permission || "运行时审批";
 }
 
@@ -2365,8 +2395,10 @@ function runtimePermissionPath(permission: TaskRuntimePermission) {
   const metadata = permission.metadata as Record<string, unknown> | null;
   const filepath = metadata?.filepath;
   const parentDir = metadata?.parentDir;
+  const command = metadata?.command;
   if (typeof filepath === "string" && filepath.trim()) return filepath.trim();
   if (typeof parentDir === "string" && parentDir.trim()) return parentDir.trim();
+  if (typeof command === "string" && command.trim()) return command.trim();
   return "";
 }
 

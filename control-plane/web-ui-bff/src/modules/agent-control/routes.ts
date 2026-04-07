@@ -29,6 +29,8 @@ export const agentControlRoutes = new Hono();
 type RuntimeRun = ReturnType<typeof listAgentRuns>[number];
 type AgentOpsQueue = "attention" | "running" | "recent";
 
+type AgentOpsViewScope = "mine" | "project" | "global";
+
 interface AgentRunSummaryResponse {
   agentRunId: string;
   entryContext?: string;
@@ -550,6 +552,355 @@ function buildAgentOpsQueueItem(summary: AgentRunSummaryResponse): AgentOpsQueue
   };
 }
 
+function parseBooleanQuery(value?: string) {
+  if (value === "true") return true;
+  if (value === "false") return false;
+  return undefined;
+}
+
+function normalizeQueryText(value?: string | null) {
+  return value?.trim().toLowerCase() ?? "";
+}
+
+function resolveSummaryTimeMs(summary: AgentRunSummaryResponse) {
+  return parseIsoMs(summary.lastActivityAt) ?? parseIsoMs(summary.finishedAt) ?? parseIsoMs(summary.startedAt);
+}
+
+function parseQueryTime(value?: string) {
+  if (!value) return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function isApprovalBlocked(summary: AgentRunSummaryResponse) {
+  return (
+    (typeof summary.governance?.pendingApprovals === "number" && summary.governance.pendingApprovals > 0) ||
+    summary.governance?.latestApprovalStatus === "pending"
+  );
+}
+
+function hasHumanIntervention(summary: AgentRunSummaryResponse) {
+  return summary.guidanceCount > 0;
+}
+
+function resolveViewScope(c: Parameters<typeof authHeader>[0]): AgentOpsViewScope {
+  if (c.req.query("ownerScope") === "mine") {
+    return "mine";
+  }
+
+  if (c.req.query("projectId")) {
+    return "project";
+  }
+
+  return "global";
+}
+
+function matchesAgentOpsFilters(
+  summary: AgentRunSummaryResponse,
+  c: Parameters<typeof authHeader>[0],
+) {
+  const projectId = c.req.query("projectId");
+  if (projectId && summary.projectId !== projectId) {
+    return false;
+  }
+
+  const taskId = c.req.query("taskId");
+  if (taskId && summary.taskId !== taskId) {
+    return false;
+  }
+
+  const agentRunId = c.req.query("agentRunId");
+  if (agentRunId && summary.agentRunId !== agentRunId) {
+    return false;
+  }
+
+  const entryContext = c.req.query("entryContext");
+  if (entryContext && summary.entryContext !== entryContext) {
+    return false;
+  }
+
+  const status = c.req.query("status");
+  if (status && summary.status !== status) {
+    return false;
+  }
+
+  const riskLevel = c.req.query("riskLevel");
+  if (riskLevel && summary.riskLevel !== riskLevel) {
+    return false;
+  }
+
+  const agentType = c.req.query("agentType");
+  if (agentType && summary.agentType !== agentType) {
+    return false;
+  }
+
+  const model = c.req.query("model");
+  if (model && summary.modelUsed !== model) {
+    return false;
+  }
+
+  const approvalBlocked = parseBooleanQuery(c.req.query("approvalBlocked"));
+  if (approvalBlocked !== undefined && isApprovalBlocked(summary) !== approvalBlocked) {
+    return false;
+  }
+
+  const requiresIntervention = parseBooleanQuery(c.req.query("requiresIntervention"));
+  if (requiresIntervention !== undefined && Boolean(summary.blockerType) !== requiresIntervention) {
+    return false;
+  }
+
+  const search = normalizeQueryText(c.req.query("search"));
+  if (search) {
+    const haystack = [
+      summary.agentRunId,
+      summary.taskId,
+      summary.taskTitle,
+      summary.projectId,
+      summary.projectName,
+      summary.agentType,
+      summary.status,
+      summary.modelUsed,
+      summary.blockerLabel,
+      summary.resultSummary,
+      summary.error,
+      summary.longSummary,
+    ]
+      .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+      .join("\n")
+      .toLowerCase();
+    if (!haystack.includes(search)) {
+      return false;
+    }
+  }
+
+  const fromMs = parseQueryTime(c.req.query("from"));
+  const toMs = parseQueryTime(c.req.query("to"));
+  if (fromMs != null || toMs != null) {
+    const summaryMs = resolveSummaryTimeMs(summary);
+    if (summaryMs == null) {
+      return false;
+    }
+    if (fromMs != null && summaryMs < fromMs) {
+      return false;
+    }
+    if (toMs != null && summaryMs > toMs) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+async function loadFilteredAgentRunSummaries(c: Parameters<typeof authHeader>[0]) {
+  const runs = listAgentRuns();
+  const summaries = await Promise.all(
+    runs.map(async (run) => {
+      const loaded = await loadAgentRunSummaryResponse(c, run.agentRunId);
+      return loaded.ok ? loaded.summary : buildRuntimeFallbackSummary(run.agentRunId, run);
+    }),
+  );
+
+  return summaries.filter((summary) => matchesAgentOpsFilters(summary, c));
+}
+
+function computeRate(count: number, total: number) {
+  if (total <= 0) {
+    return 0;
+  }
+
+  return Math.round((count / total) * 1000) / 10;
+}
+
+function computeAverage(numbers: number[]) {
+  if (numbers.length === 0) {
+    return null;
+  }
+
+  return Math.round(numbers.reduce((sum, value) => sum + value, 0) / numbers.length);
+}
+
+function buildRankingItems(
+  summaries: AgentRunSummaryResponse[],
+  keySelector: (summary: AgentRunSummaryResponse) => string,
+) {
+  const groups = new Map<
+    string,
+    {
+      label: string;
+      totalRuns: number;
+      completedRuns: number;
+      failedRuns: number;
+      attentionCount: number;
+      interventionCount: number;
+      durationValues: number[];
+      tokenValues: number[];
+    }
+  >();
+
+  for (const summary of summaries) {
+    const key = keySelector(summary) || "unknown";
+    const current = groups.get(key) ?? {
+      label: key,
+      totalRuns: 0,
+      completedRuns: 0,
+      failedRuns: 0,
+      attentionCount: 0,
+      interventionCount: 0,
+      durationValues: [],
+      tokenValues: [],
+    };
+    current.totalRuns += 1;
+    current.completedRuns += summary.status === "completed" ? 1 : 0;
+    current.failedRuns += summary.status === "failed" ? 1 : 0;
+    current.attentionCount += summary.blockerType ? 1 : 0;
+    current.interventionCount += hasHumanIntervention(summary) ? 1 : 0;
+    if (typeof summary.durationMs === "number" && Number.isFinite(summary.durationMs)) {
+      current.durationValues.push(summary.durationMs);
+    }
+    if (typeof summary.tokenUsed === "number" && Number.isFinite(summary.tokenUsed)) {
+      current.tokenValues.push(summary.tokenUsed);
+    }
+    groups.set(key, current);
+  }
+
+  return Array.from(groups.entries())
+    .map(([key, group]) => ({
+      key,
+      label: group.label,
+      totalRuns: group.totalRuns,
+      completedRuns: group.completedRuns,
+      failedRuns: group.failedRuns,
+      attentionCount: group.attentionCount,
+      interventionCount: group.interventionCount,
+      successRate: computeRate(group.completedRuns, group.totalRuns),
+      failureRate: computeRate(group.failedRuns, group.totalRuns),
+      avgDurationMs: computeAverage(group.durationValues),
+      avgTokenUsed: computeAverage(group.tokenValues),
+    }))
+    .sort((left, right) => {
+      if (right.totalRuns !== left.totalRuns) {
+        return right.totalRuns - left.totalRuns;
+      }
+      if (right.attentionCount !== left.attentionCount) {
+        return right.attentionCount - left.attentionCount;
+      }
+      return left.label.localeCompare(right.label);
+    });
+}
+
+function buildBreakdownItems(
+  items: Array<{ key: string; label: string }>,
+  total: number,
+) {
+  const counts = new Map<string, { label: string; count: number }>();
+
+  for (const item of items) {
+    const current = counts.get(item.key) ?? { label: item.label, count: 0 };
+    current.count += 1;
+    counts.set(item.key, current);
+  }
+
+  return Array.from(counts.entries())
+    .map(([key, value]) => ({
+      key,
+      label: value.label,
+      count: value.count,
+      share: computeRate(value.count, total),
+    }))
+    .sort((left, right) => {
+      if (right.count !== left.count) {
+        return right.count - left.count;
+      }
+      return left.label.localeCompare(right.label);
+    });
+}
+
+function floorBucketStart(timestampMs: number, bucketUnit: "hour" | "day") {
+  const date = new Date(timestampMs);
+  if (bucketUnit === "day") {
+    return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+  }
+
+  return Date.UTC(
+    date.getUTCFullYear(),
+    date.getUTCMonth(),
+    date.getUTCDate(),
+    date.getUTCHours(),
+  );
+}
+
+function formatBucketLabel(timestampMs: number, bucketUnit: "hour" | "day") {
+  const iso = new Date(timestampMs).toISOString();
+  return bucketUnit === "day" ? iso.slice(0, 10) : `${iso.slice(0, 13)}:00Z`;
+}
+
+function buildTimelineBuckets(summaries: AgentRunSummaryResponse[]) {
+  const resolved = summaries
+    .map((summary) => ({ summary, timestampMs: resolveSummaryTimeMs(summary) }))
+    .filter(
+      (entry): entry is { summary: AgentRunSummaryResponse; timestampMs: number } =>
+        typeof entry.timestampMs === "number",
+    );
+
+  if (resolved.length === 0) {
+    return {
+      bucketUnit: "hour" as const,
+      buckets: [],
+    };
+  }
+
+  const timestamps = resolved.map((entry) => entry.timestampMs);
+  const minTimestamp = Math.min(...timestamps);
+  const maxTimestamp = Math.max(...timestamps);
+  const bucketUnit = maxTimestamp - minTimestamp > 48 * 60 * 60 * 1000 ? ("day" as const) : ("hour" as const);
+  const bucketMs = bucketUnit === "day" ? 24 * 60 * 60 * 1000 : 60 * 60 * 1000;
+  const start = floorBucketStart(minTimestamp, bucketUnit);
+  const end = floorBucketStart(maxTimestamp, bucketUnit);
+  const buckets = new Map<
+    number,
+    {
+      bucket: string;
+      label: string;
+      totalRuns: number;
+      completedRuns: number;
+      failedRuns: number;
+      attentionRuns: number;
+      interventionRuns: number;
+    }
+  >();
+
+  for (let bucketStart = start; bucketStart <= end; bucketStart += bucketMs) {
+    buckets.set(bucketStart, {
+      bucket: new Date(bucketStart).toISOString(),
+      label: formatBucketLabel(bucketStart, bucketUnit),
+      totalRuns: 0,
+      completedRuns: 0,
+      failedRuns: 0,
+      attentionRuns: 0,
+      interventionRuns: 0,
+    });
+  }
+
+  for (const entry of resolved) {
+    const bucketStart = floorBucketStart(entry.timestampMs, bucketUnit);
+    const bucket = buckets.get(bucketStart);
+    if (!bucket) {
+      continue;
+    }
+
+    bucket.totalRuns += 1;
+    bucket.completedRuns += entry.summary.status === "completed" ? 1 : 0;
+    bucket.failedRuns += entry.summary.status === "failed" ? 1 : 0;
+    bucket.attentionRuns += entry.summary.blockerType ? 1 : 0;
+    bucket.interventionRuns += hasHumanIntervention(entry.summary) ? 1 : 0;
+  }
+
+  return {
+    bucketUnit,
+    buckets: Array.from(buckets.values()),
+  };
+}
+
 function parseQueueName(value?: string): AgentOpsQueue {
   return value === "attention" || value === "running" || value === "recent"
     ? value
@@ -585,19 +936,53 @@ agentControlRoutes.get("/", (c) => {
   return c.json(runs);
 });
 
+// GET /api/agents/overview
+agentControlRoutes.get("/overview", async (c) => {
+  const summaries = await loadFilteredAgentRunSummaries(c);
+  const durationValues = summaries
+    .map((summary) => summary.durationMs)
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  const attentionCount = summaries.filter((summary) => shouldIncludeSummaryInQueue(summary, "attention")).length;
+  const runningCount = summaries.filter((summary) => shouldIncludeSummaryInQueue(summary, "running")).length;
+  const completedCount = summaries.filter((summary) => summary.status === "completed").length;
+  const failedCount = summaries.filter((summary) => summary.status === "failed").length;
+  const humanInterventionCount = summaries.filter((summary) => hasHumanIntervention(summary)).length;
+
+  return c.json({
+    viewScope: resolveViewScope(c),
+    summary: {
+      attentionCount,
+      runningCount,
+      completedCount,
+      failureRate: computeRate(failedCount, summaries.length),
+      avgDurationMs: computeAverage(durationValues),
+      humanInterventionRate: computeRate(humanInterventionCount, summaries.length),
+    },
+    queueCounts: {
+      attention: attentionCount,
+      running: runningCount,
+      recent: summaries.length,
+    },
+    blockerBreakdown: {
+      failedHighRisk: summaries.filter(
+        (summary) =>
+          summary.status === "failed" && (summary.riskLevel === "high" || summary.riskLevel === "critical"),
+      ).length,
+      approvalBlocked: summaries.filter((summary) => isApprovalBlocked(summary)).length,
+      pausedAwaitingResume: summaries.filter((summary) => summary.status === "paused").length,
+      stalled: summaries.filter((summary) => summary.blockerType === "stalled").length,
+      stoppedPendingReview: summaries.filter((summary) => summary.status === "stopped").length,
+    },
+    generatedAt: new Date().toISOString(),
+  });
+});
+
 // GET /api/agents/queues
 agentControlRoutes.get("/queues", async (c) => {
   const queue = parseQueueName(c.req.query("queue"));
   const page = parsePositiveInt(c.req.query("page"), 1);
   const pageSize = Math.min(parsePositiveInt(c.req.query("pageSize"), 20), 100);
-  const runs = listAgentRuns();
-
-  const summaries = await Promise.all(
-    runs.map(async (run) => {
-      const loaded = await loadAgentRunSummaryResponse(c, run.agentRunId);
-      return loaded.ok ? loaded.summary : buildRuntimeFallbackSummary(run.agentRunId, run);
-    }),
-  );
+  const summaries = await loadFilteredAgentRunSummaries(c);
 
   const filtered = summaries
     .filter((summary) => shouldIncludeSummaryInQueue(summary, queue))
@@ -610,6 +995,83 @@ agentControlRoutes.get("/queues", async (c) => {
     page,
     pageSize,
     total,
+  });
+});
+
+// GET /api/agents/analytics/health
+agentControlRoutes.get("/analytics/health", async (c) => {
+  const summaries = await loadFilteredAgentRunSummaries(c);
+  const durationValues = summaries
+    .map((summary) => summary.durationMs)
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  const completedRuns = summaries.filter((summary) => summary.status === "completed").length;
+  const failedRuns = summaries.filter((summary) => summary.status === "failed").length;
+  const stoppedRuns = summaries.filter((summary) => summary.status === "stopped").length;
+  const humanInterventionRuns = summaries.filter((summary) => hasHumanIntervention(summary)).length;
+  const attentionRuns = summaries.filter((summary) => summary.blockerType != null).length;
+  const approvalBlockedRuns = summaries.filter((summary) => isApprovalBlocked(summary)).length;
+
+  return c.json({
+    viewScope: resolveViewScope(c),
+    generatedAt: new Date().toISOString(),
+    totals: {
+      totalRuns: summaries.length,
+      completedRuns,
+      failedRuns,
+      stoppedRuns,
+      humanInterventionRuns,
+      attentionRuns,
+      approvalBlockedRuns,
+      avgDurationMs: computeAverage(durationValues),
+      failureRate: computeRate(failedRuns, summaries.length),
+      interventionRate: computeRate(humanInterventionRuns, summaries.length),
+    },
+    agentRanking: buildRankingItems(summaries, (summary) => summary.agentType || "unknown"),
+    modelRanking: buildRankingItems(summaries, (summary) => summary.modelUsed || "unknown"),
+  });
+});
+
+// GET /api/agents/analytics/failures
+agentControlRoutes.get("/analytics/failures", async (c) => {
+  const summaries = await loadFilteredAgentRunSummaries(c);
+  const attentionSummaries = summaries.filter((summary) => summary.blockerType != null);
+
+  return c.json({
+    generatedAt: new Date().toISOString(),
+    totalAttentionRuns: attentionSummaries.length,
+    blockerBreakdown: buildBreakdownItems(
+      attentionSummaries.map((summary) => ({
+        key: summary.blockerType ?? "unknown",
+        label: summary.blockerLabel || summary.blockerType || "未知阻塞",
+      })),
+      attentionSummaries.length,
+    ),
+    failureReasons: buildBreakdownItems(
+      attentionSummaries.map((summary) => ({
+        key: summary.error ?? summary.blockerLabel ?? "unknown",
+        label: summary.error ?? summary.blockerLabel ?? "未知原因",
+      })),
+      attentionSummaries.length,
+    ),
+    riskBreakdown: buildBreakdownItems(
+      attentionSummaries.map((summary) => ({
+        key: summary.riskLevel ?? "unknown",
+        label: summary.riskLevel ?? "unknown",
+      })),
+      attentionSummaries.length,
+    ),
+  });
+});
+
+// GET /api/agents/analytics/timeline
+agentControlRoutes.get("/analytics/timeline", async (c) => {
+  const summaries = await loadFilteredAgentRunSummaries(c);
+  const timeline = buildTimelineBuckets(summaries);
+
+  return c.json({
+    generatedAt: new Date().toISOString(),
+    bucketUnit: timeline.bucketUnit,
+    buckets: timeline.buckets,
   });
 });
 

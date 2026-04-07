@@ -16,6 +16,7 @@ export function buildTaskCoreRegistrations(shared: ReturnType<typeof buildTaskRo
     buildTaskTreeSnapshotFromRecord: shared.sharedDeps.buildTaskTreeSnapshotFromRecord,
     upsertTaskTreeNode: shared.sharedDeps.upsertTaskTreeNode,
     syncTaskAggregateFromSnapshot: shared.aggregateSyncApi.syncTaskAggregateFromSnapshot,
+    upsertConversationSessionRecord: shared.sessionWriteApi.upsertTaskSessionRecord,
   };
 }
 

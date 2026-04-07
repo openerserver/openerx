@@ -23,36 +23,31 @@ async function loadTaskProjectionReadModule(args: {
   lineageRows?: unknown[];
   lineagePath?: string[];
   resolvedSessionId?: string | null;
-  aliasMap?: Record<string, string[]>;
 }) {
   importCounter += 1;
+
+  const buildLineagePath = (
+    rows: Array<{ id: string; parentSessionId: string | null }>,
+    sessionId: string,
+  ) => {
+    if (args.lineagePath) {
+      return args.lineagePath;
+    }
+
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    const path: string[] = [];
+    let cursor: string | null = sessionId;
+    while (cursor) {
+      path.unshift(cursor);
+      cursor = byId.get(cursor)?.parentSessionId ?? null;
+    }
+    return path;
+  };
 
   const selectResults = args.lineageRows
     ? [args.lineageRows, args.resultRows ?? []]
     : [args.resultRows ?? []];
   let selectCallIndex = 0;
-  const buildTaskSessionLineagePath = mock(() => args.lineagePath ?? []);
-  const resolveTaskSessionRecordId = mock(
-    (_rows: unknown[], sessionId?: string | null) => args.resolvedSessionId ?? sessionId ?? null,
-  );
-  const buildTaskSessionIdAliases = mock(
-    (sessionId: string) => args.aliasMap?.[sessionId] ?? [sessionId],
-  );
-  const toCanonicalTaskSessionId = mock((taskId: string, sessionId?: string | null) => {
-    if (typeof sessionId !== "string" || !sessionId.trim()) {
-      return null;
-    }
-
-    if (sessionId.startsWith("task-session:")) {
-      return sessionId;
-    }
-
-    if (sessionId.startsWith("task_session:")) {
-      return sessionId.replace(/^task_session:/, "task-session:");
-    }
-
-    return `task-session:${taskId}:${sessionId}`;
-  });
 
   mock.module("../../control-plane/service/src/db", () => ({
     db: {
@@ -64,62 +59,37 @@ async function loadTaskProjectionReadModule(args: {
     },
   }));
 
-  mock.module("../../control-plane/service/src/db/schema", () => ({
-    roleAggregateConclusions: {},
-    taskArtifacts: {},
-    taskMessageEvents: {},
-    taskMessageParts: {},
-    taskMessages: {},
-    taskOperations: {},
-    taskSessionRuns: {},
-    taskSessions: {
-      id: "id",
-      parentSessionId: "parentSessionId",
-      taskId: "taskId",
-      runtimeSessionId: "runtimeSessionId",
-      createdAt: "createdAt",
-    },
-    taskStageRuns: {},
-    taskSnapshots: {},
-    taskTimelineViews: {
-      id: "id",
-      taskId: "taskId",
-      projectId: "projectId",
-      sessionId: "sessionId",
-      messageId: "messageId",
-      operationId: "operationId",
-      artifactId: "artifactId",
-      itemKind: "itemKind",
-      itemRole: "itemRole",
-      title: "title",
-      displayText: "displayText",
-      metadataJson: "metadataJson",
-      sortAt: "sortAt",
-      createdAt: "createdAt",
-      updatedAt: "updatedAt",
-    },
-    taskUsageLedgerEntries: {},
-    taskWorkflowRuns: {},
-  }));
-
   mock.module("../../control-plane/service/src/modules/tasks/task-session-read", () => ({
-    buildTaskSessionLineagePath,
-    buildTaskSessionIdAliases,
-    resolveTaskSessionRecordId,
-    toCanonicalTaskSessionId,
+    shouldPersistStandalonePartEvent: () => true,
+    toCanonicalTaskSessionId: (taskId: string, sessionId?: string | null) =>
+      typeof sessionId === "string" && sessionId.trim()
+        ? sessionId.startsWith("task-session:")
+          ? sessionId
+          : `task-session:${taskId}:${sessionId.trim()}`
+        : null,
+    resolveTaskSessionRecordId: mock(
+      (
+        rows: Array<{ id: string; runtimeSessionId?: string | null }>,
+        sessionId: string,
+      ) =>
+        args.resolvedSessionId ??
+        rows.find((row) => row.id === sessionId)?.id ??
+        rows.find((row) => row.runtimeSessionId === sessionId)?.id ??
+        null,
+    ),
+    buildTaskSessionLineagePath: mock(
+      (
+        rows: Array<{ id: string; parentSessionId: string | null }>,
+        sessionId: string,
+      ) => buildLineagePath(rows, sessionId),
+    ),
   }));
 
   const module = await import(
     `../../control-plane/service/src/modules/tasks/task-projection-read.ts?task-projection-read-test=${importCounter}`
   );
 
-  return {
-    ...module,
-    buildTaskSessionLineagePath,
-    buildTaskSessionIdAliases,
-    resolveTaskSessionRecordId,
-    toCanonicalTaskSessionId,
-  };
+  return module;
 }
 
 afterEach(() => {
@@ -133,7 +103,7 @@ describe("task projection read", () => {
         id: "timeline-1",
         taskId: "task-1",
         projectId: "project-1",
-        sessionId: "fork-session",
+        sessionId: "task-session:task-1:fork-session",
         messageId: "msg-1",
         operationId: null,
         artifactId: null,
@@ -148,8 +118,9 @@ describe("task projection read", () => {
       },
     ];
 
-    const { buildTaskProjectionTimelineViewResponse, buildTaskSessionLineagePath } =
-      await loadTaskProjectionReadModule({ resultRows: timelineRows });
+    const { buildTaskProjectionTimelineViewResponse } = await loadTaskProjectionReadModule({
+      resultRows: timelineRows,
+    });
 
     const response = await buildTaskProjectionTimelineViewResponse({
       taskId: "task-1",
@@ -158,14 +129,8 @@ describe("task projection read", () => {
       includeLineage: false,
     });
 
-    expect(buildTaskSessionLineagePath).not.toHaveBeenCalled();
     expect(response).toEqual({
-      data: [
-        {
-          ...timelineRows[0],
-          sessionId: "task-session:task-1:fork-session",
-        },
-      ],
+      data: timelineRows,
       meta: {
         readSource: "task-session-projection",
         includeLineage: false,
@@ -179,15 +144,13 @@ describe("task projection read", () => {
   });
 
   test("expands lineage path through task session records when requested", async () => {
-    const { buildTaskProjectionTimelineViewResponse, buildTaskSessionLineagePath } =
-      await loadTaskProjectionReadModule({
-        resultRows: [],
-        lineageRows: [
-          { id: "root-session", parentSessionId: null },
-          { id: "fork-session", parentSessionId: "root-session" },
-        ],
-        lineagePath: ["root-session", "fork-session"],
-      });
+    const { buildTaskProjectionTimelineViewResponse } = await loadTaskProjectionReadModule({
+      resultRows: [],
+      lineageRows: [
+        { id: "root-session", parentSessionId: null },
+        { id: "fork-session", parentSessionId: "root-session" },
+      ],
+    });
 
     const response = await buildTaskProjectionTimelineViewResponse({
       taskId: "task-1",
@@ -196,13 +159,6 @@ describe("task projection read", () => {
       includeLineage: true,
     });
 
-    expect(buildTaskSessionLineagePath).toHaveBeenCalledWith(
-      [
-        { id: "root-session", parentSessionId: null },
-        { id: "fork-session", parentSessionId: "root-session" },
-      ],
-      "fork-session",
-    );
     expect(response.meta).toEqual({
       readSource: "task-session-projection",
       includeLineage: true,
@@ -214,13 +170,13 @@ describe("task projection read", () => {
     });
   });
 
-  test("canonicalizes legacy requested session ids before filtering projection timeline", async () => {
+  test("filters projection timeline by canonical session ids only", async () => {
     const timelineRows = [
       {
         id: "timeline-1",
         taskId: "task-1",
         projectId: "project-1",
-        sessionId: "task_session:task-1:fork-session",
+        sessionId: "task-session:task-1:fork-session",
         messageId: "msg-1",
         operationId: null,
         artifactId: null,
@@ -235,12 +191,7 @@ describe("task projection read", () => {
       },
     ];
 
-    const {
-      buildTaskProjectionTimelineViewResponse,
-      buildTaskSessionIdAliases,
-      resolveTaskSessionRecordId,
-      toCanonicalTaskSessionId,
-    } = await loadTaskProjectionReadModule({
+    const { buildTaskProjectionTimelineViewResponse } = await loadTaskProjectionReadModule({
       resultRows: timelineRows,
       lineageRows: [
         {
@@ -249,43 +200,16 @@ describe("task projection read", () => {
           runtimeSessionId: "fork-session",
         },
       ],
-      resolvedSessionId: "task-session:task-1:fork-session",
-      aliasMap: {
-        "task-session:task-1:fork-session": [
-          "task-session:task-1:fork-session",
-          "task_session:task-1:fork-session",
-        ],
-      },
     });
 
     const response = await buildTaskProjectionTimelineViewResponse({
       taskId: "task-1",
       projectId: "project-1",
-      sessionId: "task_session:task-1:fork-session",
+      sessionId: "task-session:task-1:fork-session",
       includeLineage: false,
     });
 
-    expect(resolveTaskSessionRecordId).toHaveBeenCalledWith(
-      [
-        {
-          id: "task-session:task-1:fork-session",
-          parentSessionId: null,
-          runtimeSessionId: "fork-session",
-        },
-      ],
-      "task_session:task-1:fork-session",
-    );
-    expect(buildTaskSessionIdAliases).toHaveBeenCalledWith("task-session:task-1:fork-session");
-    expect(toCanonicalTaskSessionId).toHaveBeenCalledWith(
-      "task-1",
-      "task_session:task-1:fork-session",
-    );
     expect(response.meta.lineagePath).toEqual(["task-session:task-1:fork-session"]);
-    expect(response.data).toEqual([
-      {
-        ...timelineRows[0],
-        sessionId: "task-session:task-1:fork-session",
-      },
-    ]);
+    expect(response.data).toEqual(timelineRows);
   });
 });

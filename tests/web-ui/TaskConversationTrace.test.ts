@@ -196,6 +196,116 @@ describe("Task conversation composables", () => {
     expect(state.conversationItems.value.map((item) => item.role)).toEqual(["assistant", "user"]);
   });
 
+  it("hides workflow execution-context user rows and collapses equivalent assistant replies", async () => {
+    apiMocks.getTaskMessages.mockResolvedValueOnce({
+      data: [
+        {
+          info: {
+            id: "synthetic-root-user",
+            role: "user",
+            time: { created: "2026-04-06T15:12:33.269Z" },
+          },
+          parts: [{ type: "text", text: "请回复：页面任务执行正常。" }],
+        },
+        {
+          info: {
+            id: "assistant-preview",
+            role: "assistant",
+            time: {
+              created: "2026-04-06T15:12:33.771Z",
+              completed: "2026-04-06T15:12:33.771Z",
+            },
+          },
+          parts: [{ type: "text", text: "页面任务执行正常。" }],
+        },
+        {
+          info: {
+            id: "assistant-rich",
+            role: "assistant",
+            time: {
+              created: "2026-04-06T15:12:33.771Z",
+              completed: "2026-04-06T15:12:33.771Z",
+            },
+          },
+          parts: [
+            { type: "thinking", text: "**Confirming task execution**" },
+            { type: "text", text: "页面任务执行正常。" },
+          ],
+        },
+        {
+          info: {
+            id: "execution-context-user",
+            role: "user",
+            time: { created: "2026-04-06T15:12:33.806Z" },
+          },
+          parts: [
+            {
+              type: "text",
+              text: "Execution context:\n- Opener-X task ID: task-1\n- Project ID: proj-default\n\n请回复：页面任务执行正常。",
+            },
+          ],
+        },
+        {
+          _type: "workflow_group",
+          info: {
+            id: "workflow-group-task-1",
+            role: "workflow",
+            variant: "context",
+            label: "工作流消息",
+            hint: "当前阶段与执行上下文",
+          },
+          steps: [
+            {
+              agentName: "当前工作流",
+              sessionId: "session-1",
+              messages: [
+                {
+                  info: {
+                    id: "workflow-message-1",
+                    role: "user",
+                    time: { created: "2026-04-06T15:12:33.806Z" },
+                  },
+                  parts: [
+                    {
+                      type: "text",
+                      text: "- Opener-X task ID: task-1\n- Project ID: proj-default\n\n请回复：页面任务执行正常。",
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      meta: {
+        sessionId: "session-1",
+        messageCount: 5,
+      },
+    });
+
+    const taskId = ref("task-1");
+    const sessionId = ref<string | undefined>("session-1");
+    const state = useTreeMessages(taskId, sessionId, { includeLineage: true });
+
+    await flushPromises();
+
+    expect(state.conversationItems.value.map((item) => item.role)).toEqual([
+      "user",
+      "workflow",
+      "assistant",
+    ]);
+    expect(state.conversationItems.value[0]).toMatchObject({
+      key: "synthetic-root-user",
+      role: "user",
+      text: "请回复：页面任务执行正常。",
+    });
+    expect(state.conversationItems.value[2]).toMatchObject({
+      key: "assistant-rich",
+      role: "assistant",
+      text: "页面任务执行正常。",
+    });
+  });
+
   it("classifies messages by info role first and falls back to record role", () => {
     const items = normalizeSessionConversationItems([
       {
@@ -233,7 +343,7 @@ describe("Task conversation composables", () => {
     });
   });
 
-  it("keeps user prompts visible when execution trace falls back to opencode runtime messages", async () => {
+  it("keeps user prompts visible when execution trace falls back to runtime messages", async () => {
     apiMocks.getTaskExecutionTraceView.mockResolvedValue({
       taskId: "task-1",
       sessionId: "session-1",
@@ -309,7 +419,7 @@ describe("Task conversation composables", () => {
       ],
       timeline: [],
       timelineMeta: {
-        readSource: "opencode-runtime",
+        readSource: "runtime-fallback",
         cacheState: "complete",
         complete: true,
         includeLineage: true,

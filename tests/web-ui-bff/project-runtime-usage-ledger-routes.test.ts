@@ -51,7 +51,7 @@ mock.module("../../control-plane/web-ui-bff/src/lib/paid-execution-guard", () =>
   fetchProjectPaidExecutionLeaseState: fetchProjectPaidExecutionLeaseStateMock,
 }));
 
-mock.module("../../control-plane/web-ui-bff/src/lib/opencode-config", () => ({
+mock.module("../../control-plane/web-ui-bff/src/lib/model-config", () => ({
   diagnoseModelReadiness: mock(async () => undefined),
   formatModelRoute: (resolved: { providerId: string; modelId: string }) =>
     `${resolved.providerId}:${resolved.modelId}`,

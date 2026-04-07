@@ -1,6 +1,7 @@
 /// <reference types="bun-types" />
 
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { createRuntimeProviderModuleMock } from "./runtime-provider-mock";
 import { createSseAggregatorModuleMock } from "./sse-aggregator-mock";
 
 const cpFetchMock = mock(async (..._args: unknown[]) => ({ ok: true, data: {} }));
@@ -24,8 +25,8 @@ const buildStageArtifactSummaryMock = mock((resultText?: string) => ({
 }));
 const wsBroadcastMock = mock(() => undefined);
 
-function buildOpencodeAdapterMock() {
-  return {
+function buildRuntimeProviderMock() {
+  return createRuntimeProviderModuleMock({
     buildExecutionContext: mock(() => ""),
     continueSession: mock(async () => ({ ok: true })),
     createSession: mock(async () => ({ ok: true, sessionId: "session-1", agentRunId: "run-1" })),
@@ -48,7 +49,7 @@ function buildOpencodeAdapterMock() {
     runDetachedPrompt: mock(async () => ({ ok: true, sessionId: "session-detached", text: "{}" })),
     terminateAgent: terminateAgentMock,
     updateAgentRunStatus: mock(() => undefined),
-  };
+  });
 }
 
 type RouteFetchOptions = { method?: string; body?: unknown; authorization?: string };
@@ -91,8 +92,8 @@ mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () =>
 }));
 
 mock.module(
-  "../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter",
-  buildOpencodeAdapterMock,
+  "../../control-plane/web-ui-bff/src/modules/agent-control/runtime-provider",
+  buildRuntimeProviderMock,
 );
 
 mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/run-persistence", () => ({
@@ -251,6 +252,25 @@ describe("task completion routes", () => {
 
     expect(response.status).toBe(404);
     await expect(response.text()).resolves.toContain("404 Not Found");
+  });
+
+  test("GET /:taskId/domain-runs returns an empty list when the upstream route is unavailable", async () => {
+    cpFetchMock.mockImplementation(async (...args: unknown[]) => {
+      const [url, options] = args as [string, RouteFetchOptions | undefined];
+      if (!options?.method && url === "/api/tasks/task-domain-runs-404/domain-runs") {
+        return { ok: false, status: 404, data: { error: "Not found" } };
+      }
+
+      return { ok: true, data: {} };
+    });
+
+    const { taskRoutes } = await loadTaskRoutes();
+    const response = await taskRoutes.request("http://localhost/task-domain-runs-404/domain-runs", {
+      headers: { Authorization: "Bearer test" },
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ data: [] });
   });
 
   test("POST /:taskId/candidates/:index/adopt completes session-first winner adoption", async () => {

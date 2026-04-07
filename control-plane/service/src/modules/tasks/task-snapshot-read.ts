@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "../../db";
-import { taskSessions, taskSnapshots, tasks } from "../../db/schema";
+import { taskSessions, taskSnapshots } from "../../db/schema";
 import type { TaskTreeRecord } from "../project-tree/task-view";
 import { fromStoredTaskExecutionMode } from "./task-execution-mode";
 
@@ -18,11 +18,27 @@ function mapSnapshotLifecycleStatusToTaskStatus(lifecycleStatus?: string | null)
   return "pending" as const;
 }
 
+function mapSnapshotExecutionStatusToTaskStatus(executionStatus?: string | null) {
+  if (executionStatus === "complete") {
+    return "completed" as const;
+  }
+  if (executionStatus === "queued") {
+    return "pending" as const;
+  }
+  if (
+    executionStatus === "running" ||
+    executionStatus === "failed" ||
+    executionStatus === "cancelled"
+  ) {
+    return executionStatus;
+  }
+
+  return null;
+}
+
 function mapSnapshotCurrentStatus(snapshot: typeof taskSnapshots.$inferSelect) {
-  return (
-    snapshot.currentExecutionStatus ??
-    mapSnapshotLifecycleStatusToTaskStatus(snapshot.lifecycleStatus)
-  );
+  return mapSnapshotExecutionStatusToTaskStatus(snapshot.currentExecutionStatus)
+    ?? mapSnapshotLifecycleStatusToTaskStatus(snapshot.lifecycleStatus);
 }
 
 async function loadSnapshotRuntimeSessionIds(rows: Array<typeof taskSnapshots.$inferSelect>) {
@@ -46,25 +62,12 @@ async function loadSnapshotRuntimeSessionIds(rows: Array<typeof taskSnapshots.$i
   return new Map(sessionRows.map((row) => [row.id, row.runtimeSessionId ?? row.id] as const));
 }
 
-async function loadAggregateRuntimeSessionIds(rows: Array<typeof taskSnapshots.$inferSelect>) {
-  const taskIds = Array.from(new Set(rows.map((row) => row.taskId).filter(Boolean)));
-
-  if (taskIds.length === 0) {
-    return new Map<string, string>();
-  }
-
-  const taskRows = await db.query.tasks.findMany({
-    where: inArray(tasks.id, taskIds),
-    columns: { id: true, currentSessionId: true },
-  });
-
-  return new Map(
-    taskRows
-      .filter((row): row is { id: string; currentSessionId: string } =>
-        Boolean(row.currentSessionId),
-      )
-      .map((row) => [row.id, row.currentSessionId] as const),
-  );
+async function loadAggregateRuntimeSessionIds(
+  _rows: Array<typeof taskSnapshots.$inferSelect>,
+) {
+  // Legacy: tasks.currentSessionId has been retired in migration 0034.
+  // Snapshot's currentSessionId is now the sole source.
+  return new Map<string, string>();
 }
 
 function resolveSnapshotRuntimeSessionId(args: {
@@ -85,8 +88,9 @@ function resolveSnapshotRuntimeSessionId(args: {
     return mappedRuntimeSessionId;
   }
 
-  if (snapshotSessionId.startsWith("task-session:")) {
-    return aggregateRuntimeSessionId;
+  const canonicalPrefix = `task-session:${args.snapshot.taskId}:`;
+  if (snapshotSessionId.startsWith(canonicalPrefix)) {
+    return snapshotSessionId.slice(canonicalPrefix.length) || aggregateRuntimeSessionId;
   }
 
   return snapshotSessionId;

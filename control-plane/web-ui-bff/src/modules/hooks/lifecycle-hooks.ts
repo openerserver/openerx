@@ -1,4 +1,4 @@
-import { formatModelRoute, resolveModelRoute } from "../../lib/opencode-config";
+import { formatModelRoute, resolveModelRoute } from "../../lib/model-config";
 import {
   type HookExecutionRecord,
   type HookTrigger,

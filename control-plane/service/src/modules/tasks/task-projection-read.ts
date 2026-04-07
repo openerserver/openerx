@@ -2,10 +2,8 @@ import { and, asc, eq, inArray } from "drizzle-orm";
 import { db } from "../../db";
 import { taskSessions, taskTimelineViews } from "../../db/schema";
 import {
-  buildTaskSessionIdAliases,
   buildTaskSessionLineagePath,
   resolveTaskSessionRecordId,
-  toCanonicalTaskSessionId,
 } from "./task-session-read";
 
 export async function buildTaskProjectionTimelineViewResponse(args: {
@@ -36,14 +34,7 @@ export async function buildTaskProjectionTimelineViewResponse(args: {
 
   const filters = [eq(taskTimelineViews.taskId, args.taskId)];
   if (lineagePath.length > 0) {
-    filters.push(
-      inArray(
-        taskTimelineViews.sessionId,
-        Array.from(
-          new Set(lineagePath.flatMap((sessionId) => buildTaskSessionIdAliases(sessionId))),
-        ),
-      ),
-    );
+    filters.push(inArray(taskTimelineViews.sessionId, lineagePath));
   }
 
   const timelineRows = await db
@@ -68,10 +59,7 @@ export async function buildTaskProjectionTimelineViewResponse(args: {
     .where(and(...filters))
     .orderBy(asc(taskTimelineViews.sortAt), asc(taskTimelineViews.createdAt));
 
-  const data = timelineRows.map((row) => ({
-    ...row,
-    sessionId: toCanonicalTaskSessionId(args.taskId, row.sessionId) ?? row.sessionId,
-  }));
+  const data = timelineRows;
 
   return {
     data,

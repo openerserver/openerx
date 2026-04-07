@@ -1,4 +1,3 @@
-import { opencodeRuntimeProvider } from "./runtime-provider-opencode";
 import { piMonoRuntimeProvider } from "./runtime-provider-pimono";
 import type {
   RuntimeBackend,
@@ -27,27 +26,14 @@ export type {
   RuntimeResult,
 } from "./runtime-provider-types";
 
-export const DEFAULT_RUNTIME_BACKEND: RuntimeBackend = "opencode";
-
-function normalizeRuntimeBackend(raw: string | undefined): RuntimeBackend {
-  const value = raw?.trim().toLowerCase();
-  if (value === "pi-mono" || value === "pimono") {
-    return "pi-mono";
-  }
-  return DEFAULT_RUNTIME_BACKEND;
-}
+export const DEFAULT_RUNTIME_BACKEND: RuntimeBackend = "pi-mono";
 
 export function getRuntimeBackend(): RuntimeBackend {
-  return normalizeRuntimeBackend(
-    process.env.OPENERX_RUNTIME_BACKEND ||
-      process.env.OPENERX_RUNTIME_PROVIDER ||
-      process.env.RUNTIME_BACKEND ||
-      process.env.RUNTIME_PROVIDER,
-  );
+  return "pi-mono";
 }
 
 export function getRuntimeProvider(): RuntimeProvider {
-  return getRuntimeBackend() === "pi-mono" ? piMonoRuntimeProvider : opencodeRuntimeProvider;
+  return piMonoRuntimeProvider;
 }
 
 export async function createSession(

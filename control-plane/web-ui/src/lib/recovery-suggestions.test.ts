@@ -38,9 +38,9 @@ describe("normalizeRecoverySuggestions", () => {
         "先检查服务",
         {
           id: "run-auth-login",
-          kind: RECOVERY_SUGGESTION_KINDS.command,
-          title: "重新登录",
-          command: "opencode auth login",
+          kind: RECOVERY_SUGGESTION_KINDS.check,
+          title: "确认运行时账户可读取凭据",
+          detail: "独立 runtime 环境需要同步有效凭据文件。",
         },
         "",
       ]),
@@ -52,9 +52,9 @@ describe("normalizeRecoverySuggestions", () => {
       },
       {
         id: "run-auth-login",
-        kind: RECOVERY_SUGGESTION_KINDS.command,
-        title: "重新登录",
-        command: "opencode auth login",
+        kind: RECOVERY_SUGGESTION_KINDS.check,
+        title: "确认运行时账户可读取凭据",
+        detail: "独立 runtime 环境需要同步有效凭据文件。",
       },
     ]);
   });

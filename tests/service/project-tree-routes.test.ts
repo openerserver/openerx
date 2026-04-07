@@ -136,7 +136,6 @@ beforeAll(async () => {
 afterAll(async () => {
   for (const taskId of createdTaskIds) {
     await sql.unsafe("DELETE FROM task_timeline_views WHERE task_id = $1", [taskId]);
-    await sql.unsafe("DELETE FROM task_message_events WHERE task_id = $1", [taskId]);
     await sql.unsafe("DELETE FROM task_usage_ledger_entries WHERE task_id = $1", [taskId]);
     await sql.unsafe("DELETE FROM task_artifacts WHERE task_id = $1", [taskId]);
     await sql.unsafe("DELETE FROM task_operations WHERE task_id = $1", [taskId]);
@@ -2122,75 +2121,6 @@ describe("project tree routes", () => {
     expect(replayed.data.data[0]?.parts).toEqual([
       expect.objectContaining({ partType: "text", textContent: "final result" }),
     ]);
-  });
-
-  test("dual-writes message events to the append-only event log", async () => {
-    const task = await createTask(`tree-event-log-${Date.now()}`);
-    const runtimeSessionId = `ses_elog_${Date.now()}`;
-    const sessionNodeId = taskBranchCompatNodeId(task.id, runtimeSessionId);
-    createdNodeIds.add(sessionNodeId);
-
-    await authedRequest(`/api/tasks/${task.id}/sessions`, {
-      method: "POST",
-      body: JSON.stringify({
-        runtimeSessionId,
-        branchName: "elog-root",
-        sourceType: "root",
-        isActive: true,
-      }),
-    });
-
-    await authedRequest(`/api/tasks/${task.id}/sessions/messages`, {
-      method: "POST",
-      body: JSON.stringify({
-        runtimeSessionId,
-        message: {
-          info: { id: "msg-elog-1", role: "user", time: { created: Date.now() } },
-          parts: [{ type: "text", text: "hello event log" }],
-        },
-      }),
-    });
-
-    await authedRequest(`/api/tasks/${task.id}/sessions/messages`, {
-      method: "POST",
-      body: JSON.stringify({
-        runtimeSessionId,
-        message: {
-          info: {
-            id: "msg-elog-2",
-            role: "assistant",
-            finish: "stop",
-            time: { completed: Date.now() },
-          },
-          parts: [{ type: "text", text: "hello from assistant" }],
-        },
-      }),
-    });
-
-    // Give the fire-and-forget dual-write a moment to settle
-    await new Promise((r) => setTimeout(r, 500));
-
-    const events =
-      await sql`SELECT id, task_id, session_id, event_type, runtime_message_id, projected, payload FROM task_message_events WHERE task_id = ${task.id} ORDER BY id ASC`;
-
-    expect(events.length).toBeGreaterThanOrEqual(2);
-
-    const userEvent = events.find(
-      (e: Record<string, unknown>) => e.runtime_message_id === "msg-elog-1",
-    );
-    const assistantEvent = events.find(
-      (e: Record<string, unknown>) => e.runtime_message_id === "msg-elog-2",
-    );
-
-    expect(userEvent).toBeTruthy();
-    expect(userEvent?.event_type).toBe("message.updated");
-    expect(userEvent?.session_id).toBe(runtimeSessionId);
-    expect(userEvent?.projected).toBe(false);
-    expect((userEvent?.payload as Record<string, unknown>).parts).toBeTruthy();
-
-    expect(assistantEvent).toBeTruthy();
-    expect(assistantEvent?.event_type).toBe("message.updated");
-    expect(assistantEvent?.session_id).toBe(runtimeSessionId);
   });
 
   test("builds lineage timeline items from persisted session state", async () => {

@@ -690,7 +690,7 @@
           :confirmLoading="installLoading"
         >
           <a-form layout="vertical">
-            <a-form-item label="源文件路径 (相对于 opencode-fork/)">
+            <a-form-item label="源文件路径 (相对于运行时工作区)">
               <a-input :value="installSource" placeholder=".opencode/plugins/my-plugin.ts" @update:value="installSource = String($event ?? '')" />
             </a-form-item>
             <a-form-item label="插件名称 (可选)">
@@ -3278,8 +3278,8 @@ async function saveModels() {
     });
     message.success(
       res.restartRequired
-        ? "模型配置已保存到 opencode.json；需重启 OpenCode 运行时后，新任务才会使用新配置"
-        : "模型配置已保存到 opencode.json；新任务将自动使用最新配置",
+        ? "模型配置已保存到运行时配置文件；需重启运行时后，新任务才会使用新配置"
+        : "模型配置已保存到运行时配置文件；新任务将自动使用最新配置",
     );
   } catch (e: unknown) {
     message.error("保存失败");
@@ -3331,7 +3331,7 @@ async function saveMcp() {
   saving.value = true;
   try {
     const res = await updateMcpConfig(mcpData);
-    message.success(`MCP 配置已保存${res.restartRequired ? "（需重启 OpenCode 生效）" : ""}`);
+    message.success(`MCP 配置已保存${res.restartRequired ? "（需重启运行时生效）" : ""}`);
   } catch (e: unknown) {
     message.error("保存失败");
   } finally {

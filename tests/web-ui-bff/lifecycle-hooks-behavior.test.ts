@@ -4,6 +4,7 @@ import {
   type OrchestrationStrategy,
   normalizeOrchestrationStrategy,
 } from "../../control-plane/web-ui-bff/src/lib/orchestration-strategy";
+import { createRuntimeProviderModuleMock } from "./runtime-provider-mock";
 import { createSseAggregatorModuleMock } from "./sse-aggregator-mock";
 
 mock.restore();
@@ -127,7 +128,7 @@ const extractAssistantResultFromMessagesMock = mock(() => ({
 const recoverAgentRunMock = mock(() => undefined);
 const updateAgentRunStatusMock = mock(() => undefined);
 
-mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter", () => ({
+const runtimeProviderModule = createRuntimeProviderModuleMock({
   buildExecutionContext: buildExecutionContextMock,
   createSession: createSessionMock,
   continueSession: continueSessionMock,
@@ -149,7 +150,11 @@ mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-a
   replyRuntimePermission: mock(async () => ({ ok: true })),
   terminateAgent: mock(async () => ({ ok: true })),
   updateAgentRunStatus: updateAgentRunStatusMock,
-}));
+});
+
+mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/runtime-provider", () =>
+  runtimeProviderModule,
+);
 
 mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/agent-run-registry", () => ({
   ensureAgentRunForSession: ensureAgentRunForSessionMock,
@@ -175,7 +180,7 @@ mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () =>
   createInternalAuthorization: createInternalAuthorizationMock,
 }));
 
-mock.module("../../control-plane/web-ui-bff/src/lib/opencode-config", () => ({
+mock.module("../../control-plane/web-ui-bff/src/lib/model-config", () => ({
   formatModelRoute: formatModelRouteMock,
   readDefaultExecutionModel: readDefaultExecutionModelMock,
   resolveModelRoute: resolveModelRouteMock,
@@ -545,23 +550,18 @@ describe("executeLifecycleHooks behavior", () => {
   });
 
   test("execute route returns 502 and marks task failed when all parallel candidates fail to start", async () => {
-    currentStrategy = buildStrategy({
-      hooks: [],
-      templates: [
-        {
-          id: "parallel-template",
-          name: "Parallel Template",
-          mode: "parallel",
-          agents: ["agent-a", "agent-b"],
-          enabled: true,
-          categoryDefaults: ["quick"],
-        },
-      ],
-    });
+    currentStrategy = buildStrategy({ hooks: [] });
     currentTask = {
       ...currentTask,
       title: "Parallel task",
       prompt: "Compare two implementation strategies.",
+      strategy: JSON.stringify({
+        executionMode: "parallel",
+        parallelCandidates: [
+          { model: "local:test-model-a", label: "候选 A" },
+          { model: "local:test-model-b", label: "候选 B" },
+        ],
+      }),
     };
 
     createSessionMock
@@ -576,6 +576,13 @@ describe("executeLifecycleHooks behavior", () => {
     const response = await taskRoutes.request("http://localhost/task-1/execute", {
       method: "POST",
       headers: { Authorization: "Bearer test" },
+      body: JSON.stringify({
+        mode: "parallel",
+        candidates: [
+          { model: "local:test-model-a", label: "候选 A" },
+          { model: "local:test-model-b", label: "候选 B" },
+        ],
+      }),
     });
     const body = await response.json();
 
@@ -1385,7 +1392,7 @@ describe("executeLifecycleHooks behavior", () => {
     });
   });
 
-  test("execute route keeps quick explicit parallel candidates on the quick agent without stage-summary prompt noise", async () => {
+  test("execute route keeps quick explicit parallel candidate prompts free of stage-summary workflow instructions", async () => {
     currentStrategy = buildStrategy({
       hooks: [],
       categoryAgentMap: {
@@ -1410,7 +1417,9 @@ describe("executeLifecycleHooks behavior", () => {
       title: "Quick confirm task",
       prompt: "Briefly confirm this request is ready.",
       sessionId: undefined,
-      strategy: "{}",
+      strategy: JSON.stringify({
+        selectedAgent: "explore-enterprise",
+      }),
       status: "pending",
     };
 
@@ -1445,11 +1454,15 @@ describe("executeLifecycleHooks behavior", () => {
     });
     expect(createSessionMock).toHaveBeenCalledTimes(2);
 
-    for (const call of createSessionMock.mock.calls) {
+    for (const [index, call] of createSessionMock.mock.calls.entries()) {
       expect(call[2]).not.toContain("完成后请输出本阶段产出摘要。");
       expect(call[2]).not.toContain("[STAGE_COMPLETE]");
       expect(call[3]).toMatchObject({
-        agent: "explore-enterprise",
+        candidateIndex: index,
+        model:
+          index === 0
+            ? { providerId: "local", modelId: "test-model-a" }
+            : { providerId: "local", modelId: "test-model-b" },
       });
     }
 
@@ -1467,7 +1480,6 @@ describe("executeLifecycleHooks behavior", () => {
       }
     )?.body;
 
-    expect(patchedBody?.category).toBe("quick");
     expect(patchedBody).not.toHaveProperty("executionPlan");
   });
 

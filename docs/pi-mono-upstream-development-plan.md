@@ -3,6 +3,7 @@
 > 日期：2026-04-05
 > 目标：在保留 OpenerX 控制面与任务域语义的前提下，用 pi-mono 替换当前 OpenCode runtime 执行内核。
 > 相关评估： [pi-mono-upstream-implementation-assessment.md](pi-mono-upstream-implementation-assessment.md)
+> 2026-04-06 决策更新：不做历史数据迁移、不做灰度/双写，默认 backend 直接切为 `pi-mono` 并按该路径持续开发与验收。
 
 ## 1. 文档目的
 
@@ -17,27 +18,28 @@
 
 ## 2. 当前结论
 
-截至 2026-04-05，当前状态应表述为：
+截至 2026-04-07，当前状态应表述为：
 
 1. pi-mono 接入已经不只是骨架，BFF 侧主路径能力已经落地。
 2. `pauseAgent` / `resumeAgent`、guidance 注入、runtime permission bridge、crash recovery、pause settlement 等第一版语义已经实现，不应再标为“未完成”。
-3. 默认 backend 仍然是 `opencode`，pi-mono 仍处于显式环境变量切换的 opt-in 状态。
+3. 默认 backend 已切为 `pi-mono`，不再依赖显式环境变量切换。
 4. BFF 兼容层和 pi-mono provider 专项测试已经通过，当前 BFF mock batch 22 为全绿；service task-domain current batch 也已在当前工作区复验通过。
 5. 当前工作区已经拿到一条真实 pi-mono backend live roundtrip 验收主路径：以 `OPENERX_RUNTIME_BACKEND=pi-mono` 启动 BFF 后，live control-plane + live BFF 下执行 `RUN_EXECUTION_INTEGRATION=1 bun test ../../tests/web-ui-bff/identity-binding.test.ts --timeout 240000`，结果为 15/15 通过，覆盖 execute、assistant roundtrip、tool roundtrip 与 execution trace projection。
-6. 默认 `opencode` backend 的回滚演练也已完成：恢复默认 BFF + OpenCode runtime 后，复跑同一条 live suite，结果同样为 15/15 通过。当前剩余未收口项已经收缩到审批/白名单语义缺口、治理桥接、成本与审计链路，而不再是 assistant/tool/trace/rollback 或 pause-resume 基础链路。
+6. `opencode` 回滚演练也已完成：切回 OpenCode runtime 后复跑同一条 live suite，结果同样为 15/15 通过。当前剩余未收口项已不再包含默认切换本身，而主要集中在文档口径与兼容层清理。
 7. 在将 upstream checkout 从 `tmp/pi-mono-upstream` 迁移到根目录 `pi-mono/` 并更新 BFF 默认 RPC cwd 之后，已再次复跑 live execute 与 live completion-sync；`identity-binding.test.ts` 结果仍为 15/15 通过，`opencode-completion-sync.test.ts` 结果仍为 4/4 通过，说明目录收编没有打断当前 pi-mono 主链路。
+8. 当前工作区已补上 OpenerX 自身的 pi-mono governance extension：它会在 `tool_call` 阶段为外部目录访问发出结构化 `external_directory` 审批、为危险或越界 bash 命令发出 `command_execution` 审批，并阻断对 `.env*`、`.git`、`node_modules` 的写入；对应 provider、路由、UI 与 ledger/audit 回归均已通过。
 
 因此，当前更准确的判断不是“pi-mono 改动未做完”，而是：
 
-- 实现层：已经进入可试跑状态。
-- 验收层：还不能宣布默认可切换。
+- 实现层：已经进入默认运行状态。
+- 验收层：按默认 `pi-mono` 路径持续回归与收敛。
 
 ## 3. 当前代码事实
 
 已确认事实如下：
 
 1. pi-mono 适合作为进程级 runtime engine，不适合作为现成 HTTP runtime service 直接接入。
-2. BFF 侧 runtime-provider 抽象已经落地，OpenCode 仍然是默认 backend。
+2. BFF 侧 runtime-provider 抽象已经落地，`pi-mono` 为默认 backend，OpenCode 保留回退能力。
 3. pi-mono provider 当前已实现 `createSession`、`continueSession`、`runDetachedPrompt`、`pauseAgent`、`injectGuidance`、`resumeAgent`、`terminateAgent`、`getSessionMessages`、`getAgentMessages`、`listSessions`、`listRuntimePermissions`、`replyRuntimePermission` 和 `forkSession`。
 4. pi-mono 会话已接入现有 agent-run registry，并把 `session.created`、`session.status`、`session.updated`、`session.idle`、`message.updated`、`message.part.updated`、`tool.execute.before/after` 映射回当前 BFF realtime 聚合层。
 5. pi-mono provider 已落第一版恢复语义，包括 pause settlement 等待、abort 未 settle 时回滚状态、runtime permission 请求桥接，以及子进程 crash 后基于 session file 的恢复与 resume。
@@ -46,6 +48,8 @@
 8. 当前工作区里，BFF mock batch 22 已通过，service task-domain current batch 也已通过，task-domain 基础写链不再停留在“未复验”状态。
 9. 本轮 live 验收中，当前本机 GitHub 模型认证上下文可用，`identity-binding.test.ts` 已在 pi-mono-backed BFF 下跑通；后续如果出现 `Please reauthenticate`、403 或无授权头，仍应先按认证故障处理，而不是先归因为 pi-mono runtime 回归。
 10. 本轮真实验收的边界是“execute 路由成功启动真实 pi-mono session，并完成 task identity fallback patch”；它还没有覆盖 assistant 最终回复、tool result 回流和 trace 读面断言。
+11. 当前工作区已通过 `pimono-governance-extension.test.ts`、`runtime-provider-pimono.test.ts`、`task-runtime-permissions-route.test.ts` 与 `TaskDetailV3.test.ts`，验证结构化 `external_directory` / `command_execution` 审批、`always` 目录缓存、路径保护与前端展示闭环。
+12. 当前工作区已通过 `runtime-usage-ledger-sync.test.ts`、`judge-usage-accounting.test.ts` 与 `realtime-pipeline-events.test.ts`，确认 pi-mono 路径复用现有 `recordModelUsage`、`recordAgentAudit` 与 runtime usage ledger 同步链路，不再把成本/审计/账本视作未验证空白。
 
 ## 4. 分阶段状态
 
@@ -65,7 +69,7 @@
 | OpenCode provider 封装 | 是 | 是 | 当前默认路径 |
 | pi-mono provider 文件与主入口接入 | 是 | 是 | 代码已落地 |
 | backend 选择逻辑（`OPENERX_RUNTIME_BACKEND` / `OPENERX_RUNTIME_PROVIDER` / `RUNTIME_BACKEND` / `RUNTIME_PROVIDER`） | 是 | 是 | 有定向测试覆盖 |
-| 默认 backend 保持为 `opencode` | 是 | 是 | 仍未切默认 |
+| 默认 backend 切到 `pi-mono` | 是 | 是 | 当前默认路径 |
 | BFF 消费方改为依赖 runtime-provider | 是 | 是 | 当前 BFF mock 回归通过 |
 
 ### Phase 2：BFF 兼容性修复与基础验证
@@ -115,16 +119,17 @@
 
 | 项目 | 已实现 | 已验收 | 备注 |
 | --- | --- | --- | --- |
-| `beforeToolCall` / `afterToolCall` 策略桥接 | 否 | 否 | 尚未接回 |
-| 命令白名单与路径保护 | 否 | 否 | 尚未接回 |
-| 审批流与人工确认语义 | 否 | 否 | runtime permission bridge 不等于完整审批流 |
-| 使用量统计、审计、账本与 trace id | 否 | 否 | 尚未按 pi-mono 路径收口 |
+| `tool_call` 治理桥接 | 是 | 是 | 自动注入 `pimono-governance-extension.ts`，provider 与 extension 专项测试已通过 |
+| 命令审批、目录白名单与路径保护 | 是 | 是 | `external_directory` / `command_execution` 审批与受保护路径写入阻断已接回 |
+| 审批流与人工确认语义 | 是 | 是 | runtime permission 路由、TaskDetailV3 UI、`always` 目录缓存已打通 |
+| 使用量统计、审计与账本 | 是 | 是 | `runtime-usage-ledger-sync`、`judge-usage-accounting`、`realtime-pipeline-events` 已覆盖 |
+| trace id | 是 | 是 | 已以 assistant message `info.id` 作为稳定 traceId，打通 execution trace 顶层返回与 audit 写链，并有定向测试覆盖 |
 | 明确哪些内容回给模型、哪些只落库 | 否 | 否 | 尚未收口 |
 | 新的 task/session/message canonical schema 收口 | 否 | 否 | 尚未收口 |
 | runtime 写入路径去除旧 OpenCode 语义假设 | 否 | 否 | 尚未完成 |
 | execution trace / session message / timeline 读面按 pi-mono backend 保真 | 否 | 否 | 尚未完成整链路验收 |
-| 历史数据迁移与 backfill | 否 | 否 | 尚未开始 |
-| 灰度切换、双写或分阶段 cutover 策略 | 否 | 否 | 尚未收口 |
+| 历史数据迁移与 backfill | 是 | 是 | 已明确不执行（决策裁剪） |
+| 灰度切换、双写或分阶段 cutover 策略 | 是 | 是 | 已明确不执行（直接切默认） |
 
 ### Phase 6：切换与最终验收
 
@@ -132,18 +137,18 @@
 | --- | --- | --- | --- |
 | pi-mono backend 的端到端回归用例 | 是 | 是 | live `identity-binding.test.ts` 已覆盖 execute、assistant、tool、trace |
 | 当前工作区的真实 pi-mono backend roundtrip 复验 | 是 | 是 | live control-plane + live BFF 下已完成 assistant/tool/trace roundtrip |
-| 成本、审计、审批链路验证 | 否 | 否 | 尚未完成 |
-| 回滚路径与回退演练 | 是 | 是 | 默认 `opencode` backend 下已复跑同一条 live suite |
-| 默认 backend 切到 pi-mono | 否 | 否 | 当前默认仍是 `opencode` |
+| 成本、审计、审批链路验证 | 是 | 是 | provider / extension / realtime / ledger / UI 专项测试均已通过 |
+| 回滚路径与回退演练 | 是 | 是 | 已验证可临时切回 `opencode` 并复跑通过 |
+| 默认 backend 切到 pi-mono | 是 | 是 | 当前默认已是 `pi-mono` |
 
 ## 5. 已实现但未验收完成的关键项
 
 下面这些最容易被误判为“已经完成”，需要单独列出来：
 
-1. `pauseAgent` / `resumeAgent` / guidance 已不只是 provider 专项测试：当前工作区已在 pi-mono-backed BFF 下复用 live completion-sync 用例完成真实 pause/guidance/resume 串联验证。当前未闭合的不是 pause/resume，而是审批型 runtime permission 语义是否与默认 backend 对齐。
-2. task-domain 基础写链现在已经在当前工作区复验通过，live pi-mono execute 的 assistant 最终回复、tool result 和 trace 读面也已经一起验到位；剩余未验收项主要转移到 permission / pause-resume 与治理桥接。
-3. pi-mono runtime permission bridge 已实现，但它不能替代完整审批流、路径保护、白名单和审计桥接；当前 live `/tmp/...` 外部文件读取还验证到一个更具体的差距：上游 `packages/coding-agent/src/core/tools/read.ts` 会直接 resolve 并读取绝对路径，不会自动发出 `external_directory` 审批请求，因此 BFF 这层不会出现对应 runtime permission 记录。
-4. 默认切换与成本治理仍然没有完成收口；回滚路径本身已经完成一次默认 `opencode` backend 演练，但这仍不等于“默认可切”。
+1. `pauseAgent` / `resumeAgent` / guidance 已不只是 provider 专项测试：当前工作区已在 pi-mono-backed BFF 下复用 live completion-sync 用例完成真实 pause/guidance/resume 串联验证。当前未闭合的已经不再是 pause/resume。
+2. task-domain 基础写链现在已经在当前工作区复验通过，live pi-mono execute 的 assistant 最终回复、tool result 和 trace 读面也已经一起验到位；审批、路径保护、命令治理与成本账本也已通过专项验证。
+3. 先前 live `/tmp/...` 外部文件读取不会出现 `external_directory` 审批记录的差距，现已在 OpenerX 自身治理层补齐：通过注入的 pi-mono governance extension 在 `tool_call` 阶段主动发出结构化审批请求，而不是继续依赖 upstream 默认工具行为。
+4. 默认切换已完成；当前剩余重点是把旧 OpenCode 语义假设继续从兼容层里剥离干净，并同步更新文档与验收口径。
 
 ## 6. 本轮真实验收结果
 
@@ -154,26 +159,26 @@
 3. 执行 `cd control-plane/web-ui-bff && RUN_EXECUTION_INTEGRATION=1 bun test ../../tests/web-ui-bff/identity-binding.test.ts --timeout 240000`。
 4. 在 pi-mono-backed BFF 下结果为 15/15 通过，确认了登录、凭据创建、任务创建、`POST /api/tasks/:taskId/execute` 启动真实 pi-mono session，以及 live assistant roundtrip、tool roundtrip、execution trace projection 读面。
 5. 执行 `bash scripts/run-service-task-domain-current-batch.sh`，结果为 total=20 failed=0，当前工作区的 service task-domain 基础读写回归已复验通过。
-6. 关闭 pi-mono BFF，恢复默认 `opencode` BFF + OpenCode runtime 后，复跑同一条 live suite，结果同样为 15/15 通过，完成一次可重复的回滚演练。
+6. 关闭 pi-mono BFF，切回 `opencode` runtime 后复跑同一条 live suite，结果同样为 15/15 通过，完成一次可重复的回滚演练。
 7. 复用 live completion-sync 套件在当前 pi-mono-backed BFF 下验证 pause/guidance/resume，结果为 4/4 通过，说明 pause-resume 主路径已经拿到真实环境证据。
-8. 手工创建任务并强制 `read` `/tmp/...` 外部文件时，任务会直接完成并返回文件首行，`/api/tasks/:taskId/runtime-permissions` 始终为空；结合 task trace 与上游源码可确认，当前缺口不是 BFF task/session 过滤，而是 pi-mono upstream 现状并不会为这类 read 自动发起审批事件。
-9. 在 checkout 迁移到根目录 `pi-mono/` 后，以上两条 live 验收已重新执行：`identity-binding.test.ts` 仍为 15/15 通过，`opencode-completion-sync.test.ts` 仍为 4/4 通过，说明 execute、assistant、tool、trace、pause、guidance、resume 与 terminate 在新目录布局下保持稳定。
+8. 针对先前 `/tmp/...` 外部绝对路径不会触发审批的缺口，当前工作区已新增 `pimono-governance-extension.ts`；对应 provider 专项测试现已验证 `external_directory` 审批映射、`always` 目录缓存与 `command_execution` 命令审批。
+9. `task-runtime-permissions-route.test.ts` 与 `TaskDetailV3.test.ts` 当前均通过，说明结构化权限记录可以被现有 BFF 路由与 V3 页面稳定消费。
+10. `runtime-usage-ledger-sync.test.ts`、`judge-usage-accounting.test.ts` 与 `realtime-pipeline-events.test.ts` 当前均通过，说明 pi-mono 路径下的 usage / audit / ledger 链路已拿到当前工作区证据。
+11. 在 checkout 迁移到根目录 `pi-mono/` 后，以上 live 验收已重新执行：`identity-binding.test.ts` 仍为 15/15 通过，`opencode-completion-sync.test.ts` 仍为 4/4 通过，说明 execute、assistant、tool、trace、pause、guidance、resume 与 terminate 在新目录布局下保持稳定。
+12. 针对先前未单独收口的 trace id 语义，当前工作区已将最新 assistant message `info.id` 提升为稳定 traceId，并打通到 execution trace 顶层返回与 completion/failure audit 写链；`runtime-message-utils.test.ts`、`task-execution-trace-route.test.ts`、`runtime-usage-ledger-sync.test.ts` 与 `realtime-pipeline-events.test.ts` 合计 41/41 通过。
 
 这轮验收带来的状态变化是：
 
 - “只能靠 mock / fake RPC 证明”的阶段已经过去。
 - “task-domain 基础写链未复验”这条阻塞项已经清掉。
-- 剩余差距已经收缩为审批型 runtime permission 语义、治理桥接、审批白名单和成本审计链路。
+- 剩余差距已经从审批/治理/成本链路进一步收缩到 canonical schema 与兼容层清理。
 
 ## 7. 剩余差距可执行清单
 
 下面这些是从“已实现”走到“已验收完成”还剩下的最小可执行清单，按顺序做即可：
 
-1. 明确并收口审批型 runtime permission 的实现归属：当前 pause-resume 已 live 通过，但 pi-mono upstream 现状不会为 `read` 外部绝对路径自动发出 `external_directory` 审批事件；如果默认切换要求与 OpenCode 保持同等审批 UX，需要在 upstream、tool wrapper 或 OpenerX 自身治理层补齐这一层语义，而不是继续把问题归因为 BFF 路由过滤。
-2. 接回 `beforeToolCall` / `afterToolCall` 策略桥接、命令白名单与路径保护，确认 pi-mono 路径下的治理边界与默认 backend 一致。
-3. 补 usage、审计、账本、trace id 等治理链路验证，确认 pi-mono 路径下不会丢失成本与审计事实。
-4. 收口 canonical schema / 历史 backfill / 旧 OpenCode 语义假设清理，避免默认切换后仍被兼容层拖住。
-5. 在以上 1-4 完成后，再讨论是否把默认 backend 从 `opencode` 切到 `pi-mono`。
+1. 收口 canonical schema / 旧 OpenCode 语义假设清理，避免默认 `pi-mono` 路径被兼容层拖住。
+2. 同步所有运行与验收文档口径，避免团队继续按“待切换”假设执行。
 
 ## 8. 第一阶段完成标准
 
@@ -186,7 +191,7 @@
 - [x] `pauseAgent` / `resumeAgent` / guidance / runtime permission / crash recovery 第一版语义已落地。
 - [x] pi-mono session 已能复用现有 realtime 聚合链，把 session/message/tool 基础事件映射回 BFF。
 - [x] task-domain 基础写链已经打通到当前代码路径。
-- [x] OpenCode 仍保留为默认与回退 backend。
+- [x] `pi-mono` 已作为默认 backend，OpenCode 保留应急回退能力。
 
 ### 第一阶段“验收完成”标准
 

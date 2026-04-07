@@ -22,21 +22,13 @@ fi
 
 echo "Bun version: $(bun --version)"
 
-# ── 3. Install OpenCode runtime ─────────────────────────────────────
-
-if ! command -v opencode &>/dev/null; then
-  curl -fsSL https://opencode.ai/install | bash
-fi
-
-echo "OpenCode version: $(opencode --version)"
-
-# ── 4. Create openerx user ──────────────────────────────────────────
+# ── 3. Create openerx user ──────────────────────────────────────────
 
 if ! id openerx &>/dev/null; then
   useradd -r -m -d /opt/openerx -s /bin/bash openerx
 fi
 
-# ── 5. Deploy application ───────────────────────────────────────────
+# ── 4. Deploy application ───────────────────────────────────────────
 
 DEPLOY_DIR="/opt/openerx"
 DATA_DIR="/opt/openerx/data"
@@ -52,7 +44,7 @@ fi
 
 chown -R openerx:openerx "$DEPLOY_DIR"
 
-# ── 6. Environment file ─────────────────────────────────────────────
+# ── 5. Environment file ─────────────────────────────────────────────
 
 cat > /opt/openerx/.env <<'ENVEOF'
 # Opener-X Environment Configuration
@@ -65,7 +57,6 @@ JWT_SECRET=CHANGE_ME_TO_A_RANDOM_64_CHAR_SECRET
 
 # BFF
 BFF_PORT=4098
-OPENCODE_URL=http://localhost:4096
 CONTROL_PLANE_URL=http://localhost:4097
 CORS_ORIGIN=https://your-domain.example.com
 
@@ -81,7 +72,7 @@ echo ""
 echo "=== Setup complete ==="
 echo "Next steps:"
 echo "  1. Edit /opt/openerx/.env with your API keys and JWT secret"
-echo "  2. Enable systemd services: systemctl enable openerx-{control-plane,bff,opencode}"
-echo "  3. Start services: systemctl start openerx-control-plane openerx-opencode openerx-bff"
+echo "  2. Enable systemd services: systemctl enable openerx-{control-plane,bff}"
+echo "  3. Start services: systemctl start openerx-control-plane openerx-bff"
 echo "  4. Configure nginx: edit /etc/nginx/sites-available/openerx"
 echo "  5. Enable SSL: certbot --nginx -d your-domain.example.com"

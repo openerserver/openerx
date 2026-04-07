@@ -162,7 +162,7 @@
 4. Operation Canonical：`task_operations`
 5. Artifact Canonical：`task_artifacts`（message/operation 引用对齐新模型）
 6. Usage Canonical Ledger：`task_usage_ledger_entries`
-7. Event Log：`task_message_events`（仅调试审计）
+7. 调试审计不再保留独立 message event log；`task_message_events` 已从运行代码与数据库表中删除。
 
 ## 附：与全量表结构文档的关系
 

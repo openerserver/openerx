@@ -3,6 +3,7 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import * as strategyModule from "../../control-plane/web-ui-bff/src/lib/orchestration-strategy";
 import { normalizeOrchestrationStrategy } from "../../control-plane/web-ui-bff/src/lib/orchestration-strategy";
+import { createRuntimeProviderModuleMock } from "./runtime-provider-mock";
 import { createSseAggregatorModuleMock } from "./sse-aggregator-mock";
 
 const createSessionMock = mock(async () => ({
@@ -42,35 +43,37 @@ let currentStrategy = normalizeOrchestrationStrategy({
 });
 let workflowInitialized = false;
 
-mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter", () => ({
-  buildExecutionContext: mock(() => ""),
-  continueSession: mock(async () => ({ ok: true })),
-  createSession: createSessionMock,
-  ensureAgentRunForSession: mock(() => "run-test"),
-  extractAssistantResultFromMessages: mock(() => ({
-    completed: false,
-    failed: false,
-    error: undefined,
-    tokenUsed: 0,
-  })),
-  forkSession: mock(async () => ({ ok: true, sessionId: "forked-session" })),
-  findAgentRunBySessionId: mock(() => undefined),
-  getAgentRun: mock(() => undefined),
-  getAgentMessages: mock(async () => ({ ok: true, data: [] })),
-  getSessionMessages: mock(async () => ({ ok: true, data: [] })),
-  injectGuidance: mock(async () => ({ ok: true })),
-  listAgentRuns: mock(() => []),
-  listRuntimePermissions: mock(async () => ({ ok: true, data: [] })),
-  listSessions: mock(async () => ({ ok: true, data: [] })),
-  pauseAgent: mock(async () => ({ ok: true })),
-  registerAgentRun: mock(() => undefined),
-  recoverAgentRun: mock(() => undefined),
-  replyRuntimePermission: mock(async () => ({ ok: true })),
-  resumeAgent: mock(async () => ({ ok: true })),
-  runDetachedPrompt: mock(async () => ({ ok: true, sessionId: "detached", text: "{}" })),
-  terminateAgent: mock(async () => ({ ok: true })),
-  updateAgentRunStatus: mock(() => undefined),
-}));
+mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/runtime-provider", () =>
+  createRuntimeProviderModuleMock({
+    buildExecutionContext: mock(() => ""),
+    continueSession: mock(async () => ({ ok: true })),
+    createSession: createSessionMock,
+    ensureAgentRunForSession: mock(() => "run-test"),
+    extractAssistantResultFromMessages: mock(() => ({
+      completed: false,
+      failed: false,
+      error: undefined,
+      tokenUsed: 0,
+    })),
+    forkSession: mock(async () => ({ ok: true, sessionId: "forked-session" })),
+    findAgentRunBySessionId: mock(() => undefined),
+    getAgentRun: mock(() => undefined),
+    getAgentMessages: mock(async () => ({ ok: true, data: [] })),
+    getSessionMessages: mock(async () => ({ ok: true, data: [] })),
+    injectGuidance: mock(async () => ({ ok: true })),
+    listAgentRuns: mock(() => []),
+    listRuntimePermissions: mock(async () => ({ ok: true, data: [] })),
+    listSessions: mock(async () => ({ ok: true, data: [] })),
+    pauseAgent: mock(async () => ({ ok: true })),
+    registerAgentRun: mock(() => undefined),
+    recoverAgentRun: mock(() => undefined),
+    replyRuntimePermission: mock(async () => ({ ok: true })),
+    resumeAgent: mock(async () => ({ ok: true })),
+    runDetachedPrompt: mock(async () => ({ ok: true, sessionId: "detached", text: "{}" })),
+    terminateAgent: mock(async () => ({ ok: true })),
+    updateAgentRunStatus: mock(() => undefined),
+  }),
+);
 
 mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () => ({
   authHeader: authHeaderMock,
@@ -88,7 +91,7 @@ mock.module("../../control-plane/web-ui-bff/src/lib/intent-classifier", () => ({
   })),
 }));
 
-mock.module("../../control-plane/web-ui-bff/src/lib/opencode-config", () => ({
+mock.module("../../control-plane/web-ui-bff/src/lib/model-config", () => ({
   formatModelRoute: mock((value: { providerId?: string; modelId?: string } | string) =>
     typeof value === "string"
       ? value

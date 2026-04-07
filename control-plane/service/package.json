@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "bun run src/db/migrate.ts",
+    "db:reconcile:migration-state": "bun run src/db/migration/reconcile-postgres-migration-state.ts",
     "db:seed": "bun run src/db/seed.ts",
     "db:studio": "drizzle-kit studio",
     "db:generate:pg": "bun run db:generate",
@@ -31,7 +32,6 @@
   },
   "dependencies": {
     "@hono/zod-validator": "^0.4.0",
-    "@opencode-ai/sdk": "^1.0.0",
     "drizzle-orm": "^0.36.0",
     "hono": "^4.7.0",
     "jose": "^6.0.0",

@@ -20,15 +20,6 @@ export const updateStatusSchema = z.object({
   gitCommitterEmail: z.string().email().max(200).optional(),
   finalCommitSha: z.string().max(200).optional(),
   finalBranchName: z.string().max(200).optional(),
-  changesSummary: z
-    .object({
-      filesAdded: z.number().int().optional(),
-      filesModified: z.number().int().optional(),
-      filesDeleted: z.number().int().optional(),
-      totalInsertions: z.number().int().optional(),
-      totalDeletions: z.number().int().optional(),
-    })
-    .optional(),
 });
 
 export type TaskStatusUpdate = z.infer<typeof updateStatusSchema>;
@@ -52,7 +43,6 @@ const directTaskUpdateKeys = [
   "gitCommitterEmail",
   "finalCommitSha",
   "finalBranchName",
-  "changesSummary",
 ] as const;
 
 function shouldSetFinishedAt(status: TaskStatusUpdate["status"]) {

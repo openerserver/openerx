@@ -625,7 +625,7 @@ describe.skip("TaskDetail (legacy page removed)", () => {
         },
       ],
       timelineMeta: {
-        readSource: "opencode-runtime",
+        readSource: "runtime-fallback",
         cacheState: "complete",
         complete: true,
       },

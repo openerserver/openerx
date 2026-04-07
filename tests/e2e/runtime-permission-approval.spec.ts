@@ -5,7 +5,10 @@ const liveBackendTest = process.env.PLAYWRIGHT_LIVE_BACKEND === "1" ? test : tes
 
 const BFF_URL = process.env.PLAYWRIGHT_BFF_URL || "http://127.0.0.1:4098";
 const CONTROL_PLANE_URL = process.env.PLAYWRIGHT_CONTROL_PLANE_URL || "http://127.0.0.1:4097";
-const RUNTIME_URL = process.env.PLAYWRIGHT_OPENCODE_URL || "http://127.0.0.1:4096";
+const RUNTIME_URL =
+  process.env.PLAYWRIGHT_RUNTIME_URL ||
+  process.env.PLAYWRIGHT_OPENCODE_URL ||
+  "http://127.0.0.1:4096";
 const UI_URL = process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:4173";
 const USERNAME = process.env.TEST_USERNAME || "admin";
 const PASSWORD = process.env.TEST_PASSWORD || "admin123!";

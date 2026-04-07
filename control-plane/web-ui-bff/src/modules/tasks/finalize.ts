@@ -1,8 +1,5 @@
 import { cpFetch } from "../../lib/control-plane-client";
-import {
-  fetchTaskSessionLineageRecords,
-  upsertTaskSessionLineageRecord,
-} from "./task-session-compat";
+import { fetchTaskSessionLineageRecords, upsertTaskSessionLineageRecord } from "./task-session-store";
 
 type FinalizedTaskStatus = "completed" | "failed" | "cancelled";
 

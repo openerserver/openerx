@@ -18,6 +18,11 @@ import {
   buildTaskSessionDefaultRunId,
   buildTaskSessionWriteId,
 } from "./task-session-write-api";
+import {
+  extractTaskSessionMessageRuntimeId,
+  parseTaskSessionRuntimeMessage,
+  type TaskSessionRuntimeMessageInput,
+} from "./task-session-runtime-message-schema";
 
 type TaskSessionMessageRecordArgs = {
   task: {
@@ -26,7 +31,28 @@ type TaskSessionMessageRecordArgs = {
   };
   sessionId?: string;
   runtimeSessionId?: string;
-  message: Record<string, unknown>;
+  message: TaskSessionRuntimeMessageInput;
+};
+
+type TaskSessionMessageWriteRequestArgs = Omit<TaskSessionMessageRecordArgs, "message"> & {
+  message: unknown;
+};
+
+type NormalizedIncomingTaskSessionMessage = {
+  rawMessage: TaskSessionRuntimeMessageInput;
+  role: TaskSessionMessageRole;
+  textContent: string | null;
+  createdAt: string;
+  completedAt: string | null;
+  runtimeMessageId: string;
+  status: TaskSessionMessageStatus;
+  parentId: string | null;
+  finishReason: string | null;
+  clientMessageId: string | null;
+  providerMessageId: string | null;
+  errorText: string | null;
+  parts: Record<string, unknown>[];
+  tokenUsage: number;
 };
 
 type TaskSessionMessageCompatRecord = {
@@ -43,8 +69,7 @@ type TaskSessionMessageCompatRecord = {
     | null;
 };
 
-type TaskSessionMessageCompatRow = {
-  source: "canonical" | "legacy";
+type TaskSessionMessageRow = {
   id: string;
   role: TaskSessionMessageRole;
   runtimeMessageId: string | null;
@@ -60,6 +85,48 @@ type TaskSessionMessageCompatRow = {
   errorText: string | null;
   createdAt: string;
   updatedAt: string;
+};
+
+type CanonicalTaskMessageRow = {
+  id: string;
+  taskId: string;
+  sessionId: string;
+  role: TaskSessionMessageRole;
+  runtimeMessageId: string | null;
+  status: TaskSessionMessageStatus;
+  clientMessageId: string | null;
+  providerMessageId: string | null;
+  seq: number;
+  textContent: string | null;
+  textPreview: string | null;
+  rawPayload: Record<string, unknown>;
+  tokenUsed: number;
+  startedAt: string | null;
+  completedAt: string | null;
+  errorText: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+const CANONICAL_TASK_MESSAGE_COLUMNS = {
+  id: taskMessages.id,
+  taskId: taskMessages.taskId,
+  sessionId: taskMessages.sessionId,
+  role: taskMessages.role,
+  runtimeMessageId: taskMessages.runtimeMessageId,
+  status: taskMessages.status,
+  clientMessageId: taskMessages.clientMessageId,
+  providerMessageId: taskMessages.providerMessageId,
+  seq: taskMessages.seq,
+  textContent: taskMessages.textContent,
+  textPreview: taskMessages.textPreview,
+  rawPayload: taskMessages.rawPayload,
+  tokenUsed: taskMessages.tokenUsed,
+  startedAt: taskMessages.startedAt,
+  completedAt: taskMessages.completedAt,
+  errorText: taskMessages.errorText,
+  createdAt: taskMessages.createdAt,
+  updatedAt: taskMessages.updatedAt,
 };
 
 const CANDIDATE_USER_MESSAGE_DEDUPE_WINDOW_MS = 15_000;
@@ -309,6 +376,245 @@ function normalizeTaskSessionMessageComparableText(value: string | null) {
   return typeof value === "string" && value.trim() ? value.replace(/\r\n/g, "\n").trim() : null;
 }
 
+function normalizeIncomingTaskSessionMessageRole(
+  message: TaskSessionRuntimeMessageInput,
+): TaskSessionMessageRole {
+  const rawRole =
+    typeof message.role === "string"
+      ? message.role
+      : typeof message.info?.role === "string"
+        ? message.info.role
+        : "assistant";
+  if (rawRole === "user" || rawRole === "assistant" || rawRole === "system" || rawRole === "tool") {
+    return rawRole;
+  }
+
+  return "assistant";
+}
+
+function extractIncomingTaskSessionMessageParts(message: TaskSessionRuntimeMessageInput) {
+  const explicitParts = Array.isArray(message.parts) ? message.parts : [];
+  const standalonePart =
+    message.part && typeof message.part === "object" ? [message.part] : [];
+
+  return [...explicitParts, ...standalonePart].map((part) => ({ ...part }));
+}
+
+function extractIncomingTaskSessionMessageText(message: TaskSessionRuntimeMessageInput) {
+  const candidates = [message.textContent, message.text, message.summaryText, message.content];
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate;
+    }
+  }
+
+  const parts = extractIncomingTaskSessionMessageParts(message);
+  for (const part of parts) {
+    if (normalizeTaskSessionMessagePartType(part) !== "text") {
+      continue;
+    }
+    const text = extractTaskSessionMessagePartText(part);
+    if (text) {
+      return text;
+    }
+  }
+
+  for (const part of parts) {
+    const partType = normalizeTaskSessionMessagePartType(part);
+    if (partType === "thinking" || partType === "tool_call") {
+      continue;
+    }
+    const text = extractTaskSessionMessagePartText(part);
+    if (text) {
+      return text;
+    }
+  }
+
+  for (const part of parts) {
+    const text = extractTaskSessionMessagePartText(part);
+    if (text) {
+      return text;
+    }
+  }
+
+  return null;
+}
+
+function extractIncomingTaskSessionMessageTokenUsage(message: TaskSessionRuntimeMessageInput) {
+  const candidates = [message.tokenUsed, message.token_usage, message.tokens];
+  for (const candidate of candidates) {
+    if (typeof candidate === "number" && Number.isFinite(candidate)) {
+      return candidate;
+    }
+    if (
+      candidate &&
+      typeof candidate === "object" &&
+      typeof (candidate as { total?: unknown }).total === "number" &&
+      Number.isFinite((candidate as { total: number }).total)
+    ) {
+      return (candidate as { total: number }).total;
+    }
+  }
+
+  const tokenInfo =
+    message.info?.tokens && typeof message.info.tokens === "object" ? message.info.tokens : null;
+  if (typeof tokenInfo?.total === "number" && Number.isFinite(tokenInfo.total)) {
+    return tokenInfo.total;
+  }
+
+  return 0;
+}
+
+function normalizeIncomingTaskSessionMessageParentId(message: TaskSessionRuntimeMessageInput) {
+  const raw =
+    message.parentID ??
+    message.parentId ??
+    message.parent_id ??
+    message.info?.parentID ??
+    message.info?.parentId ??
+    message.info?.parent_id;
+  return typeof raw === "string" && raw.trim() ? raw : null;
+}
+
+function normalizeIncomingTaskSessionMessageFinishReason(message: TaskSessionRuntimeMessageInput) {
+  const raw =
+    typeof message.finish === "string"
+      ? message.finish
+      : typeof message.info?.finish === "string"
+        ? message.info.finish
+        : null;
+  return raw && raw.trim() ? raw : null;
+}
+
+function normalizeIncomingTaskSessionMessageStatus(message: {
+  rawMessage: TaskSessionRuntimeMessageInput;
+  role: TaskSessionMessageRole;
+  textContent: string | null;
+  completedAt: string | null;
+  errorText: string | null;
+}) {
+  const rawStatus =
+    typeof message.rawMessage.status === "string"
+      ? message.rawMessage.status
+      : typeof message.rawMessage.info?.status === "string"
+        ? message.rawMessage.info.status
+        : null;
+  if (
+    rawStatus === "pending" ||
+    rawStatus === "streaming" ||
+    rawStatus === "completed" ||
+    rawStatus === "failed" ||
+    rawStatus === "cancelled"
+  ) {
+    return rawStatus;
+  }
+
+  if (message.errorText) {
+    return "failed";
+  }
+
+  if (message.completedAt) {
+    return "completed";
+  }
+
+  if (message.role === "user") {
+    return "completed";
+  }
+
+  return message.textContent ? "streaming" : "pending";
+}
+
+function normalizeIncomingTaskSessionMessage(
+  message: TaskSessionRuntimeMessageInput,
+): NormalizedIncomingTaskSessionMessage {
+  const role = normalizeIncomingTaskSessionMessageRole(message);
+  const textContent = extractIncomingTaskSessionMessageText(message);
+  const rawCreatedAt =
+    normalizeTaskSessionMessageTimeValue(message.createdAt) ||
+    normalizeTaskSessionMessageTimeValue(message.info?.time?.created);
+  const rawCompletedAt =
+    normalizeTaskSessionMessageTimeValue(message.completedAt) ||
+    normalizeTaskSessionMessageTimeValue(message.info?.time?.completed);
+  const createdAt =
+    pickEarlierTaskSessionMessageTime(
+      rawCreatedAt ?? rawCompletedAt ?? new Date().toISOString(),
+      rawCompletedAt,
+    ) ??
+    rawCreatedAt ??
+    rawCompletedAt ??
+    new Date().toISOString();
+  const runtimeMessageId = extractTaskSessionMessageRuntimeId(message);
+  if (!runtimeMessageId) {
+    throw new Error("Task session message write requires stable runtimeMessageId");
+  }
+
+  const errorText = (() => {
+    if (typeof message.errorText === "string" && message.errorText.trim()) {
+      return message.errorText;
+    }
+    if (typeof message.error_text === "string" && message.error_text.trim()) {
+      return message.error_text;
+    }
+    if (typeof message.info?.error === "string" && message.info.error.trim()) {
+      return message.info.error;
+    }
+    for (const part of extractIncomingTaskSessionMessageParts(message)) {
+      const partError = extractTaskSessionMessagePartToolError(part);
+      if (partError) {
+        return partError;
+      }
+    }
+    return null;
+  })();
+  const provisionalStatus = normalizeIncomingTaskSessionMessageStatus({
+    rawMessage: message,
+    role,
+    textContent,
+    completedAt: rawCompletedAt ?? null,
+    errorText,
+  });
+  const completedAt =
+    rawCompletedAt ??
+    (provisionalStatus === "completed" ||
+    provisionalStatus === "failed" ||
+    provisionalStatus === "cancelled"
+      ? createdAt
+      : null);
+
+  return {
+    rawMessage: message,
+    role,
+    textContent,
+    createdAt,
+    completedAt,
+    runtimeMessageId,
+    status: normalizeIncomingTaskSessionMessageStatus({
+      rawMessage: message,
+      role,
+      textContent,
+      completedAt,
+      errorText,
+    }),
+    parentId: normalizeIncomingTaskSessionMessageParentId(message),
+    finishReason: normalizeIncomingTaskSessionMessageFinishReason(message),
+    clientMessageId:
+      typeof message.clientMessageId === "string" && message.clientMessageId.trim()
+        ? message.clientMessageId
+        : typeof message.client_message_id === "string" && message.client_message_id.trim()
+          ? message.client_message_id
+          : null,
+    providerMessageId:
+      typeof message.providerMessageId === "string" && message.providerMessageId.trim()
+        ? message.providerMessageId
+        : typeof message.provider_message_id === "string" && message.provider_message_id.trim()
+          ? message.provider_message_id
+          : null,
+    errorText,
+    parts: extractIncomingTaskSessionMessageParts(message),
+    tokenUsage: extractIncomingTaskSessionMessageTokenUsage(message),
+  };
+}
+
 function extractTaskSessionMessageTokenUsage(message: Record<string, unknown>) {
   const tokenCandidates = [message.tokenUsed, message.token_usage, message.tokens];
   for (const candidate of tokenCandidates) {
@@ -334,15 +640,6 @@ function extractTaskSessionMessageTokenUsage(message: Record<string, unknown>) {
 
 function extractTaskSessionMessageClientId(message: Record<string, unknown>) {
   const raw = message.clientMessageId ?? message.client_message_id;
-  return typeof raw === "string" && raw.trim() ? raw : null;
-}
-
-function extractTaskSessionMessageRuntimeId(message: Record<string, unknown>) {
-  const info =
-    message.info && typeof message.info === "object"
-      ? (message.info as Record<string, unknown>)
-      : null;
-  const raw = message.runtimeMessageId ?? message.runtime_message_id ?? message.id ?? info?.id;
   return typeof raw === "string" && raw.trim() ? raw : null;
 }
 
@@ -500,9 +797,7 @@ function extractTaskSessionMessagePartIdentity(part: Record<string, unknown>) {
 }
 
 function hasTaskSessionMessageToolPart(message: Record<string, unknown>) {
-  return extractTaskSessionMessageParts(message).some((part) =>
-    isToolLikeTaskSessionMessagePart(part),
-  );
+  return extractTaskSessionMessageParts(message).some((part) => isTaskSessionMessagePartType(part, "tool"));
 }
 
 function cloneTaskSessionMessageParts(parts: Record<string, unknown>[]) {
@@ -571,12 +866,10 @@ function findTaskSessionMessagePart(
 
 function mergeAssistantToolCallFollowupParts(args: {
   existingMessage: Record<string, unknown>;
-  incomingMessage: Record<string, unknown>;
+  incomingParts: Record<string, unknown>[];
 }) {
   const existingParts = extractTaskSessionMessageParts(args.existingMessage);
-  const incomingParts = cloneTaskSessionMessageParts(
-    extractTaskSessionMessageParts(args.incomingMessage),
-  );
+  const incomingParts = cloneTaskSessionMessageParts(args.incomingParts);
   const incomingToolIds = collectTaskSessionMessageToolPartIds(incomingParts);
   const carryoverToolParts = collectCarryoverTaskSessionToolParts(existingParts, incomingToolIds);
 
@@ -616,37 +909,34 @@ function mergeAssistantToolCallFollowupParts(args: {
 function buildMergedAssistantToolCallFollowupPayload(args: {
   existingPayload: Record<string, unknown>;
   existingRuntimeMessageId: string | null;
-  incomingMessage: Record<string, unknown>;
-  incomingRuntimeMessageId: string;
+  incomingMessage: NormalizedIncomingTaskSessionMessage;
 }) {
   const existingInfo = extractTaskSessionMessageInfoRecord(args.existingPayload) ?? {};
-  const incomingInfo = extractTaskSessionMessageInfoRecord(args.incomingMessage) ?? {};
+  const incomingInfo = extractTaskSessionMessageInfoRecord(args.incomingMessage.rawMessage) ?? {};
   const existingTime = asTaskSessionMessageRecord(existingInfo.time) ?? {};
   const incomingTime = asTaskSessionMessageRecord(incomingInfo.time) ?? {};
   const preservedMessageId =
     asTaskSessionMessageString(existingInfo.id) ??
     asTaskSessionMessageString(args.existingPayload.id) ??
     args.existingRuntimeMessageId ??
-    args.incomingRuntimeMessageId;
+    args.incomingMessage.runtimeMessageId;
   const preservedRuntimeMessageId =
     asTaskSessionMessageString(args.existingPayload.runtimeMessageId) ??
     args.existingRuntimeMessageId ??
     preservedMessageId;
   const mergedText =
-    extractTaskSessionMessageText(args.incomingMessage) ??
-    extractTaskSessionMessageText(args.existingPayload);
+    args.incomingMessage.textContent ?? extractTaskSessionMessageText(args.existingPayload);
   const mergedParentId =
-    extractTaskSessionMessageParentId(args.incomingMessage) ??
-    extractTaskSessionMessageParentId(args.existingPayload);
+    args.incomingMessage.parentId ?? extractTaskSessionMessageParentId(args.existingPayload);
   const mergedRuntimeMessageIds = buildMergedTaskSessionRuntimeMessageIds({
     existingPayload: args.existingPayload,
     existingRuntimeMessageId: args.existingRuntimeMessageId,
-    incomingRuntimeMessageId: args.incomingRuntimeMessageId,
+    incomingRuntimeMessageId: args.incomingMessage.runtimeMessageId,
   });
 
   return {
     ...args.existingPayload,
-    ...args.incomingMessage,
+    ...args.incomingMessage.rawMessage,
     id: preservedMessageId,
     runtimeMessageId: preservedRuntimeMessageId,
     text: mergedText,
@@ -654,7 +944,7 @@ function buildMergedAssistantToolCallFollowupPayload(args: {
     summaryText: mergedText,
     parts: mergeAssistantToolCallFollowupParts({
       existingMessage: args.existingPayload,
-      incomingMessage: args.incomingMessage,
+      incomingParts: args.incomingMessage.parts,
     }),
     mergedRuntimeMessageIds,
     info: {
@@ -688,10 +978,7 @@ function shouldMergeAssistantToolCallFollowup(args: {
     createdAt: string;
     runtimeMessageId: string | null;
   };
-  incomingMessage: Record<string, unknown>;
-  incomingRuntimeMessageId: string;
-  incomingTextContent: string | null;
-  incomingCreatedAt: string;
+  incomingMessage: NormalizedIncomingTaskSessionMessage;
 }) {
   if (args.latestMessage.role !== "assistant") {
     return false;
@@ -700,9 +987,7 @@ function shouldMergeAssistantToolCallFollowup(args: {
   const existingText = normalizeTaskSessionMessageComparableText(
     args.latestMessage.textContent ?? extractTaskSessionMessageText(args.latestMessage.rawPayload),
   );
-  const incomingText = normalizeTaskSessionMessageComparableText(
-    args.incomingTextContent ?? extractTaskSessionMessageText(args.incomingMessage),
-  );
+  const incomingText = normalizeTaskSessionMessageComparableText(args.incomingMessage.textContent);
   if (!existingText || !incomingText || existingText !== incomingText) {
     return false;
   }
@@ -710,7 +995,7 @@ function shouldMergeAssistantToolCallFollowup(args: {
   const latestMergedRuntimeIds = extractTaskSessionMessageMergedRuntimeMessageIds(
     args.latestMessage.rawPayload,
   );
-  if (latestMergedRuntimeIds.includes(args.incomingRuntimeMessageId)) {
+  if (latestMergedRuntimeIds.includes(args.incomingMessage.runtimeMessageId)) {
     return true;
   }
 
@@ -722,18 +1007,18 @@ function shouldMergeAssistantToolCallFollowup(args: {
     return false;
   }
 
-  if (extractTaskSessionMessageFinishReason(args.incomingMessage) === "tool-calls") {
+  if (args.incomingMessage.finishReason === "tool-calls") {
     return false;
   }
 
   const latestParentId = extractTaskSessionMessageParentId(args.latestMessage.rawPayload);
-  const incomingParentId = extractTaskSessionMessageParentId(args.incomingMessage);
+  const incomingParentId = args.incomingMessage.parentId;
   if (latestParentId !== incomingParentId) {
     return false;
   }
 
   const latestCreatedAt = parseTaskSessionMessageTime(args.latestMessage.createdAt);
-  const incomingCreatedAt = parseTaskSessionMessageTime(args.incomingCreatedAt);
+  const incomingCreatedAt = parseTaskSessionMessageTime(args.incomingMessage.createdAt);
   if (latestCreatedAt === null || incomingCreatedAt === null) {
     return false;
   }
@@ -820,70 +1105,62 @@ function normalizePersistedTaskSessionMessageStatus(value: string | null | undef
 }
 
 function mapCanonicalTaskSessionMessageRow(
-  message: typeof taskMessages.$inferSelect,
-): TaskSessionMessageCompatRow {
+  message: CanonicalTaskMessageRow,
+): TaskSessionMessageRow {
   return {
-    source: "canonical",
     id: message.id,
     role: message.role,
-    runtimeMessageId:
-      message.runtimeMessageId ?? extractTaskSessionMessageRuntimeId(message.rawPayload) ?? null,
+    runtimeMessageId: message.runtimeMessageId,
     status: normalizePersistedTaskSessionMessageStatus(message.status),
-    clientMessageId:
-      message.clientMessageId ?? extractTaskSessionMessageClientId(message.rawPayload),
-    providerMessageId:
-      message.providerMessageId ?? extractTaskSessionMessageProviderMessageId(message.rawPayload),
+    clientMessageId: message.clientMessageId,
+    providerMessageId: message.providerMessageId,
     messageIndex: message.seq,
-    textContent:
-      message.textContent ??
-      extractTaskSessionMessageText(message.rawPayload) ??
-      message.textPreview ??
-      null,
+    textContent: message.textContent ?? message.textPreview ?? null,
     rawPayload: message.rawPayload,
     tokenUsed: message.tokenUsed,
     startedAt: message.startedAt ?? message.createdAt,
     completedAt: message.completedAt ?? null,
-    errorText: message.errorText ?? extractTaskSessionMessageErrorText(message.rawPayload),
+    errorText: message.errorText,
     createdAt: message.createdAt,
     updatedAt: message.updatedAt,
   };
 }
 
-async function loadCanonicalTaskSessionMessageById(messageId: string) {
-  const message = await db.query.taskMessages.findFirst({
-    where: eq(taskMessages.id, messageId),
-  });
-  return message ? mapCanonicalTaskSessionMessageRow(message) : null;
-}
-
 async function loadTaskSessionMessageById(messageId: string) {
-  return loadCanonicalTaskSessionMessageById(messageId);
-}
-
-async function loadLatestCanonicalTaskSessionMessage(sessionId: string) {
-  const message = await db.query.taskMessages.findFirst({
-    where: eq(taskMessages.sessionId, sessionId),
-    orderBy: [desc(taskMessages.seq), desc(taskMessages.createdAt)],
-  });
+  const [message] = await db
+    .select(CANONICAL_TASK_MESSAGE_COLUMNS)
+    .from(taskMessages)
+    .where(eq(taskMessages.id, messageId))
+    .limit(1);
   return message ? mapCanonicalTaskSessionMessageRow(message) : null;
 }
 
 async function loadLatestTaskSessionMessage(sessionId: string) {
-  return loadLatestCanonicalTaskSessionMessage(sessionId);
+  const [message] = await db
+    .select(CANONICAL_TASK_MESSAGE_COLUMNS)
+    .from(taskMessages)
+    .where(eq(taskMessages.sessionId, sessionId))
+    .orderBy(desc(taskMessages.seq), desc(taskMessages.createdAt))
+    .limit(1);
+  return message ? mapCanonicalTaskSessionMessageRow(message) : null;
 }
 
-async function loadEquivalentCanonicalTaskSessionUserMessage(args: {
+async function loadEquivalentTaskSessionUserMessage(args: {
   sessionId: string;
   textContent: string;
 }) {
-  const message = await db.query.taskMessages.findFirst({
-    where: and(
-      eq(taskMessages.sessionId, args.sessionId),
-      eq(taskMessages.role, "user"),
-      eq(taskMessages.textContent, args.textContent),
-    ),
-    orderBy: [desc(taskMessages.createdAt)],
-  });
+  const [message] = await db
+    .select(CANONICAL_TASK_MESSAGE_COLUMNS)
+    .from(taskMessages)
+    .where(
+      and(
+        eq(taskMessages.sessionId, args.sessionId),
+        eq(taskMessages.role, "user"),
+        eq(taskMessages.textContent, args.textContent),
+      ),
+    )
+    .orderBy(desc(taskMessages.createdAt))
+    .limit(1);
   return message ? mapCanonicalTaskSessionMessageRow(message) : null;
 }
 
@@ -892,7 +1169,7 @@ async function findEquivalentTaskSessionUserMessage(args: {
   textContent: string;
   createdAt: string;
 }) {
-  const existing = await loadEquivalentCanonicalTaskSessionUserMessage(args);
+  const existing = await loadEquivalentTaskSessionUserMessage(args);
 
   if (!existing) {
     return null;
@@ -1042,6 +1319,9 @@ function normalizeTaskSessionMessageToolOutputText(value: unknown) {
 }
 
 function extractTaskSessionMessagePartState(part: Record<string, unknown>) {
+  if (typeof part.state === "string" && part.state.trim()) {
+    return { status: part.state };
+  }
   return asTaskSessionMessageRecord(part.state);
 }
 
@@ -1650,29 +1930,23 @@ export function createTaskSessionMessageWriteApi(deps: {
   ) => Promise<TaskSessionMessageCompatRecord | null>;
 }) {
   async function resolveTaskSessionMessageRouting(args: TaskSessionMessageRecordArgs) {
-    const info = extractTaskSessionMessageInfoRecord(args.message);
-    const role = normalizeTaskSessionMessageRole(args.message);
-    const textContent = extractTaskSessionMessageText(args.message);
-    const createdAt = extractTaskSessionMessageCreatedAt(args.message);
+    const incomingMessage = normalizeIncomingTaskSessionMessage(args.message);
     const updatedAt = new Date().toISOString();
     const routedTarget =
       !args.sessionId && args.runtimeSessionId
         ? await resolveTaskSessionMessageTarget({
             task: args.task,
             runtimeSessionId: args.runtimeSessionId,
-            role,
-            textContent,
-            createdAt,
+            role: incomingMessage.role,
+            textContent: incomingMessage.textContent,
+            createdAt: incomingMessage.createdAt,
             resolveTaskSessionRecordByRuntimeSessionId:
               deps.resolveTaskSessionRecordByRuntimeSessionId,
           })
         : null;
 
     return {
-      info,
-      role,
-      textContent,
-      createdAt,
+      incomingMessage,
       updatedAt,
       routedTarget,
     };
@@ -1704,25 +1978,10 @@ export function createTaskSessionMessageWriteApi(deps: {
     throw new Error("Task session message write requires sessionId or runtimeSessionId");
   }
 
-  function resolveTaskSessionMessageRuntimeId(args: {
-    message: Record<string, unknown>;
-    info: Record<string, unknown> | null;
-  }) {
-    return (
-      (typeof args.message.id === "string" && args.message.id) ||
-      (typeof args.message.runtimeMessageId === "string" && args.message.runtimeMessageId) ||
-      (typeof args.info?.id === "string" && args.info.id) ||
-      crypto.randomUUID()
-    );
-  }
-
   async function loadTaskSessionMessagePersistenceState(args: {
     sessionId: string;
     messageId: string;
-    message: Record<string, unknown>;
-    runtimeMessageId: string;
-    textContent: string | null;
-    createdAt: string;
+    incomingMessage: NormalizedIncomingTaskSessionMessage;
   }) {
     const existing = await loadTaskSessionMessageById(args.messageId);
     const latestMessage = await loadLatestTaskSessionMessage(args.sessionId);
@@ -1737,10 +1996,7 @@ export function createTaskSessionMessageWriteApi(deps: {
           createdAt: latestMessage.createdAt,
           runtimeMessageId: latestMessage.runtimeMessageId,
         },
-        incomingMessage: args.message,
-        incomingRuntimeMessageId: args.runtimeMessageId,
-        incomingTextContent: args.textContent,
-        incomingCreatedAt: args.createdAt,
+        incomingMessage: args.incomingMessage,
       })
         ? latestMessage
         : null;
@@ -1753,35 +2009,36 @@ export function createTaskSessionMessageWriteApi(deps: {
   }
 
   function buildPersistedTaskSessionMessageState(args: {
-    message: Record<string, unknown>;
+    incomingMessage: NormalizedIncomingTaskSessionMessage;
     messageId: string;
-    runtimeMessageId: string;
-    createdAt: string;
     persistenceState: Awaited<ReturnType<typeof loadTaskSessionMessagePersistenceState>>;
   }) {
     const { existing, latestMessage, assistantMergeTarget } = args.persistenceState;
     const persistedExisting = assistantMergeTarget ?? existing;
     const persistedMessageId = assistantMergeTarget?.id ?? args.messageId;
-    const persistedRuntimeMessageId =
-      assistantMergeTarget?.runtimeMessageId ?? args.runtimeMessageId;
     const persistedPayload = assistantMergeTarget
-      ? buildMergedAssistantToolCallFollowupPayload({
-          existingPayload: assistantMergeTarget.rawPayload,
-          existingRuntimeMessageId: assistantMergeTarget.runtimeMessageId,
-          incomingMessage: args.message,
-          incomingRuntimeMessageId: args.runtimeMessageId,
-        })
-      : args.message;
-    const persistedTextContent = extractTaskSessionMessageText(persistedPayload);
-    const persistedCompletedAt = extractTaskSessionMessageCompletedAt(persistedPayload);
-    const persistedStatus = normalizeTaskSessionMessageStatus(persistedPayload);
-    const persistedClientMessageId = extractTaskSessionMessageClientId(persistedPayload);
-    const persistedProviderMessageId = extractTaskSessionMessageProviderMessageId(persistedPayload);
-    const persistedErrorText = extractTaskSessionMessageErrorText(persistedPayload);
-    const persistedParts = extractTaskSessionMessageParts(persistedPayload);
-    const persistedTokenUsage = extractTaskSessionMessageTokenUsage(persistedPayload) ?? 0;
-    const persistedCreatedAt = persistedExisting?.createdAt ?? args.createdAt;
-    const persistedStartedAt = persistedExisting?.startedAt ?? args.createdAt;
+      ? parseTaskSessionRuntimeMessage(
+          buildMergedAssistantToolCallFollowupPayload({
+            existingPayload: assistantMergeTarget.rawPayload,
+            existingRuntimeMessageId: assistantMergeTarget.runtimeMessageId,
+            incomingMessage: args.incomingMessage,
+          }),
+        )
+      : args.incomingMessage.rawMessage;
+    const persistedNormalizedMessage = assistantMergeTarget
+      ? normalizeIncomingTaskSessionMessage(persistedPayload)
+      : args.incomingMessage;
+    const persistedRuntimeMessageId = persistedNormalizedMessage.runtimeMessageId;
+    const persistedTextContent = persistedNormalizedMessage.textContent;
+    const persistedCompletedAt = persistedNormalizedMessage.completedAt;
+    const persistedStatus = persistedNormalizedMessage.status;
+    const persistedClientMessageId = persistedNormalizedMessage.clientMessageId;
+    const persistedProviderMessageId = persistedNormalizedMessage.providerMessageId;
+    const persistedErrorText = persistedNormalizedMessage.errorText;
+    const persistedParts = persistedNormalizedMessage.parts;
+    const persistedTokenUsage = persistedNormalizedMessage.tokenUsage;
+    const persistedCreatedAt = persistedExisting?.createdAt ?? persistedNormalizedMessage.createdAt;
+    const persistedStartedAt = persistedExisting?.startedAt ?? persistedNormalizedMessage.createdAt;
     const messageIndex = persistedExisting?.messageIndex ?? (latestMessage?.messageIndex ?? -1) + 1;
     const taskMessageParentId = persistedExisting ? null : (latestMessage?.id ?? null);
 
@@ -1843,27 +2100,19 @@ export function createTaskSessionMessageWriteApi(deps: {
     task: { id: string; projectId: string };
     sessionId: string;
     runtimeSessionId?: string;
-    message: Record<string, unknown>;
+    message: TaskSessionRuntimeMessageInput;
     routing: Awaited<ReturnType<typeof resolveTaskSessionMessageRouting>>;
   }) {
-    const runtimeMessageId = resolveTaskSessionMessageRuntimeId({
-      message: args.message,
-      info: args.routing.info,
-    });
+    const runtimeMessageId = args.routing.incomingMessage.runtimeMessageId;
     const messageId = buildTaskSessionMessageWriteId(args.sessionId, runtimeMessageId);
     const persistenceState = await loadTaskSessionMessagePersistenceState({
       sessionId: args.sessionId,
       messageId,
-      message: args.message,
-      runtimeMessageId,
-      textContent: args.routing.textContent,
-      createdAt: args.routing.createdAt,
+      incomingMessage: args.routing.incomingMessage,
     });
     const persistedState = buildPersistedTaskSessionMessageState({
-      message: args.message,
+      incomingMessage: args.routing.incomingMessage,
       messageId,
-      runtimeMessageId,
-      createdAt: args.routing.createdAt,
       persistenceState,
     });
     const runState = await loadTaskSessionMessageRunState(args.sessionId);
@@ -1872,13 +2121,13 @@ export function createTaskSessionMessageWriteApi(deps: {
       task: args.task,
       sessionId: args.sessionId,
       runtimeSessionId: args.runtimeSessionId,
-      role: args.routing.role,
+      role: args.routing.incomingMessage.role,
       updatedAt: args.routing.updatedAt,
       sessionRecord: runState.sessionRecord,
       defaultRunId: runState.defaultRunId,
       messagePreview: buildTaskMessagePreview(persistedState.persistedTextContent),
       taskMessageStatus: resolveTaskSessionMessageNodeStatus(
-        args.routing.role,
+        args.routing.incomingMessage.role,
         persistedState.persistedStatus,
       ),
       ...persistedState,
@@ -1944,7 +2193,7 @@ export function createTaskSessionMessageWriteApi(deps: {
       createdAt: pickEarlierTaskSessionMessageTime(
         context.sessionRecord?.createdAt ?? null,
         context.persistedCreatedAt,
-      ),
+      ) ?? undefined,
     };
   }
 
@@ -2108,7 +2357,7 @@ export function createTaskSessionMessageWriteApi(deps: {
     }
 
     if (context.role !== "assistant") {
-      if (!context.sessionRecord?.status || context.sessionRecord.status === "pending") {
+      if (!context.sessionRecord?.status || context.sessionRecord.status === "queued") {
         sessionUpdates.status = "running";
       }
       return sessionUpdates;
@@ -2215,8 +2464,12 @@ export function createTaskSessionMessageWriteApi(deps: {
       .where(eq(taskSessions.id, context.sessionId));
   }
 
-  async function upsertTaskSessionMessageRecord(args: TaskSessionMessageRecordArgs) {
-    const routing = await resolveTaskSessionMessageRouting(args);
+  async function upsertTaskSessionMessageRecord(args: TaskSessionMessageWriteRequestArgs) {
+    const normalizedArgs: TaskSessionMessageRecordArgs = {
+      ...args,
+      message: parseTaskSessionRuntimeMessage(args.message),
+    };
+    const routing = await resolveTaskSessionMessageRouting(normalizedArgs);
 
     if (routing.routedTarget?.existingMessageId) {
       return {
@@ -2227,18 +2480,18 @@ export function createTaskSessionMessageWriteApi(deps: {
     }
 
     const sessionId = await resolveTaskSessionMessageSessionId({
-      task: args.task,
-      sessionId: args.sessionId,
-      runtimeSessionId: args.runtimeSessionId,
+      task: normalizedArgs.task,
+      sessionId: normalizedArgs.sessionId,
+      runtimeSessionId: normalizedArgs.runtimeSessionId,
       routedTarget: routing.routedTarget,
     });
 
     for (let attempt = 0; attempt <= TASK_MESSAGE_SESSION_SEQ_INSERT_RETRY_LIMIT; attempt += 1) {
       const context = await buildTaskSessionMessageWriteContext({
-        task: args.task,
+        task: normalizedArgs.task,
         sessionId,
-        runtimeSessionId: args.runtimeSessionId,
-        message: args.message,
+        runtimeSessionId: normalizedArgs.runtimeSessionId,
+        message: normalizedArgs.message,
         routing,
       });
 

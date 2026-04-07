@@ -1,10 +1,7 @@
 /// <reference types="bun-types" />
 
 import { beforeEach, describe, expect, mock, test } from "bun:test";
-import {
-  createOpencodeAdapterModuleMock,
-  createRuntimeProviderModuleMock,
-} from "./opencode-adapter-mock";
+import { createRuntimeProviderModuleMock } from "./runtime-provider-mock";
 import { expectSessionMessageReaderCalls } from "./session-message-compatibility-test-helpers";
 import { createSseAggregatorModuleMock } from "./sse-aggregator-mock";
 
@@ -56,7 +53,7 @@ mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () =>
   setControlPlaneFetchHandler: setControlPlaneFetchHandlerMock,
 }));
 
-const opencodeAdapterModule = createOpencodeAdapterModuleMock({
+const runtimeProviderModule = createRuntimeProviderModuleMock({
   continueSession: continueSessionMock,
   createSession: mock(async () => ({ ok: true, sessionId: "session-1", agentRunId: "run-1" })),
   ensureAgentRunForSession: mock(() => "run-1"),
@@ -85,13 +82,8 @@ const opencodeAdapterModule = createOpencodeAdapterModuleMock({
   updateAgentRunStatus: mock(() => undefined),
 });
 
-mock.module(
-  "../../control-plane/web-ui-bff/src/modules/agent-control/opencode-adapter",
-  () => opencodeAdapterModule,
-);
-
 mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/runtime-provider", () =>
-  createRuntimeProviderModuleMock(opencodeAdapterModule),
+  runtimeProviderModule,
 );
 
 mock.module("../../control-plane/web-ui-bff/src/modules/hooks/lifecycle-hooks", () => ({
@@ -104,6 +96,7 @@ mock.module("../../control-plane/web-ui-bff/src/modules/hooks/lifecycle-hooks", 
 
 mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/run-persistence", () => ({
   createAgentRunRecord: mock(async () => undefined),
+  patchAgentRunRecord: mock(async () => undefined),
   recordAgentAudit: mock(async () => undefined),
   recordModelUsage: mock(async () => undefined),
 }));

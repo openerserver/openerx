@@ -5,6 +5,8 @@
 > 作者：GitHub Copilot
 > 关联文档：[opencode-runtime-protocol.md](opencode-runtime-protocol.md)、[runtime-process-architecture.md](runtime-process-architecture.md)、[task-session-message-roundtrip-target-plan.md](task-session-message-roundtrip-target-plan.md)
 
+> 历史口径说明（2026-04-07）：本文主要保留 runtime 镜像拓扑、SSE 补齐和上游执行链说明。凡是把“当前持久化主表”写成 `task_session_messages` / `task_session_message_parts`，或把 `task_message_events` 写成现行 event log 主路径的段落，都只代表历史阶段，不再代表现行正式边界。当前 task session message 的正式主写链与兼容边界，以 [task-session-message-write-boundary-adr.md](task-session-message-write-boundary-adr.md) 为准：主事实写入已统一到 `task_sessions`、`task_session_runs`、`task_messages`、`task_message_parts`、`task_timeline_views`；`task_message_events` 已从运行代码与数据库表中删除；仍保留的只有 `rawPayload/jsonPayload` 结构保真层。
+
 ## 1. 文档目的
 
 这份文档回答三个问题：
@@ -16,7 +18,7 @@
 
 一句话结论：
 
-**当前消息正文的第一事实源仍然是 OpenCode runtime；BFF 通过 runtime 的全局 SSE 事件流观察消息变化，在必要时回读 runtime 完整 message snapshot，再把该 snapshot 发送给 control-plane service；service 最终把它写入 `task_sessions`、`task_session_messages`、`task_session_message_parts` 和 `task_timeline_views`。**
+**当前消息正文的第一事实源仍然是 OpenCode runtime；BFF 通过 runtime 的全局 SSE 事件流观察消息变化，在必要时回读 runtime 完整 message snapshot，再把该 snapshot 发送给 control-plane service；service 最终把它写入 `task_sessions`、`task_session_runs`、`task_messages`、`task_message_parts` 和 `task_timeline_views`。**
 
 ## 2. 总体结论
 

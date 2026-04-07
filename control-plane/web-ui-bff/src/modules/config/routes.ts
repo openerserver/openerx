@@ -15,7 +15,7 @@ import {
   ALLOWED_TEST_EXECUTION_MODELS,
   normalizeTestExecutionModel,
   readEnforcedTestExecutionModel,
-} from "../../lib/opencode-config";
+} from "../../lib/model-config";
 import {
   type PlatformOrganizationSettings,
   readOrchestrationStrategy,

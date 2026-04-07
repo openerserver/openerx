@@ -1,4 +1,4 @@
-export type RuntimeBackend = "opencode" | "pi-mono";
+export type RuntimeBackend = "pi-mono";
 
 export type RuntimeModelRef = {
   providerId: string;
