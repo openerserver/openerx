@@ -10,6 +10,7 @@ const executeLifecycleHooksMock = mock(async () => ({ hookExecutions: [] }));
 const persistedSummaryState = {
   status: "running" as "running" | "paused" | "completed" | "failed" | "stopped",
   sessionId: "session-1",
+  subSessionId: undefined as string | undefined,
   taskId: "task-1",
   projectId: "proj-1",
   modelUsed: "github-copilot:gpt-5-mini",
@@ -180,6 +181,7 @@ describe("agent control routes", () => {
     runtimeState.run = undefined;
     persistedSummaryState.status = "running";
     persistedSummaryState.sessionId = "session-1";
+    persistedSummaryState.subSessionId = undefined;
     persistedSummaryState.taskId = "task-1";
     persistedSummaryState.projectId = "proj-1";
     persistedSummaryState.modelUsed = "github-copilot:gpt-5-mini";
@@ -221,6 +223,7 @@ describe("agent control routes", () => {
             agentType: "Agent",
             status: persistedSummaryState.status,
             sessionId: persistedSummaryState.sessionId,
+            subSessionId: persistedSummaryState.subSessionId,
             modelUsed: persistedSummaryState.modelUsed,
             startedAt: persistedSummaryState.startedAt,
             finishedAt: null,
@@ -258,6 +261,8 @@ describe("agent control routes", () => {
   });
 
   test("recovers persisted run metadata before terminating when runtime registry misses", async () => {
+    persistedSummaryState.sessionId = "task-session:task-1:session-1";
+
     const { agentControlRoutes } = await import(
       "../../control-plane/web-ui-bff/src/modules/agent-control/routes"
     );
@@ -315,6 +320,7 @@ describe("agent control routes", () => {
       expect.objectContaining({
         type: "agent.stopped",
         agentRunId: "run-missing",
+        sessionId: "session-1",
         taskId: "task-1",
         projectId: "proj-1",
       }),
@@ -322,6 +328,8 @@ describe("agent control routes", () => {
   });
 
   test("recovers persisted run metadata before pausing when runtime registry misses", async () => {
+    persistedSummaryState.sessionId = "task-session:task-1:session-1";
+
     const { agentControlRoutes } = await import(
       "../../control-plane/web-ui-bff/src/modules/agent-control/routes"
     );
@@ -333,7 +341,17 @@ describe("agent control routes", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({ ok: true });
-    expect(recoverAgentRunMock).toHaveBeenCalled();
+    expect(recoverAgentRunMock).toHaveBeenCalledWith(
+      "run-missing",
+      "session-1",
+      "task-1",
+      "proj-1",
+      "2026-03-18T08:00:00.000Z",
+      {
+        providerId: "github-copilot",
+        modelId: "gpt-5-mini",
+      },
+    );
     expect(pauseAgentMock).toHaveBeenCalledWith("run-missing");
     expect(patchAgentRunRecordMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -343,12 +361,17 @@ describe("agent control routes", () => {
       }),
     );
     expect(broadcastMock).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "agent.paused", agentRunId: "run-missing" }),
+      expect.objectContaining({
+        type: "agent.paused",
+        agentRunId: "run-missing",
+        sessionId: "session-1",
+      }),
     );
   });
 
   test("recovers persisted paused run metadata before resuming when runtime registry misses", async () => {
     persistedSummaryState.status = "paused";
+    persistedSummaryState.sessionId = "task-session:task-1:session-1";
 
     const { agentControlRoutes } = await import(
       "../../control-plane/web-ui-bff/src/modules/agent-control/routes"
@@ -361,7 +384,17 @@ describe("agent control routes", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({ ok: true });
-    expect(recoverAgentRunMock).toHaveBeenCalled();
+    expect(recoverAgentRunMock).toHaveBeenCalledWith(
+      "run-missing",
+      "session-1",
+      "task-1",
+      "proj-1",
+      "2026-03-18T08:00:00.000Z",
+      {
+        providerId: "github-copilot",
+        modelId: "gpt-5-mini",
+      },
+    );
     expect(executeLifecycleHooksMock).toHaveBeenCalled();
     expect(resumeAgentMock).toHaveBeenCalledWith("run-missing");
     expect(patchAgentRunRecordMock).toHaveBeenCalledWith(
@@ -372,12 +405,105 @@ describe("agent control routes", () => {
       }),
     );
     expect(broadcastMock).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "agent.resumed", agentRunId: "run-missing" }),
+      expect.objectContaining({
+        type: "agent.resumed",
+        agentRunId: "run-missing",
+        sessionId: "session-1",
+      }),
     );
+  });
+
+  test("summary route derives runtime subSessionId from canonical task session ids", async () => {
+    persistedSummaryState.sessionId = "task-session:task-1:session-1";
+
+    const { agentControlRoutes } = await import(
+      "../../control-plane/web-ui-bff/src/modules/agent-control/routes"
+    );
+
+    const response = await agentControlRoutes.request("http://localhost/run-missing/summary", {
+      headers: { Authorization: "Bearer test" },
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      agentRunId: "run-missing",
+      sessionId: "task-session:task-1:session-1",
+      subSessionId: "session-1",
+      taskId: "task-1",
+    });
+  });
+
+  test("queues route carries runtime subSessionId when persisted summaries expose canonical task session ids", async () => {
+    listAgentRunsMock.mockReturnValue([
+      {
+        agentRunId: "run-1",
+        subSessionId: "session-1",
+        taskId: "task-1",
+        projectId: "proj-1",
+        status: "running",
+        startedAt: Date.parse("2026-03-18T08:00:00.000Z"),
+        lastPromptAt: Date.parse("2026-03-18T08:05:00.000Z"),
+        model: { providerId: "github-copilot", modelId: "gpt-5-mini" },
+      },
+    ]);
+    cpFetchMock.mockImplementation(async (...args: unknown[]) => {
+      const [url] = args as [string];
+
+      if (url === "/api/agent-runs/run-1/summary") {
+        return {
+          ok: true,
+          data: {
+            agentRunId: "run-1",
+            taskId: "task-1",
+            taskTitle: "Task 1",
+            projectId: "proj-1",
+            projectName: "Project 1",
+            agentType: "builder",
+            status: "running",
+            sessionId: "task-session:task-1:session-1",
+            modelUsed: "github-copilot:gpt-5-mini",
+            startedAt: "2026-03-18T08:00:00.000Z",
+            lastActivityAt: "2026-03-18T08:05:00.000Z",
+            durationMs: 300000,
+            guidanceCount: 1,
+            blockerType: null,
+            blockerLabel: "",
+            latestEvents: [],
+          },
+        };
+      }
+
+      return { ok: true, data: {} };
+    });
+
+    const { agentControlRoutes } = await import(
+      "../../control-plane/web-ui-bff/src/modules/agent-control/routes"
+    );
+
+    const response = await agentControlRoutes.request(
+      "http://localhost/queues?queue=running&projectId=proj-1",
+      {
+        headers: { Authorization: "Bearer test" },
+      },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      data: [
+        expect.objectContaining({
+          agentRunId: "run-1",
+          subSessionId: "session-1",
+          taskId: "task-1",
+          status: "running",
+        }),
+      ],
+      total: 1,
+    });
   });
 
   test("recovers persisted paused run metadata before injecting guidance when runtime registry misses", async () => {
     persistedSummaryState.status = "paused";
+    persistedSummaryState.sessionId = "task-session:task-1:session-1";
 
     const { agentControlRoutes } = await import(
       "../../control-plane/web-ui-bff/src/modules/agent-control/routes"
@@ -394,7 +520,17 @@ describe("agent control routes", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({ ok: true });
-    expect(recoverAgentRunMock).toHaveBeenCalled();
+    expect(recoverAgentRunMock).toHaveBeenCalledWith(
+      "run-missing",
+      "session-1",
+      "task-1",
+      "proj-1",
+      "2026-03-18T08:00:00.000Z",
+      {
+        providerId: "github-copilot",
+        modelId: "gpt-5-mini",
+      },
+    );
     expect(injectGuidanceMock).toHaveBeenCalledWith(
       "run-missing",
       "Please tighten the summary.",
@@ -408,11 +544,16 @@ describe("agent control routes", () => {
       }),
     );
     expect(broadcastMock).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "guidance.injected", agentRunId: "run-missing" }),
+      expect.objectContaining({
+        type: "guidance.injected",
+        agentRunId: "run-missing",
+        sessionId: "session-1",
+      }),
     );
   });
 
   test("recovers persisted run metadata before loading messages when runtime registry misses", async () => {
+    persistedSummaryState.sessionId = "task-session:task-1:session-1";
     getAgentMessagesMock.mockResolvedValueOnce({ ok: true, data: [{ id: "msg-1" }] as never[] });
 
     const { agentControlRoutes } = await import(
@@ -425,12 +566,23 @@ describe("agent control routes", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({ ok: true, data: [{ id: "msg-1" }] });
-    expect(recoverAgentRunMock).toHaveBeenCalled();
+    expect(recoverAgentRunMock).toHaveBeenCalledWith(
+      "run-missing",
+      "session-1",
+      "task-1",
+      "proj-1",
+      "2026-03-18T08:00:00.000Z",
+      {
+        providerId: "github-copilot",
+        modelId: "gpt-5-mini",
+      },
+    );
     expect(getAgentMessagesMock).toHaveBeenCalledWith("run-missing");
   });
 
   test("recovers persisted run metadata before loading status when runtime registry misses", async () => {
     persistedSummaryState.status = "paused";
+    persistedSummaryState.sessionId = "task-session:task-1:session-1";
 
     const { agentControlRoutes } = await import(
       "../../control-plane/web-ui-bff/src/modules/agent-control/routes"
@@ -447,7 +599,17 @@ describe("agent control routes", () => {
       projectId: "proj-1",
       status: "paused",
     });
-    expect(recoverAgentRunMock).toHaveBeenCalled();
+    expect(recoverAgentRunMock).toHaveBeenCalledWith(
+      "run-missing",
+      "session-1",
+      "task-1",
+      "proj-1",
+      "2026-03-18T08:00:00.000Z",
+      {
+        providerId: "github-copilot",
+        modelId: "gpt-5-mini",
+      },
+    );
   });
 
   test("aggregates agent overview from filtered run summaries", async () => {

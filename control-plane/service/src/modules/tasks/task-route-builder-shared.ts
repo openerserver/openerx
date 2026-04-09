@@ -11,6 +11,7 @@ import { createTaskOperationWriteApi } from "./session-operation-write-api";
 import { buildTaskTreeSnapshotFromRecord, createTaskAggregateSyncApi } from "./task-aggregate-sync";
 import { createTaskArtifactWriteApi } from "./task-artifact-write-api";
 import { createTaskBranchWriteApi } from "./task-branch-write";
+import { resolvePublicTaskSessionSourceType } from "./task-session-public-source-type";
 import { createTaskSessionMessageApi } from "./task-session-message-api";
 import { createTaskSessionMessageWriteApi } from "./task-session-message-write-api";
 import { createTaskSessionReadApi } from "./task-session-read";
@@ -23,13 +24,15 @@ async function loadTaskTreeBackedRecord(taskId: string) {
 }
 
 function mapTaskSessionSourceType(session: typeof taskSessions.$inferSelect) {
-  if (session.sessionKind === "manual_branch") {
-    return "fork" as const;
-  }
-  if (session.sessionKind === "resume") {
-    return "sub_session" as const;
-  }
-  return "root" as const;
+  return resolvePublicTaskSessionSourceType({
+    sourceType: null,
+    sessionKind: session.sessionKind,
+    parentSessionId: session.parentSessionId,
+    forkedFromMessageId: session.forkedFromMessageId,
+    candidateIndex: session.candidateIndex,
+    executionModeSnapshot: session.executionModeSnapshot,
+    coordinationKey: session.coordinationKey,
+  });
 }
 
 function stripTaskSessionWritePrefix(taskId: string, sessionId: string | null) {

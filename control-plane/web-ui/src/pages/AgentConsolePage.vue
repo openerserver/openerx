@@ -183,6 +183,7 @@ interface QueueViewItem {
   taskTitle?: string;
   projectId?: string;
   projectName?: string | null;
+  subSessionId?: string;
   agentType: string;
   status: AgentRunStatus;
   blockerLabel: string;
@@ -489,6 +490,7 @@ function normalizeRemoteQueueItem(item: AgentOpsQueueItem) {
     taskTitle: item.taskTitle,
     projectId: item.projectId,
     projectName: item.projectName,
+    subSessionId: item.subSessionId,
     agentType: item.agentType || "Agent",
     status: normalizeAgentStatus(item.status),
     blockerLabel: item.blockerLabel || "运行中",
@@ -680,6 +682,7 @@ const selectedRunSummaryView = computed(() => {
     agentType: selectedQueueItem.value.agentType,
     status: selectedQueueItem.value.status,
     sessionId: null,
+    subSessionId: selectedQueueItem.value.subSessionId,
     modelUsed: null,
     startedAt: selectedQueueItem.value.startedAt
       ? new Date(selectedQueueItem.value.startedAt).toISOString()

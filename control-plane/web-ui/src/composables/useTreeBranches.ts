@@ -1,5 +1,9 @@
 import { type Ref, computed, ref, watch } from "vue";
-import { type TaskSessionLineageNode, getTaskSessionLineage } from "../lib/api";
+import {
+  type TaskSessionLineageNode,
+  type TaskSessionRecord,
+  getTaskTreeSessionContext,
+} from "../lib/api";
 
 export interface TreeSessionNodeRecord {
   id: string;
@@ -71,6 +75,7 @@ export function useTreeBranches(
   selectedSessionId: Ref<string | undefined>,
 ) {
   const sessionTree = ref<SessionTreeNode[]>([]);
+  const sessionSummaries = ref<TaskSessionRecord[]>([]);
   const loading = ref(false);
   const error = ref<string | null>(null);
 
@@ -80,9 +85,10 @@ export function useTreeBranches(
     () => flatNodes.value.find((node) => node.runtimeSessionId === selectedSessionId.value) ?? null,
   );
 
-  async function refresh() {
+  async function refresh(silent = false) {
     if (!taskId.value || !rootNodeId.value) {
       sessionTree.value = [];
+      sessionSummaries.value = [];
       error.value = null;
       return;
     }
@@ -91,12 +97,20 @@ export function useTreeBranches(
     error.value = null;
 
     try {
-      const lineage = await getTaskSessionLineage(taskId.value);
-      const nodes = Array.isArray(lineage.data) ? lineage.data : [];
+      const sessionContext = await getTaskTreeSessionContext(taskId.value);
+      const nodes = Array.isArray(sessionContext.data.sessionLineage)
+        ? sessionContext.data.sessionLineage
+        : [];
       sessionTree.value = mapLineageTree(nodes, rootNodeId.value);
+      sessionSummaries.value = Array.isArray(sessionContext.data.sessionSummaries)
+        ? sessionContext.data.sessionSummaries
+        : [];
     } catch (nextError) {
-      sessionTree.value = [];
-      error.value = nextError instanceof Error ? nextError.message : "加载分支拓扑失败";
+      if (!silent) {
+        sessionTree.value = [];
+        sessionSummaries.value = [];
+        error.value = nextError instanceof Error ? nextError.message : "加载分支拓扑失败";
+      }
     } finally {
       loading.value = false;
     }
@@ -112,6 +126,7 @@ export function useTreeBranches(
 
   return {
     flatNodes,
+    sessionSummaries,
     selectedNode,
     loading,
     error,

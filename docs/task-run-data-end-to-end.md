@@ -1,18 +1,22 @@
-# Task Run 数据链路全景说明
+# Task Run 数据链路全景说明（历史兼容链路）
 
-本文描述当前代码库中，任务运行数据从数据库表、控制层接口、BFF 透传，到任务页面显示的完整链路。范围覆盖以下三组接口及其上游/下游依赖：
+本文记录的是 task run / domain-runs 兼容链路在退役前的结构，主要用于理解旧设计、历史测试夹具，以及为什么后续要做 session-first cutover。它不再代表 2026-04-07 之后的主线实现。
+
+本文覆盖的历史接口包括：
 
 - `GET /api/tasks/:taskId/runs`
 - `GET /api/tasks/:taskId/domain-runs`
 - `GET /api/tasks/:taskId/domain-runs/:runId`
 
-本文聚焦“当前实现如何工作”，不是重构提案。目的是把数据来源、字段语义、聚合边界、页面消费方式统一到一份文档里。
+如果你的目标是理解当前实现，应优先查看 session-first 相关文档，例如 [task-session-first-schema-plan.md](task-session-first-schema-plan.md) 与 [task-session-first-execution-plan.md](task-session-first-execution-plan.md)。
 
 > 状态更新（2026-04-05）：本文成稿早于 session-first cutover 与 `0033_drop_agent_runs.sql`。当前代码中已不存在独立 `agent_runs` 主表；`GET /api/tasks/:taskId/runs` 仍保留为兼容接口，但其返回现在由 `task_operations`、`task_session_runs`、`task_sessions` 的 canonical 数据投影而来。阅读本文时，凡涉及 `agent_runs` 的描述都应理解为“兼容视图语义”，而不是当前落库结构。
+>
+> 状态更新（2026-04-07）：当前 service / BFF / web-ui 主线源码已不再暴露或消费 `/api/tasks/:taskId/domain-runs*`；任务页并行视图与候选采纳主链已切到 task sessions、execution trace、task session lineage 与 session-tree fallback。阅读本文时，凡涉及 `domain-runs` 的描述都应理解为“历史兼容路径”，而不是当前线上边界。
 
-## 1. 总体链路
+## 1. 历史总体链路
 
-当前任务页展示运行相关信息时，并不是只依赖一个接口，而是组合了四类数据：
+在 `domain-runs` 兼容链路仍存在时，任务页展示运行相关信息并不是只依赖一个接口，而是组合了四类数据：
 
 1. 任务本体读模型：`GET /api/tasks/:taskId` 或 `GET /api/project-tree/tasks/:taskId`
 2. agent run 兼容视图：`GET /api/tasks/:taskId/runs`

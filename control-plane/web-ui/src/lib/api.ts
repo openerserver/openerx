@@ -348,65 +348,6 @@ export interface TaskAgentRunRecord {
   finishedAt?: string | null;
 }
 
-export interface TaskDomainRunRecord {
-  id: string;
-  taskId: string;
-  projectId: string;
-  orchestrationKind: string;
-  triggerType: string;
-  sourceType?: string | null;
-  status: string;
-  rootSessionId?: string | null;
-  winnerNodeId?: string | null;
-  judgeNodeId?: string | null;
-  requestedModel?: string | null;
-  effectiveModel?: string | null;
-  pipelineStepCount?: number | null;
-  candidateCount?: number | null;
-  resultText?: string | null;
-  resultSummary?: string | null;
-  errorText?: string | null;
-  startedAt?: string | null;
-  finishedAt?: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface TaskDomainRunNodeRecord {
-  id: string;
-  runId: string;
-  taskId: string;
-  projectId: string;
-  nodeKind: string;
-  nodeKey: string;
-  title?: string | null;
-  instruction?: string | null;
-  candidateIndex?: number | null;
-  chainStepIndex?: number | null;
-  hookTrigger?: string | null;
-  agentType?: string | null;
-  modelUsed?: string | null;
-  sessionId?: string | null;
-  agentRunId?: string | null;
-  status: string;
-  resultText?: string | null;
-  resultSummary?: string | null;
-  errorText?: string | null;
-  tokenUsed?: number | null;
-  startedAt?: string | null;
-  finishedAt?: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface TaskDomainRunDetailRecord {
-  run: TaskDomainRunRecord;
-  nodes: TaskDomainRunNodeRecord[];
-  candidateNodes: TaskDomainRunNodeRecord[];
-  judgeNode: TaskDomainRunNodeRecord | null;
-  winnerCandidateIndex: number | null;
-}
-
 export async function listAgentRuns() {
   return request<AgentRunSummary[]>("/agents");
 }
@@ -476,6 +417,7 @@ export interface AgentOpsQueueItem {
   taskTitle: string;
   projectId: string;
   projectName: string | null;
+  subSessionId?: string;
   agentType: string;
   status: string;
   currentStage: string | null;
@@ -983,6 +925,7 @@ export interface ProjectionRunRecord {
   templateId?: string;
   startedAt: string;
   finishedAt?: string;
+  anchorMessageId?: string | null;
   parentSessionId?: string | null;
   executionSessionId?: string | null;
   winnerCandidateIndex?: number;
@@ -1501,6 +1444,7 @@ export async function getTaskPipeline(taskId: string, sessionId?: string) {
 export interface SessionInfo {
   id: string;
   taskSessionId?: string | null;
+  parentRuntimeSessionId?: string | null;
   title: string;
   isActive: boolean;
   summary: { additions: number; deletions: number; files: number } | null;
@@ -1547,8 +1491,14 @@ export interface TaskTreeSessionRecord {
   taskId: string;
   parentSessionId?: string | null;
   runtimeSessionId?: string | null;
+  coordinationKey?: string | null;
   sessionKind?: string | null;
   sessionType?: string | null;
+  executionModeSnapshot?: string | null;
+  candidateIndex?: number | null;
+  stepIndex?: number | null;
+  selectedModel?: string | null;
+  winnerSessionId?: string | null;
   sourceMessageId?: string | null;
   userPromptSummary?: string | null;
   headMessageId?: string | null;
@@ -1642,6 +1592,41 @@ export interface TaskTreeTaskMeta {
   rootSessionId?: string | null;
   createdAt?: string | null;
   updatedAt?: string | null;
+}
+
+export interface TaskTreeSessionContext {
+  currentSessionId?: string | null;
+  sessionSummaries: TaskSessionRecord[];
+  sessionLineage: TaskSessionLineageNode[];
+}
+
+interface ServiceTaskSessionRecord {
+  id: string;
+  taskSessionId?: string | null;
+  parentSessionId?: string | null;
+  parentRuntimeSessionId?: string | null;
+  runtimeSessionId?: string | null;
+  title?: string | null;
+  branchName?: string | null;
+  isActive?: boolean | null;
+  summary?: { additions: number; deletions: number; files: number } | null;
+  coordinationKey?: string | null;
+  winnerSessionId?: string | null;
+  executionStatus?: string | null;
+  sessionKind?: string | null;
+  candidateIndex?: number | null;
+  stepIndex?: number | null;
+  selectedModel?: string | null;
+  executionModeSnapshot?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
+
+interface ServiceTaskSessionListResponse {
+  data?: ServiceTaskSessionRecord[];
+  meta?: {
+    currentSessionId?: string | null;
+  };
 }
 
 function asTaskTreeString(value: unknown): string | undefined {
@@ -1872,6 +1857,94 @@ function buildTaskTreeWorkflowGroup(args: {
   } satisfies Record<string, unknown>;
 }
 
+function parseTaskTreeConversationMessageTime(message: TaskTreeMessageRecord) {
+  const parsed = Date.parse(message.createdAt ?? message.updatedAt ?? "");
+  return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
+}
+
+function isTaskTreeUserPromptMessage(message: TaskTreeMessageRecord) {
+  return message.role === "user" && message.id.endsWith(":user-prompt");
+}
+
+function shouldPromoteTaskTreeUserPrompt(args: {
+  userPrompt: TaskTreeMessageRecord;
+  other: TaskTreeMessageRecord;
+  userPromptsWithEarlierUserMessage: Set<string>;
+}) {
+  const { userPrompt, other, userPromptsWithEarlierUserMessage } = args;
+  if (!isTaskTreeUserPromptMessage(userPrompt)) {
+    return false;
+  }
+
+  if (userPromptsWithEarlierUserMessage.has(userPrompt.id)) {
+    return false;
+  }
+
+  if (userPrompt.sessionId !== other.sessionId || other.role === "user") {
+    return false;
+  }
+
+  const userPromptTime = parseTaskTreeConversationMessageTime(userPrompt);
+  const otherTime = parseTaskTreeConversationMessageTime(other);
+  if (!Number.isFinite(userPromptTime) || !Number.isFinite(otherTime)) {
+    return false;
+  }
+
+  return userPromptTime >= otherTime && userPromptTime - otherTime <= 5_000;
+}
+
+function sortTaskTreeConversationMessages(messages: TaskTreeMessageRecord[]) {
+  if (messages.length < 2) {
+    return messages;
+  }
+
+  const indexedMessages = messages.map((message, index) => ({ message, index }));
+  const seenUserSessions = new Set<string>();
+  const userPromptsWithEarlierUserMessage = new Set<string>();
+
+  for (const { message } of indexedMessages) {
+    if (isTaskTreeUserPromptMessage(message) && seenUserSessions.has(message.sessionId)) {
+      userPromptsWithEarlierUserMessage.add(message.id);
+    }
+
+    if (message.role === "user") {
+      seenUserSessions.add(message.sessionId);
+    }
+  }
+
+  indexedMessages.sort((left, right) => {
+    if (
+      shouldPromoteTaskTreeUserPrompt({
+        userPrompt: left.message,
+        other: right.message,
+        userPromptsWithEarlierUserMessage,
+      })
+    ) {
+      return -1;
+    }
+
+    if (
+      shouldPromoteTaskTreeUserPrompt({
+        userPrompt: right.message,
+        other: left.message,
+        userPromptsWithEarlierUserMessage,
+      })
+    ) {
+      return 1;
+    }
+
+    const leftTime = parseTaskTreeConversationMessageTime(left.message);
+    const rightTime = parseTaskTreeConversationMessageTime(right.message);
+    if (leftTime !== rightTime) {
+      return leftTime - rightTime;
+    }
+
+    return left.index - right.index;
+  });
+
+  return indexedMessages.map(({ message }) => message);
+}
+
 function projectTaskConversationTreeToMessages(tree: TaskConversationTreeResponse): {
   data: unknown[];
   meta?: ExecutionTraceTimelineMeta & {
@@ -1881,6 +1954,9 @@ function projectTaskConversationTreeToMessages(tree: TaskConversationTreeRespons
 } {
   const partsByMessageId = buildTaskTreePartLookup(
     Array.isArray(tree.messageParts) ? tree.messageParts : [],
+  );
+  const conversationMessages = sortTaskTreeConversationMessages(
+    Array.isArray(tree.messages) ? tree.messages : [],
   );
   const runs = Array.isArray(tree.runs) ? tree.runs : [];
   const runsById = new Map(runs.map((run) => [run.id, run]));
@@ -1894,7 +1970,7 @@ function projectTaskConversationTreeToMessages(tree: TaskConversationTreeRespons
     }
   }
 
-  const regularMessages = (Array.isArray(tree.messages) ? tree.messages : []).map((message) =>
+  const regularMessages = conversationMessages.map((message) =>
     buildTaskTreeLegacyMessage({
       message,
       parts: partsByMessageId.get(message.id) ?? [],
@@ -1906,7 +1982,7 @@ function projectTaskConversationTreeToMessages(tree: TaskConversationTreeRespons
   const workflowGroup = buildTaskTreeWorkflowGroup({
     taskId: tree.meta.taskId,
     sessions: Array.isArray(tree.sessions) ? tree.sessions : [],
-    messages: Array.isArray(tree.messages) ? tree.messages : [],
+    messages: conversationMessages,
     partsByMessageId,
   });
 
@@ -1927,7 +2003,10 @@ function projectTaskConversationTreeToMessages(tree: TaskConversationTreeRespons
   return {
     data,
     meta: {
-      sessionId: tree.meta.currentSessionId ?? tree.task.currentSessionId ?? undefined,
+      sessionId: resolveTaskTreeRuntimeSessionId(
+        tree,
+        tree.meta.currentSessionId ?? tree.task.currentSessionId ?? undefined,
+      ),
       messageCount: regularMessages.length,
       readSource: "task-domain-projection",
       complete: tree.meta.incomplete !== true,
@@ -1966,15 +2045,44 @@ function projectTaskTreeToTaskMeta(tree: TaskConversationTreeResponse): TaskTree
   };
 }
 
+function resolveTaskTreeRuntimeSessionId(
+  tree: TaskConversationTreeResponse,
+  sessionId: string | null | undefined,
+) {
+  const normalizedSessionId = asTaskTreeString(sessionId);
+  if (!normalizedSessionId) {
+    return undefined;
+  }
+
+  const sessions = Array.isArray(tree.sessions) ? tree.sessions : [];
+  for (const session of sessions) {
+    const taskSessionId = asTaskTreeString(session.id);
+    const runtimeSessionId = asTaskTreeString(session.runtimeSessionId) ?? taskSessionId;
+    if (
+      normalizedSessionId === taskSessionId ||
+      (runtimeSessionId && normalizedSessionId === runtimeSessionId)
+    ) {
+      return runtimeSessionId ?? normalizedSessionId;
+    }
+  }
+
+  return normalizedSessionId;
+}
+
 function projectTaskTreeToSessionSummaries(
   tree: TaskConversationTreeResponse,
 ): TaskSessionRecord[] {
   const messageLookup = buildTaskTreeMessageLookup(tree);
   const currentSessionId = tree.meta.currentSessionId ?? tree.task.currentSessionId ?? undefined;
+  const sessions = Array.isArray(tree.sessions) ? tree.sessions : [];
+  const runtimeSessionIdByTaskSessionId = new Map(
+    sessions.map((session) => [session.id, asTaskTreeString(session.runtimeSessionId) ?? session.id]),
+  );
 
-  return (Array.isArray(tree.sessions) ? tree.sessions : [])
+  return sessions
     .map((session) => {
-      const runtimeSessionId = session.runtimeSessionId ?? session.id;
+      const runtimeSessionId = runtimeSessionIdByTaskSessionId.get(session.id) ?? session.id;
+      const winnerSessionId = asTaskTreeString(session.winnerSessionId);
       const promptSummary =
         asTaskTreeString(session.userPromptSummary) ??
         asTaskTreeString(session.title) ??
@@ -1984,13 +2092,96 @@ function projectTaskTreeToSessionSummaries(
       return {
         id: runtimeSessionId,
         taskSessionId: session.id,
+        parentRuntimeSessionId: session.parentSessionId
+          ? (runtimeSessionIdByTaskSessionId.get(session.parentSessionId) ?? session.parentSessionId)
+          : null,
         title: promptSummary,
-        isActive: runtimeSessionId === currentSessionId,
+        isActive: runtimeSessionId === currentSessionId || session.id === currentSessionId,
         summary: null,
         createdAt: session.createdAt ?? null,
         updatedAt: session.updatedAt ?? null,
+        coordinationKey: asTaskTreeString(session.coordinationKey) ?? null,
+        winnerSessionId: winnerSessionId
+          ? (runtimeSessionIdByTaskSessionId.get(winnerSessionId) ?? winnerSessionId)
+          : null,
         executionStatus: session.status ?? null,
-        sessionKind: session.sessionType ?? session.sessionKind ?? null,
+        sessionKind: session.sessionKind ?? session.sessionType ?? null,
+        candidateIndex: typeof session.candidateIndex === "number" ? session.candidateIndex : null,
+        stepIndex: typeof session.stepIndex === "number" ? session.stepIndex : null,
+        selectedModel: asTaskTreeString(session.selectedModel) ?? null,
+        executionModeSnapshot: asTaskTreeString(session.executionModeSnapshot) ?? null,
+      } satisfies TaskSessionRecord;
+    })
+    .sort((left, right) => (left.createdAt ?? "").localeCompare(right.createdAt ?? ""));
+}
+
+function projectTaskSessionListToSummaries(
+  response: ServiceTaskSessionListResponse,
+): TaskSessionRecord[] {
+  const sessions = Array.isArray(response.data) ? response.data : [];
+  const currentSessionId = asTaskTreeString(response.meta?.currentSessionId);
+  const runtimeSessionIdByIdentifier = new Map<string, string>();
+  const normalizedSessions = sessions.map((session) => {
+    const rawId = asTaskTreeString(session.id) ?? "";
+    const taskSessionId = asTaskTreeString(session.taskSessionId) ?? rawId;
+    const runtimeSessionId = asTaskTreeString(session.runtimeSessionId) ?? rawId;
+
+    for (const identifier of [rawId, taskSessionId, runtimeSessionId]) {
+      if (identifier) {
+        runtimeSessionIdByIdentifier.set(identifier, runtimeSessionId);
+      }
+    }
+
+    return {
+      session,
+      rawId,
+      taskSessionId,
+      runtimeSessionId,
+    };
+  });
+
+  return normalizedSessions
+    .map(({ session, rawId, taskSessionId, runtimeSessionId }) => {
+      const winnerSessionId = asTaskTreeString(session.winnerSessionId);
+      const parentRuntimeSessionId =
+        asTaskTreeString(session.parentRuntimeSessionId) ??
+        (() => {
+          const parentSessionId = asTaskTreeString(session.parentSessionId);
+          if (!parentSessionId) {
+            return null;
+          }
+          return runtimeSessionIdByIdentifier.get(parentSessionId) ?? parentSessionId;
+        })();
+      const title =
+        asTaskTreeString(session.title) ??
+        asTaskTreeString(session.branchName) ??
+        runtimeSessionId ??
+        taskSessionId;
+      const isActive =
+        session.isActive === true ||
+        currentSessionId === rawId ||
+        currentSessionId === taskSessionId ||
+        currentSessionId === runtimeSessionId;
+
+      return {
+        id: runtimeSessionId,
+        taskSessionId,
+        parentRuntimeSessionId,
+        title,
+        isActive,
+        summary: session.summary ?? null,
+        createdAt: session.createdAt ?? null,
+        updatedAt: session.updatedAt ?? null,
+        coordinationKey: asTaskTreeString(session.coordinationKey) ?? null,
+        winnerSessionId: winnerSessionId
+          ? (runtimeSessionIdByIdentifier.get(winnerSessionId) ?? winnerSessionId)
+          : null,
+        executionStatus: session.executionStatus ?? null,
+        sessionKind: session.sessionKind ?? null,
+        candidateIndex: typeof session.candidateIndex === "number" ? session.candidateIndex : null,
+        stepIndex: typeof session.stepIndex === "number" ? session.stepIndex : null,
+        selectedModel: asTaskTreeString(session.selectedModel) ?? null,
+        executionModeSnapshot: asTaskTreeString(session.executionModeSnapshot) ?? null,
       } satisfies TaskSessionRecord;
     })
     .sort((left, right) => (left.createdAt ?? "").localeCompare(right.createdAt ?? ""));
@@ -2035,6 +2226,11 @@ function projectTaskTreeToSessionLineage(
         messageLookup.get(sourceMessageId ?? "")?.text ??
         null;
 
+      const isActive =
+        session.isActive === true ||
+        currentSessionId === session.id ||
+        currentSessionId === runtimeSessionId;
+
       return {
         id: branchNodeId,
         branchNodeId,
@@ -2053,7 +2249,7 @@ function projectTaskTreeToSessionLineage(
           session.sessionType ??
           session.sessionKind ??
           (session.parentSessionId ? "follow_up" : "root"),
-        isActive: runtimeSessionId === currentSessionId,
+        isActive,
         title,
         summary: null,
         createdAt: session.createdAt ?? null,
@@ -2089,21 +2285,29 @@ export async function getTaskTreeMeta(taskId: string): Promise<TaskTreeTaskMeta>
   return projectTaskTreeToTaskMeta(tree);
 }
 
+export async function getTaskTreeSessionContext(taskId: string) {
+  const tree = await getTaskConversationTree(taskId);
+  return {
+    data: {
+      currentSessionId: resolveTaskTreeRuntimeSessionId(
+        tree,
+        tree.meta.currentSessionId ?? tree.task.currentSessionId ?? undefined,
+      ),
+      sessionSummaries: projectTaskTreeToSessionSummaries(tree),
+      sessionLineage: projectTaskTreeToSessionLineage(tree),
+    } satisfies TaskTreeSessionContext,
+  };
+}
+
 export async function getTaskSessions(taskId: string) {
-  const tree = await getTaskConversationTree(taskId, { includeLineage: false });
-  return { data: projectTaskTreeToSessionSummaries(tree) };
+  const response = await request<ServiceTaskSessionListResponse>(
+    `/tasks/${encodeURIComponent(taskId)}/sessions`,
+  );
+  return { data: projectTaskSessionListToSummaries(response) };
 }
 
 export async function getTaskAgentRuns(_taskId: string) {
   return { data: [] as TaskAgentRunRecord[] };
-}
-
-export async function getTaskDomainRuns(taskId: string) {
-  return request<{ data: TaskDomainRunRecord[] }>(`/tasks/${taskId}/domain-runs`);
-}
-
-export async function getTaskDomainRunDetail(taskId: string, runId: string) {
-  return request<{ data: TaskDomainRunDetailRecord }>(`/tasks/${taskId}/domain-runs/${runId}`);
 }
 
 export async function listTaskRuntimePermissions(taskId: string, sessionId?: string) {
@@ -3051,10 +3255,21 @@ export async function executeTask(
   });
 }
 
-export async function adoptParallelCandidate(taskId: string, candidateIndex: number) {
+export async function adoptParallelCandidate(
+  taskId: string,
+  candidateIndex: number,
+  context?: {
+    parallelRunId?: string;
+    sessionId?: string;
+    candidateSessionIds?: string[];
+  },
+) {
   return request<{ ok: boolean; winnerCandidateIndex: number }>(
     `/tasks/${taskId}/candidates/${candidateIndex}/adopt`,
-    { method: "POST" },
+    {
+      method: "POST",
+      body: JSON.stringify(context ?? {}),
+    },
   );
 }
 

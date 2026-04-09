@@ -16,6 +16,18 @@ const extractAssistantResultFromMessagesMock = mock(() => ({
 }));
 const getSessionMessagesMock = mock(async () => ({ ok: true, data: [] }));
 const terminateAgentMock = mock(async () => ({ ok: true }));
+const agentRunRegistryMocks = {
+  ensureAgentRunForSession: mock(() => "run-1"),
+  findAgentRunBySessionId: mock(() => undefined as unknown),
+  registerAgentRun: mock(() => undefined),
+  recoverAgentRun: mock(() => undefined),
+  getAgentRunState: mock(() => undefined),
+  markAgentRunPromptSent: mock(() => undefined),
+  setAgentRunPausedAt: mock(() => undefined),
+  updateAgentRunStatus: mock(() => undefined),
+  getAgentRun: mock(() => undefined),
+  listAgentRuns: mock(() => []),
+};
 const buildStageArtifactSummaryMock = mock((resultText?: string) => ({
   summary: resultText ? resultText.replace(/\n\[STAGE_COMPLETE\]$/, "") : "",
   excerpt: resultText ?? "",
@@ -96,6 +108,19 @@ mock.module(
   buildRuntimeProviderMock,
 );
 
+mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/agent-run-registry", () => ({
+  ensureAgentRunForSession: agentRunRegistryMocks.ensureAgentRunForSession,
+  findAgentRunBySessionId: agentRunRegistryMocks.findAgentRunBySessionId,
+  registerAgentRun: agentRunRegistryMocks.registerAgentRun,
+  recoverAgentRun: agentRunRegistryMocks.recoverAgentRun,
+  getAgentRunState: agentRunRegistryMocks.getAgentRunState,
+  markAgentRunPromptSent: agentRunRegistryMocks.markAgentRunPromptSent,
+  setAgentRunPausedAt: agentRunRegistryMocks.setAgentRunPausedAt,
+  updateAgentRunStatus: agentRunRegistryMocks.updateAgentRunStatus,
+  getAgentRun: agentRunRegistryMocks.getAgentRun,
+  listAgentRuns: agentRunRegistryMocks.listAgentRuns,
+}));
+
 mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/run-persistence", () => ({
   createAgentRunRecord: mock(async () => undefined),
   patchAgentRunRecord: mock(async () => undefined),
@@ -143,6 +168,16 @@ describe("task completion routes", () => {
     extractAssistantResultFromMessagesMock.mockReset();
     getSessionMessagesMock.mockReset();
     terminateAgentMock.mockReset();
+    agentRunRegistryMocks.ensureAgentRunForSession.mockReset();
+    agentRunRegistryMocks.findAgentRunBySessionId.mockReset();
+    agentRunRegistryMocks.registerAgentRun.mockReset();
+    agentRunRegistryMocks.recoverAgentRun.mockReset();
+    agentRunRegistryMocks.getAgentRunState.mockReset();
+    agentRunRegistryMocks.markAgentRunPromptSent.mockReset();
+    agentRunRegistryMocks.setAgentRunPausedAt.mockReset();
+    agentRunRegistryMocks.updateAgentRunStatus.mockReset();
+    agentRunRegistryMocks.getAgentRun.mockReset();
+    agentRunRegistryMocks.listAgentRuns.mockReset();
     buildStageArtifactSummaryMock.mockClear();
     wsBroadcastMock.mockReset();
 
@@ -157,6 +192,16 @@ describe("task completion routes", () => {
     });
     getSessionMessagesMock.mockResolvedValue({ ok: true, data: [] });
     terminateAgentMock.mockResolvedValue({ ok: true });
+    agentRunRegistryMocks.ensureAgentRunForSession.mockReturnValue("run-1");
+    agentRunRegistryMocks.findAgentRunBySessionId.mockReturnValue(undefined);
+    agentRunRegistryMocks.registerAgentRun.mockReturnValue(undefined);
+    agentRunRegistryMocks.recoverAgentRun.mockReturnValue(undefined);
+    agentRunRegistryMocks.getAgentRunState.mockReturnValue(undefined);
+    agentRunRegistryMocks.markAgentRunPromptSent.mockReturnValue(undefined);
+    agentRunRegistryMocks.setAgentRunPausedAt.mockReturnValue(undefined);
+    agentRunRegistryMocks.updateAgentRunStatus.mockReturnValue(undefined);
+    agentRunRegistryMocks.getAgentRun.mockReturnValue(undefined);
+    agentRunRegistryMocks.listAgentRuns.mockReturnValue([]);
   });
 
   test("POST /:taskId/complete marks the task completed without advancing workflow state", async () => {
@@ -254,26 +299,7 @@ describe("task completion routes", () => {
     await expect(response.text()).resolves.toContain("404 Not Found");
   });
 
-  test("GET /:taskId/domain-runs returns an empty list when the upstream route is unavailable", async () => {
-    cpFetchMock.mockImplementation(async (...args: unknown[]) => {
-      const [url, options] = args as [string, RouteFetchOptions | undefined];
-      if (!options?.method && url === "/api/tasks/task-domain-runs-404/domain-runs") {
-        return { ok: false, status: 404, data: { error: "Not found" } };
-      }
-
-      return { ok: true, data: {} };
-    });
-
-    const { taskRoutes } = await loadTaskRoutes();
-    const response = await taskRoutes.request("http://localhost/task-domain-runs-404/domain-runs", {
-      headers: { Authorization: "Bearer test" },
-    });
-
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ data: [] });
-  });
-
-  test("POST /:taskId/candidates/:index/adopt completes session-first winner adoption", async () => {
+  test("POST /:taskId/candidates/:index/adopt completes session-first winner adoption on the main path", async () => {
     getSessionMessagesMock.mockResolvedValueOnce({
       ok: true,
       data: [
@@ -295,6 +321,11 @@ describe("task completion routes", () => {
       error: undefined,
       tokenUsed: 0,
     });
+    agentRunRegistryMocks.findAgentRunBySessionId.mockImplementation((sessionId: string) =>
+      sessionId === "session-b"
+        ? ({ agentRunId: "agent-run-2", status: "running", subSessionId: "session-b" } as never)
+        : undefined,
+    );
 
     mockCpFetchRoutes([
       {
@@ -338,6 +369,10 @@ describe("task completion routes", () => {
                 branchName: "Candidate 1",
                 sourceType: "fork",
                 isActive: false,
+                coordinationKey: "coord-1",
+                candidateIndex: 0,
+                executionStatus: "completed",
+                sessionKind: "candidate",
                 createdAt: "2026-03-19T10:00:01.000Z",
                 updatedAt: "2026-03-19T10:00:12.000Z",
                 archivedAt: null,
@@ -350,6 +385,10 @@ describe("task completion routes", () => {
                 branchName: "Candidate 2",
                 sourceType: "fork",
                 isActive: false,
+                coordinationKey: "coord-1",
+                candidateIndex: 1,
+                executionStatus: "running",
+                sessionKind: "candidate",
                 createdAt: "2026-03-19T10:00:02.000Z",
                 updatedAt: "2026-03-19T10:00:09.000Z",
                 archivedAt: null,
@@ -359,56 +398,7 @@ describe("task completion routes", () => {
         },
       },
       {
-        url: "/api/tasks/task-adopt-1/domain-runs",
-        response: {
-          ok: true,
-          data: {
-            data: [
-              {
-                id: "parallel-run-1",
-                orchestrationKind: "parallel",
-              },
-            ],
-          },
-        },
-      },
-      {
-        url: "/api/tasks/task-adopt-1/domain-runs/parallel-run-1",
-        response: {
-          ok: true,
-          data: {
-            data: {
-              run: {
-                id: "parallel-run-1",
-                orchestrationKind: "parallel",
-              },
-              nodes: [],
-              candidateNodes: [
-                {
-                  id: "candidate-a",
-                  nodeKind: "candidate",
-                  candidateIndex: 0,
-                  sessionId: "session-a",
-                  status: "completed",
-                  resultText: "候选 A 结果",
-                },
-                {
-                  id: "candidate-b",
-                  nodeKind: "candidate",
-                  candidateIndex: 1,
-                  sessionId: "session-b",
-                  agentRunId: "agent-run-2",
-                  status: "running",
-                },
-              ],
-              judgeNode: null,
-              winnerCandidateIndex: null,
-            },
-          },
-        },
-      },
-      {
-        url: "/api/tasks/task-adopt-1/domain-runs/parallel-run-1/candidates/0/adopt",
+        url: "/api/tasks/task-adopt-1/adopt-winner",
         method: "POST",
         response: (options) => ({ ok: true, data: { ok: true, body: options?.body } }),
       },
@@ -435,23 +425,521 @@ describe("task completion routes", () => {
     >;
     const adoptCall = cpFetchCalls.find(
       ([url, options]) =>
-        url === "/api/tasks/task-adopt-1/domain-runs/parallel-run-1/candidates/0/adopt" &&
+        url === "/api/tasks/task-adopt-1/adopt-winner" &&
         options?.method === "POST",
     );
     expect(adoptCall).toBeDefined();
-    expect((adoptCall?.[1] as RouteFetchOptions | undefined)?.body).toMatchObject({
-      stoppedCandidates: [
-        {
-          candidateIndex: 1,
-          status: "cancelled",
-        },
-      ],
+    expect((adoptCall?.[1] as RouteFetchOptions | undefined)?.body).toEqual({
+      coordinationKey: "coord-1",
+      winnerSessionId: "task-session:task-adopt-1:session-a",
+    });
+    const taskPatchCall = cpFetchCalls.find(
+      ([url, options]) => url === "/api/tasks/task-adopt-1" && options?.method === "PATCH",
+    );
+    expect(taskPatchCall).toBeDefined();
+    expect((taskPatchCall?.[1] as RouteFetchOptions | undefined)?.body).toEqual({
+      status: "completed",
+      sessionId: "session-a",
+      result: "候选 A 结果",
     });
     expect(
       cpFetchCalls.some(
-        ([url, options]) => url === "/api/tasks/task-adopt-1" && options?.method === "PATCH",
+        ([url, options]) =>
+          url === "/api/tasks/task-adopt-1/sessions/task-session%3Atask-adopt-1%3Asession-a/activate" &&
+          options?.method === "POST",
       ),
-    ).toBe(false);
+    ).toBe(true);
+  });
+
+  test("POST /:taskId/candidates/:index/adopt falls back to session-first winner adoption", async () => {
+    getSessionMessagesMock.mockResolvedValueOnce({
+      ok: true,
+      data: [
+        {
+          id: "msg-session-b",
+          info: {
+            role: "assistant",
+            created: Date.parse("2026-03-19T10:00:12.000Z"),
+            completed: Date.parse("2026-03-19T10:00:13.000Z"),
+          },
+          parts: [{ type: "text", text: "候选 B 结果" }],
+        },
+      ],
+    } as never);
+
+    mockCpFetchRoutes([
+      {
+        url: "/api/project-tree/tasks/task-adopt-session-first",
+        response: {
+          ok: true,
+          data: {
+            id: "task-adopt-session-first",
+            title: "Parallel clarify",
+            projectId: "proj-adopt",
+            prompt: "Clarify scope",
+            status: "running",
+            orchestrationKind: "parallel",
+            sessionId: "root-session",
+          },
+        },
+      },
+      {
+        url: "/api/tasks/task-adopt-session-first/sessions",
+        response: {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "task-session:task-adopt-session-first:root-session",
+                taskId: "task-adopt-session-first",
+                runtimeSessionId: "root-session",
+                parentRuntimeSessionId: null,
+                branchName: "main",
+                sourceType: "root",
+                isActive: true,
+                coordinationKey: null,
+                candidateIndex: null,
+                executionStatus: "completed",
+                createdAt: "2026-03-19T10:00:00.000Z",
+                updatedAt: "2026-03-19T10:00:00.000Z",
+                archivedAt: null,
+              },
+              {
+                id: "task-session:task-adopt-session-first:session-a",
+                taskId: "task-adopt-session-first",
+                runtimeSessionId: "session-a",
+                parentRuntimeSessionId: "root-session",
+                branchName: "Candidate 1",
+                sourceType: "fork",
+                isActive: false,
+                coordinationKey: "coord-1",
+                candidateIndex: 0,
+                executionStatus: "completed",
+                sessionKind: "candidate",
+                createdAt: "2026-03-19T10:00:01.000Z",
+                updatedAt: "2026-03-19T10:00:12.000Z",
+                archivedAt: null,
+              },
+              {
+                id: "task-session:task-adopt-session-first:session-b",
+                taskId: "task-adopt-session-first",
+                runtimeSessionId: "session-b",
+                parentRuntimeSessionId: "root-session",
+                branchName: "Candidate 2",
+                sourceType: "fork",
+                isActive: false,
+                coordinationKey: "coord-1",
+                candidateIndex: 1,
+                executionStatus: "completed",
+                sessionKind: "candidate",
+                createdAt: "2026-03-19T10:00:02.000Z",
+                updatedAt: "2026-03-19T10:00:13.000Z",
+                archivedAt: null,
+              },
+            ],
+          },
+        },
+      },
+      {
+        url: "/api/tasks/task-adopt-session-first/adopt-winner",
+        method: "POST",
+        response: (options) => ({ ok: true, data: { ok: true, body: options?.body } }),
+      },
+      {
+        url: "/api/tasks/task-adopt-session-first/sessions/task-session%3Atask-adopt-session-first%3Asession-b/activate",
+        method: "POST",
+        response: { ok: true, data: { ok: true } },
+      },
+    ]);
+
+    const { taskRoutes } = await loadTaskRoutes();
+    const response = await taskRoutes.request(
+      "http://localhost/task-adopt-session-first/candidates/1/adopt",
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer test",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          parallelRunId: "tree-fallback:root-session",
+          sessionId: "session-b",
+        }),
+      },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ ok: true, winnerCandidateIndex: 1 });
+    expect(terminateAgentMock).not.toHaveBeenCalled();
+    expect(wsBroadcastMock).toHaveBeenCalledTimes(2);
+
+    const cpFetchCalls = cpFetchMock.mock.calls as unknown as Array<
+      [string, RouteFetchOptions | undefined]
+    >;
+    const adoptWinnerCall = cpFetchCalls.find(
+      ([url, options]) =>
+        url === "/api/tasks/task-adopt-session-first/adopt-winner" &&
+        options?.method === "POST",
+    );
+    expect(adoptWinnerCall).toBeDefined();
+    expect((adoptWinnerCall?.[1] as RouteFetchOptions | undefined)?.body).toEqual({
+      coordinationKey: "coord-1",
+      winnerSessionId: "task-session:task-adopt-session-first:session-b",
+    });
+    const taskPatchCall = cpFetchCalls.find(
+      ([url, options]) =>
+        url === "/api/tasks/task-adopt-session-first" && options?.method === "PATCH",
+    );
+    expect(taskPatchCall).toBeDefined();
+    expect((taskPatchCall?.[1] as RouteFetchOptions | undefined)?.body).toEqual({
+      status: "completed",
+      sessionId: "session-b",
+      result: "候选 B 结果",
+    });
+    expect(
+      cpFetchCalls.some(
+        ([url, options]) =>
+          url ===
+            "/api/tasks/task-adopt-session-first/sessions/task-session%3Atask-adopt-session-first%3Asession-b/activate" &&
+          options?.method === "POST",
+      ),
+    ).toBe(true);
+
+    const broadcastCalls = wsBroadcastMock.mock.calls as unknown as Array<
+      [Record<string, unknown>]
+    >;
+    expect(broadcastCalls[0]?.[0]).toMatchObject({
+      type: "session.activated",
+      taskId: "task-adopt-session-first",
+      projectId: "proj-adopt",
+      data: {
+        sessionId: "session-b",
+        source: "candidate-adopt",
+      },
+    });
+    expect(broadcastCalls[1]?.[0]).toMatchObject({
+      type: "task.completed",
+      taskId: "task-adopt-session-first",
+      projectId: "proj-adopt",
+      data: {
+        status: "completed",
+        executionMode: "parallel",
+        winnerCandidateIndex: 1,
+        adoptedManually: true,
+        result: "候选 B 结果",
+      },
+    });
+  });
+
+  test("POST /:taskId/candidates/:index/adopt repairs missing coordination metadata for session-tree fallback candidates", async () => {
+    getSessionMessagesMock.mockResolvedValueOnce({
+      ok: true,
+      data: [
+        {
+          id: "msg-session-b-repair",
+          info: {
+            role: "assistant",
+            created: Date.parse("2026-03-19T10:00:12.000Z"),
+            completed: Date.parse("2026-03-19T10:00:13.000Z"),
+          },
+          parts: [{ type: "text", text: "候选 B 修复后结果" }],
+        },
+      ],
+    } as never);
+
+    mockCpFetchRoutes([
+      {
+        url: "/api/project-tree/tasks/task-adopt-repair",
+        response: {
+          ok: true,
+          data: {
+            id: "task-adopt-repair",
+            title: "Parallel clarify",
+            projectId: "proj-adopt",
+            prompt: "Clarify scope",
+            status: "running",
+            orchestrationKind: "parallel",
+            sessionId: "root-session",
+          },
+        },
+      },
+      {
+        url: "/api/tasks/task-adopt-repair/sessions",
+        response: {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "task-session:task-adopt-repair:root-session",
+                taskId: "task-adopt-repair",
+                runtimeSessionId: "root-session",
+                parentRuntimeSessionId: null,
+                branchName: "main",
+                sourceType: "root",
+                isActive: true,
+                coordinationKey: null,
+                candidateIndex: null,
+                executionStatus: "completed",
+                createdAt: "2026-03-19T10:00:00.000Z",
+                updatedAt: "2026-03-19T10:00:00.000Z",
+                archivedAt: null,
+              },
+              {
+                id: "task-session:task-adopt-repair:session-a",
+                taskId: "task-adopt-repair",
+                runtimeSessionId: "session-a",
+                parentRuntimeSessionId: "root-session",
+                branchName: "Candidate 1",
+                sourceType: "fork",
+                isActive: false,
+                coordinationKey: null,
+                candidateIndex: null,
+                executionStatus: "completed",
+                createdAt: "2026-03-19T10:00:01.000Z",
+                updatedAt: "2026-03-19T10:00:12.000Z",
+                archivedAt: null,
+              },
+              {
+                id: "task-session:task-adopt-repair:session-b",
+                taskId: "task-adopt-repair",
+                runtimeSessionId: "session-b",
+                parentRuntimeSessionId: "root-session",
+                branchName: "Candidate 2",
+                sourceType: "fork",
+                isActive: false,
+                coordinationKey: null,
+                candidateIndex: null,
+                executionStatus: "completed",
+                createdAt: "2026-03-19T10:00:02.000Z",
+                updatedAt: "2026-03-19T10:00:13.000Z",
+                archivedAt: null,
+              },
+            ],
+          },
+        },
+      },
+      {
+        url: "/api/tasks/task-adopt-repair/sessions",
+        method: "POST",
+        response: { ok: true, data: { ok: true } },
+      },
+      {
+        url: "/api/tasks/task-adopt-repair/adopt-winner",
+        method: "POST",
+        response: (options) => ({ ok: true, data: { ok: true, body: options?.body } }),
+      },
+      {
+        url: "/api/tasks/task-adopt-repair/sessions/task-session%3Atask-adopt-repair%3Asession-b/activate",
+        method: "POST",
+        response: { ok: true, data: { ok: true } },
+      },
+    ]);
+
+    const { taskRoutes } = await loadTaskRoutes();
+    const response = await taskRoutes.request(
+      "http://localhost/task-adopt-repair/candidates/1/adopt",
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer test",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          parallelRunId: "tree-fallback:root-session",
+          sessionId: "session-b",
+          candidateSessionIds: ["session-a", "session-b"],
+        }),
+      },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ ok: true, winnerCandidateIndex: 1 });
+
+    const cpFetchCalls = cpFetchMock.mock.calls as unknown as Array<
+      [string, RouteFetchOptions | undefined]
+    >;
+    const repairCalls = cpFetchCalls.filter(
+      ([url, options]) =>
+        url === "/api/tasks/task-adopt-repair/sessions" && options?.method === "POST",
+    );
+    expect(repairCalls).toHaveLength(2);
+    expect(repairCalls.map(([, options]) => options?.body)).toEqual([
+      {
+        runtimeSessionId: "session-a",
+        parentRuntimeSessionId: "root-session",
+        branchName: "Candidate 1",
+        sourceType: "fork",
+        sessionKind: "candidate",
+        executionModeSnapshot: "parallel",
+        isActive: false,
+        candidateIndex: 0,
+        stepIndex: undefined,
+        selectedModel: undefined,
+        coordinationKey: "root-session",
+        operationId: undefined,
+      },
+      {
+        runtimeSessionId: "session-b",
+        parentRuntimeSessionId: "root-session",
+        branchName: "Candidate 2",
+        sourceType: "fork",
+        sessionKind: "candidate",
+        executionModeSnapshot: "parallel",
+        isActive: false,
+        candidateIndex: 1,
+        stepIndex: undefined,
+        selectedModel: undefined,
+        coordinationKey: "root-session",
+        operationId: undefined,
+      },
+    ]);
+
+    const adoptWinnerCall = cpFetchCalls.find(
+      ([url, options]) =>
+        url === "/api/tasks/task-adopt-repair/adopt-winner" && options?.method === "POST",
+    );
+    expect(adoptWinnerCall).toBeDefined();
+    expect((adoptWinnerCall?.[1] as RouteFetchOptions | undefined)?.body).toEqual({
+      coordinationKey: "root-session",
+      winnerSessionId: "task-session:task-adopt-repair:session-b",
+    });
+    const taskPatchCall = cpFetchCalls.find(
+      ([url, options]) =>
+        url === "/api/tasks/task-adopt-repair" && options?.method === "PATCH",
+    );
+    expect(taskPatchCall).toBeDefined();
+    expect((taskPatchCall?.[1] as RouteFetchOptions | undefined)?.body).toEqual({
+      status: "completed",
+      sessionId: "session-b",
+      result: "候选 B 修复后结果",
+    });
+  });
+
+  test("POST /:taskId/candidates/:index/adopt treats legacy complete status as completed", async () => {
+    getSessionMessagesMock.mockResolvedValueOnce({
+      ok: true,
+      data: [
+        {
+          id: "msg-session-complete",
+          info: {
+            role: "assistant",
+            created: Date.parse("2026-03-19T10:00:12.000Z"),
+            completed: Date.parse("2026-03-19T10:00:13.000Z"),
+          },
+          parts: [{ type: "text", text: "候选 A 结果" }],
+        },
+      ],
+    } as never);
+
+    mockCpFetchRoutes([
+      {
+        url: "/api/project-tree/tasks/task-adopt-complete-status",
+        response: {
+          ok: true,
+          data: {
+            id: "task-adopt-complete-status",
+            title: "Parallel clarify",
+            projectId: "proj-adopt",
+            prompt: "Clarify scope",
+            status: "running",
+            orchestrationKind: "parallel",
+            sessionId: "root-session",
+          },
+        },
+      },
+      {
+        url: "/api/tasks/task-adopt-complete-status/sessions",
+        response: {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "task-session:task-adopt-complete-status:root-session",
+                taskId: "task-adopt-complete-status",
+                runtimeSessionId: "root-session",
+                parentRuntimeSessionId: null,
+                branchName: "main",
+                sourceType: "root",
+                isActive: true,
+                coordinationKey: null,
+                candidateIndex: null,
+                executionStatus: "completed",
+                createdAt: "2026-03-19T10:00:00.000Z",
+                updatedAt: "2026-03-19T10:00:00.000Z",
+                archivedAt: null,
+              },
+              {
+                id: "task-session:task-adopt-complete-status:session-a",
+                taskId: "task-adopt-complete-status",
+                runtimeSessionId: "session-a",
+                parentRuntimeSessionId: "root-session",
+                branchName: "Candidate 1",
+                sourceType: "fork",
+                isActive: false,
+                coordinationKey: "coord-1",
+                candidateIndex: 0,
+                executionStatus: "complete",
+                sessionKind: "candidate",
+                createdAt: "2026-03-19T10:00:01.000Z",
+                updatedAt: "2026-03-19T10:00:12.000Z",
+                archivedAt: null,
+              },
+              {
+                id: "task-session:task-adopt-complete-status:session-b",
+                taskId: "task-adopt-complete-status",
+                runtimeSessionId: "session-b",
+                parentRuntimeSessionId: "root-session",
+                branchName: "Candidate 2",
+                sourceType: "fork",
+                isActive: false,
+                coordinationKey: "coord-1",
+                candidateIndex: 1,
+                executionStatus: "running",
+                sessionKind: "candidate",
+                createdAt: "2026-03-19T10:00:02.000Z",
+                updatedAt: "2026-03-19T10:00:09.000Z",
+                archivedAt: null,
+              },
+            ],
+          },
+        },
+      },
+      {
+        url: "/api/tasks/task-adopt-complete-status/adopt-winner",
+        method: "POST",
+        response: (options) => ({ ok: true, data: { ok: true, body: options?.body } }),
+      },
+      {
+        url: "/api/tasks/task-adopt-complete-status/sessions/task-session%3Atask-adopt-complete-status%3Asession-a/activate",
+        method: "POST",
+        response: { ok: true, data: { ok: true } },
+      },
+    ]);
+
+    const { taskRoutes } = await loadTaskRoutes();
+    const response = await taskRoutes.request(
+      "http://localhost/task-adopt-complete-status/candidates/0/adopt",
+      {
+        method: "POST",
+        headers: { Authorization: "Bearer test" },
+      },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ ok: true, winnerCandidateIndex: 0 });
+    const cpFetchCalls = cpFetchMock.mock.calls as unknown as Array<
+      [string, RouteFetchOptions | undefined]
+    >;
+    const taskPatchCall = cpFetchCalls.find(
+      ([url, options]) =>
+        url === "/api/tasks/task-adopt-complete-status" && options?.method === "PATCH",
+    );
+    expect(taskPatchCall).toBeDefined();
+    expect((taskPatchCall?.[1] as RouteFetchOptions | undefined)?.body).toEqual({
+      status: "completed",
+      sessionId: "session-a",
+      result: "候选 A 结果",
+    });
   });
 
   test("POST /:taskId/candidates/:index/adopt returns 400 for invalid candidate index", async () => {

@@ -33,7 +33,7 @@ type RegisterTaskCoreRoutesDeps = {
     parentRuntimeSessionId?: string | null;
     forkedFromMessageId?: string | null;
     branchName?: string | null;
-    sourceType?: "root" | "fork" | "sub_session" | null;
+    sourceType?: "root" | "fork" | "sub_session" | "parallel" | null;
     isActive?: boolean;
     archivedAt?: string | null;
   }) => Promise<unknown>;

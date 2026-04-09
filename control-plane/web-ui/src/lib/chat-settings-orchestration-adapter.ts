@@ -102,7 +102,7 @@ function buildFollowupSummary(strategy: OrchestrationStrategy) {
     return {
       followupEnabledCount: 0,
       followupTemplateIds: [] as string[],
-      followupSummary: "未配置 follow-up 模板",
+      followupSummary: "未配置 continue 模板",
     };
   }
 
@@ -297,7 +297,7 @@ function prependPipelineChangeCard(
 
 function formatFollowupTemplateList(strategy: OrchestrationStrategy) {
   const enabledFollowups = resolveEnabledFollowups(strategy).map((item) => item.id);
-  return enabledFollowups.length > 0 ? enabledFollowups.join("、") : "未配置 follow-up 模板";
+  return enabledFollowups.length > 0 ? enabledFollowups.join("、") : "未配置 continue 模板";
 }
 
 export function buildChangeCards(
@@ -315,7 +315,7 @@ export function buildChangeCards(
       id: "followup-change",
       category: affectedCategories[0] || "global",
       changeType: "pipeline",
-      title: "Follow-up 模板变化",
+      title: "Continue 模板变化",
       summary: `${formatFollowupTemplateList(strategy)} -> ${formatFollowupTemplateList(nextStrategy)}`,
       beforeLabel: formatFollowupTemplateList(strategy),
       afterLabel: formatFollowupTemplateList(nextStrategy),
@@ -358,7 +358,7 @@ export function buildPreviewFromPatch(
         ? {
             level: "medium",
             summary:
-              "本次变更会调整 post-hook follow-up 模板，任务结束后的二次编排链路会发生变化。",
+              "本次变更会调整执行后 continue 模板，任务结束后的二次编排链路会发生变化。",
           }
         : null,
       templateChanges.some((item) => item.beforeMode !== item.afterMode)
@@ -395,7 +395,7 @@ export function buildOrchestrationContext(
         followupEnabledCount: item.followupEnabledCount ?? derived?.followupEnabledCount ?? 0,
         followupTemplateIds: item.followupTemplateIds ?? derived?.followupTemplateIds ?? [],
         followupSummary:
-          item.followupSummary ?? derived?.followupSummary ?? "未配置 follow-up 模板",
+          item.followupSummary ?? derived?.followupSummary ?? "未配置 continue 模板",
       };
     }),
     supportedCategories: context.supportedCategories || [...ORCHESTRATION_CATEGORIES],

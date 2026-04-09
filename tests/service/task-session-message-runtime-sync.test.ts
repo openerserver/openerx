@@ -309,12 +309,13 @@ describe("task session message runtime sync", () => {
     );
   });
 
-  test("reroutes duplicate candidate user prompts to the parent canonical session", async () => {
+  test("reroutes the first candidate user prompt to the parent canonical session", async () => {
     const parentSessionId = "task-session:task-1:runtime-parent";
     const existingMessageId = `task-session-message:${parentSessionId}:msg-parent-1`;
     const { createTaskSessionMessageWriteApi, insertCalls, deleteCalls, updateCalls } =
       await loadTaskSessionMessageWriteModule({
         taskMessageFindFirstResults: [
+          null,
           {
             id: existingMessageId,
             role: "user",
@@ -407,5 +408,124 @@ describe("task session message runtime sync", () => {
     expect(insertCalls).toHaveLength(0);
     expect(deleteCalls).toHaveLength(0);
     expect(updateCalls).toHaveLength(0);
+  });
+
+  test("keeps follow-up candidate user prompts in the child session once the child already has messages", async () => {
+    const childSessionId = "task-session:task-1:runtime-child";
+    const childAssistantMessageId = `task-session-message:${childSessionId}:msg-child-assistant-1`;
+    const existingChildAssistantMessage = {
+      id: childAssistantMessageId,
+      role: "assistant",
+      runtimeMessageId: "msg-child-assistant-1",
+      status: "completed",
+      clientMessageId: null,
+      providerMessageId: null,
+      seq: 0,
+      textContent: "candidate answer",
+      textPreview: "candidate answer",
+      rawPayload: {
+        id: "msg-child-assistant-1",
+        info: {
+          role: "assistant",
+          time: {
+            created: "2025-01-01T00:01:10.000Z",
+            completed: "2025-01-01T00:01:12.000Z",
+          },
+        },
+        parts: [{ type: "text", text: "candidate answer" }],
+      },
+      partCount: 1,
+      tokenUsed: 0,
+      startedAt: "2025-01-01T00:01:10.000Z",
+      completedAt: "2025-01-01T00:01:12.000Z",
+      errorText: null,
+      createdAt: "2025-01-01T00:01:10.000Z",
+      updatedAt: "2025-01-01T00:01:12.000Z",
+    };
+    const { createTaskSessionMessageWriteApi, insertCalls } = await loadTaskSessionMessageWriteModule({
+      taskMessageFindFirstResults: [existingChildAssistantMessage, null, existingChildAssistantMessage],
+      sessionRecord: {
+        id: childSessionId,
+        runtimeSessionId: "runtime-child",
+        latestRunId: `run_${childSessionId}`,
+        sessionKind: "candidate",
+        triggerType: "execute",
+        coordinationKey: childSessionId,
+        executionStatus: "running",
+        archivedAt: null,
+        startedAt: "2025-01-01T00:01:00.000Z",
+        createdAt: "2025-01-01T00:01:00.000Z",
+        effectiveModel: null,
+        selectedModel: null,
+        workflowStageKey: null,
+        candidateIndex: 0,
+        costUsd: 0,
+      },
+    });
+
+    const resolveTaskSessionRecordByRuntimeSessionId = mock(
+      async (_taskId: string, _projectId: string, runtimeSessionId: string) => {
+        if (runtimeSessionId === "runtime-child") {
+          return {
+            runtimeSessionId: "runtime-child",
+            parentRuntimeSessionId: "runtime-parent",
+            sessionKind: "candidate",
+          };
+        }
+        if (runtimeSessionId === "runtime-parent") {
+          return {
+            runtimeSessionId: "runtime-parent",
+            parentRuntimeSessionId: null,
+            sessionKind: "primary",
+          };
+        }
+        return null;
+      },
+    );
+    const upsertTaskSessionRecord = mock(async () => childSessionId);
+    const api = createTaskSessionMessageWriteApi({
+      upsertTaskSessionRecord,
+      resolveTaskSessionRecordByRuntimeSessionId,
+    });
+
+    const result = await api.upsertTaskSessionMessageRecord({
+      task: { id: "task-1", projectId: "project-1" },
+      runtimeSessionId: "runtime-child",
+      message: {
+        id: "msg-child-user-2",
+        info: {
+          role: "user",
+          time: { created: "2025-01-01T00:01:20.000Z" },
+        },
+        parts: [{ type: "text", text: "follow up question" }],
+      },
+    });
+
+    expect(result).toEqual({
+      messageId: `task-session-message:${childSessionId}:msg-child-user-2`,
+      sessionId: childSessionId,
+      seq: 0,
+    });
+    expect(upsertTaskSessionRecord).toHaveBeenCalledWith({
+      task: { id: "task-1", projectId: "project-1" },
+      runtimeSessionId: "runtime-child",
+      sourceType: "root",
+      isActive: true,
+    });
+    expect(insertCalls).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          table: "task_messages",
+          payload: expect.objectContaining({
+            id: `task-session-message:${childSessionId}:msg-child-user-2`,
+            sessionId: childSessionId,
+            role: "user",
+            parentMessageId: childAssistantMessageId,
+            replyToMessageId: childAssistantMessageId,
+            textContent: "follow up question",
+          }),
+        }),
+      ]),
+    );
   });
 });

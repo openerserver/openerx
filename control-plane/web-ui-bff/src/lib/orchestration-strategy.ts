@@ -321,7 +321,7 @@ const DEFAULT_PRE_PROMPT = [
 
 const DEFAULT_POST_PROMPT = [
   "You are performing a post-execution review for an Opener-X task.",
-  "Assess result quality, remaining risks, and any follow-up actions.",
+  "Assess result quality, remaining risks, and any actions for the next continue round.",
   "Keep the response concise and action-oriented.",
   "",
   "Task title: {{taskTitle}}",

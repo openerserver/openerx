@@ -160,6 +160,16 @@ function describeSessionTimelineEvent(payload: Record<string, unknown>) {
   }
 
   if (sourceType === "fork" || sourceType === "sub_session") {
+  if (sourceType === "parallel") {
+    return {
+      itemKind: "session" as const,
+      title: branchName ?? "并行会话",
+      displayText: branchName
+        ? `切换到并行候选 ${branchName}`
+        : `切换到并行会话 ${runtimeSessionId ?? "unknown"}`,
+    };
+  }
+
     return {
       itemKind: "session" as const,
       title: branchName ?? "派生会话",

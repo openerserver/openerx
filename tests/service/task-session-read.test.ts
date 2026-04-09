@@ -307,6 +307,195 @@ describe("task session read API", () => {
     expect(response.data.meta.currentSessionId).toBe(sessionId);
   });
 
+  test("projects candidate sessions as parallel sourceType on public session reads", async () => {
+    const rootSessionId = "task-session:task-1:root-session";
+    const candidateSessionId = "task-session:task-1:candidate-session";
+    const { createTaskSessionReadApi } = await loadTaskSessionReadModule({
+      sessionRows: [
+        {
+          id: rootSessionId,
+          taskId: "task-1",
+          parentSessionId: null,
+          runtimeSessionId: "root-session",
+          coordinationKey: rootSessionId,
+          createdAt: "2026-03-27T00:00:00.000Z",
+        },
+        {
+          id: candidateSessionId,
+          taskId: "task-1",
+          parentSessionId: rootSessionId,
+          runtimeSessionId: "candidate-session",
+          coordinationKey: rootSessionId,
+          sessionKind: "candidate",
+          executionModeSnapshot: "parallel",
+          candidateIndex: 0,
+          createdAt: "2026-03-27T00:00:01.000Z",
+        },
+      ],
+    });
+
+    const api = createTaskSessionReadApi({
+      loadTaskTreeBackedRecord: mock(async () => ({ id: "task-1", projectId: "project-1" })),
+    });
+
+    const response = await api.listTaskSessions("task-1");
+
+    expect(response.ok).toBe(true);
+    if (!response.ok) {
+      return;
+    }
+
+    expect(response.data.data).toContainEqual(
+      expect.objectContaining({
+        id: candidateSessionId,
+        parentRuntimeSessionId: "root-session",
+        sourceType: "parallel",
+      }),
+    );
+  });
+
+  test("orders task sessions by parent lineage while keeping latestSessionId on lifecycle time", async () => {
+    const rootSessionId = "task-session:task-1:root-session";
+    const anchorSessionId = "task-session:task-1:anchor-session";
+    const branchSessionId = "task-session:task-1:branch-session";
+    const candidateSessionId = "task-session:task-1:candidate-session";
+    const { createTaskSessionReadApi } = await loadTaskSessionReadModule({
+      sessionRows: [
+        {
+          id: rootSessionId,
+          taskId: "task-1",
+          parentSessionId: null,
+          runtimeSessionId: "root-session",
+          coordinationKey: rootSessionId,
+          createdAt: "2026-03-27T00:00:00.000Z",
+        },
+        {
+          id: branchSessionId,
+          taskId: "task-1",
+          parentSessionId: rootSessionId,
+          runtimeSessionId: "branch-session",
+          sessionKind: "manual_branch",
+          createdAt: "2026-03-27T00:00:02.000Z",
+        },
+        {
+          id: anchorSessionId,
+          taskId: "task-1",
+          parentSessionId: rootSessionId,
+          runtimeSessionId: "anchor-session",
+          sessionKind: "resume",
+          createdAt: "2026-03-27T00:00:01.000Z",
+        },
+        {
+          id: candidateSessionId,
+          taskId: "task-1",
+          parentSessionId: anchorSessionId,
+          runtimeSessionId: "candidate-session",
+          sessionKind: "candidate",
+          executionModeSnapshot: "parallel",
+          candidateIndex: 0,
+          createdAt: "2026-03-27T00:00:03.000Z",
+        },
+      ],
+    });
+
+    const api = createTaskSessionReadApi({
+      loadTaskTreeBackedRecord: mock(async () => ({ id: "task-1", projectId: "project-1" })),
+    });
+
+    const response = await api.listTaskSessions("task-1");
+
+    expect(response.ok).toBe(true);
+    if (!response.ok) {
+      return;
+    }
+
+    expect(response.data.data.map((session) => session.id)).toEqual([
+      rootSessionId,
+      anchorSessionId,
+      candidateSessionId,
+      branchSessionId,
+    ]);
+    expect(response.data.meta.latestSessionId).toBe(candidateSessionId);
+  });
+
+  test("buildTaskTreeResponse defaults to the lifecycle-latest session when topology ends on another sibling", async () => {
+    const rootSessionId = "task-session:task-1:root-session";
+    const anchorSessionId = "task-session:task-1:anchor-session";
+    const branchSessionId = "task-session:task-1:branch-session";
+    const candidateSessionId = "task-session:task-1:candidate-session";
+    const { createTaskSessionReadApi } = await loadTaskSessionReadModule({
+      sessionRows: [
+        {
+          id: rootSessionId,
+          taskId: "task-1",
+          parentSessionId: null,
+          runtimeSessionId: "root-session",
+          coordinationKey: rootSessionId,
+          createdAt: "2026-03-27T00:00:00.000Z",
+        },
+        {
+          id: branchSessionId,
+          taskId: "task-1",
+          parentSessionId: rootSessionId,
+          runtimeSessionId: "branch-session",
+          sessionKind: "manual_branch",
+          createdAt: "2026-03-27T00:00:02.000Z",
+        },
+        {
+          id: anchorSessionId,
+          taskId: "task-1",
+          parentSessionId: rootSessionId,
+          runtimeSessionId: "anchor-session",
+          sessionKind: "resume",
+          createdAt: "2026-03-27T00:00:01.000Z",
+        },
+        {
+          id: candidateSessionId,
+          taskId: "task-1",
+          parentSessionId: anchorSessionId,
+          runtimeSessionId: "candidate-session",
+          sessionKind: "candidate",
+          executionModeSnapshot: "parallel",
+          candidateIndex: 0,
+          createdAt: "2026-03-27T00:00:03.000Z",
+        },
+      ],
+    });
+
+    const api = createTaskSessionReadApi({
+      loadTaskTreeBackedRecord: mock(async () => ({
+        id: "task-1",
+        projectId: "project-1",
+        title: "parallel task",
+        prompt: "compare these candidate sessions",
+        status: "running",
+        latestResultSummary: null,
+        strategy: null,
+        createdAt: "2026-03-27T00:00:00.000Z",
+        lastActivityAt: "2026-03-27T00:00:03.000Z",
+      })),
+    });
+
+    const response = await api.buildTaskTreeResponse({
+      taskId: "task-1",
+      includeLineage: true,
+    });
+
+    expect(response.ok).toBe(true);
+    if (!response.ok) {
+      return;
+    }
+
+    expect(response.data.meta.currentSessionId).toBe(candidateSessionId);
+    expect(response.data.task.currentSessionId).toBe(candidateSessionId);
+    expect(response.data.sessions.map((session) => session.id)).toEqual([
+      rootSessionId,
+      anchorSessionId,
+      candidateSessionId,
+      branchSessionId,
+    ]);
+  });
+
   test("falls back to persisted session operation models when session selectedModel is empty", async () => {
     const sessionId = "task-session:task-1:session-1";
     const { createTaskSessionReadApi } = await loadTaskSessionReadModule({
@@ -1011,7 +1200,7 @@ describe("task session read API", () => {
     expect(response.data.meta).toMatchObject({
       sessionId: rootSessionId,
       includeLineage: true,
-      lineagePath: [childSessionId, rootSessionId],
+      lineagePath: [rootSessionId, childSessionId],
       cachedSessionCount: 2,
       messageCount: 4,
     });
@@ -2480,6 +2669,105 @@ describe("task session read API", () => {
         id: `${sessionId}:msg-1`,
         textContent: "normalized response",
       }),
+    ]);
+  });
+
+  test("buildTaskTreeResponse keeps root prompt and orders later user replies by runtime payload time", async () => {
+    const sessionId = "task-session:task-1:session-1";
+    const { createTaskSessionReadApi } = await loadTaskSessionReadModule({
+      sessionRows: [
+        {
+          id: sessionId,
+          taskId: "task-1",
+          parentSessionId: null,
+          runtimeSessionId: "session-1",
+          coordinationKey: sessionId,
+          createdAt: "2026-04-02T10:38:23.525Z",
+        },
+      ],
+      messageRows: [
+        {
+          id: `${sessionId}:msg-user`,
+          taskId: "task-1",
+          sessionId,
+          runtimeMessageId: "runtime-message-user",
+          role: "user",
+          messageIndex: 0,
+          textContent: "简单的生成1个 C程序：print aa",
+          summaryText: "简单的生成1个 C程序：print aa",
+          rawPayload: {
+            info: {
+              id: "runtime-message-user",
+              role: "user",
+              time: {
+                created: "2026-04-02T10:42:03.006Z",
+              },
+            },
+          },
+          createdAt: "2026-04-02T10:38:24.000Z",
+          updatedAt: "2026-04-02T10:38:24.000Z",
+        },
+        {
+          id: `${sessionId}:msg-assistant`,
+          taskId: "task-1",
+          sessionId,
+          runtimeMessageId: "runtime-message-assistant",
+          role: "assistant",
+          messageIndex: 1,
+          textContent: "请告诉我您希望我处理什么任务？",
+          summaryText: "请告诉我您希望我处理什么任务？",
+          rawPayload: {
+            info: {
+              id: "runtime-message-assistant",
+              role: "assistant",
+              time: {
+                created: "2026-04-02T10:38:25.000Z",
+              },
+            },
+          },
+          createdAt: "2026-04-02T10:38:25.000Z",
+          updatedAt: "2026-04-02T10:38:25.000Z",
+        },
+      ],
+      snapshot: {
+        taskId: "task-1",
+        currentSessionId: sessionId,
+      },
+    });
+
+    const api = createTaskSessionReadApi({
+      loadTaskTreeBackedRecord: mock(async () => ({
+        id: "task-1",
+        projectId: "project-1",
+        title: "实现新功能",
+        prompt: "请先梳理需求和边界条件，再实现功能代码。",
+        status: "completed",
+        latestResultSummary: "请告诉我您希望我处理什么任务？",
+        strategy: null,
+        createdAt: "2026-04-02T10:38:23.525Z",
+        lastActivityAt: "2026-04-02T10:42:03.006Z",
+      })),
+    });
+
+    const response = await api.buildTaskTreeResponse({
+      taskId: "task-1",
+      includeLineage: true,
+    });
+
+    expect(response.ok).toBe(true);
+    if (!response.ok) {
+      return;
+    }
+
+    expect(response.data.messages.map((message) => message.textContent)).toEqual([
+      "请先梳理需求和边界条件，再实现功能代码。",
+      "请告诉我您希望我处理什么任务？",
+      "简单的生成1个 C程序：print aa",
+    ]);
+    expect(response.data.messages.map((message) => message.createdAt)).toEqual([
+      "2026-04-02T10:38:23.525Z",
+      "2026-04-02T10:38:25.000Z",
+      "2026-04-02T10:42:03.006Z",
     ]);
   });
 

@@ -44,6 +44,9 @@ const modeLabel = computed(() => {
 });
 
 const executionHint = computed(() => {
+  if (!props.executing) {
+    return "执行收尾中…";
+  }
   if (props.executionMode === "parallel") return "多候选并行中…";
   if (props.executionMode === "sequential-chain") return "步骤串行中…";
   return "模型生成中…";

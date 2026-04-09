@@ -64,48 +64,9 @@ interface TaskRecord {
   sessionId?: string | null;
   strategy?: string | PersistedTaskStrategy | null;
   orchestrationKind?: string | null;
-  currentRunId?: string | null;
   createdAt?: string | null;
   finishedAt?: string | null;
   result?: string | null;
-}
-
-interface TaskDomainRunSummaryRecord {
-  id: string;
-  orchestrationKind: "single" | "parallel" | "sequential-chain";
-  status?: string;
-  rootSessionId?: string | null;
-  judgeNodeId?: string | null;
-  winnerNodeId?: string | null;
-  createdAt?: string | null;
-  updatedAt?: string | null;
-  startedAt?: string | null;
-  finishedAt?: string | null;
-}
-
-interface TaskDomainRunNodeRecord {
-  id: string;
-  nodeKind: string;
-  title?: string | null;
-  candidateIndex?: number | null;
-  agentType?: string | null;
-  modelUsed?: string | null;
-  sessionId?: string | null;
-  agentRunId?: string | null;
-  status: string;
-  resultText?: string | null;
-  resultSummary?: string | null;
-  errorText?: string | null;
-  startedAt?: string | null;
-  finishedAt?: string | null;
-}
-
-interface TaskDomainRunDetailRecord {
-  run: TaskDomainRunSummaryRecord;
-  nodes: TaskDomainRunNodeRecord[];
-  candidateNodes: TaskDomainRunNodeRecord[];
-  judgeNode: TaskDomainRunNodeRecord | null;
-  winnerCandidateIndex: number | null;
 }
 
 interface TaskSessionRecord {
@@ -280,7 +241,7 @@ function stageFromFollowupExecution(
   return {
     id: `followup:${record.templateId}:${record.triggerHookId}:${order}`,
     type: "follow-up",
-    label: `Follow-up · ${record.agent}`,
+    label: `Continue · ${record.agent}`,
     status: record.status === "skipped" ? "skipped" : record.status,
     order,
     sourceType: "strategy.hookExecution",
@@ -426,79 +387,6 @@ function stageFromJudgeStep(
       result?.tokenUsed && result.tokenUsed > 0 ? { input: 0, output: result.tokenUsed } : null,
     graphNodeId: null,
     dependsOn: step.dependsOn ?? [],
-  };
-}
-
-function stageFromParallelRunCandidate(
-  candidate: TaskDomainRunNodeRecord,
-  order: number,
-  configuredCandidate?: { model: string; label?: string },
-): RuntimePipelineStage {
-  const candidateIndex =
-    typeof candidate.candidateIndex === "number" ? candidate.candidateIndex : order;
-  const label =
-    configuredCandidate?.label ||
-    candidate.title ||
-    (typeof candidate.candidateIndex === "number"
-      ? `候选 ${candidate.candidateIndex + 1}`
-      : `候选 ${order + 1}`);
-  const output = truncateOutput(candidate.resultSummary ?? candidate.resultText);
-  const finishedAt = candidate.finishedAt ?? null;
-  const error =
-    candidate.status === "failed"
-      ? (candidate.errorText ?? candidate.resultSummary ?? candidate.resultText ?? null)
-      : null;
-
-  return {
-    id: `candidate:${candidateIndex}:${candidate.sessionId ?? candidate.id}`,
-    type: "execution",
-    label,
-    status: candidate.status as RuntimePipelineStageStatus,
-    order,
-    sourceType: "taskRun.node",
-    sourceId: candidate.id,
-    agent: candidate.agentType ?? null,
-    model: configuredCandidate?.model ?? candidate.modelUsed ?? null,
-    sessionId: candidate.sessionId ?? null,
-    startedAt: candidate.startedAt ?? null,
-    finishedAt,
-    durationMs: computeDurationMs(candidate.startedAt ?? null, finishedAt),
-    output,
-    error,
-    tokens: null,
-    graphNodeId: candidate.id,
-    dependsOn: [],
-  };
-}
-
-function stageFromParallelRunJudge(
-  detail: TaskDomainRunDetailRecord,
-  order: number,
-): RuntimePipelineStage | null {
-  const judgeNode = detail.judgeNode;
-  if (!judgeNode) {
-    return null;
-  }
-
-  return {
-    id: `judge:${judgeNode.id}`,
-    type: "judge",
-    label: judgeNode.title || "评判 / 聚合",
-    status: judgeNode.status as RuntimePipelineStageStatus,
-    order,
-    sourceType: "taskRun.node",
-    sourceId: judgeNode.id,
-    agent: judgeNode.agentType ?? null,
-    model: judgeNode.modelUsed ?? null,
-    sessionId: judgeNode.sessionId ?? null,
-    startedAt: judgeNode.startedAt ?? null,
-    finishedAt: judgeNode.finishedAt ?? null,
-    durationMs: computeDurationMs(judgeNode.startedAt ?? null, judgeNode.finishedAt ?? null),
-    output: truncateOutput(judgeNode.resultSummary ?? judgeNode.resultText),
-    error: judgeNode.status === "failed" ? (judgeNode.errorText ?? null) : null,
-    tokens: null,
-    graphNodeId: judgeNode.id,
-    dependsOn: [],
   };
 }
 
@@ -793,63 +681,6 @@ function appendPlanStages(stages: RuntimePipelineStage[], plan: RuntimePlan | nu
   return nextOrder;
 }
 
-async function loadParallelDomainRunDetail(args: {
-  task: TaskRecord;
-  authorization: string;
-}): Promise<TaskDomainRunDetailRecord | null> {
-  void args;
-  return null;
-}
-
-function resolveConfiguredParallelCandidates(
-  strategy: TaskRecord["strategy"],
-): Array<{ model: string; label?: string }> {
-  const parsed = parseTaskStrategy(strategy);
-  return Array.isArray(parsed.parallelCandidates)
-    ? parsed.parallelCandidates.filter(
-        (candidate): candidate is { model: string; label?: string } =>
-          Boolean(candidate && typeof candidate.model === "string" && candidate.model.trim()),
-      )
-    : [];
-}
-
-function appendParallelDomainRunStages(
-  stages: RuntimePipelineStage[],
-  detail: TaskDomainRunDetailRecord | null,
-  order: number,
-  configuredCandidates: Array<{ model: string; label?: string }>,
-) {
-  if (!detail) {
-    return order;
-  }
-
-  let nextOrder = order;
-  const candidates = detail.candidateNodes
-    .slice()
-    .sort(
-      (left, right) =>
-        (left.candidateIndex ?? Number.MAX_SAFE_INTEGER) -
-        (right.candidateIndex ?? Number.MAX_SAFE_INTEGER),
-    );
-
-  for (const candidate of candidates) {
-    const candidateIndex =
-      typeof candidate.candidateIndex === "number" ? candidate.candidateIndex : nextOrder;
-    stages.push(
-      stageFromParallelRunCandidate(candidate, nextOrder, configuredCandidates[candidateIndex]),
-    );
-    nextOrder += 1;
-  }
-
-  const judgeStage = stageFromParallelRunJudge(detail, nextOrder);
-  if (judgeStage) {
-    stages.push(judgeStage);
-    nextOrder += 1;
-  }
-
-  return nextOrder;
-}
-
 export async function buildRuntimePipeline(args: {
   taskId: string;
   sessionId?: string;
@@ -885,11 +716,6 @@ export async function buildRuntimePipeline(args: {
     return buildEmptyRuntimePipeline(args.taskId, requestedSessionId, task.createdAt ?? null);
   }
   const strategy = parseTaskStrategy(task.strategy);
-  const configuredParallelCandidates = resolveConfiguredParallelCandidates(task.strategy);
-  const parallelRunDetail =
-    task.orchestrationKind === "parallel"
-      ? await loadParallelDomainRunDetail({ task, authorization: args.authorization })
-      : null;
 
   const stages: RuntimePipelineStage[] = [];
   let order = 0;
@@ -900,15 +726,7 @@ export async function buildRuntimePipeline(args: {
     : [];
   order = appendHookExecutionStages(stages, hookExecutions, order, ["pre-execution", "pre-resume"]);
   order = appendPlanningStages(stages, messages, order);
-  order =
-    task.orchestrationKind === "parallel"
-      ? appendParallelDomainRunStages(
-          stages,
-          parallelRunDetail,
-          order,
-          configuredParallelCandidates,
-        )
-      : appendPlanStages(stages, null, order);
+  order = appendPlanStages(stages, null, order);
   order = appendSingleExecutionFallbackStage(stages, task, requestedSessionId, messages, order);
   order = appendHookExecutionStages(stages, hookExecutions, order, [
     "post-execution",

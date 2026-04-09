@@ -11,12 +11,12 @@ import {
   type TaskConversationMessageItem,
   type TaskConversationWorkflowItem,
   asRecord,
-  collectLiveAssistantState,
+  asString,
   createEmptyLiveAssistantState,
   normalizeMessage,
   normalizeWorkflowGroup,
 } from "../lib/message-normalize";
-import { useRealtimeStore } from "../stores/realtime";
+import { useTaskMessageStore } from "./useTaskMessageStore";
 
 export type { TaskConversationListItem, TaskConversationMessageItem };
 export type {
@@ -80,7 +80,7 @@ function collapseDisplayMessages(
       continue;
     }
 
-    const previous = collapsed.at(-1);
+    const previous = collapsed[collapsed.length - 1];
     if (areEquivalentAssistantMessages(previous, item)) {
       if (previous && resolveConversationMessageRichness(item) > resolveConversationMessageRichness(previous)) {
         collapsed[collapsed.length - 1] = item;
@@ -94,17 +94,128 @@ function collapseDisplayMessages(
   return collapsed;
 }
 
+function parseTimestampMs(value?: string) {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return null;
+  }
+
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function normalizeComparableAssistantText(text?: string) {
+  return typeof text === "string" ? text.replace(/\s+/gu, " ").trim() : "";
+}
+
+type PendingAssistantDraft = {
+  key: string;
+  sessionId: string;
+  createdAt: string;
+  knownAssistantKeys: Set<string>;
+};
+
+function collectAssistantMessageKeys(
+  persistedItems: TaskConversationMessageItem[],
+  liveState = createEmptyLiveAssistantState(),
+) {
+  const keys = new Set<string>();
+
+  for (const item of persistedItems) {
+    if (item.role === "assistant") {
+      keys.add(item.key);
+    }
+  }
+
+  for (const messageId of liveState.orderedAssistantMessageIds) {
+    keys.add(messageId);
+  }
+
+  return keys;
+}
+
+export function collectPersistedMessageIds(messages: unknown[]) {
+  const ids = new Set<string>();
+
+  for (const entry of messages) {
+    const record = asRecord(entry);
+    const info = asRecord(record?.info);
+    const rawPayload = asRecord(record?.rawPayload);
+    const rawInfo = asRecord(rawPayload?.info);
+    const candidates = [
+      asString(record?.id),
+      asString(record?.messageID),
+      asString(record?.runtimeMessageId),
+      asString(info?.id),
+      asString(rawInfo?.id),
+    ];
+
+    for (const candidate of candidates) {
+      if (candidate) {
+        ids.add(candidate);
+      }
+    }
+  }
+
+  for (const message of messages
+    .map((entry, index) => normalizeMessage(entry, index, createEmptyLiveAssistantState()))
+    .filter((entry): entry is TaskConversationMessageItem => entry != null)) {
+    if (message.key) {
+      ids.add(message.key);
+    }
+  }
+
+  return ids;
+}
+
+export function shouldSuppressCompletedStreamingAssistantDraft(args: {
+  persistedItems: TaskConversationMessageItem[];
+  draftText?: string;
+  draftCreatedAt?: string;
+  isStreaming: boolean;
+}) {
+  if (args.isStreaming) {
+    return false;
+  }
+
+  const draftCreatedAtMs = parseTimestampMs(args.draftCreatedAt);
+  const normalizedDraftText = normalizeComparableAssistantText(args.draftText);
+
+  return args.persistedItems.some((item) => {
+    if (item.role !== "assistant" || item.isStreaming) {
+      return false;
+    }
+
+    const normalizedPersistedText = normalizeComparableAssistantText(item.text);
+    if (!normalizedPersistedText) {
+      return false;
+    }
+
+    const persistedCreatedAtMs = parseTimestampMs(item.createdAt);
+    if (draftCreatedAtMs != null && persistedCreatedAtMs != null) {
+      return persistedCreatedAtMs >= draftCreatedAtMs;
+    }
+
+    return Boolean(normalizedDraftText) && normalizedPersistedText === normalizedDraftText;
+  });
+}
+
 export function useTreeMessages(
   taskId: Ref<string>,
   sessionId: Ref<string | undefined>,
   options?: { includeLineage?: boolean },
 ) {
-  const realtimeStore = useRealtimeStore();
   const trace = ref<TaskExecutionTrace | null>(null);
   const messages = ref<unknown[]>([]);
   const resolvedSessionId = ref<string | undefined>(undefined);
   const loading = ref(false);
   const error = ref<string | null>(null);
+  const pendingAssistantDraft = ref<PendingAssistantDraft | null>(null);
+  const activeSessionId = computed(() => resolvedSessionId.value ?? sessionId.value);
+  const {
+    latestTaskRefreshRequest,
+    liveAssistantState,
+    realtimeConnected,
+  } = useTaskMessageStore(taskId, activeSessionId);
 
   async function refresh(silent = false) {
     if (!taskId.value) {
@@ -124,10 +235,10 @@ export function useTreeMessages(
         includeLineage: options?.includeLineage,
       });
       messages.value = Array.isArray(response.data) ? response.data : [];
-      resolvedSessionId.value = sessionId.value;
+      resolvedSessionId.value = response.meta?.sessionId ?? sessionId.value;
       trace.value = {
         taskId: taskId.value,
-        sessionId: sessionId.value ?? response.meta?.sessionId ?? null,
+        sessionId: response.meta?.sessionId ?? sessionId.value ?? null,
         segments: [],
         messages: [],
         timeline: [],
@@ -145,25 +256,8 @@ export function useTreeMessages(
     }
   }
 
-  const taskEvents = computed(() =>
-    realtimeStore.events.filter((event) => event.taskId === taskId.value),
-  );
-
   const persistedMessageIds = computed(() => {
-    const ids = new Set<string>();
-    for (const message of messages.value
-      .map((entry, index) => normalizeMessage(entry, index, createEmptyLiveAssistantState()))
-      .filter((entry): entry is TaskConversationMessageItem => entry != null)) {
-      const id = message.key;
-      if (id) ids.add(id);
-    }
-    return ids;
-  });
-
-  const liveAssistantState = computed(() => {
-    const activeSessionId = resolvedSessionId.value ?? sessionId.value;
-    if (!activeSessionId) return createEmptyLiveAssistantState();
-    return collectLiveAssistantState(taskEvents.value, activeSessionId);
+    return collectPersistedMessageIds(messages.value);
   });
 
   const items = computed<TaskConversationMessageItem[]>(() =>
@@ -172,6 +266,36 @@ export function useTreeMessages(
       .filter((entry): entry is TaskConversationMessageItem => entry != null)
       .filter((entry) => entry.role !== "system"),
   );
+
+  const assistantMessageKeys = computed(() =>
+    collectAssistantMessageKeys(items.value, liveAssistantState.value),
+  );
+
+  function seedPendingAssistantDraft(targetSessionId?: string) {
+    if (!taskId.value || !targetSessionId) {
+      return;
+    }
+
+    const createdAt = new Date().toISOString();
+    pendingAssistantDraft.value = {
+      key: `pending-assistant:${targetSessionId}:${createdAt}`,
+      sessionId: targetSessionId,
+      createdAt,
+      knownAssistantKeys: new Set(assistantMessageKeys.value),
+    };
+  }
+
+  function clearPendingAssistantDraft(targetSessionId?: string) {
+    if (!pendingAssistantDraft.value) {
+      return;
+    }
+
+    if (targetSessionId && pendingAssistantDraft.value.sessionId !== targetSessionId) {
+      return;
+    }
+
+    pendingAssistantDraft.value = null;
+  }
 
   const streamingAssistantDraft = computed<TaskConversationMessageItem | null>(() => {
     for (let i = liveAssistantState.value.orderedAssistantMessageIds.length - 1; i >= 0; i--) {
@@ -182,6 +306,18 @@ export function useTreeMessages(
       const text = liveAssistantState.value.textById.get(messageId)?.trim();
       if (!meta && !text) continue;
 
+      const isStreaming = liveAssistantState.value.incompleteIds.has(messageId);
+      if (
+        shouldSuppressCompletedStreamingAssistantDraft({
+          persistedItems: items.value,
+          draftText: text,
+          draftCreatedAt: meta?.createdAt,
+          isStreaming,
+        })
+      ) {
+        continue;
+      }
+
       return {
         key: messageId,
         role: "assistant",
@@ -190,10 +326,38 @@ export function useTreeMessages(
         toolCalls: [],
         createdAt: meta?.createdAt,
         raw: null,
-        isStreaming: liveAssistantState.value.incompleteIds.has(messageId),
+        isStreaming,
       };
     }
     return null;
+  });
+
+  const optimisticPendingAssistantDraft = computed<TaskConversationMessageItem | null>(() => {
+    const pending = pendingAssistantDraft.value;
+    if (!pending || pending.sessionId !== activeSessionId.value) {
+      return null;
+    }
+
+    for (const messageKey of assistantMessageKeys.value) {
+      if (!pending.knownAssistantKeys.has(messageKey)) {
+        return null;
+      }
+    }
+
+    const refreshReason = latestTaskRefreshRequest.value?.reason;
+    if (refreshReason === "task-completed" || refreshReason === "task-failed") {
+      return null;
+    }
+
+    return {
+      key: pending.key,
+      role: "assistant",
+      text: "正在生成...",
+      toolCalls: [],
+      createdAt: pending.createdAt,
+      raw: null,
+      isStreaming: true,
+    };
   });
 
   const conversationItems = computed<TaskConversationListItem[]>(() => {
@@ -206,6 +370,7 @@ export function useTreeMessages(
       [
         ...items.value,
         ...(streamingAssistantDraft.value ? [streamingAssistantDraft.value] : []),
+        ...(optimisticPendingAssistantDraft.value ? [optimisticPendingAssistantDraft.value] : []),
       ].filter((item) => item.role === "user" || item.role === "assistant" || item.role === "tool"),
       {
         hideWorkflowExecutionContextUsers: workflowItems.length > 0,
@@ -236,6 +401,32 @@ export function useTreeMessages(
     ),
   );
 
+  watch(taskId, (nextTaskId, previousTaskId) => {
+    if (!nextTaskId || nextTaskId !== previousTaskId) {
+      pendingAssistantDraft.value = null;
+    }
+  });
+
+  watch(
+    [
+      activeSessionId,
+      () => assistantMessageKeys.value.size,
+      () => latestTaskRefreshRequest.value?.eventId,
+    ],
+    () => {
+      if (!pendingAssistantDraft.value) {
+        return;
+      }
+
+      if (
+        pendingAssistantDraft.value.sessionId === activeSessionId.value &&
+        !optimisticPendingAssistantDraft.value
+      ) {
+        pendingAssistantDraft.value = null;
+      }
+    },
+  );
+
   watch(
     [taskId, sessionId],
     () => {
@@ -248,9 +439,13 @@ export function useTreeMessages(
     trace,
     items,
     conversationItems,
+    latestTaskRefreshRequest,
     hasStreamingAssistant,
     loading,
     error,
+    realtimeConnected,
+    clearPendingAssistantDraft,
     refresh,
+    seedPendingAssistantDraft,
   };
 }

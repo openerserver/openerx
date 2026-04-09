@@ -169,6 +169,41 @@ beforeEach(() => {
 
 describe("task sessions route", () => {
   test("marks the task session as active when it matches the persisted sessionId", async () => {
+    setCpFetchImplementation(async (url: string, options?: { method?: string }) => {
+      if (url === "/api/project-tree/tasks/task-1") {
+        return {
+          ok: true,
+          data: {
+            id: "task-1",
+            title: "finished task",
+            status: "completed",
+            sessionId: "session-1",
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/sessions" && !options?.method) {
+        return {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "task-session:task-1:session-1",
+                runtimeSessionId: "session-1",
+                sourceType: "root",
+                isActive: true,
+                archivedAt: null,
+                createdAt: "2026-03-14T10:00:00.000Z",
+                updatedAt: "2026-03-14T10:05:00.000Z",
+              },
+            ],
+          },
+        };
+      }
+
+      return { ok: true, data: {} };
+    });
+
     const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
 
     const response = await taskRoutes.request("http://localhost/task-1/sessions", {
@@ -180,7 +215,7 @@ describe("task sessions route", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
       data: [
-        {
+        expect.objectContaining({
           id: "session-1",
           taskSessionId: "task-session:task-1:session-1",
           title: "[Task task-1] finished session",
@@ -188,9 +223,61 @@ describe("task sessions route", () => {
           summary: { additions: 1, deletions: 0, files: 1 },
           createdAt: "2026-03-14T10:00:00.000Z",
           updatedAt: "2026-03-14T10:05:00.000Z",
-        },
+        }),
       ],
     });
+  });
+
+  test("fails closed on the legacy sessions alias when persisted lineage is absent", async () => {
+    const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
+
+    const response = await taskRoutes.request("http://localhost/task-1/sessions", {
+      headers: {
+        Authorization: "Bearer test",
+      },
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ data: [] });
+  });
+
+  test("fails closed on the branches summary route when persisted lineage is absent", async () => {
+    const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
+
+    const response = await taskRoutes.request("http://localhost/task-1/branches", {
+      headers: {
+        Authorization: "Bearer test",
+      },
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ data: [] });
+  });
+
+  test("fails closed on the branch-lineage tree route when persisted lineage is absent", async () => {
+    const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
+
+    const response = await taskRoutes.request("http://localhost/task-1/branch-lineage", {
+      headers: {
+        Authorization: "Bearer test",
+      },
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ data: [] });
+  });
+
+  test("fails closed on the session-lineage tree alias when persisted lineage is absent", async () => {
+    const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
+
+    const response = await taskRoutes.request("http://localhost/task-1/session-lineage", {
+      headers: {
+        Authorization: "Bearer test",
+      },
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ data: [] });
   });
 
   test("surfaces sequential step metadata from session-first summaries", async () => {
@@ -280,6 +367,316 @@ describe("task sessions route", () => {
     });
   });
 
+  test("preserves parallel adoption metadata on the legacy sessions alias", async () => {
+    setCpFetchImplementation(async (url: string, options?: { method?: string }) => {
+      if (url === "/api/project-tree/tasks/task-1") {
+        return {
+          ok: true,
+          data: {
+            id: "task-1",
+            title: "parallel task",
+            status: "completed",
+            sessionId: "session-b",
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/sessions" && !options?.method) {
+        return {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "task-session:task-1:session-a",
+                runtimeSessionId: "session-a",
+                branchName: "候选 A",
+                sessionKind: "candidate",
+                executionModeSnapshot: "parallel",
+                executionStatus: "completed",
+                candidateIndex: 0,
+                coordinationKey: "coord-1",
+                winnerSessionId: "session-b",
+                createdAt: "2026-03-14T10:00:00.000Z",
+                updatedAt: "2026-03-14T10:05:00.000Z",
+              },
+              {
+                id: "task-session:task-1:session-b",
+                runtimeSessionId: "session-b",
+                branchName: "候选 B",
+                sessionKind: "candidate",
+                executionModeSnapshot: "parallel",
+                executionStatus: "completed",
+                candidateIndex: 1,
+                coordinationKey: "coord-1",
+                winnerSessionId: "session-b",
+                createdAt: "2026-03-14T10:00:01.000Z",
+                updatedAt: "2026-03-14T10:05:01.000Z",
+              },
+            ],
+          },
+        };
+      }
+
+      return { ok: true, data: {} };
+    });
+
+    const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
+
+    const response = await taskRoutes.request("http://localhost/task-1/sessions", {
+      headers: {
+        Authorization: "Bearer test",
+      },
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      data: [
+        expect.objectContaining({
+          id: "session-a",
+          taskSessionId: "task-session:task-1:session-a",
+          title: "候选 A",
+          coordinationKey: "coord-1",
+          winnerSessionId: "session-b",
+          candidateIndex: 0,
+          executionModeSnapshot: "parallel",
+        }),
+        expect.objectContaining({
+          id: "session-b",
+          taskSessionId: "task-session:task-1:session-b",
+          title: "候选 B",
+          isActive: true,
+          coordinationKey: "coord-1",
+          winnerSessionId: "session-b",
+          candidateIndex: 1,
+          executionModeSnapshot: "parallel",
+        }),
+      ],
+    });
+  });
+
+  test("orders legacy session aliases and lineage trees by parent topology instead of createdAt", async () => {
+    setCpFetchImplementation(async (url: string, options?: { method?: string }) => {
+      if (url === "/api/project-tree/tasks/task-1") {
+        return {
+          ok: true,
+          data: {
+            id: "task-1",
+            title: "parallel task",
+            status: "completed",
+            sessionId: "session-root",
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/sessions" && !options?.method) {
+        return {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "task-session:task-1:session-root",
+                runtimeSessionId: "session-root",
+                branchName: "main",
+                sourceType: "root",
+                isActive: true,
+                archivedAt: null,
+                createdAt: "2026-03-14T10:00:00.000Z",
+                updatedAt: "2026-03-14T10:05:00.000Z",
+              },
+              {
+                id: "task-session:task-1:session-branch",
+                runtimeSessionId: "session-branch",
+                parentRuntimeSessionId: "session-root",
+                branchName: "manual fork",
+                sourceType: "fork",
+                sessionKind: "manual_branch",
+                isActive: false,
+                archivedAt: null,
+                createdAt: "2026-03-14T10:00:02.000Z",
+                updatedAt: "2026-03-14T10:05:02.000Z",
+              },
+              {
+                id: "task-session:task-1:session-anchor",
+                runtimeSessionId: "session-anchor",
+                parentRuntimeSessionId: "session-root",
+                branchName: "round anchor",
+                sourceType: "sub_session",
+                sessionKind: "resume",
+                isActive: false,
+                archivedAt: null,
+                createdAt: "2026-03-14T10:00:01.000Z",
+                updatedAt: "2026-03-14T10:05:01.000Z",
+              },
+              {
+                id: "task-session:task-1:session-candidate",
+                runtimeSessionId: "session-candidate",
+                parentRuntimeSessionId: "session-anchor",
+                branchName: "候选 A",
+                sourceType: "parallel",
+                sessionKind: "candidate",
+                executionModeSnapshot: "parallel",
+                candidateIndex: 0,
+                isActive: false,
+                archivedAt: null,
+                createdAt: "2026-03-14T10:00:03.000Z",
+                updatedAt: "2026-03-14T10:05:03.000Z",
+              },
+            ],
+          },
+        };
+      }
+
+      return { ok: true, data: {} };
+    });
+
+    const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
+
+    const sessionsResponse = await taskRoutes.request("http://localhost/task-1/sessions", {
+      headers: {
+        Authorization: "Bearer test",
+      },
+    });
+
+    expect(sessionsResponse.status).toBe(200);
+    await expect(sessionsResponse.json()).resolves.toMatchObject({
+      data: [
+        { id: "session-root" },
+        { id: "session-anchor" },
+        { id: "session-candidate" },
+        { id: "session-branch" },
+      ],
+    });
+
+    const lineageResponse = await taskRoutes.request("http://localhost/task-1/session-lineage", {
+      headers: {
+        Authorization: "Bearer test",
+      },
+    });
+
+    expect(lineageResponse.status).toBe(200);
+    const lineageBody = (await lineageResponse.json()) as {
+      data: Array<{
+        runtimeSessionId: string;
+        children: Array<{
+          runtimeSessionId: string;
+          children: Array<{ runtimeSessionId: string }>;
+        }>;
+      }>;
+    };
+
+    expect(lineageBody.data.map((node) => node.runtimeSessionId)).toEqual(["session-root"]);
+    expect(lineageBody.data[0]?.children.map((node) => node.runtimeSessionId)).toEqual([
+      "session-anchor",
+      "session-branch",
+    ]);
+    expect(
+      lineageBody.data[0]?.children[0]?.children.map((node) => node.runtimeSessionId),
+    ).toEqual(["session-candidate"]);
+  });
+
+  test("surfaces explicit parallel sourceType on the session-lineage tree alias", async () => {
+    setCpFetchImplementation(async (url: string, options?: { method?: string }) => {
+      if (url === "/api/project-tree/tasks/task-1") {
+        return {
+          ok: true,
+          data: {
+            id: "task-1",
+            title: "parallel task",
+            status: "completed",
+            sessionId: "session-root",
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/sessions" && !options?.method) {
+        return {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "task-session:task-1:session-root",
+                runtimeSessionId: "session-root",
+                branchName: "main",
+                sourceType: "root",
+                isActive: true,
+                archivedAt: null,
+                createdAt: "2026-03-14T10:00:00.000Z",
+                updatedAt: "2026-03-14T10:05:00.000Z",
+              },
+              {
+                id: "task-session:task-1:session-a",
+                runtimeSessionId: "session-a",
+                parentRuntimeSessionId: "session-root",
+                branchName: "候选 A",
+                sourceType: "fork",
+                sessionKind: "candidate",
+                executionModeSnapshot: "parallel",
+                executionStatus: "completed",
+                candidateIndex: 0,
+                coordinationKey: "coord-1",
+                winnerSessionId: "session-b",
+                isActive: false,
+                archivedAt: null,
+                createdAt: "2026-03-14T10:00:01.000Z",
+                updatedAt: "2026-03-14T10:05:01.000Z",
+              },
+              {
+                id: "task-session:task-1:session-b",
+                runtimeSessionId: "session-b",
+                parentRuntimeSessionId: "session-root",
+                branchName: "候选 B",
+                sourceType: "fork",
+                sessionKind: "candidate",
+                executionModeSnapshot: "parallel",
+                executionStatus: "completed",
+                candidateIndex: 1,
+                coordinationKey: "coord-1",
+                winnerSessionId: "session-b",
+                isActive: true,
+                archivedAt: null,
+                createdAt: "2026-03-14T10:00:02.000Z",
+                updatedAt: "2026-03-14T10:05:02.000Z",
+              },
+            ],
+          },
+        };
+      }
+
+      return { ok: true, data: {} };
+    });
+
+    const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
+
+    const response = await taskRoutes.request("http://localhost/task-1/session-lineage", {
+      headers: {
+        Authorization: "Bearer test",
+      },
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      data: [
+        expect.objectContaining({
+          runtimeSessionId: "session-root",
+          taskSessionId: "task-session:task-1:session-root",
+          sourceType: "root",
+          children: expect.arrayContaining([
+            expect.objectContaining({
+              runtimeSessionId: "session-a",
+              taskSessionId: "task-session:task-1:session-a",
+              sourceType: "parallel",
+            }),
+            expect.objectContaining({
+              runtimeSessionId: "session-b",
+              taskSessionId: "task-session:task-1:session-b",
+              sourceType: "parallel",
+            }),
+          ]),
+        }),
+      ],
+    });
+  });
+
   test("canonicalizes public taskSessionId when lineage records use internal ids", async () => {
     setCpFetchImplementation(async (url: string, options?: { method?: string }) => {
       if (url === "/api/project-tree/tasks/task-1") {
@@ -333,6 +730,156 @@ describe("task sessions route", () => {
           taskSessionId: "task-session:task-1:session-root",
           title: "main",
           isActive: true,
+        }),
+      ],
+    });
+  });
+
+  test("collapses duplicate runtime session aliases when lineage facts are consistent", async () => {
+    setCpFetchImplementation(async (url: string, options?: { method?: string }) => {
+      if (url === "/api/project-tree/tasks/task-1") {
+        return {
+          ok: true,
+          data: {
+            id: "task-1",
+            title: "finished task",
+            status: "running",
+            sessionId: "session-root",
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/sessions" && !options?.method) {
+        return {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "ts-root-legacy",
+                runtimeSessionId: "session-root",
+                branchName: "main",
+                sourceType: "root",
+                isActive: false,
+                archivedAt: null,
+                createdAt: "2026-03-14T10:00:00.000Z",
+                updatedAt: "2026-03-14T10:05:00.000Z",
+              },
+              {
+                id: "task-session:task-1:session-root",
+                runtimeSessionId: "session-root",
+                branchName: "main",
+                sourceType: "root",
+                isActive: true,
+                archivedAt: null,
+                createdAt: "2026-03-14T10:00:00.000Z",
+                updatedAt: "2026-03-14T10:05:00.000Z",
+              },
+            ],
+            meta: {
+              currentSessionId: "task-session:task-1:session-root",
+            },
+          },
+        };
+      }
+
+      return { ok: true, data: {} };
+    });
+
+    const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
+
+    const response = await taskRoutes.request("http://localhost/task-1/sessions", {
+      headers: {
+        Authorization: "Bearer test",
+      },
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      data: [
+        expect.objectContaining({
+          id: "session-root",
+          taskSessionId: "task-session:task-1:session-root",
+          title: "main",
+          isActive: true,
+        }),
+      ],
+    });
+  });
+
+  test("drops duplicate runtime sessions when lineage facts conflict instead of picking a newer or fuller record", async () => {
+    setCpFetchImplementation(async (url: string, options?: { method?: string }) => {
+      if (url === "/api/project-tree/tasks/task-1") {
+        return {
+          ok: true,
+          data: {
+            id: "task-1",
+            title: "finished task",
+            status: "running",
+            sessionId: "session-root",
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/sessions" && !options?.method) {
+        return {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "ts-root",
+                runtimeSessionId: "session-root",
+                branchName: "main",
+                sourceType: "root",
+                isActive: true,
+                archivedAt: null,
+                createdAt: "2026-03-14T10:00:00.000Z",
+                updatedAt: "2026-03-14T10:05:00.000Z",
+              },
+              {
+                id: "ts-leaf-stale",
+                runtimeSessionId: "session-leaf",
+                branchName: "branch-a",
+                sourceType: "root",
+                isActive: false,
+                archivedAt: null,
+                createdAt: "2026-03-14T10:06:00.000Z",
+                updatedAt: "2026-03-14T10:06:00.000Z",
+              },
+              {
+                id: "task-session:task-1:session-leaf",
+                runtimeSessionId: "session-leaf",
+                parentRuntimeSessionId: "session-root",
+                forkedFromMessageId: "msg-1",
+                branchName: "branch-a",
+                sourceType: "fork",
+                isActive: false,
+                archivedAt: null,
+                createdAt: "2026-03-14T10:06:00.000Z",
+                updatedAt: "2026-03-14T10:07:00.000Z",
+              },
+            ],
+          },
+        };
+      }
+
+      return { ok: true, data: {} };
+    });
+
+    const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
+
+    const response = await taskRoutes.request("http://localhost/task-1/session-lineage", {
+      headers: {
+        Authorization: "Bearer test",
+      },
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      data: [
+        expect.objectContaining({
+          runtimeSessionId: "session-root",
+          parentTaskSessionId: null,
+          children: [],
         }),
       ],
     });

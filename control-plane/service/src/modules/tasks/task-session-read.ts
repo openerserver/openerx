@@ -16,6 +16,11 @@ import {
 } from "../../db/schema";
 import type { TaskTreeRecord } from "../project-tree/task-view";
 import { ensureTaskWorkflowFactsAvailable } from "../task-workflows/legacy-role-workflow-storage";
+import { resolvePublicTaskSessionSourceType } from "./task-session-public-source-type";
+import {
+  orderTaskSessionsByTopology,
+  resolveLatestTaskSessionId,
+} from "./task-session-topology-order";
 
 type TaskSessionMessagePartRecord = {
   id: string | null;
@@ -112,6 +117,31 @@ function asRecord(value: unknown) {
 
 function asNonEmptyString(value: unknown) {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function normalizeTaskSessionMessageTimeValue(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+  }
+
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return null;
+  }
+
+  const normalized = value.trim();
+  if (/^\d+$/u.test(normalized)) {
+    const parsedNumber = Number(normalized);
+    if (Number.isFinite(parsedNumber)) {
+      const parsed = new Date(parsedNumber);
+      if (!Number.isNaN(parsed.getTime())) {
+        return parsed.toISOString();
+      }
+    }
+  }
+
+  const parsed = Date.parse(normalized);
+  return Number.isNaN(parsed) ? normalized : new Date(parsed).toISOString();
 }
 
 function extractPersistedStandalonePart(message: unknown) {
@@ -226,11 +256,13 @@ async function loadTaskSessionRecord(taskId: string, sessionId: string) {
 }
 
 async function loadTaskSessionRecords(taskId: string) {
-  return db
+  const sessions = await db
     .select()
     .from(taskSessions)
     .where(eq(taskSessions.taskId, taskId))
     .orderBy(asc(taskSessions.createdAt));
+
+  return orderTaskSessionsByTopology(sessions);
 }
 
 function collectMissingTaskSessionModelIds(
@@ -300,6 +332,43 @@ function resolveCurrentTaskSessionId(
   return resolveTaskSessionRecordId(sessions, currentSessionId);
 }
 
+function projectPublicTaskSessions<
+  TSession extends {
+    id: string;
+    parentSessionId?: string | null;
+    runtimeSessionId?: string | null;
+    forkedFromMessageId?: string | null;
+    sessionKind?: string | null;
+    candidateIndex?: number | null;
+    executionModeSnapshot?: string | null;
+    coordinationKey?: string | null;
+  },
+>(sessions: TSession[]) {
+  const byId = new Map(sessions.map((session) => [session.id, session] as const));
+
+  return sessions.map((session) => {
+    const parentRuntimeSessionId = session.parentSessionId
+      ? (byId.get(session.parentSessionId)?.runtimeSessionId ?? session.parentSessionId)
+      : null;
+
+    return {
+      ...session,
+      parentRuntimeSessionId,
+      sourceType: resolvePublicTaskSessionSourceType({
+        sourceType: null,
+        sessionKind: session.sessionKind ?? null,
+        parentSessionId: session.parentSessionId ?? null,
+        parentRuntimeSessionId,
+        forkedFromMessageId: session.forkedFromMessageId ?? null,
+        candidateIndex:
+          typeof session.candidateIndex === "number" ? session.candidateIndex : null,
+        executionModeSnapshot: session.executionModeSnapshot ?? null,
+        coordinationKey: session.coordinationKey ?? null,
+      }),
+    };
+  });
+}
+
 function attachTaskSessionMessageParts(
   messages: TaskSessionMessageRecordInput[],
   parts: TaskSessionMessagePartRecord[],
@@ -339,13 +408,29 @@ function normalizeTaskSessionMessagePart(
 function resolveTaskSessionMessageCreatedAt(
   rawMessage: Record<string, unknown>,
 ) {
-  return asNonEmptyString(rawMessage.createdAt) ?? null;
+  const rawPayload = asRecord(rawMessage.rawPayload);
+  const rawInfo = asRecord(rawPayload?.info);
+  const rawTime = asRecord(rawInfo?.time);
+
+  return (
+    normalizeTaskSessionMessageTimeValue(rawTime?.created) ??
+    normalizeTaskSessionMessageTimeValue(rawMessage.createdAt) ??
+    null
+  );
 }
 
 function resolveTaskSessionMessageCompletedAt(
   rawMessage: Record<string, unknown>,
 ) {
-  return asNonEmptyString(rawMessage.completedAt) ?? null;
+  const rawPayload = asRecord(rawMessage.rawPayload);
+  const rawInfo = asRecord(rawPayload?.info);
+  const rawTime = asRecord(rawInfo?.time);
+
+  return (
+    normalizeTaskSessionMessageTimeValue(rawTime?.completed) ??
+    normalizeTaskSessionMessageTimeValue(rawMessage.completedAt) ??
+    null
+  );
 }
 
 function resolveTaskSessionMessageTextContent(
@@ -1415,12 +1500,14 @@ function resolveTaskSessionSelection(args: {
     id: string;
     parentSessionId: string | null;
     runtimeSessionId?: string | null;
+    createdAt?: string | null;
+    updatedAt?: string | null;
   }>;
   currentSessionId?: string | null;
   requestedSessionId?: string | null;
   includeLineage: boolean;
 }) {
-  const latestSessionId = args.sessions.at(-1)?.id ?? null;
+  const latestSessionId = resolveLatestTaskSessionId(args.sessions);
   const currentSessionId = resolveCurrentTaskSessionId(args.sessions, args.currentSessionId);
   const normalizedRequestedSessionId = resolveTaskSessionRecordId(
     args.sessions,
@@ -2015,9 +2102,10 @@ export function createTaskSessionReadApi(deps: {
       collectMissingTaskSessionModelIds(sessions),
     );
     const hydratedSessions = hydrateTaskSessionSelectedModels(sessions, selectedModelBySessionId);
-    const latestSessionId = hydratedSessions.at(-1)?.id ?? null;
+    const projectedSessions = projectPublicTaskSessions(hydratedSessions);
+    const latestSessionId = resolveLatestTaskSessionId(projectedSessions);
     const currentSessionId = resolveCurrentTaskSessionId(
-      hydratedSessions,
+      projectedSessions,
       snapshot?.currentSessionId,
     );
 
@@ -2025,12 +2113,12 @@ export function createTaskSessionReadApi(deps: {
       ok: true as const,
       status: 200 as const,
       data: {
-        data: hydratedSessions,
+        data: projectedSessions,
         meta: {
           readSource: "task-session-first" as const,
           currentSessionId,
           latestSessionId,
-          sessionCount: hydratedSessions.length,
+          sessionCount: projectedSessions.length,
         },
       },
     };
@@ -2058,9 +2146,14 @@ export function createTaskSessionReadApi(deps: {
     );
     const hydratedSessions = hydrateTaskSessionSelectedModels(sessions, selectedModelBySessionId);
     const [hydratedSession] = hydrateTaskSessionSelectedModels([session], selectedModelBySessionId);
-    const latestSessionId = hydratedSessions.at(-1)?.id ?? null;
+    const projectedSessions = projectPublicTaskSessions(hydratedSessions);
+    const [projectedSession] = projectPublicTaskSessions([
+      ...hydratedSessions.filter((entry) => entry.id !== hydratedSession.id),
+      hydratedSession,
+    ]).filter((entry) => entry.id === hydratedSession.id);
+    const latestSessionId = resolveLatestTaskSessionId(projectedSessions);
     const currentSessionId = resolveCurrentTaskSessionId(
-      hydratedSessions,
+      projectedSessions,
       snapshot?.currentSessionId,
     );
 
@@ -2068,7 +2161,7 @@ export function createTaskSessionReadApi(deps: {
       ok: true as const,
       status: 200 as const,
       data: {
-        data: hydratedSession,
+        data: projectedSession,
         meta: {
           readSource: "task-session-first" as const,
           lineagePath: buildTaskSessionLineagePath(hydratedSessions, sessionId),

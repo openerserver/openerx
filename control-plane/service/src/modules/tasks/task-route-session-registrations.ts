@@ -10,7 +10,7 @@ export function buildTaskSessionRegistrations(
       parentRuntimeSessionId?: string;
       forkedFromMessageId?: string;
       branchName?: string;
-      sourceType?: "root" | "fork" | "sub_session";
+      sourceType?: "root" | "fork" | "sub_session" | "parallel";
       sessionKind?:
         | "primary"
         | "candidate"

@@ -4,6 +4,10 @@ import type {
   TaskAgentRunRecord,
   TaskSessionRecord,
 } from "./api";
+import {
+  buildExplicitParallelTaskSessionGroups,
+  resolveExplicitParallelParentRuntimeSessionId,
+} from "./task-session-parallel-groups";
 
 type SessionParentNode = {
   id?: string;
@@ -87,10 +91,11 @@ function resolveCandidateAgentRun(
   candidateIndex: number,
   agentRuns: TaskAgentRunRecord[],
 ) {
-  const matches = agentRuns.filter(
-    (agentRun) =>
-      agentRun.sessionId === runtimeSessionId || agentRun.candidateIndex === candidateIndex,
-  );
+  const sessionMatches = agentRuns.filter((agentRun) => agentRun.sessionId === runtimeSessionId);
+  const matches =
+    sessionMatches.length > 0
+      ? sessionMatches
+      : agentRuns.filter((agentRun) => agentRun.candidateIndex === candidateIndex);
 
   if (matches.length === 0) {
     return null;
@@ -119,7 +124,7 @@ function resolveCandidateAgentRun(
 function resolveWinnerCandidateIndex(summaries: TaskSessionRecord[]) {
   const candidateSessionIds = new Set(
     summaries
-      .map((summary) => summary.id)
+      .flatMap((summary) => [summary.id, summary.taskSessionId])
       .filter((value): value is string => typeof value === "string" && value.length > 0),
   );
   const winnerSessionIds = Array.from(
@@ -137,7 +142,15 @@ function resolveWinnerCandidateIndex(summaries: TaskSessionRecord[]) {
     return undefined;
   }
 
-  const winnerCandidateIndex = summaries.findIndex((summary) => summary.id === winnerSessionIds[0]);
+  const winnerSummary = summaries.find(
+    (summary) =>
+      summary.id === winnerSessionIds[0] || summary.taskSessionId === winnerSessionIds[0],
+  );
+  if (!winnerSummary) {
+    return undefined;
+  }
+
+  const winnerCandidateIndex = summaries.findIndex((summary) => summary.id === winnerSummary.id);
   return winnerCandidateIndex >= 0 ? winnerCandidateIndex : undefined;
 }
 
@@ -148,7 +161,10 @@ function resolveSharedParentRuntimeSessionId(
   const parentSessionIds = Array.from(
     new Set(
       summaries
-        .map((summary) => parentByRuntimeSessionId.get(summary.id) ?? null)
+        .map(
+          (summary) =>
+            summary.parentRuntimeSessionId ?? parentByRuntimeSessionId.get(summary.id) ?? null,
+        )
         .filter((value): value is string => typeof value === "string" && value.length > 0),
     ),
   );
@@ -168,28 +184,6 @@ function resolveParentRuntimeSessionId(
   );
 }
 
-function resolveParallelCandidateSummaries(args: {
-  summaries: TaskSessionRecord[];
-  coordinationKey: string;
-  sharedParentSessionId: string | null;
-}) {
-  const indexedCandidates = args.summaries.filter(
-    (summary) => typeof summary.candidateIndex === "number",
-  );
-  if (indexedCandidates.length >= 2) {
-    return indexedCandidates;
-  }
-
-  if (args.sharedParentSessionId) {
-    return args.summaries.filter((summary) => summary.id !== args.sharedParentSessionId);
-  }
-
-  const withoutCoordinatorRoot = args.summaries.filter(
-    (summary) => summary.id !== args.coordinationKey,
-  );
-  return withoutCoordinatorRoot.length >= 2 ? withoutCoordinatorRoot : args.summaries;
-}
-
 function buildCandidateSession(
   summary: TaskSessionRecord,
   candidateIndex: number,
@@ -200,7 +194,7 @@ function buildCandidateSession(
   return {
     label: configuredCandidate?.label || summary.title || `候选 ${candidateIndex + 1}`,
     agent: agentRun?.agentType,
-    model: agentRun?.modelUsed || summary.selectedModel || configuredCandidate?.model || undefined,
+    model: configuredCandidate?.model || agentRun?.modelUsed || summary.selectedModel || undefined,
     status,
     sessionId: summary.id,
     agentRunId: agentRun?.id,
@@ -229,20 +223,7 @@ function latestTimestamp(values: Array<string | null | undefined>) {
 }
 
 export function hasSessionSummaryParallelGroups(sessionSummaries: TaskSessionRecord[]) {
-  const counts = new Map<string, number>();
-
-  for (const summary of sessionSummaries) {
-    if (
-      typeof summary.coordinationKey !== "string" ||
-      summary.coordinationKey.trim().length === 0
-    ) {
-      continue;
-    }
-
-    counts.set(summary.coordinationKey, (counts.get(summary.coordinationKey) ?? 0) + 1);
-  }
-
-  return Array.from(counts.values()).some((count) => count >= 2);
+  return buildExplicitParallelTaskSessionGroups(sessionSummaries).length > 0;
 }
 
 export function buildRuntimeSessionParentMap(nodes: SessionParentNode[]) {
@@ -276,48 +257,18 @@ export function buildRuntimeSessionParentMap(nodes: SessionParentNode[]) {
 
 export function buildSessionSummaryParallelRuns(args: SessionSummaryParallelRunArgs) {
   const parentByRuntimeSessionId = buildRuntimeSessionParentMap(args.sessionNodes);
-  const groups = new Map<string, TaskSessionRecord[]>();
-
-  for (const summary of args.sessionSummaries) {
-    if (
-      typeof summary.coordinationKey !== "string" ||
-      summary.coordinationKey.trim().length === 0
-    ) {
-      continue;
-    }
-
-    const existing = groups.get(summary.coordinationKey) ?? [];
-    existing.push(summary);
-    groups.set(summary.coordinationKey, existing);
-  }
-
-  return Array.from(groups.entries())
-    .map(([coordinationKey, summaries]): ProjectionRunRecord | null => {
-      const orderedSummaries = summaries.slice().sort(compareCandidateSummaries);
+  return buildExplicitParallelTaskSessionGroups(args.sessionSummaries)
+    .map(({ coordinationKey, candidateSessions }): ProjectionRunRecord | null => {
+      const orderedSummaries = candidateSessions.slice().sort(compareCandidateSummaries);
       if (orderedSummaries.length < 2) {
         return null;
       }
 
-      const sharedParentSessionId = resolveSharedParentRuntimeSessionId(
-        orderedSummaries,
-        parentByRuntimeSessionId,
-      );
-      const candidateSummaries = resolveParallelCandidateSummaries({
-        summaries: orderedSummaries,
-        coordinationKey,
-        sharedParentSessionId,
-      });
-      if (candidateSummaries.length < 2) {
-        return null;
-      }
-
-      const parentSessionId = resolveParentRuntimeSessionId(
-        orderedSummaries,
-        parentByRuntimeSessionId,
-        args.task,
-      );
-      const winnerCandidateIndex = resolveWinnerCandidateIndex(candidateSummaries);
-      const candidateSessions = candidateSummaries.map((summary, index) =>
+      const parentSessionId =
+        resolveExplicitParallelParentRuntimeSessionId(orderedSummaries) ??
+        resolveParentRuntimeSessionId(orderedSummaries, parentByRuntimeSessionId, args.task);
+      const winnerCandidateIndex = resolveWinnerCandidateIndex(orderedSummaries);
+      const projectionCandidateSessions = orderedSummaries.map((summary, index) =>
         buildCandidateSession(
           summary,
           index,
@@ -327,24 +278,24 @@ export function buildSessionSummaryParallelRuns(args: SessionSummaryParallelRunA
       );
       const startedAt =
         earliestTimestamp([
-          ...candidateSessions.map((candidate) => candidate.startedAt),
-          ...candidateSummaries.map((summary) => summary.createdAt),
+          ...projectionCandidateSessions.map((candidate) => candidate.startedAt),
+          ...orderedSummaries.map((summary) => summary.createdAt),
         ]) ??
         latestTimestamp([
-          ...candidateSummaries.map((summary) => summary.createdAt),
-          ...candidateSummaries.map((summary) => summary.updatedAt),
+          ...orderedSummaries.map((summary) => summary.createdAt),
+          ...orderedSummaries.map((summary) => summary.updatedAt),
         ]) ??
         args.task?.createdAt ??
         "";
 
-      const hasOpenCandidate = candidateSessions.some((candidate) =>
+      const hasOpenCandidate = projectionCandidateSessions.some((candidate) =>
         isOpenCandidateStatus(candidate.status),
       );
       const finishedAt = hasOpenCandidate
         ? undefined
         : latestTimestamp([
-            ...candidateSessions.map((candidate) => candidate.finishedAt),
-            ...candidateSummaries.map((summary) => summary.updatedAt),
+            ...projectionCandidateSessions.map((candidate) => candidate.finishedAt),
+            ...orderedSummaries.map((summary) => summary.updatedAt),
           ]);
 
       return {
@@ -353,7 +304,7 @@ export function buildSessionSummaryParallelRuns(args: SessionSummaryParallelRunA
         ...(finishedAt ? { finishedAt } : {}),
         ...(parentSessionId ? { parentSessionId, executionSessionId: parentSessionId } : {}),
         ...(typeof winnerCandidateIndex === "number" ? { winnerCandidateIndex } : {}),
-        candidateSessions,
+        candidateSessions: projectionCandidateSessions,
       } satisfies ProjectionRunRecord;
     })
     .filter((run): run is ProjectionRunRecord => run != null)

@@ -364,7 +364,7 @@ describe("ChatSettings", () => {
     expect(wrapper.text()).toContain("oracle-enterprise");
     expect(wrapper.text()).toContain("深度交付");
     expect(wrapper.text()).toContain("成员协作摘要");
-    expect(wrapper.text()).toContain("执行后 Follow-up");
+    expect(wrapper.text()).toContain("执行后 Continue");
     expect(wrapper.text()).toContain("post-review");
 
     vm.handleCategoryChange("ops");
@@ -407,7 +407,7 @@ describe("ChatSettings", () => {
     });
     expect(wrapper.text()).toContain("编排变更预览");
     expect(wrapper.text()).toContain("Judge 策略变化");
-    expect(wrapper.text()).toContain("Follow-up 模板变化");
+    expect(wrapper.text()).toContain("Continue 模板变化");
     expect(wrapper.text()).toContain("deep 编排策略预览");
     expect(wrapper.text()).toContain("影响 deep");
     expect(wrapper.text()).toContain("post-review -> post-review、post-audit");

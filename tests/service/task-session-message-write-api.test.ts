@@ -326,6 +326,85 @@ describe("task session message write api", () => {
     });
   });
 
+  test("overwrites placeholder createdAt with explicit runtime createdAt for existing user messages", async () => {
+    const existingUserMessage = {
+      id: "task-session-message:session-1:session-1:user-prompt",
+      taskId: "task-1",
+      sessionId: "session-1",
+      role: "user",
+      runtimeMessageId: "session-1:user-prompt",
+      status: "completed",
+      clientMessageId: null,
+      providerMessageId: null,
+      seq: 0,
+      textContent: "hello user",
+      textPreview: "hello user",
+      rawPayload: {
+        info: {
+          id: "session-1:user-prompt",
+          role: "user",
+          time: {
+            created: "2025-01-01T00:00:00.000Z",
+            completed: "2025-01-01T00:00:00.000Z",
+          },
+        },
+        parts: [{ type: "text", text: "hello user" }],
+      },
+      tokenUsed: 0,
+      startedAt: "2025-01-01T00:00:00.000Z",
+      completedAt: "2025-01-01T00:00:00.000Z",
+      errorText: null,
+      createdAt: "2025-01-01T00:00:00.000Z",
+      updatedAt: "2025-01-01T00:00:00.000Z",
+    };
+
+    const { createTaskSessionMessageWriteApi, insertCalls } =
+      await loadTaskSessionMessageWriteModule({
+        taskMessageFindFirstResults: [existingUserMessage, existingUserMessage],
+      });
+
+    const api = createTaskSessionMessageWriteApi({
+      upsertTaskSessionRecord: mock(async () => "session-1"),
+      resolveTaskSessionRecordByRuntimeSessionId: mock(async () => null),
+    });
+
+    await api.upsertTaskSessionMessageRecord({
+      task: { id: "task-1", projectId: "project-1" },
+      sessionId: "session-1",
+      message: {
+        info: {
+          id: "session-1:user-prompt",
+          role: "user",
+          time: {
+            created: "2025-01-01T00:05:00.000Z",
+            completed: "2025-01-01T00:05:00.000Z",
+          },
+        },
+        parts: [{ type: "text", text: "hello user" }],
+      },
+    });
+
+    const canonicalMessageInsert = insertCalls.find(
+      (call) => call.table === "task_messages",
+    )?.payload;
+    expect(canonicalMessageInsert).toMatchObject({
+      id: "task-session-message:session-1:session-1:user-prompt",
+      runtimeMessageId: "session-1:user-prompt",
+      createdAt: "2025-01-01T00:05:00.000Z",
+      startedAt: "2025-01-01T00:05:00.000Z",
+      completedAt: "2025-01-01T00:05:00.000Z",
+    });
+
+    const timelineInsert = insertCalls.find(
+      (call) => call.table === "task_timeline_views",
+    )?.payload;
+    expect(timelineInsert).toMatchObject({
+      messageId: "task-session-message:session-1:session-1:user-prompt",
+      createdAt: "2025-01-01T00:05:00.000Z",
+      sortAt: "2025-01-01T00:05:00.000Z",
+    });
+  });
+
   test("rejects writes that do not provide a stable runtime message id", async () => {
     const { createTaskSessionMessageWriteApi, insertCalls, deleteCalls, updateCalls } =
       await loadTaskSessionMessageWriteModule();
@@ -408,16 +487,19 @@ describe("task session message write api", () => {
     expect(updateCalls).toHaveLength(0);
   });
 
-  test("re-normalizes merged assistant legacy tool followups through the shared runtime schema", async () => {
+  test("persists legacy assistant tool followups as distinct messages when runtime ids differ", async () => {
     const latestMessage = {
       id: "task-session-message:session-1:msg-tool-start",
+      taskId: "task-1",
+      sessionId: "session-1",
       role: "assistant",
       runtimeMessageId: "msg-tool-start",
       status: "streaming",
       clientMessageId: null,
       providerMessageId: null,
-      messageIndex: 0,
+      seq: 0,
       textContent: "hello",
+      textPreview: "hello",
       rawPayload: {
         id: "msg-tool-start",
         info: {
@@ -482,7 +564,7 @@ describe("task session message write api", () => {
     });
 
     expect(result).toEqual({
-      messageId: "task-session-message:session-1:msg-tool-start",
+      messageId: "task-session-message:session-1:msg-tool-finish",
       sessionId: "session-1",
       seq: 0,
     });
@@ -491,26 +573,26 @@ describe("task session message write api", () => {
       (call) => call.table === "task_messages",
     )?.payload;
     expect(canonicalMessageInsert).toMatchObject({
-      id: "task-session-message:session-1:msg-tool-start",
-      runtimeMessageId: "msg-tool-start",
+      id: "task-session-message:session-1:msg-tool-finish",
+      parentMessageId: "task-session-message:session-1:msg-tool-start",
+      replyToMessageId: "task-session-message:session-1:msg-tool-start",
+      runtimeMessageId: "msg-tool-finish",
       clientMessageId: "client-2",
       providerMessageId: "provider-2",
+      seq: 1,
       textContent: "hello",
-      partCount: 2,
+      partCount: 1,
       tokenUsed: 19,
       status: "completed",
-      startedAt: "2025-01-01T00:00:00.000Z",
+      startedAt: "2025-01-01T00:00:05.000Z",
       completedAt: "2025-01-01T00:00:08.000Z",
       rawPayload: expect.objectContaining({
-        id: "msg-tool-start",
-        runtimeMessageId: "msg-tool-start",
-        mergedRuntimeMessageIds: ["msg-tool-start", "msg-tool-finish"],
+        id: "msg-tool-finish",
         info: expect.objectContaining({
-          id: "msg-tool-start",
-          finish: "tool-calls",
+          role: "assistant",
           parentID: "parent-1",
           time: expect.objectContaining({
-            created: "2025-01-01T00:00:00.000Z",
+            created: "2025-01-01T00:00:05.000Z",
             completed: "2025-01-01T00:00:08.000Z",
           }),
         }),
@@ -522,13 +604,8 @@ describe("task session message write api", () => {
       .map((call) => call.payload);
     expect(partInserts).toEqual([
       expect.objectContaining({
-        messageId: "task-session-message:session-1:msg-tool-start",
+        messageId: "task-session-message:session-1:msg-tool-finish",
         partIndex: 0,
-        partType: "tool_result",
-      }),
-      expect.objectContaining({
-        messageId: "task-session-message:session-1:msg-tool-start",
-        partIndex: 1,
         partType: "text",
         textContent: "hello",
       }),

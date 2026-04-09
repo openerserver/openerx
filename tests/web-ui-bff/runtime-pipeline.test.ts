@@ -159,93 +159,6 @@ function createStrategy(overrides: Partial<PersistedTaskStrategy> = {}): Persist
   };
 }
 
-function createParallelDomainRuns(overrides: Partial<Array<Record<string, unknown>>> = []) {
-  const defaultRun = {
-    id: "run-parallel-1",
-    taskId: "task-1",
-    projectId: "proj-1",
-    orchestrationKind: "parallel",
-    status: "running",
-    rootSessionId: "ses-root",
-    createdAt: "2026-03-12T09:59:00.000Z",
-    updatedAt: "2026-03-12T10:02:00.000Z",
-    startedAt: "2026-03-12T09:59:00.000Z",
-    finishedAt: null,
-  };
-
-  return (overrides.length ? overrides : [defaultRun]) as Array<Record<string, unknown>>;
-}
-
-function createParallelDomainRunDetail(overrides?: Partial<Record<string, unknown>>) {
-  return {
-    run: {
-      id: "run-parallel-1",
-      taskId: "task-1",
-      projectId: "proj-1",
-      orchestrationKind: "parallel",
-      status: "running",
-      rootSessionId: "ses-root",
-      createdAt: "2026-03-12T09:59:00.000Z",
-      updatedAt: "2026-03-12T10:02:00.000Z",
-    },
-    nodes: [],
-    candidateNodes: [
-      {
-        id: "candidate-node-1",
-        runId: "run-parallel-1",
-        taskId: "task-1",
-        projectId: "proj-1",
-        nodeKind: "candidate",
-        nodeKey: "candidate:0",
-        title: "候选 A",
-        candidateIndex: 0,
-        agentType: "default-executor",
-        modelUsed: "gpt-5.4",
-        sessionId: "ses-branch-1",
-        status: "running",
-        resultText: "正在生成实现",
-        startedAt: "2026-03-12T10:00:00.000Z",
-        finishedAt: null,
-      },
-      {
-        id: "candidate-node-2",
-        runId: "run-parallel-1",
-        taskId: "task-1",
-        projectId: "proj-1",
-        nodeKind: "candidate",
-        nodeKey: "candidate:1",
-        title: "候选 B",
-        candidateIndex: 1,
-        agentType: "reviewer",
-        modelUsed: "gpt-5.4",
-        sessionId: "ses-branch-2",
-        status: "completed",
-        resultText: "已给出替代方案",
-        startedAt: "2026-03-12T09:59:00.000Z",
-        finishedAt: "2026-03-12T10:01:00.000Z",
-      },
-    ],
-    judgeNode: {
-      id: "judge-node-1",
-      runId: "run-parallel-1",
-      taskId: "task-1",
-      projectId: "proj-1",
-      nodeKind: "judge",
-      nodeKey: "judge",
-      title: "评判 / 聚合",
-      agentType: null,
-      modelUsed: null,
-      sessionId: "ses-judge",
-      status: "pending",
-      resultText: "等待所有候选完成后再裁决",
-      startedAt: null,
-      finishedAt: "2026-03-12T10:02:00.000Z",
-    },
-    winnerCandidateIndex: null,
-    ...overrides,
-  };
-}
-
 beforeEach(() => {
   cpFetchMock.mockReset();
   getSessionMessagesMock.mockReset();
@@ -310,7 +223,7 @@ describe("buildRuntimePipeline", () => {
 
     const followupStage = pipeline.stages.find((stage) => stage.type === "follow-up");
     expect(followupStage).toBeTruthy();
-    expect(followupStage?.label).toContain("Follow-up");
+    expect(followupStage?.label).toContain("Continue");
     expect(followupStage?.sessionId).toBe("ses-followup");
     expect(followupStage?.output).toContain("回归验证");
   });

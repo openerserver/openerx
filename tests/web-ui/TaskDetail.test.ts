@@ -83,8 +83,6 @@ const apiMocks = vi.hoisted(() => ({
   getProjectRuntimeUsageLedgers: vi.fn(),
   getProjectRoleExecutionView: vi.fn(),
   getTaskAgentRuns: vi.fn(),
-  getTaskDomainRunDetail: vi.fn(),
-  getTaskDomainRuns: vi.fn(),
   getTaskMessages: vi.fn(),
   getTaskSessionLineage: vi.fn(),
   getTaskConversationMessages: vi.fn(),
@@ -465,8 +463,6 @@ beforeEach(() => {
   apiMocks.getTaskPipeline.mockResolvedValue({ stages: [] });
   apiMocks.getTaskSessions.mockResolvedValue({ data: [] });
   apiMocks.getTaskAgentRuns.mockResolvedValue({ data: [] });
-  apiMocks.getTaskDomainRuns.mockResolvedValue({ data: [] });
-  apiMocks.getTaskDomainRunDetail.mockResolvedValue({ data: null });
   apiMocks.getTaskMessages.mockImplementation((taskId: string) => {
     const sessionQuery = (routeState.query as Record<string, unknown>).session;
     return apiMocks.getSessionMessages(
@@ -2224,8 +2220,6 @@ describe.skip("TaskDetail (legacy page removed)", () => {
     expect(wrapper.text()).toContain("Claude summary reply");
     expect(wrapper.text()).toContain("GPT summary reply");
     expect(apiMocks.getTaskAgentRuns).toHaveBeenCalledWith("task-1");
-    expect(apiMocks.getTaskDomainRuns).not.toHaveBeenCalled();
-    expect(apiMocks.getTaskDomainRunDetail).not.toHaveBeenCalled();
   });
 
   it("inlines parallel comparison after the triggering user message", async () => {

@@ -1,4 +1,5 @@
 import { cpFetch } from "../../lib/control-plane-client";
+import { resolvePublicTaskSessionSourceType } from "./task-session-public-source-type";
 
 // Canonical service-backed task-session helpers.
 // Legacy workflow-context shaping and cached message compatibility reads remain
@@ -31,7 +32,7 @@ export interface UpsertTaskSessionLineageInput {
   parentRuntimeSessionId?: string;
   forkedFromMessageId?: string;
   branchName?: string;
-  sourceType?: "root" | "fork" | "sub_session";
+  sourceType?: "root" | "fork" | "sub_session" | "parallel";
   sessionKind?:
     | "primary"
     | "candidate"
@@ -91,6 +92,7 @@ export interface TaskSessionCachedMessagesResponse {
 type ServiceTaskSessionRecord = {
   id: string;
   taskId?: string;
+  sourceType?: string | null;
   parentSessionId?: string | null;
   parentRuntimeSessionId?: string | null;
   coordinationKey?: string | null;
@@ -160,31 +162,6 @@ export function toCanonicalTaskSessionId(taskId: string, sessionId: string) {
   return `task-session:${taskId}:${normalizedSessionId}`;
 }
 
-function mapSessionKindToSourceType(session?: {
-  sessionKind?: string | null;
-  parentSessionId?: string | null;
-  parentRuntimeSessionId?: string | null;
-}) {
-  const sessionKind = session?.sessionKind;
-  if (sessionKind === "manual_branch") {
-    return "fork";
-  }
-  if (sessionKind === "candidate") {
-    return "fork";
-  }
-  if (sessionKind === "resume") {
-    return "sub_session";
-  }
-  if (
-    sessionKind === "sequential_step" &&
-    (typeof session?.parentSessionId === "string" ||
-      typeof session?.parentRuntimeSessionId === "string")
-  ) {
-    return "fork";
-  }
-  return "root";
-}
-
 function mapServiceTaskSessionsToLineageRecords(
   sessions: ServiceTaskSessionRecord[],
   currentSessionId?: string | null,
@@ -202,7 +179,15 @@ function mapServiceTaskSessionsToLineageRecords(
           : (session.parentRuntimeSessionId ?? null),
         forkedFromMessageId: session.forkedFromMessageId ?? null,
         branchName: session.branchName ?? null,
-        sourceType: mapSessionKindToSourceType(session),
+        sourceType: resolvePublicTaskSessionSourceType({
+          sourceType: session.sourceType ?? null,
+          sessionKind: session.sessionKind,
+          parentSessionId: session.parentSessionId,
+          parentRuntimeSessionId: session.parentRuntimeSessionId,
+          candidateIndex: session.candidateIndex,
+          executionModeSnapshot: session.executionModeSnapshot,
+          coordinationKey: session.coordinationKey,
+        }),
         isActive: currentSessionId
           ? session.id === currentSessionId
           : session.executionStatus === "running" && !session.archivedAt,
@@ -308,7 +293,7 @@ export function shouldReplaceTraceTimeline(args: {
   fallbackItemCount: number;
   projectionComplete?: boolean;
 }): boolean {
-  return !args.projectionComplete && args.fallbackItemCount >= args.currentItemCount;
+  return args.currentItemCount === 0 && args.fallbackItemCount > 0;
 }
 
 export async function persistTaskSessionMessageSnapshot(

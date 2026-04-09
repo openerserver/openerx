@@ -12,8 +12,9 @@ import {
   taskSessionRuns,
   taskSessions,
 } from "../../db/schema";
+import type { PublicTaskSessionSourceType } from "./task-session-public-source-type";
 
-type TaskSessionSourceType = "root" | "fork" | "sub_session" | null | undefined;
+type TaskSessionSourceType = PublicTaskSessionSourceType | null | undefined;
 
 export type UpsertTaskSessionRecordArgs = {
   task: {
@@ -45,6 +46,9 @@ export function buildTaskSessionDefaultRunId(sessionId: string) {
 }
 
 function mapSourceTypeToTaskSessionKind(sourceType: TaskSessionSourceType): TaskSessionKind {
+  if (sourceType === "parallel") {
+    return "candidate";
+  }
   if (sourceType === "fork") {
     return "manual_branch";
   }
@@ -66,6 +70,9 @@ function mapTaskSessionNodeType(args: {
   sessionKind?: TaskSessionKind | null;
   parentSessionId?: string | null;
 }): TaskSessionNodeType {
+  if (args.sourceType === "parallel" || args.sessionKind === "candidate") {
+    return args.parentSessionId ? "follow_up" : "root";
+  }
   if (args.sourceType === "fork" || args.sessionKind === "manual_branch") {
     return "manual_branch";
   }
@@ -78,6 +85,9 @@ function mapTaskSessionNodeType(args: {
 function mapSourceTypeToTaskSessionTriggerType(
   sourceType: TaskSessionSourceType,
 ): TaskSessionTriggerType {
+  if (sourceType === "parallel") {
+    return "execute";
+  }
   if (sourceType === "fork") {
     return "manual_branch";
   }
@@ -171,6 +181,10 @@ function resolveTaskSessionMode(args: {
 }) {
   if (args.executionModeSnapshot) {
     return args.executionModeSnapshot;
+  }
+
+  if (args.sessionKind === "candidate") {
+    return "parallel";
   }
 
   return args.sessionKind === "sequential_step" ? "sequential_chain" : "single";
@@ -505,6 +519,20 @@ export function createTaskSessionWriteApi() {
     };
   }
 
+  function buildTaskSessionPassiveUpdateValues(context: TaskSessionWriteContext) {
+    return {
+      projectId: context.args.task.projectId,
+      latestRunId: context.persistedLatestRunId,
+      status: context.nodeStatus,
+      executionStatus: mapTaskSessionExecutionStatus(context.args),
+      runtimeSessionId: context.args.runtimeSessionId,
+      lastActivityAt: context.now,
+      finishedAt: context.args.archivedAt ?? null,
+      updatedAt: context.now,
+      archivedAt: context.args.archivedAt ?? null,
+    };
+  }
+
   function buildTaskSessionRunInsertValues(context: TaskSessionWriteContext) {
     return {
       id: context.latestRunId,
@@ -555,15 +583,47 @@ export function createTaskSessionWriteApi() {
     };
   }
 
+  function buildTaskSessionRunPassiveUpdateValues(context: TaskSessionWriteContext) {
+    return {
+      taskId: context.args.task.id,
+      sessionId: context.sessionId,
+      runtimeSessionId: context.args.runtimeSessionId,
+      status: context.nodeStatus,
+      resultSummary: context.existing?.resultSummary ?? null,
+      errorText: context.existing?.errorText ?? null,
+      startedAt: context.runStartedAt,
+      finishedAt: context.runFinishedAt,
+    };
+  }
+
+  function hasExplicitTaskSessionLineagePatch(args: UpsertTaskSessionRecordArgs) {
+    return (
+      args.parentRuntimeSessionId !== undefined ||
+      args.forkedFromMessageId !== undefined ||
+      args.branchName !== undefined ||
+      args.sourceType !== undefined ||
+      args.sessionKind !== undefined ||
+      args.executionModeSnapshot !== undefined ||
+      args.candidateIndex !== undefined ||
+      args.stepIndex !== undefined ||
+      args.selectedModel !== undefined ||
+      args.coordinationKey !== undefined ||
+      args.operationId !== undefined
+    );
+  }
+
   async function upsertTaskSessionRecord(args: UpsertTaskSessionRecordArgs) {
     const context = await buildTaskSessionWriteContext(args);
+    const hasExplicitLineage = hasExplicitTaskSessionLineagePatch(args);
 
     await db
       .insert(taskSessions)
       .values(buildTaskSessionInsertValues(context))
       .onConflictDoUpdate({
         target: taskSessions.id,
-        set: buildTaskSessionUpdateValues(context),
+        set: hasExplicitLineage
+          ? buildTaskSessionUpdateValues(context)
+          : buildTaskSessionPassiveUpdateValues(context),
       });
 
     await db
@@ -571,7 +631,9 @@ export function createTaskSessionWriteApi() {
       .values(buildTaskSessionRunInsertValues(context))
       .onConflictDoUpdate({
         target: taskSessionRuns.id,
-        set: buildTaskSessionRunUpdateValues(context),
+        set: hasExplicitLineage
+          ? buildTaskSessionRunUpdateValues(context)
+          : buildTaskSessionRunPassiveUpdateValues(context),
       });
 
     await db

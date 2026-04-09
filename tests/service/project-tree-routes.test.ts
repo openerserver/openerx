@@ -143,6 +143,18 @@ afterAll(async () => {
       taskId,
     ]);
     await sql.unsafe("DELETE FROM task_snapshots WHERE task_id = $1", [taskId]);
+    await safeSql(
+      "UPDATE task_sessions SET status = 'archived', archived_at = COALESCE(archived_at, CURRENT_TIMESTAMP::text), source_message_id = NULL, head_message_id = NULL, latest_run_id = NULL, winner_session_id = NULL, judge_session_id = NULL WHERE task_id = $1",
+      [taskId],
+    );
+    await safeSql(
+      `DELETE FROM task_message_parts WHERE message_id IN (
+        SELECT id FROM task_messages WHERE task_id = $1
+      )`,
+      [taskId],
+    );
+    await safeSql("DELETE FROM task_messages WHERE task_id = $1", [taskId]);
+    await safeSql("DELETE FROM task_session_runs WHERE task_id = $1", [taskId]);
     await sql.unsafe("DELETE FROM task_sessions WHERE task_id = $1", [taskId]);
     await sql.unsafe("DELETE FROM task_domain_events WHERE task_id = $1", [taskId]);
     await safeSql("DELETE FROM task_run_edges WHERE task_id = $1", [taskId]);
@@ -1572,7 +1584,7 @@ describe("project tree routes", () => {
           runtimeSessionId,
           parentRuntimeSessionId: roundAnchorRuntimeSessionId,
           branchName: `parallel-candidate-${candidateIndex + 1}`,
-          sourceType: "fork",
+          sourceType: "parallel",
           sessionKind: "candidate",
           executionModeSnapshot: "parallel",
           candidateIndex,
@@ -1582,6 +1594,33 @@ describe("project tree routes", () => {
       });
       expect(created.status).toBe(201);
     }
+
+    const sessions = await authedRequest<{
+      data: Array<{
+        id: string;
+        runtimeSessionId: string;
+        parentRuntimeSessionId: string | null;
+        sourceType: string;
+      }>;
+    }>(`/api/tasks/${task.id}/sessions`);
+
+    expect(sessions.status).toBe(200);
+    expect(sessions.data.data).toContainEqual(
+      expect.objectContaining({
+        id: candidateASessionRecordId,
+        runtimeSessionId: candidateARuntimeSessionId,
+        parentRuntimeSessionId: roundAnchorRuntimeSessionId,
+        sourceType: "parallel",
+      }),
+    );
+    expect(sessions.data.data).toContainEqual(
+      expect.objectContaining({
+        id: candidateBSessionRecordId,
+        runtimeSessionId: candidateBRuntimeSessionId,
+        parentRuntimeSessionId: roundAnchorRuntimeSessionId,
+        sourceType: "parallel",
+      }),
+    );
 
     const baseTime = Date.now();
 

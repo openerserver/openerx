@@ -18,6 +18,7 @@ import {
   findAgentRunBySessionId,
   updateAgentRunStatus,
 } from "../agent-control/agent-run-registry";
+import { noteContinueLatencyTaskDomainEvent } from "../agent-control/continue-latency-tracer";
 import { extractAssistantResultFromMessages } from "../agent-control/runtime-message-utils";
 import {
   createAgentRunRecord,
@@ -654,7 +655,7 @@ class SSEAggregator {
         agent: followupDecision.execution.decision?.targetAgent || "未配置模板",
         model: followupDecision.execution.decision?.targetModel,
         prompt: "",
-        error: `找不到已启用的 follow-up 模板: ${followupDecision.templateId}`,
+        error: `找不到已启用的 continue 模板: ${followupDecision.templateId}`,
         completedAt: new Date().toISOString(),
       };
 
@@ -906,6 +907,7 @@ class SSEAggregator {
       hookReason: args.decisionSelection.execution.decision?.reason || "",
       hookAgent: args.decisionSelection.execution.agent,
       followupGoal: args.decisionSelection.execution.decision?.followupGoal || "",
+      continueGoal: args.decisionSelection.execution.decision?.followupGoal || "",
       repoName: args.task.repoName,
       remoteUrl: args.task.remoteUrl,
       workingBranch: args.task.workingBranch,
@@ -921,7 +923,7 @@ class SSEAggregator {
     const followupModel =
       args.decisionSelection.execution.decision?.targetModel || args.template.model;
     const result = await runDetachedPrompt(
-      `[Follow-up ${args.task.id.slice(0, 8)}] ${args.task.title}`,
+      `[Continue ${args.task.id.slice(0, 8)}] ${args.task.title}`,
       prompt,
       {
         agent: args.decisionSelection.execution.decision?.targetAgent || args.template.agent,
@@ -941,7 +943,7 @@ class SSEAggregator {
       model: result.model ? formatModelRoute(result.model) : followupModel,
       prompt,
       result: result.text,
-      error: result.ok ? (result.completed ? undefined : "Follow-up timed out") : result.error,
+      error: result.ok ? (result.completed ? undefined : "Continue timed out") : result.error,
       sessionId: result.sessionId,
       tokenUsed: result.tokenUsed,
       completedAt: new Date().toISOString(),
@@ -1600,6 +1602,10 @@ class SSEAggregator {
   }
 
   private emit(event: RealtimeEvent): void {
+    if (event.sessionId && event.type.startsWith("task.")) {
+      noteContinueLatencyTaskDomainEvent(event.sessionId, event.type);
+    }
+
     for (const handler of this.handlers) {
       handler(event);
     }

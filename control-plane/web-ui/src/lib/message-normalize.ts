@@ -96,6 +96,7 @@ export interface TaskConversationToolCallItem {
 
 export type LiveAssistantMeta = {
   agent?: string;
+  modelLabel?: string;
   createdAt?: string;
 };
 
@@ -360,16 +361,93 @@ function extractTaggedContent(source: string | undefined, tag: string): string |
   return match?.[1]?.trim() || undefined;
 }
 
+function extractReadOutputText(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    const normalized = value.trim();
+    return normalized || undefined;
+  }
+
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const entries = value
+    .map((entry) => asRecord(entry))
+    .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    .map(
+      (entry) =>
+        asString(entry.text) ??
+        asString(entry.content) ??
+        asString(entry.textContent) ??
+        asString(entry.contentText),
+    )
+    .filter((entry): entry is string => Boolean(entry));
+
+  if (entries.length === 0) {
+    return undefined;
+  }
+
+  return entries.join("\n").trim() || undefined;
+}
+
+function extractStructuredReadPreview(output: unknown) {
+  const parseRecord = (value: unknown) => {
+    const record = asRecord(value);
+    if (!record) {
+      return null;
+    }
+
+    const filePath = normalizeWorkspaceFilePath(
+      asString(record.path) ?? asString(record.filePath),
+    );
+    const rawContent =
+      extractReadOutputText(record.content) ?? extractReadOutputText(record.entries);
+
+    if (!filePath && !rawContent) {
+      return null;
+    }
+
+    return {
+      filePath,
+      rawContent,
+    };
+  };
+
+  const directMatch = parseRecord(output);
+  if (directMatch) {
+    return directMatch;
+  }
+
+  if (typeof output !== "string") {
+    return null;
+  }
+
+  const normalized = output.trim();
+  if (!normalized || !/^[\[{]/u.test(normalized)) {
+    return null;
+  }
+
+  try {
+    return parseRecord(JSON.parse(normalized));
+  } catch {
+    return null;
+  }
+}
+
 function buildReadPreview(output: unknown) {
   const outputText = summarizeValue(output);
+  const structuredPreview = extractStructuredReadPreview(output);
+  const rawContent =
+    extractTaggedContent(outputText, "content") ??
+    extractTaggedContent(outputText, "entries") ??
+    structuredPreview?.rawContent;
+
   return {
-    filePath: normalizeWorkspaceFilePath(extractTaggedContent(outputText, "path")),
-    rawContent:
-      extractTaggedContent(outputText, "content") ?? extractTaggedContent(outputText, "entries"),
-    content: normalizePreviewText(
-      extractTaggedContent(outputText, "content") ?? extractTaggedContent(outputText, "entries"),
-      220,
-    ),
+    filePath:
+      normalizeWorkspaceFilePath(extractTaggedContent(outputText, "path")) ??
+      structuredPreview?.filePath,
+    rawContent,
+    content: normalizePreviewText(rawContent, 220),
   };
 }
 

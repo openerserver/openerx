@@ -2239,7 +2239,7 @@ describe("MultiTaskMonitor", () => {
     expect(wrapper.text()).not.toContain("运行中主执行");
   });
 
-  it("marks the window completed once the assistant reply finished and the session is no longer active", async () => {
+  it("keeps the window running when the task status is still running even if the session is inactive", async () => {
     apiMocks.getTask.mockImplementation(async (taskId: string) => ({
       id: taskId,
       projectId: "proj-1",
@@ -2271,12 +2271,13 @@ describe("MultiTaskMonitor", () => {
 
     await flushPromises();
 
-    expect(wrapper.findAll(".monitor-node--running")).toHaveLength(0);
-    expect(wrapper.findAll(".monitor-node--completed").length).toBeGreaterThan(0);
-    expect(wrapper.text()).toContain("已完成");
+    expect(wrapper.findAll(".monitor-node--running").length).toBeGreaterThan(0);
+    expect(wrapper.findAll(".monitor-node--completed")).toHaveLength(0);
+    expect(wrapper.find(".monitor-node__status-pill").text()).toBe("运行中");
+    expect(wrapper.find(".monitor-node__stream-state").text()).toBe("运行中");
   });
 
-  it("switches the window to completed once the assistant reply has fully displayed", async () => {
+  it("keeps the window running until the task status itself becomes completed", async () => {
     apiMocks.getTask.mockImplementation(async (taskId: string) => ({
       id: taskId,
       projectId: "proj-1",
@@ -2307,10 +2308,10 @@ describe("MultiTaskMonitor", () => {
 
     await flushPromises();
 
-    expect(wrapper.findAll(".monitor-node--running")).toHaveLength(0);
-    expect(wrapper.findAll(".monitor-node--completed").length).toBeGreaterThan(0);
-    expect(wrapper.find(".monitor-node__status-pill").text()).toBe("已完成");
-    expect(wrapper.find(".monitor-node__stream-state").text()).toBe("已完成");
+    expect(wrapper.findAll(".monitor-node--running").length).toBeGreaterThan(0);
+    expect(wrapper.findAll(".monitor-node--completed")).toHaveLength(0);
+    expect(wrapper.find(".monitor-node__status-pill").text()).toBe("运行中");
+    expect(wrapper.find(".monitor-node__stream-state").text()).toBe("运行中");
   });
 
   it("renders awaiting adoption for completed parallel tasks without a selected winner", async () => {
@@ -2353,7 +2354,7 @@ describe("MultiTaskMonitor", () => {
     expect(wrapper.find(".monitor-node__stream-state").text()).toBe("待采纳");
   });
 
-  it("switches the window to running as soon as the user input is visible", async () => {
+  it("keeps completed status when only a user prompt is visible", async () => {
     apiMocks.getTask.mockImplementation(async (taskId: string) => ({
       id: taskId,
       projectId: "proj-1",
@@ -2405,14 +2406,14 @@ describe("MultiTaskMonitor", () => {
 
     await flushPromises();
 
-    expect(wrapper.find(".monitor-node__status-pill").text()).toBe("运行中");
-    expect(wrapper.find(".monitor-node__stream-state").text()).toBe("运行中");
-    expect(wrapper.find(".monitor-node__activity-pill").text()).toBe("运行中");
-    expect(wrapper.findAll(".monitor-node--running").length).toBeGreaterThan(0);
-    expect(wrapper.findAll(".monitor-node--completed")).toHaveLength(0);
+    expect(wrapper.find(".monitor-node__status-pill").text()).toBe("已完成");
+    expect(wrapper.find(".monitor-node__stream-state").text()).toBe("已完成");
+    expect(wrapper.find(".monitor-node__activity-pill").exists()).toBe(false);
+    expect(wrapper.findAll(".monitor-node--running")).toHaveLength(0);
+    expect(wrapper.findAll(".monitor-node--completed").length).toBeGreaterThan(0);
   });
 
-  it("keeps the monitor card in running state when realtime streaming continues after task status flips completed", async () => {
+  it("keeps the monitor card completed when realtime streaming continues after task status flips completed", async () => {
     apiMocks.getTask.mockImplementation(async (taskId: string) => ({
       id: taskId,
       projectId: "proj-1",
@@ -2506,10 +2507,10 @@ describe("MultiTaskMonitor", () => {
     await flushPromises();
     await flushPromises();
 
-    expect(wrapper.findAll(".monitor-node--running").length).toBeGreaterThan(0);
-    expect(wrapper.findAll(".monitor-node--completed")).toHaveLength(0);
-    expect(wrapper.text()).toContain("运行中");
-    expect(wrapper.text()).not.toContain("已完成");
+    expect(wrapper.findAll(".monitor-node--running")).toHaveLength(0);
+    expect(wrapper.findAll(".monitor-node--completed").length).toBeGreaterThan(0);
+    expect(wrapper.find(".monitor-node__status-pill").text()).toBe("已完成");
+    expect(wrapper.find(".monitor-node__stream-state").text()).toBe("已完成");
   });
 
   it("keeps the monitor card stable when realtime assistant events arrive", async () => {
@@ -2675,7 +2676,7 @@ describe("MultiTaskMonitor", () => {
     expect(wrapper.find(".monitor-node__activity-pill").text()).toBe("运行中");
   });
 
-  it("keeps the main status running while assistant text is still revealing after completion", async () => {
+  it("keeps the main status completed while assistant text is still revealing after completion", async () => {
     vi.useFakeTimers();
 
     apiMocks.getTask.mockImplementation(async (taskId: string) => ({
@@ -2799,16 +2800,26 @@ describe("MultiTaskMonitor", () => {
         },
       },
     });
+    prependRealtimeEvent(realtimeStore, {
+      id: "evt-reveal-main-status-snapshot",
+      type: "task.snapshot.updated",
+      ts: "2026-03-14T08:05:03.100Z",
+      taskId: "task-1",
+      sessionId: "session-1",
+      data: {
+        reason: "session.updated",
+      },
+    });
 
     await flushPromises();
     await vi.advanceTimersByTimeAsync(80);
     await flushPromises();
 
-    expect(wrapper.find(".monitor-node__status-pill").text()).toBe("运行中");
-    expect(wrapper.find(".monitor-node__stream-state").text()).toBe("运行中");
-    expect(wrapper.find(".monitor-node__activity-pill").text()).toBe("运行中");
-    expect(wrapper.findAll(".monitor-node--running").length).toBeGreaterThan(0);
-    expect(wrapper.findAll(".monitor-node--completed")).toHaveLength(0);
+    expect(wrapper.find(".monitor-node__status-pill").text()).toBe("已完成");
+    expect(wrapper.find(".monitor-node__stream-state").text()).toBe("已完成");
+    expect(wrapper.find(".monitor-node__activity-pill").exists()).toBe(false);
+    expect(wrapper.findAll(".monitor-node--running")).toHaveLength(0);
+    expect(wrapper.findAll(".monitor-node--completed").length).toBeGreaterThan(0);
 
     vi.useRealTimers();
   });

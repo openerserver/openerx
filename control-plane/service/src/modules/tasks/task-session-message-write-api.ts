@@ -44,6 +44,7 @@ type NormalizedIncomingTaskSessionMessage = {
   textContent: string | null;
   createdAt: string;
   completedAt: string | null;
+  hasExplicitCreatedAt: boolean;
   runtimeMessageId: string;
   status: TaskSessionMessageStatus;
   parentId: string | null;
@@ -129,8 +130,6 @@ const CANONICAL_TASK_MESSAGE_COLUMNS = {
   updatedAt: taskMessages.updatedAt,
 };
 
-const CANDIDATE_USER_MESSAGE_DEDUPE_WINDOW_MS = 15_000;
-const ASSISTANT_TOOL_CALL_RESULT_MERGE_WINDOW_MS = 15_000;
 const TASK_MESSAGE_TOOL_OPERATION_INDEX_STRIDE = 1_000;
 const TASK_MESSAGE_SESSION_SEQ_INSERT_RETRY_LIMIT = 12;
 const TASK_MESSAGE_SESSION_SEQ_INSERT_RETRY_DELAY_MS = 5;
@@ -372,10 +371,6 @@ function extractTaskSessionMessageText(message: Record<string, unknown>) {
   return null;
 }
 
-function normalizeTaskSessionMessageComparableText(value: string | null) {
-  return typeof value === "string" && value.trim() ? value.replace(/\r\n/g, "\n").trim() : null;
-}
-
 function normalizeIncomingTaskSessionMessageRole(
   message: TaskSessionRuntimeMessageInput,
 ): TaskSessionMessageRole {
@@ -587,6 +582,7 @@ function normalizeIncomingTaskSessionMessage(
     textContent,
     createdAt,
     completedAt,
+    hasExplicitCreatedAt: rawCreatedAt != null,
     runtimeMessageId,
     status: normalizeIncomingTaskSessionMessageStatus({
       rawMessage: message,
@@ -746,288 +742,6 @@ function extractTaskSessionMessageParentId(message: Record<string, unknown>) {
   return asTaskSessionMessageString(raw);
 }
 
-function extractTaskSessionMessageMergedRuntimeMessageIds(message: Record<string, unknown>) {
-  const merged = message.mergedRuntimeMessageIds;
-  if (!Array.isArray(merged)) {
-    return [];
-  }
-
-  return merged.filter(
-    (value): value is string => typeof value === "string" && value.trim().length > 0,
-  );
-}
-
-function buildMergedTaskSessionRuntimeMessageIds(args: {
-  existingPayload: Record<string, unknown>;
-  existingRuntimeMessageId: string | null;
-  incomingRuntimeMessageId: string;
-}) {
-  const merged = new Set<string>(
-    extractTaskSessionMessageMergedRuntimeMessageIds(args.existingPayload),
-  );
-  const existingInfo = extractTaskSessionMessageInfoRecord(args.existingPayload);
-  const existingInfoId = asTaskSessionMessageString(existingInfo?.id);
-  if (existingInfoId) {
-    merged.add(existingInfoId);
-  }
-  if (args.existingRuntimeMessageId) {
-    merged.add(args.existingRuntimeMessageId);
-  }
-  merged.add(args.incomingRuntimeMessageId);
-  return Array.from(merged);
-}
-
-function isTaskSessionMessagePartType(part: Record<string, unknown>, partType: string) {
-  return asTaskSessionMessageString(part.type) === partType;
-}
-
-function isToolLikeTaskSessionMessagePart(part: Record<string, unknown>) {
-  const type = asTaskSessionMessageString(part.type);
-  return (
-    type === "tool" || type === "tool_call" || type === "tool-result" || type === "tool_result"
-  );
-}
-
-function extractTaskSessionMessagePartIdentity(part: Record<string, unknown>) {
-  return (
-    asTaskSessionMessageString(part.id) ??
-    asTaskSessionMessageString(part.callID) ??
-    asTaskSessionMessageString(part.toolCallId)
-  );
-}
-
-function hasTaskSessionMessageToolPart(message: Record<string, unknown>) {
-  return extractTaskSessionMessageParts(message).some((part) => isTaskSessionMessagePartType(part, "tool"));
-}
-
-function cloneTaskSessionMessageParts(parts: Record<string, unknown>[]) {
-  return parts.map((part) => ({ ...part }));
-}
-
-function collectTaskSessionMessageToolPartIds(parts: Record<string, unknown>[]) {
-  return new Set(
-    parts
-      .filter((part) => isToolLikeTaskSessionMessagePart(part))
-      .map((part) => extractTaskSessionMessagePartIdentity(part))
-      .filter((value): value is string => Boolean(value)),
-  );
-}
-
-function collectCarryoverTaskSessionToolParts(
-  existingParts: Record<string, unknown>[],
-  incomingToolIds: Set<string>,
-) {
-  return cloneTaskSessionMessageParts(
-    existingParts
-      .filter((part) => isToolLikeTaskSessionMessagePart(part))
-      .filter((part) => {
-        const identity = extractTaskSessionMessagePartIdentity(part);
-        return !identity || !incomingToolIds.has(identity);
-      }),
-  );
-}
-
-function hasTaskSessionMessagePartType(parts: Record<string, unknown>[], partType: string) {
-  return parts.some((part) => isTaskSessionMessagePartType(part, partType));
-}
-
-function insertTaskSessionMessagePartsBeforeBoundary(args: {
-  parts: Record<string, unknown>[];
-  inserts: Record<string, unknown>[];
-  boundaryTypes: string[];
-}) {
-  if (args.inserts.length === 0) {
-    return args.parts;
-  }
-
-  const insertAt = args.parts.findIndex((part) =>
-    args.boundaryTypes.some((boundaryType) => isTaskSessionMessagePartType(part, boundaryType)),
-  );
-  if (insertAt < 0) {
-    return [...args.parts, ...args.inserts];
-  }
-
-  const merged = [...args.parts];
-  merged.splice(insertAt, 0, ...args.inserts);
-  return merged;
-}
-
-function findTaskSessionMessagePart(
-  parts: Record<string, unknown>[],
-  partType: string,
-  fromEnd = false,
-) {
-  if (!fromEnd) {
-    return parts.find((part) => isTaskSessionMessagePartType(part, partType));
-  }
-
-  return [...parts].reverse().find((part) => isTaskSessionMessagePartType(part, partType));
-}
-
-function mergeAssistantToolCallFollowupParts(args: {
-  existingMessage: Record<string, unknown>;
-  incomingParts: Record<string, unknown>[];
-}) {
-  const existingParts = extractTaskSessionMessageParts(args.existingMessage);
-  const incomingParts = cloneTaskSessionMessageParts(args.incomingParts);
-  const incomingToolIds = collectTaskSessionMessageToolPartIds(incomingParts);
-  const carryoverToolParts = collectCarryoverTaskSessionToolParts(existingParts, incomingToolIds);
-
-  let mergedParts = insertTaskSessionMessagePartsBeforeBoundary({
-    parts: incomingParts,
-    inserts: carryoverToolParts,
-    boundaryTypes: ["text", "step-finish"],
-  });
-
-  if (!hasTaskSessionMessagePartType(mergedParts, "text")) {
-    mergedParts = insertTaskSessionMessagePartsBeforeBoundary({
-      parts: mergedParts,
-      inserts: cloneTaskSessionMessageParts(
-        existingParts.filter((part) => isTaskSessionMessagePartType(part, "text")),
-      ),
-      boundaryTypes: ["step-finish"],
-    });
-  }
-
-  if (!hasTaskSessionMessagePartType(mergedParts, "step-start")) {
-    const fallbackStepStart = findTaskSessionMessagePart(existingParts, "step-start");
-    if (fallbackStepStart) {
-      mergedParts = [{ ...fallbackStepStart }, ...mergedParts];
-    }
-  }
-
-  if (!hasTaskSessionMessagePartType(mergedParts, "step-finish")) {
-    const fallbackStepFinish = findTaskSessionMessagePart(existingParts, "step-finish", true);
-    if (fallbackStepFinish) {
-      mergedParts = [...mergedParts, { ...fallbackStepFinish }];
-    }
-  }
-
-  return mergedParts;
-}
-
-function buildMergedAssistantToolCallFollowupPayload(args: {
-  existingPayload: Record<string, unknown>;
-  existingRuntimeMessageId: string | null;
-  incomingMessage: NormalizedIncomingTaskSessionMessage;
-}) {
-  const existingInfo = extractTaskSessionMessageInfoRecord(args.existingPayload) ?? {};
-  const incomingInfo = extractTaskSessionMessageInfoRecord(args.incomingMessage.rawMessage) ?? {};
-  const existingTime = asTaskSessionMessageRecord(existingInfo.time) ?? {};
-  const incomingTime = asTaskSessionMessageRecord(incomingInfo.time) ?? {};
-  const preservedMessageId =
-    asTaskSessionMessageString(existingInfo.id) ??
-    asTaskSessionMessageString(args.existingPayload.id) ??
-    args.existingRuntimeMessageId ??
-    args.incomingMessage.runtimeMessageId;
-  const preservedRuntimeMessageId =
-    asTaskSessionMessageString(args.existingPayload.runtimeMessageId) ??
-    args.existingRuntimeMessageId ??
-    preservedMessageId;
-  const mergedText =
-    args.incomingMessage.textContent ?? extractTaskSessionMessageText(args.existingPayload);
-  const mergedParentId =
-    args.incomingMessage.parentId ?? extractTaskSessionMessageParentId(args.existingPayload);
-  const mergedRuntimeMessageIds = buildMergedTaskSessionRuntimeMessageIds({
-    existingPayload: args.existingPayload,
-    existingRuntimeMessageId: args.existingRuntimeMessageId,
-    incomingRuntimeMessageId: args.incomingMessage.runtimeMessageId,
-  });
-
-  return {
-    ...args.existingPayload,
-    ...args.incomingMessage.rawMessage,
-    id: preservedMessageId,
-    runtimeMessageId: preservedRuntimeMessageId,
-    text: mergedText,
-    textContent: mergedText,
-    summaryText: mergedText,
-    parts: mergeAssistantToolCallFollowupParts({
-      existingMessage: args.existingPayload,
-      incomingParts: args.incomingMessage.parts,
-    }),
-    mergedRuntimeMessageIds,
-    info: {
-      ...existingInfo,
-      ...incomingInfo,
-      id: preservedMessageId,
-      ...(mergedParentId ? { parentID: mergedParentId } : {}),
-      time: {
-        ...existingTime,
-        ...incomingTime,
-        created:
-          existingTime.created ??
-          incomingTime.created ??
-          args.existingPayload.createdAt ??
-          args.incomingMessage.createdAt,
-        completed:
-          incomingTime.completed ??
-          existingTime.completed ??
-          args.incomingMessage.completedAt ??
-          args.existingPayload.completedAt,
-      },
-    },
-  } satisfies Record<string, unknown>;
-}
-
-function shouldMergeAssistantToolCallFollowup(args: {
-  latestMessage: {
-    role: TaskSessionMessageRole;
-    rawPayload: Record<string, unknown>;
-    textContent: string | null;
-    createdAt: string;
-    runtimeMessageId: string | null;
-  };
-  incomingMessage: NormalizedIncomingTaskSessionMessage;
-}) {
-  if (args.latestMessage.role !== "assistant") {
-    return false;
-  }
-
-  const existingText = normalizeTaskSessionMessageComparableText(
-    args.latestMessage.textContent ?? extractTaskSessionMessageText(args.latestMessage.rawPayload),
-  );
-  const incomingText = normalizeTaskSessionMessageComparableText(args.incomingMessage.textContent);
-  if (!existingText || !incomingText || existingText !== incomingText) {
-    return false;
-  }
-
-  const latestMergedRuntimeIds = extractTaskSessionMessageMergedRuntimeMessageIds(
-    args.latestMessage.rawPayload,
-  );
-  if (latestMergedRuntimeIds.includes(args.incomingMessage.runtimeMessageId)) {
-    return true;
-  }
-
-  if (!hasTaskSessionMessageToolPart(args.latestMessage.rawPayload)) {
-    return false;
-  }
-
-  if (extractTaskSessionMessageFinishReason(args.latestMessage.rawPayload) !== "tool-calls") {
-    return false;
-  }
-
-  if (args.incomingMessage.finishReason === "tool-calls") {
-    return false;
-  }
-
-  const latestParentId = extractTaskSessionMessageParentId(args.latestMessage.rawPayload);
-  const incomingParentId = args.incomingMessage.parentId;
-  if (latestParentId !== incomingParentId) {
-    return false;
-  }
-
-  const latestCreatedAt = parseTaskSessionMessageTime(args.latestMessage.createdAt);
-  const incomingCreatedAt = parseTaskSessionMessageTime(args.incomingMessage.createdAt);
-  if (latestCreatedAt === null || incomingCreatedAt === null) {
-    return false;
-  }
-
-  return (
-    Math.abs(incomingCreatedAt - latestCreatedAt) <= ASSISTANT_TOOL_CALL_RESULT_MERGE_WINDOW_MS
-  );
-}
-
 function buildTaskTimelineMessageId(messageId: string) {
   return `task-timeline:message:${messageId}`;
 }
@@ -1075,19 +789,6 @@ function pickLaterTaskSessionMessageTime(
   }
 
   return candidateTime > currentTime ? candidate : current;
-}
-
-function shouldReuseParentUserMessage(args: {
-  existingCreatedAt: string;
-  incomingCreatedAt: string;
-}) {
-  const existingTime = parseTaskSessionMessageTime(args.existingCreatedAt);
-  const incomingTime = parseTaskSessionMessageTime(args.incomingCreatedAt);
-  if (existingTime === null || incomingTime === null) {
-    return false;
-  }
-
-  return Math.abs(existingTime - incomingTime) <= CANDIDATE_USER_MESSAGE_DEDUPE_WINDOW_MS;
 }
 
 function normalizePersistedTaskSessionMessageStatus(value: string | null | undefined) {
@@ -1145,42 +846,16 @@ async function loadLatestTaskSessionMessage(sessionId: string) {
   return message ? mapCanonicalTaskSessionMessageRow(message) : null;
 }
 
-async function loadEquivalentTaskSessionUserMessage(args: {
-  sessionId: string;
-  textContent: string;
-}) {
-  const [message] = await db
-    .select(CANONICAL_TASK_MESSAGE_COLUMNS)
-    .from(taskMessages)
-    .where(
-      and(
-        eq(taskMessages.sessionId, args.sessionId),
-        eq(taskMessages.role, "user"),
-        eq(taskMessages.textContent, args.textContent),
-      ),
-    )
-    .orderBy(desc(taskMessages.createdAt))
-    .limit(1);
-  return message ? mapCanonicalTaskSessionMessageRow(message) : null;
-}
-
 async function findEquivalentTaskSessionUserMessage(args: {
   sessionId: string;
   textContent: string;
-  createdAt: string;
 }) {
-  const existing = await loadEquivalentTaskSessionUserMessage(args);
-
-  if (!existing) {
+  const latest = await loadLatestTaskSessionMessage(args.sessionId);
+  if (!latest || latest.role !== "user") {
     return null;
   }
 
-  return shouldReuseParentUserMessage({
-    existingCreatedAt: existing.createdAt,
-    incomingCreatedAt: args.createdAt,
-  })
-    ? existing
-    : null;
+  return latest.textContent === args.textContent ? latest : null;
 }
 
 async function resolveTaskSessionMessageTarget(args: {
@@ -1221,11 +896,16 @@ async function resolveTaskSessionMessageTarget(args: {
     return null;
   }
 
+  const childSessionId = buildTaskSessionWriteId(args.task.id, sessionRecord.runtimeSessionId);
+  const existingChildMessage = await loadLatestTaskSessionMessage(childSessionId);
+  if (existingChildMessage) {
+    return null;
+  }
+
   const parentSessionId = buildTaskSessionWriteId(args.task.id, parentRecord.runtimeSessionId);
   const existingParentMessage = await findEquivalentTaskSessionUserMessage({
     sessionId: parentSessionId,
     textContent: args.textContent,
-    createdAt: args.createdAt,
   });
 
   return {
@@ -1985,26 +1665,10 @@ export function createTaskSessionMessageWriteApi(deps: {
   }) {
     const existing = await loadTaskSessionMessageById(args.messageId);
     const latestMessage = await loadLatestTaskSessionMessage(args.sessionId);
-    const assistantMergeTarget =
-      !existing &&
-      latestMessage &&
-      shouldMergeAssistantToolCallFollowup({
-        latestMessage: {
-          role: latestMessage.role,
-          rawPayload: latestMessage.rawPayload,
-          textContent: latestMessage.textContent,
-          createdAt: latestMessage.createdAt,
-          runtimeMessageId: latestMessage.runtimeMessageId,
-        },
-        incomingMessage: args.incomingMessage,
-      })
-        ? latestMessage
-        : null;
 
     return {
       existing,
       latestMessage,
-      assistantMergeTarget,
     };
   }
 
@@ -2013,21 +1677,11 @@ export function createTaskSessionMessageWriteApi(deps: {
     messageId: string;
     persistenceState: Awaited<ReturnType<typeof loadTaskSessionMessagePersistenceState>>;
   }) {
-    const { existing, latestMessage, assistantMergeTarget } = args.persistenceState;
-    const persistedExisting = assistantMergeTarget ?? existing;
-    const persistedMessageId = assistantMergeTarget?.id ?? args.messageId;
-    const persistedPayload = assistantMergeTarget
-      ? parseTaskSessionRuntimeMessage(
-          buildMergedAssistantToolCallFollowupPayload({
-            existingPayload: assistantMergeTarget.rawPayload,
-            existingRuntimeMessageId: assistantMergeTarget.runtimeMessageId,
-            incomingMessage: args.incomingMessage,
-          }),
-        )
-      : args.incomingMessage.rawMessage;
-    const persistedNormalizedMessage = assistantMergeTarget
-      ? normalizeIncomingTaskSessionMessage(persistedPayload)
-      : args.incomingMessage;
+    const { existing, latestMessage } = args.persistenceState;
+    const persistedExisting = existing;
+    const persistedMessageId = args.messageId;
+    const persistedPayload = args.incomingMessage.rawMessage;
+    const persistedNormalizedMessage = args.incomingMessage;
     const persistedRuntimeMessageId = persistedNormalizedMessage.runtimeMessageId;
     const persistedTextContent = persistedNormalizedMessage.textContent;
     const persistedCompletedAt = persistedNormalizedMessage.completedAt;
@@ -2037,8 +1691,12 @@ export function createTaskSessionMessageWriteApi(deps: {
     const persistedErrorText = persistedNormalizedMessage.errorText;
     const persistedParts = persistedNormalizedMessage.parts;
     const persistedTokenUsage = persistedNormalizedMessage.tokenUsage;
-    const persistedCreatedAt = persistedExisting?.createdAt ?? persistedNormalizedMessage.createdAt;
-    const persistedStartedAt = persistedExisting?.startedAt ?? persistedNormalizedMessage.createdAt;
+    const persistedCreatedAt = persistedNormalizedMessage.hasExplicitCreatedAt
+      ? persistedNormalizedMessage.createdAt
+      : (persistedExisting?.createdAt ?? persistedNormalizedMessage.createdAt);
+    const persistedStartedAt = persistedNormalizedMessage.hasExplicitCreatedAt
+      ? persistedNormalizedMessage.createdAt
+      : (persistedExisting?.startedAt ?? persistedCreatedAt);
     const messageIndex = persistedExisting?.messageIndex ?? (latestMessage?.messageIndex ?? -1) + 1;
     const taskMessageParentId = persistedExisting ? null : (latestMessage?.id ?? null);
 

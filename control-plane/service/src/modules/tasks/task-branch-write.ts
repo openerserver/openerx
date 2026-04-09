@@ -13,7 +13,7 @@ export const createTaskBranchSchema = z.object({
   parentRuntimeSessionId: z.string().optional(),
   forkedFromMessageId: z.string().optional(),
   branchName: z.string().max(200).optional(),
-  sourceType: z.enum(["root", "fork", "sub_session"]).optional(),
+  sourceType: z.enum(["root", "fork", "sub_session", "parallel"]).optional(),
   sessionKind: z
     .enum(["primary", "candidate", "judge", "sequential_step", "resume", "manual_branch", "hook"])
     .optional(),
@@ -39,7 +39,7 @@ type TaskBranchCompatRecord = {
   parentRuntimeSessionId: string | null;
   forkedFromMessageId: string | null;
   branchName: string | null;
-  sourceType: "root" | "fork" | "sub_session" | null;
+  sourceType: "root" | "fork" | "sub_session" | "parallel" | null;
   sessionKind?:
     | "primary"
     | "candidate"
@@ -53,6 +53,8 @@ type TaskBranchCompatRecord = {
   candidateIndex?: number | null;
   stepIndex?: number | null;
   selectedModel?: string | null;
+  coordinationKey?: string | null;
+  operationId?: string | null;
   isActive: boolean;
 };
 
@@ -61,7 +63,7 @@ type ResolvedTaskBranchState = {
   parentRuntimeSessionId: string | null;
   forkedFromMessageId: string | null;
   branchName: string | null;
-  sourceType: "root" | "fork" | "sub_session" | null;
+  sourceType: "root" | "fork" | "sub_session" | "parallel" | null;
   sessionKind?:
     | "primary"
     | "candidate"
@@ -89,6 +91,7 @@ function hasMaterializedTaskBranchRecord(record: TaskBranchCompatRecord | null) 
     record.branchName ||
       record.parentRuntimeSessionId ||
       record.forkedFromMessageId ||
+      record.sourceType === "parallel" ||
       record.sourceType === "fork" ||
       record.sourceType === "sub_session" ||
       record.candidateIndex != null ||
@@ -158,7 +161,7 @@ export function createTaskBranchWriteApi(deps: {
     parentRuntimeSessionId?: string | null;
     forkedFromMessageId?: string | null;
     branchName?: string | null;
-    sourceType?: "root" | "fork" | "sub_session" | null;
+    sourceType?: "root" | "fork" | "sub_session" | "parallel" | null;
     isActive?: boolean;
     archivedAt?: string | null;
   }) => Promise<string>;
@@ -169,7 +172,7 @@ export function createTaskBranchWriteApi(deps: {
     parentRuntimeSessionId?: string | null;
     forkedFromMessageId?: string | null;
     branchName?: string | null;
-    sourceType?: "root" | "fork" | "sub_session" | null;
+    sourceType?: "root" | "fork" | "sub_session" | "parallel" | null;
     sessionKind?:
       | "primary"
       | "candidate"
@@ -283,14 +286,48 @@ export function createTaskBranchWriteApi(deps: {
       body.runtimeSessionId,
     );
     const isActive = task.sessionId === body.runtimeSessionId;
+    const existingCompatLineage = existingRecord
+      ? {
+          ...(existingRecord.parentRuntimeSessionId
+            ? { parentRuntimeSessionId: existingRecord.parentRuntimeSessionId }
+            : {}),
+          ...(existingRecord.forkedFromMessageId
+            ? { forkedFromMessageId: existingRecord.forkedFromMessageId }
+            : {}),
+          ...(existingRecord.branchName ? { branchName: existingRecord.branchName } : {}),
+          ...(existingRecord.sourceType ? { sourceType: existingRecord.sourceType } : {}),
+        }
+      : {};
+    const existingSessionLineage = existingRecord
+      ? {
+          ...(existingRecord.parentRuntimeSessionId
+            ? { parentRuntimeSessionId: existingRecord.parentRuntimeSessionId }
+            : {}),
+          ...(existingRecord.forkedFromMessageId
+            ? { forkedFromMessageId: existingRecord.forkedFromMessageId }
+            : {}),
+          ...(existingRecord.branchName ? { branchName: existingRecord.branchName } : {}),
+          ...(existingRecord.sourceType ? { sourceType: existingRecord.sourceType } : {}),
+          ...(existingRecord.sessionKind ? { sessionKind: existingRecord.sessionKind } : {}),
+          ...(existingRecord.executionModeSnapshot
+            ? { executionModeSnapshot: existingRecord.executionModeSnapshot }
+            : {}),
+          ...(existingRecord.candidateIndex != null
+            ? { candidateIndex: existingRecord.candidateIndex }
+            : {}),
+          ...(existingRecord.stepIndex != null ? { stepIndex: existingRecord.stepIndex } : {}),
+          ...(existingRecord.selectedModel ? { selectedModel: existingRecord.selectedModel } : {}),
+          ...(existingRecord.coordinationKey
+            ? { coordinationKey: existingRecord.coordinationKey }
+            : {}),
+          ...(existingRecord.operationId ? { operationId: existingRecord.operationId } : {}),
+        }
+      : {};
 
     await deps.syncTaskBranchCompatTreeNode({
       taskId,
       runtimeSessionId: body.runtimeSessionId,
-      parentRuntimeSessionId: existingRecord?.parentRuntimeSessionId ?? null,
-      forkedFromMessageId: existingRecord?.forkedFromMessageId ?? null,
-      branchName: existingRecord?.branchName ?? body.runtimeSessionId,
-      sourceType: existingRecord?.sourceType ?? "root",
+      ...existingCompatLineage,
       isActive,
       archivedAt: null,
     });
@@ -298,10 +335,7 @@ export function createTaskBranchWriteApi(deps: {
     await deps.upsertConversationSessionRecord({
       task,
       runtimeSessionId: body.runtimeSessionId,
-      parentRuntimeSessionId: existingRecord?.parentRuntimeSessionId ?? null,
-      forkedFromMessageId: existingRecord?.forkedFromMessageId ?? null,
-      branchName: existingRecord?.branchName ?? body.runtimeSessionId,
-      sourceType: existingRecord?.sourceType ?? "root",
+      ...existingSessionLineage,
       isActive,
       archivedAt: null,
     });

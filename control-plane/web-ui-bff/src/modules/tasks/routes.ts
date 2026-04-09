@@ -44,7 +44,14 @@ import {
 } from "../../lib/runtime-recovery-contract";
 import { fetchProjectRuntimeUsageBaseline } from "../../lib/runtime-usage-ledger";
 import type { JWTPayload } from "../../middleware/auth";
-import { ensureAgentRunForSession } from "../agent-control/agent-run-registry";
+import {
+  ensureAgentRunForSession,
+  findAgentRunBySessionId,
+} from "../agent-control/agent-run-registry";
+import {
+  beginContinueLatencyTrace,
+  handoffContinueLatencyTrace,
+} from "../agent-control/continue-latency-tracer";
 import { buildExecutionContext } from "../agent-control/runtime-execution-context";
 import { createAgentRunRecord, recordAgentAudit } from "../agent-control/run-persistence";
 import {
@@ -66,6 +73,10 @@ import { wsBroadcaster } from "../realtime/ws-broadcaster";
 import { buildTaskMemberViewModel } from "./member-view";
 import { reconcileRunningTasksOnStartup, repairTaskMessagesFromRuntime } from "./reconcile";
 import {
+  isParallelTaskSessionCandidate,
+  resolvePublicTaskSessionSourceType,
+} from "./task-session-public-source-type";
+import {
   type TaskSessionLineageRecord,
   type TaskSessionTimelineMeta,
   createProjectionTraceTimelineMeta,
@@ -75,6 +86,7 @@ import {
   toCanonicalTaskSessionId,
   upsertTaskSessionLineageRecord as upsertTaskSessionStoreLineageRecord,
 } from "./task-session-store";
+import { orderTaskSessionLineageRecords } from "./task-session-topology-order";
 import {
   fetchTaskConversationCompatMessages,
   fetchTaskSessionCachedCompatMessages,
@@ -109,6 +121,8 @@ interface SessionSummaryRecord {
   summary: { additions: number; deletions: number; files: number } | null;
   createdAt: string | null;
   updatedAt: string | null;
+  coordinationKey?: string | null;
+  winnerSessionId?: string | null;
   executionStatus?: string | null;
   sessionKind?: string | null;
   candidateIndex?: number | null;
@@ -156,38 +170,6 @@ function isProjectionBackedTask(task: Pick<ExecutableTask, "currentRunId">) {
   return typeof task.currentRunId === "string" && task.currentRunId.length > 0;
 }
 
-interface TaskDomainRunSummaryRecord {
-  id: string;
-  orchestrationKind: "single" | "parallel" | "sequential-chain";
-  winnerNodeId?: string | null;
-  judgeNodeId?: string | null;
-}
-
-interface TaskDomainRunNodeRecord {
-  id: string;
-  nodeKind: string;
-  title?: string | null;
-  candidateIndex?: number | null;
-  agentType?: string | null;
-  modelUsed?: string | null;
-  sessionId?: string | null;
-  agentRunId?: string | null;
-  status: string;
-  resultText?: string | null;
-  resultSummary?: string | null;
-  errorText?: string | null;
-  startedAt?: string | null;
-  finishedAt?: string | null;
-}
-
-interface TaskDomainRunDetailRecord {
-  run: TaskDomainRunSummaryRecord;
-  nodes: TaskDomainRunNodeRecord[];
-  candidateNodes: TaskDomainRunNodeRecord[];
-  judgeNode: TaskDomainRunNodeRecord | null;
-  winnerCandidateIndex: number | null;
-}
-
 interface TaskOperatingStateRecord {
   collaborationMode?: "solo" | "team" | "hybrid";
   autopilotLevel?: "L0" | "L1" | "L2";
@@ -221,7 +203,7 @@ interface UpsertTaskSessionLineageInput {
   parentRuntimeSessionId?: string;
   forkedFromMessageId?: string;
   branchName?: string;
-  sourceType?: "root" | "fork" | "sub_session";
+  sourceType?: "root" | "fork" | "sub_session" | "parallel";
   sessionKind?:
     | "primary"
     | "candidate"
@@ -248,6 +230,54 @@ async function fetchTaskSessionLineageRecords(taskId: string, authorization: str
     records,
     activeRecords: records.filter((record) => !record.archivedAt),
   };
+}
+
+function extractRuntimeSessionIdFromPublicTaskSessionId(taskId: string, sessionId: string) {
+  const normalizedSessionId = sessionId.trim();
+  if (!normalizedSessionId) {
+    return null;
+  }
+
+  const prefix = `task-session:${taskId}:`;
+  if (!normalizedSessionId.startsWith(prefix)) {
+    return null;
+  }
+
+  const runtimeSessionId = normalizedSessionId.slice(prefix.length).trim();
+  return runtimeSessionId || null;
+}
+
+async function resolveRequestedTaskRuntimeSessionId(args: {
+  taskId: string;
+  sessionId: string;
+  authorization: string;
+}) {
+  const normalizedSessionId = args.sessionId.trim();
+  if (!normalizedSessionId) {
+    return null;
+  }
+
+  const runtimeSessionId = extractRuntimeSessionIdFromPublicTaskSessionId(
+    args.taskId,
+    normalizedSessionId,
+  );
+  if (runtimeSessionId) {
+    return runtimeSessionId;
+  }
+
+  if (!normalizedSessionId.startsWith("task-session:")) {
+    return normalizedSessionId;
+  }
+
+  const lineageResult = await fetchTaskSessionLineageRecords(args.taskId, args.authorization);
+  const matchedRecord = lineageResult.records.find(
+    (record) =>
+      record.runtimeSessionId === normalizedSessionId ||
+      record.id === normalizedSessionId ||
+      buildPublicTaskSessionId(args.taskId, record.runtimeSessionId) === normalizedSessionId,
+  );
+
+  return matchedRecord?.runtimeSessionId ?? null;
 }
 
 async function resolveTaskRuntimeSessionIds(taskId: string, authorization: string) {
@@ -360,7 +390,20 @@ async function upsertTaskSessionLineageRecord(
   authorization: string,
   input: UpsertTaskSessionLineageInput,
 ) {
-  return upsertTaskSessionStoreLineageRecord(taskId, authorization, input);
+  const result = await upsertTaskSessionStoreLineageRecord(taskId, authorization, input);
+  if (result.ok) {
+    return result;
+  }
+
+  const error =
+    result.data && typeof result.data === "object" && "error" in result.data
+      ? (result.data as { error?: unknown }).error
+      : undefined;
+  throw new Error(
+    typeof error === "string" && error.trim()
+      ? error
+      : `Failed to register task session lineage (${result.status})`,
+  );
 }
 
 async function fetchTaskSessionTimeline(
@@ -931,8 +974,13 @@ async function registerParallelTaskSessionCandidates(
     return;
   }
 
-  const lineageContext = await loadParallelTaskSessionLineageContext(task, authorization, options);
-  const rootSessionId = resolveParallelRootSessionId(task, candidatesWithSessions, lineageContext);
+  const lineageContext = await loadParallelTaskSessionLineageContext(task, authorization);
+  const rootSessionId = resolveParallelRootSessionId(
+    task,
+    candidatesWithSessions,
+    lineageContext,
+    options,
+  );
 
   if (!rootSessionId) {
     return;
@@ -942,6 +990,7 @@ async function registerParallelTaskSessionCandidates(
     candidatesWithSessions,
     rootSessionId,
   );
+  const coordinationKey = rootSessionId;
 
   for (const candidate of orderedCandidates) {
     const parentRuntimeSessionId = resolveParallelCandidateParentSessionId(
@@ -949,13 +998,17 @@ async function registerParallelTaskSessionCandidates(
       rootSessionId,
       options,
     );
-    const nextSourceType = parentRuntimeSessionId ? "fork" : "root";
+    const nextSourceType = "parallel";
     const existingRecord = lineageContext.existingRecordMap.get(candidate.sessionId);
 
     if (
       existingRecord &&
       existingRecord.parentRuntimeSessionId === (parentRuntimeSessionId ?? null) &&
-      existingRecord.sourceType === nextSourceType
+      existingRecord.sourceType === nextSourceType &&
+      existingRecord.coordinationKey === coordinationKey &&
+      existingRecord.sessionKind === "candidate" &&
+      existingRecord.executionModeSnapshot === "parallel" &&
+      existingRecord.candidateIndex === candidate.index
     ) {
       continue;
     }
@@ -965,7 +1018,11 @@ async function registerParallelTaskSessionCandidates(
       parentRuntimeSessionId,
       branchName: candidate.branchName,
       sourceType: nextSourceType,
+      sessionKind: "candidate",
+      executionModeSnapshot: "parallel",
       isActive: task.sessionId === candidate.sessionId,
+      candidateIndex: candidate.index,
+      coordinationKey,
       operationId: options?.operationId,
     });
     lineageContext.existingSessionIds.add(candidate.sessionId);
@@ -978,6 +1035,10 @@ async function registerParallelTaskSessionCandidates(
       branchName: candidate.branchName,
       sourceType: nextSourceType,
       isActive: task.sessionId === candidate.sessionId,
+      coordinationKey,
+      sessionKind: "candidate",
+      executionModeSnapshot: "parallel",
+      candidateIndex: candidate.index,
       createdAt: existingRecord?.createdAt || new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       archivedAt: null,
@@ -988,7 +1049,6 @@ async function registerParallelTaskSessionCandidates(
 async function loadParallelTaskSessionLineageContext(
   task: Pick<ExecutableTask, "id" | "title" | "sessionId">,
   authorization: string,
-  options?: { parentSessionId?: string },
 ) {
   const lineageResult = await fetchTaskSessionLineageRecords(task.id, authorization);
   const { records: normalizedRecords } = normalizeLineageRecords(lineageResult.activeRecords);
@@ -997,16 +1057,6 @@ async function loadParallelTaskSessionLineageContext(
     normalizedRecords.map((record) => [record.runtimeSessionId, record] as const),
   );
   const existingRoot = normalizedRecords.find((record) => record.sourceType === "root");
-
-  if (options?.parentSessionId && !existingSessionIds.has(options.parentSessionId)) {
-    await ensureParentLineageRecord(
-      task.id,
-      options.parentSessionId,
-      authorization,
-      task.title,
-    ).catch(() => null);
-    existingSessionIds.add(options.parentSessionId);
-  }
 
   return {
     existingSessionIds,
@@ -1019,12 +1069,17 @@ function resolveParallelRootSessionId(
   task: Pick<ExecutableTask, "sessionId">,
   candidatesWithSessions: Array<{ sessionId: string }>,
   lineageContext: Awaited<ReturnType<typeof loadParallelTaskSessionLineageContext>>,
+  options?: { parentSessionId?: string },
 ) {
+  const explicitParentSessionId =
+    typeof options?.parentSessionId === "string" && options.parentSessionId.trim().length > 0
+      ? options.parentSessionId.trim()
+      : undefined;
+
   return (
+    explicitParentSessionId ||
+    task.sessionId ||
     lineageContext.existingRoot?.runtimeSessionId ||
-    (task.sessionId && lineageContext.existingSessionIds.has(task.sessionId)
-      ? task.sessionId
-      : undefined) ||
     candidatesWithSessions[0]?.sessionId
   );
 }
@@ -1101,23 +1156,26 @@ async function continueParallelTaskExecution(
   }
 
   const repoContext = buildRepoContext(input.task, {});
+  resetParallelContinuationCandidateState(plan);
   const attempts = await continueParallelPlanCandidates(input, plan, input.prompt, repoContext);
 
   let hasAnySuccess = false;
+  const startedAt = new Date().toISOString();
   for (const attempt of attempts) {
     const candidate = plan.candidates[attempt.index];
     if (!candidate) {
       continue;
     }
 
-    candidate.sessionId = attempt.sessionId || candidate.sessionId;
-    candidate.agentRunId = attempt.agentRunId || candidate.agentRunId;
+    candidate.sessionId = attempt.sessionId;
+    candidate.agentRunId = attempt.agentRunId;
     candidate.status = attempt.ok ? "running" : "failed";
     if (attempt.ok) {
-      candidate.startedAt = new Date().toISOString();
+      candidate.startedAt = startedAt;
       candidate.finishedAt = undefined;
       hasAnySuccess = true;
     } else {
+      candidate.startedAt = undefined;
       candidate.finishedAt = new Date().toISOString();
     }
   }
@@ -1144,11 +1202,24 @@ async function continueParallelTaskExecution(
   });
 
   const continuationOperationId = crypto.randomUUID();
-  await registerParallelTaskSessions(input.task, plan, input.authorization, {
-    parentSessionId: input.parentSessionId,
-    operationId: continuationOperationId,
-  }).catch(() => null);
+  try {
+    await registerParallelTaskSessions(input.task, plan, input.authorization, {
+      parentSessionId: input.parentSessionId,
+      operationId: continuationOperationId,
+    });
+  } catch (error) {
+    return {
+      status: 502 as const,
+      body: {
+        error:
+          error instanceof Error && error.message.trim()
+            ? error.message
+            : "Failed to register parallel candidate sessions",
+      },
+    };
+  }
   sseAggregator.registerParallelTask(input.task.id, plan.candidates);
+  persistParallelContinuationPromptSnapshots(input, plan, repoContext);
   broadcastParallelContinuationStarted(input.task, plan.candidates);
 
   return {
@@ -1167,6 +1238,17 @@ async function continueParallelTaskExecution(
       })),
     },
   };
+}
+
+function resetParallelContinuationCandidateState(plan: RuntimePlan) {
+  for (const candidate of plan.candidates) {
+    candidate.sessionId = undefined;
+    candidate.agentRunId = undefined;
+    candidate.result = undefined;
+    candidate.startedAt = undefined;
+    candidate.finishedAt = undefined;
+    candidate.status = "pending";
+  }
 }
 
 type ParallelContinuationAttempt = {
@@ -1209,8 +1291,8 @@ async function continueParallelPlanCandidate(
     return validationFailure;
   }
 
-  if (candidate.sessionId) {
-    return continueExistingParallelCandidateSession(
+  if (input.parentSessionId) {
+    return forkParallelCandidateSessionFromParent(
       input,
       candidate,
       index,
@@ -1252,26 +1334,61 @@ async function validateParallelCandidateModel(
   };
 }
 
-async function continueExistingParallelCandidateSession(
+async function forkParallelCandidateSessionFromParent(
   input: ContinueTaskInput & { task: ExecutableTask },
   candidate: RuntimePlan["candidates"][number],
   index: number,
   prompt: string,
   candidateModel: ResolvedModel | undefined,
 ): Promise<ParallelContinuationAttempt> {
+  const parentSessionId = input.parentSessionId?.trim();
+  if (!parentSessionId) {
+    return {
+      index,
+      ok: false,
+      error: "No parent session available for parallel continue",
+    };
+  }
+
+  const forkResult = await forkSession(parentSessionId, {
+    title: buildParallelContinueSessionTitle(input.taskId, candidate, index, prompt),
+  });
+  if (!forkResult.ok || !forkResult.sessionId) {
+    return {
+      index,
+      ok: false,
+      error: forkResult.error || "Failed to create parallel continue session",
+    };
+  }
+
+  const childSessionId = forkResult.sessionId;
   const agentRunId = ensureAgentRunForSession(
-    candidate.sessionId as string,
+    childSessionId,
     input.taskId,
     input.task.projectId,
     candidateModel,
   );
-  const continuedResult = await continueSession(candidate.sessionId as string, prompt, {
+  const continuedResult = await continueSession(childSessionId, prompt, {
     model: candidateModel,
   });
+
+  await createAgentRunRecord({
+    taskId: input.task.id,
+    agentRunId,
+    sessionId: childSessionId,
+    agentType: candidate.agent,
+    status: continuedResult.ok ? "running" : "failed",
+    model: candidateModel,
+    candidateIndex: index,
+    error: continuedResult.ok ? undefined : continuedResult.error,
+    startedAt: new Date().toISOString(),
+    finishedAt: continuedResult.ok ? undefined : new Date().toISOString(),
+  });
+
   return {
     index,
     ok: continuedResult.ok,
-    sessionId: candidate.sessionId ?? undefined,
+    sessionId: childSessionId,
     agentRunId,
     error: continuedResult.ok
       ? undefined
@@ -1381,7 +1498,26 @@ async function buildTaskContinuationContext(input: ContinueTaskInput): Promise<
 
   const task = taskResult.data;
   const parallelPlan = resolveTaskContinuationParallelPlan(task, input.executionMode);
-  const sessionId = input.overrideSessionId || task.sessionId || undefined;
+  const requestedSessionId = input.overrideSessionId?.trim();
+  const resolvedOverrideSessionId = requestedSessionId
+    ? await resolveRequestedTaskRuntimeSessionId({
+        taskId: input.taskId,
+        sessionId: requestedSessionId,
+        authorization: input.authorization,
+      })
+    : null;
+  if (requestedSessionId && !resolvedOverrideSessionId) {
+    return {
+      ok: false,
+      response: { status: 404 as const, body: { error: "Task session not found" } },
+    };
+  }
+
+  const taskRuntimeSessionId =
+    typeof task.sessionId === "string"
+      ? extractRuntimeSessionIdFromPublicTaskSessionId(input.taskId, task.sessionId) ?? task.sessionId
+      : undefined;
+  const sessionId = resolvedOverrideSessionId ?? taskRuntimeSessionId ?? undefined;
   if (!sessionId && !parallelPlan) {
     return {
       ok: false,
@@ -1421,6 +1557,66 @@ function resolveTaskContinuationParallelPlan(
   return executionMode === "single" || executionMode === "sequential-chain"
     ? null
     : resolveParallelContinuationPlan(task);
+}
+
+function buildContinueSessionTitle(taskId: string, prompt: string) {
+  return `[Task ${taskId.slice(0, 8)}] ${prompt.slice(0, 80)}`;
+}
+
+function buildParallelContinueSessionTitle(
+  taskId: string,
+  candidate: RuntimePlan["candidates"][number],
+  index: number,
+  prompt: string,
+) {
+  const candidateLabel = candidate.label?.trim() || candidate.model?.trim() || `Candidate ${index + 1}`;
+  return `[Task ${taskId.slice(0, 8)}] ${candidateLabel}: ${prompt.slice(0, 64)}`;
+}
+
+function persistParallelContinuationPromptSnapshots(
+  input: ContinueTaskInput & {
+    task: ExecutableTask;
+    resolvedModel?: ResolvedModel;
+  },
+  plan: RuntimePlan,
+  repoContext: ReturnType<typeof buildRepoContext>,
+) {
+  const systemContextText = input.parentSessionId
+    ? undefined
+    : buildExecutionContext({
+        taskId: input.task.id,
+        projectId: input.task.projectId,
+        repoContext,
+      });
+  const promptCreatedAt = new Date().toISOString();
+
+  for (const candidate of plan.candidates) {
+    if (!candidate.sessionId || candidate.status !== "running") {
+      continue;
+    }
+
+    const model = candidate.model || (input.resolvedModel ? formatModelRoute(input.resolvedModel) : undefined);
+    const finalSentText = `${systemContextText ?? ""}${input.prompt}`;
+
+    persistTaskSessionMessageSnapshot(input.taskId, input.authorization, {
+      runtimeSessionId: candidate.sessionId,
+      message: {
+        info: {
+          id: `${candidate.sessionId}:user-prompt`,
+          role: "user",
+          agent: candidate.agent || DEFAULT_EXECUTION_AGENT,
+          model,
+          time: { created: promptCreatedAt, completed: promptCreatedAt },
+        },
+        parts: [{ type: "text", text: finalSentText }],
+        promptDecomposition: {
+          userInputText: input.prompt,
+          ...(systemContextText ? { systemContextText } : {}),
+          finalSentText,
+        },
+      },
+    }).catch(() => null);
+  }
 }
 
 async function prepareTaskContinuation(
@@ -1586,29 +1782,121 @@ async function continueSingleTaskExecutionFlow(
     return { status: 400 as const, body: { error: "No session associated with this task" } };
   }
 
+  beginContinueLatencyTrace({
+    sessionId: context.sessionId,
+    taskId: input.taskId,
+    prompt: input.prompt,
+  });
+
+  const childSessionTitle = buildContinueSessionTitle(input.taskId, input.prompt);
+  const forkResult = await forkSession(context.sessionId, {
+    title: childSessionTitle,
+  });
+  if (!forkResult.ok || !forkResult.sessionId) {
+    return {
+      status: 502 as const,
+      body: { error: forkResult.error || "Failed to create continue session" },
+    };
+  }
+
+  const childSessionId = forkResult.sessionId;
+  const childTaskSessionId = buildPublicTaskSessionId(input.taskId, childSessionId);
+  const parentTaskSessionId = buildPublicTaskSessionId(input.taskId, context.sessionId);
+  const childOperationId = crypto.randomUUID();
+
+  try {
+    await upsertTaskSessionLineageRecord(input.taskId, input.authorization, {
+      runtimeSessionId: childSessionId,
+      parentRuntimeSessionId: context.sessionId,
+      branchName: childSessionTitle,
+      sourceType: "sub_session",
+      isActive: true,
+      operationId: childOperationId,
+    });
+  } catch (error) {
+    return {
+      status: 502 as const,
+      body: {
+        error:
+          error instanceof Error && error.message.trim()
+            ? error.message
+            : "Failed to register continue session lineage",
+      },
+    };
+  }
+
+  handoffContinueLatencyTrace({
+    fromSessionId: context.sessionId,
+    toSessionId: childSessionId,
+    taskId: input.taskId,
+    promptLength: input.prompt.length,
+  });
+
   const agentRunId = ensureAgentRunForSession(
-    context.sessionId,
+    childSessionId,
     input.taskId,
     context.task.projectId,
     context.resolvedModel,
   );
-  const result = await continueSession(context.sessionId, input.prompt, {
+  const promptCreatedAt = new Date().toISOString();
+  const result = await continueSession(childSessionId, input.prompt, {
     model: context.resolvedModel,
   });
+  await createAgentRunRecord({
+    taskId: input.taskId,
+    agentRunId,
+    sessionId: childSessionId,
+    agentType: DEFAULT_EXECUTION_AGENT,
+    status: result.ok ? "running" : "failed",
+    model: context.resolvedModel,
+    error: result.ok ? undefined : result.error,
+    startedAt: new Date().toISOString(),
+    finishedAt: result.ok ? undefined : new Date().toISOString(),
+  });
   if (!result.ok) {
+    await archiveTaskSessionLineageByRecordId(
+      input.taskId,
+      childTaskSessionId,
+      input.authorization,
+    ).catch(() => null);
     return { status: 502 as const, body: { error: result.error || "Failed to continue session" } };
   }
 
   await cpFetch(`/api/tasks/${encodeURIComponent(input.taskId)}`, {
     method: "PATCH",
-    body: { status: "running" },
+    body: {
+      status: "running",
+      sessionId: childSessionId,
+      agentRunId,
+    },
     authorization: input.authorization,
   });
+
+  const model = context.resolvedModel
+    ? `${context.resolvedModel.providerId}:${context.resolvedModel.modelId}`
+    : undefined;
+  persistTaskSessionMessageSnapshot(input.taskId, input.authorization, {
+    runtimeSessionId: childSessionId,
+    message: {
+      info: {
+        id: `${childSessionId}:user-prompt`,
+        role: "user",
+        agent: DEFAULT_EXECUTION_AGENT,
+        model,
+        time: { created: promptCreatedAt, completed: promptCreatedAt },
+      },
+      parts: [{ type: "text", text: input.prompt }],
+      promptDecomposition: {
+        userInputText: input.prompt,
+        finalSentText: input.prompt,
+      },
+    },
+  }).catch(() => null);
 
   await recordPaidExecutionGuardStateEvent({
     projectId: context.task.projectId,
     taskId: input.taskId,
-    sessionId: context.sessionId,
+    sessionId: childSessionId,
     agentRunId,
     action: "continued",
     guardState: guard ?? undefined,
@@ -1625,18 +1913,34 @@ async function continueSingleTaskExecutionFlow(
     taskId: input.taskId,
     projectId: context.task.projectId,
     agentRunId,
-    data: { sessionId: context.sessionId, agentRunId },
+    data: {
+      sessionId: childSessionId,
+      taskSessionId: childTaskSessionId,
+      parentSessionId: context.sessionId,
+      parentTaskSessionId,
+      agentRunId,
+    },
   });
 
   void broadcastPipelineStageContinuationEvents({
     taskId: input.taskId,
-    sessionId: context.sessionId,
+    sessionId: childSessionId,
     projectId: context.task.projectId,
     agentRunId,
     authorization: input.authorization,
   });
 
-  return { status: 200 as const, body: { ok: true, sessionId: context.sessionId, agentRunId } };
+  return {
+    status: 200 as const,
+    body: {
+      ok: true,
+      sessionId: childSessionId,
+      taskSessionId: childTaskSessionId,
+      parentSessionId: context.sessionId,
+      parentTaskSessionId,
+      agentRunId,
+    },
+  };
 }
 
 async function broadcastPipelineStageContinuationEvents(args: {
@@ -3081,15 +3385,6 @@ async function loadExecutionTraceMessagesFromRuntime(args: {
   if (args.includeLineage) {
     const lineageResult = await fetchTaskSessionLineageRecords(args.task.id, args.authorization);
     lineageRecords = lineageResult.activeRecords;
-
-    if (!lineageRecords.some((record) => record.runtimeSessionId === args.sessionId)) {
-      const runtimeMap = await fetchRuntimeSessionMap(100);
-      lineageRecords = synthesizeLineageRecordsFromRuntime(
-        args.task.id,
-        args.task.sessionId ?? args.sessionId,
-        runtimeMap,
-      );
-    }
   }
 
   const normalizedLineage =
@@ -4108,15 +4403,6 @@ async function registerPrimaryTaskSession(
     return;
   }
 
-  if (options?.parentSessionId) {
-    await ensureParentLineageRecord(
-      task.id,
-      options.parentSessionId,
-      authorization,
-      branchName,
-    ).catch(() => null);
-  }
-
   await upsertTaskSessionLineageRecord(task.id, authorization, {
     runtimeSessionId: sessionId,
     parentRuntimeSessionId:
@@ -4397,6 +4683,7 @@ async function startSequentialChainSession(
     : context.resolvedModel;
 
   currentStep.status = "running";
+  const promptCreatedAt = new Date().toISOString();
 
   const execResult = await createSession(context.task.id, context.task.projectId, stepPrompt, {
     agent: context.executionAgent,
@@ -4421,6 +4708,7 @@ async function startSequentialChainSession(
 
   return {
     execResult,
+    promptCreatedAt,
     resolvedModel,
     totalSteps: chainSteps.length,
   };
@@ -4430,10 +4718,11 @@ async function finalizeSuccessfulSequentialChainStart(args: {
   context: ExecutionContext;
   currentStep: ExecutionStep;
   execResult: SessionStartResult;
+  promptCreatedAt: string;
   stepIndex: number;
   totalSteps: number;
 }) {
-  const { context, currentStep, execResult, stepIndex, totalSteps } = args;
+  const { context, currentStep, execResult, promptCreatedAt, stepIndex, totalSteps } = args;
 
   context.plan.candidates[0] = {
     ...context.plan.candidates[0],
@@ -4517,7 +4806,7 @@ async function finalizeSuccessfulSequentialChainStart(args: {
           role: "user",
           agent: context.executionAgent,
           model,
-          time: { created: new Date().toISOString(), completed: new Date().toISOString() },
+          time: { created: promptCreatedAt, completed: promptCreatedAt },
         },
         parts: [{ type: "text", text: finalSentText }],
         promptDecomposition: { userInputText, systemContextText, finalSentText },
@@ -4539,23 +4828,411 @@ async function finalizeSuccessfulSequentialChainStart(args: {
   };
 }
 
-interface CandidateAdoptionContext {
+interface CandidateAdoptionSessionFirstContext {
+  mode: "session-first";
   task: ExecutableTask & { result?: string };
-  parallelRunId: string;
-  runDetail: TaskDomainRunDetailRecord;
-  candidate: TaskDomainRunNodeRecord;
+  coordinationKey: string;
+  coordinationGroup: TaskSessionRecord[];
+  winnerCandidateIndex: number;
+  winnerSessionId: string;
+  winnerRuntimeSessionId: string;
+  winnerResult?: string;
+}
+
+type CandidateAdoptionContext = CandidateAdoptionSessionFirstContext;
+
+function normalizeCandidateAdoptionContextValue(value: string | null | undefined) {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  return normalized.length > 0 ? normalized : null;
+}
+
+function normalizeCandidateAdoptionExecutionStatus(status?: string | null) {
+  const normalizedStatus = normalizeCandidateAdoptionContextValue(status)?.toLowerCase();
+  if (normalizedStatus === "complete") {
+    return "completed";
+  }
+  if (normalizedStatus === "stopped" || normalizedStatus === "terminated") {
+    return "cancelled";
+  }
+  if (normalizedStatus === "error") {
+    return "failed";
+  }
+  return normalizedStatus;
+}
+
+function resolveCandidateAdoptionParallelRunCoordinationKey(
+  taskId: string,
+  parallelRunId?: string | null,
+) {
+  const normalizedParallelRunId = normalizeCandidateAdoptionContextValue(parallelRunId);
+  if (!normalizedParallelRunId) {
+    return null;
+  }
+
+  if (normalizedParallelRunId.startsWith("task-session:")) {
+    const coordinationKey = normalizedParallelRunId.slice("task-session:".length).trim();
+    return coordinationKey || null;
+  }
+
+  if (normalizedParallelRunId.startsWith("tree-fallback:")) {
+    const fallbackRootSessionId = normalizedParallelRunId.slice("tree-fallback:".length).trim();
+    return fallbackRootSessionId && fallbackRootSessionId !== taskId ? fallbackRootSessionId : null;
+  }
+
+  return null;
+}
+
+function matchesTaskSessionIdentifier(args: {
+  taskId: string;
+  runtimeSessionId?: string | null;
+  requestedSessionId?: string | null;
+}) {
+  if (!args.runtimeSessionId) {
+    return false;
+  }
+
+  const normalizedRequestedSessionId = normalizeCandidateAdoptionContextValue(
+    args.requestedSessionId,
+  );
+  if (!normalizedRequestedSessionId) {
+    return false;
+  }
+
+  return (
+    args.runtimeSessionId === normalizedRequestedSessionId ||
+    buildPublicTaskSessionId(args.taskId, args.runtimeSessionId) === normalizedRequestedSessionId ||
+    extractRuntimeSessionIdFromPublicTaskSessionId(args.taskId, normalizedRequestedSessionId) ===
+      args.runtimeSessionId
+  );
+}
+
+function matchesTaskSessionRecordIdentifier(
+  taskId: string,
+  record: { id?: string | null; runtimeSessionId?: string | null },
+  requestedSessionId?: string | null,
+) {
+  const normalizedRequestedSessionId = normalizeCandidateAdoptionContextValue(requestedSessionId);
+  if (!normalizedRequestedSessionId) {
+    return false;
+  }
+
+  return (
+    record.id === normalizedRequestedSessionId ||
+    matchesTaskSessionIdentifier({
+      taskId,
+      runtimeSessionId: record.runtimeSessionId,
+      requestedSessionId: normalizedRequestedSessionId,
+    })
+  );
+}
+
+function isCandidateAdoptionLineageRecord(record: TaskSessionRecord) {
+  return (
+    typeof record.coordinationKey === "string" &&
+    record.coordinationKey.trim().length > 0 &&
+    isParallelTaskSessionCandidate(record)
+  );
+}
+
+function sortCandidateAdoptionRepairRecords(
+  taskId: string,
+  records: TaskSessionRecord[],
+  candidateSessionIds?: string[],
+) {
+  const normalizedRequestedOrder = (candidateSessionIds ?? [])
+    .map((sessionId) => normalizeCandidateAdoptionContextValue(sessionId))
+    .filter((sessionId): sessionId is string => Boolean(sessionId));
+  const requestedOrder = new Map(
+    normalizedRequestedOrder.map((sessionId, index) => [sessionId, index] as const),
+  );
+
+  return records.slice().sort((left, right) => {
+    const leftRequestedOrder = requestedOrder.get(left.runtimeSessionId) ?? requestedOrder.get(left.id);
+    const rightRequestedOrder =
+      requestedOrder.get(right.runtimeSessionId) ?? requestedOrder.get(right.id);
+    if (leftRequestedOrder != null || rightRequestedOrder != null) {
+      return (leftRequestedOrder ?? Number.MAX_SAFE_INTEGER) - (rightRequestedOrder ?? Number.MAX_SAFE_INTEGER);
+    }
+
+    const leftIndex =
+      typeof left.candidateIndex === "number" ? left.candidateIndex : Number.MAX_SAFE_INTEGER;
+    const rightIndex =
+      typeof right.candidateIndex === "number" ? right.candidateIndex : Number.MAX_SAFE_INTEGER;
+    if (leftIndex !== rightIndex) {
+      return leftIndex - rightIndex;
+    }
+
+    const leftCreatedAt = Date.parse(left.createdAt ?? left.updatedAt ?? "");
+    const rightCreatedAt = Date.parse(right.createdAt ?? right.updatedAt ?? "");
+    if (!Number.isNaN(leftCreatedAt) || !Number.isNaN(rightCreatedAt)) {
+      return (Number.isNaN(leftCreatedAt) ? Number.MAX_SAFE_INTEGER : leftCreatedAt) -
+        (Number.isNaN(rightCreatedAt) ? Number.MAX_SAFE_INTEGER : rightCreatedAt);
+    }
+
+    return String(left.id).localeCompare(String(right.id), "zh-CN");
+  });
+}
+
+function resolveCandidateAdoptionGroupFromRecords(args: {
+  taskId: string;
+  records: TaskSessionRecord[];
+  candidateIndex: number;
+  preferredSessionId?: string | null;
+}) {
+  const candidateRecords = args.records.filter(isCandidateAdoptionLineageRecord);
+  const preferredSessionId = normalizeCandidateAdoptionContextValue(args.preferredSessionId);
+  const preferredRecord = preferredSessionId
+    ? candidateRecords.find((record) =>
+        matchesTaskSessionRecordIdentifier(args.taskId, record, preferredSessionId),
+      )
+    : undefined;
+  const candidateRecord =
+    preferredRecord ??
+    candidateRecords.find((record) => record.candidateIndex === args.candidateIndex);
+
+  if (!candidateRecord || !candidateRecord.coordinationKey) {
+    return null;
+  }
+
+  const coordinationGroup = candidateRecords.filter(
+    (record) => record.coordinationKey === candidateRecord.coordinationKey,
+  );
+  if (coordinationGroup.length < 2) {
+    return null;
+  }
+
+  return {
+    candidateRecord,
+    coordinationGroup,
+  };
+}
+
+async function repairCandidateAdoptionCoordinationGroup(args: {
+  taskId: string;
+  authorization: string;
+  records: TaskSessionRecord[];
+  candidateIndex: number;
+  preferredSessionId?: string | null;
+  parallelRunId?: string | null;
+  candidateSessionIds?: string[];
+}) {
+  const activeRecords = args.records.filter((record) => !record.archivedAt);
+  const preferredSessionId = normalizeCandidateAdoptionContextValue(args.preferredSessionId);
+  const preferredRecord = preferredSessionId
+    ? activeRecords.find((record) =>
+        matchesTaskSessionRecordIdentifier(args.taskId, record, preferredSessionId),
+      )
+    : undefined;
+  const requestedCandidateRecords = (args.candidateSessionIds ?? [])
+    .map((sessionId) =>
+      activeRecords.find((record) =>
+        matchesTaskSessionRecordIdentifier(args.taskId, record, sessionId),
+      ),
+    )
+    .filter((record): record is TaskSessionRecord => Boolean(record));
+
+  let repairRecords = requestedCandidateRecords;
+  if (repairRecords.length < 2) {
+    const parentRuntimeSessionId =
+      preferredRecord?.parentRuntimeSessionId ??
+      resolveCandidateAdoptionParallelRunCoordinationKey(args.taskId, args.parallelRunId);
+    if (!parentRuntimeSessionId) {
+      return null;
+    }
+
+    repairRecords = activeRecords.filter(
+      (record) =>
+        record.parentRuntimeSessionId === parentRuntimeSessionId &&
+        record.runtimeSessionId !== parentRuntimeSessionId &&
+        isParallelTaskSessionCandidate(record),
+    );
+  }
+
+  if (repairRecords.length < 2) {
+    return null;
+  }
+
+  const orderedRecords = sortCandidateAdoptionRepairRecords(
+    args.taskId,
+    repairRecords,
+    args.candidateSessionIds,
+  );
+  const coordinationKey =
+    orderedRecords
+      .map((record) => normalizeCandidateAdoptionContextValue(record.coordinationKey))
+      .find((value): value is string => Boolean(value)) ??
+    resolveCandidateAdoptionParallelRunCoordinationKey(args.taskId, args.parallelRunId) ??
+    normalizeCandidateAdoptionContextValue(orderedRecords[0]?.parentRuntimeSessionId);
+  if (!coordinationKey) {
+    return null;
+  }
+
+  await Promise.all(
+    orderedRecords.map((record, index) =>
+      upsertTaskSessionLineageRecord(args.taskId, args.authorization, {
+        runtimeSessionId: record.runtimeSessionId,
+        parentRuntimeSessionId: record.parentRuntimeSessionId ?? undefined,
+        branchName: record.branchName ?? undefined,
+        sourceType: "parallel",
+        sessionKind: "candidate",
+        executionModeSnapshot: "parallel",
+        isActive: record.isActive,
+        candidateIndex: index,
+        selectedModel: record.selectedModel ?? undefined,
+        coordinationKey,
+      }),
+    ),
+  );
+
+  return orderedRecords.map((record, index) => ({
+    ...record,
+    coordinationKey,
+    sessionKind: "candidate",
+    executionModeSnapshot: "parallel",
+    candidateIndex: index,
+  } satisfies TaskSessionRecord));
+}
+
+async function loadCandidateAdoptionSessionResult(runtimeSessionId: string) {
+  const runtimeResult = await getSessionMessages(runtimeSessionId);
+  if (!runtimeResult.ok || !Array.isArray(runtimeResult.data)) {
+    return undefined;
+  }
+
+  const assistantTexts = runtimeResult.data
+    .filter((message) => extractSessionMessageRole(message) === "assistant")
+    .map((message) => extractSessionMessageText(message))
+    .filter((text) => text.length > 0);
+
+  return assistantTexts.length > 0 ? assistantTexts[assistantTexts.length - 1] : undefined;
+}
+
+async function buildSessionFirstCandidateAdoptionContext(args: {
+  taskId: string;
+  candidateIndex: number;
+  authorization: string;
+  task: ExecutableTask & { result?: string };
+  preferredSessionId?: string | null;
+  parallelRunId?: string | null;
+  candidateSessionIds?: string[];
+}): Promise<
+  | { ok: true; context: CandidateAdoptionSessionFirstContext }
+  | {
+      ok: false;
+      response: {
+        status: 400 | 404 | 502;
+        body: Record<string, unknown>;
+      };
+    }
+> {
+  const lineageResult = await fetchTaskSessionLineageRecords(args.taskId, args.authorization);
+  if (!lineageResult.ok) {
+    return {
+      ok: false,
+      response: {
+        status: 502,
+        body: { error: "Failed to fetch task sessions" },
+      },
+    };
+  }
+
+  const preferredSessionId = normalizeCandidateAdoptionContextValue(args.preferredSessionId);
+  let resolvedGroup = resolveCandidateAdoptionGroupFromRecords({
+    taskId: args.taskId,
+    records: lineageResult.activeRecords,
+    candidateIndex: args.candidateIndex,
+    preferredSessionId,
+  });
+
+  if (!resolvedGroup) {
+    const repairedRecords = await repairCandidateAdoptionCoordinationGroup({
+      taskId: args.taskId,
+      authorization: args.authorization,
+      records: lineageResult.activeRecords,
+      candidateIndex: args.candidateIndex,
+      preferredSessionId,
+      parallelRunId: args.parallelRunId,
+      candidateSessionIds: args.candidateSessionIds,
+    });
+    if (repairedRecords) {
+      resolvedGroup = resolveCandidateAdoptionGroupFromRecords({
+        taskId: args.taskId,
+        records: repairedRecords,
+        candidateIndex: args.candidateIndex,
+        preferredSessionId,
+      });
+    }
+  }
+
+  if (!resolvedGroup) {
+    return {
+      ok: false,
+      response: {
+        status: 404,
+        body: { error: "Task session coordination group not found" },
+      },
+    };
+  }
+
+  const { candidateRecord, coordinationGroup } = resolvedGroup;
+
+  const candidateExecutionStatus = normalizeCandidateAdoptionExecutionStatus(
+    candidateRecord.executionStatus,
+  );
+  if (candidateExecutionStatus && candidateExecutionStatus !== "completed") {
+    const unresolvedCandidateIndex =
+      typeof candidateRecord.candidateIndex === "number"
+        ? candidateRecord.candidateIndex
+        : args.candidateIndex;
+    return {
+      ok: false,
+      response: {
+        status: 400,
+        body: {
+          error: `Candidate ${unresolvedCandidateIndex} is not completed (status: ${candidateRecord.executionStatus})`,
+        },
+      },
+    };
+  }
+
+  const winnerCandidateIndex =
+    typeof candidateRecord.candidateIndex === "number"
+      ? candidateRecord.candidateIndex
+      : args.candidateIndex;
+  const winnerResult = await loadCandidateAdoptionSessionResult(candidateRecord.runtimeSessionId);
+
+  return {
+    ok: true,
+    context: {
+      mode: "session-first",
+      task: args.task,
+      coordinationKey: candidateRecord.coordinationKey,
+      coordinationGroup,
+      winnerCandidateIndex,
+      winnerSessionId:
+        candidateRecord.id ??
+        buildPublicTaskSessionId(args.taskId, candidateRecord.runtimeSessionId),
+      winnerRuntimeSessionId: candidateRecord.runtimeSessionId,
+      winnerResult,
+    },
+  };
 }
 
 async function fetchCandidateAdoptionContext(
   taskId: string,
   candidateIndex: number,
   authorization: string,
+  options?: {
+    parallelRunId?: string | null;
+    sessionId?: string | null;
+    candidateSessionIds?: string[];
+  },
 ): Promise<
   | { ok: true; context: CandidateAdoptionContext }
   | {
       ok: false;
       response: {
-        status: 400 | 404;
+        status: 400 | 404 | 502;
         body: Record<string, unknown>;
       };
     }
@@ -4585,77 +5262,47 @@ async function fetchCandidateAdoptionContext(
     };
   }
 
-  const domainRunsResult = await cpFetch<{ data: TaskDomainRunSummaryRecord[] }>(
-    `/api/tasks/${encodeURIComponent(taskId)}/domain-runs`,
-    { authorization },
-  );
-  const parallelRunId =
-    domainRunsResult.ok && Array.isArray(domainRunsResult.data?.data)
-      ? (domainRunsResult.data.data.find((run) => run.orchestrationKind === "parallel")?.id ?? null)
-      : null;
-  if (!parallelRunId) {
-    return {
-      ok: false,
-      response: {
-        status: 404,
-        body: { error: "Task domain run not found" },
-      },
-    };
-  }
+  const preferredSessionId = normalizeCandidateAdoptionContextValue(options?.sessionId);
 
-  const runDetailResult = await cpFetch<{ data: TaskDomainRunDetailRecord }>(
-    `/api/tasks/${encodeURIComponent(taskId)}/domain-runs/${encodeURIComponent(parallelRunId)}`,
-    { authorization },
-  );
-  if (!runDetailResult.ok || !runDetailResult.data?.data) {
-    return {
-      ok: false,
-      response: {
-        status: 404,
-        body: { error: "Task domain run not found" },
-      },
-    };
-  }
-
-  const runDetail = runDetailResult.data.data;
-  const candidate = runDetail.candidateNodes.find((node) => node.candidateIndex === candidateIndex);
-  if (!candidate) {
-    return {
-      ok: false,
-      response: {
-        status: 404,
-        body: { error: `Candidate ${candidateIndex} not found` },
-      },
-    };
-  }
-
-  if (candidate.status !== "completed") {
-    return {
-      ok: false,
-      response: {
-        status: 400,
-        body: {
-          error: `Candidate ${candidateIndex} is not completed (status: ${candidate.status})`,
-        },
-      },
-    };
-  }
-
-  return {
-    ok: true,
-    context: {
-      task,
-      parallelRunId,
-      runDetail,
-      candidate,
-    },
-  };
+  return buildSessionFirstCandidateAdoptionContext({
+    taskId,
+    candidateIndex,
+    authorization,
+    task,
+    preferredSessionId,
+    parallelRunId: options?.parallelRunId,
+    candidateSessionIds: options?.candidateSessionIds,
+  });
 }
 
-async function stopNonWinningCandidates(
-  candidateIndex: number,
-  candidateNodes: TaskDomainRunNodeRecord[],
+function shouldStopNonWinningCandidateSession(
+  candidate: TaskSessionRecord,
+  winnerRuntimeSessionId: string,
 ) {
+  if (
+    candidate.runtimeSessionId === winnerRuntimeSessionId ||
+    typeof candidate.candidateIndex !== "number"
+  ) {
+    return false;
+  }
+
+  const executionStatus = normalizeCandidateAdoptionContextValue(candidate.executionStatus)?.toLowerCase();
+  if (
+    executionStatus === "running" ||
+    executionStatus === "pending" ||
+    executionStatus === "paused"
+  ) {
+    return true;
+  }
+
+  const liveRun = findAgentRunBySessionId(candidate.runtimeSessionId);
+  return liveRun?.status === "running" || liveRun?.status === "pending" || liveRun?.status === "paused";
+}
+
+async function stopNonWinningCandidateSessions(args: {
+  coordinationGroup: TaskSessionRecord[];
+  winnerRuntimeSessionId: string;
+}) {
   const stoppedCandidates: Array<{
     candidateIndex: number;
     status: "failed" | "cancelled";
@@ -4663,86 +5310,41 @@ async function stopNonWinningCandidates(
     errorText?: string;
   }> = [];
 
-  for (const currentCandidate of candidateNodes) {
-    if (!shouldStopNonWinningCandidate(currentCandidate, candidateIndex)) {
+  for (const currentCandidate of args.coordinationGroup) {
+    if (!shouldStopNonWinningCandidateSession(currentCandidate, args.winnerRuntimeSessionId)) {
       continue;
     }
 
-    stoppedCandidates.push(await stopParallelCandidate(currentCandidate));
+    const liveRun = findAgentRunBySessionId(currentCandidate.runtimeSessionId);
+    if (!liveRun?.agentRunId) {
+      continue;
+    }
+
+    const terminateResult = await terminateAgent(liveRun.agentRunId);
+    const status = terminateResult.ok ? ("cancelled" as const) : ("failed" as const);
+    const stopMessage = terminateResult.ok
+      ? "Manual candidate adoption ended this parallel run before the candidate completed."
+      : `Failed to stop after manual candidate adoption: ${terminateResult.error || "unknown error"}`;
+
+    stoppedCandidates.push({
+      candidateIndex: currentCandidate.candidateIndex,
+      status,
+      resultText: `[${terminateResult.ok ? "STOPPED" : "FAILED"}] ${stopMessage}`,
+      ...(terminateResult.ok ? {} : { errorText: stopMessage }),
+    });
   }
 
   return stoppedCandidates;
 }
 
-function shouldStopNonWinningCandidate(
-  candidate: TaskDomainRunNodeRecord,
-  winnerCandidateIndex: number,
-) {
-  return (
-    candidate.candidateIndex !== winnerCandidateIndex &&
-    typeof candidate.candidateIndex === "number" &&
-    (candidate.status === "running" ||
-      candidate.status === "pending" ||
-      candidate.status === "paused")
-  );
-}
-
-async function stopParallelCandidate(candidate: TaskDomainRunNodeRecord) {
-  const terminateResult = candidate.agentRunId
-    ? await terminateAgent(candidate.agentRunId)
-    : { ok: true as const };
-  const status = terminateResult.ok ? ("cancelled" as const) : ("failed" as const);
-  const stopMessage = terminateResult.ok
-    ? "Manual candidate adoption ended this parallel run before the candidate completed."
-    : `Failed to stop after manual candidate adoption: ${terminateResult.error || "unknown error"}`;
-
-  return {
-    candidateIndex: candidate.candidateIndex as number,
-    status,
-    resultText: `[${terminateResult.ok ? "STOPPED" : "FAILED"}] ${stopMessage}`,
-    ...(terminateResult.ok ? {} : { errorText: stopMessage }),
-  };
-}
-
-function buildCandidateSessionLineageNodes(candidateNodes: TaskDomainRunNodeRecord[]) {
-  return candidateNodes
-    .map((node) => ({
-      index: node.candidateIndex,
-      sessionId: node.sessionId,
-      branchName:
-        node.title ||
-        node.modelUsed ||
-        node.agentType ||
-        (typeof node.candidateIndex === "number"
-          ? `Candidate ${node.candidateIndex + 1}`
-          : "Candidate"),
-    }))
-    .filter(
-      (node): node is { index: number; sessionId: string; branchName: string } =>
-        typeof node.index === "number" &&
-        typeof node.sessionId === "string" &&
-        node.sessionId.length > 0,
-    );
-}
-
-async function activateAdoptedCandidateSession(args: {
+async function activateCandidateAdoptionTaskSession(args: {
   task: ExecutableTask & { result?: string };
   taskId: string;
-  candidate: TaskDomainRunNodeRecord;
-  candidateNodes: TaskDomainRunNodeRecord[];
+  sessionId: string;
   authorization: string;
 }) {
-  const { task, taskId, candidate, candidateNodes, authorization } = args;
-  if (!candidate.sessionId) {
-    return null;
-  }
-
-  await registerParallelTaskSessionCandidates(
-    task,
-    buildCandidateSessionLineageNodes(candidateNodes),
-    authorization,
-  );
-  const activation = await activateTaskSessionLineage(taskId, candidate.sessionId, authorization);
+  const { task, taskId, sessionId, authorization } = args;
+  const activation = await activateTaskSessionLineage(taskId, sessionId, authorization);
   if (!activation.ok) {
     return {
       ok: false as const,
@@ -4760,7 +5362,7 @@ async function activateAdoptedCandidateSession(args: {
     taskId,
     projectId: task.projectId,
     data: {
-      sessionId: candidate.sessionId,
+      sessionId,
       branchName: activation.branchName,
       source: "candidate-adopt",
     },
@@ -4769,42 +5371,36 @@ async function activateAdoptedCandidateSession(args: {
   return { ok: true as const };
 }
 
-async function finalizeCandidateAdoption(args: {
+async function finalizeSessionFirstCandidateAdoption(args: {
   taskId: string;
-  candidateIndex: number;
   authorization: string;
   task: ExecutableTask & { result?: string };
-  parallelRunId: string;
-  stoppedCandidates: Array<{
-    candidateIndex: number;
-    status: "failed" | "cancelled";
-    resultText: string;
-    errorText?: string;
-  }>;
-  winnerResult: string | undefined;
+  coordinationKey: string;
+  winnerSessionId: string;
+  winnerRuntimeSessionId: string;
+  winnerCandidateIndex: number;
+  winnerResult?: string;
 }) {
   const {
     taskId,
-    candidateIndex,
     authorization,
     task,
-    parallelRunId,
-    stoppedCandidates,
+    coordinationKey,
+    winnerSessionId,
+    winnerRuntimeSessionId,
+    winnerCandidateIndex,
     winnerResult,
   } = args;
 
-  const adoptResult = await cpFetch<{
-    data?: {
-      winnerCandidateIndex?: number;
-      result?: string | null;
-    };
-    error?: string;
-  }>(
-    `/api/tasks/${encodeURIComponent(taskId)}/domain-runs/${encodeURIComponent(parallelRunId)}/candidates/${candidateIndex}/adopt`,
+  const adoptResult = await cpFetch<{ error?: string }>(
+    `/api/tasks/${encodeURIComponent(taskId)}/adopt-winner`,
     {
       method: "POST",
       authorization,
-      body: { stoppedCandidates },
+      body: {
+        coordinationKey,
+        winnerSessionId,
+      },
     },
   );
   if (!adoptResult.ok) {
@@ -4817,14 +5413,34 @@ async function finalizeCandidateAdoption(args: {
     };
   }
 
+  const patchResult = await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
+    method: "PATCH",
+    authorization,
+    body: {
+      status: "completed",
+      sessionId: winnerRuntimeSessionId,
+      ...(winnerResult ? { result: winnerResult } : {}),
+    },
+  });
+  if (!patchResult.ok) {
+    return {
+      ok: false as const,
+      response: {
+        status: patchResult.status as 400 | 404 | 502,
+        body: { error: patchResult.data?.error || "Failed to finalize adopted candidate" },
+      },
+    };
+  }
+
   await recordAgentAudit({
     projectId: task.projectId,
     taskId,
     eventType: "task",
     action: "candidate_adopted",
     detail: {
-      candidateIndex,
+      candidateIndex: winnerCandidateIndex,
       executionMode: "parallel",
+      adoptionSource: "task-session",
       hasResult: Boolean(winnerResult),
     },
     riskLevel: "low",
@@ -4839,7 +5455,7 @@ async function finalizeCandidateAdoption(args: {
     data: {
       status: "completed",
       executionMode: "parallel",
-      winnerCandidateIndex: candidateIndex,
+      winnerCandidateIndex,
       adoptedManually: true,
       ...(winnerResult ? { result: winnerResult } : {}),
     },
@@ -4849,7 +5465,7 @@ async function finalizeCandidateAdoption(args: {
     ok: true as const,
     response: {
       status: 200 as const,
-      body: { ok: true, winnerCandidateIndex: candidateIndex },
+      body: { ok: true, winnerCandidateIndex },
     },
   };
 }
@@ -5019,10 +5635,22 @@ async function startParallelExecution(context: ExecutionContext): Promise<StartE
   });
   sseAggregator.registerParallelTask(context.task.id, context.plan.candidates);
   broadcastParallelExecutionStarted(context);
-  await registerParallelTaskSessions(context.task, context.plan, context.authorization, {
-    parentSessionId: context.parentSessionId,
-    operationId: context.operationId,
-  }).catch(() => null);
+  try {
+    await registerParallelTaskSessions(context.task, context.plan, context.authorization, {
+      parentSessionId: context.parentSessionId,
+      operationId: context.operationId,
+    });
+  } catch (error) {
+    return {
+      status: 502,
+      body: {
+        error:
+          error instanceof Error && error.message.trim()
+            ? error.message
+            : "Failed to register parallel candidate sessions",
+      },
+    };
+  }
 
   // Persist user prompt for each parallel candidate session
   const parallelSystemContextText = buildExecutionContext({
@@ -5030,6 +5658,7 @@ async function startParallelExecution(context: ExecutionContext): Promise<StartE
     projectId: context.task.projectId,
     repoContext: context.repoContext,
   });
+  const promptCreatedAt = new Date().toISOString();
   for (const candidate of context.plan.candidates) {
     if (candidate.sessionId && candidate.status === "running") {
       const candidateModel = candidate.model || context.effectiveModel;
@@ -5043,7 +5672,7 @@ async function startParallelExecution(context: ExecutionContext): Promise<StartE
             role: "user",
             agent: candidate.agent || context.executionAgent,
             model: candidateModel,
-            time: { created: new Date().toISOString(), completed: new Date().toISOString() },
+            time: { created: promptCreatedAt, completed: promptCreatedAt },
           },
           parts: [{ type: "text", text: finalSentText }],
           promptDecomposition: {
@@ -5118,6 +5747,7 @@ function broadcastSingleExecutionStarted(
 }
 
 async function startSingleExecution(context: ExecutionContext): Promise<StartExecutionResponse> {
+  const promptCreatedAt = new Date().toISOString();
   const execResult = await createSession(context.task.id, context.task.projectId, context.prompt, {
     agent: context.executionAgent,
     repoContext: context.repoContext,
@@ -5190,7 +5820,7 @@ async function startSingleExecution(context: ExecutionContext): Promise<StartExe
           role: "user",
           agent: context.executionAgent,
           model,
-          time: { created: new Date().toISOString(), completed: new Date().toISOString() },
+          time: { created: promptCreatedAt, completed: promptCreatedAt },
         },
         parts: [{ type: "text", text: finalSentText }],
         promptDecomposition: { userInputText, systemContextText, finalSentText },
@@ -5250,7 +5880,7 @@ async function startSequentialChainExecution(
     };
   }
 
-  const { execResult, totalSteps } = await startSequentialChainSession(
+  const { execResult, promptCreatedAt, totalSteps } = await startSequentialChainSession(
     context,
     currentStep,
     stepIndex,
@@ -5270,6 +5900,7 @@ async function startSequentialChainExecution(
     context,
     currentStep,
     execResult,
+    promptCreatedAt,
     stepIndex,
     totalSteps,
   });
@@ -5804,6 +6435,11 @@ taskRoutes.post("/:taskId/candidates/:index/adopt", async (c) => {
   const taskId = c.req.param("taskId");
   const candidateIndex = Number.parseInt(c.req.param("index"), 10);
   const authorization = authHeader(c);
+  const requestBody = (await c.req.json().catch(() => ({}))) as {
+    parallelRunId?: string;
+    sessionId?: string;
+    candidateSessionIds?: string[];
+  };
 
   if (Number.isNaN(candidateIndex) || candidateIndex < 0) {
     return c.json({ error: "Invalid candidate index" }, 400);
@@ -5813,36 +6449,46 @@ taskRoutes.post("/:taskId/candidates/:index/adopt", async (c) => {
     taskId,
     candidateIndex,
     authorization,
+    {
+      parallelRunId: requestBody.parallelRunId,
+      sessionId: requestBody.sessionId,
+      candidateSessionIds: Array.isArray(requestBody.candidateSessionIds)
+        ? requestBody.candidateSessionIds.filter(
+            (sessionId): sessionId is string =>
+              typeof sessionId === "string" && sessionId.trim().length > 0,
+          )
+        : undefined,
+    },
   );
   if (!adoptionContext.ok) {
     return c.json(adoptionContext.response.body, adoptionContext.response.status);
   }
 
-  const { task, parallelRunId, runDetail, candidate } = adoptionContext.context;
-  const stoppedCandidates = await stopNonWinningCandidates(
-    candidateIndex,
-    runDetail.candidateNodes,
-  );
-  const activation = await activateAdoptedCandidateSession({
+  const { task } = adoptionContext.context;
+  await stopNonWinningCandidateSessions({
+    coordinationGroup: adoptionContext.context.coordinationGroup,
+    winnerRuntimeSessionId: adoptionContext.context.winnerRuntimeSessionId,
+  });
+
+  const activation = await activateCandidateAdoptionTaskSession({
     task,
     taskId,
-    candidate,
-    candidateNodes: runDetail.candidateNodes,
+    sessionId: adoptionContext.context.winnerRuntimeSessionId,
     authorization,
   });
-  if (activation && !activation.ok) {
+  if (!activation.ok) {
     return c.json(activation.response.body, activation.response.status as 400 | 404 | 502);
   }
 
-  const winnerResult = candidate.resultText ?? candidate.resultSummary ?? undefined;
-  const adoptionResult = await finalizeCandidateAdoption({
+  const adoptionResult = await finalizeSessionFirstCandidateAdoption({
     taskId,
-    candidateIndex,
     authorization,
     task,
-    parallelRunId,
-    stoppedCandidates,
-    winnerResult,
+    coordinationKey: adoptionContext.context.coordinationKey,
+    winnerSessionId: adoptionContext.context.winnerSessionId,
+    winnerRuntimeSessionId: adoptionContext.context.winnerRuntimeSessionId,
+    winnerCandidateIndex: adoptionContext.context.winnerCandidateIndex,
+    winnerResult: adoptionContext.context.winnerResult,
   });
   if (!adoptionResult.ok) {
     return c.json(adoptionResult.response.body, adoptionResult.response.status);
@@ -5950,29 +6596,6 @@ taskRoutes.get("/:taskId/graph", async (c) => {
   const result = await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}/graph`, {
     authorization: authHeader(c),
   });
-  return c.json(result.data, result.ok ? 200 : (result.status as 401 | 404 | 502));
-});
-
-taskRoutes.get("/:taskId/domain-runs", async (c) => {
-  const taskId = c.req.param("taskId");
-  const result = await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}/domain-runs`, {
-    authorization: authHeader(c),
-  });
-  if (!result.ok && result.status === 404) {
-    return c.json({ data: [] }, 200);
-  }
-  return c.json(result.data, result.ok ? 200 : (result.status as 401 | 404 | 502));
-});
-
-taskRoutes.get("/:taskId/domain-runs/:runId", async (c) => {
-  const taskId = c.req.param("taskId");
-  const runId = c.req.param("runId");
-  const result = await cpFetch(
-    `/api/tasks/${encodeURIComponent(taskId)}/domain-runs/${encodeURIComponent(runId)}`,
-    {
-      authorization: authHeader(c),
-    },
-  );
   return c.json(result.data, result.ok ? 200 : (result.status as 401 | 404 | 502));
 });
 
@@ -6152,30 +6775,6 @@ taskRoutes.get("/:taskId/branches", async (c) => {
     return c.json({ data: sessions });
   }
 
-  const synthesizedRecords = synthesizeLineageRecordsFromRuntime(
-    taskId,
-    taskResult.data?.sessionId,
-    runtimeMap,
-  );
-
-  if (synthesizedRecords.length > 0) {
-    await persistLineageRepairs(taskId, synthesizedRecords, authorization);
-    return c.json({
-      data: synthesizedRecords.map((record) => {
-        const runtime = runtimeMap.get(record.runtimeSessionId);
-        return {
-          id: record.runtimeSessionId,
-          taskSessionId: buildPublicTaskSessionId(taskId, record.runtimeSessionId),
-          title: record.branchName ?? runtime?.title ?? "",
-          isActive: record.isActive,
-          summary: runtime?.summary ?? null,
-          createdAt: runtime?.createdAt ?? record.createdAt ?? null,
-          updatedAt: runtime?.updatedAt ?? record.updatedAt ?? null,
-        } satisfies SessionSummaryRecord;
-      }),
-    });
-  }
-
   return c.json({ data: [] });
 });
 
@@ -6214,36 +6813,14 @@ taskRoutes.get(":taskId/sessions", async (c) => {
           summary: runtime?.summary ?? null,
           createdAt: runtime?.createdAt ?? record.createdAt ?? null,
           updatedAt: runtime?.updatedAt ?? record.updatedAt ?? null,
+          coordinationKey: record.coordinationKey ?? null,
+          winnerSessionId: record.winnerSessionId ?? null,
           executionStatus: record.executionStatus ?? null,
           sessionKind: record.sessionKind ?? null,
           candidateIndex: record.candidateIndex ?? null,
           stepIndex: record.stepIndex ?? null,
           selectedModel: record.selectedModel ?? null,
           executionModeSnapshot: record.executionModeSnapshot ?? null,
-        } satisfies SessionSummaryRecord;
-      }),
-    });
-  }
-
-  const synthesizedRecords = synthesizeLineageRecordsFromRuntime(
-    taskId,
-    taskResult.data?.sessionId,
-    runtimeMap,
-  );
-
-  if (synthesizedRecords.length > 0) {
-    await persistLineageRepairs(taskId, synthesizedRecords, authorization);
-    return c.json({
-      data: synthesizedRecords.map((record) => {
-        const runtime = runtimeMap.get(record.runtimeSessionId);
-        return {
-          id: record.runtimeSessionId,
-          taskSessionId: buildPublicTaskSessionId(taskId, record.runtimeSessionId),
-          title: runtime?.title ?? record.branchName ?? "",
-          isActive: record.isActive,
-          summary: runtime?.summary ?? null,
-          createdAt: runtime?.createdAt ?? record.createdAt ?? null,
-          updatedAt: runtime?.updatedAt ?? record.updatedAt ?? null,
         } satisfies SessionSummaryRecord;
       }),
     });
@@ -6373,13 +6950,6 @@ async function executeTaskBranchFork(args: {
     return { status: 404 as const, body: { error: "Task not found" } };
   }
 
-  await ensureParentLineageRecord(
-    args.taskId,
-    parentRuntimeSessionId,
-    args.authorization,
-    taskResult.data?.title,
-  );
-
   const defaultTitle =
     args.title || `[Task ${args.taskId.slice(0, 8)}] Fork ${new Date().toLocaleTimeString()}`;
   const result = await forkSession(parentRuntimeSessionId, { title: defaultTitle });
@@ -6491,7 +7061,7 @@ function coerceTaskSessionRecord(
     parentRuntimeSessionId: record.parentRuntimeSessionId ?? null,
     forkedFromMessageId: record.forkedFromMessageId ?? null,
     branchName: record.branchName ?? null,
-    sourceType: record.sourceType,
+    sourceType: resolvePublicTaskSessionSourceType(record),
     isActive: record.isActive,
     coordinationKey: record.coordinationKey ?? null,
     winnerSessionId: record.winnerSessionId ?? null,
@@ -6543,91 +7113,258 @@ function buildBranchLineageNodeId(taskId: string, runtimeSessionId: string) {
   return `branch-node:${taskId}:${runtimeSessionId}`;
 }
 
-function compareIsoTime(left?: string | null, right?: string | null) {
-  const leftTime = left ? Date.parse(left) : Number.POSITIVE_INFINITY;
-  const rightTime = right ? Date.parse(right) : Number.POSITIVE_INFINITY;
-  return leftTime - rightTime;
-}
-
 function extractSessionMessageId(message: unknown) {
   const record = asRecord(message);
   const info = asRecord(record?.info);
   return asNonEmptyString(info?.id) || asNonEmptyString(record?.id);
 }
 
+function resolveLineageConsensusString(
+  values: Array<string | null | undefined>,
+  options?: { required?: boolean; strictPresence?: boolean },
+) {
+  const hasPresentValue = values.some((value) => typeof value === "string" && value.trim());
+  const hasMissingValue = values.some((value) => !(typeof value === "string" && value.trim()));
+  const uniqueValues = Array.from(
+    new Set(
+      values
+        .map((value) => (typeof value === "string" && value.trim() ? value : null))
+        .filter((value): value is string => Boolean(value)),
+    ),
+  );
+
+  if (options?.strictPresence && hasPresentValue && hasMissingValue) {
+    return { ok: false as const, value: null };
+  }
+
+  if (uniqueValues.length > 1) {
+    return { ok: false as const, value: null };
+  }
+
+  if (uniqueValues.length === 1) {
+    return { ok: true as const, value: uniqueValues[0] ?? null };
+  }
+
+  if (options?.required) {
+    return { ok: false as const, value: null };
+  }
+
+  return { ok: true as const, value: null };
+}
+
+function resolveLineageConsensusNumber(
+  values: Array<number | null | undefined>,
+  options?: { strictPresence?: boolean },
+) {
+  const hasPresentValue = values.some((value) => typeof value === "number");
+  const hasMissingValue = values.some((value) => typeof value !== "number");
+  const uniqueValues = Array.from(
+    new Set(values.filter((value): value is number => typeof value === "number")),
+  );
+
+  if (options?.strictPresence && hasPresentValue && hasMissingValue) {
+    return { ok: false as const, value: null };
+  }
+
+  if (uniqueValues.length > 1) {
+    return { ok: false as const, value: null };
+  }
+
+  return { ok: true as const, value: uniqueValues[0] ?? null };
+}
+
+function pickCanonicalTaskSessionRecord(records: TaskSessionRecord[]) {
+  const canonicalRecords = records.filter((record) => record.id.startsWith("task-session:"));
+  if (canonicalRecords.length === 1) {
+    return canonicalRecords[0]!;
+  }
+
+  return records[0]!;
+}
+
+function resolveTaskSessionRecordSourceType(args: {
+  parentRuntimeSessionId: string | null;
+  sessionKind: string | null;
+  candidateIndex: number | null;
+  executionModeSnapshot: string | null;
+  coordinationKey: string | null;
+  records: TaskSessionRecord[];
+}) {
+  if (
+    isParallelTaskSessionCandidate({
+      sessionKind: args.sessionKind,
+      candidateIndex: args.candidateIndex,
+      executionModeSnapshot: args.executionModeSnapshot,
+      coordinationKey: args.coordinationKey,
+    })
+  ) {
+    return "parallel";
+  }
+
+  if (args.parentRuntimeSessionId) {
+    return args.sessionKind === "resume" ||
+      args.records.some((record) => record.sourceType === "sub_session")
+      ? "sub_session"
+      : "fork";
+  }
+
+  const sourceType = resolveLineageConsensusString(args.records.map((record) => record.sourceType), {
+    required: true,
+  });
+  return sourceType.ok ? sourceType.value : null;
+}
+
+function collapseTaskSessionRecordGroup(records: TaskSessionRecord[]) {
+  if (records.length === 0) {
+    return null;
+  }
+
+  if (records.length === 1) {
+    return records[0];
+  }
+
+  const template = pickCanonicalTaskSessionRecord(records);
+  const taskId = resolveLineageConsensusString(records.map((record) => record.taskId), {
+    required: true,
+  });
+  const parentRuntimeSessionId = resolveLineageConsensusString(
+    records.map((record) => record.parentRuntimeSessionId),
+    { strictPresence: true },
+  );
+  const forkedFromMessageId = resolveLineageConsensusString(
+    records.map((record) => record.forkedFromMessageId),
+    { strictPresence: true },
+  );
+  const coordinationKey = resolveLineageConsensusString(
+    records.map((record) => record.coordinationKey),
+    { strictPresence: true },
+  );
+  const winnerSessionId = resolveLineageConsensusString(
+    records.map((record) => record.winnerSessionId),
+    { strictPresence: true },
+  );
+  const executionStatus = resolveLineageConsensusString(
+    records.map((record) => record.executionStatus),
+    { strictPresence: true },
+  );
+  const sessionKind = resolveLineageConsensusString(records.map((record) => record.sessionKind), {
+    strictPresence: true,
+  });
+  const candidateIndex = resolveLineageConsensusNumber(
+    records.map((record) => record.candidateIndex),
+    { strictPresence: true },
+  );
+  const stepIndex = resolveLineageConsensusNumber(records.map((record) => record.stepIndex), {
+    strictPresence: true,
+  });
+  const executionModeSnapshot = resolveLineageConsensusString(
+    records.map((record) => record.executionModeSnapshot),
+    { strictPresence: true },
+  );
+  const sourceType = resolveTaskSessionRecordSourceType({
+    parentRuntimeSessionId: parentRuntimeSessionId.value ?? null,
+    sessionKind: sessionKind.value ?? null,
+    candidateIndex: candidateIndex.value,
+    executionModeSnapshot: executionModeSnapshot.value ?? null,
+    coordinationKey: coordinationKey.value ?? null,
+    records,
+  });
+
+  if (
+    !taskId.ok ||
+    !parentRuntimeSessionId.ok ||
+    !forkedFromMessageId.ok ||
+    !coordinationKey.ok ||
+    !winnerSessionId.ok ||
+    !executionStatus.ok ||
+    !sessionKind.ok ||
+    !candidateIndex.ok ||
+    !stepIndex.ok ||
+    !executionModeSnapshot.ok ||
+    !sourceType
+  ) {
+    return null;
+  }
+
+  const branchName = resolveLineageConsensusString(records.map((record) => record.branchName));
+  const selectedModel = resolveLineageConsensusString(
+    records.map((record) => record.selectedModel),
+  );
+  const createdAt = resolveLineageConsensusString(records.map((record) => record.createdAt));
+  const updatedAt = resolveLineageConsensusString(records.map((record) => record.updatedAt));
+  const resolvedTaskId = taskId.value;
+
+  if (!resolvedTaskId) {
+    return null;
+  }
+
+  return {
+    ...template,
+    taskId: resolvedTaskId,
+    parentRuntimeSessionId: parentRuntimeSessionId.value ?? null,
+    forkedFromMessageId: forkedFromMessageId.value ?? null,
+    branchName: branchName.value ?? null,
+    sourceType,
+    isActive: records.some((record) => record.isActive),
+    coordinationKey: coordinationKey.value ?? null,
+    winnerSessionId: winnerSessionId.value ?? null,
+    executionStatus: executionStatus.value ?? null,
+    sessionKind: sessionKind.value ?? null,
+    candidateIndex: candidateIndex.value,
+    stepIndex: stepIndex.value,
+    selectedModel: selectedModel.value ?? null,
+    executionModeSnapshot: executionModeSnapshot.value ?? null,
+    createdAt: createdAt.value ?? null,
+    updatedAt: updatedAt.value ?? null,
+  } satisfies TaskSessionRecord;
+}
+
 function dedupeTaskSessionRecords(records: TaskSessionRecord[]) {
-  const byRuntimeSessionId = new Map<string, TaskSessionRecord>();
+  const byRuntimeSessionId = new Map<string, TaskSessionRecord[]>();
 
   for (const record of records) {
     const existing = byRuntimeSessionId.get(record.runtimeSessionId);
-    if (!existing) {
-      byRuntimeSessionId.set(record.runtimeSessionId, record);
+    if (existing) {
+      existing.push(record);
       continue;
     }
 
-    const existingScore =
-      Number(Boolean(existing.parentRuntimeSessionId)) +
-      Number(Boolean(existing.forkedFromMessageId));
-    const nextScore =
-      Number(Boolean(record.parentRuntimeSessionId)) + Number(Boolean(record.forkedFromMessageId));
-    const existingUpdated = existing.updatedAt ? Date.parse(existing.updatedAt) : 0;
-    const nextUpdated = record.updatedAt ? Date.parse(record.updatedAt) : 0;
-
-    if (nextScore > existingScore || nextUpdated > existingUpdated) {
-      byRuntimeSessionId.set(record.runtimeSessionId, record);
-    }
+    byRuntimeSessionId.set(record.runtimeSessionId, [record]);
   }
 
-  return Array.from(byRuntimeSessionId.values()).sort((left, right) =>
-    compareIsoTime(left.createdAt, right.createdAt),
-  );
+  const collapsedRecords = Array.from(byRuntimeSessionId.values())
+    .map((group) => collapseTaskSessionRecordGroup(group))
+    .filter((record): record is TaskSessionRecord => Boolean(record));
+
+  return orderTaskSessionLineageRecords(collapsedRecords);
 }
 
-function findLineageRootRecord(records: TaskSessionRecord[]) {
-  return (
-    records.find((record) => record.sourceType === "root") ??
-    records.slice().sort((left, right) => compareIsoTime(left.createdAt, right.createdAt))[0]
-  );
-}
+function normalizeTaskSessionRecord(record: TaskSessionRecord) {
+  const nextSourceType = resolvePublicTaskSessionSourceType(record);
 
-function repairLineageRecord(record: TaskSessionRecord, rootRuntimeSessionId: string) {
-  const previousParent = record.parentRuntimeSessionId;
-  const previousSourceType = record.sourceType;
-
-  if (record.runtimeSessionId === rootRuntimeSessionId) {
-    record.parentRuntimeSessionId = null;
-    record.sourceType = "root";
-  } else if (!record.parentRuntimeSessionId) {
-    record.parentRuntimeSessionId = rootRuntimeSessionId;
-    if (record.sourceType !== "sub_session") {
-      record.sourceType = "fork";
-    }
-  } else if (record.sourceType === "root") {
-    record.sourceType = "fork";
+  if (nextSourceType === record.sourceType) {
+    return { record, repaired: false as const };
   }
 
-  return (
-    record.parentRuntimeSessionId !== previousParent || record.sourceType !== previousSourceType
-  );
+  return {
+    record: {
+      ...record,
+      sourceType: nextSourceType,
+    },
+    repaired: true as const,
+  };
 }
 
 function normalizeLineageRecords(records: TaskSessionRecord[]) {
-  const normalized = dedupeTaskSessionRecords(records).map((record) => ({ ...record }));
-  if (normalized.length <= 1) {
-    return { records: normalized, repaired: [] as TaskSessionRecord[] };
-  }
-
-  const rootRecord = findLineageRootRecord(normalized);
-
-  if (!rootRecord) {
-    return { records: normalized, repaired: [] as TaskSessionRecord[] };
-  }
-
+  const dedupedRecords = dedupeTaskSessionRecords(records);
+  const normalized: TaskSessionRecord[] = [];
   const repaired: TaskSessionRecord[] = [];
 
-  for (const record of normalized) {
-    if (repairLineageRecord(record, rootRecord.runtimeSessionId)) {
-      repaired.push(record);
+  for (const record of dedupedRecords) {
+    const normalizedRecord = normalizeTaskSessionRecord({ ...record });
+    normalized.push(normalizedRecord.record);
+    if (normalizedRecord.repaired) {
+      repaired.push(normalizedRecord.record);
     }
   }
 
@@ -6852,7 +7589,14 @@ async function buildFirstPromptAfterForkMap(
         const created = (
           (info as Record<string, unknown>).time as Record<string, unknown> | undefined
         )?.created;
-        return role === "user" && typeof created === "number" && created >= createdAtMs;
+        let createdAt = Number.NaN;
+        if (typeof created === "number" && Number.isFinite(created)) {
+          createdAt = created;
+        } else if (typeof created === "string") {
+          createdAt = Date.parse(created);
+        }
+
+        return role === "user" && Number.isFinite(createdAt) && createdAt >= createdAtMs;
       });
 
       const preview = firstUserMessage ? extractMessagePreview(firstUserMessage).preview : null;
@@ -6861,50 +7605,6 @@ async function buildFirstPromptAfterForkMap(
   );
 
   return promptMap;
-}
-
-function synthesizeLineageRecordsFromRuntime(
-  taskId: string,
-  activeRuntimeSessionId: string | undefined,
-  runtimeSessions: Map<string, RuntimeSessionMeta>,
-) {
-  const taskPrefix = `[Task ${taskId.slice(0, 8)}]`;
-  const records = Array.from(runtimeSessions.entries())
-    .filter(
-      ([runtimeSessionId, runtime]) =>
-        runtimeSessionId === activeRuntimeSessionId || runtime.title?.includes(taskPrefix),
-    )
-    .sort((left, right) =>
-      compareIsoTime(
-        left[1].createdAt ?? left[1].updatedAt,
-        right[1].createdAt ?? right[1].updatedAt,
-      ),
-    )
-    .map(([runtimeSessionId, runtime]) => ({ runtimeSessionId, runtime }));
-
-  const rootRuntimeSessionId =
-    (activeRuntimeSessionId &&
-      records.find((record) => record.runtimeSessionId === activeRuntimeSessionId)
-        ?.runtimeSessionId) ||
-    records[0]?.runtimeSessionId;
-
-  if (!rootRuntimeSessionId) {
-    return [] as TaskSessionRecord[];
-  }
-
-  return records.map(({ runtimeSessionId, runtime }) => ({
-    id: `synthetic-${runtimeSessionId}`,
-    taskId,
-    runtimeSessionId,
-    parentRuntimeSessionId: runtimeSessionId === rootRuntimeSessionId ? null : rootRuntimeSessionId,
-    forkedFromMessageId: null,
-    branchName: runtime.title ?? null,
-    sourceType: runtimeSessionId === rootRuntimeSessionId ? "root" : "fork",
-    isActive: runtimeSessionId === activeRuntimeSessionId,
-    createdAt: runtime.createdAt ?? runtime.updatedAt ?? new Date().toISOString(),
-    updatedAt: runtime.updatedAt ?? runtime.createdAt ?? new Date().toISOString(),
-    archivedAt: null,
-  }));
 }
 
 async function persistLineageRepairs(
@@ -6919,45 +7619,16 @@ async function persistLineageRepairs(
       forkedFromMessageId: record.forkedFromMessageId ?? undefined,
       branchName: record.branchName ?? undefined,
       sourceType:
-        record.sourceType === "sub_session"
-          ? "sub_session"
-          : record.sourceType === "root"
-            ? "root"
-            : "fork",
+        record.sourceType === "parallel"
+          ? "parallel"
+          : record.sourceType === "sub_session"
+            ? "sub_session"
+            : record.sourceType === "root"
+              ? "root"
+              : "fork",
       isActive: record.isActive,
     });
   }
-}
-
-async function ensureParentLineageRecord(
-  taskId: string,
-  parentSessionId: string,
-  authorization: string,
-  taskTitle?: string,
-) {
-  const lineageResult = await fetchTaskSessionLineageRecords(taskId, authorization);
-  const existingRecords = lineageResult.activeRecords;
-
-  if (existingRecords.some((record) => record.runtimeSessionId === parentSessionId)) {
-    return;
-  }
-
-  const runtimeMap = await fetchRuntimeSessionMap(100);
-  const runtime = runtimeMap.get(parentSessionId);
-  const { records: normalized } = normalizeLineageRecords(existingRecords);
-  const rootRecord = normalized.find((record) => record.sourceType === "root");
-  const inferredParentId =
-    rootRecord && rootRecord.runtimeSessionId !== parentSessionId
-      ? rootRecord.runtimeSessionId
-      : undefined;
-
-  await upsertTaskSessionLineageRecord(taskId, authorization, {
-    runtimeSessionId: parentSessionId,
-    parentRuntimeSessionId: inferredParentId,
-    branchName: runtime?.title ?? taskTitle,
-    sourceType: inferredParentId ? "fork" : "root",
-    isActive: false,
-  });
 }
 
 function createSessionTreeNode(
@@ -7125,13 +7796,12 @@ taskRoutes.get(":taskId/branch-lineage", async (c) => {
   const taskId = c.req.param("taskId");
   const authorization = authHeader(c);
 
-  const taskResult = await cpFetch<{ sessionId?: string }>(
-    `/api/project-tree/tasks/${encodeURIComponent(taskId)}`,
-    { authorization },
-  );
-
   const lineageResult = await fetchTaskSessionLineageRecords(taskId, authorization);
   const lineageRecords = lineageResult.activeRecords;
+
+  if (lineageRecords.length === 0) {
+    return c.json({ data: [] });
+  }
 
   const runtimeMap = await fetchRuntimeSessionMap(100);
   const forkMessagePreviewMap = await buildForkMessagePreviewMap(
@@ -7144,23 +7814,6 @@ taskRoutes.get(":taskId/branch-lineage", async (c) => {
     authorization,
     lineageRecords,
   );
-
-  if (lineageRecords.length === 0) {
-    const synthesizedRecords = synthesizeLineageRecordsFromRuntime(
-      taskId,
-      taskResult.data?.sessionId,
-      runtimeMap,
-    );
-
-    if (synthesizedRecords.length === 0) {
-      return c.json({ data: [] });
-    }
-
-    await persistLineageRepairs(taskId, synthesizedRecords, authorization);
-    return c.json({
-      data: buildSessionTree(taskId, synthesizedRecords, runtimeMap, new Map(), new Map()),
-    });
-  }
 
   const { records: normalizedRecords, repaired } = normalizeLineageRecords(lineageRecords);
   if (repaired.length > 0) {
@@ -7182,13 +7835,13 @@ taskRoutes.get(":taskId/session-lineage", async (c) => {
   const taskId = c.req.param("taskId");
   const authorization = authHeader(c);
 
-  const taskResult = await cpFetch<{ sessionId?: string }>(
-    `/api/project-tree/tasks/${encodeURIComponent(taskId)}`,
-    { authorization },
-  );
-
   const lineageResult = await fetchTaskSessionLineageRecords(taskId, authorization);
   const lineageRecords = lineageResult.activeRecords;
+
+  if (lineageRecords.length === 0) {
+    return c.json({ data: [] });
+  }
+
   const runtimeMap = await fetchRuntimeSessionMap(100);
   const forkMessagePreviewMap = await buildForkMessagePreviewMap(
     taskId,
@@ -7200,23 +7853,6 @@ taskRoutes.get(":taskId/session-lineage", async (c) => {
     authorization,
     lineageRecords,
   );
-
-  if (lineageRecords.length === 0) {
-    const synthesizedRecords = synthesizeLineageRecordsFromRuntime(
-      taskId,
-      taskResult.data?.sessionId,
-      runtimeMap,
-    );
-
-    if (synthesizedRecords.length === 0) {
-      return c.json({ data: [] });
-    }
-
-    await persistLineageRepairs(taskId, synthesizedRecords, authorization);
-    return c.json({
-      data: buildSessionTree(taskId, synthesizedRecords, runtimeMap, new Map(), new Map()),
-    });
-  }
 
   const { records: normalizedRecords, repaired } = normalizeLineageRecords(lineageRecords);
   if (repaired.length > 0) {

@@ -960,19 +960,19 @@
             </a-collapse>
           </a-card>
 
-          <a-card title="Follow-up 模板" size="small" style="margin-top: 16px">
+          <a-card title="Continue 模板" size="small" style="margin-top: 16px">
             <template #extra>
-              <a-button size="small" type="dashed" @click="addFollowup">+ 新增 Follow-up</a-button>
+              <a-button size="small" type="dashed" @click="addFollowup">+ 新增 Continue</a-button>
             </template>
             <a-typography-text type="secondary" style="display: block; margin-bottom: 12px; font-size: 12px">
-              执行后 Hook 返回 spawn-followup 时，会从这里解析模板并启动独立 follow-up 执行。模板缺失时，任务详情页会明确提示用户修复配置。
+              执行后如果 Hook 触发 continue，会从这里解析模板并启动独立 continue 执行。模板缺失时，任务详情页会明确提示用户修复配置。
             </a-typography-text>
-            <a-empty v-if="strategyData.followups.length === 0" description="暂无 follow-up 模板，请添加" />
+            <a-empty v-if="strategyData.followups.length === 0" description="暂无 continue 模板，请添加" />
             <a-collapse v-else accordion size="small">
               <a-collapse-panel
                 v-for="(followup, idx) in strategyData.followups"
                 :key="followup.id"
-                :header="followup.id || `Follow-up ${idx + 1}`"
+                :header="followup.id || `Continue ${idx + 1}`"
               >
                 <template #extra>
                   <a-space @click.stop>
@@ -1042,7 +1042,7 @@
                     <a-textarea
                       :value="followup.promptTemplate"
                       :rows="6"
-                      placeholder="可使用 {{taskPrompt}} {{taskResult}} {{hookResult}} {{followupGoal}} 等变量"
+                      placeholder="可使用 {{taskPrompt}} {{taskResult}} {{hookResult}} {{continueGoal}} 等变量"
                       @update:value="followup.promptTemplate = String($event ?? '')"
                     />
                   </a-form-item>

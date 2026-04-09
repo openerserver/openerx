@@ -1,7 +1,17 @@
-import { existsSync } from "node:fs";
-import { dirname, resolve, sep } from "node:path";
+import { existsSync, readdirSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ensureAgentRunForSession, updateAgentRunStatus } from "./agent-run-registry";
+import {
+  markContinueLatencyStage,
+  noteContinueLatencyRuntimeEvent,
+} from "./continue-latency-tracer";
+import {
+  ensureAgentRunForSession,
+  findAgentRunBySessionId,
+  getAgentRun,
+  updateAgentRunStatus,
+} from "./agent-run-registry";
 import {
   PiMonoRpcClient,
   type PiMonoRpcConfig,
@@ -292,6 +302,180 @@ function readPiMonoRpcConfig(): PiMonoRpcConfig {
       OPENERX_PI_MONO_ALLOWED_ROOTS: JSON.stringify(readPiMonoAllowedRoots(cwd)),
     },
   };
+}
+
+function expandPiMonoHomePath(path: string) {
+  if (path === "~") {
+    return homedir();
+  }
+
+  if (path.startsWith(`~${sep}`)) {
+    return join(homedir(), path.slice(2));
+  }
+
+  return path;
+}
+
+function readPiMonoAgentDir() {
+  const configured = process.env.PI_CODING_AGENT_DIR?.trim();
+  if (configured) {
+    return resolve(expandPiMonoHomePath(configured));
+  }
+
+  return resolve(homedir(), ".pi", "agent");
+}
+
+function encodePiMonoSessionDirName(cwd: string) {
+  return `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
+}
+
+function readPiMonoCandidateSessionDirs() {
+  const sessionsRoot = join(readPiMonoAgentDir(), "sessions");
+  const configuredCwd = readPiMonoRpcConfig().cwd;
+  const candidateDirs = [
+    configuredCwd ? join(sessionsRoot, encodePiMonoSessionDirName(resolve(configuredCwd))) : null,
+    ...parsePiMonoStringArray(process.env.OPENERX_PI_MONO_SESSION_SEARCH_DIRS).map((entry) =>
+      resolve(expandPiMonoHomePath(entry)),
+    ),
+  ];
+
+  if (existsSync(sessionsRoot)) {
+    try {
+      const entries = readdirSync(sessionsRoot, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isDirectory()) {
+          candidateDirs.push(join(sessionsRoot, entry.name));
+        }
+      }
+    } catch {
+      // Ignore unreadable session roots and fall back to explicit candidate directories.
+    }
+  }
+
+  return Array.from(
+    new Set(
+      candidateDirs
+        .filter((entry): entry is string => typeof entry === "string" && entry.length > 0)
+        .map((entry) => resolve(entry)),
+    ),
+  );
+}
+
+function findPiMonoSessionFileBySessionId(sessionId: string) {
+  const normalizedSessionId = sessionId.trim();
+  if (!normalizedSessionId) {
+    return undefined;
+  }
+
+  const fileSuffix = `_${normalizedSessionId}.jsonl`;
+  for (const dir of readPiMonoCandidateSessionDirs()) {
+    if (!existsSync(dir)) {
+      continue;
+    }
+
+    try {
+      const entries = readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isFile() && entry.name.endsWith(fileSuffix)) {
+          return join(dir, entry.name);
+        }
+      }
+    } catch {
+      // Ignore unreadable per-cwd session directories and keep scanning.
+    }
+  }
+
+  return undefined;
+}
+
+function resolveRecoveredPiMonoHandleStatus(
+  isStreaming: boolean,
+  runtimeStatus?: string,
+): PiMonoRuntimeStatus {
+  if (isStreaming) {
+    return "running";
+  }
+
+  if (runtimeStatus === "paused") {
+    return "paused";
+  }
+
+  if (runtimeStatus === "stopped") {
+    return "stopped";
+  }
+
+  if (runtimeStatus === "failed") {
+    return "failed";
+  }
+
+  return "idle";
+}
+
+function resolvePiMonoRecoveredRunContext(sessionOrAgentRunId: string) {
+  return getAgentRun(sessionOrAgentRunId) ?? findAgentRunBySessionId(sessionOrAgentRunId);
+}
+
+async function recoverMissingPiMonoHandle(sessionOrAgentRunId: string) {
+  const recoveredRun = resolvePiMonoRecoveredRunContext(sessionOrAgentRunId);
+  const sessionId = recoveredRun?.subSessionId ?? sessionOrAgentRunId;
+  const sessionFile = findPiMonoSessionFileBySessionId(sessionId);
+  if (!sessionFile) {
+    return undefined;
+  }
+
+  const client = await startPiMonoClient();
+
+  try {
+    const switchResult = await client.switchSession(sessionFile);
+    if (switchResult.cancelled) {
+      throw new Error(`pi-mono session recovery cancelled for ${sessionId}`);
+    }
+
+    const state = await client.getState();
+    const resolvedSessionId = state.sessionId?.trim();
+    if (!resolvedSessionId) {
+      throw new Error(`No sessionId returned from recovered pi-mono session file ${sessionFile}`);
+    }
+
+    const createdAt =
+      recoveredRun && Number.isFinite(recoveredRun.startedAt)
+        ? new Date(recoveredRun.startedAt).toISOString()
+        : new Date().toISOString();
+    const title = state.sessionName?.trim() || `Recovered pi-mono session ${resolvedSessionId}`;
+
+    const handle: PiMonoRuntimeHandle = {
+      agentRunId: resolvedSessionId,
+      sessionId: resolvedSessionId,
+      sessionFile: state.sessionFile ?? sessionFile,
+      title,
+      taskId: recoveredRun?.taskId,
+      projectId: recoveredRun?.projectId,
+      createdAt,
+      model: recoveredRun?.model,
+      candidateIndex: recoveredRun?.candidateIndex,
+      client,
+      eventChain: Promise.resolve(),
+      status: resolveRecoveredPiMonoHandleStatus(state.isStreaming, recoveredRun?.status),
+      pendingGuidance: [],
+      cachedMessages: [],
+      assistantMessageIdAliases: new Map<string, string>(),
+      approvedExternalDirectories: new Set<string>(),
+      approvedCommands: new Set<string>(),
+    };
+
+    bindPiMonoClient(handle, client);
+    handle.cachedMessages = await client.getMessages().catch(() => []);
+    registerPiMonoHandle(handle);
+
+    if (recoveredRun?.agentRunId) {
+      setPiMonoHandleAgentRunId(handle, recoveredRun.agentRunId);
+    }
+
+    return handle;
+  } catch (error) {
+    await client.stop().catch(() => undefined);
+    throw error;
+  }
 }
 
 function uniquePiMonoHandles() {
@@ -1159,17 +1343,41 @@ async function loadLatestPiMonoNormalizedMessage(
 }
 
 function buildPiMonoRealtimeMessageSnapshot(handle: PiMonoRuntimeHandle, message: unknown) {
-  return normalizePiMonoMessage(
+  const normalized = normalizePiMonoMessage(
     handle.sessionId,
     message,
     -1,
     handle.assistantMessageIdAliases,
   );
+
+  if (!normalized || normalized.info.role !== "assistant") {
+    return normalized;
+  }
+
+  const time =
+    typeof normalized.info.time === "object" && normalized.info.time
+      ? { ...(normalized.info.time as Record<string, unknown>) }
+      : null;
+
+  if (!time) {
+    return normalized;
+  }
+
+  delete time.completed;
+  return {
+    ...normalized,
+    info: {
+      ...normalized.info,
+      time,
+    },
+  };
 }
 
 function queuePiMonoRealtimeBridge(handle: PiMonoRuntimeHandle, event: PiMonoRpcEvent) {
   handle.eventChain = handle.eventChain
     .then(async () => {
+      noteContinueLatencyRuntimeEvent(handle.sessionId, event.type);
+
       switch (event.type) {
         case "agent_start": {
           handle.status = "running";
@@ -1581,7 +1789,9 @@ async function ensurePiMonoHandle(
   sessionOrAgentRunId: string,
   options?: { action?: string; recover?: boolean },
 ) {
-  const handle = resolvePiMonoHandle(sessionOrAgentRunId);
+  const handle =
+    resolvePiMonoHandle(sessionOrAgentRunId) ??
+    (await recoverMissingPiMonoHandle(sessionOrAgentRunId));
   if (!handle) {
     throw new Error(`pi-mono runtime session not found: ${sessionOrAgentRunId}`);
   }
@@ -1744,7 +1954,14 @@ async function continuePiMonoSession(
   prompt: string,
   options?: RuntimeContinueSessionOptions,
 ) {
+  markContinueLatencyStage(sessionId, "runtime-continue-entered", {
+    promptLength: prompt.length,
+  });
   const handle = await ensurePiMonoHandle(sessionId, { action: "continue session" });
+  markContinueLatencyStage(sessionId, "runtime-handle-ready", {
+    taskId: handle.taskId,
+    promptLength: prompt.length,
+  });
   if (handle.pauseRequested) {
     await ensurePiMonoPauseSettled(handle, "continuing session");
   }
@@ -1753,6 +1970,10 @@ async function continuePiMonoSession(
     await handle.client.setModel(options.model.providerId, options.model.modelId);
     handle.model = options.model;
   }
+  markContinueLatencyStage(sessionId, "runtime-model-ready", {
+    taskId: handle.taskId,
+    promptLength: prompt.length,
+  });
 
   if (handle.taskId && handle.projectId) {
     const agentRunId = ensureAgentRunForSession(
@@ -1764,15 +1985,37 @@ async function continuePiMonoSession(
     );
     setPiMonoHandleAgentRunId(handle, agentRunId);
   }
+  markContinueLatencyStage(sessionId, "runtime-agent-run-ready", {
+    taskId: handle.taskId,
+    promptLength: prompt.length,
+  });
 
   const wasRunning = handle.status === "running";
   handle.status = "running";
+  markContinueLatencyStage(sessionId, "runtime-dispatch-begin", {
+    taskId: handle.taskId,
+    promptLength: prompt.length,
+    wasRunning,
+    dispatchMode: wasRunning ? "followUp" : "prompt",
+  });
   if (wasRunning) {
     await handle.client.followUp(prompt);
+    markContinueLatencyStage(sessionId, "runtime-dispatch-resolved", {
+      taskId: handle.taskId,
+      promptLength: prompt.length,
+      wasRunning,
+      dispatchMode: "followUp",
+    });
     return;
   }
 
   await handle.client.prompt(prompt);
+  markContinueLatencyStage(sessionId, "runtime-dispatch-resolved", {
+    taskId: handle.taskId,
+    promptLength: prompt.length,
+    wasRunning,
+    dispatchMode: "prompt",
+  });
 }
 
 const backend: RuntimeBackend = "pi-mono";

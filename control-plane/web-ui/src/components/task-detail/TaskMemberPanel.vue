@@ -5,88 +5,104 @@
         <div class="task-member-panel__title">任务成员</div>
         <div class="task-member-panel__subtitle">按成员优先模型聚合当前任务的人类成员与 Agent 成员。</div>
       </div>
-      <a-space size="small" wrap>
-        <a-tag color="blue">当前阶段 {{ view?.currentStageLabel || "未命名阶段" }}</a-tag>
-        <a-tag :color="workflowStatusColor">{{ workflowStatusLabel }}</a-tag>
-      </a-space>
+      <div class="task-member-panel__header-actions">
+        <a-space size="small" wrap>
+          <a-tag color="blue">当前阶段 {{ view?.currentStageLabel || "未命名阶段" }}</a-tag>
+          <a-tag :color="workflowStatusColor">{{ workflowStatusLabel }}</a-tag>
+        </a-space>
+        <button
+          type="button"
+          class="task-member-panel__toggle"
+          :aria-expanded="!collapsed"
+          :aria-label="collapsed ? '展开任务成员' : '收起任务成员'"
+          data-testid="task-member-panel-toggle"
+          @click="collapsed = !collapsed"
+        >
+          {{ collapsed ? "展开" : "收起" }}
+        </button>
+      </div>
     </div>
 
-    <div v-if="loading && !view" class="task-member-panel__empty">加载成员视图中...</div>
-    <div v-else-if="!view || view.members.length === 0" class="task-member-panel__empty">
-      当前任务还没有可展示的成员信息。
-    </div>
-
-    <template v-else>
-      <div class="task-member-panel__stats">
-        <div class="task-member-panel__stat">
-          <div class="task-member-panel__stat-value">{{ view.summary.managerCount }}</div>
-          <div class="task-member-panel__stat-label">管理者成员</div>
-        </div>
-        <div class="task-member-panel__stat">
-          <div class="task-member-panel__stat-value">{{ view.summary.userCount }}</div>
-          <div class="task-member-panel__stat-label">普通用户成员</div>
-        </div>
-        <div class="task-member-panel__stat">
-          <div class="task-member-panel__stat-value">{{ view.summary.agentCount }}</div>
-          <div class="task-member-panel__stat-label">Agent 成员</div>
-        </div>
-        <div class="task-member-panel__stat">
-          <div class="task-member-panel__stat-value">{{ view.summary.activeAgentCount }}</div>
-          <div class="task-member-panel__stat-label">活跃 Agent</div>
-        </div>
+    <div v-if="!collapsed" class="task-member-panel__body" data-testid="task-member-panel-body">
+      <div v-if="loading && !view" class="task-member-panel__empty">加载成员视图中...</div>
+      <div v-else-if="!view || view.members.length === 0" class="task-member-panel__empty">
+        当前任务还没有可展示的成员信息。
       </div>
 
-      <section v-for="section in sections" :key="section.key" class="task-member-panel__section">
-        <div class="task-member-panel__section-title">{{ section.label }}</div>
-        <div class="task-member-panel__member-list">
-          <article
-            v-for="member in section.items"
-            :key="member.id"
-            class="task-member-panel__member"
-            :data-kind="member.kind"
-          >
-            <div class="task-member-panel__member-header">
-              <div>
-                <div class="task-member-panel__member-name">{{ member.displayName }}</div>
-                <div v-if="member.handle" class="task-member-panel__member-handle">
-                  {{ member.handle }}
-                </div>
-              </div>
-              <a-tag :color="statusToneColor(member.statusTone)">{{ member.statusLabel }}</a-tag>
-            </div>
-
-            <div class="task-member-panel__meta">
-              分工：{{ member.responsibilityLabels.join(" / ") || "未分配" }}
-            </div>
-            <div v-if="member.stageLabels.length > 0" class="task-member-panel__meta">
-              关联阶段：{{ member.stageLabels.join(" / ") }}
-            </div>
-            <div class="task-member-panel__meta">{{ member.summary }}</div>
-            <div v-if="member.runCount > 0" class="task-member-panel__meta">
-              运行记录：{{ member.runCount }} 次
-              <span v-if="member.latestActivityAt">，最近活动 {{ formatTime(member.latestActivityAt) }}</span>
-            </div>
-
-            <a-space v-if="member.capabilityBadges.length > 0" size="small" wrap>
-              <a-tag v-for="badge in member.capabilityBadges" :key="badge" color="default">
-                {{ badge }}
-              </a-tag>
-            </a-space>
-          </article>
+      <template v-else>
+        <div class="task-member-panel__stats">
+          <div class="task-member-panel__stat">
+            <div class="task-member-panel__stat-value">{{ view.summary.managerCount }}</div>
+            <div class="task-member-panel__stat-label">管理者成员</div>
+          </div>
+          <div class="task-member-panel__stat">
+            <div class="task-member-panel__stat-value">{{ view.summary.userCount }}</div>
+            <div class="task-member-panel__stat-label">普通用户成员</div>
+          </div>
+          <div class="task-member-panel__stat">
+            <div class="task-member-panel__stat-value">{{ view.summary.agentCount }}</div>
+            <div class="task-member-panel__stat-label">Agent 成员</div>
+          </div>
+          <div class="task-member-panel__stat">
+            <div class="task-member-panel__stat-value">{{ view.summary.activeAgentCount }}</div>
+            <div class="task-member-panel__stat-label">活跃 Agent</div>
+          </div>
         </div>
-      </section>
-    </template>
+
+        <section v-for="section in sections" :key="section.key" class="task-member-panel__section">
+          <div class="task-member-panel__section-title">{{ section.label }}</div>
+          <div class="task-member-panel__member-list">
+            <article
+              v-for="member in section.items"
+              :key="member.id"
+              class="task-member-panel__member"
+              :data-kind="member.kind"
+            >
+              <div class="task-member-panel__member-header">
+                <div>
+                  <div class="task-member-panel__member-name">{{ member.displayName }}</div>
+                  <div v-if="member.handle" class="task-member-panel__member-handle">
+                    {{ member.handle }}
+                  </div>
+                </div>
+                <a-tag :color="statusToneColor(member.statusTone)">{{ member.statusLabel }}</a-tag>
+              </div>
+
+              <div class="task-member-panel__meta">
+                分工：{{ member.responsibilityLabels.join(" / ") || "未分配" }}
+              </div>
+              <div v-if="member.stageLabels.length > 0" class="task-member-panel__meta">
+                关联阶段：{{ member.stageLabels.join(" / ") }}
+              </div>
+              <div class="task-member-panel__meta">{{ member.summary }}</div>
+              <div v-if="member.runCount > 0" class="task-member-panel__meta">
+                运行记录：{{ member.runCount }} 次
+                <span v-if="member.latestActivityAt">，最近活动 {{ formatTime(member.latestActivityAt) }}</span>
+              </div>
+
+              <a-space v-if="member.capabilityBadges.length > 0" size="small" wrap>
+                <a-tag v-for="badge in member.capabilityBadges" :key="badge" color="default">
+                  {{ badge }}
+                </a-tag>
+              </a-space>
+            </article>
+          </div>
+        </section>
+      </template>
+    </div>
   </section>
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import type { TaskMemberViewMember, TaskMemberViewModel } from "../../lib/api";
 
 const props = defineProps<{
   view: TaskMemberViewModel | null;
   loading?: boolean;
 }>();
+
+const collapsed = ref(false);
 
 const sections = computed(() => {
   const groups: Array<{ key: TaskMemberViewMember["kind"]; label: string }> = [
@@ -182,6 +198,13 @@ function formatTime(value: string) {
   margin-bottom: 12px;
 }
 
+.task-member-panel__header-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
 .task-member-panel__title {
   font-size: 15px;
   font-weight: 600;
@@ -192,6 +215,25 @@ function formatTime(value: string) {
   margin-top: 4px;
   font-size: 12px;
   color: #6b7280;
+}
+
+.task-member-panel__toggle {
+  border: none;
+  background: transparent;
+  padding: 0;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: #2563eb;
+  cursor: pointer;
+}
+
+.task-member-panel__toggle:hover {
+  color: #1d4ed8;
+}
+
+.task-member-panel__body {
+  display: block;
 }
 
 .task-member-panel__empty {
@@ -283,6 +325,11 @@ function formatTime(value: string) {
 
   .task-member-panel__header {
     flex-direction: column;
+  }
+
+  .task-member-panel__header-actions {
+    width: 100%;
+    align-items: flex-start;
   }
 }
 </style>

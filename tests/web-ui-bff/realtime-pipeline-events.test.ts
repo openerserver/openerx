@@ -756,9 +756,9 @@ describe("SSEAggregator pipeline emitters", () => {
           agent: "oracle-enterprise",
           model: "github-copilot:gpt-5.4",
           promptTemplate: [
-            "Follow-up summary for Opener-X task.",
+            "Continue summary for Opener-X task.",
             "Task title: {{taskTitle}}",
-            "Follow-up goal: {{followupGoal}}",
+            "Continue goal: {{continueGoal}}",
             "Task result:",
             "{{taskResult}}",
             "Hook result:",
@@ -794,7 +794,7 @@ describe("SSEAggregator pipeline emitters", () => {
     runDetachedPromptMock.mockResolvedValue({
       ok: true,
       completed: true,
-      text: "Follow-up summary",
+      text: "Continue summary",
       sessionId: "ses-followup",
       tokenUsed: 321,
       model: {
@@ -913,7 +913,7 @@ describe("SSEAggregator pipeline emitters", () => {
         "pipeline.stage.updated",
       ]);
       expect(runDetachedPromptMock).toHaveBeenCalledWith(
-        expect.stringContaining("[Follow-up task-1]"),
+        expect.stringContaining("[Continue task-1]"),
         expect.stringContaining("Summarize remaining risks"),
         expect.objectContaining({
           agent: "oracle-enterprise",
@@ -947,7 +947,7 @@ describe("SSEAggregator pipeline emitters", () => {
               (execution) =>
                 execution.templateId === "post-review-followup" &&
                 execution.triggerHookId === "post-review" &&
-                execution.result === "Follow-up summary",
+                execution.result === "Continue summary",
             ) === true
           );
         }),

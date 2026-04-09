@@ -37,6 +37,7 @@ const runDetachedPromptMock = mock(async () => ({
   sessionId: "session-test",
 }));
 const continueSessionMock = mock(async () => ({ ok: true }));
+const forkSessionMock = mock(async () => ({ ok: true, sessionId: "session-follow-up" }));
 const createSessionMock = mock(async () => ({
   ok: true,
   sessionId: "session-test",
@@ -135,7 +136,7 @@ const runtimeProviderModule = createRuntimeProviderModuleMock({
   ensureAgentRunForSession: ensureAgentRunForSessionMock,
   extractAssistantResultFromMessages: extractAssistantResultFromMessagesMock,
   findAgentRunBySessionId: mock(() => undefined),
-  forkSession: mock(async () => ({ ok: true, sessionId: "forked-session" })),
+  forkSession: forkSessionMock,
   getSessionMessages: mock(async () => ({ ok: true, data: [] })),
   runDetachedPrompt: runDetachedPromptMock,
   getAgentMessages: mock(async () => ({ ok: true, data: [] })),
@@ -234,9 +235,41 @@ function buildStrategy(overrides: Partial<OrchestrationStrategy> = {}): Orchestr
   return normalizeOrchestrationStrategy(overrides);
 }
 
+async function withFrozenTime<T>(
+  initialIso: string,
+  action: (advanceTo: (nextIso: string) => void) => Promise<T>,
+) {
+  const RealDate = Date;
+  let currentMs = RealDate.parse(initialIso);
+
+  class FakeDate extends RealDate {
+    constructor(...args: ConstructorParameters<typeof Date>) {
+      super(...(args.length === 0 ? [currentMs] : args));
+    }
+
+    static now() {
+      return currentMs;
+    }
+
+    static parse = RealDate.parse;
+    static UTC = RealDate.UTC;
+  }
+
+  globalThis.Date = FakeDate as unknown as DateConstructor;
+
+  try {
+    return await action((nextIso: string) => {
+      currentMs = RealDate.parse(nextIso);
+    });
+  } finally {
+    globalThis.Date = RealDate;
+  }
+}
+
 beforeEach(() => {
   runDetachedPromptMock.mockReset();
   continueSessionMock.mockReset();
+  forkSessionMock.mockReset();
   createSessionMock.mockReset();
   getAgentRunMock.mockReset();
   injectGuidanceMock.mockReset();
@@ -308,6 +341,7 @@ beforeEach(() => {
     agentRunId: "run-test",
   });
   continueSessionMock.mockResolvedValue({ ok: true });
+  forkSessionMock.mockResolvedValue({ ok: true, sessionId: "session-follow-up" });
   authHeaderMock.mockReturnValue("Bearer test");
   readDefaultExecutionModelMock.mockReturnValue(undefined);
   formatModelRouteMock.mockImplementation(
@@ -370,6 +404,7 @@ beforeEach(() => {
 afterEach(() => {
   runDetachedPromptMock.mockReset();
   continueSessionMock.mockReset();
+  forkSessionMock.mockReset();
   createSessionMock.mockReset();
   getAgentRunMock.mockReset();
   injectGuidanceMock.mockReset();
@@ -954,6 +989,53 @@ describe("executeLifecycleHooks behavior", () => {
             return { ok: true, data: { settings: {} } };
           }
 
+          if (url === "/api/tasks/task-1/sessions") {
+            return {
+              ok: true,
+              data: {
+                data: [
+                  {
+                    id: "task-session:task-1:session-legacy-root",
+                    runtimeSessionId: "session-legacy-root",
+                    branchName: "Legacy root",
+                    sessionKind: "primary",
+                    executionModeSnapshot: "single",
+                  },
+                  {
+                    id: "task-session:task-1:session-legacy-a",
+                    runtimeSessionId: "session-legacy-a",
+                    parentSessionId: "task-session:task-1:session-legacy-root",
+                    branchName: "Legacy 候选 A",
+                    sessionKind: "candidate",
+                    executionModeSnapshot: "parallel",
+                    candidateIndex: 0,
+                    coordinationKey: "session-legacy-root",
+                  },
+                  {
+                    id: "task-session:task-1:session-legacy-b",
+                    runtimeSessionId: "session-legacy-b",
+                    parentSessionId: "task-session:task-1:session-legacy-root",
+                    branchName: "Legacy 候选 B",
+                    sessionKind: "candidate",
+                    executionModeSnapshot: "parallel",
+                    candidateIndex: 1,
+                    coordinationKey: "session-legacy-root",
+                  },
+                  {
+                    id: "task-session:task-1:session-existing-a",
+                    runtimeSessionId: "session-existing-a",
+                    branchName: "Adopted winner",
+                    sessionKind: "primary",
+                    executionModeSnapshot: "single",
+                  },
+                ],
+                meta: {
+                  currentSessionId: "task-session:task-1:session-existing-a",
+                },
+              },
+            };
+          }
+
           return {
             ok: true,
             data: currentTask,
@@ -1012,6 +1094,88 @@ describe("executeLifecycleHooks behavior", () => {
     }
   });
 
+  test("continue route fails closed when parallel candidate lineage registration returns non-ok", async () => {
+    currentStrategy = buildStrategy({ hooks: [] });
+    process.env.ALLOW_PAID_MODEL_EXECUTION = "1";
+    cpFetchMock.mockImplementation(
+      async (url: string, options?: { method?: string; body?: unknown }) => {
+        if (!options?.method) {
+          if (url.includes("/paid-execution-lease")) {
+            return {
+              ok: true,
+              data: {
+                projectId: "proj-1",
+                activeLease: { id: "lease-test" },
+                now: "2026-03-10T00:00:00.000Z",
+              },
+            };
+          }
+
+          if (url.includes("/api/projects/")) {
+            return { ok: true, data: { settings: {} } };
+          }
+
+          return {
+            ok: true,
+            data: currentTask,
+          };
+        }
+
+        if (url === "/api/tasks/task-1/sessions") {
+          return {
+            ok: false,
+            status: 404,
+            data: { error: "Task session route unavailable" },
+          };
+        }
+
+        return { ok: true, data: { body: options.body } };
+      },
+    );
+
+    currentTask = {
+      ...currentTask,
+      title: "Parallel continuation lineage failure",
+      prompt: "Compare responses and continue the task",
+      sessionId: undefined,
+      executionMode: "parallel",
+      strategy: JSON.stringify({
+        executionMode: "parallel",
+        parallelCandidates: [
+          { model: "github-copilot:gpt-5-mini", label: "候选 A" },
+          { model: "github-copilot:gpt-4o", label: "候选 B" },
+        ],
+      }),
+    };
+
+    createSessionMock
+      .mockResolvedValueOnce({ ok: true, sessionId: "session-a", agentRunId: "run-a" })
+      .mockResolvedValueOnce({ ok: true, sessionId: "session-b", agentRunId: "run-b" });
+
+    const { taskRoutes } = await loadTaskRoutesModule();
+    const response = await taskRoutes.request("http://localhost/task-1/continue", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer test",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ prompt: "Please continue" }),
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(502);
+    expect(body).toMatchObject({ error: "Task session route unavailable" });
+    expect(createSessionMock).toHaveBeenCalledTimes(2);
+    expect(registerParallelTaskMock).not.toHaveBeenCalled();
+
+    const lineageWrites = cpFetchMock.mock.calls.filter(
+      ([url, options]) =>
+        url === "/api/tasks/task-1/sessions" &&
+        (options as { method?: string } | undefined)?.method === "POST",
+    );
+    expect(lineageWrites).toHaveLength(1);
+  });
+
   test("continue route resets stale parallel candidate state after manual adoption before starting a new round", async () => {
     currentStrategy = buildStrategy({ hooks: [] });
     process.env.ALLOW_PAID_MODEL_EXECUTION = "1";
@@ -1059,9 +1223,9 @@ describe("executeLifecycleHooks behavior", () => {
       }),
     };
 
-    createSessionMock
-      .mockResolvedValueOnce({ ok: true, sessionId: "session-new-a", agentRunId: "run-new-a" })
-      .mockResolvedValueOnce({ ok: true, sessionId: "session-new-b", agentRunId: "run-new-b" });
+    forkSessionMock
+      .mockResolvedValueOnce({ ok: true, sessionId: "session-new-a" })
+      .mockResolvedValueOnce({ ok: true, sessionId: "session-new-b" });
 
     const { taskRoutes } = await loadTaskRoutesModule();
     const response = await taskRoutes.request("http://localhost/task-1/continue", {
@@ -1083,8 +1247,27 @@ describe("executeLifecycleHooks behavior", () => {
         { sessionId: "session-new-b", status: "running" },
       ],
     });
-    expect(createSessionMock).toHaveBeenCalledTimes(2);
-    expect(continueSessionMock).not.toHaveBeenCalled();
+    expect(createSessionMock).not.toHaveBeenCalled();
+    expect(forkSessionMock).toHaveBeenCalledTimes(2);
+    expect(forkSessionMock).toHaveBeenNthCalledWith(1, "session-existing-a", {
+      title: expect.stringContaining("候选 A"),
+    });
+    expect(forkSessionMock).toHaveBeenNthCalledWith(2, "session-existing-a", {
+      title: expect.stringContaining("候选 B"),
+    });
+    expect(continueSessionMock).toHaveBeenCalledTimes(2);
+    expect(continueSessionMock).toHaveBeenNthCalledWith(
+      1,
+      "session-new-a",
+      "Please continue",
+      expect.any(Object),
+    );
+    expect(continueSessionMock).toHaveBeenNthCalledWith(
+      2,
+      "session-new-b",
+      "Please continue",
+      expect.any(Object),
+    );
 
     const patchCalls = getPatchCalls();
     const runningPatch = patchCalls.find(
@@ -1108,23 +1291,51 @@ describe("executeLifecycleHooks behavior", () => {
         url === "/api/tasks/task-1/sessions" &&
         (options as { method?: string } | undefined)?.method === "POST",
     );
-    expect(lineageWrites).toHaveLength(3);
+    expect(lineageWrites).toHaveLength(2);
     expect((lineageWrites[0]?.[1] as { body?: Record<string, unknown> })?.body).toMatchObject({
-      runtimeSessionId: "session-existing-a",
-      branchName: "Parallel task after manual adoption",
-      sourceType: "root",
-    });
-    expect((lineageWrites[1]?.[1] as { body?: Record<string, unknown> })?.body).toMatchObject({
       runtimeSessionId: "session-new-a",
       parentRuntimeSessionId: "session-existing-a",
       branchName: "候选 A",
       sourceType: "fork",
+      sessionKind: "candidate",
+      executionModeSnapshot: "parallel",
+      candidateIndex: 0,
+      coordinationKey: "session-existing-a",
     });
-    expect((lineageWrites[2]?.[1] as { body?: Record<string, unknown> })?.body).toMatchObject({
+    expect((lineageWrites[1]?.[1] as { body?: Record<string, unknown> })?.body).toMatchObject({
       runtimeSessionId: "session-new-b",
       parentRuntimeSessionId: "session-existing-a",
       branchName: "候选 B",
       sourceType: "fork",
+      sessionKind: "candidate",
+      executionModeSnapshot: "parallel",
+      candidateIndex: 1,
+      coordinationKey: "session-existing-a",
+    });
+
+    const promptWrites = cpFetchMock.mock.calls.filter(
+      ([url, options]) =>
+        url === "/api/tasks/task-1/sessions/messages" &&
+        (options as { method?: string } | undefined)?.method === "POST",
+    );
+    expect(promptWrites).toHaveLength(2);
+    expect((promptWrites[0]?.[1] as { body?: Record<string, unknown> })?.body).toMatchObject({
+      runtimeSessionId: "session-new-a",
+      message: {
+        promptDecomposition: {
+          userInputText: "Please continue",
+          finalSentText: "Please continue",
+        },
+      },
+    });
+    expect((promptWrites[1]?.[1] as { body?: Record<string, unknown> })?.body).toMatchObject({
+      runtimeSessionId: "session-new-b",
+      message: {
+        promptDecomposition: {
+          userInputText: "Please continue",
+          finalSentText: "Please continue",
+        },
+      },
     });
   });
 
@@ -1161,10 +1372,14 @@ describe("executeLifecycleHooks behavior", () => {
     expect(response.status).toBe(200);
     expect(body).toMatchObject({
       ok: true,
-      sessionId: "session-existing",
+      sessionId: "session-follow-up",
+      parentSessionId: "session-existing",
+    });
+    expect(forkSessionMock).toHaveBeenCalledWith("session-existing", {
+      title: expect.stringContaining("Please continue"),
     });
     expect(continueSessionMock).toHaveBeenCalledWith(
-      "session-existing",
+      "session-follow-up",
       expect.stringContaining("Please continue"),
       expect.any(Object),
     );
@@ -1172,7 +1387,7 @@ describe("executeLifecycleHooks behavior", () => {
     expect(registerParallelTaskMock).not.toHaveBeenCalled();
   });
 
-  test("continue route preserves canonical task session ids in the continuation response", async () => {
+  test("continue route resolves canonical task session ids to runtime sessions", async () => {
     currentStrategy = buildStrategy({ hooks: [] });
     currentTask = {
       ...currentTask,
@@ -1234,14 +1449,71 @@ describe("executeLifecycleHooks behavior", () => {
     expect(response.status).toBe(200);
     expect(body).toMatchObject({
       ok: true,
-      sessionId: "task-session:task-1:session-existing",
+      sessionId: "session-follow-up",
+      taskSessionId: "task-session:task-1:session-follow-up",
+      parentSessionId: "session-existing",
+      parentTaskSessionId: "task-session:task-1:session-existing",
       agentRunId: "run-test",
     });
+    expect(forkSessionMock).toHaveBeenCalledWith("session-existing", {
+      title: expect.stringContaining("Please continue"),
+    });
     expect(continueSessionMock).toHaveBeenCalledWith(
-      "task-session:task-1:session-existing",
+      "session-follow-up",
       expect.stringContaining("Please continue"),
       expect.any(Object),
     );
+  });
+
+  test("continue route stamps child user prompt with the request start time", async () => {
+    currentStrategy = buildStrategy({ hooks: [] });
+    currentTask = {
+      ...currentTask,
+      title: "Timed continuation task",
+      prompt: "Please continue",
+      sessionId: "session-existing",
+      status: "paused",
+      executionMode: "single",
+    };
+
+    await withFrozenTime("2026-04-08T14:20:46.000Z", async (advanceTo) => {
+      continueSessionMock.mockImplementationOnce(async () => {
+        advanceTo("2026-04-08T14:20:46.500Z");
+        return { ok: true };
+      });
+
+      const { taskRoutes } = await loadTaskRoutesModule();
+      const response = await taskRoutes.request("http://localhost/task-1/continue", {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer test",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ prompt: "Please continue", executionMode: "single" }),
+      });
+
+      expect(response.status).toBe(200);
+
+      const promptWrites = cpFetchMock.mock.calls.filter(
+        ([url, options]) =>
+          url === "/api/tasks/task-1/sessions/messages" &&
+          (options as { method?: string } | undefined)?.method === "POST",
+      );
+
+      expect(promptWrites).toHaveLength(1);
+      expect((promptWrites[0]?.[1] as { body?: Record<string, unknown> })?.body).toMatchObject({
+        runtimeSessionId: "session-follow-up",
+        message: {
+          info: {
+            id: "session-follow-up:user-prompt",
+            time: {
+              created: "2026-04-08T14:20:46.000Z",
+              completed: "2026-04-08T14:20:46.000Z",
+            },
+          },
+        },
+      });
+    });
   });
 
   test("continue route does not rewrite legacy parallel compat patch fields for projection-backed tasks", async () => {
@@ -1371,24 +1643,24 @@ describe("executeLifecycleHooks behavior", () => {
         url === "/api/tasks/task-1/sessions" &&
         (options as { method?: string } | undefined)?.method === "POST",
     );
-    expect(lineageWrites).toHaveLength(3);
+    expect(lineageWrites).toHaveLength(2);
     expect((lineageWrites[0]?.[1] as { body?: Record<string, unknown> })?.body).toMatchObject({
-      runtimeSessionId: "session-existing-parent",
-      branchName: "Parallel execute task",
-      sourceType: "root",
-      isActive: false,
-    });
-    expect((lineageWrites[1]?.[1] as { body?: Record<string, unknown> })?.body).toMatchObject({
       runtimeSessionId: "session-new-a",
       parentRuntimeSessionId: "session-existing-parent",
       branchName: "候选 A",
       sourceType: "fork",
+      sessionKind: "candidate",
+      executionModeSnapshot: "parallel",
+      candidateIndex: 0,
     });
-    expect((lineageWrites[2]?.[1] as { body?: Record<string, unknown> })?.body).toMatchObject({
+    expect((lineageWrites[1]?.[1] as { body?: Record<string, unknown> })?.body).toMatchObject({
       runtimeSessionId: "session-new-b",
       parentRuntimeSessionId: "session-existing-parent",
       branchName: "候选 B",
       sourceType: "fork",
+      sessionKind: "candidate",
+      executionModeSnapshot: "parallel",
+      candidateIndex: 1,
     });
   });
 
@@ -1516,19 +1788,61 @@ describe("executeLifecycleHooks behavior", () => {
         url === "/api/tasks/task-1/sessions" &&
         (options as { method?: string } | undefined)?.method === "POST",
     );
-    expect(lineageWrites).toHaveLength(2);
+    expect(lineageWrites).toHaveLength(1);
     expect((lineageWrites[0]?.[1] as { body?: Record<string, unknown> })?.body).toMatchObject({
-      runtimeSessionId: "session-existing-parent",
-      branchName: "Single execute task",
-      sourceType: "root",
-      isActive: false,
-    });
-    expect((lineageWrites[1]?.[1] as { body?: Record<string, unknown> })?.body).toMatchObject({
       runtimeSessionId: "session-new-single",
       parentRuntimeSessionId: "session-existing-parent",
       branchName: "Single execute task",
       sourceType: "fork",
       isActive: true,
+    });
+  });
+
+  test("execute route stamps single-session user prompt with the request start time", async () => {
+    currentTask = {
+      ...currentTask,
+      title: "Single execute timed task",
+      prompt: "Please execute single",
+      sessionId: "session-existing-parent",
+    };
+
+    await withFrozenTime("2026-04-08T14:18:05.000Z", async (advanceTo) => {
+      createSessionMock.mockImplementationOnce(async () => {
+        advanceTo("2026-04-08T14:18:05.500Z");
+        return {
+          ok: true,
+          sessionId: "session-new-single",
+          agentRunId: "run-new-single",
+        };
+      });
+
+      const { taskRoutes } = await loadTaskRoutesModule();
+      const response = await taskRoutes.request("http://localhost/task-1/execute", {
+        method: "POST",
+        headers: { Authorization: "Bearer test" },
+      });
+
+      expect(response.status).toBe(200);
+
+      const promptWrites = cpFetchMock.mock.calls.filter(
+        ([url, options]) =>
+          url === "/api/tasks/task-1/sessions/messages" &&
+          (options as { method?: string } | undefined)?.method === "POST",
+      );
+
+      expect(promptWrites).toHaveLength(1);
+      expect((promptWrites[0]?.[1] as { body?: Record<string, unknown> })?.body).toMatchObject({
+        runtimeSessionId: "session-new-single",
+        message: {
+          info: {
+            id: "session-new-single:user-prompt",
+            time: {
+              created: "2026-04-08T14:18:05.000Z",
+              completed: "2026-04-08T14:18:05.000Z",
+            },
+          },
+        },
+      });
     });
   });
 

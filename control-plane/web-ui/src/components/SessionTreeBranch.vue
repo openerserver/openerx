@@ -16,8 +16,7 @@
           <span class="branch-node__branch-badge" :style="branchBadgeStyle">{{ branchBadgeLabel }}</span>
           <span class="branch-node__title">{{ displayTitle }}</span>
           <a-tag v-if="node.isActive" color="blue" class="branch-node__tag">当前</a-tag>
-          <a-tag v-else-if="node.sourceType === 'root'" color="default" class="branch-node__tag">主线</a-tag>
-          <a-tag v-else color="cyan" class="branch-node__tag">分叉节点</a-tag>
+          <a-tag v-else :color="nodeTypeTagColor" class="branch-node__tag">{{ nodeTypeTagLabel }}</a-tag>
           <a-tag v-if="sessionState" :color="sessionState.badgeColor" class="branch-node__tag">{{ sessionState.badgeLabel }}</a-tag>
           <a-tag v-if="sessionState?.countdownLabel" color="default" class="branch-node__tag">剩余 {{ sessionState.countdownLabel }}</a-tag>
         </div>
@@ -205,12 +204,28 @@ const branchBadgeLabel = computed(() => {
     return "主线";
   }
 
+  if (props.node.sourceType === "parallel") {
+    return `候选 ${props.branchPath}`;
+  }
+
+  if (props.node.sourceType === "sub_session") {
+    return `续跑 ${props.branchPath}`;
+  }
+
   return `分叉 ${props.branchPath}`;
 });
 
 const branchAccentColor = computed(() => {
   if (props.node.sourceType === "root") {
     return "#6c7f99";
+  }
+
+  if (props.node.sourceType === "parallel") {
+    return "#a65e00";
+  }
+
+  if (props.node.sourceType === "sub_session") {
+    return "#4f8f6a";
   }
 
   const palette = ["#2f6fed", "#0f9d7a", "#bc6a1f", "#8a4fd1", "#c04a6f", "#3b7f53"];
@@ -246,10 +261,60 @@ const parentBranchReference = computed(() => {
   return `${branchLabel}（${parentSessionShortId.value}）`;
 });
 
-const lineageBadge = computed(() => (props.node.sourceType === "root" ? "主线" : "分叉来源"));
+const nodeTypeTagLabel = computed(() => {
+  if (props.node.sourceType === "root") {
+    return "主线";
+  }
+
+  if (props.node.sourceType === "parallel") {
+    return "并行候选";
+  }
+
+  if (props.node.sourceType === "sub_session") {
+    return "续跑节点";
+  }
+
+  return "分叉节点";
+});
+
+const nodeTypeTagColor = computed(() => {
+  if (props.node.sourceType === "root") {
+    return "default";
+  }
+
+  if (props.node.sourceType === "parallel") {
+    return "gold";
+  }
+
+  if (props.node.sourceType === "sub_session") {
+    return "green";
+  }
+
+  return "cyan";
+});
+
+const lineageBadge = computed(() => {
+  if (props.node.sourceType === "root") {
+    return "主线";
+  }
+
+  if (props.node.sourceType === "parallel") {
+    return "并行来源";
+  }
+
+  if (props.node.sourceType === "sub_session") {
+    return "续跑来源";
+  }
+
+  return "分叉来源";
+});
 
 const showLineage = computed(() => {
   if (props.node.sourceType === "root") {
+    return true;
+  }
+
+  if (props.node.sourceType === "parallel") {
     return true;
   }
 
@@ -260,6 +325,23 @@ const lineageText = computed(() => {
   if (props.node.sourceType === "root") {
     return "这是当前任务的主线起点";
   }
+
+  if (props.node.sourceType === "parallel") {
+    if (!props.parentTitle && !props.parentSessionId) {
+      return "这是一个并行候选会话";
+    }
+
+    return `与 ${parentBranchReference.value} 并行执行`;
+  }
+
+  if (props.node.sourceType === "sub_session") {
+    if (!props.parentTitle && !props.parentSessionId) {
+      return "这是当前任务的续跑会话";
+    }
+
+    return `基于 ${parentBranchReference.value} 继续执行`;
+  }
+
   if (!props.parentTitle && !props.parentSessionId) {
     return "直接从主线分叉";
   }

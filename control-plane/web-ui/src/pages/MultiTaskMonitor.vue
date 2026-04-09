@@ -334,11 +334,14 @@ import {
   listTasks,
 } from "../lib/api";
 import { renderMarkdown } from "../lib/markdown";
-import { getRealtimeEventKind, getRealtimeInfo, getRealtimePart } from "../lib/message-normalize";
+import {
+  type LiveAssistantState,
+} from "../lib/message-normalize";
 import { resolveTaskDisplayStatus } from "../lib/task-display-status";
 import { normalizeWorkspaceFilePath } from "../lib/workspace-file-path";
+import { useMultiTaskMessageStore } from "../composables/useMultiTaskMessageStore";
 import { useProjectStore } from "../stores/project";
-import { type RealtimeEvent, useRealtimeStore } from "../stores/realtime";
+import { useRealtimeStore } from "../stores/realtime";
 import {
   type TaskMonitorLayoutMode,
   type TaskMonitorNodeLayout,
@@ -447,31 +450,13 @@ interface MonitorToolCallView {
   exitCode?: number;
 }
 
-interface StreamingAssistantMeta {
-  agent?: string;
-  modelLabel?: string;
-  createdAt?: string;
-}
-
-interface LiveAssistantSnapshot {
-  orderedAssistantMessageIds: string[];
-  metaById: Map<string, StreamingAssistantMeta>;
-  textById: Map<string, string>;
-  incompleteIds: Set<string>;
-}
+type LiveAssistantSnapshot = LiveAssistantState;
 
 interface MonitorTaskContext {
   task: Task;
   sessions: TaskSessionRecord[];
   pipeline: RuntimePipeline | null;
   memberView: TaskMemberViewModel | null;
-}
-
-interface LiveMessageState {
-  orderedAssistantMessageIds: string[];
-  metaById: Record<string, StreamingAssistantMeta>;
-  textById: Record<string, string>;
-  incompleteIds: string[];
 }
 
 interface FreeLayoutDragPreviewState {
@@ -576,8 +561,6 @@ const persistedMessages = reactive<Record<string, unknown[]>>({});
 const streamContainers = reactive<Record<string, HTMLDivElement | null>>({});
 const renderedNodeHeights = reactive<Record<string, number>>({});
 const taskContexts = reactive<Record<string, MonitorTaskContext>>({});
-const lastRealtimeEventIds = reactive<Record<string, string>>({});
-const liveMessageStates = reactive<Record<string, LiveMessageState>>({});
 const monitorStreamingRevealText = ref<Record<string, string>>({});
 const freeLayoutDragPreview = ref<FreeLayoutDragPreviewState>({
   active: false,
@@ -609,8 +592,7 @@ function resetMonitorTransientState() {
   clearReactiveRecord(streamContainers);
   clearReactiveRecord(renderedNodeHeights);
   clearReactiveRecord(taskContexts);
-  clearReactiveRecord(lastRealtimeEventIds);
-  clearReactiveRecord(liveMessageStates);
+  resetTaskMessageStore();
   monitorStreamingRevealText.value = {};
 }
 
@@ -682,6 +664,14 @@ const STRUCTURE_SECTION_MIN_WIDTH = 392;
 const STRUCTURE_SECTION_GAP = 28;
 const STRUCTURE_SECTION_ROW_GAP = 24;
 const STRUCTURE_SECTION_SIDE_PADDING = 28;
+
+const monitoredTaskIds = computed(() => monitorStore.nodes.map((node) => node.taskId));
+const {
+  taskPatchEventSignature,
+  getLiveAssistantState,
+  processMonitoredTaskPatchEvents,
+  reset: resetTaskMessageStore,
+} = useMultiTaskMessageStore(monitoredTaskIds);
 
 const requestedTaskIds = computed(() => {
   const value = route.query.task;
@@ -1312,7 +1302,6 @@ function summaryForTask(taskId: string) {
     context.pipeline,
     context.memberView,
     persistedMessages[taskId] || [],
-    taskRealtimeEvents.value,
   );
 }
 
@@ -1354,10 +1343,6 @@ const issueCount = computed(
     visibleLayouts.value.filter((layout) => isIssueStatus(summaryForTask(layout.taskId).status))
       .length,
 );
-const taskRealtimeEvents = computed(() => {
-  const taskIds = new Set(monitorStore.nodes.map((node) => node.taskId));
-  return realtimeStore.events.filter((event) => event.taskId && taskIds.has(event.taskId));
-});
 
 const monitorMessageSignature = computed(() =>
   visibleLayouts.value
@@ -1463,7 +1448,7 @@ watch(
 );
 
 watch(
-  () => taskRealtimeEvents.value.map((event) => event.id).join("|"),
+  () => taskPatchEventSignature.value,
   async () => {
     await processRealtimeMonitorEvents();
   },
@@ -2577,7 +2562,6 @@ function rebuildSummaryFromCache(taskId: string) {
     context.pipeline,
     context.memberView,
     persistedMessages[taskId] || [],
-    taskRealtimeEvents.value,
   );
 }
 
@@ -2589,107 +2573,6 @@ function getObjectRecord(value: unknown): Record<string, unknown> | null {
 
 function getNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function createLiveAssistantSnapshot(): LiveAssistantSnapshot {
-  return {
-    orderedAssistantMessageIds: [],
-    metaById: new Map<string, StreamingAssistantMeta>(),
-    textById: new Map<string, string>(),
-    incompleteIds: new Set<string>(),
-  };
-}
-
-function rememberAssistantMessageInSnapshot(snapshot: LiveAssistantSnapshot, messageId: string) {
-  if (!snapshot.orderedAssistantMessageIds.includes(messageId)) {
-    snapshot.orderedAssistantMessageIds.push(messageId);
-  }
-}
-
-function buildLiveAssistantSnapshotFromCache(cachedState: LiveMessageState): LiveAssistantSnapshot {
-  return {
-    orderedAssistantMessageIds: [...cachedState.orderedAssistantMessageIds],
-    metaById: new Map(Object.entries(cachedState.metaById)),
-    textById: new Map(Object.entries(cachedState.textById)),
-    incompleteIds: new Set(cachedState.incompleteIds),
-  };
-}
-
-function listRelevantRealtimeEvents(
-  taskId: string,
-  sessionId: string,
-  realtimeEvents: RealtimeEvent[],
-) {
-  return realtimeEvents
-    .filter((event) => event.taskId === taskId && event.sessionId === sessionId)
-    .slice()
-    .reverse();
-}
-
-function extractRealtimeTime(info: Record<string, unknown>) {
-  return getObjectRecord(info.time) ?? undefined;
-}
-
-function updateSnapshotAssistantMeta(
-  snapshot: LiveAssistantSnapshot,
-  messageId: string,
-  info: Record<string, unknown>,
-) {
-  const time = extractRealtimeTime(info);
-  snapshot.metaById.set(messageId, {
-    agent: getNonEmptyString(info.agent),
-    modelLabel: extractModelLabel(info),
-    createdAt: parseMessageTimestamp(time?.created ?? time?.completed),
-  });
-}
-
-function updateSnapshotIncompleteState(
-  snapshot: LiveAssistantSnapshot,
-  messageId: string,
-  completedValue: unknown,
-) {
-  if (typeof completedValue === "number" || typeof completedValue === "string") {
-    snapshot.incompleteIds.delete(messageId);
-    return;
-  }
-
-  snapshot.incompleteIds.add(messageId);
-}
-
-function applyRealtimeMessageUpdatedToSnapshot(
-  snapshot: LiveAssistantSnapshot,
-  event: RealtimeEvent,
-) {
-  const info = getRealtimeInfo(event);
-  if (!info) {
-    return;
-  }
-
-  const messageId = getNonEmptyString(info.id);
-  if (!messageId || info.role !== "assistant") {
-    return;
-  }
-
-  const time = extractRealtimeTime(info);
-  rememberAssistantMessageInSnapshot(snapshot, messageId);
-  updateSnapshotAssistantMeta(snapshot, messageId, info);
-  updateSnapshotIncompleteState(snapshot, messageId, time?.completed);
-}
-
-function applyRealtimeTextPartToSnapshot(snapshot: LiveAssistantSnapshot, event: RealtimeEvent) {
-  const part = getRealtimePart(event);
-  if (!part) {
-    return;
-  }
-
-  const messageId = getNonEmptyString(part.messageID);
-  const text = typeof part.text === "string" ? part.text : null;
-  if (!messageId || part.type !== "text" || text === null) {
-    return;
-  }
-
-  rememberAssistantMessageInSnapshot(snapshot, messageId);
-  snapshot.textById.set(messageId, mergeStreamingText(snapshot.textById.get(messageId), text));
 }
 
 function extractPersistedMessageParts(raw: Record<string, unknown>) {
@@ -3132,7 +3015,6 @@ function buildSummary(
   pipeline: RuntimePipeline | null,
   memberView: TaskMemberViewModel | null,
   sessionMessages: unknown[],
-  realtimeEvents: RealtimeEvent[],
 ): MonitorNodeSummary {
   const pipelineStages = (pipeline?.stages || [])
     .filter((stage) => stage.startedAt || stage.finishedAt)
@@ -3148,9 +3030,8 @@ function buildSummary(
     task.prompt || task.title || task.id,
     activeSession?.id,
     sessionMessages,
-    realtimeEvents,
   );
-  const resolvedStatus = resolveMonitorTaskStatus(task, pipeline, sessions, messages);
+  const resolvedStatus = resolveMonitorTaskStatus(task, pipeline);
   const resolvedDisplayStatusLabel = displayStatusLabel(task, resolvedStatus);
   const currentStage = resolveCurrentPipelineStage(pipeline, resolvedStatus, pipelineStages);
 
@@ -3265,88 +3146,17 @@ function buildChangeLabel(task: Task): string {
 function resolveMonitorTaskStatus(
   task: Task,
   pipeline: RuntimePipeline | null,
-  sessions: TaskSessionRecord[],
-  messages: MonitorMessageItem[],
 ) {
-  if (!pipeline) {
-    return inferCompletedTaskStatus(task.status, task, pipeline, sessions, messages);
+  if (task.status === "failed" || task.status === "stopped" || task.status === "cancelled") {
+    return task.status;
   }
 
-  if (
-    pipeline.status === "completed" ||
-    pipeline.status === "failed" ||
-    pipeline.status === "paused"
-  ) {
-    return pipeline.status;
+  const pipelineStatus = pipeline?.status;
+  if (pipelineStatus && pipelineStatus !== "idle") {
+    return pipelineStatus;
   }
 
-  if (
-    pipeline.summary.totalStages > 0 &&
-    pipeline.summary.currentStageId == null &&
-    pipeline.summary.completedStages >= pipeline.summary.totalStages &&
-    pipeline.summary.failedStages === 0
-  ) {
-    return "completed";
-  }
-
-  return inferCompletedTaskStatus(task.status, task, pipeline, sessions, messages);
-}
-
-function inferCompletedTaskStatus(
-  taskStatus: string,
-  task: Task,
-  pipeline: RuntimePipeline | null,
-  sessions: TaskSessionRecord[],
-  messages: MonitorMessageItem[],
-) {
-  if (taskStatus === "failed" || taskStatus === "stopped" || taskStatus === "cancelled") {
-    return taskStatus;
-  }
-
-  if (taskStatus === "pending" && !task.startedAt) {
-    return taskStatus;
-  }
-
-  const hasStreamingAssistantReply = messages.some(
-    (message) => message.role === "assistant" && message.isStreaming,
-  );
-  const hasAnimatedAssistantReveal = messages.some((message) =>
-    shouldAnimateMonitorMessage(task.id, message),
-  );
-  const hasActiveSession = sessions.some((session) => session.isActive);
-  const latestInteractiveMessage = findLatestVisibleInteractiveMonitorMessage(task.id, messages);
-  const isAwaitingAssistantReply = latestInteractiveMessage?.role === "user";
-
-  if (
-    hasStreamingAssistantReply ||
-    hasAnimatedAssistantReveal ||
-    isAwaitingAssistantReply ||
-    pipeline?.status === "running"
-  ) {
-    return "running";
-  }
-
-  if (!latestInteractiveMessage && hasActiveSession) {
-    return "running";
-  }
-
-  if (latestInteractiveMessage?.role === "assistant") {
-    return "completed";
-  }
-
-  if (taskStatus !== "running") {
-    return taskStatus;
-  }
-
-  if (task.finishedAt) {
-    return "completed";
-  }
-
-  if (task.result) {
-    return "completed";
-  }
-
-  return taskStatus;
+  return task.status;
 }
 
 function buildMonitorMessages(
@@ -3354,9 +3164,8 @@ function buildMonitorMessages(
   taskPrompt: string,
   sessionId: string | undefined,
   sessionMessages: unknown[],
-  realtimeEvents: RealtimeEvent[],
 ): MonitorMessageItem[] {
-  const liveState = buildLiveAssistantState(taskId, sessionId, realtimeEvents);
+  const liveState = buildLiveAssistantState(taskId, sessionId);
   const persistedItems = buildPersistedMonitorMessages(sessionMessages, liveState);
 
   appendLiveOnlyAssistantMessages(persistedItems, liveState);
@@ -3368,51 +3177,8 @@ function buildMonitorMessages(
 function buildLiveAssistantState(
   taskId: string,
   sessionId: string | undefined,
-  realtimeEvents: RealtimeEvent[],
 ) {
-  const liveStateKey = buildLiveMessageStateKey(taskId, sessionId);
-  const cachedState = liveMessageStates[liveStateKey];
-  if (cachedState) {
-    return buildLiveAssistantSnapshotFromCache(cachedState);
-  }
-
-  const snapshot = createLiveAssistantSnapshot();
-
-  if (!sessionId) {
-    return snapshot;
-  }
-
-  const relevantEvents = listRelevantRealtimeEvents(taskId, sessionId, realtimeEvents);
-
-  for (const event of relevantEvents) {
-    const eventKind = getRealtimeEventKind(event);
-    if (eventKind === "task.message.updated") {
-      applyRealtimeMessageUpdatedToSnapshot(snapshot, event);
-    }
-
-    if (eventKind === "task.message.delta") {
-      applyRealtimeTextPartToSnapshot(snapshot, event);
-    }
-  }
-
-  return snapshot;
-}
-
-function mergeStreamingText(existing: string | undefined, incoming: string): string {
-  const next = incoming.trim();
-  if (!existing) {
-    return next;
-  }
-  if (!next) {
-    return existing;
-  }
-  if (next.startsWith(existing)) {
-    return next;
-  }
-  if (existing === next || existing.endsWith(next)) {
-    return existing;
-  }
-  return `${existing}${next}`;
+  return getLiveAssistantState(taskId, sessionId);
 }
 
 function displayStatusLabel(task: Task, status?: string) {
@@ -3779,192 +3545,19 @@ function parseMessageTimestamp(value: unknown): string | undefined {
   return undefined;
 }
 
-function buildLiveMessageStateKey(taskId: string, sessionId: string | undefined) {
-  return `${taskId}:${sessionId || "none"}`;
-}
-
-function ensureLiveMessageState(taskId: string, sessionId: string | undefined) {
-  const key = buildLiveMessageStateKey(taskId, sessionId);
-  if (!liveMessageStates[key]) {
-    liveMessageStates[key] = {
-      orderedAssistantMessageIds: [],
-      metaById: {},
-      textById: {},
-      incompleteIds: [],
-    };
-  }
-  return liveMessageStates[key];
-}
-
-function rememberLiveAssistantMessage(state: LiveMessageState, messageId: string) {
-  if (!state.orderedAssistantMessageIds.includes(messageId)) {
-    state.orderedAssistantMessageIds.push(messageId);
-  }
-}
-
-function setIncompleteState(state: LiveMessageState, messageId: string, incomplete: boolean) {
-  if (incomplete) {
-    if (!state.incompleteIds.includes(messageId)) {
-      state.incompleteIds.push(messageId);
-    }
-    return;
-  }
-
-  state.incompleteIds = state.incompleteIds.filter((id) => id !== messageId);
-}
-
-function shouldRefreshPersistedMessagesFromEvent(event: RealtimeEvent) {
-  if (getRealtimeEventKind(event) !== "task.message.updated") {
-    return false;
-  }
-
-  const info = getRealtimeInfo(event);
-  const time = info ? extractRealtimeTime(info) : undefined;
-  return typeof time?.completed === "number" || typeof time?.completed === "string";
-}
-
-function processPendingRealtimeEvents(
-  taskId: string,
-  activeSessionId: string | undefined,
-  pendingEvents: RealtimeEvent[],
-) {
-  let shouldRefreshPersistedMessages = false;
-
-  for (const event of pendingEvents) {
-    const eventKind = getRealtimeEventKind(event);
-    if (eventKind === "task.message.delta" || eventKind === "task.message.updated") {
-      applyRealtimeEventToLiveState(taskId, activeSessionId, event);
-      shouldRefreshPersistedMessages ||=
-        Boolean(activeSessionId) && shouldRefreshPersistedMessagesFromEvent(event);
-      continue;
-    }
-
-    void refreshNodeSummary(taskId, true);
-  }
-
-  return shouldRefreshPersistedMessages;
-}
-
-function getPendingRealtimeEventsForTask(taskId: string, activeSessionId: string | undefined) {
-  const relevantEvents = taskRealtimeEvents.value
-    .filter(
-      (event) =>
-        event.taskId === taskId && (!activeSessionId || event.sessionId === activeSessionId),
-    )
-    .slice()
-    .reverse();
-  if (relevantEvents.length === 0) {
-    return { relevantEvents, pendingEvents: [] as RealtimeEvent[] };
-  }
-
-  const lastHandledEventId = lastRealtimeEventIds[taskId];
-  const lastHandledIndex = lastHandledEventId
-    ? relevantEvents.findIndex((event) => event.id === lastHandledEventId)
-    : -1;
-  const pendingEvents =
-    lastHandledIndex >= 0 ? relevantEvents.slice(lastHandledIndex + 1) : relevantEvents;
-
-  return { relevantEvents, pendingEvents };
-}
-
-async function processRealtimeEventsForTask(taskId: string) {
-  const activeSessionId =
-    extractActiveSessionId(summaryForTask(taskId)) || extractActiveSessionIdFromContext(taskId);
-  const { relevantEvents, pendingEvents } = getPendingRealtimeEventsForTask(
-    taskId,
-    activeSessionId,
-  );
-  if (relevantEvents.length === 0 || pendingEvents.length === 0) {
-    return;
-  }
-
-  const shouldRefreshPersistedMessages = processPendingRealtimeEvents(
-    taskId,
-    activeSessionId,
-    pendingEvents,
-  );
-  lastRealtimeEventIds[taskId] =
-    pendingEvents[pendingEvents.length - 1]?.id || lastRealtimeEventIds[taskId] || "";
-
-  if (shouldRefreshPersistedMessages && activeSessionId) {
-    await refreshSessionMessagesForMonitor(taskId, activeSessionId, true);
-  }
-
-  rebuildSummaryFromCache(taskId);
+function resolveActiveSessionIdForTask(taskId: string) {
+  return extractActiveSessionId(summaryForTask(taskId)) || extractActiveSessionIdFromContext(taskId);
 }
 
 async function processRealtimeMonitorEvents() {
-  const taskIds = new Set(monitorStore.nodes.map((node) => node.taskId));
-  for (const taskId of taskIds) {
-    await processRealtimeEventsForTask(taskId);
-  }
+  await processMonitoredTaskPatchEvents({
+    resolveSessionId: resolveActiveSessionIdForTask,
+    refreshSummary: (taskId) => refreshNodeSummary(taskId, true),
+    refreshPersistedMessages: (taskId, sessionId) =>
+      refreshSessionMessagesForMonitor(taskId, sessionId, true),
+    rebuildSummary: rebuildSummaryFromCache,
+  });
   void nextTick().then(() => scheduleStreamAutoScroll());
-}
-
-function applyRealtimeAssistantUpdateToLiveState(
-  state: LiveMessageState,
-  info: Record<string, unknown>,
-) {
-  const messageId = getNonEmptyString(info.id);
-  const role = getNonEmptyString(info.role);
-  if (!messageId || role !== "assistant") {
-    return;
-  }
-
-  const time = extractRealtimeTime(info);
-  state.metaById[messageId] = {
-    agent: getNonEmptyString(info.agent),
-    modelLabel: extractModelLabel(info),
-    createdAt: parseMessageTimestamp(time?.created ?? time?.completed),
-  };
-  rememberLiveAssistantMessage(state, messageId);
-  setIncompleteState(
-    state,
-    messageId,
-    !(typeof time?.completed === "number" || typeof time?.completed === "string"),
-  );
-}
-
-function applyRealtimeTextPartToLiveState(state: LiveMessageState, part: Record<string, unknown>) {
-  const messageId = getNonEmptyString(part.messageID);
-  const text = typeof part.text === "string" ? part.text : null;
-  if (!messageId || part.type !== "text" || text === null) {
-    return;
-  }
-
-  rememberLiveAssistantMessage(state, messageId);
-  state.textById[messageId] = mergeStreamingText(state.textById[messageId], text);
-  setIncompleteState(state, messageId, true);
-}
-
-function applyRealtimeEventToLiveState(
-  taskId: string,
-  sessionId: string | undefined,
-  event: RealtimeEvent,
-) {
-  if (!sessionId) {
-    return;
-  }
-
-  const state = ensureLiveMessageState(taskId, sessionId);
-  const eventKind = getRealtimeEventKind(event);
-
-  if (eventKind === "task.message.updated") {
-    const info = getRealtimeInfo(event);
-    if (info) {
-      applyRealtimeAssistantUpdateToLiveState(state, info);
-    }
-  }
-
-  if (eventKind !== "task.message.delta") {
-    return;
-  }
-
-  const part = getRealtimePart(event);
-  if (!part) {
-    return;
-  }
-  applyRealtimeTextPartToLiveState(state, part);
 }
 
 function extractActiveSessionId(summary?: MonitorNodeSummary) {

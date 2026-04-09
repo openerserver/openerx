@@ -82,11 +82,11 @@ describe("TaskFollowupPanel", () => {
 
     await flushPromises();
 
-    expect(wrapper.text()).toContain("存在需要处理的 follow-up 问题");
-    expect(wrapper.text()).toContain("请前往设置页的编排策略检查 Follow-up 模板配置");
-    expect(wrapper.text()).toContain("缺少已启用的 follow-up 模板");
+    expect(wrapper.text()).toContain("存在需要处理的 continue 问题");
+    expect(wrapper.text()).toContain("请前往设置页的编排策略检查 Continue 模板配置");
+    expect(wrapper.text()).toContain("缺少已启用的 continue 模板");
     expect(wrapper.text()).toContain("未找到启用模板 post-review");
-    expect(wrapper.text()).toContain("Follow-up 执行失败");
+    expect(wrapper.text()).toContain("Continue 执行失败");
     expect(wrapper.text()).toContain("runtime exploded");
   });
 });

@@ -90,6 +90,7 @@ interface AgentOpsQueueItemResponse {
   taskTitle: string;
   projectId: string;
   projectName: string | null;
+  subSessionId?: string;
   agentType: string;
   status: string;
   currentStage: string | null;
@@ -156,6 +157,45 @@ function parsePersistedModel(modelUsed?: string | null) {
   };
 }
 
+function extractRuntimeSessionIdFromPublicTaskSessionId(
+  taskId?: string | null,
+  sessionId?: string | null,
+) {
+  const normalizedSessionId = typeof sessionId === "string" ? sessionId.trim() : "";
+  if (!normalizedSessionId) {
+    return null;
+  }
+
+  if (!normalizedSessionId.startsWith("task-session:")) {
+    return normalizedSessionId;
+  }
+
+  const normalizedTaskId = typeof taskId === "string" ? taskId.trim() : "";
+  if (!normalizedTaskId) {
+    return null;
+  }
+
+  const prefix = `task-session:${normalizedTaskId}:`;
+  if (!normalizedSessionId.startsWith(prefix)) {
+    return null;
+  }
+
+  const runtimeSessionId = normalizedSessionId.slice(prefix.length).trim();
+  return runtimeSessionId || null;
+}
+
+function resolveRuntimeSessionIdFromAgentRunSummary(summary: Partial<AgentRunSummaryResponse>) {
+  const subSessionId =
+    typeof summary.subSessionId === "string" ? summary.subSessionId.trim() : "";
+  if (subSessionId) {
+    return subSessionId;
+  }
+
+  const taskId = typeof summary.taskId === "string" ? summary.taskId : null;
+  const sessionId = typeof summary.sessionId === "string" ? summary.sessionId : null;
+  return extractRuntimeSessionIdFromPublicTaskSessionId(taskId, sessionId);
+}
+
 async function ensureRuntimeRunFromSummary(
   c: Parameters<typeof authHeader>[0],
   agentRunId: string,
@@ -189,7 +229,7 @@ async function ensureRuntimeRunFromSummaryDetailed(
   }
 
   const summary = summaryResult.data;
-  const sessionId = typeof summary.sessionId === "string" ? summary.sessionId : null;
+  const sessionId = resolveRuntimeSessionIdFromAgentRunSummary(summary);
   const taskId = typeof summary.taskId === "string" ? summary.taskId : null;
   const projectId = typeof summary.projectId === "string" ? summary.projectId : null;
 
@@ -381,7 +421,7 @@ function normalizeAgentRunSummary(
     actionPermissions: summary.actionPermissions ?? null,
     governance: summary.governance ?? null,
     codeChanges: summary.codeChanges ?? null,
-    subSessionId: typeof summary.subSessionId === "string" ? summary.subSessionId : undefined,
+    subSessionId: resolveRuntimeSessionIdFromAgentRunSummary(summary) ?? undefined,
   };
 }
 
@@ -530,6 +570,7 @@ function buildAgentOpsQueueItem(summary: AgentRunSummaryResponse): AgentOpsQueue
     taskTitle: summary.taskTitle,
     projectId: summary.projectId,
     projectName: summary.projectName,
+    subSessionId: summary.subSessionId ?? undefined,
     agentType: summary.agentType,
     status: summary.status,
     currentStage: null,
@@ -1120,6 +1161,7 @@ agentControlRoutes.post("/:agentRunId/pause", async (c) => {
       type: "agent.paused",
       ts: new Date().toISOString(),
       agentRunId,
+      sessionId: run?.subSessionId,
       taskId: run?.taskId,
       projectId: run?.projectId,
       data: { agentRunId },
@@ -1171,6 +1213,7 @@ agentControlRoutes.post("/:agentRunId/resume", async (c) => {
       type: "agent.resumed",
       ts: new Date().toISOString(),
       agentRunId,
+      sessionId: currentRun?.subSessionId,
       taskId: currentRun?.taskId,
       projectId: currentRun?.projectId,
       data: { agentRunId },
@@ -1211,6 +1254,7 @@ agentControlRoutes.post("/:agentRunId/guidance", zValidator("json", guidanceSche
       type: "guidance.injected",
       ts: new Date().toISOString(),
       agentRunId,
+      sessionId: run?.subSessionId,
       taskId: run?.taskId,
       projectId: run?.projectId,
       data: { agentRunId, content, mode },
@@ -1293,6 +1337,7 @@ agentControlRoutes.post("/:agentRunId/terminate", async (c) => {
       type: "agent.stopped",
       ts: new Date().toISOString(),
       agentRunId,
+      sessionId: run?.subSessionId,
       taskId: run?.taskId,
       projectId: run?.projectId,
       data: { agentRunId, reason: "terminated" },

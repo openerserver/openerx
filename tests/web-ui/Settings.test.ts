@@ -787,7 +787,7 @@ describe("Settings – strategy operational linkages", () => {
     await strategyTab?.trigger("click");
     await flushPromises();
 
-    expect(wrapper.text()).toContain("Follow-up 模板");
+    expect(wrapper.text()).toContain("Continue 模板");
     expect(wrapper.text()).toContain("post-review");
 
     const setupState = (wrapper.vm as { $?: { setupState?: Record<string, unknown> } }).$

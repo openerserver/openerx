@@ -70,8 +70,8 @@
             <a-descriptions-item label="主执行模型">
               {{ currentSummary.primaryModel }}
             </a-descriptions-item>
-            <a-descriptions-item label="执行后 Follow-up">
-              {{ currentSummary.followupSummary || "未配置 follow-up 模板" }}
+            <a-descriptions-item label="执行后 Continue">
+              {{ currentSummary.followupSummary || "未配置 continue 模板" }}
             </a-descriptions-item>
             <a-descriptions-item label="成员协作摘要">
               {{ memberCollaborationSummary }}
@@ -98,7 +98,7 @@
               :key="followupId"
               color="purple"
             >
-              Follow-up {{ followupId }}
+              Continue {{ followupId }}
             </a-tag>
           </a-space>
         </a-card>
@@ -229,9 +229,9 @@
                 <a-descriptions-item label="主执行模型">
                   {{ previewCurrentDiff.before.primaryModel }} -> {{ previewCurrentDiff.after.primaryModel }}
                 </a-descriptions-item>
-                <a-descriptions-item label="执行后 Follow-up">
-                  {{ previewCurrentDiff.before.followupSummary || "未配置 follow-up 模板" }} ->
-                  {{ previewCurrentDiff.after.followupSummary || "未配置 follow-up 模板" }}
+                <a-descriptions-item label="执行后 Continue">
+                  {{ previewCurrentDiff.before.followupSummary || "未配置 continue 模板" }} ->
+                  {{ previewCurrentDiff.after.followupSummary || "未配置 continue 模板" }}
                 </a-descriptions-item>
               </a-descriptions>
             </a-card>

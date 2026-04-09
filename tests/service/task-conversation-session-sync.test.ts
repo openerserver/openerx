@@ -5,12 +5,20 @@ import { taskSessionRuns, taskSessions } from "../../control-plane/service/src/d
 
 let importCounter = 0;
 
-function createInsertChain(recorder: (payload: unknown) => void) {
+function createInsertChain(
+  insertRecorder: (payload: unknown) => void,
+  conflictRecorder: (payload: unknown) => void,
+) {
   return {
     values(payload: unknown) {
-      recorder(payload);
+      insertRecorder(payload);
       return {
-        onConflictDoUpdate: async () => undefined,
+        onConflictDoUpdate: async (args?: { set?: unknown }) => {
+          if (args?.set) {
+            conflictRecorder(args.set);
+          }
+          return undefined;
+        },
       };
     },
   };
@@ -40,6 +48,7 @@ async function loadTaskSessionWriteModule(args?: {
   importCounter += 1;
 
   const insertCalls: Array<{ table: string; payload: unknown }> = [];
+  const conflictUpdateCalls: Array<{ table: string; payload: unknown }> = [];
   const updateCalls: Array<{ table: string; payload: unknown }> = [];
   const taskSessionFindResults = [...(args?.taskSessionFindResults ?? [])];
 
@@ -53,9 +62,14 @@ async function loadTaskSessionWriteModule(args?: {
       },
     },
     insert: mock((table: unknown) =>
-      createInsertChain((payload) => {
-        insertCalls.push({ table: resolveTableName(table), payload });
-      }),
+      createInsertChain(
+        (payload) => {
+          insertCalls.push({ table: resolveTableName(table), payload });
+        },
+        (payload) => {
+          conflictUpdateCalls.push({ table: resolveTableName(table), payload });
+        },
+      ),
     ),
     update: mock((table: unknown) =>
       createUpdateChain((payload) => {
@@ -79,6 +93,7 @@ async function loadTaskSessionWriteModule(args?: {
   return {
     ...module,
     insertCalls,
+    conflictUpdateCalls,
     updateCalls,
   };
 }
@@ -145,6 +160,63 @@ describe("task session write api", () => {
         }),
       ]),
     );
+  });
+
+  test("maps explicit parallel sourceType to candidate follow-up sessions", async () => {
+    const { createTaskSessionWriteApi, insertCalls } = await loadTaskSessionWriteModule({
+      taskSessionFindResults: [
+        null,
+        {
+          id: "task-session:task-1:root-session-1",
+          rootSessionId: "task-session:task-1:root-session-1",
+          depth: 0,
+          sortKey: "task-session:task-1:root-session-1",
+        },
+      ],
+    });
+
+    const api = createTaskSessionWriteApi();
+
+    const sessionId = await api.upsertTaskSessionRecord({
+      task: { id: "task-1", projectId: "project-1" },
+      runtimeSessionId: "candidate-session-1",
+      parentRuntimeSessionId: "root-session-1",
+      branchName: "候选 A",
+      sourceType: "parallel",
+      sessionKind: "candidate",
+      candidateIndex: 0,
+      executionModeSnapshot: "parallel",
+      coordinationKey: "task-session:task-1:root-session-1",
+      isActive: false,
+    });
+
+    expect(sessionId).toBe("task-session:task-1:candidate-session-1");
+
+    const insertedSession = insertCalls.find((call) => call.table === "task_sessions")?.payload;
+    expect(insertedSession).toMatchObject({
+      id: "task-session:task-1:candidate-session-1",
+      parentSessionId: "task-session:task-1:root-session-1",
+      rootSessionId: "task-session:task-1:root-session-1",
+      sessionType: "follow_up",
+      sessionKind: "candidate",
+      triggerType: "execute",
+      executionModeSnapshot: "parallel",
+      candidateIndex: 0,
+      branchName: "候选 A",
+      runtimeSessionId: "candidate-session-1",
+      coordinationKey: "task-session:task-1:root-session-1",
+    });
+
+    const insertedRun = insertCalls.find((call) => call.table === "task_session_runs")?.payload;
+    expect(insertedRun).toMatchObject({
+      id: "run_task-session:task-1:candidate-session-1",
+      sessionId: "task-session:task-1:candidate-session-1",
+      runtimeSessionId: "candidate-session-1",
+      triggerType: "user_prompt",
+      executionKind: "parallel_candidate",
+      laneRole: "candidate",
+      status: "running",
+    });
   });
 
   test("inherits parent/root ids and canonicalizes source messages for fork sessions", async () => {
@@ -225,5 +297,112 @@ describe("task session write api", () => {
       id: "task-session:task-1:root-session-1",
       treeNodeId: null,
     });
+  });
+
+  test("passive conflict updates do not rewrite candidate lineage when callers omit it", async () => {
+    const { createTaskSessionWriteApi, conflictUpdateCalls } = await loadTaskSessionWriteModule({
+      taskSessionFindResults: [
+        {
+          id: "task-session:task-1:candidate-1",
+          projectId: "project-1",
+          taskId: "task-1",
+          treeNodeId: null,
+          parentSessionId: "task-session:task-1:root-session-1",
+          rootSessionId: "task-session:task-1:root-session-1",
+          sourceMessageId: null,
+          sessionType: "follow_up",
+          workflowStageKey: null,
+          spawnTriggerType: "execute",
+          spawnRuleKey: null,
+          userPromptSummary: null,
+          status: "running",
+          headMessageId: null,
+          latestRunId: "run_task-session:task-1:candidate-1",
+          depth: 1,
+          sortKey: "task-session:task-1:root-session-1.task-session:task-1:candidate-1",
+          coordinationKey: "task-session:task-1:root-session-1",
+          operationId: "operation-1",
+          sessionKind: "candidate",
+          triggerType: "execute",
+          executionModeSnapshot: "parallel",
+          executionStatus: "running",
+          branchName: "候选 A",
+          candidateIndex: 0,
+          stepIndex: null,
+          runtimeSessionId: "candidate-1",
+          forkedFromMessageId: null,
+          selectedModel: "github-copilot:gpt-4o",
+          effectiveModel: null,
+          winnerSessionId: null,
+          judgeSessionId: null,
+          resultText: null,
+          resultSummary: null,
+          errorText: null,
+          inputTokens: 0,
+          outputTokens: 0,
+          totalTokens: 0,
+          costUsd: 0,
+          lastActivityAt: "2026-03-24T00:00:00.000Z",
+          startedAt: "2026-03-24T00:00:00.000Z",
+          finishedAt: null,
+          createdAt: "2026-03-24T00:00:00.000Z",
+          updatedAt: "2026-03-24T00:00:00.000Z",
+          archivedAt: null,
+        },
+      ],
+    });
+
+    const api = createTaskSessionWriteApi();
+
+    await api.upsertTaskSessionRecord({
+      task: { id: "task-1", projectId: "project-1" },
+      runtimeSessionId: "candidate-1",
+      isActive: false,
+    });
+
+    const sessionConflictUpdate = conflictUpdateCalls.find(
+      (call) => call.table === "task_sessions",
+    )?.payload as Record<string, unknown>;
+    expect(sessionConflictUpdate).toMatchObject({
+      projectId: "project-1",
+      status: "running",
+      executionStatus: "complete",
+      runtimeSessionId: "candidate-1",
+    });
+    expect(sessionConflictUpdate).not.toHaveProperty("parentSessionId");
+    expect(sessionConflictUpdate).not.toHaveProperty("rootSessionId");
+    expect(sessionConflictUpdate).not.toHaveProperty("sourceMessageId");
+    expect(sessionConflictUpdate).not.toHaveProperty("sessionType");
+    expect(sessionConflictUpdate).not.toHaveProperty("spawnTriggerType");
+    expect(sessionConflictUpdate).not.toHaveProperty("depth");
+    expect(sessionConflictUpdate).not.toHaveProperty("sortKey");
+    expect(sessionConflictUpdate).not.toHaveProperty("coordinationKey");
+    expect(sessionConflictUpdate).not.toHaveProperty("operationId");
+    expect(sessionConflictUpdate).not.toHaveProperty("sessionKind");
+    expect(sessionConflictUpdate).not.toHaveProperty("triggerType");
+    expect(sessionConflictUpdate).not.toHaveProperty("executionModeSnapshot");
+    expect(sessionConflictUpdate).not.toHaveProperty("branchName");
+    expect(sessionConflictUpdate).not.toHaveProperty("candidateIndex");
+    expect(sessionConflictUpdate).not.toHaveProperty("stepIndex");
+    expect(sessionConflictUpdate).not.toHaveProperty("forkedFromMessageId");
+    expect(sessionConflictUpdate).not.toHaveProperty("selectedModel");
+
+    const runConflictUpdate = conflictUpdateCalls.find(
+      (call) => call.table === "task_session_runs",
+    )?.payload as Record<string, unknown>;
+    expect(runConflictUpdate).toMatchObject({
+      taskId: "task-1",
+      sessionId: "task-session:task-1:candidate-1",
+      runtimeSessionId: "candidate-1",
+      status: "running",
+    });
+    expect(runConflictUpdate).not.toHaveProperty("triggerType");
+    expect(runConflictUpdate).not.toHaveProperty("executionKind");
+    expect(runConflictUpdate).not.toHaveProperty("coordinationKey");
+    expect(runConflictUpdate).not.toHaveProperty("operationId");
+    expect(runConflictUpdate).not.toHaveProperty("candidateIndex");
+    expect(runConflictUpdate).not.toHaveProperty("laneRole");
+    expect(runConflictUpdate).not.toHaveProperty("executorKind");
+    expect(runConflictUpdate).not.toHaveProperty("modelRoute");
   });
 });

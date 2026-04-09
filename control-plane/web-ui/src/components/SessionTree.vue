@@ -86,7 +86,10 @@ function buildDisplayTree(nodes: TaskSessionLineageNode[]): TaskSessionLineageNo
       if (node.runtimeSessionId === primaryRoot.runtimeSessionId) {
         return true;
       }
-      if (!node.parentRuntimeSessionId && node.sourceType === "fork") {
+      if (
+        !node.parentRuntimeSessionId &&
+        (node.sourceType === "fork" || node.sourceType === "parallel")
+      ) {
         primaryRoot.children.push(node);
         return false;
       }

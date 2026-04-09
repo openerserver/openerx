@@ -1,5 +1,6 @@
 /// <reference types="bun-types" />
 
+import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 
 const runtimeProviderPiMonoModulePath =
@@ -46,7 +47,7 @@ function buildFakePiMonoRpcServerScript() {
     let permissionCounter = 0;
 
     function buildSessionFile(sessionId) {
-      return path.join(os.tmpdir(), "openerx-pimono-" + namespace + "-" + sessionId + ".json");
+      return path.join(os.tmpdir(), "openerx-pimono-" + namespace + "_" + sessionId + ".jsonl");
     }
 
     function cloneMessages(messages) {
@@ -473,6 +474,7 @@ function configurePiMonoRpcEnv(options?: { pauseSettlementTimeoutMs?: number }) 
     `ns-${Date.now()}-${Math.random().toString(16).slice(2)}`,
   ]);
   process.env.PI_MONO_RPC_CWD = undefined;
+  process.env.OPENERX_PI_MONO_SESSION_SEARCH_DIRS = JSON.stringify([tmpdir()]);
 
   if (options?.pauseSettlementTimeoutMs !== undefined) {
     process.env.PI_MONO_PAUSE_SETTLEMENT_TIMEOUT_MS = String(options.pauseSettlementTimeoutMs);
@@ -648,7 +650,7 @@ describe("pi-mono runtime provider", () => {
       ]),
     );
 
-    const assistantMessageEvent = ingestParsedEventMock.mock.calls.find(
+    const assistantMessageEvents = ingestParsedEventMock.mock.calls.filter(
       (call) =>
         call[0] === "message.updated" &&
         typeof call[1] === "object" &&
@@ -656,6 +658,13 @@ describe("pi-mono runtime provider", () => {
         typeof (call[1] as Record<string, unknown>).info === "object" &&
         ((call[1] as Record<string, unknown>).info as Record<string, unknown>).role === "assistant",
     );
+    expect(assistantMessageEvents.length).toBeGreaterThanOrEqual(2);
+
+    const assistantStartedEvent = assistantMessageEvents[0]?.[1] as Record<string, unknown> | undefined;
+    const assistantStartedInfo = assistantStartedEvent?.info as Record<string, unknown> | undefined;
+    expect(assistantStartedInfo?.time).not.toHaveProperty("completed");
+
+    const assistantMessageEvent = assistantMessageEvents[assistantMessageEvents.length - 1];
     expect(assistantMessageEvent?.[1]).toEqual(
       expect.objectContaining({
         sessionId: "rpc-session-1",
@@ -667,9 +676,11 @@ describe("pi-mono runtime provider", () => {
       }),
     );
 
-    const assistantMessageId = (
-      (assistantMessageEvent?.[1] as Record<string, unknown>)?.info as Record<string, unknown>
-    )?.id;
+    const assistantMessageId =
+      (((assistantMessageEvent?.[1] as Record<string, unknown> | undefined)?.info as
+        | Record<string, unknown>
+        | undefined)
+        ?.id as string | undefined) ?? undefined;
     const assistantDeltaEvent = ingestParsedEventMock.mock.calls.find(
       (call) => call[0] === "message.part.updated",
     );
@@ -1074,5 +1085,37 @@ describe("pi-mono runtime provider", () => {
       texts.some((text) => text.includes("Resume execution.")),
     );
     expect(assistantTexts.some((text) => text.includes("Resume execution."))).toBe(true);
+  });
+
+  test("recovers a missing runtime handle from persisted session files before continue", async () => {
+    configurePiMonoRpcEnv();
+
+    const { piMonoRuntimeProvider } = await import(runtimeProviderPiMonoModulePath);
+    const created = await piMonoRuntimeProvider.createSession(
+      "task-recovered-continue",
+      "proj-1",
+      "hello world",
+    );
+
+    expect(created.ok).toBe(true);
+
+    const initialAssistantTexts = await waitForAssistantText(String(created.sessionId), (texts) =>
+      texts.includes("reply:hello world"),
+    );
+    expect(initialAssistantTexts).toContain("reply:hello world");
+
+    await shutdownPiMonoProvider();
+
+    const continueResult = await piMonoRuntimeProvider.continueSession(
+      String(created.sessionId),
+      "after restart",
+    );
+
+    expect(continueResult.ok).toBe(true);
+
+    const assistantTexts = await waitForAssistantText(String(created.sessionId), (texts) =>
+      texts.includes("reply:after restart"),
+    );
+    expect(assistantTexts).toContain("reply:after restart");
   });
 });

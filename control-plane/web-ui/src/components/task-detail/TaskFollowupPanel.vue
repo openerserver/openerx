@@ -1,13 +1,13 @@
 <template>
   <div class="followup-panel">
     <a-flex justify="space-between" align="center" class="followup-panel__header">
-      <a-typography-text strong>Follow-up</a-typography-text>
+      <a-typography-text strong>Continue</a-typography-text>
       <a-button type="text" size="small" @click="() => void refresh()">刷新</a-button>
     </a-flex>
 
     <a-spin v-if="loading" />
     <a-alert v-else-if="error" type="error" show-icon :message="error" />
-    <a-empty v-else-if="followups.length === 0" description="当前任务还没有 follow-up 记录" />
+    <a-empty v-else-if="followups.length === 0" description="当前任务还没有 continue 记录" />
     <div v-else class="followup-panel__body">
       <a-alert
         v-if="latestAlert"
@@ -20,8 +20,8 @@
         v-if="hasBlockingIssue"
         type="warning"
         show-icon
-        message="存在需要处理的 follow-up 问题"
-        description="请前往设置页的编排策略检查 Follow-up 模板配置，或查看下方失败记录中的具体报错。"
+        message="存在需要处理的 continue 问题"
+        description="请前往设置页的编排策略检查 Continue 模板配置，或查看下方失败记录中的具体报错。"
       />
 
       <a-card
@@ -47,16 +47,16 @@
           v-if="item.failureType === 'template-missing'"
           type="warning"
           show-icon
-          message="缺少已启用的 follow-up 模板"
-          :description="item.error || 'Hook 已请求 follow-up，但系统中没有找到对应模板。请到设置页 > 编排策略 > Follow-up 模板补齐配置。'"
+          message="缺少已启用的 continue 模板"
+          :description="item.error || 'Hook 已请求 continue，但系统中没有找到对应模板。请到设置页 > 编排策略 > Continue 模板补齐配置。'"
           class="followup-panel__alert"
         />
         <a-alert
           v-else-if="item.status === 'failed'"
           type="error"
           show-icon
-          message="Follow-up 执行失败"
-          :description="item.error || 'Detached follow-up 运行失败。请根据错误信息修正模板、模型或 Agent 配置后重试。'"
+          message="Continue 执行失败"
+          :description="item.error || '后台 continue 运行失败。请根据错误信息修正模板、模型或 Agent 配置后重试。'"
           class="followup-panel__alert"
         />
 
@@ -105,21 +105,21 @@ const latestAlert = computed(() => {
   if (latest.failureType === "template-missing") {
     return {
       type: "warning" as const,
-      message: "Follow-up 未执行",
+      message: "Continue 未执行",
       description:
-        latest.error || "缺少已启用的模板配置，请到设置页 > 编排策略 > Follow-up 模板补齐。",
+        latest.error || "缺少已启用的模板配置，请到设置页 > 编排策略 > Continue 模板补齐。",
     };
   }
   if (latest.status === "failed") {
     return {
       type: "error" as const,
-      message: "Follow-up 执行失败",
-      description: latest.error || "Detached follow-up 运行失败，请检查下方错误详情。",
+      message: "Continue 执行失败",
+      description: latest.error || "后台 continue 运行失败，请检查下方错误详情。",
     };
   }
   return {
     type: "success" as const,
-    message: "Follow-up 已完成",
+    message: "Continue 已完成",
     description: latest.result?.trim() || `模板 ${latest.templateId} 已执行完成。`,
   };
 });
