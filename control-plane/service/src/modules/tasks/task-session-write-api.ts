@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import { db } from "../../db";
 import {
   type ExecutionStatus,
+  type TaskPhaseRole,
   type TaskSessionKind,
   type TaskSessionMode,
   type TaskSessionNodeType,
@@ -28,6 +29,9 @@ export type UpsertTaskSessionRecordArgs = {
   sourceType?: TaskSessionSourceType;
   sessionKind?: TaskSessionKind | null;
   executionModeSnapshot?: TaskSessionMode | null;
+  phaseId?: string | null;
+  phaseRole?: TaskPhaseRole | null;
+  phaseItemIndex?: number | null;
   isActive?: boolean;
   archivedAt?: string | null;
   candidateIndex?: number | null;
@@ -175,6 +179,22 @@ function mapTaskSessionKindToExecutorKind(sessionKind: TaskSessionKind) {
   return "assistant";
 }
 
+function mapTaskSessionKindToPhaseRole(sessionKind: TaskSessionKind): TaskPhaseRole {
+  if (sessionKind === "candidate") {
+    return "candidate";
+  }
+  if (sessionKind === "judge") {
+    return "judge";
+  }
+  if (sessionKind === "sequential_step") {
+    return "step";
+  }
+  if (sessionKind === "manual_branch" || sessionKind === "hook") {
+    return "aux";
+  }
+  return "mainline";
+}
+
 function resolveTaskSessionMode(args: {
   executionModeSnapshot?: TaskSessionMode | null;
   sessionKind?: TaskSessionKind | null;
@@ -313,6 +333,21 @@ export function createTaskSessionWriteApi() {
         args.writeArgs.selectedModel !== undefined
           ? args.writeArgs.selectedModel
           : (args.existing?.selectedModel ?? null),
+      phaseId:
+        args.writeArgs.phaseId !== undefined
+          ? args.writeArgs.phaseId
+          : (args.existing?.phaseId ?? null),
+      phaseRole:
+        args.writeArgs.phaseRole ??
+        args.existing?.phaseRole ??
+        mapTaskSessionKindToPhaseRole(sessionKind),
+      phaseItemIndex:
+        args.writeArgs.phaseItemIndex !== undefined
+          ? args.writeArgs.phaseItemIndex
+          : args.existing?.phaseItemIndex ??
+            (args.writeArgs.candidateIndex ?? args.existing?.candidateIndex ?? null) ??
+            (args.writeArgs.stepIndex ?? args.existing?.stepIndex ?? null) ??
+            0,
     };
   }
 
@@ -335,8 +370,6 @@ export function createTaskSessionWriteApi() {
   }) {
     const forkMetadata = resolveTaskSessionForkMetadata(args);
     const executionMetadata = resolveTaskSessionExecutionMetadata(args);
-    const effectiveCoordinationKey =
-      args.writeArgs.coordinationKey ?? args.existing?.coordinationKey ?? args.rootSessionId;
     const effectiveOperationId = args.writeArgs.operationId ?? args.existing?.operationId ?? null;
     const triggerType = mapSourceTypeToTaskSessionTriggerType(args.writeArgs.sourceType);
     const latestRunId = buildTaskSessionDefaultRunId(args.sessionId);
@@ -360,7 +393,6 @@ export function createTaskSessionWriteApi() {
     return {
       ...forkMetadata,
       ...executionMetadata,
-      effectiveCoordinationKey,
       effectiveOperationId,
       triggerType,
       latestRunId,
@@ -456,13 +488,18 @@ export function createTaskSessionWriteApi() {
       latestRunId: context.persistedLatestRunId,
       depth: context.depth,
       sortKey: context.sortKey,
-      coordinationKey: context.effectiveCoordinationKey,
+      phaseId: context.phaseId,
+      phaseRole: context.phaseRole,
+      phaseItemIndex: context.phaseItemIndex,
+      coordinationKey: null,
       operationId: context.effectiveOperationId,
       sessionKind: context.sessionKind,
       triggerType: context.triggerType,
       executionModeSnapshot: context.executionModeSnapshot,
       executionStatus: mapTaskSessionExecutionStatus(context.args),
       branchName: context.branchName,
+      phaseRole: context.phaseRole,
+      phaseItemIndex: context.phaseItemIndex,
       candidateIndex: context.candidateIndex,
       stepIndex: context.stepIndex,
       runtimeSessionId: context.args.runtimeSessionId,
@@ -499,7 +536,10 @@ export function createTaskSessionWriteApi() {
       latestRunId: context.persistedLatestRunId,
       depth: context.depth,
       sortKey: context.sortKey,
-      coordinationKey: context.effectiveCoordinationKey,
+      phaseId: context.phaseId,
+      phaseRole: context.phaseRole,
+      phaseItemIndex: context.phaseItemIndex,
+      coordinationKey: null,
       operationId: context.effectiveOperationId,
       sessionKind: context.sessionKind,
       triggerType: context.triggerType,
@@ -538,11 +578,12 @@ export function createTaskSessionWriteApi() {
       id: context.latestRunId,
       taskId: context.args.task.id,
       sessionId: context.sessionId,
+      phaseId: context.phaseId,
       attemptIndex: 1,
       runtimeSessionId: context.args.runtimeSessionId,
       triggerType: mapTaskSessionTriggerTypeToRunTriggerType(context.triggerType),
       executionKind: mapTaskSessionKindToRunExecutionKind(context.sessionKind),
-      coordinationKey: context.effectiveCoordinationKey,
+      coordinationKey: null,
       operationId: context.effectiveOperationId,
       candidateIndex: context.candidateIndex,
       laneRole: mapTaskSessionKindToRunLaneRole(context.sessionKind),
@@ -566,10 +607,11 @@ export function createTaskSessionWriteApi() {
     return {
       taskId: context.args.task.id,
       sessionId: context.sessionId,
+      phaseId: context.phaseId,
       runtimeSessionId: context.args.runtimeSessionId,
       triggerType: mapTaskSessionTriggerTypeToRunTriggerType(context.triggerType),
       executionKind: mapTaskSessionKindToRunExecutionKind(context.sessionKind),
-      coordinationKey: context.effectiveCoordinationKey,
+      coordinationKey: null,
       operationId: context.effectiveOperationId,
       candidateIndex: context.candidateIndex,
       laneRole: mapTaskSessionKindToRunLaneRole(context.sessionKind),
@@ -587,6 +629,7 @@ export function createTaskSessionWriteApi() {
     return {
       taskId: context.args.task.id,
       sessionId: context.sessionId,
+      phaseId: context.phaseId,
       runtimeSessionId: context.args.runtimeSessionId,
       status: context.nodeStatus,
       resultSummary: context.existing?.resultSummary ?? null,
@@ -607,7 +650,9 @@ export function createTaskSessionWriteApi() {
       args.candidateIndex !== undefined ||
       args.stepIndex !== undefined ||
       args.selectedModel !== undefined ||
-      args.coordinationKey !== undefined ||
+      args.phaseId !== undefined ||
+      args.phaseRole !== undefined ||
+      args.phaseItemIndex !== undefined ||
       args.operationId !== undefined
     );
   }

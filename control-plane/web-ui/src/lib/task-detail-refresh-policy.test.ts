@@ -83,6 +83,22 @@ describe("task detail refresh policy", () => {
     expect(shouldRefreshTaskDetailMessages(event)).toBe(true);
   });
 
+  it("refreshes flow for phase lifecycle events without forcing message reload", () => {
+    const event = createPatchEvent("phase-resumed", {
+      rawEventKind: "task.phase.resumed",
+      phaseId: "phase-2",
+    });
+
+    expect(shouldScheduleTaskDetailRefresh(event)).toBe(true);
+    expect(shouldRefreshTaskDetailMessages(event)).toBe(false);
+    expect(getTaskDetailRefreshRequest(event)).toEqual({
+      eventId: "event-1",
+      reason: "phase-resumed",
+      shouldRefreshMessages: false,
+      shouldBumpTraceRefreshKey: false,
+    });
+  });
+
   it("bumps the trace refresh key for hook and followup events", () => {
     const event = createPatchEvent("task-followup-completed", {
       rawEventKind: "task.followup.completed",

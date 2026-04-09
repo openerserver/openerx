@@ -112,7 +112,9 @@ describe("useTaskDetailActionCoordinator", () => {
 
     return {
       coordinator,
+      currentParallelRunRecord,
       isExecuting,
+      refreshTaskSnapshot,
       resolveTaskSessionRequestId,
       seedPendingAssistantDraft,
       selectedSessionId,
@@ -172,5 +174,34 @@ describe("useTaskDetailActionCoordinator", () => {
     await vi.waitFor(() => {
       expect(coordinator.queuedContinuations.value).toHaveLength(0);
     });
+  });
+
+  it("adopts a parallel candidate with the canonical phase id from the current run", async () => {
+    apiMocks.adoptParallelCandidate.mockResolvedValueOnce({ ok: true, winnerCandidateIndex: 1 });
+
+    const { coordinator, currentParallelRunRecord, refreshTaskSnapshot } = mountCoordinator();
+    currentParallelRunRecord.value = {
+      parallelRunId: "task-session:phase-parallel-1",
+      phaseId: "phase-parallel-1",
+      startedAt: "2026-03-22T10:00:00.000Z",
+      candidateSessions: [
+        { label: "候选 A", status: "completed", sessionId: "ses-a" },
+        { label: "候选 B", status: "completed", sessionId: "ses-b" },
+      ],
+    } as any;
+
+    await coordinator.handleAdoptCandidate(1);
+
+    expect(apiMocks.adoptParallelCandidate).toHaveBeenCalledWith(
+      "task-1",
+      "phase-parallel-1",
+      1,
+    );
+    expect(refreshTaskSnapshot).toHaveBeenCalledWith({
+      workflow: true,
+      flow: true,
+      messages: true,
+    });
+    expect(messageMocks.error).not.toHaveBeenCalled();
   });
 });

@@ -7,6 +7,7 @@ import type {
 import {
   buildExplicitParallelTaskSessionGroups,
   resolveExplicitParallelParentRuntimeSessionId,
+  resolveExplicitParallelPhaseId,
 } from "./task-session-parallel-groups";
 
 type SessionParentNode = {
@@ -258,7 +259,7 @@ export function buildRuntimeSessionParentMap(nodes: SessionParentNode[]) {
 export function buildSessionSummaryParallelRuns(args: SessionSummaryParallelRunArgs) {
   const parentByRuntimeSessionId = buildRuntimeSessionParentMap(args.sessionNodes);
   return buildExplicitParallelTaskSessionGroups(args.sessionSummaries)
-    .map(({ coordinationKey, candidateSessions }): ProjectionRunRecord | null => {
+    .map(({ phaseId, candidateSessions }): ProjectionRunRecord | null => {
       const orderedSummaries = candidateSessions.slice().sort(compareCandidateSummaries);
       if (orderedSummaries.length < 2) {
         return null;
@@ -299,7 +300,8 @@ export function buildSessionSummaryParallelRuns(args: SessionSummaryParallelRunA
           ]);
 
       return {
-        parallelRunId: `task-session:${coordinationKey}`,
+        parallelRunId: `task-session:${phaseId}`,
+        phaseId,
         startedAt,
         ...(finishedAt ? { finishedAt } : {}),
         ...(parentSessionId ? { parentSessionId, executionSessionId: parentSessionId } : {}),

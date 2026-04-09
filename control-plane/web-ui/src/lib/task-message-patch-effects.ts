@@ -21,6 +21,17 @@ const CANONICAL_MESSAGE_REFRESH_PATCH_KINDS = new Set<TaskMessagePatchEvent["kin
   "tool-message",
 ]);
 
+const PHASE_REFRESH_PATCH_KINDS = new Set<TaskMessagePatchEvent["kind"]>([
+  "phase-created",
+  "phase-updated",
+  "phase-awaiting-adoption",
+  "phase-paused",
+  "phase-resumed",
+  "phase-cancelled",
+  "phase-completed",
+  "phase-failed",
+]);
+
 const TASK_DETAIL_MESSAGE_REFRESH_PATCH_KINDS = new Set<TaskMessagePatchEvent["kind"]>([
   ...CANONICAL_MESSAGE_REFRESH_PATCH_KINDS,
   "session-created",
@@ -41,12 +52,14 @@ const TASK_DETAIL_TRACE_REFRESH_PATCH_KINDS = new Set<TaskMessagePatchEvent["kin
 const TASK_DETAIL_REFRESH_PATCH_KINDS = new Set<TaskMessagePatchEvent["kind"]>([
   "task-updated",
   "agent-started",
+  ...PHASE_REFRESH_PATCH_KINDS,
   ...TASK_DETAIL_TRACE_REFRESH_PATCH_KINDS,
 ]);
 
 const MONITOR_SUMMARY_REFRESH_PATCH_KINDS = new Set<TaskMessagePatchEvent["kind"]>([
   "session-created",
   "session-updated",
+  ...PHASE_REFRESH_PATCH_KINDS,
   "task-updated",
   "task-completed",
   "task-failed",

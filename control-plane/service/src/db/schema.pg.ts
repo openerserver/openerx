@@ -107,7 +107,13 @@ export type ConversationMessagePartType =
   | "file_reference"
   | "diff";
 export type TaskLifecycleStatus = "draft" | "active" | "done" | "archived";
-export type ExecutionStatus = "queued" | "running" | "complete" | "failed" | "cancelled";
+export type ExecutionStatus =
+  | "queued"
+  | "running"
+  | "awaiting_adoption"
+  | "complete"
+  | "failed"
+  | "cancelled";
 export type TaskSessionKind =
   | "primary"
   | "candidate"
@@ -125,6 +131,37 @@ export type TaskSessionTriggerType =
   | "hook_spawn"
   | "system_retry";
 export type TaskSessionMode = "single" | "parallel" | "sequential_chain";
+export type TaskExecutionPhaseKind =
+  | "root"
+  | "single"
+  | "parallel"
+  | "sequential_chain"
+  | "manual_branch"
+  | "hook";
+export type TaskExecutionPhaseTriggerType =
+  | "execute"
+  | "continue"
+  | "resume"
+  | "workflow_spawn"
+  | "candidate_adopt"
+  | "manual_branch"
+  | "hook_spawn";
+export type TaskPhaseRole = "mainline" | "candidate" | "judge" | "step" | "aux";
+export type TaskExecutionPhaseStatus =
+  | "pending"
+  | "running"
+  | "paused"
+  | "awaiting_adoption"
+  | "completed"
+  | "failed"
+  | "cancelled";
+export type TaskExecutionPhaseTerminalReason =
+  | "winner_adopted"
+  | "user_cancelled"
+  | "runtime_terminated"
+  | "runtime_failed"
+  | "timeout"
+  | "superseded";
 export type TaskSessionMessageRole = "user" | "assistant" | "system" | "tool";
 export type TaskSessionMessageStatus =
   | "pending"
@@ -714,6 +751,73 @@ export const approvalTickets = pgTable("approval_tickets", {
 
 // ── Task Session Domain ────────────────────────────────────────────
 
+export const taskExecutionPhases = pgTable(
+  "task_execution_phases",
+  {
+    id: text("id").primaryKey(),
+    taskId: text("task_id")
+      .notNull()
+      .references(() => tasks.id, { onDelete: "cascade" }),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    parentPhaseId: text("parent_phase_id").references(
+      (): AnyPgColumn => taskExecutionPhases.id,
+    ),
+    phaseIndex: integer("phase_index").notNull(),
+    phaseKind: text("phase_kind").$type<TaskExecutionPhaseKind>().notNull(),
+    triggerType: text("trigger_type").$type<TaskExecutionPhaseTriggerType>().notNull(),
+    status: text("status")
+      .$type<TaskExecutionPhaseStatus>()
+      .notNull()
+      .default("pending"),
+    resumedFromPhaseId: text("resumed_from_phase_id").references(
+      (): AnyPgColumn => taskExecutionPhases.id,
+    ),
+    awaitingAdoptionSince: text("awaiting_adoption_since"),
+    cancelRequestedAt: text("cancel_requested_at"),
+    cancelledAt: text("cancelled_at"),
+    terminalReason: text("terminal_reason").$type<TaskExecutionPhaseTerminalReason>(),
+    lastHeartbeatAt: text("last_heartbeat_at"),
+    anchorSessionId: text("anchor_session_id").references((): AnyPgColumn => taskSessions.id),
+    anchorMessageId: text("anchor_message_id"),
+    coordinationKey: text("coordination_key"),
+    candidateCount: integer("candidate_count"),
+    winnerSessionId: text("winner_session_id").references((): AnyPgColumn => taskSessions.id),
+    judgeSessionId: text("judge_session_id").references((): AnyPgColumn => taskSessions.id),
+    requestedModel: text("requested_model"),
+    effectiveModel: text("effective_model"),
+    resultSummary: text("result_summary"),
+    errorText: text("error_text"),
+    startedAt: text("started_at"),
+    finishedAt: text("finished_at"),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex("idx_task_execution_phases_task_phase_index").on(table.taskId, table.phaseIndex),
+    index("idx_task_execution_phases_task_created_at").on(table.taskId, table.createdAt),
+    index("idx_task_execution_phases_task_status_phase_index").on(
+      table.taskId,
+      table.status,
+      table.phaseIndex,
+    ),
+    index("idx_task_execution_phases_task_parent_phase_index").on(
+      table.taskId,
+      table.parentPhaseId,
+      table.phaseIndex,
+    ),
+    index("idx_task_execution_phases_task_resumed_from_phase_id").on(
+      table.taskId,
+      table.resumedFromPhaseId,
+    ),
+    index("idx_task_execution_phases_task_anchor_session_id").on(
+      table.taskId,
+      table.anchorSessionId,
+    ),
+  ],
+);
+
 export const taskSessions = pgTable(
   "task_sessions",
   {
@@ -727,6 +831,7 @@ export const taskSessions = pgTable(
     treeNodeId: text("tree_node_id").references(() => projectTreeNodes.id),
     parentSessionId: text("parent_session_id").references((): AnyPgColumn => taskSessions.id),
     rootSessionId: text("root_session_id").references((): AnyPgColumn => taskSessions.id),
+    phaseId: text("phase_id").references(() => taskExecutionPhases.id),
     sourceMessageId: text("source_message_id"),
     sessionType: text("session_type").$type<TaskSessionNodeType>(),
     workflowStageKey: text("workflow_stage_key"),
@@ -738,13 +843,15 @@ export const taskSessions = pgTable(
     latestRunId: text("latest_run_id"),
     depth: integer("depth").notNull().default(0),
     sortKey: text("sort_key"),
-    coordinationKey: text("coordination_key").notNull(),
+    coordinationKey: text("coordination_key"),
     operationId: text("operation_id"),
     sessionKind: text("session_kind").$type<TaskSessionKind>().notNull(),
     triggerType: text("trigger_type").$type<TaskSessionTriggerType>().notNull(),
     executionModeSnapshot: text("execution_mode_snapshot").$type<TaskSessionMode>().notNull(),
     executionStatus: text("execution_status").$type<ExecutionStatus>().notNull().default("running"),
     branchName: text("branch_name"),
+    phaseRole: text("phase_role").$type<TaskPhaseRole>(),
+    phaseItemIndex: integer("phase_item_index"),
     candidateIndex: integer("candidate_index"),
     stepIndex: integer("step_index"),
     runtimeSessionId: text("runtime_session_id"),
@@ -770,14 +877,14 @@ export const taskSessions = pgTable(
   (table) => [
     uniqueIndex("idx_task_sessions_tree_node_id").on(table.treeNodeId),
     uniqueIndex("idx_task_sessions_runtime_session_id").on(table.runtimeSessionId),
-    uniqueIndex("idx_task_sessions_candidate_per_group").on(
+    uniqueIndex("idx_task_sessions_candidate_per_phase").on(
       table.taskId,
-      table.coordinationKey,
+      table.phaseId,
       table.candidateIndex,
     ),
-    uniqueIndex("idx_task_sessions_step_per_group").on(
+    uniqueIndex("idx_task_sessions_step_per_phase").on(
       table.taskId,
-      table.coordinationKey,
+      table.phaseId,
       table.stepIndex,
     ),
     index("idx_task_sessions_task_created_at").on(table.taskId, table.createdAt),
@@ -791,10 +898,11 @@ export const taskSessions = pgTable(
       table.rootSessionId,
       table.createdAt,
     ),
-    index("idx_task_sessions_task_coordination_created_at").on(
+    index("idx_task_sessions_task_phase_item").on(
       table.taskId,
-      table.coordinationKey,
-      table.createdAt,
+      table.phaseId,
+      table.phaseRole,
+      table.phaseItemIndex,
     ),
     index("idx_task_sessions_parent_session_id").on(table.parentSessionId),
     index("idx_task_sessions_task_parent_created_at").on(
@@ -819,6 +927,7 @@ export const taskSessionRuns = pgTable(
     sessionId: text("session_id")
       .notNull()
       .references(() => taskSessions.id),
+    phaseId: text("phase_id").references(() => taskExecutionPhases.id),
     attemptIndex: integer("attempt_index").notNull(),
     runtimeSessionId: text("runtime_session_id"),
     triggerType: text("trigger_type").$type<TaskSessionRunTriggerType>().notNull(),
@@ -853,9 +962,9 @@ export const taskSessionRuns = pgTable(
       table.sessionId,
       table.createdAt,
     ),
-    index("idx_task_session_runs_task_coordination_created_at").on(
+    index("idx_task_session_runs_task_phase_created_at").on(
       table.taskId,
-      table.coordinationKey,
+      table.phaseId,
       table.createdAt,
     ),
     index("idx_task_session_runs_session_status_created_at").on(
@@ -1001,6 +1110,8 @@ export const taskSnapshots = pgTable(
     lifecycleStatus: text("lifecycle_status").notNull(),
     currentExecutionMode: text("current_execution_mode"),
     currentExecutionStatus: text("current_execution_status"),
+    currentPhaseId: text("current_phase_id").references(() => taskExecutionPhases.id),
+    latestPhaseId: text("latest_phase_id").references(() => taskExecutionPhases.id),
     currentSessionId: text("current_session_id"),
     latestSessionId: text("latest_session_id"),
     latestResultSummary: text("latest_result_summary"),
@@ -1019,6 +1130,8 @@ export const taskSnapshots = pgTable(
       table.lastActivityAt,
     ),
     index("idx_task_snapshots_project_updated_at").on(table.projectId, table.updatedAt),
+    index("idx_task_snapshots_current_phase_id").on(table.currentPhaseId),
+    index("idx_task_snapshots_latest_phase_id").on(table.latestPhaseId),
     index("idx_task_snapshots_current_session_id").on(table.currentSessionId),
     index("idx_task_snapshots_latest_session_id").on(table.latestSessionId),
   ],
@@ -1121,12 +1234,17 @@ export const taskTimelineViews = pgTable(
     taskId: text("task_id")
       .notNull()
       .references(() => tasks.id),
+    phaseId: text("phase_id").references(() => taskExecutionPhases.id),
     sessionId: text("session_id").references(() => taskSessions.id),
     messageId: text("message_id").references(() => taskMessages.id, { onDelete: "cascade" }),
     operationId: text("operation_id").references(() => taskOperations.id),
     artifactId: text("artifact_id").references(() => taskArtifacts.id),
     itemKind: text("item_kind").$type<TaskTimelineItemKind>().notNull(),
     itemRole: text("item_role").$type<TaskSessionMessageRole>(),
+    phaseIndex: integer("phase_index"),
+    phaseKind: text("phase_kind").$type<TaskExecutionPhaseKind>(),
+    phaseRole: text("phase_role").$type<TaskPhaseRole>(),
+    phaseItemIndex: integer("phase_item_index"),
     title: text("title"),
     displayText: text("display_text"),
     metadataJson: jsonb("metadata_json")
@@ -1139,6 +1257,12 @@ export const taskTimelineViews = pgTable(
   },
   (table) => [
     index("idx_task_timeline_views_task_sort_at").on(table.taskId, table.sortAt, table.createdAt),
+    index("idx_task_timeline_views_task_phase_sort_at").on(
+      table.taskId,
+      table.phaseId,
+      table.sortAt,
+      table.createdAt,
+    ),
     index("idx_task_timeline_views_session_sort_at").on(
       table.sessionId,
       table.sortAt,

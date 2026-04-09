@@ -1,47 +1,22 @@
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, or } from "drizzle-orm";
 import { db } from "../../db";
 import { taskSessions, taskSnapshots } from "../../db/schema";
 import type { TaskTreeRecord } from "../project-tree/task-view";
 import { fromStoredTaskExecutionMode } from "./task-execution-mode";
+import { resolvePublicTaskStatus } from "./public-task-status";
 
-function mapSnapshotLifecycleStatusToTaskStatus(lifecycleStatus?: string | null) {
-  if (lifecycleStatus === "done") {
-    return "completed";
-  }
-  if (lifecycleStatus === "active") {
-    return "running";
-  }
-  if (lifecycleStatus === "archived") {
-    return "cancelled";
-  }
-
-  return "pending" as const;
-}
-
-function mapSnapshotExecutionStatusToTaskStatus(executionStatus?: string | null) {
-  if (executionStatus === "complete") {
-    return "completed" as const;
-  }
-  if (executionStatus === "queued") {
-    return "pending" as const;
-  }
-  if (
-    executionStatus === "running" ||
-    executionStatus === "failed" ||
-    executionStatus === "cancelled"
-  ) {
-    return executionStatus;
-  }
-
-  return null;
+function asNonEmptyString(value: unknown) {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
 function mapSnapshotCurrentStatus(snapshot: typeof taskSnapshots.$inferSelect) {
-  return mapSnapshotExecutionStatusToTaskStatus(snapshot.currentExecutionStatus)
-    ?? mapSnapshotLifecycleStatusToTaskStatus(snapshot.lifecycleStatus);
+  return resolvePublicTaskStatus({
+    currentExecutionStatus: snapshot.currentExecutionStatus,
+    lifecycleStatus: snapshot.lifecycleStatus,
+  });
 }
 
-async function loadSnapshotRuntimeSessionIds(rows: Array<typeof taskSnapshots.$inferSelect>) {
+async function loadSnapshotSessionLookups(rows: Array<typeof taskSnapshots.$inferSelect>) {
   const sessionIds = Array.from(
     new Set(
       rows
@@ -51,15 +26,41 @@ async function loadSnapshotRuntimeSessionIds(rows: Array<typeof taskSnapshots.$i
   );
 
   if (sessionIds.length === 0) {
-    return new Map<string, string>();
+    return {
+      runtimeSessionIdById: new Map<string, string>(),
+      phaseIdByIdentifier: new Map<string, string>(),
+    };
   }
 
   const sessionRows = await db.query.taskSessions.findMany({
-    where: inArray(taskSessions.id, sessionIds),
-    columns: { id: true, runtimeSessionId: true },
+    where: or(
+      inArray(taskSessions.id, sessionIds),
+      inArray(taskSessions.runtimeSessionId, sessionIds),
+    ),
+    columns: { id: true, runtimeSessionId: true, phaseId: true, coordinationKey: true },
   });
 
-  return new Map(sessionRows.map((row) => [row.id, row.runtimeSessionId ?? row.id] as const));
+  const runtimeSessionIdById = new Map<string, string>();
+  const phaseIdByIdentifier = new Map<string, string>();
+
+  for (const row of sessionRows) {
+    const runtimeSessionId = row.runtimeSessionId ?? row.id;
+    const phaseId = asNonEmptyString(row.phaseId) ?? row.id;
+
+    runtimeSessionIdById.set(row.id, runtimeSessionId);
+
+    for (const identifier of [row.id, row.runtimeSessionId]) {
+      const normalizedIdentifier = asNonEmptyString(identifier);
+      if (normalizedIdentifier) {
+        phaseIdByIdentifier.set(normalizedIdentifier, phaseId);
+      }
+    }
+  }
+
+  return {
+    runtimeSessionIdById,
+    phaseIdByIdentifier,
+  };
 }
 
 async function loadAggregateRuntimeSessionIds(
@@ -96,10 +97,44 @@ function resolveSnapshotRuntimeSessionId(args: {
   return snapshotSessionId;
 }
 
+function resolveSnapshotPhaseId(args: {
+  snapshot: typeof taskSnapshots.$inferSelect;
+  snapshotSessionId?: string | null;
+  phaseIdByIdentifier: Map<string, string>;
+}) {
+  const explicitSnapshotPhaseId = asNonEmptyString(args.snapshot.currentPhaseId);
+  if (args.snapshotSessionId === args.snapshot.currentSessionId && explicitSnapshotPhaseId) {
+    return explicitSnapshotPhaseId;
+  }
+
+  const explicitLatestPhaseId = asNonEmptyString(args.snapshot.latestPhaseId);
+  if (args.snapshotSessionId === args.snapshot.latestSessionId && explicitLatestPhaseId) {
+    return explicitLatestPhaseId;
+  }
+
+  const snapshotSessionId = asNonEmptyString(args.snapshotSessionId);
+  if (!snapshotSessionId) {
+    return null;
+  }
+
+  const mappedPhaseId = args.phaseIdByIdentifier.get(snapshotSessionId);
+  if (mappedPhaseId) {
+    return mappedPhaseId;
+  }
+
+  const canonicalPrefix = `task-session:${args.snapshot.taskId}:`;
+  if (snapshotSessionId.startsWith(canonicalPrefix)) {
+    return snapshotSessionId;
+  }
+
+  return snapshotSessionId;
+}
+
 function mapTaskSnapshotForRead(
   snapshot: typeof taskSnapshots.$inferSelect,
   runtimeSessionIdById: Map<string, string>,
   aggregateRuntimeSessionIdByTaskId: Map<string, string>,
+  phaseIdByIdentifier: Map<string, string>,
 ) {
   return {
     taskId: snapshot.taskId,
@@ -111,6 +146,16 @@ function mapTaskSnapshotForRead(
       snapshot,
       runtimeSessionIdById,
       aggregateRuntimeSessionIdByTaskId,
+    }),
+    currentPhaseId: resolveSnapshotPhaseId({
+      snapshot,
+      snapshotSessionId: snapshot.currentSessionId,
+      phaseIdByIdentifier,
+    }),
+    latestPhaseId: resolveSnapshotPhaseId({
+      snapshot,
+      snapshotSessionId: snapshot.latestSessionId,
+      phaseIdByIdentifier,
     }),
     latestResult: snapshot.latestResultSummary,
     latestResultSummary: snapshot.latestResultSummary,
@@ -143,14 +188,20 @@ export function createTaskSnapshotReadApi(deps: {
 
     const query = db.select().from(taskSnapshots).orderBy(desc(taskSnapshots.updatedAt));
     const rows = filters.length > 0 ? await query.where(and(...filters)) : await query;
-    const [runtimeSessionIdById, aggregateRuntimeSessionIdByTaskId] = await Promise.all([
-      loadSnapshotRuntimeSessionIds(rows),
+    const [{ runtimeSessionIdById, phaseIdByIdentifier }, aggregateRuntimeSessionIdByTaskId] =
+      await Promise.all([
+        loadSnapshotSessionLookups(rows),
       loadAggregateRuntimeSessionIds(rows),
-    ]);
+      ]);
 
     const data = rows
       .map((row) =>
-        mapTaskSnapshotForRead(row, runtimeSessionIdById, aggregateRuntimeSessionIdByTaskId),
+        mapTaskSnapshotForRead(
+          row,
+          runtimeSessionIdById,
+          aggregateRuntimeSessionIdByTaskId,
+          phaseIdByIdentifier,
+        ),
       )
       .filter((row) => (args.status ? row.currentStatus === args.status : true))
       .slice(0, limit);
@@ -167,9 +218,12 @@ export function createTaskSnapshotReadApi(deps: {
     const snapshot = await db.query.taskSnapshots.findFirst({
       where: eq(taskSnapshots.taskId, taskId),
     });
-    const runtimeSessionIdById = snapshot
-      ? await loadSnapshotRuntimeSessionIds([snapshot])
-      : new Map<string, string>();
+    const { runtimeSessionIdById, phaseIdByIdentifier } = snapshot
+      ? await loadSnapshotSessionLookups([snapshot])
+      : {
+          runtimeSessionIdById: new Map<string, string>(),
+          phaseIdByIdentifier: new Map<string, string>(),
+        };
     const aggregateRuntimeSessionIdByTaskId = task.sessionId
       ? new Map([[task.id, task.sessionId]])
       : new Map<string, string>();
@@ -183,6 +237,7 @@ export function createTaskSnapshotReadApi(deps: {
               snapshot,
               runtimeSessionIdById,
               aggregateRuntimeSessionIdByTaskId,
+              phaseIdByIdentifier,
             )
           : null,
         meta: {

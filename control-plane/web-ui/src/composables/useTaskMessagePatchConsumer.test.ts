@@ -157,4 +157,50 @@ describe("useTaskMessagePatchConsumer", () => {
     });
     expect(consumer.getLatestTaskPatchEvent("task-2")).toBeNull();
   });
+
+  it("replays the latest assistant history when reading live state repeatedly", async () => {
+    const { consumer } = mountConsumer();
+
+    realtimeStoreMock.events = [
+      createEvent({
+        id: "event-start",
+        data: {
+          message: {
+            id: "assistant-1",
+            role: "assistant",
+            time: {
+              created: "2026-04-08T03:18:17.218Z",
+            },
+          },
+        },
+      }),
+    ];
+
+    await nextTick();
+
+    expect(consumer.getLiveAssistantState("task-1", "session-1")).toMatchObject({
+      orderedAssistantMessageIds: ["assistant-1"],
+    });
+
+    realtimeStoreMock.events = [
+      createEvent({
+        id: "event-delta",
+        type: "task.message.delta",
+        data: {
+          part: {
+            messageID: "assistant-1",
+            type: "text",
+            text: "你好",
+          },
+        },
+      }),
+      ...realtimeStoreMock.events,
+    ];
+
+    await nextTick();
+
+    const liveState = consumer.getLiveAssistantState("task-1", "session-1");
+    expect(liveState.textById.get("assistant-1")).toBe("你好");
+    expect(liveState.incompleteIds.has("assistant-1")).toBe(true);
+  });
 });

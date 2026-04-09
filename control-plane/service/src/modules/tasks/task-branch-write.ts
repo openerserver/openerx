@@ -18,11 +18,13 @@ export const createTaskBranchSchema = z.object({
     .enum(["primary", "candidate", "judge", "sequential_step", "resume", "manual_branch", "hook"])
     .optional(),
   executionModeSnapshot: z.enum(["single", "parallel", "sequential_chain"]).optional(),
+  phaseId: z.string().min(1).optional(),
+  phaseRole: z.enum(["mainline", "candidate", "judge", "step", "aux"]).optional(),
+  phaseItemIndex: z.number().int().min(0).optional(),
   isActive: z.boolean().optional(),
   candidateIndex: z.number().int().min(0).optional(),
   stepIndex: z.number().int().min(0).optional(),
   selectedModel: z.string().max(200).optional(),
-  coordinationKey: z.string().max(500).optional(),
   operationId: z.string().max(200).optional(),
 });
 
@@ -50,10 +52,12 @@ type TaskBranchCompatRecord = {
     | "hook"
     | null;
   executionModeSnapshot?: "single" | "parallel" | "sequential_chain" | null;
+  phaseId?: string | null;
+  phaseRole?: "mainline" | "candidate" | "judge" | "step" | "aux" | null;
+  phaseItemIndex?: number | null;
   candidateIndex?: number | null;
   stepIndex?: number | null;
   selectedModel?: string | null;
-  coordinationKey?: string | null;
   operationId?: string | null;
   isActive: boolean;
 };
@@ -74,11 +78,13 @@ type ResolvedTaskBranchState = {
     | "hook"
     | null;
   executionModeSnapshot?: "single" | "parallel" | "sequential_chain" | null;
+  phaseId?: string | null;
+  phaseRole?: "mainline" | "candidate" | "judge" | "step" | "aux" | null;
+  phaseItemIndex?: number | null;
   candidateIndex?: number | null;
   stepIndex?: number | null;
   selectedModel?: string | null;
   isActive: boolean;
-  coordinationKey?: string;
   operationId?: string;
 };
 
@@ -94,6 +100,9 @@ function hasMaterializedTaskBranchRecord(record: TaskBranchCompatRecord | null) 
       record.sourceType === "parallel" ||
       record.sourceType === "fork" ||
       record.sourceType === "sub_session" ||
+        record.phaseId ||
+        record.phaseRole ||
+        record.phaseItemIndex != null ||
       record.candidateIndex != null ||
       record.stepIndex != null ||
       record.selectedModel,
@@ -114,11 +123,13 @@ function resolveTaskBranchState(
     sessionKind: body.sessionKind ?? existingRecord?.sessionKind ?? null,
     executionModeSnapshot:
       body.executionModeSnapshot ?? existingRecord?.executionModeSnapshot ?? null,
+    phaseId: body.phaseId ?? existingRecord?.phaseId ?? null,
+    phaseRole: body.phaseRole ?? existingRecord?.phaseRole ?? null,
+    phaseItemIndex: body.phaseItemIndex ?? existingRecord?.phaseItemIndex ?? null,
     candidateIndex: body.candidateIndex ?? existingRecord?.candidateIndex ?? null,
     stepIndex: body.stepIndex ?? existingRecord?.stepIndex ?? null,
     selectedModel: body.selectedModel ?? existingRecord?.selectedModel ?? null,
     isActive: body.isActive ?? existingRecord?.isActive ?? false,
-    coordinationKey: body.coordinationKey,
     operationId: body.operationId,
   };
 }
@@ -183,12 +194,14 @@ export function createTaskBranchWriteApi(deps: {
       | "hook"
       | null;
     executionModeSnapshot?: "single" | "parallel" | "sequential_chain" | null;
+    phaseId?: string | null;
+    phaseRole?: "mainline" | "candidate" | "judge" | "step" | "aux" | null;
+    phaseItemIndex?: number | null;
     isActive?: boolean;
     archivedAt?: string | null;
     candidateIndex?: number | null;
     stepIndex?: number | null;
     selectedModel?: string | null;
-    coordinationKey?: string | null;
     operationId?: string | null;
   }) => Promise<string>;
   upsertConversationMessageRecord: (args: {
@@ -236,12 +249,14 @@ export function createTaskBranchWriteApi(deps: {
       sourceType: branchState.sourceType,
       sessionKind: branchState.sessionKind,
       executionModeSnapshot: branchState.executionModeSnapshot,
+      phaseId: branchState.phaseId,
+      phaseRole: branchState.phaseRole,
+      phaseItemIndex: branchState.phaseItemIndex,
       isActive: branchState.isActive,
       archivedAt: null,
       candidateIndex: branchState.candidateIndex,
       stepIndex: branchState.stepIndex,
       selectedModel: branchState.selectedModel,
-      coordinationKey: branchState.coordinationKey,
       operationId: branchState.operationId,
     });
 
@@ -312,14 +327,16 @@ export function createTaskBranchWriteApi(deps: {
           ...(existingRecord.executionModeSnapshot
             ? { executionModeSnapshot: existingRecord.executionModeSnapshot }
             : {}),
+          ...(existingRecord.phaseId ? { phaseId: existingRecord.phaseId } : {}),
+          ...(existingRecord.phaseRole ? { phaseRole: existingRecord.phaseRole } : {}),
+          ...(existingRecord.phaseItemIndex != null
+            ? { phaseItemIndex: existingRecord.phaseItemIndex }
+            : {}),
           ...(existingRecord.candidateIndex != null
             ? { candidateIndex: existingRecord.candidateIndex }
             : {}),
           ...(existingRecord.stepIndex != null ? { stepIndex: existingRecord.stepIndex } : {}),
           ...(existingRecord.selectedModel ? { selectedModel: existingRecord.selectedModel } : {}),
-          ...(existingRecord.coordinationKey
-            ? { coordinationKey: existingRecord.coordinationKey }
-            : {}),
           ...(existingRecord.operationId ? { operationId: existingRecord.operationId } : {}),
         }
       : {};
@@ -393,6 +410,9 @@ export function createTaskBranchWriteApi(deps: {
       forkedFromMessageId: record.forkedFromMessageId ?? null,
       branchName: record.branchName ?? null,
       sourceType: record.sourceType,
+      phaseId: record.phaseId ?? null,
+      phaseRole: record.phaseRole ?? null,
+      phaseItemIndex: record.phaseItemIndex ?? null,
       isActive: true,
       archivedAt: null,
     });
@@ -430,6 +450,9 @@ export function createTaskBranchWriteApi(deps: {
       forkedFromMessageId: record.forkedFromMessageId ?? null,
       branchName: record.branchName ?? null,
       sourceType: record.sourceType,
+      phaseId: record.phaseId ?? null,
+      phaseRole: record.phaseRole ?? null,
+      phaseItemIndex: record.phaseItemIndex ?? null,
       isActive: false,
       archivedAt: new Date().toISOString(),
     });

@@ -878,9 +878,9 @@ sequenceDiagram
     participant CP as Service
     participant DB as PostgreSQL
 
-    User->>BFF: POST /:taskId/candidates/:index/adopt
-    BFF->>CP: adoptTaskSessionWinner(taskId, winnerSessionId, coordinationKey)
-    CP->>DB: UPDATE task_sessions SET winnerSessionId = winner<br/>WHERE coordinationKey = :key
+    User->>BFF: POST /:taskId/phases/:phaseId/candidates/:index/adopt
+    BFF->>CP: adoptTaskPhase(taskId, phaseId, winnerSessionId)
+    CP->>DB: UPDATE task_execution_phases SET winnerSessionId = winner<br/>WHERE id = :phaseId
     CP->>DB: UPDATE taskSnapshots SET currentSessionId = winner.runtimeSessionId
     CP-->>BFF: ok
 

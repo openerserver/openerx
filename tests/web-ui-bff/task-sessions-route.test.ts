@@ -190,6 +190,8 @@ describe("task sessions route", () => {
               {
                 id: "task-session:task-1:session-1",
                 runtimeSessionId: "session-1",
+                phaseId: "phase-root",
+                coordinationKey: "phase-root",
                 sourceType: "root",
                 isActive: true,
                 archivedAt: null,
@@ -218,6 +220,7 @@ describe("task sessions route", () => {
         expect.objectContaining({
           id: "session-1",
           taskSessionId: "task-session:task-1:session-1",
+          phaseId: "phase-root",
           title: "[Task task-1] finished session",
           isActive: true,
           summary: { additions: 1, deletions: 0, files: 1 },
@@ -225,6 +228,12 @@ describe("task sessions route", () => {
           updatedAt: "2026-03-14T10:05:00.000Z",
         }),
       ],
+      meta: {
+        currentSessionId: "session-1",
+        currentPhaseId: "phase-root",
+        latestPhaseId: "phase-root",
+        phaseCount: 1,
+      },
     });
   });
 
@@ -352,6 +361,7 @@ describe("task sessions route", () => {
         expect.objectContaining({
           id: "session-1",
           taskSessionId: "task-session:task-1:session-1",
+          phaseId: "task-session:task-1:session-1",
           title: "finished task — 分析现状",
           isActive: true,
           summary: { additions: 0, deletions: 0, files: 0 },
@@ -364,6 +374,12 @@ describe("task sessions route", () => {
           executionModeSnapshot: "sequential_chain",
         }),
       ],
+      meta: {
+        currentSessionId: "session-1",
+        currentPhaseId: "task-session:task-1:session-1",
+        latestPhaseId: "task-session:task-1:session-1",
+        phaseCount: 1,
+      },
     });
   });
 
@@ -393,6 +409,7 @@ describe("task sessions route", () => {
                 sessionKind: "candidate",
                 executionModeSnapshot: "parallel",
                 executionStatus: "completed",
+                phaseId: "phase-parallel-1",
                 candidateIndex: 0,
                 coordinationKey: "coord-1",
                 winnerSessionId: "session-b",
@@ -406,6 +423,7 @@ describe("task sessions route", () => {
                 sessionKind: "candidate",
                 executionModeSnapshot: "parallel",
                 executionStatus: "completed",
+                phaseId: "phase-parallel-1",
                 candidateIndex: 1,
                 coordinationKey: "coord-1",
                 winnerSessionId: "session-b",
@@ -434,6 +452,7 @@ describe("task sessions route", () => {
         expect.objectContaining({
           id: "session-a",
           taskSessionId: "task-session:task-1:session-a",
+          phaseId: "phase-parallel-1",
           title: "候选 A",
           coordinationKey: "coord-1",
           winnerSessionId: "session-b",
@@ -443,6 +462,7 @@ describe("task sessions route", () => {
         expect.objectContaining({
           id: "session-b",
           taskSessionId: "task-session:task-1:session-b",
+          phaseId: "phase-parallel-1",
           title: "候选 B",
           isActive: true,
           coordinationKey: "coord-1",
@@ -451,6 +471,12 @@ describe("task sessions route", () => {
           executionModeSnapshot: "parallel",
         }),
       ],
+      meta: {
+        currentSessionId: "session-b",
+        currentPhaseId: "phase-parallel-1",
+        latestPhaseId: "phase-parallel-1",
+        phaseCount: 1,
+      },
     });
   });
 
@@ -728,10 +754,17 @@ describe("task sessions route", () => {
         expect.objectContaining({
           id: "session-root",
           taskSessionId: "task-session:task-1:session-root",
+          phaseId: "ts-root",
           title: "main",
           isActive: true,
         }),
       ],
+      meta: {
+        currentSessionId: "session-root",
+        currentPhaseId: "ts-root",
+        latestPhaseId: "ts-root",
+        phaseCount: 1,
+      },
     });
   });
 
@@ -799,10 +832,17 @@ describe("task sessions route", () => {
         expect.objectContaining({
           id: "session-root",
           taskSessionId: "task-session:task-1:session-root",
+          phaseId: "task-session:task-1:session-root",
           title: "main",
           isActive: true,
         }),
       ],
+      meta: {
+        currentSessionId: "session-root",
+        currentPhaseId: "task-session:task-1:session-root",
+        latestPhaseId: "task-session:task-1:session-root",
+        phaseCount: 1,
+      },
     });
   });
 
@@ -1106,6 +1146,7 @@ describe("task sessions route", () => {
                 id: "ts-candidate-a",
                 runtimeSessionId: "session-a",
                 parentRuntimeSessionId: "session-root",
+                phaseId: "phase-pending-1",
                 sessionKind: "manual_branch",
                 candidateIndex: 0,
                 coordinationKey: "coord-1",
@@ -1117,6 +1158,7 @@ describe("task sessions route", () => {
                 id: "ts-candidate-b",
                 runtimeSessionId: "session-b",
                 parentRuntimeSessionId: "session-root",
+                phaseId: "phase-pending-1",
                 sessionKind: "manual_branch",
                 candidateIndex: 1,
                 coordinationKey: "coord-1",
@@ -1279,6 +1321,7 @@ describe("task sessions route", () => {
                 id: "ts-anchor",
                 runtimeSessionId: "session-anchor",
                 parentRuntimeSessionId: "session-root",
+                phaseId: "phase-adopted-1",
                 sessionKind: "resume",
                 coordinationKey: "coord-1",
                 winnerSessionId: "session-a",
@@ -1289,6 +1332,7 @@ describe("task sessions route", () => {
                 id: "ts-candidate-a",
                 runtimeSessionId: "session-a",
                 parentRuntimeSessionId: "session-anchor",
+                phaseId: "phase-adopted-1",
                 sessionKind: "candidate",
                 candidateIndex: 0,
                 coordinationKey: "coord-1",
@@ -1300,6 +1344,7 @@ describe("task sessions route", () => {
                 id: "ts-candidate-b",
                 runtimeSessionId: "session-b",
                 parentRuntimeSessionId: "session-anchor",
+                phaseId: "phase-adopted-1",
                 sessionKind: "candidate",
                 candidateIndex: 1,
                 coordinationKey: "coord-1",
@@ -2034,6 +2079,7 @@ describe("task sessions route", () => {
                 id: "ts-old-a",
                 runtimeSessionId: "session-old-a",
                 parentRuntimeSessionId: "session-root",
+                phaseId: "phase-old",
                 sessionKind: "manual_branch",
                 candidateIndex: 0,
                 coordinationKey: "coord-old",
@@ -2045,6 +2091,7 @@ describe("task sessions route", () => {
                 id: "ts-old-b",
                 runtimeSessionId: "session-old-b",
                 parentRuntimeSessionId: "session-root",
+                phaseId: "phase-old",
                 sessionKind: "manual_branch",
                 candidateIndex: 1,
                 coordinationKey: "coord-old",
@@ -2056,6 +2103,7 @@ describe("task sessions route", () => {
                 id: "ts-new-a",
                 runtimeSessionId: "session-new-a",
                 parentRuntimeSessionId: "session-root",
+                phaseId: "phase-new",
                 sessionKind: "manual_branch",
                 candidateIndex: 0,
                 coordinationKey: "coord-new",
@@ -2067,6 +2115,7 @@ describe("task sessions route", () => {
                 id: "ts-new-b",
                 runtimeSessionId: "session-new-b",
                 parentRuntimeSessionId: "session-root",
+                phaseId: "phase-new",
                 sessionKind: "manual_branch",
                 candidateIndex: 1,
                 coordinationKey: "coord-new",

@@ -33,6 +33,9 @@ describe("getTaskSessions", () => {
       json: async () => ({
         meta: {
           currentSessionId: "task-session-b",
+          currentPhaseId: "phase-group-1",
+          latestPhaseId: "phase-group-1",
+          phaseCount: 1,
         },
         data: [
           {
@@ -41,6 +44,7 @@ describe("getTaskSessions", () => {
             parentRuntimeSessionId: "runtime-root",
             branchName: "候选 A",
             sessionKind: "candidate",
+            phaseId: "phase-group-1",
             coordinationKey: "group-1",
             executionModeSnapshot: "parallel",
             candidateIndex: 0,
@@ -56,6 +60,7 @@ describe("getTaskSessions", () => {
             parentRuntimeSessionId: "runtime-root",
             branchName: "候选 B",
             sessionKind: "candidate",
+            phaseId: "phase-group-1",
             coordinationKey: "group-1",
             executionModeSnapshot: "parallel",
             candidateIndex: 1,
@@ -74,10 +79,17 @@ describe("getTaskSessions", () => {
     const response = await getTaskSessions("task-1");
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(response.meta).toEqual({
+      currentSessionId: "task-session-b",
+      currentPhaseId: "phase-group-1",
+      latestPhaseId: "phase-group-1",
+      phaseCount: 1,
+    });
     expect(response.data).toEqual([
       expect.objectContaining({
         id: "runtime-a",
         taskSessionId: "task-session-a",
+        phaseId: "phase-group-1",
         title: "候选 A",
         isActive: false,
         parentRuntimeSessionId: "runtime-root",
@@ -92,6 +104,7 @@ describe("getTaskSessions", () => {
       expect.objectContaining({
         id: "runtime-b",
         taskSessionId: "task-session-b",
+        phaseId: "phase-group-1",
         title: "候选 B",
         isActive: true,
         parentRuntimeSessionId: "runtime-root",
@@ -115,6 +128,7 @@ describe("getTaskSessions", () => {
           {
             id: "runtime-a",
             taskSessionId: "task-session-a",
+            phaseId: "phase-a",
             title: "候选 A",
             isActive: false,
             parentRuntimeSessionId: "runtime-root",
@@ -132,6 +146,7 @@ describe("getTaskSessions", () => {
           {
             id: "runtime-b",
             taskSessionId: "task-session-b",
+            phaseId: "phase-a",
             title: "候选 B",
             isActive: true,
             parentRuntimeSessionId: "runtime-root",
@@ -158,6 +173,7 @@ describe("getTaskSessions", () => {
       expect.objectContaining({
         id: "runtime-a",
         taskSessionId: "task-session-a",
+        phaseId: "phase-a",
         title: "候选 A",
         isActive: false,
         parentRuntimeSessionId: "runtime-root",
@@ -173,6 +189,7 @@ describe("getTaskSessions", () => {
       expect.objectContaining({
         id: "runtime-b",
         taskSessionId: "task-session-b",
+        phaseId: "phase-a",
         title: "候选 B",
         isActive: true,
         parentRuntimeSessionId: "runtime-root",
@@ -324,6 +341,94 @@ describe("task tree current session projection", () => {
 
     expect(messagesResponse.meta?.sessionId).toBe("ses-child");
     expect(sessionContext.data.currentSessionId).toBe("ses-child");
+  });
+
+  it("preserves parallel phase metadata in tree session summaries", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        meta: {
+          taskId: "task-1",
+          currentSessionId: "task-session:task-1:ses-a",
+          rootSessionId: "task-session:task-1:ses-a",
+          incomplete: false,
+        },
+        task: {
+          id: "task-1",
+          currentSessionId: "task-session:task-1:ses-a",
+        },
+        workflow: null,
+        parallelGroups: [],
+        sessions: [
+          {
+            id: "task-session:task-1:ses-a",
+            runtimeSessionId: "ses-a",
+            title: "候选 A",
+            parentSessionId: null,
+            phaseId: "phase-group-1",
+            phaseRole: "candidate",
+            phaseItemIndex: 0,
+            sessionKind: "candidate",
+            executionModeSnapshot: "parallel",
+            candidateIndex: 0,
+            winnerSessionId: "task-session:task-1:ses-b",
+            createdAt: "2026-03-22T00:00:00.000Z",
+            updatedAt: "2026-03-22T00:05:00.000Z",
+          },
+          {
+            id: "task-session:task-1:ses-b",
+            runtimeSessionId: "ses-b",
+            title: "候选 B",
+            parentSessionId: "task-session:task-1:ses-a",
+            phaseId: "phase-group-1",
+            phaseRole: "candidate",
+            phaseItemIndex: 1,
+            sessionKind: "candidate",
+            executionModeSnapshot: "parallel",
+            candidateIndex: 1,
+            winnerSessionId: "task-session:task-1:ses-b",
+            createdAt: "2026-03-22T00:00:01.000Z",
+            updatedAt: "2026-03-22T00:05:01.000Z",
+          },
+        ],
+        runs: [],
+        messages: [],
+        messageParts: [],
+        operations: [],
+        artifacts: [],
+        edges: [],
+      }),
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await getTaskTreeSessionContext("task-1");
+
+    expect(response.data.sessionSummaries).toEqual([
+      expect.objectContaining({
+        id: "ses-a",
+        taskSessionId: "task-session:task-1:ses-a",
+        phaseId: "phase-group-1",
+        phaseRole: "candidate",
+        phaseItemIndex: 0,
+        sessionKind: "candidate",
+        candidateIndex: 0,
+        executionModeSnapshot: "parallel",
+        winnerSessionId: "ses-b",
+      }),
+      expect.objectContaining({
+        id: "ses-b",
+        taskSessionId: "task-session:task-1:ses-b",
+        phaseId: "phase-group-1",
+        phaseRole: "candidate",
+        phaseItemIndex: 1,
+        sessionKind: "candidate",
+        candidateIndex: 1,
+        executionModeSnapshot: "parallel",
+        winnerSessionId: "ses-b",
+      }),
+    ]);
   });
 
   it("repairs child-session user prompts that were persisted slightly after assistant start", async () => {

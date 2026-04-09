@@ -38,6 +38,7 @@ import {
   getProjectRootNodeId,
 } from "../project-tree/storage";
 import { loadTaskTreeRecords } from "../project-tree/task-view";
+import { resolvePublicTaskStatus } from "../tasks/public-task-status";
 import { fromStoredTaskExecutionMode } from "../tasks/task-execution-mode";
 
 export const projectRoutes = new Hono<AppEnv>();
@@ -844,30 +845,16 @@ interface OverviewTaskSummary {
   lastActivityAt: string | null;
 }
 
-function mapOverviewLifecycleStatusToTaskStatus(lifecycleStatus: string | null | undefined) {
-  if (lifecycleStatus === "done") {
-    return "completed";
-  }
-  if (lifecycleStatus === "active") {
-    return "running";
-  }
-  if (lifecycleStatus === "archived") {
-    return "cancelled";
-  }
-
-  return "pending";
-}
-
 function normalizeOverviewTaskStatus(args: {
   currentExecutionStatus?: string | null;
   lifecycleStatus?: string | null;
   fallbackStatus?: string | null;
 }) {
-  return (
-    args.currentExecutionStatus ??
-    args.fallbackStatus ??
-    mapOverviewLifecycleStatusToTaskStatus(args.lifecycleStatus)
-  );
+  return resolvePublicTaskStatus({
+    currentExecutionStatus: args.currentExecutionStatus,
+    lifecycleStatus: args.lifecycleStatus,
+    fallbackStatus: args.fallbackStatus,
+  });
 }
 
 function normalizeOverviewExecutionMode(value: string | null | undefined) {
@@ -980,7 +967,7 @@ function groupByProjectId<T extends { projectId: string }>(items: T[]) {
   return map;
 }
 
-function mergeOverviewTaskSummaries(args: {
+export function mergeOverviewTaskSummaries(args: {
   tasks: Array<{
     id: string;
     projectId: string;

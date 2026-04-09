@@ -12,15 +12,6 @@
         :executing="executing"
         @choose-mode="$emit('choose-mode')"
       />
-
-      <TaskCompletionActionsCard
-        v-if="showCompletionActions"
-        :can-complete="canComplete"
-        :can-advance="false"
-        :completing="completing"
-        :advancing="advancing"
-        @complete="$emit('complete')"
-      />
     </div>
   </div>
 </template>
@@ -29,7 +20,7 @@
 import { computed } from "vue";
 import type { ExecutionMode, TaskStageViewModel } from "../../lib/api";
 
-const props = defineProps<{
+defineProps<{
   // Workflow 阶段
   workflowSummary: { currentStage: string; status: string } | null;
   workflowStages: TaskStageViewModel[];
@@ -38,23 +29,11 @@ const props = defineProps<{
   autoAdvance: boolean;
   isExecuting: boolean;
   executing: boolean;
-  // 完结操作
-  taskStatus: string;
-  completing: boolean;
-  advancing: boolean;
 }>();
 
 defineEmits<{
   (e: "choose-mode"): void;
-  (e: "complete"): void;
 }>();
 
 const visible = computed(() => true);
-
-const canComplete = computed(() => {
-  const s = props.taskStatus;
-  return s === "running" || s === "awaiting_input";
-});
-
-const showCompletionActions = computed(() => canComplete.value);
 </script>

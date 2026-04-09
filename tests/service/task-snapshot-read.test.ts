@@ -44,12 +44,17 @@ function makeSnapshotRow(overrides: Partial<SnapshotRow> = {}): SnapshotRow {
 async function loadTaskSnapshotReadModule(args: {
   snapshotRows?: SnapshotRow[];
   snapshotRow?: SnapshotRow | null;
+  sessionRows?: Array<{
+    id: string;
+    runtimeSessionId: string | null;
+    coordinationKey: string | null;
+  }>;
 }) {
   importCounter += 1;
 
   const orderBy = mock(async () => args.snapshotRows ?? []);
   const findFirst = mock(async () => args.snapshotRow ?? null);
-  const findMany = mock(async () => []);
+  const findMany = mock(async () => args.sessionRows ?? []);
 
   mock.module("../../control-plane/service/src/db", () => ({
     db: {
@@ -70,9 +75,23 @@ async function loadTaskSnapshotReadModule(args: {
   }));
 
   mock.module("../../control-plane/service/src/db/schema", () => ({
+    roleAggregateConclusions: {},
+    taskArtifacts: {},
+    taskExecutionPhases: {
+      id: "id",
+      taskId: "taskId",
+      phaseIndex: "phaseIndex",
+      createdAt: "createdAt",
+    },
+    taskMessageParts: {},
+    taskMessages: {},
+    taskOperations: {},
+    taskStageRuns: {},
+    taskSessionRuns: {},
     taskSessions: {
       id: "id",
       runtimeSessionId: "runtimeSessionId",
+      coordinationKey: "coordinationKey",
     },
     taskSnapshots: {
       projectId: "projectId",
@@ -81,6 +100,9 @@ async function loadTaskSnapshotReadModule(args: {
       currentSessionId: "currentSessionId",
       latestSessionId: "latestSessionId",
     },
+    taskTimelineViews: {},
+    taskUsageLedgerEntries: {},
+    taskWorkflowRuns: {},
   }));
 
   return import(
@@ -107,9 +129,42 @@ describe("task snapshot read", () => {
     expect(result.data[0]?.currentStatus).toBe("completed");
   });
 
+  test("preserves awaiting_adoption execution status in snapshot list filtering", async () => {
+    const { createTaskSnapshotReadApi } = await loadTaskSnapshotReadModule({
+      snapshotRows: [makeSnapshotRow({
+        lifecycleStatus: "active",
+        currentExecutionStatus: "awaiting_adoption",
+      })],
+    });
+    const api = createTaskSnapshotReadApi({
+      loadTaskTreeBackedRecord: mock(async () => null),
+    });
+
+    const result = await api.listTaskSnapshots({ status: "awaiting_adoption", limit: 10 });
+
+    expect(result.data).toHaveLength(1);
+    expect(result.data[0]?.currentStatus).toBe("awaiting_adoption");
+  });
+
   test("normalizes complete execution status in single snapshot responses", async () => {
     const { createTaskSnapshotReadApi } = await loadTaskSnapshotReadModule({
-      snapshotRow: makeSnapshotRow(),
+      snapshotRow: makeSnapshotRow({
+        currentSessionId: "runtime-current",
+        latestSessionId: "task-session:task-1:latest",
+      }),
+      sessionRows: [
+        {
+          id: "task-session:task-1:current",
+          runtimeSessionId: "runtime-current",
+          phaseId: "phase-current",
+          coordinationKey: "phase-current",
+        },
+        {
+          id: "task-session:task-1:latest",
+          runtimeSessionId: "runtime-latest",
+          coordinationKey: null,
+        },
+      ],
     });
     const api = createTaskSnapshotReadApi({
       loadTaskTreeBackedRecord: mock(async () => ({ id: "task-1", sessionId: null } as never)),
@@ -122,5 +177,7 @@ describe("task snapshot read", () => {
       return;
     }
     expect(result.data.data?.currentStatus).toBe("completed");
+    expect(result.data.data?.currentPhaseId).toBe("phase-current");
+    expect(result.data.data?.latestPhaseId).toBe("task-session:task-1:latest");
   });
 });

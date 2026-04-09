@@ -45,6 +45,10 @@ type BootstrapForeignKeyRow = {
   referencesTable: string;
 };
 
+type BootstrapEnumValueRow = {
+  enumLabel: string;
+};
+
 type BootstrapState = {
   relations: Set<string>;
   columns: Set<string>;
@@ -484,6 +488,28 @@ async function loadBootstrapState(sql: Sql): Promise<BootstrapState> {
   };
 }
 
+async function ensureExecutionStatusAwaitingAdoption(sql: Sql): Promise<boolean> {
+  const enumValueRows = await sql.unsafe<BootstrapEnumValueRow[]>(
+    `SELECT enum.enumlabel AS "enumLabel"
+     FROM pg_type type
+     INNER JOIN pg_namespace namespace ON namespace.oid = type.typnamespace
+     INNER JOIN pg_enum enum ON enum.enumtypid = type.oid
+     WHERE namespace.nspname = 'public'
+       AND type.typname = 'execution_status'`,
+  );
+
+  if (enumValueRows.length === 0) {
+    return false;
+  }
+
+  if (enumValueRows.some((row) => row.enumLabel === "awaiting_adoption")) {
+    return false;
+  }
+
+  await sql.unsafe(`ALTER TYPE "execution_status" ADD VALUE IF NOT EXISTS 'awaiting_adoption'`);
+  return true;
+}
+
 function incrementBootstrapSummary(
   summary: PostgresRuntimeBootstrapSummary,
   key: BootstrapSummaryCounterKey,
@@ -600,6 +626,9 @@ export async function ensurePostgresRuntimeTables(
     foreignKeysDropped: 0,
     foreignKeysAdded: 0,
   };
+
+  await ensureExecutionStatusAwaitingAdoption(sql);
+  summary.catalogReadCount += 1;
 
   const initialState = await loadBootstrapState(sql);
   summary.catalogReadCount += 1;

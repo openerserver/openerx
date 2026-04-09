@@ -5,6 +5,7 @@ import {
   buildTaskSessionLineagePath,
   resolveTaskSessionRecordId,
 } from "./task-session-read";
+import { dedupeTaskToolTimelineRows } from "./task-tool-dedupe";
 
 export async function buildTaskProjectionTimelineViewResponse(args: {
   taskId: string;
@@ -12,23 +13,24 @@ export async function buildTaskProjectionTimelineViewResponse(args: {
   sessionId?: string | null;
   includeLineage: boolean;
 }) {
+  const sessionRows = await db
+    .select({
+      id: taskSessions.id,
+      parentSessionId: taskSessions.parentSessionId,
+      runtimeSessionId: taskSessions.runtimeSessionId,
+    })
+    .from(taskSessions)
+    .where(eq(taskSessions.taskId, args.taskId))
+    .orderBy(asc(taskSessions.createdAt));
+
   let lineagePath: string[] = [];
   if (args.sessionId) {
-    const rows = await db
-      .select({
-        id: taskSessions.id,
-        parentSessionId: taskSessions.parentSessionId,
-        runtimeSessionId: taskSessions.runtimeSessionId,
-      })
-      .from(taskSessions)
-      .where(eq(taskSessions.taskId, args.taskId))
-      .orderBy(asc(taskSessions.createdAt));
-    const selectedSessionId = resolveTaskSessionRecordId(rows, args.sessionId) ?? args.sessionId;
+    const selectedSessionId = resolveTaskSessionRecordId(sessionRows, args.sessionId) ?? args.sessionId;
 
     if (!args.includeLineage) {
       lineagePath = [selectedSessionId];
     } else {
-      lineagePath = buildTaskSessionLineagePath(rows, selectedSessionId);
+      lineagePath = buildTaskSessionLineagePath(sessionRows, selectedSessionId);
     }
   }
 
@@ -37,7 +39,7 @@ export async function buildTaskProjectionTimelineViewResponse(args: {
     filters.push(inArray(taskTimelineViews.sessionId, lineagePath));
   }
 
-  const timelineRows = await db
+  const timelineRows = (await db
     .select({
       id: taskTimelineViews.id,
       taskId: taskTimelineViews.taskId,
@@ -57,9 +59,9 @@ export async function buildTaskProjectionTimelineViewResponse(args: {
     })
     .from(taskTimelineViews)
     .where(and(...filters))
-    .orderBy(asc(taskTimelineViews.sortAt), asc(taskTimelineViews.createdAt));
+    .orderBy(asc(taskTimelineViews.sortAt), asc(taskTimelineViews.createdAt))) as TaskProjectionTimelineRow[];
 
-  const data = timelineRows;
+  const data = dedupeTaskToolTimelineRows(timelineRows, sessionRows);
 
   return {
     data,

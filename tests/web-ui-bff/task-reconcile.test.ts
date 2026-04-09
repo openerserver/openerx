@@ -994,4 +994,82 @@ describe("reconcileRunningTasksOnStartup", () => {
     expect(getSessionMessagesMock).not.toHaveBeenCalled();
     expectNoPublicTraceRequests(cpFetchMock.mock.calls.map(([url]) => String(url)));
   });
+
+  test("does not auto-complete awaiting_adoption tasks during recent terminal session repair", async () => {
+    mockCpFetchRoutes([
+      {
+        matcher: (url) => url.includes("/api/tasks/snapshots?status=running"),
+        response: { ok: true, data: { data: [] } },
+      },
+      {
+        matcher: "/api/tasks/snapshots?limit=200",
+        response: {
+          ok: true,
+          data: {
+            data: [
+              {
+                taskId: "task-awaiting-adoption",
+                currentStatus: "awaiting_adoption",
+                orchestrationKind: "parallel",
+                currentSessionId: "session-awaiting",
+                latestResult: "A",
+                lastActivityAt: "2026-03-13T12:56:03.000Z",
+              },
+            ],
+          },
+        },
+      },
+      {
+        matcher: "/api/project-tree/tasks/task-awaiting-adoption",
+        response: {
+          ok: true,
+          data: {
+            id: "task-awaiting-adoption",
+            projectId: "proj-1",
+            title: "Awaiting adoption task",
+            status: "awaiting_adoption",
+            orchestrationKind: "parallel",
+            sessionId: "session-awaiting",
+            startedAt: "2026-03-13T12:50:00.000Z",
+            finishedAt: null,
+          },
+        },
+      },
+      {
+        matcher: "/api/tasks/task-awaiting-adoption/sessions",
+        response: {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "task-session:task-awaiting-adoption:session-awaiting",
+                runtimeSessionId: "session-awaiting",
+                isActive: true,
+                archivedAt: null,
+              },
+            ],
+          },
+        },
+      },
+    ]);
+
+    const { reconcileRunningTasksOnStartup } = await import(
+      "../../control-plane/web-ui-bff/src/modules/tasks/reconcile"
+    );
+
+    const summary = await reconcileRunningTasksOnStartup();
+
+    expect(summary.completed).toBe(0);
+    expect(summary.failed).toBe(0);
+    expect(summary.scanned).toBe(0);
+    expect(summary.skipped).toBe(0);
+    expect(cpFetchMock).not.toHaveBeenCalledWith(
+      "/api/tasks/task-awaiting-adoption",
+      expect.objectContaining({
+        method: "PATCH",
+        body: expect.objectContaining({ status: "completed" }),
+      }),
+    );
+    expect(getSessionMessagesMock).not.toHaveBeenCalled();
+  });
 });

@@ -165,6 +165,7 @@ describe("judge usage accounting", () => {
     const aggregator = sseAggregator as unknown as {
       parallelCandidateResults: Map<string, Map<number, { sessionId: string; result?: string }>>;
       parallelTaskSessions: Map<string, Set<string>>;
+      parallelTaskPhaseIds: Map<string, string>;
       judgingTasks: Set<string>;
       finalizeParallelTask: (
         taskId: string,
@@ -181,6 +182,7 @@ describe("judge usage accounting", () => {
       ]),
     );
     aggregator.parallelTaskSessions.set("task-judge", new Set(["ses-a", "ses-b"]));
+    aggregator.parallelTaskPhaseIds.set("task-judge", "phase-judge");
     aggregator.judgingTasks.clear();
 
     await aggregator.finalizeParallelTask("task-judge", "proj-judge", "Bearer internal");

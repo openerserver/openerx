@@ -56,6 +56,24 @@ describe("task message patch effects", () => {
     });
   });
 
+  it("marks phase lifecycle events as flow refresh boundaries without message refresh", () => {
+    expect(
+      getTaskMessagePatchEffects(
+        createPatchEvent("phase-awaiting-adoption", {
+          rawEventKind: "task.phase.awaiting_adoption",
+          phaseId: "phase-2",
+        }),
+      ),
+    ).toMatchObject({
+      updatesLiveAssistantState: false,
+      shouldRefreshCanonicalMessages: false,
+      shouldRefreshTaskDetailMessages: false,
+      shouldScheduleTaskDetailRefresh: true,
+      shouldBumpTaskDetailTraceRefreshKey: false,
+      shouldRefreshMonitorSummary: true,
+    });
+  });
+
   it("aggregates batch effects across multiple pending patch events", () => {
     expect(
       summarizeTaskMessagePatchEffects([

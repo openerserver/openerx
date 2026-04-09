@@ -116,6 +116,9 @@ interface StartExecutionResponse {
 interface SessionSummaryRecord {
   id: string;
   taskSessionId?: string;
+  phaseId?: string | null;
+  phaseRole?: string | null;
+  phaseItemIndex?: number | null;
   title: string;
   isActive: boolean;
   summary: { additions: number; deletions: number; files: number } | null;
@@ -213,12 +216,53 @@ interface UpsertTaskSessionLineageInput {
     | "manual_branch"
     | "hook";
   executionModeSnapshot?: "single" | "parallel" | "sequential_chain";
+  phaseId?: string;
+  phaseRole?: "mainline" | "candidate" | "judge" | "step" | "aux";
+  phaseItemIndex?: number;
   isActive: boolean;
   candidateIndex?: number;
   stepIndex?: number;
   selectedModel?: string;
-  coordinationKey?: string;
   operationId?: string;
+}
+
+interface TaskPhaseRecord {
+  id: string;
+  phaseIndex: number;
+  phaseKind: "root" | "single" | "parallel" | "sequential_chain" | "manual_branch" | "hook";
+  triggerType:
+    | "execute"
+    | "continue"
+    | "resume"
+    | "workflow_spawn"
+    | "candidate_adopt"
+    | "manual_branch"
+    | "hook_spawn";
+  status: "pending" | "running" | "paused" | "awaiting_adoption" | "completed" | "failed" | "cancelled";
+  parentPhaseId?: string | null;
+  resumedFromPhaseId?: string | null;
+  awaitingAdoptionSince?: string | null;
+  anchorSessionId?: string | null;
+  coordinationKey?: string | null;
+  candidateCount?: number | null;
+  winnerSessionId?: string | null;
+  judgeSessionId?: string | null;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  sessionIds?: string[];
+}
+
+interface TaskPhaseSessionEnvelopeRecord {
+  sessionId: string;
+  taskSessionId?: string | null;
+  phaseRole: "mainline" | "candidate" | "judge" | "step" | "aux";
+  phaseItemIndex: number;
+  agentRunId?: string;
+  label?: string;
+  model?: string;
+  status?: string;
 }
 
 async function fetchTaskSessionLineageRecords(taskId: string, authorization: string) {
@@ -404,6 +448,87 @@ async function upsertTaskSessionLineageRecord(
       ? error
       : `Failed to register task session lineage (${result.status})`,
   );
+}
+
+async function upsertTaskPhase(
+  taskId: string,
+  authorization: string,
+  body: Record<string, unknown>,
+) {
+  const result = await cpFetch<TaskPhaseRecord>(`/api/tasks/${encodeURIComponent(taskId)}/phases`, {
+    method: "POST",
+    authorization,
+    body,
+  });
+
+  if (result.ok && result.data) {
+    return result.data;
+  }
+
+  const error =
+    result.data && typeof result.data === "object" && "error" in result.data
+      ? (result.data as { error?: unknown }).error
+      : undefined;
+  throw new Error(
+    typeof error === "string" && error.trim()
+      ? error
+      : `Failed to upsert task phase (${result.status})`,
+  );
+}
+
+async function adoptTaskPhase(
+  taskId: string,
+  phaseId: string,
+  winnerSessionId: string,
+  authorization: string,
+) {
+  return cpFetch(`/api/tasks/${encodeURIComponent(taskId)}/phases/${encodeURIComponent(phaseId)}/adopt`, {
+    method: "POST",
+    authorization,
+    body: { winnerSessionId },
+  });
+}
+
+async function cancelTaskPhase(
+  taskId: string,
+  phaseId: string,
+  authorization: string,
+  reason: "winner_adopted" | "user_cancelled" | "runtime_terminated" | "runtime_failed" | "timeout" | "superseded" = "user_cancelled",
+) {
+  return cpFetch(`/api/tasks/${encodeURIComponent(taskId)}/phases/${encodeURIComponent(phaseId)}/cancel`, {
+    method: "POST",
+    authorization,
+    body: { reason, terminateRunningSessions: true },
+  });
+}
+
+async function resumeTaskPhase(
+  taskId: string,
+  phaseId: string,
+  authorization: string,
+) {
+  return cpFetch(`/api/tasks/${encodeURIComponent(taskId)}/phases/${encodeURIComponent(phaseId)}/resume`, {
+    method: "POST",
+    authorization,
+    body: { mode: "reuse" },
+  });
+}
+
+function buildTaskPhaseEnvelope(args: {
+  phase: TaskPhaseRecord;
+  sessions: TaskPhaseSessionEnvelopeRecord[];
+}) {
+  const primarySession = args.sessions.find((session) => session.phaseRole === "mainline") ?? args.sessions[0];
+
+  return {
+    ok: true,
+    phase: args.phase,
+    sessions: args.sessions,
+    sessionId: primarySession?.sessionId,
+    taskSessionId: primarySession?.taskSessionId ?? null,
+    agentRunId: primarySession?.agentRunId,
+    status: args.phase.status,
+  };
 }
 
 async function fetchTaskSessionTimeline(
@@ -949,7 +1074,7 @@ async function registerParallelTaskSessions(
   task: Pick<ExecutableTask, "id" | "title" | "sessionId">,
   plan: RuntimePlan,
   authorization: string,
-  options?: { parentSessionId?: string; operationId?: string },
+  options?: { parentSessionId?: string; operationId?: string; phaseId?: string },
 ) {
   const candidatesWithSessions = plan.candidates
     .map((candidate, index) => ({
@@ -962,13 +1087,28 @@ async function registerParallelTaskSessions(
     );
 
   await registerParallelTaskSessionCandidates(task, candidatesWithSessions, authorization, options);
+
+  return candidatesWithSessions.map((candidate) => {
+    const runtimeCandidate = plan.candidates[candidate.index];
+
+    return {
+      sessionId: candidate.sessionId,
+      taskSessionId: buildPublicTaskSessionId(task.id, candidate.sessionId),
+      phaseRole: "candidate",
+      phaseItemIndex: candidate.index,
+      agentRunId: runtimeCandidate?.agentRunId,
+      label: runtimeCandidate?.label ?? candidate.branchName,
+      model: runtimeCandidate?.model,
+      status: runtimeCandidate?.status,
+    } satisfies TaskPhaseSessionEnvelopeRecord;
+  });
 }
 
 async function registerParallelTaskSessionCandidates(
   task: Pick<ExecutableTask, "id" | "title" | "sessionId">,
   candidatesWithSessions: Array<{ index: number; sessionId: string; branchName: string }>,
   authorization: string,
-  options?: { parentSessionId?: string; operationId?: string },
+  options?: { parentSessionId?: string; operationId?: string; phaseId?: string },
 ) {
   if (candidatesWithSessions.length === 0) {
     return;
@@ -990,7 +1130,6 @@ async function registerParallelTaskSessionCandidates(
     candidatesWithSessions,
     rootSessionId,
   );
-  const coordinationKey = rootSessionId;
 
   for (const candidate of orderedCandidates) {
     const parentRuntimeSessionId = resolveParallelCandidateParentSessionId(
@@ -1005,7 +1144,9 @@ async function registerParallelTaskSessionCandidates(
       existingRecord &&
       existingRecord.parentRuntimeSessionId === (parentRuntimeSessionId ?? null) &&
       existingRecord.sourceType === nextSourceType &&
-      existingRecord.coordinationKey === coordinationKey &&
+      existingRecord.phaseId === (options?.phaseId ?? null) &&
+      existingRecord.phaseRole === "candidate" &&
+      existingRecord.phaseItemIndex === candidate.index &&
       existingRecord.sessionKind === "candidate" &&
       existingRecord.executionModeSnapshot === "parallel" &&
       existingRecord.candidateIndex === candidate.index
@@ -1020,9 +1161,11 @@ async function registerParallelTaskSessionCandidates(
       sourceType: nextSourceType,
       sessionKind: "candidate",
       executionModeSnapshot: "parallel",
+      phaseId: options?.phaseId,
+      phaseRole: "candidate",
+      phaseItemIndex: candidate.index,
       isActive: task.sessionId === candidate.sessionId,
       candidateIndex: candidate.index,
-      coordinationKey,
       operationId: options?.operationId,
     });
     lineageContext.existingSessionIds.add(candidate.sessionId);
@@ -1035,7 +1178,10 @@ async function registerParallelTaskSessionCandidates(
       branchName: candidate.branchName,
       sourceType: nextSourceType,
       isActive: task.sessionId === candidate.sessionId,
-      coordinationKey,
+      phaseId: options?.phaseId ?? null,
+      phaseRole: "candidate",
+      phaseItemIndex: candidate.index,
+      coordinationKey: null,
       sessionKind: "candidate",
       executionModeSnapshot: "parallel",
       candidateIndex: candidate.index,
@@ -1181,6 +1327,23 @@ async function continueParallelTaskExecution(
   }
 
   if (!hasAnySuccess) {
+    const parentPhaseId = await resolveParentPhaseId(
+      input.taskId,
+      input.authorization,
+      input.parentSessionId,
+    );
+    await upsertTaskPhase(input.taskId, input.authorization, {
+      parentPhaseId,
+      phaseKind: "parallel",
+      triggerType: "continue",
+      status: "failed",
+      candidateCount: plan.candidates.length,
+      requestedModel: input.resolvedModel ? formatModelRoute(input.resolvedModel) : null,
+      effectiveModel: input.resolvedModel ? formatModelRoute(input.resolvedModel) : null,
+      errorText: "All parallel candidates failed to continue",
+      startedAt: startedAt,
+      finishedAt: new Date().toISOString(),
+    }).catch(() => null);
     return buildParallelContinuationFailureResponse(attempts);
   }
 
@@ -1201,11 +1364,29 @@ async function continueParallelTaskExecution(
     },
   });
 
+  const parentPhaseId = await resolveParentPhaseId(
+    input.taskId,
+    input.authorization,
+    input.parentSessionId,
+  );
+  const phase = await upsertTaskPhase(input.taskId, input.authorization, {
+    parentPhaseId,
+    phaseKind: "parallel",
+    triggerType: "continue",
+    status: "running",
+    candidateCount: plan.candidates.length,
+    requestedModel: input.resolvedModel ? formatModelRoute(input.resolvedModel) : null,
+    effectiveModel: input.resolvedModel ? formatModelRoute(input.resolvedModel) : null,
+    startedAt,
+  });
+
   const continuationOperationId = crypto.randomUUID();
+  let phaseSessions: TaskPhaseSessionEnvelopeRecord[] = [];
   try {
-    await registerParallelTaskSessions(input.task, plan, input.authorization, {
+    phaseSessions = await registerParallelTaskSessions(input.task, plan, input.authorization, {
       parentSessionId: input.parentSessionId,
       operationId: continuationOperationId,
+      phaseId: phase.id,
     });
   } catch (error) {
     return {
@@ -1218,14 +1399,27 @@ async function continueParallelTaskExecution(
       },
     };
   }
-  sseAggregator.registerParallelTask(input.task.id, plan.candidates);
+  const phaseEnvelope = await finalizeTaskPhaseEnvelope({
+    taskId: input.taskId,
+    authorization: input.authorization,
+    phaseId: phase.id,
+    phaseKind: "parallel",
+    triggerType: "continue",
+    parentPhaseId,
+    requestedModel: input.resolvedModel ? formatModelRoute(input.resolvedModel) : null,
+    effectiveModel: input.resolvedModel ? formatModelRoute(input.resolvedModel) : null,
+    candidateCount: plan.candidates.length,
+    status: "running",
+    sessions: phaseSessions,
+  });
+  sseAggregator.registerParallelTask(input.task.id, plan.candidates, phase.id);
   persistParallelContinuationPromptSnapshots(input, plan, repoContext);
   broadcastParallelContinuationStarted(input.task, plan.candidates);
 
   return {
     status: 200 as const,
     body: {
-      ok: true,
+      ...phaseEnvelope,
       sessionId: primaryCandidate?.sessionId,
       agentRunId: primaryCandidate?.agentRunId,
       executionMode: "parallel",
@@ -1803,24 +1997,41 @@ async function continueSingleTaskExecutionFlow(
   const childTaskSessionId = buildPublicTaskSessionId(input.taskId, childSessionId);
   const parentTaskSessionId = buildPublicTaskSessionId(input.taskId, context.sessionId);
   const childOperationId = crypto.randomUUID();
+  const phaseStartedAt = new Date().toISOString();
+  const parentPhaseId = await resolveParentPhaseId(
+    input.taskId,
+    input.authorization,
+    context.sessionId,
+  );
+  const phase = await upsertTaskPhase(input.taskId, input.authorization, {
+    parentPhaseId,
+    phaseKind: "single",
+    triggerType: "continue",
+    status: "running",
+    requestedModel: context.resolvedModel ? formatModelRoute(context.resolvedModel) : null,
+    effectiveModel: context.resolvedModel ? formatModelRoute(context.resolvedModel) : null,
+    startedAt: phaseStartedAt,
+  });
 
-  try {
-    await upsertTaskSessionLineageRecord(input.taskId, input.authorization, {
-      runtimeSessionId: childSessionId,
-      parentRuntimeSessionId: context.sessionId,
-      branchName: childSessionTitle,
-      sourceType: "sub_session",
-      isActive: true,
+  const phaseSession = await registerPrimaryTaskSession(
+    context.task,
+    childSessionId,
+    childSessionTitle,
+    input.authorization,
+    {
+      parentSessionId: context.sessionId,
       operationId: childOperationId,
-    });
-  } catch (error) {
+      phaseId: phase.id,
+      phaseRole: "mainline",
+      phaseItemIndex: 0,
+    },
+  );
+
+  if (!phaseSession) {
     return {
       status: 502 as const,
       body: {
-        error:
-          error instanceof Error && error.message.trim()
-            ? error.message
-            : "Failed to register continue session lineage",
+        error: "Failed to register continue phase session",
       },
     };
   }
@@ -1859,8 +2070,43 @@ async function continueSingleTaskExecutionFlow(
       childTaskSessionId,
       input.authorization,
     ).catch(() => null);
+    await upsertTaskPhase(input.taskId, input.authorization, {
+      id: phase.id,
+      parentPhaseId,
+      phaseKind: "single",
+      triggerType: "continue",
+      status: "failed",
+      requestedModel: context.resolvedModel ? formatModelRoute(context.resolvedModel) : null,
+      effectiveModel: context.resolvedModel ? formatModelRoute(context.resolvedModel) : null,
+      anchorSessionId: childTaskSessionId,
+      currentSessionId: childTaskSessionId,
+      latestSessionId: childTaskSessionId,
+      errorText: result.error || "Failed to continue session",
+      startedAt: phaseStartedAt,
+      finishedAt: new Date().toISOString(),
+    }).catch(() => null);
     return { status: 502 as const, body: { error: result.error || "Failed to continue session" } };
   }
+
+  const phaseEnvelope = await finalizeTaskPhaseEnvelope({
+    taskId: input.taskId,
+    authorization: input.authorization,
+    phaseId: phase.id,
+    phaseKind: "single",
+    triggerType: "continue",
+    parentPhaseId,
+    requestedModel: context.resolvedModel ? formatModelRoute(context.resolvedModel) : null,
+    effectiveModel: context.resolvedModel ? formatModelRoute(context.resolvedModel) : null,
+    status: "running",
+    sessions: [
+      {
+        ...phaseSession,
+        agentRunId,
+        model: context.resolvedModel ? formatModelRoute(context.resolvedModel) : undefined,
+        status: "running",
+      },
+    ],
+  });
 
   await cpFetch(`/api/tasks/${encodeURIComponent(input.taskId)}`, {
     method: "PATCH",
@@ -1918,6 +2164,7 @@ async function continueSingleTaskExecutionFlow(
       taskSessionId: childTaskSessionId,
       parentSessionId: context.sessionId,
       parentTaskSessionId,
+      phaseId: phase.id,
       agentRunId,
     },
   });
@@ -1933,7 +2180,7 @@ async function continueSingleTaskExecutionFlow(
   return {
     status: 200 as const,
     body: {
-      ok: true,
+      ...phaseEnvelope,
       sessionId: childSessionId,
       taskSessionId: childTaskSessionId,
       parentSessionId: context.sessionId,
@@ -2762,19 +3009,30 @@ function extractSessionMessageCompletedAt(message: unknown): string | undefined 
   }
 
   const time = (info as Record<string, unknown>).time;
-  if (!time || typeof time !== "object") {
+  const parseTimestamp = (value: unknown) => {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return new Date(value).toISOString();
+    }
+    if (typeof value === "string") {
+      const parsed = Date.parse(value);
+      if (!Number.isNaN(parsed)) {
+        return new Date(parsed).toISOString();
+      }
+    }
+
     return undefined;
+  };
+
+  if (time && typeof time === "object") {
+    const parsedCompletedAt = parseTimestamp((time as Record<string, unknown>).completed);
+    if (parsedCompletedAt) {
+      return parsedCompletedAt;
+    }
   }
 
-  const completed = (time as Record<string, unknown>).completed;
-  if (typeof completed === "number" && Number.isFinite(completed)) {
-    return new Date(completed).toISOString();
-  }
-  if (typeof completed === "string") {
-    const parsed = Date.parse(completed);
-    if (!Number.isNaN(parsed)) {
-      return new Date(parsed).toISOString();
-    }
+  const parsedCompletedAt = parseTimestamp((info as Record<string, unknown>).completed);
+  if (parsedCompletedAt) {
+    return parsedCompletedAt;
   }
 
   return undefined;
@@ -4392,15 +4650,66 @@ function asNonEmptyString(value: unknown) {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
+function resolveTaskPhaseKind(plan: RuntimePlan): TaskPhaseRecord["phaseKind"] {
+  if (isParallelExecution(plan)) {
+    return "parallel";
+  }
+
+  if (isSequentialChainExecution(plan)) {
+    return "sequential_chain";
+  }
+
+  return "single";
+}
+
+function resolveTaskPhaseTriggerType(parentSessionId?: string): TaskPhaseRecord["triggerType"] {
+  return parentSessionId ? "continue" : "execute";
+}
+
+function resolvePrimaryPhaseRole(plan: RuntimePlan): TaskPhaseSessionEnvelopeRecord["phaseRole"] {
+  return isSequentialChainExecution(plan) ? "step" : "mainline";
+}
+
+async function resolveParentPhaseId(
+  taskId: string,
+  authorization: string,
+  sessionId?: string | null,
+) {
+  const normalizedSessionId = asNonEmptyString(sessionId);
+  if (!normalizedSessionId) {
+    return null;
+  }
+
+  const lineageResult = await fetchTaskSessionLineageRecords(taskId, authorization);
+  const matchedRecord = lineageResult.records.find(
+    (record) =>
+      record.runtimeSessionId === normalizedSessionId ||
+      record.id === normalizedSessionId ||
+      buildPublicTaskSessionId(taskId, record.runtimeSessionId) === normalizedSessionId,
+  );
+
+  return matchedRecord?.phaseId ?? null;
+}
+
 async function registerPrimaryTaskSession(
   task: Pick<ExecutableTask, "id">,
   sessionId: string | undefined,
   branchName: string,
   authorization: string,
-  options?: { parentSessionId?: string; operationId?: string },
+  options?: {
+    parentSessionId?: string;
+    operationId?: string;
+    phaseId?: string;
+    phaseRole?: TaskPhaseSessionEnvelopeRecord["phaseRole"];
+    phaseItemIndex?: number;
+    agentRunId?: string;
+    label?: string;
+    model?: string;
+    status?: string;
+  },
 ) {
   if (!sessionId) {
-    return;
+    return null;
   }
 
   await upsertTaskSessionLineageRecord(task.id, authorization, {
@@ -4411,9 +4720,61 @@ async function registerPrimaryTaskSession(
         : undefined,
     branchName,
     sourceType: options?.parentSessionId && options.parentSessionId !== sessionId ? "fork" : "root",
+    phaseId: options?.phaseId,
+    phaseRole: options?.phaseRole,
+    phaseItemIndex: options?.phaseItemIndex,
     isActive: true,
     operationId: options?.operationId,
   }).catch(() => null);
+
+  return {
+    sessionId,
+    taskSessionId: buildPublicTaskSessionId(task.id, sessionId),
+    phaseRole: options?.phaseRole ?? "mainline",
+    phaseItemIndex: options?.phaseItemIndex ?? 0,
+    agentRunId: options?.agentRunId,
+    label: options?.label ?? branchName,
+    model: options?.model,
+    status: options?.status,
+  } satisfies TaskPhaseSessionEnvelopeRecord;
+}
+
+async function finalizeTaskPhaseEnvelope(args: {
+  taskId: string;
+  authorization: string;
+  phaseId: string;
+  phaseKind: TaskPhaseRecord["phaseKind"];
+  triggerType: TaskPhaseRecord["triggerType"];
+  parentPhaseId?: string | null;
+  resumedFromPhaseId?: string | null;
+  requestedModel?: string | null;
+  effectiveModel?: string | null;
+  candidateCount?: number | null;
+  status?: TaskPhaseRecord["status"];
+  sessions: TaskPhaseSessionEnvelopeRecord[];
+}) {
+  const primarySession =
+    args.sessions.find((session) => session.phaseRole === "mainline") ?? args.sessions[0] ?? null;
+
+  const phase = await upsertTaskPhase(args.taskId, args.authorization, {
+    id: args.phaseId,
+    parentPhaseId: args.parentPhaseId ?? null,
+    phaseKind: args.phaseKind,
+    triggerType: args.triggerType,
+    resumedFromPhaseId: args.resumedFromPhaseId ?? null,
+    anchorSessionId: primarySession?.taskSessionId ?? null,
+    candidateCount: args.candidateCount ?? null,
+    requestedModel: args.requestedModel ?? null,
+    effectiveModel: args.effectiveModel ?? null,
+    status: args.status ?? "running",
+    currentSessionId: primarySession?.taskSessionId ?? null,
+    latestSessionId: primarySession?.taskSessionId ?? null,
+  });
+
+  return buildTaskPhaseEnvelope({
+    phase,
+    sessions: args.sessions,
+  });
 }
 
 async function prepareExecutionContext(
@@ -4719,6 +5080,7 @@ async function finalizeSuccessfulSequentialChainStart(args: {
   currentStep: ExecutionStep;
   execResult: SessionStartResult;
   promptCreatedAt: string;
+  resolvedModel?: ResolvedModel;
   stepIndex: number;
   totalSteps: number;
 }) {
@@ -4773,13 +5135,53 @@ async function finalizeSuccessfulSequentialChainStart(args: {
     },
   });
 
-  await registerPrimaryTaskSession(
+  const parentPhaseId = await resolveParentPhaseId(
+    context.task.id,
+    context.authorization,
+    context.parentSessionId,
+  );
+  const effectiveStepModel = args.resolvedModel ? formatModelRoute(args.resolvedModel) : null;
+  const phase = await upsertTaskPhase(context.task.id, context.authorization, {
+    parentPhaseId,
+    phaseKind: "sequential_chain",
+    triggerType: "execute",
+    status: "running",
+    requestedModel: effectiveStepModel,
+    effectiveModel: effectiveStepModel,
+    startedAt: promptCreatedAt,
+  });
+
+  const phaseSession = await registerPrimaryTaskSession(
     context.task,
     execResult.sessionId,
     `${context.task.title} — ${currentStep.title}`,
     context.authorization,
-    { parentSessionId: context.parentSessionId, operationId: context.operationId },
+    {
+      parentSessionId: context.parentSessionId,
+      operationId: context.operationId,
+      phaseId: phase.id,
+      phaseRole: "step",
+      phaseItemIndex: stepIndex,
+      agentRunId: execResult.agentRunId,
+      label: currentStep.title,
+      model: effectiveStepModel ?? undefined,
+      status: "running",
+    },
   );
+  const phaseEnvelope = phaseSession
+    ? await finalizeTaskPhaseEnvelope({
+        taskId: context.task.id,
+        authorization: context.authorization,
+        phaseId: phase.id,
+        phaseKind: "sequential_chain",
+        triggerType: "execute",
+        parentPhaseId,
+        requestedModel: effectiveStepModel,
+        effectiveModel: effectiveStepModel,
+        status: "running",
+        sessions: [phaseSession],
+      })
+    : buildTaskPhaseEnvelope({ phase, sessions: [] });
 
   if (execResult.sessionId) {
     const stepPromptText = buildChainStepPrompt(
@@ -4788,9 +5190,7 @@ async function finalizeSuccessfulSequentialChainStart(args: {
       stepIndex,
       context.plan.steps,
     );
-    const model = args.context.resolvedModel
-      ? `${args.context.resolvedModel.providerId}:${args.context.resolvedModel.modelId}`
-      : undefined;
+    const model = effectiveStepModel ?? undefined;
     const systemContextText = buildExecutionContext({
       taskId: context.task.id,
       projectId: context.task.projectId,
@@ -4818,6 +5218,7 @@ async function finalizeSuccessfulSequentialChainStart(args: {
     status: 200 as const,
     body: {
       taskId: context.task.id,
+      ...phaseEnvelope,
       sessionId: execResult.sessionId,
       agentRunId: execResult.agentRunId,
       status: "running",
@@ -4828,18 +5229,15 @@ async function finalizeSuccessfulSequentialChainStart(args: {
   };
 }
 
-interface CandidateAdoptionSessionFirstContext {
-  mode: "session-first";
+interface CandidateAdoptionPhaseContext {
   task: ExecutableTask & { result?: string };
-  coordinationKey: string;
-  coordinationGroup: TaskSessionRecord[];
+  phaseId: string;
+  phaseGroup: TaskSessionRecord[];
   winnerCandidateIndex: number;
   winnerSessionId: string;
   winnerRuntimeSessionId: string;
   winnerResult?: string;
 }
-
-type CandidateAdoptionContext = CandidateAdoptionSessionFirstContext;
 
 function normalizeCandidateAdoptionContextValue(value: string | null | undefined) {
   const normalized = typeof value === "string" ? value.trim() : "";
@@ -4860,243 +5258,18 @@ function normalizeCandidateAdoptionExecutionStatus(status?: string | null) {
   return normalizedStatus;
 }
 
-function resolveCandidateAdoptionParallelRunCoordinationKey(
-  taskId: string,
-  parallelRunId?: string | null,
-) {
-  const normalizedParallelRunId = normalizeCandidateAdoptionContextValue(parallelRunId);
-  if (!normalizedParallelRunId) {
-    return null;
-  }
-
-  if (normalizedParallelRunId.startsWith("task-session:")) {
-    const coordinationKey = normalizedParallelRunId.slice("task-session:".length).trim();
-    return coordinationKey || null;
-  }
-
-  if (normalizedParallelRunId.startsWith("tree-fallback:")) {
-    const fallbackRootSessionId = normalizedParallelRunId.slice("tree-fallback:".length).trim();
-    return fallbackRootSessionId && fallbackRootSessionId !== taskId ? fallbackRootSessionId : null;
-  }
-
-  return null;
-}
-
-function matchesTaskSessionIdentifier(args: {
-  taskId: string;
-  runtimeSessionId?: string | null;
-  requestedSessionId?: string | null;
-}) {
-  if (!args.runtimeSessionId) {
-    return false;
-  }
-
-  const normalizedRequestedSessionId = normalizeCandidateAdoptionContextValue(
-    args.requestedSessionId,
-  );
-  if (!normalizedRequestedSessionId) {
-    return false;
-  }
-
-  return (
-    args.runtimeSessionId === normalizedRequestedSessionId ||
-    buildPublicTaskSessionId(args.taskId, args.runtimeSessionId) === normalizedRequestedSessionId ||
-    extractRuntimeSessionIdFromPublicTaskSessionId(args.taskId, normalizedRequestedSessionId) ===
-      args.runtimeSessionId
-  );
-}
-
-function matchesTaskSessionRecordIdentifier(
-  taskId: string,
-  record: { id?: string | null; runtimeSessionId?: string | null },
-  requestedSessionId?: string | null,
-) {
-  const normalizedRequestedSessionId = normalizeCandidateAdoptionContextValue(requestedSessionId);
-  if (!normalizedRequestedSessionId) {
-    return false;
-  }
-
-  return (
-    record.id === normalizedRequestedSessionId ||
-    matchesTaskSessionIdentifier({
-      taskId,
-      runtimeSessionId: record.runtimeSessionId,
-      requestedSessionId: normalizedRequestedSessionId,
-    })
-  );
-}
-
-function isCandidateAdoptionLineageRecord(record: TaskSessionRecord) {
-  return (
-    typeof record.coordinationKey === "string" &&
-    record.coordinationKey.trim().length > 0 &&
-    isParallelTaskSessionCandidate(record)
-  );
-}
-
-function sortCandidateAdoptionRepairRecords(
-  taskId: string,
-  records: TaskSessionRecord[],
-  candidateSessionIds?: string[],
-) {
-  const normalizedRequestedOrder = (candidateSessionIds ?? [])
-    .map((sessionId) => normalizeCandidateAdoptionContextValue(sessionId))
-    .filter((sessionId): sessionId is string => Boolean(sessionId));
-  const requestedOrder = new Map(
-    normalizedRequestedOrder.map((sessionId, index) => [sessionId, index] as const),
-  );
-
-  return records.slice().sort((left, right) => {
-    const leftRequestedOrder = requestedOrder.get(left.runtimeSessionId) ?? requestedOrder.get(left.id);
-    const rightRequestedOrder =
-      requestedOrder.get(right.runtimeSessionId) ?? requestedOrder.get(right.id);
-    if (leftRequestedOrder != null || rightRequestedOrder != null) {
-      return (leftRequestedOrder ?? Number.MAX_SAFE_INTEGER) - (rightRequestedOrder ?? Number.MAX_SAFE_INTEGER);
-    }
-
-    const leftIndex =
-      typeof left.candidateIndex === "number" ? left.candidateIndex : Number.MAX_SAFE_INTEGER;
-    const rightIndex =
-      typeof right.candidateIndex === "number" ? right.candidateIndex : Number.MAX_SAFE_INTEGER;
-    if (leftIndex !== rightIndex) {
-      return leftIndex - rightIndex;
-    }
-
-    const leftCreatedAt = Date.parse(left.createdAt ?? left.updatedAt ?? "");
-    const rightCreatedAt = Date.parse(right.createdAt ?? right.updatedAt ?? "");
-    if (!Number.isNaN(leftCreatedAt) || !Number.isNaN(rightCreatedAt)) {
-      return (Number.isNaN(leftCreatedAt) ? Number.MAX_SAFE_INTEGER : leftCreatedAt) -
-        (Number.isNaN(rightCreatedAt) ? Number.MAX_SAFE_INTEGER : rightCreatedAt);
-    }
-
-    return String(left.id).localeCompare(String(right.id), "zh-CN");
-  });
-}
-
-function resolveCandidateAdoptionGroupFromRecords(args: {
-  taskId: string;
-  records: TaskSessionRecord[];
-  candidateIndex: number;
-  preferredSessionId?: string | null;
-}) {
-  const candidateRecords = args.records.filter(isCandidateAdoptionLineageRecord);
-  const preferredSessionId = normalizeCandidateAdoptionContextValue(args.preferredSessionId);
-  const preferredRecord = preferredSessionId
-    ? candidateRecords.find((record) =>
-        matchesTaskSessionRecordIdentifier(args.taskId, record, preferredSessionId),
-      )
-    : undefined;
-  const candidateRecord =
-    preferredRecord ??
-    candidateRecords.find((record) => record.candidateIndex === args.candidateIndex);
-
-  if (!candidateRecord || !candidateRecord.coordinationKey) {
-    return null;
-  }
-
-  const coordinationGroup = candidateRecords.filter(
-    (record) => record.coordinationKey === candidateRecord.coordinationKey,
-  );
-  if (coordinationGroup.length < 2) {
-    return null;
-  }
-
-  return {
-    candidateRecord,
-    coordinationGroup,
-  };
-}
-
-async function repairCandidateAdoptionCoordinationGroup(args: {
-  taskId: string;
-  authorization: string;
-  records: TaskSessionRecord[];
-  candidateIndex: number;
-  preferredSessionId?: string | null;
-  parallelRunId?: string | null;
-  candidateSessionIds?: string[];
-}) {
-  const activeRecords = args.records.filter((record) => !record.archivedAt);
-  const preferredSessionId = normalizeCandidateAdoptionContextValue(args.preferredSessionId);
-  const preferredRecord = preferredSessionId
-    ? activeRecords.find((record) =>
-        matchesTaskSessionRecordIdentifier(args.taskId, record, preferredSessionId),
-      )
-    : undefined;
-  const requestedCandidateRecords = (args.candidateSessionIds ?? [])
-    .map((sessionId) =>
-      activeRecords.find((record) =>
-        matchesTaskSessionRecordIdentifier(args.taskId, record, sessionId),
-      ),
-    )
-    .filter((record): record is TaskSessionRecord => Boolean(record));
-
-  let repairRecords = requestedCandidateRecords;
-  if (repairRecords.length < 2) {
-    const parentRuntimeSessionId =
-      preferredRecord?.parentRuntimeSessionId ??
-      resolveCandidateAdoptionParallelRunCoordinationKey(args.taskId, args.parallelRunId);
-    if (!parentRuntimeSessionId) {
-      return null;
-    }
-
-    repairRecords = activeRecords.filter(
-      (record) =>
-        record.parentRuntimeSessionId === parentRuntimeSessionId &&
-        record.runtimeSessionId !== parentRuntimeSessionId &&
-        isParallelTaskSessionCandidate(record),
-    );
-  }
-
-  if (repairRecords.length < 2) {
-    return null;
-  }
-
-  const orderedRecords = sortCandidateAdoptionRepairRecords(
-    args.taskId,
-    repairRecords,
-    args.candidateSessionIds,
-  );
-  const coordinationKey =
-    orderedRecords
-      .map((record) => normalizeCandidateAdoptionContextValue(record.coordinationKey))
-      .find((value): value is string => Boolean(value)) ??
-    resolveCandidateAdoptionParallelRunCoordinationKey(args.taskId, args.parallelRunId) ??
-    normalizeCandidateAdoptionContextValue(orderedRecords[0]?.parentRuntimeSessionId);
-  if (!coordinationKey) {
-    return null;
-  }
-
-  await Promise.all(
-    orderedRecords.map((record, index) =>
-      upsertTaskSessionLineageRecord(args.taskId, args.authorization, {
-        runtimeSessionId: record.runtimeSessionId,
-        parentRuntimeSessionId: record.parentRuntimeSessionId ?? undefined,
-        branchName: record.branchName ?? undefined,
-        sourceType: "parallel",
-        sessionKind: "candidate",
-        executionModeSnapshot: "parallel",
-        isActive: record.isActive,
-        candidateIndex: index,
-        selectedModel: record.selectedModel ?? undefined,
-        coordinationKey,
-      }),
-    ),
-  );
-
-  return orderedRecords.map((record, index) => ({
-    ...record,
-    coordinationKey,
-    sessionKind: "candidate",
-    executionModeSnapshot: "parallel",
-    candidateIndex: index,
-  } satisfies TaskSessionRecord));
-}
-
 async function loadCandidateAdoptionSessionResult(runtimeSessionId: string) {
+  const evidence = await loadCandidateAdoptionSessionEvidence(runtimeSessionId);
+  return evidence.result;
+}
+
+async function loadCandidateAdoptionSessionEvidence(runtimeSessionId: string) {
   const runtimeResult = await getSessionMessages(runtimeSessionId);
   if (!runtimeResult.ok || !Array.isArray(runtimeResult.data)) {
-    return undefined;
+    return {
+      result: undefined,
+      hasCompletedAssistantMessage: false,
+    };
   }
 
   const assistantTexts = runtimeResult.data
@@ -5104,175 +5277,51 @@ async function loadCandidateAdoptionSessionResult(runtimeSessionId: string) {
     .map((message) => extractSessionMessageText(message))
     .filter((text) => text.length > 0);
 
-  return assistantTexts.length > 0 ? assistantTexts[assistantTexts.length - 1] : undefined;
-}
-
-async function buildSessionFirstCandidateAdoptionContext(args: {
-  taskId: string;
-  candidateIndex: number;
-  authorization: string;
-  task: ExecutableTask & { result?: string };
-  preferredSessionId?: string | null;
-  parallelRunId?: string | null;
-  candidateSessionIds?: string[];
-}): Promise<
-  | { ok: true; context: CandidateAdoptionSessionFirstContext }
-  | {
-      ok: false;
-      response: {
-        status: 400 | 404 | 502;
-        body: Record<string, unknown>;
-      };
+  const hasCompletedAssistantMessage = runtimeResult.data.some((message) => {
+    if (extractSessionMessageRole(message) !== "assistant") {
+      return false;
     }
-> {
-  const lineageResult = await fetchTaskSessionLineageRecords(args.taskId, args.authorization);
-  if (!lineageResult.ok) {
-    return {
-      ok: false,
-      response: {
-        status: 502,
-        body: { error: "Failed to fetch task sessions" },
-      },
-    };
-  }
 
-  const preferredSessionId = normalizeCandidateAdoptionContextValue(args.preferredSessionId);
-  let resolvedGroup = resolveCandidateAdoptionGroupFromRecords({
-    taskId: args.taskId,
-    records: lineageResult.activeRecords,
-    candidateIndex: args.candidateIndex,
-    preferredSessionId,
+    const rawMessage =
+      message && typeof message === "object" && "raw" in message
+        ? (message as { raw?: unknown }).raw ?? message
+        : message;
+    return Boolean(extractSessionMessageCompletedAt(rawMessage));
   });
 
-  if (!resolvedGroup) {
-    const repairedRecords = await repairCandidateAdoptionCoordinationGroup({
-      taskId: args.taskId,
-      authorization: args.authorization,
-      records: lineageResult.activeRecords,
-      candidateIndex: args.candidateIndex,
-      preferredSessionId,
-      parallelRunId: args.parallelRunId,
-      candidateSessionIds: args.candidateSessionIds,
-    });
-    if (repairedRecords) {
-      resolvedGroup = resolveCandidateAdoptionGroupFromRecords({
-        taskId: args.taskId,
-        records: repairedRecords,
-        candidateIndex: args.candidateIndex,
-        preferredSessionId,
-      });
-    }
-  }
-
-  if (!resolvedGroup) {
-    return {
-      ok: false,
-      response: {
-        status: 404,
-        body: { error: "Task session coordination group not found" },
-      },
-    };
-  }
-
-  const { candidateRecord, coordinationGroup } = resolvedGroup;
-
-  const candidateExecutionStatus = normalizeCandidateAdoptionExecutionStatus(
-    candidateRecord.executionStatus,
-  );
-  if (candidateExecutionStatus && candidateExecutionStatus !== "completed") {
-    const unresolvedCandidateIndex =
-      typeof candidateRecord.candidateIndex === "number"
-        ? candidateRecord.candidateIndex
-        : args.candidateIndex;
-    return {
-      ok: false,
-      response: {
-        status: 400,
-        body: {
-          error: `Candidate ${unresolvedCandidateIndex} is not completed (status: ${candidateRecord.executionStatus})`,
-        },
-      },
-    };
-  }
-
-  const winnerCandidateIndex =
-    typeof candidateRecord.candidateIndex === "number"
-      ? candidateRecord.candidateIndex
-      : args.candidateIndex;
-  const winnerResult = await loadCandidateAdoptionSessionResult(candidateRecord.runtimeSessionId);
-
   return {
-    ok: true,
-    context: {
-      mode: "session-first",
-      task: args.task,
-      coordinationKey: candidateRecord.coordinationKey,
-      coordinationGroup,
-      winnerCandidateIndex,
-      winnerSessionId:
-        candidateRecord.id ??
-        buildPublicTaskSessionId(args.taskId, candidateRecord.runtimeSessionId),
-      winnerRuntimeSessionId: candidateRecord.runtimeSessionId,
-      winnerResult,
-    },
+    result: assistantTexts.length > 0 ? assistantTexts[assistantTexts.length - 1] : undefined,
+    hasCompletedAssistantMessage,
   };
 }
 
-async function fetchCandidateAdoptionContext(
-  taskId: string,
-  candidateIndex: number,
-  authorization: string,
-  options?: {
-    parallelRunId?: string | null;
-    sessionId?: string | null;
-    candidateSessionIds?: string[];
-  },
-): Promise<
-  | { ok: true; context: CandidateAdoptionContext }
-  | {
-      ok: false;
-      response: {
-        status: 400 | 404 | 502;
-        body: Record<string, unknown>;
-      };
-    }
-> {
-  const taskResult = await cpFetch<ExecutableTask & { result?: string }>(
-    `/api/project-tree/tasks/${encodeURIComponent(taskId)}`,
-    { authorization },
+function isActiveAgentRunStatus(status?: string | null) {
+  return status === "running" || status === "pending" || status === "paused";
+}
+
+async function shouldAllowAwaitingAdoptionCandidate(args: {
+  taskStatus: string | null | undefined;
+  candidate: TaskSessionRecord;
+  evidence: Awaited<ReturnType<typeof loadCandidateAdoptionSessionEvidence>>;
+}) {
+  if (args.taskStatus !== "awaiting_adoption") {
+    return false;
+  }
+
+  const liveRun = findAgentRunBySessionId(args.candidate.runtimeSessionId);
+  if (isActiveAgentRunStatus(liveRun?.status)) {
+    return false;
+  }
+
+  if (args.evidence.hasCompletedAssistantMessage) {
+    return true;
+  }
+
+  return (
+    liveRun?.status === "completed" ||
+    liveRun?.status === "failed" ||
+    liveRun?.status === "cancelled"
   );
-  if (!taskResult.ok) {
-    return {
-      ok: false,
-      response: {
-        status: 404,
-        body: { error: "Task not found" },
-      },
-    };
-  }
-
-  const task = taskResult.data;
-  if (task.orchestrationKind && task.orchestrationKind !== "parallel") {
-    return {
-      ok: false,
-      response: {
-        status: 400,
-        body: { error: "Candidate adoption is only available for parallel execution" },
-      },
-    };
-  }
-
-  const preferredSessionId = normalizeCandidateAdoptionContextValue(options?.sessionId);
-
-  return buildSessionFirstCandidateAdoptionContext({
-    taskId,
-    candidateIndex,
-    authorization,
-    task,
-    preferredSessionId,
-    parallelRunId: options?.parallelRunId,
-    candidateSessionIds: options?.candidateSessionIds,
-  });
 }
 
 function shouldStopNonWinningCandidateSession(
@@ -5371,55 +5420,166 @@ async function activateCandidateAdoptionTaskSession(args: {
   return { ok: true as const };
 }
 
-async function finalizeSessionFirstCandidateAdoption(args: {
+async function buildPhaseFirstCandidateAdoptionContext(args: {
+  taskId: string;
+  phaseId: string;
+  candidateIndex: number;
+  authorization: string;
+}): Promise<
+  | { ok: true; context: CandidateAdoptionPhaseContext }
+  | {
+      ok: false;
+      response: {
+        status: 400 | 404 | 502;
+        body: Record<string, unknown>;
+      };
+    }
+> {
+  const taskResult = await cpFetch<ExecutableTask & { result?: string }>(
+    `/api/project-tree/tasks/${encodeURIComponent(args.taskId)}`,
+    { authorization: args.authorization },
+  );
+  if (!taskResult.ok) {
+    return {
+      ok: false,
+      response: { status: 404, body: { error: "Task not found" } },
+    };
+  }
+
+  if (taskResult.data.orchestrationKind && taskResult.data.orchestrationKind !== "parallel") {
+    return {
+      ok: false,
+      response: {
+        status: 400,
+        body: { error: "Candidate adoption is only available for parallel execution" },
+      },
+    };
+  }
+
+  const lineageResult = await fetchTaskSessionLineageRecords(args.taskId, args.authorization);
+  if (!lineageResult.ok) {
+    return {
+      ok: false,
+      response: { status: 502, body: { error: "Failed to fetch task sessions" } },
+    };
+  }
+
+  const phaseGroup = lineageResult.activeRecords.filter((record) => {
+    const recordPhaseId = record.phaseId ?? null;
+    if (recordPhaseId !== args.phaseId) {
+      return false;
+    }
+
+    return (
+      record.phaseRole === "candidate" ||
+      isParallelTaskSessionCandidate(record) ||
+      record.sessionKind === "candidate"
+    );
+  });
+
+  if (phaseGroup.length < 2) {
+    return {
+      ok: false,
+      response: { status: 404, body: { error: "Task phase candidate group not found" } },
+    };
+  }
+
+  const candidateRecord =
+    phaseGroup.find((record) => record.candidateIndex === args.candidateIndex) ??
+    phaseGroup[args.candidateIndex];
+
+  if (!candidateRecord) {
+    return {
+      ok: false,
+      response: { status: 404, body: { error: "Candidate not found in task phase" } },
+    };
+  }
+
+  const candidateExecutionStatus = normalizeCandidateAdoptionExecutionStatus(
+    candidateRecord.executionStatus,
+  );
+  const winnerEvidence = await loadCandidateAdoptionSessionEvidence(candidateRecord.runtimeSessionId);
+  const allowStaleAwaitingAdoptionCandidate = await shouldAllowAwaitingAdoptionCandidate({
+    taskStatus: taskResult.data.status,
+    candidate: candidateRecord,
+    evidence: winnerEvidence,
+  });
+  if (
+    candidateExecutionStatus &&
+    candidateExecutionStatus !== "completed" &&
+    !allowStaleAwaitingAdoptionCandidate
+  ) {
+    const unresolvedCandidateIndex =
+      typeof candidateRecord.candidateIndex === "number"
+        ? candidateRecord.candidateIndex
+        : args.candidateIndex;
+    return {
+      ok: false,
+      response: {
+        status: 400,
+        body: {
+          error: `Candidate ${unresolvedCandidateIndex} is not completed (status: ${candidateRecord.executionStatus})`,
+        },
+      },
+    };
+  }
+
+  return {
+    ok: true,
+    context: {
+      task: taskResult.data,
+      phaseId: args.phaseId,
+      phaseGroup,
+      winnerCandidateIndex:
+        typeof candidateRecord.candidateIndex === "number"
+          ? candidateRecord.candidateIndex
+          : args.candidateIndex,
+      winnerSessionId:
+        candidateRecord.id ??
+        buildPublicTaskSessionId(args.taskId, candidateRecord.runtimeSessionId),
+      winnerRuntimeSessionId: candidateRecord.runtimeSessionId,
+      winnerResult: winnerEvidence.result,
+    },
+  };
+}
+
+async function finalizePhaseFirstCandidateAdoption(args: {
   taskId: string;
   authorization: string;
   task: ExecutableTask & { result?: string };
-  coordinationKey: string;
+  phaseId: string;
   winnerSessionId: string;
   winnerRuntimeSessionId: string;
   winnerCandidateIndex: number;
   winnerResult?: string;
 }) {
-  const {
-    taskId,
-    authorization,
-    task,
-    coordinationKey,
-    winnerSessionId,
-    winnerRuntimeSessionId,
-    winnerCandidateIndex,
-    winnerResult,
-  } = args;
-
-  const adoptResult = await cpFetch<{ error?: string }>(
-    `/api/tasks/${encodeURIComponent(taskId)}/adopt-winner`,
-    {
-      method: "POST",
-      authorization,
-      body: {
-        coordinationKey,
-        winnerSessionId,
-      },
-    },
+  const adoptResult = await adoptTaskPhase(
+    args.taskId,
+    args.phaseId,
+    args.winnerSessionId,
+    args.authorization,
   );
   if (!adoptResult.ok) {
+    const error =
+      adoptResult.data && typeof adoptResult.data === "object" && "error" in adoptResult.data
+        ? (adoptResult.data as { error?: unknown }).error
+        : undefined;
     return {
       ok: false as const,
       response: {
-        status: adoptResult.status as 400 | 404 | 502,
-        body: { error: adoptResult.data?.error || "Failed to adopt candidate" },
+        status: adoptResult.status as 400 | 404 | 409 | 502,
+        body: { error: typeof error === "string" ? error : "Failed to adopt candidate" },
       },
     };
   }
 
-  const patchResult = await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
+  const patchResult = await cpFetch(`/api/tasks/${encodeURIComponent(args.taskId)}`, {
     method: "PATCH",
-    authorization,
+    authorization: args.authorization,
     body: {
       status: "completed",
-      sessionId: winnerRuntimeSessionId,
-      ...(winnerResult ? { result: winnerResult } : {}),
+      sessionId: args.winnerRuntimeSessionId,
+      ...(args.winnerResult ? { result: args.winnerResult } : {}),
     },
   });
   if (!patchResult.ok) {
@@ -5433,15 +5593,16 @@ async function finalizeSessionFirstCandidateAdoption(args: {
   }
 
   await recordAgentAudit({
-    projectId: task.projectId,
-    taskId,
+    projectId: args.task.projectId,
+    taskId: args.taskId,
     eventType: "task",
     action: "candidate_adopted",
     detail: {
-      candidateIndex: winnerCandidateIndex,
+      candidateIndex: args.winnerCandidateIndex,
       executionMode: "parallel",
-      adoptionSource: "task-session",
-      hasResult: Boolean(winnerResult),
+      adoptionSource: "task-phase",
+      phaseId: args.phaseId,
+      hasResult: Boolean(args.winnerResult),
     },
     riskLevel: "low",
   });
@@ -5450,14 +5611,15 @@ async function finalizeSessionFirstCandidateAdoption(args: {
     id: crypto.randomUUID(),
     type: "task.completed",
     ts: new Date().toISOString(),
-    taskId,
-    projectId: task.projectId,
+    taskId: args.taskId,
+    projectId: args.task.projectId,
     data: {
       status: "completed",
       executionMode: "parallel",
-      winnerCandidateIndex,
+      phaseId: args.phaseId,
+      winnerCandidateIndex: args.winnerCandidateIndex,
       adoptedManually: true,
-      ...(winnerResult ? { result: winnerResult } : {}),
+      ...(args.winnerResult ? { result: args.winnerResult } : {}),
     },
   });
 
@@ -5465,7 +5627,7 @@ async function finalizeSessionFirstCandidateAdoption(args: {
     ok: true as const,
     response: {
       status: 200 as const,
-      body: { ok: true, winnerCandidateIndex },
+      body: { ok: true, phaseId: args.phaseId, winnerCandidateIndex: args.winnerCandidateIndex },
     },
   };
 }
@@ -5596,11 +5758,13 @@ function buildParallelExecutionResponse(
   taskId: string,
   primaryCandidate: RuntimePlan["candidates"][number] | undefined,
   candidates: RuntimePlan["candidates"],
+  phaseEnvelope: ReturnType<typeof buildTaskPhaseEnvelope>,
 ): StartExecutionResponse {
   return {
     status: 200,
     body: {
       taskId,
+      ...phaseEnvelope,
       sessionId: primaryCandidate?.sessionId,
       agentRunId: primaryCandidate?.agentRunId,
       status: "running",
@@ -5619,6 +5783,23 @@ async function startParallelExecution(context: ExecutionContext): Promise<StartE
   const hasAnySuccess = applyParallelCandidateAttempts(context.plan, attempts);
 
   if (!hasAnySuccess) {
+    const parentPhaseId = await resolveParentPhaseId(
+      context.task.id,
+      context.authorization,
+      context.parentSessionId,
+    );
+    await upsertTaskPhase(context.task.id, context.authorization, {
+      parentPhaseId,
+      phaseKind: "parallel",
+      triggerType: "execute",
+      status: "failed",
+      candidateCount: context.plan.candidates.length,
+      requestedModel: context.effectiveModel ?? null,
+      effectiveModel: context.effectiveModel ?? null,
+      errorText: "All parallel candidates failed to start",
+      startedAt: new Date().toISOString(),
+      finishedAt: new Date().toISOString(),
+    }).catch(() => null);
     await markTaskFailed(context.task.id, context.authorization);
     return {
       status: 502,
@@ -5633,12 +5814,32 @@ async function startParallelExecution(context: ExecutionContext): Promise<StartE
     sessionId: primaryCandidate?.sessionId,
     agentRunId: primaryCandidate?.agentRunId,
   });
-  sseAggregator.registerParallelTask(context.task.id, context.plan.candidates);
+
+  const parentPhaseId = await resolveParentPhaseId(
+    context.task.id,
+    context.authorization,
+    context.parentSessionId,
+  );
+  const phase = await upsertTaskPhase(context.task.id, context.authorization, {
+    parentPhaseId,
+    phaseKind: "parallel",
+    triggerType: "execute",
+    status: "running",
+    candidateCount: context.plan.candidates.length,
+    requestedModel: context.effectiveModel ?? null,
+    effectiveModel: context.effectiveModel ?? null,
+    startedAt: new Date().toISOString(),
+  });
+
+  sseAggregator.registerParallelTask(context.task.id, context.plan.candidates, phase.id);
   broadcastParallelExecutionStarted(context);
+
+  let phaseSessions: TaskPhaseSessionEnvelopeRecord[] = [];
   try {
-    await registerParallelTaskSessions(context.task, context.plan, context.authorization, {
+    phaseSessions = await registerParallelTaskSessions(context.task, context.plan, context.authorization, {
       parentSessionId: context.parentSessionId,
       operationId: context.operationId,
+      phaseId: phase.id,
     });
   } catch (error) {
     return {
@@ -5651,6 +5852,20 @@ async function startParallelExecution(context: ExecutionContext): Promise<StartE
       },
     };
   }
+
+  const phaseEnvelope = await finalizeTaskPhaseEnvelope({
+    taskId: context.task.id,
+    authorization: context.authorization,
+    phaseId: phase.id,
+    phaseKind: "parallel",
+    triggerType: "execute",
+    parentPhaseId,
+    requestedModel: context.effectiveModel ?? null,
+    effectiveModel: context.effectiveModel ?? null,
+    candidateCount: context.plan.candidates.length,
+    status: "running",
+    sessions: phaseSessions,
+  });
 
   // Persist user prompt for each parallel candidate session
   const parallelSystemContextText = buildExecutionContext({
@@ -5685,7 +5900,12 @@ async function startParallelExecution(context: ExecutionContext): Promise<StartE
     }
   }
 
-  return buildParallelExecutionResponse(context.task.id, primaryCandidate, context.plan.candidates);
+  return buildParallelExecutionResponse(
+    context.task.id,
+    primaryCandidate,
+    context.plan.candidates,
+    phaseEnvelope,
+  );
 }
 
 function handleSingleExecutionFailure(
@@ -5775,6 +5995,20 @@ async function startSingleExecution(context: ExecutionContext): Promise<StartExe
   }
 
   attachSingleCandidate(context.plan, execResult);
+  const parentPhaseId = await resolveParentPhaseId(
+    context.task.id,
+    context.authorization,
+    context.parentSessionId,
+  );
+  const phase = await upsertTaskPhase(context.task.id, context.authorization, {
+    parentPhaseId,
+    phaseKind: "single",
+    triggerType: "execute",
+    status: "running",
+    requestedModel: context.effectiveModel ?? null,
+    effectiveModel: context.effectiveModel ?? null,
+    startedAt: promptCreatedAt,
+  });
   await persistExecutionStart(context, execResult);
   await recordPaidExecutionGuardStateEvent({
     projectId: context.task.projectId,
@@ -5791,13 +6025,37 @@ async function startSingleExecution(context: ExecutionContext): Promise<StartExe
   });
   broadcastSingleExecutionStarted(context, execResult);
 
-  await registerPrimaryTaskSession(
+  const phaseSession = await registerPrimaryTaskSession(
     context.task,
     execResult.sessionId,
     context.task.title,
     context.authorization,
-    { parentSessionId: context.parentSessionId, operationId: context.operationId },
+    {
+      parentSessionId: context.parentSessionId,
+      operationId: context.operationId,
+      phaseId: phase.id,
+      phaseRole: "mainline",
+      phaseItemIndex: 0,
+      agentRunId: execResult.agentRunId,
+      label: context.task.title,
+      model: context.effectiveModel,
+      status: "running",
+    },
   );
+  const phaseEnvelope = phaseSession
+    ? await finalizeTaskPhaseEnvelope({
+        taskId: context.task.id,
+        authorization: context.authorization,
+        phaseId: phase.id,
+        phaseKind: "single",
+        triggerType: "execute",
+        parentPhaseId,
+        requestedModel: context.effectiveModel ?? null,
+        effectiveModel: context.effectiveModel ?? null,
+        status: "running",
+        sessions: [phaseSession],
+      })
+    : buildTaskPhaseEnvelope({ phase, sessions: [] });
 
   // Persist user prompt message explicitly — SSE message.updated for user
   // messages may arrive without inline content and fail to persist.
@@ -5832,6 +6090,7 @@ async function startSingleExecution(context: ExecutionContext): Promise<StartExe
     status: 200,
     body: {
       taskId: context.task.id,
+      ...phaseEnvelope,
       sessionId: execResult.sessionId,
       agentRunId: execResult.agentRunId,
       status: "running",
@@ -5880,7 +6139,7 @@ async function startSequentialChainExecution(
     };
   }
 
-  const { execResult, promptCreatedAt, totalSteps } = await startSequentialChainSession(
+  const { execResult, promptCreatedAt, resolvedModel, totalSteps } = await startSequentialChainSession(
     context,
     currentStep,
     stepIndex,
@@ -5901,6 +6160,7 @@ async function startSequentialChainExecution(
     currentStep,
     execResult,
     promptCreatedAt,
+    resolvedModel,
     stepIndex,
     totalSteps,
   });
@@ -6190,7 +6450,9 @@ taskRoutes.get(":taskId/member-view", async (c) => {
 
 const updateTaskSchema = z.object({
   selectedModel: z.string().max(200).nullable().optional(),
-  status: z.enum(["running", "paused", "completed", "failed", "cancelled"]).optional(),
+  status: z
+    .enum(["running", "paused", "awaiting_adoption", "completed", "failed", "cancelled"])
+    .optional(),
   sessionId: z.string().optional(),
   agentRunId: z.string().optional(),
   result: z.string().optional(),
@@ -6430,43 +6692,107 @@ taskRoutes.post("/:taskId/execute", async (c) => {
   return c.json(response.body, response.status);
 });
 
-// POST /api/tasks/:taskId/candidates/:index/adopt — Manually adopt a parallel candidate
-taskRoutes.post("/:taskId/candidates/:index/adopt", async (c) => {
+const taskPhaseCancelSchema = z.object({
+  reason: z
+    .enum([
+      "winner_adopted",
+      "user_cancelled",
+      "runtime_terminated",
+      "runtime_failed",
+      "timeout",
+      "superseded",
+    ])
+    .optional(),
+});
+
+const taskPhaseResumeSchema = z.object({
+  mode: z.enum(["reuse"]).optional(),
+});
+
+taskRoutes.get("/:taskId/phases", async (c) => {
   const taskId = c.req.param("taskId");
+  const result = await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}/phases`, {
+    authorization: authHeader(c),
+  });
+
+  return c.json(result.data, result.ok ? 200 : (result.status as 401 | 404 | 502));
+});
+
+taskRoutes.post("/:taskId/phases", async (c) => {
+  const taskId = c.req.param("taskId");
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  const result = await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}/phases`, {
+    method: "POST",
+    body,
+    authorization: authHeader(c),
+  });
+
+  return c.json(
+    result.data,
+    result.ok ? (result.status as 200 | 201) : (result.status as 400 | 401 | 404 | 502),
+  );
+});
+
+taskRoutes.post(
+  "/:taskId/phases/:phaseId/cancel",
+  zValidator("json", taskPhaseCancelSchema),
+  async (c) => {
+    const taskId = c.req.param("taskId");
+    const phaseId = c.req.param("phaseId");
+    const body = c.req.valid("json");
+    const result = await cancelTaskPhase(
+      taskId,
+      phaseId,
+      authHeader(c),
+      body.reason ?? "user_cancelled",
+    );
+
+    return c.json(
+      result.data,
+      result.ok ? 200 : (result.status as 400 | 401 | 404 | 409 | 502),
+    );
+  },
+);
+
+taskRoutes.post(
+  "/:taskId/phases/:phaseId/resume",
+  zValidator("json", taskPhaseResumeSchema),
+  async (c) => {
+    const taskId = c.req.param("taskId");
+    const phaseId = c.req.param("phaseId");
+    const result = await resumeTaskPhase(taskId, phaseId, authHeader(c));
+
+    return c.json(
+      result.data,
+      result.ok ? 200 : (result.status as 401 | 404 | 409 | 502),
+    );
+  },
+);
+
+// POST /api/tasks/:taskId/phases/:phaseId/candidates/:index/adopt — Manually adopt a parallel candidate within a phase
+taskRoutes.post("/:taskId/phases/:phaseId/candidates/:index/adopt", async (c) => {
+  const taskId = c.req.param("taskId");
+  const phaseId = c.req.param("phaseId");
   const candidateIndex = Number.parseInt(c.req.param("index"), 10);
   const authorization = authHeader(c);
-  const requestBody = (await c.req.json().catch(() => ({}))) as {
-    parallelRunId?: string;
-    sessionId?: string;
-    candidateSessionIds?: string[];
-  };
 
   if (Number.isNaN(candidateIndex) || candidateIndex < 0) {
     return c.json({ error: "Invalid candidate index" }, 400);
   }
 
-  const adoptionContext = await fetchCandidateAdoptionContext(
+  const adoptionContext = await buildPhaseFirstCandidateAdoptionContext({
     taskId,
+    phaseId,
     candidateIndex,
     authorization,
-    {
-      parallelRunId: requestBody.parallelRunId,
-      sessionId: requestBody.sessionId,
-      candidateSessionIds: Array.isArray(requestBody.candidateSessionIds)
-        ? requestBody.candidateSessionIds.filter(
-            (sessionId): sessionId is string =>
-              typeof sessionId === "string" && sessionId.trim().length > 0,
-          )
-        : undefined,
-    },
-  );
+  });
   if (!adoptionContext.ok) {
     return c.json(adoptionContext.response.body, adoptionContext.response.status);
   }
 
   const { task } = adoptionContext.context;
   await stopNonWinningCandidateSessions({
-    coordinationGroup: adoptionContext.context.coordinationGroup,
+    coordinationGroup: adoptionContext.context.phaseGroup,
     winnerRuntimeSessionId: adoptionContext.context.winnerRuntimeSessionId,
   });
 
@@ -6480,11 +6806,11 @@ taskRoutes.post("/:taskId/candidates/:index/adopt", async (c) => {
     return c.json(activation.response.body, activation.response.status as 400 | 404 | 502);
   }
 
-  const adoptionResult = await finalizeSessionFirstCandidateAdoption({
+  const adoptionResult = await finalizePhaseFirstCandidateAdoption({
     taskId,
     authorization,
     task,
-    coordinationKey: adoptionContext.context.coordinationKey,
+    phaseId,
     winnerSessionId: adoptionContext.context.winnerSessionId,
     winnerRuntimeSessionId: adoptionContext.context.winnerRuntimeSessionId,
     winnerCandidateIndex: adoptionContext.context.winnerCandidateIndex,
@@ -6764,6 +7090,9 @@ taskRoutes.get("/:taskId/branches", async (c) => {
       return {
         id: record.runtimeSessionId,
         taskSessionId: buildPublicTaskSessionId(taskId, record.runtimeSessionId),
+        phaseId: record.phaseId ?? null,
+        phaseRole: record.phaseRole ?? null,
+        phaseItemIndex: record.phaseItemIndex ?? null,
         title: runtime?.title ?? record.branchName ?? "",
         isActive: record.isActive || record.runtimeSessionId === taskResult.data?.sessionId,
         summary: runtime?.summary ?? null,
@@ -6802,27 +7131,99 @@ taskRoutes.get(":taskId/sessions", async (c) => {
       await persistLineageRepairs(taskId, repaired, authorization);
     }
 
+    const publicTaskSessionIdByIdentifier = new Map<string, string>();
+    for (const record of normalizedRecords) {
+      const runtimeSessionId = asNonEmptyString(record.runtimeSessionId);
+      const publicTaskSessionId =
+        asNonEmptyString(record.id) ??
+        (runtimeSessionId ? buildPublicTaskSessionId(taskId, runtimeSessionId) : undefined);
+      if (!publicTaskSessionId) {
+        continue;
+      }
+
+      for (const identifier of [record.id, record.runtimeSessionId]) {
+        const normalizedIdentifier = asNonEmptyString(identifier);
+        if (normalizedIdentifier) {
+          publicTaskSessionIdByIdentifier.set(normalizedIdentifier, publicTaskSessionId);
+        }
+      }
+    }
+
+    const resolvePhaseId = (record: (typeof normalizedRecords)[number]) => {
+      const persistedPhaseId = asNonEmptyString(record.phaseId);
+      if (persistedPhaseId) {
+        return publicTaskSessionIdByIdentifier.get(persistedPhaseId) ?? persistedPhaseId;
+      }
+
+      return (
+        asNonEmptyString(record.id) ??
+        (asNonEmptyString(record.runtimeSessionId)
+          ? buildPublicTaskSessionId(taskId, record.runtimeSessionId)
+          : null)
+      );
+    };
+
+    const sessions = normalizedRecords.map((record) => {
+      const runtime = runtimeMap.get(record.runtimeSessionId);
+      return {
+        id: record.runtimeSessionId,
+        taskSessionId: buildPublicTaskSessionId(taskId, record.runtimeSessionId),
+        phaseId: resolvePhaseId(record),
+        phaseRole: record.phaseRole ?? null,
+        phaseItemIndex: record.phaseItemIndex ?? null,
+        title: record.branchName ?? runtime?.title ?? "",
+        isActive: record.isActive || record.runtimeSessionId === taskResult.data?.sessionId,
+        summary: runtime?.summary ?? null,
+        createdAt: runtime?.createdAt ?? record.createdAt ?? null,
+        updatedAt: runtime?.updatedAt ?? record.updatedAt ?? null,
+        coordinationKey: record.coordinationKey ?? null,
+        winnerSessionId: record.winnerSessionId ?? null,
+        executionStatus: record.executionStatus ?? null,
+        sessionKind: record.sessionKind ?? null,
+        candidateIndex: record.candidateIndex ?? null,
+        stepIndex: record.stepIndex ?? null,
+        selectedModel: record.selectedModel ?? null,
+        executionModeSnapshot: record.executionModeSnapshot ?? null,
+      } satisfies SessionSummaryRecord;
+    });
+
+    const parseLifecycleTime = (record: (typeof normalizedRecords)[number]) => {
+      const createdAt = Date.parse(record.createdAt ?? "");
+      if (!Number.isNaN(createdAt)) {
+        return createdAt;
+      }
+
+      const updatedAt = Date.parse(record.updatedAt ?? "");
+      return Number.isNaN(updatedAt) ? Number.NEGATIVE_INFINITY : updatedAt;
+    };
+
+    const latestRecord = normalizedRecords.reduce<(typeof normalizedRecords)[number] | null>(
+      (latest, record) => {
+        if (!latest) {
+          return record;
+        }
+
+        return parseLifecycleTime(record) >= parseLifecycleTime(latest) ? record : latest;
+      },
+      null,
+    );
+    const currentRecord = normalizedRecords.find(
+      (record) =>
+        record.runtimeSessionId === taskResult.data?.sessionId || record.id === taskResult.data?.sessionId,
+    );
+
     return c.json({
-      data: normalizedRecords.map((record) => {
-        const runtime = runtimeMap.get(record.runtimeSessionId);
-        return {
-          id: record.runtimeSessionId,
-          taskSessionId: buildPublicTaskSessionId(taskId, record.runtimeSessionId),
-          title: record.branchName ?? runtime?.title ?? "",
-          isActive: record.isActive || record.runtimeSessionId === taskResult.data?.sessionId,
-          summary: runtime?.summary ?? null,
-          createdAt: runtime?.createdAt ?? record.createdAt ?? null,
-          updatedAt: runtime?.updatedAt ?? record.updatedAt ?? null,
-          coordinationKey: record.coordinationKey ?? null,
-          winnerSessionId: record.winnerSessionId ?? null,
-          executionStatus: record.executionStatus ?? null,
-          sessionKind: record.sessionKind ?? null,
-          candidateIndex: record.candidateIndex ?? null,
-          stepIndex: record.stepIndex ?? null,
-          selectedModel: record.selectedModel ?? null,
-          executionModeSnapshot: record.executionModeSnapshot ?? null,
-        } satisfies SessionSummaryRecord;
-      }),
+      data: sessions,
+      meta: {
+        currentSessionId: asNonEmptyString(taskResult.data?.sessionId) ?? null,
+        currentPhaseId: currentRecord ? resolvePhaseId(currentRecord) : null,
+        latestPhaseId: latestRecord ? resolvePhaseId(latestRecord) : null,
+        phaseCount: new Set(
+          sessions
+            .map((session) => asNonEmptyString(session.phaseId))
+            .filter((phaseId): phaseId is string => Boolean(phaseId)),
+        ).size,
+      },
     });
   }
 
@@ -7037,6 +7438,9 @@ interface TaskSessionRecord {
   branchName: string | null;
   sourceType: string;
   isActive: boolean;
+  phaseId?: string | null;
+  phaseRole?: string | null;
+  phaseItemIndex?: number | null;
   coordinationKey?: string | null;
   winnerSessionId?: string | null;
   executionStatus?: string | null;
@@ -7063,6 +7467,9 @@ function coerceTaskSessionRecord(
     branchName: record.branchName ?? null,
     sourceType: resolvePublicTaskSessionSourceType(record),
     isActive: record.isActive,
+    phaseId: record.phaseId ?? null,
+    phaseRole: record.phaseRole ?? null,
+    phaseItemIndex: typeof record.phaseItemIndex === "number" ? record.phaseItemIndex : null,
     coordinationKey: record.coordinationKey ?? null,
     winnerSessionId: record.winnerSessionId ?? null,
     executionStatus: record.executionStatus ?? null,
@@ -7185,6 +7592,7 @@ function pickCanonicalTaskSessionRecord(records: TaskSessionRecord[]) {
 function resolveTaskSessionRecordSourceType(args: {
   parentRuntimeSessionId: string | null;
   sessionKind: string | null;
+  phaseId: string | null;
   candidateIndex: number | null;
   executionModeSnapshot: string | null;
   coordinationKey: string | null;
@@ -7193,6 +7601,7 @@ function resolveTaskSessionRecordSourceType(args: {
   if (
     isParallelTaskSessionCandidate({
       sessionKind: args.sessionKind,
+      phaseId: args.phaseId,
       candidateIndex: args.candidateIndex,
       executionModeSnapshot: args.executionModeSnapshot,
       coordinationKey: args.coordinationKey,
@@ -7235,6 +7644,16 @@ function collapseTaskSessionRecordGroup(records: TaskSessionRecord[]) {
     records.map((record) => record.forkedFromMessageId),
     { strictPresence: true },
   );
+  const phaseId = resolveLineageConsensusString(records.map((record) => record.phaseId), {
+    strictPresence: true,
+  });
+  const phaseRole = resolveLineageConsensusString(records.map((record) => record.phaseRole), {
+    strictPresence: true,
+  });
+  const phaseItemIndex = resolveLineageConsensusNumber(
+    records.map((record) => record.phaseItemIndex),
+    { strictPresence: true },
+  );
   const coordinationKey = resolveLineageConsensusString(
     records.map((record) => record.coordinationKey),
     { strictPresence: true },
@@ -7264,6 +7683,7 @@ function collapseTaskSessionRecordGroup(records: TaskSessionRecord[]) {
   const sourceType = resolveTaskSessionRecordSourceType({
     parentRuntimeSessionId: parentRuntimeSessionId.value ?? null,
     sessionKind: sessionKind.value ?? null,
+    phaseId: phaseId.value ?? null,
     candidateIndex: candidateIndex.value,
     executionModeSnapshot: executionModeSnapshot.value ?? null,
     coordinationKey: coordinationKey.value ?? null,
@@ -7274,6 +7694,9 @@ function collapseTaskSessionRecordGroup(records: TaskSessionRecord[]) {
     !taskId.ok ||
     !parentRuntimeSessionId.ok ||
     !forkedFromMessageId.ok ||
+    !phaseId.ok ||
+    !phaseRole.ok ||
+    !phaseItemIndex.ok ||
     !coordinationKey.ok ||
     !winnerSessionId.ok ||
     !executionStatus.ok ||
@@ -7306,6 +7729,9 @@ function collapseTaskSessionRecordGroup(records: TaskSessionRecord[]) {
     branchName: branchName.value ?? null,
     sourceType,
     isActive: records.some((record) => record.isActive),
+    phaseId: phaseId.value ?? null,
+    phaseRole: phaseRole.value ?? null,
+    phaseItemIndex: phaseItemIndex.value,
     coordinationKey: coordinationKey.value ?? null,
     winnerSessionId: winnerSessionId.value ?? null,
     executionStatus: executionStatus.value ?? null,
@@ -7627,6 +8053,16 @@ async function persistLineageRepairs(
               ? "root"
               : "fork",
       isActive: record.isActive,
+      phaseId: record.phaseId ?? undefined,
+      phaseRole:
+        record.phaseRole === "mainline" ||
+        record.phaseRole === "candidate" ||
+        record.phaseRole === "judge" ||
+        record.phaseRole === "step" ||
+        record.phaseRole === "aux"
+          ? record.phaseRole
+          : undefined,
+      phaseItemIndex: record.phaseItemIndex ?? undefined,
     });
   }
 }

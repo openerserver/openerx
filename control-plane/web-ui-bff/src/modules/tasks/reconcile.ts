@@ -534,6 +534,10 @@ function inferTerminalStatus(task: RunningTaskRecord): "completed" | "failed" | 
     return task.status as "completed" | "failed" | "cancelled";
   }
 
+  if (task.status === "awaiting_adoption") {
+    return null;
+  }
+
   if (typeof task.result === "string" && /^\s*\[FAILED\]/.test(task.result)) {
     return "failed";
   }

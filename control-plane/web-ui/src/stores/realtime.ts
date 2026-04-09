@@ -6,6 +6,7 @@ export interface RealtimeEvent {
   ts: string;
   projectId?: string;
   taskId?: string;
+  phaseId?: string;
   sessionId?: string;
   agentRunId?: string;
   data: Record<string, unknown>;
@@ -46,6 +47,7 @@ function normalizeRealtimeEvent(input: unknown): RealtimeEvent | null {
         : new Date().toISOString(),
     projectId: typeof payload.projectId === "string" ? payload.projectId : undefined,
     taskId: typeof payload.taskId === "string" ? payload.taskId : undefined,
+    phaseId: typeof payload.phaseId === "string" ? payload.phaseId : undefined,
     sessionId: typeof payload.sessionId === "string" ? payload.sessionId : undefined,
     agentRunId: typeof payload.agentRunId === "string" ? payload.agentRunId : undefined,
     data:

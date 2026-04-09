@@ -20,6 +20,9 @@ export function buildTaskSessionRegistrations(
         | "manual_branch"
         | "hook";
       executionModeSnapshot?: "single" | "parallel" | "sequential_chain";
+      phaseId?: string;
+      phaseRole?: "mainline" | "candidate" | "judge" | "step" | "aux";
+      phaseItemIndex?: number;
       isActive?: boolean;
       candidateIndex?: number;
       stepIndex?: number;
@@ -54,6 +57,11 @@ export function buildTaskSessionRegistrations(
     upsertTaskSession,
     persistTaskSessionMessage,
     postTaskSessionMessage,
+    listTaskPhases: shared.phaseWriteApi.listTaskPhases,
+    upsertTaskPhase: shared.phaseWriteApi.upsertTaskPhase,
+    adoptTaskPhase: shared.phaseWriteApi.adoptTaskPhase,
+    cancelTaskPhase: shared.phaseWriteApi.cancelTaskPhase,
+    resumeTaskPhase: shared.phaseWriteApi.resumeTaskPhase,
     activateTaskSession: shared.branchWriteApi.activateTaskBranch,
     archiveTaskSession: shared.branchWriteApi.archiveTaskBranch,
     listTaskSessions: shared.sessionReadApi.listTaskSessions,
@@ -71,6 +79,5 @@ export function buildTaskSessionRegistrations(
     buildTaskSessionTimelineViewResponse:
       shared.sessionReadApi.buildTaskSessionTimelineViewResponse,
     buildTaskExecutionTraceResponse: shared.sessionReadApi.buildTaskExecutionTraceResponse,
-    adoptTaskSessionWinner: shared.sessionReadApi.adoptTaskSessionWinner,
   };
 }

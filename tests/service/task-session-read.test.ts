@@ -31,6 +31,7 @@ function createUpdateChain(recorder: (payload: unknown) => void) {
 
 async function loadTaskSessionReadModule(args?: {
   sessionRows?: unknown[];
+  phaseRows?: unknown[];
   sessionOperationRows?: unknown[];
   sessionRunRows?: unknown[];
   workflowRunRows?: unknown[];
@@ -80,6 +81,12 @@ async function loadTaskSessionReadModule(args?: {
     workflowRunId: "workflowRunId",
     stageKey: "stageKey",
     approvalState: "approvalState",
+    createdAt: "createdAt",
+  };
+  const fakeTaskExecutionPhases = {
+    id: "id",
+    taskId: "taskId",
+    phaseIndex: "phaseIndex",
     createdAt: "createdAt",
   };
   const fakeTaskOperations = {
@@ -155,6 +162,9 @@ async function loadTaskSessionReadModule(args?: {
   mock.module("../../control-plane/service/src/db", () => ({
     db: {
       query: {
+        taskExecutionPhases: {
+          findMany: mock(async () => args?.phaseRows ?? []),
+        },
         taskSessions: {
           findFirst: mock(async () => args?.winnerSession ?? null),
         },
@@ -238,6 +248,7 @@ async function loadTaskSessionReadModule(args?: {
   mock.module("../../control-plane/service/src/db/schema", () => ({
     roleAggregateConclusions: {},
     taskArtifacts: {},
+    taskExecutionPhases: fakeTaskExecutionPhases,
     taskMessageParts: fakeTaskMessageParts,
     taskMessages: fakeTaskMessages,
     taskOperations: fakeTaskOperations,
@@ -317,6 +328,7 @@ describe("task session read API", () => {
           taskId: "task-1",
           parentSessionId: null,
           runtimeSessionId: "root-session",
+          phaseId: rootSessionId,
           coordinationKey: rootSessionId,
           createdAt: "2026-03-27T00:00:00.000Z",
         },
@@ -325,6 +337,7 @@ describe("task session read API", () => {
           taskId: "task-1",
           parentSessionId: rootSessionId,
           runtimeSessionId: "candidate-session",
+          phaseId: rootSessionId,
           coordinationKey: rootSessionId,
           sessionKind: "candidate",
           executionModeSnapshot: "parallel",
@@ -348,13 +361,115 @@ describe("task session read API", () => {
     expect(response.data.data).toContainEqual(
       expect.objectContaining({
         id: candidateSessionId,
+        phaseId: rootSessionId,
         parentRuntimeSessionId: "root-session",
         sourceType: "parallel",
       }),
     );
   });
 
-  test("orders task sessions by parent lineage while keeping latestSessionId on lifecycle time", async () => {
+  test("normalizes stale executionStatus from legacy completed status on public session reads", async () => {
+    const sessionId = "task-session:task-1:session-1";
+    const { createTaskSessionReadApi } = await loadTaskSessionReadModule({
+      sessionRows: [
+        {
+          id: sessionId,
+          taskId: "task-1",
+          parentSessionId: null,
+          runtimeSessionId: "session-1",
+          status: "completed",
+          executionStatus: "running",
+          createdAt: "2026-03-27T00:00:00.000Z",
+          updatedAt: "2026-03-27T00:00:05.000Z",
+        },
+      ],
+      snapshot: {
+        taskId: "task-1",
+        currentSessionId: sessionId,
+      },
+    });
+
+    const api = createTaskSessionReadApi({
+      loadTaskTreeBackedRecord: mock(async () => ({ id: "task-1", projectId: "project-1" })),
+    });
+
+    const response = await api.listTaskSessions("task-1");
+
+    expect(response.ok).toBe(true);
+    if (!response.ok) {
+      return;
+    }
+
+    expect(response.data.data).toContainEqual(
+      expect.objectContaining({
+        id: sessionId,
+        executionStatus: "complete",
+      }),
+    );
+  });
+
+  test("returns current/latest phase pointers alongside session meta", async () => {
+    const rootSessionId = "task-session:task-1:root-session";
+    const candidateSessionId = "task-session:task-1:candidate-session";
+    const branchSessionId = "task-session:task-1:branch-session";
+    const parallelPhaseId = "phase-parallel-1";
+    const { createTaskSessionReadApi } = await loadTaskSessionReadModule({
+      sessionRows: [
+        {
+          id: rootSessionId,
+          taskId: "task-1",
+          parentSessionId: null,
+          runtimeSessionId: "root-session",
+          phaseId: parallelPhaseId,
+          coordinationKey: parallelPhaseId,
+          createdAt: "2026-03-27T00:00:00.000Z",
+        },
+        {
+          id: candidateSessionId,
+          taskId: "task-1",
+          parentSessionId: rootSessionId,
+          runtimeSessionId: "candidate-session",
+          phaseId: parallelPhaseId,
+          coordinationKey: parallelPhaseId,
+          sessionKind: "candidate",
+          executionModeSnapshot: "parallel",
+          candidateIndex: 0,
+          createdAt: "2026-03-27T00:00:01.000Z",
+        },
+        {
+          id: branchSessionId,
+          taskId: "task-1",
+          parentSessionId: rootSessionId,
+          runtimeSessionId: "branch-session",
+          sessionKind: "manual_branch",
+          createdAt: "2026-03-27T00:00:02.000Z",
+        },
+      ],
+      snapshot: {
+        taskId: "task-1",
+        currentSessionId: candidateSessionId,
+      },
+    });
+
+    const api = createTaskSessionReadApi({
+      loadTaskTreeBackedRecord: mock(async () => ({ id: "task-1", projectId: "project-1" })),
+    });
+
+    const response = await api.listTaskSessions("task-1");
+
+    expect(response.ok).toBe(true);
+    if (!response.ok) {
+      return;
+    }
+
+    expect(response.data.meta.currentSessionId).toBe(candidateSessionId);
+    expect(response.data.meta.currentPhaseId).toBe(parallelPhaseId);
+    expect(response.data.meta.latestSessionId).toBe(branchSessionId);
+    expect(response.data.meta.latestPhaseId).toBe(branchSessionId);
+    expect(response.data.meta.phaseCount).toBe(2);
+  });
+
+  test("orders task sessions by phase/lifecycle while keeping latestSessionId on lifecycle time", async () => {
     const rootSessionId = "task-session:task-1:root-session";
     const anchorSessionId = "task-session:task-1:anchor-session";
     const branchSessionId = "task-session:task-1:branch-session";
@@ -412,8 +527,8 @@ describe("task session read API", () => {
     expect(response.data.data.map((session) => session.id)).toEqual([
       rootSessionId,
       anchorSessionId,
-      candidateSessionId,
       branchSessionId,
+      candidateSessionId,
     ]);
     expect(response.data.meta.latestSessionId).toBe(candidateSessionId);
   });
@@ -543,72 +658,6 @@ describe("task session read API", () => {
     expect(response.data.data[0]).toMatchObject({
       id: sessionId,
       selectedModel: "github-copilot:gpt-5.4",
-    });
-  });
-
-  test("adoptTaskSessionWinner persists the winner session across the coordination group", async () => {
-    const coordinationKey = "task-session:task-1:root-session";
-    const winnerSessionId = "task-session:task-1:session-b";
-    const { createTaskSessionReadApi, updatedTaskSessions, updatedTaskSnapshots } =
-      await loadTaskSessionReadModule({
-        sessionRows: [
-          {
-            id: coordinationKey,
-            taskId: "task-1",
-            parentSessionId: null,
-            runtimeSessionId: "root-session",
-            coordinationKey,
-            createdAt: "2026-03-27T00:00:00.000Z",
-          },
-          {
-            id: "task-session:task-1:session-a",
-            taskId: "task-1",
-            parentSessionId: coordinationKey,
-            runtimeSessionId: "session-a",
-            coordinationKey,
-            createdAt: "2026-03-27T00:00:01.000Z",
-          },
-          {
-            id: winnerSessionId,
-            taskId: "task-1",
-            parentSessionId: coordinationKey,
-            runtimeSessionId: "session-b",
-            coordinationKey,
-            createdAt: "2026-03-27T00:00:02.000Z",
-          },
-        ],
-        winnerSession: {
-          id: winnerSessionId,
-          taskId: "task-1",
-          runtimeSessionId: "session-b",
-          coordinationKey,
-        },
-      });
-
-    const api = createTaskSessionReadApi({
-      loadTaskTreeBackedRecord: mock(async () => ({ id: "task-1", projectId: "project-1" })),
-    });
-
-    const response = await api.adoptTaskSessionWinner({
-      taskId: "task-1",
-      coordinationKey,
-      winnerSessionId,
-    });
-
-    expect(response).toEqual({
-      ok: true,
-      status: 200,
-      data: {
-        taskId: "task-1",
-        coordinationKey,
-        winnerSessionId,
-      },
-    });
-    expect(updatedTaskSessions[0]).toMatchObject({
-      winnerSessionId,
-    });
-    expect(updatedTaskSnapshots[0]).toMatchObject({
-      currentSessionId: winnerSessionId,
     });
   });
 
@@ -2607,6 +2656,256 @@ describe("task session read API", () => {
     expect(response.data.edges.messageOperation).toEqual(
       expect.arrayContaining([expect.objectContaining({ messageId: assistantMessageId })]),
     );
+  });
+
+  test("buildTaskTreeResponse collapses duplicated tool messages written with mixed runtime ids", async () => {
+    const rootSessionId = "task-session:task-1:root";
+    const runtimeSessionId = "root";
+    const streamingToolMessageId = `${rootSessionId}:${runtimeSessionId}:tool:call-1`;
+    const completedToolMessageId = `${rootSessionId}:tool:call-1`;
+    const { createTaskSessionReadApi } = await loadTaskSessionReadModule({
+      sessionRows: [
+        {
+          id: rootSessionId,
+          taskId: "task-1",
+          parentSessionId: null,
+          runtimeSessionId,
+          coordinationKey: rootSessionId,
+          createdAt: "2026-03-27T00:00:00.000Z",
+        },
+      ],
+      messageRows: [
+        {
+          id: streamingToolMessageId,
+          taskId: "task-1",
+          sessionId: rootSessionId,
+          runtimeMessageId: `${runtimeSessionId}:tool:call-1`,
+          role: "tool",
+          status: "streaming",
+          messageIndex: 0,
+          textContent: "match found",
+          summaryText: "match found",
+          rawPayload: {
+            info: {
+              id: `${runtimeSessionId}:tool:call-1`,
+              role: "tool",
+              sessionID: runtimeSessionId,
+              tool: {
+                callID: "call-1",
+                toolName: "search_code",
+              },
+              time: {
+                created: "2026-03-27T00:00:01.000Z",
+              },
+            },
+            parts: [{ type: "text", text: "match found" }],
+          },
+          createdAt: "2026-03-27T00:00:01.000Z",
+          updatedAt: "2026-03-27T00:00:01.000Z",
+        },
+        {
+          id: completedToolMessageId,
+          taskId: "task-1",
+          sessionId: rootSessionId,
+          runtimeMessageId: "tool:call-1",
+          role: "tool",
+          status: "completed",
+          messageIndex: 1,
+          textContent: "match found",
+          summaryText: "match found",
+          rawPayload: {
+            id: "tool:call-1",
+            info: {
+              id: "tool:call-1",
+              role: "tool",
+              sessionID: runtimeSessionId,
+              time: {
+                created: "2026-03-27T00:00:01.001Z",
+                completed: "2026-03-27T00:00:01.001Z",
+              },
+            },
+            part: {
+              id: "tool-part:call-1",
+              type: "tool",
+              tool: "search_code",
+              toolName: "search_code",
+              callID: "call-1",
+              messageID: "tool:call-1",
+              sessionID: runtimeSessionId,
+              state: {
+                status: "completed",
+                output: "match found",
+              },
+            },
+          },
+          createdAt: "2026-03-27T00:00:01.001Z",
+          updatedAt: "2026-03-27T00:00:01.001Z",
+          completedAt: "2026-03-27T00:00:01.001Z",
+        },
+      ],
+      partRows: [
+        {
+          id: `${streamingToolMessageId}:0`,
+          messageId: streamingToolMessageId,
+          partIndex: 0,
+          partType: "text",
+          textContent: "match found",
+          jsonPayload: {
+            type: "text",
+            text: "match found",
+          },
+          createdAt: "2026-03-27T00:00:01.000Z",
+        },
+        {
+          id: `${completedToolMessageId}:0`,
+          messageId: completedToolMessageId,
+          partIndex: 0,
+          partType: "tool_result",
+          textContent: "match found",
+          jsonPayload: {
+            type: "tool",
+            tool: "search_code",
+            callID: "call-1",
+            messageID: "tool:call-1",
+            state: {
+              status: "completed",
+              output: "match found",
+            },
+          },
+          createdAt: "2026-03-27T00:00:01.001Z",
+        },
+      ],
+      snapshot: {
+        taskId: "task-1",
+        currentSessionId: rootSessionId,
+      },
+    });
+
+    const api = createTaskSessionReadApi({
+      loadTaskTreeBackedRecord: mock(async () => ({
+        id: "task-1",
+        projectId: "project-1",
+        title: "Task 1",
+        prompt: "root prompt",
+        status: "completed",
+        latestResultSummary: "done",
+        strategy: null,
+        createdAt: "2026-03-27T00:00:00.000Z",
+        lastActivityAt: "2026-03-27T00:00:02.000Z",
+      })),
+    });
+
+    const response = await api.buildTaskTreeResponse({
+      taskId: "task-1",
+      includeLineage: true,
+    });
+
+    expect(response.ok).toBe(true);
+    if (!response.ok) {
+      return;
+    }
+
+    const toolMessages = response.data.messages.filter((message) => message.role === "tool");
+    expect(toolMessages).toHaveLength(1);
+    expect(toolMessages[0]).toEqual(
+      expect.objectContaining({
+        id: completedToolMessageId,
+        runtimeMessageId: "tool:call-1",
+        status: "completed",
+        textContent: "match found",
+      }),
+    );
+  });
+
+  test("buildTaskSessionTimelineViewResponse collapses duplicated tool timeline rows written with mixed runtime ids", async () => {
+    const rootSessionId = "task-session:task-1:root";
+    const runtimeSessionId = "root";
+    const { createTaskSessionReadApi } = await loadTaskSessionReadModule({
+      sessionRows: [
+        {
+          id: rootSessionId,
+          taskId: "task-1",
+          parentSessionId: null,
+          runtimeSessionId,
+          coordinationKey: rootSessionId,
+          createdAt: "2026-03-27T00:00:00.000Z",
+        },
+      ],
+      timelineRows: [
+        {
+          id: "task-timeline:message:streaming-tool",
+          taskId: "task-1",
+          projectId: "project-1",
+          sessionId: rootSessionId,
+          messageId: `${rootSessionId}:${runtimeSessionId}:tool:call-1`,
+          operationId: null,
+          artifactId: null,
+          itemKind: "message",
+          itemRole: "tool",
+          title: null,
+          displayText: "match found",
+          metadataJson: {
+            role: "tool",
+            runtimeMessageId: `${runtimeSessionId}:tool:call-1`,
+          },
+          sortAt: "2026-03-27T00:00:01.000Z",
+          createdAt: "2026-03-27T00:00:01.000Z",
+          updatedAt: "2026-03-27T00:00:01.100Z",
+        },
+        {
+          id: "task-timeline:message:completed-tool",
+          taskId: "task-1",
+          projectId: "project-1",
+          sessionId: rootSessionId,
+          messageId: `${rootSessionId}:tool:call-1`,
+          operationId: null,
+          artifactId: null,
+          itemKind: "message",
+          itemRole: "tool",
+          title: null,
+          displayText: "match found",
+          metadataJson: {
+            role: "tool",
+            runtimeMessageId: "tool:call-1",
+          },
+          sortAt: "2026-03-27T00:00:01.001Z",
+          createdAt: "2026-03-27T00:00:01.001Z",
+          updatedAt: "2026-03-27T00:00:01.100Z",
+        },
+      ],
+      snapshot: {
+        taskId: "task-1",
+        currentSessionId: rootSessionId,
+      },
+    });
+
+    const api = createTaskSessionReadApi({
+      loadTaskTreeBackedRecord: mock(async () => ({ id: "task-1", projectId: "project-1" })),
+    });
+
+    const response = await api.buildTaskSessionTimelineViewResponse({
+      taskId: "task-1",
+      sessionId: rootSessionId,
+      includeLineage: true,
+    });
+
+    expect(response.ok).toBe(true);
+    if (!response.ok) {
+      return;
+    }
+
+    expect(response.data.data).toHaveLength(1);
+    expect(response.data.data[0]).toEqual(
+      expect.objectContaining({
+        id: "task-timeline:message:completed-tool",
+        messageId: `${rootSessionId}:tool:call-1`,
+        displayText: "match found",
+        metadataJson: expect.objectContaining({
+          runtimeMessageId: "tool:call-1",
+        }),
+      }),
+    );
+    expect(response.data.meta.itemCount).toBe(1);
   });
 
   test("buildTaskNormalizedConversationQueryResponse annotates the service-direct normalized view", async () => {

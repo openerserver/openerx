@@ -75,20 +75,24 @@ function isSessionIdInSuppressionSet(sessionId: string, idSet: Set<string>): boo
   return false;
 }
 
+function resolveParallelPhaseGroupKey(record: TaskSessionLineageRecord) {
+  return asString(record.phaseId);
+}
+
 function resolveLatestPendingParallelMessageSuppressionGroup(
   records: TaskSessionLineageRecord[],
 ): PendingParallelMessageSuppressionGroup | null {
   const groups = new Map<string, TaskSessionLineageRecord[]>();
 
   for (const record of records) {
-    const coordinationKey = asString(record.coordinationKey);
-    if (!coordinationKey) {
+    const phaseId = resolveParallelPhaseGroupKey(record);
+    if (!phaseId) {
       continue;
     }
 
-    const existing = groups.get(coordinationKey) ?? [];
+    const existing = groups.get(phaseId) ?? [];
     existing.push(record);
-    groups.set(coordinationKey, existing);
+    groups.set(phaseId, existing);
   }
 
   let selectedGroup: PendingParallelMessageSuppressionGroup | null = null;
@@ -146,14 +150,14 @@ function resolveAdoptedParallelMessageSuppressionGroups(
   const groups = new Map<string, TaskSessionLineageRecord[]>();
 
   for (const record of records) {
-    const coordinationKey = asString(record.coordinationKey);
-    if (!coordinationKey) {
+    const phaseId = resolveParallelPhaseGroupKey(record);
+    if (!phaseId) {
       continue;
     }
 
-    const existing = groups.get(coordinationKey) ?? [];
+    const existing = groups.get(phaseId) ?? [];
     existing.push(record);
-    groups.set(coordinationKey, existing);
+    groups.set(phaseId, existing);
   }
 
   const suppressionGroups: AdoptedParallelMessageSuppressionGroup[] = [];

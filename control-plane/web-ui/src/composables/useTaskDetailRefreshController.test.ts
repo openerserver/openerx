@@ -64,6 +64,21 @@ describe("useTaskDetailRefreshController", () => {
     });
   });
 
+  it("maps phase refresh requests into flow-only task snapshot options", () => {
+    expect(
+      toTaskDetailRefreshSnapshotOptions({
+        eventId: "event-phase-1",
+        reason: "phase-awaiting-adoption",
+        shouldRefreshMessages: false,
+        shouldBumpTraceRefreshKey: false,
+      }),
+    ).toEqual({
+      workflow: false,
+      flow: true,
+      messages: false,
+    });
+  });
+
   it("schedules delayed task snapshot refreshes from refresh requests", async () => {
     const { latestTaskRefreshRequest, refreshTaskSnapshot } = mountController();
 

@@ -1,7 +1,7 @@
 import type { TaskSessionRecord } from "./api";
 
 export type ExplicitParallelTaskSessionGroup = {
-  coordinationKey: string;
+  phaseId: string;
   candidateSessions: TaskSessionRecord[];
 };
 
@@ -9,16 +9,19 @@ function asNonEmptyString(value: string | null | undefined) {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
+export function resolveExplicitParallelPhaseId(
+  session: Pick<TaskSessionRecord, "phaseId">,
+) {
+  return asNonEmptyString(session.phaseId);
+}
+
 export function isExplicitParallelCandidateSession(
-  session: Pick<
-    TaskSessionRecord,
-    "coordinationKey" | "executionModeSnapshot" | "sessionKind"
-  >,
+  session: Pick<TaskSessionRecord, "phaseId" | "executionModeSnapshot" | "sessionKind">,
 ) {
   return (
     session.sessionKind === "candidate" &&
     session.executionModeSnapshot === "parallel" &&
-    asNonEmptyString(session.coordinationKey) != null
+    resolveExplicitParallelPhaseId(session) != null
   );
 }
 
@@ -42,21 +45,21 @@ export function buildExplicitParallelTaskSessionGroups(sessionSummaries: TaskSes
       continue;
     }
 
-    const coordinationKey = asNonEmptyString(summary.coordinationKey);
-    if (!coordinationKey) {
+    const phaseId = resolveExplicitParallelPhaseId(summary);
+    if (!phaseId) {
       continue;
     }
 
-    const existing = groups.get(coordinationKey) ?? [];
+    const existing = groups.get(phaseId) ?? [];
     existing.push(summary);
-    groups.set(coordinationKey, existing);
+    groups.set(phaseId, existing);
   }
 
   return Array.from(groups.entries())
     .map(
-      ([coordinationKey, candidateSessions]) =>
+      ([phaseId, candidateSessions]) =>
         ({
-          coordinationKey,
+          phaseId,
           candidateSessions,
         }) satisfies ExplicitParallelTaskSessionGroup,
     )

@@ -10,6 +10,7 @@ import {
 import {
   asRecord,
   asString,
+  type LiveAssistantState,
   normalizeSessionConversationItems,
   type TaskConversationListItem,
   type TaskConversationMessageItem,
@@ -30,6 +31,98 @@ export type ParallelCandidateSessionState = {
   hasSettledReply: boolean;
   traceState: ParallelCandidateTraceState;
 };
+
+function cloneParallelCandidateMessageItem(
+  item: TaskConversationMessageItem,
+): TaskConversationMessageItem {
+  return {
+    ...item,
+    toolCalls: item.toolCalls.map((toolCall) => ({ ...toolCall })),
+  };
+}
+
+function normalizeParallelCandidateLiveText(value?: string) {
+  const normalized = value?.trim();
+  return normalized ? normalized : undefined;
+}
+
+function hasDisplayableParallelCandidateLiveReply(liveState?: LiveAssistantState | null) {
+  if (!liveState) {
+    return false;
+  }
+
+  return liveState.orderedAssistantMessageIds.some((messageId) => {
+    if (liveState.incompleteIds.has(messageId)) {
+      return false;
+    }
+
+    return Boolean(normalizeParallelCandidateLiveText(liveState.textById.get(messageId)));
+  });
+}
+
+export function applyParallelCandidateLiveAssistantState(args: {
+  items: TaskConversationMessageItem[];
+  liveState?: LiveAssistantState | null;
+}) {
+  const liveState = args.liveState;
+  if (!liveState || liveState.orderedAssistantMessageIds.length === 0) {
+    return {
+      items: args.items,
+      hasSettledReply: false,
+    };
+  }
+
+  const nextItems = args.items.map((item) => cloneParallelCandidateMessageItem(item));
+  const assistantIndexById = new Map<string, number>();
+  for (let index = 0; index < nextItems.length; index += 1) {
+    const item = nextItems[index];
+    if (item.role === "assistant") {
+      assistantIndexById.set(item.key, index);
+    }
+  }
+
+  for (const messageId of liveState.orderedAssistantMessageIds) {
+    const meta = liveState.metaById.get(messageId);
+    const liveText = normalizeParallelCandidateLiveText(liveState.textById.get(messageId));
+    const isStreaming = liveState.incompleteIds.has(messageId);
+    const existingIndex = assistantIndexById.get(messageId);
+
+    if (typeof existingIndex === "number") {
+      const existing = nextItems[existingIndex];
+      nextItems[existingIndex] = {
+        ...existing,
+        agent: existing.agent ?? meta?.agent,
+        model: existing.model ?? meta?.modelLabel,
+        text:
+          liveText && liveText.length > (existing.text?.length ?? 0) ? liveText : existing.text,
+        createdAt: existing.createdAt ?? meta?.createdAt,
+        isStreaming,
+      };
+      continue;
+    }
+
+    if (!isStreaming && !liveText) {
+      continue;
+    }
+
+    nextItems.push({
+      key: messageId,
+      role: "assistant",
+      agent: meta?.agent,
+      model: meta?.modelLabel,
+      text: liveText ?? "正在生成...",
+      toolCalls: [],
+      createdAt: meta?.createdAt,
+      raw: null,
+      isStreaming,
+    });
+  }
+
+  return {
+    items: nextItems,
+    hasSettledReply: hasDisplayableParallelCandidateLiveReply(liveState),
+  };
+}
 
 function resolveParallelCandidateDisplayStatus(
   candidate: Pick<ExecutionCandidate, "status"> | Pick<ProjectionRunCandidate, "status">,
@@ -168,6 +261,7 @@ export function buildParallelComparisonCardsForRun(args: {
   parallelCandidateItems: Record<string, TaskConversationMessageItem[]>;
   parallelCandidateSettledReply: Record<string, boolean>;
   parallelCandidateTraceStates: Record<string, ParallelCandidateTraceState>;
+  parallelCandidateLiveStates?: Record<string, LiveAssistantState>;
 }) {
   const parallelExecutionFinishedAtMs = toTimestampMs(args.run.finishedAt);
   const cards = args.run.candidateSessions.map((candidate, index) => {
@@ -193,12 +287,20 @@ export function buildParallelComparisonCardsForRun(args: {
     });
     const fallbackItem = buildParallelCandidateFallbackItem(args.run, candidate, index);
     const displayItems = visibleItems.length > 0 || !fallbackItem ? visibleItems : [fallbackItem];
+    const liveDisplayState = applyParallelCandidateLiveAssistantState({
+      items: displayItems,
+      liveState: sessionId ? args.parallelCandidateLiveStates?.[sessionId] : undefined,
+    });
+    const mergedDisplayItems = liveDisplayState.items;
     const metaParts = [candidate.agent].filter((value): value is string => Boolean(value));
     const status = resolveParallelCandidateDisplayStatus(
       candidate,
-      displayItems,
+      mergedDisplayItems,
       args.taskStatus,
-      sessionId ? args.parallelCandidateSettledReply[sessionId] === true : false,
+      sessionId
+        ? args.parallelCandidateSettledReply[sessionId] === true ||
+            liveDisplayState.hasSettledReply
+        : false,
     );
     const traceState = sessionId ? args.parallelCandidateTraceStates[sessionId] : undefined;
     return {
@@ -210,8 +312,8 @@ export function buildParallelComparisonCardsForRun(args: {
       traceState: traceState?.state,
       traceNote: traceState?.note,
       meta: metaParts.join(" · ") || undefined,
-      loading: displayItems.length === 0 && status === "running",
-      items: displayItems,
+      loading: mergedDisplayItems.length === 0 && status === "running",
+      items: mergedDisplayItems,
       canAdopt: false,
       isAdopted:
         typeof args.run.winnerCandidateIndex === "number" &&
@@ -244,6 +346,7 @@ export function buildParallelConversationItems(args: {
   parallelCandidateItems: Record<string, TaskConversationMessageItem[]>;
   parallelCandidateSettledReply: Record<string, boolean>;
   parallelCandidateTraceStates: Record<string, ParallelCandidateTraceState>;
+  parallelCandidateLiveStates?: Record<string, LiveAssistantState>;
 }) {
   const items: TaskConversationParallelItem[] = [];
 
@@ -255,6 +358,7 @@ export function buildParallelConversationItems(args: {
       parallelCandidateItems: args.parallelCandidateItems,
       parallelCandidateSettledReply: args.parallelCandidateSettledReply,
       parallelCandidateTraceStates: args.parallelCandidateTraceStates,
+      parallelCandidateLiveStates: args.parallelCandidateLiveStates,
     });
     if (cards.length < 2) {
       continue;
@@ -588,10 +692,7 @@ function findParallelCandidateToolCallIndex(
 }
 
 function cloneParallelCandidateItem(item: TaskConversationMessageItem): TaskConversationMessageItem {
-  return {
-    ...item,
-    toolCalls: item.toolCalls.map((toolCall) => ({ ...toolCall })),
-  };
+  return cloneParallelCandidateMessageItem(item);
 }
 
 function mergeParallelCandidateToolCall(
@@ -756,24 +857,38 @@ export async function loadParallelCandidateSessionState(args: {
   sessionId: string;
   silent?: boolean;
   cachedState?: ParallelCandidateSessionState;
+  onProgress?: (state: ParallelCandidateSessionState) => void;
 }) {
   const sessionMessageFallbackPromise = loadParallelCandidateSessionMessageFallback(
     args.taskId,
     args.sessionId,
   );
+  const tracePromise = getTaskExecutionTraceView(args.taskId, args.sessionId, {
+    includeLineage: false,
+  })
+    .then((trace) => ({ ok: true as const, trace }))
+    .catch((error) => ({ ok: false as const, error }));
 
-  try {
-    const trace = await getTaskExecutionTraceView(args.taskId, args.sessionId, {
-      includeLineage: false,
+  const sessionMessageFallback = await sessionMessageFallbackPromise;
+  const canDisplaySessionFallback =
+    hasDisplayableParallelCandidateItems(sessionMessageFallback.items) ||
+    sessionMessageFallback.hasSettledReply;
+  if (canDisplaySessionFallback) {
+    args.onProgress?.({
+      items: sessionMessageFallback.items,
+      hasSettledReply: sessionMessageFallback.hasSettledReply,
+      traceState: args.cachedState?.traceState ?? {},
     });
-    const sessionMessageFallback = await sessionMessageFallbackPromise;
+  }
+
+  const traceResult = await tracePromise;
+  if (traceResult.ok) {
+    const trace = traceResult.trace;
     const traceItems = condenseParallelCandidateToolItems(normalizeTraceConversationItems(trace));
     const hasDisplayableTraceItems = hasDisplayableParallelCandidateItems(traceItems);
     const hasSettledReply = traceHasSettledCandidateReply(trace);
     const traceState = resolveParallelCandidateTraceState(trace);
-    const shouldUseSessionDisplay =
-      hasDisplayableParallelCandidateItems(sessionMessageFallback.items) ||
-      sessionMessageFallback.hasSettledReply;
+    const shouldUseSessionDisplay = canDisplaySessionFallback;
 
     if (shouldUseSessionDisplay) {
       return {
@@ -794,35 +909,31 @@ export async function loadParallelCandidateSessionState(args: {
       hasSettledReply,
       traceState,
     } satisfies ParallelCandidateSessionState;
-  } catch {
-    const sessionMessageFallback = await sessionMessageFallbackPromise;
-    if (
-      hasDisplayableParallelCandidateItems(sessionMessageFallback.items) ||
-      sessionMessageFallback.hasSettledReply
-    ) {
-      return {
-        items: sessionMessageFallback.items,
-        hasSettledReply: true,
-        traceState: buildParallelCandidateSessionFallbackTraceState({
-          reason: "trace-error",
-        }),
-      } satisfies ParallelCandidateSessionState;
-    }
+  }
 
-    const hasCachedTrace =
-      args.silent &&
-      ((args.cachedState?.items.length ?? 0) > 0 ||
-        args.cachedState?.hasSettledReply === true ||
-        Boolean(args.cachedState?.traceState && Object.keys(args.cachedState.traceState).length > 0));
+  if (canDisplaySessionFallback) {
     return {
-      items: args.silent ? (args.cachedState?.items ?? []) : [],
-      hasSettledReply: args.silent ? args.cachedState?.hasSettledReply === true : false,
-      traceState: hasCachedTrace
-        ? {
-            state: "stale" as const,
-            note: "静默刷新失败，当前展示的是上一次成功加载的执行追踪。",
-          }
-        : {},
+      items: sessionMessageFallback.items,
+      hasSettledReply: true,
+      traceState: buildParallelCandidateSessionFallbackTraceState({
+        reason: "trace-error",
+      }),
     } satisfies ParallelCandidateSessionState;
   }
+
+  const hasCachedTrace =
+    args.silent &&
+    ((args.cachedState?.items.length ?? 0) > 0 ||
+      args.cachedState?.hasSettledReply === true ||
+      Boolean(args.cachedState?.traceState && Object.keys(args.cachedState.traceState).length > 0));
+  return {
+    items: args.silent ? (args.cachedState?.items ?? []) : [],
+    hasSettledReply: args.silent ? args.cachedState?.hasSettledReply === true : false,
+    traceState: hasCachedTrace
+      ? {
+          state: "stale" as const,
+          note: "静默刷新失败，当前展示的是上一次成功加载的执行追踪。",
+        }
+      : {},
+  } satisfies ParallelCandidateSessionState;
 }

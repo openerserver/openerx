@@ -23,6 +23,17 @@ interface FinalizeTaskStateInput {
   task?: FinalizableTaskRecord;
 }
 
+export function shouldSuppressParallelAwaitingAdoptionFinalization(
+  task: FinalizableTaskRecord | null | undefined,
+  nextStatus: FinalizedTaskStatus,
+) {
+  return (
+    nextStatus === "completed" &&
+    task?.status === "awaiting_adoption" &&
+    task?.orchestrationKind === "parallel"
+  );
+}
+
 async function deactivateActiveTaskSession(
   authorization: string,
   taskId: string,
@@ -71,6 +82,10 @@ export async function finalizeTaskState(input: FinalizeTaskStateInput): Promise<
   const task = input.task ?? (await loadTaskForFinalization(input.authorization, input.taskId));
   if (!task) {
     return false;
+  }
+
+  if (shouldSuppressParallelAwaitingAdoptionFinalization(task, input.status)) {
+    return true;
   }
 
   const resolvedSessionId = input.sessionId ?? task.sessionId ?? undefined;

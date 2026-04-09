@@ -9,6 +9,7 @@ function createEvent(overrides: Partial<RealtimeEvent>): RealtimeEvent {
     ts: overrides.ts ?? "2026-04-08T03:18:17.218Z",
     projectId: overrides.projectId,
     taskId: overrides.taskId ?? "task-1",
+    phaseId: overrides.phaseId,
     sessionId: overrides.sessionId ?? "session-1",
     agentRunId: overrides.agentRunId,
     data: overrides.data ?? {},
@@ -101,6 +102,40 @@ describe("task message patch event", () => {
         }),
       ),
     ).toMatchObject({ kind: "session-created" });
+  });
+
+  it("maps phase lifecycle events and keeps the phase id", () => {
+    expect(
+      toTaskMessagePatchEvent(
+        createEvent({
+          type: "task.phase.completed",
+          phaseId: "phase-2",
+          data: {
+            status: "completed",
+          },
+        }),
+      ),
+    ).toMatchObject({
+      kind: "phase-completed",
+      phaseId: "phase-2",
+    });
+  });
+
+  it("maps phase snapshot reasons", () => {
+    expect(
+      toTaskMessagePatchEvent(
+        createEvent({
+          type: "task.snapshot.updated",
+          phaseId: "phase-2",
+          data: {
+            reason: "phase.awaiting_adoption",
+          },
+        }),
+      ),
+    ).toMatchObject({
+      kind: "phase-awaiting-adoption",
+      phaseId: "phase-2",
+    });
   });
 
   it("maps task followup events to task patch kinds", () => {

@@ -192,8 +192,8 @@ import {
   type Task,
   type TaskMemberViewModel,
   type TaskTreeTaskMeta,
+  getTask,
   getTaskMemberView,
-  getTaskTreeMeta,
   listTasks,
   toApiError,
 } from "../lib/api";
@@ -349,7 +349,7 @@ async function ensureTaskMeta(taskId: string) {
   }
 
   try {
-    const task = await getTaskTreeMeta(taskId);
+    const task = await getTask(taskId);
     taskMetaMap.value = { ...taskMetaMap.value, [taskId]: task };
     workbench.updateTaskMeta(taskId, {
       title: task.title ?? undefined,
@@ -368,7 +368,7 @@ async function refreshOpenTabMeta() {
   await Promise.all(
     taskIds.map(async (taskId) => {
       try {
-        const task = await getTaskTreeMeta(taskId);
+        const task = await getTask(taskId);
         taskMetaMap.value = { ...taskMetaMap.value, [taskId]: task };
         workbench.updateTaskMeta(taskId, {
           title: task.title ?? undefined,

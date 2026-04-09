@@ -14,6 +14,9 @@ export interface TaskSessionLineageRecord {
   branchName?: string | null;
   sourceType: string;
   isActive: boolean;
+  phaseId?: string | null;
+  phaseRole?: string | null;
+  phaseItemIndex?: number | null;
   coordinationKey?: string | null;
   winnerSessionId?: string | null;
   executionStatus?: string | null;
@@ -42,11 +45,13 @@ export interface UpsertTaskSessionLineageInput {
     | "manual_branch"
     | "hook";
   executionModeSnapshot?: "single" | "parallel" | "sequential_chain";
+  phaseId?: string;
+  phaseRole?: "mainline" | "candidate" | "judge" | "step" | "aux";
+  phaseItemIndex?: number;
   isActive: boolean;
   candidateIndex?: number;
   stepIndex?: number;
   selectedModel?: string;
-  coordinationKey?: string;
   operationId?: string;
 }
 
@@ -95,6 +100,9 @@ type ServiceTaskSessionRecord = {
   sourceType?: string | null;
   parentSessionId?: string | null;
   parentRuntimeSessionId?: string | null;
+  phaseId?: string | null;
+  phaseRole?: string | null;
+  phaseItemIndex?: number | null;
   coordinationKey?: string | null;
   runtimeSessionId?: string | null;
   forkedFromMessageId?: string | null;
@@ -184,6 +192,7 @@ function mapServiceTaskSessionsToLineageRecords(
           sessionKind: session.sessionKind,
           parentSessionId: session.parentSessionId,
           parentRuntimeSessionId: session.parentRuntimeSessionId,
+          phaseId: session.phaseId,
           candidateIndex: session.candidateIndex,
           executionModeSnapshot: session.executionModeSnapshot,
           coordinationKey: session.coordinationKey,
@@ -191,6 +200,10 @@ function mapServiceTaskSessionsToLineageRecords(
         isActive: currentSessionId
           ? session.id === currentSessionId
           : session.executionStatus === "running" && !session.archivedAt,
+        phaseId: session.phaseId ?? null,
+        phaseRole: session.phaseRole ?? null,
+        phaseItemIndex:
+          typeof session.phaseItemIndex === "number" ? session.phaseItemIndex : null,
         coordinationKey: session.coordinationKey ?? null,
         winnerSessionId: session.winnerSessionId ?? null,
         executionStatus: session.executionStatus ?? null,
@@ -351,11 +364,13 @@ export async function upsertTaskSessionLineageRecord(
       sourceType: input.sourceType,
       sessionKind: input.sessionKind,
       executionModeSnapshot: input.executionModeSnapshot,
+      phaseId: input.phaseId,
+      phaseRole: input.phaseRole,
+      phaseItemIndex: input.phaseItemIndex,
       isActive: input.isActive,
       candidateIndex: input.candidateIndex,
       stepIndex: input.stepIndex,
       selectedModel: input.selectedModel,
-      coordinationKey: input.coordinationKey,
       operationId: input.operationId,
     },
     authorization,

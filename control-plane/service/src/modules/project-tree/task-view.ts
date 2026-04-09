@@ -9,6 +9,10 @@ import {
   tasks,
 } from "../../db/schema";
 import { fromStoredTaskExecutionMode } from "../tasks/task-execution-mode";
+import {
+  normalizePublicTaskStatusValue,
+  resolvePublicTaskStatus,
+} from "../tasks/public-task-status";
 import type { TaskCategory, TaskExecutionMode, TaskStatus } from "./task-types";
 
 export interface TaskTreeRecord {
@@ -90,45 +94,14 @@ function mapOrchestrationKindToExecutionMode(
   return fromStoredTaskExecutionMode(orchestrationKind);
 }
 
-function normalizeTaskStatusValue(value: string | null | undefined): TaskStatus | null {
-  return value === "pending" ||
-    value === "running" ||
-    value === "paused" ||
-    value === "completed" ||
-    value === "failed" ||
-    value === "cancelled"
-    ? value
-    : null;
-}
-
-function mapLifecycleStatusToTaskStatus(
-  lifecycleStatus: string | null | undefined,
-): TaskStatus | null {
-  if (lifecycleStatus === "done") {
-    return "completed";
-  }
-  if (lifecycleStatus === "active") {
-    return "running";
-  }
-  if (lifecycleStatus === "archived") {
-    return "cancelled";
-  }
-  if (lifecycleStatus === "draft") {
-    return "pending";
-  }
-
-  return null;
-}
-
 function resolveSnapshotTaskStatus(
   snapshot?: TaskSnapshotRow,
   _aggregate?: TaskAggregateRow,
 ): TaskStatus {
-  return (
-    normalizeTaskStatusValue(snapshot?.currentExecutionStatus) ??
-    mapLifecycleStatusToTaskStatus(snapshot?.lifecycleStatus) ??
-    "pending"
-  );
+  return resolvePublicTaskStatus({
+    currentExecutionStatus: snapshot?.currentExecutionStatus,
+    lifecycleStatus: snapshot?.lifecycleStatus,
+  });
 }
 
 function resolveTaskReferenceIds(args: MapTaskTreeNodeArgs) {
@@ -211,7 +184,7 @@ function resolveTaskRunFields(
     finishedAt: args.aggregate?.doneAt ?? null,
     orchestrationKind: mapOrchestrationKindToExecutionMode(args.snapshot?.currentExecutionMode),
     currentRunId: refs.currentRunId,
-    currentRunStatus: normalizeTaskStatusValue(args.snapshot?.currentExecutionStatus),
+    currentRunStatus: normalizePublicTaskStatusValue(args.snapshot?.currentExecutionStatus),
     currentRunStartedAt: null,
     currentRunFinishedAt: null,
     currentRunCandidateCount: null,

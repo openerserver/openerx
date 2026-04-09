@@ -18,6 +18,79 @@ function getMessageParts(message: unknown): Record<string, unknown>[] {
     : [];
 }
 
+function normalizeAssistantToolPartType(
+  part: Record<string, unknown>,
+): "tool_call" | "tool_result" | null {
+  const rawType = typeof part.type === "string" ? part.type : "";
+  if (rawType === "tool-call" || rawType === "tool_call") {
+    return "tool_call";
+  }
+  if (rawType === "tool" || rawType === "tool-result" || rawType === "tool_result") {
+    return "tool_result";
+  }
+  return null;
+}
+
+function readAssistantToolPartStatus(
+  part: Record<string, unknown>,
+  partType: "tool_call" | "tool_result",
+): string | null {
+  const rawState = part.state;
+  const state =
+    typeof rawState === "string" && rawState.trim()
+      ? { status: rawState }
+      : typeof rawState === "object" && rawState
+        ? (rawState as Record<string, unknown>)
+        : undefined;
+  const rawStatus = typeof state?.status === "string" ? state.status.trim().toLowerCase() : "";
+  if (rawStatus) {
+    return rawStatus;
+  }
+  return partType === "tool_call" ? "running" : null;
+}
+
+function hasPendingAssistantToolContinuation(
+  info: Record<string, unknown> | undefined,
+  parts: Record<string, unknown>[],
+): boolean {
+  const finish = typeof info?.finish === "string" ? info.finish.trim().toLowerCase() : "";
+  if (
+    finish === "tool-calls" ||
+    finish === "tool_calls" ||
+    finish === "tool-call" ||
+    finish === "tool_call"
+  ) {
+    return true;
+  }
+
+  return parts.some((part) => {
+    const partType = normalizeAssistantToolPartType(part);
+    if (!partType) {
+      return false;
+    }
+
+    const status = readAssistantToolPartStatus(part, partType);
+    if (partType === "tool_call") {
+      return (
+        status !== "completed" &&
+        status !== "complete" &&
+        status !== "failed" &&
+        status !== "error" &&
+        status !== "cancelled" &&
+        status !== "stopped" &&
+        status !== "terminated"
+      );
+    }
+
+    return (
+      status === "running" ||
+      status === "queued" ||
+      status === "pending" ||
+      status === "streaming"
+    );
+  });
+}
+
 function readAssistantText(parts: Record<string, unknown>[]): string | undefined {
   const text = parts
     .filter((part) => part.type === "text" && typeof part.text === "string")
@@ -169,7 +242,8 @@ function resolveAssistantResultState(messages: unknown[], options?: { minComplet
     }
 
     const traceId = readAssistantTraceId(info);
-    const text = readAssistantText(getMessageParts(message));
+    const parts = getMessageParts(message);
+    const text = readAssistantText(parts);
     if (text) {
       fallbackText = text;
       fallbackTraceId = traceId ?? fallbackTraceId;
@@ -186,7 +260,7 @@ function resolveAssistantResultState(messages: unknown[], options?: { minComplet
       };
     }
 
-    if (text && isCompletedAssistantMessage(info)) {
+    if (text && isCompletedAssistantMessage(info) && !hasPendingAssistantToolContinuation(info, parts)) {
       return { text, completed: true, failed: false, error: undefined, traceId };
     }
 

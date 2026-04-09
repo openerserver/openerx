@@ -134,7 +134,7 @@ describe("task session write api", () => {
       executionStatus: "running",
       branchName: "main",
       runtimeSessionId: "root-session-1",
-      coordinationKey: "task-session:task-1:root-session-1",
+      coordinationKey: null,
     });
 
     const insertedRun = insertCalls.find((call) => call.table === "task_session_runs")?.payload;
@@ -184,9 +184,9 @@ describe("task session write api", () => {
       branchName: "候选 A",
       sourceType: "parallel",
       sessionKind: "candidate",
+      phaseId: "phase-parallel-1",
       candidateIndex: 0,
       executionModeSnapshot: "parallel",
-      coordinationKey: "task-session:task-1:root-session-1",
       isActive: false,
     });
 
@@ -199,22 +199,25 @@ describe("task session write api", () => {
       rootSessionId: "task-session:task-1:root-session-1",
       sessionType: "follow_up",
       sessionKind: "candidate",
+      phaseId: "phase-parallel-1",
       triggerType: "execute",
       executionModeSnapshot: "parallel",
       candidateIndex: 0,
       branchName: "候选 A",
       runtimeSessionId: "candidate-session-1",
-      coordinationKey: "task-session:task-1:root-session-1",
+      coordinationKey: null,
     });
 
     const insertedRun = insertCalls.find((call) => call.table === "task_session_runs")?.payload;
     expect(insertedRun).toMatchObject({
       id: "run_task-session:task-1:candidate-session-1",
       sessionId: "task-session:task-1:candidate-session-1",
+      phaseId: "phase-parallel-1",
       runtimeSessionId: "candidate-session-1",
       triggerType: "user_prompt",
       executionKind: "parallel_candidate",
       laneRole: "candidate",
+      coordinationKey: null,
       status: "running",
     });
   });
@@ -260,7 +263,7 @@ describe("task session write api", () => {
       archivedAt: "2025-01-01T00:03:00.000Z",
       forkedFromMessageId: "msg-1",
       runtimeSessionId: "child-session-1",
-      coordinationKey: "task-session:task-1:root-session-1",
+      coordinationKey: null,
     });
 
     const insertedRun = insertCalls.find((call) => call.table === "task_session_runs")?.payload;

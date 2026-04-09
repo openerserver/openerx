@@ -185,6 +185,7 @@ function resetAggregatorState() {
     finalizedAgentRuns: Set<string>;
     finalizingAgentRuns: Set<string>;
     parallelTaskSessions: Map<string, Set<string>>;
+    parallelTaskPhaseIds: Map<string, string>;
     parallelCandidateResults: Map<string, Map<number, { sessionId: string; result?: string }>>;
     sessionToCandidateMap: Map<string, { taskId: string; candidateIndex: number }>;
     sequentialChainTasks: Map<string, unknown>;
@@ -196,6 +197,7 @@ function resetAggregatorState() {
   aggregator.finalizedAgentRuns.clear();
   aggregator.finalizingAgentRuns.clear();
   aggregator.parallelTaskSessions.clear();
+  aggregator.parallelTaskPhaseIds.clear();
   aggregator.parallelCandidateResults.clear();
   aggregator.sessionToCandidateMap.clear();
   aggregator.sequentialChainTasks.clear();
@@ -1232,9 +1234,320 @@ describe("SSEAggregator pipeline emitters", () => {
     }
   });
 
+  test("unmapped completion signals do not route parallel tasks through single finalization", async () => {
+    extractAssistantResultFromMessagesMock.mockReturnValue({
+      completed: true,
+      failed: false,
+      error: undefined,
+      tokenUsed: 0,
+      text: "Late answer",
+      traceId: "trace-late-1",
+    });
+    findAgentRunBySessionIdMock.mockReturnValue({
+      subSessionId: "ses-1",
+      status: "running",
+      taskId: "task-1",
+      projectId: "proj-1",
+    });
+    getSessionMessagesMock.mockResolvedValue({
+      ok: true,
+      data: [
+        {
+          info: {
+            role: "assistant",
+            time: { completed: Date.parse("2026-03-12T10:03:00.000Z") },
+          },
+          parts: [{ type: "text", text: "Late answer" }],
+        },
+      ],
+    });
+    cpFetchMock.mockImplementation(async (url: string, options?: { method?: string }) => {
+      if ((options?.method || "GET") === "GET" && url === "/api/project-tree/tasks/task-1") {
+        return {
+          ok: true,
+          status: 200,
+          data: createTaskDetailRecord({
+            status: "running",
+            orchestrationKind: "parallel",
+            sessionId: "ses-main",
+            agentRunId: "run-main",
+          }),
+        };
+      }
+
+      if ((options?.method || "GET") === "GET" && url === "/api/tasks/task-1/sessions") {
+        return {
+          ok: true,
+          status: 200,
+          data: {
+            data: [
+              {
+                id: "task-session:task-1:ses-1",
+                runtimeSessionId: "ses-1",
+                isActive: true,
+                archivedAt: null,
+              },
+            ],
+            meta: {
+              currentSessionId: "task-session:task-1:ses-1",
+            },
+          },
+        };
+      }
+
+      return { ok: true, status: 200, data: { ok: true } };
+    });
+
+    const emitted: Array<Record<string, unknown>> = [];
+    const unsubscribe = sseAggregator.onEvent((event) => {
+      emitted.push(event as unknown as Record<string, unknown>);
+    });
+
+    try {
+      await (
+        sseAggregator as unknown as {
+          maybeFinalizeRun: (event: Record<string, unknown>) => Promise<void>;
+        }
+      ).maybeFinalizeRun({
+        id: "evt-session-idle-late",
+        type: "session.idle",
+        ts: "2026-03-12T10:03:00.000Z",
+        sessionId: "ses-1",
+        taskId: "task-1",
+        projectId: "proj-1",
+        agentRunId: "run-1",
+        data: {},
+      });
+
+      expect(updateAgentRunStatusMock).toHaveBeenCalledWith("run-1", "completed");
+      expect(emitted.some((event) => event.type === "task.completed")).toBe(false);
+      expect(buildPipelineStageUpdatedEventsMock).not.toHaveBeenCalled();
+      expect(cpFetchMock).not.toHaveBeenCalledWith(
+        "/api/tasks/task-1",
+        expect.objectContaining({
+          method: "PATCH",
+          body: expect.objectContaining({ status: "completed" }),
+        }),
+      );
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  test("completion signals recover parallel candidate tracking from task-session lineage", async () => {
+    extractAssistantResultFromMessagesMock.mockReturnValue({
+      completed: true,
+      failed: false,
+      error: undefined,
+      tokenUsed: 0,
+      text: "Recovered answer",
+      traceId: "trace-recovered-1",
+    });
+    findAgentRunBySessionIdMock.mockImplementation((sessionId?: string) => {
+      if (sessionId === "ses-2") {
+        return {
+          agentRunId: "run-2",
+          subSessionId: "ses-2",
+          status: "running",
+          taskId: "task-1",
+          projectId: "proj-1",
+        };
+      }
+      return undefined;
+    });
+    getSessionMessagesMock.mockResolvedValue({
+      ok: true,
+      data: [
+        {
+          info: {
+            role: "assistant",
+            time: { completed: Date.parse("2026-03-12T10:04:00.000Z") },
+          },
+          parts: [{ type: "text", text: "Recovered answer" }],
+        },
+      ],
+    });
+    cpFetchMock.mockImplementation(async (url: string, options?: { method?: string; body?: any }) => {
+      if ((options?.method || "GET") === "GET" && url === "/api/tasks/task-1/sessions") {
+        return {
+          ok: true,
+          status: 200,
+          data: {
+            data: [
+              {
+                id: "task-session:task-1:ses-1",
+                taskId: "task-1",
+                runtimeSessionId: "ses-1",
+                phaseId: "phase-1",
+                phaseRole: "candidate",
+                phaseItemIndex: 0,
+                sessionKind: "candidate",
+                candidateIndex: 0,
+                executionModeSnapshot: "parallel",
+                executionStatus: "completed",
+                archivedAt: null,
+              },
+              {
+                id: "task-session:task-1:ses-2",
+                taskId: "task-1",
+                runtimeSessionId: "ses-2",
+                phaseId: "phase-1",
+                phaseRole: "candidate",
+                phaseItemIndex: 1,
+                sessionKind: "candidate",
+                candidateIndex: 1,
+                executionModeSnapshot: "parallel",
+                executionStatus: "running",
+                archivedAt: null,
+              },
+            ],
+            meta: {
+              currentSessionId: "task-session:task-1:ses-2",
+            },
+          },
+        };
+      }
+
+      if ((options?.method || "GET") === "GET" && url === "/api/project-tree/tasks/task-1") {
+        return {
+          ok: true,
+          status: 200,
+          data: createTaskDetailRecord({
+            status: "running",
+            orchestrationKind: null,
+            sessionId: "ses-main",
+            agentRunId: "run-main",
+            result: null,
+          }),
+        };
+      }
+
+      if (options?.method === "POST" && url === "/api/tasks/task-1/phases") {
+        return {
+          ok: true,
+          status: 200,
+          data: {
+            id: "phase-1",
+            status: "awaiting_adoption",
+            awaitingAdoptionSince: "2026-04-08T03:18:24.437Z",
+          },
+        };
+      }
+
+      return { ok: true, status: 200, data: { ok: true, body: options?.body } };
+    });
+
+    const aggregator = sseAggregator as unknown as {
+      maybeFinalizeRun: (event: Record<string, unknown>) => Promise<void>;
+      parallelCandidateResults: Map<string, Map<number, { sessionId: string; result?: string }>>;
+    };
+    aggregator.parallelCandidateResults.set(
+      "task-1",
+      new Map([[0, { sessionId: "ses-1", result: "Answer A" }]]),
+    );
+
+    const emitted: Array<Record<string, unknown>> = [];
+    const unsubscribe = sseAggregator.onEvent((event) => {
+      emitted.push(event as unknown as Record<string, unknown>);
+    });
+
+    try {
+      await aggregator.maybeFinalizeRun({
+        id: "evt-session-idle-recovered",
+        type: "session.idle",
+        ts: "2026-03-12T10:04:00.000Z",
+        sessionId: "ses-2",
+        taskId: "task-1",
+        projectId: "proj-1",
+        agentRunId: "run-2",
+        data: {},
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      const calls = cpFetchMock.mock.calls as unknown as Array<
+        [string, { method?: string; authorization?: string; body?: Record<string, unknown> }]
+      >;
+      const completedPatchCall = calls.find(
+        ([url, options]) =>
+          url === "/api/tasks/task-1" &&
+          options?.method === "PATCH" &&
+          options.body?.status === "completed",
+      );
+      const awaitingPatchCall = calls.find(
+        ([url, options]) =>
+          url === "/api/tasks/task-1" &&
+          options?.method === "PATCH" &&
+          options.body?.status === "awaiting_adoption",
+      );
+
+      expect(completedPatchCall).toBeUndefined();
+      expect(awaitingPatchCall).toBeDefined();
+      expect(emitted).toContainEqual(
+        expect.objectContaining({
+          type: "agent.completed",
+          taskId: "task-1",
+          sessionId: "ses-2",
+          data: expect.objectContaining({
+            candidateIndex: 1,
+            executionMode: "parallel",
+          }),
+        }),
+      );
+      expect(emitted).toContainEqual(
+        expect.objectContaining({
+          type: "task.phase.awaiting_adoption",
+          taskId: "task-1",
+          phaseId: "phase-1",
+        }),
+      );
+    } finally {
+      unsubscribe();
+    }
+  });
+
   test("parallel finalization keeps winner selection manual", async () => {
     cpFetchMock.mockImplementation(
       async (url: string, options?: { method?: string; body?: unknown }) => {
+        if ((options?.method || "GET") === "GET" && url === "/api/tasks/task-1/sessions") {
+          return {
+            ok: true,
+            status: 200,
+            data: {
+              data: [
+                {
+                  id: "task-session:task-1:ses-1",
+                  taskId: "task-1",
+                  runtimeSessionId: "ses-1",
+                  phaseId: "phase-1",
+                  phaseRole: "candidate",
+                  phaseItemIndex: 0,
+                  sessionKind: "candidate",
+                  candidateIndex: 0,
+                  executionModeSnapshot: "parallel",
+                  executionStatus: "complete",
+                  archivedAt: null,
+                },
+                {
+                  id: "task-session:task-1:ses-2",
+                  taskId: "task-1",
+                  runtimeSessionId: "ses-2",
+                  phaseId: "phase-1",
+                  phaseRole: "candidate",
+                  phaseItemIndex: 1,
+                  sessionKind: "candidate",
+                  candidateIndex: 1,
+                  executionModeSnapshot: "parallel",
+                  executionStatus: "complete",
+                  archivedAt: null,
+                },
+              ],
+              meta: {
+                currentSessionId: "task-session:task-1:ses-2",
+              },
+            },
+          };
+        }
+
         if ((options?.method || "GET") === "GET" && url === "/api/project-tree/tasks/task-1") {
           return {
             ok: true,
@@ -1253,6 +1566,18 @@ describe("SSEAggregator pipeline emitters", () => {
           };
         }
 
+        if (options?.method === "POST" && url === "/api/tasks/task-1/phases") {
+          return {
+            ok: true,
+            status: 200,
+            data: {
+              id: "phase-1",
+              status: "awaiting_adoption",
+              awaitingAdoptionSince: "2026-04-08T03:18:24.437Z",
+            },
+          };
+        }
+
         return { ok: true, status: 200, data: { ok: true, body: options?.body } };
       },
     );
@@ -1260,6 +1585,7 @@ describe("SSEAggregator pipeline emitters", () => {
     const aggregator = sseAggregator as unknown as {
       parallelCandidateResults: Map<string, Map<number, { sessionId: string; result?: string }>>;
       parallelTaskSessions: Map<string, Set<string>>;
+      parallelTaskPhaseIds: Map<string, string>;
       finalizeParallelTask: (
         taskId: string,
         projectId: string,
@@ -1274,6 +1600,7 @@ describe("SSEAggregator pipeline emitters", () => {
       ]),
     );
     aggregator.parallelTaskSessions.set("task-1", new Set(["ses-1", "ses-2"]));
+    aggregator.parallelTaskPhaseIds.set("task-1", "phase-1");
 
     const emitted: Array<Record<string, unknown>> = [];
     const unsubscribe = sseAggregator.onEvent((event) => {
@@ -1289,24 +1616,169 @@ describe("SSEAggregator pipeline emitters", () => {
         >
       ).find(([url, options]) => url === "/api/tasks/task-1" && options?.method === "PATCH");
       expect(taskPatchCall).toBeDefined();
-      expect(taskPatchCall?.[1]?.body?.status).toBe("completed");
+      expect(taskPatchCall?.[1]?.body?.status).toBe("awaiting_adoption");
       expect(taskPatchCall?.[1]?.body?.result).toBeUndefined();
       expect(taskPatchCall?.[1]?.body).not.toHaveProperty("executionPlan");
+
+      const phaseUpsertCall = (
+        cpFetchMock.mock.calls as unknown as Array<
+          [string, { method?: string; authorization?: string; body?: Record<string, unknown> }]
+        >
+      ).find(([url, options]) => url === "/api/tasks/task-1/phases" && options?.method === "POST");
+      expect(phaseUpsertCall).toBeDefined();
+      expect(phaseUpsertCall?.[1]?.body).toMatchObject({
+        id: "phase-1",
+        phaseKind: "parallel",
+        status: "awaiting_adoption",
+        candidateCount: 2,
+      });
+
       expect(emitted).toContainEqual(
         expect.objectContaining({
-          type: "task.completed",
+          type: "task.phase.awaiting_adoption",
           taskId: "task-1",
           projectId: "proj-1",
+          phaseId: "phase-1",
           data: expect.objectContaining({
-            status: "completed",
-            executionMode: "parallel",
-            awaitingUserAdoption: true,
+            phaseId: "phase-1",
+            status: "awaiting_adoption",
+            candidateCount: 2,
+            awaitingAdoptionSince: "2026-04-08T03:18:24.437Z",
           }),
         }),
       );
       expect(buildPipelineStageUpdatedEventsMock).toHaveBeenCalledWith(
-        expect.objectContaining({ reason: "task.completed" }),
+        expect.objectContaining({ reason: "task.phase.awaiting_adoption" }),
       );
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  test("parallel finalization waits for all tracked candidates to settle before awaiting adoption", async () => {
+    findAgentRunBySessionIdMock.mockImplementation((sessionId?: string) => {
+      if (sessionId === "ses-2") {
+        return {
+          agentRunId: "run-2",
+          subSessionId: "ses-2",
+          status: "running",
+          taskId: "task-1",
+          projectId: "proj-1",
+        };
+      }
+      return undefined;
+    });
+    getSessionMessagesMock.mockResolvedValue({ ok: true, data: [] });
+    cpFetchMock.mockImplementation(
+      async (url: string, options?: { method?: string; body?: unknown }) => {
+        if ((options?.method || "GET") === "GET" && url === "/api/tasks/task-1/sessions") {
+          return {
+            ok: true,
+            status: 200,
+            data: {
+              data: [
+                {
+                  id: "task-session:task-1:ses-1",
+                  taskId: "task-1",
+                  runtimeSessionId: "ses-1",
+                  phaseId: "phase-1",
+                  phaseRole: "candidate",
+                  phaseItemIndex: 0,
+                  sessionKind: "candidate",
+                  candidateIndex: 0,
+                  executionModeSnapshot: "parallel",
+                  executionStatus: "complete",
+                  archivedAt: null,
+                },
+                {
+                  id: "task-session:task-1:ses-2",
+                  taskId: "task-1",
+                  runtimeSessionId: "ses-2",
+                  phaseId: "phase-1",
+                  phaseRole: "candidate",
+                  phaseItemIndex: 1,
+                  sessionKind: "candidate",
+                  candidateIndex: 1,
+                  executionModeSnapshot: "parallel",
+                  executionStatus: "running",
+                  archivedAt: null,
+                },
+              ],
+              meta: {
+                currentSessionId: "task-session:task-1:ses-2",
+              },
+            },
+          };
+        }
+
+        if ((options?.method || "GET") === "GET" && url === "/api/project-tree/tasks/task-1") {
+          return {
+            ok: true,
+            status: 200,
+            data: createTaskDetailRecord({
+              status: "running",
+              orchestrationKind: "parallel",
+              sessionId: "ses-main",
+              agentRunId: "run-main",
+              result: null,
+            }),
+          };
+        }
+
+        return { ok: true, status: 200, data: { ok: true, body: options?.body } };
+      },
+    );
+
+    const aggregator = sseAggregator as unknown as {
+      parallelCandidateResults: Map<string, Map<number, { sessionId: string; result?: string }>>;
+      parallelTaskSessions: Map<string, Set<string>>;
+      parallelTaskPhaseIds: Map<string, string>;
+      judgingTasks: Set<string>;
+      finalizeParallelTask: (
+        taskId: string,
+        projectId: string,
+        authorization: string,
+      ) => Promise<void>;
+    };
+    aggregator.parallelCandidateResults.set(
+      "task-1",
+      new Map([
+        [0, { sessionId: "ses-1", result: "Answer A" }],
+        [1, { sessionId: "ses-2", result: "Answer B" }],
+      ]),
+    );
+    aggregator.parallelTaskSessions.set("task-1", new Set(["ses-1", "ses-2"]));
+    aggregator.parallelTaskPhaseIds.set("task-1", "phase-1");
+
+    const emitted: Array<Record<string, unknown>> = [];
+    const unsubscribe = sseAggregator.onEvent((event) => {
+      emitted.push(event as unknown as Record<string, unknown>);
+    });
+
+    try {
+      await aggregator.finalizeParallelTask("task-1", "proj-1", "Bearer internal");
+
+      const awaitingPatchCall = (
+        cpFetchMock.mock.calls as unknown as Array<
+          [string, { method?: string; authorization?: string; body?: Record<string, unknown> }]
+        >
+      ).find(
+        ([url, options]) =>
+          url === "/api/tasks/task-1" &&
+          options?.method === "PATCH" &&
+          options.body?.status === "awaiting_adoption",
+      );
+      expect(awaitingPatchCall).toBeUndefined();
+      expect(
+        (cpFetchMock.mock.calls as unknown as Array<[string, { method?: string } | undefined]>).some(
+          ([url, options]) => url === "/api/tasks/task-1/phases" && options?.method === "POST",
+        ),
+      ).toBe(false);
+      expect(emitted.some((event) => event.type === "task.phase.awaiting_adoption")).toBe(false);
+      expect(buildPipelineStageUpdatedEventsMock).not.toHaveBeenCalled();
+      expect(aggregator.parallelTaskSessions.get("task-1")?.size).toBe(2);
+      expect(aggregator.parallelCandidateResults.get("task-1")?.size).toBe(2);
+      expect(aggregator.judgingTasks.has("task-1")).toBe(false);
     } finally {
       unsubscribe();
     }
@@ -1515,11 +1987,13 @@ describe("SSEAggregator pipeline emitters", () => {
       expect.objectContaining({
         runtimeSessionId: "ses-1",
         message: expect.objectContaining({
+          id: "ses-1:tool:call-1",
           role: "tool",
           part: expect.objectContaining({
             type: "tool",
             tool: "search_code",
             callID: "call-1",
+            messageID: "ses-1:tool:call-1",
             state: expect.objectContaining({
               status: "running",
             }),
@@ -1532,11 +2006,12 @@ describe("SSEAggregator pipeline emitters", () => {
         runtimeSessionId: "ses-1",
         message: expect.objectContaining({
           role: "tool",
-          id: "tool:call-1",
+          id: "ses-1:tool:call-1",
           part: expect.objectContaining({
             type: "tool",
             tool: "search_code",
             callID: "call-1",
+            messageID: "ses-1:tool:call-1",
             state: expect.objectContaining({
               status: "completed",
               output: "match found",
@@ -1550,6 +2025,46 @@ describe("SSEAggregator pipeline emitters", () => {
   test("parallel question tools are failed instead of staying running forever", async () => {
     cpFetchMock.mockImplementation(
       async (url: string, options?: { method?: string; body?: unknown }) => {
+        if ((options?.method || "GET") === "GET" && url === "/api/tasks/task-1/sessions") {
+          return {
+            ok: true,
+            status: 200,
+            data: {
+              data: [
+                {
+                  id: "task-session:task-1:ses-1",
+                  taskId: "task-1",
+                  runtimeSessionId: "ses-1",
+                  phaseId: "phase-1",
+                  phaseRole: "candidate",
+                  phaseItemIndex: 0,
+                  sessionKind: "candidate",
+                  candidateIndex: 0,
+                  executionModeSnapshot: "parallel",
+                  executionStatus: "complete",
+                  archivedAt: null,
+                },
+                {
+                  id: "task-session:task-1:ses-2",
+                  taskId: "task-1",
+                  runtimeSessionId: "ses-2",
+                  phaseId: "phase-1",
+                  phaseRole: "candidate",
+                  phaseItemIndex: 1,
+                  sessionKind: "candidate",
+                  candidateIndex: 1,
+                  executionModeSnapshot: "parallel",
+                  executionStatus: "complete",
+                  archivedAt: null,
+                },
+              ],
+              meta: {
+                currentSessionId: "task-session:task-1:ses-2",
+              },
+            },
+          };
+        }
+
         if ((options?.method || "GET") === "GET" && url === "/api/project-tree/tasks/task-1") {
           return {
             ok: true,
@@ -1640,6 +2155,46 @@ describe("SSEAggregator pipeline emitters", () => {
   test("parallel candidate question failures stop patching legacy runtime plan once run projection is available", async () => {
     cpFetchMock.mockImplementation(
       async (url: string, options?: { method?: string; body?: unknown }) => {
+        if ((options?.method || "GET") === "GET" && url === "/api/tasks/task-1/sessions") {
+          return {
+            ok: true,
+            status: 200,
+            data: {
+              data: [
+                {
+                  id: "task-session:task-1:ses-1",
+                  taskId: "task-1",
+                  runtimeSessionId: "ses-1",
+                  phaseId: "phase-1",
+                  phaseRole: "candidate",
+                  phaseItemIndex: 0,
+                  sessionKind: "candidate",
+                  candidateIndex: 0,
+                  executionModeSnapshot: "parallel",
+                  executionStatus: "complete",
+                  archivedAt: null,
+                },
+                {
+                  id: "task-session:task-1:ses-2",
+                  taskId: "task-1",
+                  runtimeSessionId: "ses-2",
+                  phaseId: "phase-1",
+                  phaseRole: "candidate",
+                  phaseItemIndex: 1,
+                  sessionKind: "candidate",
+                  candidateIndex: 1,
+                  executionModeSnapshot: "parallel",
+                  executionStatus: "complete",
+                  archivedAt: null,
+                },
+              ],
+              meta: {
+                currentSessionId: "task-session:task-1:ses-2",
+              },
+            },
+          };
+        }
+
         if ((options?.method || "GET") === "GET" && url === "/api/project-tree/tasks/task-1") {
           return {
             ok: true,
@@ -1716,6 +2271,46 @@ describe("SSEAggregator pipeline emitters", () => {
   test("projection-backed parallel finalization stops patching legacy runtime plan", async () => {
     cpFetchMock.mockImplementation(
       async (url: string, options?: { method?: string; body?: unknown }) => {
+        if ((options?.method || "GET") === "GET" && url === "/api/tasks/task-1/sessions") {
+          return {
+            ok: true,
+            status: 200,
+            data: {
+              data: [
+                {
+                  id: "task-session:task-1:ses-1",
+                  taskId: "task-1",
+                  runtimeSessionId: "ses-1",
+                  phaseId: "phase-1",
+                  phaseRole: "candidate",
+                  phaseItemIndex: 0,
+                  sessionKind: "candidate",
+                  candidateIndex: 0,
+                  executionModeSnapshot: "parallel",
+                  executionStatus: "complete",
+                  archivedAt: null,
+                },
+                {
+                  id: "task-session:task-1:ses-2",
+                  taskId: "task-1",
+                  runtimeSessionId: "ses-2",
+                  phaseId: "phase-1",
+                  phaseRole: "candidate",
+                  phaseItemIndex: 1,
+                  sessionKind: "candidate",
+                  candidateIndex: 1,
+                  executionModeSnapshot: "parallel",
+                  executionStatus: "complete",
+                  archivedAt: null,
+                },
+              ],
+              meta: {
+                currentSessionId: "task-session:task-1:ses-2",
+              },
+            },
+          };
+        }
+
         if ((options?.method || "GET") === "GET" && url === "/api/project-tree/tasks/task-1") {
           return {
             ok: true,
@@ -1734,6 +2329,18 @@ describe("SSEAggregator pipeline emitters", () => {
           };
         }
 
+        if (options?.method === "POST" && url === "/api/tasks/task-1/phases") {
+          return {
+            ok: true,
+            status: 200,
+            data: {
+              id: "phase-1",
+              status: "awaiting_adoption",
+              awaitingAdoptionSince: "2026-04-08T03:18:24.437Z",
+            },
+          };
+        }
+
         return { ok: true, status: 200, data: { ok: true, body: options?.body } };
       },
     );
@@ -1741,6 +2348,7 @@ describe("SSEAggregator pipeline emitters", () => {
     const aggregator = sseAggregator as unknown as {
       parallelCandidateResults: Map<string, Map<number, { sessionId: string; result?: string }>>;
       parallelTaskSessions: Map<string, Set<string>>;
+      parallelTaskPhaseIds: Map<string, string>;
       finalizeParallelTask: (
         taskId: string,
         projectId: string,
@@ -1755,6 +2363,7 @@ describe("SSEAggregator pipeline emitters", () => {
       ]),
     );
     aggregator.parallelTaskSessions.set("task-1", new Set(["ses-1", "ses-2"]));
+    aggregator.parallelTaskPhaseIds.set("task-1", "phase-1");
 
     await aggregator.finalizeParallelTask("task-1", "proj-1", "Bearer internal");
 
@@ -1764,7 +2373,7 @@ describe("SSEAggregator pipeline emitters", () => {
       >
     ).find(([url, options]) => url === "/api/tasks/task-1" && options?.method === "PATCH");
     expect(taskPatchCall).toBeDefined();
-    expect(taskPatchCall?.[1]?.body?.status).toBe("completed");
+    expect(taskPatchCall?.[1]?.body?.status).toBe("awaiting_adoption");
     expect(taskPatchCall?.[1]?.body).not.toHaveProperty("executionPlan");
   });
 

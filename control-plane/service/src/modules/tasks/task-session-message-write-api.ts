@@ -1094,6 +1094,31 @@ function normalizeTaskSessionMessagePartToolStatus(
   return partType === "tool_result" ? "completed" : "running";
 }
 
+function hasPendingAssistantToolContinuation(args: {
+  message: Record<string, unknown>;
+  parts: Record<string, unknown>[];
+}) {
+  const info = asTaskSessionMessageRecord(args.message.info);
+  const finish = asTaskSessionMessageString(info?.finish)?.toLowerCase() ?? null;
+  if (
+    finish === "tool-calls" ||
+    finish === "tool_calls" ||
+    finish === "tool-call" ||
+    finish === "tool_call"
+  ) {
+    return true;
+  }
+
+  return args.parts.some((part) => {
+    const partType = normalizeTaskSessionMessagePartType(part);
+    if (partType !== "tool_call" && partType !== "tool_result") {
+      return false;
+    }
+
+    return normalizeTaskSessionMessagePartToolStatus(part) === "running";
+  });
+}
+
 function mapTaskToolExecutionStatusToNodeStatus(
   status: TaskToolExecutionStatus,
 ): TaskSessionNodeStatus {
@@ -1735,7 +1760,12 @@ export function createTaskSessionMessageWriteApi(deps: {
   function resolveTaskSessionMessageNodeStatus(
     role: TaskSessionMessageRole,
     persistedStatus: TaskSessionMessageStatus,
+    assistantContinuationPending: boolean,
   ) {
+    if (role === "assistant" && assistantContinuationPending) {
+      return "running" as const;
+    }
+
     return role === "assistant"
       ? mapTaskSessionMessageStatusToNodeStatus(persistedStatus)
       : ("running" as const);
@@ -1746,7 +1776,12 @@ export function createTaskSessionMessageWriteApi(deps: {
     persistedStatus: TaskSessionMessageStatus;
     persistedCompletedAt: string | null;
     updatedAt: string;
+    assistantContinuationPending: boolean;
   }) {
+    if (args.role === "assistant" && args.assistantContinuationPending) {
+      return null;
+    }
+
     return args.role === "assistant" &&
       args.persistedStatus !== "pending" &&
       args.persistedStatus !== "streaming"
@@ -1774,6 +1809,12 @@ export function createTaskSessionMessageWriteApi(deps: {
       persistenceState,
     });
     const runState = await loadTaskSessionMessageRunState(args.sessionId);
+    const assistantContinuationPending =
+      args.routing.incomingMessage.role === "assistant" &&
+      hasPendingAssistantToolContinuation({
+        message: persistedState.persistedPayload,
+        parts: persistedState.persistedParts,
+      });
 
     return {
       task: args.task,
@@ -1784,9 +1825,11 @@ export function createTaskSessionMessageWriteApi(deps: {
       sessionRecord: runState.sessionRecord,
       defaultRunId: runState.defaultRunId,
       messagePreview: buildTaskMessagePreview(persistedState.persistedTextContent),
+      assistantContinuationPending,
       taskMessageStatus: resolveTaskSessionMessageNodeStatus(
         args.routing.incomingMessage.role,
         persistedState.persistedStatus,
+        assistantContinuationPending,
       ),
       ...persistedState,
     };
@@ -1798,13 +1841,11 @@ export function createTaskSessionMessageWriteApi(deps: {
 
   function buildTaskSessionRunContextValues(context: TaskSessionMessageWriteContext) {
     return {
+      phaseId: context.sessionRecord?.phaseId ?? null,
       runtimeSessionId: context.sessionRecord?.runtimeSessionId ?? context.runtimeSessionId ?? null,
       triggerType: mapLegacyTriggerTypeToRunTriggerType(context.sessionRecord?.triggerType ?? null),
       executionKind: mapLegacySessionKindToRunExecutionKind(context.sessionRecord?.sessionKind),
-      coordinationKey:
-        context.sessionRecord?.coordinationKey ??
-        context.sessionRecord?.rootSessionId ??
-        context.sessionId,
+      coordinationKey: null,
       operationId: context.sessionRecord?.operationId ?? null,
       candidateIndex: context.sessionRecord?.candidateIndex ?? null,
       laneRole: mapLegacySessionKindToRunLaneRole(context.sessionRecord?.sessionKind),
@@ -1825,6 +1866,7 @@ export function createTaskSessionMessageWriteApi(deps: {
       persistedStatus: context.persistedStatus,
       persistedCompletedAt: context.persistedCompletedAt,
       updatedAt: context.updatedAt,
+      assistantContinuationPending: context.assistantContinuationPending,
     });
 
     return {
@@ -1909,6 +1951,7 @@ export function createTaskSessionMessageWriteApi(deps: {
       status: context.persistedStatus,
       errorText: context.persistedErrorText,
       startedAt: context.persistedStartedAt,
+      createdAt: context.persistedCreatedAt,
       updatedAt: context.updatedAt,
       completedAt: context.persistedCompletedAt,
     };
@@ -1995,6 +2038,7 @@ export function createTaskSessionMessageWriteApi(deps: {
         role: context.role,
       },
       sortAt: context.persistedCompletedAt ?? context.persistedCreatedAt,
+      createdAt: context.persistedCreatedAt,
       updatedAt: context.updatedAt,
     };
   }
@@ -2008,6 +2052,7 @@ export function createTaskSessionMessageWriteApi(deps: {
 
     if (context.role === "user") {
       sessionUpdates.status = "running";
+      sessionUpdates.executionStatus = "running";
       if (!context.sessionRecord?.userPromptSummary) {
         sessionUpdates.userPromptSummary = context.messagePreview;
       }
@@ -2018,26 +2063,36 @@ export function createTaskSessionMessageWriteApi(deps: {
       if (!context.sessionRecord?.status || context.sessionRecord.status === "queued") {
         sessionUpdates.status = "running";
       }
+      if (
+        !context.sessionRecord?.executionStatus ||
+        context.sessionRecord.executionStatus === "queued"
+      ) {
+        sessionUpdates.executionStatus = "running";
+      }
       return sessionUpdates;
     }
 
-    if (context.persistedStatus === "completed") {
+    if (context.taskMessageStatus === "completed") {
       sessionUpdates.status = "completed";
+      sessionUpdates.executionStatus = "complete";
       sessionUpdates.headMessageId = context.persistedMessageId;
       return sessionUpdates;
     }
 
-    if (context.persistedStatus === "failed") {
+    if (context.taskMessageStatus === "failed") {
       sessionUpdates.status = "failed";
+      sessionUpdates.executionStatus = "failed";
       return sessionUpdates;
     }
 
-    if (context.persistedStatus === "cancelled") {
+    if (context.taskMessageStatus === "cancelled") {
       sessionUpdates.status = "cancelled";
+      sessionUpdates.executionStatus = "cancelled";
       return sessionUpdates;
     }
 
     sessionUpdates.status = "running";
+    sessionUpdates.executionStatus = "running";
     return sessionUpdates;
   }
 

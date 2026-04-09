@@ -9,11 +9,13 @@ import {
   buildExplicitParallelTaskSessionGroups,
   isExplicitParallelCandidateSession,
 } from "../../control-plane/web-ui/src/lib/task-session-parallel-groups";
+import { resolveSessionSummaryWinnerCandidateIndex } from "../../control-plane/web-ui/src/lib/task-detail-parallel-runtime";
 
 function buildSessionRecord(overrides: Partial<TaskSessionRecord>): TaskSessionRecord {
   return {
     id: "session-default",
     taskSessionId: "task-session:task-1:session-default",
+    phaseId: null,
     parentRuntimeSessionId: null,
     title: "session-default",
     isActive: false,
@@ -38,7 +40,7 @@ describe("task session parallel groups", () => {
       id: "ses-a",
       taskSessionId: "task-session:task-1:ses-a",
       parentRuntimeSessionId: "ses-root",
-      coordinationKey: "ses-root",
+      phaseId: "phase-root",
       sessionKind: "candidate",
       executionModeSnapshot: "parallel",
       candidateIndex: 0,
@@ -76,9 +78,10 @@ describe("task session parallel groups", () => {
       buildSessionRecord({
         id: "ses-a",
         taskSessionId: "task-session:task-1:ses-a",
+        phaseId: "phase-root",
         parentRuntimeSessionId: "ses-root",
         title: "候选 A",
-        coordinationKey: "ses-root",
+        coordinationKey: null,
         winnerSessionId: "ses-a",
         sessionKind: "candidate",
         executionModeSnapshot: "parallel",
@@ -90,9 +93,10 @@ describe("task session parallel groups", () => {
       buildSessionRecord({
         id: "ses-b",
         taskSessionId: "task-session:task-1:ses-b",
+        phaseId: "phase-root",
         parentRuntimeSessionId: "ses-root",
         title: "候选 B",
-        coordinationKey: "ses-root",
+        coordinationKey: null,
         winnerSessionId: "ses-a",
         sessionKind: "candidate",
         executionModeSnapshot: "parallel",
@@ -106,7 +110,7 @@ describe("task session parallel groups", () => {
     const explicitGroups = buildExplicitParallelTaskSessionGroups(sessionSummaries);
     expect(hasSessionSummaryParallelGroups(sessionSummaries)).toBe(true);
     expect(explicitGroups).toHaveLength(1);
-    expect(explicitGroups[0]?.coordinationKey).toBe("ses-root");
+    expect(explicitGroups[0]?.phaseId).toBe("phase-root");
     expect(explicitGroups[0]?.candidateSessions.map((session) => session.id)).toEqual([
       "ses-a",
       "ses-b",
@@ -129,7 +133,7 @@ describe("task session parallel groups", () => {
 
     expect(parallelRuns).toEqual([
       expect.objectContaining({
-        parallelRunId: "task-session:ses-root",
+        parallelRunId: "task-session:phase-root",
         parentSessionId: "ses-root",
         executionSessionId: "ses-root",
         winnerCandidateIndex: 0,
@@ -139,5 +143,68 @@ describe("task session parallel groups", () => {
         ],
       }),
     ]);
+  });
+
+  it("ignores explicit parallel candidates without a canonical phaseId", () => {
+    const sessionSummaries = [
+      buildSessionRecord({
+        id: "ses-a",
+        taskSessionId: "task-session:task-1:ses-a",
+        parentRuntimeSessionId: "ses-root",
+        coordinationKey: "legacy-group-1",
+        winnerSessionId: "ses-b",
+        sessionKind: "candidate",
+        executionModeSnapshot: "parallel",
+        candidateIndex: 0,
+      }),
+      buildSessionRecord({
+        id: "ses-b",
+        taskSessionId: "task-session:task-1:ses-b",
+        parentRuntimeSessionId: "ses-root",
+        coordinationKey: "legacy-group-1",
+        winnerSessionId: "ses-b",
+        sessionKind: "candidate",
+        executionModeSnapshot: "parallel",
+        candidateIndex: 1,
+      }),
+    ];
+
+    const explicitGroups = buildExplicitParallelTaskSessionGroups(sessionSummaries);
+
+    expect(explicitGroups).toHaveLength(0);
+  });
+
+  it("resolves winner candidate index from phaseId-only candidate summaries", () => {
+    const sessionSummaries = [
+      buildSessionRecord({
+        id: "ses-a",
+        taskSessionId: "task-session:task-1:ses-a",
+        phaseId: "phase-root",
+        sessionKind: "candidate",
+        executionModeSnapshot: "parallel",
+        candidateIndex: 0,
+        winnerSessionId: "ses-b",
+      }),
+      buildSessionRecord({
+        id: "ses-b",
+        taskSessionId: "task-session:task-1:ses-b",
+        phaseId: "phase-root",
+        sessionKind: "candidate",
+        executionModeSnapshot: "parallel",
+        candidateIndex: 1,
+        winnerSessionId: "ses-b",
+      }),
+    ];
+
+    const winnerCandidateIndex = resolveSessionSummaryWinnerCandidateIndex(
+      {
+        parallelRunId: "task-session:phase-root",
+        startedAt: "2026-04-08T14:00:00.000Z",
+        candidateSessions: [{ sessionId: "ses-a" }, { sessionId: "ses-b" }],
+      } as never,
+      sessionSummaries,
+    );
+
+    expect(winnerCandidateIndex).toBe(1);
   });
 });

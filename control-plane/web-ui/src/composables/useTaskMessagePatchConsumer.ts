@@ -30,7 +30,7 @@ export function useTaskMessagePatchConsumer(taskIds: Ref<string[]>) {
   }
 
   function getLiveAssistantState(taskId: string, sessionId: string | undefined) {
-    return liveAssistantStateManager.getLiveAssistantState(
+    return liveAssistantStateManager.replaceLiveAssistantStateFromHistory(
       taskId,
       sessionId,
       getTaskPatchEvents(taskId),

@@ -2,6 +2,7 @@ import type { ProjectionRunRecord, TaskSessionRecord } from "./api";
 import type { TaskConversationListItem } from "./message-normalize";
 import type { TreeTask } from "../composables/useProjectTreeTask";
 import type { TreeSessionNodeRecord } from "../composables/useTreeBranches";
+import { resolveExplicitParallelPhaseId } from "./task-session-parallel-groups";
 
 export type ParallelRunRecord = ProjectionRunRecord;
 
@@ -55,12 +56,12 @@ export function resolveSessionSummaryWinnerCandidateIndex(
     return undefined;
   }
 
-  const coordinationKeys = new Set(
+  const phaseIds = new Set(
     candidateSummaries
-      .map((summary) => summary.coordinationKey)
+      .map((summary) => resolveExplicitParallelPhaseId(summary))
       .filter((value): value is string => typeof value === "string" && value.length > 0),
   );
-  if (coordinationKeys.size > 1) {
+  if (phaseIds.size > 1) {
     return undefined;
   }
 
@@ -336,6 +337,7 @@ export function buildSessionTreeFallbackParallelRun(
 
   return {
     parallelRunId: `tree-fallback:${rootSessionId || args.task?.id || "current"}`,
+    phaseId: undefined,
     startedAt: startedAt ?? "",
     finishedAt,
     ...(anchorMessageId ? { anchorMessageId } : {}),

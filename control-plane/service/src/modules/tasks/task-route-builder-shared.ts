@@ -11,6 +11,7 @@ import { createTaskOperationWriteApi } from "./session-operation-write-api";
 import { buildTaskTreeSnapshotFromRecord, createTaskAggregateSyncApi } from "./task-aggregate-sync";
 import { createTaskArtifactWriteApi } from "./task-artifact-write-api";
 import { createTaskBranchWriteApi } from "./task-branch-write";
+import { createTaskPhaseWriteApi } from "./task-phase-write-api";
 import { resolvePublicTaskSessionSourceType } from "./task-session-public-source-type";
 import { createTaskSessionMessageApi } from "./task-session-message-api";
 import { createTaskSessionMessageWriteApi } from "./task-session-message-write-api";
@@ -31,7 +32,7 @@ function mapTaskSessionSourceType(session: typeof taskSessions.$inferSelect) {
     forkedFromMessageId: session.forkedFromMessageId,
     candidateIndex: session.candidateIndex,
     executionModeSnapshot: session.executionModeSnapshot,
-    coordinationKey: session.coordinationKey,
+    phaseId: session.phaseId,
   });
 }
 
@@ -53,9 +54,13 @@ function mapTaskSessionCompatRecord(session: typeof taskSessions.$inferSelect) {
     sourceType: mapTaskSessionSourceType(session),
     sessionKind: session.sessionKind,
     executionModeSnapshot: session.executionModeSnapshot,
+    phaseId: session.phaseId,
+    phaseRole: session.phaseRole,
+    phaseItemIndex: session.phaseItemIndex,
     candidateIndex: session.candidateIndex,
     stepIndex: session.stepIndex,
     selectedModel: session.selectedModel,
+    operationId: session.operationId,
     isActive: session.executionStatus === "running" && !session.archivedAt,
   };
 }
@@ -134,6 +139,9 @@ export function buildTaskRouteBuilderShared() {
   const snapshotReadApi = createTaskSnapshotReadApi({
     loadTaskTreeBackedRecord: sharedDeps.loadTaskTreeBackedRecord,
   });
+  const phaseWriteApi = createTaskPhaseWriteApi({
+    loadTaskTreeBackedRecord: sharedDeps.loadTaskTreeBackedRecord,
+  });
 
   const taskUsageLedgerWriteApi = createTaskUsageLedgerWriteApi();
   const taskArtifactWriteApi = createTaskArtifactWriteApi();
@@ -174,6 +182,7 @@ export function buildTaskRouteBuilderShared() {
     sharedDeps,
     aggregateSyncApi,
     snapshotReadApi,
+    phaseWriteApi,
     sessionWriteApi,
     sessionMessageApi,
     sessionMessageWriteApi,

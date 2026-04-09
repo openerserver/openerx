@@ -10,6 +10,7 @@ import {
   workflowTemplateStages,
 } from "../../db/schema";
 import { type TaskTreeRecord, loadTaskTreeRecord } from "../project-tree/task-view";
+import { resolvePublicTaskStatus } from "../tasks/public-task-status";
 
 type JsonRecord = Record<string, unknown>;
 type WorkflowStatus = typeof taskWorkflowRuns.$inferSelect.status | TaskTreeRecord["status"];
@@ -43,7 +44,9 @@ function resolveLegacyTaskIdentityFields(row: typeof taskAggregates.$inferSelect
     userId: row.createdByUserId ?? null,
     title: row.title,
     prompt: row.prompt,
-    status: (row.lifecycleStatus === "done" ? "completed" : row.lifecycleStatus === "active" ? "running" : "pending") as TaskTreeRecord["status"],
+    status: resolvePublicTaskStatus({
+      lifecycleStatus: row.lifecycleStatus,
+    }) as TaskTreeRecord["status"],
     sessionId: null,
     agentRunId: null,
     result: null,

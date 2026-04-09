@@ -182,6 +182,7 @@ async function ensureLegacyTaskSnapshotsBackfilled() {
     : `COALESCE(task.lifecycle_status, 'draft'::task_lifecycle_status)`;
   const currentExecutionStatusExpr = hasLegacyStatus
     ? `CASE
+        WHEN task.status = 'awaiting_adoption' THEN 'awaiting_adoption'::execution_status
         WHEN task.status = 'completed' THEN 'complete'::execution_status
         WHEN task.status = 'failed' THEN 'failed'::execution_status
         WHEN task.status = 'cancelled' THEN 'cancelled'::execution_status

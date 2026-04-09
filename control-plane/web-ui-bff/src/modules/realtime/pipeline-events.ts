@@ -8,6 +8,7 @@ import type { RealtimeEvent } from "../../types/events";
 export type PipelineStagePatchReason =
   | "task.continued"
   | "task.completed"
+  | "task.phase.awaiting_adoption"
   | "task.failed"
   | "task.hooks.updated"
   | "task.followup.started"

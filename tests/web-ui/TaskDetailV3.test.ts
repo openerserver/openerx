@@ -79,6 +79,20 @@ function setLegacyParallelRunDetailImplementation(
   legacyParallelFixtureState.domainRunDetailResponse = null;
 }
 
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((nextResolve, nextReject) => {
+    resolve = nextResolve;
+    reject = nextReject;
+  });
+  return {
+    promise,
+    resolve,
+    reject,
+  };
+}
+
 const taskState = vi.hoisted(() => ({
   task: {
     id: "task-1",
@@ -698,11 +712,16 @@ async function buildLegacyParallelFixtureProjection() {
         title: entry?.node?.title ?? `候选 ${candidateIndex + 1}`,
         isActive: sessionId === taskState.task.sessionId,
         summary: null,
+        phaseId: args.coordinationKey,
+        phaseRole: "candidate",
+        phaseItemIndex: candidateIndex,
         coordinationKey: args.coordinationKey,
         winnerSessionId: typeof winnerSessionId === "string" ? winnerSessionId : null,
         executionStatus:
           entry?.node?.status ?? entry?.agentRun?.status ?? args.run.status ?? "pending",
+        sessionKind: "candidate",
         candidateIndex,
+        executionModeSnapshot: "parallel",
         selectedModel:
           entry?.node?.modelUsed ?? entry?.agentRun?.modelUsed ?? entry?.agentRun?.model ?? null,
         createdAt:
@@ -3631,6 +3650,318 @@ describe("TaskDetailV3 runtime permissions", () => {
     });
   });
 
+  it("renders session fallback candidate replies before slower traces settle", async () => {
+    taskState.task.executionMode = "parallel";
+    taskState.task.orchestrationKind = "parallel";
+    taskState.task.currentRunId = "run-current-1";
+    messagesState.conversationItems = [
+      {
+        key: "parallel-user-1",
+        role: "user",
+        text: "给两个并行方案",
+        createdAt: "2026-03-22T05:25:21.900Z",
+        toolCalls: [],
+        raw: null,
+      },
+    ];
+    setLegacyParallelRuns([
+        {
+          id: "run-current-1",
+          taskId: "task-1",
+          projectId: "proj-1",
+          orchestrationKind: "parallel",
+          triggerType: "user_execute",
+          status: "running",
+          rootSessionId: "ses-root",
+          createdAt: "2026-03-22T05:25:21.900Z",
+          updatedAt: "2026-03-22T05:25:21.980Z",
+        },
+      ],);
+    setLegacyParallelRunDetail({
+        run: {
+          id: "run-current-1",
+          taskId: "task-1",
+          projectId: "proj-1",
+          orchestrationKind: "parallel",
+          triggerType: "user_execute",
+          status: "running",
+          rootSessionId: "ses-root",
+          createdAt: "2026-03-22T05:25:21.900Z",
+          updatedAt: "2026-03-22T05:25:21.980Z",
+        },
+        nodes: [],
+        candidateNodes: [
+          {
+            id: "current-node-a",
+            runId: "run-current-1",
+            taskId: "task-1",
+            projectId: "proj-1",
+            nodeKind: "candidate",
+            nodeKey: "candidate:0",
+            title: "候选 A",
+            candidateIndex: 0,
+            agentType: "oracle-enterprise",
+            modelUsed: "gpt-5-mini",
+            sessionId: "ses-a",
+            status: "running",
+            createdAt: "2026-03-22T05:25:21.966Z",
+            updatedAt: "2026-03-22T05:25:21.970Z",
+          },
+          {
+            id: "current-node-b",
+            runId: "run-current-1",
+            taskId: "task-1",
+            projectId: "proj-1",
+            nodeKind: "candidate",
+            nodeKey: "candidate:1",
+            title: "候选 B",
+            candidateIndex: 1,
+            agentType: "oracle-enterprise",
+            modelUsed: "gpt-4o",
+            sessionId: "ses-b",
+            status: "running",
+            createdAt: "2026-03-22T05:25:21.977Z",
+            updatedAt: "2026-03-22T05:25:21.980Z",
+          },
+        ],
+        judgeNode: null,
+        winnerCandidateIndex: null,
+      },);
+    const traceA = createDeferred<any>();
+    const traceB = createDeferred<any>();
+    apiMocks.getTaskConversationMessages.mockImplementation(
+      async (_taskId: string, sessionId: string) => ({
+        data:
+          sessionId === "ses-a"
+            ? [
+                {
+                  info: {
+                    id: "assistant-ses-a",
+                    role: "assistant",
+                    time: { created: "2026-03-22T05:25:22.100Z" },
+                  },
+                  parts: [{ type: "text", text: "会话回退候选 A" }],
+                },
+              ]
+            : [],
+      }),
+    );
+    apiMocks.getTaskExecutionTraceView.mockImplementation(
+      (_taskId: string, sessionId: string) =>
+        sessionId === "ses-a" ? traceA.promise : traceB.promise,
+    );
+    apiMocks.listTaskRuntimePermissions.mockResolvedValue({ data: [] });
+
+    const wrapper = await mountPage();
+    await flushPromises();
+    await nextTick();
+
+    let parallelItem = wrapper
+      .findAll(".chat-item")
+      .find((node) => node.attributes("data-role") === "parallel");
+
+    expect(wrapper.get(".parallel-candidate-texts").text()).toContain("会话回退候选 A");
+    expect(wrapper.get(".parallel-candidate-texts").text()).not.toContain("追踪候选 B");
+    expect(parallelItem?.attributes("data-candidate-statuses")).toBe("completed|running");
+
+    traceB.resolve({
+      taskId: "task-1",
+      sessionId: "ses-b",
+      segments: [],
+      hookExecutions: [],
+      messages: [
+        {
+          id: "assistant-ses-b",
+          role: "assistant",
+          text: "追踪候选 B",
+          createdAt: "2026-03-22T05:25:22.300Z",
+        },
+      ],
+      timeline: [],
+      latestResponse: "追踪候选 B",
+    });
+    await flushPromises();
+    await nextTick();
+
+    parallelItem = wrapper
+      .findAll(".chat-item")
+      .find((node) => node.attributes("data-role") === "parallel");
+
+    expect(wrapper.get(".parallel-candidate-texts").text()).toContain("会话回退候选 A");
+    expect(wrapper.get(".parallel-candidate-texts").text()).toContain("追踪候选 B");
+    expect(parallelItem?.attributes("data-candidate-statuses")).toBe("completed|completed");
+
+    traceA.resolve({
+      taskId: "task-1",
+      sessionId: "ses-a",
+      segments: [],
+      hookExecutions: [],
+      messages: [
+        {
+          id: "assistant-ses-a",
+          role: "assistant",
+          text: "追踪候选 A",
+          createdAt: "2026-03-22T05:25:22.100Z",
+        },
+      ],
+      timeline: [],
+      latestResponse: "追踪候选 A",
+    });
+    await flushPromises();
+  });
+
+  it("applies realtime assistant deltas to parallel candidate cards", async () => {
+    taskState.task.executionMode = "parallel";
+    taskState.task.orchestrationKind = "parallel";
+    taskState.task.currentRunId = "run-current-1";
+    messagesState.conversationItems = [
+      {
+        key: "parallel-user-live-1",
+        role: "user",
+        text: "继续并行生成",
+        createdAt: "2026-03-22T05:25:21.900Z",
+        toolCalls: [],
+        raw: null,
+      },
+    ];
+    setLegacyParallelRuns([
+        {
+          id: "run-current-1",
+          taskId: "task-1",
+          projectId: "proj-1",
+          orchestrationKind: "parallel",
+          triggerType: "user_execute",
+          status: "running",
+          rootSessionId: "ses-root",
+          createdAt: "2026-03-22T05:25:21.900Z",
+          updatedAt: "2026-03-22T05:25:21.980Z",
+        },
+      ],);
+    setLegacyParallelRunDetail({
+        run: {
+          id: "run-current-1",
+          taskId: "task-1",
+          projectId: "proj-1",
+          orchestrationKind: "parallel",
+          triggerType: "user_execute",
+          status: "running",
+          rootSessionId: "ses-root",
+          createdAt: "2026-03-22T05:25:21.900Z",
+          updatedAt: "2026-03-22T05:25:21.980Z",
+        },
+        nodes: [],
+        candidateNodes: [
+          {
+            id: "live-node-a",
+            runId: "run-current-1",
+            taskId: "task-1",
+            projectId: "proj-1",
+            nodeKind: "candidate",
+            nodeKey: "candidate:0",
+            title: "候选 A",
+            candidateIndex: 0,
+            agentType: "oracle-enterprise",
+            modelUsed: "gpt-5-mini",
+            sessionId: "ses-a",
+            status: "running",
+            createdAt: "2026-03-22T05:25:21.966Z",
+            updatedAt: "2026-03-22T05:25:21.970Z",
+          },
+          {
+            id: "live-node-b",
+            runId: "run-current-1",
+            taskId: "task-1",
+            projectId: "proj-1",
+            nodeKind: "candidate",
+            nodeKey: "candidate:1",
+            title: "候选 B",
+            candidateIndex: 1,
+            agentType: "oracle-enterprise",
+            modelUsed: "gpt-4o",
+            sessionId: "ses-b",
+            status: "running",
+            createdAt: "2026-03-22T05:25:21.977Z",
+            updatedAt: "2026-03-22T05:25:21.980Z",
+          },
+        ],
+        judgeNode: null,
+        winnerCandidateIndex: null,
+      },);
+    apiMocks.getTaskConversationMessages.mockResolvedValue({ data: [] });
+    apiMocks.getTaskExecutionTraceView.mockImplementation(
+      async (_taskId: string, sessionId: string) => ({
+        taskId: "task-1",
+        sessionId,
+        segments: [],
+        hookExecutions: [],
+        messages: [],
+        timeline: [],
+      }),
+    );
+    apiMocks.listTaskRuntimePermissions.mockResolvedValue({ data: [] });
+
+    const wrapper = await mountPage();
+
+    expect(wrapper.get(".parallel-candidate-texts").text()).toBe("");
+
+    realtimeStoreMock.events = [
+      {
+        id: "evt-parallel-delta-a-2",
+        type: "task.message.delta",
+        taskId: "task-1",
+        sessionId: "ses-a",
+        data: {
+          delta: "候选回复",
+          part: {
+            messageID: "assistant-live-a",
+            type: "text",
+            text: "候选回复",
+          },
+        },
+      },
+      {
+        id: "evt-parallel-delta-a-1",
+        type: "task.message.delta",
+        taskId: "task-1",
+        sessionId: "ses-a",
+        data: {
+          delta: "实时",
+          part: {
+            messageID: "assistant-live-a",
+            type: "text",
+            text: "实时",
+          },
+        },
+      },
+      {
+        id: "evt-parallel-progress-a",
+        type: "task.message.updated",
+        taskId: "task-1",
+        sessionId: "ses-a",
+        data: {
+          message: {
+            id: "assistant-live-a",
+            role: "assistant",
+            agent: "oracle-enterprise",
+            model: "gpt-5-mini",
+            time: {
+              created: "2026-03-22T05:25:22.500Z",
+            },
+          },
+        },
+      },
+    ];
+    await nextTick();
+    await flushPromises();
+
+    const parallelItem = wrapper
+      .findAll(".chat-item")
+      .find((node) => node.attributes("data-role") === "parallel");
+
+    expect(wrapper.get(".parallel-candidate-texts").text()).toContain("实时候选回复");
+    expect(parallelItem?.attributes("data-candidate-statuses")).toBe("running|running");
+  });
+
   it("prefers session message tool-call details for parallel candidate cards when trace omits them", async () => {
     taskState.task.executionMode = "parallel";
     taskState.task.orchestrationKind = "parallel";
@@ -6104,11 +6435,7 @@ describe("TaskDetailV3 runtime permissions", () => {
     wrapper.getComponent(ChatMessageListStub).vm.$emit("adoptCandidate", 1);
     await flushPromises();
 
-    expect(apiMocks.adoptParallelCandidate).toHaveBeenCalledWith("task-1", 1, {
-      parallelRunId: "tree-fallback:ses-1",
-      sessionId: "ses-b",
-      candidateSessionIds: ["ses-a", "ses-b"],
-    });
+    expect(apiMocks.adoptParallelCandidate).toHaveBeenCalledWith("task-1", "ses-1", 1);
   });
 
   it("refreshes adopted session-tree candidate state after manual adoption", async () => {

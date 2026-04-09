@@ -8,11 +8,7 @@
       :auto-advance="Boolean(main.task?.autoAdvanceStages)"
       :is-executing="main.isExecuting"
       :executing="main.hasStreamingAssistant"
-      :task-status="String(main.task?.status ?? main.taskDisplayStatus)"
-      :completing="false"
-      :advancing="false"
       @choose-mode="main.handleChooseMode"
-      @complete="main.handleUnavailableAction('完成任务')"
     />
 
     <a-alert

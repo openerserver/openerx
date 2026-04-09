@@ -1,3 +1,10 @@
+ALTER TABLE "task_session_messages"
+  ADD COLUMN IF NOT EXISTS "status" text,
+  ADD COLUMN IF NOT EXISTS "client_message_id" text,
+  ADD COLUMN IF NOT EXISTS "provider_message_id" text,
+  ADD COLUMN IF NOT EXISTS "error_text" text;
+--> statement-breakpoint
+
 UPDATE "task_sessions" ts
 SET
   "source_message_id" = COALESCE(ts."source_message_id", ts."forked_from_message_id"),

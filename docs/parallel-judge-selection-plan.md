@@ -118,7 +118,7 @@ interface JudgeResult {
   │   → 不自动选出胜者（winnerCandidateIndex = -1）      │
   │   → 前端展示「采纳」按钮                             │
   │   → 用户手动点击某候选的「采纳」                     │
-  │   → POST /candidates/:index/adopt                   │
+  │   → POST /phases/:phaseId/candidates/:index/adopt  │
   │   → 该候选 result 成为任务主线回复                   │
   │                                                     │
   └── [裁判评估失败] ──────────────────────────────────┐
@@ -358,7 +358,7 @@ const effectiveJudge = taskJudge?.enabled !== undefined
 
 ### 5.4 adopt — 裁判失败时允许手动覆盖
 
-**文件**：`routes.ts` → `POST /api/tasks/:taskId/candidates/:index/adopt`
+**文件**：`routes.ts` → `POST /api/tasks/:taskId/phases/:phaseId/candidates/:index/adopt`
 
 当前逻辑：如果已有 `winnerCandidateIndex`，拒绝 adopt。需增加判断：
 
@@ -445,7 +445,7 @@ if (plan.winnerCandidateIndex >= 0 && plan.judgeResult?.status !== 'failed') {
 | 2.1 | `buildRuntimePlan()` 支持 `overrides.judge` |
 | 2.2 | `finalizeParallelTask()` 从 `task.strategy` 读取任务级 judge 配置 |
 | 2.3 | `POST /execute` 请求体增加 judge 字段校验 |
-| 2.4 | `POST /candidates/:index/adopt` 支持裁判失败时手动覆盖 |
+| 2.4 | `POST /phases/:phaseId/candidates/:index/adopt` 支持裁判失败时手动覆盖 |
 
 ### Phase 3：前端结果展示增强（约 0.5 天）
 

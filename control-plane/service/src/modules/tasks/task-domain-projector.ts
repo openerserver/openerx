@@ -355,6 +355,7 @@ function normalizeProjectionStatus(value: unknown) {
     value === "pending" ||
     value === "running" ||
     value === "paused" ||
+    value === "awaiting_adoption" ||
     value === "completed" ||
     value === "failed" ||
     value === "cancelled"
@@ -380,6 +381,25 @@ function fromProjectionLifecycleStatus(value: unknown) {
   }
 
   return normalizeProjectionStatus(value);
+}
+
+function fromProjectionExecutionStatus(value: unknown) {
+  if (value === "queued") {
+    return "pending" as const;
+  }
+  if (value === "complete") {
+    return "completed" as const;
+  }
+  if (
+    value === "running" ||
+    value === "failed" ||
+    value === "cancelled" ||
+    value === "awaiting_adoption"
+  ) {
+    return value;
+  }
+
+  return null;
 }
 
 function normalizeProjectionOrchestrationKind(value: unknown) {
@@ -481,7 +501,14 @@ async function upsertTaskTimelineViewRecord(args: {
 function buildTaskSnapshotProjectionValues(args: {
   taskId: string;
   projectId: string;
-  currentStatus: "pending" | "running" | "paused" | "completed" | "failed" | "cancelled";
+  currentStatus:
+    | "pending"
+    | "running"
+    | "paused"
+    | "awaiting_adoption"
+    | "completed"
+    | "failed"
+    | "cancelled";
   orchestrationKind?: "single" | "parallel" | "sequential-chain" | null;
   currentSessionId?: string | null;
   latestResultSummary?: string | null;
@@ -497,7 +524,8 @@ function buildTaskSnapshotProjectionValues(args: {
     projectId: args.projectId,
     lifecycleStatus: toLifecycleStatus(args.currentStatus),
     currentExecutionMode: toStoredTaskExecutionMode(args.orchestrationKind),
-    currentExecutionStatus: null as string | null,
+    currentExecutionStatus:
+      args.currentStatus === "awaiting_adoption" ? ("awaiting_adoption" as const) : null,
     currentSessionId: args.currentSessionId ?? null,
     latestSessionId: args.currentSessionId ?? null,
     latestResultSummary: args.latestResultSummary ?? null,
@@ -513,7 +541,14 @@ function buildTaskSnapshotProjectionValues(args: {
 async function syncTaskSnapshotProjection(args: {
   taskId: string;
   projectId: string;
-  currentStatus: "pending" | "running" | "paused" | "completed" | "failed" | "cancelled";
+  currentStatus:
+    | "pending"
+    | "running"
+    | "paused"
+    | "awaiting_adoption"
+    | "completed"
+    | "failed"
+    | "cancelled";
   orchestrationKind?: "single" | "parallel" | "sequential-chain" | null;
   currentSessionId?: string | null;
   latestResultSummary?: string | null;
@@ -535,19 +570,29 @@ async function syncTaskSnapshotProjection(args: {
   });
 }
 
-function getProjectionBaseStatus(
-  snapshotStatus: string | null | undefined,
-  aggregateStatus: string | null | undefined,
-) {
-  return fromProjectionLifecycleStatus(snapshotStatus ?? aggregateStatus);
+function getProjectionBaseStatus(args: {
+  snapshotExecutionStatus?: string | null;
+  snapshotLifecycleStatus?: string | null;
+  aggregateLifecycleStatus?: string | null;
+}) {
+  return (
+    fromProjectionExecutionStatus(args.snapshotExecutionStatus) ??
+    fromProjectionLifecycleStatus(args.snapshotLifecycleStatus ?? args.aggregateLifecycleStatus)
+  );
 }
 
 function getProjectionActiveStatus(
-  snapshotStatus: string | null | undefined,
-  aggregateStatus: string | null | undefined,
+  snapshotExecutionStatus: string | null | undefined,
+  snapshotLifecycleStatus: string | null | undefined,
+  aggregateLifecycleStatus: string | null | undefined,
 ) {
-  const baseStatus = getProjectionBaseStatus(snapshotStatus, aggregateStatus);
+  const baseStatus = getProjectionBaseStatus({
+    snapshotExecutionStatus,
+    snapshotLifecycleStatus,
+    aggregateLifecycleStatus,
+  });
   if (
+    baseStatus === "awaiting_adoption" ||
     baseStatus === "completed" ||
     baseStatus === "failed" ||
     baseStatus === "cancelled"
@@ -571,6 +616,7 @@ async function syncSnapshotFromProjectionBase(args: {
     taskId: args.eventRecord.taskId,
     projectId: args.eventRecord.projectId,
     currentStatus: getProjectionActiveStatus(
+      snapshotRecord?.currentExecutionStatus,
       snapshotRecord?.lifecycleStatus,
       aggregateRecord?.lifecycleStatus,
     ),

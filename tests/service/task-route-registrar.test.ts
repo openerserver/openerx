@@ -31,6 +31,11 @@ function createTaskSessionRegistrarDeps(overrides: Record<string, unknown> = {})
     upsertTaskSession: mock(async () => ({ ok: true, status: 201, data: {} })),
     persistTaskSessionMessage: mock(async () => ({ ok: true, status: 201, data: {} })),
     postTaskSessionMessage: mock(async () => ({ ok: true, status: 201, data: {} })),
+    listTaskPhases: mock(async () => ({ ok: true, status: 200, data: {} })),
+    upsertTaskPhase: mock(async () => ({ ok: true, status: 201, data: {} })),
+    adoptTaskPhase: mock(async () => ({ ok: true, status: 200, data: {} })),
+    cancelTaskPhase: mock(async () => ({ ok: true, status: 200, data: {} })),
+    resumeTaskPhase: mock(async () => ({ ok: true, status: 200, data: {} })),
     activateTaskSession: mock(async () => ({ ok: true, status: 200, data: {} })),
     archiveTaskSession: mock(async () => ({ ok: true, status: 200, data: {} })),
     listTaskSessions: mock(async () => ({ ok: true, status: 200, data: {} })),
@@ -49,7 +54,6 @@ function createTaskSessionRegistrarDeps(overrides: Record<string, unknown> = {})
     listTaskUsageLedgerEntries: mock(async () => ({ ok: true, status: 200, data: {} })),
     buildTaskSessionTimelineViewResponse: mock(async () => ({ ok: true, status: 200, data: {} })),
     buildTaskExecutionTraceResponse: mock(async () => ({ ok: true, status: 200, data: {} })),
-    adoptTaskSessionWinner: mock(async () => ({ ok: true, status: 200, data: {} })),
     ...overrides,
   };
 }
@@ -83,8 +87,8 @@ afterEach(() => {
 });
 
 describe("task session route registrar", () => {
-  test("adopt-winner route is mounted and forwards parsed body to the session adoption dependency", async () => {
-    const adoptTaskSessionWinner = mock(async (args: unknown) => ({
+  test("phase adopt route is mounted and forwards parsed body to the phase adoption dependency", async () => {
+    const adoptTaskPhase = mock(async (args: unknown) => ({
       ok: true as const,
       status: 200 as const,
       data: args,
@@ -92,9 +96,9 @@ describe("task session route registrar", () => {
 
     const { primaryHandler } = await setupTaskSessionRegistrar({
       routeKeys: {
-        primary: "POST /:taskId/adopt-winner",
+        primary: "POST /:taskId/phases/:phaseId/adopt",
       },
-      depsOverrides: { adoptTaskSessionWinner },
+      depsOverrides: { adoptTaskPhase },
     });
 
     const response = await invokeRouteHandler(
@@ -102,23 +106,23 @@ describe("task session route registrar", () => {
       createRouteContext({
         params: {
           taskId: "task-1",
+          phaseId: "phase-1",
         },
         validJson: {
-          coordinationKey: "coord-1",
           winnerSessionId: "session-2",
         },
       }),
     );
 
     expect(response.status).toBe(200);
-    expect(adoptTaskSessionWinner).toHaveBeenCalledWith({
+    expect(adoptTaskPhase).toHaveBeenCalledWith({
       taskId: "task-1",
-      coordinationKey: "coord-1",
+      phaseId: "phase-1",
       winnerSessionId: "session-2",
     });
     expect(await response.json()).toEqual({
       taskId: "task-1",
-      coordinationKey: "coord-1",
+      phaseId: "phase-1",
       winnerSessionId: "session-2",
     });
   });

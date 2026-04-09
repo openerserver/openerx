@@ -148,10 +148,11 @@ describe("task session message runtime sync", () => {
         sessionRecord: {
           id: sessionId,
           latestRunId: null,
+          phaseId: "phase-runtime-1",
           runtimeSessionId: "runtime-session-1",
           triggerType: null,
           sessionKind: "primary",
-          coordinationKey: sessionId,
+          coordinationKey: null,
           rootSessionId: sessionId,
           candidateIndex: null,
           workflowStageKey: null,
@@ -243,6 +244,17 @@ describe("task session message runtime sync", () => {
       startedAt: "2025-01-01T00:01:00.000Z",
       createdAt: "2025-01-01T00:01:00.000Z",
       completedAt: "2025-01-01T00:02:00.000Z",
+    });
+
+    const taskSessionRunInsert = insertCalls.find(
+      (call) => call.table === "task_session_runs",
+    )?.payload;
+    expect(taskSessionRunInsert).toMatchObject({
+      id: `run_${sessionId}`,
+      sessionId,
+      phaseId: "phase-runtime-1",
+      coordinationKey: null,
+      status: "completed",
     });
 
     const messagePartInsertCalls = insertCalls

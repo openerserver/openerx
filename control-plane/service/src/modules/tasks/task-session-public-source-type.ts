@@ -8,7 +8,7 @@ type TaskSessionSourceTypeLike = {
   forkedFromMessageId?: string | null;
   candidateIndex?: number | null;
   executionModeSnapshot?: string | null;
-  coordinationKey?: string | null;
+  phaseId?: string | null;
 };
 
 function hasNonEmptyString(value: string | null | undefined) {
@@ -28,9 +28,7 @@ export function isParallelTaskSessionCandidate(session?: TaskSessionSourceTypeLi
     return true;
   }
 
-  return (
-    session.executionModeSnapshot === "parallel" && hasNonEmptyString(session.coordinationKey)
-  );
+  return session.executionModeSnapshot === "parallel" && hasNonEmptyString(session.phaseId);
 }
 
 export function resolvePublicTaskSessionSourceType(

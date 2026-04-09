@@ -1,7 +1,7 @@
 import { computed, ref, type Ref, watch } from "vue";
 import type { TaskAgentRunRecord, TaskSessionRecord } from "../lib/api";
 import { getTaskAgentRuns } from "../lib/api";
-import type { TaskConversationMessageItem } from "../lib/message-normalize";
+import type { LiveAssistantState, TaskConversationMessageItem } from "../lib/message-normalize";
 import {
   buildConversationItemsWithParallelRuns,
   buildParallelComparisonCardsForRun,
@@ -23,6 +23,7 @@ import {
   type ParallelRunRecord,
 } from "../lib/task-detail-parallel-runtime";
 import { buildSessionSummaryParallelRuns } from "../lib/session-summary-parallel-runs";
+import { useTaskMessagePatchConsumer } from "./useTaskMessagePatchConsumer";
 import type { TreeTask } from "./useProjectTreeTask";
 import type { TreeSessionNodeRecord } from "./useTreeBranches";
 import type { TaskConversationListItem } from "./useTreeMessages";
@@ -42,6 +43,7 @@ export function useTaskDetailParallelFlow(args: {
   const parallelCandidateSettledReply = ref<Record<string, boolean>>({});
   const parallelCandidateTraceStates = ref<Record<string, ParallelCandidateTraceState>>({});
   const taskAgentRuns = ref<TaskAgentRunRecord[]>([]);
+  let parallelCandidateRefreshGeneration = 0;
 
   const sessionSummaryParallelRuns = computed<ParallelRunRecord[]>(() =>
     buildSessionSummaryParallelRuns({
@@ -170,39 +172,6 @@ export function useTaskDetailParallelFlow(args: {
     return resolvedParallelRuns.value[resolvedParallelRuns.value.length - 1] ?? null;
   });
 
-  const isCurrentParallelRunPendingAdoption = computed(() => {
-    const currentRun = currentParallelRunRecord.value;
-    if (!currentRun || currentRun.parallelRunId !== currentParallelRunId.value) {
-      return false;
-    }
-
-    if (typeof currentRun.winnerCandidateIndex === "number") {
-      return false;
-    }
-
-    const cards = buildParallelComparisonCardsForRun({
-      run: currentRun,
-      currentParallelRunId: currentParallelRunId.value,
-      taskStatus: args.task.value?.status,
-      parallelCandidateItems: parallelCandidateItems.value,
-      parallelCandidateSettledReply: parallelCandidateSettledReply.value,
-      parallelCandidateTraceStates: parallelCandidateTraceStates.value,
-    });
-    return (
-      cards.length >= 2 &&
-      cards.every((candidate) => candidate.status === "completed" || candidate.status === "failed")
-    );
-  });
-
-  const adoptedCandidateSessionId = computed(() => {
-    const currentRun = currentParallelRunRecord.value;
-    if (!currentRun || typeof currentRun.winnerCandidateIndex !== "number") {
-      return undefined;
-    }
-    const sessionId = currentRun.candidateSessions[currentRun.winnerCandidateIndex]?.sessionId;
-    return typeof sessionId === "string" && sessionId.length > 0 ? sessionId : undefined;
-  });
-
   const visibleParallelRuns = computed(() => {
     const visibleRuns = buildVisibleParallelRunSet({
       resolvedParallelRuns: resolvedParallelRuns.value,
@@ -223,6 +192,103 @@ export function useTaskDetailParallelFlow(args: {
     return visibleRuns;
   });
 
+  const visibleParallelCandidateSessionIds = computed(() =>
+    Array.from(
+      new Set(
+        visibleParallelRuns.value
+          .flatMap((run) => run.candidateSessions.map((candidate) => candidate.sessionId))
+          .filter((sessionId): sessionId is string => Boolean(sessionId)),
+      ),
+    ),
+  );
+
+  const { taskPatchEventSignature, getLiveAssistantState } = useTaskMessagePatchConsumer(
+    computed(() => (args.taskId.value ? [args.taskId.value] : [])),
+  );
+
+  function retainParallelCandidateState(candidateSessionIds: string[]) {
+    const allowedSessionIds = new Set(candidateSessionIds);
+    const filterEntries = <T>(record: Record<string, T>) =>
+      Object.fromEntries(
+        Object.entries(record).filter(([sessionId]) => allowedSessionIds.has(sessionId)),
+      ) as Record<string, T>;
+
+    parallelCandidateItems.value = filterEntries(parallelCandidateItems.value);
+    parallelCandidateSettledReply.value = filterEntries(parallelCandidateSettledReply.value);
+    parallelCandidateTraceStates.value = filterEntries(parallelCandidateTraceStates.value);
+  }
+
+  function applyParallelCandidateSessionState(
+    sessionId: string,
+    nextState: {
+      items: TaskConversationMessageItem[];
+      hasSettledReply: boolean;
+      traceState: ParallelCandidateTraceState;
+    },
+  ) {
+    parallelCandidateItems.value = {
+      ...parallelCandidateItems.value,
+      [sessionId]: nextState.items,
+    };
+    parallelCandidateSettledReply.value = {
+      ...parallelCandidateSettledReply.value,
+      [sessionId]: nextState.hasSettledReply,
+    };
+    parallelCandidateTraceStates.value = {
+      ...parallelCandidateTraceStates.value,
+      [sessionId]: nextState.traceState,
+    };
+  }
+
+  const parallelCandidateLiveStates = computed<Record<string, LiveAssistantState>>(() => {
+    void taskPatchEventSignature.value;
+    const currentTaskId = args.taskId.value;
+    if (!currentTaskId) {
+      return {};
+    }
+
+    return Object.fromEntries(
+      visibleParallelCandidateSessionIds.value.map((sessionId) => [
+        sessionId,
+        getLiveAssistantState(currentTaskId, sessionId),
+      ]),
+    ) as Record<string, LiveAssistantState>;
+  });
+
+  const isCurrentParallelRunPendingAdoption = computed(() => {
+    const currentRun = currentParallelRunRecord.value;
+    if (!currentRun || currentRun.parallelRunId !== currentParallelRunId.value) {
+      return false;
+    }
+
+    if (typeof currentRun.winnerCandidateIndex === "number") {
+      return false;
+    }
+
+    const cards = buildParallelComparisonCardsForRun({
+      run: currentRun,
+      currentParallelRunId: currentParallelRunId.value,
+      taskStatus: args.task.value?.status,
+      parallelCandidateItems: parallelCandidateItems.value,
+      parallelCandidateSettledReply: parallelCandidateSettledReply.value,
+      parallelCandidateTraceStates: parallelCandidateTraceStates.value,
+      parallelCandidateLiveStates: parallelCandidateLiveStates.value,
+    });
+    return (
+      cards.length >= 2 &&
+      cards.every((candidate) => candidate.status === "completed" || candidate.status === "failed")
+    );
+  });
+
+  const adoptedCandidateSessionId = computed(() => {
+    const currentRun = currentParallelRunRecord.value;
+    if (!currentRun || typeof currentRun.winnerCandidateIndex !== "number") {
+      return undefined;
+    }
+    const sessionId = currentRun.candidateSessions[currentRun.winnerCandidateIndex]?.sessionId;
+    return typeof sessionId === "string" && sessionId.length > 0 ? sessionId : undefined;
+  });
+
   const parallelConversationItems = computed(() =>
     buildParallelConversationItems({
       visibleParallelRuns: visibleParallelRuns.value,
@@ -232,6 +298,7 @@ export function useTaskDetailParallelFlow(args: {
       parallelCandidateItems: parallelCandidateItems.value,
       parallelCandidateSettledReply: parallelCandidateSettledReply.value,
       parallelCandidateTraceStates: parallelCandidateTraceStates.value,
+      parallelCandidateLiveStates: parallelCandidateLiveStates.value,
     }),
   );
 
@@ -255,43 +322,48 @@ export function useTaskDetailParallelFlow(args: {
   }
 
   async function refreshParallelCandidateMessages(currentTaskId: string, silent = false) {
-    const candidateSessionIds = Array.from(
-      new Set(
-        visibleParallelRuns.value
-          .flatMap((run) => run.candidateSessions.map((candidate) => candidate.sessionId))
-          .filter((sessionId): sessionId is string => Boolean(sessionId)),
-      ),
-    );
+    const candidateSessionIds = visibleParallelCandidateSessionIds.value;
     if (candidateSessionIds.length === 0) {
       clearParallelFlowState();
       return;
     }
 
-    const entries = await Promise.all(
-      candidateSessionIds.map(async (sessionId) => [
-        sessionId,
-        await loadParallelCandidateSessionState({
-          taskId: currentTaskId,
-          sessionId,
-          silent,
-          cachedState: {
-            items: parallelCandidateItems.value[sessionId] ?? [],
-            hasSettledReply: parallelCandidateSettledReply.value[sessionId] === true,
-            traceState: parallelCandidateTraceStates.value[sessionId] ?? {},
-          },
-        }),
-      ] as const),
-    );
+    const refreshGeneration = ++parallelCandidateRefreshGeneration;
+    retainParallelCandidateState(candidateSessionIds);
 
-    parallelCandidateItems.value = Object.fromEntries(
-      entries.map(([sessionId, value]) => [sessionId, value.items]),
-    );
-    parallelCandidateSettledReply.value = Object.fromEntries(
-      entries.map(([sessionId, value]) => [sessionId, value.hasSettledReply]),
-    );
-    parallelCandidateTraceStates.value = Object.fromEntries(
-      entries.map(([sessionId, value]) => [sessionId, value.traceState]),
-    );
+    const shouldApplySessionState = (sessionId: string) =>
+      parallelCandidateRefreshGeneration === refreshGeneration &&
+      args.taskId.value === currentTaskId &&
+      visibleParallelCandidateSessionIds.value.includes(sessionId);
+
+    const loads = candidateSessionIds.map(async (sessionId) => {
+      const cachedState = {
+        items: parallelCandidateItems.value[sessionId] ?? [],
+        hasSettledReply: parallelCandidateSettledReply.value[sessionId] === true,
+        traceState: parallelCandidateTraceStates.value[sessionId] ?? {},
+      };
+      const nextState = await loadParallelCandidateSessionState({
+        taskId: currentTaskId,
+        sessionId,
+        silent,
+        cachedState,
+        onProgress: (progressState) => {
+          if (!shouldApplySessionState(sessionId)) {
+            return;
+          }
+
+          applyParallelCandidateSessionState(sessionId, progressState);
+        },
+      });
+
+      if (!shouldApplySessionState(sessionId)) {
+        return;
+      }
+
+      applyParallelCandidateSessionState(sessionId, nextState);
+    });
+
+    await Promise.allSettled(loads);
   }
 
   function clearParallelFlowState() {
@@ -299,6 +371,7 @@ export function useTaskDetailParallelFlow(args: {
     parallelCandidateSettledReply.value = {};
     parallelCandidateTraceStates.value = {};
     taskAgentRuns.value = [];
+    parallelCandidateRefreshGeneration += 1;
   }
 
   async function refreshTaskRunSummaries(currentTaskId: string, silent = false) {

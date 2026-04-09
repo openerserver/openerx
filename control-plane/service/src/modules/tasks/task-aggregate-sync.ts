@@ -37,6 +37,9 @@ function toExecutionStatus(status: string | null | undefined) {
   if (!status || status === "pending") {
     return null;
   }
+  if (status === "awaiting_adoption") {
+    return "awaiting_adoption" as const;
+  }
   if (status === "completed") {
     return "complete" as const;
   }

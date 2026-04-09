@@ -22,6 +22,10 @@ DELETE FROM "task_artifacts";
 --> statement-breakpoint
 DELETE FROM "task_usage_ledger_entries";
 --> statement-breakpoint
+DELETE FROM "runtime_usage_ledger_steps";
+--> statement-breakpoint
+DELETE FROM "runtime_usage_ledgers";
+--> statement-breakpoint
 DELETE FROM "task_operations";
 --> statement-breakpoint
 DELETE FROM "task_message_parts";

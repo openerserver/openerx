@@ -260,6 +260,20 @@
       "when": 1775001720000,
       "tag": "0036_drop_task_message_events",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1775001780000,
+      "tag": "0037_task_execution_phases",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1775001840000,
+      "tag": "0038_clear_coordination_key_mirrors",
+      "breakpoints": true
     }
   ]
 }

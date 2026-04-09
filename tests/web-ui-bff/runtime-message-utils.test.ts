@@ -70,4 +70,40 @@ describe("runtime-message-utils", () => {
     expect(result.text).toBe("done");
     expect(result.traceId).toBe("trace-complete-1");
   });
+
+  test("does not treat assistant replies with pending tool continuation as completed", async () => {
+    const { extractAssistantResultFromMessages } = await loadRuntimeMessageUtils();
+    const result = extractAssistantResultFromMessages([
+      {
+        info: {
+          id: "trace-tool-call-1",
+          role: "assistant",
+          finish: "tool-calls",
+          time: {
+            created: 1773406563485,
+            completed: 1773406563502,
+          },
+        },
+        parts: [
+          {
+            type: "text",
+            text: "Calling a tool",
+          },
+          {
+            type: "tool_call",
+            id: "tool-call-1",
+            toolName: "search_code",
+            state: {
+              status: "running",
+            },
+          },
+        ],
+      },
+    ]);
+
+    expect(result.completed).toBe(false);
+    expect(result.failed).toBe(false);
+    expect(result.text).toBe("Calling a tool");
+    expect(result.traceId).toBe("trace-tool-call-1");
+  });
 });

@@ -13,6 +13,7 @@ import {
 type TaskMessagePatchEventBase = {
   eventId: string;
   taskId?: string;
+  phaseId?: string;
   sessionId?: string;
   rawEventKind: string;
 };
@@ -51,6 +52,17 @@ export type TaskMessagePatchEvent =
     })
   | (TaskMessagePatchEventBase & {
       kind:
+        | "phase-created"
+        | "phase-updated"
+        | "phase-awaiting-adoption"
+        | "phase-paused"
+        | "phase-resumed"
+        | "phase-cancelled"
+        | "phase-completed"
+        | "phase-failed";
+    })
+  | (TaskMessagePatchEventBase & {
+      kind:
         | "task-updated"
         | "task-completed"
         | "task-failed"
@@ -73,6 +85,14 @@ export function isTaskMessagePatchEventRelevant(
 }
 
 const TASK_EVENT_KIND_TO_PATCH_KIND = new Map<string, TaskMessagePatchEvent["kind"]>([
+  ["task.phase.created", "phase-created"],
+  ["task.phase.updated", "phase-updated"],
+  ["task.phase.awaiting_adoption", "phase-awaiting-adoption"],
+  ["task.phase.paused", "phase-paused"],
+  ["task.phase.resumed", "phase-resumed"],
+  ["task.phase.cancelled", "phase-cancelled"],
+  ["task.phase.completed", "phase-completed"],
+  ["task.phase.failed", "phase-failed"],
   ["task.updated", "task-updated"],
   ["task.completed", "task-completed"],
   ["task.failed", "task-failed"],
@@ -89,6 +109,7 @@ function buildBasePatchEvent(event: RealtimeEvent): TaskMessagePatchEventBase {
   return {
     eventId: event.id,
     taskId: event.taskId,
+    phaseId: event.phaseId,
     sessionId: event.sessionId,
     rawEventKind: getRealtimeEventKind(event),
   };
@@ -204,6 +225,30 @@ export function toTaskMessagePatchEvent(event: RealtimeEvent): TaskMessagePatchE
     }
     if (snapshotReason === "session.updated") {
       return { ...base, kind: "session-updated" };
+    }
+    if (snapshotReason === "phase.created") {
+      return { ...base, kind: "phase-created" };
+    }
+    if (snapshotReason === "phase.updated") {
+      return { ...base, kind: "phase-updated" };
+    }
+    if (snapshotReason === "phase.awaiting_adoption") {
+      return { ...base, kind: "phase-awaiting-adoption" };
+    }
+    if (snapshotReason === "phase.paused") {
+      return { ...base, kind: "phase-paused" };
+    }
+    if (snapshotReason === "phase.resumed") {
+      return { ...base, kind: "phase-resumed" };
+    }
+    if (snapshotReason === "phase.cancelled") {
+      return { ...base, kind: "phase-cancelled" };
+    }
+    if (snapshotReason === "phase.completed") {
+      return { ...base, kind: "phase-completed" };
+    }
+    if (snapshotReason === "phase.failed") {
+      return { ...base, kind: "phase-failed" };
     }
     return buildIgnoredPatchEvent(event);
   }

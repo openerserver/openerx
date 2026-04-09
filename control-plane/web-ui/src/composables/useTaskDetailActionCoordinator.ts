@@ -301,18 +301,19 @@ export function useTaskDetailActionCoordinator(args: {
     if (!args.taskId.value) return;
     try {
       const currentRun = args.currentParallelRunRecord.value;
-      const candidateSessionId = currentRun?.candidateSessions[index]?.sessionId;
-      const candidateSessionIds = (currentRun?.candidateSessions ?? [])
-        .map((candidate) => candidate.sessionId)
-        .filter(
-          (sessionId): sessionId is string =>
-            typeof sessionId === "string" && sessionId.length > 0,
-        );
-      await adoptParallelCandidate(args.taskId.value, index, {
-        parallelRunId: currentRun?.parallelRunId,
-        sessionId: candidateSessionId,
-        ...(candidateSessionIds.length > 0 ? { candidateSessionIds } : {}),
-      });
+      const phaseId =
+        currentRun?.phaseId ??
+        (currentRun?.parallelRunId?.startsWith("task-session:")
+          ? currentRun.parallelRunId.slice("task-session:".length)
+          : currentRun?.parallelRunId?.startsWith("tree-fallback:")
+            ? currentRun.parallelRunId.slice("tree-fallback:".length)
+          : undefined);
+      if (!phaseId) {
+        message.warning("当前并行运行缺少 phaseId，无法采纳候选结果");
+        return;
+      }
+
+      await adoptParallelCandidate(args.taskId.value, phaseId, index);
       message.success("已采纳候选结果");
       await args.refreshTaskSnapshot({ workflow: true, flow: true, messages: true });
     } catch (err) {

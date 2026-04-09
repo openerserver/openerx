@@ -4943,7 +4943,7 @@ describe.skip("TaskDetail (legacy page removed)", () => {
     await handleAdopt(1);
     await flushPromises();
 
-    expect(apiMocks.adoptParallelCandidate).toHaveBeenCalledWith("task-1", 1);
+    expect(apiMocks.adoptParallelCandidate).toHaveBeenCalledWith("task-1", "ses-1", 1);
     expect(messageMocks.error).not.toHaveBeenCalled();
     expect(apiMocks.getTask).toHaveBeenCalledTimes(2);
   });

@@ -920,8 +920,58 @@ export interface ProjectionRunCandidate {
   finishedAt?: string;
 }
 
+export interface TaskPhaseRecord {
+  id: string;
+  phaseIndex: number;
+  phaseKind: "root" | "single" | "parallel" | "sequential_chain" | "manual_branch" | "hook";
+  triggerType:
+    | "execute"
+    | "continue"
+    | "resume"
+    | "workflow_spawn"
+    | "candidate_adopt"
+    | "manual_branch"
+    | "hook_spawn";
+  status: "pending" | "running" | "paused" | "awaiting_adoption" | "completed" | "failed" | "cancelled";
+  parentPhaseId?: string | null;
+  resumedFromPhaseId?: string | null;
+  awaitingAdoptionSince?: string | null;
+  anchorSessionId?: string | null;
+  coordinationKey?: string | null;
+  candidateCount?: number | null;
+  winnerSessionId?: string | null;
+  judgeSessionId?: string | null;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  sessionIds?: string[];
+}
+
+export interface TaskPhaseSessionEnvelopeRecord {
+  sessionId: string;
+  taskSessionId?: string | null;
+  phaseRole: "mainline" | "candidate" | "judge" | "step" | "aux";
+  phaseItemIndex: number;
+  agentRunId?: string;
+  label?: string;
+  model?: string;
+  status?: string;
+}
+
+export interface TaskPhaseExecutionEnvelope {
+  ok: boolean;
+  phase: TaskPhaseRecord;
+  sessions: TaskPhaseSessionEnvelopeRecord[];
+  sessionId?: string;
+  taskSessionId?: string | null;
+  agentRunId?: string;
+  status?: string;
+}
+
 export interface ProjectionRunRecord {
   parallelRunId: string;
+  phaseId?: string;
   templateId?: string;
   startedAt: string;
   finishedAt?: string;
@@ -1444,6 +1494,9 @@ export async function getTaskPipeline(taskId: string, sessionId?: string) {
 export interface SessionInfo {
   id: string;
   taskSessionId?: string | null;
+  phaseId?: string | null;
+  phaseRole?: string | null;
+  phaseItemIndex?: number | null;
   parentRuntimeSessionId?: string | null;
   title: string;
   isActive: boolean;
@@ -1551,7 +1604,7 @@ export interface TaskTreeMessagePartRecord {
 }
 
 export interface TaskTreeParallelGroupRecord {
-  coordinationKey: string;
+  phaseId: string;
   sessionId: string;
   executionMode?: string | null;
   winnerRunId?: string | null;
@@ -1603,6 +1656,9 @@ export interface TaskTreeSessionContext {
 interface ServiceTaskSessionRecord {
   id: string;
   taskSessionId?: string | null;
+  phaseId?: string | null;
+  phaseRole?: string | null;
+  phaseItemIndex?: number | null;
   parentSessionId?: string | null;
   parentRuntimeSessionId?: string | null;
   runtimeSessionId?: string | null;
@@ -1626,6 +1682,9 @@ interface ServiceTaskSessionListResponse {
   data?: ServiceTaskSessionRecord[];
   meta?: {
     currentSessionId?: string | null;
+    currentPhaseId?: string | null;
+    latestPhaseId?: string | null;
+    phaseCount?: number | null;
   };
 }
 
@@ -2092,6 +2151,9 @@ function projectTaskTreeToSessionSummaries(
       return {
         id: runtimeSessionId,
         taskSessionId: session.id,
+        phaseId: asTaskTreeString(session.phaseId) ?? null,
+        phaseRole: asTaskTreeString(session.phaseRole) ?? null,
+        phaseItemIndex: typeof session.phaseItemIndex === "number" ? session.phaseItemIndex : null,
         parentRuntimeSessionId: session.parentSessionId
           ? (runtimeSessionIdByTaskSessionId.get(session.parentSessionId) ?? session.parentSessionId)
           : null,
@@ -2166,6 +2228,10 @@ function projectTaskSessionListToSummaries(
       return {
         id: runtimeSessionId,
         taskSessionId,
+        phaseId: asTaskTreeString(session.phaseId) ?? null,
+        phaseRole: asTaskTreeString(session.phaseRole) ?? null,
+        phaseItemIndex:
+          typeof session.phaseItemIndex === "number" ? session.phaseItemIndex : null,
         parentRuntimeSessionId,
         title,
         isActive,
@@ -2303,7 +2369,15 @@ export async function getTaskSessions(taskId: string) {
   const response = await request<ServiceTaskSessionListResponse>(
     `/tasks/${encodeURIComponent(taskId)}/sessions`,
   );
-  return { data: projectTaskSessionListToSummaries(response) };
+  return {
+    data: projectTaskSessionListToSummaries(response),
+    meta: {
+      currentSessionId: asTaskTreeString(response.meta?.currentSessionId) ?? null,
+      currentPhaseId: asTaskTreeString(response.meta?.currentPhaseId) ?? null,
+      latestPhaseId: asTaskTreeString(response.meta?.latestPhaseId) ?? null,
+      phaseCount: typeof response.meta?.phaseCount === "number" ? response.meta.phaseCount : null,
+    },
+  };
 }
 
 export async function getTaskAgentRuns(_taskId: string) {
@@ -2373,7 +2447,13 @@ export async function continueTask(
   sessionId?: string,
   executionMode?: ExecutionMode,
 ) {
-  return request<{ ok: boolean; sessionId: string; taskSessionId?: string | null }>(
+  return request<
+    TaskPhaseExecutionEnvelope & {
+      parentSessionId?: string;
+      parentTaskSessionId?: string | null;
+      executionMode?: ExecutionMode;
+    }
+  >(
     `/tasks/${taskId}/continue`,
     {
       method: "POST",
@@ -3244,12 +3324,15 @@ export async function executeTask(
     steps?: ChainStepInput[];
   },
 ) {
-  return request<{
-    taskId: string;
-    sessionId: string;
-    agentRunId: string;
-    status: string;
-  }>(`/tasks/${taskId}/execute`, {
+  return request<
+    TaskPhaseExecutionEnvelope & {
+      taskId: string;
+      executionMode?: ExecutionMode;
+      candidates?: ProjectionRunCandidate[];
+      chainStepIndex?: number;
+      totalSteps?: number;
+    }
+  >(`/tasks/${taskId}/execute`, {
     method: "POST",
     ...(overrides ? { body: JSON.stringify(overrides) } : {}),
   });
@@ -3257,18 +3340,13 @@ export async function executeTask(
 
 export async function adoptParallelCandidate(
   taskId: string,
+  phaseId: string,
   candidateIndex: number,
-  context?: {
-    parallelRunId?: string;
-    sessionId?: string;
-    candidateSessionIds?: string[];
-  },
 ) {
-  return request<{ ok: boolean; winnerCandidateIndex: number }>(
-    `/tasks/${taskId}/candidates/${candidateIndex}/adopt`,
+  return request<{ ok: boolean; phaseId: string; winnerCandidateIndex: number }>(
+    `/tasks/${taskId}/phases/${encodeURIComponent(phaseId)}/candidates/${candidateIndex}/adopt`,
     {
       method: "POST",
-      body: JSON.stringify(context ?? {}),
     },
   );
 }

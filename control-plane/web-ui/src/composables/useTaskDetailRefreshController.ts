@@ -36,6 +36,14 @@ const WORKFLOW_REFRESH_REASONS = new Set<TaskDetailRefreshRequest["reason"]>([
 const FLOW_REFRESH_REASONS = new Set<TaskDetailRefreshRequest["reason"]>([
   "session-created",
   "session-updated",
+  "phase-created",
+  "phase-updated",
+  "phase-awaiting-adoption",
+  "phase-paused",
+  "phase-resumed",
+  "phase-cancelled",
+  "phase-completed",
+  "phase-failed",
 ]);
 
 export function toTaskDetailRefreshSnapshotOptions(

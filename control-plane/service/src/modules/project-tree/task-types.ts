@@ -1,4 +1,11 @@
-export type TaskStatus = "pending" | "running" | "paused" | "completed" | "failed" | "cancelled";
+export type TaskStatus =
+  | "pending"
+  | "running"
+  | "paused"
+  | "awaiting_adoption"
+  | "completed"
+  | "failed"
+  | "cancelled";
 
 export type TaskCategory = "quick" | "deep" | "ops" | "security" | "architecture";
 

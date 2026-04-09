@@ -1,7 +1,9 @@
 import { z } from "zod";
 
 export const updateStatusSchema = z.object({
-  status: z.enum(["running", "paused", "completed", "failed", "cancelled"]).optional(),
+  status: z
+    .enum(["running", "paused", "awaiting_adoption", "completed", "failed", "cancelled"])
+    .optional(),
   sessionId: z.string().optional(),
   agentRunId: z.string().optional(),
   result: z.string().optional(),
@@ -67,7 +69,7 @@ export function buildTaskUpdates(body: TaskStatusUpdate, existing: { startedAt: 
     updates.startedAt = new Date().toISOString();
   }
 
-  if (body.status === "running") {
+  if (body.status === "running" || body.status === "awaiting_adoption") {
     updates.finishedAt = null;
   }
 

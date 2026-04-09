@@ -299,7 +299,7 @@ describe("task completion routes", () => {
     await expect(response.text()).resolves.toContain("404 Not Found");
   });
 
-  test("POST /:taskId/candidates/:index/adopt completes session-first winner adoption on the main path", async () => {
+  test("POST /:taskId/phases/:phaseId/candidates/:index/adopt completes phase-first winner adoption on the main path", async () => {
     getSessionMessagesMock.mockResolvedValueOnce({
       ok: true,
       data: [
@@ -369,6 +369,9 @@ describe("task completion routes", () => {
                 branchName: "Candidate 1",
                 sourceType: "fork",
                 isActive: false,
+                phaseId: "phase-parallel-1",
+                phaseRole: "candidate",
+                phaseItemIndex: 0,
                 coordinationKey: "coord-1",
                 candidateIndex: 0,
                 executionStatus: "completed",
@@ -385,6 +388,9 @@ describe("task completion routes", () => {
                 branchName: "Candidate 2",
                 sourceType: "fork",
                 isActive: false,
+                phaseId: "phase-parallel-1",
+                phaseRole: "candidate",
+                phaseItemIndex: 1,
                 coordinationKey: "coord-1",
                 candidateIndex: 1,
                 executionStatus: "running",
@@ -398,7 +404,7 @@ describe("task completion routes", () => {
         },
       },
       {
-        url: "/api/tasks/task-adopt-1/adopt-winner",
+        url: "/api/tasks/task-adopt-1/phases/phase-parallel-1/adopt",
         method: "POST",
         response: (options) => ({ ok: true, data: { ok: true, body: options?.body } }),
       },
@@ -410,13 +416,20 @@ describe("task completion routes", () => {
     ]);
 
     const { taskRoutes } = await loadTaskRoutes();
-    const response = await taskRoutes.request("http://localhost/task-adopt-1/candidates/0/adopt", {
-      method: "POST",
-      headers: { Authorization: "Bearer test" },
-    });
+    const response = await taskRoutes.request(
+      "http://localhost/task-adopt-1/phases/phase-parallel-1/candidates/0/adopt",
+      {
+        method: "POST",
+        headers: { Authorization: "Bearer test" },
+      },
+    );
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ ok: true, winnerCandidateIndex: 0 });
+    await expect(response.json()).resolves.toEqual({
+      ok: true,
+      phaseId: "phase-parallel-1",
+      winnerCandidateIndex: 0,
+    });
     expect(terminateAgentMock).toHaveBeenCalledWith("agent-run-2");
     expect(wsBroadcastMock).toHaveBeenCalledTimes(2);
 
@@ -425,12 +438,11 @@ describe("task completion routes", () => {
     >;
     const adoptCall = cpFetchCalls.find(
       ([url, options]) =>
-        url === "/api/tasks/task-adopt-1/adopt-winner" &&
+        url === "/api/tasks/task-adopt-1/phases/phase-parallel-1/adopt" &&
         options?.method === "POST",
     );
     expect(adoptCall).toBeDefined();
     expect((adoptCall?.[1] as RouteFetchOptions | undefined)?.body).toEqual({
-      coordinationKey: "coord-1",
       winnerSessionId: "task-session:task-adopt-1:session-a",
     });
     const taskPatchCall = cpFetchCalls.find(
@@ -451,202 +463,7 @@ describe("task completion routes", () => {
     ).toBe(true);
   });
 
-  test("POST /:taskId/candidates/:index/adopt falls back to session-first winner adoption", async () => {
-    getSessionMessagesMock.mockResolvedValueOnce({
-      ok: true,
-      data: [
-        {
-          id: "msg-session-b",
-          info: {
-            role: "assistant",
-            created: Date.parse("2026-03-19T10:00:12.000Z"),
-            completed: Date.parse("2026-03-19T10:00:13.000Z"),
-          },
-          parts: [{ type: "text", text: "候选 B 结果" }],
-        },
-      ],
-    } as never);
-
-    mockCpFetchRoutes([
-      {
-        url: "/api/project-tree/tasks/task-adopt-session-first",
-        response: {
-          ok: true,
-          data: {
-            id: "task-adopt-session-first",
-            title: "Parallel clarify",
-            projectId: "proj-adopt",
-            prompt: "Clarify scope",
-            status: "running",
-            orchestrationKind: "parallel",
-            sessionId: "root-session",
-          },
-        },
-      },
-      {
-        url: "/api/tasks/task-adopt-session-first/sessions",
-        response: {
-          ok: true,
-          data: {
-            data: [
-              {
-                id: "task-session:task-adopt-session-first:root-session",
-                taskId: "task-adopt-session-first",
-                runtimeSessionId: "root-session",
-                parentRuntimeSessionId: null,
-                branchName: "main",
-                sourceType: "root",
-                isActive: true,
-                coordinationKey: null,
-                candidateIndex: null,
-                executionStatus: "completed",
-                createdAt: "2026-03-19T10:00:00.000Z",
-                updatedAt: "2026-03-19T10:00:00.000Z",
-                archivedAt: null,
-              },
-              {
-                id: "task-session:task-adopt-session-first:session-a",
-                taskId: "task-adopt-session-first",
-                runtimeSessionId: "session-a",
-                parentRuntimeSessionId: "root-session",
-                branchName: "Candidate 1",
-                sourceType: "fork",
-                isActive: false,
-                coordinationKey: "coord-1",
-                candidateIndex: 0,
-                executionStatus: "completed",
-                sessionKind: "candidate",
-                createdAt: "2026-03-19T10:00:01.000Z",
-                updatedAt: "2026-03-19T10:00:12.000Z",
-                archivedAt: null,
-              },
-              {
-                id: "task-session:task-adopt-session-first:session-b",
-                taskId: "task-adopt-session-first",
-                runtimeSessionId: "session-b",
-                parentRuntimeSessionId: "root-session",
-                branchName: "Candidate 2",
-                sourceType: "fork",
-                isActive: false,
-                coordinationKey: "coord-1",
-                candidateIndex: 1,
-                executionStatus: "completed",
-                sessionKind: "candidate",
-                createdAt: "2026-03-19T10:00:02.000Z",
-                updatedAt: "2026-03-19T10:00:13.000Z",
-                archivedAt: null,
-              },
-            ],
-          },
-        },
-      },
-      {
-        url: "/api/tasks/task-adopt-session-first/adopt-winner",
-        method: "POST",
-        response: (options) => ({ ok: true, data: { ok: true, body: options?.body } }),
-      },
-      {
-        url: "/api/tasks/task-adopt-session-first/sessions/task-session%3Atask-adopt-session-first%3Asession-b/activate",
-        method: "POST",
-        response: { ok: true, data: { ok: true } },
-      },
-    ]);
-
-    const { taskRoutes } = await loadTaskRoutes();
-    const response = await taskRoutes.request(
-      "http://localhost/task-adopt-session-first/candidates/1/adopt",
-      {
-        method: "POST",
-        headers: {
-          Authorization: "Bearer test",
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          parallelRunId: "tree-fallback:root-session",
-          sessionId: "session-b",
-        }),
-      },
-    );
-
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ ok: true, winnerCandidateIndex: 1 });
-    expect(terminateAgentMock).not.toHaveBeenCalled();
-    expect(wsBroadcastMock).toHaveBeenCalledTimes(2);
-
-    const cpFetchCalls = cpFetchMock.mock.calls as unknown as Array<
-      [string, RouteFetchOptions | undefined]
-    >;
-    const adoptWinnerCall = cpFetchCalls.find(
-      ([url, options]) =>
-        url === "/api/tasks/task-adopt-session-first/adopt-winner" &&
-        options?.method === "POST",
-    );
-    expect(adoptWinnerCall).toBeDefined();
-    expect((adoptWinnerCall?.[1] as RouteFetchOptions | undefined)?.body).toEqual({
-      coordinationKey: "coord-1",
-      winnerSessionId: "task-session:task-adopt-session-first:session-b",
-    });
-    const taskPatchCall = cpFetchCalls.find(
-      ([url, options]) =>
-        url === "/api/tasks/task-adopt-session-first" && options?.method === "PATCH",
-    );
-    expect(taskPatchCall).toBeDefined();
-    expect((taskPatchCall?.[1] as RouteFetchOptions | undefined)?.body).toEqual({
-      status: "completed",
-      sessionId: "session-b",
-      result: "候选 B 结果",
-    });
-    expect(
-      cpFetchCalls.some(
-        ([url, options]) =>
-          url ===
-            "/api/tasks/task-adopt-session-first/sessions/task-session%3Atask-adopt-session-first%3Asession-b/activate" &&
-          options?.method === "POST",
-      ),
-    ).toBe(true);
-
-    const broadcastCalls = wsBroadcastMock.mock.calls as unknown as Array<
-      [Record<string, unknown>]
-    >;
-    expect(broadcastCalls[0]?.[0]).toMatchObject({
-      type: "session.activated",
-      taskId: "task-adopt-session-first",
-      projectId: "proj-adopt",
-      data: {
-        sessionId: "session-b",
-        source: "candidate-adopt",
-      },
-    });
-    expect(broadcastCalls[1]?.[0]).toMatchObject({
-      type: "task.completed",
-      taskId: "task-adopt-session-first",
-      projectId: "proj-adopt",
-      data: {
-        status: "completed",
-        executionMode: "parallel",
-        winnerCandidateIndex: 1,
-        adoptedManually: true,
-        result: "候选 B 结果",
-      },
-    });
-  });
-
-  test("POST /:taskId/candidates/:index/adopt repairs missing coordination metadata for session-tree fallback candidates", async () => {
-    getSessionMessagesMock.mockResolvedValueOnce({
-      ok: true,
-      data: [
-        {
-          id: "msg-session-b-repair",
-          info: {
-            role: "assistant",
-            created: Date.parse("2026-03-19T10:00:12.000Z"),
-            completed: Date.parse("2026-03-19T10:00:13.000Z"),
-          },
-          parts: [{ type: "text", text: "候选 B 修复后结果" }],
-        },
-      ],
-    } as never);
-
+  test("POST /:taskId/phases/:phaseId/candidates/:index/adopt returns 404 when the phase candidate group is missing", async () => {
     mockCpFetchRoutes([
       {
         url: "/api/project-tree/tasks/task-adopt-repair",
@@ -677,8 +494,6 @@ describe("task completion routes", () => {
                 branchName: "main",
                 sourceType: "root",
                 isActive: true,
-                coordinationKey: null,
-                candidateIndex: null,
                 executionStatus: "completed",
                 createdAt: "2026-03-19T10:00:00.000Z",
                 updatedAt: "2026-03-19T10:00:00.000Z",
@@ -692,9 +507,12 @@ describe("task completion routes", () => {
                 branchName: "Candidate 1",
                 sourceType: "fork",
                 isActive: false,
-                coordinationKey: null,
-                candidateIndex: null,
+                phaseId: "phase-other",
+                phaseRole: "candidate",
+                phaseItemIndex: 0,
+                candidateIndex: 0,
                 executionStatus: "completed",
+                sessionKind: "candidate",
                 createdAt: "2026-03-19T10:00:01.000Z",
                 updatedAt: "2026-03-19T10:00:12.000Z",
                 archivedAt: null,
@@ -707,9 +525,107 @@ describe("task completion routes", () => {
                 branchName: "Candidate 2",
                 sourceType: "fork",
                 isActive: false,
-                coordinationKey: null,
-                candidateIndex: null,
+                phaseId: "phase-other",
+                phaseRole: "candidate",
+                phaseItemIndex: 1,
+                candidateIndex: 1,
                 executionStatus: "completed",
+                sessionKind: "candidate",
+                createdAt: "2026-03-19T10:00:02.000Z",
+                updatedAt: "2026-03-19T10:00:13.000Z",
+                archivedAt: null,
+              },
+            ],
+          },
+        },
+      },
+    ]);
+
+    const { taskRoutes } = await loadTaskRoutes();
+    const response = await taskRoutes.request(
+      "http://localhost/task-adopt-repair/phases/phase-missing/candidates/1/adopt",
+      {
+        method: "POST",
+        headers: { Authorization: "Bearer test" },
+      },
+    );
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({
+      error: "Task phase candidate group not found",
+    });
+  });
+
+  test("POST /:taskId/phases/:phaseId/candidates/:index/adopt allows stale running candidate status when task is awaiting adoption", async () => {
+    getSessionMessagesMock.mockResolvedValueOnce({
+      ok: true,
+      data: [
+        {
+          id: "msg-session-b-awaiting",
+          info: {
+            role: "assistant",
+            created: Date.parse("2026-03-19T10:00:12.000Z"),
+            completed: Date.parse("2026-03-19T10:00:13.000Z"),
+          },
+          parts: [{ type: "text", text: "候选 B 结果" }],
+        },
+      ],
+    } as never);
+
+    mockCpFetchRoutes([
+      {
+        url: "/api/project-tree/tasks/task-adopt-awaiting",
+        response: {
+          ok: true,
+          data: {
+            id: "task-adopt-awaiting",
+            title: "Parallel clarify",
+            projectId: "proj-adopt",
+            prompt: "Clarify scope",
+            status: "awaiting_adoption",
+            orchestrationKind: "parallel",
+            sessionId: "root-session",
+          },
+        },
+      },
+      {
+        url: "/api/tasks/task-adopt-awaiting/sessions",
+        response: {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "task-session:task-adopt-awaiting:session-a",
+                taskId: "task-adopt-awaiting",
+                runtimeSessionId: "session-a",
+                parentRuntimeSessionId: "root-session",
+                branchName: "Candidate 1",
+                sourceType: "fork",
+                isActive: false,
+                phaseId: "phase-awaiting-1",
+                phaseRole: "candidate",
+                phaseItemIndex: 0,
+                candidateIndex: 0,
+                executionStatus: "completed",
+                sessionKind: "candidate",
+                createdAt: "2026-03-19T10:00:01.000Z",
+                updatedAt: "2026-03-19T10:00:12.000Z",
+                archivedAt: null,
+              },
+              {
+                id: "task-session:task-adopt-awaiting:session-b",
+                taskId: "task-adopt-awaiting",
+                runtimeSessionId: "session-b",
+                parentRuntimeSessionId: "root-session",
+                branchName: "Candidate 2",
+                sourceType: "fork",
+                isActive: false,
+                phaseId: "phase-awaiting-1",
+                phaseRole: "candidate",
+                phaseItemIndex: 1,
+                candidateIndex: 1,
+                executionStatus: "running",
+                sessionKind: "candidate",
                 createdAt: "2026-03-19T10:00:02.000Z",
                 updatedAt: "2026-03-19T10:00:13.000Z",
                 archivedAt: null,
@@ -719,17 +635,12 @@ describe("task completion routes", () => {
         },
       },
       {
-        url: "/api/tasks/task-adopt-repair/sessions",
-        method: "POST",
-        response: { ok: true, data: { ok: true } },
-      },
-      {
-        url: "/api/tasks/task-adopt-repair/adopt-winner",
+        url: "/api/tasks/task-adopt-awaiting/phases/phase-awaiting-1/adopt",
         method: "POST",
         response: (options) => ({ ok: true, data: { ok: true, body: options?.body } }),
       },
       {
-        url: "/api/tasks/task-adopt-repair/sessions/task-session%3Atask-adopt-repair%3Asession-b/activate",
+        url: "/api/tasks/task-adopt-awaiting/sessions/task-session%3Atask-adopt-awaiting%3Asession-b/activate",
         method: "POST",
         response: { ok: true, data: { ok: true } },
       },
@@ -737,85 +648,131 @@ describe("task completion routes", () => {
 
     const { taskRoutes } = await loadTaskRoutes();
     const response = await taskRoutes.request(
-      "http://localhost/task-adopt-repair/candidates/1/adopt",
+      "http://localhost/task-adopt-awaiting/phases/phase-awaiting-1/candidates/1/adopt",
       {
         method: "POST",
-        headers: {
-          Authorization: "Bearer test",
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          parallelRunId: "tree-fallback:root-session",
-          sessionId: "session-b",
-          candidateSessionIds: ["session-a", "session-b"],
-        }),
+        headers: { Authorization: "Bearer test" },
       },
     );
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ ok: true, winnerCandidateIndex: 1 });
+    await expect(response.json()).resolves.toEqual({
+      ok: true,
+      phaseId: "phase-awaiting-1",
+      winnerCandidateIndex: 1,
+    });
 
     const cpFetchCalls = cpFetchMock.mock.calls as unknown as Array<
       [string, RouteFetchOptions | undefined]
     >;
-    const repairCalls = cpFetchCalls.filter(
-      ([url, options]) =>
-        url === "/api/tasks/task-adopt-repair/sessions" && options?.method === "POST",
+    expect(
+      cpFetchCalls.some(
+        ([url, options]) =>
+          url === "/api/tasks/task-adopt-awaiting/phases/phase-awaiting-1/adopt" &&
+          options?.method === "POST",
+      ),
+    ).toBe(true);
+  });
+
+  test("POST /:taskId/phases/:phaseId/candidates/:index/adopt rejects genuinely running candidate even when task is awaiting adoption", async () => {
+    getSessionMessagesMock.mockResolvedValueOnce({ ok: true, data: [] } as never);
+    agentRunRegistryMocks.findAgentRunBySessionId.mockImplementation((sessionId: string) =>
+      sessionId === "session-b"
+        ? ({ agentRunId: "agent-run-running", status: "running", subSessionId: "session-b" } as never)
+        : undefined,
     );
-    expect(repairCalls).toHaveLength(2);
-    expect(repairCalls.map(([, options]) => options?.body)).toEqual([
+
+    mockCpFetchRoutes([
       {
-        runtimeSessionId: "session-a",
-        parentRuntimeSessionId: "root-session",
-        branchName: "Candidate 1",
-        sourceType: "fork",
-        sessionKind: "candidate",
-        executionModeSnapshot: "parallel",
-        isActive: false,
-        candidateIndex: 0,
-        stepIndex: undefined,
-        selectedModel: undefined,
-        coordinationKey: "root-session",
-        operationId: undefined,
+        url: "/api/project-tree/tasks/task-adopt-awaiting-running",
+        response: {
+          ok: true,
+          data: {
+            id: "task-adopt-awaiting-running",
+            title: "Parallel clarify",
+            projectId: "proj-adopt",
+            prompt: "Clarify scope",
+            status: "awaiting_adoption",
+            orchestrationKind: "parallel",
+            sessionId: "root-session",
+          },
+        },
       },
       {
-        runtimeSessionId: "session-b",
-        parentRuntimeSessionId: "root-session",
-        branchName: "Candidate 2",
-        sourceType: "fork",
-        sessionKind: "candidate",
-        executionModeSnapshot: "parallel",
-        isActive: false,
-        candidateIndex: 1,
-        stepIndex: undefined,
-        selectedModel: undefined,
-        coordinationKey: "root-session",
-        operationId: undefined,
+        url: "/api/tasks/task-adopt-awaiting-running/sessions",
+        response: {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "task-session:task-adopt-awaiting-running:session-a",
+                taskId: "task-adopt-awaiting-running",
+                runtimeSessionId: "session-a",
+                parentRuntimeSessionId: "root-session",
+                branchName: "Candidate 1",
+                sourceType: "fork",
+                isActive: false,
+                phaseId: "phase-awaiting-running-1",
+                phaseRole: "candidate",
+                phaseItemIndex: 0,
+                candidateIndex: 0,
+                executionStatus: "completed",
+                sessionKind: "candidate",
+                createdAt: "2026-03-19T10:00:01.000Z",
+                updatedAt: "2026-03-19T10:00:12.000Z",
+                archivedAt: null,
+              },
+              {
+                id: "task-session:task-adopt-awaiting-running:session-b",
+                taskId: "task-adopt-awaiting-running",
+                runtimeSessionId: "session-b",
+                parentRuntimeSessionId: "root-session",
+                branchName: "Candidate 2",
+                sourceType: "fork",
+                isActive: true,
+                phaseId: "phase-awaiting-running-1",
+                phaseRole: "candidate",
+                phaseItemIndex: 1,
+                candidateIndex: 1,
+                executionStatus: "running",
+                sessionKind: "candidate",
+                createdAt: "2026-03-19T10:00:02.000Z",
+                updatedAt: "2026-03-19T10:00:13.000Z",
+                archivedAt: null,
+              },
+            ],
+          },
+        },
       },
     ]);
 
-    const adoptWinnerCall = cpFetchCalls.find(
-      ([url, options]) =>
-        url === "/api/tasks/task-adopt-repair/adopt-winner" && options?.method === "POST",
+    const { taskRoutes } = await loadTaskRoutes();
+    const response = await taskRoutes.request(
+      "http://localhost/task-adopt-awaiting-running/phases/phase-awaiting-running-1/candidates/1/adopt",
+      {
+        method: "POST",
+        headers: { Authorization: "Bearer test" },
+      },
     );
-    expect(adoptWinnerCall).toBeDefined();
-    expect((adoptWinnerCall?.[1] as RouteFetchOptions | undefined)?.body).toEqual({
-      coordinationKey: "root-session",
-      winnerSessionId: "task-session:task-adopt-repair:session-b",
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Candidate 1 is not completed (status: running)",
     });
-    const taskPatchCall = cpFetchCalls.find(
-      ([url, options]) =>
-        url === "/api/tasks/task-adopt-repair" && options?.method === "PATCH",
-    );
-    expect(taskPatchCall).toBeDefined();
-    expect((taskPatchCall?.[1] as RouteFetchOptions | undefined)?.body).toEqual({
-      status: "completed",
-      sessionId: "session-b",
-      result: "候选 B 修复后结果",
-    });
+
+    const cpFetchCalls = cpFetchMock.mock.calls as unknown as Array<
+      [string, RouteFetchOptions | undefined]
+    >;
+    expect(
+      cpFetchCalls.some(
+        ([url, options]) =>
+          url === "/api/tasks/task-adopt-awaiting-running/phases/phase-awaiting-running-1/adopt" &&
+          options?.method === "POST",
+      ),
+    ).toBe(false);
   });
 
-  test("POST /:taskId/candidates/:index/adopt treats legacy complete status as completed", async () => {
+  test("POST /:taskId/phases/:phaseId/candidates/:index/adopt treats legacy complete status as completed", async () => {
     getSessionMessagesMock.mockResolvedValueOnce({
       ok: true,
       data: [
@@ -876,6 +833,9 @@ describe("task completion routes", () => {
                 branchName: "Candidate 1",
                 sourceType: "fork",
                 isActive: false,
+                phaseId: "phase-parallel-complete",
+                phaseRole: "candidate",
+                phaseItemIndex: 0,
                 coordinationKey: "coord-1",
                 candidateIndex: 0,
                 executionStatus: "complete",
@@ -892,6 +852,9 @@ describe("task completion routes", () => {
                 branchName: "Candidate 2",
                 sourceType: "fork",
                 isActive: false,
+                phaseId: "phase-parallel-complete",
+                phaseRole: "candidate",
+                phaseItemIndex: 1,
                 coordinationKey: "coord-1",
                 candidateIndex: 1,
                 executionStatus: "running",
@@ -905,7 +868,7 @@ describe("task completion routes", () => {
         },
       },
       {
-        url: "/api/tasks/task-adopt-complete-status/adopt-winner",
+        url: "/api/tasks/task-adopt-complete-status/phases/phase-parallel-complete/adopt",
         method: "POST",
         response: (options) => ({ ok: true, data: { ok: true, body: options?.body } }),
       },
@@ -918,7 +881,7 @@ describe("task completion routes", () => {
 
     const { taskRoutes } = await loadTaskRoutes();
     const response = await taskRoutes.request(
-      "http://localhost/task-adopt-complete-status/candidates/0/adopt",
+      "http://localhost/task-adopt-complete-status/phases/phase-parallel-complete/candidates/0/adopt",
       {
         method: "POST",
         headers: { Authorization: "Bearer test" },
@@ -926,7 +889,11 @@ describe("task completion routes", () => {
     );
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ ok: true, winnerCandidateIndex: 0 });
+    await expect(response.json()).resolves.toEqual({
+      ok: true,
+      phaseId: "phase-parallel-complete",
+      winnerCandidateIndex: 0,
+    });
     const cpFetchCalls = cpFetchMock.mock.calls as unknown as Array<
       [string, RouteFetchOptions | undefined]
     >;
@@ -942,10 +909,10 @@ describe("task completion routes", () => {
     });
   });
 
-  test("POST /:taskId/candidates/:index/adopt returns 400 for invalid candidate index", async () => {
+  test("POST /:taskId/phases/:phaseId/candidates/:index/adopt returns 400 for invalid candidate index", async () => {
     const { taskRoutes } = await loadTaskRoutes();
     const response = await taskRoutes.request(
-      "http://localhost/task-adopt-invalid/candidates/not-a-number/adopt",
+      "http://localhost/task-adopt-invalid/phases/phase-invalid/candidates/not-a-number/adopt",
       {
         method: "POST",
         headers: { Authorization: "Bearer test" },
@@ -956,7 +923,7 @@ describe("task completion routes", () => {
     await expect(response.json()).resolves.toEqual({ error: "Invalid candidate index" });
   });
 
-  test("POST /:taskId/candidates/:index/adopt returns 404 when task does not exist", async () => {
+  test("POST /:taskId/phases/:phaseId/candidates/:index/adopt returns 404 when task does not exist", async () => {
     cpFetchMock.mockImplementation(async (...args: unknown[]) => {
       const [url, options] = args as [string, RouteFetchOptions | undefined];
       if (!options?.method && url === "/api/project-tree/tasks/task-adopt-missing") {
@@ -968,7 +935,7 @@ describe("task completion routes", () => {
 
     const { taskRoutes } = await loadTaskRoutes();
     const response = await taskRoutes.request(
-      "http://localhost/task-adopt-missing/candidates/0/adopt",
+      "http://localhost/task-adopt-missing/phases/phase-missing/candidates/0/adopt",
       {
         method: "POST",
         headers: { Authorization: "Bearer test" },
@@ -979,7 +946,7 @@ describe("task completion routes", () => {
     await expect(response.json()).resolves.toEqual({ error: "Task not found" });
   });
 
-  test("POST /:taskId/candidates/:index/adopt returns 400 when task orchestration is not parallel", async () => {
+  test("POST /:taskId/phases/:phaseId/candidates/:index/adopt returns 400 when task orchestration is not parallel", async () => {
     cpFetchMock.mockImplementation(async (...args: unknown[]) => {
       const [url, options] = args as [string, RouteFetchOptions | undefined];
       if (!options?.method && url === "/api/project-tree/tasks/task-adopt-single") {
@@ -1001,7 +968,7 @@ describe("task completion routes", () => {
 
     const { taskRoutes } = await loadTaskRoutes();
     const response = await taskRoutes.request(
-      "http://localhost/task-adopt-single/candidates/0/adopt",
+      "http://localhost/task-adopt-single/phases/phase-single/candidates/0/adopt",
       {
         method: "POST",
         headers: { Authorization: "Bearer test" },

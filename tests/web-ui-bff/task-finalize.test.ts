@@ -88,4 +88,34 @@ describe("finalizeTaskState", () => {
     expect(patchBody).not.toHaveProperty("executionPlan");
     expect(patchBody).not.toHaveProperty("parallelRunHistory");
   });
+
+  test("does not overwrite awaiting_adoption parallel tasks back to completed", async () => {
+    const { finalizeTaskState } = await loadFinalizeModule();
+
+    const finalized = await finalizeTaskState({
+      authorization: "Bearer test",
+      taskId: "task-awaiting-adoption",
+      status: "completed",
+      sessionId: "ses-parallel-a",
+      agentRunId: "run-parallel-a",
+      result: "late completion",
+      task: {
+        id: "task-awaiting-adoption",
+        status: "awaiting_adoption",
+        sessionId: "ses-root",
+        agentRunId: "run-root",
+        orchestrationKind: "parallel",
+        currentRunId: "run-domain-2",
+        startedAt: "2026-04-09T08:20:10.000Z",
+      },
+    });
+
+    expect(finalized).toBe(true);
+    expect(cpFetchMock).not.toHaveBeenCalledWith(
+      "/api/tasks/task-awaiting-adoption",
+      expect.objectContaining({
+        method: "PATCH",
+      }),
+    );
+  });
 });

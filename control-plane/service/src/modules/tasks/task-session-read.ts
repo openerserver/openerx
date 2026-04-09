@@ -3,6 +3,7 @@ import { db } from "../../db";
 import {
   roleAggregateConclusions,
   taskArtifacts,
+  taskExecutionPhases,
   taskMessageParts,
   taskMessages,
   taskOperations,
@@ -17,6 +18,10 @@ import {
 import type { TaskTreeRecord } from "../project-tree/task-view";
 import { ensureTaskWorkflowFactsAvailable } from "../task-workflows/legacy-role-workflow-storage";
 import { resolvePublicTaskSessionSourceType } from "./task-session-public-source-type";
+import {
+  dedupeTaskToolTimelineRows,
+  resolveTaskToolIdentity,
+} from "./task-tool-dedupe";
 import {
   orderTaskSessionsByTopology,
   resolveLatestTaskSessionId,
@@ -81,6 +86,24 @@ type CanonicalTaskMessageRow = {
   errorText: string | null;
   createdAt: string;
   updatedAt: string;
+};
+
+type TaskTimelineViewRow = {
+  id: string;
+  taskId: string;
+  projectId: string;
+  sessionId: string | null;
+  messageId: string | null;
+  operationId: string | null;
+  artifactId: string | null;
+  itemKind: string | null;
+  itemRole: string | null;
+  title: string | null;
+  displayText: string | null;
+  metadataJson: Record<string, unknown> | null;
+  sortAt: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
 };
 
 const CANONICAL_TASK_MESSAGE_COLUMNS = {
@@ -265,6 +288,13 @@ async function loadTaskSessionRecords(taskId: string) {
   return orderTaskSessionsByTopology(sessions);
 }
 
+async function loadTaskExecutionPhaseRecords(taskId: string) {
+  return db.query.taskExecutionPhases.findMany({
+    where: eq(taskExecutionPhases.taskId, taskId),
+    orderBy: [asc(taskExecutionPhases.phaseIndex), asc(taskExecutionPhases.createdAt)],
+  });
+}
+
 function collectMissingTaskSessionModelIds(
   sessions: Array<{ id: string; selectedModel?: string | null; effectiveModel?: string | null }>,
 ) {
@@ -332,13 +362,120 @@ function resolveCurrentTaskSessionId(
   return resolveTaskSessionRecordId(sessions, currentSessionId);
 }
 
+function resolveTaskSessionPhaseId<
+  TSession extends { id: string; phaseId?: string | null; coordinationKey?: string | null },
+>(session?: TSession | null) {
+  return asNonEmptyString(session?.phaseId) ?? session?.id ?? null;
+}
+
+function findTaskSessionByIdentifier<
+  TSession extends { id: string; runtimeSessionId?: string | null },
+>(
+  sessions: TSession[],
+  sessionId?: string | null,
+) {
+  if (!sessionId) {
+    return null;
+  }
+
+  return (
+    sessions.find(
+      (session) => session.id === sessionId || session.runtimeSessionId === sessionId,
+    ) ?? null
+  );
+}
+
+function resolveTaskSessionPhaseIdBySessionId<
+  TSession extends {
+    id: string;
+    phaseId?: string | null;
+    coordinationKey?: string | null;
+    runtimeSessionId?: string | null;
+  },
+>(
+  sessions: TSession[],
+  sessionId?: string | null,
+) {
+  return resolveTaskSessionPhaseId(findTaskSessionByIdentifier(sessions, sessionId));
+}
+
+function countTaskSessionPhases<
+  TSession extends { id: string; phaseId?: string | null; coordinationKey?: string | null },
+>(sessions: TSession[]) {
+  const phaseIds = new Set<string>();
+
+  for (const session of sessions) {
+    const phaseId = resolveTaskSessionPhaseId(session);
+    if (phaseId) {
+      phaseIds.add(phaseId);
+    }
+  }
+
+  return phaseIds.size;
+}
+
+function normalizePublicTaskSessionStatusValue(status?: string | null) {
+  const normalizedStatus = asNonEmptyString(status)?.toLowerCase();
+  if (!normalizedStatus) {
+    return null;
+  }
+
+  if (normalizedStatus === "completed") {
+    return "complete" as const;
+  }
+
+  if (normalizedStatus === "error") {
+    return "failed" as const;
+  }
+
+  if (normalizedStatus === "stopped" || normalizedStatus === "terminated") {
+    return "cancelled" as const;
+  }
+
+  if (
+    normalizedStatus === "queued" ||
+    normalizedStatus === "running" ||
+    normalizedStatus === "awaiting_adoption" ||
+    normalizedStatus === "complete" ||
+    normalizedStatus === "failed" ||
+    normalizedStatus === "cancelled"
+  ) {
+    return normalizedStatus;
+  }
+
+  return null;
+}
+
+function normalizePublicTaskSessionExecutionStatus(args: {
+  executionStatus?: string | null;
+  status?: string | null;
+}) {
+  const normalizedExecutionStatus = normalizePublicTaskSessionStatusValue(args.executionStatus);
+  const normalizedLegacyStatus = normalizePublicTaskSessionStatusValue(args.status);
+
+  if (
+    (normalizedExecutionStatus === "queued" || normalizedExecutionStatus === "running") &&
+    normalizedLegacyStatus &&
+    normalizedLegacyStatus !== normalizedExecutionStatus
+  ) {
+    return normalizedLegacyStatus;
+  }
+
+  return normalizedExecutionStatus ?? normalizedLegacyStatus;
+}
+
 function projectPublicTaskSessions<
   TSession extends {
     id: string;
     parentSessionId?: string | null;
     runtimeSessionId?: string | null;
     forkedFromMessageId?: string | null;
+    status?: string | null;
+    executionStatus?: string | null;
     sessionKind?: string | null;
+    phaseId?: string | null;
+    phaseRole?: string | null;
+    phaseItemIndex?: number | null;
     candidateIndex?: number | null;
     executionModeSnapshot?: string | null;
     coordinationKey?: string | null;
@@ -350,9 +487,15 @@ function projectPublicTaskSessions<
     const parentRuntimeSessionId = session.parentSessionId
       ? (byId.get(session.parentSessionId)?.runtimeSessionId ?? session.parentSessionId)
       : null;
+    const phaseId = resolveTaskSessionPhaseId(session);
 
     return {
       ...session,
+      phaseId,
+      executionStatus: normalizePublicTaskSessionExecutionStatus({
+        executionStatus: session.executionStatus ?? null,
+        status: session.status ?? null,
+      }),
       parentRuntimeSessionId,
       sourceType: resolvePublicTaskSessionSourceType({
         sourceType: null,
@@ -363,9 +506,81 @@ function projectPublicTaskSessions<
         candidateIndex:
           typeof session.candidateIndex === "number" ? session.candidateIndex : null,
         executionModeSnapshot: session.executionModeSnapshot ?? null,
-        coordinationKey: session.coordinationKey ?? null,
+        phaseId,
       }),
     };
+  });
+}
+
+function resolveTaskPhaseRoleSortOrder(phaseRole?: string | null) {
+  switch (phaseRole) {
+    case "mainline":
+      return 0;
+    case "step":
+      return 1;
+    case "candidate":
+      return 2;
+    case "judge":
+      return 3;
+    default:
+      return 4;
+  }
+}
+
+function resolveTaskPhaseSortTime(session: { createdAt?: string | null; updatedAt?: string | null }) {
+  const createdAt = Date.parse(session.createdAt ?? "");
+  if (!Number.isNaN(createdAt)) {
+    return createdAt;
+  }
+
+  const updatedAt = Date.parse(session.updatedAt ?? "");
+  return Number.isNaN(updatedAt) ? Number.MAX_SAFE_INTEGER : updatedAt;
+}
+
+function orderTaskSessionsByPhase<
+  TSession extends {
+    id: string;
+    runtimeSessionId?: string | null;
+    phaseId?: string | null;
+    coordinationKey?: string | null;
+    phaseRole?: string | null;
+    phaseItemIndex?: number | null;
+    createdAt?: string | null;
+    updatedAt?: string | null;
+  },
+>(sessions: TSession[], phaseIndexById: Map<string, number>) {
+  return sessions.slice().sort((left, right) => {
+    const leftPhaseIndex =
+      phaseIndexById.get(resolveTaskSessionPhaseId(left) ?? "") ?? Number.MAX_SAFE_INTEGER;
+    const rightPhaseIndex =
+      phaseIndexById.get(resolveTaskSessionPhaseId(right) ?? "") ?? Number.MAX_SAFE_INTEGER;
+    if (leftPhaseIndex !== rightPhaseIndex) {
+      return leftPhaseIndex - rightPhaseIndex;
+    }
+
+    const leftRoleOrder = resolveTaskPhaseRoleSortOrder(left.phaseRole);
+    const rightRoleOrder = resolveTaskPhaseRoleSortOrder(right.phaseRole);
+    if (leftRoleOrder !== rightRoleOrder) {
+      return leftRoleOrder - rightRoleOrder;
+    }
+
+    const leftItemIndex =
+      typeof left.phaseItemIndex === "number" ? left.phaseItemIndex : Number.MAX_SAFE_INTEGER;
+    const rightItemIndex =
+      typeof right.phaseItemIndex === "number" ? right.phaseItemIndex : Number.MAX_SAFE_INTEGER;
+    if (leftItemIndex !== rightItemIndex) {
+      return leftItemIndex - rightItemIndex;
+    }
+
+    const leftTime = resolveTaskPhaseSortTime(left);
+    const rightTime = resolveTaskPhaseSortTime(right);
+    if (leftTime !== rightTime) {
+      return leftTime - rightTime;
+    }
+
+    const leftRuntimeSessionId = asNonEmptyString(left.runtimeSessionId) ?? left.id;
+    const rightRuntimeSessionId = asNonEmptyString(right.runtimeSessionId) ?? right.id;
+    return leftRuntimeSessionId.localeCompare(rightRuntimeSessionId);
   });
 }
 
@@ -1232,6 +1447,50 @@ function extractTaskSessionMessageIdentity(message: TaskSessionMessageRecord) {
   return (typeof message.runtimeMessageId === "string" && message.runtimeMessageId.trim()) || message.id;
 }
 
+function extractTaskSessionMessageRuntimeSessionId(message: TaskSessionMessageRecord) {
+  const rawPayload = asRecord(message.rawPayload);
+  const rawInfo = asRecord(rawPayload?.info);
+  return (
+    asNonEmptyString(rawInfo?.sessionID) ??
+    asNonEmptyString(rawInfo?.sessionId) ??
+    asNonEmptyString(rawPayload?.sessionID) ??
+    asNonEmptyString(rawPayload?.sessionId) ??
+    null
+  );
+}
+
+function resolveTaskSessionMessageToolCallIdentity(message: TaskSessionMessageRecord) {
+  if (extractTaskSessionMessageRole(message) !== "tool") {
+    return null;
+  }
+
+  const runtimeSessionId = extractTaskSessionMessageRuntimeSessionId(message);
+  const rawPayload = asRecord(message.rawPayload);
+  const rawInfo = asRecord(rawPayload?.info);
+  const rawInfoTool = asRecord(rawInfo?.tool);
+  const rawPart = asRecord(rawPayload?.part);
+  const rawPayloadParts = Array.isArray(rawPayload?.parts)
+    ? rawPayload.parts
+        .map((part) => asRecord(part))
+        .filter((part): part is Record<string, unknown> => Boolean(part))
+    : [];
+  const persistedParts = Array.isArray(message.parts)
+    ? message.parts
+        .map((part) => asRecord(part.jsonPayload))
+        .filter((part): part is Record<string, unknown> => Boolean(part))
+    : [];
+
+  return resolveTaskToolIdentity({
+    runtimeSessionId,
+    identitySources: [rawPart, rawInfoTool, ...persistedParts, ...rawPayloadParts],
+    runtimeCandidates: [
+      asNonEmptyString(message.runtimeMessageId),
+      asNonEmptyString(rawInfo?.id),
+      asNonEmptyString(rawPayload?.id),
+    ],
+  });
+}
+
 function countTaskSessionMessageParts(message: TaskSessionMessageRecord) {
   if (Array.isArray(message.parts) && message.parts.length > 0) {
     return message.parts.length;
@@ -1246,7 +1505,18 @@ function normalizeTaskSessionMessageComparableText(text: string) {
 }
 
 function resolveTaskSessionMessageSemanticDuplicateKey(message: TaskSessionMessageRecord) {
-  if (extractTaskSessionMessageRole(message) !== "assistant") {
+  const role = extractTaskSessionMessageRole(message);
+  if (role === "tool") {
+    const sessionId = asNonEmptyString(message.sessionId);
+    const toolCallIdentity = resolveTaskSessionMessageToolCallIdentity(message);
+    if (!sessionId || !toolCallIdentity) {
+      return null;
+    }
+
+    return `${sessionId}::tool::${toolCallIdentity}`;
+  }
+
+  if (role !== "assistant") {
     return null;
   }
 
@@ -1271,16 +1541,40 @@ function resolveTaskSessionMessageRichness(message: TaskSessionMessageRecord) {
   return countTaskSessionMessageParts(message) * 1000 + summaryBonus + previewBonus + textLength;
 }
 
+function resolveTaskSessionMessageStatePriority(message: TaskSessionMessageRecord) {
+  switch (asNonEmptyString(message.status)) {
+    case "completed":
+      return 3;
+    case "error":
+    case "failed":
+    case "cancelled":
+      return 2;
+    case "streaming":
+    case "running":
+      return 1;
+    case "pending":
+      return 0;
+    default:
+      return -1;
+  }
+}
+
 function mergeTaskSessionDuplicateMessages(
   existing: TaskSessionMessageRecord,
   candidate: TaskSessionMessageRecord,
 ) {
   const existingText = extractTaskSessionMessageText(existing);
   const candidateText = extractTaskSessionMessageText(candidate);
+  const existingStatePriority = resolveTaskSessionMessageStatePriority(existing);
+  const candidateStatePriority = resolveTaskSessionMessageStatePriority(candidate);
   const preferred =
-    resolveTaskSessionMessageRichness(candidate) > resolveTaskSessionMessageRichness(existing)
-      ? candidate
-      : existing;
+    candidateStatePriority === existingStatePriority
+      ? resolveTaskSessionMessageRichness(candidate) > resolveTaskSessionMessageRichness(existing)
+        ? candidate
+        : existing
+      : candidateStatePriority > existingStatePriority
+        ? candidate
+        : existing;
   const preferredText = extractTaskSessionMessageText(preferred);
   const longerText =
     candidateText.length > existingText.length
@@ -1382,7 +1676,9 @@ function resolveTaskSessionMessageRolePriority(message: TaskSessionMessageRecord
   }
 }
 
-function sortSingleTaskSessionMessageRecords(messages: TaskSessionMessageRecord[]) {
+function sortSingleTaskSessionMessageRecords(
+  messages: TaskSessionMessageRecord[],
+) {
   return messages
     .map((message, index) => ({
       message,
@@ -1421,72 +1717,66 @@ function sortSingleTaskSessionMessageRecords(messages: TaskSessionMessageRecord[
 }
 
 function sortTaskSessionMessageRecordsChronologically(
-  messages: TaskSessionMessageRecord[],
+  messages: LoadedTaskSessionMessageRecord[],
   sessionIds: string[],
 ) {
-  const sessionOrder = new Map<string, number>();
-  for (const [index, sessionId] of sessionIds.entries()) {
-    if (!sessionOrder.has(sessionId)) {
-      sessionOrder.set(sessionId, index);
+  const sessionOrder = new Map(sessionIds.map((sessionId, index) => [sessionId, index] as const));
+
+  return messages.slice().sort((left, right) => {
+    const leftSortTime = resolveTaskSessionMessageSortTime(left);
+    const rightSortTime = resolveTaskSessionMessageSortTime(right);
+    if (leftSortTime != null && rightSortTime != null && leftSortTime !== rightSortTime) {
+      return leftSortTime - rightSortTime;
     }
-  }
+    if (leftSortTime == null && rightSortTime != null) {
+      return 1;
+    }
+    if (leftSortTime != null && rightSortTime == null) {
+      return -1;
+    }
 
-  return messages
-    .map((message, index) => ({
-      message,
-      index,
-      sortTime: resolveTaskSessionMessageSortTime(message),
-      rolePriority: resolveTaskSessionMessageRolePriority(message),
-      sessionIndex: sessionOrder.get(message.sessionId ?? "") ?? Number.MAX_SAFE_INTEGER,
-      messageIndex:
-        typeof message.messageIndex === "number" && Number.isFinite(message.messageIndex)
-          ? message.messageIndex
-          : Number.MAX_SAFE_INTEGER,
-    }))
-    .sort((left, right) => {
-      if (left.sortTime != null && right.sortTime != null && left.sortTime !== right.sortTime) {
-        return left.sortTime - right.sortTime;
-      }
+    const leftSessionIndex = sessionOrder.get(left.sessionId ?? "") ?? Number.MAX_SAFE_INTEGER;
+    const rightSessionIndex = sessionOrder.get(right.sessionId ?? "") ?? Number.MAX_SAFE_INTEGER;
+    if (leftSessionIndex !== rightSessionIndex) {
+      return leftSessionIndex - rightSessionIndex;
+    }
 
-      if (left.sortTime != null && right.sortTime == null) {
-        return -1;
-      }
+    const leftRolePriority = resolveTaskSessionMessageRolePriority(left);
+    const rightRolePriority = resolveTaskSessionMessageRolePriority(right);
+    if (leftRolePriority !== rightRolePriority) {
+      return leftRolePriority - rightRolePriority;
+    }
 
-      if (left.sortTime == null && right.sortTime != null) {
-        return 1;
-      }
+    const leftMessageIndex =
+      typeof left.messageIndex === "number" ? left.messageIndex : Number.MAX_SAFE_INTEGER;
+    const rightMessageIndex =
+      typeof right.messageIndex === "number" ? right.messageIndex : Number.MAX_SAFE_INTEGER;
+    if (leftMessageIndex !== rightMessageIndex) {
+      return leftMessageIndex - rightMessageIndex;
+    }
 
-      if (left.sessionIndex !== right.sessionIndex) {
-        return left.sessionIndex - right.sessionIndex;
-      }
-
-      if (left.rolePriority !== right.rolePriority) {
-        return left.rolePriority - right.rolePriority;
-      }
-
-      if (left.messageIndex !== right.messageIndex) {
-        return left.messageIndex - right.messageIndex;
-      }
-
-      return left.index - right.index;
-    })
-    .map((entry) => entry.message);
+    return left.id.localeCompare(right.id);
+  });
 }
 
 function sliceTaskSessionMessagesForLineageBoundary(
-  messages: TaskSessionMessageRecord[],
+  messages: LoadedTaskSessionMessageRecord[],
   childRecord:
     | {
+        sourceMessageId?: string | null;
         forkedFromMessageId?: string | null;
       }
     | undefined,
 ) {
-  if (!childRecord?.forkedFromMessageId) {
+  const boundaryMessageId =
+    asNonEmptyString(childRecord?.sourceMessageId) ??
+    asNonEmptyString(childRecord?.forkedFromMessageId);
+  if (!boundaryMessageId) {
     return messages;
   }
 
   const boundaryIndex = messages.findIndex(
-    (message) => extractTaskSessionMessageIdentity(message) === childRecord.forkedFromMessageId,
+    (message) => message.id === boundaryMessageId || message.runtimeMessageId === boundaryMessageId,
   );
   if (boundaryIndex < 0) {
     return messages;
@@ -1496,23 +1786,21 @@ function sliceTaskSessionMessagesForLineageBoundary(
 }
 
 function resolveTaskSessionSelection(args: {
-  sessions: Array<{
-    id: string;
-    parentSessionId: string | null;
-    runtimeSessionId?: string | null;
-    createdAt?: string | null;
-    updatedAt?: string | null;
-  }>;
-  currentSessionId?: string | null;
   requestedSessionId?: string | null;
   includeLineage: boolean;
+  sessions: Array<{
+    id: string;
+    runtimeSessionId?: string | null;
+    parentSessionId?: string | null;
+  }>;
+  currentSessionId?: string | null;
 }) {
-  const latestSessionId = resolveLatestTaskSessionId(args.sessions);
-  const currentSessionId = resolveCurrentTaskSessionId(args.sessions, args.currentSessionId);
   const normalizedRequestedSessionId = resolveTaskSessionRecordId(
     args.sessions,
     args.requestedSessionId,
   );
+  const currentSessionId = resolveCurrentTaskSessionId(args.sessions, args.currentSessionId);
+  const latestSessionId = resolveLatestTaskSessionId(args.sessions);
 
   if (args.requestedSessionId && !normalizedRequestedSessionId) {
     return {
@@ -1743,16 +2031,16 @@ export function createTaskSessionReadApi(deps: {
 
   function buildTaskTreeParallelGroups(runs: TaskSessionReadRunRecord[]) {
     const groups = runs
-      .filter((run) => typeof run.coordinationKey === "string" && run.coordinationKey.length > 0)
+      .filter((run) => typeof run.phaseId === "string" && run.phaseId.length > 0)
       .reduce(
         (result, run) => {
-          const key = run.coordinationKey;
+          const key = run.phaseId;
           if (!key) {
             return result;
           }
 
           const existing = result.get(key) ?? {
-            coordinationKey: key,
+            phaseId: key,
             sessionId: run.sessionId,
             executionMode: run.executionKind,
             winnerRunId: null as string | null,
@@ -1765,7 +2053,7 @@ export function createTaskSessionReadApi(deps: {
         new Map<
           string,
           {
-            coordinationKey: string;
+            phaseId: string;
             sessionId: string;
             executionMode: string | null;
             winnerRunId: string | null;
@@ -1967,10 +2255,11 @@ export function createTaskSessionReadApi(deps: {
       return { ok: false as const, status: 404 as const, error: "Task not found" };
     }
 
-    const [snapshot, sessions, workflowFacts] = await Promise.all([
+    const [snapshot, sessions, workflowFacts, phases] = await Promise.all([
       loadTaskSnapshot(args.taskId),
       loadTaskSessionRecords(args.taskId),
       loadTaskWorkflowFacts(args.taskId),
+      loadTaskExecutionPhaseRecords(args.taskId),
     ]);
 
     const selection = resolveTaskSessionSelection({
@@ -2012,6 +2301,11 @@ export function createTaskSessionReadApi(deps: {
     const normalizedOperations =
       operations.length > 0 ? operations : buildFallbackOperationsFromMessageParts(messages);
     const scopedSessions = sessions.filter((session) => scopedSessionIds.includes(session.id));
+    const phaseIdsInScope = new Set(
+      scopedSessions
+        .map((session) => resolveTaskSessionPhaseId(session))
+        .filter((phaseId): phaseId is string => Boolean(phaseId)),
+    );
     const workflowContext = resolveTaskTreeWorkflowContext({
       workflowFacts,
       task,
@@ -2021,6 +2315,27 @@ export function createTaskSessionReadApi(deps: {
     });
     const rootSessionId = resolveTaskTreeRootSessionId(sessions);
     const parallelGroups = buildTaskTreeParallelGroups(runs);
+    const scopedPhases = phases
+      .filter((phase) => phaseIdsInScope.has(phase.id))
+      .map((phase) => ({
+        id: phase.id,
+        parentPhaseId: phase.parentPhaseId,
+        phaseIndex: phase.phaseIndex,
+        phaseKind: phase.phaseKind,
+        triggerType: phase.triggerType,
+        status: phase.status,
+        resumedFromPhaseId: phase.resumedFromPhaseId,
+        anchorSessionId: phase.anchorSessionId,
+        anchorMessageId: phase.anchorMessageId,
+        coordinationKey: null,
+        candidateCount: phase.candidateCount,
+        winnerSessionId: phase.winnerSessionId,
+        judgeSessionId: phase.judgeSessionId,
+        startedAt: phase.startedAt,
+        finishedAt: phase.finishedAt,
+        createdAt: phase.createdAt,
+        updatedAt: phase.updatedAt,
+      }));
     const edges = buildTaskTreeEdges({
       sessions,
       runs,
@@ -2063,6 +2378,7 @@ export function createTaskSessionReadApi(deps: {
           stages: workflowFacts.stages,
           roleConclusions: workflowFacts.roleConclusions,
         },
+        phases: scopedPhases,
         parallelGroups,
         sessions: scopedSessions,
         runs,
@@ -2093,21 +2409,28 @@ export function createTaskSessionReadApi(deps: {
       return { ok: false as const, status: 404 as const, error: "Task not found" };
     }
 
-    const [snapshot, sessions] = await Promise.all([
+    const [snapshot, sessions, phases] = await Promise.all([
       loadTaskSnapshot(taskId),
       loadTaskSessionRecords(taskId),
+      loadTaskExecutionPhaseRecords(taskId),
     ]);
     const selectedModelBySessionId = await loadTaskSessionSelectedModelFallbacks(
       taskId,
       collectMissingTaskSessionModelIds(sessions),
     );
     const hydratedSessions = hydrateTaskSessionSelectedModels(sessions, selectedModelBySessionId);
-    const projectedSessions = projectPublicTaskSessions(hydratedSessions);
+    const phaseIndexById = new Map(phases.map((phase) => [phase.id, phase.phaseIndex] as const));
+    const projectedSessions = orderTaskSessionsByPhase(
+      projectPublicTaskSessions(hydratedSessions),
+      phaseIndexById,
+    );
     const latestSessionId = resolveLatestTaskSessionId(projectedSessions);
     const currentSessionId = resolveCurrentTaskSessionId(
       projectedSessions,
       snapshot?.currentSessionId,
     );
+    const currentPhaseId = resolveTaskSessionPhaseIdBySessionId(projectedSessions, currentSessionId);
+    const latestPhaseId = resolveTaskSessionPhaseIdBySessionId(projectedSessions, latestSessionId);
 
     return {
       ok: true as const,
@@ -2115,9 +2438,12 @@ export function createTaskSessionReadApi(deps: {
       data: {
         data: projectedSessions,
         meta: {
-          readSource: "task-session-first" as const,
+          readSource: "task-phase-first" as const,
           currentSessionId,
+          currentPhaseId,
           latestSessionId,
+          latestPhaseId,
+          phaseCount: countTaskSessionPhases(projectedSessions),
           sessionCount: projectedSessions.length,
         },
       },
@@ -2416,7 +2742,7 @@ export function createTaskSessionReadApi(deps: {
       filters.push(inArray(taskTimelineViews.sessionId, selection.lineagePath));
     }
 
-    const timelineRows = await db
+    const timelineRows = (await db
       .select({
         id: taskTimelineViews.id,
         taskId: taskTimelineViews.taskId,
@@ -2436,9 +2762,9 @@ export function createTaskSessionReadApi(deps: {
       })
       .from(taskTimelineViews)
       .where(and(...filters))
-      .orderBy(asc(taskTimelineViews.sortAt), asc(taskTimelineViews.createdAt));
+      .orderBy(asc(taskTimelineViews.sortAt), asc(taskTimelineViews.createdAt))) as TaskTimelineViewRow[];
 
-    const data = timelineRows;
+    const data = dedupeTaskToolTimelineRows(timelineRows, sessions);
 
     return {
       ok: true as const,
@@ -2529,75 +2855,6 @@ export function createTaskSessionReadApi(deps: {
     };
   }
 
-  async function adoptTaskSessionWinner(args: {
-    taskId: string;
-    coordinationKey: string;
-    winnerSessionId: string;
-  }) {
-    const task = await ensureTask(args.taskId);
-    if (!task) {
-      return { ok: false as const, status: 404 as const, error: "Task not found" };
-    }
-
-    const winnerSession = await loadTaskSessionRecord(args.taskId, args.winnerSessionId);
-    if (!winnerSession) {
-      return { ok: false as const, status: 404 as const, error: "Task session not found" };
-    }
-
-    if (winnerSession.coordinationKey !== args.coordinationKey) {
-      return {
-        ok: false as const,
-        status: 400 as const,
-        error: "winnerSessionId does not belong to the provided coordinationKey",
-      };
-    }
-
-    const groupSessions = (await loadTaskSessionRecords(args.taskId)).filter(
-      (session) => session.coordinationKey === args.coordinationKey,
-    );
-    if (groupSessions.length === 0) {
-      return {
-        ok: false as const,
-        status: 404 as const,
-        error: "Task session coordination group not found",
-      };
-    }
-
-    const now = new Date().toISOString();
-
-    await db
-      .update(taskSessions)
-      .set({
-        winnerSessionId: winnerSession.id,
-        updatedAt: now,
-      })
-      .where(
-        and(
-          eq(taskSessions.taskId, args.taskId),
-          eq(taskSessions.coordinationKey, args.coordinationKey),
-        ),
-      );
-
-    await db
-      .update(taskSnapshots)
-      .set({
-        currentSessionId: winnerSession.id,
-        lastActivityAt: now,
-        updatedAt: now,
-      })
-      .where(eq(taskSnapshots.taskId, args.taskId));
-
-    return {
-      ok: true as const,
-      status: 200 as const,
-      data: {
-        taskId: args.taskId,
-        coordinationKey: args.coordinationKey,
-        winnerSessionId: winnerSession.id,
-      },
-    };
-  }
-
   return {
     listTaskSessions,
     getTaskSession,
@@ -2611,6 +2868,5 @@ export function createTaskSessionReadApi(deps: {
     listTaskUsageLedgerEntries,
     buildTaskSessionTimelineViewResponse,
     buildTaskExecutionTraceResponse,
-    adoptTaskSessionWinner,
   };
 }

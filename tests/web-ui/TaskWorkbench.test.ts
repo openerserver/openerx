@@ -217,10 +217,10 @@ beforeEach(() => {
 });
 
 describe("TaskWorkbench regression", () => {
-  it("shows 待采纳 for completed parallel tasks without an adopted winner", async () => {
+  it("refreshes stale tab status from canonical task detail", async () => {
     apiMocks.getTask.mockResolvedValue({
       id: "task-awaiting-adoption",
-      title: "并行待采纳任务",
+      title: "并行已完成任务",
       status: "completed",
       executionMode: "parallel",
       orchestrationKind: "parallel",
@@ -229,11 +229,16 @@ describe("TaskWorkbench regression", () => {
 
     const { wrapper, workbench } = await mountWorkbench();
 
-    workbench.openTask("task-awaiting-adoption", "并行待采纳任务", "completed");
+    workbench.openTask("task-awaiting-adoption", "并行待采纳任务", "awaiting_adoption");
     await nextTick();
     await flushPromises();
 
-    expect(wrapper.text()).toContain("待采纳");
+    expect(apiMocks.getTask).toHaveBeenCalledWith("task-awaiting-adoption");
+    expect(workbench.tabs.find((tab) => tab.taskId === "task-awaiting-adoption")?.status).toBe(
+      "completed",
+    );
+    expect(wrapper.text()).toContain("已完成");
+    expect(wrapper.text()).not.toContain("待采纳");
   });
 
   it("renders the reverted single-pane layout and does not show multi-pane composer UI", async () => {

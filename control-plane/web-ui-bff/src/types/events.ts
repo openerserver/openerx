@@ -10,6 +10,14 @@ export type RealtimeEventType =
   | "message.updated"
   | "task.message.updated"
   | "task.message.delta"
+  | "task.phase.created"
+  | "task.phase.updated"
+  | "task.phase.awaiting_adoption"
+  | "task.phase.paused"
+  | "task.phase.resumed"
+  | "task.phase.cancelled"
+  | "task.phase.completed"
+  | "task.phase.failed"
   | "task.snapshot.updated"
   | "tool.execute.before"
   | "tool.execute.after"
@@ -41,6 +49,7 @@ export interface RealtimeEvent {
   ts: string;
   projectId?: string;
   taskId?: string;
+  phaseId?: string;
   sessionId?: string;
   agentRunId?: string;
   data: Record<string, unknown>;

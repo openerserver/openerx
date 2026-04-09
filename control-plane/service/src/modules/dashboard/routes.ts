@@ -14,6 +14,7 @@ import {
 import { type AppEnv, type JWTPayload, authMiddleware } from "../../middleware/auth";
 import { requireRole } from "../../middleware/rbac";
 import { fromStoredTaskExecutionMode } from "../tasks/task-execution-mode";
+import { resolvePublicTaskStatus } from "../tasks/public-task-status";
 
 export const dashboardRoutes = new Hono<AppEnv>();
 
@@ -244,28 +245,48 @@ interface GovernanceTaskRecord {
 type DashboardTaskSnapshotRow = typeof taskSnapshots.$inferSelect;
 
 function normalizeDashboardTaskStatus(snapshot: DashboardTaskSnapshotRow) {
-  if (
-    snapshot.currentExecutionStatus === "pending" ||
-    snapshot.currentExecutionStatus === "running" ||
-    snapshot.currentExecutionStatus === "paused" ||
-    snapshot.currentExecutionStatus === "completed" ||
-    snapshot.currentExecutionStatus === "failed" ||
-    snapshot.currentExecutionStatus === "cancelled"
-  ) {
-    return snapshot.currentExecutionStatus;
-  }
+  return resolvePublicTaskStatus({
+    currentExecutionStatus: snapshot.currentExecutionStatus,
+    lifecycleStatus: snapshot.lifecycleStatus,
+  });
+}
 
-  if (snapshot.lifecycleStatus === "done") {
-    return "completed";
-  }
-  if (snapshot.lifecycleStatus === "active") {
-    return "running";
-  }
-  if (snapshot.lifecycleStatus === "archived") {
-    return "cancelled";
-  }
+export function summarizeDashboardTaskSnapshots(snapshotRows: DashboardTaskSnapshotRow[]) {
+  const activeSessionIds = new Set(
+    snapshotRows
+      .map((snapshot) => snapshot.currentSessionId)
+      .filter((sessionId): sessionId is string => Boolean(sessionId)),
+  );
 
-  return "pending";
+  return {
+    activeSessionCount: activeSessionIds.size,
+    runningTaskCount: snapshotRows.filter((snapshot) => {
+      const status = normalizeDashboardTaskStatus(snapshot);
+      return status === "running" || status === "paused";
+    }).length,
+    parallelTaskCount: snapshotRows.filter(
+      (snapshot) => normalizeDashboardExecutionMode(snapshot) === "parallel",
+    ).length,
+    sequentialChainTaskCount: snapshotRows.filter(
+      (snapshot) => normalizeDashboardExecutionMode(snapshot) === "sequential-chain",
+    ).length,
+    pausedTaskCount: snapshotRows.filter(
+      (snapshot) => normalizeDashboardTaskStatus(snapshot) === "paused",
+    ).length,
+    failedTaskCount: snapshotRows.filter((snapshot) => {
+      const status = normalizeDashboardTaskStatus(snapshot);
+      return status === "failed" || status === "cancelled";
+    }).length,
+    activeCandidateCount: snapshotRows.reduce(
+      (sum, snapshot) => sum + (snapshot.activeCandidateCount ?? 0),
+      0,
+    ),
+    pendingChainStepCount: snapshotRows.reduce(
+      (sum, snapshot) =>
+        sum + Math.max((snapshot.totalChainSteps ?? 0) - (snapshot.completedChainSteps ?? 0), 0),
+      0,
+    ),
+  };
 }
 
 function normalizeDashboardExecutionMode(snapshot: DashboardTaskSnapshotRow) {
@@ -1494,37 +1515,7 @@ dashboardRoutes.get("/governance-overview", async (c) => {
     audits,
     taskById,
   });
-  const activeSessionIds = new Set(
-    snapshotRows
-      .map((snapshot) => snapshot.currentSessionId)
-      .filter((sessionId): sessionId is string => Boolean(sessionId)),
-  );
-  const runningTaskCount = snapshotRows.filter((snapshot) => {
-    const status = normalizeDashboardTaskStatus(snapshot);
-    return status === "running" || status === "paused";
-  }).length;
-  const parallelTaskCount = snapshotRows.filter(
-    (snapshot) => normalizeDashboardExecutionMode(snapshot) === "parallel",
-  ).length;
-  const sequentialChainTaskCount = snapshotRows.filter(
-    (snapshot) => normalizeDashboardExecutionMode(snapshot) === "sequential-chain",
-  ).length;
-  const pausedTaskCount = snapshotRows.filter(
-    (snapshot) => normalizeDashboardTaskStatus(snapshot) === "paused",
-  ).length;
-  const failedTaskCount = snapshotRows.filter((snapshot) => {
-    const status = normalizeDashboardTaskStatus(snapshot);
-    return status === "failed" || status === "cancelled";
-  }).length;
-  const activeCandidateCount = snapshotRows.reduce(
-    (sum, snapshot) => sum + (snapshot.activeCandidateCount ?? 0),
-    0,
-  );
-  const pendingChainStepCount = snapshotRows.reduce(
-    (sum, snapshot) =>
-      sum + Math.max((snapshot.totalChainSteps ?? 0) - (snapshot.completedChainSteps ?? 0), 0),
-    0,
-  );
+  const snapshotSummary = summarizeDashboardTaskSnapshots(snapshotRows);
   const toolTimelineItemCount = recentTimelineRows.filter(
     (row) => row.itemKind === "operation",
   ).length;
@@ -1540,15 +1531,15 @@ dashboardRoutes.get("/governance-overview", async (c) => {
       breakerCount: summaryCounts.breakerCount,
       activeLeaseCount: activeLeases.length,
       topRiskTaskCount: rankedTopRiskTasks.length,
-      runningTaskCount,
-      activeSessionCount: activeSessionIds.size,
-      parallelTaskCount,
-      sequentialChainTaskCount,
+      runningTaskCount: snapshotSummary.runningTaskCount,
+      activeSessionCount: snapshotSummary.activeSessionCount,
+      parallelTaskCount: snapshotSummary.parallelTaskCount,
+      sequentialChainTaskCount: snapshotSummary.sequentialChainTaskCount,
       recentTimelineItemCount: recentTimelineRows.length,
-      pausedTaskCount,
-      failedTaskCount,
-      activeCandidateCount,
-      pendingChainStepCount,
+      pausedTaskCount: snapshotSummary.pausedTaskCount,
+      failedTaskCount: snapshotSummary.failedTaskCount,
+      activeCandidateCount: snapshotSummary.activeCandidateCount,
+      pendingChainStepCount: snapshotSummary.pendingChainStepCount,
       toolTimelineItemCount,
       decisionTimelineItemCount,
     },

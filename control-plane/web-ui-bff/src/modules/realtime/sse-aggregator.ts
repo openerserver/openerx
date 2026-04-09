@@ -34,8 +34,12 @@ import {
 } from "../agent-control/runtime-provider";
 import { collectChangesFromSession } from "../code-changes/change-collector";
 import { executeLifecycleHooks } from "../hooks/lifecycle-hooks";
-import { finalizeTaskState } from "../tasks/finalize";
 import {
+  finalizeTaskState,
+  shouldSuppressParallelAwaitingAdoptionFinalization,
+} from "../tasks/finalize";
+import {
+  fetchTaskSessionLineageRecords,
   persistTaskSessionMessageSnapshot,
   upsertTaskSessionLineageRecord,
 } from "../tasks/task-session-store";
@@ -53,6 +57,7 @@ interface CompletedTaskContext {
   title: string;
   prompt: string;
   projectId: string;
+  status?: string | null;
   sessionId?: string | null;
   currentRunId?: string | null;
   orchestrationKind?: string | null;
@@ -73,6 +78,16 @@ interface CompletedTaskContext {
   } | null;
 }
 
+interface TaskPhaseLifecycleRecord {
+  id?: string | null;
+  phaseIndex?: number | null;
+  phaseKind?: string | null;
+  status?: string | null;
+  awaitingAdoptionSince?: string | null;
+  candidateCount?: number | null;
+  judgeSessionId?: string | null;
+}
+
 interface FollowupDecisionSelection {
   execution: {
     hookId: string;
@@ -91,6 +106,11 @@ interface FollowupDecisionSelection {
   };
   templateId: string;
 }
+
+type ParallelCandidateSettlementCheck = {
+  ready: boolean;
+  totalCandidateCount: number;
+};
 
 function buildPaidExecutionGuardDetail(
   guardState: PaidExecutionGuardState | undefined,
@@ -114,8 +134,52 @@ function buildPaidExecutionGuardDetail(
   };
 }
 
+function normalizeParallelCandidateExecutionStatus(status: string | null | undefined) {
+  const normalizedStatus = asString(status)?.trim().toLowerCase();
+  if (!normalizedStatus) {
+    return null;
+  }
+  if (normalizedStatus === "completed") {
+    return "complete" as const;
+  }
+  if (normalizedStatus === "error") {
+    return "failed" as const;
+  }
+  if (normalizedStatus === "stopped" || normalizedStatus === "terminated") {
+    return "cancelled" as const;
+  }
+  return normalizedStatus;
+}
+
+function isTerminalParallelCandidateExecutionStatus(status: string | null | undefined) {
+  const normalizedStatus = normalizeParallelCandidateExecutionStatus(status);
+  return (
+    normalizedStatus === "complete" ||
+    normalizedStatus === "failed" ||
+    normalizedStatus === "cancelled"
+  );
+}
+
+function isTrackedParallelCandidateRecord(record: { phaseRole?: string | null; sessionKind?: string | null; candidateIndex?: number | null; }) {
+  return (
+    record.phaseRole === "candidate" ||
+    record.sessionKind === "candidate" ||
+    typeof record.candidateIndex === "number"
+  );
+}
+
 function parseModelString(raw: string): { providerId: string; modelId: string } {
   return resolveModelRoute(raw);
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 function formatChangeSummary(task: CompletedTaskContext): string {
@@ -145,6 +209,8 @@ class SSEAggregator {
   // ── Parallel execution tracking ─────────────────────────────────
   // Maps taskId → sessionIds of all candidates
   private parallelTaskSessions = new Map<string, Set<string>>();
+  // Maps taskId → active parallel phaseId for the current candidate batch
+  private parallelTaskPhaseIds = new Map<string, string>();
   // Maps sessionId → { taskId, candidateIndex }
   private sessionToCandidateMap = new Map<string, { taskId: string; candidateIndex: number }>();
   // Maps taskId → completed candidate sessions with results
@@ -404,6 +470,7 @@ class SSEAggregator {
     reason:
       | "task.continued"
       | "task.completed"
+      | "task.phase.awaiting_adoption"
       | "task.failed"
       | "task.hooks.updated"
       | "task.followup.started"
@@ -419,7 +486,7 @@ class SSEAggregator {
   }
 
   /** Register parallel candidates for aggregated tracking. */
-  registerParallelTask(taskId: string, candidates: ExecutionCandidate[]): void {
+  registerParallelTask(taskId: string, candidates: ExecutionCandidate[], phaseId?: string): void {
     const sessionIds = new Set<string>();
     for (let i = 0; i < candidates.length; i++) {
       const c = candidates[i];
@@ -429,7 +496,246 @@ class SSEAggregator {
       }
     }
     this.parallelTaskSessions.set(taskId, sessionIds);
+    if (phaseId) {
+      this.parallelTaskPhaseIds.set(taskId, phaseId);
+    }
     this.parallelCandidateResults.set(taskId, new Map());
+  }
+
+  private isTrackedParallelTask(taskId: string): boolean {
+    return (
+      this.parallelTaskSessions.has(taskId) ||
+      this.parallelTaskPhaseIds.has(taskId) ||
+      this.parallelCandidateResults.has(taskId)
+    );
+  }
+
+  private async recoverParallelTaskTracking(
+    taskId: string,
+    authorization: string,
+  ): Promise<void> {
+    const lineageResult = await fetchTaskSessionLineageRecords(taskId, authorization);
+    if (!lineageResult.ok) {
+      return;
+    }
+
+    const mergedSessionIds = new Set(this.parallelTaskSessions.get(taskId) ?? []);
+    let recoveredPhaseId: string | undefined;
+
+    for (const record of lineageResult.records) {
+      const runtimeSessionId = asString(record.runtimeSessionId);
+      if (!runtimeSessionId) {
+        continue;
+      }
+
+      const candidateIndex =
+        typeof record.candidateIndex === "number"
+          ? record.candidateIndex
+          : typeof record.phaseItemIndex === "number" && record.phaseRole === "candidate"
+            ? record.phaseItemIndex
+            : undefined;
+      const isParallelCandidate =
+        typeof candidateIndex === "number" ||
+        record.phaseRole === "candidate" ||
+        record.sessionKind === "candidate";
+
+      if (!isParallelCandidate) {
+        continue;
+      }
+
+      mergedSessionIds.add(runtimeSessionId);
+      if (typeof candidateIndex === "number") {
+        this.sessionToCandidateMap.set(runtimeSessionId, { taskId, candidateIndex });
+      }
+
+      const phaseId = asString(record.phaseId);
+      if (phaseId && !recoveredPhaseId) {
+        recoveredPhaseId = phaseId;
+      }
+    }
+
+    if (mergedSessionIds.size > 0) {
+      this.parallelTaskSessions.set(taskId, mergedSessionIds);
+      if (!this.parallelCandidateResults.has(taskId)) {
+        this.parallelCandidateResults.set(taskId, new Map());
+      }
+    }
+
+    if (recoveredPhaseId) {
+      this.parallelTaskPhaseIds.set(taskId, recoveredPhaseId);
+    }
+  }
+
+  private async resolveParallelCandidateInfo(args: {
+    taskId: string;
+    sessionId: string;
+    authorization: string;
+    candidateIndexHint?: number;
+  }): Promise<{ taskId: string; candidateIndex: number } | null> {
+    const existing = this.sessionToCandidateMap.get(args.sessionId);
+    if (existing) {
+      return existing;
+    }
+
+    const trackedSessions = this.parallelTaskSessions.get(args.taskId);
+    if (trackedSessions?.has(args.sessionId) && typeof args.candidateIndexHint === "number") {
+      const recovered = { taskId: args.taskId, candidateIndex: args.candidateIndexHint };
+      this.sessionToCandidateMap.set(args.sessionId, recovered);
+      if (!this.parallelCandidateResults.has(args.taskId)) {
+        this.parallelCandidateResults.set(args.taskId, new Map());
+      }
+      return recovered;
+    }
+
+    await this.recoverParallelTaskTracking(args.taskId, args.authorization);
+
+    const recovered = this.sessionToCandidateMap.get(args.sessionId);
+    if (recovered) {
+      return recovered;
+    }
+
+    if (
+      typeof args.candidateIndexHint === "number" &&
+      this.parallelTaskSessions.get(args.taskId)?.has(args.sessionId)
+    ) {
+      const hinted = { taskId: args.taskId, candidateIndex: args.candidateIndexHint };
+      this.sessionToCandidateMap.set(args.sessionId, hinted);
+      return hinted;
+    }
+
+    return null;
+  }
+
+  private async resolveParallelTaskPhaseId(
+    taskId: string,
+    authorization: string,
+  ): Promise<string | null> {
+    const cachedPhaseId = this.parallelTaskPhaseIds.get(taskId);
+    if (cachedPhaseId) {
+      return cachedPhaseId;
+    }
+
+    const phasesResult = await cpFetch<{ data?: TaskPhaseLifecycleRecord[] }>(
+      `/api/tasks/${encodeURIComponent(taskId)}/phases`,
+      { authorization },
+    );
+    const phases = Array.isArray(phasesResult.data?.data) ? phasesResult.data.data : [];
+    const activeParallelPhase = phases
+      .filter(
+        (phase) =>
+          phase.phaseKind === "parallel" &&
+          phase.status !== "completed" &&
+          phase.status !== "failed" &&
+          phase.status !== "cancelled",
+      )
+      .sort((left, right) => (left.phaseIndex ?? 0) - (right.phaseIndex ?? 0))
+      .at(-1);
+
+    if (!activeParallelPhase?.id) {
+      return null;
+    }
+
+    this.parallelTaskPhaseIds.set(taskId, activeParallelPhase.id);
+    return activeParallelPhase.id;
+  }
+
+  private async hasCompletedParallelCandidateMessage(args: {
+    taskId: string;
+    sessionId: string;
+    authorization: string;
+  }) {
+    const messagesResult = await getSessionMessages(args.sessionId, {
+      taskId: args.taskId,
+      authorization: args.authorization,
+      includeLineage: false,
+      bypassCircuitBreaker: true,
+    });
+    if (!messagesResult.ok || !Array.isArray(messagesResult.data)) {
+      return false;
+    }
+
+    const assistantResult = extractAssistantResultFromMessages(messagesResult.data);
+    return assistantResult.completed;
+  }
+
+  private isActiveTrackedParallelRun(run: unknown) {
+    if (!run || typeof run !== "object") {
+      return false;
+    }
+
+    const status = normalizeParallelCandidateExecutionStatus(
+      asString((run as Record<string, unknown>).status),
+    );
+    if (status !== "running" && status !== "queued" && status !== "pending" && status !== "paused") {
+      return false;
+    }
+
+    const agentRunId = asString((run as Record<string, unknown>).agentRunId);
+    return !(agentRunId && this.finalizedAgentRuns.has(agentRunId));
+  }
+
+  private async confirmParallelCandidatesSettled(args: {
+    taskId: string;
+    authorization: string;
+    candidateResults: Array<[number, { sessionId: string; result?: string }]>;
+  }): Promise<ParallelCandidateSettlementCheck> {
+    await this.recoverParallelTaskTracking(args.taskId, args.authorization);
+
+    const trackedSessions = new Set(this.parallelTaskSessions.get(args.taskId) ?? []);
+    const trackedPhaseId = this.parallelTaskPhaseIds.get(args.taskId) ?? null;
+    const lineageResult = await fetchTaskSessionLineageRecords(args.taskId, args.authorization);
+    if (!lineageResult.ok) {
+      return {
+        ready: false,
+        totalCandidateCount: Math.max(trackedSessions.size, args.candidateResults.length),
+      };
+    }
+
+    const candidateRecords = lineageResult.activeRecords.filter((record) => {
+      if (!isTrackedParallelCandidateRecord(record)) {
+        return false;
+      }
+      if (trackedPhaseId) {
+        return record.phaseId === trackedPhaseId;
+      }
+      return trackedSessions.has(record.runtimeSessionId);
+    });
+
+    const totalCandidateCount = Math.max(
+      trackedSessions.size,
+      args.candidateResults.length,
+      candidateRecords.length,
+    );
+
+    if (
+      totalCandidateCount === 0 ||
+      candidateRecords.length < totalCandidateCount ||
+      args.candidateResults.length < totalCandidateCount
+    ) {
+      return { ready: false, totalCandidateCount };
+    }
+
+    for (const candidate of candidateRecords) {
+      const liveRun = findAgentRunBySessionId(candidate.runtimeSessionId);
+      if (this.isActiveTrackedParallelRun(liveRun)) {
+        return { ready: false, totalCandidateCount };
+      }
+
+      if (isTerminalParallelCandidateExecutionStatus(candidate.executionStatus)) {
+        continue;
+      }
+
+      const hasCompletedMessage = await this.hasCompletedParallelCandidateMessage({
+        taskId: args.taskId,
+        sessionId: candidate.runtimeSessionId,
+        authorization: args.authorization,
+      });
+      if (!hasCompletedMessage) {
+        return { ready: false, totalCandidateCount };
+      }
+    }
+
+    return { ready: true, totalCandidateCount };
   }
 
   /** Register a sequential-chain task for step-by-step tracking. */
@@ -1125,6 +1431,36 @@ class SSEAggregator {
     return undefined;
   }
 
+  private normalizePersistableToolIdentity(sessionId: string, toolIdentity: string): string {
+    let normalized = toolIdentity.trim();
+    const sessionToolPrefix = `${sessionId}:tool:`;
+    if (normalized.startsWith(sessionToolPrefix)) {
+      normalized = normalized.slice(sessionToolPrefix.length);
+    }
+    if (normalized.startsWith("tool:")) {
+      normalized = normalized.slice("tool:".length);
+    }
+    const sessionPrefix = `${sessionId}:`;
+    if (normalized.startsWith(sessionPrefix)) {
+      normalized = normalized.slice(sessionPrefix.length);
+    }
+    if (normalized.startsWith("tool:")) {
+      normalized = normalized.slice("tool:".length);
+    }
+    return normalized;
+  }
+
+  private buildPersistableToolMessageId(sessionId: string, toolIdentity: string) {
+    const normalizedToolIdentity = this.normalizePersistableToolIdentity(
+      sessionId,
+      toolIdentity,
+    );
+    return {
+      toolCallId: normalizedToolIdentity,
+      messageId: `${sessionId}:tool:${normalizedToolIdentity}`,
+    };
+  }
+
   private buildPersistableToolMessageSnapshot(
     event: RealtimeEvent,
   ): Record<string, unknown> | null {
@@ -1146,7 +1482,11 @@ class SSEAggregator {
       return null;
     }
 
-    const toolIdentity = this.extractToolIdentity(event.data) || `${event.sessionId}:${toolName}`;
+    const rawToolIdentity = this.extractToolIdentity(event.data) || toolName;
+    const { toolCallId, messageId } = this.buildPersistableToolMessageId(
+      event.sessionId,
+      rawToolIdentity,
+    );
     const resultText =
       typeof properties?.result === "string"
         ? properties.result
@@ -1165,10 +1505,10 @@ class SSEAggregator {
       event.type === "tool.execute.before" ? "running" : errorText ? "error" : "completed";
 
     return {
-      id: `tool:${toolIdentity}`,
+      id: messageId,
       role: "tool",
       info: {
-        id: `tool:${toolIdentity}`,
+        id: messageId,
         role: "tool",
         sessionID: event.sessionId,
         time: {
@@ -1177,13 +1517,13 @@ class SSEAggregator {
         },
       },
       part: {
-        id: `tool-part:${toolIdentity}`,
+        id: `tool-part:${toolCallId}`,
         type: "tool",
         tool: toolName,
         toolName,
-        callID: toolIdentity,
+        callID: toolCallId,
         sessionID: event.sessionId,
-        messageID: `tool:${toolIdentity}`,
+        messageID: messageId,
         ...(inputValue !== undefined ? { input: inputValue } : {}),
         state: {
           status,
@@ -1466,13 +1806,6 @@ class SSEAggregator {
   }
 
   private buildTaskDomainEvents(event: RealtimeEvent): RealtimeEvent[] {
-    const asRecord = (value: unknown): Record<string, unknown> | null =>
-      value && typeof value === "object" && !Array.isArray(value)
-        ? (value as Record<string, unknown>)
-        : null;
-    const asString = (value: unknown): string | undefined =>
-      typeof value === "string" && value.length > 0 ? value : undefined;
-
     if (event.type === "message.updated") {
       const rawType = asString(event.data.rawType) ?? event.type;
 
@@ -1490,6 +1823,7 @@ class SSEAggregator {
             ts: event.ts,
             projectId: event.projectId,
             taskId: event.taskId,
+            phaseId: asString(event.data.phaseId) ?? event.phaseId,
             sessionId: event.sessionId,
             agentRunId: event.agentRunId,
             data: {
@@ -1517,6 +1851,7 @@ class SSEAggregator {
             ts: event.ts,
             projectId: event.projectId,
             taskId: event.taskId,
+            phaseId: asString(event.data.phaseId) ?? event.phaseId,
             sessionId: event.sessionId,
             agentRunId: event.agentRunId,
             data: {
@@ -1540,6 +1875,7 @@ class SSEAggregator {
           ts: event.ts,
           projectId: event.projectId,
           taskId: event.taskId,
+          phaseId: asString(event.data.phaseId) ?? event.phaseId,
           sessionId: event.sessionId,
           agentRunId: event.agentRunId,
           data: {
@@ -1590,6 +1926,7 @@ class SSEAggregator {
       sessionId,
       taskId: run?.taskId,
       projectId: run?.projectId,
+      phaseId: asString(data.phaseId) ?? asString(data.phaseID),
       agentRunId: run?.agentRunId,
       data:
         typeof data.rawType === "string" || type === mappedType
@@ -1837,10 +2174,16 @@ class SSEAggregator {
       }
 
       // Check if this is a parallel candidate completion
-      const candidateInfo = this.sessionToCandidateMap.get(event.sessionId);
+      const candidateInfo = await this.resolveParallelCandidateInfo({
+        taskId: event.taskId,
+        sessionId: event.sessionId,
+        authorization,
+        candidateIndexHint:
+          typeof run.candidateIndex === "number" ? run.candidateIndex : undefined,
+      });
       const parallelSessions = candidateInfo
         ? this.parallelTaskSessions.get(candidateInfo.taskId)
-        : undefined;
+        : this.parallelTaskSessions.get(event.taskId);
       if (candidateInfo) {
         const finishedAt = new Date().toISOString();
 
@@ -1982,6 +2325,18 @@ class SSEAggregator {
       }
 
       // Single mode: original flow
+      const currentTaskResult = await cpFetch<CompletedTaskContext>(
+        `/api/project-tree/tasks/${encodeURIComponent(event.taskId)}`,
+        { authorization },
+      );
+      const currentTask = currentTaskResult.ok ? currentTaskResult.data : undefined;
+
+      if (currentTask?.orchestrationKind === "parallel" || this.isTrackedParallelTask(event.taskId)) {
+        updateAgentRunStatus(event.agentRunId, "completed");
+        this.finalizedAgentRuns.add(event.agentRunId);
+        return;
+      }
+
       const taskUpdate = await finalizeTaskState({
         authorization,
         taskId: event.taskId,
@@ -1989,6 +2344,7 @@ class SSEAggregator {
         sessionId: event.sessionId,
         agentRunId: event.agentRunId,
         result: resultText,
+        task: currentTask,
       });
 
       if (!taskUpdate) {
@@ -3108,11 +3464,23 @@ class SSEAggregator {
     if (this.judgingTasks.has(taskId)) return;
     this.judgingTasks.add(taskId);
 
+    let preserveTracking = false;
+
     try {
       const results = this.parallelCandidateResults.get(taskId);
       const candidateResults = results
         ? Array.from(results.entries()).sort(([a], [b]) => a - b)
         : [];
+      const settlement = await this.confirmParallelCandidatesSettled({
+        taskId,
+        authorization,
+        candidateResults,
+      });
+      const totalCandidateCount = settlement.totalCandidateCount;
+      if (!settlement.ready) {
+        preserveTracking = true;
+        return;
+      }
 
       const taskResult = await cpFetch<CompletedTaskContext>(
         `/api/project-tree/tasks/${encodeURIComponent(taskId)}`,
@@ -3192,11 +3560,50 @@ class SSEAggregator {
         }
       }
 
+      const parallelPhaseId = await this.resolveParallelTaskPhaseId(taskId, authorization);
+      let awaitingAdoptionPhase: {
+        phaseId: string;
+        awaitingAdoptionSince: string;
+        judgeSessionId?: string;
+      } | null = null;
+
+      if (parallelPhaseId) {
+        const awaitingAdoptionAt = new Date().toISOString();
+        const phaseResult = await cpFetch<TaskPhaseLifecycleRecord>(
+          `/api/tasks/${encodeURIComponent(taskId)}/phases`,
+          {
+            method: "POST",
+            authorization,
+            body: {
+              id: parallelPhaseId,
+              phaseKind: "parallel",
+              triggerType: "execute",
+              status: "awaiting_adoption",
+              candidateCount: totalCandidateCount,
+              judgeSessionId: judgeResult?.sessionId,
+            },
+          },
+        );
+
+        if (phaseResult.ok) {
+          const phaseId = asString(phaseResult.data?.id) ?? parallelPhaseId;
+          this.parallelTaskPhaseIds.set(taskId, phaseId);
+          awaitingAdoptionPhase = {
+            phaseId,
+            awaitingAdoptionSince:
+              asString(phaseResult.data?.awaitingAdoptionSince) ?? awaitingAdoptionAt,
+            judgeSessionId: asString(phaseResult.data?.judgeSessionId) ?? judgeResult?.sessionId,
+          };
+        } else {
+          console.error(`Failed to persist awaiting adoption phase for task ${taskId}`);
+        }
+      }
+
       const patchResult = await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
         method: "PATCH",
         authorization,
         body: {
-          status: "completed",
+          status: "awaiting_adoption",
           strategy: mergeTaskStrategy(task.strategy, {
             hookExecutions: judgeResult
               ? [
@@ -3222,36 +3629,43 @@ class SSEAggregator {
         return;
       }
 
-      this.emit({
-        id: crypto.randomUUID(),
-        type: "task.completed",
-        ts: new Date().toISOString(),
-        taskId,
-        projectId,
-        data: {
-          status: "completed",
-          executionMode: "parallel",
-          awaitingUserAdoption: true,
-          judgeRan: Boolean(judgeResult),
-        },
-      });
+      if (awaitingAdoptionPhase) {
+        this.emit({
+          id: crypto.randomUUID(),
+          type: "task.phase.awaiting_adoption",
+          ts: new Date().toISOString(),
+          taskId,
+          projectId,
+          phaseId: awaitingAdoptionPhase.phaseId,
+          data: {
+            phaseId: awaitingAdoptionPhase.phaseId,
+            status: "awaiting_adoption",
+            candidateCount: totalCandidateCount,
+            awaitingAdoptionSince: awaitingAdoptionPhase.awaitingAdoptionSince,
+            judgeSessionId: awaitingAdoptionPhase.judgeSessionId,
+          },
+        });
+      }
 
       await this.emitPipelineStageUpdates({
         taskId,
         projectId,
         authorization,
-        reason: "task.completed",
+        reason: "task.phase.awaiting_adoption",
       });
     } catch (error) {
       console.error(`Failed to finalize parallel task ${taskId}:`, error);
     } finally {
-      // Clean up tracking state
-      this.parallelTaskSessions.delete(taskId);
-      this.parallelCandidateResults.delete(taskId);
       this.judgingTasks.delete(taskId);
-      // Clean up session->candidate mappings
-      for (const [sid, info] of this.sessionToCandidateMap) {
-        if (info.taskId === taskId) this.sessionToCandidateMap.delete(sid);
+      if (!preserveTracking) {
+        // Clean up tracking state
+        this.parallelTaskSessions.delete(taskId);
+        this.parallelTaskPhaseIds.delete(taskId);
+        this.parallelCandidateResults.delete(taskId);
+        // Clean up session->candidate mappings
+        for (const [sid, info] of this.sessionToCandidateMap) {
+          if (info.taskId === taskId) this.sessionToCandidateMap.delete(sid);
+        }
       }
     }
   }

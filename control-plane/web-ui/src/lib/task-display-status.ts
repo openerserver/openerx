@@ -23,6 +23,16 @@ export interface TaskDisplayStatus {
   needsAttention: boolean;
 }
 
+function buildAwaitingAdoptionDisplayStatus(): TaskDisplayStatus {
+  return {
+    status: "awaiting-adoption",
+    label: "待采纳",
+    tagColor: "gold",
+    badgeStatus: "warning",
+    needsAttention: true,
+  };
+}
+
 function resolveParallelCandidateCount(task?: TaskStatusSource | Task | null): number {
   if (!task) {
     return 0;
@@ -72,17 +82,13 @@ export function isTaskAwaitingParallelAdoption(task?: TaskStatusSource | null): 
 }
 
 export function resolveTaskDisplayStatus(task?: TaskStatusSource | Task | null): TaskDisplayStatus {
-  if (isTaskAwaitingParallelAdoption(task)) {
-    return {
-      status: "awaiting-adoption",
-      label: "待采纳",
-      tagColor: "gold",
-      badgeStatus: "warning",
-      needsAttention: true,
-    };
+  const explicitStatus = typeof task?.status === "string" ? task.status.trim() : "";
+
+  if (explicitStatus === "awaiting_adoption") {
+    return buildAwaitingAdoptionDisplayStatus();
   }
 
-  switch (task?.status) {
+  switch (explicitStatus) {
     case "pending":
       return {
         status: "pending",
@@ -133,8 +139,8 @@ export function resolveTaskDisplayStatus(task?: TaskStatusSource | Task | null):
       };
     default:
       return {
-        status: task?.status || "unknown",
-        label: task?.status || "未知",
+        status: explicitStatus || "unknown",
+        label: explicitStatus || "未知",
         tagColor: "default",
         badgeStatus: "default",
         needsAttention: false,

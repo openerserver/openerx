@@ -386,7 +386,7 @@ const workflowStageSchema = z.object({
 | `POST /workflow/advance` | 仅在 `autoAdvanceStages = true` 时由执行完成后的收口链路自动调用；也可由用户手动触发；当前 `post-execution` Hook 在执行完成收口时触发，而不是在 `advance` 路由内触发；推进后自动开始下一阶段的初始任务 | 改动 |
 | `POST /api/tasks/:taskId/execute` 的 `parallel` 模式 | 接受 `candidates: [{model, label}]` 数组，为每个候选创建独立 session | 改动（扩展请求体） |
 | `POST /api/tasks/:taskId/execute` 的 `sequential-chain` 模式 | 接受 `steps: [{instruction, model?}]` 数组，按顺序串行执行 | 改动（扩展请求体） |
-| `POST /api/tasks/:taskId/candidates/:index/adopt` | 并行比较完成后，用户采纳某个候选结果 | 新增 |
+| `POST /api/tasks/:taskId/phases/:phaseId/candidates/:index/adopt` | 并行比较完成后，用户在指定 phase 内采纳某个候选结果 | 新增 |
 | `POST /api/tasks/:taskId/complete` 或等价入口 | 用户确认当前任务或当前任务链已完结；若需要 Workflow 外的新工作，由用户显式发起新独立任务，而不是由阶段推进逻辑隐式派生 | 新增 |
 
 ## 6. Prompt 注入实现要点
@@ -465,7 +465,7 @@ Agent 执行结束时（session complete 回调）：
 并行比较模式下的推进：
 
 - 所有 candidate 完成后，若有 judge 且 `autoAdvanceStages = true` → 自动评分，采纳胜者结果后推进，并自动开始下一阶段的初始任务
-- 若无 judge 或 `autoAdvanceStages = false` → 等待用户手动采纳（`/candidates/:index/adopt`），采纳后再决定是否启动下一阶段的初始任务
+- 若无 judge 或 `autoAdvanceStages = false` → 等待用户手动采纳（`/phases/:phaseId/candidates/:index/adopt`），采纳后再决定是否启动下一阶段的初始任务
 
 顺序编排模式下的推进：
 

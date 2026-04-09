@@ -6,6 +6,7 @@ import {
   JSONB_COLUMN_NAMES,
   KEY_FOREIGN_KEYS,
   LEGACY_OFFLINE_SOURCE_TABLES,
+  RETIRED_SQLITE_SOURCE_TABLES,
   type SnapshotManifest,
   ensureDir,
   getOrderedTables,
@@ -299,6 +300,25 @@ function pruneLegacySourceTables(
   }
 }
 
+function pruneRetiredSourceTables(
+  rowsByTable: Map<string, Array<Record<string, unknown>>>,
+  tableMetaByName: Map<string, SnapshotManifest["tables"][number]>,
+  warnings: Record<string, string[]>,
+) {
+  for (const tableName of RETIRED_SQLITE_SOURCE_TABLES) {
+    if (!rowsByTable.delete(tableName)) {
+      continue;
+    }
+
+    tableMetaByName.delete(tableName);
+    pushTableWarning(
+      warnings,
+      tableName,
+      `Omitted retired legacy source table ${tableName} from normalized PostgreSQL import; current PostgreSQL schema no longer materializes it.`,
+    );
+  }
+}
+
 function synthesizeTreeTables(
   rowsByTable: Map<string, Array<Record<string, unknown>>>,
   tableMetaByName: Map<string, SnapshotManifest["tables"][number]>,
@@ -485,6 +505,7 @@ export async function transformExportSnapshot(options: TransformExportOptions) {
     rowsByTable.set(table.name, normalizedRows);
   }
 
+  pruneRetiredSourceTables(rowsByTable, tableMetaByName, warnings);
   synthesizeTreeTables(rowsByTable, tableMetaByName, warnings);
 
   pruneRowsWithMissingParents(rowsByTable, warnings);

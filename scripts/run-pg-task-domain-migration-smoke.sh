@@ -67,20 +67,19 @@ BEGIN
   FROM (
     VALUES
       ('tasks'),
-      ('task_runs'),
-      ('task_run_nodes'),
-      ('task_run_edges'),
-      ('conversation_sessions'),
-      ('conversation_messages'),
-      ('conversation_message_parts'),
-      ('task_domain_events'),
+      ('task_execution_phases'),
+      ('task_sessions'),
+      ('task_session_runs'),
+      ('task_messages'),
+      ('task_message_parts'),
+      ('task_operations'),
       ('task_snapshots'),
       ('task_timeline_views')
   ) AS expected(table_name)
   WHERE to_regclass(format('public.%s', expected.table_name)) IS NULL;
 
   IF missing_table_count <> 0 THEN
-    RAISE EXCEPTION 'Missing expected task-domain tables: %', missing_table_count;
+    RAISE EXCEPTION 'Missing expected task-domain canonical tables: %', missing_table_count;
   END IF;
 END $$;
 
@@ -92,14 +91,13 @@ BEGIN
   FROM information_schema.columns
   WHERE table_schema = 'public'
     AND (
-      (table_name = 'agent_runs' AND column_name IN ('run_id', 'run_node_id')) OR
       (table_name = 'runtime_usage_ledgers' AND column_name IN ('task_id', 'runtime_session_id')) OR
       (table_name = 'runtime_usage_ledger_steps' AND column_name IN ('task_id', 'run_id', 'run_node_id')) OR
       (table_name = 'project_tree_nodes' AND column_name IN ('runtime_session_id', 'branch_name'))
     );
 
-  IF bridge_column_count <> 9 THEN
-    RAISE EXCEPTION 'Expected 9 bridge columns, found %', bridge_column_count;
+  IF bridge_column_count <> 7 THEN
+    RAISE EXCEPTION 'Expected 7 bridge columns, found %', bridge_column_count;
   END IF;
 END $$;
 
@@ -111,8 +109,10 @@ BEGIN
   FROM (
     VALUES
       ('idx_tasks_project_created_at'),
-      ('idx_task_runs_task_created_at'),
-      ('idx_task_snapshots_project_status_last_activity'),
+      ('idx_task_execution_phases_task_created_at'),
+      ('idx_task_sessions_task_created_at'),
+      ('idx_task_session_runs_task_phase_created_at'),
+      ('idx_task_snapshots_project_lifecycle_execution_activity'),
       ('idx_task_timeline_views_task_sort_at')
   ) AS expected(index_name)
   LEFT JOIN pg_indexes indexes

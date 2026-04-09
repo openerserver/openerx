@@ -6,9 +6,51 @@ import { createTaskBranchSchema, persistTaskBranchMessageSchema } from "./task-b
 import { resolveTaskByRuntimeSessionId } from "./task-route-builder-shared";
 import { postTaskSessionMessageSchema } from "./task-session-message-dto";
 
-const adoptTaskSessionWinnerSchema = z.object({
-  coordinationKey: z.string().min(1),
+const upsertTaskPhaseSchema = z.object({
+  id: z.string().min(1).optional(),
+  parentPhaseId: z.string().min(1).nullable().optional(),
+  phaseKind: z.enum(["root", "single", "parallel", "sequential_chain", "manual_branch", "hook"]),
+  triggerType: z.enum([
+    "execute",
+    "continue",
+    "resume",
+    "workflow_spawn",
+    "candidate_adopt",
+    "manual_branch",
+    "hook_spawn",
+  ]),
+  status: z
+    .enum(["pending", "running", "paused", "awaiting_adoption", "completed", "failed", "cancelled"])
+    .optional(),
+  resumedFromPhaseId: z.string().min(1).nullable().optional(),
+  anchorSessionId: z.string().min(1).nullable().optional(),
+  anchorMessageId: z.string().min(1).nullable().optional(),
+  candidateCount: z.number().int().min(0).nullable().optional(),
+  winnerSessionId: z.string().min(1).nullable().optional(),
+  judgeSessionId: z.string().min(1).nullable().optional(),
+  requestedModel: z.string().min(1).nullable().optional(),
+  effectiveModel: z.string().min(1).nullable().optional(),
+  resultSummary: z.string().nullable().optional(),
+  errorText: z.string().nullable().optional(),
+  startedAt: z.string().datetime().nullable().optional(),
+  finishedAt: z.string().datetime().nullable().optional(),
+  currentSessionId: z.string().min(1).nullable().optional(),
+  latestSessionId: z.string().min(1).nullable().optional(),
+});
+
+const adoptTaskPhaseSchema = z.object({
   winnerSessionId: z.string().min(1),
+});
+
+const cancelTaskPhaseSchema = z.object({
+  reason: z
+    .enum(["winner_adopted", "user_cancelled", "runtime_terminated", "runtime_failed", "timeout", "superseded"])
+    .default("user_cancelled"),
+  terminateRunningSessions: z.boolean().optional(),
+});
+
+const resumeTaskPhaseSchema = z.object({
+  mode: z.enum(["reuse"]).default("reuse"),
 });
 
 function getIncludeLineage(queryValue: string | undefined) {
@@ -48,6 +90,50 @@ export function registerTaskSessionRoutes(
       error?: string;
       data?: unknown;
       details?: unknown;
+    }>;
+    listTaskPhases: (taskId: string) => Promise<{
+      ok: boolean;
+      status: number;
+      error?: string;
+      data?: unknown;
+    }>;
+    upsertTaskPhase: (
+      taskId: string,
+      body: z.infer<typeof upsertTaskPhaseSchema>,
+    ) => Promise<{
+      ok: boolean;
+      status: number;
+      error?: string;
+      data?: unknown;
+    }>;
+    adoptTaskPhase: (args: {
+      taskId: string;
+      phaseId: string;
+      winnerSessionId: string;
+    }) => Promise<{
+      ok: boolean;
+      status: number;
+      error?: string;
+      data?: unknown;
+    }>;
+    cancelTaskPhase: (args: {
+      taskId: string;
+      phaseId: string;
+      reason: "winner_adopted" | "user_cancelled" | "runtime_terminated" | "runtime_failed" | "timeout" | "superseded";
+    }) => Promise<{
+      ok: boolean;
+      status: number;
+      error?: string;
+      data?: unknown;
+    }>;
+    resumeTaskPhase: (args: {
+      taskId: string;
+      phaseId: string;
+    }) => Promise<{
+      ok: boolean;
+      status: number;
+      error?: string;
+      data?: unknown;
     }>;
     activateTaskSession: (
       taskId: string,
@@ -178,16 +264,6 @@ export function registerTaskSessionRoutes(
       error?: string;
       data?: unknown;
     }>;
-    adoptTaskSessionWinner: (args: {
-      taskId: string;
-      coordinationKey: string;
-      winnerSessionId: string;
-    }) => Promise<{
-      ok: boolean;
-      status: number;
-      error?: string;
-      data?: unknown;
-    }>;
   },
 ) {
   // Lookup route — must come before /:taskId routes to avoid conflict.
@@ -253,19 +329,71 @@ export function registerTaskSessionRoutes(
     return c.json(result.data, result.status as 200);
   });
 
+  taskRoutes.get("/:taskId/phases", async (c) => {
+    const taskId = c.req.param("taskId");
+    const result = await deps.listTaskPhases(taskId);
+    if (!result.ok) {
+      return c.json({ error: result.error }, result.status as 404 | 500);
+    }
+
+    return c.json(result.data, result.status as 200);
+  });
+
+  taskRoutes.post("/:taskId/phases", zValidator("json", upsertTaskPhaseSchema), async (c) => {
+    const taskId = c.req.param("taskId");
+    const result = await deps.upsertTaskPhase(taskId, c.req.valid("json"));
+    if (!result.ok) {
+      return c.json({ error: result.error }, result.status as 400 | 404 | 500);
+    }
+
+    return c.json(result.data, result.status as 200 | 201);
+  });
+
   taskRoutes.post(
-    "/:taskId/adopt-winner",
-    zValidator("json", adoptTaskSessionWinnerSchema),
+    "/:taskId/phases/:phaseId/adopt",
+    zValidator("json", adoptTaskPhaseSchema),
     async (c) => {
-      const taskId = c.req.param("taskId");
-      const body = c.req.valid("json");
-      const result = await deps.adoptTaskSessionWinner({
-        taskId,
-        coordinationKey: body.coordinationKey,
-        winnerSessionId: body.winnerSessionId,
+      const result = await deps.adoptTaskPhase({
+        taskId: c.req.param("taskId"),
+        phaseId: c.req.param("phaseId"),
+        winnerSessionId: c.req.valid("json").winnerSessionId,
       });
       if (!result.ok) {
-        return c.json({ error: result.error }, result.status as 400 | 404 | 501);
+        return c.json({ error: result.error }, result.status as 400 | 404 | 409 | 500);
+      }
+
+      return c.json(result.data, result.status as 200);
+    },
+  );
+
+  taskRoutes.post(
+    "/:taskId/phases/:phaseId/cancel",
+    zValidator("json", cancelTaskPhaseSchema),
+    async (c) => {
+      const body = c.req.valid("json");
+      const result = await deps.cancelTaskPhase({
+        taskId: c.req.param("taskId"),
+        phaseId: c.req.param("phaseId"),
+        reason: body.reason,
+      });
+      if (!result.ok) {
+        return c.json({ error: result.error }, result.status as 400 | 404 | 409 | 500);
+      }
+
+      return c.json(result.data, result.status as 200);
+    },
+  );
+
+  taskRoutes.post(
+    "/:taskId/phases/:phaseId/resume",
+    zValidator("json", resumeTaskPhaseSchema),
+    async (c) => {
+      const result = await deps.resumeTaskPhase({
+        taskId: c.req.param("taskId"),
+        phaseId: c.req.param("phaseId"),
+      });
+      if (!result.ok) {
+        return c.json({ error: result.error }, result.status as 404 | 409 | 500);
       }
 
       return c.json(result.data, result.status as 200);

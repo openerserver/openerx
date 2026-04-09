@@ -5,6 +5,7 @@ import {
   type TaskUsageEntryKind,
   taskOperations,
   taskSessionRuns,
+  taskSessions,
 } from "../../db/schema";
 import type { TaskTreeSnapshot } from "../project-tree/task-types";
 import type { TaskTreeRecord } from "../project-tree/task-view";
@@ -44,6 +45,15 @@ function mapAgentRunStatusToTaskStatus(status: SyncExecutionFactsForAgentRunArgs
   }
 
   return "pending" as const;
+}
+
+function usesCompositeTaskLifecycle(task: Pick<TaskTreeRecord, "executionMode" | "orchestrationKind">) {
+  return (
+    task.executionMode === "parallel" ||
+    task.executionMode === "sequential-chain" ||
+    task.orchestrationKind === "parallel" ||
+    task.orchestrationKind === "sequential-chain"
+  );
 }
 
 function mapAgentRunStatusToTaskNodeStatus(
@@ -152,6 +162,7 @@ type AgentRunWriteContext = {
   runtimeSessionId: string;
   taskOperationId: string;
   taskSessionId: string;
+  phaseId: string | null;
   operationIndex: number;
   tokenUsed: number;
   taskNodeStatus: TaskSessionNodeStatus;
@@ -223,6 +234,10 @@ async function buildAgentRunWriteContext(
     taskOperationId,
     runtimeSessionId,
   );
+  const taskSessionRecord = await db.query.taskSessions.findFirst({
+    where: eq(taskSessions.id, taskSessionId),
+    columns: { phaseId: true },
+  });
   const operationKind = mapAgentTypeToTaskOperationKind(args.agentType);
   const isJudgeOperation = operationKind === "judge";
 
@@ -230,6 +245,7 @@ async function buildAgentRunWriteContext(
     runtimeSessionId,
     taskOperationId,
     taskSessionId,
+    phaseId: taskSessionRecord?.phaseId ?? null,
     operationIndex: await resolveTaskOperationIndex(taskOperationId, taskSessionId),
     tokenUsed: args.tokenUsed ?? 0,
     taskNodeStatus: mapAgentRunStatusToTaskNodeStatus(args.status),
@@ -251,11 +267,12 @@ async function upsertTaskSessionRunFacts(
       id: context.defaultRunId,
       taskId: args.task.id,
       sessionId: context.taskSessionId,
+      phaseId: context.phaseId,
       attemptIndex: 1,
       runtimeSessionId: context.runtimeSessionId,
       triggerType: "user_prompt",
       executionKind: resolveTaskSessionRunExecutionKind(context.isJudgeOperation),
-      coordinationKey: context.taskSessionId,
+      coordinationKey: null,
       candidateIndex: args.candidateIndex ?? null,
       laneRole: resolveTaskSessionRunLaneRole(context.isJudgeOperation),
       executorKind: args.agentType,
@@ -275,7 +292,9 @@ async function upsertTaskSessionRunFacts(
     .onConflictDoUpdate({
       target: taskSessionRuns.id,
       set: {
+        phaseId: context.phaseId,
         runtimeSessionId: context.runtimeSessionId,
+        coordinationKey: null,
         candidateIndex: args.candidateIndex ?? null,
         executorKind: args.agentType,
         modelRoute: args.modelUsed ?? null,
@@ -363,7 +382,11 @@ async function syncTaskAggregateSnapshotFromAgentRun(
     return;
   }
 
-  const snapshot = deps.buildTaskTreeSnapshotFromRecord(args.task, {
+  if (usesCompositeTaskLifecycle(args.task)) {
+    return;
+  }
+
+  const snapshotUpdates: Record<string, unknown> = {
     status: mapAgentRunStatusToTaskStatus(args.status),
     sessionId: context.runtimeSessionId,
     agentRunId: args.agentRunId,
@@ -371,7 +394,9 @@ async function syncTaskAggregateSnapshotFromAgentRun(
     selectedModel: args.modelUsed ?? args.task.selectedModel,
     startedAt: args.startedAt ?? args.task.startedAt,
     finishedAt: args.finishedAt ?? args.task.finishedAt,
-  });
+  };
+
+  const snapshot = deps.buildTaskTreeSnapshotFromRecord(args.task, snapshotUpdates);
   await deps.syncTaskAggregateFromSnapshot(snapshot);
 }
 

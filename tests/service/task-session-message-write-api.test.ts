@@ -15,13 +15,17 @@ let importCounter = 0;
 
 function createInsertChain(
   recorder: (payload: unknown) => void,
+  conflictRecorder?: (payload: { payload: unknown; args: unknown }) => void | Promise<void>,
   onConflictDoUpdateHook?: (payload: unknown) => void | Promise<void>,
 ) {
   return {
     values(payload: unknown) {
       recorder(payload);
       return {
-        onConflictDoUpdate: async () => onConflictDoUpdateHook?.(payload),
+        onConflictDoUpdate: async (args: unknown) => {
+          await conflictRecorder?.({ payload, args });
+          await onConflictDoUpdateHook?.(payload);
+        },
       };
     },
   };
@@ -92,6 +96,12 @@ async function loadTaskSessionMessageWriteModule(args?: {
   importCounter += 1;
 
   const insertCalls: Array<{ table: string; payload: unknown }> = [];
+  const conflictUpdateCalls: Array<{
+    table: string;
+    payload: unknown;
+    target: unknown;
+    set: unknown;
+  }> = [];
   const deleteCalls: Array<{ table: string; payload: unknown }> = [];
   const updateCalls: Array<{ table: string; payload: unknown }> = [];
   const taskMessageFindFirstResults = [...(args?.taskMessageFindFirstResults ?? [])];
@@ -101,10 +111,11 @@ async function loadTaskSessionMessageWriteModule(args?: {
   const defaultSessionRecord = {
     id: "session-1",
     latestRunId: null,
+    phaseId: "phase-session-1",
     runtimeSessionId: "runtime-session-1",
     triggerType: null,
     sessionKind: "primary",
-    coordinationKey: "session-1",
+    coordinationKey: null,
     rootSessionId: "session-1",
     candidateIndex: null,
     workflowStageKey: null,
@@ -130,6 +141,18 @@ async function loadTaskSessionMessageWriteModule(args?: {
       return createInsertChain(
         (payload) => {
           insertCalls.push({ table: tableName, payload });
+        },
+        async ({ payload, args }) => {
+          const record =
+            args && typeof args === "object"
+              ? (args as { target?: unknown; set?: unknown })
+              : {};
+          conflictUpdateCalls.push({
+            table: tableName,
+            payload,
+            target: record.target,
+            set: record.set,
+          });
         },
         async (payload) => {
           const hook = insertHooks[tableName]?.shift();
@@ -162,6 +185,7 @@ async function loadTaskSessionMessageWriteModule(args?: {
   return {
     ...module,
     insertCalls,
+    conflictUpdateCalls,
     deleteCalls,
     updateCalls,
   };
@@ -239,6 +263,8 @@ describe("task session message write api", () => {
     expect(taskSessionRunInsert).toMatchObject({
       id: "run_session-1",
       sessionId: "session-1",
+      phaseId: "phase-session-1",
+      coordinationKey: null,
       status: "completed",
     });
 
@@ -249,6 +275,7 @@ describe("task session message write api", () => {
           payload: expect.objectContaining({
             latestRunId: "run_session-1",
             status: "completed",
+            executionStatus: "complete",
           }),
         }),
       ]),
@@ -326,7 +353,7 @@ describe("task session message write api", () => {
     });
   });
 
-  test("overwrites placeholder createdAt with explicit runtime createdAt for existing user messages", async () => {
+  test("overwrites placeholder createdAt on conflict updates for existing user messages", async () => {
     const existingUserMessage = {
       id: "task-session-message:session-1:session-1:user-prompt",
       taskId: "task-1",
@@ -344,21 +371,21 @@ describe("task session message write api", () => {
           id: "session-1:user-prompt",
           role: "user",
           time: {
-            created: "2025-01-01T00:00:00.000Z",
-            completed: "2025-01-01T00:00:00.000Z",
+            created: "2025-01-01T00:10:00.000Z",
+            completed: "2025-01-01T00:10:00.000Z",
           },
         },
         parts: [{ type: "text", text: "hello user" }],
       },
       tokenUsed: 0,
-      startedAt: "2025-01-01T00:00:00.000Z",
-      completedAt: "2025-01-01T00:00:00.000Z",
+      startedAt: "2025-01-01T00:10:00.000Z",
+      completedAt: "2025-01-01T00:10:00.000Z",
       errorText: null,
-      createdAt: "2025-01-01T00:00:00.000Z",
-      updatedAt: "2025-01-01T00:00:00.000Z",
+      createdAt: "2025-01-01T00:10:00.000Z",
+      updatedAt: "2025-01-01T00:10:00.000Z",
     };
 
-    const { createTaskSessionMessageWriteApi, insertCalls } =
+    const { createTaskSessionMessageWriteApi, insertCalls, conflictUpdateCalls } =
       await loadTaskSessionMessageWriteModule({
         taskMessageFindFirstResults: [existingUserMessage, existingUserMessage],
       });
@@ -395,11 +422,28 @@ describe("task session message write api", () => {
       completedAt: "2025-01-01T00:05:00.000Z",
     });
 
+    const canonicalMessageConflictUpdate = conflictUpdateCalls.find(
+      (call) => call.table === "task_messages",
+    )?.set;
+    expect(canonicalMessageConflictUpdate).toMatchObject({
+      createdAt: "2025-01-01T00:05:00.000Z",
+      startedAt: "2025-01-01T00:05:00.000Z",
+      completedAt: "2025-01-01T00:05:00.000Z",
+    });
+
     const timelineInsert = insertCalls.find(
       (call) => call.table === "task_timeline_views",
     )?.payload;
     expect(timelineInsert).toMatchObject({
       messageId: "task-session-message:session-1:session-1:user-prompt",
+      createdAt: "2025-01-01T00:05:00.000Z",
+      sortAt: "2025-01-01T00:05:00.000Z",
+    });
+
+    const timelineConflictUpdate = conflictUpdateCalls.find(
+      (call) => call.table === "task_timeline_views",
+    )?.set;
+    expect(timelineConflictUpdate).toMatchObject({
       createdAt: "2025-01-01T00:05:00.000Z",
       sortAt: "2025-01-01T00:05:00.000Z",
     });
@@ -804,7 +848,7 @@ describe("task session message write api", () => {
   });
 
   test("accepts legacy string tool state values on runtime message parts", async () => {
-    const { createTaskSessionMessageWriteApi, insertCalls } =
+    const { createTaskSessionMessageWriteApi, insertCalls, updateCalls } =
       await loadTaskSessionMessageWriteModule();
 
     const api = createTaskSessionMessageWriteApi({
@@ -846,6 +890,14 @@ describe("task session message write api", () => {
       status: "completed",
     });
 
+    const taskSessionRunInsert = insertCalls.find(
+      (call) => call.table === "task_session_runs",
+    )?.payload;
+    expect(taskSessionRunInsert).toMatchObject({
+      status: "running",
+      finishedAt: null,
+    });
+
     const messagePartInsertCalls = insertCalls
       .filter((call) => call.table === "task_message_parts")
       .map((call) => call.payload);
@@ -855,6 +907,27 @@ describe("task session message write api", () => {
           partType: "tool_result",
         }),
       ]),
+    );
+
+    expect(updateCalls).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          table: "task_sessions",
+          payload: expect.objectContaining({
+            status: "running",
+            executionStatus: "running",
+          }),
+        }),
+      ]),
+    );
+    expect(updateCalls).not.toContainEqual(
+      expect.objectContaining({
+        table: "task_sessions",
+        payload: expect.objectContaining({
+          status: "completed",
+          executionStatus: "complete",
+        }),
+      }),
     );
   });
 });

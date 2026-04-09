@@ -99,4 +99,101 @@ describe("transform export snapshot", () => {
     expect(synthesizedTaskNode?.content_json).not.toHaveProperty("executionMode");
     expect(synthesizedTaskNode?.content_json).not.toHaveProperty("autoAdvanceStages");
   });
+
+  test("omits retired agent_runs source tables from normalized exports", async () => {
+    const inputDir = await createTempDir("transform-export-input-");
+    const outputDir = await createTempDir("transform-export-output-");
+
+    const manifest: SnapshotManifest = {
+      kind: "sqlite-export",
+      generatedAt: "2025-01-01T00:00:00.000Z",
+      sourceDatabasePath: "/tmp/openerx.db",
+      tables: [
+        {
+          name: "projects",
+          columns: ["id", "created_at"],
+          rowCount: 1,
+          primaryKeyColumn: "id",
+          fileName: "projects.jsonl",
+        },
+        {
+          name: "repositories",
+          columns: ["id", "project_id"],
+          rowCount: 1,
+          primaryKeyColumn: "id",
+          fileName: "repositories.jsonl",
+        },
+        {
+          name: "tasks",
+          columns: ["id", "project_id", "title", "created_at"],
+          rowCount: 1,
+          primaryKeyColumn: "id",
+          fileName: "tasks.jsonl",
+        },
+        {
+          name: "code_changes",
+          columns: ["id", "task_id", "repo_id", "agent_run_id", "created_at"],
+          rowCount: 1,
+          primaryKeyColumn: "id",
+          fileName: "code_changes.jsonl",
+        },
+        {
+          name: "agent_runs",
+          columns: ["id", "task_id", "created_at"],
+          rowCount: 1,
+          primaryKeyColumn: "id",
+          fileName: "agent_runs.jsonl",
+        },
+      ],
+    };
+
+    await writeJson(join(inputDir, "manifest.json"), manifest);
+    await writeJsonLines(join(inputDir, "projects.jsonl"), [
+      { id: "project-1", created_at: "2025-01-01T00:00:00.000Z" },
+    ]);
+    await writeJsonLines(join(inputDir, "repositories.jsonl"), [
+      { id: "repo-1", project_id: "project-1" },
+    ]);
+    await writeJsonLines(join(inputDir, "tasks.jsonl"), [
+      {
+        id: "task-1",
+        project_id: "project-1",
+        title: "Legacy task",
+        created_at: "2025-01-01T00:00:10.000Z",
+      },
+    ]);
+    await writeJsonLines(join(inputDir, "code_changes.jsonl"), [
+      {
+        id: "change-1",
+        task_id: "task-1",
+        repo_id: "repo-1",
+        agent_run_id: "agent-run-1",
+        created_at: "2025-01-01T00:00:20.000Z",
+      },
+    ]);
+    await writeJsonLines(join(inputDir, "agent_runs.jsonl"), [
+      {
+        id: "agent-run-1",
+        task_id: "task-1",
+        created_at: "2025-01-01T00:00:15.000Z",
+      },
+    ]);
+
+    const normalizedManifest = await transformExportSnapshot({ inputDir, outputDir });
+
+    expect(normalizedManifest.tables.map((table) => table.name)).not.toContain("agent_runs");
+    expect(normalizedManifest.warnings?.agent_runs).toContain(
+      "Omitted retired legacy source table agent_runs from normalized PostgreSQL import; current PostgreSQL schema no longer materializes it.",
+    );
+
+    const codeChangeRows = await Bun.file(join(outputDir, "code_changes.jsonl")).text();
+    expect(codeChangeRows.trim().split("\n").map((line) => JSON.parse(line))).toEqual([
+      expect.objectContaining({
+        id: "change-1",
+        task_id: "task-1",
+        repo_id: "repo-1",
+        agent_run_id: "agent-run-1",
+      }),
+    ]);
+  });
 });

@@ -44,9 +44,7 @@ async function loadTaskProjectionReadModule(args: {
     return path;
   };
 
-  const selectResults = args.lineageRows
-    ? [args.lineageRows, args.resultRows ?? []]
-    : [args.resultRows ?? []];
+  const selectResults = [args.lineageRows ?? [], args.resultRows ?? []];
   let selectCallIndex = 0;
 
   mock.module("../../control-plane/service/src/db", () => ({
@@ -211,5 +209,85 @@ describe("task projection read", () => {
 
     expect(response.meta.lineagePath).toEqual(["task-session:task-1:fork-session"]);
     expect(response.data).toEqual(timelineRows);
+  });
+
+  test("collapses duplicated tool timeline rows written with mixed runtime ids", async () => {
+    const sessionId = "task-session:task-1:runtime-1";
+    const timelineRows = [
+      {
+        id: "timeline-1",
+        taskId: "task-1",
+        projectId: "project-1",
+        sessionId,
+        messageId: `task-session-message:${sessionId}:runtime-1:tool:write_1`,
+        operationId: null,
+        artifactId: null,
+        itemKind: "message",
+        itemRole: "tool",
+        title: null,
+        displayText: "Successfully wrote 73 bytes to print_cc.c",
+        metadataJson: {
+          runtimeMessageId: "runtime-1:tool:write_1",
+        },
+        sortAt: "2025-01-01T00:00:01.000Z",
+        createdAt: "2025-01-01T00:00:01.000Z",
+        updatedAt: "2025-01-01T00:00:01.000Z",
+      },
+      {
+        id: "timeline-2",
+        taskId: "task-1",
+        projectId: "project-1",
+        sessionId,
+        messageId: `task-session-message:${sessionId}:tool:write_1`,
+        operationId: null,
+        artifactId: null,
+        itemKind: "message",
+        itemRole: "tool",
+        title: null,
+        displayText: "Successfully wrote 73 bytes to print_cc.c",
+        metadataJson: {
+          runtimeMessageId: "tool:write_1",
+        },
+        sortAt: "2025-01-01T00:00:02.000Z",
+        createdAt: "2025-01-01T00:00:02.000Z",
+        updatedAt: "2025-01-01T00:00:02.000Z",
+      },
+    ];
+
+    const { buildTaskProjectionTimelineViewResponse } = await loadTaskProjectionReadModule({
+      resultRows: timelineRows,
+      lineageRows: [
+        {
+          id: sessionId,
+          parentSessionId: null,
+          runtimeSessionId: "runtime-1",
+        },
+      ],
+    });
+
+    const response = await buildTaskProjectionTimelineViewResponse({
+      taskId: "task-1",
+      projectId: "project-1",
+      sessionId,
+      includeLineage: false,
+    });
+
+    expect(response.data).toEqual([
+      expect.objectContaining({
+        id: "timeline-2",
+        sessionId,
+        itemRole: "tool",
+        displayText: "Successfully wrote 73 bytes to print_cc.c",
+      }),
+    ]);
+    expect(response.meta).toEqual({
+      readSource: "task-session-projection",
+      includeLineage: false,
+      lineagePath: [sessionId],
+      itemCount: 1,
+      cachedSessionCount: 1,
+      complete: true,
+      cacheState: "complete",
+    });
   });
 });

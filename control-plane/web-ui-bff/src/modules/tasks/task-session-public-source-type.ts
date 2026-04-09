@@ -6,6 +6,7 @@ type TaskSessionSourceTypeLike = {
   parentSessionId?: string | null;
   parentRuntimeSessionId?: string | null;
   forkedFromMessageId?: string | null;
+  phaseId?: string | null;
   candidateIndex?: number | null;
   executionModeSnapshot?: string | null;
   coordinationKey?: string | null;
@@ -29,7 +30,8 @@ export function isParallelTaskSessionCandidate(session?: TaskSessionSourceTypeLi
   }
 
   return (
-    session.executionModeSnapshot === "parallel" && hasNonEmptyString(session.coordinationKey)
+    session.executionModeSnapshot === "parallel" &&
+    (hasNonEmptyString(session.phaseId) || hasNonEmptyString(session.coordinationKey))
   );
 }
 

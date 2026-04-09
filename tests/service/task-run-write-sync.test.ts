@@ -24,6 +24,7 @@ function resolveTableName(table: unknown) {
 
 async function loadTaskOperationWriteModule(args?: {
   taskOperationFindResults?: unknown[];
+  taskSessionRecord?: { phaseId?: string | null } | null;
 }) {
   importCounter += 1;
 
@@ -34,6 +35,9 @@ async function loadTaskOperationWriteModule(args?: {
     query: {
       taskOperations: {
         findFirst: mock(async () => taskOperationFindResults.shift() ?? null),
+      },
+      taskSessions: {
+        findFirst: mock(async () => args?.taskSessionRecord ?? null),
       },
     },
     insert: mock((table: unknown) =>
@@ -119,15 +123,15 @@ afterEach(() => {
 });
 
 describe("task operation write api", () => {
-  test("syncs agent runs into canonical task session runs, operations, usage entries, and aggregate snapshots", async () => {
+  test("syncs parallel candidate runs without collapsing the parent task lifecycle", async () => {
     const { createTaskOperationWriteApi, insertCalls } = await loadTaskOperationWriteModule({
       taskOperationFindResults: [null, null],
+      taskSessionRecord: { phaseId: "phase-agent-run-1" },
     });
 
     const upsertTaskSessionRecord = mock(async () => "task-session:task-1:runtime-session-1");
     const appendTaskUsageLedgerEntry = mock(async () => ({ id: "ledger-1" }));
-    const snapshot = { id: "snapshot-1" } as never;
-    const buildTaskTreeSnapshotFromRecord = mock(() => snapshot);
+    const buildTaskTreeSnapshotFromRecord = mock(() => ({ id: "snapshot-1" } as never));
     const syncTaskAggregateFromSnapshot = mock(async () => undefined);
 
     const api = createTaskOperationWriteApi({
@@ -171,7 +175,9 @@ describe("task operation write api", () => {
       id: "run_task-session:task-1:runtime-session-1",
       taskId: "task-1",
       sessionId: "task-session:task-1:runtime-session-1",
+      phaseId: "phase-agent-run-1",
       runtimeSessionId: "runtime-session-1",
+      coordinationKey: null,
       candidateIndex: 1,
       executionKind: "single",
       laneRole: "primary",
@@ -215,22 +221,55 @@ describe("task operation write api", () => {
         outputTokens: 13,
       }),
     );
-    expect(buildTaskTreeSnapshotFromRecord).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "task-1" }),
-      expect.objectContaining({
-        status: "cancelled",
-        sessionId: "runtime-session-1",
-        agentRunId: "agent-run-1",
-        result: "candidate stopped",
-        selectedModel: "github-copilot:gpt-5-mini",
+    expect(buildTaskTreeSnapshotFromRecord).not.toHaveBeenCalled();
+    expect(syncTaskAggregateFromSnapshot).not.toHaveBeenCalled();
+  });
+
+  test("keeps parallel completed candidate runs from marking the parent task completed", async () => {
+    const { createTaskOperationWriteApi } = await loadTaskOperationWriteModule({
+      taskOperationFindResults: [null, null],
+      taskSessionRecord: { phaseId: "phase-agent-run-2" },
+    });
+
+    const upsertTaskSessionRecord = mock(async () => "task-session:task-1:runtime-session-2");
+    const appendTaskUsageLedgerEntry = mock(async () => ({ id: "ledger-2" }));
+    const buildTaskTreeSnapshotFromRecord = mock(() => ({ id: "snapshot-2" } as never));
+    const syncTaskAggregateFromSnapshot = mock(async () => undefined);
+
+    const api = createTaskOperationWriteApi({
+      upsertTaskSessionRecord,
+      buildTaskTreeSnapshotFromRecord,
+      syncTaskAggregateFromSnapshot,
+      appendTaskUsageLedgerEntry,
+    });
+
+    await api.syncExecutionFactsForAgentRun({
+      task: createTaskRecord({
+        status: "running",
+        result: null,
+        executionMode: "parallel",
+        orchestrationKind: "parallel",
       }),
-    );
-    expect(syncTaskAggregateFromSnapshot).toHaveBeenCalledWith(snapshot);
+      agentRunId: "agent-run-2",
+      sessionId: "runtime-session-2",
+      agentType: "builder",
+      status: "completed",
+      modelUsed: "github-copilot:gpt-5-mini",
+      tokenUsed: 8,
+      result: "candidate complete",
+      candidateIndex: 0,
+      startedAt: "2025-01-01T00:02:00.000Z",
+      finishedAt: "2025-01-01T00:02:30.000Z",
+    });
+
+    expect(buildTaskTreeSnapshotFromRecord).not.toHaveBeenCalled();
+    expect(syncTaskAggregateFromSnapshot).not.toHaveBeenCalled();
   });
 
   test("normalizes canonical session ids and maps judge agent runs to judge semantics", async () => {
     const { createTaskOperationWriteApi, insertCalls } = await loadTaskOperationWriteModule({
       taskOperationFindResults: [null, null],
+      taskSessionRecord: { phaseId: "phase-judge-1" },
     });
 
     const upsertTaskSessionRecord = mock(async () => "task-session:task-1:judge-session");
@@ -259,7 +298,9 @@ describe("task operation write api", () => {
     const insertedRun = insertCalls.find((call) => call.table === "task_session_runs")?.payload;
     expect(insertedRun).toMatchObject({
       sessionId: "task-session:task-1:judge-session",
+      phaseId: "phase-judge-1",
       runtimeSessionId: "judge-session",
+      coordinationKey: null,
       executionKind: "judge",
       laneRole: "judge",
       status: "completed",

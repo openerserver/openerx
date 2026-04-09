@@ -252,6 +252,13 @@ export const SAMPLE_TABLES = [
 
 export const LEGACY_OFFLINE_SOURCE_TABLES = new Set(["sessions", "task_sessions"]);
 
+export const RETIRED_SQLITE_SOURCE_TABLES = new Set([
+  "agent_runs",
+  "project_task_relations",
+  "task_edges",
+  "task_nodes",
+]);
+
 export function nowIso() {
   return new Date().toISOString();
 }
