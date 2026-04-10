@@ -1,5 +1,5 @@
 <template>
-  <div :style="workbenchThemeStyles.page">
+  <div class="task-workbench-page" :style="workbenchThemeStyles.page">
     <a-flex justify="space-between" align="center" :style="workbenchThemeStyles.header">
       <a-typography-title :level="3" :style="workbenchThemeStyles.title">任务 Workbench</a-typography-title>
       <a-space wrap>
@@ -31,22 +31,18 @@
         <a-button :disabled="workbench.tabs.length < 2" @click="toggleSplitMode">
           {{ workbench.splitMode ? "退出分屏" : "双栏分屏" }}
         </a-button>
-        <a-radio-group
-          :value="workbenchViewMode"
-          size="small"
-          button-style="solid"
-          @update:value="handleWorkbenchViewModeChange"
-        >
-          <a-radio-button value="v1">经典</a-radio-button>
-          <a-radio-button value="v3">V3</a-radio-button>
-        </a-radio-group>
         <a-button danger :disabled="workbench.tabs.length === 0" @click="confirmClearWorkbench">
           清空工作台
         </a-button>
       </a-space>
     </a-flex>
 
-    <a-card size="small" :body-style="workbenchThemeStyles.shellBody" :style="workbenchThemeStyles.shellCard">
+    <a-card
+      class="task-workbench-shell"
+      size="small"
+      :body-style="workbenchThemeStyles.shellBody"
+      :style="workbenchThemeStyles.shellCard"
+    >
       <a-empty v-if="workbench.tabs.length === 0" description="工作台还没有打开任何任务">
         <a-button type="primary" @click="openTaskList">去任务列表挑一个任务</a-button>
       </a-empty>
@@ -104,14 +100,7 @@
         </div>
 
         <template v-if="!workbench.splitMode">
-          <div :style="workbenchThemeStyles.pane">
-            <div :style="workbenchThemeStyles.paneHeader">
-              <a-space size="small" wrap>
-                <a-tag color="blue">主视图</a-tag>
-                <span :style="workbenchThemeStyles.paneTitle">{{ activeTab?.title || workbench.activeTaskId }}</span>
-                <a-tag :color="activeTaskDisplayStatus.tagColor">{{ activeTaskDisplayStatus.label }}</a-tag>
-              </a-space>
-            </div>
+          <div class="task-workbench-pane" :style="workbenchThemeStyles.pane">
             <iframe
               v-if="workbench.activeTaskId"
               :src="taskFrameSrc(workbench.activeTaskId)"
@@ -121,15 +110,9 @@
         </template>
 
         <template v-else>
-          <a-row :gutter="16">
-            <a-col :xs="24" :xl="12">
-              <div :style="workbenchThemeStyles.pane">
-                <div :style="workbenchThemeStyles.paneHeader">
-                  <a-space size="small" wrap>
-                    <a-tag color="blue">主窗</a-tag>
-                    <span :style="workbenchThemeStyles.paneTitle">{{ activeTab?.title || workbench.activeTaskId }}</span>
-                  </a-space>
-                </div>
+          <a-row class="task-workbench-split-row" :gutter="16">
+            <a-col class="task-workbench-split-col" :xs="24" :xl="12">
+              <div class="task-workbench-pane" :style="workbenchThemeStyles.pane">
                 <iframe
                   v-if="workbench.activeTaskId"
                   :src="taskFrameSrc(workbench.activeTaskId)"
@@ -138,8 +121,8 @@
               </div>
             </a-col>
 
-            <a-col :xs="24" :xl="12">
-              <div :style="workbenchThemeStyles.pane">
+            <a-col class="task-workbench-split-col" :xs="24" :xl="12">
+              <div class="task-workbench-pane" :style="workbenchThemeStyles.pane">
                 <div :style="workbenchThemeStyles.paneHeader">
                   <a-flex justify="space-between" align="center" :style="workbenchThemeStyles.secondaryHeader">
                     <a-space size="small" wrap>
@@ -238,15 +221,6 @@ const activeTab = computed(() =>
 
 const secondaryOptions = computed(() =>
   workbench.tabs.filter((tab) => tab.taskId !== workbench.activeTaskId),
-);
-
-const activeTaskMeta = computed(() => {
-  const taskId = workbench.activeTaskId;
-  return taskId ? taskMetaMap.value[taskId] : undefined;
-});
-
-const activeTaskDisplayStatus = computed(() =>
-  resolveTaskDisplayStatus(activeTaskMeta.value || { status: activeTab.value?.status }),
 );
 
 const secondaryTaskMeta = computed(() => {
@@ -516,19 +490,12 @@ function tabAttentionLabel(taskId?: string, status?: string) {
   return displayStatus.status === "awaiting-adoption" ? displayStatus.label : "未完成";
 }
 
-const workbenchViewMode = ref<"v1" | "v3">("v1");
-
-function handleWorkbenchViewModeChange(value: string | number | boolean) {
-  workbenchViewMode.value = value === "v3" ? "v3" : "v1";
-}
-
 function taskFrameSrc(taskId: string, sessionId?: string) {
   const query = new URLSearchParams({ embedded: "1", workbench: "1" });
   if (sessionId) {
     query.set("session", sessionId);
   }
-  const suffix = workbenchViewMode.value === "v3" ? "/v3" : "";
-  return `/tasks/${taskId}${suffix}?${query.toString()}`;
+  return `/tasks/${taskId}?${query.toString()}`;
 }
 
 function tabLabel(tab: { taskId: string; title?: string }) {
@@ -708,6 +675,29 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+.task-workbench-page {
+  width: 100%;
+}
+
+.task-workbench-shell :deep(.ant-card-body) {
+  flex: 1;
+  min-height: 0;
+}
+
+.task-workbench-pane {
+  min-width: 0;
+}
+
+.task-workbench-split-row {
+  flex: 1;
+  min-height: 0;
+}
+
+.task-workbench-split-col {
+  display: flex;
+  min-height: 0;
+}
+
 .task-workbench-member-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -763,6 +753,20 @@ onUnmounted(() => {
 }
 
 @media (max-width: 960px) {
+  .task-workbench-page {
+    height: auto;
+    min-height: 100dvh;
+    overflow: visible;
+  }
+
+  .task-workbench-shell :deep(.ant-card-body) {
+    overflow: visible;
+  }
+
+  .task-workbench-split-row {
+    flex: 0 0 auto;
+  }
+
   .task-workbench-member-grid {
     grid-template-columns: 1fr;
   }

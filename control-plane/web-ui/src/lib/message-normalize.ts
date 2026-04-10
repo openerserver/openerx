@@ -18,6 +18,7 @@ export interface TaskConversationMessageItem {
   model?: string;
   status?: string;
   errorText?: string;
+  thinkingText?: string;
   text?: string;
   userInputText?: string;
   finalSentText?: string;
@@ -289,6 +290,31 @@ function messageParts(message: unknown): Array<Record<string, unknown>> {
     : [];
 }
 
+function normalizePartText(
+  parts: Array<Record<string, unknown>>,
+  acceptedTypes: Set<string>,
+): string | undefined {
+  const chunks = parts
+    .filter((part) => {
+      const partType = asString(part.type);
+      return Boolean(partType && acceptedTypes.has(partType));
+    })
+    .map(
+      (part) =>
+        asString(part.text) ??
+        asString(part.content) ??
+        asString(part.textContent) ??
+        asString(part.contentText),
+    )
+    .filter((value): value is string => Boolean(value));
+
+  if (chunks.length > 0) {
+    return chunks.join("\n").trim() || undefined;
+  }
+
+  return undefined;
+}
+
 function normalizeText(parts: Array<Record<string, unknown>>): string | undefined {
   const chunks = parts
     .filter((part) => {
@@ -309,6 +335,10 @@ function normalizeText(parts: Array<Record<string, unknown>>): string | undefine
   }
 
   return undefined;
+}
+
+function normalizeThinkingText(parts: Array<Record<string, unknown>>): string | undefined {
+  return normalizePartText(parts, new Set(["thinking", "reasoning"]));
 }
 
 function normalizePreviewText(value: unknown, maxLength = 320): string | undefined {
@@ -805,6 +835,7 @@ export function normalizeMessage(
   const key = asString(info?.id) ?? asString(record?.id) ?? `${role}-${index}`;
   const toolCalls = normalizeToolCalls(parts);
   const isStreaming = role === "assistant" && liveState.incompleteIds.has(key);
+  const thinkingText = normalizeThinkingText(parts);
   const persistedText =
     normalizeText(parts) ??
     asString(record?.textContent) ??
@@ -833,6 +864,7 @@ export function normalizeMessage(
 
   if (
     !text &&
+    !thinkingText &&
     toolCalls.length === 0 &&
     !isStreaming
   ) {
@@ -846,6 +878,7 @@ export function normalizeMessage(
     model: asString(asRecord(info?.model)?.modelID) ?? asString(info?.modelID),
     status,
     errorText,
+    thinkingText,
     text,
     userInputText: asString(record?.userInputText),
     finalSentText: asString(record?.finalSentText),

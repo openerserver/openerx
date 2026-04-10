@@ -197,6 +197,22 @@ function resolveSnapshotTimingFields(task: TaskTreeRecord, updates: Record<strin
   };
 }
 
+function resolveTaskAggregateLifecycleFields(snapshot: TaskTreeSnapshot) {
+  const lifecycleStatus = toLifecycleStatus(snapshot.status);
+  const activatedAt = snapshot.startedAt ?? null;
+  const isTerminalStatus =
+    snapshot.status === "completed" ||
+    snapshot.status === "failed" ||
+    snapshot.status === "cancelled";
+
+  return {
+    lifecycleStatus,
+    activatedAt,
+    doneAt: isTerminalStatus ? (snapshot.finishedAt ?? null) : null,
+    archivedAt: snapshot.status === "cancelled" ? (snapshot.finishedAt ?? null) : null,
+  };
+}
+
 export function buildTaskTreeSnapshotFromCreateInput(
   userId: string,
   taskId: string,
@@ -281,6 +297,7 @@ export function createTaskAggregateSyncApi() {
   async function syncTaskAggregateFromSnapshot(snapshot: TaskTreeSnapshot) {
     const updatedAt = snapshot.finishedAt ?? snapshot.startedAt ?? new Date().toISOString();
     const { db, taskAggregates, taskSnapshots } = await loadTaskAggregateSyncRuntime();
+    const lifecycleFields = resolveTaskAggregateLifecycleFields(snapshot);
 
     // Tree/task write paths still carry runtime session ids, while task_snapshots persists
     // canonical task_session ids behind the session-first FK chain.
@@ -310,6 +327,10 @@ export function createTaskAggregateSyncApi() {
           executionMode: snapshot.executionMode,
           autoAdvanceStages: snapshot.autoAdvanceStages,
         }),
+        lifecycleStatus: lifecycleFields.lifecycleStatus,
+        activatedAt: lifecycleFields.activatedAt,
+        doneAt: lifecycleFields.doneAt,
+        archivedAt: lifecycleFields.archivedAt,
         finalCommitSha: snapshot.finalCommitSha,
         finalBranchName: snapshot.finalBranchName,
         createdAt: snapshot.createdAt,
@@ -338,6 +359,10 @@ export function createTaskAggregateSyncApi() {
             executionMode: snapshot.executionMode,
             autoAdvanceStages: snapshot.autoAdvanceStages,
           }),
+          lifecycleStatus: lifecycleFields.lifecycleStatus,
+          activatedAt: lifecycleFields.activatedAt,
+          doneAt: lifecycleFields.doneAt,
+          archivedAt: lifecycleFields.archivedAt,
           finalCommitSha: snapshot.finalCommitSha,
           finalBranchName: snapshot.finalBranchName,
           updatedAt,

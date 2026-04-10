@@ -3,14 +3,20 @@ import { and, eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 import { db } from "../../db";
+import { findUniqueConstraintMatch } from "../../db/unique-conflict";
 import { projects, repositories } from "../../db/schema";
 import { type AppEnv, authMiddleware } from "../../middleware/auth";
 import { requireProjectRole } from "../../middleware/rbac";
 import { recordAuditEvent } from "../audit/routes";
+import { normalizeApiTimestampFields } from "../shared/api-timestamp";
 
 type RepoEnv = AppEnv & { Variables: AppEnv["Variables"] };
 
 export const repositoryRoutes = new Hono<RepoEnv>();
+
+function normalizeRepositoryRecord(repository: typeof repositories.$inferSelect) {
+  return normalizeApiTimestampFields(repository, ["createdAt", "updatedAt"] as const);
+}
 
 function getProjectId(c: { req: { param: (name: string) => string | undefined } }): string {
   const id = c.req.param("projectId");
@@ -20,6 +26,23 @@ function getProjectId(c: { req: { param: (name: string) => string | undefined } 
 
 repositoryRoutes.use("*", authMiddleware);
 repositoryRoutes.use("*", requireProjectRole("projectId", "developer"));
+
+function resolveRepositoryConflictMessage(error: unknown) {
+  const matchedConstraint = findUniqueConstraintMatch(error, [
+    "idx_repositories_project_name",
+    "idx_repositories_project_remote_url",
+  ]);
+
+  if (matchedConstraint === "idx_repositories_project_name") {
+    return "A repository with this name already exists in the project";
+  }
+
+  if (matchedConstraint === "idx_repositories_project_remote_url") {
+    return "A repository with this URL already exists in the project";
+  }
+
+  return null;
+}
 
 // ── Validation Schemas ─────────────────────────────────────────────
 
@@ -71,7 +94,7 @@ repositoryRoutes.get("/", async (c) => {
     .from(repositories)
     .where(and(eq(repositories.projectId, projectId), eq(repositories.status, "active")));
 
-  return c.json({ data: result });
+  return c.json({ data: result.map(normalizeRepositoryRecord) });
 });
 
 // ── List All Repositories for Project (including archived) ─────────
@@ -81,7 +104,7 @@ repositoryRoutes.get("/all", async (c) => {
 
   const result = await db.select().from(repositories).where(eq(repositories.projectId, projectId));
 
-  return c.json({ data: result });
+  return c.json({ data: result.map(normalizeRepositoryRecord) });
 });
 
 // ── Get Single Repository ──────────────────────────────────────────
@@ -95,7 +118,7 @@ repositoryRoutes.get("/:repoId", async (c) => {
   });
 
   if (!repo) return c.json({ error: "Repository not found" }, 404);
-  return c.json(repo);
+  return c.json(normalizeRepositoryRecord(repo));
 });
 
 // ── Create Repository ──────────────────────────────────────────────
@@ -130,18 +153,27 @@ repositoryRoutes.post("/", zValidator("json", createRepoSchema), async (c) => {
   const repoId = crypto.randomUUID();
   const now = new Date().toISOString();
 
-  await db.insert(repositories).values({
-    id: repoId,
-    projectId,
-    name: body.name,
-    provider: body.provider,
-    remoteUrl: body.remoteUrl,
-    defaultBranch: body.defaultBranch,
-    description: body.description ?? null,
-    status: "active",
-    createdAt: now,
-    updatedAt: now,
-  });
+  try {
+    await db.insert(repositories).values({
+      id: repoId,
+      projectId,
+      name: body.name,
+      provider: body.provider,
+      remoteUrl: body.remoteUrl,
+      defaultBranch: body.defaultBranch,
+      description: body.description ?? null,
+      status: "active",
+      createdAt: now,
+      updatedAt: now,
+    });
+  } catch (error) {
+    const conflictMessage = resolveRepositoryConflictMessage(error);
+    if (conflictMessage) {
+      return c.json({ error: conflictMessage }, 409);
+    }
+
+    throw error;
+  }
 
   await recordAuditEvent({
     userId: user.sub,
@@ -156,7 +188,7 @@ repositoryRoutes.post("/", zValidator("json", createRepoSchema), async (c) => {
     where: eq(repositories.id, repoId),
   });
 
-  return c.json(created, 201);
+  return c.json(created ? normalizeRepositoryRecord(created) : created, 201);
 });
 
 // ── Update Repository ──────────────────────────────────────────────
@@ -202,7 +234,16 @@ repositoryRoutes.patch("/:repoId", zValidator("json", updateRepoSchema), async (
   if (body.description !== undefined) updates.description = body.description;
   if (body.status !== undefined) updates.status = body.status;
 
-  await db.update(repositories).set(updates).where(eq(repositories.id, repoId));
+  try {
+    await db.update(repositories).set(updates).where(eq(repositories.id, repoId));
+  } catch (error) {
+    const conflictMessage = resolveRepositoryConflictMessage(error);
+    if (conflictMessage) {
+      return c.json({ error: conflictMessage }, 409);
+    }
+
+    throw error;
+  }
 
   await recordAuditEvent({
     userId: user.sub,
@@ -217,7 +258,7 @@ repositoryRoutes.patch("/:repoId", zValidator("json", updateRepoSchema), async (
     where: eq(repositories.id, repoId),
   });
 
-  return c.json(updated);
+  return c.json(updated ? normalizeRepositoryRecord(updated) : updated);
 });
 
 // ── Delete (Archive) Repository ────────────────────────────────────

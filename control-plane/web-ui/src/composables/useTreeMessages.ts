@@ -210,6 +210,7 @@ export function useTreeMessages(
   const loading = ref(false);
   const error = ref<string | null>(null);
   const pendingAssistantDraft = ref<PendingAssistantDraft | null>(null);
+  let refreshGeneration = 0;
   const activeSessionId = computed(() => resolvedSessionId.value ?? sessionId.value);
   const {
     latestTaskRefreshRequest,
@@ -218,11 +219,16 @@ export function useTreeMessages(
   } = useTaskMessageStore(taskId, activeSessionId);
 
   async function refresh(silent = false) {
-    if (!taskId.value) {
+    const currentRefreshGeneration = ++refreshGeneration;
+    const currentTaskId = taskId.value;
+    const requestedSessionId = sessionId.value;
+
+    if (!currentTaskId) {
       trace.value = null;
       messages.value = [];
       resolvedSessionId.value = undefined;
       error.value = null;
+      loading.value = false;
       return;
     }
 
@@ -230,15 +236,19 @@ export function useTreeMessages(
     error.value = null;
 
     try {
-      const response = await getTaskMessages(taskId.value, {
-        sessionId: sessionId.value,
+      const response = await getTaskMessages(currentTaskId, {
+        sessionId: requestedSessionId,
         includeLineage: options?.includeLineage,
       });
+      if (currentRefreshGeneration !== refreshGeneration) {
+        return;
+      }
+
       messages.value = Array.isArray(response.data) ? response.data : [];
-      resolvedSessionId.value = response.meta?.sessionId ?? sessionId.value;
+      resolvedSessionId.value = response.meta?.sessionId ?? requestedSessionId;
       trace.value = {
-        taskId: taskId.value,
-        sessionId: response.meta?.sessionId ?? sessionId.value ?? null,
+        taskId: currentTaskId,
+        sessionId: response.meta?.sessionId ?? requestedSessionId ?? null,
         segments: [],
         messages: [],
         timeline: [],
@@ -247,12 +257,18 @@ export function useTreeMessages(
         followupExecutions: [],
       } satisfies TaskExecutionTrace;
     } catch (nextError) {
+      if (currentRefreshGeneration !== refreshGeneration) {
+        return;
+      }
+
       trace.value = null;
       messages.value = [];
       resolvedSessionId.value = undefined;
       error.value = nextError instanceof Error ? nextError.message : "加载消息失败";
     } finally {
-      if (!silent) loading.value = false;
+      if (currentRefreshGeneration === refreshGeneration) {
+        loading.value = false;
+      }
     }
   }
 

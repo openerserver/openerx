@@ -5,10 +5,15 @@ import { z } from "zod";
 import { db } from "../../db";
 import { budgetConfigs, costRecords, projects } from "../../db/schema";
 import { type AppEnv, type JWTPayload, authMiddleware } from "../../middleware/auth";
+import { normalizeApiTimestampFields } from "../shared/api-timestamp";
 
 export const costRoutes = new Hono<AppEnv>();
 
 costRoutes.use("*", authMiddleware);
+
+function normalizeCostRecord<T extends { ts?: string | null } & Record<string, unknown>>(record: T) {
+  return normalizeApiTimestampFields(record, ["ts"] as const);
+}
 
 type ProjectRole = "platform_admin" | "org_admin" | "project_admin" | "developer" | "viewer";
 
@@ -264,7 +269,7 @@ costRoutes.post("/records", zValidator("json", createCostRecordSchema), async (c
   };
 
   await db.insert(costRecords).values(record);
-  return c.json(record, 201);
+  return c.json(normalizeCostRecord(record), 201);
 });
 
 // GET /api/cost/detail?taskId=
@@ -283,6 +288,6 @@ costRoutes.get("/detail", async (c) => {
     totalCost,
     totalInputTokens,
     totalOutputTokens,
-    records,
+    records: records.map((record) => normalizeCostRecord(record)),
   });
 });

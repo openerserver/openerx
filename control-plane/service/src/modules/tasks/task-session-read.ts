@@ -210,7 +210,7 @@ export function shouldPersistStandalonePartEvent(message: unknown) {
 
 export type TaskSessionLineageRecord = {
   id: string;
-  parentSessionId: string | null;
+  parentSessionId?: string | null;
 };
 
 export function buildTaskSessionLineagePath(
@@ -616,7 +616,7 @@ function normalizeTaskSessionMessagePart(
     partType: part.partType ?? null,
     textContent: part.textContent ?? null,
     jsonPayload: part.jsonPayload ?? null,
-    createdAt: part.createdAt ?? null,
+    createdAt: normalizeTaskSessionMessageTimeValue(part.createdAt) ?? null,
   };
 }
 
@@ -740,7 +740,7 @@ function normalizeTaskSessionMessageRecord(
     summaryText: resolveTaskSessionMessageSummaryText(rawMessage, textContent),
     rawPayload,
     tokenUsed: typeof rawMessage.tokenUsed === "number" ? rawMessage.tokenUsed : null,
-    startedAt: asNonEmptyString(rawMessage.startedAt) ?? createdAt,
+    startedAt: normalizeTaskSessionMessageTimeValue(rawMessage.startedAt) ?? createdAt,
     completedAt,
     errorText: resolveTaskSessionMessageErrorText(rawMessage),
     agent: asNonEmptyString(rawInfo?.agent) ?? asNonEmptyString(rawPayload?.agent) ?? null,
@@ -749,7 +749,7 @@ function normalizeTaskSessionMessageRecord(
     systemContextText: promptDecomposition.systemContextText,
     finalSentText: promptDecomposition.finalSentText,
     createdAt,
-    updatedAt: asNonEmptyString(rawMessage.updatedAt) ?? createdAt,
+    updatedAt: normalizeTaskSessionMessageTimeValue(rawMessage.updatedAt) ?? createdAt,
   };
 }
 
@@ -2471,12 +2471,11 @@ export function createTaskSessionReadApi(deps: {
       collectMissingTaskSessionModelIds([...sessions, session]),
     );
     const hydratedSessions = hydrateTaskSessionSelectedModels(sessions, selectedModelBySessionId);
-    const [hydratedSession] = hydrateTaskSessionSelectedModels([session], selectedModelBySessionId);
     const projectedSessions = projectPublicTaskSessions(hydratedSessions);
-    const [projectedSession] = projectPublicTaskSessions([
-      ...hydratedSessions.filter((entry) => entry.id !== hydratedSession.id),
-      hydratedSession,
-    ]).filter((entry) => entry.id === hydratedSession.id);
+    const projectedSession = projectedSessions.find((entry) => entry.id === session.id) ?? null;
+    if (!projectedSession) {
+      return { ok: false as const, status: 500 as const, error: "Task session projection failed" };
+    }
     const latestSessionId = resolveLatestTaskSessionId(projectedSessions);
     const currentSessionId = resolveCurrentTaskSessionId(
       projectedSessions,

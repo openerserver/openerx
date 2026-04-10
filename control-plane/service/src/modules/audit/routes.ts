@@ -6,11 +6,18 @@ import { db } from "../../db";
 import { auditEvents } from "../../db/schema";
 import { type AppEnv, authMiddleware } from "../../middleware/auth";
 import { requireRole } from "../../middleware/rbac";
+import { normalizeApiTimestampFields } from "../shared/api-timestamp";
 
 export const auditRoutes = new Hono<AppEnv>();
 
 auditRoutes.use("*", authMiddleware);
 auditRoutes.use("*", requireRole("developer"));
+
+function normalizeAuditEventRecord<T extends { ts?: string | null } & Record<string, unknown>>(
+  event: T,
+) {
+  return normalizeApiTimestampFields(event, ["ts"] as const);
+}
 
 // GET /api/audit?projectId=&userId=&from=&to=&type=&limit=&offset=
 auditRoutes.get("/", async (c) => {
@@ -40,7 +47,7 @@ auditRoutes.get("/", async (c) => {
     .limit(limit)
     .offset(offset);
 
-  return c.json({ data: result, limit, offset });
+  return c.json({ data: result.map((event) => normalizeAuditEventRecord(event)), limit, offset });
 });
 
 // GET /api/audit/:eventId
@@ -51,7 +58,7 @@ auditRoutes.get("/:eventId", async (c) => {
   });
 
   if (!event) return c.json({ error: "Audit event not found" }, 404);
-  return c.json(event);
+  return c.json(normalizeAuditEventRecord(event));
 });
 
 // GET /api/audit/trace/:traceId
@@ -63,7 +70,7 @@ auditRoutes.get("/trace/:traceId", async (c) => {
     .where(eq(auditEvents.traceId, traceId))
     .orderBy(auditEvents.ts);
 
-  return c.json(result);
+  return c.json(result.map((event) => normalizeAuditEventRecord(event)));
 });
 
 const createAuditEventSchema = z.object({

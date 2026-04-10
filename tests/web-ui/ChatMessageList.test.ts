@@ -6,6 +6,7 @@ import type {
   TaskConversationMessageItem,
   TaskConversationParallelItem,
 } from "../../control-plane/web-ui/src/lib/message-normalize";
+import { normalizeSessionConversationItems } from "../../control-plane/web-ui/src/lib/message-normalize";
 
 function createPassThroughStub(name: string) {
   return defineComponent({
@@ -33,6 +34,77 @@ afterEach(() => {
 });
 
 describe("ChatMessageList tool cards", () => {
+  it("keeps assistant thinking text separate from visible reply text during normalization", () => {
+    const items = normalizeSessionConversationItems([
+      {
+        info: {
+          id: "assistant-normalize-thinking-1",
+          role: "assistant",
+          time: { created: "2026-04-10T10:00:00.000Z" },
+        },
+        parts: [
+          { type: "thinking", text: "**Confirming task execution**" },
+          { type: "text", text: "页面任务执行正常。" },
+        ],
+      },
+    ]);
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      thinkingText: "**Confirming task execution**",
+      text: "页面任务执行正常。",
+    });
+  });
+
+  it("renders assistant thinking inside a collapsible section", async () => {
+    const items: TaskConversationMessageItem[] = [
+      {
+        key: "message-thinking-1",
+        role: "assistant",
+        thinkingText: "**Confirming task execution**\n\n准备展示最终回复。",
+        text: "页面任务执行正常。",
+        toolCalls: [],
+        createdAt: "2026-04-10T10:00:00.000Z",
+        raw: null,
+        isStreaming: false,
+      },
+    ];
+
+    const wrapper = mount(ChatMessageList, {
+      props: {
+        items,
+        loading: false,
+        error: null,
+      },
+      global: {
+        stubs: {
+          ASpin: createPassThroughStub("ASpin"),
+          AAlert: createPassThroughStub("AAlert"),
+          AEmpty: createPassThroughStub("AEmpty"),
+          ASpace: createPassThroughStub("ASpace"),
+          AFlex: createPassThroughStub("AFlex"),
+          ATag: createPassThroughStub("ATag"),
+          ATypographyText: createPassThroughStub("ATypographyText"),
+          AButton: ButtonStub,
+        },
+      },
+    });
+
+    expect(wrapper.text()).toContain("模型回复");
+    expect(wrapper.text()).toContain("页面任务执行正常。");
+    expect(wrapper.text()).toContain("查看思考过程");
+    expect(wrapper.text()).not.toContain("Confirming task execution");
+
+    const toggle = wrapper.findAll("button").find((button) => button.text() === "查看思考过程");
+    expect(toggle).toBeTruthy();
+
+    await toggle?.trigger("click");
+
+    expect(wrapper.text()).toContain("收起思考过程");
+    expect(wrapper.text()).toContain("Confirming task execution");
+    expect(wrapper.text()).toContain("准备展示最终回复。");
+  });
+
   it("keeps user-visible instruction text from execution context prompts", () => {
     const items: TaskConversationMessageItem[] = [
       {

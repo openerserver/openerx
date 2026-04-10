@@ -7,6 +7,7 @@ import {
   type TaskExecutionPhaseTerminalReason,
   type TaskExecutionPhaseTriggerType,
   type TaskLifecycleStatus,
+  type TaskSessionMode,
   type TaskSessionNodeStatus,
   taskExecutionPhases,
   taskSessions,
@@ -18,7 +19,7 @@ function asNonEmptyString(value: unknown) {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
-function mapPhaseKindToExecutionMode(phaseKind: TaskExecutionPhaseKind) {
+function mapPhaseKindToExecutionMode(phaseKind: TaskExecutionPhaseKind): TaskSessionMode {
   if (phaseKind === "parallel") {
     return "parallel";
   }
@@ -28,7 +29,7 @@ function mapPhaseKindToExecutionMode(phaseKind: TaskExecutionPhaseKind) {
   return "single";
 }
 
-function mapPhaseStatusToSnapshotExecutionStatus(status: TaskExecutionPhaseStatus) {
+function mapPhaseStatusToSnapshotExecutionStatus(status: TaskExecutionPhaseStatus): ExecutionStatus {
   if (status === "pending") {
     return "queued";
   }
@@ -358,7 +359,6 @@ export function createTaskPhaseWriteApi(deps: {
         args.anchorSessionId !== undefined ? args.anchorSessionId : (existing?.anchorSessionId ?? null),
       anchorMessageId:
         args.anchorMessageId !== undefined ? args.anchorMessageId : (existing?.anchorMessageId ?? null),
-      coordinationKey: null,
       candidateCount:
         args.candidateCount !== undefined ? args.candidateCount : (existing?.candidateCount ?? null),
       winnerSessionId:
@@ -389,7 +389,6 @@ export function createTaskPhaseWriteApi(deps: {
         awaitingAdoptionSince: values.awaitingAdoptionSince,
         anchorSessionId: values.anchorSessionId,
         anchorMessageId: values.anchorMessageId,
-        coordinationKey: null,
         candidateCount: values.candidateCount,
         winnerSessionId: values.winnerSessionId,
         judgeSessionId: values.judgeSessionId,

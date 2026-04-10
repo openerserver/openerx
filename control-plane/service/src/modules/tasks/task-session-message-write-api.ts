@@ -247,24 +247,6 @@ function mapLegacyTriggerTypeToRunTriggerType(triggerType?: string | null) {
   return "user_prompt" as const;
 }
 
-function normalizeTaskSessionMessageRole(message: Record<string, unknown>): TaskSessionMessageRole {
-  const info =
-    message.info && typeof message.info === "object"
-      ? (message.info as Record<string, unknown>)
-      : null;
-  const role =
-    typeof message.role === "string"
-      ? message.role
-      : typeof info?.role === "string"
-        ? info.role
-        : "assistant";
-  if (role === "user" || role === "assistant" || role === "system" || role === "tool") {
-    return role;
-  }
-
-  return "assistant";
-}
-
 function normalizeTaskSessionMessagePartType(
   part: Record<string, unknown>,
 ): TaskSessionMessagePartType {
@@ -290,87 +272,6 @@ function normalizeTaskSessionMessagePartType(
 
   return "text";
 }
-
-function normalizeTaskSessionMessageStatus(
-  message: Record<string, unknown>,
-): TaskSessionMessageStatus {
-  const info =
-    message.info && typeof message.info === "object"
-      ? (message.info as Record<string, unknown>)
-      : null;
-  const rawStatus =
-    typeof message.status === "string"
-      ? message.status
-      : typeof info?.status === "string"
-        ? info.status
-        : null;
-  if (
-    rawStatus === "pending" ||
-    rawStatus === "streaming" ||
-    rawStatus === "completed" ||
-    rawStatus === "failed" ||
-    rawStatus === "cancelled"
-  ) {
-    return rawStatus;
-  }
-
-  const errorText = extractTaskSessionMessageErrorText(message);
-  if (errorText) {
-    return "failed";
-  }
-
-  const completedAt = extractTaskSessionMessageCompletedAt(message);
-  if (completedAt) {
-    return "completed";
-  }
-
-  if (normalizeTaskSessionMessageRole(message) === "user") {
-    return "completed";
-  }
-
-  return extractTaskSessionMessageText(message) ? "streaming" : "pending";
-}
-
-function extractTaskSessionMessageText(message: Record<string, unknown>) {
-  const candidates = [message.textContent, message.text, message.summaryText, message.content];
-  for (const candidate of candidates) {
-    if (typeof candidate === "string" && candidate.trim()) {
-      return candidate;
-    }
-  }
-
-  const parts = extractTaskSessionMessageParts(message);
-  for (const part of parts) {
-    if (normalizeTaskSessionMessagePartType(part) !== "text") {
-      continue;
-    }
-    const text = extractTaskSessionMessagePartText(part);
-    if (text) {
-      return text;
-    }
-  }
-
-  for (const part of parts) {
-    const partType = normalizeTaskSessionMessagePartType(part);
-    if (partType === "thinking" || partType === "tool_call") {
-      continue;
-    }
-    const text = extractTaskSessionMessagePartText(part);
-    if (text) {
-      return text;
-    }
-  }
-
-  for (const part of parts) {
-    const text = extractTaskSessionMessagePartText(part);
-    if (text) {
-      return text;
-    }
-  }
-
-  return null;
-}
-
 function normalizeIncomingTaskSessionMessageRole(
   message: TaskSessionRuntimeMessageInput,
 ): TaskSessionMessageRole {
@@ -611,64 +512,6 @@ function normalizeIncomingTaskSessionMessage(
   };
 }
 
-function extractTaskSessionMessageTokenUsage(message: Record<string, unknown>) {
-  const tokenCandidates = [message.tokenUsed, message.token_usage, message.tokens];
-  for (const candidate of tokenCandidates) {
-    if (typeof candidate === "number" && Number.isFinite(candidate)) {
-      return candidate;
-    }
-  }
-
-  const info =
-    message.info && typeof message.info === "object"
-      ? (message.info as Record<string, unknown>)
-      : null;
-  const tokenInfo =
-    info?.tokens && typeof info.tokens === "object"
-      ? (info.tokens as Record<string, unknown>)
-      : null;
-  if (typeof tokenInfo?.total === "number" && Number.isFinite(tokenInfo.total)) {
-    return tokenInfo.total;
-  }
-
-  return null;
-}
-
-function extractTaskSessionMessageClientId(message: Record<string, unknown>) {
-  const raw = message.clientMessageId ?? message.client_message_id;
-  return typeof raw === "string" && raw.trim() ? raw : null;
-}
-
-function extractTaskSessionMessageProviderMessageId(message: Record<string, unknown>) {
-  const info =
-    message.info && typeof message.info === "object"
-      ? (message.info as Record<string, unknown>)
-      : null;
-  const raw = message.providerMessageId ?? message.provider_message_id ?? info?.id;
-  return typeof raw === "string" && raw.trim() ? raw : null;
-}
-
-function extractTaskSessionMessageErrorText(message: Record<string, unknown>) {
-  const info =
-    message.info && typeof message.info === "object"
-      ? (message.info as Record<string, unknown>)
-      : null;
-  const raw = message.errorText ?? message.error_text ?? info?.error;
-  if (typeof raw === "string" && raw.trim()) {
-    return raw;
-  }
-
-  const parts = extractTaskSessionMessageParts(message);
-  for (const part of parts) {
-    const errorText = extractTaskSessionMessagePartToolError(part);
-    if (errorText) {
-      return errorText;
-    }
-  }
-
-  return null;
-}
-
 function normalizeTaskSessionMessageTimeValue(value: unknown) {
   if (typeof value === "string" && value) {
     return value;
@@ -679,67 +522,6 @@ function normalizeTaskSessionMessageTimeValue(value: unknown) {
   }
 
   return null;
-}
-
-function extractTaskSessionMessageCreatedAt(message: Record<string, unknown>) {
-  const info =
-    message.info && typeof message.info === "object"
-      ? (message.info as Record<string, unknown>)
-      : null;
-  const infoTime =
-    info?.time && typeof info.time === "object" ? (info.time as Record<string, unknown>) : null;
-
-  return (
-    normalizeTaskSessionMessageTimeValue(message.createdAt) ||
-    normalizeTaskSessionMessageTimeValue(infoTime?.created) ||
-    new Date().toISOString()
-  );
-}
-
-function extractTaskSessionMessageCompletedAt(message: Record<string, unknown>) {
-  const info =
-    message.info && typeof message.info === "object"
-      ? (message.info as Record<string, unknown>)
-      : null;
-  const infoTime =
-    info?.time && typeof info.time === "object" ? (info.time as Record<string, unknown>) : null;
-
-  return (
-    normalizeTaskSessionMessageTimeValue(message.completedAt) ||
-    normalizeTaskSessionMessageTimeValue(infoTime?.completed) ||
-    null
-  );
-}
-
-function extractTaskSessionMessageParts(message: Record<string, unknown>) {
-  const parts = Array.isArray(message.parts) ? message.parts : [];
-  const singlePart = message.part;
-  const candidates = singlePart && typeof singlePart === "object" ? [...parts, singlePart] : parts;
-
-  return candidates.filter((part): part is Record<string, unknown> =>
-    Boolean(part && typeof part === "object"),
-  );
-}
-
-function extractTaskSessionMessageFinishReason(message: Record<string, unknown>) {
-  const info = extractTaskSessionMessageInfoRecord(message);
-  return asTaskSessionMessageString(message.finish) ?? asTaskSessionMessageString(info?.finish);
-}
-
-function extractTaskSessionMessageInfoRecord(message: Record<string, unknown>) {
-  return asTaskSessionMessageRecord(message.info);
-}
-
-function extractTaskSessionMessageParentId(message: Record<string, unknown>) {
-  const info = extractTaskSessionMessageInfoRecord(message);
-  const raw =
-    message.parentID ??
-    message.parentId ??
-    message.parent_id ??
-    info?.parentID ??
-    info?.parentId ??
-    info?.parent_id;
-  return asTaskSessionMessageString(raw);
 }
 
 function buildTaskTimelineMessageId(messageId: string) {

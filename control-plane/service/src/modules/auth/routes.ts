@@ -5,6 +5,7 @@ import { z } from "zod";
 import { db } from "../../db";
 import { organizations, projectRoles, projects, users } from "../../db/schema";
 import { type AppEnv, authMiddleware, signJWT } from "../../middleware/auth";
+import { normalizeApiTimestampFields } from "../shared/api-timestamp";
 import { validatePasswordPolicy } from "../shared/password-policy";
 
 export const authRoutes = new Hono<AppEnv>();
@@ -69,18 +70,21 @@ async function buildUserProfile(userId: string) {
     }),
   );
 
-  return {
-    id: user.id,
-    username: user.username,
-    displayName: user.displayName,
-    email: user.email,
-    role: user.role,
-    accountStatus: user.accountStatus,
-    mustChangePassword: user.mustChangePassword,
-    lastLoginAt: user.lastLoginAt,
-    createdAt: user.createdAt,
-    projects: projectMemberships,
-  };
+  return normalizeApiTimestampFields(
+    {
+      id: user.id,
+      username: user.username,
+      displayName: user.displayName,
+      email: user.email,
+      role: user.role,
+      accountStatus: user.accountStatus,
+      mustChangePassword: user.mustChangePassword,
+      lastLoginAt: user.lastLoginAt,
+      createdAt: user.createdAt,
+      projects: projectMemberships,
+    },
+    ["lastLoginAt", "createdAt"] as const,
+  );
 }
 
 const MAX_FAILED_ATTEMPTS = 5;
@@ -149,18 +153,21 @@ authRoutes.post("/login", zValidator("json", loginSchema), async (c) => {
 
   return c.json({
     token,
-    user: {
-      id: user.id,
-      username: user.username,
-      displayName: user.displayName,
-      email: user.email,
-      role: user.role,
-      accountStatus: user.accountStatus,
-      mustChangePassword: user.mustChangePassword,
-      lastLoginAt,
-      createdAt: user.createdAt,
-      projects: roles.map((r) => ({ id: r.projectId, role: r.role })),
-    },
+    user: normalizeApiTimestampFields(
+      {
+        id: user.id,
+        username: user.username,
+        displayName: user.displayName,
+        email: user.email,
+        role: user.role,
+        accountStatus: user.accountStatus,
+        mustChangePassword: user.mustChangePassword,
+        lastLoginAt,
+        createdAt: user.createdAt,
+        projects: roles.map((r) => ({ id: r.projectId, role: r.role })),
+      },
+      ["lastLoginAt", "createdAt"] as const,
+    ),
   });
 });
 

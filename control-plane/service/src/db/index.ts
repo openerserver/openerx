@@ -2,6 +2,10 @@ import { drizzle as drizzlePostgres } from "drizzle-orm/postgres-js";
 import type { Sql } from "postgres";
 import { openPostgresDatabase } from "./postgres-client";
 import {
+  ensurePostgresMigrations,
+  type PostgresMigrationSummary,
+} from "./postgres-migrations";
+import {
   ensurePostgresRuntimeTables,
   type PostgresRuntimeBootstrapSummary,
 } from "./postgres-runtime-bootstrap";
@@ -40,6 +44,21 @@ function logRuntimeBootstrapSummary(summary: PostgresRuntimeBootstrapSummary) {
   );
 }
 
+function logMigrationSummary(summary: PostgresMigrationSummary) {
+  console.log(
+    [
+      "[db:migrate:pg]",
+      `durationMs=${summary.durationMs}`,
+      `appliedCount=${summary.appliedCount}`,
+      `latestAppliedMillis=${summary.latestAppliedMillis ?? "none"}`,
+    ].join(" "),
+  );
+}
+
+const migrationSummary = await ensurePostgresMigrations(postgresRuntime.sql, {
+  logPrefix: "[db:migrate:pg]",
+});
+logMigrationSummary(migrationSummary);
 const runtimeBootstrapSummary = await ensurePostgresRuntimeTables(postgresRuntime.sql);
 logRuntimeBootstrapSummary(runtimeBootstrapSummary);
 

@@ -1,14 +1,25 @@
 import { zValidator } from "@hono/zod-validator";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull, ne } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 import { db } from "../../db";
+import { findUniqueConstraintMatch } from "../../db/unique-conflict";
 import { projects, repositories, repositoryCredentials } from "../../db/schema";
 import { type AppEnv, authMiddleware } from "../../middleware/auth";
 import { requireProjectRole } from "../../middleware/rbac";
 import { recordAuditEvent } from "../audit/routes";
+import { normalizeApiTimestampFields } from "../shared/api-timestamp";
 
 export const credentialRoutes = new Hono<AppEnv>();
+
+function normalizeCredentialRecord<
+  T extends {
+    createdAt: string | null | undefined;
+    updatedAt: string | null | undefined;
+  } & Record<string, unknown>,
+>(credential: T) {
+  return normalizeApiTimestampFields(credential, ["createdAt", "updatedAt"] as const);
+}
 
 credentialRoutes.use("*", authMiddleware);
 
@@ -20,6 +31,35 @@ function getProjectId(c: { req: { param: (name: string) => string | undefined } 
 
 // All credential routes require project-level developer role
 credentialRoutes.use("*", requireProjectRole("projectId", "developer"));
+
+function buildCredentialScopePredicate(
+  projectId: string,
+  repoId: string | null,
+  excludeCredentialId?: string,
+) {
+  const conditions = [eq(repositoryCredentials.projectId, projectId)];
+
+  if (repoId) {
+    conditions.push(eq(repositoryCredentials.repoId, repoId));
+  } else {
+    conditions.push(isNull(repositoryCredentials.repoId));
+  }
+
+  if (excludeCredentialId) {
+    conditions.push(ne(repositoryCredentials.id, excludeCredentialId));
+  }
+
+  return and(...conditions);
+}
+
+function isDefaultCredentialConflict(error: unknown) {
+  return Boolean(
+    findUniqueConstraintMatch(error, [
+      "idx_repository_credentials_project_default_active",
+      "idx_repository_credentials_repo_default_active",
+    ]),
+  );
+}
 
 // ── Validation Schemas ─────────────────────────────────────────────
 
@@ -72,7 +112,7 @@ credentialRoutes.get("/", async (c) => {
     .from(repositoryCredentials)
     .where(and(...conditions));
 
-  return c.json({ data: result });
+  return c.json({ data: result.map(normalizeCredentialRecord) });
 });
 
 // ── Get Single Credential ──────────────────────────────────────────
@@ -92,7 +132,7 @@ credentialRoutes.get("/:credentialId", async (c) => {
 
   // Never expose secretRef in GET responses — return masked reference
   const { secretRef: _secret, ...safe } = cred;
-  return c.json({ ...safe, secretRefMasked: "***" });
+  return c.json({ ...normalizeCredentialRecord(safe), secretRefMasked: "***" });
 });
 
 // ── Create Credential ──────────────────────────────────────────────
@@ -118,23 +158,41 @@ credentialRoutes.post("/", zValidator("json", createSchema), async (c) => {
 
   const credId = crypto.randomUUID();
   const now = new Date().toISOString();
+  const effectiveRepoId = body.repoId ?? null;
 
-  await db.insert(repositoryCredentials).values({
-    id: credId,
-    projectId,
-    repoId: body.repoId ?? null,
-    label: body.label,
-    provider: body.provider,
-    credentialType: body.credentialType,
-    secretRef: body.secretRef,
-    gitAuthorName: body.gitAuthorName ?? null,
-    gitAuthorEmail: body.gitAuthorEmail ?? null,
-    scope: body.scope,
-    isDefault: body.isDefault,
-    status: "active",
-    createdAt: now,
-    updatedAt: now,
-  });
+  try {
+    await db.transaction(async (tx) => {
+      if (body.isDefault) {
+        await tx
+          .update(repositoryCredentials)
+          .set({ isDefault: false, updatedAt: now })
+          .where(buildCredentialScopePredicate(projectId, effectiveRepoId));
+      }
+
+      await tx.insert(repositoryCredentials).values({
+        id: credId,
+        projectId,
+        repoId: effectiveRepoId,
+        label: body.label,
+        provider: body.provider,
+        credentialType: body.credentialType,
+        secretRef: body.secretRef,
+        gitAuthorName: body.gitAuthorName ?? null,
+        gitAuthorEmail: body.gitAuthorEmail ?? null,
+        scope: body.scope,
+        isDefault: body.isDefault,
+        status: "active",
+        createdAt: now,
+        updatedAt: now,
+      });
+    });
+  } catch (error) {
+    if (isDefaultCredentialConflict(error)) {
+      return c.json({ error: "Another active default credential already exists in this scope" }, 409);
+    }
+
+    throw error;
+  }
 
   await recordAuditEvent({
     userId: user.sub,
@@ -164,20 +222,40 @@ credentialRoutes.patch("/:credentialId", zValidator("json", updateSchema), async
   });
   if (!existing) return c.json({ error: "Credential not found" }, 404);
 
+  const now = new Date().toISOString();
+  const nextStatus = body.status ?? existing.status;
+  const nextIsDefault = nextStatus === "revoked" ? false : (body.isDefault ?? existing.isDefault);
   const updates: Record<string, unknown> = {
-    updatedAt: new Date().toISOString(),
+    updatedAt: now,
+    status: nextStatus,
+    isDefault: nextIsDefault,
   };
   if (body.label !== undefined) updates.label = body.label;
   if (body.secretRef !== undefined) updates.secretRef = body.secretRef;
   if (body.gitAuthorName !== undefined) updates.gitAuthorName = body.gitAuthorName;
   if (body.gitAuthorEmail !== undefined) updates.gitAuthorEmail = body.gitAuthorEmail;
-  if (body.isDefault !== undefined) updates.isDefault = body.isDefault;
-  if (body.status !== undefined) updates.status = body.status;
 
-  await db
-    .update(repositoryCredentials)
-    .set(updates)
-    .where(eq(repositoryCredentials.id, credentialId));
+  try {
+    await db.transaction(async (tx) => {
+      if (nextIsDefault) {
+        await tx
+          .update(repositoryCredentials)
+          .set({ isDefault: false, updatedAt: now })
+          .where(buildCredentialScopePredicate(projectId, existing.repoId ?? null, credentialId));
+      }
+
+      await tx
+        .update(repositoryCredentials)
+        .set(updates)
+        .where(eq(repositoryCredentials.id, credentialId));
+    });
+  } catch (error) {
+    if (isDefaultCredentialConflict(error)) {
+      return c.json({ error: "Another active default credential already exists in this scope" }, 409);
+    }
+
+    throw error;
+  }
 
   await recordAuditEvent({
     userId: user.sub,
@@ -208,7 +286,7 @@ credentialRoutes.delete("/:credentialId", async (c) => {
 
   await db
     .update(repositoryCredentials)
-    .set({ status: "revoked", updatedAt: new Date().toISOString() })
+    .set({ status: "revoked", isDefault: false, updatedAt: new Date().toISOString() })
     .where(eq(repositoryCredentials.id, credentialId));
 
   await recordAuditEvent({

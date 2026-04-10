@@ -63,6 +63,25 @@
                       </a-typography-text>
                     </a-flex>
 
+                      <div v-if="assistantThinkingText(turn.item)" class="chat-message-card__thinking">
+                        <button
+                          type="button"
+                          class="chat-message-card__thinking-toggle"
+                          @click="toggleThinking(turn.item.key)"
+                        >
+                          {{ isThinkingExpanded(turn.item.key) ? '收起思考过程' : '查看思考过程' }}
+                        </button>
+                        <div
+                          v-if="isThinkingExpanded(turn.item.key)"
+                          class="chat-message-card__thinking-content"
+                        >
+                          <div
+                            class="chat-message-card__markdown chat-message-card__thinking-markdown"
+                            v-html="render(assistantThinkingText(turn.item) || '')"
+                          ></div>
+                        </div>
+                      </div>
+
                     <div
                       v-if="turn.item.role === 'assistant' && turn.item.text && shouldRenderMarkdown(turn.item)"
                       class="chat-message-card__markdown"
@@ -185,6 +204,25 @@
                       </a-typography-text>
                     </a-flex>
 
+                      <div v-if="assistantThinkingText(turn.item)" class="chat-message-card__thinking">
+                        <button
+                          type="button"
+                          class="chat-message-card__thinking-toggle"
+                          @click="toggleThinking(turn.item.key)"
+                        >
+                          {{ isThinkingExpanded(turn.item.key) ? '收起思考过程' : '查看思考过程' }}
+                        </button>
+                        <div
+                          v-if="isThinkingExpanded(turn.item.key)"
+                          class="chat-message-card__thinking-content"
+                        >
+                          <div
+                            class="chat-message-card__markdown chat-message-card__thinking-markdown"
+                            v-html="render(assistantThinkingText(turn.item) || '')"
+                          ></div>
+                        </div>
+                      </div>
+
                     <div
                       v-if="turn.item.role === 'assistant' && turn.item.text && shouldRenderMarkdown(turn.item)"
                       class="chat-message-card__markdown"
@@ -245,6 +283,22 @@
             </a-space>
             <a-button v-if="canCopy(item)" type="text" size="small" @click="handleCopy(copyText(item))">复制</a-button>
           </a-flex>
+
+            <div v-if="assistantThinkingText(item)" class="chat-message-card__thinking">
+              <button
+                type="button"
+                class="chat-message-card__thinking-toggle"
+                @click="toggleThinking(item.key)"
+              >
+                {{ isThinkingExpanded(item.key) ? '收起思考过程' : '查看思考过程' }}
+              </button>
+              <div v-if="isThinkingExpanded(item.key)" class="chat-message-card__thinking-content">
+                <div
+                  class="chat-message-card__markdown chat-message-card__thinking-markdown"
+                  v-html="render(assistantThinkingText(item) || '')"
+                ></div>
+              </div>
+            </div>
 
           <div
             v-if="item.role === 'assistant' && item.text && shouldRenderMarkdown(item)"
@@ -322,6 +376,7 @@ const emit = defineEmits<{
 const scrollContainer = ref<HTMLElement | null>(null);
 const shouldAutoScroll = ref(true);
 const revealText = ref<Record<string, string>>({});
+const expandedThinking = ref<Record<string, boolean>>({});
 const expandedFinalSent = ref<Record<string, boolean>>({});
 const collapsedWorkflows = ref<Record<string, boolean>>({});
 const collapsedWorkflowSteps = ref<Record<string, boolean>>({});
@@ -863,6 +918,13 @@ function sanitizedItemText(item: TaskConversationMessageItem) {
   return sanitizeTextForDisplay(item.role, item.text);
 }
 
+function assistantThinkingText(item: TaskConversationMessageItem) {
+  if (item.role !== "assistant" || !item.thinkingText) {
+    return undefined;
+  }
+  return sanitizeTextForDisplay("assistant", item.thinkingText);
+}
+
 function hasStandaloneMessageContent(item: TaskConversationMessageItem) {
   if (item.role === "tool") {
     return item.toolCalls.length === 0 && Boolean(sanitizedItemText(item)?.trim() || item.text?.trim());
@@ -874,6 +936,7 @@ function hasStandaloneMessageContent(item: TaskConversationMessageItem) {
 
   if (item.role === "assistant") {
     return Boolean(
+      assistantThinkingText(item)?.trim() ||
       sanitizedItemText(item)?.trim() ||
         item.text?.trim() ||
         item.finalSentText ||
@@ -1040,6 +1103,17 @@ function shouldRenderMarkdown(item: TaskConversationMessageItem) {
 
 function isFinalSentExpanded(key: string) {
   return expandedFinalSent.value[key] === true;
+}
+
+function isThinkingExpanded(key: string) {
+  return expandedThinking.value[key] === true;
+}
+
+function toggleThinking(key: string) {
+  expandedThinking.value = {
+    ...expandedThinking.value,
+    [key]: !expandedThinking.value[key],
+  };
 }
 
 function toggleFinalSent(key: string) {
@@ -1240,6 +1314,40 @@ onBeforeUnmount(() => {
   line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.chat-message-card__thinking {
+  margin-bottom: 10px;
+}
+
+.chat-message-card__thinking-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 0;
+  border: none;
+  background: none;
+  color: rgba(0, 0, 0, 0.45);
+  font-size: 12px;
+  cursor: pointer;
+  transition: color 0.2s;
+}
+
+.chat-message-card__thinking-toggle:hover {
+  color: #1677ff;
+}
+
+.chat-message-card__thinking-content {
+  margin-top: 6px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #f0f0f0;
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.chat-message-card__thinking-markdown {
+  color: rgba(0, 0, 0, 0.72);
+  font-size: 13px;
 }
 
 .chat-message-card__final-sent {

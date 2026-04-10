@@ -236,8 +236,11 @@ export const workbenchThemeStyles = {
   page: {
     padding: "24px",
     background: palette.layoutBg,
-    minHeight: "100%",
     boxSizing: "border-box",
+    display: "flex",
+    flexDirection: "column",
+    width: "100%",
+    minHeight: "100dvh",
   } satisfies CSSProperties,
   header: {
     marginBottom: "16px",
@@ -255,12 +258,18 @@ export const workbenchThemeStyles = {
     borderColor: palette.accentCopperSoft,
     background: palette.containerBg,
     boxShadow: palette.shadowSoft,
+    display: "flex",
+    flexDirection: "column",
+    flex: 1,
+    minHeight: 0,
   } satisfies CSSProperties,
   shellBody: {
     paddingBottom: "12px",
     display: "flex",
     flexDirection: "column",
-    minHeight: "calc(100dvh - 210px)",
+    flex: 1,
+    minHeight: 0,
+    overflow: "hidden",
   } satisfies CSSProperties,
   tabLabel: {
     display: "flex",
@@ -276,6 +285,8 @@ export const workbenchThemeStyles = {
   pane: {
     display: "flex",
     flexDirection: "column",
+    flex: 1,
+    minHeight: 0,
     border: `1px solid ${palette.accentCopperSoft}`,
     borderRadius: "10px",
     overflow: "hidden",
@@ -306,13 +317,17 @@ export const workbenchThemeStyles = {
   primaryFrame: {
     display: "block",
     width: "100%",
-    height: "clamp(520px, calc(100dvh - 250px), 1200px)",
+    flex: "1 1 auto",
+    minHeight: "360px",
+    height: "100%",
     border: 0,
   } satisfies CSSProperties,
   splitFrame: {
     display: "block",
     width: "100%",
-    height: "clamp(420px, calc(100dvh - 280px), 1000px)",
+    flex: "1 1 auto",
+    minHeight: "320px",
+    height: "100%",
     border: 0,
   } satisfies CSSProperties,
 };

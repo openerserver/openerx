@@ -181,6 +181,7 @@ describe("Admin user management (service)", () => {
     const created = users.find((user) => user.id === data.id);
     expect(created).toBeTruthy();
     expect(created?.mustChangePassword).toBe(true);
+    expect(created?.createdAt).toEqual(expect.stringMatching(/Z$/));
   });
 
   test("PUT /api/users/:userId/role changes another user's role", async () => {

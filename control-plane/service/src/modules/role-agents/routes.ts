@@ -6,6 +6,7 @@ import { db } from "../../db";
 import { roleAgentBindings, roleAgentProjectOverrides, roleAgents } from "../../db/schema";
 import { type AppEnv, authMiddleware } from "../../middleware/auth";
 import { requireRole } from "../../middleware/rbac";
+import { normalizeApiTimestampFields } from "../shared/api-timestamp";
 import { bootstrapDefaultRoleAgents } from "./bootstrap";
 import { resolveRoleAgentForExecution } from "./resolve";
 
@@ -95,18 +96,40 @@ function roleCanWriteCode(roleId: string, permissionProfile: string, toolProfile
   return permissionProfile === "perm.code-implementation" || toolProfile.includes("write");
 }
 
+function normalizeRoleAgentRecord<
+  T extends { createdAt?: string | null; updatedAt?: string | null } & Record<string, unknown>,
+>(roleAgent: T) {
+  return normalizeApiTimestampFields(roleAgent, ["createdAt", "updatedAt"] as const);
+}
+
+function normalizeRoleAgentBindingRecord<
+  T extends { createdAt?: string | null; updatedAt?: string | null } & Record<string, unknown>,
+>(binding: T) {
+  return normalizeApiTimestampFields(binding, ["createdAt", "updatedAt"] as const);
+}
+
+function normalizeProjectOverrideRecord<
+  T extends { createdAt?: string | null; updatedAt?: string | null } & Record<string, unknown>,
+>(override: T) {
+  return normalizeApiTimestampFields(override, ["createdAt", "updatedAt"] as const);
+}
+
 function serializeRoleAgent(row: typeof roleAgents.$inferSelect) {
   return {
-    ...row,
+    ...normalizeRoleAgentRecord(row),
     allowedStages: row.allowedStagesJson ?? [],
   };
 }
 
 function serializeProjectOverride(row: typeof roleAgentProjectOverrides.$inferSelect) {
   return {
-    ...row,
+    ...normalizeProjectOverrideRecord(row),
     allowedStages: row.allowedStagesJson ?? [],
   };
+}
+
+function serializeRoleAgentBinding(row: typeof roleAgentBindings.$inferSelect) {
+  return normalizeRoleAgentBindingRecord(row);
 }
 
 function isSameBindingScope(
@@ -437,7 +460,7 @@ roleAgentRoutes.get("/", async (c) => {
       ...serializeRoleAgent(row),
       bindings: (bindingMap.get(row.id) ?? []).sort(
         (left, right) => left.priority - right.priority,
-      ),
+      ).map((binding) => serializeRoleAgentBinding(binding)),
     })),
   });
 });
@@ -564,7 +587,11 @@ roleAgentRoutes.get("/:roleAgentId/bindings", async (c) => {
   const filteredRows = projectId
     ? rows.filter((row) => row.projectId === projectId)
     : rows.filter((row) => !row.projectId);
-  return c.json({ data: filteredRows.sort((left, right) => left.priority - right.priority) });
+  return c.json({
+    data: filteredRows
+      .sort((left, right) => left.priority - right.priority)
+      .map((binding) => serializeRoleAgentBinding(binding)),
+  });
 });
 
 roleAgentRoutes.post(
@@ -609,7 +636,7 @@ roleAgentRoutes.post(
     const created = await db.query.roleAgentBindings.findFirst({
       where: eq(roleAgentBindings.id, id),
     });
-    return c.json(created, 201);
+    return c.json(created ? serializeRoleAgentBinding(created) : created, 201);
   },
 );
 
@@ -652,7 +679,7 @@ roleAgentRoutes.patch(
       where: eq(roleAgentBindings.id, bindingId),
     });
     if (!updated) return c.json({ error: "Role agent binding not found" }, 404);
-    return c.json(updated);
+    return c.json(serializeRoleAgentBinding(updated));
   },
 );
 

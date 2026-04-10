@@ -7,7 +7,9 @@ import {
   index,
   integer,
   jsonb,
+  pgEnum,
   pgTable,
+  timestamp,
   text,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
@@ -242,30 +244,289 @@ export type TaskOperationKind =
   | "resume"
   | "system";
 
+const pgTimestampString = (columnName: string) =>
+  timestamp(columnName, { withTimezone: true, mode: "string" });
+
+export const workflowTaskSourceEnum = pgEnum("workflow_task_source", ["manual_seed", "workflow_spawn"]);
+export const workflowTaskTriggerEventEnum = pgEnum("workflow_task_trigger_event", [
+  "created",
+  "running",
+  "completed",
+  "failed",
+]);
+export const taskLifecycleStatusEnum = pgEnum("task_lifecycle_status", [
+  "draft",
+  "active",
+  "done",
+  "archived",
+]);
+export const executionStatusEnum = pgEnum("execution_status", [
+  "queued",
+  "running",
+  "complete",
+  "failed",
+  "cancelled",
+  "awaiting_adoption",
+]);
+export const taskSessionKindEnum = pgEnum("task_session_kind", [
+  "primary",
+  "candidate",
+  "judge",
+  "sequential_step",
+  "resume",
+  "manual_branch",
+  "hook",
+]);
+export const taskSessionTriggerTypeEnum = pgEnum("task_session_trigger_type", [
+  "execute",
+  "continue",
+  "resume",
+  "workflow_spawn",
+  "manual_branch",
+  "hook_spawn",
+  "system_retry",
+]);
+export const taskSessionModeEnum = pgEnum("task_session_mode", [
+  "single",
+  "parallel",
+  "sequential_chain",
+]);
+export const taskExecutionPhaseKindEnum = pgEnum("task_execution_phase_kind", [
+  "root",
+  "single",
+  "parallel",
+  "sequential_chain",
+  "manual_branch",
+  "hook",
+]);
+export const taskExecutionPhaseTriggerTypeEnum = pgEnum("task_execution_phase_trigger_type", [
+  "execute",
+  "continue",
+  "resume",
+  "workflow_spawn",
+  "candidate_adopt",
+  "manual_branch",
+  "hook_spawn",
+]);
+export const taskExecutionPhaseStatusEnum = pgEnum("task_execution_phase_status", [
+  "pending",
+  "running",
+  "paused",
+  "awaiting_adoption",
+  "completed",
+  "failed",
+  "cancelled",
+]);
+export const taskExecutionPhaseTerminalReasonEnum = pgEnum(
+  "task_execution_phase_terminal_reason",
+  [
+    "winner_adopted",
+    "user_cancelled",
+    "runtime_terminated",
+    "runtime_failed",
+    "timeout",
+    "superseded",
+  ],
+);
+export const taskSessionNodeStatusEnum = pgEnum("task_session_node_status", [
+  "queued",
+  "running",
+  "completed",
+  "failed",
+  "cancelled",
+  "interrupted",
+  "archived",
+]);
+export const taskSessionRunTriggerTypeEnum = pgEnum("task_session_run_trigger_type", [
+  "user_prompt",
+  "assistant_reply",
+  "parallel_result",
+  "resume",
+  "workflow_spawn",
+  "manual_branch",
+  "system_retry",
+]);
+export const taskSessionRunExecutionKindEnum = pgEnum("task_session_run_execution_kind", [
+  "single",
+  "parallel_candidate",
+  "judge",
+  "repair",
+  "resume",
+  "workflow_step",
+  "hook",
+]);
+export const taskSessionRunLaneRoleEnum = pgEnum("task_session_run_lane_role", [
+  "primary",
+  "candidate",
+  "judge",
+  "repair",
+  "resume",
+  "hook",
+]);
+export const taskSessionMessageRoleEnum = pgEnum("task_session_message_role", [
+  "user",
+  "assistant",
+  "system",
+  "tool",
+]);
+export const taskMessageKindEnum = pgEnum("task_message_kind", [
+  "prompt",
+  "reply",
+  "note",
+  "tool_echo",
+]);
+export const taskMessageStatusEnum = pgEnum("task_message_status", [
+  "pending",
+  "streaming",
+  "completed",
+  "failed",
+  "cancelled",
+]);
+export const taskSessionMessagePartTypeEnum = pgEnum("task_session_message_part_type", [
+  "text",
+  "tool_call",
+  "tool_result",
+  "thinking",
+  "file_reference",
+  "diff",
+]);
+export const taskOperationKindEnum = pgEnum("task_operation_kind", [
+  "model_request",
+  "tool_call",
+  "judge",
+  "hook",
+  "resume",
+  "system",
+]);
+export const approvalTicketActionTypeEnum = pgEnum("approval_ticket_action_type", [
+  "production_write",
+  "level3_command",
+  "budget_exceed",
+  "batch_edit",
+  "external_api",
+]);
+export const approvalTicketStatusEnum = pgEnum("approval_ticket_status", [
+  "pending",
+  "approved",
+  "rejected",
+  "expired",
+]);
+export const taskWorkflowRunStatusEnum = pgEnum("task_workflow_run_status", [
+  "pending",
+  "running",
+  "blocked",
+  "waiting-approval",
+  "failed",
+  "completed",
+  "cancelled",
+]);
+export const taskStageRunStatusEnum = pgEnum("task_stage_run_status", [
+  "pending",
+  "running",
+  "blocked",
+  "waiting-approval",
+  "failed",
+  "completed",
+  "skipped",
+  "cancelled",
+]);
+export const taskStageRunApprovalStateEnum = pgEnum("task_stage_run_approval_state", [
+  "not-required",
+  "pending",
+  "approved",
+  "rejected",
+  "expired",
+  "cancelled",
+]);
+export const roleAggregateConclusionAggregationStrategyEnum = pgEnum(
+  "role_aggregate_conclusion_aggregation_strategy",
+  ["first-pass", "majority", "merge-summary", "human-review"],
+);
+export const roleAggregateConclusionStatusEnum = pgEnum("role_aggregate_conclusion_status", [
+  "aligned",
+  "partially-aligned",
+  "conflicted",
+  "escalated",
+  "blocked",
+]);
+export const roleAggregateConclusionFinalDecisionEnum = pgEnum(
+  "role_aggregate_conclusion_final_decision",
+  ["allow", "notify-developer", "needs-approval", "block", "observe", "human-review"],
+);
+export const roleAggregateConclusionRiskLevelEnum = pgEnum(
+  "role_aggregate_conclusion_risk_level",
+  ["low", "medium", "high", "critical"],
+);
+export const developerChangeRequestStatusEnum = pgEnum("developer_change_request_status", [
+  "open",
+  "acknowledged",
+  "in-progress",
+  "resolved",
+  "won't-fix",
+]);
+export const paidExecutionLeaseStatusEnum = pgEnum("paid_execution_lease_status", [
+  "active",
+  "revoked",
+  "expired",
+]);
+export const runtimeUsageLedgerStatusEnum = pgEnum("runtime_usage_ledger_status", [
+  "running",
+  "completed",
+  "failed",
+  "cancelled",
+]);
+export const runtimeUsageLedgerStepTypeEnum = pgEnum("runtime_usage_ledger_step_type", [
+  "execution",
+  "judge",
+  "hook",
+  "resume",
+  "other",
+]);
+export const runtimeUsageLedgerStepStatusEnum = pgEnum("runtime_usage_ledger_step_status", [
+  "pending",
+  "completed",
+  "failed",
+  "skipped",
+]);
+export const runtimeUsageBaselineMatchScopeEnum = pgEnum(
+  "runtime_usage_baseline_match_scope",
+  [
+    "project+provider+model+entrypoint+fingerprint",
+    "project+provider+model+entrypoint",
+    "project+provider+model",
+    "project+entrypoint",
+    "project",
+  ],
+);
+
 // ── Organizations ──────────────────────────────────────────────────
 
 export const organizations = pgTable("organizations", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   slug: text("slug").notNull().unique(),
-  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  createdAt: pgTimestampString("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
 // ── Projects ───────────────────────────────────────────────────────
 
-export const projects = pgTable("projects", {
-  id: text("id").primaryKey(),
-  orgId: text("org_id")
-    .notNull()
-    .references(() => organizations.id),
-  name: text("name").notNull(),
-  slug: text("slug").notNull(),
-  description: text("description"),
-  settings: jsonb("settings").$type<ProjectSettings>(),
-  status: text("status").notNull().default("active"),
-  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-});
+export const projects = pgTable(
+  "projects",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organizations.id),
+    name: text("name").notNull(),
+    slug: text("slug").notNull(),
+    description: text("description"),
+    settings: jsonb("settings").$type<ProjectSettings>(),
+    status: text("status").notNull().default("active"),
+    createdAt: pgTimestampString("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: pgTimestampString("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [uniqueIndex("idx_projects_org_slug").on(table.orgId, table.slug)],
+);
 
 // ── Project Tree ──────────────────────────────────────────────────
 
@@ -276,7 +537,7 @@ export const projectTreeNodes = pgTable(
     projectId: text("project_id")
       .notNull()
       .references(() => projects.id),
-    parentId: text("parent_id"),
+    parentId: text("parent_id").references((): AnyPgColumn => projectTreeNodes.id),
     path: ltree("path").notNull(),
     depth: integer("depth").notNull().default(0),
     nodeType: text("node_type").$type<ProjectTreeNodeType>().notNull(),
@@ -290,10 +551,10 @@ export const projectTreeNodes = pgTable(
     runtimeMessageId: text("runtime_message_id"),
     branchName: text("branch_name"),
     isActive: boolean("is_active").notNull().default(true),
-    supersededBy: text("superseded_by"),
-    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-    archivedAt: text("archived_at"),
+    supersededBy: text("superseded_by").references((): AnyPgColumn => projectTreeNodes.id),
+    createdAt: pgTimestampString("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: pgTimestampString("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    archivedAt: pgTimestampString("archived_at"),
   },
   (table) => [
     index("idx_ptn_project_path").using("gist", table.path),
@@ -304,20 +565,31 @@ export const projectTreeNodes = pgTable(
   ],
 );
 
-export const projectTreeBranches = pgTable("project_tree_branches", {
-  id: text("id").primaryKey(),
-  projectId: text("project_id")
-    .notNull()
-    .references(() => projects.id),
-  taskNodeId: text("task_node_id").references(() => projectTreeNodes.id),
-  branchName: text("branch_name").notNull(),
-  headNodeId: text("head_node_id")
-    .notNull()
-    .references(() => projectTreeNodes.id),
-  isDefault: boolean("is_default").notNull().default(false),
-  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-});
+export const projectTreeBranches = pgTable(
+  "project_tree_branches",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    taskNodeId: text("task_node_id").references(() => projectTreeNodes.id),
+    branchName: text("branch_name").notNull(),
+    headNodeId: text("head_node_id")
+      .notNull()
+      .references(() => projectTreeNodes.id),
+    isDefault: boolean("is_default").notNull().default(false),
+    createdAt: pgTimestampString("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: pgTimestampString("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex("idx_ptb_project_branch_unique")
+      .on(table.projectId, table.branchName)
+      .where(sql`${table.taskNodeId} IS NULL`),
+    uniqueIndex("idx_ptb_task_branch_unique")
+      .on(table.projectId, table.taskNodeId, table.branchName)
+      .where(sql`${table.taskNodeId} IS NOT NULL`),
+  ],
+);
 
 export const projectTreeLinks = pgTable(
   "project_tree_links",
@@ -339,7 +611,7 @@ export const projectTreeLinks = pgTable(
     metadata: jsonb("metadata").$type<Record<string, unknown>>(),
     bidirectional: boolean("bidirectional").notNull().default(false),
     createdBy: text("created_by"),
-    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    createdAt: pgTimestampString("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   },
   (table) => [
     uniqueIndex("idx_ptl_unique_edge").on(table.sourceNodeId, table.targetNodeId, table.linkType),
@@ -352,16 +624,20 @@ export const projectTreeLinks = pgTable(
 
 // ── Environments ───────────────────────────────────────────────────
 
-export const environments = pgTable("environments", {
-  id: text("id").primaryKey(),
-  projectId: text("project_id")
-    .notNull()
-    .references(() => projects.id),
-  name: text("name").notNull(), // dev | staging | production
-  riskLevel: text("risk_level").notNull().default("low"),
-  requiresApproval: boolean("requires_approval").notNull().default(false),
-  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-});
+export const environments = pgTable(
+  "environments",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    name: text("name").notNull(), // dev | staging | production
+    riskLevel: text("risk_level").notNull().default("low"),
+    requiresApproval: boolean("requires_approval").notNull().default(false),
+    createdAt: pgTimestampString("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [uniqueIndex("idx_environments_project_name").on(table.projectId, table.name)],
+);
 
 // ── Users ──────────────────────────────────────────────────────────
 
@@ -380,23 +656,27 @@ export const users = pgTable("users", {
   mustChangePassword: boolean("must_change_password").notNull().default(false),
   tokenVersion: integer("token_version").notNull().default(0),
   failedLoginAttempts: integer("failed_login_attempts").notNull().default(0),
-  lockedUntil: text("locked_until"),
-  lastLoginAt: text("last_login_at"),
-  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  lockedUntil: pgTimestampString("locked_until"),
+  lastLoginAt: pgTimestampString("last_login_at"),
+  createdAt: pgTimestampString("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
-export const projectRoles = pgTable("project_roles", {
-  id: text("id").primaryKey(),
-  userId: text("user_id")
-    .notNull()
-    .references(() => users.id),
-  projectId: text("project_id")
-    .notNull()
-    .references(() => projects.id),
-  role: text("role", {
-    enum: ["project_admin", "developer", "viewer"],
-  }).notNull(),
-});
+export const projectRoles = pgTable(
+  "project_roles",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    role: text("role", {
+      enum: ["project_admin", "developer", "viewer"],
+    }).notNull(),
+  },
+  (table) => [uniqueIndex("idx_project_roles_user_project").on(table.userId, table.projectId)],
+);
 
 export const paidExecutionLeases = pgTable(
   "paid_execution_leases",
@@ -410,11 +690,11 @@ export const paidExecutionLeases = pgTable(
       .references(() => users.id),
     revokedByUserId: text("revoked_by_user_id").references(() => users.id),
     reason: text("reason"),
-    status: text("status").notNull().default("active"),
-    expiresAt: text("expires_at").notNull(),
-    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-    revokedAt: text("revoked_at"),
+    status: paidExecutionLeaseStatusEnum("status").notNull().default("active"),
+    expiresAt: pgTimestampString("expires_at").notNull(),
+    createdAt: pgTimestampString("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: pgTimestampString("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    revokedAt: pgTimestampString("revoked_at"),
   },
   (table) => [
     index("idx_paid_execution_leases_project_status").on(
@@ -451,12 +731,12 @@ export const runtimeUsageLedgers = pgTable(
     candidateCount: integer("candidate_count").notNull().default(1),
     judgeRequestCount: integer("judge_request_count").notNull().default(0),
     hookRequestCount: integer("hook_request_count").notNull().default(0),
-    status: text("status").notNull().default("running"),
-    startedAt: text("started_at"),
-    finishedAt: text("finished_at"),
-    syncedAt: text("synced_at"),
-    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    status: runtimeUsageLedgerStatusEnum("status").notNull().default("running"),
+    startedAt: pgTimestampString("started_at"),
+    finishedAt: pgTimestampString("finished_at"),
+    syncedAt: pgTimestampString("synced_at"),
+    createdAt: pgTimestampString("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: pgTimestampString("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   },
   (table) => [
     uniqueIndex("idx_runtime_usage_ledgers_runtime_session").on(table.runtimeSessionId),
@@ -482,7 +762,7 @@ export const runtimeUsageLedgerSteps = pgTable(
     runId: text("run_id"),
     runNodeId: text("run_node_id"),
     runtimeSessionId: text("runtime_session_id"),
-    stepType: text("step_type").notNull(),
+    stepType: runtimeUsageLedgerStepTypeEnum("step_type").notNull(),
     triggerType: text("trigger_type"),
     hookId: text("hook_id"),
     candidateIndex: integer("candidate_index"),
@@ -494,11 +774,11 @@ export const runtimeUsageLedgerSteps = pgTable(
     totalTokens: integer("total_tokens").notNull().default(0),
     costUsd: doublePrecision("cost_usd").notNull().default(0),
     amplificationSource: text("amplification_source"),
-    status: text("status").notNull().default("completed"),
-    startedAt: text("started_at"),
-    finishedAt: text("finished_at"),
-    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    status: runtimeUsageLedgerStepStatusEnum("status").notNull().default("completed"),
+    startedAt: pgTimestampString("started_at"),
+    finishedAt: pgTimestampString("finished_at"),
+    createdAt: pgTimestampString("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: pgTimestampString("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   },
   (table) => [
     index("idx_runtime_usage_ledger_steps_ledger_request").on(table.ledgerId, table.requestIndex),
@@ -524,15 +804,7 @@ export const runtimeUsageBaselines = pgTable(
     modelId: text("model_id").notNull().default(""),
     entrypointType: text("entrypoint_type").notNull().default(""),
     orchestrationFingerprint: text("orchestration_fingerprint").notNull().default(""),
-    matchScope: text("match_scope", {
-      enum: [
-        "project+provider+model+entrypoint+fingerprint",
-        "project+provider+model+entrypoint",
-        "project+provider+model",
-        "project+entrypoint",
-        "project",
-      ],
-    })
+    matchScope: runtimeUsageBaselineMatchScopeEnum("match_scope")
       .notNull()
       .default("project"),
     sampleSize: integer("sample_size").notNull().default(0),
@@ -546,10 +818,10 @@ export const runtimeUsageBaselines = pgTable(
     p90TotalTokens: doublePrecision("p90_total_tokens"),
     p50CostUsd: doublePrecision("p50_cost_usd"),
     p90CostUsd: doublePrecision("p90_cost_usd"),
-    lastLedgerAt: text("last_ledger_at"),
-    generatedAt: text("generated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    lastLedgerAt: pgTimestampString("last_ledger_at"),
+    generatedAt: pgTimestampString("generated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    createdAt: pgTimestampString("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: pgTimestampString("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   },
   (table) => [
     uniqueIndex("idx_runtime_usage_baselines_project_scope").on(
@@ -566,56 +838,72 @@ export const runtimeUsageBaselines = pgTable(
 
 // ── Repositories ───────────────────────────────────────────────────
 
-export const repositories = pgTable("repositories", {
-  id: text("id").primaryKey(),
-  projectId: text("project_id")
-    .notNull()
-    .references(() => projects.id),
-  name: text("name").notNull(),
-  provider: text("provider", {
-    enum: ["github", "gitlab", "gitea", "local"],
-  }).notNull(),
-  remoteUrl: text("remote_url").notNull(),
-  defaultBranch: text("default_branch").notNull().default("main"),
-  description: text("description"),
-  status: text("status", {
-    enum: ["active", "archived", "error"],
-  })
-    .notNull()
-    .default("active"),
-  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-});
+export const repositories = pgTable(
+  "repositories",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    name: text("name").notNull(),
+    provider: text("provider", {
+      enum: ["github", "gitlab", "gitea", "local"],
+    }).notNull(),
+    remoteUrl: text("remote_url").notNull(),
+    defaultBranch: text("default_branch").notNull().default("main"),
+    description: text("description"),
+    status: text("status", {
+      enum: ["active", "archived", "error"],
+    })
+      .notNull()
+      .default("active"),
+    createdAt: pgTimestampString("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: pgTimestampString("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex("idx_repositories_project_name").on(table.projectId, table.name),
+    uniqueIndex("idx_repositories_project_remote_url").on(table.projectId, table.remoteUrl),
+  ],
+);
 
 // ── Repository Credentials (references, not raw secrets) ───────────
 
 export type CredentialType = "pat" | "oauth_token" | "ssh_key_ref" | "app_installation";
 
-export const repositoryCredentials = pgTable("repository_credentials", {
-  id: text("id").primaryKey(),
-  projectId: text("project_id")
-    .notNull()
-    .references(() => projects.id),
-  repoId: text("repo_id").references(() => repositories.id), // null = project-wide
-  label: text("label").notNull(),
-  provider: text("provider", {
-    enum: ["github", "gitlab", "gitea", "local"],
-  }).notNull(),
-  credentialType: text("credential_type", {
-    enum: ["pat", "oauth_token", "ssh_key_ref", "app_installation"],
-  }).notNull(),
-  /** Where the real secret lives — e.g. env var name or secret-store path. Never a raw token. */
-  secretRef: text("secret_ref").notNull(),
-  gitAuthorName: text("git_author_name"),
-  gitAuthorEmail: text("git_author_email"),
-  scope: text("scope").notNull().default("project"),
-  isDefault: boolean("is_default").notNull().default(false),
-  status: text("status").notNull().default("active"),
-  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-});
-
-// ── Task Domain Core ───────────────────────────────────────────────
+export const repositoryCredentials = pgTable(
+  "repository_credentials",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    repoId: text("repo_id").references(() => repositories.id), // null = project-wide
+    label: text("label").notNull(),
+    provider: text("provider", {
+      enum: ["github", "gitlab", "gitea", "local"],
+    }).notNull(),
+    credentialType: text("credential_type", {
+      enum: ["pat", "oauth_token", "ssh_key_ref", "app_installation"],
+    }).notNull(),
+    /** Where the real secret lives — e.g. env var name or secret-store path. Never a raw token. */
+    secretRef: text("secret_ref").notNull(),
+    gitAuthorName: text("git_author_name"),
+    gitAuthorEmail: text("git_author_email"),
+    scope: text("scope").notNull().default("project"),
+    isDefault: boolean("is_default").notNull().default(false),
+    status: text("status").notNull().default("active"),
+    createdAt: pgTimestampString("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: pgTimestampString("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex("idx_repository_credentials_project_default_active")
+      .on(table.projectId)
+      .where(sql`${table.repoId} IS NULL AND ${table.isDefault} = true AND ${table.status} = 'active'`),
+    uniqueIndex("idx_repository_credentials_repo_default_active")
+      .on(table.projectId, table.repoId)
+      .where(sql`${table.repoId} IS NOT NULL AND ${table.isDefault} = true AND ${table.status} = 'active'`),
+  ],
+);
 
 export const tasks = pgTable(
   "tasks",
@@ -640,8 +928,8 @@ export const tasks = pgTable(
       .default(sql`'{}'::jsonb`),
     finalCommitSha: text("final_commit_sha"),
     finalBranchName: text("final_branch_name"),
-    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    createdAt: pgTimestampString("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: pgTimestampString("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
     gitCommitterName: text("git_committer_name"),
     gitCommitterEmail: text("git_committer_email"),
     gitAuthorName: text("git_author_name"),
@@ -649,16 +937,16 @@ export const tasks = pgTable(
     // ─── columns added by migration 0022 ───
     workflowTemplateId: text("workflow_template_id"),
     workflowTemplateVersion: integer("workflow_template_version"),
-    workflowSource: text("workflow_source").notNull().default("manual_seed"),
+    workflowSource: workflowTaskSourceEnum("workflow_source").notNull().default("manual_seed"),
     stageKey: text("stage_key"),
     spawnedFromTaskId: text("spawned_from_task_id").references((): AnyPgColumn => tasks.id),
-    spawnTriggerEvent: text("spawn_trigger_event"),
+    spawnTriggerEvent: workflowTaskTriggerEventEnum("spawn_trigger_event"),
     spawnRuleKey: text("spawn_rule_key"),
-    lifecycleStatus: text("lifecycle_status").notNull().default("draft"),
+    lifecycleStatus: taskLifecycleStatusEnum("lifecycle_status").notNull().default("draft"),
     preferredModel: text("preferred_model"),
-    activatedAt: text("activated_at"),
-    doneAt: text("done_at"),
-    archivedAt: text("archived_at"),
+    activatedAt: pgTimestampString("activated_at"),
+    doneAt: pgTimestampString("done_at"),
+    archivedAt: pgTimestampString("archived_at"),
   },
   (table) => [
     uniqueIndex("idx_tasks_tree_node_id").on(table.treeNodeId),
@@ -686,14 +974,14 @@ export const policyTemplates = pgTable("policy_templates", {
   }).notNull(),
   rules: jsonb("rules").$type<Record<string, unknown>>(),
   appliesTo: text("applies_to").notNull().default("all"),
-  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  createdAt: pgTimestampString("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
 // ── Audit Events ───────────────────────────────────────────────────
 
 export const auditEvents = pgTable("audit_events", {
   id: text("id").primaryKey(),
-  ts: text("ts").notNull().default(sql`CURRENT_TIMESTAMP`),
+  ts: pgTimestampString("ts").notNull().default(sql`CURRENT_TIMESTAMP`),
   userId: text("user_id"),
   projectId: text("project_id"),
   sessionId: text("session_id"),
@@ -714,7 +1002,7 @@ export const auditEvents = pgTable("audit_events", {
 
 export const costRecords = pgTable("cost_records", {
   id: text("id").primaryKey(),
-  ts: text("ts").notNull().default(sql`CURRENT_TIMESTAMP`),
+  ts: pgTimestampString("ts").notNull().default(sql`CURRENT_TIMESTAMP`),
   projectId: text("project_id")
     .notNull()
     .references(() => projects.id),
@@ -736,17 +1024,15 @@ export const approvalTickets = pgTable("approval_tickets", {
   id: text("id").primaryKey(),
   taskId: text("task_id").notNull(),
   agentRunId: text("agent_run_id"),
-  actionType: text("action_type", {
-    enum: ["production_write", "level3_command", "budget_exceed", "batch_edit", "external_api"],
-  }).notNull(),
+  actionType: approvalTicketActionTypeEnum("action_type").notNull(),
   riskLevel: text("risk_level").notNull(),
-  status: text("status").notNull().default("pending"),
+  status: approvalTicketStatusEnum("status").notNull().default("pending"),
   requestDetail: jsonb("request_detail").$type<Record<string, unknown>>(),
   approver: text("approver"),
   comment: text("comment"),
-  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-  resolvedAt: text("resolved_at"),
-  expiresAt: text("expires_at").notNull(),
+  createdAt: pgTimestampString("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  resolvedAt: pgTimestampString("resolved_at"),
+  expiresAt: pgTimestampString("expires_at").notNull(),
 });
 
 // ── Task Session Domain ────────────────────────────────────────────
@@ -765,20 +1051,17 @@ export const taskExecutionPhases = pgTable(
       (): AnyPgColumn => taskExecutionPhases.id,
     ),
     phaseIndex: integer("phase_index").notNull(),
-    phaseKind: text("phase_kind").$type<TaskExecutionPhaseKind>().notNull(),
-    triggerType: text("trigger_type").$type<TaskExecutionPhaseTriggerType>().notNull(),
-    status: text("status")
-      .$type<TaskExecutionPhaseStatus>()
-      .notNull()
-      .default("pending"),
+    phaseKind: taskExecutionPhaseKindEnum("phase_kind").notNull(),
+    triggerType: taskExecutionPhaseTriggerTypeEnum("trigger_type").notNull(),
+    status: taskExecutionPhaseStatusEnum("status").notNull().default("pending"),
     resumedFromPhaseId: text("resumed_from_phase_id").references(
       (): AnyPgColumn => taskExecutionPhases.id,
     ),
-    awaitingAdoptionSince: text("awaiting_adoption_since"),
-    cancelRequestedAt: text("cancel_requested_at"),
-    cancelledAt: text("cancelled_at"),
-    terminalReason: text("terminal_reason").$type<TaskExecutionPhaseTerminalReason>(),
-    lastHeartbeatAt: text("last_heartbeat_at"),
+    awaitingAdoptionSince: pgTimestampString("awaiting_adoption_since"),
+    cancelRequestedAt: pgTimestampString("cancel_requested_at"),
+    cancelledAt: pgTimestampString("cancelled_at"),
+    terminalReason: taskExecutionPhaseTerminalReasonEnum("terminal_reason"),
+    lastHeartbeatAt: pgTimestampString("last_heartbeat_at"),
     anchorSessionId: text("anchor_session_id").references((): AnyPgColumn => taskSessions.id),
     anchorMessageId: text("anchor_message_id"),
     candidateCount: integer("candidate_count"),
@@ -788,10 +1071,10 @@ export const taskExecutionPhases = pgTable(
     effectiveModel: text("effective_model"),
     resultSummary: text("result_summary"),
     errorText: text("error_text"),
-    startedAt: text("started_at"),
-    finishedAt: text("finished_at"),
-    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    startedAt: pgTimestampString("started_at"),
+    finishedAt: pgTimestampString("finished_at"),
+    createdAt: pgTimestampString("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: pgTimestampString("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   },
   (table) => [
     uniqueIndex("idx_task_execution_phases_task_phase_index").on(table.taskId, table.phaseIndex),
@@ -823,7 +1106,7 @@ export const taskSessions = pgTable(
     id: text("id").primaryKey(),
     taskId: text("task_id")
       .notNull()
-      .references(() => tasks.id),
+      .references(() => tasks.id, { onDelete: "cascade" }),
     projectId: text("project_id")
       .notNull()
       .references(() => projects.id),
@@ -837,16 +1120,16 @@ export const taskSessions = pgTable(
     spawnTriggerType: text("spawn_trigger_type"),
     spawnRuleKey: text("spawn_rule_key"),
     userPromptSummary: text("user_prompt_summary"),
-    status: text("status").$type<TaskSessionNodeStatus>().notNull().default("running"),
+    status: taskSessionNodeStatusEnum("status").notNull().default("running"),
     headMessageId: text("head_message_id"),
     latestRunId: text("latest_run_id"),
     depth: integer("depth").notNull().default(0),
     sortKey: text("sort_key"),
     operationId: text("operation_id"),
-    sessionKind: text("session_kind").$type<TaskSessionKind>().notNull(),
-    triggerType: text("trigger_type").$type<TaskSessionTriggerType>().notNull(),
-    executionModeSnapshot: text("execution_mode_snapshot").$type<TaskSessionMode>().notNull(),
-    executionStatus: text("execution_status").$type<ExecutionStatus>().notNull().default("running"),
+    sessionKind: taskSessionKindEnum("session_kind").notNull(),
+    triggerType: taskSessionTriggerTypeEnum("trigger_type").notNull(),
+    executionModeSnapshot: taskSessionModeEnum("execution_mode_snapshot").notNull(),
+    executionStatus: executionStatusEnum("execution_status").notNull().default("running"),
     branchName: text("branch_name"),
     phaseRole: text("phase_role").$type<TaskPhaseRole>(),
     phaseItemIndex: integer("phase_item_index"),
@@ -865,12 +1148,12 @@ export const taskSessions = pgTable(
     outputTokens: bigint("output_tokens", { mode: "number" }).notNull().default(0),
     totalTokens: bigint("total_tokens", { mode: "number" }).notNull().default(0),
     costUsd: doublePrecision("cost_usd").notNull().default(0),
-    lastActivityAt: text("last_activity_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-    startedAt: text("started_at"),
-    finishedAt: text("finished_at"),
-    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-    archivedAt: text("archived_at"),
+    lastActivityAt: pgTimestampString("last_activity_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    startedAt: pgTimestampString("started_at"),
+    finishedAt: pgTimestampString("finished_at"),
+    createdAt: pgTimestampString("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: pgTimestampString("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    archivedAt: pgTimestampString("archived_at"),
   },
   (table) => [
     uniqueIndex("idx_task_sessions_tree_node_id").on(table.treeNodeId),
@@ -921,31 +1204,31 @@ export const taskSessionRuns = pgTable(
     id: text("id").primaryKey(),
     taskId: text("task_id")
       .notNull()
-      .references(() => tasks.id),
+      .references(() => tasks.id, { onDelete: "cascade" }),
     sessionId: text("session_id")
       .notNull()
-      .references(() => taskSessions.id),
+      .references(() => taskSessions.id, { onDelete: "cascade" }),
     phaseId: text("phase_id").references(() => taskExecutionPhases.id),
     attemptIndex: integer("attempt_index").notNull(),
     runtimeSessionId: text("runtime_session_id"),
-    triggerType: text("trigger_type").$type<TaskSessionRunTriggerType>().notNull(),
-    executionKind: text("execution_kind").$type<TaskSessionRunExecutionKind>().notNull(),
+    triggerType: taskSessionRunTriggerTypeEnum("trigger_type").notNull(),
+    executionKind: taskSessionRunExecutionKindEnum("execution_kind").notNull(),
     operationId: text("operation_id"),
     candidateIndex: integer("candidate_index"),
-    laneRole: text("lane_role").$type<TaskSessionRunLaneRole>().notNull(),
+    laneRole: taskSessionRunLaneRoleEnum("lane_role").notNull(),
     executorKind: text("executor_kind").notNull(),
     modelRoute: text("model_route"),
     workflowStageKey: text("workflow_stage_key"),
-    status: text("status").$type<TaskSessionNodeStatus>().notNull().default("running"),
+    status: taskSessionNodeStatusEnum("status").notNull().default("running"),
     inputTokens: bigint("input_tokens", { mode: "number" }).notNull().default(0),
     outputTokens: bigint("output_tokens", { mode: "number" }).notNull().default(0),
     totalTokens: bigint("total_tokens", { mode: "number" }).notNull().default(0),
     costUsd: doublePrecision("cost_usd").notNull().default(0),
     resultSummary: text("result_summary"),
     errorText: text("error_text"),
-    startedAt: text("started_at"),
-    finishedAt: text("finished_at"),
-    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    startedAt: pgTimestampString("started_at"),
+    finishedAt: pgTimestampString("finished_at"),
+    createdAt: pgTimestampString("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   },
   (table) => [
     uniqueIndex("idx_task_session_runs_session_attempt_index").on(
@@ -984,8 +1267,8 @@ export const taskMessages = pgTable(
       .notNull()
       .references(() => taskSessions.id),
     createdByRunId: text("created_by_run_id"),
-    role: text("role").$type<TaskSessionMessageRole>().notNull(),
-    messageKind: text("message_kind").$type<TaskMessageKind>().notNull(),
+    role: taskSessionMessageRoleEnum("role").notNull(),
+    messageKind: taskMessageKindEnum("message_kind").notNull(),
     parentMessageId: text("parent_message_id").references((): AnyPgColumn => taskMessages.id),
     replyToMessageId: text("reply_to_message_id").references((): AnyPgColumn => taskMessages.id),
     runtimeMessageId: text("runtime_message_id"),
@@ -1000,16 +1283,16 @@ export const taskMessages = pgTable(
       .default(sql`'{}'::jsonb`),
     partCount: integer("part_count").notNull().default(0),
     tokenUsed: bigint("token_used", { mode: "number" }).notNull().default(0),
-    status: text("status").$type<TaskMessageStatus>().notNull().default("streaming"),
+    status: taskMessageStatusEnum("status").notNull().default("streaming"),
     errorText: text("error_text"),
     // ─── prompt visibility columns (canonical since 0034) ───
     userInputText: text("user_input_text"),
     systemContextText: text("system_context_text"),
     finalSentText: text("final_sent_text"),
-    startedAt: text("started_at"),
-    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-    completedAt: text("completed_at"),
+    startedAt: pgTimestampString("started_at"),
+    createdAt: pgTimestampString("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: pgTimestampString("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    completedAt: pgTimestampString("completed_at"),
   },
   (table) => [
     uniqueIndex("idx_task_messages_session_seq").on(table.sessionId, table.seq),
@@ -1041,13 +1324,13 @@ export const taskMessageParts = pgTable(
       .notNull()
       .references(() => taskMessages.id),
     partIndex: integer("part_index").notNull(),
-    partType: text("part_type").$type<TaskSessionMessagePartType>().notNull(),
+    partType: taskSessionMessagePartTypeEnum("part_type").notNull(),
     textContent: text("text_content"),
     jsonPayload: jsonb("json_payload")
       .$type<Record<string, unknown>>()
       .notNull()
       .default(sql`'{}'::jsonb`),
-    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    createdAt: pgTimestampString("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   },
   (table) => [
     uniqueIndex("idx_task_message_parts_message_part_index").on(table.messageId, table.partIndex),
@@ -1072,18 +1355,18 @@ export const taskOperations = pgTable(
     parentOperationId: text("parent_operation_id").references((): AnyPgColumn => taskOperations.id),
     runtimeOperationId: text("runtime_operation_id"),
     operationIndex: integer("operation_index").notNull(),
-    operationKind: text("operation_kind").$type<TaskOperationKind>().notNull(),
+    operationKind: taskOperationKindEnum("operation_kind").notNull(),
     toolName: text("tool_name"),
     title: text("title"),
-    status: text("status").$type<TaskSessionNodeStatus>().notNull().default("running"),
+    status: taskSessionNodeStatusEnum("status").notNull().default("running"),
     summaryJson: jsonb("summary_json")
       .$type<Record<string, unknown>>()
       .notNull()
       .default(sql`'{}'::jsonb`),
-    startedAt: text("started_at"),
-    finishedAt: text("finished_at"),
-    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    startedAt: pgTimestampString("started_at"),
+    finishedAt: pgTimestampString("finished_at"),
+    createdAt: pgTimestampString("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: pgTimestampString("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   },
   (table) => [
     uniqueIndex("idx_task_operations_run_operation_index").on(table.runId, table.operationIndex),
@@ -1104,20 +1387,20 @@ export const taskSnapshots = pgTable(
     projectId: text("project_id")
       .notNull()
       .references(() => projects.id),
-    lifecycleStatus: text("lifecycle_status").notNull(),
-    currentExecutionMode: text("current_execution_mode"),
-    currentExecutionStatus: text("current_execution_status"),
+    lifecycleStatus: taskLifecycleStatusEnum("lifecycle_status").notNull(),
+    currentExecutionMode: taskSessionModeEnum("current_execution_mode"),
+    currentExecutionStatus: executionStatusEnum("current_execution_status"),
     currentPhaseId: text("current_phase_id").references(() => taskExecutionPhases.id),
     latestPhaseId: text("latest_phase_id").references(() => taskExecutionPhases.id),
-    currentSessionId: text("current_session_id"),
-    latestSessionId: text("latest_session_id"),
+    currentSessionId: text("current_session_id").references((): AnyPgColumn => taskSessions.id),
+    latestSessionId: text("latest_session_id").references((): AnyPgColumn => taskSessions.id),
     latestResultSummary: text("latest_result_summary"),
     latestErrorText: text("latest_error_text"),
     activeCandidateCount: integer("active_candidate_count").notNull().default(0),
     totalChainSteps: integer("total_chain_steps").notNull().default(0),
     completedChainSteps: integer("completed_chain_steps").notNull().default(0),
-    lastActivityAt: text("last_activity_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    lastActivityAt: pgTimestampString("last_activity_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: pgTimestampString("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   },
   (table) => [
     index("idx_task_snapshots_project_lifecycle_execution_activity").on(
@@ -1161,8 +1444,8 @@ export const taskArtifacts = pgTable(
       .default(sql`'{}'::jsonb`),
     byteSize: bigint("byte_size", { mode: "number" }),
     sha256: text("sha256"),
-    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    createdAt: pgTimestampString("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: pgTimestampString("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   },
   (table) => [
     index("idx_task_artifacts_task_created_at").on(table.taskId, table.createdAt),
@@ -1195,12 +1478,12 @@ export const taskUsageLedgerEntries = pgTable(
     totalTokens: bigint("total_tokens", { mode: "number" }).notNull().default(0),
     costUsd: doublePrecision("cost_usd").notNull().default(0),
     currencyCode: text("currency_code").notNull().default("USD"),
-    recordedAt: text("recorded_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    recordedAt: pgTimestampString("recorded_at").notNull().default(sql`CURRENT_TIMESTAMP`),
     metadataJson: jsonb("metadata_json")
       .$type<Record<string, unknown>>()
       .notNull()
       .default(sql`'{}'::jsonb`),
-    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    createdAt: pgTimestampString("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   },
   (table) => [
     index("idx_task_usage_ledger_entries_project_recorded_at").on(
@@ -1221,6 +1504,37 @@ export const taskUsageLedgerEntries = pgTable(
   ],
 );
 
+export const taskDomainEvents = pgTable(
+  "task_domain_events",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    taskId: text("task_id").references(() => tasks.id),
+    sessionId: text("session_id").references(() => taskSessions.id),
+    runId: text("run_id"),
+    runNodeId: text("run_node_id"),
+    eventType: text("event_type").notNull(),
+    payload: jsonb("payload_json")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default(sql`'{}'::jsonb`),
+    createdAt: pgTimestampString("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    seq: bigint("seq", { mode: "number" }).notNull().default(0),
+  },
+  (table) => [
+    uniqueIndex("task_domain_events_task_seq_unique").on(table.taskId, table.seq),
+    index("idx_task_domain_events_task_created_at").on(table.taskId, table.createdAt, table.seq),
+    index("idx_task_domain_events_project_created_at").on(
+      table.projectId,
+      table.createdAt,
+      table.seq,
+    ),
+    index("idx_task_domain_events_session_created_at").on(table.sessionId, table.createdAt),
+  ],
+);
+
 export const taskTimelineViews = pgTable(
   "task_timeline_views",
   {
@@ -1230,12 +1544,12 @@ export const taskTimelineViews = pgTable(
       .references(() => projects.id),
     taskId: text("task_id")
       .notNull()
-      .references(() => tasks.id),
+      .references(() => tasks.id, { onDelete: "cascade" }),
     phaseId: text("phase_id").references(() => taskExecutionPhases.id),
-    sessionId: text("session_id").references(() => taskSessions.id),
+    sessionId: text("session_id").references(() => taskSessions.id, { onDelete: "cascade" }),
     messageId: text("message_id").references(() => taskMessages.id, { onDelete: "cascade" }),
-    operationId: text("operation_id").references(() => taskOperations.id),
-    artifactId: text("artifact_id").references(() => taskArtifacts.id),
+    operationId: text("operation_id").references(() => taskOperations.id, { onDelete: "cascade" }),
+    artifactId: text("artifact_id").references(() => taskArtifacts.id, { onDelete: "cascade" }),
     itemKind: text("item_kind").$type<TaskTimelineItemKind>().notNull(),
     itemRole: text("item_role").$type<TaskSessionMessageRole>(),
     phaseIndex: integer("phase_index"),
@@ -1248,9 +1562,9 @@ export const taskTimelineViews = pgTable(
       .$type<Record<string, unknown>>()
       .notNull()
       .default(sql`'{}'::jsonb`),
-    sortAt: text("sort_at").notNull(),
-    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    sortAt: pgTimestampString("sort_at").notNull(),
+    createdAt: pgTimestampString("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: pgTimestampString("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   },
   (table) => [
     index("idx_task_timeline_views_task_sort_at").on(table.taskId, table.sortAt, table.createdAt),
@@ -1286,7 +1600,7 @@ export const codeChanges = pgTable("code_changes", {
   commitMessage: text("commit_message"),
   branchName: text("branch_name"),
   summary: text("summary"),
-  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  createdAt: pgTimestampString("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
 export const fileChanges = pgTable("file_changes", {
@@ -1315,10 +1629,10 @@ export const plugins = pgTable("plugins", {
   status: text("status").notNull().default("enabled"),
   description: text("description"),
   capabilities: jsonb("capabilities").$type<string[]>(), // tool names exposed
-  lastVerifiedAt: text("last_verified_at"),
+  lastVerifiedAt: pgTimestampString("last_verified_at"),
   errorDetail: text("error_detail"),
-  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  createdAt: pgTimestampString("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: pgTimestampString("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
 // ── Budget Configs ─────────────────────────────────────────────────
@@ -1332,7 +1646,7 @@ export const budgetConfigs = pgTable("budget_configs", {
   limitAmount: doublePrecision("limit_amount").notNull(),
   warnThreshold: doublePrecision("warn_threshold").notNull().default(0.8),
   throttleThreshold: doublePrecision("throttle_threshold").notNull().default(0.95),
-  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  createdAt: pgTimestampString("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
 // ── Workbench Layouts ──────────────────────────────────────────────
@@ -1342,7 +1656,7 @@ export const workbenchLayouts = pgTable("workbench_layouts", {
     .primaryKey()
     .references(() => users.id),
   layoutJson: text("layout_json").notNull().default("{}"),
-  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: pgTimestampString("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
 // ── Role Agents ───────────────────────────────────────────────────
@@ -1372,8 +1686,8 @@ export const roleAgents = pgTable("role_agents", {
   allowedStagesJson: jsonb("allowed_stages_json").$type<string[]>().notNull(),
   outputSchemaId: text("output_schema_id"),
   tagsJson: jsonb("tags_json").$type<string[]>(),
-  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  createdAt: pgTimestampString("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: pgTimestampString("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
 export const roleAgentBindings = pgTable(
@@ -1391,8 +1705,8 @@ export const roleAgentBindings = pgTable(
     priority: integer("priority").notNull().default(1),
     model: text("model"),
     tagsJson: jsonb("tags_json").$type<string[]>(),
-    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    createdAt: pgTimestampString("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: pgTimestampString("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   },
   (table) => [
     uniqueIndex("idx_role_agent_bindings_role_project_key").on(
@@ -1433,8 +1747,8 @@ export const roleAgentProjectOverrides = pgTable(
     outputSchemaId: text("output_schema_id"),
     tagsJson: jsonb("tags_json").$type<string[]>(),
     bindingsMode: text("bindings_mode").notNull().default("inherit"),
-    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    createdAt: pgTimestampString("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: pgTimestampString("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   },
   (table) => [
     uniqueIndex("idx_role_agent_project_overrides_role_project").on(
@@ -1469,8 +1783,8 @@ export const workflowTemplates = pgTable("workflow_templates", {
   version: integer("version").notNull().default(1),
   createdBy: text("created_by"),
   updatedBy: text("updated_by"),
-  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  createdAt: pgTimestampString("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: pgTimestampString("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
 export const workflowTemplateStages = pgTable("workflow_template_stages", {
@@ -1536,15 +1850,13 @@ export const taskWorkflowRuns = pgTable("task_workflow_runs", {
     .references(() => projectTreeNodes.id),
   templateId: text("template_id").notNull(),
   currentStage: text("current_stage").notNull(),
-  status: text("status", {
-    enum: ["pending", "running", "blocked", "waiting-approval", "failed", "completed", "cancelled"],
-  })
+  status: taskWorkflowRunStatusEnum("status")
     .notNull()
     .default("pending"),
-  startedAt: text("started_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-  finishedAt: text("finished_at"),
-  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  startedAt: pgTimestampString("started_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  finishedAt: pgTimestampString("finished_at"),
+  createdAt: pgTimestampString("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: pgTimestampString("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
 export const taskStageRuns = pgTable("task_stage_runs", {
@@ -1553,33 +1865,20 @@ export const taskStageRuns = pgTable("task_stage_runs", {
     .notNull()
     .references(() => taskWorkflowRuns.id),
   stageKey: text("stage_key").notNull(),
-  status: text("status", {
-    enum: [
-      "pending",
-      "running",
-      "blocked",
-      "waiting-approval",
-      "failed",
-      "completed",
-      "skipped",
-      "cancelled",
-    ],
-  })
+  status: taskStageRunStatusEnum("status")
     .notNull()
     .default("pending"),
   primaryRoleAgentId: text("primary_role_agent_id").notNull(),
   participantRoleAgentIdsJson: jsonb("participant_role_agent_ids_json").$type<string[]>(),
-  startedAt: text("started_at"),
-  finishedAt: text("finished_at"),
+  startedAt: pgTimestampString("started_at"),
+  finishedAt: pgTimestampString("finished_at"),
   blockingReason: text("blocking_reason"),
-  approvalState: text("approval_state", {
-    enum: ["not-required", "pending", "approved", "rejected", "expired", "cancelled"],
-  })
+  approvalState: taskStageRunApprovalStateEnum("approval_state")
     .notNull()
     .default("not-required"),
   artifactsSummaryJson: jsonb("artifacts_summary_json"),
-  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  createdAt: pgTimestampString("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: pgTimestampString("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
 export const roleAggregateConclusions = pgTable("role_aggregate_conclusions", {
@@ -1590,18 +1889,10 @@ export const roleAggregateConclusions = pgTable("role_aggregate_conclusions", {
   taskStageRunId: text("task_stage_run_id"),
   roleAgentId: text("role_agent_id").notNull(),
   stage: text("stage").notNull(),
-  aggregationStrategy: text("aggregation_strategy", {
-    enum: ["first-pass", "majority", "merge-summary", "human-review"],
-  }).notNull(),
-  status: text("status", {
-    enum: ["aligned", "partially-aligned", "conflicted", "escalated", "blocked"],
-  }).notNull(),
-  finalDecision: text("final_decision", {
-    enum: ["allow", "notify-developer", "needs-approval", "block", "observe", "human-review"],
-  }).notNull(),
-  aggregateRiskLevel: text("aggregate_risk_level", {
-    enum: ["low", "medium", "high", "critical"],
-  }).notNull(),
+  aggregationStrategy: roleAggregateConclusionAggregationStrategyEnum("aggregation_strategy").notNull(),
+  status: roleAggregateConclusionStatusEnum("status").notNull(),
+  finalDecision: roleAggregateConclusionFinalDecisionEnum("final_decision").notNull(),
+  aggregateRiskLevel: roleAggregateConclusionRiskLevelEnum("aggregate_risk_level").notNull(),
   confidenceScore: doublePrecision("confidence_score").notNull().default(0),
   consensusScore: doublePrecision("consensus_score").notNull().default(0),
   winningRationale: text("winning_rationale").notNull(),
@@ -1611,9 +1902,9 @@ export const roleAggregateConclusions = pgTable("role_aggregate_conclusions", {
   approvalRecommendationJson: jsonb("approval_recommendation_json").$type<
     Record<string, unknown>
   >(),
-  generatedAt: text("generated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  generatedAt: pgTimestampString("generated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  createdAt: pgTimestampString("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: pgTimestampString("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
 export const developerChangeRequests = pgTable("developer_change_requests", {
@@ -1631,15 +1922,13 @@ export const developerChangeRequests = pgTable("developer_change_requests", {
   relatedFindingKeysJson: jsonb("related_finding_keys_json").$type<string[]>(),
   blocking: boolean("blocking").notNull().default(false),
   approvalRequired: boolean("approval_required").notNull().default(false),
-  status: text("status", {
-    enum: ["open", "acknowledged", "in-progress", "resolved", "won't-fix"],
-  })
+  status: developerChangeRequestStatusEnum("status")
     .notNull()
     .default("open"),
   resolutionNote: text("resolution_note"),
-  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-  resolvedAt: text("resolved_at"),
+  createdAt: pgTimestampString("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: pgTimestampString("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  resolvedAt: pgTimestampString("resolved_at"),
 });
 
 export const taskOperatingModes = pgTable("task_operating_modes", {
@@ -1652,8 +1941,8 @@ export const taskOperatingModes = pgTable("task_operating_modes", {
   selectedTemplateId: text("selected_template_id"),
   scenarioKey: text("scenario_key"),
   source: text("source").notNull().default("task-override"),
-  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  createdAt: pgTimestampString("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: pgTimestampString("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
 export const bossDecisions = pgTable(
@@ -1663,13 +1952,13 @@ export const bossDecisions = pgTable(
     taskId: text("task_id")
       .notNull()
       .references(() => projectTreeNodes.id),
-    ts: text("ts").notNull(),
+    ts: pgTimestampString("ts").notNull(),
     decisionType: text("decision_type").notNull(),
     reason: text("reason").notNull(),
     confidence: doublePrecision("confidence"),
     stageKey: text("stage_key"),
     metadataJson: jsonb("metadata_json").$type<Record<string, unknown> | null>(),
-    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    createdAt: pgTimestampString("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   },
   (table) => [index("idx_boss_decisions_task_ts").on(table.taskId, table.ts)],
 );
@@ -1681,13 +1970,13 @@ export const humanEscalations = pgTable(
     taskId: text("task_id")
       .notNull()
       .references(() => projectTreeNodes.id),
-    ts: text("ts").notNull(),
+    ts: pgTimestampString("ts").notNull(),
     reason: text("reason").notNull(),
     status: text("status"),
     stageKey: text("stage_key"),
     requestedBy: text("requested_by"),
     metadataJson: jsonb("metadata_json").$type<Record<string, unknown> | null>(),
-    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    createdAt: pgTimestampString("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   },
   (table) => [index("idx_human_escalations_task_ts").on(table.taskId, table.ts)],
 );

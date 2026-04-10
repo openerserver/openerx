@@ -86,9 +86,9 @@ async function queryCanonicalAgentRuns(whereClause: ReturnType<typeof postgresSq
       coalesce(
         nullif(op.summary_json->>'status', ''),
         case
-          when tsr.status = 'queued' then 'pending'
-          when tsr.status = 'cancelled' then 'terminated'
-          else tsr.status
+          when tsr.status::text = 'queued' then 'pending'
+          when tsr.status::text = 'cancelled' then 'terminated'
+          else tsr.status::text
         end
       ) as status,
       coalesce(nullif(op.summary_json->>'modelUsed', ''), tsr.model_route) as "modelUsed",

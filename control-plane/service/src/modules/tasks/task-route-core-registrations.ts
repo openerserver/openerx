@@ -5,6 +5,7 @@ import { buildTaskUpdates } from "./task-status-update";
 export function buildTaskCoreRegistrations(shared: ReturnType<typeof buildTaskRouteBuilderShared>) {
   const taskCreationApi = createTaskCreationApi({
     syncTaskAggregateFromSnapshot: shared.aggregateSyncApi.syncTaskAggregateFromSnapshot,
+    appendTaskDomainEvent: shared.sharedDeps.appendTaskDomainEvent,
   });
 
   return {

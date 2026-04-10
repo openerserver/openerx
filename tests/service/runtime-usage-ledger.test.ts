@@ -49,6 +49,7 @@ interface RuntimeUsageLedgerStepRecord {
   requestIndex: number;
   totalTokens: number;
   status: string;
+  finishedAt?: string | null;
 }
 
 async function request<T>(
@@ -302,6 +303,8 @@ describe("runtime usage ledger routes", () => {
           totalTokens: 180,
           costUsd: 0.18,
           status: "completed",
+          startedAt: "2026-03-17T11:00:00.000Z",
+          finishedAt: "2026-03-17T11:01:00.000Z",
         },
       },
     ];
@@ -364,6 +367,7 @@ describe("runtime usage ledger routes", () => {
       stepType: "judge",
       totalTokens: 180,
       status: "completed",
+      finishedAt: "2026-03-17T11:01:00.000Z",
     });
     expect(detailResult.data.breakdown.byStepType).toEqual({ judge: 1 });
   });

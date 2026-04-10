@@ -6,10 +6,15 @@ import { db } from "../../db";
 import { organizations, projectRoles, projects } from "../../db/schema";
 import { type AppEnv, authMiddleware } from "../../middleware/auth";
 import { requireRole } from "../../middleware/rbac";
+import { normalizeApiTimestampFields } from "../shared/api-timestamp";
 
 export const orgRoutes = new Hono<AppEnv>();
 
 orgRoutes.use("*", authMiddleware);
+
+function normalizeOrganizationRecord<T extends { createdAt?: string | null }>(org: T) {
+  return normalizeApiTimestampFields(org, ["createdAt"] as const);
+}
 
 const createOrgSchema = z.object({
   name: z.string().min(1).max(100),
@@ -27,7 +32,7 @@ orgRoutes.get("/", async (c) => {
 
   if (isGlobalAdmin) {
     const orgs = await db.query.organizations.findMany();
-    return c.json(orgs);
+    return c.json(orgs.map((org) => normalizeOrganizationRecord(org)));
   }
 
   const memberships = await db.query.projectRoles.findMany({
@@ -51,7 +56,7 @@ orgRoutes.get("/", async (c) => {
   const orgs = await db.query.organizations.findMany({
     where: inArray(organizations.id, orgIds),
   });
-  return c.json(orgs);
+  return c.json(orgs.map((org) => normalizeOrganizationRecord(org)));
 });
 
 // POST /api/orgs
@@ -62,7 +67,7 @@ orgRoutes.post("/", requireRole("org_admin"), zValidator("json", createOrgSchema
 
   await db.insert(organizations).values({ id, name, slug, createdAt });
 
-  return c.json({ id, name, slug, createdAt }, 201);
+  return c.json(normalizeOrganizationRecord({ id, name, slug, createdAt }), 201);
 });
 
 // GET /api/orgs/:orgId
@@ -89,5 +94,5 @@ orgRoutes.get("/:orgId", async (c) => {
   });
 
   if (!org) return c.json({ error: "Organization not found" }, 404);
-  return c.json(org);
+  return c.json(normalizeOrganizationRecord(org));
 });

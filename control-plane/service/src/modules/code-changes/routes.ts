@@ -7,11 +7,16 @@ import { codeChanges, fileChanges } from "../../db/schema";
 import { type AppEnv, authMiddleware } from "../../middleware/auth";
 import { requireRole } from "../../middleware/rbac";
 import { loadTaskTreeRecord } from "../project-tree/task-view";
+import { normalizeApiTimestampFields } from "../shared/api-timestamp";
 
 export const codeChangeRoutes = new Hono<AppEnv>();
 
 codeChangeRoutes.use("*", authMiddleware);
 codeChangeRoutes.use("*", requireRole("developer"));
+
+function normalizeCodeChangeRecord<T extends { createdAt?: string | null }>(change: T) {
+  return normalizeApiTimestampFields(change, ["createdAt"] as const);
+}
 
 // ── List changes for a task ────────────────────────────────────────
 
@@ -23,7 +28,7 @@ codeChangeRoutes.get("/tasks/:taskId/changes", async (c) => {
     .where(eq(codeChanges.taskId, taskId))
     .orderBy(desc(codeChanges.createdAt));
 
-  return c.json({ data: result });
+  return c.json({ data: result.map((change) => normalizeCodeChangeRecord(change)) });
 });
 
 // ── Get files for a specific change ────────────────────────────────

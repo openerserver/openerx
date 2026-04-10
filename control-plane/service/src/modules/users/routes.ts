@@ -7,6 +7,7 @@ import { projectRoles, projects, users } from "../../db/schema";
 import { type AppEnv, authMiddleware } from "../../middleware/auth";
 import { requireRole } from "../../middleware/rbac";
 import { recordAuditEvent } from "../audit/routes";
+import { normalizeApiTimestampFields } from "../shared/api-timestamp";
 import { validatePasswordPolicy } from "../shared/password-policy";
 
 export const userRoutes = new Hono<AppEnv>();
@@ -88,7 +89,7 @@ userRoutes.get("/", requireRole("org_admin"), async (c) => {
   }
 
   const result = allUsers.map((u) => ({
-    ...u,
+    ...normalizeApiTimestampFields(u, ["lockedUntil", "lastLoginAt", "createdAt"] as const),
     projects: membershipsByUser.get(u.id) ?? [],
   }));
 

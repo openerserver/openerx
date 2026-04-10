@@ -98,6 +98,16 @@ export function createTaskCreationApi(deps: {
   syncTaskAggregateFromSnapshot: (
     snapshot: ReturnType<typeof buildTaskTreeSnapshotFromCreateInput>,
   ) => Promise<unknown>;
+  appendTaskDomainEvent?: (args: {
+    projectId: string;
+    taskId: string;
+    runId?: string | null;
+    runNodeId?: string | null;
+    sessionId?: string | null;
+    eventType: string;
+    payload: Record<string, unknown>;
+    createdAt?: string;
+  }) => Promise<unknown>;
 }) {
   async function validateTaskCreateInput(body: CreateTaskInput) {
     const repoValidation = await validateTaskRepository(body.projectId, body.repoId);
@@ -135,6 +145,23 @@ export function createTaskCreationApi(deps: {
 
     await upsertTaskTreeNode(snapshot);
     await deps.syncTaskAggregateFromSnapshot(snapshot);
+    if (deps.appendTaskDomainEvent) {
+      await deps.appendTaskDomainEvent({
+        projectId: body.projectId,
+        taskId,
+        eventType: "task.aggregate.upserted",
+        payload: {
+          status: snapshot.status,
+          executionMode: snapshot.executionMode,
+          selectedModel: snapshot.selectedModel,
+          currentSessionId: snapshot.sessionId,
+          resultSummary: null,
+          latestErrorText: null,
+          lastActivityAt: snapshot.createdAt,
+        },
+        createdAt: snapshot.createdAt,
+      });
+    }
 
     const normalizedRelations = expandCreateTaskRelations({
       taskId,

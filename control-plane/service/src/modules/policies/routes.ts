@@ -5,6 +5,7 @@ import { z } from "zod";
 import { db } from "../../db";
 import { policyTemplates, projects } from "../../db/schema";
 import { type AppEnv, type JWTPayload, authMiddleware } from "../../middleware/auth";
+import { normalizeApiTimestampFields } from "../shared/api-timestamp";
 
 export const policyRoutes = new Hono<AppEnv>();
 
@@ -34,6 +35,10 @@ const ROLE_HIERARCHY: Record<ProjectRole, number> = {
   viewer: 1,
 };
 
+function normalizePolicyRecord<T extends { createdAt?: string | null }>(policy: T) {
+  return normalizeApiTimestampFields(policy, ["createdAt"] as const);
+}
+
 function hasProjectAccess(user: JWTPayload, projectId: string, minRole: ProjectRole) {
   const globalLevel = ROLE_HIERARCHY[user.role as ProjectRole] ?? 0;
   if (globalLevel >= ROLE_HIERARCHY.org_admin) {
@@ -60,7 +65,7 @@ policyRoutes.get("/", async (c) => {
   const result = await db.query.policyTemplates.findMany({
     where: eq(policyTemplates.projectId, projectId),
   });
-  return c.json(result);
+  return c.json(result.map((policy) => normalizePolicyRecord(policy)));
 });
 
 // POST /api/policies
@@ -89,7 +94,7 @@ policyRoutes.post("/", zValidator("json", createPolicySchema), async (c) => {
     createdAt,
   });
 
-  return c.json({ id, ...body, createdAt }, 201);
+  return c.json(normalizePolicyRecord({ id, ...body, createdAt }), 201);
 });
 
 // PATCH /api/policies/:policyId

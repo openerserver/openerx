@@ -3,6 +3,7 @@ import { and, asc, desc, eq, gt, inArray, lte, or, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 import { db } from "../../db";
+import { findUniqueConstraintMatch } from "../../db/unique-conflict";
 import {
   type ProjectSettings,
   type ProjectTreeLinkType,
@@ -38,12 +39,24 @@ import {
   getProjectRootNodeId,
 } from "../project-tree/storage";
 import { loadTaskTreeRecords } from "../project-tree/task-view";
+import { normalizeApiTimestamp, normalizeApiTimestampFields } from "../shared/api-timestamp";
 import { resolvePublicTaskStatus } from "../tasks/public-task-status";
 import { fromStoredTaskExecutionMode } from "../tasks/task-execution-mode";
 
 export const projectRoutes = new Hono<AppEnv>();
 
 projectRoutes.use("*", authMiddleware);
+
+function isProjectSlugConflict(error: unknown) {
+  return findUniqueConstraintMatch(error, ["idx_projects_org_slug"]) === "idx_projects_org_slug";
+}
+
+function isProjectMemberConflict(error: unknown) {
+  return (
+    findUniqueConstraintMatch(error, ["idx_project_roles_user_project"]) ===
+    "idx_project_roles_user_project"
+  );
+}
 
 const approvalPolicyModeSchema = z.enum(["balanced", "strict", "manual"]);
 
@@ -248,13 +261,31 @@ function normalizeProjectSettings(settings: unknown): ProjectSettings | null | u
   return settings as ProjectSettings;
 }
 
-function normalizeProjectRecord<T extends { settings?: unknown }>(
+function normalizeComparableTimestamp(value: string | null | undefined) {
+  const normalized = normalizeApiTimestamp(value);
+  if (!normalized) {
+    return null;
+  }
+
+  const timestamp = Date.parse(normalized);
+  return Number.isNaN(timestamp) ? null : timestamp;
+}
+
+function normalizeProjectRecord<
+  T extends {
+    settings?: unknown;
+    createdAt?: string | null;
+    updatedAt?: string | null;
+  },
+>(
   project: T,
 ): Omit<T, "settings"> & {
   settings?: ProjectSettings | null;
 } {
+  const normalized = normalizeApiTimestampFields(project, ["createdAt", "updatedAt"] as const);
+
   return {
-    ...project,
+    ...normalized,
     settings: normalizeProjectSettings(project.settings),
   };
 }
@@ -359,10 +390,10 @@ function normalizeLeaseRecord(lease: typeof paidExecutionLeases.$inferSelect) {
     revokedByUserId: lease.revokedByUserId,
     reason: lease.reason,
     status: lease.status,
-    expiresAt: lease.expiresAt,
-    createdAt: lease.createdAt,
-    updatedAt: lease.updatedAt,
-    revokedAt: lease.revokedAt,
+    expiresAt: normalizeApiTimestamp(lease.expiresAt),
+    createdAt: normalizeApiTimestamp(lease.createdAt),
+    updatedAt: normalizeApiTimestamp(lease.updatedAt),
+    revokedAt: normalizeApiTimestamp(lease.revokedAt),
   };
 }
 
@@ -390,11 +421,11 @@ function normalizeRuntimeUsageLedgerRecord(ledger: typeof runtimeUsageLedgers.$i
     judgeRequestCount: ledger.judgeRequestCount,
     hookRequestCount: ledger.hookRequestCount,
     status: ledger.status,
-    startedAt: ledger.startedAt,
-    finishedAt: ledger.finishedAt,
-    syncedAt: ledger.syncedAt,
-    createdAt: ledger.createdAt,
-    updatedAt: ledger.updatedAt,
+    startedAt: normalizeApiTimestamp(ledger.startedAt),
+    finishedAt: normalizeApiTimestamp(ledger.finishedAt),
+    syncedAt: normalizeApiTimestamp(ledger.syncedAt),
+    createdAt: normalizeApiTimestamp(ledger.createdAt),
+    updatedAt: normalizeApiTimestamp(ledger.updatedAt),
   };
 }
 
@@ -421,10 +452,10 @@ function normalizeRuntimeUsageLedgerStepRecord(step: typeof runtimeUsageLedgerSt
     costUsd: step.costUsd,
     amplificationSource: step.amplificationSource,
     status: step.status,
-    startedAt: step.startedAt,
-    finishedAt: step.finishedAt,
-    createdAt: step.createdAt,
-    updatedAt: step.updatedAt,
+    startedAt: normalizeApiTimestamp(step.startedAt),
+    finishedAt: normalizeApiTimestamp(step.finishedAt),
+    createdAt: normalizeApiTimestamp(step.createdAt),
+    updatedAt: normalizeApiTimestamp(step.updatedAt),
   };
 }
 
@@ -512,9 +543,21 @@ function normalizeRuntimeUsageBaselineRecord(
       p50: roundBaselineValue(baseline.p50CostUsd),
       p90: roundBaselineValue(baseline.p90CostUsd),
     },
-    lastLedgerAt: baseline.lastLedgerAt || null,
-    generatedAt: baseline.generatedAt,
+    lastLedgerAt: normalizeApiTimestamp(baseline.lastLedgerAt),
+    generatedAt: normalizeApiTimestamp(baseline.generatedAt) || baseline.generatedAt,
   };
+}
+
+function normalizeProjectTreeNodeRecord(node: typeof projectTreeNodes.$inferSelect) {
+  return normalizeApiTimestampFields(node, ["createdAt", "updatedAt", "archivedAt"] as const);
+}
+
+function normalizeProjectTreeBranchRecord(branch: typeof projectTreeBranches.$inferSelect) {
+  return normalizeApiTimestampFields(branch, ["createdAt", "updatedAt"] as const);
+}
+
+function normalizeProjectTreeLinkRecord(link: typeof projectTreeLinks.$inferSelect) {
+  return normalizeApiTimestampFields(link, ["createdAt"] as const);
 }
 
 function buildRuntimeUsageBaselineId(args: {
@@ -751,6 +794,20 @@ async function rebuildRuntimeUsageBaseline(args: {
 
 async function getActivePaidExecutionLease(projectId: string) {
   const now = new Date().toISOString();
+  await db
+    .update(paidExecutionLeases)
+    .set({
+      status: "expired",
+      updatedAt: now,
+    })
+    .where(
+      and(
+        eq(paidExecutionLeases.projectId, projectId),
+        eq(paidExecutionLeases.status, "active"),
+        lte(paidExecutionLeases.expiresAt, now),
+      ),
+    );
+
   const activeLease = await db.query.paidExecutionLeases.findFirst({
     where: and(
       eq(paidExecutionLeases.projectId, projectId),
@@ -759,24 +816,6 @@ async function getActivePaidExecutionLease(projectId: string) {
     ),
     orderBy: [desc(paidExecutionLeases.createdAt)],
   });
-
-  const staleLease = await db.query.paidExecutionLeases.findFirst({
-    where: and(
-      eq(paidExecutionLeases.projectId, projectId),
-      eq(paidExecutionLeases.status, "active"),
-    ),
-    orderBy: [desc(paidExecutionLeases.createdAt)],
-  });
-
-  if (!activeLease && staleLease && staleLease.expiresAt <= now) {
-    await db
-      .update(paidExecutionLeases)
-      .set({
-        status: "expired",
-        updatedAt: now,
-      })
-      .where(eq(paidExecutionLeases.id, staleLease.id));
-  }
 
   return {
     now,
@@ -1248,26 +1287,40 @@ function getProjectLastActivity(
   timelineViewsForProject: Array<Pick<typeof taskTimelineViews.$inferSelect, "sortAt">>,
 ) {
   let lastActivityAt: string | null = null;
+  let lastActivityTime: number | null = null;
 
   for (const task of projectTasks) {
-    const timestamp = task.lastActivityAt || task.finishedAt || task.startedAt || task.createdAt;
-    if (timestamp && (!lastActivityAt || timestamp > lastActivityAt)) {
+    const timestamp = normalizeApiTimestamp(
+      task.lastActivityAt || task.finishedAt || task.startedAt || task.createdAt,
+    );
+    const timestampTime = normalizeComparableTimestamp(timestamp);
+    if (timestamp && timestampTime != null && (lastActivityTime == null || timestampTime > lastActivityTime)) {
       lastActivityAt = timestamp;
+      lastActivityTime = timestampTime;
     }
   }
 
   for (const item of timelineViewsForProject) {
-    if (item.sortAt && (!lastActivityAt || item.sortAt > lastActivityAt)) {
-      lastActivityAt = item.sortAt;
+    const sortAt = normalizeApiTimestamp(item.sortAt);
+    const sortAtTime = normalizeComparableTimestamp(sortAt);
+    if (sortAt && sortAtTime != null && (lastActivityTime == null || sortAtTime > lastActivityTime)) {
+      lastActivityAt = sortAt;
+      lastActivityTime = sortAtTime;
     }
   }
 
-  const projectUpdatedAt = (project as { updatedAt?: string }).updatedAt;
-  if (projectUpdatedAt && (!lastActivityAt || projectUpdatedAt > lastActivityAt)) {
+  const projectUpdatedAt = normalizeApiTimestamp((project as { updatedAt?: string }).updatedAt);
+  const projectUpdatedAtTime = normalizeComparableTimestamp(projectUpdatedAt);
+  if (
+    projectUpdatedAt &&
+    projectUpdatedAtTime != null &&
+    (lastActivityTime == null || projectUpdatedAtTime > lastActivityTime)
+  ) {
     lastActivityAt = projectUpdatedAt;
+    lastActivityTime = projectUpdatedAtTime;
   }
 
-  return lastActivityAt || project.createdAt;
+  return lastActivityAt || normalizeApiTimestamp(project.createdAt);
 }
 
 function getProjectOverviewResources(
@@ -1451,7 +1504,7 @@ function buildOverviewItem(
     currentUserRole,
     isCurrentUserManager:
       hasGlobalProjectAccess(user) || dependencies.userRoleMap.get(project.id) === "project_admin",
-    createdAt: project.createdAt,
+    createdAt: normalizeApiTimestamp(project.createdAt) ?? project.createdAt,
   };
 }
 
@@ -1742,15 +1795,30 @@ projectRoutes.post(
     });
     if (!org) return c.json({ error: "Organization not found" }, 404);
 
-    await db.insert(projects).values({
-      id,
-      orgId: body.orgId,
-      name: body.name,
-      slug: body.slug,
-      description: body.description,
-      settings: body.settings,
-      createdAt,
+    const existingBySlug = await db.query.projects.findFirst({
+      where: and(eq(projects.orgId, body.orgId), eq(projects.slug, body.slug)),
     });
+    if (existingBySlug) {
+      return c.json({ error: "A project with this slug already exists in the organization" }, 409);
+    }
+
+    try {
+      await db.insert(projects).values({
+        id,
+        orgId: body.orgId,
+        name: body.name,
+        slug: body.slug,
+        description: body.description,
+        settings: body.settings,
+        createdAt,
+      });
+    } catch (error) {
+      if (isProjectSlugConflict(error)) {
+        return c.json({ error: "A project with this slug already exists in the organization" }, 409);
+      }
+
+      throw error;
+    }
 
     await db.insert(projectRoles).values({
       id: crypto.randomUUID(),
@@ -1792,7 +1860,7 @@ projectRoutes.get("/:projectId/tree", requireProjectRole("projectId", "viewer"),
     .where(and(...conditions))
     .orderBy(asc(projectTreeNodes.depth), asc(projectTreeNodes.createdAt));
 
-  return c.json({ data: nodes });
+  return c.json({ data: nodes.map(normalizeProjectTreeNodeRecord) });
 });
 
 projectRoutes.get(
@@ -1810,7 +1878,7 @@ projectRoutes.get(
       return c.json({ error: "Tree node not found" }, 404);
     }
 
-    return c.json(node);
+    return c.json(normalizeProjectTreeNodeRecord(node));
   },
 );
 
@@ -1835,7 +1903,7 @@ projectRoutes.get(
       .where(and(eq(projectTreeNodes.projectId, projectId), eq(projectTreeNodes.parentId, nodeId)))
       .orderBy(asc(projectTreeNodes.createdAt));
 
-    return c.json({ data: children });
+    return c.json({ data: children.map(normalizeProjectTreeNodeRecord) });
   },
 );
 
@@ -1864,7 +1932,7 @@ projectRoutes.post(
       archivedAt: body.archivedAt ?? null,
     });
 
-    return c.json(created, 201);
+    return c.json(normalizeProjectTreeNodeRecord(created), 201);
   },
 );
 
@@ -1894,7 +1962,7 @@ projectRoutes.get(
       )
       .orderBy(asc(projectTreeNodes.depth), asc(projectTreeNodes.createdAt));
 
-    return c.json({ data: ancestors });
+    return c.json({ data: ancestors.map(normalizeProjectTreeNodeRecord) });
   },
 );
 
@@ -1907,7 +1975,7 @@ projectRoutes.get("/:projectId/branches", requireProjectRole("projectId", "viewe
     .where(eq(projectTreeBranches.projectId, projectId))
     .orderBy(desc(projectTreeBranches.isDefault), asc(projectTreeBranches.branchName));
 
-  return c.json({ data: branches });
+  return c.json({ data: branches.map(normalizeProjectTreeBranchRecord) });
 });
 
 projectRoutes.put(
@@ -1960,7 +2028,7 @@ projectRoutes.put(
       where: eq(projectTreeBranches.id, branchId),
     });
 
-    return c.json(updated);
+    return c.json(updated ? normalizeProjectTreeBranchRecord(updated) : updated);
   },
 );
 
@@ -1988,7 +2056,7 @@ projectRoutes.get(
 
     return c.json({
       data: links.map((link) => ({
-        ...link,
+        ...normalizeProjectTreeLinkRecord(link),
         direction:
           link.sourceNodeId === nodeId
             ? link.targetNodeId === nodeId
@@ -2063,18 +2131,21 @@ projectRoutes.post(
     });
 
     return c.json(
-      {
-        id,
-        sourceNodeId: nodeId,
-        sourceProjectId: projectId,
-        targetNodeId: body.targetNodeId,
-        targetProjectId,
-        linkType: body.linkType,
-        metadata: body.metadata ?? null,
-        bidirectional: body.bidirectional ?? false,
-        createdBy: user.sub,
-        createdAt,
-      },
+      normalizeApiTimestampFields(
+        {
+          id,
+          sourceNodeId: nodeId,
+          sourceProjectId: projectId,
+          targetNodeId: body.targetNodeId,
+          targetProjectId,
+          linkType: body.linkType,
+          metadata: body.metadata ?? null,
+          bidirectional: body.bidirectional ?? false,
+          createdBy: user.sub,
+          createdAt,
+        },
+        ["createdAt"] as const,
+      ),
       201,
     );
   },
@@ -2094,7 +2165,7 @@ projectRoutes.get("/:projectId/links", requireProjectRole("projectId", "viewer")
     )
     .orderBy(desc(projectTreeLinks.createdAt));
 
-  return c.json({ data: links });
+  return c.json({ data: links.map(normalizeProjectTreeLinkRecord) });
 });
 
 projectRoutes.delete(
@@ -2140,7 +2211,7 @@ projectRoutes.get("/:projectId/members", requireProjectRole("projectId", "viewer
     .innerJoin(users, eq(projectRoles.userId, users.id))
     .where(eq(projectRoles.projectId, projectId));
 
-  return c.json(members);
+  return c.json(members.map((member) => normalizeApiTimestampFields(member, ["createdAt"] as const)));
 });
 
 // GET /api/projects/:projectId/members/candidates
@@ -2168,7 +2239,11 @@ projectRoutes.get(
       },
     });
 
-    return c.json(allUsers.filter((user) => !existingUserIds.has(user.id)));
+    return c.json(
+      allUsers
+        .filter((user) => !existingUserIds.has(user.id))
+        .map((user) => normalizeApiTimestampFields(user, ["createdAt"] as const)),
+    );
   },
 );
 
@@ -2195,23 +2270,34 @@ projectRoutes.post(
     });
     if (existing) return c.json({ error: "User is already a project member" }, 409);
 
-    await db.insert(projectRoles).values({
-      id: crypto.randomUUID(),
-      projectId,
-      userId: body.userId,
-      role: body.role,
-    });
+    try {
+      await db.insert(projectRoles).values({
+        id: crypto.randomUUID(),
+        projectId,
+        userId: body.userId,
+        role: body.role,
+      });
+    } catch (error) {
+      if (isProjectMemberConflict(error)) {
+        return c.json({ error: "User is already a project member" }, 409);
+      }
+
+      throw error;
+    }
 
     return c.json(
-      {
-        userId: user.id,
-        projectId,
-        role: body.role,
-        username: user.username,
-        displayName: user.displayName,
-        globalRole: user.role,
-        createdAt: user.createdAt,
-      },
+      normalizeApiTimestampFields(
+        {
+          userId: user.id,
+          projectId,
+          role: body.role,
+          username: user.username,
+          displayName: user.displayName,
+          globalRole: user.role,
+          createdAt: user.createdAt,
+        },
+        ["createdAt"] as const,
+      ),
       201,
     );
   },
@@ -2763,6 +2849,7 @@ projectRoutes.patch(
     const nextSettings = body.settings
       ? { ...existingSettings, ...body.settings }
       : existingSettings;
+    const updatedAt = new Date().toISOString();
 
     await db
       .update(projects)
@@ -2770,7 +2857,7 @@ projectRoutes.patch(
         ...(body.name && { name: body.name }),
         ...(body.description !== undefined && { description: body.description }),
         ...(body.settings && { settings: nextSettings }),
-        updatedAt: new Date().toISOString(),
+        updatedAt,
       })
       .where(eq(projects.id, projectId));
 
@@ -2780,6 +2867,7 @@ projectRoutes.patch(
         ...body,
         id: projectId,
         settings: body.settings ? nextSettings : existingSettings,
+        updatedAt,
       }),
     );
   },

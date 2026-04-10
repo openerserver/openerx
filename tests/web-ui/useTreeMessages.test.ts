@@ -29,6 +29,76 @@ vi.mock("../../control-plane/web-ui/src/composables/useTaskMessageStore", () => 
   }),
 }));
 
+type Deferred<T> = {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+};
+
+function createDeferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((nextResolve) => {
+    resolve = nextResolve;
+  });
+
+  return {
+    promise,
+    resolve,
+  };
+}
+
+function buildMessage(args: {
+  id: string;
+  sessionId: string;
+  role: "user" | "assistant" | "tool";
+  text: string;
+  createdAt: string;
+}) {
+  return {
+    id: args.id,
+    sessionId: args.sessionId,
+    taskId: "task-1",
+    runtimeMessageId: args.id,
+    role: args.role,
+    status: "completed",
+    messageIndex: 0,
+    textContent: args.text,
+    summaryText: args.text,
+    createdAt: args.createdAt,
+    updatedAt: args.createdAt,
+    rawPayload: {
+      info: {
+        id: args.id,
+        role: args.role,
+        time: {
+          created: args.createdAt,
+          completed: args.createdAt,
+        },
+      },
+      parts: [
+        {
+          type: "text",
+          text: args.text,
+        },
+      ],
+    },
+    parts: [
+      {
+        id: `${args.id}:part:0`,
+        messageId: args.id,
+        partIndex: 0,
+        type: "text",
+        textContent: args.text,
+        rawPayload: {
+          type: "text",
+          text: args.text,
+        },
+        createdAt: args.createdAt,
+        updatedAt: args.createdAt,
+      },
+    ],
+  };
+}
+
 describe("useTreeMessages", () => {
   let scope: ReturnType<typeof effectScope> | null = null;
 
@@ -140,5 +210,89 @@ describe("useTreeMessages", () => {
       role: "assistant",
       isStreaming: true,
     });
+  });
+
+  it("ignores stale task-wide responses after a newer session-scoped refresh", async () => {
+    const taskWideResponse = createDeferred<{
+      data: unknown[];
+      meta: { sessionId?: string };
+    }>();
+    const scopedResponse = createDeferred<{
+      data: unknown[];
+      meta: { sessionId?: string };
+    }>();
+
+    getTaskMessagesMock
+      .mockReset()
+      .mockImplementationOnce(() => taskWideResponse.promise)
+      .mockImplementationOnce(() => scopedResponse.promise);
+
+    const { composable, sessionId } = mountComposableWithoutExplicitSession();
+
+    expect(getTaskMessagesMock).toHaveBeenNthCalledWith(1, "task-1", {
+      sessionId: undefined,
+      includeLineage: undefined,
+    });
+
+    sessionId.value = "session-current";
+    await nextTick();
+
+    expect(getTaskMessagesMock).toHaveBeenNthCalledWith(2, "task-1", {
+      sessionId: "session-current",
+      includeLineage: undefined,
+    });
+
+    scopedResponse.resolve({
+      data: [
+        buildMessage({
+          id: "assistant-current",
+          sessionId: "session-current",
+          role: "assistant",
+          text: "current-session reply",
+          createdAt: "2026-04-10T08:00:00.000Z",
+        }),
+      ],
+      meta: { sessionId: "session-current" },
+    });
+    await flushPromises();
+    await nextTick();
+
+    expect(composable.conversationItems.value).toMatchObject([
+      {
+        key: "assistant-current",
+        role: "assistant",
+        text: "current-session reply",
+      },
+    ]);
+    expect(composable.trace.value?.sessionId).toBe("session-current");
+
+    taskWideResponse.resolve({
+      data: [
+        buildMessage({
+          id: "assistant-task-wide",
+          sessionId: "session-task-wide",
+          role: "assistant",
+          text: "task-wide duplicate reply",
+          createdAt: "2026-04-10T07:59:00.000Z",
+        }),
+      ],
+      meta: {},
+    });
+    await flushPromises();
+    await nextTick();
+
+    expect(composable.conversationItems.value).toMatchObject([
+      {
+        key: "assistant-current",
+        role: "assistant",
+        text: "current-session reply",
+      },
+    ]);
+    expect(
+      composable.conversationItems.value.some(
+        (item) => item.role === "assistant" && item.text === "task-wide duplicate reply",
+      ),
+    ).toBe(false);
+    expect(composable.trace.value?.sessionId).toBe("session-current");
   });
 });

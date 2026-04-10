@@ -1,10 +1,12 @@
 import { zValidator } from "@hono/zod-validator";
-import { eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 import { db } from "../../db";
+import { findUniqueConstraintMatch } from "../../db/unique-conflict";
 import { environments, projects } from "../../db/schema";
 import { type AppEnv, type JWTPayload, authMiddleware } from "../../middleware/auth";
+import { normalizeApiTimestampFields } from "../shared/api-timestamp";
 
 export const envRoutes = new Hono<AppEnv>();
 
@@ -33,6 +35,10 @@ const ROLE_HIERARCHY: Record<ProjectRole, number> = {
   viewer: 1,
 };
 
+function normalizeEnvironmentRecord<T extends { createdAt?: string | null }>(environment: T) {
+  return normalizeApiTimestampFields(environment, ["createdAt"] as const);
+}
+
 function hasProjectAccess(user: JWTPayload, projectId: string, minRole: ProjectRole) {
   const globalLevel = ROLE_HIERARCHY[user.role as ProjectRole] ?? 0;
   if (globalLevel >= ROLE_HIERARCHY.org_admin) {
@@ -44,6 +50,13 @@ function hasProjectAccess(user: JWTPayload, projectId: string, minRole: ProjectR
     | undefined;
   const projectLevel = projectRole ? ROLE_HIERARCHY[projectRole] : 0;
   return projectLevel >= ROLE_HIERARCHY[minRole];
+}
+
+function isEnvironmentNameConflict(error: unknown) {
+  return (
+    findUniqueConstraintMatch(error, ["idx_environments_project_name"]) ===
+    "idx_environments_project_name"
+  );
 }
 
 // GET /api/envs?projectId=
@@ -59,7 +72,7 @@ envRoutes.get("/", async (c) => {
   const result = await db.query.environments.findMany({
     where: eq(environments.projectId, projectId),
   });
-  return c.json(result);
+  return c.json(result.map((environment) => normalizeEnvironmentRecord(environment)));
 });
 
 // POST /api/envs
@@ -79,16 +92,31 @@ envRoutes.post("/", zValidator("json", createEnvSchema), async (c) => {
     return c.json({ error: "Insufficient project permissions" }, 403);
   }
 
-  await db.insert(environments).values({
-    id,
-    projectId: body.projectId,
-    name: body.name,
-    riskLevel: body.riskLevel,
-    requiresApproval: body.requiresApproval,
-    createdAt,
+  const existingByName = await db.query.environments.findFirst({
+    where: and(eq(environments.projectId, body.projectId), eq(environments.name, body.name)),
   });
+  if (existingByName) {
+    return c.json({ error: "An environment with this name already exists in the project" }, 409);
+  }
 
-  return c.json({ id, ...body, createdAt }, 201);
+  try {
+    await db.insert(environments).values({
+      id,
+      projectId: body.projectId,
+      name: body.name,
+      riskLevel: body.riskLevel,
+      requiresApproval: body.requiresApproval,
+      createdAt,
+    });
+  } catch (error) {
+    if (isEnvironmentNameConflict(error)) {
+      return c.json({ error: "An environment with this name already exists in the project" }, 409);
+    }
+
+    throw error;
+  }
+
+  return c.json(normalizeEnvironmentRecord({ id, ...body, createdAt }), 201);
 });
 
 // PATCH /api/envs/:envId
@@ -106,14 +134,35 @@ envRoutes.patch("/:envId", zValidator("json", updateEnvSchema), async (c) => {
     return c.json({ error: "Insufficient project permissions" }, 403);
   }
 
-  await db
-    .update(environments)
-    .set({
-      ...(body.name !== undefined ? { name: body.name } : {}),
-      ...(body.riskLevel !== undefined ? { riskLevel: body.riskLevel } : {}),
-      ...(body.requiresApproval !== undefined ? { requiresApproval: body.requiresApproval } : {}),
-    })
-    .where(eq(environments.id, envId));
+  if (body.name && body.name !== existing.name) {
+    const duplicate = await db.query.environments.findFirst({
+      where: and(
+        eq(environments.projectId, existing.projectId),
+        eq(environments.name, body.name),
+        ne(environments.id, envId),
+      ),
+    });
+    if (duplicate) {
+      return c.json({ error: "An environment with this name already exists in the project" }, 409);
+    }
+  }
+
+  try {
+    await db
+      .update(environments)
+      .set({
+        ...(body.name !== undefined ? { name: body.name } : {}),
+        ...(body.riskLevel !== undefined ? { riskLevel: body.riskLevel } : {}),
+        ...(body.requiresApproval !== undefined ? { requiresApproval: body.requiresApproval } : {}),
+      })
+      .where(eq(environments.id, envId));
+  } catch (error) {
+    if (isEnvironmentNameConflict(error)) {
+      return c.json({ error: "An environment with this name already exists in the project" }, 409);
+    }
+
+    throw error;
+  }
 
   return c.json({
     id: envId,

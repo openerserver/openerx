@@ -24,12 +24,12 @@ const USERNAME = process.env.TEST_USERNAME || "admin";
 const PASSWORD = process.env.TEST_PASSWORD || "admin123!";
 const DB_PATH =
   process.env.TEST_DB_PATH || resolve(__dirname, "../../control-plane/service/data/openerx.db");
-const DATABASE_URL =
-  process.env.TEST_DATABASE_URL || process.env.DATABASE_URL || "postgres://127.0.0.1:5432/openerx";
+const DATABASE_URL = process.env.TEST_DATABASE_URL || "postgres://127.0.0.1:5432/openerx";
 const DATABASE_DIALECT =
   process.env.TEST_DATABASE_DIALECT ||
-  process.env.DATABASE_DIALECT ||
-  (/^(postgres|postgresql):\/\//i.test(DATABASE_URL) ? "postgres" : "sqlite");
+  (/^(postgres|postgresql):\/\//i.test(DATABASE_URL)
+    ? "postgres"
+    : "sqlite");
 
 // ── Helpers ────────────────────────────────────────────────────────
 
@@ -125,6 +125,7 @@ beforeAll(async () => {
 
 describe("Credential CRUD", () => {
   let credId = "";
+  let replacementCredId = "";
 
   test("POST create credential", async () => {
     const { data, status } = await authedRequest<{ id: string; label: string; status: string }>(
@@ -168,6 +169,8 @@ describe("Credential CRUD", () => {
     expect(found?.gitAuthorEmail).toBe("bot@test.openerx.dev");
     expect(found?.scope).toBe("project");
     expect(found?.isDefault).toBe(true);
+    expect(found?.createdAt).toEqual(expect.stringMatching(/Z$/));
+    expect(found?.updatedAt).toEqual(expect.stringMatching(/Z$/));
     // secretRef should NOT be in list response fields
     // (list uses explicit select, which excludes secretRef)
   });
@@ -181,8 +184,47 @@ describe("Credential CRUD", () => {
     expect(status).toBe(200);
     expect(data.id).toBe(credId);
     expect(data.secretRefMasked).toBe("***");
+    expect(data.createdAt).toEqual(expect.stringMatching(/Z$/));
+    expect(data.updatedAt).toEqual(expect.stringMatching(/Z$/));
     // Raw secretRef must NOT appear
     expect(data.secretRef).toBeUndefined();
+  });
+
+  test("POST new project default clears previous default in same scope", async () => {
+    const { data, status } = await authedRequest<{ id: string; label: string; status: string }>(
+      token,
+      `/api/projects/${PROJECT_ID}/credentials`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          label: "replacement-default-cred",
+          provider: "github",
+          credentialType: "pat",
+          secretRef: "vault://test/replacement-default-ref",
+          gitAuthorName: "Replacement Bot",
+          gitAuthorEmail: "replacement@test.openerx.dev",
+          scope: "project",
+          isDefault: true,
+        }),
+      },
+    );
+
+    expect(status).toBe(201);
+    replacementCredId = data.id;
+    createdCredentialIds.push(replacementCredId);
+
+    const { data: credentials } = await authedRequest<{ data: Array<Record<string, unknown>> }>(
+      token,
+      `/api/projects/${PROJECT_ID}/credentials`,
+    );
+
+    const original = credentials.data.find((credential) => credential.id === credId);
+    const replacement = credentials.data.find(
+      (credential) => credential.id === replacementCredId,
+    );
+
+    expect(original?.isDefault).toBe(false);
+    expect(replacement?.isDefault).toBe(true);
   });
 
   test("PATCH update credential label and gitAuthorEmail", async () => {
@@ -200,6 +242,7 @@ describe("Credential CRUD", () => {
 
     expect(status).toBe(200);
     expect(data.label).toBe("updated-cred-label");
+    expect(data.isDefault).toBe(false);
 
     // Verify the update persisted
     const { data: updated } = await authedRequest<Record<string, unknown>>(
@@ -208,6 +251,35 @@ describe("Credential CRUD", () => {
     );
     expect(updated.label).toBe("updated-cred-label");
     expect(updated.gitAuthorEmail).toBe("updated@test.openerx.dev");
+  });
+
+  test("PATCH credential can reclaim project default and clear the replacement", async () => {
+    const { data, status } = await authedRequest<Record<string, unknown>>(
+      token,
+      `/api/projects/${PROJECT_ID}/credentials/${credId}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({
+          isDefault: true,
+        }),
+      },
+    );
+
+    expect(status).toBe(200);
+    expect(data.isDefault).toBe(true);
+
+    const { data: credentials } = await authedRequest<{ data: Array<Record<string, unknown>> }>(
+      token,
+      `/api/projects/${PROJECT_ID}/credentials`,
+    );
+
+    const original = credentials.data.find((credential) => credential.id === credId);
+    const replacement = credentials.data.find(
+      (credential) => credential.id === replacementCredId,
+    );
+
+    expect(original?.isDefault).toBe(true);
+    expect(replacement?.isDefault).toBe(false);
   });
 
   test("DELETE (revoke) credential sets status to revoked", async () => {
@@ -226,6 +298,7 @@ describe("Credential CRUD", () => {
       `/api/projects/${PROJECT_ID}/credentials/${credId}`,
     );
     expect(revoked.status).toBe("revoked");
+    expect(revoked.isDefault).toBe(false);
   });
 
   test("GET credential for non-existent returns 404", async () => {
@@ -327,14 +400,6 @@ describe("Task Identity Fields", () => {
   });
 
   test("PATCH task with post-execution facts", async () => {
-    const changesSummary = {
-      filesAdded: 3,
-      filesModified: 5,
-      filesDeleted: 1,
-      totalInsertions: 120,
-      totalDeletions: 45,
-    };
-
     const { data, status } = await authedRequest<Record<string, unknown>>(
       token,
       `/api/tasks/${taskId}`,
@@ -344,7 +409,6 @@ describe("Task Identity Fields", () => {
           status: "completed",
           finalCommitSha: "abc123def456",
           finalBranchName: "feature/identity-test",
-          changesSummary,
         }),
       },
     );
@@ -352,7 +416,7 @@ describe("Task Identity Fields", () => {
     expect(status).toBe(200);
     expect(data.finalCommitSha).toBe("abc123def456");
     expect(data.finalBranchName).toBe("feature/identity-test");
-    expect(data.changesSummary).toEqual(changesSummary);
+    expect(data.finishedAt).toBeTruthy();
   });
 
   test("GET task detail includes post-execution facts", async () => {
@@ -365,9 +429,6 @@ describe("Task Identity Fields", () => {
     expect(data.finalCommitSha).toBe("abc123def456");
     expect(data.finalBranchName).toBe("feature/identity-test");
     expect(data.finishedAt).toBeTruthy();
-    const summary = data.changesSummary as Record<string, number>;
-    expect(summary.filesAdded).toBe(3);
-    expect(summary.totalInsertions).toBe(120);
   });
 
   test("POST task rejects invalid credentialId", async () => {
@@ -494,6 +555,7 @@ describe("Code Changes Recording", () => {
     expect(change?.commitMessage).toBe("feat: add identity binding support");
     expect(change?.branchName).toBe("feature/identity");
     expect(change?.changeSource).toBe("runtime_diff");
+    expect(change?.createdAt).toEqual(expect.stringMatching(/Z$/));
   });
 
   test("GET file changes for a specific change", async () => {

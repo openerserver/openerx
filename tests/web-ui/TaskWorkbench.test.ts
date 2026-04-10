@@ -241,23 +241,24 @@ describe("TaskWorkbench regression", () => {
     expect(wrapper.text()).not.toContain("待采纳");
   });
 
-  it("renders the reverted single-pane layout and does not show multi-pane composer UI", async () => {
+  it("renders the single-pane layout without the unused member strip", async () => {
     const { wrapper, workbench } = await mountWorkbench();
 
     workbench.openTask("task-primary", "主任务", "running");
     await nextTick();
     await flushPromises();
 
-    expect(wrapper.text()).toContain("主视图协作");
-    expect(wrapper.text()).toContain("项目管理员");
-    expect(wrapper.text()).toContain("Coder Agent");
-    expect(wrapper.text()).toContain("主视图");
     expect(wrapper.text()).toContain("主任务");
     expect(wrapper.text()).toContain("加入主窗");
     expect(wrapper.text()).toContain("加入副窗");
+    expect(wrapper.text()).not.toContain("经典");
+    expect(wrapper.text()).not.toContain("V3");
+    expect(wrapper.text()).not.toContain("主视图协作");
+    expect(wrapper.text()).not.toContain("主视图");
     expect(wrapper.text()).not.toContain("待分配窗口");
     expect(wrapper.text()).not.toContain("选择模型");
     expect(wrapper.text()).not.toContain("⌘+Enter");
+    expect(wrapper.get(".task-workbench-pane").text()).toBe("");
     expect(wrapper.findAll("iframe")).toHaveLength(1);
     expect(wrapper.find("iframe").attributes("src")).toBe(
       "/tasks/task-primary?embedded=1&workbench=1",
@@ -274,14 +275,26 @@ describe("TaskWorkbench regression", () => {
     await flushPromises();
 
     expect(wrapper.text()).toContain("副窗协作");
-    expect(wrapper.text()).toContain("主窗");
     expect(wrapper.text()).toContain("副窗");
     expect(wrapper.text()).toContain("设为主窗");
     expect(wrapper.text()).toContain("退出分屏");
+    expect(wrapper.findAll(".task-workbench-pane")[0]?.text()).toBe("");
     const frames = wrapper.findAll("iframe");
     expect(frames).toHaveLength(2);
     expect(frames[0]?.attributes("src")).toBe("/tasks/task-primary?embedded=1&workbench=1");
     expect(frames[1]?.attributes("src")).toBe("/tasks/task-secondary?embedded=1&workbench=1");
+  });
+
+  it("stretches the workbench shell to the available viewport height", async () => {
+    const { wrapper, workbench } = await mountWorkbench();
+
+    workbench.openTask("task-primary", "主任务", "running");
+    await nextTick();
+    await flushPromises();
+
+    expect(wrapper.get(".task-workbench-page").attributes("style")).toContain("min-height: 100dvh");
+    expect(wrapper.get(".task-workbench-shell").attributes("style")).toContain("display: flex");
+    expect(wrapper.get("iframe").attributes("style")).toContain("flex: 1 1 auto");
   });
 
   it("keeps workbench tabs in a single-line overflow layout for long labels", async () => {

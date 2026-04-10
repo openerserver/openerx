@@ -97,7 +97,7 @@ afterAll(async () => {
     await safeSql("DELETE FROM task_operations WHERE task_id = $1", [taskId]);
     await safeSql("DELETE FROM task_snapshots WHERE task_id = $1", [taskId]);
     await safeSql(
-      "UPDATE task_sessions SET status = 'archived', archived_at = COALESCE(archived_at, CURRENT_TIMESTAMP::text), source_message_id = NULL, head_message_id = NULL, latest_run_id = NULL, winner_session_id = NULL, judge_session_id = NULL WHERE task_id = $1",
+      "UPDATE task_sessions SET status = 'archived', archived_at = COALESCE(archived_at, CURRENT_TIMESTAMP), source_message_id = NULL, head_message_id = NULL, latest_run_id = NULL, winner_session_id = NULL, judge_session_id = NULL WHERE task_id = $1",
       [taskId],
     );
     await safeSql(

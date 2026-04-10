@@ -6,11 +6,18 @@ import { db } from "../../db";
 import { workflowTemplateStages, workflowTemplates } from "../../db/schema";
 import { type AppEnv, authMiddleware } from "../../middleware/auth";
 import { requireRole } from "../../middleware/rbac";
+import { normalizeApiTimestampFields } from "../shared/api-timestamp";
 
 export const workflowTemplateRoutes = new Hono<AppEnv>();
 
 workflowTemplateRoutes.use("*", authMiddleware);
 workflowTemplateRoutes.use("*", requireRole("org_admin"));
+
+function normalizeWorkflowTemplateRecord<
+  T extends { createdAt?: string | null; updatedAt?: string | null } & Record<string, unknown>,
+>(template: T) {
+  return normalizeApiTimestampFields(template, ["createdAt", "updatedAt"] as const);
+}
 
 const workflowTemplateSchema = z.object({
   id: z.string().min(1),
@@ -103,7 +110,7 @@ workflowTemplateRoutes.get("/", async (c) => {
     .select()
     .from(workflowTemplates)
     .where(projectId ? eq(workflowTemplates.projectId, projectId) : undefined);
-  return c.json({ data: rows });
+  return c.json({ data: rows.map((template) => normalizeWorkflowTemplateRecord(template)) });
 });
 
 workflowTemplateRoutes.post("/", zValidator("json", workflowTemplateSchema), async (c) => {
@@ -132,7 +139,7 @@ workflowTemplateRoutes.post("/", zValidator("json", workflowTemplateSchema), asy
   const created = await db.query.workflowTemplates.findFirst({
     where: eq(workflowTemplates.id, body.id),
   });
-  return c.json(created, 201);
+  return c.json(created ? normalizeWorkflowTemplateRecord(created) : created, 201);
 });
 
 workflowTemplateRoutes.patch(
@@ -168,7 +175,7 @@ workflowTemplateRoutes.patch(
       where: eq(workflowTemplates.id, templateId),
     });
     if (!updated) return c.json({ error: "Workflow template not found" }, 404);
-    return c.json(updated);
+    return c.json(normalizeWorkflowTemplateRecord(updated));
   },
 );
 

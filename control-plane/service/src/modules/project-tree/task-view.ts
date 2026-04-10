@@ -8,6 +8,7 @@ import {
   taskSnapshots,
   tasks,
 } from "../../db/schema";
+import { normalizeApiTimestamp } from "../shared/api-timestamp";
 import { fromStoredTaskExecutionMode } from "../tasks/task-execution-mode";
 import {
   normalizePublicTaskStatusValue,
@@ -124,6 +125,8 @@ function resolveTaskStrategyFields(args: MapTaskTreeNodeArgs) {
 }
 
 function resolveTaskIdentityFields(args: MapTaskTreeNodeArgs) {
+  const createdAt = args.aggregate?.createdAt ?? args.node.createdAt;
+
   return {
     id: args.node.id,
     projectId: args.aggregate?.projectId ?? args.snapshot?.projectId ?? args.node.projectId,
@@ -131,7 +134,7 @@ function resolveTaskIdentityFields(args: MapTaskTreeNodeArgs) {
     title: args.aggregate?.title ?? args.node.contentText ?? args.node.id,
     prompt: args.aggregate?.prompt ?? "",
     category: normalizeTaskCategory(args.aggregate?.category),
-    createdAt: args.aggregate?.createdAt ?? args.node.createdAt,
+    createdAt: normalizeApiTimestamp(createdAt) ?? createdAt,
   };
 }
 
@@ -170,6 +173,9 @@ function resolveTaskRunFields(
   const snapshotSessionId = args.snapshot?.currentSessionId
     ? (args.sessionRuntimeIds.get(args.snapshot.currentSessionId) ?? null)
     : null;
+  const startedAt = args.aggregate?.activatedAt ?? null;
+  const finishedAt = args.aggregate?.doneAt ?? null;
+  const lastActivityAt = args.snapshot?.lastActivityAt ?? null;
 
   return {
     status: resolveSnapshotTaskStatus(args.snapshot, args.aggregate),
@@ -180,8 +186,8 @@ function resolveTaskRunFields(
     strategy: strategyFields.strategy,
     executionMode: strategyFields.executionMode,
     autoAdvanceStages: strategyFields.autoAdvanceStages,
-    startedAt: args.aggregate?.activatedAt ?? null,
-    finishedAt: args.aggregate?.doneAt ?? null,
+    startedAt: normalizeApiTimestamp(startedAt),
+    finishedAt: normalizeApiTimestamp(finishedAt),
     orchestrationKind: mapOrchestrationKindToExecutionMode(args.snapshot?.currentExecutionMode),
     currentRunId: refs.currentRunId,
     currentRunStatus: normalizePublicTaskStatusValue(args.snapshot?.currentExecutionStatus),
@@ -192,7 +198,7 @@ function resolveTaskRunFields(
     latestResultSummary:
       args.snapshot?.latestResultSummary ?? null,
     latestErrorText: args.snapshot?.latestErrorText ?? null,
-    lastActivityAt: args.snapshot?.lastActivityAt ?? null,
+    lastActivityAt: normalizeApiTimestamp(lastActivityAt),
   };
 }
 

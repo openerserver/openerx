@@ -281,6 +281,76 @@
       "when": 1775001900000,
       "tag": "0039_drop_coordination_key_columns",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1775001960000,
+      "tag": "0040_business_uniqueness_guards",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1775002020000,
+      "tag": "0041_pg_authority_and_task_time_types",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1775002080000,
+      "tag": "0042_execution_status_queued",
+      "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1775002140000,
+      "tag": "0043_workflow_governance_type_tightening",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1775002200000,
+      "tag": "0044_runtime_governance_time_types",
+      "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1775002260000,
+      "tag": "0045_task_domain_events_canonical_reconcile",
+      "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1775002320000,
+      "tag": "0046_identity_repository_project_tree_time_types",
+      "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1775002380000,
+      "tag": "0047_metadata_foundation_time_types",
+      "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1775002440000,
+      "tag": "0048_residual_time_type_closure",
+      "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1775002500000,
+      "tag": "0049_task_orchestration_enum_closure",
+      "breakpoints": true
     }
   ]
 }

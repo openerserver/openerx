@@ -6,18 +6,30 @@ import { db } from "../../db";
 import { plugins } from "../../db/schema";
 import { type AppEnv, authMiddleware } from "../../middleware/auth";
 import { requireRole } from "../../middleware/rbac";
+import { normalizeApiTimestampFields } from "../shared/api-timestamp";
 
 export const pluginRoutes = new Hono<AppEnv>();
 
 pluginRoutes.use("*", authMiddleware);
 pluginRoutes.use("*", requireRole("developer"));
 
+function normalizePluginRecord<
+  T extends {
+    id?: string;
+    createdAt?: string | null;
+    updatedAt?: string | null;
+    lastVerifiedAt?: string | null;
+  },
+>(plugin: T) {
+  return normalizeApiTimestampFields(plugin, ["createdAt", "updatedAt", "lastVerifiedAt"] as const);
+}
+
 // ── List Plugins ───────────────────────────────────────────────────
 
 pluginRoutes.get("/", async (c) => {
   const result = await db.select().from(plugins).orderBy(desc(plugins.createdAt));
 
-  return c.json({ data: result });
+  return c.json({ data: result.map((plugin) => normalizePluginRecord(plugin)) });
 });
 
 // ── Get Plugin ─────────────────────────────────────────────────────
@@ -29,7 +41,7 @@ pluginRoutes.get("/:pluginId", async (c) => {
   });
 
   if (!plugin) return c.json({ error: "Plugin not found" }, 404);
-  return c.json(plugin);
+  return c.json(normalizePluginRecord(plugin));
 });
 
 // ── Register Plugin ────────────────────────────────────────────────
@@ -87,5 +99,5 @@ pluginRoutes.patch("/:pluginId", zValidator("json", updatePluginSchema), async (
 
   await db.update(plugins).set(updates).where(eq(plugins.id, pluginId));
 
-  return c.json({ id: pluginId, ...updates });
+  return c.json(normalizePluginRecord({ id: pluginId, ...updates }));
 });

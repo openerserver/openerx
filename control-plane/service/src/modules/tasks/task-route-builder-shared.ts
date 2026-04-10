@@ -103,6 +103,20 @@ async function replayTaskDomainProjectionsByProject(projectId: string) {
   return projector.replayTaskDomainProjectionsByProject(projectId);
 }
 
+async function appendTaskDomainEvent(args: {
+  projectId: string;
+  taskId: string;
+  runId?: string | null;
+  runNodeId?: string | null;
+  sessionId?: string | null;
+  eventType: string;
+  payload: Record<string, unknown>;
+  createdAt?: string;
+}) {
+  const projector = await import("./task-domain-projector");
+  return projector.appendTaskDomainEvent(args);
+}
+
 /**
  * Resolve taskId + projectId from a runtime session ID.
  * Checks task_sessions unique index on runtime_session_id.
@@ -130,6 +144,7 @@ export function buildTaskRouteBuilderShared() {
     archiveTaskBranchCompatTreeNode,
     resolveTaskSessionRecord,
     resolveTaskSessionRecordByRuntimeSessionId,
+    appendTaskDomainEvent,
     replayTaskDomainProjections,
     replayTaskDomainProjectionsByProject,
   };

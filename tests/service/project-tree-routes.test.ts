@@ -144,7 +144,7 @@ afterAll(async () => {
     ]);
     await sql.unsafe("DELETE FROM task_snapshots WHERE task_id = $1", [taskId]);
     await safeSql(
-      "UPDATE task_sessions SET status = 'archived', archived_at = COALESCE(archived_at, CURRENT_TIMESTAMP::text), source_message_id = NULL, head_message_id = NULL, latest_run_id = NULL, winner_session_id = NULL, judge_session_id = NULL WHERE task_id = $1",
+      "UPDATE task_sessions SET status = 'archived', archived_at = COALESCE(archived_at, CURRENT_TIMESTAMP), source_message_id = NULL, head_message_id = NULL, latest_run_id = NULL, winner_session_id = NULL, judge_session_id = NULL WHERE task_id = $1",
       [taskId],
     );
     await safeSql(
@@ -221,7 +221,13 @@ describe("project tree routes", () => {
   test("supports ancestors lookup and link deletion", async () => {
     const task = await createTask(`tree-links-${Date.now()}`);
 
-    const contextNode = await authedRequest<{ id: string; nodeType: string }>(
+    const contextNode = await authedRequest<{
+      id: string;
+      nodeType: string;
+      createdAt: string;
+      updatedAt: string;
+      archivedAt: string | null;
+    }>(
       `/api/projects/${PROJECT_ID}/tree/${PROJECT_ROOT_NODE_ID}/children`,
       {
         method: "POST",
@@ -235,6 +241,9 @@ describe("project tree routes", () => {
 
     expect(contextNode.status).toBe(201);
     createdNodeIds.add(contextNode.data.id);
+  expect(contextNode.data.createdAt).toMatch(/Z$/);
+  expect(contextNode.data.updatedAt).toMatch(/Z$/);
+  expect(contextNode.data.archivedAt).toBeNull();
 
     const ancestors = await authedRequest<{ data: Array<{ id: string }> }>(
       `/api/projects/${PROJECT_ID}/tree/${contextNode.data.id}/ancestors`,
@@ -250,6 +259,7 @@ describe("project tree routes", () => {
       id: string;
       sourceNodeId: string;
       targetNodeId: string;
+      createdAt: string;
     }>(`/api/projects/${PROJECT_ID}/tree/${task.nodeId}/links`, {
       method: "POST",
       body: JSON.stringify({
@@ -261,15 +271,17 @@ describe("project tree routes", () => {
 
     expect(createdLink.status).toBe(201);
     createdLinkIds.push(createdLink.data.id);
+    expect(createdLink.data.createdAt).toMatch(/Z$/);
 
     const taskLinks = await authedRequest<{
-      data: Array<{ id: string; direction: string; targetNodeId: string }>;
+      data: Array<{ id: string; direction: string; targetNodeId: string; createdAt: string }>;
     }>(`/api/projects/${PROJECT_ID}/tree/${task.nodeId}/links`);
 
     expect(taskLinks.status).toBe(200);
     expect(taskLinks.data.data).toContainEqual(
       expect.objectContaining({
         id: createdLink.data.id,
+        createdAt: expect.stringMatching(/Z$/),
         direction: "outgoing",
         targetNodeId: contextNode.data.id,
       }),
@@ -1773,7 +1785,7 @@ describe("project tree routes", () => {
     );
   });
 
-  test("merges tool-call assistant turns with identical final stop replies", async () => {
+  test("keeps legacy tool-call assistant turns with identical final stop replies as separate canonical messages", async () => {
     const unique = Date.now();
     const task = await createTask(`conversation-tool-call-merge-${unique}`);
     const runtimeSessionId = `ses_tool_merge_${unique}`;
@@ -1881,16 +1893,16 @@ describe("project tree routes", () => {
     expect(messages.data.meta).toEqual(
       expect.objectContaining({
         readSource: "task-session-first",
-        messageCount: 1,
+        messageCount: 2,
       }),
     );
-    expect(messages.data.data).toHaveLength(1);
+    expect(messages.data.data).toHaveLength(2);
     expect(messages.data.data[0]).toMatchObject({
       role: "assistant",
       textContent: replyText,
       rawPayload: expect.objectContaining({
         info: expect.objectContaining({
-          finish: "stop",
+          finish: "tool-calls",
         }),
       }),
     });
@@ -1909,6 +1921,15 @@ describe("project tree routes", () => {
         }),
       }),
     );
+    expect(messages.data.data[1]).toMatchObject({
+      role: "assistant",
+      textContent: replyText,
+      rawPayload: expect.objectContaining({
+        info: expect.objectContaining({
+          finish: "stop",
+        }),
+      }),
+    });
 
     const taskMessages = await queryNormalizedConversation<{
       data: Array<Record<string, unknown>>;
@@ -1919,14 +1940,14 @@ describe("project tree routes", () => {
     expect(taskMessages.data.meta).toEqual(
       expect.objectContaining({
         readSource: "task-session-first",
-        messageCount: 1,
+        messageCount: 2,
       }),
     );
-    expect(taskMessages.data.data).toHaveLength(1);
-    expect(taskMessages.data.data[0]).toMatchObject({
-      role: "assistant",
-      textContent: replyText,
-    });
+    expect(taskMessages.data.data).toHaveLength(2);
+    expect(taskMessages.data.data.map((message) => message.textContent)).toEqual([
+      replyText,
+      replyText,
+    ]);
   });
 
   test("merges normalized tool_call assistant turns with identical final stop replies", async () => {
@@ -2517,7 +2538,7 @@ describe("project tree routes", () => {
     ]);
   });
 
-  test("returns execution trace detail with executor and judge session operations", async () => {
+  test("returns execution trace detail with executor and judge session operations without auto-closing parallel snapshot", async () => {
     const task = await createTask(`domain-run-detail-${Date.now()}`);
     const rootRuntimeSessionId = `ses_domain_run_${Date.now()}`;
     const sessionRecordId = taskSessionId(task.id, rootRuntimeSessionId);
@@ -2621,10 +2642,11 @@ describe("project tree routes", () => {
     expect(detail.data.data.snapshot).toEqual(
       expect.objectContaining({
         currentExecutionMode: "parallel",
+        currentExecutionStatus: "running",
         currentSessionId: sessionRecordId,
         latestSessionId: sessionRecordId,
-        latestResultSummary: "candidate 2 is stronger",
-        lifecycleStatus: "done",
+        latestResultSummary: null,
+        lifecycleStatus: "active",
       }),
     );
     expect(detail.data.data.operations).toEqual(

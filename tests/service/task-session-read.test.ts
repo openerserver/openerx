@@ -758,6 +758,89 @@ describe("task session read API", () => {
     });
   });
 
+  test("buildTaskConversationMessagesResponse normalizes PG-style message and part timestamps", async () => {
+    const sessionId = "task-session:task-1:session-1";
+    const { createTaskSessionReadApi } = await loadTaskSessionReadModule({
+      sessionRows: [
+        {
+          id: sessionId,
+          taskId: "task-1",
+          parentSessionId: null,
+          runtimeSessionId: "session-1",
+          coordinationKey: sessionId,
+          createdAt: "2026-03-27T00:00:00.000Z",
+        },
+      ],
+      messageRows: [
+        {
+          id: "db-message-pg-1",
+          taskId: "task-1",
+          sessionId,
+          runtimeMessageId: "runtime-message-pg-1",
+          role: "assistant",
+          status: "completed",
+          clientMessageId: "cli-pg-1",
+          providerMessageId: "provider-pg-1",
+          seq: 0,
+          textContent: "pg timestamp body",
+          textPreview: "pg timestamp body",
+          rawPayload: { info: { role: "assistant" } },
+          tokenUsed: 0,
+          startedAt: "2026-03-27 00:00:00+00",
+          completedAt: "2026-03-27 00:00:02+00",
+          errorText: null,
+          createdAt: "2026-03-27 00:00:01+00",
+          updatedAt: "2026-03-27 00:00:03+00",
+        },
+      ],
+      partRows: [
+        {
+          id: "db-part-pg-1",
+          messageId: "db-message-pg-1",
+          partIndex: 0,
+          partType: "text",
+          textContent: "pg timestamp body",
+          jsonPayload: { type: "text", text: "pg timestamp body" },
+          createdAt: "2026-03-27 00:00:01+00",
+        },
+      ],
+      snapshot: {
+        taskId: "task-1",
+        currentSessionId: "session-1",
+      },
+    });
+
+    const api = createTaskSessionReadApi({
+      loadTaskTreeBackedRecord: mock(async () => ({ id: "task-1", projectId: "project-1" })),
+    });
+
+    const response = await api.buildTaskConversationMessagesResponse({
+      taskId: "task-1",
+      includeLineage: true,
+    });
+
+    expect(response.ok).toBe(true);
+    if (!response.ok) {
+      return;
+    }
+
+    expect(response.data.data).toEqual([
+      expect.objectContaining({
+        id: "db-message-pg-1",
+        startedAt: "2026-03-27T00:00:00.000Z",
+        completedAt: "2026-03-27T00:00:02.000Z",
+        createdAt: "2026-03-27T00:00:01.000Z",
+        updatedAt: "2026-03-27T00:00:03.000Z",
+        parts: [
+          expect.objectContaining({
+            id: "db-part-pg-1",
+            createdAt: "2026-03-27T00:00:01.000Z",
+          }),
+        ],
+      }),
+    ]);
+  });
+
   test("buildTaskConversationMessagesResponse returns an empty message set when canonical task messages are absent", async () => {
     const sessionId = "task-session:task-1:session-1";
     const { createTaskSessionReadApi } = await loadTaskSessionReadModule({

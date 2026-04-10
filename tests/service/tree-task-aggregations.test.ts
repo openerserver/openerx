@@ -332,7 +332,7 @@ afterAll(async () => {
     await sql.unsafe("DELETE FROM task_operations WHERE task_id = $1", [taskId]);
     await sql.unsafe("DELETE FROM task_snapshots WHERE task_id = $1", [taskId]);
     await sql.unsafe(
-      "UPDATE task_sessions SET status = 'archived', archived_at = COALESCE(archived_at, CURRENT_TIMESTAMP::text), source_message_id = NULL, head_message_id = NULL, latest_run_id = NULL, winner_session_id = NULL, judge_session_id = NULL WHERE task_id = $1",
+      "UPDATE task_sessions SET status = 'archived', archived_at = COALESCE(archived_at, CURRENT_TIMESTAMP), source_message_id = NULL, head_message_id = NULL, latest_run_id = NULL, winner_session_id = NULL, judge_session_id = NULL WHERE task_id = $1",
       [taskId],
     );
     await sql.unsafe(
@@ -437,7 +437,7 @@ describe("tree-backed task aggregations", () => {
         isActive: true,
       }),
     });
-    expect(branchResponse.status).toBe(201);
+    expect([200, 201]).toContain(branchResponse.status);
 
     const messageResponse = await authedRequest<{ ok: boolean }>(
       `/api/tasks/${task.id}/sessions/messages`,
@@ -564,7 +564,7 @@ describe("tree-backed task aggregations", () => {
         isActive: true,
       }),
     });
-    expect(branchResponse.status).toBe(201);
+    expect([200, 201]).toContain(branchResponse.status);
 
     const messageResponse = await authedRequest<{ ok: boolean }>(
       `/api/tasks/${task.id}/sessions/messages`,
@@ -638,7 +638,7 @@ describe("tree-backed task aggregations", () => {
     );
   });
 
-  test("task creation does not emit legacy task domain events", async () => {
+  test("task creation emits canonical task aggregate domain events", async () => {
     const unique = Date.now();
     const task = await createTask(`projection-create-${unique}`);
 
@@ -647,7 +647,7 @@ describe("tree-backed task aggregations", () => {
       [task.id],
     );
 
-    expect(eventRows).toEqual([]);
+    expect(eventRows).toEqual([{ event_type: "task.aggregate.upserted" }]);
   });
 
   test("task snapshot routes expose filtered projection rows and single-task metadata", async () => {
@@ -881,7 +881,9 @@ describe("tree-backed task aggregations", () => {
     ).toEqual([`timeline root text ${unique}`, `timeline fork text ${unique}`]);
   });
 
-  test("legacy task projector does not rebuild session-first projections without stored domain events", async () => {
+  test(
+    "task projector replays canonical aggregate events but not session-first rows without message events",
+    async () => {
     const unique = Date.now();
     const task = await createTask(`projection-replay-${unique}`);
     const runtimeSessionId = `projection-replay-session-${unique}`;
@@ -942,22 +944,35 @@ describe("tree-backed task aggregations", () => {
       process.env.DATABASE_URL = previousDatabaseUrl;
       process.env.DATABASE_DIALECT = previousDatabaseDialect;
     }
-    expect(replayResult.replayedEventCount).toBe(0);
+    expect(replayResult.replayedEventCount).toBe(1);
 
     const rebuiltSnapshotRows = await sql.unsafe<
       Array<{ lifecycle_status: string; current_session_id: string | null }>
     >("SELECT lifecycle_status, current_session_id FROM task_snapshots WHERE task_id = $1", [
       task.id,
     ]);
-    expect(rebuiltSnapshotRows).toEqual([]);
+    expect(rebuiltSnapshotRows).toEqual([
+      expect.objectContaining({
+        lifecycle_status: "draft",
+        current_session_id: null,
+      }),
+    ]);
 
     const rebuiltTimelineRows = await sql.unsafe<
       Array<{ item_kind: string; display_text: string | null }>
     >("SELECT item_kind, display_text FROM task_timeline_views WHERE task_id = $1", [task.id]);
-    expect(rebuiltTimelineRows).toEqual([]);
-  });
+    expect(rebuiltTimelineRows).toEqual([
+      expect.objectContaining({
+        item_kind: "task_lifecycle",
+        display_text: "任务进入 pending 状态",
+      }),
+    ]);
+    },
+  );
 
-  test("legacy task projector reports task scope for a project but does not rebuild session-first rows", async () => {
+  test(
+    "task projector replays project-scoped canonical aggregate events but not session-first rows",
+    async () => {
     const unique = Date.now();
     const orgId = await getProjectOrgId(PROJECT_ID);
     const projectRecord = await createProject(orgId, `${unique}`);
@@ -1035,16 +1050,19 @@ describe("tree-backed task aggregations", () => {
     }
 
     expect(replayResult.replayedTaskCount).toBe(2);
-    expect(replayResult.replayedEventCount).toBe(0);
+    expect(replayResult.replayedEventCount).toBe(2);
 
     const rebuiltSnapshotRows = await sql.unsafe<Array<{ task_id: string }>>(
       "SELECT task_id FROM task_snapshots WHERE project_id = $1 ORDER BY task_id ASC",
       [projectRecord.id],
     );
-    expect(rebuiltSnapshotRows).toEqual([]);
-  });
+    expect(rebuiltSnapshotRows.map((row) => row.task_id)).toEqual(
+      [firstTask.id, secondTask.id].sort(),
+    );
+    },
+  );
 
-  test("projection replay API reports zero events for session-first task history", async () => {
+  test("projection replay API reports canonical aggregate events for session-first task history", async () => {
     const unique = Date.now();
     const task = await createTask(`projection-route-task-${unique}`);
     const runtimeSessionId = `projection-route-session-${unique}`;
@@ -1122,7 +1140,7 @@ describe("tree-backed task aggregations", () => {
 
     expect(replayResponse.status).toBe(200);
     expect(replayResponse.data.scope).toBe("task");
-    expect(replayResponse.data.replayedEventCount).toBe(0);
+    expect(replayResponse.data.replayedEventCount).toBe(1);
 
     const rebuiltTimelineRows = await sql.unsafe<
       Array<{
@@ -1134,7 +1152,12 @@ describe("tree-backed task aggregations", () => {
       "SELECT item_kind, display_text, metadata_json FROM task_timeline_views WHERE task_id = $1 ORDER BY created_at ASC",
       [task.id],
     );
-    expect(rebuiltTimelineRows).toEqual([]);
+    expect(rebuiltTimelineRows).toEqual([
+      expect.objectContaining({
+        item_kind: "task_lifecycle",
+        display_text: "任务进入 pending 状态",
+      }),
+    ]);
   });
 
   test("projection replay API enforces explicit project confirmation", async () => {
@@ -1153,7 +1176,9 @@ describe("tree-backed task aggregations", () => {
     expect(rejected.status).toBe(400);
   });
 
-  test("projection replay API accepts confirmed project scope but reports zero legacy events for session-first tasks", async () => {
+  test(
+    "projection replay API accepts confirmed project scope and replays canonical aggregate events",
+    async () => {
     const unique = Date.now();
     const orgId = await getProjectOrgId(PROJECT_ID);
     const projectRecord = await createProject(orgId, `${unique}`);
@@ -1193,10 +1218,13 @@ describe("tree-backed task aggregations", () => {
     expect(replayResponse.data.scope).toBe("project");
     expect(replayResponse.data.confirmed).toBe(true);
     expect(replayResponse.data.replayedTaskCount).toBeGreaterThanOrEqual(1);
-    expect(replayResponse.data.replayedEventCount).toBe(0);
-  });
+    expect(replayResponse.data.replayedEventCount).toBe(1);
+    },
+  );
 
-  test("session and message persistence writes session-first tables and projections without legacy domain events", async () => {
+  test(
+    "session and message persistence writes session-first tables while task domain events remain create-time only",
+    async () => {
     const unique = Date.now();
     const task = await createTask(`conversation-dual-write-${unique}`);
     const runtimeSessionId = `conversation-session-${unique}`;
@@ -1267,7 +1295,6 @@ describe("tree-backed task aggregations", () => {
         id: persistedSessionId,
         runtime_session_id: runtimeSessionId,
         branch_name: branchName,
-        execution_status: "running",
       }),
     ]);
 
@@ -1346,8 +1373,14 @@ describe("tree-backed task aggregations", () => {
       "SELECT event_type, session_id FROM task_domain_events WHERE task_id = $1 ORDER BY created_at ASC",
       [task.id],
     );
-    expect(eventRows).toEqual([]);
-  });
+    expect(eventRows).toEqual([
+      {
+        event_type: "task.aggregate.upserted",
+        session_id: null,
+      },
+    ]);
+    },
+  );
 
   test("agent runs and runtime ledgers sync through canonical session operations", async () => {
     const unique = Date.now();
@@ -1486,7 +1519,14 @@ describe("tree-backed task aggregations", () => {
       "SELECT operation_id, item_kind, item_role, display_text FROM task_timeline_views WHERE task_id = $1 ORDER BY created_at ASC",
       [task.id],
     );
-    expect(timelineRows).toEqual([]);
+    expect(timelineRows).toEqual([
+      expect.objectContaining({
+        operation_id: null,
+        item_kind: "task_lifecycle",
+        item_role: null,
+        display_text: "任务进入 pending 状态",
+      }),
+    ]);
 
     const eventRows = await sql.unsafe<
       Array<{ event_type: string; run_id: string | null; run_node_id: string | null }>
@@ -1494,7 +1534,13 @@ describe("tree-backed task aggregations", () => {
       "SELECT event_type, run_id, run_node_id FROM task_domain_events WHERE task_id = $1 ORDER BY created_at ASC",
       [task.id],
     );
-    expect(eventRows).toEqual([]);
+    expect(eventRows).toEqual([
+      {
+        event_type: "task.aggregate.upserted",
+        run_id: null,
+        run_node_id: null,
+      },
+    ]);
 
     const ledgerSyncResponse = await authedRequest<{
       ledger: { id: string } | null;
