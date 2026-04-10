@@ -37,7 +37,6 @@ export type UpsertTaskSessionRecordArgs = {
   candidateIndex?: number | null;
   stepIndex?: number | null;
   selectedModel?: string | null;
-  coordinationKey?: string | null;
   operationId?: string | null;
 };
 
@@ -491,15 +490,12 @@ export function createTaskSessionWriteApi() {
       phaseId: context.phaseId,
       phaseRole: context.phaseRole,
       phaseItemIndex: context.phaseItemIndex,
-      coordinationKey: null,
       operationId: context.effectiveOperationId,
       sessionKind: context.sessionKind,
       triggerType: context.triggerType,
       executionModeSnapshot: context.executionModeSnapshot,
       executionStatus: mapTaskSessionExecutionStatus(context.args),
       branchName: context.branchName,
-      phaseRole: context.phaseRole,
-      phaseItemIndex: context.phaseItemIndex,
       candidateIndex: context.candidateIndex,
       stepIndex: context.stepIndex,
       runtimeSessionId: context.args.runtimeSessionId,
@@ -539,7 +535,6 @@ export function createTaskSessionWriteApi() {
       phaseId: context.phaseId,
       phaseRole: context.phaseRole,
       phaseItemIndex: context.phaseItemIndex,
-      coordinationKey: null,
       operationId: context.effectiveOperationId,
       sessionKind: context.sessionKind,
       triggerType: context.triggerType,
@@ -583,7 +578,6 @@ export function createTaskSessionWriteApi() {
       runtimeSessionId: context.args.runtimeSessionId,
       triggerType: mapTaskSessionTriggerTypeToRunTriggerType(context.triggerType),
       executionKind: mapTaskSessionKindToRunExecutionKind(context.sessionKind),
-      coordinationKey: null,
       operationId: context.effectiveOperationId,
       candidateIndex: context.candidateIndex,
       laneRole: mapTaskSessionKindToRunLaneRole(context.sessionKind),
@@ -611,7 +605,6 @@ export function createTaskSessionWriteApi() {
       runtimeSessionId: context.args.runtimeSessionId,
       triggerType: mapTaskSessionTriggerTypeToRunTriggerType(context.triggerType),
       executionKind: mapTaskSessionKindToRunExecutionKind(context.sessionKind),
-      coordinationKey: null,
       operationId: context.effectiveOperationId,
       candidateIndex: context.candidateIndex,
       laneRole: mapTaskSessionKindToRunLaneRole(context.sessionKind),

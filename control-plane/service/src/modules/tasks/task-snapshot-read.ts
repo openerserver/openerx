@@ -37,7 +37,7 @@ async function loadSnapshotSessionLookups(rows: Array<typeof taskSnapshots.$infe
       inArray(taskSessions.id, sessionIds),
       inArray(taskSessions.runtimeSessionId, sessionIds),
     ),
-    columns: { id: true, runtimeSessionId: true, phaseId: true, coordinationKey: true },
+    columns: { id: true, runtimeSessionId: true, phaseId: true },
   });
 
   const runtimeSessionIdById = new Map<string, string>();

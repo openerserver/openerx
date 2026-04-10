@@ -808,6 +808,70 @@ describe("Task conversation composables", () => {
     });
   });
 
+  it("keeps failed tool calls even when the tool part has no visible input or output details", () => {
+    const items = normalizeSessionConversationItems([
+      {
+        info: {
+          id: "failed-tool-only-assistant",
+          role: "assistant",
+          time: { completed: "2026-03-20T00:00:04.000Z" },
+        },
+        parts: [
+          {
+            type: "tool",
+            id: "failed-tool-call-1",
+            toolName: "bash",
+            state: {
+              status: "failed",
+            },
+          },
+        ],
+      },
+    ]);
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      role: "assistant",
+      toolCalls: [
+        expect.objectContaining({
+          kind: "bash",
+          label: "bash",
+          stateLabel: "失败",
+        }),
+      ],
+    });
+  });
+
+  it("preserves failed assistant message status and error text", () => {
+    const items = normalizeSessionConversationItems([
+      {
+        status: "failed",
+        errorText: "An unknown error occurred",
+        info: {
+          id: "failed-assistant-message",
+          role: "assistant",
+          finish: "error",
+          error: "An unknown error occurred",
+          time: { completed: "2026-03-20T00:00:04.000Z" },
+        },
+        parts: [
+          {
+            type: "text",
+            text: "我已展示了两个C文件的内容，现在问用户下一步做什么。",
+          },
+        ],
+      },
+    ]);
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      role: "assistant",
+      status: "failed",
+      errorText: "An unknown error occurred",
+      text: "我已展示了两个C文件的内容，现在问用户下一步做什么。",
+    });
+  });
+
   it("prefers richer tool snapshots when the same call is observed multiple times in one trace item", () => {
     const items = normalizeTraceConversationItems(
       {

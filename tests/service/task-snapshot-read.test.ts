@@ -47,7 +47,7 @@ async function loadTaskSnapshotReadModule(args: {
   sessionRows?: Array<{
     id: string;
     runtimeSessionId: string | null;
-    coordinationKey: string | null;
+    phaseId?: string | null;
   }>;
 }) {
   importCounter += 1;
@@ -91,7 +91,7 @@ async function loadTaskSnapshotReadModule(args: {
     taskSessions: {
       id: "id",
       runtimeSessionId: "runtimeSessionId",
-      coordinationKey: "coordinationKey",
+      phaseId: "phaseId",
     },
     taskSnapshots: {
       projectId: "projectId",
@@ -157,12 +157,10 @@ describe("task snapshot read", () => {
           id: "task-session:task-1:current",
           runtimeSessionId: "runtime-current",
           phaseId: "phase-current",
-          coordinationKey: "phase-current",
         },
         {
           id: "task-session:task-1:latest",
           runtimeSessionId: "runtime-latest",
-          coordinationKey: null,
         },
       ],
     });

@@ -76,7 +76,6 @@ CREATE TABLE IF NOT EXISTS task_session_runs (
   runtime_session_id text,
   trigger_type text NOT NULL,
   execution_kind text NOT NULL,
-  coordination_key text,
   candidate_index integer,
   lane_role text NOT NULL,
   executor_kind text NOT NULL,
@@ -116,8 +115,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_task_session_runs_runtime_session_id
   ON task_session_runs(runtime_session_id);
 CREATE INDEX IF NOT EXISTS idx_task_session_runs_task_session_created_at
   ON task_session_runs(task_id, session_id, created_at);
-CREATE INDEX IF NOT EXISTS idx_task_session_runs_task_coordination_created_at
-  ON task_session_runs(task_id, coordination_key, created_at);
 
 
 -- 3) task_messages: session 可见消息表

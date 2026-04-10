@@ -17,7 +17,6 @@ export interface TaskSessionLineageRecord {
   phaseId?: string | null;
   phaseRole?: string | null;
   phaseItemIndex?: number | null;
-  coordinationKey?: string | null;
   winnerSessionId?: string | null;
   executionStatus?: string | null;
   sessionKind?: string | null;
@@ -103,7 +102,6 @@ type ServiceTaskSessionRecord = {
   phaseId?: string | null;
   phaseRole?: string | null;
   phaseItemIndex?: number | null;
-  coordinationKey?: string | null;
   runtimeSessionId?: string | null;
   forkedFromMessageId?: string | null;
   branchName?: string | null;
@@ -195,7 +193,6 @@ function mapServiceTaskSessionsToLineageRecords(
           phaseId: session.phaseId,
           candidateIndex: session.candidateIndex,
           executionModeSnapshot: session.executionModeSnapshot,
-          coordinationKey: session.coordinationKey,
         }),
         isActive: currentSessionId
           ? session.id === currentSessionId
@@ -204,7 +201,6 @@ function mapServiceTaskSessionsToLineageRecords(
         phaseRole: session.phaseRole ?? null,
         phaseItemIndex:
           typeof session.phaseItemIndex === "number" ? session.phaseItemIndex : null,
-        coordinationKey: session.coordinationKey ?? null,
         winnerSessionId: session.winnerSessionId ?? null,
         executionStatus: session.executionStatus ?? null,
         sessionKind: session.sessionKind ?? null,

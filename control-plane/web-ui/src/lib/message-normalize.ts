@@ -16,6 +16,8 @@ export interface TaskConversationMessageItem {
   role: string;
   agent?: string;
   model?: string;
+  status?: string;
+  errorText?: string;
   text?: string;
   userInputText?: string;
   finalSentText?: string;
@@ -536,7 +538,17 @@ function buildToolInputPreview(input: Record<string, unknown>): string | undefin
   };
 
   appendLine("path", input.filePath ?? input.path);
+  appendLine("includePattern", input.includePattern);
   appendLine("query", input.query ?? input.pattern ?? input.url ?? input.urls);
+
+  const startLine = summarizeValue(input.startLine);
+  const endLine = summarizeValue(input.endLine);
+  if (startLine && endLine) {
+    lines.push(`range: ${startLine}-${endLine}`);
+  } else {
+    appendLine("startLine", input.startLine);
+    appendLine("endLine", input.endLine);
+  }
 
   const patchPaths = firstPatchFilePath(input);
   if (patchPaths) {
@@ -612,6 +624,10 @@ function hasVisibleToolSignal(args: {
   );
 }
 
+function shouldPreserveToolCallWithoutVisibleSignal(status?: string) {
+  return status === "error" || status === "failed";
+}
+
 function buildToolCall(
   part: Record<string, unknown>,
   index: number,
@@ -648,7 +664,8 @@ function buildToolCall(
       filePath: derivedFilePath,
       inputPreview,
       outputPreview,
-    })
+    }) &&
+    !shouldPreserveToolCallWithoutVisibleSignal(status)
   ) {
     return null;
   }
@@ -787,6 +804,7 @@ export function normalizeMessage(
   const role = asString(info?.role) ?? asString(record?.role) ?? "system";
   const key = asString(info?.id) ?? asString(record?.id) ?? `${role}-${index}`;
   const toolCalls = normalizeToolCalls(parts);
+  const isStreaming = role === "assistant" && liveState.incompleteIds.has(key);
   const persistedText =
     normalizeText(parts) ??
     asString(record?.textContent) ??
@@ -798,11 +816,25 @@ export function normalizeMessage(
   const liveText = liveState.textById.get(key);
   const text =
     liveText && liveText.length > (persistedText?.length ?? 0) ? liveText : persistedText;
+  const status =
+    asString(record?.status) ??
+    asString(info?.status) ??
+    (asString(info?.finish) === "error" || asString(info?.finish) === "failed"
+      ? "failed"
+      : isStreaming
+        ? "running"
+        : hasCompletedTimestamp(asRecord(info?.time)?.completed)
+          ? "completed"
+          : undefined);
+  const errorText =
+    asString(record?.errorText) ??
+    asString(info?.error) ??
+    asString(asRecord(info?.error)?.message);
 
   if (
     !text &&
     toolCalls.length === 0 &&
-    !(role === "assistant" && liveState.incompleteIds.has(key))
+    !isStreaming
   ) {
     return null;
   }
@@ -812,6 +844,8 @@ export function normalizeMessage(
     role,
     agent: asString(info?.agent),
     model: asString(asRecord(info?.model)?.modelID) ?? asString(info?.modelID),
+    status,
+    errorText,
     text,
     userInputText: asString(record?.userInputText),
     finalSentText: asString(record?.finalSentText),
@@ -821,7 +855,7 @@ export function normalizeMessage(
       parseTimestamp(asRecord(info?.time)?.completed) ??
       parseTimestamp(record?.createdAt),
     raw: message,
-    isStreaming: role === "assistant" && liveState.incompleteIds.has(key),
+    isStreaming,
   };
 }
 

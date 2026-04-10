@@ -39,7 +39,7 @@ export async function buildTaskProjectionTimelineViewResponse(args: {
     filters.push(inArray(taskTimelineViews.sessionId, lineagePath));
   }
 
-  const timelineRows = (await db
+  const timelineRows = await db
     .select({
       id: taskTimelineViews.id,
       taskId: taskTimelineViews.taskId,
@@ -59,7 +59,7 @@ export async function buildTaskProjectionTimelineViewResponse(args: {
     })
     .from(taskTimelineViews)
     .where(and(...filters))
-    .orderBy(asc(taskTimelineViews.sortAt), asc(taskTimelineViews.createdAt))) as TaskProjectionTimelineRow[];
+    .orderBy(asc(taskTimelineViews.sortAt), asc(taskTimelineViews.createdAt));
 
   const data = dedupeTaskToolTimelineRows(timelineRows, sessionRows);
 

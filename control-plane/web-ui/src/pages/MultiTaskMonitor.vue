@@ -289,7 +289,11 @@
                     <span class="monitor-stream-message__skeleton-dot"></span>
                   </div>
                   <div v-if="message.toolCalls.length" class="monitor-tool-summary-list">
-                    <div class="monitor-tool-summary-title">{{ monitorToolGroupTitle(message.toolCalls) }}</div>
+                    <div class="monitor-tool-summary-title">工具调用</div>
+                    <div class="monitor-tool-summary-primary">{{ monitorToolSummary(message.toolCalls).primary }}</div>
+                    <div v-if="monitorToolSummaryMeta(message.toolCalls)" class="monitor-tool-summary-meta">
+                      {{ monitorToolSummaryMeta(message.toolCalls) }}
+                    </div>
                     <div
                       v-for="tool in message.toolCalls.slice(0, 2)"
                       :key="tool.key"
@@ -338,6 +342,7 @@ import {
   type LiveAssistantState,
 } from "../lib/message-normalize";
 import { resolveTaskDisplayStatus } from "../lib/task-display-status";
+import { summarizeToolCalls, toolCallText } from "../lib/task-tool-call-display";
 import { normalizeWorkspaceFilePath } from "../lib/workspace-file-path";
 import { useMultiTaskMessageStore } from "../composables/useMultiTaskMessageStore";
 import { useProjectStore } from "../stores/project";
@@ -2830,24 +2835,17 @@ function buildMonitorToolCallView(
   };
 }
 
-function monitorToolGroupTitle(toolCalls: MonitorToolCallView[]) {
-  const firstTool = toolCalls[0];
-  if (!firstTool) {
-    return "工具调用";
-  }
+function monitorToolSummary(toolCalls: MonitorToolCallView[]) {
+  return summarizeToolCalls(toolCalls);
+}
 
-  const title = firstTool.headline || firstTool.description || firstTool.label;
-  const compactTitle = title.length > 80 ? `${title.slice(0, 79)}…` : title;
-
-  if (toolCalls.length === 1) {
-    return `工具调用 · ${firstTool.label} · ${compactTitle}`;
-  }
-
-  return `工具调用 (${toolCalls.length}) · ${firstTool.label} · ${compactTitle}`;
+function monitorToolSummaryMeta(toolCalls: MonitorToolCallView[]) {
+  const summary = monitorToolSummary(toolCalls);
+  return [summary.status, summary.secondary].filter(Boolean).join(" · ");
 }
 
 function monitorToolCallCommand(tool: MonitorToolCallView) {
-  return tool.command || tool.headline || tool.filePath || tool.inputPreview || tool.label;
+  return toolCallText(tool) || tool.filePath || tool.inputPreview || tool.label;
 }
 
 function buildPersistedMonitorMessage(
@@ -4526,6 +4524,18 @@ function freeLayoutPreviewSlotStyle(slot: { x: number; y: number; width: number;
 .monitor-tool-summary-more {
   font-size: 12px;
   color: rgba(216, 231, 255, 0.64);
+}
+
+.monitor-tool-summary-primary {
+  font-size: 13px;
+  line-height: 1.55;
+  color: #eef6ff;
+}
+
+.monitor-tool-summary-meta {
+  font-size: 12px;
+  line-height: 1.5;
+  color: rgba(216, 231, 255, 0.7);
 }
 
 .monitor-tool-call-card {

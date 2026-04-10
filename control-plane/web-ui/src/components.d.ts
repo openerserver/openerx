@@ -116,6 +116,7 @@ declare module 'vue' {
     TaskProjectRoleConfigPanel: typeof import('./components/TaskProjectRoleConfigPanel.vue')['default']
     TaskRoleWorkflowPanel: typeof import('./components/TaskRoleWorkflowPanel.vue')['default']
     TaskSwitcher: typeof import('./components/task-detail-shared/TaskSwitcher.vue')['default']
+    TaskToolCallGroup: typeof import('./components/task-detail-shared/TaskToolCallGroup.vue')['default']
     TaskWorkbenchMemberStrip: typeof import('./components/task-detail/TaskWorkbenchMemberStrip.vue')['default']
     TaskWorkflowStageOverviewCard: typeof import('./components/task-detail/TaskWorkflowStageOverviewCard.vue')['default']
     TreeBreadcrumb: typeof import('./components/task-detail-v3/TreeBreadcrumb.vue')['default']

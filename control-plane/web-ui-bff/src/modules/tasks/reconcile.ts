@@ -6,7 +6,6 @@ import { finalizeTaskState } from "./finalize";
 import {
   fetchTaskSessionLineageRecords,
   persistTaskSessionMessageSnapshot,
-  upsertTaskSessionLineageRecord,
 } from "./task-session-store";
 
 interface RunningTaskRecord {

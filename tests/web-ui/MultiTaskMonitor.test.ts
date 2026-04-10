@@ -830,8 +830,9 @@ describe("MultiTaskMonitor", () => {
     taskMonitorStore.addTaskNode("task-1");
     await flushPromises();
 
+    expect(wrapper.text()).toContain("工具调用");
     expect(wrapper.text()).toContain(
-      '工具调用 · bash · rg -n "authMiddleware" control-plane/service/src',
+      '执行 rg -n "authMiddleware" control-plane/service/src',
     );
     expect(wrapper.text()).toContain('rg -n "authMiddleware" control-plane/service/src');
     expect(wrapper.text()).not.toContain("exit 0");

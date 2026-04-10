@@ -80,22 +80,43 @@ describe("ChatMessageList tool cards", () => {
     expect(wrapper.text()).not.toContain("Opener-X task ID");
   });
 
-  it("keeps tool details collapsed by default and expands on demand", async () => {
+  it("shows tool actions beside each assistant turn instead of one session panel", async () => {
     const items: TaskConversationMessageItem[] = [
       {
         key: "message-1",
         role: "assistant",
+        text: "先读取文件",
+        toolCalls: [
+          {
+            key: "tool-read-1",
+            kind: "read_file",
+            label: "read_file",
+            stateLabel: "完成",
+            stateColor: "success",
+            filePath: "control-plane/web-ui/src/pages/MultiTaskMonitor.vue",
+            inputPreview:
+              "path: control-plane/web-ui/src/pages/MultiTaskMonitor.vue\nrange: 400-470",
+            outputPreview: "const monitorNode = createNode();",
+          },
+        ],
+        createdAt: "2026-03-22T10:00:00.000Z",
+        raw: null,
+        isStreaming: false,
+      },
+      {
+        key: "message-2",
+        role: "assistant",
         text: undefined,
         toolCalls: [
           {
-            key: "tool-1",
-            kind: "bash",
-            label: "bash",
+            key: "tool-search-1",
+            kind: "grep_search",
+            label: "grep_search",
             stateLabel: "完成",
             stateColor: "success",
-            command: "ls -la",
-            inputPreview: "args: ['-la']",
-            outputPreview: "total 8",
+            inputPreview:
+              "includePattern: **/tests/web-ui/TaskExecutionTracePanel.test.ts\nquery: ExecutionTraceTimelineItem",
+            outputPreview: "No results found.",
           },
         ],
         createdAt: "2026-03-22T10:00:00.000Z",
@@ -124,22 +145,293 @@ describe("ChatMessageList tool cards", () => {
       },
     });
 
-    expect(wrapper.text()).toContain("工具调用");
-    expect(wrapper.text()).toContain("展开详情");
+    const groups = wrapper.findAll(".task-tool-call-group");
+
+    expect(groups).toHaveLength(2);
+    expect(groups[0]?.text()).toContain("读取 MultiTaskMonitor.vue，行 400 到 470");
+    expect(groups[1]?.text()).toContain(
+      "搜索文本 ExecutionTraceTimelineItem（**/tests/web-ui/TaskExecutionTracePanel.test.ts），无结果",
+    );
     expect(wrapper.text()).not.toContain("参数");
     expect(wrapper.text()).not.toContain("输出");
-    expect(wrapper.text()).not.toContain("args: ['-la']");
-    expect(wrapper.text()).not.toContain("total 8");
+    expect(wrapper.text()).not.toContain("共 1 个动作");
 
-    const toggle = wrapper.find(".chat-tool-call__toggle");
-    await toggle.trigger("click");
+    const toggles = wrapper.findAll("button.task-tool-call-group__toggle");
+    expect(toggles).toHaveLength(2);
+    await toggles[0]?.trigger("click");
+    await toggles[1]?.trigger("click");
 
-    expect(wrapper.text()).toContain("收起详情");
-    expect(wrapper.text()).toContain("调用");
+    expect(wrapper.text()).toContain("收起");
+    expect(wrapper.text()).toContain("读取 MultiTaskMonitor.vue，行 400 到 470");
+    expect(wrapper.text()).toContain(
+      "搜索文本 ExecutionTraceTimelineItem（**/tests/web-ui/TaskExecutionTracePanel.test.ts），无结果",
+    );
+    expect(wrapper.text()).not.toContain("参数");
+    expect(wrapper.text()).not.toContain("输出");
+
+    const detailToggle = wrapper.findAll("button").find((button) =>
+      button.text().includes("读取 MultiTaskMonitor.vue，行 400 到 470"),
+    );
+    expect(detailToggle).toBeTruthy();
+    await detailToggle?.trigger("click");
+
+    expect(wrapper.text()).toContain("详情");
+    expect(wrapper.text()).toContain("文件");
     expect(wrapper.text()).toContain("参数");
     expect(wrapper.text()).toContain("输出");
-    expect(wrapper.text()).toContain("args: ['-la']");
-    expect(wrapper.text()).toContain("total 8");
+    expect(wrapper.text()).toContain("range: 400-470");
+    expect(wrapper.text()).toContain("const monitorNode = createNode();");
+  });
+
+  it("folds tool result messages back into the previous assistant turn", async () => {
+    const items: TaskConversationMessageItem[] = [
+      {
+        key: "message-main-tool",
+        role: "assistant",
+        text: "先写入 main.c",
+        toolCalls: [
+          {
+            key: "tool-main-flow-write",
+            kind: "write",
+            label: "write",
+            stateLabel: "执行中",
+            stateColor: "processing",
+            filePath: "main.c",
+            inputPreview: "path: main.c",
+          },
+        ],
+        createdAt: "2026-03-22T10:00:00.000Z",
+        raw: null,
+        isStreaming: false,
+      },
+      {
+        key: "message-main-tool-output",
+        role: "tool",
+        text: "Command exited with code 2",
+        toolCalls: [
+          {
+            key: "tool-main-flow-output",
+            kind: "write",
+            label: "write",
+            stateLabel: "失败",
+            stateColor: "error",
+            filePath: "main.c",
+            outputPreview:
+              '{"content":[{"type":"text","text":"Successfully wrote 69 bytes to main.c"}],"details":{}}',
+          },
+        ],
+        createdAt: "2026-03-22T10:00:30.000Z",
+        raw: null,
+        isStreaming: false,
+      },
+    ];
+
+    const wrapper = mount(ChatMessageList, {
+      props: {
+        items,
+        loading: false,
+        error: null,
+      },
+      global: {
+        stubs: {
+          ASpin: createPassThroughStub("ASpin"),
+          AAlert: createPassThroughStub("AAlert"),
+          AEmpty: createPassThroughStub("AEmpty"),
+          ASpace: createPassThroughStub("ASpace"),
+          AFlex: createPassThroughStub("AFlex"),
+          ATag: createPassThroughStub("ATag"),
+          ATypographyText: createPassThroughStub("ATypographyText"),
+          AButton: ButtonStub,
+        },
+      },
+    });
+
+    expect(wrapper.findAll(".task-tool-call-group")).toHaveLength(1);
+    expect(wrapper.text()).not.toContain("工具输出");
+
+    const groupToggle = wrapper.find("button.task-tool-call-group__toggle");
+    expect(groupToggle).toBeTruthy();
+    await groupToggle.trigger("click");
+
+    expect(wrapper.text()).toContain("写入 main.c");
+
+    const detailToggle = wrapper.findAll("button").find((button) =>
+      button.text().includes("写入 main.c"),
+    );
+    expect(detailToggle).toBeTruthy();
+    await detailToggle?.trigger("click");
+
+    expect(wrapper.text()).toContain("Successfully wrote 69 bytes to main.c");
+    expect(wrapper.text()).toContain("Command exited with code 2");
+  });
+
+  it("shows failed assistant turns inside parallel candidates instead of only relying on the candidate header", () => {
+    const items: TaskConversationParallelItem[] = [
+      {
+        key: "parallel-failed-candidate",
+        role: "parallel",
+        createdAt: "2026-03-22T10:00:00.000Z",
+        raw: null,
+        toolCalls: [],
+        candidates: [
+          {
+            key: "candidate-failed-turn",
+            index: 1,
+            label: "候选 B",
+            model: "gpt-5-mini",
+            status: "failed",
+            loading: false,
+            canAdopt: false,
+            isAdopted: false,
+            isRecommended: false,
+            items: [
+              {
+                key: "candidate-main-read",
+                role: "assistant",
+                text: "好的，我先显示 main.c 的内容。",
+                toolCalls: [
+                  {
+                    key: "candidate-main-read-tool",
+                    kind: "read",
+                    label: "read",
+                    stateLabel: "完成",
+                    stateColor: "success",
+                    filePath: "main.c",
+                    inputPreview: "path: main.c",
+                  },
+                ],
+                createdAt: "2026-03-22T10:00:00.000Z",
+                raw: null,
+                isStreaming: false,
+              },
+              {
+                key: "candidate-main-read-output",
+                role: "tool",
+                text: "#include <stdio.h>\n\nint main() {\n    printf(\"BB\\n\");\n    return 0;\n}",
+                toolCalls: [
+                  {
+                    key: "candidate-main-read-output-tool",
+                    kind: "read",
+                    label: "read",
+                    stateLabel: "完成",
+                    stateColor: "success",
+                    filePath: "main.c",
+                    outputPreview: "#include <stdio.h>",
+                  },
+                ],
+                createdAt: "2026-03-22T10:00:01.000Z",
+                raw: null,
+                isStreaming: false,
+              },
+              {
+                key: "candidate-failed-assistant",
+                role: "assistant",
+                status: "failed",
+                errorText: "An unknown error occurred",
+                text: "我已展示了两个C文件的内容，现在问用户下一步做什么。",
+                toolCalls: [],
+                createdAt: "2026-03-22T10:00:02.000Z",
+                raw: null,
+                isStreaming: false,
+              },
+            ],
+          },
+        ],
+      },
+    ];
+
+    const wrapper = mount(ChatMessageList, {
+      props: {
+        items,
+        loading: false,
+        error: null,
+      },
+      global: {
+        stubs: {
+          ASpin: createPassThroughStub("ASpin"),
+          AAlert: createPassThroughStub("AAlert"),
+          AEmpty: createPassThroughStub("AEmpty"),
+          ASpace: createPassThroughStub("ASpace"),
+          AFlex: createPassThroughStub("AFlex"),
+          ATag: createPassThroughStub("ATag"),
+          ATypographyText: createPassThroughStub("ATypographyText"),
+          AButton: ButtonStub,
+        },
+      },
+    });
+
+    expect(wrapper.text()).toContain("候选 B");
+    expect(wrapper.text()).toContain("读取 main.c");
+    expect(wrapper.findAll(".chat-message-card__status-tag")).toHaveLength(1);
+    expect(wrapper.find(".chat-message-card__status-tag").text()).toContain("失败");
+    expect(wrapper.text()).toContain("An unknown error occurred");
+  });
+
+  it("re-emits file preview requests from grouped tool details", async () => {
+    const items: TaskConversationMessageItem[] = [
+      {
+        key: "message-open-file",
+        role: "assistant",
+        text: "已查看文件",
+        toolCalls: [
+          {
+            key: "tool-open-file",
+            kind: "read_file",
+            label: "read_file",
+            stateLabel: "完成",
+            stateColor: "success",
+            filePath: "docs/architecture-overview.md",
+            fileContent: "# overview",
+          },
+        ],
+        createdAt: "2026-03-22T10:00:00.000Z",
+        raw: null,
+        isStreaming: false,
+      },
+    ];
+
+    const wrapper = mount(ChatMessageList, {
+      props: {
+        items,
+        loading: false,
+        error: null,
+      },
+      global: {
+        stubs: {
+          ASpin: createPassThroughStub("ASpin"),
+          AAlert: createPassThroughStub("AAlert"),
+          AEmpty: createPassThroughStub("AEmpty"),
+          ASpace: createPassThroughStub("ASpace"),
+          AFlex: createPassThroughStub("AFlex"),
+          ATag: createPassThroughStub("ATag"),
+          ATypographyText: createPassThroughStub("ATypographyText"),
+          AButton: ButtonStub,
+        },
+      },
+    });
+
+    const groupToggle = wrapper.find("button.task-tool-call-group__toggle");
+    expect(groupToggle).toBeTruthy();
+    await groupToggle.trigger("click");
+
+    const detailToggle = wrapper.findAll("button").find((button) =>
+      button.text().includes("读取 architecture-overview.md"),
+    );
+    expect(detailToggle).toBeTruthy();
+    await detailToggle?.trigger("click");
+
+    const fileButton = wrapper.findAll("button").find((button) => button.text() === "docs/architecture-overview.md");
+    expect(fileButton).toBeTruthy();
+    await fileButton?.trigger("click");
+
+    expect(wrapper.emitted("openFilePreview")).toEqual([
+      [
+        {
+          filePath: "docs/architecture-overview.md",
+          content: "# overview",
+        },
+      ],
+    ]);
   });
 
   it("falls back to execCommand copy when clipboard api is unavailable", async () => {

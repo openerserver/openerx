@@ -204,23 +204,6 @@ async function loadTaskSessionMessageByClientMessageId(
   return message ? mapCanonicalTaskMessage(message) : null;
 }
 
-async function loadTaskSessionMessageByRuntimeId(
-  sessionId: string,
-  runtimeMessageId: string,
-) {
-  const [message] = await db
-    .select(CANONICAL_TASK_MESSAGE_SUMMARY_COLUMNS)
-    .from(taskMessages)
-    .where(
-      and(
-        eq(taskMessages.sessionId, sessionId),
-        eq(taskMessages.runtimeMessageId, runtimeMessageId),
-      ),
-    )
-    .limit(1);
-  return message ? mapCanonicalTaskMessage(message) : null;
-}
-
 async function loadSessionOperationByRuntimeId(sessionId: string, runtimeOperationId: string) {
   return db.query.taskOperations.findFirst({
     where: and(

@@ -8,12 +8,13 @@ import type { TaskMessagePatchEvent } from "./task-message-patch-event";
 function createPatchEvent(
   overrides: Partial<TaskMessagePatchEvent> & Pick<TaskMessagePatchEvent, "kind" | "eventId">,
 ): TaskMessagePatchEvent {
+  const { eventId, taskId, sessionId, rawEventKind, ...rest } = overrides;
   return {
-    eventId: overrides.eventId,
-    taskId: overrides.taskId ?? "task-1",
-    sessionId: overrides.sessionId ?? "session-1",
-    rawEventKind: overrides.rawEventKind ?? "task.message.updated",
-    ...overrides,
+    ...rest,
+    eventId,
+    taskId: taskId ?? "task-1",
+    sessionId: sessionId ?? "session-1",
+    rawEventKind: rawEventKind ?? "task.message.updated",
   } as TaskMessagePatchEvent;
 }
 

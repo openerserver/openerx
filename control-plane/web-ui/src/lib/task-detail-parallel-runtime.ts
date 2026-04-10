@@ -38,6 +38,69 @@ function hasSessionNode(flatNodes: TreeSessionNodeRecord[], sessionId?: string |
   );
 }
 
+function buildSessionLineageRuntimeSessionIds(
+  flatNodes: TreeSessionNodeRecord[],
+  sessionId?: string | null,
+) {
+  if (typeof sessionId !== "string" || sessionId.length === 0) {
+    return new Set<string>();
+  }
+
+  const nodeById = new Map(
+    flatNodes
+      .filter(
+        (node): node is TreeSessionNodeRecord & { id: string } =>
+          typeof node.id === "string" && node.id.length > 0,
+      )
+      .map((node) => [node.id, node] as const),
+  );
+  const currentNode = flatNodes.find((node) => node.runtimeSessionId === sessionId);
+  const lineageSessionIds = new Set<string>();
+
+  let cursor: TreeSessionNodeRecord | undefined = currentNode;
+  while (cursor) {
+    if (typeof cursor.runtimeSessionId === "string" && cursor.runtimeSessionId.length > 0) {
+      lineageSessionIds.add(cursor.runtimeSessionId);
+    }
+    cursor = cursor.parentId ? nodeById.get(cursor.parentId) : undefined;
+  }
+
+  return lineageSessionIds;
+}
+
+function runReferencesAnySession(run: ParallelRunRecord, sessionIds: Set<string>) {
+  if (sessionIds.size === 0) {
+    return false;
+  }
+
+  if (
+    (typeof run.executionSessionId === "string" && sessionIds.has(run.executionSessionId)) ||
+    (typeof run.parentSessionId === "string" && sessionIds.has(run.parentSessionId))
+  ) {
+    return true;
+  }
+
+  return run.candidateSessions.some(
+    (candidate) =>
+      typeof candidate.sessionId === "string" && sessionIds.has(candidate.sessionId),
+  );
+}
+
+function mergeParallelRuns(runs: ParallelRunRecord[]) {
+  return runs
+    .reduce<ParallelRunRecord[]>((entries, run) => {
+      if (entries.some((entry) => entry.parallelRunId === run.parallelRunId)) {
+        return entries;
+      }
+      entries.push(run);
+      return entries;
+    }, [])
+    .sort(
+      (left, right) =>
+        (toTimestampMs(left.startedAt) ?? 0) - (toTimestampMs(right.startedAt) ?? 0),
+    );
+}
+
 export function resolveSessionSummaryWinnerCandidateIndex(
   run: ParallelRunRecord,
   taskSessionSummaries: TaskSessionRecord[],
@@ -483,13 +546,21 @@ export function buildVisibleParallelRunSet(
   }
 
   const scopedSessionId = resolveScopedSessionId(args);
+  const lineageSessionIds = buildSessionLineageRuntimeSessionIds(args.flatNodes, scopedSessionId);
+  const lineageHistoricalRuns = args.resolvedParallelRuns.filter(
+    (run) =>
+      !isSessionTreeFallbackParallelRun(run) &&
+      !args.sessionScopedParallelRuns.some(
+        (scopedRun) => scopedRun.parallelRunId === run.parallelRunId,
+      ) && runReferencesAnySession(run, lineageSessionIds),
+  );
   const taskSessionId =
     typeof args.task?.sessionId === "string" && args.task.sessionId.length > 0
       ? args.task.sessionId
       : null;
 
   if (!scopedSessionId || !taskSessionId || scopedSessionId !== taskSessionId) {
-    return args.sessionScopedParallelRuns;
+    return mergeParallelRuns([...lineageHistoricalRuns, ...args.sessionScopedParallelRuns]);
   }
 
   const adoptedHistoricalRuns = args.resolvedParallelRuns.filter(
@@ -500,18 +571,11 @@ export function buildVisibleParallelRunSet(
       ),
   );
 
-  return [...adoptedHistoricalRuns, ...args.sessionScopedParallelRuns]
-    .reduce<ParallelRunRecord[]>((runs, run) => {
-      if (runs.some((entry) => entry.parallelRunId === run.parallelRunId)) {
-        return runs;
-      }
-      runs.push(run);
-      return runs;
-    }, [])
-    .sort(
-      (left, right) =>
-        (toTimestampMs(left.startedAt) ?? 0) - (toTimestampMs(right.startedAt) ?? 0),
-    );
+  return mergeParallelRuns([
+    ...adoptedHistoricalRuns,
+    ...lineageHistoricalRuns,
+    ...args.sessionScopedParallelRuns,
+  ]);
 }
 
 export function resolvePreferredConversationSessionId(

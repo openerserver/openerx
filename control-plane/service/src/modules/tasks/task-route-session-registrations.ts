@@ -1,4 +1,5 @@
 import type { buildTaskRouteBuilderShared } from "./task-route-builder-shared";
+import type { PersistTaskBranchMessageInput } from "./task-branch-write";
 
 export function buildTaskSessionRegistrations(
   shared: ReturnType<typeof buildTaskRouteBuilderShared>,
@@ -35,10 +36,7 @@ export function buildTaskSessionRegistrations(
 
   async function persistTaskSessionMessage(
     taskId: string,
-    body: {
-      runtimeSessionId: string;
-      message: Record<string, unknown>;
-    },
+    body: PersistTaskBranchMessageInput,
   ) {
     return shared.branchWriteApi.persistTaskBranchMessage(taskId, body);
   }

@@ -624,7 +624,14 @@ function hasHumanIntervention(summary: AgentRunSummaryResponse) {
   return summary.guidanceCount > 0;
 }
 
-function resolveViewScope(c: Parameters<typeof authHeader>[0]): AgentOpsViewScope {
+type AgentOpsQueryContext = {
+  req: {
+    header: (name: string) => string | undefined;
+    query: (name: string) => string | undefined;
+  };
+};
+
+function resolveViewScope(c: AgentOpsQueryContext): AgentOpsViewScope {
   if (c.req.query("ownerScope") === "mine") {
     return "mine";
   }
@@ -638,7 +645,7 @@ function resolveViewScope(c: Parameters<typeof authHeader>[0]): AgentOpsViewScop
 
 function matchesAgentOpsFilters(
   summary: AgentRunSummaryResponse,
-  c: Parameters<typeof authHeader>[0],
+  c: AgentOpsQueryContext,
 ) {
   const projectId = c.req.query("projectId");
   if (projectId && summary.projectId !== projectId) {
@@ -732,7 +739,7 @@ function matchesAgentOpsFilters(
   return true;
 }
 
-async function loadFilteredAgentRunSummaries(c: Parameters<typeof authHeader>[0]) {
+async function loadFilteredAgentRunSummaries(c: AgentOpsQueryContext) {
   const runs = listAgentRuns();
   const summaries = await Promise.all(
     runs.map(async (run) => {

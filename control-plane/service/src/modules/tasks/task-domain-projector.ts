@@ -159,7 +159,6 @@ function describeSessionTimelineEvent(payload: Record<string, unknown>) {
     };
   }
 
-  if (sourceType === "fork" || sourceType === "sub_session") {
   if (sourceType === "parallel") {
     return {
       itemKind: "session" as const,
@@ -170,6 +169,7 @@ function describeSessionTimelineEvent(payload: Record<string, unknown>) {
     };
   }
 
+  if (sourceType === "fork" || sourceType === "sub_session") {
     return {
       itemKind: "session" as const,
       title: branchName ?? "派生会话",

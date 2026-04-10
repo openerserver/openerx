@@ -274,6 +274,13 @@
       "when": 1775001840000,
       "tag": "0038_clear_coordination_key_mirrors",
       "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1775001900000,
+      "tag": "0039_drop_coordination_key_columns",
+      "breakpoints": true
     }
   ]
 }

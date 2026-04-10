@@ -141,7 +141,7 @@ export function createTaskLiveAssistantStateManager() {
         continue;
       }
 
-      const baseState =
+      const baseState: LiveAssistantState =
         nextLiveAssistantState ?? getOrReplayLiveAssistantState(taskId, sessionId, patchEvents);
       const appliedState = applyTaskMessagePatchEventToLiveAssistantState(
         baseState,

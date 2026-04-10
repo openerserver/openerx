@@ -84,7 +84,29 @@ export function isTaskMessagePatchEventRelevant(
   return event.kind !== "ignored";
 }
 
-const TASK_EVENT_KIND_TO_PATCH_KIND = new Map<string, TaskMessagePatchEvent["kind"]>([
+type PassiveTaskMessagePatchKind = Extract<
+  TaskMessagePatchEvent["kind"],
+  | "phase-created"
+  | "phase-updated"
+  | "phase-awaiting-adoption"
+  | "phase-paused"
+  | "phase-resumed"
+  | "phase-cancelled"
+  | "phase-completed"
+  | "phase-failed"
+  | "task-updated"
+  | "task-completed"
+  | "task-failed"
+  | "task-continued"
+  | "task-node-updated"
+  | "agent-started"
+  | "task-hooks-updated"
+  | "task-followup-started"
+  | "task-followup-completed"
+  | "task-followup-failed"
+>;
+
+const TASK_EVENT_KIND_TO_PATCH_KIND = new Map<string, PassiveTaskMessagePatchKind>([
   ["task.phase.created", "phase-created"],
   ["task.phase.updated", "phase-updated"],
   ["task.phase.awaiting_adoption", "phase-awaiting-adoption"],
@@ -130,7 +152,11 @@ function extractPatchEventModelIdentifier(model: Record<string, unknown>) {
   return asString(model.modelID) ?? asString(model.modelId) ?? asString(model.id);
 }
 
-function extractPatchEventModelLabel(info: Record<string, unknown>) {
+function extractPatchEventModelLabel(info: Record<string, unknown> | null | undefined) {
+  if (!info) {
+    return undefined;
+  }
+
   const directLabel =
     asString(info.modelLabel) ??
     asString(info.modelRoute) ??
@@ -258,7 +284,7 @@ export function toTaskMessagePatchEvent(event: RealtimeEvent): TaskMessagePatchE
     return {
       ...base,
       kind: taskPatchKind,
-    };
+    } satisfies TaskMessagePatchEvent;
   }
 
   return buildIgnoredPatchEvent(event);

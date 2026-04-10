@@ -145,12 +145,12 @@ describe("task detail parallel conversation anchoring", () => {
     expect(
       conversationItems.map((item) => ({
         role: item.role,
-        text:
-          item.role === "parallel"
-            ? item.candidates?.[0]?.label ?? ""
-            : "text" in item && typeof item.text === "string"
-              ? item.text
-              : "",
+        text: (() => {
+          if ("candidates" in item) {
+            return item.candidates[0]?.label ?? "";
+          }
+          return "text" in item && typeof item.text === "string" ? item.text : "";
+        })(),
       })),
     ).toEqual([
       { role: "user", text: "先并行试一下" },

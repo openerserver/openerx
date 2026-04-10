@@ -4,7 +4,8 @@
     <a-alert v-else-if="error" type="error" show-icon :message="error" />
     <a-empty v-else-if="items.length === 0" description="当前分支还没有可展示的消息" />
     <div v-else class="chat-message-list__items">
-      <article v-for="item in items" :key="item.key" class="chat-message-card" :class="`chat-message-card--${item.role}`">
+      <div v-for="item in visibleItems" :key="item.key" class="chat-message-list__item-group">
+        <article class="chat-message-card" :class="`chat-message-card--${item.role}`">
         <template v-if="isWorkflowItem(item)">
           <div class="chat-message-card__workflow-group">
             <div class="chat-message-card__workflow-header" @click="toggleWorkflowCollapse(item.key)">
@@ -39,76 +40,45 @@
 
                 <div v-if="!isWorkflowStepCollapsed(step.sessionId)" class="chat-message-card__workflow-step-messages">
                   <div
-                    v-for="entry in step.items"
-                    :key="entry.key"
+                    v-for="turn in visibleMessageTurns(step.items)"
+                    :key="turn.item.key"
                     class="chat-message-card__workflow-entry"
-                    :class="`chat-message-card__workflow-entry--${entry.role}`"
+                    :class="`chat-message-card__workflow-entry--${turn.item.role}`"
                   >
                     <a-flex justify="space-between" align="center" style="margin-bottom: 6px;">
                       <a-space size="small" wrap>
-                        <a-tag :color="roleColor(entry.role)" size="small">{{ messageRoleLabel(entry) }}</a-tag>
-                        <a-tag v-if="assistantModelLabel(entry)" color="geekblue" size="small">{{ assistantModelLabel(entry) }}</a-tag>
+                        <a-tag :color="roleColor(turn.item.role)" size="small">{{ messageRoleLabel(turn.item) }}</a-tag>
+                        <a-tag v-if="assistantModelLabel(turn.item)" color="geekblue" size="small">{{ assistantModelLabel(turn.item) }}</a-tag>
+                        <a-tag
+                          v-if="shouldShowMessageStatus(turn.item)"
+                          :color="messageStatusColor(turn.item.status)"
+                          size="small"
+                          class="chat-message-card__status-tag"
+                        >
+                          {{ messageStatusLabel(turn.item.status) }}
+                        </a-tag>
                       </a-space>
-                      <a-typography-text v-if="entry.createdAt" type="secondary" class="chat-message-card__time">
-                        {{ formatTime(entry.createdAt) }}
+                      <a-typography-text v-if="turn.item.createdAt" type="secondary" class="chat-message-card__time">
+                        {{ formatTime(turn.item.createdAt) }}
                       </a-typography-text>
                     </a-flex>
 
-                    <div v-if="entry.toolCalls.length > 0" class="chat-message-card__tools">
-                      <div class="chat-message-card__tools-header">
-                        <span class="chat-message-card__tools-title">工具调用</span>
-                        <span class="chat-message-card__tools-count">{{ entry.toolCalls.length }} 次</span>
-                      </div>
-                      <div v-for="(tool, toolIndex) in entry.toolCalls" :key="tool.key" class="chat-tool-call">
-                        <a-flex justify="space-between" align="start" gap="small" wrap="wrap">
-                          <a-space size="small" wrap>
-                            <span class="chat-tool-call__index">{{ toolIndex + 1 }}.</span>
-                            <span class="chat-tool-call__label">{{ tool.label }}</span>
-                            <a-tag :color="tool.stateColor">{{ tool.stateLabel }}</a-tag>
-                          </a-space>
-                          <a-space size="small" wrap>
-                            <button
-                              v-if="tool.filePath"
-                              type="button"
-                              class="chat-tool-call__path-button"
-                              @click="emit('openFilePreview', { filePath: tool.filePath, content: tool.fileContent })"
-                            >
-                              {{ tool.filePath }}
-                            </button>
-                            <button
-                              v-if="toolDetailText(tool)"
-                              type="button"
-                              class="chat-tool-call__toggle"
-                              @click="toggleTool(tool.key)"
-                            >
-                              {{ isToolExpanded(tool.key) ? '收起详情' : '展开详情' }}
-                            </button>
-                          </a-space>
-                        </a-flex>
-                        <div v-if="isToolExpanded(tool.key) && toolCallText(tool)" class="chat-tool-call__line">
-                          <span class="chat-tool-call__field">调用</span>
-                          <span class="chat-tool-call__value">{{ toolCallText(tool) }}</span>
-                        </div>
-                        <div v-if="isToolExpanded(tool.key) && toolInputText(tool)" class="chat-tool-call__line chat-tool-call__line--stacked">
-                          <span class="chat-tool-call__field">参数</span>
-                          <pre class="chat-tool-call__detail chat-tool-call__detail--compact">{{ toolInputText(tool) }}</pre>
-                        </div>
-                        <div v-if="isToolExpanded(tool.key) && toolOutputText(tool)" class="chat-tool-call__line chat-tool-call__line--stacked">
-                          <span class="chat-tool-call__field">输出</span>
-                          <pre class="chat-tool-call__detail chat-tool-call__detail--compact">{{ toolOutputText(tool) }}</pre>
-                        </div>
-                      </div>
-                    </div>
-
                     <div
-                      v-if="entry.role === 'assistant' && entry.text && shouldRenderMarkdown(entry)"
+                      v-if="turn.item.role === 'assistant' && turn.item.text && shouldRenderMarkdown(turn.item)"
                       class="chat-message-card__markdown"
-                      v-html="render(sanitizeTextForDisplay(entry.role, entry.text))"
+                      v-html="render(sanitizeTextForDisplay(turn.item.role, turn.item.text))"
                     ></div>
                     <pre
-                      v-else-if="sanitizedItemText(entry)"
+                      v-else-if="sanitizedItemText(turn.item)"
                       class="chat-message-card__plain"
-                    >{{ sanitizedItemText(entry) }}</pre>
+                    >{{ sanitizedItemText(turn.item) }}</pre>
+                    <TaskToolCallGroup
+                      :tool-calls="turn.toolCalls"
+                      @open-file-preview="emit('openFilePreview', $event)"
+                    />
+                    <div v-if="messageErrorText(turn.item)" class="chat-message-card__error-text">
+                      {{ messageErrorText(turn.item) }}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -182,88 +152,46 @@
                 <a-typography-text v-if="candidate.loading" type="secondary">
                   正在等待该模型返回结果...
                 </a-typography-text>
-                <a-typography-text v-else-if="candidate.items.length === 0" type="secondary">
+                <a-typography-text v-else-if="visibleMessageTurns(candidate.items).length === 0" type="secondary">
                   该模型暂时还没有可展示的回复。
                 </a-typography-text>
                 <div v-else class="chat-message-card__parallel-thread">
                   <div
-                    v-for="entry in candidate.items"
-                    :key="entry.key"
+                    v-for="turn in visibleMessageTurns(candidate.items)"
+                    :key="turn.item.key"
                     class="chat-message-card__parallel-entry"
-                    :class="`chat-message-card__parallel-entry--${entry.role}`"
+                    :class="`chat-message-card__parallel-entry--${turn.item.role}`"
                   >
                     <a-flex justify="space-between" align="center" class="chat-message-card__parallel-entry-header">
                       <div class="chat-message-card__parallel-entry-header-main">
                         <span class="chat-message-card__parallel-entry-kicker">
-                          {{ messageKicker(entry) }}
+                          {{ messageKicker(turn.item) }}
                         </span>
                         <a-space size="small" wrap>
-                          <a-tag :color="roleColor(entry.role)">{{ messageRoleLabel(entry) }}</a-tag>
-                          <a-tag v-if="entry.agent" color="geekblue">{{ entry.agent }}</a-tag>
-                          <a-tag v-if="entry.isStreaming" color="processing">生成中</a-tag>
+                          <a-tag :color="roleColor(turn.item.role)">{{ messageRoleLabel(turn.item) }}</a-tag>
+                          <a-tag v-if="turn.item.agent" color="geekblue">{{ turn.item.agent }}</a-tag>
+                          <a-tag v-if="turn.item.isStreaming" color="processing">生成中</a-tag>
+                          <a-tag
+                            v-if="shouldShowMessageStatus(turn.item)"
+                            :color="messageStatusColor(turn.item.status)"
+                            class="chat-message-card__status-tag"
+                          >
+                            {{ messageStatusLabel(turn.item.status) }}
+                          </a-tag>
                         </a-space>
                       </div>
-                      <a-typography-text v-if="entry.createdAt" type="secondary" class="chat-message-card__time">
-                        {{ formatTime(entry.createdAt) }}
+                      <a-typography-text v-if="turn.item.createdAt" type="secondary" class="chat-message-card__time">
+                        {{ formatTime(turn.item.createdAt) }}
                       </a-typography-text>
                     </a-flex>
 
-                    <div v-if="entry.toolCalls.length > 0" class="chat-message-card__tools">
-                      <div class="chat-message-card__tools-header">
-                        <span class="chat-message-card__tools-title">工具调用</span>
-                        <span class="chat-message-card__tools-count">{{ entry.toolCalls.length }} 次</span>
-                      </div>
-                      <div v-for="(tool, toolIndex) in entry.toolCalls" :key="tool.key" class="chat-tool-call">
-                        <a-flex justify="space-between" align="start" gap="small" wrap="wrap">
-                          <a-space size="small" wrap>
-                            <span class="chat-tool-call__index">{{ toolIndex + 1 }}.</span>
-                            <span class="chat-tool-call__label">{{ tool.label }}</span>
-                            <a-tag :color="tool.stateColor">{{ tool.stateLabel }}</a-tag>
-                          </a-space>
-                          <a-space size="small" wrap>
-                            <button
-                              v-if="tool.filePath"
-                              type="button"
-                              class="chat-tool-call__path-button"
-                              @click="emit('openFilePreview', { filePath: tool.filePath, content: tool.fileContent })"
-                            >
-                              {{ tool.filePath }}
-                            </button>
-                            <button
-                              v-if="toolDetailText(tool)"
-                              type="button"
-                              class="chat-tool-call__toggle"
-                              @click="toggleTool(tool.key)"
-                            >
-                              {{ isToolExpanded(tool.key) ? '收起详情' : '展开详情' }}
-                            </button>
-                          </a-space>
-                        </a-flex>
-                        <div v-if="isToolExpanded(tool.key) && toolCallText(tool)" class="chat-tool-call__line">
-                          <span class="chat-tool-call__field">调用</span>
-                          <span class="chat-tool-call__value">{{ toolCallText(tool) }}</span>
-                        </div>
-                        <div v-if="isToolExpanded(tool.key) && toolInputText(tool)" class="chat-tool-call__line chat-tool-call__line--stacked">
-                          <span class="chat-tool-call__field">参数</span>
-                          <pre class="chat-tool-call__detail chat-tool-call__detail--compact">{{ toolInputText(tool) }}</pre>
-                        </div>
-                        <div
-                          v-if="toolOutputText(tool) && isToolExpanded(tool.key)"
-                          class="chat-tool-call__line chat-tool-call__line--stacked"
-                        >
-                          <span class="chat-tool-call__field">输出</span>
-                          <pre class="chat-tool-call__detail chat-tool-call__detail--compact">{{ toolOutputText(tool) }}</pre>
-                        </div>
-                      </div>
-                    </div>
-
                     <div
-                      v-if="entry.role === 'assistant' && entry.text && shouldRenderMarkdown(entry)"
+                      v-if="turn.item.role === 'assistant' && turn.item.text && shouldRenderMarkdown(turn.item)"
                       class="chat-message-card__markdown"
-                      v-html="render(displayText(entry) || sanitizedItemText(entry) || entry.text)"
+                      v-html="render(displayText(turn.item) || sanitizedItemText(turn.item) || turn.item.text)"
                     ></div>
                     <div
-                      v-else-if="entry.isStreaming && !displayText(entry) && entry.toolCalls.length === 0"
+                      v-else-if="turn.item.isStreaming && !displayText(turn.item) && turn.toolCalls.length === 0"
                       class="streaming-skeleton"
                       aria-hidden="true"
                     >
@@ -273,10 +201,17 @@
                       <span class="streaming-skeleton__dot">.</span>
                     </div>
                     <pre
-                      v-else-if="displayText(entry) || sanitizedItemText(entry) || (!entry.toolCalls.length && !entry.isStreaming)"
+                      v-else-if="displayText(turn.item) || sanitizedItemText(turn.item) || (!turn.toolCalls.length && !turn.item.isStreaming)"
                       class="chat-message-card__plain chat-message-card__parallel-plain"
-                      :class="{ 'chat-message-card__plain--streaming': entry.isStreaming || isRevealing(entry) }"
-                    >{{ displayText(entry) || sanitizedItemText(entry) || '暂无文本内容' }}</pre>
+                      :class="{ 'chat-message-card__plain--streaming': turn.item.isStreaming || isRevealing(turn.item) }"
+                    >{{ displayText(turn.item) || sanitizedItemText(turn.item) || '暂无文本内容' }}</pre>
+                    <TaskToolCallGroup
+                      :tool-calls="turn.toolCalls"
+                      @open-file-preview="emit('openFilePreview', $event)"
+                    />
+                    <div v-if="messageErrorText(turn.item)" class="chat-message-card__error-text">
+                      {{ messageErrorText(turn.item) }}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -297,56 +232,19 @@
               <a-tag :color="roleColor(item.role)">{{ messageRoleLabel(item) }}</a-tag>
               <a-tag v-if="assistantModelLabel(item)" color="geekblue">{{ assistantModelLabel(item) }}</a-tag>
               <a-tag v-if="item.isStreaming" color="processing" class="chat-message-card__streaming-tag">生成中</a-tag>
+              <a-tag
+                v-if="shouldShowMessageStatus(item)"
+                :color="messageStatusColor(item.status)"
+                class="chat-message-card__status-tag"
+              >
+                {{ messageStatusLabel(item.status) }}
+              </a-tag>
               <a-typography-text v-if="item.createdAt" type="secondary" class="chat-message-card__time">
                 {{ formatTime(item.createdAt) }}
               </a-typography-text>
             </a-space>
             <a-button v-if="canCopy(item)" type="text" size="small" @click="handleCopy(copyText(item))">复制</a-button>
           </a-flex>
-
-          <div v-if="item.toolCalls.length > 0" class="chat-message-card__tools">
-            <div class="chat-message-card__tools-header">
-              <span class="chat-message-card__tools-title">工具调用</span>
-              <span class="chat-message-card__tools-count">{{ item.toolCalls.length }} 次</span>
-            </div>
-            <div v-for="(tool, toolIndex) in item.toolCalls" :key="tool.key" class="chat-tool-call">
-              <a-flex justify="space-between" align="start" gap="small" wrap="wrap">
-                <a-space size="small" wrap>
-                  <span class="chat-tool-call__index">{{ toolIndex + 1 }}.</span>
-                  <span class="chat-tool-call__label">{{ tool.label }}</span>
-                  <a-tag :color="tool.stateColor">{{ tool.stateLabel }}</a-tag>
-                </a-space>
-                <button
-                  v-if="toolDetailText(tool)"
-                  type="button"
-                  class="chat-tool-call__toggle"
-                  @click="toggleTool(tool.key)"
-                >
-                  {{ isToolExpanded(tool.key) ? '收起详情' : '展开详情' }}
-                </button>
-                <button
-                  v-if="tool.filePath"
-                  type="button"
-                  class="chat-tool-call__path-button"
-                  @click="emit('openFilePreview', { filePath: tool.filePath, content: tool.fileContent })"
-                >
-                  {{ tool.filePath }}
-                </button>
-              </a-flex>
-              <div v-if="isToolExpanded(tool.key) && toolCallText(tool)" class="chat-tool-call__line">
-                <span class="chat-tool-call__field">调用</span>
-                <span class="chat-tool-call__value">{{ toolCallText(tool) }}</span>
-              </div>
-              <div v-if="isToolExpanded(tool.key) && toolInputText(tool)" class="chat-tool-call__line chat-tool-call__line--stacked">
-                <span class="chat-tool-call__field">参数</span>
-                <pre class="chat-tool-call__detail chat-tool-call__detail--compact">{{ toolInputText(tool) }}</pre>
-              </div>
-              <div v-if="isToolExpanded(tool.key) && toolOutputText(tool)" class="chat-tool-call__line chat-tool-call__line--stacked">
-                <span class="chat-tool-call__field">输出</span>
-                <pre class="chat-tool-call__detail chat-tool-call__detail--compact">{{ toolOutputText(tool) }}</pre>
-              </div>
-            </div>
-          </div>
 
           <div
             v-if="item.role === 'assistant' && item.text && shouldRenderMarkdown(item)"
@@ -380,8 +278,16 @@
             class="chat-message-card__plain"
             :class="{ 'chat-message-card__plain--streaming': item.isStreaming || isRevealing(item) }"
           >{{ displayText(item) || sanitizedItemText(item) || '暂无文本内容' }}</pre>
+          <TaskToolCallGroup
+            :tool-calls="topLevelDisplayToolCalls(item)"
+            @open-file-preview="emit('openFilePreview', $event)"
+          />
+          <div v-if="messageErrorText(item)" class="chat-message-card__error-text">
+            {{ messageErrorText(item) }}
+          </div>
         </template>
-      </article>
+        </article>
+      </div>
     </div>
   </div>
 </template>
@@ -389,6 +295,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { renderMarkdown } from "../../lib/markdown";
+import { buildToolCopyText } from "../../lib/task-tool-call-display";
 import type {
   TaskConversationListItem,
   TaskConversationMessageItem,
@@ -415,7 +322,6 @@ const emit = defineEmits<{
 const scrollContainer = ref<HTMLElement | null>(null);
 const shouldAutoScroll = ref(true);
 const revealText = ref<Record<string, string>>({});
-const expandedTools = ref<Record<string, boolean>>({});
 const expandedFinalSent = ref<Record<string, boolean>>({});
 const collapsedWorkflows = ref<Record<string, boolean>>({});
 const collapsedWorkflowSteps = ref<Record<string, boolean>>({});
@@ -425,6 +331,271 @@ const REVEAL_INTERVAL_MS = 22;
 const REVEAL_MINOR_PAUSE_MS = 90;
 const REVEAL_MAJOR_PAUSE_MS = 180;
 let revealTimer: ReturnType<typeof setTimeout> | null = null;
+
+type ConversationDisplayTurn = {
+  item: TaskConversationMessageItem;
+  toolCalls: TaskConversationToolCallItem[];
+};
+
+type PendingToolRef = {
+  turnIndex: number;
+  toolIndex: number;
+  sessionId?: string;
+  kind: string;
+};
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function cloneToolCall(tool: TaskConversationToolCallItem): TaskConversationToolCallItem {
+  return { ...tool };
+}
+
+function mergeDistinctText(primary?: string, secondary?: string) {
+  const left = primary?.trim();
+  const right = secondary?.trim();
+  if (!left) {
+    return right;
+  }
+  if (!right || right === left || left.includes(right)) {
+    return left;
+  }
+  if (right.includes(left)) {
+    return right;
+  }
+  return `${left}\n\n${right}`;
+}
+
+function resolveMessageSessionId(item: TaskConversationMessageItem) {
+  const raw = asRecord(item.raw);
+  const info = asRecord(raw?.info);
+  return (
+    asString(raw?.sessionId) ??
+    asString(info?.sessionID) ??
+    asString(info?.sessionId)
+  );
+}
+
+function mergeToolCallIntoTarget(
+  target: TaskConversationToolCallItem,
+  incoming: TaskConversationToolCallItem,
+) {
+  target.stateLabel = incoming.stateLabel || target.stateLabel;
+  target.stateColor = incoming.stateColor || target.stateColor;
+  target.headline = target.headline || incoming.headline;
+  target.description = target.description || incoming.description;
+  target.command = target.command || incoming.command;
+  target.filePath = target.filePath || incoming.filePath;
+  target.fileContent = target.fileContent || incoming.fileContent;
+  target.inputPreview = mergeDistinctText(target.inputPreview, incoming.inputPreview);
+  target.outputPreview = mergeDistinctText(target.outputPreview, incoming.outputPreview);
+}
+
+function appendToolOutputText(target: TaskConversationToolCallItem, text?: string) {
+  if (!text?.trim()) {
+    return;
+  }
+  target.outputPreview = mergeDistinctText(target.outputPreview, text);
+}
+
+function toolMatchScore(
+  target: TaskConversationToolCallItem,
+  candidate: TaskConversationToolCallItem,
+) {
+  if (target.kind !== candidate.kind) {
+    return -1;
+  }
+
+  let score = 10;
+  if (target.filePath && candidate.filePath && target.filePath === candidate.filePath) {
+    score += 6;
+  }
+  if (target.command && candidate.command && target.command === candidate.command) {
+    score += 4;
+  }
+  if (target.headline && candidate.headline && target.headline === candidate.headline) {
+    score += 3;
+  }
+  if (target.label === candidate.label) {
+    score += 1;
+  }
+
+  return score;
+}
+
+function findPendingToolRefIndex(
+  pendingRefs: PendingToolRef[],
+  turns: ConversationDisplayTurn[],
+  candidate: TaskConversationToolCallItem,
+  sessionId?: string,
+) {
+  let bestIndex = -1;
+  let bestScore = -1;
+
+  for (let index = pendingRefs.length - 1; index >= 0; index -= 1) {
+    const ref = pendingRefs[index];
+    if (sessionId && ref.sessionId && ref.sessionId !== sessionId) {
+      continue;
+    }
+    const target = turns[ref.turnIndex]?.toolCalls[ref.toolIndex];
+    if (!target) {
+      continue;
+    }
+    const score = toolMatchScore(target, candidate);
+    if (score > bestScore) {
+      bestScore = score;
+      bestIndex = index;
+    }
+  }
+
+  return bestIndex;
+}
+
+function findRecentToolRef(
+  turns: ConversationDisplayTurn[],
+  pendingRefs: PendingToolRef[],
+  lastMatchedRef: PendingToolRef | null,
+  sessionId?: string,
+) {
+  if (lastMatchedRef && (!sessionId || !lastMatchedRef.sessionId || lastMatchedRef.sessionId === sessionId)) {
+    return lastMatchedRef;
+  }
+
+  for (let index = pendingRefs.length - 1; index >= 0; index -= 1) {
+    const ref = pendingRefs[index];
+    if (!sessionId || !ref.sessionId || ref.sessionId === sessionId) {
+      return ref;
+    }
+  }
+
+  for (let turnIndex = turns.length - 1; turnIndex >= 0; turnIndex -= 1) {
+    const turn = turns[turnIndex];
+    const turnSessionId = resolveMessageSessionId(turn.item);
+    if (sessionId && turnSessionId && turnSessionId !== sessionId) {
+      continue;
+    }
+    if (turn.toolCalls.length === 0) {
+      continue;
+    }
+    return {
+      turnIndex,
+      toolIndex: turn.toolCalls.length - 1,
+      sessionId: turnSessionId,
+      kind: turn.toolCalls[turn.toolCalls.length - 1]?.kind ?? "tool",
+    } satisfies PendingToolRef;
+  }
+
+  return null;
+}
+
+function shouldDisplayConversationTurn(turn: ConversationDisplayTurn) {
+  return turn.toolCalls.length > 0 || hasStandaloneMessageContent(turn.item);
+}
+
+function buildConversationDisplayTurns(items: TaskConversationMessageItem[]) {
+  const turns: ConversationDisplayTurn[] = [];
+  const pendingRefs: PendingToolRef[] = [];
+  let lastMatchedRef: PendingToolRef | null = null;
+
+  const registerTurnToolCalls = (turnIndex: number) => {
+    const turn = turns[turnIndex];
+    const sessionId = resolveMessageSessionId(turn.item);
+    turn.toolCalls.forEach((tool, toolIndex) => {
+      pendingRefs.push({
+        turnIndex,
+        toolIndex,
+        sessionId,
+        kind: tool.kind,
+      });
+    });
+  };
+
+  for (const item of items) {
+    const sessionId = resolveMessageSessionId(item);
+    if (item.role === "tool") {
+      const clonedToolCalls = item.toolCalls.map(cloneToolCall);
+      const matchedToolIndexes = new Set<number>();
+
+      clonedToolCalls.forEach((tool, toolIndex) => {
+        const pendingIndex = findPendingToolRefIndex(pendingRefs, turns, tool, sessionId);
+        if (pendingIndex < 0) {
+          return;
+        }
+        const ref = pendingRefs[pendingIndex];
+        const target = turns[ref.turnIndex]?.toolCalls[ref.toolIndex];
+        if (!target) {
+          return;
+        }
+        mergeToolCallIntoTarget(target, tool);
+        pendingRefs.splice(pendingIndex, 1);
+        matchedToolIndexes.add(toolIndex);
+        lastMatchedRef = ref;
+      });
+
+      const toolText = sanitizedItemText(item)?.trim() || item.text?.trim();
+      let textMerged = false;
+      if (toolText) {
+        const targetRef = findRecentToolRef(turns, pendingRefs, lastMatchedRef, sessionId);
+        if (targetRef) {
+          const target = turns[targetRef.turnIndex]?.toolCalls[targetRef.toolIndex];
+          if (target) {
+            appendToolOutputText(target, toolText);
+            lastMatchedRef = targetRef;
+            textMerged = true;
+          }
+        }
+      }
+
+      const unmatchedToolCalls = clonedToolCalls.filter((_, index) => !matchedToolIndexes.has(index));
+      if (unmatchedToolCalls.length === 0 && (!toolText || textMerged)) {
+        continue;
+      }
+
+      turns.push({
+        item: textMerged ? { ...item, text: undefined } : item,
+        toolCalls: unmatchedToolCalls,
+      });
+      continue;
+    }
+
+    turns.push({
+      item,
+      toolCalls: item.toolCalls.map(cloneToolCall),
+    });
+    registerTurnToolCalls(turns.length - 1);
+  }
+
+  return turns.filter((turn) => shouldDisplayConversationTurn(turn));
+}
+
+const topLevelDisplayTurns = computed(() =>
+  buildConversationDisplayTurns(
+    props.items.filter(
+      (item): item is TaskConversationMessageItem =>
+        !isParallelComparisonItem(item) && !isWorkflowItem(item),
+    ),
+  ),
+);
+
+const topLevelDisplayTurnMap = computed(
+  () => new Map(topLevelDisplayTurns.value.map((turn) => [turn.item.key, turn])),
+);
+
+const visibleItems = computed(() =>
+  props.items.filter((item) => {
+    if (isParallelComparisonItem(item) || isWorkflowItem(item)) {
+      return true;
+    }
+    return topLevelDisplayTurnMap.value.has(item.key);
+  }),
+);
 
 const itemsSignature = computed(() =>
   props.items
@@ -474,6 +645,35 @@ function messageKicker(item: TaskConversationMessageItem) {
         : roleLabel(item.role);
 }
 
+function isFailedMessageStatus(status: string | undefined) {
+  return status === "failed" || status === "error";
+}
+
+function shouldShowMessageStatus(item: TaskConversationMessageItem) {
+  return isFailedMessageStatus(item.status);
+}
+
+function messageStatusLabel(status: string | undefined) {
+  if (status === "failed" || status === "error") return "失败";
+  if (status === "running") return "执行中";
+  if (status === "completed") return "完成";
+  return status || "未知";
+}
+
+function messageStatusColor(status: string | undefined) {
+  if (status === "failed" || status === "error") return "error";
+  if (status === "running") return "processing";
+  if (status === "completed") return "success";
+  return "default";
+}
+
+function messageErrorText(item: TaskConversationMessageItem) {
+  if (!isFailedMessageStatus(item.status)) {
+    return undefined;
+  }
+  return item.errorText?.trim() || "执行失败";
+}
+
 function assistantModelLabel(item: TaskConversationMessageItem): string | undefined {
   if (item.role !== "assistant") {
     return undefined;
@@ -496,6 +696,18 @@ function isParallelComparisonItem(
 
 function isWorkflowItem(item: TaskConversationListItem): item is TaskConversationWorkflowItem {
   return item.role === "workflow";
+}
+
+function visibleMessageTurns(items: TaskConversationMessageItem[]) {
+  return buildConversationDisplayTurns(items);
+}
+
+function topLevelDisplayToolCalls(item: TaskConversationListItem) {
+  if (isParallelComparisonItem(item) || isWorkflowItem(item)) {
+    return [];
+  }
+
+  return topLevelDisplayTurnMap.value.get(item.key)?.toolCalls ?? item.toolCalls;
 }
 
 function isWorkflowCollapsed(key: string) {
@@ -649,6 +861,27 @@ function sanitizedItemText(item: TaskConversationMessageItem) {
     return undefined;
   }
   return sanitizeTextForDisplay(item.role, item.text);
+}
+
+function hasStandaloneMessageContent(item: TaskConversationMessageItem) {
+  if (item.role === "tool") {
+    return item.toolCalls.length === 0 && Boolean(sanitizedItemText(item)?.trim() || item.text?.trim());
+  }
+
+  if (item.role === "user") {
+    return Boolean(userDisplayText(item).trim() || item.finalSentText);
+  }
+
+  if (item.role === "assistant") {
+    return Boolean(
+      sanitizedItemText(item)?.trim() ||
+        item.text?.trim() ||
+        item.finalSentText ||
+        (item.isStreaming && item.toolCalls.length === 0),
+    );
+  }
+
+  return Boolean(sanitizedItemText(item)?.trim() || item.text?.trim());
 }
 
 function isNearBottom() {
@@ -805,63 +1038,6 @@ function shouldRenderMarkdown(item: TaskConversationMessageItem) {
   return item.role === "assistant" && !item.isStreaming && !isRevealing(item);
 }
 
-function toolHeadlineText(tool: TaskConversationToolCallItem) {
-  const text = tool.headline || tool.description;
-  if (!text) {
-    return undefined;
-  }
-
-  if (tool.filePath && text.trim() === tool.filePath.trim()) {
-    return undefined;
-  }
-
-  if (text.trim() === tool.label.trim()) {
-    return undefined;
-  }
-
-  return text;
-}
-
-function toolCallText(tool: TaskConversationToolCallItem) {
-  return tool.command || toolHeadlineText(tool) || tool.description;
-}
-
-function toolInputText(tool: TaskConversationToolCallItem) {
-  const input = tool.inputPreview?.trim();
-  if (!input) {
-    return undefined;
-  }
-
-  const callText = toolCallText(tool)?.trim();
-  if (callText && input === callText) {
-    return undefined;
-  }
-
-  return input;
-}
-
-function toolOutputText(tool: TaskConversationToolCallItem) {
-  const output = tool.outputPreview?.trim();
-  return output || undefined;
-}
-
-function toolDetailText(tool: TaskConversationToolCallItem) {
-  return [toolCallText(tool), toolInputText(tool), toolOutputText(tool)]
-    .filter(Boolean)
-    .join("\n\n");
-}
-
-function isToolExpanded(key: string) {
-  return expandedTools.value[key] === true;
-}
-
-function toggleTool(key: string) {
-  expandedTools.value = {
-    ...expandedTools.value,
-    [key]: !expandedTools.value[key],
-  };
-}
-
 function isFinalSentExpanded(key: string) {
   return expandedFinalSent.value[key] === true;
 }
@@ -885,29 +1061,16 @@ function userDisplayText(item: TaskConversationMessageItem) {
   return sanitizedItemText(item) || item.text || "";
 }
 
-function buildToolCopyText(tool: TaskConversationToolCallItem) {
-  return [
-    `工具: ${tool.label}`,
-    `状态: ${tool.stateLabel}`,
-    tool.filePath ? `路径: ${tool.filePath}` : null,
-    toolCallText(tool) ? `调用: ${toolCallText(tool)}` : null,
-    toolInputText(tool) ? `参数:\n${toolInputText(tool)}` : null,
-    toolOutputText(tool) ? `输出:\n${toolOutputText(tool)}` : null,
-  ]
-    .filter((item): item is string => Boolean(item))
-    .join("\n");
-}
-
 function canCopy(item: TaskConversationListItem) {
   if (isParallelComparisonItem(item) || isWorkflowItem(item)) {
     return false;
   }
-  return Boolean(displayText(item) || sanitizedItemText(item) || item.toolCalls.length);
+  return Boolean(displayText(item) || sanitizedItemText(item) || topLevelDisplayToolCalls(item).length);
 }
 
 function canCopyParallelCandidate(candidate: TaskParallelComparisonCard) {
-  return candidate.items.some((entry) =>
-    Boolean(displayText(entry) || sanitizedItemText(entry) || entry.toolCalls.length),
+  return visibleMessageTurns(candidate.items).some((turn) =>
+    Boolean(displayText(turn.item) || sanitizedItemText(turn.item) || turn.toolCalls.length),
   );
 }
 
@@ -942,9 +1105,9 @@ async function handleCopy(text: string) {
   }
 }
 
-function copyText(item: TaskConversationMessageItem) {
+function copyText(item: TaskConversationMessageItem, toolCalls = item.toolCalls) {
   const text = displayText(item) || sanitizedItemText(item) || item.text || "";
-  const toolText = item.toolCalls
+  const toolText = toolCalls
     .map((tool) => buildToolCopyText(tool))
     .filter(Boolean)
     .join("\n\n");
@@ -962,10 +1125,10 @@ function copyParallelCandidateText(candidate: TaskParallelComparisonCard) {
     .filter((item): item is string => Boolean(item))
     .join("\n");
 
-  const body = candidate.items
-    .map((entry) => {
-      const label = messageRoleLabel(entry);
-      const content = copyText(entry);
+  const body = visibleMessageTurns(candidate.items)
+    .map((turn) => {
+      const label = messageRoleLabel(turn.item);
+      const content = copyText(turn.item, turn.toolCalls);
       return content ? `${label}:\n${content}` : undefined;
     })
     .filter((item): item is string => Boolean(item))
@@ -1010,6 +1173,12 @@ onBeforeUnmount(() => {
   gap: 12px;
 }
 
+.chat-message-list__item-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
 .chat-message-card {
   border: 1px solid #e8e8e8;
   border-radius: 12px;
@@ -1047,6 +1216,10 @@ onBeforeUnmount(() => {
   animation: streaming-tag-shimmer 1.6s linear infinite;
 }
 
+.chat-message-card__status-tag {
+  flex-shrink: 0;
+}
+
 .chat-message-card__plain {
   margin: 0;
   white-space: pre-wrap;
@@ -1057,6 +1230,15 @@ onBeforeUnmount(() => {
 
 .chat-message-card__markdown {
   overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.chat-message-card__error-text {
+  margin-top: 8px;
+  color: #cf1322;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
   word-break: break-word;
 }
 

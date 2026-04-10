@@ -38,7 +38,7 @@
 当前主链把两类排序语义混在了同一套 `task_sessions` 字段里：
 
 1. lineage 语义：`parentSessionId`、`rootSessionId`、`sortKey`
-2. 局部分组语义：`coordinationKey`、`candidateIndex`、`stepIndex`
+2. 局部分组语义：`candidateIndex`、`stepIndex`
 
 这导致 [control-plane/service/src/modules/tasks/task-session-topology-order.ts](control-plane/service/src/modules/tasks/task-session-topology-order.ts) 只能做 lineage-first 排序，不能做 phase-first 排序。
 
@@ -180,7 +180,6 @@ export const taskExecutionPhases = pgTable(
     ),
     anchorMessageId: text("anchor_message_id"),
 
-    coordinationKey: text("coordination_key"),
     candidateCount: integer("candidate_count"),
     winnerSessionId: text("winner_session_id").references(
       (): AnyPgColumn => taskSessions.id,
@@ -219,10 +218,6 @@ export const taskExecutionPhases = pgTable(
       table.taskId,
       table.resumedFromPhaseId,
     ),
-    index("idx_task_execution_phases_task_coordination_key").on(
-      table.taskId,
-      table.coordinationKey,
-    ),
     index("idx_task_execution_phases_task_anchor_session_id").on(
       table.taskId,
       table.anchorSessionId,
@@ -237,13 +232,13 @@ export const taskExecutionPhases = pgTable(
 2. `phaseKind`：该轮执行类型，决定平铺列表的组语义。
 3. `anchorSessionId`：该轮执行从哪条 session 继续出来。
 4. `anchorMessageId`：触发该轮执行的 user prompt，用于 conversation 和 timeline 锚点。
-5. `coordinationKey`：仅 parallel phase 保留，作为低层 runtime / session 绑定键，不再承担 API 主语义。
-6. `winnerSessionId` / `judgeSessionId`：组级事实，只存一份，不再重复散落到每条 session 上。
-7. `status`：必须使用 phase 专属状态，而不是直接复用 task 级 status；parallel 在候选全部结束但未 adopt 时进入 `awaiting_adoption`。
-8. `awaitingAdoptionSince`：并行比较完成后开始等待人工采纳的时间点。
-9. `cancelRequestedAt` / `cancelledAt` / `terminalReason`：表达 phase 中断与终止原因，避免只从 session status 反推。
-10. `resumedFromPhaseId`：当恢复不是“原地 resume”，而是创建新的 recovery phase 时，显式指回被恢复的旧 phase。
-11. `lastHeartbeatAt`：记录 runtime 最近一次存活信号，用于 realtime 降级与 running / stalled 判定。
+5. `winnerSessionId` / `judgeSessionId`：组级事实，只存一份，不再重复散落到每条 session 上。
+6. `status`：必须使用 phase 专属状态，而不是直接复用 task 级 status；parallel 在候选全部结束但未 adopt 时进入 `awaiting_adoption`。
+7. `awaitingAdoptionSince`：并行比较完成后开始等待人工采纳的时间点。
+8. `cancelRequestedAt` / `cancelledAt` / `terminalReason`：表达 phase 中断与终止原因，避免只从 session status 反推。
+9. `resumedFromPhaseId`：当恢复不是“原地 resume”，而是创建新的 recovery phase 时，显式指回被恢复的旧 phase。
+10. `lastHeartbeatAt`：记录 runtime 最近一次存活信号，用于 realtime 降级与 running / stalled 判定。
+11. 如未来确实存在 `phaseId` 之外需要长期保留的 runtime 批次键，应以兼容/适配字段单独评估命名与边界，而不是默认进入 `task_execution_phases` canonical schema。
 
 ### 5.3 修改 `task_sessions`
 
@@ -555,7 +550,7 @@ service 内部动作：
 
 #### 删除 `POST /api/tasks/:taskId/adopt-winner`
 
-当前这个接口的问题是把组级主语义建立在 `coordinationKey` 上，而 `coordinationKey` 在新模型里只保留为内部绑定键，不再是 API 主键。
+当前这个接口的问题是把组级主语义建立在 `coordinationKey` 上；phase-first 下这类绑定键不再是 canonical storage，也不再是 API 主键。
 
 #### 新增 `POST /api/tasks/:taskId/phases/:phaseId/adopt`
 

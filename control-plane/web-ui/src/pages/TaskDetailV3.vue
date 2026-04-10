@@ -55,6 +55,11 @@ import { useTaskDetailPageModel } from "../composables/useTaskDetailPageModel";
 const TaskSwitcher = defineAsyncComponent(() => import("../components/task-detail-shared/TaskSwitcher.vue"));
 
 const page = reactive(useTaskDetailPageModel());
+
+defineExpose({
+  handleContinue: page.main.handleContinue,
+  handleFork: page.main.handleFork,
+});
 </script>
 
 <style scoped>

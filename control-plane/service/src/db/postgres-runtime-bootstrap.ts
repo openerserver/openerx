@@ -84,7 +84,6 @@ const POSTGRES_RUNTIME_TABLE_DEFINITIONS: BootstrapRelationDefinition[] = [
       "tree_node_id" text,
       "parent_session_id" text,
       "root_session_id" text,
-      "coordination_key" text NOT NULL,
       "session_kind" text NOT NULL,
       "trigger_type" text NOT NULL,
       "execution_mode_snapshot" text NOT NULL,

@@ -1,5 +1,6 @@
 import { flushPromises, mount } from "@vue/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ref } from "vue";
 
 const composableMocks = vi.hoisted(() => ({
   useTaskExecutionTrace: vi.fn(),
@@ -30,78 +31,118 @@ vi.mock("ant-design-vue", () => ({
 describe("TaskExecutionTracePanel", () => {
   beforeEach(() => {
     composableMocks.useTaskExecutionTrace.mockReturnValue({
-      trace: {
+      trace: ref({
+        taskId: "task-1",
         sessionId: "ses-1",
-        segments: [
+        segments: [],
+        timeline: [
           {
-            type: "tool-call",
-            label: "工具调用 search_code",
-            content:
-              "query: task domain projections | includePattern: control-plane/service/src/modules/tasks/**",
-            toolName: "search_code",
-            toolArgumentsSummary:
-              "query: task domain projections | includePattern: control-plane/service/src/modules/tasks/**",
-            toolStatus: "completed",
+            id: "tool-request-1",
+            role: "tool-request",
+            text: "bash\n调用: bun test tests/web-ui/ChatMessageList.test.ts",
+            createdAt: "2026-03-14T08:04:00.000Z",
+            raw: {
+              source: "trace-message-tool-request",
+              toolName: "bash",
+              request: {
+                status: "completed",
+                command: "bun test tests/web-ui/ChatMessageList.test.ts",
+                headline: "bun test tests/web-ui/ChatMessageList.test.ts",
+                filePath: "tests/web-ui/ChatMessageList.test.ts",
+              },
+              rawPart: {
+                tool: "bash",
+                toolName: "bash",
+                state: { status: "completed" },
+              },
+            },
+            sourceEventTypes: ["runtime:tool-request:bash"],
           },
           {
-            type: "file-reference",
-            label: "文件引用 docs/spec.md",
-            content: "docs/spec.md:8-24",
-            filePath: "docs/spec.md",
-            fileRange: "8-24",
-          },
-          {
-            type: "diff",
-            label: "变更 Diff",
-            content: "control-plane/service/src/modules/tasks/task-domain-projector.ts | +14 -3",
-            filePath: "control-plane/service/src/modules/tasks/task-domain-projector.ts",
-            diffSummary:
-              "control-plane/service/src/modules/tasks/task-domain-projector.ts | +14 -3",
+            id: "tool-result-1",
+            role: "tool-result",
+            text: "bash 结果\n状态: failed\n输出: test failed",
+            completedAt: "2026-03-14T08:04:20.000Z",
+            raw: {
+              source: "trace-message-tool-result",
+              toolName: "bash",
+              result: {
+                status: "failed",
+                headline: "bun test tests/web-ui/ChatMessageList.test.ts",
+                output: "test failed",
+                filePath: "tests/web-ui/ChatMessageList.test.ts",
+              },
+              rawPart: {
+                tool: "bash",
+                toolName: "bash",
+                state: { status: "failed", error: "test failed" },
+              },
+            },
+            sourceEventTypes: ["runtime:tool-result:bash"],
           },
         ],
-        timeline: [],
         timelineMeta: { readSource: "task-domain-projection", cacheState: "complete" },
         snapshot: { currentStatus: "running" },
         truncated: false,
-      },
-      loading: false,
-      error: null,
-      segmentFilter: "narrative",
-      messageRoleFilter: "narrative",
-      expandedMessageRaw: {},
+        hookExecutions: [],
+        followupExecutions: [],
+      }),
+      loading: ref(false),
+      error: ref(null),
+      messageRoleFilter: ref("narrative"),
+      expandedMessageRaw: ref({}),
       refresh: vi.fn(),
-      filteredSegments: [
+      filteredMessages: ref([
         {
-          type: "tool-call",
-          label: "工具调用 search_code",
-          content:
-            "query: task domain projections | includePattern: control-plane/service/src/modules/tasks/**",
-          toolName: "search_code",
-          toolArgumentsSummary:
-            "query: task domain projections | includePattern: control-plane/service/src/modules/tasks/**",
-          toolStatus: "completed",
+          id: "tool-request-1",
+          role: "tool-request",
+          text: "bash\n调用: bun test tests/web-ui/ChatMessageList.test.ts",
+          createdAt: "2026-03-14T08:04:00.000Z",
+          raw: {
+            source: "trace-message-tool-request",
+            toolName: "bash",
+            request: {
+              status: "completed",
+              command: "bun test tests/web-ui/ChatMessageList.test.ts",
+              headline: "bun test tests/web-ui/ChatMessageList.test.ts",
+              filePath: "tests/web-ui/ChatMessageList.test.ts",
+            },
+            rawPart: {
+              tool: "bash",
+              toolName: "bash",
+              state: { status: "completed" },
+            },
+          },
+          sourceEventTypes: ["runtime:tool-request:bash"],
         },
         {
-          type: "file-reference",
-          label: "文件引用 docs/spec.md",
-          content: "docs/spec.md:8-24",
-          filePath: "docs/spec.md",
-          fileRange: "8-24",
+          id: "tool-result-1",
+          role: "tool-result",
+          text: "bash 结果\n状态: failed\n输出: test failed",
+          completedAt: "2026-03-14T08:04:20.000Z",
+          raw: {
+            source: "trace-message-tool-result",
+            toolName: "bash",
+            result: {
+              status: "failed",
+              headline: "bun test tests/web-ui/ChatMessageList.test.ts",
+              output: "test failed",
+              filePath: "tests/web-ui/ChatMessageList.test.ts",
+            },
+            rawPart: {
+              tool: "bash",
+              toolName: "bash",
+              state: { status: "failed", error: "test failed" },
+            },
+          },
+          sourceEventTypes: ["runtime:tool-result:bash"],
         },
-        {
-          type: "diff",
-          label: "变更 Diff",
-          content: "control-plane/service/src/modules/tasks/task-domain-projector.ts | +14 -3",
-          filePath: "control-plane/service/src/modules/tasks/task-domain-projector.ts",
-          diffSummary: "control-plane/service/src/modules/tasks/task-domain-projector.ts | +14 -3",
-        },
-      ],
-      filteredMessages: [],
-      summaryItems: [],
+      ]),
+      summaryItems: ref([{ label: "时间线项", value: "2", tone: "purple" }]),
     });
   });
 
-  it("renders specialized projection trace details for tool, file reference, and diff segments", async () => {
+  it("renders shared tool summaries for tool timeline items", async () => {
     const { default: Panel } = await import(
       "../../control-plane/web-ui/src/components/task-detail-shared/TaskExecutionTracePanel.vue"
     );
@@ -115,16 +156,12 @@ describe("TaskExecutionTracePanel", () => {
 
     await flushPromises();
 
-    expect(wrapper.text()).toContain("completed");
-    expect(wrapper.text()).toContain("docs/spec.md");
-    expect(wrapper.text()).toContain("L8-24");
-    expect(wrapper.text()).toContain("参数");
-    expect(wrapper.text()).toContain("includePattern");
-    expect(wrapper.text()).toContain("变更");
-    expect(wrapper.text()).toContain("+14 -3");
+    expect(wrapper.text()).toContain("执行 bun test tests/web-ui/ChatMessageList.test.ts");
+    expect(wrapper.text()).toContain("1 失败 · 涉及 web-ui/ChatMessageList.test.ts");
+    expect(wrapper.text()).toContain("bash 结果");
   });
 
-  it("shows user-facing filters so the trace centers on user input, system-added context, and model replies", async () => {
+  it("shows the current trace filters for timeline roles", async () => {
     const { default: Panel } = await import(
       "../../control-plane/web-ui/src/components/task-detail-shared/TaskExecutionTracePanel.vue"
     );
@@ -138,11 +175,13 @@ describe("TaskExecutionTracePanel", () => {
 
     await flushPromises();
 
-    expect(wrapper.text()).toContain("关键内容");
-    expect(wrapper.text()).toContain("用户输入");
-    expect(wrapper.text()).toContain("系统补充");
-    expect(wrapper.text()).toContain("模型回复");
-    expect(wrapper.text()).toContain("调试事件");
     expect(wrapper.text()).toContain("关键时间线");
+    expect(wrapper.text()).toContain("全部时间线");
+    expect(wrapper.text()).toContain("用户输入");
+    expect(wrapper.text()).toContain("模型");
+    expect(wrapper.text()).toContain("工具");
+    expect(wrapper.text()).toContain("工具发起");
+    expect(wrapper.text()).toContain("工具结果");
+    expect(wrapper.text()).toContain("调试事件");
   });
 });

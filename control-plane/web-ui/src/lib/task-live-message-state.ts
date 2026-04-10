@@ -63,7 +63,9 @@ export function applyTaskMessagePatchEventToLiveAssistantState(
     nextState.metaById.set(messageId, {
       agent: patchEvent.agent,
       modelLabel: patchEvent.modelLabel,
-      createdAt: patchEvent.createdAt ?? patchEvent.completedAt,
+      createdAt:
+        patchEvent.createdAt ??
+        (patchEvent.kind === "assistant-completed" ? patchEvent.completedAt : undefined),
     });
     rememberAssistantMessageId(nextState, messageId);
 

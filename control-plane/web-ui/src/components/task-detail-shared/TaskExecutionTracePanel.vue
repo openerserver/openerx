@@ -68,6 +68,12 @@
               <a-typography-text type="secondary" style="font-size: 12px; display: block; margin-bottom: 6px">
                 {{ formatTimelineTime(message.createdAt, message.completedAt) }}
               </a-typography-text>
+              <div v-if="traceToolSummaryPrimary(message)" class="trace-panel__tool-summary">
+                <div class="trace-panel__tool-summary-primary">{{ traceToolSummaryPrimary(message) }}</div>
+                <div v-if="traceToolSummaryMeta(message)" class="trace-panel__tool-summary-meta">
+                  {{ traceToolSummaryMeta(message) }}
+                </div>
+              </div>
               <pre class="trace-panel__content">{{ message.text }}</pre>
               <pre v-if="expandedMessageRaw[message.id] && message.raw" class="trace-panel__raw">{{ JSON.stringify(message.raw, null, 2) }}</pre>
             </a-card>
@@ -81,6 +87,9 @@
 
 <script setup lang="ts">
 import { computed, ref, toRef, watch } from "vue";
+import type { ExecutionTraceTimelineItem } from "../../lib/api";
+import type { ToolCallDisplayItem } from "../../lib/task-tool-call-display";
+import { summarizeToolCalls } from "../../lib/task-tool-call-display";
 import { useTaskExecutionTrace } from "../../composables/useTaskExecutionTrace";
 
 const props = defineProps<{
@@ -149,6 +158,96 @@ function toggleMessageRaw(messageId: string) {
   };
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function normalizeTraceStatusLabel(status?: string) {
+  if (status === "completed") return "完成";
+  if (status === "running") return "执行中";
+  if (status === "failed" || status === "error") return "失败";
+  return status || "已触发";
+}
+
+function normalizeTracePreview(value: unknown, maxLength = 220) {
+  const text =
+    typeof value === "string"
+      ? value.replace(/\s+/g, " ").trim()
+      : (() => {
+          try {
+            return JSON.stringify(value);
+          } catch {
+            return undefined;
+          }
+        })();
+
+  if (!text) {
+    return undefined;
+  }
+
+  if (text.length <= maxLength) {
+    return text;
+  }
+
+  return `${text.slice(0, maxLength - 1)}...`;
+}
+
+function resolveTraceToolDisplayItem(message: ExecutionTraceTimelineItem): ToolCallDisplayItem | null {
+  if (!["tool", "tool-request", "tool-result"].includes(message.role)) {
+    return null;
+  }
+
+  const raw = asRecord(message.raw);
+  if (!raw) {
+    return null;
+  }
+
+  const request = asRecord(raw.request);
+  const result = asRecord(raw.result);
+  const rawPart = asRecord(raw.rawPart);
+  const rawState = asRecord(rawPart?.state);
+  const kind = asString(raw.toolName) ?? asString(rawPart?.toolName) ?? asString(rawPart?.tool) ?? "tool";
+  const status =
+    asString(request?.status) ?? asString(result?.status) ?? asString(rawState?.status) ?? undefined;
+
+  return {
+    kind,
+    label: kind,
+    stateLabel: normalizeTraceStatusLabel(status),
+    headline: asString(request?.headline) ?? asString(result?.headline),
+    description: asString(request?.description),
+    command: asString(request?.command),
+    filePath: asString(request?.filePath) ?? asString(result?.filePath),
+    inputPreview: normalizeTracePreview(request?.input),
+    outputPreview: normalizeTracePreview(result?.output ?? result?.error),
+  };
+}
+
+function traceToolSummaryPrimary(message: ExecutionTraceTimelineItem) {
+  const tool = resolveTraceToolDisplayItem(message);
+  if (!tool) {
+    return undefined;
+  }
+
+  return summarizeToolCalls([tool]).primary;
+}
+
+function traceToolSummaryMeta(message: ExecutionTraceTimelineItem) {
+  const tool = resolveTraceToolDisplayItem(message);
+  if (!tool) {
+    return undefined;
+  }
+
+  const summary = summarizeToolCalls([tool]);
+  return [summary.status, summary.secondary].filter(Boolean).join(" · ");
+}
+
 watch(
   () => props.refreshKey,
   () => {
@@ -190,6 +289,29 @@ watch(
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+.trace-panel__tool-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid #f0f0f0;
+  background: #fafafa;
+}
+
+.trace-panel__tool-summary-primary {
+  font-size: 13px;
+  line-height: 1.55;
+  color: #262626;
+}
+
+.trace-panel__tool-summary-meta {
+  font-size: 12px;
+  line-height: 1.5;
+  color: #8c8c8c;
 }
 
 .trace-panel__meta-lines {

@@ -272,7 +272,6 @@ async function upsertTaskSessionRunFacts(
       runtimeSessionId: context.runtimeSessionId,
       triggerType: "user_prompt",
       executionKind: resolveTaskSessionRunExecutionKind(context.isJudgeOperation),
-      coordinationKey: null,
       candidateIndex: args.candidateIndex ?? null,
       laneRole: resolveTaskSessionRunLaneRole(context.isJudgeOperation),
       executorKind: args.agentType,
@@ -294,7 +293,6 @@ async function upsertTaskSessionRunFacts(
       set: {
         phaseId: context.phaseId,
         runtimeSessionId: context.runtimeSessionId,
-        coordinationKey: null,
         candidateIndex: args.candidateIndex ?? null,
         executorKind: args.agentType,
         modelRoute: args.modelUsed ?? null,
