@@ -113,39 +113,11 @@
 
         <template v-if="column.key === 'actions'">
           <a-space>
-            <a-button
-              v-if="record.status === 'pending'"
-              type="primary"
-              size="small"
-              :loading="executingId === record.id"
-              @click="handleExecute(record.id)"
-            >
-              执行
-            </a-button>
-            <a-popconfirm
-              v-if="record.status === 'running' || record.status === 'pending'"
-              title="确定取消该任务？"
-              ok-text="确定"
-              cancel-text="返回"
-              @confirm="handleCancel(record.id)"
-            >
-              <a-button danger size="small" :loading="cancellingId === record.id">
-                取消
-              </a-button>
-            </a-popconfirm>
-            <a-button
-              v-if="record.status === 'failed' || record.status === 'completed'"
-              size="small"
-              @click="handleContinue(record.id)"
-            >续跑</a-button>
-            <router-link :to="`/workbench?task=${record.id}`">
-              <a-button type="link" size="small">工作台</a-button>
+            <router-link :to="`/tasks/${record.id}/v3`">
+              <a-button type="link" size="small">任务详情</a-button>
             </router-link>
             <router-link :to="`/multi-task-monitor?task=${record.id}`">
               <a-button type="link" size="small">监控台</a-button>
-            </router-link>
-            <router-link :to="`/tasks/${record.id}/v3`">
-              <a-button type="link" size="small">任务视图</a-button>
             </router-link>
             <a-popconfirm
               v-if="isAdmin"
@@ -428,17 +400,6 @@
         </a-form-item>
       </a-form>
     </a-modal>
-
-    <!-- Execution Mode Modal -->
-    <ExecutionModeModal
-      :open="showExecutionModeModal"
-      :loading="!!executingId"
-      :model-options="modelOptions"
-      :models-loading="modelsLoading"
-      :filter-model-option="filterModelOption"
-      @update:open="showExecutionModeModal = $event"
-      @confirm="handleExecutionModeConfirm"
-    />
   </div>
 </template>
 
@@ -447,15 +408,12 @@ import { PlusOutlined, SyncOutlined } from "@ant-design/icons-vue";
 import { message } from "ant-design-vue";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import ExecutionModeModal from "../components/ExecutionModeModal.vue";
 import {
   ApiError,
   type AutopilotLevel,
   type BossParticipationMode,
-  type ChainStepInput,
   type CollaborationMode,
   type CommandSummary,
-  type ExecutionMode,
   type OperatingModeSelection,
   type RecommendedOperatingProfile,
   type Repository,
@@ -474,10 +432,8 @@ import {
   listRepositories,
   listTasks,
   updateTask,
-  updateTaskStatus,
 } from "../lib/api";
 import { showRuntimeRecoveryNotice } from "../lib/runtime-recovery";
-import { RUNTIME_RECOVERY_ERROR_PREFIX } from "../lib/runtime-recovery-contract";
 import { RUNTIME_RECOVERY_CONTEXTS } from "../lib/runtime-recovery-notice";
 import { resolveTaskDisplayStatus } from "../lib/task-display-status";
 import { useAuthStore } from "../stores/auth";
@@ -490,8 +446,6 @@ const route = useRoute();
 const router = useRouter();
 const loading = ref(false);
 const creating = ref(false);
-const executingId = ref<string | null>(null);
-const cancellingId = ref<string | null>(null);
 const deletingId = ref<string | null>(null);
 const tasks = ref<Task[]>([]);
 const statusFilter = ref<string | undefined>(undefined);
@@ -508,15 +462,6 @@ const AUTO_REFRESH_INTERVAL_MS = 8000;
 const isAdmin = computed(() =>
   ["admin", "platform_admin", "org_admin"].includes(authStore.user?.role ?? ""),
 );
-
-const showExecutionModeModal = ref(false);
-const executionModeTargetTaskId = ref<string | null>(null);
-type ExecutionOverrides = {
-  mode: ExecutionMode;
-  candidates?: Array<{ model: string; label?: string }>;
-  steps?: ChainStepInput[];
-} | null;
-const pendingExecutionOverrides = ref<ExecutionOverrides>(null);
 
 const autoRefreshTimer = ref<ReturnType<typeof setInterval> | null>(null);
 const hasActiveTasks = computed(() =>
@@ -882,8 +827,8 @@ async function autoExecuteCreatedTask(taskId?: string) {
   }
 }
 
-async function runTaskExecution(taskId: string, overrides?: ExecutionOverrides) {
-  await executeTask(taskId, overrides ?? undefined);
+async function runTaskExecution(taskId: string) {
+  await executeTask(taskId);
   upsertTaskSnapshot({
     id: taskId,
     status: "running",
@@ -896,7 +841,7 @@ async function runTaskExecution(taskId: string, overrides?: ExecutionOverrides) 
 async function attemptTaskExecution(taskId: string, fromAutoCreate = false) {
   const preflight = await getTaskExecutionPreflight(taskId);
   if (preflight.allowed) {
-    return runTaskExecution(taskId, fromAutoCreate ? undefined : pendingExecutionOverrides.value);
+    return runTaskExecution(taskId);
   }
 
   if (
@@ -926,7 +871,7 @@ async function attemptTaskExecution(taskId: string, fromAutoCreate = false) {
     message.success(
       fromAutoCreate ? "已自动降级模型并重试执行" : "已切换到低成本模型，正在重试执行",
     );
-    return runTaskExecution(taskId, fromAutoCreate ? undefined : pendingExecutionOverrides.value);
+    return runTaskExecution(taskId);
   }
 
   throw new ApiError({
@@ -1168,7 +1113,7 @@ const columns = [
     sorter: (a: Task, b: Task) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
     defaultSortOrder: "descend" as const,
   },
-  { title: "操作", key: "actions", width: 280 },
+  { title: "操作", key: "actions", width: 220 },
 ];
 
 function setStatusFilter(value: unknown) {
@@ -1250,66 +1195,6 @@ async function handleCreate() {
   }
 }
 
-function handleExecute(taskId: string) {
-  executionModeTargetTaskId.value = taskId;
-  pendingExecutionOverrides.value = null;
-  if (!modelsData.value) loadModels();
-  showExecutionModeModal.value = true;
-}
-
-async function handleExecutionModeConfirm(overrides: ExecutionOverrides) {
-  showExecutionModeModal.value = false;
-  const taskId = executionModeTargetTaskId.value;
-  if (!taskId) return;
-  executionModeTargetTaskId.value = null;
-  pendingExecutionOverrides.value = overrides;
-  executingId.value = taskId;
-  try {
-    const latestTask = await attemptTaskExecution(taskId);
-    if (latestTask === null) {
-      return;
-    }
-
-    message.success("Agent 已开始执行");
-    await refresh();
-    if (latestTask) {
-      upsertTaskSnapshot(latestTask);
-    }
-  } catch (e) {
-    if (
-      showRuntimeRecoveryNotice(e, {
-        context: RUNTIME_RECOVERY_CONTEXTS.taskExecute,
-        router,
-      })
-    ) {
-      return;
-    }
-
-    const msg = String(e instanceof Error ? e.message : e);
-    if ((e as ApiError | null)?.code?.includes(RUNTIME_RECOVERY_ERROR_PREFIX)) {
-      message.error(msg, 8);
-    } else {
-      message.error(`执行失败: ${msg}`);
-    }
-  } finally {
-    executingId.value = null;
-    pendingExecutionOverrides.value = null;
-  }
-}
-
-async function handleCancel(taskId: string) {
-  cancellingId.value = taskId;
-  try {
-    await updateTaskStatus(taskId, "cancelled");
-    message.success("任务已取消");
-    await refresh();
-  } catch (e) {
-    message.error(`取消失败: ${e}`);
-  } finally {
-    cancellingId.value = null;
-  }
-}
-
 async function handleDelete(taskId: string) {
   deletingId.value = taskId;
   try {
@@ -1321,16 +1206,6 @@ async function handleDelete(taskId: string) {
   } finally {
     deletingId.value = null;
   }
-}
-
-function handleContinue(taskId: string) {
-  void router.push({
-    path: "/workbench",
-    query: {
-      task: taskId,
-      reply: "1",
-    },
-  });
 }
 
 function formatDuration(task: { startedAt?: string; finishedAt?: string }) {

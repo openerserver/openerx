@@ -6,10 +6,6 @@
         <div class="task-member-panel__subtitle">按成员优先模型聚合当前任务的人类成员与 Agent 成员。</div>
       </div>
       <div class="task-member-panel__header-actions">
-        <a-space size="small" wrap>
-          <a-tag color="blue">当前阶段 {{ view?.currentStageLabel || "未命名阶段" }}</a-tag>
-          <a-tag :color="workflowStatusColor">{{ workflowStatusLabel }}</a-tag>
-        </a-space>
         <button
           type="button"
           class="task-member-panel__toggle"
@@ -119,41 +115,6 @@ const sections = computed(() => {
     .filter((group) => group.items.length > 0);
 });
 
-const workflowStatusLabel = computed(() => {
-  switch (props.view?.workflowStatus) {
-    case "running":
-      return "运行中";
-    case "blocked":
-      return "阻塞中";
-    case "waiting-approval":
-      return "待审批";
-    case "completed":
-      return "已完成";
-    case "failed":
-      return "失败";
-    case "cancelled":
-      return "已取消";
-    default:
-      return "待开始";
-  }
-});
-
-const workflowStatusColor = computed(() => {
-  switch (props.view?.workflowStatus) {
-    case "running":
-      return "processing";
-    case "blocked":
-    case "failed":
-      return "error";
-    case "waiting-approval":
-      return "warning";
-    case "completed":
-      return "success";
-    default:
-      return "default";
-  }
-});
-
 function statusToneColor(tone: TaskMemberViewMember["statusTone"]) {
   switch (tone) {
     case "processing":
@@ -234,6 +195,8 @@ function formatTime(value: string) {
 
 .task-member-panel__body {
   display: block;
+  max-height: 420px;
+  overflow-y: auto;
 }
 
 .task-member-panel__empty {

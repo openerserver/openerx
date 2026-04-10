@@ -16,12 +16,6 @@
             <a-typography-title :level="3" style="margin: 0">
               {{ page.header.task.title || "任务详情" }}
             </a-typography-title>
-            <a-space size="small" wrap style="margin-top: 8px">
-              <a-tag :color="page.header.taskDisplayStatus.tagColor">
-                {{ page.header.taskDisplayStatus.label }}
-              </a-tag>
-              <a-tag color="blue">当前阶段 {{ page.header.currentStageLabel }}</a-tag>
-            </a-space>
           </div>
 
           <a-space size="small" wrap>

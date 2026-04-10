@@ -18,7 +18,7 @@ export function useTaskDetailViewStateCoordinator(args: {
   selectedSessionNode: Ref<TreeSessionNodeRecord | null | undefined>;
   messageTrace: Ref<TaskExecutionTrace | null | undefined>;
 }) {
-  const sidebarCollapsed = ref(false);
+  const sidebarCollapsed = ref(true);
   const previewFile = ref<PreviewFilePayload | null>(null);
   const runtimePermissions = ref<TaskRuntimePermission[]>([]);
 

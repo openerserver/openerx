@@ -7,20 +7,15 @@
         :content="sidebar.previewFile.content"
         @close="sidebar.handleCloseFilePreview"
       />
-      <TaskMemberPanel
-        v-if="sidebar.memberViewLoading || sidebar.memberView"
-        :view="sidebar.memberView"
-        :loading="sidebar.memberViewLoading"
-      />
-      <TaskFollowupPanel
-        :task-id="sidebar.taskId"
-        :session-id="sidebar.selectedSessionId"
-        :refresh-key="sidebar.traceRefreshKey"
-      />
       <TaskExecutionTracePanel
         :task-id="sidebar.taskId"
         :session-id="sidebar.selectedSessionId"
         :refresh-key="sidebar.traceRefreshKey"
+      />
+      <TaskMemberPanel
+        v-if="sidebar.memberViewLoading || sidebar.memberView"
+        :view="sidebar.memberView"
+        :loading="sidebar.memberViewLoading"
       />
     </template>
   </aside>
@@ -39,9 +34,6 @@ const TaskFilePreviewPanel = defineAsyncComponent(
 );
 const TaskMemberPanel = defineAsyncComponent(
   () => import("../task-detail/TaskMemberPanel.vue"),
-);
-const TaskFollowupPanel = defineAsyncComponent(
-  () => import("../task-detail/TaskFollowupPanel.vue"),
 );
 const TaskExecutionTracePanel = defineAsyncComponent(
   () => import("../task-detail-shared/TaskExecutionTracePanel.vue"),
