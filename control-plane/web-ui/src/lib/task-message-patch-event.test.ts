@@ -121,6 +121,56 @@ describe("task message patch event", () => {
     });
   });
 
+  it("maps persisted ack events into a stable task patch", () => {
+    expect(
+      toTaskMessagePatchEvent(
+        createEvent({
+          type: "task.message.persisted",
+          data: {
+            roundId: "task-session:task-1:session-1",
+            taskSessionId: "task-session:task-1:session-1",
+            messageId: "assistant-1",
+            persistedRevision: 7,
+            snapshotVersion: 7,
+            persistedThroughRevision: 7,
+          },
+        }),
+      ),
+    ).toMatchObject({
+      kind: "message-persisted",
+      roundId: "task-session:task-1:session-1",
+      taskSessionId: "task-session:task-1:session-1",
+      messageId: "assistant-1",
+      persistedRevision: 7,
+      snapshotVersion: 7,
+      persistedThroughRevision: 7,
+    });
+  });
+
+  it("maps round synced events into a stable task patch", () => {
+    expect(
+      toTaskMessagePatchEvent(
+        createEvent({
+          type: "task.round.synced",
+          data: {
+            roundId: "task-session:task-1:session-1",
+            taskSessionId: "task-session:task-1:session-1",
+            messageId: "assistant-1",
+            snapshotVersion: 8,
+            persistedThroughRevision: 8,
+          },
+        }),
+      ),
+    ).toMatchObject({
+      kind: "round-synced",
+      roundId: "task-session:task-1:session-1",
+      taskSessionId: "task-session:task-1:session-1",
+      messageId: "assistant-1",
+      snapshotVersion: 8,
+      persistedThroughRevision: 8,
+    });
+  });
+
   it("maps session lifecycle snapshot reasons", () => {
     expect(
       toTaskMessagePatchEvent(

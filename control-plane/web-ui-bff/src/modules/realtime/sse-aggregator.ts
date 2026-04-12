@@ -41,6 +41,7 @@ import {
 import {
   fetchTaskSessionLineageRecords,
   persistTaskSessionMessageSnapshot,
+  toCanonicalTaskSessionId,
   upsertTaskSessionLineageRecord,
 } from "../tasks/task-session-store";
 import { observeGraphWorkspaceDir, onGraphToolExecuted } from "./dag-sync";
@@ -1403,9 +1404,78 @@ class SSEAggregator {
     }
 
     const authorization = await createInternalAuthorization();
-    await persistTaskSessionMessageSnapshot(taskId, authorization, {
+    const persistResult = await persistTaskSessionMessageSnapshot(taskId, authorization, {
       runtimeSessionId: event.sessionId,
       message,
+    });
+    this.emitTaskPersistenceAck({
+      ts: event.ts,
+      taskId,
+      projectId: event.projectId,
+      phaseId: asString(event.data.phaseId) ?? event.phaseId,
+      runtimeSessionId: event.sessionId,
+      agentRunId: event.agentRunId,
+      persistedMessageId: persistResult.data?.messageId,
+      persistedSessionId: persistResult.data?.sessionId,
+      seq: persistResult.data?.seq,
+    });
+  }
+
+  private emitTaskPersistenceAck(args: {
+    ts: string;
+    taskId: string;
+    projectId?: string;
+    phaseId?: string;
+    runtimeSessionId: string;
+    agentRunId?: string;
+    persistedMessageId?: string;
+    persistedSessionId?: string;
+    seq?: number;
+  }) {
+    if (!args.persistedMessageId || typeof args.seq !== "number") {
+      return;
+    }
+
+    const roundId =
+      toCanonicalTaskSessionId(args.taskId, args.runtimeSessionId) ??
+      args.persistedSessionId ??
+      args.runtimeSessionId;
+
+    this.emit({
+      id: crypto.randomUUID(),
+      type: "task.message.persisted",
+      ts: args.ts,
+      projectId: args.projectId,
+      taskId: args.taskId,
+      phaseId: args.phaseId,
+      sessionId: args.runtimeSessionId,
+      agentRunId: args.agentRunId,
+      data: {
+        roundId,
+        taskSessionId: args.persistedSessionId ?? roundId,
+        messageId: args.persistedMessageId,
+        persistedRevision: args.seq,
+        snapshotVersion: args.seq,
+        persistedThroughRevision: args.seq,
+      },
+    });
+
+    this.emit({
+      id: crypto.randomUUID(),
+      type: "task.round.synced",
+      ts: args.ts,
+      projectId: args.projectId,
+      taskId: args.taskId,
+      phaseId: args.phaseId,
+      sessionId: args.runtimeSessionId,
+      agentRunId: args.agentRunId,
+      data: {
+        roundId,
+        taskSessionId: args.persistedSessionId ?? roundId,
+        messageId: args.persistedMessageId,
+        snapshotVersion: args.seq,
+        persistedThroughRevision: args.seq,
+      },
     });
   }
 
@@ -1597,9 +1667,20 @@ class SSEAggregator {
     }
 
     const authorization = await createInternalAuthorization();
-    await persistTaskSessionMessageSnapshot(taskId, authorization, {
+    const persistResult = await persistTaskSessionMessageSnapshot(taskId, authorization, {
       runtimeSessionId: event.sessionId,
       message,
+    });
+    this.emitTaskPersistenceAck({
+      ts: event.ts,
+      taskId,
+      projectId: event.projectId,
+      phaseId: asString(event.data.phaseId) ?? event.phaseId,
+      runtimeSessionId: event.sessionId,
+      agentRunId: event.agentRunId,
+      persistedMessageId: persistResult.data?.messageId,
+      persistedSessionId: persistResult.data?.sessionId,
+      seq: persistResult.data?.seq,
     });
   }
 

@@ -313,7 +313,13 @@ export async function persistTaskSessionMessageSnapshot(
     message: unknown;
   },
 ) {
-  return cpFetch(`/api/tasks/${encodeURIComponent(taskId)}/sessions/messages`, {
+  return cpFetch<{
+    ok?: boolean;
+    skipped?: boolean;
+    messageId?: string;
+    sessionId?: string;
+    seq?: number;
+  }>(`/api/tasks/${encodeURIComponent(taskId)}/sessions/messages`, {
     method: "POST",
     authorization,
     body: {

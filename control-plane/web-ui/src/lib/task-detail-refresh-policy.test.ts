@@ -46,7 +46,7 @@ describe("task detail refresh policy", () => {
     expect(getTaskDetailRefreshRequest(event)).toBeNull();
   });
 
-  it("refreshes when an assistant reply reaches a completed boundary", () => {
+  it("keeps assistant completion on realtime state until a persisted ack arrives", () => {
     const event = createPatchEvent("assistant-completed", {
       rawEventKind: "task.message.updated",
       messageId: "assistant-1",
@@ -54,24 +54,39 @@ describe("task detail refresh policy", () => {
       completedAt: "2026-04-08T03:18:24.437Z",
     });
 
+    expect(shouldScheduleTaskDetailRefresh(event)).toBe(false);
+    expect(shouldRefreshTaskDetailMessages(event)).toBe(false);
+    expect(getTaskDetailRefreshRequest(event)).toBeNull();
+  });
+
+  it("refreshes when a round synced ack confirms persisted messages are ready", () => {
+    const event = createPatchEvent("round-synced", {
+      rawEventKind: "task.round.synced",
+      roundId: "task-session:task-1:session-1",
+      taskSessionId: "task-session:task-1:session-1",
+      snapshotVersion: 8,
+      persistedThroughRevision: 8,
+    });
+
     expect(shouldScheduleTaskDetailRefresh(event)).toBe(true);
     expect(shouldRefreshTaskDetailMessages(event)).toBe(true);
     expect(getTaskDetailRefreshRequest(event)).toEqual({
       eventId: "event-1",
-      reason: "assistant-completed",
+      reason: "round-synced",
       shouldRefreshMessages: true,
       shouldBumpTraceRefreshKey: false,
     });
   });
 
-  it("refreshes persisted messages for tool message updates", () => {
+  it("does not treat tool message updates as a persisted refresh boundary", () => {
     const event = createPatchEvent("tool-message", {
       rawEventKind: "task.message.updated",
       messageId: "tool-1",
     });
 
-    expect(shouldScheduleTaskDetailRefresh(event)).toBe(true);
-    expect(shouldRefreshTaskDetailMessages(event)).toBe(true);
+    expect(shouldScheduleTaskDetailRefresh(event)).toBe(false);
+    expect(shouldRefreshTaskDetailMessages(event)).toBe(false);
+    expect(getTaskDetailRefreshRequest(event)).toBeNull();
   });
 
   it("refreshes on session creation snapshots", () => {

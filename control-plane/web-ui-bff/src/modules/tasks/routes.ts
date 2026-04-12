@@ -91,6 +91,12 @@ import {
   fetchTaskConversationCompatMessages,
   fetchTaskSessionCachedCompatMessages,
 } from "./task-session-read-compat";
+import {
+  queryCurrentTaskRound,
+  queryTaskRoundMessages,
+  queryTaskRounds,
+  type TaskRoundDto,
+} from "./task-round-facade";
 import { buildWorkflowExecutionPromptSnapshot } from "./workflow-stage-execution";
 import { buildTaskWorkflowViewModel } from "./workflow-view";
 
@@ -2206,6 +2212,29 @@ async function continueSingleTaskExecutionFlow(
     authorization: input.authorization,
   });
 
+  const round: TaskRoundDto = {
+    id: childTaskSessionId,
+    taskId: input.taskId,
+    sessionId: childTaskSessionId,
+    parentRoundId: parentTaskSessionId,
+    parentSessionId: parentTaskSessionId,
+    phaseId: phase.id,
+    kind: "continue",
+    source: "continue",
+    status: "running",
+    title: childSessionTitle,
+    promptText: input.prompt,
+    model: context.resolvedModel ? formatModelRoute(context.resolvedModel) : null,
+    candidateIndex: null,
+    stepIndex: null,
+    startedAt: phaseStartedAt,
+    completedAt: null,
+    createdAt: phaseStartedAt,
+    updatedAt: phaseStartedAt,
+    stale: false,
+    partial: false,
+  };
+
   return {
     status: 200 as const,
     body: {
@@ -2215,6 +2244,7 @@ async function continueSingleTaskExecutionFlow(
       parentSessionId: context.sessionId,
       parentTaskSessionId,
       agentRunId,
+      round,
     },
   };
 }
@@ -6963,6 +6993,46 @@ taskRoutes.get("/:taskId/graph", async (c) => {
     authorization: authHeader(c),
   });
   return c.json(result.data, result.ok ? 200 : (result.status as 401 | 404 | 502));
+});
+
+taskRoutes.get("/:taskId/current-round", async (c) => {
+  const result = await queryCurrentTaskRound({
+    taskId: c.req.param("taskId"),
+    authorization: authHeader(c),
+  });
+
+  if (!result.ok) {
+    return c.json(result.data ?? { error: result.error }, result.status as 404 | 502);
+  }
+
+  return c.json(result.data, 200);
+});
+
+taskRoutes.get("/:taskId/rounds", async (c) => {
+  const result = await queryTaskRounds({
+    taskId: c.req.param("taskId"),
+    authorization: authHeader(c),
+  });
+
+  if (!result.ok) {
+    return c.json(result.data ?? { error: result.error }, result.status as 404 | 502);
+  }
+
+  return c.json(result.data, 200);
+});
+
+taskRoutes.get("/:taskId/rounds/:roundId/messages", async (c) => {
+  const result = await queryTaskRoundMessages({
+    taskId: c.req.param("taskId"),
+    roundId: c.req.param("roundId"),
+    authorization: authHeader(c),
+  });
+
+  if (!result.ok) {
+    return c.json(result.data ?? { error: result.error }, result.status as 404 | 502);
+  }
+
+  return c.json(result.data, 200);
 });
 
 taskRoutes.get("/:taskId/query/normalized-conversation", async (c) => {

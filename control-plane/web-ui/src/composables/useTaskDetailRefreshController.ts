@@ -11,13 +11,11 @@ export type TaskDetailRefreshSnapshotOptions = {
 };
 
 const SLOW_REFRESH_REASONS = new Set<TaskDetailRefreshRequest["reason"]>([
-  "assistant-completed",
   "user-message",
   "tool-message",
 ]);
 
 const WORKFLOW_REFRESH_REASONS = new Set<TaskDetailRefreshRequest["reason"]>([
-  "assistant-completed",
   "user-message",
   "tool-message",
   "session-created",

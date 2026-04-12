@@ -382,11 +382,140 @@ describe("SSEAggregator pipeline emitters", () => {
         agentRunId: "run-1",
         data: {
           message: {
-            id: "msg-1",
-            role: "assistant",
-            agent: "planner",
+            sessionId: "ses-1",
+            info: {
+              id: "msg-1",
+              role: "assistant",
+              agent: "planner",
+            },
           },
           reason: "message.updated",
+        },
+      });
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  test("message mirror persistence emits persisted and synced ack events", async () => {
+    findAgentRunBySessionIdMock.mockReturnValue({
+      subSessionId: "ses-1",
+      taskId: "task-1",
+      projectId: "proj-1",
+      agentRunId: "run-1",
+      status: "running",
+    });
+
+    cpFetchMock.mockImplementation(async (url: string, options?: { method?: string }) => {
+      if ((options?.method || "GET") === "POST" && url === "/api/tasks/task-1/sessions/messages") {
+        return {
+          ok: true,
+          status: 201,
+          data: {
+            ok: true,
+            messageId: "task-message-1",
+            sessionId: "task-session:task-1:ses-1",
+            seq: 42,
+          },
+        };
+      }
+
+      if (isTaskDetailGet(url, options)) {
+        return {
+          ok: true,
+          status: 200,
+          data: createTaskDetailRecord(),
+        };
+      }
+
+      if ((options?.method || "GET") === "GET" && url === "/api/tasks/task-1/sessions") {
+        return {
+          ok: true,
+          status: 200,
+          data: {
+            data: [
+              {
+                id: "task-session:task-1:ses-1",
+                runtimeSessionId: "ses-1",
+                isActive: true,
+                archivedAt: null,
+              },
+            ],
+            meta: {
+              currentSessionId: "task-session:task-1:ses-1",
+            },
+          },
+        };
+      }
+
+      return { ok: true, status: 200, data: {} };
+    });
+
+    const emitted: Array<Record<string, unknown>> = [];
+    const unsubscribe = sseAggregator.onEvent((event) => {
+      emitted.push(event as unknown as Record<string, unknown>);
+    });
+
+    try {
+      await sseAggregator.ingestParsedEvent("message.updated", {
+        sessionId: "ses-1",
+        text: "persist me",
+        info: {
+          id: "msg-1",
+          role: "assistant",
+          agent: "planner",
+          time: {
+            created: "2026-03-12T10:05:00.000Z",
+            completed: "2026-03-12T10:05:02.000Z",
+          },
+        },
+      });
+
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const persistCalls = (
+        cpFetchMock.mock.calls as unknown as Array<
+          [string, { method?: string; authorization?: string; body?: Record<string, unknown> }]
+        >
+      ).filter(
+        ([url, options]) =>
+          (options?.method || "GET") === "POST" && url === "/api/tasks/task-1/sessions/messages",
+      );
+
+      expect(persistCalls).toHaveLength(1);
+
+      expect(emitted.map((event) => event.type)).toEqual([
+        "task.message.updated",
+        "message.updated",
+        "task.message.persisted",
+        "task.round.synced",
+      ]);
+      expect(emitted[2]).toMatchObject({
+        taskId: "task-1",
+        projectId: "proj-1",
+        sessionId: "ses-1",
+        data: {
+          roundId: "task-session:task-1:ses-1",
+          taskSessionId: "task-session:task-1:ses-1",
+          messageId: "task-message-1",
+          persistedRevision: 42,
+          snapshotVersion: 42,
+          persistedThroughRevision: 42,
+        },
+      });
+      expect(emitted[3]).toMatchObject({
+        taskId: "task-1",
+        projectId: "proj-1",
+        sessionId: "ses-1",
+        data: {
+          roundId: "task-session:task-1:ses-1",
+          taskSessionId: "task-session:task-1:ses-1",
+          messageId: "task-message-1",
+          snapshotVersion: 42,
+          persistedThroughRevision: 42,
         },
       });
     } finally {

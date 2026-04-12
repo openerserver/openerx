@@ -1031,6 +1031,222 @@ describe("task sessions route", () => {
     expect(getSessionMessagesMock).not.toHaveBeenCalled();
   });
 
+  test("exposes a minimal round facade backed by persisted sessions and session-first messages", async () => {
+    setCpFetchImplementation(async (url: string, options?: { method?: string }) => {
+      if (url === "/api/tasks/task-1/sessions" && !options?.method) {
+        return {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "task-session:task-1:session-root",
+                runtimeSessionId: "session-root",
+                parentRuntimeSessionId: null,
+                sourceType: "root",
+                sessionKind: "primary",
+                executionStatus: "running",
+                isActive: true,
+                archivedAt: null,
+                createdAt: "2026-03-20T10:00:00.000Z",
+                updatedAt: "2026-03-20T10:00:10.000Z",
+              },
+              {
+                id: "task-session:task-1:session-candidate-a",
+                runtimeSessionId: "session-candidate-a",
+                parentRuntimeSessionId: "session-root",
+                sourceType: "parallel",
+                sessionKind: "candidate",
+                phaseRole: "candidate",
+                candidateIndex: 0,
+                executionStatus: "completed",
+                isActive: false,
+                archivedAt: null,
+                createdAt: "2026-03-20T10:00:02.000Z",
+                updatedAt: "2026-03-20T10:00:08.000Z",
+              },
+            ],
+            meta: {
+              currentSessionId: "task-session:task-1:session-root",
+            },
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Asession-root/messages") {
+        return {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "db-message-user-1",
+                runtimeMessageId: "runtime-message-user-1",
+                role: "user",
+                textContent: "继续完善主线方案",
+                createdAt: "2026-03-20T10:00:00.000Z",
+                parts: [
+                  {
+                    id: "db-part-user-1",
+                    partType: "text",
+                    textContent: "继续完善主线方案",
+                    jsonPayload: {},
+                  },
+                ],
+              },
+              {
+                id: "db-message-assistant-1",
+                runtimeMessageId: "runtime-message-assistant-1",
+                role: "assistant",
+                textContent: "这是主线回复",
+                createdAt: "2026-03-20T10:00:03.000Z",
+                completedAt: "2026-03-20T10:00:06.000Z",
+                parts: [
+                  {
+                    id: "db-part-assistant-1",
+                    partType: "text",
+                    textContent: "这是主线回复",
+                    jsonPayload: {},
+                  },
+                ],
+              },
+            ],
+            meta: {
+              readSource: "task-session-first",
+              sessionId: "task-session:task-1:session-root",
+              messageCount: 2,
+              cacheState: "complete",
+              complete: true,
+              itemCount: 2,
+            },
+          },
+        };
+      }
+
+      if (
+        url ===
+        "/api/tasks/task-1/sessions/task-session%3Atask-1%3Asession-candidate-a/messages"
+      ) {
+        return {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "db-message-candidate-a",
+                runtimeMessageId: "runtime-message-candidate-a",
+                role: "assistant",
+                textContent: "候选 A 回复",
+                createdAt: "2026-03-20T10:00:04.000Z",
+                completedAt: "2026-03-20T10:00:07.000Z",
+                parts: [
+                  {
+                    id: "db-part-candidate-a",
+                    partType: "text",
+                    textContent: "候选 A 回复",
+                    jsonPayload: {},
+                  },
+                ],
+              },
+            ],
+            meta: {
+              readSource: "task-session-first",
+              sessionId: "task-session:task-1:session-candidate-a",
+              messageCount: 1,
+              cacheState: "complete",
+              complete: true,
+              itemCount: 1,
+            },
+          },
+        };
+      }
+
+      return { ok: true, data: {} };
+    });
+
+    const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
+
+    const roundsResponse = await taskRoutes.request("http://localhost/task-1/rounds", {
+      headers: {
+        Authorization: "Bearer test",
+      },
+    });
+
+    expect(roundsResponse.status).toBe(200);
+    await expect(roundsResponse.json()).resolves.toEqual({
+      taskId: "task-1",
+      currentRoundId: "task-session:task-1:session-root",
+      rounds: [
+        expect.objectContaining({
+          id: "task-session:task-1:session-root",
+          sessionId: "task-session:task-1:session-root",
+          kind: "continue",
+          source: "continue",
+          status: "running",
+          promptText: "继续完善主线方案",
+        }),
+        expect.objectContaining({
+          id: "task-session:task-1:session-candidate-a",
+          parentRoundId: "task-session:task-1:session-root",
+          kind: "compare-candidate",
+          source: "compare",
+          status: "completed",
+          promptText: "",
+          partial: true,
+        }),
+      ],
+    });
+
+    const currentRoundResponse = await taskRoutes.request("http://localhost/task-1/current-round", {
+      headers: {
+        Authorization: "Bearer test",
+      },
+    });
+
+    expect(currentRoundResponse.status).toBe(200);
+    await expect(currentRoundResponse.json()).resolves.toEqual({
+      taskId: "task-1",
+      round: expect.objectContaining({
+        id: "task-session:task-1:session-root",
+        kind: "continue",
+        promptText: "继续完善主线方案",
+      }),
+    });
+
+    const roundMessagesResponse = await taskRoutes.request(
+      "http://localhost/task-1/rounds/task-session%3Atask-1%3Asession-root/messages",
+      {
+        headers: {
+          Authorization: "Bearer test",
+        },
+      },
+    );
+
+    expect(roundMessagesResponse.status).toBe(200);
+    await expect(roundMessagesResponse.json()).resolves.toEqual({
+      taskId: "task-1",
+      round: expect.objectContaining({
+        id: "task-session:task-1:session-root",
+        promptText: "继续完善主线方案",
+      }),
+      messages: [
+        expect.objectContaining({
+          id: "runtime-message-user-1",
+          roundId: "task-session:task-1:session-root",
+          role: "user",
+          text: "继续完善主线方案",
+          status: "completed",
+        }),
+        expect.objectContaining({
+          id: "runtime-message-assistant-1",
+          role: "assistant",
+          text: "这是主线回复",
+          status: "completed",
+        }),
+      ],
+      reconcileRequired: false,
+      snapshotVersion: 2,
+      persistedThroughRevision: 2,
+    });
+  });
+
   test("reads task-level conversation messages from the task-first cache", async () => {
     setCpFetchImplementation(async (url: string) => {
       if (url === "/api/tasks/task-1/messages") {

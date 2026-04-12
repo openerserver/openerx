@@ -79,24 +79,39 @@ describe("useTaskDetailRefreshController", () => {
     });
   });
 
+  it("maps round synced requests into message-only snapshot options", () => {
+    expect(
+      toTaskDetailRefreshSnapshotOptions({
+        eventId: "event-round-1",
+        reason: "round-synced",
+        shouldRefreshMessages: true,
+        shouldBumpTraceRefreshKey: false,
+      }),
+    ).toEqual({
+      workflow: false,
+      flow: false,
+      messages: true,
+    });
+  });
+
   it("schedules delayed task snapshot refreshes from refresh requests", async () => {
     const { latestTaskRefreshRequest, refreshTaskSnapshot } = mountController();
 
     latestTaskRefreshRequest.value = {
       eventId: "event-1",
-      reason: "assistant-completed",
+      reason: "round-synced",
       shouldRefreshMessages: true,
       shouldBumpTraceRefreshKey: false,
     };
 
     await nextTick();
-    vi.advanceTimersByTime(259);
+    vi.advanceTimersByTime(179);
     expect(refreshTaskSnapshot).not.toHaveBeenCalled();
 
     vi.advanceTimersByTime(1);
     await nextTick();
     expect(refreshTaskSnapshot).toHaveBeenCalledWith({
-      workflow: true,
+      workflow: false,
       flow: false,
       messages: true,
     });

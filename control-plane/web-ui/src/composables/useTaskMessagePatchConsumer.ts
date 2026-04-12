@@ -97,6 +97,7 @@ export function useTaskMessagePatchConsumer(taskIds: Ref<string[]>) {
   return {
     taskPatchEventSignature,
     realtimeConnected,
+    getTaskPatchEvents,
     getLatestTaskPatchEvent,
     getLiveAssistantState,
     replaceLiveAssistantStateFromHistory,

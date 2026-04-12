@@ -1515,6 +1515,80 @@ export interface SessionInfo {
 
 export type TaskSessionRecord = SessionInfo;
 
+export type TaskRoundKind = "continue" | "compare-candidate" | "workflow-step";
+export type TaskRoundSource = "continue" | "compare" | "workflow";
+export type TaskRoundStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+
+export interface TaskRoundDto {
+  id: string;
+  taskId: string;
+  sessionId: string;
+  parentRoundId?: string | null;
+  parentSessionId?: string | null;
+  phaseId?: string | null;
+  kind: TaskRoundKind;
+  source: TaskRoundSource;
+  status: TaskRoundStatus;
+  title?: string | null;
+  promptText: string;
+  model?: string | null;
+  candidateIndex?: number | null;
+  stepIndex?: number | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  stale?: boolean;
+  partial?: boolean;
+}
+
+export interface TaskRoundListDto {
+  taskId: string;
+  currentRoundId?: string | null;
+  rounds: TaskRoundDto[];
+}
+
+export type TaskRoundMessageRole = "user" | "assistant" | "tool" | "system";
+export type TaskRoundMessageStatus =
+  | "pending"
+  | "streaming"
+  | "completed"
+  | "failed"
+  | "cancelled";
+export type TaskRoundMessagePartType = "text" | "toolCall" | "toolResult";
+
+export interface TaskRoundMessagePartDto {
+  id: string;
+  partIndex: number;
+  partType: TaskRoundMessagePartType;
+  text: string;
+  finalizedAt?: string | null;
+}
+
+export interface TaskRoundMessageDto {
+  id: string;
+  roundId: string;
+  sessionId: string;
+  role: TaskRoundMessageRole;
+  status: TaskRoundMessageStatus;
+  text: string;
+  errorText?: string | null;
+  parts: TaskRoundMessagePartDto[];
+  createdAt: string;
+  updatedAt: string;
+  startedAt?: string | null;
+  completedAt?: string | null;
+}
+
+export interface TaskRoundMessagesDto {
+  taskId: string;
+  round: TaskRoundDto;
+  messages: TaskRoundMessageDto[];
+  reconcileRequired?: boolean;
+  snapshotVersion: number;
+  persistedThroughRevision: number;
+}
+
 export interface TaskRuntimePermission {
   id: string;
   sessionId: string;
@@ -2454,6 +2528,23 @@ export async function getTaskMessages(
   return projectTaskConversationTreeToMessages(tree, {
     preferredSessionId: options?.sessionId,
   });
+}
+
+export async function getCurrentTaskRound(taskId: string) {
+  return request<{
+    taskId: string;
+    round: TaskRoundDto | null;
+  }>(`/tasks/${taskId}/current-round`);
+}
+
+export async function getTaskRounds(taskId: string) {
+  return request<TaskRoundListDto>(`/tasks/${taskId}/rounds`);
+}
+
+export async function getTaskRoundMessages(taskId: string, roundId: string) {
+  return request<TaskRoundMessagesDto>(
+    `/tasks/${taskId}/rounds/${encodeURIComponent(roundId)}/messages`,
+  );
 }
 
 export async function continueTask(
@@ -5011,6 +5102,10 @@ export interface ExecutionTraceTimelineMeta {
   lineagePath?: string[];
   cachedSessionCount?: number;
   itemCount?: number;
+  roundId?: string;
+  snapshotVersion?: number;
+  persistedThroughRevision?: number;
+  reconcileRequired?: boolean;
 }
 
 export interface ExecutionTraceProjectionSnapshot {

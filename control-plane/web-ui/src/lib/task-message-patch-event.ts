@@ -42,6 +42,23 @@ export type TaskMessagePatchEvent =
       textDelta: string;
     })
   | (TaskMessagePatchEventBase & {
+      kind: "message-persisted";
+      messageId: string;
+      roundId?: string;
+      taskSessionId?: string;
+      persistedRevision?: number;
+      snapshotVersion?: number;
+      persistedThroughRevision?: number;
+    })
+  | (TaskMessagePatchEventBase & {
+      kind: "round-synced";
+      roundId?: string;
+      taskSessionId?: string;
+      messageId?: string;
+      snapshotVersion?: number;
+      persistedThroughRevision?: number;
+    })
+  | (TaskMessagePatchEventBase & {
       kind: "user-message";
       messageId?: string;
     })
@@ -152,6 +169,24 @@ function extractPatchEventModelProvider(model: Record<string, unknown>) {
 
 function extractPatchEventModelIdentifier(model: Record<string, unknown>) {
   return asString(model.modelID) ?? asString(model.modelId) ?? asString(model.id);
+}
+
+function asFiniteNumber(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function extractPatchEventModelLabel(info: Record<string, unknown> | null | undefined) {
@@ -294,6 +329,44 @@ export function toTaskMessagePatchEvent(event: RealtimeEvent): TaskMessagePatchE
       kind: "assistant-delta",
       messageId,
       textDelta,
+    };
+  }
+
+  if (eventKind === "task.message.persisted") {
+    const roundId = asString(event.data.roundId) ?? asString(event.data.taskSessionId);
+    const taskSessionId = asString(event.data.taskSessionId) ?? roundId;
+    const messageId = asString(event.data.messageId);
+    if (!messageId || !roundId) {
+      return buildIgnoredPatchEvent(event);
+    }
+
+    return {
+      ...base,
+      kind: "message-persisted",
+      messageId,
+      roundId,
+      taskSessionId,
+      persistedRevision: asFiniteNumber(event.data.persistedRevision),
+      snapshotVersion: asFiniteNumber(event.data.snapshotVersion),
+      persistedThroughRevision: asFiniteNumber(event.data.persistedThroughRevision),
+    };
+  }
+
+  if (eventKind === "task.round.synced") {
+    const roundId = asString(event.data.roundId) ?? asString(event.data.taskSessionId);
+    const taskSessionId = asString(event.data.taskSessionId) ?? roundId;
+    if (!roundId) {
+      return buildIgnoredPatchEvent(event);
+    }
+
+    return {
+      ...base,
+      kind: "round-synced",
+      roundId,
+      taskSessionId,
+      messageId: asString(event.data.messageId),
+      snapshotVersion: asFiniteNumber(event.data.snapshotVersion),
+      persistedThroughRevision: asFiniteNumber(event.data.persistedThroughRevision),
     };
   }
 

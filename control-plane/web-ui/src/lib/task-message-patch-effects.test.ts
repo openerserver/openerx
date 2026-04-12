@@ -21,7 +21,7 @@ function createPatchEvent(
 }
 
 describe("task message patch effects", () => {
-  it("marks assistant completion as a canonical message refresh boundary", () => {
+  it("keeps assistant completion on the realtime authority without forcing persisted refresh", () => {
     expect(
       getTaskMessagePatchEffects(
         createPatchEvent("assistant-completed", {
@@ -31,6 +31,27 @@ describe("task message patch effects", () => {
       ),
     ).toMatchObject({
       updatesLiveAssistantState: true,
+      shouldRefreshCanonicalMessages: false,
+      shouldRefreshTaskDetailMessages: false,
+      shouldScheduleTaskDetailRefresh: false,
+      shouldBumpTaskDetailTraceRefreshKey: false,
+      shouldRefreshMonitorSummary: false,
+    });
+  });
+
+  it("treats round synced as the persisted refresh boundary for task detail", () => {
+    expect(
+      getTaskMessagePatchEffects(
+        createPatchEvent("round-synced", {
+          rawEventKind: "task.round.synced",
+          roundId: "task-session:task-1:session-1",
+          taskSessionId: "task-session:task-1:session-1",
+          snapshotVersion: 8,
+          persistedThroughRevision: 8,
+        }),
+      ),
+    ).toMatchObject({
+      updatesLiveAssistantState: false,
       shouldRefreshCanonicalMessages: true,
       shouldRefreshTaskDetailMessages: true,
       shouldScheduleTaskDetailRefresh: true,
@@ -82,17 +103,21 @@ describe("task message patch effects", () => {
           messageId: "assistant-1",
           textDelta: "hello",
         }),
-        createPatchEvent("session-updated", {
-          rawEventKind: "task.snapshot.updated",
+        createPatchEvent("round-synced", {
+          rawEventKind: "task.round.synced",
+          roundId: "task-session:task-1:session-1",
+          taskSessionId: "task-session:task-1:session-1",
+          snapshotVersion: 9,
+          persistedThroughRevision: 9,
         }),
       ]),
     ).toMatchObject({
       updatesLiveAssistantState: true,
-      shouldRefreshCanonicalMessages: false,
+      shouldRefreshCanonicalMessages: true,
       shouldRefreshTaskDetailMessages: true,
       shouldScheduleTaskDetailRefresh: true,
       shouldBumpTaskDetailTraceRefreshKey: false,
-      shouldRefreshMonitorSummary: true,
+      shouldRefreshMonitorSummary: false,
     });
   });
 

@@ -5,7 +5,14 @@
  * live realtime overlays for in-flight assistant output.
  */
 import { type Ref, computed, ref, watch } from "vue";
-import { type TaskExecutionTrace, getTaskMessages } from "../lib/api";
+import {
+  type TaskExecutionTrace,
+  type TaskRoundDto,
+  type TaskRoundMessageDto,
+  getCurrentTaskRound,
+  getTaskRoundMessages,
+  getTaskRounds,
+} from "../lib/api";
 import {
   type TaskConversationListItem,
   type TaskConversationMessageItem,
@@ -16,6 +23,11 @@ import {
   normalizeMessage,
   normalizeWorkflowGroup,
 } from "../lib/message-normalize";
+import {
+  buildTaskConversationDisplayMessages,
+  collectAssistantMessageKeys,
+  type PendingAssistantDraftState,
+} from "../lib/task-conversation-display";
 import { useTaskMessageStore } from "./useTaskMessageStore";
 
 export type { TaskConversationListItem, TaskConversationMessageItem };
@@ -29,109 +41,57 @@ export type {
 /*  Primary composable                                                 */
 /* ------------------------------------------------------------------ */
 
-function countRawMessageParts(item: TaskConversationMessageItem) {
-  const raw = asRecord(item.raw);
-  return Array.isArray(raw?.parts) ? raw.parts.filter((part) => Boolean(part)).length : 0;
-}
-
-function isWorkflowExecutionContextUserMessage(item: TaskConversationMessageItem) {
-  return item.role === "user" && typeof item.text === "string" && item.text.trim().startsWith("Execution context:");
-}
-
-function areEquivalentAssistantMessages(
-  left: TaskConversationMessageItem | undefined,
-  right: TaskConversationMessageItem,
-) {
-  if (!left || left.role !== "assistant" || right.role !== "assistant") {
-    return false;
-  }
-
-  if (left.isStreaming || right.isStreaming) {
-    return false;
-  }
-
-  const leftText = left.text?.trim();
-  const rightText = right.text?.trim();
-  if (!leftText || !rightText || leftText !== rightText) {
-    return false;
-  }
-
-  return !left.createdAt || !right.createdAt || left.createdAt === right.createdAt;
-}
-
-function resolveConversationMessageRichness(item: TaskConversationMessageItem) {
-  return (
-    countRawMessageParts(item) * 1000 +
-    item.toolCalls.length * 100 +
-    (item.model ? 10 : 0) +
-    (item.agent ? 5 : 0) +
-    (item.text?.length ?? 0)
-  );
-}
-
-function collapseDisplayMessages(
-  items: TaskConversationMessageItem[],
-  options?: { hideWorkflowExecutionContextUsers?: boolean },
-) {
-  const collapsed: TaskConversationMessageItem[] = [];
-
-  for (const item of items) {
-    if (options?.hideWorkflowExecutionContextUsers && isWorkflowExecutionContextUserMessage(item)) {
-      continue;
-    }
-
-    const previous = collapsed[collapsed.length - 1];
-    if (areEquivalentAssistantMessages(previous, item)) {
-      if (previous && resolveConversationMessageRichness(item) > resolveConversationMessageRichness(previous)) {
-        collapsed[collapsed.length - 1] = item;
-      }
-      continue;
-    }
-
-    collapsed.push(item);
-  }
-
-  return collapsed;
-}
-
-function parseTimestampMs(value?: string) {
-  if (typeof value !== "string" || value.trim().length === 0) {
+function resolveRoundForRequestedSession(rounds: TaskRoundDto[], requestedSessionId?: string) {
+  if (!requestedSessionId) {
     return null;
   }
 
-  const parsed = Date.parse(value);
-  return Number.isNaN(parsed) ? null : parsed;
+  return (
+    rounds.find(
+      (round) => round.sessionId === requestedSessionId || round.id === requestedSessionId,
+    ) ?? null
+  );
 }
 
-function normalizeComparableAssistantText(text?: string) {
-  return typeof text === "string" ? text.replace(/\s+/gu, " ").trim() : "";
+function toRoundMessageRecord(message: TaskRoundMessageDto) {
+  const completedAt = message.completedAt ?? message.updatedAt ?? null;
+
+  return {
+    id: message.id,
+    role: message.role,
+    status: message.status,
+    errorText: message.errorText ?? undefined,
+    text: message.text,
+    textContent: message.text,
+    createdAt: message.createdAt,
+    completedAt,
+    info: {
+      id: message.id,
+      role: message.role,
+      status: message.status,
+      time: {
+        created: message.startedAt ?? message.createdAt,
+        completed: completedAt,
+      },
+    },
+    parts: message.parts.map((part) => ({
+      id: part.id,
+      type: "text",
+      text: part.text,
+      finalizedAt: part.finalizedAt ?? undefined,
+    })),
+  };
 }
 
-type PendingAssistantDraft = {
-  key: string;
-  sessionId: string;
-  createdAt: string;
-  knownAssistantKeys: Set<string>;
-};
-
-function collectAssistantMessageKeys(
-  persistedItems: TaskConversationMessageItem[],
-  liveState = createEmptyLiveAssistantState(),
-) {
-  const keys = new Set<string>();
-
-  for (const item of persistedItems) {
-    if (item.role === "assistant") {
-      keys.add(item.key);
-    }
-  }
-
-  for (const messageId of liveState.orderedAssistantMessageIds) {
-    keys.add(messageId);
-  }
-
-  return keys;
+function resolveAckRevision(args: {
+  persistedRevision?: number;
+  persistedThroughRevision?: number;
+  snapshotVersion?: number;
+}) {
+  return args.persistedThroughRevision ?? args.snapshotVersion ?? args.persistedRevision ?? 0;
 }
+
+type PendingAssistantDraft = PendingAssistantDraftState;
 
 export function collectPersistedMessageIds(messages: unknown[]) {
   const ids = new Set<string>();
@@ -167,38 +127,6 @@ export function collectPersistedMessageIds(messages: unknown[]) {
   return ids;
 }
 
-export function shouldSuppressCompletedStreamingAssistantDraft(args: {
-  persistedItems: TaskConversationMessageItem[];
-  draftText?: string;
-  draftCreatedAt?: string;
-  isStreaming: boolean;
-}) {
-  if (args.isStreaming) {
-    return false;
-  }
-
-  const draftCreatedAtMs = parseTimestampMs(args.draftCreatedAt);
-  const normalizedDraftText = normalizeComparableAssistantText(args.draftText);
-
-  return args.persistedItems.some((item) => {
-    if (item.role !== "assistant" || item.isStreaming) {
-      return false;
-    }
-
-    const normalizedPersistedText = normalizeComparableAssistantText(item.text);
-    if (!normalizedPersistedText) {
-      return false;
-    }
-
-    const persistedCreatedAtMs = parseTimestampMs(item.createdAt);
-    if (draftCreatedAtMs != null && persistedCreatedAtMs != null) {
-      return persistedCreatedAtMs >= draftCreatedAtMs;
-    }
-
-    return Boolean(normalizedDraftText) && normalizedPersistedText === normalizedDraftText;
-  });
-}
-
 export function useTreeMessages(
   taskId: Ref<string>,
   sessionId: Ref<string | undefined>,
@@ -213,10 +141,46 @@ export function useTreeMessages(
   let refreshGeneration = 0;
   const activeSessionId = computed(() => resolvedSessionId.value ?? sessionId.value);
   const {
+    conversationAuthority,
+    latestPersistenceAck,
     latestTaskRefreshRequest,
     liveAssistantState,
     realtimeConnected,
   } = useTaskMessageStore(taskId, activeSessionId);
+
+  const persistedSnapshotRevision = computed(() => {
+    const timelineMeta = trace.value?.timelineMeta;
+    return resolveAckRevision({
+      persistedThroughRevision: timelineMeta?.persistedThroughRevision,
+      snapshotVersion: timelineMeta?.snapshotVersion,
+    });
+  });
+
+  const latestAckRevision = computed(() =>
+    resolveAckRevision({
+      persistedRevision: latestPersistenceAck.value?.persistedRevision,
+      persistedThroughRevision: latestPersistenceAck.value?.persistedThroughRevision,
+      snapshotVersion: latestPersistenceAck.value?.snapshotVersion,
+    }),
+  );
+
+  const displayConversationAuthority = computed(() => {
+    if (conversationAuthority.value !== "persisted") {
+      return conversationAuthority.value;
+    }
+
+    if (latestAckRevision.value > persistedSnapshotRevision.value) {
+      return "realtime" as const;
+    }
+
+    return "persisted" as const;
+  });
+
+  const displayLiveAssistantState = computed(() =>
+    displayConversationAuthority.value === "realtime"
+      ? liveAssistantState.value
+      : createEmptyLiveAssistantState(),
+  );
 
   async function refresh(silent = false) {
     const currentRefreshGeneration = ++refreshGeneration;
@@ -236,23 +200,65 @@ export function useTreeMessages(
     error.value = null;
 
     try {
-      const response = await getTaskMessages(currentTaskId, {
-        sessionId: requestedSessionId,
-        includeLineage: options?.includeLineage,
-      });
+      const targetRound = requestedSessionId
+        ? resolveRoundForRequestedSession(
+            (await getTaskRounds(currentTaskId)).rounds,
+            requestedSessionId,
+          )
+        : (await getCurrentTaskRound(currentTaskId)).round;
       if (currentRefreshGeneration !== refreshGeneration) {
         return;
       }
 
-      messages.value = Array.isArray(response.data) ? response.data : [];
-      resolvedSessionId.value = response.meta?.sessionId ?? requestedSessionId;
+      if (!targetRound) {
+        messages.value = [];
+        resolvedSessionId.value = requestedSessionId;
+        trace.value = {
+          taskId: currentTaskId,
+          sessionId: requestedSessionId ?? null,
+          segments: [],
+          messages: [],
+          timeline: [],
+          timelineMeta: {
+            readSource: "task-domain-projection",
+            includeLineage: options?.includeLineage,
+            itemCount: 0,
+            complete: true,
+            reconcileRequired: false,
+            snapshotVersion: 0,
+            persistedThroughRevision: 0,
+          },
+          hookExecutions: [],
+          followupExecutions: [],
+        } satisfies TaskExecutionTrace;
+        return;
+      }
+
+      const response = await getTaskRoundMessages(currentTaskId, targetRound.id);
+      if (currentRefreshGeneration !== refreshGeneration) {
+        return;
+      }
+
+      messages.value = Array.isArray(response.messages)
+        ? response.messages.map((message) => toRoundMessageRecord(message))
+        : [];
+      resolvedSessionId.value = response.round.sessionId ?? requestedSessionId;
       trace.value = {
         taskId: currentTaskId,
-        sessionId: response.meta?.sessionId ?? requestedSessionId ?? null,
+        sessionId: response.round.sessionId ?? requestedSessionId ?? null,
         segments: [],
         messages: [],
         timeline: [],
-        timelineMeta: response.meta,
+        timelineMeta: {
+          readSource: "task-domain-projection",
+          includeLineage: options?.includeLineage,
+          itemCount: response.messages.length,
+          complete: !response.reconcileRequired,
+          roundId: response.round.id,
+          snapshotVersion: response.snapshotVersion,
+          persistedThroughRevision: response.persistedThroughRevision,
+          reconcileRequired: Boolean(response.reconcileRequired),
+        },
         hookExecutions: [],
         followupExecutions: [],
       } satisfies TaskExecutionTrace;
@@ -276,15 +282,15 @@ export function useTreeMessages(
     return collectPersistedMessageIds(messages.value);
   });
 
-  const items = computed<TaskConversationMessageItem[]>(() =>
+  const persistedItems = computed<TaskConversationMessageItem[]>(() =>
     messages.value
-      .map((entry, index) => normalizeMessage(entry, index, liveAssistantState.value))
+      .map((entry, index) => normalizeMessage(entry, index, createEmptyLiveAssistantState()))
       .filter((entry): entry is TaskConversationMessageItem => entry != null)
       .filter((entry) => entry.role !== "system"),
   );
 
   const assistantMessageKeys = computed(() =>
-    collectAssistantMessageKeys(items.value, liveAssistantState.value),
+    collectAssistantMessageKeys(persistedItems.value, displayLiveAssistantState.value),
   );
 
   function seedPendingAssistantDraft(targetSessionId?: string) {
@@ -313,100 +319,50 @@ export function useTreeMessages(
     pendingAssistantDraft.value = null;
   }
 
-  const streamingAssistantDraft = computed<TaskConversationMessageItem | null>(() => {
-    for (let i = liveAssistantState.value.orderedAssistantMessageIds.length - 1; i >= 0; i--) {
-      const messageId = liveAssistantState.value.orderedAssistantMessageIds[i];
-      if (persistedMessageIds.value.has(messageId)) continue;
+  const items = computed<TaskConversationMessageItem[]>(() =>
+    buildTaskConversationDisplayMessages({
+      persistedItems: persistedItems.value,
+      liveAssistantState: displayLiveAssistantState.value,
+      authority: displayConversationAuthority.value,
+      pendingAssistantDraft: pendingAssistantDraft.value,
+      activeSessionId: activeSessionId.value,
+      latestTaskRefreshReason: latestTaskRefreshRequest.value?.reason,
+      hideWorkflowExecutionContextUsers: workflowItems.value.length > 0,
+    }),
+  );
 
-      const meta = liveAssistantState.value.metaById.get(messageId);
-      const text = liveAssistantState.value.textById.get(messageId)?.trim();
-      if (!meta && !text) continue;
+  const workflowItems = computed<TaskConversationWorkflowItem[]>(() =>
+    messages.value
+      .map((entry) => normalizeWorkflowGroup(entry))
+      .filter((item): item is TaskConversationWorkflowItem => item != null),
+  );
 
-      const isStreaming = liveAssistantState.value.incompleteIds.has(messageId);
-      if (
-        shouldSuppressCompletedStreamingAssistantDraft({
-          persistedItems: items.value,
-          draftText: text,
-          draftCreatedAt: meta?.createdAt,
-          isStreaming,
-        })
-      ) {
-        continue;
-      }
-
-      return {
-        key: messageId,
-        role: "assistant",
-        agent: meta?.agent,
-        text: text || "正在生成...",
-        toolCalls: [],
-        createdAt: meta?.createdAt,
-        raw: null,
-        isStreaming,
-      };
-    }
-    return null;
-  });
-
-  const optimisticPendingAssistantDraft = computed<TaskConversationMessageItem | null>(() => {
+  const hasVisiblePendingAssistantDraft = computed(() => {
     const pending = pendingAssistantDraft.value;
-    if (!pending || pending.sessionId !== activeSessionId.value) {
-      return null;
+    if (!pending) {
+      return false;
     }
 
-    for (const messageKey of assistantMessageKeys.value) {
-      if (!pending.knownAssistantKeys.has(messageKey)) {
-        return null;
-      }
-    }
-
-    const refreshReason = latestTaskRefreshRequest.value?.reason;
-    if (refreshReason === "task-completed" || refreshReason === "task-failed") {
-      return null;
-    }
-
-    return {
-      key: pending.key,
-      role: "assistant",
-      text: "正在生成...",
-      toolCalls: [],
-      createdAt: pending.createdAt,
-      raw: null,
-      isStreaming: true,
-    };
+    return items.value.some((item) => item.key === pending.key);
   });
 
   const conversationItems = computed<TaskConversationListItem[]>(() => {
-    // Extract workflow group items from raw messages
-    const workflowItems: TaskConversationWorkflowItem[] = messages.value
-      .map((entry) => normalizeWorkflowGroup(entry))
-      .filter((item): item is TaskConversationWorkflowItem => item != null);
+    const regularItems = items.value;
 
-    const regularItems = collapseDisplayMessages(
-      [
-        ...items.value,
-        ...(streamingAssistantDraft.value ? [streamingAssistantDraft.value] : []),
-        ...(optimisticPendingAssistantDraft.value ? [optimisticPendingAssistantDraft.value] : []),
-      ].filter((item) => item.role === "user" || item.role === "assistant" || item.role === "tool"),
-      {
-        hideWorkflowExecutionContextUsers: workflowItems.length > 0,
-      },
-    );
-
-    if (workflowItems.length === 0) return regularItems;
+    if (workflowItems.value.length === 0) return regularItems;
 
     // Insert workflow groups after the last user message, before the first assistant reply
     const result: TaskConversationListItem[] = [];
     let workflowInserted = false;
     for (const item of regularItems) {
       if (!workflowInserted && item.role !== "user") {
-        result.push(...workflowItems);
+        result.push(...workflowItems.value);
         workflowInserted = true;
       }
       result.push(item);
     }
     if (!workflowInserted) {
-      result.push(...workflowItems);
+      result.push(...workflowItems.value);
     }
     return result;
   });
@@ -446,7 +402,7 @@ export function useTreeMessages(
 
       if (
         pendingAssistantDraft.value.sessionId === activeSessionId.value &&
-        !optimisticPendingAssistantDraft.value
+        !hasVisiblePendingAssistantDraft.value
       ) {
         pendingAssistantDraft.value = null;
       }
@@ -462,6 +418,7 @@ export function useTreeMessages(
   );
 
   return {
+    conversationAuthority: displayConversationAuthority,
     trace,
     items,
     conversationItems,

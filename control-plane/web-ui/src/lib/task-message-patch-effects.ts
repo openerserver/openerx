@@ -16,9 +16,8 @@ const LIVE_ASSISTANT_PATCH_KINDS = new Set<TaskMessagePatchEvent["kind"]>([
 ]);
 
 const CANONICAL_MESSAGE_REFRESH_PATCH_KINDS = new Set<TaskMessagePatchEvent["kind"]>([
-  "assistant-completed",
-  "user-message",
-  "tool-message",
+  "message-persisted",
+  "round-synced",
 ]);
 
 const PHASE_REFRESH_PATCH_KINDS = new Set<TaskMessagePatchEvent["kind"]>([
