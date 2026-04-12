@@ -75,6 +75,13 @@ export function applyTaskMessagePatchEventToLiveAssistantState(
       nextState.incompleteIds.add(messageId);
     }
 
+    if (patchEvent.initialText) {
+      nextState.textById.set(
+        messageId,
+        mergeStreamingText(nextState.textById.get(messageId), patchEvent.initialText),
+      );
+    }
+
     return nextState;
   }
 

@@ -25,6 +25,7 @@ export type TaskMessagePatchEvent =
       agent?: string;
       modelLabel?: string;
       createdAt?: string;
+      initialText?: string;
     })
   | (TaskMessagePatchEventBase & {
       kind: "assistant-completed";
@@ -33,6 +34,7 @@ export type TaskMessagePatchEvent =
       modelLabel?: string;
       createdAt?: string;
       completedAt?: string;
+      initialText?: string;
     })
   | (TaskMessagePatchEventBase & {
       kind: "assistant-delta";
@@ -182,8 +184,58 @@ function extractPatchEventModelLabel(info: Record<string, unknown> | null | unde
   return asString(model.route) ?? asString(model.label) ?? identifier ?? provider;
 }
 
+function extractPatchEventInlineText(event: RealtimeEvent) {
+  if (eventKindOf(event) !== "task.message.updated") {
+    return undefined;
+  }
+
+  const message = asRecord(event.data.message);
+  if (!message) {
+    return undefined;
+  }
+
+  const directText =
+    asString(message.text) ??
+    asString(message.textContent) ??
+    asString(message.content) ??
+    asString(message.contentText) ??
+    asString(message.summaryText);
+  if (directText) {
+    return directText;
+  }
+
+  const parts = Array.isArray(message.parts)
+    ? message.parts
+        .map((part) => asRecord(part))
+        .filter((part): part is Record<string, unknown> => Boolean(part))
+    : [];
+  const textParts = parts
+    .filter((part) => {
+      const partType = asString(part.type);
+      return !partType || partType === "text";
+    })
+    .map(
+      (part) =>
+        asString(part.text) ??
+        asString(part.content) ??
+        asString(part.textContent) ??
+        asString(part.contentText),
+    )
+    .filter((part): part is string => Boolean(part));
+
+  if (textParts.length === 0) {
+    return undefined;
+  }
+
+  return textParts.join("\n").trim() || undefined;
+}
+
+function eventKindOf(event: RealtimeEvent) {
+  return getRealtimeEventKind(event);
+}
+
 export function toTaskMessagePatchEvent(event: RealtimeEvent): TaskMessagePatchEvent {
-  const eventKind = getRealtimeEventKind(event);
+  const eventKind = eventKindOf(event);
   const base = buildBasePatchEvent(event);
 
   if (eventKind === "task.message.updated") {
@@ -204,6 +256,7 @@ export function toTaskMessagePatchEvent(event: RealtimeEvent): TaskMessagePatchE
         modelLabel: extractPatchEventModelLabel(info),
         createdAt,
         completedAt,
+        initialText: extractPatchEventInlineText(event),
       };
     }
 

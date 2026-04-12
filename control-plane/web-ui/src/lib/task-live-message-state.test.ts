@@ -43,6 +43,36 @@ describe("task live message state", () => {
     expect(state.incompleteIds.has("assistant-1")).toBe(true);
   });
 
+  it("hydrates initial assistant text from a message snapshot update", () => {
+    const state = applyRealtimeEventToLiveAssistantState(
+      createEmptyLiveAssistantState(),
+      createEvent({
+        data: {
+          message: {
+            info: {
+              id: "assistant-1",
+              role: "assistant",
+              time: {
+                created: "2026-04-08T03:18:17.218Z",
+              },
+            },
+            parts: [
+              {
+                type: "text",
+                text: "首段正文",
+              },
+            ],
+          },
+        },
+      }),
+      "session-1",
+    );
+
+    expect(state.orderedAssistantMessageIds).toEqual(["assistant-1"]);
+    expect(state.textById.get("assistant-1")).toBe("首段正文");
+    expect(state.incompleteIds.has("assistant-1")).toBe(true);
+  });
+
   it("accumulates assistant deltas before completion", () => {
     const initial = createEmptyLiveAssistantState();
     const withFirstDelta = applyRealtimeEventToLiveAssistantState(

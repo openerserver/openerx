@@ -253,6 +253,8 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_OAUTH_T
 		// Verify messages cleared
 		state = await client.getState();
 		expect(state.messageCount).toBe(0);
+		expect(state.sessionFile).toBeDefined();
+		expect(existsSync(state.sessionFile!)).toBe(true);
 	}, 90000);
 
 	test("should export to HTML", async () => {
@@ -290,7 +292,7 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_OAUTH_T
 		let state = await client.getState();
 		expect(state.sessionName).toBeUndefined();
 
-		// Send a prompt first - session files are only written after first assistant message
+		// Send a prompt first so the session has content before renaming it
 		await client.promptAndWait("Reply with just 'ok'");
 
 		// Set name

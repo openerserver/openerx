@@ -958,13 +958,15 @@ describe("executeLifecycleHooks behavior", () => {
     expect((lineageWrites[0]?.[1] as { body?: Record<string, unknown> })?.body).toMatchObject({
       runtimeSessionId: "session-a",
       branchName: "候选 A",
-      sourceType: "root",
+      sourceType: "parallel",
+      isActive: true,
     });
     expect((lineageWrites[1]?.[1] as { body?: Record<string, unknown> })?.body).toMatchObject({
       runtimeSessionId: "session-b",
       parentRuntimeSessionId: "session-a",
       branchName: "候选 B",
-      sourceType: "fork",
+      sourceType: "parallel",
+      isActive: true,
     });
   });
 
@@ -1296,21 +1298,21 @@ describe("executeLifecycleHooks behavior", () => {
       runtimeSessionId: "session-new-a",
       parentRuntimeSessionId: "session-existing-a",
       branchName: "候选 A",
-      sourceType: "fork",
+      sourceType: "parallel",
       sessionKind: "candidate",
       executionModeSnapshot: "parallel",
       candidateIndex: 0,
-      coordinationKey: "session-existing-a",
+      isActive: true,
     });
     expect((lineageWrites[1]?.[1] as { body?: Record<string, unknown> })?.body).toMatchObject({
       runtimeSessionId: "session-new-b",
       parentRuntimeSessionId: "session-existing-a",
       branchName: "候选 B",
-      sourceType: "fork",
+      sourceType: "parallel",
       sessionKind: "candidate",
       executionModeSnapshot: "parallel",
       candidateIndex: 1,
-      coordinationKey: "session-existing-a",
+      isActive: true,
     });
 
     const promptWrites = cpFetchMock.mock.calls.filter(
@@ -1648,19 +1650,21 @@ describe("executeLifecycleHooks behavior", () => {
       runtimeSessionId: "session-new-a",
       parentRuntimeSessionId: "session-existing-parent",
       branchName: "候选 A",
-      sourceType: "fork",
+      sourceType: "parallel",
       sessionKind: "candidate",
       executionModeSnapshot: "parallel",
       candidateIndex: 0,
+      isActive: true,
     });
     expect((lineageWrites[1]?.[1] as { body?: Record<string, unknown> })?.body).toMatchObject({
       runtimeSessionId: "session-new-b",
       parentRuntimeSessionId: "session-existing-parent",
       branchName: "候选 B",
-      sourceType: "fork",
+      sourceType: "parallel",
       sessionKind: "candidate",
       executionModeSnapshot: "parallel",
       candidateIndex: 1,
+      isActive: true,
     });
   });
 

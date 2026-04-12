@@ -296,6 +296,27 @@ describe("task list snapshot routes", () => {
       },
     });
   });
+
+  test("proxies DELETE /:taskId to the control plane", async () => {
+    cpFetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      data: { ok: true, id: "task-1" },
+    });
+
+    const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
+    const response = await taskRoutes.request("http://localhost/task-1", {
+      method: "DELETE",
+      headers: { Authorization: "Bearer test-token" },
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ ok: true, id: "task-1" });
+    expect(cpFetchMock).toHaveBeenCalledWith("/api/tasks/task-1", {
+      method: "DELETE",
+      authorization: "Bearer test-token",
+    });
+  });
 });
 
 afterAll(() => {

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { buildVisibleParallelRunSet } from "../../control-plane/web-ui/src/lib/task-detail-parallel-runtime";
+import {
+  buildVisibleParallelRunSet,
+  resolveNextSelectedSessionId,
+} from "../../control-plane/web-ui/src/lib/task-detail-parallel-runtime";
 
 describe("task detail parallel runtime visibility", () => {
   it("keeps historical unadopted runs that stay on the selected session lineage", () => {
@@ -172,5 +175,53 @@ describe("task detail parallel runtime visibility", () => {
     });
 
     expect(visibleRuns.map((run) => run.parallelRunId)).toEqual(["run-current"]);
+  });
+
+  it("keeps an explicitly focused child session while a running task tree catches up", () => {
+    const nextSessionId = resolveNextSelectedSessionId({
+      selectedSessionId: "child-1",
+      selectedSessionNode: null,
+      flatNodes: [
+        {
+          id: "node-parent",
+          runtimeSessionId: "parent-1",
+          isActive: true,
+        },
+      ],
+      task: {
+        id: "task-1",
+        sessionId: "parent-1",
+        status: "running",
+      },
+      currentParallelRun: null,
+      adoptedCandidateSessionId: undefined,
+      isCurrentParallelRunPendingAdoption: false,
+    });
+
+    expect(nextSessionId).toBe("child-1");
+  });
+
+  it("falls back to the active task session once the task is no longer running", () => {
+    const nextSessionId = resolveNextSelectedSessionId({
+      selectedSessionId: "child-1",
+      selectedSessionNode: null,
+      flatNodes: [
+        {
+          id: "node-parent",
+          runtimeSessionId: "parent-1",
+          isActive: true,
+        },
+      ],
+      task: {
+        id: "task-1",
+        sessionId: "parent-1",
+        status: "completed",
+      },
+      currentParallelRun: null,
+      adoptedCandidateSessionId: undefined,
+      isCurrentParallelRunPendingAdoption: false,
+    });
+
+    expect(nextSessionId).toBe("parent-1");
   });
 });

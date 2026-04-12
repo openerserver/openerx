@@ -63,7 +63,7 @@ export function useTaskDetailPageCoordinator(args: {
   watch(
     () => args.task.value?.id,
     (newId) => {
-      if (newId) {
+      if (newId && newId === args.taskId.value) {
         void args.loadInitialSnapshot();
       }
     },

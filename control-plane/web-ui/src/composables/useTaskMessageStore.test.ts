@@ -1,7 +1,14 @@
 import { effectScope, nextTick, reactive, ref } from "vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RealtimeEvent } from "../stores/realtime";
+import { useTreeMessages } from "./useTreeMessages";
 import { useTaskMessageStore } from "./useTaskMessageStore";
+
+const getTaskMessagesMock = vi.fn();
+
+vi.mock("../lib/api", () => ({
+  getTaskMessages: getTaskMessagesMock,
+}));
 
 const realtimeStoreMock = reactive({
   connected: true,
@@ -31,6 +38,13 @@ describe("useTaskMessageStore", () => {
   beforeEach(() => {
     realtimeStoreMock.connected = true;
     realtimeStoreMock.events = [];
+    getTaskMessagesMock.mockReset();
+    getTaskMessagesMock.mockResolvedValue({
+      data: [],
+      meta: {
+        sessionId: "session-1",
+      },
+    });
   });
 
   afterEach(() => {
@@ -154,5 +168,67 @@ describe("useTaskMessageStore", () => {
     await nextTick();
 
     expect(store.liveAssistantState.value.incompleteIds.has("assistant-1")).toBe(false);
+  });
+
+  it("clears terminal pending drafts so later session snapshot updates cannot revive them", async () => {
+    const taskId = ref("task-1");
+    const sessionId = ref<string | undefined>("session-1");
+    scope = effectScope();
+    const messages = scope.run(() => useTreeMessages(taskId, sessionId));
+    if (!messages) {
+      throw new Error("expected tree messages composable");
+    }
+
+    await Promise.resolve();
+    await nextTick();
+
+    messages.seedPendingAssistantDraft("session-1");
+    await nextTick();
+
+    expect(messages.hasStreamingAssistant.value).toBe(true);
+    expect(
+      messages.conversationItems.value.some(
+        (item) => item.role === "assistant" && item.key.startsWith("pending-assistant:"),
+      ),
+    ).toBe(true);
+
+    realtimeStoreMock.events = [
+      createEvent({
+        id: "event-task-completed",
+        type: "task.completed",
+      }),
+    ];
+
+    await nextTick();
+
+    expect(messages.hasStreamingAssistant.value).toBe(false);
+    expect(
+      messages.conversationItems.value.some(
+        (item) => item.role === "assistant" && item.key.startsWith("pending-assistant:"),
+      ),
+    ).toBe(false);
+
+    realtimeStoreMock.events = [
+      createEvent({
+        id: "event-session-updated",
+        type: "task.snapshot.updated",
+        data: {
+          reason: "session.updated",
+        },
+      }),
+      createEvent({
+        id: "event-task-completed",
+        type: "task.completed",
+      }),
+    ];
+
+    await nextTick();
+
+    expect(messages.hasStreamingAssistant.value).toBe(false);
+    expect(
+      messages.conversationItems.value.some(
+        (item) => item.role === "assistant" && item.key.startsWith("pending-assistant:"),
+      ),
+    ).toBe(false);
   });
 });

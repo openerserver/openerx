@@ -1633,6 +1633,21 @@ describe("SSEAggregator pipeline emitters", () => {
         candidateCount: 2,
       });
 
+      const closeoutCalls = (
+        cpFetchMock.mock.calls as unknown as Array<
+          [string, { method?: string; authorization?: string; body?: Record<string, unknown> }]
+        >
+      )
+        .filter(([url, options]) => url === "/api/tasks/task-1/sessions" && options?.method === "POST")
+        .map(([, options]) => options?.body);
+      expect(closeoutCalls).toHaveLength(2);
+      expect(closeoutCalls).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ runtimeSessionId: "ses-1", isActive: false }),
+          expect.objectContaining({ runtimeSessionId: "ses-2", isActive: false }),
+        ]),
+      );
+
       expect(emitted).toContainEqual(
         expect.objectContaining({
           type: "task.phase.awaiting_adoption",

@@ -738,6 +738,46 @@ class SSEAggregator {
     return { ready: true, totalCandidateCount };
   }
 
+  private async deactivateSettledParallelCandidateSessions(args: {
+    taskId: string;
+    authorization: string;
+    phaseId?: string | null;
+    trackedSessionIds?: Iterable<string>;
+  }): Promise<void> {
+    const trackedSessionIds = new Set(args.trackedSessionIds ?? []);
+    if (!args.phaseId && trackedSessionIds.size === 0) {
+      return;
+    }
+
+    const lineageResult = await fetchTaskSessionLineageRecords(args.taskId, args.authorization);
+    if (!lineageResult.ok) {
+      return;
+    }
+
+    const candidateRecords = lineageResult.records.filter((record) => {
+      if (record.archivedAt || !record.runtimeSessionId || !isTrackedParallelCandidateRecord(record)) {
+        return false;
+      }
+      if (args.phaseId) {
+        return record.phaseId === args.phaseId;
+      }
+      return trackedSessionIds.has(record.runtimeSessionId);
+    });
+
+    if (candidateRecords.length === 0) {
+      return;
+    }
+
+    await Promise.allSettled(
+      candidateRecords.map((record) =>
+        upsertTaskSessionLineageRecord(args.taskId, args.authorization, {
+          runtimeSessionId: record.runtimeSessionId,
+          isActive: false,
+        }),
+      ),
+    );
+  }
+
   /** Register a sequential-chain task for step-by-step tracking. */
   registerSequentialChainTask(
     taskId: string,
@@ -1810,9 +1850,9 @@ class SSEAggregator {
       const rawType = asString(event.data.rawType) ?? event.type;
 
       if (rawType === "message.updated") {
-        const message = asRecord(event.data.info);
-        const messageId = asString(message?.id);
-        if (!message || !messageId) {
+        const info = asRecord(event.data.info);
+        const messageId = asString(info?.id);
+        if (!info || !messageId) {
           return [];
         }
 
@@ -1827,7 +1867,7 @@ class SSEAggregator {
             sessionId: event.sessionId,
             agentRunId: event.agentRunId,
             data: {
-              message,
+              message: event.data,
               reason: rawType,
             },
           },
@@ -3476,6 +3516,7 @@ class SSEAggregator {
         authorization,
         candidateResults,
       });
+      const trackedSessionIds = new Set(this.parallelTaskSessions.get(taskId) ?? []);
       const totalCandidateCount = settlement.totalCandidateCount;
       if (!settlement.ready) {
         preserveTracking = true;
@@ -3628,6 +3669,13 @@ class SSEAggregator {
       if (!patchResult.ok) {
         return;
       }
+
+      await this.deactivateSettledParallelCandidateSessions({
+        taskId,
+        authorization,
+        phaseId: awaitingAdoptionPhase?.phaseId ?? parallelPhaseId ?? null,
+        trackedSessionIds,
+      });
 
       if (awaitingAdoptionPhase) {
         this.emit({

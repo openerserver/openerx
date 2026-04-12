@@ -116,6 +116,42 @@ export const taskSessionRuntimeMessagePartSchema = z
     }
   });
 
+function hasTaskSessionRuntimeExplicitError(value: unknown): boolean {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const message = value as Record<string, unknown>;
+  if (typeof message.errorText === "string" && message.errorText.trim().length > 0) {
+    return true;
+  }
+
+  if (typeof message.error_text === "string" && message.error_text.trim().length > 0) {
+    return true;
+  }
+
+  const info =
+    message.info && typeof message.info === "object"
+      ? (message.info as Record<string, unknown>)
+      : null;
+  return typeof info?.error === "string" && info.error.trim().length > 0;
+}
+
+const taskSessionRuntimeMessageErrorContentSchema = z
+  .object({
+    errorText: z.string().optional(),
+    error_text: z.string().optional(),
+    info: taskSessionRuntimeMessageInfoSchema.optional(),
+  })
+  .superRefine((message, ctx) => {
+    if (!hasTaskSessionRuntimeExplicitError(message)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Runtime message error payload must include explicit error text",
+      });
+    }
+  });
+
 export const taskSessionRuntimePromptDecompositionSchema = z
   .object({
     userInputText: taskSessionRuntimeMessageTextSchema.optional(),
@@ -181,6 +217,7 @@ const taskSessionRuntimeMessageContentSchema = z.union([
   z.object({
     promptDecomposition: taskSessionRuntimePromptDecompositionSchema,
   }),
+  taskSessionRuntimeMessageErrorContentSchema,
 ]);
 
 const taskSessionRuntimeMessageBaseSchema = z
@@ -286,6 +323,10 @@ function hasTaskSessionRuntimeExplicitContent(message: Record<string, unknown>):
     return true;
   }
 
+  if (hasTaskSessionRuntimeExplicitError(message)) {
+    return true;
+  }
+
   return hasTaskSessionRuntimePromptDecompositionContent(message.promptDecomposition);
 }
 
@@ -327,7 +368,7 @@ function collectTaskSessionRuntimeSemanticMessages(
 
   if (!hasTaskSessionRuntimeExplicitContent(message)) {
     messages.add(
-      "Runtime message must include explicit content via parts, part, text, textContent, summaryText, content, or promptDecomposition",
+      "Runtime message must include explicit content via parts, part, text, textContent, summaryText, content, promptDecomposition, or errorText/info.error",
     );
   }
 }

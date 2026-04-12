@@ -225,10 +225,17 @@ export function getRealtimeRawType(event: RealtimeEvent): string {
 }
 
 export function getRealtimeInfo(event: RealtimeEvent): Record<string, unknown> | null {
-  return (
-    asRecord(event.data.info) ??
-    (event.type === "task.message.updated" ? asRecord(event.data.message) : null)
-  );
+  const directInfo = asRecord(event.data.info);
+  if (directInfo) {
+    return directInfo;
+  }
+
+  if (event.type !== "task.message.updated") {
+    return null;
+  }
+
+  const message = asRecord(event.data.message);
+  return asRecord(message?.info) ?? message;
 }
 
 export function getRealtimePart(event: RealtimeEvent): Record<string, unknown> | null {

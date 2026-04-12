@@ -1055,6 +1055,11 @@ function syncReveal() {
       continue;
     }
 
+    if (item.isStreaming) {
+      nextReveal[item.key] = fullText;
+      continue;
+    }
+
     const current = resolveCurrentRevealText(item, fullText);
     const progress = applyRevealProgress(item, nextReveal, fullText, current);
     if (!progress) {
@@ -1081,14 +1086,20 @@ function displayText(item: TaskConversationMessageItem) {
   if (!fullText || fullText === STREAMING_PLACEHOLDER_TEXT) {
     return undefined;
   }
+  if (item.isStreaming) {
+    return fullText;
+  }
   const revealed = revealText.value[item.key];
   if (revealed) {
     return sanitizeTextForDisplay(item.role, revealed);
   }
-  return item.isStreaming ? undefined : fullText;
+  return fullText;
 }
 
 function isRevealing(item: TaskConversationMessageItem) {
+  if (item.isStreaming) {
+    return false;
+  }
   const fullText = sanitizedItemText(item);
   if (!fullText) {
     return false;

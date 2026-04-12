@@ -109,6 +109,20 @@ function hasMaterializedTaskBranchRecord(record: TaskBranchCompatRecord | null) 
   );
 }
 
+function shouldPreserveCandidateActiveState(record: TaskBranchCompatRecord | null) {
+  if (!record) {
+    return false;
+  }
+
+  return (
+    record.sourceType === "parallel" ||
+    record.sessionKind === "candidate" ||
+    record.phaseRole === "candidate" ||
+    record.executionModeSnapshot === "parallel" ||
+    record.candidateIndex != null
+  );
+}
+
 function resolveTaskBranchState(
   body: CreateTaskBranchInput,
   existingRecord: TaskBranchCompatRecord | null,
@@ -300,7 +314,9 @@ export function createTaskBranchWriteApi(deps: {
       task.projectId,
       body.runtimeSessionId,
     );
-    const isActive = task.sessionId === body.runtimeSessionId;
+    const isActive = shouldPreserveCandidateActiveState(existingRecord)
+      ? existingRecord?.isActive ?? false
+      : task.sessionId === body.runtimeSessionId;
     const existingCompatLineage = existingRecord
       ? {
           ...(existingRecord.parentRuntimeSessionId

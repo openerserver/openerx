@@ -113,6 +113,21 @@ function mapTaskSessionExecutionStatus(args: {
   return "complete";
 }
 
+function shouldCompleteTaskSessionOnPassiveDeactivate(args: {
+  existing: typeof taskSessions.$inferSelect | null;
+  writeArgs: UpsertTaskSessionRecordArgs;
+  hasExplicitLineage: boolean;
+}) {
+  if (args.hasExplicitLineage || args.writeArgs.archivedAt || args.writeArgs.isActive !== false) {
+    return false;
+  }
+
+  return (
+    args.existing?.executionStatus === "running" ||
+    (args.existing?.status === "running" && Boolean(args.existing?.startedAt))
+  );
+}
+
 function mapTaskSessionTriggerTypeToRunTriggerType(
   triggerType: TaskSessionTriggerType,
 ): TaskSessionRunTriggerType {
@@ -408,12 +423,16 @@ export function createTaskSessionWriteApi() {
     writeArgs: UpsertTaskSessionRecordArgs;
     existing: typeof taskSessions.$inferSelect | null;
     now: string;
+    hasExplicitLineage: boolean;
   }) {
+    const shouldCompleteOnDeactivate = shouldCompleteTaskSessionOnPassiveDeactivate(args);
     const nodeStatus = args.writeArgs.archivedAt
       ? "archived"
       : args.writeArgs.isActive
         ? "running"
-        : (args.existing?.status ?? "running");
+        : shouldCompleteOnDeactivate
+          ? "completed"
+          : (args.existing?.status ?? "running");
     const runCreatedAt = args.existing?.startedAt ?? args.existing?.createdAt ?? args.now;
     const runStartedAt = args.existing?.startedAt ?? (args.writeArgs.isActive ? args.now : null);
     const runFinishedAt =
@@ -430,7 +449,10 @@ export function createTaskSessionWriteApi() {
     };
   }
 
-  async function buildTaskSessionWriteContext(args: UpsertTaskSessionRecordArgs) {
+  async function buildTaskSessionWriteContext(
+    args: UpsertTaskSessionRecordArgs,
+    hasExplicitLineage: boolean,
+  ) {
     const sessionId = buildTaskSessionWriteId(args.task.id, args.runtimeSessionId);
     const now = new Date().toISOString();
     const existing =
@@ -453,6 +475,7 @@ export function createTaskSessionWriteApi() {
       writeArgs: args,
       existing,
       now,
+      hasExplicitLineage,
     });
 
     return {
@@ -513,7 +536,7 @@ export function createTaskSessionWriteApi() {
       costUsd: 0,
       lastActivityAt: context.now,
       startedAt: context.args.isActive ? context.now : null,
-      finishedAt: context.args.archivedAt ?? null,
+      finishedAt: context.runFinishedAt,
       createdAt: context.now,
       updatedAt: context.now,
       archivedAt: context.args.archivedAt ?? null,
@@ -548,7 +571,7 @@ export function createTaskSessionWriteApi() {
       forkedFromMessageId: context.forkedFromMessageId,
       selectedModel: context.selectedModel,
       lastActivityAt: context.now,
-      finishedAt: context.args.archivedAt ?? null,
+      finishedAt: context.runFinishedAt,
       updatedAt: context.now,
       archivedAt: context.args.archivedAt ?? null,
     };
@@ -562,7 +585,7 @@ export function createTaskSessionWriteApi() {
       executionStatus: mapTaskSessionExecutionStatus(context.args),
       runtimeSessionId: context.args.runtimeSessionId,
       lastActivityAt: context.now,
-      finishedAt: context.args.archivedAt ?? null,
+      finishedAt: context.runFinishedAt,
       updatedAt: context.now,
       archivedAt: context.args.archivedAt ?? null,
     };
@@ -651,8 +674,8 @@ export function createTaskSessionWriteApi() {
   }
 
   async function upsertTaskSessionRecord(args: UpsertTaskSessionRecordArgs) {
-    const context = await buildTaskSessionWriteContext(args);
     const hasExplicitLineage = hasExplicitTaskSessionLineagePatch(args);
+    const context = await buildTaskSessionWriteContext(args, hasExplicitLineage);
 
     await db
       .insert(taskSessions)

@@ -2,6 +2,7 @@ import { message } from "ant-design-vue";
 import { computed, nextTick, ref, type Ref, watch } from "vue";
 import {
   adoptParallelCandidate,
+  cancelTaskPhase,
   continueTask,
   forkTaskSession,
   replyTaskRuntimePermission,
@@ -19,6 +20,7 @@ type QueuedContinuation = { id: string; prompt: string; sessionId?: string; queu
 export function useTaskDetailActionCoordinator(args: {
   taskId: Ref<string>;
   task: Ref<TreeTask | null | undefined>;
+  stopPhaseId: Ref<string | null>;
   selectedSessionId: Ref<string | undefined>;
   selectedSessionLabel: Ref<string>;
   currentParallelRunRecord: Ref<ProjectionRunRecord | null>;
@@ -253,17 +255,26 @@ export function useTaskDetailActionCoordinator(args: {
   }
 
   async function handleTerminate() {
-    if (!args.canTerminateExecution.value || !args.task.value?.agentRunId) return;
+    if (!args.canTerminateExecution.value || !args.taskId.value) return;
     terminating.value = true;
     try {
-      await terminateAgent(args.task.value.agentRunId);
+      const agentRunId = args.task.value?.agentRunId;
+      if (agentRunId) {
+        await terminateAgent(agentRunId);
+      } else if (args.stopPhaseId.value) {
+        await cancelTaskPhase(args.taskId.value, args.stopPhaseId.value, "user_cancelled");
+      } else {
+        throw new Error("当前执行缺少可停止的运行标识");
+      }
       latestContinuationSessionId.value = undefined;
       args.clearPendingAssistantDraft(args.selectedSessionId.value);
-      message.success("已发送终止指令");
+      message.success("已发送停止指令");
       await args.refreshTask(true);
+      await args.refreshSessions(true);
+      await args.refreshTaskSnapshot({ workflow: true, flow: true, messages: true });
       await args.refreshMessages(true);
     } catch (err) {
-      message.error(err instanceof Error ? err.message : "终止执行失败");
+      message.error(err instanceof Error ? err.message : "停止执行失败");
     } finally {
       terminating.value = false;
     }

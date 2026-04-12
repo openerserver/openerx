@@ -84,6 +84,7 @@ function resolveTableName(table: unknown) {
 async function loadTaskSessionMessageWriteModule(args?: {
   taskMessageFindFirstResults?: unknown[];
   sessionRecord?: Record<string, unknown> | null;
+  runRecord?: Record<string, unknown> | null;
 }) {
   importCounter += 1;
 
@@ -100,6 +101,9 @@ async function loadTaskSessionMessageWriteModule(args?: {
       },
       taskSessions: {
         findFirst: mock(async () => args?.sessionRecord ?? null),
+      },
+      taskSessionRuns: {
+        findFirst: mock(async () => args?.runRecord ?? null),
       },
     },
     insert: mock((table: unknown) =>
@@ -254,7 +258,7 @@ describe("task session message runtime sync", () => {
       sessionId,
       phaseId: "phase-runtime-1",
       coordinationKey: null,
-      status: "completed",
+      status: "running",
     });
 
     const messagePartInsertCalls = insertCalls
@@ -313,8 +317,118 @@ describe("task session message runtime sync", () => {
           table: "task_sessions",
           payload: expect.objectContaining({
             latestRunId: `run_${sessionId}`,
-            headMessageId: `task-session-message:${sessionId}:msg-1`,
-            status: "completed",
+            status: "running",
+          }),
+        }),
+      ]),
+    );
+    expect(updateCalls).not.toContainEqual(
+      expect.objectContaining({
+        table: "task_sessions",
+        payload: expect.objectContaining({
+          headMessageId: `task-session-message:${sessionId}:msg-1`,
+          status: "completed",
+        }),
+      }),
+    );
+  });
+
+  test("writes assistant error-only runtime messages as failed canonical records", async () => {
+    const sessionId = "task-session:task-1:runtime-session-1";
+    const { createTaskSessionMessageWriteApi, insertCalls, updateCalls } =
+      await loadTaskSessionMessageWriteModule({
+        taskMessageFindFirstResults: [null, null],
+        sessionRecord: {
+          id: sessionId,
+          latestRunId: null,
+          phaseId: "phase-runtime-1",
+          runtimeSessionId: "runtime-session-1",
+          triggerType: null,
+          sessionKind: "primary",
+          coordinationKey: null,
+          rootSessionId: sessionId,
+          candidateIndex: null,
+          workflowStageKey: null,
+          effectiveModel: null,
+          selectedModel: null,
+          costUsd: 0,
+          startedAt: "2025-01-01T00:00:00.000Z",
+          createdAt: "2025-01-01T00:00:00.000Z",
+        },
+      });
+
+    const api = createTaskSessionMessageWriteApi({
+      upsertTaskSessionRecord: mock(async () => sessionId),
+      resolveTaskSessionRecordByRuntimeSessionId: mock(async () => null),
+    });
+
+    const result = await api.upsertTaskSessionMessageRecord({
+      task: { id: "task-1", projectId: "project-1" },
+      runtimeSessionId: "runtime-session-1",
+      message: {
+        id: "msg-error-1",
+        info: {
+          role: "assistant",
+          finish: "error",
+          error: "provider overloaded",
+          time: {
+            created: "2025-01-01T00:01:00.000Z",
+          },
+        },
+        parts: [],
+      },
+    });
+
+    expect(result).toEqual({
+      messageId: `task-session-message:${sessionId}:msg-error-1`,
+      sessionId,
+      seq: 0,
+    });
+
+    const taskMessageInsert = insertCalls.find((call) => call.table === "task_messages")?.payload;
+    expect(taskMessageInsert).toMatchObject({
+      id: `task-session-message:${sessionId}:msg-error-1`,
+      taskId: "task-1",
+      sessionId,
+      createdByRunId: `run_${sessionId}`,
+      role: "assistant",
+      messageKind: "reply",
+      runtimeMessageId: "msg-error-1",
+      seq: 0,
+      textContent: null,
+      textPreview: null,
+      partCount: 0,
+      tokenUsed: 0,
+      status: "failed",
+      startedAt: "2025-01-01T00:01:00.000Z",
+      createdAt: "2025-01-01T00:01:00.000Z",
+      completedAt: "2025-01-01T00:01:00.000Z",
+      errorText: "provider overloaded",
+    });
+
+    const taskSessionRunInsert = insertCalls.find(
+      (call) => call.table === "task_session_runs",
+    )?.payload;
+    expect(taskSessionRunInsert).toMatchObject({
+      id: `run_${sessionId}`,
+      sessionId,
+      phaseId: "phase-runtime-1",
+      status: "failed",
+      errorText: "provider overloaded",
+      startedAt: "2025-01-01T00:00:00.000Z",
+      finishedAt: "2025-01-01T00:01:00.000Z",
+    });
+
+    expect(insertCalls.filter((call) => call.table === "task_message_parts")).toHaveLength(0);
+    expect(insertCalls.filter((call) => call.table === "task_operations")).toHaveLength(0);
+    expect(updateCalls).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          table: "task_sessions",
+          payload: expect.objectContaining({
+            latestRunId: `run_${sessionId}`,
+            status: "failed",
+            executionStatus: "failed",
           }),
         }),
       ]),

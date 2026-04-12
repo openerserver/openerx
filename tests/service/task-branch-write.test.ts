@@ -416,6 +416,9 @@ describe("task branch write", () => {
       "forkedFromMessageId",
       "isActive",
       "parentRuntimeSessionId",
+      "phaseId",
+      "phaseItemIndex",
+      "phaseRole",
       "runtimeSessionId",
       "sourceType",
       "task",
@@ -536,6 +539,98 @@ describe("task branch write", () => {
       isActive: false,
       archivedAt: null,
     });
+  });
+
+  test("persistTaskBranchMessage preserves registered active state for parallel candidates", async () => {
+    const { createTaskBranchWriteApi } = await loadTaskBranchWriteModule();
+    const syncTaskBranchCompatTreeNode = mock(async () => "task_session:task-1:candidate-session-1");
+    const upsertConversationSessionRecord = mock(async () => undefined);
+    const upsertConversationMessageRecord = mock(async () => ({
+      messageId: "task-session-message:task-session:task-1:candidate-session-1:msg-2",
+      sessionId: "task-session:task-1:candidate-session-1",
+      seq: 2,
+    }));
+
+    const api = createTaskBranchWriteApi({
+      loadTaskTreeBackedRecord: mock(async () => createTaskRecord({ sessionId: "root-session-1" })),
+      resolveTaskBranchCompatRecord: mock(async () => null),
+      resolveTaskBranchCompatRecordByRuntimeSessionId: mock(async () => ({
+        runtimeSessionId: "candidate-session-1",
+        parentRuntimeSessionId: "root-session-1",
+        forkedFromMessageId: null,
+        branchName: "候选 A",
+        sourceType: "parallel",
+        sessionKind: "candidate",
+        executionModeSnapshot: "parallel",
+        phaseId: "phase-1",
+        phaseRole: "candidate",
+        phaseItemIndex: 0,
+        candidateIndex: 0,
+        stepIndex: null,
+        selectedModel: "github-copilot:gpt-5-mini",
+        operationId: null,
+        isActive: true,
+      })),
+      syncTaskBranchCompatTreeNode,
+      archiveTaskBranchCompatTreeNode: mock(async () => undefined),
+      upsertConversationSessionRecord,
+      upsertConversationMessageRecord,
+      buildTaskTreeSnapshotFromRecord: mock(
+        (_task: unknown, updates: Record<string, unknown>) => updates as TaskTreeSnapshot,
+      ),
+      upsertTaskTreeNode: mock(async () => undefined),
+      syncTaskAggregateFromSnapshot: mock(async () => undefined),
+    });
+
+    const result = await api.persistTaskBranchMessage("task-1", {
+      runtimeSessionId: "candidate-session-1",
+      message: {
+        info: {
+          id: "msg-2",
+          role: "assistant",
+          time: {
+            created: "2026-03-24T00:00:02.000Z",
+            completed: "2026-03-24T00:00:03.000Z",
+          },
+        },
+        parts: [{ type: "text", text: "candidate still running" }],
+      },
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      status: 201,
+      data: {
+        ok: true,
+        messageId: "task-session-message:task-session:task-1:candidate-session-1:msg-2",
+        sessionId: "task-session:task-1:candidate-session-1",
+        seq: 2,
+      },
+    });
+
+    expect(syncTaskBranchCompatTreeNode).toHaveBeenCalledWith({
+      taskId: "task-1",
+      runtimeSessionId: "candidate-session-1",
+      parentRuntimeSessionId: "root-session-1",
+      branchName: "候选 A",
+      sourceType: "parallel",
+      isActive: true,
+      archivedAt: null,
+    });
+    expect(upsertConversationSessionRecord).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimeSessionId: "candidate-session-1",
+        parentRuntimeSessionId: "root-session-1",
+        sourceType: "parallel",
+        sessionKind: "candidate",
+        executionModeSnapshot: "parallel",
+        phaseId: "phase-1",
+        phaseRole: "candidate",
+        candidateIndex: 0,
+        isActive: true,
+        archivedAt: null,
+      }),
+    );
   });
 
 });

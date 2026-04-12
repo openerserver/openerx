@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const apiMocks = vi.hoisted(() => ({
   adoptParallelCandidate: vi.fn(),
+  cancelTaskPhase: vi.fn(),
   continueTask: vi.fn(),
   forkTaskSession: vi.fn(),
   replyTaskRuntimePermission: vi.fn(),
@@ -22,6 +23,7 @@ vi.mock("ant-design-vue", () => ({
 
 vi.mock("../../control-plane/web-ui/src/lib/api", () => ({
   adoptParallelCandidate: apiMocks.adoptParallelCandidate,
+  cancelTaskPhase: apiMocks.cancelTaskPhase,
   continueTask: apiMocks.continueTask,
   forkTaskSession: apiMocks.forkTaskSession,
   replyTaskRuntimePermission: apiMocks.replyTaskRuntimePermission,
@@ -35,6 +37,7 @@ describe("useTaskDetailActionCoordinator", () => {
 
   beforeEach(() => {
     apiMocks.adoptParallelCandidate.mockReset();
+    apiMocks.cancelTaskPhase.mockReset();
     apiMocks.continueTask.mockReset();
     apiMocks.forkTaskSession.mockReset();
     apiMocks.replyTaskRuntimePermission.mockReset();
@@ -58,6 +61,7 @@ describe("useTaskDetailActionCoordinator", () => {
       status: "completed",
       selectedModel: null,
     });
+    const stopPhaseId = ref<string | null>(null);
     const selectedSessionId = ref<string | undefined>("ses-history");
     const selectedSessionLabel = ref("主分支");
     const currentParallelRunRecord = ref(null);
@@ -87,6 +91,7 @@ describe("useTaskDetailActionCoordinator", () => {
       useTaskDetailActionCoordinator({
         taskId,
         task,
+        stopPhaseId,
         selectedSessionId,
         selectedSessionLabel,
         currentParallelRunRecord,
@@ -113,11 +118,13 @@ describe("useTaskDetailActionCoordinator", () => {
     return {
       coordinator,
       currentParallelRunRecord,
+      canTerminateExecution,
       isExecuting,
       refreshTaskSnapshot,
       resolveTaskSessionRequestId,
       seedPendingAssistantDraft,
       selectedSessionId,
+      stopPhaseId,
       task,
     };
   }
@@ -203,5 +210,26 @@ describe("useTaskDetailActionCoordinator", () => {
       messages: true,
     });
     expect(messageMocks.error).not.toHaveBeenCalled();
+  });
+
+  it("falls back to cancelTaskPhase when a running task has no agent run id but still has a current phase", async () => {
+    apiMocks.cancelTaskPhase.mockResolvedValueOnce({ ok: true, phaseId: "phase-live-1" });
+
+    const { coordinator, canTerminateExecution, isExecuting, stopPhaseId, task } =
+      mountCoordinator();
+    canTerminateExecution.value = true;
+    isExecuting.value = true;
+    stopPhaseId.value = "phase-live-1";
+    task.value.status = "running";
+    task.value.agentRunId = undefined;
+
+    await coordinator.handleTerminate();
+
+    expect(apiMocks.cancelTaskPhase).toHaveBeenCalledWith(
+      "task-1",
+      "phase-live-1",
+      "user_cancelled",
+    );
+    expect(apiMocks.terminateAgent).not.toHaveBeenCalled();
   });
 });

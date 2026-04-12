@@ -1076,6 +1076,7 @@ async function registerParallelTaskSessions(
   authorization: string,
   options?: { parentSessionId?: string; operationId?: string; phaseId?: string },
 ) {
+  const activeSessionIds = resolveActiveParallelCandidateSessionIds(plan);
   const candidatesWithSessions = plan.candidates
     .map((candidate, index) => ({
       index,
@@ -1086,7 +1087,13 @@ async function registerParallelTaskSessions(
       Boolean(candidate.sessionId),
     );
 
-  await registerParallelTaskSessionCandidates(task, candidatesWithSessions, authorization, options);
+  await registerParallelTaskSessionCandidates(
+    task,
+    candidatesWithSessions,
+    activeSessionIds,
+    authorization,
+    options,
+  );
 
   return candidatesWithSessions.map((candidate) => {
     const runtimeCandidate = plan.candidates[candidate.index];
@@ -1104,9 +1111,29 @@ async function registerParallelTaskSessions(
   });
 }
 
+function isLiveParallelCandidateStatus(
+  status: RuntimePlan["candidates"][number]["status"] | undefined,
+) {
+  return status === "pending" || status === "running" || status === "paused";
+}
+
+function resolveActiveParallelCandidateSessionIds(plan: Pick<RuntimePlan, "candidates">) {
+  return new Set(
+    plan.candidates
+      .filter(
+        (candidate): candidate is RuntimePlan["candidates"][number] & { sessionId: string } =>
+          typeof candidate.sessionId === "string" &&
+          candidate.sessionId.trim().length > 0 &&
+          isLiveParallelCandidateStatus(candidate.status),
+      )
+      .map((candidate) => candidate.sessionId),
+  );
+}
+
 async function registerParallelTaskSessionCandidates(
   task: Pick<ExecutableTask, "id" | "title" | "sessionId">,
   candidatesWithSessions: Array<{ index: number; sessionId: string; branchName: string }>,
+  activeSessionIds: ReadonlySet<string>,
   authorization: string,
   options?: { parentSessionId?: string; operationId?: string; phaseId?: string },
 ) {
@@ -1132,6 +1159,7 @@ async function registerParallelTaskSessionCandidates(
   );
 
   for (const candidate of orderedCandidates) {
+    const isActive = activeSessionIds.has(candidate.sessionId);
     const parentRuntimeSessionId = resolveParallelCandidateParentSessionId(
       candidate,
       rootSessionId,
@@ -1164,7 +1192,7 @@ async function registerParallelTaskSessionCandidates(
       phaseId: options?.phaseId,
       phaseRole: "candidate",
       phaseItemIndex: candidate.index,
-      isActive: task.sessionId === candidate.sessionId,
+      isActive,
       candidateIndex: candidate.index,
       operationId: options?.operationId,
     });
@@ -1185,6 +1213,7 @@ async function registerParallelTaskSessionCandidates(
       sessionKind: "candidate",
       executionModeSnapshot: "parallel",
       candidateIndex: candidate.index,
+      isActive,
       createdAt: existingRecord?.createdAt || new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       archivedAt: null,
@@ -6491,6 +6520,17 @@ taskRoutes.patch("/:taskId", zValidator("json", updateTaskSchema), async (c) => 
   });
 
   return c.json(result.data, result.ok ? 200 : (result.status as 400 | 401 | 404 | 502));
+});
+
+taskRoutes.delete("/:taskId", async (c) => {
+  const taskId = c.req.param("taskId");
+
+  const result = await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
+    method: "DELETE",
+    authorization: authHeader(c),
+  });
+
+  return c.json(result.data, result.ok ? 200 : (result.status as 401 | 403 | 404 | 502));
 });
 
 // POST /api/tasks — Create a new task

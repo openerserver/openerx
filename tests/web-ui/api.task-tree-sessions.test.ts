@@ -343,6 +343,57 @@ describe("task tree current session projection", () => {
     expect(sessionContext.data.currentSessionId).toBe("ses-child");
   });
 
+  it("keeps an explicitly requested child session when tree currentSessionId still points to the parent", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        meta: {
+          taskId: "task-1",
+          currentSessionId: "task-session:task-1:ses-root",
+          rootSessionId: "task-session:task-1:ses-root",
+          incomplete: false,
+        },
+        task: {
+          id: "task-1",
+          currentSessionId: "task-session:task-1:ses-root",
+        },
+        workflow: null,
+        parallelGroups: [],
+        sessions: [
+          {
+            id: "task-session:task-1:ses-root",
+            runtimeSessionId: "ses-root",
+            title: "主分支",
+            parentSessionId: null,
+            createdAt: "2026-03-22T00:00:00.000Z",
+            updatedAt: "2026-03-22T00:05:00.000Z",
+          },
+          {
+            id: "task-session:task-1:ses-child",
+            runtimeSessionId: "ses-child",
+            title: "继续会话",
+            parentSessionId: "task-session:task-1:ses-root",
+            createdAt: "2026-03-22T00:06:00.000Z",
+            updatedAt: "2026-03-22T00:07:00.000Z",
+          },
+        ],
+        runs: [],
+        messages: [],
+        messageParts: [],
+        operations: [],
+        artifacts: [],
+        edges: [],
+      }),
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await getTaskMessages("task-1", { sessionId: "ses-child" });
+
+    expect(response.meta?.sessionId).toBe("ses-child");
+  });
+
   it("preserves parallel phase metadata in tree session summaries", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

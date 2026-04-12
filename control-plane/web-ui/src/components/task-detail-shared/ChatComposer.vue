@@ -53,7 +53,7 @@
         <a-space size="small" wrap>
           <a-button v-if="showFork" :disabled="forkDisabled || !prompt.trim()" @click="emitFork">分叉</a-button>
           <a-button v-if="canTerminate" danger :disabled="actionDisabled" @click="$emit('terminate')">
-            终止执行
+            停止执行
           </a-button>
           <a-button type="primary" :disabled="actionDisabled || !prompt.trim()" @click="emitContinue">
             {{ isExecuting ? "加入队列" : "发送" }}

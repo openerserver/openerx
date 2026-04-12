@@ -79,14 +79,17 @@ async function deleteTaskTreeBackedTask(taskId: string, nodeIdList: string[]) {
 
     await tx`DELETE FROM task_message_parts WHERE message_id IN (SELECT id FROM task_messages WHERE task_id = ${taskId})`;
     await tx`DELETE FROM task_timeline_views WHERE task_id = ${taskId}`;
+    await tx`DELETE FROM task_domain_events WHERE task_id = ${taskId}`;
     await tx`DELETE FROM task_usage_ledger_entries WHERE task_id = ${taskId}`;
     await tx`DELETE FROM task_artifacts WHERE task_id = ${taskId}`;
     await tx`DELETE FROM task_operations WHERE task_id = ${taskId}`;
 
     await tx`DELETE FROM task_messages WHERE task_id = ${taskId}`;
     await tx`DELETE FROM task_session_runs WHERE task_id = ${taskId}`;
-    await tx`UPDATE task_sessions SET parent_session_id = NULL, root_session_id = NULL, judge_session_id = NULL, winner_session_id = NULL, forked_from_message_id = NULL WHERE task_id = ${taskId}`;
+    await tx`UPDATE task_sessions SET parent_session_id = NULL, judge_session_id = NULL, winner_session_id = NULL, forked_from_message_id = NULL, phase_id = NULL WHERE task_id = ${taskId}`;
+    await tx`UPDATE task_execution_phases SET parent_phase_id = NULL, resumed_from_phase_id = NULL, anchor_session_id = NULL, winner_session_id = NULL, judge_session_id = NULL WHERE task_id = ${taskId}`;
     await tx`DELETE FROM task_snapshots WHERE task_id = ${taskId}`;
+    await tx`DELETE FROM task_execution_phases WHERE task_id = ${taskId}`;
     await tx`DELETE FROM task_sessions WHERE task_id = ${taskId}`;
 
     await tx`DELETE FROM task_stage_runs WHERE workflow_run_id IN (SELECT id FROM task_workflow_runs WHERE task_id = ${taskId})`;

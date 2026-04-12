@@ -173,6 +173,39 @@ afterAll(async () => {
 });
 
 describe("task route registration smoke", () => {
+  test("DELETE /api/tasks/:taskId removes tasks that have task-domain events", async () => {
+    const unique = Date.now();
+    const task = await createTask(`task-route-delete-${unique}`);
+
+    const [{ count: eventCountBeforeDelete }] = await sql<Array<{ count: string }>>`
+      SELECT count(*)::text AS count
+      FROM task_domain_events
+      WHERE task_id = ${task.id}
+    `;
+    expect(Number(eventCountBeforeDelete)).toBeGreaterThan(0);
+
+    const deleteResponse = await authedRequest<{ ok: boolean; id: string }>(`/api/tasks/${task.id}`, {
+      method: "DELETE",
+    });
+
+    expect(deleteResponse.status).toBe(200);
+    expect(deleteResponse.data).toEqual({ ok: true, id: task.id });
+
+    const [{ count: taskCountAfterDelete }] = await sql<Array<{ count: string }>>`
+      SELECT count(*)::text AS count
+      FROM tasks
+      WHERE id = ${task.id}
+    `;
+    const [{ count: eventCountAfterDelete }] = await sql<Array<{ count: string }>>`
+      SELECT count(*)::text AS count
+      FROM task_domain_events
+      WHERE task_id = ${task.id}
+    `;
+
+    expect(Number(taskCountAfterDelete)).toBe(0);
+    expect(Number(eventCountAfterDelete)).toBe(0);
+  });
+
   test("all split task route registrars remain wired", async () => {
     const unique = Date.now();
     const task = await createTask(`task-route-smoke-${unique}`);

@@ -34,6 +34,7 @@ export function useTaskDetailPageModel() {
     ancestors,
     baseConversationItems,
     clearPendingAssistantDraft,
+    currentPhaseId,
     flatNodes,
     hasStreamingAssistant,
     latestTaskRefreshRequest,
@@ -93,7 +94,7 @@ export function useTaskDetailPageModel() {
   );
 
   const {
-    canTerminateExecution,
+    canTerminateExecution: baseCanTerminateExecution,
     editableExecutionMode,
     editableJudgeConfig,
     editableParallelCandidates,
@@ -150,6 +151,13 @@ export function useTaskDetailPageModel() {
     baseConversationItems,
     configuredCandidates: editableParallelCandidates,
   });
+
+  const stopPhaseId = computed(
+    () => currentParallelRunRecord.value?.phaseId ?? currentPhaseId.value ?? null,
+  );
+  const canTerminateExecution = computed(
+    () => baseCanTerminateExecution.value || (isExecuting.value && Boolean(stopPhaseId.value)),
+  );
 
   const {
     workflowView,
@@ -251,6 +259,7 @@ export function useTaskDetailPageModel() {
   } = useTaskDetailActionCoordinator({
     taskId,
     task,
+    stopPhaseId,
     selectedSessionId,
     selectedSessionLabel,
     currentParallelRunRecord,

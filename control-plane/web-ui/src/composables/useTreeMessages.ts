@@ -424,6 +424,16 @@ export function useTreeMessages(
   });
 
   watch(
+    () => latestTaskRefreshRequest.value?.eventId,
+    () => {
+      const refreshReason = latestTaskRefreshRequest.value?.reason;
+      if (refreshReason === "task-completed" || refreshReason === "task-failed") {
+        pendingAssistantDraft.value = null;
+      }
+    },
+  );
+
+  watch(
     [
       activeSessionId,
       () => assistantMessageKeys.value.size,

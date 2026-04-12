@@ -1,3 +1,6 @@
+import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { SessionManager } from "../../src/core/session-manager.js";
 
@@ -31,5 +34,20 @@ describe("SessionManager.newSession with custom id", () => {
 		const header = session.getHeader();
 		expect(header).not.toBeNull();
 		expect(header!.id).toBe("header-test-id");
+	});
+
+	it("persists a recoverable file immediately in persisted mode", () => {
+		const tempDir = join(tmpdir(), `session-custom-id-${Date.now()}`);
+		mkdirSync(tempDir, { recursive: true });
+
+		try {
+			const session = SessionManager.create(tempDir, tempDir);
+			const sessionFile = session.newSession({ id: "persisted-id" });
+
+			expect(sessionFile).toBeDefined();
+			expect(existsSync(sessionFile!)).toBe(true);
+		} finally {
+			rmSync(tempDir, { recursive: true, force: true });
+		}
 	});
 });

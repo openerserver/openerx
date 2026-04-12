@@ -1432,7 +1432,7 @@ function queuePiMonoRealtimeBridge(handle: PiMonoRuntimeHandle, event: PiMonoRpc
 
           await ingestPiMonoRealtimeEvent("message.updated", {
             sessionId: handle.sessionId,
-            info: message.info,
+            ...message,
           });
           return;
         }

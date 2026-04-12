@@ -19,6 +19,7 @@ export function useTaskDetailCoreContext(taskId: Ref<string>) {
   const taskNodeId = computed(() => node.value?.id ?? taskId.value);
 
   const {
+    currentPhaseId,
     flatNodes,
     sessionSummaries: taskSessionSummaries,
     selectedNode: selectedSessionNode,
@@ -42,6 +43,7 @@ export function useTaskDetailCoreContext(taskId: Ref<string>) {
     ancestors,
     baseConversationItems,
     clearPendingAssistantDraft,
+    currentPhaseId,
     flatNodes,
     hasStreamingAssistant,
     latestTaskRefreshRequest,

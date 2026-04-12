@@ -134,7 +134,6 @@ describe("task session write api", () => {
       executionStatus: "running",
       branchName: "main",
       runtimeSessionId: "root-session-1",
-      coordinationKey: null,
     });
 
     const insertedRun = insertCalls.find((call) => call.table === "task_session_runs")?.payload;
@@ -205,7 +204,6 @@ describe("task session write api", () => {
       candidateIndex: 0,
       branchName: "候选 A",
       runtimeSessionId: "candidate-session-1",
-      coordinationKey: null,
     });
 
     const insertedRun = insertCalls.find((call) => call.table === "task_session_runs")?.payload;
@@ -217,7 +215,6 @@ describe("task session write api", () => {
       triggerType: "user_prompt",
       executionKind: "parallel_candidate",
       laneRole: "candidate",
-      coordinationKey: null,
       status: "running",
     });
   });
@@ -263,7 +260,6 @@ describe("task session write api", () => {
       archivedAt: "2025-01-01T00:03:00.000Z",
       forkedFromMessageId: "msg-1",
       runtimeSessionId: "child-session-1",
-      coordinationKey: null,
     });
 
     const insertedRun = insertCalls.find((call) => call.table === "task_session_runs")?.payload;
@@ -302,7 +298,7 @@ describe("task session write api", () => {
     });
   });
 
-  test("passive conflict updates do not rewrite candidate lineage when callers omit it", async () => {
+  test("passive conflict updates complete active candidates without rewriting lineage", async () => {
     const { createTaskSessionWriteApi, conflictUpdateCalls } = await loadTaskSessionWriteModule({
       taskSessionFindResults: [
         {
@@ -368,9 +364,10 @@ describe("task session write api", () => {
     )?.payload as Record<string, unknown>;
     expect(sessionConflictUpdate).toMatchObject({
       projectId: "project-1",
-      status: "running",
+      status: "completed",
       executionStatus: "complete",
       runtimeSessionId: "candidate-1",
+      finishedAt: expect.any(String),
     });
     expect(sessionConflictUpdate).not.toHaveProperty("parentSessionId");
     expect(sessionConflictUpdate).not.toHaveProperty("rootSessionId");
@@ -397,7 +394,8 @@ describe("task session write api", () => {
       taskId: "task-1",
       sessionId: "task-session:task-1:candidate-1",
       runtimeSessionId: "candidate-1",
-      status: "running",
+      status: "completed",
+      finishedAt: expect.any(String),
     });
     expect(runConflictUpdate).not.toHaveProperty("triggerType");
     expect(runConflictUpdate).not.toHaveProperty("executionKind");

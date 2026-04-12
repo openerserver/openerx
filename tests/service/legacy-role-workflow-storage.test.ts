@@ -40,6 +40,7 @@ async function loadLegacyWorkflowStorageModule(args: {
   task: Record<string, unknown>;
   existingWorkflowRun: Record<string, unknown> | null;
   existingStageRun?: Record<string, unknown> | null;
+  existingStageRuns?: unknown[];
   existingRoleConclusions?: unknown[];
   project?: Record<string, unknown> | null;
   fallbackTemplateStages?: unknown[];
@@ -67,11 +68,14 @@ async function loadLegacyWorkflowStorageModule(args: {
   const insertedRoleAggregateConclusions: unknown[] = [];
   const insertedDeveloperChangeRequests: unknown[] = [];
   const updatedTaskAggregates: unknown[] = [];
+  const updatedTaskStageRuns: unknown[] = [];
   const updatedTaskWorkflowRuns: unknown[] = [];
   let workflowTemplateStageSelectCount = 0;
   const projectFindFirstMock = mock(async () => args.project ?? null);
   const taskWorkflowRunFindFirstMock = mock(async () => args.existingWorkflowRun);
-  const taskStageRunFindFirstMock = mock(async () => args.existingStageRun ?? null);
+  const taskStageRunFindFirstMock = mock(
+    async () => args.existingStageRun ?? args.existingStageRuns?.[0] ?? null,
+  );
 
   mock.module("../../control-plane/service/src/db", () => ({
     db: {
@@ -93,6 +97,9 @@ async function loadLegacyWorkflowStorageModule(args: {
               workflowTemplateStageSelectCount === 0 ? [] : (args.fallbackTemplateStages ?? []);
             workflowTemplateStageSelectCount += 1;
             return rows;
+          }
+          if (table === fakeTaskStageRuns) {
+            return args.existingStageRuns ?? [];
           }
           if (table === fakeRoleAggregateConclusions || table === fakeDeveloperChangeRequests) {
             return table === fakeRoleAggregateConclusions
@@ -124,6 +131,12 @@ async function loadLegacyWorkflowStorageModule(args: {
         return createInsertChain(() => undefined);
       }),
       update: mock((table: unknown) => {
+        if (table === fakeTaskStageRuns) {
+          return createUpdateChain((payload) => {
+            updatedTaskStageRuns.push(payload);
+          });
+        }
+
         if (table === fakeTaskWorkflowRuns) {
           return createUpdateChain((payload) => {
             updatedTaskWorkflowRuns.push(payload);
@@ -177,6 +190,7 @@ async function loadLegacyWorkflowStorageModule(args: {
     taskStageRunFindFirstMock,
     taskWorkflowRunFindFirstMock,
     updatedTaskAggregates,
+    updatedTaskStageRuns,
     updatedTaskWorkflowRuns,
   };
 }
@@ -370,5 +384,97 @@ describe("legacy role workflow storage", () => {
         approvalState: "pending",
       }),
     ]);
+  });
+
+  test("reconciles terminal stage runs when a completed task still has running legacy stages", async () => {
+    const { ensureTaskWorkflowAvailable, insertedTaskStageRuns, updatedTaskStageRuns } =
+      await loadLegacyWorkflowStorageModule({
+        task: {
+          id: "task-1",
+          projectId: "project-1",
+          status: "completed",
+          createdAt: "2026-04-02T00:00:00.000Z",
+          startedAt: "2026-04-02T00:00:00.000Z",
+          finishedAt: "2026-04-02T01:00:00.000Z",
+          strategy: {
+            currentStage: "clarify",
+          },
+        },
+        existingWorkflowRun: {
+          id: "workflow-run-1",
+          taskId: "task-1",
+          templateId: "workflow-template-default-delivery",
+          currentStage: "done",
+          status: "completed",
+          startedAt: "2026-04-02T00:00:00.000Z",
+          finishedAt: "2026-04-02T01:00:00.000Z",
+          createdAt: "2026-04-02T00:00:00.000Z",
+          updatedAt: "2026-04-02T01:00:00.000Z",
+        },
+        existingStageRun: {
+          id: "stage-run-clarify",
+          workflowRunId: "workflow-run-1",
+          stageKey: "clarify",
+          status: "running",
+          startedAt: "2026-04-02T00:00:00.000Z",
+          finishedAt: null,
+          blockingReason: null,
+          approvalState: "not-required",
+        },
+        existingStageRuns: [
+          {
+            id: "stage-run-clarify",
+            workflowRunId: "workflow-run-1",
+            stageKey: "clarify",
+            status: "running",
+            startedAt: "2026-04-02T00:00:00.000Z",
+            finishedAt: null,
+            blockingReason: null,
+            approvalState: "not-required",
+          },
+          {
+            id: "stage-run-design",
+            workflowRunId: "workflow-run-1",
+            stageKey: "design",
+            status: "pending",
+            startedAt: null,
+            finishedAt: null,
+            blockingReason: null,
+            approvalState: "not-required",
+          },
+        ],
+        fallbackTemplateStages: [
+          {
+            id: "workflow-template-default-delivery.clarify",
+            templateId: "workflow-template-default-delivery",
+            stageKey: "clarify",
+            primaryRoleAgentId: "role.product",
+            participantRoleAgentIdsJson: [],
+            orderIndex: 0,
+          },
+          {
+            id: "workflow-template-default-delivery.design",
+            templateId: "workflow-template-default-delivery",
+            stageKey: "design",
+            primaryRoleAgentId: "role.architect",
+            participantRoleAgentIdsJson: [],
+            orderIndex: 1,
+          },
+        ],
+      });
+
+    const task = await ensureTaskWorkflowAvailable("task-1");
+
+    expect(task).toMatchObject({ id: "task-1" });
+    expect(insertedTaskStageRuns).toEqual([]);
+    expect(updatedTaskStageRuns).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          status: "completed",
+          finishedAt: "2026-04-02T01:00:00.000Z",
+        }),
+      ]),
+    );
+    expect(updatedTaskStageRuns).toHaveLength(2);
   });
 });

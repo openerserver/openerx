@@ -21,6 +21,7 @@ export function useTaskDetailViewStateCoordinator(args: {
   const sidebarCollapsed = ref(true);
   const previewFile = ref<PreviewFilePayload | null>(null);
   const runtimePermissions = ref<TaskRuntimePermission[]>([]);
+  let runtimePermissionsRefreshGeneration = 0;
 
   const chatTraceWarning = computed(() => {
     const cacheState = args.messageTrace.value?.timelineMeta?.cacheState;
@@ -76,15 +77,39 @@ export function useTaskDetailViewStateCoordinator(args: {
   });
 
   async function refreshRuntimePermissions(silent = false) {
-    if (!args.taskId.value || !args.selectedSessionId.value) {
+    const currentRefreshGeneration = ++runtimePermissionsRefreshGeneration;
+    const currentTaskId = args.taskId.value;
+    const currentSessionId = args.selectedSessionId.value;
+
+    if (
+      !currentTaskId ||
+      !currentSessionId ||
+      args.task.value?.id !== currentTaskId
+    ) {
       runtimePermissions.value = [];
       return;
     }
 
     try {
-      const response = await listTaskRuntimePermissions(args.taskId.value, args.selectedSessionId.value);
+      const response = await listTaskRuntimePermissions(currentTaskId, currentSessionId);
+      if (
+        currentRefreshGeneration !== runtimePermissionsRefreshGeneration ||
+        args.taskId.value !== currentTaskId ||
+        args.selectedSessionId.value !== currentSessionId
+      ) {
+        return;
+      }
+
       runtimePermissions.value = Array.isArray(response.data) ? response.data : [];
     } catch {
+      if (
+        currentRefreshGeneration !== runtimePermissionsRefreshGeneration ||
+        args.taskId.value !== currentTaskId ||
+        args.selectedSessionId.value !== currentSessionId
+      ) {
+        return;
+      }
+
       runtimePermissions.value = [];
       if (!silent) {
         throw new Error("加载运行时审批失败");

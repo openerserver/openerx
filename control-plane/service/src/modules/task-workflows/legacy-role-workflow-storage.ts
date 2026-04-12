@@ -416,19 +416,16 @@ function buildStageRunStatus(
   }
 }
 
+function isTerminalWorkflowStatus(status: WorkflowStatus | null | undefined) {
+  return status === "completed" || status === "failed" || status === "cancelled";
+}
+
 async function ensureWorkflowStageRunsMigrated(
   workflowRun: typeof taskWorkflowRuns.$inferSelect,
   task: TaskTreeRecord,
   legacyStage: string | null,
   strategy: JsonRecord,
 ) {
-  const existingStageRun = await db.query.taskStageRuns.findFirst({
-    where: eq(taskStageRuns.workflowRunId, workflowRun.id),
-  });
-  if (existingStageRun) {
-    return;
-  }
-
   let effectiveWorkflowRun = workflowRun;
   let templateId = normalizeWorkflowTemplateId(workflowRun.templateId);
   let templateStages = templateId ? await loadWorkflowTemplateStageRows(templateId) : [];
@@ -457,6 +454,16 @@ async function ensureWorkflowStageRunsMigrated(
     return;
   }
 
+  const existingStageRuns = await db
+    .select()
+    .from(taskStageRuns)
+    .where(eq(taskStageRuns.workflowRunId, workflowRun.id));
+  const shouldRepairExistingStageRuns =
+    existingStageRuns.length > 0 && isTerminalWorkflowStatus(effectiveWorkflowRun.status);
+  if (existingStageRuns.length > 0 && !shouldRepairExistingStageRuns) {
+    return;
+  }
+
   const orderedStages = [...templateStages].sort(
     (left, right) => left.orderIndex - right.orderIndex,
   );
@@ -481,6 +488,93 @@ async function ensureWorkflowStageRunsMigrated(
     effectiveWorkflowRun.status === "cancelled"
       ? now
       : null);
+
+  if (existingStageRuns.length > 0) {
+    const existingStageRunsByKey = new Map(
+      existingStageRuns
+        .filter((stageRun) => typeof stageRun.stageKey === "string" && stageRun.stageKey)
+        .map((stageRun) => [stageRun.stageKey, stageRun] as const),
+    );
+
+    const missingStagePayloads: Array<typeof taskStageRuns.$inferInsert> = [];
+
+    for (const [index, stage] of orderedStages.entries()) {
+      const status = buildStageRunStatus(
+        effectiveWorkflowRun.status,
+        stage.stageKey,
+        activeStageKey,
+        index,
+        activeIndex,
+      );
+      const expectedStartedAt = status === "pending" ? null : startedAt;
+      const expectedFinishedAt =
+        status === "completed" || status === "failed" || status === "cancelled"
+          ? (finishedAt ?? now)
+          : null;
+      const expectedBlockingReason = status === "blocked" ? "历史任务暂停，待人工恢复" : null;
+      const expectedApprovalState = status === "waiting-approval" ? "pending" : "not-required";
+      const existingStageRun = existingStageRunsByKey.get(stage.stageKey);
+
+      if (!existingStageRun) {
+        missingStagePayloads.push({
+          id: crypto.randomUUID(),
+          workflowRunId: effectiveWorkflowRun.id,
+          stageKey: stage.stageKey,
+          status,
+          primaryRoleAgentId: stage.primaryRoleAgentId,
+          participantRoleAgentIdsJson: stage.participantRoleAgentIdsJson,
+          startedAt: expectedStartedAt,
+          finishedAt: expectedFinishedAt,
+          blockingReason: expectedBlockingReason,
+          approvalState: expectedApprovalState,
+          artifactsSummaryJson: null,
+          createdAt: task.createdAt ?? now,
+          updatedAt: now,
+        });
+        continue;
+      }
+
+      const updates: Partial<typeof taskStageRuns.$inferInsert> = {};
+
+      if (existingStageRun.status !== status) {
+        updates.status = status;
+      }
+
+      if ((existingStageRun.startedAt ?? null) !== expectedStartedAt) {
+        updates.startedAt = expectedStartedAt;
+      }
+
+      if ((existingStageRun.finishedAt ?? null) !== expectedFinishedAt) {
+        updates.finishedAt = expectedFinishedAt;
+      }
+
+      if ((existingStageRun.blockingReason ?? null) !== expectedBlockingReason) {
+        updates.blockingReason = expectedBlockingReason;
+      }
+
+      if ((existingStageRun.approvalState ?? null) !== expectedApprovalState) {
+        updates.approvalState = expectedApprovalState;
+      }
+
+      if (Object.keys(updates).length === 0) {
+        continue;
+      }
+
+      await db
+        .update(taskStageRuns)
+        .set({
+          ...updates,
+          updatedAt: now,
+        })
+        .where(eq(taskStageRuns.id, existingStageRun.id));
+    }
+
+    if (missingStagePayloads.length > 0) {
+      await db.insert(taskStageRuns).values(missingStagePayloads);
+    }
+
+    return;
+  }
 
   const stagePayloads: Array<typeof taskStageRuns.$inferInsert> = orderedStages.map(
     (stage, index) => {
@@ -673,6 +767,12 @@ export async function ensureTaskWorkflowAvailable(taskId: string) {
   });
 
   if (hasCanonicalTemplateId && hasWorkflowStatus && hasCanonicalCurrentStage && existingStageRun) {
+    if (isTerminalWorkflowStatus(task.status)) {
+      const strategy = parseTaskStrategy(task.strategy);
+      const legacyRoleConclusions = normalizeArray(strategy.roleAggregateConclusions);
+      const legacyStage = inferLegacyStage(strategy, legacyRoleConclusions);
+      await ensureWorkflowStageRunsMigrated(existingWorkflowRun, task, legacyStage, strategy);
+    }
     return task;
   }
 

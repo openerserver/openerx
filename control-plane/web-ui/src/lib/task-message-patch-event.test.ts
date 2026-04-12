@@ -70,6 +70,36 @@ describe("task message patch event", () => {
     });
   });
 
+  it("extracts inline assistant text from a message snapshot update", () => {
+    expect(
+      toTaskMessagePatchEvent(
+        createEvent({
+          data: {
+            message: {
+              info: {
+                id: "assistant-1",
+                role: "assistant",
+                time: {
+                  created: "2026-04-08T03:18:17.218Z",
+                },
+              },
+              parts: [
+                {
+                  type: "text",
+                  text: "首段正文",
+                },
+              ],
+            },
+          },
+        }),
+      ),
+    ).toMatchObject({
+      kind: "assistant-progress",
+      messageId: "assistant-1",
+      initialText: "首段正文",
+    });
+  });
+
   it("maps a text delta into an assistant patch", () => {
     expect(
       toTaskMessagePatchEvent(

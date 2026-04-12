@@ -635,6 +635,18 @@ export function resolveNextSelectedSessionId(
     return preferredSessionId;
   }
 
+  const selectedSessionId =
+    typeof args.selectedSessionId === "string" && args.selectedSessionId.length > 0
+      ? args.selectedSessionId
+      : undefined;
+  if (
+    selectedSessionId &&
+    !hasSessionNode(args.flatNodes, selectedSessionId) &&
+    args.task?.status === "running"
+  ) {
+    return selectedSessionId;
+  }
+
   const baseSessionId = resolveBaseSessionId(args);
   const currentRun = args.currentParallelRun;
   const baseSessionParticipatesInCurrentRun = Boolean(

@@ -76,8 +76,10 @@ export function useTreeBranches(
 ) {
   const sessionTree = ref<SessionTreeNode[]>([]);
   const sessionSummaries = ref<TaskSessionRecord[]>([]);
+  const currentPhaseId = ref<string | null>(null);
   const loading = ref(false);
   const error = ref<string | null>(null);
+  let refreshGeneration = 0;
 
   const flatNodes = computed(() => flattenTree(sessionTree.value));
 
@@ -86,9 +88,14 @@ export function useTreeBranches(
   );
 
   async function refresh(silent = false) {
-    if (!taskId.value || !rootNodeId.value) {
+    const currentRefreshGeneration = ++refreshGeneration;
+    const currentTaskId = taskId.value;
+    const currentRootNodeId = rootNodeId.value;
+
+    if (!currentTaskId || !currentRootNodeId) {
       sessionTree.value = [];
       sessionSummaries.value = [];
+      currentPhaseId.value = null;
       error.value = null;
       return;
     }
@@ -97,22 +104,42 @@ export function useTreeBranches(
     error.value = null;
 
     try {
-      const sessionContext = await getTaskTreeSessionContext(taskId.value);
+      const sessionContext = await getTaskTreeSessionContext(currentTaskId);
+      if (
+        currentRefreshGeneration !== refreshGeneration ||
+        taskId.value !== currentTaskId ||
+        rootNodeId.value !== currentRootNodeId
+      ) {
+        return;
+      }
+
       const nodes = Array.isArray(sessionContext.data.sessionLineage)
         ? sessionContext.data.sessionLineage
         : [];
-      sessionTree.value = mapLineageTree(nodes, rootNodeId.value);
+      sessionTree.value = mapLineageTree(nodes, currentRootNodeId);
+      currentPhaseId.value = sessionContext.data.currentPhaseId ?? null;
       sessionSummaries.value = Array.isArray(sessionContext.data.sessionSummaries)
         ? sessionContext.data.sessionSummaries
         : [];
     } catch (nextError) {
+      if (
+        currentRefreshGeneration !== refreshGeneration ||
+        taskId.value !== currentTaskId ||
+        rootNodeId.value !== currentRootNodeId
+      ) {
+        return;
+      }
+
       if (!silent) {
         sessionTree.value = [];
         sessionSummaries.value = [];
+        currentPhaseId.value = null;
         error.value = nextError instanceof Error ? nextError.message : "加载分支拓扑失败";
       }
     } finally {
-      loading.value = false;
+      if (currentRefreshGeneration === refreshGeneration) {
+        loading.value = false;
+      }
     }
   }
 
@@ -125,6 +152,7 @@ export function useTreeBranches(
   );
 
   return {
+    currentPhaseId,
     flatNodes,
     sessionSummaries,
     selectedNode,

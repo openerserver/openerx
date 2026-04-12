@@ -3,6 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { computed, defineComponent, nextTick, reactive, ref } from "vue";
 import type { TreeTask } from "../../control-plane/web-ui/src/composables/useProjectTreeTask";
 
+const MISSING_TASK_LOAD_ERROR =
+  "当前任务不存在。当前 UI 指向的 app 数据库实例中找不到这个任务，可能是历史标签仍指向旧数据库实例。请切换到正确的数据库实例，或关闭这个 Workbench 标签。";
+
 const routeState = vi.hoisted(() => ({
   params: { taskId: "task-1" },
   query: {},
@@ -22,6 +25,7 @@ const realtimeStoreMock = reactive(realtimeStoreState) as typeof realtimeStoreSt
 
 const apiMocks = vi.hoisted(() => ({
   adoptParallelCandidate: vi.fn(),
+  cancelTaskPhase: vi.fn(),
   continueTask: vi.fn(),
   forkTaskSession: vi.fn(),
   getModelsList: vi.fn(),
@@ -93,7 +97,7 @@ function createDeferred<T>() {
   };
 }
 
-const taskState = vi.hoisted(() => ({
+const taskStateRaw = vi.hoisted(() => ({
   task: {
     id: "task-1",
     nodeId: "task-1",
@@ -112,8 +116,11 @@ const taskState = vi.hoisted(() => ({
   node: { id: "node-task-1" },
   ancestors: [] as Array<unknown>,
   projectId: "proj-1",
+  loading: false,
+  error: "",
   refresh: vi.fn(async () => undefined),
 }));
+const taskState = reactive(taskStateRaw) as typeof taskStateRaw;
 
 const branchState = vi.hoisted(() => ({
   flatNodes: [
@@ -125,6 +132,7 @@ const branchState = vi.hoisted(() => ({
       branchName: "main",
     },
   ] as Array<any>,
+  currentPhaseId: null as string | null,
   sessionSummaries: null as Array<any> | null,
   selectedNode: {
     id: "node-session-1",
@@ -166,18 +174,39 @@ vi.mock("../../control-plane/web-ui/src/lib/api", async (importOriginal) => {
 
 vi.mock("../../control-plane/web-ui/src/composables/useProjectTreeTask", () => ({
   useProjectTreeTask: () => ({
-    task: ref(taskState.task),
-    node: ref(taskState.node),
-    ancestors: ref(taskState.ancestors),
-    projectId: ref(taskState.projectId),
-    loading: ref(false),
-    error: ref(""),
+    task: computed({
+      get: () => taskState.task,
+      set: (value) => {
+        taskState.task = value;
+      },
+    }),
+    node: computed({
+      get: () => taskState.node,
+      set: (value) => {
+        taskState.node = value;
+      },
+    }),
+    ancestors: computed({
+      get: () => taskState.ancestors,
+      set: (value) => {
+        taskState.ancestors = value;
+      },
+    }),
+    projectId: computed({
+      get: () => taskState.projectId,
+      set: (value) => {
+        taskState.projectId = value;
+      },
+    }),
+    loading: computed(() => taskState.loading),
+    error: computed(() => taskState.error),
     refresh: taskState.refresh,
   }),
 }));
 
 vi.mock("../../control-plane/web-ui/src/composables/useTreeBranches", () => ({
   useTreeBranches: () => ({
+    currentPhaseId: ref(branchState.currentPhaseId),
     flatNodes: ref(branchState.flatNodes),
     sessionSummaries: branchSessionSummariesRef,
     selectedNode: ref(branchState.selectedNode),
@@ -1084,26 +1113,31 @@ describe("TaskDetailV3 runtime permissions", () => {
     legacyParallelFixtureState.domainRunDetailImplementation = null;
     routeState.params = { taskId: "task-1" };
     routeState.query = {};
-    taskState.task.id = "task-1";
-    taskState.task.nodeId = "task-1";
-    taskState.task.projectId = "proj-1";
-    taskState.task.title = "任务详情 V3";
-    taskState.task.prompt = "执行任务详情页测试";
-    taskState.task.sessionId = "ses-1";
-    taskState.task.status = "running";
-    taskState.task.agentRunId = "run-1";
-    taskState.task.finishedAt = undefined;
-    taskState.task.executionMode = undefined;
-    taskState.task.orchestrationKind = undefined;
-    taskState.task.currentRunId = undefined;
-    taskState.task.autoAdvanceStages = false;
-    taskState.task.selectedModel = null;
-    taskState.task.result = undefined;
-    taskState.task.strategy = undefined;
-    taskState.task.changesSummary = null;
+    taskState.task = {
+      id: "task-1",
+      nodeId: "task-1",
+      projectId: "proj-1",
+      sessionId: "ses-1",
+      title: "任务详情 V3",
+      prompt: "执行任务详情页测试",
+      status: "running",
+      selectedModel: null,
+      autoAdvanceStages: false,
+      executionMode: undefined,
+      result: undefined,
+      agentRunId: "run-1",
+      createdAt: "2026-03-22T00:00:00.000Z",
+      finishedAt: undefined,
+      orchestrationKind: undefined,
+      currentRunId: undefined,
+      strategy: undefined,
+      changesSummary: null,
+    } as TreeTask;
     taskState.node = { id: "node-task-1" };
     taskState.ancestors = [];
     taskState.projectId = "proj-1";
+    taskState.loading = false;
+    taskState.error = "";
     branchState.refresh.mockImplementation(async () => {
       if (branchState.sessionSummaries !== null) {
         branchSessionSummariesRef.value = branchState.sessionSummaries;
@@ -1115,6 +1149,7 @@ describe("TaskDetailV3 runtime permissions", () => {
         ? sessionsResponse.data
         : [];
     });
+    branchState.currentPhaseId = null;
     branchState.sessionSummaries = null;
     branchSessionSummariesRef.value = [];
     branchState.flatNodes = [
@@ -1283,6 +1318,39 @@ describe("TaskDetailV3 runtime permissions", () => {
     expect(wrapper.find('[data-testid="breadcrumb"]').exists()).toBe(true);
   });
 
+  it("shows missing-task guidance when the current task no longer exists", async () => {
+    taskState.task = null;
+    taskState.node = null;
+    taskState.ancestors = [];
+    taskState.projectId = "";
+    taskState.error = MISSING_TASK_LOAD_ERROR;
+
+    const wrapper = await mountPage();
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("当前任务不存在");
+    expect(wrapper.text()).toContain("当前 UI 指向的 app 数据库实例中找不到这个任务");
+    expect(apiMocks.getTaskWorkflowView).not.toHaveBeenCalled();
+    expect(apiMocks.getTaskMemberView).not.toHaveBeenCalled();
+    expect(apiMocks.listTaskRuntimePermissions).not.toHaveBeenCalled();
+  });
+
+  it("waits for the loaded task to match the route before loading follow-up snapshots", async () => {
+    routeState.params = { taskId: "task-2" };
+    taskState.task = {
+      ...(taskState.task as TreeTask),
+      id: "task-1",
+      nodeId: "task-1",
+    };
+
+    await mountPage();
+    await flushPromises();
+
+    expect(apiMocks.getTaskWorkflowView).not.toHaveBeenCalled();
+    expect(apiMocks.getTaskMemberView).not.toHaveBeenCalled();
+    expect(apiMocks.listTaskRuntimePermissions).not.toHaveBeenCalled();
+  });
+
   it("renders and approves a pending external_directory request", async () => {
     const wrapper = await mountPage();
 
@@ -1304,6 +1372,10 @@ describe("TaskDetailV3 runtime permissions", () => {
 
   it("renders the task member view in the sidebar", async () => {
     const wrapper = await mountPage();
+    const expandSidebarButton = wrapper.findAll("button").find((button) => button.text() === "展开 Sidebar");
+    await expandSidebarButton?.trigger("click");
+    await nextTick();
+    await flushPromises();
 
     expect(wrapper.text()).toContain("任务成员");
     expect(wrapper.text()).toContain("项目管理员");
@@ -1316,10 +1388,12 @@ describe("TaskDetailV3 runtime permissions", () => {
 
   it("bumps the sidebar trace refresh key when follow-up realtime events arrive", async () => {
     const wrapper = await mountPage();
+    const expandSidebarButton = wrapper.findAll("button").find((button) => button.text() === "展开 Sidebar");
+    await expandSidebarButton?.trigger("click");
+    await nextTick();
+    await flushPromises();
 
-    const followupPanel = wrapper.get('[data-testid="task-followup-panel"]');
     const tracePanel = wrapper.get('[data-testid="trace-panel"]');
-    expect(followupPanel.attributes("data-refresh-key")).toBe("0");
     expect(tracePanel.attributes("data-refresh-key")).toBe("0");
 
     realtimeStoreMock.events = [
@@ -1335,9 +1409,6 @@ describe("TaskDetailV3 runtime permissions", () => {
     await nextTick();
     await flushPromises();
 
-    expect(wrapper.get('[data-testid="task-followup-panel"]').attributes("data-refresh-key")).toBe(
-      "1",
-    );
     expect(wrapper.get('[data-testid="trace-panel"]').attributes("data-refresh-key")).toBe("1");
   });
 
@@ -1471,7 +1542,7 @@ describe("TaskDetailV3 runtime permissions", () => {
     expect(wrapper.text()).toContain("主聊天区当前展示的是部分执行追踪结果");
   });
 
-  it("only enables terminate capability for running tasks with an agent run", async () => {
+  it("enables stop capability for running tasks with either an agent run or a current phase", async () => {
     taskState.task.status = "completed";
 
     let wrapper = await mountPage();
@@ -1483,6 +1554,16 @@ describe("TaskDetailV3 runtime permissions", () => {
 
     taskState.task.status = "running";
     taskState.task.agentRunId = "run-1";
+
+    wrapper = await mountPage();
+    composer = wrapper.get('[data-testid="chat-composer"]');
+    expect(composer.attributes("data-can-terminate")).toBe("true");
+    expect(composer.attributes("data-is-executing")).toBe("true");
+
+    wrapper.unmount();
+
+    taskState.task.agentRunId = undefined;
+    branchState.currentPhaseId = "phase-live-1";
 
     wrapper = await mountPage();
     composer = wrapper.get('[data-testid="chat-composer"]');

@@ -212,6 +212,41 @@ describe("useTreeMessages", () => {
     });
   });
 
+  it("clears a terminal pending assistant draft even if later snapshot events arrive", async () => {
+    const { composable } = mountComposable();
+    await flushPromises();
+    await nextTick();
+
+    composable.seedPendingAssistantDraft("session-1");
+    await nextTick();
+
+    expect(composable.hasStreamingAssistant.value).toBe(true);
+    expect(composable.conversationItems.value).toHaveLength(1);
+    expect(String(composable.conversationItems.value[0]?.key)).toContain("pending-assistant:");
+
+    taskMessageStoreState.latestTaskRefreshRequest.value = {
+      eventId: "event-task-completed",
+      reason: "task-completed",
+      shouldRefreshMessages: true,
+      shouldBumpTraceRefreshKey: false,
+    };
+    await nextTick();
+
+    expect(composable.hasStreamingAssistant.value).toBe(false);
+    expect(composable.conversationItems.value).toHaveLength(0);
+
+    taskMessageStoreState.latestTaskRefreshRequest.value = {
+      eventId: "event-session-updated",
+      reason: "session-updated",
+      shouldRefreshMessages: true,
+      shouldBumpTraceRefreshKey: false,
+    };
+    await nextTick();
+
+    expect(composable.hasStreamingAssistant.value).toBe(false);
+    expect(composable.conversationItems.value).toHaveLength(0);
+  });
+
   it("ignores stale task-wide responses after a newer session-scoped refresh", async () => {
     const taskWideResponse = createDeferred<{
       data: unknown[];

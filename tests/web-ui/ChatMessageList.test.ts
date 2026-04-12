@@ -1,6 +1,6 @@
 import { mount } from "@vue/test-utils";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { defineComponent } from "vue";
+import { defineComponent, nextTick } from "vue";
 import ChatMessageList from "../../control-plane/web-ui/src/components/task-detail-shared/ChatMessageList.vue";
 import type {
   TaskConversationMessageItem,
@@ -103,6 +103,45 @@ describe("ChatMessageList tool cards", () => {
     expect(wrapper.text()).toContain("收起思考过程");
     expect(wrapper.text()).toContain("Confirming task execution");
     expect(wrapper.text()).toContain("准备展示最终回复。");
+  });
+
+  it("renders streaming assistant text immediately without waiting for reveal throttling", async () => {
+    const items: TaskConversationMessageItem[] = [
+      {
+        key: "message-streaming-1",
+        role: "assistant",
+        text: "正在实时输出的第一段正文",
+        toolCalls: [],
+        createdAt: "2026-04-10T10:00:00.000Z",
+        raw: null,
+        isStreaming: true,
+      },
+    ];
+
+    const wrapper = mount(ChatMessageList, {
+      props: {
+        items,
+        loading: false,
+        error: null,
+      },
+      global: {
+        stubs: {
+          ASpin: createPassThroughStub("ASpin"),
+          AAlert: createPassThroughStub("AAlert"),
+          AEmpty: createPassThroughStub("AEmpty"),
+          ASpace: createPassThroughStub("ASpace"),
+          AFlex: createPassThroughStub("AFlex"),
+          ATag: createPassThroughStub("ATag"),
+          ATypographyText: createPassThroughStub("ATypographyText"),
+          AButton: ButtonStub,
+        },
+      },
+    });
+
+    await nextTick();
+
+    expect(wrapper.text()).toContain("正在实时输出的第一段正文");
+    expect(wrapper.text()).not.toContain("暂无文本内容");
   });
 
   it("keeps user-visible instruction text from execution context prompts", () => {

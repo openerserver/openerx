@@ -7,6 +7,16 @@ const apiMocks = vi.hoisted(() => ({
   getTaskTreeSessionContext: vi.fn(),
 }));
 
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((nextResolve, nextReject) => {
+    resolve = nextResolve;
+    reject = nextReject;
+  });
+  return { promise, resolve, reject };
+}
+
 vi.mock("../../control-plane/web-ui/src/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../control-plane/web-ui/src/lib/api")>();
   return {
@@ -24,6 +34,7 @@ describe("useTreeBranches", () => {
     apiMocks.getTaskTreeSessionContext.mockResolvedValue({
       data: {
         currentSessionId: "ses-root",
+        currentPhaseId: "phase-root",
         sessionSummaries: [
           {
             id: "ses-root",
@@ -108,6 +119,7 @@ describe("useTreeBranches", () => {
     await flushPromises();
 
     expect(apiMocks.getTaskTreeSessionContext).toHaveBeenCalledWith("task-1");
+    expect(state.currentPhaseId.value).toBe("phase-root");
     expect(state.sessionSummaries.value).toEqual([
       {
         id: "ses-root",
@@ -276,6 +288,114 @@ describe("useTreeBranches", () => {
         summary: null,
         forkedFromMessageId: null,
       },
+    ]);
+  });
+
+  it("ignores stale session-tree responses that finish after a newer refresh", async () => {
+    const firstRefresh = createDeferred<{
+      data: {
+        sessionLineage: Array<Record<string, unknown>>;
+        sessionSummaries: Array<Record<string, unknown>>;
+      };
+    }>();
+    const secondRefresh = createDeferred<{
+      data: {
+        sessionLineage: Array<Record<string, unknown>>;
+        sessionSummaries: Array<Record<string, unknown>>;
+      };
+    }>();
+
+    apiMocks.getTaskTreeSessionContext
+      .mockImplementationOnce(() => firstRefresh.promise)
+      .mockImplementationOnce(() => secondRefresh.promise);
+
+    const taskId = ref("task-1");
+    const rootNodeId = ref("node-task-1");
+    const selectedSessionId = ref<string | undefined>("parent-1");
+    const state = useTreeBranches(taskId, rootNodeId, selectedSessionId);
+
+    await flushPromises();
+
+    void state.refresh(true);
+
+    secondRefresh.resolve({
+      data: {
+        sessionSummaries: [],
+        sessionLineage: [
+          {
+            id: "task-session:task-1:parent-1",
+            runtimeSessionId: "parent-1",
+            parentRuntimeSessionId: null,
+            forkedFromMessageId: null,
+            forkedFromMessageRole: null,
+            forkedFromMessagePreview: null,
+            firstPromptAfterFork: null,
+            branchName: "main",
+            sourceType: "root",
+            isActive: false,
+            title: "主分支",
+            summary: null,
+            createdAt: "2026-03-22T00:00:00.000Z",
+            updatedAt: "2026-03-22T00:05:00.000Z",
+            children: [
+              {
+                id: "task-session:task-1:child-1",
+                runtimeSessionId: "child-1",
+                parentRuntimeSessionId: "parent-1",
+                forkedFromMessageId: null,
+                forkedFromMessageRole: null,
+                forkedFromMessagePreview: null,
+                firstPromptAfterFork: null,
+                branchName: "child",
+                sourceType: "continue",
+                isActive: true,
+                title: "子会话",
+                summary: null,
+                createdAt: "2026-03-22T00:06:00.000Z",
+                updatedAt: "2026-03-22T00:07:00.000Z",
+                children: [],
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    await flushPromises();
+    expect(state.flatNodes.value.map((node) => node.runtimeSessionId)).toEqual([
+      "parent-1",
+      "child-1",
+    ]);
+
+    firstRefresh.resolve({
+      data: {
+        sessionSummaries: [],
+        sessionLineage: [
+          {
+            id: "task-session:task-1:parent-1",
+            runtimeSessionId: "parent-1",
+            parentRuntimeSessionId: null,
+            forkedFromMessageId: null,
+            forkedFromMessageRole: null,
+            forkedFromMessagePreview: null,
+            firstPromptAfterFork: null,
+            branchName: "main",
+            sourceType: "root",
+            isActive: true,
+            title: "主分支",
+            summary: null,
+            createdAt: "2026-03-22T00:00:00.000Z",
+            updatedAt: "2026-03-22T00:05:00.000Z",
+            children: [],
+          },
+        ],
+      },
+    });
+
+    await flushPromises();
+    expect(state.flatNodes.value.map((node) => node.runtimeSessionId)).toEqual([
+      "parent-1",
+      "child-1",
     ]);
   });
 });

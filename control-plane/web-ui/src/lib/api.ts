@@ -1534,6 +1534,7 @@ export interface TaskTreeMeta {
   contractVersion?: string;
   taskId: string;
   currentSessionId?: string | null;
+  currentPhaseId?: string | null;
   rootSessionId?: string | null;
   generatedAt?: string;
   incomplete?: boolean;
@@ -1649,6 +1650,7 @@ export interface TaskTreeTaskMeta {
 
 export interface TaskTreeSessionContext {
   currentSessionId?: string | null;
+  currentPhaseId?: string | null;
   sessionSummaries: TaskSessionRecord[];
   sessionLineage: TaskSessionLineageNode[];
 }
@@ -2004,7 +2006,10 @@ function sortTaskTreeConversationMessages(messages: TaskTreeMessageRecord[]) {
   return indexedMessages.map(({ message }) => message);
 }
 
-function projectTaskConversationTreeToMessages(tree: TaskConversationTreeResponse): {
+function projectTaskConversationTreeToMessages(
+  tree: TaskConversationTreeResponse,
+  options?: { preferredSessionId?: string },
+): {
   data: unknown[];
   meta?: ExecutionTraceTimelineMeta & {
     sessionId?: string;
@@ -2064,7 +2069,10 @@ function projectTaskConversationTreeToMessages(tree: TaskConversationTreeRespons
     meta: {
       sessionId: resolveTaskTreeRuntimeSessionId(
         tree,
-        tree.meta.currentSessionId ?? tree.task.currentSessionId ?? undefined,
+        options?.preferredSessionId ??
+          tree.meta.currentSessionId ??
+          tree.task.currentSessionId ??
+          undefined,
       ),
       messageCount: regularMessages.length,
       readSource: "task-domain-projection",
@@ -2352,13 +2360,18 @@ export async function getTaskTreeMeta(taskId: string): Promise<TaskTreeTaskMeta>
 }
 
 export async function getTaskTreeSessionContext(taskId: string) {
-  const tree = await getTaskConversationTree(taskId);
+  const [tree, sessionsResponse] = await Promise.all([
+    getTaskConversationTree(taskId),
+    getTaskSessions(taskId).catch(() => null),
+  ]);
   return {
     data: {
       currentSessionId: resolveTaskTreeRuntimeSessionId(
         tree,
         tree.meta.currentSessionId ?? tree.task.currentSessionId ?? undefined,
       ),
+      currentPhaseId:
+        sessionsResponse?.meta.currentPhaseId ?? asTaskTreeString(tree.meta.currentPhaseId) ?? null,
       sessionSummaries: projectTaskTreeToSessionSummaries(tree),
       sessionLineage: projectTaskTreeToSessionLineage(tree),
     } satisfies TaskTreeSessionContext,
@@ -2424,7 +2437,7 @@ export async function getTaskConversationMessages(
     includeLineage: options?.includeLineage,
   });
 
-  return projectTaskConversationTreeToMessages(tree);
+  return projectTaskConversationTreeToMessages(tree, { preferredSessionId: sessionId });
 }
 
 export async function getTaskMessages(
@@ -2438,7 +2451,9 @@ export async function getTaskMessages(
   };
 }> {
   const tree = await getTaskConversationTree(taskId, options);
-  return projectTaskConversationTreeToMessages(tree);
+  return projectTaskConversationTreeToMessages(tree, {
+    preferredSessionId: options?.sessionId,
+  });
 }
 
 export async function continueTask(
@@ -3347,6 +3362,20 @@ export async function adoptParallelCandidate(
     `/tasks/${taskId}/phases/${encodeURIComponent(phaseId)}/candidates/${candidateIndex}/adopt`,
     {
       method: "POST",
+    },
+  );
+}
+
+export async function cancelTaskPhase(
+  taskId: string,
+  phaseId: string,
+  reason: "winner_adopted" | "user_cancelled" | "runtime_terminated" | "runtime_failed" | "timeout" | "superseded" = "user_cancelled",
+) {
+  return request<{ ok: boolean; phaseId: string; status?: string }>(
+    `/tasks/${taskId}/phases/${encodeURIComponent(phaseId)}/cancel`,
+    {
+      method: "POST",
+      body: JSON.stringify({ reason }),
     },
   );
 }

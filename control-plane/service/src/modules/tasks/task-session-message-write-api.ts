@@ -109,6 +109,8 @@ type CanonicalTaskMessageRow = {
   updatedAt: string;
 };
 
+type TaskSessionRunRecord = typeof taskSessionRuns.$inferSelect;
+
 const CANONICAL_TASK_MESSAGE_COLUMNS = {
   id: taskMessages.id,
   taskId: taskMessages.taskId,
@@ -165,6 +167,12 @@ function mapTaskMessageKind(role: TaskSessionMessageRole) {
     return "tool_echo" as const;
   }
   return "note" as const;
+}
+
+function isTerminalTaskSessionNodeStatus(
+  status: TaskSessionNodeStatus | null | undefined,
+): status is "completed" | "failed" | "cancelled" {
+  return status === "completed" || status === "failed" || status === "cancelled";
 }
 
 function mapTaskSessionMessageStatusToNodeStatus(status: TaskSessionMessageStatus) {
@@ -1533,9 +1541,15 @@ export function createTaskSessionMessageWriteApi(deps: {
       where: eq(taskSessions.id, sessionId),
     });
 
+    const defaultRunId = sessionRecord?.latestRunId ?? buildTaskSessionDefaultRunId(sessionId);
+    const existingRunRecord = await db.query.taskSessionRuns.findFirst({
+      where: eq(taskSessionRuns.id, defaultRunId),
+    });
+
     return {
       sessionRecord,
-      defaultRunId: sessionRecord?.latestRunId ?? buildTaskSessionDefaultRunId(sessionId),
+      defaultRunId,
+      existingRunRecord,
     };
   }
 
@@ -1606,6 +1620,7 @@ export function createTaskSessionMessageWriteApi(deps: {
       updatedAt: args.routing.updatedAt,
       sessionRecord: runState.sessionRecord,
       defaultRunId: runState.defaultRunId,
+      existingRunRecord: runState.existingRunRecord,
       messagePreview: buildTaskMessagePreview(persistedState.persistedTextContent),
       assistantContinuationPending,
       taskMessageStatus: resolveTaskSessionMessageNodeStatus(
@@ -1643,6 +1658,26 @@ export function createTaskSessionMessageWriteApi(deps: {
       context.sessionRecord?.startedAt ?? null,
       context.persistedCreatedAt,
     );
+
+    if (
+      context.role !== "assistant" &&
+      context.existingRunRecord &&
+      isTerminalTaskSessionNodeStatus(context.existingRunRecord.status)
+    ) {
+      return {
+        status: context.existingRunRecord.status,
+        outputTokens: context.existingRunRecord.outputTokens ?? 0,
+        totalTokens: context.existingRunRecord.totalTokens ?? 0,
+        resultSummary: context.existingRunRecord.resultSummary ?? null,
+        errorText: context.existingRunRecord.errorText,
+        startedAt: context.existingRunRecord.startedAt ?? startedAt,
+        finishedAt:
+          context.existingRunRecord.finishedAt ??
+          context.existingRunRecord.startedAt ??
+          startedAt,
+      };
+    }
+
     const finishedAt = resolveTaskSessionMessageRunFinishedAt({
       role: context.role,
       persistedStatus: context.persistedStatus,
