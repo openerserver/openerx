@@ -9,6 +9,7 @@ type TaskSessionSourceTypeLike = {
   phaseId?: string | null;
   candidateIndex?: number | null;
   executionModeSnapshot?: string | null;
+  coordinationKey?: string | null;
 };
 
 function hasNonEmptyString(value: string | null | undefined) {
@@ -25,6 +26,10 @@ export function isParallelTaskSessionCandidate(session?: TaskSessionSourceTypeLi
   }
 
   if (typeof session.candidateIndex === "number") {
+    return true;
+  }
+
+  if (hasNonEmptyString(session.coordinationKey)) {
     return true;
   }
 

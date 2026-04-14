@@ -56,7 +56,7 @@
 
 主聊天消息读链与实时 patch：
 
-1. [control-plane/web-ui/src/composables/useTreeMessages.ts](../control-plane/web-ui/src/composables/useTreeMessages.ts)
+1. [control-plane/web-ui/src/composables/useTaskMessageSnapshot.ts](../control-plane/web-ui/src/composables/useTaskMessageSnapshot.ts)
 2. [control-plane/web-ui/src/composables/useTaskMessageStore.ts](../control-plane/web-ui/src/composables/useTaskMessageStore.ts)
 3. [control-plane/web-ui/src/composables/useTaskMessagePatchConsumer.ts](../control-plane/web-ui/src/composables/useTaskMessagePatchConsumer.ts)
 4. [control-plane/web-ui/src/lib/message-normalize.ts](../control-plane/web-ui/src/lib/message-normalize.ts)
@@ -69,8 +69,9 @@
 parallel 相关：
 
 1. [control-plane/web-ui/src/composables/useTaskDetailParallelFlow.ts](../control-plane/web-ui/src/composables/useTaskDetailParallelFlow.ts)
-2. [control-plane/web-ui/src/lib/task-detail-parallel-conversation.ts](../control-plane/web-ui/src/lib/task-detail-parallel-conversation.ts)
+2. [control-plane/web-ui/src/lib/task-detail-parallel-read-model.ts](../control-plane/web-ui/src/lib/task-detail-parallel-read-model.ts)
 3. [control-plane/web-ui/src/lib/task-detail-parallel-runtime.ts](../control-plane/web-ui/src/lib/task-detail-parallel-runtime.ts)
+4. [control-plane/web-ui/src/lib/task-detail-parallel-conversation-projector.ts](../control-plane/web-ui/src/lib/task-detail-parallel-conversation-projector.ts)
 
 workflow 相关：
 
@@ -143,7 +144,7 @@ BFF：
 2. 不再接受 `executionMode`
 3. 页面不再支持 continue 排队
 
-### 需要修改的现有文件
+### 4.1.1 需要修改的现有文件
 
 接口与 BFF：
 
@@ -158,7 +159,7 @@ BFF：
 4. [control-plane/web-ui/src/components/task-detail-v3/TaskDetailV3MainPane.vue](../control-plane/web-ui/src/components/task-detail-v3/TaskDetailV3MainPane.vue)
 5. [control-plane/web-ui/src/components/task-detail-shared/ChatComposer.vue](../control-plane/web-ui/src/components/task-detail-shared/ChatComposer.vue)
 
-### 具体动作
+### 4.1.2 具体动作
 
 1. 在 [control-plane/web-ui/src/lib/api.ts](../control-plane/web-ui/src/lib/api.ts) 删除 `continueTask(...)` 的 `executionMode` 参数，只保留 `taskId + prompt + sessionId`。
 2. 在 [control-plane/web-ui-bff/src/modules/tasks/routes.ts](../control-plane/web-ui-bff/src/modules/tasks/routes.ts) 收紧 continue schema，去掉 `executionMode`，并让 `continueTaskExecution(...)` 永远只走 single continue flow。
@@ -167,7 +168,7 @@ BFF：
 5. 在 [control-plane/web-ui/src/composables/useTaskDetailPageSectionModels.ts](../control-plane/web-ui/src/composables/useTaskDetailPageSectionModels.ts) 移除与 `queuedContinuations`、`handleClearQueuedContinuations`、`handleRemoveQueuedContinuation` 相关的主区 model 暴露。
 6. 在 [control-plane/web-ui/src/components/task-detail-v3/TaskDetailV3MainPane.vue](../control-plane/web-ui/src/components/task-detail-v3/TaskDetailV3MainPane.vue) 和 [control-plane/web-ui/src/components/task-detail-shared/ChatComposer.vue](../control-plane/web-ui/src/components/task-detail-shared/ChatComposer.vue) 删除排队 UI。
 
-### 同步调整的测试
+### 4.1.3 同步调整的测试
 
 1. 更新 [tests/web-ui/useTaskDetailActionCoordinator.test.ts](../tests/web-ui/useTaskDetailActionCoordinator.test.ts)：把“正在执行时进入队列”的断言改为“直接拒绝发送”。
 2. 更新 [tests/web-ui-bff/lifecycle-hooks-behavior.test.ts](../tests/web-ui-bff/lifecycle-hooks-behavior.test.ts)：删除 continue route 的 parallel continuation 断言，改为只覆盖 single continue。
@@ -189,29 +190,29 @@ BFF：
 2. 主聊天不再被 parallel candidate 卡和 workflow step 状态污染
 3. 页面从“tree + overlay + compare merge”回到“snapshot + patch”模式
 
-### 需要修改的现有文件
+### 4.2.1 需要修改的现有文件
 
 1. [control-plane/web-ui/src/composables/useTaskDetailCoreContext.ts](../control-plane/web-ui/src/composables/useTaskDetailCoreContext.ts)
-2. [control-plane/web-ui/src/composables/useTreeMessages.ts](../control-plane/web-ui/src/composables/useTreeMessages.ts)
+2. [control-plane/web-ui/src/composables/useTaskMessageSnapshot.ts](../control-plane/web-ui/src/composables/useTaskMessageSnapshot.ts)
 3. [control-plane/web-ui/src/composables/useTaskMessageStore.ts](../control-plane/web-ui/src/composables/useTaskMessageStore.ts)
 4. [control-plane/web-ui/src/composables/useTaskMessagePatchConsumer.ts](../control-plane/web-ui/src/composables/useTaskMessagePatchConsumer.ts)
 5. [control-plane/web-ui/src/composables/useTaskDetailSnapshotCoordinator.ts](../control-plane/web-ui/src/composables/useTaskDetailSnapshotCoordinator.ts)
 6. [control-plane/web-ui/src/composables/useTaskDetailRefreshController.ts](../control-plane/web-ui/src/composables/useTaskDetailRefreshController.ts)
 7. [control-plane/web-ui/src/lib/task-detail-refresh-policy.ts](../control-plane/web-ui/src/lib/task-detail-refresh-policy.ts)
 
-### 具体动作
+### 4.2.2 具体动作
 
 1. 在 [control-plane/web-ui/src/composables/useTaskDetailCoreContext.ts](../control-plane/web-ui/src/composables/useTaskDetailCoreContext.ts) 明确“baseConversationItems 只代表主聊天 active session”，不再让 parallel flow 改写主消息流。
-2. 在 [control-plane/web-ui/src/composables/useTreeMessages.ts](../control-plane/web-ui/src/composables/useTreeMessages.ts) 把职责收敛到两件事：读取持久化消息、拼 active session 的最小 pending assistant。不要再负责 parallel candidate 的展示语义。
+2. 在 [control-plane/web-ui/src/composables/useTaskMessageSnapshot.ts](../control-plane/web-ui/src/composables/useTaskMessageSnapshot.ts) 与 [control-plane/web-ui/src/composables/useTaskMessageStore.ts](../control-plane/web-ui/src/composables/useTaskMessageStore.ts) 之间明确分工：前者只负责读取持久化消息与 refresh 编排，后者负责 active session 的 pending assistant 与统一 conversation merge；不要再负责 parallel candidate 的展示语义。
 3. 在 [control-plane/web-ui/src/composables/useTaskMessageStore.ts](../control-plane/web-ui/src/composables/useTaskMessageStore.ts) 和 [control-plane/web-ui/src/composables/useTaskMessagePatchConsumer.ts](../control-plane/web-ui/src/composables/useTaskMessagePatchConsumer.ts) 固定主聊天只消费 `task.message.updated` / `task.message.delta` / `task.reconcile.required` 触发的状态变化。
 4. 在 [control-plane/web-ui/src/composables/useTaskDetailSnapshotCoordinator.ts](../control-plane/web-ui/src/composables/useTaskDetailSnapshotCoordinator.ts) 让 `refreshTaskSnapshot` 的主路径优先服务主聊天；parallel 和 workflow 触发单独的 snapshot refresh，不再和主聊天 refresh 绑成一组。
 5. 在 [control-plane/web-ui/src/composables/useTaskDetailRefreshController.ts](../control-plane/web-ui/src/composables/useTaskDetailRefreshController.ts) 调整 refresh reason 分组，把 compare/workflow 专属事件从主聊天消息刷新条件里拆出去。
 
 ### 建议新增的相邻模块
 
-建议在 [control-plane/web-ui/src/composables](../control-plane/web-ui/src/composables) 新增单 round 或单 active session 的消息 composable，命名可放在 `useTreeMessages.ts` 旁边，用来承接后续 round DTO，而不是继续把所有逻辑塞回 `useTreeMessages.ts`。
+建议在 [control-plane/web-ui/src/composables](../control-plane/web-ui/src/composables) 围绕现有 [control-plane/web-ui/src/composables/useTaskMessageSnapshot.ts](../control-plane/web-ui/src/composables/useTaskMessageSnapshot.ts) 与 [control-plane/web-ui/src/composables/useTaskMessageStore.ts](../control-plane/web-ui/src/composables/useTaskMessageStore.ts) 继续拆更细的单 round / 单 active session reader-reducer helper，而不是重新引入新的兼容 facade。
 
-### 同步调整的测试
+### 4.2.3 同步调整的测试
 
 1. 扩充 [control-plane/web-ui/src/composables/useTaskMessageStore.test.ts](../control-plane/web-ui/src/composables/useTaskMessageStore.test.ts)：覆盖 active session 切换、reconcile 后恢复、pending assistant 清理。
 2. 扩充 [control-plane/web-ui/src/composables/useTaskDetailRefreshController.test.ts](../control-plane/web-ui/src/composables/useTaskDetailRefreshController.test.ts)：覆盖 compare/workflow 事件不再误触发主聊天高频刷新。
@@ -225,16 +226,17 @@ BFF：
 2. 候选结果不再插回主聊天流式链路
 3. adoption 只发生在 compare feature 内
 
-### 需要修改的现有文件
+### 4.3.1 需要修改的现有文件
 
 前端：
 
 1. [control-plane/web-ui/src/composables/useTaskDetailParallelFlow.ts](../control-plane/web-ui/src/composables/useTaskDetailParallelFlow.ts)
-2. [control-plane/web-ui/src/lib/task-detail-parallel-conversation.ts](../control-plane/web-ui/src/lib/task-detail-parallel-conversation.ts)
+2. [control-plane/web-ui/src/lib/task-detail-parallel-read-model.ts](../control-plane/web-ui/src/lib/task-detail-parallel-read-model.ts)
 3. [control-plane/web-ui/src/lib/task-detail-parallel-runtime.ts](../control-plane/web-ui/src/lib/task-detail-parallel-runtime.ts)
-4. [control-plane/web-ui/src/composables/useTaskDetailPageModel.ts](../control-plane/web-ui/src/composables/useTaskDetailPageModel.ts)
-5. [control-plane/web-ui/src/composables/useTaskDetailPageSectionModels.ts](../control-plane/web-ui/src/composables/useTaskDetailPageSectionModels.ts)
-6. [control-plane/web-ui/src/components/task-detail-v3/TaskDetailV3MainPane.vue](../control-plane/web-ui/src/components/task-detail-v3/TaskDetailV3MainPane.vue)
+4. [control-plane/web-ui/src/lib/task-detail-parallel-conversation-projector.ts](../control-plane/web-ui/src/lib/task-detail-parallel-conversation-projector.ts)
+5. [control-plane/web-ui/src/composables/useTaskDetailPageModel.ts](../control-plane/web-ui/src/composables/useTaskDetailPageModel.ts)
+6. [control-plane/web-ui/src/composables/useTaskDetailPageSectionModels.ts](../control-plane/web-ui/src/composables/useTaskDetailPageSectionModels.ts)
+7. [control-plane/web-ui/src/components/task-detail-v3/TaskDetailV3MainPane.vue](../control-plane/web-ui/src/components/task-detail-v3/TaskDetailV3MainPane.vue)
 
 BFF：
 
@@ -243,15 +245,15 @@ BFF：
 3. [control-plane/web-ui-bff/src/modules/tasks/finalize.ts](../control-plane/web-ui-bff/src/modules/tasks/finalize.ts)
 4. [control-plane/web-ui-bff/src/modules/tasks/reconcile.ts](../control-plane/web-ui-bff/src/modules/tasks/reconcile.ts)
 
-### 具体动作
+### 4.3.2 具体动作
 
 1. 在 [control-plane/web-ui-bff/src/modules/tasks/routes.ts](../control-plane/web-ui-bff/src/modules/tasks/routes.ts) 新增独立 compare route，把当前 parallel continue 逻辑迁过去；`registerParallelTask(...)` 仅由 compare 或 execute parallel 入口调用。
 2. 在 [control-plane/web-ui/src/composables/useTaskDetailPageModel.ts](../control-plane/web-ui/src/composables/useTaskDetailPageModel.ts) 让 `useTaskDetailParallelFlow(...)` 不再参与 `conversationItems` 主链路合成；主页面只按需要挂一个 compare 面板 model。
 3. 在 [control-plane/web-ui/src/composables/useTaskDetailPageSectionModels.ts](../control-plane/web-ui/src/composables/useTaskDetailPageSectionModels.ts) 和 [control-plane/web-ui/src/components/task-detail-v3/TaskDetailV3MainPane.vue](../control-plane/web-ui/src/components/task-detail-v3/TaskDetailV3MainPane.vue) 移除“主聊天区直接承载候选采纳”的耦合，采纳动作迁到 compare 视图。
-4. 在 [control-plane/web-ui/src/lib/task-detail-parallel-conversation.ts](../control-plane/web-ui/src/lib/task-detail-parallel-conversation.ts) 保留候选态展示与 fallback，但它只服务 compare feature，不再参与主聊天 conversation splice。
+4. 在 [control-plane/web-ui/src/lib/task-detail-parallel-conversation-projector.ts](../control-plane/web-ui/src/lib/task-detail-parallel-conversation-projector.ts) 保留候选态展示与主对话 splice 规则，但它只服务 compare feature，不再参与主聊天 conversation splice。
 5. 在 [control-plane/web-ui-bff/src/modules/tasks/finalize.ts](../control-plane/web-ui-bff/src/modules/tasks/finalize.ts) 和 [control-plane/web-ui-bff/src/modules/tasks/reconcile.ts](../control-plane/web-ui-bff/src/modules/tasks/reconcile.ts) 继续维护 compare 生命周期，但不要再要求主聊天页感知候选内部状态。
 
-### 同步调整的测试
+### 4.3.3 同步调整的测试
 
 1. [tests/web-ui/TaskDetailV3.test.ts](../tests/web-ui/TaskDetailV3.test.ts) 中与候选卡插入主对话流相关的用例应拆成独立 compare 视图测试。
 2. [tests/web-ui-bff/lifecycle-hooks-behavior.test.ts](../tests/web-ui-bff/lifecycle-hooks-behavior.test.ts) 中 continue route 的 parallel 断言迁到新的 compare route 套件。
@@ -265,7 +267,7 @@ BFF：
 2. continue 不再知道 sequential-chain
 3. 步骤状态展示不再与聊天 composer 共用同一套执行模式配置
 
-### 需要修改的现有文件
+### 4.4.1 需要修改的现有文件
 
 前端：
 
@@ -281,14 +283,14 @@ BFF：
 3. [control-plane/web-ui-bff/src/modules/tasks/workflow-stage-execution.ts](../control-plane/web-ui-bff/src/modules/tasks/workflow-stage-execution.ts)
 4. [control-plane/web-ui-bff/src/modules/realtime/sse-aggregator.ts](../control-plane/web-ui-bff/src/modules/realtime/sse-aggregator.ts)
 
-### 具体动作
+### 4.4.2 具体动作
 
 1. 在 [control-plane/web-ui-bff/src/modules/tasks/routes.ts](../control-plane/web-ui-bff/src/modules/tasks/routes.ts) 确保 `/continue` 永远不再接受 `sequential-chain`，顺序链只保留在 `/execute` 或后续独立 workflow route。
 2. 在 [control-plane/web-ui/src/composables/useTaskDetailExecutionModeCoordinator.ts](../control-plane/web-ui/src/composables/useTaskDetailExecutionModeCoordinator.ts) 取消“主聊天 composer 下选择 sequential-chain”的入口，把 workflow 配置移到独立 workflow 视图。
 3. 在 [control-plane/web-ui/src/composables/useTaskDetailSequentialStepsCoordinator.ts](../control-plane/web-ui/src/composables/useTaskDetailSequentialStepsCoordinator.ts) 保留 step 解析与展示能力，但它只服务 workflow feature，不再反向决定主聊天的执行模式。
 4. 在 [control-plane/web-ui-bff/src/modules/realtime/sse-aggregator.ts](../control-plane/web-ui-bff/src/modules/realtime/sse-aggregator.ts) 保留 `registerSequentialChainTask(...)` 和自动推进逻辑，但它只归 workflow 运行时模块消费，不再通过主聊天 refresh policy 间接驱动页面。
 
-### 同步调整的测试
+### 4.4.3 同步调整的测试
 
 1. [tests/web-ui/TaskDetailV3.test.ts](../tests/web-ui/TaskDetailV3.test.ts) 中与 sequential-chain 直接绑定主聊天区的用例迁到 workflow 视图或 workflow panel 套件。
 2. [tests/web-ui-bff/task-execute-stage-dispatch-route.test.ts](../tests/web-ui-bff/task-execute-stage-dispatch-route.test.ts)、[tests/web-ui-bff/task-workflow-view-route.test.ts](../tests/web-ui-bff/task-workflow-view-route.test.ts)、[tests/web-ui-bff/workflow-stage-execution.test.ts](../tests/web-ui-bff/workflow-stage-execution.test.ts) 继续作为 workflow 真正回归入口。
@@ -301,7 +303,7 @@ BFF：
 2. 前端按 round 读取，不再直接理解太多 lineage 细节
 3. BFF 成为 round facade，service 继续做底层真源
 
-### 需要修改的现有文件
+### 4.5.1 需要修改的现有文件
 
 1. [control-plane/web-ui/src/lib/api.ts](../control-plane/web-ui/src/lib/api.ts)
 2. [control-plane/web-ui/src/composables/useTaskDetailCoreContext.ts](../control-plane/web-ui/src/composables/useTaskDetailCoreContext.ts)
@@ -309,7 +311,7 @@ BFF：
 4. [control-plane/service/src/modules/tasks/task-session-read.ts](../control-plane/service/src/modules/tasks/task-session-read.ts)
 5. [control-plane/service/src/modules/tasks/task-route-session-registrations.ts](../control-plane/service/src/modules/tasks/task-route-session-registrations.ts)
 
-### 具体动作
+### 4.5.2 具体动作
 
 1. 在 BFF 侧新增 round facade 读接口，位置建议放在 [control-plane/web-ui-bff/src/modules/tasks](../control-plane/web-ui-bff/src/modules/tasks) 目录下，与 [control-plane/web-ui-bff/src/modules/tasks/routes.ts](../control-plane/web-ui-bff/src/modules/tasks/routes.ts) 同层。
 2. 第一阶段 round facade 可直接复用 [control-plane/service/src/modules/tasks/task-session-read.ts](../control-plane/service/src/modules/tasks/task-session-read.ts) 的 session/tree 读结果做转换，不要求 service 立刻新增 round 表。

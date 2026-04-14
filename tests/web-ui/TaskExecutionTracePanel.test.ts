@@ -81,7 +81,11 @@ describe("TaskExecutionTracePanel", () => {
             sourceEventTypes: ["runtime:tool-result:bash"],
           },
         ],
-        timelineMeta: { readSource: "task-domain-projection", cacheState: "complete" },
+        timelineMeta: {
+          readSource: "task-domain-projection",
+          complete: true,
+          snapshotVersion: 4,
+        },
         snapshot: { currentStatus: "running" },
         truncated: false,
         hookExecutions: [],
@@ -183,5 +187,62 @@ describe("TaskExecutionTracePanel", () => {
     expect(wrapper.text()).toContain("工具发起");
     expect(wrapper.text()).toContain("工具结果");
     expect(wrapper.text()).toContain("调试事件");
+  });
+
+  it("shows a partial timeline warning when reconcile is still pending", async () => {
+    composableMocks.useTaskExecutionTrace.mockReturnValue({
+      trace: ref({
+        taskId: "task-1",
+        sessionId: "ses-1",
+        segments: [],
+        timeline: [
+          {
+            id: "msg-1",
+            role: "assistant",
+            text: "partial timeline",
+            createdAt: "2026-03-14T08:04:00.000Z",
+          },
+        ],
+        timelineMeta: {
+          readSource: "task-domain-projection",
+          complete: false,
+          reconcileRequired: true,
+          itemCount: 1,
+        },
+        snapshot: { currentStatus: "running" },
+        truncated: false,
+        hookExecutions: [],
+        followupExecutions: [],
+      }),
+      loading: ref(false),
+      error: ref(null),
+      messageRoleFilter: ref("narrative"),
+      expandedMessageRaw: ref({}),
+      refresh: vi.fn(),
+      filteredMessages: ref([
+        {
+          id: "msg-1",
+          role: "assistant",
+          text: "partial timeline",
+          createdAt: "2026-03-14T08:04:00.000Z",
+        },
+      ]),
+      summaryItems: ref([{ label: "时间线状态", value: "部分可用", tone: "warning" }]),
+    });
+
+    const { default: Panel } = await import(
+      "../../control-plane/web-ui/src/components/task-detail-shared/TaskExecutionTracePanel.vue"
+    );
+
+    const wrapper = mount(Panel, {
+      props: {
+        taskId: "task-1",
+        sessionId: "ses-1",
+      },
+    });
+
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("时间线仅部分可用");
   });
 });

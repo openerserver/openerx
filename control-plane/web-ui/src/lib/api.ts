@@ -16,9 +16,7 @@ export interface ApiErrorPayload {
   guardDecision?: GuardDecision;
   guardReason?: string;
   suggestedModel?: string;
-  activeLease?: PaidExecutionLeaseRecord | null;
   policy?: ModelExecutionPolicy;
-  requirements?: PaidExecutionRequirements;
   preflight?: PaidExecutionEstimate;
 }
 
@@ -33,9 +31,7 @@ export class ApiError extends Error {
   guardDecision?: GuardDecision;
   guardReason?: string;
   suggestedModel?: string;
-  activeLease?: PaidExecutionLeaseRecord | null;
   policy?: ModelExecutionPolicy;
-  requirements?: PaidExecutionRequirements;
   preflight?: PaidExecutionEstimate;
 
   constructor(payload: ApiErrorPayload) {
@@ -51,9 +47,7 @@ export class ApiError extends Error {
     this.guardDecision = payload.guardDecision;
     this.guardReason = payload.guardReason;
     this.suggestedModel = payload.suggestedModel;
-    this.activeLease = payload.activeLease;
     this.policy = payload.policy;
-    this.requirements = payload.requirements;
     this.preflight = payload.preflight;
   }
 }
@@ -689,7 +683,6 @@ export interface DashboardGovernanceOverviewResponse {
   summary: {
     blockedCount: number;
     breakerCount: number;
-    activeLeaseCount: number;
     topRiskTaskCount: number;
     runningTaskCount: number;
     activeSessionCount: number;
@@ -969,6 +962,31 @@ export interface TaskPhaseExecutionEnvelope {
   status?: string;
 }
 
+export interface TaskExecutionRefreshTargets {
+  workflow: boolean;
+  flow: boolean;
+  messages: boolean;
+}
+
+export interface TaskExecutionReconcileEnvelope {
+  action: "continue" | "fork" | "adopt" | "terminate";
+  nextSessionId?: string;
+  taskSessionId?: string | null;
+  roundId?: string | null;
+  acceptedRevision?: number | null;
+  phaseId?: string | null;
+  agentRunId?: string | null;
+  status?: string | null;
+  executionMode?: ExecutionMode | null;
+  parentSessionId?: string | null;
+  parentTaskSessionId?: string | null;
+  refreshTargets: TaskExecutionRefreshTargets;
+}
+
+export interface TaskExecutionActionResponse {
+  execution: TaskExecutionReconcileEnvelope;
+}
+
 export interface ProjectionRunRecord {
   parallelRunId: string;
   phaseId?: string;
@@ -990,6 +1008,11 @@ export interface RunningTaskReconcileSummary {
   recovered: number;
   skipped: number;
   runtimeAvailable: boolean;
+  affectedTasks?: Array<{
+    taskId: string;
+    projectId: string;
+    outcome: "completed" | "failed";
+  }>;
 }
 
 export interface Project {
@@ -1012,7 +1035,6 @@ export interface EnvironmentApprovalPolicyBinding {
 export interface ProjectSettings {
   defaultModel?: string;
   defaultEnvironmentId?: string;
-  allowPaidExecution?: boolean;
   workflowTemplateId?: string;
   approvalPolicyTemplateId?: string;
   projectGroupKey?: string | null;
@@ -1020,16 +1042,61 @@ export interface ProjectSettings {
   approvalPolicy?: ApprovalPolicyMode;
   environmentApprovalPolicies?: Record<string, EnvironmentApprovalPolicyBinding>;
   maxConcurrency?: number;
-  budgetMonthly?: number;
   budgetConfigId?: string;
-  warnThreshold?: number;
-  throttleThreshold?: number;
   collaborationMode?: CollaborationMode;
   autopilotLevel?: AutopilotLevel;
   bossParticipationMode?: BossParticipationMode;
   preferredTemplateId?: string | null;
   allowBossAutoTemplateSwitch?: boolean;
   allowHybridEscalation?: boolean;
+}
+
+export type ProjectModelFundStatus = "active" | "depleted";
+export type ProjectModelFundLedgerType =
+  | "grant"
+  | "reserve"
+  | "consume"
+  | "refund"
+  | "adjust";
+
+export interface ProjectModelFund {
+  id: string | null;
+  projectId: string;
+  currency: string;
+  totalGranted: number;
+  reserved: number;
+  consumed: number;
+  available: number;
+  status: ProjectModelFundStatus;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  hasFund: boolean;
+}
+
+export interface ProjectModelFundLedgerEntry {
+  id: string;
+  projectId: string;
+  fundId: string;
+  type: ProjectModelFundLedgerType;
+  amountUsd: number;
+  balanceAfter: number;
+  modelRoute?: string | null;
+  taskId?: string | null;
+  runtimeSessionId?: string | null;
+  createdBy?: string | null;
+  createdAt: string;
+  note?: string | null;
+}
+
+export interface ProjectModelFundMutationResponse {
+  fund: ProjectModelFund;
+  ledgerEntry: ProjectModelFundLedgerEntry;
+}
+
+export interface ProjectModelFundLedgerListResponse {
+  projectId: string;
+  items: ProjectModelFundLedgerEntry[];
+  nextCursor: string | null;
 }
 
 export type GuardDecision = "allow" | "allow-with-downgrade" | "require-approval" | "deny";
@@ -1084,57 +1151,15 @@ export interface ModelExecutionPolicy {
   maxParallelCandidates: number;
   allowJudge: boolean;
   allowHooks: boolean;
-  requiresExplicitGate: boolean;
-  requiresLease: boolean;
   suggestedModel?: string;
-}
-
-export interface PaidExecutionLeaseRecord {
-  id: string;
-  projectId: string;
-  issuedByUserId?: string | null;
-  revokedByUserId?: string | null;
-  reason?: string | null;
-  status: "active" | "revoked" | "expired";
-  expiresAt: string;
-  createdAt: string;
-  updatedAt: string;
-  revokedAt?: string | null;
-}
-
-export interface PaidExecutionRequirements {
-  allowPaidExecution: boolean;
-  leaseRequired: boolean;
-  hasAllowPaidExecution: boolean;
-  hasLease: boolean;
-  leaseId: string | null;
 }
 
 export interface TaskExecutionPreflightResponse {
   taskId: string;
   allowed: boolean;
   effectiveModel: string;
-  activeLease: PaidExecutionLeaseRecord | null;
   policy: ModelExecutionPolicy;
-  requirements: PaidExecutionRequirements;
   preflight: PaidExecutionEstimate;
-}
-
-export interface ProjectExecutionPreflightResponse {
-  projectId: string;
-  defaultModel: string | null;
-  effectiveModel: string;
-  allowed: boolean;
-  activeLease: PaidExecutionLeaseRecord | null;
-  policy: ModelExecutionPolicy;
-  requirements: PaidExecutionRequirements;
-  preflight: PaidExecutionEstimate;
-}
-
-export interface PaidExecutionLeaseStateResponse {
-  projectId: string;
-  activeLease: PaidExecutionLeaseRecord | null;
-  now: string;
 }
 
 export interface RuntimeUsageLedgerRecord {
@@ -1738,6 +1763,8 @@ interface ServiceTaskSessionRecord {
   parentSessionId?: string | null;
   parentRuntimeSessionId?: string | null;
   runtimeSessionId?: string | null;
+  forkedFromMessageId?: string | null;
+  sourceType?: string | null;
   title?: string | null;
   branchName?: string | null;
   isActive?: boolean | null;
@@ -1763,6 +1790,13 @@ interface ServiceTaskSessionListResponse {
     phaseCount?: number | null;
   };
 }
+
+type NormalizedTaskSessionListRecord = {
+  session: ServiceTaskSessionRecord;
+  rawId: string;
+  taskSessionId: string;
+  runtimeSessionId: string;
+};
 
 function asTaskTreeString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
@@ -2262,27 +2296,8 @@ function projectTaskTreeToSessionSummaries(
 function projectTaskSessionListToSummaries(
   response: ServiceTaskSessionListResponse,
 ): TaskSessionRecord[] {
-  const sessions = Array.isArray(response.data) ? response.data : [];
-  const currentSessionId = asTaskTreeString(response.meta?.currentSessionId);
-  const runtimeSessionIdByIdentifier = new Map<string, string>();
-  const normalizedSessions = sessions.map((session) => {
-    const rawId = asTaskTreeString(session.id) ?? "";
-    const taskSessionId = asTaskTreeString(session.taskSessionId) ?? rawId;
-    const runtimeSessionId = asTaskTreeString(session.runtimeSessionId) ?? rawId;
-
-    for (const identifier of [rawId, taskSessionId, runtimeSessionId]) {
-      if (identifier) {
-        runtimeSessionIdByIdentifier.set(identifier, runtimeSessionId);
-      }
-    }
-
-    return {
-      session,
-      rawId,
-      taskSessionId,
-      runtimeSessionId,
-    };
-  });
+  const { currentSessionId, runtimeSessionIdByIdentifier, normalizedSessions } =
+    normalizeTaskSessionListResponse(response);
 
   return normalizedSessions
     .map(({ session, rawId, taskSessionId, runtimeSessionId }) => {
@@ -2333,6 +2348,119 @@ function projectTaskSessionListToSummaries(
       } satisfies TaskSessionRecord;
     })
     .sort((left, right) => (left.createdAt ?? "").localeCompare(right.createdAt ?? ""));
+}
+
+function resolveTaskSessionListRuntimeSessionId(args: {
+  runtimeSessionIdByIdentifier: Map<string, string>;
+  sessionId: string | null | undefined;
+}) {
+  const normalizedSessionId = asTaskTreeString(args.sessionId);
+  if (!normalizedSessionId) {
+    return undefined;
+  }
+
+  return args.runtimeSessionIdByIdentifier.get(normalizedSessionId) ?? normalizedSessionId;
+}
+
+function normalizeTaskSessionListResponse(response: ServiceTaskSessionListResponse) {
+  const sessions = Array.isArray(response.data) ? response.data : [];
+  const currentSessionId = asTaskTreeString(response.meta?.currentSessionId);
+  const runtimeSessionIdByIdentifier = new Map<string, string>();
+  const normalizedSessions: NormalizedTaskSessionListRecord[] = sessions.map((session) => {
+    const rawId = asTaskTreeString(session.id) ?? "";
+    const taskSessionId = asTaskTreeString(session.taskSessionId) ?? rawId;
+    const runtimeSessionId = asTaskTreeString(session.runtimeSessionId) ?? rawId;
+
+    for (const identifier of [rawId, taskSessionId, runtimeSessionId]) {
+      if (identifier) {
+        runtimeSessionIdByIdentifier.set(identifier, runtimeSessionId);
+      }
+    }
+
+    return {
+      session,
+      rawId,
+      taskSessionId,
+      runtimeSessionId,
+    } satisfies NormalizedTaskSessionListRecord;
+  });
+
+  return {
+    currentSessionId,
+    runtimeSessionIdByIdentifier,
+    normalizedSessions,
+  };
+}
+
+function projectTaskSessionListToLineage(
+  response: ServiceTaskSessionListResponse,
+  taskId: string,
+): TaskSessionLineageNode[] {
+  const { currentSessionId, normalizedSessions, runtimeSessionIdByIdentifier } =
+    normalizeTaskSessionListResponse(response);
+  const byParent = new Map<string | null, NormalizedTaskSessionListRecord[]>();
+
+  for (const normalizedSession of normalizedSessions) {
+    const parentTaskSessionId = asTaskTreeString(normalizedSession.session.parentSessionId) ?? null;
+    const existing = byParent.get(parentTaskSessionId) ?? [];
+    existing.push(normalizedSession);
+    byParent.set(parentTaskSessionId, existing);
+  }
+
+  const buildNodes = (parentTaskSessionId: string | null): TaskSessionLineageNode[] => {
+    const children = byParent.get(parentTaskSessionId) ?? [];
+
+    return children.map(({ session, rawId, taskSessionId, runtimeSessionId }) => {
+      const branchNodeId = buildTaskBranchNodeId(taskId, runtimeSessionId);
+      const parentRuntimeSessionId =
+        asTaskTreeString(session.parentRuntimeSessionId) ??
+        (() => {
+          const parentId = asTaskTreeString(session.parentSessionId);
+          if (!parentId) {
+            return null;
+          }
+
+          return runtimeSessionIdByIdentifier.get(parentId) ?? parentId;
+        })();
+      const title =
+        asTaskTreeString(session.title) ??
+        asTaskTreeString(session.branchName) ??
+        runtimeSessionId ??
+        taskSessionId;
+      const sourceType =
+        asTaskTreeString(session.sourceType) ??
+        session.sessionKind ??
+        (parentTaskSessionId ? "follow_up" : "root");
+      const isActive =
+        session.isActive === true ||
+        currentSessionId === rawId ||
+        currentSessionId === taskSessionId ||
+        currentSessionId === runtimeSessionId;
+
+      return {
+        id: branchNodeId,
+        branchNodeId,
+        runtimeSessionId,
+        taskSessionId,
+        parentRuntimeSessionId,
+        parentTaskSessionId: asTaskTreeString(session.parentSessionId) ?? null,
+        forkedFromMessageId: asTaskTreeString(session.forkedFromMessageId) ?? null,
+        forkedFromMessageRole: null,
+        forkedFromMessagePreview: null,
+        firstPromptAfterFork: null,
+        branchName: asTaskTreeString(session.branchName) ?? title,
+        sourceType,
+        isActive,
+        title,
+        summary: session.summary ?? null,
+        createdAt: session.createdAt ?? null,
+        updatedAt: session.updatedAt ?? null,
+        children: buildNodes(taskSessionId),
+      } satisfies TaskSessionLineageNode;
+    });
+  };
+
+  return buildNodes(null);
 }
 
 function buildTaskBranchNodeId(taskId: string, runtimeSessionId: string) {
@@ -2434,20 +2562,20 @@ export async function getTaskTreeMeta(taskId: string): Promise<TaskTreeTaskMeta>
 }
 
 export async function getTaskTreeSessionContext(taskId: string) {
-  const [tree, sessionsResponse] = await Promise.all([
-    getTaskConversationTree(taskId),
-    getTaskSessions(taskId).catch(() => null),
-  ]);
+  const sessionsResponse = await request<ServiceTaskSessionListResponse>(
+    `/tasks/${encodeURIComponent(taskId)}/sessions`,
+  );
+  const { runtimeSessionIdByIdentifier } = normalizeTaskSessionListResponse(sessionsResponse);
+
   return {
     data: {
-      currentSessionId: resolveTaskTreeRuntimeSessionId(
-        tree,
-        tree.meta.currentSessionId ?? tree.task.currentSessionId ?? undefined,
-      ),
-      currentPhaseId:
-        sessionsResponse?.meta.currentPhaseId ?? asTaskTreeString(tree.meta.currentPhaseId) ?? null,
-      sessionSummaries: projectTaskTreeToSessionSummaries(tree),
-      sessionLineage: projectTaskTreeToSessionLineage(tree),
+      currentSessionId: resolveTaskSessionListRuntimeSessionId({
+        runtimeSessionIdByIdentifier,
+        sessionId: sessionsResponse.meta?.currentSessionId,
+      }),
+      currentPhaseId: asTaskTreeString(sessionsResponse.meta?.currentPhaseId) ?? null,
+      sessionSummaries: projectTaskSessionListToSummaries(sessionsResponse),
+      sessionLineage: projectTaskSessionListToLineage(sessionsResponse, taskId),
     } satisfies TaskTreeSessionContext,
   };
 }
@@ -2495,39 +2623,45 @@ export async function replyTaskRuntimePermission(
   });
 }
 
-export async function getTaskConversationMessages(
-  taskId: string,
-  sessionId: string,
-  options?: { includeLineage?: boolean },
-): Promise<{
+type TaskConversationMessagesResponse = {
   data: unknown[];
   meta?: ExecutionTraceTimelineMeta & {
     sessionId?: string;
     messageCount?: number;
   };
-}> {
-  const tree = await getTaskConversationTree(taskId, {
-    sessionId,
-    includeLineage: options?.includeLineage,
-  });
+};
 
-  return projectTaskConversationTreeToMessages(tree, { preferredSessionId: sessionId });
+function buildTaskConversationMessagesQuery(options?: { includeLineage?: boolean }) {
+  const query = new URLSearchParams();
+  if (typeof options?.includeLineage === "boolean") {
+    query.set("includeLineage", String(options.includeLineage));
+  }
+  return query.toString() ? `?${query.toString()}` : "";
+}
+
+export async function getTaskConversationMessages(
+  taskId: string,
+  sessionId: string,
+  options?: { includeLineage?: boolean },
+): Promise<TaskConversationMessagesResponse> {
+  return request<TaskConversationMessagesResponse>(
+    `/tasks/${encodeURIComponent(taskId)}/sessions/${encodeURIComponent(sessionId)}/messages${buildTaskConversationMessagesQuery(options)}`,
+  );
 }
 
 export async function getTaskMessages(
   taskId: string,
   options?: { sessionId?: string; includeLineage?: boolean },
-): Promise<{
-  data: unknown[];
-  meta?: ExecutionTraceTimelineMeta & {
-    sessionId?: string;
-    messageCount?: number;
-  };
-}> {
-  const tree = await getTaskConversationTree(taskId, options);
-  return projectTaskConversationTreeToMessages(tree, {
-    preferredSessionId: options?.sessionId,
-  });
+): Promise<TaskConversationMessagesResponse> {
+  if (options?.sessionId) {
+    return getTaskConversationMessages(taskId, options.sessionId, {
+      includeLineage: options.includeLineage,
+    });
+  }
+
+  return request<TaskConversationMessagesResponse>(
+    `/tasks/${encodeURIComponent(taskId)}/messages${buildTaskConversationMessagesQuery(options)}`,
+  );
 }
 
 export async function getCurrentTaskRound(taskId: string) {
@@ -2554,10 +2688,13 @@ export async function continueTask(
   executionMode?: ExecutionMode,
 ) {
   return request<
-    TaskPhaseExecutionEnvelope & {
+    TaskPhaseExecutionEnvelope &
+      TaskExecutionActionResponse & {
       parentSessionId?: string;
       parentTaskSessionId?: string | null;
       executionMode?: ExecutionMode;
+      candidates?: ProjectionRunCandidate[];
+      round?: TaskRoundDto;
     }
   >(
     `/tasks/${taskId}/continue`,
@@ -2574,17 +2711,46 @@ export async function forkTaskSession(
   title?: string,
   messageId?: string,
 ) {
-  return request<{
-    ok: boolean;
-    sessionId: string;
-    taskSessionId?: string | null;
-    title?: string;
-    parentSessionId?: string;
-    parentTaskSessionId?: string | null;
-    forkedFromMessageId?: string;
-  }>(`/tasks/${taskId}/sessions/${sessionId}/fork`, {
+  return request<
+    TaskExecutionActionResponse & {
+      ok: boolean;
+      sessionId: string;
+      taskSessionId?: string | null;
+      title?: string;
+      parentSessionId?: string;
+      parentTaskSessionId?: string | null;
+      forkedFromMessageId?: string;
+    }
+  >(`/tasks/${taskId}/sessions/${sessionId}/fork`, {
     method: "POST",
     body: JSON.stringify({ title, messageId }),
+  });
+}
+
+export async function terminateTaskExecution(
+  taskId: string,
+  input: {
+    phaseId?: string | null;
+    agentRunId?: string | null;
+    sessionId?: string;
+    reason?:
+      | "winner_adopted"
+      | "user_cancelled"
+      | "runtime_terminated"
+      | "runtime_failed"
+      | "timeout"
+      | "superseded";
+  },
+) {
+  return request<
+    TaskExecutionActionResponse & {
+      ok: boolean;
+      phaseId?: string;
+      status?: string;
+    }
+  >(`/tasks/${taskId}/terminate`, {
+    method: "POST",
+    body: JSON.stringify(input),
   });
 }
 
@@ -2991,38 +3157,40 @@ export async function updateProject(
   });
 }
 
-export async function getProjectPaidExecutionLease(projectId: string) {
-  return request<PaidExecutionLeaseStateResponse>(`/projects/${projectId}/paid-execution-lease`);
+export async function getProjectFund(projectId: string) {
+  return request<ProjectModelFund>(`/projects/${projectId}/fund`);
 }
 
-export async function createProjectPaidExecutionLease(
+export async function grantProjectFund(
   projectId: string,
-  data: { durationMinutes: number; reason?: string },
+  data: { amountUsd: number; note?: string },
 ) {
-  return request<PaidExecutionLeaseStateResponse>(`/projects/${projectId}/paid-execution-lease`, {
+  return request<ProjectModelFundMutationResponse>(`/projects/${projectId}/fund/grant`, {
     method: "POST",
     body: JSON.stringify(data),
   });
 }
 
-export async function revokeProjectPaidExecutionLease(
+export async function adjustProjectFund(
   projectId: string,
-  leaseId: string,
-  data?: { reason?: string },
+  data: { amountUsd: number; note?: string },
 ) {
-  return request<{ ok: boolean; leaseId: string; projectId: string }>(
-    `/projects/${projectId}/paid-execution-lease/${leaseId}`,
-    {
-      method: "DELETE",
-      body: JSON.stringify(data || {}),
-    },
-  );
+  return request<ProjectModelFundMutationResponse>(`/projects/${projectId}/fund/adjust`, {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
 }
 
-export async function getProjectPaidExecutionPreflight(projectId: string) {
-  return request<ProjectExecutionPreflightResponse>(
-    `/projects/${projectId}/paid-execution-preflight`,
-  );
+export async function getProjectFundLedger(
+  projectId: string,
+  params?: { limit?: number; cursor?: string },
+) {
+  const search = new URLSearchParams();
+  if (params?.limit) search.set("limit", String(params.limit));
+  if (params?.cursor) search.set("cursor", params.cursor);
+  const suffix = search.toString() ? `?${search.toString()}` : "";
+
+  return request<ProjectModelFundLedgerListResponse>(`/projects/${projectId}/fund/ledger${suffix}`);
 }
 
 export async function getProjectRuntimeUsageLedgers(
@@ -3449,7 +3617,9 @@ export async function adoptParallelCandidate(
   phaseId: string,
   candidateIndex: number,
 ) {
-  return request<{ ok: boolean; phaseId: string; winnerCandidateIndex: number }>(
+  return request<
+    TaskExecutionActionResponse & { ok: boolean; phaseId: string; winnerCandidateIndex: number }
+  >(
     `/tasks/${taskId}/phases/${encodeURIComponent(phaseId)}/candidates/${candidateIndex}/adopt`,
     {
       method: "POST",
@@ -3565,10 +3735,35 @@ export interface McpServer {
   description?: string;
 }
 
+export type ModelBillingStatus = "free" | "paid";
+export type ModelBillingMethod = "token_metered" | "request_metered" | "run_metered";
+
+export interface ModelBillingPrice {
+  currency: "USD";
+  inputPerMillionTokens?: number;
+  outputPerMillionTokens?: number;
+  perRequestUsd?: number;
+  perRunUsd?: number;
+  [key: string]: unknown;
+}
+
+export interface ModelListItem {
+  id?: string;
+  name?: string;
+  provider?: string;
+  route?: string;
+  contextWindow?: number;
+  maxTokens?: number;
+  billingStatus?: ModelBillingStatus;
+  billingMethod?: ModelBillingMethod;
+  price?: ModelBillingPrice;
+  [key: string]: unknown;
+}
+
 export interface ModelsConfig {
   defaults: Record<string, unknown>;
   providers: Record<string, unknown>;
-  list: Array<Record<string, unknown>>;
+  list: ModelListItem[];
 }
 
 export interface ModelsTestPolicy {
@@ -3607,7 +3802,7 @@ export async function getConfigOverview() {
     data: {
       agents: AgentSummary[];
       skills: SkillSummary[];
-      models: { defaults: Record<string, unknown>; list: Array<Record<string, unknown>> };
+      models: { defaults: Record<string, unknown>; list: ModelListItem[] };
       mcp: Record<string, McpServer>;
       plugins: PluginInfo[];
     };
@@ -3670,7 +3865,7 @@ export async function getModelsConfig() {
   return request<{ data: ModelsConfig }>("/config/models");
 }
 export async function getModelsList() {
-  return request<{ data: Array<Record<string, unknown>> }>("/config/models/list");
+  return request<{ data: ModelListItem[] }>("/config/models/list");
 }
 export async function getModelsTestPolicy() {
   return request<{ data: ModelsTestPolicy }>("/config/models/test-policy");
@@ -4369,6 +4564,10 @@ export interface DeveloperChangeRequestViewModel {
 
 export interface TaskWorkflowViewModel {
   taskId: string;
+  meta?: {
+    snapshotVersion?: number;
+    reconcileRequired?: boolean;
+  };
   workflow: {
     templateId?: string | null;
     currentStage: string;
@@ -4399,6 +4598,10 @@ export interface TaskMemberViewMember {
 export interface TaskMemberViewModel {
   taskId: string;
   projectId: string | null;
+  meta?: {
+    snapshotVersion?: number;
+    reconcileRequired?: boolean;
+  };
   workflowStatus: string;
   currentStageKey: string;
   currentStageLabel: string;
@@ -5091,6 +5294,8 @@ export type ExecutionTraceReadSource =
   | "conversation-table"
   | "task-domain-events"
   | "conversation-table+task-domain-events"
+  | "task-session-first"
+  | "task-session-projection"
   | "runtime-fallback"
   | "task-domain-projection";
 

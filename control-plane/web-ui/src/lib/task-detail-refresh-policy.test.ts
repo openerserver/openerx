@@ -73,9 +73,133 @@ describe("task detail refresh policy", () => {
     expect(getTaskDetailRefreshRequest(event)).toEqual({
       eventId: "event-1",
       reason: "round-synced",
-      shouldRefreshMessages: true,
+      targets: {
+        workflow: false,
+        flow: false,
+        messages: true,
+      },
       shouldBumpTraceRefreshKey: false,
     });
+  });
+
+  it("refreshes messages when reconcile required asks for a silent catch-up", () => {
+    const event = createPatchEvent("message-reconcile-required", {
+      rawEventKind: "task.reconcile.required",
+      roundId: "task-session:task-1:session-1",
+      reason: "snapshot_lag",
+      expectedRevision: 9,
+    });
+
+    expect(shouldScheduleTaskDetailRefresh(event)).toBe(true);
+    expect(shouldRefreshTaskDetailMessages(event)).toBe(true);
+    expect(getTaskDetailRefreshRequest(event)).toEqual({
+      eventId: "event-1",
+      reason: "message-reconcile-required",
+      targets: {
+        workflow: false,
+        flow: false,
+        messages: true,
+      },
+      shouldBumpTraceRefreshKey: false,
+    });
+  });
+
+  it("keeps message-only refresh targets for sequence gaps", () => {
+    const event = createPatchEvent("message-reconcile-required", {
+      rawEventKind: "task.reconcile.required",
+      roundId: "task-session:task-1:session-1",
+      reason: "sequence_gap",
+      expectedRevision: 12,
+    });
+
+    expect(shouldScheduleTaskDetailRefresh(event)).toBe(true);
+    expect(shouldRefreshTaskDetailMessages(event)).toBe(true);
+    expect(getTaskDetailRefreshRequest(event)).toEqual({
+      eventId: "event-1",
+      reason: "message-reconcile-required",
+      targets: {
+        workflow: false,
+        flow: false,
+        messages: true,
+      },
+      shouldBumpTraceRefreshKey: false,
+    });
+  });
+
+  it("refreshes workflow only when reconcile required targets the sidebar", () => {
+    const event = createPatchEvent("workflow-reconcile-required", {
+      rawEventKind: "task.reconcile.required",
+      reason: "projection_rebuilt",
+    });
+
+    expect(shouldScheduleTaskDetailRefresh(event)).toBe(true);
+    expect(shouldRefreshTaskDetailMessages(event)).toBe(false);
+    expect(getTaskDetailRefreshRequest(event)).toEqual({
+      eventId: "event-1",
+      reason: "workflow-reconcile-required",
+      targets: {
+        workflow: true,
+        flow: false,
+        messages: false,
+      },
+      shouldBumpTraceRefreshKey: false,
+    });
+  });
+
+  it("refreshes flow only when reconcile required targets compare and trace surfaces", () => {
+    const event = createPatchEvent("flow-reconcile-required", {
+      rawEventKind: "task.reconcile.required",
+      reason: "projection_rebuilt",
+    });
+
+    expect(shouldScheduleTaskDetailRefresh(event)).toBe(true);
+    expect(shouldRefreshTaskDetailMessages(event)).toBe(false);
+    expect(getTaskDetailRefreshRequest(event)).toEqual({
+      eventId: "event-1",
+      reason: "flow-reconcile-required",
+      targets: {
+        workflow: false,
+        flow: true,
+        messages: false,
+      },
+      shouldBumpTraceRefreshKey: false,
+    });
+  });
+
+  it("refreshes workflow, flow and messages when reconcile required targets the whole task", () => {
+    const event = createPatchEvent("task-reconcile-required", {
+      rawEventKind: "task.reconcile.required",
+      reason: "internal_repair",
+    });
+
+    expect(shouldScheduleTaskDetailRefresh(event)).toBe(true);
+    expect(shouldRefreshTaskDetailMessages(event)).toBe(true);
+    expect(getTaskDetailRefreshRequest(event)).toEqual({
+      eventId: "event-1",
+      reason: "task-reconcile-required",
+      targets: {
+        workflow: true,
+        flow: true,
+        messages: true,
+      },
+      shouldBumpTraceRefreshKey: false,
+    });
+  });
+
+  it("does not schedule a snapshot refresh on message persisted before the round sync arrives", () => {
+    const event = createPatchEvent("message-persisted", {
+      rawEventKind: "task.message.persisted",
+      messageId: "assistant-1",
+      roundId: "task-session:task-1:session-1",
+      taskSessionId: "task-session:task-1:session-1",
+      persistedRevision: 7,
+      snapshotVersion: 7,
+      persistedThroughRevision: 7,
+    });
+
+    expect(shouldScheduleTaskDetailRefresh(event)).toBe(false);
+    expect(shouldRefreshTaskDetailMessages(event)).toBe(false);
+    expect(getTaskDetailRefreshRequest(event)).toBeNull();
   });
 
   it("does not treat tool message updates as a persisted refresh boundary", () => {
@@ -89,13 +213,23 @@ describe("task detail refresh policy", () => {
     expect(getTaskDetailRefreshRequest(event)).toBeNull();
   });
 
-  it("refreshes on session creation snapshots", () => {
+  it("refreshes on session creation snapshots without forcing message reload", () => {
     const event = createPatchEvent("session-created", {
       rawEventKind: "task.snapshot.updated",
     });
 
     expect(shouldScheduleTaskDetailRefresh(event)).toBe(true);
-    expect(shouldRefreshTaskDetailMessages(event)).toBe(true);
+    expect(shouldRefreshTaskDetailMessages(event)).toBe(false);
+    expect(getTaskDetailRefreshRequest(event)).toEqual({
+      eventId: "event-1",
+      reason: "session-created",
+      targets: {
+        workflow: true,
+        flow: true,
+        messages: false,
+      },
+      shouldBumpTraceRefreshKey: false,
+    });
   });
 
   it("refreshes flow for phase lifecycle events without forcing message reload", () => {
@@ -109,7 +243,11 @@ describe("task detail refresh policy", () => {
     expect(getTaskDetailRefreshRequest(event)).toEqual({
       eventId: "event-1",
       reason: "phase-resumed",
-      shouldRefreshMessages: false,
+      targets: {
+        workflow: false,
+        flow: true,
+        messages: false,
+      },
       shouldBumpTraceRefreshKey: false,
     });
   });

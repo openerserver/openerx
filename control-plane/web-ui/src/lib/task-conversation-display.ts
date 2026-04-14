@@ -1,7 +1,9 @@
 import {
   createEmptyLiveAssistantState,
   type LiveAssistantState,
+  type TaskConversationListItem,
   type TaskConversationMessageItem,
+  type TaskConversationWorkflowItem,
 } from "./message-normalize";
 
 export type PendingAssistantDraftState = {
@@ -11,13 +13,61 @@ export type PendingAssistantDraftState = {
   knownAssistantKeys: Set<string>;
 };
 
+export type TaskConversationMessageRecordAuthority = "local" | "realtime" | "persisted";
+
+export type TaskConversationMessageRenderStatus =
+  | "draft"
+  | "streaming"
+  | "committing"
+  | "persisted"
+  | "failed";
+
+export type TaskConversationMessageRecord = {
+  key: string;
+  kind: "message";
+  authority: TaskConversationMessageRecordAuthority;
+  renderStatus: TaskConversationMessageRenderStatus;
+  item: TaskConversationMessageItem;
+};
+
+export type TaskConversationWorkflowRecord = {
+  key: string;
+  kind: "workflow";
+  item: TaskConversationWorkflowItem;
+};
+
+export type TaskConversationRenderRecord =
+  | TaskConversationMessageRecord
+  | TaskConversationWorkflowRecord;
+
+export type TaskConversationRenderState = {
+  orderedIds: string[];
+  recordsById: Record<string, TaskConversationRenderRecord>;
+};
+
+const WORKFLOW_EXECUTION_CONTEXT_PREFIXES = [
+  "Execution context:",
+  "## Execution context",
+  "当前执行上下文",
+  "## 当前执行上下文",
+];
+
 function countRawMessageParts(item: TaskConversationMessageItem) {
   const raw = item.raw && typeof item.raw === "object" ? (item.raw as Record<string, unknown>) : null;
   return Array.isArray(raw?.parts) ? raw.parts.filter((part) => Boolean(part)).length : 0;
 }
 
+function isWorkflowExecutionContextText(text?: string) {
+  if (typeof text !== "string") {
+    return false;
+  }
+
+  const normalized = text.trim();
+  return WORKFLOW_EXECUTION_CONTEXT_PREFIXES.some((prefix) => normalized.startsWith(prefix));
+}
+
 function isWorkflowExecutionContextUserMessage(item: TaskConversationMessageItem) {
-  return item.role === "user" && typeof item.text === "string" && item.text.trim().startsWith("Execution context:");
+  return item.role === "user" && isWorkflowExecutionContextText(item.text);
 }
 
 function areEquivalentAssistantMessages(
@@ -74,6 +124,13 @@ function collapseDisplayMessages(
   }
 
   return collapsed;
+}
+
+function createEmptyTaskConversationRenderState(): TaskConversationRenderState {
+  return {
+    orderedIds: [],
+    recordsById: {},
+  };
 }
 
 function parseTimestampMs(value?: string) {
@@ -140,6 +197,21 @@ export function collectAssistantMessageKeys(
   return keys;
 }
 
+export function collectAssistantMessageKeysFromRenderState(
+  state: TaskConversationRenderState,
+) {
+  const keys = new Set<string>();
+
+  for (const recordId of state.orderedIds) {
+    const record = state.recordsById[recordId];
+    if (record?.kind === "message" && record.item.role === "assistant") {
+      keys.add(record.key);
+    }
+  }
+
+  return keys;
+}
+
 function overlayPersistedConversationItem(args: {
   item: TaskConversationMessageItem;
   liveAssistantState: LiveAssistantState;
@@ -174,6 +246,74 @@ function overlayPersistedConversationItem(args: {
   } satisfies TaskConversationMessageItem;
 }
 
+function appendMessageRecord(
+  state: TaskConversationRenderState,
+  record: TaskConversationMessageRecord,
+  options?: { hideWorkflowExecutionContextUsers?: boolean },
+) {
+  if (
+    options?.hideWorkflowExecutionContextUsers &&
+    isWorkflowExecutionContextUserMessage(record.item)
+  ) {
+    return;
+  }
+
+  const previousId = state.orderedIds[state.orderedIds.length - 1];
+  const previousRecord = previousId ? state.recordsById[previousId] : undefined;
+  if (
+    previousRecord?.kind === "message" &&
+    areEquivalentAssistantMessages(previousRecord.item, record.item)
+  ) {
+    if (resolveConversationMessageRichness(record.item) > resolveConversationMessageRichness(previousRecord.item)) {
+      state.recordsById[previousId] = record;
+    }
+    return;
+  }
+
+  if (state.recordsById[record.key]) {
+    state.recordsById[record.key] = record;
+    return;
+  }
+
+  state.orderedIds.push(record.key);
+  state.recordsById[record.key] = record;
+}
+
+function createPersistedMessageRecord(args: {
+  originalItem: TaskConversationMessageItem;
+  liveAssistantState: LiveAssistantState;
+  authority: "persisted" | "realtime";
+}) {
+  const item = overlayPersistedConversationItem({
+    item: args.originalItem,
+    liveAssistantState: args.liveAssistantState,
+    authority: args.authority,
+  });
+  const hasLiveState =
+    args.authority === "realtime" &&
+    args.originalItem.role === "assistant" &&
+    (args.liveAssistantState.textById.has(args.originalItem.key) ||
+      args.liveAssistantState.metaById.has(args.originalItem.key) ||
+      args.liveAssistantState.incompleteIds.has(args.originalItem.key));
+
+  let authority: TaskConversationMessageRecordAuthority = "persisted";
+  let renderStatus: TaskConversationMessageRenderStatus =
+    item.status === "failed" || Boolean(item.errorText) ? "failed" : "persisted";
+
+  if (hasLiveState) {
+    authority = "realtime";
+    renderStatus = item.isStreaming ? "streaming" : "committing";
+  }
+
+  return {
+    key: item.key,
+    kind: "message",
+    authority,
+    renderStatus,
+    item,
+  } satisfies TaskConversationMessageRecord;
+}
+
 function buildStreamingAssistantDraft(args: {
   persistedItems: TaskConversationMessageItem[];
   liveAssistantState: LiveAssistantState;
@@ -197,6 +337,10 @@ function buildStreamingAssistantDraft(args: {
       continue;
     }
 
+    if (isWorkflowExecutionContextText(text)) {
+      continue;
+    }
+
     const isStreaming = args.liveAssistantState.incompleteIds.has(messageId);
     if (
       shouldSuppressCompletedStreamingAssistantDraft({
@@ -211,14 +355,20 @@ function buildStreamingAssistantDraft(args: {
 
     return {
       key: messageId,
-      role: "assistant",
-      agent: meta?.agent,
-      text: text || "正在生成...",
-      toolCalls: [],
-      createdAt: meta?.createdAt,
-      raw: null,
-      isStreaming,
-    } satisfies TaskConversationMessageItem;
+      kind: "message",
+      authority: "realtime",
+      renderStatus: isStreaming ? "streaming" : "committing",
+      item: {
+        key: messageId,
+        role: "assistant",
+        agent: meta?.agent,
+        text: text || "正在生成...",
+        toolCalls: [],
+        createdAt: meta?.createdAt,
+        raw: null,
+        isStreaming,
+      },
+    } satisfies TaskConversationMessageRecord;
   }
 
   return null;
@@ -250,13 +400,123 @@ function buildOptimisticPendingAssistantDraft(args: {
 
   return {
     key: pending.key,
-    role: "assistant",
-    text: "正在生成...",
-    toolCalls: [],
-    createdAt: pending.createdAt,
-    raw: null,
-    isStreaming: true,
-  } satisfies TaskConversationMessageItem;
+    kind: "message",
+    authority: "local",
+    renderStatus: "draft",
+    item: {
+      key: pending.key,
+      role: "assistant",
+      text: "正在生成...",
+      toolCalls: [],
+      createdAt: pending.createdAt,
+      raw: null,
+      isStreaming: true,
+    },
+  } satisfies TaskConversationMessageRecord;
+}
+
+function injectWorkflowRecords(
+  state: TaskConversationRenderState,
+  workflowItems: TaskConversationWorkflowItem[],
+) {
+  if (workflowItems.length === 0) {
+    return state;
+  }
+
+  const workflowIds = workflowItems.map((item) => item.key);
+  const recordsById = { ...state.recordsById };
+  for (const item of workflowItems) {
+    recordsById[item.key] = {
+      key: item.key,
+      kind: "workflow",
+      item,
+    } satisfies TaskConversationWorkflowRecord;
+  }
+
+  const insertIndex = state.orderedIds.findIndex((recordId) => {
+    const record = state.recordsById[recordId];
+    return record?.kind === "message" && record.item.role !== "user";
+  });
+  const orderedIds = [...state.orderedIds];
+  orderedIds.splice(insertIndex >= 0 ? insertIndex : orderedIds.length, 0, ...workflowIds);
+
+  return {
+    orderedIds,
+    recordsById,
+  } satisfies TaskConversationRenderState;
+}
+
+export function buildTaskConversationRenderState(args: {
+  persistedItems: TaskConversationMessageItem[];
+  workflowItems?: TaskConversationWorkflowItem[];
+  liveAssistantState: LiveAssistantState;
+  authority: "persisted" | "realtime";
+  pendingAssistantDraft: PendingAssistantDraftState | null;
+  activeSessionId?: string;
+  latestTaskRefreshReason?: string;
+  hideWorkflowExecutionContextUsers?: boolean;
+}) {
+  const state = createEmptyTaskConversationRenderState();
+  const overlaidPersistedItems = args.persistedItems.map((item) =>
+    overlayPersistedConversationItem({
+      item,
+      liveAssistantState: args.liveAssistantState,
+      authority: args.authority,
+    }),
+  );
+
+  overlaidPersistedItems.forEach((item, index) => {
+    appendMessageRecord(
+      state,
+      createPersistedMessageRecord({
+        originalItem: args.persistedItems[index] ?? item,
+        liveAssistantState: args.liveAssistantState,
+        authority: args.authority,
+      }),
+      { hideWorkflowExecutionContextUsers: args.hideWorkflowExecutionContextUsers },
+    );
+  });
+
+  const streamingAssistantDraft = buildStreamingAssistantDraft({
+    persistedItems: overlaidPersistedItems,
+    liveAssistantState: args.liveAssistantState,
+    authority: args.authority,
+  });
+  if (streamingAssistantDraft) {
+    appendMessageRecord(state, streamingAssistantDraft, {
+      hideWorkflowExecutionContextUsers: args.hideWorkflowExecutionContextUsers,
+    });
+  }
+
+  const optimisticPendingAssistantDraft = buildOptimisticPendingAssistantDraft({
+    pendingAssistantDraft: args.pendingAssistantDraft,
+    activeSessionId: args.activeSessionId,
+    assistantMessageKeys: collectAssistantMessageKeysFromRenderState(state),
+    latestTaskRefreshReason: args.latestTaskRefreshReason,
+  });
+  if (optimisticPendingAssistantDraft) {
+    appendMessageRecord(state, optimisticPendingAssistantDraft, {
+      hideWorkflowExecutionContextUsers: args.hideWorkflowExecutionContextUsers,
+    });
+  }
+
+  return injectWorkflowRecords(state, args.workflowItems ?? []);
+}
+
+export function getTaskConversationRenderItems(state: TaskConversationRenderState) {
+  return state.orderedIds
+    .map((recordId) => state.recordsById[recordId]?.item)
+    .filter((item): item is TaskConversationListItem => item != null);
+}
+
+export function getTaskConversationRenderMessageItems(state: TaskConversationRenderState) {
+  return state.orderedIds
+    .map((recordId) => state.recordsById[recordId])
+    .filter(
+      (record): record is TaskConversationMessageRecord =>
+        Boolean(record) && record.kind === "message",
+    )
+    .map((record) => record.item);
 }
 
 export function buildTaskConversationDisplayMessages(args: {
@@ -268,38 +528,34 @@ export function buildTaskConversationDisplayMessages(args: {
   latestTaskRefreshReason?: string;
   hideWorkflowExecutionContextUsers?: boolean;
 }) {
-  const overlaidPersistedItems = args.persistedItems.map((item) =>
-    overlayPersistedConversationItem({
-      item,
-      liveAssistantState: args.liveAssistantState,
-      authority: args.authority,
+  return getTaskConversationRenderMessageItems(
+    buildTaskConversationRenderState({
+      ...args,
+      workflowItems: [],
     }),
   );
+}
 
-  const assistantMessageKeys = collectAssistantMessageKeys(
-    args.persistedItems,
-    args.liveAssistantState,
-  );
-  const streamingAssistantDraft = buildStreamingAssistantDraft({
-    persistedItems: overlaidPersistedItems,
-    liveAssistantState: args.liveAssistantState,
-    authority: args.authority,
-  });
-  const optimisticPendingAssistantDraft = buildOptimisticPendingAssistantDraft({
-    pendingAssistantDraft: args.pendingAssistantDraft,
-    activeSessionId: args.activeSessionId,
-    assistantMessageKeys,
-    latestTaskRefreshReason: args.latestTaskRefreshReason,
-  });
-
-  return collapseDisplayMessages(
-    [
-      ...overlaidPersistedItems,
-      ...(streamingAssistantDraft ? [streamingAssistantDraft] : []),
-      ...(optimisticPendingAssistantDraft ? [optimisticPendingAssistantDraft] : []),
-    ].filter((item) => item.role === "user" || item.role === "assistant" || item.role === "tool"),
-    {
-      hideWorkflowExecutionContextUsers: args.hideWorkflowExecutionContextUsers,
-    },
+export function buildTaskConversationListItems(args: {
+  regularItems: TaskConversationMessageItem[];
+  workflowItems: TaskConversationWorkflowItem[];
+}) {
+  return getTaskConversationRenderItems(
+    injectWorkflowRecords(
+      collapseDisplayMessages(args.regularItems).reduce((state, item) => {
+        appendMessageRecord(
+          state,
+          {
+            key: item.key,
+            kind: "message",
+            authority: item.isStreaming ? "realtime" : "persisted",
+            renderStatus: item.isStreaming ? "streaming" : "persisted",
+            item,
+          },
+        );
+        return state;
+      }, createEmptyTaskConversationRenderState()),
+      args.workflowItems,
+    ),
   );
 }

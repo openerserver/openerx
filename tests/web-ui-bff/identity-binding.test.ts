@@ -10,7 +10,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { selectCredentialForIdentity } from "../../control-plane/web-ui-bff/src/modules/tasks/routes";
 import {
-  paidExecutionIntegrationDescribe,
+  executionIntegrationDescribe,
   resolveExecutionIntegrationModel,
 } from "./execution-integration-guard";
 import {
@@ -26,7 +26,6 @@ const CP_URL = resolveControlPlaneUrl();
 const PROJECT_ID = process.env.TEST_PROJECT_ID || "proj-default";
 const USERNAME = process.env.TEST_USERNAME || "admin";
 const PASSWORD = process.env.TEST_PASSWORD || "admin123!";
-const executionIntegrationDescribe = paidExecutionIntegrationDescribe;
 
 interface ConfigModelRecord {
   id?: string;

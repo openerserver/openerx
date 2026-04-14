@@ -92,6 +92,7 @@ mock.module("../../control-plane/web-ui-bff/src/lib/model-config", () => ({
   diagnoseModelReadiness: mock(() => ({ ready: true })),
   formatModelRoute: mock(() => "github-copilot:gpt-5.4"),
   readDefaultExecutionModel: mock(() => "github-copilot:gpt-5.4"),
+  readOpencodeJson: mock(() => ({ models: { list: [] } })),
   resolveModelRoute: mock(() => ({ providerId: "github-copilot", modelId: "gpt-5.4" })),
   validateModelProvider: mock(() => true),
 }));
@@ -102,6 +103,7 @@ mock.module("../../control-plane/web-ui-bff/src/lib/orchestration-strategy", () 
 
 mock.module("../../control-plane/web-ui-bff/src/lib/paid-execution-runtime", () => ({
   recordPaidExecutionRuntimeUsage: mock(async () => undefined),
+  releasePaidExecutionReservation: mock(async () => ({ ok: true, releasedUsd: 0 })),
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/lib/runtime-pipeline", () => ({
@@ -472,6 +474,7 @@ describe("task execution trace route", () => {
             meta: {
               readSource: "task-session-projection",
               complete: true,
+              snapshotVersion: 29,
               itemCount: 6,
             },
           },
@@ -500,6 +503,7 @@ describe("task execution trace route", () => {
     expect(payload.timelineMeta).toMatchObject({
       readSource: "task-session-projection",
       complete: true,
+      snapshotVersion: 29,
     });
     expectNoLegacyTimelineReadSource(payload);
     expect(payload.snapshot).toMatchObject({
@@ -2363,6 +2367,8 @@ describe("task execution trace route", () => {
             meta: {
               readSource: "task-session-projection",
               complete: false,
+              reconcileRequired: true,
+              snapshotVersion: 37,
               itemCount: 0,
             },
           },
@@ -2407,6 +2413,8 @@ describe("task execution trace route", () => {
     expect(payload.timelineMeta).toMatchObject({
       readSource: "task-session-projection",
       complete: false,
+      reconcileRequired: true,
+      snapshotVersion: 37,
       itemCount: 0,
     });
     expect(getSessionMessagesMock).not.toHaveBeenCalled();

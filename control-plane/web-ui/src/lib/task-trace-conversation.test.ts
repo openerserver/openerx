@@ -24,7 +24,6 @@ describe("resolveTraceTimelineItems", () => {
       timeline: [],
       timelineMeta: {
         readSource: "runtime-fallback",
-        cacheState: "complete",
         complete: true,
         includeLineage: true,
       },
@@ -102,7 +101,6 @@ describe("resolveTraceTimelineItems", () => {
       timeline: [],
       timelineMeta: {
         readSource: "runtime-fallback",
-        cacheState: "complete",
         complete: true,
         includeLineage: true,
       },
@@ -190,7 +188,6 @@ describe("resolveTraceTimelineItems", () => {
         ],
         timelineMeta: {
           readSource: "task-domain-projection",
-          cacheState: "complete",
           complete: true,
           includeLineage: true,
         },
@@ -270,7 +267,6 @@ describe("resolveTraceTimelineItems", () => {
         ],
         timelineMeta: {
           readSource: "runtime-fallback",
-          cacheState: "complete",
           complete: true,
           includeLineage: true,
         },

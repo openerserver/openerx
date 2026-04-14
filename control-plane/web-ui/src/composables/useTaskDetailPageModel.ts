@@ -1,27 +1,25 @@
-import { message } from "ant-design-vue";
-import { computed, type UnwrapNestedRefs, watch } from "vue";
+import { computed, ref, watch, type UnwrapNestedRefs } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useRealtimeStore } from "../stores/realtime";
-import { useTaskDetailActionCoordinator } from "./useTaskDetailActionCoordinator";
 import { useTaskDetailCoreContext } from "./useTaskDetailCoreContext";
 import {
-  useTaskDetailPollingState,
   useTaskDetailTaskDerivedState,
-  useTaskDetailWorkflowDerivedState,
 } from "./useTaskDetailDerivedState";
-import { useTaskDetailExecutionModeCoordinator } from "./useTaskDetailExecutionModeCoordinator";
 import { useTaskDetailPageCoordinator } from "./useTaskDetailPageCoordinator";
 import {
   useTaskDetailHeaderModel,
   useTaskDetailLayoutModel,
-  useTaskDetailMainPaneModel,
-  useTaskDetailSidebarModel,
 } from "./useTaskDetailPageSectionModels";
-import { useTaskDetailParallelFlow } from "./useTaskDetailParallelFlow";
-import { useTaskDetailRefreshController } from "./useTaskDetailRefreshController";
-import { useTaskDetailSequentialStepsCoordinator } from "./useTaskDetailSequentialStepsCoordinator";
+import { useTaskConversationFeature } from "./useTaskConversationFeature";
+import { useTaskDetailMainPaneFeature } from "./useTaskDetailMainPaneFeature";
+import { useTaskDetailRealtimeFeature } from "./useTaskDetailRealtimeFeature";
 import { useTaskDetailSnapshotCoordinator } from "./useTaskDetailSnapshotCoordinator";
-import { useTaskDetailViewStateCoordinator } from "./useTaskDetailViewStateCoordinator";
+import { useTaskDetailSidebarPaneFeature } from "./useTaskDetailSidebarPaneFeature";
+import { useTaskDetailParallelFlow } from "./useTaskDetailParallelFlow";
+import { useTaskRuntimePermissionFeature } from "./useTaskRuntimePermissionFeature";
+import { useTaskParallelCandidateActions } from "./useTaskParallelCandidateActions";
+import { useTaskSidebarFeature } from "./useTaskSidebarFeature";
+import { useTaskWorkflowFeature } from "./useTaskWorkflowFeature";
 
 export function useTaskDetailPageModel() {
   const route = useRoute();
@@ -38,6 +36,7 @@ export function useTaskDetailPageModel() {
     flatNodes,
     hasStreamingAssistant,
     latestTaskRefreshRequest,
+    messageReconcileRequired,
     messageTrace,
     messagesError,
     messagesLoading,
@@ -56,43 +55,6 @@ export function useTaskDetailPageModel() {
     taskSessionSummaries,
   } = useTaskDetailCoreContext(taskId);
 
-  watch(
-    () => latestTaskRefreshRequest.value?.eventId,
-    () => {
-      const refreshRequest = latestTaskRefreshRequest.value;
-      const currentTask = task.value;
-      if (!refreshRequest || !currentTask) {
-        return;
-      }
-
-      if (refreshRequest.reason === "task-completed") {
-        task.value = {
-          ...currentTask,
-          status: "completed",
-          finishedAt: currentTask.finishedAt ?? new Date().toISOString(),
-        };
-        return;
-      }
-
-      if (refreshRequest.reason === "task-failed") {
-        task.value = {
-          ...currentTask,
-          status: "failed",
-          finishedAt: currentTask.finishedAt ?? new Date().toISOString(),
-        };
-        return;
-      }
-
-      if (refreshRequest.reason === "task-continued") {
-        task.value = {
-          ...currentTask,
-          status: "running",
-          finishedAt: undefined,
-        };
-      }
-    },
-  );
-
   const {
     canTerminateExecution: baseCanTerminateExecution,
     editableExecutionMode,
@@ -109,38 +71,72 @@ export function useTaskDetailPageModel() {
     taskLoadError,
   });
 
-  const {
-    assistantMessageModelFallback,
-    chatTraceWarning,
-    handleCloseFilePreview,
-    handleOpenFilePreview,
-    previewFile,
-    refreshRuntimePermissions,
-    runtimePermissionLabel,
-    runtimePermissionPath,
-    runtimePermissionPatterns,
-    selectedSessionLabel,
-    selectedSessionRuntimePermissions,
-    sidebarCollapsed,
-    toggleSidebar,
-  } = useTaskDetailViewStateCoordinator({
+  const workflowFeature = useTaskWorkflowFeature({
+    editableExecutionMode,
     taskId,
     task,
     taskSessionSummaries,
-    selectedSessionId,
-    selectedSessionNode,
-    messageTrace,
+    refreshTask,
   });
 
-  const {
-    conversationItems,
-    currentParallelRunRecord,
-    ensureSelectedSession,
-    isParallelComparisonMode,
-    refreshParallelCandidateMessages,
-    refreshTaskRunSummaries,
-    clearParallelFlowState,
-  } = useTaskDetailParallelFlow({
+  const sidebarTraceRefreshKey = ref(0);
+  const sidebarFeature = useTaskSidebarFeature({
+    selectedSessionId,
+    task,
+    taskId,
+    traceRefreshKey: sidebarTraceRefreshKey,
+  });
+
+  const workflowReconcileRequired = computed(
+    () =>
+      workflowFeature.workflowReconcileRequired.value ||
+      sidebarFeature.memberReconcileRequired.value,
+  );
+
+  async function refreshWorkflowSnapshot() {
+    const currentTaskId = taskId.value;
+    if (!currentTaskId) {
+      return;
+    }
+
+    await workflowFeature.refreshWorkflowSnapshot();
+    if (taskId.value !== currentTaskId) {
+      return;
+    }
+
+    await sidebarFeature.refreshMemberViewSnapshot();
+  }
+
+  async function loadInitialWorkflowSnapshot() {
+    if (!taskId.value) {
+      resetWorkflowTargetState();
+      return;
+    }
+
+    await Promise.all([
+      workflowFeature.loadInitialWorkflowSnapshot(),
+      sidebarFeature.loadInitialMemberViewSnapshot(),
+    ]);
+  }
+
+  function resetWorkflowSnapshotState() {
+    workflowFeature.resetWorkflowSnapshotState();
+    sidebarFeature.resetMemberViewState();
+  }
+
+  function resetWorkflowTargetState() {
+    workflowFeature.resetWorkflowState();
+    sidebarFeature.resetMemberViewState();
+  }
+
+  const runtimePermissionFeature = useTaskRuntimePermissionFeature({
+    taskId,
+    task,
+    selectedSessionId,
+    refreshTaskSnapshot: (options) => refreshTaskSnapshot(options),
+  });
+
+  const compareFlow = useTaskDetailParallelFlow({
     taskId,
     taskNodeId,
     task,
@@ -150,35 +146,89 @@ export function useTaskDetailPageModel() {
     selectedSessionNode,
     baseConversationItems,
     configuredCandidates: editableParallelCandidates,
+    refreshTask,
+    refreshSessions,
+    refreshRuntimePermissions: runtimePermissionFeature.refreshRuntimePermissions,
   });
-
+  const compareActions = useTaskParallelCandidateActions({
+    taskId,
+    currentParallelRunRecord: compareFlow.currentParallelRunRecord,
+    refreshTaskSnapshot: (options) => refreshTaskSnapshot(options),
+    reconcileExecutionEnvelope: (envelope) => reconcileExecutionEnvelope(envelope),
+  });
   const stopPhaseId = computed(
-    () => currentParallelRunRecord.value?.phaseId ?? currentPhaseId.value ?? null,
+    () => compareFlow.currentParallelRunRecord.value?.phaseId ?? currentPhaseId.value ?? null,
   );
   const canTerminateExecution = computed(
-    () => baseCanTerminateExecution.value || (isExecuting.value && Boolean(stopPhaseId.value)),
+    () =>
+      Boolean(baseCanTerminateExecution.value) ||
+      (Boolean(isExecuting.value) && Boolean(stopPhaseId.value)),
   );
 
   const {
-    workflowView,
-    memberView,
-    memberViewLoading,
+    assistantMessageModelFallback,
+    bumpConversationFocus,
+    canForkFromCurrentSession,
+    chatTraceWarning,
+    composerResetToken,
+    continuing,
+    conversationFocusToken,
+    forking,
+    handleClearQueuedContinuations,
+    handleContinue,
+    handleFork,
+    handleSwitchRound,
+    handleRemoveQueuedContinuation,
+    handleTerminate,
+    queuedContinuations,
+    resolveTaskSessionRequestId,
+    selectedSessionLabel,
+    terminating,
+  } = useTaskConversationFeature({
+    actionArgs: {
+      taskId,
+      task,
+      stopPhaseId,
+      selectedSessionId,
+      editableExecutionMode,
+      isExecuting,
+      hasStreamingAssistant,
+      canTerminateExecution,
+      baseConversationItems,
+      messageTrace,
+      clearPendingAssistantDraft,
+      refreshTask,
+      refreshSessions,
+      refreshMessages,
+      refreshTaskSnapshot: (options) => refreshTaskSnapshot(options),
+      reconcileExecutionEnvelope: (envelope) => reconcileExecutionEnvelope(envelope),
+      seedPendingAssistantDraft,
+    },
+    messageTrace,
+    selectedSessionId,
+    selectedSessionNode,
+    task,
+    taskSessionSummaries,
+  });
+
+  const {
+    reconcileExecutionEnvelope,
+    refreshMessageSnapshot,
     refreshTaskSnapshot,
     loadInitialSnapshot,
     resetSnapshotState,
   } = useTaskDetailSnapshotCoordinator({
     taskId,
     projectId,
-    task,
-    isParallelComparisonMode: () => isParallelComparisonMode.value,
-    refreshTask,
-    refreshSessions,
+    selectedSessionId,
+    bumpConversationFocus,
     refreshMessages,
-    refreshTaskRunSummaries,
-    refreshParallelCandidateMessages,
-    clearParallelCandidateState: clearParallelFlowState,
-    refreshRuntimePermissions,
-    ensureSelectedSession,
+    refreshFlowSnapshot: compareFlow.refreshFlowSnapshot,
+    refreshWorkflowSnapshot,
+    loadInitialFlowSnapshot: compareFlow.loadInitialFlowSnapshot,
+    loadInitialWorkflowSnapshot,
+    resetFlowSnapshotState: compareFlow.clearParallelFlowState,
+    resetWorkflowTargetState,
     subscribeProject: (currentProjectId) => {
       realtimeStore.subscribeProject(currentProjectId);
     },
@@ -187,29 +237,10 @@ export function useTaskDetailPageModel() {
     },
   });
 
-  const { currentStageLabel, workflowStages, workflowSummary } =
-    useTaskDetailWorkflowDerivedState({
-      workflowView,
-    });
-
-  const { editableSequentialSteps, resetSequentialStepState } =
-    useTaskDetailSequentialStepsCoordinator({
-      taskId,
-      task,
-      taskSessionSummaries,
-      editableExecutionMode,
-    });
-
-  const {
-    canForkFromCurrentSession,
-    handleTaskSwitch,
-    resolveTaskSessionRequestId,
-  } = useTaskDetailPageCoordinator({
+  const { handleTaskSwitch } = useTaskDetailPageCoordinator({
     taskId,
-    selectedSessionId,
     task,
     projectId,
-    taskSessionSummaries,
     route,
     router,
     realtimeConnected,
@@ -219,93 +250,38 @@ export function useTaskDetailPageModel() {
     subscribeProject: (currentProjectId) => {
       realtimeStore.subscribeProject(currentProjectId);
     },
+    resetConversationRound: () => handleSwitchRound(undefined, { focus: false }),
     resetSnapshotState,
-    resetSequentialStepState,
     loadInitialSnapshot,
   });
 
-  const {
-    executionModeSaving,
-    filterModelOption,
-    handleChooseMode,
-    handleExecutionModeConfirm,
-    handleSelectedModelChange,
-    loadModels,
-    modelOptions,
-    modelsLoading,
-    showExecutionModeModal,
-  } = useTaskDetailExecutionModeCoordinator({
-    taskId,
-    task,
-    editableExecutionMode,
-    refreshTask,
+  const { traceRefreshKey } = useTaskDetailRealtimeFeature({
+    polling: {
+      isExecuting,
+      hasStreamingAssistant,
+      continuing,
+      forking,
+    },
+    subscription: {
+      taskId,
+      latestTaskRefreshRequest,
+      messageReconcileRequired,
+      workflowReconcileRequired,
+      realtimeConnected,
+      refreshFlowSnapshot: compareFlow.refreshFlowSnapshot,
+      refreshMessageSnapshot,
+      refreshTaskSnapshot,
+      refreshWorkflowSnapshot,
+    },
   });
 
-  const {
-    composerResetToken,
-    continuing,
-    conversationFocusToken,
-    forking,
-    handleAdoptCandidate,
-    handleClearQueuedContinuations,
-    handleContinue,
-    handleFork,
-    handleRemoveQueuedContinuation,
-    handleReplyRuntimePermission,
-    handleTerminate,
-    queuedContinuations,
-    runtimePermissionActionId,
-    terminating,
-  } = useTaskDetailActionCoordinator({
-    taskId,
-    task,
-    stopPhaseId,
-    selectedSessionId,
-    selectedSessionLabel,
-    currentParallelRunRecord,
-    editableExecutionMode,
-    isExecuting,
-    hasStreamingAssistant,
-    canTerminateExecution,
-    baseConversationItems,
-    messageTrace,
-    clearPendingAssistantDraft,
-    refreshTask,
-    refreshSessions,
-    refreshMessages,
-    refreshTaskSnapshot,
-    refreshRuntimePermissions,
-    resolveTaskSessionRequestId,
-    seedPendingAssistantDraft,
-  });
-
-  const { shouldPollRunningStatus } = useTaskDetailPollingState({
-    isExecuting,
-    hasStreamingAssistant,
-    continuing,
-    forking,
-  });
-
-  const { traceRefreshKey } = useTaskDetailRefreshController({
-    taskId,
-    latestTaskRefreshRequest,
-    realtimeConnected,
-    shouldPollRunningStatus,
-    refreshTaskSnapshot,
-  });
-
-  function handleUnavailableAction(label: string) {
-    return () => {
-      message.info(`精简视图暂未接入${label}`);
-    };
-  }
-
-  function setExecutionModeModalOpen(open: boolean) {
-    showExecutionModeModal.value = open;
-  }
-
-  const sidebarTaskId = computed(() => task.value?.id ?? taskId.value);
-  const normalizedMessagesError = computed(() => messagesError.value ?? null);
+  watch(
+    traceRefreshKey,
+    (value) => {
+      sidebarTraceRefreshKey.value = value;
+    },
+    { immediate: true },
+  );
 
   const layout = useTaskDetailLayoutModel({
     pageLoading,
@@ -314,75 +290,83 @@ export function useTaskDetailPageModel() {
 
   const header = useTaskDetailHeaderModel({
     ancestors,
-    currentStageLabel,
+    currentStageLabel: workflowFeature.currentStageLabel,
     handleTaskSwitch,
     projectId,
     task,
     taskDisplayStatus,
   });
 
-  const main = useTaskDetailMainPaneModel({
-    assistantMessageModelFallback,
-    canForkFromCurrentSession,
-    canTerminateExecution,
-    chatTraceWarning,
-    composerResetToken,
-    continuing,
-    conversationFocusToken,
-    conversationItems,
-    editableExecutionMode,
-    editableJudgeConfig,
-    editableParallelCandidates,
-    editableSequentialSteps,
-    executionModeSaving,
-    filterModelOption,
-    forking,
-    handleAdoptCandidate,
-    handleChooseMode,
-    handleClearQueuedContinuations,
-    handleContinue,
-    handleExecutionModeConfirm,
-    handleFork,
-    handleOpenFilePreview,
-    handleRemoveQueuedContinuation,
-    handleReplyRuntimePermission,
-    handleSelectedModelChange,
-    handleTerminate,
-    handleUnavailableAction,
-    hasStreamingAssistant,
-    isExecuting,
-    loadModels,
-    messagesError: normalizedMessagesError,
-    messagesLoading,
-    modelOptions,
-    modelsLoading,
-    queuedContinuations,
-    runtimePermissionActionId,
-    runtimePermissionLabel,
-    runtimePermissionPath,
-    runtimePermissionPatterns,
-    selectedSessionId,
-    selectedSessionRuntimePermissions,
-    setExecutionModeModalOpen,
-    showExecutionModeModal,
-    task,
-    taskDisplayStatus,
-    taskFailureReason,
-    terminating,
-    workflowStages,
-    workflowSummary,
+  const main = useTaskDetailMainPaneFeature({
+    compare: {
+      canTerminateExecution,
+      conversationItems: compareFlow.conversationItems,
+      handleAdoptCandidate: compareActions.handleAdoptCandidate,
+    },
+    conversation: {
+      assistantMessageModelFallback,
+      canForkFromCurrentSession,
+      chatTraceWarning,
+      composerResetToken,
+      continuing,
+      conversationFocusToken,
+      forking,
+      handleClearQueuedContinuations,
+      handleContinue,
+      handleFork,
+      handleRemoveQueuedContinuation,
+      handleTerminate,
+      queuedContinuations,
+      terminating,
+    },
+    messages: {
+      messagesError,
+      messagesLoading,
+      selectedSessionId,
+    },
+    page: {
+      hasStreamingAssistant,
+      isExecuting,
+      task,
+      taskFailureReason,
+    },
+    runtimePermission: {
+      handleReplyRuntimePermission: runtimePermissionFeature.handleReplyRuntimePermission,
+      runtimePermissionActionId: runtimePermissionFeature.runtimePermissionActionId,
+      runtimePermissionLabel: runtimePermissionFeature.runtimePermissionLabel,
+      runtimePermissionPath: runtimePermissionFeature.runtimePermissionPath,
+      runtimePermissionPatterns: runtimePermissionFeature.runtimePermissionPatterns,
+      selectedSessionRuntimePermissions: runtimePermissionFeature.selectedSessionRuntimePermissions,
+    },
+    sidebar: {
+      handleOpenFilePreview: sidebarFeature.handleOpenFilePreview,
+    },
+    workflow: {
+      editableExecutionMode,
+      editableJudgeConfig,
+      editableParallelCandidates,
+      editableSequentialSteps: workflowFeature.editableSequentialSteps,
+      executionModeSaving: workflowFeature.executionModeSaving,
+      filterModelOption: workflowFeature.filterModelOption,
+      handleChooseMode: workflowFeature.handleChooseMode,
+      handleExecutionModeConfirm: workflowFeature.handleExecutionModeConfirm,
+      handleSelectedModelChange: workflowFeature.handleSelectedModelChange,
+      loadModels: workflowFeature.loadModels,
+      modelOptions: workflowFeature.modelOptions,
+      modelsLoading: workflowFeature.modelsLoading,
+      setExecutionModeModalOpen: workflowFeature.setExecutionModeModalOpen,
+      showExecutionModeModal: workflowFeature.showExecutionModeModal,
+      workflowStages: workflowFeature.workflowStages,
+      workflowSummary: workflowFeature.workflowSummary,
+    },
   });
 
-  const sidebar = useTaskDetailSidebarModel({
-    collapsed: sidebarCollapsed,
-    handleCloseFilePreview,
-    memberView,
-    memberViewLoading,
-    previewFile,
-    selectedSessionId,
-    taskId: sidebarTaskId,
-    toggleSidebar,
-    traceRefreshKey,
+  const sidebar = useTaskDetailSidebarPaneFeature({
+    collapsed: sidebarFeature.collapsed,
+    filePreview: sidebarFeature.filePreviewPanel,
+    member: sidebarFeature.memberPanel,
+    trace: sidebarFeature.tracePanel,
+    toggleSidebar: sidebarFeature.toggleSidebar,
   });
 
   return {

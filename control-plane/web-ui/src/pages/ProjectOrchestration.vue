@@ -328,6 +328,7 @@ import {
   getProjectOrchestrationView,
   updateProjectWorkflowTemplateBinding,
 } from "../lib/api";
+import { resolveWorkflowStatusDisplay } from "../lib/task-workflow-display-policy";
 
 const MermaidRenderer = defineAsyncComponent(() => import("../components/MermaidRenderer.vue"));
 
@@ -554,8 +555,8 @@ function latestTaskDescription(stage: OrchestrationStageViewModel) {
 
   const details = [
     `任务 ${latestTask.taskId}`,
-    `流程 ${latestTask.workflowStatus}`,
-    `阶段 ${latestTask.stageStatus}`,
+    `流程 ${resolveWorkflowStatusDisplay(latestTask.workflowStatus, "workflow", "未记录").label}`,
+    `阶段 ${resolveWorkflowStatusDisplay(latestTask.stageStatus, "stage", "未记录").label}`,
   ];
   if (latestTask.approvalState && latestTask.approvalState !== "not-required") {
     details.push(`审批 ${latestTask.approvalState}`);

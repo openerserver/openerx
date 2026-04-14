@@ -6,7 +6,7 @@ import { db } from "../../db";
 import { roleAggregateConclusions } from "../../db/schema";
 import { type AppEnv, authMiddleware } from "../../middleware/auth";
 import { requireRole } from "../../middleware/rbac";
-import { ensureRoleConclusionsAvailable } from "../task-workflows/legacy-role-workflow-storage";
+import { ensureRoleConclusionsAvailability } from "../task-workflows/legacy-role-workflow-storage";
 
 export const roleConclusionRoutes = new Hono<AppEnv>();
 
@@ -42,8 +42,8 @@ function requireTaskId(c: { req: { param: (name: string) => string | undefined }
 
 roleConclusionRoutes.get("/", async (c) => {
   const taskId = requireTaskId(c);
-  const task = await ensureRoleConclusionsAvailable(taskId);
-  if (!task) return c.json({ error: "Task not found" }, 404);
+  const availability = await ensureRoleConclusionsAvailability(taskId);
+  if (!availability.task) return c.json({ error: "Task not found" }, 404);
 
   const rows = await db
     .select()
@@ -69,6 +69,9 @@ roleConclusionRoutes.get("/", async (c) => {
       approvalRecommendation: row.approvalRecommendationJson ?? null,
       generatedAt: row.generatedAt,
     })),
+    meta: {
+      workflowMigrated: availability.migrated,
+    },
   });
 });
 

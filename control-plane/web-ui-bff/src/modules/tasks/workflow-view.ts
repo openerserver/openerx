@@ -32,6 +32,10 @@ interface RoleConclusionPayload {
   approvalRecommendation?: { required?: boolean | null } | null;
 }
 
+interface WorkflowRepairMetaPayload {
+  workflowMigrated?: boolean;
+}
+
 interface DeveloperChangeRequestPayload {
   id?: string;
   taskStageRunId?: string | null;
@@ -60,12 +64,19 @@ export interface TaskWorkflowResources {
   stages: WorkflowStagePayload[];
   conclusions: RoleConclusionPayload[];
   requests: DeveloperChangeRequestPayload[];
+  meta: {
+    reconcileRequired: boolean;
+    workflowMigrated: boolean;
+  };
 }
 
 export interface TaskWorkflowStateResources {
   task: TaskDetailPayload | null;
   workflowRun: WorkflowRunPayload | null;
   stages: WorkflowStagePayload[];
+  meta: {
+    reconcileRequired: boolean;
+  };
 }
 
 interface WorkflowTemplateStagePayload {
@@ -154,6 +165,10 @@ export interface ProjectStageRuntimeSummaryViewModel {
 
 export interface WorkflowViewModel {
   taskId: string;
+  meta?: {
+    snapshotVersion?: number;
+    reconcileRequired?: boolean;
+  };
   workflow: {
     templateId: string | null;
     currentStage: string;
@@ -198,6 +213,31 @@ export interface WorkflowViewModel {
     approvalRequired: boolean;
     status: string;
   }>;
+}
+
+type TaskWorkflowSnapshotMetaResponse = {
+  meta?: {
+    snapshotVersion?: number;
+  };
+};
+
+async function fetchTaskWorkflowSnapshotMeta(taskId: string, authorization: string) {
+  const result = await cpFetch<TaskWorkflowSnapshotMetaResponse>(
+    `/api/tasks/${encodeURIComponent(taskId)}/query/normalized-conversation?includeLineage=false`,
+    { authorization },
+  );
+
+  if (
+    !result.ok ||
+    typeof result.data?.meta?.snapshotVersion !== "number" ||
+    !Number.isFinite(result.data.meta.snapshotVersion)
+  ) {
+    return undefined;
+  }
+
+  return {
+    snapshotVersion: result.data.meta.snapshotVersion,
+  };
 }
 
 function fallbackRoleLabelFromId(roleAgentId: string | null | undefined) {
@@ -632,7 +672,10 @@ async function fetchWorkflowTemplateStages(templateId: string, authorization: st
     { authorization },
   );
 
-  return result.ok ? result.data?.data || [] : [];
+  return {
+    data: result.ok ? result.data?.data || [] : [],
+    reconcileRequired: !result.ok,
+  };
 }
 
 export async function fetchTaskWorkflowState(input: {
@@ -659,6 +702,9 @@ export async function fetchTaskWorkflowState(input: {
     task: taskResult?.ok ? (taskResult.data ?? null) : null,
     workflowRun: workflowResult.ok ? (workflowResult.data?.data?.workflowRun ?? null) : null,
     stages: workflowResult.ok ? (workflowResult.data?.data?.stages ?? []) : [],
+    meta: {
+      reconcileRequired: Boolean((input.includeTask && taskResult && !taskResult.ok) || !workflowResult.ok),
+    },
   };
 }
 
@@ -669,22 +715,31 @@ export async function fetchTaskWorkflowResources(input: {
 }): Promise<TaskWorkflowResources> {
   const [workflowState, conclusionsResult, requestsResult] = await Promise.all([
     fetchTaskWorkflowState(input),
-    cpFetch<{ data?: RoleConclusionPayload[] }>(
+    cpFetch<{ data?: RoleConclusionPayload[]; meta?: WorkflowRepairMetaPayload }>(
       `/api/tasks/${encodeURIComponent(input.taskId)}/role-conclusions`,
       {
         authorization: input.authorization,
       },
     ),
-    cpFetch<{ data?: DeveloperChangeRequestPayload[] }>(
+    cpFetch<{ data?: DeveloperChangeRequestPayload[]; meta?: WorkflowRepairMetaPayload }>(
       `/api/tasks/${encodeURIComponent(input.taskId)}/developer-change-requests`,
       { authorization: input.authorization },
     ),
   ]);
 
+  const workflowMigrated =
+    Boolean(conclusionsResult.ok && conclusionsResult.data?.meta?.workflowMigrated) ||
+    Boolean(requestsResult.ok && requestsResult.data?.meta?.workflowMigrated);
+
   return {
     ...workflowState,
     conclusions: conclusionsResult.ok ? (conclusionsResult.data?.data ?? []) : [],
     requests: requestsResult.ok ? (requestsResult.data?.data ?? []) : [],
+    meta: {
+      reconcileRequired:
+        workflowState.meta.reconcileRequired || !conclusionsResult.ok || !requestsResult.ok,
+      workflowMigrated,
+    },
   };
 }
 
@@ -703,14 +758,16 @@ export async function buildTaskWorkflowViewModel(
       taskId,
       authorization,
     }));
+  const snapshotMetaPromise = fetchTaskWorkflowSnapshotMeta(taskId, authorization);
 
   const workflowRun = resources.workflowRun;
   const stages = resources.stages;
   const conclusions = resources.conclusions;
   const requests = resources.requests;
-  const templateStages = workflowRun?.templateId
+  const templateStagesResult = workflowRun?.templateId
     ? await fetchWorkflowTemplateStages(workflowRun.templateId, authorization)
-    : [];
+    : { data: [], reconcileRequired: false };
+  const templateStages = templateStagesResult.data;
   const templateStageMap = new Map(
     templateStages
       .filter((stage): stage is WorkflowTemplateStagePayload & { stageKey: string } =>
@@ -750,9 +807,20 @@ export async function buildTaskWorkflowViewModel(
     ...item,
     stageKey: item.taskStageRunId ? stageRunIdToKey.get(item.taskStageRunId) : undefined,
   }));
+  const snapshotMeta = await snapshotMetaPromise;
+  const reconcileRequired =
+    resources.meta.reconcileRequired || templateStagesResult.reconcileRequired;
+  const viewMeta =
+    snapshotMeta || reconcileRequired
+      ? {
+          snapshotVersion: snapshotMeta?.snapshotVersion,
+          reconcileRequired,
+        }
+      : undefined;
 
   return {
     taskId,
+    meta: viewMeta,
     workflow: {
       templateId: workflowRun?.templateId ?? null,
       currentStage: inferredCurrentStage,

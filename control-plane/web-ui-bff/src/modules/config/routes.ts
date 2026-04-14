@@ -176,6 +176,21 @@ function validateModelsPayload(list: Array<Record<string, unknown>>): string | n
   return null;
 }
 
+function normalizeModelListEntries(list: Array<Record<string, unknown>>) {
+  return list.map((model) => {
+    const provider = getTrimmedString(model.provider);
+    const id = getTrimmedString(model.id);
+    if (!provider || !id) {
+      return model;
+    }
+
+    return {
+      ...model,
+      route: getTrimmedString(model.route) ?? `${provider}:${id}`,
+    };
+  });
+}
+
 function normalizeBaseUrl(value: string): string {
   return value.replace(/\/+$/, "");
 }
@@ -533,11 +548,15 @@ configRoutes.get("/models", (c) => {
   const adminErr = requireSystemAdmin(c.get("user"));
   if (adminErr) return c.json({ error: adminErr }, 403);
   const config = readOpencodeJson();
+  const modelList = normalizeModelListEntries(
+    (((config.models as Record<string, unknown>)?.list as Array<Record<string, unknown>> | undefined) ??
+      []) as Array<Record<string, unknown>>,
+  );
   return c.json({
     data: {
       defaults: (config.agents as Record<string, unknown>)?.defaults || {},
       providers: (config.models as Record<string, unknown>)?.providers || {},
-      list: (config.models as Record<string, unknown>)?.list || [],
+      list: modelList,
     },
   });
 });
@@ -546,7 +565,10 @@ configRoutes.get("/models", (c) => {
 configRoutes.get("/models/list", (c) => {
   const config = readOpencodeJson();
   return c.json({
-    data: (config.models as Record<string, unknown>)?.list || [],
+    data: normalizeModelListEntries(
+      (((config.models as Record<string, unknown>)?.list as Array<Record<string, unknown>> | undefined) ??
+        []) as Array<Record<string, unknown>>,
+    ),
   });
 });
 

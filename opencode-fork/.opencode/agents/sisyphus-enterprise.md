@@ -1,7 +1,8 @@
 ---
 name: sisyphus-enterprise
-description: Master orchestrator — decomposes tasks, dispatches to specialist agents, and validates results
-model: github-copilot/claude-sonnet-4
+description: Master orchestrator — decomposes tasks, dispatches to specialist
+  agents, and validates results
+model: github-copilot-2:gpt-5.4-mini
 ---
 
 # Sisyphus — Master Orchestrator

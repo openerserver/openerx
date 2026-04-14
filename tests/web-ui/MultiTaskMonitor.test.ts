@@ -2315,7 +2315,7 @@ describe("MultiTaskMonitor", () => {
     expect(wrapper.find(".monitor-node__stream-state").text()).toBe("运行中");
   });
 
-  it("renders awaiting adoption for completed parallel tasks without a selected winner", async () => {
+  it("keeps explicit completed status for parallel tasks even when no winner has been selected", async () => {
     apiMocks.getTask.mockImplementation(async (taskId: string) => ({
       id: taskId,
       projectId: "proj-1",
@@ -2351,8 +2351,8 @@ describe("MultiTaskMonitor", () => {
     await flushPromises();
 
     expect(wrapper.findAll(".monitor-node--completed").length).toBeGreaterThan(0);
-    expect(wrapper.find(".monitor-node__status-pill").text()).toBe("待采纳");
-    expect(wrapper.find(".monitor-node__stream-state").text()).toBe("待采纳");
+    expect(wrapper.find(".monitor-node__status-pill").text()).toBe("已完成");
+    expect(wrapper.find(".monitor-node__stream-state").text()).toBe("已完成");
   });
 
   it("keeps completed status when only a user prompt is visible", async () => {

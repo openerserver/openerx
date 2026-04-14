@@ -216,7 +216,7 @@ judge 可以保留，但只能作为比较辅助，不得替代用户最终选�
 
 1. [control-plane/web-ui/src/components/ExecutionModeModal.vue](control-plane/web-ui/src/components/ExecutionModeModal.vue) — 三种执行模式入口
 2. [control-plane/web-ui/src/pages/TaskDetailV3.vue](control-plane/web-ui/src/pages/TaskDetailV3.vue) — 任务详情主交互，当前仍暴露 fork 等额外动作
-3. [control-plane/web-ui/src/composables/useTreeMessages.ts](control-plane/web-ui/src/composables/useTreeMessages.ts) — 会话消息与流式 assistant 叠加
+3. [control-plane/web-ui/src/composables/useTaskMessageSnapshot.ts](control-plane/web-ui/src/composables/useTaskMessageSnapshot.ts) 与 [control-plane/web-ui/src/composables/useTaskMessageStore.ts](control-plane/web-ui/src/composables/useTaskMessageStore.ts) — 会话消息快照与流式 assistant 归并
 4. [control-plane/web-ui/src/composables/useTaskExecutionTrace.ts](control-plane/web-ui/src/composables/useTaskExecutionTrace.ts) — final prompt / latest response 的 synthetic fallback
 5. [control-plane/web-ui/src/lib/message-normalize.ts](control-plane/web-ui/src/lib/message-normalize.ts) — userInputText / finalSentText / streaming message 的前端结构承接位
 6. [control-plane/web-ui-bff/src/modules/realtime/sse-aggregator.ts](control-plane/web-ui-bff/src/modules/realtime/sse-aggregator.ts) — realtime delta、prompt decomposition、parallel/sequential 协调核心

@@ -24,7 +24,6 @@ import {
   createAgentRunRecord,
   patchAgentRunRecord,
   recordAgentAudit,
-  recordModelUsage,
 } from "../agent-control/run-persistence";
 import {
   createSession,
@@ -32,18 +31,20 @@ import {
   runDetachedPrompt,
   terminateAgent,
 } from "../agent-control/runtime-provider";
+import {
+  recordPaidExecutionRuntimeUsage,
+  releasePaidExecutionReservation,
+} from "../../lib/paid-execution-runtime";
 import { collectChangesFromSession } from "../code-changes/change-collector";
 import { executeLifecycleHooks } from "../hooks/lifecycle-hooks";
-import {
-  finalizeTaskState,
-  shouldSuppressParallelAwaitingAdoptionFinalization,
-} from "../tasks/finalize";
+import { finalizeTaskState } from "../tasks/finalize";
 import {
   fetchTaskSessionLineageRecords,
   persistTaskSessionMessageSnapshot,
   toCanonicalTaskSessionId,
   upsertTaskSessionLineageRecord,
 } from "../tasks/task-session-store";
+import { queryTaskRoundSyncState } from "../tasks/task-round-facade";
 import { observeGraphWorkspaceDir, onGraphToolExecuted } from "./dag-sync";
 import { buildPipelineStageUpdatedEvents } from "./pipeline-events";
 
@@ -122,7 +123,6 @@ function buildPaidExecutionGuardDetail(
   }
 
   return {
-    leaseId: guardState.leaseId,
     guardDecision: guardState.guardDecision,
     guardReason: guardState.guardReason,
     estimatedRequestUpperBound: guardState.estimatedRequestUpperBound,
@@ -251,76 +251,6 @@ class SSEAggregator {
     return this.paidExecutionRuntime.get(taskId)?.tripped === true;
   }
 
-  private async updatePaidExecutionRuntimeAccounting(args: {
-    taskId: string;
-    authorization: string;
-    usage: {
-      providerId: string;
-      modelId: string;
-      totalTokens: number;
-      costUsd: number;
-    };
-    requestDelta: number;
-  }): Promise<{ guardState?: PaidExecutionGuardState; tripped: boolean; breakerReason?: string }> {
-    const taskResult = await cpFetch<CompletedTaskContext>(
-      `/api/project-tree/tasks/${encodeURIComponent(args.taskId)}`,
-      { authorization: args.authorization },
-    );
-    if (!taskResult.ok) {
-      return { tripped: false };
-    }
-
-    const task = taskResult.data;
-    const taskStrategy = parseTaskStrategy(task.strategy);
-    const currentGuard = taskStrategy.paidExecutionGuard as PaidExecutionGuardState | undefined;
-    if (!currentGuard?.enabled) {
-      return { tripped: false };
-    }
-
-    const nextActualRequests = (currentGuard.actualRequests || 0) + args.requestDelta;
-    const nextActualTokenUsage = (currentGuard.actualTokenUsage || 0) + args.usage.totalTokens;
-    const nextActualCost = Number(((currentGuard.actualCost || 0) + args.usage.costUsd).toFixed(2));
-    const overRequestLimit =
-      currentGuard.maxRequestsPerRun > 0 && nextActualRequests > currentGuard.maxRequestsPerRun;
-    const overCostLimit =
-      currentGuard.maxEstimatedCostUsdPerRun > 0 &&
-      nextActualCost > currentGuard.maxEstimatedCostUsdPerRun;
-    const breakerReason = overRequestLimit
-      ? `actual requests ${nextActualRequests} exceeded ${currentGuard.maxRequestsPerRun}`
-      : overCostLimit
-        ? `actual cost $${nextActualCost} exceeded $${currentGuard.maxEstimatedCostUsdPerRun}`
-        : undefined;
-
-    const nextGuard: PaidExecutionGuardState = {
-      ...currentGuard,
-      actualRequests: nextActualRequests,
-      actualTokenUsage: nextActualTokenUsage,
-      actualCost: nextActualCost,
-      ...(breakerReason
-        ? {
-            breakerReason,
-            breakerTrippedAt: currentGuard.breakerTrippedAt || new Date().toISOString(),
-          }
-        : {}),
-    };
-
-    await cpFetch(`/api/tasks/${encodeURIComponent(args.taskId)}`, {
-      method: "PATCH",
-      authorization: args.authorization,
-      body: {
-        strategy: mergeTaskStrategy(task.strategy, {
-          paidExecutionGuard: nextGuard,
-        }),
-      },
-    });
-
-    return {
-      guardState: nextGuard,
-      tripped: Boolean(breakerReason),
-      breakerReason,
-    };
-  }
-
   private async recordPaidExecutionUsageEvent(args: {
     taskId: string;
     projectId?: string;
@@ -362,35 +292,19 @@ class SSEAggregator {
       return { tripped: false };
     }
 
-    const usage = await recordModelUsage({
-      projectId: args.projectId || "",
+    return recordPaidExecutionRuntimeUsage({
       taskId: args.taskId,
+      projectId: args.projectId,
       sessionId: args.sessionId,
       agentRunId: args.agentRunId,
-      providerId: args.providerId,
-      modelId: args.modelId,
-      tokenUsed: args.tokenUsed,
-      runtimeLedger: args.runtimeLedger,
-      audit: args.action
-        ? {
-            projectId: args.projectId,
-            taskId: args.taskId,
-            sessionId: args.sessionId,
-            agentRunId: args.agentRunId,
-          traceId: args.traceId,
-            eventType: "paid_execution",
-            action: args.action,
-            detail: args.detail,
-            riskLevel: args.riskLevel,
-          }
-        : undefined,
-    });
-
-    return this.updatePaidExecutionRuntimeAccounting({
-      taskId: args.taskId,
       authorization: args.authorization,
-      usage,
+      modelRoute: `${args.providerId}:${args.modelId}`,
+      tokenUsed: args.tokenUsed,
       requestDelta: args.requestDelta,
+      action: args.action,
+      detail: args.detail,
+      riskLevel: args.riskLevel,
+      runtimeLedger: args.runtimeLedger,
     });
   }
 
@@ -819,24 +733,25 @@ class SSEAggregator {
     const paidExecutionGuard = taskStrategy.paidExecutionGuard as
       | PaidExecutionGuardState
       | undefined;
-    if (paidExecutionGuard?.postHooksDisabled || this.isPaidExecutionBreakerTripped(taskId)) {
-      await recordAgentAudit({
-        projectId: task.projectId,
-        taskId: task.id,
-        sessionId: task.sessionId ?? undefined,
-        eventType: "paid_execution",
-        action: "post_hooks_skipped",
-        detail: buildPaidExecutionGuardDetail(paidExecutionGuard, {
-          reason: this.isPaidExecutionBreakerTripped(taskId)
-            ? this.paidExecutionRuntime.get(taskId)?.reason || "paid execution breaker tripped"
-            : "post-execution hooks disabled by paid execution guard",
-        }),
-        riskLevel: "medium",
-      });
-      return;
-    }
+    try {
+      if (paidExecutionGuard?.postHooksDisabled || this.isPaidExecutionBreakerTripped(taskId)) {
+        await recordAgentAudit({
+          projectId: task.projectId,
+          taskId: task.id,
+          sessionId: task.sessionId ?? undefined,
+          eventType: "paid_execution",
+          action: "post_hooks_skipped",
+          detail: buildPaidExecutionGuardDetail(paidExecutionGuard, {
+            reason: this.isPaidExecutionBreakerTripped(taskId)
+              ? this.paidExecutionRuntime.get(taskId)?.reason || "paid execution breaker tripped"
+              : "post-execution hooks disabled by paid execution guard",
+          }),
+          riskLevel: "medium",
+        });
+        return;
+      }
 
-    const hookResult = await executeLifecycleHooks({
+      const hookResult = await executeLifecycleHooks({
       strategy: strategyConfig,
       trigger: "post-execution",
       taskId: task.id,
@@ -1193,6 +1108,14 @@ class SSEAggregator {
       reason:
         followupExecution.status === "failed" ? "task.followup.failed" : "task.followup.completed",
     });
+    } finally {
+      await releasePaidExecutionReservation({
+        authorization,
+        taskId: task.id,
+        reason: "post-execution finalized",
+        sessionId: task.sessionId ?? undefined,
+      }).catch(() => null);
+    }
   }
 
   private pickFollowupDecision(
@@ -1419,6 +1342,67 @@ class SSEAggregator {
       persistedSessionId: persistResult.data?.sessionId,
       seq: persistResult.data?.seq,
     });
+    await this.emitTaskRoundSyncOrReconcile({
+      authorization,
+      ts: event.ts,
+      taskId,
+      projectId: event.projectId,
+      phaseId: asString(event.data.phaseId) ?? event.phaseId,
+      runtimeSessionId: event.sessionId,
+      agentRunId: event.agentRunId,
+      persistedMessageId: persistResult.data?.messageId,
+      persistedSessionId: persistResult.data?.sessionId,
+      seq: persistResult.data?.seq,
+    });
+  }
+
+  private resolvePersistenceRoundTarget(args: {
+    taskId: string;
+    runtimeSessionId: string;
+    persistedSessionId?: string;
+  }) {
+    const runtimeRoundId = toCanonicalTaskSessionId(args.taskId, args.runtimeSessionId);
+    const roundId = args.persistedSessionId ?? runtimeRoundId ?? args.runtimeSessionId;
+
+    return {
+      roundId,
+      taskSessionId: args.persistedSessionId ?? roundId,
+      aliasMiss:
+        typeof args.persistedSessionId === "string" &&
+        args.persistedSessionId.length > 0 &&
+        typeof runtimeRoundId === "string" &&
+        runtimeRoundId.length > 0 &&
+        args.persistedSessionId !== runtimeRoundId,
+    };
+  }
+
+  private emitTaskMessageReconcileRequired(args: {
+    ts: string;
+    taskId: string;
+    projectId?: string;
+    phaseId?: string;
+    runtimeSessionId: string;
+    agentRunId?: string;
+    roundId: string;
+    reason: "alias_miss" | "sequence_gap" | "snapshot_lag";
+    expectedRevision: number;
+  }) {
+    this.emit({
+      id: crypto.randomUUID(),
+      type: "task.reconcile.required",
+      ts: args.ts,
+      projectId: args.projectId,
+      taskId: args.taskId,
+      phaseId: args.phaseId,
+      sessionId: args.runtimeSessionId,
+      agentRunId: args.agentRunId,
+      data: {
+        roundId: args.roundId,
+        scope: "messages",
+        reason: args.reason,
+        expectedRevision: args.expectedRevision,
+      },
+    });
   }
 
   private emitTaskPersistenceAck(args: {
@@ -1436,10 +1420,10 @@ class SSEAggregator {
       return;
     }
 
-    const roundId =
-      toCanonicalTaskSessionId(args.taskId, args.runtimeSessionId) ??
-      args.persistedSessionId ??
-      args.runtimeSessionId;
+    const target = this.resolvePersistenceRoundTarget(args);
+    if (target.aliasMiss) {
+      return;
+    }
 
     this.emit({
       id: crypto.randomUUID(),
@@ -1451,14 +1435,98 @@ class SSEAggregator {
       sessionId: args.runtimeSessionId,
       agentRunId: args.agentRunId,
       data: {
-        roundId,
-        taskSessionId: args.persistedSessionId ?? roundId,
+        roundId: target.roundId,
+        taskSessionId: target.taskSessionId,
         messageId: args.persistedMessageId,
         persistedRevision: args.seq,
         snapshotVersion: args.seq,
         persistedThroughRevision: args.seq,
       },
     });
+  }
+
+  private async emitTaskRoundSyncOrReconcile(args: {
+    authorization: string;
+    ts: string;
+    taskId: string;
+    projectId?: string;
+    phaseId?: string;
+    runtimeSessionId: string;
+    agentRunId?: string;
+    persistedMessageId?: string;
+    persistedSessionId?: string;
+    seq?: number;
+  }) {
+    if (!args.persistedMessageId || typeof args.seq !== "number") {
+      return;
+    }
+
+    const target = this.resolvePersistenceRoundTarget(args);
+    if (target.aliasMiss) {
+      this.emitTaskMessageReconcileRequired({
+        ts: args.ts,
+        taskId: args.taskId,
+        projectId: args.projectId,
+        phaseId: args.phaseId,
+        runtimeSessionId: args.runtimeSessionId,
+        agentRunId: args.agentRunId,
+        roundId: target.roundId,
+        reason: "alias_miss",
+        expectedRevision: args.seq,
+      });
+      return;
+    }
+
+    const syncStateResult = await queryTaskRoundSyncState({
+      taskId: args.taskId,
+      sessionId: target.taskSessionId,
+      authorization: args.authorization,
+    });
+
+    if (!syncStateResult.ok) {
+      this.emitTaskMessageReconcileRequired({
+        ts: args.ts,
+        taskId: args.taskId,
+        projectId: args.projectId,
+        phaseId: args.phaseId,
+        runtimeSessionId: args.runtimeSessionId,
+        agentRunId: args.agentRunId,
+        roundId: target.roundId,
+        reason: syncStateResult.status === 404 ? "alias_miss" : "snapshot_lag",
+        expectedRevision: args.seq,
+      });
+      return;
+    }
+
+    if (syncStateResult.data.reconcileRequired) {
+      this.emitTaskMessageReconcileRequired({
+        ts: args.ts,
+        taskId: args.taskId,
+        projectId: args.projectId,
+        phaseId: args.phaseId,
+        runtimeSessionId: args.runtimeSessionId,
+        agentRunId: args.agentRunId,
+        roundId: target.roundId,
+        reason: "snapshot_lag",
+        expectedRevision: args.seq,
+      });
+      return;
+    }
+
+    if (syncStateResult.data.persistedThroughRevision < args.seq) {
+      this.emitTaskMessageReconcileRequired({
+        ts: args.ts,
+        taskId: args.taskId,
+        projectId: args.projectId,
+        phaseId: args.phaseId,
+        runtimeSessionId: args.runtimeSessionId,
+        agentRunId: args.agentRunId,
+        roundId: target.roundId,
+        reason: "sequence_gap",
+        expectedRevision: args.seq,
+      });
+      return;
+    }
 
     this.emit({
       id: crypto.randomUUID(),
@@ -1470,11 +1538,11 @@ class SSEAggregator {
       sessionId: args.runtimeSessionId,
       agentRunId: args.agentRunId,
       data: {
-        roundId,
-        taskSessionId: args.persistedSessionId ?? roundId,
+        roundId: target.roundId,
+        taskSessionId: target.taskSessionId,
         messageId: args.persistedMessageId,
-        snapshotVersion: args.seq,
-        persistedThroughRevision: args.seq,
+        snapshotVersion: syncStateResult.data.snapshotVersion,
+        persistedThroughRevision: syncStateResult.data.persistedThroughRevision,
       },
     });
   }
@@ -1672,6 +1740,18 @@ class SSEAggregator {
       message,
     });
     this.emitTaskPersistenceAck({
+      ts: event.ts,
+      taskId,
+      projectId: event.projectId,
+      phaseId: asString(event.data.phaseId) ?? event.phaseId,
+      runtimeSessionId: event.sessionId,
+      agentRunId: event.agentRunId,
+      persistedMessageId: persistResult.data?.messageId,
+      persistedSessionId: persistResult.data?.sessionId,
+      seq: persistResult.data?.seq,
+    });
+    await this.emitTaskRoundSyncOrReconcile({
+      authorization,
       ts: event.ts,
       taskId,
       projectId: event.projectId,
@@ -2817,7 +2897,7 @@ class SSEAggregator {
 
       this.emit({
         id: crypto.randomUUID(),
-        type: "task.completed",
+        type: "task.failed",
         ts: new Date().toISOString(),
         sessionId: event.sessionId,
         taskId: event.taskId,
@@ -3084,22 +3164,24 @@ class SSEAggregator {
     const paidExecutionGuard = taskStrategy.paidExecutionGuard as
       | PaidExecutionGuardState
       | undefined;
-    if (this.isPaidExecutionBreakerTripped(taskId)) {
-      await recordAgentAudit({
-        projectId: task.projectId,
-        taskId: task.id,
-        sessionId: task.sessionId ?? undefined,
-        eventType: "paid_execution",
-        action: "failure_hooks_skipped",
-        detail: buildPaidExecutionGuardDetail(paidExecutionGuard, {
-          reason: this.paidExecutionRuntime.get(taskId)?.reason || "paid execution breaker tripped",
-        }),
-        riskLevel: "medium",
-      });
-      return;
-    }
+    try {
+      if (this.isPaidExecutionBreakerTripped(taskId)) {
+        await recordAgentAudit({
+          projectId: task.projectId,
+          taskId: task.id,
+          sessionId: task.sessionId ?? undefined,
+          eventType: "paid_execution",
+          action: "failure_hooks_skipped",
+          detail: buildPaidExecutionGuardDetail(paidExecutionGuard, {
+            reason:
+              this.paidExecutionRuntime.get(taskId)?.reason || "paid execution breaker tripped",
+          }),
+          riskLevel: "medium",
+        });
+        return;
+      }
 
-    const hookResult = await executeLifecycleHooks({
+      const hookResult = await executeLifecycleHooks({
       strategy: strategyConfig,
       trigger: "on-failure",
       taskId: task.id,
@@ -3204,6 +3286,14 @@ class SSEAggregator {
           }),
         },
       });
+    }
+    } finally {
+      await releasePaidExecutionReservation({
+        authorization,
+        taskId: task.id,
+        reason: "failure finalized",
+        sessionId: task.sessionId ?? undefined,
+      }).catch(() => null);
     }
   }
 
@@ -3502,7 +3592,7 @@ class SSEAggregator {
 
       this.emit({
         id: crypto.randomUUID(),
-        type: "task.completed",
+        type: isFailed ? "task.failed" : "task.completed",
         ts: new Date().toISOString(),
         taskId,
         projectId,

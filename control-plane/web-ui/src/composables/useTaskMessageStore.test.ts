@@ -1,17 +1,22 @@
-import { effectScope, nextTick, reactive, ref } from "vue";
+import { computed, effectScope, nextTick, reactive, ref } from "vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+  TaskConversationMessageItem,
+  TaskConversationWorkflowItem,
+} from "../lib/message-normalize";
+import { getTaskMessageSnapshotRevision } from "../lib/task-message-snapshot";
 import type { RealtimeEvent } from "../stores/realtime";
-import { useTreeMessages } from "./useTreeMessages";
+import { useTaskMessageSnapshot } from "./useTaskMessageSnapshot";
 import { useTaskMessageStore } from "./useTaskMessageStore";
 
-const getCurrentTaskRoundMock = vi.fn();
-const getTaskRoundsMock = vi.fn();
-const getTaskRoundMessagesMock = vi.fn();
+const apiMocks = vi.hoisted(() => ({
+  getCurrentTaskRound: vi.fn(),
+  getTaskRoundMessages: vi.fn(),
+}));
 
 vi.mock("../lib/api", () => ({
-  getCurrentTaskRound: getCurrentTaskRoundMock,
-  getTaskRounds: getTaskRoundsMock,
-  getTaskRoundMessages: getTaskRoundMessagesMock,
+  getCurrentTaskRound: apiMocks.getCurrentTaskRound,
+  getTaskRoundMessages: apiMocks.getTaskRoundMessages,
 }));
 
 const realtimeStoreMock = reactive({
@@ -39,6 +44,43 @@ function createEvent(overrides: Partial<RealtimeEvent>): RealtimeEvent {
 describe("useTaskMessageStore", () => {
   let scope: ReturnType<typeof effectScope> | null = null;
 
+  function createConversationItem(
+    overrides?: Partial<TaskConversationMessageItem>,
+  ): TaskConversationMessageItem {
+    return {
+      key: overrides?.key ?? "message-1",
+      role: overrides?.role ?? "assistant",
+      text: overrides?.text,
+      createdAt: overrides?.createdAt ?? "2026-04-08T03:18:17.218Z",
+      toolCalls: overrides?.toolCalls ?? [],
+      raw: overrides?.raw ?? null,
+      isStreaming: overrides?.isStreaming,
+      agent: overrides?.agent,
+      model: overrides?.model,
+      status: overrides?.status,
+      errorText: overrides?.errorText,
+      thinkingText: overrides?.thinkingText,
+      userInputText: overrides?.userInputText,
+      finalSentText: overrides?.finalSentText,
+    };
+  }
+
+  function createWorkflowItem(
+    overrides?: Partial<TaskConversationWorkflowItem>,
+  ): TaskConversationWorkflowItem {
+    return {
+      key: overrides?.key ?? "workflow-1",
+      role: "workflow",
+      createdAt: overrides?.createdAt,
+      variant: overrides?.variant,
+      label: overrides?.label,
+      hint: overrides?.hint,
+      steps: overrides?.steps ?? [],
+      raw: overrides?.raw ?? null,
+      toolCalls: [],
+    };
+  }
+
   function createRound(overrides?: Partial<Record<string, unknown>>) {
     return {
       id: "task-session:task-1:session-1",
@@ -57,19 +99,13 @@ describe("useTaskMessageStore", () => {
   beforeEach(() => {
     realtimeStoreMock.connected = true;
     realtimeStoreMock.events = [];
-    getCurrentTaskRoundMock.mockReset();
-    getTaskRoundsMock.mockReset();
-    getTaskRoundMessagesMock.mockReset();
-    getCurrentTaskRoundMock.mockResolvedValue({
+    apiMocks.getCurrentTaskRound.mockReset();
+    apiMocks.getTaskRoundMessages.mockReset();
+    apiMocks.getCurrentTaskRound.mockResolvedValue({
       taskId: "task-1",
       round: createRound(),
     });
-    getTaskRoundsMock.mockResolvedValue({
-      taskId: "task-1",
-      currentRoundId: "task-session:task-1:session-1",
-      rounds: [createRound()],
-    });
-    getTaskRoundMessagesMock.mockResolvedValue({
+    apiMocks.getTaskRoundMessages.mockResolvedValue({
       taskId: "task-1",
       round: createRound(),
       messages: [],
@@ -83,11 +119,11 @@ describe("useTaskMessageStore", () => {
     scope = null;
   });
 
-  function mountStore() {
+  function mountStore(options?: Parameters<typeof useTaskMessageStore>[2]) {
     const taskId = ref("task-1");
     const sessionId = ref<string | undefined>("session-1");
     scope = effectScope();
-    const store = scope.run(() => useTaskMessageStore(taskId, sessionId));
+    const store = scope.run(() => useTaskMessageStore(taskId, sessionId, options));
     if (!store) {
       throw new Error("expected task message store");
     }
@@ -96,6 +132,38 @@ describe("useTaskMessageStore", () => {
       taskId,
       sessionId,
       store,
+    };
+  }
+
+  function mountConversationState() {
+    const taskId = ref("task-1");
+    const sessionId = ref<string | undefined>("session-1");
+    scope = effectScope();
+    const state = scope.run(() => {
+      const snapshot = useTaskMessageSnapshot(taskId, sessionId);
+      const store = useTaskMessageStore(taskId, snapshot.activeSessionId, {
+        sourceMessages: snapshot.sourceMessages,
+        snapshotRevision: computed(() => getTaskMessageSnapshotRevision(snapshot.trace.value)),
+      });
+
+      return {
+        clearPendingAssistantDraft: store.clearPendingAssistantDraft,
+        conversationAuthority: store.displayConversationAuthority,
+        conversationItems: store.conversationItems,
+        hasStreamingAssistant: store.hasStreamingAssistant,
+        refresh: snapshot.refresh,
+        seedPendingAssistantDraft: store.seedPendingAssistantDraft,
+        trace: snapshot.trace,
+      };
+    });
+    if (!state) {
+      throw new Error("expected task conversation state");
+    }
+
+    return {
+      taskId,
+      sessionId,
+      state,
     };
   }
 
@@ -133,7 +201,11 @@ describe("useTaskMessageStore", () => {
     expect(store.latestTaskRefreshRequest.value).toEqual({
       eventId: "event-1",
       reason: "round-synced",
-      shouldRefreshMessages: true,
+      targets: {
+        workflow: false,
+        flow: false,
+        messages: true,
+      },
       shouldBumpTraceRefreshKey: false,
     });
   });
@@ -251,24 +323,207 @@ describe("useTaskMessageStore", () => {
     });
   });
 
+  it("owns the regular conversation reducer and only cuts over after snapshot catch-up", async () => {
+    const persistedItems = ref<TaskConversationMessageItem[]>([]);
+    const snapshotRevision = ref(0);
+    const { store } = mountStore({
+      persistedItems,
+      snapshotRevision,
+    });
+
+    realtimeStoreMock.events = [
+      createEvent({
+        id: "event-progress",
+        data: {
+          message: {
+            id: "assistant-1",
+            role: "assistant",
+            time: {
+              created: "2026-04-08T03:18:17.218Z",
+            },
+          },
+        },
+      }),
+      createEvent({
+        id: "event-delta",
+        type: "task.message.delta",
+        data: {
+          part: {
+            messageID: "assistant-1",
+            type: "text",
+            text: "live reply",
+          },
+        },
+      }),
+    ];
+
+    await nextTick();
+
+    expect(store.conversationAuthority.value).toBe("realtime");
+    expect(store.displayConversationAuthority.value).toBe("realtime");
+    expect(store.hasStreamingAssistant.value).toBe(true);
+    expect(store.conversationState.value.orderedIds).toEqual(["assistant-1"]);
+    expect(store.conversationState.value.recordsById["assistant-1"]).toMatchObject({
+      key: "assistant-1",
+      kind: "message",
+      authority: "realtime",
+      renderStatus: "streaming",
+      item: {
+        key: "assistant-1",
+        text: "live reply",
+        isStreaming: true,
+      },
+    });
+    expect(store.items.value.map((item) => item.text)).toEqual(["live reply"]);
+
+    realtimeStoreMock.events = [
+      createEvent({
+        id: "event-ack",
+        type: "task.round.synced",
+        data: {
+          roundId: "task-session:task-1:session-1",
+          taskSessionId: "task-session:task-1:session-1",
+          messageId: "assistant-1",
+          snapshotVersion: 9,
+          persistedThroughRevision: 9,
+        },
+      }),
+      ...realtimeStoreMock.events,
+    ];
+
+    await nextTick();
+
+    expect(store.conversationAuthority.value).toBe("persisted");
+    expect(store.displayConversationAuthority.value).toBe("realtime");
+    expect(store.conversationState.value.orderedIds).toEqual(["assistant-1"]);
+    expect(store.conversationState.value.recordsById["assistant-1"]).toMatchObject({
+      key: "assistant-1",
+      kind: "message",
+      authority: "realtime",
+      renderStatus: "streaming",
+      item: {
+        key: "assistant-1",
+        text: "live reply",
+        isStreaming: true,
+      },
+    });
+    expect(store.items.value.map((item) => item.text)).toEqual(["live reply"]);
+
+    persistedItems.value = [
+      createConversationItem({
+        key: "assistant-1",
+        text: "persisted reply",
+        createdAt: "2026-04-08T03:18:19.218Z",
+      }),
+    ];
+    snapshotRevision.value = 9;
+
+    await nextTick();
+
+    expect(store.displayConversationAuthority.value).toBe("persisted");
+    expect(store.hasStreamingAssistant.value).toBe(false);
+    expect(store.conversationState.value.orderedIds).toEqual(["assistant-1"]);
+    expect(store.conversationState.value.recordsById["assistant-1"]).toMatchObject({
+      key: "assistant-1",
+      kind: "message",
+      authority: "persisted",
+      renderStatus: "persisted",
+      item: {
+        key: "assistant-1",
+        text: "persisted reply",
+      },
+    });
+    expect(store.items.value.map((item) => item.text)).toEqual(["persisted reply"]);
+  });
+
+  it("owns pending assistant draft lifecycle inside the store contract", async () => {
+    const persistedItems = ref<TaskConversationMessageItem[]>([
+      createConversationItem({
+        key: "user-1",
+        role: "user",
+        text: "continue",
+      }),
+    ]);
+    const { store } = mountStore({
+      persistedItems,
+    });
+
+    store.seedPendingAssistantDraft("session-1");
+
+    await nextTick();
+
+    expect(
+      store.items.value.some((item) => item.key.startsWith("pending-assistant:session-1:")),
+    ).toBe(true);
+    expect(store.hasStreamingAssistant.value).toBe(true);
+
+    store.clearPendingAssistantDraft("session-2");
+    await nextTick();
+
+    expect(
+      store.items.value.some((item) => item.key.startsWith("pending-assistant:session-1:")),
+    ).toBe(true);
+
+    store.clearPendingAssistantDraft("session-1");
+    await nextTick();
+
+    expect(
+      store.items.value.some((item) => item.key.startsWith("pending-assistant:session-1:")),
+    ).toBe(false);
+
+    store.seedPendingAssistantDraft("session-1");
+    await nextTick();
+
+    realtimeStoreMock.events = [
+      createEvent({
+        id: "event-task-completed",
+        type: "task.completed",
+      }),
+    ];
+
+    await nextTick();
+
+    expect(
+      store.items.value.some((item) => item.key.startsWith("pending-assistant:session-1:")),
+    ).toBe(false);
+  });
+
+  it("builds workflow-aware conversation list items inside the store", async () => {
+    const persistedItems = ref<TaskConversationMessageItem[]>([
+      createConversationItem({ key: "user-1", role: "user", text: "prompt" }),
+      createConversationItem({ key: "assistant-1", text: "reply" }),
+    ]);
+    const workflowItems = ref<TaskConversationWorkflowItem[]>([
+      createWorkflowItem({ key: "workflow-1", label: "workflow" }),
+    ]);
+    const { store } = mountStore({
+      persistedItems,
+      workflowItems,
+      hideWorkflowExecutionContextUsers: ref(true),
+    });
+
+    await nextTick();
+
+    expect(store.items.value.map((item) => item.key)).toEqual(["user-1", "assistant-1"]);
+    expect(store.conversationItems.value.map((item) => item.key)).toEqual([
+      "user-1",
+      "workflow-1",
+      "assistant-1",
+    ]);
+  });
+
   it("clears terminal pending drafts so later session snapshot updates cannot revive them", async () => {
-    const taskId = ref("task-1");
-    const sessionId = ref<string | undefined>("session-1");
-    scope = effectScope();
-    const messages = scope.run(() => useTreeMessages(taskId, sessionId));
-    if (!messages) {
-      throw new Error("expected tree messages composable");
-    }
+    const { state } = mountConversationState();
 
     await Promise.resolve();
     await nextTick();
 
-    messages.seedPendingAssistantDraft("session-1");
+    state.seedPendingAssistantDraft("session-1");
     await nextTick();
 
-    expect(messages.hasStreamingAssistant.value).toBe(true);
+    expect(state.hasStreamingAssistant.value).toBe(true);
     expect(
-      messages.conversationItems.value.some(
+      state.conversationItems.value.some(
         (item) => item.role === "assistant" && item.key.startsWith("pending-assistant:"),
       ),
     ).toBe(true);
@@ -282,9 +537,9 @@ describe("useTaskMessageStore", () => {
 
     await nextTick();
 
-    expect(messages.hasStreamingAssistant.value).toBe(false);
+    expect(state.hasStreamingAssistant.value).toBe(false);
     expect(
-      messages.conversationItems.value.some(
+      state.conversationItems.value.some(
         (item) => item.role === "assistant" && item.key.startsWith("pending-assistant:"),
       ),
     ).toBe(false);
@@ -305,18 +560,16 @@ describe("useTaskMessageStore", () => {
 
     await nextTick();
 
-    expect(messages.hasStreamingAssistant.value).toBe(false);
+    expect(state.hasStreamingAssistant.value).toBe(false);
     expect(
-      messages.conversationItems.value.some(
+      state.conversationItems.value.some(
         (item) => item.role === "assistant" && item.key.startsWith("pending-assistant:"),
       ),
     ).toBe(false);
   });
 
   it("loads persisted messages through the round facade for the selected session", async () => {
-    const taskId = ref("task-1");
-    const sessionId = ref<string | undefined>("session-1");
-    getTaskRoundMessagesMock.mockResolvedValueOnce({
+    apiMocks.getTaskRoundMessages.mockResolvedValueOnce({
       taskId: "task-1",
       round: createRound(),
       messages: [
@@ -362,25 +615,20 @@ describe("useTaskMessageStore", () => {
       persistedThroughRevision: 4,
     });
 
-    scope = effectScope();
-    const messages = scope.run(() => useTreeMessages(taskId, sessionId));
-    if (!messages) {
-      throw new Error("expected tree messages composable");
-    }
+    const { state } = mountConversationState();
 
     await Promise.resolve();
     await nextTick();
 
-    expect(getTaskRoundsMock).toHaveBeenCalledWith("task-1");
-    expect(getTaskRoundMessagesMock).toHaveBeenCalledWith(
+    expect(apiMocks.getTaskRoundMessages).toHaveBeenCalledWith(
       "task-1",
-      "task-session:task-1:session-1",
+      "session-1",
     );
-    expect(messages.conversationItems.value.map((item) => item.text)).toEqual([
+    expect(state.conversationItems.value.map((item) => item.text)).toEqual([
       "session-first prompt",
       "session-first reply",
     ]);
-    expect(messages.trace.value?.timelineMeta).toMatchObject({
+    expect(state.trace.value?.timelineMeta).toMatchObject({
       readSource: "task-domain-projection",
       roundId: "task-session:task-1:session-1",
       snapshotVersion: 4,
@@ -389,9 +637,7 @@ describe("useTaskMessageStore", () => {
   });
 
   it("keeps realtime overlay until the persisted snapshot catches up to the latest ack", async () => {
-    const taskId = ref("task-1");
-    const sessionId = ref<string | undefined>("session-1");
-    getTaskRoundMessagesMock
+    apiMocks.getTaskRoundMessages
       .mockResolvedValueOnce({
         taskId: "task-1",
         round: createRound(),
@@ -427,11 +673,7 @@ describe("useTaskMessageStore", () => {
         persistedThroughRevision: 9,
       });
 
-    scope = effectScope();
-    const messages = scope.run(() => useTreeMessages(taskId, sessionId));
-    if (!messages) {
-      throw new Error("expected tree messages composable");
-    }
+    const { state } = mountConversationState();
 
     await Promise.resolve();
     await nextTick();
@@ -464,10 +706,10 @@ describe("useTaskMessageStore", () => {
 
     await nextTick();
 
-    expect(messages.conversationAuthority.value).toBe("realtime");
-    expect(messages.hasStreamingAssistant.value).toBe(true);
+    expect(state.conversationAuthority.value).toBe("realtime");
+    expect(state.hasStreamingAssistant.value).toBe(true);
     expect(
-      messages.conversationItems.value.find((item) => item.role === "assistant")?.text,
+      state.conversationItems.value.find((item) => item.role === "assistant")?.text,
     ).toBe("live reply");
 
     realtimeStoreMock.events = [
@@ -487,19 +729,19 @@ describe("useTaskMessageStore", () => {
 
     await nextTick();
 
-    expect(messages.conversationAuthority.value).toBe("realtime");
-    expect(messages.hasStreamingAssistant.value).toBe(true);
+    expect(state.conversationAuthority.value).toBe("realtime");
+    expect(state.hasStreamingAssistant.value).toBe(true);
     expect(
-      messages.conversationItems.value.find((item) => item.role === "assistant")?.text,
+      state.conversationItems.value.find((item) => item.role === "assistant")?.text,
     ).toBe("live reply");
 
-    await messages.refresh(true);
+    await state.refresh(true);
     await nextTick();
 
-    expect(messages.conversationAuthority.value).toBe("persisted");
-    expect(messages.hasStreamingAssistant.value).toBe(false);
+    expect(state.conversationAuthority.value).toBe("persisted");
+    expect(state.hasStreamingAssistant.value).toBe(false);
     expect(
-      messages.conversationItems.value.find((item) => item.role === "assistant")?.text,
+      state.conversationItems.value.find((item) => item.role === "assistant")?.text,
     ).toBe("persisted reply");
   });
 });

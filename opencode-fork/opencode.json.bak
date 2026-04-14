@@ -121,54 +121,87 @@
         "name": "GPT-5.4",
         "provider": "github-copilot",
         "contextWindow": 400000,
-        "maxTokens": 128000
+        "maxTokens": 128000,
+        "billingStatus": "paid",
+        "billingMethod": "request_metered",
+        "price": {
+          "currency": "USD",
+          "perRequestUsd": 0.026
+        }
       },
       {
         "id": "claude-opus-4.6",
         "name": "Claude Opus 4.6",
         "provider": "github-copilot",
         "contextWindow": 144000,
-        "maxTokens": 64000
+        "maxTokens": 64000,
+        "billingStatus": "paid",
+        "billingMethod": "request_metered",
+        "price": {
+          "currency": "USD",
+          "perRequestUsd": 0.078
+        }
       },
       {
         "id": "gemini-3-flash-preview",
         "name": "Gemini 3 Flash (Preview)",
         "provider": "github-copilot",
         "contextWindow": 128000,
-        "maxTokens": 64000
-      },
-      {
-        "id": "gpt-5.3-codex",
-        "name": "GPT-5.3-Codex",
-        "provider": "github-copilot",
-        "contextWindow": 400000,
-        "maxTokens": 128000
+        "maxTokens": 64000,
+        "billingStatus": "paid",
+        "billingMethod": "request_metered",
+        "price": {
+          "currency": "USD",
+          "perRequestUsd": 0.0086
+        }
       },
       {
         "id": "Qwen3.5-122B-A10B-4bit",
         "name": "Qwen3.5-122B-A10B-4bit",
         "provider": "qwen-local",
         "contextWindow": 200000,
-        "maxTokens": 16384
+        "maxTokens": 16384,
+        "billingStatus": "free"
       },
       {
         "id": "gpt-4o",
         "name": "GPT-4o",
-        "provider": "github-copilot"
+        "provider": "github-copilot",
+        "billingStatus": "free"
       },
       {
         "id": "claude-sonnet-4.6",
         "name": "Claude Sonnet 4.6",
         "provider": "github-copilot",
         "contextWindow": 200000,
-        "maxTokens": 32000
+        "maxTokens": 32000,
+        "billingStatus": "paid",
+        "billingMethod": "request_metered",
+        "price": {
+          "currency": "USD",
+          "perRequestUsd": 0.026
+        }
       },
       {
         "id": "gpt-5-mini",
         "name": "GPT-5 mini",
         "provider": "github-copilot",
         "contextWindow": 264000,
-        "maxTokens": 64000
+        "maxTokens": 64000,
+        "billingStatus": "free"
+      },
+      {
+        "id": "gpt-5.4-mini",
+        "name": "GPT-5.4 mini",
+        "provider": "github-copilot-2",
+        "contextWindow": 400000,
+        "maxTokens": 128000,
+        "billingStatus": "paid",
+        "billingMethod": "request_metered",
+        "price": {
+          "currency": "USD",
+          "perRequestUsd": 0.026
+        }
       }
     ]
   }

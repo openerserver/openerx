@@ -1,13 +1,13 @@
 import { flushPromises } from "@vue/test-utils";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ref } from "vue";
-import { useTreeMessages } from "../../control-plane/web-ui/src/composables/useTreeMessages";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { effectScope, ref } from "vue";
 import {
   type TaskConversationMessageItem,
   normalizeSessionConversationItems,
 } from "../../control-plane/web-ui/src/lib/message-normalize";
 import { buildSessionMessagesFromExecutionTrace } from "../../control-plane/web-ui/src/lib/task-message-source";
 import { normalizeTraceConversationItems } from "../../control-plane/web-ui/src/lib/task-trace-conversation";
+import { useTaskMessageStore } from "../../control-plane/web-ui/src/composables/useTaskMessageStore";
 import {
   DEFAULT_JUDGE_CONFIG,
   buildSavedRuntimePlan,
@@ -90,6 +90,8 @@ function createTraceFromMessages(messages: unknown[]) {
 }
 
 describe("Task conversation composables", () => {
+  let scope: ReturnType<typeof effectScope> | null = null;
+
   beforeEach(() => {
     apiMocks.getTaskMessages.mockReset();
     apiMocks.getTaskExecutionTraceView.mockReset();
@@ -119,6 +121,50 @@ describe("Task conversation composables", () => {
     realtimeStoreMock.events = [];
   });
 
+  afterEach(() => {
+    scope?.stop();
+    scope = null;
+  });
+
+  async function mountConversationState(options?: {
+    sessionId?: string;
+    includeLineage?: boolean;
+  }) {
+    const taskId = ref("task-1");
+    const sessionId = ref<string | undefined>(options?.sessionId ?? "session-1");
+    const response = await apiMocks.getTaskMessages(taskId.value, {
+      sessionId: sessionId.value,
+      includeLineage: options?.includeLineage,
+    });
+    const sourceMessages = ref(Array.isArray(response?.data) ? response.data : []);
+    const snapshotRevision = ref(
+      typeof response?.meta?.persistedThroughRevision === "number"
+        ? response.meta.persistedThroughRevision
+        : typeof response?.meta?.snapshotVersion === "number"
+          ? response.meta.snapshotVersion
+          : 0,
+    );
+
+    scope = effectScope();
+    const store = scope.run(() =>
+      useTaskMessageStore(taskId, sessionId, {
+        sourceMessages,
+        snapshotRevision,
+      }),
+    );
+    if (!store) {
+      throw new Error("expected task conversation state");
+    }
+
+    await flushPromises();
+
+    return {
+      conversationItems: store.conversationItems,
+      conversationAuthority: store.displayConversationAuthority,
+      hasStreamingAssistant: store.hasStreamingAssistant,
+    };
+  }
+
   it("normalizes session messages into conversation items", async () => {
     apiMocks.getTaskExecutionTraceView.mockResolvedValue(
       createTraceFromMessages([
@@ -142,11 +188,7 @@ describe("Task conversation composables", () => {
       ]),
     );
 
-    const taskId = ref("task-1");
-    const sessionId = ref<string | undefined>("session-1");
-    const state = useTreeMessages(taskId, sessionId);
-
-    await flushPromises();
+    const state = await mountConversationState();
 
     expect(apiMocks.getTaskMessages).toHaveBeenCalledWith("task-1", {
       sessionId: "session-1",
@@ -182,11 +224,7 @@ describe("Task conversation composables", () => {
       ]),
     );
 
-    const taskId = ref("task-1");
-    const sessionId = ref<string | undefined>("session-1");
-    const state = useTreeMessages(taskId, sessionId);
-
-    await flushPromises();
+    const state = await mountConversationState();
 
     expect(state.conversationItems.value).toHaveLength(2);
     expect(state.conversationItems.value.map((item) => item.key)).toEqual([
@@ -283,11 +321,7 @@ describe("Task conversation composables", () => {
       },
     });
 
-    const taskId = ref("task-1");
-    const sessionId = ref<string | undefined>("session-1");
-    const state = useTreeMessages(taskId, sessionId, { includeLineage: true });
-
-    await flushPromises();
+    const state = await mountConversationState({ includeLineage: true });
 
     expect(state.conversationItems.value.map((item) => item.role)).toEqual([
       "user",
@@ -429,11 +463,7 @@ describe("Task conversation composables", () => {
       },
     });
 
-    const taskId = ref("task-1");
-    const sessionId = ref<string | undefined>("session-1");
-    const state = useTreeMessages(taskId, sessionId, { includeLineage: true });
-
-    await flushPromises();
+    const state = await mountConversationState({ includeLineage: true });
 
     expect(apiMocks.getTaskMessages).toHaveBeenCalledWith("task-1", {
       sessionId: "session-1",
@@ -497,11 +527,7 @@ describe("Task conversation composables", () => {
       },
     ];
 
-    const taskId = ref("task-1");
-    const sessionId = ref<string | undefined>("session-1");
-    const state = useTreeMessages(taskId, sessionId);
-
-    await flushPromises();
+    const state = await mountConversationState();
 
     expect(state.conversationItems.value).toHaveLength(2);
     expect(state.conversationItems.value[1]).toMatchObject({
@@ -555,11 +581,7 @@ describe("Task conversation composables", () => {
       },
     ];
 
-    const taskId = ref("task-1");
-    const sessionId = ref<string | undefined>("session-1");
-    const state = useTreeMessages(taskId, sessionId);
-
-    await flushPromises();
+    const state = await mountConversationState();
 
     expect(state.conversationItems.value).toHaveLength(2);
     expect(state.conversationItems.value[1]).toMatchObject({
@@ -616,11 +638,7 @@ describe("Task conversation composables", () => {
       },
     ];
 
-    const taskId = ref("task-1");
-    const sessionId = ref<string | undefined>("session-1");
-    const state = useTreeMessages(taskId, sessionId);
-
-    await flushPromises();
+    const state = await mountConversationState();
 
     expect(state.conversationItems.value).toHaveLength(1);
     expect(state.conversationItems.value[0]).toMatchObject({
@@ -662,11 +680,7 @@ describe("Task conversation composables", () => {
       ]),
     );
 
-    const taskId = ref("task-1");
-    const sessionId = ref<string | undefined>("session-1");
-    const state = useTreeMessages(taskId, sessionId);
-
-    await flushPromises();
+    const state = await mountConversationState();
 
     expect(state.conversationItems.value).toHaveLength(1);
     expect(state.conversationItems.value[0]).toMatchObject({
@@ -731,11 +745,7 @@ describe("Task conversation composables", () => {
       ]),
     );
 
-    const taskId = ref("task-1");
-    const sessionId = ref<string | undefined>("session-1");
-    const state = useTreeMessages(taskId, sessionId);
-
-    await flushPromises();
+    const state = await mountConversationState();
 
     expect(state.conversationItems.value).toHaveLength(1);
     expect(state.conversationItems.value[0]?.toolCalls).toEqual([
@@ -1021,11 +1031,7 @@ describe("Task conversation composables", () => {
       ]),
     );
 
-    const taskId = ref("task-1");
-    const sessionId = ref<string | undefined>("session-1");
-    const state = useTreeMessages(taskId, sessionId);
-
-    await flushPromises();
+    const state = await mountConversationState();
 
     expect(state.conversationItems.value[0]?.toolCalls).toEqual([
       expect.objectContaining({
@@ -1065,11 +1071,7 @@ describe("Task conversation composables", () => {
       ]),
     );
 
-    const taskId = ref("task-1");
-    const sessionId = ref<string | undefined>("session-1");
-    const state = useTreeMessages(taskId, sessionId);
-
-    await flushPromises();
+    const state = await mountConversationState();
 
     expect(state.conversationItems.value[0]?.toolCalls).toEqual([
       expect.objectContaining({
@@ -1111,11 +1113,7 @@ describe("Task conversation composables", () => {
       ]),
     );
 
-    const taskId = ref("task-1");
-    const sessionId = ref<string | undefined>("session-1");
-    const state = useTreeMessages(taskId, sessionId);
-
-    await flushPromises();
+    const state = await mountConversationState();
 
     expect(state.conversationItems.value[0]?.toolCalls).toEqual([
       expect.objectContaining({

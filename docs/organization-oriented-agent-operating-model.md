@@ -20,7 +20,7 @@
 相关文档：
 
 - [docs/development-role-agents-plan.md](docs/development-role-agents-plan.md)
-- [docs/boss-agent-design.md](docs/boss-agent-design.md)（历史文档）
+ - [archive/organization/historical-boss-agent-design.md](archive/organization/historical-boss-agent-design.md)（历史文档）
 - [docs/organization-oriented-agent-technical-checklist.md](docs/organization-oriented-agent-technical-checklist.md)
 - [docs/organization-oriented-agent-frontend-information-architecture.md](docs/organization-oriented-agent-frontend-information-architecture.md)
 - [docs/multi-agent-hook-architecture.md](docs/multi-agent-hook-architecture.md)
@@ -28,7 +28,7 @@
 本次重写后的文档关系建议如下：
 
 - [docs/organization-oriented-agent-operating-model.md](docs/organization-oriented-agent-operating-model.md)：主产品方案，定义前台心智模型、成员关系和核心对象
-- [docs/boss-agent-design.md](docs/boss-agent-design.md)：历史阶段曾用于细化老板 Agent 方案，当前应视为已被管理员成员模型取代的旧设计
+ - [archive/organization/historical-boss-agent-design.md](archive/organization/historical-boss-agent-design.md)：历史阶段曾用于细化老板 Agent 方案，当前应视为已被管理员成员模型取代的旧设计
 - [docs/development-role-agents-plan.md](docs/development-role-agents-plan.md)：保留为“系统内部职责位与阶段接入”文档，而不再视为前台主心智来源
 - [docs/organization-oriented-agent-technical-checklist.md](docs/organization-oriented-agent-technical-checklist.md)：把本方案落到配置项、数据结构、API 和页面承载
 

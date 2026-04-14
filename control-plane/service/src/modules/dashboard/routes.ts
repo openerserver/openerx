@@ -3,7 +3,6 @@ import { Hono } from "hono";
 import { db } from "../../db";
 import {
   auditEvents,
-  paidExecutionLeases,
   projects,
   runtimeUsageLedgers,
   taskSessions,
@@ -211,7 +210,6 @@ interface GovernanceOverviewResponse {
   summary: {
     blockedCount: number;
     breakerCount: number;
-    activeLeaseCount: number;
     topRiskTaskCount: number;
     runningTaskCount: number;
     activeSessionCount: number;
@@ -891,7 +889,6 @@ function createEmptyGovernanceOverview(
     summary: {
       blockedCount: 0,
       breakerCount: 0,
-      activeLeaseCount: 0,
       topRiskTaskCount: 0,
       runningTaskCount: 0,
       activeSessionCount: 0,
@@ -1452,9 +1449,8 @@ dashboardRoutes.get("/governance-overview", async (c) => {
 
   const startIso = new Date(bounds.currentStartMs).toISOString();
   const endIso = new Date(bounds.currentEndMs).toISOString();
-  const nowIso = new Date(nowMs).toISOString();
 
-  const [ledgers, audits, activeLeases, snapshotRows, recentTimelineRows] = await Promise.all([
+  const [ledgers, audits, snapshotRows, recentTimelineRows] = await Promise.all([
     db.query.runtimeUsageLedgers.findMany({
       where: and(
         inArray(runtimeUsageLedgers.projectId, projectIds),
@@ -1471,13 +1467,6 @@ dashboardRoutes.get("/governance-overview", async (c) => {
         lt(auditEvents.ts, endIso),
       ),
       orderBy: [desc(auditEvents.ts)],
-    }),
-    db.query.paidExecutionLeases.findMany({
-      where: and(
-        inArray(paidExecutionLeases.projectId, projectIds),
-        eq(paidExecutionLeases.status, "active"),
-        gte(paidExecutionLeases.expiresAt, nowIso),
-      ),
     }),
     db.query.taskSnapshots.findMany({
       where: inArray(taskSnapshots.projectId, projectIds),
@@ -1529,7 +1518,6 @@ dashboardRoutes.get("/governance-overview", async (c) => {
     summary: {
       blockedCount: summaryCounts.blockedCount,
       breakerCount: summaryCounts.breakerCount,
-      activeLeaseCount: activeLeases.length,
       topRiskTaskCount: rankedTopRiskTasks.length,
       runningTaskCount: snapshotSummary.runningTaskCount,
       activeSessionCount: snapshotSummary.activeSessionCount,

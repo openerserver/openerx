@@ -3,7 +3,7 @@
 > 状态：Draft v1
 > 日期：2026-03-29
 > 作者：GitHub Copilot
-> 关联文档：[new-task-detail-page-plan.md](new-task-detail-page-plan.md)、[execution-trace-read-boundary-adr.md](execution-trace-read-boundary-adr.md)、[task-session-message-minimal-contract.md](task-session-message-minimal-contract.md)
+> 关联文档：[archive/task-detail/historical-new-task-detail-page-plan.md](archive/task-detail/historical-new-task-detail-page-plan.md)、[execution-trace-read-boundary-adr.md](execution-trace-read-boundary-adr.md)、[task-session-message-minimal-contract.md](task-session-message-minimal-contract.md)
 
 ## 1. 文档目的
 
@@ -291,10 +291,11 @@ flowchart TB
 
 1. 页面布局与任务详情主视图：[../control-plane/web-ui/src/pages/TaskDetail.vue](../control-plane/web-ui/src/pages/TaskDetail.vue)
 2. 新任务页与消息聚合语义：[../control-plane/web-ui/src/pages/TaskDetailV3.vue](../control-plane/web-ui/src/pages/TaskDetailV3.vue)
-3. 会话消息读取与流式草稿补位：[../control-plane/web-ui/src/composables/useTreeMessages.ts](../control-plane/web-ui/src/composables/useTreeMessages.ts)
-4. 消息标准化与角色归类：[../control-plane/web-ui/src/lib/message-normalize.ts](../control-plane/web-ui/src/lib/message-normalize.ts)
-5. 执行追踪转会话消息的补位逻辑：[../control-plane/web-ui/src/lib/task-trace-conversation.ts](../control-plane/web-ui/src/lib/task-trace-conversation.ts)
-6. BFF 对 task/session 读取的兼容层：[../control-plane/web-ui-bff/src/modules/tasks/task-session-compat.ts](../control-plane/web-ui-bff/src/modules/tasks/task-session-compat.ts)
+3. 会话消息快照读取：[../control-plane/web-ui/src/composables/useTaskMessageSnapshot.ts](../control-plane/web-ui/src/composables/useTaskMessageSnapshot.ts)
+4. 主聊天 reducer 与流式草稿补位：[../control-plane/web-ui/src/composables/useTaskMessageStore.ts](../control-plane/web-ui/src/composables/useTaskMessageStore.ts)
+5. 消息标准化与角色归类：[../control-plane/web-ui/src/lib/message-normalize.ts](../control-plane/web-ui/src/lib/message-normalize.ts)
+6. 执行追踪转会话消息的补位逻辑：[../control-plane/web-ui/src/lib/task-trace-conversation.ts](../control-plane/web-ui/src/lib/task-trace-conversation.ts)
+7. BFF 对 task/session 读取的兼容层：[../control-plane/web-ui-bff/src/modules/tasks/task-session-compat.ts](../control-plane/web-ui-bff/src/modules/tasks/task-session-compat.ts)
 
 对实现口径最重要的几条约束是：
 

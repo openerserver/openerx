@@ -9,7 +9,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "bash ../../scripts/run-bff-tests.sh",
     "test:realtime:unit": "bun test ../../tests/web-ui-bff/realtime-routes.test.ts --timeout 30000 && bun test ../../tests/web-ui-bff/realtime-pipeline-events.test.ts --timeout 30000 && bun test ../../tests/web-ui-bff/pipeline-events.test.ts --timeout 30000 && bun test ../../tests/web-ui-bff/runtime-pipeline.test.ts --timeout 30000",
-    "test:paid-execution:unit": "bun test ../../tests/web-ui-bff/lifecycle-hooks-behavior.test.ts --timeout 30000 && bun test ../../tests/web-ui-bff/realtime-pipeline-events.test.ts --timeout 30000 && bun test ../../tests/web-ui-bff/project-paid-execution-preflight-route.test.ts --timeout 30000 && bun test ../../tests/web-ui-bff/execution-integration-guard.test.ts --timeout 30000 && bun test ../../tests/web-ui-bff/judge-usage-accounting.test.ts --timeout 30000",
+    "test:paid-execution:unit": "bun test ../../tests/web-ui-bff/lifecycle-hooks-behavior.test.ts --timeout 30000 && bun test ../../tests/web-ui-bff/realtime-pipeline-events.test.ts --timeout 30000 && bun test ../../tests/web-ui-bff/execution-integration-guard.test.ts --timeout 30000 && bun test ../../tests/web-ui-bff/judge-usage-accounting.test.ts --timeout 30000",
     "test:integration:completion-sync": "echo 'deprecated: opencode completion-sync test removed'",
     "test:integration:realtime": "RUN_EXECUTION_INTEGRATION=1 bun test ../../tests/web-ui-bff/hooks-integration.test.ts --timeout 120000",
     "test:realtime-regression": "bun run test:realtime:unit && bun run test:integration:realtime",

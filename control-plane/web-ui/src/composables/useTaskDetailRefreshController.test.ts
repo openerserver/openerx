@@ -1,10 +1,7 @@
 import { effectScope, nextTick, ref } from "vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TaskDetailRefreshRequest } from "../lib/task-detail-refresh-policy";
-import {
-  toTaskDetailRefreshSnapshotOptions,
-  useTaskDetailRefreshController,
-} from "./useTaskDetailRefreshController";
+import { useTaskDetailRefreshController } from "./useTaskDetailRefreshController";
 
 describe("useTaskDetailRefreshController", () => {
   let scope: ReturnType<typeof effectScope> | null = null;
@@ -22,18 +19,28 @@ describe("useTaskDetailRefreshController", () => {
   function mountController() {
     const taskId = ref("task-1");
     const latestTaskRefreshRequest = ref<TaskDetailRefreshRequest | null>(null);
+    const messageReconcileRequired = ref(false);
+    const workflowReconcileRequired = ref(false);
     const realtimeConnected = ref(true);
     const shouldPollRunningStatus = ref(false);
+    const refreshFlowSnapshot = vi.fn(async () => undefined);
+    const refreshMessageSnapshot = vi.fn(async () => undefined);
     const refreshTaskSnapshot = vi.fn(async () => undefined);
+    const refreshWorkflowSnapshot = vi.fn(async () => undefined);
 
     scope = effectScope();
     const controller = scope.run(() =>
       useTaskDetailRefreshController({
         taskId,
         latestTaskRefreshRequest,
+        messageReconcileRequired,
+        workflowReconcileRequired,
         realtimeConnected,
         shouldPollRunningStatus,
+        refreshFlowSnapshot,
+        refreshMessageSnapshot,
         refreshTaskSnapshot,
+        refreshWorkflowSnapshot,
       }),
     );
     if (!controller) {
@@ -42,79 +49,159 @@ describe("useTaskDetailRefreshController", () => {
 
     return {
       latestTaskRefreshRequest,
+      messageReconcileRequired,
+      workflowReconcileRequired,
       realtimeConnected,
       shouldPollRunningStatus,
+      refreshFlowSnapshot,
+      refreshMessageSnapshot,
       refreshTaskSnapshot,
+      refreshWorkflowSnapshot,
       controller,
     };
   }
 
-  it("maps refresh requests into task snapshot options", () => {
-    expect(
-      toTaskDetailRefreshSnapshotOptions({
-        eventId: "event-1",
-        reason: "session-created",
-        shouldRefreshMessages: true,
-        shouldBumpTraceRefreshKey: false,
-      }),
-    ).toEqual({
-      workflow: true,
-      flow: true,
-      messages: true,
-    });
-  });
-
-  it("maps phase refresh requests into flow-only task snapshot options", () => {
-    expect(
-      toTaskDetailRefreshSnapshotOptions({
-        eventId: "event-phase-1",
-        reason: "phase-awaiting-adoption",
-        shouldRefreshMessages: false,
-        shouldBumpTraceRefreshKey: false,
-      }),
-    ).toEqual({
-      workflow: false,
-      flow: true,
-      messages: false,
-    });
-  });
-
-  it("maps round synced requests into message-only snapshot options", () => {
-    expect(
-      toTaskDetailRefreshSnapshotOptions({
-        eventId: "event-round-1",
-        reason: "round-synced",
-        shouldRefreshMessages: true,
-        shouldBumpTraceRefreshKey: false,
-      }),
-    ).toEqual({
-      workflow: false,
-      flow: false,
-      messages: true,
-    });
-  });
-
-  it("schedules delayed task snapshot refreshes from refresh requests", async () => {
-    const { latestTaskRefreshRequest, refreshTaskSnapshot } = mountController();
+  it("dispatches message-only refresh requests to the message path", async () => {
+    const { latestTaskRefreshRequest, refreshMessageSnapshot, refreshTaskSnapshot } = mountController();
 
     latestTaskRefreshRequest.value = {
       eventId: "event-1",
       reason: "round-synced",
-      shouldRefreshMessages: true,
+      targets: {
+        workflow: false,
+        flow: false,
+        messages: true,
+      },
       shouldBumpTraceRefreshKey: false,
     };
 
     await nextTick();
     vi.advanceTimersByTime(179);
-    expect(refreshTaskSnapshot).not.toHaveBeenCalled();
+    expect(refreshMessageSnapshot).not.toHaveBeenCalled();
 
     vi.advanceTimersByTime(1);
     await nextTick();
+    expect(refreshMessageSnapshot).toHaveBeenCalledTimes(1);
+    expect(refreshTaskSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("dispatches flow-only refresh requests to the flow path", async () => {
+    const { latestTaskRefreshRequest, refreshFlowSnapshot, refreshTaskSnapshot } = mountController();
+
+    latestTaskRefreshRequest.value = {
+      eventId: "event-phase-1",
+      reason: "phase-awaiting-adoption",
+      targets: {
+        workflow: false,
+        flow: true,
+        messages: false,
+      },
+      shouldBumpTraceRefreshKey: false,
+    };
+
+    await nextTick();
+    vi.advanceTimersByTime(180);
+    await nextTick();
+
+    expect(refreshFlowSnapshot).toHaveBeenCalledTimes(1);
+    expect(refreshTaskSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("dispatches flow reconcile requests to the flow path", async () => {
+    const { latestTaskRefreshRequest, refreshFlowSnapshot, refreshTaskSnapshot } = mountController();
+
+    latestTaskRefreshRequest.value = {
+      eventId: "event-flow-reconcile-1",
+      reason: "flow-reconcile-required",
+      targets: {
+        workflow: false,
+        flow: true,
+        messages: false,
+      },
+      shouldBumpTraceRefreshKey: false,
+    };
+
+    await nextTick();
+    vi.advanceTimersByTime(180);
+    await nextTick();
+
+    expect(refreshFlowSnapshot).toHaveBeenCalledTimes(1);
+    expect(refreshTaskSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("dispatches workflow-only refresh requests to the workflow path", async () => {
+    const { latestTaskRefreshRequest, refreshTaskSnapshot, refreshWorkflowSnapshot } = mountController();
+
+    latestTaskRefreshRequest.value = {
+      eventId: "event-workflow-1",
+      reason: "task-followup-completed",
+      targets: {
+        workflow: true,
+        flow: false,
+        messages: false,
+      },
+      shouldBumpTraceRefreshKey: false,
+    };
+
+    await nextTick();
+    vi.advanceTimersByTime(180);
+    await nextTick();
+
+    expect(refreshWorkflowSnapshot).toHaveBeenCalledTimes(1);
+    expect(refreshTaskSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("uses the combined snapshot path when one request spans multiple refresh targets", async () => {
+    const { latestTaskRefreshRequest, refreshFlowSnapshot, refreshTaskSnapshot, refreshWorkflowSnapshot } = mountController();
+
+    latestTaskRefreshRequest.value = {
+      eventId: "event-session-1",
+      reason: "session-created",
+      targets: {
+        workflow: true,
+        flow: true,
+        messages: false,
+      },
+      shouldBumpTraceRefreshKey: false,
+    };
+
+    await nextTick();
+    vi.advanceTimersByTime(180);
+    await nextTick();
+
     expect(refreshTaskSnapshot).toHaveBeenCalledWith({
-      workflow: false,
-      flow: false,
+      workflow: true,
+      flow: true,
+      messages: false,
+    });
+    expect(refreshWorkflowSnapshot).not.toHaveBeenCalled();
+    expect(refreshFlowSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("uses the combined snapshot path for task-wide reconcile requests", async () => {
+    const { latestTaskRefreshRequest, refreshMessageSnapshot, refreshTaskSnapshot } = mountController();
+
+    latestTaskRefreshRequest.value = {
+      eventId: "event-task-reconcile-1",
+      reason: "task-reconcile-required",
+      targets: {
+        workflow: true,
+        flow: true,
+        messages: true,
+      },
+      shouldBumpTraceRefreshKey: false,
+    };
+
+    await nextTick();
+    vi.advanceTimersByTime(180);
+    await nextTick();
+
+    expect(refreshTaskSnapshot).toHaveBeenCalledWith({
+      workflow: true,
+      flow: true,
       messages: true,
     });
+    expect(refreshMessageSnapshot).not.toHaveBeenCalled();
   });
 
   it("bumps the trace refresh key for trace refresh requests", async () => {
@@ -123,7 +210,11 @@ describe("useTaskDetailRefreshController", () => {
     latestTaskRefreshRequest.value = {
       eventId: "event-2",
       reason: "task-followup-completed",
-      shouldRefreshMessages: false,
+      targets: {
+        workflow: true,
+        flow: false,
+        messages: false,
+      },
       shouldBumpTraceRefreshKey: true,
     };
 
@@ -136,6 +227,7 @@ describe("useTaskDetailRefreshController", () => {
     const {
       realtimeConnected,
       shouldPollRunningStatus,
+      refreshFlowSnapshot,
       refreshTaskSnapshot,
     } = mountController();
 
@@ -144,15 +236,13 @@ describe("useTaskDetailRefreshController", () => {
 
     vi.advanceTimersByTime(2000);
     await nextTick();
-    expect(refreshTaskSnapshot).toHaveBeenNthCalledWith(1, {
-      flow: true,
-      messages: false,
-    });
+    expect(refreshFlowSnapshot).toHaveBeenNthCalledWith(1);
 
     realtimeConnected.value = false;
     vi.advanceTimersByTime(2000);
     await nextTick();
-    expect(refreshTaskSnapshot).toHaveBeenNthCalledWith(2, {
+    expect(refreshTaskSnapshot).toHaveBeenNthCalledWith(1, {
+      workflow: false,
       flow: true,
       messages: true,
     });
@@ -161,6 +251,46 @@ describe("useTaskDetailRefreshController", () => {
     await nextTick();
     vi.advanceTimersByTime(2000);
     await nextTick();
-    expect(refreshTaskSnapshot).toHaveBeenCalledTimes(2);
+    expect(refreshFlowSnapshot).toHaveBeenCalledTimes(1);
+    expect(refreshTaskSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes canonical messages once realtime reconnects", async () => {
+    const { realtimeConnected, refreshMessageSnapshot, refreshTaskSnapshot } = mountController();
+
+    realtimeConnected.value = false;
+    await nextTick();
+
+    realtimeConnected.value = true;
+    await nextTick();
+    vi.advanceTimersByTime(180);
+    await nextTick();
+
+    expect(refreshMessageSnapshot).toHaveBeenCalledTimes(1);
+    expect(refreshTaskSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("refreshes canonical messages when the snapshot reports reconcile required", async () => {
+    const { messageReconcileRequired, refreshMessageSnapshot, refreshTaskSnapshot } = mountController();
+
+    messageReconcileRequired.value = true;
+    await nextTick();
+    vi.advanceTimersByTime(180);
+    await nextTick();
+
+    expect(refreshMessageSnapshot).toHaveBeenCalledTimes(1);
+    expect(refreshTaskSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("refreshes workflow when the sidebar snapshot reports reconcile required", async () => {
+    const { workflowReconcileRequired, refreshTaskSnapshot, refreshWorkflowSnapshot } = mountController();
+
+    workflowReconcileRequired.value = true;
+    await nextTick();
+    vi.advanceTimersByTime(180);
+    await nextTick();
+
+    expect(refreshWorkflowSnapshot).toHaveBeenCalledTimes(1);
+    expect(refreshTaskSnapshot).not.toHaveBeenCalled();
   });
 });

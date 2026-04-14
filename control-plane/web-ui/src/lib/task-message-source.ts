@@ -1,3 +1,5 @@
+import { resolveTraceTimelineAvailability } from "./task-trace-timeline-state";
+
 interface MinimalExecutionTraceMessage {
   id: string;
   role: string;
@@ -17,6 +19,9 @@ interface MinimalExecutionTraceTimelineItem {
 
 interface MinimalExecutionTraceTimelineMeta {
   cacheState?: "none" | "partial" | "complete";
+  complete?: boolean;
+  itemCount?: number;
+  reconcileRequired?: boolean;
 }
 
 interface MinimalExecutionTraceSnapshot {
@@ -253,12 +258,16 @@ export function buildSessionMessagesFromExecutionTrace(
   const timeline = Array.isArray(trace.timeline) ? trace.timeline : [];
   const narrativeTimeline = timeline.filter(isNarrativeTimelineItem);
   const messages = Array.isArray(trace.messages) ? trace.messages : [];
+  const timelineAvailability = resolveTraceTimelineAvailability(
+    trace.timelineMeta,
+    narrativeTimeline.length,
+  );
   const sourceItems: TraceSourceItem[] =
     includeLineage && narrativeTimeline.length > 0
       ? narrativeTimeline
       : messages.length > 0
         ? messages
-        : narrativeTimeline.length > 0 && trace.timelineMeta?.cacheState === "complete"
+        : narrativeTimeline.length > 0 && timelineAvailability === "complete"
           ? narrativeTimeline
           : [];
 

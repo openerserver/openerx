@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildConversationItemsWithParallelRuns,
   buildParallelConversationItems,
-} from "../../control-plane/web-ui/src/lib/task-detail-parallel-conversation";
+} from "../../control-plane/web-ui/src/lib/task-detail-parallel-conversation-projector";
 
 describe("task detail parallel conversation anchoring", () => {
   it("keeps a completed historical parallel card ahead of later single-turn replies from the adopted session", () => {

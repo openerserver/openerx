@@ -1,8 +1,8 @@
 <template>
   <aside class="task-detail-v3-sidebar" :class="{ 'task-detail-v3-sidebar--collapsed': sidebar.collapsed }">
-    <template v-if="!sidebar.collapsed">
+    <template v-if="sidebar.showSidebarContent">
       <TaskFilePreviewPanel
-        v-if="sidebar.previewFile"
+        v-if="sidebar.showFilePreview"
         :file-path="sidebar.previewFile.filePath"
         :content="sidebar.previewFile.content"
         @close="sidebar.handleCloseFilePreview"
@@ -13,7 +13,7 @@
         :refresh-key="sidebar.traceRefreshKey"
       />
       <TaskMemberPanel
-        v-if="sidebar.memberViewLoading || sidebar.memberView"
+        v-if="sidebar.showMemberPanel"
         :view="sidebar.memberView"
         :loading="sidebar.memberViewLoading"
       />
@@ -23,10 +23,10 @@
 
 <script setup lang="ts">
 import { defineAsyncComponent } from "vue";
-import type { TaskDetailSidebarModelState } from "../../composables/useTaskDetailPageSectionModels";
+import type { TaskDetailSidebarPaneFeatureState } from "../../composables/useTaskDetailSidebarPaneFeature";
 
 defineProps<{
-  sidebar: TaskDetailSidebarModelState;
+  sidebar: TaskDetailSidebarPaneFeatureState;
 }>();
 
 const TaskFilePreviewPanel = defineAsyncComponent(

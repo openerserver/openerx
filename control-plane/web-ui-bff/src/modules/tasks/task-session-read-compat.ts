@@ -36,6 +36,7 @@ interface ServiceTaskSessionMessageRecord {
   status?: string | null;
   clientMessageId?: string | null;
   providerMessageId?: string | null;
+  messageIndex?: number | null;
   textContent?: string | null;
   rawPayload?: Record<string, unknown> | null;
   tokenUsed?: number | null;
@@ -54,6 +55,10 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function asString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
+function asFiniteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function mapServiceMessagePart(part: ServiceTaskSessionMessagePart, index: number) {
@@ -100,6 +105,7 @@ function buildLegacySessionMessage(message: ServiceTaskSessionMessageRecord) {
   const text = asString(message.textContent) ?? asString(rawPayload.text);
   const createdAt = asString(message.createdAt) ?? asString(rawTime.created);
   const completedAt = asString(message.completedAt) ?? asString(rawTime.completed);
+  const messageIndex = asFiniteNumber(message.messageIndex) ?? asFiniteNumber(rawInfo.messageIndex);
   const parts = buildLegacySessionMessageParts(message);
 
   return {
@@ -108,10 +114,14 @@ function buildLegacySessionMessage(message: ServiceTaskSessionMessageRecord) {
     role,
     ...(text ? { text } : {}),
     ...(createdAt ? { createdAt } : {}),
+    ...(messageIndex !== undefined && rawPayload.messageIndex === undefined
+      ? { messageIndex }
+      : {}),
     info: {
       ...rawInfo,
       id,
       role,
+      ...(messageIndex !== undefined && rawInfo.messageIndex === undefined ? { messageIndex } : {}),
       ...(text && !asString(rawInfo.preview) ? { preview: text } : {}),
       ...(message.status ? { status: message.status } : {}),
       ...(message.clientMessageId ? { clientMessageId: message.clientMessageId } : {}),
@@ -295,7 +305,15 @@ type ServiceTaskSessionMessagesResponse = {
   meta?: TaskSessionTimelineMeta & {
     sessionId?: string;
     messageCount?: number;
+    snapshotVersion?: number;
+    persistedThroughRevision?: number;
   };
+};
+
+type TaskPromptRecord = {
+  id?: string;
+  prompt?: string | null;
+  createdAt?: string | null;
 };
 
 type TaskSessionCachedMessagesResponseData = {
@@ -304,6 +322,8 @@ type TaskSessionCachedMessagesResponseData = {
     | (TaskSessionTimelineMeta & {
         sessionId?: string;
         messageCount?: number;
+        snapshotVersion?: number;
+        persistedThroughRevision?: number;
       })
     | undefined;
 };
@@ -314,6 +334,127 @@ type TaskSessionCachedMessagesResult = {
   data?: TaskSessionCachedMessagesResponseData;
   error?: string;
 };
+
+function normalizePromptEquivalenceText(value: string) {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function resolveRootPrimaryTaskSessionRecord(records: TaskSessionLineageRecord[]) {
+  return (
+    records.find(
+      (record) => record.sessionKind === "primary" && !asString(record.parentRuntimeSessionId),
+    ) ?? null
+  );
+}
+
+function hasPromptEquivalentUserMessage(
+  messages: ServiceTaskSessionMessageRecord[],
+  promptText: string,
+) {
+  const normalizedPromptText = normalizePromptEquivalenceText(promptText);
+
+  return messages.some((message) => {
+    if (extractServiceTaskSessionMessageRole(message) !== "user") {
+      return false;
+    }
+
+    const messageText = extractServiceTaskSessionMessageText(message);
+    if (!messageText || isExecutionContextUserMessage(message)) {
+      return false;
+    }
+
+    return normalizePromptEquivalenceText(messageText) === normalizedPromptText;
+  });
+}
+
+function buildSyntheticRootPromptCompatMessage(args: {
+  taskId: string;
+  sessionId: string;
+  promptText: string;
+  createdAt: string | null;
+}) {
+  const messageId = `${args.sessionId}:synthetic-root-prompt`;
+
+  return {
+    id: messageId,
+    sessionId: args.sessionId,
+    runtimeMessageId: `${messageId}:runtime`,
+    role: "user",
+    status: "completed",
+    messageIndex: -1,
+    textContent: args.promptText,
+    rawPayload: {
+      info: {
+        id: `${messageId}:runtime`,
+        role: "user",
+        sessionID: args.sessionId,
+        time: {
+          created: args.createdAt,
+        },
+      },
+      text: args.promptText,
+      parts: [
+        {
+          type: "text",
+          text: args.promptText,
+          content: args.promptText,
+        },
+      ],
+    },
+    createdAt: args.createdAt ?? undefined,
+    completedAt: args.createdAt ?? undefined,
+    parts: [
+      {
+        id: `${messageId}:part-text`,
+        partType: "text",
+        textContent: args.promptText,
+        jsonPayload: {
+          type: "text",
+          text: args.promptText,
+          content: args.promptText,
+        },
+      },
+    ],
+  } satisfies ServiceTaskSessionMessageRecord;
+}
+
+async function ensureRootPromptCompatMessages(args: {
+  taskId: string;
+  authorization: string;
+  messages: ServiceTaskSessionMessageRecord[];
+  records: TaskSessionLineageRecord[];
+}) {
+  const rootRecord = resolveRootPrimaryTaskSessionRecord(args.records);
+  const rootSessionId =
+    asString(rootRecord?.runtimeSessionId) ?? asString(rootRecord?.id) ?? undefined;
+  if (!rootSessionId) {
+    return args.messages;
+  }
+
+  const taskResult = await cpFetch<TaskPromptRecord>(
+    `/api/project-tree/tasks/${encodeURIComponent(args.taskId)}`,
+    {
+      authorization: args.authorization,
+    },
+  );
+  const promptText = taskResult.ok ? asString(taskResult.data?.prompt) : undefined;
+  if (!promptText || hasPromptEquivalentUserMessage(args.messages, promptText)) {
+    return args.messages;
+  }
+
+  return [
+    buildSyntheticRootPromptCompatMessage({
+      taskId: args.taskId,
+      sessionId: rootSessionId,
+      promptText,
+      createdAt:
+        (taskResult.ok ? asString(taskResult.data?.createdAt) : undefined) ??
+        asString(rootRecord?.createdAt) ??
+        null,
+    }),
+    ...args.messages,
+  ];
+}
 
 async function resolvePersistedTaskSessionId(
   taskId: string,
@@ -338,12 +479,52 @@ async function resolvePersistedTaskSessionId(
   return canonicalSessionId;
 }
 
+function extractRuntimeSessionIdFromPublicTaskSessionId(taskId: string, sessionId: string) {
+  const normalizedSessionId = sessionId.trim();
+  if (!normalizedSessionId) {
+    return null;
+  }
+
+  const prefix = `task-session:${taskId}:`;
+  if (!normalizedSessionId.startsWith(prefix)) {
+    return null;
+  }
+
+  const runtimeSessionId = normalizedSessionId.slice(prefix.length).trim();
+  return runtimeSessionId || null;
+}
+
+function resolvePublicRuntimeSessionId(
+  taskId: string,
+  sessionId: unknown,
+  records?: TaskSessionLineageRecord[] | null,
+) {
+  const normalizedSessionId = asString(sessionId);
+  if (!normalizedSessionId) {
+    return undefined;
+  }
+
+  const runtimeSessionId = extractRuntimeSessionIdFromPublicTaskSessionId(
+    taskId,
+    normalizedSessionId,
+  );
+  if (runtimeSessionId) {
+    return runtimeSessionId;
+  }
+
+  const matchedRecord = records?.find(
+    (record) => record.id === normalizedSessionId || record.runtimeSessionId === normalizedSessionId,
+  );
+  return matchedRecord?.runtimeSessionId ?? normalizedSessionId;
+}
+
 export async function fetchTaskSessionCachedCompatMessages(
   taskId: string,
   sessionId: string,
   authorization: string,
   options?: { includeLineage?: boolean },
 ): Promise<TaskSessionCachedMessagesResult> {
+  const publicSessionId = resolvePublicRuntimeSessionId(taskId, sessionId);
   if (options?.includeLineage) {
     const lineageResult = await fetchTaskSessionLineageRecords(taskId, authorization);
     const lineagePath = lineageResult.ok
@@ -376,6 +557,15 @@ export async function fetchTaskSessionCachedCompatMessages(
           sliceLegacyMessagesForLineageBoundary(result.data, lineagePath[index + 1]),
         ),
       );
+      const persistedThroughRevision = Math.max(
+        -1,
+        ...messageSets.map((result) =>
+          typeof result.meta?.persistedThroughRevision === "number" &&
+          Number.isFinite(result.meta.persistedThroughRevision)
+            ? result.meta.persistedThroughRevision
+            : -1,
+        ),
+      );
       const cachedSessionCount = messageSets.filter((result) => result.data.length > 0).length;
       const complete =
         messageSets.length > 0 &&
@@ -397,8 +587,18 @@ export async function fetchTaskSessionCachedCompatMessages(
             cacheState: complete ? "complete" : cachedSessionCount > 0 ? "partial" : "none",
             complete,
             itemCount: mergedMessages.length,
-            sessionId,
+            sessionId: publicSessionId ?? sessionId,
             messageCount: mergedMessages.length,
+            snapshotVersion: Math.max(
+              0,
+              ...messageSets.map((result) =>
+                typeof result.meta?.snapshotVersion === "number" &&
+                Number.isFinite(result.meta.snapshotVersion)
+                  ? result.meta.snapshotVersion
+                  : 0,
+              ),
+            ),
+            ...(persistedThroughRevision >= 0 ? { persistedThroughRevision } : {}),
           },
         },
       };
@@ -436,8 +636,21 @@ export async function fetchTaskSessionCachedCompatMessages(
             cacheState,
             complete,
             itemCount: messages.length,
-            sessionId: result.data.meta?.sessionId ?? persistedSessionId,
+            sessionId:
+              publicSessionId ??
+              resolvePublicRuntimeSessionId(taskId, result.data.meta?.sessionId) ??
+              persistedSessionId,
             messageCount: messages.length,
+            snapshotVersion:
+              typeof result.data.meta?.snapshotVersion === "number" &&
+              Number.isFinite(result.data.meta.snapshotVersion)
+                ? result.data.meta.snapshotVersion
+                : undefined,
+            persistedThroughRevision:
+              typeof result.data.meta?.persistedThroughRevision === "number" &&
+              Number.isFinite(result.data.meta.persistedThroughRevision)
+                ? result.data.meta.persistedThroughRevision
+                : undefined,
           },
         }
       : undefined,
@@ -484,10 +697,19 @@ export async function fetchTaskConversationCompatMessages(
     lineageResult?.ok && lineageResult.activeRecords.length > 0
       ? buildTaskSessionLineageCompatRecordLookup(lineageResult.activeRecords)
       : null;
+  const promptReadyServiceMessages =
+    lineageResult?.ok && lineageResult.activeRecords.length > 0
+      ? await ensureRootPromptCompatMessages({
+          taskId,
+          authorization,
+          messages: serviceMessages,
+          records: lineageResult.activeRecords,
+        })
+      : serviceMessages;
   const filteredServiceMessages =
     lineageResult?.ok && lineageResult.activeRecords.length > 0
       ? filterPendingParallelTaskConversationCompatMessages({
-          messages: serviceMessages,
+          messages: promptReadyServiceMessages,
           records: lineageResult.activeRecords,
           extractSourceSessionId: extractServiceTaskSessionMessageSourceSessionId,
           extractRole: extractServiceTaskSessionMessageRole,
@@ -498,7 +720,7 @@ export async function fetchTaskConversationCompatMessages(
               lineageRecordLookup!,
             ),
         })
-      : serviceMessages;
+      : promptReadyServiceMessages;
   const messages =
     lineageResult?.ok && lineageResult.activeRecords.length > 0
       ? await synthesizeWorkflowGroupCompatMessages({
@@ -517,6 +739,11 @@ export async function fetchTaskConversationCompatMessages(
   const normalizedMeta = normalizeTaskSessionTimelineMeta(result.data?.meta);
   const cacheState = deriveTaskSessionMessageCacheState(normalizedMeta, messages.length);
   const complete = isTaskSessionMessageCacheComplete(normalizedMeta, messages.length);
+  const publicSessionId = resolvePublicRuntimeSessionId(
+    taskId,
+    options?.sessionId ?? result.data?.meta?.sessionId,
+    lineageResult?.activeRecords,
+  );
 
   return {
     ...result,
@@ -528,8 +755,18 @@ export async function fetchTaskConversationCompatMessages(
             cacheState,
             complete,
             itemCount: messages.length,
-            sessionId: result.data.meta?.sessionId,
+            sessionId: publicSessionId,
             messageCount: messages.length,
+            snapshotVersion:
+              typeof result.data.meta?.snapshotVersion === "number" &&
+              Number.isFinite(result.data.meta.snapshotVersion)
+                ? result.data.meta.snapshotVersion
+                : undefined,
+            persistedThroughRevision:
+              typeof result.data.meta?.persistedThroughRevision === "number" &&
+              Number.isFinite(result.data.meta.persistedThroughRevision)
+                ? result.data.meta.persistedThroughRevision
+                : undefined,
           },
         }
       : undefined,

@@ -22,7 +22,7 @@
 - [docs/approval-standards-management-plan.md](docs/approval-standards-management-plan.md)
 - [docs/architecture-overview.md](docs/architecture-overview.md)
 - [docs/organization-oriented-agent-operating-model.md](docs/organization-oriented-agent-operating-model.md)
-- [docs/boss-agent-design.md](docs/boss-agent-design.md)
+- [archive/organization/historical-boss-agent-design.md](archive/organization/historical-boss-agent-design.md)
 
 ## 1.1 在文档体系中的位置
 
@@ -56,7 +56,7 @@
 
 因此，本文档不被新的组织化方案废弃，而是被其上提并纳入更完整的组织叙事中。
 
-若需要进一步查看老板 Agent 的职责、输入输出、升级规则和自动托管等级，应继续参考 [docs/boss-agent-design.md](docs/boss-agent-design.md)。
+若需要进一步查看老板 Agent 的职责、输入输出、升级规则和自动托管等级，应继续参考 [archive/organization/historical-boss-agent-design.md](archive/organization/historical-boss-agent-design.md)。
 
 若需要统一理解“单兵模式 / 组织化协作模式 / 混合模式”与 `L0 / L1 / L2` 自动托管等级的组合关系，应以 [docs/organization-oriented-agent-operating-model.md](docs/organization-oriented-agent-operating-model.md) 中的“协作模式 × 自动托管等级对照表”为准。
 

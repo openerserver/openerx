@@ -32,6 +32,7 @@ function createUpdateChain(recorder: (payload: unknown) => void) {
 async function loadTaskSessionReadModule(args?: {
   sessionRows?: unknown[];
   phaseRows?: unknown[];
+  taskDomainEventRows?: unknown[];
   sessionOperationRows?: unknown[];
   sessionRunRows?: unknown[];
   workflowRunRows?: unknown[];
@@ -118,6 +119,11 @@ async function loadTaskSessionReadModule(args?: {
   const fakeTaskSnapshots = {
     taskId: "taskId",
   };
+  const fakeTaskDomainEvents = {
+    taskId: "taskId",
+    seq: "seq",
+    createdAt: "createdAt",
+  };
   const fakeTaskTimelineViews = {
     id: "id",
     taskId: "taskId",
@@ -145,6 +151,7 @@ async function loadTaskSessionReadModule(args?: {
     if (table === fakeTaskMessages) return "task_messages";
     if (table === fakeTaskMessageParts) return "task_message_parts";
     if (table === fakeTaskSnapshots) return "task_snapshots";
+    if (table === fakeTaskDomainEvents) return "task_domain_events";
     if (table === fakeTaskTimelineViews) return "task_timeline_views";
 
     if (!table || typeof table !== "object") {
@@ -224,6 +231,9 @@ async function loadTaskSessionReadModule(args?: {
           if (tableName === "task_timeline_views") {
             return args?.timelineRows ?? [];
           }
+          if (tableName === "task_domain_events") {
+            return args?.taskDomainEventRows ?? [];
+          }
           return [];
         }),
       ),
@@ -248,6 +258,7 @@ async function loadTaskSessionReadModule(args?: {
   mock.module("../../control-plane/service/src/db/schema", () => ({
     roleAggregateConclusions: {},
     taskArtifacts: {},
+    taskDomainEvents: fakeTaskDomainEvents,
     taskExecutionPhases: fakeTaskExecutionPhases,
     taskMessageParts: fakeTaskMessageParts,
     taskMessages: fakeTaskMessages,
@@ -754,6 +765,7 @@ describe("task session read API", () => {
         cacheState: "complete",
         complete: true,
         messageCount: 1,
+        persistedThroughRevision: 0,
       }),
     });
   });
@@ -2914,6 +2926,34 @@ describe("task session read API", () => {
           createdAt: "2026-03-27T00:00:00.000Z",
         },
       ],
+      messageRows: [
+        {
+          id: `${rootSessionId}:assistant-1`,
+          taskId: "task-1",
+          sessionId: rootSessionId,
+          runtimeMessageId: "assistant-1",
+          role: "assistant",
+          status: "completed",
+          clientMessageId: null,
+          providerMessageId: null,
+          seq: 6,
+          textContent: "match found",
+          textPreview: "match found",
+          rawPayload: {
+            info: {
+              id: "assistant-1",
+              role: "assistant",
+              messageIndex: 6,
+            },
+          },
+          tokenUsed: 0,
+          startedAt: "2026-03-27T00:00:01.000Z",
+          completedAt: "2026-03-27T00:00:01.100Z",
+          errorText: null,
+          createdAt: "2026-03-27T00:00:01.000Z",
+          updatedAt: "2026-03-27T00:00:01.100Z",
+        },
+      ],
       timelineRows: [
         {
           id: "task-timeline:message:streaming-tool",
@@ -2956,6 +2996,13 @@ describe("task session read API", () => {
           updatedAt: "2026-03-27T00:00:01.100Z",
         },
       ],
+      taskDomainEventRows: [
+        {
+          taskId: "task-1",
+          seq: 23,
+          createdAt: "2026-03-27T00:00:02.000Z",
+        },
+      ],
       snapshot: {
         taskId: "task-1",
         currentSessionId: rootSessionId,
@@ -2988,7 +3035,11 @@ describe("task session read API", () => {
         }),
       }),
     );
-    expect(response.data.meta.itemCount).toBe(1);
+    expect(response.data.meta).toMatchObject({
+      itemCount: 1,
+      snapshotVersion: 23,
+      persistedThroughRevision: 6,
+    });
   });
 
   test("buildTaskNormalizedConversationQueryResponse annotates the service-direct normalized view", async () => {
@@ -3024,6 +3075,13 @@ describe("task session read API", () => {
           updatedAt: "2026-03-27T00:00:01.000Z",
         },
       ],
+      taskDomainEventRows: [
+        {
+          taskId: "task-1",
+          seq: 17,
+          createdAt: "2026-03-27T00:00:02.000Z",
+        },
+      ],
     });
 
     const api = createTaskSessionReadApi({
@@ -3045,6 +3103,8 @@ describe("task session read API", () => {
       viewType: "normalized-conversation",
       querySurface: "service-direct",
       messageCount: 1,
+      snapshotVersion: 17,
+      persistedThroughRevision: 0,
     });
     expect(response.data.data).toEqual([
       expect.objectContaining({

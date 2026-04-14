@@ -1,8 +1,9 @@
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { db } from "../../db";
 import {
   roleAggregateConclusions,
   taskArtifacts,
+  taskDomainEvents,
   taskExecutionPhases,
   taskMessageParts,
   taskMessages,
@@ -270,6 +271,20 @@ async function loadTaskSnapshot(taskId: string) {
   });
 
   return snapshot ?? null;
+}
+
+async function loadTaskProjectionHeadVersion(taskId: string) {
+  if (!taskDomainEvents) {
+    return 0;
+  }
+
+  const rows = await db
+    .select({ seq: taskDomainEvents.seq })
+    .from(taskDomainEvents)
+    .where(eq(taskDomainEvents.taskId, taskId))
+    .orderBy(desc(taskDomainEvents.seq), desc(taskDomainEvents.createdAt));
+
+  return typeof rows[0]?.seq === "number" && Number.isFinite(rows[0].seq) ? rows[0].seq : 0;
 }
 
 async function loadTaskSessionRecord(taskId: string, sessionId: string) {
@@ -2212,6 +2227,54 @@ export function createTaskSessionReadApi(deps: {
     });
   }
 
+  function asNonNegativeFiniteNumber(value: unknown) {
+    if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+      return value;
+    }
+
+    if (typeof value !== "string") {
+      return null;
+    }
+
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+
+    const parsed = Number(trimmed);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+  }
+
+  function resolveLoadedTaskSessionMessagePersistedRevision(
+    message: LoadedTaskSessionMessageRecord,
+  ) {
+    const rawPayload = asRecord(message.rawPayload);
+    const rawInfo = asRecord(rawPayload?.info);
+
+    return (
+      asNonNegativeFiniteNumber(message.messageIndex) ??
+      asNonNegativeFiniteNumber(rawInfo?.messageIndex) ??
+      asNonNegativeFiniteNumber(rawPayload?.messageIndex) ??
+      asNonNegativeFiniteNumber(rawInfo?.seq) ??
+      asNonNegativeFiniteNumber(rawPayload?.seq)
+    );
+  }
+
+  function resolveLoadedTaskSessionMessagesPersistedThroughRevision(
+    messages: LoadedTaskSessionMessageRecord[],
+  ) {
+    const persistedThroughRevision = messages.reduce((maxRevision, message) => {
+      const revision = resolveLoadedTaskSessionMessagePersistedRevision(message);
+      if (revision == null) {
+        return maxRevision;
+      }
+
+      return Math.max(maxRevision, revision);
+    }, -1);
+
+    return persistedThroughRevision >= 0 ? persistedThroughRevision : undefined;
+  }
+
   function resolveSelectedTaskSession(
     sessions: TaskSessionReadSessionRecord[],
     selectedSessionId: string | null,
@@ -2542,9 +2605,10 @@ export function createTaskSessionReadApi(deps: {
       return { ok: false as const, status: 404 as const, error: "Task not found" };
     }
 
-    const [snapshot, sessions] = await Promise.all([
+    const [snapshot, sessions, snapshotVersion] = await Promise.all([
       loadTaskSnapshot(args.taskId),
       loadTaskSessionRecords(args.taskId),
+      loadTaskProjectionHeadVersion(args.taskId),
     ]);
     const selection = resolveTaskSessionSelection({
       sessions,
@@ -2584,6 +2648,8 @@ export function createTaskSessionReadApi(deps: {
       task,
       snapshot,
     });
+    const persistedThroughRevision =
+      resolveLoadedTaskSessionMessagesPersistedThroughRevision(data);
     const hasSelectedSession = Boolean(selection.selectedSessionId);
 
     return {
@@ -2596,11 +2662,13 @@ export function createTaskSessionReadApi(deps: {
           sessionId: selection.selectedSessionId,
           includeLineage: args.includeLineage,
           lineagePath: conversationScope.sessionScopeIds,
+          snapshotVersion,
           cachedSessionCount: conversationScope.scopeRecords.length,
           cacheState: hasSelectedSession ? ("complete" as const) : ("none" as const),
           complete: hasSelectedSession,
           itemCount: data.length,
           messageCount: data.length,
+          ...(persistedThroughRevision != null ? { persistedThroughRevision } : {}),
         },
       },
     };
@@ -2722,9 +2790,10 @@ export function createTaskSessionReadApi(deps: {
       return { ok: false as const, status: 404 as const, error: "Task not found" };
     }
 
-    const [snapshot, sessions] = await Promise.all([
+    const [snapshot, sessions, snapshotVersion] = await Promise.all([
       loadTaskSnapshot(args.taskId),
       loadTaskSessionRecords(args.taskId),
+      loadTaskProjectionHeadVersion(args.taskId),
     ]);
     const selection = resolveTaskSessionSelection({
       sessions,
@@ -2736,34 +2805,47 @@ export function createTaskSessionReadApi(deps: {
       return selection;
     }
 
+    const sessionsById = new Map(sessions.map((session) => [session.id, session] as const));
+    const scopeRecords = selection.lineagePath
+      .map((sessionId) => sessionsById.get(sessionId))
+      .filter((session): session is TaskSessionReadSessionRecord => Boolean(session));
+
     const filters = [eq(taskTimelineViews.taskId, args.taskId)];
     if (selection.lineagePath.length > 0) {
       filters.push(inArray(taskTimelineViews.sessionId, selection.lineagePath));
     }
 
-    const timelineRows = (await db
-      .select({
-        id: taskTimelineViews.id,
-        taskId: taskTimelineViews.taskId,
-        projectId: taskTimelineViews.projectId,
-        sessionId: taskTimelineViews.sessionId,
-        messageId: taskTimelineViews.messageId,
-        operationId: taskTimelineViews.operationId,
-        artifactId: taskTimelineViews.artifactId,
-        itemKind: taskTimelineViews.itemKind,
-        itemRole: taskTimelineViews.itemRole,
-        title: taskTimelineViews.title,
-        displayText: taskTimelineViews.displayText,
-        metadataJson: taskTimelineViews.metadataJson,
-        sortAt: taskTimelineViews.sortAt,
-        createdAt: taskTimelineViews.createdAt,
-        updatedAt: taskTimelineViews.updatedAt,
-      })
-      .from(taskTimelineViews)
-      .where(and(...filters))
-      .orderBy(asc(taskTimelineViews.sortAt), asc(taskTimelineViews.createdAt))) as TaskTimelineViewRow[];
+    const [timelineRows, messageSets] = await Promise.all([
+      db
+        .select({
+          id: taskTimelineViews.id,
+          taskId: taskTimelineViews.taskId,
+          projectId: taskTimelineViews.projectId,
+          sessionId: taskTimelineViews.sessionId,
+          messageId: taskTimelineViews.messageId,
+          operationId: taskTimelineViews.operationId,
+          artifactId: taskTimelineViews.artifactId,
+          itemKind: taskTimelineViews.itemKind,
+          itemRole: taskTimelineViews.itemRole,
+          title: taskTimelineViews.title,
+          displayText: taskTimelineViews.displayText,
+          metadataJson: taskTimelineViews.metadataJson,
+          sortAt: taskTimelineViews.sortAt,
+          createdAt: taskTimelineViews.createdAt,
+          updatedAt: taskTimelineViews.updatedAt,
+        })
+        .from(taskTimelineViews)
+        .where(and(...filters))
+        .orderBy(asc(taskTimelineViews.sortAt), asc(taskTimelineViews.createdAt)),
+      scopeRecords.length > 0
+        ? loadTaskConversationMessageSets(args.taskId, scopeRecords)
+        : Promise.resolve([] as LoadedTaskSessionMessageRecord[][]),
+    ]);
 
-    const data = dedupeTaskToolTimelineRows(timelineRows, sessions);
+    const data = dedupeTaskToolTimelineRows(timelineRows as TaskTimelineViewRow[], sessions);
+    const persistedThroughRevision = resolveLoadedTaskSessionMessagesPersistedThroughRevision(
+      messageSets.flat(),
+    );
 
     return {
       ok: true as const,
@@ -2775,8 +2857,10 @@ export function createTaskSessionReadApi(deps: {
           sessionId: selection.selectedSessionId,
           includeLineage: args.includeLineage,
           lineagePath: selection.lineagePath,
+          snapshotVersion,
           itemCount: data.length,
           complete: data.length > 0,
+          ...(persistedThroughRevision != null ? { persistedThroughRevision } : {}),
         },
       },
     };

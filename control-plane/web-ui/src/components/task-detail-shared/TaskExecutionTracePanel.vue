@@ -21,13 +21,11 @@
         </a-space>
 
         <a-alert
-          v-if="trace.timelineMeta?.cacheState && trace.timelineMeta.cacheState !== 'complete'"
+          v-if="timelineWarning"
           type="warning"
           show-icon
-          :message="trace.timelineMeta.cacheState === 'partial' ? '时间线缓存仅部分可用' : '时间线缓存暂不可用'"
-          :description="trace.timelineMeta.cacheState === 'partial'
-            ? '当前执行追踪只拿到了部分时间线结果；主链已停止隐式回退到运行时消息，请结合时间线来源和会话范围判断缺口。'
-            : '当前执行追踪暂时没有可用时间线结果；页面会显式保留不完整状态，而不会隐式回退到运行时消息。'"
+          :message="timelineWarning?.message"
+          :description="timelineWarning?.description"
         />
 
         <a-space direction="vertical" style="width: 100%" size="small">
@@ -89,6 +87,7 @@
 import { computed, ref, toRef, watch } from "vue";
 import type { ExecutionTraceTimelineItem } from "../../lib/api";
 import type { ToolCallDisplayItem } from "../../lib/task-tool-call-display";
+import { resolveTraceTimelineAvailability } from "../../lib/task-trace-timeline-state";
 import { summarizeToolCalls } from "../../lib/task-tool-call-display";
 import { useTaskExecutionTrace } from "../../composables/useTaskExecutionTrace";
 
@@ -115,6 +114,28 @@ const {
   computed(() => taskIdRef.value),
   computed(() => sessionIdRef.value),
 );
+
+const timelineWarning = computed(() => {
+  const timelineAvailability = resolveTraceTimelineAvailability(
+    trace.value?.timelineMeta,
+    trace.value?.timeline?.length ?? 0,
+  );
+  if (timelineAvailability === "partial") {
+    return {
+      message: "时间线仅部分可用",
+      description:
+        "当前执行追踪只拿到了部分时间线结果；主链已停止隐式回退到运行时消息，请结合时间线来源和会话范围判断缺口。",
+    };
+  }
+  if (timelineAvailability === "none") {
+    return {
+      message: "时间线暂不可用",
+      description:
+        "当前执行追踪暂时没有可用时间线结果；页面会显式保留不完整状态，而不会隐式回退到运行时消息。",
+    };
+  }
+  return null;
+});
 
 function tagTone(value?: string) {
   if (value === "warning") return "orange";

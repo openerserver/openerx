@@ -3,6 +3,7 @@ import {
   buildTaskWorkflowViewModel,
   fetchTaskWorkflowResources,
   stageLabelFromKey,
+  type TaskWorkflowResources,
 } from "./workflow-view";
 
 interface TaskDetailPayload {
@@ -35,6 +36,8 @@ interface TaskAgentRunPayload {
 interface TaskAgentRunListResponse {
   data?: TaskAgentRunPayload[];
 }
+
+type WorkflowStageResource = TaskWorkflowResources["stages"][number];
 
 interface RoleAgentResolutionPayload {
   role?: {
@@ -80,6 +83,10 @@ export interface TaskMemberViewMember {
 export interface TaskMemberViewModel {
   taskId: string;
   projectId: string | null;
+  meta?: {
+    snapshotVersion?: number;
+    reconcileRequired?: boolean;
+  };
   workflowStatus: string;
   currentStageKey: string;
   currentStageLabel: string;
@@ -225,7 +232,12 @@ async function resolveRoleMembers(args: {
     },
   );
 
-  return result.ok ? (result.data?.data ?? null) : null;
+  const data = result.ok ? (result.data?.data ?? null) : null;
+
+  return {
+    data,
+    reconcileRequired: !result.ok || data == null,
+  };
 }
 
 export async function buildTaskMemberViewModel(input: {
@@ -233,6 +245,7 @@ export async function buildTaskMemberViewModel(input: {
   authorization: string;
   projectId?: string | null;
   taskStatus?: string | null;
+  prefetchedWorkflowResources?: TaskWorkflowResources | null;
 }): Promise<TaskMemberViewModel> {
   const taskResult = await cpFetch<TaskDetailPayload>(
     `/api/project-tree/tasks/${encodeURIComponent(input.taskId)}`,
@@ -244,11 +257,13 @@ export async function buildTaskMemberViewModel(input: {
   const task = taskResult.ok ? taskResult.data : null;
   const projectId = input.projectId ?? task?.projectId ?? null;
   const [workflowResources, projectMembersResult, agentRunsResult] = await Promise.all([
-    fetchTaskWorkflowResources({
-      taskId: input.taskId,
-      authorization: input.authorization,
-      includeTask: false,
-    }),
+    input.prefetchedWorkflowResources
+      ? Promise.resolve(input.prefetchedWorkflowResources)
+      : fetchTaskWorkflowResources({
+          taskId: input.taskId,
+          authorization: input.authorization,
+          includeTask: false,
+        }),
     projectId
       ? cpFetch<ProjectMemberPayload[]>(`/api/projects/${encodeURIComponent(projectId)}/members`, {
           authorization: input.authorization,
@@ -293,34 +308,52 @@ export async function buildTaskMemberViewModel(input: {
   }
   const stageIdToKey = new Map(
     workflowResources.stages
-      .filter((stage): stage is { id: string; stageKey: string } =>
+      .filter((stage: WorkflowStageResource): stage is WorkflowStageResource & {
+        id: string;
+        stageKey: string;
+      } =>
         Boolean(stage.id && stage.stageKey),
       )
       .map((stage) => [stage.id, stage.stageKey] as const),
   );
   for (const request of workflowResources.requests) {
+    const requestStageId =
+      typeof request.taskStageRunId === "string" ? request.taskStageRunId : undefined;
     registerRoleStage(
       request.sourceRoleAgentId,
-      request.taskStageRunId ? stageIdToKey.get(request.taskStageRunId) : undefined,
+      requestStageId ? stageIdToKey.get(requestStageId) : undefined,
     );
   }
 
   const roleIds = Array.from(roleStageMap.keys());
-  const roleResolutions = new Map(
-    await Promise.all(
-      roleIds.map(async (roleAgentId) => {
-        const stageKeys = Array.from(roleStageMap.get(roleAgentId) ?? []);
-        const resolved = await resolveRoleMembers({
-          roleAgentId,
-          projectId,
-          templateId: workflowView.workflow.templateId ?? null,
-          stageKey: stageKeys[0],
-          authorization: input.authorization,
-        });
-        return [roleAgentId, resolved] as const;
-      }),
-    ),
+  const roleResolutionEntries = await Promise.all(
+    roleIds.map(async (roleAgentId) => {
+      const stageKeys = Array.from(roleStageMap.get(roleAgentId) ?? []);
+      const resolved = await resolveRoleMembers({
+        roleAgentId,
+        projectId,
+        templateId: workflowView.workflow.templateId ?? null,
+        stageKey: stageKeys[0],
+        authorization: input.authorization,
+      });
+      return [roleAgentId, resolved] as const;
+    }),
   );
+  const roleResolutions = new Map(
+    roleResolutionEntries.map(([roleAgentId, resolved]) => [roleAgentId, resolved.data] as const),
+  );
+  const reconcileRequired =
+    Boolean(workflowView.meta?.reconcileRequired) ||
+    Boolean(projectId && !projectMembersResult.ok) ||
+    !agentRunsResult.ok ||
+    roleResolutionEntries.some(([, resolved]) => resolved.reconcileRequired);
+  const memberMeta =
+    workflowView.meta || reconcileRequired
+      ? {
+          snapshotVersion: workflowView.meta?.snapshotVersion,
+          reconcileRequired,
+        }
+      : undefined;
 
   const stageLabelMap = new Map(
     workflowView.workflow.stages.map((stage) => [stage.stageKey, stage.stageLabel] as const),
@@ -403,7 +436,8 @@ export async function buildTaskMemberViewModel(input: {
     for (const binding of bindings) {
       const key = `agent:${binding.bindingId}`;
       const matchedRuns = agentRuns.filter(
-        (run) => normalizeAgentName(run.agentType) === normalizeAgentName(binding.runtimeAgent),
+        (run: TaskAgentRunPayload) =>
+          normalizeAgentName(run.agentType) === normalizeAgentName(binding.runtimeAgent),
       );
       const existing = agentDrafts.get(key);
       agentDrafts.set(key, {
@@ -482,6 +516,7 @@ export async function buildTaskMemberViewModel(input: {
   return {
     taskId: input.taskId,
     projectId,
+    meta: memberMeta,
     workflowStatus: workflowView.workflow.status,
     currentStageKey: workflowView.workflow.currentStage,
     currentStageLabel,

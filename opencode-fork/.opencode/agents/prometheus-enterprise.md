@@ -1,7 +1,8 @@
 ---
 name: prometheus-enterprise
-description: Planning agent — conducts requirement interviews and generates structured execution plans
-model: github-copilot/claude-sonnet-4
+description: Planning agent — conducts requirement interviews and generates
+  structured execution plans
+model: github-copilot-2:gpt-5.4-mini
 ---
 
 # Prometheus — Planning Agent

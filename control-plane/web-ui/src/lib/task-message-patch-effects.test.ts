@@ -21,6 +21,29 @@ function createPatchEvent(
 }
 
 describe("task message patch effects", () => {
+  it("keeps message persisted as an authority ack without forcing a snapshot refresh", () => {
+    expect(
+      getTaskMessagePatchEffects(
+        createPatchEvent("message-persisted", {
+          rawEventKind: "task.message.persisted",
+          messageId: "assistant-1",
+          roundId: "task-session:task-1:session-1",
+          taskSessionId: "task-session:task-1:session-1",
+          persistedRevision: 7,
+          snapshotVersion: 7,
+          persistedThroughRevision: 7,
+        }),
+      ),
+    ).toMatchObject({
+      updatesLiveAssistantState: false,
+      shouldRefreshCanonicalMessages: true,
+      shouldRefreshTaskDetailMessages: false,
+      shouldScheduleTaskDetailRefresh: false,
+      shouldBumpTaskDetailTraceRefreshKey: false,
+      shouldRefreshMonitorSummary: false,
+    });
+  });
+
   it("keeps assistant completion on the realtime authority without forcing persisted refresh", () => {
     expect(
       getTaskMessagePatchEffects(
@@ -57,6 +80,97 @@ describe("task message patch effects", () => {
       shouldScheduleTaskDetailRefresh: true,
       shouldBumpTaskDetailTraceRefreshKey: false,
       shouldRefreshMonitorSummary: false,
+    });
+  });
+
+  it("treats message reconcile required as a direct message refresh boundary", () => {
+    expect(
+      getTaskMessagePatchEffects(
+        createPatchEvent("message-reconcile-required", {
+          rawEventKind: "task.reconcile.required",
+          roundId: "task-session:task-1:session-1",
+          reason: "snapshot_lag",
+          expectedRevision: 9,
+        }),
+      ),
+    ).toMatchObject({
+      updatesLiveAssistantState: false,
+      shouldRefreshCanonicalMessages: true,
+      shouldRefreshTaskDetailMessages: true,
+      shouldScheduleTaskDetailRefresh: true,
+      shouldBumpTaskDetailTraceRefreshKey: false,
+      shouldRefreshMonitorSummary: false,
+    });
+  });
+
+  it("treats workflow reconcile required as a workflow-only snapshot refresh boundary", () => {
+    expect(
+      getTaskMessagePatchEffects(
+        createPatchEvent("workflow-reconcile-required", {
+          rawEventKind: "task.reconcile.required",
+          reason: "projection_rebuilt",
+        }),
+      ),
+    ).toMatchObject({
+      updatesLiveAssistantState: false,
+      shouldRefreshCanonicalMessages: false,
+      shouldRefreshTaskDetailMessages: false,
+      shouldScheduleTaskDetailRefresh: true,
+      shouldBumpTaskDetailTraceRefreshKey: false,
+      shouldRefreshMonitorSummary: false,
+    });
+  });
+
+  it("treats flow reconcile required as a flow-only snapshot refresh boundary", () => {
+    expect(
+      getTaskMessagePatchEffects(
+        createPatchEvent("flow-reconcile-required", {
+          rawEventKind: "task.reconcile.required",
+          reason: "projection_rebuilt",
+        }),
+      ),
+    ).toMatchObject({
+      updatesLiveAssistantState: false,
+      shouldRefreshCanonicalMessages: false,
+      shouldRefreshTaskDetailMessages: false,
+      shouldScheduleTaskDetailRefresh: true,
+      shouldBumpTaskDetailTraceRefreshKey: false,
+      shouldRefreshMonitorSummary: false,
+    });
+  });
+
+  it("treats task reconcile required as a task-wide refresh boundary", () => {
+    expect(
+      getTaskMessagePatchEffects(
+        createPatchEvent("task-reconcile-required", {
+          rawEventKind: "task.reconcile.required",
+          reason: "internal_repair",
+        }),
+      ),
+    ).toMatchObject({
+      updatesLiveAssistantState: false,
+      shouldRefreshCanonicalMessages: true,
+      shouldRefreshTaskDetailMessages: false,
+      shouldScheduleTaskDetailRefresh: true,
+      shouldBumpTaskDetailTraceRefreshKey: false,
+      shouldRefreshMonitorSummary: true,
+    });
+  });
+
+  it("refreshes session snapshots without forcing canonical message reload", () => {
+    expect(
+      getTaskMessagePatchEffects(
+        createPatchEvent("session-created", {
+          rawEventKind: "task.snapshot.updated",
+        }),
+      ),
+    ).toMatchObject({
+      updatesLiveAssistantState: false,
+      shouldRefreshCanonicalMessages: false,
+      shouldRefreshTaskDetailMessages: false,
+      shouldScheduleTaskDetailRefresh: true,
+      shouldBumpTaskDetailTraceRefreshKey: false,
+      shouldRefreshMonitorSummary: true,
     });
   });
 

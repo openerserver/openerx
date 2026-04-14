@@ -278,7 +278,7 @@ describe("getTaskSessionLineage", () => {
   });
 });
 
-describe("task tree current session projection", () => {
+describe("task message/session projection", () => {
   beforeEach(() => {
     authStoreState.token = null;
     authStoreState.logout.mockReset();
@@ -288,48 +288,62 @@ describe("task tree current session projection", () => {
     vi.unstubAllGlobals();
   });
 
-  it("maps canonical currentSessionId to runtime session ids for message and session projections", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        meta: {
-          taskId: "task-1",
-          currentSessionId: "task-session:task-1:ses-child",
-          rootSessionId: "task-session:task-1:ses-root",
-          incomplete: false,
+  it("maps runtime session ids from unified messages and lightweight session context", async () => {
+    const sessionsPayload = {
+      meta: {
+        currentSessionId: "task-session:task-1:ses-child",
+        currentPhaseId: "phase-root",
+      },
+      data: [
+        {
+          id: "task-session:task-1:ses-root",
+          runtimeSessionId: "ses-root",
+          title: "主分支",
+          parentSessionId: null,
+          sourceType: "root",
+          createdAt: "2026-03-22T00:00:00.000Z",
+          updatedAt: "2026-03-22T00:05:00.000Z",
         },
-        task: {
-          id: "task-1",
-          currentSessionId: "task-session:task-1:ses-child",
+        {
+          id: "task-session:task-1:ses-child",
+          runtimeSessionId: "ses-child",
+          title: "分叉会话",
+          parentSessionId: "task-session:task-1:ses-root",
+          sourceType: "fork",
+          forkedFromMessageId: "msg-1",
+          createdAt: "2026-03-22T00:06:00.000Z",
+          updatedAt: "2026-03-22T00:07:00.000Z",
         },
-        workflow: null,
-        parallelGroups: [],
-        sessions: [
-          {
-            id: "task-session:task-1:ses-root",
-            runtimeSessionId: "ses-root",
-            title: "主分支",
-            parentSessionId: null,
-            createdAt: "2026-03-22T00:00:00.000Z",
-            updatedAt: "2026-03-22T00:05:00.000Z",
-          },
-          {
-            id: "task-session:task-1:ses-child",
-            runtimeSessionId: "ses-child",
-            title: "分叉会话",
-            parentSessionId: "task-session:task-1:ses-root",
-            createdAt: "2026-03-22T00:06:00.000Z",
-            updatedAt: "2026-03-22T00:07:00.000Z",
-          },
-        ],
-        runs: [],
-        messages: [],
-        messageParts: [],
-        operations: [],
-        artifacts: [],
-        edges: [],
-      }),
+      ],
+    };
+    const fetchMock = vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/tasks/task-1/messages") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: [],
+            meta: {
+              sessionId: "ses-child",
+              readSource: "task-session-first",
+              complete: true,
+              snapshotVersion: 4,
+              persistedThroughRevision: 5,
+            },
+          }),
+        };
+      }
+
+      if (url === "/api/tasks/task-1/sessions") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => sessionsPayload,
+        };
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
     });
 
     vi.stubGlobal("fetch", fetchMock);
@@ -339,84 +353,70 @@ describe("task tree current session projection", () => {
       getTaskTreeSessionContext("task-1"),
     ]);
 
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(messagesResponse.meta?.sessionId).toBe("ses-child");
     expect(sessionContext.data.currentSessionId).toBe("ses-child");
+    expect(sessionContext.data.sessionLineage).toEqual([
+      expect.objectContaining({
+        runtimeSessionId: "ses-root",
+        sourceType: "root",
+        children: [
+          expect.objectContaining({
+            runtimeSessionId: "ses-child",
+            sourceType: "fork",
+            forkedFromMessageId: "msg-1",
+          }),
+        ],
+      }),
+    ]);
   });
 
-  it("keeps an explicitly requested child session when tree currentSessionId still points to the parent", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        meta: {
-          taskId: "task-1",
-          currentSessionId: "task-session:task-1:ses-root",
-          rootSessionId: "task-session:task-1:ses-root",
-          incomplete: false,
-        },
-        task: {
-          id: "task-1",
-          currentSessionId: "task-session:task-1:ses-root",
-        },
-        workflow: null,
-        parallelGroups: [],
-        sessions: [
-          {
-            id: "task-session:task-1:ses-root",
-            runtimeSessionId: "ses-root",
-            title: "主分支",
-            parentSessionId: null,
-            createdAt: "2026-03-22T00:00:00.000Z",
-            updatedAt: "2026-03-22T00:05:00.000Z",
-          },
-          {
-            id: "task-session:task-1:ses-child",
-            runtimeSessionId: "ses-child",
-            title: "继续会话",
-            parentSessionId: "task-session:task-1:ses-root",
-            createdAt: "2026-03-22T00:06:00.000Z",
-            updatedAt: "2026-03-22T00:07:00.000Z",
-          },
-        ],
-        runs: [],
-        messages: [],
-        messageParts: [],
-        operations: [],
-        artifacts: [],
-        edges: [],
-      }),
+  it("keeps an explicitly requested child session on direct session-first reads", async () => {
+    const fetchMock = vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/tasks/task-1/sessions/ses-child/messages") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: [],
+            meta: {
+              sessionId: "ses-child",
+              readSource: "task-session-first",
+              complete: true,
+              snapshotVersion: 6,
+            },
+          }),
+        };
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
     });
 
     vi.stubGlobal("fetch", fetchMock);
 
     const response = await getTaskMessages("task-1", { sessionId: "ses-child" });
 
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(response.meta?.sessionId).toBe("ses-child");
   });
 
-  it("preserves parallel phase metadata in tree session summaries", async () => {
+  it("preserves parallel phase metadata in lightweight session-context summaries", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
       json: async () => ({
         meta: {
-          taskId: "task-1",
           currentSessionId: "task-session:task-1:ses-a",
-          rootSessionId: "task-session:task-1:ses-a",
-          incomplete: false,
+          currentPhaseId: "phase-group-1",
         },
-        task: {
-          id: "task-1",
-          currentSessionId: "task-session:task-1:ses-a",
-        },
-        workflow: null,
-        parallelGroups: [],
-        sessions: [
+        data: [
           {
             id: "task-session:task-1:ses-a",
             runtimeSessionId: "ses-a",
             title: "候选 A",
             parentSessionId: null,
+            sourceType: "parallel",
             phaseId: "phase-group-1",
             phaseRole: "candidate",
             phaseItemIndex: 0,
@@ -432,6 +432,7 @@ describe("task tree current session projection", () => {
             runtimeSessionId: "ses-b",
             title: "候选 B",
             parentSessionId: "task-session:task-1:ses-a",
+            sourceType: "parallel",
             phaseId: "phase-group-1",
             phaseRole: "candidate",
             phaseItemIndex: 1,
@@ -443,12 +444,6 @@ describe("task tree current session projection", () => {
             updatedAt: "2026-03-22T00:05:01.000Z",
           },
         ],
-        runs: [],
-        messages: [],
-        messageParts: [],
-        operations: [],
-        artifacts: [],
-        edges: [],
       }),
     });
 
@@ -480,64 +475,62 @@ describe("task tree current session projection", () => {
         winnerSessionId: "ses-b",
       }),
     ]);
+    expect(response.data.sessionLineage).toEqual([
+      expect.objectContaining({
+        runtimeSessionId: "ses-a",
+        sourceType: "parallel",
+        children: [
+          expect.objectContaining({
+            runtimeSessionId: "ses-b",
+            parentRuntimeSessionId: "ses-a",
+            sourceType: "parallel",
+          }),
+        ],
+      }),
+    ]);
+    expect(response.data.currentSessionId).toBe("ses-a");
+    expect(response.data.currentPhaseId).toBe("phase-group-1");
   });
 
-  it("repairs child-session user prompts that were persisted slightly after assistant start", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        meta: {
-          taskId: "task-1",
-          currentSessionId: "task-session:task-1:ses-child",
-          incomplete: false,
-        },
-        task: {
-          id: "task-1",
-          currentSessionId: "task-session:task-1:ses-child",
-        },
-        workflow: null,
-        parallelGroups: [],
-        sessions: [
-          {
-            id: "task-session:task-1:ses-child",
-            runtimeSessionId: "ses-child",
-            title: "继续会话",
-            parentSessionId: "task-session:task-1:ses-root",
-            createdAt: "2026-04-08T14:20:46.000Z",
-            updatedAt: "2026-04-08T14:22:12.500Z",
-          },
-        ],
-        runs: [],
-        messages: [
-          {
-            id: "ses-child:assistant:1775658046114",
-            sessionId: "task-session:task-1:ses-child",
-            role: "assistant",
-            textPreview: "assistant reply",
-            createdAt: "2026-04-08T14:20:46.114Z",
-            updatedAt: "2026-04-08T14:20:46.114Z",
-          },
-          {
-            id: "ses-child:user-prompt",
-            sessionId: "task-session:task-1:ses-child",
-            role: "user",
-            textPreview: "continue prompt",
-            createdAt: "2026-04-08T14:20:46.137Z",
-            updatedAt: "2026-04-08T14:20:46.137Z",
-          },
-        ],
-        messageParts: [],
-        operations: [],
-        artifacts: [],
-        edges: [],
-      }),
+  it("accepts normalized session-first messages without reprojecting tree order", async () => {
+    const fetchMock = vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/tasks/task-1/messages") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: [
+              {
+                id: "ses-child:user-prompt",
+                role: "user",
+                text: "continue prompt",
+              },
+              {
+                id: "ses-child:assistant:1775658046114",
+                role: "assistant",
+                text: "assistant reply",
+              },
+            ],
+            meta: {
+              sessionId: "ses-child",
+              readSource: "task-session-first",
+              complete: true,
+              snapshotVersion: 19,
+              persistedThroughRevision: 11,
+            },
+          }),
+        };
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
     });
 
     vi.stubGlobal("fetch", fetchMock);
 
     const response = await getTaskMessages("task-1");
 
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(response.meta?.sessionId).toBe("ses-child");
     expect(response.data).toEqual([
       expect.objectContaining({

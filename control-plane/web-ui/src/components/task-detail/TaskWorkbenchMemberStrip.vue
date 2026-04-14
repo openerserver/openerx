@@ -7,7 +7,7 @@
       </div>
       <a-space size="small" wrap>
         <a-tag color="blue">{{ stageLabel }}</a-tag>
-        <a-tag :color="workflowStatusColor">{{ workflowStatusLabel }}</a-tag>
+        <a-tag :color="workflowStatusDisplay.tagColor">{{ workflowStatusDisplay.label }}</a-tag>
       </a-space>
     </div>
 
@@ -51,6 +51,10 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { TaskMemberViewMember, TaskMemberViewModel } from "../../lib/api";
+import {
+  resolveWorkflowStageLabel,
+  resolveWorkflowStatusDisplay,
+} from "../../lib/task-workflow-display-policy";
 
 const props = defineProps<{
   paneLabel: string;
@@ -77,42 +81,21 @@ const highlightedMembers = computed(() => {
     .slice(0, 4);
 });
 
-const stageLabel = computed(() => props.view?.currentStageLabel || "阶段待同步");
-
-const workflowStatusLabel = computed(() => {
-  switch (props.view?.workflowStatus) {
-    case "running":
-      return "运行中";
-    case "blocked":
-      return "阻塞中";
-    case "waiting-approval":
-      return "待审批";
-    case "completed":
-      return "已完成";
-    case "failed":
-      return "失败";
-    case "cancelled":
-      return "已取消";
-    default:
-      return "待开始";
+const stageLabel = computed(() => {
+  if (!props.view) {
+    return "阶段待同步";
   }
+
+  return resolveWorkflowStageLabel(
+    props.view.currentStageKey,
+    [{ stageKey: props.view.currentStageKey, stageLabel: props.view.currentStageLabel }],
+    "阶段待同步",
+  );
 });
 
-const workflowStatusColor = computed(() => {
-  switch (props.view?.workflowStatus) {
-    case "running":
-      return "processing";
-    case "blocked":
-    case "failed":
-      return "error";
-    case "waiting-approval":
-      return "warning";
-    case "completed":
-      return "success";
-    default:
-      return "default";
-  }
-});
+const workflowStatusDisplay = computed(() =>
+  resolveWorkflowStatusDisplay(props.view?.workflowStatus),
+);
 
 function memberSummary(member: TaskMemberViewMember) {
   const responsibility = member.responsibilityLabels[0] || member.statusLabel;

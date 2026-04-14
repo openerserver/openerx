@@ -25,7 +25,6 @@ export interface EnvironmentApprovalPolicyBinding {
 export interface ProjectSettings {
   defaultModel?: string;
   defaultEnvironmentId?: string;
-  allowPaidExecution?: boolean;
   workflowTemplateId?: string;
   approvalPolicyTemplateId?: string;
   projectGroupKey?: string | null;
@@ -62,6 +61,13 @@ export type ProjectTreeLinkType =
   | "related";
 
 export type PaidExecutionLeaseStatus = "active" | "revoked" | "expired";
+export type ProjectModelFundStatus = "active" | "depleted";
+export type ProjectModelFundLedgerType =
+  | "grant"
+  | "reserve"
+  | "consume"
+  | "refund"
+  | "adjust";
 export type RuntimeUsageLedgerStatus = "running" | "completed" | "failed" | "cancelled";
 export type RuntimeUsageLedgerStepType = "execution" | "judge" | "hook" | "resume" | "other";
 export type RuntimeUsageLedgerStepStatus = "pending" | "completed" | "failed" | "skipped";
@@ -1648,6 +1654,56 @@ export const budgetConfigs = pgTable("budget_configs", {
   throttleThreshold: doublePrecision("throttle_threshold").notNull().default(0.95),
   createdAt: pgTimestampString("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
+
+export const projectModelFunds = pgTable(
+  "project_model_funds",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    currency: text("currency").notNull().default("USD"),
+    totalGranted: doublePrecision("total_granted").notNull().default(0),
+    reserved: doublePrecision("reserved").notNull().default(0),
+    consumed: doublePrecision("consumed").notNull().default(0),
+    status: text("status", {
+      enum: ["active", "depleted"],
+    })
+      .notNull()
+      .default("active"),
+    createdAt: pgTimestampString("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: pgTimestampString("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [uniqueIndex("idx_project_model_funds_project").on(table.projectId)],
+);
+
+export const projectModelFundLedger = pgTable(
+  "project_model_fund_ledger",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id),
+    fundId: text("fund_id")
+      .notNull()
+      .references(() => projectModelFunds.id),
+    type: text("type", {
+      enum: ["grant", "reserve", "consume", "refund", "adjust"],
+    }).notNull(),
+    amountUsd: doublePrecision("amount_usd").notNull(),
+    balanceAfter: doublePrecision("balance_after").notNull(),
+    modelRoute: text("model_route"),
+    taskId: text("task_id"),
+    runtimeSessionId: text("runtime_session_id"),
+    createdBy: text("created_by"),
+    createdAt: pgTimestampString("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    note: text("note"),
+  },
+  (table) => [
+    index("idx_fund_ledger_project_time").on(table.projectId, table.createdAt),
+    index("idx_fund_ledger_fund").on(table.fundId),
+  ],
+);
 
 // ── Workbench Layouts ──────────────────────────────────────────────
 

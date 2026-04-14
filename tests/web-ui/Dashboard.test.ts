@@ -471,7 +471,6 @@ function createGovernanceOverviewResponse() {
     summary: {
       blockedCount: 3,
       breakerCount: 2,
-      activeLeaseCount: 1,
       topRiskTaskCount: 2,
       runningTaskCount: 4,
       activeSessionCount: 3,
@@ -766,7 +765,6 @@ describe("Dashboard provider navigation", () => {
     expect(governanceText).toContain("付费执行治理总览");
     expect(governanceText).toContain("Block 命中");
     expect(governanceText).toContain("Breaker 触发");
-    expect(governanceText).toContain("Active Lease");
     expect(governanceText).toContain("Top 风险任务");
     expect(governanceText).toContain("运行中任务");
     expect(governanceText).toContain("活动会话");
@@ -965,7 +963,7 @@ describe("Dashboard provider navigation", () => {
     expect(openLedgerButton.exists()).toBe(true);
     await openLedgerButton.trigger("click");
 
-    expect(pushMock).toHaveBeenCalledWith({
+    expect(pushMock).toHaveBeenNthCalledWith(1, {
       name: "ProjectDetail",
       params: {
         projectId: "proj-beta",
@@ -982,8 +980,8 @@ describe("Dashboard provider navigation", () => {
     expect(openTaskButton.exists()).toBe(true);
     await openTaskButton.trigger("click");
 
-    expect(pushMock).toHaveBeenCalledWith({
-      name: "TaskDetail",
+    expect(pushMock).toHaveBeenNthCalledWith(2, {
+      name: "TaskDetailV3",
       params: {
         taskId: "task-beta-1",
       },
@@ -1002,8 +1000,8 @@ describe("Dashboard provider navigation", () => {
     expect(taskButton.exists()).toBe(true);
     await taskButton.trigger("click");
 
-    expect(pushMock).toHaveBeenCalledWith({
-      name: "TaskDetail",
+    expect(pushMock).toHaveBeenNthCalledWith(1, {
+      name: "TaskDetailV3",
       params: {
         taskId: "task-beta-1",
       },
@@ -1018,7 +1016,7 @@ describe("Dashboard provider navigation", () => {
     expect(projectButton.exists()).toBe(true);
     await projectButton.trigger("click");
 
-    expect(pushMock).toHaveBeenCalledWith({
+    expect(pushMock).toHaveBeenNthCalledWith(2, {
       name: "ProjectDetail",
       params: {
         projectId: "proj-beta",

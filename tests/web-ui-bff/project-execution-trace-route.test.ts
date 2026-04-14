@@ -32,6 +32,7 @@ mock.module("../../control-plane/web-ui-bff/src/lib/model-config", () => ({
   diagnoseModelReadiness: mock(() => ({ ready: true })),
   formatModelRoute: mock((value: string) => value),
   readDefaultExecutionModel: mock(() => "github-copilot:gpt-5.4"),
+  readOpencodeJson: mock(() => ({ models: { list: [] }, provider: {} })),
   resolveModelRoute: mock((value: string) => ({
     providerId: value.split(":")[0] || "github-copilot",
     modelId: value.split(":").slice(1).join(":") || value,
@@ -282,6 +283,7 @@ describe("project execution trace route", () => {
             meta: {
               readSource: "task-session-projection",
               complete: true,
+              snapshotVersion: 31,
               itemCount: 5,
             },
           },
@@ -310,6 +312,7 @@ describe("project execution trace route", () => {
     expect(payload.timelineMeta).toMatchObject({
       readSource: "task-session-projection",
       complete: true,
+      snapshotVersion: 31,
     });
     expectNoLegacyTimelineReadSource(payload);
     expect(payload.snapshot).toMatchObject({

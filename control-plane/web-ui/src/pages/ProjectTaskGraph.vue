@@ -930,6 +930,7 @@ function isProjectGraphRelevantEvent(type: string) {
   return [
     "task.created",
     "task.completed",
+    "task.failed",
     "task.continued",
     "task.node.updated",
     "task.forked",
@@ -944,6 +945,13 @@ function applyRealtimeEventLocally(event: RealtimeEvent) {
     case "task.completed":
       patchTask(event.taskId, () => ({
         status: "completed",
+        finishedAt: event.ts,
+        latestActivityAt: event.ts,
+      }));
+      return;
+    case "task.failed":
+      patchTask(event.taskId, () => ({
+        status: "failed",
         finishedAt: event.ts,
         latestActivityAt: event.ts,
       }));

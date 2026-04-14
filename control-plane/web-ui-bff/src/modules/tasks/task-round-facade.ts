@@ -74,10 +74,20 @@ export interface TaskRoundMessagesDto {
   persistedThroughRevision: number;
 }
 
+export interface TaskRoundSyncStateDto {
+  reconcileRequired: boolean;
+  snapshotVersion: number;
+  persistedThroughRevision: number;
+}
+
 type QueryOk<T> = { ok: true; status: number; data: T };
 type QueryError = { ok: false; status: number; error: string; data?: Record<string, unknown> };
-
-type LegacyMessage = Record<string, unknown>;
+type TaskRoundMessagesMeta = {
+  messageCount?: number;
+  complete?: boolean;
+  snapshotVersion?: number;
+  persistedThroughRevision?: number;
+} | undefined;
 
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -88,6 +98,10 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function asString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function asFiniteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function resolveRoundKind(record: TaskSessionLineageRecord): TaskRoundKind {
@@ -239,6 +253,46 @@ function extractLegacyMessageCompletedAt(message: unknown) {
   return asString(record?.completedAt) ?? asString(time?.completed) ?? null;
 }
 
+function extractLegacyMessagePersistedRevision(message: unknown): number | null {
+  const record = asRecord(message);
+  const info = asRecord(record?.info);
+  const revision =
+    asFiniteNumber(record?.messageIndex) ??
+    asFiniteNumber(info?.messageIndex) ??
+    asFiniteNumber(record?.seq) ??
+    asFiniteNumber(info?.seq);
+
+  return typeof revision === "number" && revision >= 0 ? revision : null;
+}
+
+function resolveTaskRoundSyncState(
+  rawMessages: unknown[],
+  meta: TaskRoundMessagesMeta,
+): TaskRoundSyncStateDto {
+  const snapshotVersion =
+    typeof meta?.snapshotVersion === "number" && Number.isFinite(meta.snapshotVersion)
+      ? meta.snapshotVersion
+      : meta?.messageCount ?? rawMessages.length;
+  const persistedThroughRevision =
+    typeof meta?.persistedThroughRevision === "number" &&
+    Number.isFinite(meta.persistedThroughRevision)
+      ? meta.persistedThroughRevision
+      : rawMessages.reduce<number>((maxRevision, message) => {
+          const revision = extractLegacyMessagePersistedRevision(message);
+          if (revision == null) {
+            return maxRevision;
+          }
+          return Math.max(maxRevision, revision);
+        }, -1);
+
+  return {
+    reconcileRequired: meta?.complete === false,
+    snapshotVersion,
+    persistedThroughRevision:
+      persistedThroughRevision >= 0 ? persistedThroughRevision : snapshotVersion,
+  };
+}
+
 function extractLegacyMessageErrorText(message: unknown) {
   const record = asRecord(message);
   const info = asRecord(record?.info);
@@ -351,15 +405,23 @@ async function resolveRoundPromptText(
   return extractPromptTextFromMessages(messages) || (record.branchName ?? "");
 }
 
+function resolvePartialRoundPromptText() {
+  return "";
+}
+
 async function buildRoundDto(
   taskId: string,
   authorization: string,
   record: TaskSessionLineageRecord,
   recordsByRuntimeSessionId: Map<string, TaskSessionLineageRecord>,
+  options?: { allowPartialPrompt?: boolean },
 ): Promise<TaskRoundDto> {
   const kind = resolveRoundKind(record);
   const roundId = resolveRoundId(taskId, record);
-  const promptText = await resolveRoundPromptText(taskId, authorization, record);
+  const allowPartialPrompt = options?.allowPartialPrompt === true;
+  const promptText = allowPartialPrompt
+    ? resolvePartialRoundPromptText()
+    : await resolveRoundPromptText(taskId, authorization, record);
   const createdAt = record.createdAt ?? record.updatedAt ?? new Date(0).toISOString();
   const updatedAt = record.updatedAt ?? record.createdAt ?? createdAt;
 
@@ -383,7 +445,7 @@ async function buildRoundDto(
     createdAt,
     updatedAt,
     stale: false,
-    partial: promptText.length === 0,
+    partial: allowPartialPrompt || promptText.length === 0,
   } satisfies TaskRoundDto;
 }
 
@@ -448,15 +510,27 @@ export async function queryCurrentTaskRound(args: {
   taskId: string;
   authorization: string;
 }): Promise<QueryOk<{ taskId: string; round: TaskRoundDto | null }> | QueryError> {
-  const roundsResult = await queryTaskRounds(args);
-  if (!roundsResult.ok) {
-    return roundsResult;
+  const lineageResult = await fetchTaskSessionLineageRecords(args.taskId, args.authorization);
+  if (!lineageResult.ok) {
+    return {
+      ok: false,
+      status: lineageResult.status,
+      error: "Failed to load task rounds",
+    };
   }
 
-  const round =
-    roundsResult.data.currentRoundId != null
-      ? roundsResult.data.rounds.find((item) => item.id === roundsResult.data.currentRoundId) ?? null
-      : null;
+  const records = lineageResult.activeRecords;
+  const currentRecord = pickCurrentRoundRecord(records);
+  const round = currentRecord
+    ? await buildRoundDto(
+        args.taskId,
+        args.authorization,
+        currentRecord,
+        new Map(records.map((record) => [record.runtimeSessionId, record] as const)),
+        { allowPartialPrompt: true },
+      )
+    : null;
+
   return {
     ok: true,
     status: 200,
@@ -464,6 +538,33 @@ export async function queryCurrentTaskRound(args: {
       taskId: args.taskId,
       round,
     },
+  };
+}
+
+export async function queryTaskRoundSyncState(args: {
+  taskId: string;
+  sessionId: string;
+  authorization: string;
+}) {
+  const messagesResult = await fetchTaskSessionCachedCompatMessages(
+    args.taskId,
+    args.sessionId,
+    args.authorization,
+    { includeLineage: false },
+  );
+  if (!messagesResult.ok) {
+    return {
+      ok: false as const,
+      status: messagesResult.status,
+      error: messagesResult.error ?? "Failed to load task round sync state",
+    };
+  }
+
+  const rawMessages = Array.isArray(messagesResult.data?.data) ? messagesResult.data.data : [];
+  return {
+    ok: true as const,
+    status: 200 as const,
+    data: resolveTaskRoundSyncState(rawMessages, messagesResult.data?.meta),
   };
 }
 
@@ -518,8 +619,7 @@ export async function queryTaskRoundMessages(args: {
   const messages = rawMessages
     .map((message) => buildMessageDto(round, message))
     .filter((message): message is TaskMessageDto => Boolean(message));
-  const version = messagesResult.data?.meta?.messageCount ?? messages.length;
-  const complete = messagesResult.data?.meta?.complete;
+  const syncState = resolveTaskRoundSyncState(rawMessages, messagesResult.data?.meta);
 
   return {
     ok: true,
@@ -528,9 +628,9 @@ export async function queryTaskRoundMessages(args: {
       taskId: args.taskId,
       round,
       messages,
-      reconcileRequired: complete === false,
-      snapshotVersion: version,
-      persistedThroughRevision: version,
+      reconcileRequired: syncState.reconcileRequired,
+      snapshotVersion: syncState.snapshotVersion,
+      persistedThroughRevision: syncState.persistedThroughRevision,
     },
   };
 }

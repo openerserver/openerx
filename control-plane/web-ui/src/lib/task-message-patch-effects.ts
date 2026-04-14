@@ -18,6 +18,8 @@ const LIVE_ASSISTANT_PATCH_KINDS = new Set<TaskMessagePatchEvent["kind"]>([
 const CANONICAL_MESSAGE_REFRESH_PATCH_KINDS = new Set<TaskMessagePatchEvent["kind"]>([
   "message-persisted",
   "round-synced",
+  "message-reconcile-required",
+  "task-reconcile-required",
 ]);
 
 const PHASE_REFRESH_PATCH_KINDS = new Set<TaskMessagePatchEvent["kind"]>([
@@ -32,13 +34,8 @@ const PHASE_REFRESH_PATCH_KINDS = new Set<TaskMessagePatchEvent["kind"]>([
 ]);
 
 const TASK_DETAIL_MESSAGE_REFRESH_PATCH_KINDS = new Set<TaskMessagePatchEvent["kind"]>([
-  ...CANONICAL_MESSAGE_REFRESH_PATCH_KINDS,
-  "session-created",
-  "session-updated",
-  "task-completed",
-  "task-failed",
-  "task-continued",
-  "task-node-updated",
+  "round-synced",
+  "message-reconcile-required",
 ]);
 
 const TASK_DETAIL_TRACE_REFRESH_PATCH_KINDS = new Set<TaskMessagePatchEvent["kind"]>([
@@ -49,13 +46,23 @@ const TASK_DETAIL_TRACE_REFRESH_PATCH_KINDS = new Set<TaskMessagePatchEvent["kin
 ]);
 
 const TASK_DETAIL_REFRESH_PATCH_KINDS = new Set<TaskMessagePatchEvent["kind"]>([
+  "flow-reconcile-required",
+  "task-reconcile-required",
+  "workflow-reconcile-required",
+  "session-created",
+  "session-updated",
   "task-updated",
+  "task-completed",
+  "task-failed",
+  "task-continued",
+  "task-node-updated",
   "agent-started",
   ...PHASE_REFRESH_PATCH_KINDS,
   ...TASK_DETAIL_TRACE_REFRESH_PATCH_KINDS,
 ]);
 
 const MONITOR_SUMMARY_REFRESH_PATCH_KINDS = new Set<TaskMessagePatchEvent["kind"]>([
+  "task-reconcile-required",
   "session-created",
   "session-updated",
   ...PHASE_REFRESH_PATCH_KINDS,

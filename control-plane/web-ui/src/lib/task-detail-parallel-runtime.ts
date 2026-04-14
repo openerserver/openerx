@@ -647,6 +647,10 @@ export function resolveNextSelectedSessionId(
     return selectedSessionId;
   }
 
+  if (!selectedSessionId && !args.currentParallelRun && !args.adoptedCandidateSessionId) {
+    return undefined;
+  }
+
   const baseSessionId = resolveBaseSessionId(args);
   const currentRun = args.currentParallelRun;
   const baseSessionParticipatesInCurrentRun = Boolean(

@@ -446,6 +446,97 @@ describe("Settings – test execution model policy", () => {
       }),
     );
   });
+
+  it("persists billing settings for configured models", async () => {
+    apiMocks.getConfigOverview.mockResolvedValueOnce({
+      data: {
+        agents: [],
+        skills: [],
+        models: {
+          defaults: {
+            model: "github-copilot:gpt-5-mini",
+            testModel: "github-copilot:gpt-5-mini",
+          },
+          list: [
+            {
+              id: "gpt-4o",
+              provider: "github-copilot",
+              name: "GPT-4o",
+            },
+          ],
+        },
+        mcp: {},
+        plugins: [],
+      },
+    });
+    apiMocks.getModelsConfig.mockResolvedValueOnce({
+      data: {
+        defaults: {
+          model: "github-copilot:gpt-5-mini",
+          testModel: "github-copilot:gpt-5-mini",
+        },
+        providers: {},
+        list: [
+          {
+            id: "gpt-4o",
+            provider: "github-copilot",
+            name: "GPT-4o",
+          },
+        ],
+      },
+    });
+    apiMocks.updateModelsConfig.mockResolvedValueOnce({ restartRequired: false });
+
+    const { wrapper } = await mountSettings({ role: "platform_admin" });
+
+    const setupState = (wrapper.vm as { $?: { setupState?: Record<string, unknown> } }).$
+      ?.setupState;
+    expect(setupState).toBeTruthy();
+    expect(typeof setupState?.setModelBillingStatus).toBe("function");
+    expect(typeof setupState?.setModelBillingMethod).toBe("function");
+    expect(typeof setupState?.updateModelBillingPrice).toBe("function");
+    expect(typeof setupState?.saveModels).toBe("function");
+
+    const models = setupState?.modelsData as { list: Array<Record<string, unknown>> };
+    const targetModel = models.list.find((item) => item.id === "gpt-4o");
+    expect(targetModel).toBeTruthy();
+
+    (setupState?.setModelBillingStatus as (record: Record<string, unknown>, checked: boolean) => void)(
+      targetModel as Record<string, unknown>,
+      true,
+    );
+    (setupState?.setModelBillingMethod as (record: Record<string, unknown>, value: string) => void)(
+      targetModel as Record<string, unknown>,
+      "request_metered",
+    );
+    (
+      setupState?.updateModelBillingPrice as (
+        record: Record<string, unknown>,
+        field: string,
+        value: number,
+      ) => void
+    )(targetModel as Record<string, unknown>, "perRequestUsd", 0.025);
+
+    await (setupState?.saveModels as () => Promise<void>)();
+    await flushPromises();
+
+    expect(apiMocks.updateModelsConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        list: expect.arrayContaining([
+          expect.objectContaining({
+            id: "gpt-4o",
+            provider: "github-copilot",
+            billingStatus: "paid",
+            billingMethod: "request_metered",
+            price: {
+              currency: "USD",
+              perRequestUsd: 0.025,
+            },
+          }),
+        ]),
+      }),
+    );
+  });
 });
 
 describe("Settings – strategy/policy loading state", () => {

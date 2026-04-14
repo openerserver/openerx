@@ -1,5 +1,5 @@
-import { type UpstreamResponse, cpFetch } from "./control-plane-client";
-import { formatModelRoute, resolveModelRoute } from "./model-config";
+import { formatModelRoute, readOpencodeJson, resolveModelRoute } from "./model-config";
+import type { ProjectModelFundSnapshot } from "./project-fund";
 
 export type GuardDecision = "allow" | "allow-with-downgrade" | "require-approval" | "deny";
 export type ModelCostTier = "free" | "low" | "medium" | "high" | "premium";
@@ -71,45 +71,14 @@ export interface ModelExecutionPolicy {
   maxParallelCandidates: number;
   allowJudge: boolean;
   allowHooks: boolean;
-  requiresExplicitGate: boolean;
-  requiresLease: boolean;
   suggestedModel?: string;
-}
-
-export interface PaidExecutionLeaseRecord {
-  id: string;
-  projectId: string;
-  issuedByUserId?: string | null;
-  revokedByUserId?: string | null;
-  reason?: string | null;
-  status: "active" | "revoked" | "expired";
-  expiresAt: string;
-  createdAt: string;
-  updatedAt: string;
-  revokedAt?: string | null;
-}
-
-export interface PaidExecutionLeaseState {
-  projectId: string;
-  activeLease: PaidExecutionLeaseRecord | null;
-  now: string;
-}
-
-export interface PaidExecutionRequirements {
-  allowPaidExecution: boolean;
-  leaseRequired: boolean;
-  hasAllowPaidExecution: boolean;
-  hasLease: boolean;
-  leaseId: string | null;
 }
 
 export interface PaidExecutionPreflightResult {
   allowed: boolean;
   code: string;
   policy: ModelExecutionPolicy;
-  requirements: PaidExecutionRequirements;
   estimate: PaidExecutionEstimate;
-  activeLease: PaidExecutionLeaseRecord | null;
 }
 
 export interface PaidExecutionGuardState {
@@ -117,7 +86,6 @@ export interface PaidExecutionGuardState {
   providerId: string;
   modelId: string;
   modelRoute: string;
-  leaseId: string | null;
   guardDecision: GuardDecision;
   guardReason: string;
   estimatedRequestUpperBound: number;
@@ -130,6 +98,8 @@ export interface PaidExecutionGuardState {
   maxEstimatedCostUsdPerRun: number;
   overridesApplied: PaidExecutionOverride[];
   postHooksDisabled: boolean;
+  fundReservedTotalUsd?: number;
+  fundReservedRemainingUsd?: number;
   breakerTrippedAt?: string;
   breakerReason?: string;
 }
@@ -144,10 +114,13 @@ export interface PaidExecutionShape {
 
 export interface PaidExecutionPreflightInput {
   projectId: string;
-  allowPaidExecution?: boolean;
   resolvedModel?: ResolvedModelLike;
   shape: PaidExecutionShape;
   baseline?: RuntimeUsageBaselineLike | null;
+  funding?: Pick<
+    ProjectModelFundSnapshot,
+    "available" | "hasFund" | "currency" | "reserved" | "consumed" | "totalGranted"
+  > | null;
 }
 
 export function buildPreflightOrchestrationFingerprint(shape: PaidExecutionShape) {
@@ -179,8 +152,6 @@ const POLICY_BY_COST_TIER: Record<
     maxParallelCandidates: 4,
     allowJudge: true,
     allowHooks: true,
-    requiresExplicitGate: false,
-    requiresLease: false,
   },
   low: {
     costTier: "low",
@@ -191,8 +162,6 @@ const POLICY_BY_COST_TIER: Record<
     maxParallelCandidates: 5,
     allowJudge: false,
     allowHooks: true,
-    requiresExplicitGate: true,
-    requiresLease: false,
   },
   medium: {
     costTier: "medium",
@@ -203,8 +172,6 @@ const POLICY_BY_COST_TIER: Record<
     maxParallelCandidates: 5,
     allowJudge: false,
     allowHooks: true,
-    requiresExplicitGate: true,
-    requiresLease: false,
   },
   high: {
     costTier: "high",
@@ -215,8 +182,6 @@ const POLICY_BY_COST_TIER: Record<
     maxParallelCandidates: 5,
     allowJudge: false,
     allowHooks: false,
-    requiresExplicitGate: true,
-    requiresLease: true,
   },
   premium: {
     costTier: "premium",
@@ -227,8 +192,6 @@ const POLICY_BY_COST_TIER: Record<
     maxParallelCandidates: 5,
     allowJudge: false,
     allowHooks: false,
-    requiresExplicitGate: true,
-    requiresLease: true,
   },
 };
 
@@ -308,7 +271,7 @@ function splitTokenUsage(totalTokens: number) {
   };
 }
 
-function detectModelCostTier(modelRoute: string, providerId: string): ModelCostTier {
+function detectHeuristicModelCostTier(modelRoute: string, providerId: string): ModelCostTier {
   const normalizedRoute = modelRoute.toLowerCase();
   const normalizedProvider = providerId.toLowerCase();
 
@@ -349,6 +312,55 @@ function detectModelCostTier(modelRoute: string, providerId: string): ModelCostT
   return "medium";
 }
 
+function resolveConfiguredBillingStatus(
+  modelRoute: string,
+  providerId: string,
+): "free" | "paid" | undefined {
+  const config = readOpencodeJson();
+  const list = Array.isArray((config.models as Record<string, unknown> | undefined)?.list)
+    ? ((config.models as Record<string, unknown>).list as Array<Record<string, unknown>>)
+    : [];
+  const normalizedRoute = modelRoute.trim();
+  const fallbackPrefix = `${providerId.trim()}:`;
+
+  const match = list.find((item) => {
+    const itemProvider = typeof item.provider === "string" ? item.provider.trim() : "";
+    const itemId = typeof item.id === "string" ? item.id.trim() : "";
+    if (!itemProvider || !itemId) {
+      return false;
+    }
+
+    const configuredRoute = formatModelRoute({ providerId: itemProvider, modelId: itemId });
+    return configuredRoute === normalizedRoute || configuredRoute === `${fallbackPrefix}${itemId}`;
+  });
+
+  if (!match) {
+    return undefined;
+  }
+
+  if (match.billingStatus === "paid") {
+    return "paid";
+  }
+  if (match.billingStatus === "free") {
+    return "free";
+  }
+  return undefined;
+}
+
+function detectModelCostTier(modelRoute: string, providerId: string): ModelCostTier {
+  const configuredBillingStatus = resolveConfiguredBillingStatus(modelRoute, providerId);
+  if (configuredBillingStatus === "free") {
+    return "free";
+  }
+
+  const heuristicTier = detectHeuristicModelCostTier(modelRoute, providerId);
+  if (configuredBillingStatus === "paid") {
+    return heuristicTier === "free" ? "low" : heuristicTier;
+  }
+
+  return heuristicTier;
+}
+
 export function isFreeExecutionModelRoute(modelRoute: string, providerId: string): boolean {
   return detectModelCostTier(modelRoute, providerId) === "free";
 }
@@ -383,6 +395,7 @@ function buildModelExecutionPolicy(
     environment,
     suggestedModel,
     ...policyDefaults,
+    defaultDecision: "allow",
   };
 }
 
@@ -482,21 +495,6 @@ function buildShapeMetrics(
   };
 }
 
-function buildRequirements(
-  policy: ModelExecutionPolicy,
-  input: Pick<PaidExecutionPreflightInput, "allowPaidExecution">,
-  leaseState: PaidExecutionLeaseState,
-): PaidExecutionRequirements {
-  return {
-    allowPaidExecution: policy.requiresExplicitGate,
-    leaseRequired: policy.requiresLease,
-    hasAllowPaidExecution:
-      process.env.ALLOW_PAID_MODEL_EXECUTION === "1" || input.allowPaidExecution === true,
-    hasLease: Boolean(leaseState.activeLease?.id),
-    leaseId: leaseState.activeLease?.id ?? null,
-  };
-}
-
 function resolveModelRiskImpact(policy: ModelExecutionPolicy): PaidExecutionRiskDriver["impact"] {
   if (!policy.isPaid) {
     return "low";
@@ -572,14 +570,17 @@ function buildHookRiskDriver(
 }
 
 function buildBudgetRiskDriver(
-  policy: ModelExecutionPolicy,
+  _policy: ModelExecutionPolicy,
   metrics: ShapeMetrics,
+  remainingUsd: number | null,
   guardDecision: GuardDecision,
   guardReason: string,
 ): PaidExecutionRiskDriver {
+  const remainingLabel = remainingUsd == null ? "n/a" : `$${remainingUsd}`;
+
   return {
     type: "budget",
-    label: `estimated $${metrics.estimatedCostUpper} / limit $${policy.maxEstimatedCostUsdPerRun}`,
+    label: `estimated $${metrics.estimatedCostUpper} / available ${remainingLabel}`,
     impact:
       guardDecision === "allow"
         ? "low"
@@ -594,6 +595,7 @@ function buildRiskDrivers(
   policy: ModelExecutionPolicy,
   shape: PaidExecutionShape,
   metrics: ShapeMetrics,
+  remainingUsd: number | null,
   guardDecision: GuardDecision,
   guardReason: string,
 ): PaidExecutionRiskDriver[] {
@@ -602,52 +604,14 @@ function buildRiskDrivers(
     buildParallelRiskDriver(policy, shape),
     buildJudgeRiskDriver(policy, shape),
     buildHookRiskDriver(policy, shape, metrics),
-    buildBudgetRiskDriver(policy, metrics, guardDecision, guardReason),
+    buildBudgetRiskDriver(policy, metrics, remainingUsd, guardDecision, guardReason),
   ].filter((driver): driver is PaidExecutionRiskDriver => Boolean(driver));
-}
-
-function exceedsShapePolicy(
-  policy: ModelExecutionPolicy,
-  shape: PaidExecutionShape,
-  metrics: ShapeMetrics,
-) {
-  return (
-    shape.candidateCount > policy.maxParallelCandidates ||
-    (shape.judgeEnabled && !policy.allowJudge) ||
-    (metrics.enabledHookCount > 0 && !policy.allowHooks)
-  );
-}
-
-function exceedsBudgetPolicy(policy: ModelExecutionPolicy, metrics: ShapeMetrics) {
-  const exceedsRequestLimit = metrics.estimatedRequestsUpper > policy.maxRequestsPerRun;
-  const exceedsCostLimit =
-    policy.maxEstimatedCostUsdPerRun > 0 &&
-    metrics.estimatedCostUpper > policy.maxEstimatedCostUsdPerRun;
-
-  return exceedsRequestLimit || exceedsCostLimit;
-}
-
-function resolveShapeViolationReasons(
-  policy: ModelExecutionPolicy,
-  shape: PaidExecutionShape,
-  metrics: ShapeMetrics,
-) {
-  return [
-    shape.candidateCount > policy.maxParallelCandidates
-      ? `parallel candidates ${shape.candidateCount} > ${policy.maxParallelCandidates}`
-      : null,
-    shape.judgeEnabled && !policy.allowJudge ? "judge must be disabled" : null,
-    metrics.enabledHookCount > 0 && !policy.allowHooks
-      ? `hooks must be disabled (${shape.enabledHookTriggers.join(", ")})`
-      : null,
-  ].filter((value): value is string => Boolean(value));
 }
 
 function canSuggestedModelAllowShape(
   suggestedModel: string | undefined,
   shape: PaidExecutionShape,
-  input: Pick<PaidExecutionPreflightInput, "allowPaidExecution">,
-  leaseState: PaidExecutionLeaseState,
+  availableFundUsd: number,
 ) {
   const resolved = parseModelRoute(suggestedModel);
   if (!resolved) {
@@ -655,33 +619,9 @@ function canSuggestedModelAllowShape(
   }
 
   const suggestedPolicy = buildModelExecutionPolicy(resolved);
-  const suggestedRequirements = buildRequirements(suggestedPolicy, input, leaseState);
   const suggestedMetrics = buildShapeMetrics(suggestedPolicy, shape);
 
-  if (suggestedPolicy.requiresExplicitGate && !suggestedRequirements.hasAllowPaidExecution) {
-    return false;
-  }
-  if (suggestedPolicy.requiresLease && !suggestedRequirements.hasLease) {
-    return false;
-  }
-  if (exceedsShapePolicy(suggestedPolicy, shape, suggestedMetrics)) {
-    return false;
-  }
-  if (exceedsBudgetPolicy(suggestedPolicy, suggestedMetrics)) {
-    return false;
-  }
-
-  return true;
-}
-
-export async function fetchProjectPaidExecutionLeaseState(
-  projectId: string,
-  authorization: string,
-): Promise<UpstreamResponse<PaidExecutionLeaseState>> {
-  return cpFetch<PaidExecutionLeaseState>(
-    `/api/projects/${encodeURIComponent(projectId)}/paid-execution-lease`,
-    { authorization },
-  );
+  return !suggestedPolicy.isPaid || availableFundUsd >= suggestedMetrics.estimatedCostUpper;
 }
 
 export function estimatePaidExecutionUsage(
@@ -709,7 +649,6 @@ export function createPaidExecutionGuardState(
     providerId: preflight.policy.providerId,
     modelId: preflight.policy.modelId,
     modelRoute: preflight.policy.modelRoute,
-    leaseId: preflight.requirements.leaseId,
     guardDecision: preflight.estimate.guardDecision,
     guardReason: preflight.estimate.guardReason,
     estimatedRequestUpperBound: preflight.estimate.requestCount.max,
@@ -722,54 +661,42 @@ export function createPaidExecutionGuardState(
     maxEstimatedCostUsdPerRun: preflight.policy.maxEstimatedCostUsdPerRun,
     overridesApplied,
     postHooksDisabled: overridesApplied.includes("post-hook-disabled"),
+    fundReservedTotalUsd: 0,
+    fundReservedRemainingUsd: 0,
   };
 }
 
 export function evaluatePaidExecutionPreflight(
   input: PaidExecutionPreflightInput,
-  leaseState: PaidExecutionLeaseState,
 ): PaidExecutionPreflightResult {
   const policy = buildModelExecutionPolicy(input.resolvedModel);
-  const requirements = buildRequirements(policy, input, leaseState);
   const metrics = buildShapeMetrics(policy, input.shape, input.baseline);
+  const availableFundUsd = roundEstimate(Math.max(0, input.funding?.available ?? 0));
+  const hasEnoughFund = !policy.isPaid || availableFundUsd >= metrics.estimatedCostUpper;
 
   let guardDecision: GuardDecision = "allow";
-  let guardReason = "Execution is within the current paid-model policy window.";
+  let guardReason =
+    !policy.isPaid
+      ? "Execution uses a free model and does not require project fund reservation."
+      : `Project fund can cover the estimated upper bound of $${metrics.estimatedCostUpper}.`;
   let code = "PAID_EXECUTION_ALLOWED";
 
-  if (policy.requiresExplicitGate && !requirements.hasAllowPaidExecution) {
-    guardDecision = "deny";
-    guardReason =
-      "Missing ALLOW_PAID_MODEL_EXECUTION=1; BFF blocks paid execution before creating the runtime session.";
-    code = "PAID_EXECUTION_GATE_REQUIRED";
-  } else if (policy.requiresLease && !requirements.hasLease) {
-    guardDecision = "require-approval";
-    guardReason =
-      "The selected model requires an active paid execution lease issued by the control-plane service before execution can proceed.";
-    code = "PAID_EXECUTION_LEASE_REQUIRED";
-  } else if (exceedsShapePolicy(policy, input.shape, metrics)) {
-    const reasons = resolveShapeViolationReasons(policy, input.shape, metrics);
-    if (canSuggestedModelAllowShape(policy.suggestedModel, input.shape, input, leaseState)) {
+  if (policy.isPaid && !hasEnoughFund) {
+    if (canSuggestedModelAllowShape(policy.suggestedModel, input.shape, availableFundUsd)) {
       guardDecision = "allow-with-downgrade";
-      guardReason = `Execution shape exceeds the current model policy. Retry with ${policy.suggestedModel} before creating the runtime session: ${reasons.join("; ")}.`;
-      code = "PAID_EXECUTION_DOWNGRADE_REQUIRED";
+      guardReason = `Current model is estimated at $${metrics.estimatedCostUpper}, but project fund available is $${availableFundUsd}. Retry with ${policy.suggestedModel}.`;
+      code = "PAID_EXECUTION_FUND_DOWNGRADE_SUGGESTED";
     } else {
       guardDecision = "deny";
-      guardReason = `Execution shape exceeds policy and cannot be auto-downgraded safely: ${reasons.join("; ")}.`;
-      code = "PAID_EXECUTION_POLICY_SHAPE_EXCEEDED";
+      guardReason = `Current model is estimated at $${metrics.estimatedCostUpper}, but project fund available is only $${availableFundUsd}. Grant more fund or switch to a cheaper model.`;
+      code = "PAID_EXECUTION_FUND_REQUIRED";
     }
-  } else if (exceedsBudgetPolicy(policy, metrics)) {
-    guardDecision = "deny";
-    guardReason = `Estimated amplification exceeds policy: requests=${metrics.estimatedRequestsUpper}/${policy.maxRequestsPerRun}, cost=$${metrics.estimatedCostUpper}/$${policy.maxEstimatedCostUsdPerRun}.`;
-    code = "PAID_EXECUTION_POLICY_LIMIT_EXCEEDED";
   }
 
   return {
     allowed: guardDecision === "allow",
     code,
     policy,
-    requirements,
-    activeLease: leaseState.activeLease,
     estimate: {
       providerId: policy.providerId,
       modelId: policy.modelId,
@@ -781,20 +708,19 @@ export function evaluatePaidExecutionPreflight(
       outputTokens: buildExecutionEstimateRange(metrics.outputLower, metrics.outputUpper),
       totalTokens: buildExecutionEstimateRange(metrics.totalLower, metrics.totalUpper),
       costUsd: buildExecutionEstimateRange(metrics.estimatedCostLower, metrics.estimatedCostUpper),
-      riskDrivers: buildRiskDrivers(policy, input.shape, metrics, guardDecision, guardReason),
+      riskDrivers: buildRiskDrivers(
+        policy,
+        input.shape,
+        metrics,
+        policy.isPaid ? availableFundUsd : null,
+        guardDecision,
+        guardReason,
+      ),
       budgetHeadroom: {
-        remainingUsd:
-          policy.maxEstimatedCostUsdPerRun > 0
-            ? roundEstimate(
-                Math.max(0, policy.maxEstimatedCostUsdPerRun - metrics.estimatedCostUpper),
-              )
-            : null,
-        enoughForSingleRun:
-          policy.maxEstimatedCostUsdPerRun <= 0 ||
-          metrics.estimatedCostUpper <= policy.maxEstimatedCostUsdPerRun,
+        remainingUsd: policy.isPaid ? availableFundUsd : null,
+        enoughForSingleRun: hasEnoughFund,
         enoughForSuiteRun:
-          policy.maxEstimatedCostUsdPerRun <= 0 ||
-          metrics.estimatedCostUpper * 4 <= policy.maxEstimatedCostUsdPerRun,
+          !policy.isPaid || availableFundUsd >= roundEstimate(metrics.estimatedCostUpper * 4),
       },
       baselineSource: metrics.baselineSource,
       guardDecision,

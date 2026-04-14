@@ -1,9 +1,17 @@
 # TaskDetail Realtime Broadcaster Mapper 草案
 
-> 状态：Draft v1
+> 状态：Draft v1，未来 service/BFF 出口收口方案
 > 日期：2026-03-29
 > 作者：GitHub Copilot
 > 关联文档：[task-detail-realtime-event-contract.md](task-detail-realtime-event-contract.md)、[task-session-message-service-route-dto-draft.md](task-session-message-service-route-dto-draft.md)、[task-detail-message-state-machine-plan.md](task-detail-message-state-machine-plan.md)
+
+## 0. 文档定位
+
+这份文档属于 TaskDetail realtime 的“服务端出口目标设计”，用来承接 public contract，不是对现网 broadcaster 结构的事实描述。
+
+1. 当前实现：domain realtime 事件仍分散在 `sseAggregator`、`tasks/routes.ts`、`agent-control/routes.ts` 等入口，广播出口并不唯一。
+2. 未来目标：所有 domain event 先进入 mapper，再由 publisher 统一广播 public DTO。
+3. 阅读建议：先看 [task-detail-realtime-event-contract.md](task-detail-realtime-event-contract.md) 确认 DTO，再用本文设计 service / BFF 内部 source event、mapper 和 publisher 边界；如果要看现网页面切换效果，则回到 [task-detail-realtime-persisted-coordination-plan.md](task-detail-realtime-persisted-coordination-plan.md)。
 
 ## 1. 文档目的
 
@@ -13,7 +21,7 @@
 
 这份文档不定义最终页面行为，那已经在 realtime contract 和 TaskDetail 状态机文档里定义过了。这里聚焦的是“服务端出口层”。
 
-## 2. 现状问题
+## 2. 当前实现问题
 
 当前 realtime 广播存在三个入口：
 
@@ -35,7 +43,7 @@
 3. 页面还在直接解析 `message.updated`、`rawType`、`data.info`、`data.part`
 4. 任何新增 runtime 事件都可能无意间泄漏到前端 contract
 
-## 3. 目标架构
+## 3. 未来目标架构
 
 目标架构只有一句话：
 
@@ -73,7 +81,7 @@ mapper 只能基于“数据库已经提交成功的事实”生成 public DTO�
 
 也就是说：
 
-1. 不能在事务提交前广播 `task.message.created`
+1. 不能在事务提交前广播 `task.message.updated`
 2. 不能用纯 runtime chunk 临时拼出浏览器 contract
 3. 如需发 delta，必须先完成对应 message flush
 
@@ -130,6 +138,8 @@ export type TaskRealtimeSourceEvent =
   | AssistantPlaceholderPersistedSourceEvent
   | AssistantMessageDeltaFlushedSourceEvent
   | AssistantMessageCompletedSourceEvent
+  | AssistantMessagePersistedSourceEvent
+  | RoundSnapshotSyncedSourceEvent
   | AssistantMessageFailedSourceEvent
   | AssistantMessageCancelledSourceEvent
   | SessionOperationUpdatedSourceEvent
@@ -195,7 +205,32 @@ export interface AssistantMessageCompletedSourceEvent extends TaskRealtimeSource
 }
 ```
 
-### 6.2.5 assistant 失败
+### 6.2.5 assistant persisted ack
+
+```ts
+export interface AssistantMessagePersistedSourceEvent extends TaskRealtimeSourceEventBase {
+  sourceType: "assistant.message.persisted";
+  roundId: string;
+  taskSessionId: string;
+  messageId: string;
+  persistedRevision: number;
+}
+```
+
+### 6.2.6 round snapshot 已追平
+
+```ts
+export interface RoundSnapshotSyncedSourceEvent extends TaskRealtimeSourceEventBase {
+  sourceType: "round.snapshot.synced";
+  roundId: string;
+  taskSessionId: string;
+  messageId?: string;
+  persistedThroughRevision: number;
+  snapshotVersion?: number;
+}
+```
+
+### 6.2.7 assistant 失败
 
 ```ts
 export interface AssistantMessageFailedSourceEvent extends TaskRealtimeSourceEventBase {
@@ -211,7 +246,7 @@ export interface AssistantMessageFailedSourceEvent extends TaskRealtimeSourceEve
 }
 ```
 
-### 6.2.6 assistant 取消
+### 6.2.8 assistant 取消
 
 ```ts
 export interface AssistantMessageCancelledSourceEvent extends TaskRealtimeSourceEventBase {
@@ -222,7 +257,7 @@ export interface AssistantMessageCancelledSourceEvent extends TaskRealtimeSource
 }
 ```
 
-### 6.2.7 operation 更新
+### 6.2.9 operation 更新
 
 ```ts
 export interface SessionOperationUpdatedSourceEvent extends TaskRealtimeSourceEventBase {
@@ -231,7 +266,7 @@ export interface SessionOperationUpdatedSourceEvent extends TaskRealtimeSourceEv
 }
 ```
 
-### 6.2.8 task snapshot 变化
+### 6.2.10 task snapshot 变化
 
 ```ts
 export interface TaskSnapshotChangedSourceEvent extends TaskRealtimeSourceEventBase {
@@ -239,7 +274,7 @@ export interface TaskSnapshotChangedSourceEvent extends TaskRealtimeSourceEventB
 }
 ```
 
-### 6.2.9 runtime permission 变化
+### 6.2.11 runtime permission 变化
 
 ```ts
 export interface RuntimePermissionChangedSourceEvent extends TaskRealtimeSourceEventBase {
@@ -249,7 +284,7 @@ export interface RuntimePermissionChangedSourceEvent extends TaskRealtimeSourceE
 }
 ```
 
-### 6.2.10 workflow stage patch
+### 6.2.12 workflow stage patch
 
 ```ts
 export interface WorkflowStagePatchSourceEvent extends TaskRealtimeSourceEventBase {
@@ -258,22 +293,23 @@ export interface WorkflowStagePatchSourceEvent extends TaskRealtimeSourceEventBa
 }
 ```
 
-### 6.2.11 reconcile 信号
+### 6.2.13 reconcile 信号
 
 ```ts
 export interface ReconcileRequiredSourceEvent extends TaskRealtimeSourceEventBase {
   sourceType: "task.reconcile.required";
-  scope: "messages" | "snapshot" | "task";
+  scope: "messages" | "flow" | "workflow" | "task";
   reason:
     | "sequence_gap"
+    | "alias_miss"
     | "projection_rebuilt"
-    | "session_switched"
-    | "message_gap"
+    | "snapshot_lag"
     | "internal_repair";
+  expectedRevision?: number;
 }
 ```
 
-### 6.2.12 agent control 状态变化
+### 6.2.14 agent control 状态变化
 
 ```ts
 export interface AgentControlStateChangedSourceEvent extends TaskRealtimeSourceEventBase {
@@ -283,7 +319,7 @@ export interface AgentControlStateChangedSourceEvent extends TaskRealtimeSourceE
 }
 ```
 
-### 6.2.13 legacy runtime raw 事件
+### 6.2.15 legacy runtime raw 事件
 
 ```ts
 export interface LegacyRuntimeRawEventSourceEvent extends TaskRealtimeSourceEventBase {
@@ -379,53 +415,53 @@ export async function publishTaskRealtimeSourceEvent(
 
 ## 11.1 用户消息创建
 
-### 输入
+### 11.1 输入
 
 `user.message.persisted`
 
-### 输出
+### 11.1 输出
 
-1. `task.message.created`
+1. `task.message.updated`
 2. `task.snapshot.updated`
 
-### 规则
+### 11.1 规则
 
 1. `message` payload 通过 `loadMessageDto(...)` 获取
 2. `snapshot` payload 通过 `loadSnapshotDto(...)` 获取
 3. 两条事件应按这个顺序发布：
-4. 先 `task.message.created`
+4. 先 `task.message.updated`
 5. 后 `task.snapshot.updated`
 
 ## 11.2 assistant placeholder 创建
 
-### 输入
+### 11.2 输入
 
 `assistant.placeholder.persisted`
 
-### 输出
+### 11.2 输出
 
-1. `task.message.created`
+1. `task.message.updated`
 2. `task.operation.updated`
 3. `task.snapshot.updated`
 
-### 规则
+### 11.2 规则
 
 1. assistant placeholder 应显示为 `status = pending`
 2. operation 应显示为 `status = queued` 或 `running`
 
 ## 11.3 assistant delta flush
 
-### 输入
+### 11.3 输入
 
 `assistant.message.delta.flushed`
 
-### 输出
+### 11.3 输出
 
 1. `task.message.delta`
 2. 可选 `task.operation.updated`
 3. 可选 `task.snapshot.updated`
 
-### 规则
+### 11.3 规则
 
 1. `task.message.delta` 必须来自已 flush 的 message 记录，而不是纯 runtime chunk
 2. delta 事件 payload 可以由 message DTO 派生，但只取：
@@ -436,7 +472,7 @@ export async function publishTaskRealtimeSourceEvent(
 7. `status = streaming`
 8. `updatedAt`
 
-### 特别说明
+### 11.3 特别说明
 
 如果 flush 过程中没有稳定拿到“真正的 deltaText”，也可以发：
 
@@ -445,135 +481,167 @@ export async function publishTaskRealtimeSourceEvent(
 
 前端 reducer 仍然可以工作。
 
-## 11.4 assistant 完成
+## 11.4 assistant 终态更新
 
-### 输入
+### 11.4 输入
 
 `assistant.message.completed`
 
-### 输出
+### 11.4 输出
 
-1. `task.message.completed`
+1. `task.message.updated`
 2. `task.operation.updated`
 3. `task.snapshot.updated`
 
-### 规则
+### 11.4 规则
 
 1. message DTO 必须是 terminal 状态
 2. operation DTO 必须已包含 token / cost 聚合
 3. snapshot DTO 必须体现当前 task 最新状态
+4. 这一步只表达 realtime/terminal state，不等价于 canonical persisted ack。
 
-## 11.5 assistant 失败
+## 11.5 assistant persisted ack
 
-### 输入
+### 11.5 输入
+
+`assistant.message.persisted`
+
+### 11.5 输出
+
+1. `task.message.persisted`
+
+### 11.5 规则
+
+1. 这是 message-level canonical ack，不直接代替 `task.round.synced`。
+2. `persistedRevision` 应直接来自 canonical message 的 `seq`，不要再由 broadcaster 自己现算。
+
+## 11.6 round snapshot 已追平
+
+### 11.6 输入
+
+`round.snapshot.synced`
+
+### 11.6 输出
+
+1. `task.round.synced`
+
+### 11.6 规则
+
+1. 只有 round snapshot 的 persisted coverage 真正追平后才发这条事件。
+2. `persistedThroughRevision` 与 `snapshotVersion` 语义必须分开，不能继续把同一个占位值解释成两层含义。
+
+## 11.7 assistant 失败
+
+### 11.7 输入
 
 `assistant.message.failed`
 
-### 输出
+### 11.7 输出
 
-1. `task.message.failed`
+1. `task.message.updated`
 2. `task.operation.updated`
 3. `task.snapshot.updated`
 
-## 11.6 assistant 取消
+## 11.8 assistant 取消
 
-### 输入
+### 11.8 输入
 
 `assistant.message.cancelled`
 
-### 输出
+### 11.8 输出
 
-1. `task.message.cancelled`
+1. `task.message.updated`
 2. `task.operation.updated`
 3. `task.snapshot.updated`
 
-## 11.7 operation 更新
+## 11.9 operation 更新
 
-### 输入
+### 11.9 输入
 
 `session.operation.updated`
 
-### 输出
+### 11.9 输出
 
 1. `task.operation.updated`
 
-### 规则
+### 11.9 规则
 
 1. operation 更新不默认连带 message 事件
 2. 只有在 message 层也发生了持久化变化时，才由其他 source event 触发 message event
 
-## 11.8 runtime permission 变化
+## 11.10 runtime permission 变化
 
-### 输入
+### 11.10 输入
 
 `runtime.permission.changed`
 
-### 输出
+### 11.10 输出
 
 1. 若 `state = required` -> `task.runtimePermission.required`
 2. 若 `state = resolved` -> `task.runtimePermission.resolved`
 
-### 规则
+### 11.10 规则
 
 1. payload 必须由 `loadRuntimePermissionDto(...)` 获取
 2. 任何审批类 UI 不再消费 `approval.required` / `approval.resolved`
 
-## 11.9 workflow stage patch
+## 11.11 workflow stage patch
 
-### 输入
+### 11.11 输入
 
 `workflow.stage.patch`
 
-### 输出
+### 11.11 输出
 
 1. `task.workflowStage.updated`
 
-### 规则
+### 11.11 规则
 
 1. 当前已有 `buildPipelineStageUpdatedEvents(...)` 生成的是内部 `pipeline.stage.updated`
 2. 新方案里它不再直发给页面，而是转成 `workflow.stage.patch` source event，再映射成 `task.workflowStage.updated`
 
-## 11.10 reconcile required
+## 11.12 reconcile required
 
-### 输入
+### 11.12 输入
 
 `task.reconcile.required`
 
-### 输出
+### 11.12 输出
 
 1. `task.reconcile.required`
 
-### 规则
+### 11.12 规则
 
 1. 这是极少数 source event 与 public event 一一对应的情况
 2. 但仍应经过统一 publisher，拿到 eventId 和 ordering
+3. `scope` 必须直接对应前端 refresh target，不再使用 `snapshot`、`conversation`、`compare` 这类混合术语
 
-## 11.11 agent control 状态变化
+## 11.13 agent control 状态变化
 
-### 输入
+### 11.13 输入
 
 `agent.control.state.changed`
 
-### 输出
+### 11.13 输出
 
 默认不直接映射成独立 public event，而是：
 
 1. `task.operation.updated`
 2. `task.snapshot.updated`
-3. 必要时 `task.message.cancelled`
+3. 必要时 `task.message.updated`
 
-### 规则
+### 11.13 规则
 
 1. `paused` / `resumed` 主要通过 operation 和 snapshot 表达，不再暴露 `agent.paused` / `agent.resumed`
-2. `stopped` 如果终止了当前 assistant 生成，应额外发 `task.message.cancelled`
+2. `stopped` 如果终止了当前 assistant 生成，应额外发带 `status = cancelled` 的 `task.message.updated`
 
-## 11.12 legacy runtime raw 事件
+## 11.14 legacy runtime raw 事件
 
-### 输入
+### 11.14 输入
 
 `legacy.runtime.raw`
 
-### 输出
+### 11.14 输出
 
 默认情况下：
 
@@ -584,7 +652,7 @@ export async function publishTaskRealtimeSourceEvent(
 1. 在迁移期里帮助生成更高层 source event
 2. 在无法拿到正式持久化 source event 时，触发 `task.reconcile.required`
 
-### 关键规则
+### 11.14 关键规则
 
 禁止以下映射：
 
@@ -651,6 +719,16 @@ export async function publishTaskRealtimeSourceEvent(
 1. raw runtime 事件只用来驱动持久化和 finalize
 2. 真正发给页面的 event 在 DB flush / finalize / operation update 之后，由 mapper 再发
 
+当前实现里最需要拆开的点是：
+
+1. [control-plane/web-ui-bff/src/modules/realtime/sse-aggregator.ts](../control-plane/web-ui-bff/src/modules/realtime/sse-aggregator.ts) 的 `emitTaskPersistenceAck(...)` 现在在同一个 helper 里直接双发 `task.message.persisted` 和 `task.round.synced`。
+
+推荐拆法：
+
+1. persist 成功后只产出 `assistant.message.persisted` source event。
+2. snapshot 追平被验证后再单独产出 `round.snapshot.synced` source event。
+3. 如果 alias miss、snapshot lag、repair 改写导致无法自然追平，就产出 `task.reconcile.required` source event，而不是提前伪造 `task.round.synced`。
+
 ### 13.2 `tasks/routes.ts` 收口建议
 
 当前这里会直接发：
@@ -664,9 +742,19 @@ export async function publishTaskRealtimeSourceEvent(
 目标收口方式：
 
 1. 任务创建后发 `task.snapshot.updated`
-2. user message 持久化后发 `task.message.created`
-3. assistant placeholder 持久化后发 `task.message.created`
+2. user message 持久化后发 `task.message.updated`
+3. assistant placeholder 持久化后发 `task.message.updated`
 4. operation 进入 queued/running 后发 `task.operation.updated`
+
+### 13.2.1 `reconcile.ts` 收口建议
+
+当前 [control-plane/web-ui-bff/src/modules/tasks/reconcile.ts](../control-plane/web-ui-bff/src/modules/tasks/reconcile.ts) 会直接 repair persisted messages，但这条链路还没有对页面公开“你之前看到的 patch 假设已经失效了”。
+
+目标收口方式：
+
+1. repair 成功后不要只停留在日志和 DB 修改。
+2. 如果 repair 影响的是当前活跃 round 的消息，应补一个 `task.reconcile.required(scope=messages, reason=internal_repair)` source event。
+3. 如果 repair 影响的是 task 壳层或多 target 状态，再按影响面发 `scope=task` 或更精确的 target。
 
 ### 13.3 `agent-control/routes.ts` 收口建议
 

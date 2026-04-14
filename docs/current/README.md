@@ -39,6 +39,6 @@
 
 例如：
 
-- [../boss-agent-design.md](../boss-agent-design.md)
+- [../archive/organization/historical-boss-agent-design.md](../archive/organization/historical-boss-agent-design.md)
 
 它仍保留在原位置作为历史追溯材料，但不视为当前主方案目录的一部分。

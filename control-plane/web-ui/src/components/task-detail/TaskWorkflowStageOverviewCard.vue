@@ -2,7 +2,7 @@
   <a-card size="small" :bordered="false" :body-style="{ padding: '8px 12px' }">
     <a-space size="small" wrap style="margin-bottom: 8px">
       <a-tag color="blue">阶段 {{ currentStageLabel }}</a-tag>
-      <a-tag :color="statusColor">{{ statusLabel }}</a-tag>
+      <a-tag :color="statusDisplay.tagColor">{{ statusDisplay.label }}</a-tag>
       <a-tag v-if="blocked" color="red">已阻断</a-tag>
       <a-tag v-if="approvalPending" color="orange">待审批</a-tag>
     </a-space>
@@ -15,7 +15,7 @@
       <a-step
         v-for="stage in stages"
         :key="stage.stageKey"
-        :title="stage.stageLabel || stage.stageKey"
+        :title="stageTitle(stage)"
         :status="stageStepStatus(stage)"
       />
     </a-steps>
@@ -31,6 +31,11 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { TaskStageViewModel } from "../../lib/api";
+import {
+  resolveWorkflowStageLabel,
+  resolveWorkflowStatusDisplay,
+  resolveWorkflowStepStatus,
+} from "../../lib/task-workflow-display-policy";
 
 const props = defineProps<{
   currentStage: string;
@@ -38,10 +43,9 @@ const props = defineProps<{
   stages: TaskStageViewModel[];
 }>();
 
-const currentStageLabel = computed(() => {
-  const stage = props.stages.find((s) => s.stageKey === props.currentStage);
-  return stage?.stageLabel || props.currentStage || "—";
-});
+const currentStageLabel = computed(() =>
+  resolveWorkflowStageLabel(props.currentStage, props.stages, "—"),
+);
 
 const currentStageIndex = computed(() => {
   const idx = props.stages.findIndex((s) => s.stageKey === props.currentStage);
@@ -62,40 +66,13 @@ const approvalPending = computed(() =>
   ),
 );
 
-const statusColor = computed(() => {
-  switch (props.workflowStatus) {
-    case "running":
-      return "processing";
-    case "completed":
-      return "success";
-    case "failed":
-      return "error";
-    case "blocked":
-      return "red";
-    default:
-      return "default";
-  }
-});
-
-const statusLabel = computed(() => {
-  switch (props.workflowStatus) {
-    case "running":
-      return "进行中";
-    case "completed":
-      return "已完成";
-    case "failed":
-      return "已失败";
-    case "blocked":
-      return "已阻断";
-    default:
-      return props.workflowStatus;
-  }
-});
+const statusDisplay = computed(() => resolveWorkflowStatusDisplay(props.workflowStatus));
 
 function stageStepStatus(stage: TaskStageViewModel): "finish" | "process" | "wait" | "error" {
-  if (stage.status === "completed") return "finish";
-  if (stage.stageKey === props.currentStage) return "process";
-  if (stage.status === "failed") return "error";
-  return "wait";
+  return resolveWorkflowStepStatus(stage, props.currentStage);
+}
+
+function stageTitle(stage: TaskStageViewModel) {
+  return resolveWorkflowStageLabel(stage.stageKey, props.stages, stage.stageKey);
 }
 </script>

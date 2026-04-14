@@ -25,7 +25,7 @@
 - [docs/organization-oriented-agent-frontend-information-architecture.md](docs/organization-oriented-agent-frontend-information-architecture.md)
 - [docs/organization-oriented-agent-technical-checklist.md](docs/organization-oriented-agent-technical-checklist.md)
 - [docs/development-role-agents-plan.md](docs/development-role-agents-plan.md)
-- [docs/boss-agent-design.md](docs/boss-agent-design.md)（历史文档）
+- [archive/organization/historical-boss-agent-design.md](archive/organization/historical-boss-agent-design.md)（历史文档）
 
 ## 2. 讨论起点：任务没有问题，Agent 才是概念冲突点
 

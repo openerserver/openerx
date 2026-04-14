@@ -4,14 +4,13 @@ import type {
   ExecutionMode,
   JudgeConfig,
   ProjectTreeNodeRecord,
-  TaskMemberViewModel,
   TaskRuntimePermission,
   TaskStageViewModel,
 } from "../lib/api";
+import type { TaskConversationListItem } from "../lib/message-normalize";
 import type { TaskDisplayStatus } from "../lib/task-display-status";
 import type { ExecutionOverrides } from "../lib/taskExecutionMode";
 import type { TreeTask } from "./useProjectTreeTask";
-import type { TaskConversationListItem } from "./useTreeMessages";
 
 type ReadonlyRef<T> = Readonly<Ref<T>>;
 
@@ -67,11 +66,12 @@ export function useTaskDetailHeaderModel(args: {
 
 export function useTaskDetailMainPaneModel(args: {
   assistantMessageModelFallback: ReadonlyRef<string | undefined>;
-  canForkFromCurrentSession: ReadonlyRef<boolean>;
+  autoAdvanceEnabled: ReadonlyRef<boolean>;
   canTerminateExecution: ReadonlyRef<boolean>;
   chatTraceWarning: ReadonlyRef<RuntimeTraceWarning | null>;
+  composerActionDisabled: ReadonlyRef<boolean>;
+  composerInputDisabled: ReadonlyRef<boolean>;
   composerResetToken: Ref<number>;
-  continuing: Ref<boolean>;
   conversationFocusToken: Ref<number>;
   conversationItems: ReadonlyRef<TaskConversationListItem[]>;
   editableExecutionMode: ReadonlyRef<ExecutionMode>;
@@ -80,7 +80,7 @@ export function useTaskDetailMainPaneModel(args: {
   editableSequentialSteps: ReadonlyRef<ChainStepInput[]>;
   executionModeSaving: Ref<boolean>;
   filterModelOption: (input: string, option?: unknown) => boolean;
-  forking: Ref<boolean>;
+  forkDisabled: ReadonlyRef<boolean>;
   handleAdoptCandidate: (index: number) => void | Promise<void>;
   handleChooseMode: () => void;
   handleClearQueuedContinuations: () => void;
@@ -95,37 +95,37 @@ export function useTaskDetailMainPaneModel(args: {
   ) => void | Promise<void>;
   handleSelectedModelChange: (model: string) => void | Promise<void>;
   handleTerminate: () => void | Promise<void>;
-  handleUnavailableAction: (label: string) => () => void;
   hasStreamingAssistant: ReadonlyRef<boolean>;
   isExecuting: ReadonlyRef<boolean>;
   loadModels: () => void | Promise<void>;
   messagesError: ReadonlyRef<string | null>;
   messagesLoading: ReadonlyRef<boolean>;
   modelOptions: ReadonlyRef<ModelOption[]>;
+  modelSelectionDisabled: ReadonlyRef<boolean>;
   modelsLoading: Ref<boolean>;
-  queuedContinuations: Ref<QueuedContinuationItem[]>;
+  queueCount: ReadonlyRef<number>;
+  queuedItems: ReadonlyRef<Array<Pick<QueuedContinuationItem, "id" | "prompt">>>;
   runtimePermissionActionId: Ref<string | null>;
   runtimePermissionLabel: (permission: string) => string;
   runtimePermissionPath: (permission: TaskRuntimePermission) => string;
   runtimePermissionPatterns: (permission: TaskRuntimePermission) => string[];
+  selectedModel: ReadonlyRef<string | undefined>;
   selectedSessionId: Ref<string | undefined>;
   selectedSessionRuntimePermissions: ReadonlyRef<TaskRuntimePermission[]>;
   setExecutionModeModalOpen: (open: boolean) => void;
   showExecutionModeModal: Ref<boolean>;
-  task: Ref<TreeTask | null | undefined>;
-  taskDisplayStatus: ReadonlyRef<TaskDisplayStatus>;
   taskFailureReason: ReadonlyRef<string>;
-  terminating: Ref<boolean>;
   workflowStages: ReadonlyRef<TaskStageViewModel[]>;
   workflowSummary: ReadonlyRef<{ currentStage: string; status: string } | null>;
 }) {
   return {
     assistantMessageModelFallback: args.assistantMessageModelFallback,
-    canForkFromCurrentSession: args.canForkFromCurrentSession,
+    autoAdvanceEnabled: args.autoAdvanceEnabled,
     canTerminateExecution: args.canTerminateExecution,
     chatTraceWarning: args.chatTraceWarning,
+    composerActionDisabled: args.composerActionDisabled,
+    composerInputDisabled: args.composerInputDisabled,
     composerResetToken: args.composerResetToken,
-    continuing: args.continuing,
     conversationFocusToken: args.conversationFocusToken,
     conversationItems: args.conversationItems,
     editableExecutionMode: args.editableExecutionMode,
@@ -134,7 +134,7 @@ export function useTaskDetailMainPaneModel(args: {
     editableSequentialSteps: args.editableSequentialSteps,
     executionModeSaving: args.executionModeSaving,
     filterModelOption: args.filterModelOption,
-    forking: args.forking,
+    forkDisabled: args.forkDisabled,
     handleAdoptCandidate: args.handleAdoptCandidate,
     handleChooseMode: args.handleChooseMode,
     handleClearQueuedContinuations: args.handleClearQueuedContinuations,
@@ -146,53 +146,28 @@ export function useTaskDetailMainPaneModel(args: {
     handleReplyRuntimePermission: args.handleReplyRuntimePermission,
     handleSelectedModelChange: args.handleSelectedModelChange,
     handleTerminate: args.handleTerminate,
-    handleUnavailableAction: args.handleUnavailableAction,
     hasStreamingAssistant: args.hasStreamingAssistant,
     isExecuting: args.isExecuting,
     loadModels: args.loadModels,
     messagesError: args.messagesError,
     messagesLoading: args.messagesLoading,
     modelOptions: args.modelOptions,
+    modelSelectionDisabled: args.modelSelectionDisabled,
     modelsLoading: args.modelsLoading,
-    queuedContinuations: args.queuedContinuations,
+    queueCount: args.queueCount,
+    queuedItems: args.queuedItems,
     runtimePermissionActionId: args.runtimePermissionActionId,
     runtimePermissionLabel: args.runtimePermissionLabel,
     runtimePermissionPath: args.runtimePermissionPath,
     runtimePermissionPatterns: args.runtimePermissionPatterns,
+    selectedModel: args.selectedModel,
     selectedSessionId: args.selectedSessionId,
     selectedSessionRuntimePermissions: args.selectedSessionRuntimePermissions,
     setExecutionModeModalOpen: args.setExecutionModeModalOpen,
     showExecutionModeModal: args.showExecutionModeModal,
-    task: args.task,
-    taskDisplayStatus: args.taskDisplayStatus,
     taskFailureReason: args.taskFailureReason,
-    terminating: args.terminating,
     workflowStages: args.workflowStages,
     workflowSummary: args.workflowSummary,
-  };
-}
-
-export function useTaskDetailSidebarModel(args: {
-  collapsed: Ref<boolean>;
-  handleCloseFilePreview: () => void;
-  memberView: Ref<TaskMemberViewModel | null>;
-  memberViewLoading: Ref<boolean>;
-  previewFile: Ref<PreviewFilePayload | null>;
-  selectedSessionId: Ref<string | undefined>;
-  taskId: ReadonlyRef<string>;
-  toggleSidebar: () => void;
-  traceRefreshKey: Ref<number>;
-}) {
-  return {
-    collapsed: args.collapsed,
-    handleCloseFilePreview: args.handleCloseFilePreview,
-    memberView: args.memberView,
-    memberViewLoading: args.memberViewLoading,
-    previewFile: args.previewFile,
-    selectedSessionId: args.selectedSessionId,
-    taskId: args.taskId,
-    toggleSidebar: args.toggleSidebar,
-    traceRefreshKey: args.traceRefreshKey,
   };
 }
 
@@ -204,7 +179,4 @@ export type TaskDetailHeaderModelState = UnwrapNestedRefs<
 >;
 export type TaskDetailMainPaneModelState = UnwrapNestedRefs<
   ReturnType<typeof useTaskDetailMainPaneModel>
->;
-export type TaskDetailSidebarModelState = UnwrapNestedRefs<
-  ReturnType<typeof useTaskDetailSidebarModel>
 >;

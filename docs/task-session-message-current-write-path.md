@@ -496,7 +496,7 @@ const eventTypeMap: Record<string, RealtimeEventType> = {
 if (eventKind === "task.message.delta") return;  // 第 2712 行
 ```
 
-前端收到 `task.message.delta` 后直接 `return`，不做任何处理。消息展示完全依赖 `useTreeMessages` 从执行追踪快照加载——这是一个 poll 模型，不是 push 模型。
+这段观察对应的是旧版兼容消息读层主路径。当前实现已经切到 `useTaskMessageSnapshot()` + `useTaskMessageStore()`：主聊天 baseline 由 round snapshot 提供，`task.message.updated` / `task.message.delta` / `task.message.persisted` / `task.round.synced` 会进入统一 reducer，不再只靠 execution trace 快照轮询收敛。
 
 **结论**：差距存在于两个层面：
 
@@ -529,7 +529,7 @@ if (eventKind === "task.message.delta") return;  // 第 2712 行
 | 改造点 | 目标模块 | 关键函数 | 建议方向 | 为什么必要 |
 | --- | --- | --- | --- | --- |
 | 新增 streaming message buffer | `web-ui/src/stores/` | 新建或扩展 `realtime` store | 维护一个 `Map<messageId, { parts: Map<partId, string>, streaming: boolean }>` 的前端 buffer，delta 事件往 buffer 追加 | 让 delta 在 UI 可见，而不必等快照刷新 |
-| 合并 buffer 与快照 | `web-ui/src/composables/useTreeMessages` | message 列表组装 | 快照消息与 buffer 中的 streaming 消息 merge；当收到完整 `task.message.updated` 后，用快照替换 buffer | 保证已完成消息仍以快照为准 |
+| 合并 buffer 与快照 | `web-ui/src/composables/useTaskMessageSnapshot.ts` + `web-ui/src/composables/useTaskMessageStore.ts` | message 列表组装 | round snapshot 提供 persisted baseline，message store 负责 merge realtime patch / pending assistant / workflow block；当收到完整 persisted snapshot 且 revision 追平后切回 canonical authority | 保证已完成消息仍以快照为准 |
 
 #### 13.4 前端 — TaskDetailV3 流式渲染
 

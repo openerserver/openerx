@@ -34,26 +34,36 @@
   - 负责拿任务基本信息、当前 task 节点、breadcrumb ancestors
 - `useTreeBranches()`
   - 负责拿 session tree、session summaries、当前选中 session 节点
-- `useTreeMessages()`
-  - 负责拿主聊天区消息
-  - 采用“persisted canonical baseline + realtime overlay”的策略
+- `useTaskMessageSnapshot()`
+  - 负责拿主聊天区 persisted baseline
+  - 负责 active round / active session 的 snapshot revision
+- `useTaskMessageStore()`
+  - 负责 realtime patch、pending assistant draft 与最终 conversation items 收敛
 
 ### 3. 页面装配层
 
-在 `useTaskDetailPageModel()` 中，基础读源会继续被这些协调层消费：
+在 `useTaskDetailPageModel()` 中，基础读源会继续被这些 feature / coordinator 消费：
 
 - `useTaskDetailSnapshotCoordinator()`
-  - 负责 workflow/member/flow/messages 的初始快照与 silent refresh
-- `useTaskDetailViewStateCoordinator()`
-  - 负责 sidebar、文件预览、runtime permissions、trace warning 等视图状态
+  - 负责 `messages` / `flow` / `workflow` 三条 refresh target 的 fan-out 与 silent refresh
+- `useTaskConversationFeature()`
+  - 负责主聊天展示态、round/context、continue / fork / terminate / queued continuation 动作
 - `useTaskDetailParallelFlow()`
-  - 负责把并行候选、agent runs、trace、session summaries 组装成主聊天区里的并行比较块
-- `useTaskDetailExecutionModeCoordinator()`
-  - 负责模型列表、execution mode modal、保存执行模式
-- `useTaskDetailActionCoordinator()`
-  - 负责 continue、fork、terminate、adopt candidate、runtime permission 回复等写操作
-- `useTaskDetailRefreshController()`
-  - 负责基于 realtime patch 触发延迟刷新和运行期轮询
+  - 负责并行候选、parallel run、candidate message/trace 刷新，以及把并行块插回主聊天列表
+- `useTaskParallelCandidateActions()`
+  - 负责 adopt candidate；compare 派生的 stop/terminate 状态由 page model 基于当前 parallel run 直接推导
+- `useTaskWorkflowFeature()`
+  - 负责 workflow snapshot、steps 派生、execution mode modal / model list / save 动作
+- `useTaskRuntimePermissionFeature()`
+  - 负责 runtime permissions 读取与审批回复动作
+- `useTaskSidebarFeature()`
+  - 负责 sidebar collapse、文件预览、member/trace panel 的本地 UI 边界，并直接吸收 member snapshot 读取
+- `useTaskDetailRealtimeFeature()`
+  - 负责 polling state 与 realtime subscription / refresh dispatch 的桥接
+- `useTaskDetailMainPaneFeature()`
+  - 负责把 conversation / compare / workflow / runtime permission / sidebar 输出装成主区模型
+- `useTaskDetailSidebarPaneFeature()`
+  - 负责把 sidebar panel 输出装成侧栏模型，并承接侧栏专属展示判定
 
 在这些协调层之上，`useTaskDetailPageModel()` 不再平铺返回几十个字段，而是再收成 4 个分区模型：
 
@@ -127,43 +137,49 @@
 
 - `getTaskTreeSessionContext`
 
-来自 `useTreeMessages()`：
+来自 `useTaskMessageSnapshot()` / `useTaskMessageStore()`：
 
-- `getTaskMessages`
+- `getCurrentTaskRound`
+- `getTaskRounds`
+- `getTaskRoundMessages`
 
 ### 页面装配补充 API
 
-来自 `useTaskDetailSnapshotCoordinator()`：
-
-- `getTaskWorkflowView`
-- `getTaskMemberView`
-
-来自 `useTaskDetailViewStateCoordinator()`：
-
-- `listTaskRuntimePermissions`
-
-来自 `useTaskDetailParallelFlow()`：
+来自 `useTaskDetailParallelFlow()` / `useTaskParallelCandidateActions()`：
 
 - `getTaskAgentRuns`
 - `getTaskExecutionTraceView`
 - `getTaskConversationMessages`
+- `adoptParallelCandidate`
 
-来自 `useTaskDetailSequentialStepsCoordinator()`：
+来自 `useTaskWorkflowFeature()`：
 
-- `getTaskConversationMessages`
-
-来自 `useTaskDetailExecutionModeCoordinator()`：
-
+- `getTaskWorkflowView`
 - `getModelsList`
 - `updateTask`
 
-来自 `useTaskDetailActionCoordinator()`：
+来自 `useTaskSidebarFeature()` / `useTaskMemberViewFeature()`：
+
+- `getTaskMemberView`
+
+workflow 纯显示策略：
+
+- `task-workflow-display-policy.ts`
+- 负责 stage key -> label fallback，以及 workflow/stage status -> tag label/color 映射
+- 供 `useTaskWorkflowSteps()`、`TaskWorkflowStageOverviewCard.vue`、`TaskWorkbenchMemberStrip.vue`、`TaskRoleWorkflowPanel.vue` 复用
+- 也被 `ManagementOperationsCenter.vue`、`TaskOperatingConsole.vue`、`ProjectOrchestration.vue` 等 workflow 相关页面用于 stage/status 展示，避免页面层重新编码状态标签
+
+来自 `useTaskRuntimePermissionFeature()`：
+
+- `listTaskRuntimePermissions`
+- `replyTaskRuntimePermission`
+
+来自 `useTaskConversationFeature()`：
 
 - `continueTask`
 - `forkTaskSession`
-- `replyTaskRuntimePermission`
 - `terminateAgent`
-- `adoptParallelCandidate`
+- `cancelTaskPhase`
 
 ### 侧栏面板自身 API
 
@@ -198,30 +214,33 @@ flowchart LR
   subgraph PM["Page Model 装配层"]
     PageModel --> Core["useTaskDetailCoreContext"]
     PageModel --> Snapshot["useTaskDetailSnapshotCoordinator"]
-    PageModel --> ViewState["useTaskDetailViewStateCoordinator"]
-    PageModel --> Parallel["useTaskDetailParallelFlow"]
-    PageModel --> ExecMode["useTaskDetailExecutionModeCoordinator"]
-    PageModel --> Actions["useTaskDetailActionCoordinator"]
-    PageModel --> Refresh["useTaskDetailRefreshController"]
-    PageModel --> Derived["Derived State / Page Coordinator"]
+    PageModel --> Conversation["useTaskConversationFeature"]
+    PageModel --> CompareFlow["useTaskDetailParallelFlow"]
+    PageModel --> CompareActions["useTaskParallelCandidateActions"]
+    PageModel --> Workflow["useTaskWorkflowFeature"]
+    PageModel --> RuntimePermission["useTaskRuntimePermissionFeature"]
+    PageModel --> SidebarFeature["useTaskSidebarFeature"]
+    PageModel --> Refresh["useTaskDetailRealtimeFeature"]
+    PageModel --> MainFeature["useTaskDetailMainPaneFeature"]
+    PageModel --> SideFeature["useTaskDetailSidebarPaneFeature"]
   end
 
   subgraph CoreRead["基础读源"]
     Core --> ProjectTask["useProjectTreeTask"]
     Core --> Branches["useTreeBranches"]
-    Core --> Messages["useTreeMessages"]
+    Core --> Messages["useTaskMessageSnapshot + useTaskMessageStore"]
   end
 
   ProjectTask --> API_Task["getTask\ngetProjectTreeNode\ngetProjectTreeAncestors"]
   Branches --> API_Branch["getTaskTreeSessionContext"]
-  Messages --> API_Msg["getTaskMessages"]
+  Messages --> API_Msg["getCurrentTaskRound\ngetTaskRounds\ngetTaskRoundMessages"]
   Messages --> RT["Realtime Store\nuseTaskMessageStore"]
 
-  Snapshot --> API_Snapshot["getTaskWorkflowView\ngetTaskMemberView"]
-  ViewState --> API_Runtime["listTaskRuntimePermissions"]
-  Parallel --> API_Parallel["getTaskAgentRuns\ngetTaskExecutionTraceView\ngetTaskConversationMessages"]
-  ExecMode --> API_Mode["getModelsList\nupdateTask"]
-  Actions --> API_Write["continueTask\nforkTaskSession\nreplyTaskRuntimePermission\nterminateAgent\nadoptParallelCandidate"]
+  Workflow --> API_Workflow["getTaskWorkflowView\ngetTaskMemberView\ngetModelsList\nupdateTask"]
+  RuntimePermission --> API_Runtime["listTaskRuntimePermissions\nreplyTaskRuntimePermission"]
+  CompareFlow --> API_ParallelRead["getTaskAgentRuns\ngetTaskExecutionTraceView\ngetTaskConversationMessages"]
+  CompareActions --> API_ParallelWrite["adoptParallelCandidate"]
+  Conversation --> API_Write["continueTask\nforkTaskSession\nterminateAgent\ncancelTaskPhase"]
 
   MainPane --> MainQuick["TaskDetailQuickOverview"]
   MainPane --> MainChat["ChatMessageList"]
@@ -255,11 +274,13 @@ sequenceDiagram
   participant C as useTaskDetailCoreContext
   participant PT as useProjectTreeTask
   participant TB as useTreeBranches
-  participant TM as useTreeMessages
-  participant S as useTaskDetailSnapshotCoordinator
+  participant TM as useTaskMessageSnapshot + useTaskMessageStore
+  participant WF as useTaskWorkflowFeature
+  participant RF as useTaskRuntimePermissionFeature
   participant PF as useTaskDetailParallelFlow
-  participant VS as useTaskDetailViewStateCoordinator
-  participant RC as useTaskDetailRefreshController
+  participant SF as useTaskSidebarFeature
+  participant S as useTaskDetailSnapshotCoordinator
+  participant RTF as useTaskDetailRealtimeFeature
   participant RT as Realtime Store
   participant API as Backend APIs
 
@@ -281,36 +302,37 @@ sequenceDiagram
     API-->>TB: sessionLineage + sessionSummaries
     TB-->>M: flatNodes / selectedSessionNode / sessionSummaries
   and 基础消息加载
-    C->>TM: useTreeMessages(taskId, selectedSessionId)
-    TM->>API: getTaskMessages(includeLineage=true)
-    API-->>TM: persisted messages + meta
+    C->>TM: useTaskMessageSnapshot(taskId, selectedSessionId)
+    TM->>API: getCurrentTaskRound / getTaskRounds / getTaskRoundMessages
+    API-->>TM: persisted messages + round meta
     TM-->>M: conversationItems baseline + latestTaskRefreshRequest + realtimeConnected
   end
 
-  Note over M: task.id 可用后，page coordinator 触发 loadInitialSnapshot()
-  M->>S: loadInitialSnapshot()
-  S->>API: getTaskWorkflowView
-  S->>API: getTaskMemberView
-  API-->>S: workflowView + memberView
-  S->>TB: refreshSessions()
+  Note over M: task.id 可用后，page model 触发各 feature 初始加载
+  M->>WF: loadInitialWorkflowSnapshot()
+  WF->>API: getTaskWorkflowView
+  API-->>WF: workflowView
+  M->>SF: loadInitialMemberViewSnapshot()
+  SF->>API: getTaskMemberView
+  API-->>SF: memberView
+  M->>PF: loadInitialFlowSnapshot()
+  PF->>TB: refreshSessions()
   TB->>API: getTaskTreeSessionContext
   API-->>TB: 最新 session tree
-  S->>PF: refreshTaskRunSummaries(taskId)
   PF->>API: getTaskAgentRuns
   API-->>PF: agent runs
 
   alt 当前是并行比较模式
-    S->>PF: refreshParallelCandidateMessages(taskId)
     PF->>API: getTaskExecutionTraceView(sessionId)
     PF->>API: getTaskConversationMessages(sessionId, includeLineage=false)
     API-->>PF: trace / candidate messages
   else 当前不是并行比较模式
-    S->>PF: clearParallelCandidateState()
+    PF->>PF: clearParallelFlowState()
   end
 
-  S->>VS: refreshRuntimePermissions(true)
-  VS->>API: listTaskRuntimePermissions(taskId, selectedSessionId)
-  API-->>VS: runtime permissions
+  M->>RF: refreshRuntimePermissions(true)
+  RF->>API: listTaskRuntimePermissions(taskId, selectedSessionId)
+  API-->>RF: runtime permissions
   S->>RT: subscribeProject(projectId)
   S->>RT: subscribeTask(taskId)
   M-->>P: page model 就绪
@@ -318,40 +340,41 @@ sequenceDiagram
 
   RT-->>TM: 推送 realtime patch event
   TM-->>M: live assistant overlay + latestTaskRefreshRequest
-  M->>RC: 交给 refresh controller 判定
+  M->>RTF: 交给 realtime feature 判定
 
   alt 事件要求刷新 trace 面板
-    RC-->>M: traceRefreshKey + 1
+    RTF-->>M: traceRefreshKey + 1
   end
 
-  RC->>S: 延迟 refreshTaskSnapshot(options)
+  RTF->>S: 延迟 refreshTaskSnapshot(options)
   S->>PT: refreshTask(true)
   PT->>API: getTask
   API-->>PT: 最新 task
 
   opt 需要刷新 workflow/member
-    S->>API: getTaskWorkflowView
-    S->>API: getTaskMemberView
-    API-->>S: 最新 workflow/member
+    S->>WF: refreshWorkflowSnapshot()
+    WF->>API: getTaskWorkflowView
+    WF->>API: getTaskMemberView
+    API-->>WF: 最新 workflow/member
   end
 
   opt 需要刷新 flow
     S->>TB: refreshSessions(true)
     TB->>API: getTaskTreeSessionContext
     API-->>TB: 最新 session tree
-    S->>PF: refreshTaskRunSummaries(taskId, true)
-    PF->>API: getTaskAgentRuns
-    API-->>PF: 最新 agent runs
+    S->>CP: refreshFlowSnapshot()
+    CP->>API: getTaskAgentRuns
+    API-->>CP: 最新 agent runs
   end
 
   opt 需要刷新 messages
-    S->>TM: refreshMessages(true)
-    TM->>API: getTaskMessages
-    API-->>TM: 最新 persisted messages
+    S->>TM: refresh(true)
+    TM->>API: getCurrentTaskRound / getTaskRounds / getTaskRoundMessages
+    API-->>TM: 最新 persisted messages + round meta
   end
 
   alt 任务执行中或 assistant 正在流式输出
-    RC->>S: 每 2 秒轮询 refreshTaskSnapshot({flow:true, messages:条件刷新})
+    RTF->>S: 每 2 秒轮询 refreshTaskSnapshot({flow:true, messages:条件刷新})
   end
 
   opt 用户主动写操作 continue / fork / adopt / terminate / runtime permission
@@ -368,35 +391,31 @@ sequenceDiagram
 
 ### 当前边界结论
 
-2026-04-08 本轮进展：
+2026-04-12 当前状态：
 
-- 已将 session-tree fallback、run/session 选择、selected session 收敛逻辑下沉到 `task-detail-parallel-runtime.ts`
-- 已将候选消息源选择、tool output 折叠、并行卡片构造、并行对话插入下沉到 `task-detail-parallel-conversation.ts`
-- `useTaskDetailParallelFlow.ts` 已收成 orchestration-only，主要保留 state、computed、watch 和刷新编排
+- 已将 session-tree fallback、run/session 选择与可见 compare runs 的纯派生进一步收口到 `task-detail-parallel-runtime.ts` + `task-detail-parallel-read-model.ts`
+- 已将 pending-adoption / adopted-session 选择收口到 `task-detail-parallel-adoption.ts`
+- 已将候选消息源、tool output 折叠下沉到 `task-detail-parallel-candidate-source.ts`
+- 已将 tool output 压缩继续下沉到 `task-detail-parallel-tool-condense.ts`
+- 已将 trace/session fallback 的最终来源决策下沉到 `task-detail-parallel-source-policy.ts`
+- 已将并行卡片构造下沉到 `task-detail-parallel-card-builder.ts`
+- 已将并行对话插入下沉到 `task-detail-parallel-conversation-projector.ts`
+- `useTaskDetailParallelFlow.ts` 已进一步收成 orchestration-only，主要保留 state、watch、candidate refresh 与刷新编排
 - `useTaskDetailPageModel.ts` 已完成第一阶段拆分：改为返回 `layout/header/main/sidebar` 分区模型，主区和侧栏不再接收整个 `page`
+- 旧 `useTaskDetailActionCoordinator.ts` / `useTaskDetailViewStateCoordinator.ts` 已从代码树移除，相关行为断言已迁回当前 feature tests
+- 主区与侧栏的 section-level 装配已下沉到 `useTaskDetailMainPaneFeature.ts` / `useTaskDetailSidebarPaneFeature.ts`
 
 当前 `TaskDetailV3.vue` 已经基本收成页面壳层，继续直接拆页面本身的收益已经不高。
 
 真正还偏厚的边界，现阶段主要在：
 
-1. `task-detail-parallel-conversation.ts`
-2. `task-detail-parallel-runtime.ts`
+1. `task-detail-parallel-runtime.ts`
+2. `task-detail-parallel-read-model.ts`
 3. `useTaskDetailPageModel.ts`
-4. `useTaskDetailActionCoordinator.ts`
-5. `TaskDetailV3MainPane.vue`
+4. `TaskDetailV3MainPane.vue`
+5. `useTaskConversationFeature.ts` / `useTaskWorkflowFeature.ts` 背后的底层 orchestration
 
-按当前体量看：
-
-- `TaskDetailV3.vue`: 151 行
-- `useTaskDetailPageModel.ts`: 344 行
-- `useTaskDetailPageSectionModels.ts`: 207 行
-- `TaskDetailV3MainPane.vue`: 190 行
-- `TaskDetailV3SidebarPane.vue`: 48 行
-- `useTaskDetailParallelFlow.ts`: 371 行
-- `task-detail-parallel-runtime.ts`: 597 行
-- `task-detail-parallel-conversation.ts`: 804 行
-- `useTaskDetailActionCoordinator.ts`: 342 行
-- `useTaskDetailSnapshotCoordinator.ts`: 176 行
+按当前体量看，真正偏厚的实现已经集中到 parallel runtime/read-model cluster、page model、main pane 模板，以及 conversation/workflow 背后的读写 orchestration，而不是旧 compat coordinator 或已经删除的薄 facade。
 
 ### 高优先级：最值得继续收的点
 
@@ -425,27 +444,27 @@ sequenceDiagram
 - 页面壳层、主区、侧栏都不再依赖整个 `page`
 - `useTaskDetailPageModel.ts` 主要只剩组合与返回，不再堆满字段映射
 
-#### 2. 继续细拆 `task-detail-parallel-conversation.ts`
+#### 2. 继续压缩 parallel runtime / read-model cluster
 
 问题：
 
-- 并行候选的“展示拼装”已经从 composable 中抽离，但仍集中在一个 800+ 行 helper 里。
-- 当前它同时负责：trace/session fallback、tool item 合并、parallel card 构造、parallel item 插入主对话。
+- 并行候选的展示投影已经拆完，但 runtime/read-model 侧的纯派生仍集中在少数大文件里。
+- 当前最厚的逻辑集中在 run/session 可见性、fallback run 选择、selected session 收敛与 phase 上下文推导。
 
 根因：
 
-- 读源选择规则和展示投影规则虽然已脱离 composable，但还耦合在同一文件里。
+- 对话投影已拆开，但 parallel 领域里的运行态选择与读模型推导仍聚在一起，没有进一步分成更窄的 projector / selector 边界。
 
 建议收口方向：
 
-1. `task-detail-parallel-candidate-source.ts`
-2. `task-detail-parallel-card-builder.ts`
-3. `task-detail-parallel-conversation-projector.ts`
+1. `task-detail-parallel-runtime.ts`
+2. `task-detail-parallel-read-model.ts`
+3. `task-detail-parallel-adoption.ts`
 
 判断标准：
 
-- `loadParallelCandidateSessionState()` 不再和 `buildConversationItemsWithParallelRuns()` 留在同一文件
-- 候选读取失败回退逻辑和 UI 投影逻辑可以独立测试
+- selected session / visible runs / current run 选择规则可以独立测试
+- page model 不再直接感知 parallel 领域里的多步选择细节
 
 #### 3. 拆 `TaskDetailV3MainPane.vue`
 
@@ -471,22 +490,21 @@ sequenceDiagram
 
 ### 中优先级：可以继续做，但收益次于上面三项
 
-#### 4. 拆 `useTaskDetailActionCoordinator.ts`
+#### 4. 继续压缩当前 feature 写路径
 
 问题：
 
-- continue/fork/terminate/runtime permission/adopt candidate/queued continuation 仍然在一个写路径协调层里。
+- continue / fork / terminate、runtime permission reply、candidate adopt 虽然已经从 compat 层退出，但当前仍分别挂在 conversation / runtime permission / compare 三条 feature 上，跨 feature 的写路径协同还可以更明确。
 
 根因：
 
-- “会话动作”“执行控制动作”“审批动作”还没有分域。
+- 旧 coordinator 已删除，但“会话动作”“执行控制动作”“审批动作”“compare adopt” 目前还是按 feature 分散持有，尚未进一步抽成更细的 application-service 层。
 
 建议收口方向：
 
-1. `useTaskContinuationActions()`
-2. `useTaskExecutionControlActions()`
-3. `useTaskRuntimePermissionActions()`
-4. `useTaskCandidateAdoptionActions()`
+1. 保持 `useTaskConversationActions()` / `useTaskRuntimePermissionActions()` / `useTaskParallelCandidateActions()` 作为 domain action entry；compare 侧由 page model 直接组合 `useTaskDetailParallelFlow()` 与 `useTaskParallelCandidateActions()`，不再重新引入 page-era coordinator 或新的 compare wrapper。
+2. 如果后续跨 feature 写路径继续增多，再考虑补一层更明确的 application-service facade，而不是回退到“大 coordinator”。
+3. 新增动作时优先把断言落在各自 feature tests，而不是再给页面层造兼容入口。
 
 适用前提：
 
@@ -545,8 +563,8 @@ sequenceDiagram
 
 如果继续做，推荐顺序是：
 
-1. 先继续细拆 `task-detail-parallel-conversation.ts`
-2. 再继续压缩 `useTaskDetailPageModel.ts` 的 orchestration 层
+1. 先继续压缩 `useTaskDetailPageModel.ts` 的 orchestration 层
+2. 再继续压缩 parallel runtime / read-model cluster
 3. 然后再拆 `TaskDetailV3MainPane.vue`
 4. 最后视需求决定是否抽 `TaskDetailV3Header.vue`
 

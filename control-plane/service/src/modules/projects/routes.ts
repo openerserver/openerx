@@ -1,5 +1,5 @@
 import { zValidator } from "@hono/zod-validator";
-import { and, asc, desc, eq, gt, inArray, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, lt, lte, or, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 import { db } from "../../db";
@@ -14,7 +14,8 @@ import {
   costRecords,
   environments,
   organizations,
-  paidExecutionLeases,
+  projectModelFundLedger,
+  projectModelFunds,
   projectRoles,
   projectTreeBranches,
   projectTreeLinks,
@@ -42,6 +43,7 @@ import { loadTaskTreeRecords } from "../project-tree/task-view";
 import { normalizeApiTimestamp, normalizeApiTimestampFields } from "../shared/api-timestamp";
 import { resolvePublicTaskStatus } from "../tasks/public-task-status";
 import { fromStoredTaskExecutionMode } from "../tasks/task-execution-mode";
+import { validateConfiguredModelRoute } from "../../lib/configured-model-routes";
 
 export const projectRoutes = new Hono<AppEnv>();
 
@@ -68,7 +70,6 @@ const environmentApprovalPolicyBindingSchema = z.object({
 const projectSettingsSchema = z.object({
   defaultModel: z.string().min(1).optional(),
   defaultEnvironmentId: z.string().min(1).optional(),
-  allowPaidExecution: z.boolean().optional(),
   workflowTemplateId: z.string().min(1).optional(),
   approvalPolicyTemplateId: z.string().min(1).optional(),
   projectGroupKey: z.string().min(1).nullable().optional(),
@@ -133,13 +134,29 @@ const workflowTemplateBindingSchema = z.object({
   workflowTemplateId: z.string().min(1).nullable(),
 });
 
-const createPaidExecutionLeaseSchema = z.object({
-  durationMinutes: z.number().int().min(5).max(480).default(30),
-  reason: z.string().trim().max(500).optional(),
+const projectFundGrantSchema = z.object({
+  amountUsd: z.number().positive(),
+  note: z.string().trim().max(500).optional(),
 });
 
-const revokePaidExecutionLeaseSchema = z.object({
-  reason: z.string().trim().max(500).optional(),
+const projectFundAdjustSchema = z.object({
+  amountUsd: z.number().refine((value) => Number.isFinite(value) && value !== 0, {
+    message: "amountUsd must be a non-zero number",
+  }),
+  note: z.string().trim().max(500).optional(),
+});
+
+const projectFundExecutionMutationSchema = z.object({
+  amountUsd: z.number().positive(),
+  modelRoute: z.string().trim().min(1).max(200).optional(),
+  taskId: z.string().trim().min(1).optional(),
+  runtimeSessionId: z.string().trim().min(1).optional(),
+  note: z.string().trim().max(500).optional(),
+});
+
+const projectFundLedgerQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  cursor: z.string().trim().min(1).optional(),
 });
 
 const projectTreeNodeTypeSchema = z.enum([
@@ -382,21 +399,6 @@ async function getVisibleProjectOrNull(user: JWTPayload, projectId: string) {
   return getProjectOrNull(projectId);
 }
 
-function normalizeLeaseRecord(lease: typeof paidExecutionLeases.$inferSelect) {
-  return {
-    id: lease.id,
-    projectId: lease.projectId,
-    issuedByUserId: lease.issuedByUserId,
-    revokedByUserId: lease.revokedByUserId,
-    reason: lease.reason,
-    status: lease.status,
-    expiresAt: normalizeApiTimestamp(lease.expiresAt),
-    createdAt: normalizeApiTimestamp(lease.createdAt),
-    updatedAt: normalizeApiTimestamp(lease.updatedAt),
-    revokedAt: normalizeApiTimestamp(lease.revokedAt),
-  };
-}
-
 function normalizeRuntimeUsageLedgerRecord(ledger: typeof runtimeUsageLedgers.$inferSelect) {
   return {
     id: ledger.id,
@@ -427,6 +429,233 @@ function normalizeRuntimeUsageLedgerRecord(ledger: typeof runtimeUsageLedgers.$i
     createdAt: normalizeApiTimestamp(ledger.createdAt),
     updatedAt: normalizeApiTimestamp(ledger.updatedAt),
   };
+}
+
+type ProjectModelFundRow = typeof projectModelFunds.$inferSelect;
+type ProjectModelFundLedgerRow = typeof projectModelFundLedger.$inferSelect;
+type ProjectModelFundMutationKind = "grant" | "reserve" | "consume" | "refund" | "adjust";
+
+function roundUsd(value: number) {
+  return Number(Number(value || 0).toFixed(4));
+}
+
+function computeProjectModelFundAvailable(values: {
+  totalGranted: number;
+  reserved: number;
+  consumed: number;
+}) {
+  return roundUsd(values.totalGranted - values.reserved - values.consumed);
+}
+
+function resolveProjectModelFundStatus(available: number): "active" | "depleted" {
+  return available > 0 ? "active" : "depleted";
+}
+
+function normalizeProjectModelFundRecord(projectId: string, fund?: ProjectModelFundRow | null) {
+  const totalGranted = roundUsd(fund?.totalGranted ?? 0);
+  const reserved = roundUsd(fund?.reserved ?? 0);
+  const consumed = roundUsd(fund?.consumed ?? 0);
+  const available = computeProjectModelFundAvailable({ totalGranted, reserved, consumed });
+
+  return {
+    id: fund?.id ?? null,
+    projectId,
+    currency: fund?.currency ?? "USD",
+    totalGranted,
+    reserved,
+    consumed,
+    available,
+    status:
+      fund?.status === "active" || fund?.status === "depleted"
+        ? fund.status
+        : resolveProjectModelFundStatus(available),
+    createdAt: normalizeApiTimestamp(fund?.createdAt),
+    updatedAt: normalizeApiTimestamp(fund?.updatedAt),
+    hasFund: Boolean(fund),
+  };
+}
+
+function normalizeProjectModelFundLedgerRecord(entry: ProjectModelFundLedgerRow) {
+  return {
+    id: entry.id,
+    projectId: entry.projectId,
+    fundId: entry.fundId,
+    type: entry.type,
+    amountUsd: roundUsd(entry.amountUsd),
+    balanceAfter: roundUsd(entry.balanceAfter),
+    modelRoute: entry.modelRoute,
+    taskId: entry.taskId,
+    runtimeSessionId: entry.runtimeSessionId,
+    createdBy: entry.createdBy,
+    createdAt: normalizeApiTimestamp(entry.createdAt) || entry.createdAt,
+    note: entry.note,
+  };
+}
+
+async function getProjectModelFundRecord(projectId: string) {
+  return db.query.projectModelFunds.findFirst({
+    where: eq(projectModelFunds.projectId, projectId),
+  });
+}
+
+async function ensureProjectModelFundTx(tx: {
+  select: typeof db.select;
+  insert: typeof db.insert;
+}, projectId: string, now: string): Promise<ProjectModelFundRow> {
+  const [existing] = await tx
+    .select()
+    .from(projectModelFunds)
+    .where(eq(projectModelFunds.projectId, projectId))
+    .limit(1);
+
+  if (existing) {
+    return existing;
+  }
+
+  const created: ProjectModelFundRow = {
+    id: crypto.randomUUID(),
+    projectId,
+    currency: "USD",
+    totalGranted: 0,
+    reserved: 0,
+    consumed: 0,
+    status: "depleted",
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  await tx.insert(projectModelFunds).values(created);
+  return created;
+}
+
+function applyProjectModelFundMutation(
+  current: Pick<ProjectModelFundRow, "totalGranted" | "reserved" | "consumed">,
+  type: ProjectModelFundMutationKind,
+  amountUsd: number,
+) {
+  const totalGranted = roundUsd(current.totalGranted);
+  const reserved = roundUsd(current.reserved);
+  const consumed = roundUsd(current.consumed);
+  const normalizedAmount = roundUsd(amountUsd);
+
+  if (!Number.isFinite(normalizedAmount)) {
+    throw new Error("Invalid project fund amount.");
+  }
+
+  const next = { totalGranted, reserved, consumed };
+
+  switch (type) {
+    case "grant":
+      if (normalizedAmount <= 0) {
+        throw new Error("Grant amount must be greater than 0.");
+      }
+      next.totalGranted = roundUsd(next.totalGranted + normalizedAmount);
+      break;
+    case "adjust":
+      if (normalizedAmount === 0) {
+        throw new Error("Adjustment amount must not be 0.");
+      }
+      next.totalGranted = roundUsd(next.totalGranted + normalizedAmount);
+      break;
+    case "reserve":
+      if (normalizedAmount <= 0) {
+        throw new Error("Reserve amount must be greater than 0.");
+      }
+      next.reserved = roundUsd(next.reserved + normalizedAmount);
+      break;
+    case "consume":
+      if (normalizedAmount <= 0) {
+        throw new Error("Consume amount must be greater than 0.");
+      }
+      {
+        const coveredByReservation = Math.min(next.reserved, normalizedAmount);
+        const overflow = roundUsd(normalizedAmount - coveredByReservation);
+        if (overflow > computeProjectModelFundAvailable(next)) {
+          throw new Error("Project fund balance is insufficient.");
+        }
+        next.reserved = roundUsd(next.reserved - coveredByReservation);
+      }
+      next.consumed = roundUsd(next.consumed + normalizedAmount);
+      break;
+    case "refund":
+      if (normalizedAmount <= 0) {
+        throw new Error("Refund amount must be greater than 0.");
+      }
+      if (next.reserved < normalizedAmount) {
+        throw new Error("Reserved project fund is insufficient for refund.");
+      }
+      next.reserved = roundUsd(next.reserved - normalizedAmount);
+      break;
+  }
+
+  const available = computeProjectModelFundAvailable(next);
+  if (available < 0) {
+    throw new Error("Project fund balance would become negative.");
+  }
+
+  return {
+    ...next,
+    available,
+    status: resolveProjectModelFundStatus(available),
+  };
+}
+
+async function mutateProjectModelFund(args: {
+  projectId: string;
+  type: ProjectModelFundMutationKind;
+  amountUsd: number;
+  createdBy?: string | null;
+  note?: string | null;
+  modelRoute?: string | null;
+  taskId?: string | null;
+  runtimeSessionId?: string | null;
+}) {
+  const now = new Date().toISOString();
+
+  return db.transaction(async (tx) => {
+    const current = await ensureProjectModelFundTx(tx, args.projectId, now);
+    const next = applyProjectModelFundMutation(current, args.type, args.amountUsd);
+
+    await tx
+      .update(projectModelFunds)
+      .set({
+        totalGranted: next.totalGranted,
+        reserved: next.reserved,
+        consumed: next.consumed,
+        status: next.status,
+        updatedAt: now,
+      })
+      .where(eq(projectModelFunds.id, current.id));
+
+    const ledger: ProjectModelFundLedgerRow = {
+      id: crypto.randomUUID(),
+      projectId: args.projectId,
+      fundId: current.id,
+      type: args.type,
+      amountUsd: roundUsd(args.amountUsd),
+      balanceAfter: next.available,
+      modelRoute: args.modelRoute ?? null,
+      taskId: args.taskId ?? null,
+      runtimeSessionId: args.runtimeSessionId ?? null,
+      createdBy: args.createdBy ?? null,
+      createdAt: now,
+      note: args.note ?? null,
+    };
+
+    await tx.insert(projectModelFundLedger).values(ledger);
+
+    return {
+      fund: {
+        ...current,
+        totalGranted: next.totalGranted,
+        reserved: next.reserved,
+        consumed: next.consumed,
+        status: next.status,
+        updatedAt: now,
+      },
+      ledger,
+    };
+  });
 }
 
 function normalizeRuntimeUsageLedgerStepRecord(step: typeof runtimeUsageLedgerSteps.$inferSelect) {
@@ -790,37 +1019,6 @@ async function rebuildRuntimeUsageBaseline(args: {
   }
 
   return rebuilt;
-}
-
-async function getActivePaidExecutionLease(projectId: string) {
-  const now = new Date().toISOString();
-  await db
-    .update(paidExecutionLeases)
-    .set({
-      status: "expired",
-      updatedAt: now,
-    })
-    .where(
-      and(
-        eq(paidExecutionLeases.projectId, projectId),
-        eq(paidExecutionLeases.status, "active"),
-        lte(paidExecutionLeases.expiresAt, now),
-      ),
-    );
-
-  const activeLease = await db.query.paidExecutionLeases.findFirst({
-    where: and(
-      eq(paidExecutionLeases.projectId, projectId),
-      eq(paidExecutionLeases.status, "active"),
-      gt(paidExecutionLeases.expiresAt, now),
-    ),
-    orderBy: [desc(paidExecutionLeases.createdAt)],
-  });
-
-  return {
-    now,
-    activeLease: activeLease ? normalizeLeaseRecord(activeLease) : null,
-  };
 }
 
 type OverviewProjectStatus = "healthy" | "pending_config" | "archived" | "error";
@@ -1788,6 +1986,13 @@ projectRoutes.post(
     const user = c.get("user");
     const id = crypto.randomUUID();
     const createdAt = new Date().toISOString();
+    const modelValidation = validateConfiguredModelRoute(
+      body.settings?.defaultModel,
+      "项目默认模型",
+    );
+    if (modelValidation) {
+      return c.json({ error: modelValidation }, 400);
+    }
 
     // Verify org exists
     const org = await db.query.organizations.findFirst({
@@ -2420,22 +2625,21 @@ projectRoutes.get(
   },
 );
 
-// GET /api/projects/:projectId
-projectRoutes.get("/:projectId/paid-execution-lease", async (c) => {
+projectRoutes.get("/:projectId/fund", async (c) => {
   const projectId = c.req.param("projectId");
   const project = await getVisibleProjectOrNull(c.get("user"), projectId);
   if (!project) {
     return c.json({ error: "Project not found or access denied" }, 404);
   }
 
-  const leaseState = await getActivePaidExecutionLease(projectId);
-  return c.json({ projectId, ...leaseState });
+  const fund = await getProjectModelFundRecord(projectId);
+  return c.json(normalizeProjectModelFundRecord(projectId, fund));
 });
 
 projectRoutes.post(
-  "/:projectId/paid-execution-lease",
+  "/:projectId/fund/grant",
   requireProjectRole("projectId", "project_admin"),
-  zValidator("json", createPaidExecutionLeaseSchema),
+  zValidator("json", projectFundGrantSchema),
   async (c) => {
     const projectId = c.req.param("projectId");
     const user = c.get("user");
@@ -2446,112 +2650,313 @@ projectRoutes.post(
       return c.json({ error: "Project not found" }, 404);
     }
 
-    const existingLeaseState = await getActivePaidExecutionLease(projectId);
-    if (existingLeaseState.activeLease) {
-      return c.json(
-        {
-          error: "An active paid execution lease already exists",
-          activeLease: existingLeaseState.activeLease,
-        },
-        409,
-      );
-    }
-
-    const now = new Date();
-    const createdAt = now.toISOString();
-    const expiresAt = new Date(now.getTime() + body.durationMinutes * 60_000).toISOString();
-    const lease = {
-      id: crypto.randomUUID(),
+    const result = await mutateProjectModelFund({
       projectId,
-      issuedByUserId: user.sub,
-      revokedByUserId: null,
-      reason: body.reason || null,
-      status: "active" as const,
-      expiresAt,
-      createdAt,
-      updatedAt: createdAt,
-      revokedAt: null,
-    };
+      type: "grant",
+      amountUsd: body.amountUsd,
+      createdBy: user.sub,
+      note: body.note || null,
+    });
 
-    await db.insert(paidExecutionLeases).values(lease);
     await db.insert(auditEvents).values({
       id: crypto.randomUUID(),
-      ts: createdAt,
+      ts: result.ledger.createdAt,
       userId: user.sub,
       projectId,
-      eventType: "project.paid_execution_lease.created",
-      action: "issue_paid_execution_lease",
-      target: lease.id,
+      eventType: "project.model_fund.granted",
+      action: "grant_project_model_fund",
+      target: result.ledger.id,
       detail: {
-        durationMinutes: body.durationMinutes,
-        expiresAt,
-        reason: body.reason || null,
+        fundId: result.fund.id,
+        amountUsd: body.amountUsd,
+        balanceAfter: result.ledger.balanceAfter,
+        note: body.note || null,
       },
-      riskLevel: "medium",
+      riskLevel: "low",
     });
 
     return c.json(
       {
-        projectId,
-        activeLease: normalizeLeaseRecord(lease),
-        now: createdAt,
+        fund: normalizeProjectModelFundRecord(projectId, result.fund),
+        ledgerEntry: normalizeProjectModelFundLedgerRecord(result.ledger),
       },
       201,
     );
   },
 );
 
-projectRoutes.delete(
-  "/:projectId/paid-execution-lease/:leaseId",
+projectRoutes.post(
+  "/:projectId/fund/adjust",
   requireProjectRole("projectId", "project_admin"),
+  zValidator("json", projectFundAdjustSchema),
   async (c) => {
     const projectId = c.req.param("projectId");
-    const leaseId = c.req.param("leaseId");
     const user = c.get("user");
-    const body = await c.req.json().catch(() => ({}));
-    const parsedBody = revokePaidExecutionLeaseSchema.safeParse(body);
-    if (!parsedBody.success) {
-      return c.json({ error: "Invalid revoke payload" }, 400);
+    const body = c.req.valid("json");
+    const project = await getProjectOrNull(projectId);
+
+    if (!project) {
+      return c.json({ error: "Project not found" }, 404);
     }
+    try {
+      const result = await mutateProjectModelFund({
+        projectId,
+        type: "adjust",
+        amountUsd: body.amountUsd,
+        createdBy: user.sub,
+        note: body.note || null,
+      });
 
-    const lease = await db.query.paidExecutionLeases.findFirst({
-      where: and(eq(paidExecutionLeases.id, leaseId), eq(paidExecutionLeases.projectId, projectId)),
-    });
+      await db.insert(auditEvents).values({
+        id: crypto.randomUUID(),
+        ts: result.ledger.createdAt,
+        userId: user.sub,
+        projectId,
+        eventType: "project.model_fund.adjusted",
+        action: "adjust_project_model_fund",
+        target: result.ledger.id,
+        detail: {
+          fundId: result.fund.id,
+          amountUsd: body.amountUsd,
+          balanceAfter: result.ledger.balanceAfter,
+          note: body.note || null,
+        },
+        riskLevel: body.amountUsd < 0 ? "medium" : "low",
+      });
 
-    if (!lease) {
-      return c.json({ error: "Paid execution lease not found" }, 404);
+      return c.json(
+        {
+          fund: normalizeProjectModelFundRecord(projectId, result.fund),
+          ledgerEntry: normalizeProjectModelFundLedgerRecord(result.ledger),
+        },
+        200,
+      );
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : "Failed to adjust fund" }, 400);
     }
-
-    const now = new Date().toISOString();
-    await db
-      .update(paidExecutionLeases)
-      .set({
-        status: lease.status === "expired" ? "expired" : "revoked",
-        revokedAt: now,
-        revokedByUserId: user.sub,
-        updatedAt: now,
-        reason: parsedBody.data.reason || lease.reason,
-      })
-      .where(eq(paidExecutionLeases.id, leaseId));
-
-    await db.insert(auditEvents).values({
-      id: crypto.randomUUID(),
-      ts: now,
-      userId: user.sub,
-      projectId,
-      eventType: "project.paid_execution_lease.revoked",
-      action: "revoke_paid_execution_lease",
-      target: leaseId,
-      detail: {
-        reason: parsedBody.data.reason || null,
-        previousStatus: lease.status,
-      },
-      riskLevel: "medium",
-    });
-
-    return c.json({ ok: true, leaseId, projectId });
   },
 );
+
+projectRoutes.post(
+  "/:projectId/fund/reserve",
+  requireProjectRole("projectId", "developer"),
+  zValidator("json", projectFundExecutionMutationSchema),
+  async (c) => {
+    const projectId = c.req.param("projectId");
+    const user = c.get("user");
+    const body = c.req.valid("json");
+    const project = await getProjectOrNull(projectId);
+
+    if (!project) {
+      return c.json({ error: "Project not found" }, 404);
+    }
+
+    try {
+      const result = await mutateProjectModelFund({
+        projectId,
+        type: "reserve",
+        amountUsd: body.amountUsd,
+        createdBy: user.sub,
+        note: body.note || null,
+        modelRoute: body.modelRoute || null,
+        taskId: body.taskId || null,
+        runtimeSessionId: body.runtimeSessionId || null,
+      });
+
+      await db.insert(auditEvents).values({
+        id: crypto.randomUUID(),
+        ts: result.ledger.createdAt,
+        userId: user.sub,
+        projectId,
+        eventType: "project.model_fund.reserved",
+        action: "reserve_project_model_fund",
+        target: result.ledger.id,
+        detail: {
+          fundId: result.fund.id,
+          amountUsd: body.amountUsd,
+          balanceAfter: result.ledger.balanceAfter,
+          modelRoute: body.modelRoute || null,
+          taskId: body.taskId || null,
+          runtimeSessionId: body.runtimeSessionId || null,
+          note: body.note || null,
+        },
+        riskLevel: "medium",
+      });
+
+      return c.json(
+        {
+          fund: normalizeProjectModelFundRecord(projectId, result.fund),
+          ledgerEntry: normalizeProjectModelFundLedgerRecord(result.ledger),
+        },
+        200,
+      );
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : "Failed to reserve fund" }, 400);
+    }
+  },
+);
+
+projectRoutes.post(
+  "/:projectId/fund/consume",
+  requireProjectRole("projectId", "developer"),
+  zValidator("json", projectFundExecutionMutationSchema),
+  async (c) => {
+    const projectId = c.req.param("projectId");
+    const user = c.get("user");
+    const body = c.req.valid("json");
+    const project = await getProjectOrNull(projectId);
+
+    if (!project) {
+      return c.json({ error: "Project not found" }, 404);
+    }
+
+    try {
+      const result = await mutateProjectModelFund({
+        projectId,
+        type: "consume",
+        amountUsd: body.amountUsd,
+        createdBy: user.sub,
+        note: body.note || null,
+        modelRoute: body.modelRoute || null,
+        taskId: body.taskId || null,
+        runtimeSessionId: body.runtimeSessionId || null,
+      });
+
+      await db.insert(auditEvents).values({
+        id: crypto.randomUUID(),
+        ts: result.ledger.createdAt,
+        userId: user.sub,
+        projectId,
+        eventType: "project.model_fund.consumed",
+        action: "consume_project_model_fund",
+        target: result.ledger.id,
+        detail: {
+          fundId: result.fund.id,
+          amountUsd: body.amountUsd,
+          balanceAfter: result.ledger.balanceAfter,
+          modelRoute: body.modelRoute || null,
+          taskId: body.taskId || null,
+          runtimeSessionId: body.runtimeSessionId || null,
+          note: body.note || null,
+        },
+        riskLevel: "medium",
+      });
+
+      return c.json(
+        {
+          fund: normalizeProjectModelFundRecord(projectId, result.fund),
+          ledgerEntry: normalizeProjectModelFundLedgerRecord(result.ledger),
+        },
+        200,
+      );
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : "Failed to consume fund" }, 400);
+    }
+  },
+);
+
+projectRoutes.post(
+  "/:projectId/fund/refund",
+  requireProjectRole("projectId", "developer"),
+  zValidator("json", projectFundExecutionMutationSchema),
+  async (c) => {
+    const projectId = c.req.param("projectId");
+    const user = c.get("user");
+    const body = c.req.valid("json");
+    const project = await getProjectOrNull(projectId);
+
+    if (!project) {
+      return c.json({ error: "Project not found" }, 404);
+    }
+
+    try {
+      const result = await mutateProjectModelFund({
+        projectId,
+        type: "refund",
+        amountUsd: body.amountUsd,
+        createdBy: user.sub,
+        note: body.note || null,
+        modelRoute: body.modelRoute || null,
+        taskId: body.taskId || null,
+        runtimeSessionId: body.runtimeSessionId || null,
+      });
+
+      await db.insert(auditEvents).values({
+        id: crypto.randomUUID(),
+        ts: result.ledger.createdAt,
+        userId: user.sub,
+        projectId,
+        eventType: "project.model_fund.refunded",
+        action: "refund_project_model_fund",
+        target: result.ledger.id,
+        detail: {
+          fundId: result.fund.id,
+          amountUsd: body.amountUsd,
+          balanceAfter: result.ledger.balanceAfter,
+          modelRoute: body.modelRoute || null,
+          taskId: body.taskId || null,
+          runtimeSessionId: body.runtimeSessionId || null,
+          note: body.note || null,
+        },
+        riskLevel: "low",
+      });
+
+      return c.json(
+        {
+          fund: normalizeProjectModelFundRecord(projectId, result.fund),
+          ledgerEntry: normalizeProjectModelFundLedgerRecord(result.ledger),
+        },
+        200,
+      );
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : "Failed to refund fund" }, 400);
+    }
+  },
+);
+
+projectRoutes.get("/:projectId/fund/ledger", async (c) => {
+  const projectId = c.req.param("projectId");
+  const project = await getVisibleProjectOrNull(c.get("user"), projectId);
+  if (!project) {
+    return c.json({ error: "Project not found or access denied" }, 404);
+  }
+
+  const parsedQuery = projectFundLedgerQuerySchema.safeParse({
+    limit: c.req.query("limit"),
+    cursor: c.req.query("cursor"),
+  });
+  if (!parsedQuery.success) {
+    return c.json({ error: "Invalid project fund ledger query" }, 400);
+  }
+
+  const cursor = normalizeApiTimestamp(parsedQuery.data.cursor) || parsedQuery.data.cursor;
+  const whereClause = cursor
+    ? and(
+        eq(projectModelFundLedger.projectId, projectId),
+        lt(projectModelFundLedger.createdAt, cursor),
+      )
+    : eq(projectModelFundLedger.projectId, projectId);
+
+  const items = await db
+    .select()
+    .from(projectModelFundLedger)
+    .where(whereClause)
+    .orderBy(desc(projectModelFundLedger.createdAt), desc(projectModelFundLedger.id))
+    .limit(parsedQuery.data.limit);
+
+  const nextCursor =
+    items.length === parsedQuery.data.limit
+      ? (normalizeApiTimestamp(items[items.length - 1]?.createdAt) ||
+          items[items.length - 1]?.createdAt ||
+          null)
+      : null;
+
+  return c.json({
+    projectId,
+    items: items.map(normalizeProjectModelFundLedgerRecord),
+    nextCursor,
+  });
+});
 
 projectRoutes.post(
   "/:projectId/runtime-usage-ledgers/sync",
@@ -2839,6 +3244,13 @@ projectRoutes.patch(
   async (c) => {
     const projectId = c.req.param("projectId");
     const body = c.req.valid("json");
+    const modelValidation = validateConfiguredModelRoute(
+      body.settings?.defaultModel,
+      "项目默认模型",
+    );
+    if (modelValidation) {
+      return c.json({ error: modelValidation }, 400);
+    }
 
     const existing = await db.query.projects.findFirst({
       where: eq(projects.id, projectId),

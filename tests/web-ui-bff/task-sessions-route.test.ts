@@ -19,6 +19,7 @@ const getSessionMessagesMock = mock(async () => ({
 }));
 const continueSessionMock = mock(async () => ({ ok: true }));
 const forkSessionMock = mock(async () => ({ ok: true, sessionId: "session-2" }));
+const wsBroadcastMock = mock(() => undefined);
 
 function aliasTaskSessionsMockUrl(url: string) {
   const normalizedConversationMatch = url.match(
@@ -118,7 +119,7 @@ mock.module("../../control-plane/web-ui-bff/src/modules/realtime/sse-aggregator"
 
 mock.module("../../control-plane/web-ui-bff/src/modules/realtime/ws-broadcaster", () => ({
   wsBroadcaster: {
-    broadcast: mock(() => undefined),
+    broadcast: wsBroadcastMock,
   },
 }));
 
@@ -130,6 +131,7 @@ beforeEach(() => {
   getSessionMessagesMock.mockReset();
   continueSessionMock.mockReset();
   forkSessionMock.mockReset();
+  wsBroadcastMock.mockReset();
 
   authHeaderMock.mockReturnValue("Bearer test");
   createInternalAuthorizationMock.mockResolvedValue("Bearer internal");
@@ -168,6 +170,182 @@ beforeEach(() => {
 });
 
 describe("task sessions route", () => {
+  test("broadcasts flow reconcile after branches lineage auto-repair persists normalized records", async () => {
+    setCpFetchImplementation(async (url: string, options?: { method?: string }) => {
+      if (url === "/api/project-tree/tasks/task-1") {
+        return {
+          ok: true,
+          data: {
+            id: "task-1",
+            title: "parallel task",
+            status: "completed",
+            sessionId: "session-b",
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/sessions" && !options?.method) {
+        return {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "task-session:task-1:session-root",
+                runtimeSessionId: "session-root",
+                branchName: "main",
+                sourceType: "root",
+                isActive: true,
+                archivedAt: null,
+                createdAt: "2026-03-14T10:00:00.000Z",
+                updatedAt: "2026-03-14T10:05:00.000Z",
+              },
+              {
+                id: "task-session:task-1:session-a",
+                runtimeSessionId: "session-a",
+                parentRuntimeSessionId: "session-root",
+                branchName: "候选 A",
+                sourceType: "fork",
+                sessionKind: "candidate",
+                executionModeSnapshot: "parallel",
+                executionStatus: "completed",
+                candidateIndex: 0,
+                coordinationKey: "coord-1",
+                winnerSessionId: "session-b",
+                isActive: false,
+                archivedAt: null,
+                createdAt: "2026-03-14T10:00:01.000Z",
+                updatedAt: "2026-03-14T10:05:01.000Z",
+              },
+              {
+                id: "task-session:task-1:session-b",
+                runtimeSessionId: "session-b",
+                parentRuntimeSessionId: "session-root",
+                branchName: "候选 B",
+                sourceType: "fork",
+                sessionKind: "candidate",
+                executionModeSnapshot: "parallel",
+                executionStatus: "completed",
+                candidateIndex: 1,
+                coordinationKey: "coord-1",
+                winnerSessionId: "session-b",
+                isActive: true,
+                archivedAt: null,
+                createdAt: "2026-03-14T10:00:02.000Z",
+                updatedAt: "2026-03-14T10:05:02.000Z",
+              },
+            ],
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/sessions" && options?.method === "POST") {
+        return { ok: true, data: { ok: true } };
+      }
+
+      return { ok: true, data: {} };
+    });
+
+    const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
+
+    const response = await taskRoutes.request("http://localhost/task-1/branches", {
+      headers: {
+        Authorization: "Bearer test",
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(wsBroadcastMock).toHaveBeenCalledTimes(1);
+    expect(wsBroadcastMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "task.reconcile.required",
+        taskId: "task-1",
+        data: expect.objectContaining({ scope: "flow", reason: "internal_repair" }),
+      }),
+    );
+  });
+
+  test("broadcasts flow reconcile after session-lineage auto-repair persists normalized records", async () => {
+    setCpFetchImplementation(async (url: string, options?: { method?: string }) => {
+      if (url === "/api/tasks/task-1/sessions" && !options?.method) {
+        return {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "task-session:task-1:session-root",
+                runtimeSessionId: "session-root",
+                branchName: "main",
+                sourceType: "root",
+                isActive: true,
+                archivedAt: null,
+                createdAt: "2026-03-14T10:00:00.000Z",
+                updatedAt: "2026-03-14T10:05:00.000Z",
+              },
+              {
+                id: "task-session:task-1:session-a",
+                runtimeSessionId: "session-a",
+                parentRuntimeSessionId: "session-root",
+                branchName: "候选 A",
+                sourceType: "fork",
+                sessionKind: "candidate",
+                executionModeSnapshot: "parallel",
+                executionStatus: "completed",
+                candidateIndex: 0,
+                coordinationKey: "coord-1",
+                winnerSessionId: "session-b",
+                isActive: false,
+                archivedAt: null,
+                createdAt: "2026-03-14T10:00:01.000Z",
+                updatedAt: "2026-03-14T10:05:01.000Z",
+              },
+              {
+                id: "task-session:task-1:session-b",
+                runtimeSessionId: "session-b",
+                parentRuntimeSessionId: "session-root",
+                branchName: "候选 B",
+                sourceType: "fork",
+                sessionKind: "candidate",
+                executionModeSnapshot: "parallel",
+                executionStatus: "completed",
+                candidateIndex: 1,
+                coordinationKey: "coord-1",
+                winnerSessionId: "session-b",
+                isActive: true,
+                archivedAt: null,
+                createdAt: "2026-03-14T10:00:02.000Z",
+                updatedAt: "2026-03-14T10:05:02.000Z",
+              },
+            ],
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/sessions" && options?.method === "POST") {
+        return { ok: true, data: { ok: true } };
+      }
+
+      return { ok: true, data: {} };
+    });
+
+    const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
+
+    const response = await taskRoutes.request("http://localhost/task-1/session-lineage", {
+      headers: {
+        Authorization: "Bearer test",
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(wsBroadcastMock).toHaveBeenCalledTimes(1);
+    expect(wsBroadcastMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "task.reconcile.required",
+        taskId: "task-1",
+        data: expect.objectContaining({ scope: "flow", reason: "internal_repair" }),
+      }),
+    );
+  });
+
   test("marks the task session as active when it matches the persisted sessionId", async () => {
     setCpFetchImplementation(async (url: string, options?: { method?: string }) => {
       if (url === "/api/project-tree/tasks/task-1") {
@@ -1031,8 +1209,172 @@ describe("task sessions route", () => {
     expect(getSessionMessagesMock).not.toHaveBeenCalled();
   });
 
+  test("keeps runtime session ids on direct session-first reads without lineage fan-in", async () => {
+    setCpFetchImplementation(async (url: string) => {
+      if (url === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Asession-1/messages") {
+        return {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "db-message-1",
+                runtimeMessageId: "runtime-message-1",
+                role: "assistant",
+                textContent: "direct session-first reply",
+                createdAt: "2026-03-20T10:00:05.000Z",
+                completedAt: "2026-03-20T10:00:08.000Z",
+                parts: [
+                  {
+                    id: "db-part-1",
+                    partType: "text",
+                    textContent: "direct session-first reply",
+                    jsonPayload: {},
+                  },
+                ],
+              },
+            ],
+            meta: {
+              readSource: "task-session-first",
+              sessionId: "task-session:task-1:session-1",
+              messageCount: 1,
+              complete: true,
+              snapshotVersion: 7,
+              persistedThroughRevision: 9,
+            },
+          },
+        };
+      }
+
+      return { ok: true, data: {} };
+    });
+
+    const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
+
+    const response = await taskRoutes.request(
+      "http://localhost/task-1/sessions/session-1/messages?includeLineage=false",
+      {
+        headers: {
+          Authorization: "Bearer test",
+        },
+      },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      data: [
+        expect.objectContaining({
+          id: "runtime-message-1",
+          role: "assistant",
+          text: "direct session-first reply",
+        }),
+      ],
+      meta: expect.objectContaining({
+        readSource: "task-session-first",
+        sessionId: "session-1",
+        messageCount: 1,
+        itemCount: 1,
+        cacheState: "complete",
+        complete: true,
+        snapshotVersion: 7,
+        persistedThroughRevision: 9,
+      }),
+    });
+
+    const requestedUrls = cpFetchMock.mock.calls.map(([url]) => String(url));
+    expect(requestedUrls).toEqual(
+      expect.arrayContaining([
+        "/api/tasks/task-1/sessions",
+        "/api/tasks/task-1/query/normalized-conversation?sessionId=task-session%3Atask-1%3Asession-1&includeLineage=false",
+      ]),
+    );
+  });
+
   test("exposes a minimal round facade backed by persisted sessions and session-first messages", async () => {
     setCpFetchImplementation(async (url: string, options?: { method?: string }) => {
+      const rootRoundMessages = {
+        ok: true,
+        data: {
+          data: [
+            {
+              id: "db-message-user-1",
+              runtimeMessageId: "runtime-message-user-1",
+              role: "user",
+              messageIndex: 7,
+              textContent: "继续完善主线方案",
+              createdAt: "2026-03-20T10:00:00.000Z",
+              parts: [
+                {
+                  id: "db-part-user-1",
+                  partType: "text",
+                  textContent: "继续完善主线方案",
+                  jsonPayload: {},
+                },
+              ],
+            },
+            {
+              id: "db-message-assistant-1",
+              runtimeMessageId: "runtime-message-assistant-1",
+              role: "assistant",
+              messageIndex: 11,
+              textContent: "这是主线回复",
+              createdAt: "2026-03-20T10:00:03.000Z",
+              completedAt: "2026-03-20T10:00:06.000Z",
+              parts: [
+                {
+                  id: "db-part-assistant-1",
+                  partType: "text",
+                  textContent: "这是主线回复",
+                  jsonPayload: {},
+                },
+              ],
+            },
+          ],
+          meta: {
+            readSource: "task-session-first",
+            sessionId: "task-session:task-1:session-root",
+              snapshotVersion: 19,
+            messageCount: 2,
+            cacheState: "complete",
+            complete: true,
+            itemCount: 2,
+          },
+        },
+      };
+
+      const candidateRoundMessages = {
+        ok: true,
+        data: {
+          data: [
+            {
+              id: "db-message-candidate-a",
+              runtimeMessageId: "runtime-message-candidate-a",
+              role: "assistant",
+              messageIndex: 5,
+              textContent: "候选 A 回复",
+              createdAt: "2026-03-20T10:00:04.000Z",
+              completedAt: "2026-03-20T10:00:07.000Z",
+              parts: [
+                {
+                  id: "db-part-candidate-a",
+                  partType: "text",
+                  textContent: "候选 A 回复",
+                  jsonPayload: {},
+                },
+              ],
+            },
+          ],
+          meta: {
+            readSource: "task-session-first",
+            sessionId: "task-session:task-1:session-candidate-a",
+              snapshotVersion: 13,
+            messageCount: 1,
+            cacheState: "complete",
+            complete: true,
+            itemCount: 1,
+          },
+        },
+      };
+
       if (url === "/api/tasks/task-1/sessions" && !options?.method) {
         return {
           ok: true,
@@ -1072,90 +1414,20 @@ describe("task sessions route", () => {
         };
       }
 
-      if (url === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Asession-root/messages") {
-        return {
-          ok: true,
-          data: {
-            data: [
-              {
-                id: "db-message-user-1",
-                runtimeMessageId: "runtime-message-user-1",
-                role: "user",
-                textContent: "继续完善主线方案",
-                createdAt: "2026-03-20T10:00:00.000Z",
-                parts: [
-                  {
-                    id: "db-part-user-1",
-                    partType: "text",
-                    textContent: "继续完善主线方案",
-                    jsonPayload: {},
-                  },
-                ],
-              },
-              {
-                id: "db-message-assistant-1",
-                runtimeMessageId: "runtime-message-assistant-1",
-                role: "assistant",
-                textContent: "这是主线回复",
-                createdAt: "2026-03-20T10:00:03.000Z",
-                completedAt: "2026-03-20T10:00:06.000Z",
-                parts: [
-                  {
-                    id: "db-part-assistant-1",
-                    partType: "text",
-                    textContent: "这是主线回复",
-                    jsonPayload: {},
-                  },
-                ],
-              },
-            ],
-            meta: {
-              readSource: "task-session-first",
-              sessionId: "task-session:task-1:session-root",
-              messageCount: 2,
-              cacheState: "complete",
-              complete: true,
-              itemCount: 2,
-            },
-          },
-        };
+      if (
+        url === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Asession-root/messages" ||
+        url ===
+          "/api/tasks/task-1/query/normalized-conversation?sessionId=task-session%3Atask-1%3Asession-root&includeLineage=false"
+      ) {
+        return rootRoundMessages;
       }
 
       if (
+        url === "/api/tasks/task-1/sessions/task-session%3Atask-1%3Asession-candidate-a/messages" ||
         url ===
-        "/api/tasks/task-1/sessions/task-session%3Atask-1%3Asession-candidate-a/messages"
+          "/api/tasks/task-1/query/normalized-conversation?sessionId=task-session%3Atask-1%3Asession-candidate-a&includeLineage=false"
       ) {
-        return {
-          ok: true,
-          data: {
-            data: [
-              {
-                id: "db-message-candidate-a",
-                runtimeMessageId: "runtime-message-candidate-a",
-                role: "assistant",
-                textContent: "候选 A 回复",
-                createdAt: "2026-03-20T10:00:04.000Z",
-                completedAt: "2026-03-20T10:00:07.000Z",
-                parts: [
-                  {
-                    id: "db-part-candidate-a",
-                    partType: "text",
-                    textContent: "候选 A 回复",
-                    jsonPayload: {},
-                  },
-                ],
-              },
-            ],
-            meta: {
-              readSource: "task-session-first",
-              sessionId: "task-session:task-1:session-candidate-a",
-              messageCount: 1,
-              cacheState: "complete",
-              complete: true,
-              itemCount: 1,
-            },
-          },
-        };
+        return candidateRoundMessages;
       }
 
       return { ok: true, data: {} };
@@ -1194,6 +1466,8 @@ describe("task sessions route", () => {
       ],
     });
 
+    cpFetchMock.mockClear();
+
     const currentRoundResponse = await taskRoutes.request("http://localhost/task-1/current-round", {
       headers: {
         Authorization: "Bearer test",
@@ -1206,9 +1480,12 @@ describe("task sessions route", () => {
       round: expect.objectContaining({
         id: "task-session:task-1:session-root",
         kind: "continue",
-        promptText: "继续完善主线方案",
+        promptText: "",
+        partial: true,
       }),
     });
+
+    expect(cpFetchMock.mock.calls.map(([url]) => String(url))).toEqual(["/api/tasks/task-1/sessions"]);
 
     const roundMessagesResponse = await taskRoutes.request(
       "http://localhost/task-1/rounds/task-session%3Atask-1%3Asession-root/messages",
@@ -1242,8 +1519,8 @@ describe("task sessions route", () => {
         }),
       ],
       reconcileRequired: false,
-      snapshotVersion: 2,
-      persistedThroughRevision: 2,
+      snapshotVersion: 19,
+      persistedThroughRevision: 11,
     });
   });
 
@@ -1288,13 +1565,15 @@ describe("task sessions route", () => {
             ],
             meta: {
               readSource: "task-session-first",
-              sessionId: "session-1",
+              sessionId: "task-session:task-1:session-1",
               messageCount: 2,
               includeLineage: true,
               cachedSessionCount: 1,
               cacheState: "complete",
               complete: true,
               itemCount: 2,
+              snapshotVersion: 12,
+              persistedThroughRevision: 13,
             },
           },
         };
@@ -1334,6 +1613,8 @@ describe("task sessions route", () => {
         complete: true,
         itemCount: 2,
         cachedSessionCount: 1,
+        snapshotVersion: 12,
+        persistedThroughRevision: 13,
       }),
     });
     expect(getSessionMessagesMock).not.toHaveBeenCalled();
@@ -1823,6 +2104,178 @@ describe("task sessions route", () => {
       data: [
         expect.objectContaining({
           id: "runtime-root-user",
+          role: "user",
+          text: "/start-work 真正的用户输入",
+        }),
+        expect.objectContaining({
+          _type: "workflow_group",
+          info: expect.objectContaining({
+            role: "workflow",
+            variant: "context",
+            label: "工作流消息",
+          }),
+          steps: [
+            expect.objectContaining({
+              agentName: "需求进入",
+              sessionId: "session-root",
+              messages: [
+                expect.objectContaining({
+                  role: "workflow",
+                  text: expect.stringContaining("当前阶段：需求进入"),
+                }),
+              ],
+            }),
+          ],
+        }),
+        expect.objectContaining({
+          id: "runtime-root-assistant",
+          role: "assistant",
+          text: "已完成需求梳理",
+        }),
+      ],
+      meta: expect.objectContaining({
+        readSource: "task-session-first",
+        includeLineage: true,
+        sessionId: "session-root",
+        messageCount: 3,
+        cacheState: "complete",
+        complete: true,
+        itemCount: 3,
+        cachedSessionCount: 1,
+      }),
+    });
+  });
+
+  test("hydrates the root prompt as a standalone user message when upstream only embeds it in execution context", async () => {
+    setCpFetchImplementation(async (url: string, options?: { method?: string }) => {
+      if (url === "/api/project-tree/tasks/task-1") {
+        return {
+          ok: true,
+          data: {
+            id: "task-1",
+            title: "demo task",
+            prompt: "/start-work 真正的用户输入",
+            createdAt: "2026-03-20T09:59:59.000Z",
+            status: "completed",
+            sessionId: "session-root",
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/sessions" && !options?.method) {
+        return {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "ts-root",
+                runtimeSessionId: "session-root",
+                parentRuntimeSessionId: null,
+                sessionKind: "primary",
+                archivedAt: null,
+              },
+            ],
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-1/messages") {
+        const buildMessage = (
+          id: string,
+          role: "user" | "assistant",
+          text: string,
+          createdAt: string,
+          sessionId: string,
+        ) => ({
+          id: `db-${id}`,
+          runtimeMessageId: id,
+          role,
+          textContent: text,
+          createdAt,
+          completedAt: role === "assistant" ? createdAt : undefined,
+          rawPayload: {
+            info: {
+              id,
+              role,
+              sessionID: sessionId,
+              time: {
+                created: createdAt,
+                ...(role === "assistant" ? { completed: createdAt } : {}),
+              },
+            },
+          },
+          parts: [
+            {
+              id: `part-${id}`,
+              partType: "text",
+              textContent: text,
+              jsonPayload: {},
+            },
+          ],
+        });
+
+        return {
+          ok: true,
+          data: {
+            data: [
+              buildMessage(
+                "runtime-root-context",
+                "user",
+                [
+                  "Execution context:",
+                  "- Opener-X task ID: task-1",
+                  "- Project ID: project-1",
+                  "",
+                  "## 当前执行上下文",
+                  "任务：demo task",
+                  "流程状态：pending",
+                  "当前阶段：需求进入",
+                  "执行 Agent：explore-enterprise",
+                  "执行模型：github-copilot:gpt-5-mini",
+                  "请只完成当前阶段的目标。",
+                  "/start-work 真正的用户输入",
+                ].join("\n"),
+                "2026-03-20T10:00:01.000Z",
+                "session-root",
+              ),
+              buildMessage(
+                "runtime-root-assistant",
+                "assistant",
+                "已完成需求梳理",
+                "2026-03-20T10:00:02.000Z",
+                "session-root",
+              ),
+            ],
+            meta: {
+              readSource: "task-session-first",
+              sessionId: "session-root",
+              messageCount: 2,
+              includeLineage: true,
+              cachedSessionCount: 1,
+              cacheState: "complete",
+              complete: true,
+              itemCount: 2,
+            },
+          },
+        };
+      }
+
+      return { ok: true, data: {} };
+    });
+
+    const { taskRoutes } = await import("../../control-plane/web-ui-bff/src/modules/tasks/routes");
+
+    const response = await taskRoutes.request("http://localhost/task-1/messages", {
+      headers: {
+        Authorization: "Bearer test",
+      },
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toEqual({
+      data: [
+        expect.objectContaining({
           role: "user",
           text: "/start-work 真正的用户输入",
         }),
@@ -2757,6 +3210,24 @@ describe("task sessions route", () => {
       parentSessionId: "session-root",
       parentTaskSessionId: "task-session:task-1:session-root",
       forkedFromMessageId: "msg-1",
+      execution: {
+        action: "fork",
+        nextSessionId: "session-2",
+        taskSessionId: "task-session:task-1:session-2",
+        roundId: "task-session:task-1:session-2",
+        acceptedRevision: null,
+        status: "idle",
+        executionMode: null,
+        parentSessionId: "session-root",
+        parentTaskSessionId: "task-session:task-1:session-root",
+        phaseId: null,
+        agentRunId: null,
+        refreshTargets: {
+          workflow: true,
+          flow: true,
+          messages: true,
+        },
+      },
     });
   });
 
@@ -2830,6 +3301,24 @@ describe("task sessions route", () => {
       title: "Canonical 分支",
       parentSessionId: "session-root",
       parentTaskSessionId: "task-session:task-1:session-root",
+      execution: {
+        action: "fork",
+        nextSessionId: "session-2",
+        taskSessionId: "task-session:task-1:session-2",
+        roundId: "task-session:task-1:session-2",
+        acceptedRevision: null,
+        status: "idle",
+        executionMode: null,
+        parentSessionId: "session-root",
+        parentTaskSessionId: "task-session:task-1:session-root",
+        phaseId: null,
+        agentRunId: null,
+        refreshTargets: {
+          workflow: true,
+          flow: true,
+          messages: true,
+        },
+      },
     });
     expect(forkSessionMock).toHaveBeenCalledWith("session-root", { title: "Canonical 分支" });
   });

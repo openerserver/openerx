@@ -98,6 +98,7 @@ mock.module("../../control-plane/web-ui-bff/src/lib/model-config", () => ({
       : `${value.providerId || "github-copilot"}:${value.modelId || "gpt-5.4"}`,
   ),
   readDefaultExecutionModel: mock(() => undefined),
+  readOpencodeJson: mock(() => ({ models: { list: [] }, provider: {} })),
   resolveModelRoute: mock((raw: string) => ({ providerId: "github-copilot", modelId: raw })),
   validateModelProvider: mock(() => ({ valid: true })),
   diagnoseModelReadiness: mock(async () => undefined),

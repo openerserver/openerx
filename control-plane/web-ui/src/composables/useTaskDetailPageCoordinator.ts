@@ -1,38 +1,20 @@
 import { computed, watch, type Ref } from "vue";
 import type { useRoute, useRouter } from "vue-router";
-import type { TaskSessionRecord } from "../lib/api";
 import type { TreeTask } from "./useProjectTreeTask";
 
 export function useTaskDetailPageCoordinator(args: {
   taskId: Ref<string>;
-  selectedSessionId: Ref<string | undefined>;
   task: Ref<TreeTask | null | undefined>;
   projectId: Ref<string | null | undefined>;
-  taskSessionSummaries: Ref<TaskSessionRecord[]>;
   route: ReturnType<typeof useRoute>;
   router: ReturnType<typeof useRouter>;
   realtimeConnected: Ref<boolean>;
   subscribeTask: (taskId: string) => void;
   subscribeProject: (projectId: string) => void;
+  resetConversationRound: () => void;
   resetSnapshotState: () => void;
-  resetSequentialStepState: () => void;
   loadInitialSnapshot: () => void | Promise<void>;
 }) {
-  const canForkFromCurrentSession = computed(() =>
-    Boolean(args.selectedSessionId.value || args.task.value?.sessionId),
-  );
-
-  function resolveTaskSessionRequestId(sessionId?: string | null) {
-    if (!sessionId) {
-      return undefined;
-    }
-
-    const matchedSummary = args.taskSessionSummaries.value.find(
-      (summary) => summary.id === sessionId || summary.taskSessionId === sessionId,
-    );
-    return matchedSummary?.taskSessionId ?? sessionId;
-  }
-
   function stripLegacySessionQueryFromRoute() {
     if (!args.taskId.value || !Object.prototype.hasOwnProperty.call(args.route.query, "session")) {
       return;
@@ -53,9 +35,8 @@ export function useTaskDetailPageCoordinator(args: {
   watch(
     args.taskId,
     () => {
-      args.selectedSessionId.value = undefined;
+      args.resetConversationRound();
       args.resetSnapshotState();
-      args.resetSequentialStepState();
     },
     { immediate: false },
   );
@@ -92,8 +73,6 @@ export function useTaskDetailPageCoordinator(args: {
   );
 
   return {
-    canForkFromCurrentSession,
     handleTaskSwitch,
-    resolveTaskSessionRequestId,
   };
 }

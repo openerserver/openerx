@@ -23,27 +23,25 @@
             <a-descriptions-item label="默认环境">
               {{ selectedEnvironmentLabel }}
             </a-descriptions-item>
-            <a-descriptions-item label="付费执行权限">
-              {{ form.allowPaidExecution ? '已开启' : '未开启' }}
+            <a-descriptions-item label="项目组标识">
+              {{ form.projectGroupKey || '未配置' }}
             </a-descriptions-item>
-              <a-descriptions-item label="项目组标识">
-                {{ form.projectGroupKey || '未配置' }}
-              </a-descriptions-item>
-              <a-descriptions-item label="项目组展示名">
-                {{ form.projectGroupLabel || '未配置' }}
-              </a-descriptions-item>
-            <a-descriptions-item label="预算配置状态">
-              <a-space direction="vertical" :size="2">
-                <a-space>
-                  <span>{{ linkedBudget ? `$${linkedBudget.limit} / ${linkedBudget.period}` : '未绑定' }}</span>
-                  <a-tag v-if="linkedBudget" :color="budgetStatusColor(linkedBudget.status)">
-                    {{ budgetStatusLabel(linkedBudget.status) }}
-                  </a-tag>
-                </a-space>
-                <a-typography-text v-if="linkedBudget" type="secondary">
-                  已使用 {{ usageLabel(linkedBudget.usage) }} · 已支出 ${{ linkedBudget.currentSpend.toFixed(2) }}
-                </a-typography-text>
+            <a-descriptions-item label="项目组展示名">
+              {{ form.projectGroupLabel || '未配置' }}
+            </a-descriptions-item>
+            <a-descriptions-item label="最大并发">
+              {{ form.maxConcurrency ?? '未配置' }}
+            </a-descriptions-item>
+            <a-descriptions-item label="钱包状态">
+              <a-space>
+                <span>{{ formatUsd(currentFund.available) }}</span>
+                <a-tag :color="walletHealthColor(currentFund)">
+                  {{ walletHealthLabel(currentFund) }}
+                </a-tag>
               </a-space>
+            </a-descriptions-item>
+            <a-descriptions-item label="钱包分布">
+              已充值 {{ formatUsd(currentFund.totalGranted) }} · 已预留 {{ formatUsd(currentFund.reserved) }} · 已消耗 {{ formatUsd(currentFund.consumed) }}
             </a-descriptions-item>
             <a-descriptions-item label="快捷入口">
               <a-space wrap>
@@ -66,15 +64,88 @@
         <a-card size="small" title="设置说明">
           <a-space direction="vertical" :size="8">
             <a-typography-text type="secondary">
-              这里保留项目基础运行设置，包括默认模型、默认环境、并发与预算阈值。
+              项目基础设置只保留默认模型、默认环境、项目组和并发等运行参数。
             </a-typography-text>
             <a-typography-text type="secondary">
-              审批策略已经拆到独立页面，角色执行规则也在独立页面维护。
+              付费模型是否收费由系统模型目录决定；项目还能否继续使用，改由下面的钱包余额控制。
             </a-typography-text>
           </a-space>
         </a-card>
       </a-col>
     </a-row>
+
+    <a-card size="small" title="项目额度钱包" style="margin-bottom: 16px">
+      <a-spin :spinning="walletLoading || fundMutating">
+        <a-alert
+          v-if="walletError"
+          type="error"
+          show-icon
+          style="margin-bottom: 12px"
+          :message="walletError"
+        />
+
+        <a-descriptions :column="{ xs: 1, lg: 3 }" bordered size="small">
+          <a-descriptions-item label="当前可用额度">
+            <a-space>
+              <span style="font-weight: 600">{{ formatUsd(currentFund.available) }}</span>
+              <a-tag :color="walletHealthColor(currentFund)">
+                {{ walletHealthLabel(currentFund) }}
+              </a-tag>
+            </a-space>
+          </a-descriptions-item>
+          <a-descriptions-item label="总充值">
+            {{ formatUsd(currentFund.totalGranted) }}
+          </a-descriptions-item>
+          <a-descriptions-item label="最后更新时间">
+            {{ currentFund.updatedAt ? formatTime(currentFund.updatedAt) : '尚未初始化' }}
+          </a-descriptions-item>
+          <a-descriptions-item label="已预留">
+            {{ formatUsd(currentFund.reserved) }}
+          </a-descriptions-item>
+          <a-descriptions-item label="已消耗">
+            {{ formatUsd(currentFund.consumed) }}
+          </a-descriptions-item>
+          <a-descriptions-item label="余额说明">
+            {{ walletSummary(currentFund) }}
+          </a-descriptions-item>
+        </a-descriptions>
+
+        <a-space style="margin-top: 12px" wrap>
+          <a-button v-if="canManage" type="primary" @click="openGrantModal">充值</a-button>
+          <a-button v-if="canManage" @click="openAdjustModal">调整</a-button>
+          <a-button :loading="walletLoading" @click="refreshWalletState">刷新钱包</a-button>
+        </a-space>
+
+        <div style="margin-top: 16px">
+          <div style="font-weight: 600; margin-bottom: 8px">最近额度流水</div>
+          <a-empty
+            v-if="!walletLedgerLoading && walletLedger.length === 0"
+            description="最近还没有额度流水"
+          />
+          <a-list v-else :data-source="walletLedger" size="small" bordered>
+            <template #renderItem="{ item }">
+              <a-list-item>
+                <a-space direction="vertical" :size="2" style="width: 100%">
+                  <a-space wrap>
+                    <a-tag :color="fundLedgerTypeColor(item.type)">
+                      {{ fundLedgerTypeLabel(item.type) }}
+                    </a-tag>
+                    <span>{{ formatLedgerAmount(item) }}</span>
+                    <span style="color: rgba(0, 0, 0, 0.45)">余额 {{ formatUsd(item.balanceAfter) }}</span>
+                  </a-space>
+                  <span style="color: rgba(0, 0, 0, 0.65)">
+                    {{ item.note || '无备注' }}
+                  </span>
+                  <span style="color: rgba(0, 0, 0, 0.45)">
+                    {{ formatTime(item.createdAt) }}
+                  </span>
+                </a-space>
+              </a-list-item>
+            </template>
+          </a-list>
+        </div>
+      </a-spin>
+    </a-card>
 
     <a-card size="small">
       <a-form layout="vertical">
@@ -91,21 +162,6 @@
                 :disabled="!canManage"
                 @update:value="form.defaultModel = valueToString($event)"
               />
-            </a-form-item>
-          </a-col>
-
-          <a-col :xs="24" :lg="12">
-            <a-form-item label="付费执行权限">
-              <a-switch
-                :checked="form.allowPaidExecution === true"
-                :disabled="!canManage"
-                checked-children="已开启"
-                un-checked-children="未开启"
-                @update:checked="form.allowPaidExecution = Boolean($event)"
-              />
-              <a-typography-text type="secondary" style="display: block; margin-top: 8px">
-                开启后，项目可以通过当前项目设置放行付费执行，无需再依赖单独的环境变量开关。
-              </a-typography-text>
             </a-form-item>
           </a-col>
 
@@ -151,7 +207,7 @@
             </a-form-item>
           </a-col>
 
-          <a-col :xs="24" :lg="6">
+          <a-col :xs="24" :lg="12">
             <a-form-item label="最大并发">
               <a-input-number
                 :value="form.maxConcurrency"
@@ -163,50 +219,69 @@
               />
             </a-form-item>
           </a-col>
-
-          <a-col :xs="24" :lg="6">
-            <a-form-item label="月预算 (USD)">
-              <a-input-number
-                :value="form.budgetMonthly"
-                :min="0"
-                :step="50"
-                style="width: 100%"
-                :disabled="!canManage"
-                @update:value="form.budgetMonthly = valueToNumber($event)"
-              />
-            </a-form-item>
-          </a-col>
-
-          <a-col :xs="24" :lg="6">
-            <a-form-item label="预警阈值 (%)">
-              <a-input-number
-                :value="toPercent(form.warnThreshold)"
-                :min="0"
-                :max="100"
-                :step="5"
-                style="width: 100%"
-                :disabled="!canManage"
-                @update:value="form.warnThreshold = percentToRatio($event)"
-              />
-            </a-form-item>
-          </a-col>
-
-          <a-col :xs="24" :lg="6">
-            <a-form-item label="限流阈值 (%)">
-              <a-input-number
-                :value="toPercent(form.throttleThreshold)"
-                :min="0"
-                :max="100"
-                :step="5"
-                style="width: 100%"
-                :disabled="!canManage"
-                @update:value="form.throttleThreshold = percentToRatio($event)"
-              />
-            </a-form-item>
-          </a-col>
         </a-row>
       </a-form>
     </a-card>
+
+    <a-modal
+      :open="grantModalOpen"
+      title="为项目充值"
+      ok-text="确认充值"
+      cancel-text="取消"
+      :confirm-loading="fundMutating"
+      @ok="submitGrant"
+      @cancel="closeGrantModal"
+    >
+      <a-form layout="vertical">
+        <a-form-item label="充值金额 (USD)">
+          <a-input-number
+            :value="grantForm.amountUsd"
+            :min="0.01"
+            :step="10"
+            style="width: 100%"
+            @update:value="grantForm.amountUsd = valueToNumber($event)"
+          />
+        </a-form-item>
+        <a-form-item label="备注">
+          <a-textarea
+            :value="grantForm.note"
+            :rows="3"
+            @update:value="grantForm.note = valueToString($event)"
+          />
+        </a-form-item>
+      </a-form>
+    </a-modal>
+
+    <a-modal
+      :open="adjustModalOpen"
+      title="调整项目余额"
+      ok-text="确认调整"
+      cancel-text="取消"
+      :confirm-loading="fundMutating"
+      @ok="submitAdjust"
+      @cancel="closeAdjustModal"
+    >
+      <a-form layout="vertical">
+        <a-form-item label="调整金额 (USD)">
+          <a-input-number
+            :value="adjustForm.amountUsd"
+            :step="10"
+            style="width: 100%"
+            @update:value="adjustForm.amountUsd = valueToNumber($event)"
+          />
+          <a-typography-text type="secondary">
+            输入正数表示追加额度，输入负数表示扣减当前可用额度。
+          </a-typography-text>
+        </a-form-item>
+        <a-form-item label="备注">
+          <a-textarea
+            :value="adjustForm.note"
+            :rows="3"
+            @update:value="adjustForm.note = valueToString($event)"
+          />
+        </a-form-item>
+      </a-form>
+    </a-modal>
   </div>
 </template>
 
@@ -214,15 +289,17 @@
 import { message } from "ant-design-vue";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import {
-  type BudgetConfig,
   type Environment,
   type ModelsConfig,
+  type ProjectModelFund,
+  type ProjectModelFundLedgerEntry,
   type ProjectSettings,
-  createBudgetConfig,
+  adjustProjectFund,
   getModelsConfig,
-  listBudgetConfigs,
+  getProjectFund,
+  getProjectFundLedger,
+  grantProjectFund,
   listEnvironments,
-  updateBudgetConfig,
   updateProject,
 } from "../lib/api";
 import { useAuthStore } from "../stores/auth";
@@ -239,19 +316,41 @@ const emit = defineEmits<{
 const authStore = useAuthStore();
 const modelsLoading = ref(false);
 const environmentsLoading = ref(false);
+const walletLoading = ref(false);
+const walletLedgerLoading = ref(false);
 const saving = ref(false);
+const fundMutating = ref(false);
 const modelsData = ref<ModelsConfig | null>(null);
 const environments = ref<Environment[]>([]);
-const budgetConfigs = ref<BudgetConfig[]>([]);
+const projectFund = ref<ProjectModelFund | null>(null);
+const walletLedger = ref<ProjectModelFundLedgerEntry[]>([]);
+const fundError = ref("");
+const walletLedgerError = ref("");
+const grantModalOpen = ref(false);
+const adjustModalOpen = ref(false);
+
+const grantForm = reactive<{
+  amountUsd?: number;
+  note: string;
+}>({
+  amountUsd: undefined,
+  note: "",
+});
+
+const adjustForm = reactive<{
+  amountUsd?: number;
+  note: string;
+}>({
+  amountUsd: undefined,
+  note: "",
+});
 
 const form = reactive<ProjectSettings>({
   defaultModel: "",
   defaultEnvironmentId: "",
-  allowPaidExecution: false,
+  projectGroupKey: null,
+  projectGroupLabel: null,
   maxConcurrency: undefined,
-  budgetMonthly: undefined,
-  warnThreshold: 0.8,
-  throttleThreshold: 0.95,
 });
 
 const canManage = computed(() => {
@@ -263,6 +362,59 @@ const canManage = computed(() => {
   return projectRole === "project_admin";
 });
 
+const currentFund = computed(
+  (): ProjectModelFund =>
+    projectFund.value || {
+      id: null,
+      projectId: props.projectId,
+      currency: "USD",
+      totalGranted: 0,
+      reserved: 0,
+      consumed: 0,
+      available: 0,
+      status: "depleted",
+      createdAt: null,
+      updatedAt: null,
+      hasFund: false,
+    },
+);
+
+const walletError = computed(() => [fundError.value, walletLedgerError.value].filter(Boolean).join("；"));
+
+function resolveModelOptionValue(model: Record<string, unknown>) {
+  const id = typeof model.id === "string" ? model.id.trim() : "";
+  const provider = typeof model.provider === "string" ? model.provider.trim() : "";
+  const route = typeof model.route === "string" ? model.route.trim() : "";
+  if (route) {
+    return provider === "github-copilot" && route === `${provider}:${id}` ? id || route : route;
+  }
+
+  if (!id) {
+    return "";
+  }
+
+  return provider && provider !== "github-copilot" ? `${provider}:${id}` : id;
+}
+
+const knownModelValues = computed(() => {
+  const values = new Set<string>();
+  for (const model of modelsData.value?.list || []) {
+    const value = resolveModelOptionValue(model as Record<string, unknown>);
+    if (value) {
+      values.add(value);
+    }
+  }
+
+  return values;
+});
+
+const canValidateDefaultModel = computed(() => knownModelValues.value.size > 0);
+
+const hasInvalidDefaultModel = computed(() => {
+  const currentModel = form.defaultModel.trim();
+  return Boolean(currentModel) && canValidateDefaultModel.value && !knownModelValues.value.has(currentModel);
+});
+
 const modelOptions = computed(() => {
   const currentModel = form.defaultModel || "";
   const options = (modelsData.value?.list || [])
@@ -271,16 +423,21 @@ const modelOptions = computed(() => {
       if (!id) return null;
       const name = typeof model.name === "string" ? model.name : "";
       const provider = typeof model.provider === "string" ? model.provider : "";
+      const value = resolveModelOptionValue(model as Record<string, unknown>);
+      if (!value) return null;
       const meta = [name, provider].filter(Boolean).join(" / ");
       return {
-        value: id,
+        value,
         label: meta ? `${id} (${meta})` : id,
       };
     })
     .filter((option): option is { value: string; label: string } => Boolean(option));
 
   if (currentModel && !options.some((option) => option.value === currentModel)) {
-    options.unshift({ value: currentModel, label: `${currentModel} (当前值)` });
+    options.unshift({
+      value: currentModel,
+      label: `${currentModel} (${hasInvalidDefaultModel.value ? "当前值，已失效" : "当前值"})`,
+    });
   }
 
   return options;
@@ -293,7 +450,6 @@ const environmentOptions = computed(() =>
   })),
 );
 
-const linkedBudget = computed(() => resolveLinkedBudget(budgetConfigs.value));
 const selectedEnvironmentLabel = computed(() => {
   const selected = environments.value.find((item) => item.id === form.defaultEnvironmentId);
   return selected ? `${selected.name} (${selected.riskLevel})` : "未配置";
@@ -304,17 +460,9 @@ watch(
   (settings) => {
     form.defaultModel = settings?.defaultModel || "";
     form.defaultEnvironmentId = settings?.defaultEnvironmentId || "";
-    form.allowPaidExecution = settings?.allowPaidExecution === true;
     form.projectGroupKey = settings?.projectGroupKey || null;
     form.projectGroupLabel = settings?.projectGroupLabel || null;
     form.maxConcurrency = settings?.maxConcurrency;
-    form.budgetMonthly = settings?.budgetMonthly;
-    form.warnThreshold = settings?.warnThreshold ?? 0.8;
-    form.throttleThreshold = settings?.throttleThreshold ?? 0.95;
-    form.approvalPolicyTemplateId = settings?.approvalPolicyTemplateId;
-    form.approvalPolicy = settings?.approvalPolicy;
-    form.environmentApprovalPolicies = settings?.environmentApprovalPolicies;
-    form.budgetConfigId = settings?.budgetConfigId;
   },
   { immediate: true, deep: true },
 );
@@ -322,57 +470,164 @@ watch(
 onMounted(async () => {
   modelsLoading.value = true;
   environmentsLoading.value = true;
+
   try {
     const modelsRequest = canManage.value ? getModelsConfig() : Promise.resolve(null);
-    const [modelsResult, environmentsResult, budgetResult] = await Promise.allSettled([
+    const [modelsResult, environmentsResult] = await Promise.allSettled([
       modelsRequest,
       listEnvironments(props.projectId),
-      listBudgetConfigs(props.projectId),
     ]);
 
     modelsData.value =
       modelsResult.status === "fulfilled" ? (modelsResult.value?.data ?? null) : null;
     environments.value = environmentsResult.status === "fulfilled" ? environmentsResult.value : [];
-    budgetConfigs.value = budgetResult.status === "fulfilled" ? budgetResult.value : [];
-
-    const linked = resolveLinkedBudget(budgetConfigs.value);
-    if (linked) {
-      form.budgetMonthly = linked.limit;
-      form.warnThreshold = linked.warnThreshold;
-      form.throttleThreshold = linked.throttleThreshold;
-    }
   } finally {
     modelsLoading.value = false;
     environmentsLoading.value = false;
   }
+
+  await refreshWalletState();
 });
+
+async function refreshWalletState() {
+  await Promise.all([refreshProjectFund(), refreshProjectFundLedger()]);
+}
+
+async function refreshProjectFund() {
+  walletLoading.value = true;
+  fundError.value = "";
+
+  try {
+    projectFund.value = await getProjectFund(props.projectId);
+  } catch (error) {
+    fundError.value = `加载项目额度钱包失败: ${error}`;
+  } finally {
+    walletLoading.value = false;
+  }
+}
+
+async function refreshProjectFundLedger() {
+  walletLedgerLoading.value = true;
+  walletLedgerError.value = "";
+
+  try {
+    const result = await getProjectFundLedger(props.projectId, { limit: 5 });
+    walletLedger.value = result.items;
+  } catch (error) {
+    walletLedgerError.value = `加载钱包流水失败: ${error}`;
+  } finally {
+    walletLedgerLoading.value = false;
+  }
+}
 
 async function handleSave() {
   saving.value = true;
   try {
-    const linkedBudget = await upsertBudgetConfig();
-
+    const clearingInvalidDefaultModel = hasInvalidDefaultModel.value;
+    const normalizedDefaultModel = clearingInvalidDefaultModel ? "" : form.defaultModel;
     const settings: ProjectSettings = {
       ...(props.settings || {}),
-      ...upsertOptionalStringSetting("defaultModel", form.defaultModel),
+      ...upsertOptionalStringSetting("defaultModel", normalizedDefaultModel),
       ...upsertOptionalStringSetting("defaultEnvironmentId", form.defaultEnvironmentId),
-      allowPaidExecution: form.allowPaidExecution === true,
       ...upsertNullableStringSetting("projectGroupKey", form.projectGroupKey),
       ...upsertNullableStringSetting("projectGroupLabel", form.projectGroupLabel),
       ...upsertOptionalNumberSetting("maxConcurrency", form.maxConcurrency),
-      ...upsertOptionalNumberSetting("budgetMonthly", form.budgetMonthly),
-      ...upsertOptionalStringSetting("budgetConfigId", linkedBudget?.id),
-      ...upsertOptionalNumberSetting("warnThreshold", form.warnThreshold),
-      ...upsertOptionalNumberSetting("throttleThreshold", form.throttleThreshold),
     };
 
     await updateProject(props.projectId, { settings });
+    if (clearingInvalidDefaultModel) {
+      form.defaultModel = "";
+    }
     emit("updated", settings);
-    message.success("项目设置已保存");
-  } catch (e) {
-    message.error(`保存设置失败: ${e}`);
+    message.success(clearingInvalidDefaultModel ? "项目设置已保存，已清除失效默认模型" : "项目设置已保存");
+  } catch (error) {
+    message.error(`保存设置失败: ${error}`);
   } finally {
     saving.value = false;
+  }
+}
+
+function openGrantModal() {
+  grantForm.amountUsd = undefined;
+  grantForm.note = "";
+  grantModalOpen.value = true;
+}
+
+function closeGrantModal() {
+  grantModalOpen.value = false;
+  grantForm.amountUsd = undefined;
+  grantForm.note = "";
+}
+
+function openAdjustModal() {
+  adjustForm.amountUsd = undefined;
+  adjustForm.note = "";
+  adjustModalOpen.value = true;
+}
+
+function closeAdjustModal() {
+  adjustModalOpen.value = false;
+  adjustForm.amountUsd = undefined;
+  adjustForm.note = "";
+}
+
+async function submitGrant() {
+  if (!canManage.value) {
+    return;
+  }
+
+  if (typeof grantForm.amountUsd !== "number" || grantForm.amountUsd <= 0) {
+    message.error("请输入大于 0 的充值金额");
+    return;
+  }
+
+  fundMutating.value = true;
+  try {
+    const result = await grantProjectFund(props.projectId, {
+      amountUsd: grantForm.amountUsd,
+      note: grantForm.note.trim() || undefined,
+    });
+    projectFund.value = result.fund;
+    walletLedger.value = [
+      result.ledgerEntry,
+      ...walletLedger.value.filter((item) => item.id !== result.ledgerEntry.id),
+    ].slice(0, 5);
+    closeGrantModal();
+    message.success("项目额度已充值");
+  } catch (error) {
+    message.error(`充值失败: ${error}`);
+  } finally {
+    fundMutating.value = false;
+  }
+}
+
+async function submitAdjust() {
+  if (!canManage.value) {
+    return;
+  }
+
+  if (typeof adjustForm.amountUsd !== "number" || adjustForm.amountUsd === 0) {
+    message.error("请输入非 0 的调整金额");
+    return;
+  }
+
+  fundMutating.value = true;
+  try {
+    const result = await adjustProjectFund(props.projectId, {
+      amountUsd: adjustForm.amountUsd,
+      note: adjustForm.note.trim() || undefined,
+    });
+    projectFund.value = result.fund;
+    walletLedger.value = [
+      result.ledgerEntry,
+      ...walletLedger.value.filter((item) => item.id !== result.ledgerEntry.id),
+    ].slice(0, 5);
+    closeAdjustModal();
+    message.success("项目额度已调整");
+  } catch (error) {
+    message.error(`调整失败: ${error}`);
+  } finally {
+    fundMutating.value = false;
   }
 }
 
@@ -387,14 +642,6 @@ function valueToNullableString(value: unknown) {
 
 function valueToNumber(value: unknown) {
   return typeof value === "number" ? value : undefined;
-}
-
-function percentToRatio(value: unknown) {
-  return typeof value === "number" ? Number((value / 100).toFixed(2)) : undefined;
-}
-
-function toPercent(value: number | undefined) {
-  return typeof value === "number" ? Math.round(value * 100) : undefined;
 }
 
 function upsertOptionalStringSetting<Key extends keyof ProjectSettings>(key: Key, value: unknown) {
@@ -415,81 +662,70 @@ function upsertOptionalNumberSetting<Key extends keyof ProjectSettings>(key: Key
     : ({ [key]: undefined } as Pick<ProjectSettings, Key>);
 }
 
-function resolveLinkedBudget(items: BudgetConfig[]) {
-  const linkedId = props.settings?.budgetConfigId;
-  if (linkedId) {
-    return items.find((item) => item.id === linkedId);
+function walletHealthColor(fund: ProjectModelFund) {
+  if (fund.available <= 0) return "red";
+  if (fund.totalGranted <= 0) return "red";
+  const ratio = fund.available / fund.totalGranted;
+  if (ratio <= 0.2) return "gold";
+  return "green";
+}
+
+function walletHealthLabel(fund: ProjectModelFund) {
+  if (!fund.hasFund) return "未充值";
+  if (fund.available <= 0) return "额度耗尽";
+  if (fund.totalGranted > 0 && fund.available / fund.totalGranted <= 0.2) return "余额偏低";
+  return "余额正常";
+}
+
+function walletSummary(fund: ProjectModelFund) {
+  if (!fund.hasFund) {
+    return "项目还没有初始化任何额度记录。";
   }
-
-  return items.find((item) => item.period === "monthly");
-}
-
-async function upsertBudgetConfig() {
-  const existing = resolveLinkedBudget(budgetConfigs.value);
-  const hasBudgetValue = typeof form.budgetMonthly === "number";
-
-  if (!existing && !hasBudgetValue) {
-    return undefined;
+  if (fund.available <= 0) {
+    return "当前余额已经耗尽，付费模型后续应由钱包余额阻断。";
   }
+  return `当前还可继续支撑 ${formatUsd(fund.available)} 的付费模型使用。`;
+}
 
-  const payload = {
-    period: "monthly" as const,
-    limitAmount: form.budgetMonthly ?? existing?.limit ?? 0,
-    warnThreshold: form.warnThreshold ?? existing?.warnThreshold ?? 0.8,
-    throttleThreshold: form.throttleThreshold ?? existing?.throttleThreshold ?? 0.95,
-  };
+function fundLedgerTypeLabel(type: ProjectModelFundLedgerEntry["type"]) {
+  if (type === "grant") return "充值";
+  if (type === "adjust") return "调整";
+  if (type === "reserve") return "预留";
+  if (type === "consume") return "扣费";
+  if (type === "refund") return "退回";
+  return type;
+}
 
-  if (existing) {
-    const updated = await updateBudgetConfig(existing.id, payload);
-    budgetConfigs.value = budgetConfigs.value.map((item) =>
-      item.id === existing.id
-        ? {
-            ...item,
-            period: updated.period,
-            limit: updated.limitAmount,
-            warnThreshold: updated.warnThreshold,
-            throttleThreshold: updated.throttleThreshold,
-          }
-        : item,
-    );
-    return { id: updated.id };
+function fundLedgerTypeColor(type: ProjectModelFundLedgerEntry["type"]) {
+  if (type === "grant") return "green";
+  if (type === "adjust") return "blue";
+  if (type === "reserve") return "gold";
+  if (type === "consume") return "red";
+  if (type === "refund") return "cyan";
+  return "default";
+}
+
+function formatLedgerAmount(entry: ProjectModelFundLedgerEntry) {
+  if (entry.type === "consume" || entry.type === "reserve") {
+    return `-${formatUsd(Math.abs(entry.amountUsd)).slice(1)}`;
   }
-
-  const created = await createBudgetConfig({
-    projectId: props.projectId,
-    ...payload,
-  });
-  budgetConfigs.value = [
-    ...budgetConfigs.value,
-    {
-      id: created.id,
-      period: created.period,
-      limit: created.limitAmount,
-      currentSpend: 0,
-      usage: 0,
-      status: "ok",
-      warnThreshold: created.warnThreshold,
-      throttleThreshold: created.throttleThreshold,
-    },
-  ];
-  return { id: created.id };
+  if (entry.type === "refund" || entry.type === "grant") {
+    return `+${formatUsd(Math.abs(entry.amountUsd)).slice(1)}`;
+  }
+  if (entry.amountUsd > 0) {
+    return `+${formatUsd(entry.amountUsd).slice(1)}`;
+  }
+  if (entry.amountUsd < 0) {
+    return `-${formatUsd(Math.abs(entry.amountUsd)).slice(1)}`;
+  }
+  return formatUsd(0);
 }
 
-function budgetStatusColor(status: BudgetConfig["status"]) {
-  if (status === "ok") return "green";
-  if (status === "warn") return "gold";
-  if (status === "throttle") return "orange";
-  return "red";
+function formatUsd(value: number) {
+  return `$${Number(value || 0).toFixed(2)}`;
 }
 
-function budgetStatusLabel(status: BudgetConfig["status"]) {
-  if (status === "ok") return "正常";
-  if (status === "warn") return "预警";
-  if (status === "throttle") return "限流";
-  return "阻断";
-}
-
-function usageLabel(usage: number) {
-  return `${Math.round(usage * 100)}%`;
+function formatTime(ts: string) {
+  return new Date(ts).toLocaleString();
 }
 </script>

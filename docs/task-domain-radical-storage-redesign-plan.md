@@ -24,7 +24,7 @@
 - [architecture-target-evolution.md](architecture-target-evolution.md)
 - [task-domain-radical-schema-migration-plan.md](task-domain-radical-schema-migration-plan.md)
 - [task-thread-session-workbench-plan.md](task-thread-session-workbench-plan.md)
-- [pg-event-sourcing-optimization-plan.md](pg-event-sourcing-optimization-plan.md)
+- [archive/task-domain/historical-pg-event-sourcing-optimization-plan.md](archive/task-domain/historical-pg-event-sourcing-optimization-plan.md)
 - [task-domain-cleanup-closure-plan.md](task-domain-cleanup-closure-plan.md)
 
 ## 2. 目标架构摘要

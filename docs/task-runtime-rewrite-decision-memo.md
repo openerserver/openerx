@@ -135,7 +135,7 @@
 5. [control-plane/web-ui-bff/src/modules/realtime/sse-aggregator.ts](control-plane/web-ui-bff/src/modules/realtime/sse-aggregator.ts)
 6. [control-plane/web-ui-bff/src/modules/realtime/pipeline-events.ts](control-plane/web-ui-bff/src/modules/realtime/pipeline-events.ts)
 7. [control-plane/web-ui/src/pages/TaskDetailV3.vue](control-plane/web-ui/src/pages/TaskDetailV3.vue) 的任务主交互数据链
-8. [control-plane/web-ui/src/composables/useTreeMessages.ts](control-plane/web-ui/src/composables/useTreeMessages.ts)
+8. [control-plane/web-ui/src/composables/useTaskMessageSnapshot.ts](control-plane/web-ui/src/composables/useTaskMessageSnapshot.ts) 与 [control-plane/web-ui/src/composables/useTaskMessageStore.ts](control-plane/web-ui/src/composables/useTaskMessageStore.ts)
 9. [control-plane/web-ui/src/composables/useTaskExecutionTrace.ts](control-plane/web-ui/src/composables/useTaskExecutionTrace.ts)
 10. 与 opencode 强绑定的脚本与测试，包括 [scripts/opencode-capture-global-events.ts](scripts/opencode-capture-global-events.ts)、[scripts/opencode-cleanup.sh](scripts/opencode-cleanup.sh)、[scripts/opencode-health-check.sh](scripts/opencode-health-check.sh)、[tests/web-ui-bff/opencode-adapter.test.ts](tests/web-ui-bff/opencode-adapter.test.ts)、[tests/web-ui-bff/opencode-completion-sync.test.ts](tests/web-ui-bff/opencode-completion-sync.test.ts)
 

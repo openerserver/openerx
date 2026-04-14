@@ -1,65 +1,27 @@
 import { onScopeDispose, ref, type Ref, watch } from "vue";
 import {
   shouldRefreshTaskDetailMessagesFromPoll,
+  type TaskDetailRefreshTargets,
   type TaskDetailRefreshRequest,
 } from "../lib/task-detail-refresh-policy";
 
-export type TaskDetailRefreshSnapshotOptions = {
-  workflow?: boolean;
-  flow?: boolean;
-  messages?: boolean;
-};
-
-const SLOW_REFRESH_REASONS = new Set<TaskDetailRefreshRequest["reason"]>([
-  "user-message",
-  "tool-message",
-]);
-
-const WORKFLOW_REFRESH_REASONS = new Set<TaskDetailRefreshRequest["reason"]>([
-  "user-message",
-  "tool-message",
-  "session-created",
-  "session-updated",
-  "task-updated",
-  "task-completed",
-  "task-continued",
-  "task-node-updated",
-  "agent-started",
-  "task-hooks-updated",
-  "task-followup-started",
-  "task-followup-completed",
-  "task-followup-failed",
-]);
-
-const FLOW_REFRESH_REASONS = new Set<TaskDetailRefreshRequest["reason"]>([
-  "session-created",
-  "session-updated",
-  "phase-created",
-  "phase-updated",
-  "phase-awaiting-adoption",
-  "phase-paused",
-  "phase-resumed",
-  "phase-cancelled",
-  "phase-completed",
-  "phase-failed",
-]);
-
-export function toTaskDetailRefreshSnapshotOptions(
-  request: TaskDetailRefreshRequest,
-): TaskDetailRefreshSnapshotOptions {
-  return {
-    workflow: WORKFLOW_REFRESH_REASONS.has(request.reason),
-    flow: FLOW_REFRESH_REASONS.has(request.reason),
-    messages: request.shouldRefreshMessages,
-  };
-}
+type TaskDetailRefreshScheduleReason =
+  | TaskDetailRefreshRequest["reason"]
+  | "realtime-reconnected"
+  | "message-reconcile-required"
+  | "workflow-reconcile-required";
 
 export function useTaskDetailRefreshController(args: {
   taskId: Ref<string>;
   latestTaskRefreshRequest: Ref<TaskDetailRefreshRequest | null | undefined>;
+  messageReconcileRequired: Ref<boolean>;
+  workflowReconcileRequired: Ref<boolean>;
   realtimeConnected: Ref<boolean>;
   shouldPollRunningStatus: Ref<boolean>;
-  refreshTaskSnapshot: (options?: TaskDetailRefreshSnapshotOptions) => void | Promise<void>;
+  refreshFlowSnapshot: () => void | Promise<void>;
+  refreshMessageSnapshot: () => void | Promise<void>;
+  refreshTaskSnapshot: (options?: TaskDetailRefreshTargets) => void | Promise<void>;
+  refreshWorkflowSnapshot: () => void | Promise<void>;
 }) {
   const traceRefreshKey = ref(0);
   let taskRefreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -79,17 +41,39 @@ export function useTaskDetailRefreshController(args: {
     }
   }
 
-  function scheduleTaskRefresh(request: TaskDetailRefreshRequest) {
+  function scheduleTaskRefreshOptions(
+    options: TaskDetailRefreshTargets,
+    reason: TaskDetailRefreshScheduleReason,
+  ) {
     if (!args.taskId.value) {
       return;
     }
 
     clearScheduledTaskRefresh();
-    const delay = SLOW_REFRESH_REASONS.has(request.reason) ? 260 : 180;
+    const delay = 180;
     taskRefreshTimer = setTimeout(() => {
       taskRefreshTimer = null;
-      void args.refreshTaskSnapshot(toTaskDetailRefreshSnapshotOptions(request));
+      if (options.messages && !options.workflow && !options.flow) {
+        void args.refreshMessageSnapshot();
+        return;
+      }
+
+      if (options.workflow && !options.flow && !options.messages) {
+        void args.refreshWorkflowSnapshot();
+        return;
+      }
+
+      if (options.flow && !options.workflow && !options.messages) {
+        void args.refreshFlowSnapshot();
+        return;
+      }
+
+      void args.refreshTaskSnapshot(options);
     }, delay);
+  }
+
+  function scheduleTaskRefresh(request: TaskDetailRefreshRequest) {
+    scheduleTaskRefreshOptions(request.targets, request.reason);
   }
 
   function ensureRunningStatusPoll() {
@@ -98,10 +82,12 @@ export function useTaskDetailRefreshController(args: {
     }
 
     runningStatusPollTimer = setInterval(() => {
-      void args.refreshTaskSnapshot({
-        flow: true,
-        messages: shouldRefreshTaskDetailMessagesFromPoll(args.realtimeConnected.value),
-      });
+      if (shouldRefreshTaskDetailMessagesFromPoll(args.realtimeConnected.value)) {
+        void args.refreshTaskSnapshot({ workflow: false, flow: true, messages: true });
+        return;
+      }
+
+      void args.refreshFlowSnapshot();
     }, 2000);
   }
 
@@ -117,6 +103,48 @@ export function useTaskDetailRefreshController(args: {
         traceRefreshKey.value += 1;
       }
       scheduleTaskRefresh(refreshRequest);
+    },
+  );
+
+  watch(
+    () => args.realtimeConnected.value,
+    (connected, previousConnected) => {
+      if (!connected || previousConnected !== false || !args.taskId.value) {
+        return;
+      }
+
+      scheduleTaskRefreshOptions(
+        { workflow: false, flow: false, messages: true },
+        "realtime-reconnected",
+      );
+    },
+  );
+
+  watch(
+    () => args.messageReconcileRequired.value,
+    (reconcileRequired, previousReconcileRequired) => {
+      if (!reconcileRequired || previousReconcileRequired === true || !args.taskId.value) {
+        return;
+      }
+
+      scheduleTaskRefreshOptions(
+        { workflow: false, flow: false, messages: true },
+        "message-reconcile-required",
+      );
+    },
+  );
+
+  watch(
+    () => args.workflowReconcileRequired.value,
+    (reconcileRequired, previousReconcileRequired) => {
+      if (!reconcileRequired || previousReconcileRequired === true || !args.taskId.value) {
+        return;
+      }
+
+      scheduleTaskRefreshOptions(
+        { workflow: true, flow: false, messages: false },
+        "workflow-reconcile-required",
+      );
     },
   );
 

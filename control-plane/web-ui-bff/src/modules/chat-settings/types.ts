@@ -8,10 +8,35 @@ export type ChatSettingsConfigType =
   | "security"
   | "plugins";
 
+export type ModelBillingStatus = "free" | "paid";
+export type ModelBillingMethod = "token_metered" | "request_metered" | "run_metered";
+
+export interface ModelBillingPrice {
+  currency: "USD";
+  inputPerMillionTokens?: number;
+  outputPerMillionTokens?: number;
+  perRequestUsd?: number;
+  perRunUsd?: number;
+  [key: string]: unknown;
+}
+
+export interface ModelListItem {
+  id?: string;
+  name?: string;
+  provider?: string;
+  route?: string;
+  contextWindow?: number;
+  maxTokens?: number;
+  billingStatus?: ModelBillingStatus;
+  billingMethod?: ModelBillingMethod;
+  price?: ModelBillingPrice;
+  [key: string]: unknown;
+}
+
 export interface ModelsConfig {
   defaults: Record<string, unknown>;
   providers: Record<string, unknown>;
-  list: Array<Record<string, unknown>>;
+  list: ModelListItem[];
 }
 
 export interface McpServer {

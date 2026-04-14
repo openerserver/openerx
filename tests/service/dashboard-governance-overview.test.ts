@@ -28,7 +28,6 @@ const sql = USE_POSTGRES ? postgres(DATABASE_URL, { max: 1, prepare: false }) : 
 const createdTaskIds: string[] = [];
 const createdLedgerIds: string[] = [];
 const createdAuditIds: string[] = [];
-const createdLeaseIds: string[] = [];
 let token = "";
 let currentUserId = "";
 
@@ -52,7 +51,6 @@ interface GovernanceOverviewResponse {
   summary: {
     blockedCount: number;
     breakerCount: number;
-    activeLeaseCount: number;
     topRiskTaskCount: number;
     runningTaskCount: number;
     activeSessionCount: number;
@@ -239,25 +237,6 @@ async function insertAudit(args: {
   createdAuditIds.push(args.id);
 }
 
-async function insertActiveLease(id: string, expiresAt: string, createdAt: string) {
-  await writeDb(
-    `INSERT INTO paid_execution_leases (
-      id, project_id, issued_by_user_id, reason, status, expires_at, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      id,
-      PROJECT_ID,
-      currentUserId,
-      "dashboard governance overview test",
-      "active",
-      expiresAt,
-      createdAt,
-      createdAt,
-    ],
-  );
-  createdLeaseIds.push(id);
-}
-
 beforeAll(async () => {
   token = await login();
   currentUserId = decodeJwtPayload(token).sub;
@@ -265,7 +244,6 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await runDeleteByIds(writeDb, "audit_events", createdAuditIds);
-  await runDeleteByIds(writeDb, "paid_execution_leases", createdLeaseIds);
   await runDeleteByIds(writeDb, "runtime_usage_ledgers", createdLedgerIds);
 
   for (const taskId of createdTaskIds) {
@@ -286,7 +264,7 @@ afterAll(async () => {
 });
 
 describe("dashboard governance overview route", () => {
-  test("aggregates blocked, breaker, lease, and top-risk task metrics", async () => {
+  test("aggregates blocked, breaker, and top-risk task metrics", async () => {
     const unique = Date.now();
     const baseline = await authedRequest<GovernanceOverviewResponse>(
       "/api/dashboard/governance-overview?range=24h",
@@ -297,7 +275,6 @@ describe("dashboard governance overview route", () => {
     const primaryTaskId = await createTask(primaryTaskTitle);
     const primaryLedgerId = `ledger-governance-primary-${unique}`;
     const primarySessionId = `session-governance-primary-${unique}`;
-    const leaseId = `lease-governance-${unique}`;
 
     const now = Date.now();
     const primaryCreatedAt = new Date(now - 8 * 60 * 1000).toISOString();
@@ -306,7 +283,6 @@ describe("dashboard governance overview route", () => {
     const breakerPrimaryAt = new Date(now - 3 * 60 * 1000).toISOString();
     const blockedPrimaryRetryAt = new Date(now - 2 * 60 * 1000).toISOString();
     const blockedPrimaryFinalAt = new Date(now - 60 * 1000).toISOString();
-    const leaseExpiresAt = new Date(now + 60 * 60 * 1000).toISOString();
 
     await insertLedger({
       id: primaryLedgerId,
@@ -365,7 +341,6 @@ describe("dashboard governance overview route", () => {
         guardReason: "Final retry still exceeds amplification threshold.",
       },
     });
-    await insertActiveLease(leaseId, leaseExpiresAt, primaryCreatedAt);
 
     const response = await authedRequest<GovernanceOverviewResponse>(
       "/api/dashboard/governance-overview?range=24h",
@@ -376,7 +351,6 @@ describe("dashboard governance overview route", () => {
     expect(response.data.summary).toEqual({
       blockedCount: baseline.data.summary.blockedCount + 3,
       breakerCount: baseline.data.summary.breakerCount + 1,
-      activeLeaseCount: baseline.data.summary.activeLeaseCount + 1,
       topRiskTaskCount: Math.min(5, baseline.data.summary.topRiskTaskCount + 1),
       runningTaskCount: baseline.data.summary.runningTaskCount,
       activeSessionCount: baseline.data.summary.activeSessionCount,

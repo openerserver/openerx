@@ -1,2 +1,5 @@
 {
+	"search.exclude": {
+		"docs/archive/**": true
+	}
 }

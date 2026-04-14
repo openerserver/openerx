@@ -195,8 +195,8 @@ service 最终 public contract 默认收敛到：
 2. [../control-plane/web-ui/src/pages/TaskDetailV3.vue](../control-plane/web-ui/src/pages/TaskDetailV3.vue)
 说明：当前仍直接依赖 `getTaskDomainRuns()` / `getTaskDomainRunDetail()`。
 
-3. [../control-plane/web-ui/src/composables/useTreeMessages.ts](../control-plane/web-ui/src/composables/useTreeMessages.ts)
-说明：execution trace 主链切换后需要一并改写。
+3. [../control-plane/web-ui/src/composables/useTaskMessageSnapshot.ts](../control-plane/web-ui/src/composables/useTaskMessageSnapshot.ts) 与 [../control-plane/web-ui/src/composables/useTaskMessageStore.ts](../control-plane/web-ui/src/composables/useTaskMessageStore.ts)
+说明：execution trace 主链切换后需要一并改写主聊天 snapshot/store 读链。
 
 4. [../control-plane/web-ui/src/lib/api.ts](../control-plane/web-ui/src/lib/api.ts)
 说明：前端 helper 中仍暴露旧 routes 与旧 payload 类型。
@@ -402,7 +402,7 @@ service contract 切掉之后，BFF 和前端同步跟进，不做中间兼容�
 #### Phase 5 重点重写
 
 1. [../control-plane/web-ui/src/pages/TaskDetailV3.vue](../control-plane/web-ui/src/pages/TaskDetailV3.vue)
-2. [../control-plane/web-ui/src/composables/useTreeMessages.ts](../control-plane/web-ui/src/composables/useTreeMessages.ts)
+2. [../control-plane/web-ui/src/composables/useTaskMessageSnapshot.ts](../control-plane/web-ui/src/composables/useTaskMessageSnapshot.ts) 与 [../control-plane/web-ui/src/composables/useTaskMessageStore.ts](../control-plane/web-ui/src/composables/useTaskMessageStore.ts)
 3. BFF task routes 中 execution trace、session list、candidate adoption 拼装逻辑
 
 #### Phase 5 具体要求

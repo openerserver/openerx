@@ -13,10 +13,12 @@ export interface TaskSessionLineageRecord {
   forkedFromMessageId: string | null;
   branchName?: string | null;
   sourceType: string;
+  needsSourceTypeRepair?: boolean;
   isActive: boolean;
   phaseId?: string | null;
   phaseRole?: string | null;
   phaseItemIndex?: number | null;
+  coordinationKey?: string | null;
   winnerSessionId?: string | null;
   executionStatus?: string | null;
   sessionKind?: string | null;
@@ -77,6 +79,9 @@ export interface TaskSessionTimelineMeta {
   readSource?: TaskSessionTimelineReadSource;
   cacheState?: "none" | "partial" | "complete";
   complete?: boolean;
+  snapshotVersion?: number;
+  persistedThroughRevision?: number;
+  reconcileRequired?: boolean;
   includeLineage?: boolean;
   lineagePath?: string[];
   cachedSessionCount?: number;
@@ -102,6 +107,7 @@ type ServiceTaskSessionRecord = {
   phaseId?: string | null;
   phaseRole?: string | null;
   phaseItemIndex?: number | null;
+  coordinationKey?: string | null;
   runtimeSessionId?: string | null;
   forkedFromMessageId?: string | null;
   branchName?: string | null;
@@ -175,8 +181,19 @@ function mapServiceTaskSessionsToLineageRecords(
   const byId = new Map(sessions.map((session) => [session.id, session] as const));
 
   return sessions.map(
-    (session) =>
-      ({
+    (session) => {
+      const normalizedSourceType = resolvePublicTaskSessionSourceType({
+        sourceType: session.sourceType ?? null,
+        sessionKind: session.sessionKind,
+        parentSessionId: session.parentSessionId,
+        parentRuntimeSessionId: session.parentRuntimeSessionId,
+        phaseId: session.phaseId,
+        candidateIndex: session.candidateIndex,
+        executionModeSnapshot: session.executionModeSnapshot,
+      });
+      const persistedSourceType = typeof session.sourceType === "string" ? session.sourceType.trim() : "";
+
+      return {
         id: session.id,
         taskId: session.taskId,
         runtimeSessionId: session.runtimeSessionId ?? session.id,
@@ -185,15 +202,8 @@ function mapServiceTaskSessionsToLineageRecords(
           : (session.parentRuntimeSessionId ?? null),
         forkedFromMessageId: session.forkedFromMessageId ?? null,
         branchName: session.branchName ?? null,
-        sourceType: resolvePublicTaskSessionSourceType({
-          sourceType: session.sourceType ?? null,
-          sessionKind: session.sessionKind,
-          parentSessionId: session.parentSessionId,
-          parentRuntimeSessionId: session.parentRuntimeSessionId,
-          phaseId: session.phaseId,
-          candidateIndex: session.candidateIndex,
-          executionModeSnapshot: session.executionModeSnapshot,
-        }),
+        sourceType: normalizedSourceType,
+        needsSourceTypeRepair: persistedSourceType !== normalizedSourceType,
         isActive: currentSessionId
           ? session.id === currentSessionId
           : session.executionStatus === "running" && !session.archivedAt,
@@ -201,6 +211,7 @@ function mapServiceTaskSessionsToLineageRecords(
         phaseRole: session.phaseRole ?? null,
         phaseItemIndex:
           typeof session.phaseItemIndex === "number" ? session.phaseItemIndex : null,
+        coordinationKey: session.coordinationKey ?? null,
         winnerSessionId: session.winnerSessionId ?? null,
         executionStatus: session.executionStatus ?? null,
         sessionKind: session.sessionKind ?? null,
@@ -211,7 +222,8 @@ function mapServiceTaskSessionsToLineageRecords(
         createdAt: session.createdAt ?? null,
         updatedAt: session.updatedAt ?? null,
         archivedAt: session.archivedAt ?? null,
-      }) satisfies TaskSessionLineageRecord,
+      } satisfies TaskSessionLineageRecord;
+    },
   );
 }
 

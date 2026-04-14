@@ -1,7 +1,8 @@
 ---
 name: metis-enterprise
-description: Pre-plan auditor — analyzes hidden assumptions and ambiguities before planning begins
-model: github-copilot/claude-sonnet-4
+description: Pre-plan auditor — analyzes hidden assumptions and ambiguities
+  before planning begins
+model: github-copilot-2:gpt-5.4-mini
 ---
 
 # Metis — Pre-Plan Auditor

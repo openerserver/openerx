@@ -21,7 +21,7 @@
 - 如需运行完整的 BFF 执行集成通道，使用 bun run test:bff:execution-integration；它会顺序执行 identity execute、completion sync、hooks integration、workflow evaluation 四组真实执行用例。
 - 如需只跑某一组真实执行用例，可在 control-plane/web-ui-bff 下分别运行 bun run test:integration:identity-execute、bun run test:integration:completion-sync、bun run test:integration:hooks、bun run test:integration:workflow-evaluation。
 - 这组真实执行用例默认只要求 RUN_EXECUTION_INTEGRATION=1，并会统一从设置页的测试模型策略读取受控模型；当前强制允许的测试模型只有 github-copilot:gpt-5-mini 和 github-copilot:gpt-4o。
-- 如需手动切回付费模型验证 paid guard 路径，才需要额外显式设置 ALLOW_PAID_MODEL_EXECUTION=1，并满足对应租约或审批要求；否则 BFF 会在创建 runtime session 前直接拒绝。
+- 不再使用额外的 ALLOW_PAID_MODEL_EXECUTION 测试门控；付费执行降级/拦截路径统一通过强 mock 的 fund/guard 回归覆盖，真实执行集成只验证受控模型下的链路可用性。
 - 这类执行集成用例已改为在建任务时优先选择可用的 GitHub Copilot 模型，避免回落到本地 runtime 默认模型后因为 provider 不可达而误报失败。
 - Chat Settings 回归分组可直接运行 bun run test:chat-settings:regression；它会顺序执行 BFF chat/apply 集成测试和前端 ChatSettings 页面回归。
 - 浏览器级 Chat Settings 管理员回归可运行 bun run test:e2e:chat-settings；该用例通过 Playwright 覆盖登录、侧边栏导航、发送按钮和应用按钮，并在浏览器层 mock API，适合纳入 CI。

@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { authHeader, cpFetch } from "../../lib/control-plane-client";
 import { classifyIntent } from "../../lib/intent-classifier";
+import * as modelConfig from "../../lib/model-config";
 import {
   diagnoseModelReadiness,
   formatModelRoute,
@@ -26,15 +27,17 @@ import {
 } from "../../lib/orchestration-strategy";
 import {
   type PaidExecutionGuardState,
-  type PaidExecutionOverride,
   type PaidExecutionPreflightResult,
   buildPreflightOrchestrationFingerprint,
   createPaidExecutionGuardState,
   evaluatePaidExecutionPreflight,
-  fetchProjectPaidExecutionLeaseState,
   isFreeExecutionModelRoute,
 } from "../../lib/paid-execution-guard";
-import { recordPaidExecutionRuntimeUsage } from "../../lib/paid-execution-runtime";
+import {
+  recordPaidExecutionRuntimeUsage,
+  releasePaidExecutionReservation,
+} from "../../lib/paid-execution-runtime";
+import { fetchProjectFundSnapshot, reserveProjectFund } from "../../lib/project-fund";
 import { buildRuntimePipeline } from "../../lib/runtime-pipeline";
 import {
   RUNTIME_RECOVERY_ERROR_CODES,
@@ -98,7 +101,7 @@ import {
   type TaskRoundDto,
 } from "./task-round-facade";
 import { buildWorkflowExecutionPromptSnapshot } from "./workflow-stage-execution";
-import { buildTaskWorkflowViewModel } from "./workflow-view";
+import { buildTaskWorkflowViewModel, fetchTaskWorkflowResources } from "./workflow-view";
 
 // ── Task Routes (BFF) ──────────────────────────────────────────────
 
@@ -537,6 +540,69 @@ function buildTaskPhaseEnvelope(args: {
   };
 }
 
+type TaskExecutionActionKind = "continue" | "fork" | "adopt" | "terminate";
+
+type TaskExecutionRefreshTargetsRecord = {
+  workflow: boolean;
+  flow: boolean;
+  messages: boolean;
+};
+
+interface TaskExecutionReconcileEnvelopeRecord {
+  action: TaskExecutionActionKind;
+  nextSessionId?: string;
+  taskSessionId?: string | null;
+  roundId?: string | null;
+  acceptedRevision?: number | null;
+  phaseId?: string | null;
+  agentRunId?: string | null;
+  status?: string | null;
+  executionMode?: ExecutionMode | null;
+  parentSessionId?: string | null;
+  parentTaskSessionId?: string | null;
+  refreshTargets: TaskExecutionRefreshTargetsRecord;
+}
+
+const DEFAULT_TASK_EXECUTION_REFRESH_TARGETS: TaskExecutionRefreshTargetsRecord = {
+  workflow: true,
+  flow: true,
+  messages: true,
+};
+
+function buildTaskExecutionReconcileEnvelope(args: {
+  taskId: string;
+  action: TaskExecutionActionKind;
+  nextSessionId?: string | null;
+  taskSessionId?: string | null;
+  roundId?: string | null;
+  acceptedRevision?: number | null;
+  phaseId?: string | null;
+  agentRunId?: string | null;
+  status?: string | null;
+  executionMode?: ExecutionMode | null;
+  parentSessionId?: string | null;
+  parentTaskSessionId?: string | null;
+}) {
+  const nextSessionId = args.nextSessionId?.trim() || undefined;
+  const taskSessionId =
+    args.taskSessionId ?? (nextSessionId ? buildPublicTaskSessionId(args.taskId, nextSessionId) : null);
+
+  return {
+    action: args.action,
+    nextSessionId,
+    taskSessionId,
+    roundId: args.roundId ?? taskSessionId ?? null,
+    acceptedRevision: args.acceptedRevision ?? null,
+    phaseId: args.phaseId ?? null,
+    agentRunId: args.agentRunId ?? null,
+    status: args.status ?? null,
+    executionMode: args.executionMode ?? null,
+    parentSessionId: args.parentSessionId ?? null,
+    parentTaskSessionId: args.parentTaskSessionId ?? null,
+    refreshTargets: DEFAULT_TASK_EXECUTION_REFRESH_TARGETS,
+  } satisfies TaskExecutionReconcileEnvelopeRecord;
+}
+
 async function fetchTaskSessionTimeline(
   taskId: string,
   sessionId: string,
@@ -899,8 +965,6 @@ function buildBlockedExecutionResponse(
       guardDecision: preflight.estimate.guardDecision,
       guardReason: preflight.estimate.guardReason,
       suggestedModel: preflight.policy.suggestedModel,
-      activeLease: preflight.activeLease,
-      requirements: preflight.requirements,
       policy: preflight.policy,
       preflight: preflight.estimate,
     },
@@ -913,7 +977,6 @@ function buildPaidExecutionAuditDetail(
   detail: Record<string, unknown> = {},
 ) {
   return {
-    leaseId: preflight.requirements.leaseId,
     guardDecision: preflight.estimate.guardDecision,
     guardReason: preflight.estimate.guardReason,
     estimatedRequestUpperBound: preflight.estimate.requestCount.max,
@@ -958,9 +1021,75 @@ async function buildContinuationPreflight(input: {
   return {
     ok: true as const,
     preflight,
-    guard: preflight.policy.isPaid
-      ? createPaidExecutionGuardState(preflight, ["judge-disabled", "post-hook-disabled"])
-      : undefined,
+  };
+}
+
+function buildReserveFailurePreflight(
+  preflight: PaidExecutionPreflightResult,
+  reason: string,
+): PaidExecutionPreflightResult {
+  return {
+    ...preflight,
+    allowed: false,
+    code: "PAID_EXECUTION_FUND_RESERVE_FAILED",
+    estimate: {
+      ...preflight.estimate,
+      guardDecision: "deny",
+      guardReason: reason,
+    },
+  };
+}
+
+async function materializePaidExecutionGuard(input: {
+  taskId: string;
+  projectId: string;
+  authorization: string;
+  modelRoute: string;
+  preflight: PaidExecutionPreflightResult;
+}) {
+  if (!input.preflight.policy.isPaid) {
+    return { ok: true as const, guard: undefined };
+  }
+
+  const reserveAmountUsd = Number(input.preflight.estimate.costUsd.max || 0);
+  const guard = createPaidExecutionGuardState(input.preflight);
+  if (reserveAmountUsd <= 0) {
+    return {
+      ok: true as const,
+      guard: {
+        ...guard,
+        fundReservedTotalUsd: 0,
+        fundReservedRemainingUsd: 0,
+      },
+    };
+  }
+
+  const reserveResult = await reserveProjectFund(input.projectId, input.authorization, {
+    amountUsd: reserveAmountUsd,
+    modelRoute: input.modelRoute,
+    taskId: input.taskId,
+    note: "execution preflight reservation",
+  });
+  if (!reserveResult.ok) {
+    const errorPayload = reserveResult.data as unknown as { error?: unknown };
+    const reason =
+      typeof errorPayload?.error === "string"
+        ? (errorPayload.error ?? "Failed to reserve project fund for execution")
+        : "Failed to reserve project fund for execution";
+
+    return {
+      ok: false as const,
+      preflight: buildReserveFailurePreflight(input.preflight, reason),
+    };
+  }
+
+  return {
+    ok: true as const,
+    guard: {
+      ...guard,
+      fundReservedTotalUsd: reserveAmountUsd,
+      fundReservedRemainingUsd: reserveAmountUsd,
+    },
   };
 }
 
@@ -1120,7 +1249,7 @@ async function registerParallelTaskSessions(
 function isLiveParallelCandidateStatus(
   status: RuntimePlan["candidates"][number]["status"] | undefined,
 ) {
-  return status === "pending" || status === "running" || status === "paused";
+  return status === "pending" || status === "running";
 }
 
 function resolveActiveParallelCandidateSessionIds(plan: Pick<RuntimePlan, "candidates">) {
@@ -1211,7 +1340,6 @@ async function registerParallelTaskSessionCandidates(
       forkedFromMessageId: existingRecord?.forkedFromMessageId ?? null,
       branchName: candidate.branchName,
       sourceType: nextSourceType,
-      isActive: task.sessionId === candidate.sessionId,
       phaseId: options?.phaseId ?? null,
       phaseRole: "candidate",
       phaseItemIndex: candidate.index,
@@ -1379,6 +1507,11 @@ async function continueParallelTaskExecution(
       startedAt: startedAt,
       finishedAt: new Date().toISOString(),
     }).catch(() => null);
+    await releasePaidExecutionReservationSafely({
+      taskId: input.taskId,
+      authorization: input.authorization,
+      reason: "all parallel candidates failed to continue",
+    });
     return buildParallelContinuationFailureResponse(attempts);
   }
 
@@ -1448,8 +1581,21 @@ async function continueParallelTaskExecution(
     sessions: phaseSessions,
   });
   sseAggregator.registerParallelTask(input.task.id, plan.candidates, phase.id);
-  persistParallelContinuationPromptSnapshots(input, plan, repoContext);
+  const acceptedRevisions = await persistParallelContinuationPromptSnapshots(input, plan, repoContext);
   broadcastParallelContinuationStarted(input.task, plan.candidates);
+
+  const execution = buildTaskExecutionReconcileEnvelope({
+    taskId: input.taskId,
+    action: "continue",
+    nextSessionId: primaryCandidate?.sessionId,
+    acceptedRevision: primaryCandidate?.sessionId
+      ? acceptedRevisions.get(primaryCandidate.sessionId) ?? null
+      : null,
+    phaseId: phase.id,
+    agentRunId: primaryCandidate?.agentRunId,
+    status: "running",
+    executionMode: "parallel",
+  });
 
   return {
     status: 200 as const,
@@ -1465,6 +1611,7 @@ async function continueParallelTaskExecution(
         agentRunId: candidate.agentRunId,
         status: candidate.status,
       })),
+      execution,
     },
   };
 }
@@ -1802,14 +1949,15 @@ function buildParallelContinueSessionTitle(
   return `[Task ${taskId.slice(0, 8)}] ${candidateLabel}: ${prompt.slice(0, 64)}`;
 }
 
-function persistParallelContinuationPromptSnapshots(
+async function persistParallelContinuationPromptSnapshots(
   input: ContinueTaskInput & {
     task: ExecutableTask;
     resolvedModel?: ResolvedModel;
   },
   plan: RuntimePlan,
   repoContext: ReturnType<typeof buildRepoContext>,
-) {
+): Promise<Map<string, number | null>> {
+  const revisions = new Map<string, number | null>();
   const systemContextText = input.parentSessionId
     ? undefined
     : buildExecutionContext({
@@ -1819,33 +1967,45 @@ function persistParallelContinuationPromptSnapshots(
       });
   const promptCreatedAt = new Date().toISOString();
 
-  for (const candidate of plan.candidates) {
-    if (!candidate.sessionId || candidate.status !== "running") {
-      continue;
-    }
+  await Promise.all(
+    plan.candidates.map(async (candidate) => {
+      if (!candidate.sessionId || candidate.status !== "running") {
+        return;
+      }
 
-    const model = candidate.model || (input.resolvedModel ? formatModelRoute(input.resolvedModel) : undefined);
-    const finalSentText = `${systemContextText ?? ""}${input.prompt}`;
+      const model =
+        candidate.model || (input.resolvedModel ? formatModelRoute(input.resolvedModel) : undefined);
+      const finalSentText = `${systemContextText ?? ""}${input.prompt}`;
 
-    persistTaskSessionMessageSnapshot(input.taskId, input.authorization, {
-      runtimeSessionId: candidate.sessionId,
-      message: {
-        info: {
-          id: `${candidate.sessionId}:user-prompt`,
-          role: "user",
-          agent: candidate.agent || DEFAULT_EXECUTION_AGENT,
-          model,
-          time: { created: promptCreatedAt, completed: promptCreatedAt },
+      const persistResult = await persistTaskSessionMessageSnapshot(input.taskId, input.authorization, {
+        runtimeSessionId: candidate.sessionId,
+        message: {
+          info: {
+            id: `${candidate.sessionId}:user-prompt`,
+            role: "user",
+            agent: candidate.agent || DEFAULT_EXECUTION_AGENT,
+            model,
+            time: { created: promptCreatedAt, completed: promptCreatedAt },
+          },
+          parts: [{ type: "text", text: finalSentText }],
+          promptDecomposition: {
+            userInputText: input.prompt,
+            ...(systemContextText ? { systemContextText } : {}),
+            finalSentText,
+          },
         },
-        parts: [{ type: "text", text: finalSentText }],
-        promptDecomposition: {
-          userInputText: input.prompt,
-          ...(systemContextText ? { systemContextText } : {}),
-          finalSentText,
-        },
-      },
-    }).catch(() => null);
-  }
+      }).catch(() => null);
+
+      revisions.set(
+        candidate.sessionId,
+        persistResult?.ok && typeof persistResult.data?.seq === "number"
+          ? persistResult.data.seq
+          : null,
+      );
+    }),
+  );
+
+  return revisions;
 }
 
 async function prepareTaskContinuation(
@@ -1873,10 +2033,24 @@ async function prepareTaskContinuation(
     context,
     input,
     preflightResult.preflight,
-    preflightResult.guard,
+    undefined,
   );
   if (blockedResponse) {
     return { ok: false, response: blockedResponse };
+  }
+
+  const guardMaterialization = await materializePaidExecutionGuard({
+    taskId: input.taskId,
+    projectId: context.task.projectId,
+    authorization: input.authorization,
+    modelRoute:
+      formatModelRoute(preflightResult.preflight.policy) ||
+      (context.resolvedModel ? formatModelRoute(context.resolvedModel) : "github-copilot:gpt-5-mini"),
+    preflight: preflightResult.preflight,
+  });
+  if (!guardMaterialization.ok) {
+    const blocked = buildBlockedExecutionResponse(input.taskId, guardMaterialization.preflight);
+    return { ok: false, response: { status: blocked.status, body: blocked.body } };
   }
 
   const guardPersistResult = await persistContinuationGuard({
@@ -1884,16 +2058,21 @@ async function prepareTaskContinuation(
     authorization: input.authorization,
     strategy: context.task.strategy,
     resolvedModel: context.resolvedModel,
-    guard: preflightResult.guard,
+    guard: guardMaterialization.guard,
   });
   if (!guardPersistResult.ok) {
+    await releasePaidExecutionReservationSafely({
+      taskId: input.taskId,
+      authorization: input.authorization,
+      reason: "failed to persist continuation guard configuration",
+    });
     return {
       ok: false,
       response: { status: guardPersistResult.status, body: guardPersistResult.data },
     };
   }
 
-  return { ok: true, guard: preflightResult.guard };
+  return { ok: true, guard: guardMaterialization.guard };
 }
 
 async function buildBlockedTaskContinuationResponse(
@@ -2022,6 +2201,11 @@ async function continueSingleTaskExecutionFlow(
     title: childSessionTitle,
   });
   if (!forkResult.ok || !forkResult.sessionId) {
+    await releasePaidExecutionReservationSafely({
+      taskId: input.taskId,
+      authorization: input.authorization,
+      reason: forkResult.error || "failed to create continue session",
+    });
     return {
       status: 502 as const,
       body: { error: forkResult.error || "Failed to create continue session" },
@@ -2063,6 +2247,12 @@ async function continueSingleTaskExecutionFlow(
   );
 
   if (!phaseSession) {
+    await releasePaidExecutionReservationSafely({
+      taskId: input.taskId,
+      authorization: input.authorization,
+      reason: "failed to register continue phase session",
+      sessionId: childSessionId,
+    });
     return {
       status: 502 as const,
       body: {
@@ -2120,6 +2310,13 @@ async function continueSingleTaskExecutionFlow(
       startedAt: phaseStartedAt,
       finishedAt: new Date().toISOString(),
     }).catch(() => null);
+    await releasePaidExecutionReservationSafely({
+      taskId: input.taskId,
+      authorization: input.authorization,
+      reason: result.error || "failed to continue session",
+      sessionId: childSessionId,
+      agentRunId,
+    });
     return { status: 502 as const, body: { error: result.error || "Failed to continue session" } };
   }
 
@@ -2156,7 +2353,7 @@ async function continueSingleTaskExecutionFlow(
   const model = context.resolvedModel
     ? `${context.resolvedModel.providerId}:${context.resolvedModel.modelId}`
     : undefined;
-  persistTaskSessionMessageSnapshot(input.taskId, input.authorization, {
+  const promptPersistResult = await persistTaskSessionMessageSnapshot(input.taskId, input.authorization, {
     runtimeSessionId: childSessionId,
     message: {
       info: {
@@ -2235,6 +2432,24 @@ async function continueSingleTaskExecutionFlow(
     partial: false,
   };
 
+  const execution = buildTaskExecutionReconcileEnvelope({
+    taskId: input.taskId,
+    action: "continue",
+    nextSessionId: childSessionId,
+    taskSessionId: childTaskSessionId,
+    roundId: round.id,
+    acceptedRevision:
+      promptPersistResult?.ok && typeof promptPersistResult.data?.seq === "number"
+        ? promptPersistResult.data.seq
+        : null,
+    phaseId: phase.id,
+    agentRunId,
+    status: "running",
+    executionMode: "single",
+    parentSessionId: context.sessionId,
+    parentTaskSessionId,
+  });
+
   return {
     status: 200 as const,
     body: {
@@ -2245,6 +2460,7 @@ async function continueSingleTaskExecutionFlow(
       parentTaskSessionId,
       agentRunId,
       round,
+      execution,
     },
   };
 }
@@ -2318,7 +2534,6 @@ async function recordPaidExecutionGuardStateEvent(args: {
     eventType: "paid_execution",
     action: args.action,
     detail: {
-      leaseId: args.guardState.leaseId,
       guardDecision: args.guardState.guardDecision,
       guardReason: args.guardState.guardReason,
       estimatedRequestUpperBound: args.guardState.estimatedRequestUpperBound,
@@ -2331,44 +2546,6 @@ async function recordPaidExecutionGuardStateEvent(args: {
     },
     riskLevel: args.riskLevel,
   });
-}
-
-function applyPaidExecutionSafetyOverlay(context: PreparedExecutionContext): {
-  context: PreparedExecutionContext;
-  overridesApplied: PaidExecutionOverride[];
-} {
-  const overridesApplied: PaidExecutionOverride[] = [];
-
-  const safePlan = {
-    ...context.plan,
-    judgeResult: undefined,
-    winnerCandidateIndex: undefined,
-  };
-
-  if (context.strategy.hooks.some((hook) => hook.enabled && hook.trigger === "post-execution")) {
-    overridesApplied.push("post-hook-disabled");
-  }
-  if (context.strategy.judge.enabled) {
-    overridesApplied.push("judge-disabled");
-  }
-
-  return {
-    context: {
-      ...context,
-      plan: safePlan,
-      strategy: {
-        ...context.strategy,
-        judge: {
-          ...context.strategy.judge,
-          enabled: false,
-        },
-        hooks: context.strategy.hooks.map((hook) =>
-          hook.enabled && hook.trigger === "post-execution" ? { ...hook, enabled: false } : hook,
-        ),
-      },
-    },
-    overridesApplied,
-  };
 }
 
 async function preparePaidExecutionContext(
@@ -2395,26 +2572,29 @@ async function preparePaidExecutionContext(
     };
   }
 
-  const overlay = applyPaidExecutionSafetyOverlay(context);
-  const safePreflight = await buildTaskExecutionPreflight(overlay.context, authorization);
-  if (!safePreflight.ok) {
+  const guardMaterialization = await materializePaidExecutionGuard({
+    taskId: context.task.id,
+    projectId: context.task.projectId,
+    authorization,
+    modelRoute: context.effectiveModel || formatModelRoute(rawPreflight.data.policy),
+    preflight: rawPreflight.data,
+  });
+  if (!guardMaterialization.ok) {
     return {
       ok: false,
-      status: safePreflight.status,
-      data: safePreflight.data as unknown as Record<string, unknown>,
+      status: 403,
+      data: buildBlockedExecutionResponse(context.task.id, guardMaterialization.preflight)
+        .body as Record<string, unknown>,
     };
   }
 
   return {
     ok: true,
     context: {
-      ...overlay.context,
-      paidExecutionGuard: createPaidExecutionGuardState(
-        safePreflight.data,
-        overlay.overridesApplied,
-      ),
+      ...context,
+      paidExecutionGuard: guardMaterialization.guard,
     },
-    preflight: safePreflight.data,
+    preflight: rawPreflight.data,
   };
 }
 
@@ -2524,24 +2704,91 @@ async function recordManualTaskMessageRepairAudit(
   }
 }
 
+function broadcastTaskReconcileRequired(args: {
+  taskId: string;
+  projectId?: string;
+  sessionId?: string;
+  scope: "messages" | "flow" | "workflow" | "task";
+  reason:
+    | "alias_miss"
+    | "sequence_gap"
+    | "snapshot_lag"
+    | "projection_rebuilt"
+    | "internal_repair";
+}) {
+  wsBroadcaster.broadcast({
+    id: crypto.randomUUID(),
+    type: "task.reconcile.required",
+    ts: new Date().toISOString(),
+    taskId: args.taskId,
+    ...(args.projectId ? { projectId: args.projectId } : {}),
+    ...(args.sessionId ? { sessionId: args.sessionId } : {}),
+    data: {
+      scope: args.scope,
+      reason: args.reason,
+    },
+  });
+}
+
 const repairTaskMessagesSchema = z.object({
   sessionId: z.string().min(1).optional(),
   onlyActive: z.boolean().optional(),
 });
 
+const replayTaskProjectionSchema = z
+  .object({
+    scope: z.enum(["task", "project"]),
+    taskId: z.string().min(1).optional(),
+    projectId: z.string().min(1).optional(),
+    reason: z.string().trim().min(12),
+    confirm: z.boolean().optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.scope === "task") {
+      if (!value.taskId) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "taskId is required for task replay",
+          path: ["taskId"],
+        });
+      }
+      if (value.projectId) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "projectId is not allowed for task replay",
+          path: ["projectId"],
+        });
+      }
+      return;
+    }
+
+    if (!value.projectId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "projectId is required for project replay",
+        path: ["projectId"],
+      });
+    }
+    if (value.taskId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "taskId is not allowed for project replay",
+        path: ["taskId"],
+      });
+    }
+    if (value.confirm !== true) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "confirm=true is required for project replay",
+        path: ["confirm"],
+      });
+    }
+  });
+
 async function fetchExecutableTask(taskId: string, authorization: string) {
   return cpFetch<ExecutableTask>(`/api/project-tree/tasks/${encodeURIComponent(taskId)}`, {
     authorization,
   });
-}
-
-async function fetchProjectPaidExecutionSettings(projectId: string, authorization: string) {
-  return cpFetch<{ settings?: { allowPaidExecution?: boolean } }>(
-    `/api/projects/${encodeURIComponent(projectId)}`,
-    {
-      authorization,
-    },
-  );
 }
 
 async function buildPaidExecutionPreflight(input: {
@@ -2556,43 +2803,34 @@ async function buildPaidExecutionPreflight(input: {
     suiteReference: string;
   };
 }) {
-  const leaseResult = await fetchProjectPaidExecutionLeaseState(
-    input.projectId,
-    input.authorization,
-  );
-  if (!leaseResult.ok) {
-    return {
-      ok: false as const,
-      status: leaseResult.status,
-      data: leaseResult.data,
-    };
-  }
-
-  const [baselineResult, projectResult] = await Promise.all([
+  const [baselineResult, fundResult] = await Promise.all([
     fetchProjectRuntimeUsageBaseline(input.projectId, input.authorization, {
       providerId: input.resolvedModel?.providerId,
       modelId: input.resolvedModel?.modelId,
       entrypointType: "single-task",
       orchestrationFingerprint: buildPreflightOrchestrationFingerprint(input.shape),
     }),
-    fetchProjectPaidExecutionSettings(input.projectId, input.authorization),
+    fetchProjectFundSnapshot(input.projectId, input.authorization),
   ]);
+
+  if (!fundResult.ok) {
+    return {
+      ok: false as const,
+      status: fundResult.status,
+      data: fundResult.data,
+    };
+  }
 
   return {
     ok: true as const,
     status: 200 as const,
-    data: evaluatePaidExecutionPreflight(
-      {
-        projectId: input.projectId,
-        allowPaidExecution: projectResult.ok
-          ? projectResult.data.settings?.allowPaidExecution === true
-          : false,
-        resolvedModel: input.resolvedModel,
-        shape: input.shape,
-        baseline: baselineResult.ok ? baselineResult.data.baseline : null,
-      },
-      leaseResult.data,
-    ),
+    data: evaluatePaidExecutionPreflight({
+      projectId: input.projectId,
+      resolvedModel: input.resolvedModel,
+      shape: input.shape,
+      baseline: baselineResult.ok ? baselineResult.data.baseline : null,
+      funding: fundResult.data,
+    }),
   };
 }
 
@@ -2666,19 +2904,195 @@ function selectExecutionAgent(prompt: string, overrides?: ExecuteOverrides) {
  * Priority: task.selectedModel > strategy override > project.settings.defaultModel >
  * opencode.json default > env fallback (null).
  */
+function collectConfiguredModelProviders(config: Record<string, unknown>) {
+  const providerIds = Object.keys((config.provider as Record<string, unknown>) || {});
+  const modelProviderIds = Object.keys(
+    ((config.models as Record<string, unknown> | undefined)?.providers as
+      | Record<string, unknown>
+      | undefined) || {},
+  );
+
+  return Array.from(new Set([...providerIds, ...modelProviderIds])).filter(Boolean);
+}
+
+function normalizeConfiguredModelId(providerId: string, modelId: string) {
+  const trimmedModelId = modelId.trim();
+  if (trimmedModelId.startsWith(`${providerId}/`)) {
+    return trimmedModelId.slice(providerId.length + 1);
+  }
+  if (trimmedModelId.startsWith(`${providerId}:`)) {
+    return trimmedModelId.slice(providerId.length + 1);
+  }
+  return trimmedModelId;
+}
+
+function addConfiguredModelId(
+  modelIdsByProvider: Map<string, Set<string>>,
+  providerId: string | undefined,
+  modelId: string | undefined,
+) {
+  const normalizedProviderId = asNonEmptyString(providerId);
+  const normalizedModelId = asNonEmptyString(modelId);
+  if (!normalizedProviderId || !normalizedModelId) {
+    return;
+  }
+
+  const providerModels = modelIdsByProvider.get(normalizedProviderId) ?? new Set<string>();
+  providerModels.add(normalizeConfiguredModelId(normalizedProviderId, normalizedModelId));
+  modelIdsByProvider.set(normalizedProviderId, providerModels);
+}
+
+function buildConfiguredModelIdRegistry() {
+  const readOpencodeJson = modelConfig.readOpencodeJson;
+  if (typeof readOpencodeJson !== "function") {
+    return null;
+  }
+
+  let config: Record<string, unknown>;
+  try {
+    config = readOpencodeJson();
+  } catch {
+    return null;
+  }
+
+  const providers = collectConfiguredModelProviders(config);
+  const modelIdsByProvider = new Map<string, Set<string>>();
+
+  const configuredDefaultModel =
+    asNonEmptyString(((config.agents as Record<string, unknown> | undefined)?.defaults as
+      | Record<string, unknown>
+      | undefined)?.model) ?? asNonEmptyString(config.model);
+  if (configuredDefaultModel) {
+    const resolvedDefaultModel = resolveModelRoute(configuredDefaultModel);
+    addConfiguredModelId(
+      modelIdsByProvider,
+      resolvedDefaultModel.providerId,
+      resolvedDefaultModel.modelId,
+    );
+  }
+
+  const modelList = Array.isArray((config.models as Record<string, unknown> | undefined)?.list)
+    ? (((config.models as Record<string, unknown>).list as Array<Record<string, unknown>>) ?? [])
+    : [];
+  for (const model of modelList) {
+    const route = asNonEmptyString(model.route);
+    if (route) {
+      const resolvedRoute = resolveModelRoute(route);
+      addConfiguredModelId(modelIdsByProvider, resolvedRoute.providerId, resolvedRoute.modelId);
+      continue;
+    }
+
+    addConfiguredModelId(
+      modelIdsByProvider,
+      asNonEmptyString(model.provider),
+      asNonEmptyString(model.id),
+    );
+  }
+
+  const providerConfigs = (config.provider as Record<string, unknown>) || {};
+  for (const [providerId, providerConfig] of Object.entries(providerConfigs)) {
+    const providerModels = (providerConfig as Record<string, unknown> | undefined)?.models as
+      | Record<string, unknown>
+      | undefined;
+    for (const [modelKey, modelValue] of Object.entries(providerModels || {})) {
+      addConfiguredModelId(
+        modelIdsByProvider,
+        providerId,
+        asNonEmptyString((modelValue as Record<string, unknown> | undefined)?.id) ?? modelKey,
+      );
+    }
+  }
+
+  return { providers, modelIdsByProvider };
+}
+
+function hasExplicitConfiguredProviderPrefix(raw: string, providers: string[]) {
+  const value = raw.trim();
+  const colonIndex = value.indexOf(":");
+  if (colonIndex > 0) {
+    return true;
+  }
+
+  const slashIndex = value.indexOf("/");
+  return slashIndex > 0 && providers.includes(value.slice(0, slashIndex));
+}
+
+function isConfiguredTaskModel(raw: string | null | undefined) {
+  const value = asNonEmptyString(raw);
+  if (!value) {
+    return true;
+  }
+
+  const registry = buildConfiguredModelIdRegistry();
+  if (!registry || registry.modelIdsByProvider.size === 0) {
+    return true;
+  }
+
+  const resolvedModel = resolveModelRoute(value);
+  const normalizedModelId = normalizeConfiguredModelId(
+    resolvedModel.providerId,
+    resolvedModel.modelId,
+  );
+  if (registry.modelIdsByProvider.get(resolvedModel.providerId)?.has(normalizedModelId)) {
+    return true;
+  }
+
+  if (hasExplicitConfiguredProviderPrefix(value, registry.providers)) {
+    return false;
+  }
+
+  let matchCount = 0;
+  for (const providerModels of registry.modelIdsByProvider.values()) {
+    if (!providerModels.has(normalizedModelId)) {
+      continue;
+    }
+
+    matchCount += 1;
+    if (matchCount > 1) {
+      return false;
+    }
+  }
+
+  return matchCount === 1;
+}
+
+function sanitizeConfiguredTaskModelValue(raw: string | null | undefined) {
+  const value = asNonEmptyString(raw);
+  return value && isConfiguredTaskModel(value) ? value : undefined;
+}
+
+function sanitizeConfiguredTaskModelRecord<T extends Record<string, unknown>>(task: T): T {
+  const selectedModel = asNonEmptyString(task.selectedModel);
+  if (!selectedModel || isConfiguredTaskModel(selectedModel)) {
+    return task;
+  }
+
+  return {
+    ...task,
+    selectedModel: undefined,
+  };
+}
+
+function resolveConfiguredExecutionModel(raw: string | null | undefined) {
+  const value = sanitizeConfiguredTaskModelValue(raw);
+  return value ? parseModelString(value) : undefined;
+}
+
 async function resolveExecutionModel(
   task: ExecutableTask,
   authorization: string,
   strategyModel?: string,
 ): Promise<ResolvedModel | undefined> {
   // 1. Task-level override
-  if (task.selectedModel) {
-    return parseModelString(task.selectedModel);
+  const taskModel = resolveConfiguredExecutionModel(task.selectedModel);
+  if (taskModel) {
+    return taskModel;
   }
 
   // 2. Strategy-level category override
-  if (strategyModel) {
-    return parseModelString(strategyModel);
+  const strategyResolvedModel = resolveConfiguredExecutionModel(strategyModel);
+  if (strategyResolvedModel) {
+    return strategyResolvedModel;
   }
 
   // 3. Project-level default
@@ -2687,17 +3101,20 @@ async function resolveExecutionModel(
       `/api/projects/${encodeURIComponent(task.projectId)}`,
       { authorization },
     );
-    if (projectResult.ok && projectResult.data?.settings?.defaultModel) {
-      return parseModelString(projectResult.data.settings.defaultModel);
+    const projectDefaultModel = resolveConfiguredExecutionModel(
+      projectResult.ok ? projectResult.data?.settings?.defaultModel : undefined,
+    );
+    if (projectDefaultModel) {
+      return projectDefaultModel;
     }
   } catch {
     // Fall through to system default
   }
 
   // 4. System-level default from opencode.json
-  const systemDefaultModel = readDefaultExecutionModel();
+  const systemDefaultModel = resolveConfiguredExecutionModel(readDefaultExecutionModel());
   if (systemDefaultModel) {
-    return parseModelString(systemDefaultModel);
+    return systemDefaultModel;
   }
 
   // 5. Return undefined — adapter will use its env-based defaults
@@ -4048,6 +4465,7 @@ async function buildTaskExecutionTrace(
     task,
     snapshot,
     sessionId,
+    preserveProjectionMetaOnEmptyFallback: Boolean(requestedSessionId?.trim()),
     authorization,
     includeLineage,
   });
@@ -4138,6 +4556,7 @@ async function loadTaskExecutionTraceMessages(args: {
   task: ExecutableTask;
   snapshot: Awaited<ReturnType<typeof loadTaskProjectionSnapshot>>;
   sessionId: string | null;
+  preserveProjectionMetaOnEmptyFallback: boolean;
   authorization: string;
   includeLineage: boolean;
 }): Promise<TaskExecutionTraceMessageLoadResult> {
@@ -4177,6 +4596,7 @@ async function loadTaskExecutionTraceMessages(args: {
         sessionId: args.sessionId,
         authorization: args.authorization,
         includeLineage: args.includeLineage,
+        preserveProjectionMetaOnEmptyFallback: args.preserveProjectionMetaOnEmptyFallback,
         timelineMeta,
       });
       timeline = timelineFallback.timeline;
@@ -4237,6 +4657,7 @@ async function loadTaskExecutionTraceTimelineFallback(args: {
   sessionId: string;
   authorization: string;
   includeLineage: boolean;
+  preserveProjectionMetaOnEmptyFallback: boolean;
   timelineMeta: TaskSessionTimelineMetaRecord | undefined;
 }) {
   let messages: ExecutionTraceMessageRecord[] = [];
@@ -4254,7 +4675,13 @@ async function loadTaskExecutionTraceTimelineFallback(args: {
 
   if (timelineMessages) {
     timeline = timelineMessages.items;
-    timelineMeta = timelineMessages.meta;
+    if (
+      timelineMessages.items.length > 0 ||
+      !timelineMeta ||
+      !args.preserveProjectionMetaOnEmptyFallback
+    ) {
+      timelineMeta = timelineMessages.meta;
+    }
     messages = timelineMessages.messages;
     messageLimit = timelineMessages.messageLimit;
   }
@@ -4709,26 +5136,6 @@ function asNonEmptyString(value: unknown) {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
-function resolveTaskPhaseKind(plan: RuntimePlan): TaskPhaseRecord["phaseKind"] {
-  if (isParallelExecution(plan)) {
-    return "parallel";
-  }
-
-  if (isSequentialChainExecution(plan)) {
-    return "sequential_chain";
-  }
-
-  return "single";
-}
-
-function resolveTaskPhaseTriggerType(parentSessionId?: string): TaskPhaseRecord["triggerType"] {
-  return parentSessionId ? "continue" : "execute";
-}
-
-function resolvePrimaryPhaseRole(plan: RuntimePlan): TaskPhaseSessionEnvelopeRecord["phaseRole"] {
-  return isSequentialChainExecution(plan) ? "step" : "mainline";
-}
-
 async function resolveParentPhaseId(
   taskId: string,
   authorization: string,
@@ -5029,6 +5436,11 @@ async function prepareTaskExecutionStart(
   }
 
   if (!(await persistPaidExecutionConfiguration(guardPreparation.context))) {
+    await releasePaidExecutionReservationSafely({
+      taskId,
+      authorization,
+      reason: "failed to persist paid execution configuration",
+    });
     return {
       ok: false,
       response: {
@@ -5040,6 +5452,11 @@ async function prepareTaskExecutionStart(
 
   const executionContextResult = await finalizePreExecutionContext(guardPreparation.context);
   if (!executionContextResult.ok) {
+    await releasePaidExecutionReservationSafely({
+      taskId,
+      authorization,
+      reason: executionContextResult.reason,
+    });
     return {
       ok: false,
       response: {
@@ -5317,11 +5734,6 @@ function normalizeCandidateAdoptionExecutionStatus(status?: string | null) {
   return normalizedStatus;
 }
 
-async function loadCandidateAdoptionSessionResult(runtimeSessionId: string) {
-  const evidence = await loadCandidateAdoptionSessionEvidence(runtimeSessionId);
-  return evidence.result;
-}
-
 async function loadCandidateAdoptionSessionEvidence(runtimeSessionId: string) {
   const runtimeResult = await getSessionMessages(runtimeSessionId);
   if (!runtimeResult.ok || !Array.isArray(runtimeResult.data)) {
@@ -5379,7 +5791,7 @@ async function shouldAllowAwaitingAdoptionCandidate(args: {
   return (
     liveRun?.status === "completed" ||
     liveRun?.status === "failed" ||
-    liveRun?.status === "cancelled"
+    liveRun?.status === "stopped"
   );
 }
 
@@ -5404,7 +5816,7 @@ function shouldStopNonWinningCandidateSession(
   }
 
   const liveRun = findAgentRunBySessionId(candidate.runtimeSessionId);
-  return liveRun?.status === "running" || liveRun?.status === "pending" || liveRun?.status === "paused";
+  return liveRun?.status === "running" || liveRun?.status === "paused";
 }
 
 async function stopNonWinningCandidateSessions(args: {
@@ -5423,6 +5835,11 @@ async function stopNonWinningCandidateSessions(args: {
       continue;
     }
 
+    const candidateIndex = currentCandidate.candidateIndex;
+    if (typeof candidateIndex !== "number") {
+      continue;
+    }
+
     const liveRun = findAgentRunBySessionId(currentCandidate.runtimeSessionId);
     if (!liveRun?.agentRunId) {
       continue;
@@ -5435,7 +5852,7 @@ async function stopNonWinningCandidateSessions(args: {
       : `Failed to stop after manual candidate adoption: ${terminateResult.error || "unknown error"}`;
 
     stoppedCandidates.push({
-      candidateIndex: currentCandidate.candidateIndex,
+      candidateIndex,
       status,
       resultText: `[${terminateResult.ok ? "STOPPED" : "FAILED"}] ${stopMessage}`,
       ...(terminateResult.ok ? {} : { errorText: stopMessage }),
@@ -5632,15 +6049,18 @@ async function finalizePhaseFirstCandidateAdoption(args: {
     };
   }
 
-  const patchResult = await cpFetch(`/api/tasks/${encodeURIComponent(args.taskId)}`, {
-    method: "PATCH",
-    authorization: args.authorization,
-    body: {
-      status: "completed",
-      sessionId: args.winnerRuntimeSessionId,
-      ...(args.winnerResult ? { result: args.winnerResult } : {}),
+  const patchResult = await cpFetch<{ error?: string }>(
+    `/api/tasks/${encodeURIComponent(args.taskId)}`,
+    {
+      method: "PATCH",
+      authorization: args.authorization,
+      body: {
+        status: "completed",
+        sessionId: args.winnerRuntimeSessionId,
+        ...(args.winnerResult ? { result: args.winnerResult } : {}),
+      },
     },
-  });
+  );
   if (!patchResult.ok) {
     return {
       ok: false as const,
@@ -5682,11 +6102,28 @@ async function finalizePhaseFirstCandidateAdoption(args: {
     },
   });
 
+  const execution = buildTaskExecutionReconcileEnvelope({
+    taskId: args.taskId,
+    action: "adopt",
+    nextSessionId: args.winnerRuntimeSessionId,
+    taskSessionId: args.winnerSessionId,
+    roundId: args.winnerSessionId,
+    acceptedRevision: null,
+    phaseId: args.phaseId,
+    status: "completed",
+    executionMode: "parallel",
+  });
+
   return {
     ok: true as const,
     response: {
       status: 200 as const,
-      body: { ok: true, phaseId: args.phaseId, winnerCandidateIndex: args.winnerCandidateIndex },
+      body: {
+        ok: true,
+        phaseId: args.phaseId,
+        winnerCandidateIndex: args.winnerCandidateIndex,
+        execution,
+      },
     },
   };
 }
@@ -5762,6 +6199,16 @@ async function markTaskFailed(taskId: string, authorization: string) {
     body: { status: "failed" },
     authorization,
   });
+}
+
+async function releasePaidExecutionReservationSafely(args: {
+  taskId: string;
+  authorization: string;
+  reason: string;
+  sessionId?: string;
+  agentRunId?: string;
+}) {
+  await releasePaidExecutionReservation(args).catch(() => null);
 }
 
 async function persistExecutionStart(
@@ -5860,6 +6307,11 @@ async function startParallelExecution(context: ExecutionContext): Promise<StartE
       finishedAt: new Date().toISOString(),
     }).catch(() => null);
     await markTaskFailed(context.task.id, context.authorization);
+    await releasePaidExecutionReservationSafely({
+      taskId: context.task.id,
+      authorization: context.authorization,
+      reason: "all parallel candidates failed to start",
+    });
     return {
       status: 502,
       body: { error: "All parallel candidates failed to start" },
@@ -5901,6 +6353,14 @@ async function startParallelExecution(context: ExecutionContext): Promise<StartE
       phaseId: phase.id,
     });
   } catch (error) {
+    await releasePaidExecutionReservationSafely({
+      taskId: context.task.id,
+      authorization: context.authorization,
+      reason:
+        error instanceof Error && error.message.trim()
+          ? error.message
+          : "failed to register parallel candidate sessions",
+    });
     return {
       status: 502,
       body: {
@@ -6050,6 +6510,13 @@ async function startSingleExecution(context: ExecutionContext): Promise<StartExe
     if (failure.body.code === "MODEL_RUNTIME_ERROR") {
       await markTaskFailed(context.task.id, context.authorization);
     }
+    await releasePaidExecutionReservationSafely({
+      taskId: context.task.id,
+      authorization: context.authorization,
+      reason: String(failure.body.error || "failed to start single execution"),
+      sessionId: execResult.sessionId,
+      agentRunId: execResult.agentRunId,
+    });
     return failure;
   }
 
@@ -6279,7 +6746,9 @@ taskRoutes.get("/:taskId", async (c) => {
   }
 
   return c.json(
-    mergeTaskWithProjectionSnapshot(result.data as Record<string, unknown>, snapshot),
+    sanitizeConfiguredTaskModelRecord(
+      mergeTaskWithProjectionSnapshot(result.data as Record<string, unknown>, snapshot),
+    ),
     200,
   );
 });
@@ -6424,20 +6893,46 @@ taskRoutes.get("/:taskId/workflow", async (c) => {
 
 taskRoutes.get("/:taskId/role-conclusions", async (c) => {
   const taskId = c.req.param("taskId");
-  const result = await cpFetch(`/api/tasks/${encodeURIComponent(taskId)}/role-conclusions`, {
-    authorization: authHeader(c),
+  const authorization = authHeader(c);
+  const result = await cpFetch<{
+    data?: unknown[];
+    meta?: { workflowMigrated?: boolean };
+  }>(`/api/tasks/${encodeURIComponent(taskId)}/role-conclusions`, {
+    authorization,
   });
+  if (result.ok && result.data?.meta?.workflowMigrated) {
+    const taskResult = await fetchExecutableTask(taskId, authorization);
+    broadcastTaskReconcileRequired({
+      taskId,
+      projectId: taskResult.ok ? taskResult.data.projectId : undefined,
+      scope: "workflow",
+      reason: "internal_repair",
+    });
+  }
   return c.json(result.data, result.ok ? 200 : (result.status as 401 | 404 | 502));
 });
 
 taskRoutes.get("/:taskId/developer-change-requests", async (c) => {
   const taskId = c.req.param("taskId");
-  const result = await cpFetch(
+  const authorization = authHeader(c);
+  const result = await cpFetch<{
+    data?: unknown[];
+    meta?: { workflowMigrated?: boolean };
+  }>(
     `/api/tasks/${encodeURIComponent(taskId)}/developer-change-requests`,
     {
-      authorization: authHeader(c),
+      authorization,
     },
   );
+  if (result.ok && result.data?.meta?.workflowMigrated) {
+    const taskResult = await fetchExecutableTask(taskId, authorization);
+    broadcastTaskReconcileRequired({
+      taskId,
+      projectId: taskResult.ok ? taskResult.data.projectId : undefined,
+      scope: "workflow",
+      reason: "internal_repair",
+    });
+  }
   return c.json(result.data, result.ok ? 200 : (result.status as 401 | 404 | 502));
 });
 
@@ -6478,10 +6973,25 @@ taskRoutes.get(":taskId/workflow-view", async (c) => {
     return c.json(taskResult.data, taskResult.status as 401 | 404 | 502);
   }
 
+  const resources = await fetchTaskWorkflowResources({
+    taskId,
+    authorization,
+    includeTask: false,
+  });
+
   const view = await buildTaskWorkflowViewModel(taskId, authorization, {
     projectId: taskResult.data?.projectId,
     taskStatus: taskResult.data?.status,
+    prefetched: resources,
   });
+  if (resources.meta.workflowMigrated) {
+    broadcastTaskReconcileRequired({
+      taskId,
+      projectId: taskResult.data?.projectId ?? undefined,
+      scope: "workflow",
+      reason: "internal_repair",
+    });
+  }
   return c.json(view);
 });
 
@@ -6498,12 +7008,27 @@ taskRoutes.get(":taskId/member-view", async (c) => {
     return c.json(taskResult.data, taskResult.status as 401 | 404 | 502);
   }
 
+  const workflowResources = await fetchTaskWorkflowResources({
+    taskId,
+    authorization,
+    includeTask: false,
+  });
+
   const view = await buildTaskMemberViewModel({
     taskId,
     authorization,
     projectId: taskResult.data?.projectId,
     taskStatus: taskResult.data?.status,
+    prefetchedWorkflowResources: workflowResources,
   });
+  if (workflowResources.meta.workflowMigrated) {
+    broadcastTaskReconcileRequired({
+      taskId,
+      projectId: taskResult.data?.projectId ?? undefined,
+      scope: "workflow",
+      reason: "internal_repair",
+    });
+  }
   return c.json(view);
 });
 
@@ -6739,9 +7264,7 @@ taskRoutes.get("/:taskId/execute/preflight", async (c) => {
     taskId,
     allowed: preflight.allowed,
     effectiveModel: preparedContext.effectiveModel,
-    activeLease: preflight.activeLease,
     policy: preflight.policy,
-    requirements: preflight.requirements,
     preflight: preflight.estimate,
   });
 });
@@ -6763,6 +7286,22 @@ taskRoutes.post("/:taskId/execute", async (c) => {
 });
 
 const taskPhaseCancelSchema = z.object({
+  reason: z
+    .enum([
+      "winner_adopted",
+      "user_cancelled",
+      "runtime_terminated",
+      "runtime_failed",
+      "timeout",
+      "superseded",
+    ])
+    .optional(),
+});
+
+const taskTerminateSchema = z.object({
+  phaseId: z.string().min(1).optional(),
+  agentRunId: z.string().min(1).optional(),
+  sessionId: z.string().min(1).optional(),
   reason: z
     .enum([
       "winner_adopted",
@@ -6821,6 +7360,113 @@ taskRoutes.post(
       result.data,
       result.ok ? 200 : (result.status as 400 | 401 | 404 | 409 | 502),
     );
+  },
+);
+
+async function executeTaskTermination(args: {
+  taskId: string;
+  phaseId?: string;
+  agentRunId?: string;
+  sessionId?: string;
+  authorization: string;
+  reason?:
+    | "winner_adopted"
+    | "user_cancelled"
+    | "runtime_terminated"
+    | "runtime_failed"
+    | "timeout"
+    | "superseded";
+}) {
+  if (!args.phaseId && !args.agentRunId) {
+    return {
+      status: 400 as const,
+      body: { error: "Either phaseId or agentRunId is required" },
+    };
+  }
+
+  const taskResult = await cpFetch<ExecutableTask>(
+    `/api/project-tree/tasks/${encodeURIComponent(args.taskId)}`,
+    { authorization: args.authorization },
+  );
+  if (!taskResult.ok || !taskResult.data?.id) {
+    return {
+      status: 404 as const,
+      body: { error: "Task not found" },
+    };
+  }
+
+  const resolvedSessionId = args.sessionId
+    ? await resolveRequestedTaskRuntimeSessionId({
+        taskId: args.taskId,
+        sessionId: args.sessionId,
+        authorization: args.authorization,
+      })
+    : taskResult.data.sessionId ?? undefined;
+
+  let status: string | null = null;
+  if (args.phaseId) {
+    const cancelResult = await cancelTaskPhase(
+      args.taskId,
+      args.phaseId,
+      args.authorization,
+      args.reason ?? "user_cancelled",
+    );
+    if (!cancelResult.ok) {
+      return {
+        status: cancelResult.status as 400 | 401 | 404 | 409 | 502,
+        body: cancelResult.data,
+      };
+    }
+
+    const cancelData =
+      cancelResult.data && typeof cancelResult.data === "object"
+        ? (cancelResult.data as { status?: unknown })
+        : undefined;
+    status = typeof cancelData?.status === "string" ? cancelData.status : "cancelled";
+  } else if (args.agentRunId) {
+    const terminateResult = await terminateAgent(args.agentRunId);
+    if (!terminateResult.ok) {
+      return {
+        status: 502 as const,
+        body: { error: terminateResult.error || "Failed to terminate agent execution" },
+      };
+    }
+    status = "cancelled";
+  }
+
+  const execution = buildTaskExecutionReconcileEnvelope({
+    taskId: args.taskId,
+    action: "terminate",
+    nextSessionId: resolvedSessionId,
+    acceptedRevision: null,
+    phaseId: args.phaseId,
+    agentRunId: args.agentRunId,
+    status,
+    executionMode: taskResult.data.executionMode ?? null,
+  });
+
+  return {
+    status: 200 as const,
+    body: {
+      ok: true,
+      phaseId: args.phaseId,
+      status,
+      execution,
+    },
+  };
+}
+
+taskRoutes.post(
+  "/:taskId/terminate",
+  zValidator("json", taskTerminateSchema),
+  async (c) => {
+    const result = await executeTaskTermination({
+      taskId: c.req.param("taskId"),
+      ...c.req.valid("json"),
+      authorization: authHeader(c),
+    });
+
+    return c.json(result.body, result.status);
   },
 );
 
@@ -6913,6 +7559,13 @@ taskRoutes.post("/:taskId/complete", async (c) => {
     body: { status: "completed" },
   });
 
+  await releasePaidExecutionReservationSafely({
+    taskId,
+    authorization,
+    reason: "manual task completion",
+    sessionId: task.sessionId ?? undefined,
+  });
+
   wsBroadcaster.broadcast({
     id: crypto.randomUUID(),
     type: "task.completed",
@@ -6930,6 +7583,44 @@ taskRoutes.post("/:taskId/complete", async (c) => {
 });
 
 // POST /api/tasks/reconcile-running — Manually reconcile persisted running tasks
+taskRoutes.post("/projections/replay", async (c) => {
+  const adminErr = requireSystemAdmin(c.get("user"));
+  if (adminErr) {
+    return c.json({ error: adminErr }, 403);
+  }
+
+  const bodyResult = replayTaskProjectionSchema.safeParse(await c.req.json().catch(() => ({})));
+  if (!bodyResult.success) {
+    return c.json({ error: bodyResult.error.flatten() }, 400);
+  }
+
+  const authorization = authHeader(c);
+  const result = await cpFetch<Record<string, unknown>>("/api/tasks/projections/replay", {
+    method: "POST",
+    authorization,
+    body: bodyResult.data,
+  });
+
+  if (!result.ok) {
+    return c.json(
+      result.data,
+      (result.status as 400 | 401 | 403 | 404 | 409 | 422 | 500 | 502) ?? 502,
+    );
+  }
+
+  if (bodyResult.data.scope === "task" && bodyResult.data.taskId) {
+    const taskResult = await fetchExecutableTask(bodyResult.data.taskId, authorization);
+    broadcastTaskReconcileRequired({
+      taskId: bodyResult.data.taskId,
+      projectId: taskResult.ok ? taskResult.data.projectId : undefined,
+      scope: "task",
+      reason: "projection_rebuilt",
+    });
+  }
+
+  return c.json(result.data, result.status as 200);
+});
+
 taskRoutes.post("/reconcile-running", async (c) => {
   const adminErr = requireSystemAdmin(c.get("user"));
   if (adminErr) {
@@ -6940,6 +7631,16 @@ taskRoutes.post("/reconcile-running", async (c) => {
   const authorization = authHeader(c);
   const summary = await reconcileRunningTasksOnStartup();
   await recordManualReconcileAudit(authorization, user, summary);
+
+  for (const affectedTask of summary.affectedTasks) {
+    broadcastTaskReconcileRequired({
+      taskId: affectedTask.taskId,
+      projectId: affectedTask.projectId,
+      scope: "task",
+      reason: "internal_repair",
+    });
+  }
+
   return c.json({ ok: true, data: summary });
 });
 
@@ -6983,6 +7684,17 @@ taskRoutes.post("/:taskId/repair-messages", async (c) => {
   }
 
   await recordManualTaskMessageRepairAudit(authorization, user, taskId, summary, bodyResult.data);
+
+  if (summary.repairedMessages > 0) {
+    broadcastTaskReconcileRequired({
+      taskId,
+      projectId: taskResult.data.projectId,
+      sessionId: bodyResult.data.sessionId,
+      scope: "messages",
+      reason: "internal_repair",
+    });
+  }
+
   return c.json({ ok: true, data: summary });
 });
 
@@ -7191,9 +7903,11 @@ taskRoutes.get("/:taskId/branches", async (c) => {
 
   if (lineageRecords.length > 0) {
     const { records: normalizedRecords, repaired } = normalizeLineageRecords(lineageRecords);
-    if (repaired.length > 0) {
-      await persistLineageRepairs(taskId, repaired, authorization);
-    }
+    await persistLineageRepairsAndBroadcast({
+      taskId,
+      records: repaired,
+      authorization,
+    });
 
     const sessions = normalizedRecords.map((record) => {
       const runtime = runtimeMap.get(record.runtimeSessionId);
@@ -7237,9 +7951,11 @@ taskRoutes.get(":taskId/sessions", async (c) => {
 
   if (lineageRecords.length > 0) {
     const { records: normalizedRecords, repaired } = normalizeLineageRecords(lineageRecords);
-    if (repaired.length > 0) {
-      await persistLineageRepairs(taskId, repaired, authorization);
-    }
+    await persistLineageRepairsAndBroadcast({
+      taskId,
+      records: repaired,
+      authorization,
+    });
 
     const publicTaskSessionIdByIdentifier = new Map<string, string>();
     for (const record of normalizedRecords) {
@@ -7452,7 +8168,7 @@ async function executeTaskBranchFork(args: {
   const parentRuntimeSessionId = parentRecord?.runtimeSessionId ?? args.sessionId;
   const parentTaskSessionId = buildPublicTaskSessionId(args.taskId, parentRuntimeSessionId);
 
-  const taskResult = await cpFetch<{ projectId?: string; title?: string }>(
+  const taskResult = await cpFetch<ExecutableTask>(
     `/api/project-tree/tasks/${encodeURIComponent(args.taskId)}`,
     { authorization: args.authorization },
   );
@@ -7493,6 +8209,18 @@ async function executeTaskBranchFork(args: {
     },
   });
 
+  const execution = buildTaskExecutionReconcileEnvelope({
+    taskId: args.taskId,
+    action: "fork",
+    nextSessionId: result.sessionId,
+    taskSessionId: buildPublicTaskSessionId(args.taskId, result.sessionId),
+    acceptedRevision: null,
+    status: "idle",
+    executionMode: taskResult.data?.executionMode ?? null,
+    parentSessionId: parentRuntimeSessionId,
+    parentTaskSessionId,
+  });
+
   return {
     status: 200 as const,
     body: {
@@ -7503,6 +8231,7 @@ async function executeTaskBranchFork(args: {
       parentSessionId: parentRuntimeSessionId,
       parentTaskSessionId,
       forkedFromMessageId: args.messageId,
+      execution,
     },
   };
 }
@@ -7547,6 +8276,7 @@ interface TaskSessionRecord {
   forkedFromMessageId: string | null;
   branchName: string | null;
   sourceType: string;
+  needsSourceTypeRepair?: boolean;
   isActive: boolean;
   phaseId?: string | null;
   phaseRole?: string | null;
@@ -7575,7 +8305,8 @@ function coerceTaskSessionRecord(
     parentRuntimeSessionId: record.parentRuntimeSessionId ?? null,
     forkedFromMessageId: record.forkedFromMessageId ?? null,
     branchName: record.branchName ?? null,
-    sourceType: resolvePublicTaskSessionSourceType(record),
+    sourceType: record.sourceType,
+    needsSourceTypeRepair: Boolean(record.needsSourceTypeRepair),
     isActive: record.isActive,
     phaseId: record.phaseId ?? null,
     phaseRole: record.phaseRole ?? null,
@@ -7838,6 +8569,7 @@ function collapseTaskSessionRecordGroup(records: TaskSessionRecord[]) {
     forkedFromMessageId: forkedFromMessageId.value ?? null,
     branchName: branchName.value ?? null,
     sourceType,
+    needsSourceTypeRepair: records.some((record) => record.needsSourceTypeRepair),
     isActive: records.some((record) => record.isActive),
     phaseId: phaseId.value ?? null,
     phaseRole: phaseRole.value ?? null,
@@ -7878,7 +8610,7 @@ function dedupeTaskSessionRecords(records: TaskSessionRecord[]) {
 function normalizeTaskSessionRecord(record: TaskSessionRecord) {
   const nextSourceType = resolvePublicTaskSessionSourceType(record);
 
-  if (nextSourceType === record.sourceType) {
+  if (nextSourceType === record.sourceType && !record.needsSourceTypeRepair) {
     return { record, repaired: false as const };
   }
 
@@ -7886,6 +8618,7 @@ function normalizeTaskSessionRecord(record: TaskSessionRecord) {
     record: {
       ...record,
       sourceType: nextSourceType,
+      needsSourceTypeRepair: false,
     },
     repaired: true as const,
   };
@@ -8177,6 +8910,23 @@ async function persistLineageRepairs(
   }
 }
 
+async function persistLineageRepairsAndBroadcast(args: {
+  taskId: string;
+  records: TaskSessionRecord[];
+  authorization: string;
+}) {
+  if (args.records.length === 0) {
+    return;
+  }
+
+  await persistLineageRepairs(args.taskId, args.records, args.authorization);
+  broadcastTaskReconcileRequired({
+    taskId: args.taskId,
+    scope: "flow",
+    reason: "internal_repair",
+  });
+}
+
 function createSessionTreeNode(
   taskId: string,
   record: TaskSessionRecord,
@@ -8362,9 +9112,11 @@ taskRoutes.get(":taskId/branch-lineage", async (c) => {
   );
 
   const { records: normalizedRecords, repaired } = normalizeLineageRecords(lineageRecords);
-  if (repaired.length > 0) {
-    await persistLineageRepairs(taskId, repaired, authorization);
-  }
+  await persistLineageRepairsAndBroadcast({
+    taskId,
+    records: repaired,
+    authorization,
+  });
 
   const tree = buildSessionTree(
     taskId,
@@ -8401,9 +9153,11 @@ taskRoutes.get(":taskId/session-lineage", async (c) => {
   );
 
   const { records: normalizedRecords, repaired } = normalizeLineageRecords(lineageRecords);
-  if (repaired.length > 0) {
-    await persistLineageRepairs(taskId, repaired, authorization);
-  }
+  await persistLineageRepairsAndBroadcast({
+    taskId,
+    records: repaired,
+    authorization,
+  });
 
   return c.json({
     data: buildSessionTree(

@@ -177,7 +177,6 @@ describe("task operation write api", () => {
       sessionId: "task-session:task-1:runtime-session-1",
       phaseId: "phase-agent-run-1",
       runtimeSessionId: "runtime-session-1",
-      coordinationKey: null,
       candidateIndex: 1,
       executionKind: "single",
       laneRole: "primary",
@@ -266,6 +265,51 @@ describe("task operation write api", () => {
     expect(syncTaskAggregateFromSnapshot).not.toHaveBeenCalled();
   });
 
+  test("preserves the explicit task model when single execution facts sync back", async () => {
+    const { createTaskOperationWriteApi } = await loadTaskOperationWriteModule({
+      taskOperationFindResults: [null, null],
+      taskSessionRecord: { phaseId: null },
+    });
+
+    const upsertTaskSessionRecord = mock(async () => "task-session:task-1:runtime-session-root");
+    const appendTaskUsageLedgerEntry = mock(async () => ({ id: "ledger-single" }));
+    const buildTaskTreeSnapshotFromRecord = mock(() => ({ id: "snapshot-single" } as never));
+    const syncTaskAggregateFromSnapshot = mock(async () => undefined);
+
+    const api = createTaskOperationWriteApi({
+      upsertTaskSessionRecord,
+      buildTaskTreeSnapshotFromRecord,
+      syncTaskAggregateFromSnapshot,
+      appendTaskUsageLedgerEntry,
+    });
+
+    await api.syncExecutionFactsForAgentRun({
+      task: createTaskRecord({
+        executionMode: "single",
+        orchestrationKind: null,
+        selectedModel: "github-copilot:gpt-5.4",
+      }),
+      agentRunId: "agent-run-single",
+      sessionId: "runtime-session-root",
+      agentType: "builder",
+      status: "completed",
+      modelUsed: "github-copilot:gpt-5-mini",
+      result: "completed result",
+      startedAt: "2025-01-01T00:03:00.000Z",
+      finishedAt: "2025-01-01T00:03:30.000Z",
+    });
+
+    expect(buildTaskTreeSnapshotFromRecord).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "task-1" }),
+      expect.objectContaining({
+        selectedModel: "github-copilot:gpt-5.4",
+        sessionId: "runtime-session-root",
+        agentRunId: "agent-run-single",
+      }),
+    );
+    expect(syncTaskAggregateFromSnapshot).toHaveBeenCalledTimes(1);
+  });
+
   test("normalizes canonical session ids and maps judge agent runs to judge semantics", async () => {
     const { createTaskOperationWriteApi, insertCalls } = await loadTaskOperationWriteModule({
       taskOperationFindResults: [null, null],
@@ -300,7 +344,6 @@ describe("task operation write api", () => {
       sessionId: "task-session:task-1:judge-session",
       phaseId: "phase-judge-1",
       runtimeSessionId: "judge-session",
-      coordinationKey: null,
       executionKind: "judge",
       laneRole: "judge",
       status: "completed",

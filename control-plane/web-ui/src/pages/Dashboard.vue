@@ -330,13 +330,6 @@
           </a-col>
           <a-col :xs="24" :sm="12" :xl="6">
             <a-card size="small" :loading="governanceLoading">
-              <div class="provider-card-label">Active Lease</div>
-              <div class="provider-card-value">{{ formatCount(governanceSummary?.activeLeaseCount) }}</div>
-              <div class="provider-card-hint">当前仍有效的付费执行租约数</div>
-            </a-card>
-          </a-col>
-          <a-col :xs="24" :sm="12" :xl="6">
-            <a-card size="small" :loading="governanceLoading">
               <div class="provider-card-label">Top 风险任务</div>
               <div class="provider-card-value">{{ formatCount(governanceSummary?.topRiskTaskCount) }}</div>
               <div class="provider-card-hint">按风险评分排序的高风险任务 Top 5</div>
@@ -1112,19 +1105,18 @@ const governanceInsightTitle = computed(() => {
 
 const governanceInsightDescription = computed(() => {
   if (governanceTopRiskRows.value.length === 0 && governanceEventRows.value.length === 0) {
-    return "Dashboard 会在 paid execution 发生 block、breaker、租约生效或高风险放大时，把任务排进治理总览。";
+    return "Dashboard 会在 paid execution 发生 block、breaker 或高风险放大时，把任务排进治理总览。";
   }
   if (governanceTopRiskRows.value.length === 0) {
     const recent = governanceEventRows.value[0];
     return recent
       ? `${recent.projectName} / ${recent.title} 最近触发了 ${recent.eventKindLabel} 事件。`
-      : "Dashboard 会在 paid execution 发生 block、breaker、租约生效或高风险放大时，把任务排进治理总览。";
+      : "Dashboard 会在 paid execution 发生 block、breaker 或高风险放大时，把任务排进治理总览。";
   }
   const top = governanceTopRiskRows.value[0];
-  const leaseText = `${formatCount(governanceSummary.value?.activeLeaseCount)} 个 active lease 正在生效。`;
   const runtimeText = `当前有 ${formatCount(governanceSummary.value?.runningTaskCount)} 个运行中任务、${formatCount(governanceSummary.value?.activeSessionCount)} 个活动会话，另有 ${formatCount(governanceSummary.value?.pausedTaskCount)} 个暂停任务与 ${formatCount(governanceSummary.value?.failedTaskCount)} 个失败任务。`;
   const detailText = `活跃候选 ${formatCount(governanceSummary.value?.activeCandidateCount)} 个，链式待完成步骤 ${formatCount(governanceSummary.value?.pendingChainStepCount)} 个。`;
-  return `${top.projectName} / ${top.title} 当前风险最高，累计 ${formatCount(top.requestCount)} 次调用、${formatUsd(top.costUsd)}。${leaseText}${runtimeText}${detailText}`;
+  return `${top.projectName} / ${top.title} 当前风险最高，累计 ${formatCount(top.requestCount)} 次调用、${formatUsd(top.costUsd)}。${runtimeText}${detailText}`;
 });
 
 const governanceInsightTone = computed(() => {
@@ -1595,7 +1587,6 @@ const BREAKER_REASON_RULES: GovernanceReasonRule[] = [
 ];
 
 const GUARD_REASON_RULES: GovernanceReasonRule[] = [
-  { keywords: ["lease"], label: "缺少付费租约" },
   { keywords: ["amplification", "parallel", "candidate"], label: "请求放大量超阈值" },
   { keywords: ["budget", "cost"], label: "预算或成本超限" },
 ];

@@ -1134,7 +1134,7 @@ DROP TABLE IF EXISTS tasks;
 | **Phase 0** | 树表、扩展、root 初始化、tree-first 主写切换 | 切换脚本 + 类型定义 | **已完成** |
 | **Phase 1** | tree / branches / links API、BFF tree 数据面接入、`task_sessions` 兼容调用收口 | 路由改造 + BFF 适配 | **已完成** |
 | **Phase 2** | 前端通用消息源切树模型；删除 `/api/tasks*` 兼容读取入口；完成 `tasks` / `sessions` / `task_sessions` 删表收口 | 前端 composable 改造 + 旧路由清理 + migration 收口 | **已完成** |
-| **Phase 3** | `pg_trgm` 搜索、`project_tree_events` 增量能力、完整端到端验证 | 统一收敛到 [pg-event-sourcing-optimization-plan.md](pg-event-sourcing-optimization-plan.md) 作为可选优化独立推进 | **可选 / 未纳入当前主线收尾** |
+| **Phase 3** | `pg_trgm` 搜索、`project_tree_events` 增量能力、完整端到端验证 | 统一收敛到 [archive/task-domain/historical-pg-event-sourcing-optimization-plan.md](archive/task-domain/historical-pg-event-sourcing-optimization-plan.md) 作为可选优化独立推进 | **可选 / 未纳入当前主线收尾** |
 
 ---
 
@@ -1144,8 +1144,8 @@ DROP TABLE IF EXISTS tasks;
 | --- | --- | --- |
 | 1 | ltree path label 最大长度限制（PostgreSQL 默认 256 字符/label） | 评估 UUID→短 hash 映射方案 |
 | 2 | 消息内容是否存全文还是仅存摘要？全文 = 存储膨胀，摘要 = 需要回 runtime 取原文 | 如未来继续推进树侧搜索/快照优化，再单独决策 |
-| 3 | `project_tree_events` 合并频率？实时 vs 批量？ | 已转入 [pg-event-sourcing-optimization-plan.md](pg-event-sourcing-optimization-plan.md) 统一评估 |
+| 3 | `project_tree_events` 合并频率？实时 vs 批量？ | 已转入 [archive/task-domain/historical-pg-event-sourcing-optimization-plan.md](archive/task-domain/historical-pg-event-sourcing-optimization-plan.md) 统一评估 |
 | 4 | 是否需要支持「子树移动」（如将任务从一个项目迁移到另一个） | 当前设计不支持，需确认 |
-| 5 | `pg_trgm` 全文搜索如何与 message snapshot / 项目级搜索接口协同落地？ | 已转入 [pg-event-sourcing-optimization-plan.md](pg-event-sourcing-optimization-plan.md) 统一评估 |
+| 5 | `pg_trgm` 全文搜索如何与 message snapshot / 项目级搜索接口协同落地？ | 已转入 [archive/task-domain/historical-pg-event-sourcing-optimization-plan.md](archive/task-domain/historical-pg-event-sourcing-optimization-plan.md) 统一评估 |
 | 6 | 跨树链接是否需要审批流？（如项目 A 主动链接到项目 B 的节点） | 取决于组织权限模型 |
 | 7 | `bidirectional` 链接的反向查询是否需要额外索引优化？ | 根据实际查询模式评估 |

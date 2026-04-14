@@ -1,9 +1,17 @@
 # TaskDetail Continue 简化方案（接口与页面职责）
 
-> 状态：Draft v1
+> 状态：Future target draft
 > 日期：2026-04-11
 > 作者：GitHub Copilot
 > 关联文档：[task-detail-continue-sequence-diagrams.md](task-detail-continue-sequence-diagrams.md)、[task-detail-message-state-machine-plan.md](task-detail-message-state-machine-plan.md)、[task-detail-realtime-event-contract.md](task-detail-realtime-event-contract.md)、[task-detail-continue-simplified-migration-checklist.md](task-detail-continue-simplified-migration-checklist.md)、[task-detail-continue-target-module-architecture.md](task-detail-continue-target-module-architecture.md)
+
+## 0. 文档定位
+
+这份文档属于 TaskDetail continue 的“未来目标设计”，不是当前实现说明。
+
+1. 当前实现：single / parallel / sequential continue 的真实链路见 [task-detail-continue-sequence-diagrams.md](task-detail-continue-sequence-diagrams.md)，页面读写边界见 [task-detail-display-write-logic.md](task-detail-display-write-logic.md)。
+2. 未来目标：把 continue 收口为主聊天最小闭环，把 compare / workflow 改成独立能力，并让页面只消费稳定 task-domain DTO。
+3. 阅读建议：如果要排查当前 bug，先看当前实现文档；如果要继续做 cutover 或 migration，再从本文和 [task-detail-continue-simplified-migration-checklist.md](task-detail-continue-simplified-migration-checklist.md) 入手。
 
 ## 1. 文档目的
 
@@ -14,7 +22,7 @@
 
 目标不是在现有实现上继续加兼容层，而是把主链路重新压缩成一个容易理解、容易验证、容易维护的最小闭环。
 
-## 2. 现状问题与根因
+## 2. 当前实现问题与根因
 
 当前复杂度主要不是业务需求本身造成的，而是职责边界被揉在了一起。
 

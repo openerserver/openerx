@@ -59,6 +59,24 @@ export type TaskMessagePatchEvent =
       persistedThroughRevision?: number;
     })
   | (TaskMessagePatchEventBase & {
+      kind: "message-reconcile-required";
+      roundId?: string;
+      reason?: string;
+      expectedRevision?: number;
+    })
+  | (TaskMessagePatchEventBase & {
+      kind: "workflow-reconcile-required";
+      reason?: string;
+    })
+  | (TaskMessagePatchEventBase & {
+      kind: "flow-reconcile-required";
+      reason?: string;
+    })
+  | (TaskMessagePatchEventBase & {
+      kind: "task-reconcile-required";
+      reason?: string;
+    })
+  | (TaskMessagePatchEventBase & {
       kind: "user-message";
       messageId?: string;
     })
@@ -368,6 +386,45 @@ export function toTaskMessagePatchEvent(event: RealtimeEvent): TaskMessagePatchE
       snapshotVersion: asFiniteNumber(event.data.snapshotVersion),
       persistedThroughRevision: asFiniteNumber(event.data.persistedThroughRevision),
     };
+  }
+
+  if (eventKind === "task.reconcile.required") {
+    const scope = asString(event.data.scope);
+    if (scope === "messages") {
+      return {
+        ...base,
+        kind: "message-reconcile-required",
+        roundId: asString(event.data.roundId) ?? asString(event.data.taskSessionId),
+        reason: asString(event.data.reason),
+        expectedRevision: asFiniteNumber(event.data.expectedRevision),
+      };
+    }
+
+    if (scope === "workflow") {
+      return {
+        ...base,
+        kind: "workflow-reconcile-required",
+        reason: asString(event.data.reason),
+      };
+    }
+
+    if (scope === "flow") {
+      return {
+        ...base,
+        kind: "flow-reconcile-required",
+        reason: asString(event.data.reason),
+      };
+    }
+
+    if (scope === "task") {
+      return {
+        ...base,
+        kind: "task-reconcile-required",
+        reason: asString(event.data.reason),
+      };
+    }
+
+    return buildIgnoredPatchEvent(event);
   }
 
   if (eventKind === "task.snapshot.updated") {

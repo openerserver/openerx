@@ -42,8 +42,9 @@ describe("useTaskExecutionTrace", () => {
       hookExecutions: [],
       timelineMeta: {
         readSource: "runtime-fallback",
-        cacheState: "complete",
         complete: true,
+        snapshotVersion: 4,
+        persistedThroughRevision: 5,
       },
     });
 

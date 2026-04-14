@@ -574,6 +574,21 @@ async function loadModels() {
   }
 }
 
+function resolveModelOptionValue(model: Record<string, unknown>) {
+  const id = typeof model.id === "string" ? model.id.trim() : "";
+  const provider = typeof model.provider === "string" ? model.provider.trim() : "";
+  const route = typeof model.route === "string" ? model.route.trim() : "";
+  if (route) {
+    return provider === "github-copilot" && route === `${provider}:${id}` ? id || route : route;
+  }
+
+  if (!id) {
+    return "";
+  }
+
+  return provider && provider !== "github-copilot" ? `${provider}:${id}` : id;
+}
+
 const modelOptions = computed(() => {
   return (modelsData.value || [])
     .map((model) => {
@@ -581,9 +596,11 @@ const modelOptions = computed(() => {
       if (!id) return null;
       const name = typeof model.name === "string" ? model.name : "";
       const provider = typeof model.provider === "string" ? model.provider : "";
+      const value = resolveModelOptionValue(model as Record<string, unknown>);
+      if (!value) return null;
       const meta = [name, provider].filter(Boolean).join(" / ");
       return {
-        value: id,
+        value,
         label: meta ? `${id} (${meta})` : id,
       };
     })

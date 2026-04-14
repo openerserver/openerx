@@ -206,6 +206,12 @@ function resetAggregatorState() {
   aggregator.paidExecutionRuntime.clear();
 }
 
+async function flushBackgroundPersistencePipeline(iterations = 12) {
+  for (let index = 0; index < iterations; index += 1) {
+    await Promise.resolve();
+  }
+}
+
 beforeEach(() => {
   cpFetchMock.mockReset();
   createInternalAuthorizationMock.mockReset();
@@ -397,7 +403,7 @@ describe("SSEAggregator pipeline emitters", () => {
     }
   });
 
-  test("message mirror persistence emits persisted and synced ack events", async () => {
+  test("message mirror persistence emits round synced only after snapshot catch-up is proven", async () => {
     findAgentRunBySessionIdMock.mockReturnValue({
       subSessionId: "ses-1",
       taskId: "task-1",
@@ -416,6 +422,47 @@ describe("SSEAggregator pipeline emitters", () => {
             messageId: "task-message-1",
             sessionId: "task-session:task-1:ses-1",
             seq: 42,
+          },
+        };
+      }
+
+      if (
+        (options?.method || "GET") === "GET" &&
+        url ===
+          "/api/tasks/task-1/query/normalized-conversation?sessionId=task-session%3Atask-1%3Ases-1&includeLineage=false"
+      ) {
+        return {
+          ok: true,
+          status: 200,
+          data: {
+            data: [
+              {
+                id: "db-message-1",
+                runtimeMessageId: "msg-1",
+                role: "assistant",
+                messageIndex: 11,
+                textContent: "persist me",
+                createdAt: "2026-03-12T10:05:00.000Z",
+                completedAt: "2026-03-12T10:05:02.000Z",
+                parts: [
+                  {
+                    id: "db-part-1",
+                    partType: "text",
+                    textContent: "persist me",
+                    jsonPayload: {},
+                  },
+                ],
+              },
+            ],
+            meta: {
+              sessionId: "task-session:task-1:ses-1",
+              messageCount: 1,
+              snapshotVersion: 17,
+              persistedThroughRevision: 42,
+              cacheState: "complete",
+              complete: true,
+              itemCount: 1,
+            },
           },
         };
       }
@@ -471,10 +518,7 @@ describe("SSEAggregator pipeline emitters", () => {
         },
       });
 
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      await flushBackgroundPersistencePipeline();
 
       const persistCalls = (
         cpFetchMock.mock.calls as unknown as Array<
@@ -514,8 +558,361 @@ describe("SSEAggregator pipeline emitters", () => {
           roundId: "task-session:task-1:ses-1",
           taskSessionId: "task-session:task-1:ses-1",
           messageId: "task-message-1",
-          snapshotVersion: 42,
+          snapshotVersion: 17,
           persistedThroughRevision: 42,
+        },
+      });
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  test("message mirror persistence emits alias_miss when the runtime session alias cannot map to the canonical round", async () => {
+    findAgentRunBySessionIdMock.mockReturnValue({
+      subSessionId: "branch-alias",
+      taskId: "task-1",
+      projectId: "proj-1",
+      agentRunId: "run-1",
+      status: "running",
+    });
+
+    cpFetchMock.mockImplementation(async (url: string, options?: { method?: string }) => {
+      if ((options?.method || "GET") === "POST" && url === "/api/tasks/task-1/sessions/messages") {
+        return {
+          ok: true,
+          status: 201,
+          data: {
+            ok: true,
+            messageId: "task-message-1",
+            sessionId: "task-session:task-1:session-root",
+            seq: 42,
+          },
+        };
+      }
+
+      if (isTaskDetailGet(url, options)) {
+        return {
+          ok: true,
+          status: 200,
+          data: createTaskDetailRecord(),
+        };
+      }
+
+      return { ok: true, status: 200, data: {} };
+    });
+
+    const emitted: Array<Record<string, unknown>> = [];
+    const unsubscribe = sseAggregator.onEvent((event) => {
+      emitted.push(event as unknown as Record<string, unknown>);
+    });
+
+    try {
+      await sseAggregator.ingestParsedEvent("message.updated", {
+        sessionId: "branch-alias",
+        text: "persist me",
+        info: {
+          id: "msg-1",
+          role: "assistant",
+          agent: "planner",
+          time: {
+            created: "2026-03-12T10:05:00.000Z",
+            completed: "2026-03-12T10:05:02.000Z",
+          },
+        },
+      });
+
+      await flushBackgroundPersistencePipeline();
+
+      expect(emitted.map((event) => event.type)).toEqual([
+        "task.message.updated",
+        "message.updated",
+        "task.reconcile.required",
+      ]);
+      expect(emitted[2]).toMatchObject({
+        taskId: "task-1",
+        projectId: "proj-1",
+        sessionId: "branch-alias",
+        data: {
+          roundId: "task-session:task-1:session-root",
+          scope: "messages",
+          reason: "alias_miss",
+          expectedRevision: 42,
+        },
+      });
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  test("message mirror persistence emits reconcile required when the round snapshot still lags", async () => {
+    findAgentRunBySessionIdMock.mockReturnValue({
+      subSessionId: "ses-1",
+      taskId: "task-1",
+      projectId: "proj-1",
+      agentRunId: "run-1",
+      status: "running",
+    });
+
+    cpFetchMock.mockImplementation(async (url: string, options?: { method?: string }) => {
+      if ((options?.method || "GET") === "POST" && url === "/api/tasks/task-1/sessions/messages") {
+        return {
+          ok: true,
+          status: 201,
+          data: {
+            ok: true,
+            messageId: "task-message-1",
+            sessionId: "task-session:task-1:ses-1",
+            seq: 42,
+          },
+        };
+      }
+
+      if (
+        (options?.method || "GET") === "GET" &&
+        url ===
+          "/api/tasks/task-1/query/normalized-conversation?sessionId=task-session%3Atask-1%3Ases-1&includeLineage=false"
+      ) {
+        return {
+          ok: true,
+          status: 200,
+          data: {
+            data: [
+              {
+                id: "db-message-1",
+                runtimeMessageId: "msg-1",
+                role: "assistant",
+                messageIndex: 40,
+                textContent: "persist me",
+                createdAt: "2026-03-12T10:05:00.000Z",
+                completedAt: "2026-03-12T10:05:02.000Z",
+                parts: [
+                  {
+                    id: "db-part-1",
+                    partType: "text",
+                    textContent: "persist me",
+                    jsonPayload: {},
+                  },
+                ],
+              },
+            ],
+            meta: {
+              sessionId: "task-session:task-1:ses-1",
+              messageCount: 1,
+              cacheState: "partial",
+              complete: false,
+              itemCount: 1,
+            },
+          },
+        };
+      }
+
+      if (isTaskDetailGet(url, options)) {
+        return {
+          ok: true,
+          status: 200,
+          data: createTaskDetailRecord(),
+        };
+      }
+
+      if ((options?.method || "GET") === "GET" && url === "/api/tasks/task-1/sessions") {
+        return {
+          ok: true,
+          status: 200,
+          data: {
+            data: [
+              {
+                id: "task-session:task-1:ses-1",
+                runtimeSessionId: "ses-1",
+                isActive: true,
+                archivedAt: null,
+              },
+            ],
+            meta: {
+              currentSessionId: "task-session:task-1:ses-1",
+            },
+          },
+        };
+      }
+
+      return { ok: true, status: 200, data: {} };
+    });
+
+    const emitted: Array<Record<string, unknown>> = [];
+    const unsubscribe = sseAggregator.onEvent((event) => {
+      emitted.push(event as unknown as Record<string, unknown>);
+    });
+
+    try {
+      await sseAggregator.ingestParsedEvent("message.updated", {
+        sessionId: "ses-1",
+        text: "persist me",
+        info: {
+          id: "msg-1",
+          role: "assistant",
+          agent: "planner",
+          time: {
+            created: "2026-03-12T10:05:00.000Z",
+            completed: "2026-03-12T10:05:02.000Z",
+          },
+        },
+      });
+
+      await flushBackgroundPersistencePipeline();
+
+      expect(emitted.map((event) => event.type)).toEqual([
+        "task.message.updated",
+        "message.updated",
+        "task.message.persisted",
+        "task.reconcile.required",
+      ]);
+      expect(emitted[3]).toMatchObject({
+        taskId: "task-1",
+        projectId: "proj-1",
+        sessionId: "ses-1",
+        data: {
+          roundId: "task-session:task-1:ses-1",
+          scope: "messages",
+          reason: "snapshot_lag",
+          expectedRevision: 42,
+        },
+      });
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  test("message mirror persistence emits sequence_gap when the canonical round head stays behind the acked revision", async () => {
+    findAgentRunBySessionIdMock.mockReturnValue({
+      subSessionId: "ses-1",
+      taskId: "task-1",
+      projectId: "proj-1",
+      agentRunId: "run-1",
+      status: "running",
+    });
+
+    cpFetchMock.mockImplementation(async (url: string, options?: { method?: string }) => {
+      if ((options?.method || "GET") === "POST" && url === "/api/tasks/task-1/sessions/messages") {
+        return {
+          ok: true,
+          status: 201,
+          data: {
+            ok: true,
+            messageId: "task-message-1",
+            sessionId: "task-session:task-1:ses-1",
+            seq: 42,
+          },
+        };
+      }
+
+      if (
+        (options?.method || "GET") === "GET" &&
+        url ===
+          "/api/tasks/task-1/query/normalized-conversation?sessionId=task-session%3Atask-1%3Ases-1&includeLineage=false"
+      ) {
+        return {
+          ok: true,
+          status: 200,
+          data: {
+            data: [
+              {
+                id: "db-message-1",
+                runtimeMessageId: "msg-1",
+                role: "assistant",
+                messageIndex: 40,
+                textContent: "persist me",
+                createdAt: "2026-03-12T10:05:00.000Z",
+                completedAt: "2026-03-12T10:05:02.000Z",
+                parts: [
+                  {
+                    id: "db-part-1",
+                    partType: "text",
+                    textContent: "persist me",
+                    jsonPayload: {},
+                  },
+                ],
+              },
+            ],
+            meta: {
+              sessionId: "task-session:task-1:ses-1",
+              messageCount: 1,
+              snapshotVersion: 61,
+              persistedThroughRevision: 40,
+              cacheState: "complete",
+              complete: true,
+              itemCount: 1,
+            },
+          },
+        };
+      }
+
+      if (isTaskDetailGet(url, options)) {
+        return {
+          ok: true,
+          status: 200,
+          data: createTaskDetailRecord(),
+        };
+      }
+
+      if ((options?.method || "GET") === "GET" && url === "/api/tasks/task-1/sessions") {
+        return {
+          ok: true,
+          status: 200,
+          data: {
+            data: [
+              {
+                id: "task-session:task-1:ses-1",
+                runtimeSessionId: "ses-1",
+                isActive: true,
+                archivedAt: null,
+              },
+            ],
+            meta: {
+              currentSessionId: "task-session:task-1:ses-1",
+            },
+          },
+        };
+      }
+
+      return { ok: true, status: 200, data: {} };
+    });
+
+    const emitted: Array<Record<string, unknown>> = [];
+    const unsubscribe = sseAggregator.onEvent((event) => {
+      emitted.push(event as unknown as Record<string, unknown>);
+    });
+
+    try {
+      await sseAggregator.ingestParsedEvent("message.updated", {
+        sessionId: "ses-1",
+        text: "persist me",
+        info: {
+          id: "msg-1",
+          role: "assistant",
+          agent: "planner",
+          time: {
+            created: "2026-03-12T10:05:00.000Z",
+            completed: "2026-03-12T10:05:02.000Z",
+          },
+        },
+      });
+
+      await flushBackgroundPersistencePipeline();
+
+      expect(emitted.map((event) => event.type)).toEqual([
+        "task.message.updated",
+        "message.updated",
+        "task.message.persisted",
+        "task.reconcile.required",
+      ]);
+      expect(emitted[3]).toMatchObject({
+        taskId: "task-1",
+        projectId: "proj-1",
+        sessionId: "ses-1",
+        data: {
+          roundId: "task-session:task-1:ses-1",
+          scope: "messages",
+          reason: "sequence_gap",
+          expectedRevision: 42,
         },
       });
     } finally {
@@ -1456,6 +1853,105 @@ describe("SSEAggregator pipeline emitters", () => {
         expect.objectContaining({
           method: "PATCH",
           body: expect.objectContaining({ status: "completed" }),
+        }),
+      );
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  test("single-task failures emit task.failed instead of task.completed", async () => {
+    findAgentRunBySessionIdMock.mockReturnValue({
+      subSessionId: "ses-1",
+      taskId: "task-1",
+      projectId: "proj-1",
+      agentRunId: "run-1",
+      status: "running",
+    });
+    getSessionMessagesMock.mockResolvedValue({
+      ok: true,
+      data: [
+        {
+          info: {
+            role: "assistant",
+            time: { completed: Date.parse("2026-03-12T10:05:00.000Z") },
+          },
+          parts: [{ type: "text", text: "partial answer" }],
+        },
+      ],
+    });
+    buildPipelineStageUpdatedEventsMock.mockResolvedValue([
+      {
+        id: "pipeline-task-failed-1",
+        type: "pipeline.stage.updated",
+        ts: "2026-03-12T10:05:01.000Z",
+        taskId: "task-1",
+        sessionId: "ses-1",
+        projectId: "proj-1",
+        agentRunId: "run-1",
+        data: {
+          patch: { type: "upsert", stage: { id: "execution-1" } },
+          summary: { totalStages: 1, completedStages: 0 },
+          reason: "task.failed",
+          status: "failed",
+          branchName: "main",
+        },
+      },
+    ]);
+
+    const emitted: Array<Record<string, unknown>> = [];
+    const unsubscribe = sseAggregator.onEvent((event) => {
+      emitted.push(event as unknown as Record<string, unknown>);
+    });
+
+    try {
+      await (
+        sseAggregator as unknown as {
+          maybeFinalizeFailure: (event: Record<string, unknown>) => Promise<void>;
+        }
+      ).maybeFinalizeFailure({
+        id: "evt-session-error-1",
+        type: "session.error",
+        ts: "2026-03-12T10:05:00.000Z",
+        sessionId: "ses-1",
+        taskId: "task-1",
+        projectId: "proj-1",
+        agentRunId: "run-1",
+        data: {
+          error: "Provider overloaded",
+        },
+      });
+
+      expect(emitted).toContainEqual(
+        expect.objectContaining({
+          type: "task.failed",
+          taskId: "task-1",
+          sessionId: "ses-1",
+          data: expect.objectContaining({
+            status: "failed",
+            error: "Provider overloaded",
+            sourceEvent: "session.error",
+          }),
+        }),
+      );
+      expect(emitted.some((event) => event.type === "task.completed")).toBe(false);
+      expect(buildPipelineStageUpdatedEventsMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          taskId: "task-1",
+          sessionId: "ses-1",
+          projectId: "proj-1",
+          agentRunId: "run-1",
+          reason: "task.failed",
+        }),
+      );
+      expect(cpFetchMock).toHaveBeenCalledWith(
+        "/api/tasks/task-1",
+        expect.objectContaining({
+          method: "PATCH",
+          body: expect.objectContaining({
+            status: "failed",
+            result: "Provider overloaded",
+          }),
         }),
       );
     } finally {

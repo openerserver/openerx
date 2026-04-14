@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { createEmptyLiveAssistantState, type TaskConversationMessageItem } from "./message-normalize";
-import { buildTaskConversationDisplayMessages } from "./task-conversation-display";
+import {
+  buildTaskConversationDisplayMessages,
+  buildTaskConversationRenderState,
+} from "./task-conversation-display";
 
 function createAssistantItem(overrides?: Partial<TaskConversationMessageItem>): TaskConversationMessageItem {
   return {
@@ -85,6 +88,62 @@ describe("task conversation display", () => {
       key: "assistant-2",
       text: "streaming reply",
       isStreaming: true,
+    });
+  });
+
+  it("keeps a single assistant record while authority moves from realtime to persisted", () => {
+    const liveState = createEmptyLiveAssistantState();
+    liveState.orderedAssistantMessageIds = ["assistant-1"];
+    liveState.textById.set("assistant-1", "live reply extended");
+    liveState.incompleteIds.add("assistant-1");
+
+    const realtimeState = buildTaskConversationRenderState({
+      persistedItems: [createAssistantItem()],
+      workflowItems: [],
+      liveAssistantState: liveState,
+      authority: "realtime",
+      pendingAssistantDraft: null,
+      activeSessionId: "session-1",
+    });
+
+    expect(realtimeState.orderedIds).toEqual(["assistant-1"]);
+    expect(realtimeState.recordsById["assistant-1"]).toMatchObject({
+      key: "assistant-1",
+      kind: "message",
+      authority: "realtime",
+      renderStatus: "streaming",
+      item: {
+        key: "assistant-1",
+        text: "live reply extended",
+        isStreaming: true,
+      },
+    });
+
+    const persistedState = buildTaskConversationRenderState({
+      persistedItems: [
+        createAssistantItem({
+          key: "assistant-1",
+          text: "persisted reply",
+          createdAt: "2026-04-08T03:18:19.218Z",
+        }),
+      ],
+      workflowItems: [],
+      liveAssistantState: createEmptyLiveAssistantState(),
+      authority: "persisted",
+      pendingAssistantDraft: null,
+      activeSessionId: "session-1",
+    });
+
+    expect(persistedState.orderedIds).toEqual(["assistant-1"]);
+    expect(persistedState.recordsById["assistant-1"]).toMatchObject({
+      key: "assistant-1",
+      kind: "message",
+      authority: "persisted",
+      renderStatus: "persisted",
+      item: {
+        key: "assistant-1",
+        text: "persisted reply",
+      },
     });
   });
 });

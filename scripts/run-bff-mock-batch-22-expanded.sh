@@ -28,7 +28,6 @@ files=(
   "tests/web-ui-bff/chat-settings-assistant-engine.test.ts"
   "tests/web-ui-bff/task-finalize.test.ts"
   "tests/web-ui-bff/workflow-stage-execution.test.ts"
-  "tests/web-ui-bff/project-paid-execution-preflight-route.test.ts"
   "tests/web-ui-bff/project-runtime-usage-ledger-routes.test.ts"
   "tests/web-ui-bff/runtime-usage-ledger-project-e2e.test.ts"
   "tests/web-ui-bff/realtime-pipeline-events.test.ts"

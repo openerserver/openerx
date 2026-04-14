@@ -224,4 +224,28 @@ describe("task detail parallel runtime visibility", () => {
 
     expect(nextSessionId).toBe("parent-1");
   });
+
+  it("keeps task-wide history unscoped by default outside parallel runs", () => {
+    const nextSessionId = resolveNextSelectedSessionId({
+      selectedSessionId: undefined,
+      selectedSessionNode: null,
+      flatNodes: [
+        {
+          id: "node-parent",
+          runtimeSessionId: "parent-1",
+          isActive: true,
+        },
+      ],
+      task: {
+        id: "task-1",
+        sessionId: "parent-1",
+        status: "completed",
+      },
+      currentParallelRun: null,
+      adoptedCandidateSessionId: undefined,
+      isCurrentParallelRunPendingAdoption: false,
+    });
+
+    expect(nextSessionId).toBeUndefined();
+  });
 });

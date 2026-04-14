@@ -26,7 +26,7 @@ describe("buildSessionMessagesFromExecutionTrace", () => {
           },
         ],
         timelineMeta: {
-          cacheState: "complete",
+          complete: true,
         },
       },
       { includeLineage: true },
@@ -66,7 +66,7 @@ describe("buildSessionMessagesFromExecutionTrace", () => {
           },
         ],
         timelineMeta: {
-          cacheState: "complete",
+          complete: true,
         },
       },
       { includeLineage: true },
@@ -92,7 +92,7 @@ describe("buildSessionMessagesFromExecutionTrace", () => {
           },
         ],
         timelineMeta: {
-          cacheState: "complete",
+          complete: true,
         },
         snapshot: {
           lastActivityAt: "2026-03-25T09:47:35.022Z",

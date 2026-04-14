@@ -63,7 +63,9 @@
                       <a-space wrap style="margin-top: 8px">
                         <a-tag color="blue">{{ item.taskTitle }}</a-tag>
                         <a-tag>{{ formatStageLabel(item.currentStageKey) }}</a-tag>
-                        <a-tag :color="workflowStatusColor(item.workflowStatus)">{{ item.workflowStatus }}</a-tag>
+                        <a-tag :color="workflowStatusDisplay(item.workflowStatus).tagColor">
+                          {{ workflowStatusDisplay(item.workflowStatus).label }}
+                        </a-tag>
                         <a-tag v-if="item.decisionType === 'select-template' && formatTemplateDecisionSource(item.metadata)" color="cyan">
                           {{ formatTemplateDecisionSource(item.metadata) }}
                         </a-tag>
@@ -118,13 +120,15 @@
               </template>
               <template v-else-if="column.key === 'stage'">
                 <a-space direction="vertical" :size="2">
-                  <a-tag>{{ record.currentStageLabel }}</a-tag>
-                  <a-typography-text type="secondary">{{ record.currentStageStatus }}</a-typography-text>
+                  <a-tag>{{ currentStageLabel(record.currentStageKey, record.currentStageLabel) }}</a-tag>
+                  <a-typography-text type="secondary">{{ stageStatusLabel(record.currentStageStatus) }}</a-typography-text>
                 </a-space>
               </template>
               <template v-else-if="column.key === 'risk'">
                 <a-space wrap>
-                  <a-tag :color="workflowStatusColor(record.workflowStatus)">{{ record.workflowStatus }}</a-tag>
+                  <a-tag :color="workflowStatusDisplay(record.workflowStatus).tagColor">
+                    {{ workflowStatusDisplay(record.workflowStatus).label }}
+                  </a-tag>
                   <a-tag v-if="record.openEscalationCount > 0" color="orange">升级 {{ record.openEscalationCount }}</a-tag>
                   <a-tag v-if="record.managementDecisionCount > 0" color="blue">决策 {{ record.managementDecisionCount }}</a-tag>
                 </a-space>
@@ -188,6 +192,10 @@ import {
   getProjectManagementOperationsView,
   toApiError,
 } from "../lib/api";
+import {
+  resolveWorkflowStageLabel,
+  resolveWorkflowStatusDisplay,
+} from "../lib/task-workflow-display-policy";
 
 const route = useRoute();
 const router = useRouter();
@@ -206,36 +214,23 @@ const attentionColumns = [
 ];
 
 function formatStageLabel(stageKey?: string | null) {
-  switch (stageKey) {
-    case "intake":
-      return "需求进入";
-    case "clarify":
-      return "需求澄清";
-    case "design":
-      return "方案设计";
-    case "plan":
-      return "任务拆解";
-    case "implement":
-      return "实现开发";
-    case "verify":
-      return "集成验证";
-    case "release":
-      return "发布执行";
-    case "post-release":
-      return "发布观察";
-    case "retrospective":
-      return "复盘沉淀";
-    default:
-      return stageKey || "未记录阶段";
-  }
+  return resolveWorkflowStageLabel(stageKey, [], "未记录阶段");
 }
 
-function workflowStatusColor(status?: string | null) {
-  if (status === "blocked") return "red";
-  if (status === "waiting-approval") return "orange";
-  if (status === "completed") return "green";
-  if (status === "failed") return "volcano";
-  return "blue";
+function workflowStatusDisplay(status?: string | null) {
+  return resolveWorkflowStatusDisplay(status, "workflow", "未记录");
+}
+
+function stageStatusLabel(status?: string | null) {
+  return resolveWorkflowStatusDisplay(status, "stage", "未记录").label;
+}
+
+function currentStageLabel(stageKey?: string | null, stageLabel?: string | null) {
+  return resolveWorkflowStageLabel(
+    stageKey,
+    stageLabel ? [{ stageKey: stageKey || "", stageLabel }] : [],
+    "未记录阶段",
+  );
 }
 
 function formatTime(value?: string | null) {

@@ -6,7 +6,7 @@ import { db } from "../../db";
 import { developerChangeRequests } from "../../db/schema";
 import { type AppEnv, authMiddleware } from "../../middleware/auth";
 import { requireRole } from "../../middleware/rbac";
-import { ensureDeveloperChangeRequestsAvailable } from "../task-workflows/legacy-role-workflow-storage";
+import { ensureDeveloperChangeRequestsAvailability } from "../task-workflows/legacy-role-workflow-storage";
 
 export const developerChangeRequestRoutes = new Hono<AppEnv>();
 
@@ -37,8 +37,8 @@ function requireTaskId(c: { req: { param: (name: string) => string | undefined }
 
 developerChangeRequestRoutes.get("/", async (c) => {
   const taskId = requireTaskId(c);
-  const task = await ensureDeveloperChangeRequestsAvailable(taskId);
-  if (!task) return c.json({ error: "Task not found" }, 404);
+  const availability = await ensureDeveloperChangeRequestsAvailability(taskId);
+  if (!availability.task) return c.json({ error: "Task not found" }, 404);
 
   const rows = await db
     .select()
@@ -65,6 +65,9 @@ developerChangeRequestRoutes.get("/", async (c) => {
       updatedAt: row.updatedAt,
       resolvedAt: row.resolvedAt,
     })),
+    meta: {
+      workflowMigrated: availability.migrated,
+    },
   });
 });
 

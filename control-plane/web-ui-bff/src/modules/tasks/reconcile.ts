@@ -45,6 +45,13 @@ export interface RunningTaskReconcileSummary {
   recovered: number;
   skipped: number;
   runtimeAvailable: boolean;
+  affectedTasks: RunningTaskReconcileAffectedTask[];
+}
+
+export interface RunningTaskReconcileAffectedTask {
+  taskId: string;
+  projectId: string;
+  outcome: "completed" | "failed";
 }
 
 export interface TaskRuntimeMessageRepairSessionSummary {
@@ -402,6 +409,7 @@ function emptyReconcileSummary(runtimeAvailable = false): RunningTaskReconcileSu
     recovered: 0,
     skipped: 0,
     runtimeAvailable,
+    affectedTasks: [],
   };
 }
 
@@ -632,11 +640,23 @@ async function reconcileCompletedTaskWithActiveSession(
   return updated ? "completed" : "skipped";
 }
 
-function summarizeOutcome(summary: RunningTaskReconcileSummary, outcome: ReconcileTaskOutcome) {
+function summarizeOutcome(
+  summary: RunningTaskReconcileSummary,
+  task: RunningTaskRecord,
+  outcome: ReconcileTaskOutcome,
+) {
   if (outcome === "completed") summary.completed += 1;
   if (outcome === "failed") summary.failed += 1;
   if (outcome === "recovered") summary.recovered += 1;
   if (outcome === "skipped") summary.skipped += 1;
+
+  if (outcome === "completed" || outcome === "failed") {
+    summary.affectedTasks.push({
+      taskId: task.id,
+      projectId: task.projectId,
+      outcome,
+    });
+  }
 }
 
 async function failTaskWithReason(
@@ -825,12 +845,12 @@ export async function reconcileRunningTasksOnStartup(): Promise<RunningTaskRecon
 
   for (const task of runningOnlyTasks) {
     const outcome = await reconcileSingleRunningTask(task, context);
-    summarizeOutcome(summary, outcome);
+    summarizeOutcome(summary, task, outcome);
   }
 
   for (const task of historicalTasks) {
     const outcome = await reconcileHistoricallyInconsistentTask(task, context);
-    summarizeOutcome(summary, outcome);
+    summarizeOutcome(summary, task, outcome);
   }
 
   console.log(

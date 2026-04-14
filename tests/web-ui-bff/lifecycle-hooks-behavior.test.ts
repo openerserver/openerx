@@ -9,7 +9,6 @@ import { createSseAggregatorModuleMock } from "./sse-aggregator-mock";
 
 mock.restore();
 
-const originalAllowPaidExecution = process.env.ALLOW_PAID_MODEL_EXECUTION;
 const originalLowCostExecutionModel = process.env.LOW_COST_EXECUTION_MODEL;
 
 async function loadLifecycleHooksModule() {
@@ -53,6 +52,7 @@ const resumeAgentMock = mock(async () => ({ ok: true }));
 const registerParallelTaskMock = mock(() => undefined);
 const authHeaderMock = mock(() => "Bearer test");
 const readDefaultExecutionModelMock = mock(() => undefined as string | undefined);
+const readOpencodeJsonMock = mock(() => ({ models: { list: [] }, provider: {} }));
 const resolveModelRouteMock = mock((raw: string) => {
   const value = raw.trim();
   const colonIndex = value.indexOf(":");
@@ -117,6 +117,7 @@ const broadcastMock = mock(() => undefined);
 const patchAgentRunRecordMock = mock(async () => undefined);
 const recordAgentAuditMock = mock(async () => undefined);
 const recordPaidExecutionRuntimeUsageMock = mock(async () => ({ tripped: false }));
+const releasePaidExecutionReservationMock = mock(async () => ({ ok: true, releasedUsd: 0 }));
 const buildPipelineStageUpdatedEventsMock = mock(async () => [] as Array<Record<string, unknown>>);
 const buildExecutionContextMock = mock(() => "");
 const ensureAgentRunForSessionMock = mock(() => "run-test");
@@ -184,6 +185,7 @@ mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () =>
 mock.module("../../control-plane/web-ui-bff/src/lib/model-config", () => ({
   formatModelRoute: formatModelRouteMock,
   readDefaultExecutionModel: readDefaultExecutionModelMock,
+  readOpencodeJson: readOpencodeJsonMock,
   resolveModelRoute: resolveModelRouteMock,
   validateModelProvider: validateModelProviderMock,
   diagnoseModelReadiness: diagnoseModelReadinessMock,
@@ -225,6 +227,7 @@ mock.module("../../control-plane/web-ui-bff/src/modules/agent-control/run-persis
 
 mock.module("../../control-plane/web-ui-bff/src/lib/paid-execution-runtime", () => ({
   recordPaidExecutionRuntimeUsage: recordPaidExecutionRuntimeUsageMock,
+  releasePaidExecutionReservation: releasePaidExecutionReservationMock,
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/modules/realtime/pipeline-events", () => ({
@@ -277,6 +280,7 @@ beforeEach(() => {
   registerParallelTaskMock.mockReset();
   authHeaderMock.mockReset();
   readDefaultExecutionModelMock.mockReset();
+  readOpencodeJsonMock.mockReset();
   formatModelRouteMock.mockReset();
   resolveModelRouteMock.mockClear();
   validateModelProviderMock.mockReset();
@@ -288,6 +292,7 @@ beforeEach(() => {
   patchAgentRunRecordMock.mockReset();
   recordAgentAuditMock.mockReset();
   recordPaidExecutionRuntimeUsageMock.mockReset();
+  releasePaidExecutionReservationMock.mockReset();
   buildPipelineStageUpdatedEventsMock.mockReset();
   buildExecutionContextMock.mockReset();
   ensureAgentRunForSessionMock.mockReset();
@@ -344,6 +349,7 @@ beforeEach(() => {
   forkSessionMock.mockResolvedValue({ ok: true, sessionId: "session-follow-up" });
   authHeaderMock.mockReturnValue("Bearer test");
   readDefaultExecutionModelMock.mockReturnValue(undefined);
+  readOpencodeJsonMock.mockReturnValue({ models: { list: [] }, provider: {} });
   formatModelRouteMock.mockImplementation(
     (resolvedModel: { providerId: string; modelId: string }) =>
       `${resolvedModel.providerId}:${resolvedModel.modelId}`,
@@ -355,17 +361,14 @@ beforeEach(() => {
     combinedResultText: undefined,
     rewrittenPrompt: undefined,
   });
+  releasePaidExecutionReservationMock.mockResolvedValue({ ok: true, releasedUsd: 0 });
   cpFetchMock.mockImplementation(
     async (url: string, options?: { method?: string; body?: unknown }) => {
       if (!options?.method) {
-        if (url.includes("/paid-execution-lease")) {
+        if (url.includes("/fund")) {
           return {
             ok: true,
-            data: {
-              projectId: "proj-1",
-              activeLease: null,
-              now: "2026-03-10T00:00:00.000Z",
-            },
+            data: buildProjectFundSnapshot(20),
           };
         }
 
@@ -387,12 +390,6 @@ beforeEach(() => {
   recordAgentAuditMock.mockResolvedValue(undefined);
   recordPaidExecutionRuntimeUsageMock.mockResolvedValue({ tripped: false });
   buildPipelineStageUpdatedEventsMock.mockResolvedValue([]);
-
-  if (originalAllowPaidExecution === undefined) {
-    process.env.ALLOW_PAID_MODEL_EXECUTION = undefined;
-  } else {
-    process.env.ALLOW_PAID_MODEL_EXECUTION = originalAllowPaidExecution;
-  }
 
   if (originalLowCostExecutionModel === undefined) {
     process.env.LOW_COST_EXECUTION_MODEL = undefined;
@@ -420,18 +417,13 @@ afterEach(() => {
   patchAgentRunRecordMock.mockReset();
   recordAgentAuditMock.mockReset();
   recordPaidExecutionRuntimeUsageMock.mockReset();
+  releasePaidExecutionReservationMock.mockReset();
   buildPipelineStageUpdatedEventsMock.mockReset();
   buildExecutionContextMock.mockReset();
   ensureAgentRunForSessionMock.mockReset();
   extractAssistantResultFromMessagesMock.mockReset();
   recoverAgentRunMock.mockReset();
   updateAgentRunStatusMock.mockReset();
-
-  if (originalAllowPaidExecution === undefined) {
-    process.env.ALLOW_PAID_MODEL_EXECUTION = undefined;
-  } else {
-    process.env.ALLOW_PAID_MODEL_EXECUTION = originalAllowPaidExecution;
-  }
 
   if (originalLowCostExecutionModel === undefined) {
     process.env.LOW_COST_EXECUTION_MODEL = undefined;
@@ -449,6 +441,22 @@ function getPatchCalls() {
     (call) =>
       call[1] && typeof call[1] === "object" && (call[1] as { method?: string }).method === "PATCH",
   );
+}
+
+function buildProjectFundSnapshot(available: number) {
+  return {
+    id: "fund-1",
+    projectId: "proj-1",
+    currency: "USD",
+    totalGranted: available,
+    reserved: 0,
+    consumed: 0,
+    available,
+    status: available > 0 ? "active" : "depleted",
+    createdAt: "2026-03-10T00:00:00.000Z",
+    updatedAt: "2026-03-10T00:00:00.000Z",
+    hasFund: available > 0,
+  };
 }
 
 describe("executeLifecycleHooks behavior", () => {
@@ -690,8 +698,6 @@ describe("executeLifecycleHooks behavior", () => {
       selectedModel: undefined,
     };
 
-    process.env.ALLOW_PAID_MODEL_EXECUTION = "1";
-
     const { taskRoutes } = await loadTaskRoutesModule();
 
     readDefaultExecutionModelMock.mockReturnValueOnce("github-copilot:gemini-3-flash-preview");
@@ -722,7 +728,67 @@ describe("executeLifecycleHooks behavior", () => {
     });
   });
 
-  test("preflight endpoint returns a structured deny estimate for paid models without the explicit gate", async () => {
+  test("execute route ignores stale invalid task and project model routes", async () => {
+    currentStrategy = buildStrategy({ hooks: [] });
+    currentTask = {
+      ...currentTask,
+      title: "Invalid persisted model task",
+      prompt: "Run with a valid fallback model.",
+      selectedModel: "anthropic/claude-sonnet-4-20250514",
+    };
+
+    process.env.ALLOW_PAID_MODEL_EXECUTION = "1";
+
+    readDefaultExecutionModelMock.mockReturnValueOnce("github-copilot:gemini-3-flash-preview");
+    readOpencodeJsonMock.mockReturnValue({
+      provider: {
+        anthropic: { api: "anthropic" },
+        "github-copilot": { api: "github-copilot" },
+      },
+      models: {
+        list: [{ id: "gemini-3-flash-preview", provider: "github-copilot" }],
+      },
+      agents: {
+        defaults: {
+          model: "github-copilot:gemini-3-flash-preview",
+        },
+      },
+    });
+    cpFetchMock.mockImplementation(async (url: string, options?: { method?: string }) => {
+      if (!options?.method) {
+        if (url.includes("/fund")) {
+          return { ok: true, data: buildProjectFundSnapshot(20) };
+        }
+
+        if (url.includes("/api/projects/")) {
+          return {
+            ok: true,
+            data: { settings: { defaultModel: "anthropic/claude-sonnet-4-20250514" } },
+          };
+        }
+
+        return { ok: true, data: currentTask };
+      }
+
+      return { ok: true, data: { body: options?.body } };
+    });
+
+    const { taskRoutes } = await loadTaskRoutesModule();
+    const response = await taskRoutes.request("http://localhost/task-1/execute", {
+      method: "POST",
+      headers: { Authorization: "Bearer test" },
+    });
+
+    expect(response.status).toBe(200);
+    expect(createSessionMock.mock.calls[0]?.[3]).toMatchObject({
+      model: {
+        providerId: "github-copilot",
+        modelId: "gemini-3-flash-preview",
+      },
+    });
+  });
+
+  test("preflight endpoint returns a structured downgrade recommendation when project fund is depleted", async () => {
     currentStrategy = buildStrategy({ hooks: [] });
     currentTask = {
       ...currentTask,
@@ -730,7 +796,18 @@ describe("executeLifecycleHooks behavior", () => {
       prompt: "Ship the full feature with GPT-5.4.",
       selectedModel: "github-copilot:gpt-5.4",
     };
-    process.env.ALLOW_PAID_MODEL_EXECUTION = undefined;
+    cpFetchMock.mockImplementation(async (url: string, options?: { method?: string; body?: unknown }) => {
+      if (!options?.method) {
+        if (url.includes("/fund")) {
+          return { ok: true, data: buildProjectFundSnapshot(0) };
+        }
+        if (url.includes("/api/projects/")) {
+          return { ok: true, data: { settings: {} } };
+        }
+        return { ok: true, data: currentTask };
+      }
+      return { ok: true, data: { body: options.body } };
+    });
 
     const { taskRoutes } = await loadTaskRoutesModule();
     const response = await taskRoutes.request("http://localhost/task-1/execute/preflight", {
@@ -744,23 +821,19 @@ describe("executeLifecycleHooks behavior", () => {
       taskId: "task-1",
       allowed: false,
       effectiveModel: "github-copilot:gpt-5.4",
-      requirements: {
-        allowPaidExecution: true,
-        leaseRequired: true,
-        hasAllowPaidExecution: false,
-        hasLease: false,
-      },
       preflight: {
         providerId: "github-copilot",
         modelId: "gpt-5.4",
-        guardDecision: "deny",
+        guardDecision: "allow-with-downgrade",
       },
     });
-    expect(body.preflight.guardReason).toContain("ALLOW_PAID_MODEL_EXECUTION=1");
+    expect(body).not.toHaveProperty("requirements");
+    expect(body).not.toHaveProperty("activeLease");
+    expect(body.preflight.guardReason).toContain("project fund available is $0");
     expect(createSessionMock).not.toHaveBeenCalled();
   });
 
-  test("execute route rejects paid execution before creating a runtime session when the explicit gate is missing", async () => {
+  test("execute route blocks paid execution before creating a runtime session when project fund is depleted", async () => {
     currentStrategy = buildStrategy({ hooks: [] });
     currentTask = {
       ...currentTask,
@@ -768,7 +841,18 @@ describe("executeLifecycleHooks behavior", () => {
       prompt: "Ship the full feature with GPT-5.4.",
       selectedModel: "github-copilot:gpt-5.4",
     };
-    process.env.ALLOW_PAID_MODEL_EXECUTION = undefined;
+    cpFetchMock.mockImplementation(async (url: string, options?: { method?: string; body?: unknown }) => {
+      if (!options?.method) {
+        if (url.includes("/fund")) {
+          return { ok: true, data: buildProjectFundSnapshot(0) };
+        }
+        if (url.includes("/api/projects/")) {
+          return { ok: true, data: { settings: {} } };
+        }
+        return { ok: true, data: currentTask };
+      }
+      return { ok: true, data: { body: options.body } };
+    });
 
     const { taskRoutes } = await loadTaskRoutesModule();
     const response = await taskRoutes.request("http://localhost/task-1/execute", {
@@ -777,19 +861,19 @@ describe("executeLifecycleHooks behavior", () => {
     });
     const body = await response.json();
 
-    expect(response.status).toBe(403);
+    expect(response.status).toBe(409);
     expect(body).toMatchObject({
-      code: "PAID_EXECUTION_GATE_REQUIRED",
+      code: "PAID_EXECUTION_FUND_DOWNGRADE_SUGGESTED",
       taskId: "task-1",
       allowed: false,
       effectiveModel: "github-copilot:gpt-5.4",
-      guardDecision: "deny",
+      guardDecision: "allow-with-downgrade",
     });
-    expect(body.guardReason).toContain("ALLOW_PAID_MODEL_EXECUTION=1");
+    expect(body.guardReason).toContain("project fund available is $0");
     expect(createSessionMock).not.toHaveBeenCalled();
   });
 
-  test("execute route requires a lease for premium paid models even after the explicit gate is enabled", async () => {
+  test("execute route allows paid execution once the project wallet has enough fund", async () => {
     currentStrategy = buildStrategy({ hooks: [] });
     currentTask = {
       ...currentTask,
@@ -797,33 +881,29 @@ describe("executeLifecycleHooks behavior", () => {
       prompt: "Ship the full feature with GPT-5.4.",
       selectedModel: "github-copilot:gpt-5.4",
     };
-    process.env.ALLOW_PAID_MODEL_EXECUTION = "1";
+    cpFetchMock.mockImplementation(async (url: string, options?: { method?: string; body?: unknown }) => {
+      if (!options?.method) {
+        if (url.includes("/fund")) {
+          return { ok: true, data: buildProjectFundSnapshot(20) };
+        }
+        if (url.includes("/api/projects/")) {
+          return { ok: true, data: { settings: {} } };
+        }
+        return { ok: true, data: currentTask };
+      }
+      return { ok: true, data: { body: options.body } };
+    });
 
     const { taskRoutes } = await loadTaskRoutesModule();
     const response = await taskRoutes.request("http://localhost/task-1/execute", {
       method: "POST",
       headers: { Authorization: "Bearer test" },
     });
-    const body = await response.json();
-
-    expect(response.status).toBe(403);
-    expect(body).toMatchObject({
-      code: "PAID_EXECUTION_LEASE_REQUIRED",
-      taskId: "task-1",
-      allowed: false,
-      guardDecision: "require-approval",
-      requirements: {
-        allowPaidExecution: true,
-        leaseRequired: true,
-        hasAllowPaidExecution: true,
-        hasLease: false,
-      },
-    });
-    expect(body.guardReason).toContain("active paid execution lease");
-    expect(createSessionMock).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    expect(createSessionMock).toHaveBeenCalledTimes(1);
   });
 
-  test("continue route rejects paid execution before sending follow-up prompts when the explicit gate is missing", async () => {
+  test("continue route blocks paid execution before sending follow-up prompts when project fund is depleted", async () => {
     currentStrategy = buildStrategy({ hooks: [] });
     currentTask = {
       ...currentTask,
@@ -831,7 +911,18 @@ describe("executeLifecycleHooks behavior", () => {
       prompt: "Continue the premium task",
       selectedModel: "github-copilot:gpt-5.4",
     };
-    process.env.ALLOW_PAID_MODEL_EXECUTION = undefined;
+    cpFetchMock.mockImplementation(async (url: string, options?: { method?: string; body?: unknown }) => {
+      if (!options?.method) {
+        if (url.includes("/fund")) {
+          return { ok: true, data: buildProjectFundSnapshot(0) };
+        }
+        if (url.includes("/api/projects/")) {
+          return { ok: true, data: { settings: {} } };
+        }
+        return { ok: true, data: currentTask };
+      }
+      return { ok: true, data: { body: options.body } };
+    });
 
     const { taskRoutes } = await loadTaskRoutesModule();
     const response = await taskRoutes.request("http://localhost/task-1/continue", {
@@ -844,32 +935,24 @@ describe("executeLifecycleHooks behavior", () => {
     });
     const body = await response.json();
 
-    expect(response.status).toBe(403);
+    expect(response.status).toBe(409);
     expect(body).toMatchObject({
-      code: "PAID_EXECUTION_GATE_REQUIRED",
+      code: "PAID_EXECUTION_FUND_DOWNGRADE_SUGGESTED",
       taskId: "task-1",
       allowed: false,
-      guardDecision: "deny",
+      guardDecision: "allow-with-downgrade",
     });
-    expect(body.guardReason).toContain("ALLOW_PAID_MODEL_EXECUTION=1");
+    expect(body.guardReason).toContain("project fund available is $0");
     expect(continueSessionMock).not.toHaveBeenCalled();
   });
 
   test("continue route prefers strategy candidates when only an incomplete legacy parallel compat payload remains", async () => {
     currentStrategy = buildStrategy({ hooks: [] });
-    process.env.ALLOW_PAID_MODEL_EXECUTION = "1";
     cpFetchMock.mockImplementation(
       async (url: string, options?: { method?: string; body?: unknown }) => {
         if (!options?.method) {
-          if (url.includes("/paid-execution-lease")) {
-            return {
-              ok: true,
-              data: {
-                projectId: "proj-1",
-                activeLease: { id: "lease-test" },
-                now: "2026-03-10T00:00:00.000Z",
-              },
-            };
+          if (url.includes("/fund")) {
+            return { ok: true, data: buildProjectFundSnapshot(20) };
           }
 
           if (url.includes("/api/projects/")) {
@@ -924,6 +1007,15 @@ describe("executeLifecycleHooks behavior", () => {
         { sessionId: "session-a", status: "running" },
         { sessionId: "session-b", status: "running" },
       ],
+      execution: {
+        action: "continue",
+        nextSessionId: "session-a",
+        taskSessionId: "task-session:task-1:session-a",
+        roundId: "task-session:task-1:session-a",
+        phaseId: null,
+        status: "running",
+        executionMode: "parallel",
+      },
     });
     expect(createSessionMock).toHaveBeenCalledTimes(2);
     expect(continueSessionMock).not.toHaveBeenCalled();
@@ -972,19 +1064,11 @@ describe("executeLifecycleHooks behavior", () => {
 
   test("continue route keeps quick parallel prompts free of stage-summary workflow instructions", async () => {
     currentStrategy = buildStrategy({ hooks: [] });
-    process.env.ALLOW_PAID_MODEL_EXECUTION = "1";
     cpFetchMock.mockImplementation(
       async (url: string, options?: { method?: string; body?: unknown }) => {
         if (!options?.method) {
-          if (url.includes("/paid-execution-lease")) {
-            return {
-              ok: true,
-              data: {
-                projectId: "proj-1",
-                activeLease: { id: "lease-test" },
-                now: "2026-03-10T00:00:00.000Z",
-              },
-            };
+          if (url.includes("/fund")) {
+            return { ok: true, data: buildProjectFundSnapshot(20) };
           }
 
           if (url.includes("/api/projects/")) {
@@ -1098,19 +1182,11 @@ describe("executeLifecycleHooks behavior", () => {
 
   test("continue route fails closed when parallel candidate lineage registration returns non-ok", async () => {
     currentStrategy = buildStrategy({ hooks: [] });
-    process.env.ALLOW_PAID_MODEL_EXECUTION = "1";
     cpFetchMock.mockImplementation(
       async (url: string, options?: { method?: string; body?: unknown }) => {
         if (!options?.method) {
-          if (url.includes("/paid-execution-lease")) {
-            return {
-              ok: true,
-              data: {
-                projectId: "proj-1",
-                activeLease: { id: "lease-test" },
-                now: "2026-03-10T00:00:00.000Z",
-              },
-            };
+          if (url.includes("/fund")) {
+            return { ok: true, data: buildProjectFundSnapshot(20) };
           }
 
           if (url.includes("/api/projects/")) {
@@ -1180,19 +1256,11 @@ describe("executeLifecycleHooks behavior", () => {
 
   test("continue route resets stale parallel candidate state after manual adoption before starting a new round", async () => {
     currentStrategy = buildStrategy({ hooks: [] });
-    process.env.ALLOW_PAID_MODEL_EXECUTION = "1";
     cpFetchMock.mockImplementation(
       async (url: string, options?: { method?: string; body?: unknown }) => {
         if (!options?.method) {
-          if (url.includes("/paid-execution-lease")) {
-            return {
-              ok: true,
-              data: {
-                projectId: "proj-1",
-                activeLease: { id: "lease-test" },
-                now: "2026-03-10T00:00:00.000Z",
-              },
-            };
+          if (url.includes("/fund")) {
+            return { ok: true, data: buildProjectFundSnapshot(20) };
           }
 
           if (url.includes("/api/projects/")) {
@@ -1343,7 +1411,6 @@ describe("executeLifecycleHooks behavior", () => {
 
   test("continue route respects explicit single execution mode when stale parallel strategy remains", async () => {
     currentStrategy = buildStrategy({ hooks: [] });
-    process.env.ALLOW_PAID_MODEL_EXECUTION = "1";
     currentTask = {
       ...currentTask,
       title: "Single continuation task",
@@ -1376,6 +1443,17 @@ describe("executeLifecycleHooks behavior", () => {
       ok: true,
       sessionId: "session-follow-up",
       parentSessionId: "session-existing",
+      execution: {
+        action: "continue",
+        nextSessionId: "session-follow-up",
+        taskSessionId: "task-session:task-1:session-follow-up",
+        roundId: "task-session:task-1:session-follow-up",
+        parentSessionId: "session-existing",
+        parentTaskSessionId: "task-session:task-1:session-existing",
+        phaseId: null,
+        status: "running",
+        executionMode: "single",
+      },
     });
     expect(forkSessionMock).toHaveBeenCalledWith("session-existing", {
       title: expect.stringContaining("Please continue"),
@@ -1520,19 +1598,11 @@ describe("executeLifecycleHooks behavior", () => {
 
   test("continue route does not rewrite legacy parallel compat patch fields for projection-backed tasks", async () => {
     currentStrategy = buildStrategy({ hooks: [] });
-    process.env.ALLOW_PAID_MODEL_EXECUTION = "1";
     cpFetchMock.mockImplementation(
       async (url: string, options?: { method?: string; body?: unknown }) => {
         if (!options?.method) {
-          if (url.includes("/paid-execution-lease")) {
-            return {
-              ok: true,
-              data: {
-                projectId: "proj-1",
-                activeLease: { id: "lease-test" },
-                now: "2026-03-10T00:00:00.000Z",
-              },
-            };
+          if (url.includes("/fund")) {
+            return { ok: true, data: buildProjectFundSnapshot(20) };
           }
 
           if (url.includes("/api/projects/")) {
@@ -1871,20 +1941,12 @@ describe("executeLifecycleHooks behavior", () => {
       prompt: "Do the minimal change.",
       selectedModel: "github-copilot:claude-sonnet-4",
     };
-    process.env.ALLOW_PAID_MODEL_EXECUTION = "1";
 
     cpFetchMock.mockImplementation(
       async (url: string, options?: { method?: string; body?: { strategy?: string } }) => {
         if (!options?.method) {
-          if (url.includes("/paid-execution-lease")) {
-            return {
-              ok: true,
-              data: {
-                projectId: "proj-1",
-                activeLease: null,
-                now: "2026-03-10T00:00:00.000Z",
-              },
-            };
+          if (url.includes("/fund")) {
+            return { ok: true, data: buildProjectFundSnapshot(20) };
           }
 
           if (url.includes("/api/projects/")) {
@@ -1986,7 +2048,6 @@ describe("executeLifecycleHooks behavior", () => {
           providerId: "github-copilot",
           modelId: "claude-sonnet-4",
           modelRoute: "github-copilot:claude-sonnet-4",
-          leaseId: null,
           guardDecision: "allow",
           guardReason: "approved",
           estimatedRequestUpperBound: 2,
@@ -2002,7 +2063,6 @@ describe("executeLifecycleHooks behavior", () => {
         },
       }),
     };
-    process.env.ALLOW_PAID_MODEL_EXECUTION = "1";
 
     runDetachedPromptMock.mockResolvedValueOnce({
       ok: true,

@@ -1,6 +1,7 @@
 import { computed, type Ref } from "vue";
 import { type ExecutionMode, type TaskWorkflowViewModel } from "../lib/api";
 import { resolveTaskDisplayStatus } from "../lib/task-display-status";
+import { resolveWorkflowStageLabel } from "../lib/task-workflow-display-policy";
 import {
   resolveEditableExecutionMode,
   resolveEditableJudgeConfig,
@@ -51,15 +52,9 @@ export function useTaskDetailWorkflowDerivedState(args: {
 }) {
   const workflowSummary = computed(() => args.workflowView.value?.workflow ?? null);
   const workflowStages = computed(() => workflowSummary.value?.stages ?? []);
-  const currentStageLabel = computed(() => {
-    const currentStage = workflowSummary.value?.currentStage;
-    if (!currentStage) {
-      return "";
-    }
-
-    const matchedStage = workflowStages.value.find((stage) => stage.stageKey === currentStage);
-    return matchedStage?.stageLabel || currentStage;
-  });
+  const currentStageLabel = computed(() =>
+    resolveWorkflowStageLabel(workflowSummary.value?.currentStage, workflowStages.value, ""),
+  );
 
   return {
     currentStageLabel,

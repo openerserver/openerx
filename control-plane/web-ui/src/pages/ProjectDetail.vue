@@ -91,9 +91,6 @@
               <a-descriptions-item label="默认环境">
                 {{ project.settings?.defaultEnvironmentId || '未配置' }}
               </a-descriptions-item>
-              <a-descriptions-item label="付费执行权限">
-                {{ project.settings?.allowPaidExecution ? '已开启' : '未开启' }}
-              </a-descriptions-item>
               <a-descriptions-item label="项目组标识">
                 {{ project.settings?.projectGroupKey || '未配置' }}
               </a-descriptions-item>
@@ -106,141 +103,99 @@
               <a-descriptions-item label="最大并发">
                 {{ project.settings?.maxConcurrency || '未配置' }}
               </a-descriptions-item>
-              <a-descriptions-item label="月预算">
-                {{ project.settings?.budgetMonthly != null ? `$${project.settings.budgetMonthly}` : '未配置' }}
+              <a-descriptions-item label="钱包可用额度">
+                <a-space>
+                  <span>{{ formatUsd(projectFundSummary.available) }}</span>
+                  <a-tag :color="projectFundHealthColor">
+                    {{ projectFundHealthLabel }}
+                  </a-tag>
+                </a-space>
               </a-descriptions-item>
-              <a-descriptions-item label="预警阈值">
-                {{ percentLabel(project.settings?.warnThreshold) }}
+              <a-descriptions-item label="钱包总充值">
+                {{ formatUsd(projectFundSummary.totalGranted) }}
               </a-descriptions-item>
-              <a-descriptions-item label="限流阈值">
-                {{ percentLabel(project.settings?.throttleThreshold) }}
+              <a-descriptions-item label="钱包分布">
+                已预留 {{ formatUsd(projectFundSummary.reserved) }} · 已消耗 {{ formatUsd(projectFundSummary.consumed) }}
               </a-descriptions-item>
             </a-descriptions>
           </a-card>
 
-          <a-card title="付费执行预检" size="small" style="margin-top: 16px">
-            <a-spin :spinning="paidExecutionLoading">
+          <a-card title="额度钱包概览" size="small" style="margin-top: 16px">
+            <a-spin :spinning="projectFundLoading">
               <a-alert
-                v-if="paidExecutionError"
+                v-if="projectFundError"
                 type="error"
                 show-icon
-                :message="paidExecutionError"
+                :message="projectFundError"
                 style="margin-bottom: 12px"
               />
+
               <a-descriptions :column="{ xs: 1, lg: 2 }" bordered size="small">
-                <a-descriptions-item label="生效模型">
-                  {{ paidExecutionPreflight?.effectiveModel || project.settings?.defaultModel || '未解析' }}
+                <a-descriptions-item label="当前可用额度">
+                  <a-space>
+                    <span style="font-weight: 600">{{ formatUsd(projectFundSummary.available) }}</span>
+                    <a-tag :color="projectFundHealthColor">
+                      {{ projectFundHealthLabel }}
+                    </a-tag>
+                  </a-space>
                 </a-descriptions-item>
-                <a-descriptions-item label="预检结论">
-                  {{ paidExecutionDecisionLabel }}
+                <a-descriptions-item label="最后更新时间">
+                  {{ projectFundSummary.updatedAt ? formatTime(projectFundSummary.updatedAt) : '尚未初始化' }}
                 </a-descriptions-item>
-                <a-descriptions-item label="租约状态">
-                  {{ paidExecutionLeaseLabel }}
+                <a-descriptions-item label="总充值">
+                  {{ formatUsd(projectFundSummary.totalGranted) }}
                 </a-descriptions-item>
-                <a-descriptions-item label="租约到期">
-                  {{ paidExecutionPreflight?.activeLease?.expiresAt ? formatTime(paidExecutionPreflight.activeLease.expiresAt) : '无' }}
+                <a-descriptions-item label="已预留">
+                  {{ formatUsd(projectFundSummary.reserved) }}
                 </a-descriptions-item>
-                <a-descriptions-item label="单次成本预估">
-                  {{ paidExecutionCostLabel }}
+                <a-descriptions-item label="已消耗">
+                  {{ formatUsd(projectFundSummary.consumed) }}
                 </a-descriptions-item>
-                <a-descriptions-item label="执行前置条件">
-                  {{ paidExecutionRequirementLabel }}
+                <a-descriptions-item label="最近流水数">
+                  {{ projectFundLedgerRows.length }}
                 </a-descriptions-item>
               </a-descriptions>
 
               <a-alert
-                v-if="paidExecutionPreflight"
+                v-if="!projectFundError"
                 style="margin-top: 12px"
-                :type="paidExecutionPreflight.allowed ? 'success' : (paidExecutionPreflight.preflight.guardDecision === 'allow-with-downgrade' ? 'warning' : 'info')"
+                :type="projectFundAlertType"
                 show-icon
-                :message="paidExecutionGuardMessage"
-                :description="paidExecutionGuardDescription"
+                :message="projectFundHealthMessage"
+                :description="projectFundHealthDescription"
               />
 
-              <a-descriptions
-                v-if="paidExecutionPreflight"
-                :column="{ xs: 1, lg: 2 }"
-                bordered
-                size="small"
-                style="margin-top: 12px"
-              >
-                <a-descriptions-item label="请求上界">
-                  {{ paidExecutionPreflight.preflight.requestCount.min }} - {{ paidExecutionPreflight.preflight.requestCount.max }} 次
-                </a-descriptions-item>
-                <a-descriptions-item label="Token 上界">
-                  {{ paidExecutionPreflight.preflight.totalTokens.min }} - {{ paidExecutionPreflight.preflight.totalTokens.max }} tokens
-                </a-descriptions-item>
-                <a-descriptions-item label="输入 Token 估算">
-                  {{ paidExecutionPreflight.preflight.inputTokens.min }} - {{ paidExecutionPreflight.preflight.inputTokens.max }}
-                </a-descriptions-item>
-                <a-descriptions-item label="输出 Token 估算">
-                  {{ paidExecutionPreflight.preflight.outputTokens.min }} - {{ paidExecutionPreflight.preflight.outputTokens.max }}
-                </a-descriptions-item>
-                <a-descriptions-item label="预算余量">
-                  {{ paidExecutionBudgetHeadroomLabel }}
-                </a-descriptions-item>
-                <a-descriptions-item label="重点关注项">
-                  {{ paidExecutionPreflight.preflight.riskDrivers.length }}
-                </a-descriptions-item>
-                <a-descriptions-item label="预估基线">
-                  {{ paidExecutionPreflight.preflight.baselineSource?.source === 'historical'
-                    ? `基于历史记录估算 · ${paidExecutionPreflight.preflight.baselineSource?.matchScope || 'project'} · ${paidExecutionPreflight.preflight.baselineSource?.sampleSize || 0} 条样本`
-                    : '系统估算（暂无历史记录）' }}
-                </a-descriptions-item>
-              </a-descriptions>
-
-              <div v-if="paidExecutionPreflight?.preflight.riskDrivers.length" style="margin-top: 12px">
-                <div style="font-weight: 600; margin-bottom: 8px">影响本次判断的因素</div>
-                <a-list
-                  size="small"
-                  bordered
-                  :data-source="paidExecutionPreflight.preflight.riskDrivers"
-                >
+              <div style="margin-top: 12px">
+                <div style="font-weight: 600; margin-bottom: 8px">最近额度流水</div>
+                <a-empty
+                  v-if="projectFundLedgerRows.length === 0"
+                  description="最近还没有额度流水"
+                />
+                <a-list v-else size="small" bordered :data-source="projectFundLedgerRows">
                   <template #renderItem="{ item }">
                     <a-list-item>
-                      <div>
-                        <div>
-                          {{ item.label }}
-                          <a-tag style="margin-inline-start: 8px">{{ formatPaidExecutionRiskType(item.type) }}</a-tag>
-                          <a-tag :color="item.impact === 'high' ? 'red' : (item.impact === 'medium' ? 'orange' : 'green')">
-                            {{ formatPaidExecutionRiskImpact(item.impact) }}
+                      <a-space direction="vertical" :size="2" style="width: 100%">
+                        <a-space wrap>
+                          <a-tag :color="fundLedgerTypeColor(item.type)">
+                            {{ fundLedgerTypeLabel(item.type) }}
                           </a-tag>
-                        </div>
-                        <div style="color: rgba(0, 0, 0, 0.65)">{{ item.detail }}</div>
-                      </div>
+                          <span>{{ formatFundLedgerAmount(item) }}</span>
+                          <span style="color: rgba(0, 0, 0, 0.45)">余额 {{ formatUsd(item.balanceAfter) }}</span>
+                        </a-space>
+                        <span style="color: rgba(0, 0, 0, 0.65)">{{ item.note || '无备注' }}</span>
+                        <span style="color: rgba(0, 0, 0, 0.45)">{{ formatTime(item.createdAt) }}</span>
+                      </a-space>
                     </a-list-item>
                   </template>
                 </a-list>
               </div>
 
-              <a-space v-if="canManage && project" style="margin-top: 12px" wrap>
-                <a-button
-                  v-if="shouldShowEnablePaidExecutionAction"
-                  type="primary"
-                  ghost
-                  :loading="paidExecutionPermissionMutating"
-                  @click="enableProjectPaidExecution"
-                >
-                  开启项目付费执行权限
+              <a-space v-if="project" style="margin-top: 12px" wrap>
+                <a-button :loading="projectFundLoading" @click="refreshProjectFund(project.id)">
+                  刷新钱包
                 </a-button>
-                <a-button
-                  v-if="!paidExecutionLease?.activeLease"
-                  type="primary"
-                  :loading="leaseMutating"
-                  @click="issueLease"
-                >
-                  开启 30 分钟执行许可
-                </a-button>
-                <a-button
-                  v-else
-                  danger
-                  :loading="leaseMutating"
-                  @click="revokeLease"
-                >
-                  关闭当前执行许可
-                </a-button>
-                <a-button :loading="paidExecutionLoading" @click="refreshPaidExecutionState(project.id)">
-                  刷新预检
+                <a-button @click="activeTab = 'settings'">
+                  前往设置充值
                 </a-button>
               </a-space>
             </a-spin>
@@ -494,19 +449,17 @@ import { message } from "ant-design-vue";
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
-  type PaidExecutionLeaseStateResponse,
   type Project,
-  type ProjectExecutionPreflightResponse,
+  type ProjectModelFund,
+  type ProjectModelFundLedgerEntry,
   type ProjectRuntimeUsageLedgerDetailResponse,
   type ProjectRuntimeUsageLedgerListResponse,
   type ProjectSettings,
-  createProjectPaidExecutionLease,
   getProject,
-  getProjectPaidExecutionLease,
-  getProjectPaidExecutionPreflight,
+  getProjectFund,
+  getProjectFundLedger,
   getProjectRuntimeUsageLedgerDetail,
   getProjectRuntimeUsageLedgers,
-  revokeProjectPaidExecutionLease,
   updateProject,
 } from "../lib/api";
 import { useAuthStore } from "../stores/auth";
@@ -525,12 +478,10 @@ const loading = ref(true);
 const saving = ref(false);
 const project = ref<ProjectWithSettings | null>(null);
 const activeTab = ref("overview");
-const paidExecutionLoading = ref(false);
-const leaseMutating = ref(false);
-const paidExecutionPermissionMutating = ref(false);
-const paidExecutionError = ref("");
-const paidExecutionPreflight = ref<ProjectExecutionPreflightResponse | null>(null);
-const paidExecutionLease = ref<PaidExecutionLeaseStateResponse | null>(null);
+const projectFundLoading = ref(false);
+const projectFundError = ref("");
+const projectFund = ref<ProjectModelFund | null>(null);
+const projectFundLedger = ref<ProjectModelFundLedgerEntry[]>([]);
 const runtimeUsageLoading = ref(false);
 const runtimeUsageError = ref("");
 const runtimeUsageList = ref<ProjectRuntimeUsageLedgerListResponse | null>(null);
@@ -573,7 +524,7 @@ onMounted(async () => {
   const projectId = String(route.params.projectId);
   try {
     project.value = (await getProject(projectId)) as ProjectWithSettings;
-    await Promise.all([refreshPaidExecutionState(projectId), refreshRuntimeUsage(projectId)]);
+    await Promise.all([refreshProjectFund(projectId), refreshRuntimeUsage(projectId)]);
     await maybeOpenRuntimeUsageFromRoute();
   } catch {
     project.value = null;
@@ -596,133 +547,70 @@ watch(
   },
 );
 
-const paidExecutionDecisionLabel = computed(() => {
-  const decision = paidExecutionPreflight.value?.preflight.guardDecision;
-  if (decision === "allow") return "允许直接执行";
-  if (decision === "allow-with-downgrade") return "需要降级后重试";
-  if (decision === "require-approval") return "需要租约或审批";
-  if (decision === "deny") return "当前阻止执行";
-  return "未评估";
+const projectFundSummary = computed(
+  (): ProjectModelFund =>
+    projectFund.value || {
+      id: null,
+      projectId: project.value?.id || "",
+      currency: "USD",
+      totalGranted: 0,
+      reserved: 0,
+      consumed: 0,
+      available: 0,
+      status: "depleted",
+      createdAt: null,
+      updatedAt: null,
+      hasFund: false,
+    },
+);
+
+const projectFundHealthColor = computed(() => {
+  const fund = projectFundSummary.value;
+  if (fund.available <= 0) return "red";
+  if (fund.totalGranted <= 0) return "red";
+  const ratio = fund.available / fund.totalGranted;
+  if (ratio <= 0.2) return "gold";
+  return "green";
 });
 
-const paidExecutionLeaseLabel = computed(() => {
-  if (paidExecutionLease.value?.activeLease) {
-    return `已签发 · ${paidExecutionLease.value.activeLease.id}`;
-  }
-  return "未签发";
+const projectFundHealthLabel = computed(() => {
+  const fund = projectFundSummary.value;
+  if (!fund.hasFund) return "未充值";
+  if (fund.available <= 0) return "额度耗尽";
+  if (fund.totalGranted > 0 && fund.available / fund.totalGranted <= 0.2) return "余额偏低";
+  return "余额正常";
 });
 
-const paidExecutionCostLabel = computed(() => {
-  const cost = paidExecutionPreflight.value?.preflight.costUsd;
-  if (!cost) {
-    return "未评估";
-  }
-  return `$${cost.min} - $${cost.max}`;
+const projectFundAlertType = computed(() => {
+  const color = projectFundHealthColor.value;
+  if (color === "green") return "success" as const;
+  if (color === "gold") return "warning" as const;
+  return "error" as const;
 });
 
-const paidExecutionGuardMessage = computed(() => {
-  const preflight = paidExecutionPreflight.value?.preflight;
-  const requirements = paidExecutionPreflight.value?.requirements;
-  if (!preflight) {
-    return "尚未生成执行建议";
+const projectFundHealthMessage = computed(() => {
+  const fund = projectFundSummary.value;
+  if (!fund.hasFund) {
+    return "当前项目还没有任何额度钱包记录。";
   }
-
-  if (requirements?.allowPaidExecution && !requirements.hasAllowPaidExecution) {
-    return "当前还未开启付费执行权限，请联系平台管理员开通后再重试。";
+  if (fund.available <= 0) {
+    return "当前可用额度已经耗尽，后续付费模型应由钱包余额阻断。";
   }
-  if (requirements?.leaseRequired && !requirements.hasLease) {
-    return "当前模型需要临时执行许可，请先开启执行许可后再执行。";
+  if (fund.totalGranted > 0 && fund.available / fund.totalGranted <= 0.2) {
+    return "当前钱包余额偏低，建议尽快补充项目额度。";
   }
-
-  const reason = preflight.guardReason;
-
-  if (reason.includes("ALLOW_PAID_MODEL_EXECUTION=1")) {
-    return "当前还未开启付费执行权限，请联系平台管理员开通后再重试。";
-  }
-  if (reason.includes("requires an active paid execution lease")) {
-    return "当前模型需要临时执行许可，请先开启执行许可后再执行。";
-  }
-  if (reason.includes("Retry with") && preflight.guardDecision === "allow-with-downgrade") {
-    return "当前执行规模偏高，建议切换到更稳妥的模型后重试。";
-  }
-  if (reason.includes("cannot be auto-downgraded safely")) {
-    return "当前执行规模超出策略限制，系统暂不允许自动降级放行。";
-  }
-  if (reason.includes("Estimated amplification exceeds policy")) {
-    return "预计调用放大量或成本将超出当前策略上限。";
-  }
-  if (preflight.guardDecision === "allow") {
-    return "当前设置已满足执行条件，可以直接发起。";
-  }
-  return "当前设置仍需调整，暂不建议直接发起执行。";
+  return "当前钱包余额充足，可继续支撑项目付费模型使用。";
 });
 
-const paidExecutionGuardDescription = computed(() => {
-  const reason = paidExecutionPreflight.value?.preflight.guardReason?.trim();
-  if (!reason || reason === paidExecutionGuardMessage.value) {
-    return undefined;
+const projectFundHealthDescription = computed(() => {
+  const fund = projectFundSummary.value;
+  if (!fund.hasFund) {
+    return "请前往设置页为项目充值或调整额度。";
   }
-  return `原始说明：${reason}`;
+  return `总充值 ${formatUsd(fund.totalGranted)}，已预留 ${formatUsd(fund.reserved)}，已消耗 ${formatUsd(fund.consumed)}。`;
 });
 
-const paidExecutionBudgetHeadroomLabel = computed(() => {
-  const budgetHeadroom = paidExecutionPreflight.value?.preflight.budgetHeadroom;
-  if (!budgetHeadroom) {
-    return "未评估";
-  }
-  if (budgetHeadroom.remainingUsd == null) {
-    return "当前策略未设置成本余量";
-  }
-
-  return `$${budgetHeadroom.remainingUsd} · 单次${budgetHeadroom.enoughForSingleRun ? "可执行" : "超限"} · 套件${budgetHeadroom.enoughForSuiteRun ? "可执行" : "超限"}`;
-});
-
-const paidExecutionRequirementLabel = computed(() => {
-  const requirements = paidExecutionPreflight.value?.requirements;
-  if (!requirements) {
-    return "未评估";
-  }
-
-  const parts: string[] = [];
-  if (requirements.allowPaidExecution) {
-    parts.push(
-      requirements.hasAllowPaidExecution
-        ? "已开启付费执行权限"
-        : "需平台管理员先开启付费执行权限（当前无自助开通页面）",
-    );
-  }
-  if (requirements.leaseRequired) {
-    parts.push(requirements.hasLease ? "已具备临时执行许可" : "还需要临时执行许可");
-  }
-  return parts.length > 0 ? parts.join("；") : "当前无需额外设置";
-});
-
-const shouldShowEnablePaidExecutionAction = computed(() => {
-  const requirements = paidExecutionPreflight.value?.requirements;
-  return (
-    canManage.value &&
-    Boolean(project.value) &&
-    requirements?.allowPaidExecution === true &&
-    requirements.hasAllowPaidExecution !== true
-  );
-});
-
-function formatPaidExecutionRiskType(type: string) {
-  if (type === "model") return "模型";
-  if (type === "suite") return "执行场景";
-  if (type === "parallel") return "并行放大";
-  if (type === "judge") return "评审链路";
-  if (type === "hook") return "扩展钩子";
-  if (type === "budget") return "预算约束";
-  return type;
-}
-
-function formatPaidExecutionRiskImpact(impact: string) {
-  if (impact === "high") return "高";
-  if (impact === "medium") return "中";
-  if (impact === "low") return "低";
-  return impact;
-}
+const projectFundLedgerRows = computed(() => projectFundLedger.value);
 
 const runtimeUsageRows = computed(() => runtimeUsageList.value?.items || []);
 
@@ -731,21 +619,21 @@ const runtimeUsageBreakdownEntries = computed(() => {
   return Object.entries(byStepType).map(([key, count]) => ({ key, count }));
 });
 
-async function refreshPaidExecutionState(projectId: string) {
-  paidExecutionLoading.value = true;
-  paidExecutionError.value = "";
+async function refreshProjectFund(projectId: string) {
+  projectFundLoading.value = true;
+  projectFundError.value = "";
 
   try {
-    const [preflight, leaseState] = await Promise.all([
-      getProjectPaidExecutionPreflight(projectId),
-      getProjectPaidExecutionLease(projectId),
+    const [fund, ledger] = await Promise.all([
+      getProjectFund(projectId),
+      getProjectFundLedger(projectId, { limit: 5 }),
     ]);
-    paidExecutionPreflight.value = preflight;
-    paidExecutionLease.value = leaseState;
+    projectFund.value = fund;
+    projectFundLedger.value = ledger.items;
   } catch (error) {
-    paidExecutionError.value = `加载付费执行预检失败: ${error}`;
+    projectFundError.value = `加载项目额度钱包失败: ${error}`;
   } finally {
-    paidExecutionLoading.value = false;
+    projectFundLoading.value = false;
   }
 }
 
@@ -820,70 +708,6 @@ function handleRuntimeUsageDrawerOpen(nextOpen: boolean) {
   });
 }
 
-async function issueLease() {
-  if (!project.value) {
-    return;
-  }
-
-  leaseMutating.value = true;
-  try {
-    paidExecutionLease.value = await createProjectPaidExecutionLease(project.value.id, {
-      durationMinutes: 30,
-      reason: "Issued from project overview",
-    });
-    await refreshPaidExecutionState(project.value.id);
-    message.success("已开启 30 分钟执行许可");
-  } catch (error) {
-    message.error(`开启执行许可失败: ${error}`);
-  } finally {
-    leaseMutating.value = false;
-  }
-}
-
-async function enableProjectPaidExecution() {
-  if (!project.value) {
-    return;
-  }
-
-  paidExecutionPermissionMutating.value = true;
-  try {
-    const nextSettings: ProjectSettings = {
-      ...(project.value.settings || {}),
-      allowPaidExecution: true,
-    };
-    await updateProject(project.value.id, { settings: nextSettings });
-    handleSettingsUpdated(nextSettings);
-    message.success("项目付费执行权限已开启");
-  } catch (error) {
-    message.error(`开启项目付费执行权限失败: ${error}`);
-  } finally {
-    paidExecutionPermissionMutating.value = false;
-  }
-}
-
-async function revokeLease() {
-  if (!project.value || !paidExecutionLease.value?.activeLease?.id) {
-    return;
-  }
-
-  leaseMutating.value = true;
-  try {
-    await revokeProjectPaidExecutionLease(
-      project.value.id,
-      paidExecutionLease.value.activeLease.id,
-      {
-        reason: "Revoked from project overview",
-      },
-    );
-    await refreshPaidExecutionState(project.value.id);
-    message.success("当前执行许可已关闭");
-  } catch (error) {
-    message.error(`关闭执行许可失败: ${error}`);
-  } finally {
-    leaseMutating.value = false;
-  }
-}
-
 function startEditName() {
   editNameValue.value = project.value?.name || "";
   editingName.value = true;
@@ -953,6 +777,40 @@ function formatLedgerModel(providerId?: string | null, modelId?: string | null) 
   return `${providerId || "unknown"}:${modelId || "unknown"}`;
 }
 
+function fundLedgerTypeLabel(type: ProjectModelFundLedgerEntry["type"]) {
+  if (type === "grant") return "充值";
+  if (type === "adjust") return "调整";
+  if (type === "reserve") return "预留";
+  if (type === "consume") return "扣费";
+  if (type === "refund") return "退回";
+  return type;
+}
+
+function fundLedgerTypeColor(type: ProjectModelFundLedgerEntry["type"]) {
+  if (type === "grant") return "green";
+  if (type === "adjust") return "blue";
+  if (type === "reserve") return "gold";
+  if (type === "consume") return "red";
+  if (type === "refund") return "cyan";
+  return "default";
+}
+
+function formatFundLedgerAmount(entry: ProjectModelFundLedgerEntry) {
+  if (entry.type === "consume" || entry.type === "reserve") {
+    return `-${formatUsd(Math.abs(entry.amountUsd))}`;
+  }
+  if (entry.type === "refund" || entry.type === "grant") {
+    return `+${formatUsd(Math.abs(entry.amountUsd))}`;
+  }
+  if (entry.amountUsd > 0) {
+    return `+${formatUsd(entry.amountUsd)}`;
+  }
+  if (entry.amountUsd < 0) {
+    return `-${formatUsd(Math.abs(entry.amountUsd))}`;
+  }
+  return formatUsd(0);
+}
+
 function runtimeUsageStatusLabel(status: string) {
   if (status === "running") return "运行中";
   if (status === "completed") return "已完成";
@@ -998,7 +856,7 @@ function handleSettingsUpdated(settings: ProjectWithSettings["settings"]) {
   if (!project.value) return;
   project.value.settings = settings || null;
   projectStore.updateProjectInList({ id: project.value.id, settings: settings || null });
-  void refreshPaidExecutionState(project.value.id);
+  void refreshProjectFund(project.value.id);
   void refreshRuntimeUsage(project.value.id);
 }
 
@@ -1007,10 +865,5 @@ function approvalPolicyLabel(policy: ProjectSettings["approvalPolicy"]) {
   if (policy === "strict") return "strict: 高风险优先审批";
   if (policy === "manual") return "manual: 关键动作全部人工审批";
   return "未配置";
-}
-
-function percentLabel(value: number | undefined) {
-  if (typeof value !== "number") return "未配置";
-  return `${Math.round(value * 100)}%`;
 }
 </script>

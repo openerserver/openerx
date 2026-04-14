@@ -244,6 +244,17 @@ describe("task workflow view route", () => {
         };
       }
 
+      if (url === "/api/tasks/task-1/query/normalized-conversation?includeLineage=false") {
+        return {
+          ok: true,
+          data: {
+            meta: {
+              snapshotVersion: 41,
+            },
+          },
+        };
+      }
+
       if (url === "/api/tasks/task-1/workflow") {
         return {
           ok: true,
@@ -280,6 +291,9 @@ describe("task workflow view route", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
       taskId: "task-1",
+      meta: {
+        snapshotVersion: 41,
+      },
       workflow: {
         currentStage: "done",
         status: "completed",
@@ -299,6 +313,17 @@ describe("task workflow view route", () => {
             id: "task-2",
             projectId: "project-1",
             status: "failed",
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-2/query/normalized-conversation?includeLineage=false") {
+        return {
+          ok: true,
+          data: {
+            meta: {
+              snapshotVersion: 52,
+            },
           },
         };
       }
@@ -339,6 +364,9 @@ describe("task workflow view route", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
       taskId: "task-2",
+      meta: {
+        snapshotVersion: 52,
+      },
       workflow: {
         currentStage: "unknown",
         status: "failed",
@@ -351,9 +379,19 @@ describe("task workflow view route", () => {
 
   test("derives gate, approval and block actual state for task workflow stages", async () => {
     const responseMap = buildTaskWorkflowStageRuntimeResponses("task-3");
-    cpFetchMock.mockImplementation(async (url: string) =>
-      getTaskWorkflowStageRuntimeResponse(url, responseMap),
-    );
+    cpFetchMock.mockImplementation(async (url: string) => {
+      if (url === "/api/tasks/task-3/query/normalized-conversation?includeLineage=false") {
+        return {
+          ok: true,
+          data: {
+            meta: {
+              snapshotVersion: 63,
+            },
+          },
+        };
+      }
+      return getTaskWorkflowStageRuntimeResponse(url, responseMap);
+    });
 
     const { taskRoutes } = await import(
       "../../control-plane/web-ui-bff/src/modules/tasks/routes?task-workflow-view-route-stage-runtime"
@@ -368,6 +406,9 @@ describe("task workflow view route", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
       taskId: "task-3",
+      meta: {
+        snapshotVersion: 63,
+      },
       workflow: {
         templateId: "tpl-1",
         currentStage: "verify",
@@ -406,6 +447,115 @@ describe("task workflow view route", () => {
           stageKey: "verify",
         }),
       ],
+    });
+  });
+
+  test("marks workflow view reconcile required when authoritative workflow resources are partial", async () => {
+    cpFetchMock.mockImplementation(async (url: string) => {
+      if (url === "/api/project-tree/tasks/task-4") {
+        return {
+          ok: true,
+          data: {
+            id: "task-4",
+            projectId: "project-1",
+            status: "running",
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-4/query/normalized-conversation?includeLineage=false") {
+        return {
+          ok: true,
+          data: {
+            meta: {
+              snapshotVersion: 74,
+            },
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-4/workflow") {
+        return {
+          ok: true,
+          data: {
+            data: {
+              workflowRun: {
+                id: "wf-task-4",
+                templateId: "tpl-1",
+                currentStage: "implement",
+                status: "running",
+              },
+              stages: [
+                {
+                  id: "run-implement",
+                  stageKey: "implement",
+                  status: "running",
+                  approvalState: "not-required",
+                  primaryRoleAgentId: "role.developer",
+                },
+              ],
+            },
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-4/role-conclusions") {
+        return {
+          ok: false,
+          status: 502,
+          data: {},
+        };
+      }
+
+      if (url === "/api/tasks/task-4/developer-change-requests") {
+        return { ok: true, data: { data: [] } };
+      }
+
+      if (url === "/api/workflow-templates/tpl-1/stages") {
+        return {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "stage-implement",
+                stageKey: "implement",
+                name: "实现开发",
+                primaryRoleAgentId: "role.developer",
+                gatesJson: [],
+                approvalsJson: [],
+              },
+            ],
+          },
+        };
+      }
+
+      if (url.startsWith("/api/role-agents/role.developer/resolve")) {
+        return {
+          ok: true,
+          data: { data: { role: { name: "开发 Agent" } } },
+        };
+      }
+
+      return { ok: true, data: {} };
+    });
+
+    const { taskRoutes } = await import(
+      "../../control-plane/web-ui-bff/src/modules/tasks/routes?task-workflow-view-route-reconcile"
+    );
+
+    const response = await taskRoutes.request("http://localhost/task-4/workflow-view", {
+      headers: {
+        Authorization: "Bearer test",
+      },
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      taskId: "task-4",
+      meta: {
+        snapshotVersion: 74,
+        reconcileRequired: true,
+      },
     });
   });
 });

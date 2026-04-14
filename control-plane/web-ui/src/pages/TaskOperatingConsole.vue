@@ -103,6 +103,10 @@ import {
   getTaskWorkflowView,
   toApiError,
 } from "../lib/api";
+import {
+  resolveWorkflowStageLabel,
+  resolveWorkflowStatusDisplay,
+} from "../lib/task-workflow-display-policy";
 
 const route = useRoute();
 const router = useRouter();
@@ -115,15 +119,28 @@ const workflowView = ref<TaskWorkflowViewModel | null>(null);
 const operatingState = ref<TaskOperatingState | null>(null);
 const bossDecisions = ref<BossDecisionRecord[]>([]);
 const escalations = ref<HumanEscalationRequest[]>([]);
-const currentStageLabel = computed(
-  () =>
-    operatingState.value?.currentStageKey || workflowView.value?.workflow.currentStage || "未记录",
+const currentStageLabel = computed(() =>
+  resolveWorkflowStageLabel(
+    operatingState.value?.currentStageKey || workflowView.value?.workflow.currentStage,
+    workflowView.value?.workflow.stages ?? [],
+    "未记录",
+  ),
 );
 const currentStageStatus = computed(
-  () => operatingState.value?.currentStageStatus || workflowView.value?.workflow.status || "未记录",
+  () =>
+    resolveWorkflowStatusDisplay(
+      operatingState.value?.currentStageStatus || workflowView.value?.workflow.status,
+      "stage",
+      "未记录",
+    ).label,
 );
 const workflowStatus = computed(
-  () => workflowView.value?.workflow.status || task.value?.status || "未知",
+  () =>
+    resolveWorkflowStatusDisplay(
+      workflowView.value?.workflow.status || task.value?.status,
+      "workflow",
+      "未知",
+    ).label,
 );
 
 function formatCollaboration(value?: string | null) {

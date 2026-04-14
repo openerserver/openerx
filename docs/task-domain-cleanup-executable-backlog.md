@@ -350,7 +350,7 @@
 2. [docs/task-domain-radical-storage-redesign-plan.md](task-domain-radical-storage-redesign-plan.md)
 3. [docs/task-domain-radical-schema-migration-plan.md](task-domain-radical-schema-migration-plan.md)
 4. [docs/project-tree-storage-design.md](project-tree-storage-design.md)
-5. [docs/pg-event-sourcing-optimization-plan.md](pg-event-sourcing-optimization-plan.md)
+5. [archive/task-domain/historical-pg-event-sourcing-optimization-plan.md](archive/task-domain/historical-pg-event-sourcing-optimization-plan.md)
 
 代码动作：
 

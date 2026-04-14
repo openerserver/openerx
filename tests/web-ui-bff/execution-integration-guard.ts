@@ -40,22 +40,17 @@ export function isExecutionIntegrationEnabled() {
   return process.env.RUN_EXECUTION_INTEGRATION === "1";
 }
 
-export function isPaidExecutionAllowed() {
-  return process.env.ALLOW_PAID_MODEL_EXECUTION === "1";
-}
-
 export function getExecutionIntegrationGuardSummary() {
   return {
     executionEnabled: isExecutionIntegrationEnabled(),
-    paidExecutionAllowed: isPaidExecutionAllowed(),
     safeModel: getDefaultLowCostExecutionModel(),
     allowedModels: [...ALLOWED_EXECUTION_TEST_MODELS],
   };
 }
 
-export const paidExecutionIntegrationTest = isExecutionIntegrationEnabled() ? test : test.skip;
+export const executionIntegrationTest = isExecutionIntegrationEnabled() ? test : test.skip;
 
-export const paidExecutionIntegrationDescribe = isExecutionIntegrationEnabled()
+export const executionIntegrationDescribe = isExecutionIntegrationEnabled()
   ? describe
   : describe.skip;
 

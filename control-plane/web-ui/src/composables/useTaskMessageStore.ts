@@ -1,7 +1,21 @@
 import { type Ref, computed, ref, watch } from "vue";
-import { createEmptyLiveAssistantState } from "../lib/message-normalize";
+import {
+  createEmptyLiveAssistantState,
+  normalizeMessage,
+  normalizeWorkflowGroup,
+  type TaskConversationListItem,
+  type TaskConversationMessageItem,
+  type TaskConversationWorkflowItem,
+} from "../lib/message-normalize";
 import { getTaskDetailRefreshRequest } from "../lib/task-detail-refresh-policy";
 import type { TaskMessagePatchEvent } from "../lib/task-message-patch-event";
+import {
+  buildTaskConversationRenderState,
+  collectAssistantMessageKeysFromRenderState,
+  getTaskConversationRenderItems,
+  getTaskConversationRenderMessageItems,
+  type PendingAssistantDraftState,
+} from "../lib/task-conversation-display";
 import { useTaskMessagePatchConsumer } from "./useTaskMessagePatchConsumer";
 
 export type TaskConversationAuthority = "persisted" | "realtime";
@@ -16,6 +30,14 @@ export type TaskConversationPersistenceAck = {
   persistedRevision?: number;
   snapshotVersion?: number;
   persistedThroughRevision?: number;
+};
+
+type UseTaskMessageStoreOptions = {
+  sourceMessages?: Ref<unknown[]>;
+  persistedItems?: Ref<TaskConversationMessageItem[]>;
+  snapshotRevision?: Ref<number>;
+  hideWorkflowExecutionContextUsers?: Ref<boolean>;
+  workflowItems?: Ref<TaskConversationWorkflowItem[]>;
 };
 
 function isMatchingConversationSession(
@@ -133,13 +155,23 @@ function reduceConversationAuthorityState(args: {
   };
 }
 
+function resolveAckRevision(args: {
+  persistedRevision?: number;
+  persistedThroughRevision?: number;
+  snapshotVersion?: number;
+}) {
+  return args.persistedThroughRevision ?? args.snapshotVersion ?? args.persistedRevision ?? 0;
+}
+
 export function useTaskMessageStore(
   taskId: Ref<string>,
   sessionId: Ref<string | undefined>,
+  options?: UseTaskMessageStoreOptions,
 ) {
   const liveAssistantState = ref(createEmptyLiveAssistantState());
   const conversationAuthority = ref<TaskConversationAuthority>("persisted");
   const latestPersistenceAck = ref<TaskConversationPersistenceAck | null>(null);
+  const pendingAssistantDraft = ref<PendingAssistantDraftState | null>(null);
   const taskIds = computed(() => (taskId.value ? [taskId.value] : []));
   const {
     realtimeConnected,
@@ -152,6 +184,109 @@ export function useTaskMessageStore(
   const latestTaskRefreshRequest = computed(() =>
     getTaskDetailRefreshRequest(latestTaskPatchEvent.value),
   );
+  const sourceMessages = computed(() => options?.sourceMessages?.value ?? []);
+  const persistedItems = computed(() => {
+    if (options?.persistedItems) {
+      return options.persistedItems.value;
+    }
+
+    return sourceMessages.value
+      .map((entry, index) => normalizeMessage(entry, index, createEmptyLiveAssistantState()))
+      .filter((entry): entry is TaskConversationMessageItem => entry != null)
+      .filter((entry) => entry.role !== "system");
+  });
+  const workflowItems = computed(() => {
+    if (options?.workflowItems) {
+      return options.workflowItems.value;
+    }
+
+    return sourceMessages.value
+      .map((entry) => normalizeWorkflowGroup(entry))
+      .filter((entry): entry is TaskConversationWorkflowItem => entry != null);
+  });
+  const hideWorkflowExecutionContextUsers = computed(
+    () => options?.hideWorkflowExecutionContextUsers?.value ?? workflowItems.value.length > 0,
+  );
+  const persistedSnapshotRevision = computed(() => options?.snapshotRevision?.value ?? 0);
+  const displayConversationAuthority = computed(() => {
+    if (conversationAuthority.value !== "persisted") {
+      return conversationAuthority.value;
+    }
+
+    const latestAckRevision = resolveAckRevision({
+      persistedRevision: latestPersistenceAck.value?.persistedRevision,
+      persistedThroughRevision: latestPersistenceAck.value?.persistedThroughRevision,
+      snapshotVersion: latestPersistenceAck.value?.snapshotVersion,
+    });
+    if (latestAckRevision > persistedSnapshotRevision.value) {
+      return "realtime" as const;
+    }
+
+    return "persisted" as const;
+  });
+  const displayLiveAssistantState = computed(() =>
+    displayConversationAuthority.value === "realtime"
+      ? liveAssistantState.value
+      : createEmptyLiveAssistantState(),
+  );
+  const conversationState = computed(() =>
+    buildTaskConversationRenderState({
+      persistedItems: persistedItems.value,
+      workflowItems: workflowItems.value,
+      liveAssistantState: displayLiveAssistantState.value,
+      authority: displayConversationAuthority.value,
+      pendingAssistantDraft: pendingAssistantDraft.value,
+      activeSessionId: sessionId.value,
+      latestTaskRefreshReason: latestTaskRefreshRequest.value?.reason,
+      hideWorkflowExecutionContextUsers: hideWorkflowExecutionContextUsers.value,
+    }),
+  );
+  const assistantMessageKeys = computed(() =>
+    collectAssistantMessageKeysFromRenderState(conversationState.value),
+  );
+  const items = computed(() => getTaskConversationRenderMessageItems(conversationState.value));
+  const conversationItems = computed<TaskConversationListItem[]>(() =>
+    getTaskConversationRenderItems(conversationState.value),
+  );
+  const hasVisiblePendingAssistantDraft = computed(() => {
+    const pending = pendingAssistantDraft.value;
+    if (!pending) {
+      return false;
+    }
+
+    return items.value.some((item) => item.key === pending.key);
+  });
+  const hasStreamingAssistant = computed(() =>
+    conversationItems.value.some(
+      (item) => item.role === "assistant" && Boolean(item.isStreaming),
+    ),
+  );
+
+  function seedPendingAssistantDraft(targetSessionId?: string) {
+    if (!taskId.value || !targetSessionId) {
+      return;
+    }
+
+    const createdAt = new Date().toISOString();
+    pendingAssistantDraft.value = {
+      key: `pending-assistant:${targetSessionId}:${createdAt}`,
+      sessionId: targetSessionId,
+      createdAt,
+      knownAssistantKeys: new Set(assistantMessageKeys.value),
+    };
+  }
+
+  function clearPendingAssistantDraft(targetSessionId?: string) {
+    if (!pendingAssistantDraft.value) {
+      return;
+    }
+
+    if (targetSessionId && pendingAssistantDraft.value.sessionId !== targetSessionId) {
+      return;
+    }
+
+    pendingAssistantDraft.value = null;
+  }
 
   function resetLiveAssistantStateFromHistory() {
     liveAssistantState.value = replaceLiveAssistantStateFromHistory({
@@ -169,6 +304,38 @@ export function useTaskMessageStore(
   }
 
   watch([taskId, sessionId], resetLiveAssistantStateFromHistory, { immediate: true });
+
+  watch(taskId, (nextTaskId, previousTaskId) => {
+    if (!nextTaskId || nextTaskId !== previousTaskId) {
+      pendingAssistantDraft.value = null;
+    }
+  });
+
+  watch(
+    () => latestTaskRefreshRequest.value?.eventId,
+    () => {
+      const refreshReason = latestTaskRefreshRequest.value?.reason;
+      if (refreshReason === "task-completed" || refreshReason === "task-failed") {
+        pendingAssistantDraft.value = null;
+      }
+    },
+  );
+
+  watch(
+    [sessionId, () => assistantMessageKeys.value.size, () => latestTaskRefreshRequest.value?.eventId],
+    () => {
+      if (!pendingAssistantDraft.value) {
+        return;
+      }
+
+      if (
+        pendingAssistantDraft.value.sessionId === sessionId.value &&
+        !hasVisiblePendingAssistantDraft.value
+      ) {
+        pendingAssistantDraft.value = null;
+      }
+    },
+  );
 
   watch(
     () => latestTaskPatchEvent.value?.eventId,
@@ -198,10 +365,17 @@ export function useTaskMessageStore(
   );
 
   return {
+    conversationState,
+    items,
+    conversationItems,
     conversationAuthority,
+    clearPendingAssistantDraft,
+    displayConversationAuthority,
+    hasStreamingAssistant,
     latestTaskRefreshRequest,
     latestPersistenceAck,
     liveAssistantState,
     realtimeConnected,
+    seedPendingAssistantDraft,
   };
 }

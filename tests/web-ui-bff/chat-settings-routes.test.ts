@@ -484,6 +484,36 @@ describe("chat settings routes", () => {
     );
   });
 
+  test("normalizes legacy model configs with free billing defaults in current context", async () => {
+    const app = await createApp();
+    const response = await app.request("/api/chat-settings/current-context");
+
+    expect(response.status).toBe(200);
+
+    const payload = (await response.json()) as {
+      data: {
+        modelsConfig: {
+          list: Array<{
+            id?: string;
+            provider?: string;
+            billingStatus?: string;
+            billingMethod?: string;
+            price?: Record<string, unknown>;
+          }>;
+        };
+      };
+    };
+    expect(payload.data.modelsConfig.list[0]).toEqual(
+      expect.objectContaining({
+        id: "claude-opus-4.6",
+        provider: "github-copilot",
+        billingStatus: "free",
+      }),
+    );
+    expect(payload.data.modelsConfig.list[0]?.billingMethod).toBeUndefined();
+    expect(payload.data.modelsConfig.list[0]?.price).toBeUndefined();
+  });
+
   test("applies a preview by signed fallback patch when in-memory pending state is missing", async () => {
     const app = await createApp();
     const preview = await createPreview(app, "Please switch ops to parallel and enable judge.");

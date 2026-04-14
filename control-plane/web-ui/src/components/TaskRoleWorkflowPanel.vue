@@ -14,7 +14,7 @@
     <a-card size="small" :style="{ marginBottom: '12px' }" data-testid="task-workflow-banner">
       <a-space size="small" wrap :style="{ marginBottom: workflowBannerState.blockingReason ? '12px' : '0' }">
         <a-tag color="blue">阶段 {{ currentStageLabel }}</a-tag>
-        <a-tag :color="stageStatusTone(workflowBannerState.workflowStatus)">{{ workflowStatusLabel }}</a-tag>
+        <a-tag :color="workflowStatusDisplay.tagColor">{{ workflowStatusDisplay.label }}</a-tag>
         <a-tag v-if="workflowBannerState.blocked" color="red">已阻断</a-tag>
         <a-tag v-if="workflowBannerState.approvalPending" color="orange">待审批</a-tag>
         <a-tag v-if="workflowBannerState.openChangeRequestCount > 0" color="gold">
@@ -32,7 +32,7 @@
 
       <a-descriptions :column="1" bordered size="small">
         <a-descriptions-item label="当前阶段">{{ currentStageLabel }}</a-descriptions-item>
-        <a-descriptions-item label="流程状态">{{ workflowStatusLabel }}</a-descriptions-item>
+        <a-descriptions-item label="流程状态">{{ workflowStatusDisplay.label }}</a-descriptions-item>
         <a-descriptions-item label="角色结论数">{{ roleConclusions.length }}</a-descriptions-item>
         <a-descriptions-item label="待处理项">{{ openDeveloperChangeRequests.length }}</a-descriptions-item>
       </a-descriptions>
@@ -44,7 +44,7 @@
         <a-card v-for="stage in workflowStages" :key="stage.id || stage.stageKey" size="small">
           <a-flex justify="space-between" align="flex-start" :gap="8">
             <div>
-              <div><strong>{{ stage.stageLabel || formatStageLabel(stage.stageKey) }}</strong></div>
+              <div><strong>{{ formatStageLabel(stage.stageKey) }}</strong></div>
               <a-typography-text type="secondary">
                 {{ stage.stageKey }} · 主责 {{ stage.primaryRoleLabel || '未命名角色' }}
               </a-typography-text>
@@ -192,7 +192,7 @@
         <a-typography-text strong>待审批阶段</a-typography-text>
         <ul :style="{ paddingLeft: '18px', margin: '6px 0' }">
           <li v-for="stage in approvalPendingStages" :key="stage.id || stage.stageKey">
-            {{ stage.stageLabel || stage.stageKey }}
+            {{ formatStageLabel(stage.stageKey) }}
           </li>
         </ul>
       </div>
@@ -235,6 +235,10 @@ import type {
   TaskStageViewModel,
   TaskWorkflowViewModel,
 } from "../lib/api";
+import {
+  resolveWorkflowStageLabel,
+  resolveWorkflowStatusDisplay,
+} from "../lib/task-workflow-display-policy";
 
 const props = withDefaults(
   defineProps<{
@@ -304,17 +308,9 @@ const workflowBannerState = computed(() => ({
   blockingReason: props.workflowStages.find((stage) => stage.blockingReason)?.blockingReason,
 }));
 
-const stageLabelLookup = computed(
-  () =>
-    new Map(
-      props.workflowStages.map((stage) => [
-        stage.stageKey,
-        stage.stageLabel || fallbackStageLabel(stage.stageKey),
-      ]),
-    ),
+const currentStageLabel = computed(() =>
+  resolveWorkflowStageLabel(workflowBannerState.value.currentStage, props.workflowStages),
 );
-
-const currentStageLabel = computed(() => formatStageLabel(workflowBannerState.value.currentStage));
 
 function runtimeSummaryOf(stage: TaskStageViewModel) {
   return (
@@ -346,24 +342,9 @@ const manualInterventionLabel = computed(() => {
   return "当前无需人工接管";
 });
 
-const workflowStatusLabel = computed(() => {
-  switch (workflowBannerState.value.workflowStatus) {
-    case "running":
-      return "进行中";
-    case "blocked":
-      return "已阻断";
-    case "waiting-approval":
-      return "待审批";
-    case "failed":
-      return "失败";
-    case "completed":
-      return "已完成";
-    case "cancelled":
-      return "已取消";
-    default:
-      return workflowBannerState.value.workflowStatus || "未开始";
-  }
-});
+const workflowStatusDisplay = computed(() =>
+  resolveWorkflowStatusDisplay(workflowBannerState.value.workflowStatus),
+);
 
 function riskColor(level: string) {
   const map: Record<string, string> = {
@@ -424,41 +405,11 @@ function changeRequestStatusLabel(status: string) {
 }
 
 function stageStatusTone(status: string) {
-  switch (status) {
-    case "completed":
-      return "green";
-    case "running":
-      return "blue";
-    case "blocked":
-      return "red";
-    case "waiting-approval":
-      return "orange";
-    case "failed":
-      return "volcano";
-    default:
-      return "default";
-  }
+  return resolveWorkflowStatusDisplay(status, "stage").tagColor;
 }
 
 function stageStatusLabel(status: string) {
-  switch (status) {
-    case "pending":
-      return "待开始";
-    case "running":
-      return "进行中";
-    case "blocked":
-      return "已阻断";
-    case "waiting-approval":
-      return "待审批";
-    case "failed":
-      return "失败";
-    case "completed":
-      return "已完成";
-    case "cancelled":
-      return "已取消";
-    default:
-      return status;
-  }
+  return resolveWorkflowStatusDisplay(status, "stage").label;
 }
 
 function gateResultColor(status: string) {
@@ -514,46 +465,7 @@ function approvalResultLabel(status: string) {
 }
 
 function formatStageLabel(stageKey: string | null | undefined) {
-  if (!stageKey) {
-    return "未开始";
-  }
-
-  return stageLabelLookup.value.get(stageKey) || fallbackStageLabel(stageKey);
-}
-
-function fallbackStageLabel(stageKey: string) {
-  switch (stageKey) {
-    case "intake":
-      return "需求进入";
-    case "clarify":
-      return "需求澄清";
-    case "design":
-      return "方案设计";
-    case "plan":
-      return "任务拆解";
-    case "implement":
-      return "实现开发";
-    case "review":
-      return "评审";
-    case "verify":
-      return "集成验证";
-    case "fix":
-      return "修复处理";
-    case "release":
-      return "发布执行";
-    case "post-release":
-      return "发布观察";
-    case "retrospective":
-      return "复盘沉淀";
-    case "done":
-      return "已完成";
-    case "cancelled":
-      return "已取消";
-    case "unknown":
-      return "未知阶段";
-    default:
-      return stageKey;
-  }
+  return resolveWorkflowStageLabel(stageKey, props.workflowStages);
 }
 
 function isRoleReviewExpanded(id: string) {

@@ -389,7 +389,7 @@ async function syncTaskAggregateSnapshotFromAgentRun(
     sessionId: context.runtimeSessionId,
     agentRunId: args.agentRunId,
     result: args.result ?? args.task.result,
-    selectedModel: args.modelUsed ?? args.task.selectedModel,
+    selectedModel: args.task.selectedModel,
     startedAt: args.startedAt ?? args.task.startedAt,
     finishedAt: args.finishedAt ?? args.task.finishedAt,
   };

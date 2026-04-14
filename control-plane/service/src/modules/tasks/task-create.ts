@@ -5,6 +5,7 @@ import { repositories, repositoryCredentials } from "../../db/schema";
 import { recordAuditEvent } from "../audit/routes";
 import { syncTaskRelationLinks, upsertTaskTreeNode } from "../project-tree/storage";
 import { loadTaskTreeRecordMap } from "../project-tree/task-view";
+import { validateConfiguredModelRoute } from "../../lib/configured-model-routes";
 import {
   collectLinkedTaskIdsFromCreateInput,
   expandCreateTaskRelations,
@@ -110,6 +111,11 @@ export function createTaskCreationApi(deps: {
   }) => Promise<unknown>;
 }) {
   async function validateTaskCreateInput(body: CreateTaskInput) {
+    const modelValidation = validateConfiguredModelRoute(body.selectedModel, "任务模型");
+    if (modelValidation) {
+      return { error: modelValidation as const };
+    }
+
     const repoValidation = await validateTaskRepository(body.projectId, body.repoId);
     if (repoValidation) {
       return repoValidation;

@@ -249,7 +249,6 @@ export interface PersistedTaskStrategy {
     providerId?: string;
     modelId?: string;
     modelRoute?: string;
-    leaseId?: string | null;
     guardDecision?: string;
     guardReason?: string;
     estimatedRequestUpperBound?: number;

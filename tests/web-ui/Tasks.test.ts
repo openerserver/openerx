@@ -23,8 +23,11 @@ const apiMocks = vi.hoisted(() => ({
   listTasks: vi.fn(),
   listRepositories: vi.fn(),
   listCredentials: vi.fn(),
+  listCommands: vi.fn(),
+  getModelsList: vi.fn(),
   getOrchestrationStrategy: vi.fn(),
   createTask: vi.fn(),
+  deleteTask: vi.fn(),
   executeTask: vi.fn(),
   getTaskExecutionPreflight: vi.fn(),
   getTask: vi.fn(),
@@ -247,6 +250,8 @@ async function mountPage(tasks = [makeTask()]) {
   apiMocks.listTasks.mockResolvedValue({ data: tasks });
   apiMocks.listRepositories.mockResolvedValue({ data: [] });
   apiMocks.listCredentials.mockResolvedValue({ data: [] });
+  apiMocks.listCommands.mockResolvedValue({ data: [] });
+  apiMocks.getModelsList.mockResolvedValue({ data: [] });
   apiMocks.getOrchestrationStrategy.mockResolvedValue({
     data: {
       organizationSettings: {
@@ -255,12 +260,12 @@ async function mountPage(tasks = [makeTask()]) {
     },
   });
   apiMocks.createTask.mockResolvedValue({ id: "task-created" });
+  apiMocks.deleteTask.mockResolvedValue({});
   apiMocks.executeTask.mockResolvedValue({});
   apiMocks.getTaskExecutionPreflight.mockResolvedValue({
     taskId: "task-created",
     allowed: true,
     effectiveModel: "github-copilot:gpt-5-mini",
-    activeLease: null,
     policy: {
       providerId: "github-copilot",
       modelId: "gpt-5-mini",
@@ -274,16 +279,7 @@ async function mountPage(tasks = [makeTask()]) {
       maxParallelCandidates: 4,
       allowJudge: true,
       allowHooks: true,
-      requiresExplicitGate: false,
-      requiresLease: false,
       suggestedModel: undefined,
-    },
-    requirements: {
-      allowPaidExecution: false,
-      leaseRequired: false,
-      hasAllowPaidExecution: true,
-      hasLease: false,
-      leaseId: null,
     },
     preflight: {
       providerId: "github-copilot",
@@ -384,41 +380,30 @@ describe("Tasks page", () => {
     expect(rowTexts.some((text) => text.includes("Alphatask"))).toBe(false);
   });
 
-  it("executes pending task and refreshes the list", async () => {
+  it("starts pending task through preflight and returns the settled snapshot", async () => {
     const wrapper = await mountPage([makeTask({ id: "task-exec", status: "pending" })]);
 
     const state = getSetupState(wrapper) as {
-      handleExecute: (taskId: string) => void;
-      handleExecutionModeConfirm: (overrides: unknown) => Promise<void>;
+      attemptTaskExecution: (taskId: string) => Promise<Task | undefined | null>;
     };
-    state.handleExecute("task-exec");
-    await state.handleExecutionModeConfirm(null);
+    const latestTask = await state.attemptTaskExecution("task-exec");
     await flushPromises();
 
     expect(apiMocks.getTaskExecutionPreflight).toHaveBeenCalledWith("task-exec");
-    expect(apiMocks.executeTask).toHaveBeenCalledWith("task-exec", undefined);
+    expect(apiMocks.executeTask).toHaveBeenCalledWith("task-exec");
     expect(apiMocks.getTask).toHaveBeenCalledWith("task-exec");
-    expect(apiMocks.listTasks).toHaveBeenCalledTimes(2);
+    expect(latestTask?.status).toBe("running");
   });
 
-  it("opens workbench reply focus when continuing a completed task", async () => {
+  it("links completed task titles to the workbench task view", async () => {
     const wrapper = await mountPage([makeTask({ id: "task-done", status: "completed" })]);
 
-    const state = getSetupState(wrapper) as {
-      handleContinue: (taskId: string) => void;
-    };
-    state.handleContinue("task-done");
-
-    expect(routerMocks.push).toHaveBeenCalledWith({
-      path: "/workbench",
-      query: {
-        task: "task-done",
-        reply: "1",
-      },
-    });
+    const workbenchLink = wrapper.find('a[data-to="/workbench?task=task-done"]');
+    expect(workbenchLink.exists()).toBe(true);
+    expect(workbenchLink.text()).toContain("Fix login flow");
   });
 
-  it("renders awaiting adoption label for completed parallel tasks without a winner", async () => {
+  it("keeps explicit completed status for parallel tasks without a winner", async () => {
     const wrapper = await mountPage([
       makeTask({
         id: "task-awaiting-adoption",
@@ -431,7 +416,8 @@ describe("Tasks page", () => {
 
     await flushPromises();
 
-    expect(wrapper.text()).toContain("待采纳");
+    expect(wrapper.text()).toContain("已完成");
+    expect(wrapper.text()).not.toContain("待采纳");
   });
 
   it("downgrades model and retries when preflight asks for allow-with-downgrade", async () => {
@@ -441,7 +427,6 @@ describe("Tasks page", () => {
         taskId: "task-exec",
         allowed: false,
         effectiveModel: "github-copilot:gpt-5.4",
-        activeLease: null,
         policy: {
           providerId: "github-copilot",
           modelId: "gpt-5.4",
@@ -455,16 +440,7 @@ describe("Tasks page", () => {
           maxParallelCandidates: 1,
           allowJudge: false,
           allowHooks: false,
-          requiresExplicitGate: true,
-          requiresLease: true,
           suggestedModel: "github-copilot:gpt-5-mini",
-        },
-        requirements: {
-          allowPaidExecution: true,
-          leaseRequired: false,
-          hasAllowPaidExecution: true,
-          hasLease: false,
-          leaseId: null,
         },
         preflight: {
           providerId: "github-copilot",
@@ -485,7 +461,6 @@ describe("Tasks page", () => {
         taskId: "task-exec",
         allowed: true,
         effectiveModel: "github-copilot:gpt-5-mini",
-        activeLease: null,
         policy: {
           providerId: "github-copilot",
           modelId: "gpt-5-mini",
@@ -499,16 +474,7 @@ describe("Tasks page", () => {
           maxParallelCandidates: 4,
           allowJudge: true,
           allowHooks: true,
-          requiresExplicitGate: false,
-          requiresLease: false,
           suggestedModel: undefined,
-        },
-        requirements: {
-          allowPaidExecution: false,
-          leaseRequired: false,
-          hasAllowPaidExecution: true,
-          hasLease: false,
-          leaseId: null,
         },
         preflight: {
           providerId: "github-copilot",
@@ -529,17 +495,15 @@ describe("Tasks page", () => {
     const wrapper = await mountPage([makeTask({ id: "task-exec", status: "pending" })]);
 
     const state = getSetupState(wrapper) as {
-      handleExecute: (taskId: string) => void;
-      handleExecutionModeConfirm: (overrides: unknown) => Promise<void>;
+      attemptTaskExecution: (taskId: string) => Promise<Task | undefined | null>;
     };
-    state.handleExecute("task-exec");
-    await state.handleExecutionModeConfirm(null);
+    await state.attemptTaskExecution("task-exec");
     await flushPromises();
 
     expect(apiMocks.updateTask).toHaveBeenCalledWith("task-exec", {
       selectedModel: "github-copilot:gpt-5-mini",
     });
-    expect(apiMocks.executeTask).toHaveBeenCalledWith("task-exec", undefined);
+    expect(apiMocks.executeTask).toHaveBeenCalledWith("task-exec");
   });
 
   it("keeps locally created task in running state when immediate execute settles after list refresh", async () => {
@@ -586,20 +550,20 @@ describe("Tasks page", () => {
     await state.handleCreate();
     await flushPromises();
 
-    expect(apiMocks.executeTask).toHaveBeenCalledWith("task-created", undefined);
+    expect(apiMocks.executeTask).toHaveBeenCalledWith("task-created");
     expect(state.filteredTasks[0]?.status).toBe("running");
   });
 
-  it("cancels running task from list action", async () => {
+  it("deletes task from list action helper", async () => {
     const wrapper = await mountPage([makeTask({ id: "task-run", status: "running" })]);
 
     const state = getSetupState(wrapper) as {
-      handleCancel: (taskId: string) => Promise<void>;
+      handleDelete: (taskId: string) => Promise<void>;
     };
-    await state.handleCancel("task-run");
+    await state.handleDelete("task-run");
     await flushPromises();
 
-    expect(apiMocks.updateTaskStatus).toHaveBeenCalledWith("task-run", "cancelled");
+    expect(apiMocks.deleteTask).toHaveBeenCalledWith("task-run");
   });
 
   it("loads built-in task templates when localStorage is empty", async () => {
@@ -756,70 +720,44 @@ describe("Tasks page", () => {
     );
   });
 
-  it("passes parallel overrides to executeTask when user selects parallel mode", async () => {
+  it("navigates to recommended scenarios from the header action", async () => {
     const wrapper = await mountPage([makeTask({ id: "task-p", status: "pending" })]);
 
-    const state = getSetupState(wrapper) as {
-      handleExecute: (taskId: string) => void;
-      handleExecutionModeConfirm: (overrides: unknown) => Promise<void>;
-    };
-    state.handleExecute("task-p");
-    await state.handleExecutionModeConfirm({
-      mode: "parallel",
-      candidates: [
-        { model: "github-copilot:gpt-5-mini", label: "候选 A" },
-        { model: "github-copilot:claude-sonnet-4", label: "候选 B" },
-      ],
-    });
+    const scenarioButton = wrapper
+      .findAll("button")
+      .find((node) => node.text().includes("推荐场景"));
+
+    expect(scenarioButton).toBeTruthy();
+    await scenarioButton!.trigger("click");
     await flushPromises();
 
-    expect(apiMocks.executeTask).toHaveBeenCalledWith("task-p", {
-      mode: "parallel",
-      candidates: [
-        { model: "github-copilot:gpt-5-mini", label: "候选 A" },
-        { model: "github-copilot:claude-sonnet-4", label: "候选 B" },
-      ],
-    });
+    expect(routerMocks.push).toHaveBeenCalledWith("/projects/proj-1/recommended-scenarios");
   });
 
-  it("passes sequential-chain overrides to executeTask when user selects chain mode", async () => {
+  it("navigates to task graph from the header action", async () => {
     const wrapper = await mountPage([makeTask({ id: "task-sc", status: "pending" })]);
 
-    const state = getSetupState(wrapper) as {
-      handleExecute: (taskId: string) => void;
-      handleExecutionModeConfirm: (overrides: unknown) => Promise<void>;
-    };
-    state.handleExecute("task-sc");
-    await state.handleExecutionModeConfirm({
-      mode: "sequential-chain",
-      steps: [
-        { id: "step-1", title: "分析", instruction: "先分析" },
-        { id: "step-2", title: "实施", instruction: "再动手", model: "github-copilot:gpt-5.4" },
-      ],
-    });
+    const taskGraphButton = wrapper.findAll("button").find((node) => node.text().includes("任务总图"));
+
+    expect(taskGraphButton).toBeTruthy();
+    await taskGraphButton!.trigger("click");
     await flushPromises();
 
-    expect(apiMocks.executeTask).toHaveBeenCalledWith("task-sc", {
-      mode: "sequential-chain",
-      steps: [
-        { id: "step-1", title: "分析", instruction: "先分析" },
-        { id: "step-2", title: "实施", instruction: "再动手", model: "github-copilot:gpt-5.4" },
-      ],
-    });
+    expect(routerMocks.push).toHaveBeenCalledWith("/projects/proj-1/task-graph");
   });
 
-  it("opens execution mode modal when handleExecute is called", async () => {
+  it("opens the create modal from the header action", async () => {
     const wrapper = await mountPage([makeTask({ id: "task-modal", status: "pending" })]);
 
     const state = getSetupState(wrapper) as {
-      handleExecute: (taskId: string) => void;
-      showExecutionModeModal: boolean;
-      executionModeTargetTaskId: string | null;
+      showCreateModal: boolean;
     };
-    state.handleExecute("task-modal");
+
+    const createButton = wrapper.findAll("button").find((node) => node.text().includes("新建任务"));
+    expect(createButton).toBeTruthy();
+    await createButton!.trigger("click");
     await flushPromises();
 
-    expect(state.showExecutionModeModal).toBe(true);
-    expect(state.executionModeTargetTaskId).toBe("task-modal");
+    expect(state.showCreateModal).toBe(true);
   });
 });

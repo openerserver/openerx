@@ -185,7 +185,7 @@
 | `delete-now` | 已完成 | [tests/service/project-tree-routes.test.ts](../tests/service/project-tree-routes.test.ts) | lineage-aware session message 测试命名已改为当前实现语义，强调 persisted conversation state / conversation tables，而不再暗示 tree-event message fallback 是主路径 |
 | `delete-now` | 已完成 | [control-plane/service/src/db/schema.pg.ts](../control-plane/service/src/db/schema.pg.ts), [control-plane/service/drizzle-pg/0021_drop_project_tree_events.sql](../control-plane/service/drizzle-pg/0021_drop_project_tree_events.sql), [control-plane/web-ui/src/stores/realtime.ts](../control-plane/web-ui/src/stores/realtime.ts), [control-plane/web-ui/src/lib/api.ts](../control-plane/web-ui/src/lib/api.ts) | `project_tree_events` 已从当前 runtime schema 和前端 project-level realtime backfill 删除；项目级 tree-event feed 不再作为现行客户端能力保留 |
 | `keep-for-compat` | 保留 | [tests/service/tree-task-aggregations.test.ts](../tests/service/tree-task-aggregations.test.ts), [tests/service/task-route-registration-smoke.test.ts](../tests/service/task-route-registration-smoke.test.ts), [tests/service/task-operating-runtime-tree.test.ts](../tests/service/task-operating-runtime-tree.test.ts) | 测试仍保留 project tree 相关 cleanup 语境，但 `project_tree_events` 删除后这类清理已转移到 branches / links / tree nodes，自身不再是运行时前提 |
-| `keep-for-compat` | 已完成当前范围 | [docs/task-domain-radical-storage-redesign-plan.md](task-domain-radical-storage-redesign-plan.md), [docs/task-domain-radical-schema-migration-plan.md](task-domain-radical-schema-migration-plan.md), [docs/task-domain-radical-drizzle-schema-draft.md](task-domain-radical-drizzle-schema-draft.md), [docs/pg-event-sourcing-optimization-plan.md](pg-event-sourcing-optimization-plan.md), [docs/project-tree-storage-design.md](project-tree-storage-design.md) | task-domain 主设计文档、project-tree 文档与 pg-event 文档已统一为“历史回放 / 审计窗口 / 测试清理副产物 / 可选优化”口径；后续仅需继续同步外围历史文档 |
+| `keep-for-compat` | 已完成当前范围 | [docs/task-domain-radical-storage-redesign-plan.md](task-domain-radical-storage-redesign-plan.md), [docs/task-domain-radical-schema-migration-plan.md](task-domain-radical-schema-migration-plan.md), [docs/task-domain-radical-drizzle-schema-draft.md](task-domain-radical-drizzle-schema-draft.md), [archive/task-domain/historical-pg-event-sourcing-optimization-plan.md](archive/task-domain/historical-pg-event-sourcing-optimization-plan.md), [docs/project-tree-storage-design.md](project-tree-storage-design.md) | task-domain 主设计文档、project-tree 文档与 pg-event 文档已统一为“历史回放 / 审计窗口 / 测试清理副产物 / 可选优化”口径；后续仅需继续同步外围历史文档 |
 | `keep-for-repair-only` | 暂无 | 无 | 本轮 source 扫描未找到直接查询 `project_tree_events` 作为消息读取来源的 repair-only 代码分支 |
 
 #### 5.2.3 关键证据
@@ -434,7 +434,7 @@ execution trace 对前端暴露的 `timelineMeta.readSource` 只保留当前真�
 
 1. 这些编号不要求立刻落地成 SQL。
 2. 已经形成文档化 backlog、边界和验收条件。
-3. 本轮已同步收口 [docs/task-domain-radical-schema-migration-plan.md](task-domain-radical-schema-migration-plan.md)、[docs/project-tree-storage-design.md](project-tree-storage-design.md)、[docs/pg-event-sourcing-optimization-plan.md](pg-event-sourcing-optimization-plan.md) 的历史/兼容口径。
+3. 本轮已同步收口 [docs/task-domain-radical-schema-migration-plan.md](task-domain-radical-schema-migration-plan.md)、[docs/project-tree-storage-design.md](project-tree-storage-design.md)、[archive/task-domain/historical-pg-event-sourcing-optimization-plan.md](archive/task-domain/historical-pg-event-sourcing-optimization-plan.md) 的历史/兼容口径。
 
 当前结论：
 

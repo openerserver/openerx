@@ -3,6 +3,7 @@ import { cpFetch } from "./control-plane-client";
 import { resolveModelRoute } from "./model-config";
 import { mergeTaskStrategy, parseTaskStrategy } from "./orchestration-strategy";
 import type { PaidExecutionGuardState } from "./paid-execution-guard";
+import { consumeProjectFund, refundProjectFund } from "./project-fund";
 
 interface TaskGuardRecord {
   projectId: string;
@@ -52,6 +53,10 @@ export interface PaidExecutionRuntimeOutcome {
   breakerReason?: string;
 }
 
+function roundUsd(value: number) {
+  return Number(Number(value || 0).toFixed(4));
+}
+
 function parseModelRoute(modelRoute: string) {
   return resolveModelRoute(modelRoute);
 }
@@ -65,7 +70,6 @@ function buildGuardDetail(
   }
 
   return {
-    leaseId: guardState.leaseId,
     guardDecision: guardState.guardDecision,
     guardReason: guardState.guardReason,
     estimatedRequestUpperBound: guardState.estimatedRequestUpperBound,
@@ -75,6 +79,8 @@ function buildGuardDetail(
     actualTokenUsage: guardState.actualTokenUsage,
     actualCost: guardState.actualCost,
     guardOverridesApplied: guardState.overridesApplied,
+    fundReservedTotalUsd: guardState.fundReservedTotalUsd,
+    fundReservedRemainingUsd: guardState.fundReservedRemainingUsd,
     breakerTrippedAt: guardState.breakerTrippedAt,
     breakerReason: guardState.breakerReason,
     ...detail,
@@ -103,21 +109,12 @@ function computeNextPaidExecutionGuardState(args: {
   requestDelta: number;
   tokenUsed: number;
   costUsd: number;
+  fundReservedRemainingUsd?: number;
+  breakerReason?: string;
 }) {
   const nextActualRequests = (args.currentGuard.actualRequests || 0) + args.requestDelta;
   const nextActualTokenUsage = (args.currentGuard.actualTokenUsage || 0) + args.tokenUsed;
-  const nextActualCost = Number(((args.currentGuard.actualCost || 0) + args.costUsd).toFixed(2));
-  const overRequestLimit =
-    args.currentGuard.maxRequestsPerRun > 0 &&
-    nextActualRequests > args.currentGuard.maxRequestsPerRun;
-  const overCostLimit =
-    args.currentGuard.maxEstimatedCostUsdPerRun > 0 &&
-    nextActualCost > args.currentGuard.maxEstimatedCostUsdPerRun;
-  const breakerReason = overRequestLimit
-    ? `actual requests ${nextActualRequests} exceeded ${args.currentGuard.maxRequestsPerRun}`
-    : overCostLimit
-      ? `actual cost $${nextActualCost} exceeded $${args.currentGuard.maxEstimatedCostUsdPerRun}`
-      : undefined;
+  const nextActualCost = roundUsd((args.currentGuard.actualCost || 0) + args.costUsd);
 
   return {
     nextGuard: {
@@ -125,14 +122,61 @@ function computeNextPaidExecutionGuardState(args: {
       actualRequests: nextActualRequests,
       actualTokenUsage: nextActualTokenUsage,
       actualCost: nextActualCost,
-      ...(breakerReason
+      ...(typeof args.fundReservedRemainingUsd === "number"
         ? {
-            breakerReason,
+            fundReservedRemainingUsd: roundUsd(Math.max(0, args.fundReservedRemainingUsd)),
+          }
+        : {}),
+      ...(args.breakerReason
+        ? {
+            breakerReason: args.breakerReason,
             breakerTrippedAt: args.currentGuard.breakerTrippedAt || new Date().toISOString(),
           }
         : {}),
     } satisfies PaidExecutionGuardState,
-    breakerReason,
+    breakerReason: args.breakerReason,
+  };
+}
+
+async function consumeReservedProjectFund(input: {
+  authorization: string;
+  projectId: string;
+  taskId: string;
+  sessionId?: string;
+  modelRoute: string;
+  currentGuard: PaidExecutionGuardState;
+  amountUsd: number;
+}) {
+  const normalizedAmount = roundUsd(input.amountUsd);
+  if (normalizedAmount <= 0) {
+    return {
+      ok: true as const,
+      remainingUsd: input.currentGuard.fundReservedRemainingUsd ?? 0,
+    };
+  }
+
+  const result = await consumeProjectFund(input.projectId, input.authorization, {
+    amountUsd: normalizedAmount,
+    modelRoute: input.modelRoute,
+    taskId: input.taskId,
+    runtimeSessionId: input.sessionId,
+    note: "runtime settlement",
+  });
+
+  if (!result.ok) {
+    const errorPayload = result.data as unknown as { error?: unknown };
+    return {
+      ok: false as const,
+      error:
+        typeof errorPayload?.error === "string"
+          ? (errorPayload.error ?? "Failed to consume reserved project fund")
+          : "Failed to consume reserved project fund",
+    };
+  }
+
+  return {
+    ok: true as const,
+    remainingUsd: roundUsd((input.currentGuard.fundReservedRemainingUsd ?? 0) - normalizedAmount),
   };
 }
 
@@ -237,11 +281,34 @@ export async function recordPaidExecutionRuntimeUsage(
   if (!currentGuard?.enabled) {
     return buildNoTripOutcome();
   }
-  const { nextGuard, breakerReason } = computeNextPaidExecutionGuardState({
+  let breakerReason: string | undefined;
+  let fundReservedRemainingUsd = currentGuard.fundReservedRemainingUsd;
+
+  if (usage.costUsd > 0) {
+    const consumeResult = await consumeReservedProjectFund({
+      authorization: input.authorization,
+      projectId: input.projectId || task.projectId,
+      taskId: input.taskId,
+      sessionId: input.sessionId,
+      modelRoute: input.modelRoute,
+      currentGuard,
+      amountUsd: usage.costUsd,
+    });
+
+    if (!consumeResult.ok) {
+      breakerReason = consumeResult.error;
+    } else {
+      fundReservedRemainingUsd = consumeResult.remainingUsd;
+    }
+  }
+
+  const { nextGuard } = computeNextPaidExecutionGuardState({
     currentGuard,
     requestDelta: input.requestDelta,
     tokenUsed: usage.totalTokens,
     costUsd: usage.costUsd,
+    fundReservedRemainingUsd,
+    breakerReason,
   });
 
   await persistPaidExecutionGuardState({
@@ -267,5 +334,72 @@ export async function recordPaidExecutionRuntimeUsage(
     guardState: nextGuard,
     tripped: Boolean(breakerReason),
     breakerReason,
+  };
+}
+
+export async function releasePaidExecutionReservation(input: {
+  authorization: string;
+  taskId: string;
+  reason: string;
+  sessionId?: string;
+  agentRunId?: string;
+}) {
+  const taskResult = await cpFetch<TaskGuardRecord>(
+    `/api/project-tree/tasks/${encodeURIComponent(input.taskId)}`,
+    {
+      authorization: input.authorization,
+    },
+  );
+  if (!taskResult.ok) {
+    return { ok: false as const, releasedUsd: 0 };
+  }
+
+  const task = taskResult.data;
+  const taskStrategy = parseTaskStrategy(task.strategy);
+  const currentGuard = taskStrategy.paidExecutionGuard as PaidExecutionGuardState | undefined;
+  const remainingUsd = roundUsd(currentGuard?.fundReservedRemainingUsd ?? 0);
+  if (!currentGuard?.enabled || remainingUsd <= 0) {
+    return { ok: true as const, releasedUsd: 0, guardState: currentGuard };
+  }
+
+  const refundResult = await refundProjectFund(task.projectId, input.authorization, {
+    amountUsd: remainingUsd,
+    modelRoute: currentGuard.modelRoute,
+    taskId: input.taskId,
+    runtimeSessionId: input.sessionId,
+    note: input.reason,
+  });
+  if (!refundResult.ok) {
+    return { ok: false as const, releasedUsd: 0, guardState: currentGuard };
+  }
+
+  const nextGuard: PaidExecutionGuardState = {
+    ...currentGuard,
+    fundReservedRemainingUsd: 0,
+  };
+  await persistPaidExecutionGuardState({
+    authorization: input.authorization,
+    taskId: input.taskId,
+    strategy: task.strategy,
+    nextGuard,
+  });
+  await recordAgentAudit({
+    projectId: task.projectId,
+    taskId: input.taskId,
+    sessionId: input.sessionId,
+    agentRunId: input.agentRunId,
+    eventType: "paid_execution",
+    action: "reservation_released",
+    detail: buildGuardDetail(nextGuard, {
+      reason: input.reason,
+      releasedUsd: remainingUsd,
+    }),
+    riskLevel: "low",
+  });
+
+  return {
+    ok: true as const,
+    releasedUsd: remainingUsd,
+    guardState: nextGuard,
   };
 }

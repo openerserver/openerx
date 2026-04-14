@@ -338,7 +338,6 @@ describe("mergeTaskStrategy with hookExecutions", () => {
           estimatedCostUpperBound: 0.2,
           maxEstimatedCostUsdPerRun: 0.75,
           postHooksDisabled: false,
-          leaseId: null,
         },
       },
     );

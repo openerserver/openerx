@@ -171,6 +171,99 @@ describe("task message patch event", () => {
     });
   });
 
+  it("maps message reconcile required events into a refresh patch", () => {
+    expect(
+      toTaskMessagePatchEvent(
+        createEvent({
+          type: "task.reconcile.required",
+          data: {
+            roundId: "task-session:task-1:session-1",
+            scope: "messages",
+            reason: "snapshot_lag",
+            expectedRevision: 9,
+          },
+        }),
+      ),
+    ).toMatchObject({
+      kind: "message-reconcile-required",
+      roundId: "task-session:task-1:session-1",
+      reason: "snapshot_lag",
+      expectedRevision: 9,
+    });
+  });
+
+  it("preserves alias_miss reconcile reasons on message refresh patches", () => {
+    expect(
+      toTaskMessagePatchEvent(
+        createEvent({
+          type: "task.reconcile.required",
+          data: {
+            roundId: "task-session:task-1:session-1",
+            scope: "messages",
+            reason: "alias_miss",
+            expectedRevision: 10,
+          },
+        }),
+      ),
+    ).toMatchObject({
+      kind: "message-reconcile-required",
+      roundId: "task-session:task-1:session-1",
+      reason: "alias_miss",
+      expectedRevision: 10,
+    });
+  });
+
+  it("maps workflow reconcile required events into a workflow refresh patch", () => {
+    expect(
+      toTaskMessagePatchEvent(
+        createEvent({
+          type: "task.reconcile.required",
+          data: {
+            scope: "workflow",
+            reason: "projection_rebuilt",
+          },
+        }),
+      ),
+    ).toMatchObject({
+      kind: "workflow-reconcile-required",
+      reason: "projection_rebuilt",
+    });
+  });
+
+  it("maps flow reconcile required events into a flow refresh patch", () => {
+    expect(
+      toTaskMessagePatchEvent(
+        createEvent({
+          type: "task.reconcile.required",
+          data: {
+            scope: "flow",
+            reason: "projection_rebuilt",
+          },
+        }),
+      ),
+    ).toMatchObject({
+      kind: "flow-reconcile-required",
+      reason: "projection_rebuilt",
+    });
+  });
+
+  it("maps task reconcile required events into a task-wide refresh patch", () => {
+    expect(
+      toTaskMessagePatchEvent(
+        createEvent({
+          type: "task.reconcile.required",
+          data: {
+            scope: "task",
+            reason: "internal_repair",
+          },
+        }),
+      ),
+    ).toMatchObject({
+      kind: "task-reconcile-required",
+      reason: "internal_repair",
+    });
+  });
+
   it("maps session lifecycle snapshot reasons", () => {
     expect(
       toTaskMessagePatchEvent(

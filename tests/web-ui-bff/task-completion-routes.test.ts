@@ -429,6 +429,24 @@ describe("task completion routes", () => {
       ok: true,
       phaseId: "phase-parallel-1",
       winnerCandidateIndex: 0,
+      execution: {
+        action: "adopt",
+        nextSessionId: "session-a",
+        taskSessionId: "task-session:task-adopt-1:session-a",
+        roundId: "task-session:task-adopt-1:session-a",
+        acceptedRevision: null,
+        phaseId: "phase-parallel-1",
+        agentRunId: null,
+        status: "completed",
+        executionMode: "parallel",
+        parentSessionId: null,
+        parentTaskSessionId: null,
+        refreshTargets: {
+          workflow: true,
+          flow: true,
+          messages: true,
+        },
+      },
     });
     expect(terminateAgentMock).toHaveBeenCalledWith("agent-run-2");
     expect(wsBroadcastMock).toHaveBeenCalledTimes(2);
@@ -660,6 +678,24 @@ describe("task completion routes", () => {
       ok: true,
       phaseId: "phase-awaiting-1",
       winnerCandidateIndex: 1,
+      execution: {
+        action: "adopt",
+        nextSessionId: "session-b",
+        taskSessionId: "task-session:task-adopt-awaiting:session-b",
+        roundId: "task-session:task-adopt-awaiting:session-b",
+        acceptedRevision: null,
+        phaseId: "phase-awaiting-1",
+        agentRunId: null,
+        status: "completed",
+        executionMode: "parallel",
+        parentSessionId: null,
+        parentTaskSessionId: null,
+        refreshTargets: {
+          workflow: true,
+          flow: true,
+          messages: true,
+        },
+      },
     });
 
     const cpFetchCalls = cpFetchMock.mock.calls as unknown as Array<
@@ -893,6 +929,24 @@ describe("task completion routes", () => {
       ok: true,
       phaseId: "phase-parallel-complete",
       winnerCandidateIndex: 0,
+      execution: {
+        action: "adopt",
+        nextSessionId: "session-a",
+        taskSessionId: "task-session:task-adopt-complete-status:session-a",
+        roundId: "task-session:task-adopt-complete-status:session-a",
+        acceptedRevision: null,
+        phaseId: "phase-parallel-complete",
+        agentRunId: null,
+        status: "completed",
+        executionMode: "parallel",
+        parentSessionId: null,
+        parentTaskSessionId: null,
+        refreshTargets: {
+          workflow: true,
+          flow: true,
+          messages: true,
+        },
+      },
     });
     const cpFetchCalls = cpFetchMock.mock.calls as unknown as Array<
       [string, RouteFetchOptions | undefined]
@@ -921,6 +975,66 @@ describe("task completion routes", () => {
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({ error: "Invalid candidate index" });
+  });
+
+  test("POST /:taskId/terminate returns the shared execution envelope for phase cancellation", async () => {
+    mockCpFetchRoutes([
+      {
+        url: "/api/project-tree/tasks/task-stop-1",
+        response: {
+          ok: true,
+          data: {
+            id: "task-stop-1",
+            title: "Stop execution",
+            projectId: "proj-stop",
+            prompt: "Stop the task",
+            status: "running",
+            sessionId: "session-live",
+            executionMode: "single",
+          },
+        },
+      },
+      {
+        url: "/api/tasks/task-stop-1/phases/phase-live-1/cancel",
+        method: "POST",
+        response: { ok: true, data: { ok: true, status: "cancelled" } },
+      },
+    ]);
+
+    const { taskRoutes } = await loadTaskRoutes();
+    const response = await taskRoutes.request("http://localhost/task-stop-1/terminate", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer test",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ phaseId: "phase-live-1", sessionId: "session-live" }),
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      ok: true,
+      phaseId: "phase-live-1",
+      status: "cancelled",
+      execution: {
+        action: "terminate",
+        nextSessionId: "session-live",
+        taskSessionId: "task-session:task-stop-1:session-live",
+        roundId: "task-session:task-stop-1:session-live",
+        acceptedRevision: null,
+        phaseId: "phase-live-1",
+        agentRunId: null,
+        status: "cancelled",
+        executionMode: "single",
+        parentSessionId: null,
+        parentTaskSessionId: null,
+        refreshTargets: {
+          workflow: true,
+          flow: true,
+          messages: true,
+        },
+      },
+    });
   });
 
   test("POST /:taskId/phases/:phaseId/candidates/:index/adopt returns 404 when task does not exist", async () => {

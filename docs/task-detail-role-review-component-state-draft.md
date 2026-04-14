@@ -2,7 +2,17 @@
 
 > 适用范围：OpenerX Web UI TaskDetail 页面
 >
-> 目标：把任务详情页中“角色结论 / 冲突 / 开发者修正请求”方案进一步收成可实现的组件结构、状态模型和数据流草案，贴近当前 [control-plane/web-ui/src/pages/TaskDetail.vue](control-plane/web-ui/src/pages/TaskDetail.vue) 的实现方式
+> 状态：Future target draft，当前实现尚未落地
+>
+> 目标：把任务详情页中“角色结论 / 冲突 / 开发者修正请求”方案进一步收成可实现的组件结构、状态模型和数据流草案，贴近当前 [control-plane/web-ui/src/pages/TaskDetailV3.vue](../control-plane/web-ui/src/pages/TaskDetailV3.vue) 与 [control-plane/web-ui/src/composables/useTaskDetailPageModel.ts](../control-plane/web-ui/src/composables/useTaskDetailPageModel.ts) 的实现边界
+
+## 0. 文档定位
+
+这份文档是 role-review UI plan 的“未来组件与状态模型落地草案”，不是当前 TaskDetailV3 代码结构的直接描述。
+
+1. 当前实现：当前 TaskDetailV3 的装配中心是 [control-plane/web-ui/src/composables/useTaskDetailPageModel.ts](../control-plane/web-ui/src/composables/useTaskDetailPageModel.ts)，页面壳与右栏 feature 已经拆成当前模块；角色评审相关组件尚未进入生产代码。
+2. 未来目标：给 role review、conflict、developer change request 设计一组可逐步接入的组件、state slice 和 composable。
+3. 阅读建议：先看 [task-detail-role-review-ui-plan.md](task-detail-role-review-ui-plan.md) 确认产品结构，再用本文安排组件与状态模型；同时对照 [taskdetail-v3-page-dataflow.md](taskdetail-v3-page-dataflow.md) 避免重新回到旧的大组件思路。
 
 ## 1. 文档目标
 
@@ -21,19 +31,19 @@
 
 ## 2. 与现有页面结构的对齐
 
-当前 [control-plane/web-ui/src/pages/TaskDetail.vue](control-plane/web-ui/src/pages/TaskDetail.vue) 的特点：
+当前生产页 [control-plane/web-ui/src/pages/TaskDetailV3.vue](../control-plane/web-ui/src/pages/TaskDetailV3.vue) 与其 page model 装配边界的特点：
 
-- 是单文件大组件
+- 页面壳已经稳定为左栏 / 中栏 / 右栏
+- 主要展示状态由 page model 与 composables 派生，而不是全部堆回单文件大组件
 - 页面结构已经稳定为左栏 / 中栏 / 右栏
-- 大量展示状态通过 `computed` 从页面级数据派生
 - 右栏已经有编排、流水线、治理等折叠面板
 
 因此本草案建议：
 
 - 不直接把整页改写成全新页面框架
-- 先在 `TaskDetail.vue` 中引入几个小组件
-- 数据获取先由页面统一拉取，再作为 props 传给右栏子组件
-- 如果状态继续膨胀，再在第二阶段抽 composable
+- 先在现有 V3 页面壳和右栏 feature 边界上引入几个小组件
+- 数据获取先由 page model 统一拉取，再作为 props 传给右栏子组件
+- 如果状态继续膨胀，再在第二阶段抽 role-review 专属 composable
 
 ## 3. 建议新增组件
 
@@ -148,7 +158,7 @@ interface DeveloperChangeRequestListProps {
 
 ### 4.1 新增页面级源数据
 
-建议在 `TaskDetail.vue` 中新增以下源数据：
+建议在 TaskDetailV3 的 page model 或 role-review feature 中新增以下源数据：
 
 ```ts
 const workflowViewLoading = ref(false);
@@ -210,7 +220,7 @@ const workflowBannerState = computed(() => ({
 优点：
 
 - 避免页面发 3 到 5 个并行请求再自行拼装
-- 更适合当前 TaskDetail 单组件模式
+- 更适合当前 TaskDetailV3 page model 统一装配模式
 
 ### 5.2 页面加载伪代码
 
@@ -331,7 +341,7 @@ export interface DeveloperChangeRequestViewModel {
 
 ## 9. composable 草案
 
-如果第二阶段要降低 `TaskDetail.vue` 的复杂度，建议抽：
+如果第二阶段要降低 TaskDetailV3 page model / 右栏装配复杂度，建议抽：
 
 - `useTaskWorkflowView(taskId)`
 - `useRoleReviewPanel(workflowView)`
@@ -367,12 +377,12 @@ export interface DeveloperChangeRequestViewModel {
 
 1. 先补 BFF 统一读模型接口。
 2. 再在 `api.ts` 中补类型和请求函数。
-3. 然后在 `TaskDetail.vue` 中接入页面级状态。
+3. 然后在 TaskDetailV3 page model / 右栏 feature 中接入页面级状态。
 4. 最后抽出右栏子组件。
 
 ## 12. 首批验收标准
 
-1. `TaskDetail.vue` 不需要自己拼装复杂聚合逻辑，只消费统一读模型。
+1. TaskDetailV3 page model 不需要自己拼装复杂聚合逻辑，只消费统一读模型。
 2. 新增 UI 不破坏当前左栏 / 中栏 / 右栏结构。
 3. 角色结论、冲突、修正请求分别有独立组件边界。
 4. 顶部横幅可以准确反映阻断、审批和待修正状态。

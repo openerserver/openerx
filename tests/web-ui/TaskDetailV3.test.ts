@@ -150,8 +150,10 @@ const messagesState = vi.hoisted(() => ({
   conversationItems: [] as Array<unknown>,
   hasStreamingAssistant: false,
   clearPendingAssistantDraft: vi.fn(),
+  error: null as string | null,
   refresh: vi.fn(async () => undefined),
   seedPendingAssistantDraft: vi.fn(),
+  sourceMessages: [] as Array<unknown>,
 }));
 const messagesStoreMock = reactive(messagesState) as typeof messagesState;
 
@@ -206,17 +208,31 @@ vi.mock("../../control-plane/web-ui/src/composables/useProjectTreeTask", () => (
 
 vi.mock("../../control-plane/web-ui/src/composables/useTreeBranches", () => ({
   useTreeBranches: () => ({
-    currentPhaseId: ref(branchState.currentPhaseId),
-    flatNodes: ref(branchState.flatNodes),
+    currentPhaseId: computed(() => branchState.currentPhaseId),
+    flatNodes: computed(() => branchState.flatNodes),
     sessionSummaries: branchSessionSummariesRef,
-    selectedNode: ref(branchState.selectedNode),
+    selectedNode: computed(() => branchState.selectedNode),
     loading: ref(false),
     error: ref<string | null>(null),
     refresh: branchState.refresh,
   }),
 }));
 
-vi.mock("../../control-plane/web-ui/src/composables/useTreeMessages", async () => {
+vi.mock("../../control-plane/web-ui/src/composables/useTaskMessageSnapshot", async () => {
+  return {
+    useTaskMessageSnapshot: () => ({
+      activeSessionId: ref<string | undefined>(undefined),
+      error: computed(() => messagesStoreMock.error),
+      loading: ref(false),
+      refresh: messagesState.refresh,
+      resolvedSessionId: ref<string | undefined>(undefined),
+      sourceMessages: computed(() => messagesStoreMock.sourceMessages),
+      trace: computed(() => messagesStoreMock.trace),
+    }),
+  };
+});
+
+vi.mock("../../control-plane/web-ui/src/composables/useTaskMessageStore", async () => {
   const { getTaskDetailRefreshRequest } = await import(
     "../../control-plane/web-ui/src/lib/task-detail-refresh-policy"
   );
@@ -225,8 +241,7 @@ vi.mock("../../control-plane/web-ui/src/composables/useTreeMessages", async () =
   );
 
   return {
-    useTreeMessages: () => ({
-      trace: computed(() => messagesStoreMock.trace),
+    useTaskMessageStore: () => ({
       conversationItems: computed(() => messagesStoreMock.conversationItems),
       clearPendingAssistantDraft: messagesState.clearPendingAssistantDraft,
       hasStreamingAssistant: computed(() => messagesStoreMock.hasStreamingAssistant),
@@ -236,10 +251,7 @@ vi.mock("../../control-plane/web-ui/src/composables/useTreeMessages", async () =
         );
         return getTaskDetailRefreshRequest(event ? toTaskMessagePatchEvent(event as any) : null);
       }),
-      loading: ref(false),
-      error: ref<string | null>(null),
       realtimeConnected: computed(() => realtimeStoreMock.connected),
-      refresh: messagesState.refresh,
       seedPendingAssistantDraft: messagesState.seedPendingAssistantDraft,
     }),
   };
@@ -1106,6 +1118,12 @@ describe("TaskDetailV3 runtime permissions", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    apiMocks.continueTask.mockReset();
+    apiMocks.forkTaskSession.mockReset();
+    taskState.refresh.mockReset();
+    taskState.refresh.mockImplementation(async () => undefined);
+    messagesState.refresh.mockReset();
+    messagesState.refresh.mockImplementation(async () => undefined);
     legacyParallelFixtureState.taskSessionsResponse = { data: [] };
     legacyParallelFixtureState.agentRunsResponse = { data: [] };
     legacyParallelFixtureState.domainRunsResponse = { data: [] };
@@ -1412,7 +1430,7 @@ describe("TaskDetailV3 runtime permissions", () => {
     expect(wrapper.get('[data-testid="trace-panel"]').attributes("data-refresh-key")).toBe("1");
   });
 
-  it("refreshes task state when a task-domain snapshot event arrives", async () => {
+  it("refreshes task state when a task-domain snapshot event arrives without forcing message reload", async () => {
     vi.useFakeTimers();
     try {
       const wrapper = await mountPage();
@@ -1437,7 +1455,7 @@ describe("TaskDetailV3 runtime permissions", () => {
 
       expect(taskState.refresh).toHaveBeenCalled();
       expect(branchState.refresh).toHaveBeenCalled();
-      expect(messagesState.refresh).toHaveBeenCalled();
+      expect(messagesState.refresh).not.toHaveBeenCalled();
       wrapper.unmount();
     } finally {
       vi.useRealTimers();
@@ -1482,7 +1500,7 @@ describe("TaskDetailV3 runtime permissions", () => {
     }
   });
 
-  it("refetches persisted task and messages when an assistant realtime update reaches completion", async () => {
+  it("keeps assistant completion on realtime state until a round synced ack arrives", async () => {
     vi.useFakeTimers();
     try {
       const wrapper = await mountPage();
@@ -1512,7 +1530,43 @@ describe("TaskDetailV3 runtime permissions", () => {
       await vi.advanceTimersByTimeAsync(300);
       await flushPromises();
 
-      expect(taskState.refresh).toHaveBeenCalled();
+      expect(taskState.refresh).not.toHaveBeenCalled();
+      expect(branchState.refresh).not.toHaveBeenCalled();
+      expect(messagesState.refresh).not.toHaveBeenCalled();
+      wrapper.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("refetches persisted task and messages when a round synced ack arrives", async () => {
+    vi.useFakeTimers();
+    try {
+      const wrapper = await mountPage();
+      taskState.refresh.mockClear();
+      branchState.refresh.mockClear();
+      messagesState.refresh.mockClear();
+
+      realtimeStoreMock.events = [
+        {
+          id: "evt-round-synced-1",
+          type: "task.round.synced",
+          taskId: "task-1",
+          data: {
+            roundId: "task-session:task-1:ses-1",
+            taskSessionId: "task-session:task-1:ses-1",
+            messageId: "assistant-1",
+            snapshotVersion: 8,
+            persistedThroughRevision: 8,
+          },
+        },
+      ];
+
+      await nextTick();
+      await vi.advanceTimersByTimeAsync(200);
+      await flushPromises();
+
+      expect(taskState.refresh).not.toHaveBeenCalled();
       expect(branchState.refresh).not.toHaveBeenCalled();
       expect(messagesState.refresh).toHaveBeenCalled();
       wrapper.unmount();
@@ -3389,7 +3443,7 @@ describe("TaskDetailV3 runtime permissions", () => {
     const wrapper = await mountPage();
     const metaBefore = wrapper.get('[data-testid="chat-message-list-meta"]');
 
-    expect(metaBefore.attributes("data-session-id")).toBe("ses-1");
+    expect(metaBefore.attributes("data-session-id")).toBe("");
     expect(metaBefore.attributes("data-force-scroll-token")).toBe("0");
 
     await (
@@ -3406,7 +3460,46 @@ describe("TaskDetailV3 runtime permissions", () => {
       expect.any(String),
     );
     expect(metaAfter.attributes("data-session-id")).toBe("ses-2");
-    expect(Number(metaAfter.attributes("data-force-scroll-token"))).toBeGreaterThanOrEqual(2);
+    expect(Number(metaAfter.attributes("data-force-scroll-token"))).toBeGreaterThanOrEqual(1);
+    expect(routerState.replace).not.toHaveBeenCalled();
+  });
+
+  it("keeps the provisional child round focused when silent refresh still returns the parent session tree", async () => {
+    taskState.task.status = "completed";
+    taskState.task.finishedAt = "2026-03-22T10:00:00.000Z";
+    apiMocks.continueTask.mockResolvedValueOnce({ ok: true, sessionId: "ses-2" });
+    taskState.refresh.mockImplementation(async () => {
+      taskState.task = {
+        ...taskState.task,
+        status: "running",
+        sessionId: "ses-1",
+        finishedAt: undefined,
+      } as TreeTask;
+      branchState.flatNodes = [
+        {
+          id: "node-session-1",
+          runtimeSessionId: "ses-1",
+          isActive: true,
+          contentText: "主分支",
+          branchName: "main",
+        },
+      ];
+      branchState.selectedNode = branchState.flatNodes[0];
+    });
+
+    const wrapper = await mountPage();
+
+    await (
+      wrapper.vm as unknown as { handleContinue: (prompt: string) => Promise<void> }
+    ).handleContinue("新的 follow-up");
+    await flushPromises();
+    await nextTick();
+    await flushPromises();
+
+    const metaAfter = wrapper.get('[data-testid="chat-message-list-meta"]');
+    expect(taskState.refresh).toHaveBeenCalled();
+    expect(metaAfter.attributes("data-session-id")).toBe("ses-2");
+    expect(Number(metaAfter.attributes("data-force-scroll-token"))).toBeGreaterThanOrEqual(1);
     expect(routerState.replace).not.toHaveBeenCalled();
   });
 
@@ -3605,11 +3698,6 @@ describe("TaskDetailV3 runtime permissions", () => {
     let refreshCount = 0;
     messagesState.refresh = vi.fn(async () => {
       refreshCount += 1;
-      if (refreshCount < 2) {
-        messagesStoreMock.trace = { sessionId: "ses-2" };
-        messagesStoreMock.conversationItems = [];
-        return;
-      }
       messagesStoreMock.trace = { sessionId: "ses-2" };
       messagesStoreMock.conversationItems = [
         {
@@ -3634,7 +3722,7 @@ describe("TaskDetailV3 runtime permissions", () => {
     await nextTick();
 
     expect(messagesState.refresh).toHaveBeenCalled();
-    expect(refreshCount).toBeGreaterThanOrEqual(2);
+    expect(refreshCount).toBe(1);
 
     const renderedItems = wrapper.findAll(".chat-item").map((node) => ({
       role: node.attributes("data-role"),

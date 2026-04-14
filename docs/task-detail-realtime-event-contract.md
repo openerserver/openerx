@@ -1,9 +1,17 @@
 # TaskDetail Realtime Event Contract
 
-> 状态：Draft v1
-> 日期：2026-03-29
+> 状态：Draft v2，未来稳定 public contract
+> 日期：2026-04-12
 > 作者：GitHub Copilot
 > 关联文档：[task-session-message-minimal-contract.md](task-session-message-minimal-contract.md)、[task-detail-message-state-machine-plan.md](task-detail-message-state-machine-plan.md)、[task-session-message-service-route-dto-draft.md](task-session-message-service-route-dto-draft.md)、[task-detail-realtime-broadcaster-mapper-draft.md](task-detail-realtime-broadcaster-mapper-draft.md)
+
+## 0. 文档定位
+
+这份文档是 TaskDetail realtime 的“未来稳定 public contract”，不是现网所有事件都已完全对齐的事实描述。
+
+1. 当前实现：`task.message.persisted`、`task.round.synced`、`task.reconcile.required` 已在主聊天链路中落地，TaskDetailV3 也已经以 task-domain patch 为主消费 realtime。
+2. 未来目标：把 service / BFF / Web UI 全部收敛到这里定义的 public DTO，彻底隔离 runtime 原始 SSE 与页面主逻辑。
+3. 阅读建议：先看 [task-detail-realtime-persisted-coordination-plan.md](task-detail-realtime-persisted-coordination-plan.md) 理解为什么需要这套 contract，再把本文当成对外 DTO 规范；如果要继续做服务端出口收口，再接 [task-detail-realtime-broadcaster-mapper-draft.md](task-detail-realtime-broadcaster-mapper-draft.md)。
 
 ## 1. 文档目的
 
@@ -27,11 +35,11 @@
 
 1. websocket 控制帧
 2. 任务摘要更新
-3. session 级 message 流
+3. task-domain message patch 与 persisted ack
 4. operation 更新
 5. runtime permission 更新
 6. workflow stage 更新
-7. 强制 reconcile 事件
+7. target-specific reconcile 事件
 
 本期不覆盖：
 
@@ -72,6 +80,8 @@ REST 接口可以继续使用 snake_case，但 websocket contract 建议统一�
 任何实时系统最终都需要一个正式的“请重拉一次”的信号。因此本 contract 保留：
 
 1. `task.reconcile.required`
+
+它的 `scope` 必须直接对应前端 refresh target：`messages`、`flow`、`workflow`、`task`，而不是继续混用页面层术语。
 
 前端收到后，只需要 silent refetch，不需要猜测怎么修补未知缺口。
 
@@ -293,6 +303,15 @@ export interface TaskRealtimeWorkflowStageDto {
   startedAt?: string | null;
   finishedAt?: string | null;
 }
+
+export type TaskRealtimeRefreshScope = "messages" | "flow" | "workflow" | "task";
+
+export type TaskRealtimeReconcileReason =
+  | "sequence_gap"
+  | "alias_miss"
+  | "projection_rebuilt"
+  | "snapshot_lag"
+  | "internal_repair";
 ```
 
 ## 7. 稳定事件集合
@@ -318,14 +337,17 @@ export type TaskSnapshotUpdatedEvent = TaskRealtimeEventEnvelope<
 2. `currentSessionId` 变化也应该发
 3. 它不替代 message event，只更新页面摘要层
 
-## 7.2 `task.message.created`
+## 7.2 `task.message.updated`
 
-作用：正式创建 user 或 assistant message。
+作用：广播某条消息当前 authoritative 状态。它既可以表示 assistant 首条占位，也可以表示 streaming 中的完整快照，或终态封账后的最终 message 形状。
 
 ```ts
-export type TaskMessageCreatedEvent = TaskRealtimeEventEnvelope<
-  "task.message.created",
+export type TaskMessageUpdatedEvent = TaskRealtimeEventEnvelope<
+  "task.message.updated",
   {
+    roundId?: string;
+    taskSessionId?: string;
+    reason: "message.updated";
     message: TaskRealtimeMessageDto;
   }
 >;
@@ -333,9 +355,9 @@ export type TaskMessageCreatedEvent = TaskRealtimeEventEnvelope<
 
 约束：
 
-1. `user` message 在 POST 成功后立即可发
-2. `assistant` message 在 placeholder 创建后立即可发
-3. 如果 created 事件晚于 delta，前端仍必须可通过 reconcile 或 provisional merge 处理
+1. 这是单条 message 的 authoritative patch，不是 persisted authority 的确认信号。
+2. `message.status` 可以是 `pending`、`streaming`、`completed`、`failed`、`cancelled`，页面不得再从事件名猜“是否已经结束”。
+3. 即使 `message.status = completed`，前端也不能仅凭这一条事件认定 canonical snapshot 已追平。
 
 ## 7.3 `task.message.delta`
 
@@ -345,82 +367,71 @@ export type TaskMessageCreatedEvent = TaskRealtimeEventEnvelope<
 export type TaskMessageDeltaEvent = TaskRealtimeEventEnvelope<
   "task.message.delta",
   {
+    roundId?: string;
+    taskSessionId?: string;
     messageId: string;
-    partId: string;
     partType: "text";
     deltaText: string;
-    fullText: string;
-    status: "streaming";
-    providerMessageId?: string | null;
-    updatedAt: string;
+    fullText?: string;
+    updatedAt?: string;
   }
 >;
 ```
 
 约束：
 
-1. 对 text streaming，始终优先信任 `fullText`
-2. `deltaText` 只是性能优化，不是唯一真相
-3. delta 事件只能用于 `assistant` message
+1. 如果 `fullText` 存在，前端应优先信任 `fullText`；`deltaText` 只是性能优化。
+2. delta 事件只能用于 `assistant` message。
+3. delta 不能单独承担 persisted 切换语义。
 
-## 7.4 `task.message.completed`
+## 7.4 `task.message.persisted`
 
-作用：assistant message 最终完成封账。
+作用：告诉前端某条 message 已完成 canonical 写入，但这仍然只是 message-level ack，不等价于整轮 snapshot 已追平。
 
 ```ts
-export type TaskMessageCompletedEvent = TaskRealtimeEventEnvelope<
-  "task.message.completed",
+export type TaskMessagePersistedEvent = TaskRealtimeEventEnvelope<
+  "task.message.persisted",
   {
-    message: TaskRealtimeMessageDto;
+    roundId: string;
+    taskSessionId: string;
+    messageId: string;
+    persistedRevision: number;
+    snapshotVersion?: number;
+    persistedThroughRevision?: number;
   }
 >;
 ```
 
 约束：
 
-1. 一旦发出 completed，message 状态不能再回退为 streaming
-2. `message.parts` 应包含最终 text part 结果
-3. `completedAt` 必须存在
+1. 这条事件只负责 message-level ack，不直接触发 persisted text 接管。
+2. `persistedRevision` 必须单调不减。
+3. 如有 `snapshotVersion` / `persistedThroughRevision`，其语义必须与 REST snapshot 字段保持一致。
 
-## 7.5 `task.message.failed`
+## 7.5 `task.round.synced`
 
-作用：assistant message 失败结束。
+作用：告诉前端某一轮 persisted snapshot 已至少追平到哪个 revision，这是主聊天 messages refresh 的正式边界。
 
 ```ts
-export type TaskMessageFailedEvent = TaskRealtimeEventEnvelope<
-  "task.message.failed",
+export type TaskRoundSyncedEvent = TaskRealtimeEventEnvelope<
+  "task.round.synced",
   {
-    message: TaskRealtimeMessageDto;
-    reasonCode:
-      | "provider_error"
-      | "timeout"
-      | "permission_denied"
-      | "tool_failure"
-      | "internal_error";
+    roundId: string;
+    taskSessionId: string;
+    messageId?: string;
+    snapshotVersion?: number;
+    persistedThroughRevision: number;
   }
 >;
 ```
 
 约束：
 
-1. 已有部分文本不应被清空
-2. `message.errorText` 必须可展示给用户或日志系统
+1. `task.round.synced` 才是前端拉 persisted messages snapshot 的主边界。
+2. `persistedThroughRevision` 必须代表 round 级 canonical 覆盖上界，而不是任意实现细节字段。
+3. 这条事件的存在是为了让页面不再把 `assistant completed = 已落库` 当成推断规则。
 
-## 7.6 `task.message.cancelled`
-
-作用：assistant message 被用户或系统取消。
-
-```ts
-export type TaskMessageCancelledEvent = TaskRealtimeEventEnvelope<
-  "task.message.cancelled",
-  {
-    message: TaskRealtimeMessageDto;
-    cancelledBy: "user" | "system";
-  }
->;
-```
-
-## 7.7 `task.operation.updated`
+## 7.6 `task.operation.updated`
 
 作用：更新 model request / tool call 的生命周期和 token / cost。
 
@@ -438,7 +449,7 @@ export type TaskOperationUpdatedEvent = TaskRealtimeEventEnvelope<
 1. operation 更新不应直接改变 message 文本
 2. 但前端可以用它更新“执行中”“token/cost”“失败原因”
 
-## 7.8 `task.runtimePermission.required`
+## 7.7 `task.runtimePermission.required`
 
 作用：在任务页显示待审批卡片。
 
@@ -451,7 +462,7 @@ export type TaskRuntimePermissionRequiredEvent = TaskRealtimeEventEnvelope<
 >;
 ```
 
-## 7.9 `task.runtimePermission.resolved`
+## 7.8 `task.runtimePermission.resolved`
 
 作用：移除或更新审批卡片。
 
@@ -464,7 +475,7 @@ export type TaskRuntimePermissionResolvedEvent = TaskRealtimeEventEnvelope<
 >;
 ```
 
-## 7.10 `task.workflowStage.updated`
+## 7.9 `task.workflowStage.updated`
 
 作用：更新 TaskDetail 顶部工作流阶段视图。
 
@@ -477,7 +488,7 @@ export type TaskWorkflowStageUpdatedEvent = TaskRealtimeEventEnvelope<
 >;
 ```
 
-## 7.11 `task.reconcile.required`
+## 7.10 `task.reconcile.required`
 
 作用：显式通知前端放弃 patch 猜测，直接静默重拉。
 
@@ -485,29 +496,31 @@ export type TaskWorkflowStageUpdatedEvent = TaskRealtimeEventEnvelope<
 export type TaskReconcileRequiredEvent = TaskRealtimeEventEnvelope<
   "task.reconcile.required",
   {
-    scope: "messages" | "snapshot" | "task";
-    reason:
-      | "sequence_gap"
-      | "projection_rebuilt"
-      | "session_switched"
-      | "message_gap"
-      | "internal_repair";
+    roundId?: string;
+    scope: TaskRealtimeRefreshScope;
+    reason: TaskRealtimeReconcileReason;
+    expectedRevision?: number;
   }
 >;
 ```
 
 这是 escape hatch，不应该高频触发，但必须存在。
 
+约束：
+
+1. `scope=messages` 只驱动主聊天 persisted messages reconcile，不得顺手触发 flow/workflow refresh。
+2. `scope=flow` / `scope=workflow` 应与前端 `TaskDetailRefreshTargets` 一一对应。
+3. 当 alias miss、projection rebuilt、sequence gap 导致 patch 流不再可靠时，应优先发这条事件，而不是让页面继续猜测修复。
+
 ## 8. 完整事件联合类型
 
 ```ts
 export type TaskRealtimeEventType =
   | "task.snapshot.updated"
-  | "task.message.created"
+  | "task.message.updated"
   | "task.message.delta"
-  | "task.message.completed"
-  | "task.message.failed"
-  | "task.message.cancelled"
+  | "task.message.persisted"
+  | "task.round.synced"
   | "task.operation.updated"
   | "task.runtimePermission.required"
   | "task.runtimePermission.resolved"
@@ -516,11 +529,10 @@ export type TaskRealtimeEventType =
 
 export type TaskRealtimeEvent =
   | TaskSnapshotUpdatedEvent
-  | TaskMessageCreatedEvent
+  | TaskMessageUpdatedEvent
   | TaskMessageDeltaEvent
-  | TaskMessageCompletedEvent
-  | TaskMessageFailedEvent
-  | TaskMessageCancelledEvent
+  | TaskMessagePersistedEvent
+  | TaskRoundSyncedEvent
   | TaskOperationUpdatedEvent
   | TaskRuntimePermissionRequiredEvent
   | TaskRuntimePermissionResolvedEvent
@@ -551,12 +563,17 @@ export type RealtimeServerFrame = RealtimeControlFrame | TaskRealtimeEvent;
 
 TaskDetail 页面只应消费这些稳定事件：
 
-1. `task.message.*`
+1. `task.message.updated`、`task.message.delta`、`task.message.persisted`、`task.round.synced`
 2. `task.operation.updated`
 3. `task.snapshot.updated`
 4. `task.runtimePermission.*`
 5. `task.workflowStage.updated`
 6. `task.reconcile.required`
+
+另外要固定两条页面规则：
+
+1. `task.message.persisted` 只更新 ack/revision，不单独触发 messages snapshot refresh。
+2. `task.round.synced` 与 `task.reconcile.required(scope=messages)` 才是主聊天 persisted refresh 的正式边界。
 
 页面不得再直接消费：
 
@@ -602,11 +619,14 @@ service broadcaster 必须满足：
 
 建议的 public 映射如下：
 
-1. 内部 `message.updated` / `message.part.updated` -> `task.message.created|delta|completed|failed|cancelled`
-2. 内部 `tool.execute.before/after` -> `task.operation.updated`
-3. 内部 `approval.required/resolved` -> `task.runtimePermission.required/resolved`
-4. 内部 `pipeline.stage.updated` -> `task.workflowStage.updated`
-5. 内部各种状态落点 -> `task.snapshot.updated`
+1. 内部 `message.updated` -> `task.message.updated`
+2. 内部 `message.part.updated` -> `task.message.delta`
+3. 内部 canonical write / mirror flush 完成 -> `task.message.persisted`、`task.round.synced`
+4. 内部 `tool.execute.before/after` -> `task.operation.updated`
+5. 内部 `approval.required/resolved` -> `task.runtimePermission.required/resolved`
+6. 内部 `pipeline.stage.updated` -> `task.workflowStage.updated`
+7. 内部 projection rebuild / sequence gap / alias repair -> `task.reconcile.required`
+8. 内部各种状态落点 -> `task.snapshot.updated`
 
 ## 12. 版本策略
 
@@ -632,7 +652,8 @@ TaskDetail 的稳定 realtime contract 应该是：
 
 1. websocket 控制帧与领域事件分层
 2. public 领域事件统一走 `TaskRealtimeEventEnvelope`
-3. web-ui 只消费 `task.message.*`、`task.operation.updated`、`task.snapshot.updated` 等稳定 DTO
-4. 原始 runtime SSE 和 compat `message.updated` 事件只留在 service/BFF 内部
+3. 主聊天 message 流只消费 `task.message.updated`、`task.message.delta`、`task.message.persisted`、`task.round.synced` 这组稳定 DTO
+4. `task.reconcile.required` 明确使用 `messages` / `flow` / `workflow` / `task` 四类 target，而不是页面层术语
+5. 原始 runtime SSE 和 compat `message.updated` 事件只留在 service/BFF 内部
 
 也就是说，**浏览器端接收的应该是 task-domain patch，而不是 runtime protocol 本身。**

@@ -1,7 +1,10 @@
 import { computed, ref, type Ref } from "vue";
+import { getTaskMessageSnapshotRevision } from "../lib/task-message-snapshot";
 import { useProjectTreeTask } from "./useProjectTreeTask";
+import { useTaskDetailTaskStatusSync } from "./useTaskDetailTaskStatusSync";
+import { useTaskMessageSnapshot } from "./useTaskMessageSnapshot";
+import { useTaskMessageStore } from "./useTaskMessageStore";
 import { useTreeBranches } from "./useTreeBranches";
-import { useTreeMessages } from "./useTreeMessages";
 
 export function useTaskDetailCoreContext(taskId: Ref<string>) {
   const selectedSessionId = ref<string | undefined>(undefined);
@@ -26,18 +29,23 @@ export function useTaskDetailCoreContext(taskId: Ref<string>) {
     refresh: refreshSessions,
   } = useTreeBranches(taskId, taskNodeId, selectedSessionId);
 
+  const messageSnapshot = useTaskMessageSnapshot(taskId, selectedSessionId);
   const {
-    trace: messageTrace,
-    conversationItems: baseConversationItems,
     clearPendingAssistantDraft,
+    conversationItems: baseConversationItems,
     hasStreamingAssistant,
     latestTaskRefreshRequest,
-    loading: messagesLoading,
-    error: messagesError,
     realtimeConnected,
-    refresh: refreshMessages,
     seedPendingAssistantDraft,
-  } = useTreeMessages(taskId, selectedSessionId, { includeLineage: true });
+  } = useTaskMessageStore(taskId, messageSnapshot.activeSessionId, {
+    sourceMessages: messageSnapshot.sourceMessages,
+    snapshotRevision: computed(() => getTaskMessageSnapshotRevision(messageSnapshot.trace.value)),
+  });
+
+  useTaskDetailTaskStatusSync({
+    latestTaskRefreshRequest,
+    task,
+  });
 
   return {
     ancestors,
@@ -47,12 +55,15 @@ export function useTaskDetailCoreContext(taskId: Ref<string>) {
     flatNodes,
     hasStreamingAssistant,
     latestTaskRefreshRequest,
-    messageTrace,
-    messagesError,
-    messagesLoading,
+    messageReconcileRequired: computed(
+      () => Boolean(messageSnapshot.trace.value?.timelineMeta?.reconcileRequired),
+    ),
+    messageTrace: messageSnapshot.trace,
+    messagesError: messageSnapshot.error,
+    messagesLoading: messageSnapshot.loading,
     projectId,
     realtimeConnected,
-    refreshMessages,
+    refreshMessages: messageSnapshot.refresh,
     refreshSessions,
     refreshTask,
     seedPendingAssistantDraft,

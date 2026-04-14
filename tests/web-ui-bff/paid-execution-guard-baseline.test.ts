@@ -1,18 +1,19 @@
 /// <reference types="bun-types" />
 
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { evaluatePaidExecutionPreflight } from "../../control-plane/web-ui-bff/src/lib/paid-execution-guard";
 
 describe("paid execution guard baseline estimation", () => {
   test("prefers historical runtime baseline over heuristic-only estimate when available", () => {
-    process.env.ALLOW_PAID_MODEL_EXECUTION = undefined;
-
     const preflight = evaluatePaidExecutionPreflight(
       {
         projectId: "proj-default",
         resolvedModel: {
-          providerId: "github-copilot",
-          modelId: "gpt-5-mini",
+          providerId: "local",
+          modelId: "test-model",
         },
         shape: {
           candidateCount: 1,
@@ -31,11 +32,6 @@ describe("paid execution guard baseline estimation", () => {
           costUsd: { p50: 0.08, p90: 0.12 },
           lastLedgerAt: "2026-03-17T00:00:00.000Z",
         },
-      },
-      {
-        projectId: "proj-default",
-        activeLease: null,
-        now: "2026-03-17T00:00:00.000Z",
       },
     );
 
@@ -56,13 +52,10 @@ describe("paid execution guard baseline estimation", () => {
     });
   });
 
-  test("uses project-level paid execution permission before falling back to deny", () => {
-    process.env.ALLOW_PAID_MODEL_EXECUTION = undefined;
-
+  test("uses project fund affordability to allow paid execution", () => {
     const preflight = evaluatePaidExecutionPreflight(
       {
         projectId: "proj-default",
-        allowPaidExecution: true,
         resolvedModel: {
           providerId: "github-copilot",
           modelId: "gpt-5.4",
@@ -75,21 +68,23 @@ describe("paid execution guard baseline estimation", () => {
           suiteReference: "task=task-1",
         },
         baseline: null,
-      },
-      {
-        projectId: "proj-default",
-        activeLease: null,
-        now: "2026-03-17T00:00:00.000Z",
+        funding: {
+          totalGranted: 10,
+          reserved: 0,
+          consumed: 0,
+          available: 10,
+          hasFund: true,
+          currency: "USD",
+        },
       },
     );
 
-    expect(preflight.requirements.hasAllowPaidExecution).toBe(true);
-    expect(preflight.estimate.guardDecision).toBe("require-approval");
+    expect(Object.prototype.hasOwnProperty.call(preflight, "requirements")).toBe(false);
+    expect(preflight.estimate.guardDecision).toBe("allow");
+    expect(preflight.estimate.budgetHeadroom.remainingUsd).toBe(10);
   });
 
   test("preserves direct provider routes in policy metadata", () => {
-    process.env.ALLOW_PAID_MODEL_EXECUTION = undefined;
-
     const preflight = evaluatePaidExecutionPreflight(
       {
         projectId: "proj-default",
@@ -106,13 +101,57 @@ describe("paid execution guard baseline estimation", () => {
         },
         baseline: null,
       },
-      {
-        projectId: "proj-default",
-        activeLease: null,
-        now: "2026-03-17T00:00:00.000Z",
-      },
     );
 
     expect(preflight.policy.modelRoute).toBe("anthropic/claude-sonnet-4-20250514");
+  });
+
+  test("prefers explicit paid billing config over heuristic free classification", async () => {
+    const previousOpencodeRoot = process.env.OPENCODE_ROOT;
+    const tempRoot = mkdtempSync(join(tmpdir(), "openerx-paid-guard-"));
+
+    try {
+      writeFileSync(
+        join(tempRoot, "opencode.json"),
+        `${JSON.stringify(
+          {
+            models: {
+              list: [
+                {
+                  id: "gpt-5-mini",
+                  provider: "github-copilot",
+                  name: "GPT-5 mini",
+                  billingStatus: "paid",
+                  billingMethod: "request_metered",
+                  price: {
+                    currency: "USD",
+                    perRequestUsd: 0.01,
+                  },
+                },
+              ],
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+      process.env.OPENCODE_ROOT = tempRoot;
+
+      const { isFreeExecutionModelRoute } = await import(
+        `../../control-plane/web-ui-bff/src/lib/paid-execution-guard?paid-billing-override=${Date.now()}`
+      );
+
+      expect(isFreeExecutionModelRoute("github-copilot:gpt-5-mini", "github-copilot")).toBe(
+        false,
+      );
+    } finally {
+      if (previousOpencodeRoot === undefined) {
+        delete process.env.OPENCODE_ROOT;
+      } else {
+        process.env.OPENCODE_ROOT = previousOpencodeRoot;
+      }
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
   });
 });

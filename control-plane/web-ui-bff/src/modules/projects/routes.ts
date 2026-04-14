@@ -1,18 +1,6 @@
 import { Hono } from "hono";
 import { authHeader, cpFetch } from "../../lib/control-plane-client";
-import {
-  formatModelRoute,
-  readDefaultExecutionModel,
-  resolveModelRoute,
-} from "../../lib/model-config";
-import { readOrchestrationStrategy } from "../../lib/orchestration-strategy";
 import type { HookExecutionRecord } from "../../lib/orchestration-strategy";
-import {
-  buildPreflightOrchestrationFingerprint,
-  evaluatePaidExecutionPreflight,
-  fetchProjectPaidExecutionLeaseState,
-} from "../../lib/paid-execution-guard";
-import { fetchProjectRuntimeUsageBaseline } from "../../lib/runtime-usage-ledger";
 import type { JWTPayload } from "../../middleware/auth";
 import {
   type TaskSessionTimelineMeta,
@@ -41,7 +29,6 @@ interface ProjectRecord {
   description?: string | null;
   settings?: {
     defaultModel?: string;
-    allowPaidExecution?: boolean;
   } | null;
 }
 
@@ -1862,112 +1849,70 @@ projectRoutes.delete("/:projectId/members/:userId", async (c) => {
   return c.json(result.data, result.ok ? 200 : (result.status as 401 | 403 | 404 | 502));
 });
 
-projectRoutes.get("/:projectId/paid-execution-lease", async (c) => {
+projectRoutes.get("/:projectId/fund", async (c) => {
   const projectId = c.req.param("projectId");
-  const result = await cpFetch<Record<string, unknown>>(
-    `/api/projects/${projectId}/paid-execution-lease`,
-    {
-      authorization: authHeader(c),
-    },
-  );
+  const result = await cpFetch<Record<string, unknown>>(`/api/projects/${projectId}/fund`, {
+    authorization: authHeader(c),
+  });
+
   return c.json(result.data, result.ok ? 200 : (result.status as 401 | 403 | 404 | 502));
 });
 
-projectRoutes.post("/:projectId/paid-execution-lease", async (c) => {
+projectRoutes.post("/:projectId/fund/grant", async (c) => {
   const projectId = c.req.param("projectId");
   const body = await c.req.json();
   const result = await cpFetch<Record<string, unknown>>(
-    `/api/projects/${projectId}/paid-execution-lease`,
+    `/api/projects/${projectId}/fund/grant`,
     {
       method: "POST",
       body,
       authorization: authHeader(c),
     },
   );
+
   return c.json(
     result.data,
-    result.ok ? 201 : (result.status as 400 | 401 | 403 | 404 | 409 | 502),
+    result.ok ? 201 : (result.status as 400 | 401 | 403 | 404 | 502),
   );
 });
 
-projectRoutes.delete("/:projectId/paid-execution-lease/:leaseId", async (c) => {
+projectRoutes.post("/:projectId/fund/adjust", async (c) => {
   const projectId = c.req.param("projectId");
-  const leaseId = c.req.param("leaseId");
-  const body = await c.req.json().catch(() => undefined);
+  const body = await c.req.json();
   const result = await cpFetch<Record<string, unknown>>(
-    `/api/projects/${projectId}/paid-execution-lease/${leaseId}`,
+    `/api/projects/${projectId}/fund/adjust`,
     {
-      method: "DELETE",
+      method: "POST",
       body,
       authorization: authHeader(c),
     },
   );
-  return c.json(result.data, result.ok ? 200 : (result.status as 400 | 401 | 403 | 404 | 502));
-});
-
-projectRoutes.get("/:projectId/paid-execution-preflight", async (c) => {
-  const projectId = c.req.param("projectId");
-  const authorization = authHeader(c);
-  const [projectResult, leaseResult] = await Promise.all([
-    cpFetch<ProjectRecord>(`/api/projects/${projectId}`, { authorization }),
-    fetchProjectPaidExecutionLeaseState(projectId, authorization),
-  ]);
-
-  if (!projectResult.ok) {
-    return c.json(projectResult.data, projectResult.status as 401 | 403 | 404 | 502);
-  }
-  if (!leaseResult.ok) {
-    return c.json(leaseResult.data, leaseResult.status as 401 | 403 | 404 | 502);
-  }
-
-  const defaultModel = projectResult.data.settings?.defaultModel || readDefaultExecutionModel();
-  const resolvedModel = defaultModel ? resolveModelRoute(defaultModel) : undefined;
-  const strategy = readOrchestrationStrategy();
-  const enabledHookTriggers = strategy.hooks
-    .filter((hook) => hook.enabled && hook.trigger !== "pre-resume")
-    .map((hook) => hook.trigger);
-  const shape = {
-    candidateCount: 1,
-    judgeEnabled: false,
-    enabledHookTriggers,
-    suiteLabel: "project default execute profile",
-    suiteReference: `project=${projectId}`,
-  };
-  const baselineResult = await fetchProjectRuntimeUsageBaseline(projectId, authorization, {
-    providerId: resolvedModel?.providerId,
-    modelId: resolvedModel?.modelId,
-    entrypointType: "single-task",
-    orchestrationFingerprint: buildPreflightOrchestrationFingerprint(shape),
-  });
-  const preflight = evaluatePaidExecutionPreflight(
-    {
-      projectId,
-      allowPaidExecution: projectResult.data.settings?.allowPaidExecution === true,
-      resolvedModel: resolvedModel || undefined,
-      shape,
-      baseline: baselineResult.ok ? baselineResult.data.baseline : null,
-    },
-    leaseResult.data,
-  );
 
   return c.json(
-    {
-      projectId,
-      defaultModel: projectResult.data.settings?.defaultModel || null,
-      effectiveModel:
-        defaultModel ||
-        formatModelRoute({
-          providerId: preflight.policy.providerId,
-          modelId: preflight.policy.modelId,
-        }),
-      allowed: preflight.allowed,
-      activeLease: preflight.activeLease,
-      policy: preflight.policy,
-      requirements: preflight.requirements,
-      preflight: preflight.estimate,
-    },
-    200,
+    result.data,
+    result.ok ? 200 : (result.status as 400 | 401 | 403 | 404 | 502),
   );
+});
+
+projectRoutes.get("/:projectId/fund/ledger", async (c) => {
+  const projectId = c.req.param("projectId");
+  const search = new URLSearchParams();
+  for (const key of ["limit", "cursor"]) {
+    const value = c.req.query(key);
+    if (value) {
+      search.set(key, value);
+    }
+  }
+
+  const suffix = search.toString() ? `?${search.toString()}` : "";
+  const result = await cpFetch<Record<string, unknown>>(
+    `/api/projects/${projectId}/fund/ledger${suffix}`,
+    {
+      authorization: authHeader(c),
+    },
+  );
+
+  return c.json(result.data, result.ok ? 200 : (result.status as 400 | 401 | 403 | 404 | 502));
 });
 
 projectRoutes.get("/:projectId/runtime-usage-ledgers", async (c) => {
@@ -2772,15 +2717,12 @@ function shouldLoadProjectExecutionTraceTimelineFallback(
   timeline: TaskSessionTimelineItem[],
   snapshot: TaskProjectionSnapshotRecord | null,
 ) {
-  return (
-    shouldReplaceTraceTimeline({
-      currentItemCount: timeline.length,
-      fallbackItemCount: 0,
-      projectionComplete: projectionItems?.complete,
-    }) &&
-    timeline.length === 0 &&
-    !snapshot?.latestResult
-  );
+  void projectionItems;
+
+  // Project-level execution trace follows the same fallback rule as task trace:
+  // when projection has no displayable conversation timeline and snapshot has no
+  // latestResult shortcut, fall back to the persisted session timeline.
+  return timeline.length === 0 && !snapshot?.latestResult;
 }
 
 function appendTaskExecutionTraceTimelineSegments(

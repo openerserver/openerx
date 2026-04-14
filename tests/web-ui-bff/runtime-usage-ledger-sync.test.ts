@@ -8,22 +8,35 @@ const estimatePaidExecutionUsageMock = mock(() => ({
 }));
 const evaluatePaidExecutionPreflightMock = mock(async () => ({
   allowed: true,
-  requirements: {
-    allowPaidExecution: false,
-    leaseRequired: false,
-    hasAllowPaidExecution: true,
-    hasLease: false,
+  code: "PAID_EXECUTION_ALLOWED",
+  policy: {
+    providerId: "github-copilot",
+    modelId: "gpt-5-mini",
+    modelRoute: "github-copilot:gpt-5-mini",
+    environment: "dev",
+    costTier: "free",
+    isPaid: false,
+    defaultDecision: "allow",
+    maxRequestsPerRun: 20,
+    maxEstimatedCostUsdPerRun: 0,
+    maxParallelCandidates: 4,
+    allowJudge: true,
+    allowHooks: true,
   },
   estimate: {
+    providerId: "github-copilot",
+    modelId: "gpt-5-mini",
+    requestCount: { min: 1, max: 1 },
+    inputTokens: { min: 80, max: 80 },
+    outputTokens: { min: 40, max: 40 },
+    totalTokens: { min: 120, max: 120 },
+    costUsd: { min: 0.12, max: 0.12 },
+    riskDrivers: [],
+    budgetHeadroom: { remainingUsd: 100, enoughForSingleRun: true, enoughForSuiteRun: true },
     guardDecision: "allow",
     guardReason: "ok",
+    generatedAt: "2026-03-17T10:00:00.000Z",
   },
-  activeLease: null,
-}));
-const fetchProjectPaidExecutionLeaseStateMock = mock(async () => ({
-  projectId: "proj-default",
-  activeLease: null,
-  now: "2026-03-17T10:00:00.000Z",
 }));
 
 const cpFetchMock = mock(async (..._args: unknown[]) => ({ ok: true, status: 200, data: {} }));
@@ -34,7 +47,6 @@ const syncRuntimeUsageLedgerMock = mock(async (..._args: unknown[]) => ({ id: "l
 mock.module("../../control-plane/web-ui-bff/src/lib/paid-execution-guard", () => ({
   estimatePaidExecutionUsage: estimatePaidExecutionUsageMock,
   evaluatePaidExecutionPreflight: evaluatePaidExecutionPreflightMock,
-  fetchProjectPaidExecutionLeaseState: fetchProjectPaidExecutionLeaseStateMock,
 }));
 
 mock.module("../../control-plane/web-ui-bff/src/lib/control-plane-client", () => ({
@@ -50,7 +62,6 @@ mock.module("../../control-plane/web-ui-bff/src/lib/runtime-usage-ledger", () =>
 beforeEach(() => {
   estimatePaidExecutionUsageMock.mockReset();
   evaluatePaidExecutionPreflightMock.mockReset();
-  fetchProjectPaidExecutionLeaseStateMock.mockReset();
   cpFetchMock.mockReset();
   createInternalAuthorizationMock.mockReset();
   authHeaderMock.mockReset();
@@ -64,22 +75,35 @@ beforeEach(() => {
   });
   evaluatePaidExecutionPreflightMock.mockResolvedValue({
     allowed: true,
-    requirements: {
-      allowPaidExecution: false,
-      leaseRequired: false,
-      hasAllowPaidExecution: true,
-      hasLease: false,
+    code: "PAID_EXECUTION_ALLOWED",
+    policy: {
+      providerId: "github-copilot",
+      modelId: "gpt-5-mini",
+      modelRoute: "github-copilot:gpt-5-mini",
+      environment: "dev",
+      costTier: "free",
+      isPaid: false,
+      defaultDecision: "allow",
+      maxRequestsPerRun: 20,
+      maxEstimatedCostUsdPerRun: 0,
+      maxParallelCandidates: 4,
+      allowJudge: true,
+      allowHooks: true,
     },
     estimate: {
+      providerId: "github-copilot",
+      modelId: "gpt-5-mini",
+      requestCount: { min: 1, max: 1 },
+      inputTokens: { min: 80, max: 80 },
+      outputTokens: { min: 40, max: 40 },
+      totalTokens: { min: 120, max: 120 },
+      costUsd: { min: 0.12, max: 0.12 },
+      riskDrivers: [],
+      budgetHeadroom: { remainingUsd: 100, enoughForSingleRun: true, enoughForSuiteRun: true },
       guardDecision: "allow",
       guardReason: "ok",
+      generatedAt: "2026-03-17T10:00:00.000Z",
     },
-    activeLease: null,
-  });
-  fetchProjectPaidExecutionLeaseStateMock.mockResolvedValue({
-    projectId: "proj-default",
-    activeLease: null,
-    now: "2026-03-17T10:00:00.000Z",
   });
   cpFetchMock.mockResolvedValue({ ok: true, status: 200, data: {} });
   createInternalAuthorizationMock.mockResolvedValue("Bearer internal");

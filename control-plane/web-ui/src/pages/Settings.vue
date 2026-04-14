@@ -338,9 +338,9 @@
           </a-modal>
 
           <a-card id="settings-models-list" title="模型列表" style="margin-top: 16px">
-            <div style="margin-bottom: 8px; color: #888; font-size: 12px">为任务准备可选的执行模型。</div>
+            <div style="margin-bottom: 8px; color: #888; font-size: 12px">为任务准备可选的执行模型，并维护每个模型是否付费、按什么方式收费以及价格配置。</div>
             <template v-if="modelsData.list.length">
-              <a-table :dataSource="modelsData.list" :columns="modelColumns" :pagination="false" :rowKey="getConfiguredModelKey" :rowClassName="getModelRowClassName" size="small">
+              <a-table :dataSource="modelsData.list" :columns="modelColumns" :pagination="false" :rowKey="getConfiguredModelKey" :rowClassName="getModelRowClassName" :scroll="{ x: 1450 }" size="small">
                 <template #bodyCell="{ column, record, index }">
                   <template v-if="column.dataIndex === 'id'">
                     <div style="display: flex; flex-direction: column; gap: 6px">
@@ -367,6 +367,89 @@
                   </template>
                   <template v-else-if="column.dataIndex === 'maxTokens'">
                     <a-input-number :value="record.maxTokens" size="small" :min="1" style="width:100%" @update:value="record.maxTokens = Number($event ?? 1)" />
+                  </template>
+                  <template v-else-if="column.dataIndex === 'billingStatus'">
+                    <a-switch
+                      :checked="getModelBillingStatus(record) === 'paid'"
+                      checked-children="付费"
+                      un-checked-children="免费"
+                      size="small"
+                      @update:checked="setModelBillingStatus(record, $event)"
+                    />
+                  </template>
+                  <template v-else-if="column.dataIndex === 'billingMethod'">
+                    <a-select
+                      :value="getModelBillingMethod(record)"
+                      size="small"
+                      style="width:100%"
+                      :disabled="getModelBillingStatus(record) !== 'paid'"
+                      placeholder="选择计费方式"
+                      @update:value="setModelBillingMethod(record, $event)"
+                    >
+                      <a-select-option value="token_metered">按 Token</a-select-option>
+                      <a-select-option value="request_metered">按请求次数</a-select-option>
+                      <a-select-option value="run_metered">按运行次数</a-select-option>
+                    </a-select>
+                  </template>
+                  <template v-else-if="column.dataIndex === 'price'">
+                    <a-space direction="vertical" style="width: 100%" :size="4">
+                      <a-typography-text v-if="getModelBillingStatus(record) !== 'paid'" type="secondary" style="font-size: 12px">
+                        免费模型无需价格配置
+                      </a-typography-text>
+                      <a-typography-text v-else-if="!getModelBillingMethod(record)" type="secondary" style="font-size: 12px">
+                        先选择付费方式，再填写价格
+                      </a-typography-text>
+                      <template v-else-if="getModelBillingMethod(record) === 'token_metered'">
+                        <div style="display: flex; flex-direction: column; gap: 4px">
+                          <a-input-number
+                            :value="getModelBillingPriceValue(record, 'inputPerMillionTokens')"
+                            size="small"
+                            :min="0"
+                            :precision="6"
+                            style="width: 100%"
+                            @update:value="updateModelBillingPrice(record, 'inputPerMillionTokens', $event)"
+                          />
+                          <span style="color: #888; font-size: 12px">输入单价 / 百万 Tokens (USD)</span>
+                        </div>
+                        <div style="display: flex; flex-direction: column; gap: 4px">
+                          <a-input-number
+                            :value="getModelBillingPriceValue(record, 'outputPerMillionTokens')"
+                            size="small"
+                            :min="0"
+                            :precision="6"
+                            style="width: 100%"
+                            @update:value="updateModelBillingPrice(record, 'outputPerMillionTokens', $event)"
+                          />
+                          <span style="color: #888; font-size: 12px">输出单价 / 百万 Tokens (USD)</span>
+                        </div>
+                      </template>
+                      <template v-else-if="getModelBillingMethod(record) === 'request_metered'">
+                        <div style="display: flex; flex-direction: column; gap: 4px">
+                          <a-input-number
+                            :value="getModelBillingPriceValue(record, 'perRequestUsd')"
+                            size="small"
+                            :min="0"
+                            :precision="6"
+                            style="width: 100%"
+                            @update:value="updateModelBillingPrice(record, 'perRequestUsd', $event)"
+                          />
+                          <span style="color: #888; font-size: 12px">每次请求价格 (USD)</span>
+                        </div>
+                      </template>
+                      <template v-else-if="getModelBillingMethod(record) === 'run_metered'">
+                        <div style="display: flex; flex-direction: column; gap: 4px">
+                          <a-input-number
+                            :value="getModelBillingPriceValue(record, 'perRunUsd')"
+                            size="small"
+                            :min="0"
+                            :precision="6"
+                            style="width: 100%"
+                            @update:value="updateModelBillingPrice(record, 'perRunUsd', $event)"
+                          />
+                          <span style="color: #888; font-size: 12px">每次运行价格 (USD)</span>
+                        </div>
+                      </template>
+                    </a-space>
                   </template>
                   <template v-else-if="column.dataIndex === 'action'">
                     <a-button danger size="small" @click="removeModelAt(index)">删除</a-button>
@@ -1261,6 +1344,10 @@ import {
   type JudgeConfig,
   type LifecycleHook,
   type McpServer,
+  type ModelBillingMethod,
+  type ModelBillingPrice,
+  type ModelBillingStatus,
+  type ModelListItem,
   type OrchestrationStrategy,
   type PluginCompatResult,
   type PluginInfo,
@@ -1545,12 +1632,120 @@ const modelsLoading = ref(false);
 const modelsData = reactive<{
   defaults: Record<string, unknown>;
   providers: Record<string, unknown>;
-  list: Array<Record<string, unknown>>;
+  list: ModelListItem[];
 }>({
   defaults: {},
   providers: {},
   list: [],
 });
+
+type ModelBillingPriceField = keyof Pick<
+  ModelBillingPrice,
+  "inputPerMillionTokens" | "outputPerMillionTokens" | "perRequestUsd" | "perRunUsd"
+>;
+
+function normalizeModelBillingStatus(value: unknown): ModelBillingStatus {
+  return value === "paid" ? "paid" : "free";
+}
+
+function normalizeModelBillingMethod(value: unknown): ModelBillingMethod | undefined {
+  return value === "token_metered" || value === "request_metered" || value === "run_metered"
+    ? value
+    : undefined;
+}
+
+function toFiniteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function normalizeModelBillingPriceRecord(value: unknown): ModelBillingPrice | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+
+  const record = value as Record<string, unknown>;
+  const normalized: ModelBillingPrice = { currency: "USD" };
+  const inputPerMillionTokens = toFiniteNumber(record.inputPerMillionTokens);
+  const outputPerMillionTokens = toFiniteNumber(record.outputPerMillionTokens);
+  const perRequestUsd = toFiniteNumber(record.perRequestUsd);
+  const perRunUsd = toFiniteNumber(record.perRunUsd);
+
+  if (inputPerMillionTokens !== undefined) {
+    normalized.inputPerMillionTokens = inputPerMillionTokens;
+  }
+  if (outputPerMillionTokens !== undefined) {
+    normalized.outputPerMillionTokens = outputPerMillionTokens;
+  }
+  if (perRequestUsd !== undefined) {
+    normalized.perRequestUsd = perRequestUsd;
+  }
+  if (perRunUsd !== undefined) {
+    normalized.perRunUsd = perRunUsd;
+  }
+
+  return Object.keys(normalized).length > 1 ? normalized : undefined;
+}
+
+function normalizeModelRecord(record: ModelListItem | Record<string, unknown>): ModelListItem {
+  const source = record as Record<string, unknown>;
+  const normalized: ModelListItem = { ...source };
+  const contextWindow = toFiniteNumber(source.contextWindow);
+  const maxTokens = toFiniteNumber(source.maxTokens);
+  const route = getRecordString(source, "route").trim();
+  const billingStatus = normalizeModelBillingStatus(source.billingStatus);
+  const billingMethod = normalizeModelBillingMethod(source.billingMethod);
+  const price = normalizeModelBillingPriceRecord(source.price);
+
+  normalized.id = getRecordString(source, "id");
+  normalized.name = getRecordString(source, "name");
+  normalized.provider = getRecordString(source, "provider");
+  if (route) {
+    normalized.route = route;
+  } else {
+    delete normalized.route;
+  }
+  if (contextWindow !== undefined) {
+    normalized.contextWindow = contextWindow;
+  } else {
+    delete normalized.contextWindow;
+  }
+  if (maxTokens !== undefined) {
+    normalized.maxTokens = maxTokens;
+  } else {
+    delete normalized.maxTokens;
+  }
+
+  normalized.billingStatus = billingStatus;
+  if (billingStatus === "paid" && billingMethod) {
+    normalized.billingMethod = billingMethod;
+    if (price) {
+      normalized.price = price;
+    } else {
+      delete normalized.price;
+    }
+  } else {
+    delete normalized.billingMethod;
+    delete normalized.price;
+  }
+
+  return normalized;
+}
+
+function normalizeModelList(list: Array<ModelListItem | Record<string, unknown>>) {
+  return list.map((record) => normalizeModelRecord(record));
+}
+
+function createModelRecord(overrides: Partial<ModelListItem> = {}): ModelListItem {
+  return normalizeModelRecord({
+    id: "",
+    name: "",
+    provider: "",
+    contextWindow: 200000,
+    maxTokens: 16384,
+    billingStatus: "free",
+    ...overrides,
+  });
+}
 
 const allowedTestExecutionModels = ["github-copilot:gpt-5-mini", "github-copilot:gpt-4o"];
 
@@ -1586,7 +1781,7 @@ function parseModelRouteValue(value: string) {
   };
 }
 
-function getConfiguredModelKey(model: Record<string, unknown>) {
+function getConfiguredModelKey(model: ModelListItem) {
   return buildModelRoute(getRecordString(model, "provider"), getRecordString(model, "id"));
 }
 
@@ -1640,28 +1835,161 @@ function clearInvalidDefaultAgentModel() {
   return false;
 }
 
-function isDefaultConfiguredModelRecord(record: Record<string, unknown>) {
+function isDefaultConfiguredModelRecord(record: ModelListItem) {
   const route = getDefaultAgentModelValue();
   if (!route) return false;
   return getConfiguredModelKey(record) === route;
 }
 
-function getModelDuplicateRouteCount(record: Record<string, unknown>) {
+function getModelDuplicateRouteCount(record: ModelListItem) {
   const route = getConfiguredModelKey(record);
   if (!route) return 0;
   return modelsData.list.filter((model) => getConfiguredModelKey(model) === route).length;
 }
 
-function getModelRecordIssue(record: Record<string, unknown>) {
+function getModelBillingStatus(record: ModelListItem): ModelBillingStatus {
+  return normalizeModelBillingStatus(record.billingStatus);
+}
+
+function getModelBillingMethod(record: ModelListItem): ModelBillingMethod | undefined {
+  if (getModelBillingStatus(record) !== "paid") {
+    return undefined;
+  }
+  return normalizeModelBillingMethod(record.billingMethod);
+}
+
+function getModelBillingPrice(record: ModelListItem): ModelBillingPrice | undefined {
+  if (!getModelBillingMethod(record)) {
+    return undefined;
+  }
+  return normalizeModelBillingPriceRecord(record.price);
+}
+
+function ensureModelBillingPrice(record: ModelListItem): ModelBillingPrice {
+  const normalized = getModelBillingPrice(record) ?? { currency: "USD" };
+  record.price = normalized;
+  return normalized;
+}
+
+function setModelBillingStatus(record: ModelListItem, checked: unknown) {
+  if (checked === true) {
+    record.billingStatus = "paid";
+    if (!getModelBillingMethod(record)) {
+      delete record.billingMethod;
+      delete record.price;
+    }
+    return;
+  }
+
+  record.billingStatus = "free";
+  delete record.billingMethod;
+  delete record.price;
+}
+
+function setModelBillingMethod(record: ModelListItem, value: unknown) {
+  const billingMethod = normalizeModelBillingMethod(value);
+  if (getModelBillingStatus(record) !== "paid" || !billingMethod) {
+    delete record.billingMethod;
+    delete record.price;
+    return;
+  }
+
+  const currentPrice = getModelBillingPrice(record);
+  record.billingMethod = billingMethod;
+
+  if (billingMethod === "token_metered") {
+    record.price = {
+      currency: "USD",
+      ...(currentPrice?.inputPerMillionTokens !== undefined
+        ? { inputPerMillionTokens: currentPrice.inputPerMillionTokens }
+        : {}),
+      ...(currentPrice?.outputPerMillionTokens !== undefined
+        ? { outputPerMillionTokens: currentPrice.outputPerMillionTokens }
+        : {}),
+    };
+    return;
+  }
+
+  if (billingMethod === "request_metered") {
+    record.price = {
+      currency: "USD",
+      ...(currentPrice?.perRequestUsd !== undefined
+        ? { perRequestUsd: currentPrice.perRequestUsd }
+        : {}),
+    };
+    return;
+  }
+
+  record.price = {
+    currency: "USD",
+    ...(currentPrice?.perRunUsd !== undefined ? { perRunUsd: currentPrice.perRunUsd } : {}),
+  };
+}
+
+function getModelBillingPriceValue(record: ModelListItem, field: ModelBillingPriceField) {
+  return getModelBillingPrice(record)?.[field];
+}
+
+function updateModelBillingPrice(
+  record: ModelListItem,
+  field: ModelBillingPriceField,
+  value: unknown,
+) {
+  if (!getModelBillingMethod(record)) {
+    return;
+  }
+
+  const numericValue = toFiniteNumber(value);
+  const price = ensureModelBillingPrice(record);
+  if (numericValue === undefined) {
+    delete price[field];
+  } else {
+    price[field] = numericValue;
+  }
+  record.price = normalizeModelBillingPriceRecord(price) ?? { currency: "USD" };
+}
+
+function getModelBillingIssue(record: ModelListItem) {
+  if (getModelBillingStatus(record) !== "paid") {
+    return "";
+  }
+
+  const billingMethod = getModelBillingMethod(record);
+  if (!billingMethod) {
+    return "付费模型必须选择付费方式";
+  }
+
+  const price = getModelBillingPrice(record);
+  if (
+    billingMethod === "token_metered" &&
+    (!price ||
+      !((price.inputPerMillionTokens ?? 0) > 0) ||
+      !((price.outputPerMillionTokens ?? 0) > 0))
+  ) {
+    return "按 Token 计费必须填写输入/输出单价";
+  }
+  if (billingMethod === "request_metered" && !((price?.perRequestUsd ?? 0) > 0)) {
+    return "按请求计费必须填写每次请求价格";
+  }
+  if (billingMethod === "run_metered" && !((price?.perRunUsd ?? 0) > 0)) {
+    return "按运行计费必须填写每次运行价格";
+  }
+
+  return "";
+}
+
+function getModelRecordIssue(record: ModelListItem) {
   const provider = getRecordString(record, "provider").trim();
   const id = getRecordString(record, "id").trim();
   if (!provider || !id) return "需要同时填写 Provider 和模型 ID";
   if (getModelDuplicateRouteCount(record) > 1)
     return `重复模型路由：${buildModelRoute(provider, id)}`;
+  const billingIssue = getModelBillingIssue(record);
+  if (billingIssue) return billingIssue;
   return "";
 }
 
-function getModelRoutePreview(record: Record<string, unknown>) {
+function getModelRoutePreview(record: ModelListItem) {
   const provider = getRecordString(record, "provider").trim();
   const id = getRecordString(record, "id").trim();
   if (!provider && !id) return "";
@@ -1669,7 +1997,7 @@ function getModelRoutePreview(record: Record<string, unknown>) {
   return `模型路由：${buildModelRoute(provider, id)}`;
 }
 
-function getModelRowClassName(record: Record<string, unknown>) {
+function getModelRowClassName(record: ModelListItem) {
   const rowClasses: string[] = [];
   if (isDefaultConfiguredModelRecord(record)) rowClasses.push("default-agent-model-row");
   if (getModelRecordIssue(record)) rowClasses.push("invalid-model-row");
@@ -1938,13 +2266,13 @@ async function chooseProviderModels(key: string) {
 
 function addDiscoveredModelFor(model: DiscoveredProviderModel, provider: string) {
   if (!provider || isModelConfigured(provider, model.id)) return;
-  modelsData.list.push({
+  modelsData.list.push(createModelRecord({
     id: model.id,
     name: model.name || model.id,
     provider,
     contextWindow: model.contextWindow ?? 200000,
     maxTokens: model.maxTokens ?? 16384,
-  });
+  }));
 }
 
 function addDiscoveredModelFromRecord(record: Record<string, unknown>) {
@@ -2021,12 +2349,15 @@ function deleteProvider(key: string) {
 }
 
 const modelColumns = [
-  { title: "ID", dataIndex: "id", width: "22%" },
-  { title: "名称", dataIndex: "name", width: "20%" },
-  { title: "Provider", dataIndex: "provider", width: "13%" },
-  { title: "Context Window", dataIndex: "contextWindow", width: "15%" },
-  { title: "Max Tokens", dataIndex: "maxTokens", width: "15%" },
-  { title: "", dataIndex: "action", width: "15%" },
+  { title: "ID", dataIndex: "id", width: 190 },
+  { title: "名称", dataIndex: "name", width: 170 },
+  { title: "Provider", dataIndex: "provider", width: 140 },
+  { title: "Context Window", dataIndex: "contextWindow", width: 130 },
+  { title: "Max Tokens", dataIndex: "maxTokens", width: 130 },
+  { title: "是否付费", dataIndex: "billingStatus", width: 110 },
+  { title: "付费方式", dataIndex: "billingMethod", width: 160 },
+  { title: "价格配置", dataIndex: "price", width: 260 },
+  { title: "", dataIndex: "action", width: 90 },
 ];
 
 const copilotModelColumns = [
@@ -2039,11 +2370,11 @@ const copilotModelColumns = [
 ];
 
 function addModel() {
-  modelsData.list.push({ id: "", name: "", provider: "", contextWindow: 200000, maxTokens: 16384 });
+  modelsData.list.push(createModelRecord());
 }
 
 function updateModelField(
-  record: Record<string, unknown>,
+  record: ModelListItem,
   field: "id" | "provider",
   value: unknown,
 ) {
@@ -2191,13 +2522,13 @@ function getFilteredCopilotModels(provider: string): CopilotModelInfo[] {
 function addCopilotModelFor(model: CopilotModelInfo, provider: string) {
   if (isModelConfigured(provider, model.id)) return;
   ensureCopilotProviderFor(provider);
-  modelsData.list.push({
+  modelsData.list.push(createModelRecord({
     id: model.id,
     name: model.name || model.id,
     provider,
     contextWindow: model.contextWindow ?? 200000,
     maxTokens: model.maxTokens ?? 16384,
-  });
+  }));
 }
 
 function addCopilotModelFromRecordFor(record: Record<string, unknown>, provider: string) {
@@ -3266,6 +3597,7 @@ async function saveModels() {
     clearInvalidDefaultAgentModel();
     setDefaultAgentModelValue(getDefaultAgentModelValue());
     setTestExecutionModelValue(getTestExecutionModelValue());
+    modelsData.list = normalizeModelList(modelsData.list);
     const validationErrors = getModelValidationErrors();
     if (validationErrors.length > 0) {
       message.error(validationErrors[0]);
@@ -3274,7 +3606,7 @@ async function saveModels() {
     const res = await updateModelsConfig({
       defaults: modelsData.defaults,
       providers: modelsData.providers,
-      list: modelsData.list,
+      list: normalizeModelList(modelsData.list),
     });
     message.success(
       res.restartRequired
@@ -3378,7 +3710,7 @@ onMounted(async () => {
       skillsList.value = d.skills as SkillSummary[];
       Object.assign(modelsData.defaults, d.models.defaults);
       setTestExecutionModelValue(getRecordString(d.models.defaults, "testModel"));
-      modelsData.list = d.models.list;
+      modelsData.list = normalizeModelList(d.models.list || []);
 
       // MCP
       Object.assign(mcpData, d.mcp);
@@ -3394,6 +3726,7 @@ onMounted(async () => {
       const modelsRes = await getModelsConfig();
       Object.assign(modelsData.defaults, modelsRes.data.defaults || {});
       setTestExecutionModelValue(getRecordString(modelsRes.data.defaults || {}, "testModel"));
+      modelsData.list = normalizeModelList(modelsRes.data.list || modelsData.list);
       Object.assign(modelsData.providers, modelsRes.data.providers);
     } catch {
       /* ignore */

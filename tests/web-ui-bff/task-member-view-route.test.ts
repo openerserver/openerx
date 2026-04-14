@@ -109,6 +109,17 @@ describe("task member view route", () => {
         };
       }
 
+      if (url === "/api/tasks/task-1/query/normalized-conversation?includeLineage=false") {
+        return {
+          ok: true,
+          data: {
+            meta: {
+              snapshotVersion: 71,
+            },
+          },
+        };
+      }
+
       if (url === "/api/tasks/task-1/workflow") {
         return {
           ok: true,
@@ -336,6 +347,9 @@ describe("task member view route", () => {
     await expect(response.json()).resolves.toMatchObject({
       taskId: "task-1",
       projectId: "proj-1",
+      meta: {
+        snapshotVersion: 71,
+      },
       workflowStatus: "running",
       currentStageKey: "implement",
       currentStageLabel: "实现开发",
@@ -372,6 +386,162 @@ describe("task member view route", () => {
           runCount: 1,
         }),
       ],
+    });
+  });
+
+  test("marks member view reconcile required when member resources are partial", async () => {
+    cpFetchMock.mockImplementation(async (url: string) => {
+      if (url === "/api/project-tree/tasks/task-2") {
+        return {
+          ok: true,
+          data: {
+            id: "task-2",
+            projectId: "proj-1",
+            status: "running",
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-2/query/normalized-conversation?includeLineage=false") {
+        return {
+          ok: true,
+          data: {
+            meta: {
+              snapshotVersion: 81,
+            },
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-2/workflow") {
+        return {
+          ok: true,
+          data: {
+            data: {
+              workflowRun: {
+                id: "wf-task-2",
+                templateId: "tpl-1",
+                currentStage: "implement",
+                status: "running",
+              },
+              stages: [
+                {
+                  id: "stage-run-implement",
+                  stageKey: "implement",
+                  status: "running",
+                  approvalState: "not-required",
+                  primaryRoleAgentId: "role.developer",
+                },
+              ],
+            },
+          },
+        };
+      }
+
+      if (url === "/api/tasks/task-2/role-conclusions") {
+        return { ok: true, data: { data: [] } };
+      }
+
+      if (url === "/api/tasks/task-2/developer-change-requests") {
+        return { ok: true, data: { data: [] } };
+      }
+
+      if (url === "/api/workflow-templates/tpl-1/stages") {
+        return {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "stage-implement",
+                stageKey: "implement",
+                name: "实现开发",
+                primaryRoleAgentId: "role.developer",
+                gatesJson: [],
+                approvalsJson: [],
+              },
+            ],
+          },
+        };
+      }
+
+      if (url === "/api/projects/proj-1/members") {
+        return {
+          ok: false,
+          status: 502,
+          data: {},
+        };
+      }
+
+      if (url === "/api/tasks/task-2/runs") {
+        return {
+          ok: true,
+          data: {
+            data: [
+              {
+                id: "run-dev-1",
+                taskId: "task-2",
+                sessionId: "session-1",
+                agentType: "oracle-enterprise",
+                status: "running",
+                createdAt: "2026-03-22T01:00:00.000Z",
+                startedAt: "2026-03-22T01:00:05.000Z",
+                finishedAt: null,
+              },
+            ],
+          },
+        };
+      }
+
+      if (url.startsWith("/api/role-agents/role.developer/resolve")) {
+        return {
+          ok: true,
+          data: {
+            data: {
+              role: {
+                id: "role.developer",
+                name: "开发 Agent",
+                bindings: [
+                  {
+                    bindingId: "binding-dev",
+                    runtimeAgent: "oracle-enterprise",
+                    label: "开发 Agent Alpha",
+                    enabled: true,
+                    priority: 1,
+                    model: "gpt-5.4",
+                    tags: ["code"],
+                  },
+                ],
+              },
+              validation: {
+                executable: true,
+                reasons: [],
+              },
+            },
+          },
+        };
+      }
+
+      return { ok: true, data: {} };
+    });
+
+    const { taskRoutes } = await import(
+      "../../control-plane/web-ui-bff/src/modules/tasks/routes?task-member-view-route-reconcile"
+    );
+
+    const response = await taskRoutes.request("http://localhost/task-2/member-view", {
+      headers: {
+        Authorization: "Bearer test",
+      },
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      taskId: "task-2",
+      projectId: "proj-1",
+      meta: {
+        snapshotVersion: 81,
+        reconcileRequired: true,
+      },
     });
   });
 });

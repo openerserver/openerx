@@ -808,9 +808,13 @@ export async function ensureTaskWorkflowFactsAvailable(taskId: string) {
 }
 
 export async function ensureRoleConclusionsAvailable(taskId: string) {
+  return (await ensureRoleConclusionsAvailability(taskId)).task;
+}
+
+export async function ensureRoleConclusionsAvailability(taskId: string) {
   const task = await loadWorkflowMigrationTask(taskId);
   if (!task) {
-    return null;
+    return { task: null, migrated: false };
   }
 
   const strategy = parseTaskStrategy(task.strategy);
@@ -822,21 +826,28 @@ export async function ensureRoleConclusionsAvailable(taskId: string) {
 
   if (existingRoleConclusions.length > 0) {
     await clearLegacyWorkflowStrategyFields(taskId, strategy, ["roleAggregateConclusions"]);
-    return task;
+    return { task, migrated: false };
   }
 
   if (legacyRoleConclusions.length === 0) {
     await clearLegacyWorkflowStrategyFields(taskId, strategy, ["roleAggregateConclusions"]);
-    return task;
+    return { task, migrated: false };
   }
 
-  return ensureLegacyRoleWorkflowMigrated(taskId);
+  return {
+    task: await ensureLegacyRoleWorkflowMigrated(taskId),
+    migrated: true,
+  };
 }
 
 export async function ensureDeveloperChangeRequestsAvailable(taskId: string) {
+  return (await ensureDeveloperChangeRequestsAvailability(taskId)).task;
+}
+
+export async function ensureDeveloperChangeRequestsAvailability(taskId: string) {
   const task = await loadWorkflowMigrationTask(taskId);
   if (!task) {
-    return null;
+    return { task: null, migrated: false };
   }
 
   const strategy = parseTaskStrategy(task.strategy);
@@ -848,15 +859,18 @@ export async function ensureDeveloperChangeRequestsAvailable(taskId: string) {
 
   if (existingChangeRequests.length > 0) {
     await clearLegacyWorkflowStrategyFields(taskId, strategy, ["developerChangeRequests"]);
-    return task;
+    return { task, migrated: false };
   }
 
   if (legacyChangeRequests.length === 0) {
     await clearLegacyWorkflowStrategyFields(taskId, strategy, ["developerChangeRequests"]);
-    return task;
+    return { task, migrated: false };
   }
 
-  return ensureLegacyRoleWorkflowMigrated(taskId);
+  return {
+    task: await ensureLegacyRoleWorkflowMigrated(taskId),
+    migrated: true,
+  };
 }
 
 async function ensureLegacyRoleWorkflowMigratedInternal(taskId: string) {

@@ -122,7 +122,7 @@ flowchart LR
 优先完成：
 
 1. unified conversation store。
-2. `useTreeMessages` 退化成 snapshot loader。
+2. `useTaskMessageSnapshot` 成为 snapshot loader，并删除旧消息兼容 facade。
 3. `useTaskMessageStore` 成为唯一 reducer 入口。
 4. refresh policy 改成只在边界事件上触发。
 
@@ -185,7 +185,7 @@ flowchart LR
 
 ### 不能并行
 
-1. 不能在统一主聊天数据模型前，先大规模拆 `useTreeMessages` / `useTaskMessageStore` / `useTaskDetailActionCoordinator`。
+1. 不能在统一主聊天数据模型前，先大规模拆 `useTaskMessageSnapshot` / `useTaskMessageStore` / 主聊天动作协调层。
 2. 不能在 round facade 落地前，让前端直接按 session/tree 事实去实现新的 Conversation Feature。
 3. 不能在 persistence ack 明确前，就让 snapshot refresh 逻辑去接管最终切换。
 
@@ -237,7 +237,7 @@ flowchart LR
 
 收编当前模块：
 
-1. [control-plane/web-ui/src/composables/useTreeMessages.ts](../control-plane/web-ui/src/composables/useTreeMessages.ts)
+1. [control-plane/web-ui/src/composables/useTaskMessageSnapshot.ts](../control-plane/web-ui/src/composables/useTaskMessageSnapshot.ts)
 2. [control-plane/web-ui/src/composables/useTaskMessageStore.ts](../control-plane/web-ui/src/composables/useTaskMessageStore.ts)
 3. [control-plane/web-ui/src/composables/useTaskMessagePatchConsumer.ts](../control-plane/web-ui/src/composables/useTaskMessagePatchConsumer.ts)
 4. [control-plane/web-ui/src/composables/useTaskDetailActionCoordinator.ts](../control-plane/web-ui/src/composables/useTaskDetailActionCoordinator.ts) 中主聊天相关部分
@@ -265,9 +265,9 @@ flowchart LR
 
 建议模块：
 
-1. `useTaskCompareFeature`
-2. `useTaskCompareCandidates`
-3. `useTaskCompareActions`
+1. `useTaskDetailParallelFlow`
+2. `useTaskParallelCandidateActions`
+3. `task-detail-parallel-read-model`
 
 建议位置：
 
@@ -276,8 +276,9 @@ flowchart LR
 收编当前模块：
 
 1. [control-plane/web-ui/src/composables/useTaskDetailParallelFlow.ts](../control-plane/web-ui/src/composables/useTaskDetailParallelFlow.ts)
-2. [control-plane/web-ui/src/lib/task-detail-parallel-conversation.ts](../control-plane/web-ui/src/lib/task-detail-parallel-conversation.ts)
+2. [control-plane/web-ui/src/lib/task-detail-parallel-read-model.ts](../control-plane/web-ui/src/lib/task-detail-parallel-read-model.ts)
 3. [control-plane/web-ui/src/lib/task-detail-parallel-runtime.ts](../control-plane/web-ui/src/lib/task-detail-parallel-runtime.ts)
+4. [control-plane/web-ui/src/lib/task-detail-parallel-conversation-projector.ts](../control-plane/web-ui/src/lib/task-detail-parallel-conversation-projector.ts)
 
 负责：
 
@@ -780,7 +781,7 @@ TaskDetailPageShell
 
 1. [control-plane/web-ui/src/composables/useTaskDetailPageModel.ts](../control-plane/web-ui/src/composables/useTaskDetailPageModel.ts) 收缩成 Page Shell 组合层。
 2. [control-plane/web-ui/src/composables/useTaskDetailActionCoordinator.ts](../control-plane/web-ui/src/composables/useTaskDetailActionCoordinator.ts) 拆成 ConversationActions、CompareActions、WorkflowActions 三块。
-3. [control-plane/web-ui/src/composables/useTreeMessages.ts](../control-plane/web-ui/src/composables/useTreeMessages.ts) 主聊天部分进入 ConversationFeature，compare/workflow 相关逻辑移出。
+3. [control-plane/web-ui/src/composables/useTaskMessageSnapshot.ts](../control-plane/web-ui/src/composables/useTaskMessageSnapshot.ts) 与 [control-plane/web-ui/src/composables/useTaskMessageStore.ts](../control-plane/web-ui/src/composables/useTaskMessageStore.ts) 共同收敛为 ConversationFeature 的主聊天读链；旧兼容消息层已删除。
 4. [control-plane/web-ui/src/composables/useTaskDetailParallelFlow.ts](../control-plane/web-ui/src/composables/useTaskDetailParallelFlow.ts) 变成 CompareFeature。
 5. [control-plane/web-ui/src/composables/useTaskDetailSequentialStepsCoordinator.ts](../control-plane/web-ui/src/composables/useTaskDetailSequentialStepsCoordinator.ts) 变成 WorkflowFeature。
 6. [control-plane/web-ui/src/composables/useTaskDetailRefreshController.ts](../control-plane/web-ui/src/composables/useTaskDetailRefreshController.ts) 和 [control-plane/web-ui/src/composables/useTaskDetailSnapshotCoordinator.ts](../control-plane/web-ui/src/composables/useTaskDetailSnapshotCoordinator.ts) 收缩成 Task Subscription Feature。
@@ -814,9 +815,9 @@ control-plane/web-ui/src/
       compare/
         index.ts
         task-compare.contracts.ts
-        useTaskCompareFeature.ts
-        useTaskCompareCandidates.ts
-        useTaskCompareActions.ts
+        useTaskDetailParallelFlow.ts
+        useTaskParallelCandidateActions.ts
+        task-detail-parallel-read-model.ts
       workflow/
         index.ts
         task-workflow.contracts.ts

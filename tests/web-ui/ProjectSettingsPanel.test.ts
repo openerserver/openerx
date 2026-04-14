@@ -6,11 +6,12 @@ import type { ProjectSettings } from "../../control-plane/web-ui/src/lib/api";
 import { useAuthStore } from "../../control-plane/web-ui/src/stores/auth";
 
 const apiMocks = vi.hoisted(() => ({
-  createBudgetConfig: vi.fn(),
+  adjustProjectFund: vi.fn(),
   getModelsConfig: vi.fn(),
-  listBudgetConfigs: vi.fn(),
+  getProjectFund: vi.fn(),
+  getProjectFundLedger: vi.fn(),
+  grantProjectFund: vi.fn(),
   listEnvironments: vi.fn(),
-  updateBudgetConfig: vi.fn(),
   updateProject: vi.fn(),
 }));
 
@@ -73,71 +74,113 @@ beforeEach(() => {
     },
   });
   apiMocks.listEnvironments.mockResolvedValue([]);
-  apiMocks.listBudgetConfigs.mockResolvedValue([]);
+  apiMocks.getProjectFund.mockResolvedValue({
+    id: "fund-1",
+    projectId: "proj-default",
+    currency: "USD",
+    totalGranted: 200,
+    reserved: 20,
+    consumed: 50,
+    available: 130,
+    status: "active",
+    createdAt: "2026-04-01T00:00:00.000Z",
+    updatedAt: "2026-04-02T00:00:00.000Z",
+    hasFund: true,
+  });
+  apiMocks.getProjectFundLedger.mockResolvedValue({
+    projectId: "proj-default",
+    items: [
+      {
+        id: "ledger-1",
+        projectId: "proj-default",
+        fundId: "fund-1",
+        type: "grant",
+        amountUsd: 200,
+        balanceAfter: 200,
+        createdAt: "2026-04-02T00:00:00.000Z",
+        note: "初始化充值",
+      },
+    ],
+    nextCursor: null,
+  });
   apiMocks.updateProject.mockResolvedValue({
     id: "proj-default",
     orgId: "org-default",
     name: "Default Project",
     slug: "default-project",
   });
+  apiMocks.grantProjectFund.mockResolvedValue({
+    fund: {
+      id: "fund-1",
+      projectId: "proj-default",
+      currency: "USD",
+      totalGranted: 260,
+      reserved: 20,
+      consumed: 50,
+      available: 190,
+      status: "active",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      updatedAt: "2026-04-03T00:00:00.000Z",
+      hasFund: true,
+    },
+    ledgerEntry: {
+      id: "ledger-2",
+      projectId: "proj-default",
+      fundId: "fund-1",
+      type: "grant",
+      amountUsd: 60,
+      balanceAfter: 190,
+      createdAt: "2026-04-03T00:00:00.000Z",
+      note: "补充预算",
+    },
+  });
+  apiMocks.adjustProjectFund.mockResolvedValue({
+    fund: {
+      id: "fund-1",
+      projectId: "proj-default",
+      currency: "USD",
+      totalGranted: 240,
+      reserved: 20,
+      consumed: 50,
+      available: 170,
+      status: "active",
+      createdAt: "2026-04-01T00:00:00.000Z",
+      updatedAt: "2026-04-03T01:00:00.000Z",
+      hasFund: true,
+    },
+    ledgerEntry: {
+      id: "ledger-3",
+      projectId: "proj-default",
+      fundId: "fund-1",
+      type: "adjust",
+      amountUsd: -20,
+      balanceAfter: 170,
+      createdAt: "2026-04-03T01:00:00.000Z",
+      note: "扣回未使用额度",
+    },
+  });
 });
 
 describe("ProjectSettingsPanel", () => {
-  it("hydrates and persists project-level paid execution permission", async () => {
-    const wrapper = await mountPanel({
-      defaultModel: "github-copilot:gpt-5.4",
-      allowPaidExecution: false,
-      warnThreshold: 0.8,
-      throttleThreshold: 0.95,
-    });
-
-    const setupState = getSetupState(wrapper) as {
-      form: ProjectSettings;
-      handleSave: () => Promise<void>;
-    };
-
-    expect(wrapper.text()).toContain("付费执行权限");
-    expect(wrapper.text()).toContain("未开启");
-
-    setupState.form.allowPaidExecution = true;
-    await setupState.handleSave();
-
-    expect(apiMocks.updateProject).toHaveBeenCalledWith("proj-default", {
-      settings: expect.objectContaining({
-        allowPaidExecution: true,
-      }),
-    });
-    expect(wrapper.emitted("updated")?.[0]?.[0]).toEqual(
-      expect.objectContaining({
-        allowPaidExecution: true,
-      }),
-    );
-  });
-
-  it("hydrates explicit project group settings into the editable form", async () => {
+  it("renders wallet summary instead of legacy paid execution controls", async () => {
     const wrapper = await mountPanel({
       defaultModel: "github-copilot:gpt-5.4",
       projectGroupKey: "core-platform",
       projectGroupLabel: "核心平台",
-      warnThreshold: 0.8,
-      throttleThreshold: 0.95,
     });
 
-    const setupState = getSetupState(wrapper) as {
-      form: ProjectSettings;
-    };
-
-    expect(setupState.form.projectGroupKey).toBe("core-platform");
-    expect(setupState.form.projectGroupLabel).toBe("核心平台");
-    expect(wrapper.text()).toContain("项目组标识");
-    expect(wrapper.text()).toContain("项目组展示名");
+    expect(wrapper.text()).toContain("项目额度钱包");
+    expect(wrapper.text()).toContain("当前可用额度");
+    expect(wrapper.text()).toContain("最近额度流水");
+    expect(wrapper.text()).not.toContain("付费执行权限");
+    expect(wrapper.text()).not.toContain("月预算");
+    expect(apiMocks.getProjectFund).toHaveBeenCalledWith("proj-default");
+    expect(apiMocks.getProjectFundLedger).toHaveBeenCalledWith("proj-default", { limit: 5 });
   });
 
   it("persists explicit project group settings from the panel", async () => {
     const wrapper = await mountPanel({
       defaultModel: "github-copilot:gpt-5.4",
-      warnThreshold: 0.8,
-      throttleThreshold: 0.95,
     });
 
     const setupState = getSetupState(wrapper) as {
@@ -165,12 +208,23 @@ describe("ProjectSettingsPanel", () => {
     );
   });
 
-  it("clears explicit project group settings when both fields are emptied", async () => {
+  it("clears an invalid persisted default model on save when the catalog is available", async () => {
+    apiMocks.getModelsConfig.mockResolvedValueOnce({
+      data: {
+        defaults: {},
+        providers: {},
+        list: [
+          {
+            id: "gpt-5.4",
+            provider: "github-copilot",
+            route: "github-copilot:gpt-5.4",
+          },
+        ],
+      },
+    });
+
     const wrapper = await mountPanel({
-      projectGroupKey: "core-platform",
-      projectGroupLabel: "核心平台",
-      warnThreshold: 0.8,
-      throttleThreshold: 0.95,
+      defaultModel: "anthropic/claude-sonnet-4-20250514",
     });
 
     const setupState = getSetupState(wrapper) as {
@@ -178,16 +232,72 @@ describe("ProjectSettingsPanel", () => {
       handleSave: () => Promise<void>;
     };
 
-    setupState.form.projectGroupKey = null;
-    setupState.form.projectGroupLabel = null;
-
+    setupState.form.projectGroupKey = "core-platform";
     await setupState.handleSave();
 
     expect(apiMocks.updateProject).toHaveBeenCalledWith("proj-default", {
       settings: expect.objectContaining({
-        projectGroupKey: null,
-        projectGroupLabel: null,
+        defaultModel: undefined,
+        projectGroupKey: "core-platform",
       }),
     });
+    expect(wrapper.emitted("updated")?.[0]?.[0]).toEqual(
+      expect.objectContaining({
+        defaultModel: undefined,
+        projectGroupKey: "core-platform",
+      }),
+    );
+  });
+
+  it("grants project fund from the wallet modal workflow", async () => {
+    const wrapper = await mountPanel();
+    const setupState = getSetupState(wrapper) as {
+      openGrantModal: () => void;
+      grantForm: { amountUsd?: number; note: string };
+      submitGrant: () => Promise<void>;
+      currentFund: { available: number };
+      walletLedger: Array<{ id: string; type: string }>;
+    };
+
+    setupState.openGrantModal();
+    setupState.grantForm.amountUsd = 60;
+    setupState.grantForm.note = "补充预算";
+    await setupState.submitGrant();
+
+    expect(apiMocks.grantProjectFund).toHaveBeenCalledWith("proj-default", {
+      amountUsd: 60,
+      note: "补充预算",
+    });
+    expect(setupState.currentFund.available).toBe(190);
+    expect(setupState.walletLedger[0]?.id).toBe("ledger-2");
+  });
+
+  it("adjusts project fund with signed amount", async () => {
+    const wrapper = await mountPanel();
+    const setupState = getSetupState(wrapper) as {
+      openAdjustModal: () => void;
+      adjustForm: { amountUsd?: number; note: string };
+      submitAdjust: () => Promise<void>;
+      currentFund: { available: number };
+      walletLedger: Array<{ id: string; type: string; amountUsd: number }>;
+    };
+
+    setupState.openAdjustModal();
+    setupState.adjustForm.amountUsd = -20;
+    setupState.adjustForm.note = "扣回未使用额度";
+    await setupState.submitAdjust();
+
+    expect(apiMocks.adjustProjectFund).toHaveBeenCalledWith("proj-default", {
+      amountUsd: -20,
+      note: "扣回未使用额度",
+    });
+    expect(setupState.currentFund.available).toBe(170);
+    expect(setupState.walletLedger[0]).toEqual(
+      expect.objectContaining({
+        id: "ledger-3",
+        type: "adjust",
+        amountUsd: -20,
+      }),
+    );
   });
 });

@@ -5,6 +5,7 @@ import type { AppEnv, JWTPayload } from "../../middleware/auth";
 import { requireRole } from "../../middleware/rbac";
 import { type TaskTreeSnapshot, getTaskBranchCompatNodeIdAliases } from "../project-tree/storage";
 import type { TaskTreeRecord } from "../project-tree/task-view";
+import { validateConfiguredModelRoute } from "../../lib/configured-model-routes";
 import { type CreateTaskInput, createTaskSchema } from "./task-create";
 import { type TaskStatusUpdate, updateStatusSchema } from "./task-status-update";
 
@@ -137,6 +138,11 @@ export function registerTaskCoreRoutes(taskRoutes: Hono<AppEnv>, deps: RegisterT
   taskRoutes.patch("/:taskId", zValidator("json", updateStatusSchema), async (c) => {
     const taskId = c.req.param("taskId");
     const body = c.req.valid("json") as TaskStatusUpdate;
+
+    const modelValidation = validateConfiguredModelRoute(body.selectedModel, "任务模型");
+    if (modelValidation) {
+      return c.json({ error: modelValidation }, 400);
+    }
 
     const existing = await deps.loadTaskTreeBackedRecord(taskId);
     if (!existing) return c.json({ error: "Task not found" }, 404);

@@ -1,7 +1,8 @@
 ---
 name: momus-enterprise
-description: Post-plan validator — reviews plans for clarity, completeness, and verifiability
-model: github-copilot/claude-sonnet-4
+description: Post-plan validator — reviews plans for clarity, completeness, and
+  verifiability
+model: github-copilot-2:gpt-5.4-mini
 ---
 
 # Momus — Post-Plan Validator

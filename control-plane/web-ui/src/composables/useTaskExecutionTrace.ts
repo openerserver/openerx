@@ -1,5 +1,6 @@
 import { type Ref, computed, ref, watch } from "vue";
 import { type TaskExecutionTrace, getTaskExecutionTraceView } from "../lib/api";
+import { resolveTraceTimelineAvailability } from "../lib/task-trace-timeline-state";
 
 type TraceSummaryItem = { label: string; value: string; tone?: string };
 type TraceMessageRoleFilter =
@@ -100,12 +101,16 @@ function buildTraceReadSourceLabel(
   switch (readSource) {
     case "task-domain-projection":
       return { value: "投影", tone: "cyan" };
+    case "task-session-projection":
+      return { value: "会话投影", tone: "cyan" };
     case "conversation-table":
       return { value: "会话表", tone: "default" };
     case "task-domain-events":
       return { value: "领域事件", tone: "default" };
     case "conversation-table+task-domain-events":
       return { value: "会话表+领域事件", tone: "default" };
+    case "task-session-first":
+      return { value: "会话时间线", tone: "default" };
     case "runtime-fallback":
       return { value: "运行时回退", tone: "warning" };
     default:
@@ -115,11 +120,15 @@ function buildTraceReadSourceLabel(
 
 function buildTraceSummaryItems(trace: TaskExecutionTrace): TraceSummaryItem[] {
   const items = buildBaseTraceSummaryItems(trace);
+  const timelineAvailability = resolveTraceTimelineAvailability(
+    trace.timelineMeta,
+    trace.timeline?.length ?? 0,
+  );
 
-  if (trace.timelineMeta?.cacheState && trace.timelineMeta.cacheState !== "complete") {
+  if (timelineAvailability && timelineAvailability !== "complete") {
     items.push({
-      label: "时间线缓存",
-      value: trace.timelineMeta.cacheState === "partial" ? "部分" : "未命中",
+      label: "时间线状态",
+      value: timelineAvailability === "partial" ? "部分可用" : "暂不可用",
       tone: "warning",
     });
   }

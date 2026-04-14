@@ -5,6 +5,14 @@
 > 作者：GitHub Copilot
 > 关联文档：[task-detail-message-state-machine-plan.md](task-detail-message-state-machine-plan.md)、[task-detail-realtime-event-contract.md](task-detail-realtime-event-contract.md)、[task-detail-continue-simplified-design.md](task-detail-continue-simplified-design.md)
 
+## 0. 文档定位
+
+这份文档是 TaskDetail continue 的“当前实现快照”，不是目标改造方案。
+
+1. 当前实现：记录 single continue、parallel continue、sequential-chain 在现网里的真实时序，以及 realtime overlay、tree 回读、candidate 补拉之间的边界。
+2. 未来目标：continue 接口和模块之后应该如何收口，见 [task-detail-continue-simplified-design.md](task-detail-continue-simplified-design.md) 与 [task-detail-continue-target-module-architecture.md](task-detail-continue-target-module-architecture.md)。
+3. 阅读建议：排查现网行为先读本文；设计 cutover 时，把本文当作 baseline，再对照目标设计文档找差异。
+
 ## 1. 文档目的
 
 这份文档把 TaskDetailV3 当前实现里的 continue 主链路，以及 sequential-chain 的独立执行链路，落成可直接阅读的时序图，方便在代码评审、链路排障和前后端对齐时快速确认“消息是怎么发出去的、模型回复是怎么回来的、页面为什么会先看到流式内容再收敛成最终结果”。
@@ -54,7 +62,7 @@ sequenceDiagram
     participant RT as PiMono Runtime
     participant Agg as SSE Aggregator
     participant WS as WS Broadcaster
-    participant Store as useTaskMessageStore / useTreeMessages
+    participant Store as useTaskMessageSnapshot / useTaskMessageStore
     participant Tree as /tasks/:taskId/tree
 
     User->>Composer: 输入 follow-up 并发送
@@ -230,7 +238,7 @@ sequenceDiagram
     participant RT as PiMono Runtime
     participant Agg as SSE Aggregator
     participant WS as WS Broadcaster
-    participant Store as useTreeMessages / useTaskMessageStore
+    participant Store as useTaskMessageSnapshot / useTaskMessageStore
     participant StepUI as Sequential Steps UI
 
     User->>Page: 配置顺序步骤并点击执行
@@ -287,7 +295,7 @@ sequenceDiagram
     end
 ```
 
-## 7. 阅读建议
+## 7. 阅读建议与未来目标
 
 如果要沿着代码逐段核对，建议按下面顺序阅读：
 
@@ -297,7 +305,7 @@ sequenceDiagram
 4. runtime 事件桥：`control-plane/web-ui-bff/src/modules/agent-control/runtime-provider-pimono.ts`
 5. realtime 聚合：`control-plane/web-ui-bff/src/modules/realtime/sse-aggregator.ts`
 6. service 消息主写链：`control-plane/service/src/modules/tasks/task-session-message-write-api.ts`
-7. 前端 realtime patch 与 tree 收敛：`control-plane/web-ui/src/composables/useTreeMessages.ts`
+7. 前端 realtime patch 与 snapshot/store 收敛：`control-plane/web-ui/src/composables/useTaskMessageSnapshot.ts`、`control-plane/web-ui/src/composables/useTaskMessageStore.ts`
 8. sequential-chain 启动入口：`control-plane/web-ui/src/lib/api.ts`、`control-plane/web-ui-bff/src/modules/tasks/routes.ts`
 9. sequential-chain 步骤 UI 与回填：`control-plane/web-ui/src/composables/useTaskDetailSequentialStepsCoordinator.ts`
 10. sequential-chain 自动推进与收尾：`control-plane/web-ui-bff/src/modules/realtime/sse-aggregator.ts`

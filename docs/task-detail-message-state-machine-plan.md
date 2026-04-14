@@ -1,9 +1,17 @@
 # TaskDetail 消息状态机与 Realtime Patch 实施文档
 
-> 状态：Draft v1
+> 状态：Draft v1，目标状态机文档
 > 日期：2026-03-29
 > 作者：GitHub Copilot
 > 关联文档：[task-session-message-minimal-contract.md](task-session-message-minimal-contract.md)、[task-session-message-service-route-dto-draft.md](task-session-message-service-route-dto-draft.md)、[task-session-message-roundtrip-target-plan.md](task-session-message-roundtrip-target-plan.md)、[task-detail-realtime-event-contract.md](task-detail-realtime-event-contract.md)
+
+## 0. 文档定位
+
+这份文档属于“未来目标状态机文档”，但开头已经补了当前实现映射，避免把现网行为和目标 reducer 混写。
+
+1. 当前实现：TaskDetailV3 主聊天已经由 `useTaskMessageSnapshot` + `useTaskMessageStore` 组合，页面不再直接 merge `realtime.events[]`。
+2. 未来目标：把现网已落地的模式继续固定成标准 state slice、状态机与 patch 规则，作为后续删兼容层的目标口径。
+3. 阅读建议：先读第 4 节确认现网，再从第 5 节开始把后文视为目标状态机设计；如果要对齐事件字段，再接着看 [task-detail-realtime-event-contract.md](task-detail-realtime-event-contract.md)。
 
 ## 1. 文档目的
 
@@ -52,22 +60,22 @@
 2. websocket 重连后先静默 reconcile，再继续收流
 3. 刷新后从 GET messages 恢复，而不是请求底层 runtime replay
 
-## 4. 当前实现需要纠偏的方向
+## 4. 当前实现映射与仍需纠偏的方向
 
-当前前端里，TaskDetailV3 和 `useTreeMessages` 的核心模式是：
+当前前端里，TaskDetailV3 的主聊天读链已经收敛为：
 
-1. 先从 execution trace 读一份持久化消息
-2. 再从 `realtimeStore.events` 里收集 live assistant 草稿
-3. 最后把两者 merge 成页面消息列表
+1. 先由 `useTaskMessageSnapshot` 读取 active round 的持久化消息
+2. 再由 `useTaskMessageStore` 接收 `task.message.*` patch、pending assistant 与 reconcile 状态
+3. 最后由 store 统一产出页面消息列表
 
 相关入口包括：
 
 1. [control-plane/web-ui/src/pages/TaskDetailV3.vue](../control-plane/web-ui/src/pages/TaskDetailV3.vue)
-2. [control-plane/web-ui/src/composables/useTreeMessages.ts](../control-plane/web-ui/src/composables/useTreeMessages.ts)
+2. [control-plane/web-ui/src/composables/useTaskMessageSnapshot.ts](../control-plane/web-ui/src/composables/useTaskMessageSnapshot.ts) 与 [control-plane/web-ui/src/composables/useTaskMessageStore.ts](../control-plane/web-ui/src/composables/useTaskMessageStore.ts)
 3. [control-plane/web-ui/src/stores/realtime.ts](../control-plane/web-ui/src/stores/realtime.ts)
 4. [control-plane/web-ui/src/lib/message-normalize.ts](../control-plane/web-ui/src/lib/message-normalize.ts)
 
-这套模式对 compat 过渡有用，但不适合作为目标实现的主模式。目标实现应该改成：
+这套模式已经接近目标实现，但后续仍应继续保持：
 
 1. 初始 GET messages 建立本地实体状态
 2. 之后只接受标准化 `task.message.*` 事件做 patch
@@ -396,7 +404,7 @@ function applyTaskDetailRealtimePatch(
 
 ## 9.2 `task.message.created`
 
-### patch 规则
+### 9.2 patch 规则
 
 1. 若 `message.id` 不存在，插入新消息
 2. 若已存在，按“单调字段 merge”更新
@@ -411,7 +419,7 @@ function applyTaskDetailRealtimePatch(
 
 ## 9.3 `task.message.delta`
 
-### patch 规则
+### 9.3 patch 规则
 
 1. 若目标 assistant message 不存在，创建 1 条 provisional assistant message
 2. `localStatus` 设为 `streaming`
@@ -441,7 +449,7 @@ function applyTaskDetailRealtimePatch(
 
 ## 9.4 `task.message.completed`
 
-### patch 规则
+### 9.4 patch 规则
 
 1. 若消息不存在，创建 provisional completed message
 2. 状态设为 `completed`
@@ -457,7 +465,7 @@ function applyTaskDetailRealtimePatch(
 
 ## 9.5 `task.message.failed`
 
-### patch 规则
+### 9.5 patch 规则
 
 1. 若消息不存在，创建 provisional failed message
 2. 状态设为 `failed`
@@ -472,7 +480,7 @@ function applyTaskDetailRealtimePatch(
 
 ## 9.6 `task.operation.updated`
 
-### patch 规则
+### 9.6 patch 规则
 
 1. upsert operation
 2. 若状态为 `running`，页面头部和 composer 显示“执行中”
@@ -481,7 +489,7 @@ function applyTaskDetailRealtimePatch(
 
 ## 9.7 `task.snapshot.updated`
 
-### patch 规则
+### 9.7 patch 规则
 
 1. 更新 header 区的 task status、lastActivityAt、currentSessionId
 2. 不直接替代 message state

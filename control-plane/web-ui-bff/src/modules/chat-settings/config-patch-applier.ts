@@ -19,6 +19,9 @@ import {
 import type {
   MarkdownConfigDetail,
   McpServer,
+  ModelBillingMethod,
+  ModelBillingPrice,
+  ModelListItem,
   ModelsConfig,
   PluginsConfig,
   SecurityBaselineConfig,
@@ -134,6 +137,104 @@ export function getPluginsConfigVersion(): string {
   return getFileVersion(OPENCODE_JSON);
 }
 
+function getTrimmedString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
+function getFiniteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function normalizeModelBillingMethod(value: unknown): ModelBillingMethod | undefined {
+  return value === "token_metered" || value === "request_metered" || value === "run_metered"
+    ? value
+    : undefined;
+}
+
+function normalizeModelBillingPrice(value: unknown): ModelBillingPrice | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+
+  const record = value as Record<string, unknown>;
+  const normalized: ModelBillingPrice = { currency: "USD" };
+  const inputPerMillionTokens = getFiniteNumber(record.inputPerMillionTokens);
+  const outputPerMillionTokens = getFiniteNumber(record.outputPerMillionTokens);
+  const perRequestUsd = getFiniteNumber(record.perRequestUsd);
+  const perRunUsd = getFiniteNumber(record.perRunUsd);
+
+  if (inputPerMillionTokens !== undefined) {
+    normalized.inputPerMillionTokens = inputPerMillionTokens;
+  }
+  if (outputPerMillionTokens !== undefined) {
+    normalized.outputPerMillionTokens = outputPerMillionTokens;
+  }
+  if (perRequestUsd !== undefined) {
+    normalized.perRequestUsd = perRequestUsd;
+  }
+  if (perRunUsd !== undefined) {
+    normalized.perRunUsd = perRunUsd;
+  }
+
+  return Object.keys(normalized).length > 1 ? normalized : undefined;
+}
+
+function normalizeModelListItem(item: Record<string, unknown>): ModelListItem {
+  const normalized: ModelListItem = { ...item };
+  const id = getTrimmedString(item.id);
+  const name = getTrimmedString(item.name);
+  const provider = getTrimmedString(item.provider);
+  const route = getTrimmedString(item.route);
+  const contextWindow = getFiniteNumber(item.contextWindow);
+  const maxTokens = getFiniteNumber(item.maxTokens);
+  const billingStatus = item.billingStatus === "paid" ? "paid" : "free";
+  const billingMethod = normalizeModelBillingMethod(item.billingMethod);
+  const price = normalizeModelBillingPrice(item.price);
+
+  if (id !== undefined) {
+    normalized.id = id;
+  }
+  if (name !== undefined) {
+    normalized.name = name;
+  }
+  if (provider !== undefined) {
+    normalized.provider = provider;
+  }
+  if (route !== undefined) {
+    normalized.route = route;
+  }
+  if (contextWindow !== undefined) {
+    normalized.contextWindow = contextWindow;
+  }
+  if (maxTokens !== undefined) {
+    normalized.maxTokens = maxTokens;
+  }
+
+  normalized.billingStatus = billingStatus;
+  if (billingStatus === "paid" && billingMethod) {
+    normalized.billingMethod = billingMethod;
+    if (price) {
+      normalized.price = price;
+    } else {
+      delete normalized.price;
+    }
+  } else {
+    delete normalized.billingMethod;
+    delete normalized.price;
+  }
+
+  return normalized;
+}
+
+function normalizeModelList(list: ReadonlyArray<Record<string, unknown>>): ModelListItem[] {
+  return list.map((item) => normalizeModelListItem(item));
+}
+
 export function readModelsConfig(): ModelsConfig {
   const config = readOpencodeJson();
   const models = (config.models as Record<string, unknown>) || {};
@@ -144,7 +245,7 @@ export function readModelsConfig(): ModelsConfig {
         unknown
       >) || {},
     providers: (models.providers as Record<string, unknown>) || {},
-    list: (models.list as Array<Record<string, unknown>>) || [],
+    list: normalizeModelList((models.list as ModelListItem[]) || []),
   };
 }
 
@@ -411,7 +512,32 @@ export function applyOrchestrationStrategyPatch(args: {
 const modelsSchema = z.object({
   defaults: z.record(z.unknown()),
   providers: z.record(z.unknown()),
-  list: z.array(z.record(z.unknown())),
+  list: z.array(
+    z
+      .object({
+        id: z.string().optional(),
+        name: z.string().optional(),
+        provider: z.string().optional(),
+        route: z.string().optional(),
+        contextWindow: z.number().finite().optional(),
+        maxTokens: z.number().finite().optional(),
+        billingStatus: z.enum(["free", "paid"]).optional(),
+        billingMethod: z
+          .enum(["token_metered", "request_metered", "run_metered"])
+          .optional(),
+        price: z
+          .object({
+            currency: z.literal("USD").optional(),
+            inputPerMillionTokens: z.number().finite().nonnegative().optional(),
+            outputPerMillionTokens: z.number().finite().nonnegative().optional(),
+            perRequestUsd: z.number().finite().nonnegative().optional(),
+            perRunUsd: z.number().finite().nonnegative().optional(),
+          })
+          .passthrough()
+          .optional(),
+      })
+      .passthrough(),
+  ),
 });
 
 const mcpSchema = z.record(
@@ -452,8 +578,9 @@ export function applyModelsPatch(args: {
   const config = readOpencodeJson();
   const defaultModel =
     typeof parsed.data.defaults.model === "string" ? parsed.data.defaults.model.trim() : "";
+  const normalizedList = normalizeModelList(parsed.data.list);
   config.agents = { ...(config.agents as object), defaults: parsed.data.defaults };
-  config.models = { providers: parsed.data.providers, list: parsed.data.list };
+  config.models = { providers: parsed.data.providers, list: normalizedList };
   if (defaultModel) {
     config.model = defaultModel.includes(":") ? defaultModel.replace(":", "/") : defaultModel;
   }

@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
 const originalRunExecutionIntegration = process.env.RUN_EXECUTION_INTEGRATION;
-const originalAllowPaidExecution = process.env.ALLOW_PAID_MODEL_EXECUTION;
 const originalLowCostExecutionModel = process.env.LOW_COST_EXECUTION_MODEL;
 
 afterEach(() => {
@@ -9,12 +8,6 @@ afterEach(() => {
     process.env.RUN_EXECUTION_INTEGRATION = undefined;
   } else {
     process.env.RUN_EXECUTION_INTEGRATION = originalRunExecutionIntegration;
-  }
-
-  if (originalAllowPaidExecution === undefined) {
-    process.env.ALLOW_PAID_MODEL_EXECUTION = undefined;
-  } else {
-    process.env.ALLOW_PAID_MODEL_EXECUTION = originalAllowPaidExecution;
   }
 
   if (originalLowCostExecutionModel === undefined) {
@@ -31,21 +24,18 @@ async function loadGuardModule() {
 describe("execution integration guard", () => {
   test("real execution tests only depend on the execution gate", async () => {
     process.env.RUN_EXECUTION_INTEGRATION = "1";
-    process.env.ALLOW_PAID_MODEL_EXECUTION = undefined;
 
     const guard = await loadGuardModule();
     expect(guard.isExecutionIntegrationEnabled()).toBe(true);
-    expect(guard.isPaidExecutionAllowed()).toBe(false);
     expect(guard.getExecutionIntegrationGuardSummary()).toMatchObject({
       executionEnabled: true,
-      paidExecutionAllowed: false,
       safeModel: "github-copilot:gpt-5-mini",
     });
+    expect(guard.getExecutionIntegrationGuardSummary()).not.toHaveProperty("paidExecutionAllowed");
   });
 
   test("rejects unsupported fallback models and coerces to GPT-5 mini", async () => {
     process.env.RUN_EXECUTION_INTEGRATION = "1";
-    process.env.ALLOW_PAID_MODEL_EXECUTION = undefined;
     process.env.LOW_COST_EXECUTION_MODEL = "github-copilot:gpt-4.1";
 
     const guard = await loadGuardModule();

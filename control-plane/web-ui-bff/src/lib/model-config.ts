@@ -9,16 +9,6 @@ import {
   type RuntimeRecoverySuggestion,
 } from "./runtime-recovery-contract";
 
-const UI_OPENCODE_ROOT = resolve(
-  process.env.OPENCODE_ROOT || join(__dirname, "../../../../opencode-fork"),
-);
-const UI_OPENCODE_JSON = join(UI_OPENCODE_ROOT, "opencode.json");
-const WORKSPACE_ROOT = resolve(
-  process.env.OPENCODE_RUNTIME_ROOT || join(__dirname, "../../../../"),
-);
-const RUNTIME_OPENCODE_JSON = join(WORKSPACE_ROOT, "opencode.json");
-const RUNTIME_STATE_DIR = join(WORKSPACE_ROOT, ".opencode", "state");
-const UI_STATE_DIR = join(UI_OPENCODE_ROOT, ".opencode", "state");
 const LEGACY_AUTH_JSON = resolve(homedir(), ".local/share/opencode/auth.json");
 const LEGACY_AUTH_BACKUP = `${LEGACY_AUTH_JSON}.bak`;
 
@@ -61,12 +51,36 @@ function readJsonFile(path: string): Record<string, unknown> | null {
   }
 }
 
+function getUiOpencodeRoot() {
+  return resolve(process.env.OPENCODE_ROOT || join(__dirname, "../../../../opencode-fork"));
+}
+
+function getUiOpencodeJsonPath() {
+  return join(getUiOpencodeRoot(), "opencode.json");
+}
+
+function getWorkspaceRoot() {
+  return resolve(process.env.OPENCODE_RUNTIME_ROOT || join(__dirname, "../../../../"));
+}
+
+function getRuntimeOpencodeJsonPath() {
+  return join(getWorkspaceRoot(), "opencode.json");
+}
+
+function getRuntimeStateDir() {
+  return join(getWorkspaceRoot(), ".opencode", "state");
+}
+
+function getUiStateDir() {
+  return join(getUiOpencodeRoot(), ".opencode", "state");
+}
+
 export function readOpencodeJson(): Record<string, unknown> {
-  return JSON.parse(readFileSync(UI_OPENCODE_JSON, "utf-8"));
+  return JSON.parse(readFileSync(getUiOpencodeJsonPath(), "utf-8"));
 }
 
 export function readRuntimeOpencodeJson(): Record<string, unknown> {
-  return readJsonFile(RUNTIME_OPENCODE_JSON) ?? readOpencodeJson();
+  return readJsonFile(getRuntimeOpencodeJsonPath()) ?? readOpencodeJson();
 }
 
 function getTrimmedString(value: unknown): string | undefined {
@@ -125,7 +139,14 @@ export function readEnforcedTestExecutionModel(): string {
  */
 export function getConfiguredProviders(): string[] {
   const config = readOpencodeJson();
-  return Object.keys((config.provider as Record<string, unknown>) || {});
+  const providerIds = Object.keys((config.provider as Record<string, unknown>) || {});
+  const modelProviderIds = Object.keys(
+    ((config.models as Record<string, unknown> | undefined)?.providers as
+      | Record<string, unknown>
+      | undefined) || {},
+  );
+
+  return Array.from(new Set([...providerIds, ...modelProviderIds])).filter(Boolean);
 }
 
 export function resolveModelRoute(
@@ -231,14 +252,16 @@ function readProviderConfig(
 
 function getProviderConfigCandidates(providerId: string): ProviderConfig[] {
   const candidates: ProviderConfig[] = [];
-  const runtimeConfig = readJsonFile(RUNTIME_OPENCODE_JSON);
-  const uiConfig = readJsonFile(UI_OPENCODE_JSON);
+  const runtimeOpencodeJsonPath = getRuntimeOpencodeJsonPath();
+  const uiOpencodeJsonPath = getUiOpencodeJsonPath();
+  const runtimeConfig = readJsonFile(runtimeOpencodeJsonPath);
+  const uiConfig = readJsonFile(uiOpencodeJsonPath);
 
   if (runtimeConfig) {
     const runtimeProvider = readProviderConfig(
       runtimeConfig,
       providerId,
-      RUNTIME_OPENCODE_JSON,
+      runtimeOpencodeJsonPath,
       "runtime",
     );
     if (runtimeProvider) {
@@ -246,8 +269,8 @@ function getProviderConfigCandidates(providerId: string): ProviderConfig[] {
     }
   }
 
-  if (UI_OPENCODE_JSON !== RUNTIME_OPENCODE_JSON && uiConfig) {
-    const uiProvider = readProviderConfig(uiConfig, providerId, UI_OPENCODE_JSON, "ui");
+  if (uiOpencodeJsonPath !== runtimeOpencodeJsonPath && uiConfig) {
+    const uiProvider = readProviderConfig(uiConfig, providerId, uiOpencodeJsonPath, "ui");
     if (uiProvider) {
       candidates.push(uiProvider);
     }
@@ -295,8 +318,8 @@ function buildCopilotTokenFile(providerId: string, stateDir: string): string {
 
 function hasStoredCopilotToken(providerId: string) {
   const tokenFiles = [
-    buildCopilotTokenFile(providerId, RUNTIME_STATE_DIR),
-    buildCopilotTokenFile(providerId, UI_STATE_DIR),
+    buildCopilotTokenFile(providerId, getRuntimeStateDir()),
+    buildCopilotTokenFile(providerId, getUiStateDir()),
   ];
 
   return tokenFiles.some((filePath) => {
@@ -403,8 +426,8 @@ function buildCopilotCredentialError(args: {
       modelId: args.resolvedModel.modelId,
       authFile: LEGACY_AUTH_JSON,
       backupAvailable: args.backupHasCredential,
-      runtimeStateDir: RUNTIME_STATE_DIR,
-      uiStateDir: UI_STATE_DIR,
+      runtimeStateDir: getRuntimeStateDir(),
+      uiStateDir: getUiStateDir(),
       configMismatch: args.configMismatch,
     },
     recoverySuggestions: [

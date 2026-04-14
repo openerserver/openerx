@@ -8,6 +8,7 @@ import {
   createEmptyLiveAssistantState,
   normalizeMessage,
 } from "./message-normalize";
+import { resolveTraceTimelineAvailability } from "./task-trace-timeline-state";
 
 type TraceSourceItem = ExecutionTraceTimelineItem | ExecutionTraceMessage;
 
@@ -232,6 +233,10 @@ function resolveTraceSourceItems(
   const includeLineage = options?.includeLineage === true;
   const timeline = Array.isArray(trace.timeline) ? trace.timeline : [];
   const messages = Array.isArray(trace.messages) ? trace.messages : [];
+  const timelineAvailability = resolveTraceTimelineAvailability(
+    trace.timelineMeta,
+    timeline.length,
+  );
 
   if (includeLineage && timeline.length > 0) {
     return timeline;
@@ -239,7 +244,7 @@ function resolveTraceSourceItems(
   if (messages.length > 0) {
     return messages;
   }
-  if (timeline.length > 0 && trace.timelineMeta?.cacheState === "complete") {
+  if (timeline.length > 0 && timelineAvailability === "complete") {
     return timeline;
   }
   return [];

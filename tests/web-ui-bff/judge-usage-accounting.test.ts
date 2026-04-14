@@ -24,6 +24,7 @@ mock.module("../../control-plane/web-ui-bff/src/lib/model-config", () => ({
   formatModelRoute: (resolved: { providerId: string; modelId: string }) =>
     `${resolved.providerId}:${resolved.modelId}`,
   readDefaultExecutionModel: mock(() => "github-copilot:gpt-5.4"),
+  readOpencodeJson: mock(() => ({ models: { list: [] }, provider: {} })),
   resolveModelRoute: (value: string) => ({
     providerId: value.split(":")[0] || "github-copilot",
     modelId: value.split(":").slice(1).join(":") || value,

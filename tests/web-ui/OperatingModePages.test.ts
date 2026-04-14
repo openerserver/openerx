@@ -261,6 +261,77 @@ describe("Operating mode pages", () => {
       "阶段策略：高风险阶段进入审批模板。 · 治理触发：Need approval",
     );
     expect(wrapper.text()).toContain("Need approval");
+    expect(wrapper.text()).toContain("进行中");
+    expect(wrapper.text()).not.toContain("running");
+  });
+
+  it("formats latest runtime task statuses in project orchestration", async () => {
+    routeState.params = { projectId: "proj-default" };
+    apiMocks.getProjectOrchestrationView.mockResolvedValueOnce({
+      project: { id: "proj-default", name: "Default Project", slug: "default-project" },
+      workflowTemplateId: "tpl-1",
+      currentTemplate: { id: "tpl-1", name: "Template 1" },
+      selectableTemplates: [],
+      access: { canManage: true, message: null },
+      roleCapabilities: [],
+      scenarios: {
+        current: {
+          source: "current",
+          template: { id: "tpl-1", name: "Template 1" },
+          stages: [
+            {
+              id: "stage-1",
+              stageKey: "release",
+              name: "发布执行",
+              mode: "parallel",
+              primaryRoleLabel: "release-manager",
+              participantRoleAgentIdsJson: [],
+              gatesJson: [],
+              approvalsJson: [],
+              orderIndex: 0,
+              enabled: true,
+              roleMatrix: [],
+              runtimeSummary: {
+                totalTasks: 1,
+                runningCount: 1,
+                blockedCount: 0,
+                waitingApprovalCount: 1,
+                completedCount: 0,
+                failedCount: 0,
+                blockDecisionCount: 0,
+                approvalDecisionCount: 1,
+                openChangeRequestCount: 0,
+                blockingChangeRequestCount: 0,
+                latestTask: {
+                  taskId: "task-1",
+                  title: "Release candidate",
+                  workflowStatus: "waiting-approval",
+                  stageStatus: "running",
+                  approvalState: "pending",
+                },
+              },
+            },
+          ],
+        },
+        candidate: null,
+      },
+    });
+
+    const { default: Page } = await import(
+      "../../control-plane/web-ui/src/pages/ProjectOrchestration.vue"
+    );
+    const wrapper = mount(Page, {
+      global: {
+        stubs: {
+          MermaidRenderer: true,
+        },
+      },
+    });
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("流程 待审批");
+    expect(wrapper.text()).toContain("阶段 进行中");
+    expect(wrapper.text()).not.toContain("waiting-approval");
   });
 
   it("loads task operating override and saves task-specific mode", async () => {
@@ -520,6 +591,8 @@ describe("Operating mode pages", () => {
     expect(wrapper.text()).toContain(
       "阶段策略：高风险发布阶段统一切到发布审批模板。 · 治理触发：Release approval pending",
     );
+    expect(wrapper.text()).toContain("待审批");
+    expect(wrapper.text()).not.toContain("waiting-approval");
   });
 
   it("loads project workflow template page with governance settings", async () => {

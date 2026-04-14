@@ -6,12 +6,63 @@ import {
 
 export { shouldRefreshTaskDetailMessagesFromPoll };
 
+export type TaskDetailRefreshTargets = {
+  workflow: boolean;
+  flow: boolean;
+  messages: boolean;
+};
+
+const WORKFLOW_REFRESH_REASONS = new Set<TaskMessagePatchEvent["kind"]>([
+  "workflow-reconcile-required",
+  "session-created",
+  "session-updated",
+  "task-updated",
+  "task-completed",
+  "task-continued",
+  "task-node-updated",
+  "agent-started",
+  "task-hooks-updated",
+  "task-followup-started",
+  "task-followup-completed",
+  "task-followup-failed",
+]);
+
+const FLOW_REFRESH_REASONS = new Set<TaskMessagePatchEvent["kind"]>([
+  "flow-reconcile-required",
+  "session-created",
+  "session-updated",
+  "phase-created",
+  "phase-updated",
+  "phase-awaiting-adoption",
+  "phase-paused",
+  "phase-resumed",
+  "phase-cancelled",
+  "phase-completed",
+  "phase-failed",
+]);
+
 export type TaskDetailRefreshRequest = {
   eventId: string;
   reason: TaskMessagePatchEvent["kind"];
-  shouldRefreshMessages: boolean;
+  targets: TaskDetailRefreshTargets;
   shouldBumpTraceRefreshKey: boolean;
 };
+
+function getTaskDetailRefreshTargets(kind: TaskMessagePatchEvent["kind"]): TaskDetailRefreshTargets {
+  if (kind === "task-reconcile-required") {
+    return {
+      workflow: true,
+      flow: true,
+      messages: true,
+    };
+  }
+
+  return {
+    workflow: WORKFLOW_REFRESH_REASONS.has(kind),
+    flow: FLOW_REFRESH_REASONS.has(kind),
+    messages: kind === "round-synced" || kind === "message-reconcile-required",
+  };
+}
 
 export function getTaskDetailRefreshRequest(
   patchEvent: TaskMessagePatchEvent | null | undefined,
@@ -28,7 +79,7 @@ export function getTaskDetailRefreshRequest(
   return {
     eventId: patchEvent.eventId,
     reason: patchEvent.kind,
-    shouldRefreshMessages: effects.shouldRefreshTaskDetailMessages,
+    targets: getTaskDetailRefreshTargets(patchEvent.kind),
     shouldBumpTraceRefreshKey: effects.shouldBumpTaskDetailTraceRefreshKey,
   };
 }
@@ -42,7 +93,7 @@ export function shouldBumpTaskDetailTraceRefreshKey(
 export function shouldRefreshTaskDetailMessages(
   patchEvent: TaskMessagePatchEvent | null | undefined,
 ) {
-  return getTaskMessagePatchEffects(patchEvent).shouldRefreshTaskDetailMessages;
+  return getTaskDetailRefreshRequest(patchEvent)?.targets.messages ?? false;
 }
 
 export function shouldScheduleTaskDetailRefresh(

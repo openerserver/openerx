@@ -2,7 +2,17 @@
 
 > 适用范围：OpenerX 任务详情页 / Task Workbench
 >
+> 状态：Future target draft，当前实现尚未落地
+>
 > 目标：在现有任务详情页和工作台演进方向上，增加角色结论、冲突和开发者修正请求视图，让用户能看清当前任务处于什么阶段、哪些辅助角色提出了什么问题、开发者还需要修什么
+
+## 0. 文档定位
+
+这份文档属于 TaskDetail role-review 能力的“未来目标 UI 方案”，不是当前 TaskDetailV3 的现网说明。
+
+1. 当前实现：当前任务详情主页面已经是 [control-plane/web-ui/src/pages/TaskDetailV3.vue](../control-plane/web-ui/src/pages/TaskDetailV3.vue)，右栏目前以 workflow、trace、member、preview 为主，尚未把角色评审、冲突、修正请求作为统一治理视图落地。
+2. 未来目标：在不挤占中栏消息流的前提下，把 role review 与 developer change request 纳入右栏和顶部横幅。
+3. 阅读建议：先看 [taskdetail-v3-page-dataflow.md](taskdetail-v3-page-dataflow.md) 了解现网页壳，再读本文定义未来 UI 形态；如果要继续拆组件和状态模型，再接 [task-detail-role-review-component-state-draft.md](task-detail-role-review-component-state-draft.md)。
 
 ## 1. 文档目标
 
